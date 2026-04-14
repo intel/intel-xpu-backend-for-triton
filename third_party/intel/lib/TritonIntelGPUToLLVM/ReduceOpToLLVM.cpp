@@ -48,8 +48,6 @@ public:
   matchAndRewrite(triton::ReduceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     ReduceOpHelper helper(op);
-    assert(helper.isReduceWithinCTA() &&
-           "Unexpected srcLayout in ReduceOpConversion");
     Location loc = op->getLoc();
 
     std::map<SmallVector<unsigned>, SmallVector<Value>> accs;
@@ -86,6 +84,62 @@ public:
 
 private:
   const TargetInfoBase &targetInfo;
+
+  void accumulate(Location loc, ConversionPatternRewriter &rewriter,
+                  Region &combineOp, SmallVector<Value> &acc, ValueRange cur,
+                  Value pred = {}) const {
+    auto results = applyCombineOp(loc, rewriter, combineOp, acc, cur, pred);
+    if (acc.size() < results.size())
+      acc.resize(results.size());
+    for (unsigned i = 0; i < acc.size(); ++i)
+      acc[i] = results[i];
+  }
+
+  SmallVector<SmallVector<Value>>
+  unpackInputs(Location loc, triton::ReduceOp op, OpAdaptor adaptor,
+               ConversionPatternRewriter &rewriter) const {
+    auto types = op.getInputTypes();
+    auto operands = adaptor.getOperands();
+    unsigned srcElems = getTotalElemsPerThread(types[0]);
+    SmallVector<SmallVector<Value>> srcValues(srcElems);
+    for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+      auto values = unpackLLElements(loc, operands[i], rewriter);
+      assert(values.size() == srcValues.size());
+      for (unsigned j = 0; j < srcValues.size(); ++j)
+        srcValues[j].push_back(values[j]);
+    }
+    return srcValues;
+  }
+
+  void sync(ConversionPatternRewriter &rewriter, Location loc,
+            triton::ReduceOp op) const {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    b.barrier(triton::gpu::AddrSpace::Local);
+  }
+
+  // Tree-reduce helper matching the common ReduceOpToLLVM.cpp structure.
+  SmallVector<Value> treeReduceLikeCommon(
+      Location loc, ConversionPatternRewriter &rewriter, Region &combineOp,
+      SmallVector<SmallVector<Value>> values, unsigned arity) const {
+    assert(!values.empty() && arity >= 2);
+    while (values.size() > 1) {
+      SmallVector<SmallVector<Value>> next;
+      for (size_t i = 0; i < values.size(); i += arity) {
+        size_t remaining = values.size() - i;
+        size_t groupSize = std::min(static_cast<size_t>(arity), remaining);
+        if (groupSize == 1) {
+          next.push_back(std::move(values[i]));
+          continue;
+        }
+        SmallVector<Value> acc = std::move(values[i]);
+        for (size_t j = 1; j < groupSize; ++j)
+          accumulate(loc, rewriter, combineOp, acc, values[i + j]);
+        next.push_back(std::move(acc));
+      }
+      values = std::move(next);
+    }
+    return values.front();
+  }
 
   // Common step1+step2 implementation that produces Intel’s accs/indices maps.
   LogicalResult reduceStep1Step2LikeCommon(
@@ -146,25 +200,10 @@ private:
           vals.push_back(std::move(tuple));
         }
 
-        while (vals.size() > 1) {
-          SmallVector<SmallVector<Value>> next;
-          for (size_t j = 0; j < vals.size(); j += arity) {
-            size_t remaining = vals.size() - j;
-            size_t groupSize = std::min(static_cast<size_t>(arity), remaining);
-            if (groupSize == 1) {
-              next.push_back(std::move(vals[j]));
-              continue;
-            }
-            SmallVector<Value> acc = std::move(vals[j]);
-            for (size_t k = 1; k < groupSize; ++k)
-              accumulate(loc, rewriter, op.getCombineOp(), acc, vals[j + k]);
-            next.push_back(std::move(acc));
-          }
-          vals = std::move(next);
-        }
-
+        auto acc = treeReduceLikeCommon(loc, rewriter, op.getCombineOp(),
+                                        std::move(vals), arity);
         for (unsigned opIdx = 0; opIdx < op.getNumOperands(); ++opIdx)
-          reduced[opIdx].push_back(vals.front()[opIdx]);
+          reduced[opIdx].push_back(acc[opIdx]);
       }
 
       accVecs = std::move(reduced);
@@ -237,142 +276,7 @@ private:
 
   // Port of common “within-thread” reduction behavior, but output is Intel’s
   // maps (`accs` + `indices`).
-  LogicalResult reduceWithinThreadsLikeCommon(
-      ReduceOpHelper &helper, OpAdaptor adaptor,
-      std::map<SmallVector<unsigned>, SmallVector<Value>> &accs,
-      std::map<SmallVector<unsigned>, SmallVector<Value>> &indices,
-      ConversionPatternRewriter &rewriter) const {
-    triton::ReduceOp op = helper.getOperation();
-    Location loc = op.getLoc();
-    MLIRContext *ctx = op.getContext();
-    unsigned axis = op.getAxis();
-
-    // Build common representation: per-operand register vectors.
-    SmallVector<SmallVector<Value>> accVecs(op.getNumOperands());
-    for (unsigned i = 0; i < op.getNumOperands(); ++i)
-      accVecs[i] = unpackLLElements(loc, adaptor.getOperands()[i], rewriter);
-
-    LinearLayout regLl = triton::gpu::toLinearLayout(helper.getSrcTy());
-
-    // Remove broadcasted regs like common lowering.
-    auto removeBroadcast = actionRemoveBroadcastedRegs(regLl);
-    if (!removeBroadcast.isIdentity()) {
-      regLl = removeBroadcast.apply(regLl);
-      for (auto &vals : accVecs)
-        vals = removeBroadcast.apply(vals);
-    }
-
-    // If there’s nothing to reduce within a thread, just scatter directly.
-    auto linearAttr = triton::gpu::LinearEncodingAttr::get(ctx, regLl);
-    auto kReg = StringAttr::get(ctx, "register");
-    auto basesPerDim = linearAttr.basesPerDim(kReg, /*skipBroadcast=*/true);
-    unsigned axisPack = basesPerDim[axis];
-    if (axisPack == 1)
-      return scatterReducedRegsToAccsAndIndices(op, helper, regLl, accVecs,
-                                                accs, indices, rewriter);
-
-    // Common: move axis bases to front. Intel does not need to vectorize here
-    // because we’re only matching reduction order (not micro-optimizations).
-    // This also avoids the known OOB hazards during packing.
-    auto perm = ReduceOpHelper::moveAxisBasesToFront(regLl, axis,
-                                                     /*vectorize=*/false);
-    if (!perm.isIdentity()) {
-      regLl = perm.apply(regLl);
-      for (auto &vals : accVecs)
-        vals = perm.apply(vals);
-    }
-
-    // Reduce groups of `axisPack` registers using the same tree reduction
-    // arity selection as the common lowering.
-    Operation &combinerOp = op.getCombineOp().front().front();
-    // unsigned arity = targetInfo.getReductionTreeArity(&combinerOp);
-    unsigned arity = 2;
-
-    unsigned regs = accVecs.front().size();
-    if (regs % axisPack != 0)
-      return rewriter.notifyMatchFailure(op,
-                                         "axisPack does not divide reg count");
-
-    SmallVector<SmallVector<Value>> reduced(op.getNumOperands());
-    for (unsigned regBase = 0; regBase < regs; regBase += axisPack) {
-      SmallVector<SmallVector<Value>> vals;
-      vals.reserve(axisPack);
-      for (unsigned i = 0; i < axisPack; ++i) {
-        SmallVector<Value> tuple(op.getNumOperands());
-        for (unsigned opIdx = 0; opIdx < op.getNumOperands(); ++opIdx)
-          tuple[opIdx] = accVecs[opIdx][regBase + i];
-        vals.push_back(std::move(tuple));
-      }
-
-      // Tree reduce.
-      while (vals.size() > 1) {
-        SmallVector<SmallVector<Value>> next;
-        for (size_t j = 0; j < vals.size(); j += arity) {
-          size_t remaining = vals.size() - j;
-          size_t groupSize = std::min(static_cast<size_t>(arity), remaining);
-          if (groupSize == 1) {
-            next.push_back(std::move(vals[j]));
-            continue;
-          }
-          SmallVector<Value> acc = std::move(vals[j]);
-          for (size_t k = 1; k < groupSize; ++k)
-            accumulate(loc, rewriter, op.getCombineOp(), acc, vals[j + k]);
-          next.push_back(std::move(acc));
-        }
-        vals = std::move(next);
-      }
-
-      for (unsigned opIdx = 0; opIdx < op.getNumOperands(); ++opIdx)
-        reduced[opIdx].push_back(vals.front()[opIdx]);
-    }
-
-    // Zero axis bases along "register" and remove broadcasts, matching common.
-    regLl = ReduceOpHelper::zeroBasesAlongDimAndReorder(regLl, axis, kReg);
-    regLl = actionRemoveBroadcastedRegs(regLl).apply(regLl);
-
-    return scatterReducedRegsToAccsAndIndices(op, helper, regLl, reduced, accs,
-                                              indices, rewriter);
-  }
-
-  void accumulate(Location loc, ConversionPatternRewriter &rewriter,
-                  Region &combineOp, SmallVector<Value> &acc, ValueRange cur,
-                  Value pred = {}) const {
-    auto results = applyCombineOp(loc, rewriter, combineOp, acc, cur, pred);
-    if (acc.size() < results.size()) {
-      acc.resize(results.size());
-    }
-    for (unsigned i = 0; i < acc.size(); ++i) {
-      acc[i] = results[i];
-    }
-  }
-
-  SmallVector<SmallVector<Value>>
-  unpackInputs(Location loc, triton::ReduceOp op, OpAdaptor adaptor,
-               ConversionPatternRewriter &rewriter) const {
-    auto types = op.getInputTypes();
-    auto operands = adaptor.getOperands();
-    unsigned srcElems = getTotalElemsPerThread(types[0]);
-    SmallVector<SmallVector<Value>> srcValues(srcElems);
-    for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-      auto values = unpackLLElements(loc, operands[i], rewriter);
-
-      assert(values.size() == srcValues.size());
-      for (unsigned j = 0; j < srcValues.size(); ++j) {
-        srcValues[j].push_back(values[j]);
-      }
-    }
-    return srcValues;
-  }
-
-  void sync(ConversionPatternRewriter &rewriter, Location loc,
-            triton::ReduceOp op) const {
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    b.barrier(triton::gpu::AddrSpace::Local);
-  }
-
-  // Reduce along op axis for elements that are in the same thread. The
-  // accumulated value is stored in accs.
-  void reduceWithinThreads(
+  LogicalResult reduceWithinThreads(
       ReduceOpHelper &helper, SmallVector<SmallVector<Value>> &srcValues,
       std::map<SmallVector<unsigned>, SmallVector<Value>> &accs,
       std::map<SmallVector<unsigned>, SmallVector<Value>> &indices,
