@@ -51,6 +51,7 @@ jobs:
       skip_list: ${{ inputs.skip_list || '' }}
       ignore_errors: ${{ inputs.ignore_errors || false }}
       use_pyenv_python: ${{ inputs.use_pyenv_python || true }}
+    secrets: inherit
 
   # TODO: After PR #6360 is merged, replace this inline reports job with:
   #   uses: ./.github/workflows/reports-reusable.yml
