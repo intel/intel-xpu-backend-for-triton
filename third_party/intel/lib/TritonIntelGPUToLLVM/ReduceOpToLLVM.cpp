@@ -276,7 +276,7 @@ private:
 
   // Port of common “within-thread” reduction behavior, but output is Intel’s
   // maps (`accs` + `indices`).
-  LogicalResult reduceWithinThreads(
+  void reduceWithinThreads(
       ReduceOpHelper &helper, SmallVector<SmallVector<Value>> &srcValues,
       std::map<SmallVector<unsigned>, SmallVector<Value>> &accs,
       std::map<SmallVector<unsigned>, SmallVector<Value>> &indices,
