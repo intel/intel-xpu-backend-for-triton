@@ -1069,7 +1069,6 @@ extern "C" EXPORT_FUNC PyObject *build_signature_metadata(PyObject *args) {
   for (Py_ssize_t i = 0; i < signature_size; ++i) {
     ExtractorTypeIndex extractor_idx = getExtractorIndex(signature_items[i]);
     if (extractor_idx == EXTRACTOR_UNKOWN_INDEX) {
-      // goto cleanup;
       Py_XDECREF(fast_signature);
       Py_XDECREF(ret_bytes);
       return NULL;
@@ -1079,11 +1078,6 @@ extern "C" EXPORT_FUNC PyObject *build_signature_metadata(PyObject *args) {
 
   Py_XDECREF(fast_signature);
   return ret_bytes;
-
-  // cleanup:
-  //   Py_XDECREF(fast_signature);
-  //   Py_XDECREF(ret_bytes);
-  //   return NULL;
 }
 
 bool extractArgs(PyObject **final_list, int *list_idx, PyObject *kernel_args,
@@ -1092,9 +1086,7 @@ bool extractArgs(PyObject **final_list, int *list_idx, PyObject *kernel_args,
   PyObject *fast_annotations = PySequence_Fast(
       arg_annotations, "Expected arg_annotations to be a sequence or iterable");
   if (!fast_annotations) {
-    // goto cleanup;
     Py_XDECREF(fast_annotations);
-    // Py_XDECREF(fast_args);
     return false;
   }
   Py_ssize_t num_annotations = PySequence_Fast_GET_SIZE(fast_annotations);
@@ -1103,7 +1095,6 @@ bool extractArgs(PyObject **final_list, int *list_idx, PyObject *kernel_args,
   PyObject *fast_args = PySequence_Fast(
       kernel_args, "Expected kernel_args to be a sequence or iterable");
   if (!fast_args) {
-    // goto cleanup;
     Py_XDECREF(fast_annotations);
     Py_XDECREF(fast_args);
     return false;
@@ -1120,7 +1111,6 @@ bool extractArgs(PyObject **final_list, int *list_idx, PyObject *kernel_args,
     case ARG_TUPLE:
       if (!extractArgs(final_list, list_idx, args[arg_idx++],
                        annotation->nested_tuple)) {
-        // goto cleanup;
         Py_XDECREF(fast_annotations);
         Py_XDECREF(fast_args);
         return false;
@@ -1134,11 +1124,6 @@ bool extractArgs(PyObject **final_list, int *list_idx, PyObject *kernel_args,
   Py_DECREF(fast_annotations);
   Py_DECREF(fast_args);
   return true;
-
-  // cleanup:
-  //   Py_XDECREF(fast_annotations);
-  //   Py_XDECREF(fast_args);
-  //   return false;
 }
 
 bool launchHook(PyObject *hook, PyObject *metadata) {
@@ -1153,22 +1138,8 @@ bool launchHook(PyObject *hook, PyObject *metadata) {
 }
 
 extern "C" EXPORT_FUNC PyObject *launch(PyObject *args) {
-  /* old
-  int gridX, gridY, gridZ;
-  void* global_scratch = nullptr;
-  void* profile_scratch = nullptr;
-  PyObject *launch_enter_hook = NULL;
-  PyObject *launch_exit_hook = NULL;
-  PyObject *kernel_metadata = NULL;
-  PyObject *launch_metadata = NULL;
-  PyObject *py_obj_stream;
-  PyObject* py_kernel;
-  */
-
-  // Parse the arguments.
   int gridX, gridY, gridZ;
   PyObject *py_obj_stream;
-  // int _num_warps, _num_ctas, _shared_memory;
   PyObject *py_kernel;
   PyObject *kernel_metadata = NULL;
   PyObject *launch_metadata = NULL;
@@ -1205,7 +1176,6 @@ extern "C" EXPORT_FUNC PyObject *launch(PyObject *args) {
 
   // launch entry hook.
   if (!launchHook(launch_enter_hook, launch_metadata)) {
-    // goto cleanup;
     PyBuffer_Release(&signature);
     return NULL;
   }
@@ -1225,13 +1195,11 @@ extern "C" EXPORT_FUNC PyObject *launch(PyObject *args) {
   // Extract kernel parameters - flatten tuples & remove constexpr.
   PyObject **args_data = (PyObject **)alloca(num_args * sizeof(PyObject *));
   if (args_data == NULL) {
-    // goto cleanup;
     PyBuffer_Release(&signature);
     return NULL;
   }
   int list_idx = 0;
   if (!extractArgs(args_data, &list_idx, kernel_args, arg_annotations)) {
-    // goto cleanup;
     PyBuffer_Release(&signature);
     return NULL;
   }
@@ -1250,7 +1218,6 @@ extern "C" EXPORT_FUNC PyObject *launch(PyObject *args) {
     // * function to call to put the parameter in params buffer
     Extractor extractor = getExtractor(extractor_data[i]);
     if (extractor.extract == NULL) {
-      // goto cleanup;
       PyBuffer_Release(&signature);
       return NULL;
     }
@@ -1264,7 +1231,6 @@ extern "C" EXPORT_FUNC PyObject *launch(PyObject *args) {
                                    ~(alignment - 1));
       if (aligned_ptr == NULL) {
         PyErr_SetString(PyExc_MemoryError, "Failed to align parameter storage");
-        // goto cleanup;
         PyBuffer_Release(&signature);
         return NULL;
       }
@@ -1275,7 +1241,6 @@ extern "C" EXPORT_FUNC PyObject *launch(PyObject *args) {
 
     PyObject *current_arg = args_data[i];
     if (!extractor.extract(params[params_idx++], current_arg)) {
-      // goto cleanup;
       PyBuffer_Release(&signature);
       return NULL;
     }
@@ -1297,22 +1262,16 @@ extern "C" EXPORT_FUNC PyObject *launch(PyObject *args) {
   Py_END_ALLOW_THREADS;
 
   if (PyErr_Occurred()) {
-    // goto cleanup;
     PyBuffer_Release(&signature);
     return NULL;
   }
 
   if (!launchHook(launch_exit_hook, launch_metadata)) {
-    // goto cleanup;
     PyBuffer_Release(&signature);
     return NULL;
   }
   PyBuffer_Release(&signature);
   Py_RETURN_NONE;
-
-  // cleanup:
-  //   PyBuffer_Release(&signature);
-  //   return NULL;
 }
 
 extern "C" EXPORT_FUNC PyTypeObject *init_PyKernelArgType() {
@@ -1321,12 +1280,4 @@ extern "C" EXPORT_FUNC PyTypeObject *init_PyKernelArgType() {
 
   Py_INCREF(&PyKernelArgType);
   return &PyKernelArgType;
-}
-
-extern "C" EXPORT_FUNC PyObject *init_utils() {
-  // PyModule_AddIntConstant(m, "ARG_CONSTEXPR", ARG_CONSTEXPR);
-  // PyModule_AddIntConstant(m, "ARG_KERNEL", ARG_KERNEL);
-  // PyModule_AddIntConstant(m, "ARG_TUPLE", ARG_TUPLE);
-
-  return NULL;
 }
