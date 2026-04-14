@@ -227,8 +227,8 @@ public:
                           std::function<bool(Operation *)> stopPropagation);
 
   LogicalResult getRematerializableSlice(
-      OpOperand &root, Attribute rootEncoding, SetVector<Value> &sliceArg,
-      DenseMap<Value, Attribute> &layoutArg,
+      OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
+      DenseMap<Value, Attribute> &layout,
       std::function<bool(Operation *)> stopPropagation = nullptr);
 
 private:
@@ -1367,13 +1367,9 @@ LogicalResult LayoutRematerialization::getConvertBackwardSlice(
 }
 
 LogicalResult LayoutRematerialization::getRematerializableSlice(
-    OpOperand &root, Attribute rootEncoding, SetVector<Value> &sliceArg,
-    DenseMap<Value, Attribute> &layoutArg,
+    OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
+    DenseMap<Value, Attribute> &layout,
     std::function<bool(Operation *)> stopPropagation) {
-  // Operate on copies of the input, we do not want to modify them unless we
-  // have succeeded.
-  SetVector<Value> slice = sliceArg;
-  DenseMap<Value, Attribute> layout = layoutArg;
   LogicalResult result = getConvertBackwardSlice(root, rootEncoding, slice,
                                                  layout, stopPropagation);
   if (result.failed() || slice.empty())
@@ -1386,8 +1382,6 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
         return failure();
     }
   }
-  sliceArg = std::move(slice);
-  layoutArg = std::move(layout);
   return success();
 }
 
