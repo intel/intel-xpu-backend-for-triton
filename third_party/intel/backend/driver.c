@@ -611,15 +611,10 @@ static inline void gpuAssert(ze_result_t code, const char *file, int line) {
   }
 }
 
-typedef struct _DevicePtrInfo {
-  void *dev_ptr;
-  bool valid;
-} DevicePtrInfo;
-
-static inline void checkDevicePointer(DevicePtrInfo *ptr_info, int idx,
+static inline bool checkDevicePointer(void *ptr, int idx,
                                       const sycl::queue &queue) {
-  if (!ptr_info->dev_ptr || !ptr_info->valid) {
-    return;
+  if (ptr == nullptr) {
+    return true;
   }
   auto context = queue.get_context();
   auto handle = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(context);
@@ -627,23 +622,39 @@ static inline void checkDevicePointer(DevicePtrInfo *ptr_info, int idx,
   prop.stype = ZE_STRUCTURE_TYPE_MEMORY_ALLOCATION_PROPERTIES;
   prop.pNext = nullptr;
   ze_device_handle_t device;
-  auto res = zeMemGetAllocProperties((ze_context_handle_t)handle,
-                                     ptr_info->dev_ptr, &prop, &device);
+  auto res =
+      zeMemGetAllocProperties((ze_context_handle_t)handle, ptr, &prop, &device);
   if (res != ZE_RESULT_SUCCESS) {
     PyErr_Format(
         PyExc_ValueError,
         "Cannot get memory properties for pointer argument (at %d, err=%d)",
         idx, res);
-    ptr_info->valid = false;
+    return false;
   } else if (prop.type == ZE_MEMORY_TYPE_UNKNOWN) {
     // We can work with any memory, known to the driver:
     // ZE_MEMORY_TYPE_DEVICE, ZE_MEMORY_TYPE_SHARED, ZE_MEMORY_TYPE_HOST
     PyErr_Format(
         PyExc_ValueError,
         "Pointer argument (at %d) doesn't reference accessible memory.", idx);
-    ptr_info->valid = false;
+    return false;
   }
+  return true;
 }
+
+static thread_local const sycl::queue *g_pointer_check_queue = nullptr;
+static thread_local int g_pointer_check_arg_idx = -1;
+
+struct PointerCheckScope {
+  explicit PointerCheckScope(const sycl::queue &queue) {
+    g_pointer_check_queue = &queue;
+    g_pointer_check_arg_idx = -1;
+  }
+
+  ~PointerCheckScope() {
+    g_pointer_check_arg_idx = -1;
+    g_pointer_check_queue = nullptr;
+  }
+};
 
 // start sycl
 template <class T>
@@ -734,30 +745,15 @@ static PyObject *data_ptr_str = NULL;
 // Extract a XPU device pointer from a pointer-like PyObject obj, and store
 // it to the memory location pointed by ptr.
 bool extractPointer(void *ptr, PyObject *obj) {
-  void *dev_ptr = nullptr;
   if (obj == Py_None) {
-    dev_ptr = nullptr; // valid nullptr
-    *(void **)ptr = dev_ptr;
+    *(void **)ptr = nullptr; // valid nullptr
     return true;
   }
   if (PyLong_Check(obj)) {
-    dev_ptr = PyLong_AsVoidPtr(obj);
-    // checkDevicePointer(&ptr_info, idx, queue);
-    *(void **)ptr = dev_ptr;
-    return true;
+    *(void **)ptr = PyLong_AsVoidPtr(obj);
+    return checkDevicePointer(*(void **)ptr, g_pointer_check_arg_idx,
+                              *g_pointer_check_queue);
   }
-  // DEBUG
-  /*
-  PyObject* type = (PyObject*)Py_TYPE(obj);
-  PyObject* name = PyObject_GetAttrString(type, "__name__");
-  printf("Type: %s\n", PyUnicode_AsUTF8(name));
-  PyObject* dir_list = PyObject_Dir(obj);
-
-  Py_ssize_t n = PyList_Size(dir_list);
-  for (Py_ssize_t i = 0; i < n; i++) {
-      PyObject* item = PyList_GetItem(dir_list, i);
-      printf("%s\n", PyUnicode_AsUTF8(item));
-  }*/
 
   PyObject *data_ptr = PyObject_GetAttrString(obj, "data_ptr");
 
@@ -776,26 +772,10 @@ bool extractPointer(void *ptr, PyObject *obj) {
           "data_ptr method of Pointer object must return 64-bit int");
       return false;
     }
-    dev_ptr = PyLong_AsVoidPtr(ret);
+    *(void **)ptr = PyLong_AsVoidPtr(ret);
     Py_DECREF(ret);
-    *(void **)ptr = dev_ptr;
-    if (dev_ptr == 0) {
-      return true; // valid nullptr
-    }
-    // checkDevicePointer(&ptr_info, idx, queue);
-    // checkDevicePointer doesn't work without queue param
-    /*
-    CUresult status = cuPointerGetAttribute(
-        dev_ptr, CU_POINTER_ATTRIBUTE_DEVICE_POINTER, *dev_ptr);
-    if (status == CUDA_ERROR_INVALID_VALUE) {
-      PyErr_Format(PyExc_ValueError,
-                  "Pointer argument cannot be accessed from Triton "
-                  "(cpu tensor?)");
-      return false;
-    }
-    return gpuAssert(status, __FILE__, __LINE__);
-    */
-    return true;
+    return checkDevicePointer(*(void **)ptr, g_pointer_check_arg_idx,
+                              *g_pointer_check_queue);
   }
   PyErr_SetString(
       PyExc_TypeError,
@@ -1233,6 +1213,15 @@ extern "C" EXPORT_FUNC PyObject *launch(PyObject *args) {
   uint8_t *extractor_data = (uint8_t *)signature.buf;
   Py_ssize_t num_args = signature.len;
 
+  void *pStream = PyLong_AsVoidPtr(py_obj_stream);
+  // error check
+  if (pStream == nullptr || py_kernel == nullptr) {
+    PyBuffer_Release(&signature);
+    return NULL;
+  }
+
+  sycl::queue stream = *(static_cast<sycl::queue *>(pStream));
+
   // Extract kernel parameters - flatten tuples & remove constexpr.
   PyObject **args_data = (PyObject **)alloca(num_args * sizeof(PyObject *));
   if (args_data == NULL) {
@@ -1251,9 +1240,11 @@ extern "C" EXPORT_FUNC PyObject *launch(PyObject *args) {
   int num_params = num_args + 2;
   void **params = (void **)alloca(num_params * sizeof(void *));
   int params_idx = 0;
+  PointerCheckScope pointerCheckScope(stream);
   // This loop has to stay in the same function that owns params, since we are
   // using alloca to allocate pointers to it on the stack of the function.
   for (Py_ssize_t i = 0; i < num_args; ++i) {
+    g_pointer_check_arg_idx = static_cast<int>(i);
     // Get extractor that will send back a struct with
     // * size for allocation
     // * function to call to put the parameter in params buffer
@@ -1289,16 +1280,10 @@ extern "C" EXPORT_FUNC PyObject *launch(PyObject *args) {
       return NULL;
     }
   }
+  g_pointer_check_arg_idx = -1;
   // Add scratch objects.
   params[params_idx++] = &global_scratch;
   params[params_idx++] = &profile_scratch;
-
-  void *pStream = PyLong_AsVoidPtr(py_obj_stream);
-  // error check
-  if (pStream == nullptr || py_kernel == nullptr)
-    return NULL;
-
-  sycl::queue stream = *(static_cast<sycl::queue *>(pStream));
   sycl::kernel *kernel_ptr = reinterpret_cast<sycl::kernel *>(
       PyCapsule_GetPointer(py_kernel, "kernel"));
   if (kernel_ptr == nullptr)
