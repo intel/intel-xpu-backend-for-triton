@@ -18,10 +18,9 @@
 
 #include <level_zero/ze_api.h>
 #include <sycl/sycl.hpp>
-// FIXME
-// #include <ATen/record_function.h>
-// { "#include <ATen/record_function.h>" if
-// COMPILATION_HELPER.inject_pytorch_dep else "" }
+#if defined(TRITON_INTEL_INJECT_PYTORCH)
+#include <ATen/record_function.h>
+#endif
 
 #if defined(_WIN32)
 #define EXPORT_FUNC __declspec(dllexport)
@@ -957,10 +956,9 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
 
   std::string kernel_name =
       kernel_ptr.get_info<sycl::info::kernel::function_name>();
-  // FIXME
-  // RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {});
-  //{ 'RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {});' if
-  // COMPILATION_HELPER.inject_pytorch_dep else "" }
+#if defined(TRITON_INTEL_INJECT_PYTORCH)
+  RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {});
+#endif
 
   uint32_t expected_num_params =
       kernel_ptr.get_info<sycl::info::kernel::num_args>();

@@ -304,6 +304,12 @@ def compile_module_from_src(src: str, name: str):
                 else:
                     extra_compiler_args += ["-Wl,-rpath," + dir for dir in COMPILATION_HELPER.libsycl_dir]
 
+            if COMPILATION_HELPER.inject_pytorch_dep and name == "spirv_utils":
+                if os.name == "nt":
+                    extra_compiler_args += ["/DTRITON_INTEL_INJECT_PYTORCH=1"]
+                else:
+                    extra_compiler_args += ["-DTRITON_INTEL_INJECT_PYTORCH=1"]
+
             so = _build(name, src_path, tmpdir, COMPILATION_HELPER.library_dir, COMPILATION_HELPER.include_dir,
                         COMPILATION_HELPER.libraries, ccflags=extra_compiler_args)
             with open(so, "rb") as f:
