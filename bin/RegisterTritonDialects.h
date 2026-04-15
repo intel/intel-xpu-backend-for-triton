@@ -106,7 +106,6 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::registerConvertTritonToTritonGPUPass();
   mlir::triton::intel::registerTritonIntelFuseReshape();
   mlir::triton::intel::registerTritonIntelRemoveMasks();
-  mlir::triton::intel::registerTritonIntelRewriteTensorPointer();
   mlir::triton::intel::registerTritonIntelStrideVersioning();
   mlir::triton::intel::registerTritonIntelSimplifySignedArithmetic();
   mlir::triton::intel::registerTritonRewriteTensorDescriptorToPointer();
