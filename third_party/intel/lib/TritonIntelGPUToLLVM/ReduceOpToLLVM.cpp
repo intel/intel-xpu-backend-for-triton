@@ -32,7 +32,7 @@ using ::mlir::triton::gpu::getTotalElemsPerThread;
 // convert_layout through shared memory into a temporary layout, then perform up
 // to two additional warp reductions until the reduction axis size becomes 1.
 #ifndef TRITON_INTEL_REDUCE_USE_COMMON_CROSS_WARP
-#define TRITON_INTEL_REDUCE_USE_COMMON_CROSS_WARP 0
+#define TRITON_INTEL_REDUCE_USE_COMMON_CROSS_WARP 1
 #endif
 
 namespace {
