@@ -66,49 +66,9 @@ public:
       }
     }
 
-    auto linearAttr = triton::gpu::LinearEncodingAttr::get(ctx, regLl);
-    auto kReg = StringAttr::get(ctx, "register");
-    auto basesPerDim = linearAttr.basesPerDim(kReg, /*skipBroadcast=*/true);
-    unsigned axisPack = basesPerDim[axis];
-
-    if (axisPack != 1) {
-      auto perm = ReduceOpHelper::moveAxisBasesToFront(regLl, axis,
-                                                       /*vectorize=*/false);
-      if (!perm.isIdentity()) {
-        regLl = perm.apply(regLl);
-        for (auto &vals : accs)
-          vals = perm.apply(vals);
-      }
-
-      Operation &combinerOp = op.getCombineOp().front().front();
-      // unsigned arity = targetInfo.getReductionTreeArity(&combinerOp);
-      unsigned arity = 2;
-      unsigned regs = accs.front().size();
-      if (regs % axisPack != 0)
-        return rewriter.notifyMatchFailure(
-            op, "axisPack does not divide reg count in step1");
-
-      SmallVector<SmallVector<Value>> reduced(op.getNumOperands());
-      for (unsigned regBase = 0; regBase < regs; regBase += axisPack) {
-        SmallVector<SmallVector<Value>> vals;
-        vals.reserve(axisPack);
-        for (unsigned i = 0; i < axisPack; ++i) {
-          SmallVector<Value> tuple(op.getNumOperands());
-          for (unsigned opIdx = 0; opIdx < op.getNumOperands(); ++opIdx)
-            tuple[opIdx] = accs[opIdx][regBase + i];
-          vals.push_back(std::move(tuple));
-        }
-
-        auto acc = treeReduce(loc, rewriter, op.getCombineOp(), std::move(vals),
-                              arity);
-        for (unsigned opIdx = 0; opIdx < op.getNumOperands(); ++opIdx)
-          reduced[opIdx].push_back(acc[opIdx]);
-      }
-
-      accs = std::move(reduced);
-      regLl = ReduceOpHelper::zeroBasesAlongDimAndReorder(regLl, axis, kReg);
-      regLl = actionRemoveBroadcastedRegs(regLl).apply(regLl);
-    }
+    // First reduce all the values along axis within each thread.
+    std::tie(regLl, accs) =
+        reduceWithinThreads(op, std::move(regLl), std::move(accs), rewriter);
 
     // Then reduce across threads within a warp.
     std::tie(regLl, accs) =
