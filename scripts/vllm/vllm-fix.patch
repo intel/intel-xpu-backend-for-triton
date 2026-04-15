@@ -1,8 +1,8 @@
 diff --git a/tests/conftest.py b/tests/conftest.py
-index 719bfa5ed..0199ce057 100644
+index f3b22d898..bdb82146a 100644
 --- a/tests/conftest.py
 +++ b/tests/conftest.py
-@@ -237,6 +237,11 @@ def workspace_init():
+@@ -283,6 +283,11 @@ def workspace_init():
  
      if torch.cuda.is_available():
          device = torch.device("cuda:0")
@@ -14,6 +14,21 @@ index 719bfa5ed..0199ce057 100644
          init_workspace_manager(device)
      yield
      reset_workspace_manager()
+diff --git a/tests/kernels/attention/test_merge_attn_states.py b/tests/kernels/attention/test_merge_attn_states.py
+index 6fccb8ccf..0e4fa2d2d 100644
+--- a/tests/kernels/attention/test_merge_attn_states.py
++++ b/tests/kernels/attention/test_merge_attn_states.py
+@@ -10,6 +10,10 @@ from vllm.v1.attention.ops.triton_merge_attn_states import (
+     merge_attn_states as merge_attn_states_triton,
+ )
+ 
++# XPU: Skip entire module - requires CUDA merge kernel for comparison
++if current_platform.is_xpu():
++    pytest.skip("Requires CUDA merge kernel for comparison", allow_module_level=True)
++
+ 
+ # Naive PyTorch Implements section 2.2 of https://www.arxiv.org/pdf/2501.01005
+ # can be used to combine partial attention results (in the split-KV case)
 diff --git a/tests/kernels/moe/test_batched_moe.py b/tests/kernels/moe/test_batched_moe.py
 index d78e1947f..e97352841 100644
 --- a/tests/kernels/moe/test_batched_moe.py
@@ -190,7 +205,7 @@ index 4b693d8c8..5fee0e1d0 100644
  
  
 diff --git a/vllm/model_executor/layers/fused_moe/fused_batched_moe.py b/vllm/model_executor/layers/fused_moe/fused_batched_moe.py
-index 9df94b72d..22c0e8ba9 100644
+index e2b5a8f67..0513a957b 100644
 --- a/vllm/model_executor/layers/fused_moe/fused_batched_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/fused_batched_moe.py
 @@ -778,7 +778,7 @@ class NaiveBatchedExperts(mk.FusedMoEExpertsModular):
@@ -211,68 +226,8 @@ index 9df94b72d..22c0e8ba9 100644
          # Note: this does a bunch of extra work because expert_num_tokens is
          # ignored but it does support torch.compile + cudagraphs.
          hidden_dim = A.size(-1)
-diff --git a/tests/kernels/attention/test_merge_attn_states.py b/tests/kernels/attention/test_merge_attn_states.py
-index 000000000..111111111 100644
---- a/tests/kernels/attention/test_merge_attn_states.py
-+++ b/tests/kernels/attention/test_merge_attn_states.py
-@@ -10,6 +10,10 @@ from vllm.v1.attention.ops.triton_merge_attn_states import (
-     merge_attn_states as merge_attn_states_triton,
- )
-
-+# XPU: Skip entire module - requires CUDA merge kernel for comparison
-+if current_platform.is_xpu():
-+    pytest.skip("Requires CUDA merge kernel for comparison", allow_module_level=True)
-+
-
- # Naive PyTorch Implements section 2.2 of https://www.arxiv.org/pdf/2501.01005
- # can be used to combine partial attention results (in the split-KV case)
-+diff --git a/vllm/model_executor/layers/fused_moe/batched_deep_gemm_moe.py b/vllm/model_executor/layers/fused_moe/batched_deep_gemm_moe.py
-+index 000000000..111111111 100644
-+--- a/vllm/model_executor/layers/fused_moe/batched_deep_gemm_moe.py
-++++ b/vllm/model_executor/layers/fused_moe/batched_deep_gemm_moe.py
-+@@ -210,12 +210,15 @@ def persistent_masked_m_silu_mul_quant(
-+         DeepGemmQuantScaleFMT.UE8M0,
-+     ]
-+
-+-    cuda_arch = current_platform.get_device_capability(
-+-        device_id=y.device.index
-+-    ).to_int()
-+-
-+-    if current_platform.is_cuda() and cuda_arch >= 80:
-++    # XPU: Check platform before getting device capability
-++    # ROCm and XPU use Triton fallback path
-++    use_cuda_kernel = False
-++    if current_platform.is_cuda():
-++        cuda_arch = current_platform.get_device_capability(
-++            device_id=y.device.index
-++        ).to_int()
-++        use_cuda_kernel = cuda_arch >= 80
-++    if use_cuda_kernel:
-+         torch.ops._C.persistent_masked_m_silu_mul_quant(
-+             y, tokens_per_expert, y_q, y_s, ceil_ue8m0
-+         )
-+@@ -710,12 +713,15 @@ def _silu_mul_fp8_quant_deep_gemm(
-+         DeepGemmQuantScaleFMT.UE8M0,
-+     ]
-+
-+-    cuda_arch = current_platform.get_device_capability(
-+-        device_id=y.device.index
-+-    ).to_int()
-+-
-+-    if current_platform.is_cuda() and cuda_arch >= 80:
-++    # XPU: Check platform before getting device capability
-++    # ROCm and XPU use Triton fallback path
-++    use_cuda_kernel = False
-++    if current_platform.is_cuda():
-++        cuda_arch = current_platform.get_device_capability(
-++            device_id=y.device.index
-++        ).to_int()
-++        use_cuda_kernel = cuda_arch >= 80
-++    if use_cuda_kernel:
-+         torch.ops._C.persistent_masked_m_silu_mul_quant(
-+             y, tokens_per_expert, y_q, y_s, ceil_ue8m0
-+         )
 diff --git a/vllm/model_executor/layers/quantization/utils/w8a8_utils.py b/vllm/model_executor/layers/quantization/utils/w8a8_utils.py
+index b309bf14d..eebd9fe39 100644
 --- a/vllm/model_executor/layers/quantization/utils/w8a8_utils.py
 +++ b/vllm/model_executor/layers/quantization/utils/w8a8_utils.py
 @@ -11,6 +11,10 @@ from vllm.platforms import current_platform
