@@ -22,18 +22,6 @@ using ::mlir::triton::gpu::getTotalElemsPerThread;
 #define TRITON_INTEL_REDUCE_USE_COMMON_CROSS_WARP 0
 #endif
 
-// A/B toggle for step1 (within-thread) + step2 (within-warp) lowering.
-//
-// When enabled, both steps are ported from the common ReduceOpToLLVM.cpp
-// lowering, but we keep Intel’s downstream representation:
-//   - `accs`: map<offset, tuple-of-operands>
-//   - `indices`: map<offset, multiDimIndex>
-//
-// This makes step3 and result packing work unchanged.
-#ifndef TRITON_INTEL_REDUCE_USE_COMMON_STEP1_STEP2
-#define TRITON_INTEL_REDUCE_USE_COMMON_STEP1_STEP2 1
-#endif
-
 namespace {
 struct ReduceOpConversion
     : public ConvertTritonGPUReduceScanToLLVMPattern<triton::ReduceOp> {
@@ -49,34 +37,135 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     ReduceOpHelper helper(op);
     Location loc = op->getLoc();
+    auto accs = unpackInputs(loc, op, adaptor, rewriter);
+    unsigned axis = op.getAxis();
 
-    std::map<SmallVector<unsigned>, SmallVector<Value>> accs;
-    std::map<SmallVector<unsigned>, SmallVector<Value>> indices;
+    auto *ctx = op.getContext();
 
-#if TRITON_INTEL_REDUCE_USE_COMMON_STEP1_STEP2
-    if (failed(reduceStep1Step2LikeCommon(helper, adaptor, accs, indices,
-                                          rewriter)))
-      return failure();
-#else
-    auto srcValues = unpackInputs(loc, op, adaptor, rewriter);
-    // Step 1: reduce all the values along axis within each thread.
-    reduceWithinThreads(helper, srcValues, accs, indices, rewriter);
-
-    // Step 2: reduce across threads within a warp.
-    reduceWithinWarps(helper, accs, rewriter);
-#endif
-
-    if (helper.isWarpSynchronous()) {
-      packResults(helper, accs, rewriter);
-      return success();
+    // Remove block as we don't currently support it
+    LinearLayout regLl = triton::gpu::toLinearLayout(helper.getSrcTy());
+    // Remove broadcasting in registers as SliceLayout removes them
+    auto removeBroadcast = actionRemoveBroadcastedRegs(regLl);
+    if (!removeBroadcast.isIdentity()) {
+      regLl = removeBroadcast.apply(regLl);
+      for (auto &vals : accs) {
+        vals = removeBroadcast.apply(vals);
+      }
     }
+
+    auto linearAttr = triton::gpu::LinearEncodingAttr::get(ctx, regLl);
+    auto kReg = StringAttr::get(ctx, "register");
+    auto basesPerDim = linearAttr.basesPerDim(kReg, /*skipBroadcast=*/true);
+    unsigned axisPack = basesPerDim[axis];
+
+    if (axisPack != 1) {
+      auto perm = ReduceOpHelper::moveAxisBasesToFront(regLl, axis,
+                                                       /*vectorize=*/false);
+      if (!perm.isIdentity()) {
+        regLl = perm.apply(regLl);
+        for (auto &vals : accs)
+          vals = perm.apply(vals);
+      }
+
+      Operation &combinerOp = op.getCombineOp().front().front();
+      unsigned arity = targetInfo.getReductionTreeArity(&combinerOp);
+      unsigned regs = accs.front().size();
+      if (regs % axisPack != 0)
+        return rewriter.notifyMatchFailure(
+            op, "axisPack does not divide reg count in step1");
+
+      SmallVector<SmallVector<Value>> reduced(op.getNumOperands());
+      for (unsigned regBase = 0; regBase < regs; regBase += axisPack) {
+        SmallVector<SmallVector<Value>> vals;
+        vals.reserve(axisPack);
+        for (unsigned i = 0; i < axisPack; ++i) {
+          SmallVector<Value> tuple(op.getNumOperands());
+          for (unsigned opIdx = 0; opIdx < op.getNumOperands(); ++opIdx)
+            tuple[opIdx] = accs[opIdx][regBase + i];
+          vals.push_back(std::move(tuple));
+        }
+
+        auto acc = treeReduceLike(loc, rewriter, op.getCombineOp(),
+                                  std::move(vals), arity);
+        for (unsigned opIdx = 0; opIdx < op.getNumOperands(); ++opIdx)
+          reduced[opIdx].push_back(acc[opIdx]);
+      }
+
+      accs = std::move(reduced);
+      regLl = ReduceOpHelper::zeroBasesAlongDimAndReorder(regLl, axis, kReg);
+      regLl = actionRemoveBroadcastedRegs(regLl).apply(regLl);
+    }
+
+    // Then reduce across threads within a warp.
+    std::tie(regLl, accs) =
+        reduceWithinWarps(op, std::move(regLl), std::move(accs), rewriter);
+
+    // reducedRegLaneLayout is used in the AllocationAnalysis to get the size
+    // of the scratch space.
+    // assert(regLl ==
+    //        ReduceOpHelper::reducedRegLaneLayout(helper.getSrcTy(), axis));
 
     // Step 3: reduce across warps.
 #if TRITON_INTEL_REDUCE_USE_COMMON_CROSS_WARP
-    if (failed(reduceAcrossWarpsLikeCommon(helper, accs, rewriter)))
-      return failure();
+    // If we still need to reduce along warps / blocks:
+    // Create temporary layout for reduction within warps.
+    // By construction of tmpLl, we will iterate at most 2 times, as the maximum
+    // number of warp / block bases is 64 * 16 = 32 * 32
+    // That is, they fit in 2 rounds of warp reductions
+    // Even more, if we do two rounds, getInterLayout will make sure that the
+    // first one does not cross CTAs
+    auto kAxis = *(regLl.getOutDimNames().begin() + axis);
+    auto kBlock = StringAttr::get(ctx, "block");
+    bool lastCvtCrossesCTAs = false;
+    int i = 0;
+    while (regLl.getOutDimSize(kAxis) != 1) {
+      LinearLayout tmpLl = ReduceOpHelper::getInterLayout(regLl, axis);
+
+      // Emit a barrier if we are reusing the shmem
+      if (i > 0) {
+        sync(rewriter, loc, lastCvtCrossesCTAs);
+      }
+      accs = convertLayoutValues(loc, rewriter, op, regLl, tmpLl, accs);
+      lastCvtCrossesCTAs = !mlir::isCvtDimSync(regLl, tmpLl, kBlock);
+
+      std::tie(regLl, accs) =
+          reduceWithinWarps(op, std::move(tmpLl), std::move(accs), rewriter);
+      ++i;
+    }
+    assert(i <= 2 && "expected at most 2 rounds of warp reductions");
+    // Remove the axis dimension, which at this point is of size 1
+    regLl = removeStandardDim(regLl, axis);
+
+    // Convert to output layout if we didn't fit the warp bases within zero
+    // bases in the tmpLl
+    if (auto resultTy =
+            dyn_cast<RankedTensorType>(op.getResult()[0].getType())) {
+      auto outputLayout = triton::gpu::toLinearLayout(resultTy);
+      if (regLl != outputLayout) {
+        // Reuse the shmem
+        sync(rewriter, loc, lastCvtCrossesCTAs);
+        accs =
+            convertLayoutValues(loc, rewriter, op, regLl, outputLayout, accs);
+      }
+    }
+
+    packResults(op, accs, rewriter);
 #else
-    reduceAcrossWarpsIntel(helper, accs, indices, rewriter);
+
+    std::map<SmallVector<unsigned>, SmallVector<Value>> intelAccs;
+    std::map<SmallVector<unsigned>, SmallVector<Value>> indices;
+
+    // Scatter to Intel’s canonical maps.
+    if (failed(scatterReducedRegsToAccsAndIndices(
+            op, helper, regLl, accs, intelAccs, indices, rewriter)))
+      return failure();
+
+    if (helper.isWarpSynchronous()) {
+      packResults(helper, intelAccs, rewriter);
+      return success();
+    }
+
+    reduceAcrossWarpsIntel(helper, intelAccs, indices, rewriter);
 #endif
 
     return success();
@@ -95,22 +184,6 @@ private:
       acc[i] = results[i];
   }
 
-  SmallVector<SmallVector<Value>>
-  unpackInputs(Location loc, triton::ReduceOp op, OpAdaptor adaptor,
-               ConversionPatternRewriter &rewriter) const {
-    auto types = op.getInputTypes();
-    auto operands = adaptor.getOperands();
-    unsigned srcElems = getTotalElemsPerThread(types[0]);
-    SmallVector<SmallVector<Value>> srcValues(srcElems);
-    for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-      auto values = unpackLLElements(loc, operands[i], rewriter);
-      assert(values.size() == srcValues.size());
-      for (unsigned j = 0; j < srcValues.size(); ++j)
-        srcValues[j].push_back(values[j]);
-    }
-    return srcValues;
-  }
-
   void sync(ConversionPatternRewriter &rewriter, Location loc,
             triton::ReduceOp op) const {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -118,9 +191,11 @@ private:
   }
 
   // Tree-reduce helper matching the common ReduceOpToLLVM.cpp structure.
-  SmallVector<Value> treeReduceLikeCommon(
-      Location loc, ConversionPatternRewriter &rewriter, Region &combineOp,
-      SmallVector<SmallVector<Value>> values, unsigned arity) const {
+  SmallVector<Value> treeReduceLike(Location loc,
+                                    ConversionPatternRewriter &rewriter,
+                                    Region &combineOp,
+                                    SmallVector<SmallVector<Value>> values,
+                                    unsigned arity) const {
     assert(!values.empty() && arity >= 2);
     while (values.size() > 1) {
       SmallVector<SmallVector<Value>> next;
@@ -139,6 +214,17 @@ private:
       values = std::move(next);
     }
     return values.front();
+  }
+
+  SmallVector<SmallVector<Value>>
+  unpackInputs(Location loc, triton::ReduceOp op, OpAdaptor adaptor,
+               ConversionPatternRewriter &rewriter) const {
+    auto operands = adaptor.getOperands();
+    SmallVector<SmallVector<Value>> srcValues(op.getNumOperands());
+    for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+      srcValues[i] = unpackLLElements(loc, operands[i], rewriter);
+    }
+    return srcValues;
   }
 
   // Common step1+step2 implementation that produces Intel’s accs/indices maps.
@@ -200,8 +286,8 @@ private:
           vals.push_back(std::move(tuple));
         }
 
-        auto acc = treeReduceLikeCommon(loc, rewriter, op.getCombineOp(),
-                                        std::move(vals), arity);
+        auto acc = treeReduceLike(loc, rewriter, op.getCombineOp(),
+                                  std::move(vals), arity);
         for (unsigned opIdx = 0; opIdx < op.getNumOperands(); ++opIdx)
           reduced[opIdx].push_back(acc[opIdx]);
       }
@@ -212,8 +298,8 @@ private:
     }
 
     // Step2: within-warp reduction (common behavior).
-    std::tie(regLl, accVecs) = reduceWithinWarpsLikeCommon(
-        op, std::move(regLl), std::move(accVecs), rewriter);
+    std::tie(regLl, accVecs) =
+        reduceWithinWarps(op, std::move(regLl), std::move(accVecs), rewriter);
 
     // Scatter to Intel’s canonical maps.
     return scatterReducedRegsToAccsAndIndices(op, helper, regLl, accVecs, accs,
@@ -274,42 +360,6 @@ private:
     return success();
   }
 
-  // Port of common “within-thread” reduction behavior, but output is Intel’s
-  // maps (`accs` + `indices`).
-  void reduceWithinThreads(
-      ReduceOpHelper &helper, SmallVector<SmallVector<Value>> &srcValues,
-      std::map<SmallVector<unsigned>, SmallVector<Value>> &accs,
-      std::map<SmallVector<unsigned>, SmallVector<Value>> &indices,
-      ConversionPatternRewriter &rewriter) const {
-    triton::ReduceOp op = helper.getOperation();
-    RankedTensorType operandType = op.getInputTypes()[0];
-    // Assumes offsets don't actually depend on type
-    SmallVector<SmallVector<unsigned>> offsets =
-        emitOffsetForLayout(helper.getSrcLayout(), operandType);
-
-    // Thread X might hold the same input value in two registers.  Get the
-    // indices in `offsets` that hold unique values, and only accumulate over
-    // those.
-    llvm::MapVector<ArrayRef<unsigned>, int> uniqueOffsets;
-    for (int i = 0; i < offsets.size(); ++i) {
-      uniqueOffsets.insert({offsets[i], i});
-    }
-
-    unsigned srcElems = getTotalElemsPerThread(operandType);
-    auto *combineOp = &op.getCombineOp();
-    auto srcIndices = emitIndices(op.getLoc(), rewriter, targetInfo,
-                                  helper.getSrcLayout(), operandType, true);
-    // reduce within threads
-    for (const auto &[_, i] : uniqueOffsets) {
-      SmallVector<unsigned> key = offsets[i];
-      key[op.getAxis()] = 0;
-      bool isFirst = accs.find(key) == accs.end();
-      accumulate(op.getLoc(), rewriter, *combineOp, accs[key], srcValues[i]);
-      if (isFirst)
-        indices[key] = srcIndices[i];
-    }
-  }
-
   // Apply warp reduction across the given number of contiguous lanes using op
   // region and the accumulator values as source.
   void warpReduce(ConversionPatternRewriter &rewriter, Location loc,
@@ -327,23 +377,6 @@ private:
         shfl[i] = targetInfo.shuffleXor(rewriter, loc, acc[i], N * interleave);
       }
       accumulate(op.getLoc(), rewriter, op.getCombineOp(), acc, shfl, pred);
-    }
-  }
-
-  // Reduce across threads within each warp.
-  void
-  reduceWithinWarps(ReduceOpHelper &helper,
-                    std::map<SmallVector<unsigned>, SmallVector<Value>> &accs,
-                    ConversionPatternRewriter &rewriter) const {
-    triton::ReduceOp op = helper.getOperation();
-    unsigned sizeIntraWarps = helper.getIntraWarpSizeWithUniqueData();
-    unsigned threadOffsetOnReductionAxis =
-        helper.getThreadOffsetOnReductionAxis();
-    for (auto it : accs) {
-      const SmallVector<unsigned> &key = it.first;
-      SmallVector<Value> &acc = accs[key];
-      warpReduce(rewriter, op.getLoc(), acc, op, sizeIntraWarps,
-                 threadOffsetOnReductionAxis);
     }
   }
 
@@ -597,110 +630,11 @@ private:
     loadReductionAndPackResult(helper, smemShape, smemBases, rewriter);
   }
 
-  LogicalResult reduceAcrossWarpsLikeCommon(
-      ReduceOpHelper &helper,
-      std::map<SmallVector<unsigned>, SmallVector<Value>> &accs,
-      ConversionPatternRewriter &rewriter) const {
-    triton::ReduceOp op = helper.getOperation();
-    Location loc = op.getLoc();
-    MLIRContext *ctx = rewriter.getContext();
-
-    // The common lowering logic works on LinearLayout + SSA vectors of values.
-    // We reconstruct (layout, values) from the post-step-2 Intel state:
-    //  - layout is the reducedRegLaneLayout for the src type.
-    //  - values are taken from accs in the canonical per-thread register order
-    //    of the *reduced* layout (i.e., after step 1/2 have collapsed axis).
-    //
-    // This keeps the numeric behavior of step 1/2 unchanged, and only changes
-    // the cross-warp orchestration.
-    unsigned axis = op.getAxis();
-
-    LinearLayout regLl =
-        ReduceOpHelper::reducedRegLaneLayout(helper.getSrcTy(), axis);
-
-    // Materialize per-operand register values from the (key -> acc) map.
-    // Keys are indices in the reduced layout with the reduction axis set to 0.
-    SmallVector<SmallVector<Value>> llAccs(op.getNumOperands());
-
-    // The important bit: `llAccs[*]` must be in the same register order that
-    // `packLLElements` expects for the tensor type we create in
-    // convertLayoutValues().  That order corresponds to
-    // `emitOffsetForLayout(<reduced-encoding>, <reduced-tensor-type>)`.
-    auto srcTy = cast<RankedTensorType>(op.getOperandTypes().front());
-    auto reducedShape = llvm::to_vector(srcTy.getShape());
-    reducedShape[axis] = 1;
-
-    // Create a tensor type whose encoding matches `regLl`.
-    auto regEnc = triton::gpu::LinearEncodingAttr::get(ctx, regLl);
-    auto reducedTensorTy =
-        RankedTensorType::get(reducedShape, srcTy.getElementType(), regEnc);
-
-    SmallVector<SmallVector<unsigned>> regOffsets =
-        emitOffsetForLayout(regEnc, reducedTensorTy);
-
-    for (const SmallVector<unsigned> &off : regOffsets) {
-      SmallVector<unsigned> key = off;
-      // Be robust: the reduced encoding should already have axis=0, but keep it
-      // explicit since our accs map is keyed that way.
-      key[axis] = 0;
-      auto it = accs.find(key);
-      if (it == accs.end())
-        return rewriter.notifyMatchFailure(op,
-                                           "failed to find accumulator key");
-      for (unsigned opIdx = 0; opIdx < op.getNumOperands(); ++opIdx)
-        llAccs[opIdx].push_back(it->second[opIdx]);
-    }
-
-    // Now mirror the common lowering’s cross-warp loop.
-    auto kAxis = *(regLl.getOutDimNames().begin() + axis);
-    auto kBlock = StringAttr::get(ctx, "block");
-    bool lastCvtCrossesCTAs = false;
-    int round = 0;
-
-    while (regLl.getOutDimSize(kAxis) != 1) {
-      LinearLayout tmpLl = ReduceOpHelper::getInterLayout(regLl, axis);
-
-      if (round > 0)
-        sync(rewriter, loc, op);
-
-      llAccs = convertLayoutValues(loc, rewriter, op, regLl, tmpLl, llAccs);
-      lastCvtCrossesCTAs = !mlir::isCvtDimSync(regLl, tmpLl, kBlock);
-
-      (void)lastCvtCrossesCTAs;
-      std::tie(regLl, llAccs) = reduceWithinWarpsLikeCommon(
-          op, std::move(tmpLl), std::move(llAccs), rewriter);
-      ++round;
-    }
-
-    // Common expects <= 2 rounds.
-    if (round > 2) {
-      return rewriter.notifyMatchFailure(
-          op, "expected at most 2 cross-warp rounds");
-    }
-
-    // Remove axis dim (size 1) and pack results.
-    regLl = removeStandardDim(regLl, axis);
-
-    // Convert to output layout if needed.
-    if (auto resultTy =
-            dyn_cast<RankedTensorType>(op.getResult()[0].getType())) {
-      auto outLl = triton::gpu::toLinearLayout(resultTy);
-      if (regLl != outLl) {
-        sync(rewriter, loc, op);
-        llAccs = convertLayoutValues(loc, rewriter, op, regLl, outLl, llAccs);
-      }
-    }
-
-    // Replace op with packed results.
-    packResultsLikeCommon(op, llAccs, rewriter);
-    return success();
-  }
-
   // --- Common within-warp reduction helper (used by common cross-warp loop)
   std::pair<LinearLayout, SmallVector<SmallVector<Value>>>
-  reduceWithinWarpsLikeCommon(triton::ReduceOp op, LinearLayout layout,
-                              SmallVector<SmallVector<Value>> accs,
-                              ConversionPatternRewriter &rewriter) const {
+  reduceWithinWarps(triton::ReduceOp op, LinearLayout layout,
+                    SmallVector<SmallVector<Value>> accs,
+                    ConversionPatternRewriter &rewriter) const {
     auto *ctx = op.getContext();
     auto kLane = StringAttr::get(ctx, "lane");
     const auto &laneBases = layout.getBases().lookup(kLane);
@@ -756,25 +690,6 @@ private:
 
       accumulate(op.getLoc(), rewriter, op.getCombineOp(), acc, shfl);
     }
-  }
-
-  // === Helpers borrowed from common reduce lowering (kept local to Intel file)
-
-  void packResultsLikeCommon(triton::ReduceOp op,
-                             SmallVector<SmallVector<Value>> &accs,
-                             ConversionPatternRewriter &rewriter) const {
-    Location loc = op.getLoc();
-    SmallVector<Value> results(op.getNumOperands());
-    for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-      if (auto resultTy =
-              dyn_cast<RankedTensorType>(op.getResult()[i].getType())) {
-        results[i] = packLLElements(loc, getTypeConverter(), accs[i], rewriter,
-                                    resultTy);
-      } else {
-        results[i] = accs[i].front();
-      }
-    }
-    rewriter.replaceOp(op, results);
   }
 
   SmallVector<SmallVector<Value>>
