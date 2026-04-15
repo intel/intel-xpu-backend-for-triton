@@ -9,9 +9,6 @@
 #include <cstddef>
 #include <cstring>
 #include <iostream>
-#include <stdalign.h>
-#include <stddef.h>
-#include <stdio.h>
 #include <string>
 #include <utility>
 #include <vector>
@@ -696,16 +693,16 @@ static inline void setScalarArgByType(sycl::handler &cgh, int index,
     set_scalar_arg<uint64_t>(cgh, index, value);
     break;
   case EXTRACTOR_FP16_INDEX:
-    set_scalar_arg<double>(cgh, index, value);
+    set_scalar_arg<uint16_t>(cgh, index, value);
     break;
   case EXTRACTOR_BF16_INDEX:
-    set_scalar_arg<double>(cgh, index, value);
+    set_scalar_arg<uint16_t>(cgh, index, value);
     break;
   case EXTRACTOR_FP32_INDEX:
-    set_scalar_arg<double>(cgh, index, value);
+    set_scalar_arg<uint32_t>(cgh, index, value);
     break;
   case EXTRACTOR_FP64_INDEX:
-    set_scalar_arg<double>(cgh, index, value);
+    set_scalar_arg<uint64_t>(cgh, index, value);
     break;
   default:
     break;
@@ -720,7 +717,7 @@ static inline void printScalarArgByType(uint32_t index, const void *value,
     std::cout << *static_cast<void *const *>(value);
     break;
   case EXTRACTOR_INT8_INDEX:
-    std::cout << static_cast<int>(*static_cast<const int8_t *>(value));
+    std::cout << *static_cast<const int8_t *>(value);
     break;
   case EXTRACTOR_INT16_INDEX:
     std::cout << *static_cast<const int16_t *>(value);
@@ -732,7 +729,7 @@ static inline void printScalarArgByType(uint32_t index, const void *value,
     std::cout << *static_cast<const int64_t *>(value);
     break;
   case EXTRACTOR_UINT8_INDEX:
-    std::cout << static_cast<unsigned>(*static_cast<const uint8_t *>(value));
+    std::cout << *static_cast<const uint8_t *>(value);
     break;
   case EXTRACTOR_UINT16_INDEX:
     std::cout << *static_cast<const uint16_t *>(value);
@@ -749,15 +746,11 @@ static inline void printScalarArgByType(uint32_t index, const void *value,
     std::cout << *static_cast<const uint16_t *>(value);
     break;
   case EXTRACTOR_FP32_INDEX: {
-    float fp32;
-    std::memcpy(&fp32, value, sizeof(fp32));
-    std::cout << fp32;
+    std::cout << *static_cast<const float *>(value);
     break;
   }
   case EXTRACTOR_FP64_INDEX: {
-    double fp64;
-    std::memcpy(&fp64, value, sizeof(fp64));
-    std::cout << fp64;
+    std::cout << *static_cast<const double *>(value);
     break;
   }
   default:
