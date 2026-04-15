@@ -2604,8 +2604,9 @@ struct DescriptorLoadOpToBlockIOConversion
     // suboptimal instruction schedule.
     unsigned descBlockColIdx =
         mapResultDimToDescDim(isTransposeRequired ? rowDim : colDim);
-    auto descColConst = mlir::triton::intel::getFoldedConstantValue(
-        descIndices[descBlockColIdx]);
+    std::optional<int64_t> descColConst =
+        mlir::triton::intel::getFoldedConstantValue(
+            descIndices[descBlockColIdx]);
     if (!descColConst || *descColConst != 0) {
       constexpr int64_t ALIGNMENT_MASK = 0x3f;
       Value baseAddr = b.ptrtoint(int_ty(64), desc.base);

@@ -70,7 +70,7 @@ VLLM_PROJ=$ROOT/vllm
 
 # Use VLLM_PIN environment variable if set, otherwise read from file
 if [ -z "${VLLM_PIN:-}" ]; then
-  VLLM_PIN="$(<"$ROOT/benchmarks/vllm/vllm-pin.txt")"
+  VLLM_PIN="$(<"$ROOT/scripts/vllm/vllm-pin.txt")"
 fi
 
 echo "**** vLLM pin: $VLLM_PIN ****"
@@ -149,8 +149,8 @@ function patch_vllm {
   cd "$VLLM_PROJ"
 
   # Apply the main vLLM fix patch (conftest, batched_moe, fused_batched_moe, etc.)
-  if git apply --check "$ROOT/benchmarks/vllm/vllm-fix.patch" 2>/dev/null; then
-    git apply "$ROOT/benchmarks/vllm/vllm-fix.patch"
+  if git apply --check "$ROOT/scripts/vllm/vllm-fix.patch" 2>/dev/null; then
+    git apply "$ROOT/scripts/vllm/vllm-fix.patch"
     echo "**** Applied vllm-fix.patch ****"
   else
     echo "**** vllm-fix.patch already applied or conflicts, skipping. ****"
@@ -244,8 +244,8 @@ function install_vllm {
   rm -f "$CONSTRAINTS"
 
   # Copy tests for benchmark use
-  rm -rf "$ROOT/benchmarks/vllm/batched_moe/tests"
-  cp -r tests "$ROOT/benchmarks/vllm/batched_moe/tests"
+  rm -rf "$ROOT/benchmarks/triton_kernels_benchmark/vllm/batched_moe/tests"
+  cp -r tests "$ROOT/benchmarks/triton_kernels_benchmark/vllm/batched_moe/tests"
 
   # Install vLLM in editable mode (--no-deps: don't resolve deps again)
   VLLM_TARGET_DEVICE=xpu python -m pip install --no-deps --no-build-isolation -e .
