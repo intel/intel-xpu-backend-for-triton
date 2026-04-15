@@ -7,10 +7,17 @@
 //===----------------------------------------------------------------------===//
 
 #include <cstddef>
+#include <cstring>
 #include <iostream>
 #include <string>
 #include <utility>
 #include <vector>
+
+#include <level_zero/ze_api.h>
+#include <sycl/sycl.hpp>
+#if defined(TRITON_INTEL_INJECT_PYTORCH)
+#include <ATen/record_function.h>
+#endif
 
 #if defined(_WIN32)
 #define EXPORT_FUNC __declspec(dllexport)
@@ -515,4 +522,783 @@ extern "C" EXPORT_FUNC PyObject *sycl_queue_memset(PyObject *args) {
   }
 
   Py_RETURN_NONE;
+}
+
+typedef enum { ARG_CONSTEXPR = 0, ARG_KERNEL = 1, ARG_TUPLE = 2 } ArgType;
+
+// Annotation struct to know how the argument should be handled.
+typedef struct {
+  PyObject_HEAD;
+  PyObject *nested_tuple; // Can be a List of PyKernelArgObjects or None
+  ArgType type;
+} PyKernelArgObject;
+
+// Deallocator
+static void PyKernelArg_dealloc(PyKernelArgObject *self) {
+  Py_XDECREF(self->nested_tuple);
+  Py_TYPE(self)->tp_free((PyObject *)self);
+}
+
+// Constructor
+static int PyKernelArg_init(PyKernelArgObject *self, PyObject *args,
+                            PyObject *kwds) {
+  static char *kwlist[] = {"nested_tuple", "type", NULL};
+  PyObject *tup = NULL;
+  int type_val = 0;
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|i", kwlist, &tup,
+                                   &type_val)) {
+    return -1;
+  }
+  Py_XINCREF(tup);
+  self->nested_tuple = tup;
+  self->type = (ArgType)type_val;
+  return 0;
+}
+
+static void PyKernelArg_free(void *ptr) { free(ptr); }
+
+static PyTypeObject PyKernelArgType = {
+    PyVarObject_HEAD_INIT(NULL, 0).tp_name =
+        "triton.backends.intel.PyKernelArg",
+    .tp_basicsize = sizeof(PyKernelArgObject),
+    .tp_itemsize = 0,
+    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_doc = "Kernel Argument Metadata",
+    .tp_new = PyType_GenericNew,
+    .tp_init = (initproc)PyKernelArg_init,
+    .tp_dealloc = (destructor)PyKernelArg_dealloc,
+};
+
+static inline void gpuAssert(ze_result_t code, const char *file, int line) {
+  if (code != ZE_RESULT_SUCCESS) {
+    const char *prefix = "Triton Error [ZE]: ";
+    std::string str = std::to_string(code);
+    char err[1024] = {{0}};
+    strcat(err, prefix);
+    strcat(err, str.c_str());
+    PyErr_SetString(PyExc_RuntimeError, err);
+  }
+}
+
+static inline bool checkDevicePointer(void *ptr, int idx,
+                                      const sycl::queue &queue) {
+  if (ptr == nullptr) {
+    return true;
+  }
+  auto context = queue.get_context();
+  auto handle = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(context);
+  ze_memory_allocation_properties_t prop;
+  prop.stype = ZE_STRUCTURE_TYPE_MEMORY_ALLOCATION_PROPERTIES;
+  prop.pNext = nullptr;
+  ze_device_handle_t device;
+  auto res =
+      zeMemGetAllocProperties((ze_context_handle_t)handle, ptr, &prop, &device);
+  if (res != ZE_RESULT_SUCCESS) {
+    PyErr_Format(
+        PyExc_ValueError,
+        "Cannot get memory properties for pointer argument (at %d, err=%d)",
+        idx, res);
+    return false;
+  } else if (prop.type == ZE_MEMORY_TYPE_UNKNOWN) {
+    // We can work with any memory, known to the driver:
+    // ZE_MEMORY_TYPE_DEVICE, ZE_MEMORY_TYPE_SHARED, ZE_MEMORY_TYPE_HOST
+    PyErr_Format(
+        PyExc_ValueError,
+        "Pointer argument (at %d) doesn't reference accessible memory.", idx);
+    return false;
+  }
+  return true;
+}
+
+static thread_local const sycl::queue *g_pointer_check_queue = nullptr;
+static thread_local int g_pointer_check_arg_idx = -1;
+
+struct PointerCheckScope {
+  explicit PointerCheckScope(const sycl::queue &queue) {
+    g_pointer_check_queue = &queue;
+    g_pointer_check_arg_idx = -1;
+  }
+
+  ~PointerCheckScope() {
+    g_pointer_check_arg_idx = -1;
+    g_pointer_check_queue = nullptr;
+  }
+};
+
+// start sycl
+template <class T>
+static inline void set_scalar_arg(sycl::handler &cgh, int index,
+                                  const void *value) {
+  cgh.set_arg(index, *static_cast<const T *>(value));
+}
+
+typedef enum {
+  EXTRACTOR_UNKOWN_INDEX = 0,
+  // pointers
+  EXTRACTOR_POINTER_INDEX = 1,
+  // ints
+  EXTRACTOR_INT8_INDEX = 2,
+  EXTRACTOR_INT16_INDEX = 3,
+  EXTRACTOR_INT32_INDEX = 4,
+  EXTRACTOR_INT64_INDEX = 5,
+  // uints
+  EXTRACTOR_UINT8_INDEX = 6,
+  EXTRACTOR_UINT16_INDEX = 7,
+  EXTRACTOR_UINT32_INDEX = 8,
+  EXTRACTOR_UINT64_INDEX = 9,
+  // floats
+  EXTRACTOR_FP16_INDEX = 10,
+  EXTRACTOR_BF16_INDEX = 11,
+  EXTRACTOR_FP32_INDEX = 12,
+  EXTRACTOR_FP64_INDEX = 13,
+  // custom
+  // last entry to have a count
+  EXTRACTOR_TYPE_COUNT
+} ExtractorTypeIndex;
+
+// In C it's not needed
+ExtractorTypeIndex &operator++(ExtractorTypeIndex &idx) {
+  idx = static_cast<ExtractorTypeIndex>(static_cast<int>(idx) + 1);
+  return idx;
+}
+
+static inline void setScalarArgByType(sycl::handler &cgh, int index,
+                                      const void *value, uint8_t type_idx) {
+  switch ((ExtractorTypeIndex)type_idx) {
+  case EXTRACTOR_POINTER_INDEX:
+    set_scalar_arg<void *>(cgh, index, value);
+    break;
+  case EXTRACTOR_INT8_INDEX:
+    set_scalar_arg<int8_t>(cgh, index, value);
+    break;
+  case EXTRACTOR_INT16_INDEX:
+    set_scalar_arg<int16_t>(cgh, index, value);
+    break;
+  case EXTRACTOR_INT32_INDEX:
+    set_scalar_arg<int32_t>(cgh, index, value);
+    break;
+  case EXTRACTOR_INT64_INDEX:
+    set_scalar_arg<int64_t>(cgh, index, value);
+    break;
+  case EXTRACTOR_UINT8_INDEX:
+    set_scalar_arg<uint8_t>(cgh, index, value);
+    break;
+  case EXTRACTOR_UINT16_INDEX:
+    set_scalar_arg<uint16_t>(cgh, index, value);
+    break;
+  case EXTRACTOR_UINT32_INDEX:
+    set_scalar_arg<uint32_t>(cgh, index, value);
+    break;
+  case EXTRACTOR_UINT64_INDEX:
+    set_scalar_arg<uint64_t>(cgh, index, value);
+    break;
+  case EXTRACTOR_FP16_INDEX:
+    set_scalar_arg<uint16_t>(cgh, index, value);
+    break;
+  case EXTRACTOR_BF16_INDEX:
+    set_scalar_arg<uint16_t>(cgh, index, value);
+    break;
+  case EXTRACTOR_FP32_INDEX:
+    set_scalar_arg<uint32_t>(cgh, index, value);
+    break;
+  case EXTRACTOR_FP64_INDEX:
+    set_scalar_arg<uint64_t>(cgh, index, value);
+    break;
+  default:
+    break;
+  }
+}
+
+static inline void printScalarArgByType(uint32_t index, const void *value,
+                                        uint8_t type_idx) {
+  std::cout << "  param[" << index << "] value=";
+  switch ((ExtractorTypeIndex)type_idx) {
+  case EXTRACTOR_POINTER_INDEX:
+    std::cout << *static_cast<void *const *>(value);
+    break;
+  case EXTRACTOR_INT8_INDEX:
+    std::cout << *static_cast<const int8_t *>(value);
+    break;
+  case EXTRACTOR_INT16_INDEX:
+    std::cout << *static_cast<const int16_t *>(value);
+    break;
+  case EXTRACTOR_INT32_INDEX:
+    std::cout << *static_cast<const int32_t *>(value);
+    break;
+  case EXTRACTOR_INT64_INDEX:
+    std::cout << *static_cast<const int64_t *>(value);
+    break;
+  case EXTRACTOR_UINT8_INDEX:
+    std::cout << *static_cast<const uint8_t *>(value);
+    break;
+  case EXTRACTOR_UINT16_INDEX:
+    std::cout << *static_cast<const uint16_t *>(value);
+    break;
+  case EXTRACTOR_UINT32_INDEX:
+    std::cout << *static_cast<const uint32_t *>(value);
+    break;
+  case EXTRACTOR_UINT64_INDEX:
+    std::cout << *static_cast<const uint64_t *>(value);
+    break;
+  case EXTRACTOR_FP16_INDEX:
+  case EXTRACTOR_BF16_INDEX:
+    // Stored as 16-bit payload; print raw bits for debugging.
+    std::cout << *static_cast<const uint16_t *>(value);
+    break;
+  case EXTRACTOR_FP32_INDEX: {
+    std::cout << *static_cast<const float *>(value);
+    break;
+  }
+  case EXTRACTOR_FP64_INDEX: {
+    std::cout << *static_cast<const double *>(value);
+    break;
+  }
+  default:
+    std::cout << "<unknown>";
+    break;
+  }
+  std::cout << std::endl;
+}
+
+static PyObject *data_ptr_str = NULL;
+
+// Extract a XPU device pointer from a pointer-like PyObject obj, and store
+// it to the memory location pointed by ptr.
+bool extractPointer(void *ptr, PyObject *obj) {
+  if (obj == Py_None) {
+    *(void **)ptr = nullptr; // valid nullptr
+    return true;
+  }
+  if (PyLong_Check(obj)) {
+    *(void **)ptr = PyLong_AsVoidPtr(obj);
+    return checkDevicePointer(*(void **)ptr, g_pointer_check_arg_idx,
+                              *g_pointer_check_queue);
+  }
+
+  PyObject *data_ptr = PyObject_GetAttrString(obj, "data_ptr");
+
+  if (data_ptr) {
+    PyObject *ret = PyObject_CallNoArgs(data_ptr);
+    Py_DECREF(data_ptr);
+    if (!ret) {
+      PyErr_SetString(
+          PyExc_TypeError,
+          "Pointer argument must be either uint64 or have data_ptr method");
+      return false;
+    }
+    if (!PyLong_Check(ret)) {
+      PyErr_SetString(
+          PyExc_TypeError,
+          "data_ptr method of Pointer object must return 64-bit int");
+      return false;
+    }
+    *(void **)ptr = PyLong_AsVoidPtr(ret);
+    Py_DECREF(ret);
+    return checkDevicePointer(*(void **)ptr, g_pointer_check_arg_idx,
+                              *g_pointer_check_queue);
+  }
+  PyErr_SetString(
+      PyExc_TypeError,
+      "Pointer argument must be either uint64 or have data_ptr method");
+  return false;
+}
+
+bool extractI8(void *ptr, PyObject *obj) {
+  *((int8_t *)ptr) = PyLong_AsLong(obj);
+  return PyErr_Occurred() == NULL;
+}
+
+bool extractI16(void *ptr, PyObject *obj) {
+  *((int16_t *)ptr) = PyLong_AsLong(obj);
+  return PyErr_Occurred() == NULL;
+}
+
+bool extractI32(void *ptr, PyObject *obj) {
+  *((int32_t *)ptr) = PyLong_AsLong(obj);
+  return PyErr_Occurred() == NULL;
+}
+
+bool extractI64(void *ptr, PyObject *obj) {
+  *((int64_t *)ptr) = PyLong_AsLongLong(obj);
+  return PyErr_Occurred() == NULL;
+}
+
+bool extractU8(void *ptr, PyObject *obj) {
+  *((uint8_t *)ptr) = PyLong_AsUnsignedLong(obj);
+  return PyErr_Occurred() == NULL;
+}
+
+bool extractU16(void *ptr, PyObject *obj) {
+  *((uint16_t *)ptr) = PyLong_AsUnsignedLong(obj);
+  return PyErr_Occurred() == NULL;
+}
+
+bool extractU32(void *ptr, PyObject *obj) {
+  *((uint32_t *)ptr) = PyLong_AsUnsignedLong(obj);
+  return PyErr_Occurred() == NULL;
+}
+
+bool extractU64(void *ptr, PyObject *obj) {
+  *((uint64_t *)ptr) = PyLong_AsUnsignedLongLong(obj);
+  return PyErr_Occurred() == NULL;
+}
+
+bool extractFP16(void *ptr, PyObject *obj) {
+  double temp_double = PyFloat_AsDouble(obj);
+  uint16_t result;
+  // from https://github.com/python/pythoncapi-compat
+#if 0x030600B1 <= PY_VERSION_HEX && PY_VERSION_HEX <= 0x030B00A1 &&            \
+    !defined(PYPY_VERSION)
+  _PyFloat_Pack2(temp_double, (unsigned char *)&result, 1);
+#else
+  PyFloat_Pack2(temp_double, (char *)&result, 1);
+#endif
+  *((uint16_t *)ptr) = result;
+  return PyErr_Occurred() == NULL;
+}
+
+bool extractBF16(void *ptr, PyObject *obj) {
+  double temp_double = PyFloat_AsDouble(obj);
+  float f32 = (float)temp_double;
+  uint32_t u32 = *(uint32_t *)&f32;
+  *((uint16_t *)ptr) = (u32 >> 16);
+  return PyErr_Occurred() == NULL;
+}
+
+bool extractFP32(void *ptr, PyObject *obj) {
+  double temp_double = PyFloat_AsDouble(obj);
+  float f32 = (float)temp_double;
+  *((uint32_t *)ptr) = *(uint32_t *)&f32;
+  return PyErr_Occurred() == NULL;
+}
+
+bool extractFP64(void *ptr, PyObject *obj) {
+  double temp_double = PyFloat_AsDouble(obj);
+  *((uint64_t *)ptr) = *(uint64_t *)&temp_double;
+  return PyErr_Occurred() == NULL;
+}
+
+typedef bool (*ExtractorFunc)(void *ptr, PyObject *obj);
+
+#define MAX_NAMES_PER_EXTRACTOR 2
+
+typedef struct {
+  ExtractorFunc extract;
+  size_t size;
+  size_t alignment;
+  const char *name[MAX_NAMES_PER_EXTRACTOR];
+} Extractor;
+
+Extractor extraction_map[EXTRACTOR_TYPE_COUNT] = {
+    [EXTRACTOR_UNKOWN_INDEX] =
+        (Extractor){.extract = NULL, .size = 0, .name = NULL},
+    [EXTRACTOR_POINTER_INDEX] = (Extractor){.extract = extractPointer,
+                                            .size = sizeof(void *),
+                                            .name = NULL},
+    [EXTRACTOR_INT8_INDEX] = (Extractor){.extract = extractI8,
+                                         .size = sizeof(int8_t),
+                                         .name = {"i8"}},
+    [EXTRACTOR_INT16_INDEX] = (Extractor){.extract = extractI16,
+                                          .size = sizeof(int16_t),
+                                          .name = {"i16"}},
+    [EXTRACTOR_INT32_INDEX] = (Extractor){.extract = extractI32,
+                                          .size = sizeof(int32_t),
+                                          .name = {"i1", "i32"}},
+    [EXTRACTOR_INT64_INDEX] = (Extractor){.extract = extractI64,
+                                          .size = sizeof(int64_t),
+                                          .name = {"i64"}},
+    [EXTRACTOR_UINT8_INDEX] = (Extractor){.extract = extractU8,
+                                          .size = sizeof(uint8_t),
+                                          .name = {"u8"}},
+    [EXTRACTOR_UINT16_INDEX] = (Extractor){.extract = extractU16,
+                                           .size = sizeof(uint16_t),
+                                           .name = {"u16"}},
+    [EXTRACTOR_UINT32_INDEX] = (Extractor){.extract = extractU32,
+                                           .size = sizeof(uint32_t),
+                                           .name = {"u1", "u32"}},
+    [EXTRACTOR_UINT64_INDEX] = (Extractor){.extract = extractU64,
+                                           .size = sizeof(uint64_t),
+                                           .name = {"u64"}},
+    [EXTRACTOR_FP16_INDEX] = (Extractor){.extract = extractFP16,
+                                         .size = sizeof(uint16_t),
+                                         .name = {"fp16"}},
+    [EXTRACTOR_BF16_INDEX] = (Extractor){.extract = extractBF16,
+                                         .size = sizeof(uint16_t),
+                                         .name = {"bf16"}},
+    [EXTRACTOR_FP32_INDEX] = (Extractor){.extract = extractFP32,
+                                         .size = sizeof(uint32_t),
+                                         .name = {"fp32", "f32"}},
+    [EXTRACTOR_FP64_INDEX] = (Extractor){.extract = extractFP64,
+                                         .size = sizeof(uint64_t),
+                                         .name = {"fp64"}},
+};
+
+Extractor getExtractor(uint8_t index) {
+  if (index >= EXTRACTOR_TYPE_COUNT) {
+    return extraction_map[EXTRACTOR_UNKOWN_INDEX];
+  }
+  return extraction_map[index];
+}
+
+static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
+                               int num_warps, int threads_per_warp,
+                               int shared_memory, sycl::queue &stream,
+                               sycl::kernel &kernel_ptr, void *global_scratch,
+                               void *profile_scratch, uint32_t num_params,
+                               void **params, uint8_t *extractor_data) {
+
+  std::string kernel_name =
+      kernel_ptr.get_info<sycl::info::kernel::function_name>();
+#if defined(TRITON_INTEL_INJECT_PYTORCH)
+  RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {});
+#endif
+
+  uint32_t expected_num_params =
+      kernel_ptr.get_info<sycl::info::kernel::num_args>();
+  size_t global_range_x = gridX * threads_per_warp * num_warps;
+  size_t global_range_y = gridY;
+  size_t global_range_z = gridZ;
+  size_t local_range_x = num_warps * threads_per_warp;
+  size_t local_range_y = 1;
+  size_t local_range_z = 1;
+  sycl::range<3> global_range(global_range_z, global_range_y, global_range_x);
+  sycl::range<3> local_range(local_range_z, local_range_y, local_range_x);
+  sycl::nd_range<3> parallel_work_size(global_range, local_range);
+  if (shared_memory) {
+    expected_num_params -= 1;
+  }
+
+  static bool launchDebug = getBoolEnv("TRITON_INTEL_LAUNCH_DEBUG");
+  if (launchDebug) {
+    std::cout << "kernel info name:" << kernel_name << " @" << &kernel_ptr
+              << std::endl;
+    std::cout << "kernel info attributes:"
+              << kernel_ptr.get_info<sycl::info::kernel::attributes>()
+              << std::endl;
+    std::cout << "kernel info reference_count:"
+              << kernel_ptr.get_info<sycl::info::kernel::reference_count>()
+              << std::endl;
+    std::cout << "kernel info num_args:"
+              << kernel_ptr.get_info<sycl::info::kernel::num_args>()
+              << std::endl;
+
+    std::cout << "launch num param:" << num_params << std::endl;
+    std::cout << "  gridx: " << gridX << std::endl;
+    std::cout << "  gridY: " << gridY << std::endl;
+    std::cout << "  gridZ: " << gridZ << std::endl;
+    std::cout << "  num_warps: " << num_warps << std::endl;
+    std::cout << "  threads_per_warp: " << threads_per_warp << std::endl;
+    std::cout << "  global range:[" << "x:" << global_range_x
+              << ", y:" << global_range_y << ", z:" << global_range_z << "]"
+              << std::endl;
+    std::cout << "  local range:[" << "x:" << local_range_x
+              << ", y:" << local_range_y << ", z:" << local_range_z << "]"
+              << std::endl;
+    std::cout << "  shared_memory: " << shared_memory << std::endl;
+
+    for (uint32_t idx = 0; idx < num_params - 2; ++idx)
+      printScalarArgByType(idx, params[idx], extractor_data[idx]);
+    // print scratch memory arguments
+    printScalarArgByType(num_params - 2, params[num_params - 2],
+                         EXTRACTOR_POINTER_INDEX);
+    printScalarArgByType(num_params - 1, params[num_params - 1],
+                         EXTRACTOR_POINTER_INDEX);
+  }
+  assert(num_params == expected_num_params &&
+         "number of kernel param not matched");
+  // Submit the imported kernel.
+  auto cgf = [&](sycl::handler &cgh) {
+    // Set kernel arguments dynamically using extractor type information
+    for (uint32_t idx = 0; idx < num_params - 2; ++idx) {
+      setScalarArgByType(cgh, idx, params[idx], extractor_data[idx]);
+    }
+    // Set scratch memory arguments
+    set_scalar_arg<void *>(cgh, num_params - 2, params[num_params - 2]);
+    set_scalar_arg<void *>(cgh, num_params - 1, params[num_params - 1]);
+    if (shared_memory) {
+      using share_mem_t = sycl::local_accessor<int8_t, 1>;
+      share_mem_t local_buffer = share_mem_t(shared_memory, cgh);
+      cgh.set_arg(num_params, local_buffer);
+      cgh.parallel_for(parallel_work_size, kernel_ptr);
+    } else {
+      cgh.parallel_for(parallel_work_size, kernel_ptr);
+    }
+  };
+  auto event = stream.submit(cgf);
+}
+// end sycl
+
+bool isMatch(const char *type_bytes, ExtractorTypeIndex idx) {
+  Extractor extractor = extraction_map[idx];
+  for (int j = 0; j < MAX_NAMES_PER_EXTRACTOR; j++) {
+    if (extractor.name[j] != NULL &&
+        strcmp(type_bytes, extractor.name[j]) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+ExtractorTypeIndex getExtractorIndex(PyObject *type) {
+  Py_ssize_t type_len = 0;
+  const char *type_bytes = PyUnicode_AsUTF8AndSize(type, &type_len);
+  if (!type_bytes) {
+    return EXTRACTOR_UNKOWN_INDEX;
+  }
+  if (type_len < 2) {
+    PyErr_Format(PyExc_RuntimeError, "Unexpected data type: %R", type);
+    return EXTRACTOR_UNKOWN_INDEX;
+  }
+  // Examples: '*fp32', 'fp32', 'i8', etc.
+  if (type_bytes[0] == '*') {
+    return EXTRACTOR_POINTER_INDEX;
+  }
+  for (ExtractorTypeIndex i = EXTRACTOR_INT8_INDEX; i < EXTRACTOR_TYPE_COUNT;
+       ++i) {
+    if (isMatch(type_bytes, i)) {
+      return i;
+    }
+  }
+
+  PyErr_Format(PyExc_RuntimeError, "Unknown data type: %R", type);
+  return EXTRACTOR_UNKOWN_INDEX;
+}
+
+// Takes in a list of types (ex: ['*fp32', 'u8', 'nvTmaDesc']) and returns
+// a bytes array that represent extractors for quick argument extraction
+// when launching.
+extern "C" EXPORT_FUNC PyObject *build_signature_metadata(PyObject *args) {
+  PyObject *signature = NULL;
+  if (!PyArg_ParseTuple(args, "O", &signature)) {
+    return NULL;
+  }
+  PyObject *fast_signature = PySequence_Fast(
+      signature, "Expected kernel_arg_types to be a sequence or iterable");
+  if (!fast_signature) {
+    return NULL;
+  }
+  Py_ssize_t signature_size = PySequence_Fast_GET_SIZE(fast_signature);
+  PyObject **signature_items = PySequence_Fast_ITEMS(fast_signature);
+
+  // Create return bytes object.
+  PyObject *ret_bytes = PyBytes_FromStringAndSize(NULL, signature_size);
+  if (ret_bytes == NULL) {
+    Py_XDECREF(fast_signature);
+    return NULL;
+  }
+  char *buffer = PyBytes_AS_STRING(ret_bytes);
+  for (Py_ssize_t i = 0; i < signature_size; ++i) {
+    ExtractorTypeIndex extractor_idx = getExtractorIndex(signature_items[i]);
+    if (extractor_idx == EXTRACTOR_UNKOWN_INDEX) {
+      Py_XDECREF(fast_signature);
+      Py_XDECREF(ret_bytes);
+      return NULL;
+    }
+    buffer[i] = (uint8_t)extractor_idx;
+  }
+
+  Py_XDECREF(fast_signature);
+  return ret_bytes;
+}
+
+bool extractArgs(PyObject **final_list, int *list_idx, PyObject *kernel_args,
+                 PyObject *arg_annotations) {
+  // Extract arg annotations
+  PyObject *fast_annotations = PySequence_Fast(
+      arg_annotations, "Expected arg_annotations to be a sequence or iterable");
+  if (!fast_annotations) {
+    Py_XDECREF(fast_annotations);
+    return false;
+  }
+  Py_ssize_t num_annotations = PySequence_Fast_GET_SIZE(fast_annotations);
+  PyObject **annotations = PySequence_Fast_ITEMS(fast_annotations);
+
+  PyObject *fast_args = PySequence_Fast(
+      kernel_args, "Expected kernel_args to be a sequence or iterable");
+  if (!fast_args) {
+    Py_XDECREF(fast_annotations);
+    Py_XDECREF(fast_args);
+    return false;
+  }
+  PyObject **args = PySequence_Fast_ITEMS(fast_args);
+
+  int arg_idx = 0;
+  for (int i = 0; i < num_annotations; ++i) {
+    PyKernelArgObject *annotation = (PyKernelArgObject *)annotations[i];
+    switch (annotation->type) {
+    case ARG_KERNEL:
+      final_list[(*list_idx)++] = args[arg_idx++];
+      break;
+    case ARG_TUPLE:
+      if (!extractArgs(final_list, list_idx, args[arg_idx++],
+                       annotation->nested_tuple)) {
+        Py_XDECREF(fast_annotations);
+        Py_XDECREF(fast_args);
+        return false;
+      }
+      break;
+    case ARG_CONSTEXPR:
+      arg_idx++;
+      break;
+    }
+  }
+  Py_DECREF(fast_annotations);
+  Py_DECREF(fast_args);
+  return true;
+}
+
+bool launchHook(PyObject *hook, PyObject *metadata) {
+  if (hook != Py_None) {
+    PyObject *ret = PyObject_CallOneArg(hook, metadata);
+    if (!ret) {
+      return false;
+    }
+    Py_DECREF(ret);
+  }
+  return true;
+}
+
+extern "C" EXPORT_FUNC PyObject *launch(PyObject *args) {
+  int gridX, gridY, gridZ;
+  PyObject *py_obj_stream;
+  PyObject *py_kernel;
+  PyObject *kernel_metadata = NULL;
+  PyObject *launch_metadata = NULL;
+  PyObject *launch_enter_hook = NULL;
+  PyObject *launch_exit_hook = NULL;
+  void *global_scratch = nullptr;
+  void *profile_scratch = nullptr;
+  PyObject *arg_annotations = NULL;
+  Py_buffer signature;
+  PyObject *kernel_args = NULL;
+
+  if (!PyArg_ParseTuple(args, "iiiOOOOOOOy*O", &gridX, &gridY, &gridZ,
+                        &py_obj_stream, &py_kernel, &kernel_metadata,
+                        &launch_metadata, &launch_enter_hook, &launch_exit_hook,
+                        &arg_annotations, &signature, &kernel_args)) {
+    return NULL;
+  }
+
+  // extract kernel metadata
+  PyObject *num_warps_attr =
+      PyObject_GetAttrString(kernel_metadata, "num_warps");
+  int num_warps = PyLong_AsLong(num_warps_attr);
+  Py_DECREF(num_warps_attr);
+  PyObject *num_ctas_attr = PyObject_GetAttrString(kernel_metadata, "num_ctas");
+  int num_ctas = PyLong_AsLong(num_ctas_attr);
+  Py_DECREF(num_ctas_attr);
+  PyObject *shared_attr = PyObject_GetAttrString(kernel_metadata, "shared");
+  int shared_memory = PyLong_AsLong(shared_attr);
+  Py_DECREF(shared_attr);
+  PyObject *threads_per_warp_attr =
+      PyObject_GetAttrString(kernel_metadata, "threads_per_warp");
+  int threads_per_warp = PyLong_AsLong(threads_per_warp_attr);
+  Py_DECREF(threads_per_warp_attr);
+
+  // launch entry hook.
+  if (!launchHook(launch_enter_hook, launch_metadata)) {
+    PyBuffer_Release(&signature);
+    return NULL;
+  }
+
+  uint8_t *extractor_data = (uint8_t *)signature.buf;
+  Py_ssize_t num_args = signature.len;
+
+  void *pStream = PyLong_AsVoidPtr(py_obj_stream);
+  // error check
+  if (pStream == nullptr || py_kernel == nullptr) {
+    PyBuffer_Release(&signature);
+    return NULL;
+  }
+
+  sycl::queue stream = *(static_cast<sycl::queue *>(pStream));
+
+  // Extract kernel parameters - flatten tuples & remove constexpr.
+  PyObject **args_data = (PyObject **)alloca(num_args * sizeof(PyObject *));
+  if (args_data == NULL) {
+    PyBuffer_Release(&signature);
+    return NULL;
+  }
+  int list_idx = 0;
+  if (!extractArgs(args_data, &list_idx, kernel_args, arg_annotations)) {
+    PyBuffer_Release(&signature);
+    return NULL;
+  }
+
+  // Number of parameters passed to kernel. + 2 for global & profile scratch.
+  int num_params = num_args + 2;
+  void **params = (void **)alloca(num_params * sizeof(void *));
+  int params_idx = 0;
+  PointerCheckScope pointerCheckScope(stream);
+  // This loop has to stay in the same function that owns params, since we are
+  // using alloca to allocate pointers to it on the stack of the function.
+  for (Py_ssize_t i = 0; i < num_args; ++i) {
+    g_pointer_check_arg_idx = static_cast<int>(i);
+    // Get extractor that will send back a struct with
+    // * size for allocation
+    // * function to call to put the parameter in params buffer
+    Extractor extractor = getExtractor(extractor_data[i]);
+    if (extractor.extract == NULL) {
+      PyBuffer_Release(&signature);
+      return NULL;
+    }
+
+    size_t alignment = extractor.alignment;
+    if (alignment != 0) {
+      // Allocate enough space on the stack to guarantee an aligned block.
+      size_t size_with_alignment = extractor.size + alignment - 1;
+      void *storage_ptr = alloca(size_with_alignment);
+      void *aligned_ptr = (void *)((((uintptr_t)storage_ptr) + alignment - 1) &
+                                   ~(alignment - 1));
+      if (aligned_ptr == NULL) {
+        PyErr_SetString(PyExc_MemoryError, "Failed to align parameter storage");
+        PyBuffer_Release(&signature);
+        return NULL;
+      }
+      params[params_idx] = aligned_ptr;
+    } else {
+      params[params_idx] = alloca(extractor.size);
+    }
+
+    PyObject *current_arg = args_data[i];
+    if (!extractor.extract(params[params_idx++], current_arg)) {
+      PyBuffer_Release(&signature);
+      return NULL;
+    }
+  }
+  g_pointer_check_arg_idx = -1;
+  // Add scratch objects.
+  params[params_idx++] = &global_scratch;
+  params[params_idx++] = &profile_scratch;
+  sycl::kernel *kernel_ptr = reinterpret_cast<sycl::kernel *>(
+      PyCapsule_GetPointer(py_kernel, "kernel"));
+  if (kernel_ptr == nullptr)
+    return NULL;
+  sycl::kernel kernel = *kernel_ptr;
+
+  Py_BEGIN_ALLOW_THREADS;
+  sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp,
+                     shared_memory, stream, kernel, global_scratch,
+                     profile_scratch, num_params, params, extractor_data);
+  Py_END_ALLOW_THREADS;
+
+  if (PyErr_Occurred()) {
+    PyBuffer_Release(&signature);
+    return NULL;
+  }
+
+  if (!launchHook(launch_exit_hook, launch_metadata)) {
+    PyBuffer_Release(&signature);
+    return NULL;
+  }
+  PyBuffer_Release(&signature);
+  Py_RETURN_NONE;
+}
+
+extern "C" EXPORT_FUNC PyTypeObject *init_PyKernelArgType() {
+  if (PyType_Ready(&PyKernelArgType) < 0)
+    return NULL;
+
+  Py_INCREF(&PyKernelArgType);
+  return &PyKernelArgType;
 }
