@@ -246,5 +246,5 @@ cause categories:
 ## Reference
 
 - vLLM PR [#36041](https://github.com/vllm-project/vllm/pull/36041) - Initial MRv2 CI tests for CUDA
-- vLLM pinned commit: `benchmarks/vllm/vllm-pin.txt`
-- XPU patch: `benchmarks/vllm/vllm-fix.patch`
+- vLLM pinned commit: `scripts/vllm/vllm-pin.txt`
+- XPU patch: `scripts/vllm/vllm-fix.patch`

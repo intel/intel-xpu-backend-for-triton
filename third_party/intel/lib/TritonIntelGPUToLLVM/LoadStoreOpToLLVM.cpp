@@ -463,18 +463,19 @@ struct LoadStoreConversionBase {
     // There's an IGC bug with predicated load so it is disabled by default.
     // On the other hand, predicated store is expected to be correct and it is
     // enabled by default. Both can be overridden by env vars.
-    static const bool canUsePredicatedLoad =
-        tools::getBoolEnv("TRITON_INTEL_PREDICATED_LOAD");
+    static const std::optional<bool> usePredicatedLoad =
+        tools::isEnvValueBool(tools::getStrEnv("TRITON_INTEL_PREDICATED_LOAD"));
     static const std::optional<bool> usePredicatedStore = tools::isEnvValueBool(
         tools::getStrEnv("TRITON_INTEL_PREDICATED_STORE"));
 
     // SPIRV predicated load/store does not support volatile qualifier.
     if constexpr (std::is_same_v<OpType, LoadOp>) {
-      return canUsePredicatedLoad && !op.getIsVolatile();
+      return (!usePredicatedLoad.has_value() || usePredicatedLoad.value()) &&
+             !op.getIsVolatile();
     } else if constexpr (std::is_same_v<OpType, StoreOp>) {
       return !usePredicatedStore.has_value() || usePredicatedStore.value();
     } else if constexpr (std::is_same_v<OpType, DescriptorLoadOp>) {
-      return canUsePredicatedLoad;
+      return !usePredicatedLoad.has_value() || usePredicatedLoad.value();
     } else if constexpr (std::is_same_v<OpType, DescriptorStoreOp>) {
       return !usePredicatedStore.has_value() || usePredicatedStore.value();
     }
@@ -2594,16 +2595,20 @@ struct DescriptorLoadOpToBlockIOConversion
     // (see https://github.com/intel/intel-xpu-backend-for-triton/issues/6540).
     //
     // Pre-apply 64-byte alignment compensation to the base pointer and column
-    // offset. This bakes the alignment adjustment into the column index BEFORE
-    // per-tile layout offsets are added, ensuring LLVM builds tile 1's
-    // x-coordinate as (tile0_x + delta) rather than (descIndex + delta) +
-    // misalign. Without this, LLVM's CSE factors out (descIndex + delta) as a
-    // common subexpression shared across different operand loads, producing a
+    // offset when the descriptor column index is non-zero. This bakes the
+    // alignment adjustment into the column index BEFORE per-tile layout offsets
+    // are added, ensuring LLVM builds tile 1's x-coordinate as
+    // (tile0_x + delta) rather than (descIndex + delta) + misalign. Without
+    // this, LLVM's CSE factors out (descIndex + delta) as a common
+    // subexpression shared across different operand loads, producing a
     // suboptimal instruction schedule.
-    constexpr int64_t ALIGNMENT_MASK = 0x3f;
     unsigned descBlockColIdx =
         mapResultDimToDescDim(isTransposeRequired ? rowDim : colDim);
-    {
+    std::optional<int64_t> descColConst =
+        mlir::triton::intel::getFoldedConstantValue(
+            descIndices[descBlockColIdx]);
+    if (!descColConst || *descColConst != 0) {
+      constexpr int64_t ALIGNMENT_MASK = 0x3f;
       Value baseAddr = b.ptrtoint(int_ty(64), desc.base);
       Value alignedBaseAddr = b.and_(baseAddr, b.i64_val(~ALIGNMENT_MASK));
       desc.base = b.inttoptr(ptr_ty(ctx, 1), alignedBaseAddr);
