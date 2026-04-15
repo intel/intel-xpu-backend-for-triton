@@ -22,6 +22,11 @@ void populateHistogramOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        const TargetInfoBase &targetInfo,
                                        PatternBenefit benefit);
 
+void populateReduceOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                    RewritePatternSet &patterns,
+                                    const TargetInfoBase &targetInfo,
+                                    PatternBenefit benefit);
+
 void populateConvertLayoutOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                            const TargetInfo &targetInfo,
                                            RewritePatternSet &patterns,
