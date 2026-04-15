@@ -261,6 +261,7 @@ def main() -> None:
     # Patch test files and source files that need CUDA->XPU transformation
     patch_dirs = [
         # Test directories
+        vllm_root / "tests" / "kernels",
         vllm_root / "tests" / "kernels" / "attention",
         vllm_root / "tests" / "kernels" / "mamba",
         vllm_root / "tests" / "kernels" / "moe",
