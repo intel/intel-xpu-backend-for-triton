@@ -227,7 +227,6 @@ public:
     mlir::triton::populateViewOpToLLVMPatterns(typeConverter, patterns,
                                                benefit);
 
-    intel::populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns, benefit);
     intel::populateTensorDescOpsToLLVMPatterns(typeConverter, patterns,
                                                benefit);
     intel::populateHistogramOpToLLVMPatterns(typeConverter, patterns,
