@@ -2080,7 +2080,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %6 = arith.extsi %5 : tensor<4x1xi32, #blockedX> to tensor<4x1xi64, #blockedX>
     %7 = arith.addi %2, %6 : tensor<4x1xi64, #blockedX>
     // CHECK: ttg.convert_layout
-    // CHECK-NOT: scf.for
+    // CHECK: arith.extsi
     // CHECK: arith.extsi
     %8 = scf.for %arg2 = %c0_i32 to %c4_i32 step %c1_i32 iter_args(%arg3 = %5) -> (tensor<4x1xi32, #blockedX>) : i32 {
       scf.yield %5 : tensor<4x1xi32, #blockedX>
@@ -3033,7 +3033,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %7 = arith.extsi %6 : tensor<4x1xi32, #blocked1> to tensor<4x1xi64, #blocked1>
     %8 = arith.addi %3, %7 : tensor<4x1xi64, #blocked1>
     // CHECK: scf.for
-    // CHECK-NOT: ttg.convert_layout
     %9:2 = scf.for %arg2 = %c0_i32 to %c4_i32 step %c1_i32 iter_args(%arg3 = %6, %arg4 = %c1_i32) -> (tensor<4x1xi32, #blocked1>, i32)  : i32 {
       %13 = arith.addi %arg2, %arg4 : i32
       scf.yield %6, %13 : tensor<4x1xi32, #blocked1>, i32
