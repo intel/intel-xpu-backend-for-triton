@@ -80,7 +80,7 @@ index 4b693d8c8..3ff3093b4 100644
          if e > 0 and w_gs_l[0] is not None:
              w_gs = torch.stack(w_gs_l)
 diff --git a/tests/v1/sample/test_logprobs.py b/tests/v1/sample/test_logprobs.py
-index d029a6ce0..01519ab2d 100644
+index d029a6ce0..7958b65c6 100644
 --- a/tests/v1/sample/test_logprobs.py
 +++ b/tests/v1/sample/test_logprobs.py
 @@ -3,6 +3,7 @@
@@ -143,7 +143,7 @@ index d029a6ce0..01519ab2d 100644
 +            marks=[
 +                large_gpu_mark(min_gb=32),
 +                pytest.mark.xfail(
-+                    current_platform.is_xpu(),
++                    condidition=current_platform.is_xpu(),
 +                    reason="XPU uses V2 engine which doesn't support ngram spec decode yet",
 +                    strict=True,
 +                ),
