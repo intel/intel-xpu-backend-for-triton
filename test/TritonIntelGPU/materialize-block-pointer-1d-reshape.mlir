@@ -19,9 +19,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %off = arith.addi %rem, %mul : tensor<1024xi32, #blocked1d>
     %base = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1024x!tt.ptr<f16>, #blocked1d>
     %ptrs = tt.addptr %base, %off : tensor<1024x!tt.ptr<f16>, #blocked1d>, tensor<1024xi32, #blocked1d>
-    // CHECK: tt.reshape
-    // CHECK: tt.reshape
-    // CHECK: tt.store %{{.*}}, %{{.*}} {ttig.block_io = "row_major", ttig.block_io_stride = 96 : i64} : tensor<32x32x!tt.ptr<f16>
+    // CHECK-NOT: tt.reshape
+    // CHECK: tt.store %{{.*}}, %{{.*}} : tensor<1024x!tt.ptr<f16>
     tt.store %ptrs, %arg1 : tensor<1024x!tt.ptr<f16>, #blocked1d>
     tt.return
   }
@@ -47,8 +46,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %base = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1024x!tt.ptr<f16>, #blocked1d>
     %ptrs = tt.addptr %base, %off : tensor<1024x!tt.ptr<f16>, #blocked1d>, tensor<1024xi32, #blocked1d>
     %mask = arith.constant dense<true> : tensor<1024xi1, #blocked1d>
-    // CHECK: tt.reshape
-    // CHECK: tt.store %{{.*}}, %{{.*}} {ttig.block_io = "row_major", ttig.block_io_stride = 96 : i64} : tensor<32x32x!tt.ptr<f16>
+    // CHECK-NOT: tt.reshape
+    // CHECK: tt.store %{{.*}}, %{{.*}}, %{{.*}} : tensor<1024x!tt.ptr<f16>
     tt.store %ptrs, %arg1, %mask : tensor<1024x!tt.ptr<f16>, #blocked1d>
     tt.return
   }

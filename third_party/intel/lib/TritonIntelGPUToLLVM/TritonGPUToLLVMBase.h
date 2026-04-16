@@ -25,8 +25,6 @@ using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
 using ::mlir::triton::gpu::intel::DpasEncodingAttr;
 
-typedef DenseMap<Operation *, triton::MakeTensorPtrOp> TensorPtrMapT;
-
 class ConvertTritonGPUOpToLLVMPatternBase {
 public:
   explicit ConvertTritonGPUOpToLLVMPatternBase(

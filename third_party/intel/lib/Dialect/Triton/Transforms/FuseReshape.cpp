@@ -306,27 +306,12 @@ private:
     }
 
     Location loc = user->getLoc();
-    if (auto advanceOp = dyn_cast<tt::AdvanceOp>(user)) {
-      OpBuilder rewriter(advanceOp);
-      SmallVector<Value> newOffsets(advanceOp.getOffsets().drop_front());
-      auto newAdvanceOp = tt::AdvanceOp::create(rewriter, loc, newVal.getType(),
-                                                newVal, newOffsets);
-      mapping.map(static_cast<Operation *>(advanceOp),
-                  static_cast<Operation *>(newAdvanceOp));
-      LLVM_DEBUG(llvm::dbgs().indent(2)
-                 << "newAdvanceOp: " << newAdvanceOp << "\n");
-      cleanUp.insert(advanceOp);
-      return propagateToUsers(newAdvanceOp, advanceOp.getResult(), advanceOp,
-                              sentinel, mapping);
-    }
-
     if (auto loadOp = dyn_cast<tt::LoadOp>(user)) {
       OpBuilder rewriter(loadOp);
-      auto newLoadOp = tt::LoadOp::create(
-          rewriter, loadOp.getLoc(), newVal, loadOp.getMask(),
-          loadOp.getOther(), loadOp.getBoundaryCheckAttr(),
-          loadOp.getPaddingAttr(), loadOp.getCache(), loadOp.getEvict(),
-          loadOp.getIsVolatile());
+      auto newLoadOp = tt::LoadOp::create(rewriter, loadOp.getLoc(), newVal,
+                                          loadOp.getMask(), loadOp.getOther(),
+                                          loadOp.getCache(), loadOp.getEvict(),
+                                          loadOp.getIsVolatile());
       newLoadOp->setAttrs(loadOp->getAttrs());
       mapping.map(static_cast<Operation *>(loadOp),
                   static_cast<Operation *>(newLoadOp));

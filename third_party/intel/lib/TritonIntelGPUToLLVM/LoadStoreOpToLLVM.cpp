@@ -202,7 +202,7 @@ struct LoadStoreConversionBase {
   }
 
   unsigned getVectorSize(Value ptr) const {
-    if (!isTensorOrTensorPointerType(ptr.getType()))
+    if (!isa<RankedTensorType>(ptr.getType()))
       return 1;
 
     unsigned contiguity = getContiguity(ptr);
@@ -1632,8 +1632,6 @@ struct PrefetchOpConversion
   LogicalResult
   matchAndRewrite(triton::gpu::intel::PrefetchOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
-    assert(!isTensorPointerType(op.getPtr().getType()) &&
-           "block pointers should not reach this lowering");
     LogicalResult res = rewriteRegularPointerPrefetch(op, adaptor, rewriter);
 
     // FIXME: the prefetch lowering code should never fail. Currently it does in
@@ -1969,10 +1967,8 @@ struct DescriptorPrefetchOpConversion
         unpackDescriptor(adaptor.getDesc(), rank, loc, rewriter);
 
     // Get base width and height from the descriptor shape fields.
-    // TODO: For a block pointer, baseWidth/baseHeight come from the
-    // MakeTensorPtrOp shape operands which represent the bounds of the
-    // underlying memory, not the tile shape. For tensor descriptors, the shape
-    // fields in the struct similarly represent the underlying memory bounds
+    // TODO: baseWidth/baseHeight come from the MakeTensorDescOp shape operands
+    // which represent the bounds of the underlying memory, not the tile shape
     // (set by MakeTensorDescOp). Verify this is consistent.
     Value baseWidth = desc.shapes[colIdx];
     Value baseHeight = desc.shapes[rowIdx];
@@ -2031,9 +2027,6 @@ public:
                   ConversionPatternRewriter &rewriter) const final {
     if (!isBlockIOCandidate(op))
       return failure();
-
-    assert(!isTensorPointerType(op.getPtr().getType()) &&
-           "block pointers should not reach this lowering");
 
     // FIXME: Remove once IGC can split large 2D block loads.
     std::optional<bool> oneMatrixPerLoadForBT =
@@ -2724,8 +2717,6 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     Value ptr = op.getPtr();
     Value mask = op.getMask();
     Value other = op.getOther();
-    assert(!isTensorPointerType(ptr.getType()) &&
-           "block pointers should not reach this lowering");
 
     // adaptor values
     Value llPtr = adaptor.getPtr();
@@ -3628,8 +3619,6 @@ struct StoreOpToBlockIOConversion
 
     Value llPtr = adaptor.getPtr();
     Value ptr = op.getPtr();
-    assert(!isTensorPointerType(ptr.getType()) &&
-           "block pointers should not reach this lowering");
     unsigned numElems = getTotalElemsPerThread(tensorType);
 
     // Get the LLVM values for pointers
@@ -3815,8 +3804,6 @@ struct StoreOpConversion
     auto *typeConverter = getTypeConverter();
     MLIRContext *ctx = rewriter.getContext();
     Value ptr = op.getPtr();
-    assert(!isTensorPointerType(ptr.getType()) &&
-           "block pointers should not reach this lowering");
     Value llMask = adaptor.getMask();
 
     // Determine the vectorization size

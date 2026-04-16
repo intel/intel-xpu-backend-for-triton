@@ -31,8 +31,6 @@ def L2Cache : Resource<"::mlir::triton::gpu::intel::L2Cache">;
 class TTIG_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonIntelGPU_Dialect, mnemonic, !listconcat(traits, [VerifyMemDescLayoutsTrait])>;
 
-def TT_TensorOrTensorPtr : AnyTypeOf<[TT_Tensor, TT_TensorPtr]>;
-
 def TTIG_AllocOp : TTIG_Op<"alloc", [MemoryEffects<[MemAlloc]>]> {
   let summary = "Memory allocation operation";
   let description = [{
@@ -63,7 +61,7 @@ def TTIG_PrefetchOp : TTIG_Op<"prefetch", [
       ```
   }];
   let arguments = (ins
-    Arg<AnyTypeOf<[TT_PtrLike, TT_TensorPtr]>, "Global memory pointer", [MemRead]>:$ptr,
+    Arg<TT_PtrLike, "Global memory pointer", [MemRead]>:$ptr,
     Optional<TT_BoolLike>:$mask,
     TT_CacheModifierAttr:$cache,
     TT_EvictionPolicyAttr:$evict,

@@ -63,10 +63,6 @@ void populateLoadStoreOpToLLVMPatterns(
     RewritePatternSet &patterns, const ModuleAxisInfoAnalysis &axisInfoAnalysis,
     ModuleStrideAnalysis &strideAnalysis, PatternBenefit benefit);
 
-void populateTensorPtrOpsToLLVMPatterns(LLVMTypeConverter &typeConverter,
-                                        RewritePatternSet &patterns,
-                                        PatternBenefit benefit);
-
 void populateTensorDescOpsToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                          RewritePatternSet &patterns,
                                          PatternBenefit benefit);

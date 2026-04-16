@@ -174,9 +174,6 @@ private:
     }
 
     Value ptr = op.getPtr();
-    assert(!tt::isTensorPointerType(ptr.getType()) &&
-           "Expected pointer refer to a tensor.");
-
     auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
     if (!tensorTy)
       return;
@@ -614,6 +611,14 @@ private:
         matchStridedPattern(op, ptrTensorTy, /*maxPerWarpHeight=*/8);
     if (!info)
       return;
+
+    // TODO: The 2D block store lowering in StoreOpToBlockIOConversion
+    // does not correctly handle multi-row tiles (H > 1) because offsetY
+    // is hardcoded to 0. Restrict to H == 1 until the lowering is fixed.
+    if (info->H != 1) {
+      LDBG("H=" << info->H << " > 1 not yet supported, skip 1D reshape");
+      return;
+    }
 
     // Create reshaped tensors: [N] -> [H, W].
     Location loc = op.getLoc();
