@@ -115,7 +115,7 @@ jobs:
           ./scripts/test-triton.sh --install-sglang --skip-pip-install --skip-pytorch-install
           cd benchmarks/third_party/sglang
           python scaled_mm_benchmark.py --reports $REPORTS
-          python ../../vllm/transform_results.py \
+          python ../../transform_results.py \
             $REPORTS/scaled_mm_benchmark.csv \
             $REPORTS/scaled-mm-int8-report.csv \
             --tag $TAG \
@@ -130,7 +130,7 @@ jobs:
 
           cd benchmarks/third_party/sglang
           FP8="1" python scaled_mm_benchmark.py --reports $REPORTS
-          python ../../vllm/transform_results.py \
+          python ../../transform_results.py \
             $REPORTS/scaled_mm_benchmark.csv \
             $REPORTS/scaled-mm-fp8-report.csv \
             --tag $TAG \
@@ -198,7 +198,7 @@ jobs:
           source scripts/capture-hw-details.sh
           python python/test/microbenchmark/launch_overhead.py --reports $REPORTS
 
-          python benchmarks/vllm/transform_results.py $REPORTS/launch_overhead_results.csv $REPORTS/launch_overhead-report.csv \
+          python benchmarks/transform_results.py $REPORTS/launch_overhead_results.csv $REPORTS/launch_overhead-report.csv \
             --tag $TAG \
             --bgroup overhead \
             --benchmark launch-overhead \
