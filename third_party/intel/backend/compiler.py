@@ -423,10 +423,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         llvm.init_targets()
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
-        intel.set_fast_math(llvm_mod)
         if options.extern_libs:
             paths = [path for (name, path) in options.extern_libs]
             llvm.link_extern_libs(llvm_mod, paths)
+        intel.set_fast_math(llvm_mod)
 
         cls.optimize_llvm_mod(llvm_mod, options)
         intel.post_process_llir(llvm_mod)
