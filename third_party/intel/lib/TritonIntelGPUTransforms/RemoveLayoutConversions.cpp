@@ -1688,11 +1688,6 @@ void LayoutRematerialization::hoistConvertDotOperand(
     ttg::ConvertLayoutOp convertOp) {
   auto targetType = convertOp.getType();
 
-  // The pass is targeted to NVidia.
-  auto dotEnc = dyn_cast<ttg::DotOperandEncodingAttr>(targetType.getEncoding());
-  if (!(dotEnc && isa<ttg::NvidiaMmaEncodingAttr>(dotEnc.getParent())))
-    return;
-
   auto canBePipelined = [&](ttg::ConvertLayoutOp convertOp) {
     // FIXME: Check that the parent is a for loop
     auto parent = convertOp->getParentOp();
