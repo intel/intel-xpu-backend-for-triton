@@ -80,7 +80,7 @@ index 4b693d8c8..3ff3093b4 100644
          if e > 0 and w_gs_l[0] is not None:
              w_gs = torch.stack(w_gs_l)
 diff --git a/tests/v1/sample/test_logprobs.py b/tests/v1/sample/test_logprobs.py
-index d029a6ce0..2256ab7eb 100644
+index d029a6ce0..32f1b0d57 100644
 --- a/tests/v1/sample/test_logprobs.py
 +++ b/tests/v1/sample/test_logprobs.py
 @@ -3,6 +3,7 @@
@@ -91,19 +91,40 @@ index d029a6ce0..2256ab7eb 100644
  from collections.abc import Generator
  from typing import get_args
  
-@@ -47,6 +48,11 @@ ROCM_DETERMINISM_KWARGS: dict = (
+@@ -47,6 +48,17 @@ ROCM_DETERMINISM_KWARGS: dict = (
      else {}
  )
  
 +XFAIL_V2_LOGITS = pytest.mark.xfail(
 +    condition=os.getenv("VLLM_USE_V2_MODEL_RUNNER"),
-+    reason="Model Runner V2 does not support logits mode",
++    reason="Model Runner V2 does not support logits modes.",
++    strict=True,
++)
++
++XFAIL_V2_PROMPT = pytest.mark.xfail(
++    condition=os.getenv("VLLM_USE_V2_MODEL_RUNNER"),
++    reason="Model Runner V2 does not support prompt compositions.",
 +    strict=True,
 +)
  
  @pytest.fixture(
      scope="module",
-@@ -491,7 +497,14 @@ def test_all_logprobs(example_prompts):
+@@ -291,7 +303,13 @@ def _run_and_validate(
+ 
+ 
+ @pytest.mark.parametrize(
+-    "batch_logprobs_composition", [NONE, SAMPLE, PROMPT, SAMPLE_PROMPT]
++    "batch_logprobs_composition",
++    [
++        NONE,
++        SAMPLE,
++        pytest.param(PROMPT, marks=XFAIL_V2_PROMPT),
++        pytest.param(SAMPLE_PROMPT, marks=XFAIL_V2_PROMPT),
++    ],
+ )
+ @pytest.mark.parametrize("temperature", [0.0, 2.0])
+ def test_get_logprobs_and_prompt_logprobs(
+@@ -491,7 +509,14 @@ def test_all_logprobs(example_prompts):
                  assert len(prompt_logprob) == vocab_size
  
  
@@ -119,7 +140,7 @@ index d029a6ce0..2256ab7eb 100644
  def test_logprobs_mode(logprobs_mode: LogprobsMode):
      """Test with LLM engine with different logprobs_mode.
      For logprobs, we should have non-positive values.
-@@ -947,7 +960,14 @@ def test_correct_decoded_token_preserves_valid_tokens():
+@@ -947,7 +972,14 @@ def test_correct_decoded_token_preserves_valid_tokens():
                      assert "�" not in decoded_token
  
  
@@ -135,7 +156,7 @@ index d029a6ce0..2256ab7eb 100644
  @pytest.mark.parametrize(
      "model_setup",
      [
-@@ -991,7 +1011,14 @@ def test_correct_decoded_token_preserves_valid_tokens():
+@@ -991,7 +1023,14 @@ def test_correct_decoded_token_preserves_valid_tokens():
                  },
                  3,
              ),
@@ -144,7 +165,7 @@ index d029a6ce0..2256ab7eb 100644
 +                large_gpu_mark(min_gb=32),
 +                pytest.mark.xfail(
 +                    condition=current_platform.is_xpu(),
-+                    reason="XPU uses V2 engine which doesn't support ngram spec decode yet",
++                    reason="XPU does not support ngram spec decode.",
 +                    strict=True,
 +                ),
 +            ],
