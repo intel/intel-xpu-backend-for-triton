@@ -268,8 +268,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
-        intel.passes.ttir.add_convert_block_pointer_to_tdesc(pm)
-        intel.passes.ttir.add_rewrite_tensor_pointer(pm)
         intel.passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         passes.common.add_cse(pm)
         passes.ttir.add_triton_licm(pm)
@@ -318,6 +316,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if (opt.reduce_variable_liveness):
             intel.passes.ttgpuir.add_reduce_variable_liveness(pm)
 
+        passes.ttir.add_loop_aware_cse(pm)
         passes.ttgpuir.add_fuse_nested_loops(pm)
 
         passes.common.add_canonicalizer(pm)
@@ -333,7 +332,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_reduce_data_duplication(pm)
         passes.ttgpuir.add_reorder_instructions(pm)
-        passes.common.add_cse(pm)
+        passes.ttir.add_loop_aware_cse(pm)
         passes.common.add_symbol_dce(pm)
         passes.common.add_sccp(pm)
         passes.common.add_canonicalizer(pm)
