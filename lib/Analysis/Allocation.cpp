@@ -96,7 +96,7 @@ unsigned defaultAllocationAnalysisScratchSizeFnOld(Operation *op) {
 
 unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
   if (auto reduceOp = dyn_cast<ReduceOp>(op)) {
-    return ReduceOpHelper(reduceOp).getScratchSizeInBytes();
+    return ReduceOpHelper(reduceOp).getScratchSizeInBytesOld();
   }
   if (auto scanOp = dyn_cast<ScanOp>(op)) {
     ScanLoweringHelper helper(scanOp);
