@@ -80,7 +80,7 @@ index 4b693d8c8..3ff3093b4 100644
          if e > 0 and w_gs_l[0] is not None:
              w_gs = torch.stack(w_gs_l)
 diff --git a/tests/v1/sample/test_logprobs.py b/tests/v1/sample/test_logprobs.py
-index d029a6ce0..c4f51bbf7 100644
+index d029a6ce0..26bb70b23 100644
 --- a/tests/v1/sample/test_logprobs.py
 +++ b/tests/v1/sample/test_logprobs.py
 @@ -3,6 +3,7 @@
@@ -91,38 +91,67 @@ index d029a6ce0..c4f51bbf7 100644
  from collections.abc import Generator
  from typing import get_args
  
-@@ -497,6 +498,12 @@ def test_logprobs_mode(logprobs_mode: LogprobsMode):
+@@ -47,6 +48,12 @@ ROCM_DETERMINISM_KWARGS: dict = (
+     else {}
+ )
+ 
++VLLM_USE_V2_MODEL_RUNNER = os.getenv("VLLM_USE_V2_MODEL_RUNNER")
++XFAIL_V2_LOGITS = pytest.mark.xfail(
++    condition=VLLM_USE_V2_MODEL_RUNNER,
++    reason="Model Runner V2 does not support logits mode",
++    strict=True,
++)
+ 
+ @pytest.fixture(
+     scope="module",
+@@ -491,7 +498,14 @@ def test_all_logprobs(example_prompts):
+                 assert len(prompt_logprob) == vocab_size
+ 
+ 
+-@pytest.mark.parametrize("logprobs_mode", get_args(LogprobsMode))
++@pytest.mark.parametrize("logprobs_mode",
++    [
++        pytest.param(mode, marks=XFAIL_V2_LOGITS)
++        if mode in ("processed_logits", "raw_logits")
++        else mode
++        for mode in get_args(LogprobsMode)
++    ]
++)
+ def test_logprobs_mode(logprobs_mode: LogprobsMode):
+     """Test with LLM engine with different logprobs_mode.
      For logprobs, we should have non-positive values.
-     For logits, we should expect at least one positive values.
-     """
-+    pytest.mark.xfail(
-+        os.getenv("VLLM_USE_V2_MODEL_RUNNER") and logprobs_mode in ("processed_logits", "raw_logits"),
-+        reason="Model Runner V2 does not support logits mode",
-+        strict=True,
-+    )
-+
-     from vllm import LLM
+@@ -947,7 +961,14 @@ def test_correct_decoded_token_preserves_valid_tokens():
+                     assert "�" not in decoded_token
  
-     llm = LLM(
-@@ -1014,6 +1021,18 @@ def test_spec_decode_logprobs(
-             speculative_config dict, top_logprobs).
-         monkeypatch: pytest fixture for setting env vars.
-     """
-+    pytest.mark.xfail(
-+        os.getenv("VLLM_USE_V2_MODEL_RUNNER") and logprobs_mode in ("processed_logits", "raw_logits"),
-+        reason="Model Runner V2 does not support logits mode",
-+        strict=True,
-+    )
-+
-+    pytest.mark.xfail(
-+        os.getenv("VLLM_USE_V2_MODEL_RUNNER") and model_setup[0] == "ngram",
-+        reason="Model Runner V2 does not support ngram method",
-+        strict=True,
-+    )
-+
-     from vllm import LLM
  
-     # The ROCm skinny GEMM kernels (gemm_kernels.cu) are
+-@pytest.mark.parametrize("logprobs_mode", get_args(LogprobsMode))
++@pytest.mark.parametrize("logprobs_mode",
++    [
++        pytest.param(mode, marks=XFAIL_V2_LOGITS)
++        if mode in ("processed_logits", "raw_logits")
++        else mode
++        for mode in get_args(LogprobsMode)
++    ]
++)
+ @pytest.mark.parametrize(
+     "model_setup",
+     [
+@@ -991,7 +1012,14 @@ def test_correct_decoded_token_preserves_valid_tokens():
+                 },
+                 3,
+             ),
+-            marks=large_gpu_mark(min_gb=32),
++            marks=[
++                large_gpu_mark(min_gb=32),
++                pytest.mark.xfail(
++                    current_platform.is_xpu(),
++                    reason="XPU uses V2 engine which doesn't support ngram spec decode yet",
++                    strict=True,
++                ),
++            ],
+             id="ngram",
+         ),
+     ],
 diff --git a/tests/v1/worker/test_gpu_model_runner.py b/tests/v1/worker/test_gpu_model_runner.py
 index d7695027a..dd1b0b481 100644
 --- a/tests/v1/worker/test_gpu_model_runner.py
