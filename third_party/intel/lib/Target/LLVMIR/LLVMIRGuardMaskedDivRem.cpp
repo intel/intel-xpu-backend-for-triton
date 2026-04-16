@@ -43,10 +43,6 @@ static bool processPhiNode(PHINode *PhiNode) {
         // This is legal: the zero case only arises on the false path
         // where both dividend and divisor are zero, so 0/0 (UB) becomes
         // 0/1 = 0, a well-defined value whose result is never observed.
-        //
-        // Using freeze alone is insufficient because LLVM can prove the
-        // phi inputs are well-defined and remove the freeze before
-        // SimplifyCFG acts.
         IRBuilder<> Builder(&I);
         Type *Ty = PhiNode->getType();
         Value *Zero = ConstantInt::get(Ty, 0);

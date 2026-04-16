@@ -283,9 +283,9 @@ void init_triton_intel(py::module &&m) {
     // paths with undefined behavior as dead. This can result in
     // removal of the mask path and incorrect results from legal
     // Triton kernels due to masked elements being used in
-    // computation. Run a pass to add a freeze instruction between
-    // masked loads and sdiv/srem to signal to LLVM we consider the
-    // sdiv/srem operands to be well defined.
+    // computation. Run a pass to guard masked-load phi nodes used
+    // as divisors with select(divisor == 0, 1, divisor) to prevent
+    // LLVM from exploiting the division-by-zero UB.
     //
     // This must run before any optimization pass (especially
     // SimplifyCFG) which can fold conditional blocks that share the
