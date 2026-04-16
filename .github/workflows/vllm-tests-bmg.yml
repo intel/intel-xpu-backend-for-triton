@@ -10,6 +10,6 @@ on:
 
 jobs:
   tests:
-    uses: ./.github/workflows/vllm-tests.yml
+    uses: ./.github/workflows/vllm-tests-reusable.yml
     with:
       runner_label: b580
