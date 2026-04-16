@@ -262,4 +262,5 @@ jobs:
     with:
       artifact_pattern: test-reports-vllm-*
       python_version: ${{ inputs.python_version }}
+      runner_label: ${{ inputs.runner_label }}
       use_pyenv_python: ${{ inputs.use_pyenv_python }}
