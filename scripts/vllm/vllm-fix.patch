@@ -80,7 +80,7 @@ index 4b693d8c8..3ff3093b4 100644
          if e > 0 and w_gs_l[0] is not None:
              w_gs = torch.stack(w_gs_l)
 diff --git a/tests/v1/sample/test_logprobs.py b/tests/v1/sample/test_logprobs.py
-index d029a6ce0..e3c0ac403 100644
+index d029a6ce0..293fd2710 100644
 --- a/tests/v1/sample/test_logprobs.py
 +++ b/tests/v1/sample/test_logprobs.py
 @@ -497,6 +497,12 @@ def test_logprobs_mode(logprobs_mode: LogprobsMode):
@@ -91,7 +91,7 @@ index d029a6ce0..e3c0ac403 100644
 +    import os
 +
 +    if os.getenv("VLLM_USE_V2_MODEL_RUNNER") and logprobs_mode in ("processed_logits", "raw_logits"):
-+        pytest.xfail(reason="Model Runner V2 does not support logits mode")
++        pytest.xfail(reason="Model Runner V2 sampler does not support logits mode")
 +
      from vllm import LLM
  
@@ -104,7 +104,7 @@ index d029a6ce0..e3c0ac403 100644
 +    import os
 +
 +    if os.getenv("VLLM_USE_V2_MODEL_RUNNER") and logprobs_mode in ("processed_logits", "raw_logits"):
-+        pytest.xfail(reason="Model Runner V2 does not support logits mode")
++        pytest.xfail(reason="Model Runner V2 sampler does not support logits mode")
 +
      from vllm import LLM
  
