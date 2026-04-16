@@ -80,31 +80,45 @@ index 4b693d8c8..3ff3093b4 100644
          if e > 0 and w_gs_l[0] is not None:
              w_gs = torch.stack(w_gs_l)
 diff --git a/tests/v1/sample/test_logprobs.py b/tests/v1/sample/test_logprobs.py
-index d029a6ce0..293fd2710 100644
+index d029a6ce0..0e12d5c66 100644
 --- a/tests/v1/sample/test_logprobs.py
 +++ b/tests/v1/sample/test_logprobs.py
-@@ -497,6 +497,12 @@ def test_logprobs_mode(logprobs_mode: LogprobsMode):
+@@ -3,6 +3,7 @@
+ 
+ import itertools
+ import math
++import os
+ from collections.abc import Generator
+ from typing import get_args
+ 
+@@ -497,6 +498,12 @@ def test_logprobs_mode(logprobs_mode: LogprobsMode):
      For logprobs, we should have non-positive values.
      For logits, we should expect at least one positive values.
      """
-+
-+    import os
-+
-+    if os.getenv("VLLM_USE_V2_MODEL_RUNNER") and logprobs_mode in ("processed_logits", "raw_logits"):
-+        pytest.xfail(reason="Model Runner V2 sampler does not support logits mode")
++    pytest.xfail(
++        os.getenv("VLLM_USE_V2_MODEL_RUNNER") and logprobs_mode in ("processed_logits", "raw_logits"),
++        reason="Model Runner V2 does not support logits mode",
++        strict=True,
++    )
 +
      from vllm import LLM
  
      llm = LLM(
-@@ -1014,6 +1020,12 @@ def test_spec_decode_logprobs(
+@@ -1014,6 +1021,18 @@ def test_spec_decode_logprobs(
              speculative_config dict, top_logprobs).
          monkeypatch: pytest fixture for setting env vars.
      """
++    pytest.xfail(
++        os.getenv("VLLM_USE_V2_MODEL_RUNNER") and logprobs_mode in ("processed_logits", "raw_logits"),
++        reason="Model Runner V2 does not support logits mode",
++        strict=True,
++    )
 +
-+    import os
-+
-+    if os.getenv("VLLM_USE_V2_MODEL_RUNNER") and logprobs_mode in ("processed_logits", "raw_logits"):
-+        pytest.xfail(reason="Model Runner V2 sampler does not support logits mode")
++    pytest.xfail(
++        os.getenv("VLLM_USE_V2_MODEL_RUNNER") and model_setup[0] == "ngram",
++        reason="Model Runner V2 does not support ngram method",
++        strict=True,
++    )
 +
      from vllm import LLM
  
