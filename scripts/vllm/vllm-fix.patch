@@ -80,7 +80,7 @@ index 4b693d8c8..3ff3093b4 100644
          if e > 0 and w_gs_l[0] is not None:
              w_gs = torch.stack(w_gs_l)
 diff --git a/tests/v1/sample/test_logprobs.py b/tests/v1/sample/test_logprobs.py
-index d029a6ce0..0e12d5c66 100644
+index d029a6ce0..c4f51bbf7 100644
 --- a/tests/v1/sample/test_logprobs.py
 +++ b/tests/v1/sample/test_logprobs.py
 @@ -3,6 +3,7 @@
@@ -95,7 +95,7 @@ index d029a6ce0..0e12d5c66 100644
      For logprobs, we should have non-positive values.
      For logits, we should expect at least one positive values.
      """
-+    pytest.xfail(
++    pytest.mark.xfail(
 +        os.getenv("VLLM_USE_V2_MODEL_RUNNER") and logprobs_mode in ("processed_logits", "raw_logits"),
 +        reason="Model Runner V2 does not support logits mode",
 +        strict=True,
@@ -108,13 +108,13 @@ index d029a6ce0..0e12d5c66 100644
              speculative_config dict, top_logprobs).
          monkeypatch: pytest fixture for setting env vars.
      """
-+    pytest.xfail(
++    pytest.mark.xfail(
 +        os.getenv("VLLM_USE_V2_MODEL_RUNNER") and logprobs_mode in ("processed_logits", "raw_logits"),
 +        reason="Model Runner V2 does not support logits mode",
 +        strict=True,
 +    )
 +
-+    pytest.xfail(
++    pytest.mark.xfail(
 +        os.getenv("VLLM_USE_V2_MODEL_RUNNER") and model_setup[0] == "ngram",
 +        reason="Model Runner V2 does not support ngram method",
 +        strict=True,
