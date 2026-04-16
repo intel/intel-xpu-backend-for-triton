@@ -1,13 +1,38 @@
-#include <stddef.h>
-#include <stdint.h>
+#pragma once
 
-#ifdef __CUDACC__
+#if defined(__CUDA__) && defined(__clang__)
+#define GSAN_DEVICE __attribute__((device))
+#define GSAN_HOST_DEVICE __attribute__((host)) __attribute__((device))
+#elif defined(__CUDACC__)
+#define GSAN_DEVICE __device__
 #define GSAN_HOST_DEVICE __host__ __device__
 #else
+#define GSAN_DEVICE
 #define GSAN_HOST_DEVICE
 #endif
 
 namespace gsan {
+
+#ifdef _MSC_VER
+// MSVC does not provide GCC/Clang __SIZE_TYPE__ builtins.
+// Use MSVC built-in sized types directly (no headers needed).
+using uint8_t = unsigned __int8;
+using uint16_t = unsigned __int16;
+using uint32_t = unsigned __int32;
+#ifdef _WIN64
+using size_t = unsigned __int64;
+using uintptr_t = unsigned __int64;
+#else
+using size_t = unsigned __int32;
+using uintptr_t = unsigned __int32;
+#endif
+#else
+using size_t = __SIZE_TYPE__;
+using uint8_t = __UINT8_TYPE__;
+using uint16_t = __UINT16_TYPE__;
+using uint32_t = __UINT32_TYPE__;
+using uintptr_t = __UINTPTR_TYPE__;
+#endif
 
 // Reserve 1 PiB, should be big enough for a while :)
 static constexpr size_t kReserveSize = 1ull << 40;
@@ -34,8 +59,12 @@ struct alignas(4) ScalarClock {
   // MSVC allocates bitfields of different underlying types into separate
   // allocation units. Use uint16_t to match threadId and keep sizeof == 4.
   uint16_t scope : 2;
+  uint16_t isRelease : 1;
 #else
   AtomicScope scope : 2;
+  // For a release write, the epoch is actually an index into the thread's
+  // circular clock buffer where the full vector clock is stored.
+  bool isRelease : 1;
 #endif
 };
 
@@ -91,10 +120,18 @@ struct ThreadState {
   epoch_t vectorClock[];
 };
 
+static constexpr int kMaxAtomicShadowCells = 3;
+
+struct AtomicEventState {
+  ThreadState *threadState;
+  ShadowCell *cells[kMaxAtomicShadowCells];
+  uint8_t numCells;
+};
+
 // Place the thread state for each device at a fixed stride for ease of
 // address calculation.
 static constexpr uintptr_t kPerDeviceStateStride = 1ull << 30;
-static constexpr uintptr_t kMaxGPUs = 16;
+static constexpr uintptr_t kMaxGPUs = 32;
 static constexpr uintptr_t kGlobalsReserveSize =
     kPerDeviceStateStride * kMaxGPUs;
 
@@ -123,6 +160,10 @@ inline GSAN_HOST_DEVICE uintptr_t getShadowAddress(uintptr_t virtualAddress) {
 inline GSAN_HOST_DEVICE bool isGsanManaged(uintptr_t addr,
                                            uintptr_t reserveBase) {
   return getReserveBaseFromAddress(addr) == reserveBase;
+}
+
+inline GSAN_HOST_DEVICE bool isAtomicScope(AtomicScope scope) {
+  return scope != AtomicScope::NonAtomic;
 }
 
 } // namespace gsan

@@ -1,4 +1,4 @@
-// RUN: env TRITON_INTEL_DISABLE_REWRITE_CONTIGUOUS_GATHER=0 triton-opt %s -split-input-file --triton-intel-rewrite-tensor-descriptor-to-pointer | FileCheck %s
+// RUN: env TRITON_INTEL_DISABLE_DESCRIPTOR_GATHER_SCATTER_REWRITE=0 triton-opt %s -split-input-file --triton-intel-rewrite-tensor-descriptor-to-pointer | FileCheck %s
 //
 // Tests for the descriptor_gather → descriptor_load optimization in the
 // rewrite-tensor-descriptor-to-pointer pass. When x_offsets are provably

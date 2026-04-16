@@ -875,7 +875,7 @@ run_vllm_install() {
   echo "************************************************"
   echo "******    Installing vLLM                 ******"
   echo "************************************************"
-  echo "vllm pin: $(<"$TRITON_PROJ/benchmarks/vllm/vllm-pin.txt")"
+  echo "vllm pin: $(<"$TRITON_PROJ/scripts/vllm/vllm-pin.txt")"
 
   "$SCRIPTS_DIR/vllm/install-vllm.sh" $([ "$VENV" = true ] && echo --venv) --smoke-test
 }
