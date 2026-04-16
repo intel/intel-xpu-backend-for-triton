@@ -166,17 +166,35 @@ private:
              MLIRContext *context) const {
     LDBG("Considering op: " << *op);
 
+    Value ptr = op.getPtr();
+    auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
+    if (!tensorTy)
+      return;
+
+    unsigned rank = tensorTy.getRank();
+
+    // For 1D ops, try to detect strided access patterns and reshape
+    // to 2D for block IO lowering. This runs before the 2D mask check
+    // because 1D strided loads handle masks internally.
+    if constexpr (std::is_same_v<OpType, tt::LoadOp>) {
+      if (rank == 1) {
+        reshape1DStridedLoad(op, tensorTy, context);
+        return;
+      }
+    }
+    if constexpr (std::is_same_v<OpType, tt::StoreOp>) {
+      if (rank == 1) {
+        reshape1DStridedStore(op, tensorTy, context);
+        return;
+      }
+    }
+
     if constexpr (std::is_same_v<OpType, tt::LoadOp>) {
       if (op.getMask()) {
         LDBG("Load op has mask, skip block IO attribute");
         return;
       }
     }
-
-    Value ptr = op.getPtr();
-    auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
-    if (!tensorTy)
-      return;
 
     LDBG("Considering tensor of pointer of memory accessing op: " << op);
 
@@ -208,16 +226,6 @@ private:
     //   This corresponds to a column-major contiguous access pattern per 2d
     //   slice. The axis info reflects this with stride [..., 1, X].
     const tt::AxisInfo *axisInfo = axisInfoAnalysis.getAxisInfo(ptr);
-    unsigned rank = axisInfo->getRank();
-
-    // For 1D StoreOps, try to detect strided access patterns and reshape
-    // to 2D for block IO lowering.
-    if constexpr (std::is_same_v<OpType, tt::StoreOp>) {
-      if (rank == 1) {
-        reshape1DStridedStore(op, tensorTy, context);
-        return;
-      }
-    }
 
     if (rank < 2) {
       LDBG("Rank is < 2, skip block IO attribute");
@@ -375,6 +383,31 @@ private:
     }
     return std::nullopt;
   }
+
+  //===--------------------------------------------------------------------===//
+  // 1D strided access → 2D block I/O reshape
+  //
+  // Inductor (and similar code-generators) flatten 2D row-major tiles into
+  // 1D indices:  offset = (idx % W) + (idx / W) * S.  Without intervention
+  // the compiler sees N independent pointer computations and emits N scalar
+  // gather/scatter operations.
+  //
+  // The helpers below recover W (tile width), H (tile height), and S (row
+  // stride) from the arithmetic, reshape the 1D op into a 2D [H, W] op, and
+  // annotate it with ttig.block_io / ttig.block_io_stride so that the LLVM
+  // lowering emits a single LSC 2D block read or write.
+  //
+  // Load vs store asymmetry:
+  //   - Stores:  2D block store writes FROM registers in any order, so the
+  //     default reshape encoding works.  However, HW does not support
+  //     transpose, so multi-row tiles (H > 1) are currently disabled.
+  //   - Loads:   2D block load delivers data in a fixed HW pattern (lane k
+  //     = column k, registers stack rows).  An explicit "load encoding"
+  //     matching this pattern is constructed, and a ConvertLayoutOp (SLM
+  //     transpose) converts to the consumer encoding.  The load encoding
+  //     must be anchored (isExpensiveLoadOrStore) so that
+  //     RemoveLayoutConversions does not eliminate the ConvertLayoutOp.
+  //===--------------------------------------------------------------------===//
 
   /// Information extracted from a 1D strided access pattern:
   ///   offset = (idx % W) + (idx / W) * S
@@ -612,11 +645,13 @@ private:
     if (!info)
       return;
 
-    // TODO: The 2D block store lowering in StoreOpToBlockIOConversion
-    // does not correctly handle multi-row tiles (H > 1) because offsetY
-    // is hardcoded to 0. Restrict to H == 1 until the lowering is fixed.
+    // TODO: 2D block store does not support hardware transpose. With H > 1,
+    // the encoding inference puts registers in columns while the store
+    // hardware expects registers in rows. Fixing this requires inserting a
+    // ConvertLayoutOp before the store.
     if (info->H != 1) {
-      LDBG("H=" << info->H << " > 1 not yet supported, skip 1D reshape");
+      LDBG("H=" << info->H
+                << " > 1 not yet supported for store, skip 1D reshape");
       return;
     }
 
@@ -636,11 +671,122 @@ private:
     auto newStore = tt::StoreOp::create(builder, loc, ptrReshape, valReshape,
                                         op.getCache(), op.getEvict());
 
-    setBlockIOAttrs(newStore, ctx, info->S);
     copyNonBlockIOAttrs(op, newStore);
+    setBlockIOAttrs(newStore, ctx, info->S);
 
     LDBG("Created 2D block store: " << *newStore);
 
+    // Erase the original 1D store.
+    op.erase();
+  }
+
+  /// Detect 1D tensor-of-pointers LoadOp with strided access pattern
+  /// and reshape to 2D load with block IO attributes.
+  ///
+  /// Similar to reshape1DStridedStore, but for loads. Since 2D block loads
+  /// deliver data in a specific layout (lane k = column k, registers stack
+  /// rows), we construct an explicit "load encoding" matching this HW
+  /// delivery, perform the load, then insert a ConvertLayoutOp to the
+  /// natural "consumer encoding" that the rest of the pipeline expects.
+  void reshape1DStridedLoad(tt::LoadOp op, RankedTensorType ptrTensorTy,
+                            MLIRContext *ctx) const {
+    LDBG("Attempting 1D strided load reshape for: " << *op);
+
+    // For loads, we allow masks (the load path handles them).
+    // However, the strided pattern matcher needs the ptr, not mask.
+
+    // MAX_TILE_HEIGHT_LOAD = 32
+    std::optional<StridedPatternInfo> info =
+        matchStridedPattern(op, ptrTensorTy, /*maxPerWarpHeight=*/32);
+    if (!info)
+      return;
+
+    Location loc = op.getLoc();
+    OpBuilder builder(op);
+    SmallVector<int64_t> newShape = {info->H, info->W};
+
+    unsigned threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(
+        op->getParentOfType<ModuleOp>());
+    unsigned numWarps = info->numWarps;
+    unsigned perWarpH = static_cast<unsigned>(info->H / numWarps);
+
+    // Construct "load encoding" matching HW delivery:
+    // lane k = column k, registers stack rows.
+    // sizePerThread=[perWarpH, 1], threadsPerWarp=[1, tpw], warpsPerCTA=[nw, 1]
+    auto loadEnc = ttg::BlockedEncodingAttr::get(
+        ctx,
+        /*sizePerThread=*/{perWarpH, 1},
+        /*threadsPerWarp=*/{1, threadsPerWarp},
+        /*warpsPerCTA=*/{numWarps, 1},
+        /*order=*/{1, 0},
+        ttg::CGAEncodingAttr::fromSplitParams(
+            ctx, /*CTAsPerCGA=*/SmallVector<unsigned>(2, 1),
+            /*CTASplitNum=*/SmallVector<unsigned>(2, 1),
+            /*CTAOrder=*/{0, 1}));
+
+    // Construct "consumer encoding" — the natural 2D reshape of the original
+    // 1D encoding. For a 1D blocked encoding with sizePerThread=[spt],
+    // threadsPerWarp=[tpw], warpsPerCTA=[wpc], order=[0], the natural reshape
+    // to [H, W] with order=[1,0] distributes elements column-first.
+    auto origEnc = cast<ttg::BlockedEncodingAttr>(ptrTensorTy.getEncoding());
+    unsigned spt = origEnc.getSizePerThread()[0];
+    unsigned tpw = origEnc.getThreadsPerWarp()[0];
+    unsigned wpc = origEnc.getWarpsPerCTA()[0];
+    unsigned spt1 = std::min(spt, static_cast<unsigned>(info->W));
+    unsigned spt0 = spt / spt1;
+    unsigned tpw1 = std::min(tpw, static_cast<unsigned>(info->W) / spt1);
+    unsigned tpw0 = tpw / tpw1;
+    auto consumerEnc = ttg::BlockedEncodingAttr::get(
+        ctx, {spt0, spt1}, {tpw0, tpw1}, {wpc, 1}, {1, 0},
+        ttg::CGAEncodingAttr::fromSplitParams(
+            ctx, /*CTAsPerCGA=*/SmallVector<unsigned>(2, 1),
+            /*CTASplitNum=*/SmallVector<unsigned>(2, 1),
+            /*CTAOrder=*/{0, 1}));
+
+    // Reshape pointer to [H, W] with load encoding.
+    auto loadPtrTy =
+        RankedTensorType::get(newShape, ptrTensorTy.getElementType(), loadEnc);
+    auto ptrReshape = tt::ReshapeOp::create(builder, loc, loadPtrTy, info->ptr,
+                                            /*allowReorder=*/true);
+
+    // Reshape mask if present.
+    Value mask2d;
+    if (Value mask = op.getMask()) {
+      auto maskTy = cast<RankedTensorType>(mask.getType());
+      auto loadMaskTy =
+          RankedTensorType::get(newShape, maskTy.getElementType(), loadEnc);
+      mask2d = tt::ReshapeOp::create(builder, loc, loadMaskTy, mask,
+                                     /*allowReorder=*/true);
+    }
+
+    // Create 2D load with load encoding.
+    Type pointeeTy =
+        cast<tt::PointerType>(ptrTensorTy.getElementType()).getPointeeType();
+    auto loadResultTy = RankedTensorType::get(newShape, pointeeTy, loadEnc);
+    auto newLoad = tt::LoadOp::create(
+        builder, loc, loadResultTy, ptrReshape, mask2d, op.getOther(),
+        /*boundaryCheck=*/{},
+        /*padding=*/nullptr, op.getCache(), op.getEvict(), op.getIsVolatile());
+
+    // Set block IO attributes.
+    setBlockIOAttrs(newLoad, ctx, info->S);
+    copyNonBlockIOAttrs(op, newLoad);
+
+    // ConvertLayoutOp: load encoding -> consumer encoding.
+    auto consumerResultTy =
+        RankedTensorType::get(newShape, pointeeTy, consumerEnc);
+    auto converted =
+        ttg::ConvertLayoutOp::create(builder, loc, consumerResultTy, newLoad);
+
+    // Reshape back to 1D with original result type.
+    auto origResultTy = cast<RankedTensorType>(op.getType());
+    auto reshapeBack = tt::ReshapeOp::create(builder, loc, origResultTy,
+                                             converted, /*allowReorder=*/false);
+
+    LDBG("Created 2D block load with layout conversion: " << *newLoad);
+
+    // Replace and erase.
+    op.replaceAllUsesWith(reshapeBack.getResult());
     op.erase();
   }
 

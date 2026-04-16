@@ -4,11 +4,9 @@
 // COM: reshapes it to a 2D store with ttig.block_io and ttig.block_io_stride,
 // COM: is lowered all the way to triton_gen.2Dblockstore by the LLVM conversion.
 
-// COM: Test 1: Canonical strided pattern — 1D store with W=32, S=96, fp16, 1024 elements.
-// COM: MaterializeBlockPointer detects the offset pattern:
-// COM:   arith.addi(arith.remui(idx, 32), arith.muli(arith.divui(idx, 32), 96))
-// COM: and reshapes [1024] -> [32, 32] with stride=96. The LLVM conversion should
-// COM: then emit a triton_gen.2Dblockstore with elem_size=16, tile_width=32, tile_height=8.
+// COM: Test 1: Canonical strided store — W=32, S=96, fp16, 1024 elements, H=32.
+// COM: H > 1 so MaterializeBlockPointer does NOT reshape the store (PR #6682).
+// COM: No triton_gen.2Dblockstore should be emitted.
 
 #blocked1d = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
@@ -31,8 +29,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
-// COM: Test 2: Masked store with dense<true> constant — should also lower to 2D block store.
-// COM: matchPattern/m_One recognizes dense<true> as provably all-true.
+// COM: Test 2: Masked store with dense<true> constant — H=32 > 1, so the store
+// COM: is NOT reshaped (PR #6682). No triton_gen.2Dblockstore should be emitted.
 
 #blocked1d = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
@@ -78,5 +76,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %ptrs = tt.addptr %base, %off : tensor<1024x!tt.ptr<f16>, #blocked1d>, tensor<1024xi32, #blocked1d>
     tt.store %ptrs, %arg1 : tensor<1024x!tt.ptr<f16>, #blocked1d>
     tt.return
+  }
+}
+
+// -----
+
+// COM: Test 4: 1D strided load — W=32, S=96, fp16, 1024 elements, H=32.
+// COM: MaterializeBlockPointer detects the offset pattern and reshapes the 1D
+// COM: load to a 2D block load. The LLVM conversion should emit a
+// COM: triton_gen.2Dblockload.
+
+#blocked1d = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @test_1d_strided_load_to_2d_blockload
+  // CHECK: triton_gen.2Dblockload
+  tt.func @test_1d_strided_load_to_2d_blockload(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> tensor<1024xf16, #blocked1d> {
+    %idx = tt.make_range {start = 0 : i32, end = 1024 : i32} : tensor<1024xi32, #blocked1d>
+    %c32 = arith.constant dense<32> : tensor<1024xi32, #blocked1d>
+    %c96 = arith.constant dense<96> : tensor<1024xi32, #blocked1d>
+    %rem = arith.remui %idx, %c32 : tensor<1024xi32, #blocked1d>
+    %div = arith.divui %idx, %c32 : tensor<1024xi32, #blocked1d>
+    %mul = arith.muli %div, %c96 : tensor<1024xi32, #blocked1d>
+    %off = arith.addi %rem, %mul : tensor<1024xi32, #blocked1d>
+    %base = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1024x!tt.ptr<f16>, #blocked1d>
+    %ptrs = tt.addptr %base, %off : tensor<1024x!tt.ptr<f16>, #blocked1d>, tensor<1024xi32, #blocked1d>
+    %mask = arith.constant dense<true> : tensor<1024xi1, #blocked1d>
+    %result = tt.load %ptrs, %mask : tensor<1024x!tt.ptr<f16>, #blocked1d>
+    tt.return %result : tensor<1024xf16, #blocked1d>
   }
 }
