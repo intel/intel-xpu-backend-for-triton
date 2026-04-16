@@ -564,9 +564,9 @@ static PyTypeObject PyKernelArgType = {
     .tp_itemsize = 0,
     .tp_flags = Py_TPFLAGS_DEFAULT,
     .tp_doc = "Kernel Argument Metadata",
-    .tp_new = PyType_GenericNew,
-    .tp_init = (initproc)PyKernelArg_init,
     .tp_dealloc = (destructor)PyKernelArg_dealloc,
+    .tp_init = (initproc)PyKernelArg_init,
+    .tp_new = PyType_GenericNew,
 };
 
 static inline void gpuAssert(ze_result_t code, const char *file, int line) {
