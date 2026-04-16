@@ -1,5 +1,4 @@
 add_triton_library(TritonIntelTransforms
-  BlockPointerToTensorDesc.cpp
   FuseReshape.cpp
   RemoveMasks.cpp
   RewriteTensorDescriptorToPointer.cpp
