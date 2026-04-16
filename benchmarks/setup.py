@@ -114,7 +114,6 @@ setup(
         "torch>=2.6",
         "pandas<3.0",
         "scipy",
-        "psutil",
         "tabulate",
         "matplotlib",
     ],
