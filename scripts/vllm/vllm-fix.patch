@@ -80,7 +80,7 @@ index 4b693d8c8..3ff3093b4 100644
          if e > 0 and w_gs_l[0] is not None:
              w_gs = torch.stack(w_gs_l)
 diff --git a/tests/v1/sample/test_logprobs.py b/tests/v1/sample/test_logprobs.py
-index d029a6ce0..26bb70b23 100644
+index d029a6ce0..01519ab2d 100644
 --- a/tests/v1/sample/test_logprobs.py
 +++ b/tests/v1/sample/test_logprobs.py
 @@ -3,6 +3,7 @@
@@ -91,20 +91,19 @@ index d029a6ce0..26bb70b23 100644
  from collections.abc import Generator
  from typing import get_args
  
-@@ -47,6 +48,12 @@ ROCM_DETERMINISM_KWARGS: dict = (
+@@ -47,6 +48,11 @@ ROCM_DETERMINISM_KWARGS: dict = (
      else {}
  )
  
-+VLLM_USE_V2_MODEL_RUNNER = os.getenv("VLLM_USE_V2_MODEL_RUNNER")
 +XFAIL_V2_LOGITS = pytest.mark.xfail(
-+    condition=VLLM_USE_V2_MODEL_RUNNER,
++    condition=os.getenv("VLLM_USE_V2_MODEL_RUNNER")
 +    reason="Model Runner V2 does not support logits mode",
 +    strict=True,
 +)
  
  @pytest.fixture(
      scope="module",
-@@ -491,7 +498,14 @@ def test_all_logprobs(example_prompts):
+@@ -491,7 +497,14 @@ def test_all_logprobs(example_prompts):
                  assert len(prompt_logprob) == vocab_size
  
  
@@ -120,7 +119,7 @@ index d029a6ce0..26bb70b23 100644
  def test_logprobs_mode(logprobs_mode: LogprobsMode):
      """Test with LLM engine with different logprobs_mode.
      For logprobs, we should have non-positive values.
-@@ -947,7 +961,14 @@ def test_correct_decoded_token_preserves_valid_tokens():
+@@ -947,7 +960,14 @@ def test_correct_decoded_token_preserves_valid_tokens():
                      assert "�" not in decoded_token
  
  
@@ -136,7 +135,7 @@ index d029a6ce0..26bb70b23 100644
  @pytest.mark.parametrize(
      "model_setup",
      [
-@@ -991,7 +1012,14 @@ def test_correct_decoded_token_preserves_valid_tokens():
+@@ -991,7 +1011,14 @@ def test_correct_decoded_token_preserves_valid_tokens():
                  },
                  3,
              ),
