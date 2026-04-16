@@ -515,6 +515,14 @@ private:
     }
     int64_t H = numElements / W;
 
+    // TODO: The 2D block store lowering in StoreOpToBlockIOConversion
+    // does not correctly handle multi-row tiles (H > 1) because offsetY
+    // is hardcoded to 0. Restrict to H == 1 until the lowering is fixed.
+    if (H != 1) {
+      LDBG("H=" << H << " > 1 not yet supported, skip 1D reshape");
+      return;
+    }
+
     LDBG("Detected strided pattern: W=" << W << ", H=" << H << ", S=" << S);
 
     // 4b. Validate HW constraints for 2D block store.
