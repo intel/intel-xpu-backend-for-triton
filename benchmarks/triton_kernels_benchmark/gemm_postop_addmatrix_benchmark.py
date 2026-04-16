@@ -301,9 +301,10 @@ X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
-        line_vals=['triton', 'onednn'],
+        # torch.matmul with int8 on XPU produces incorrect results; exclude onednn for int8.
+        line_vals=['triton'] + ([] if torch.int8 in dtypes() else ['onednn']),
         # label name for the lines
-        line_names=['Triton', 'OneDNN'],
+        line_names=['Triton'] + ([] if torch.int8 in dtypes() else ['OneDNN']),
         # line styles
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
