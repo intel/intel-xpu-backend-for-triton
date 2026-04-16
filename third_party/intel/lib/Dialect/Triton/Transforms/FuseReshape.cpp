@@ -308,11 +308,10 @@ private:
     Location loc = user->getLoc();
     if (auto loadOp = dyn_cast<tt::LoadOp>(user)) {
       OpBuilder rewriter(loadOp);
-      auto newLoadOp = tt::LoadOp::create(
-          rewriter, loadOp.getLoc(), newVal, loadOp.getMask(),
-          loadOp.getOther(), loadOp.getBoundaryCheckAttr(),
-          loadOp.getPaddingAttr(), loadOp.getCache(), loadOp.getEvict(),
-          loadOp.getIsVolatile());
+      auto newLoadOp = tt::LoadOp::create(rewriter, loadOp.getLoc(), newVal,
+                                          loadOp.getMask(), loadOp.getOther(),
+                                          loadOp.getCache(), loadOp.getEvict(),
+                                          loadOp.getIsVolatile());
       newLoadOp->setAttrs(loadOp->getAttrs());
       mapping.map(static_cast<Operation *>(loadOp),
                   static_cast<Operation *>(newLoadOp));

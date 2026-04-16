@@ -174,9 +174,6 @@ private:
     }
 
     Value ptr = op.getPtr();
-    assert(!tt::isTensorPointerType(ptr.getType()) &&
-           "Expected pointer refer to a tensor.");
-
     auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
     if (!tensorTy)
       return;
