@@ -65,13 +65,20 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       unsigned elemBits = isa<triton::PointerType>(elemTy)
                               ? 64
                               : elemTy.getIntOrFloatBitWidth();
-      auto elemBytes = std::max(elemBits / 8, 1u);
-      auto totalBytes =
-          static_cast<int64_t>(srcTy.getNumElements()) * elemBytes;
-      constexpr int64_t kSmallTileThreshold = 1024;
-      if (totalBytes < kSmallTileThreshold) {
-        return performNonSwizzledSLMConversion(op, srcLayout, dstLayout,
-                                               adaptor, rewriter);
+      // Skip sub-byte types (e.g. i1): their LinearLayout has sub-byte
+      // element granularity that doesn't match the i8 promotion we do in
+      // performNonSwizzledSLMConversion, causing incorrect SLM offsets.
+      // Sub-byte types also don't trigger the bitreverse.i4 issue this
+      // workaround targets.
+      if (elemBits >= 8) {
+        auto elemBytes = elemBits / 8;
+        auto totalBytes =
+            static_cast<int64_t>(srcTy.getNumElements()) * elemBytes;
+        constexpr int64_t kSmallTileThreshold = 1024;
+        if (totalBytes < kSmallTileThreshold) {
+          return performNonSwizzledSLMConversion(op, srcLayout, dstLayout,
+                                                 adaptor, rewriter);
+        }
       }
     }
     return failure();
