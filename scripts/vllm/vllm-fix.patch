@@ -123,6 +123,34 @@ index d029a6ce0..c4f51bbf7 100644
      from vllm import LLM
  
      # The ROCm skinny GEMM kernels (gemm_kernels.cu) are
+diff --git a/tests/v1/worker/test_gpu_model_runner.py b/tests/v1/worker/test_gpu_model_runner.py
+index d7695027a..dd1b0b481 100644
+--- a/tests/v1/worker/test_gpu_model_runner.py
++++ b/tests/v1/worker/test_gpu_model_runner.py
+@@ -759,6 +759,11 @@ def test_init_kv_cache_with_kv_sharing_valid(default_vllm_config):
+     current_platform.is_rocm(),
+     reason="Attention backend FLASHINFER is not supported on ROCm.",
+ )
++@pytest.mark.xfail(
++    current_platform.is_xpu(),
++    reason="FlashInfer is CUDA-only, not supported on XPU",
++    strict=True,
++)
+ def test_hybrid_attention_mamba_tensor_shapes():
+     """
+     The GPU model runner creates different views into the
+@@ -1222,6 +1227,11 @@ def test_is_uniform_decode() -> None:
+     current_platform.is_rocm(),
+     reason="Attention backend FLASHINFER is not supported on ROCm.",
+ )
++@pytest.mark.xfail(
++    current_platform.is_xpu(),
++    reason="FlashInfer is CUDA-only, not supported on XPU",
++    strict=True,
++)
+ def test_mamba_cache_raises_when_max_num_seqs_exceeds_blocks():
+     """Test that a ValueError is raised when max_num_seqs exceeds the
+     available Mamba cache blocks for hybrid models with FULL cudagraphs.
 diff --git a/vllm/model_executor/layers/fused_moe/fused_batched_moe.py b/vllm/model_executor/layers/fused_moe/fused_batched_moe.py
 index e2b5a8f67..0513a957b 100644
 --- a/vllm/model_executor/layers/fused_moe/fused_batched_moe.py
