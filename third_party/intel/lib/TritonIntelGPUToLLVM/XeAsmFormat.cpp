@@ -1,8 +1,9 @@
 #include "intel/include/TritonIntelGPUToLLVM/XeAsmFormat.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Transforms/DialectConversion.h"
 #include "triton/Conversion/TritonGPUToLLVM/AsmFormat.h"
 #include "llvm/Support/raw_ostream.h"
+#include <llvm/ADT/TypeSwitch.h>
+#include <llvm/Support/FormatVariadic.h>
 #include <sstream>
 
 namespace mlir {
@@ -229,6 +230,163 @@ XeInstr &XeInstr::v(int vecWidth, bool predicate) {
 XeInstr &XeInstr::b(int width) {
   o("b" + std::to_string(width));
   return *this;
+}
+
+std::optional<std::string> XeVISAInstr::getTypeName(Type scalarTy) {
+  std::string typeSyntax;
+  TypeSwitch<Type>(scalarTy)
+      .Case<Float32Type>([&](auto) { typeSyntax = "f"; })
+      .Case<Float16Type>([&](auto) { typeSyntax = "hf"; })
+      .Case<IntegerType>([&](auto type) {
+        unsigned bitWidth = type.getIntOrFloatBitWidth();
+        switch (bitWidth) {
+        case 8:
+          typeSyntax = "ub";
+          break;
+        case 16:
+          typeSyntax = "uw";
+          break;
+        case 32:
+          typeSyntax = "ud";
+          break;
+        case 64:
+          typeSyntax = "uq";
+          break;
+        }
+      })
+      .Default([&](auto) { typeSyntax = ""; });
+
+  if (!typeSyntax.empty())
+    return typeSyntax;
+  return std::nullopt;
+}
+
+unsigned XeVISAInstr::getGRFSizeInBytes(XeArch arch) {
+  switch (arch) {
+  case Xe:
+    return 8 * 4;
+  case Xe2:
+  case Xe3:
+  default:
+    return 16 * 4;
+  }
+}
+
+std::string simdReduceAsm(std::string binOp, unsigned warpSize,
+                          unsigned numLaneToReduce, unsigned accSize,
+                          Type elemTy, XeArch arch) {
+
+  // TODO: implement more variants.
+  assert(arch != Xe ||
+         warpSize == 16 && "only suppor warpSize=16 for on Xe arch fow now");
+  unsigned numElem = accSize * warpSize;
+  unsigned tempResultSize = numElem / 2;
+  unsigned reducePart = warpSize / numLaneToReduce;
+  unsigned numResult = accSize * reducePart;
+
+  auto typeSyntax = XeVISAInstr::getTypeName(elemTy);
+  if (!typeSyntax)
+    llvm_unreachable("Unsupported scalar type");
+
+  unsigned grfSizeInBytes = XeVISAInstr::getGRFSizeInBytes(arch);
+  unsigned grfElemsPerRow =
+      grfSizeInBytes / (elemTy.getIntOrFloatBitWidth() / 8);
+
+  constexpr StringLiteral reduceBuff = R"({
+  .decl temp_result v_type=G type={0} num_elts={1} align=GRF
+  )";
+
+  std::string simdAsm =
+      llvm::formatv(reduceBuff.data(), *typeSyntax, tempResultSize).str();
+
+  constexpr StringLiteral reduceBinOp =
+      R"({0} (M1_NM, {1}) {2}({3}, {4})<1>  {5}({6}, {7})<{11};{12},1> {8}({9}, {10})<{11};{12},1>
+  )";
+
+  for (unsigned n = numElem, rowStride = numLaneToReduce,
+                colNum = numLaneToReduce / 2;
+       n > numResult; n >>= 1, rowStride >>= 1, colNum >>= 1) {
+    unsigned elemPerRow = std::min(n, warpSize);
+    unsigned rowNum = n / elemPerRow;
+    unsigned reduceNum = (rowNum + 1) / 2;
+
+    for (unsigned r = 0; r < reduceNum; r++) {
+      unsigned dstOffset = r * elemPerRow;
+      unsigned dstOffsetM = dstOffset / grfElemsPerRow;
+      unsigned dstOffsetN = dstOffset % grfElemsPerRow;
+      unsigned srcAOffset = r * 2 * elemPerRow;
+      unsigned srcBOffset = srcAOffset + colNum;
+      unsigned srcAOffM = srcAOffset / grfElemsPerRow;
+      unsigned srcAOffN = srcAOffset % grfElemsPerRow;
+      unsigned srcBOffM = srcBOffset / grfElemsPerRow;
+      unsigned srcBOffN = srcBOffset % grfElemsPerRow;
+      std::string simdOps =
+          llvm::formatv(
+              reduceBinOp.data(), binOp, std::min(n / 2, warpSize),
+              /*dst*/ colNum == 1 ? "$0" : "temp_result", dstOffsetM,
+              dstOffsetN,
+              /*srcA*/ colNum == numLaneToReduce / 2 ? "$1" : "temp_result",
+              srcAOffM, srcAOffN,
+              /*srcB*/ colNum == numLaneToReduce / 2 ? "$1" : "temp_result",
+              srcBOffM, srcBOffN, rowStride, colNum)
+              .str();
+      simdAsm += simdOps;
+    }
+  }
+  simdAsm += "}";
+  return simdAsm;
+}
+
+std::string TransposeAsm(unsigned warpSize, unsigned transWidth,
+                         unsigned transHeight, unsigned numElems, Type elemTy,
+                         XeArch arch) {
+
+  assert(arch != Xe ||
+         warpSize == 16 && "only support warpSize=16 for on Xe arch fow now");
+  unsigned elemSizeInBits = elemTy.getIntOrFloatBitWidth();
+  auto typeName = XeVISAInstr::getTypeName(
+      IntegerType::get(elemTy.getContext(), elemSizeInBits));
+  if (!typeName)
+    llvm_unreachable("Unsupported scalar type");
+
+  unsigned grfSizeInBytes = XeVISAInstr::getGRFSizeInBytes(arch);
+  unsigned grfElemsPerRow =
+      grfSizeInBytes / (elemTy.getIntOrFloatBitWidth() / 8);
+
+  constexpr StringLiteral decl = R"({
+                .decl OUTPUT v_type=G type={0} num_elts={1} alias=<$0, 0>
+                .decl INPUT v_type=G type={0} num_elts={1} alias=<$1, 0>
+  )";
+
+  std::string simdAsm = llvm::formatv(decl.data(), /* type name*/ typeName,
+                                      /* number elements */ numElems)
+                            .str();
+
+  constexpr StringLiteral movOp =
+      R"(mov (M1_NM, {0}) OUTPUT({1},{2})<1> INPUT({3},{4})<{5};1,0>
+  )";
+
+  for (unsigned n = 0; n < numElems; n += transWidth * transHeight) {
+    for (unsigned m = 0; m < transHeight; ++m) {
+      unsigned srcOffset = n + m;
+      unsigned srcOffM = srcOffset / grfElemsPerRow;
+      unsigned srcOffN = srcOffset % grfElemsPerRow;
+      unsigned dstOffset = n + m * transWidth;
+      unsigned dstOffM = dstOffset / grfElemsPerRow;
+      unsigned dstOffN = dstOffset % grfElemsPerRow;
+      std::string simdOps = llvm::formatv(movOp.data(),
+                                          /*simd size*/ transWidth,
+                                          /*out region*/ dstOffM,
+                                          /*out sub-region*/ dstOffN,
+                                          /*in region*/ srcOffM,
+                                          /*in sub-region*/ srcOffN,
+                                          /*stride*/ transHeight)
+                                .str();
+      simdAsm += simdOps;
+    }
+  }
+  simdAsm += "}";
+  return simdAsm;
 }
 
 } // namespace triton

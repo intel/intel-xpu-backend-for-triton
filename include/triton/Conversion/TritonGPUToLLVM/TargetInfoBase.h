@@ -69,7 +69,18 @@ public:
 
   virtual bool warpReduce(RewriterBase &rewriter, Location loc,
                           SmallVector<Value> &acc, triton::ReduceOp op,
+                          unsigned numLaneToReduce,
+                          unsigned interleave) const = 0;
+
+  virtual bool warpReduce(RewriterBase &rewriter, Location loc,
+                          SmallVector<Value> &acc, triton::ReduceOp op,
                           unsigned reduceLaneIdMask) const = 0;
+
+  virtual bool
+  warpBatchReduce(RewriterBase &rewriter, Location loc,
+                  std::map<SmallVector<unsigned>, SmallVector<Value>> &acc,
+                  triton::ReduceOp op, unsigned numLaneToReduce,
+                  unsigned interleave) const = 0;
 
   virtual std::string getMulhiFuncName(Type resultElementTy) const = 0;
   // Emits LLVM code with |rewriter| to print a message following the given

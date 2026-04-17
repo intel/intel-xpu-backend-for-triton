@@ -61,11 +61,26 @@ public:
 
   RankedTensorType getSrcTy() { return srcTy; }
 
+  ArrayRef<int64_t> getSrcShape() { return srcShape; }
+
+  Attribute getSrcLayout() { return srcEncoding; }
+
+  triton::ReduceOp getOperation() { return op; }
+
+  unsigned getThreadOffsetOnReductionAxis();
+
   bool isWarpSynchronous();
 
   unsigned getInterWarpSizeWithUniqueData();
 
   unsigned getIntraWarpSizeWithUniqueData();
+
+  // The shape of the shared memory space needed for the reduction.
+  SmallVector<unsigned> getScratchRepShape();
+
+  SmallVector<unsigned> getOrderWithAxisAtBeginning();
+
+  unsigned getScratchSizeInBytesOld();
 
   bool isReduceWithinCTA();
 
