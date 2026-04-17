@@ -647,10 +647,7 @@ private:
     auto [multiDimWarpId, isRepresentativeWarp] =
         delinearize(rewriter, loc, srcLayout, srcShape, kWarp, warpId);
 
-    Value laneIdAxis = multiDimLaneId[axis];
-    Value laneZero = b.icmp_eq(laneIdAxis, b.i32_val(0));
-    Value write =
-        b.and_(b.and_(isRepresentativeLane, isRepresentativeWarp), laneZero);
+    Value write = b.and_(isRepresentativeLane, isRepresentativeWarp);
 
     Value warpIdAxis = multiDimWarpId[axis];
 
