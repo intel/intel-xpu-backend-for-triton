@@ -254,3 +254,13 @@ jobs:
         with:
           name: test-reports-${{ matrix.suite }}
           path: reports
+
+  reports:
+    needs: tests
+    if: always()
+    uses: ./.github/workflows/reports-reusable.yml
+    with:
+      artifact_pattern: test-reports-vllm-*
+      python_version: ${{ inputs.python_version }}
+      runner_label: ${{ inputs.runner_label }}
+      use_pyenv_python: ${{ inputs.use_pyenv_python }}
