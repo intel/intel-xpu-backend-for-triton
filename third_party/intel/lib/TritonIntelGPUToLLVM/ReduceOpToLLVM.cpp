@@ -25,15 +25,7 @@ using ::mlir::LLVM::linearize;
 using ::mlir::triton::gpu::DistributedEncodingTrait;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 
-// Enable to A/B test cross-warp reduction logic.
-//
-// When enabled, we keep Intel step 1/2 (within-thread + within-warp) intact,
-// but replace step 3 (cross-warp) with the common ReduceOpToLLVM.cpp logic:
-// convert_layout through shared memory into a temporary layout, then perform up
-// to two additional warp reductions until the reduction axis size becomes 1.
-#ifndef TRITON_INTEL_REDUCE_USE_COMMON_CROSS_WARP
-#define TRITON_INTEL_REDUCE_USE_COMMON_CROSS_WARP 1
-#endif
+
 
 namespace {
 struct ReduceOpConversion
