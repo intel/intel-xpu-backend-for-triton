@@ -37,9 +37,8 @@ static Operation *dropMask(Operation *op, bool maskVal) {
       .Case<tt::LoadOp>([&](auto loadOp) {
         if (maskVal) {
           auto newLoadOp = tt::LoadOp::create(
-              builder, loc, loadOp.getPtr(), loadOp.getBoundaryCheck(),
-              loadOp.getPadding(), loadOp.getCache(), loadOp.getEvict(),
-              loadOp.getIsVolatile());
+              builder, loc, loadOp.getPtr(), loadOp.getCache(),
+              loadOp.getEvict(), loadOp.getIsVolatile());
           loadOp->replaceAllUsesWith(newLoadOp);
         } else {
           Operation *cstOp =
@@ -492,21 +491,6 @@ public:
            "Expecting a non-empty collection of masked operations");
 
     // Limitation
-    // Currently we can version the loop only if it doesn't have downward
-    // exposed uses of return values that are a tensor of pointers.
-    // Note: this is due to the fact the results yielded by the 2 versioning
-    // branches have different types for ptr (only in one versioned loop
-    // tensor of ptrs are changed to block ptrs) 'then' part of the versioning
-    // branch and leave them as is in the 'else' branch).
-    auto canVersion = [](scf::ForOp &forOp) {
-      return llvm::any_of(forOp.getResults(), [](Value res) {
-        return !tt::isTensorPointerType(res.getType()) ||
-               res.getUsers().empty();
-      });
-    };
-    if (!canVersion(forOp))
-      return false;
-
     auto getMask = [](Operation *maskedOp) {
       assert(isa<tt::LoadOp>(maskedOp) ||
              isa<tt::StoreOp>(maskedOp) &&

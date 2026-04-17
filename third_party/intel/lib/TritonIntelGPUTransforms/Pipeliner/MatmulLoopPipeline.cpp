@@ -258,7 +258,7 @@ createSchedule(scf::ForOp forOp, int numStages) {
       // (typically `advanceOp`).
       // As prefetchOp dependencies are assigned to stage 0, this type of loads
       // must not be explicitely assigned to stage `numStages - 1`.
-      if (mlir::triton::isTensorOrTensorPointerType(loadOp.getPtr().getType()))
+      if (isa<RankedTensorType>(loadOp.getPtr().getType()))
         loadOps.emplace_back(&op);
     }
     if (isa<tt::DescriptorLoadOp>(op))

@@ -202,7 +202,7 @@ struct LoadStoreConversionBase {
   }
 
   unsigned getVectorSize(Value ptr) const {
-    if (!isTensorOrTensorPointerType(ptr.getType()))
+    if (!isa<RankedTensorType>(ptr.getType()))
       return 1;
 
     unsigned contiguity = getContiguity(ptr);
@@ -1967,10 +1967,8 @@ struct DescriptorPrefetchOpConversion
         unpackDescriptor(adaptor.getDesc(), rank, loc, rewriter);
 
     // Get base width and height from the descriptor shape fields.
-    // TODO: For a block pointer, baseWidth/baseHeight come from the
-    // MakeTensorPtrOp shape operands which represent the bounds of the
-    // underlying memory, not the tile shape. For tensor descriptors, the shape
-    // fields in the struct similarly represent the underlying memory bounds
+    // TODO: baseWidth/baseHeight come from the MakeTensorDescOp shape operands
+    // which represent the bounds of the underlying memory, not the tile shape
     // (set by MakeTensorDescOp). Verify this is consistent.
     Value baseWidth = desc.shapes[colIdx];
     Value baseHeight = desc.shapes[rowIdx];
