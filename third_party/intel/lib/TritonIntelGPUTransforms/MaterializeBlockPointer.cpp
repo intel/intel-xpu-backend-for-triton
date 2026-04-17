@@ -763,10 +763,9 @@ private:
     Type pointeeTy =
         cast<tt::PointerType>(ptrTensorTy.getElementType()).getPointeeType();
     auto loadResultTy = RankedTensorType::get(newShape, pointeeTy, loadEnc);
-    auto newLoad = tt::LoadOp::create(
-        builder, loc, loadResultTy, ptrReshape, mask2d, op.getOther(),
-        /*boundaryCheck=*/{},
-        /*padding=*/nullptr, op.getCache(), op.getEvict(), op.getIsVolatile());
+    auto newLoad = tt::LoadOp::create(builder, loc, loadResultTy, ptrReshape,
+                                      mask2d, op.getOther(), op.getCache(),
+                                      op.getEvict(), op.getIsVolatile());
 
     // Set block IO attributes.
     setBlockIOAttrs(newLoad, ctx, info->S);
