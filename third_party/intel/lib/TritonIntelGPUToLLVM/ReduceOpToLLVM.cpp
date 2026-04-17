@@ -139,7 +139,7 @@ public:
       return success();
     }
 
-    reduceAcrossWarpsIntel(helper, intelAccs, indices, rewriter);
+    reduceAcrossWarpsIntel(helper, intelAccs, indices, rewriter, regLl);
 #endif
 
     return success();
@@ -627,8 +627,8 @@ private:
       ReduceOpHelper &helper,
       std::map<SmallVector<unsigned>, SmallVector<Value>> &accs,
       std::map<SmallVector<unsigned>, SmallVector<Value>> &indices,
-      SmallVector<Value> &smemBases,
-      ConversionPatternRewriter &rewriter) const {
+      SmallVector<Value> &smemBases, ConversionPatternRewriter &rewriter,
+      LinearLayout &regLl) const {
     triton::ReduceOp op = helper.getOperation();
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -637,17 +637,23 @@ private:
     auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
     unsigned axis = op.getAxis();
     auto smemShape = helper.getScratchRepShape();
+    SmallVector<int64_t> smemShapeI64(smemShape.begin(), smemShape.end());
 
+    auto reducedEnc =
+        triton::gpu::LinearEncodingAttr::get(rewriter.getContext(), regLl);
     // Lezcano: We should move all the shared memory logic to use LLs natively
     auto srcShape = helper.getSrcShape();
     auto kLane = rewriter.getStringAttr("lane");
     auto [multiDimLaneId, isRepresentativeLane] =
-        delinearize(rewriter, loc, srcLayout, srcShape, kLane, laneId);
+        delinearize(rewriter, loc, reducedEnc, smemShapeI64, kLane, laneId);
     auto kWarp = rewriter.getStringAttr("warp");
     auto [multiDimWarpId, isRepresentativeWarp] =
-        delinearize(rewriter, loc, srcLayout, srcShape, kWarp, warpId);
+        delinearize(rewriter, loc, reducedEnc, smemShapeI64, kWarp, warpId);
 
-    Value write = b.and_(isRepresentativeLane, isRepresentativeWarp);
+    Value laneIdAxis = multiDimLaneId[axis];
+    Value laneZero = b.icmp_eq(laneIdAxis, b.i32_val(0));
+    Value write =
+        b.and_(b.and_(isRepresentativeLane, isRepresentativeWarp), laneZero);
 
     Value warpIdAxis = multiDimWarpId[axis];
 
@@ -752,7 +758,7 @@ private:
 
       if (problemSize > numLanes) {
         // More reduce iteration required. Synchronize here.
-        sync(rewriter, loc, op);
+        sync(rewriter, loc, /*crossCTA=*/false);
       }
     }
   }
@@ -820,7 +826,7 @@ private:
       ReduceOpHelper &helper,
       std::map<SmallVector<unsigned>, SmallVector<Value>> &accs,
       std::map<SmallVector<unsigned>, SmallVector<Value>> &indices,
-      ConversionPatternRewriter &rewriter) const {
+      ConversionPatternRewriter &rewriter, LinearLayout &regLl) const {
     triton::ReduceOp op = helper.getOperation();
     Location loc = op.getLoc();
 
@@ -829,13 +835,14 @@ private:
     SmallVector<Value> smemBases =
         getSmemBases(op, product<unsigned>(smemShape), rewriter, targetInfo);
 
-    storeWarpReduceToSharedMemory(helper, accs, indices, smemBases, rewriter);
-    sync(rewriter, loc, op);
+    storeWarpReduceToSharedMemory(helper, accs, indices, smemBases, rewriter,
+                                  regLl);
+    sync(rewriter, loc, /*crossCTA=*/false);
 
     accumulatePartialReductions(helper, smemBases, rewriter);
 
     // We could avoid this barrier in some of the layouts; not the general case.
-    sync(rewriter, loc, op);
+    sync(rewriter, loc, /*crossCTA=*/false);
 
     // Set output values.
     loadReductionAndPackResult(helper, smemShape, smemBases, rewriter);
