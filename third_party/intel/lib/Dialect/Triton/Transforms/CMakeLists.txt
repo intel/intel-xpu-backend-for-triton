@@ -4,7 +4,6 @@ add_triton_library(TritonIntelTransforms
   PrepareIfCombining.cpp
   RemoveMasks.cpp
   RewriteTensorDescriptorToPointer.cpp
-  RewriteTensorPointer.cpp
   SimplifySignedArithmetic.cpp
   StrideVersioning.cpp
 

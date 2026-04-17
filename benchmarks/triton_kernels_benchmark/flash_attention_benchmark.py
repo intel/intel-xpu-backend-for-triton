@@ -610,9 +610,8 @@ def get_benchmark(
         sm_scale = 0.125
         atol = 1e-1 if N_CTX == 16384 else 1e-2
         bwd_atol = 1e-1 if N_CTX >= 4096 else 1e-2
-        # FIXME: use torch sdpa for result check after https://github.com/intel/intel-xpu-backend-for-triton/issues/2042 fixed
-        torch_fn = lambda: torch.nn.functional.scaled_dot_product_attention(q.cpu(), k.cpu(), v.cpu(
-        ), attn_mask=None, dropout_p=0.0, is_causal=CAUSAL, scale=sm_scale)
+        torch_fn = lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0,
+                                                                            is_causal=CAUSAL, scale=sm_scale)
 
         if provider == 'triton':
             triton_fn = lambda: attention(q, k, v, CAUSAL, sm_scale)
@@ -621,7 +620,7 @@ def get_benchmark(
             else:
                 dout = torch.randn_like(q)
                 torch_o = torch_fn()
-                torch_grads = torch.autograd.grad((torch_o, ), (q, k, v), dout.cpu(), retain_graph=True)
+                torch_grads = torch.autograd.grad((torch_o, ), (q, k, v), dout, retain_graph=True)
                 eager_tensors = torch_grads
                 triton_o = triton_fn()
                 triton_grads = torch.autograd.grad((triton_o, ), (q, k, v), dout, retain_graph=True)
