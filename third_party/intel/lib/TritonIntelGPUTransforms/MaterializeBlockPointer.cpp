@@ -376,6 +376,192 @@ private:
     return std::nullopt;
   }
 
+  /// Information extracted from a 1D strided access pattern:
+  ///   offset = (idx % W) + (idx / W) * S
+  struct StridedPatternInfo {
+    int64_t W;          // Tile width (contiguous elements per row)
+    int64_t H;          // Tile height (number of rows)
+    int64_t S;          // Row stride in elements (pitch = S * elemBytes)
+    unsigned numWarps;  // Number of warps in the module
+    unsigned elemBits;  // Element size in bits
+    unsigned elemBytes; // Element size in bytes
+    Value ptr;          // The AddPtrOp result (original 1D pointer tensor)
+  };
+
+  /// Try to match a 1D strided access pattern from a pointer tensor.
+  /// The pattern is: offset = (idx % W) + (idx / W) * S
+  /// where W is the tile width, H = numElements / W is the tile height,
+  /// and S is the row stride.
+  ///
+  /// \p maxPerWarpHeight is the maximum per-warp tile height allowed
+  /// by the HW (8 for stores, 32 for loads).
+  std::optional<StridedPatternInfo>
+  matchStridedPattern(Operation *op, RankedTensorType ptrTensorTy,
+                      unsigned maxPerWarpHeight) const {
+    // Trace pointer through tt.addptr to find the offset tensor.
+    Value ptr = op->getOperand(0); // ptr is always operand 0 for Load/Store
+    auto addPtrOp = ptr.getDefiningOp<tt::AddPtrOp>();
+    if (!addPtrOp) {
+      LDBG("Pointer not defined by tt.addptr, skip 1D reshape");
+      return std::nullopt;
+    }
+    Value offset = addPtrOp.getOffset();
+
+    // Pattern-match the offset for:
+    //   arith.addi(arith.remui(idx, W), arith.muli(arith.divui(idx, W), S))
+    Value offsetUnwrapped = lookThroughCasts(offset);
+    auto addIOp = offsetUnwrapped.getDefiningOp<arith::AddIOp>();
+    if (!addIOp) {
+      LDBG("Offset not defined by arith.addi, skip 1D reshape");
+      return std::nullopt;
+    }
+
+    // Match (remui, muli) in either order of the addi operands.
+    Value lhs = lookThroughCasts(addIOp.getLhs());
+    Value rhs = lookThroughCasts(addIOp.getRhs());
+    auto remOp = lhs.getDefiningOp<arith::RemUIOp>();
+    auto mulOp = rhs.getDefiningOp<arith::MulIOp>();
+    if (!remOp || !mulOp) {
+      remOp = rhs.getDefiningOp<arith::RemUIOp>();
+      mulOp = lhs.getDefiningOp<arith::MulIOp>();
+    }
+    if (!remOp || !mulOp) {
+      LDBG("Could not match remui/muli pattern, skip 1D reshape");
+      return std::nullopt;
+    }
+
+    // Extract W from remui(idx, W).
+    Value remIdx = lookThroughCasts(remOp.getLhs());
+    std::optional<int64_t> wVal = getConstantValue(remOp.getRhs());
+    if (!wVal || *wVal <= 0) {
+      LDBG("Could not extract constant W from remui, skip 1D reshape");
+      return std::nullopt;
+    }
+    int64_t W = *wVal;
+
+    // Match muli(divui(idx, W'), S) in either operand order.
+    Value mulLhs = lookThroughCasts(mulOp.getLhs());
+    Value mulRhs = lookThroughCasts(mulOp.getRhs());
+    auto divOp = mulLhs.getDefiningOp<arith::DivUIOp>();
+    std::optional<int64_t> sVal =
+        divOp ? getConstantValue(mulRhs) : std::nullopt;
+    if (!divOp || !sVal) {
+      divOp = mulRhs.getDefiningOp<arith::DivUIOp>();
+      sVal = divOp ? getConstantValue(mulLhs) : std::nullopt;
+    }
+    if (!divOp || !sVal || *sVal <= 0) {
+      LDBG("Could not match divui/constant in muli, skip 1D reshape");
+      return std::nullopt;
+    }
+    int64_t S = *sVal;
+
+    // Verify divui uses the same index and same W constant as remui.
+    Value divIdx = lookThroughCasts(divOp.getLhs());
+    std::optional<int64_t> divWVal = getConstantValue(divOp.getRhs());
+    if (!divWVal || *divWVal != W) {
+      LDBG("divui W constant (" << (divWVal ? std::to_string(*divWVal) : "?")
+                                << ") does not match remui W (" << W
+                                << "), skip 1D reshape");
+      return std::nullopt;
+    }
+
+    // Verify both remui and divui use the same index.
+    if (remIdx != divIdx) {
+      LDBG("remui and divui use different index values, skip 1D reshape");
+      return std::nullopt;
+    }
+
+    // Compute H = numElements / W and verify evenly divides.
+    int64_t numElements = ptrTensorTy.getDimSize(0);
+
+    // Verify idx is a canonical unit-stride linear index.
+    if (!isCanonicalLinearIndex(remIdx, numElements, W)) {
+      LDBG("Index is not a canonical linear index of length "
+           << numElements << " with W=" << W);
+      return std::nullopt;
+    }
+    if (numElements % W != 0) {
+      LDBG("numElements (" << numElements << ") not divisible by W (" << W
+                           << "), skip 1D reshape");
+      return std::nullopt;
+    }
+    int64_t H = numElements / W;
+
+    LDBG("Detected strided pattern: W=" << W << ", H=" << H << ", S=" << S);
+
+    // Validate HW constraints common to both loads and stores.
+    Type pointeeTy =
+        cast<tt::PointerType>(ptrTensorTy.getElementType()).getPointeeType();
+    unsigned elemBits = pointeeTy.getIntOrFloatBitWidth();
+    unsigned elemBytes = elemBits / 8;
+
+    // Minimum pitch is 64 bytes.
+    if (S * elemBytes < 64) {
+      LDBG("Pitch " << S * elemBytes << " bytes < 64, skip 1D reshape");
+      return std::nullopt;
+    }
+
+    // Pitch must be 16-byte aligned (surface pitch HW requirement).
+    if ((S * elemBytes) % 16 != 0) {
+      LDBG("Pitch " << S * elemBytes
+                    << " bytes not 16-byte aligned, skip 1D reshape");
+      return std::nullopt;
+    }
+
+    // Tile width must satisfy HW limits per element size.
+    auto isValidTileWidth = [](unsigned bits, int64_t w) -> bool {
+      switch (bits) {
+      case 8:
+        return w >= 4 && w <= 64;
+      case 16:
+        return w >= 2 && w <= 32;
+      case 32:
+        return w <= 16;
+      case 64:
+        return w <= 8;
+      default:
+        return false;
+      }
+    };
+    if (!isValidTileWidth(elemBits, W)) {
+      LDBG("Tile width " << W << " invalid for " << elemBits
+                         << "-bit elements, skip 1D reshape");
+      return std::nullopt;
+    }
+
+    // Per-warp tile height must be in [1, maxPerWarpHeight].
+    unsigned numWarps = ttg::lookupNumWarps(op);
+    if (H % numWarps != 0 ||
+        static_cast<unsigned>(H / numWarps) > maxPerWarpHeight) {
+      LDBG("Per-warp height " << H / numWarps << " exceeds max "
+                              << maxPerWarpHeight << ", skip 1D reshape");
+      return std::nullopt;
+    }
+
+    return StridedPatternInfo{W, H, S, numWarps, elemBits, elemBytes, ptr};
+  }
+
+  /// Copy discardable attributes from \p src to \p dst, skipping block IO
+  /// attributes that are set explicitly by the caller.
+  static void copyNonBlockIOAttrs(Operation *src, Operation *dst) {
+    for (NamedAttribute attr : src->getDiscardableAttrs()) {
+      StringRef name = attr.getName().getValue();
+      if (name == ttgi::TritonIntelGPUDialect::getBlockIOAttrName() ||
+          name == ttgi::TritonIntelGPUDialect::getBlockIOStrideAttrName())
+        continue;
+      dst->setDiscardableAttr(attr.getName(), attr.getValue());
+    }
+  }
+
+  /// Set the standard block IO attributes (row_major + stride) on an op.
+  static void setBlockIOAttrs(Operation *op, MLIRContext *ctx, int64_t stride) {
+    assert(stride > 0 && "stride must be positive");
+    op->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
+                StringAttr::get(ctx, "row_major"));
+    op->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOStrideAttrName(),
+                IntegerAttr::get(IntegerType::get(ctx, 64), stride));
+  }
+
   /// Detect 1D tensor-of-pointers StoreOp with strided access pattern
   /// and reshape to 2D store with block IO attributes.
   ///
@@ -412,7 +598,7 @@ private:
                              MLIRContext *ctx) const {
     LDBG("Attempting 1D strided store reshape for: " << *op);
 
-    // 1. Reject masked stores — we only handle unmasked or provably all-true.
+    // Reject masked stores — we only handle unmasked or provably all-true.
     if (Value mask = op.getMask()) {
       if (!matchPattern(mask, m_One())) {
         LDBG("Store has non-trivial mask, skip 1D reshape");
@@ -420,195 +606,41 @@ private:
       }
     }
 
-    // 2. Trace pointer through tt.addptr to find the offset tensor.
-    Value ptr = op.getPtr();
-    auto addPtrOp = ptr.getDefiningOp<tt::AddPtrOp>();
-    if (!addPtrOp) {
-      LDBG("Pointer not defined by tt.addptr, skip 1D reshape");
+    // MAX_TILE_HEIGHT_STORE = 8
+    std::optional<StridedPatternInfo> info =
+        matchStridedPattern(op, ptrTensorTy, /*maxPerWarpHeight=*/8);
+    if (!info)
       return;
-    }
-    Value offset = addPtrOp.getOffset();
-
-    // 3. Pattern-match the offset for:
-    //    arith.addi(arith.remui(idx, W), arith.muli(arith.divui(idx, W), S))
-    //    Look through cast wrappers at each step.
-    Value offsetUnwrapped = lookThroughCasts(offset);
-    auto addIOp = offsetUnwrapped.getDefiningOp<arith::AddIOp>();
-    if (!addIOp) {
-      LDBG("Offset not defined by arith.addi, skip 1D reshape");
-      return;
-    }
-
-    // Match (remui, muli) in either order of the addi operands.
-    Value lhs = lookThroughCasts(addIOp.getLhs());
-    Value rhs = lookThroughCasts(addIOp.getRhs());
-    auto remOp = lhs.getDefiningOp<arith::RemUIOp>();
-    auto mulOp = rhs.getDefiningOp<arith::MulIOp>();
-    if (!remOp || !mulOp) {
-      remOp = rhs.getDefiningOp<arith::RemUIOp>();
-      mulOp = lhs.getDefiningOp<arith::MulIOp>();
-    }
-    if (!remOp || !mulOp) {
-      LDBG("Could not match remui/muli pattern, skip 1D reshape");
-      return;
-    }
-
-    // Extract W from remui(idx, W).
-    Value remIdx = lookThroughCasts(remOp.getLhs());
-    std::optional<int64_t> wVal = getConstantValue(remOp.getRhs());
-    if (!wVal || *wVal <= 0) {
-      LDBG("Could not extract constant W from remui, skip 1D reshape");
-      return;
-    }
-    int64_t W = *wVal;
-
-    // Match muli(divui(idx, W'), S) in either operand order.
-    Value mulLhs = lookThroughCasts(mulOp.getLhs());
-    Value mulRhs = lookThroughCasts(mulOp.getRhs());
-    auto divOp = mulLhs.getDefiningOp<arith::DivUIOp>();
-    auto sVal = divOp ? getConstantValue(mulRhs) : std::nullopt;
-    if (!divOp || !sVal) {
-      divOp = mulRhs.getDefiningOp<arith::DivUIOp>();
-      sVal = divOp ? getConstantValue(mulLhs) : std::nullopt;
-    }
-    if (!divOp || !sVal || *sVal <= 0) {
-      LDBG("Could not match divui/constant in muli, skip 1D reshape");
-      return;
-    }
-    int64_t S = *sVal;
-
-    // Verify divui uses the same index and same W constant as remui.
-    Value divIdx = lookThroughCasts(divOp.getLhs());
-    std::optional<int64_t> divWVal = getConstantValue(divOp.getRhs());
-    if (!divWVal || *divWVal != W) {
-      LDBG("divui W constant (" << (divWVal ? std::to_string(*divWVal) : "?")
-                                << ") does not match remui W (" << W
-                                << "), skip 1D reshape");
-      return;
-    }
-
-    // Verify both remui and divui use the same index.
-    if (remIdx != divIdx) {
-      LDBG("remui and divui use different index values, skip 1D reshape");
-      return;
-    }
-
-    // 4. Compute H = numElements / W and verify evenly divides.
-    int64_t numElements = ptrTensorTy.getDimSize(0);
-
-    // Verify idx is a canonical unit-stride linear index: tt.make_range(0, N).
-    // This is complementary to the structural checks above: those extract W and
-    // S from the arithmetic pattern, while this ensures the base index itself
-    // is a simple sequential range (not scaled, permuted, etc.).
-    if (!isCanonicalLinearIndex(remIdx, numElements, W)) {
-      LDBG("Index is not a canonical linear index of length "
-           << numElements << " with W=" << W);
-      return;
-    }
-    if (numElements % W != 0) {
-      LDBG("numElements (" << numElements << ") not divisible by W (" << W
-                           << "), skip 1D reshape");
-      return;
-    }
-    int64_t H = numElements / W;
 
     // TODO: The 2D block store lowering in StoreOpToBlockIOConversion
     // does not correctly handle multi-row tiles (H > 1) because offsetY
     // is hardcoded to 0. Restrict to H == 1 until the lowering is fixed.
-    if (H != 1) {
-      LDBG("H=" << H << " > 1 not yet supported, skip 1D reshape");
+    if (info->H != 1) {
+      LDBG("H=" << info->H << " > 1 not yet supported, skip 1D reshape");
       return;
     }
 
-    LDBG("Detected strided pattern: W=" << W << ", H=" << H << ", S=" << S);
-
-    // 4b. Validate HW constraints for 2D block store.
-    // Mirrors check2DBlockAddressPayloadRestriction in LoadStoreOpToLLVM.cpp.
-    Type pointeeTy =
-        cast<tt::PointerType>(ptrTensorTy.getElementType()).getPointeeType();
-    unsigned elemBits = pointeeTy.getIntOrFloatBitWidth();
-    unsigned elemBytes = elemBits / 8;
-
-    // Minimum pitch is 64 bytes (LoadStoreOpToLLVM.cpp getPitch()).
-    if (S * elemBytes < 64) {
-      LDBG("Pitch " << S * elemBytes << " bytes < 64, skip 1D reshape");
-      return;
-    }
-
-    // Pitch must be 16-byte aligned (surface pitch HW requirement).
-    if ((S * elemBytes) % 16 != 0) {
-      LDBG("Pitch " << S * elemBytes
-                    << " bytes not 16-byte aligned, skip 1D reshape");
-      return;
-    }
-
-    // Tile width must satisfy HW limits per element size.
-    auto isValidTileWidth = [](unsigned bits, int64_t w) -> bool {
-      switch (bits) {
-      case 8:
-        return w >= 4 && w <= 64;
-      case 16:
-        return w >= 2 && w <= 32;
-      case 32:
-        return w <= 16;
-      case 64:
-        return w <= 8;
-      default:
-        return false;
-      }
-    };
-    if (!isValidTileWidth(elemBits, W)) {
-      LDBG("Tile width " << W << " invalid for " << elemBits
-                         << "-bit elements, skip 1D reshape");
-      return;
-    }
-
-    // Per-warp tile height must be in [1, 8] (MAX_TILE_HEIGHT_STORE=8).
-    unsigned numWarps = ttg::lookupNumWarps(op);
-    if (H % numWarps != 0 || H / numWarps > 8) {
-      LDBG("Per-warp height " << H / numWarps << " invalid, skip 1D reshape");
-      return;
-    }
-
-    // 5. Create reshaped tensors: [N] -> [H, W].
+    // Create reshaped tensors: [N] -> [H, W].
     Location loc = op.getLoc();
     OpBuilder builder(op);
-    SmallVector<int64_t> newShape = {H, W};
+    SmallVector<int64_t> newShape = {info->H, info->W};
 
     // Use the ReshapeOp builder that infers the 2D encoding automatically.
-    auto ptrReshape = tt::ReshapeOp::create(builder, loc, newShape, ptr,
+    auto ptrReshape = tt::ReshapeOp::create(builder, loc, newShape, info->ptr,
                                             /*allowReorder=*/false);
     Value val = op.getValue();
     auto valReshape = tt::ReshapeOp::create(builder, loc, newShape, val,
                                             /*allowReorder=*/false);
 
-    // 6. Create the new 2D store.
+    // Create the new 2D store.
     auto newStore = tt::StoreOp::create(builder, loc, ptrReshape, valReshape,
                                         op.getCache(), op.getEvict());
 
-    // Copy discardable attributes from the original store. Skip the block IO
-    // attributes that we set explicitly below; carry everything else forward so
-    // that analysis hints attached by earlier passes are not silently dropped.
-    for (NamedAttribute attr : op->getDiscardableAttrs()) {
-      StringRef name = attr.getName().getValue();
-      if (name == ttgi::TritonIntelGPUDialect::getBlockIOAttrName() ||
-          name == ttgi::TritonIntelGPUDialect::getBlockIOStrideAttrName())
-        continue;
-      newStore->setDiscardableAttr(attr.getName(), attr.getValue());
-    }
-
-    // 7. Set block IO attributes on the new store.
-    // Stride is validated positive at extraction; assert here so lowering
-    // can trust the attribute without re-checking.
-    assert(S > 0 && "stride must be positive");
-    newStore->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
-                      StringAttr::get(ctx, "row_major"));
-    newStore->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOStrideAttrName(),
-                      IntegerAttr::get(IntegerType::get(ctx, 64), S));
+    setBlockIOAttrs(newStore, ctx, info->S);
+    copyNonBlockIOAttrs(op, newStore);
 
     LDBG("Created 2D block store: " << *newStore);
 
-    // 8. Erase the original 1D store.
     op.erase();
   }
 
