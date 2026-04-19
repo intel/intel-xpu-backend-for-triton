@@ -1,10 +1,10 @@
 // RUN: triton-opt -split-input-file -verify-diagnostics %s
 // -----
 
-tt.func @ttig.prefetch(%arg0: !tt.ptr<tensor<2x32xf32>>, %arg1: tensor<4x32xi1>) {
+tt.func @ttig.prefetch(%arg0: tensor<2x32x!tt.ptr<f32>>, %arg1: tensor<4x32xi1>) {
   // expected-note@-1 {{prior use here}}
   // expected-error@+1 {{use of value '%arg1' expects different type than prior uses: 'tensor<2x32xi1>' vs 'tensor<4x32xi1>'}}
-  ttig.prefetch %arg0, %arg1 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<2x32xf32>>
+  ttig.prefetch %arg0, %arg1 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<2x32x!tt.ptr<f32>>
   tt.return
 }
 
