@@ -66,9 +66,10 @@ module {
 // CHECK-LABEL: @caller
 // CHECK-SAME: %[[PTR:[^:]*]]
 // CHECK-DAG: %[[c1:.*]] = arith.constant 1 : i64
-// CHECK-DAG: %[[c256:.*]] = arith.constant 256 : i64
-// CHECK: %{{.*}}:7 = tt.call @callee(%[[PTR]], %[[c256]], %[[c256]], %[[c256]], %[[c1]], %false, %false)
-// CHECK-SAME -> (!tt.ptr<f32>, i64, i64, i64, i64, i1, i1)
+// CHECK-DAG: %[[c256_i32:.*]] = arith.constant 256 : i32
+// CHECK-DAG: %[[c256_i64:.*]] = arith.constant 256 : i64
+// CHECK: %{{.*}}:7 = tt.call @callee(%[[PTR]], %[[c256_i32]], %[[c256_i32]], %[[c256_i64]], %[[c1]], %false, %false)
+// CHECK-SAME -> (!tt.ptr<f32>, i32, i32, i64, i64, i1, i1)
 
 // -----
 
@@ -98,27 +99,30 @@ module {
 
 // CHECK-LABEL: @gather
 // CHECK-SAME: %[[ARG0:[^:]*]]
-// CHECK-DAG: %[[CST:.*]] = arith.constant dense<0> : tensor<1x128xi64>
-// CHECK-DAG: %[[CST_0:.*]] = arith.constant dense<256> : tensor<1x128xi64>
-// CHECK-DAG: %[[CST_1:.*]] = arith.constant dense<1> : tensor<32x128xi64>
-// CHECK-DAG: %[[CST_2:.*]] = arith.constant dense<0.000000e+00> : tensor<32x128xf32>
+// CHECK-DAG: %[[CST_I32_256:.*]] = arith.constant dense<256> : tensor<1x128xi32>
+// CHECK-DAG: %[[CST_I32_0:.*]] = arith.constant dense<0> : tensor<1x128xi32>
+// CHECK-DAG: %[[CST_I64_256:.*]] = arith.constant dense<256> : tensor<1x128xi64>
+// CHECK-DAG: %[[CST_I64_1:.*]] = arith.constant dense<1> : tensor<32x128xi64>
+// CHECK-DAG: %[[CST_ZERO:.*]] = arith.constant dense<0.000000e+00> : tensor<32x128xf32>
 
-// CHECK-DAG: %[[VAL0:.*]] = tt.make_range {end = 128 : i32, start = 0 : i32}
-// CHECK-DAG: %[[VAL1:.*]] = arith.extsi %[[VAL0]] :
-// CHECK-DAG: %[[VAL2:.*]] = tt.expand_dims %[[VAL1]] {axis = 0 : i32}
-// CHECK-DAG: %[[VAL3:.*]] = tt.splat %[[ARG0]] :
-// CHECK-DAG: %[[VAL4:.*]] = tt.addptr %[[VAL3]], %[[CST_1]] :
-// CHECK-DAG: %[[VAL5:.*]] = arith.muli %[[VAL2]], %[[CST_0]] :
-// CHECK-DAG: %[[VAL6:.*]] = tt.broadcast %[[VAL5]] : tensor<1x128xi64> -> tensor<32x128xi64>
-// CHECK-DAG: %[[VAL7:.*]] = tt.addptr %[[VAL4]], %[[VAL6]] :
+// CHECK-DAG: %[[RANGE:.*]] = tt.make_range {end = 128 : i32, start = 0 : i32}
+// CHECK-DAG: %[[RANGE_EXP:.*]] = tt.expand_dims %[[RANGE]] {axis = 0 : i32}
+// CHECK-DAG: %[[SPLAT_PTR:.*]] = tt.splat %[[ARG0]] :
+// CHECK-DAG: %[[PTR1:.*]] = tt.addptr %[[SPLAT_PTR]], %[[CST_I64_1]] :
+// Offset range extended to i64 only at stride multiply
+// CHECK-DAG: %[[EXT:.*]] = arith.extsi %[[RANGE_EXP]] : tensor<1x128xi32> to tensor<1x128xi64>
+// CHECK-DAG: %[[MUL:.*]] = arith.muli %[[EXT]], %[[CST_I64_256]] :
+// CHECK-DAG: %[[BCAST:.*]] = tt.broadcast %[[MUL]] : tensor<1x128xi64> -> tensor<32x128xi64>
+// CHECK-DAG: %[[PTR2:.*]] = tt.addptr %[[PTR1]], %[[BCAST]] :
 
-// CHECK-DAG: %[[VAL8:.*]] = arith.cmpi sge, %[[VAL2]], %[[CST]]
-// CHECK-DAG: %[[VAL9:.*]] = arith.cmpi slt, %[[VAL2]], %[[CST_0]]
-// CHECK-DAG: %[[VAL10:.*]] = arith.andi %[[VAL8]], %[[VAL9]]
-// CHECK-DAG: %[[VAL11:.*]] = tt.broadcast %[[VAL10]] : tensor<1x128xi1> -> tensor<32x128xi1>
+// Mask comparisons in i32 (not i64)
+// CHECK-DAG: %[[CMP_LO:.*]] = arith.cmpi sge, %[[RANGE_EXP]], %[[CST_I32_0]] : tensor<1x128xi32>
+// CHECK-DAG: %[[CMP_HI:.*]] = arith.cmpi slt, %[[RANGE_EXP]], %[[CST_I32_256]] : tensor<1x128xi32>
+// CHECK-DAG: %[[AND:.*]] = arith.andi %[[CMP_LO]], %[[CMP_HI]]
+// CHECK-DAG: %[[MASK:.*]] = tt.broadcast %[[AND]] : tensor<1x128xi1> -> tensor<32x128xi1>
 
-// CHECK-DAG: %[[VAL12:.*]] = tt.load %[[VAL7]], %[[VAL11]], %[[CST_2]]
-// CHECK: tt.return %[[VAL12]] :
+// CHECK-DAG: %[[LOAD:.*]] = tt.load %[[PTR2]], %[[MASK]], %[[CST_ZERO]]
+// CHECK: tt.return %[[LOAD]] :
 
 // -----
 
