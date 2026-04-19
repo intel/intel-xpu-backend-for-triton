@@ -465,13 +465,12 @@ composePaddedLayoutWMMA(int opIdx, unsigned vecWidth,
 ttg::SharedEncodingTrait getEncodingFromDescriptor(Operation *op,
                                                    RankedTensorType tensorType,
                                                    Value desc) {
-  auto descTy = cast<tt::TensorDescType>(desc.getType());
-  auto sharedLayout = descTy.getSharedLayout();
-  if (!sharedLayout) {
+  auto descBlockType = cast<tt::TensorDescType>(desc.getType()).getBlockType();
+  auto encoding = cast<ttg::SharedEncodingTrait>(descBlockType.getEncoding());
+  if (!encoding) {
     emitError(op->getLoc()) << "Missing encoding on the tensor descriptor";
     return {};
   }
-  auto encoding = cast<ttg::SharedEncodingTrait>(sharedLayout);
   return ttg::updateEncodingForShape(op, encoding, tensorType);
 }
 

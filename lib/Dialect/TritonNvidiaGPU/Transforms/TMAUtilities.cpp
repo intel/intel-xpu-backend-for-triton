@@ -11,8 +11,8 @@ namespace mlir::triton::nvidia_gpu {
 ttg::SharedEncodingTrait getEncodingFromDescriptor(Operation *op,
                                                    RankedTensorType tensorType,
                                                    Value desc) {
-  auto descType = cast<TensorDescType>(desc.getType());
-  Attribute encoding = descType.getSharedLayout();
+  auto descBlockType = cast<TensorDescType>(desc.getType()).getBlockType();
+  Attribute encoding = descBlockType.getEncoding();
   if (!encoding) {
     constexpr auto msg =
         "Internal Error: Tensor descriptor should have encoding set";
@@ -21,7 +21,7 @@ ttg::SharedEncodingTrait getEncodingFromDescriptor(Operation *op,
     llvm::report_fatal_error(msg);
   }
   auto sharedEnc = cast<ttg::SharedEncodingTrait>(encoding);
-  if (descType.getShape() == tensorType.getShape())
+  if (descBlockType.getShape() == tensorType.getShape())
     return sharedEnc;
 
   return ttg::updateEncodingForShape(op, sharedEnc, tensorType);
@@ -35,9 +35,9 @@ bool hasCGABroadcast(ttg::MemDescType memDescType) {
 }
 
 FailureOr<int> getTMASwizzleMode(Location loc, tt::TensorDescInterface ty) {
-  auto encoding = ty.getSharedLayout();
-  auto mmaEncoding =
-      dyn_cast_if_present<ttg::NVMMASharedEncodingAttr>(encoding);
+  auto blockType = ty.getBlockType();
+  auto encoding = blockType.getEncoding();
+  auto mmaEncoding = dyn_cast<ttg::NVMMASharedEncodingAttr>(encoding);
   unsigned swizzleBytes = mmaEncoding ? mmaEncoding.getSwizzlingByteWidth() : 0;
   if (!mmaEncoding) {
     auto swizzledEnc = dyn_cast<ttg::SwizzledSharedEncodingAttr>(encoding);
@@ -90,13 +90,14 @@ enum TMA_ELEMENT_TYPES {
 };
 
 FailureOr<int> getTMAElementType(Location loc, tt::TensorDescInterface ty) {
-  auto encoding = ty.getSharedLayout();
+  auto blockType = ty.getBlockType();
+  auto encoding = blockType.getEncoding();
   bool fp4Padded = isFp4Padded(encoding);
 
   if (fp4Padded)
     return TMA_B4X16_P64;
 
-  auto elemTy = ty.getElementType();
+  auto elemTy = blockType.getElementType();
   if (elemTy.isBF16()) {
     return TMA_BF16;
   } else if (elemTy.isF16()) {
@@ -137,13 +138,13 @@ LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
 
   auto elemType = op.getBase().getType().getPointeeType();
   auto elemSize = elemType.getIntOrFloatBitWidth() / 8;
-  auto encoding = op.getType().getSharedLayout();
+  auto encoding = op.getType().getBlockType().getEncoding();
   auto mmaEncoding =
       llvm::dyn_cast_or_null<gpu::NVMMASharedEncodingAttr>(encoding);
   bool fp4Padded = mmaEncoding && mmaEncoding.getFp4Padded();
 
   int paddingScale = fp4Padded ? 2 : 1;
-  auto shapePerCTA = gpu::getShapePerCTA(encoding, op.getType().getShape());
+  auto shapePerCTA = gpu::getShapePerCTA(encoding, op.getTensorShape());
   // MakeTensorDescOp creates tiled descriptors (not im2col)
   auto blockShape = getTMABlockShape(encoding, shapePerCTA,
                                      /*packedSize=*/false, gpu::TMAMode::Tiled);
@@ -160,8 +161,8 @@ LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
 
   unsigned swizzleBytes = mmaEncoding ? mmaEncoding.getSwizzlingByteWidth() : 0;
   if (!mmaEncoding) {
-    auto swizzledEnc =
-        dyn_cast_if_present<gpu::SwizzledSharedEncodingAttr>(encoding);
+    auto swizzledEnc = dyn_cast<gpu::SwizzledSharedEncodingAttr>(
+        op.getType().getBlockType().getEncoding());
     if (!swizzledEnc || swizzledEnc.getVec() != 1 ||
         swizzledEnc.getPerPhase() != 1 || swizzledEnc.getMaxPhase() != 1) {
       op->emitError() << "Unhandled encoding type";
