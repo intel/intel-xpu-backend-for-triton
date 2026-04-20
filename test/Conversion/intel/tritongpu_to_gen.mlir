@@ -1789,7 +1789,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 // CHECK-LABEL: sum_reduction
 // CHECK: llvm.call spir_funccc @_Z27__spirv_GroupNonUniformIAddiij(%{{.*}}, %{{.*}}, %{{.*}}) {{.*}} : (i32, i32, i32) -> i32
 // CHECK: llvm.call spir_funccc @_Z7barrierj({{.*}}) {{.*}} : (i32) -> ()
-// CHECK: llvm.call spir_funccc @_Z{{(27__spirv_GroupNonUniformIAddiijj|21sub_group_shuffle_xorij)}}({{.*}})
+// CHECK: {{llvm.call spir_funccc @_Z27__spirv_GroupNonUniformIAddiijj\(.*\).* : \(i32, i32, i32, i32\) -> i32|llvm.call spir_funccc @_Z21sub_group_shuffle_xorij\(.*\).* : \(i32, i32\) -> i32}}
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>

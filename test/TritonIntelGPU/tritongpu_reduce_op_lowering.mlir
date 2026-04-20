@@ -8,7 +8,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 64 : i32, "ttg.th
   tt.func @reduce_problem_size_64_threads_per_warp_32(%f : tensor<2048xi32, #blocked>) -> i32 {
 
   // 1st round intra-warp reduce
-  // CHECK: llvm.call spir_funccc @_Z{{(27__spirv_GroupNonUniformIAddiij|21sub_group_shuffle_xorij)}}({{.*}})
+  // CHECK: {{llvm.call spir_funccc @_Z27__spirv_GroupNonUniformIAddiij\(.*\).* : \(i32, i32, i32\) -> i32|llvm.call spir_funccc @_Z21sub_group_shuffle_xorij\(.*\).* : \(i32, i32\) -> i32}}
   // CHECK: llvm.store %{{.*}}, %{{.*}} : vector<1xi32>, !llvm.ptr<3>
 
   // 2nd round inter-warp reduce with problem size 64 with threads_per_warp 32
@@ -37,10 +37,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 64 : i32, "ttg.th
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32, ttig.min_sg_size = 32 : i32} {
   // CHECK-LABEL: test_reduce
   tt.func public @test_reduce(%arg0: tensor<32x128xf32, #blocked>) -> tensor<128xf32, #ttg.slice<{dim = 0, parent = #blocked}>> {
-    // CHECK:     llvm.call spir_funccc @_Z{{(27__spirv_GroupNonUniformFAddiif|21sub_group_shuffle_xorfj)}}
-    // CHECK:     llvm.call spir_funccc @_Z{{(27__spirv_GroupNonUniformFAddiif|21sub_group_shuffle_xorfj)}}
-    // CHECK:     llvm.call spir_funccc @_Z{{(27__spirv_GroupNonUniformFAddiif|21sub_group_shuffle_xorfj)}}
-    // CHECK:     llvm.call spir_funccc @_Z{{(27__spirv_GroupNonUniformFAddiif|21sub_group_shuffle_xorfj)}}
+    // CHECK: {{llvm.call spir_funccc @_Z27__spirv_GroupNonUniformFAddiif\(.*\).* : \(i32, i32, f32\) -> f32|llvm.call spir_funccc @_Z21sub_group_shuffle_xorfj\(.*\).* : \(f32, i32\) -> f32}}
+    // CHECK: {{llvm.call spir_funccc @_Z27__spirv_GroupNonUniformFAddiif\(.*\).* : \(i32, i32, f32\) -> f32|llvm.call spir_funccc @_Z21sub_group_shuffle_xorfj\(.*\).* : \(f32, i32\) -> f32}}
+    // CHECK: {{llvm.call spir_funccc @_Z27__spirv_GroupNonUniformFAddiif\(.*\).* : \(i32, i32, f32\) -> f32|llvm.call spir_funccc @_Z21sub_group_shuffle_xorfj\(.*\).* : \(f32, i32\) -> f32}}
+    // CHECK: {{llvm.call spir_funccc @_Z27__spirv_GroupNonUniformFAddiif\(.*\).* : \(i32, i32, f32\) -> f32|llvm.call spir_funccc @_Z21sub_group_shuffle_xorfj\(.*\).* : \(f32, i32\) -> f32}}
     // CHECK:     llvm.store
     // CHECK-NOT: llvm.load
     // CHECK:     llvm.call spir_funccc @_Z7barrierj
@@ -65,7 +65,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
   tt.func @reduce_tpw16_addi(%f : tensor<512xi32, #blocked>) -> i32 {
 
   // 1st round: intra-warp full reduce across 16 lanes (3 args = Reduce)
-  // CHECK: llvm.call spir_funccc @_Z{{(27__spirv_GroupNonUniformIAddiij|21sub_group_shuffle_xorij)}}({{.*}})
+  // CHECK: {{llvm.call spir_funccc @_Z27__spirv_GroupNonUniformIAddiij\(.*\).* : \(i32, i32, i32\) -> i32|llvm.call spir_funccc @_Z21sub_group_shuffle_xorij\(.*\).* : \(i32, i32\) -> i32}}
   // CHECK: llvm.store %{{.*}}, %{{.*}} : vector<1xi32>, !llvm.ptr<3>
 
   // 2nd round: inter-warp reduce with problem size 32 using 16-wide subgroups (3 args = full Reduce)
@@ -106,7 +106,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // 2nd round: inter-warp reduce with 4 warps using ClusteredReduce (4 args)
   // CHECK: llvm.call spir_funccc @_Z7barrierj(%{{.*}}) {{.*}} : (i32) -> ()
   // CHECK: llvm.load %{{.*}} : !llvm.ptr<3> -> vector<1xi32>
-  // CHECK: llvm.call spir_funccc @_Z{{(27__spirv_GroupNonUniformSMaxiijj|21sub_group_shuffle_xorij)}}({{.*}})
+  // CHECK: {{llvm.call spir_funccc @_Z27__spirv_GroupNonUniformSMaxiijj\(.*\).* : \(i32, i32, i32, i32\) -> i32|llvm.call spir_funccc @_Z21sub_group_shuffle_xorij\(.*\).* : \(i32, i32\) -> i32}}
 
     %g = "tt.reduce" (%f) ({
     ^bb0(%arg0: i32, %arg1: i32):
@@ -138,7 +138,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
   // Inter-warp reduce: load from shared memory and ClusteredReduce with cluster_size=4 (4 args)
   // CHECK:     llvm.load %{{.*}} : !llvm.ptr<3> -> vector<4xf32>
-  // CHECK:     llvm.call spir_funccc @_Z{{(27__spirv_GroupNonUniformFAddiifj|21sub_group_shuffle_xorfj)}}({{.*}})
+  // CHECK: {{llvm.call spir_funccc @_Z27__spirv_GroupNonUniformFAddiifj\(.*\).* : \(i32, i32, f32, i32\) -> f32|llvm.call spir_funccc @_Z21sub_group_shuffle_xorfj\(.*\).* : \(f32, i32\) -> f32}}
 
     %g = "tt.reduce" (%f) ({
     ^bb0(%arg0: f32, %arg1: f32):
