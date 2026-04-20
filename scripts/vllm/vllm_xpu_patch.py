@@ -136,15 +136,6 @@ def _find_cuda_patterns(source: str) -> list[dict]:
                     "var_name": target.id,
                 })
 
-        # current_platform.is_cuda() in skipif decorators
-        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "is_cuda"
-                and isinstance(node.func.value, ast.Name) and node.func.value.id == "current_platform"):
-            patterns.append({
-                "type": "is_cuda_check",
-                "line": node.lineno,
-                "col": node.col_offset,
-            })
-
         # current_platform.get_device_capability() < tuple comparisons
         if isinstance(node, ast.Compare):
             if (isinstance(node.left, ast.Call) and isinstance(node.left.func, ast.Attribute)
@@ -216,14 +207,6 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
             # Replace torch.cuda.get_device_capability() with torch.xpu.get_device_capability()
             lines[line_idx] = line.replace("torch.cuda.get_device_capability()", "torch.xpu.get_device_capability()")
 
-        elif ptype == "is_cuda_check":
-            # In skipif: not current_platform.is_cuda()
-            # -> not (current_platform.is_cuda() or current_platform.is_xpu())
-            lines[line_idx] = line.replace(
-                "current_platform.is_cuda()",
-                "(current_platform.is_cuda() or current_platform.is_xpu())",
-            )
-
         elif ptype == "device_capability_compare":
             # Handle: if current_platform.get_device_capability() < (X, Y):
             # Strategy: wrap the call in a helper that returns a safe value
@@ -255,13 +238,6 @@ def patch_file(filepath: Path) -> bool:
     patterns = _find_cuda_patterns(source)
     if not patterns:
         return False
-
-    # Skip is_cuda_check transformation in fp8_utils.py
-    # (it's for runtime branching, not test skipping, and XPU has incompatible signatures)
-    if filepath.name == "fp8_utils.py":
-        patterns = [p for p in patterns if p["type"] != "is_cuda_check"]
-        if not patterns:
-            return False
 
     patched = _apply_patches(source, patterns)
     if patched == source:
