@@ -4,6 +4,62 @@
 #include "Driver/GPU/XpuApi.h"
 #include <algorithm>
 #include <cstdint>
+#include <stdexcept>
+#include <string>
+
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
+
+namespace {
+
+typedef void (*CopyDeviceToHostAsyncFunc)(void *, void *, const void *, size_t);
+typedef void (*WaitOnSyclQueueFunc)(void *);
+
+template <typename Fn> Fn loadProtonUtilsSymbol(const char *name) {
+  const std::string &path = proton::xpu::PROTON_UTILS;
+  if (path.empty()) {
+    throw std::runtime_error(
+        std::string("[PROTON] PROTON_UTILS path is empty; cannot resolve ") +
+        name);
+  }
+#if defined(_WIN32)
+  HMODULE handle = LoadLibrary(path.data());
+  if (!handle) {
+    throw std::runtime_error(std::string("[PROTON] Failed to load ") + path +
+                             ", code: " + std::to_string(GetLastError()));
+  }
+  auto fn = reinterpret_cast<Fn>(GetProcAddress(handle, name));
+  if (!fn) {
+    long err = GetLastError();
+    FreeLibrary(handle);
+    throw std::runtime_error(std::string("[PROTON] Failed to resolve ") + name +
+                             ", code: " + std::to_string(err));
+  }
+  return fn;
+#else
+  void *handle = dlopen(path.data(), RTLD_LAZY);
+  if (!handle) {
+    throw std::runtime_error(std::string("[PROTON] Failed to load ") + path +
+                             ": " + dlerror());
+  }
+  dlerror();
+  auto fn = reinterpret_cast<Fn>(dlsym(handle, name));
+  const char *err = dlerror();
+  if (err) {
+    dlclose(handle);
+    throw std::runtime_error(std::string("[PROTON] Failed to resolve ") + name +
+                             ": " + err);
+  }
+  return fn;
+#endif
+}
+
+} // namespace
 
 namespace proton {
 
@@ -70,11 +126,9 @@ void XpuRuntime::freeDeviceBuffer(uint8_t *buffer) {
 
 void XpuRuntime::copyDeviceToHostAsync(void *dst, const void *src, size_t size,
                                        void *stream) {
-  /*
-  (void)xpu::memcpyDToHAsync<true>(
-      dst, reinterpret_cast<hipDeviceptr_t>(const_cast<void *>(src)), size,
-      reinterpret_cast<hipStream_t>(stream));
-  */
+  static auto copyFn =
+      loadProtonUtilsSymbol<CopyDeviceToHostAsyncFunc>("copyDeviceToHostAsync");
+  copyFn(stream, dst, src, size);
 }
 
 void *XpuRuntime::getDevice() {
@@ -99,9 +153,9 @@ void *XpuRuntime::getPriorityStream() {
 }
 
 void XpuRuntime::synchronizeStream(void *stream) {
-  /*
-  (void)xpu::streamSynchronize<true>(reinterpret_cast<hipStream_t>(stream));
-  */
+  static auto waitFn =
+      loadProtonUtilsSymbol<WaitOnSyclQueueFunc>("waitOnSyclQueue");
+  waitFn(stream);
 }
 
 void XpuRuntime::synchronizeDevice() { /*(void)xpu::deviceSynchronize<true>();*/

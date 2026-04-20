@@ -1406,8 +1406,6 @@ def test_nvtx_range_push_pop(enable_nvtx, fresh_knobs, tmp_path: pathlib.Path, d
 
 
 def test_tensor_metrics_scope(tmp_path: pathlib.Path, device: str):
-    if is_xpu():
-        pytest.skip("FIXME: enable metrics")
     temp_file = tmp_path / "test_tensor_metrics_scope.hatchet"
     proton.start(str(temp_file.with_suffix("")))
 
@@ -1437,8 +1435,6 @@ def test_tensor_metrics_scope(tmp_path: pathlib.Path, device: str):
 
 
 def test_tensor_metrics_hook(tmp_path: pathlib.Path, device: str):
-    if is_xpu():
-        pytest.skip("FIXME: enable metrics")
     temp_file = tmp_path / "test_tensor_metrics_hook.hatchet"
 
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
