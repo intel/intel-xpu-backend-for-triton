@@ -14,7 +14,6 @@ add_triton_library(TritonIntelGPUToLLVM
     SPIRVTargetInfo.cpp
     TargetInfo.cpp
     TensorDescOpsToLLVM.cpp
-    TensorPtrOpsToLLVM.cpp
     TritonGPUToLLVM.cpp
     TypeConverter.cpp
     Utility.cpp

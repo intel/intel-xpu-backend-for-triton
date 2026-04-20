@@ -153,7 +153,7 @@ def test_binary_op(dtype_x, dtype_y, op, num_ctas, device):
 @pytest.mark.xfail(
     not triton.runtime.driver.active.get_current_target().arch['has_subgroup_2d_block_io'],
     reason="Block loads not supported", run=False)
-def test_block_load(device):
+def test_block_io(device):
     ...
 ```
 
@@ -261,7 +261,7 @@ Each directory contains per-suite skip files: `intel.txt`, `language.txt`, `gluo
 
 ```
 # Comment with tracking issue link
-python/test/unit/intel/test_block_load.py::test_block_load_dpas_layout
+python/test/unit/intel/test_block_io.py::test_block_io
 python/test/unit/intel/test_core.py::test_gather_warp_shuffle[param1-param2]
 python/test/unit/language/test_core.py::test_dot3d[r".*-int8-.*$"]@regexp
 06-fused-attention

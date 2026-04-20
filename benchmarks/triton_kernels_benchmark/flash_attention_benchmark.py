@@ -3,12 +3,12 @@ import contextlib
 from typing import Callable, Optional
 
 import torch
+from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.profiler import record_function
 import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
-from triton_kernels_benchmark import xetla_kernel
 from triton_kernels_benchmark import sycl_tla_kernel
 
 
@@ -544,8 +544,6 @@ def get_benchmark(
 
     supported_providers = {
         'triton': 'Triton',
-        # FIXME: #5896
-        #'xetla': 'XeTLA',
         'sycl-tla': 'SYCL-TLA',
     }
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
@@ -612,9 +610,8 @@ def get_benchmark(
         sm_scale = 0.125
         atol = 1e-1 if N_CTX == 16384 else 1e-2
         bwd_atol = 1e-1 if N_CTX >= 4096 else 1e-2
-        # FIXME: use torch sdpa for result check after https://github.com/intel/intel-xpu-backend-for-triton/issues/2042 fixed
-        torch_fn = lambda: torch.nn.functional.scaled_dot_product_attention(q.cpu(), k.cpu(), v.cpu(
-        ), attn_mask=None, dropout_p=0.0, is_causal=CAUSAL, scale=sm_scale)
+        torch_fn = lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0,
+                                                                            is_causal=CAUSAL, scale=sm_scale)
 
         if provider == 'triton':
             triton_fn = lambda: attention(q, k, v, CAUSAL, sm_scale)
@@ -623,7 +620,7 @@ def get_benchmark(
             else:
                 dout = torch.randn_like(q)
                 torch_o = torch_fn()
-                torch_grads = torch.autograd.grad((torch_o, ), (q, k, v), dout.cpu(), retain_graph=True)
+                torch_grads = torch.autograd.grad((torch_o, ), (q, k, v), dout, retain_graph=True)
                 eager_tensors = torch_grads
                 triton_o = triton_fn()
                 triton_grads = torch.autograd.grad((triton_o, ), (q, k, v), dout, retain_graph=True)
@@ -643,42 +640,6 @@ def get_benchmark(
                 triton_fn, grad_to_none=(q, k, v),
                 benchmark_label='__profile_kernel_of_func_bwd_fa' if MODE == 'bwd' else None)
 
-        elif provider == 'xetla':
-            if MODE == 'bwd':
-                module_name = f'flash_attn_bwd_causal_{CAUSAL}'.lower()
-                func = getattr(xetla_kernel, module_name)
-                grad_out = torch.empty_like(q, device='xpu', dtype=dtype, requires_grad=True)
-                bias = torch.empty_like(q, device='xpu', dtype=dtype, requires_grad=True)
-                dropout = torch.empty_like(q, device='xpu', dtype=torch.uint8)
-                out = torch.empty_like(q, device='xpu', dtype=dtype, requires_grad=True)
-                log_sumexp = torch.zeros(q.size(), device='xpu', dtype=dtype, requires_grad=True)
-                workspace = torch.zeros(q.size(), device='xpu', dtype=dtype, requires_grad=True)
-                grad_q_tmp = torch.zeros(q.size(), device='xpu', dtype=dtype, requires_grad=True)
-                alpha = sm_scale
-                dropout_prob = 0
-                grad_query = torch.empty_like(q, device='xpu', dtype=dtype, requires_grad=True)
-                grad_key = torch.empty_like(k, device='xpu', dtype=dtype, requires_grad=True)
-                grad_value = torch.empty_like(v, device='xpu', dtype=dtype, requires_grad=True)
-                grad_bias = torch.empty_like(bias, device='xpu', dtype=dtype, requires_grad=True)
-                bias_strideB = -1
-                bias_strideN = -1
-                bias_strideF = -1
-                attn_mask_padding = 0
-
-                def xetla_bwd_fn():
-                    func(grad_out, q, k, v, bias, dropout, out, log_sumexp, workspace, grad_q_tmp, alpha, dropout_prob,
-                         grad_query, grad_key, grad_value, grad_bias, Z, H, D_HEAD, N_CTX, N_CTX, bias_strideB,
-                         bias_strideN, bias_strideF, attn_mask_padding)
-                    return out
-
-                _, min_ms, max_ms, mean, cv = do_bench(xetla_bwd_fn)
-
-            else:
-                min_ms = float('nan')
-                max_ms = float('nan')
-                mean = float('nan')
-                cv = float('nan')
-
         elif provider == 'sycl-tla':
             if MODE == 'fwd':
                 name = 'attention'
@@ -695,10 +656,17 @@ def get_benchmark(
                 _, min_ms, max_ms, mean, cv = do_bench(sycl_tla_fwd_fn)
 
             else:
-                min_ms = float('nan')
-                max_ms = float('nan')
-                mean = float('nan')
-                cv = float('nan')
+                dout = torch.randn_like(q)
+
+                with sdpa_kernel(backends=[SDPBackend.FLASH_ATTENTION]):
+                    sycl_tla_o = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None,
+                                                                                  dropout_p=0.0, is_causal=CAUSAL,
+                                                                                  scale=sm_scale)
+
+                sycl_tla_bwd_fn = lambda: sycl_tla_o.backward(dout, retain_graph=True)
+
+                _, min_ms, max_ms, mean, cv = do_bench(sycl_tla_bwd_fn, grad_to_none=(q, k, v),
+                                                       benchmark_label='ScaledDotProductFlashAttentionBackward0')
 
         else:
             raise NotImplementedError(f'Unsupported provider {provider}')

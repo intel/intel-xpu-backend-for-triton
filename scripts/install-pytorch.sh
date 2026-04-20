@@ -5,6 +5,7 @@ set -euo pipefail
 # Select what to install.
 BUILD_PYTORCH=false
 BUILD_LATEST=false
+PREPARE_SOURCE_ONLY=false
 FORCE_REINSTALL=false
 CHECK_WHEEL=false
 PYTORCH_CURRENT_COMMIT=""
@@ -16,6 +17,12 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --source)
       BUILD_PYTORCH=true
+      shift
+      ;;
+    --prepare-source)
+      # Clone/reset PyTorch source and apply patches, without build/install.
+      BUILD_PYTORCH=true
+      PREPARE_SOURCE_ONLY=true
       shift
       ;;
     --latest)
@@ -55,11 +62,16 @@ Usage: ./install-pytorch.sh [options]
 
 Options:
   --source                Build PyTorch from source using pinned commit.
+  --prepare-source        Prepare PyTorch source only (clone/reset + patch),
+                          without build/install. With --no-clean and an
+                          existing source tree, checkout/reset and patching
+                          are skipped and the tree is reused as-is.
   --latest                Build PyTorch from the latest commit in the main branch.
   --force-reinstall       Force reinstallation of PyTorch and pinned dependencies.
   --check-wheel           Check if a prebuilt PyTorch wheel already exists before building.
   --venv                  Activate Python virtual environment from .venv/ before installation.
-  -nc, --no-clean         Do not clean existing PyTorch source directory before build.
+  -nc, --no-clean         Reuse existing PyTorch source tree without cleanup;
+                          skips checkout/reset and patching when source exists.
 
   --triton-repo <repo>          GitHub repo to fetch prebuilt PyTorch wheels from
                                 (default: intel/intel-xpu-backend-for-triton)
@@ -71,6 +83,8 @@ Options:
 
 Examples:
   ./install-pytorch.sh --source
+  ./install-pytorch.sh --prepare-source
+  ./install-pytorch.sh --prepare-source --latest
   ./install-pytorch.sh --latest --venv
   ./install-pytorch.sh --triton-repo my_fork/intel-xpu-backend-for-triton --triton-repo-branch dev
 EOF
@@ -95,59 +109,61 @@ fi
 # intel-xpu-backend-for-triton project root
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 
-############################################################################
-# Check installed torch
-
 if [ "$BUILD_LATEST" = false ]; then
   PYTORCH_PINNED_COMMIT="$(<$ROOT/.github/pins/pytorch.txt)"
   echo "***** Using pinned PyTorch commit $PYTORCH_PINNED_COMMIT by default. *****"
 fi
 
-if pip show torch &>/dev/null; then
-  PYTORCH_CURRENT_COMMIT="$(python -c 'import torch;print(torch.__version__)')"
-  PYTORCH_CURRENT_COMMIT=${PYTORCH_CURRENT_COMMIT#*"git"}
-  echo "**** PyTorch is already installed. Current commit is $PYTORCH_CURRENT_COMMIT ****"
-  if [ "$BUILD_LATEST" = false ]; then
-    if [[ "$PYTORCH_PINNED_COMMIT" = "$PYTORCH_CURRENT_COMMIT"* ]]; then
-      if [ "$FORCE_REINSTALL" = true ]; then
-        echo "**** Matching pinned commit ($PYTORCH_PINNED_COMMIT) detected but --force-reinstall specified: proceeding with rebuild. ****"
+if [ "$PREPARE_SOURCE_ONLY" = false ]; then
+  ############################################################################
+  # Check installed torch
+
+  if pip show torch &>/dev/null; then
+    PYTORCH_CURRENT_COMMIT="$(python -c 'import torch;print(torch.__version__)')"
+    PYTORCH_CURRENT_COMMIT=${PYTORCH_CURRENT_COMMIT#*"git"}
+    echo "**** PyTorch is already installed. Current commit is $PYTORCH_CURRENT_COMMIT ****"
+    if [ "$BUILD_LATEST" = false ]; then
+      if [[ "$PYTORCH_PINNED_COMMIT" = "$PYTORCH_CURRENT_COMMIT"* ]]; then
+        if [ "$FORCE_REINSTALL" = true ]; then
+          echo "**** Matching pinned commit ($PYTORCH_PINNED_COMMIT) detected but --force-reinstall specified: proceeding with rebuild. ****"
+        else
+          echo "**** PyTorch is already installed and its current commit matches the pinned commit: $PYTORCH_PINNED_COMMIT. ****"
+          echo "**** There is no need to build anything, exiting. ****"
+          exit 0
+        fi
       else
-        echo "**** PyTorch is already installed and its current commit matches the pinned commit: $PYTORCH_PINNED_COMMIT. ****"
-        echo "**** There is no need to build anything, exiting. ****"
-        exit 0
+        echo "**** Current PyTorch commit $PYTORCH_CURRENT_COMMIT ****"
+        echo "**** Pinned PyTorch commit $PYTORCH_PINNED_COMMIT ****"
       fi
-    else
-      echo "**** Current PyTorch commit $PYTORCH_CURRENT_COMMIT ****"
-      echo "**** Pinned PyTorch commit $PYTORCH_PINNED_COMMIT ****"
     fi
-  fi
-  if [ "$FORCE_REINSTALL" = false ]; then
-    echo "**** Exiting without action. ****"
-    echo "**** INFO: Run the install-pytorch.sh script with the --force-reinstall flag to force reinstallation of PyTorch,
+    if [ "$FORCE_REINSTALL" = false ]; then
+      echo "**** Exiting without action. ****"
+      echo "**** INFO: Run the install-pytorch.sh script with the --force-reinstall flag to force reinstallation of PyTorch,
       or uninstall the current version of PyTorch manually. ****"
-    exit 1
+      exit 1
+    fi
+    pip uninstall -y torch
   fi
-  pip uninstall -y torch
-fi
 
-############################################################################
-# Check installed torch pinned dependencies
+  ############################################################################
+  # Check installed torch pinned dependencies
 
-PINNED_TORCH_DEPENDENCIES_REGEX="^torchaudio==|^torchvision=="
-INSTALLED_PINNED_TORCH_DEPENDENCIES=$(pip list --format=freeze | grep -iE "$PINNED_TORCH_DEPENDENCIES_REGEX" || true)
+  PINNED_TORCH_DEPENDENCIES_REGEX="^torchaudio==|^torchvision=="
+  INSTALLED_PINNED_TORCH_DEPENDENCIES=$(pip list --format=freeze | grep -iE "$PINNED_TORCH_DEPENDENCIES_REGEX" || true)
 
-if [ -n "$INSTALLED_PINNED_TORCH_DEPENDENCIES" ]; then
-  echo "**** The following pinned torch dependencies are installed: ****"
-  echo
-  echo "$INSTALLED_PINNED_TORCH_DEPENDENCIES"
-  echo
-  if [ "$FORCE_REINSTALL" = false ]; then
-    echo "**** Exiting without action. ****"
-    echo "**** INFO: Add --force-reinstall flag to force the PyTorch pinned dependencies re-installation. ****"
-    echo "**** INFO: PyTorch pinned dependencies build from source mode is not supported. ****"
-    exit 1
+  if [ -n "$INSTALLED_PINNED_TORCH_DEPENDENCIES" ]; then
+    echo "**** The following pinned torch dependencies are installed: ****"
+    echo
+    echo "$INSTALLED_PINNED_TORCH_DEPENDENCIES"
+    echo
+    if [ "$FORCE_REINSTALL" = false ]; then
+      echo "**** Exiting without action. ****"
+      echo "**** INFO: Add --force-reinstall flag to force the PyTorch pinned dependencies re-installation. ****"
+      echo "**** INFO: PyTorch pinned dependencies build from source mode is not supported. ****"
+      exit 1
+    fi
+    pip uninstall -y torchaudio torchvision
   fi
-  pip uninstall -y torchaudio torchvision
 fi
 
 ############################################################################
@@ -213,31 +229,57 @@ function pytorch_wheel_exists {
   fi
 }
 
-function build_pytorch {
-  if [ "$CLEAN" = true ]; then
-    if [ -d "$PYTORCH_PROJ" ] && cd "$PYTORCH_PROJ" && \
-      git fetch --recurse-submodules && \
-      git reset --hard ${PYTORCH_PINNED_COMMIT:-main} && \
-      git submodule update --init --recursive && \
-      git clean -xffd; then
-      echo "**** Cleaning $PYTORCH_PROJ before build ****"
-    else
-      cd $BASE
-      rm -rf "$PYTORCH_PROJ"
-      echo "**** Cloning PyTorch into $PYTORCH_PROJ ****"
-      git clone --single-branch -b main --recurse-submodules https://github.com/pytorch/pytorch.git
-      cd "$PYTORCH_PROJ"
+function clone_pytorch_source {
+  cd $BASE
+  rm -rf "$PYTORCH_PROJ"
+  echo "**** Cloning PyTorch into $PYTORCH_PROJ ****"
+  git clone --single-branch -b main --recurse-submodules https://github.com/pytorch/pytorch.git "$PYTORCH_PROJ"
+  cd "$PYTORCH_PROJ"
 
-      if [ "$BUILD_LATEST" = false ]; then
-        git checkout $PYTORCH_PINNED_COMMIT
-        git submodule update --init --recursive
-        git clean -xffd
-      fi
-    fi
-
-    # Apply Triton specific patches to PyTorch.
-    $SCRIPTS_DIR/patch-pytorch.sh
+  if [ "$BUILD_LATEST" = false ]; then
+    git checkout $PYTORCH_PINNED_COMMIT
+    git submodule update --init --recursive
+    git clean -xffd
   fi
+}
+
+function prepare_pytorch_source {
+  if [ -d "$PYTORCH_PROJ" ]; then
+    if [ "$CLEAN" = true ]; then
+      local reset_ref
+      if [ "$BUILD_LATEST" = true ]; then
+        reset_ref="origin/main"
+      else
+        reset_ref="${PYTORCH_PINNED_COMMIT:-main}"
+      fi
+
+      if cd "$PYTORCH_PROJ" && \
+        git fetch --recurse-submodules && \
+        git reset --hard "$reset_ref" && \
+        git submodule update --init --recursive && \
+        git clean -xffd; then
+        echo "**** Cleaning $PYTORCH_PROJ before build ****"
+      else
+        clone_pytorch_source
+      fi
+
+      # Apply Triton specific patches to PyTorch.
+      $SCRIPTS_DIR/patch-pytorch.sh
+    else
+      echo "**** Reusing existing PyTorch source at $PYTORCH_PROJ (--no-clean). ****"
+      echo "**** Skipping checkout/reset and patch application. ****"
+    fi
+    return
+  fi
+
+  clone_pytorch_source
+
+  # Apply Triton specific patches to PyTorch.
+  $SCRIPTS_DIR/patch-pytorch.sh
+}
+
+function build_pytorch {
+  prepare_pytorch_source
 
   echo "****** Building $PYTORCH_PROJ ******"
   cd "$PYTORCH_PROJ"
@@ -267,6 +309,14 @@ function install_pytorch {
   cd "$PYTORCH_PROJ"
   pip install dist/*.whl
 }
+
+if [ "$PREPARE_SOURCE_ONLY" = true ]; then
+  prepare_pytorch_source
+  cd "$PYTORCH_PROJ"
+  echo "****** PyTorch source prepared at $PYTORCH_PROJ ******"
+  echo "****** Current commit: $(git rev-parse HEAD) ******"
+  exit 0
+fi
 
 if [ "$CHECK_WHEEL" = false ] || ! pytorch_wheel_exists; then
   build_pytorch

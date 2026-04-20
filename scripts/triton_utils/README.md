@@ -251,6 +251,66 @@ Default: `name` (alphabetical sort by test name).
 
 This mode supports all filtering and merging options from `pass_rate` mode.
 
+### 6. Download wheels from CI
+
+Download wheel artifacts from GitHub Actions CI runs. Supports filtering by wheel set, Python version, and workflow presets.
+
+#### Basic usage
+
+```bash
+# Download all nightly wheels for current Python version
+triton-utils wheels -D ./wheels
+
+# Download only PyTorch-related wheels
+triton-utils wheels -D ./wheels --wheel-set torch
+
+# Download benchmarks wheel from benchmarks workflow
+triton-utils wheels --latest-wf-run benchmarks -D ./wheels --wheel-set bench
+
+# Download from a specific run ID
+triton-utils wheels --run 12345678 -D ./wheels --wheel-set torch
+
+# Download wheels for all Python versions
+triton-utils wheels --download-for-all-pythons -D ./wheels
+```
+
+#### Wheel sets
+
+Use `--wheel-set` (repeatable) to filter by predefined wheel sets:
+
+| Preset | Packages |
+|--------|----------|
+| `torch` | torch, torchvision, torchaudio, timm |
+| `triton` | triton |
+| `bench` | triton_kernels_benchmark |
+| `pti` | intel_pti |
+
+#### Workflow presets
+
+Use `--latest-wf-run` to select a workflow by preset name (default: `nightly`):
+
+| Preset | Workflow |
+|--------|----------|
+| `nightly` | `nightly-wheels.yml` |
+| `benchmarks` | `build-benchmarks-wheel.yml` |
+| `build-test` | `build-test-reusable.yml` |
+| `wheels` | `wheels.yml` |
+| `wheels-triton` | `wheels-triton.yml` |
+| `wheels-pytorch` | `wheels-pytorch.yml` |
+
+#### Notes
+
+- Default repo is `intel/intel-xpu-backend-for-triton`. To change use `--repo <repo_org/repo_name>`.
+- Default branch is `main`. To change use `--branch <branch_name>`.
+- This command only downloads wheels. Installation, validation, and fallback are the caller's responsibility.
+- When no wheels match filters, a warning is printed and exit code is 0 (CI-friendly).
+- Output: one absolute path per downloaded `.whl` file per line (enables `pip install $(triton-utils wheels ...)`).
+
+For the full list of options run:
+```bash
+triton-utils download_wheels --help
+```
+
 ## Troubleshooting
 
 ### `gh auth` not configured
@@ -275,6 +335,10 @@ If you see "Test contains test cases from multiple testsuites", either:
 2. Exclude one testsuite with `--ignore-testsuite <name>`
 
 ## Changelog
+
+### 0.6.0
+
+- **Download wheels from CI** — New `download_wheels` subcommand (alias: `wheels`) to download wheel artifacts from GitHub Actions CI runs. Supports filtering by predefined wheel sets (`torch`, `triton`, `bench`, `pti`), Python version, workflow presets (`nightly`, `benchmarks`, `build-test`, etc.), and custom fnmatch patterns. Reuses existing `GHAWorkflow`/`GHArtifact` infrastructure from `gh_utils.py`. Composable design: only downloads, leaving installation and fallback to the caller.
 
 ### 0.5.0
 

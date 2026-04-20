@@ -97,15 +97,8 @@ def file_hash(path):
 
 
 def sm_arch_from_capability(capability: int):
-    # The "a" suffix enables arch-accelerated features only available on
-    # specific GPU implementations:
-    #   sm_90a  — Hopper datacenter (H100, H200)
-    #   sm_100a — Blackwell datacenter (B100, B200)
-    # Consumer Blackwell (sm_120, e.g. RTX 5070 Ti/5080/5090) does NOT
-    # have an "a" variant — using sm_120a causes invalid codegen (tensor
-    # memory instructions that don't exist on consumer hardware), leading
-    # to runtime segfaults.
-    suffix = "a" if capability >= 90 and capability != 120 else ""
+    # TODO: Handle non-"a" sms
+    suffix = "a" if capability >= 90 else ""
     return f"sm_{capability}{suffix}"
 
 
@@ -142,6 +135,12 @@ class CUDAOptions:
         extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
         if not extern_libs.get('libdevice', None):
             extern_libs['libdevice'] = knobs.nvidia.libdevice_path or str(default_libdir / 'libdevice.10.bc')
+        if "gsan" in self.instrumentation_mode:
+            gsan_lib = default_libdir / "gsan.ll"
+            if not gsan_lib.exists():
+                raise FileNotFoundError(f"GSan runtime is missing at {gsan_lib}. "
+                                        "Rebuild Triton to generate it.")
+            extern_libs['gsan'] = str(gsan_lib)
 
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
         assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
@@ -243,7 +242,6 @@ class CUDABackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
-        passes.ttir.add_rewrite_tensor_pointer(pm)
         if capability // 10 < 9:
             passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         passes.common.add_canonicalizer(pm)
@@ -307,7 +305,8 @@ class CUDABackend(BaseBackend):
             passes.ttir.add_triton_licm(pm)
         passes.common.add_canonicalizer(pm)
         passes.ttir.add_loop_aware_cse(pm)
-        passes.ttgpuir.add_prefetch(pm)
+        if capability // 10 == 8:
+            passes.ttgpuir.add_prefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, capability >= 80)
         passes.ttgpuir.add_coalesce_async_copy(pm)
         nvidia.passes.ttnvgpuir.add_optimize_tmem_layouts(pm)
@@ -361,6 +360,10 @@ class CUDABackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
 
+        if "gsan" in options.instrumentation_mode:
+            # GSan introduces layout conversions, so must come before shared memory allocation
+            passes.ttgpuir.add_global_sanitizer(pm)
+
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
         passes.ttgpuir.add_allocate_warp_groups(pm)
         passes.convert.add_scf_to_cf(pm)
@@ -368,17 +371,11 @@ class CUDABackend(BaseBackend):
         nvidia.passes.ttgpuir.add_allocate_shared_memory_nv(pm, capability, ptx_version)
         nvidia.passes.ttnvgpuir.add_allocate_tensor_memory(pm)
         nvidia.passes.ttnvgpuir.add_check_matmul_two_cta(pm)
-        if "consan" in options.instrumentation_mode:
-            # Call ConcurrencySanitizerPass here, before allocating global scratch memory but after allocating tensor and shared
-            passes.ttgpuir.add_concurrency_sanitizer(pm)
-            passes.gluon.add_canonicalizer(pm)
-            passes.common.add_cse(pm)
         # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
         if CUDABackend.instrumentation:
             CUDABackend.instrumentation.patch("ttgpuir_to_llvmir", pm, mod.context)
-        passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         nvidia.passes.ttnvgpuir.add_proxy_fence_insertion(pm, capability)
-        nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version)
+        nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version, "consan" in options.instrumentation_mode)
         passes.ttgpuir.add_canonicalize_llvm_ir(pm)
         passes.common.add_cse(pm)
         nvidia.passes.ttnvgpuir.add_warp_specialize_to_llvm(pm)
@@ -442,8 +439,8 @@ class CUDABackend(BaseBackend):
             metadata["num_warps"] = total_num_warps
         metadata["shared"] = src.get_int_attr("ttg.shared")
         metadata["tmem_size"] = src.get_int_attr("ttg.tensor_memory_size")
-        metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size")
-        metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment")
+        metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size") or 0
+        metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment") or 1
         metadata["profile_scratch_size"] = src.get_int_attr("ttg.profile_scratch_memory_size") or 0
         metadata["profile_scratch_align"] = src.get_int_attr("ttg.profile_scratch_memory_alignment") or 1
         ret = str(llvm_mod)

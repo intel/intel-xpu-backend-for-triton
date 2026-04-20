@@ -22,36 +22,6 @@ def TritonRewriteTensorDescriptorToPointer : Pass</*cli-arg*/"triton-intel-rewri
   let dependentDialects = ["mlir::triton::TritonDialect"];
 }
 
-def TritonIntelBlockPointerToTensorDesc
-    : Pass<"triton-intel-block-pointer-to-tdesc", "mlir::ModuleOp"> {
-  let summary = "Convert block pointers into tensor descriptors";
-
-  let description = [{
-    This pass attempts to convert block pointers into tensor descriptors.
-  }];
-
-  let dependentDialects = [
-    "mlir::arith::ArithDialect",
-    "mlir::scf::SCFDialect",
-    "mlir::triton::TritonDialect"
-  ];
-}
-
-def TritonIntelTensorDescToBlockPointer
-    : Pass<"triton-intel-tdesc-to-block-pointer", "mlir::ModuleOp"> {
-  let summary = "Convert tensor descriptors into block pointers";
-
-  let description = [{
-    This pass attempts to convert tensor descriptors into block pointers.
-  }];
-
-  let dependentDialects = [
-    "mlir::arith::ArithDialect",
-    "mlir::scf::SCFDialect",
-    "mlir::triton::TritonDialect"
-  ];
-}
-
 def TritonIntelRemoveMasks
     : Pass<"triton-intel-remove-masks", "mlir::ModuleOp"> {
   let summary = "Remove masks from tt.load and tt.store operations";

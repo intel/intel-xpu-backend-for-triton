@@ -160,9 +160,10 @@ static void collectOpsToPipeline(scf::ForOp forOp,
 
       RankedTensorType resultTy =
           dyn_cast<RankedTensorType>(op.getResultTypes()[0]);
-      // Currently we can only prefetch 2D loads.
-      if (!resultTy || resultTy.getRank() != 2) {
-        LDBG("Skipping LoadOp with non 2D tensor type" << op);
+      // Rank > 2 tensors are handled by folding batch dims into the base
+      // pointer via GEP (see emit2DBlockPrefetchOps in LoadStoreOpToLLVM.cpp).
+      if (!resultTy || resultTy.getRank() < 2) {
+        LDBG("Skipping LoadOp with rank < 2 tensor type" << op);
         continue;
       }
 
@@ -257,7 +258,7 @@ createSchedule(scf::ForOp forOp, int numStages) {
       // (typically `advanceOp`).
       // As prefetchOp dependencies are assigned to stage 0, this type of loads
       // must not be explicitely assigned to stage `numStages - 1`.
-      if (mlir::triton::isTensorOrTensorPointerType(loadOp.getPtr().getType()))
+      if (isa<RankedTensorType>(loadOp.getPtr().getType()))
         loadOps.emplace_back(&op);
     }
     if (isa<tt::DescriptorLoadOp>(op))

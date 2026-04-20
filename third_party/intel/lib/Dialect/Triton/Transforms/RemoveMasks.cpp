@@ -37,9 +37,8 @@ static Operation *dropMask(Operation *op, bool maskVal) {
       .Case<tt::LoadOp>([&](auto loadOp) {
         if (maskVal) {
           auto newLoadOp = tt::LoadOp::create(
-              builder, loc, loadOp.getPtr(), loadOp.getBoundaryCheck(),
-              loadOp.getPadding(), loadOp.getCache(), loadOp.getEvict(),
-              loadOp.getIsVolatile());
+              builder, loc, loadOp.getPtr(), loadOp.getCache(),
+              loadOp.getEvict(), loadOp.getIsVolatile());
           loadOp->replaceAllUsesWith(newLoadOp);
         } else {
           Operation *cstOp =
@@ -326,7 +325,8 @@ private:
   MaskInfo getMaskInfo(scf::ForOp &forOp, Value mask) const {
     assert(isValidMask(forOp, mask) && "Expecting a valid mask");
 
-    auto cmpOp = cast<arith::CmpIOp>(mask.getDefiningOp());
+    Value finalMask = tt::intel::getFinalValue(mask);
+    auto cmpOp = cast<arith::CmpIOp>(finalMask.getDefiningOp());
     Operation *lhs = tt::intel::getFinalValue(cmpOp.getLhs()).getDefiningOp();
     Operation *rhs = tt::intel::getFinalValue(cmpOp.getRhs()).getDefiningOp();
     return MaskInfo{cast<arith::SubIOp>(rhs).getLhs(),
@@ -391,7 +391,8 @@ public:
 
     OpBuilder builder(forOp);
     Location loc = forOp.getLoc();
-    auto cmpOp = cast<arith::CmpIOp>(mask.getDefiningOp());
+    Value finalMask = tt::intel::getFinalValue(mask);
+    auto cmpOp = cast<arith::CmpIOp>(finalMask.getDefiningOp());
     Value lhsVal = tt::intel::getFinalValue(cmpOp.getLhs());
     Value rhsVal = tt::intel::getFinalValue(cmpOp.getRhs());
     Operation *lhs = tt::intel::getFinalValue(lhsVal).getDefiningOp();
@@ -490,21 +491,6 @@ public:
            "Expecting a non-empty collection of masked operations");
 
     // Limitation
-    // Currently we can version the loop only if it doesn't have downward
-    // exposed uses of return values that are a tensor of pointers.
-    // Note: this is due to the fact the results yielded by the 2 versioning
-    // branches have different types for ptr (only in one versioned loop
-    // tensor of ptrs are changed to block ptrs) 'then' part of the versioning
-    // branch and leave them as is in the 'else' branch).
-    auto canVersion = [](scf::ForOp &forOp) {
-      return llvm::any_of(forOp.getResults(), [](Value res) {
-        return !tt::isTensorPointerType(res.getType()) ||
-               res.getUsers().empty();
-      });
-    };
-    if (!canVersion(forOp))
-      return false;
-
     auto getMask = [](Operation *maskedOp) {
       assert(isa<tt::LoadOp>(maskedOp) ||
              isa<tt::StoreOp>(maskedOp) &&
@@ -593,14 +579,21 @@ public:
     assert(!collector.getMaskedOps().empty() &&
            "Expecting a non-empty collection of masked operations");
 
-    // Collect the (loop invariant) mask conditions.
+    // Collect the (loop invariant) mask conditions, looking through
+    // broadcast/splat/expand_dims to find the underlying CmpIOp.
     SmallPtrSet<Operation *, 8> maskConds;
     for (Operation *maskedOp : collector.getMaskedOps()) {
       if (auto loadOp = dyn_cast<tt::LoadOp>(maskedOp))
-        maskConds.insert(loadOp.getMask().getDefiningOp());
+        maskConds.insert(
+            tt::intel::getFinalValue(loadOp.getMask()).getDefiningOp());
       if (auto storeOp = dyn_cast<tt::StoreOp>(maskedOp))
-        maskConds.insert(storeOp.getMask().getDefiningOp());
+        maskConds.insert(
+            tt::intel::getFinalValue(storeOp.getMask()).getDefiningOp());
     }
+
+    // Early return if no mask conditions were collected.
+    if (maskConds.empty())
+      return false;
 
     // Combine the versioning conditions.
     OpBuilder builder(forOp);

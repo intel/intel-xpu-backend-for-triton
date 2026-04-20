@@ -1,0 +1,103 @@
+name: Reports (manual)
+run-name: "Reports - run ${{ inputs.gh_run_id }}${{ inputs.compare_run_id && format(' vs {0}', inputs.compare_run_id) || '' }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      gh_run_id:
+        description: GH Actions run ID to generate reports for
+        type: string
+        required: true
+      repo:
+        description: Repository
+        type: string
+        default: "intel/intel-xpu-backend-for-triton"
+      branch:
+        description: Branch
+        type: string
+        default: "main"
+      artifact_pattern:
+        description: Artifact pattern (e.g. 'test-reports-xe2-*')
+        type: string
+        default: ""
+
+      # Comparison parameters
+      compare_run_id:
+        description: GH run ID to compare against (leave empty to skip)
+        type: string
+        default: ""
+      compare_repo:
+        description: Repository for comparison run
+        type: string
+        default: "intel/intel-xpu-backend-for-triton"
+      compare_branch:
+        description: Branch for comparison run
+        type: string
+        default: "main"
+      compare_artifact_pattern:
+        description: Artifact pattern for comparison run
+        type: string
+        default: ""
+
+permissions: read-all
+
+jobs:
+  download:
+    name: Download reports
+    runs-on:
+      - runner-0.0.22
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install Python
+        uses: ./.github/actions/setup-python
+        with:
+          python_version: "3.10"
+          use_pyenv: true
+
+      - name: Install triton_utils
+        run: |
+          pip install ./scripts/triton_utils
+
+      - name: Download base reports
+        shell: bash
+        env:
+          ARTIFACT_PATTERN: ${{ inputs.artifact_pattern }}
+          GH_RUN_ID: ${{ inputs.gh_run_id }}
+          REPO: ${{ inputs.repo }}
+          BRANCH: ${{ inputs.branch }}
+        run: |
+          set -euo pipefail
+          args=(
+            download
+            --run "$GH_RUN_ID"
+            -R "$REPO"
+            -B "$BRANCH"
+            -D reports
+          )
+          if [[ -n "${ARTIFACT_PATTERN:-}" ]]; then
+            args+=(--artifact-pattern "$ARTIFACT_PATTERN")
+          fi
+          triton-utils "${args[@]}"
+
+      - name: Upload base reports as artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports-manual
+          include-hidden-files: true
+          path: reports
+
+  reports:
+    name: Reports
+    needs: download
+    uses: ./.github/workflows/reports-reusable.yml
+    with:
+      artifact_pattern: "test-reports-manual"
+      compare_run_id: ${{ inputs.compare_run_id }}
+      compare_repo: ${{ inputs.compare_repo }}
+      compare_branch: ${{ inputs.compare_branch }}
+      compare_artifact_pattern: ${{ inputs.compare_artifact_pattern }}

@@ -50,10 +50,9 @@ class XPUOptions:
     extern_libs: dict = None
     debug: bool = False
     backend_name: str = 'intel'
-    sanitize_overflow: bool = False
+    sanitize_overflow: bool = True
     generate_native_code: bool = False
     arch: str = None
-    # FIXME: enable for XPU: https://github.com/intel/intel-xpu-backend-for-triton/issues/4954
     instrumentation_mode: str = ""
 
     def __post_init__(self):
@@ -167,10 +166,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             'has_subgroup_matrix_multiply_accumulate_tensor_float32', False)
         dev_prop['has_16bit_atomics'] = tgt_prop.get('has_16bit_atomics', False)
         dev_prop['has_2d_block_io'] = tgt_prop.get('has_2d_block_io', False)
-        dev_prop['has_bfloat16_arithmetic'] = tgt_prop.get('has_bfloat16_arithmetic', False)
-        dev_prop['has_bfloat16_conversion'] = tgt_prop.get('has_bfloat16_conversion', True)
-        dev_prop['has_predicated_io'] = tgt_prop.get('has_predicated_io',
-                                                     not self.is_lts(tgt_prop.get('driver_version')))
+        is_lts = self.is_lts(tgt_prop.get('driver_version'))
+        dev_prop['has_bfloat16_arithmetic'] = tgt_prop.get('has_bfloat16_arithmetic', not is_lts)
+        dev_prop['has_bfloat16_conversion'] = tgt_prop.get('has_bfloat16_conversion', False)
+        dev_prop['has_predicated_io'] = tgt_prop.get('has_predicated_io', not is_lts)
         dev_prop['has_subgroup_matrix_multiply_accumulate'] = tgt_prop.get('has_subgroup_matrix_multiply_accumulate',
                                                                            False)
         dev_prop['has_subgroup_scaled_matrix_multiply_accumulate'] = tgt_prop.get(
@@ -269,7 +268,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
-        intel.passes.ttir.add_convert_block_pointer_to_tdesc(pm)
         intel.passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         passes.common.add_cse(pm)
         passes.ttir.add_triton_licm(pm)
@@ -314,11 +312,11 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_optimize_dot_operands(pm)
         intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier)
-        intel.passes.ttir.add_convert_tdesc_to_block_pointer(pm)
 
         if (opt.reduce_variable_liveness):
             intel.passes.ttgpuir.add_reduce_variable_liveness(pm)
 
+        passes.ttir.add_loop_aware_cse(pm)
         passes.ttgpuir.add_fuse_nested_loops(pm)
 
         passes.common.add_canonicalizer(pm)
@@ -334,13 +332,15 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_reduce_data_duplication(pm)
         passes.ttgpuir.add_reorder_instructions(pm)
-        passes.common.add_cse(pm)
+        passes.ttir.add_loop_aware_cse(pm)
         passes.common.add_symbol_dce(pm)
         passes.common.add_sccp(pm)
         passes.common.add_canonicalizer(pm)
         if knobs.intel.opt_reduction_locality:
             intel.passes.ttgpuir.add_optimize_reduction_locality(pm)
         intel.passes.arith.add_arith_emulate_unsupported_floats(pm, ["bf16"], "f32")
+        if opt.instrumentation_mode == "fpsan":
+            passes.ttgpuir.add_fp_sanitizer(pm)
         pm.run(mod, 'make_ttgir')
         return mod
 
@@ -355,6 +355,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.ttir.add_loop_aware_cse(pm)
         passes.gluon.add_canonicalizer(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
+        if options.instrumentation_mode == "fpsan":
+            passes.ttgpuir.add_fp_sanitizer(pm)
 
         pm.run(mod, 'gluon_to_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
