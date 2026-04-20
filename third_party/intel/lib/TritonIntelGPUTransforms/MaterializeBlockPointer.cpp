@@ -384,31 +384,6 @@ private:
     return std::nullopt;
   }
 
-  //===--------------------------------------------------------------------===//
-  // 1D strided access → 2D block I/O reshape
-  //
-  // Inductor (and similar code-generators) flatten 2D row-major tiles into
-  // 1D indices:  offset = (idx % W) + (idx / W) * S.  Without intervention
-  // the compiler sees N independent pointer computations and emits N scalar
-  // gather/scatter operations.
-  //
-  // The helpers below recover W (tile width), H (tile height), and S (row
-  // stride) from the arithmetic, reshape the 1D op into a 2D [H, W] op, and
-  // annotate it with ttig.block_io / ttig.block_io_stride so that the LLVM
-  // lowering emits a single LSC 2D block read or write.
-  //
-  // Load vs store asymmetry:
-  //   - Stores:  2D block store writes FROM registers in any order, so the
-  //     default reshape encoding works.  However, HW does not support
-  //     transpose, so multi-row tiles (H > 1) are currently disabled.
-  //   - Loads:   2D block load delivers data in a fixed HW pattern (lane k
-  //     = column k, registers stack rows).  An explicit "load encoding"
-  //     matching this pattern is constructed, and a ConvertLayoutOp (SLM
-  //     transpose) converts to the consumer encoding.  The load encoding
-  //     must be anchored (isExpensiveLoadOrStore) so that
-  //     RemoveLayoutConversions does not eliminate the ConvertLayoutOp.
-  //===--------------------------------------------------------------------===//
-
   /// Information extracted from a 1D strided access pattern:
   ///   offset = (idx % W) + (idx / W) * S
   struct StridedPatternInfo {
@@ -671,12 +646,11 @@ private:
     auto newStore = tt::StoreOp::create(builder, loc, ptrReshape, valReshape,
                                         op.getCache(), op.getEvict());
 
-    copyNonBlockIOAttrs(op, newStore);
     setBlockIOAttrs(newStore, ctx, info->S);
+    copyNonBlockIOAttrs(op, newStore);
 
     LDBG("Created 2D block store: " << *newStore);
 
-    // Erase the original 1D store.
     op.erase();
   }
 
