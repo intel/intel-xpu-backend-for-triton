@@ -1633,15 +1633,19 @@ struct PrefetchOpConversion
   matchAndRewrite(triton::gpu::intel::PrefetchOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
     LogicalResult res = rewriteRegularPointerPrefetch(op, adaptor, rewriter);
+    if (succeeded(res))
+      return success();
+
+    res = rewriteCooperativePrefetch(op, adaptor, rewriter);
+    if (succeeded(res))
+      return success();
 
     // FIXME: the prefetch lowering code should never fail. Currently it does in
     // some cases. We should address those cases instead of removing the
     // prefetch operation.
-    if (failed(res)) {
-      op.emitWarning("Prefetch operation could not be converted to LLVM. "
-                     "The operation was erased.");
-      rewriter.eraseOp(op);
-    }
+    op.emitWarning("Prefetch operation could not be converted to LLVM. "
+                   "The operation was erased.");
+    rewriter.eraseOp(op);
 
     return success();
   }
@@ -1877,6 +1881,101 @@ struct PrefetchOpConversion
 
     rewriter.eraseOp(op);
     return success();
+  }
+
+  /// Handle prefetch for loads with BlockedEncodingAttr (non-dot).
+  /// Follows the same cooperative 2D-block-prefetch pattern as
+  /// DescriptorPrefetchOpConversion::rewriteTensorDescriptorPrefetch() but
+  /// extracts base/stride from tensor-of-pointers instead of a descriptor.
+  LogicalResult
+  rewriteCooperativePrefetch(triton::gpu::intel::PrefetchOp op,
+                             OpAdaptor adaptor,
+                             ConversionPatternRewriter &rewriter) const {
+    Attribute blockIOAttr =
+        op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
+    if (!blockIOAttr)
+      return failure();
+
+    // Masked prefetches (from pipeline epilogue predication) are not handled
+    // by the cooperative path — the base pointer may be out of bounds.
+    if (op.getMask())
+      return failure();
+
+    const bool memoryRowMajor = isMemoryRowMajor(op);
+    if (!memoryRowMajor)
+      return failure();
+
+    auto tensorOfPointers = cast<RankedTensorType>(op.getPtr().getType());
+    unsigned rank = tensorOfPointers.getRank();
+    if (rank < 2)
+      return failure();
+
+    ArrayRef<int64_t> tensorShape = tensorOfPointers.getShape();
+    auto ptrType = cast<PointerType>(tensorOfPointers.getElementType());
+    Type elementType = ptrType.getPointeeType();
+    Type eltTy = getTypeConverter()->convertType(elementType);
+    unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
+    unsigned elemSizeInBytes = elemSizeInBits / 8;
+
+    int numWarps = triton::gpu::lookupNumWarps(op);
+    auto m = op->getParentOfType<ModuleOp>();
+    bool isPrefetch256BSupported =
+        m->hasAttr(TritonIntelGPUDialect::getSupportPrefetch256BAttrName());
+
+    auto [tileHeightInElem, tileWidthInElem, warpsM, warpsN] =
+        get2DPrefetchWarpsPerCTA(tensorShape, eltTy, numWarps,
+                                 isPrefetch256BSupported);
+    auto llEncoding = getPrefetchLinearLayout(
+        getContext(), tensorShape, {tileHeightInElem, tileWidthInElem},
+        {warpsM, warpsN});
+
+    unsigned tileSizeInElem = tileHeightInElem * tileWidthInElem;
+    int64_t totalElems = 1;
+    for (auto s : tensorShape)
+      totalElems *= s;
+    unsigned numTilesPerWarp = totalElems / (tileSizeInElem * numWarps);
+
+    Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    // Recover base pointer from the tensor-of-pointers.
+    Value llPtr = adaptor.getPtr();
+    SmallVector<Value> ptrElems = unpackLLElements(loc, llPtr, rewriter);
+    Value base = targetInfo.shuffleIdx(rewriter, loc, ptrElems[0], 0);
+
+    // Row stride in elements (i64) -- emit2DBlockPrefetchOps converts to bytes.
+    int stride = getStride(op.getPtr(), rank - 2);
+    if (stride < 0)
+      return failure();
+    Value rowStride = b.i64_val(stride);
+
+    // Surface dimensions for the 2D block prefetch hardware.
+    // baseWidth must equal the row stride (surface width) because the HW
+    // computes addresses as base + y * pitch + x. Using the tile width would
+    // be wrong when pitch > tile width.
+    // baseHeight uses the tile height — each warp's offsetY stays within the
+    // tile, so this is sufficient for bounds checking.
+    Value baseWidth = b.i64_val(stride);
+    Value baseHeight = b.i64_val(tensorShape[rank - 2]);
+
+    // Offsets start at 0; per-warp offsets computed by emit2DBlockPrefetchOps.
+    Value offsetBaseX = b.i32_val(0);
+    Value offsetBaseY = b.i32_val(0);
+
+    // Prepare extra-dim strides (bytes, i64) and base offsets (i32) for
+    // rank > 2.
+    SmallVector<Value> extraDimStrides, extraDimBaseOffsets;
+    for (unsigned d = 0; d < rank - 2; ++d) {
+      int dimStride = getStride(op.getPtr(), d);
+      extraDimStrides.push_back(
+          b.i64_val(dimStride > 0 ? dimStride * elemSizeInBytes : 0));
+      extraDimBaseOffsets.push_back(b.i32_val(0));
+    }
+
+    return emit2DBlockPrefetchOps(
+        op, rewriter, loc, base, baseWidth, baseHeight, rowStride, offsetBaseX,
+        offsetBaseY, eltTy, tileWidthInElem, tileHeightInElem, numTilesPerWarp,
+        tileSizeInElem, llEncoding, rank, extraDimStrides, extraDimBaseOffsets);
   }
 };
 
