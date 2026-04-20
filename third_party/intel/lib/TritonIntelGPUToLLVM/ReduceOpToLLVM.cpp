@@ -25,14 +25,19 @@ using ::mlir::LLVM::linearize;
 using ::mlir::triton::gpu::DistributedEncodingTrait;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 
-// Enable to A/B test cross-warp reduction logic.
+// FIXME: Remove the Intel workaround to align the ReduceOp lowering logic same
+// to the upstream. Enable to A/B test cross-warp reduction logic.
 //
-// When enabled, we keep Intel step 1/2 (within-thread + within-warp) intact,
+// When enabled, we keep reduce step 1/2 (within-thread + within-warp) intact,
 // but replace step 3 (cross-warp) with the common ReduceOpToLLVM.cpp logic:
 // convert_layout through shared memory into a temporary layout, then perform up
 // to two additional warp reductions until the reduction axis size becomes 1.
 #ifndef TRITON_INTEL_REDUCE_USE_COMMON_CROSS_WARP
 #define TRITON_INTEL_REDUCE_USE_COMMON_CROSS_WARP 0
+#endif
+
+#ifndef TRITON_INTEL_REDUCE_USE_LEFT_FOLD_THREAD_REDUCE
+#define TRITON_INTEL_REDUCE_USE_LEFT_FOLD_THREAD_REDUCE 1
 #endif
 
 namespace {
@@ -334,12 +339,18 @@ private:
         }
         vals.push_back(std::move(cur));
       }
+
+#ifdef TRITON_INTEL_REDUCE_USE_LEFT_FOLD_THREAD_REDUCE
       // Use a deterministic left fold to avoid extra reassociation error in
       // low-precision reductions.
       SmallVector<Value> acc = vals.front();
       for (unsigned i = 1; i < vals.size(); ++i) {
         accumulate(loc, rewriter, combineRegion, acc, vals[i]);
       }
+#else
+      auto acc =
+          treeReduce(loc, rewriter, combineRegion, std::move(vals), arity);
+#endif
       for (unsigned opIdx = 0; opIdx < numOperands; ++opIdx) {
         reduced[opIdx].push_back(acc[opIdx]);
       }
