@@ -14,21 +14,6 @@ index f3b22d898..bdb82146a 100644
          init_workspace_manager(device)
      yield
      reset_workspace_manager()
-diff --git a/tests/kernels/attention/test_merge_attn_states.py b/tests/kernels/attention/test_merge_attn_states.py
-index 6fccb8ccf..0e4fa2d2d 100644
---- a/tests/kernels/attention/test_merge_attn_states.py
-+++ b/tests/kernels/attention/test_merge_attn_states.py
-@@ -10,6 +10,10 @@ from vllm.v1.attention.ops.triton_merge_attn_states import (
-     merge_attn_states as merge_attn_states_triton,
- )
- 
-+# XPU: Skip entire module - requires CUDA merge kernel for comparison
-+if current_platform.is_xpu():
-+    pytest.skip("Requires CUDA merge kernel for comparison", allow_module_level=True)
-+
- 
- # Naive PyTorch Implements section 2.2 of https://www.arxiv.org/pdf/2501.01005
- # can be used to combine partial attention results (in the split-KV case)
 diff --git a/tests/kernels/moe/test_batched_moe.py b/tests/kernels/moe/test_batched_moe.py
 index d78e1947f..e7ffb39e3 100644
 --- a/tests/kernels/moe/test_batched_moe.py
