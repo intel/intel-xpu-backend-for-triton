@@ -4,8 +4,7 @@
 // Test that tt.descriptor_store with DPAS encodings is lowered to
 // triton_gen.2Dblockstore when the module has "ttig.support_2d_block_io".
 // This mirrors test/TritonIntelGPU/blockptr_store.mlir but uses tensor
-// descriptors (tt.make_tensor_descriptor / tt.descriptor_store) instead of
-// block pointers (tt.make_tensor_ptr / tt.store).
+// descriptors (tt.make_tensor_descriptor / tt.descriptor_store).
 
 // Test 1: f16 dpas layout store — descriptor store produces 2D block stores.
 // Mirrors blockptr_store.mlir "matmul_no_scf_with_advance_kernel" (f16).

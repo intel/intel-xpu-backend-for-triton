@@ -2,12 +2,12 @@
 
 // -----
 
-tt.func @ttig.prefetch(%arg0: !tt.ptr<tensor<2x32xf32>>, %arg1: tensor<2x32xi1>) {
+tt.func @ttig.prefetch(%arg0: tensor<2x32x!tt.ptr<f32>>, %arg1: tensor<2x32xi1>) {
   // CHECK-LABEL: @ttig.prefetch
-  // CHECK:         ttig.prefetch %arg0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<2x32xf32>>
-  ttig.prefetch %arg0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<2x32xf32>>
-  // CHECK:         ttig.prefetch %arg0, %arg1 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<2x32xf32>>
-  ttig.prefetch %arg0, %arg1 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<2x32xf32>>
+  // CHECK:         ttig.prefetch %arg0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<2x32x!tt.ptr<f32>>
+  ttig.prefetch %arg0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<2x32x!tt.ptr<f32>>
+  // CHECK:         ttig.prefetch %arg0, %arg1 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<2x32x!tt.ptr<f32>>
+  ttig.prefetch %arg0, %arg1 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<2x32x!tt.ptr<f32>>
   tt.return
 }
 

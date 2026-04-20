@@ -1,9 +1,7 @@
 add_triton_library(TritonIntelTransforms
-  BlockPointerToTensorDesc.cpp
   FuseReshape.cpp
   RemoveMasks.cpp
   RewriteTensorDescriptorToPointer.cpp
-  RewriteTensorPointer.cpp
   SimplifySignedArithmetic.cpp
   StrideVersioning.cpp
 
@@ -13,5 +11,6 @@ add_triton_library(TritonIntelTransforms
   LINK_LIBS PUBLIC
   MLIRPass
   MLIRTransformUtils
+  TritonIntelAnalysis
   TritonIR
 )

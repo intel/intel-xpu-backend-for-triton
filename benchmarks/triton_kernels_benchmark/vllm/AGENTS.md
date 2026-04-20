@@ -9,7 +9,7 @@ For the purposes of this repository, vllm installation consists of:
 1. Activating a Python environment that has triton, pytorch, oneapi
 2. Running [`scripts/test-triton.sh --install-vllm`](../../scripts/test-triton.sh)
 
-This installation internally will clone the vllm repo into a local folder, checkout the commit pinned via [`vllm-pin.txt`](vllm-pin.txt), apply our local patch [`vllm-fix.patch`](vllm-fix.patch), and apply some regexp changes to the vllm repo.
+This installation internally will clone the vllm repo into a local folder, checkout the commit pinned via [`vllm-pin.txt`](vllm-pin.txt), apply our local patch [`vllm-fix.patch`](vllm-fix.patch), and apply other common substitutions defined in [`vllm-xpu-patch.py`](../../scripts/vllm/vllm_xpu_patch.py).
 
 These patches are necessary because vllm doesn't yet support XPU completely.
 
@@ -52,7 +52,7 @@ The shared [`run_benchmark.sh`](run_benchmark.sh) script orchestrates both steps
 
 You can run a benchmark with environment variable `DEBUG_BENCH=1` to speed up if the benchmark runs at all. For example:
 ```
-DEBUG_BENCH=1 bash benchmarks/vllm/run_benchmark.sh unified_attention
+DEBUG_BENCH=1 bash benchmarks/triton_kernels_benchmark/vllm/run_benchmark.sh unified_attention
 ```
 
 # Running tests
@@ -70,7 +70,7 @@ Note that during the benchmarking CI there is report generation. Reports need to
 
 You can find the diff that the upstream had in a specific file by doing:
 1. Go to vllm folder: `cd vllm`
-2. Run `git diff main $(<../benchmarks/vllm/vllm-pin.txt) -- $FILE`
+2. Run `git diff main $(<../../../scripts/vllm/vllm-pin.txt) -- $FILE`
 
 During a pin update you need to:
 1. Update the pin file.
