@@ -327,7 +327,10 @@ private:
         vectorCombineRegion ? *vectorCombineRegion : op.getCombineOp();
 
     Operation &combinerOp = combineRegion.front().front();
+
+#if !TRITON_INTEL_REDUCE_USE_LEFT_FOLD_THREAD_REDUCE
     unsigned arity = targetInfo.getReductionTreeArity(&combinerOp);
+#endif
 
     // Perform a tree reduction
     unsigned numOperands = accs.size();
