@@ -1,25 +1,25 @@
 # XPU does not support the FLASHINFER attention backend.
-test_hybrid_attention_mamba_tensor_shapes
-test_mamba_cache_raises_when_max_num_seqs_exceeds_blocks
+#test_hybrid_attention_mamba_tensor_shapes
+#test_mamba_cache_raises_when_max_num_seqs_exceeds_blocks
 
 # Model Runner V2 does not support PROMPT and SAMPLE_PROMPT batch_logprobs_composition.
-test_get_logprobs_and_prompt_logprobs[False-0.0-BatchLogprobsComposition.PROMPT]
-test_get_logprobs_and_prompt_logprobs[False-0.0-BatchLogprobsComposition.SAMPLE_PROMPT]
-test_get_logprobs_and_prompt_logprobs[False-2.0-BatchLogprobsComposition.PROMPT]
-test_get_logprobs_and_prompt_logprobs[False-2.0-BatchLogprobsComposition.SAMPLE_PROMPT]
-test_get_logprobs_and_prompt_logprobs[True-2.0-BatchLogprobsComposition.SAMPLE_PROMPT]
-test_all_logprobs
+#test_get_logprobs_and_prompt_logprobs[False-0.0-BatchLogprobsComposition.PROMPT]
+#test_get_logprobs_and_prompt_logprobs[False-0.0-BatchLogprobsComposition.SAMPLE_PROMPT]
+#test_get_logprobs_and_prompt_logprobs[False-2.0-BatchLogprobsComposition.PROMPT]
+#test_get_logprobs_and_prompt_logprobs[False-2.0-BatchLogprobsComposition.SAMPLE_PROMPT]
+#test_get_logprobs_and_prompt_logprobs[True-2.0-BatchLogprobsComposition.SAMPLE_PROMPT]
+#test_all_logprobs
 
 # Model Runner V2 sampler does not support raw_logits and procesessed_logits log_probs_mode.
-test_logprobs_mode[raw_logits]
-test_logprobs_mode[processed_logits]
-test_spec_decode_logprobs[eagle0-raw_logits]
-test_spec_decode_logprobs[eagle0-processed_logits]
-test_spec_decode_logprobs[eagle3-raw_logits]
-test_spec_decode_logprobs[eagle3-processed_logits]
-test_spec_decode_logprobs[ngram-raw_logits]
-test_spec_decode_logprobs[ngram-processed_logits]
+#test_logprobs_mode[raw_logits]
+#test_logprobs_mode[processed_logits]
+#test_spec_decode_logprobs[eagle0-raw_logits]
+#test_spec_decode_logprobs[eagle0-processed_logits]
+#test_spec_decode_logprobs[eagle3-raw_logits]
+#test_spec_decode_logprobs[eagle3-processed_logits]
+#test_spec_decode_logprobs[ngram-raw_logits]
+#test_spec_decode_logprobs[ngram-processed_logits]
 
 # Model Runner V2 spec decode does not support ngram method.
-test_spec_decode_logprobs[ngram-raw_logprobs]
-test_spec_decode_logprobs[ngram-processed_logprobs]
+#test_spec_decode_logprobs[ngram-raw_logprobs]
+#test_spec_decode_logprobs[ngram-processed_logprobs]
