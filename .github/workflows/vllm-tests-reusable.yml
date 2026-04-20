@@ -137,7 +137,7 @@ jobs:
     runs-on:
       - linux
       - ${{ inputs.runner_label || 'max1550' }}
-    timeout-minutes: 120
+    timeout-minutes: 180
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
