@@ -10,6 +10,7 @@ add_triton_library(TritonIntelGPUToLLVM
     HistogramOpToLLVM.cpp
     LoadStoreOpToLLVM.cpp
     PrintOpToLLVM.cpp
+    ReduceOpToLLVM.cpp
     SPMDOpToLLVM.cpp
     SPIRVTargetInfo.cpp
     TargetInfo.cpp

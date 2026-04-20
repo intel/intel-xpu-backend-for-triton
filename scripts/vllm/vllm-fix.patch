@@ -52,18 +52,9 @@ index d78e1947f..e7ffb39e3 100644
  @pytest.mark.parametrize("input_scales", [False])
  def test_fused_moe_batched_experts(
 diff --git a/tests/kernels/moe/utils.py b/tests/kernels/moe/utils.py
-index 4b693d8c8..3ff3093b4 100644
+index 4b693d8c8..a04281e13 100644
 --- a/tests/kernels/moe/utils.py
 +++ b/tests/kernels/moe/utils.py
-@@ -3,7 +3,7 @@
- 
- import torch
- 
--import vllm._custom_ops as ops
-+from vllm import _custom_ops as ops
- from tests.kernels.quant_utils import per_block_cast_to_int8
- from tests.kernels.quantization.nvfp4_utils import FLOAT4_E2M1_MAX, FLOAT8_E4M3_MAX
- from vllm.model_executor.layers.activation import SiluAndMul
 @@ -314,7 +314,13 @@ def make_test_weight(
                  w_16[idx], None, quant_dtype, per_out_ch_quant, block_shape
              )
