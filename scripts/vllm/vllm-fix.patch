@@ -78,39 +78,55 @@ index e2b5a8f67..0513a957b 100644
          # ignored but it does support torch.compile + cudagraphs.
          hidden_dim = A.size(-1)
 diff --git a/vllm/model_executor/layers/quantization/utils/w8a8_utils.py b/vllm/model_executor/layers/quantization/utils/w8a8_utils.py
-index b309bf14d..eebd9fe39 100644
+index b309bf14d..bf01c227f 100644
 --- a/vllm/model_executor/layers/quantization/utils/w8a8_utils.py
 +++ b/vllm/model_executor/layers/quantization/utils/w8a8_utils.py
-@@ -11,6 +11,10 @@ from vllm.platforms import current_platform
+@@ -9,16 +9,33 @@ from vllm.platforms import current_platform
+ 
+ 
  def cutlass_fp8_supported() -> bool:
++    # DEBUG: Print platform state to diagnose is_cuda() bug on XPU
++    import sys
++    print(f"[DEBUG cutlass_fp8_supported] Platform: {current_platform.__class__.__name__}", file=sys.stderr)
++    print(f"[DEBUG cutlass_fp8_supported] _enum: {current_platform._enum}", file=sys.stderr)
++    print(f"[DEBUG cutlass_fp8_supported] is_cuda(): {current_platform.is_cuda()}", file=sys.stderr)
++    print(f"[DEBUG cutlass_fp8_supported] is_xpu(): {current_platform.is_xpu()}", file=sys.stderr)
++
      if not current_platform.is_cuda():
++        print(f"[DEBUG cutlass_fp8_supported] Returning False because is_cuda() is False", file=sys.stderr)
          return False
-+    
-+    # XPU: cutlass operations are CUDA-only, return False
-+    if current_platform.is_xpu():
-+        return False
  
      capability_tuple = current_platform.get_device_capability()
      capability = -1 if capability_tuple is None else capability_tuple.to_int()
-@@ -21,6 +25,10 @@ def cutlass_fp8_supported() -> bool:
+ 
++    print(f"[DEBUG cutlass_fp8_supported] is_cuda() returned True, calling ops with capability={capability}", file=sys.stderr)
+     return ops.cutlass_scaled_mm_supports_fp8(capability)
+ 
+ 
  def cutlass_block_fp8_supported() -> bool:
-     if not current_platform.is_cuda():
-         return False
-+    
-+    # XPU: cutlass operations are CUDA-only, return False
++    # CUTLASS operations are CUDA-only. Check platform to avoid calling
++    # CUDA-specific ops on non-CUDA devices.
++    # Note: We check is_xpu() first because there may be initialization
++    # ordering issues where is_cuda() returns an incorrect value during
++    # early module imports.
 +    if current_platform.is_xpu():
 +        return False
++
+     if not current_platform.is_cuda():
+         return False
  
-     capability_tuple = current_platform.get_device_capability()
-     capability = -1 if capability_tuple is None else capability_tuple.to_int()
-@@ -31,6 +39,10 @@ def cutlass_block_fp8_supported() -> bool:
+@@ -29,6 +46,14 @@ def cutlass_block_fp8_supported() -> bool:
+ 
+ 
  def cutlass_group_gemm_supported() -> bool:
-     if not current_platform.is_cuda():
-         return False
-+    
-+    # XPU: cutlass operations are CUDA-only, return False
++    # CUTLASS operations are CUDA-only. Check platform to avoid calling
++    # CUDA-specific ops on non-CUDA devices.
++    # Note: We check is_xpu() first because there may be initialization
++    # ordering issues where is_cuda() returns an incorrect value during
++    # early module imports.
 +    if current_platform.is_xpu():
 +        return False
++
+     if not current_platform.is_cuda():
+         return False
  
-     capability_tuple = current_platform.get_device_capability()
-     capability = -1 if capability_tuple is None else capability_tuple.to_int()
