@@ -334,8 +334,12 @@ private:
         }
         vals.push_back(std::move(cur));
       }
-      auto acc =
-          treeReduce(loc, rewriter, combineRegion, std::move(vals), arity);
+      // Use a deterministic left fold to avoid extra reassociation error in
+      // low-precision reductions.
+      SmallVector<Value> acc = vals.front();
+      for (unsigned i = 1; i < vals.size(); ++i) {
+        accumulate(loc, rewriter, combineRegion, acc, vals[i]);
+      }
       for (unsigned opIdx = 0; opIdx < numOperands; ++opIdx) {
         reduced[opIdx].push_back(acc[opIdx]);
       }
