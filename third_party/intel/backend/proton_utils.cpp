@@ -7,6 +7,12 @@ extern "C" void waitOnSyclQueue(void *syclQueue) {
   queue->wait();
 }
 
+extern "C" void copyDeviceToHostAsync(void *syclQueue, void *dst,
+                                      const void *src, size_t size) {
+  sycl::queue *queue = static_cast<sycl::queue *>(syclQueue);
+  queue->memcpy(dst, src, size);
+}
+
 // FIXME: Should it be in DeviceInfo class?
 // Inspired by Kineto: `XpuptiActivityProfiler.cpp`
 extern "C" void enumDeviceUUIDs(void *deviceUUIDsPtr) {
