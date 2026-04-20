@@ -247,4 +247,24 @@ def TritonIntelGPUReduceVariableLiveness
                            "mlir::scf::SCFDialect",
                            "mlir::arith::ArithDialect"];
 }
+
+def TritonIntelGPUAnnotateCacheControl
+    : Pass<"tritonintelgpu-annotate-cache-control", "mlir::ModuleOp"> {
+  let summary = "Annotate load/store ops with .cg cache control when data does not flow to/from a tt.dot";
+  let description = [{
+    Sets `.cg` (L1UC_L3C) cache control on `tt.load`/`tt.store` operations
+    whose data does not participate in a matrix multiply. GEMM operand loads
+    and epilogue stores benefit from L1 reuse and are left with the default
+    cache modifier; streaming / elementwise loads/stores bypass L1 to avoid
+    thrashing. User-specified cache modifiers are never overridden.
+
+    The heuristic uses a forward use-def walk from `tt.load` results (through
+    `scf.for` iter_args and results) to detect whether the loaded data reaches
+    a `tt.dot`/`tt.dot_scaled`, and a backward walk from `tt.store` values to
+    detect whether the stored data originates from a `tt.dot`/`tt.dot_scaled`.
+  }];
+  let dependentDialects = ["mlir::triton::TritonDialect",
+                           "mlir::scf::SCFDialect"];
+}
+
 #endif // TRITON_INTEL_GPU_PASSES
