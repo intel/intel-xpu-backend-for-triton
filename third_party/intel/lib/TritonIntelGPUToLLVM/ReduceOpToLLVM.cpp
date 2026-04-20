@@ -1,4 +1,4 @@
-#include <lib/Conversion/TritonGPUToLLVM/ReduceScanCommon.h>
+#include "lib/Conversion/TritonGPUToLLVM/ReduceScanCommon.h"
 
 #include <memory>
 #include <tuple>
@@ -130,6 +130,10 @@ public:
 
     packResults(op, accs, rewriter);
 #else
+
+    if (!helper.isReduceWithinCTA())
+      return rewriter.notifyMatchFailure(op,
+                                         "cross-CTA reduction not supported");
 
     std::map<SmallVector<unsigned>, SmallVector<Value>> intelAccs;
     std::map<SmallVector<unsigned>, SmallVector<Value>> indices;

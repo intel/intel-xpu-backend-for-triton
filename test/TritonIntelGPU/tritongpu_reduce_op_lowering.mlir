@@ -5,7 +5,7 @@
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [64], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 64 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: reduce_problem_size_64_threads_per_warp_32
-  tt.func @reduce_problem_size_64_threads_per_warp_32(%f : tensor<2048xi32, #blocked>) {
+  tt.func @reduce_problem_size_64_threads_per_warp_32(%f : tensor<2048xi32, #blocked>) -> i32 {
 
   // 1st round intra-warp reduce
   // CHECK: llvm.call spir_funccc @_Z27__spirv_GroupNonUniformIAddiij(%{{.*}}) {{.*}} : (i32, i32, i32) -> i32
@@ -32,7 +32,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 64 : i32, "ttg.th
       %add = arith.addi %arg0, %arg1 : i32
       tt.reduce.return %add : i32
     }) {axis = 0 : i32} : (tensor<2048xi32, #blocked>) -> i32
-    tt.return
+    tt.return %g : i32
   }
 }
 
