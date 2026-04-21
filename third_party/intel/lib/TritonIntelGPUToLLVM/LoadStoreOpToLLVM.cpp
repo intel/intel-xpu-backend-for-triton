@@ -2064,13 +2064,11 @@ public:
               .getAxisInfo(op.getMask());
     }
     BlockIOTileSizeInfo sizeInfo = BlockIOTileSizeInfo::unknown();
-    if (hasAnnotated1DReshapeStride(op)) {
+    auto blockedEnc = dyn_cast<BlockedEncodingAttr>(encoding);
+    if (hasAnnotated1DReshapeStride(op) && blockedEnc && rank == 2) {
       // For loads annotated by the 1D->2D reshape, the explicit load encoding
       // has sizePerThread=[H/warps, 1], threadsPerWarp=[1, tpw]. This matches
       // 2D block load HW delivery (lane k = col k, registers = rows).
-      auto blockedEnc = dyn_cast<BlockedEncodingAttr>(encoding);
-      assert(blockedEnc && "1D reshape load must have BlockedEncodingAttr");
-      assert(rank == 2 && "1D reshape always produces rank-2 tensors");
       unsigned numWarpsRow = blockedEnc.getWarpsPerCTA()[0];
       int height = tensorType.getDimSize(0) / numWarpsRow;
       int width = tensorType.getDimSize(rank - 1);
