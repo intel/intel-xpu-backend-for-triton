@@ -26,6 +26,16 @@ namespace mlir {
 using namespace triton;
 using namespace triton::gpu;
 
+SmallVector<unsigned> ReduceOpHelper::getOrderWithAxisAtBeginning() {
+  auto order = toLinearEncoding(srcTy).getOrder();
+  auto it = std::find(order.begin(), order.end(), axis);
+  // delete the axis from order
+  order.erase(it);
+  // insert axis at the beginning of order
+  order.insert(order.begin(), axis);
+  return order;
+}
+
 // Cases where distributed shared memory is not required in ConvertLayout:
 // (1) numCTAs == 1
 // (2) numCTAs > 1 but srcCGALayout == dstCGALayout
@@ -81,6 +91,29 @@ unsigned ReduceOpHelper::getIntraWarpSizeWithUniqueData() {
 
 bool ReduceOpHelper::isWarpSynchronous() {
   return getWarpsPerCTA(srcEncoding, srcShape)[axis] == 1;
+}
+
+SmallVector<unsigned> ReduceOpHelper::getScratchRepShape() {
+  SmallVector<unsigned> smemShape;
+  // This case doesn't need inter-warp communication
+  if (isWarpSynchronous())
+    return {0, 0};
+
+  smemShape = convertType<unsigned>(srcShape);
+  smemShape[axis] = getInterWarpSizeWithUniqueData();
+
+  return smemShape;
+}
+
+unsigned ReduceOpHelper::getScratchSizeInBytesOld() {
+  auto smemShape = getScratchRepShape();
+  auto elems = product<unsigned>(smemShape);
+
+  unsigned bytesPerElem = 0;
+  for (const auto &ty : srcElementTypes) {
+    bytesPerElem += ceil<unsigned>(ty.getIntOrFloatBitWidth(), 8);
+  }
+  return bytesPerElem * elems;
 }
 
 bool ReduceOpHelper::isReduceWithinCTA() {
