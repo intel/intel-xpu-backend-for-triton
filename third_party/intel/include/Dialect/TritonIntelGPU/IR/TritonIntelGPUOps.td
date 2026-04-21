@@ -57,7 +57,7 @@ def TTIG_PrefetchOp : TTIG_Op<"prefetch", [
     Example:
       ```mlir
       ttig.prefetch %ptr {cache=none, evict=normal, isVolatile=false}
-          : !tt.ptr<tensor<256x32xf16>
+          : !tt.ptr<256x32xf16
       ```
   }];
   let arguments = (ins
@@ -85,7 +85,7 @@ def TTIG_DescriptorPrefetchOp : TTIG_Op<"descriptor_prefetch", [MemoryEffects<[M
     Example:
       ```mlir
       ttig.descriptor_prefetch %desc[%x, %y] cacheModifier = none evictionPolicy = normal
-          : !tt.tensor_desc<tensor<256x32xf16>>
+          : !tt.tensor_desc<256x32xf16>
       ```
   }];
   let arguments = (ins

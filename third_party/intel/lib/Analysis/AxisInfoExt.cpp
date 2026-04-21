@@ -144,7 +144,7 @@ makeTensorDescAxisInfo(Type elemTy, ArrayRef<int64_t> blkShape, unsigned rank,
   unsigned elemBytes = ceil<unsigned>(elemTy.getIntOrFloatBitWidth(), 8);
   for (unsigned dim = 0; dim < rank; ++dim) {
     // The maximum contiguity is the divisibility of boundary shape, which is
-    // the case when stride is 1. Take an example of !tt.ptr<tensor<4x4xi8>>: if
+    // the case when stride is 1. Take an example of !tt.ptr<4x4xi8>: if
     // the boundary shape is [3, 3] which divisibility is 1. The tensor pointer
     // axis is like:
     // clang-format off

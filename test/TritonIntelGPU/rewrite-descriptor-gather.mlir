@@ -15,9 +15,9 @@ module {
     %c256_i64 = arith.constant 256 : i64
     %c0_i32 = arith.constant 0 : i32
     %c256_i32 = arith.constant 256 : i32
-    %desc = tt.make_tensor_descriptor %arg0, [%c256_i32, %c256_i32], [%c256_i64, %c1_i64] {order = array<i32: 0>} : <f16>, <tensor<1x32xf16>>
+    %desc = tt.make_tensor_descriptor %arg0, [%c256_i32, %c256_i32], [%c256_i64, %c1_i64] {order = array<i32: 0>} : <f16>, <1x32xf16>
     %x_offsets = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32>
-    %result = tt.descriptor_gather %desc[%x_offsets, %c0_i32] : (!tt.tensordesc<tensor<1x32xf16>>, tensor<16xi32>, i32) -> tensor<16x32xf16>
+    %result = tt.descriptor_gather %desc[%x_offsets, %c0_i32] : (!tt.tensordesc<1x32xf16>, tensor<16xi32>, i32) -> tensor<16x32xf16>
     tt.return %result : tensor<16x32xf16>
   }
 }
@@ -39,11 +39,11 @@ module {
     %c0_i32 = arith.constant 0 : i32
     %c5_i32 = arith.constant 5 : i32
     %c256_i32 = arith.constant 256 : i32
-    %desc = tt.make_tensor_descriptor %arg0, [%c256_i32, %c256_i32], [%c256_i64, %c1_i64] {order = array<i32: 0>} : <f16>, <tensor<1x32xf16>>
+    %desc = tt.make_tensor_descriptor %arg0, [%c256_i32, %c256_i32], [%c256_i64, %c1_i64] {order = array<i32: 0>} : <f16>, <1x32xf16>
     %range = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32>
     %splat = tt.splat %c5_i32 : i32 -> tensor<16xi32>
     %x_offsets = arith.addi %range, %splat : tensor<16xi32>
-    %result = tt.descriptor_gather %desc[%x_offsets, %c0_i32] : (!tt.tensordesc<tensor<1x32xf16>>, tensor<16xi32>, i32) -> tensor<16x32xf16>
+    %result = tt.descriptor_gather %desc[%x_offsets, %c0_i32] : (!tt.tensordesc<1x32xf16>, tensor<16xi32>, i32) -> tensor<16x32xf16>
     tt.return %result : tensor<16x32xf16>
   }
 }
@@ -65,11 +65,11 @@ module {
     %c256_i64 = arith.constant 256 : i64
     %c0_i32 = arith.constant 0 : i32
     %c256_i32 = arith.constant 256 : i32
-    %desc = tt.make_tensor_descriptor %arg0, [%c256_i32, %c256_i32], [%c256_i64, %c1_i64] {order = array<i32: 0>} : <f16>, <tensor<1x32xf16>>
+    %desc = tt.make_tensor_descriptor %arg0, [%c256_i32, %c256_i32], [%c256_i64, %c1_i64] {order = array<i32: 0>} : <f16>, <1x32xf16>
     %range = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32>
     %splat = tt.splat %arg1 : i32 -> tensor<16xi32>
     %x_offsets = arith.addi %range, %splat : tensor<16xi32>
-    %result = tt.descriptor_gather %desc[%x_offsets, %c0_i32] : (!tt.tensordesc<tensor<1x32xf16>>, tensor<16xi32>, i32) -> tensor<16x32xf16>
+    %result = tt.descriptor_gather %desc[%x_offsets, %c0_i32] : (!tt.tensordesc<1x32xf16>, tensor<16xi32>, i32) -> tensor<16x32xf16>
     tt.return %result : tensor<16x32xf16>
   }
 }
@@ -90,9 +90,9 @@ module {
     %c256_i64 = arith.constant 256 : i64
     %c0_i32 = arith.constant 0 : i32
     %c256_i32 = arith.constant 256 : i32
-    %desc = tt.make_tensor_descriptor %arg0, [%c256_i32, %c256_i32], [%c256_i64, %c1_i64] {order = array<i32: 0>} : <bf16>, <tensor<1x32xbf16>>
+    %desc = tt.make_tensor_descriptor %arg0, [%c256_i32, %c256_i32], [%c256_i64, %c1_i64] {order = array<i32: 0>} : <bf16>, <1x32xbf16>
     %x_offsets = arith.constant dense<[0, 1, 2, 3, 8, 9, 10, 11]> : tensor<8xi32>
-    %result = tt.descriptor_gather %desc[%x_offsets, %c0_i32] : (!tt.tensordesc<tensor<1x32xbf16>>, tensor<8xi32>, i32) -> tensor<8x32xbf16>
+    %result = tt.descriptor_gather %desc[%x_offsets, %c0_i32] : (!tt.tensordesc<1x32xbf16>, tensor<8xi32>, i32) -> tensor<8x32xbf16>
     tt.return %result : tensor<8x32xbf16>
   }
 }
@@ -113,8 +113,8 @@ module {
     %c256_i64 = arith.constant 256 : i64
     %c0_i32 = arith.constant 0 : i32
     %c256_i32 = arith.constant 256 : i32
-    %desc = tt.make_tensor_descriptor %arg0, [%c256_i32, %c256_i32], [%c256_i64, %c1_i64] {order = array<i32: 0>} : <f16>, <tensor<1x32xf16>>
-    %result = tt.descriptor_gather %desc[%arg1, %c0_i32] : (!tt.tensordesc<tensor<1x32xf16>>, tensor<16xi32>, i32) -> tensor<16x32xf16>
+    %desc = tt.make_tensor_descriptor %arg0, [%c256_i32, %c256_i32], [%c256_i64, %c1_i64] {order = array<i32: 0>} : <f16>, <1x32xf16>
+    %result = tt.descriptor_gather %desc[%arg1, %c0_i32] : (!tt.tensordesc<1x32xf16>, tensor<16xi32>, i32) -> tensor<16x32xf16>
     tt.return %result : tensor<16x32xf16>
   }
 }
@@ -134,9 +134,9 @@ module {
     %c256_i64 = arith.constant 256 : i64
     %c0_i32 = arith.constant 0 : i32
     %c256_i32 = arith.constant 256 : i32
-    %desc = tt.make_tensor_descriptor %arg0, [%c256_i32, %c256_i32], [%c256_i64, %c1_i64] {order = array<i32: 0>} : <bf16>, <tensor<1x32xbf16>>
+    %desc = tt.make_tensor_descriptor %arg0, [%c256_i32, %c256_i32], [%c256_i64, %c1_i64] {order = array<i32: 0>} : <bf16>, <1x32xbf16>
     %x_offsets = arith.constant dense<[0, 1, 2, 3, 4, 8, 9, 10]> : tensor<8xi32>
-    %result = tt.descriptor_gather %desc[%x_offsets, %c0_i32] : (!tt.tensordesc<tensor<1x32xbf16>>, tensor<8xi32>, i32) -> tensor<8x32xbf16>
+    %result = tt.descriptor_gather %desc[%x_offsets, %c0_i32] : (!tt.tensordesc<1x32xbf16>, tensor<8xi32>, i32) -> tensor<8x32xbf16>
     tt.return %result : tensor<8x32xbf16>
   }
 }
