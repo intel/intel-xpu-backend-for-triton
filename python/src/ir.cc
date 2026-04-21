@@ -183,8 +183,7 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
       continue;
 
     bool isIm2Col = isa<ttng::TensorDescIm2ColType>(arg.getType());
-    auto blockType = descTy.getBlockType();
-    auto encoding = blockType.getEncoding();
+    auto encoding = descTy.getSharedLayout();
 
     py::dict metadata;
     if (isa<ttg::NVMMASharedEncodingAttr>(encoding)) {
@@ -195,21 +194,23 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
         throw py::type_error("invalid TMA descriptor type");
       auto tmaMode = isIm2Col ? ttg::TMAMode::Im2Col : ttg::TMAMode::Tiled;
       auto blockSize =
-          ttng::getTMABlockShape(blockType, /*packedSize=*/false, tmaMode);
+          ttng::getTMABlockShape(descTy, /*packedSize=*/false, tmaMode);
       metadata["swizzle"] = *swizzle;
-      metadata["elem_size"] = blockType.getElementTypeBitWidth() / 8;
+      metadata["elem_size"] =
+          descTy.getElementType().getIntOrFloatBitWidth() / 8;
       metadata["elem_type"] = *elemType;
       metadata["block_size"] =
           std::vector<int>(blockSize.begin(), blockSize.end());
       metadata["fp4_padded"] = mmaEncoding && mmaEncoding.getFp4Padded();
       metadata["is_im2col"] = isIm2Col;
     } else {
-      auto blockShape = blockType.getShape();
+      auto blockShape = descTy.getShape();
       metadata["block_size"] =
           std::vector<int>(blockShape.begin(), blockShape.end());
-      metadata["elem_bits"] = blockType.getElementTypeBitWidth();
+      metadata["elem_bits"] = descTy.getElementType().getIntOrFloatBitWidth();
 
-      if (auto paddedEnc = dyn_cast<ttg::PaddedSharedEncodingAttr>(encoding)) {
+      if (auto paddedEnc =
+              dyn_cast_if_present<ttg::PaddedSharedEncodingAttr>(encoding)) {
         py::list intervalPaddingPairs;
         for (auto [interval, padding] : llvm::zip_equal(
                  paddedEnc.getIntervals(), paddedEnc.getPaddings())) {
@@ -220,7 +221,7 @@ py::list getTensorDescMetadata(ModuleOp &mod) {
         }
         metadata["interval_padding_pairs"] = intervalPaddingPairs;
 
-        auto blockShape = blockType.getShape();
+        auto blockShape = descTy.getShape();
       }
     }
     result.append(std::move(metadata));
@@ -1519,23 +1520,6 @@ void init_triton_ir(py::module &&m) {
               EvictionPolicy evictionPolicy) -> void {
              self.create<StoreOp>(ptrs, value, cacheModifier, evictionPolicy);
            })
-      .def("create_tensor_pointer_load",
-           [](TritonOpBuilder &self, Value &ptr,
-              std::vector<int32_t> &boundaryCheck,
-              std::optional<PaddingOption> paddingOption,
-              CacheModifier cacheModifier, EvictionPolicy evictionPolicy,
-              bool isVolatile) -> Value {
-             return self.create<LoadOp>(ptr, boundaryCheck, paddingOption,
-                                        cacheModifier, evictionPolicy,
-                                        isVolatile);
-           })
-      .def("create_tensor_pointer_store",
-           [](TritonOpBuilder &self, Value &ptr, Value &val,
-              std::vector<int32_t> &boundaryCheck, CacheModifier cacheModifier,
-              EvictionPolicy evictionPolicy) -> void {
-             self.create<StoreOp>(ptr, val, boundaryCheck, cacheModifier,
-                                  evictionPolicy);
-           })
       .def("create_masked_load",
            [](TritonOpBuilder &self, Value &ptrs, Value &mask,
               std::optional<Value> &other, CacheModifier cacheModifier,
@@ -1553,9 +1537,9 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_tensor_descriptor_type",
            [](TritonOpBuilder &self, Type blockTy, bool isSigned) -> Type {
-             auto ctx = self.getContext();
-             return triton::TensorDescType::get(
-                 ctx, cast<RankedTensorType>(blockTy), isSigned);
+             auto rtt = cast<RankedTensorType>(blockTy);
+             return triton::TensorDescType::get(rtt.getShape(),
+                                                rtt.getElementType(), isSigned);
            })
       .def("create_descriptor_load",
            [](TritonOpBuilder &self, Value desc, std::vector<Value> &indices,
@@ -1866,21 +1850,6 @@ void init_triton_ir(py::module &&m) {
       .def("create_barrier",
            [](TritonOpBuilder &self) {
              self.create<triton::gpu::BarrierOp>(triton::gpu::AddrSpace::All);
-           })
-      // Make a block pointer (tensor pointer in Triton IR)
-      .def("create_make_block_ptr",
-           [](TritonOpBuilder &self, Value &base, std::vector<Value> &shape,
-              std::vector<Value> &strides, std::vector<Value> &offsets,
-              std::vector<int32_t> &tensorShape,
-              std::vector<int32_t> &order) -> Value {
-             return self.create<MakeTensorPtrOp>(base, shape, strides, offsets,
-                                                 tensorShape, order);
-           })
-      // Advance a block pointer
-      .def("create_advance",
-           [](TritonOpBuilder &self, Value &ptr,
-              std::vector<Value> &offsets) -> Value {
-             return self.create<AdvanceOp>(ptr.getType(), ptr, offsets);
            })
       // Make a tensor descriptor
       .def("create_make_tensor_descriptor",

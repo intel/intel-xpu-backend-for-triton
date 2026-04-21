@@ -562,9 +562,9 @@ static PyTypeObject PyKernelArgType = {
         "triton.backends.intel.PyKernelArg",
     .tp_basicsize = sizeof(PyKernelArgObject),
     .tp_itemsize = 0,
+    .tp_dealloc = (destructor)PyKernelArg_dealloc,
     .tp_flags = Py_TPFLAGS_DEFAULT,
     .tp_doc = "Kernel Argument Metadata",
-    .tp_dealloc = (destructor)PyKernelArg_dealloc,
     .tp_init = (initproc)PyKernelArg_init,
     .tp_new = PyType_GenericNew,
 };

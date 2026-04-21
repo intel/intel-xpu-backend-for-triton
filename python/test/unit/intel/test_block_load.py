@@ -59,32 +59,32 @@ def test_block_tdesc_load_dpas_layout(M, N, dtype_str, device, tmp_path: pathlib
 
             // A matrix: row-major MxN, encoding = dot_op opIdx=0
             %src_a = tt.make_tensor_descriptor %arg0, [%cM_i32, %cN_i32], [%N_i64, %c1_i64]
-                     : !tt.ptr<{ty}>, !tt.tensordesc<tensor<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>>
+                     : !tt.ptr<{ty}>, !tt.tensordesc<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>
 
             %a = tt.descriptor_load %src_a [%0, %c0_i32]
-                 : !tt.tensordesc<tensor<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>>
+                 : !tt.tensordesc<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>
                  -> tensor<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>
 
             %dst_a = tt.make_tensor_descriptor %arg1, [%cM_i32, %cN_i32], [%N_i64, %c1_i64]
-                     : !tt.ptr<{ty}>, !tt.tensordesc<tensor<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>>
+                     : !tt.ptr<{ty}>, !tt.tensordesc<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>
 
             tt.descriptor_store %dst_a [%0, %c0_i32], %a
-                                : !tt.tensordesc<tensor<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>>,
+                                : !tt.tensordesc<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>,
                                   tensor<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>
 
             // B matrix: row-major NxM, encoding = dot_op opIdx=1
             %src_b = tt.make_tensor_descriptor %arg2, [%cN_i32, %cM_i32], [%M_i64, %c1_i64]
-                     : !tt.ptr<{ty}>, !tt.tensordesc<tensor<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>>
+                     : !tt.ptr<{ty}>, !tt.tensordesc<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>
 
             %b = tt.descriptor_load %src_b [%c0_i32, %0]
-                 : !tt.tensordesc<tensor<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>>
+                 : !tt.tensordesc<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>
                  -> tensor<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>
 
             %dst_b = tt.make_tensor_descriptor %arg3, [%cN_i32, %cM_i32], [%M_i64, %c1_i64]
-                     : !tt.ptr<{ty}>, !tt.tensordesc<tensor<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>>
+                     : !tt.ptr<{ty}>, !tt.tensordesc<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>
 
             tt.descriptor_store %dst_b [%c0_i32, %0], %b
-                                : !tt.tensordesc<tensor<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>>,
+                                : !tt.tensordesc<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>,
                                   tensor<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>
 
             tt.return
@@ -285,18 +285,18 @@ def test_block_tdesc_column_major_load(device, tmp_path: pathlib.Path):
 
             // A: [{M}, {K}] row-major.
             %desc_a = tt.make_tensor_descriptor %a_ptr, [%cM_i32, %cK_i32], [%cK_i64, %c1_i64]
-                      : !tt.ptr<f16>, !tt.tensordesc<tensor<{M}x{K}xf16>>
+                      : !tt.ptr<f16>, !tt.tensordesc<{M}x{K}xf16>
             %a = tt.descriptor_load %desc_a [%c0_i32, %c0_i32] {{ttig.block_io = "row_major"}}
-                 : !tt.tensordesc<tensor<{M}x{K}xf16>> -> tensor<{M}x{K}xf16, #dot0>
+                 : !tt.tensordesc<{M}x{K}xf16> -> tensor<{M}x{K}xf16, #dot0>
 
             // B stored as [{N}, {K}] row-major in memory (N rows, K contiguous cols).
             // column_major load: the permuteDescDim logic swaps the last two descriptor
             // dimensions before extracting surface parameters, so the result is
             // tensor<{K}x{N}xf16, #dot1> (the transposed view of the [{N},{K}] storage).
             %desc_b = tt.make_tensor_descriptor %b_ptr, [%cN_i32, %cK_i32], [%cK_i64, %c1_i64]
-                      : !tt.ptr<f16>, !tt.tensordesc<tensor<{N}x{K}xf16>>
+                      : !tt.ptr<f16>, !tt.tensordesc<{N}x{K}xf16>
             %b = tt.descriptor_load %desc_b [%c0_i32, %c0_i32] {{ttig.block_io = "column_major"}}
-                 : !tt.tensordesc<tensor<{N}x{K}xf16>> -> tensor<{K}x{N}xf16, #dot1>
+                 : !tt.tensordesc<{N}x{K}xf16> -> tensor<{K}x{N}xf16, #dot1>
 
             // C = A x B  (dimensions: [{M},{K}] x [{K},{N}] -> [{M},{N}])
             %C_init = arith.constant dense<0.000000e+00> : tensor<{M}x{N}xf32, #dpas>
@@ -305,9 +305,9 @@ def test_block_tdesc_column_major_load(device, tmp_path: pathlib.Path):
 
             // Store C: the dpas encoding supports 2D block stores via a descriptor.
             %desc_c = tt.make_tensor_descriptor %c_ptr, [%cM_i32, %cN_i32], [%cN_i64, %c1_i64]
-                      : !tt.ptr<f32>, !tt.tensordesc<tensor<{M}x{N}xf32, #dpas>>
+                      : !tt.ptr<f32>, !tt.tensordesc<{M}x{N}xf32, #dpas>
             tt.descriptor_store %desc_c [%c0_i32, %c0_i32], %C {{ttig.block_io = "row_major"}}
-                                : !tt.tensordesc<tensor<{M}x{N}xf32, #dpas>>, tensor<{M}x{N}xf32, #dpas>
+                                : !tt.tensordesc<{M}x{N}xf32, #dpas>, tensor<{M}x{N}xf32, #dpas>
 
             tt.return
         }}

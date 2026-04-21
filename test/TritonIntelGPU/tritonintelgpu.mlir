@@ -2,12 +2,12 @@
 
 // -----
 
-tt.func @ttig.prefetch(%arg0: !tt.ptr<tensor<2x32xf32>>, %arg1: tensor<2x32xi1>) {
+tt.func @ttig.prefetch(%arg0: tensor<2x32x!tt.ptr<f32>>, %arg1: tensor<2x32xi1>) {
   // CHECK-LABEL: @ttig.prefetch
-  // CHECK:         ttig.prefetch %arg0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<2x32xf32>>
-  ttig.prefetch %arg0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<2x32xf32>>
-  // CHECK:         ttig.prefetch %arg0, %arg1 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<2x32xf32>>
-  ttig.prefetch %arg0, %arg1 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<2x32xf32>>
+  // CHECK:         ttig.prefetch %arg0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<2x32x!tt.ptr<f32>>
+  ttig.prefetch %arg0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<2x32x!tt.ptr<f32>>
+  // CHECK:         ttig.prefetch %arg0, %arg1 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<2x32x!tt.ptr<f32>>
+  ttig.prefetch %arg0, %arg1 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<2x32x!tt.ptr<f32>>
   tt.return
 }
 
@@ -24,11 +24,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
-tt.func @ttig.descriptor_prefetch(%desc: !tt.tensordesc<tensor<256x32xf16>>, %x: i32, %y: i32) {
+tt.func @ttig.descriptor_prefetch(%desc: !tt.tensordesc<256x32xf16>, %x: i32, %y: i32) {
   // CHECK-LABEL: @ttig.descriptor_prefetch
-  // CHECK:         ttig.descriptor_prefetch %arg0[%arg1, %arg2] : !tt.tensordesc<tensor<256x32xf16>>
-  ttig.descriptor_prefetch %desc[%x, %y] cacheModifier = none evictionPolicy = evict_normal : !tt.tensordesc<tensor<256x32xf16>>
-  // CHECK:         ttig.descriptor_prefetch %arg0[%arg1, %arg2] : !tt.tensordesc<tensor<256x32xf16>>
-  ttig.descriptor_prefetch %desc[%x, %y] : !tt.tensordesc<tensor<256x32xf16>>
+  // CHECK:         ttig.descriptor_prefetch %arg0[%arg1, %arg2] : !tt.tensordesc<256x32xf16>
+  ttig.descriptor_prefetch %desc[%x, %y] cacheModifier = none evictionPolicy = evict_normal : !tt.tensordesc<256x32xf16>
+  // CHECK:         ttig.descriptor_prefetch %arg0[%arg1, %arg2] : !tt.tensordesc<256x32xf16>
+  ttig.descriptor_prefetch %desc[%x, %y] : !tt.tensordesc<256x32xf16>
   tt.return
 }

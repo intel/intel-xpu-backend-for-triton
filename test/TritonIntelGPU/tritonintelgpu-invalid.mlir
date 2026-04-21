@@ -1,10 +1,10 @@
 // RUN: triton-opt -split-input-file -verify-diagnostics %s
 // -----
 
-tt.func @ttig.prefetch(%arg0: !tt.ptr<tensor<2x32xf32>>, %arg1: tensor<4x32xi1>) {
+tt.func @ttig.prefetch(%arg0: tensor<2x32x!tt.ptr<f32>>, %arg1: tensor<4x32xi1>) {
   // expected-note@-1 {{prior use here}}
   // expected-error@+1 {{use of value '%arg1' expects different type than prior uses: 'tensor<2x32xi1>' vs 'tensor<4x32xi1>'}}
-  ttig.prefetch %arg0, %arg1 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<2x32xf32>>
+  ttig.prefetch %arg0, %arg1 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<2x32x!tt.ptr<f32>>
   tt.return
 }
 
@@ -99,8 +99,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
-tt.func @ttig.descriptor_prefetch.indices_mismatch(%desc: !tt.tensordesc<tensor<256x32xf16>>, %x: i32) {
+tt.func @ttig.descriptor_prefetch.indices_mismatch(%desc: !tt.tensordesc<256x32xf16>, %x: i32) {
   // expected-error @below {{'ttig.descriptor_prefetch' op expected 2 indices, but got 1}}
-  ttig.descriptor_prefetch %desc[%x] : !tt.tensordesc<tensor<256x32xf16>>
+  ttig.descriptor_prefetch %desc[%x] : !tt.tensordesc<256x32xf16>
   tt.return
 }
