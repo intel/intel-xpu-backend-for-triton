@@ -214,10 +214,13 @@ void IntegerRangeAnalysis::setToEntryState(
         lattice->getValue().getValue().smin().getBitWidth();
     unsigned incomingWidth = range.getValue().smin().getBitWidth();
     if (existingWidth != incomingWidth) {
-      DBGS() << "!!! ENTRY STATE BIT WIDTH MISMATCH: existing=" << existingWidth
-             << " incoming=" << incomingWidth << " for value: ";
-      anchor.printAsOperand(llvm::dbgs(), {});
-      llvm::dbgs() << "\n";
+      LLVM_DEBUG({
+        DBGS() << "!!! ENTRY STATE BIT WIDTH MISMATCH: existing="
+               << existingWidth << " incoming=" << incomingWidth
+               << " for value: ";
+        anchor.printAsOperand(llvm::dbgs(), {});
+        llvm::dbgs() << "\n";
+      });
     }
   }
   ChangeResult changed = lattice->join(range);
@@ -430,10 +433,12 @@ LogicalResult IntegerRangeAnalysis::visitOperationHelper(
           lattice->getValue().getValue().smin().getBitWidth();
       unsigned incomingWidth = newRange.getValue().smin().getBitWidth();
       if (existingWidth != incomingWidth) {
-        DBGS() << "!!! BIT WIDTH MISMATCH: existing=" << existingWidth
-               << " incoming=" << incomingWidth << " for value: ";
-        resultVal.printAsOperand(llvm::dbgs(), {});
-        llvm::dbgs() << " in op: " << *op << "\n";
+        LLVM_DEBUG({
+          DBGS() << "!!! BIT WIDTH MISMATCH: existing=" << existingWidth
+                 << " incoming=" << incomingWidth << " for value: ";
+          resultVal.printAsOperand(llvm::dbgs(), {});
+          llvm::dbgs() << " in op: " << *op << "\n";
+        });
       }
     }
     ChangeResult changed = lattice->join(newRange);

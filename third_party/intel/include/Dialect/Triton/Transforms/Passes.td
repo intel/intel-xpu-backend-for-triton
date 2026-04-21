@@ -156,7 +156,7 @@ def TritonIntelGPUPrepareIfCombining
     Moves pure operations from between scf.if pairs that share the same
     condition, enabling canonicalization to combine them into a single scf.if.
   }];
-  let dependentDialects = [];
+  let dependentDialects = ["mlir::scf::SCFDialect"];
 }
 
 #endif // TRITON_DIALECT_TRITON_INTEL_TRANSFORMS_PASSES

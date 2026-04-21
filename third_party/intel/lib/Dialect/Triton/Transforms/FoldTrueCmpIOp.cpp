@@ -1,6 +1,7 @@
 #include "intel/include/Analysis/Range.h"
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/Utils/InferIntRangeCommon.h"
 #include "triton/Analysis/Utility.h"
