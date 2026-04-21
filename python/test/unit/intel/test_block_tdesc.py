@@ -35,16 +35,16 @@ def test_tdesc_load_store(M, N, dtype_str, device, tmp_path: pathlib.Path):
             %c0_i32 = arith.constant 0 : i32
 
             %src_desc = tt.make_tensor_descriptor %arg0, [%cM_i32, %cN_i32], [%stride_i64, %c1_i64]
-                        : !tt.ptr<{ty}>, !tt.tensordesc<tensor<{M}x{N}x{ty}, #blocked>>
+                        : !tt.ptr<{ty}>, !tt.tensordesc<{M}x{N}x{ty}, #blocked>
 
             %data = tt.descriptor_load %src_desc [%c0_i32, %c0_i32]
-                    : !tt.tensordesc<tensor<{M}x{N}x{ty}, #blocked>> -> tensor<{M}x{N}x{ty}, #blocked>
+                    : !tt.tensordesc<{M}x{N}x{ty}, #blocked> -> tensor<{M}x{N}x{ty}, #blocked>
 
             %dst_desc = tt.make_tensor_descriptor %arg1, [%cM_i32, %cN_i32], [%stride_i64, %c1_i64]
-                        : !tt.ptr<{ty}>, !tt.tensordesc<tensor<{M}x{N}x{ty}, #blocked>>
+                        : !tt.ptr<{ty}>, !tt.tensordesc<{M}x{N}x{ty}, #blocked>
 
             tt.descriptor_store %dst_desc [%c0_i32, %c0_i32], %data
-                                : !tt.tensordesc<tensor<{M}x{N}x{ty}, #blocked>>, tensor<{M}x{N}x{ty}, #blocked>
+                                : !tt.tensordesc<{M}x{N}x{ty}, #blocked>, tensor<{M}x{N}x{ty}, #blocked>
 
             tt.return
         }}
@@ -97,17 +97,17 @@ def test_tdesc_load_zero_padding(M, N, dtype_str, device, tmp_path: pathlib.Path
 
             // Source descriptor with shape (M-1)x(N-1) — last row/col out of bounds
             %src_desc = tt.make_tensor_descriptor %arg0, [%cM_minus1, %cN_minus1], [%stride_i64, %c1_i64]
-                        : !tt.ptr<{ty}>, !tt.tensordesc<tensor<{M}x{N}x{ty}, #blocked>>
+                        : !tt.ptr<{ty}>, !tt.tensordesc<{M}x{N}x{ty}, #blocked>
 
             %data = tt.descriptor_load %src_desc [%c0_i32, %c0_i32]
-                    : !tt.tensordesc<tensor<{M}x{N}x{ty}, #blocked>> -> tensor<{M}x{N}x{ty}, #blocked>
+                    : !tt.tensordesc<{M}x{N}x{ty}, #blocked> -> tensor<{M}x{N}x{ty}, #blocked>
 
             // Destination descriptor with full shape so we can store everything
             %dst_desc = tt.make_tensor_descriptor %arg1, [%cM_i32, %cN_i32], [%stride_i64, %c1_i64]
-                        : !tt.ptr<{ty}>, !tt.tensordesc<tensor<{M}x{N}x{ty}, #blocked>>
+                        : !tt.ptr<{ty}>, !tt.tensordesc<{M}x{N}x{ty}, #blocked>
 
             tt.descriptor_store %dst_desc [%c0_i32, %c0_i32], %data
-                                : !tt.tensordesc<tensor<{M}x{N}x{ty}, #blocked>>, tensor<{M}x{N}x{ty}, #blocked>
+                                : !tt.tensordesc<{M}x{N}x{ty}, #blocked>, tensor<{M}x{N}x{ty}, #blocked>
 
             tt.return
         }}

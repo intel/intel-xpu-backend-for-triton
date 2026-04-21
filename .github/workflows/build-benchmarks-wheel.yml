@@ -2,6 +2,20 @@ name: Build benchmarks wheel
 
 on:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      python-version:
+        description: Python version to build (builds all versions if empty)
+        type: string
+        default: ""
+  schedule:
+    - cron: "0 6 * * *"
+  push:
+    branches:
+      - main
+    paths:
+      - benchmarks/**
+      - .github/workflows/build-benchmarks-wheel.yml
   pull_request:
     branches:
       - main
@@ -10,7 +24,7 @@ on:
       - .github/workflows/build-benchmarks-wheel.yml
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'keep-going') && github.run_id || github.event.pull_request.number) || github.ref }}
+  group: ${{ github.workflow }}-wheel-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'keep-going') && github.run_id || github.event.pull_request.number) || github.ref }}
   cancel-in-progress: true
 
 permissions: read-all
@@ -24,12 +38,7 @@ jobs:
       - runner-0.0.22
     strategy:
       matrix:
-        python:
-          - "3.10"
-          - "3.11"
-          - "3.12"
-          - "3.13"
-          - "3.14"
+        python: ${{ fromJson(inputs.python-version && format('["{0}"]', inputs.python-version) || '["3.10","3.11","3.12","3.13","3.14"]') }}
       fail-fast: false
       max-parallel: 2
     timeout-minutes: 120
@@ -56,6 +65,17 @@ jobs:
         run: |
           cd benchmarks
           python -m build --wheel --no-isolation
+
+      - name: Install benchmarks wheel
+        run: |
+          # Uninstall first — see install-benchmarks/action.yml for full rationale.
+          pip uninstall -y triton-kernels-benchmark 2>/dev/null || true
+          cd benchmarks/dist
+          pip install *.whl
+
+      - name: Validate benchmarks wheel
+        run: |
+          triton-benchmarks-validate
 
       - name: Upload benchmarks wheel
         uses: actions/upload-artifact@v7

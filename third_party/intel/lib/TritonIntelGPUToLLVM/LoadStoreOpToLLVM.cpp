@@ -18,6 +18,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "intel/include/Utils/Utility.h"
 #include "triton/Tools/LinearLayout.h"
+#include <limits>
 #include <optional>
 #include <triton/Tools/Sys/GetEnv.hpp>
 
@@ -592,25 +593,34 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
            enableBlockIOForAllLayout.value() || hasDpas;
   }
 
-  /// Check whether a store was annotated by the 1D→2D reshape in
-  /// MaterializeBlockPointer. Only applies to StoreOp; returns false for
-  /// loads.
+  /// Check whether an op was annotated by the 1D→2D reshape in
+  /// MaterializeBlockPointer.
   template <typename OpTy> static bool hasAnnotated1DReshapeStride(OpTy op) {
-    if constexpr (std::is_same_v<OpTy, triton::StoreOp>)
+    if constexpr (std::is_same_v<OpTy, triton::StoreOp> ||
+                  std::is_same_v<OpTy, triton::LoadOp>)
       return op->hasAttr(TritonIntelGPUDialect::getBlockIOStrideAttrName());
     return false;
   }
 
-  /// Return the pitch (in bytes) for a store annotated by the 1D→2D reshape.
+  /// Return the pitch (in bytes) for an op annotated by the 1D→2D reshape.
   /// The stride attribute is in elements; this converts to bytes.
-  /// Returns std::nullopt if the attribute is absent.
+  /// Returns std::nullopt if the attribute is absent, non-positive, or if
+  /// the resulting byte pitch does not fit in a signed 32-bit integer (the
+  /// HW pitch operand is i32).
+  template <typename OpTy>
   static std::optional<int64_t>
-  getAnnotated1DReshapePitch(triton::StoreOp op, unsigned elemSizeInBits) {
-    auto strideAttr = op->getAttrOfType<IntegerAttr>(
+  getAnnotated1DReshapePitch(OpTy op, unsigned elemSizeInBits) {
+    auto strideAttr = op->template getAttrOfType<IntegerAttr>(
         TritonIntelGPUDialect::getBlockIOStrideAttrName());
     if (!strideAttr)
       return std::nullopt;
-    return strideAttr.getInt() * elemSizeInBits / 8;
+    int64_t strideElems = strideAttr.getInt();
+    if (strideElems <= 0)
+      return std::nullopt;
+    int64_t pitchBytes = strideElems * elemSizeInBits / 8;
+    if (pitchBytes > std::numeric_limits<int32_t>::max())
+      return std::nullopt;
+    return pitchBytes;
   }
 
   // Determine whether the given descriptor op can be lowered to using
@@ -2062,9 +2072,30 @@ public:
           const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
               .getAxisInfo(op.getMask());
     }
-    BlockIOTileSizeInfo sizeInfo = getBlockIOTileSize<true /*load*/>(
-        llEncoding.value(), contiguousDim, elemSizeInBits, maskAxisInfo,
-        oneMatrixPerLoadForBT.has_value() ? *oneMatrixPerLoadForBT : false);
+    BlockIOTileSizeInfo sizeInfo = BlockIOTileSizeInfo::unknown();
+    auto blockedEnc = dyn_cast<BlockedEncodingAttr>(encoding);
+    if (hasAnnotated1DReshapeStride(op) && blockedEnc && rank == 2) {
+      // For loads annotated by the 1D->2D reshape, the explicit load encoding
+      // has sizePerThread=[H/warps, 1], threadsPerWarp=[1, tpw]. This matches
+      // 2D block load HW delivery (lane k = col k, registers = rows).
+      unsigned numWarpsRow = blockedEnc.getWarpsPerCTA()[0];
+      int height = tensorType.getDimSize(0) / numWarpsRow;
+      int width = tensorType.getDimSize(rank - 1);
+      auto *ctx = rewriter.getContext();
+      StringAttr kRegister = str_attr("register");
+      unsigned regDimSize = llEncoding->getInDimSize(kRegister);
+      SetVector<unsigned> regPackBases;
+      for (unsigned i = 1; i < regDimSize; i <<= 1)
+        regPackBases.insert(i);
+      sizeInfo = BlockIOTileSizeInfo(height, width, /*numElemPerPackedVal=*/1,
+                                     /*vBlocks=*/1, /*rowDim=*/0,
+                                     /*colDim=*/rank - 1, /*transpose=*/false,
+                                     std::move(regPackBases));
+    } else {
+      sizeInfo = getBlockIOTileSize<true /*load*/>(
+          llEncoding.value(), contiguousDim, elemSizeInBits, maskAxisInfo,
+          oneMatrixPerLoadForBT.has_value() ? *oneMatrixPerLoadForBT : false);
+    }
     if (!sizeInfo.isValid())
       return failure();
     // Extract members to regular variables for C++17 compatibility
@@ -2176,8 +2207,15 @@ public:
     Type load2DGenXType = LLVM::getVectorType(packedType, numValuesPerLoad);
     Type unpackedType = LLVM::getVectorType(eltTy, numElemsPerLoad);
 
-    Value pitch = getPitch(rewriter, ptr, elemSizeInBits,
-                           isTransposeRequired ? colDim : rowDim);
+    // Use the explicit stride attribute if set by the 1D->2D reshape,
+    // otherwise compute pitch from pointer element analysis.
+    Value pitch;
+    if (auto pitchBytes = getAnnotated1DReshapePitch(op, elemSizeInBits)) {
+      pitch = b.i32_val(*pitchBytes);
+    } else {
+      pitch = getPitch(rewriter, ptr, elemSizeInBits,
+                       isTransposeRequired ? colDim : rowDim);
+    }
     if (!pitch)
       return failure();
 

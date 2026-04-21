@@ -22,9 +22,9 @@
 // CHECK: %[[ADD:.*]] = arith.addf %[[LOAD]], %[[LOAD]] : tensor<16x64xf32, #[[$BLOCKED]]>
 // CHECK: tt.return %[[ADD]] : tensor<16x64xf32, #[[$BLOCKED]]>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  tt.func @descriptor_load_forward_propagation(%desc: !tt.tensordesc<tensor<16x64xf32>>) -> tensor<16x64xf32, #blocked1> {
+  tt.func @descriptor_load_forward_propagation(%desc: !tt.tensordesc<16x64xf32>) -> tensor<16x64xf32, #blocked1> {
     %c0 = arith.constant 0 : i32
-    %load = tt.descriptor_load %desc[%c0, %c0] : !tt.tensordesc<tensor<16x64xf32>> -> tensor<16x64xf32, #blocked1>
+    %load = tt.descriptor_load %desc[%c0, %c0] : !tt.tensordesc<16x64xf32> -> tensor<16x64xf32, #blocked1>
     %cvt_to_blocked = ttg.convert_layout %load : tensor<16x64xf32, #blocked1> -> tensor<16x64xf32, #blocked>
     %add = arith.addf %cvt_to_blocked, %cvt_to_blocked : tensor<16x64xf32, #blocked>
     %cvt_back = ttg.convert_layout %add : tensor<16x64xf32, #blocked> -> tensor<16x64xf32, #blocked1>
@@ -52,9 +52,9 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 // CHECK: %[[LOAD:.*]] = tt.descriptor_load {{.*}} -> tensor<16x64xf32, #[[$BLOCKED1]]>
 // CHECK: ttg.convert_layout %[[LOAD]] : tensor<16x64xf32, #[[$BLOCKED1]]> -> tensor<16x64xf32, #[[$BLOCKED]]>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  tt.func @descriptor_load_not_rematerialized(%desc: !tt.tensordesc<tensor<16x64xf32>>, %out: tensor<16x64x!tt.ptr<f32>, #blocked>) {
+  tt.func @descriptor_load_not_rematerialized(%desc: !tt.tensordesc<16x64xf32>, %out: tensor<16x64x!tt.ptr<f32>, #blocked>) {
     %c0 = arith.constant 0 : i32
-    %load = tt.descriptor_load %desc[%c0, %c0] : !tt.tensordesc<tensor<16x64xf32>> -> tensor<16x64xf32, #blocked1>
+    %load = tt.descriptor_load %desc[%c0, %c0] : !tt.tensordesc<16x64xf32> -> tensor<16x64xf32, #blocked1>
     %cvt = ttg.convert_layout %load : tensor<16x64xf32, #blocked1> -> tensor<16x64xf32, #blocked>
     tt.store %out, %cvt : tensor<16x64x!tt.ptr<f32>, #blocked>
     tt.return
@@ -73,12 +73,12 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // CHECK-LABEL: @descriptor_store_dpas_source_forwarding
 // CHECK-NOT: ttg.convert_layout
-// CHECK: tt.descriptor_store {{.*}}, %arg1 : !tt.tensordesc<tensor<8x32xf16>>, tensor<8x32xf16, #mma>
+// CHECK: tt.descriptor_store {{.*}}, %arg1 : !tt.tensordesc<8x32xf16>, tensor<8x32xf16, #mma>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
-  tt.func @descriptor_store_dpas_source_forwarding(%arg0: !tt.tensordesc<tensor<8x32xf16>>, %arg1: tensor<8x32xf16, #mma>) {
+  tt.func @descriptor_store_dpas_source_forwarding(%arg0: !tt.tensordesc<8x32xf16>, %arg1: tensor<8x32xf16, #mma>) {
     %c0_i32 = arith.constant 0 : i32
     %0 = ttg.convert_layout %arg1 : tensor<8x32xf16, #mma> -> tensor<8x32xf16, #blocked>
-    tt.descriptor_store %arg0[%c0_i32, %c0_i32], %0 : !tt.tensordesc<tensor<8x32xf16>>, tensor<8x32xf16, #blocked>
+    tt.descriptor_store %arg0[%c0_i32, %c0_i32], %0 : !tt.tensordesc<8x32xf16>, tensor<8x32xf16, #blocked>
     tt.return
   }
 }
