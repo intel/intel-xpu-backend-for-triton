@@ -1905,8 +1905,7 @@ struct PrefetchOpConversion
     if (!memoryRowMajor)
       return failure();
 
-    auto tensorOfPointers =
-        dyn_cast<RankedTensorType>(op.getPtr().getType());
+    auto tensorOfPointers = dyn_cast<RankedTensorType>(op.getPtr().getType());
     if (!tensorOfPointers)
       return failure();
     unsigned rank = tensorOfPointers.getRank();
