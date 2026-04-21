@@ -5,7 +5,7 @@
 // COM: operations via the cooperative prefetch path.
 
 // COM: Test case: f16 blocked prefetch, 128x64 tensor, 4 warps.
-// COM: With 128x64xf16 and 4 warps (no 256B prefetch support):
+// COM: With 128x64xf16 and 4 warps (256B prefetch support enabled):
 // COM:   tileHeight=32, tileWidth=32 -> vBlocks=2, tile_width=16
 // COM:   warpsM=2, warpsN=2
 // COM:   numTilesPerWarp = (128*64) / (32*32*4) = 2

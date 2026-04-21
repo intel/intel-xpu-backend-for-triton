@@ -10,6 +10,8 @@
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/MathExtras.h"
+#include <limits>
 
 #define DEBUG_TYPE "tritonintelgpu-pipeline"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -53,13 +55,22 @@ struct PrefetchCandidate {
 
 /// Return the multi-buffered byte cost of a load's result tensor.
 /// Each prefetched load is kept live for \p numStages iterations.
+/// Returns UINT_MAX when the tensor is non-ranked or has dynamic
+/// dimensions, so callers that compare against a byte budget skip the
+/// load conservatively. Uses ceil-div on bits/8 to avoid under-counting
+/// sub-byte types, and widens arithmetic to int64_t to avoid overflow
+/// on large tensors before saturating back to unsigned.
 static unsigned getTileBytes(Operation *op, int numStages) {
   auto tensorType = dyn_cast<RankedTensorType>(op->getResultTypes()[0]);
-  if (!tensorType)
-    return 0;
+  if (!tensorType || !tensorType.hasStaticShape())
+    return std::numeric_limits<unsigned>::max();
   unsigned bits = tensorType.getElementType().getIntOrFloatBitWidth();
   int64_t numElems = tensorType.getNumElements();
-  return static_cast<unsigned>(numElems * bits / 8) * numStages;
+  int64_t bytesPerElem = llvm::divideCeil(bits, 8u);
+  int64_t totalBytes = numElems * bytesPerElem * numStages;
+  return (totalBytes > std::numeric_limits<unsigned>::max())
+             ? std::numeric_limits<unsigned>::max()
+             : static_cast<unsigned>(totalBytes);
 }
 
 /// Collect all prefetch candidates from the loop body. Dot-feeding loads

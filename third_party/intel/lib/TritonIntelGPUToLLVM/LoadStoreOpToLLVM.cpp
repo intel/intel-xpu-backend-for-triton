@@ -1905,7 +1905,10 @@ struct PrefetchOpConversion
     if (!memoryRowMajor)
       return failure();
 
-    auto tensorOfPointers = cast<RankedTensorType>(op.getPtr().getType());
+    auto tensorOfPointers =
+        dyn_cast<RankedTensorType>(op.getPtr().getType());
+    if (!tensorOfPointers)
+      return failure();
     unsigned rank = tensorOfPointers.getRank();
     if (rank < 2)
       return failure();
@@ -1972,8 +1975,8 @@ struct PrefetchOpConversion
     // baseWidth must equal the row stride (surface width) because the HW
     // computes addresses as base + y * pitch + x. Using the tile width would
     // be wrong when pitch > tile width.
-    // baseHeight uses the tile height — each warp's offsetY stays within the
-    // tile, so this is sufficient for bounds checking.
+    // baseHeight is the full logical tensor height (surface height), not the
+    // tile height, so the hardware's bounds checking spans the whole tensor.
     Value baseWidth = b.i64_val(stride);
     Value baseHeight = b.i64_val(tensorShape[rank - 2]);
 
@@ -1982,12 +1985,15 @@ struct PrefetchOpConversion
     Value offsetBaseY = b.i32_val(0);
 
     // Prepare extra-dim strides (bytes, i64) and base offsets (i32) for
-    // rank > 2.
+    // rank > 2. Silently substituting 0 for an unknown/negative stride
+    // would synthesize aliasing addresses across outer-dim slices (all
+    // slices would prefetch the same (x,y) surface), so bail out instead.
     SmallVector<Value> extraDimStrides, extraDimBaseOffsets;
     for (unsigned d = 0; d < rank - 2; ++d) {
       int dimStride = getStride(op.getPtr(), d);
-      extraDimStrides.push_back(
-          b.i64_val(dimStride > 0 ? dimStride * elemSizeInBytes : 0));
+      if (dimStride <= 0)
+        return failure();
+      extraDimStrides.push_back(b.i64_val(dimStride * elemSizeInBytes));
       extraDimBaseOffsets.push_back(b.i32_val(0));
     }
 
