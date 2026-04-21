@@ -32,8 +32,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %c1_i64 = arith.constant 1 : i64
     %c0_i64 = arith.constant 0 : i64
     %cst = arith.constant dense<0.000000e+00> : tensor<64x256xf32, #dpas>
-    %desc_a = tt.make_tensor_descriptor %arg0, [%arg4, %arg4], [%c0_i64, %c1_i64] : <f16>, <tensor<64x32xf16>>
-    %desc_b = tt.make_tensor_descriptor %arg1, [%arg4, %arg4], [%c0_i64, %c1_i64] : <f16>, <tensor<32x256xf16>>
+    %desc_a = tt.make_tensor_descriptor %arg0, [%arg4, %arg4], [%c0_i64, %c1_i64] : <f16>, <64x32xf16>
+    %desc_b = tt.make_tensor_descriptor %arg1, [%arg4, %arg4], [%c0_i64, %c1_i64] : <f16>, <32x256xf16>
     // COM: In the loop, the addf result feeds both the convert_layout (for dot)
     // COM: and a store. The store use prevents backward rematerialization from
     // COM: firing (duplication cost). hoistConvertDotOperand should still hoist
@@ -48,8 +48,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK:   tt.store %arg3, %[[A2_BLOCKED]] : tensor<64x32x!tt.ptr<f16>, #blocked>
     // CHECK:   scf.yield
     %result = scf.for %iv = %c0_i32 to %arg4 step %c32_i32 iter_args(%acc = %cst) -> (tensor<64x256xf32, #dpas>) : i32 {
-      %a = tt.descriptor_load %desc_a[%c0_i32, %iv] : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #blocked>
-      %b = tt.descriptor_load %desc_b[%iv, %c0_i32] : !tt.tensordesc<tensor<32x256xf16>> -> tensor<32x256xf16, #blocked1>
+      %a = tt.descriptor_load %desc_a[%c0_i32, %iv] : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #blocked>
+      %b = tt.descriptor_load %desc_b[%iv, %c0_i32] : !tt.tensordesc<32x256xf16> -> tensor<32x256xf16, #blocked1>
       %a2 = arith.addf %a, %a : tensor<64x32xf16, #blocked>
       %a_dot = ttg.convert_layout %a2 : tensor<64x32xf16, #blocked> -> tensor<64x32xf16, #dot0>
       %b_dot = ttg.convert_layout %b : tensor<32x256xf16, #blocked1> -> tensor<32x256xf16, #dot1>
@@ -59,8 +59,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
       tt.store %arg3, %a2 : tensor<64x32x!tt.ptr<f16>, #blocked>
       scf.yield %d : tensor<64x256xf32, #dpas>
     }
-    %desc_c = tt.make_tensor_descriptor %arg2, [%arg4, %arg4], [%c0_i64, %c1_i64] : <f32>, <tensor<64x256xf32>>
-    tt.descriptor_store %desc_c[%c0_i32, %c0_i32], %result : !tt.tensordesc<tensor<64x256xf32>>, tensor<64x256xf32, #dpas>
+    %desc_c = tt.make_tensor_descriptor %arg2, [%arg4, %arg4], [%c0_i64, %c1_i64] : <f32>, <64x256xf32>
+    tt.descriptor_store %desc_c[%c0_i32, %c0_i32], %result : !tt.tensordesc<64x256xf32>, tensor<64x256xf32, #dpas>
     tt.return
   }
 }
