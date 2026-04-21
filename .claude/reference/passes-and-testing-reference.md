@@ -96,7 +96,6 @@ Module attributes for device capabilities are listed in `intel-gpu-hardware.md` 
 | RemoveMasks | `triton-intel-remove-masks` | Manual walk + TypeSwitch | — |
 | StrideVersioning | `triton-intel-stride-versioning` | Manual walk + if-conversion | — |
 | BlockPointerToTensorDesc | `triton-intel-block-pointer-to-tdesc` | Manual pattern matching | — |
-| TensorDescToBlockPointer | `triton-intel-tdesc-to-block-pointer` | Manual pattern matching | — |
 | RewriteTensorDescToPointer | `triton-intel-rewrite-tensor-descriptor-to-pointer` | Manual walk | — |
 | FuseReshape | `triton-intel-fuse-reshape` | Manual pattern matching | — |
 | SimplifySignedArithmetic | `triton-intel-simplify-signed-arithmetic` | Manual pattern matching | — |
@@ -130,7 +129,7 @@ Module attributes for device capabilities are listed in `intel-gpu-hardware.md` 
 
 | Transform | File | Description |
 |-----------|------|-------------|
-| LLVMIRFreezeMaskedDivRem | `LLVMIRFreezeMaskedDivRem.cpp` | Insert freeze for masked div/rem |
+| LLVMIRGuardMaskedDivRem | `LLVMIRGuardMaskedDivRem.cpp` | Guard masked div/rem against zero divisors |
 | PostProcess | `PostProcess.cpp` | Final LLVM IR cleanup |
 
 ## From intel-testing.md
@@ -165,7 +164,6 @@ TTIR passes:
 - `-triton-intel-remove-masks`
 - `-triton-intel-stride-versioning`
 - `-triton-intel-block-pointer-to-tdesc`
-- `-triton-intel-tdesc-to-block-pointer`
 - `-triton-intel-fuse-reshape`
 
 TTGIR passes:

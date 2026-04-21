@@ -165,6 +165,11 @@ static bool isSPVBuiltinAvailableImpl(TritonGEN::Matrix2DBlockLoadOp op) {
 static bool isSPVBuiltinAvailableImpl(TritonGEN::Matrix2DBlockStoreOp op) {
   // FIXME: The following signatures are not valid in SPV interface.
 
+  // intel_sub_group_2d_block_write_32b_4r4x1c
+  if (op.getElemSizeInBits() == 32 && op.getTileHeight() == 4 &&
+      op.getTileWidth() == 4 && op.getVBlocks() == 1)
+    return false;
+
   // FIXME: The SPV block store only support subgroup size 16.
   int subGroupSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(
       op->getParentOfType<mlir::ModuleOp>());

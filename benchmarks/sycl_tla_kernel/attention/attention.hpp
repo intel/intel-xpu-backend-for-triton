@@ -1,9 +1,9 @@
 #include "flash_attention_v2/collective/fmha_fusion.hpp"
-#include "flash_attention_v2/collective/xe_flash_attn_prefill_epilogue.hpp"
-#include "flash_attention_v2/collective/xe_flash_attn_prefill_mma.hpp"
-#include "flash_attention_v2/collective/xe_flash_attn_prefill_softmax_epilogue.hpp"
-#include "flash_attention_v2/kernel/tile_scheduler.hpp"
-#include "flash_attention_v2/kernel/xe_flash_attn_prefill.hpp"
+#include "flash_attention_v2/collective/legacy/xe_flash_attn_prefill_epilogue.hpp"
+#include "flash_attention_v2/collective/legacy/xe_flash_attn_prefill_mma.hpp"
+#include "flash_attention_v2/collective/legacy/xe_flash_attn_prefill_softmax_epilogue.hpp"
+#include "flash_attention_v2/kernel/legacy/tile_scheduler.hpp"
+#include "flash_attention_v2/kernel/legacy/xe_flash_attn_prefill.hpp"
 
 #include "cutlass/gemm/dispatch_policy.hpp"
 

@@ -25,7 +25,7 @@ PvcGemmBF16BF16FP32_RRR_2 --bm_name=bf16_bf16_fp32 --l=4096 --m=8 --k=128 --n=16
 
 # NEW SHAPES : `cutlass-sycl/benchmarks/device/pvc/input_files/input_pytorch_2.in`
 
-PvcGemmBF16BF16FP32_RCR_16 --bm_name=bf16_bf16_fp32 --l=1 --m=1 --k=4096 --n=1024
+PvcGemmBF16BF16FP32_RRR_5 --bm_name=bf16_bf16_fp32 --l=1 --m=1 --k=4096 --n=1024
 PvcGemmBF16BF16FP32_RRR_5 --bm_name=bf16_bf16_fp32 --l=1 --m=1 --k=4096 --n=4096
 PvcGemmBF16BF16FP32_RRR_5 --bm_name=bf16_bf16_fp32 --l=1 --m=1 --k=14336 --n=4096
 PvcGemmBF16BF16FP32_RRR_5 --bm_name=bf16_bf16_fp32 --l=1 --m=1 --k=4096 --n=6144

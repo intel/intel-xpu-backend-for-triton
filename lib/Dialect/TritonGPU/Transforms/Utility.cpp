@@ -87,10 +87,6 @@ SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
   }
 }
 
-bool isLoadFromTensorPtr(triton::LoadOp op) {
-  return mlir::triton::isTensorPointerType(op.getPtr().getType());
-}
-
 SmallVector<unsigned, 4>
 getOrderFromContiguity(const SmallVector<int64_t> &arr) {
   SmallVector<unsigned, 4> ret(arr.size());
@@ -316,6 +312,9 @@ std::string GraphLayoutMarker::getColor(const Type &type) const {
 // -------------------------------------------------------------------------- //
 
 static Attribute inferDstEncoding(triton::ReduceOp op, Attribute encoding) {
+  // If the input is rank 1, the output is a scalar value.
+  if (cast<ttg::LayoutEncodingTrait>(encoding).getRank() == 1)
+    return {};
   return triton::gpu::SliceEncodingAttr::get(
       op->getContext(), op.getAxis(),
       cast<ttg::DistributedEncodingTrait>(encoding));
@@ -591,15 +590,10 @@ Attribute inferDstEncoding(Operation *op, Attribute encoding) {
 }
 
 bool isExpensiveLoadOrStore(Operation *op) {
-  // Case 1: Pointer of tensor is always expensive
-  auto operandType = op->getOperand(0).getType();
-  if (triton::isTensorPointerType(operandType))
-    return true;
-  // Case 2a: A size 1 tensor is not expensive since all threads will load the
-  // same
+  // size 1 tensor is not expensive since all threads will load the same
   if (isSingleValue(op->getOperand(0)))
     return false;
-  // Case 2b: Tensor of pointers has more threads than elements
+  // Tensor of pointers has more threads than elements
   // we can presume a high hit-rate that makes it cheap to load
   auto ptrType = cast<RankedTensorType>(op->getOperand(0).getType());
   auto mod = op->getParentOfType<ModuleOp>();
@@ -874,7 +868,6 @@ LogicalResult getConvertBackwardSlice(
 
   auto updateLayout = [&](Value value, Attribute encoding) {
     assert((isa<RankedTensorType>(value.getType())));
-    slice.insert(value);
     Attribute &existing = layout[value];
     if (existing && existing != encoding)
       return failure();
@@ -886,7 +879,8 @@ LogicalResult getConvertBackwardSlice(
     auto [currentValueUse, encoding] = queue.back();
     Value currentValue = currentValueUse->get();
     queue.pop_back();
-    if (!isa<RankedTensorType>(currentValue.getType()))
+    auto currentValueType = dyn_cast<RankedTensorType>(currentValue.getType());
+    if (!currentValueType)
       continue;
     // Skip propagating through for op/while op/ws op results for now.
     // TODO: enable this based on needs.
@@ -895,6 +889,11 @@ LogicalResult getConvertBackwardSlice(
       return failure();
     if (failed(updateLayout(currentValue, encoding)))
       return failure();
+    // If the value already has the desired encoding, we can stop here without
+    // adding it to the slice.
+    if (currentValueType.getEncoding() == encoding)
+      continue;
+    slice.insert(currentValue);
 
     // If there is already an existing conversion to the target layout, we don't
     // need to propagate to the operands.
@@ -925,6 +924,7 @@ LogicalResult getConvertBackwardSlice(
           continue;
         if (failed(updateLayout(result, encoding)))
           return failure();
+        slice.insert(result);
       }
       if (isFreeConvert(definingOp)) {
         enqueue(definingOp->getOpOperand(0), encoding);
@@ -955,13 +955,6 @@ LogicalResult getConvertBackwardSlice(
         }
         if (!srcEncoding)
           return failure();
-        // If the infered layout matches the original one we don't need to keep
-        // propagating.
-        if (auto operandType =
-                dyn_cast<RankedTensorType>(operand.get().getType())) {
-          if (srcEncoding == operandType.getEncoding())
-            continue;
-        }
         enqueue(operand, srcEncoding);
       }
       continue;
@@ -1201,9 +1194,6 @@ static bool skipOperand(Operation *op, unsigned operandNumber) {
 Operation *convertDistributedOpEncoding(Attribute encoding, Operation *op) {
   OpBuilder builder(op);
   // Convert operands
-  // For load/store with tensor pointers, we don't have to change the
-  // operands' type, we do this by changing the outputs' type of
-  // `make_tensor_ptr`
   SmallVector<Value, 4> newArgs;
   for (auto &opOperand : op->getOpOperands()) {
     Value operand = opOperand.get();

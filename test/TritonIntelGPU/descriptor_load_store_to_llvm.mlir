@@ -1,4 +1,4 @@
-// RUN: TRITON_INTEL_PREDICATED_LOAD=1 TRITON_INTEL_PREDICATED_STORE=1 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s
+// RUN: env TRITON_INTEL_PREDICATED_LOAD=1 env TRITON_INTEL_PREDICATED_STORE=1 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s
 
 // Test that tt.descriptor_load and tt.descriptor_store are converted to LLVM
 // gather loads/stores when going through the Intel GPU to LLVM conversion.
@@ -14,7 +14,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     %c1_i64 = arith.constant 1 : i64
     %c4_i64 = arith.constant 4 : i64
     %c4_i32 = arith.constant 4 : i32
-    %0 = tt.make_tensor_descriptor %arg0, [%c4_i32, %c4_i32], [%c1_i64, %c4_i64] {order = array<i32: 0>} : <f32>, <tensor<4x4xf32>>
+    %0 = tt.make_tensor_descriptor %arg0, [%c4_i32, %c4_i32], [%c1_i64, %c4_i64] {order = array<i32: 0>} : <f32>, <4x4xf32>
 
     // Verify the tensor descriptor is constructed as an LLVM struct with:
     //   [0]: shape0 (i64), [1]: shape1 (i64), [2]: stride0 (i64), [3]: stride1 (i64), [4]: base_ptr (ptr<1>)
@@ -56,7 +56,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK: ^[[BB_MERGE]](%{{.*}}: i32):
 
     // CHECK: llvm.return
-    %3 = tt.descriptor_load %0[%arg1, %arg2] : !tt.tensordesc<tensor<4x4xf32>> -> tensor<4x4xf32, #blocked>
+    %3 = tt.descriptor_load %0[%arg1, %arg2] : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
     tt.return %3 : tensor<4x4xf32, #blocked>
   }
 }
@@ -75,7 +75,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     %c1_i64 = arith.constant 1 : i64
     %c4_i64 = arith.constant 4 : i64
     %c4_i32 = arith.constant 4 : i32
-    %0 = tt.make_tensor_descriptor %arg0, [%c4_i32, %c4_i32], [%c1_i64, %c4_i64] {order = array<i32: 0>} : <f32>, <tensor<4x4xf32>>
+    %0 = tt.make_tensor_descriptor %arg0, [%c4_i32, %c4_i32], [%c1_i64, %c4_i64] {order = array<i32: 0>} : <f32>, <4x4xf32>
 
     // Verify the tensor descriptor is constructed as an LLVM struct with:
     //   [0]: shape0 (i64), [1]: shape1 (i64), [2]: stride0 (i64), [3]: stride1 (i64), [4]: base_ptr (ptr<1>)
@@ -115,7 +115,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK: triton_gen.predicated_load %[[LOAD_PTR]], %{{.*}}, %[[PRED]], %{{.*}} {cache_control = Default} : (!llvm.ptr<1>, i64, i1, i32) -> i32
 
     // CHECK: llvm.return
-    %3 = tt.descriptor_load %0[%arg1, %arg2] : !tt.tensordesc<tensor<4x4xf32>> -> tensor<4x4xf32, #blocked>
+    %3 = tt.descriptor_load %0[%arg1, %arg2] : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
     tt.return %3 : tensor<4x4xf32, #blocked>
   }
 }
@@ -130,7 +130,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     %c1_i64 = arith.constant 1 : i64
     %c4_i64 = arith.constant 4 : i64
     %c4_i32 = arith.constant 4 : i32
-    %0 = tt.make_tensor_descriptor %arg0, [%c4_i32, %c4_i32], [%c1_i64, %c4_i64] {order = array<i32: 0>} : <f32>, <tensor<4x4xf32>>
+    %0 = tt.make_tensor_descriptor %arg0, [%c4_i32, %c4_i32], [%c1_i64, %c4_i64] {order = array<i32: 0>} : <f32>, <4x4xf32>
     // Verify the tensor descriptor is constructed as an LLVM struct
     // CHECK: %[[DESC:.*]] = llvm.insertvalue %{{.*}}, %{{.*}}[4] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
 
@@ -177,7 +177,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK: ^[[BB_MERGE]]:
 
     // CHECK: llvm.return
-    tt.descriptor_store %0[%arg1, %arg2], %arg3 : !tt.tensordesc<tensor<4x4xf32>>, tensor<4x4xf32, #blocked>
+    tt.descriptor_store %0[%arg1, %arg2], %arg3 : !tt.tensordesc<4x4xf32>, tensor<4x4xf32, #blocked>
     tt.return
   }
 }
@@ -196,7 +196,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     %c1_i64 = arith.constant 1 : i64
     %c4_i64 = arith.constant 4 : i64
     %c4_i32 = arith.constant 4 : i32
-    %0 = tt.make_tensor_descriptor %arg0, [%c4_i32, %c4_i32], [%c1_i64, %c4_i64] {order = array<i32: 0>} : <f32>, <tensor<4x4xf32>>
+    %0 = tt.make_tensor_descriptor %arg0, [%c4_i32, %c4_i32], [%c1_i64, %c4_i64] {order = array<i32: 0>} : <f32>, <4x4xf32>
     // Verify the tensor descriptor is constructed as an LLVM struct
     // CHECK: %[[DESC:.*]] = llvm.insertvalue %{{.*}}, %{{.*}}[4] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
 
@@ -241,7 +241,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK: triton_gen.predicated_store %[[STORE_PTR]], %{{.*}}, %{{.*}}, %[[STORE_PRED]] {cache_control = Default} : (!llvm.ptr<1>, i32, i64, i1)
 
     // CHECK: llvm.return
-    tt.descriptor_store %0[%arg1, %arg2], %arg3 : !tt.tensordesc<tensor<4x4xf32>>, tensor<4x4xf32, #blocked>
+    tt.descriptor_store %0[%arg1, %arg2], %arg3 : !tt.tensordesc<4x4xf32>, tensor<4x4xf32, #blocked>
     tt.return
   }
 }
@@ -260,7 +260,64 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
   //   {shape0: i64, shape1: i64, stride0: i64, stride1: i64, base_ptr: ptr<1>}
   // CHECK-SAME: %{{.*}}: !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
   // CHECK-SAME: %{{.*}}: i32
-  tt.func public @arg_attr(%arg0: !tt.tensordesc<tensor<4x4xf32>>, %arg1: i32 {tt.divisibility = 16 : i32}) {
+  tt.func public @arg_attr(%arg0: !tt.tensordesc<4x4xf32>, %arg1: i32 {tt.divisibility = 16 : i32}) {
     tt.return
+  }
+}
+
+// -----
+
+// Test vectorized descriptor load and store: with sizePerThread > 1 and stride-1
+// on the fast dimension, the gather fallback should emit wider (vectorized) I/O.
+// Here sizePerThread=[1,4] with f16 gives vec=4 (4*16=64 bits < 128 bit max).
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_predicated_io"} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @vectorized_descriptor_load_store
+  tt.func public @vectorized_descriptor_load_store(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32) -> (tensor<4x16xf16, #blocked>) {
+    %c4_i32 = arith.constant 4 : i32
+    %c16_i32 = arith.constant 16 : i32
+    %c16_i64 = arith.constant 16 : i64
+    %c1_i64 = arith.constant 1 : i64
+    // stride = [16, 1] → stride-1 on dim 1 (the fast dimension with order=[1,0])
+    %desc = tt.make_tensor_descriptor %arg0, [%c4_i32, %c16_i32], [%c16_i64, %c1_i64] : <f16>, <4x16xf16>
+
+    // With vec=4 and f16: totalWidth=64, maxWordWidth=32, width=32, nWords=2.
+    // Return type is vector<2xi32>. Verify wider-than-scalar predicated loads.
+    // CHECK: triton_gen.predicated_load {{.*}} : (!llvm.ptr<1>, i64, i1, vector<2xi32>) -> vector<2xi32>
+    %load = tt.descriptor_load %desc[%arg1, %arg2] : !tt.tensordesc<4x16xf16> -> tensor<4x16xf16, #blocked>
+
+    // Verify wider-than-scalar predicated stores with the same descriptor.
+    // CHECK: triton_gen.predicated_store {{.*}}, %{{.*}}, %{{.*}}, %{{.*}} {cache_control = Default} : (!llvm.ptr<1>, vector<2xi32>, i64, i1)
+    tt.descriptor_store %desc[%arg1, %arg2], %load : !tt.tensordesc<4x16xf16>, tensor<4x16xf16, #blocked>
+    tt.return %load : tensor<4x16xf16, #blocked>
+  }
+}
+
+// -----
+
+// Negative test: stride != 1 on the fast dimension prevents vectorization.
+// With stride[1] unknown (not constant 1), vec should be 1, producing scalar I/O.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_predicated_io"} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @no_vec_non_unit_stride
+  tt.func public @no_vec_non_unit_stride(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32, %arg3: i64) -> (tensor<4x16xf16, #blocked>) {
+    %c4_i32 = arith.constant 4 : i32
+    %c16_i32 = arith.constant 16 : i32
+    %c16_i64 = arith.constant 16 : i64
+    // stride = [16, %arg3] → stride on dim 1 is unknown (not constant 1)
+    %desc = tt.make_tensor_descriptor %arg0, [%c4_i32, %c16_i32], [%c16_i64, %arg3] : <f16>, <4x16xf16>
+
+    // With unknown stride on the fast dimension, vec=1. Loads should be 16-bit (scalar f16).
+    // CHECK: triton_gen.predicated_load {{.*}} : (!llvm.ptr<1>, i64, i1, i16) -> i16
+    %load = tt.descriptor_load %desc[%arg1, %arg2] : !tt.tensordesc<4x16xf16> -> tensor<4x16xf16, #blocked>
+
+    // Stores should also be 16-bit (scalar f16).
+    // CHECK: triton_gen.predicated_store {{.*}}, %{{.*}}, %{{.*}}, %{{.*}} {cache_control = Default} : (!llvm.ptr<1>, i16, i64, i1)
+    tt.descriptor_store %desc[%arg1, %arg2], %load : !tt.tensordesc<4x16xf16>, tensor<4x16xf16, #blocked>
+    tt.return %load : tensor<4x16xf16, #blocked>
   }
 }

@@ -1,15 +1,13 @@
 # pylint: disable=too-many-lines
 import dataclasses
-from typing import Any, cast
-from unittest.mock import patch
-from pathlib import Path
-
 import json
 import re
-
-import pytest
+from pathlib import Path
+from typing import Any, cast
+from unittest.mock import patch
 
 import pandas as pd
+import pytest
 
 import triton_utils
 
@@ -60,7 +58,8 @@ TESTS_WITH_MULTIPLE_TESTSUITES = {
         <testcase classname="test.unit.language.test_core" name="test_reduce_layouts[sum-int32-reduce2d-1-src_layout8-32-128]" time="0.114" />
     </testsuite>
 </testsuites>
-''', 'interpreter.xml':
+''',
+    'interpreter.xml':
     '''<?xml version="1.0" encoding="utf-8"?>
 <testsuites>
     <testsuite name="pytest" errors="0" failures="0" skipped="0" tests="1" time="0.114" timestamp="2024-04-05T11:03:23.033702" hostname="hostname">
@@ -188,19 +187,116 @@ def test_export_to_csv(tmp_path):
         assert e.code == 0
 
 
-def test_save_to_pass_rate_json(tmp_path):
-    rep1 = tmp_path / 'language.xml'
-    rep1.write_text(TESTS_WITH_DIFFERENT_STATUSES['language.xml'], encoding='utf-8')
-    config = dataclasses.replace(
-        triton_utils.Config(),
+@pytest.mark.parametrize(
+    ('has_explicit_level', 'expected_total'),
+    [
+        (False, 8),  # Default: both language (5) and scaled_dot (3)
+        (True, 8),   # Explicit level='all': same result
+    ]
+)
+def test_pass_rate_level_all(tmp_path, has_explicit_level, expected_total):
+    """Test that level='all' creates a single JSON file (default and explicit)."""
+    language_xml = tmp_path / 'language.xml'
+    language_xml.write_text(TESTS_WITH_DIFFERENT_STATUSES['language.xml'], encoding='utf-8')
+
+    scaled_dot_xml = tmp_path / 'scaled_dot.xml'
+    scaled_dot_xml.write_text(TESTS_WITH_DIFFERENT_STATUSES['scaled_dot.xml'], encoding='utf-8')
+
+    json_file = tmp_path / 'report.json'
+
+    # Build config with or without explicit level
+    config_kwargs = {
+        'action': 'pass_rate',
+        'reports': str(tmp_path),
+        'save_to_json': str(json_file),
+    }
+    if has_explicit_level:
+        config_kwargs['pass_rate_level'] = 'all'
+
+    config = triton_utils.Config(**config_kwargs)
+    triton_utils.PassRateActionRunner(config=config)()
+
+    # Verify single JSON file created
+    assert json_file.exists()
+    with open(json_file, encoding='utf-8') as f:
+        data = json.load(f)
+
+    # Should have aggregate stats for all testsuites
+    assert data['testsuite'] == 'all'
+    assert data['total'] == expected_total
+    assert 'passed' in data
+    assert 'failed' in data
+
+
+def test_pass_rate_level_testsuite_jsonl(tmp_path):
+    """Test that level='testsuite' creates a JSONL file with one JSON per testsuite."""
+    language_xml = tmp_path / 'language.xml'
+    language_xml.write_text(TESTS_WITH_DIFFERENT_STATUSES['language.xml'], encoding='utf-8')
+
+    scaled_dot_xml = tmp_path / 'scaled_dot.xml'
+    scaled_dot_xml.write_text(TESTS_WITH_DIFFERENT_STATUSES['scaled_dot.xml'], encoding='utf-8')
+
+    jsonl_file = tmp_path / 'report.jsonl'
+    config = triton_utils.Config(
         action='pass_rate',
         reports=str(tmp_path),
-        save_to_json=str(tmp_path / 'pass_rate.json'),
+        save_to_json=str(jsonl_file),
+        pass_rate_level='testsuite',
     )
-    try:
-        triton_utils.run(config)
-    except SystemExit as e:
-        assert e.code == 0
+    triton_utils.PassRateActionRunner(config=config)()
+
+    # Verify JSONL file created
+    assert jsonl_file.exists()
+
+    # Read and parse JSONL (one JSON per line)
+    with open(jsonl_file, encoding='utf-8') as f:
+        lines = f.readlines()
+
+    # Should have 2 lines (one per testsuite)
+    assert len(lines) == 2
+
+    # Parse each line as JSON
+    testsuites_data = [json.loads(line) for line in lines]
+
+    # Verify structure
+    testsuite_names = {data['testsuite'] for data in testsuites_data}
+    assert testsuite_names == {'language', 'scaled_dot'}
+
+    # Verify each has stats
+    for data in testsuites_data:
+        assert 'testsuite' in data
+        assert 'passed' in data
+        assert 'failed' in data
+        assert 'total' in data
+        assert 'ts' in data  # Common metadata present
+        assert 'git_ref' in data
+
+    # Verify language testsuite stats
+    language_data = next(d for d in testsuites_data if d['testsuite'] == 'language')
+    assert language_data['total'] == 5
+
+    # Verify scaled_dot testsuite stats
+    scaled_dot_data = next(d for d in testsuites_data if d['testsuite'] == 'scaled_dot')
+    assert scaled_dot_data['total'] == 3
+
+
+def test_pass_rate_invalid_level(tmp_path):
+    """Test that invalid level value raises an error."""
+    language_xml = tmp_path / 'language.xml'
+    language_xml.write_text(TESTS_WITH_DIFFERENT_STATUSES['language.xml'], encoding='utf-8')
+
+    json_file = tmp_path / 'report.json'
+    config = triton_utils.Config(
+        action='pass_rate',
+        reports=str(tmp_path),
+        save_to_json=str(json_file),
+        pass_rate_level='invalid',  # This should be caught by argparse
+    )
+
+    # Note: argparse validation happens at CLI level, so this test is mainly
+    # for completeness if someone bypasses CLI and calls directly
+    with pytest.raises(ValueError, match='Unsupported level'):
+        triton_utils.PassRateActionRunner(config=config)()
 
 
 def test_multiple_test_suites(tmp_path):
@@ -527,6 +623,14 @@ def test_tests_with_multiple_results(  # pylint: disable=R0913, R0914, R0917
             )
         ),
         (
+            'pass_rate --reports /path/to/reports --level testsuite',
+            triton_utils.Config(
+                action='pass_rate',
+                reports='/path/to/reports',
+                pass_rate_level='testsuite',
+            )
+        ),
+        (
             'tests_stats --r /path/to/reports --status skipped',
             triton_utils.Config(
                 action='tests_stats',
@@ -668,7 +772,7 @@ def test_flaky_tests_detection(  # pylint: disable=R0913, R0914, R0917
     assert pass_rate_dict['xfailed'] == xfailed
     assert pass_rate_dict['failed'] == failed
 
-    assert is_flaky and '[WARNING] Flaky test detected:' in warnings_out or not is_flaky
+    assert (is_flaky and '[WARNING] Flaky test detected:' in warnings_out) or not is_flaky
 
 
 TESTS_WITH_NO_CLASSNAME_AND_NAME = {

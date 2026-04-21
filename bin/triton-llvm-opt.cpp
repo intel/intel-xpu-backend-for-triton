@@ -43,9 +43,14 @@ static cl::opt<bool>
                         llvm::cl::desc("run pass to break phi struct"),
                         cl::init(false));
 
-static cl::opt<bool> FreezeMaskedDivRem(
-    "freeze-masked-div-rem",
-    llvm::cl::desc("run pass to insert freeze between masked load and div/rem"),
+static cl::opt<bool> GuardMaskedDivRem(
+    "guard-masked-div-rem",
+    llvm::cl::desc("run pass to guard masked div/rem against zero divisors"),
+    cl::init(false));
+
+static cl::opt<bool> ExpandSaddOverflow(
+    "expand-sadd-overflow",
+    llvm::cl::desc("expand llvm.sadd.with.overflow into plain arithmetic"),
     cl::init(false));
 
 namespace {
@@ -65,11 +70,13 @@ static std::function<Error(Module *)> makeOptimizingPipeline() {
     pb.crossRegisterProxies(lam, fam, cgam, mam);
 
     ModulePassManager mpm;
+    if (ExpandSaddOverflow)
+      mpm.addPass(ExpandSaddWithOverflowPass());
     llvm::FunctionPassManager fpm;
     if (BreakStructPhiNodes)
       fpm.addPass(BreakStructPhiNodesPass());
-    if (FreezeMaskedDivRem)
-      fpm.addPass(FreezeMaskedDivRemPass());
+    if (GuardMaskedDivRem)
+      fpm.addPass(GuardMaskedDivRemPass());
     mpm.addPass(createModuleToFunctionPassAdaptor(std::move(fpm)));
     mpm.run(*m, mam);
     return Error::success();

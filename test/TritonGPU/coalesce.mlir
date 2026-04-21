@@ -121,19 +121,6 @@ tt.func public @load_tensors_two_types(%arg0: !tt.ptr<f32> {tt.divisibility = 16
 
 // -----
 
-// COM: Reproducer for issue #3866
-// CHECK-LABEL: @test_3866
-// CHECK: tt.load {{.*}} : !tt.ptr<tensor<64x16xf16>
-module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  tt.func public @test_3866(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i64) {
-    %0 = tt.make_tensor_ptr %arg0, [%arg2, %arg2], [%arg2, %arg2], [%arg1, %arg1] {order = array<i32: 1, 0>} : <tensor<64x16xf16>>
-    %1 = tt.load %0 : !tt.ptr<tensor<64x16xf16>>
-    tt.return
-  }
-}
-
-// -----
-
 // COM: Reproducer for issue #5122
 // CHECK-LABEL: @test_5122
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
@@ -220,12 +207,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @descriptor_store
-  tt.func public @descriptor_store(%arg0: !tt.tensordesc<tensor<2x64xf16>>) {
+  tt.func public @descriptor_store(%arg0: !tt.tensordesc<2x64xf16>) {
     %c0_i32 = arith.constant 0 : i32
     %cst = arith.constant dense<0.000000e+00> : tensor<2x64xf16, #blocked>
     // CHECK: %[[C:.+]] = ttg.convert_layout %{{.+}} : tensor<2x64xf16, #{{.+}}> -> tensor<2x64xf16, #[[$LAYOUT]]>
-    // CHECK: tt.descriptor_store {{.*}}, %[[C]] : !tt.tensordesc<tensor<2x64xf16>>, tensor<2x64xf16, #[[$LAYOUT]]>
-    tt.descriptor_store %arg0[%c0_i32, %c0_i32], %cst : !tt.tensordesc<tensor<2x64xf16>>, tensor<2x64xf16, #blocked>
+    // CHECK: tt.descriptor_store {{.*}}, %[[C]] : !tt.tensordesc<2x64xf16>, tensor<2x64xf16, #[[$LAYOUT]]>
+    tt.descriptor_store %arg0[%c0_i32, %c0_i32], %cst : !tt.tensordesc<2x64xf16>, tensor<2x64xf16, #blocked>
     tt.return
   }
 }

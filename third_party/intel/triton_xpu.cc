@@ -57,10 +57,6 @@ static uint32_t findKernels(llvm::Module &M,
 }
 
 void init_triton_intel_passes_ttir(py::module &&m) {
-  ADD_PASS_WRAPPER_0("add_convert_block_pointer_to_tdesc",
-                     intel::createTritonIntelBlockPointerToTensorDesc);
-  ADD_PASS_WRAPPER_0("add_convert_tdesc_to_block_pointer",
-                     intel::createTritonIntelTensorDescToBlockPointer);
   ADD_PASS_WRAPPER_0("add_rewrite_tensor_descriptor_to_pointer",
                      intel::createTritonRewriteTensorDescriptorToPointer);
   ADD_PASS_WRAPPER_0("add_remove_masks", intel::createTritonIntelRemoveMasks);
@@ -69,6 +65,10 @@ void init_triton_intel_passes_ttir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_fuse_reshape", intel::createTritonIntelFuseReshape);
   ADD_PASS_WRAPPER_0("add_simplify_signed_arithmetic",
                      intel::createTritonIntelSimplifySignedArithmetic);
+  ADD_PASS_WRAPPER_0("add_fold_true_cmpi",
+                     intel::createTritonIntelGPUFoldTrueCmpI);
+  ADD_FUNC_PASS_WRAPPER_0("add_prepare_if_combining",
+                          intel::createTritonIntelGPUPrepareIfCombining);
 }
 
 void init_triton_intel_passes_ttgpuir(py::module &&m) {
@@ -277,22 +277,28 @@ void init_triton_intel(py::module &&m) {
           fpm.addPass(BreakStructPhiNodesPass());
           fpm.addPass(InstCombinePass());
         });
-    pb.registerPeepholeEPCallback(
-        [&](llvm::FunctionPassManager &fpm, llvm::OptimizationLevel level) {
-          // The Triton masked load pattern can generate instances where the
-          // mask value causes undefined behavior in sdiv/srem instructions.
-          // The language allows this UB as the result of those arithmetic
-          // instructions is never used, and control flow to avoid
-          // computation of these instructions would negatively affect
-          // performance. But, LLVM SimplifyCFG aggressively marks code
-          // paths with undefined behavior as dead. This can result in
-          // removal of the mask path and incorrect results from legal
-          // Triton kernels due to masked elements being used in
-          // computation. Run a pass to add a freeze instruction between
-          // masked loads and sdiv/srem to signal to LLVM we consider the
-          // sdiv/srem operands to be well defined.
-          fpm.addPass(FreezeMaskedDivRemPass());
-        });
+    // The Triton masked load pattern can generate instances where the
+    // mask value causes undefined behavior in sdiv/srem instructions.
+    // The language allows this UB as the result of those arithmetic
+    // instructions is never used, and control flow to avoid
+    // computation of these instructions would negatively affect
+    // performance. But, LLVM SimplifyCFG aggressively marks code
+    // paths with undefined behavior as dead. This can result in
+    // removal of the mask path and incorrect results from legal
+    // Triton kernels due to masked elements being used in
+    // computation. Run a pass to guard masked-load phi nodes used
+    // as divisors with select(divisor == 0, 1, divisor) to prevent
+    // LLVM from exploiting the division-by-zero UB.
+    //
+    // This must run before any optimization pass (especially
+    // SimplifyCFG) which can fold conditional blocks that share the
+    // same branch condition, eliminating the phi nodes this pass
+    // needs to match.
+    {
+      llvm::FunctionPassManager fpm;
+      fpm.addPass(GuardMaskedDivRemPass());
+      mpm.addPass(createModuleToFunctionPassAdaptor(std::move(fpm)));
+    }
     mpm.addPass(pb.buildPerModuleDefaultPipeline(opt));
     mpm.run(*mod, mam);
   });

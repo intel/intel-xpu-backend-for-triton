@@ -139,11 +139,11 @@ protected:
   // additional user if the operation is in a for loop, and the additional user
   // is the loop yield operation, provided that the result yielded is not used
   // after the loop. Example:
-  //   make_tensor_ptr -> advance -> load (OK)
-  //   make_tensor_ptr -> for init_arg -> advance -> load (OK)
-  //                                   -> yield (OK)
-  //   make_tensor_ptr -> for init_arg -> advance -> load (OK)
-  //                                              -> yield -> load (NOT OK)
+  //   make_tensor_descriptor -> load (OK)
+  //   make_tensor_descriptor -> for init_arg -> load (OK)
+  //                                          -> yield (OK)
+  //   make_tensor_descriptor -> for init_arg -> load (OK)
+  //                                          -> yield -> load (NOT OK)
   //
   bool validateChain(const DefUseChain &chain) const;
 

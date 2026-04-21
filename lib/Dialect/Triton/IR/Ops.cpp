@@ -42,47 +42,22 @@ namespace triton {
 //-- LoadOp --
 void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
                    CacheModifier cache, EvictionPolicy evict, bool isVolatile) {
-  LoadOp::build(builder, state, ptr, /*mask=*/{}, /*other=*/{},
-                /*boundaryCheck=*/ArrayRef<int32_t>{}, /*padding=*/std::nullopt,
-                cache, evict, isVolatile);
-}
-
-void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
-                   ArrayRef<int32_t> boundaryCheck,
-                   std::optional<PaddingOption> padding, CacheModifier cache,
-                   EvictionPolicy evict, bool isVolatile) {
-  LoadOp::build(builder, state, ptr, /*mask=*/{}, /*other=*/{}, boundaryCheck,
-                padding, cache, evict, isVolatile);
+  LoadOp::build(builder, state, ptr, /*mask=*/{}, /*other=*/{}, cache, evict,
+                isVolatile);
 }
 
 void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
                    Value mask, CacheModifier cache, EvictionPolicy evict,
                    bool isVolatile) {
-  LoadOp::build(builder, state, ptr, mask, /*other=*/{},
-                /*boundaryCheck=*/ArrayRef<int32_t>{},
-                /*padding=*/std::nullopt, cache, evict, isVolatile);
+  LoadOp::build(builder, state, ptr, mask, /*other=*/{}, cache, evict,
+                isVolatile);
 }
 
-void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
-                   Value mask, Value other, CacheModifier cache,
-                   EvictionPolicy evict, bool isVolatile) {
-  LoadOp::build(builder, state, ptr, mask, other,
-                /*boundaryCheck=*/ArrayRef<int32_t>{},
-                /*padding=*/std::nullopt, cache, evict, isVolatile);
-}
+Value LoadOp::getPredicateOperand() { return getMask(); }
 
-void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
-                   Value mask, Value other, ArrayRef<int32_t> boundaryCheck,
-                   std::optional<PaddingOption> padding, CacheModifier cache,
-                   EvictionPolicy evict, bool isVolatile) {
-  auto paddingAttr =
-      padding.has_value()
-          ? PaddingOptionAttr::get(builder.getContext(), padding.value())
-          : PaddingOptionAttr();
-  LoadOp::build(builder, state, ptr, mask, other,
-                builder.getDenseI32ArrayAttr(boundaryCheck), paddingAttr, cache,
-                evict, isVolatile);
-}
+void LoadOp::setPredicateOperand(Value pred) { getMaskMutable().assign(pred); }
+
+Type LoadOp::getPredicateOperandTypeLike() { return getPtr().getType(); }
 
 // load(ptr, splat(1), ...)        -> load(ptr, ...)
 // load(ptr, splat(0), other, ...) -> other
@@ -108,7 +83,6 @@ struct CanonicalizeMaskedLoadPattern : public OpRewritePattern<LoadOp> {
       // mask = splat(1)
       rewriter.replaceOpWithNewOp<LoadOp>(
           loadOp, loadOp.getType(), loadOp.getPtr(), Value(), Value(),
-          loadOp.getBoundaryCheckAttr(), loadOp.getPaddingAttr(),
           loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
     } else {
       // mask = splat(0)
@@ -132,24 +106,14 @@ void LoadOp::getCanonicalizationPatterns(RewritePatternSet &results,
 //-- StoreOp --
 void StoreOp::build(OpBuilder &builder, OperationState &state, Value ptr,
                     Value value, CacheModifier cache, EvictionPolicy evict) {
-  return StoreOp::build(builder, state, ptr, value, /*mask=*/{},
-                        /*boundaryCheck=*/{}, cache, evict);
+  return StoreOp::build(builder, state, ptr, value, /*mask=*/{}, cache, evict);
 }
 
-void StoreOp::build(OpBuilder &builder, OperationState &state, Value ptr,
-                    Value value, Value mask, CacheModifier cache,
-                    EvictionPolicy evict) {
-  return StoreOp::build(builder, state, ptr, value, mask, /*boundaryCheck=*/{},
-                        cache, evict);
-}
+Value StoreOp::getPredicateOperand() { return getMask(); }
 
-void StoreOp::build(OpBuilder &builder, OperationState &state, Value ptr,
-                    Value value, ArrayRef<int32_t> boundaryCheck,
-                    CacheModifier cache, EvictionPolicy evict) {
-  return StoreOp::build(builder, state, ptr, value, /*mask=*/{},
-                        builder.getDenseI32ArrayAttr(boundaryCheck), cache,
-                        evict);
-}
+void StoreOp::setPredicateOperand(Value pred) { getMaskMutable().assign(pred); }
+
+Type StoreOp::getPredicateOperandTypeLike() { return getPtr().getType(); }
 
 // store(ptr, value, splat(1), ...) -> store(ptr, value, ...)
 // store(ptr, value, splat(0), ...) -> [none]
@@ -183,6 +147,14 @@ struct CanonicalizeMaskedStorePattern : public OpRewritePattern<StoreOp> {
     return success();
   }
 };
+
+Value AtomicRMWOp::getPredicateOperand() { return getMask(); }
+
+void AtomicRMWOp::setPredicateOperand(Value pred) {
+  getMaskMutable().assign(pred);
+}
+
+Type AtomicRMWOp::getPredicateOperandTypeLike() { return getPtr().getType(); }
 
 void StoreOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                           MLIRContext *context) {
@@ -1098,25 +1070,6 @@ LogicalResult BroadcastOp::verify() {
   return success();
 }
 
-//-- MakeTensorPtrOp --
-void MakeTensorPtrOp::build(OpBuilder &builder, OperationState &state,
-                            Value base, ValueRange shape, ValueRange strides,
-                            ValueRange offsets, ArrayRef<int32_t> tensorShape,
-                            ArrayRef<int32_t> order) {
-  // Get pointer type from `base`
-  auto pointerType = cast<PointerType>(base.getType());
-  assert(pointerType != nullptr);
-
-  // Build type `tt.ptr<tensor<tensorShape, base.pointeeType>>`
-  auto tensorType = RankedTensorType::get(
-      SmallVector<int64_t>(tensorShape.begin(), tensorShape.end()),
-      pointerType.getPointeeType());
-  auto result = PointerType::get(tensorType, pointerType.getAddressSpace());
-
-  return build(builder, state, result, base, shape, strides, offsets,
-               builder.getDenseI32ArrayAttr(order));
-}
-
 //-- AddPtrOp --
 OpFoldResult AddPtrOp::fold(FoldAdaptor adaptor) {
   // addptr(ptr, 0) -> ptr
@@ -1124,19 +1077,6 @@ OpFoldResult AddPtrOp::fold(FoldAdaptor adaptor) {
     return getPtr();
   }
   return {};
-}
-
-//-- AdvanceOp --
-OpFoldResult AdvanceOp::fold(FoldAdaptor adaptor) {
-  // advance(ptr, 0, 0) -> ptr
-  SmallVector<OpFoldResult> rawOffsets = getOffsets();
-  auto offsets = getConstantIntValues(rawOffsets);
-  if (!offsets.has_value())
-    return {};
-  for (int64_t offset : offsets.value())
-    if (offset != 0)
-      return {};
-  return getPtr();
 }
 
 //-- MakeTensorDescOp --
@@ -1150,9 +1090,7 @@ void MakeTensorDescOp::build(OpBuilder &builder, OperationState &state,
   }
   auto elemTy = ptrTy.getPointeeType();
   SmallVector<int64_t> blockShape64(blockShape);
-  auto blockTy = RankedTensorType::get(blockShape64, elemTy);
-  auto descTy =
-      TensorDescType::get(builder.getContext(), blockTy, isSignedInteger);
+  auto descTy = TensorDescType::get(blockShape64, elemTy, isSignedInteger);
   auto paddingAttr = PaddingOptionAttr::get(builder.getContext(), padding);
   return build(builder, state, descTy, base, shape, strides, paddingAttr);
 }

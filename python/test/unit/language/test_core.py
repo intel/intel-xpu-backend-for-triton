@@ -1081,7 +1081,7 @@ def test_abs_fp8(in_dtype, device):
             pytest.skip("float8e4b8/float8e5b16 not supported on CUDA")
     elif is_xpu():
         if in_dtype in (tl.float8e4b8, tl.float8e5b16):
-            pytest.skip("FIXME: Ensure float8e4b8/float8e5b16 not supported on XPU (#6326)")
+            pytest.xfail("float8e4b8/float8e5b16 not supported on XPU")
 
     @triton.jit
     def abs_kernel(X, Z, SIZE: tl.constexpr):
@@ -3289,6 +3289,21 @@ def get_test_dot_vdot2_cases():
             (4, 32, 32, 4, False, False, 'None', 'ieee', 'bfloat16', 'float32', 1, None)]
 
 
+def get_test_dot_small_mn_wmma_cases():
+    if not is_hip_gfx1250():
+        return []
+    return [(*shape_nw, False, False, 'none', 'ieee', 'float16', 'float32', 1, None)
+            for shape_nw in [(8, 8, 32, 1), (8, 32, 32, 1), (32, 8, 32, 1)]]
+
+
+def get_test_dot_small_k_wmma_cases():
+    if not is_hip_gfx1250():
+        return []
+    return [(16, 64, k_size, 4, False, False, 'none', 'ieee', 'float32', 'float32', 1, None) for k_size in [2]] + \
+           [(16, 64, k_size, 4, False, False, 'none', 'ieee', 'float16', 'float32', 1, None) for k_size in [2, 4, 8, 16, 32]] + \
+           [(16, 64, k_size, 4, False, False, 'none', 'ieee', 'float8e5', 'float32', 1, None) for k_size in [2, 4, 8, 16, 32, 64]]
+
+
 def get_test_small_dots_cases():
     if not (is_cuda() or is_xpu()):
         return []
@@ -3309,6 +3324,8 @@ def get_test_small_dots_cases():
     get_test_dot_fp8_output_cases() + \
     get_test_dot_small_k_mfma_cases() + \
     get_test_dot_small_mn_mfma_cases() + \
+    get_test_dot_small_mn_wmma_cases() + \
+    get_test_dot_small_k_wmma_cases() + \
     get_test_dot_softmax() + \
     get_test_small_dots_cases())
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
@@ -3609,7 +3626,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         else:
             assert re.search(r'[mma|wgmma.mma_async].sync.aligned.m\d+n\d+k16(?:.row.col)?.f16.f16.f16', ptx)
     elif in_dtype == 'int8':
-        if is_tcgen5:
+        if is_tcgen5 and capability[0:2] != (10, 3):
             assert re.search(r'tcgen05.mma.cta_group::1.kind::i8', ptx)
         elif capability[0] == 7 and capability[1] == 5:  # Turing
             assert 'mma.sync.aligned.m8n8k16.row.col.satfinite.s32.s8.s8.s32' in ptx
@@ -4556,8 +4573,8 @@ def test_assume(device):
         return
 
     assert 'llvm.intr.assume' in pgm.asm['ttgir']
-    # tritonamdgpu-fold-true-cmpi on AMD folds true cmpi ops to %true (which llvm itself then DCEs).
-    if not is_hip():
+    # fold-true-cmpi on AMD/Intel folds true cmpi ops to %true (which llvm itself then DCEs).
+    if not is_hip() and not is_xpu():
         assert 'llvm.assume' in pgm.asm['llir']
 
 

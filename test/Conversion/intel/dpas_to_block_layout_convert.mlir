@@ -11,12 +11,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.sha
     %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf16, #mma>
 
     // CHECK-DAG:       %[[CST_3:.*]] = llvm.mlir.constant(3 : i32) : i32
-    // CHECK-DAG:       %[[CST_8192:.*]] = llvm.mlir.constant(8192 : i32) : i32
+    // CHECK-DAG:       %[[CST_7:.*]] = llvm.mlir.constant(7 : i32) : i32
     // CHECK-DAG:       %[[CST_387:.*]] = llvm.mlir.constant(387 : i32) : i32
-    // CHECK-DAG:       %[[CST_384:.*]] = llvm.mlir.constant(384 : i32) : i32
     // CHECK-DAG:       %[[CST_64:.*]] = llvm.mlir.constant(64 : i32) : i32
     // CHECK-DAG:       %[[CST_48:.*]] = llvm.mlir.constant(48 : i32) : i32
-    // CHECK-DAG:       %[[CST_15:.*]] = llvm.mlir.constant(15 : i32) : i32
     // CHECK-DAG:       %[[CST_14:.*]] = llvm.mlir.constant(14 : i32) : i32
     // CHECK-DAG:       %[[CST_12:.*]] = llvm.mlir.constant(12 : i32) : i32
     // CHECK-DAG:       %[[CST_4:.*]] = llvm.mlir.constant(4 : i32) : i32
@@ -50,8 +48,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.sha
     // CHECK:           %[[VAL_38:.*]] = llvm.and %[[VAL_28]], %[[CST_12]] : i32
     // CHECK:           %[[VAL_39:.*]] = llvm.lshr %[[VAL_38]], %[[CST_0]] : i32
     // CHECK:           %[[VAL_40:.*]] = llvm.and %[[VAL_28]], %[[CST_64]] : i32
-    // CHECK:           %[[VAL_41:.*]] = llvm.icmp "eq" %[[VAL_40]], %[[CST_0]] : i32
-    // CHECK:           %[[VAL_42:.*]] = llvm.select %[[VAL_41]], %[[CST_0]], %[[CST_8192]] : i1, i32
+    // CHECK:           %[[VAL_42:.*]] = llvm.shl %[[VAL_40]], %[[CST_7]] : i32
     // CHECK:           %[[VAL_43:.*]] = llvm.or disjoint %[[VAL_30]], %[[VAL_42]] : i32
     // CHECK:           %[[VAL_45:.*]] = llvm.xor %[[VAL_33]], %[[VAL_36]] : i32
     // CHECK:           %[[VAL_46:.*]] = llvm.xor %[[VAL_45]], %[[VAL_39]] : i32
@@ -97,13 +94,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.sha
     %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf16, #mma>
 
     // CHECK-DAG:           %[[CST_3:.*]] = llvm.mlir.constant(3 : i32) : i32
-    // CHECK-DAG:           %[[CST_8192:.*]] = llvm.mlir.constant(8192 : i32) : i32
-    // CHECK-DAG:           %[[CST_4096:.*]] = llvm.mlir.constant(4096 : i32) : i32
+    // CHECK-DAG:           %[[CST_7:.*]] = llvm.mlir.constant(7 : i32) : i32
     // CHECK-DAG:           %[[CST_387:.*]] = llvm.mlir.constant(387 : i32) : i32
-    // CHECK-DAG:           %[[CST_384:.*]] = llvm.mlir.constant(384 : i32) : i32
     // CHECK-DAG:           %[[CST_64:.*]] = llvm.mlir.constant(64 : i32) : i32
     // CHECK-DAG:           %[[CST_48:.*]] = llvm.mlir.constant(48 : i32) : i32
-    // CHECK-DAG:           %[[CST_15:.*]] = llvm.mlir.constant(15 : i32) : i32
     // CHECK-DAG:           %[[CST_14:.*]] = llvm.mlir.constant(14 : i32) : i32
     // CHECK-DAG:           %[[CST_12:.*]] = llvm.mlir.constant(12 : i32) : i32
     // CHECK-DAG:           %[[CST_4:.*]] = llvm.mlir.constant(4 : i32) : i32
@@ -138,8 +132,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.sha
     // CHECK:           %[[VAL_38:.*]] = llvm.and %[[VAL_28]], %[[CST_12]] : i32
     // CHECK:           %[[VAL_39:.*]] = llvm.lshr %[[VAL_38]], %[[CST_0]] : i32
     // CHECK:           %[[VAL_40:.*]] = llvm.and %[[VAL_28]], %[[CST_64]] : i32
-    // CHECK:           %[[VAL_41:.*]] = llvm.icmp "eq" %[[VAL_40]], %[[CST_0]] : i32
-    // CHECK:           %[[VAL_42:.*]] = llvm.select %[[VAL_41]], %[[CST_0]], %[[CST_8192]] : i1, i32
+    // CHECK:           %[[VAL_42:.*]] = llvm.shl %[[VAL_40]], %[[CST_7]] : i32
     // CHECK:           %[[VAL_43:.*]] = llvm.or disjoint %[[VAL_30]], %[[VAL_42]] : i32
     // CHECK:           %[[VAL_45:.*]] = llvm.xor %[[VAL_33]], %[[VAL_36]] : i32
     // CHECK:           %[[VAL_46:.*]] = llvm.xor %[[VAL_45]], %[[VAL_39]] : i32

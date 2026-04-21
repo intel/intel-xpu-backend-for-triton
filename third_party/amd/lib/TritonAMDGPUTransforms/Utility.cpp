@@ -3,6 +3,8 @@
 #include "amd/lib/TritonAMDGPUTransforms/Utility.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/DescriptorMemoryLayouts.h"
 #include "triton/Tools/LayoutUtils.h"
 
 #include <limits>
@@ -442,13 +444,35 @@ composePaddedLayoutWMMA(int opIdx, unsigned vecWidth,
       padAmount = std::min(vecWidth, padAmount);
   }
 
-  if (padAmount == 0)
+  if (padAmount == 0 || padAmount >= static_cast<unsigned>(innerDimLength))
     return {};
 
-  unsigned padInterval = innerDimLength;
+  // When innerDimLength doesn't span all LDS banks, widen the padding
+  // interval to the bank-wrap boundary so padding is inserted every N
+  // rows instead of every row, at the point where the bank pattern
+  // would repeat.
+  constexpr unsigned ldsNumBanks = 64;
+  constexpr unsigned ldsBankWidthInBytes = 4;
+  unsigned elemBytes = typeWidthInBit / 8;
+  unsigned bankWrapInterval = ldsNumBanks * ldsBankWidthInBytes / elemBytes;
+  unsigned padInterval =
+      std::max(static_cast<unsigned>(innerDimLength), bankWrapInterval);
   auto *context = srcTy.getContext();
   return triton::gpu::PaddedSharedEncodingAttr::get(
       context, {{padInterval, padAmount}}, order, shape, CGALayout);
+}
+
+ttg::SharedEncodingTrait getEncodingFromDescriptor(Operation *op,
+                                                   RankedTensorType tensorType,
+                                                   Value desc) {
+  auto descTy = cast<tt::TensorDescType>(desc.getType());
+  auto sharedLayout = descTy.getSharedLayout();
+  if (!sharedLayout) {
+    emitError(op->getLoc()) << "Missing encoding on the tensor descriptor";
+    return {};
+  }
+  auto encoding = cast<ttg::SharedEncodingTrait>(sharedLayout);
+  return ttg::updateEncodingForShape(op, encoding, tensorType);
 }
 
 ttg::PaddedSharedEncodingAttr
