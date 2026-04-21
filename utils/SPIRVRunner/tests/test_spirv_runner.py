@@ -58,7 +58,7 @@ def test_args_json_gen():
             if "args_data.json" in files:
                 dump_dirs.append(root)
         assert dump_dirs, f"args_data.json not found under cache root: {cache_root}"
-        dump_dir = max(dump_dirs, key=os.path.getmtime)
+        dump_dir = max(dump_dirs, key=lambda path: os.path.getmtime(os.path.join(path, "args_data.json")))
         result = subprocess.run([SPIRV_RUNNER_PATH, "-o", "tensor_2", "-v", "expected_output.pt"], capture_output=True,
                                 text=True, cwd=dump_dir)
         print("SPIRVRunner stderr:", result.stderr)

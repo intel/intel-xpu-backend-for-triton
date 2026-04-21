@@ -460,8 +460,7 @@ def wrap_handle_tensordesc(launcher, signature, tensordesc_meta):
 def serialize_args(args, constants, signature, dir_path):
     import torch
     import numbers
-    if not os.path.exists(dir_path):
-        os.makedirs(dir_path, exist_ok=True)
+    os.makedirs(dir_path, exist_ok=True)
     print(f"Path to directory consisting of SPIR-V Runner data: {dir_path}")
 
     def serialize_kernel_metadata(arg, args_dict):
