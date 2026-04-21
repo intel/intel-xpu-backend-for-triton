@@ -52,23 +52,42 @@ def strided_store_kernel(
 
 @pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
 @pytest.mark.parametrize(
-    "W, S, dtype_str",
-    [(32, 96, "float16"),  # canonical case from issue #6532
-     (32, 128, "float16"),  # different stride
-     (32, 192, "float16"),  # large stride
-     ],
-    ids=["W32_S96_f16", "W32_S128_f16", "W32_S192_f16"],
+    "W, S, XBLOCK, num_warps, dtype_str",
+    [
+        # H = XBLOCK / W = 1: this IS the case that exercises
+        # `reshape1DStridedStore` (it requires H == 1 per the TODO in
+        # MaterializeBlockPointer.cpp).  num_warps must be 1 so that
+        # H / num_warps >= 1.
+        (32, 96, 32, 1, "float16"),
+        (32, 128, 32, 1, "float16"),
+        (32, 192, 32, 1, "float16"),
+        # H > 1: baseline functional correctness only — the store reshape
+        # optimization is currently disabled for H != 1, so these cases do
+        # not exercise the optimized path but verify the fallback gather
+        # store remains correct.
+        (32, 96, 1024, 4, "float16"),
+        (32, 128, 1024, 4, "float16"),
+        (32, 192, 1024, 4, "float16"),
+    ],
+    ids=[
+        "H1_W32_S96_f16",
+        "H1_W32_S128_f16",
+        "H1_W32_S192_f16",
+        "H32_W32_S96_f16_fallback",
+        "H32_W32_S128_f16_fallback",
+        "H32_W32_S192_f16_fallback",
+    ],
 )
-def test_1d_reshape_strided_store(W, S, dtype_str, device):
-    """Test multi-row 1D-to-2D block store reshape produces correct results.
+def test_1d_reshape_strided_store(W, S, XBLOCK, num_warps, dtype_str, device):
+    """Test 1D-to-2D block store reshape and fallback produce correct results.
 
-    With XBLOCK=1024 and W=32, H = XBLOCK/W = 32 rows.  The kernel stores
-    into a strided output buffer; we compare against a numpy reference.
+    With H = XBLOCK / W == 1, the Inductor-style strided store is lowered
+    via `reshape1DStridedStore` to a 2D block store.  With H > 1, the
+    current implementation rejects the reshape (TODO: hardware transpose
+    unsupported) and this case exercises the gather-store fallback.
     """
-    XBLOCK = 1024
     num_rows = 1024
-    xnumel = W * num_rows  # 32768 total elements
-    num_warps = 4
+    xnumel = W * num_rows  # total elements
 
     # Generate reproducible input data
     rs = RandomState(17)

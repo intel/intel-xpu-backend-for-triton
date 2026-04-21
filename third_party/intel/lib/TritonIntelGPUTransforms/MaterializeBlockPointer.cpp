@@ -480,6 +480,13 @@ private:
     }
 
     // Compute H = numElements / W and verify evenly divides.
+    // Bail out on dynamic shapes — getDimSize returns ShapedType::kDynamic
+    // (-1), which would make subsequent divisibility and H computation
+    // invalid.
+    if (ShapedType::isDynamic(ptrTensorTy.getDimSize(0))) {
+      LDBG("Pointer tensor has dynamic shape, skip 1D reshape");
+      return std::nullopt;
+    }
     int64_t numElements = ptrTensorTy.getDimSize(0);
 
     // Verify idx is a canonical unit-stride linear index.
@@ -702,13 +709,29 @@ private:
     // 1D encoding. For a 1D blocked encoding with sizePerThread=[spt],
     // threadsPerWarp=[tpw], warpsPerCTA=[wpc], order=[0], the natural reshape
     // to [H, W] with order=[1,0] distributes elements column-first.
-    auto origEnc = cast<ttg::BlockedEncodingAttr>(ptrTensorTy.getEncoding());
+    auto origEnc =
+        dyn_cast<ttg::BlockedEncodingAttr>(ptrTensorTy.getEncoding());
+    if (!origEnc || origEnc.getSizePerThread().size() != 1 ||
+        origEnc.getOrder().size() != 1 || origEnc.getOrder()[0] != 0) {
+      LDBG("Expected 1D blocked encoding with order=[0], skip 1D reshape");
+      return;
+    }
     unsigned spt = origEnc.getSizePerThread()[0];
     unsigned tpw = origEnc.getThreadsPerWarp()[0];
     unsigned wpc = origEnc.getWarpsPerCTA()[0];
     unsigned spt1 = std::min(spt, static_cast<unsigned>(info->W));
+    if (spt1 == 0 || spt % spt1 != 0) {
+      LDBG("Original sizePerThread ("
+           << spt << ") not divisible by spt1=" << spt1 << ", skip 1D reshape");
+      return;
+    }
     unsigned spt0 = spt / spt1;
     unsigned tpw1 = std::min(tpw, static_cast<unsigned>(info->W) / spt1);
+    if (tpw1 == 0 || tpw % tpw1 != 0) {
+      LDBG("Original threadsPerWarp ("
+           << tpw << ") not divisible by tpw1=" << tpw1 << ", skip 1D reshape");
+      return;
+    }
     unsigned tpw0 = tpw / tpw1;
     auto consumerEnc = ttg::BlockedEncodingAttr::get(
         ctx, {spt0, spt1}, {tpw0, tpw1}, {wpc, 1}, {1, 0},

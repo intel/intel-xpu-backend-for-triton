@@ -18,6 +18,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "intel/include/Utils/Utility.h"
 #include "triton/Tools/LinearLayout.h"
+#include <limits>
 #include <optional>
 #include <triton/Tools/Sys/GetEnv.hpp>
 
@@ -603,7 +604,9 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
 
   /// Return the pitch (in bytes) for an op annotated by the 1D→2D reshape.
   /// The stride attribute is in elements; this converts to bytes.
-  /// Returns std::nullopt if the attribute is absent.
+  /// Returns std::nullopt if the attribute is absent, non-positive, or if
+  /// the resulting byte pitch does not fit in a signed 32-bit integer (the
+  /// HW pitch operand is i32).
   template <typename OpTy>
   static std::optional<int64_t>
   getAnnotated1DReshapePitch(OpTy op, unsigned elemSizeInBits) {
@@ -611,7 +614,13 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
         TritonIntelGPUDialect::getBlockIOStrideAttrName());
     if (!strideAttr)
       return std::nullopt;
-    return strideAttr.getInt() * elemSizeInBits / 8;
+    int64_t strideElems = strideAttr.getInt();
+    if (strideElems <= 0)
+      return std::nullopt;
+    int64_t pitchBytes = strideElems * elemSizeInBits / 8;
+    if (pitchBytes > std::numeric_limits<int32_t>::max())
+      return std::nullopt;
+    return pitchBytes;
   }
 
   // Determine whether the given descriptor op can be lowered to using
