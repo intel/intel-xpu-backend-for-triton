@@ -1915,6 +1915,11 @@ struct PrefetchOpConversion
     Type elementType = ptrType.getPointeeType();
     Type eltTy = getTypeConverter()->convertType(elementType);
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
+    // 2D block prefetch requires byte-addressable element sizes. Sub-byte
+    // types (e.g. i1, i4) would trigger division by zero in
+    // get2DPrefetchWarpsPerCTA and downstream byte-based math.
+    if (elemSizeInBits < 8 || elemSizeInBits % 8 != 0)
+      return failure();
     unsigned elemSizeInBytes = elemSizeInBits / 8;
 
     int numWarps = triton::gpu::lookupNumWarps(op);
@@ -1938,10 +1943,24 @@ struct PrefetchOpConversion
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    // Recover base pointer from the tensor-of-pointers.
-    Value llPtr = adaptor.getPtr();
-    SmallVector<Value> ptrElems = unpackLLElements(loc, llPtr, rewriter);
-    Value base = targetInfo.shuffleIdx(rewriter, loc, ptrElems[0], 0);
+    // Recover a uniform scalar base pointer from the tensor-of-pointers.
+    // The cooperative path relies on a single base with per-warp offsets added
+    // later via applyLinearLayout(kWarp=warpId). Using ptrElems[0] would give
+    // each warp its register-0 pointer, which already encodes that warp's
+    // position — combining it with the warp offset would double-shift the
+    // address. Require the tensor-of-pointers to be produced by a chain of
+    // `tt.addptr` ending in `tt.splat(%base)` so we can extract the scalar
+    // `%base` as the uniform pointer. Otherwise bail out so the generic
+    // fallback can handle it.
+    Value cur = op.getPtr();
+    while (auto addPtrOp = cur.getDefiningOp<triton::AddPtrOp>())
+      cur = addPtrOp.getPtr();
+    auto splatOp = cur.getDefiningOp<triton::SplatOp>();
+    if (!splatOp)
+      return failure();
+    Value base = rewriter.getRemappedValue(splatOp.getSrc());
+    if (!base)
+      return failure();
 
     // Row stride in elements (i64) -- emit2DBlockPrefetchOps converts to bytes.
     int stride = getStride(op.getPtr(), rank - 2);
