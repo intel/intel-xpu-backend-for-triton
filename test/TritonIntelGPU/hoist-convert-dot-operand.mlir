@@ -40,10 +40,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // COM: the convert next to the load.
     //
     // CHECK: scf.for
-    // CHECK:   tt.descriptor_load {{.*}} -> tensor<64x32xf16,
-    // CHECK:   ttg.convert_layout {{.*}} -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
-    // CHECK:   arith.addf {{.*}} : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
-    // CHECK:   tt.dot
+    // CHECK:   %[[A:.*]] = tt.descriptor_load {{.*}} -> tensor<64x32xf16, #blocked>
+    // CHECK:   %[[A_DOT:.*]] = ttg.convert_layout %[[A]] : tensor<64x32xf16, #blocked> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+    // CHECK:   %[[A2_DOT:.*]] = arith.addf %[[A_DOT]], %[[A_DOT]] : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+    // CHECK:   %[[A2_BLOCKED:.*]] = arith.addf %[[A]], %[[A]] : tensor<64x32xf16, #blocked>
+    // CHECK:   tt.dot %[[A2_DOT]], {{.*}} : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<64x256xf32, #mma>
+    // CHECK:   tt.store %arg3, %[[A2_BLOCKED]] : tensor<64x32x!tt.ptr<f16>, #blocked>
     // CHECK:   scf.yield
     %result = scf.for %iv = %c0_i32 to %arg4 step %c32_i32 iter_args(%acc = %cst) -> (tensor<64x256xf32, #dpas>) : i32 {
       %a = tt.descriptor_load %desc_a[%c0_i32, %iv] : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #blocked>
