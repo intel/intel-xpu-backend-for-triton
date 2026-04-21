@@ -7,7 +7,14 @@ on:
     - cron: "0 8 * * *"
 
 jobs:
+  build-wheel:
+    uses: ./.github/workflows/build-benchmarks-wheel.yml
+    with:
+      python-version: "3.12"
+
   benchmarks:
+    needs: build-wheel
+    if: always() && !cancelled()
     uses: ./.github/workflows/vllm-benchmarks.yml
     with:
       runner_label: b580

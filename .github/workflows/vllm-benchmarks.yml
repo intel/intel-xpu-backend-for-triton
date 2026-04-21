@@ -99,10 +99,10 @@ jobs:
 
       - name: Install benchmarks
         id: install-benchmarks
-        run: |
-          cd benchmarks
-          # --no-build-isolation is necessary after moving to python=3.12
-          pip install --no-build-isolation .
+        uses: ./.github/actions/install-benchmarks
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          github-token: ${{ github.token }}
 
       - name: Install vllm
         id: install-vllm

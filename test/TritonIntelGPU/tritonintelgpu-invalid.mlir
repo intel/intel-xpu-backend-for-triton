@@ -99,8 +99,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
-tt.func @ttig.descriptor_prefetch.indices_mismatch(%desc: !tt.tensordesc<tensor<256x32xf16>>, %x: i32) {
+tt.func @ttig.descriptor_prefetch.indices_mismatch(%desc: !tt.tensordesc<256x32xf16>, %x: i32) {
   // expected-error @below {{'ttig.descriptor_prefetch' op expected 2 indices, but got 1}}
-  ttig.descriptor_prefetch %desc[%x] : !tt.tensordesc<tensor<256x32xf16>>
+  ttig.descriptor_prefetch %desc[%x] : !tt.tensordesc<256x32xf16>
   tt.return
 }
