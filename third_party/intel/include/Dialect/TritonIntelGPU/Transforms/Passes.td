@@ -250,18 +250,35 @@ def TritonIntelGPUReduceVariableLiveness
 
 def TritonIntelGPUAnnotateCacheControl
     : Pass<"tritonintelgpu-annotate-cache-control", "mlir::ModuleOp"> {
-  let summary = "Annotate load/store ops with .cg cache control when data does not flow to/from a tt.dot";
+  let summary = "Annotate tt.load ops with .cg cache control when data does not flow to a tt.dot";
   let description = [{
-    Sets `.cg` (L1UC_L3C) cache control on `tt.load`/`tt.store` operations
-    whose data does not participate in a matrix multiply. GEMM operand loads
-    and epilogue stores benefit from L1 reuse and are left with the default
-    cache modifier; streaming / elementwise loads/stores bypass L1 to avoid
-    thrashing. User-specified cache modifiers are never overridden.
+    Sets `.cg` (L1UC_L3C) cache control on `tt.load` operations whose result
+    does not participate in a matrix multiply. GEMM operand loads benefit from
+    L1 reuse and are left with the default cache modifier; streaming /
+    elementwise loads bypass L1 to avoid thrashing. User-specified cache
+    modifiers are never overridden.
 
     The heuristic uses a forward use-def walk from `tt.load` results (through
     `scf.for` iter_args and results) to detect whether the loaded data reaches
-    a `tt.dot`/`tt.dot_scaled`, and a backward walk from `tt.store` values to
-    detect whether the stored data originates from a `tt.dot`/`tt.dot_scaled`.
+    a `tt.dot`/`tt.dot_scaled`.
+
+    To preserve cross-workgroup coherency, loads are additionally skipped when
+    their pointer root-traces to a kernel argument that falls into either of
+    two unsafe tiers (computed per `tt.FuncOp`):
+
+      1. Read-write args: arguments that are both loaded and stored within the
+         same function (producer/consumer scratch buffers).
+      2. Atomic-kernel loaded args: if the function contains any
+         `tt.atomic_rmw`/`tt.atomic_cas`, every argument that is loaded
+         anywhere in the function becomes unsafe. The presence of atomics
+         signals programmer-coordinated cross-workgroup synchronization
+         through those pointers (e.g. layer-norm backward spinlock
+         accumulation), where a `.cg` load could observe stale data still
+         resident in a sibling workgroup's L1.
+
+    Stores are intentionally left untouched: annotating stores with `.cg` on
+    cross-kernel producer/consumer buffers (e.g. layer-norm backward
+    partial-sum scratch) introduces data races.
   }];
   let dependentDialects = ["mlir::triton::TritonDialect",
                            "mlir::scf::SCFDialect"];
