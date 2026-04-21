@@ -71,12 +71,9 @@ struct KernelArguments {
   std::string spirv_dump_dir;
 
   KernelArguments(const std::vector<std::string> &outtensornames) {
-    // Check if the triton_xpu_dump path exists if not point to current
-    // directory
-    auto env_path = std::getenv("TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS");
-    spirv_dump_dir = (env_path != nullptr)
-                         ? env_path
-                         : std::filesystem::current_path().string();
+    // Use current working directory, expected to be a Triton kernel cache
+    // directory with SPIRVRunner dump artifacts.
+    spirv_dump_dir = std::filesystem::current_path().string();
     if (std::filesystem::exists(spirv_dump_dir)) {
       std::ifstream file(spirv_dump_dir + "/args_data.json");
       if (!file.is_open()) {

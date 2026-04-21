@@ -457,13 +457,12 @@ def wrap_handle_tensordesc(launcher, signature, tensordesc_meta):
     return wrap_handle_tensordesc_impl(launcher, signature, tensordesc_meta, _make_intel_tensordesc_arg)
 
 
-def serialize_args(args, constants, signature):
+def serialize_args(args, constants, signature, dir_path):
     import torch
     import numbers
-    dir_path = knobs.intel.dump_spirv_kernel_args
     if not os.path.exists(dir_path):
-        os.makedirs(dir_path)
-        print(f"Path to directory consisting of SPIR-V Runner data: {dir_path}")
+        os.makedirs(dir_path, exist_ok=True)
+    print(f"Path to directory consisting of SPIR-V Runner data: {dir_path}")
 
     def serialize_kernel_metadata(arg, args_dict):
         args_dict['num_warps'] = arg.num_warps
@@ -530,7 +529,8 @@ class XPULauncher(object):
         self.launch = wrap_handle_tensordesc(launcher, signature, tensordesc_meta=[])
 
         # Serialize KernelArguments for SPIR-V Runner
-        self.serialize_kernel_args = knobs.intel.dump_spirv_kernel_args
+        self.serialize_kernel_args = knobs.intel.enable_dump_spirv_kernel_args
+        self.dump_dir = metadata.cache_dir
         self.constants = constants
         self.signature = signature
 
@@ -577,7 +577,7 @@ class XPULauncher(object):
                  launch_exit_hook, *args):
         if self.serialize_kernel_args:
             serialize_args((gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
-                            launch_exit_hook, *args), self.constants, self.signature)
+                            launch_exit_hook, *args), self.constants, self.signature, self.dump_dir)
 
         if os.environ.get("TRITON_DUMP_LAUNCH_PARAMS") == "1":
             # This function does not cover all cases, for example when the arguments are tuple,

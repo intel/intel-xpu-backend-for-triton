@@ -1,6 +1,7 @@
 import pytest
 import subprocess
 import os
+import tempfile
 
 # Path to the SPIRVRunner executable
 SPIRV_RUNNER_PATH = os.getenv("SPIRV_RUNNER_PATH")
@@ -45,14 +46,21 @@ def test_args_json_gen():
     """Test generation of serialized arguments in JSON format."""
     try:
         print("Running SPIRVRunner to generate serialized args/Tensor data from Triton ...")
-        os.environ['TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS'] = './'
+        cache_root = tempfile.mkdtemp(prefix="spirv_runner_cache_")
         target_dir = os.path.join(SPIRV_RUNNER_TESTS, "add_kernel")
-        os.chdir(target_dir)
-        result = subprocess.run(["python3", "01-vector-add.py"], capture_output=True, text=True)
+        env = os.environ.copy()
+        env["TRITON_XPU_ENABLE_DUMP_SPIRV_KERNEL_ARGS"] = "1"
+        env["TRITON_CACHE_DIR"] = cache_root
+        result = subprocess.run(["python3", "01-vector-add.py"], capture_output=True, text=True, cwd=target_dir, env=env)
         print("SPIRVRunner stderr:", result.stderr)
-        os.environ.pop("TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS", None)
+        dump_dirs = []
+        for root, _, files in os.walk(cache_root):
+            if "args_data.json" in files:
+                dump_dirs.append(root)
+        assert dump_dirs, f"args_data.json not found under cache root: {cache_root}"
+        dump_dir = max(dump_dirs, key=os.path.getmtime)
         result = subprocess.run([SPIRV_RUNNER_PATH, "-o", "tensor_2", "-v", "expected_output.pt"], capture_output=True,
-                                text=True)
+                                text=True, cwd=dump_dir)
         print("SPIRVRunner stderr:", result.stderr)
     except subprocess.CalledProcessError as e:
         print("Unexpected error executing SPIRVRunner:", e)
