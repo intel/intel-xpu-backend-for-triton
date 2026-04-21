@@ -24,11 +24,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
-tt.func @ttig.descriptor_prefetch(%desc: !tt.tensordesc<tensor<256x32xf16>>, %x: i32, %y: i32) {
+tt.func @ttig.descriptor_prefetch(%desc: !tt.tensordesc<256x32xf16>, %x: i32, %y: i32) {
   // CHECK-LABEL: @ttig.descriptor_prefetch
-  // CHECK:         ttig.descriptor_prefetch %arg0[%arg1, %arg2] : !tt.tensordesc<tensor<256x32xf16>>
-  ttig.descriptor_prefetch %desc[%x, %y] cacheModifier = none evictionPolicy = evict_normal : !tt.tensordesc<tensor<256x32xf16>>
-  // CHECK:         ttig.descriptor_prefetch %arg0[%arg1, %arg2] : !tt.tensordesc<tensor<256x32xf16>>
-  ttig.descriptor_prefetch %desc[%x, %y] : !tt.tensordesc<tensor<256x32xf16>>
+  // CHECK:         ttig.descriptor_prefetch %arg0[%arg1, %arg2] : !tt.tensordesc<256x32xf16>
+  ttig.descriptor_prefetch %desc[%x, %y] cacheModifier = none evictionPolicy = evict_normal : !tt.tensordesc<256x32xf16>
+  // CHECK:         ttig.descriptor_prefetch %arg0[%arg1, %arg2] : !tt.tensordesc<256x32xf16>
+  ttig.descriptor_prefetch %desc[%x, %y] : !tt.tensordesc<256x32xf16>
   tt.return
 }

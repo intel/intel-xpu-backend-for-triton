@@ -78,8 +78,8 @@ def TritonIntelGPURemoveLayoutConversions : Pass<"tritonintelgpu-remove-layout-c
     #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
     #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4], A = [8, 16], B = [16, 16], C = [8, 16]}>
     ...
-    %28 = tt.descriptor_load %desc_a[%off_m, %off_k] : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #blocked>
-    %29 = tt.descriptor_load %desc_b[%off_k, %off_n] : !tt.tensordesc<tensor<32x256xf16>> -> tensor<32x256xf16, #blocked1>
+    %28 = tt.descriptor_load %desc_a[%off_m, %off_k] : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #blocked>
+    %29 = tt.descriptor_load %desc_b[%off_k, %off_n] : !tt.tensordesc<32x256xf16> -> tensor<32x256xf16, #blocked1>
     %30 = ttg.convert_layout %28 : tensor<64x32xf16, #blocked> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas}>>
     %31 = ttg.convert_layout %29 : tensor<32x256xf16, #blocked1> -> tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #dpas}>>
     %32 = tt.dot %30, %31, %arg10, inputPrecision = tf32 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas}>> * tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #dpas}>> -> tensor<64x256xf32, #dpas>
@@ -92,8 +92,8 @@ def TritonIntelGPURemoveLayoutConversions : Pass<"tritonintelgpu-remove-layout-c
     ```mlir
     #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4], A = [8, 16], B = [16, 16], C = [8, 16]}>
     ...
-    %28 = tt.descriptor_load %desc_a[%off_m, %off_k] : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas}>>
-    %29 = tt.descriptor_load %desc_b[%off_k, %off_n] : !tt.tensordesc<tensor<32x256xf16>> -> tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #dpas}>>
+    %28 = tt.descriptor_load %desc_a[%off_m, %off_k] : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas}>>
+    %29 = tt.descriptor_load %desc_b[%off_k, %off_n] : !tt.tensordesc<32x256xf16> -> tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #dpas}>>
     %32 = tt.dot %28, %29, %arg10, inputPrecision = tf32 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas}>> * tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #dpas}>> -> tensor<64x256xf32, #dpas>
     ```
 

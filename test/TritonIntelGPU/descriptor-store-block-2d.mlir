@@ -19,10 +19,10 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf16, #dpas>
     %c0_i32 = arith.constant 0 : i32
     %c1_i64 = arith.constant 1 : i64
-    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <tensor<64x64xf16, #dpas>>
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <64x64xf16, #dpas>
     // 4 warps x 2 warps, repCluster [1,1], C shape [8,16] => 4 stores total.
     // CHECK-COUNT-4: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
-    tt.descriptor_store %desc[%c0_i32, %c0_i32], %cst {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<64x64xf16, #dpas>>, tensor<64x64xf16, #dpas>
+    tt.descriptor_store %desc[%c0_i32, %c0_i32], %cst {ttig.block_io = "row_major"} : !tt.tensordesc<64x64xf16, #dpas>, tensor<64x64xf16, #dpas>
     tt.return
   }
 }
@@ -41,8 +41,8 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     %c0_i32 = arith.constant 0 : i32
     %c1_i32 = arith.constant 1 : i32
     %c1_i64 = arith.constant 1 : i64
-    %desc = tt.make_tensor_descriptor %arg0, [%c1_i32, %arg1, %arg2], [%arg3, %c1_i64, %c1_i64] : <f16>, <tensor<1x32x32xf16, #dpas>>
-    tt.descriptor_store %desc[%c0_i32, %c0_i32, %c0_i32], %cst {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<1x32x32xf16, #dpas>>, tensor<32x32xf16, #dpas>
+    %desc = tt.make_tensor_descriptor %arg0, [%c1_i32, %arg1, %arg2], [%arg3, %c1_i64, %c1_i64] : <f16>, <1x32x32xf16, #dpas>
+    tt.descriptor_store %desc[%c0_i32, %c0_i32, %c0_i32], %cst {ttig.block_io = "row_major"} : !tt.tensordesc<1x32x32xf16, #dpas>, tensor<32x32xf16, #dpas>
     tt.return
   }
 }
@@ -62,8 +62,8 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32}
     %c0_i32 = arith.constant 0 : i32
     %c1_i32 = arith.constant 1 : i32
     %c1_i64 = arith.constant 1 : i64
-    %desc = tt.make_tensor_descriptor %arg0, [%c1_i32, %arg1, %arg2], [%arg3, %c1_i64, %c1_i64] : <f16>, <tensor<1x32x32xf16, #dpas>>
-    tt.descriptor_store %desc[%c0_i32, %c0_i32, %c0_i32], %cst : !tt.tensordesc<tensor<1x32x32xf16, #dpas>>, tensor<32x32xf16, #dpas>
+    %desc = tt.make_tensor_descriptor %arg0, [%c1_i32, %arg1, %arg2], [%arg3, %c1_i64, %c1_i64] : <f16>, <1x32x32xf16, #dpas>
+    tt.descriptor_store %desc[%c0_i32, %c0_i32, %c0_i32], %cst : !tt.tensordesc<1x32x32xf16, #dpas>, tensor<32x32xf16, #dpas>
     tt.return
   }
 }
@@ -79,10 +79,10 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
     %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #dpas>
     %c0_i32 = arith.constant 0 : i32
     %c1_i64 = arith.constant 1 : i64
-    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f32>, <tensor<64x64xf32, #dpas>>
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f32>, <64x64xf32, #dpas>
     // 8 warps x 4 warps, repCluster [1,1], C shape [8,16] => 32 warps tile 64x64 exactly => 1 store per warp.
     // CHECK-COUNT-1: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 32, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
-    tt.descriptor_store %desc[%c0_i32, %c0_i32], %cst {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<64x64xf32, #dpas>>, tensor<64x64xf32, #dpas>
+    tt.descriptor_store %desc[%c0_i32, %c0_i32], %cst {ttig.block_io = "row_major"} : !tt.tensordesc<64x64xf32, #dpas>, tensor<64x64xf32, #dpas>
     tt.return
   }
 }
@@ -153,8 +153,8 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
 
     // Remaining 7 stores (repCluster [4,2] => 8 total stores).
     // CHECK-COUNT-7: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
-    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <tensor<32x32xf16, #dpas>>
-    tt.descriptor_store %desc[%c0_i32, %c0_i32], %cst {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<32x32xf16, #dpas>>, tensor<32x32xf16, #dpas>
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <32x32xf16, #dpas>
+    tt.descriptor_store %desc[%c0_i32, %c0_i32], %cst {ttig.block_io = "row_major"} : !tt.tensordesc<32x32xf16, #dpas>, tensor<32x32xf16, #dpas>
     tt.return
   }
 }
@@ -173,10 +173,10 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
       %cst = arith.constant dense<0.000000e+00> : tensor<64x16xf16, #blocked>
       %c0_i32 = arith.constant 0 : i32
       %c1_i64 = arith.constant 1 : i64
-      %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <tensor<64x16xf16, #blocked>>
+      %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <64x16xf16, #blocked>
       // DPAS-LAYOUT-NOT: triton_gen.2Dblockstore
       // ALL-LAYOUT-COUNT-32: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 1, v_blocks = 1, cache_control = Default}
-      tt.descriptor_store %desc[%c0_i32, %c0_i32], %cst {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<64x16xf16, #blocked>>, tensor<64x16xf16, #blocked>
+      tt.descriptor_store %desc[%c0_i32, %c0_i32], %cst {ttig.block_io = "row_major"} : !tt.tensordesc<64x16xf16, #blocked>, tensor<64x16xf16, #blocked>
       tt.return
   }
 }
@@ -192,9 +192,9 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32}
       %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf16, #dpas>
       %c0_i32 = arith.constant 0 : i32
       %c1_i64 = arith.constant 1 : i64
-      %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <tensor<32x32xf16, #dpas>>
+      %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <32x32xf16, #dpas>
       // CHECK-NOT:    triton_gen.2Dblockstore
-      tt.descriptor_store %desc[%c0_i32, %c0_i32], %cst : !tt.tensordesc<tensor<32x32xf16, #dpas>>, tensor<32x32xf16, #dpas>
+      tt.descriptor_store %desc[%c0_i32, %c0_i32], %cst : !tt.tensordesc<32x32xf16, #dpas>, tensor<32x32xf16, #dpas>
       tt.return
   }
 }
@@ -211,8 +211,8 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
       %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf16, #dpas>
       %c0_i32 = arith.constant 0 : i32
       %c2_i64 = arith.constant 2 : i64
-      %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c2_i64] : <f16>, <tensor<64x64xf16, #dpas>>
-      tt.descriptor_store %desc[%c0_i32, %c0_i32], %cst : !tt.tensordesc<tensor<64x64xf16, #dpas>>, tensor<64x64xf16, #dpas>
+      %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c2_i64] : <f16>, <64x64xf16, #dpas>
+      tt.descriptor_store %desc[%c0_i32, %c0_i32], %cst : !tt.tensordesc<64x64xf16, #dpas>, tensor<64x64xf16, #dpas>
       tt.return
   }
 }
@@ -230,21 +230,21 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     %c0_i32 = arith.constant 0 : i32
     %c1_i64 = arith.constant 1 : i64
     %C = arith.constant dense<0.000000e+00> : tensor<64x64xf16, #dpas>
-    %descA = tt.make_tensor_descriptor %arg0, [%arg3, %arg5], [%arg6, %c1_i64] : <f16>, <tensor<64x32xf16>>
-    %descB = tt.make_tensor_descriptor %arg1, [%arg5, %arg4], [%arg7, %c1_i64] : <f16>, <tensor<32x64xf16>>
-    %descD = tt.make_tensor_descriptor %arg2, [%arg3, %arg4], [%arg8, %c1_i64] : <f16>, <tensor<64x64xf16, #dpas>>
+    %descA = tt.make_tensor_descriptor %arg0, [%arg3, %arg5], [%arg6, %c1_i64] : <f16>, <64x32xf16>
+    %descB = tt.make_tensor_descriptor %arg1, [%arg5, %arg4], [%arg7, %c1_i64] : <f16>, <32x64xf16>
+    %descD = tt.make_tensor_descriptor %arg2, [%arg3, %arg4], [%arg8, %c1_i64] : <f16>, <64x64xf16, #dpas>
     // Loads for A operand: 4 warps along M, repCluster [1,1], A tile [8,16] => 2 loads.
     // CHECK-COUNT-2: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 2, transpose = false, vnni_transform = false, cache_control = Default}
-    %A = tt.descriptor_load %descA[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #dot0>
+    %A = tt.descriptor_load %descA[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
     // Loads for B operand: 2 warps along N, repCluster [1,1], B tile [16,16] => 2 loads with VNNI.
     // CHECK-COUNT-2: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 1, transpose = false, vnni_transform = true, cache_control = Default}
-    %B = tt.descriptor_load %descB[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<32x64xf16>> -> tensor<32x64xf16, #dot1>
+    %B = tt.descriptor_load %descB[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<32x64xf16> -> tensor<32x64xf16, #dot1>
     // DPAS instructions: 8 total.
     // CHECK-COUNT-8: triton_gen.dpas {{.*}} {pa = f16, pb = f16, rc = 8}
     %D = tt.dot %A, %B, %C, inputPrecision = tf32 : tensor<64x32xf16, #dot0> * tensor<32x64xf16, #dot1> -> tensor<64x64xf16, #dpas>
     // Stores for result: 4 warps x 2 warps, repCluster [1,1], C shape [8,16] => 4 stores.
     // CHECK-COUNT-4: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
-    tt.descriptor_store %descD[%c0_i32, %c0_i32], %D {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<64x64xf16, #dpas>>, tensor<64x64xf16, #dpas>
+    tt.descriptor_store %descD[%c0_i32, %c0_i32], %D {ttig.block_io = "row_major"} : !tt.tensordesc<64x64xf16, #dpas>, tensor<64x64xf16, #dpas>
     tt.return
   }
 }
