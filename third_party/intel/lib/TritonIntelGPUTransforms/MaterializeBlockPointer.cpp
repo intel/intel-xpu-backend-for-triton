@@ -189,13 +189,6 @@ private:
       }
     }
 
-    if constexpr (std::is_same_v<OpType, tt::LoadOp>) {
-      if (op.getMask()) {
-        LDBG("Load op has mask, skip block IO attribute");
-        return;
-      }
-    }
-
     LDBG("Considering tensor of pointer of memory accessing op: " << op);
 
     // Axis info describes the value layout of the indices tensor.
