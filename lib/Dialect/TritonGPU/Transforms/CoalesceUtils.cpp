@@ -13,6 +13,17 @@
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace mlir::triton::gpu {
+namespace {
+// The attribute is referenced by string rather than via the Intel dialect's
+// helper to avoid pulling an Intel-dialect dependency into upstream code.
+unsigned getStoreVecBitWidth(Operation *op) {
+  auto mod = op->getParentOfType<ModuleOp>();
+  if (mod && mod->hasAttr("ttig.support_256b_load_store"))
+    return 256;
+  return 128;
+}
+} // namespace
+
 BlockedEncodingAttr
 buildCoalescedEncoding(ModuleAxisInfoAnalysis &axisInfoAnalysis, Operation *op,
                        int numWarps, int threadsPerWarp,
@@ -78,14 +89,23 @@ buildCoalescedEncoding(ModuleAxisInfoAnalysis &axisInfoAnalysis, Operation *op,
 
   if (!dyn_cast<triton::LoadOp>(op)) {
     // For ops that can result in a global memory write, we should enforce
-    // that each thread handles at most 128 bits, which is the widest
-    // available vectorized store op; otherwise, the store will have "gaps"
-    // in the memory write at the warp level, resulting in worse performance.
-    // For loads, we can expect that the gaps won't matter due to the L1
-    // cache.
-    perThread = std::min<int>(
-        perThread,
-        getNumElementsPerThread(op, order, axisInfoAnalysis, shapePerCTA));
+    // that each thread handles at most the target's widest vectorized store
+    // width; otherwise, the store will have "gaps" in the memory write at
+    // the warp level, resulting in worse performance. For loads, we can
+    // expect that the gaps won't matter due to the L1 cache.
+    Value val = getMemAccessPtr(op);
+    auto ty = cast<RankedTensorType>(val.getType());
+    AxisInfo &valInfo = *axisInfoAnalysis.getAxisInfo(val);
+    unsigned elemNumBits = getElementBitWidth(ty);
+    unsigned elemNumBytes = std::max(elemNumBits / 8, 1u);
+    unsigned maxMultipleBytes = valInfo.getDivisibility(order[0]);
+    unsigned maxMultiple = std::max(maxMultipleBytes / elemNumBytes, 1u);
+    unsigned maxContig = std::min<unsigned>(valInfo.getContiguity(order[0]),
+                                            shapePerCTA[order[0]]);
+    unsigned alignment = std::min(maxMultiple, maxContig);
+    unsigned storeCap =
+        std::max(1u, getStoreVecBitWidth(op) / std::max(elemNumBits, 1u));
+    perThread = std::min<int>(perThread, std::min(alignment, storeCap));
   }
   SmallVector<unsigned> sizePerThread(refTensorType.getRank(), 1);
   sizePerThread[order[0]] = perThread;

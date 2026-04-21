@@ -1,5 +1,7 @@
 // RUN: env TRITON_INTEL_PREDICATED_LOAD=1 TRITON_INTEL_PREDICATED_STORE=1  triton-opt %s -split-input-file --convert-triton-intel-gpu-to-llvm | FileCheck %s
 
+// COM: Baseline 128-bit vectorization — ttig.support_256b_load_store is NOT set on the module. See load_store_256b_to_llvm.mlir for the widened variant.
+
 #blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // CHECK-LABEL: global_load_with_attributes

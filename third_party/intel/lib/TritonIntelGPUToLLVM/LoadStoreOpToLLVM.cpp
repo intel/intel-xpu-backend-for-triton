@@ -197,9 +197,15 @@ struct LoadStoreConversionBase {
         .getContiguity(ptr);
   }
 
-  /// Maximum number of elements that fit in a 128-bit vector load/store.
-  static unsigned getMaxVecWidth(unsigned pointeeBitWidth) {
-    return std::max(1u, 128 / std::max(8u, pointeeBitWidth));
+  /// Maximum number of elements per-thread vector load/store. 128 bits by
+  /// default; 256 bits when `mod` carries `ttig.support_256b_load_store`.
+  static unsigned getMaxVecWidth(unsigned pointeeBitWidth, ModuleOp mod) {
+    unsigned maxBits =
+        (mod &&
+         mod->hasAttr(TritonIntelGPUDialect::getSupport256bLoadStoreAttrName()))
+            ? 256u
+            : 128u;
+    return std::max(1u, maxBits / std::max(8u, pointeeBitWidth));
   }
 
   unsigned getVectorSize(Value ptr) const {
@@ -208,8 +214,8 @@ struct LoadStoreConversionBase {
 
     unsigned contiguity = getContiguity(ptr);
     unsigned pointeeBitWidth = triton::getPointeeBitWidth(ptr.getType());
-    // The maximum vector size is 128 bits.
-    return std::min<unsigned>(getMaxVecWidth(pointeeBitWidth), contiguity);
+    auto mod = ptr.getParentRegion()->getParentOfType<ModuleOp>();
+    return std::min<unsigned>(getMaxVecWidth(pointeeBitWidth, mod), contiguity);
   }
 
   unsigned getMaskAlignment(Value mask) const {
@@ -255,7 +261,8 @@ struct LoadStoreConversionBase {
       return 1; // Stride is not 1 on this dimension
 
     unsigned pointeeBitWidth = valueElemTy.getIntOrFloatBitWidth();
-    unsigned maxVec = getMaxVecWidth(pointeeBitWidth);
+    auto mod = desc.getParentRegion()->getParentOfType<ModuleOp>();
+    unsigned maxVec = getMaxVecWidth(pointeeBitWidth, mod);
     unsigned threadContig = contigPerThread[order[0]];
     // Note: descContiguity and threadContig refer to the same logical dimension
     // but are indexed in different coordinate spaces. descContiguity uses

@@ -71,6 +71,11 @@ struct TritonAnnotateModule
           ttgi::TritonIntelGPUDialect::getSupportPrefetch256BAttrName(),
           builder.getUnitAttr());
 
+    if (support256bLoadStore)
+      mod->setAttr(
+          ttgi::TritonIntelGPUDialect::getSupport256bLoadStoreAttrName(),
+          builder.getUnitAttr());
+
     if (supportBfloat16Arithmetic)
       mod->setAttr(
           ttgi::TritonIntelGPUDialect::getSupportBFloat16ArithmeticAttrName(),

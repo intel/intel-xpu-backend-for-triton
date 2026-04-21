@@ -177,6 +177,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         dev_prop['has_f4_conversions'] = tgt_prop.get('has_f4_conversions', False)
         dev_prop['has_f8_conversions'] = tgt_prop.get('has_f8_conversions', False)
         dev_prop['has_256b_prefetch'] = tgt_prop.get('has_256b_prefetch', False)
+        # Same Xe3P+ gate as 256B prefetch pending separate driver prop.
+        dev_prop['has_256b_load_store'] = tgt_prop.get('has_256b_load_store', dev_prop['has_256b_prefetch'])
 
         if '__intel_already_queried_extensions__' not in tgt_prop:
             # All GPUs with the same device_id have the same extensions, so we just
@@ -257,6 +259,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         module_opts.support_f4_conversion = properties["has_f4_conversions"]
         module_opts.support_f8_conversion = properties["has_f8_conversions"]
         module_opts.support_256b_prefetch = properties["has_256b_prefetch"]
+        module_opts.support_256b_load_store = properties["has_256b_load_store"]
         module_opts.support_subgroup_matrix_multiply_accumulate_bf8 = properties[
             "has_subgroup_matrix_multiply_accumulate_bfloat8"]
         module_opts.threads_per_warp = opt.warp_size
