@@ -2,6 +2,7 @@
 
 #include "mlir/Analysis/Liveness.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
 
@@ -115,6 +116,7 @@ hoistCvtDotOpOutOfLoop(ttg::ConvertLayoutOp cvtOp, Liveness &liveness,
                                    << " + alreadyHoisted=" << alreadyHoisted
                                    << " + hoistBytes=" << hoistBytes
                                    << " exceeds 80% of budget=" << grfBudget);
+    cvtOp->setAttr("tt.no_licm", UnitAttr::get(cvtOp.getContext()));
     return;
   }
 
