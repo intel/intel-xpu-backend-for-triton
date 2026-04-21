@@ -461,7 +461,6 @@ def serialize_args(args, constants, signature, dir_path):
     import torch
     import numbers
     os.makedirs(dir_path, exist_ok=True)
-    print(f"Path to directory consisting of SPIR-V Runner data: {dir_path}")
 
     def serialize_kernel_metadata(arg, args_dict):
         args_dict['num_warps'] = arg.num_warps
