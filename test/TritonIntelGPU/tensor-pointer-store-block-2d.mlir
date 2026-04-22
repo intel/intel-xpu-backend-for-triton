@@ -205,3 +205,34 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     tt.return
   }
 }
+
+// -----
+
+// COM: Regression test for 2D block-load lowering base-width floor adjustment.
+// COM: Ensure minimum base width is adjusted by pointer alignment offset.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [4, 4], repCluster = [2, 2]}>
+#dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 2}>
+module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 16 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @regular_pointer_block_io_load
+  // CHECK: %[[ADDR_I64:.*]] = llvm.ptrtoint %{{.*}} : !llvm.ptr<1> to i64
+  // CHECK: %[[ALIGN_OFF_I64:.*]] = llvm.and %[[ADDR_I64]], {{.*}} : i64
+  // CHECK: %[[ALIGN_OFF_I32:.*]] = llvm.trunc %[[ALIGN_OFF_I64]] : i64 to i32
+  // CHECK: %[[MIN_BASE_WIDTH:.*]] = llvm.sub %{{.*}}, %[[ALIGN_OFF_I32]] : i32
+  // CHECK: %[[ADJ_BASE_WIDTH:.*]] = llvm.intr.umax %{{.*}}, %[[MIN_BASE_WIDTH]] : i32
+  // CHECK: triton_gen.2Dblockload {{.*}}, %[[ADJ_BASE_WIDTH]]
+  tt.func public @regular_pointer_block_io_load(%arg0: !tt.ptr<i8>) {
+    %0 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #dot_a}>>
+    %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #dot_a}>> -> tensor<256x1xi32, #dot_a>
+    %2 = arith.constant dense<64> : tensor<256x1xi32, #dot_a>
+    %3 = arith.muli %1, %2 : tensor<256x1xi32, #dot_a>
+    %4 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #dot_a}>>
+    %5 = tt.expand_dims %4 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #dot_a}>> -> tensor<1x64xi32, #dot_a>
+    %6 = tt.broadcast %3 : tensor<256x1xi32, #dot_a> -> tensor<256x64xi32, #dot_a>
+    %7 = tt.broadcast %5 : tensor<1x64xi32, #dot_a> -> tensor<256x64xi32, #dot_a>
+    %8 = arith.addi %6, %7 : tensor<256x64xi32, #dot_a>
+    %9 = tt.splat %arg0 : !tt.ptr<i8> -> tensor<256x64x!tt.ptr<i8>, #dot_a>
+    %addr = tt.addptr %9, %8 : tensor<256x64x!tt.ptr<i8>, #dot_a>, tensor<256x64xi32, #dot_a>
+    %loaded = tt.load %addr {ttig.block_io = "row_major"} : tensor<256x64x!tt.ptr<i8>, #dot_a>
+    tt.return
+  }
+}
