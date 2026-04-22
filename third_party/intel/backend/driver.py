@@ -528,9 +528,19 @@ class XPULauncher(object):
 
         # Serialize KernelArguments for SPIR-V Runner
         self.serialize_kernel_args = knobs.intel.enable_dump_spirv_kernel_args
-        self.dump_dir = metadata.cache_dir
+        self.cache_dir = metadata.cache_dir
+        self.dump_dir = self._resolve_dump_dir(metadata.cache_dir)
+        self.print_dump_spirv_kernel_args_info = knobs.intel.print_dump_spirv_kernel_args_info
+        self.dump_info_printed = False
         self.constants = constants
         self.signature = signature
+
+    def _resolve_dump_dir(self, cache_dir):
+        dump_dir_root = knobs.intel.dump_spirv_kernel_args_dir
+        if not dump_dir_root:
+            return cache_dir
+        cache_dir_name = os.path.basename(os.path.normpath(cache_dir))
+        return os.path.join(dump_dir_root, cache_dir_name)
 
     def _dump_launch_params(self, args, constants, signature):
         # inspired by `def _dump_launch_params(args, kwargs, launcher, kernel_name, grid):` from
@@ -574,6 +584,11 @@ class XPULauncher(object):
     def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
                  launch_exit_hook, *args):
         if self.serialize_kernel_args:
+            if self.print_dump_spirv_kernel_args_info and not self.dump_info_printed:
+                print(
+                    f"Triton kernel dump info: kernel_name={kernel_metadata.name}, cache_dir={self.cache_dir}, dump_dir={self.dump_dir}"
+                )
+                self.dump_info_printed = True
             serialize_args((gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
                             launch_exit_hook, *args), self.constants, self.signature, self.dump_dir)
 

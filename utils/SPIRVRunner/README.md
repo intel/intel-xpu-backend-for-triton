@@ -54,6 +54,18 @@ Optional cache location override:
 export TRITON_CACHE_DIR=< Absolute path to Triton cache root >
 ```
 
+Optional dump directory override:
+
+```
+export TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS_DIR=< Absolute path to SPIRV dump root >
+```
+
+Optional dump info printing:
+
+```
+export TRITON_XPU_PRINT_DUMP_SPIRV_KERNEL_ARGS_INFO=1
+```
+
 Following input data is generated in the kernel cache subdirectory (`<TRITON_CACHE_DIR>/<kernel_hash>/`),
 
 1. args_data.json - (Kernel Arguments / Grid Configuration)
@@ -72,9 +84,11 @@ General options:
 
   -o <string> - <Specify Output Tensor Name>
 
+  -d <string> - <Specify SPIRV dump directory path>
+
   -p          - Enable kernel time profiling
   -v <string> - <Specify Expected Output Tensor Names (Ex: -v expected_tensor1.pt,expected_tensor2.pt or skip)>
- ```
+  ```
 
 
 Note: `Output Tensor Name`  is essentially a chosen tensor that needs to be copied back to the CPU and written to disk. Additionally, the name must match the tensor's name (tensor_) and number as specified in the JSON file. Please refer args_data.json file.
@@ -85,8 +99,7 @@ Note: `Output Tensor Name`  is essentially a chosen tensor that needs to be copi
 
 SPIRVRunner Usage:
 ```
-cd <TRITON_CACHE_DIR>/<kernel_hash>
-`<abs path to SPIRVRunner executable> -o tensor_2 -p`
+<abs path to SPIRVRunner executable> -d <TRITON_CACHE_DIR>/<kernel_hash> -o tensor_2 -p
 
 Note: Prior to this run test framework to generate serialized args/tensor information
 ```

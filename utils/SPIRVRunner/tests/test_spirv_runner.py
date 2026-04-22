@@ -67,8 +67,8 @@ def test_args_json_gen():
                     break
 
             assert dump_dir is not None, f"args_data.json for add_kernel.spv not found under cache root: {cache_root}"
-            result = subprocess.run([SPIRV_RUNNER_PATH, "-o", "tensor_2", "-v", "expected_output.pt"], capture_output=True,
-                                    text=True, cwd=dump_dir)
+            result = subprocess.run([SPIRV_RUNNER_PATH, "-d", dump_dir, "-o", "tensor_2", "-v", "expected_output.pt"],
+                                    capture_output=True, text=True, check=True)
             print("SPIRVRunner stderr:", result.stderr)
     except subprocess.CalledProcessError as e:
         print("Unexpected error executing SPIRVRunner:", e)

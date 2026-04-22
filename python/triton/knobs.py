@@ -560,6 +560,8 @@ class intel_knobs(base_knobs):
     disable_igc_opt: env_bool = env_bool("TRITON_INTEL_DISABLE_IGC_OPT", False)
 
     enable_dump_spirv_kernel_args: env_bool = env_bool("TRITON_XPU_ENABLE_DUMP_SPIRV_KERNEL_ARGS", False)
+    dump_spirv_kernel_args_dir: env_opt_str = env_opt_str("TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS_DIR")
+    print_dump_spirv_kernel_args_info: env_bool = env_bool("TRITON_XPU_PRINT_DUMP_SPIRV_KERNEL_ARGS_INFO", False)
 
     libdevice_path: env_opt_str = env_opt_str("TRITON_LIBDEVICE_PATH")
 
