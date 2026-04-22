@@ -93,19 +93,10 @@ buildCoalescedEncoding(ModuleAxisInfoAnalysis &axisInfoAnalysis, Operation *op,
     // width; otherwise, the store will have "gaps" in the memory write at
     // the warp level, resulting in worse performance. For loads, we can
     // expect that the gaps won't matter due to the L1 cache.
-    Value val = getMemAccessPtr(op);
-    auto ty = cast<RankedTensorType>(val.getType());
-    AxisInfo &valInfo = *axisInfoAnalysis.getAxisInfo(val);
-    unsigned elemNumBits = getElementBitWidth(ty);
-    unsigned elemNumBytes = std::max(elemNumBits / 8, 1u);
-    unsigned maxMultipleBytes = valInfo.getDivisibility(order[0]);
-    unsigned maxMultiple = std::max(maxMultipleBytes / elemNumBytes, 1u);
-    unsigned maxContig = std::min<unsigned>(valInfo.getContiguity(order[0]),
-                                            shapePerCTA[order[0]]);
-    unsigned alignment = std::min(maxMultiple, maxContig);
-    unsigned storeCap =
-        std::max(1u, getStoreVecBitWidth(op) / std::max(elemNumBits, 1u));
-    perThread = std::min<int>(perThread, std::min(alignment, storeCap));
+    perThread = std::min<int>(
+        perThread,
+        getNumElementsPerThread(op, order, axisInfoAnalysis, shapePerCTA,
+                                getStoreVecBitWidth(op)));
   }
   SmallVector<unsigned> sizePerThread(refTensorType.getRank(), 1);
   sizePerThread[order[0]] = perThread;
