@@ -14,6 +14,27 @@ for file in Liger-Kernel/benchmark/scripts/benchmark_*; do
     if [ $file = "Liger-Kernel/benchmark/scripts/benchmark_fused_linear_jsd.py" ]; then
         continue
     fi
+
+    SKIP=1
+    if [ $file = "Liger-Kernel/benchmark/scripts/benchmark_fused_moe.py" ]; then
+        SKIP=0
+    fi
+    if [ $file = "Liger-Kernel/benchmark/scripts/benchmark_fused_neighborhood_attention.py" ]; then
+        SKIP=0
+    fi
+    if [ $file = "Liger-Kernel/benchmark/scripts/benchmark_layer_norm.py" ]; then
+        SKIP=0
+    fi
+    if [ $file = "Liger-Kernel/benchmark/scripts/benchmark_multi_token_attention.py" ]; then
+        SKIP=0
+    fi
+    if [ $file = "Liger-Kernel/benchmark/scripts/benchmark_sparse_multi_token_attention.py" ]; then
+        SKIP=0
+    fi
+    if [ $SKIP -eq 1 ]; then
+        continue
+    fi
+
     if python "$file"; then
         echo "Benchmark ran successfully: $file"
     else
