@@ -1511,6 +1511,24 @@ static LinearLayout getPrefetchLinearLayout(MLIRContext *ctx,
                                 tensorShape);
 }
 
+// Prefetch-specific cache control mapping. Differs from LoadOp in that
+// `NONE` defaults to L1C_L3C (traditional prefetch-aggressively policy)
+// rather than DEFAULT. Explicit user/pass-set modifiers (e.g., `.cg` from
+// the AnnotateCacheControl pass) still propagate through.
+static TritonGEN::LoadCacheControl prefetchCacheControl(CacheModifier cm) {
+  switch (cm) {
+  case CacheModifier::NONE:
+  case CacheModifier::CA:
+    return TritonGEN::LoadCacheControl::L1C_L3C;
+  case CacheModifier::CG:
+    return TritonGEN::LoadCacheControl::L1UC_L3C;
+  case CacheModifier::CV:
+    return TritonGEN::LoadCacheControl::L1UC_L3UC;
+  default:
+    return TritonGEN::LoadCacheControl::L1C_L3C;
+  }
+}
+
 /// Emit 2D block prefetch operations for a tiled prefetch.
 ///
 /// Converts base dimensions to bytes, determines vBlocks from element size,
@@ -1523,7 +1541,9 @@ static LogicalResult emit2DBlockPrefetchOps(
     unsigned tileHeightInElem, unsigned numTilesPerWarp,
     unsigned tileSizeInElem, const LinearLayout &llEncoding, unsigned rank = 2,
     ArrayRef<Value> extraDimStridesInBytes = {},
-    ArrayRef<Value> extraDimBaseOffsets = {}, Value scalarPred = {}) {
+    ArrayRef<Value> extraDimBaseOffsets = {}, Value scalarPred = {},
+    TritonGEN::LoadCacheControl cacheOpt =
+        TritonGEN::LoadCacheControl::L1C_L3C) {
   assert(extraDimStridesInBytes.size() == rank - 2 &&
          extraDimBaseOffsets.size() == rank - 2 &&
          "extraDim arrays must have rank - 2 elements");
@@ -1608,7 +1628,7 @@ static LogicalResult emit2DBlockPrefetchOps(
         /*tile_width*/ tileWidthInElem,
         /*tile_height*/ tileHeightInElem,
         /*v_blocks*/ vBlocks,
-        /*cache_opt*/ TritonGEN::LoadCacheControl::L1C_L3C);
+        /*cache_opt*/ cacheOpt);
     if (failed(newOp.verify())) {
       // Delete the op so that the verifier will not abort the pass
       // pipeline later, as we can fail this path and try a different
@@ -1874,7 +1894,7 @@ struct PrefetchOpConversion
                   /*tile_width*/ tileWidthInElem,
                   /*tile_height*/ tileHeightInElem,
                   /*v_blocks*/ vBlocks,
-                  /*cache_opt*/ TritonGEN::LoadCacheControl::L1C_L3C);
+                  /*cache_opt*/ prefetchCacheControl(op.getCache()));
               if (failed(newOp.verify())) {
                 // delete the op so that the verifier will not abort the pass
                 // pipeline later, as we can fail this path and try a different
@@ -2063,7 +2083,7 @@ struct PrefetchOpConversion
         op, rewriter, loc, base, baseWidth, baseHeight, rowStride, offsetBaseX,
         offsetBaseY, eltTy, tileWidthInElem, tileHeightInElem, numTilesPerWarp,
         tileSizeInElem, llEncoding, rank, extraDimStrides, extraDimBaseOffsets,
-        scalarPred);
+        scalarPred, prefetchCacheControl(op.getCache()));
   }
 };
 
@@ -2185,7 +2205,8 @@ struct DescriptorPrefetchOpConversion
         op, rewriter, loc, desc.base, baseWidth, baseHeight, rowStride,
         offsetBaseX, offsetBaseY, eltTy, tileWidthInElem, tileHeightInElem,
         numTilesPerWarp, tileSizeInElem, llEncoding, rank, extraDimStrides,
-        extraDimBaseOffsets);
+        extraDimBaseOffsets, /*scalarPred=*/Value{},
+        prefetchCacheControl(op.getCache()));
   }
 };
 

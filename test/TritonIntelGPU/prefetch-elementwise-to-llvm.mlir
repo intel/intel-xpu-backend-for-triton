@@ -187,3 +187,36 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     tt.return
   }
 }
+
+// -----
+
+// COM: Test case: cooperative prefetch with `cache = 3 : i32` (= CacheModifier::CG).
+// COM: Mirrors @prefetch_blocked_f16 but asserts that the CG modifier propagates
+// COM: through the prefetch lowering to `cache_control = L1UC_L3C` (L1 bypass).
+// COM: This is the path exercised when the `tritonintelgpu-annotate-cache-control`
+// COM: pass tags a non-dot streaming load with `.cg` and the pipeliner forwards
+// COM: the modifier to the created prefetch — the prefetch must then match the
+// COM: load's L1-bypass policy instead of dragging the data back into L1.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_prefetch_256b"} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @prefetch_blocked_f16_cg
+  tt.func public @prefetch_blocked_f16_cg(%arg0: !tt.ptr<f16>) {
+    %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi32, #blocked>
+    %2 = arith.constant dense<64> : tensor<128x1xi32, #blocked>
+    %3 = arith.muli %1, %2 : tensor<128x1xi32, #blocked>
+    %4 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %5 = tt.expand_dims %4 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #blocked>
+    %6 = tt.broadcast %3 : tensor<128x1xi32, #blocked> -> tensor<128x64xi32, #blocked>
+    %7 = tt.broadcast %5 : tensor<1x64xi32, #blocked> -> tensor<128x64xi32, #blocked>
+    %8 = arith.addi %6, %7 : tensor<128x64xi32, #blocked>
+    %9 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x64x!tt.ptr<f16>, #blocked>
+    %ptr = tt.addptr %9, %8 : tensor<128x64x!tt.ptr<f16>, #blocked>, tensor<128x64xi32, #blocked>
+
+    // CHECK-COUNT-2: triton_gen.2Dblockprefetch {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 2, cache_control = L1UC_L3C}
+    ttig.prefetch %ptr {boundaryCheck = array<i32>, cache = 3 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, ttig.block_io = "row_major"} : tensor<128x64x!tt.ptr<f16>, #blocked>
+
+    tt.return
+  }
+}
