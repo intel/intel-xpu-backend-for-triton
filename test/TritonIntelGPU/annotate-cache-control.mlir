@@ -358,3 +358,74 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     tt.return %0 : tensor<32xf32>
   }
 }
+
+// -----
+
+// COM: Test r — scf.while forward flow: a loaded value from a safe arg X is
+// COM: threaded through an scf.while before-region arg and after-region yield
+// COM: back into the before region, then stored to an RW arg DW. The
+// COM: forward-flow filter must propagate through scf.while init, condition,
+// COM: and after-region yield so the load of X does NOT get .cg.
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @value_flows_through_scf_while
+  tt.func public @value_flows_through_scf_while(%X: tensor<32x!tt.ptr<f32>>,
+                                                %DW: tensor<32x!tt.ptr<f32>>,
+                                                %offs: tensor<32xi32>,
+                                                %n: i32) {
+    // CHECK: tt.load
+    // CHECK-NOT: cacheModifier = cg
+    %x = tt.load %X : tensor<32x!tt.ptr<f32>>
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %res:2 = scf.while (%iv = %c0, %acc = %x) : (i32, tensor<32xf32>) -> (i32, tensor<32xf32>) {
+      %cmp = arith.cmpi slt, %iv, %n : i32
+      scf.condition(%cmp) %iv, %acc : i32, tensor<32xf32>
+    } do {
+    ^bb0(%iv1: i32, %acc1: tensor<32xf32>):
+      %next = arith.addi %iv1, %c1 : i32
+      scf.yield %next, %acc1 : i32, tensor<32xf32>
+    }
+    // The while's 2nd result carries %x into this store on the RW arg DW.
+    %sp = tt.addptr %DW, %offs : tensor<32x!tt.ptr<f32>>, tensor<32xi32>
+    tt.store %sp, %res#1 : tensor<32x!tt.ptr<f32>>
+    // Second load/store on DW makes DW an RW arg for the unsafe-arg analysis.
+    %lp = tt.addptr %DW, %offs : tensor<32x!tt.ptr<f32>>, tensor<32xi32>
+    %y = tt.load %lp : tensor<32x!tt.ptr<f32>>
+    %sp2 = tt.addptr %DW, %offs : tensor<32x!tt.ptr<f32>>, tensor<32xi32>
+    tt.store %sp2, %y : tensor<32x!tt.ptr<f32>>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Test s — scf.while feeding a tt.dot: the A operand of a matmul is
+// COM: threaded through an scf.while into the dot. The forward-walk must see
+// COM: this and leave the load with default cache modifier.
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @scf_while_feeds_dot_unchanged
+  tt.func public @scf_while_feeds_dot_unchanged(%aptr: tensor<32x32x!tt.ptr<f16>>,
+                                                %bptr: tensor<32x32x!tt.ptr<f16>>,
+                                                %c: tensor<32x32xf32>,
+                                                %n: i32)
+      -> tensor<32x32xf32> {
+    // CHECK: tt.load
+    // CHECK-NOT: cacheModifier = cg
+    %a = tt.load %aptr : tensor<32x32x!tt.ptr<f16>>
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %res:2 = scf.while (%iv = %c0, %acc = %c) : (i32, tensor<32x32xf32>) -> (i32, tensor<32x32xf32>) {
+      %cmp = arith.cmpi slt, %iv, %n : i32
+      scf.condition(%cmp) %iv, %acc : i32, tensor<32x32xf32>
+    } do {
+    ^bb0(%iv1: i32, %acc1: tensor<32x32xf32>):
+      %b = tt.load %bptr : tensor<32x32x!tt.ptr<f16>>
+      %d = tt.dot %a, %b, %acc1 : tensor<32x32xf16> * tensor<32x32xf16> -> tensor<32x32xf32>
+      %next = arith.addi %iv1, %c1 : i32
+      scf.yield %next, %d : i32, tensor<32x32xf32>
+    }
+    tt.return %res#1 : tensor<32x32xf32>
+  }
+}

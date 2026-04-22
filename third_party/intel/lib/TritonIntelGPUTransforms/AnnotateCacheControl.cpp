@@ -16,8 +16,73 @@ namespace mlir::triton::gpu::intel {
 
 namespace {
 
+// Propagates a use of `v` through structured control flow, inserting any
+// downstream values that may transitively carry data from `v` into `worklist`.
+// Returns true if the caller should skip the default fallback (i.e. the use
+// was already handled here). Handles scf.for (init -> iter_arg, result),
+// scf.if (yield -> result), and scf.while (init -> before-region arg,
+// condition -> after-region arg + while result, after-region yield ->
+// before-region arg).
+static bool propagateThroughSCF(OpOperand &use,
+                                llvm::SetVector<Value> &worklist) {
+  Operation *user = use.getOwner();
+
+  if (auto forOp = dyn_cast<scf::ForOp>(user)) {
+    unsigned operandIdx = use.getOperandNumber();
+    unsigned numCtrl = forOp.getNumControlOperands();
+    if (operandIdx >= numCtrl) {
+      unsigned iterIdx = operandIdx - numCtrl;
+      worklist.insert(forOp.getRegionIterArg(iterIdx));
+      worklist.insert(forOp.getResult(iterIdx));
+    }
+    return true;
+  }
+
+  if (auto whileOp = dyn_cast<scf::WhileOp>(user)) {
+    // scf.while operands are the init values for the before-region args.
+    unsigned idx = use.getOperandNumber();
+    if (idx < whileOp.getBeforeArguments().size())
+      worklist.insert(whileOp.getBeforeArguments()[idx]);
+    return true;
+  }
+
+  if (auto condOp = dyn_cast<scf::ConditionOp>(user)) {
+    // scf.condition(cond, args...) — operand 0 is the i1 break condition;
+    // operands 1..N map to after-region args and while results at 0..N-1.
+    unsigned idx = use.getOperandNumber();
+    if (idx == 0)
+      return true;
+    unsigned resultIdx = idx - 1;
+    auto whileOp = cast<scf::WhileOp>(condOp->getParentOp());
+    if (resultIdx < whileOp.getAfterArguments().size())
+      worklist.insert(whileOp.getAfterArguments()[resultIdx]);
+    if (resultIdx < whileOp.getResults().size())
+      worklist.insert(whileOp.getResult(resultIdx));
+    return true;
+  }
+
+  if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
+    Operation *parent = yieldOp->getParentOp();
+    unsigned idx = use.getOperandNumber();
+    if (auto forOp = dyn_cast<scf::ForOp>(parent)) {
+      worklist.insert(forOp.getResult(idx));
+      worklist.insert(forOp.getRegionIterArg(idx));
+    } else if (auto ifOp = dyn_cast<scf::IfOp>(parent)) {
+      worklist.insert(ifOp.getResult(idx));
+    } else if (auto whileOp = dyn_cast<scf::WhileOp>(parent)) {
+      // Yield is the terminator of the after region; it feeds the next
+      // iteration's before-region arguments.
+      if (idx < whileOp.getBeforeArguments().size())
+        worklist.insert(whileOp.getBeforeArguments()[idx]);
+    }
+    return true;
+  }
+
+  return false;
+}
+
 // Returns true if any transitive (forward) user of `root` is a tt::DotOp or
-// tt::DotScaledOp. Walks through scf.for: init -> iter_arg -> yield -> result.
+// tt::DotScaledOp. Walks through scf.for/scf.if/scf.while.
 static bool flowsToDot(Value root) {
   llvm::SetVector<Value> worklist;
   worklist.insert(root);
@@ -29,31 +94,8 @@ static bool flowsToDot(Value root) {
       if (isa<tt::DotOp, tt::DotScaledOp>(user))
         return true;
 
-      if (auto forOp = dyn_cast<scf::ForOp>(user)) {
-        // Map init operand -> region iter_arg and corresponding loop result.
-        unsigned operandIdx = use.getOperandNumber();
-        unsigned numCtrl = forOp.getNumControlOperands();
-        if (operandIdx >= numCtrl) {
-          unsigned iterIdx = operandIdx - numCtrl;
-          worklist.insert(forOp.getRegionIterArg(iterIdx));
-          worklist.insert(forOp.getResult(iterIdx));
-        }
+      if (propagateThroughSCF(use, worklist))
         continue;
-      }
-
-      if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
-        // yield inside scf.for: forward to the matching loop result and
-        // iter_arg. yield inside scf.if: forward to the matching if result.
-        Operation *parent = yieldOp->getParentOp();
-        unsigned idx = use.getOperandNumber();
-        if (auto forOp = dyn_cast<scf::ForOp>(parent)) {
-          worklist.insert(forOp.getResult(idx));
-          worklist.insert(forOp.getRegionIterArg(idx));
-        } else if (auto ifOp = dyn_cast<scf::IfOp>(parent)) {
-          worklist.insert(ifOp.getResult(idx));
-        }
-        continue;
-      }
 
       // Generic forward propagation: any value produced by this op may carry
       // data from `v`. Safe overapproximation.
@@ -184,6 +226,7 @@ static bool isUnsafePtr(Value ptr, tt::FuncOp func,
 // destination pointer resolves to an arg in `unsafeArgs`. This catches the
 // cross-kernel accumulation pattern where the loaded value is reduced into an
 // unsafe accumulator buffer even though the load's own pointer is safe.
+// Walks through scf.for/scf.if/scf.while.
 static bool
 valueFlowsToUnsafeStore(Value root, tt::FuncOp func,
                         const llvm::DenseSet<BlockArgument> &unsafeArgs) {
@@ -208,28 +251,8 @@ valueFlowsToUnsafeStore(Value root, tt::FuncOp func,
         continue;
       }
 
-      if (auto forOp = dyn_cast<scf::ForOp>(user)) {
-        unsigned operandIdx = use.getOperandNumber();
-        unsigned numCtrl = forOp.getNumControlOperands();
-        if (operandIdx >= numCtrl) {
-          unsigned iterIdx = operandIdx - numCtrl;
-          worklist.insert(forOp.getRegionIterArg(iterIdx));
-          worklist.insert(forOp.getResult(iterIdx));
-        }
+      if (propagateThroughSCF(use, worklist))
         continue;
-      }
-
-      if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
-        Operation *parent = yieldOp->getParentOp();
-        unsigned idx = use.getOperandNumber();
-        if (auto forOp = dyn_cast<scf::ForOp>(parent)) {
-          worklist.insert(forOp.getResult(idx));
-          worklist.insert(forOp.getRegionIterArg(idx));
-        } else if (auto ifOp = dyn_cast<scf::IfOp>(parent)) {
-          worklist.insert(ifOp.getResult(idx));
-        }
-        continue;
-      }
 
       // Generic forward propagation: any value produced by this op may carry
       // data from `v`. Safe overapproximation.
