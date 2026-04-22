@@ -463,6 +463,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             if options.num_warps > 32:
                 raise RuntimeError("grf_mode = 256 cannot be used with num_warps > 32")
             metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
+        elif options.grf_mode == '512':
+            if options.num_warps > 32:
+                raise RuntimeError("grf_mode = 512 cannot be used with num_warps > 32")
+            metadata["build_flags"] += " -cl-intel-512-GRF-per-thread"
         elif options.grf_mode == 'auto':
             metadata["build_flags"] += " -cl-intel-enable-auto-large-GRF-mode"
         elif options.grf_mode != 'default':

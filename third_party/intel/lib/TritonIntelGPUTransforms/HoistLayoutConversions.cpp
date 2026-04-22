@@ -4,6 +4,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/Debug.h"
 
 namespace mlir::triton::gpu::intel {
@@ -21,13 +22,22 @@ namespace ttg = mlir::triton::gpu;
 namespace {
 
 /// Return the GRF budget in bytes per thread for the given GRF mode.
-/// "256" mode gives 8192 bytes; all other modes (default/128/auto) use
-/// the conservative 128-register budget of 4096 bytes.
 ///
-/// \param grfMode  The GRF mode string ("default", "128", "256", or "auto").
+/// Explicit sizes ("128", "256", "512") map to the exact per-thread budget.
+/// For "default" and "auto" the compiler chooses the GRF size at JIT time,
+/// so the pass conservatively assumes the smallest (128-register) budget to
+/// avoid hoisting past the hardware limit on configurations that ultimately
+/// compile with fewer registers.
+///
+/// \param grfMode  The GRF mode string ("default", "128", "256", "512", or
+///                 "auto").
 /// \return         The GRF budget in bytes per hardware thread.
 unsigned getGRFBytesPerThread(StringRef grfMode) {
-  return grfMode == "256" ? 8192 : 4096;
+  return llvm::StringSwitch<unsigned>(grfMode)
+      .Case("128", 4096)
+      .Case("256", 8192)
+      .Case("512", 16384)
+      .Default(4096);
 }
 
 /// Return the per-thread size in bytes for \p type, using the encoding's
