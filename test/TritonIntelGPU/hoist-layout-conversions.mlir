@@ -212,9 +212,10 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Case 8: Hoist ConvertLayoutOp out of inner loop when source is defined
-// COM: outside both loops. The convert_layout moves before the inner scf.for
-// COM: but remains inside the outer loop.
+// COM: Case 8: Hoist ConvertLayoutOp out of an inner loop when its source is
+// COM: loop-invariant w.r.t. the inner loop. The convert_layout moves before
+// COM: the inner scf.for but remains inside the outer loop. Hoisting further
+// COM: out of the outer loop is left as a follow-up.
 
 #blocked8 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas8 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
