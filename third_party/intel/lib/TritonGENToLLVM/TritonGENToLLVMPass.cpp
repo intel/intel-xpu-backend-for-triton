@@ -225,6 +225,11 @@ computeAlignedBasePtrWidthAndOffset(OpTy op,
   Value elemSizeInBytes = b.i32_val(op.getElemSizeInBits() / 8);
   Value adjustedXOffset =
       b.add(op.getX(), b.udiv(offsetInBytes, elemSizeInBytes));
+  // Minimum base width in bytes for 2D block operations
+  static constexpr unsigned MIN_BASE_WIDTH_BYTES = 64;
+  adjustedBaseWidth =
+      b.umax(adjustedBaseWidth, b.i32_val(MIN_BASE_WIDTH_BYTES));
+
   return {adjustedBasePtr, adjustedBaseWidth, adjustedXOffset};
 }
 
@@ -476,9 +481,10 @@ createAssertNot(ConversionPatternRewriter &rewriter,
 }
 
 static void create2DBlockAssertsImpl(
-    const mlir::Value &baseWidth, const mlir::Value &baseHeight,
-    const mlir::Value &basePitch, const mlir::Value &x, unsigned int elemSize,
-    const mlir::Location &loc, mlir::ConversionPatternRewriter &rewriter,
+    const bool checkBaseWidth, const mlir::Value &baseWidth,
+    const mlir::Value &baseHeight, const mlir::Value &basePitch,
+    const mlir::Value &x, unsigned int elemSize, const mlir::Location &loc,
+    mlir::ConversionPatternRewriter &rewriter,
     const mlir::triton::gpu::intel::LibCallEmitter &emitter) {
   using namespace mlir;
   using namespace mlir::LLVM;
@@ -498,10 +504,12 @@ static void create2DBlockAssertsImpl(
   createAssertNot(rewriter, emitter, wTooLarge,
                   "2nd operand (base width) should be <= 24 bits");
 
-  Value wTooSmall =
-      ICmpOp::create(rewriter, loc, ICmpPredicate::ult, baseWidth, c64);
-  createAssertNot(rewriter, emitter, wTooSmall,
-                  "2nd operand (base width) should be >= 64");
+  if (checkBaseWidth) {
+    Value wTooSmall =
+        ICmpOp::create(rewriter, loc, ICmpPredicate::ult, baseWidth, c64);
+    createAssertNot(rewriter, emitter, wTooSmall,
+                    "2nd operand (base width) should be >= 64");
+  }
 
   Value wRem = URemOp::create(rewriter, loc, baseWidth, cMaxAlign);
   Value wNotAligned =
@@ -555,10 +563,14 @@ create2DBlockAsserts(OpTy op, mlir::ConversionPatternRewriter &rewriter,
     return;
   }
 
+  bool checkBaseWidth = true;
+  if constexpr (std::is_same_v<OpTy, TritonGEN::Matrix2DBlockLoadOp>) {
+    checkBaseWidth = op.getValidBaseWidth();
+  }
   // put implementation in a separate function to avoid template bloat
   create2DBlockAssertsImpl(
-      op.getBaseWidth(), op.getBaseHeight(), op.getBasePitch(), op.getX(),
-      op.getElemSizeInBits() / 8, op->getLoc(), rewriter, emitter);
+      checkBaseWidth, op.getBaseWidth(), op.getBaseHeight(), op.getBasePitch(),
+      op.getX(), op.getElemSizeInBits() / 8, op->getLoc(), rewriter, emitter);
 }
 
 namespace {

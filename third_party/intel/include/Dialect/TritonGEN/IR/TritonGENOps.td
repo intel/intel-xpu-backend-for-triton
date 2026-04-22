@@ -197,7 +197,8 @@ def TritonGEN_Matrix2DBlockLoadOp : TritonGEN_Op<"2Dblockload">,
     I32Attr:$v_blocks,
     I1Attr:$transpose,
     I1Attr:$vnni_transform,
-    DefaultValuedAttr<TritonGEN_LoadCacheControl, "::mlir::triton::TritonGEN::LoadCacheControl::DEFAULT">:$cache_control
+    DefaultValuedAttr<TritonGEN_LoadCacheControl, "::mlir::triton::TritonGEN::LoadCacheControl::DEFAULT">:$cache_control,
+    DefaultValuedAttr<BoolAttr, "true">: $valid_base_width
   )> {
 
   let summary = "2D block load";
@@ -217,6 +218,7 @@ def TritonGEN_Matrix2DBlockLoadOp : TritonGEN_Op<"2Dblockload">,
       $transpose - transpose the tile in registers (useful for 32 bit element type)
       $vnni_transform - transpose and pack the sub matrix in registers (useful for < 32 bit element types)
       $cache_control - an enumerator that sets the L1 and L3 cache behavior
+      $valid_base_width - to check the base width in runtime.
 
     Notes:
       - the $transpose and $vnni_transform parameters are mutual exclusive

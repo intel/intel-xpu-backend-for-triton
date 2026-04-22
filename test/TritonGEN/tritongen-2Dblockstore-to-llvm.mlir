@@ -34,6 +34,8 @@ llvm.func @triton_gen.2Dblockstore(%ptr : !llvm.ptr<1>, %base_width : i32, %base
   // CHECK-DAG:   [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK-NEXT:  [[DIV:%.*]] = llvm.udiv [[TRUNC]], [[ONE]] : i32
   // CHECK-NEXT:  [[ADD_1:%.*]] = llvm.add %arg4, [[DIV]] : i32
+  // CHECK-NEXT:  [[MIN_BASE_WIDTH:%.*]] = llvm.mlir.constant(64 : i32) : i32
+  // CHECK-NEXT:  [[MAX:%.*]] = llvm.intr.umax([[ADD_0]], [[MIN_BASE_WIDTH]]) : (i32, i32) -> i32
   // CHECK-DAG:   [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
   // CHECK-DAG:   [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK-DAG:   [[UNDEF:%.*]] = llvm.mlir.undef : vector<2xi32>
@@ -43,7 +45,7 @@ llvm.func @triton_gen.2Dblockstore(%ptr : !llvm.ptr<1>, %base_width : i32, %base
   // CHECK-DAG:   [[TileWidth:%.*]] = llvm.mlir.constant(16 : i32) : i32
   // CHECK-DAG:   [[TileHeight:%.*]] = llvm.mlir.constant(8 : i32) : i32
   // CHECK-DAG:   [[VBlocks:%.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK-NEXT:  llvm.call spir_funccc @_Z33__spirv_Subgroup2DBlockStoreINTELiiiiPvPU3AS1viiiDv2_i([[ElemSize]], [[TileWidth]], [[TileHeight]], [[VBlocks]], [[STOREVALPTR]], [[BASE_ALIGNED]], [[ADD_0]], %arg2, %arg3, [[COORD1]])
+  // CHECK-NEXT:  llvm.call spir_funccc @_Z33__spirv_Subgroup2DBlockStoreINTELiiiiPvPU3AS1viiiDv2_i([[ElemSize]], [[TileWidth]], [[TileHeight]], [[VBlocks]], [[STOREVALPTR]], [[BASE_ALIGNED]], [[MAX]], %arg2, %arg3, [[COORD1]])
   // CHECK-SAME:       triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.store_cache_control<0, Uncached, 5>, #triton_gen.store_cache_control<1, Uncached, 5>>
   // CHECK-SAME:       : (i32, i32, i32, i32, !llvm.ptr{{.*}}, !llvm.ptr<1>{{.*}}, i32, i32, i32, vector<2xi32>) -> ()
   triton_gen.2Dblockstore %ptr, %base_width, %base_height, %base_pitch, %x, %y, %stored_val {elem_size_in_bits=8, tile_width=16, tile_height=8, v_blocks=1, cache_control=L1UC_L3UC} : (!llvm.ptr<1>, i32, i32, i32, i32, i32, vector<8xi8>)
@@ -80,8 +82,10 @@ llvm.func @triton_gen.2Dblockstore(%ptr : !llvm.ptr<1>, %base_width : i32, %base
   // CHECK:    [[TWO:%.*]] = llvm.mlir.constant(2 : i32) : i32
   // CHECK:    [[SHR:%.*]] = llvm.udiv [[TRUNC]], [[TWO]] : i32
   // CHECK:    [[X:%.*]] = llvm.add %arg4, [[SHR]] : i32
+  // CHECK:    [[MIN_BASE_WIDTH:%.*]] = llvm.mlir.constant(64 : i32) : i32
+  // CHECK:    [[MAX:%.*]] = llvm.intr.umax([[ADD]], [[MIN_BASE_WIDTH]]) : (i32, i32) -> i32
   // CHECK:    [[BASE_ALIGNED:%.*]] = llvm.ptrtoint [[VAL_65]] : !llvm.ptr<1> to i64
-  // CHECK:    [[BASEWIDTH:%.*]] = llvm.sub [[ADD]], [[ONE0]] : i32
+  // CHECK:    [[BASEWIDTH:%.*]] = llvm.sub [[MAX]], [[ONE0]] : i32
   // CHECK:    [[ELEM_BITS:%.*]] = llvm.mlir.constant(16 : i32) : i32
   // CHECK:    [[TILE_WIDTH:%.*]] = llvm.mlir.constant(32 : i32) : i32
   // CHECK:    [[TILE_HEIGHT:%.*]] = llvm.mlir.constant(1 : i32) : i32

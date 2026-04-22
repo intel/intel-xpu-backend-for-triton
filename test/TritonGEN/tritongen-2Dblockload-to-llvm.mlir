@@ -30,8 +30,10 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
   // CHECK:    [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK:    [[SHR:%.*]] = llvm.udiv [[TRUNC]], [[ONE]] : i32
   // CHECK:    [[X:%.*]] = llvm.add %arg4, [[SHR]] : i32
+  // CHECK:    [[MIN_BASE_WIDTH:%.*]] = llvm.mlir.constant(64 : i32) : i32
+  // CHECK:    [[MAX:%.*]] = llvm.intr.umax([[ADD]], [[MIN_BASE_WIDTH]]) : (i32, i32) -> i32
   // CHECK:    [[BASE_ALIGNED:%.*]] = llvm.ptrtoint [[VAL_65]] : !llvm.ptr<1> to i64
-  // CHECK:    [[BASEWIDTH:%.*]] = llvm.sub [[ADD]], [[ONE0]] : i32
+  // CHECK:    [[BASEWIDTH:%.*]] = llvm.sub [[MAX]], [[ONE0]] : i32
   // CHECK:    [[ELEM_BITS:%.*]] = llvm.mlir.constant(8 : i32) : i32
   // CHECK:    [[TILE_WIDTH:%.*]] = llvm.mlir.constant(8 : i32) : i32
   // CHECK:    [[TILE_HEIGHT:%.*]] = llvm.mlir.constant(8 : i32) : i32
@@ -109,6 +111,8 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
   // CHECK-DAG:   [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK-NEXT:  [[DIV:%.*]] = llvm.udiv [[TRUNC]], [[ONE]] : i32
   // CHECK-NEXT:  [[ADD_1:%.*]] = llvm.add %arg4, [[DIV]] : i32
+  // CHECK-NEXT:  [[MIN_BASE_WIDTH:%.*]] = llvm.mlir.constant(64 : i32) : i32
+  // CHECK-NEXT:  [[MAX:%.*]] = llvm.intr.umax([[ADD_0]], [[MIN_BASE_WIDTH]]) : (i32, i32) -> i32
   // CHECK-DAG:   [[ZERO_1:%.*]] = llvm.mlir.constant(0 : i32) : i32
   // CHECK-DAG:   [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK-DAG:   [[UNDEF:%.*]] = llvm.mlir.undef : vector<2xi32>
@@ -118,7 +122,7 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
   // CHECK-DAG:   [[TileWidth:%.*]] = llvm.mlir.constant(16 : i32) : i32
   // CHECK-DAG:   [[TileHeight:%.*]] = llvm.mlir.constant(8 : i32) : i32
   // CHECK-DAG:   [[VBlocks:%.*]] = llvm.mlir.constant(4 : i32) : i32
-  // CHECK-NEXT:  llvm.call spir_funccc @_Z32__spirv_Subgroup2DBlockLoadINTELiiiiPU3AS1viiiDv2_iPv([[ElemSize]], [[TileWidth]], [[TileHeight]], [[VBlocks]], [[BASE_ALIGNED]], [[ADD_0]], %arg2, %arg3, [[COORD1]], [[DEST]]) {{.*}} : (i32, i32, i32, i32, !llvm.ptr<1>{{.*}}, i32, i32, i32, vector<2xi32>, !llvm.ptr{{.*}}) -> ()
+  // CHECK-NEXT:  llvm.call spir_funccc @_Z32__spirv_Subgroup2DBlockLoadINTELiiiiPU3AS1viiiDv2_iPv([[ElemSize]], [[TileWidth]], [[TileHeight]], [[VBlocks]], [[BASE_ALIGNED]], [[MAX]], %arg2, %arg3, [[COORD1]], [[DEST]]) {{.*}} : (i32, i32, i32, i32, !llvm.ptr<1>{{.*}}, i32, i32, i32, vector<2xi32>, !llvm.ptr{{.*}}) -> ()
   // CHECK-NEXT:  llvm.load [[DEST]] : !llvm.ptr -> vector<32xi8>
   %0 = triton_gen.2Dblockload %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=16, tile_height=8, v_blocks=4, transpose=false, vnni_transform=false, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32) -> vector<32xi8>
   llvm.return
