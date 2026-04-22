@@ -45,16 +45,16 @@ tt.func @no_attr_gets_hoisted(%arg0: i32, %arg1: i32, %lb: i32, %ub: i32, %step:
 // COM: the LoadOp-specific legality checks, so the load stays inside scf.for.
 
 // CHECK-LABEL: @no_licm_attr_blocks_load_hoist
-tt.func @no_licm_attr_blocks_load_hoist(%arg0: !tt.ptr<tensor<1024xf32>>, %lb: i32, %ub: i32, %step: i32, %arg5: !tt.ptr<tensor<1024xf32>>) {
+tt.func @no_licm_attr_blocks_load_hoist(%arg0: tensor<1024x!tt.ptr<f32>>, %lb: i32, %ub: i32, %step: i32, %arg5: tensor<1024x!tt.ptr<f32>>) {
   %cst = arith.constant dense<0.000000e+00> : tensor<1024xf32>
   // CHECK: scf.for
   // CHECK:   tt.load %{{.*}} {tt.no_licm}
   // CHECK:   scf.yield
   %1 = scf.for %iv = %lb to %ub step %step iter_args(%acc = %cst) -> (tensor<1024xf32>) : i32 {
-    %val = tt.load %arg0 {tt.no_licm} : !tt.ptr<tensor<1024xf32>>
+    %val = tt.load %arg0 {tt.no_licm} : tensor<1024x!tt.ptr<f32>>
     %sum = arith.addf %acc, %val : tensor<1024xf32>
     scf.yield %sum : tensor<1024xf32>
   }
-  tt.store %arg5, %1 : !tt.ptr<tensor<1024xf32>>
+  tt.store %arg5, %1 : tensor<1024x!tt.ptr<f32>>
   tt.return
 }
