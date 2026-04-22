@@ -174,8 +174,7 @@ private:
     unsigned rank = tensorTy.getRank();
 
     // For 1D ops, try to detect strided access patterns and reshape
-    // to 2D for block IO lowering. This runs before the 2D mask check
-    // because 1D strided loads handle masks internally.
+    // to 2D for block IO lowering.
     if constexpr (std::is_same_v<OpType, tt::LoadOp>) {
       if (rank == 1) {
         reshape1DStridedLoad(op, tensorTy, context);
@@ -185,13 +184,6 @@ private:
     if constexpr (std::is_same_v<OpType, tt::StoreOp>) {
       if (rank == 1) {
         reshape1DStridedStore(op, tensorTy, context);
-        return;
-      }
-    }
-
-    if constexpr (std::is_same_v<OpType, tt::LoadOp>) {
-      if (op.getMask()) {
-        LDBG("Load op has mask, skip block IO attribute");
         return;
       }
     }

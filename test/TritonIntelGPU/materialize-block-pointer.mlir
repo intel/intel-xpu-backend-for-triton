@@ -55,6 +55,84 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
 
 // -----
 
+// COM: Row-major masked tensor-of-pointer load should get block_io attribute.
+#blocked3 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 4], warpsPerCTA = [32, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @masked_row_major_load
+  tt.func public @masked_row_major_load(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}) {
+    %0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked3}>>
+    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked3}>> -> tensor<1x32xi32, #blocked3>
+    %2 = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<1x32x!tt.ptr<bf16>, #blocked3>
+    %3 = tt.addptr %2, %1 : tensor<1x32x!tt.ptr<bf16>, #blocked3>, tensor<1x32xi32, #blocked3>
+    %4 = tt.broadcast %3 : tensor<1x32x!tt.ptr<bf16>, #blocked3> -> tensor<256x32x!tt.ptr<bf16>, #blocked3>
+    %mask = arith.constant dense<true> : tensor<256x32xi1, #blocked3>
+    // CHECK: tt.load {{.*}} {ttig.block_io = "row_major"}
+    tt.load %4, %mask : tensor<256x32x!tt.ptr<bf16>, #blocked3>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Column-major masked tensor-of-pointer load should get block_io attribute.
+#blocked4 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 4], warpsPerCTA = [32, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @masked_column_major_load
+  tt.func public @masked_column_major_load(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}) {
+    %0 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked4}>>
+    %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked4}>> -> tensor<256x1xi32, #blocked4>
+    %2 = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<256x1x!tt.ptr<bf16>, #blocked4>
+    %3 = tt.addptr %2, %1 : tensor<256x1x!tt.ptr<bf16>, #blocked4>, tensor<256x1xi32, #blocked4>
+    %4 = tt.broadcast %3 : tensor<256x1x!tt.ptr<bf16>, #blocked4> -> tensor<256x32x!tt.ptr<bf16>, #blocked4>
+    %mask = arith.constant dense<true> : tensor<256x32xi1, #blocked4>
+    // CHECK: tt.load {{.*}} {ttig.block_io = "column_major"}
+    tt.load %4, %mask : tensor<256x32x!tt.ptr<bf16>, #blocked4>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Negative case - masked 1D load should NOT get block_io attribute (rank < 2).
+#blocked5 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [16], warpsPerCTA = [32], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @masked_1d_load_no_block_io
+  tt.func public @masked_1d_load_no_block_io(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}) {
+    %0 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked5>
+    %1 = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<256x!tt.ptr<bf16>, #blocked5>
+    %2 = tt.addptr %1, %0 : tensor<256x!tt.ptr<bf16>, #blocked5>, tensor<256xi32, #blocked5>
+    %mask = arith.constant dense<true> : tensor<256xi1, #blocked5>
+    // CHECK-NOT: ttig.block_io
+    tt.load %2, %mask : tensor<256x!tt.ptr<bf16>, #blocked5>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Negative case - masked load with non-contiguous pattern should NOT get block_io attribute.
+#blocked6 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 4], warpsPerCTA = [32, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @masked_non_contiguous_no_block_io
+  tt.func public @masked_non_contiguous_no_block_io(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}) {
+    // Create strided (non-contiguous) access pattern
+    %c2 = arith.constant 2 : i32
+    %0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked6}>>
+    %c2_tensor = tt.splat %c2 : i32 -> tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked6}>>
+    %strided = arith.muli %0, %c2_tensor : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked6}>>
+    %1 = tt.expand_dims %strided {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked6}>> -> tensor<1x32xi32, #blocked6>
+    %2 = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<1x32x!tt.ptr<bf16>, #blocked6>
+    %3 = tt.addptr %2, %1 : tensor<1x32x!tt.ptr<bf16>, #blocked6>, tensor<1x32xi32, #blocked6>
+    %4 = tt.broadcast %3 : tensor<1x32x!tt.ptr<bf16>, #blocked6> -> tensor<256x32x!tt.ptr<bf16>, #blocked6>
+    %mask = arith.constant dense<true> : tensor<256x32xi1, #blocked6>
+    // CHECK-NOT: ttig.block_io
+    tt.load %4, %mask : tensor<256x32x!tt.ptr<bf16>, #blocked6>
+    tt.return
+  }
+}
+
+// -----
+
 // COM: 3D regular pointer.
 #blocked = #ttg.blocked<{sizePerThread = [1, 4, 4], threadsPerWarp = [1, 4, 8], warpsPerCTA = [2, 2, 1], order = [2, 1, 0]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
