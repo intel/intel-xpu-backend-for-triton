@@ -1,6 +1,7 @@
 #include "Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -1903,39 +1904,68 @@ struct PrefetchOpConversion
     if (!blockIOAttr)
       return failure();
 
-    // Masked prefetches can arise from loop-pipeline epilogue predication,
-    // which turns a scalar `pred` into `splat(pred)` via tt::getPredMask. The
-    // cooperative path uses a single uniform base pointer plus per-warp
-    // offsets and can only honor a uniform (scalar) predicate. If the mask is
-    // provably uniform (a splat, or already scalar), extract a single i1 and
-    // apply it to offsetY below. Otherwise bail so the generic path, which
-    // supports per-element masks, can handle it.
+    // Masked prefetches can arise from loop-pipeline epilogue predication.
+    // `MatmulLoopPipeline::predicateOp` wraps the existing mask with
+    // `tt::getPredMask`, which yields either `splat(pred)` (when the prefetch
+    // had no prior mask) or `arith.andi(splat(pred), priorMask)` (when it
+    // did, e.g. the load had a bounds check). The cooperative path uses a
+    // single uniform base pointer plus per-warp offsets and can only honor a
+    // uniform (scalar) predicate; the per-element `priorMask` component
+    // cannot be applied here. Because a prefetch is a hint (dropping a
+    // per-element mask is safe — the HW bounds check on the 2D surface
+    // still rejects out-of-surface offsets), we extract any uniform
+    // component(s) and AND them into a scalar predicate. If no uniform
+    // component can be found (e.g., the mask is purely `arith.cmpi`), bail
+    // so the generic path can handle it.
     const bool memoryRowMajor = isMemoryRowMajor(op);
     if (!memoryRowMajor)
       return failure();
 
+    // Extract a scalar `i1` predicate from a (possibly `arith.andi`-nested)
+    // tensor mask. Scalar leaves and `splat(scalar)` operands contribute to
+    // the uniform predicate; non-uniform leaves (e.g., `arith.cmpi`) are
+    // ignored — safe for a prefetch hint. Returns nullptr if no uniform
+    // predicate can be recovered (i.e., the mask is entirely non-uniform).
+    auto extractUniformPred = [&](Value mask) -> Value {
+      SmallVector<Value> worklist{mask};
+      SmallVector<Value> uniformSrcs;
+      while (!worklist.empty()) {
+        Value v = worklist.pop_back_val();
+        if (!isa<RankedTensorType>(v.getType())) {
+          uniformSrcs.push_back(v);
+          continue;
+        }
+        if (auto splat = v.getDefiningOp<triton::SplatOp>()) {
+          uniformSrcs.push_back(splat.getSrc());
+          continue;
+        }
+        if (auto andOp = v.getDefiningOp<arith::AndIOp>()) {
+          worklist.push_back(andOp.getLhs());
+          worklist.push_back(andOp.getRhs());
+          continue;
+        }
+        // Non-uniform leaf (e.g., arith.cmpi) — ignored.
+      }
+      if (uniformSrcs.empty())
+        return Value();
+      Value acc = rewriter.getRemappedValue(uniformSrcs.front());
+      if (!acc)
+        return Value();
+      auto tb = TritonLLVMOpBuilder(op.getLoc(), rewriter);
+      for (Value v : ArrayRef<Value>(uniformSrcs).drop_front()) {
+        Value remapped = rewriter.getRemappedValue(v);
+        if (!remapped)
+          return Value();
+        acc = tb.and_(acc, remapped);
+      }
+      return acc;
+    };
+
     Value scalarPred;
     if (Value mask = op.getMask()) {
-      bool uniform = false;
-      if (isa<RankedTensorType>(mask.getType()))
-        uniform = mask.getDefiningOp<triton::SplatOp>() != nullptr;
-      else
-        uniform = true;
-      if (!uniform)
+      scalarPred = extractUniformPred(mask);
+      if (!scalarPred)
         return failure();
-
-      Value llMask = adaptor.getMask();
-      if (!llMask)
-        return failure();
-      if (isa<RankedTensorType>(mask.getType())) {
-        SmallVector<Value> maskElems =
-            unpackLLElements(op.getLoc(), llMask, rewriter);
-        if (maskElems.empty())
-          return failure();
-        scalarPred = maskElems[0];
-      } else {
-        scalarPred = llMask;
-      }
     }
 
     auto tensorOfPointers = dyn_cast<RankedTensorType>(op.getPtr().getType());
