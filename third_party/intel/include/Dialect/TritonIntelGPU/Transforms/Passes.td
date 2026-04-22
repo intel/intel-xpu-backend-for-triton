@@ -263,24 +263,33 @@ def TritonIntelGPUAnnotateCacheControl
     a `tt.dot`/`tt.dot_scaled`.
 
     To preserve cross-workgroup coherency, loads are additionally skipped when
-    their pointer root-traces to a kernel argument that falls into either of
-    two unsafe tiers (computed per `tt.FuncOp`):
+    their pointer root-traces to a kernel argument that falls into any of the
+    following unsafe cases (computed per `tt.FuncOp`):
 
       1. Read-write args: arguments that are both loaded and stored within the
          same function (producer/consumer scratch buffers).
-      2. Atomic-kernel loaded args: if the function contains any
-         `tt.atomic_rmw`/`tt.atomic_cas`, every argument that is loaded
-         anywhere in the function becomes unsafe. The presence of atomics
-         signals programmer-coordinated cross-workgroup synchronization
-         through those pointers (e.g. layer-norm backward spinlock
-         accumulation), where a `.cg` load could observe stale data still
-         resident in a sibling workgroup's L1.
+      2. Atomic kernels: if the function contains any `tt.atomic_rmw` or
+         `tt.atomic_cas`, every pointer-typed entry-block argument is
+         conservatively marked unsafe, even if only some of them are loaded.
+         The presence of atomics signals possible programmer-coordinated
+         cross-workgroup synchronization through kernel pointers (e.g.
+         layer-norm backward spinlock accumulation), where a `.cg` load could
+         observe stale data still resident in a sibling workgroup's L1.
+      3. Unresolved stores: if any `tt.store` has a pointer SSA chain that
+         cannot be resolved to known roots, every pointer-typed entry-block
+         argument is marked unsafe (we cannot prove which args are written).
+      4. Unresolved load pointer: if a `tt.load`'s own pointer SSA chain hits
+         an op the pass does not whitelist, the load is treated as unsafe.
+      5. Forward flow into unsafe store: if the loaded value transitively
+         feeds a `tt.store` whose destination resolves to an unsafe arg, the
+         load is treated as unsafe even if its own pointer is safe.
 
     Stores are intentionally left untouched: annotating stores with `.cg` on
     cross-kernel producer/consumer buffers (e.g. layer-norm backward
     partial-sum scratch) introduces data races.
   }];
   let dependentDialects = ["mlir::triton::TritonDialect",
+                           "mlir::triton::gpu::TritonGPUDialect",
                            "mlir::scf::SCFDialect"];
 }
 

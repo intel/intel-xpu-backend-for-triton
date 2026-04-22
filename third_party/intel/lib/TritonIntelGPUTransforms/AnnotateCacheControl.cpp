@@ -243,11 +243,13 @@ valueFlowsToUnsafeStore(Value root, tt::FuncOp func,
 // Scans `func` once to determine which entry-block pointer arguments are
 // unsafe to annotate `.cg`:
 //   - read-write args (loaded AND stored within the same function), OR
-//   - if the function contains any atomic op, every loaded arg (atomics imply
-//     cross-workgroup synchronized communication through the pointer args), OR
+//   - if the function contains any atomic op, every pointer-typed entry-block
+//     arg is marked unsafe (atomics imply cross-workgroup synchronized
+//     communication and the synchronized buffer may be any pointer arg, not
+//     only the ones we observed loaded), OR
 //   - if any store's pointer could not be resolved to known roots (so we
-//     cannot tell which args are actually written), treat every loaded arg
-//     as read-write.
+//     cannot tell which args are actually written), treat every pointer-typed
+//     entry-block arg as potentially read-write.
 static FuncUnsafeInfo computeUnsafeArgs(tt::FuncOp func) {
   FuncUnsafeInfo info;
   llvm::DenseSet<BlockArgument> loadedArgs;
