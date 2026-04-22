@@ -2286,8 +2286,18 @@ public:
       // by element bytes size.
       adjustedBaseWidth =
           b.add(baseWidth, b.mul(offsetX, b.i32_val(elemSizeInBits / 8)));
-      adjustedBaseWidth =
-          b.umax(adjustedBaseWidth, b.i32_val(MIN_BASE_WIDTH_BYTES));
+      Value baseAddrI64 = b.ptrtoint(int_ty(64), addrElem);
+      // A mask for 64-byte alignment (0x3f = 63).
+      constexpr int64_t ALIGNMENT_MASK = 0x3f;
+      // Calculate the byte offset of the base address from a 64-byte
+      // alignment.
+      Value offsetInBytes =
+          b.trunc(i32_ty, b.and_(baseAddrI64, b.i64_val(ALIGNMENT_MASK)));
+      // Adjust the min base width to account for the byte offset since it is
+      // going to be compensated in TritonGen.
+      Value minBaseWidth = b.sub(b.i32_val(MIN_BASE_WIDTH_BYTES), offsetInBytes);
+      // Max the min base width of hardware limitation.
+      adjustedBaseWidth = b.umax(adjustedBaseWidth, minBaseWidth);
       // Use the top-left address and mask of the block to load the data.
       // (The first value referred to by the registerIdx.)
       if (maskElems.size()) {
