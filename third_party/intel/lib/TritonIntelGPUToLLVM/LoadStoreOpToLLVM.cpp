@@ -1522,7 +1522,7 @@ static LogicalResult emit2DBlockPrefetchOps(
     unsigned tileHeightInElem, unsigned numTilesPerWarp,
     unsigned tileSizeInElem, const LinearLayout &llEncoding, unsigned rank = 2,
     ArrayRef<Value> extraDimStridesInBytes = {},
-    ArrayRef<Value> extraDimBaseOffsets = {}) {
+    ArrayRef<Value> extraDimBaseOffsets = {}, Value scalarPred = {}) {
   assert(extraDimStridesInBytes.size() == rank - 2 &&
          extraDimBaseOffsets.size() == rank - 2 &&
          "extraDim arrays must have rank - 2 elements");
@@ -1576,6 +1576,13 @@ static LogicalResult emit2DBlockPrefetchOps(
         {{kOffset, b.i32_val(off)}, {kWarp, warpId}, {kBlock, b.i32_val(0)}});
     Value offsetX = b.add(offsets[rank - 1].second, offsetBaseX);
     Value offsetY = b.add(offsets[rank - 2].second, offsetBaseY);
+
+    // If a uniform predicate is supplied (e.g. from loop-pipeline epilogue
+    // predication), set offsetY to baseHeight when the predicate is false so
+    // the HW out-of-bounds check skips the prefetch without generating
+    // spurious traffic.
+    if (scalarPred)
+      offsetY = b.select(scalarPred, offsetY, baseHeight);
 
     // Fold extra dimensions (beyond the inner 2) into the base pointer.
     Value adjustedBase = base;
@@ -1896,14 +1903,40 @@ struct PrefetchOpConversion
     if (!blockIOAttr)
       return failure();
 
-    // Masked prefetches (from pipeline epilogue predication) are not handled
-    // by the cooperative path — the base pointer may be out of bounds.
-    if (op.getMask())
-      return failure();
-
+    // Masked prefetches can arise from loop-pipeline epilogue predication,
+    // which turns a scalar `pred` into `splat(pred)` via tt::getPredMask. The
+    // cooperative path uses a single uniform base pointer plus per-warp
+    // offsets and can only honor a uniform (scalar) predicate. If the mask is
+    // provably uniform (a splat, or already scalar), extract a single i1 and
+    // apply it to offsetY below. Otherwise bail so the generic path, which
+    // supports per-element masks, can handle it.
     const bool memoryRowMajor = isMemoryRowMajor(op);
     if (!memoryRowMajor)
       return failure();
+
+    Value scalarPred;
+    if (Value mask = op.getMask()) {
+      bool uniform = false;
+      if (isa<RankedTensorType>(mask.getType()))
+        uniform = mask.getDefiningOp<triton::SplatOp>() != nullptr;
+      else
+        uniform = true;
+      if (!uniform)
+        return failure();
+
+      Value llMask = adaptor.getMask();
+      if (!llMask)
+        return failure();
+      if (isa<RankedTensorType>(mask.getType())) {
+        SmallVector<Value> maskElems =
+            unpackLLElements(op.getLoc(), llMask, rewriter);
+        if (maskElems.empty())
+          return failure();
+        scalarPred = maskElems[0];
+      } else {
+        scalarPred = llMask;
+      }
+    }
 
     auto tensorOfPointers = dyn_cast<RankedTensorType>(op.getPtr().getType());
     if (!tensorOfPointers)
@@ -1999,7 +2032,8 @@ struct PrefetchOpConversion
     return emit2DBlockPrefetchOps(
         op, rewriter, loc, base, baseWidth, baseHeight, rowStride, offsetBaseX,
         offsetBaseY, eltTy, tileWidthInElem, tileHeightInElem, numTilesPerWarp,
-        tileSizeInElem, llEncoding, rank, extraDimStrides, extraDimBaseOffsets);
+        tileSizeInElem, llEncoding, rank, extraDimStrides, extraDimBaseOffsets,
+        scalarPred);
   }
 };
 

@@ -67,3 +67,78 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     tt.return
   }
 }
+
+// -----
+
+// COM: Test case: masked cooperative prefetch (epilogue predication from
+// COM: the loop pipeliner). The pipeliner wraps the mask in `splat(pred)`,
+// COM: and the cooperative path should fold the uniform scalar predicate
+// COM: into offsetY = select(pred, 0, baseHeight) so the HW skips the
+// COM: prefetch out-of-bounds, mirroring the regular-pointer path's trick.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_prefetch_256b"} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @prefetch_blocked_f16_masked
+  tt.func public @prefetch_blocked_f16_masked(%arg0: !tt.ptr<f16>, %pred: i1) {
+    // COM: Build a 128x64 tensor-of-pointers with row stride = 64.
+    %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi32, #blocked>
+    %2 = arith.constant dense<64> : tensor<128x1xi32, #blocked>
+    %3 = arith.muli %1, %2 : tensor<128x1xi32, #blocked>
+    %4 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %5 = tt.expand_dims %4 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #blocked>
+    %6 = tt.broadcast %3 : tensor<128x1xi32, #blocked> -> tensor<128x64xi32, #blocked>
+    %7 = tt.broadcast %5 : tensor<1x64xi32, #blocked> -> tensor<128x64xi32, #blocked>
+    %8 = arith.addi %6, %7 : tensor<128x64xi32, #blocked>
+    %9 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x64x!tt.ptr<f16>, #blocked>
+    %ptr = tt.addptr %9, %8 : tensor<128x64x!tt.ptr<f16>, #blocked>, tensor<128x64xi32, #blocked>
+
+    // COM: tt.getPredMask-shaped mask: splat(%pred).
+    %mask = tt.splat %pred : i1 -> tensor<128x64xi1, #blocked>
+
+    // COM: Uniform mask is extracted as a scalar i1 predicate and folded into
+    // COM: offsetY via `select(pred, origY, baseHeight)` so the HW skips the
+    // COM: prefetch when the predicate is false. Check that the prefetch is
+    // COM: still emitted (twice) and that its offsetY comes from an llvm.select.
+    // CHECK: %[[SEL0:.*]] = llvm.select %{{.*}}, %{{.*}}, %{{.*}} : i1, i32
+    // CHECK-NEXT: triton_gen.2Dblockprefetch %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[SEL0]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 2, cache_control = L1C_L3C}
+    // CHECK: %[[SEL1:.*]] = llvm.select %{{.*}}, %{{.*}}, %{{.*}} : i1, i32
+    // CHECK-NEXT: triton_gen.2Dblockprefetch %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[SEL1]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 2, cache_control = L1C_L3C}
+    ttig.prefetch %ptr, %mask {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 0>, ttig.block_io = "row_major"} : tensor<128x64x!tt.ptr<f16>, #blocked>
+
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Test case: non-uniform mask on the cooperative path. An `arith.cmpi`
+// COM: mask cannot be proven uniform, so the cooperative path must bail. The
+// COM: generic pointer path rejects non-dot encodings, so the op is erased
+// COM: with a warning and no 2D block prefetch is emitted.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_prefetch_256b"} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @prefetch_blocked_f16_nonuniform_mask
+  tt.func public @prefetch_blocked_f16_nonuniform_mask(%arg0: !tt.ptr<f16>, %bound: tensor<128x64xi32, #blocked>) {
+    %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi32, #blocked>
+    %2 = arith.constant dense<64> : tensor<128x1xi32, #blocked>
+    %3 = arith.muli %1, %2 : tensor<128x1xi32, #blocked>
+    %4 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %5 = tt.expand_dims %4 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #blocked>
+    %6 = tt.broadcast %3 : tensor<128x1xi32, #blocked> -> tensor<128x64xi32, #blocked>
+    %7 = tt.broadcast %5 : tensor<1x64xi32, #blocked> -> tensor<128x64xi32, #blocked>
+    %8 = arith.addi %6, %7 : tensor<128x64xi32, #blocked>
+    %9 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x64x!tt.ptr<f16>, #blocked>
+    %ptr = tt.addptr %9, %8 : tensor<128x64x!tt.ptr<f16>, #blocked>, tensor<128x64xi32, #blocked>
+
+    // COM: Per-element mask, non-uniform -> cooperative path bails.
+    %mask = arith.cmpi slt, %8, %bound : tensor<128x64xi32, #blocked>
+
+    // CHECK-NOT: triton_gen.2Dblockprefetch
+    ttig.prefetch %ptr, %mask {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 0>, ttig.block_io = "row_major"} : tensor<128x64x!tt.ptr<f16>, #blocked>
+
+    tt.return
+  }
+}
