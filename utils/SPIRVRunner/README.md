@@ -88,7 +88,7 @@ General options:
 
   -p          - Enable kernel time profiling
   -v <string> - <Specify Expected Output Tensor Names (Ex: -v expected_tensor1.pt,expected_tensor2.pt or skip)>
-  ```
+```
 
 
 Note: `Output Tensor Name`  is essentially a chosen tensor that needs to be copied back to the CPU and written to disk. Additionally, the name must match the tensor's name (tensor_) and number as specified in the JSON file. Please refer args_data.json file.
