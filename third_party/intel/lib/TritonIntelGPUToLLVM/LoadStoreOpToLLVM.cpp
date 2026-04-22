@@ -2288,11 +2288,11 @@ public:
           b.add(baseWidth, b.mul(offsetX, b.i32_val(elemSizeInBits / 8)));
       Value baseAddrI64 = b.ptrtoint(int_ty(64), addrElem);
       // A mask for 64-byte alignment (0x3f = 63).
-      constexpr int64_t AlignmentMask = 0x3f;
+      constexpr int64_t alignmentMask = 0x3f;
       // Calculate the byte offset of the base address from a 64-byte
       // alignment.
       Value alignmentOffsetInBytes =
-          b.trunc(i32_ty, b.and_(baseAddrI64, b.i64_val(AlignmentMask)));
+          b.trunc(i32_ty, b.and_(baseAddrI64, b.i64_val(alignmentMask)));
       // Adjust the min base width to account for the byte offset since it is
       // going to be compensated in TritonGen. alignmentOffsetInBytes is
       // guaranteed in [0, 63], so minBaseWidth stays positive.
