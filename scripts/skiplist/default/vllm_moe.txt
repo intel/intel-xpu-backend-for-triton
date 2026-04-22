@@ -6,3 +6,9 @@ tests/kernels/moe/test_moe.py::test_mixtral_moe
 tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py::test_silu_mul_fp8_quant_deep_gemm
 tests/kernels/moe/test_batched_moe.py::test_fused_moe_batched_experts
 tests/kernels/moe/test_moe.py::test_fused_moe_wn16
+
+# rocm skips these
+test_fused_marlin_moe
+test_fused_marlin_moe_with_bias
+test_fused_marlin_moe_non_gated
+test_batched_fused_marlin_moe
