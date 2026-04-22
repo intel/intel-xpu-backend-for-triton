@@ -16,6 +16,19 @@ on:
         description: Custom run name
         type: string
         default: Build and test on Windows
+      test_suite:
+        description: "Run a single test suite (debug iteration). 'all' runs everything."
+        type: choice
+        default: all
+        options:
+          - all
+          - unit
+          - core
+          - gluon
+          - triton-kernels
+          - interpreter
+          - tutorial
+          - instrumentation
 
 permissions: read-all
 
@@ -148,7 +161,7 @@ jobs:
           pip uninstall pytest_forked -y
 
       - name: Run unit tests
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && (inputs.test_suite == 'all' || inputs.test_suite == 'unit') }}
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
@@ -156,7 +169,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --unit
 
       - name: Run core tests
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && (inputs.test_suite == 'all' || inputs.test_suite == 'core') }}
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
@@ -164,7 +177,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --core
 
       - name: Run gluon tests
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && (inputs.test_suite == 'all' || inputs.test_suite == 'gluon') }}
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
@@ -172,7 +185,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --gluon
 
       - name: Run triton kernels tests
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && (inputs.test_suite == 'all' || inputs.test_suite == 'triton-kernels') }}
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
@@ -180,7 +193,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --triton-kernels
 
       - name: Run interpreter tests
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && (inputs.test_suite == 'all' || inputs.test_suite == 'interpreter') }}
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
@@ -188,7 +201,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --interpreter
 
       - name: Run tutorials
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && (inputs.test_suite == 'all' || inputs.test_suite == 'tutorial') }}
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
@@ -198,7 +211,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --tutorial
 
       - name: Run instrumentation tests
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && (inputs.test_suite == 'all' || inputs.test_suite == 'instrumentation') }}
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
@@ -206,7 +219,7 @@ jobs:
           ${{ env.TRITON_TEST_CMD }} --instrumentation
 
       - name: Pass rate
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && inputs.test_suite == 'all' }}
         run: |
           .venv\Scripts\activate.ps1
           # oneAPI is required for sycl-ls, which is used by scripts/capture-hw-details.sh
@@ -222,14 +235,14 @@ jobs:
 
       - name: Upload pass rate report
         # upload reports only for the default branch
-        if: ${{ !cancelled() && github.ref_name == 'main' }}
+        if: ${{ !cancelled() && github.ref_name == 'main' && inputs.test_suite == 'all' }}
         uses: actions/upload-artifact@v7
         with:
           name: pass_rate
           path: ${{ env.NEW_WORKSPACE }}\pass_rate*.json
 
       - name: Upload tutorial performance
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && inputs.test_suite == 'all' }}
         uses: actions/upload-artifact@v7
         with:
           name: tutorials-report
