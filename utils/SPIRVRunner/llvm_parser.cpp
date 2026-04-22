@@ -20,8 +20,7 @@ command_line_parser::options command_line_parser::parse() {
                      "expected_tensor1.pt,expected_tensor2.pt or skip)>"),
       llvm::cl::CommaSeparated);
   llvm::cl::opt<std::string> spirv_dump_dir(
-      "d", llvm::cl::desc("<Specify SPIRV dump directory path>"),
-      llvm::cl::init(opts.spirv_dump_dir));
+      "d", llvm::cl::desc("<Specify SPIRV dump directory path>"));
 
   llvm::cl::ParseCommandLineOptions(argc, argv, "SPIRVRunner\n");
 

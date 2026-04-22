@@ -531,7 +531,6 @@ class XPULauncher(object):
         self.cache_dir = metadata.cache_dir
         self.dump_dir = self._resolve_dump_dir(metadata.cache_dir)
         self.print_dump_spirv_kernel_args_info = knobs.intel.print_dump_spirv_kernel_args_info
-        self.dump_info_printed = False
         self.constants = constants
         self.signature = signature
 
@@ -584,11 +583,10 @@ class XPULauncher(object):
     def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
                  launch_exit_hook, *args):
         if self.serialize_kernel_args:
-            if self.print_dump_spirv_kernel_args_info and not self.dump_info_printed:
+            if self.print_dump_spirv_kernel_args_info:
                 print(
                     f"Triton kernel dump info: kernel_name={kernel_metadata.name}, cache_dir={self.cache_dir}, dump_dir={self.dump_dir}"
                 )
-                self.dump_info_printed = True
             serialize_args((gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
                             launch_exit_hook, *args), self.constants, self.signature, self.dump_dir)
 
