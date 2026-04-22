@@ -132,6 +132,8 @@ jobs:
           $PTI_LIBS_DIR = python ./scripts/pti_lib.py
           ls $PTI_LIBS_DIR
           echo "PATH=$PTI_LIBS_DIR;$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $L0_SDK_PATH = "${{ env.NEW_WORKSPACE }}\.scripts_cache\level_zero_for_pti\level-zero-1.24.2\install"
+          echo "LEVEL_ZERO_V1_SDK_PATH=$L0_SDK_PATH" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Triton version
         run: |
