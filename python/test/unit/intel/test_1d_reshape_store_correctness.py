@@ -177,8 +177,14 @@ def strided_load_kernel(
         (32, 96, "float16"),
         (32, 128, "float16"),
         (32, 192, "float16"),
+        # W < threadsPerWarp (16 < 32) — regression test for issue #6738.
+        # Previously crashed in make_llir with "expensive view not supported
+        # on reshape op" because the load encoding was constructed with
+        # threadsPerWarp=[1, 32] which replicated data across lanes.
+        (16, 96, "float16"),
+        (16, 128, "float16"),
     ],
-    ids=["W32_S96_f16", "W32_S128_f16", "W32_S192_f16"],
+    ids=["W32_S96_f16", "W32_S128_f16", "W32_S192_f16", "W16_S96_f16", "W16_S128_f16"],
 )
 def test_1d_reshape_strided_load(W, S, dtype_str, device):
     """Test 1D-to-2D block load reshape produces correct results.

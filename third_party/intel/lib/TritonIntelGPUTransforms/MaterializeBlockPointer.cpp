@@ -682,13 +682,28 @@ private:
         op->getParentOfType<ModuleOp>());
     unsigned numWarps = info->numWarps;
     unsigned perWarpH = static_cast<unsigned>(info->H / numWarps);
+    unsigned W = static_cast<unsigned>(info->W);
+
+    // The 2D block load HW delivers tile_width contiguous columns per row
+    // into the first tile_width lanes of the subgroup.  When W < tpw, the
+    // remaining lanes' delivery pattern does not match a plain row/col
+    // layout, and constructing a BlockedEncoding with threadsPerWarp=[1,tpw]
+    // would create a replicated layout that the reshape lowering rejects
+    // as an "expensive view" (make_llir failure).  Bail out for now; this
+    // case can be re-enabled once the lowering handles sub-subgroup tiles.
+    if (W < threadsPerWarp) {
+      LDBG("W=" << W << " < threadsPerWarp=" << threadsPerWarp
+                << " not supported for 1D load reshape");
+      return;
+    }
 
     // Construct "load encoding" matching HW delivery:
     // lane k = column k, registers stack rows.
-    // sizePerThread=[perWarpH, 1], threadsPerWarp=[1, tpw], warpsPerCTA=[nw, 1]
+    // When W > tpw, each thread owns W/tpw consecutive columns.
+    unsigned loadSpt1 = W / threadsPerWarp;
     auto loadEnc = ttg::BlockedEncodingAttr::get(
         ctx,
-        /*sizePerThread=*/{perWarpH, 1},
+        /*sizePerThread=*/{perWarpH, loadSpt1},
         /*threadsPerWarp=*/{1, threadsPerWarp},
         /*warpsPerCTA=*/{numWarps, 1},
         /*order=*/{1, 0},

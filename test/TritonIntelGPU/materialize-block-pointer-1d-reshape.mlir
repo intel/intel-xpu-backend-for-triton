@@ -197,3 +197,34 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return %result : tensor<32xf16, #blocked1d_small>
   }
 }
+
+// -----
+
+// COM: Test 8: 1D strided load with W < threadsPerWarp (W=16, tpw=32).
+// COM: The pass must bail out — the 2D block load HW delivers the tile into
+// COM: the first W lanes and the remaining lanes' data are not a plain
+// COM: row/col layout.  Constructing a [1,tpw] load encoding would broadcast
+// COM: across lanes and produce an "expensive view" reshape that cannot be
+// COM: lowered (make_llir crash). Regression test for issue #6738.
+
+#blocked1d = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @test_1d_strided_load_narrow_width
+  // CHECK-NOT: ttig.block_io
+  // CHECK: tt.load
+  // CHECK-NOT: ttig.block_io
+  tt.func @test_1d_strided_load_narrow_width(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> tensor<128xf16, #blocked1d> {
+    %idx = tt.make_range {start = 0 : i32, end = 128 : i32} : tensor<128xi32, #blocked1d>
+    %c16 = arith.constant dense<16> : tensor<128xi32, #blocked1d>
+    %c96 = arith.constant dense<96> : tensor<128xi32, #blocked1d>
+    %rem = arith.remui %idx, %c16 : tensor<128xi32, #blocked1d>
+    %div = arith.divui %idx, %c16 : tensor<128xi32, #blocked1d>
+    %mul = arith.muli %div, %c96 : tensor<128xi32, #blocked1d>
+    %off = arith.addi %rem, %mul : tensor<128xi32, #blocked1d>
+    %base = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x!tt.ptr<f16>, #blocked1d>
+    %ptrs = tt.addptr %base, %off : tensor<128x!tt.ptr<f16>, #blocked1d>, tensor<128xi32, #blocked1d>
+    %mask = arith.constant dense<true> : tensor<128xi1, #blocked1d>
+    %result = tt.load %ptrs, %mask : tensor<128x!tt.ptr<f16>, #blocked1d>
+    tt.return %result : tensor<128xf16, #blocked1d>
+  }
+}
