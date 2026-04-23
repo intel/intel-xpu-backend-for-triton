@@ -218,7 +218,7 @@ def TritonGEN_Matrix2DBlockLoadOp : TritonGEN_Op<"2Dblockload">,
       $transpose - transpose the tile in registers (useful for 32 bit element type)
       $vnni_transform - transpose and pack the sub matrix in registers (useful for < 32 bit element types)
       $cache_control - an enumerator that sets the L1 and L3 cache behavior
-      $valid_base_width - to check the base width in runtime.
+      $valid_base_width - whether to check the base width at runtime.
 
     Notes:
       - the $transpose and $vnni_transform parameters are mutual exclusive
