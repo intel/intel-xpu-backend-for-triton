@@ -209,6 +209,20 @@ void IntegerRangeAnalysis::setToEntryState(
           getAssumedRange(anchor, entryBlock, assumptions, domInfo))
     range = *assumedRange;
 
+  if (!lattice->getValue().isUninitialized() && !range.isUninitialized()) {
+    unsigned existingWidth =
+        lattice->getValue().getValue().smin().getBitWidth();
+    unsigned incomingWidth = range.getValue().smin().getBitWidth();
+    if (existingWidth != incomingWidth) {
+      LLVM_DEBUG({
+        DBGS() << "!!! ENTRY STATE BIT WIDTH MISMATCH: existing="
+               << existingWidth << " incoming=" << incomingWidth
+               << " for value: ";
+        anchor.printAsOperand(llvm::dbgs(), {});
+        llvm::dbgs() << "\n";
+      });
+    }
+  }
   ChangeResult changed = lattice->join(range);
 
   LLVM_DEBUG({
@@ -414,6 +428,19 @@ LogicalResult IntegerRangeAnalysis::visitOperationHelper(
     // Update the range. Note that we are using `join` operation which means
     // `union`. Transfer function must be monotone! The resolver would otherwise
     // fall into an infinite loop.
+    if (!lattice->getValue().isUninitialized() && !newRange.isUninitialized()) {
+      unsigned existingWidth =
+          lattice->getValue().getValue().smin().getBitWidth();
+      unsigned incomingWidth = newRange.getValue().smin().getBitWidth();
+      if (existingWidth != incomingWidth) {
+        LLVM_DEBUG({
+          DBGS() << "!!! BIT WIDTH MISMATCH: existing=" << existingWidth
+                 << " incoming=" << incomingWidth << " for value: ";
+          resultVal.printAsOperand(llvm::dbgs(), {});
+          llvm::dbgs() << " in op: " << *op << "\n";
+        });
+      }
+    }
     ChangeResult changed = lattice->join(newRange);
 
     LLVM_DEBUG({
@@ -713,6 +740,16 @@ std::optional<ConstantIntRanges> collectRange(const DataFlowSolver &solver,
   ConstantIntRanges inferredRange = range->getValue().getValue();
   if (isEmpty(inferredRange))
     return std::nullopt;
+
+  // After a greedy rewrite, a newly created Value may reuse the memory address
+  // of an erased Value whose stale lattice entry remains in the solver. Reject
+  // ranges whose bitwidth does not match the value's actual element type.
+  Type elemType = getElementTypeOrSelf(value.getType());
+  if (auto intTy = dyn_cast<IntegerType>(elemType)) {
+    unsigned expectedBW = ConstantIntRanges::getStorageBitwidth(intTy);
+    if (inferredRange.smin().getBitWidth() != expectedBW)
+      return std::nullopt;
+  }
 
   return inferredRange;
 }

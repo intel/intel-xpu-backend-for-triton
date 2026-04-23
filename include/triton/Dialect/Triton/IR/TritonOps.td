@@ -48,6 +48,8 @@ def TT_IntToPtrOp : TT_Op<"int_to_ptr", [Elementwise,
     let results = (outs TT_PtrLike:$result);
 
     let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
+
+    let hasCanonicalizer = 1;
 }
 
 def TT_PtrToIntOp : TT_Op<"ptr_to_int", [Elementwise,
@@ -1004,11 +1006,6 @@ def TT_MakeTensorDescOp : TT_Op<"make_tensor_descriptor", [
     "triton::PaddingOption":$padding)>
   ];
 
-  let extraClassDeclaration = [{
-    ArrayRef<int64_t> getTensorShape() {
-      return getType().getBlockType().getShape();
-    }
-  }];
 }
 
 // The following ops, including `call`, `func`, and `return` are copied and modified from

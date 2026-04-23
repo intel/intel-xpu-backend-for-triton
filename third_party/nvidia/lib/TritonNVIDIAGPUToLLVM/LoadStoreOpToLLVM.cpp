@@ -742,7 +742,6 @@ public:
                                                          loc, targetInfo);
     uint32_t regMask = freeVarMasks[str_attr("reg")];
 
-    auto packedTy = vec_ty(valueElemTy, packed);
     SmallVector<Value> resultVals(elemsPerThread);
 
     // Lower AtomicRMWOp to a ld.acquire if possible
@@ -953,8 +952,6 @@ struct AsyncCopyGlobalToLocalOpConversion
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     Value mask = op.getMask();
-    Value other = op.getOther();
-    auto funcOp = op->getParentOfType<FunctionOpInterface>();
 
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getResult().getType();
@@ -963,7 +960,6 @@ struct AsyncCopyGlobalToLocalOpConversion
     Value llDst = adaptor.getResult();
     Value llSrc = adaptor.getSrc();
     Value llMask = adaptor.getMask();
-    Value llOther = adaptor.getOther();
 
     // %src
     auto srcElems = unpackLLElements(loc, llSrc, rewriter);
@@ -1105,7 +1101,6 @@ static LinearLayout getMsgToPackedOffsetLayout(ttg::MemDescType ty,
                                                ttg::TMAMode mode) {
   auto ctx = ty.getContext();
   auto kMsg = str_attr("msg");
-  auto kBlock = str_attr("block");
   auto shapePerCTA = ttg::getShapePerCTA(ty);
   int rank = shapePerCTA.size();
   auto blockShape = ttng::getTMABlockShape(ty, /*packedSize=*/true, mode);
@@ -1264,7 +1259,7 @@ struct AsyncTMACopyGlobalToLocalOpConversion
       auto offsets = applyLinearLayout(loc, rewriter, msgToOffset,
                                        {{kMsg, copyIdxVal}, {kBlock, ctaId}});
       int operandIdx = 3;
-      auto encoding = op.getDesc().getType().getBlockType().getEncoding();
+      auto encoding = op.getDesc().getType().getSharedLayout();
       bool fp4Padded = nvidia_gpu::isFp4Padded(encoding);
       for (int i = 0; i < rank; i++) {
         Value coord = adaptor.getCoord()[rank - i - 1];

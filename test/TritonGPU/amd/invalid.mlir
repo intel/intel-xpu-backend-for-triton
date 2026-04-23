@@ -209,22 +209,45 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @interval_not_matching_innermost_block_dimension(
-    %tensorDesc: !tt.tensordesc<tensor<128x64xf16>>,
+    %tensorDesc: !tt.tensordesc<128x64xf16>,
     %memDesc: !ttg.memdesc<128x64xf16, #shared_32, #smem, mutable>
   ) {
     %c0_i32 = arith.constant 0 : i32
     // expected-error @+1 {{TDM store padding is only supported when padding interval equals the innermost block dimension}}
-    amdg.async_tdm_copy_local_to_global %tensorDesc[%c0_i32, %c0_i32] from %memDesc: !ttg.memdesc<128x64xf16, #shared_32, #smem, mutable> -> !tt.tensordesc<tensor<128x64xf16>>
+    amdg.async_tdm_copy_local_to_global %tensorDesc[%c0_i32, %c0_i32] from %memDesc: !ttg.memdesc<128x64xf16, #shared_32, #smem, mutable> -> !tt.tensordesc<128x64xf16>
     tt.return
   }
 
   tt.func public @tdm_store_two_padding_intervals(
-    %tensorDesc: !tt.tensordesc<tensor<128x64xf16>>,
+    %tensorDesc: !tt.tensordesc<128x64xf16>,
     %memDesc: !ttg.memdesc<128x64xf16, #shared_2_intervals, #smem, mutable>
   ) {
     %c0_i32 = arith.constant 0 : i32
     // expected-error @+1 {{TDM store only supports single interval paddings}}
-    amdg.async_tdm_copy_local_to_global %tensorDesc[%c0_i32, %c0_i32] from %memDesc: !ttg.memdesc<128x64xf16, #shared_2_intervals, #smem, mutable> -> !tt.tensordesc<tensor<128x64xf16>>
+    amdg.async_tdm_copy_local_to_global %tensorDesc[%c0_i32, %c0_i32] from %memDesc: !ttg.memdesc<128x64xf16, #shared_2_intervals, #smem, mutable> -> !tt.tensordesc<128x64xf16>
+    tt.return
+  }
+}
+
+// -----
+
+// Gather with an index layout that distributes values across lanes (invalid).
+// parent blocked: threadsPerWarp = [32, 1] → lanes map to dim 0.
+// slice dim 1 → 1D tensor where each lane holds a different value.
+#blocked_lane_dist = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
+#slice_lane_dist = #ttg.slice<{dim = 1, parent = #blocked_lane_dist}>
+#shared_gather = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem_gather = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_gather_invalid_lane_distribution(
+    %memDesc: !ttg.memdesc<32x128xf16, #shared_gather, #smem_gather, mutable>,
+    %tensorDesc: !tt.tensordesc<32x128xf16>,
+    %row_indices: tensor<32xi32, #slice_lane_dist>,
+    %pred: i32
+  ) {
+    %c0_i32 = arith.constant 0 : i32
+    // expected-error @+1 {{index layout distributes values across lanes}}
+    %token = amdg.async_tdm_gather %tensorDesc[%row_indices, %c0_i32] to %memDesc, pred = %pred : tensor<32xi32, #slice_lane_dist>, !ttg.memdesc<32x128xf16, #shared_gather, #smem_gather, mutable> -> !tt.tensordesc<32x128xf16>
     tt.return
   }
 }
