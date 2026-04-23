@@ -1941,51 +1941,66 @@ struct PrefetchOpConversion
     if (!memoryRowMajor)
       return failure();
 
-    // Extract a scalar `i1` predicate from a (possibly `arith.andi`-nested)
-    // tensor mask. Scalar leaves and `splat(scalar)` operands contribute to
-    // the uniform predicate; non-uniform leaves (e.g., `arith.cmpi`) are
-    // ignored — safe for a prefetch hint. Returns nullptr if no uniform
-    // predicate can be recovered (i.e., the mask is entirely non-uniform).
-    auto extractUniformPred = [&](Value mask) -> Value {
-      SmallVector<Value> worklist{mask};
-      SmallVector<Value> uniformSrcs;
-      while (!worklist.empty()) {
-        Value v = worklist.pop_back_val();
-        if (!isa<RankedTensorType>(v.getType())) {
-          uniformSrcs.push_back(v);
-          continue;
-        }
-        if (auto splat = v.getDefiningOp<triton::SplatOp>()) {
-          uniformSrcs.push_back(splat.getSrc());
-          continue;
-        }
-        if (auto andOp = v.getDefiningOp<arith::AndIOp>()) {
-          worklist.push_back(andOp.getLhs());
-          worklist.push_back(andOp.getRhs());
-          continue;
-        }
-        // Non-uniform leaf (e.g., arith.cmpi) — ignored.
+    // A tensor value is "uniform" if `AxisInfo` proves its constancy covers
+    // the full shape in every dimension (same semantics as the regular path
+    // at line 1729–1736). Scalars are trivially uniform.
+    auto isUniform = [&](Value v) {
+      auto ty = dyn_cast<RankedTensorType>(v.getType());
+      if (!ty)
+        return true;
+      AxisInfo *info =
+          const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
+              .getAxisInfo(v);
+      if (!info)
+        return false;
+      ArrayRef<int64_t> shape = ty.getShape();
+      for (unsigned d = 0, e = ty.getRank(); d < e; ++d)
+        if (info->getConstancy(d) < static_cast<unsigned>(shape[d]))
+          return false;
+      return true;
+    };
+
+    // Collect operands that `AxisInfo` proves are uniform, descending
+    // through `arith.andi` chains (as produced by `tt::getPredMask`).
+    // Non-uniform leaves are dropped — safe for a prefetch hint.
+    SmallVector<Value> uniformOps;
+    std::function<void(Value)> collect = [&](Value v) {
+      if (isUniform(v)) {
+        uniformOps.push_back(v);
+        return;
       }
-      if (uniformSrcs.empty())
-        return Value();
-      Value acc = rewriter.getRemappedValue(uniformSrcs.front());
-      if (!acc)
-        return Value();
-      auto tb = TritonLLVMOpBuilder(op.getLoc(), rewriter);
-      for (Value v : ArrayRef<Value>(uniformSrcs).drop_front()) {
-        Value remapped = rewriter.getRemappedValue(v);
-        if (!remapped)
-          return Value();
-        acc = tb.and_(acc, remapped);
+      if (auto andOp = v.getDefiningOp<arith::AndIOp>()) {
+        collect(andOp.getLhs());
+        collect(andOp.getRhs());
       }
-      return acc;
     };
 
     Value scalarPred;
     if (Value mask = op.getMask()) {
-      scalarPred = extractUniformPred(mask);
-      if (!scalarPred)
+      collect(mask);
+      if (uniformOps.empty())
         return failure();
+
+      // Reduce each uniform operand to a scalar `i1` (element 0 of the
+      // packed LLVM representation — all lanes hold the same value by
+      // definition of uniformity) and AND them together.
+      auto tb = TritonLLVMOpBuilder(op.getLoc(), rewriter);
+      for (Value v : uniformOps) {
+        Value remapped = rewriter.getRemappedValue(v);
+        if (!remapped)
+          return failure();
+        Value scalar;
+        if (isa<RankedTensorType>(v.getType())) {
+          SmallVector<Value> elems =
+              unpackLLElements(op.getLoc(), remapped, rewriter);
+          if (elems.empty())
+            return failure();
+          scalar = elems[0];
+        } else {
+          scalar = remapped;
+        }
+        scalarPred = scalarPred ? tb.and_(scalarPred, scalar) : scalar;
+      }
     }
 
     auto tensorOfPointers = dyn_cast<RankedTensorType>(op.getPtr().getType());
