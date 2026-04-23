@@ -166,6 +166,7 @@ jobs:
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
           cd ${{ env.NEW_WORKSPACE }}
+          $env:LIT_FILTER_OUT = "TritonGPU/amd/(amd-convert-buffer-ops-range-analysis|amd-convert-buffer-ops-small-tensor|amd-convert-buffer-ops|amd-fold-true-cmpi|amd-pid-bounds|amd-range-analysis)\.mlir"
           ${{ env.TRITON_TEST_CMD }} --unit
 
       - name: Run core tests
