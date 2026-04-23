@@ -1,0 +1,4 @@
+# Windows-only regression sub-suite failures on bmg-dut6210.
+
+python/test/regression/test_functional_regressions.py::test_chained_matmul
+python/test/regression/test_functional_regressions.py::test_vecmat

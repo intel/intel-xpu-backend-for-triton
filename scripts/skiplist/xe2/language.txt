@@ -1,0 +1,2 @@
+# Linux xe2 language skips. Keep in sync with Linux triage on bmg/xe2-discrete.
+# Windows-only additions live in language-windows.txt.
