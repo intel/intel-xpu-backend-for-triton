@@ -1,0 +1,37 @@
+# Windows-only failures on top of xe2/debug.txt.
+# Root cause: MSVC/UCRT aborts differently than glibc for sanitizer tests; tests
+# expect SIGABRT but get a clean exit. Also affects isolated-subprocess variants
+# of test_device_assert. Pre-existing on Windows runners, historically masked by
+# --ignore-errors.
+
+# test_sanitize_int_*_overflow[...-True-True] variants. Related to #5991.
+python/test/unit/test_debug.py::test_sanitize_int_add_overflow[-2147483648--1-int32-int32-True-True]
+python/test/unit/test_debug.py::test_sanitize_int_add_overflow[-32768--1-int16-int16-True-True]
+python/test/unit/test_debug.py::test_sanitize_int_add_overflow[2147483647-1-int32-int32-True-True]
+python/test/unit/test_debug.py::test_sanitize_int_add_overflow[2147483647-100-int32-int32-True-True]
+python/test/unit/test_debug.py::test_sanitize_int_add_overflow[32767-1-int16-int16-True-True]
+python/test/unit/test_debug.py::test_sanitize_int_mul_overflow[-1073741824--4-int32-int32-True-True]
+python/test/unit/test_debug.py::test_sanitize_int_mul_overflow[1073741824-2-int32-int32-True-True]
+python/test/unit/test_debug.py::test_sanitize_int_mul_overflow[1073741824-4-int32-int32-True-True]
+python/test/unit/test_debug.py::test_sanitize_int_sub_overflow[-2147483648-1-int32-int32-True-True]
+python/test/unit/test_debug.py::test_sanitize_int_sub_overflow[2147483647--1-int32-int32-True-True]
+
+# test_device_assert[...-False]: isolated-subprocess variants failing with exit 1 on Windows.
+python/test/unit/test_debug.py::test_device_assert[False-False-True-None-False]
+python/test/unit/test_debug.py::test_device_assert[False-False-True-True-False]
+python/test/unit/test_debug.py::test_device_assert[False-True-False-None-False]
+python/test/unit/test_debug.py::test_device_assert[False-True-False-True-False]
+python/test/unit/test_debug.py::test_device_assert[False-True-None-None-False]
+python/test/unit/test_debug.py::test_device_assert[False-True-None-True-False]
+python/test/unit/test_debug.py::test_device_assert[False-True-True-None-False]
+python/test/unit/test_debug.py::test_device_assert[False-True-True-True-False]
+python/test/unit/test_debug.py::test_device_assert[True-False-None-None-False]
+python/test/unit/test_debug.py::test_device_assert[True-False-None-True-False]
+python/test/unit/test_debug.py::test_device_assert[True-False-True-None-False]
+python/test/unit/test_debug.py::test_device_assert[True-False-True-True-False]
+python/test/unit/test_debug.py::test_device_assert[True-True-False-None-False]
+python/test/unit/test_debug.py::test_device_assert[True-True-False-True-False]
+python/test/unit/test_debug.py::test_device_assert[True-True-None-None-False]
+python/test/unit/test_debug.py::test_device_assert[True-True-None-True-False]
+python/test/unit/test_debug.py::test_device_assert[True-True-True-None-False]
+python/test/unit/test_debug.py::test_device_assert[True-True-True-True-False]
