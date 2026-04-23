@@ -59,13 +59,20 @@ pytest() {
 
     if [[ ! -f $TRITON_TEST_SELECTFILE && -v TRITON_TEST_SUITE && -f $TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt ]]; then
         if [[ $TEST_UNSKIP = false ]]; then
-            SKIPFILES="$TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt"
+            # On MSYS, MSYS auto-translates a bare POSIX path arg to a Windows
+            # path before handing it to a native .exe. It does NOT rewrite
+            # POSIX paths embedded inside `--flag=a;b` strings, so pytest-skip
+            # (Python) sees `/c/...` and Path.exists() fails. Convert here.
+            _skiplist_path() {
+                if [[ $OSTYPE = msys ]]; then cygpath -w "$1"; else echo "$1"; fi
+            }
+            SKIPFILES="$(_skiplist_path "$TRITON_TEST_SKIPLIST_DIR/$TRITON_TEST_SUITE.txt")"
             if [[ -n "$TRITON_EXTRA_SKIPLIST_SUFFIXES" ]]; then
                 IFS=',' read -ra SUFFIXES <<< "$TRITON_EXTRA_SKIPLIST_SUFFIXES"
                 for SUFFIX in "${SUFFIXES[@]}"; do
                     SKIPFILE="$TRITON_TEST_SKIPLIST_DIR/${TRITON_TEST_SUITE}-${SUFFIX}.txt"
                     if [[ -f "$SKIPFILE" ]]; then
-                        SKIPFILES+=";$SKIPFILE"
+                        SKIPFILES+=";$(_skiplist_path "$SKIPFILE")"
                     else
                         echo "ERROR: $SKIPFILE not found"
                         exit 1
