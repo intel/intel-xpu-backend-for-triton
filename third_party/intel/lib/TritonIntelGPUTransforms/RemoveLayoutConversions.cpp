@@ -1688,9 +1688,11 @@ void LayoutRematerialization::hoistConvertDotOperand(
     ttg::ConvertLayoutOp convertOp) {
   auto targetType = convertOp.getType();
 
-  // The pass is targeted to NVidia.
+  // Only hoist when the target is a dot operand backed by an MMA-family
+  // parent encoding (NVIDIA MMA on upstream, DPAS on Intel).
   auto dotEnc = dyn_cast<ttg::DotOperandEncodingAttr>(targetType.getEncoding());
-  if (!(dotEnc && isa<ttg::NvidiaMmaEncodingAttr>(dotEnc.getParent())))
+  if (!dotEnc || !isa<ttg::NvidiaMmaEncodingAttr, ttgi::DpasEncodingAttr>(
+                     dotEnc.getParent()))
     return;
 
   auto canBePipelined = [&](ttg::ConvertLayoutOp convertOp) {

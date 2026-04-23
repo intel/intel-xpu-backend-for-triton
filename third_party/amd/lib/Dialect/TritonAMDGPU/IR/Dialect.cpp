@@ -598,7 +598,7 @@ LogicalResult AsyncTDMCopyGlobalToLocalOp::verify() {
   auto smemTy = getResult().getType();
 
   // Check that every dimension of the block shape is <= 2^16
-  auto blockShape = tensorDescTy.getBlockType().getShape();
+  auto blockShape = tensorDescTy.getShape();
   auto verifyResult = verifyTDMBlockSize(getOperation(), blockShape);
   if (failed(verifyResult))
     return verifyResult;
@@ -674,7 +674,7 @@ LogicalResult AsyncTDMCopyLocalToGlobalOp::verify() {
   auto smemTy = getSrc().getType();
 
   // Check that every dimension of the block shape is <= 2^16
-  auto blockShape = tensorDescTy.getBlockType().getShape();
+  auto blockShape = tensorDescTy.getShape();
   auto verifyResult = verifyTDMBlockSize(getOperation(), blockShape);
   if (failed(verifyResult))
     return verifyResult;
@@ -722,7 +722,7 @@ LogicalResult AsyncTDMScatterOp::verify() {
   auto smemTy = getSrc().getType();
 
   // TDM scatter mode only supports 2D tensors
-  auto blockShape = tensorDescTy.getBlockType().getShape();
+  auto blockShape = tensorDescTy.getShape();
   if (blockShape.size() != 2)
     return emitOpError("TDM scatter only supports 2D tensors, got ")
            << blockShape.size() << "D";
@@ -772,7 +772,7 @@ LogicalResult AsyncTDMGatherOp::verify() {
   auto smemTy = getDst().getType();
 
   // TDM gather mode only supports 2D tensors
-  auto blockShape = tensorDescTy.getBlockType().getShape();
+  auto blockShape = tensorDescTy.getShape();
   if (blockShape.size() != 2)
     return emitOpError("TDM gather only supports 2D tensors, got ")
            << blockShape.size() << "D";
@@ -815,6 +815,22 @@ LogicalResult AsyncTDMGatherOp::verify() {
       shapePerCTA);
   if (sharedOrder[0] != (sharedOrder.size() - 1))
     return emitOpError("TDM gather only supports row-major shared order");
+
+  // TDM gather reads the descriptor from SGPRs — all lanes in a warp see
+  // the same descriptor. The index layout must broadcast the same values
+  // to all lanes (all lane bits must be free).
+  if (srcRowIndicesType.getEncoding()) {
+    auto indexLL = triton::gpu::toLinearLayout(srcRowIndicesType);
+    auto kLane = mlir::StringAttr::get(getContext(), "lane");
+    auto freeVarMasks = indexLL.getFreeVariableMasks();
+    unsigned laneFreeMask = freeVarMasks.lookup(kLane);
+    unsigned numLanes = indexLL.getInDimSize(kLane);
+    if (laneFreeMask != (numLanes - 1))
+      return emitOpError(
+          "index layout distributes values across lanes, which is "
+          "incompatible with the warp-level TDM instruction. Change layout "
+          "to broadcast the same indices to all lanes in a warp.");
+  }
 
   return success();
 }
@@ -880,9 +896,8 @@ LogicalResult TDMPrefetchOp::inferReturnTypes(
   }
 
   auto descType = cast<triton::TensorDescType>(ad.getDesc().getType());
-  auto blockType = descType.getBlockType();
-  auto blockShape = blockType.getShape();
-  auto elementType = blockType.getElementType();
+  auto blockShape = descType.getShape();
+  auto elementType = descType.getElementType();
 
   // Lookup the module to get the number of threads per warp, number of warps
   // and number of CTAs

@@ -9,7 +9,7 @@
 module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: tt.func @fuse_trans_with_descriptor_load
   // CHECK-NOT: tt.trans
-  // CHECK: %[[LD:.*]] = tt.descriptor_load {{.*}} {ttig.block_io = "column_major"} : !tt.tensordesc<tensor<64x32xf16>> -> tensor<32x64xf16, #[[BCOL:[a-z]+]]>
+  // CHECK: %[[LD:.*]] = tt.descriptor_load {{.*}} {ttig.block_io = "column_major"} : !tt.tensordesc<64x32xf16> -> tensor<32x64xf16, #[[BCOL:[a-z]+]]>
   // CHECK: ttg.convert_layout %[[LD]] : tensor<32x64xf16, #[[BCOL]]> -> tensor<32x64xf16, {{.*}}>
   tt.func @fuse_trans_with_descriptor_load(%ptr: !tt.ptr<f16>, %a: tensor<64x32xf16, #dot0>) -> tensor<64x64xf32, #dpas> {
     %c0_i32 = arith.constant 0 : i32
@@ -18,8 +18,8 @@ module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 8 : i32, "ttg.thr
     %c64_i32 = arith.constant 64 : i32
     %c32_i64 = arith.constant 32 : i64
     %c = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #dpas>
-    %desc = tt.make_tensor_descriptor %ptr, [%c64_i32, %c32_i32], [%c32_i64, %c1_i64] : <f16>, <tensor<64x32xf16>>
-    %ld = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #brow>
+    %desc = tt.make_tensor_descriptor %ptr, [%c64_i32, %c32_i32], [%c32_i64, %c1_i64] : <f16>, <64x32xf16>
+    %ld = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #brow>
     %tr = tt.trans %ld {order = array<i32: 1, 0>} : tensor<64x32xf16, #brow> -> tensor<32x64xf16, #bcol>
     %b = ttg.convert_layout %tr : tensor<32x64xf16, #bcol> -> tensor<32x64xf16, #dot1>
     %d = tt.dot %a, %b, %c, inputPrecision = tf32 : tensor<64x32xf16, #dot0> * tensor<32x64xf16, #dot1> -> tensor<64x64xf32, #dpas>
@@ -46,8 +46,8 @@ module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 8 : i32, "ttg.thr
     %c64_i32 = arith.constant 64 : i32
     %c32_i64 = arith.constant 32 : i64
     %c = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #dpas>
-    %desc = tt.make_tensor_descriptor %ptr, [%c64_i32, %c32_i32], [%c32_i64, %c1_i64] : <f16>, <tensor<64x32xf16>>
-    %ld = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #brow>
+    %desc = tt.make_tensor_descriptor %ptr, [%c64_i32, %c32_i32], [%c32_i64, %c1_i64] : <f16>, <64x32xf16>
+    %ld = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #brow>
     %tr = tt.trans %ld {order = array<i32: 1, 0>} : tensor<64x32xf16, #brow> -> tensor<32x64xf16, #bcol>
     %b = ttg.convert_layout %tr : tensor<32x64xf16, #bcol> -> tensor<32x64xf16, #dot1>
     %d = tt.dot %a, %b, %c, inputPrecision = tf32 : tensor<64x32xf16, #dot0> * tensor<32x64xf16, #dot1> -> tensor<64x64xf32, #dpas>
@@ -74,8 +74,8 @@ module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 8 : i32, "ttg.thr
     %c64_i32 = arith.constant 64 : i32
     %c32_i64 = arith.constant 32 : i64
     %c = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #dpas>
-    %desc = tt.make_tensor_descriptor %ptr, [%c64_i32, %c32_i32], [%c32_i64, %c1_i64] : <f16>, <tensor<64x32xf16>>
-    %ld = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "column_major"} : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #brow>
+    %desc = tt.make_tensor_descriptor %ptr, [%c64_i32, %c32_i32], [%c32_i64, %c1_i64] : <f16>, <64x32xf16>
+    %ld = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "column_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #brow>
     %tr = tt.trans %ld {order = array<i32: 1, 0>} : tensor<64x32xf16, #brow> -> tensor<32x64xf16, #bcol>
     %b = ttg.convert_layout %tr : tensor<32x64xf16, #bcol> -> tensor<32x64xf16, #dot1>
     %d = tt.dot %a, %b, %c, inputPrecision = tf32 : tensor<64x32xf16, #dot0> * tensor<32x64xf16, #dot1> -> tensor<64x64xf32, #dpas>

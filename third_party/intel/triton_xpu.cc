@@ -65,6 +65,10 @@ void init_triton_intel_passes_ttir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_fuse_reshape", intel::createTritonIntelFuseReshape);
   ADD_PASS_WRAPPER_0("add_simplify_signed_arithmetic",
                      intel::createTritonIntelSimplifySignedArithmetic);
+  ADD_PASS_WRAPPER_0("add_fold_true_cmpi",
+                     intel::createTritonIntelGPUFoldTrueCmpI);
+  ADD_FUNC_PASS_WRAPPER_0("add_prepare_if_combining",
+                          intel::createTritonIntelGPUPrepareIfCombining);
 }
 
 void init_triton_intel_passes_ttgpuir(py::module &&m) {
@@ -83,6 +87,9 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      gpu::intel::createTritonIntelGPURemoveLayoutConversions);
   ADD_PASS_WRAPPER_0("add_optimize_dot_operands",
                      gpu::intel::createTritonIntelGPUOptimizeDotOperands);
+  ADD_PASS_OPTION_WRAPPER_1(
+      "add_hoist_layout_conversions",
+      gpu::intel::createTritonIntelGPUHoistLayoutConversions, std::string);
 
   py::class_<gpu::intel::TritonAnnotateModuleOptions>(m,
                                                       "AnnotateModuleOptions")

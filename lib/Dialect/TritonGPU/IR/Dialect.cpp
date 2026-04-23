@@ -1412,7 +1412,6 @@ void AMDMfmaEncodingAttr::print(AsmPrinter &printer) const {
 
   maybePrintCGALayout(printer, getCGALayout());
 
-  auto tilesPerWarp = getTilesPerWarp();
   if (!hasUnitTilesPerWarp())
     printer << ", tilesPerWarp = [" << getTilesPerWarp() << "]";
 
@@ -4293,12 +4292,10 @@ bool triton::gpu::areLayoutsEquivalent(ArrayRef<int64_t> shape,
 }
 
 bool triton::gpu::isInnermostContiguous(MemDescType type, unsigned numElems) {
-  ArrayRef<int64_t> shape = type.getShape();
   Attribute enc = type.getEncoding();
   MLIRContext *ctx = enc.getContext();
 
   LinearLayout actual = toLinearLayout(type);
-  StringAttr fastestIn = *actual.getInDimNames().begin();
 
   // Flatten actual outs in reverse order to produce a row-major flattening
   // of the layout
@@ -4491,6 +4488,8 @@ std::optional<int> triton::gpu::getWarpSpecializeTag(Operation *op) {
 }
 
 PaddedSharedEncodingAttr triton::gpu::getPaddedEncoding(Attribute encoding) {
+  if (!encoding)
+    return nullptr;
   if (auto padded = dyn_cast<PaddedSharedEncodingAttr>(encoding))
     return padded;
   if (auto partitioned = dyn_cast<PartitionedSharedEncodingAttr>(encoding))

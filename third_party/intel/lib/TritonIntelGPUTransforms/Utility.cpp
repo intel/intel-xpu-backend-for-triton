@@ -219,12 +219,6 @@ LogicalResult getConvertBackwardSlice(
 
   auto updateLayout = [&](Value value, Attribute encoding) {
     assert(isa<RankedTensorType>(value.getType()));
-
-    if (RankedTensorType tensorType = getRankedTensorType(value.getType()))
-      if (tensorType.getEncoding() == encoding)
-        return success();
-
-    slice.insert(value);
     Attribute &existing = layout[value];
     if (existing && existing != encoding)
       return failure();
@@ -246,6 +240,13 @@ LogicalResult getConvertBackwardSlice(
 
     if (failed(updateLayout(currentValue, encoding)))
       return failure();
+
+    // If the value already has the desired encoding, we can stop here without
+    // adding it to the slice.
+    auto currentValueType = cast<RankedTensorType>(currentValue.getType());
+    if (currentValueType.getEncoding() == encoding)
+      continue;
+    slice.insert(currentValue);
 
     Value existing;
     if (getExistingConversion &&
@@ -288,6 +289,7 @@ LogicalResult getConvertBackwardSlice(
           continue;
         if (failed(updateLayout(result, encoding)))
           return failure();
+        slice.insert(result);
       }
       if (isFreeConvert(definingOp)) {
         enqueue(definingOp->getOpOperand(0), encoding);
@@ -313,13 +315,6 @@ LogicalResult getConvertBackwardSlice(
           auto srcEncoding = ttgi::inferSrcEncoding(definingOp, encoding);
           if (!srcEncoding)
             return failure();
-          // If the inferred layout matches the original one we don't need to
-          // keep propagating.
-          if (auto operandType =
-                  dyn_cast<RankedTensorType>(operand.get().getType())) {
-            if (srcEncoding == operandType.getEncoding())
-              continue;
-          }
           enqueue(operand, srcEncoding);
         }
       }
