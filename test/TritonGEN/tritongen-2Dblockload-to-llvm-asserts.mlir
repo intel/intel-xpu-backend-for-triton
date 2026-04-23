@@ -14,6 +14,8 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
 
 module attributes {"ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.2Dblockload_skip_base_width_assert(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
+  // When valid_base_width is false, the base-width assert is skipped, but
+  // base-pitch and other runtime asserts should still be emitted.
   // ASSERT: llvm.call spir_funccc @__assert_fail
   // ASSERT-NOT: 2nd operand (base width) should be >= 64
   // ASSERT: 4th operand (base pitch) should be >= 64
