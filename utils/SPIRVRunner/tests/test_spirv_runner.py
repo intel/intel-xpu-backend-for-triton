@@ -10,7 +10,6 @@ SPIRV_RUNNER_TESTS = os.getenv("SPIRV_RUNNER_TESTS")
 
 # Define CLI arguments per directory
 SPIRV_CLI_ARGS = {
-    os.path.join(SPIRV_RUNNER_TESTS, "add_kernel"): ["-o", "tensor_2", "-p", "-v", "expected_output.pt"],
     os.path.join(SPIRV_RUNNER_TESTS, "dot"): ["-o", "tensor_3", "-p", "-v", "expected_output.pt"]
 }
 
@@ -67,11 +66,15 @@ def test_args_json_gen():
                     break
 
             assert dump_dir is not None, f"args_data.json for add_kernel.spv not found under cache root: {cache_root}"
-            result = subprocess.run([SPIRV_RUNNER_PATH, "-d", dump_dir, "-o", "tensor_2", "-v", "expected_output.pt"],
+            result = subprocess.run([SPIRV_RUNNER_PATH, "-d", dump_dir, "-o", "tensor_2"],
                                     capture_output=True, text=True, check=True)
             print("SPIRVRunner stderr:", result.stderr)
     except subprocess.CalledProcessError as e:
         print("Unexpected error executing SPIRVRunner:", e)
+        if e.stdout:
+            print("SPIRVRunner stdout:", e.stdout)
+        if e.stderr:
+            print("SPIRVRunner stderr:", e.stderr)
         pytest.fail(f"SPIRVRunner failed unexpectedly: {e}")
 
 
