@@ -69,6 +69,8 @@ def test_args_json_gen():
             result = subprocess.run([SPIRV_RUNNER_PATH, "-d", dump_dir, "-o", "tensor_2"],
                                     capture_output=True, text=True, check=True)
             print("SPIRVRunner stderr:", result.stderr)
+            assert any(name.startswith("cpp_outs_") and name.endswith(".pt") for name in os.listdir(dump_dir)), \
+                f"No SPIRVRunner output tensor file found in dump dir: {dump_dir}"
     except subprocess.CalledProcessError as e:
         print("Unexpected error executing SPIRVRunner:", e)
         if e.stdout:
