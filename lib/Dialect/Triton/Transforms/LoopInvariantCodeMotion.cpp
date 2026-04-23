@@ -43,6 +43,8 @@ class LoopInvariantCodeMotionPass
           },
           // shouldMoveOutOfRegion
           [&](Operation *op, Region *region) {
+            if (op->hasAttr("tt.no_licm"))
+              return false;
             if (!isa<LoadOp>(op))
               return isSpeculatable(op) && isMemoryEffectFree(op);
             if (!isLoopMemoryEffectFreeOrOnlyRead.contains(loopLike))

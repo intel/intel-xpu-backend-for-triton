@@ -313,6 +313,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttgpuir.add_materialize_block_pointer(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_optimize_dot_operands(pm)
+        intel.passes.ttgpuir.add_hoist_layout_conversions(pm, opt.grf_mode)
         intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier)
 
         if (opt.reduce_variable_liveness):
@@ -462,6 +463,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             if options.num_warps > 32:
                 raise RuntimeError("grf_mode = 256 cannot be used with num_warps > 32")
             metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
+        elif options.grf_mode == '512':
+            if options.num_warps > 32:
+                raise RuntimeError("grf_mode = 512 cannot be used with num_warps > 32")
+            metadata["build_flags"] += " -cl-intel-512-GRF-per-thread"
         elif options.grf_mode == 'auto':
             metadata["build_flags"] += " -cl-intel-enable-auto-large-GRF-mode"
         elif options.grf_mode != 'default':
