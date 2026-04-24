@@ -239,7 +239,7 @@ function install_vllm {
   # Install minimal test dependencies only (not the full xpu-test.txt)
   # The full requirements are very large and cause pip resolver issues.
   # We only need a small subset for the tests we actually run.
-  python -m pip install cachetools cbor2 blake3 pybase64 openai_harmony tblib
+  python -m pip install cachetools cbor2 blake3 pybase64 openai_harmony tblib accelerate
 
   rm -f "$CONSTRAINTS"
 

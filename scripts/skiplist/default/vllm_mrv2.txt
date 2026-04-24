@@ -1,19 +1,33 @@
-# Skip tests using Llama-3.2-1B-Instruct
-tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs
-tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs
-tests/v1/sample/test_logprobs.py::test_none_logprobs
-tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs
-tests/v1/sample/test_logprobs.py::test_zero_logprobs
-
-# Skip tests that query the available free memory
-tests/v1/sample/test_logprobs.py::test_max_logprobs
-tests/v1/sample/test_logprobs.py::test_all_logprobs
-tests/v1/sample/test_logprobs.py::test_logprobs_mode
-tests/v1/sample/test_logprobs.py::test_verify_tokens_integration
-tests/v1/sample/test_logprobs.py::test_utf8_edge_cases_with_real_model
-tests/v1/sample/test_logprobs.py::test_correct_decoded_token_preserves_valid_tokens
-tests/v1/sample/test_logprobs.py::test_prompt_logprobs_with_chunking_and_preemption
-
-# Other
+# XPU does not support the FLASHINFER attention backend.
 tests/v1/worker/test_gpu_model_runner.py::test_hybrid_attention_mamba_tensor_shapes
 tests/v1/worker/test_gpu_model_runner.py::test_mamba_cache_raises_when_max_num_seqs_exceeds_blocks
+
+# Model Runner V2 does not support PROMPT and SAMPLE_PROMPT batch_logprobs_composition.
+tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[False-0.0-BatchLogprobsComposition.PROMPT]
+tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[False-0.0-BatchLogprobsComposition.SAMPLE_PROMPT]
+tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[False-2.0-BatchLogprobsComposition.PROMPT]
+tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[False-2.0-BatchLogprobsComposition.SAMPLE_PROMPT]
+tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[True-2.0-BatchLogprobsComposition.SAMPLE_PROMPT]
+tests/v1/sample/test_logprobs.py::test_all_logprobs
+
+# Model Runner V2 sampler does not support raw_logits and procesessed_logits log_probs_mode.
+tests/v1/sample/test_logprobs.py::test_logprobs_mode[raw_logits]
+tests/v1/sample/test_logprobs.py::test_logprobs_mode[processed_logits]
+tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[eagle0-raw_logits]
+tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[eagle0-processed_logits]
+tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[eagle3-raw_logits]
+tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[eagle3-processed_logits]
+tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[ngram-raw_logits]
+tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[ngram-processed_logits]
+
+# Model Runner V2 spec decode does not support ngram method.
+tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[ngram-raw_logprobs]
+tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[ngram-processed_logprobs]
+
+# AOT autograd cache cannot pickle launcher function.
+tests/v1/sample/test_logprobs.py::test_prompt_logprobs_with_chunking_and_preemption
+
+# Non-deterministic engine core initialization failures.
+tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[eagle0-processed_logprobs]
+tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[eagle3-raw_logprobs]
+tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[eagle3-processed_logprobs]
