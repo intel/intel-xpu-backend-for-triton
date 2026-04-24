@@ -72,12 +72,14 @@ def _attn_fwd(sm_scale, M,  #
               BLOCK_M: tl.constexpr,  #
               BLOCK_N: tl.constexpr,  #
               STAGE: tl.constexpr,  #
-              ):  # pylint: disable=unused-argument
+              TWISST_GRID: tl.constexpr):  # pylint: disable=unused-argument
     dtype = tl.float16
     tl.static_assert(BLOCK_N <= HEAD_DIM)
-    # Grid: (Z, H, num_blocks_m) for N_CTX > 512, (num_blocks_m, 1, Z*H) for N_CTX <= 512
-    if N_CTX <= 512:
-        start_m = tl.program_id(0)
+    # Grid layout: (1, num_blocks_m, Z*H) when TWISST_GRID is True; (Z, H, num_blocks_m) otherwise.
+    # TWISST_GRID places Z*H as the innermost (fastest-varying) dimension, improving EU
+    # utilisation and Q-tile cache reuse across batch/head pairs for the same M-block.
+    if TWISST_GRID:
+        start_m = tl.program_id(1)
         off_hz = tl.program_id(2)
         off_z = off_hz // H
         off_h = off_hz % H
@@ -130,7 +132,7 @@ def _attn_fwd(sm_scale, M,  #
     m_i += tl.math.log2(l_i)
     acc = acc / l_i[:, None]
     # Compute off_hz based on grid layout
-    if N_CTX <= 512:
+    if TWISST_GRID:
         off_hz = tl.program_id(2)
     else:
         off_hz = tl.program_id(0) * H + tl.program_id(1)
@@ -463,10 +465,11 @@ class _attention(torch.autograd.Function):
         assert Lk in {16, 32, 64, 128}
         o = torch.empty_like(q)
         stage = 3 if causal else 1
-        grid = lambda args: (q.shape[0], q.shape[1], triton.cdiv(q.shape[2], args['BLOCK_M']))
-        n_ctx = q.shape[2]
-        if n_ctx <= 512:
-            grid = lambda args: (triton.cdiv(q.shape[2], args['BLOCK_M']), 1, q.shape[0] * q.shape[1])
+        # Use TWISST_GRID layout (1, num_blocks_m, Z*H) for all context sizes.
+        # Placing Z*H as the innermost (fastest-varying) grid dimension allows the hardware
+        # to schedule work across batch/head pairs for the same M-block, improving Q-tile
+        # cache reuse and EU utilisation regardless of sequence length.
+        grid = lambda args: (1, triton.cdiv(q.shape[2], args['BLOCK_M']), q.shape[0] * q.shape[1])
         M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
 
         _attention.tune_attn_fwd[grid](  # pylint: disable=unsubscriptable-object
@@ -476,6 +479,7 @@ class _attention(torch.autograd.Function):
             N_CTX=q.shape[2],  #
             HEAD_DIM=Lk,  #
             STAGE=stage,  #
+            TWISST_GRID=True,  #
         )
 
         ctx.save_for_backward(q, k, v, o, M)
