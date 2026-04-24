@@ -9,9 +9,7 @@ SPIRV_RUNNER_PATH = os.getenv("SPIRV_RUNNER_PATH")
 SPIRV_RUNNER_TESTS = os.getenv("SPIRV_RUNNER_TESTS")
 
 # Define CLI arguments per directory
-SPIRV_CLI_ARGS = {
-    os.path.join(SPIRV_RUNNER_TESTS, "dot"): ["-o", "tensor_3", "-p", "-v", "expected_output.pt"]
-}
+SPIRV_CLI_ARGS = {os.path.join(SPIRV_RUNNER_TESTS, "dot"): ["-o", "tensor_3", "-p", "-v", "expected_output.pt"]}
 
 
 @pytest.mark.skipif(not os.path.exists(SPIRV_RUNNER_PATH), reason="SPIRVRunner executable not found")
@@ -51,7 +49,8 @@ def test_args_json_gen():
             env = os.environ.copy()
             env["TRITON_XPU_ENABLE_DUMP_SPIRV_KERNEL_ARGS"] = "1"
             env["TRITON_CACHE_DIR"] = cache_root
-            result = subprocess.run(["python3", "01-vector-add.py"], capture_output=True, text=True, cwd=target_dir, env=env)
+            result = subprocess.run(["python3", "01-vector-add.py"], capture_output=True, text=True, cwd=target_dir,
+                                    env=env)
             print("SPIRVRunner stderr:", result.stderr)
 
             dump_dir = None
@@ -66,8 +65,8 @@ def test_args_json_gen():
                     break
 
             assert dump_dir is not None, f"args_data.json for add_kernel.spv not found under cache root: {cache_root}"
-            result = subprocess.run([SPIRV_RUNNER_PATH, "-d", dump_dir, "-o", "tensor_2"],
-                                    capture_output=True, text=True, check=True)
+            result = subprocess.run([SPIRV_RUNNER_PATH, "-d", dump_dir, "-o", "tensor_2"], capture_output=True,
+                                    text=True, check=True)
             print("SPIRVRunner stderr:", result.stderr)
             assert any(name.startswith("cpp_outs_") and name.endswith(".pt") for name in os.listdir(dump_dir)), \
                 f"No SPIRVRunner output tensor file found in dump dir: {dump_dir}"

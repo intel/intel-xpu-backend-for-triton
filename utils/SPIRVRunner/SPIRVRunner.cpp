@@ -463,7 +463,8 @@ int main(int argc, char **argv) {
     initDevices(&q);
 
     // Parse the JSON file and create argument dictionary
-    KernelArguments tritonArgDict(cliopts.output_tensors, cliopts.spirv_dump_dir);
+    KernelArguments tritonArgDict(cliopts.output_tensors,
+                                  cliopts.spirv_dump_dir);
 
     // read spirv
     auto spirv = read_spirv(tritonArgDict.spv_name);
