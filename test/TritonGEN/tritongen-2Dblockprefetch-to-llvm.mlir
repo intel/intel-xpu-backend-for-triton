@@ -15,8 +15,6 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
   // CHECK-DAG:  [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK-NEXT: [[DIV:%.*]] = llvm.udiv [[TRUNC]], [[ONE]] : i32
   // CHECK-NEXT: [[ADD_1:%.*]] = llvm.add %arg4, [[DIV]] : i32
-  // CHECK-NEXT: [[MIN_BASE_WIDTH:%.*]] = llvm.mlir.constant(64 : i32) : i32
-  // CHECK-NEXT: [[MAX:%.*]] = llvm.intr.umax([[ADD_0]], [[MIN_BASE_WIDTH]]) : (i32, i32) -> i32
   // CHECK-DAG:  [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
   // CHECK-DAG:  [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK-DAG:  [[UNDEF:%.*]] = llvm.mlir.undef : vector<2xi32>
@@ -26,7 +24,7 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
   // CHECK-NEXT: [[TileWidth:%.*]] = llvm.mlir.constant(32 : i32) : i32
   // CHECK-NEXT: [[TileHeight:%.*]] = llvm.mlir.constant(8 : i32) : i32
   // CHECK-NEXT: [[VBlocks:%.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK-NEXT: llvm.call spir_funccc @_Z36__spirv_Subgroup2DBlockPrefetchINTELiiiiPU3AS1viiiDv2_i([[ElemSize]], [[TileWidth]], [[TileHeight]], [[VBlocks]], [[BASE_ALIGNED]], [[MAX]], %arg2, %arg3, [[COORD1]])
+  // CHECK-NEXT: llvm.call spir_funccc @_Z36__spirv_Subgroup2DBlockPrefetchINTELiiiiPU3AS1viiiDv2_i([[ElemSize]], [[TileWidth]], [[TileHeight]], [[VBlocks]], [[BASE_ALIGNED]], [[ADD_0]], %arg2, %arg3, [[COORD1]])
   // CHECK-SAME:       triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.load_cache_control<0, Uncached, 4>, #triton_gen.load_cache_control<1, Uncached, 4>>
   // CHECK-SAME:       : (i32, i32, i32, i32, !llvm.ptr<1>{{.*}}, i32, i32, i32, vector<2xi32>) -> ()
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=1, cache_control=L1UC_L3UC} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
