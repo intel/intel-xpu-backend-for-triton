@@ -2010,9 +2010,6 @@ struct LoadOpToBlockIOConversion
 
   using ValueTable = std::map<std::pair<int, int>, Value>;
 
-  // Minimum base width in bytes for 2D block operations
-  static constexpr unsigned MIN_BASE_WIDTH_BYTES = 64;
-
   LoadOpToBlockIOConversion(
       LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
@@ -2248,8 +2245,6 @@ public:
       // by element bytes size.
       adjustedBaseWidth =
           b.add(baseWidth, b.mul(offsetX, b.i32_val(elemSizeInBits / 8)));
-      adjustedBaseWidth =
-          b.umax(adjustedBaseWidth, b.i32_val(MIN_BASE_WIDTH_BYTES));
       // Use the top-left address and mask of the block to load the data.
       // (The first value referred to by the registerIdx.)
       if (maskElems.size()) {
