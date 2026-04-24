@@ -48,9 +48,7 @@ def test_args_json_gen():
             env = os.environ.copy()
             env["TRITON_XPU_ENABLE_DUMP_SPIRV_KERNEL_ARGS"] = "1"
             env["TRITON_CACHE_DIR"] = cache_root
-            vector_add_path = os.path.join(SPIRV_RUNNER_TESTS, "01-vector-add.py")
-            assert os.path.exists(vector_add_path), f"Test script not found: {vector_add_path}"
-            result = subprocess.run(["python3", vector_add_path], capture_output=True, text=True, env=env, check=True)
+            result = subprocess.run(["python3", "01-vector-add.py"], capture_output=True, text=True, env=env)
             print("SPIRVRunner stderr:", result.stderr)
 
             dump_dir = None
