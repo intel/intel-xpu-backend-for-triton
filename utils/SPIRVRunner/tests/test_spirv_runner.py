@@ -45,10 +45,12 @@ def test_args_json_gen():
     try:
         print("Running SPIRVRunner to generate serialized args/Tensor data from Triton ...")
         with tempfile.TemporaryDirectory(prefix="spirv_runner_cache_") as cache_root:
+            target_dir = os.path.join(SPIRV_RUNNER_TESTS, "add_kernel")
             env = os.environ.copy()
             env["TRITON_XPU_ENABLE_DUMP_SPIRV_KERNEL_ARGS"] = "1"
             env["TRITON_CACHE_DIR"] = cache_root
-            result = subprocess.run(["python3", "01-vector-add.py"], capture_output=True, text=True, env=env)
+            result = subprocess.run(["python3", "01-vector-add.py"], capture_output=True, text=True, cwd=target_dir,
+                                    env=env)
             print("SPIRVRunner stderr:", result.stderr)
 
             dump_dir = None
