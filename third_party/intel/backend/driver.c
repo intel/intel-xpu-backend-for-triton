@@ -126,6 +126,11 @@ extern "C" EXPORT_FUNC PyObject *get_device_properties(int device_id) {
 
   // Get device handle
   ze_device_handle_t phDevice = device.second;
+  if (!phDevice) {
+    zeConstructError(__FILE__, __LINE__,
+                     "Level Zero device handle is null for this device index.");
+    return NULL;
+  }
 
   // create a struct to hold device properties
   ze_device_properties_t device_properties = {};
@@ -318,6 +323,11 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   const auto &sycl_l0_device_pair = g_sycl_l0_device_list[devId];
   const sycl::device sycl_device = sycl_l0_device_pair.first;
   const auto l0_device = sycl_l0_device_pair.second;
+  if (!l0_device) {
+    zeConstructError(__FILE__, __LINE__,
+                     "Level Zero device handle is null for load_binary.");
+    return NULL;
+  }
 
   const std::string kernel_name = name;
   const size_t binary_size = PyBytes_Size(py_bytes);
@@ -471,17 +481,40 @@ extern "C" EXPORT_FUNC PyObject *init_devices(PyObject *cap) {
   }
   sycl::queue *sycl_queue = static_cast<sycl::queue *>(queue);
 
+  {
+    ze_result_t zr = zeInit(ZE_INIT_FLAG_GPU_ONLY);
+    if (zr != ZE_RESULT_SUCCESS) {
+      const std::string ze_msg = parseZeResultCode(zr);
+      zeConstructError(__FILE__, __LINE__, ze_msg.c_str());
+      return NULL;
+    }
+  }
+
   auto sycl_context = sycl_queue->get_context();
 
   // Get sycl-device
   const std::vector<sycl::device> &sycl_devices = sycl_context.get_devices();
 
-  // Retrieve l0 devices
+  g_sycl_l0_device_list.clear();
+
   const uint32_t deviceCount = sycl_devices.size();
+  g_sycl_l0_device_list.reserve(deviceCount);
+  size_t usableDeviceCount = 0;
   for (uint32_t i = 0; i < deviceCount; ++i) {
-    g_sycl_l0_device_list.push_back(std::make_pair(
-        sycl_devices[i], sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
-                             sycl_devices[i])));
+    ze_device_handle_t zeDev =
+        sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_devices[i]);
+    if (zeDev)
+      ++usableDeviceCount;
+    // Keep indices stable: callers pass torch.xpu device ordinals (dense),
+    // so we must not compact this list based on availability of native handles.
+    g_sycl_l0_device_list.push_back(std::make_pair(sycl_devices[i], zeDev));
+  }
+
+  if (usableDeviceCount == 0) {
+    zeConstructError(
+        __FILE__, __LINE__,
+        "No Level Zero device handle from the queue's SYCL context.");
+    return NULL;
   }
 
   return Py_BuildValue("(i)", deviceCount);
@@ -587,6 +620,13 @@ static inline bool checkDevicePointer(void *ptr, int idx,
   }
   auto context = queue.get_context();
   auto handle = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(context);
+  if (!handle) {
+    PyErr_Format(PyExc_RuntimeError,
+                 "Level Zero context handle is null while validating pointer "
+                 "argument (at %d).",
+                 idx);
+    return false;
+  }
   ze_memory_allocation_properties_t prop;
   prop.stype = ZE_STRUCTURE_TYPE_MEMORY_ALLOCATION_PROPERTIES;
   prop.pNext = nullptr;

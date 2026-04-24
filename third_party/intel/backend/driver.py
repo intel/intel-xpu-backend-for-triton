@@ -340,6 +340,8 @@ class XPUUtils(object):
         return cls.instance
 
     def __init__(self):
+        if getattr(self, "_xpu_utils_init_done", False):
+            return
         dirname = os.path.dirname(os.path.realpath(__file__))
         # we save `spirv_utils` module so that the destructor is not called prematurely, which will unload the dll
         # and can cause `Fatal Python error: Segmentation fault`
@@ -364,6 +366,7 @@ class XPUUtils(object):
         self.unload_module = lambda module: None
         self.launch = mod.launch
         self.build_signature_metadata = mod.build_signature_metadata
+        self._xpu_utils_init_done = True
 
     def get_current_device(self):
         import torch
