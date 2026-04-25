@@ -3,7 +3,6 @@
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
-#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "triton/Tools/LayoutUtils.h"
@@ -200,28 +199,19 @@ struct LoadStoreConversionBase {
         .getContiguity(ptr);
   }
 
-  static bool hasSupport256bLoadStore(Operation *op) {
-    auto mod = op->getParentOfType<ModuleOp>();
-    return mod && mod->hasAttr(
-                      TritonIntelGPUDialect::getSupport256bLoadStoreAttrName());
+  /// Maximum number of elements that fit in a 128-bit vector load/store.
+  static unsigned getMaxVecWidth(unsigned pointeeBitWidth) {
+    return std::max(1u, 128 / std::max(8u, pointeeBitWidth));
   }
 
-  /// Maximum number of elements per-thread vector load/store. 128 bits by
-  /// default; 256 bits when the target supports wider load/stores.
-  static unsigned getMaxVecWidth(bool support256bLoadStore,
-                                 unsigned pointeeBitWidth) {
-    unsigned maxBits = support256bLoadStore ? 256u : 128u;
-    return std::max(1u, maxBits / std::max(8u, pointeeBitWidth));
-  }
-
-  unsigned getVectorSize(bool support256bLoadStore, Value ptr) const {
+  unsigned getVectorSize(Value ptr) const {
     if (!isa<RankedTensorType>(ptr.getType()))
       return 1;
 
     unsigned contiguity = getContiguity(ptr);
     unsigned pointeeBitWidth = triton::getPointeeBitWidth(ptr.getType());
-    return std::min<unsigned>(
-        getMaxVecWidth(support256bLoadStore, pointeeBitWidth), contiguity);
+    // The maximum vector size is 128 bits.
+    return std::min<unsigned>(getMaxVecWidth(pointeeBitWidth), contiguity);
   }
 
   unsigned getMaskAlignment(Value mask) const {
@@ -232,8 +222,8 @@ struct LoadStoreConversionBase {
   /// Compute vectorization factor for descriptor load/store gather fallback.
   /// Queries the descriptor's address-level AxisInfo (analogous to how
   /// getVectorSize queries the pointer operand's AxisInfo for LoadOp).
-  unsigned getDescriptorVecSize(bool support256bLoadStore, Value desc,
-                                RankedTensorType resultType, Type valueElemTy,
+  unsigned getDescriptorVecSize(Value desc, RankedTensorType resultType,
+                                Type valueElemTy,
                                 StringAttr blockIOAttr) const {
     unsigned rank = resultType.getRank();
     if (rank == 0)
@@ -267,7 +257,7 @@ struct LoadStoreConversionBase {
       return 1; // Stride is not 1 on this dimension
 
     unsigned pointeeBitWidth = valueElemTy.getIntOrFloatBitWidth();
-    unsigned maxVec = getMaxVecWidth(support256bLoadStore, pointeeBitWidth);
+    unsigned maxVec = getMaxVecWidth(pointeeBitWidth);
     unsigned threadContig = contigPerThread[order[0]];
     // Note: descContiguity and threadContig refer to the same logical dimension
     // but are indexed in different coordinate spaces. descContiguity uses
@@ -726,18 +716,6 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     assert(stride == -1 && "invalid stride < 0");
 
     return nullptr;
-  }
-
-  // getBlockIOTileSize and BlockIOTileSizeInfo have been moved to
-  // intel/include/Dialect/TritonIntelGPU/Transforms/BlockIOUtils.h
-  template <bool isLoad>
-  static BlockIOTileSizeInfo
-  getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
-                     unsigned elemSizeInBits, AxisInfo *maskAxisInfo = nullptr,
-                     bool oneMatrixPerLoadForBT = false) {
-    return triton::gpu::intel::getBlockIOTileSize<isLoad>(
-        ll, memContiguousDim, elemSizeInBits, maskAxisInfo,
-        oneMatrixPerLoadForBT);
   }
 
   /// Configuration produced by configureDPASLoadTypes().
@@ -1875,723 +1853,9 @@ struct DescriptorPrefetchOpConversion
   }
 };
 
-struct LoadOpToBlockIOConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>,
-      public BlockIOConversionBase {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::LoadOp>::ConvertTritonGPUOpToLLVMPattern;
-
-  using ValueTable = std::map<std::pair<int, int>, Value>;
-
-  LoadOpToBlockIOConversion(
-      LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
-      const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
-      triton::intel::ModuleStrideAnalysis &strideAnalysis,
-      PatternBenefit benefit)
-      : ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>(converter, benefit),
-        BlockIOConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
-
-public:
-  LogicalResult
-  matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const final {
-    if (!isBlockIOCandidate(op))
-      return failure();
-
-    // FIXME: Remove once IGC can split large 2D block loads.
-    std::optional<bool> oneMatrixPerLoadForBT =
-        mlir::triton::tools::isEnvValueBool(mlir::triton::tools::getStrEnv(
-            "TRITON_INTEL_ONE_MATRIX_PER_LOAD_BT"));
-    if (!oneMatrixPerLoadForBT.has_value())
-      oneMatrixPerLoadForBT =
-          op->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
-                          getOneMatrixPerLoadAttrName());
-
-    // Get the max tile shape supported by the layout.
-    Type resultType = op.getType();
-    auto tensorType = cast<RankedTensorType>(resultType);
-    Attribute encoding = tensorType.getEncoding();
-    std::optional<LinearLayout> llEncoding =
-        cast<DistributedEncodingTrait>(encoding).toLinearLayout(
-            tensorType.getShape());
-    assert(llEncoding.has_value() &&
-           "unexpected failure when getting linear layout");
-
-    // TODO: use the axis info to general the handling for both regular pointer
-    // and block pointer.
-    const bool memoryRowMajor = isMemoryRowMajor(op);
-    const unsigned rank = tensorType.getRank();
-    unsigned contiguousDim = memoryRowMajor ? rank - 1 : rank - 2;
-    Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
-    unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
-
-    // Get the maximum tile shapes for the given mask constancy.
-    AxisInfo *maskAxisInfo = nullptr;
-    if (op.getMask()) {
-      maskAxisInfo =
-          const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
-              .getAxisInfo(op.getMask());
-    }
-    BlockIOTileSizeInfo sizeInfo = BlockIOTileSizeInfo::unknown();
-    auto blockedEnc = dyn_cast<BlockedEncodingAttr>(encoding);
-    if (hasAnnotated1DReshapeStride(op) && blockedEnc && rank == 2) {
-      // For loads annotated by the 1D->2D reshape, the explicit load encoding
-      // has sizePerThread=[H/warps, 1], threadsPerWarp=[1, tpw]. This matches
-      // 2D block load HW delivery (lane k = col k, registers = rows).
-      unsigned numWarpsRow = blockedEnc.getWarpsPerCTA()[0];
-      int height = tensorType.getDimSize(0) / numWarpsRow;
-      int width = tensorType.getDimSize(rank - 1);
-      auto *ctx = rewriter.getContext();
-      StringAttr kRegister = str_attr("register");
-      unsigned regDimSize = llEncoding->getInDimSize(kRegister);
-      SetVector<unsigned> regPackBases;
-      for (unsigned i = 1; i < regDimSize; i <<= 1)
-        regPackBases.insert(i);
-      sizeInfo = BlockIOTileSizeInfo(height, width, /*numElemPerPackedVal=*/1,
-                                     /*vBlocks=*/1, /*rowDim=*/0,
-                                     /*colDim=*/rank - 1, /*transpose=*/false,
-                                     std::move(regPackBases));
-    } else {
-      sizeInfo = getBlockIOTileSize<true /*load*/>(
-          llEncoding.value(), contiguousDim, elemSizeInBits, maskAxisInfo,
-          oneMatrixPerLoadForBT.has_value() ? *oneMatrixPerLoadForBT : false);
-    }
-    if (!sizeInfo.isValid())
-      return failure();
-    // Extract members to regular variables for C++17 compatibility
-    // (capturing structured bindings in lambdas requires C++20)
-    int tileHeight = sizeInfo.tileHeight;
-    int tileWidth = sizeInfo.tileWidth;
-    int numPackedVals = sizeInfo.numElemPerPackedVal;
-    int vBlocks = sizeInfo.vBlocks;
-    int rowDim = sizeInfo.rowDim;
-    int colDim = sizeInfo.colDim;
-    bool isTransposeRequired = sizeInfo.transpose;
-    std::optional<SetVector<unsigned>> regPackedBases =
-        std::move(sizeInfo.regPackedBases);
-
-    unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
-    if (!check2DBlockAddressPayloadRestriction(packedElemSizeInBits, tileWidth))
-      return failure();
-
-    // 2D block load supports 64 bytes per row at most.
-    constexpr int MAX_WIDTH = 64;
-    unsigned totalBytesPerRowPerMatrix = tileWidth * packedElemSizeInBits / 8;
-    if (totalBytesPerRowPerMatrix > MAX_WIDTH)
-      return failure();
-
-    // Load multiple dot operands by enlarging the vBlocks.
-    vBlocks = std::min(vBlocks,
-                       static_cast<int>(MAX_WIDTH / totalBytesPerRowPerMatrix));
-    // vBlocks has HW limitation of 4.
-    vBlocks = std::min(vBlocks, 4);
-    // Limit vBlocks to 1 if block size is smaller than GRF size.
-    const unsigned GRF_SIZE = 64;
-    if (tileHeight * tileWidth * packedElemSizeInBits / 8 < GRF_SIZE)
-      vBlocks = 1;
-
-    Location loc = op.getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    MLIRContext *ctx = rewriter.getContext();
-
-    unsigned threadsPerWarp =
-        TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());
-
-    StringAttr kRegister = S("register");
-    StringAttr kLane = S("lane");
-    StringAttr kWarp = S("warp");
-    StringAttr kBlock = S("block");
-    assert(regPackedBases.has_value() &&
-           "invalid register bases for packing elems.");
-    std::vector<std::vector<int>> bases(regPackedBases->size());
-    llvm::transform(*regPackedBases, bases.begin(),
-                    [&](int base) { return std::vector<int>{base}; });
-    LinearLayout regMapping({{kRegister, bases}},
-                            {{kRegister, llEncoding->getInDimSize(kRegister)}},
-                            /*requireSurjective=*/true);
-
-    // Get the LLVM values for pointers
-    Value ptr = op.getPtr();
-    Value llPtr = adaptor.getPtr();
-    unsigned numElems = getTotalElemsPerThread(resultType);
-    SmallVector<Value> ptrElems =
-        unpackLLElements(ptr.getLoc(), llPtr, rewriter);
-    assert(ptrElems.size() == numElems &&
-           "the number of pointer values is not matched with the number of "
-           "elements");
-
-    SmallVector<Value> maskElems;
-    Value llMask = adaptor.getMask();
-
-    // Get the LLVM values for mask
-    if (llMask) {
-      Value mask = op.getMask();
-      maskElems = unpackLLElements(loc, llMask, rewriter);
-      assert(maskElems.size() == numElems &&
-             "the number of mask values is not matched with the number of "
-             "elements");
-    }
-
-    // Get the LLVM values for other
-    Value other = op.getOther();
-    SmallVector<Value> otherElems;
-    Value llOther = adaptor.getOther();
-    DenseElementsAttr constAttr;
-    if (other) {
-      if (matchPattern(other, m_Constant(&constAttr)) && constAttr.isSplat()) {
-        Type elemTy = constAttr.getElementType();
-        auto handleSplatValue = [&](auto splatVal) {
-          if (!splatVal.isZero()) {
-            otherElems = SmallVector<Value>(
-                numElems,
-                LLVM::ConstantOp::create(rewriter, loc, elemTy, splatVal));
-          }
-        };
-
-        TypeSwitch<mlir::Type>(elemTy)
-            .Case<FloatType>([&](FloatType) {
-              handleSplatValue(constAttr.getSplatValue<APFloat>());
-            })
-            .Case<IntegerType>([&](IntegerType) {
-              handleSplatValue(constAttr.getSplatValue<APInt>());
-            });
-      } else {
-        otherElems = unpackLLElements(loc, llOther, rewriter);
-      }
-    }
-
-    int64_t numElemsPerLoad = mlir::ceil(
-        tileHeight * tileWidth * numPackedVals * vBlocks, (int)threadsPerWarp);
-    unsigned numValuesPerLoad = mlir::ceil((int)numElemsPerLoad, numPackedVals);
-    Type packedType = IntegerType::get(ctx, packedElemSizeInBits);
-    Type load2DGenXType = LLVM::getVectorType(packedType, numValuesPerLoad);
-    Type unpackedType = LLVM::getVectorType(eltTy, numElemsPerLoad);
-
-    // Use the explicit stride attribute if set by the 1D->2D reshape,
-    // otherwise compute pitch from pointer element analysis.
-    Value pitch;
-    if (auto pitchBytes = getAnnotated1DReshapePitch(op, elemSizeInBits)) {
-      pitch = b.i32_val(*pitchBytes);
-    } else {
-      pitch = getPitch(rewriter, ptr, elemSizeInBits,
-                       isTransposeRequired ? colDim : rowDim);
-    }
-    if (!pitch)
-      return failure();
-
-    auto dpasCfg = configureDPASLoadTypes(
-        tensorType, eltTy, packedType, load2DGenXType, unpackedType,
-        elemSizeInBits, numPackedVals, threadsPerWarp, tileHeight, tileWidth,
-        vBlocks, numElemsPerLoad, numValuesPerLoad, isTransposeRequired, ctx);
-    Type packedDPASOperandType = dpasCfg.packedDPASOperandType;
-    unpackedType = dpasCfg.unpackedType;
-    load2DGenXType = dpasCfg.load2DGenXType;
-    packedType = dpasCfg.packedType;
-    bool useVNNIFormat = dpasCfg.useVNNIFormat;
-    tileHeight = dpasCfg.tileHeight;
-    tileWidth = dpasCfg.tileWidth;
-    vBlocks = dpasCfg.vBlocks;
-    numElemsPerLoad = dpasCfg.numElemsPerLoad;
-    numValuesPerLoad = dpasCfg.numValuesPerLoad;
-
-    // If the stride is 0, we want to load only the first row.
-    int stride = getStride(ptr, isTransposeRequired ? colDim : rowDim);
-    // Only tileWidth == threadsPerWarp/2 is handled in the baseHeight==1 fixup.
-    if (stride == 0 && tileHeight > 1 && tileWidth < threadsPerWarp &&
-        tileWidth * 2 != threadsPerWarp)
-      return failure();
-    Value baseHeight = b.i32_val((stride == 0 ? 1 : tileHeight));
-    Value baseWidth =
-        b.i32_val(vBlocks * tileWidth * (packedElemSizeInBits / 8));
-
-    LinearLayout shuffleMapping =
-        LinearLayout::identity1D(numElemsPerLoad, kRegister, kRegister);
-    if (isTransposeRequired) {
-      auto result = computeTransposeShuffleMapping(
-          tensorType, regMapping, numElemsPerLoad, numPackedVals, tileHeight,
-          threadsPerWarp, /*hasDPASOperandType=*/!!packedDPASOperandType, ctx);
-      if (failed(result))
-        return failure();
-      shuffleMapping = *result;
-    }
-
-    Value warpId = arith::IndexCastOp::create(
-        rewriter, loc, i32_ty,
-        mlir::gpu::SubgroupIdOp::create(rewriter, loc,
-                                        /*upperBound=*/nullptr));
-
-    SmallVector<Value> unpackedLoadedVals(numElems);
-    for (size_t elemIdx = 0; elemIdx < numElems; elemIdx += numElemsPerLoad) {
-      unsigned registerIdx = regMapping.apply({{kRegister, elemIdx}})[0].second;
-
-      // Need to apply the linear layout to get the offsets to the base of the
-      // block pointer.
-      // TODO: add annotation uniform to the offsets. Make sure the IGC detect
-      // the offsets as uniform.
-      auto offsets = applyLinearLayout(loc, rewriter, *llEncoding,
-                                       {{kRegister, b.i32_val(registerIdx)},
-                                        {kLane, b.i32_val(0)},
-                                        {kWarp, warpId},
-                                        {kBlock, b.i32_val(0)}});
-
-      // Use the top-left address of the block to load the data.
-      Value addrElem =
-          targetInfo.shuffleIdx(rewriter, loc, ptrElems[registerIdx], 0);
-      Value adjustedBaseWidth = baseWidth, adjustedBaseHeight = baseHeight;
-      Value pred;
-
-      // Adjust the baseWidth, offsetX and base address use the original base
-      // of the BLOCK.
-      Value offsetX = offsets[isTransposeRequired ? rowDim : colDim].second;
-      Value offsetY = b.i32_val(0);
-      Value negativeOffsetX = b.sub(b.i32_val(0), offsetX);
-      addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, negativeOffsetX);
-      // The offset is in number of original elements. So we need to scale it
-      // by element bytes size.
-      adjustedBaseWidth =
-          b.add(baseWidth, b.mul(offsetX, b.i32_val(elemSizeInBits / 8)));
-      // Use the top-left address and mask of the block to load the data.
-      // (The first value referred to by the registerIdx.)
-      if (maskElems.size()) {
-        pred = targetInfo.shuffleIdx(rewriter, loc, maskElems[registerIdx], 0);
-      }
-
-      if (pred) {
-        // We leverage the GPU block I/O hardware out-of-bound protection
-        // feature by setting the offset to an invalid value when 'pred'
-        // is false (the HW will not read out-of-bounds values). Later on,
-        // after issuing the 2d block read operation, we will select the
-        // result of the load only if the mask evaluate to true, otherwise
-        // we will use 'other'.
-        offsetY = b.select(pred, offsetY, adjustedBaseHeight);
-      }
-
-      assert(numPackedVals > 0 && "numPackedVals should be greater than zero.");
-      Value ret = TritonGEN::Matrix2DBlockLoadOp::create(
-          rewriter, loc, load2DGenXType,
-          /*ptr*/ addrElem,
-          /*base_width*/ adjustedBaseWidth,
-          /*base_height*/ adjustedBaseHeight,
-          /*base_pitch*/ pitch,
-          // offsetX was in terms of original elements. The 2d block io requires
-          // offsetX to be in terms of packed elements.
-          /*x*/ b.udiv(offsetX, b.i32_val(numPackedVals)),
-          /*y*/ offsetY,
-          /*elem_size_in_bits*/ packedElemSizeInBits,
-          /*tile_width*/ tileWidth,
-          /*tile_height*/ tileHeight,
-          /*v_blocks*/ vBlocks,
-          /*transpose*/ isTransposeRequired,
-          /*vnni_transform*/ !isTransposeRequired && useVNNIFormat);
-
-      {
-        // When strides[0] is 0, we only want to load the first row, so we
-        // set the base height to be 1. If tile height is bigger than 1,
-        // then only the first row contain valid data. To ensure the entire
-        // tile is filled with valid data, we must replicate the first row
-        // throughout the tile.
-        if (auto baseHeightInt =
-                mlir::triton::intel::getFoldedConstantValue(baseHeight)) {
-          if (baseHeightInt < tileHeight && baseHeightInt == 1) {
-            unsigned numIndicesPerMatrix = numValuesPerLoad / vBlocks;
-            SmallVector<int32_t> shuffleIndices(numValuesPerLoad);
-
-            // Create a vector to store the data of the first index of each
-            // matrix.
-            VectorType vecTy = vec_ty(packedType, vBlocks);
-            Value firstIndexVec = b.undef(vecTy);
-
-            for (unsigned valueIndex = 0; valueIndex < numValuesPerLoad;
-                 ++valueIndex) {
-              unsigned firstIndexVecIdx = valueIndex / numIndicesPerMatrix;
-              // Handle case where an index spans two rows.
-              if (valueIndex % numIndicesPerMatrix == 0) {
-                Value oldVal = b.extract_element(ret, b.i32_val(valueIndex));
-                Value newVal = oldVal;
-                if (tileWidth < threadsPerWarp) {
-                  assert(tileWidth * 2 == threadsPerWarp &&
-                         "Expecting tileWidth to be 2x threadsPerWarp");
-                  Value threadId = getThreadId(rewriter, loc);
-                  newVal = targetInfo.shuffleIdx(
-                      rewriter, loc, oldVal,
-                      b.urem(threadId, b.i32_val(tileWidth)));
-                }
-                firstIndexVec =
-                    b.insert_element(firstIndexVec.getType(), firstIndexVec,
-                                     newVal, b.i32_val(firstIndexVecIdx));
-              }
-
-              shuffleIndices[valueIndex] = firstIndexVecIdx;
-            }
-            DenseI32ArrayAttr attr =
-                rewriter.getDenseI32ArrayAttr(shuffleIndices);
-            ret = LLVM::ShuffleVectorOp::create(rewriter, loc, load2DGenXType,
-                                                firstIndexVec, firstIndexVec,
-                                                attr);
-          }
-        }
-      }
-
-      unpackBlockLoadResult(ret, unpackedLoadedVals, elemIdx, regMapping,
-                            shuffleMapping, packedDPASOperandType, unpackedType,
-                            numValuesPerLoad, numPackedVals, pred, otherElems,
-                            /*nanMaskElems=*/{}, loc, rewriter, ctx);
-    }
-
-    auto typeConverter = getTypeConverter();
-    Type llvmResultStructTy = typeConverter->convertType(op.getType());
-    Value resultStruct = packLLElements(loc, typeConverter, unpackedLoadedVals,
-                                        rewriter, llvmResultStructTy);
-    rewriter.replaceOp(op, {resultStruct});
-
-    return success();
-  }
-};
-
-struct DescriptorLoadOpToBlockIOConversion
-    : public ConvertTritonGPUOpToLLVMPattern<triton::DescriptorLoadOp>,
-      public BlockIOConversionBase {
-  using ConvertTritonGPUOpToLLVMPattern<
-      triton::DescriptorLoadOp>::ConvertTritonGPUOpToLLVMPattern;
-
-  DescriptorLoadOpToBlockIOConversion(
-      LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
-      const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
-      triton::intel::ModuleStrideAnalysis &strideAnalysis,
-      PatternBenefit benefit)
-      : ConvertTritonGPUOpToLLVMPattern<triton::DescriptorLoadOp>(converter,
-                                                                  benefit),
-        BlockIOConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
-
-  LogicalResult
-  matchAndRewrite(triton::DescriptorLoadOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    if (!isDescriptorBlockIOCandidate(op))
-      return failure();
-
-    // Get padding from the propagated attribute (set by
-    // MaterializeBlockPointer).
-    PaddingOption padding = PaddingOption::PAD_ZERO;
-    if (auto paddingAttr = op->getAttrOfType<triton::PaddingOptionAttr>(
-            TritonIntelGPUDialect::getDescPaddingAttrName()))
-      padding = paddingAttr.getValue();
-
-    // Result type and encoding setup.
-    Type resultType = op.getType();
-    auto tensorType = cast<RankedTensorType>(resultType);
-    Attribute encoding = tensorType.getEncoding();
-    std::optional<LinearLayout> llEncoding =
-        cast<DistributedEncodingTrait>(encoding).toLinearLayout(
-            tensorType.getShape());
-    assert(llEncoding.has_value() &&
-           "unexpected failure when getting linear layout");
-
-    // Read memory layout from block_io attribute (set by
-    // MaterializeBlockPointer; column_major set by
-    // FuseTransWithDescriptorLoad).
-    StringRef blockIOName = TritonIntelGPUDialect::getBlockIOAttrName();
-    StringAttr blockIOAttr = op->getAttrOfType<StringAttr>(blockIOName);
-    assert(
-        blockIOAttr &&
-        "block_io attribute required; checked by isDescriptorBlockIOCandidate");
-    const unsigned rank = tensorType.getRank();
-    auto descType = cast<triton::TensorDescType>(op.getDesc().getType());
-    const unsigned descRank = descType.getBlockType().getRank();
-    assert(descRank >= rank &&
-           "descriptor rank must be >= result rank for descriptor load");
-    const unsigned rankDelta = descRank - rank;
-    auto mapResultDimToDescDim = [rankDelta](unsigned dim) {
-      return dim + rankDelta;
-    };
-    auto mode = symbolizeBlockIOMode(blockIOAttr.getValue());
-    // The ColumnMajor mode means the descriptor load needs to permute
-    // the last 2 dim to align the load result type.
-    bool permuteDescDim = mode && *mode == BlockIOMode::ColumnMajor;
-    assertDescriptorInnerShapeCompatible(op, descType.getBlockType().getShape(),
-                                         tensorType.getShape(), permuteDescDim);
-    // For the permuted case, the tensor descriptor's dimension space needs to
-    // be aligned with the result type. Specifically, the (rank - 1) dimension
-    // of the tensor descriptor is mapped to the (rank - 2) dimension of the
-    // result type when permuted. Note: The getBlockIOTileSize function expects
-    // the input dimension based on the result type, not the tensor descriptor
-    // type.
-    unsigned contiguousDim = !permuteDescDim ? rank - 1 : rank - 2;
-
-    Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
-    unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
-
-    // Tile size computation (no mask for descriptors).
-    // FIXME: Remove once IGC can split large 2D block loads.
-    std::optional<bool> oneMatrixPerLoadForBT =
-        mlir::triton::tools::isEnvValueBool(mlir::triton::tools::getStrEnv(
-            "TRITON_INTEL_ONE_MATRIX_PER_LOAD_BT"));
-    if (!oneMatrixPerLoadForBT.has_value())
-      oneMatrixPerLoadForBT =
-          op->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
-                          getOneMatrixPerLoadAttrName());
-    BlockIOTileSizeInfo sizeInfo = getBlockIOTileSize<true /*load*/>(
-        llEncoding.value(), contiguousDim, elemSizeInBits,
-        /*maskAxisInfo=*/nullptr, *oneMatrixPerLoadForBT);
-    if (!sizeInfo.isValid())
-      return failure();
-
-    // For descriptor loads, the 2D block I/O tile must use only the inner 2
-    // dims. Reject if rowDim or colDim falls in a batch dimension.
-    int innerDimStart = static_cast<int>(rank - 2);
-    if (sizeInfo.rowDim < innerDimStart || sizeInfo.colDim < innerDimStart)
-      return failure();
-
-    int tileHeight = sizeInfo.tileHeight;
-    int tileWidth = sizeInfo.tileWidth;
-    int numPackedVals = sizeInfo.numElemPerPackedVal;
-    int vBlocks = sizeInfo.vBlocks;
-    int rowDim = sizeInfo.rowDim;
-    int colDim = sizeInfo.colDim;
-    bool isTransposeRequired = sizeInfo.transpose;
-    std::optional<SetVector<unsigned>> regPackedBases =
-        std::move(sizeInfo.regPackedBases);
-
-    unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
-    if (!check2DBlockAddressPayloadRestriction(packedElemSizeInBits, tileWidth))
-      return failure();
-
-    // 2D block load supports 64 bytes per row at most.
-    constexpr int MAX_WIDTH = 64;
-    unsigned totalBytesPerRowPerMatrix = tileWidth * packedElemSizeInBits / 8;
-    if (totalBytesPerRowPerMatrix > MAX_WIDTH)
-      return failure();
-
-    // Load multiple dot operands by enlarging the vBlocks.
-    vBlocks = std::min(vBlocks,
-                       static_cast<int>(MAX_WIDTH / totalBytesPerRowPerMatrix));
-    vBlocks = std::min(vBlocks, 4);
-    const unsigned GRF_SIZE = 64;
-    if (tileHeight * tileWidth * packedElemSizeInBits / 8 < GRF_SIZE)
-      vBlocks = 1;
-
-    Location loc = op.getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    MLIRContext *ctx = rewriter.getContext();
-
-    unsigned threadsPerWarp =
-        TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());
-
-    StringAttr kRegister = S("register");
-    StringAttr kLane = S("lane");
-    StringAttr kWarp = S("warp");
-    StringAttr kBlock = S("block");
-    assert(regPackedBases.has_value() &&
-           "invalid register bases for packing elems.");
-    std::vector<std::vector<int>> bases(regPackedBases->size());
-    llvm::transform(*regPackedBases, bases.begin(),
-                    [&](int base) { return std::vector<int>{base}; });
-    LinearLayout regMapping({{kRegister, bases}},
-                            {{kRegister, llEncoding->getInDimSize(kRegister)}},
-                            /*requireSurjective=*/true);
-
-    // Unpack descriptor struct: { shape[rank], stride[rank], base }.
-    DescriptorFields desc =
-        unpackDescriptor(adaptor.getDesc(), descRank, loc, rewriter);
-
-    const unsigned descRowDim = mapResultDimToDescDim(rowDim);
-    const unsigned descColDim = mapResultDimToDescDim(colDim);
-
-    if (permuteDescDim) {
-      std::swap(desc.shapes[descRank - 2], desc.shapes[descRank - 1]);
-      std::swap(desc.strides[descRank - 2], desc.strides[descRank - 1]);
-    }
-
-    // column_major descriptor loads must always produce transposed block I/O
-    // (contiguousDim = rank-2 forces transpose in getBlockIOTileSize). If this
-    // invariant breaks, the surface parameters below would be incorrect because
-    // they index the already-swapped shapes/strides via isTransposeRequired.
-    assert((!permuteDescDim || isTransposeRequired) &&
-           "column_major descriptor load expects transposed block I/O");
-
-    Value elemBytes = b.i32_val(elemSizeInBits / 8);
-    Value surfaceWidth = b.trunc(
-        i32_ty, desc.shapes[isTransposeRequired ? descRowDim : descColDim]);
-    Value surfaceHeight = b.trunc(
-        i32_ty, desc.shapes[isTransposeRequired ? descColDim : descRowDim]);
-    Value baseWidth = b.mul(surfaceWidth, elemBytes);
-    Value baseHeight = surfaceHeight;
-    Value pitch = b.mul(
-        b.trunc(i32_ty,
-                desc.strides[isTransposeRequired ? descColDim : descRowDim]),
-        elemBytes);
-
-    // Base offsets from descriptor load indices.
-    // Indices are in descriptor dimension space. When column_major, the result
-    // type dimensions are transposed relative to the descriptor, so we swap
-    // the indices to align with the result type coordinate system used by
-    // the LinearLayout offsets.
-    SmallVector<Value> descIndices(adaptor.getIndices().begin(),
-                                   adaptor.getIndices().end());
-    assert(descIndices.size() == descRank &&
-           "descriptor index count must match descriptor rank");
-    if (permuteDescDim) {
-      // Only swap the inner 2 dims; batch dims stay in place.
-      std::swap(descIndices[descRank - 2], descIndices[descRank - 1]);
-    }
-
-    // Replicate base pointer for all tiles.
-    unsigned numElems = getTotalElemsPerThread(resultType);
-
-    int64_t numElemsPerLoad = mlir::ceil(
-        tileHeight * tileWidth * numPackedVals * vBlocks, (int)threadsPerWarp);
-    unsigned numValuesPerLoad = mlir::ceil((int)numElemsPerLoad, numPackedVals);
-    Type packedType = IntegerType::get(ctx, packedElemSizeInBits);
-    Type load2DGenXType = LLVM::getVectorType(packedType, numValuesPerLoad);
-    Type unpackedType = LLVM::getVectorType(eltTy, numElemsPerLoad);
-
-    auto dpasCfg = configureDPASLoadTypes(
-        tensorType, eltTy, packedType, load2DGenXType, unpackedType,
-        elemSizeInBits, numPackedVals, threadsPerWarp, tileHeight, tileWidth,
-        vBlocks, numElemsPerLoad, numValuesPerLoad, isTransposeRequired, ctx);
-    Type packedDPASOperandType = dpasCfg.packedDPASOperandType;
-    unpackedType = dpasCfg.unpackedType;
-    load2DGenXType = dpasCfg.load2DGenXType;
-    packedType = dpasCfg.packedType;
-    bool useVNNIFormat = dpasCfg.useVNNIFormat;
-    tileHeight = dpasCfg.tileHeight;
-    tileWidth = dpasCfg.tileWidth;
-    vBlocks = dpasCfg.vBlocks;
-    numElemsPerLoad = dpasCfg.numElemsPerLoad;
-    numValuesPerLoad = dpasCfg.numValuesPerLoad;
-
-    LinearLayout shuffleMapping =
-        LinearLayout::identity1D(numElemsPerLoad, kRegister, kRegister);
-    if (isTransposeRequired) {
-      auto result = computeTransposeShuffleMapping(
-          tensorType, regMapping, numElemsPerLoad, numPackedVals, tileHeight,
-          threadsPerWarp, /*hasDPASOperandType=*/!!packedDPASOperandType, ctx);
-      if (failed(result))
-        return failure();
-      shuffleMapping = *result;
-    }
-
-    Value warpId = arith::IndexCastOp::create(
-        rewriter, loc, i32_ty,
-        mlir::gpu::SubgroupIdOp::create(rewriter, loc,
-                                        /*upperBound=*/nullptr));
-
-    // Dimension mapping for offsets.
-    // When transpose is required, the row/col assignment to X/Y swaps:
-    //   X (block load column offset) maps to the fast-changing dimension.
-    //   Y (block load row offset) maps to the slow-changing dimension.
-    unsigned blockColIdx = isTransposeRequired ? rowDim : colDim;
-    unsigned blockRowIdx = isTransposeRequired ? colDim : rowDim;
-
-    // FIXME: This is a workaround for suboptimal instruction scheduling.
-    // Remove once IGC handles the or-expression reassociation correctly
-    // (see https://github.com/intel/intel-xpu-backend-for-triton/issues/6540).
-    //
-    // Pre-apply 64-byte alignment compensation to the base pointer and column
-    // offset when the descriptor column index is non-zero. This bakes the
-    // alignment adjustment into the column index BEFORE per-tile layout offsets
-    // are added, ensuring LLVM builds tile 1's x-coordinate as
-    // (tile0_x + delta) rather than (descIndex + delta) + misalign. Without
-    // this, LLVM's CSE factors out (descIndex + delta) as a common
-    // subexpression shared across different operand loads, producing a
-    // suboptimal instruction schedule.
-    unsigned descBlockColIdx =
-        mapResultDimToDescDim(isTransposeRequired ? rowDim : colDim);
-    std::optional<int64_t> descColConst =
-        mlir::triton::intel::getFoldedConstantValue(
-            descIndices[descBlockColIdx]);
-    if (!descColConst || *descColConst != 0) {
-      constexpr int64_t ALIGNMENT_MASK = 0x3f;
-      Value baseAddr = b.ptrtoint(int_ty(64), desc.base);
-      Value alignedBaseAddr = b.and_(baseAddr, b.i64_val(~ALIGNMENT_MASK));
-      desc.base = b.inttoptr(ptr_ty(ctx, 1), alignedBaseAddr);
-      Value offsetInBytes =
-          b.trunc(i32_ty, b.and_(baseAddr, b.i64_val(ALIGNMENT_MASK)));
-      Value misalignElems = b.udiv(offsetInBytes, elemBytes);
-      baseWidth = b.add(baseWidth, offsetInBytes);
-      descIndices[descBlockColIdx] =
-          b.add(descIndices[descBlockColIdx], misalignElems);
-    }
-
-    // Build NaN masks for PAD_NAN descriptors. The 2D block load hardware
-    // zero-pads OOB accesses; for NaN padding we post-select NaN values.
-    SmallVector<Value> nanMaskElems;
-    if (padding == PaddingOption::PAD_NAN) {
-      // Map descriptor shapes/indices to result dimension space.
-      SmallVector<Value> resultOffsets(rank), resultShapes(rank);
-      for (unsigned i = 0; i < rank; ++i) {
-        unsigned descDim = mapResultDimToDescDim(i);
-        resultOffsets[i] = descIndices[descDim];
-        resultShapes[i] = desc.shapes[descDim];
-      }
-      nanMaskElems =
-          buildNaNMasks(loc, resultOffsets, resultShapes, tensorType, rewriter);
-    }
-
-    SmallVector<Value> unpackedLoadedVals(numElems);
-    for (size_t elemIdx = 0; elemIdx < numElems; elemIdx += numElemsPerLoad) {
-      unsigned registerIdx = regMapping.apply({{kRegister, elemIdx}})[0].second;
-
-      auto offsets = applyLinearLayout(loc, rewriter, *llEncoding,
-                                       {{kRegister, b.i32_val(registerIdx)},
-                                        {kLane, b.i32_val(0)},
-                                        {kWarp, warpId},
-                                        {kBlock, b.i32_val(0)}});
-
-      Value addrElem = desc.base;
-      Value offsetX, offsetY;
-      Value adjustedBaseWidth = baseWidth;
-      Value adjustedBaseHeight = baseHeight;
-
-      // Compute per-tile offsets: descriptor indices + linear layout offsets.
-      // Boundary check is always enabled for descriptors.
-      for (auto [dim, offsetPair] : llvm::enumerate(offsets)) {
-        unsigned descDim = mapResultDimToDescDim(dim);
-        Value adjustedOffset = b.add(descIndices[descDim], offsetPair.second);
-        if (dim == blockRowIdx)
-          offsetY = adjustedOffset;
-        else if (dim == blockColIdx)
-          offsetX = adjustedOffset;
-        else {
-          // Batch dimensions: fold into base pointer via GEP.
-          Value pred; // Unused for descriptors (boundary checking is built-in).
-          adjustOtherDimension(adjustedOffset, addrElem, pred, eltTy,
-                               desc.strides, desc.shapes, dim,
-                               /*hasBoundaryCheck=*/false, loc, rewriter, b);
-        }
-      }
-
-      assert(numPackedVals > 0 && "numPackedVals should be greater than zero.");
-      Value ret = TritonGEN::Matrix2DBlockLoadOp::create(
-          rewriter, loc, load2DGenXType,
-          /*ptr*/ addrElem,
-          /*base_width*/ adjustedBaseWidth,
-          /*base_height*/ adjustedBaseHeight,
-          /*base_pitch*/ pitch,
-          /*x*/ b.udiv(offsetX, b.i32_val(numPackedVals)),
-          /*y*/ offsetY,
-          /*elem_size_in_bits*/ packedElemSizeInBits,
-          /*tile_width*/ tileWidth,
-          /*tile_height*/ tileHeight,
-          /*v_blocks*/ vBlocks,
-          /*transpose*/ isTransposeRequired,
-          /*vnni_transform*/ !isTransposeRequired && useVNNIFormat);
-
-      unpackBlockLoadResult(ret, unpackedLoadedVals, elemIdx, regMapping,
-                            shuffleMapping, packedDPASOperandType, unpackedType,
-                            numValuesPerLoad, numPackedVals,
-                            /*pred=*/Value(), /*otherElems=*/{}, nanMaskElems,
-                            loc, rewriter, ctx);
-    }
-
-    auto typeConverter = getTypeConverter();
-    Type llvmResultStructTy = typeConverter->convertType(op.getType());
-    Value resultStruct = packLLElements(loc, typeConverter, unpackedLoadedVals,
-                                        rewriter, llvmResultStructTy);
-    rewriter.replaceOp(op, {resultStruct});
-
-    return success();
-  }
-};
+// LoadOpToBlockIOConversion and DescriptorLoadOpToBlockIOConversion have been
+// replaced by the ttig.2d_block_load path (LowerTo2DBlockLoad TTGIR pass +
+// Subgroup2DBlockLoadOpConversion LLVM lowering).
 
 struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                           public LoadStoreConversionBase {
@@ -2627,7 +1891,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     Type valueElemTy =
         typeConverter->convertType(getElementTypeOrSelf(op.getType()));
     unsigned numElems = getTotalElemsPerThread(op.getType());
-    unsigned vec = getVectorSize(hasSupport256bLoadStore(op), ptr);
+    unsigned vec = getVectorSize(ptr);
     if (llMask)
       vec = std::min<size_t>(vec, getMaskAlignment(mask));
 
@@ -2891,10 +2155,10 @@ struct DescriptorLoadOpConversion
 
     // Determine vectorization by querying the descriptor's address-level
     // AxisInfo, analogous to how LoadOp queries getVectorSize(ptr).
-    unsigned vec = getDescriptorVecSize(
-        hasSupport256bLoadStore(op), op.getDesc(), resultType, valueElemTy,
-        op->getAttrOfType<StringAttr>(
-            TritonIntelGPUDialect::getBlockIOAttrName()));
+    unsigned vec =
+        getDescriptorVecSize(op.getDesc(), resultType, valueElemTy,
+                             op->getAttrOfType<StringAttr>(
+                                 TritonIntelGPUDialect::getBlockIOAttrName()));
 
     // vectorized iteration through all pointer elements
     const int valueElemNBits =
@@ -3078,8 +2342,7 @@ struct DescriptorStoreOpConversion
 
     // Determine vectorization by querying the descriptor's address-level
     // AxisInfo, analogous to how StoreOp queries getVectorSize(ptr).
-    unsigned vec = getDescriptorVecSize(hasSupport256bLoadStore(op),
-                                        op.getDesc(), valueTy, valueElemTy,
+    unsigned vec = getDescriptorVecSize(op.getDesc(), valueTy, valueElemTy,
                                         /*blockIOAttr=*/nullptr);
 
     const size_t dtsize =
@@ -3711,7 +2974,7 @@ struct StoreOpConversion
     Type valueTy = op.getValue().getType();
     Type valueElemTy =
         typeConverter->convertType(getElementTypeOrSelf(valueTy));
-    unsigned vec = getVectorSize(hasSupport256bLoadStore(op), ptr);
+    unsigned vec = getVectorSize(ptr);
     if (llMask)
       vec = std::min<size_t>(vec, getMaskAlignment(op.getMask()));
 
@@ -4080,7 +3343,7 @@ struct AtomicRMWOpConversion
     const size_t valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
     auto elemsPerThread = getTotalElemsPerThread(val.getType());
     // vec = 1, numElements = 1 for scalar
-    unsigned vec = getVectorSize(hasSupport256bLoadStore(op), ptr);
+    auto vec = getVectorSize(ptr);
     int numElems = 1;
     // tensor
     if (tensorTy) {
@@ -4287,6 +3550,295 @@ struct AtomicRMWOpConversion
   }
 };
 
+// ---------------------------------------------------------------------------
+// ttig.2d_block_load -> triton_gen.2Dblockload
+// ---------------------------------------------------------------------------
+struct Subgroup2DBlockLoadOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<
+          triton::gpu::intel::Subgroup2DBlockLoadOp>,
+      public BlockIOConversionBase {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::gpu::intel::Subgroup2DBlockLoadOp>::
+      ConvertTritonGPUOpToLLVMPattern;
+
+  Subgroup2DBlockLoadOpConversion(
+      LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
+      const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
+      triton::intel::ModuleStrideAnalysis &strideAnalysis,
+      PatternBenefit benefit)
+      : ConvertTritonGPUOpToLLVMPattern<
+            triton::gpu::intel::Subgroup2DBlockLoadOp>(converter, benefit),
+        BlockIOConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::intel::Subgroup2DBlockLoadOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto tensorType = cast<RankedTensorType>(op.getType());
+    Attribute encoding = tensorType.getEncoding();
+    std::optional<LinearLayout> llEncoding =
+        cast<DistributedEncodingTrait>(encoding).toLinearLayout(
+            tensorType.getShape());
+    assert(llEncoding.has_value() && "expected valid linear layout");
+
+    auto memLayout = op.getMemoryLayout();
+    bool memoryRowMajor =
+        (memLayout == triton::gpu::intel::BlockIOMode::RowMajor);
+    unsigned rank = tensorType.getRank();
+    unsigned contiguousDim = memoryRowMajor ? rank - 1 : rank - 2;
+
+    Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
+    unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
+
+    bool oneMatrixPerLoad =
+        op->hasAttr(TritonIntelGPUDialect::getOneMatrixPerLoadAttrName());
+
+    BlockIOTileSizeInfo sizeInfo = getBlockIOTileSize<true /*load*/>(
+        llEncoding.value(), contiguousDim, elemSizeInBits,
+        /*maskAxisInfo=*/nullptr, oneMatrixPerLoad);
+    assert(sizeInfo.isValid() && "expected valid tile size");
+
+    int tileHeight = sizeInfo.tileHeight;
+    int tileWidth = sizeInfo.tileWidth;
+    int numPackedVals = sizeInfo.numElemPerPackedVal;
+    int vBlocks = sizeInfo.vBlocks;
+    int rowDim = sizeInfo.rowDim;
+    int colDim = sizeInfo.colDim;
+    bool isTransposeRequired = sizeInfo.transpose;
+    std::optional<SetVector<unsigned>> regPackedBases =
+        std::move(sizeInfo.regPackedBases);
+
+    unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
+    constexpr int MAX_WIDTH = 64;
+    unsigned totalBytesPerRowPerMatrix = tileWidth * packedElemSizeInBits / 8;
+    assert(totalBytesPerRowPerMatrix <= MAX_WIDTH && "tile width exceeds max");
+
+    vBlocks = std::min(vBlocks,
+                       static_cast<int>(MAX_WIDTH / totalBytesPerRowPerMatrix));
+    vBlocks = std::min(vBlocks, 4);
+    // 64-bit elements require v_blocks = 1 per HW spec.
+    if (packedElemSizeInBits == 64)
+      vBlocks = 1;
+    const unsigned GRF_SIZE = 64;
+    if (tileHeight * tileWidth * packedElemSizeInBits / 8 < GRF_SIZE)
+      vBlocks = 1;
+
+    Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    MLIRContext *ctx = rewriter.getContext();
+    unsigned threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(
+        op->getParentOfType<ModuleOp>());
+
+    StringAttr kRegister = S("register");
+    StringAttr kLane = S("lane");
+    StringAttr kWarp = S("warp");
+    StringAttr kBlock = S("block");
+    assert(regPackedBases.has_value());
+    std::vector<std::vector<int>> bases(regPackedBases->size());
+    llvm::transform(*regPackedBases, bases.begin(),
+                    [&](int base) { return std::vector<int>{base}; });
+    LinearLayout regMapping({{kRegister, bases}},
+                            {{kRegister, llEncoding->getInDimSize(kRegister)}},
+                            /*requireSurjective=*/true);
+
+    unsigned numElems = getTotalElemsPerThread(op.getType());
+
+    int64_t numElemsPerLoad = mlir::ceil(
+        tileHeight * tileWidth * numPackedVals * vBlocks, (int)threadsPerWarp);
+    unsigned numValuesPerLoad = mlir::ceil((int)numElemsPerLoad, numPackedVals);
+    Type packedType = IntegerType::get(ctx, packedElemSizeInBits);
+    Type load2DGenXType = LLVM::getVectorType(packedType, numValuesPerLoad);
+    Type unpackedType = LLVM::getVectorType(eltTy, numElemsPerLoad);
+
+    auto dpasCfg = configureDPASLoadTypes(
+        tensorType, eltTy, packedType, load2DGenXType, unpackedType,
+        elemSizeInBits, numPackedVals, threadsPerWarp, tileHeight, tileWidth,
+        vBlocks, numElemsPerLoad, numValuesPerLoad, isTransposeRequired, ctx);
+    Type packedDPASOperandType = dpasCfg.packedDPASOperandType;
+    unpackedType = dpasCfg.unpackedType;
+    load2DGenXType = dpasCfg.load2DGenXType;
+    packedType = dpasCfg.packedType;
+    bool useVNNIFormat = dpasCfg.useVNNIFormat;
+    tileHeight = dpasCfg.tileHeight;
+    tileWidth = dpasCfg.tileWidth;
+    vBlocks = dpasCfg.vBlocks;
+    numElemsPerLoad = dpasCfg.numElemsPerLoad;
+    numValuesPerLoad = dpasCfg.numValuesPerLoad;
+
+    // Read surface params from the op.
+    Value basePtr = adaptor.getBasePtr();
+    Value baseWidth = adaptor.getBaseWidth();
+    Value baseHeight = adaptor.getBaseHeight();
+    Value pitch = adaptor.getBasePitch();
+    Value baseOffsetX = adaptor.getOffsetX();
+    Value baseOffsetY = adaptor.getOffsetY();
+
+    Value elemBytes = b.i32_val(elemSizeInBits / 8);
+
+    // FIXME: This is a workaround for suboptimal instruction scheduling.
+    // Remove once IGC handles the or-expression reassociation correctly
+    // (see https://github.com/intel/intel-xpu-backend-for-triton/issues/6540).
+    //
+    // Pre-apply 64-byte alignment compensation to the base pointer and column
+    // offset when the column index is non-zero. This bakes the alignment
+    // adjustment into the column index BEFORE per-tile layout offsets are
+    // added, preventing LLVM's CSE from producing a suboptimal instruction
+    // schedule.
+    std::optional<int64_t> colConst =
+        triton::intel::getFoldedConstantValue(baseOffsetX);
+    if (!colConst || *colConst != 0) {
+      constexpr int64_t ALIGNMENT_MASK = 0x3f;
+      Value baseAddr = b.ptrtoint(int_ty(64), basePtr);
+      Value alignedBaseAddr = b.and_(baseAddr, b.i64_val(~ALIGNMENT_MASK));
+      basePtr = b.inttoptr(ptr_ty(ctx, 1), alignedBaseAddr);
+      Value offsetInBytes =
+          b.trunc(i32_ty, b.and_(baseAddr, b.i64_val(ALIGNMENT_MASK)));
+      Value misalignElems = b.udiv(offsetInBytes, elemBytes);
+      baseWidth = b.add(baseWidth, offsetInBytes);
+      baseOffsetX = b.add(baseOffsetX, misalignElems);
+    }
+
+    LinearLayout shuffleMapping =
+        LinearLayout::identity1D(numElemsPerLoad, kRegister, kRegister);
+    if (isTransposeRequired)
+      shuffleMapping = *computeTransposeShuffleMapping(
+          tensorType, regMapping, numElemsPerLoad, numPackedVals, tileHeight,
+          threadsPerWarp, /*hasDPASOperandType=*/!!packedDPASOperandType, ctx);
+
+    // Handle mask/other.
+    Value llMask = adaptor.getMask();
+    Value llOther = adaptor.getOther();
+    SmallVector<Value> maskElems;
+    SmallVector<Value> otherElems;
+    if (llMask)
+      maskElems = unpackLLElements(loc, llMask, rewriter);
+    if (llOther && llMask)
+      otherElems = unpackLLElements(loc, llOther, rewriter);
+
+    // Build NaN masks if other is present but mask is absent (descriptor
+    // PAD_NAN path). The TTGIR pass sets other=NaN_splat for PAD_NAN.
+    SmallVector<Value> nanMaskElems;
+    if (llOther && !llMask) {
+      SmallVector<Value> resultOffsets(rank, b.i32_val(0));
+      SmallVector<Value> resultShapes(rank);
+      Value elemBytes = b.i32_val(elemSizeInBits / 8);
+      for (unsigned i = 0; i < rank; ++i) {
+        if (static_cast<int>(i) == rowDim)
+          resultShapes[i] = baseHeight;
+        else if (static_cast<int>(i) == colDim)
+          resultShapes[i] = b.udiv(baseWidth, elemBytes);
+        else
+          resultShapes[i] = b.i32_val(tensorType.getDimSize(i));
+      }
+      // Map surface offsets to result tensor dimensions. The surface column
+      // (X/width) direction corresponds to the contiguous dimension in the
+      // result, which is rank-1 for row_major but rank-2 for column_major
+      // (because the result's inner-2 dims are transposed for column_major).
+      unsigned surfaceColDim = contiguousDim;
+      unsigned surfaceRowDim =
+          (contiguousDim == rank - 1) ? rank - 2 : rank - 1;
+      resultOffsets[surfaceColDim] = baseOffsetX;
+      resultOffsets[surfaceRowDim] = baseOffsetY;
+      nanMaskElems =
+          buildNaNMasks(loc, resultOffsets, resultShapes, tensorType, rewriter);
+    }
+
+    Value warpId = arith::IndexCastOp::create(
+        rewriter, loc, i32_ty,
+        mlir::gpu::SubgroupIdOp::create(rewriter, loc,
+                                        /*upperBound=*/nullptr));
+
+    // Dimension mapping for offsets.
+    unsigned blockRowIdx = isTransposeRequired ? colDim : rowDim;
+    unsigned blockColIdx = isTransposeRequired ? rowDim : colDim;
+
+    SmallVector<Value> unpackedLoadedVals(numElems);
+    for (size_t elemIdx = 0; elemIdx < numElems; elemIdx += numElemsPerLoad) {
+      unsigned registerIdx = regMapping.apply({{kRegister, elemIdx}})[0].second;
+
+      auto offsets = applyLinearLayout(loc, rewriter, *llEncoding,
+                                       {{kRegister, b.i32_val(registerIdx)},
+                                        {kLane, b.i32_val(0)},
+                                        {kWarp, warpId},
+                                        {kBlock, b.i32_val(0)}});
+
+      Value addrElem = basePtr;
+      Value offsetX, offsetY;
+      Value adjustedBaseWidth = baseWidth;
+      Value adjustedBaseHeight = baseHeight;
+
+      // Combine base offsets (from op) with per-sub-tile offsets (from layout).
+      // The op's baseOffsetX/Y are surface coordinates:
+      //   X = surface column (physically contiguous direction),
+      //   Y = surface row (non-contiguous direction).
+      // Map to result tensor dimensions: surface column direction corresponds
+      // to contiguousDim in the result (rank-1 for row_major, rank-2 for
+      // column_major since the result's inner-2 dims are transposed).
+      unsigned surfaceColDim = contiguousDim;
+      unsigned surfaceRowDim =
+          (contiguousDim == rank - 1) ? rank - 2 : rank - 1;
+      for (auto [dim, offsetPair] : llvm::enumerate(offsets)) {
+        Value baseOff = b.i32_val(0);
+        if (dim == surfaceColDim)
+          baseOff = baseOffsetX;
+        else if (dim == surfaceRowDim)
+          baseOff = baseOffsetY;
+        Value adjustedOffset = b.add(baseOff, offsetPair.second);
+        if (dim == blockRowIdx)
+          offsetY = adjustedOffset;
+        else if (dim == blockColIdx)
+          offsetX = adjustedOffset;
+        else {
+          // Batch dimensions: fold into base pointer via GEP.
+          // Batch stride = base_height * (pitch / elemBytes), which is
+          // correct for contiguous layouts (guaranteed by
+          // MaterializeBlockPointer).
+          Value strideInElems = b.zext(
+              int_ty(64), b.mul(adjustedBaseHeight, b.udiv(pitch, elemBytes)));
+          Value offset64 = b.zext(int_ty(64), adjustedOffset);
+          Value batchOffset = b.mul(offset64, strideInElems);
+          addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, batchOffset);
+        }
+      }
+
+      // Handle mask: use HW OOB protection.
+      Value pred;
+      if (maskElems.size()) {
+        pred = targetInfo.shuffleIdx(rewriter, loc, maskElems[registerIdx], 0);
+        offsetY = b.select(pred, offsetY, adjustedBaseHeight);
+      }
+
+      assert(numPackedVals > 0);
+      Value ret = TritonGEN::Matrix2DBlockLoadOp::create(
+          rewriter, loc, load2DGenXType,
+          /*ptr*/ addrElem,
+          /*base_width*/ adjustedBaseWidth,
+          /*base_height*/ adjustedBaseHeight,
+          /*base_pitch*/ pitch,
+          /*x*/ b.udiv(offsetX, b.i32_val(numPackedVals)),
+          /*y*/ offsetY,
+          /*elem_size_in_bits*/ packedElemSizeInBits,
+          /*tile_width*/ tileWidth,
+          /*tile_height*/ tileHeight,
+          /*v_blocks*/ vBlocks,
+          /*transpose*/ isTransposeRequired,
+          /*vnni_transform*/ !isTransposeRequired && useVNNIFormat);
+
+      unpackBlockLoadResult(ret, unpackedLoadedVals, elemIdx, regMapping,
+                            shuffleMapping, packedDPASOperandType, unpackedType,
+                            numValuesPerLoad, numPackedVals, pred, otherElems,
+                            nanMaskElems, loc, rewriter, ctx);
+    }
+
+    auto typeConverter = getTypeConverter();
+    Type llvmResultStructTy = typeConverter->convertType(op.getType());
+    Value resultStruct = packLLElements(loc, typeConverter, unpackedLoadedVals,
+                                        rewriter, llvmResultStructTy);
+    rewriter.replaceOp(op, {resultStruct});
+    return success();
+  }
+};
+
 } // namespace
 
 void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
@@ -4300,10 +3852,12 @@ void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
                DescriptorStoreOpConversion, PrefetchOpConversion,
                DescriptorPrefetchOpConversion>(
       typeConverter, targetInfo, axisInfoAnalysis, strideAnalysis, benefit);
-  // BlockIO is more efficient than gather load or scatter store.
-  patterns.add<LoadOpToBlockIOConversion, StoreOpToBlockIOConversion,
-               DescriptorLoadOpToBlockIOConversion,
-               DescriptorStoreOpToBlockIOConversion>(
-      typeConverter, targetInfo, axisInfoAnalysis, strideAnalysis,
-      benefit.getBenefit() + 2);
+  // Block IO store patterns (loads are handled via ttig.2d_block_load path).
+  patterns
+      .add<StoreOpToBlockIOConversion, DescriptorStoreOpToBlockIOConversion>(
+          typeConverter, targetInfo, axisInfoAnalysis, strideAnalysis,
+          benefit.getBenefit() + 2);
+  // TTIG block 2D load op.
+  patterns.add<Subgroup2DBlockLoadOpConversion>(
+      typeConverter, targetInfo, axisInfoAnalysis, strideAnalysis, benefit);
 }

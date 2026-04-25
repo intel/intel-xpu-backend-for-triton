@@ -1,6 +1,7 @@
 #ifndef TRITONINTELGPU_TRANSFORMS_BLOCKIOUTILS_H
 #define TRITONINTELGPU_TRANSFORMS_BLOCKIOUTILS_H
 
+#include "mlir/IR/BuiltinTypes.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Tools/LinearLayout.h"
 #include "llvm/ADT/SetVector.h"
@@ -43,8 +44,8 @@ struct BlockIOTileSizeInfo {
 template <bool isLoad>
 BlockIOTileSizeInfo
 getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
-                   unsigned elemSizeInBits, AxisInfo *maskAxisInfo,
-                   bool oneMatrixPerLoadForBT);
+                   unsigned elemSizeInBits, AxisInfo *maskAxisInfo = nullptr,
+                   bool oneMatrixPerLoadForBT = false);
 
 // Explicit instantiation declarations.
 extern template BlockIOTileSizeInfo
@@ -60,10 +61,13 @@ bool check2DBlockAddressPayloadRestriction(unsigned packedElemSizeInBits,
                                            unsigned tileWidth);
 
 /// Validate that a load with the given encoding and element size can be
-/// lowered to 2D block I/O. Checks tile size, HW address restrictions, and
-/// inner-dim constraints. Returns true if valid.
+/// lowered to 2D block I/O. This runs getBlockIOTileSize,
+/// check2DBlockAddressPayloadRestriction, and transpose shuffle validation
+/// without producing any IR. Returns true if the load is valid for 2D block
+/// I/O.
 bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
-                             unsigned elemSizeInBits);
+                             unsigned elemSizeInBits,
+                             RankedTensorType tensorType);
 
 } // namespace mlir::triton::gpu::intel
 

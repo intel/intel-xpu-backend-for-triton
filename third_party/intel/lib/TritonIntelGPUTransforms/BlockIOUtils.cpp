@@ -1,6 +1,9 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/BlockIOUtils.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/MathExtras.h"
 #include <numeric>
@@ -374,13 +377,10 @@ bool check2DBlockAddressPayloadRestriction(unsigned packedElemSizeInBits,
 }
 
 bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
-                             unsigned elemSizeInBits) {
-  // Descriptor loads have no mask, so maskAxisInfo is nullptr.
-  // oneMatrixPerLoadForBT is not needed for validation — it only limits
-  // transpose tile expansion, which doesn't affect basic validity.
-  auto sizeInfo = getBlockIOTileSize<true>(ll, memContiguousDim, elemSizeInBits,
-                                           /*maskAxisInfo=*/nullptr,
-                                           /*oneMatrixPerLoadForBT=*/false);
+                             unsigned elemSizeInBits,
+                             RankedTensorType tensorType) {
+  auto sizeInfo =
+      getBlockIOTileSize<true>(ll, memContiguousDim, elemSizeInBits);
   if (!sizeInfo.isValid())
     return false;
 
@@ -403,6 +403,95 @@ bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
       sizeInfo.tileWidth * packedElemSizeInBits / 8;
   if (totalBytesPerRowPerMatrix > MAX_WIDTH)
     return false;
+
+  // For transposed loads, validate computeTransposeShuffleMapping conditions.
+  if (sizeInfo.transpose && sizeInfo.regPackedBases.has_value()) {
+    MLIRContext *ctx = ll.getBases().begin()->first.getContext();
+    StringAttr kRegister = StringAttr::get(ctx, "register");
+    std::vector<std::vector<int>> bases(sizeInfo.regPackedBases->size());
+    llvm::transform(*sizeInfo.regPackedBases, bases.begin(),
+                    [&](int base) { return std::vector<int>{base}; });
+    LinearLayout regMapping({{kRegister, bases}},
+                            {{kRegister, ll.getInDimSize(kRegister)}},
+                            /*requireSurjective=*/true);
+
+    unsigned threadsPerWarp = ll.getInDimSize(StringAttr::get(ctx, "lane"));
+    unsigned vBlocks = std::min(
+        sizeInfo.vBlocks,
+        std::min(4, static_cast<int>(MAX_WIDTH / totalBytesPerRowPerMatrix)));
+    if (packedElemSizeInBits == 64)
+      vBlocks = 1;
+    int64_t numElemsPerLoad =
+        llvm::divideCeil(sizeInfo.tileHeight * sizeInfo.tileWidth *
+                             sizeInfo.numElemPerPackedVal * vBlocks,
+                         threadsPerWarp);
+
+    unsigned widthToTranspose = sizeInfo.tileHeight;
+
+    // Determine if configureDPASLoadTypes would produce a non-null
+    // packedDPASOperandType (hasDPASOperandType in the LLVM lowering).
+    bool hasDPASOperandType = false;
+    if (hasDpasEncoding(tensorType) || hasDotDpasEncoding(tensorType)) {
+      auto dpasLayout = cast<DpasEncodingAttr>(
+          hasDpasEncoding(tensorType)
+              ? tensorType.getEncoding()
+              : cast<triton::gpu::DotOperandEncodingAttr>(
+                    tensorType.getEncoding())
+                    .getParent());
+      unsigned opsPerChannel = dpasLayout.getOpsPerChannel();
+      auto opIdx = hasDpasEncoding(tensorType)
+                       ? DpasEncodingAttr::OpIdx::OperandC
+                       : static_cast<DpasEncodingAttr::OpIdx>(
+                             cast<triton::gpu::DotOperandEncodingAttr>(
+                                 tensorType.getEncoding())
+                                 .getOpIdx());
+
+      // Mirrors configureDPASLoadTypes conditions for setting
+      // packedDPASOperandType.
+      bool matchesDPASPrecision =
+          (opsPerChannel == 4 && elemSizeInBits == 8) ||
+          (opsPerChannel == 2 && elemSizeInBits == 16) ||
+          (opsPerChannel == 1 && elemSizeInBits == 32);
+      if (matchesDPASPrecision && (opIdx == DpasEncodingAttr::OpIdx::OperandA ||
+                                   opIdx == DpasEncodingAttr::OpIdx::OperandB))
+        hasDPASOperandType = true;
+      if (opIdx == DpasEncodingAttr::OpIdx::OperandC)
+        hasDPASOperandType = true; // C always sets it when tile fits
+
+      if (hasDPASOperandType) {
+        // Surjectivity check (mirrors computeTransposeShuffleMapping).
+        auto invertMapping = regMapping.invert();
+        bool foundSurjective = false;
+        for (unsigned n = numElemsPerLoad; n > 0; n >>= 1) {
+          auto layout = invertMapping.resizeInDim(kRegister, n)
+                            .resizeOutDim(kRegister, n);
+          if (layout.isSurjective()) {
+            foundSurjective = true;
+            break;
+          }
+        }
+        if (!foundSurjective)
+          return false;
+
+        // Use DPAS instruction shape for widthToTranspose.
+        switch (opIdx) {
+        case DpasEncodingAttr::OpIdx::OperandA:
+          widthToTranspose = dpasLayout.getDPASInstShapeA()[1];
+          break;
+        case DpasEncodingAttr::OpIdx::OperandB:
+          widthToTranspose = dpasLayout.getDPASInstShapeB()[1];
+          break;
+        case DpasEncodingAttr::OpIdx::OperandC:
+          widthToTranspose = dpasLayout.getDPASInstShapeC()[1];
+          break;
+        }
+      }
+    }
+
+    // Mirrors computeTransposeShuffleMapping line 945.
+    if (sizeInfo.numElemPerPackedVal > 1 && widthToTranspose != threadsPerWarp)
+      return false;
+  }
 
   return true;
 }
