@@ -357,7 +357,7 @@ struct CanonicalizeConvertFromConvert
 
     // cvt(cat) -> cat
     if (auto cat = dyn_cast<CatOp>(arg)) {
-      if (isExpensiveCat(cat, op.getType().getEncoding()))
+      if (!isLegalCatEncoding(cat, op.getType().getEncoding()))
         return failure();
 
       rewriter.replaceOpWithNewOp<CatOp>(op, op->getResult(0).getType(),
