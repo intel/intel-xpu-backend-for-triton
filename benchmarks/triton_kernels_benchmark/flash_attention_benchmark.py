@@ -72,11 +72,11 @@ def _attn_fwd(sm_scale, M,  #
               BLOCK_M: tl.constexpr,  #
               BLOCK_N: tl.constexpr,  #
               STAGE: tl.constexpr,  #
-              TWISST_GRID: tl.constexpr):  # pylint: disable=unused-argument
+              TWISTED_GRID: tl.constexpr):  # pylint: disable=unused-argument
     dtype = tl.float16
     tl.static_assert(BLOCK_N <= HEAD_DIM)
-    # TWISST_GRID: (1, num_blocks_m, Z*H) otherwise (Z, H, num_blocks_m)
-    if TWISST_GRID:
+    # TWISTED_GRID: (1, num_blocks_m, Z*H) otherwise (Z, H, num_blocks_m)
+    if TWISTED_GRID:
         start_m = tl.program_id(1)
         off_hz = tl.program_id(2)
         off_z = off_hz // H
@@ -130,7 +130,7 @@ def _attn_fwd(sm_scale, M,  #
     m_i += tl.math.log2(l_i)
     acc = acc / l_i[:, None]
     # Compute off_hz based on grid layout
-    if TWISST_GRID:
+    if TWISTED_GRID:
         off_hz = tl.program_id(2)
     else:
         off_hz = tl.program_id(0) * H + tl.program_id(1)
@@ -466,13 +466,13 @@ class _attention(torch.autograd.Function):
         batch = q.shape[0]
         heads = q.shape[1]
         n_ctx = q.shape[2]
-        TWISST_GRID = not (batch == 2 and heads == 16)
+        TWISTED_GRID = not (batch == 2 and heads == 16)
 
         def grid(args):
             block_m = args['BLOCK_M']
             num_blocks_m = triton.cdiv(n_ctx, block_m)
-            # TWISST_GRID grid order: (1, num_blocks_m, batch * heads) Standard grid order: (batch, heads, num_blocks_m)
-            return (1, num_blocks_m, batch * heads) if args['TWISST_GRID'] else (batch, heads, num_blocks_m)
+            # TWISTED_GRID grid order: (1, num_blocks_m, batch * heads) Standard grid order: (batch, heads, num_blocks_m)
+            return (1, num_blocks_m, batch * heads) if args['TWISTED_GRID'] else (batch, heads, num_blocks_m)
 
         M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
 
@@ -483,7 +483,7 @@ class _attention(torch.autograd.Function):
             N_CTX=q.shape[2],  #
             HEAD_DIM=Lk,  #
             STAGE=stage,  #
-            TWISST_GRID=TWISST_GRID)
+            TWISTED_GRID=TWISTED_GRID)
 
         ctx.save_for_backward(q, k, v, o, M)
         ctx.sm_scale = sm_scale
