@@ -45,18 +45,8 @@ public:
 
       SmallVector<int> newBoundaryCheck;
       for (int boundIdx : loadOp.getBoundaryCheck()) {
-        // `boundaryCheck` indices are in the same coordinate space as
-        // make_tensor_ptr shape/offset operands.
-        int idx = boundIdx;
-        if (idx < 0 || idx >= makeTensorPtrOp.getOffsets().size()) {
-          LLVM_DEBUG(llvm::dbgs().indent(2)
-                     << "Check at index " << boundIdx
-                     << " is necessary (invalid boundary check index)\n");
-          newBoundaryCheck.push_back(boundIdx);
-          continue;
-        }
-        Value offset = makeTensorPtrOp.getOffsets()[idx];
-        Value shape = makeTensorPtrOp.getShape()[idx];
+        Value offset = makeTensorPtrOp.getOffsets()[boundIdx];
+        Value shape = makeTensorPtrOp.getShape()[boundIdx];
         auto resType = cast<RankedTensorType>(loadOp.getResult().getType());
         ArrayRef<int64_t> resShape = resType.getShape();
         std::optional<int64_t> offsetVal = getConstantIntValue(offset),
@@ -72,7 +62,7 @@ public:
         }
 
         // Case 1: offset and shape are constant.
-        if (offsetVal && ((*offsetVal + resShape[idx]) <= *shapeVal)) {
+        if (offsetVal && ((*offsetVal + resShape[boundIdx]) <= *shapeVal)) {
           LLVM_DEBUG(llvm::dbgs().indent(2)
                      << "Check at index " << boundIdx << " is unnecessary\n");
           continue;
@@ -99,7 +89,7 @@ public:
           }
 
           APInt maxIV = (*optRange).smax();
-          if (maxIV.getSExtValue() + resShape[idx] <= shapeVal) {
+          if (maxIV.getSExtValue() + resShape[boundIdx] <= *shapeVal) {
             LLVM_DEBUG(llvm::dbgs().indent(2)
                        << "Check at index " << boundIdx << " is unnecessary\n");
             continue;
