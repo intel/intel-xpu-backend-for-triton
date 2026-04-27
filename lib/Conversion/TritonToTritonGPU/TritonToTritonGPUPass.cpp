@@ -288,7 +288,6 @@ struct TritonCatPattern : public OpConversionPattern<triton::CatOp> {
     auto lhsTotalElemsPerThread = triton::gpu::getTotalElemsPerThread(lhsType);
     auto rhsTotalElemsPerThread = triton::gpu::getTotalElemsPerThread(rhsType);
     auto retTotalElemsPerThread = triton::gpu::getTotalElemsPerThread(retType);
-    auto retShape = retType.getShape();
     auto retOrder = retEncoding.getOrder();
     auto retThreadsPerWarp = retEncoding.getThreadsPerWarp();
     auto retWarpsPerCTA = retEncoding.getWarpsPerCTA();
@@ -544,8 +543,6 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
   patterns.insert< // TODO: view should have custom pattern that views the
                    // layout
       // clang-format off
-      GenericOpPattern<triton::AdvanceOp>,
-      GenericOpPattern<triton::MakeTensorPtrOp>,
       GenericOpPattern<triton::ReshapeOp>,
       GenericOpPattern<triton::BitcastOp>,
       GenericOpPattern<triton::FpToFpOp>,

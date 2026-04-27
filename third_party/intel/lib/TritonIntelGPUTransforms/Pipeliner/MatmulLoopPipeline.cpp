@@ -10,6 +10,8 @@
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/MathExtras.h"
+#include <limits>
 
 #define DEBUG_TYPE "tritonintelgpu-pipeline"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -20,17 +22,95 @@ namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttgi = mlir::triton::gpu::intel;
 
+static ttg::DotOperandEncodingAttr allTransitiveUsesHaveDotEncoding(Value val);
+
 namespace {
 
-/// Represent a candidate load operation which is used by operations that
-/// convert its layout to a 'dot' layout (e.g. ttg.convert_layout).
-struct LoadDotOperand {
-  LoadDotOperand(Operation *load,
-                 ttg::DotOperandEncodingAttr dotOperandEncoding)
-      : load(load), dotOperandEncoding(dotOperandEncoding) {}
-  Operation *load;
-  ttg::DotOperandEncodingAttr dotOperandEncoding;
+/// A load operation eligible for prefetching. Only tt::LoadOp and
+/// tt::DescriptorLoadOp are valid. Static predicates centralize the
+/// candidacy logic.
+struct PrefetchCandidate {
+  explicit PrefetchCandidate(Operation *op) : op(op) {
+    assert((isa<tt::LoadOp, tt::DescriptorLoadOp>(op)) &&
+           "only tt::LoadOp and tt::DescriptorLoadOp can be prefetched");
+  }
+  Operation *op;
+
+  /// Whether \p op has the block_io attribute and rank >= 2 result type,
+  /// making it eligible for 2D block prefetching.
+  static bool isCandidate(Operation *op) {
+    if (!isa<tt::LoadOp, tt::DescriptorLoadOp>(op))
+      return false;
+    if (!op->getAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName()))
+      return false;
+    auto resultTy = dyn_cast<RankedTensorType>(op->getResultTypes()[0]);
+    return resultTy && resultTy.getRank() >= 2;
+  }
+
+  /// Whether all transitive uses of \p op's result feed a dot operation.
+  static bool feedsDot(Operation *op) {
+    return allTransitiveUsesHaveDotEncoding(op->getResult(0)) != nullptr;
+  }
 };
+
+/// Return the multi-buffered byte cost of a load's result tensor.
+/// Each prefetched load is kept live for \p numStages iterations.
+/// Returns UINT_MAX when the tensor is non-ranked or has dynamic
+/// dimensions, so callers that compare against a byte budget skip the
+/// load conservatively. Uses ceil-div on bits/8 to avoid under-counting
+/// sub-byte types, and widens arithmetic to int64_t to avoid overflow
+/// on large tensors before saturating back to unsigned.
+static unsigned getTileBytes(Operation *op, int numStages) {
+  auto tensorType = dyn_cast<RankedTensorType>(op->getResultTypes()[0]);
+  if (!tensorType || !tensorType.hasStaticShape())
+    return std::numeric_limits<unsigned>::max();
+  unsigned bits = tensorType.getElementType().getIntOrFloatBitWidth();
+  int64_t numElems = tensorType.getNumElements();
+  int64_t bytesPerElem = llvm::divideCeil(bits, 8u);
+  int64_t totalBytes = numElems * bytesPerElem * numStages;
+  return (totalBytes > std::numeric_limits<unsigned>::max())
+             ? std::numeric_limits<unsigned>::max()
+             : static_cast<unsigned>(totalBytes);
+}
+
+/// Collect all prefetch candidates from the loop body. Dot-feeding loads
+/// are always collected; elementwise loads are only collected on architectures
+/// with 256B prefetch support (Xe3P+), where software prefetch can outpace the
+/// hardware prefetcher.
+static SmallVector<PrefetchCandidate>
+collectPrefetchCandidates(scf::ForOp forOp, int numStages) {
+  constexpr unsigned kMaxElementwisePrefetchOps = 4;
+  constexpr unsigned kMaxPerLoadPrefetchBytes = 16384;
+
+  auto moduleOp = forOp->getParentOfType<ModuleOp>();
+  bool enableElementwisePrefetch = moduleOp->hasAttr(
+      ttgi::TritonIntelGPUDialect::getSupportPrefetch256BAttrName());
+
+  unsigned numElementwisePrefetch = 0;
+
+  SmallVector<PrefetchCandidate> candidates;
+  // We cannot use forOp.walk(...) here because we only want to visit the
+  // operations in the loop body block.
+  for (Operation &op : forOp) {
+    if (!PrefetchCandidate::isCandidate(&op))
+      continue;
+
+    if (PrefetchCandidate::feedsDot(&op)) {
+      candidates.emplace_back(&op);
+    } else if (enableElementwisePrefetch &&
+               numElementwisePrefetch < kMaxElementwisePrefetchOps) {
+      unsigned tileBytes = getTileBytes(&op, numStages);
+      if (tileBytes > kMaxPerLoadPrefetchBytes) {
+        LDBG("Skipping elementwise prefetch: per-load budget exceeded ("
+             << tileBytes << " > " << kMaxPerLoadPrefetchBytes << " bytes)");
+        continue;
+      }
+      candidates.emplace_back(&op);
+      ++numElementwisePrefetch;
+    }
+  }
+  return candidates;
+}
 
 } // namespace
 
@@ -47,8 +127,6 @@ static void appendToYield(scf::ForOp forOp, ArrayRef<Value> newOperands) {
   scf::YieldOp::create(builder, yieldOp->getLoc(), operands);
   yieldOp->erase();
 }
-
-static ttg::DotOperandEncodingAttr allTransitiveUsesHaveDotEncoding(Value val);
 
 static ttg::DotOperandEncodingAttr getDotEncodingFromUser(Operation *user) {
   if (user->getNumResults() != 1)
@@ -111,66 +189,17 @@ static void createPrefetchOp(scf::ForOp &forOp, tt::DescriptorLoadOp loadOp) {
   prefetchOp->setAttrs(attrs);
 }
 
-/// Create prefetch operations for the given loads.
+/// Create prefetch operations for the given load candidates.
 static void createPrefetchOps(scf::ForOp &forOp,
-                              ArrayRef<LoadDotOperand> loads) {
-  assert(!loads.empty() && "Expecting at least one load operation");
-  for (const LoadDotOperand &loadOperand : loads) {
-    if (auto loadOp = dyn_cast<tt::LoadOp>(loadOperand.load)) {
-      createPrefetchOp(forOp, loadOp);
-    } else if (auto descriptorLoadOp =
-                   dyn_cast<tt::DescriptorLoadOp>(loadOperand.load)) {
-      createPrefetchOp(forOp, descriptorLoadOp);
-    } else {
-      llvm_unreachable("Unsupported load operation type");
-    }
-  }
-}
-
-/// Return the transitive use of the load which is a dot operand.
-static std::optional<LoadDotOperand> loadDotOperand(Operation *loadOp) {
-  Value result = loadOp->getResult(0);
-  if (ttg::DotOperandEncodingAttr attr =
-          allTransitiveUsesHaveDotEncoding(result))
-    return LoadDotOperand(loadOp, attr);
-  return std::nullopt;
-}
-
-/// Collect loads to pipeline. Return success if we can pipeline this loop.
-static void collectOpsToPipeline(scf::ForOp forOp,
-                                 SmallVectorImpl<LoadDotOperand> &loadOps) {
-  assert(loadOps.empty() && "Expecting an empty list of load operations");
-
-  ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
-  mlir::triton::ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
-
-  // We cannot use forOp.walk(...) here because we only want to visit the
-  // operations in the loop body block.
-  for (Operation &op : forOp) {
-    if (isa<tt::LoadOp, tt::DescriptorLoadOp>(&op)) {
-      // In order to avoid polluting the cache, do not prefetch loads unless the
-      // memory they reference is densely structured.
-      Attribute blockIOAttr =
-          op.getAttr(mlir::triton::gpu::intel::TritonIntelGPUDialect::
-                         getBlockIOAttrName());
-      if (!blockIOAttr) {
-        LDBG("Skipping LoadOp without block_io attribute" << op);
-        continue;
-      }
-
-      RankedTensorType resultTy =
-          dyn_cast<RankedTensorType>(op.getResultTypes()[0]);
-      // Rank > 2 tensors are handled by folding batch dims into the base
-      // pointer via GEP (see emit2DBlockPrefetchOps in LoadStoreOpToLLVM.cpp).
-      if (!resultTy || resultTy.getRank() < 2) {
-        LDBG("Skipping LoadOp with rank < 2 tensor type" << op);
-        continue;
-      }
-
-      std::optional<LoadDotOperand> loadWithDotOperand = loadDotOperand(&op);
-      if (loadWithDotOperand.has_value())
-        loadOps.push_back(loadWithDotOperand.value());
-    }
+                              ArrayRef<PrefetchCandidate> candidates) {
+  assert(!candidates.empty() && "Expecting at least one candidate");
+  for (const PrefetchCandidate &candidate : candidates) {
+    TypeSwitch<Operation *>(candidate.op)
+        .Case<tt::LoadOp, tt::DescriptorLoadOp>(
+            [&](auto loadOp) { createPrefetchOp(forOp, loadOp); })
+        .Default([](Operation *op) {
+          llvm_unreachable("Unsupported load operation type");
+        });
   }
 }
 
@@ -258,7 +287,7 @@ createSchedule(scf::ForOp forOp, int numStages) {
       // (typically `advanceOp`).
       // As prefetchOp dependencies are assigned to stage 0, this type of loads
       // must not be explicitely assigned to stage `numStages - 1`.
-      if (mlir::triton::isTensorOrTensorPointerType(loadOp.getPtr().getType()))
+      if (isa<RankedTensorType>(loadOp.getPtr().getType()))
         loadOps.emplace_back(&op);
     }
     if (isa<tt::DescriptorLoadOp>(op))
@@ -318,9 +347,9 @@ bool ttgi::preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
                                         mlir::scf::PipeliningOption &options) {
   // 1. First collect "interesting" operations with a stage where to schedule
   // them. This gives a coarse scheduling for the loop.
-  SmallVector<LoadDotOperand> loads;
-  collectOpsToPipeline(forOp, loads);
-  if (loads.empty()) {
+  SmallVector<PrefetchCandidate> candidates =
+      collectPrefetchCandidates(forOp, numStages);
+  if (candidates.empty()) {
     LDBG("No loads to pipeline");
     return false;
   }
@@ -328,8 +357,8 @@ bool ttgi::preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
   LLVM_DEBUG({
     DBGS() << "Loads to pipeline:\n";
     unsigned prefetchBytes = 0;
-    for (LoadDotOperand &load : loads) {
-      Operation *op = load.load;
+    for (const PrefetchCandidate &candidate : candidates) {
+      Operation *op = candidate.op;
       RankedTensorType tensorType =
           dyn_cast<RankedTensorType>(op->getResultTypes()[0]);
       if (tensorType) {
@@ -350,7 +379,7 @@ bool ttgi::preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
   });
 
   // 2. Create the prefetching operations for the loads collected.
-  createPrefetchOps(forOp, loads);
+  createPrefetchOps(forOp, candidates);
 
   // 3. Create the final schedule for the kernel loop. This will dictate the
   // stages and order of operations to the pipeline expander.

@@ -166,10 +166,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             'has_subgroup_matrix_multiply_accumulate_tensor_float32', False)
         dev_prop['has_16bit_atomics'] = tgt_prop.get('has_16bit_atomics', False)
         dev_prop['has_2d_block_io'] = tgt_prop.get('has_2d_block_io', False)
-        dev_prop['has_bfloat16_arithmetic'] = tgt_prop.get('has_bfloat16_arithmetic', False)
-        dev_prop['has_bfloat16_conversion'] = tgt_prop.get('has_bfloat16_conversion', True)
-        dev_prop['has_predicated_io'] = tgt_prop.get('has_predicated_io',
-                                                     not self.is_lts(tgt_prop.get('driver_version')))
+        is_lts = self.is_lts(tgt_prop.get('driver_version'))
+        dev_prop['has_bfloat16_arithmetic'] = tgt_prop.get('has_bfloat16_arithmetic', not is_lts)
+        dev_prop['has_bfloat16_conversion'] = tgt_prop.get('has_bfloat16_conversion', False)
+        dev_prop['has_predicated_io'] = tgt_prop.get('has_predicated_io', not is_lts)
         dev_prop['has_subgroup_matrix_multiply_accumulate'] = tgt_prop.get('has_subgroup_matrix_multiply_accumulate',
                                                                            False)
         dev_prop['has_subgroup_scaled_matrix_multiply_accumulate'] = tgt_prop.get(
@@ -268,14 +268,14 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
-        intel.passes.ttir.add_convert_block_pointer_to_tdesc(pm)
-        passes.ttir.add_rewrite_tensor_pointer(pm)
         intel.passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         passes.common.add_cse(pm)
         passes.ttir.add_triton_licm(pm)
         intel.passes.ttir.add_remove_masks(pm)
         intel.passes.ttir.add_stride_versioning(pm)
         intel.passes.ttir.add_fuse_reshape(pm)
+        intel.passes.ttir.add_fold_true_cmpi(pm)
+        intel.passes.ttir.add_prepare_if_combining(pm)
         passes.common.add_canonicalizer(pm)
         passes.ttir.add_combine(pm)
         intel.passes.ttir.add_simplify_signed_arithmetic(pm)
@@ -313,11 +313,13 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttgpuir.add_materialize_block_pointer(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_optimize_dot_operands(pm)
+        intel.passes.ttgpuir.add_hoist_layout_conversions(pm, opt.grf_mode)
         intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier)
 
         if (opt.reduce_variable_liveness):
             intel.passes.ttgpuir.add_reduce_variable_liveness(pm)
 
+        passes.ttir.add_loop_aware_cse(pm)
         passes.ttgpuir.add_fuse_nested_loops(pm)
 
         passes.common.add_canonicalizer(pm)
@@ -333,7 +335,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_reduce_data_duplication(pm)
         passes.ttgpuir.add_reorder_instructions(pm)
-        passes.common.add_cse(pm)
+        passes.ttir.add_loop_aware_cse(pm)
         passes.common.add_symbol_dce(pm)
         passes.common.add_sccp(pm)
         passes.common.add_canonicalizer(pm)
@@ -461,6 +463,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             if options.num_warps > 32:
                 raise RuntimeError("grf_mode = 256 cannot be used with num_warps > 32")
             metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
+        elif options.grf_mode == '512':
+            if options.num_warps > 32:
+                raise RuntimeError("grf_mode = 512 cannot be used with num_warps > 32")
+            metadata["build_flags"] += " -cl-intel-512-GRF-per-thread"
         elif options.grf_mode == 'auto':
             metadata["build_flags"] += " -cl-intel-enable-auto-large-GRF-mode"
         elif options.grf_mode != 'default':

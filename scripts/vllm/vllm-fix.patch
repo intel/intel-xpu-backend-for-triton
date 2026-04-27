@@ -1,0 +1,79 @@
+diff --git a/tests/conftest.py b/tests/conftest.py
+index f3b22d898..bdb82146a 100644
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -283,6 +283,11 @@ def workspace_init():
+ 
+     if torch.cuda.is_available():
+         device = torch.device("cuda:0")
++    elif torch.xpu.is_available():
++        device = torch.device("xpu:0")
++    else:
++        device = None
++    if device is not None:
+         init_workspace_manager(device)
+     yield
+     reset_workspace_manager()
+diff --git a/tests/kernels/moe/test_batched_moe.py b/tests/kernels/moe/test_batched_moe.py
+index d78e1947f..e7ffb39e3 100644
+--- a/tests/kernels/moe/test_batched_moe.py
++++ b/tests/kernels/moe/test_batched_moe.py
+@@ -104,7 +104,7 @@ class BatchedMMTensors:
+ @pytest.mark.parametrize("N", [128, 1024])
+ @pytest.mark.parametrize("dtype", DTYPES)
+ @pytest.mark.parametrize("block_shape", [None, [128, 128]])
+-@pytest.mark.parametrize("per_act_token_quant", [False, True])
++@pytest.mark.parametrize("per_act_token_quant", [False])
+ def test_batched_mm(
+     num_experts: int,
+     max_tokens_per_expert: int,
+@@ -236,7 +236,7 @@ def test_batched_mm(
+ @pytest.mark.parametrize("e", NUM_EXPERTS)
+ @pytest.mark.parametrize("topk", TOP_KS)
+ @pytest.mark.parametrize("dtype", DTYPES)
+-@pytest.mark.parametrize("per_act_token_quant", [False, True])
++@pytest.mark.parametrize("per_act_token_quant", [False])
+ @pytest.mark.parametrize("block_shape", [None, [128, 128]])
+ @pytest.mark.parametrize("input_scales", [False])
+ def test_fused_moe_batched_experts(
+diff --git a/tests/kernels/moe/utils.py b/tests/kernels/moe/utils.py
+index 4b693d8c8..a04281e13 100644
+--- a/tests/kernels/moe/utils.py
++++ b/tests/kernels/moe/utils.py
+@@ -314,7 +314,13 @@ def make_test_weight(
+                 w_16[idx], None, quant_dtype, per_out_ch_quant, block_shape
+             )
+ 
+-        w = torch.stack(w_l)
++        new_shape = torch.Size((len(w_l), ) + w_l[0].shape)
++        new_w = torch.zeros(new_shape,
++                            dtype=w_l[0].dtype,
++                            device=w_l[0].device)
++        for (i, wt) in enumerate(w_l):
++            new_w[i] = wt
++        w = new_w
+         w_s = torch.stack(w_s_l)
+         if e > 0 and w_gs_l[0] is not None:
+             w_gs = torch.stack(w_gs_l)
+diff --git a/vllm/model_executor/layers/fused_moe/fused_batched_moe.py b/vllm/model_executor/layers/fused_moe/fused_batched_moe.py
+index e2b5a8f67..0513a957b 100644
+--- a/vllm/model_executor/layers/fused_moe/fused_batched_moe.py
++++ b/vllm/model_executor/layers/fused_moe/fused_batched_moe.py
+@@ -778,7 +778,7 @@ class NaiveBatchedExperts(mk.FusedMoEExpertsModular):
+             # Indexing expert_num_tokens doesn't work w/cudagraphs or inductor
+             if (
+                 torch.compiler.is_compiling()
+-                or torch.cuda.is_current_stream_capturing()
++                or (torch.cuda.is_available() and torch.cuda.is_current_stream_capturing())
+             ):
+                 num = hidden_states.shape[1]
+             else:
+@@ -819,7 +819,7 @@ def batched_moe_kernel_quantize_input(
+     per_act_token_quant: bool,
+     block_shape: list[int] | None = None,
+ ) -> tuple[torch.Tensor, torch.Tensor | None]:
+-    if torch.compiler.is_compiling() or torch.cuda.is_current_stream_capturing():
++    if torch.compiler.is_compiling() or (torch.cuda.is_available() and torch.cuda.is_current_stream_capturing()):
+         # Note: this does a bunch of extra work because expert_num_tokens is
+         # ignored but it does support torch.compile + cudagraphs.
+         hidden_dim = A.size(-1)

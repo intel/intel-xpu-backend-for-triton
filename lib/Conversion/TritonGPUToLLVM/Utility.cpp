@@ -646,7 +646,7 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
   auto vals = to_vector(valsArray);
   bool isStore = !vals.empty();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto smemPtrTy = ptr_ty(ctx, 3);
+  auto smemPtrTy = ptr_ty(ctx, targetInfo.getSharedAddressSpace());
   auto kReg = str_attr("register");
   auto kLane = str_attr("lane");
   auto kWarp = str_attr("warp");
@@ -666,10 +666,8 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
   // Extract the partition sublayout before stripping it for vectorization.
   auto inDimNames = to_vector(cvt.getInDimNames());
   LinearLayout partitionLayout;
-  Value basesVec;
   if (isPartitioned) {
     partitionLayout = cvt.sublayout(inDimNames, {kPartition});
-    basesVec = buildBasePtrVector(loc, rewriter, smemBases);
   }
 
   // Strip kPartition output for vectorization analysis.
@@ -769,7 +767,10 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
                                                   {kWarp, warpId},
                                                   {kBlock, blockId}});
         Value partitionIdx = partitionResult[0].second;
-        smemBase = b.extract_element(basesVec, partitionIdx);
+        for (size_t p = 1; p < smemBases.size(); ++p) {
+          Value cmp = b.icmp_eq(partitionIdx, b.i32_val(p));
+          smemBase = b.select(cmp, smemBases[p], smemBase);
+        }
       }
 
       std::optional<Value> innerCtaOffset;

@@ -227,8 +227,8 @@ public:
                           std::function<bool(Operation *)> stopPropagation);
 
   LogicalResult getRematerializableSlice(
-      OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
-      DenseMap<Value, Attribute> &layout,
+      OpOperand &root, Attribute rootEncoding, SetVector<Value> &sliceArg,
+      DenseMap<Value, Attribute> &layoutArg,
       std::function<bool(Operation *)> stopPropagation = nullptr);
 
 private:
@@ -898,6 +898,8 @@ bool canBeRemat(Operation *op) {
     return false;
   if (auto gather = dyn_cast<tt::GatherOp>(op))
     return !gather.getEfficientLayout();
+  if (auto reshape = dyn_cast<tt::ReshapeOp>(op))
+    return !reshape.getEfficientLayout();
 
   if (isa<scf::WhileOp, scf::ConditionOp>(op))
     return false;
@@ -1365,9 +1367,13 @@ LogicalResult LayoutRematerialization::getConvertBackwardSlice(
 }
 
 LogicalResult LayoutRematerialization::getRematerializableSlice(
-    OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
-    DenseMap<Value, Attribute> &layout,
+    OpOperand &root, Attribute rootEncoding, SetVector<Value> &sliceArg,
+    DenseMap<Value, Attribute> &layoutArg,
     std::function<bool(Operation *)> stopPropagation) {
+  // Operate on copies of the input, we do not want to modify them unless we
+  // have succeeded.
+  SetVector<Value> slice = sliceArg;
+  DenseMap<Value, Attribute> layout = layoutArg;
   LogicalResult result = getConvertBackwardSlice(root, rootEncoding, slice,
                                                  layout, stopPropagation);
   if (result.failed() || slice.empty())
@@ -1380,6 +1386,8 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
         return failure();
     }
   }
+  sliceArg = std::move(slice);
+  layoutArg = std::move(layout);
   return success();
 }
 
@@ -1680,9 +1688,11 @@ void LayoutRematerialization::hoistConvertDotOperand(
     ttg::ConvertLayoutOp convertOp) {
   auto targetType = convertOp.getType();
 
-  // The pass is targeted to NVidia.
+  // Only hoist when the target is a dot operand backed by an MMA-family
+  // parent encoding (NVIDIA MMA on upstream, DPAS on Intel).
   auto dotEnc = dyn_cast<ttg::DotOperandEncodingAttr>(targetType.getEncoding());
-  if (!(dotEnc && isa<ttg::NvidiaMmaEncodingAttr>(dotEnc.getParent())))
+  if (!dotEnc || !isa<ttg::NvidiaMmaEncodingAttr, ttgi::DpasEncodingAttr>(
+                     dotEnc.getParent()))
     return;
 
   auto canBePipelined = [&](ttg::ConvertLayoutOp convertOp) {
@@ -1737,6 +1747,29 @@ void LayoutRematerialization::hoistConvertDotOperand(
       convertOp.getSrcMutable(), targetType.getEncoding(), slice, layout, stop);
   if (result.failed())
     return;
+
+  // Bail if any leaf load has a different element bitwidth than the convert
+  // target. The target DotOperandEncodingAttr's kWidth / opsPerChannel is
+  // parameterized for the dot-operand element width; propagating it back
+  // across a width-changing op (e.g. tt.fp_to_fp fp8->fp16, arith.extf)
+  // produces a convert_layout on a narrower element with a layout that does
+  // not match any efficient 2D block I/O or sub-group shuffle, forcing a
+  // sub-group-transpose-through-SLM fallback and disabling block I/O on the
+  // load. See issue #6737.
+  unsigned targetBitwidth = targetType.getElementType().getIntOrFloatBitWidth();
+  for (Value v : slice) {
+    Operation *def = v.getDefiningOp();
+    if (!def || !isa<tt::LoadOp, tt::DescriptorLoadOp>(def))
+      continue;
+    auto loadTy = cast<RankedTensorType>(v.getType());
+    if (loadTy.getElementType().getIntOrFloatBitWidth() != targetBitwidth) {
+      LDBG("  Leaf load element bitwidth ("
+           << loadTy.getElementType().getIntOrFloatBitWidth()
+           << ") differs from convert target bitwidth (" << targetBitwidth
+           << "); skipping hoist to avoid degrading dot-operand encoding");
+      return;
+    }
+  }
 
   IRMapping mapping;
   OpBuilder builder(convertOp.getContext());
@@ -1825,33 +1858,14 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     if (!op)
       continue;
     if (isExtOrBroadcastOp(op)) {
-      SetVector<Value> tempSlice;
-      DenseMap<Value, Attribute> tempLayout;
       Attribute srcEncoding = ttgi::inferSrcEncoding(op, layout[v]);
       if (!srcEncoding)
         return;
-      LogicalResult result = getRematerializableSlice(
-          op->getOpOperand(0), srcEncoding, tempSlice, tempLayout);
-
-      // If a value is already assigned to a _different_ layout,
-      // we cannot propagate past this op (as it would conflict with
-      // an already-assigned layout).
-      for (auto [val, enc] : tempLayout) {
-        auto preexistingLayout = layout.find(val);
-        if (preexistingLayout != layout.end() &&
-            preexistingLayout->second != enc) {
-          result = failure();
-          break;
-        }
-      }
-
       // If we can rematerialize the rest of the ext slice we can ignore this
       // ext as it won't need a convert.
-      if (result.succeeded()) {
-        slice.insert(tempSlice.begin(), tempSlice.end());
-        layout.insert(tempLayout.begin(), tempLayout.end());
+      if (succeeded(getRematerializableSlice(op->getOpOperand(0), srcEncoding,
+                                             slice, layout)))
         continue;
-      }
       // Only apply it if there is a single ext op otherwise we would have to
       // duplicate the convert.
       if (extOrBroadcastOp != nullptr)
@@ -1866,6 +1880,14 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   Attribute srcEncoding = ttgi::inferSrcEncoding(extOrBroadcastOp, dstEncoding);
   if (!srcEncoding)
     return;
+  // Check that hoisting the convert is actually beneficial.
+  // Always apply the cost gate (matching upstream) — isRematBeneficial
+  // accounts for slice values with external users, preventing hoists that
+  // would duplicate expensive ops or break dominance.
+  int64_t newCvtCost = getConvertCost(extOrBroadcastOp->getOperand(0));
+  if (!isRematBeneficial(convertOp, slice, newCvtCost))
+    return;
+
   // Move the convert before the ext op and rewrite the slice.
   OpBuilder builder(extOrBroadcastOp);
   auto tensorType =

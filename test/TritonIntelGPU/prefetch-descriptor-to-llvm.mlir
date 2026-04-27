@@ -20,7 +20,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 
     // COM: Create a tensor descriptor for a 16x32xf16 tile.
     // COM: make_tensor_descriptor takes (base, [shape0, shape1], [stride0, stride1]).
-    %desc = tt.make_tensor_descriptor %arg0, [%c16_i32, %c32_i32], [%arg5, %c1_i64] : <f16>, <tensor<16x32xf16>>
+    %desc = tt.make_tensor_descriptor %arg0, [%c16_i32, %c32_i32], [%arg5, %c1_i64] : <f16>, <16x32xf16>
 
     // COM: The descriptor struct is: (i64, i64, i64, i64, ptr<1>)
     // CHECK:     %[[DESC:.*]] = llvm.insertvalue %{{.*}}, %{{.*}}[4] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
@@ -55,7 +55,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 
     // COM: 16x32xf16 with 8 warps: tile_height=2, tile_width=32 → vBlocks=2, tile_width=16.
     // CHECK:     triton_gen.2Dblockprefetch %[[BASE_PTR]], %[[BASE_WIDTH_I32]], %[[BASE_HEIGHT_I32]], %[[PITCH]], %[[OFFSET_X]], %[[OFFSET_Y]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 2, v_blocks = 2, cache_control = L1C_L3C}
-    ttig.descriptor_prefetch %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<16x32xf16>>
+    ttig.descriptor_prefetch %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<16x32xf16>
 
     tt.return
   }
@@ -72,11 +72,11 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     %c16_i32 = arith.constant 16 : i32
     %c32_i32 = arith.constant 32 : i32
 
-    %desc = tt.make_tensor_descriptor %arg0, [%c16_i32, %c32_i32], [%arg5, %c1_i64] : <f16>, <tensor<16x32xf16>>
+    %desc = tt.make_tensor_descriptor %arg0, [%c16_i32, %c32_i32], [%arg5, %c1_i64] : <f16>, <16x32xf16>
 
     // COM: Without ttig.block_io, the prefetch should be erased with no 2D block prefetch generated.
     // CHECK-NOT: triton_gen.2Dblockprefetch
-    ttig.descriptor_prefetch %desc[%c0_i32, %c0_i32] : !tt.tensordesc<tensor<16x32xf16>>
+    ttig.descriptor_prefetch %desc[%c0_i32, %c0_i32] : !tt.tensordesc<16x32xf16>
     tt.return
   }
 }
@@ -95,14 +95,14 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     %c256_i32 = arith.constant 256 : i32
 
     // COM: Create a tensor descriptor for a 16x256xf16 tile (256 cols → 512 bytes/row → uses 256B prefetch path).
-    %desc = tt.make_tensor_descriptor %arg0, [%c16_i32, %c256_i32], [%arg5, %c1_i64] : <f16>, <tensor<16x256xf16>>
+    %desc = tt.make_tensor_descriptor %arg0, [%c16_i32, %c256_i32], [%arg5, %c1_i64] : <f16>, <16x256xf16>
 
     // CHECK:     %[[DESC:.*]] = llvm.insertvalue %{{.*}}, %{{.*}}[4] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
     // CHECK:     %[[BASE_PTR:.*]] = llvm.extractvalue %[[DESC]][4] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
 
     // COM: 16x256xf16 with 256B support → tile_width=128, tile_height=4, v_blocks=1.
     // CHECK:     triton_gen.2Dblockprefetch %[[BASE_PTR]], {{.*}} {elem_size_in_bits = 16, tile_width = 128, tile_height = 4, v_blocks = 1, cache_control = L1C_L3C}
-    ttig.descriptor_prefetch %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<16x256xf16>>
+    ttig.descriptor_prefetch %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<16x256xf16>
 
     tt.return
   }
@@ -122,14 +122,14 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     %c64_i32 = arith.constant 64 : i32
 
     // COM: 16x64xf16 → 128 bytes/row. With support_prefetch_256b, this falls back to 64 bytes prefetch.
-    %desc = tt.make_tensor_descriptor %arg0, [%c16_i32, %c64_i32], [%arg5, %c1_i64] : <f16>, <tensor<16x64xf16>>
+    %desc = tt.make_tensor_descriptor %arg0, [%c16_i32, %c64_i32], [%arg5, %c1_i64] : <f16>, <16x64xf16>
 
     // CHECK:     %[[DESC:.*]] = llvm.insertvalue %{{.*}}, %{{.*}}[4] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
     // CHECK:     %[[BASE_PTR:.*]] = llvm.extractvalue %[[DESC]][4] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
 
     // COM: 128 bytes per row falls back to 64 bytes prefetch → tile_width=16, tile_height=4, v_blocks=2.
     // CHECK:     triton_gen.2Dblockprefetch %[[BASE_PTR]], {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 4, v_blocks = 2, cache_control = L1C_L3C}
-    ttig.descriptor_prefetch %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<16x64xf16>>
+    ttig.descriptor_prefetch %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<16x64xf16>
 
     tt.return
   }
@@ -152,7 +152,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     %c32_i32 = arith.constant 32 : i32
 
     // COM: Create a rank-3 tensor descriptor for 2x16x32xf16.
-    %desc = tt.make_tensor_descriptor %arg0, [%c2_i32, %c16_i32, %c32_i32], [%arg6, %arg5, %c1_i64] : <f16>, <tensor<2x16x32xf16>>
+    %desc = tt.make_tensor_descriptor %arg0, [%c2_i32, %c16_i32, %c32_i32], [%arg6, %arg5, %c1_i64] : <f16>, <2x16x32xf16>
 
     // CHECK:     %[[DESC:.*]] = llvm.insertvalue %{{.*}}, %{{.*}}[6] : !llvm.struct<(i64, i64, i64, i64, i64, i64, ptr<1>)>
     // CHECK:     %[[BASE_PTR:.*]] = llvm.extractvalue %[[DESC]][6] : !llvm.struct<(i64, i64, i64, i64, i64, i64, ptr<1>)>
@@ -162,7 +162,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:     triton_gen.2Dblockprefetch {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 4, v_blocks = 2, cache_control = L1C_L3C}
     // CHECK:     llvm.getelementptr
     // CHECK:     triton_gen.2Dblockprefetch {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 4, v_blocks = 2, cache_control = L1C_L3C}
-    ttig.descriptor_prefetch %desc[%c0_i32, %c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<tensor<2x16x32xf16>>
+    ttig.descriptor_prefetch %desc[%c0_i32, %c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<2x16x32xf16>
 
     tt.return
   }
