@@ -820,9 +820,21 @@ class BenchmarkConfig:  # pylint: disable=too-many-instance-attributes
             if not indices:
                 raise AssertionError(
                     f"No providers selected from {bench.line_vals} for {self.providers_filter} filter.")
-            bench.line_vals = [bench.line_vals[i] for i in indices]
-            bench.line_names = [bench.line_names[i] for i in indices]
-            bench.styles = [bench.styles[i] for i in indices]
+            filtered_bench = Benchmark(
+                x_names=bench.x_names,
+                x_vals=bench.x_vals,
+                line_arg=bench.line_arg,
+                line_vals=[bench.line_vals[i] for i in indices],
+                line_names=[bench.line_names[i] for i in indices],
+                plot_name=bench.plot_name,
+                args=bench.args,
+                xlabel=bench.xlabel,
+                ylabel=bench.ylabel,
+                x_log=bench.x_log,
+                y_log=bench.y_log,
+                styles=[bench.styles[i] for i in indices] if bench.styles else None,
+            )
+            return Mark(mark.fn, filtered_bench)
         return mark
 
 
