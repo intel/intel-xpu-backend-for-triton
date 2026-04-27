@@ -279,8 +279,8 @@ struct LLVMDILocalVariablePass
       if (isa<LLVM::LLVMFuncOp>(op)) {
         auto funcOp = cast<LLVM::LLVMFuncOp>(op);
         diSubprogramAttr = getDISubprogramAttr(funcOp);
-        // External declarations (e.g., SPIR-V/OCL builtins) have no body,
-        // so we cannot insert debug value intrinsics into them.
+        // External declarations (e.g., runtime builtins like vprintf) have no
+        // body, so we cannot insert debug value intrinsics into them.
         if (!funcOp.isExternal())
           diSubprogramAttr = fuseFuncArgVariables(funcOp, diSubprogramAttr);
       } else {
