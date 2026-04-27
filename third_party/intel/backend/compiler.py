@@ -191,6 +191,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     def parse_options(self, opts) -> Any:
         args = {k: v for k, v in opts.items() if k in XPUOptions.__dataclass_fields__}
         args["allow_fp8e4nv"] = True
+        if "enable_fp_fusion" not in args:
+            args["enable_fp_fusion"] = knobs.language.default_fp_fusion
         return XPUOptions(**args)
 
     def pack_metadata(self, metadata):
@@ -426,7 +428,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         llvm.init_targets()
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
-        intel.set_fast_math(llvm_mod)
+        intel.set_fast_math(llvm_mod, metadata['enable_fp_fusion'])
         if options.extern_libs:
             paths = [path for (name, path) in options.extern_libs]
             llvm.link_extern_libs(llvm_mod, paths)

@@ -5987,9 +5987,10 @@ def test_enable_fp_fusion(enable_fp_fusion, default_override, device, fresh_knob
     else:
         h = mul_add.warmup(data, grid=(1, ), enable_fp_fusion=enable_fp_fusion)
 
-    if not is_cuda():
-        return
-    found_fma = re.search(r'(mad|fma)\.r[nzmp]\.(ftz\.)?f32', h.asm["ptx"]) is not None
+    if is_cuda():
+        found_fma = re.search(r'(mad|fma)\.r[nzmp]\.(ftz\.)?f32', h.asm["ptx"]) is not None
+    else:
+        found_fma = "fmul contract" in h.asm["llir"] and "fadd contract" in h.asm["llir"]
     assert found_fma == enable_fp_fusion
 
 
