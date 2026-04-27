@@ -227,5 +227,19 @@ def benchmark(Z, H, N_CTX, D_HEAD, MASK, MODE, provider):
     return (gbps(mean), gbps(max_ms), gbps(min_ms)), (tflops(mean), tflops(max_ms), tflops(min_ms)), cv
 
 
+def get_benchmark(providers_filter=None, fa_kernel_mode='fwd'):  # pylint: disable=W0613,W0621
+    base = benchmark.benchmarks
+    x_vals = [[*x[:-1], fa_kernel_mode] for x in list(base.x_vals)]
+
+    @benchmark_suite.perf_report(
+        benchmark_suite.Benchmark(x_names=base.x_names, x_vals=x_vals, line_arg=base.line_arg, line_vals=base.line_vals,
+                                  line_names=base.line_names, styles=base.styles, ylabel=base.ylabel,
+                                  plot_name=base.plot_name, args=base.args))
+    def _benchmark(Z, H, N_CTX, D_HEAD, MASK, MODE, provider):
+        return benchmark.fn(Z, H, N_CTX, D_HEAD, MASK, MODE, provider)
+
+    return _benchmark
+
+
 if __name__ == '__main__':
     benchmark.run(show_plots=False, print_data=True)

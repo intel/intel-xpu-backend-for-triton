@@ -790,22 +790,39 @@ class BenchmarkRunResult(_BenchmarkSummary, ABC):
 
 
 @dataclass
-class BenchmarkConfig:
+class BenchmarkConfig:  # pylint: disable=too-many-instance-attributes
     key: str
     get_benchmark: Callable[..., Mark]
     categories: Set[BenchmarkCategory]
     description: str = ""
     providers_filter: Optional[list[str]] = None
-    run_opts: Dict[str, Union[str, bool, List[str]]] = field(default_factory=dict)
+    run_opts: Dict[str, Union[str, bool, int, List[str]]] = field(default_factory=dict)
+    report_name: Optional[str] = None
+    report_file_prefix: Optional[str] = None
+
+    @property
+    def benchmark_report_name(self) -> str:
+        return self.report_name if self.report_name else self.key
+
+    @property
+    def benchmark_report_file_prefix(self) -> str:
+        return self.report_file_prefix if self.report_file_prefix else self.benchmark_report_name
 
     def _get_benchmark(self, apply_providers_filter=True) -> Mark:
         run_opts = self.run_opts
-        if self.providers_filter and apply_providers_filter:
-            run_opts = run_opts | {"providers_filter": self.providers_filter}
         mark = self.get_benchmark(**run_opts)
         if not isinstance(mark.benchmarks, Benchmark):
             raise NotImplementedError(
                 "Benchmark config list is not supported, exactly one benchmark config is expected.")
+        if self.providers_filter and apply_providers_filter:
+            bench = mark.benchmarks
+            indices = [i for i, p in enumerate(bench.line_vals) if p in self.providers_filter]
+            if not indices:
+                raise AssertionError(
+                    f"No providers selected from {bench.line_vals} for {self.providers_filter} filter.")
+            bench.line_vals = [bench.line_vals[i] for i in indices]
+            bench.line_names = [bench.line_names[i] for i in indices]
+            bench.styles = [bench.styles[i] for i in indices]
         return mark
 
 
@@ -846,7 +863,7 @@ class BenchmarkConfigRunResult(BenchmarkRunResult, BenchmarkConfig):
         start_time = time.perf_counter()
         # FIXME: Eliminate mark_args argument
         # This is useful for unit testing, composite becnhmark configs and results caching
-        self.res_df_list = (self.get_benchmark().run_constrained(shapes=self.selected_shapes, mark_args=args)
+        self.res_df_list = (self._get_benchmark().run_constrained(shapes=self.selected_shapes, mark_args=args)
                             if self.res_df_list is None else self.res_df_list)
         self.run_time = time.perf_counter() - start_time
         return self
@@ -857,16 +874,19 @@ class BenchmarkConfigRunResult(BenchmarkRunResult, BenchmarkConfig):
             column for column in res_df.select_dtypes(include=["number", "bool"]).columns
             if column in self.shape_dimensions
         ]
+        has_mask = "MASK" in self.shape_dimensions and "MASK" in res_df.columns
+        if has_mask:
+            shape_cols_for_report_builder.append("MASK")
         for provider_key, provider_label in self.selected_providers.items():
             report_args = build_report.PassedArgs(
                 source=f"{reports_folder}/{self.plot_name}.csv",
-                target=f"{reports_folder}/{self.key}-{provider_key}-report.csv",
+                target=f"{reports_folder}/{self.benchmark_report_file_prefix}-{provider_key}-report.csv",
                 param_cols=",".join(shape_cols_for_report_builder),
-                benchmark=self.key,
+                benchmark=self.benchmark_report_name,
                 compiler=str(provider_key),
                 tflops_col=f"{provider_label}-{self.compute_metric}",
                 hbm_col=f"{provider_label}-{self.memory_metric}",
                 tag=tag,
-                mask=False,
+                mask=has_mask,
             )
             build_report.build_report(report_args, res_df)

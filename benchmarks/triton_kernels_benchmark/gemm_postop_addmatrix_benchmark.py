@@ -363,5 +363,23 @@ def benchmark(B, M, N, K, dtype, provider):
     return (gbps(mean_ms), gbps(max_ms), gbps(min_ms)), (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
 
 
+def get_benchmark(providers_filter=None, int8_only=False):
+    if not int8_only:
+        return benchmark
+    base = benchmark.benchmarks
+    local_x_vals = [[*x[:-1], torch.int8] for x in list(X_VALS)]
+    local_x_vals = [x for x in local_x_vals if is_enough_memory(x)]
+
+    @benchmark_suite.perf_report(
+        benchmark_suite.Benchmark(x_names=base.x_names, x_vals=local_x_vals, line_arg=base.line_arg,
+                                  line_vals=['triton'], line_names=['Triton'], styles=[('green', '-')],
+                                  ylabel=base.ylabel, plot_name='matmul-performance-postop-addmatrix-int8',
+                                  args=base.args))
+    def _benchmark(B, M, N, K, dtype, provider):
+        return benchmark.fn(B, M, N, K, dtype, provider)
+
+    return _benchmark
+
+
 if __name__ == '__main__':
     benchmark.run(show_plots=False, print_data=True)
