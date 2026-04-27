@@ -21,6 +21,25 @@ tt.func public @simple_load(%load_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}
 // -----
 
 module {
+tt.func public @preserve_boundary_check_for_column_major(%load_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+  %c1_i64 = arith.constant 1 : i64
+  %c4_i64 = arith.constant 4 : i64
+  %c64_i64 = arith.constant 64 : i64
+  %c0_i32 = arith.constant 0 : i32
+  // boundaryCheck(1) must guard the second dimension (%c4_i64):
+  // 0 + 64 > 4, so the check cannot be removed.
+  %ptr = tt.make_tensor_ptr %load_ptr, [%c4_i64, %c4_i64], [%c1_i64, %c4_i64], [%c0_i32, %c0_i32] {order = array<i32: 0, 1>} : <tensor<4x64xf16>>
+  %load = tt.load %ptr {boundaryCheck = array<i32: 1>} : !tt.ptr<tensor<4x64xf16>>
+  tt.return
+}
+// CHECK-LABEL: preserve_boundary_check_for_column_major
+// CHECK: [[PTR:%.*]] = tt.make_tensor_ptr
+// CHECK: tt.load [[PTR]] {boundaryCheck = array<i32: 1>} : !tt.ptr<tensor<4x64xf16>>
+}
+
+// -----
+
+module {
 tt.func public @load_in_for_loop1(%load_ptr0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %load_ptr1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
   %c0_i32 = arith.constant 0 : i32
   %c1_i32 = arith.constant 1 : i32

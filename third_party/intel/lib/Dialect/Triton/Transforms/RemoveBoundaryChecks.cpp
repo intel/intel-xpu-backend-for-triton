@@ -45,10 +45,8 @@ public:
 
       SmallVector<int> newBoundaryCheck;
       for (int boundIdx : loadOp.getBoundaryCheck()) {
-        ArrayRef<int> order = makeTensorPtrOp.getOrder();
-        int idx = order.size() - order[boundIdx] - 1;
-        Value offset = makeTensorPtrOp.getOffsets()[idx];
-        Value shape = makeTensorPtrOp.getShape()[idx];
+        Value offset = makeTensorPtrOp.getOffsets()[boundIdx];
+        Value shape = makeTensorPtrOp.getShape()[boundIdx];
         auto resType = cast<RankedTensorType>(loadOp.getResult().getType());
         ArrayRef<int64_t> resShape = resType.getShape();
         std::optional<int64_t> offsetVal = getConstantIntValue(offset),
@@ -64,7 +62,7 @@ public:
         }
 
         // Case 1: offset and shape are constant.
-        if (offsetVal && ((*offsetVal + resShape[idx]) <= *shapeVal)) {
+        if (offsetVal && ((*offsetVal + resShape[boundIdx]) <= *shapeVal)) {
           LLVM_DEBUG(llvm::dbgs().indent(2)
                      << "Check at index " << boundIdx << " is unnecessary\n");
           continue;
@@ -91,7 +89,7 @@ public:
           }
 
           APInt maxIV = (*optRange).smax();
-          if (maxIV.getSExtValue() + resShape[idx] <= shapeVal) {
+          if (maxIV.getSExtValue() + resShape[boundIdx] <= *shapeVal) {
             LLVM_DEBUG(llvm::dbgs().indent(2)
                        << "Check at index " << boundIdx << " is unnecessary\n");
             continue;
