@@ -45,8 +45,16 @@ public:
 
       SmallVector<int> newBoundaryCheck;
       for (int boundIdx : loadOp.getBoundaryCheck()) {
-        ArrayRef<int> order = makeTensorPtrOp.getOrder();
-        int idx = order.size() - order[boundIdx] - 1;
+        // `boundaryCheck` indices are in the same coordinate space as
+        // make_tensor_ptr shape/offset operands.
+        int idx = boundIdx;
+        if (idx < 0 || idx >= makeTensorPtrOp.getOffsets().size()) {
+          LLVM_DEBUG(llvm::dbgs().indent(2)
+                     << "Check at index " << boundIdx
+                     << " is necessary (invalid boundary check index)\n");
+          newBoundaryCheck.push_back(boundIdx);
+          continue;
+        }
         Value offset = makeTensorPtrOp.getOffsets()[idx];
         Value shape = makeTensorPtrOp.getShape()[idx];
         auto resType = cast<RankedTensorType>(loadOp.getResult().getType());
