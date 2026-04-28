@@ -457,13 +457,10 @@ def wrap_handle_tensordesc(launcher, signature, tensordesc_meta):
     return wrap_handle_tensordesc_impl(launcher, signature, tensordesc_meta, _make_intel_tensordesc_arg)
 
 
-def serialize_args(args, constants, signature):
+def serialize_args(args, constants, signature, dir_path):
     import torch
     import numbers
-    dir_path = knobs.intel.dump_spirv_kernel_args
-    if not os.path.exists(dir_path):
-        os.makedirs(dir_path)
-        print(f"Path to directory consisting of SPIR-V Runner data: {dir_path}")
+    os.makedirs(dir_path, exist_ok=True)
 
     def serialize_kernel_metadata(arg, args_dict):
         args_dict['num_warps'] = arg.num_warps
@@ -530,9 +527,19 @@ class XPULauncher(object):
         self.launch = wrap_handle_tensordesc(launcher, signature, tensordesc_meta=[])
 
         # Serialize KernelArguments for SPIR-V Runner
-        self.serialize_kernel_args = knobs.intel.dump_spirv_kernel_args
+        self.serialize_kernel_args = knobs.intel.enable_dump_spirv_kernel_args
+        self.cache_dir = metadata.cache_dir
+        self.dump_dir = self._resolve_dump_dir(metadata.cache_dir)
+        self.print_dump_spirv_kernel_args_info = knobs.intel.print_dump_spirv_kernel_args_info
         self.constants = constants
         self.signature = signature
+
+    def _resolve_dump_dir(self, cache_dir):
+        dump_dir_root = knobs.intel.dump_spirv_kernel_args_dir
+        if not dump_dir_root:
+            return cache_dir
+        cache_dir_name = os.path.basename(os.path.normpath(cache_dir))
+        return os.path.join(dump_dir_root, cache_dir_name)
 
     def _dump_launch_params(self, args, constants, signature):
         # inspired by `def _dump_launch_params(args, kwargs, launcher, kernel_name, grid):` from
@@ -576,8 +583,12 @@ class XPULauncher(object):
     def __call__(self, gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
                  launch_exit_hook, *args):
         if self.serialize_kernel_args:
+            if self.print_dump_spirv_kernel_args_info:
+                print(
+                    f"Triton kernel dump info: kernel_name={kernel_metadata.name}, cache_dir={self.cache_dir}, dump_dir={self.dump_dir}"
+                )
             serialize_args((gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
-                            launch_exit_hook, *args), self.constants, self.signature)
+                            launch_exit_hook, *args), self.constants, self.signature, self.dump_dir)
 
         if os.environ.get("TRITON_DUMP_LAUNCH_PARAMS") == "1":
             # This function does not cover all cases, for example when the arguments are tuple,

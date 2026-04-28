@@ -802,7 +802,7 @@ def async_tma_kernel(input_desc, XBLOCK: ttgl.constexpr):
     bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(bar, count=1)
 
-    tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem)
+    tma.async_load(input_desc, [0, 0], bar, smem)
     ttgl.static_assert(input_desc.block_type.nbytes == XBLOCK * XBLOCK * 2)
     mbarrier.expect(bar, input_desc.block_type.nbytes)
     mbarrier.wait(bar, 0)
@@ -1872,6 +1872,44 @@ def test_atomic_rmw():
     ttgl.atomic_max(offset + ptr, val, mask=mask)
     ttgl.atomic_add(offset + ptr, val, mask=mask, sem="relaxed")
     ttgl.atomic_add(offset + ptr, val, mask=scalar_mask, sem="acquire", scope="cta")
+
+
+@filecheck_test
+@gluon.jit
+def test_atomic_rmw_scalar_masks():
+    # CHECK-LABEL: test_atomic_rmw_scalar_masks
+    BLOCK: ttgl.constexpr = 128
+    x = ttgl.full([BLOCK], 0, ttgl.int64)
+    ptr = x.cast(ttgl.pointer_type(ttgl.int32), bitcast=True)
+    offs = ttgl.arange(0, BLOCK)
+    ptrs = ptr + offs
+    val = ttgl.full([BLOCK], 1, ttgl.int32)
+    mask = offs >= 0
+    scalar_mask = True
+    constexpr_value: ttgl.constexpr = 1
+    constexpr_mask: ttgl.constexpr = True
+
+    # CHECK: {{.*}} = tt.atomic_rmw add, acq_rel, gpu
+    ttgl.atomic_add(ptrs, val, mask=mask)
+    # CHECK: {{.*}} = tt.atomic_rmw add, acq_rel, gpu
+    ttgl.atomic_add(ptrs, 1, mask=True)
+    # CHECK: {{.*}} = tt.atomic_rmw add, acq_rel, gpu
+    ttgl.atomic_add(ptrs, constexpr_value, mask=constexpr_mask)
+    # CHECK: {{.*}} = tt.atomic_rmw add, acq_rel, gpu
+    ttgl.atomic_add(ptrs, val, mask=scalar_mask)
+
+    # CHECK: {{.*}} = tt.atomic_rmw exch, acq_rel, gpu
+    ttgl.atomic_xchg(ptrs, 1, mask=True)
+    # CHECK: {{.*}} = tt.atomic_rmw max, acq_rel, gpu
+    ttgl.atomic_max(ptrs, 1, mask=True)
+    # CHECK: {{.*}} = tt.atomic_rmw min, acq_rel, gpu
+    ttgl.atomic_min(ptrs, 1, mask=True)
+    # CHECK: {{.*}} = tt.atomic_rmw and, acq_rel, gpu
+    ttgl.atomic_and(ptrs, 1, mask=True)
+    # CHECK: {{.*}} = tt.atomic_rmw or, acq_rel, gpu
+    ttgl.atomic_or(ptrs, 1, mask=True)
+    # CHECK: {{.*}} = tt.atomic_rmw xor, acq_rel, gpu
+    ttgl.atomic_xor(ptrs, 1, mask=True)
 
 
 @filecheck_test
@@ -3811,7 +3849,7 @@ def test_nv_tma_descriptor_load_kernel(target):
         bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
         mbarrier.init(bar, count=1)
         mbarrier.expect(bar, XBLOCK * XBLOCK * ttgl.float32.primitive_bitwidth // 8)
-        tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem)
+        tma.async_load(input_desc, [0, 0], bar, smem)
 
     ptr = MockTensor(ttgl.float32)
     module = run_parser(nv_tma_descriptor_load_kernel, *make_args(ptr), target)
@@ -3882,6 +3920,50 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
 }
 """)
+
+
+@pytest.mark.parametrize("target", [BLACKWELL_TARGET, HOPPER_TARGET])
+@pytest.mark.parametrize(("op_name", "kind"), [
+    ("async_atomic_add", "add"),
+    ("async_atomic_min", "min"),
+    ("async_atomic_max", "max"),
+    ("async_atomic_and", "and"),
+    ("async_atomic_or", "or"),
+    ("async_atomic_xor", "xor"),
+])
+def test_nv_tma_descriptor_reduce_kernel(target, op_name, kind):
+
+    @gluon.jit
+    def nv_tma_descriptor_reduce_kernel(input_ptr, OP_NAME: ttgl.constexpr):
+        XBLOCK: ttgl.constexpr = 128
+        smem_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
+        input_desc = tma.make_tensor_descriptor(
+            input_ptr,
+            shape=[XBLOCK, XBLOCK],
+            strides=[XBLOCK, 1],
+            block_shape=[XBLOCK, XBLOCK],
+            layout=smem_layout,
+        )
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [XBLOCK, XBLOCK], smem_layout)
+        if OP_NAME == "async_atomic_add":
+            tma.async_atomic_add(input_desc, [0, 0], smem)
+        elif OP_NAME == "async_atomic_min":
+            tma.async_atomic_min(input_desc, [0, 0], smem)
+        elif OP_NAME == "async_atomic_max":
+            tma.async_atomic_max(input_desc, [0, 0], smem)
+        elif OP_NAME == "async_atomic_and":
+            tma.async_atomic_and(input_desc, [0, 0], smem)
+        elif OP_NAME == "async_atomic_or":
+            tma.async_atomic_or(input_desc, [0, 0], smem)
+        elif OP_NAME == "async_atomic_xor":
+            tma.async_atomic_xor(input_desc, [0, 0], smem)
+        tma.store_wait(0)
+
+    ptr = MockTensor(ttgl.int32)
+    module = run_parser(nv_tma_descriptor_reduce_kernel, *make_args(ptr, op_name), target)
+    ttgir = anonymize_ir(module.str_nodebug())
+    assert f"ttng.async_tma_reduce {kind}," in ttgir
+    assert "ttng.async_tma_copy_local_to_global" not in ttgir
 
 
 @filecheck_test
