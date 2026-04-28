@@ -84,27 +84,6 @@ static int getStride(tt::intel::ModuleStrideAnalysis &strideAnalysis, Value ptr,
   return -1;
 }
 
-/// Trace a pointer tensor back through addptr/broadcast/splat to find the
-/// original scalar base pointer. Returns nullptr if the pattern is not
-/// recognized.
-static Value traceBasePtr(Value ptrTensor) {
-  Value current = ptrTensor;
-  for (;;) {
-    if (auto addptr = current.getDefiningOp<tt::AddPtrOp>()) {
-      current = addptr.getPtr();
-      continue;
-    }
-    if (auto broadcast = current.getDefiningOp<tt::BroadcastOp>()) {
-      current = broadcast.getSrc();
-      continue;
-    }
-    if (auto splat = current.getDefiningOp<tt::SplatOp>()) {
-      return splat.getSrc(); // Found the scalar pointer.
-    }
-    return nullptr; // Unrecognized pattern.
-  }
-}
-
 /// Create a zero-valued splat for the given tensor type. Used when a mask is
 /// present but no explicit 'other' value was provided by the user.
 static Value createZeroSplat(OpBuilder &builder, Location loc,
@@ -160,7 +139,7 @@ public:
   }
 
 private:
-  /// Convert a tt.load with tensor-of-pointers to ttig.2d_block_load.
+  /// Convert a tt.load with tensor-of-pointers to ttig.2d_block_ptr_load.
   void convertLoadOp(tt::LoadOp op,
                      tt::intel::ModuleStrideAnalysis &strideAnalysis) {
     if (!isBlockIOEligible(op))
@@ -210,14 +189,6 @@ private:
       return;
     }
 
-    // Trace back through addptr/broadcast/splat to find the scalar base
-    // pointer. This gives a uniform value (no per-lane shuffle needed).
-    Value basePtr = traceBasePtr(op.getPtr());
-    if (!basePtr) {
-      LDBG("Cannot trace base pointer for load: " << *op);
-      return;
-    }
-
     OpBuilder builder(op);
     Location loc = op.getLoc();
 
@@ -229,7 +200,6 @@ private:
     Value baseHeight =
         arith::ConstantIntOp::create(builder, loc, baseHeightRows, 32);
     Value basePitch = arith::ConstantIntOp::create(builder, loc, pitch, 32);
-    Value zero = arith::ConstantIntOp::create(builder, loc, 0, 32);
 
     auto memLayout = memoryRowMajor ? ttgi::BlockIOMode::RowMajor
                                     : ttgi::BlockIOMode::ColumnMajor;
@@ -246,14 +216,14 @@ private:
       }
     }
 
-    auto blockLoadOp = ttgi::Subgroup2DBlockLoadOp::create(
-        builder, loc, op.getType(), basePtr, baseWidth, baseHeight, basePitch,
-        /*offset_x=*/zero, /*offset_y=*/zero, mask, other,
+    auto blockPtrLoadOp = ttgi::Subgroup2DBlockPtrLoadOp::create(
+        builder, loc, op.getType(), op.getPtr(), baseWidth, baseHeight,
+        basePitch, mask, other,
         ttgi::BlockIOModeAttr::get(builder.getContext(), memLayout));
 
-    op.replaceAllUsesWith(blockLoadOp.getResult());
+    op.replaceAllUsesWith(blockPtrLoadOp.getResult());
     op.erase();
-    LDBG("Converted load to ttig.2d_block_load: " << *blockLoadOp);
+    LDBG("Converted load to ttig.2d_block_ptr_load: " << *blockPtrLoadOp);
   }
 
   /// Convert a tt.descriptor_load to ttig.2d_block_load.
@@ -393,8 +363,7 @@ private:
 
     auto blockLoadOp = ttgi::Subgroup2DBlockLoadOp::create(
         builder, loc, op.getType(), basePtr, baseWidth, baseHeight, basePitch,
-        offsetX, offsetY,
-        /*mask=*/Value(), /*other=*/other,
+        offsetX, offsetY, /*other=*/other,
         ttgi::BlockIOModeAttr::get(builder.getContext(), memLayout));
 
     // Propagate one_matrix_per_load attribute if present.

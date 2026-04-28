@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load | FileCheck %s --implicit-check-not=ttig.2d_block_load
+// RUN: triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load | FileCheck %s --implicit-check-not=ttig.2d_block_ptr_load --implicit-check-not=ttig.2d_block_load
 
 // COM: Pointer-based load from a function arg has unknown stride, so it
 // COM: cannot be converted (stride analysis returns -1). Stays as tt.load.
