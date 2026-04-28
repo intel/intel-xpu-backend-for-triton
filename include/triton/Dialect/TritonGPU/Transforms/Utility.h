@@ -45,13 +45,11 @@ Value getMemAccessPtr(Operation *op);
 unsigned getElementBitWidth(RankedTensorType type);
 
 // Calculate the optimal number of elements per thread for a given operation
-// along an axis with greatest continuity. `maxVecBitWidth` caps the vectorized
-// access width (defaults to 128b, the widest vectorized store op on most
-// targets); callers may widen it for targets with larger vectorized stores.
+// along an axis with greatest continuity.
 unsigned
 getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
                         triton::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                        ArrayRef<int64_t> shape, unsigned maxVecBitWidth = 128);
+                        ArrayRef<int64_t> shape);
 
 // Returns whether the op is a "view op", i.e. doesn't move any data
 bool isView(Operation *op);
