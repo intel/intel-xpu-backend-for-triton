@@ -3700,10 +3700,14 @@ struct Subgroup2DBlockLoadOpConversion
 
     LinearLayout shuffleMapping =
         LinearLayout::identity1D(numElemsPerLoad, kRegister, kRegister);
-    if (isTransposeRequired)
-      shuffleMapping = *computeTransposeShuffleMapping(
+    if (isTransposeRequired) {
+      auto maybeShuffleMapping = computeTransposeShuffleMapping(
           tensorType, regMapping, numElemsPerLoad, numPackedVals, tileHeight,
           threadsPerWarp, /*hasDPASOperandType=*/!!packedDPASOperandType, ctx);
+      assert(succeeded(maybeShuffleMapping) &&
+             "validate2DBlockLoadTile should have rejected this configuration");
+      shuffleMapping = *maybeShuffleMapping;
+    }
 
     // Handle mask/other.
     Value llMask = adaptor.getMask();

@@ -105,6 +105,23 @@ static Value traceBasePtr(Value ptrTensor) {
   }
 }
 
+/// Create a zero-valued splat for the given tensor type. Used when a mask is
+/// present but no explicit 'other' value was provided by the user.
+static Value createZeroSplat(OpBuilder &builder, Location loc,
+                             RankedTensorType tensorTy) {
+  Type elemType = tensorTy.getElementType();
+  Attribute zeroAttr;
+  if (isa<FloatType>(elemType))
+    zeroAttr = builder.getFloatAttr(elemType, 0.0);
+  else if (isa<IntegerType>(elemType))
+    zeroAttr = builder.getIntegerAttr(elemType, 0);
+  else
+    return nullptr;
+  Value zeroVal =
+      arith::ConstantOp::create(builder, loc, cast<TypedAttr>(zeroAttr));
+  return tt::SplatOp::create(builder, loc, tensorTy, zeroVal);
+}
+
 /// Determine whether memory layout is row-major from the block_io attribute.
 static bool isMemoryRowMajor(Operation *op) {
   auto blockIOAttr = op->getAttrOfType<StringAttr>(
@@ -217,10 +234,21 @@ private:
     auto memLayout = memoryRowMajor ? ttgi::BlockIOMode::RowMajor
                                     : ttgi::BlockIOMode::ColumnMajor;
 
+    // If mask is present but other is absent, create a zero splat as the
+    // default padding value (the verifier requires 'other' when 'mask' is set).
+    Value mask = op.getMask();
+    Value other = op.getOther();
+    if (mask && !other) {
+      other = createZeroSplat(builder, loc, tensorTy);
+      if (!other) {
+        LDBG("Cannot create default 'other' for masked load: " << *op);
+        return;
+      }
+    }
+
     auto blockLoadOp = ttgi::Subgroup2DBlockLoadOp::create(
         builder, loc, op.getType(), basePtr, baseWidth, baseHeight, basePitch,
-        /*offset_x=*/zero, /*offset_y=*/zero,
-        /*mask=*/op.getMask(), /*other=*/op.getOther(),
+        /*offset_x=*/zero, /*offset_y=*/zero, mask, other,
         ttgi::BlockIOModeAttr::get(builder.getContext(), memLayout));
 
     op.replaceAllUsesWith(blockLoadOp.getResult());
