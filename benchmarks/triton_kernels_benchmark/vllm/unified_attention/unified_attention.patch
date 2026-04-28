@@ -1,5 +1,5 @@
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 1774f1b30..24bf8377f 100644
+index 1774f1b30..3bd1de2b5 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -141,6 +141,8 @@ def kernel_unified_attention(
@@ -11,15 +11,7 @@ index 1774f1b30..24bf8377f 100644
      USE_PER_TOKEN_HEAD_SCALES: tl.constexpr = KV_QUANT_MODE >= 2
  
      q_block_global_idx = tl.program_id(0)
-@@ -159,6 +161,7 @@ def kernel_unified_attention(
- 
-     if q_block_local_idx * BLOCK_Q >= cur_batch_query_len:
-         return
-+    q_block_local_len = min(BLOCK_Q, cur_batch_query_len - q_block_local_idx * BLOCK_Q)
- 
-     if IS_3D:
-         tiles_per_segment = cdiv_fn(seq_len, NUM_SEGMENTS_PER_SEQ * TILE_SIZE)
-@@ -168,28 +171,30 @@ def kernel_unified_attention(
+@@ -168,28 +170,32 @@ def kernel_unified_attention(
          tiles_per_segment = 0
  
      offs_m = tl.arange(0, BLOCK_M)
@@ -39,6 +31,8 @@ index 1774f1b30..24bf8377f 100644
      query_mask_0 = tl.where(query_pos < cur_batch_query_len, 1, 0).to(tl.int1)
      query_mask_1 = tl.where(query_offset_1 < num_query_heads, 1, 0).to(tl.int1)
  
++    q_block_local_len = min(BLOCK_Q, cur_batch_query_len - q_block_local_idx * BLOCK_Q)
++
      # Q : (BLOCK_M, HEAD_SIZE_PADDED)
 -    Q = tl.load(
 -        query_ptr + query_offset,
@@ -62,16 +56,14 @@ index 1774f1b30..24bf8377f 100644
  
      block_table_offset = seq_idx * block_table_stride
  
-@@ -233,35 +238,24 @@ def kernel_unified_attention(
+@@ -233,35 +239,23 @@ def kernel_unified_attention(
          seq_offset = j * TILE_SIZE + offs_t
          tile_mask = seq_offset < max_seq_prefix_len
  
 -        physical_block_idx = tl.load(
 -            block_tables_ptr + block_table_offset + seq_offset // BLOCK_SIZE
 -        ).to(tl.int64)
-+        physical_block_idx = tl.load(block_tables_ptr + block_table_offset + j // (BLOCK_SIZE // TILE_SIZE)).to(
-+            tl.int64)
- 
+-
 -        v_offset = (
 -            physical_block_idx[:, None] * stride_v_cache_0
 -            + kv_head_idx * stride_v_cache_2
@@ -84,11 +76,13 @@ index 1774f1b30..24bf8377f 100644
 -            + offs_d[:, None] * stride_k_cache_3
 -            + (seq_offset % BLOCK_SIZE)[None, :] * stride_k_cache_1
 -        )
++        physical_block_idx = tl.load(block_tables_ptr + block_table_offset + j // (BLOCK_SIZE // TILE_SIZE)).to(
++            tl.int64)
++
 +        v_base = value_cache_ptr + physical_block_idx * stride_v_cache_0 + kv_head_idx * stride_v_cache_2
 +        v_desc = tl.make_tensor_descriptor(base=v_base, shape=(BLOCK_SIZE, HEAD_SIZE),
 +                                           strides=(stride_v_cache_1, stride_v_cache_3),
 +                                           block_shape=(TILE_SIZE, HEAD_SIZE_PADDED))
-+
 +        k_base = key_cache_ptr + physical_block_idx * stride_k_cache_0 + kv_head_idx * stride_k_cache_2
 +        k_desc = tl.make_tensor_descriptor(base=k_base, shape=(BLOCK_SIZE, HEAD_SIZE),
 +                                           strides=(stride_k_cache_1, stride_k_cache_3),
@@ -159,7 +153,7 @@ index 1774f1b30..24bf8377f 100644
          store_segm_reduce_scalars(
              segm_max_ptr,
              segm_expsum_ptr,
-@@ -372,16 +361,15 @@ def kernel_unified_attention(
+@@ -372,16 +361,14 @@ def kernel_unified_attention(
          if USE_FP8:
              acc = acc * tl.load(out_scale)
              acc = tl.clamp(acc, FP8_MIN, FP8_MAX)
@@ -173,7 +167,6 @@ index 1774f1b30..24bf8377f 100644
 -            acc,
 -            mask=dim_mask[None, :] & query_mask_0[:, None] & query_mask_1[:, None],
 -        )
-+
 +        output_offset = (cur_batch_in_all_start_index + q_block_local_idx * BLOCK_Q) * output_stride_0 + (
 +            kv_head_idx * num_queries_per_kv) * output_stride_1
 +        output_base = output_ptr + output_offset
@@ -185,7 +178,7 @@ index 1774f1b30..24bf8377f 100644
  
  
  @triton.jit
-@@ -601,28 +589,25 @@ def unified_attention(
+@@ -601,28 +588,25 @@ def unified_attention(
      elif sliding_window_val <= 0:
          chunk_lookback = -1
  
@@ -229,7 +222,7 @@ index 1774f1b30..24bf8377f 100644
  
      # The kernel signature is the same for 2D and 3D — only the launch
      # grid + a handful of constexpr toggles differ.  Per-token-head scale
-@@ -645,6 +630,31 @@ def unified_attention(
+@@ -645,6 +629,31 @@ def unified_attention(
  
      # 3D needs real segm tensors; 2D never touches them but Triton wants
      # a non-null pointer.  Reuse ``out`` as the placeholder.
