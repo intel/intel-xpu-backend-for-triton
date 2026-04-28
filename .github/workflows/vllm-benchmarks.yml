@@ -15,6 +15,10 @@ on:
         description: vLLM pin (commit hash), keep empty for default
         type: string
         default: ""
+      rebuild_benchmarks_wheel:
+        description: Build benchmarks wheel from current ref before running (use this to test changes under benchmarks/)
+        type: boolean
+        default: false
   # This workflow is also called from workflows vllm-benchmarks-*.yml.
   workflow_call:
     inputs:
@@ -29,6 +33,10 @@ on:
         description: vLLM pin (commit hash), keep empty for default
         type: string
         default: ""
+      rebuild_benchmarks_wheel:
+        description: Build benchmarks wheel from current ref before running
+        type: boolean
+        default: false
 
   schedule:
     - cron: "0 8 * * *"
@@ -42,8 +50,16 @@ env:
   HF_TOKEN: ${{ secrets.HF_TOKEN || '' }}
 
 jobs:
+  build-wheel:
+    if: ${{ inputs.rebuild_benchmarks_wheel }}
+    uses: ./.github/workflows/build-benchmarks-wheel.yml
+    with:
+      python-version: "3.12"
+
   build:
     name: vLLM benchmarks
+    needs: [build-wheel]
+    if: ${{ always() && !cancelled() && (needs.build-wheel.result == 'success' || needs.build-wheel.result == 'skipped') }}
     runs-on:
       - linux
       - ${{ inputs.runner_label || 'max1550' }}
