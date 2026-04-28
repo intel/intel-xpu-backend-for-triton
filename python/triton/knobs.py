@@ -559,7 +559,9 @@ class intel_knobs(base_knobs):
     opt_reduction_locality: env_bool = env_bool("TRITON_INTEL_OPTIMIZE_REDUCTION_LOCALITY", False)
     disable_igc_opt: env_bool = env_bool("TRITON_INTEL_DISABLE_IGC_OPT", False)
 
-    dump_spirv_kernel_args: env_opt_str = env_opt_str("TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS")
+    enable_dump_spirv_kernel_args: env_bool = env_bool("TRITON_XPU_ENABLE_DUMP_SPIRV_KERNEL_ARGS", False)
+    dump_spirv_kernel_args_dir: env_opt_str = env_opt_str("TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS_DIR")
+    print_dump_spirv_kernel_args_info: env_bool = env_bool("TRITON_XPU_PRINT_DUMP_SPIRV_KERNEL_ARGS_INFO", False)
 
     libdevice_path: env_opt_str = env_opt_str("TRITON_LIBDEVICE_PATH")
 
@@ -603,6 +605,7 @@ class proton_knobs(base_knobs):
         "TRITON_CUPTI_LIB_BLACKWELL_PATH",
         str(pathlib.Path(__file__).parent.absolute() / "backends" / "nvidia" / "lib" / "cupti-blackwell"))
     profile_buffer_size: env_int = env_int("TRITON_PROFILE_BUFFER_SIZE", 64 * 1024 * 1024)
+    profile_metric_buffer_size: env_int = env_int("TRITON_PROFILE_METRIC_BUFFER_SIZE", 64 * 1024 * 1024)
     enable_nvtx: env_bool = env_bool("TRITON_ENABLE_NVTX", True)
     # This knob is effective only on Blackwell+ GPUs.
     #

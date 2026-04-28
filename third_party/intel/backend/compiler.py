@@ -193,6 +193,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     def parse_options(self, opts) -> Any:
         args = {k: v for k, v in opts.items() if k in XPUOptions.__dataclass_fields__}
         args["allow_fp8e4nv"] = True
+        if "enable_fp_fusion" not in args:
+            args["enable_fp_fusion"] = knobs.language.default_fp_fusion
         return XPUOptions(**args)
 
     def pack_metadata(self, metadata):
@@ -316,6 +318,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttgpuir.add_materialize_block_pointer(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_optimize_dot_operands(pm)
+        intel.passes.ttgpuir.add_hoist_layout_conversions(pm, opt.grf_mode)
         intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier)
 
         if (opt.reduce_variable_liveness):
@@ -428,7 +431,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         llvm.init_targets()
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
-        intel.set_fast_math(llvm_mod)
+        intel.set_fast_math(llvm_mod, metadata['enable_fp_fusion'])
         if options.extern_libs:
             paths = [path for (name, path) in options.extern_libs]
             llvm.link_extern_libs(llvm_mod, paths)
@@ -465,6 +468,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             if options.num_warps > 32:
                 raise RuntimeError("grf_mode = 256 cannot be used with num_warps > 32")
             metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
+        elif options.grf_mode == '512':
+            if options.num_warps > 32:
+                raise RuntimeError("grf_mode = 512 cannot be used with num_warps > 32")
+            metadata["build_flags"] += " -cl-intel-512-GRF-per-thread"
         elif options.grf_mode == 'auto':
             metadata["build_flags"] += " -cl-intel-enable-auto-large-GRF-mode"
         elif options.grf_mode != 'default':

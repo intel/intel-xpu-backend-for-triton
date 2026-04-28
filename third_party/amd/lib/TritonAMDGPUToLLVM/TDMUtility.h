@@ -37,7 +37,7 @@ TDMDescriptor createTDMDescriptor(RewriterBase &rewriter, Location loc,
                                   unsigned padInterval, unsigned padAmount,
                                   SmallVector<Value> tensorShape,
                                   SmallVector<Value> tensorStride, Value srcPtr,
-                                  bool isRowMajor, Attribute sharedEncoding);
+                                  Attribute sharedEncoding);
 
 // Update the global memory address with offset, and fill the shared memory
 // address and pred in a given TDM descriptor for regular load/store (1D-5D).
@@ -53,7 +53,7 @@ void fillTDMDescriptor(
     SmallVector<Value> offset, ArrayRef<Value> dstPtrs, Value pred,
     Value multicastMask, Value barrierPtr,
     const triton::LinearLayout &sharedLayout, Value ctaId, bool isStore,
-    bool isRowMajor, ArrayRef<unsigned> warpsPerCTA);
+    ArrayRef<unsigned> warpsPerCTA);
 
 // Fill TDM descriptor for gather/scatter operations (2D only).
 // Gather reads from non-contiguous rows in global memory to LDS.
@@ -71,7 +71,7 @@ void fillTDMDescriptorForGatherScatter(
     SmallVector<Value> &group2, SmallVector<Value> &group3, Value ldsRowOffset,
     Value globalColOffset, Value ldsPtr, Value pred, Value barrierPtr,
     const triton::LinearLayout &cgaLayout, Value ctaId,
-    ArrayRef<Value> rowIndices, bool use32BitIndices);
+    ArrayRef<Value> rowIndices, bool use32BitIndices, bool isGather);
 
 // Emit a TDM load or store for regular (non-scatter) contiguous transfers.
 //
@@ -94,7 +94,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       Value pred, Value multicastMask, Type elementType,
                       Value barrierPtr, bool isLoad,
                       const triton::LinearLayout &sharedLayout,
-                      Attribute encoding, Value ctaId, bool isRowMajor);
+                      Attribute encoding, Value ctaId);
 
 // Returns (warpsPerCTA, numTDMInstructions) for a given shared encoding.
 // For PartitionedSharedEncodingAttr, computes a partition-aligned warp
@@ -119,9 +119,11 @@ size_t getTDMGatherScatterInstrinsicCount(size_t numIndices,
 // scatter)
 // - rowIndices: which global rows to read from (gather) or write to (scatter)
 // - colOffset: starting column offset in global memory
-// - use32BitIndices: true for 32-bit indices (max 8 rows/instr), false for
-//   16-bit (max 16 rows/instr)
 // - isGather: true for gather (global->LDS), false for scatter (LDS->global)
+// - numWarps: number of warps in the CTA (used for warp predication)
+// - indicesType: the RankedTensorType of the index tensor. Used to derive
+//   whether indices are 32-bit or 16-bit, detect redundant warps (via
+//   getFreeVariableMasks), and compute per-warp LDS offsets.
 // Multiple TDM instructions are issued automatically if more rows are needed.
 void emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
                           const LLVMTypeConverter *typeConverter,
@@ -131,7 +133,8 @@ void emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
                           Value barrierPtr,
                           const triton::LinearLayout &cgaLayout, Value ctaId,
                           ArrayRef<Value> rowIndices, Value colOffset,
-                          bool use32BitIndices, bool isGather);
+                          bool isGather, int numWarps,
+                          RankedTensorType indicesType);
 
 // Emit prefetches for a TDM tile to make it available for an actual load in
 // the future. Data is prefetched cooperatively across all CTAs, warps, and
