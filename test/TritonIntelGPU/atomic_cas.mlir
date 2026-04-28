@@ -8,7 +8,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // CHECK-DAG: llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
 
   // CHECK-LABEL: llvm.func spir_kernelcc @test_atomic_cas_i32_global
-  // CHECK-SAME: (%arg0: !llvm.ptr<1>, %arg1: i32, %arg2: i32, %arg3: !llvm.ptr<1>, %arg4: !llvm.ptr<1>) -> i32
+  // CHECK-SAME: (%arg0: !llvm.ptr<1> {tt.pointee_type = i32}, %arg1: i32, %arg2: i32, %arg3: !llvm.ptr<1>, %arg4: !llvm.ptr<1>) -> i32
   // CHECK-SAME: attributes {intel_reqd_sub_group_size = 32 : i32, reqd_work_group_size = array<i32: 32, 1, 1>}
   tt.func @test_atomic_cas_i32_global(%ptr: !tt.ptr<i32, 1>, %cmp: i32, %val: i32) -> i32 {
 
@@ -47,7 +47,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // CHECK-DAG: llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
 
   // CHECK-LABEL: llvm.func spir_kernelcc @test_atomic_cas_i64_global
-  // CHECK-SAME: (%arg0: !llvm.ptr<1>, %arg1: i64, %arg2: i64, %arg3: !llvm.ptr<1>, %arg4: !llvm.ptr<1>) -> i64
+  // CHECK-SAME: (%arg0: !llvm.ptr<1> {tt.pointee_type = i64}, %arg1: i64, %arg2: i64, %arg3: !llvm.ptr<1>, %arg4: !llvm.ptr<1>) -> i64
   // CHECK-SAME: attributes {intel_reqd_sub_group_size = 32 : i32, reqd_work_group_size = array<i32: 32, 1, 1>}
   tt.func @test_atomic_cas_i64_global(%ptr: !tt.ptr<i64, 1>, %cmp: i64, %val: i64) -> i64 {
 
@@ -135,7 +135,7 @@ module attributes {ttig.support_16bit_atomics = true, "ttg.num-ctas" = 1 : i32, 
   // CHECK-DAG: llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
 
   // CHECK-LABEL: llvm.func spir_kernelcc @test_atomic_cas_i16_hw_support
-  // CHECK-SAME: (%arg0: !llvm.ptr<1>, %arg1: i16, %arg2: i16, %arg3: !llvm.ptr<1>, %arg4: !llvm.ptr<1>) -> i16
+  // CHECK-SAME: (%arg0: !llvm.ptr<1> {tt.pointee_type = i16}, %arg1: i16, %arg2: i16, %arg3: !llvm.ptr<1>, %arg4: !llvm.ptr<1>) -> i16
   // CHECK-SAME: attributes {intel_reqd_sub_group_size = 32 : i32, reqd_work_group_size = array<i32: 32, 1, 1>}
   tt.func @test_atomic_cas_i16_hw_support(%ptr: !tt.ptr<i16, 1>, %cmp: i16, %val: i16) -> i16 {
 
@@ -207,7 +207,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   // CHECK-DAG: llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
 
   // CHECK-LABEL: llvm.func spir_kernelcc @test_atomic_cas_i16_emulated
-  // CHECK-SAME: (%arg0: !llvm.ptr<1>, %arg1: i16, %arg2: i16, %arg3: !llvm.ptr<1>, %arg4: !llvm.ptr<1>) -> i16
+  // CHECK-SAME: (%arg0: !llvm.ptr<1> {tt.pointee_type = i16}, %arg1: i16, %arg2: i16, %arg3: !llvm.ptr<1>, %arg4: !llvm.ptr<1>) -> i16
   tt.func @test_atomic_cas_i16_emulated(%ptr: !tt.ptr<i16, 1>, %cmp: i16, %val: i16) -> i16 {
 
     // Same emulation pattern as hardware support version but without hardware optimization
@@ -231,7 +231,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   // CHECK-DAG: llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
 
   // CHECK-LABEL: llvm.func spir_kernelcc @test_atomic_cas_f16_emulated
-  // CHECK-SAME: (%arg0: !llvm.ptr<1>, %arg1: f16, %arg2: f16, %arg3: !llvm.ptr<1>, %arg4: !llvm.ptr<1>) -> f16
+  // CHECK-SAME: (%arg0: !llvm.ptr<1> {tt.pointee_type = f16}, %arg1: f16, %arg2: f16, %arg3: !llvm.ptr<1>, %arg4: !llvm.ptr<1>) -> f16
   tt.func @test_atomic_cas_f16_emulated(%ptr: !tt.ptr<f16, 1>, %cmp: f16, %val: f16) -> f16 {
 
     // CHECK: %[[I16_ZERO:.*]] = llvm.mlir.constant(0 : i16) : i16
@@ -269,7 +269,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   // CHECK-DAG: llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
 
   // CHECK-LABEL: llvm.func spir_kernelcc @test_atomic_cas_bf16_emulated
-  // CHECK-SAME: (%arg0: !llvm.ptr<1>, %arg1: bf16, %arg2: bf16, %arg3: !llvm.ptr<1>, %arg4: !llvm.ptr<1>) -> bf16
+  // CHECK-SAME: (%arg0: !llvm.ptr<1> {tt.pointee_type = bf16}, %arg1: bf16, %arg2: bf16, %arg3: !llvm.ptr<1>, %arg4: !llvm.ptr<1>) -> bf16
   tt.func @test_atomic_cas_bf16_emulated(%ptr: !tt.ptr<bf16, 1>, %cmp: bf16, %val: bf16) -> bf16 {
 
     // CHECK: %[[I16_ZERO:.*]] = llvm.mlir.constant(0 : i16) : i16
