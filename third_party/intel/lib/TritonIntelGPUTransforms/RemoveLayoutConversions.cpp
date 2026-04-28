@@ -1748,6 +1748,29 @@ void LayoutRematerialization::hoistConvertDotOperand(
   if (result.failed())
     return;
 
+  // Bail if any leaf load has a different element bitwidth than the convert
+  // target. The target DotOperandEncodingAttr's kWidth / opsPerChannel is
+  // parameterized for the dot-operand element width; propagating it back
+  // across a width-changing op (e.g. tt.fp_to_fp fp8->fp16, arith.extf)
+  // produces a convert_layout on a narrower element with a layout that does
+  // not match any efficient 2D block I/O or sub-group shuffle, forcing a
+  // sub-group-transpose-through-SLM fallback and disabling block I/O on the
+  // load. See issue #6737.
+  unsigned targetBitwidth = targetType.getElementType().getIntOrFloatBitWidth();
+  for (Value v : slice) {
+    Operation *def = v.getDefiningOp();
+    if (!def || !isa<tt::LoadOp, tt::DescriptorLoadOp>(def))
+      continue;
+    auto loadTy = cast<RankedTensorType>(v.getType());
+    if (loadTy.getElementType().getIntOrFloatBitWidth() != targetBitwidth) {
+      LDBG("  Leaf load element bitwidth ("
+           << loadTy.getElementType().getIntOrFloatBitWidth()
+           << ") differs from convert target bitwidth (" << targetBitwidth
+           << "); skipping hoist to avoid degrading dot-operand encoding");
+      return;
+    }
+  }
+
   IRMapping mapping;
   OpBuilder builder(convertOp.getContext());
   SetVector<Value> innerSlice;
