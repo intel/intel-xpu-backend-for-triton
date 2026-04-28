@@ -131,8 +131,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // -----
 
 // COM: Test h — atomic kernel: function contains tt.atomic_rmw on one arg;
-// COM: a separate arg is only loaded. Conservative rule: any atomics in the
-// COM: function poison loaded args, so the pure load must NOT get .cg.
+// COM: a separate arg is only loaded. Cost-model rule: atomics signal complex
+// COM: kernels where L1 reuse may matter, so all loads keep default.
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: @atomic_kernel_load_unchanged
@@ -239,10 +239,10 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // -----
 
 // COM: Test m — forward-flow filter: X is a read-only arg, but its loaded
-// COM: value is combined with DW (an RW arg) and stored back to DW. Even
-// COM: though X itself is safe in isolation, the loaded data participates in
-// COM: a cross-workgroup accumulation on DW. Filter 4 must block .cg on the
-// COM: load of X. (Load of DW is also blocked, but by the RW-arg filter.)
+// COM: value is combined with DW (an RW arg) and stored back to DW. The
+// COM: forward-flow filter blocks .cg on the load of X to preserve L1
+// COM: locality for the accumulation pattern. (Load of DW is also blocked,
+// COM: but by the RW-arg filter.)
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: @value_flows_to_rw_store
@@ -267,12 +267,11 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // COM: Test n — unresolved producer: the load pointer comes from an op the
 // COM: pass does not whitelist (arith.select on pointer tensors). Root
-// COM: resolution fails, so the load is conservatively treated as unsafe and
-// COM: must NOT get .cg.
+// COM: resolution fails, so the load is conservatively skipped.
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // CHECK-LABEL: @unresolved_producer_unsafe
-  tt.func public @unresolved_producer_unsafe(%a: tensor<32x!tt.ptr<f32>>,
+  // CHECK-LABEL: @unresolved_producer_skipped
+  tt.func public @unresolved_producer_skipped(%a: tensor<32x!tt.ptr<f32>>,
                                              %b: tensor<32x!tt.ptr<f32>>,
                                              %cond: i1) -> tensor<32xf32> {
     %p = arith.select %cond, %a, %b : tensor<32x!tt.ptr<f32>>
@@ -285,14 +284,14 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Test o — unresolved-store broad poison: a store's pointer cannot be
+// COM: Test o — unresolved-store exclusion: a store's pointer cannot be
 // COM: traced back to a known root (arith.select). Because the pass cannot
-// COM: prove which args are written, it poisons every pointer-typed entry-block
-// COM: arg, so the load of X (otherwise safe) must NOT get .cg.
+// COM: prove which args are written, it excludes every pointer-typed
+// COM: entry-block arg, so the load of X (otherwise eligible) must NOT get .cg.
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // CHECK-LABEL: @unresolved_store_poisons_loads
-  tt.func public @unresolved_store_poisons_loads(%X: tensor<32x!tt.ptr<f32>>,
+  // CHECK-LABEL: @unresolved_store_excludes_loads
+  tt.func public @unresolved_store_excludes_loads(%X: tensor<32x!tt.ptr<f32>>,
                                                  %a: tensor<32x!tt.ptr<f32>>,
                                                  %b: tensor<32x!tt.ptr<f32>>,
                                                  %cond: i1,
@@ -308,9 +307,9 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Test p — forward-flow through scf.if: loaded value from a safe arg
-// COM: passes through an scf.if result and reaches a store on an unsafe (RW)
-// COM: arg. The filter must follow yields across scf.if, not just scf.for.
+// COM: Test p — forward-flow through scf.if: loaded value from a read-only
+// COM: arg passes through an scf.if result and reaches a store on an excluded
+// COM: (RW) arg. The filter must follow yields across scf.if, not just scf.for.
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: @value_flows_through_scf_if
@@ -329,7 +328,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     }
     %sp = tt.addptr %DW, %offs : tensor<32x!tt.ptr<f32>>, tensor<32xi32>
     tt.store %sp, %res : tensor<32x!tt.ptr<f32>>
-    // second store on DW makes DW a RW arg so the above store is on an unsafe
+    // second store on DW makes DW a RW arg so the above store is on an excluded
     // ptr; without this the DW arg would only be stored (write-only), not RW.
     %lp = tt.addptr %DW, %offs : tensor<32x!tt.ptr<f32>>, tensor<32xi32>
     %y = tt.load %lp : tensor<32x!tt.ptr<f32>>
@@ -341,9 +340,9 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Test q — atomic_cas in the function. The atomic-poison filter must
-// COM: treat atomic_cas the same as atomic_rmw: every pointer arg becomes
-// COM: unsafe, so the load of a read-only arg X does NOT get .cg.
+// COM: Test q — atomic_cas in the function. The atomic cost-model filter
+// COM: treats atomic_cas the same as atomic_rmw: every pointer arg is
+// COM: excluded, so the load of a read-only arg X does NOT get .cg.
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: @atomic_cas_kernel_load_unchanged
@@ -389,7 +388,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     // The while's 2nd result carries %x into this store on the RW arg DW.
     %sp = tt.addptr %DW, %offs : tensor<32x!tt.ptr<f32>>, tensor<32xi32>
     tt.store %sp, %res#1 : tensor<32x!tt.ptr<f32>>
-    // Second load/store on DW makes DW an RW arg for the unsafe-arg analysis.
+    // Second load/store on DW makes DW an RW arg for the skip-arg analysis.
     %lp = tt.addptr %DW, %offs : tensor<32x!tt.ptr<f32>>, tensor<32xi32>
     %y = tt.load %lp : tensor<32x!tt.ptr<f32>>
     %sp2 = tt.addptr %DW, %offs : tensor<32x!tt.ptr<f32>>, tensor<32xi32>

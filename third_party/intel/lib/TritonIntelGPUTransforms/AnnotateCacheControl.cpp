@@ -106,17 +106,17 @@ static bool flowsToDot(Value root) {
   return false;
 }
 
-// Tracks kernel-argument pointers that must not be annotated `.cg` to preserve
-// cross-workgroup coherency.
-struct FuncUnsafeInfo {
-  llvm::DenseSet<BlockArgument> unsafeArgs;
+// Tracks kernel-argument pointers where `.cg` annotation is suppressed to
+// preserve L1 locality for loads that may benefit from L1 reuse.
+struct FuncSkipInfo {
+  llvm::DenseSet<BlockArgument> skipArgs;
   bool hasAtomic = false;
 };
 
 // Walks the pointer SSA chain backward and collects all entry-block
 // BlockArguments of `func` that `ptr` may resolve to. Returns true iff every
 // path in the SSA chain bottomed out at a known handled op. Returns false if
-// any path hit an unknown producer — the caller must treat that as unsafe.
+// any path hit an unknown producer — the caller should skip annotation.
 static bool collectRoots(Value ptr, tt::FuncOp func,
                          llvm::SmallVectorImpl<BlockArgument> &roots,
                          llvm::DenseSet<Value> &visited) {
@@ -205,32 +205,32 @@ static bool collectRoots(Value ptr, tt::FuncOp func,
   return false;
 }
 
-// A load is unsafe to annotate `.cg` if (a) its pointer SSA chain could not be
-// fully resolved to entry-block function arguments, OR (b) any resolved root is
-// in `unsafeArgs`. "Unknown producer => unsafe" is the conservative default.
-static bool isUnsafePtr(Value ptr, tt::FuncOp func,
-                        const llvm::DenseSet<BlockArgument> &unsafeArgs) {
+// Returns true if `.cg` annotation should be skipped for a load at `ptr`:
+// (a) the pointer SSA chain could not be fully resolved to entry-block function
+// arguments, OR (b) any resolved root is in `skipArgs`.
+static bool shouldSkipLoad(Value ptr, tt::FuncOp func,
+                           const llvm::DenseSet<BlockArgument> &skipArgs) {
   llvm::SmallVector<BlockArgument, 4> roots;
   llvm::DenseSet<Value> visited;
   bool resolved = collectRoots(ptr, func, roots, visited);
   if (!resolved)
     return true;
   for (BlockArgument arg : roots) {
-    if (unsafeArgs.contains(arg))
+    if (skipArgs.contains(arg))
       return true;
   }
   return false;
 }
 
 // Returns true if any transitive forward user of `root` is a `tt.store` whose
-// destination pointer resolves to an arg in `unsafeArgs`. This catches the
-// cross-kernel accumulation pattern where the loaded value is reduced into an
-// unsafe accumulator buffer even though the load's own pointer is safe.
+// destination pointer resolves to an arg in `skipArgs`. This catches the
+// pattern where the loaded value is reduced into a read-write accumulator
+// buffer even though the load's own pointer is read-only.
 // Walks through scf.for/scf.if/scf.while.
 static bool
-valueFlowsToUnsafeStore(Value root, tt::FuncOp func,
-                        const llvm::DenseSet<BlockArgument> &unsafeArgs) {
-  if (unsafeArgs.empty())
+valueFlowsToSkippedStore(Value root, tt::FuncOp func,
+                         const llvm::DenseSet<BlockArgument> &skipArgs) {
+  if (skipArgs.empty())
     return false;
 
   llvm::SetVector<Value> worklist;
@@ -246,7 +246,7 @@ valueFlowsToUnsafeStore(Value root, tt::FuncOp func,
         // pointer or mask operand, it's irrelevant to where the loaded *data*
         // ends up.
         if (use.get() == storeOp.getValue() &&
-            isUnsafePtr(storeOp.getPtr(), func, unsafeArgs))
+            shouldSkipLoad(storeOp.getPtr(), func, skipArgs))
           return true;
         continue;
       }
@@ -263,18 +263,21 @@ valueFlowsToUnsafeStore(Value root, tt::FuncOp func,
   return false;
 }
 
-// Scans `func` once to determine which entry-block pointer arguments are
-// unsafe to annotate `.cg`:
+// Scans `func` once to determine which entry-block pointer arguments should
+// have `.cg` annotation suppressed. `.cg` (L1UC_L3C) on loads is always
+// coherence-safe because it reads from the shared L3 rather than the
+// incoherent per-core L1. These filters preserve L1 locality for loads that
+// may benefit from L1 reuse (e.g. matmul operand loads in complex kernels):
 //   - read-write args (loaded AND stored within the same function), OR
 //   - if the function contains any atomic op, every pointer-typed entry-block
-//     arg is marked unsafe (atomics imply cross-workgroup synchronized
-//     communication and the synchronized buffer may be any pointer arg, not
-//     only the ones we observed loaded), OR
+//     arg is excluded (atomic kernels often mix matmul operand loads with
+//     streaming loads; excluding all args avoids regressing matmul operand
+//     L1 reuse), OR
 //   - if any store's pointer could not be resolved to known roots (so we
 //     cannot tell which args are actually written), treat every pointer-typed
 //     entry-block arg as potentially read-write.
-static FuncUnsafeInfo computeUnsafeArgs(tt::FuncOp func) {
-  FuncUnsafeInfo info;
+static FuncSkipInfo computeSkipArgs(tt::FuncOp func) {
+  FuncSkipInfo info;
   llvm::DenseSet<BlockArgument> loadedArgs;
   llvm::DenseSet<BlockArgument> storedArgs;
   bool hasUnresolvedStore = false;
@@ -305,24 +308,24 @@ static FuncUnsafeInfo computeUnsafeArgs(tt::FuncOp func) {
     }
   });
 
-  // Read-write args are always unsafe.
+  // Read-write args are always excluded.
   for (BlockArgument arg : loadedArgs) {
     if (storedArgs.contains(arg))
-      info.unsafeArgs.insert(arg);
+      info.skipArgs.insert(arg);
   }
-  // If the function has any atomic, poison every pointer-typed entry-block
-  // arg — the kernel is using cross-workgroup synchronization and the
-  // synchronized buffer may be any pointer arg, not only ones we saw loaded.
+  // If the function has any atomic, exclude every pointer-typed entry-block
+  // arg — atomic kernels often mix matmul operand loads with streaming loads
+  // and we cannot distinguish them; excluding all args preserves L1 reuse.
   // Likewise, if any store has an unresolved pointer, we can't prove which
   // args are written; treat every pointer arg as potentially RW.
   if (info.hasAtomic || hasUnresolvedStore) {
     for (BlockArgument arg : func.getBody().front().getArguments()) {
       Type argTy = arg.getType();
       if (isa<tt::PointerType>(argTy))
-        info.unsafeArgs.insert(arg);
+        info.skipArgs.insert(arg);
       else if (auto tensorTy = dyn_cast<RankedTensorType>(argTy)) {
         if (isa<tt::PointerType>(tensorTy.getElementType()))
-          info.unsafeArgs.insert(arg);
+          info.skipArgs.insert(arg);
       }
     }
   }
@@ -344,7 +347,7 @@ struct AnnotateCacheControlPass
       if (func.getBody().empty())
         return;
 
-      FuncUnsafeInfo info = computeUnsafeArgs(func);
+      FuncSkipInfo info = computeSkipArgs(func);
 
       func.walk([&](tt::LoadOp loadOp) {
         if (loadOp.getCache() != tt::CacheModifier::NONE)
@@ -353,9 +356,9 @@ struct AnnotateCacheControlPass
           return;
         if (flowsToDot(loadOp.getResult()))
           return;
-        if (isUnsafePtr(loadOp.getPtr(), func, info.unsafeArgs))
+        if (shouldSkipLoad(loadOp.getPtr(), func, info.skipArgs))
           return;
-        if (valueFlowsToUnsafeStore(loadOp.getResult(), func, info.unsafeArgs))
+        if (valueFlowsToSkippedStore(loadOp.getResult(), func, info.skipArgs))
           return;
         loadOp.setCacheAttr(tt::CacheModifierAttr::get(loadOp.getContext(),
                                                        tt::CacheModifier::CG));
@@ -363,11 +366,11 @@ struct AnnotateCacheControlPass
       });
     });
 
-    // Note: stores are intentionally NOT annotated. Annotating stores with .cg
+    // Note: stores are intentionally NOT annotated. Unlike loads, store `.cg`
     // (L1-uncached) on cross-kernel producer/consumer buffers (e.g. layer-norm
-    // backward partial-sum scratch) introduces data races. Loads with .cg are
-    // hints only and safe when the pointer does not alias a synchronized
-    // cross-workgroup buffer (see computeUnsafeArgs).
+    // backward partial-sum scratch) introduces data races — this is a true
+    // coherence concern. Load `.cg` is always coherence-safe; the load filters
+    // above are cost-model heuristics to preserve L1 locality.
 
     if (!changed)
       markAllAnalysesPreserved();
