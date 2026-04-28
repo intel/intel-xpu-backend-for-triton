@@ -171,11 +171,15 @@ SmallVector<unsigned, 2> get2DPrefetchShapePerWarp(RankedTensorType tensorTy) {
 // Contains some helper functions for both Load and Store conversions.
 struct LoadStoreConversionBase {
   explicit LoadStoreConversionBase(
-      const triton::intel::TargetInfo &targetInfo,
+      ModuleOp mod, const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
       triton::intel::ModuleStrideAnalysis &strideAnalysis)
       : targetInfo(targetInfo), axisAnalysisPass(axisAnalysisPass),
-        strideAnalysis(strideAnalysis) {}
+        strideAnalysis(strideAnalysis),
+        support256bLoadStore(
+            mod &&
+            mod->hasAttr(
+                TritonIntelGPUDialect::getSupport256bLoadStoreAttrName())) {}
 
   int getStride(Value ptr, unsigned dim) const {
     triton::intel::StrideInfo *strideInfo = strideAnalysis.getStrideInfo(ptr);
@@ -198,13 +202,9 @@ struct LoadStoreConversionBase {
   }
 
   /// Maximum number of elements per-thread vector load/store. 128 bits by
-  /// default; 256 bits when `mod` carries `ttig.support_256b_load_store`.
-  static unsigned getMaxVecWidth(unsigned pointeeBitWidth, ModuleOp mod) {
-    unsigned maxBits =
-        (mod &&
-         mod->hasAttr(TritonIntelGPUDialect::getSupport256bLoadStoreAttrName()))
-            ? 256u
-            : 128u;
+  /// default; 256 bits when the module carries `ttig.support_256b_load_store`.
+  unsigned getMaxVecWidth(unsigned pointeeBitWidth) const {
+    unsigned maxBits = support256bLoadStore ? 256u : 128u;
     return std::max(1u, maxBits / std::max(8u, pointeeBitWidth));
   }
 
@@ -214,8 +214,7 @@ struct LoadStoreConversionBase {
 
     unsigned contiguity = getContiguity(ptr);
     unsigned pointeeBitWidth = triton::getPointeeBitWidth(ptr.getType());
-    auto mod = ptr.getParentRegion()->getParentOfType<ModuleOp>();
-    return std::min<unsigned>(getMaxVecWidth(pointeeBitWidth, mod), contiguity);
+    return std::min<unsigned>(getMaxVecWidth(pointeeBitWidth), contiguity);
   }
 
   unsigned getMaskAlignment(Value mask) const {
@@ -261,8 +260,7 @@ struct LoadStoreConversionBase {
       return 1; // Stride is not 1 on this dimension
 
     unsigned pointeeBitWidth = valueElemTy.getIntOrFloatBitWidth();
-    auto mod = desc.getParentRegion()->getParentOfType<ModuleOp>();
-    unsigned maxVec = getMaxVecWidth(pointeeBitWidth, mod);
+    unsigned maxVec = getMaxVecWidth(pointeeBitWidth);
     unsigned threadContig = contigPerThread[order[0]];
     // Note: descContiguity and threadContig refer to the same logical dimension
     // but are indexed in different coordinate spaces. descContiguity uses
@@ -562,14 +560,16 @@ protected:
   const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass;
   triton::intel::ModuleStrideAnalysis &strideAnalysis;
   const triton::intel::TargetInfo &targetInfo;
+  bool support256bLoadStore;
 };
 
 struct BlockIOConversionBase : public LoadStoreConversionBase {
   explicit BlockIOConversionBase(
-      const triton::intel::TargetInfo &targetInfo,
+      ModuleOp mod, const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
       triton::intel::ModuleStrideAnalysis &strideAnalysis)
-      : LoadStoreConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
+      : LoadStoreConversionBase(mod, targetInfo, axisAnalysisPass,
+                                strideAnalysis) {}
 
   // Determine whether the given operation can be lowered to using block IO
   // instructions.
@@ -1638,13 +1638,15 @@ struct PrefetchOpConversion
       triton::gpu::intel::PrefetchOp>::ConvertTritonGPUOpToLLVMPattern;
 
   PrefetchOpConversion(
-      LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
+      LLVMTypeConverter &converter, ModuleOp mod,
+      const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
       triton::intel::ModuleStrideAnalysis &strideAnalysis,
       PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::gpu::intel::PrefetchOp>(
             converter, benefit),
-        BlockIOConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
+        BlockIOConversionBase(mod, targetInfo, axisAnalysisPass,
+                              strideAnalysis) {}
 
   LogicalResult
   matchAndRewrite(triton::gpu::intel::PrefetchOp op, OpAdaptor adaptor,
@@ -1906,13 +1908,15 @@ struct DescriptorPrefetchOpConversion
       ConvertTritonGPUOpToLLVMPattern;
 
   DescriptorPrefetchOpConversion(
-      LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
+      LLVMTypeConverter &converter, ModuleOp mod,
+      const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
       triton::intel::ModuleStrideAnalysis &strideAnalysis,
       PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<
             triton::gpu::intel::DescriptorPrefetchOp>(converter, benefit),
-        BlockIOConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
+        BlockIOConversionBase(mod, targetInfo, axisAnalysisPass,
+                              strideAnalysis) {}
 
   LogicalResult
   matchAndRewrite(triton::gpu::intel::DescriptorPrefetchOp op,
@@ -2031,12 +2035,14 @@ struct LoadOpToBlockIOConversion
   static constexpr unsigned MIN_BASE_WIDTH_BYTES = 64;
 
   LoadOpToBlockIOConversion(
-      LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
+      LLVMTypeConverter &converter, ModuleOp mod,
+      const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
       triton::intel::ModuleStrideAnalysis &strideAnalysis,
       PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>(converter, benefit),
-        BlockIOConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
+        BlockIOConversionBase(mod, targetInfo, axisAnalysisPass,
+                              strideAnalysis) {}
 
 public:
   LogicalResult
@@ -2400,13 +2406,15 @@ struct DescriptorLoadOpToBlockIOConversion
       triton::DescriptorLoadOp>::ConvertTritonGPUOpToLLVMPattern;
 
   DescriptorLoadOpToBlockIOConversion(
-      LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
+      LLVMTypeConverter &converter, ModuleOp mod,
+      const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
       triton::intel::ModuleStrideAnalysis &strideAnalysis,
       PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::DescriptorLoadOp>(converter,
                                                                   benefit),
-        BlockIOConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
+        BlockIOConversionBase(mod, targetInfo, axisAnalysisPass,
+                              strideAnalysis) {}
 
   LogicalResult
   matchAndRewrite(triton::DescriptorLoadOp op, OpAdaptor adaptor,
@@ -2743,12 +2751,14 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
   using ConvertOpToLLVMPattern<triton::LoadOp>::ConvertOpToLLVMPattern;
 
   LoadOpConversion(
-      LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
+      LLVMTypeConverter &converter, ModuleOp mod,
+      const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
       triton::intel::ModuleStrideAnalysis &strideAnalysis,
       PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::LoadOp>(converter, benefit),
-        LoadStoreConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
+        LoadStoreConversionBase(mod, targetInfo, axisAnalysisPass,
+                                strideAnalysis) {}
 
   LogicalResult
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
@@ -2940,12 +2950,14 @@ struct DescriptorLoadOpConversion
       triton::DescriptorLoadOp>::ConvertOpToLLVMPattern;
 
   DescriptorLoadOpConversion(
-      LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
+      LLVMTypeConverter &converter, ModuleOp mod,
+      const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
       triton::intel::ModuleStrideAnalysis &strideAnalysis,
       PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::DescriptorLoadOp>(converter, benefit),
-        LoadStoreConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
+        LoadStoreConversionBase(mod, targetInfo, axisAnalysisPass,
+                                strideAnalysis) {}
 
   LogicalResult
   matchAndRewrite(triton::DescriptorLoadOp op, OpAdaptor adaptor,
@@ -3162,12 +3174,14 @@ struct DescriptorStoreOpConversion
       triton::DescriptorStoreOp>::ConvertOpToLLVMPattern;
 
   DescriptorStoreOpConversion(
-      LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
+      LLVMTypeConverter &converter, ModuleOp mod,
+      const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
       triton::intel::ModuleStrideAnalysis &strideAnalysis,
       PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::DescriptorStoreOp>(converter, benefit),
-        LoadStoreConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
+        LoadStoreConversionBase(mod, targetInfo, axisAnalysisPass,
+                                strideAnalysis) {}
 
   LogicalResult
   matchAndRewrite(triton::DescriptorStoreOp op, OpAdaptor adaptor,
@@ -3328,13 +3342,15 @@ struct DescriptorStoreOpToBlockIOConversion
       triton::DescriptorStoreOp>::ConvertTritonGPUOpToLLVMPattern;
 
   DescriptorStoreOpToBlockIOConversion(
-      LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
+      LLVMTypeConverter &converter, ModuleOp mod,
+      const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
       triton::intel::ModuleStrideAnalysis &strideAnalysis,
       PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::DescriptorStoreOp>(converter,
                                                                    benefit),
-        BlockIOConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
+        BlockIOConversionBase(mod, targetInfo, axisAnalysisPass,
+                              strideAnalysis) {}
 
   LogicalResult
   matchAndRewrite(triton::DescriptorStoreOp op, OpAdaptor adaptor,
@@ -3562,12 +3578,14 @@ struct StoreOpToBlockIOConversion
       triton::StoreOp>::ConvertTritonGPUOpToLLVMPattern;
 
   StoreOpToBlockIOConversion(
-      LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
+      LLVMTypeConverter &converter, ModuleOp mod,
+      const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
       triton::intel::ModuleStrideAnalysis &strideAnalysis,
       PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::StoreOp>(converter, benefit),
-        BlockIOConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
+        BlockIOConversionBase(mod, targetInfo, axisAnalysisPass,
+                              strideAnalysis) {}
 
   LogicalResult
   matchAndRewrite(triton::StoreOp op, OpAdaptor adaptor,
@@ -3834,12 +3852,14 @@ struct StoreOpConversion
       triton::StoreOp>::ConvertTritonGPUOpToLLVMPattern;
 
   StoreOpConversion(
-      LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
+      LLVMTypeConverter &converter, ModuleOp mod,
+      const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
       triton::intel::ModuleStrideAnalysis &strideAnalysis,
       PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::StoreOp>(converter, benefit),
-        LoadStoreConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
+        LoadStoreConversionBase(mod, targetInfo, axisAnalysisPass,
+                                strideAnalysis) {}
 
   LogicalResult
   matchAndRewrite(triton::StoreOp op, OpAdaptor adaptor,
@@ -3980,13 +4000,15 @@ struct AtomicCASOpConversion
       triton::AtomicCASOp>::ConvertTritonGPUOpToLLVMPattern;
 
   AtomicCASOpConversion(
-      LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
+      LLVMTypeConverter &converter, ModuleOp mod,
+      const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
       triton::intel::ModuleStrideAnalysis &strideAnalysis,
       PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::AtomicCASOp>(converter,
                                                              benefit),
-        LoadStoreConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
+        LoadStoreConversionBase(mod, targetInfo, axisAnalysisPass,
+                                strideAnalysis) {}
 
   LogicalResult
   matchAndRewrite(triton::AtomicCASOp op, OpAdaptor adaptor,
@@ -4178,13 +4200,15 @@ struct AtomicRMWOpConversion
       triton::AtomicRMWOp>::ConvertTritonGPUOpToLLVMPattern;
 
   AtomicRMWOpConversion(
-      LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
+      LLVMTypeConverter &converter, ModuleOp mod,
+      const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
       triton::intel::ModuleStrideAnalysis &strideAnalysis,
       PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::AtomicRMWOp>(converter,
                                                              benefit),
-        LoadStoreConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
+        LoadStoreConversionBase(mod, targetInfo, axisAnalysisPass,
+                                strideAnalysis) {}
 
   LogicalResult
   matchAndRewrite(triton::AtomicRMWOp op, OpAdaptor adaptor,
@@ -4434,20 +4458,21 @@ struct AtomicRMWOpConversion
 } // namespace
 
 void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
-    LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
-    RewritePatternSet &patterns,
+    LLVMTypeConverter &typeConverter, ModuleOp mod,
+    const TargetInfo &targetInfo, RewritePatternSet &patterns,
     const intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
     intel::ModuleStrideAnalysis &strideAnalysis, PatternBenefit benefit) {
 
   patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
                DescriptorLoadOpConversion, StoreOpConversion,
                DescriptorStoreOpConversion, PrefetchOpConversion,
-               DescriptorPrefetchOpConversion>(
-      typeConverter, targetInfo, axisInfoAnalysis, strideAnalysis, benefit);
+               DescriptorPrefetchOpConversion>(typeConverter, mod, targetInfo,
+                                               axisInfoAnalysis, strideAnalysis,
+                                               benefit);
   // BlockIO is more efficient than gather load or scatter store.
   patterns.add<LoadOpToBlockIOConversion, StoreOpToBlockIOConversion,
                DescriptorLoadOpToBlockIOConversion,
                DescriptorStoreOpToBlockIOConversion>(
-      typeConverter, targetInfo, axisInfoAnalysis, strideAnalysis,
+      typeConverter, mod, targetInfo, axisInfoAnalysis, strideAnalysis,
       benefit.getBenefit() + 2);
 }

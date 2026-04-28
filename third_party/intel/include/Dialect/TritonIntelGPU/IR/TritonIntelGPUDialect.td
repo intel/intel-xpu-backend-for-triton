@@ -119,6 +119,9 @@ def TritonIntelGPU_Dialect : Dialect {
 
     /// Get the name of the attribute used to indicate whether 256-bit
     /// per-thread elementwise load/store vectorization is supported.
+    /// NOTE: also referenced by bare string in
+    /// lib/Dialect/TritonGPU/Transforms/CoalesceUtils.cpp
+    /// (upstream code cannot link the Intel dialect). Keep both in sync.
     static constexpr llvm::StringRef getSupport256bLoadStoreAttrName() {
       return "ttig.support_256b_load_store";
     }
