@@ -764,7 +764,12 @@ class BenchmarkRunResult(_BenchmarkSummary, ABC):
             [c for c in res_df.columns if c.endswith(("-min", "-max", "-CV"))], )
         providers = self.selected_providers.values()
         metric_cols = [column for column in res_df.columns if _keep_column(column)]
-        column_tuples = [tuple(col.split("-", 1)) for col in metric_cols]
+        column_tuples = []
+        for col in metric_cols:
+            for provider in providers:
+                if col.startswith(provider + "-"):
+                    column_tuples.append((provider, col[len(provider) + 1:]))
+                    break
         metrics_df = res_df[metric_cols].copy()
         metrics_df.index = res_df[shape_name]
         metrics_df.index.name = shape_name
