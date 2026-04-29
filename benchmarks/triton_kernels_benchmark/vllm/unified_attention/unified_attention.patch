@@ -1,5 +1,5 @@
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 1774f1b30..d89d00195 100644
+index 1774f1b30..bce78b2fa 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -141,6 +141,8 @@ def kernel_unified_attention(
@@ -11,7 +11,7 @@ index 1774f1b30..d89d00195 100644
      USE_PER_TOKEN_HEAD_SCALES: tl.constexpr = KV_QUANT_MODE >= 2
  
      q_block_global_idx = tl.program_id(0)
-@@ -168,28 +170,32 @@ def kernel_unified_attention(
+@@ -168,28 +170,31 @@ def kernel_unified_attention(
          tiles_per_segment = 0
  
      offs_m = tl.arange(0, BLOCK_M)
@@ -19,7 +19,7 @@ index 1774f1b30..d89d00195 100644
      offs_t = tl.arange(0, TILE_SIZE)
      query_pos = q_block_local_idx * BLOCK_Q + offs_m // num_queries_per_kv
  
-     query_offset_0 = cur_batch_in_all_start_index + query_pos
+-    query_offset_0 = cur_batch_in_all_start_index + query_pos
      query_offset_1 = kv_head_idx * num_queries_per_kv + offs_m % num_queries_per_kv
 -    query_offset = (
 -        query_offset_0[:, None] * query_stride_0
@@ -56,7 +56,7 @@ index 1774f1b30..d89d00195 100644
  
      block_table_offset = seq_idx * block_table_stride
  
-@@ -231,41 +237,30 @@ def kernel_unified_attention(
+@@ -231,41 +236,30 @@ def kernel_unified_attention(
      # iterate through tiles (now limited to the sliding window range)
      for j in range(loop_lo, loop_hi):
          seq_offset = j * TILE_SIZE + offs_t
@@ -114,7 +114,7 @@ index 1774f1b30..d89d00195 100644
              scale_idx = (
                  physical_block_idx * stride_ks_blk
                  + (seq_offset % BLOCK_SIZE) * stride_ks_slot
-@@ -325,13 +320,9 @@ def kernel_unified_attention(
+@@ -325,13 +319,9 @@ def kernel_unified_attention(
          M, L, P, alpha = softmax_step(S, M, L)
          acc = acc * alpha[:, None]
  
@@ -131,9 +131,12 @@ index 1774f1b30..d89d00195 100644
          if USE_PER_TOKEN_HEAD_SCALES:
              # Per-token-head quant: apply v_scale to P instead of V.
              P_v = (P * v_token_head_scales[None, :]).to(V.dtype)
-@@ -342,18 +333,17 @@ def kernel_unified_attention(
+@@ -341,19 +331,20 @@ def kernel_unified_attention(
+ 
      # ---- Epilogue ---------------------------------------------------------
      if IS_3D:
++        query_offset_0 = cur_batch_in_all_start_index + query_pos
++
          # Store per-segment partials; finalized by ``reduce_segments``.
 -        segm_output_offset = (
 -            query_offset_0[:, None].to(tl.int64)
@@ -161,7 +164,7 @@ index 1774f1b30..d89d00195 100644
          store_segm_reduce_scalars(
              segm_max_ptr,
              segm_expsum_ptr,
-@@ -372,16 +362,14 @@ def kernel_unified_attention(
+@@ -372,16 +363,14 @@ def kernel_unified_attention(
          if USE_FP8:
              acc = acc * tl.load(out_scale)
              acc = tl.clamp(acc, FP8_MIN, FP8_MAX)
@@ -186,7 +189,7 @@ index 1774f1b30..d89d00195 100644
  
  
  @triton.jit
-@@ -601,28 +589,25 @@ def unified_attention(
+@@ -601,28 +590,25 @@ def unified_attention(
      elif sliding_window_val <= 0:
          chunk_lookback = -1
  
@@ -230,7 +233,7 @@ index 1774f1b30..d89d00195 100644
  
      # The kernel signature is the same for 2D and 3D — only the launch
      # grid + a handful of constexpr toggles differ.  Per-token-head scale
-@@ -645,6 +630,31 @@ def unified_attention(
+@@ -645,6 +631,31 @@ def unified_attention(
  
      # 3D needs real segm tensors; 2D never touches them but Triton wants
      # a non-null pointer.  Reuse ``out`` as the placeholder.
