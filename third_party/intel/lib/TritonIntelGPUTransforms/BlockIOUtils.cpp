@@ -1,0 +1,376 @@
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/BlockIOUtils.h"
+#include "mlir/IR/BuiltinAttributes.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/Support/MathExtras.h"
+#include <numeric>
+
+namespace mlir::triton::gpu::intel {
+
+template <typename T> static T product(const std::vector<T> &vec) {
+  return std::accumulate(vec.begin(), vec.end(), static_cast<T>(1),
+                         std::multiplies<T>());
+}
+
+// Return the tileHeight, tileWidth, numElemPerPackedVal, vBlocks, row Dim and
+// column Dim.
+template <bool isLoad>
+BlockIOTileSizeInfo
+getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
+                   unsigned elemSizeInBits, AxisInfo *maskAxisInfo,
+                   bool oneMatrixPerLoadForBT) {
+
+  if (elemSizeInBits > 64)
+    return BlockIOTileSizeInfo::unknown();
+
+  const size_t rank = ll.getOutDims().size();
+  std::vector<unsigned> tileShape(rank, 1);
+
+  const LinearLayout::BasesT &bases = ll.getBases();
+  auto getBase = [&](const std::string &inDim) {
+    for (const auto &base : bases) {
+      StringAttr attr = base.first;
+      if (attr.getValue().compare(inDim) == 0)
+        return base.second;
+    }
+    llvm_unreachable(("Could not find the input dim:" + inDim +
+                      ", on the ll:" + ll.toString())
+                         .c_str());
+  };
+
+  auto validateBase = [](const std::vector<int> &vec) {
+    // Check there is only one element that is greater than 0
+    return llvm::count_if(vec, [](int x) { return x > 0; }) == 1;
+  };
+
+  auto getFirstNonZeroDim = [](const std::vector<int> &vec) {
+    auto it = llvm::find_if(vec, [](int x) { return x > 0; });
+    return (it != vec.end()) ? std::distance(vec.begin(), it) : -1;
+  };
+
+  using BaseType = LinearLayout::BasesT::value_type::second_type;
+  const BaseType &basesOfLane = getBase("lane");
+
+  if (!validateBase(basesOfLane[0]))
+    return BlockIOTileSizeInfo::unknown();
+
+  // The IGC scalar backend always vectorize the non-uniform value in row
+  // major. So the first non-zero dimension of the lane base is used as column
+  // dim for block io.
+  int fastChangeDim = getFirstNonZeroDim(basesOfLane[0]);
+
+  // The mask constancy has to be power of 2 for block IO.
+  if (maskAxisInfo &&
+      !llvm::isPowerOf2_64(maskAxisInfo->getConstancy(fastChangeDim)))
+    return BlockIOTileSizeInfo::unknown();
+
+  unsigned maskConstancyFastChangeDimLimit =
+      maskAxisInfo ? maskAxisInfo->getConstancy(fastChangeDim)
+                   : std::numeric_limits<unsigned>::max();
+  bool transpose = fastChangeDim != memContiguousDim;
+
+  // Walk thru the register bases in incremental order to get the register
+  // index for the packed value for block io.
+  // TODO: improve the register packing order to support swizzled linear
+  // layout.
+  const BaseType &basesOfRegister = getBase("register");
+  int numElemPerPackedVal = 1;
+  constexpr unsigned MAX_BITS_NORMAL = 64;
+  // Hardware supports the d64 for transposing. But for packing
+  // transpose, we'd prefer smaller d32 type cause hardware could
+  // transpose more to reduce the number of mov operation in register.
+  constexpr unsigned MAX_BITS_TRANSPOSE = 32;
+  constexpr unsigned MAX_BITS_WIDTH_NORMAL = 64 * 8;       // 64 bytes.
+  constexpr unsigned MAX_BITS_WIDTH_TRANSPOSE = 8 * 4 * 8; // 8xd32. (and 4xd64)
+  constexpr unsigned TRANSPOSE_LOAD_D64_HEIGHT = 8;
+  constexpr unsigned MAX_TILE_HEIGHT_STORE = 8;
+  constexpr unsigned MAX_TILE_HEIGHT_LOAD = 32;
+  unsigned MAX_TILE_HEIGHT;
+  if constexpr (isLoad) {
+    MAX_TILE_HEIGHT = (transpose && elemSizeInBits == 64)
+                          ? TRANSPOSE_LOAD_D64_HEIGHT
+                          : MAX_TILE_HEIGHT_LOAD;
+  } else {
+    MAX_TILE_HEIGHT = MAX_TILE_HEIGHT_STORE;
+  }
+  unsigned MAX_BITS_WIDTH =
+      transpose ? MAX_BITS_WIDTH_TRANSPOSE : MAX_BITS_WIDTH_NORMAL;
+
+  unsigned maxElemPackedVal = mlir::ceil<unsigned>(
+      transpose ? MAX_BITS_TRANSPOSE : MAX_BITS_NORMAL, elemSizeInBits);
+  SetVector<unsigned> regPackBases;
+  for (unsigned regBaseIter = 0; regBaseIter < basesOfRegister.size();
+       ++regBaseIter) {
+    if (numElemPerPackedVal >= maxElemPackedVal) {
+      // Reached the maximum number of elements per packed value.
+      break;
+    }
+    const std::vector<int> &base = basesOfRegister[regBaseIter];
+    if (!validateBase(base))
+      continue; // Skip as the register can not be trivial packed.
+    int dim = getFirstNonZeroDim(base);
+    if (memContiguousDim == dim) {
+      if (tileShape[dim] != base[dim])
+        continue; // Skip the register not in dense tile.
+      // The value can be loaded as packed value.
+      tileShape[dim] <<= 1;
+      numElemPerPackedVal <<= 1;
+      regPackBases.insert(1 << regBaseIter);
+    }
+  }
+
+  // For the transpose case, we have to pack the elements to d32.
+  if (transpose && numElemPerPackedVal != maxElemPackedVal)
+    return BlockIOTileSizeInfo::unknown();
+
+  // We already get the basic tile shape in packing values.
+  // To increase the tile shape along each lane dimension.
+  for (const std::vector<int> &base : basesOfLane) {
+    if (!validateBase(base))
+      break; // break if the lane bases are not trivial.
+    int dim = getFirstNonZeroDim(base);
+    if (tileShape[dim] != base[dim]) {
+      // TODO: Check whether we can add an VNNI pack to make a larger tile.
+      break;
+    }
+    tileShape[dim] <<= 1;
+  }
+
+  const unsigned numLanes = 1 << basesOfLane.size();
+  // The slice of a name is not distributed densely across the lane. It is not
+  // supported by block io.
+  if ((product<unsigned>(tileShape) / numElemPerPackedVal) != numLanes)
+    return BlockIOTileSizeInfo::unknown();
+
+  unsigned sliceRank = 0;
+  int rowDim = -1;
+  for (size_t i = 0; i < rank; ++i) {
+    if (tileShape[i] > 1) {
+      sliceRank++;
+      // if the slice has more than one non-zero size. Chose the
+      // non-fast change dim as the row dim.
+      if (i != fastChangeDim)
+        rowDim = i;
+    }
+  }
+
+  // The block IO only supports 2D shape.
+  if (sliceRank > 2)
+    return BlockIOTileSizeInfo::unknown();
+
+  // When transposed, width and height constraints swap between fastChangeDim
+  // and rowDim: fastChangeDim is constrained by block io tile width in the
+  // non-transposed case and by block io tile height in the transposed case,
+  // while rowDim uses the opposite limits.
+
+  // The tile shape sizes should not exceed the hardware limit.
+  unsigned fastChangeDimLimit =
+      !transpose ? MAX_BITS_WIDTH / elemSizeInBits : MAX_TILE_HEIGHT;
+  unsigned rowDimLimit =
+      !transpose ? MAX_TILE_HEIGHT : MAX_BITS_WIDTH / elemSizeInBits;
+
+  // The tile shape sizes should not exceed the mask constancy limit.
+  fastChangeDimLimit =
+      std::min(fastChangeDimLimit, maskConstancyFastChangeDimLimit);
+
+  unsigned maskConstancyRowDimLimit = std::numeric_limits<unsigned>::max();
+  if (rowDim >= 0) {
+    // The mask constancy has to be power of 2 for block IO.
+    if (maskAxisInfo &&
+        !llvm::isPowerOf2_64(maskAxisInfo->getConstancy(rowDim)))
+      return BlockIOTileSizeInfo::unknown();
+    if (maskAxisInfo)
+      maskConstancyRowDimLimit = maskAxisInfo->getConstancy(rowDim);
+  }
+
+  rowDimLimit = std::min(rowDimLimit, maskConstancyRowDimLimit);
+
+  if (tileShape[fastChangeDim] > fastChangeDimLimit)
+    return BlockIOTileSizeInfo::unknown();
+
+  if (rowDim >= 0 && tileShape[rowDim] > rowDimLimit)
+    return BlockIOTileSizeInfo::unknown();
+
+  if (!oneMatrixPerLoadForBT && transpose &&
+      tileShape[memContiguousDim] == numElemPerPackedVal) {
+    // Increase the tile shape along the col dimension for transpose case.
+    for (unsigned regBaseIter = 0; regBaseIter < basesOfRegister.size();
+         ++regBaseIter) {
+      if (regPackBases.contains(1 << regBaseIter))
+        continue; // Skip the register already packed.
+      const std::vector<int> &base = basesOfRegister[regBaseIter];
+      if (!validateBase(base))
+        continue; // Skip as the bases are not trivial.
+      int dim = getFirstNonZeroDim(base);
+      if (dim != fastChangeDim ||
+          tileShape[fastChangeDim] != base[fastChangeDim])
+        continue; // Skip the register not mapped to the row dim.
+      if ((tileShape[fastChangeDim] << 1) > MAX_TILE_HEIGHT)
+        break; // The col dim is the height.
+      if ((tileShape[fastChangeDim] << 1) > maskConstancyFastChangeDimLimit)
+        break; // Should not exceed the mask constancy limit.
+      tileShape[fastChangeDim] <<= 1;
+      regPackBases.insert(1 << regBaseIter);
+    }
+  }
+
+  // Note: we only walk thru register packing order by increasing the
+  // tileHeight and vBlocks for simplicity. This may cause low efficiency in
+  // block store for some cases because the block store doesn't support
+  // vBlocks > 1. Illustration of the tile shape and register packing:
+  // clang-format off
+  //                 vBlocks=2
+  //                     ^
+  //          ┌───────────────────┐
+  //     tileWidth=16        tileWidth=16
+  //           ^                   ^
+  // ┌───────────────────┬───────────────────┐
+  // lane 0 1 2 .....  15 lane 0 1 2 .....  15
+  // ┌────┬────┬────┬────┬────┬────┬────┬────┐
+  // │R0  │    │    │    │R1  │    │    │    │
+  // │    │    │    │    │    │    │    │    │
+  // ├────┼────┼────┼────┼────┼────┼────┼────┤
+  // │R2  │    │    │    │R3  │    │    │    │
+  // │    │    │    │    │    │    │    │    │
+  // └────┴────┴────┴────┴────┴────┴────┴────┘
+  // We will pack the R0 and R2 as the first matrix. R1 and R3 as the second matrix with vBlocks=2 for 2 matrixes.
+  // But the tile shape following maybe more efficient for block store because block store only supports vBlocks=1.
+  //               tileWidth=32
+  //                     ^
+  // ┌───────────────────┬───────────────────┐
+  // lane 0 1 2 .....  15 lane 0 1 2 .....  15
+  // ┌────┬────┬────┬────┬────┬────┬────┬────┐
+  // │R0  │    │    │    │R1  │    │    │    │
+  // │    │    │    │    │    │    │    │    │
+  // ├────┼────┼────┼────┼────┼────┼────┼────┤
+  // │R2  │    │    │    │R3  │    │    │    │
+  // │    │    │    │    │    │    │    │    │
+  // └────┴────┴────┴────┴────┴────┴────┴────┘
+  // clang-format on
+
+  // Increase the tile shape along the row dimension. (Increase the
+  // tileHeight.)
+  for (unsigned regBaseIter = 0; regBaseIter < basesOfRegister.size();
+       ++regBaseIter) {
+    if (regPackBases.contains(1 << regBaseIter))
+      continue; // Skip the register already packed.
+    const std::vector<int> &base = basesOfRegister[regBaseIter];
+    if (!validateBase(base))
+      continue; // Skip as the bases are not trivial.
+    int dim = getFirstNonZeroDim(base);
+    if (rowDim < 0 && dim != fastChangeDim) {
+      rowDim = dim;
+      // The mask constancy has to be power of 2 for block IO.
+      if (maskAxisInfo &&
+          !llvm::isPowerOf2_64(maskAxisInfo->getConstancy(rowDim)))
+        return BlockIOTileSizeInfo::unknown();
+      if (maskAxisInfo)
+        maskConstancyRowDimLimit = maskAxisInfo->getConstancy(rowDim);
+    }
+    if (dim != rowDim || tileShape[rowDim] != base[rowDim])
+      continue; // Skip the register not mapped to the row dim.
+    if (!transpose) {
+      if ((tileShape[rowDim] << 1) > MAX_TILE_HEIGHT)
+        break; // If the tile height is limited, we stop here.
+    } else {
+      if (((tileShape[rowDim] << 1) * elemSizeInBits) > MAX_BITS_WIDTH)
+        break; // The row is the width.
+    }
+    // The size should not exceed the mask constancy limit.
+    if ((tileShape[rowDim] << 1) > maskConstancyRowDimLimit)
+      break;
+    tileShape[rowDim] <<= 1;
+    regPackBases.insert(1 << regBaseIter);
+  }
+
+  if (transpose) {
+    // For transpose, the row dim has to be the memory contiguous dim.
+    // If rowDim is determined (>= 0) and it is not memory contiguous dim,
+    // reject.
+    if (rowDim >= 0 && rowDim != memContiguousDim)
+      return BlockIOTileSizeInfo::unknown();
+  }
+
+  if (rowDim < 0) {
+    int lastDim = static_cast<int>(rank - 1);
+    rowDim = (fastChangeDim != lastDim) ? lastDim : lastDim - 1;
+  }
+
+  if (transpose && elemSizeInBits == 64) {
+    // D64 transpose only supports 8 rows.
+    if (tileShape[fastChangeDim] != TRANSPOSE_LOAD_D64_HEIGHT)
+      return BlockIOTileSizeInfo::unknown();
+  }
+
+  unsigned vBlocks = 1;
+  if (!transpose) {
+    // Increase the tile shape along the column dimension. (Increase the
+    // vBlocks.)
+    for (unsigned regBaseIter = 0; regBaseIter < basesOfRegister.size();
+         ++regBaseIter) {
+      if (regPackBases.contains(1 << regBaseIter))
+        continue; // Skip the register already packed.
+      const std::vector<int> &base = basesOfRegister[regBaseIter];
+      if (!validateBase(base))
+        continue; // Skip as the bases are not trivial.
+      int dim = getFirstNonZeroDim(base);
+      if (dim != fastChangeDim || (tileShape[dim] * vBlocks) != base[dim])
+        continue;
+      if ((tileShape[fastChangeDim] * (vBlocks << 1)) >
+          maskConstancyFastChangeDimLimit)
+        break; // Should not exceed the mask constancy limit.
+      vBlocks <<= 1;
+      regPackBases.insert(1 << regBaseIter);
+    }
+  }
+  for (unsigned regBaseIter = 0; regBaseIter < basesOfRegister.size();
+       ++regBaseIter) {
+    if (regPackBases.contains(1 << regBaseIter))
+      continue; // Skip the register already packed.
+    // insert the remaining register base.
+    regPackBases.insert(1 << regBaseIter);
+  }
+  return BlockIOTileSizeInfo(tileShape[transpose ? fastChangeDim : rowDim],
+                             tileShape[transpose ? rowDim : fastChangeDim] /
+                                 numElemPerPackedVal,
+                             numElemPerPackedVal, vBlocks, rowDim,
+                             fastChangeDim, transpose, std::move(regPackBases));
+}
+
+// Explicit instantiations.
+template BlockIOTileSizeInfo getBlockIOTileSize<true>(const LinearLayout &,
+                                                      unsigned, unsigned,
+                                                      AxisInfo *, bool);
+template BlockIOTileSizeInfo getBlockIOTileSize<false>(const LinearLayout &,
+                                                       unsigned, unsigned,
+                                                       AxisInfo *, bool);
+
+bool check2DBlockAddressPayloadRestriction(unsigned packedElemSizeInBits,
+                                           unsigned tileWidth) {
+  // Return false if tile width is not supported by HW.
+  // Note: Tile width is not changeable.
+  switch (packedElemSizeInBits) {
+  case 8:
+    if (tileWidth < 4 || tileWidth > 64)
+      return false;
+    break;
+  case 16:
+    if (tileWidth < 2 || tileWidth > 32)
+      return false;
+    break;
+  case 32:
+    if (tileWidth > 16)
+      return false;
+    break;
+  case 64:
+    if (tileWidth > 8)
+      return false;
+    break;
+  default:
+    // invalid element type for 2D block io.
+    return false;
+  }
+  return true;
+}
+
+} // namespace mlir::triton::gpu::intel

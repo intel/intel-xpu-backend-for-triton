@@ -1,0 +1,7 @@
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/6780
+python/test/gluon/test_lowerings.py::test_elementwise_generic_linear[r".*"]@regexp
+python/test/gluon/test_lowerings.py::test_expand_dims_generic_linear[r".*"]@regexp
+python/test/gluon/test_lowerings.py::test_reshape_generic_linear[r".*"]@regexp
+python/test/gluon/test_lowerings.py::test_permute_generic_linear[r".*"]@regexp
+python/test/gluon/test_lowerings.py::test_split_join_generic_linear[r".*"]@regexp
+python/test/gluon/test_lowerings.py::test_broadcast_generic_linear[r".*"]@regexp
