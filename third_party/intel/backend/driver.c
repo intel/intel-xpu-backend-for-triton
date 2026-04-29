@@ -104,6 +104,50 @@ static void zeConstructError(const char *file, int line, const char *message,
   PyGILState_Release(gil_state);
 }
 
+// Level Zero helpers for `extern "C"` Python entry points (return NULL on
+// failure). Layering (each expands at most once per use site; no extra work vs
+// inlining): FAIL_MSG* -> FAIL_IF*; SET_INTEL_ERR + return -> FAIL_SET_INTEL;
+// TRITON_ZE_CHECK evaluates a ze_result_t expression once.
+#define TRITON_ZE_FAIL_MSG(msg)                                                \
+  do {                                                                         \
+    zeConstructError(__FILE__, __LINE__, (msg));                               \
+    return NULL;                                                               \
+  } while (0)
+
+#define TRITON_ZE_FAIL_MSG_INTEL(msg)                                          \
+  do {                                                                         \
+    zeConstructError(__FILE__, __LINE__, (msg), true);                         \
+    return NULL;                                                               \
+  } while (0)
+
+#define TRITON_ZE_FAIL_IF(cond, msg)                                           \
+  do {                                                                         \
+    if (cond)                                                                  \
+      TRITON_ZE_FAIL_MSG((msg));                                               \
+  } while (0)
+
+#define TRITON_ZE_FAIL_IF_INTEL(cond, msg)                                     \
+  do {                                                                         \
+    if (cond)                                                                  \
+      TRITON_ZE_FAIL_MSG_INTEL((msg));                                         \
+  } while (0)
+
+#define TRITON_ZE_SET_INTEL_ERR(file, line, ze_res)                            \
+  zeConstructError((file), (line), parseZeResultCode(ze_res).data(), true)
+
+#define TRITON_ZE_FAIL_SET_INTEL(file, line, ze_res)                           \
+  do {                                                                         \
+    TRITON_ZE_SET_INTEL_ERR(file, line, ze_res);                               \
+    return NULL;                                                               \
+  } while (0)
+
+#define TRITON_ZE_CHECK(expr)                                                  \
+  do {                                                                         \
+    ze_result_t triton_ze_r__ = (expr);                                        \
+    if (triton_ze_r__ != ZE_RESULT_SUCCESS)                                    \
+      TRITON_ZE_FAIL_SET_INTEL(__FILE__, __LINE__, triton_ze_r__);             \
+  } while (0)
+
 template <typename T>
 static inline T
 checkZeCodeAndSetPyErr(const std::tuple<T, ze_result_t> syclTuple,
@@ -112,25 +156,24 @@ checkZeCodeAndSetPyErr(const std::tuple<T, ze_result_t> syclTuple,
   if (code == ZE_RESULT_SUCCESS)
     return std::get<0>(syclTuple);
 
-  zeConstructError(file, line, parseZeResultCode(code).data(),
-                   /* useIntelGPUError */ true);
+  TRITON_ZE_SET_INTEL_ERR(file, line, code);
   return std::get<0>(syclTuple);
 }
 
 extern "C" EXPORT_FUNC PyObject *get_device_properties(int device_id) {
-  if (device_id >= g_sycl_l0_device_list.size()) {
-    zeConstructError(__FILE__, __LINE__, "Device is not found");
-    return NULL;
-  }
+  TRITON_ZE_FAIL_IF(device_id >= g_sycl_l0_device_list.size(),
+                    "Device is not found");
   const auto device = g_sycl_l0_device_list[device_id];
 
   // Get device handle
   ze_device_handle_t phDevice = device.second;
+  TRITON_ZE_FAIL_IF(!phDevice, "Level Zero device handle is null for this "
+                               "device index.");
 
   // create a struct to hold device properties
   ze_device_properties_t device_properties = {};
   device_properties.stype = ZE_STRUCTURE_TYPE_DEVICE_PROPERTIES;
-  zeDeviceGetProperties(phDevice, &device_properties);
+  TRITON_ZE_CHECK(zeDeviceGetProperties(phDevice, &device_properties));
 
   int multiprocessor_count =
       device_properties.numSlices * device_properties.numSubslicesPerSlice;
@@ -139,31 +182,42 @@ extern "C" EXPORT_FUNC PyObject *get_device_properties(int device_id) {
 
   ze_device_compute_properties_t compute_properties = {};
   compute_properties.stype = ZE_STRUCTURE_TYPE_DEVICE_COMPUTE_PROPERTIES;
-  zeDeviceGetComputeProperties(phDevice, &compute_properties);
+  TRITON_ZE_CHECK(zeDeviceGetComputeProperties(phDevice, &compute_properties));
   int max_shared_mem = compute_properties.maxSharedLocalMemory;
   int max_group_size = compute_properties.maxTotalGroupSize;
   int num_subgroup_sizes = compute_properties.numSubGroupSizes;
-  PyObject *subgroup_sizes = PyTuple_New(num_subgroup_sizes);
-  for (int i = 0; i < num_subgroup_sizes; i++) {
-    PyTuple_SetItem(subgroup_sizes, i,
-                    PyLong_FromLong(compute_properties.subGroupSizes[i]));
-  }
 
   uint32_t memoryCount = 0;
-  zeDeviceGetMemoryProperties(phDevice, &memoryCount, nullptr);
-  auto pMemoryProperties = new ze_device_memory_properties_t[memoryCount];
+  TRITON_ZE_CHECK(zeDeviceGetMemoryProperties(phDevice, &memoryCount, nullptr));
+  TRITON_ZE_FAIL_IF_INTEL(memoryCount == 0,
+                          "zeDeviceGetMemoryProperties reported zero memory "
+                          "heaps.");
+
+  std::vector<ze_device_memory_properties_t> memory_properties(memoryCount);
   for (uint32_t mem = 0; mem < memoryCount; ++mem) {
-    pMemoryProperties[mem].stype = ZE_STRUCTURE_TYPE_DEVICE_MEMORY_PROPERTIES;
-    pMemoryProperties[mem].pNext = nullptr;
+    memory_properties[mem].stype = ZE_STRUCTURE_TYPE_DEVICE_MEMORY_PROPERTIES;
+    memory_properties[mem].pNext = nullptr;
   }
-  zeDeviceGetMemoryProperties(phDevice, &memoryCount, pMemoryProperties);
+  TRITON_ZE_CHECK(zeDeviceGetMemoryProperties(phDevice, &memoryCount,
+                                              memory_properties.data()));
 
   // To align with other backends - convert MHz to KHz
   // https://github.com/intel/compute-runtime/blob/cfa007e5519d3a038d726b62237b86fca9a49e2c/shared/source/xe_hpc_core/linux/product_helper_pvc.cpp#L51
-  int mem_clock_rate = pMemoryProperties[0].maxClockRate * 1000;
-  int mem_bus_width = pMemoryProperties[0].maxBusWidth;
+  int mem_clock_rate = memory_properties[0].maxClockRate * 1000;
+  int mem_bus_width = memory_properties[0].maxBusWidth;
 
-  delete[] pMemoryProperties;
+  PyObject *subgroup_sizes = PyTuple_New(num_subgroup_sizes);
+  if (!subgroup_sizes) {
+    return NULL;
+  }
+  for (int i = 0; i < num_subgroup_sizes; i++) {
+    PyObject *item = PyLong_FromLong(compute_properties.subGroupSizes[i]);
+    if (!item) {
+      Py_DECREF(subgroup_sizes);
+      return NULL;
+    }
+    PyTuple_SetItem(subgroup_sizes, i, item);
+  }
 
   return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i, s:i, s:N}", "max_shared_mem",
                        max_shared_mem, "multiprocessor_count",
@@ -308,16 +362,16 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
     return NULL;
   }
 
-  if (devId >= g_sycl_l0_device_list.size()) {
-    zeConstructError(__FILE__, __LINE__, "Device is not found");
-    return NULL;
-  }
+  TRITON_ZE_FAIL_IF(devId >= g_sycl_l0_device_list.size(),
+                    "Device is not found");
 
   BuildFlags build_flags(build_flags_ptr);
 
   const auto &sycl_l0_device_pair = g_sycl_l0_device_list[devId];
   const sycl::device sycl_device = sycl_l0_device_pair.first;
   const auto l0_device = sycl_l0_device_pair.second;
+  TRITON_ZE_FAIL_IF(!l0_device,
+                    "Level Zero device handle is null for load_binary.");
 
   const std::string kernel_name = name;
   const size_t binary_size = PyBytes_Size(py_bytes);
@@ -326,6 +380,8 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   const auto &ctx = get_default_context(sycl_device);
   const auto l0_context =
       sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
+  TRITON_ZE_FAIL_IF(!l0_context,
+                    "Level Zero context handle is null for load_binary.");
 
   ze_device_compute_properties_t compute_properties = {};
   compute_properties.stype = ZE_STRUCTURE_TYPE_DEVICE_COMPUTE_PROPERTIES;
@@ -464,36 +520,43 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
 
 extern "C" EXPORT_FUNC PyObject *init_devices(PyObject *cap) {
   void *queue = NULL;
-  if (!(queue = PyLong_AsVoidPtr(cap))) {
-    zeConstructError(__FILE__, __LINE__,
-                     "Failed to convert PyObject to void* for queue");
-    return NULL;
-  }
+  TRITON_ZE_FAIL_IF(!(queue = PyLong_AsVoidPtr(cap)),
+                    "Failed to convert PyObject to void* for queue");
   sycl::queue *sycl_queue = static_cast<sycl::queue *>(queue);
+
+  TRITON_ZE_CHECK(zeInit(ZE_INIT_FLAG_GPU_ONLY));
 
   auto sycl_context = sycl_queue->get_context();
 
   // Get sycl-device
   const std::vector<sycl::device> &sycl_devices = sycl_context.get_devices();
 
-  // Retrieve l0 devices
+  g_sycl_l0_device_list.clear();
+
   const uint32_t deviceCount = sycl_devices.size();
+  g_sycl_l0_device_list.reserve(deviceCount);
+  size_t usableDeviceCount = 0;
   for (uint32_t i = 0; i < deviceCount; ++i) {
-    g_sycl_l0_device_list.push_back(std::make_pair(
-        sycl_devices[i], sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
-                             sycl_devices[i])));
+    ze_device_handle_t zeDev =
+        sycl::get_native<sycl::backend::ext_oneapi_level_zero>(sycl_devices[i]);
+    if (zeDev)
+      ++usableDeviceCount;
+    // Keep indices stable: callers pass torch.xpu device ordinals (dense),
+    // so we must not compact this list based on availability of native handles.
+    g_sycl_l0_device_list.push_back(std::make_pair(sycl_devices[i], zeDev));
   }
+
+  TRITON_ZE_FAIL_IF(usableDeviceCount == 0,
+                    "No Level Zero device handle from the queue's SYCL "
+                    "context.");
 
   return Py_BuildValue("(i)", deviceCount);
 }
 
 extern "C" EXPORT_FUNC PyObject *wait_on_sycl_queue(PyObject *cap) {
   void *queue = NULL;
-  if (!(queue = PyLong_AsVoidPtr(cap))) {
-    zeConstructError(__FILE__, __LINE__,
-                     "Failed to convert PyObject to void* for queue");
-    return NULL;
-  }
+  TRITON_ZE_FAIL_IF(!(queue = PyLong_AsVoidPtr(cap)),
+                    "Failed to convert PyObject to void* for queue");
   sycl::queue *sycl_queue = static_cast<sycl::queue *>(queue);
   sycl_queue->wait();
   Py_RETURN_NONE;
@@ -509,16 +572,12 @@ extern "C" EXPORT_FUNC PyObject *sycl_queue_memset(PyObject *args) {
   }
 
   sycl::queue *queue = static_cast<sycl::queue *>(PyLong_AsVoidPtr(py_queue));
-  if (!queue) {
-    zeConstructError(__FILE__, __LINE__, "Invalid SYCL queue pointer");
-    return NULL;
-  }
+  TRITON_ZE_FAIL_IF(!queue, "Invalid SYCL queue pointer");
 
   try {
     queue->memset((void *)ptr, value, (size_t)count);
   } catch (const sycl::exception &e) {
-    zeConstructError(__FILE__, __LINE__, e.what());
-    return NULL;
+    TRITON_ZE_FAIL_MSG(e.what());
   }
 
   Py_RETURN_NONE;
@@ -587,6 +646,13 @@ static inline bool checkDevicePointer(void *ptr, int idx,
   }
   auto context = queue.get_context();
   auto handle = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(context);
+  if (!handle) {
+    PyErr_Format(PyExc_RuntimeError,
+                 "Level Zero context handle is null while validating pointer "
+                 "argument (at %d).",
+                 idx);
+    return false;
+  }
   ze_memory_allocation_properties_t prop;
   prop.stype = ZE_STRUCTURE_TYPE_MEMORY_ALLOCATION_PROPERTIES;
   prop.pNext = nullptr;
