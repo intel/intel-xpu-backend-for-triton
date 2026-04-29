@@ -1,0 +1,6 @@
+# ptl-809906: test_atomic_rmw all_neg cases crash pytest workers in interpreter mode
+language/test_core.py::test_atomic_rmw[add-float32-all_neg-None]
+language/test_core.py::test_atomic_rmw[add-float64-all_neg-None]
+language/test_core.py::test_atomic_rmw[max-int32-all_neg-None]
+language/test_core.py::test_atomic_rmw[max-float32-all_neg-None]
+language/test_core.py::test_atomic_rmw[max-int64-all_neg-None]
