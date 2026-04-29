@@ -200,9 +200,8 @@ struct LoadStoreConversionBase {
 
   static bool hasSupport256bLoadStore(Operation *op) {
     auto mod = op->getParentOfType<ModuleOp>();
-    return mod &&
-           mod->hasAttr(
-               TritonIntelGPUDialect::getSupport256bLoadStoreAttrName());
+    return mod && mod->hasAttr(
+                      TritonIntelGPUDialect::getSupport256bLoadStoreAttrName());
   }
 
   /// Maximum number of elements per-thread vector load/store. 128 bits by
@@ -219,9 +218,8 @@ struct LoadStoreConversionBase {
 
     unsigned contiguity = getContiguity(ptr);
     unsigned pointeeBitWidth = triton::getPointeeBitWidth(ptr.getType());
-    return std::min<unsigned>(getMaxVecWidth(support256bLoadStore,
-                                             pointeeBitWidth),
-                              contiguity);
+    return std::min<unsigned>(
+        getMaxVecWidth(support256bLoadStore, pointeeBitWidth), contiguity);
   }
 
   unsigned getMaskAlignment(Value mask) const {
@@ -3221,11 +3219,10 @@ struct DescriptorLoadOpConversion
 
     // Determine vectorization by querying the descriptor's address-level
     // AxisInfo, analogous to how LoadOp queries getVectorSize(ptr).
-    unsigned vec =
-        getDescriptorVecSize(hasSupport256bLoadStore(op), op.getDesc(),
-                             resultType, valueElemTy,
-                             op->getAttrOfType<StringAttr>(
-                                 TritonIntelGPUDialect::getBlockIOAttrName()));
+    unsigned vec = getDescriptorVecSize(
+        hasSupport256bLoadStore(op), op.getDesc(), resultType, valueElemTy,
+        op->getAttrOfType<StringAttr>(
+            TritonIntelGPUDialect::getBlockIOAttrName()));
 
     // vectorized iteration through all pointer elements
     const int valueElemNBits =
