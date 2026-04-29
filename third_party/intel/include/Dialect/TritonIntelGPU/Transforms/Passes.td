@@ -165,16 +165,18 @@ def TritonIntelGPUMaterializeBlockPointer : Pass<"tritonintelgpu-materialize-blo
                            "mlir::arith::ArithDialect"];
 }
 
-def TritonIntelGPUWidenStoreEncoding : Pass<"tritonintelgpu-widen-store-encoding", "mlir::ModuleOp"> {
-  let summary = "Widen a store's blocked encoding from 128b to 256b per thread";
+def TritonIntelGPUWidenLoadStoreEncoding : Pass<"tritonintelgpu-widen-load-store-encoding", "mlir::ModuleOp"> {
+  let summary = "Widen a load/store's blocked encoding from 128b to 256b per thread";
 
   let description = [{
     On Xe3P (gated by the `ttig.support_256b_load_store` module attribute), this pass
-    rewrites `tt.store` operations whose value tensor uses a `BlockedEncodingAttr` with
-    a 128-bit-per-thread contiguous tile into a 256-bit-per-thread contiguous tile, when
-    pointer alignment, contiguity, and tensor shape allow it. The pass relies on the
-    downstream `tritonintelgpu-remove-layout-conversions` pass to absorb any
-    `ttg.convert_layout` ops introduced by the rewrite.
+    rewrites `tt.load` and `tt.store` operations whose tensor uses a `BlockedEncodingAttr`
+    with a 128-bit-per-thread contiguous tile into a 256-bit-per-thread contiguous tile,
+    when pointer alignment, contiguity, and tensor shape allow it. Descriptor-based
+    loads/stores (`tt.descriptor_load`, `tt.descriptor_store`) and atomic ops
+    (`tt.atomic_rmw`) are out of scope. The pass relies on the downstream
+    `tritonintelgpu-remove-layout-conversions` pass to absorb any `ttg.convert_layout`
+    ops introduced by the rewrite.
   }];
 
   let dependentDialects = ["mlir::triton::TritonDialect",
