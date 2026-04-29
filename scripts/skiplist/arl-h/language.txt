@@ -7,8 +7,6 @@ python/test/unit/language/test_core.py::test_dot3d[8-2-32-32-32-8-16-float16-flo
 python/test/unit/language/test_core.py::test_dot3d[8-4-32-32-32-8-16-float16-float16]
 python/test/unit/language/test_core.py::test_dot3d[8-1-32-32-32-8-16-float16-float16]
 # https://github.com/intel/intel-xpu-backend-for-triton/issues/983
-python/test/unit/language/test_core.py::test_noinline[shared]
-
 # test_dot
 python/test/unit/language/test_core.py::test_dot[r"1-128-128-64-2-.*"]@regexp
 python/test/unit/language/test_core.py::test_dot[r"1-64-128-128-2-.*"]@regexp
