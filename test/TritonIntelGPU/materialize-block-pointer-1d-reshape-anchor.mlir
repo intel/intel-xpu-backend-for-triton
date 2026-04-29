@@ -9,10 +9,10 @@
 #blocked1d = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
   // CHECK-LABEL: tt.func @test_convert_layout_survives
-  // CHECK: tt.reshape
+  // CHECK: tt.reshape %{{.*}} allow_reorder efficient_layout
   // CHECK: tt.load %{{.*}} {ttig.block_io = "row_major", ttig.block_io_stride = 96 : i64}
+  // CHECK: tt.reshape %{{.*}} efficient_layout
   // CHECK: ttg.convert_layout
-  // CHECK: tt.reshape
   tt.func @test_convert_layout_survives(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> tensor<1024xf16, #blocked1d> {
     %idx = tt.make_range {start = 0 : i32, end = 1024 : i32} : tensor<1024xi32, #blocked1d>
     %c32 = arith.constant dense<32> : tensor<1024xi32, #blocked1d>

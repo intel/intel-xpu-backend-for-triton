@@ -757,10 +757,13 @@ private:
             /*CTAOrder=*/{0, 1}));
 
     // Reshape pointer to [H, W] with load encoding.
+    // Mark efficient_layout so RemoveLayoutConversions does not
+    // rematerialize these reshapes with a different encoding.
     auto loadPtrTy =
         RankedTensorType::get(newShape, ptrTensorTy.getElementType(), loadEnc);
     auto ptrReshape = tt::ReshapeOp::create(builder, loc, loadPtrTy, info->ptr,
-                                            /*allowReorder=*/true);
+                                            /*allowReorder=*/true,
+                                            /*efficientLayout=*/true);
 
     // Reshape mask if present.
     Value mask2d;
@@ -769,7 +772,8 @@ private:
       auto loadMaskTy =
           RankedTensorType::get(newShape, maskTy.getElementType(), loadEnc);
       mask2d = tt::ReshapeOp::create(builder, loc, loadMaskTy, mask,
-                                     /*allowReorder=*/true);
+                                     /*allowReorder=*/true,
+                                     /*efficientLayout=*/true);
     }
 
     // Create 2D load with load encoding.
@@ -793,7 +797,8 @@ private:
     // Reshape back to 1D with original result type.
     auto origResultTy = cast<RankedTensorType>(op.getType());
     auto reshapeBack = tt::ReshapeOp::create(builder, loc, origResultTy,
-                                             converted, /*allowReorder=*/false);
+                                             converted, /*allowReorder=*/false,
+                                             /*efficientLayout=*/true);
 
     LDBG("Created 2D block load with layout conversion: " << *newLoad);
 
