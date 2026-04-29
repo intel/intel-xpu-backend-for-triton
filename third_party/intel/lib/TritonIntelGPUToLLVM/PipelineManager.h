@@ -217,7 +217,7 @@ public:
     intel::populateDotOpToLLVMPatterns(typeConverter, patterns, benefit);
     intel::populateElementwiseOpToLLVMPatterns(
         typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
-    intel::populateLoadStoreOpToLLVMPatterns(typeConverter, mod, targetInfo,
+    intel::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo,
                                              patterns, axisInfoAnalysis,
                                              strideAnalysis, benefit);
     intel::populateReduceOpToLLVMPatterns(typeConverter, patterns, targetInfo,

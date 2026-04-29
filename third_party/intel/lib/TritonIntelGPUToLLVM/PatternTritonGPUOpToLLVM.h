@@ -64,9 +64,8 @@ void populateFp4ToFpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                    PatternBenefit benefit);
 
 void populateLoadStoreOpToLLVMPatterns(
-    LLVMTypeConverter &typeConverter, ModuleOp mod,
-    const TargetInfo &targetInfo, RewritePatternSet &patterns,
-    const ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
+    RewritePatternSet &patterns, const ModuleAxisInfoAnalysis &axisInfoAnalysis,
     ModuleStrideAnalysis &strideAnalysis, PatternBenefit benefit);
 
 void populateTensorDescOpsToLLVMPatterns(LLVMTypeConverter &typeConverter,
