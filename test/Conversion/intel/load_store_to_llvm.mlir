@@ -144,3 +144,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     tt.return
   }
 }
+
+// -----
+
+// COM: descriptor_load with evict_first routes to L1IAR_L3C on the predicated path.
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.support_predicated_io} {
+  // CHECK-LABEL: descriptor_load_evict_first_predicated
+  tt.func @descriptor_load_evict_first_predicated(%desc: !tt.tensordesc<tensor<128xf32>>) {
+    %c0_i32 = arith.constant 0 : i32
+    // CHECK: triton_gen.predicated_load {{.*}} {cache_control = L1IAR_L3C} : (!llvm.ptr<1>, i64, i1, i32) -> i32
+    %val = tt.descriptor_load %desc[%c0_i32] evictionPolicy = evict_first : !tt.tensordesc<tensor<128xf32>> -> tensor<128xf32, #blocked>
+    tt.return
+  }
+}

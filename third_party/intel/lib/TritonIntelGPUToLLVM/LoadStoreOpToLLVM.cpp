@@ -567,8 +567,9 @@ struct LoadStoreConversionBase {
     }
   }
 
-  template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
-                                 OpType, LoadOp, StoreOp>::value>>
+  template <typename OpType,
+            typename = std::enable_if_t<llvm::is_one_of<
+                OpType, LoadOp, StoreOp, DescriptorLoadOp>::value>>
   bool getNonTemporalFlag(OpType op) const {
     switch (op.getCache()) {
     case triton::CacheModifier::CG:
@@ -581,7 +582,11 @@ struct LoadStoreConversionBase {
       // No explicit cache modifier: derive from eviction policy hint.
       // EVICT_FIRST implies single-use; map to nontemporal so IGC bypasses L1.
       // EVICT_LAST implies reuse; keep the default (temporal) behavior.
-      return op.getEvict() == triton::EvictionPolicy::EVICT_FIRST;
+      // Only load ops carry eviction policy; stores always return false here.
+      if constexpr (std::is_same_v<OpType, LoadOp> ||
+                    std::is_same_v<OpType, DescriptorLoadOp>)
+        return op.getEvict() == triton::EvictionPolicy::EVICT_FIRST;
+      return false;
     default:
       return false;
     }
@@ -2291,7 +2296,7 @@ struct DescriptorLoadOpConversion
       auto createLoadWithAttrs = [&]() {
         return SmallVector<Value>{b.load(retTy, addrElem, alignment,
                                          /*isVolatile=*/false,
-                                         /*isNonTemporal=*/false)};
+                                         getNonTemporalFlag(op))};
       };
 
       Value ret;
