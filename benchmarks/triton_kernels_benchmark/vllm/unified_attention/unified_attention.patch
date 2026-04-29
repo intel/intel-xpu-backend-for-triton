@@ -1,5 +1,5 @@
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 1774f1b30..bce78b2fa 100644
+index 1774f1b30..f16621c5b 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -141,6 +141,8 @@ def kernel_unified_attention(
@@ -31,7 +31,7 @@ index 1774f1b30..bce78b2fa 100644
      query_mask_0 = tl.where(query_pos < cur_batch_query_len, 1, 0).to(tl.int1)
      query_mask_1 = tl.where(query_offset_1 < num_query_heads, 1, 0).to(tl.int1)
  
-+    q_block_local_len = min(BLOCK_Q, cur_batch_query_len - q_block_local_idx * BLOCK_Q)
++    q_block_local_len = tl.minimum(BLOCK_Q, cur_batch_query_len - q_block_local_idx * BLOCK_Q)
 +
      # Q : (BLOCK_M, HEAD_SIZE_PADDED)
 -    Q = tl.load(
