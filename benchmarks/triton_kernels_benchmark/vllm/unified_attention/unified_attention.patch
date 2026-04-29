@@ -1,5 +1,5 @@
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 285c7b263..218522711 100644
+index 285c7b263..f43bb2f53 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -180,6 +180,8 @@ def kernel_unified_attention_2d(
@@ -57,11 +57,9 @@ index 285c7b263..218522711 100644
  
      block_table_offset = seq_idx * block_table_stride
  
-@@ -308,32 +312,23 @@ def kernel_unified_attention_2d(
-     # iterate through tiles (now limited to the sliding window range)
-     for j in range(tile_start, tile_end):
+@@ -310,30 +314,22 @@ def kernel_unified_attention_2d(
          seq_offset = j * TILE_SIZE + offs_t
--        tile_mask = seq_offset < max_seq_prefix_len
+         tile_mask = seq_offset < max_seq_prefix_len
  
 -        physical_block_idx = tl.load(
 -            block_tables_ptr + block_table_offset + seq_offset // BLOCK_SIZE
@@ -103,7 +101,7 @@ index 285c7b263..218522711 100644
          K, k_token_head_scales = _prepare_kv_tile(
              K_load,
              Q,
-@@ -350,12 +345,7 @@ def kernel_unified_attention_2d(
+@@ -350,12 +346,7 @@ def kernel_unified_attention_2d(
              KV_QUANT_MODE,
          )
  
@@ -117,7 +115,7 @@ index 285c7b263..218522711 100644
          V, v_token_head_scales = _prepare_kv_tile(
              V_load,
              Q,
-@@ -480,11 +470,8 @@ def kernel_unified_attention_2d(
+@@ -480,11 +471,8 @@ def kernel_unified_attention_2d(
          L = L * alpha + l_j
          M = m_j
  
@@ -131,7 +129,7 @@ index 285c7b263..218522711 100644
  
          # acc : (BLOCK_M, HEAD_SIZE_PADDED)
          # Per-token-head quant: apply v_scale to P instead of V.
-@@ -500,17 +487,15 @@ def kernel_unified_attention_2d(
+@@ -500,17 +488,15 @@ def kernel_unified_attention_2d(
          acc = acc * tl.load(out_scale)
          acc = tl.clamp(acc, FP8_MIN, FP8_MAX)
  
@@ -157,7 +155,7 @@ index 285c7b263..218522711 100644
  
  
  @triton.jit
-@@ -578,6 +563,8 @@ def kernel_unified_attention_3d(
+@@ -578,6 +564,8 @@ def kernel_unified_attention_3d(
      CHUNK_LOOKBACK: tl.constexpr = -1,
      CHUNK_SIZE: tl.constexpr = -1,
  ):
@@ -166,7 +164,7 @@ index 285c7b263..218522711 100644
      q_block_global_idx = tl.program_id(0)
      kv_head_idx = tl.program_id(1)
      segm_idx = tl.program_id(2)
-@@ -609,28 +596,32 @@ def kernel_unified_attention_3d(
+@@ -609,28 +597,32 @@ def kernel_unified_attention_3d(
          return
  
      offs_m = tl.arange(0, BLOCK_M)
@@ -211,7 +209,7 @@ index 285c7b263..218522711 100644
  
      block_table_offset = seq_idx * block_table_stride
  
-@@ -715,32 +706,25 @@ def kernel_unified_attention_3d(
+@@ -715,32 +707,25 @@ def kernel_unified_attention_3d(
          min((segm_idx + 1) * tiles_per_segment, tile_end),
      ):
          seq_offset = j * TILE_SIZE + offs_t
@@ -259,7 +257,7 @@ index 285c7b263..218522711 100644
          K, k_token_head_scales = _prepare_kv_tile(
              K_load,
              Q,
-@@ -887,11 +871,8 @@ def kernel_unified_attention_3d(
+@@ -887,11 +872,8 @@ def kernel_unified_attention_3d(
          L = L * alpha + l_j
          M = m_j
  
@@ -273,7 +271,7 @@ index 285c7b263..218522711 100644
  
          # acc : (BLOCK_M, HEAD_SIZE_PADDED)
          # Per-token-head quant: apply v_scale to P instead of V.
-@@ -901,18 +882,17 @@ def kernel_unified_attention_3d(
+@@ -901,18 +883,17 @@ def kernel_unified_attention_3d(
          else:
              acc += tl.dot(P.to(V.dtype), V)
  
@@ -303,7 +301,7 @@ index 285c7b263..218522711 100644
      segm_offset = (
          query_offset_0.to(tl.int64) * (num_query_heads * NUM_SEGMENTS_PER_SEQ)
          + query_offset_1 * NUM_SEGMENTS_PER_SEQ
-@@ -1136,40 +1116,38 @@ def unified_attention(
+@@ -1136,40 +1117,38 @@ def unified_attention(
      elif sliding_window_val <= 0:
          chunk_lookback = -1
  
@@ -372,7 +370,7 @@ index 285c7b263..218522711 100644
              output_ptr=out,
              query_ptr=q,
              key_cache_ptr=k,
-@@ -1231,9 +1209,31 @@ def unified_attention(
+@@ -1231,9 +1210,31 @@ def unified_attention(
              CHUNK_SIZE=chunk_size,
          )
      else:
