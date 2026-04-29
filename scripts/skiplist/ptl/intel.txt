@@ -1,0 +1,2 @@
+# PTL (xe3): build_flags is empty on xe3 architecture, 256-GRF auto-select not reported
+intel/test_native_code_generation.py::test_auto_large_grf
