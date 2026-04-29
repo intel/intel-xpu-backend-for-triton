@@ -1344,23 +1344,13 @@ struct PreciseSqrtOpConversion
       return {callOp.getResult()};
     }
 
-    // Fallback: __imf_sqrt_rn operates on f64, so upcast if needed.
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    Value input = operandsRanges[0][0];
-    Type origTy = input.getType();
-    bool needsCast = !origTy.isF64();
-    if (needsCast)
-      input = b.fpext(f64_ty, input);
-    Type callElemTy = needsCast ? f64_ty : elemTy;
-    SmallVector<Value> callOperands{input};
-    SmallVector<Type> callArgTypes(ValueRange(callOperands).getTypes());
+    // Fallback: use type-appropriate __imf_sqrt*_rn builtin.
+    StringRef fnName = elemTy.isF32() ? "__imf_sqrtf_rn" : "__imf_sqrt_rn";
+    SmallVector<Type> argTypes(ValueRange(operandsRanges[0]).getTypes());
     LLVM::CallOp callOp = intel::createDeviceFunctionCall(
-        rewriter, "__imf_sqrt_rn", callElemTy, callArgTypes, callOperands,
+        rewriter, fnName, elemTy, argTypes, operandsRanges[0],
         /*paramAttrs=*/{}, intel::noUnwindWillReturnAttrs);
-    Value result = callOp.getResult();
-    if (needsCast)
-      result = LLVM::FPTruncOp::create(rewriter, loc, origTy, result);
-    return {result};
+    return {callOp.getResult()};
   }
 };
 
