@@ -3,8 +3,12 @@ name: Debug Tensor Descriptor IR
 on:
   workflow_dispatch:
     inputs:
+      target_branch:
+        description: Branch to checkout and test (main or quinnlp/pin-update)
+        type: string
+        required: true
       branch_name:
-        description: Branch name (for artifact naming)
+        description: Short name for artifact (main or pin-update)
         type: string
         required: true
       runner_label:
@@ -28,8 +32,10 @@ jobs:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
     steps:
-      - name: Checkout repository
+      - name: Checkout target branch
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.target_branch }}
 
       - name: Install Python (from pyenv)
         uses: ./.github/actions/setup-pyenv-python
