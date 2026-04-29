@@ -198,25 +198,30 @@ struct LoadStoreConversionBase {
         .getContiguity(ptr);
   }
 
-  /// Maximum number of elements per-thread vector load/store. 128 bits by
-  /// default; 256 bits when the module carries `ttig.support_256b_load_store`.
-  static unsigned getMaxVecWidth(Operation *op, unsigned pointeeBitWidth) {
+  static bool hasSupport256bLoadStore(Operation *op) {
     auto mod = op->getParentOfType<ModuleOp>();
-    unsigned maxBits =
-        mod && mod->hasAttr(
-                   TritonIntelGPUDialect::getSupport256bLoadStoreAttrName())
-            ? 256u
-            : 128u;
+    return mod &&
+           mod->hasAttr(
+               TritonIntelGPUDialect::getSupport256bLoadStoreAttrName());
+  }
+
+  /// Maximum number of elements per-thread vector load/store. 128 bits by
+  /// default; 256 bits when the target supports wider load/stores.
+  static unsigned getMaxVecWidth(bool support256bLoadStore,
+                                 unsigned pointeeBitWidth) {
+    unsigned maxBits = support256bLoadStore ? 256u : 128u;
     return std::max(1u, maxBits / std::max(8u, pointeeBitWidth));
   }
 
-  unsigned getVectorSize(Operation *op, Value ptr) const {
+  unsigned getVectorSize(bool support256bLoadStore, Value ptr) const {
     if (!isa<RankedTensorType>(ptr.getType()))
       return 1;
 
     unsigned contiguity = getContiguity(ptr);
     unsigned pointeeBitWidth = triton::getPointeeBitWidth(ptr.getType());
-    return std::min<unsigned>(getMaxVecWidth(op, pointeeBitWidth), contiguity);
+    return std::min<unsigned>(getMaxVecWidth(support256bLoadStore,
+                                             pointeeBitWidth),
+                              contiguity);
   }
 
   unsigned getMaskAlignment(Value mask) const {
@@ -227,7 +232,7 @@ struct LoadStoreConversionBase {
   /// Compute vectorization factor for descriptor load/store gather fallback.
   /// Queries the descriptor's address-level AxisInfo (analogous to how
   /// getVectorSize queries the pointer operand's AxisInfo for LoadOp).
-  unsigned getDescriptorVecSize(Operation *op, Value desc,
+  unsigned getDescriptorVecSize(bool support256bLoadStore, Value desc,
                                 RankedTensorType resultType, Type valueElemTy,
                                 StringAttr blockIOAttr) const {
     unsigned rank = resultType.getRank();
@@ -262,7 +267,7 @@ struct LoadStoreConversionBase {
       return 1; // Stride is not 1 on this dimension
 
     unsigned pointeeBitWidth = valueElemTy.getIntOrFloatBitWidth();
-    unsigned maxVec = getMaxVecWidth(op, pointeeBitWidth);
+    unsigned maxVec = getMaxVecWidth(support256bLoadStore, pointeeBitWidth);
     unsigned threadContig = contigPerThread[order[0]];
     // Note: descContiguity and threadContig refer to the same logical dimension
     // but are indexed in different coordinate spaces. descContiguity uses
@@ -2952,7 +2957,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     Type valueElemTy =
         typeConverter->convertType(getElementTypeOrSelf(op.getType()));
     unsigned numElems = getTotalElemsPerThread(op.getType());
-    unsigned vec = getVectorSize(op, ptr);
+    unsigned vec = getVectorSize(hasSupport256bLoadStore(op), ptr);
     if (llMask)
       vec = std::min<size_t>(vec, getMaskAlignment(mask));
 
@@ -3217,7 +3222,8 @@ struct DescriptorLoadOpConversion
     // Determine vectorization by querying the descriptor's address-level
     // AxisInfo, analogous to how LoadOp queries getVectorSize(ptr).
     unsigned vec =
-        getDescriptorVecSize(op, op.getDesc(), resultType, valueElemTy,
+        getDescriptorVecSize(hasSupport256bLoadStore(op), op.getDesc(),
+                             resultType, valueElemTy,
                              op->getAttrOfType<StringAttr>(
                                  TritonIntelGPUDialect::getBlockIOAttrName()));
 
@@ -3403,7 +3409,8 @@ struct DescriptorStoreOpConversion
 
     // Determine vectorization by querying the descriptor's address-level
     // AxisInfo, analogous to how StoreOp queries getVectorSize(ptr).
-    unsigned vec = getDescriptorVecSize(op, op.getDesc(), valueTy, valueElemTy,
+    unsigned vec = getDescriptorVecSize(hasSupport256bLoadStore(op),
+                                        op.getDesc(), valueTy, valueElemTy,
                                         /*blockIOAttr=*/nullptr);
 
     const size_t dtsize =
@@ -4035,7 +4042,7 @@ struct StoreOpConversion
     Type valueTy = op.getValue().getType();
     Type valueElemTy =
         typeConverter->convertType(getElementTypeOrSelf(valueTy));
-    unsigned vec = getVectorSize(op, ptr);
+    unsigned vec = getVectorSize(hasSupport256bLoadStore(op), ptr);
     if (llMask)
       vec = std::min<size_t>(vec, getMaskAlignment(op.getMask()));
 
@@ -4404,7 +4411,7 @@ struct AtomicRMWOpConversion
     const size_t valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
     auto elemsPerThread = getTotalElemsPerThread(val.getType());
     // vec = 1, numElements = 1 for scalar
-    auto vec = getVectorSize(op, ptr);
+    unsigned vec = getVectorSize(hasSupport256bLoadStore(op), ptr);
     int numElems = 1;
     // tensor
     if (tensorTy) {
