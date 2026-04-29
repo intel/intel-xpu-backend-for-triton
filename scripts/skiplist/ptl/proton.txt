@@ -1,0 +1,2 @@
+# ptl-809906: test_triton hangs indefinitely (2h30m CPU spin, flaky)
+third_party/proton/test/test_profile.py::test_triton
