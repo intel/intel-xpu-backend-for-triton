@@ -720,12 +720,12 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
 
   // getBlockIOTileSize and BlockIOTileSizeInfo have been moved to
   // intel/include/Dialect/TritonIntelGPU/Transforms/BlockIOUtils.h
-  template <bool IS_LOAD>
+  template <bool isLoad>
   static BlockIOTileSizeInfo
   getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
                      unsigned elemSizeInBits, AxisInfo *maskAxisInfo = nullptr,
                      bool oneMatrixPerLoadForBT = false) {
-    return triton::gpu::intel::getBlockIOTileSize<IS_LOAD>(
+    return triton::gpu::intel::getBlockIOTileSize<isLoad>(
         ll, memContiguousDim, elemSizeInBits, maskAxisInfo,
         oneMatrixPerLoadForBT);
   }

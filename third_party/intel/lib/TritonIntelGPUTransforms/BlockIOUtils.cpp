@@ -1,13 +1,6 @@
-//===- BlockIOUtils.cpp - 2D Block IO tile utilities ----------------------===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
-
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/BlockIOUtils.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/MathExtras.h"
 #include <numeric>
@@ -21,7 +14,7 @@ template <typename T> static T product(const std::vector<T> &vec) {
 
 // Return the tileHeight, tileWidth, numElemPerPackedVal, vBlocks, row Dim and
 // column Dim.
-template <bool IS_LOAD>
+template <bool isLoad>
 BlockIOTileSizeInfo
 getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
                    unsigned elemSizeInBits, AxisInfo *maskAxisInfo,
@@ -93,7 +86,7 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
   constexpr unsigned MAX_TILE_HEIGHT_STORE = 8;
   constexpr unsigned MAX_TILE_HEIGHT_LOAD = 32;
   unsigned MAX_TILE_HEIGHT;
-  if constexpr (IS_LOAD) {
+  if constexpr (isLoad) {
     MAX_TILE_HEIGHT = (transpose && elemSizeInBits == 64)
                           ? TRANSPOSE_LOAD_D64_HEIGHT
                           : MAX_TILE_HEIGHT_LOAD;
@@ -103,7 +96,7 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
   unsigned MAX_BITS_WIDTH =
       transpose ? MAX_BITS_WIDTH_TRANSPOSE : MAX_BITS_WIDTH_NORMAL;
 
-  unsigned maxElemPackedVal = llvm::divideCeil(
+  unsigned maxElemPackedVal = mlir::ceil<unsigned>(
       transpose ? MAX_BITS_TRANSPOSE : MAX_BITS_NORMAL, elemSizeInBits);
   SetVector<unsigned> regPackBases;
   for (unsigned regBaseIter = 0; regBaseIter < basesOfRegister.size();

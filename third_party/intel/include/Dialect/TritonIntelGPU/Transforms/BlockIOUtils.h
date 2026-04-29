@@ -1,17 +1,5 @@
-//===- BlockIOUtils.h - 2D Block IO tile utilities ---------------- C++ -*-===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
-//
-// Shared utilities for 2D block I/O tile size computation and validation.
-// Used by both the TTGIR LowerTo2DBlockLoad pass and the LLVM lowering.
-//
-//===----------------------------------------------------------------------===//
-
-#pragma once
+#ifndef TRITONINTELGPU_TRANSFORMS_BLOCKIOUTILS_H
+#define TRITONINTELGPU_TRANSFORMS_BLOCKIOUTILS_H
 
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Tools/LinearLayout.h"
@@ -52,11 +40,11 @@ struct BlockIOTileSizeInfo {
 /// Compute the 2D block I/O tile shape from a LinearLayout.
 /// Returns BlockIOTileSizeInfo::unknown() if the layout does not support
 /// 2D block I/O.
-template <bool IS_LOAD>
+template <bool isLoad>
 BlockIOTileSizeInfo
 getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
-                   unsigned elemSizeInBits, AxisInfo *maskAxisInfo = nullptr,
-                   bool oneMatrixPerLoadForBT = false);
+                   unsigned elemSizeInBits, AxisInfo *maskAxisInfo,
+                   bool oneMatrixPerLoadForBT);
 
 // Explicit instantiation declarations.
 extern template BlockIOTileSizeInfo
@@ -72,3 +60,5 @@ bool check2DBlockAddressPayloadRestriction(unsigned packedElemSizeInBits,
                                            unsigned tileWidth);
 
 } // namespace mlir::triton::gpu::intel
+
+#endif // TRITONINTELGPU_TRANSFORMS_BLOCKIOUTILS_H
