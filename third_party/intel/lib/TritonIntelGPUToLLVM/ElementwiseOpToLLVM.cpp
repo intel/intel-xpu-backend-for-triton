@@ -1380,10 +1380,11 @@ struct PreciseDivFOpConversion
       return {callOp.getResult()};
     }
 
-    // Fallback: __imf_fdiv_rn operates on the native element type.
+    // Fallback: use type-appropriate __imf_*div_rn builtin.
+    StringRef fnName = elemTy.isF32() ? "__imf_fdiv_rn" : "__imf_ddiv_rn";
     SmallVector<Type> argTypes(ValueRange(operandsRanges[0]).getTypes());
     LLVM::CallOp callOp = intel::createDeviceFunctionCall(
-        rewriter, "__imf_fdiv_rn", elemTy, argTypes, operandsRanges[0],
+        rewriter, fnName, elemTy, argTypes, operandsRanges[0],
         /*paramAttrs=*/{}, intel::noUnwindWillReturnAttrs);
     return {callOp.getResult()};
   }
