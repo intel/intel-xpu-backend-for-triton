@@ -333,13 +333,17 @@ def compile_module_from_src(src: str, name: str):
 
 
 class XPUUtils(object):
+    _instance = None
 
     def __new__(cls):
-        if not hasattr(cls, "instance"):
-            cls.instance = super(XPUUtils, cls).__new__(cls)
-        return cls.instance
+        if cls._instance is None:
+            cls._instance = super(XPUUtils, cls).__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
 
     def __init__(self):
+        if self._initialized:
+            return
         dirname = os.path.dirname(os.path.realpath(__file__))
         # we save `spirv_utils` module so that the destructor is not called prematurely, which will unload the dll
         # and can cause `Fatal Python error: Segmentation fault`
@@ -364,6 +368,7 @@ class XPUUtils(object):
         self.unload_module = lambda module: None
         self.launch = mod.launch
         self.build_signature_metadata = mod.build_signature_metadata
+        self._initialized = True
 
     def get_current_device(self):
         import torch
