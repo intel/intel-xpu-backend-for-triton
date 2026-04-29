@@ -1,0 +1,113 @@
+name: Debug Tensor Descriptor IR
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch_name:
+        description: Branch name (for artifact naming)
+        type: string
+        required: true
+      runner_label:
+        description: Runner label, keep empty for default
+        type: string
+        default: ""
+
+permissions: read-all
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  dump-ir:
+    name: Dump IR for tensor descriptor analysis
+    runs-on:
+      - linux
+      - ${{ inputs.runner_label || 'max1550' }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install Python (from pyenv)
+        uses: ./.github/actions/setup-pyenv-python
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Python build dependencies
+        run: pip install cmake
+
+      - name: Setup PyTorch
+        uses: ./.github/actions/setup-pytorch
+
+      - name: Setup Triton
+        uses: ./.github/actions/setup-triton
+
+      - name: Create IR dump directory
+        run: |
+          mkdir -p ir_dumps
+          echo "IR_DUMP_DIR=$PWD/ir_dumps" >> $GITHUB_ENV
+
+      - name: Install benchmark dependencies
+        run: pip install transformers 'pandas<3.0' pytest
+
+      - name: Install benchmarks
+        uses: ./.github/actions/install-benchmarks
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          github-token: ${{ github.token }}
+
+      - name: Install vllm
+        run: |
+          source ./scripts/capture-hw-details.sh
+          ./scripts/test-triton.sh --install-vllm --skip-pip-install --skip-pytorch-install
+
+      - name: Dump IR for unified attention with tensor descriptors
+        run: |
+          source ./scripts/capture-hw-details.sh
+
+          cd benchmarks/triton_kernels_benchmark/vllm
+
+          # Run with IR dumps enabled (only first config via DEBUG_BENCH)
+          export MLIR_ENABLE_DUMP=1
+          export DEBUG_BENCH=1
+          export TD_PATCHED=1
+
+          echo "=== Running unified_attention with IR dumps ==="
+          bash run_benchmark.sh unified_attention --reports "$IR_DUMP_DIR" 2>&1 | tee "$IR_DUMP_DIR/full_output.log"
+
+          cd "$IR_DUMP_DIR"
+
+          # Extract key IR stages
+          echo "=== Extracting IR stages ==="
+          grep -A 200 "IR Dump After.*RemoveLayoutConversions" full_output.log > ttgir_after_remove_layout_conversions.mlir || echo "RemoveLayoutConversions not found"
+          grep -A 200 "IR Dump After.*MaterializeBlockPointer" full_output.log > ttgir_after_materialize_block_pointer.mlir || echo "MaterializeBlockPointer not found"
+          grep -A 200 "IR Dump After.*OptimizeDotOperands" full_output.log > ttgir_after_optimize_dot_operands.mlir || echo "OptimizeDotOperands not found"
+          grep -A 500 "IR Dump After.*ConvertTritonIntelGPUToLLVM\|IR Dump After.*ConvertTritonGPUToLLVM" full_output.log > llir.mlir || echo "LLVM lowering not found"
+
+          # Count layout conversions
+          echo ""
+          echo "=== Layout conversion count ==="
+          grep -c "tt.convert_layout\|ttg.convert_layout" full_output.log || echo "0"
+          echo ""
+
+          # Create summary
+          cat > summary.txt << EOF
+          Branch: ${{ inputs.branch_name }}
+          Date: $(date)
+          Commit: $(git rev-parse HEAD)
+          vLLM pin: $(cat ../../../scripts/vllm/vllm-pin.txt)
+
+          Layout conversions: $(grep -c "tt.convert_layout\|ttg.convert_layout" full_output.log || echo "0")
+          EOF
+
+          cat summary.txt
+
+      - name: Upload IR dumps
+        uses: actions/upload-artifact@v7
+        with:
+          name: ir-dump-${{ inputs.branch_name }}
+          path: ir_dumps/
+          retention-days: 7
