@@ -1,17 +1,17 @@
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 150f022f8..5ba830efd 100644
+index 285c7b263..218522711 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
-@@ -178,6 +178,8 @@ def kernel_unified_attention_2d(
-     stride_vs_slot=0,
-     stride_vs_head=0,
+@@ -180,6 +180,8 @@ def kernel_unified_attention_2d(
+     CHUNK_LOOKBACK: tl.constexpr = -1,
+     CHUNK_SIZE: tl.constexpr = -1,
  ):
 +    tl.static_assert(BLOCK_SIZE % TILE_SIZE == 0, "BLOCK_SIZE must be multiple of TILE_SIZE")
 +    tl.static_assert(BLOCK_SIZE >= TILE_SIZE, "BLOCK_SIZE must be >= TILE_SIZE")
      q_block_global_idx = tl.program_id(0)
      kv_head_idx = tl.program_id(1)
  
-@@ -196,30 +198,32 @@ def kernel_unified_attention_2d(
+@@ -198,30 +200,32 @@ def kernel_unified_attention_2d(
  
      if q_block_local_idx * BLOCK_Q >= cur_batch_query_len:
          return
@@ -57,7 +57,7 @@ index 150f022f8..5ba830efd 100644
  
      block_table_offset = seq_idx * block_table_stride
  
-@@ -302,32 +306,23 @@ def kernel_unified_attention_2d(
+@@ -308,32 +312,23 @@ def kernel_unified_attention_2d(
      # iterate through tiles (now limited to the sliding window range)
      for j in range(tile_start, tile_end):
          seq_offset = j * TILE_SIZE + offs_t
@@ -103,7 +103,7 @@ index 150f022f8..5ba830efd 100644
          K, k_token_head_scales = _prepare_kv_tile(
              K_load,
              Q,
-@@ -344,12 +339,7 @@ def kernel_unified_attention_2d(
+@@ -350,12 +345,7 @@ def kernel_unified_attention_2d(
              KV_QUANT_MODE,
          )
  
@@ -117,7 +117,7 @@ index 150f022f8..5ba830efd 100644
          V, v_token_head_scales = _prepare_kv_tile(
              V_load,
              Q,
-@@ -464,11 +454,8 @@ def kernel_unified_attention_2d(
+@@ -480,11 +470,8 @@ def kernel_unified_attention_2d(
          L = L * alpha + l_j
          M = m_j
  
@@ -131,7 +131,7 @@ index 150f022f8..5ba830efd 100644
  
          # acc : (BLOCK_M, HEAD_SIZE_PADDED)
          # Per-token-head quant: apply v_scale to P instead of V.
-@@ -484,17 +471,15 @@ def kernel_unified_attention_2d(
+@@ -500,17 +487,15 @@ def kernel_unified_attention_2d(
          acc = acc * tl.load(out_scale)
          acc = tl.clamp(acc, FP8_MIN, FP8_MAX)
  
@@ -157,16 +157,16 @@ index 150f022f8..5ba830efd 100644
  
  
  @triton.jit
-@@ -560,6 +545,8 @@ def kernel_unified_attention_3d(
-     stride_vs_slot=0,
-     stride_vs_head=0,
+@@ -578,6 +563,8 @@ def kernel_unified_attention_3d(
+     CHUNK_LOOKBACK: tl.constexpr = -1,
+     CHUNK_SIZE: tl.constexpr = -1,
  ):
 +    tl.static_assert(BLOCK_SIZE % TILE_SIZE == 0, "BLOCK_SIZE must be multiple of TILE_SIZE")
 +    tl.static_assert(BLOCK_SIZE >= TILE_SIZE, "BLOCK_SIZE must be >= TILE_SIZE")
      q_block_global_idx = tl.program_id(0)
      kv_head_idx = tl.program_id(1)
      segm_idx = tl.program_id(2)
-@@ -591,28 +578,32 @@ def kernel_unified_attention_3d(
+@@ -609,28 +596,32 @@ def kernel_unified_attention_3d(
          return
  
      offs_m = tl.arange(0, BLOCK_M)
@@ -211,7 +211,7 @@ index 150f022f8..5ba830efd 100644
  
      block_table_offset = seq_idx * block_table_stride
  
-@@ -693,32 +684,25 @@ def kernel_unified_attention_3d(
+@@ -715,32 +706,25 @@ def kernel_unified_attention_3d(
          min((segm_idx + 1) * tiles_per_segment, tile_end),
      ):
          seq_offset = j * TILE_SIZE + offs_t
@@ -259,7 +259,7 @@ index 150f022f8..5ba830efd 100644
          K, k_token_head_scales = _prepare_kv_tile(
              K_load,
              Q,
-@@ -855,11 +839,8 @@ def kernel_unified_attention_3d(
+@@ -887,11 +871,8 @@ def kernel_unified_attention_3d(
          L = L * alpha + l_j
          M = m_j
  
@@ -273,7 +273,7 @@ index 150f022f8..5ba830efd 100644
  
          # acc : (BLOCK_M, HEAD_SIZE_PADDED)
          # Per-token-head quant: apply v_scale to P instead of V.
-@@ -869,18 +850,17 @@ def kernel_unified_attention_3d(
+@@ -901,18 +882,17 @@ def kernel_unified_attention_3d(
          else:
              acc += tl.dot(P.to(V.dtype), V)
  
@@ -303,10 +303,10 @@ index 150f022f8..5ba830efd 100644
      segm_offset = (
          query_offset_0.to(tl.int64) * (num_query_heads * NUM_SEGMENTS_PER_SEQ)
          + query_offset_1 * NUM_SEGMENTS_PER_SEQ
-@@ -1093,40 +1073,38 @@ def unified_attention(
-     # Tile sizes for prefill and decode. Gemma3 models use optimized values.
-     # Note: tile size must be at least 32 for fp8 (element_size == 1).
-     sliding_window_val = 1 + window_size[0] if window_size[0] >= 0 else 0
+@@ -1136,40 +1116,38 @@ def unified_attention(
+     elif sliding_window_val <= 0:
+         chunk_lookback = -1
+ 
 -    TILE_SIZE_PREFILL = _get_tile_size(
 -        head_size,
 -        sliding_window_val,
@@ -372,8 +372,8 @@ index 150f022f8..5ba830efd 100644
              output_ptr=out,
              query_ptr=q,
              key_cache_ptr=k,
-@@ -1186,9 +1164,31 @@ def unified_attention(
-             stride_vs_head=v_scale_cache.stride(2) if v_scale_cache is not None else 0,
+@@ -1231,9 +1209,31 @@ def unified_attention(
+             CHUNK_SIZE=chunk_size,
          )
      else:
 -        kernel_unified_attention_3d[
