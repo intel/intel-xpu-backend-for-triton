@@ -139,7 +139,7 @@ public:
   }
 
 private:
-  /// Convert a tt.load with tensor-of-pointers to ttig.2d_block_ptr_load.
+  /// Convert a tt.load with tensor-of-pointers to ttig.2d_block_load_from_ptr.
   void convertLoadOp(tt::LoadOp op,
                      tt::intel::ModuleStrideAnalysis &strideAnalysis) {
     if (!isBlockIOEligible(op))
@@ -222,12 +222,6 @@ private:
     // Compute constant surface parameters.
     int64_t baseHeightRows = stride == 0 ? 1 : tensorTy.getDimSize(rowDim);
 
-    Value baseWidth =
-        arith::ConstantIntOp::create(builder, loc, baseWidthBytes, 32);
-    Value baseHeight =
-        arith::ConstantIntOp::create(builder, loc, baseHeightRows, 32);
-    Value basePitch = arith::ConstantIntOp::create(builder, loc, pitch, 32);
-
     auto memLayout = memoryRowMajor ? ttgi::BlockIOMode::RowMajor
                                     : ttgi::BlockIOMode::ColumnMajor;
 
@@ -243,9 +237,11 @@ private:
       }
     }
 
-    auto blockPtrLoadOp = ttgi::Subgroup2DBlockPtrLoadOp::create(
-        builder, loc, op.getType(), op.getPtr(), baseWidth, baseHeight,
-        basePitch, mask, other,
+    auto blockPtrLoadOp = ttgi::Subgroup2DBlockLoadFromPtrOp::create(
+        builder, loc, op.getType(), op.getPtr(), mask, other,
+        builder.getI32IntegerAttr(baseWidthBytes),
+        builder.getI32IntegerAttr(baseHeightRows),
+        builder.getI32IntegerAttr(pitch),
         ttgi::BlockIOModeAttr::get(builder.getContext(), memLayout));
 
     // Propagate attributes if present.
@@ -258,7 +254,7 @@ private:
 
     op.replaceAllUsesWith(blockPtrLoadOp.getResult());
     op.erase();
-    LDBG("Converted load to ttig.2d_block_ptr_load: " << *blockPtrLoadOp);
+    LDBG("Converted load to ttig.2d_block_load_from_ptr: " << *blockPtrLoadOp);
   }
 
   /// Convert a tt.descriptor_load to ttig.2d_block_load.
@@ -380,27 +376,14 @@ private:
     Value offsetX = indices[descRank - 1];
     Value offsetY = indices[descRank - 2];
 
-    // Handle padding: for PAD_NAN, create a NaN splat as 'other'.
-    Value other;
-    tt::PaddingOption padding = makeTensorDescOp->getPadding();
-    if (padding == tt::PaddingOption::PAD_NAN) {
-      Type elemType = tensorTy.getElementType();
-      Attribute nanAttr;
-      if (isa<FloatType>(elemType)) {
-        auto floatTy = cast<FloatType>(elemType);
-        nanAttr = builder.getFloatAttr(
-            floatTy, APFloat::getNaN(floatTy.getFloatSemantics()));
-      }
-      if (nanAttr) {
-        Value nanVal =
-            arith::ConstantOp::create(builder, loc, cast<TypedAttr>(nanAttr));
-        other = tt::SplatOp::create(builder, loc, tensorTy, nanVal);
-      }
-    }
+    // Determine padding mode from the descriptor.
+    bool padNan =
+        makeTensorDescOp->getPadding() == tt::PaddingOption::PAD_NAN;
+    UnitAttr padNanAttr = padNan ? builder.getUnitAttr() : UnitAttr();
 
     auto blockLoadOp = ttgi::Subgroup2DBlockLoadOp::create(
         builder, loc, op.getType(), basePtr, baseWidth, baseHeight, basePitch,
-        offsetX, offsetY, /*other=*/other,
+        offsetX, offsetY, padNanAttr,
         ttgi::BlockIOModeAttr::get(builder.getContext(), memLayout));
 
     // Propagate one_matrix_per_load attribute if present.

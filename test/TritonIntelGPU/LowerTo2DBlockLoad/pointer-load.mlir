@@ -1,7 +1,7 @@
 // RUN: triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load | FileCheck %s
 
 // COM: Pointer-based load with broadcast (stride=0). The pass converts this
-// COM: to ttig.2d_block_ptr_load, retaining the full pointer tensor.
+// COM: to ttig.2d_block_load_from_ptr, retaining the full pointer tensor.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
@@ -12,10 +12,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1x32x!tt.ptr<f16>, #dot0>
     %3 = tt.addptr %2, %1 : tensor<1x32x!tt.ptr<f16>, #dot0>, tensor<1x32xi32, #dot0>
     %4 = tt.broadcast %3 : tensor<1x32x!tt.ptr<f16>, #dot0> -> tensor<64x32x!tt.ptr<f16>, #dot0>
-    // CHECK-DAG: %[[W:.*]] = arith.constant 64 : i32
-    // CHECK-DAG: %[[H:.*]] = arith.constant 1 : i32
-    // CHECK-DAG: %[[P:.*]] = arith.constant 64 : i32
-    // CHECK: "ttig.2d_block_ptr_load"(%4, %[[W]], %[[H]], %[[P]])
+    // CHECK: ttig.2d_block_load_from_ptr %4 {row_major} {base_height = 1 : i32, base_pitch = 64 : i32, base_width = 64 : i32}
     // CHECK-NOT: tt.load
     %5 = tt.load %4 {ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #dot0>
     tt.return %5 : tensor<64x32xf16, #dot0>
@@ -25,7 +22,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 // -----
 
 // COM: Masked pointer load with both mask and other. Both are forwarded
-// COM: to the ttig.2d_block_ptr_load op.
+// COM: to the ttig.2d_block_load_from_ptr op.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
@@ -40,7 +37,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %5 = tt.splat %arg1 : i32 -> tensor<1x32xi32, #dot0>
     %6 = arith.cmpi slt, %5, %1 : tensor<1x32xi32, #dot0>
     %mask = tt.broadcast %6 : tensor<1x32xi1, #dot0> -> tensor<64x32xi1, #dot0>
-    // CHECK: "ttig.2d_block_ptr_load"
+    // CHECK: ttig.2d_block_load_from_ptr
     // CHECK-NOT: tt.load
     %7 = tt.load %4, %mask, %cst {ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #dot0>
     tt.return %7 : tensor<64x32xf16, #dot0>
@@ -67,7 +64,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %mask = tt.broadcast %6 : tensor<1x32xi1, #dot0> -> tensor<64x32xi1, #dot0>
     // CHECK: %[[ZERO_CST:.*]] = arith.constant 0.000000e+00 : f16
     // CHECK: %[[ZERO_SPLAT:.*]] = tt.splat %[[ZERO_CST]]
-    // CHECK: "ttig.2d_block_ptr_load"
+    // CHECK: ttig.2d_block_load_from_ptr
     // CHECK-NOT: tt.load
     %7 = tt.load %4, %mask {ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #dot0>
     tt.return %7 : tensor<64x32xf16, #dot0>

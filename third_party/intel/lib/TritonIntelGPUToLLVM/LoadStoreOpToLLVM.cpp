@@ -3711,7 +3711,7 @@ static BlockLoad2DParams computeBlockLoad2DParams(
   return p;
 }
 
-/// Common lowering body for ttig.2d_block_load and ttig.2d_block_ptr_load.
+/// Common lowering body for ttig.2d_block_load and ttig.2d_block_load_from_ptr.
 ///
 /// Computes tile parameters from the result tensor's encoding, runs the
 /// sub-tile splitting loop, emits triton_gen.2Dblockload for each sub-tile,
@@ -3867,10 +3867,9 @@ struct Subgroup2DBlockLoadOpConversion
     unsigned blockColIdx =
         sizeInfo.transpose ? sizeInfo.rowDim : sizeInfo.colDim;
 
-    // Build NaN masks if other is present (PAD_NAN path).
-    Value llOther = adaptor.getOther();
+    // Build NaN masks if pad_nan is set.
     SmallVector<Value> nanMaskElems;
-    if (llOther) {
+    if (op.getPadNan()) {
       SmallVector<Value> resultOffsets(rank, b.i32_val(0));
       SmallVector<Value> resultShapes(rank);
       for (unsigned i = 0; i < rank; ++i) {
@@ -3932,27 +3931,27 @@ struct Subgroup2DBlockLoadOpConversion
 };
 
 // ---------------------------------------------------------------------------
-// ttig.2d_block_ptr_load -> triton_gen.2Dblockload  (pointer-based loads)
+// ttig.2d_block_load_from_ptr -> triton_gen.2Dblockload  (pointer-based loads)
 // ---------------------------------------------------------------------------
-struct Subgroup2DBlockPtrLoadOpConversion
+struct Subgroup2DBlockLoadFromPtrOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<
-          triton::gpu::intel::Subgroup2DBlockPtrLoadOp>,
+          triton::gpu::intel::Subgroup2DBlockLoadFromPtrOp>,
       public BlockIOConversionBase {
   using ConvertTritonGPUOpToLLVMPattern<
-      triton::gpu::intel::Subgroup2DBlockPtrLoadOp>::
+      triton::gpu::intel::Subgroup2DBlockLoadFromPtrOp>::
       ConvertTritonGPUOpToLLVMPattern;
 
-  Subgroup2DBlockPtrLoadOpConversion(
+  Subgroup2DBlockLoadFromPtrOpConversion(
       LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
       const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
       triton::intel::ModuleStrideAnalysis &strideAnalysis,
       PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<
-            triton::gpu::intel::Subgroup2DBlockPtrLoadOp>(converter, benefit),
+            triton::gpu::intel::Subgroup2DBlockLoadFromPtrOp>(converter, benefit),
         BlockIOConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
 
   LogicalResult
-  matchAndRewrite(triton::gpu::intel::Subgroup2DBlockPtrLoadOp op,
+  matchAndRewrite(triton::gpu::intel::Subgroup2DBlockLoadFromPtrOp op,
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto tensorType = cast<RankedTensorType>(op.getType());
@@ -3963,9 +3962,9 @@ struct Subgroup2DBlockPtrLoadOpConversion
     SmallVector<Value> ptrElems =
         unpackLLElements(loc, adaptor.getPtr(), rewriter);
 
-    Value baseWidth = adaptor.getBaseWidth();
-    Value baseHeight = adaptor.getBaseHeight();
-    Value pitch = adaptor.getBasePitch();
+    Value baseWidth = b.i32_val(op.getBaseWidth());
+    Value baseHeight = b.i32_val(op.getBaseHeight());
+    Value pitch = b.i32_val(op.getBasePitch());
     Value elemBytes =
         b.i32_val(tensorType.getElementType().getIntOrFloatBitWidth() / 8);
 
@@ -4052,6 +4051,6 @@ void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
           benefit.getBenefit() + 2);
   // TTIG 2D block load ops.
   patterns
-      .add<Subgroup2DBlockLoadOpConversion, Subgroup2DBlockPtrLoadOpConversion>(
+      .add<Subgroup2DBlockLoadOpConversion, Subgroup2DBlockLoadFromPtrOpConversion>(
           typeConverter, targetInfo, axisInfoAnalysis, strideAnalysis, benefit);
 }

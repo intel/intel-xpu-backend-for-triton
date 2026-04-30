@@ -16,7 +16,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     // CHECK: %[[BW:.*]] = arith.muli %arg2, %[[ELEM_BYTES]]
     // CHECK: %[[ST:.*]] = arith.trunci %arg3
     // CHECK: %[[BP:.*]] = arith.muli %[[ST]], %[[ELEM_BYTES]]
-    // CHECK: "ttig.2d_block_load"(%arg0, %[[BW]], %arg1, %[[BP]], %[[ZERO]], %[[ZERO]])
+    // CHECK: ttig.2d_block_load %arg0, %[[BW]], %arg1, %[[BP]][%[[ZERO]], %[[ZERO]]] {row_major}
     %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
     tt.return %0 : tensor<64x32xf16, #dot0>
   }
@@ -36,8 +36,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %c0_i32 = arith.constant 0 : i32
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <64x32xf16>
     // CHECK-NOT: tt.descriptor_load
-    // CHECK: "ttig.2d_block_load"
-    // CHECK-SAME: memory_layout = 1
+    // CHECK: ttig.2d_block_load
+    // CHECK-SAME: {column_major}
     %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "column_major"} : !tt.tensordesc<64x32xf16> -> tensor<32x64xf16, #dot1>
     tt.return %0 : tensor<32x64xf16, #dot1>
   }
@@ -55,9 +55,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %c1_i64 = arith.constant 1 : i64
     %c0_i32 = arith.constant 0 : i32
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] {padding = 2 : i32} : <f16>, <64x32xf16>
-    // CHECK: %[[NAN:.*]] = arith.constant 0x7E00 : f16
-    // CHECK: %[[NAN_SPLAT:.*]] = tt.splat %[[NAN]]
-    // CHECK: "ttig.2d_block_load"
+    // CHECK: ttig.2d_block_load
+    // CHECK-SAME: {row_major, pad_nan}
     // CHECK-NOT: tt.descriptor_load
     %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major", ttig.desc_padding = 2 : i32} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
     tt.return %0 : tensor<64x32xf16, #dot0>
