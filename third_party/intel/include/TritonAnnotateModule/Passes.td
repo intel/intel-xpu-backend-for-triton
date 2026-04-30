@@ -55,7 +55,9 @@ def TritonAnnotateModule: Pass<"triton-annotate-module", "mlir::ModuleOp"> {
     Option<"isLTS", "is-lts", "bool", /*default*/"false",
            "whether driver is LTS">,
     Option<"supportPrefetch256Bytes", "support-prefetch-256b", "bool", /*default*/"false",
-           "whether prefetch 256 bytes is supported">
+           "whether prefetch 256 bytes is supported">,
+    Option<"supportRoundedDivideSqrt", "support-rounded-divide-sqrt", "bool", /*default*/"false",
+           "whether rounded divide and sqrt operations are available">
   ];
 }
 
