@@ -1733,7 +1733,8 @@ void LayoutRematerialization::hoistConvertDotOperand(
   // threads We do views and elementwise pure ops for now
   auto noDataMovement = [](Operation *op) {
     return (op->hasTrait<OpTrait::Elementwise>() && isMemoryEffectFree(op)) ||
-           isa<tt::BroadcastOp, ttg::Fp4ToFpOp, ttg::ConvertLayoutOp>(op) ||
+           isa<tt::BroadcastOp, ttg::Fp4ToFpOp, ttg::ConvertLayoutOp,
+               ttg::UpcastFpOpInterface>(op) ||
            isView(op);
   };
   // Stop the slice as soon as we find an operation that cannot be done without

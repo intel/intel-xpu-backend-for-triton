@@ -123,6 +123,12 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.support_256b_load_store";
     }
 
+    /// Get the name of the attribute used to indicate whether rounded divide
+    /// and sqrt operations are available.
+    static constexpr llvm::StringRef getSupportRoundedDivideSqrtAttrName() {
+      return "ttig.support_rounded_divide_sqrt";
+    }
+
     /// FIXME: Remove once IGC can split large 2D block loads.
     /// Get the name of the attribute used to indicate that a load operation
     /// should use 'one matrix per load'.

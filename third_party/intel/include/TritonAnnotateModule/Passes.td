@@ -57,7 +57,9 @@ def TritonAnnotateModule: Pass<"triton-annotate-module", "mlir::ModuleOp"> {
     Option<"supportPrefetch256Bytes", "support-prefetch-256b", "bool", /*default*/"false",
            "whether prefetch 256 bytes is supported">,
     Option<"support256bLoadStore", "support-256b-load-store", "bool", /*default*/"false",
-           "whether 256-bit per-thread elementwise load/store is supported">
+           "whether 256-bit per-thread elementwise load/store is supported">,
+    Option<"supportRoundedDivideSqrt", "support-rounded-divide-sqrt", "bool", /*default*/"false",
+           "whether rounded divide and sqrt operations are available">
   ];
 }
 
