@@ -59,6 +59,12 @@ getBlockIOTileSize<false>(const LinearLayout &, unsigned, unsigned, AxisInfo *,
 bool check2DBlockAddressPayloadRestriction(unsigned packedElemSizeInBits,
                                            unsigned tileWidth);
 
+/// Validate that a load with the given encoding and element size can be
+/// lowered to 2D block I/O. Checks tile size, HW address restrictions, and
+/// inner-dim constraints. Returns true if valid.
+bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
+                             unsigned elemSizeInBits);
+
 } // namespace mlir::triton::gpu::intel
 
 #endif // TRITONINTELGPU_TRANSFORMS_BLOCKIOUTILS_H
