@@ -1,5 +1,5 @@
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 285c7b263..066e7c038 100644
+index 285c7b263..21e1af381 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -180,6 +180,8 @@ def kernel_unified_attention_2d(
@@ -209,7 +209,7 @@ index 285c7b263..066e7c038 100644
  
      block_table_offset = seq_idx * block_table_stride
  
-@@ -717,30 +709,24 @@ def kernel_unified_attention_3d(
+@@ -717,30 +709,22 @@ def kernel_unified_attention_3d(
          seq_offset = j * TILE_SIZE + offs_t
          tile_mask = seq_offset < max_seq_prefix_len
  
@@ -250,12 +250,25 @@ index 285c7b263..066e7c038 100644
 +        # K : (HEAD_SIZE, BLOCK_SIZE)
 +        offset_in_block = (j * TILE_SIZE) % BLOCK_SIZE
 +        K_load = k_desc.load([offset_in_block, 0]).T
-+        # V : (BLOCK_SIZE, HEAD_SIZE)
-+        V_load = v_desc.load([offset_in_block, 0])
          K, k_token_head_scales = _prepare_kv_tile(
              K_load,
              Q,
-@@ -887,11 +873,8 @@ def kernel_unified_attention_3d(
+@@ -757,12 +741,8 @@ def kernel_unified_attention_3d(
+             KV_QUANT_MODE,
+         )
+ 
+-        # V : (TILE_SIZE, HEAD_SIZE)
+-        V_load = tl.load(
+-            value_cache_ptr + v_offset,
+-            mask=dim_mask[None, :] & tile_mask[:, None],
+-            other=0.0,
+-        )
++        # V : (BLOCK_SIZE, HEAD_SIZE)
++        V_load = v_desc.load([offset_in_block, 0])
+         V, v_token_head_scales = _prepare_kv_tile(
+             V_load,
+             Q,
+@@ -887,11 +867,8 @@ def kernel_unified_attention_3d(
          L = L * alpha + l_j
          M = m_j
  
@@ -269,7 +282,7 @@ index 285c7b263..066e7c038 100644
  
          # acc : (BLOCK_M, HEAD_SIZE_PADDED)
          # Per-token-head quant: apply v_scale to P instead of V.
-@@ -901,18 +884,17 @@ def kernel_unified_attention_3d(
+@@ -901,18 +878,17 @@ def kernel_unified_attention_3d(
          else:
              acc += tl.dot(P.to(V.dtype), V)
  
@@ -299,7 +312,7 @@ index 285c7b263..066e7c038 100644
      segm_offset = (
          query_offset_0.to(tl.int64) * (num_query_heads * NUM_SEGMENTS_PER_SEQ)
          + query_offset_1 * NUM_SEGMENTS_PER_SEQ
-@@ -1136,40 +1118,38 @@ def unified_attention(
+@@ -1136,40 +1112,38 @@ def unified_attention(
      elif sliding_window_val <= 0:
          chunk_lookback = -1
  
@@ -368,7 +381,7 @@ index 285c7b263..066e7c038 100644
              output_ptr=out,
              query_ptr=q,
              key_cache_ptr=k,
-@@ -1231,9 +1211,31 @@ def unified_attention(
+@@ -1231,9 +1205,31 @@ def unified_attention(
              CHUNK_SIZE=chunk_size,
          )
      else:
