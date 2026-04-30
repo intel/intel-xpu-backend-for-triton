@@ -2086,6 +2086,10 @@ public:
 
     // If the stride is 0, we want to load only the first row.
     int stride = getStride(ptr, isTransposeRequired ? colDim : rowDim);
+    // Only tileWidth == threadsPerWarp/2 is handled in the baseHeight==1 fixup.
+    if (stride == 0 && tileHeight > 1 && tileWidth < threadsPerWarp &&
+        tileWidth * 2 != threadsPerWarp)
+      return failure();
     Value baseHeight = b.i32_val((stride == 0 ? 1 : tileHeight));
     Value baseWidth =
         b.i32_val(vBlocks * tileWidth * (packedElemSizeInBits / 8));
