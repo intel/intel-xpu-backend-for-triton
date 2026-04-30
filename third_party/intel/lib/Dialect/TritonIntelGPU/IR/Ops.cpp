@@ -133,7 +133,7 @@ LogicalResult Subgroup2DBlockLoadOp::verify() {
   return success();
 }
 
-LogicalResult Subgroup2DBlockPtrLoadOp::verify() {
+LogicalResult Subgroup2DBlockLoadFromPtrOp::verify() {
   auto resultType = dyn_cast<RankedTensorType>(getResult().getType());
   if (!resultType)
     return emitOpError("result must be a ranked tensor type");

@@ -23,6 +23,7 @@ include "mlir/Interfaces/SideEffectInterfaces.td"
 //===----------------------------------------------------------------------===//
 
 def L2Cache : Resource<"::mlir::triton::gpu::intel::L2Cache">;
+def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
 
 //===----------------------------------------------------------------------===//
 // TritonIntelGPU op definitions
@@ -202,13 +203,14 @@ def TTIG_Subgroup2DBlockLoadOp : TTIG_Op<"2d_block_load"> {
     descriptor indices) that are combined with per-sub-tile linear layout
     offsets during LLVM lowering.
 
-    When `pad_nan` is true, the LLVM lowering builds boundary masks from
+    When `pad_nan` is set, the LLVM lowering builds boundary masks from
     the surface dimensions and fills out-of-bounds elements with NaN.
-    When false (default), the hardware zero-fills out-of-bounds elements.
+    Otherwise, the hardware zero-fills out-of-bounds elements.
   }];
 
   let arguments = (ins
-    Arg<TT_Ptr, "scalar base pointer to the memory surface", [MemRead]>:$base_ptr,
+    Arg<TT_Ptr, "scalar base pointer to the memory surface",
+        [MemRead<GlobalMemory>]>:$base_ptr,
     I32:$base_width,
     I32:$base_height,
     I32:$base_pitch,
@@ -219,10 +221,16 @@ def TTIG_Subgroup2DBlockLoadOp : TTIG_Op<"2d_block_load"> {
   );
 
   let results = (outs TT_Tensor:$result);
+  let assemblyFormat = [{
+    $base_ptr `,` $base_width `,` $base_height `,` $base_pitch
+    `[` $offset_x `,` $offset_y `]`
+    `{` $memory_layout (`,` `pad_nan` $pad_nan^)? `}`
+    attr-dict `:` type($base_ptr) `->` type($result)
+  }];
   let hasVerifier = 1;
 }
 
-def TTIG_Subgroup2DBlockPtrLoadOp : TTIG_Op<"2d_block_ptr_load", [
+def TTIG_Subgroup2DBlockLoadFromPtrOp : TTIG_Op<"2d_block_load_from_ptr", [
   AttrSizedOperandSegments
 ]> {
   let summary = "2D block load from a tensor of pointers";
@@ -237,25 +245,37 @@ def TTIG_Subgroup2DBlockPtrLoadOp : TTIG_Op<"2d_block_ptr_load", [
     the column offset from the linear layout is subtracted from the pointer
     to reach the row start, then passed as the block load's X coordinate.
 
-    One `ttig.2d_block_ptr_load` may lower to multiple
+    One `ttig.2d_block_load_from_ptr` may lower to multiple
     `triton_gen.2Dblockload` ops when the tensor requires splitting across
     warps/registers.
 
     Tile computation (`tile_height`, `tile_width`, `v_blocks`, `transpose`,
     etc.) is performed during LLVM lowering from the result tensor's encoding.
+
+    Precondition (not verified): The pointer tensor must describe a 2D
+    rectangular slice of a strided surface, i.e.
+    `ptr[i,j] = base + i*row_stride + j*elem_size` for a constant `base`
+    and known `row_stride`. Creating this op from a ptr tensor that does not
+    satisfy this precondition produces undefined behavior at lowering.
   }];
 
   let arguments = (ins
-    Arg<TT_PtrLike, "tensor of pointers to the memory surface", [MemRead]>:$ptr,
-    I32:$base_width,
-    I32:$base_height,
-    I32:$base_pitch,
+    Arg<TT_PtrLike, "tensor of pointers to the memory surface",
+        [MemRead<GlobalMemory>]>:$ptr,
     Optional<TT_BoolLike>:$mask,
     Optional<TT_Type>:$other,
+    I32Attr:$base_width,
+    I32Attr:$base_height,
+    I32Attr:$base_pitch,
     TTIG_BlockIOMode:$memory_layout
   );
 
   let results = (outs TT_Tensor:$result);
+  let assemblyFormat = [{
+    $ptr (`,` $mask^ `,` $other)?
+    ` ` `{` $memory_layout `}`
+    attr-dict `:` functional-type(operands, results)
+  }];
   let hasVerifier = 1;
 }
 
