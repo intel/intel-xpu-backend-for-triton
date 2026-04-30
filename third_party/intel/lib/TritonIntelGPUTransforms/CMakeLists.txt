@@ -1,5 +1,6 @@
 add_triton_library(TritonIntelGPUTransforms
   AccelerateMatmul.cpp
+  BlockIOUtils.cpp
   DecomposeScaledBlocked.cpp
   HoistLayoutConversions.cpp
   MaterializeBlockPointer.cpp
@@ -12,6 +13,7 @@ add_triton_library(TritonIntelGPUTransforms
   RemoveLayoutConversions.cpp
   RewriteStackPtr.cpp
   Utility.cpp
+  WidenStoreEncoding.cpp
 
   DEPENDS
   TritonGPUTransforms
