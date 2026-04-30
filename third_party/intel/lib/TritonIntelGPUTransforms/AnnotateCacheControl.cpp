@@ -81,28 +81,43 @@ static bool propagateThroughSCF(OpOperand &use,
   return false;
 }
 
-// Returns true if any transitive (forward) user of `root` is a tt::DotOp or
-// tt::DotScaledOp. Walks through scf.for/scf.if/scf.while.
-static bool flowsToDot(Value root) {
-  llvm::SetVector<Value> worklist;
-  worklist.insert(root);
+// Returns true when `.cg` annotation should be suppressed on `loadOp` because
+// the HW access pattern implied by the load's result encoding already yields
+// cross-subgroup L1 reuse. Replaces the older forward-dataflow flowsToDot()
+// heuristic — reviewer feedback on PR #6723.
+static bool skipForL1Reuse(tt::LoadOp loadOp) {
+  auto tensorTy = dyn_cast<RankedTensorType>(loadOp.getType());
+  if (!tensorTy)
+    return false;
+  Attribute enc = tensorTy.getEncoding();
+  if (!enc)
+    return false;
 
-  for (unsigned i = 0; i < worklist.size(); ++i) {
-    Value v = worklist[i];
-    for (OpOperand &use : v.getUses()) {
-      Operation *user = use.getOwner();
-      if (isa<tt::DotOp, tt::DotScaledOp>(user))
+  // Unwrap SliceEncodingAttr chain (may be nested).
+  while (auto sliceEnc = dyn_cast<ttg::SliceEncodingAttr>(enc))
+    enc = sliceEnc.getParent();
+
+  // DotOperandEncodingAttr whose parent is a DPAS/MMA-family encoding
+  // (DpasEncodingAttr and Subgroup2DBlockEncodingAttr both implement
+  // MmaEncodingTrait).
+  if (auto dotEnc = dyn_cast<ttg::DotOperandEncodingAttr>(enc))
+    if (isa<ttg::MmaEncodingTrait>(dotEnc.getParent()))
+      return true;
+
+  // Scale operand of tt.dot_scaled: scales are consumed by the same
+  // DPAS-backed matmul as the A/B operands and benefit from the same
+  // cross-subgroup L1 reuse, so `.cg` would defeat that. The
+  // LinearEncodingAttr built by BlockScaledDPAStoLinearLayout has no
+  // signature we can match by attribute, so use a use-site check instead.
+  // A single-hop walk suffices because AccelerateMatmul materialises the
+  // scale encoding immediately before the tt.dot_scaled consumer — no
+  // scf.for / convert_layout sits between them at this pass position.
+  for (OpOperand &use : loadOp.getResult().getUses()) {
+    if (auto ds = dyn_cast<tt::DotScaledOp>(use.getOwner()))
+      if (use.get() == ds.getAScale() || use.get() == ds.getBScale())
         return true;
-
-      if (propagateThroughSCF(use, worklist))
-        continue;
-
-      // Generic forward propagation: any value produced by this op may carry
-      // data from `v`. Safe overapproximation.
-      for (Value res : user->getResults())
-        worklist.insert(res);
-    }
   }
+
   return false;
 }
 
@@ -354,7 +369,7 @@ struct AnnotateCacheControlPass
           return;
         if (!isa<RankedTensorType>(loadOp.getType()))
           return;
-        if (flowsToDot(loadOp.getResult()))
+        if (skipForL1Reuse(loadOp))
           return;
         if (shouldSkipLoad(loadOp.getPtr(), func, info.skipArgs))
           return;
