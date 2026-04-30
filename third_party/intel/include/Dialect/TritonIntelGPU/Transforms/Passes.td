@@ -40,6 +40,27 @@ def TritonIntelGPUOptimizeDotOperands
                            "mlir::triton::gpu::TritonGPUDialect"];
 }
 
+def TritonIntelGPUHoistLayoutConversions
+    : Pass<"tritonintelgpu-hoist-layout-conversions", "mlir::ModuleOp"> {
+  let summary = "Hoist layout conversions out of loops";
+  let description = [{
+    Hoist `ttg.convert_layout` operations out of `scf.for` loops when the
+    destination encoding is `DotOperandEncodingAttr` and the source operand is
+    defined outside the loop. This keeps loop-invariant dot operand layout
+    conversions in registers, avoiding redundant conversion on every iteration.
+
+    Hoisting is only performed when the resulting register pressure (measured
+    via liveness analysis) stays within 80% of the GRF budget for the given
+    GRF mode.
+  }];
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
+
+  let options = [
+    Option<"grfMode", "grf-mode", "std::string", /*default*/"\"default\"",
+           "GRF mode (default, 128, 256, or auto)">,
+  ];
+}
+
 def TritonIntelGPUPipeline : Pass<"tritonintelgpu-pipeline", "mlir::ModuleOp"> {
   let summary = "Pipeline loops";
 
@@ -78,8 +99,8 @@ def TritonIntelGPURemoveLayoutConversions : Pass<"tritonintelgpu-remove-layout-c
     #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
     #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4], A = [8, 16], B = [16, 16], C = [8, 16]}>
     ...
-    %28 = tt.descriptor_load %desc_a[%off_m, %off_k] : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #blocked>
-    %29 = tt.descriptor_load %desc_b[%off_k, %off_n] : !tt.tensordesc<tensor<32x256xf16>> -> tensor<32x256xf16, #blocked1>
+    %28 = tt.descriptor_load %desc_a[%off_m, %off_k] : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #blocked>
+    %29 = tt.descriptor_load %desc_b[%off_k, %off_n] : !tt.tensordesc<32x256xf16> -> tensor<32x256xf16, #blocked1>
     %30 = ttg.convert_layout %28 : tensor<64x32xf16, #blocked> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas}>>
     %31 = ttg.convert_layout %29 : tensor<32x256xf16, #blocked1> -> tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #dpas}>>
     %32 = tt.dot %30, %31, %arg10, inputPrecision = tf32 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas}>> * tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #dpas}>> -> tensor<64x256xf32, #dpas>
@@ -92,8 +113,8 @@ def TritonIntelGPURemoveLayoutConversions : Pass<"tritonintelgpu-remove-layout-c
     ```mlir
     #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4], A = [8, 16], B = [16, 16], C = [8, 16]}>
     ...
-    %28 = tt.descriptor_load %desc_a[%off_m, %off_k] : !tt.tensordesc<tensor<64x32xf16>> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas}>>
-    %29 = tt.descriptor_load %desc_b[%off_k, %off_n] : !tt.tensordesc<tensor<32x256xf16>> -> tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #dpas}>>
+    %28 = tt.descriptor_load %desc_a[%off_m, %off_k] : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas}>>
+    %29 = tt.descriptor_load %desc_b[%off_k, %off_n] : !tt.tensordesc<32x256xf16> -> tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #dpas}>>
     %32 = tt.dot %28, %29, %arg10, inputPrecision = tf32 : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #dpas}>> * tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #dpas}>> -> tensor<64x256xf32, #dpas>
     ```
 

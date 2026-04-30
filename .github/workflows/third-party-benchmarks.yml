@@ -19,6 +19,10 @@ on:
         description: SGLang pin (commit hash), keep empty for default
         type: string
         default: ""
+      liger_pin:
+        description: Liger-Kernel pin (commit hash), keep empty for default
+        type: string
+        default: ""
   # This workflow is also called from workflows third-party-benchmarks-*.yml.
   workflow_call:
     inputs:
@@ -31,6 +35,10 @@ on:
         default: ""
       sglang_pin:
         description: SGLang pin (commit hash), keep empty for default
+        type: string
+        default: ""
+      liger_pin:
+        description: Liger-Kernel pin (commit hash), keep empty for default
         type: string
         default: ""
 
@@ -70,6 +78,12 @@ jobs:
           echo "${{ inputs.sglang_pin }}" > benchmarks/third_party/sglang/sglang-pin.txt
           echo "Overriding SGLang pin to: ${{ inputs.sglang_pin }}"
 
+      - name: Override Liger-Kernel pin
+        if: ${{ inputs.liger_pin }}
+        run: |
+          echo "${{ inputs.liger_pin }}" > benchmarks/third_party/liger/liger-pin.txt
+          echo "Overriding Liger-Kernel pin to: ${{ inputs.liger_pin }}"
+
       - name: Install Python (from pyenv) ${{ inputs.python_version }}
         uses: ./.github/actions/setup-pyenv-python
         with:
@@ -102,10 +116,10 @@ jobs:
 
       - name: Install benchmarks
         id: install-benchmarks
-        run: |
-          cd benchmarks
-          # --no-build-isolation is necessary after moving to python=3.12
-          pip install --no-build-isolation .
+        uses: ./.github/actions/install-benchmarks
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          github-token: ${{ github.token }}
 
       - name: Run sglang benchmark int8
         if: ${{ steps.install-benchmarks.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'sglang')) }}

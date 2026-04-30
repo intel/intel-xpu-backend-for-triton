@@ -177,6 +177,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         dev_prop['has_f4_conversions'] = tgt_prop.get('has_f4_conversions', False)
         dev_prop['has_f8_conversions'] = tgt_prop.get('has_f8_conversions', False)
         dev_prop['has_256b_prefetch'] = tgt_prop.get('has_256b_prefetch', False)
+        dev_prop['has_rounded_divide_sqrt'] = tgt_prop.get('has_rounded_divide_sqrt', not is_lts)
 
         if '__intel_already_queried_extensions__' not in tgt_prop:
             # All GPUs with the same device_id have the same extensions, so we just
@@ -191,6 +192,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     def parse_options(self, opts) -> Any:
         args = {k: v for k, v in opts.items() if k in XPUOptions.__dataclass_fields__}
         args["allow_fp8e4nv"] = True
+        if "enable_fp_fusion" not in args:
+            args["enable_fp_fusion"] = knobs.language.default_fp_fusion
         return XPUOptions(**args)
 
     def pack_metadata(self, metadata):
@@ -259,6 +262,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         module_opts.support_256b_prefetch = properties["has_256b_prefetch"]
         module_opts.support_subgroup_matrix_multiply_accumulate_bf8 = properties[
             "has_subgroup_matrix_multiply_accumulate_bfloat8"]
+        module_opts.support_rounded_divide_sqrt = properties["has_rounded_divide_sqrt"]
         module_opts.threads_per_warp = opt.warp_size
         module_opts.target_arch = cls.target_arch
 
@@ -274,6 +278,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttir.add_remove_masks(pm)
         intel.passes.ttir.add_stride_versioning(pm)
         intel.passes.ttir.add_fuse_reshape(pm)
+        intel.passes.ttir.add_fold_true_cmpi(pm)
+        intel.passes.ttir.add_prepare_if_combining(pm)
         passes.common.add_canonicalizer(pm)
         passes.ttir.add_combine(pm)
         intel.passes.ttir.add_simplify_signed_arithmetic(pm)
@@ -312,6 +318,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_annotate_cache_control(pm)
         intel.passes.ttgpuir.add_optimize_dot_operands(pm)
+        intel.passes.ttgpuir.add_hoist_layout_conversions(pm, opt.grf_mode)
         intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier)
 
         if (opt.reduce_variable_liveness):
@@ -424,7 +431,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         llvm.init_targets()
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
-        intel.set_fast_math(llvm_mod)
+        intel.set_fast_math(llvm_mod, metadata['enable_fp_fusion'])
         if options.extern_libs:
             paths = [path for (name, path) in options.extern_libs]
             llvm.link_extern_libs(llvm_mod, paths)
@@ -461,6 +468,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             if options.num_warps > 32:
                 raise RuntimeError("grf_mode = 256 cannot be used with num_warps > 32")
             metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
+        elif options.grf_mode == '512':
+            if options.num_warps > 32:
+                raise RuntimeError("grf_mode = 512 cannot be used with num_warps > 32")
+            metadata["build_flags"] += " -cl-intel-512-GRF-per-thread"
         elif options.grf_mode == 'auto':
             metadata["build_flags"] += " -cl-intel-enable-auto-large-GRF-mode"
         elif options.grf_mode != 'default':

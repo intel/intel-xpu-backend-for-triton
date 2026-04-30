@@ -581,8 +581,8 @@ validateMultiRangeSetup(Value xOffsets, RankedTensorType tensorTy, Value desc) {
 
   // 7. Compute per-range slice types.
   auto sliceTy = RankedTensorType::get({rangeCount, rowWidth}, elemTy);
-  auto sliceDescTy =
-      triton::TensorDescType::get(tensorTy.getContext(), sliceTy);
+  auto sliceDescTy = triton::TensorDescType::get(sliceTy.getShape(), elemTy,
+                                                 mlir::Attribute{});
 
   return MultiRangeSetupInfo{std::move(ranges), rangeCount, rowWidth,   elemTy,
                              makeDescOp,        sliceTy,    sliceDescTy};
@@ -595,18 +595,18 @@ validateMultiRangeSetup(Value xOffsets, RankedTensorType tensorTy, Value desc) {
 ///
 /// Example — single contiguous range:
 ///   %desc = tt.make_tensor_desc %ptr, [%H, %W], [%s0, %s1]
-///              : !tt.tensordesc<tensor<1x64xbf16>>
+///              : !tt.tensordesc<1x64xbf16>
 ///   %range = tt.make_range {start = 0, end = 16} : tensor<16xi32>
 ///   %off = tt.splat %base : (i32) -> tensor<16xi32>
 ///   %x = arith.addi %range, %off : tensor<16xi32>
 ///   %v = tt.descriptor_gather %desc[%x, %y]
-///          : (!tt.tensordesc<tensor<1x64xbf16>>, tensor<16xi32>, i32)
+///          : (!tt.tensordesc<1x64xbf16>, tensor<16xi32>, i32)
 ///            -> tensor<16x64xbf16>
 /// Becomes:
 ///   %new_desc = tt.make_tensor_desc %ptr, [%H, %W], [%s0, %s1]
-///                  : !tt.tensordesc<tensor<16x64xbf16>>
+///                  : !tt.tensordesc<16x64xbf16>
 ///   %v = tt.descriptor_load %new_desc[%base, %y]
-///          : !tt.tensordesc<tensor<16x64xbf16>> -> tensor<16x64xbf16>
+///          : !tt.tensordesc<16x64xbf16> -> tensor<16x64xbf16>
 struct RewriteContiguousGather
     : public OpRewritePattern<triton::DescriptorGatherOp> {
   RewriteContiguousGather(MLIRContext *context,
@@ -626,8 +626,8 @@ struct RewriteContiguousGather
     Location loc = gatherOp.getLoc();
     auto newBlockTy =
         RankedTensorType::get({setup->numRows, setup->rowWidth}, setup->elemTy);
-    auto newDescTy =
-        triton::TensorDescType::get(rewriter.getContext(), newBlockTy);
+    auto newDescTy = triton::TensorDescType::get(
+        newBlockTy.getShape(), newBlockTy.getElementType(), mlir::Attribute{});
     auto newMakeDesc = triton::MakeTensorDescOp::create(
         rewriter, loc, newDescTy, setup->makeDescOp.getBase(),
         setup->makeDescOp.getShape(), setup->makeDescOp.getStrides(),
@@ -655,12 +655,12 @@ private:
 /// Example — constant offsets [0,1,2,3, 8,9,10,11] on tensor<1x64xbf16>:
 ///   %x = arith.constant dense<[0, 1, 2, 3, 8, 9, 10, 11]> : tensor<8xi32>
 ///   %v = tt.descriptor_gather %desc[%x, %y]
-///          : (!tt.tensordesc<tensor<1x64xbf16>>, tensor<8xi32>, i32)
+///          : (!tt.tensordesc<1x64xbf16>, tensor<8xi32>, i32)
 ///            -> tensor<8x64xbf16>
 /// Becomes (2 block loads + concatenation):
-///   %d0 = tt.make_tensor_desc ... : !tt.tensordesc<tensor<4x64xbf16>>
+///   %d0 = tt.make_tensor_desc ... : !tt.tensordesc<4x64xbf16>
 ///   %v0 = tt.descriptor_load %d0[%c0, %y] : ... -> tensor<4x64xbf16>
-///   %d1 = tt.make_tensor_desc ... : !tt.tensordesc<tensor<4x64xbf16>>
+///   %d1 = tt.make_tensor_desc ... : !tt.tensordesc<4x64xbf16>
 ///   %v1 = tt.descriptor_load %d1[%c8, %y] : ... -> tensor<4x64xbf16>
 ///   %v  = tt.cat %v0, %v1 : tensor<4x64xbf16> -> tensor<8x64xbf16>
 ///
@@ -744,8 +744,8 @@ struct RewriteContiguousScatter
     Location loc = scatterOp.getLoc();
     auto newBlockTy =
         RankedTensorType::get({setup->numRows, setup->rowWidth}, setup->elemTy);
-    auto newDescTy =
-        triton::TensorDescType::get(rewriter.getContext(), newBlockTy);
+    auto newDescTy = triton::TensorDescType::get(
+        newBlockTy.getShape(), newBlockTy.getElementType(), mlir::Attribute{});
     auto newMakeDesc = triton::MakeTensorDescOp::create(
         rewriter, loc, newDescTy, setup->makeDescOp.getBase(),
         setup->makeDescOp.getShape(), setup->makeDescOp.getStrides(),

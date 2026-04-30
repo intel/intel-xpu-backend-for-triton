@@ -30,14 +30,14 @@ namespace {
 
 // Transform:
 //   %desc = tt.make_tensor_descriptor %base, [%s0,%s1,%s2], [%a,%b,%c]
-//                       : !tt.tensordesc<tensor<1x512x64xf16>>
+//                       : !tt.tensordesc<1x512x64xf16>
 //   %load = tt.descriptor_load %desc[%x,%y,%z] -> tensor<1x512x64xf16>
 //   %A = tt.reshape %load : tensor<1x512x64xf16> -> tensor<512x64xf16>
 //   dot %A, ... : tensor<512x64xf16> x tensor<64x32xf16> -> tensor<512x32xf16>
 // into:
 //   %d = %a / %b
 //   %desc = tt.make_tensor_descriptor %base, [%s0*%d+%s1,%s2], [%b,%c]
-//                       : !tt.tensordesc<tensor<512x64xf16>>
+//                       : !tt.tensordesc<512x64xf16>
 //   %A = tt.descriptor_load %desc[%x*%d+%y,%z] -> tensor<512x64xf16>
 //   dot %A, ... : tensor<512x64xf16> x tensor<64x32xf16> -> tensor<512x32xf16>
 class FuseReshapeWithLoad : public tt::intel::Fuser {
@@ -133,8 +133,8 @@ private:
                                "the outermost dimension");
 
     auto tensorType = cast<RankedTensorType>(reshapeOp.getType());
-    auto newDescType =
-        tt::TensorDescType::get(reshapeOp->getContext(), tensorType);
+    auto newDescType = tt::TensorDescType::get(
+        tensorType.getShape(), tensorType.getElementType(), mlir::Attribute{});
 
     OpBuilder builder(makeTensorDescOp);
     Location loc = makeTensorDescOp.getLoc();

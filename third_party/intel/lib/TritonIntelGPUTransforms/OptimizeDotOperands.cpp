@@ -47,7 +47,7 @@ namespace {
 //   %desc = tt.make_tensor_desc %base, [%N, %K], [%K_stride, %1]
 //         : <tensor<BNxBKxf16>>
 //   %load = tt.descriptor_load %desc[%n, %k] {ttig.block_io = "row_major"}
-//         : !tt.tensordesc<tensor<BNxBKxf16>> -> tensor<BNxBKxf16>
+//         : !tt.tensordesc<BNxBKxf16> -> tensor<BNxBKxf16>
 //   %trans = tt.trans %load : tensor<BKxBN, #blocked>
 //   %cvt = ttg.convert_layout %trans : tensor<BKxBN, #dotEnc>
 //   tt.dot(%a, %cvt)
@@ -55,7 +55,7 @@ namespace {
 //   %desc = tt.make_tensor_desc %base, [%N, %K], [%K_stride, %1]
 //         : <tensor<BNxBKxf16>> (unchanged)
 //   %load = tt.descriptor_load %desc[%n, %k] {block_io = "column_major"}
-//         : !tt.tensordesc<tensor<BNxBKxf16>> -> tensor<BKxBN, #blocked>
+//         : !tt.tensordesc<BNxBKxf16> -> tensor<BKxBN, #blocked>
 //   %cvt = ttg.convert_layout %load : tensor<BKxBN, #dotEnc>
 //   tt.dot(%a, %cvt)
 class FuseTransWithDescriptorLoad {

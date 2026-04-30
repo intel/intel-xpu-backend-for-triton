@@ -48,18 +48,18 @@ def TritonIntelFuseReshape
     This pass attempts to fuse a tt.reshape operation with a tt.descriptor_load operation.
     For example, given:
         %desc = tt.make_tensor_descriptor %base_ptr, [%s0, %s1, %s2], [%a, %b, %c]
-                                          : !tt.tensordesc<tensor<1x512x64xf16>>
+                                          : !tt.tensordesc<1x512x64xf16>
         %load = tt.descriptor_load %desc[%x, %y, %z]
-                                   : !tt.tensordesc<tensor<1x512x64xf16>> -> tensor<1x512x64xf16>
+                                   : !tt.tensordesc<1x512x64xf16> -> tensor<1x512x64xf16>
         %A = tt.reshape %load : tensor<1x512x64xf16> -> tensor<512x64xf16>
         dot %A, ... : tensor<512x64xf16> x tensor<64x32xf16> -> tensor<512x32xf16>
 
     The transformation drops the reshape operation, and generates:
         %div = %a / %b
         %desc = tt.make_tensor_descriptor %base_ptr, [%s0 * %div + %s1, %s2], [%b, %c]
-                                          : !tt.tensordesc<tensor<512x64xf16>>
+                                          : !tt.tensordesc<512x64xf16>
         %A = tt.descriptor_load %desc[%x * %div + %y, %z]
-                                : !tt.tensordesc<tensor<512x64xf16>> -> tensor<512x64xf16>
+                                : !tt.tensordesc<512x64xf16> -> tensor<512x64xf16>
         dot %A, ... : tensor<512x64xf16> x tensor<64x32xf16> -> tensor<512x32xf16>
   }];
 
@@ -78,29 +78,29 @@ def TritonIntelStrideVersioning
 
     %cst = arith.constant ...
     %desc = tt.make_tensor_descriptor %base, [%s0, %s1], [%cst, %b]
-            : !tt.tensordesc<tensor<512x64xf16>>
+            : !tt.tensordesc<512x64xf16>
     scf.for ... {
       %load = tt.descriptor_load %desc[%x, %y]
-              : !tt.tensordesc<tensor<512x64xf16>> -> tensor<512x64xf16>
+              : !tt.tensordesc<512x64xf16> -> tensor<512x64xf16>
       ...
     }
 
     The transformation creates:
 
     %desc = tt.make_tensor_descriptor %base, [%s0, %s1], [%a, %b]
-            : !tt.tensordesc<tensor<512x64xf16>>
+            : !tt.tensordesc<512x64xf16>
     %desc' = tt.make_tensor_descriptor %base, [%s0, %s1], [%a, 1]
-             : !tt.tensordesc<tensor<512x64xf16>>
+             : !tt.tensordesc<512x64xf16>
     if (%b == 1)
       scf.for ... {
         %load = tt.descriptor_load %desc'[%x, %y]
-                : !tt.tensordesc<tensor<512x64xf16>> -> tensor<512x64xf16>
+                : !tt.tensordesc<512x64xf16> -> tensor<512x64xf16>
         ...
       }
     else
       scf.for ... {
         %load = tt.descriptor_load %desc[%x, %y]
-                : !tt.tensordesc<tensor<512x64xf16>> -> tensor<512x64xf16>
+                : !tt.tensordesc<512x64xf16> -> tensor<512x64xf16>
         ...
       }
   }];
@@ -136,6 +136,27 @@ def TritonIntelSimplifySignedArithmetic
   let dependentDialects = [
     "mlir::triton::TritonDialect"
   ];
+}
+
+def TritonIntelGPUFoldTrueCmpI
+    : Pass<"triton-intel-fold-true-cmpi", "mlir::ModuleOp"> {
+  let summary = "Fold provably true/false arith.cmpi to constants";
+  let description = [{
+    Uses integer range analysis to fold arith.cmpi comparisons that are
+    provably always true or always false into constant values. Cleans up
+    dead branches created by RemoveMasks loop versioning.
+  }];
+  let dependentDialects = ["mlir::arith::ArithDialect"];
+}
+
+def TritonIntelGPUPrepareIfCombining
+    : Pass<"triton-intel-prepare-if-combining", "mlir::triton::FuncOp"> {
+  let summary = "Move ops between scf.if pairs to enable combining";
+  let description = [{
+    Moves pure operations from between scf.if pairs that share the same
+    condition, enabling canonicalization to combine them into a single scf.if.
+  }];
+  let dependentDialects = ["mlir::scf::SCFDialect"];
 }
 
 #endif // TRITON_DIALECT_TRITON_INTEL_TRANSFORMS_PASSES

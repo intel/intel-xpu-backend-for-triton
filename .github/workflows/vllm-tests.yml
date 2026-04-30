@@ -51,3 +51,4 @@ jobs:
       skip_list: ${{ inputs.skip_list || '' }}
       ignore_errors: ${{ inputs.ignore_errors || false }}
       use_pyenv_python: ${{ inputs.use_pyenv_python || true }}
+    secrets: inherit

@@ -93,6 +93,12 @@ void PrefetchOp::build(OpBuilder &builder, OperationState &state, Value ptr,
   PrefetchOp::build(builder, state, ptr, /*mask=*/{}, cache, evict, isVolatile);
 }
 
+Value PrefetchOp::getPredicateOperand() { return getMask(); }
+void PrefetchOp::setPredicateOperand(Value pred) {
+  getMaskMutable().assign(pred);
+}
+Type PrefetchOp::getPredicateOperandTypeLike() { return getPtr().getType(); }
+
 LogicalResult DescriptorPrefetchOp::verify() {
   auto descType = getDesc().getType();
   unsigned blockRank = descType.getBlockType().getRank();

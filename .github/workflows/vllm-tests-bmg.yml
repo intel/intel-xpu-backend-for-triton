@@ -13,3 +13,4 @@ jobs:
     uses: ./.github/workflows/vllm-tests-reusable.yml
     with:
       runner_label: b580
+    secrets: inherit

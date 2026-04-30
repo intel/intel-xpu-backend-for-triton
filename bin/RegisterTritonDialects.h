@@ -109,6 +109,8 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::intel::registerTritonIntelStrideVersioning();
   mlir::triton::intel::registerTritonIntelSimplifySignedArithmetic();
   mlir::triton::intel::registerTritonRewriteTensorDescriptorToPointer();
+  mlir::triton::intel::registerTritonIntelGPUFoldTrueCmpI();
+  mlir::triton::intel::registerTritonIntelGPUPrepareIfCombining();
   mlir::triton::registerRelayoutTritonGPUPass();
   mlir::triton::gpu::registerAllocateSharedMemoryPass();
   mlir::triton::gpu::registerTritonGPUAllocateWarpGroups();

@@ -769,6 +769,15 @@ struct TritonIntelGPUInferLayoutInterface
     return success();
   }
 
+  LogicalResult verifyCatOpEncodingCompatibility(Operation *op) const override {
+    auto cat = cast<CatOp>(op);
+    if (!isLegalCatEncoding(cat, cat.getType().getEncoding()))
+      return op->emitError(
+          "tt.cat result encoding requires matching non-broadcast register "
+          "count");
+    return success();
+  }
+
   // Given a src shape + encoding and a dst shape, our goal is to compute a dst
   // encoding that makes the reshape a "nop".  That is, if GPU thread [x,y,z]
   // contains elements [a,b,c,d] before the reshape, it contains those same
@@ -1042,7 +1051,17 @@ struct TritonIntelGPUInferLayoutInterface
   LogicalResult
   inferReshapeOpEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
                          ArrayRef<int64_t> dstShape, Attribute &dstEnc,
+                         bool allowReorder,
                          std::optional<Location> loc) const override {
+    if (product(srcShape) != product(dstShape)) {
+      return emitOptionalError(loc, "numel of dst shape does not match "
+                                    "numel of src shape");
+    }
+    // If allowReorder is true, there are multiple valid encodings. Prefer the
+    // hint if it is set and valid.
+    if (allowReorder && dstEnc)
+      if (!isExpensiveView(srcShape, srcEnc, dstShape, dstEnc))
+        return success();
     auto result =
         inferReshapeOpLegacyEncoding(srcShape, srcEnc, dstShape, dstEnc);
     if (succeeded(result)) {
@@ -1054,11 +1073,6 @@ struct TritonIntelGPUInferLayoutInterface
     // inferReshapeOpLegacyEncoding and simply use LLs.
     auto *ctx = getContext();
     auto src = toLinearLayout(srcShape, srcEnc);
-
-    if (product(srcShape) != product(dstShape)) {
-      return emitOptionalError(loc, "numel of dst shape does not match "
-                                    "numel of src shape");
-    }
 
     auto newRank = dstShape.size();
     SmallVector<std::pair<StringAttr, int32_t>> newOutDims;

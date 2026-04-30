@@ -8,15 +8,18 @@ import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 from triton import language as tl
-from triton._internal_testing import is_blackwell, is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_gfx1250, is_interpreter, is_xpu
+from triton._internal_testing import (is_blackwell, is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_gfx1250,
+                                      is_hopper, is_interpreter, is_xpu)
 
 try:
+    from triton.experimental.gluon.language.nvidia import hopper
     from triton.experimental.gluon.language.nvidia.blackwell import (
         TensorMemoryLayout,
         TensorMemoryScalesLayout,
         allocate_tensor_memory,
         mbarrier,
         tcgen05_commit,
+        tcgen05_copy,
         tcgen05_mma,
         tcgen05_mma_scaled,
     )
@@ -163,6 +166,18 @@ def _expected_mul_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarray:
     return _payload_u32_to_f32_bits_i32(x_u32 * y_u32)
 
 
+def _expected_min_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarray:
+    x = _u32_to_i32(_mix_f32_bits_to_payload_u32(x_i32))
+    y = _u32_to_i32(_mix_f32_bits_to_payload_u32(y_i32))
+    return _unmix_payload_u32_to_f32_bits_i32(np.minimum(x, y).astype(np.int32).view(np.uint32))
+
+
+def _expected_max_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarray:
+    x = _u32_to_i32(_mix_f32_bits_to_payload_u32(x_i32))
+    y = _u32_to_i32(_mix_f32_bits_to_payload_u32(y_i32))
+    return _unmix_payload_u32_to_f32_bits_i32(np.maximum(x, y).astype(np.int32).view(np.uint32))
+
+
 def _expected_srem_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarray:
     # Match LLVM srem semantics: remainder after trunc-toward-zero division.
     # NOTE: Python/NumPy '%' uses floor division for negatives, so we implement explicitly.
@@ -248,6 +263,36 @@ def _expected_exp_i32(x_i32: np.ndarray) -> np.ndarray:
     rcp_log2 = np.uint64(0x236ee9bf)
     scaled = ((x * rcp_log2) & np.uint64(0xFFFFFFFF)).astype(np.uint32)
     return _expected_exp2_i32(_unmix_payload_u32_to_f32_bits_i32(scaled))
+
+
+def _expected_cossin_payload_u32(x_u32: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    mask = np.uint64(0xFFFFFFFF)
+    rcp5 = int(_inv_odd_u64(np.uint64(5)) & mask)
+    a = np.uint64((-3 * rcp5) & 0xFFFFFFFF)
+    b = np.uint64((4 * rcp5) & 0xFFFFFFFF)
+    x = x_u32.astype(np.uint64)
+    c = np.ones_like(x, dtype=np.uint64)
+    s = np.zeros_like(x, dtype=np.uint64)
+    with np.errstate(over="ignore"):
+        for i in range(32):
+            c_double = (c * c - s * s) & mask
+            s_double = (np.uint64(2) * c * s) & mask
+            c_inc = (a * c_double - b * s_double) & mask
+            s_inc = (a * s_double + b * c_double) & mask
+            inc = (x & np.uint64(1 << (31 - i))) != 0
+            c = np.where(inc, c_inc, c_double) & mask
+            s = np.where(inc, s_inc, s_double) & mask
+    return c.astype(np.uint32), s.astype(np.uint32)
+
+
+def _expected_cos_i32(x_i32: np.ndarray) -> np.ndarray:
+    c, _ = _expected_cossin_payload_u32(_mix_f32_bits_to_payload_u32(x_i32))
+    return _unmix_payload_u32_to_f32_bits_i32(c)
+
+
+def _expected_sin_i32(x_i32: np.ndarray) -> np.ndarray:
+    _, s = _expected_cossin_payload_u32(_mix_f32_bits_to_payload_u32(x_i32))
+    return _unmix_payload_u32_to_f32_bits_i32(s)
 
 
 def _expected_unary_tag_i32(x_i32: np.ndarray, op: str) -> np.ndarray:
@@ -414,6 +459,10 @@ def _binop_kernel(x_ptr, y_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOCK: gl
         z = x - y
     elif OP == "mul":
         z = x * y
+    elif OP == "min":
+        z = gl.minimum(x, y)
+    elif OP == "max":
+        z = gl.maximum(x, y)
     elif OP == "truediv":
         z = x / y
     elif OP == "fdiv":
@@ -516,6 +565,8 @@ def test_reciprocal_involution(device, fresh_knobs):
         ("add", _expected_add_i32),
         ("sub", _expected_sub_i32),
         ("mul", _expected_mul_i32),
+        ("min", _expected_min_i32),
+        ("max", _expected_max_i32),
         ("truediv", _expected_div_payload_i32),
         ("fdiv", _expected_div_payload_i32),
         ("mod", _expected_srem_i32),
@@ -652,6 +703,43 @@ def _exp_inverse_identity_kernel(x_ptr, out_ptr, n_elements, MODE: gl.constexpr,
     gl.store(out_ptr + offs, z, mask=mask)
 
 
+@gluon.jit
+def _cossin_identity_kernel(x_ptr, y_ptr, lhs_ptr, rhs_ptr, n_elements, MODE: gl.constexpr, BLOCK: gl.constexpr,
+                            THREADS_PER_WARP: gl.constexpr):
+    pid = gl.program_id(0)
+    layout: gl.constexpr = gl.BlockedLayout(size_per_thread=[2], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4],
+                                            order=[0])
+    offs = pid * BLOCK + gl.arange(0, BLOCK, layout=layout)
+    mask = offs < n_elements
+    x = gl.load(x_ptr + offs, mask=mask, other=0.0)
+    y = gl.load(y_ptr + offs, mask=mask, other=0.0)
+    sx = gl.sin(x)
+    sy = gl.sin(y)
+    cx = gl.cos(x)
+    cy = gl.cos(y)
+
+    if MODE == "sin_add":
+        lhs = gl.sin(x + y)
+        rhs = sx * cy + cx * sy
+    elif MODE == "sin_sub":
+        lhs = gl.sin(x - y)
+        rhs = sx * cy - cx * sy
+    elif MODE == "cos_add":
+        lhs = gl.cos(x + y)
+        rhs = cx * cy - sx * sy
+    elif MODE == "cos_sub":
+        lhs = gl.cos(x - y)
+        rhs = cx * cy + sx * sy
+    elif MODE == "unit":
+        lhs = cx * cx + sx * sx
+        rhs = x * 0.0 + 1.0
+    else:
+        gl.static_assert(False, "unsupported MODE")
+
+    gl.store(lhs_ptr + offs, lhs, mask=mask)
+    gl.store(rhs_ptr + offs, rhs, mask=mask)
+
+
 @pytest.mark.parametrize(
     "op",
     [
@@ -698,6 +786,10 @@ def test_unary_math_identity(device, op, fresh_knobs):
         exp_bits = _expected_exp_i32(x_bits)
     elif op == "exp2":
         exp_bits = _expected_exp2_i32(x_bits)
+    elif op == "cos":
+        exp_bits = _expected_cos_i32(x_bits)
+    elif op == "sin":
+        exp_bits = _expected_sin_i32(x_bits)
     else:
         exp_bits = _expected_unary_tag_i32(x_bits, op)
     _assert_payload_equal(out, exp_bits)
@@ -784,6 +876,34 @@ def test_exp_neg_reciprocal_identity(device, fresh_knobs):
                                        THREADS_PER_WARP=THREADS_PER_WARP)
 
     _assert_payload_equal(out_neg, out_recip)
+
+
+@pytest.mark.parametrize("mode", ["sin_add", "sin_sub", "cos_add", "cos_sub", "unit"])
+def test_cossin_angle_identities(device, mode, fresh_knobs):
+    _require_backend(device)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    n_elements = 1024
+    BLOCK = 256
+
+    g = torch.Generator(device=device)
+    g.manual_seed(5)
+    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device=device, generator=g)
+    y = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device=device, generator=g)
+    lhs = torch.empty((n_elements, ), dtype=torch.int32, device=device)
+    rhs = torch.empty((n_elements, ), dtype=torch.int32, device=device)
+
+    xw = triton.TensorWrapper(x, dtype=torch.float32)
+    yw = triton.TensorWrapper(y, dtype=torch.float32)
+    lhsw = triton.TensorWrapper(lhs, dtype=torch.float32)
+    rhsw = triton.TensorWrapper(rhs, dtype=torch.float32)
+
+    grid = (triton.cdiv(n_elements, BLOCK), )
+    _cossin_identity_kernel[grid](xw, yw, lhsw, rhsw, n_elements, MODE=mode, BLOCK=BLOCK,
+                                  THREADS_PER_WARP=THREADS_PER_WARP)
+
+    _assert_payload_equal(lhs, rhs)
 
 
 @gluon.jit
@@ -1267,31 +1387,47 @@ def _mm_scaled_payload_u32(a_u8: np.ndarray, b_u8: np.ndarray, a_scale_u8: np.nd
     assert a_scale.shape == (m, k // 32)
     assert b_scale.shape == (n, k // 32)
 
-    def unpack(data: np.ndarray, row: int, col: int, pack: int, pack_axis: int) -> np.uint16:
+    def unpack_payload_matrix(data: np.ndarray, pack: int, pack_axis: int) -> np.ndarray:
         if pack == 1:
-            return np.uint16(data[row, col])
-        return np.uint16(_unpack_element(data, row, col, pack, pack_axis=pack_axis))
+            return data.astype(np.uint64)
+        assert pack == 2
+        if pack_axis == 1:
+            out = np.empty((data.shape[0], data.shape[1] * pack), dtype=np.uint64)
+            out[:, 0::2] = data.astype(np.uint64) & np.uint64(0x0F)
+            out[:, 1::2] = (data.astype(np.uint64) >> np.uint64(4)) & np.uint64(0x0F)
+            return out
+        out = np.empty((data.shape[0] * pack, data.shape[1]), dtype=np.uint64)
+        out[0::2, :] = data.astype(np.uint64) & np.uint64(0x0F)
+        out[1::2, :] = (data.astype(np.uint64) >> np.uint64(4)) & np.uint64(0x0F)
+        return out
 
-    out = np.empty((m, n), dtype=np.uint64)
-    compute_type = "bf16"
+    def compute_payload_matrix(data: np.ndarray) -> np.ndarray:
+        if elem_type in ("e4m3", "e5m2"):
+            one_bits = 0x38 if elem_type == "e4m3" else 0x3C
+            payload = _mix_float_bits_to_payload_u64(data, 8, one_bits)
+            return _signed_cast_payload_u64(payload, 8, 16)
+        return data & np.uint64(0xFFFF)
+
+    def scale_payload_matrix(raw_scale: np.ndarray) -> np.ndarray:
+        raw_bf16 = (raw_scale & np.uint64(0xFF)) << np.uint64(7)
+        return _mix_float_bits_to_payload_u64(raw_bf16, 16, 0x3F80)
+
+    a_payload = compute_payload_matrix(unpack_payload_matrix(a_u8, a_pack, pack_axis=1))
+    b_payload = compute_payload_matrix(unpack_payload_matrix(b_u8, b_pack, pack_axis=0))
+    a_scale_payload = scale_payload_matrix(a_scale)
+    b_scale_payload = scale_payload_matrix(b_scale)
+
+    out = c_u.copy() if c_u is not None else np.zeros((m, n), dtype=np.uint64)
     compute_mask = np.uint64(0xFFFF)
     mask32 = np.uint64(0xFFFFFFFF)
-    for i in range(m):
-        for j in range(n):
-            s = c_u[i, j] if c_u is not None else 0
-            for kk in range(k):
-                a_val = unpack(a_u8, i, kk, a_pack, pack_axis=1)
-                b_val = unpack(b_u8, kk, j, b_pack, pack_axis=0)
-                a_val = _dot_scaled_compute_payload_elem(np.uint64(a_val), elem_type, compute_type)
-                b_val = _dot_scaled_compute_payload_elem(np.uint64(b_val), elem_type, compute_type)
-                a_scale_val = _dot_scaled_scale_payload(a_scale[i, kk // 32], compute_type)
-                b_scale_val = _dot_scaled_scale_payload(b_scale[j, kk // 32], compute_type)
-                lhs = (a_val * a_scale_val) & compute_mask
-                rhs = (b_val * b_scale_val) & compute_mask
-                lhs = _signed_cast_payload_scalar(lhs, 16, 32)
-                rhs = _signed_cast_payload_scalar(rhs, 16, 32)
-                s = (s + ((np.uint64(lhs) * np.uint64(rhs)) & mask32)) & mask32
-            out[i, j] = s
+    for group in range(k // 32):
+        start = group * 32
+        end = start + 32
+        lhs = (a_payload[:, start:end] * a_scale_payload[:, group:group + 1]) & compute_mask
+        rhs = (b_payload[start:end, :] * b_scale_payload[:, group][None, :]) & compute_mask
+        lhs = _signed_cast_payload_u64(lhs, 16, 32)
+        rhs = _signed_cast_payload_u64(rhs, 16, 32)
+        out = (out + (lhs @ rhs)) & mask32
     return _unmix_payload_u32_to_f32_bits_i32(out.astype(np.uint32))
 
 
@@ -1345,6 +1481,63 @@ def test_dot_fma(device, fresh_knobs):
     outw = triton.TensorWrapper(out, dtype=torch.float32)
 
     kernel[(1, )](aw, bw, cw, outw, THREADS_PER_WARP=THREADS_PER_WARP)
+
+    _assert_payload_equal(out, exp_bits)
+
+
+@pytest.mark.xfail(not is_hopper(), reason="Requires Hopper", run=False)
+@pytest.mark.parametrize(("use_acc", "is_async"), [(False, False), (True, False), (True, True)])
+def test_warpgroup_mma(device, use_acc, is_async, fresh_knobs):
+    _require_backend(device)
+
+    B = 64
+    BLOCK = gl.constexpr(B)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, c_ptr, out_ptr, USE_ACC: gl.constexpr, IS_ASYNC: gl.constexpr):
+        layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [gl.num_warps(), 1], [1, 0])
+        acc_layout: gl.constexpr = gl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1],
+                                                             instr_shape=[16, 32, 16])
+
+        offs_m = gl.arange(0, BLOCK, layout=gl.SliceLayout(1, layout))[:, None]
+        offs_n = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, layout))[None, :]
+        offs_k_row = gl.arange(0, BLOCK, layout=gl.SliceLayout(1, layout))[:, None]
+        offs_k_col = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, layout))[None, :]
+
+        a_tile = gl.load(a_ptr + offs_m * BLOCK + offs_k_col)
+        b_tile = gl.load(b_ptr + offs_k_row * BLOCK + offs_n)
+        c_tile = gl.load(c_ptr + offs_m * BLOCK + offs_n)
+
+        smem_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK, BLOCK], gl.float32)
+        smem_a = gl.allocate_shared_memory(gl.float32, [BLOCK, BLOCK], smem_layout, a_tile)
+        smem_b = gl.allocate_shared_memory(gl.float32, [BLOCK, BLOCK], smem_layout, b_tile)
+
+        acc = gl.convert_layout(c_tile, acc_layout)
+        acc = hopper.warpgroup_mma(smem_a, smem_b, acc, use_acc=USE_ACC, precision="tf32", is_async=IS_ASYNC)
+        if IS_ASYNC:
+            acc = hopper.warpgroup_mma_wait(num_outstanding=0, deps=[acc])
+        out = gl.convert_layout(acc, layout)
+        gl.store(out_ptr + offs_m * BLOCK + offs_n, out)
+
+    rs = np.random.RandomState(0)
+    a_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
+    b_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
+    c_bits = rs.randint(-(2**31), 2**31 - 1, size=(B, B), dtype=np.int32)
+    exp_bits = _mm_payload_u32(a_bits, b_bits, c_bits if use_acc else None)
+
+    a = torch.tensor(a_bits, device="cuda", dtype=torch.int32)
+    b = torch.tensor(b_bits, device="cuda", dtype=torch.int32)
+    c = torch.tensor(c_bits, device="cuda", dtype=torch.int32)
+    out = torch.empty((B, B), device="cuda", dtype=torch.int32)
+
+    aw = triton.TensorWrapper(a, dtype=torch.float32)
+    bw = triton.TensorWrapper(b, dtype=torch.float32)
+    cw = triton.TensorWrapper(c, dtype=torch.float32)
+    outw = triton.TensorWrapper(out, dtype=torch.float32)
+
+    kernel[(1, )](aw, bw, cw, outw, USE_ACC=use_acc, IS_ASYNC=is_async)
 
     _assert_payload_equal(out, exp_bits)
 
@@ -1554,8 +1747,8 @@ def test_tcgen05_mma_scaled(device, elem_type, fresh_knobs):
 
         bar = gl.allocate_shared_memory(gl.int64, [1], gl.constexpr(mbarrier.MBarrierLayout()))
         mbarrier.init(bar, count=1)
-        tcgen05_mma_scaled(a_smem, b_mma, acc_tmem, a_scale_tmem, b_scale_tmem, TYPE, TYPE, use_acc=True)
-        tcgen05_commit(bar)
+        tcgen05_mma_scaled(a_smem, b_mma, acc_tmem, a_scale_tmem, b_scale_tmem, TYPE, TYPE, use_acc=True,
+                           mbarriers=[bar])
         mbarrier.wait(bar, phase=0)
         mbarrier.invalidate(bar)
 
@@ -1645,41 +1838,154 @@ def test_tmem_index_subslice(device, fresh_knobs):
     _assert_payload_equal(out, exp_bits)
 
 
+@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+def test_tmem_copy_scales_in_warp_specialize_partition(device, fresh_knobs):
+    _require_backend(device)
+
+    smem_h = 64
+    smem_w = 16
+    SMEM_H = gl.constexpr(smem_h)
+    SMEM_W = gl.constexpr(smem_w)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    @gluon.jit
+    def copy_partition(smem, tmem, bar):
+        tcgen05_copy(smem, tmem)
+        tcgen05_commit(bar)
+
+    @gluon.jit
+    def default_partition():
+        pass
+
+    @gluon.jit
+    def kernel(in_ptr, out_ptr):
+        blocked: gl.constexpr = gl.BlockedLayout([1, 4], [32, 1], [gl.num_warps(), 1], [1, 0])
+        in_ptrs = (in_ptr + gl.arange(0, SMEM_H)[:, None] * SMEM_W + gl.arange(0, SMEM_W)[None, :])
+        value = gl.load(gl.set_auto_layout(in_ptrs, blocked))
+
+        smem_layout: gl.constexpr = gl.SharedLinearLayout(offset_bases=[
+            [0, 1],
+            [0, 2],
+            [32, 0],
+            [0, 4],
+            [1, 0],
+            [2, 0],
+            [4, 0],
+            [8, 0],
+            [16, 0],
+            [0, 8],
+        ])
+        smem = gl.allocate_shared_memory(gl.int8, (SMEM_H, SMEM_W), layout=smem_layout)
+        smem.store(value)
+
+        tmem_layout: gl.constexpr = TensorMemoryScalesLayout()
+        tmem = allocate_tensor_memory(gl.int8, (SMEM_H, SMEM_W), layout=tmem_layout)
+        bar = gl.allocate_shared_memory(gl.int64, [1], gl.constexpr(mbarrier.MBarrierLayout()))
+        mbarrier.init(bar, count=1)
+
+        gl.warp_specialize(
+            [
+                (default_partition, ()),
+                (copy_partition, (smem, tmem, bar)),
+            ],
+            [1],
+            [32],
+        )
+
+        mbarrier.wait(bar, phase=0)
+        mbarrier.invalidate(bar)
+        gl.store(out_ptr, 1)
+
+    x = torch.randint(size=(smem_h, smem_w), low=-100, high=100, dtype=torch.int8, device=device)
+    out = torch.empty((), device=device, dtype=torch.int32)
+    kernel[(1, )](x, out, num_warps=4)
+    torch.testing.assert_close(out, torch.ones_like(out))
+
+
+@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+def test_tmem_store_in_warp_specialize_partition_visible_to_parent(device, fresh_knobs):
+    _require_backend(device)
+
+    B = 64
+    BLOCK = gl.constexpr(B)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    @gluon.jit
+    def store_one_partition(tmem, bar):
+        reg_layout: gl.constexpr = tmem.get_reg_layout()
+        one = gl.full((BLOCK, BLOCK), 1.0, gl.float32, reg_layout)
+        tmem.store(one)
+        mbarrier.arrive(bar, count=1)
+
+    @gluon.jit
+    def default_partition():
+        pass
+
+    @gluon.jit
+    def kernel(out_ptr):
+        layout: gl.constexpr = gl.BlockedLayout([1, 1], [32, 1], [gl.num_warps(), 1], [1, 0])
+        offs_m = gl.arange(0, BLOCK, layout=gl.SliceLayout(1, layout))[:, None]
+        offs_n = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, layout))[None, :]
+        offs = offs_m * BLOCK + offs_n
+
+        tmem_layout: gl.constexpr = TensorMemoryLayout((BLOCK, BLOCK), col_stride=1)
+        tmem = allocate_tensor_memory(gl.float32, [BLOCK, BLOCK], layout=tmem_layout)
+        reg_layout: gl.constexpr = tmem.get_reg_layout()
+        zero = gl.full((BLOCK, BLOCK), 0.0, gl.float32, reg_layout)
+        tmem.store(zero)
+
+        bar = gl.allocate_shared_memory(gl.int64, [1], gl.constexpr(mbarrier.MBarrierLayout()))
+        mbarrier.init(bar, count=1)
+        gl.warp_specialize([
+            (default_partition, ()),
+            (store_one_partition, (tmem, bar)),
+        ], [4], [32])
+        mbarrier.wait(bar, phase=0, deps=[tmem])
+        mbarrier.invalidate(bar)
+
+        out = tmem.load()
+        out = gl.convert_layout(out, layout)
+        gl.store(out_ptr + offs, out)
+
+    out = torch.empty((B, B), device=device, dtype=torch.float32)
+    kernel[(1, )](out, num_warps=4)
+
+    torch.testing.assert_close(out, torch.ones_like(out), rtol=0, atol=0)
+
+
 def test_reduction(device, fresh_knobs):
     _require_backend(device)
 
     @triton.jit
-    def reduce_kernel(a_ptr, c_ptr, M: tl.constexpr, N: tl.constexpr, stride_am: tl.constexpr, stride_ak: tl.constexpr,
-                      ORDER: tl.constexpr):
-        a_ptrs = a_ptr + (tl.arange(0, M)[:, None] * stride_am + (tl.arange(0, N)[None, :]) * stride_ak)
+    def reduce_kernel(a_ptr, c_ptr, M: tl.constexpr, N: tl.constexpr, stride_ak: tl.constexpr, stride_am: tl.constexpr,
+                      stride_an: tl.constexpr, ORDER: tl.constexpr):
+
+        a_ptr += tl.program_id(0).to(tl.int64) * stride_ak
+        c_ptr += tl.program_id(0).to(tl.int64)
+        a_ptrs = a_ptr + (tl.arange(0, M)[:, None] * stride_am + (tl.arange(0, N)[None, :]) * stride_an)
         a = tl.load(a_ptrs)
         r1 = tl.sum(a, axis=ORDER)
-        r2 = tl.sum(r1, axis=ORDER - 1)
+        r2 = tl.sum(r1, axis=0)
         tl.store(c_ptr, r2)
 
-    # XPU needs smaller matrix to avoid resource exhaustion.
-    if is_xpu():
-        M, N = 128, 128
-        split = 16
-    else:
-        M, N = 512, 512
-        split = 64
+    # we run K parallel tests so as to make non-associativity much more
+    # likely to manifest:
+    K, M, N = 100, 128, 128
     torch.manual_seed(0)
-    a = torch.randn((M, N), dtype=torch.float32, device=device)
-    # Make non-associativity visible and deterministic: large + tiny magnitudes.
-    a[:, :split] *= 1e10
-    a[:, split:] *= 1e-10
-    c1 = torch.empty((1, ), device=device, dtype=torch.float32)
-    c2 = torch.empty((1, ), device=device, dtype=torch.float32)
+    a = torch.randn((K, M, N), dtype=torch.float32, device=device)
+    c1 = torch.empty((K, ), dtype=torch.float32).to(device)
+    c2 = torch.empty((K, ), dtype=torch.float32).to(device)
 
-    reduce_kernel[(1, )](a, c1, M=M, N=N, stride_am=a.stride(0), stride_ak=a.stride(1), ORDER=0)
-    reduce_kernel[(1, )](a, c2, M=M, N=N, stride_am=a.stride(0), stride_ak=a.stride(1), ORDER=1)
+    reduce_kernel[(K, )](a, c1, M, N, a.stride(0), a.stride(1), a.stride(2), ORDER=0)
+    reduce_kernel[(K, )](a, c2, M, N, a.stride(0), a.stride(1), a.stride(2), ORDER=1)
     assert not _payload_equal(c1, c2)
 
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
-    reduce_kernel[(1, )](a, c1, M=M, N=N, stride_am=a.stride(0), stride_ak=a.stride(1), ORDER=0)
-    reduce_kernel[(1, )](a, c2, M=M, N=N, stride_am=a.stride(0), stride_ak=a.stride(1), ORDER=1)
+    reduce_kernel[(K, )](a, c1, M, N, a.stride(0), a.stride(1), a.stride(2), ORDER=0)
+    reduce_kernel[(K, )](a, c2, M, N, a.stride(0), a.stride(1), a.stride(2), ORDER=1)
     assert _payload_equal(c1, c2)
 
 

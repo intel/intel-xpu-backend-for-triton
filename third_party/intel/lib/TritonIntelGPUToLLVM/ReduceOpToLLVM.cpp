@@ -327,7 +327,10 @@ private:
         vectorCombineRegion ? *vectorCombineRegion : op.getCombineOp();
 
     Operation &combinerOp = combineRegion.front().front();
+
+#if !TRITON_INTEL_REDUCE_USE_LEFT_FOLD_THREAD_REDUCE
     unsigned arity = targetInfo.getReductionTreeArity(&combinerOp);
+#endif
 
     // Perform a tree reduction
     unsigned numOperands = accs.size();
@@ -344,7 +347,7 @@ private:
         vals.push_back(std::move(cur));
       }
 
-#ifdef TRITON_INTEL_REDUCE_USE_LEFT_FOLD_THREAD_REDUCE
+#if TRITON_INTEL_REDUCE_USE_LEFT_FOLD_THREAD_REDUCE
       // Use a deterministic left fold to avoid extra reassociation error in
       // low-precision reductions.
       SmallVector<Value> acc = vals.front();

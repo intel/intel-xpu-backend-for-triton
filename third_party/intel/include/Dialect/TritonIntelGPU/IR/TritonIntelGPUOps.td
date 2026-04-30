@@ -48,6 +48,7 @@ def TTIG_AllocOp : TTIG_Op<"alloc", [MemoryEffects<[MemAlloc]>]> {
 
 def TTIG_PrefetchOp : TTIG_Op<"prefetch", [
   MemoryEffects<[MemWrite<L2Cache>]>,
+  DeclareOpInterfaceMethods<PredicatedOpInterface>,
   TypesMatchWith<"mask type matches ptr type", "ptr", "mask", "getI1SameShape(getPointeeType($_self))",
                  "($_op.getOperands().size() <= 1) || std::equal_to<>()">,
 ]> {

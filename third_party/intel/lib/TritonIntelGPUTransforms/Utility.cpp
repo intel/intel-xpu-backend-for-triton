@@ -132,9 +132,13 @@ bool isExpensiveLoadOrStore(Operation *op) {
   // Loads or stores that use a block pointer are expensive if they cannot be
   // lowered to 2D block read/write operations. Temporarily leverage the
   // "ttig.block_io" attribute to filter out inexpensive loads.
+  // Exception: 1D-reshaped loads and stores (indicated by
+  // ttig.block_io_stride) have a specific encoding that matches HW delivery
+  // order and must be anchored.
   Attribute blockIOAttr =
       op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
-  if (blockIOAttr)
+  if (blockIOAttr &&
+      !op->getAttr(TritonIntelGPUDialect::getBlockIOStrideAttrName()))
     return false;
 
   // Loads or stores that use more threads than elements can be presumed to have
@@ -219,12 +223,6 @@ LogicalResult getConvertBackwardSlice(
 
   auto updateLayout = [&](Value value, Attribute encoding) {
     assert(isa<RankedTensorType>(value.getType()));
-
-    if (RankedTensorType tensorType = getRankedTensorType(value.getType()))
-      if (tensorType.getEncoding() == encoding)
-        return success();
-
-    slice.insert(value);
     Attribute &existing = layout[value];
     if (existing && existing != encoding)
       return failure();
@@ -246,6 +244,13 @@ LogicalResult getConvertBackwardSlice(
 
     if (failed(updateLayout(currentValue, encoding)))
       return failure();
+
+    // If the value already has the desired encoding, we can stop here without
+    // adding it to the slice.
+    auto currentValueType = cast<RankedTensorType>(currentValue.getType());
+    if (currentValueType.getEncoding() == encoding)
+      continue;
+    slice.insert(currentValue);
 
     Value existing;
     if (getExistingConversion &&
@@ -288,6 +293,7 @@ LogicalResult getConvertBackwardSlice(
           continue;
         if (failed(updateLayout(result, encoding)))
           return failure();
+        slice.insert(result);
       }
       if (isFreeConvert(definingOp)) {
         enqueue(definingOp->getOpOperand(0), encoding);
@@ -310,16 +316,13 @@ LogicalResult getConvertBackwardSlice(
       }
       for (auto [i, operand] : llvm::enumerate(definingOp->getOpOperands())) {
         if (isa<RankedTensorType>(operand.get().getType())) {
-          auto srcEncoding = ttgi::inferSrcEncoding(definingOp, encoding);
+          Attribute srcEncoding;
+          if (auto upcast = dyn_cast<gpu::UpcastFpOpInterface>(definingOp))
+            srcEncoding = upcast.inferSrcEncoding(i, encoding);
+          else
+            srcEncoding = ttgi::inferSrcEncoding(definingOp, encoding);
           if (!srcEncoding)
             return failure();
-          // If the inferred layout matches the original one we don't need to
-          // keep propagating.
-          if (auto operandType =
-                  dyn_cast<RankedTensorType>(operand.get().getType())) {
-            if (srcEncoding == operandType.getEncoding())
-              continue;
-          }
           enqueue(operand, srcEncoding);
         }
       }

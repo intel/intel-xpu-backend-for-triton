@@ -1,5 +1,7 @@
 add_triton_library(TritonIntelTransforms
+  FoldTrueCmpIOp.cpp
   FuseReshape.cpp
+  PrepareIfCombining.cpp
   RemoveMasks.cpp
   RewriteTensorDescriptorToPointer.cpp
   SimplifySignedArithmetic.cpp

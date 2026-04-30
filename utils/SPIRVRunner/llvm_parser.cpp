@@ -19,6 +19,8 @@ command_line_parser::options command_line_parser::parse() {
       llvm::cl::desc("<Specify Expected Output Tensor Names (Ex: -v "
                      "expected_tensor1.pt,expected_tensor2.pt or skip)>"),
       llvm::cl::CommaSeparated);
+  llvm::cl::opt<std::string> spirv_dump_dir(
+      "d", llvm::cl::desc("<Specify SPIRV dump directory path>"));
 
   llvm::cl::ParseCommandLineOptions(argc, argv, "SPIRVRunner\n");
 
@@ -26,6 +28,7 @@ command_line_parser::options command_line_parser::parse() {
   opts.get_kernel_time = enable_profiling;
   opts.validate_results.assign(validate_results.begin(),
                                validate_results.end());
+  opts.spirv_dump_dir = spirv_dump_dir;
 
   return opts;
 }

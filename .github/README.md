@@ -20,7 +20,7 @@ Intel® XPU Backend for Triton\* is an out of tree backend module for [Triton](h
   * [Intel® Arc Pro B60](https://www.intel.com/content/www/us/en/products/sku/243916/intel-arc-pro-b60-graphics/specifications.html)
 * GPU Drivers:
   * Latest [Long Term Support (LTS) Release](https://dgpu-docs.intel.com/driver/installation-lts2.html)
-  * Latest [The Kobuk team Intel® Graphics PPA](https://launchpad.net/~kobuk-team/+archive/ubuntu/intel-graphics)
+  * Latest [The Kobuk team Intel® Graphics PPA](https://dgpu-docs.intel.com/driver/client/overview.html#ubuntu-latest)
 * Toolchain:
   * [Intel® Deep Learning Essentials 2025.3.2](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html?packages=dl-essentials&dl-lin=offline&dl-essentials-os=linux)
 

@@ -3,3 +3,13 @@ tests/kernels/mamba/test_causal_conv1d.py::test_causal_conv1d_varlen
 tests/kernels/mamba/test_mamba_ssm.py::test_selective_scan
 tests/kernels/mamba/test_mamba_ssm.py::test_selective_scan_varlen
 tests/kernels/mamba/test_mamba_ssm.py::test_selective_state_update
+
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/6713
+tests/kernels/mamba/test_mamba_ssm_ssd.py::test_mamba_chunk_scan_single_example[seq_len_chunk_size1-5-16-itype1]
+tests/kernels/mamba/test_mamba_ssm_ssd.py::test_mamba_chunk_scan_single_example[seq_len_chunk_size1-5-32-itype1]
+tests/kernels/mamba/test_mamba_ssm_ssd.py::test_mamba_chunk_scan_single_example[seq_len_chunk_size1-8-16-itype1]
+tests/kernels/mamba/test_mamba_ssm_ssd.py::test_mamba_chunk_scan_single_example[seq_len_chunk_size1-8-32-itype1]
+tests/kernels/mamba/test_mamba_ssm_ssd.py::test_mamba_chunk_scan_single_example[seq_len_chunk_size1-32-16-itype1]
+tests/kernels/mamba/test_mamba_ssm_ssd.py::test_mamba_chunk_scan_single_example[seq_len_chunk_size1-32-32-itype1]
+tests/kernels/mamba/test_mamba_ssm_ssd.py::test_mamba_chunk_scan_single_example[seq_len_chunk_size1-128-16-itype1]
+tests/kernels/mamba/test_mamba_ssm_ssd.py::test_mamba_chunk_scan_single_example[seq_len_chunk_size1-128-32-itype1]
