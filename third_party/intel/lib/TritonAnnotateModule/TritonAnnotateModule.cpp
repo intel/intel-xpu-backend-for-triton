@@ -86,6 +86,11 @@ struct TritonAnnotateModule
           ttgi::TritonIntelGPUDialect::getSupportPredicatedIOAttrName(),
           builder.getUnitAttr());
 
+    if (supportRoundedDivideSqrt)
+      mod->setAttr(
+          ttgi::TritonIntelGPUDialect::getSupportRoundedDivideSqrtAttrName(),
+          builder.getUnitAttr());
+
     if (isLTS)
       mod->setAttr(ttgi::TritonIntelGPUDialect::getIsLTSAttrName(),
                    builder.getUnitAttr());
