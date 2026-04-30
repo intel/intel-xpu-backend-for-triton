@@ -286,6 +286,7 @@ jobs:
 
       - name: Run Proton tests
         if: matrix.suite == 'rest'
+        timeout-minutes: 30
         run: |
           ${{ env.TRITON_TEST_CMD }} --proton
 
@@ -301,6 +302,7 @@ jobs:
 
       - name: Run matmul tests
         if: matrix.suite == 'rest'
+        timeout-minutes: 60
         run: |
           ${{ env.TRITON_TEST_CMD }} --matmul
 
@@ -311,6 +313,7 @@ jobs:
 
       - name: Run debug tests
         if: matrix.suite == 'rest'
+        timeout-minutes: 30
         run: |
           ${{ env.TRITON_TEST_CMD }} --debug
 
@@ -321,6 +324,7 @@ jobs:
 
       - name: Run interpreter tests
         if: matrix.suite == 'rest'
+        timeout-minutes: 30
         run: |
           ${{ env.TRITON_TEST_CMD }} --interpreter
 
@@ -332,17 +336,20 @@ jobs:
 
       - name: Run Tutorials
         if: matrix.suite == 'rest'
+        timeout-minutes: 45
         run: |
           ${{ env.TRITON_TEST_CMD }} --tutorial --tutorial06-run-mode skip
 
       # Run 06-fused-attention.py separately, because it is split into 3 configs
       - name: Run Flash Attention tutorials (HEAD_DIM=64)
         if: matrix.suite == 'rest'
+        timeout-minutes: 30
         run: |
           HEAD_DIM=64 ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode fa_only
 
       - name: Run Flash Attention tutorials (HEAD_DIM=128, FP8 only)
         if: matrix.suite == 'rest'
+        timeout-minutes: 30
         run: |
           ${{ env.TRITON_TEST_CMD }} --tutorial06-run-mode fp8_only
 
