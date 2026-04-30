@@ -14,6 +14,7 @@ add_triton_library(TritonIntelGPUTransforms
   RemoveLayoutConversions.cpp
   RewriteStackPtr.cpp
   Utility.cpp
+  WidenStoreEncoding.cpp
 
   DEPENDS
   TritonGPUTransforms

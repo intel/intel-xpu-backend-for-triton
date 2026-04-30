@@ -165,6 +165,23 @@ def TritonIntelGPUMaterializeBlockPointer : Pass<"tritonintelgpu-materialize-blo
                            "mlir::arith::ArithDialect"];
 }
 
+def TritonIntelGPUWidenStoreEncoding : Pass<"tritonintelgpu-widen-store-encoding", "mlir::ModuleOp"> {
+  let summary = "Widen a store's blocked encoding from 128b to 256b per thread";
+
+  let description = [{
+    On Xe3P (gated by the `ttig.support_256b_load_store` module attribute), this pass
+    rewrites `tt.store` operations whose value tensor uses a `BlockedEncodingAttr` with
+    a 128-bit-per-thread contiguous tile into a 256-bit-per-thread contiguous tile, when
+    pointer alignment, contiguity, and tensor shape allow it. The pass relies on the
+    downstream `tritonintelgpu-remove-layout-conversions` pass to absorb any
+    `ttg.convert_layout` ops introduced by the rewrite.
+  }];
+
+  let dependentDialects = ["mlir::triton::TritonDialect",
+                           "mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::gpu::intel::TritonIntelGPUDialect"];
+}
+
 def TritonIntelGPUOptimizeReductionLocality
     : Pass<"tritonintelgpu-optimize-reduction-locality", "mlir::ModuleOp"> {
   let summary = "Minimize number of reductions within sub-groups";
