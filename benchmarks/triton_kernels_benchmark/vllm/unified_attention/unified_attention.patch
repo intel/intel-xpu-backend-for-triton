@@ -1,5 +1,5 @@
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 285c7b263..f46401d76 100644
+index 285c7b263..d721c39e0 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -180,6 +180,8 @@ def kernel_unified_attention_2d(
@@ -311,7 +311,7 @@ index 285c7b263..f46401d76 100644
      segm_offset = (
          query_offset_0.to(tl.int64) * (num_query_heads * NUM_SEGMENTS_PER_SEQ)
          + query_offset_1 * NUM_SEGMENTS_PER_SEQ
-@@ -1136,40 +1111,38 @@ def unified_attention(
+@@ -1136,40 +1111,29 @@ def unified_attention(
      elif sliding_window_val <= 0:
          chunk_lookback = -1
  
@@ -360,15 +360,6 @@ index 285c7b263..f46401d76 100644
 -            )
 -        ](
 +    # 3. The number of sequences exceeds the configured threshold
-+    # if (
-+    #     seq_threshold_3D is None
-+    #     or num_par_softmax_segments is None
-+    #     or softmax_segm_output is None
-+    #     or softmax_segm_max is None
-+    #     or softmax_segm_expsum is None
-+    #     or max_seqlen_q > 1
-+    #     or num_seqs > seq_threshold_3D
-+    # ):
 +    seq_threshold_3D = 32
 +    if (max_seqlen_q > 1 or num_seqs > seq_threshold_3D
 +            # 2d kernel includes crucial optimizations for models with sliding window
@@ -380,7 +371,7 @@ index 285c7b263..f46401d76 100644
              output_ptr=out,
              query_ptr=q,
              key_cache_ptr=k,
-@@ -1231,9 +1204,31 @@ def unified_attention(
+@@ -1231,9 +1195,31 @@ def unified_attention(
              CHUNK_SIZE=chunk_size,
          )
      else:
