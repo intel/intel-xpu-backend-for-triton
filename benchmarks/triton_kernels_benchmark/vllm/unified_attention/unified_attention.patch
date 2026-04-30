@@ -1,5 +1,5 @@
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 285c7b263..21e1af381 100644
+index 285c7b263..3141c1c6e 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -180,6 +180,8 @@ def kernel_unified_attention_2d(
@@ -253,17 +253,15 @@ index 285c7b263..21e1af381 100644
          K, k_token_head_scales = _prepare_kv_tile(
              K_load,
              Q,
-@@ -757,12 +741,8 @@ def kernel_unified_attention_3d(
-             KV_QUANT_MODE,
+@@ -758,11 +742,7 @@ def kernel_unified_attention_3d(
          )
  
--        # V : (TILE_SIZE, HEAD_SIZE)
+         # V : (TILE_SIZE, HEAD_SIZE)
 -        V_load = tl.load(
 -            value_cache_ptr + v_offset,
 -            mask=dim_mask[None, :] & tile_mask[:, None],
 -            other=0.0,
 -        )
-+        # V : (BLOCK_SIZE, HEAD_SIZE)
 +        V_load = v_desc.load([offset_in_block, 0])
          V, v_token_head_scales = _prepare_kv_tile(
              V_load,
