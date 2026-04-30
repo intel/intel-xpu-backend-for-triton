@@ -55,8 +55,7 @@ def ref_paged_attn(
     for i in range(num_seqs):
         query_len = query_lens[i]
         kv_len = kv_lens[i]
-        q = query[start_idx:start_idx + query_len]
-        q *= scale
+        q = query[start_idx:start_idx + query_len] * scale
 
         num_kv_blocks = (kv_len + block_size - 1) // block_size
         block_indices = block_tables[i, :num_kv_blocks]
@@ -167,8 +166,9 @@ def is_enough_memory(x_val, safety_factor=0.80):
         ref_memory = max(ref_memory,
                          kv_repeat_mem + attn_mem + softmax_mem + empty_mask_mem + mask_mem + sliding_window_mask_mem)
 
-    # benchmark() and ref_paged_attn() allocations overlap.
-    total_memory = triton_memory + ref_memory
+    ref_phase_memory = query_mem + kv_cache_mem + bt_mem + ref_memory
+    triton_phase_memory = triton_memory + output_mem
+    total_memory = max(ref_phase_memory, triton_phase_memory)
 
     threshold = TOTAL_MEMORY_BYTES * safety_factor
     enough = total_memory < threshold
@@ -301,33 +301,34 @@ def get_unified_attention_benchmark(
         query = torch.randn(sum(query_lens), q_heads, head_size, dtype=dtype)
         key_cache = torch.randn(num_blocks, block_size, k_heads, head_size, dtype=dtype)
         value_cache = torch.randn_like(key_cache)
-        cu_query_lens = torch.tensor([0] + query_lens, dtype=torch.int32).cumsum(dim=0, dtype=torch.int32)
-        kv_lens_tensor = torch.tensor(kv_lens, dtype=torch.int32)
 
         max_num_blocks_per_seq = (max_kv_len + block_size - 1) // block_size
         block_tables = torch.randint(0, num_blocks, (num_seqs, max_num_blocks_per_seq), dtype=torch.int32)
 
-        output = torch.empty_like(query)
+        if provider == 'pytorch':
 
-        maybe_quantized_query = query
-        maybe_quantized_key_cache = key_cache
-        maybe_quantized_value_cache = value_cache
-        q_descale = None
-        k_descale = None
-        v_descale = None
-        if qdtype is not None:
-            # QKV are drawn from N(0, 1): no need for a fp8 scaling factor
-            maybe_quantized_query = query.to(qdtype)
-            maybe_quantized_key_cache = key_cache.to(qdtype)
-            maybe_quantized_value_cache = value_cache.to(qdtype)
+            def torch_fn():
+                return ref_paged_attn(
+                    query=query,
+                    key_cache=key_cache,
+                    value_cache=value_cache,
+                    query_lens=query_lens,
+                    kv_lens=kv_lens,
+                    block_tables=block_tables,
+                    scale=scale,
+                    sliding_window=sliding_window,
+                    soft_cap=soft_cap,
+                )
 
-            scale_shape = (num_seqs, k_heads)
-            q_descale = None  # Not yet supported
-            k_descale = torch.rand(scale_shape, dtype=torch.float32)
-            v_descale = torch.rand(scale_shape, dtype=torch.float32)
+            _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
+                torch_fn,
+                n_warmup=n_warmup,
+                n_repeat=10,
+                quantiles=quantiles,
+            )
 
-        def torch_fn():
-            return ref_paged_attn(
+        elif provider.startswith('triton'):
+            expected_output = ref_paged_attn(
                 query=query,
                 key_cache=key_cache,
                 value_cache=value_cache,
@@ -339,15 +340,26 @@ def get_unified_attention_benchmark(
                 soft_cap=soft_cap,
             )
 
-        if provider == 'pytorch':
-            _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
-                torch_fn,
-                n_warmup=n_warmup,
-                n_repeat=10,
-                quantiles=quantiles,
-            )
+            cu_query_lens = torch.tensor([0] + query_lens, dtype=torch.int32).cumsum(dim=0, dtype=torch.int32)
+            kv_lens_tensor = torch.tensor(kv_lens, dtype=torch.int32)
+            output = torch.empty_like(query)
 
-        elif provider.startswith('triton'):
+            maybe_quantized_query = query
+            maybe_quantized_key_cache = key_cache
+            maybe_quantized_value_cache = value_cache
+            q_descale = None
+            k_descale = None
+            v_descale = None
+            if qdtype is not None:
+                # QKV are drawn from N(0, 1): no need for a fp8 scaling factor
+                maybe_quantized_query = query.to(qdtype)
+                maybe_quantized_key_cache = key_cache.to(qdtype)
+                maybe_quantized_value_cache = value_cache.to(qdtype)
+
+                scale_shape = (num_seqs, k_heads)
+                q_descale = None  # Not yet supported
+                k_descale = torch.rand(scale_shape, dtype=torch.float32)
+                v_descale = torch.rand(scale_shape, dtype=torch.float32)
 
             def triton_fn():
                 unified_attention(
@@ -373,7 +385,9 @@ def get_unified_attention_benchmark(
             atol, rtol = 2.5e-2, 1e-2
             if qdtype is not None:
                 atol, rtol = 3 / 8 + 1e-6, 1.5e-1
-            benchmark_suite.assert_close(triton_fn, torch_fn, atol=atol, rtol=rtol, err_msg='triton to torch')
+            benchmark_suite.assert_close(triton_fn, lambda: expected_output, atol=atol, rtol=rtol,
+                                         err_msg='triton to torch')
+            del expected_output
 
             _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
                 triton_fn,
