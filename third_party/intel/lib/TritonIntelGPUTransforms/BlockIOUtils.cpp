@@ -477,4 +477,38 @@ FailureOr<LinearLayout> computeTransposeShuffleMapping(
   return shuffleMapping;
 }
 
+bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
+                             unsigned elemSizeInBits) {
+  // Descriptor loads have no mask, so maskAxisInfo is nullptr.
+  // oneMatrixPerLoadForBT is not needed for validation — it only limits
+  // transpose tile expansion, which doesn't affect basic validity.
+  auto sizeInfo = getBlockIOTileSize<true>(ll, memContiguousDim, elemSizeInBits,
+                                           /*maskAxisInfo=*/nullptr,
+                                           /*oneMatrixPerLoadForBT=*/false);
+  if (!sizeInfo.isValid())
+    return false;
+
+  // The 2D block I/O tile must use only the inner 2 dims. Reject if
+  // rowDim or colDim falls in a batch dimension.
+  unsigned rank = ll.getNumOutDims();
+  if (rank > 2) {
+    int innerDimStart = static_cast<int>(rank - 2);
+    if (sizeInfo.rowDim < innerDimStart || sizeInfo.colDim < innerDimStart)
+      return false;
+  }
+
+  unsigned packedElemSizeInBits = elemSizeInBits * sizeInfo.numElemPerPackedVal;
+  if (!check2DBlockAddressPayloadRestriction(packedElemSizeInBits,
+                                             sizeInfo.tileWidth))
+    return false;
+
+  constexpr int MAX_WIDTH = 64;
+  unsigned totalBytesPerRowPerMatrix =
+      sizeInfo.tileWidth * packedElemSizeInBits / 8;
+  if (totalBytesPerRowPerMatrix > MAX_WIDTH)
+    return false;
+
+  return true;
+}
+
 } // namespace mlir::triton::gpu::intel
