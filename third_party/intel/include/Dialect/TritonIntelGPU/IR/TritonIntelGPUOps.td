@@ -184,4 +184,79 @@ def TTIG_SubGroupTransposeOp
   let hasVerifier = 1;
 }
 
+
+def TTIG_Subgroup2DBlockLoadOp : TTIG_Op<"2d_block_load"> {
+  let summary = "2D block load from a descriptor-based surface";
+  let description = [{
+    Loads a 2D tile from a memory surface described by decomposed parameters.
+    Created from `tt.descriptor_load` ops where the surface parameters are
+    extracted from the `tt.make_tensor_descriptor` that defined the descriptor.
+
+    One `ttig.2d_block_load` may lower to multiple `triton_gen.2Dblockload`
+    ops when the tensor requires splitting across warps/registers.
+
+    Tile computation (`tile_height`, `tile_width`, `v_blocks`, `transpose`,
+    etc.) is performed during LLVM lowering from the result tensor's encoding.
+
+    The `offset_x` and `offset_y` are surface-level offsets (from the
+    descriptor indices) that are combined with per-sub-tile linear layout
+    offsets during LLVM lowering.
+
+    When `pad_nan` is true, the LLVM lowering builds boundary masks from
+    the surface dimensions and fills out-of-bounds elements with NaN.
+    When false (default), the hardware zero-fills out-of-bounds elements.
+  }];
+
+  let arguments = (ins
+    Arg<TT_Ptr, "scalar base pointer to the memory surface", [MemRead]>:$base_ptr,
+    I32:$base_width,
+    I32:$base_height,
+    I32:$base_pitch,
+    I32:$offset_x,
+    I32:$offset_y,
+    OptionalAttr<UnitAttr>:$pad_nan,
+    TTIG_BlockIOMode:$memory_layout
+  );
+
+  let results = (outs TT_Tensor:$result);
+  let hasVerifier = 1;
+}
+
+def TTIG_Subgroup2DBlockPtrLoadOp : TTIG_Op<"2d_block_ptr_load", [
+  AttrSizedOperandSegments
+]> {
+  let summary = "2D block load from a tensor of pointers";
+  let description = [{
+    Loads a 2D tile using a tensor of pointers. Created from `tt.load` ops
+    on pointer tensors that are eligible for 2D block I/O.
+
+    Unlike `ttig.2d_block_load` which takes a scalar base pointer and
+    surface-level offsets, this op retains the full pointer tensor. During
+    LLVM lowering, the per-sub-tile base address is extracted from
+    `ptrElems[registerIdx]` and subtraction-based addressing is used:
+    the column offset from the linear layout is subtracted from the pointer
+    to reach the row start, then passed as the block load's X coordinate.
+
+    One `ttig.2d_block_ptr_load` may lower to multiple
+    `triton_gen.2Dblockload` ops when the tensor requires splitting across
+    warps/registers.
+
+    Tile computation (`tile_height`, `tile_width`, `v_blocks`, `transpose`,
+    etc.) is performed during LLVM lowering from the result tensor's encoding.
+  }];
+
+  let arguments = (ins
+    Arg<TT_PtrLike, "tensor of pointers to the memory surface", [MemRead]>:$ptr,
+    I32:$base_width,
+    I32:$base_height,
+    I32:$base_pitch,
+    Optional<TT_BoolLike>:$mask,
+    Optional<TT_Type>:$other,
+    TTIG_BlockIOMode:$memory_layout
+  );
+
+  let results = (outs TT_Tensor:$result);
+  let hasVerifier = 1;
+}
+
 #endif
