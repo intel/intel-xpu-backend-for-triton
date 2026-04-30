@@ -1,5 +1,5 @@
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 285c7b263..d721c39e0 100644
+index 285c7b263..a3aca07c7 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -180,6 +180,8 @@ def kernel_unified_attention_2d(
@@ -101,12 +101,10 @@ index 285c7b263..d721c39e0 100644
          K, k_token_head_scales = _prepare_kv_tile(
              K_load,
              Q,
-@@ -349,13 +345,7 @@ def kernel_unified_attention_2d(
-             BLOCK_SIZE,
-             KV_QUANT_MODE,
+@@ -351,11 +347,7 @@ def kernel_unified_attention_2d(
          )
--
--        # V : (TILE_SIZE, HEAD_SIZE)
+ 
+         # V : (TILE_SIZE, HEAD_SIZE)
 -        V_load = tl.load(
 -            value_cache_ptr + v_offset,
 -            mask=dim_mask[None, :] & tile_mask[:, None],
@@ -116,7 +114,7 @@ index 285c7b263..d721c39e0 100644
          V, v_token_head_scales = _prepare_kv_tile(
              V_load,
              Q,
-@@ -480,11 +470,8 @@ def kernel_unified_attention_2d(
+@@ -480,11 +472,8 @@ def kernel_unified_attention_2d(
          L = L * alpha + l_j
          M = m_j
  
@@ -130,7 +128,7 @@ index 285c7b263..d721c39e0 100644
  
          # acc : (BLOCK_M, HEAD_SIZE_PADDED)
          # Per-token-head quant: apply v_scale to P instead of V.
-@@ -500,17 +487,15 @@ def kernel_unified_attention_2d(
+@@ -500,17 +489,15 @@ def kernel_unified_attention_2d(
          acc = acc * tl.load(out_scale)
          acc = tl.clamp(acc, FP8_MIN, FP8_MAX)
  
@@ -156,7 +154,7 @@ index 285c7b263..d721c39e0 100644
  
  
  @triton.jit
-@@ -578,6 +563,8 @@ def kernel_unified_attention_3d(
+@@ -578,6 +565,8 @@ def kernel_unified_attention_3d(
      CHUNK_LOOKBACK: tl.constexpr = -1,
      CHUNK_SIZE: tl.constexpr = -1,
  ):
@@ -165,7 +163,7 @@ index 285c7b263..d721c39e0 100644
      q_block_global_idx = tl.program_id(0)
      kv_head_idx = tl.program_id(1)
      segm_idx = tl.program_id(2)
-@@ -609,28 +596,32 @@ def kernel_unified_attention_3d(
+@@ -609,28 +598,32 @@ def kernel_unified_attention_3d(
          return
  
      offs_m = tl.arange(0, BLOCK_M)
@@ -210,7 +208,7 @@ index 285c7b263..d721c39e0 100644
  
      block_table_offset = seq_idx * block_table_stride
  
-@@ -717,30 +708,22 @@ def kernel_unified_attention_3d(
+@@ -717,30 +710,22 @@ def kernel_unified_attention_3d(
          seq_offset = j * TILE_SIZE + offs_t
          tile_mask = seq_offset < max_seq_prefix_len
  
@@ -254,7 +252,7 @@ index 285c7b263..d721c39e0 100644
          K, k_token_head_scales = _prepare_kv_tile(
              K_load,
              Q,
-@@ -758,11 +741,7 @@ def kernel_unified_attention_3d(
+@@ -758,11 +743,7 @@ def kernel_unified_attention_3d(
          )
  
          # V : (TILE_SIZE, HEAD_SIZE)
@@ -267,7 +265,7 @@ index 285c7b263..d721c39e0 100644
          V, v_token_head_scales = _prepare_kv_tile(
              V_load,
              Q,
-@@ -887,11 +866,8 @@ def kernel_unified_attention_3d(
+@@ -887,11 +868,8 @@ def kernel_unified_attention_3d(
          L = L * alpha + l_j
          M = m_j
  
@@ -281,7 +279,7 @@ index 285c7b263..d721c39e0 100644
  
          # acc : (BLOCK_M, HEAD_SIZE_PADDED)
          # Per-token-head quant: apply v_scale to P instead of V.
-@@ -901,18 +877,17 @@ def kernel_unified_attention_3d(
+@@ -901,18 +879,17 @@ def kernel_unified_attention_3d(
          else:
              acc += tl.dot(P.to(V.dtype), V)
  
@@ -311,7 +309,7 @@ index 285c7b263..d721c39e0 100644
      segm_offset = (
          query_offset_0.to(tl.int64) * (num_query_heads * NUM_SEGMENTS_PER_SEQ)
          + query_offset_1 * NUM_SEGMENTS_PER_SEQ
-@@ -1136,40 +1111,29 @@ def unified_attention(
+@@ -1136,40 +1113,29 @@ def unified_attention(
      elif sliding_window_val <= 0:
          chunk_lookback = -1
  
@@ -371,7 +369,7 @@ index 285c7b263..d721c39e0 100644
              output_ptr=out,
              query_ptr=q,
              key_cache_ptr=k,
-@@ -1231,9 +1195,31 @@ def unified_attention(
+@@ -1231,9 +1197,31 @@ def unified_attention(
              CHUNK_SIZE=chunk_size,
          )
      else:
