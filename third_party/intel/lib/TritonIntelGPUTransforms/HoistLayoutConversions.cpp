@@ -4,6 +4,8 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
+#include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/Debug.h"
 
@@ -18,6 +20,14 @@ namespace ttg = mlir::triton::gpu;
 #define DEBUG_TYPE "tritonintelgpu-hoist-layout-conversions"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
+
+STATISTIC(NumConsidered,
+          "Number of convert_layout ops considered for hoisting");
+STATISTIC(NumHoisted, "Number of convert_layout ops hoisted out of loops");
+STATISTIC(NumRejectedPressure,
+          "Number of convert_layout ops rejected due to register pressure");
+STATISTIC(NumSkippedOther,
+          "Number of convert_layout ops skipped (not eligible)");
 
 namespace {
 
@@ -84,35 +94,48 @@ static void
 hoistCvtDotOpOutOfLoop(ttg::ConvertLayoutOp cvtOp, Liveness &liveness,
                        unsigned grfBudget,
                        DenseMap<Operation *, unsigned> &cumulativeHoistBytes) {
+  ++NumConsidered;
   // Check the destination has DotOperandEncodingAttr.
   auto rtType = dyn_cast<RankedTensorType>(cvtOp.getType());
-  if (!rtType)
+  if (!rtType) {
+    ++NumSkippedOther;
     return;
+  }
   Attribute encoding = rtType.getEncoding();
-  if (!encoding || !isa<ttg::DotOperandEncodingAttr>(encoding))
+  if (!encoding || !isa<ttg::DotOperandEncodingAttr>(encoding)) {
+    ++NumSkippedOther;
     return;
+  }
 
   // Find the enclosing scf.for loop.
   auto parentForOp = cvtOp->getParentOfType<scf::ForOp>();
-  if (!parentForOp)
+  if (!parentForOp) {
+    ++NumSkippedOther;
     return;
+  }
 
   // Only hoist if the cvtOp is directly in the ForOp's body, not nested
   // inside a conditional (e.g., scf.if with a loop-variant condition).
-  if (cvtOp->getParentRegion() != &parentForOp.getRegion())
+  if (cvtOp->getParentRegion() != &parentForOp.getRegion()) {
+    ++NumSkippedOther;
     return;
+  }
 
   // Check the source is loop-invariant (defined outside the loop).
   // isDefinedOutsideOfLoop correctly rejects iter_args and induction vars.
-  if (!parentForOp.isDefinedOutsideOfLoop(cvtOp.getSrc()))
+  if (!parentForOp.isDefinedOutsideOfLoop(cvtOp.getSrc())) {
+    ++NumSkippedOther;
     return;
+  }
 
   // Liveness check.
   Block *bodyBlock = parentForOp.getBody();
   const LivenessBlockInfo *blockInfo = liveness.getLiveness(bodyBlock);
   // getLiveness() returns nullptr for unreachable blocks; defensive check.
-  if (!blockInfo)
+  if (!blockInfo) {
+    ++NumSkippedOther;
     return;
+  }
 
   unsigned liveInBytes = getBlockLiveInSizeInBytes(blockInfo);
   unsigned hoistBytes = getPerThreadSizeInBytes(rtType);
@@ -126,6 +149,7 @@ hoistCvtDotOpOutOfLoop(ttg::ConvertLayoutOp cvtOp, Liveness &liveness,
                                    << " + alreadyHoisted=" << alreadyHoisted
                                    << " + hoistBytes=" << hoistBytes
                                    << " exceeds 80% of budget=" << grfBudget);
+    ++NumRejectedPressure;
     cvtOp->setAttr("tt.no_licm", UnitAttr::get(cvtOp.getContext()));
     return;
   }
@@ -140,6 +164,7 @@ hoistCvtDotOpOutOfLoop(ttg::ConvertLayoutOp cvtOp, Liveness &liveness,
   else
     cvtOp->moveBefore(parentForOp);
 
+  ++NumHoisted;
   cumulativeHoistBytes[parentForOp] += hoistBytes;
 }
 
@@ -162,6 +187,13 @@ class TritonIntelGPUHoistLayoutConversionsPass
     DenseMap<Operation *, unsigned> cumulativeHoistBytes;
     for (auto cvtOp : cvtOps)
       hoistCvtDotOpOutOfLoop(cvtOp, liveness, grfBudget, cumulativeHoistBytes);
+
+    if (mlir::triton::tools::getBoolEnv("TRITON_INTEL_HLC_STATS")) {
+      llvm::errs() << "[HoistLayoutConversions] considered=" << NumConsidered
+                   << " hoisted=" << NumHoisted
+                   << " rejected_pressure=" << NumRejectedPressure
+                   << " skipped_other=" << NumSkippedOther << "\n";
+    }
   }
 };
 
