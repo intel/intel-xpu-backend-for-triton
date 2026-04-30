@@ -151,41 +151,68 @@ private:
     bool memoryRowMajor = isMemoryRowMajor(op);
 
     unsigned elemSizeInBits = tensorTy.getElementTypeBitWidth();
+    unsigned contiguousDim = memoryRowMajor ? rank - 1 : rank - 2;
 
-    // Compute pitch from stride analysis. For pointer-based 2D block IO, the
-    // stride must be a compile-time constant.
-    unsigned rowDim = memoryRowMajor ? rank - 2 : rank - 1;
-    int stride = getStride(strideAnalysis, op.getPtr(), rowDim);
-    if (stride < 0) {
-      LDBG("Cannot compute constant stride for load: " << *op);
-      return;
+    // For 1D→2D reshape loads, skip tile validation and use the stride
+    // attribute directly for pitch.
+    bool has1DReshapeStride =
+        op->hasAttr(ttgi::TritonIntelGPUDialect::getBlockIOStrideAttrName());
+
+    // Validate tile computation and get the actual row/col dims from the
+    // encoding. These may differ from the conventional rank-2/rank-1 for
+    // rank > 2 tensors.
+    unsigned rowDim, colDim;
+    if (has1DReshapeStride) {
+      // 1D reshape: conventional dims, no tile validation needed.
+      rowDim = memoryRowMajor ? rank - 2 : rank - 1;
+      colDim = memoryRowMajor ? rank - 1 : rank - 2;
+    } else {
+      Attribute encoding = tensorTy.getEncoding();
+      LinearLayout llEncoding =
+          cast<ttg::DistributedEncodingTrait>(encoding).toLinearLayout(
+              tensorTy.getShape());
+      auto sizeInfo = ttgi::getBlockIOTileSize<true>(llEncoding, contiguousDim,
+                                                     elemSizeInBits);
+      if (!sizeInfo.isValid()) {
+        LDBG("Tile size invalid for load: " << *op);
+        return;
+      }
+      unsigned packedBits = elemSizeInBits * sizeInfo.numElemPerPackedVal;
+      if (!ttgi::check2DBlockAddressPayloadRestriction(packedBits,
+                                                       sizeInfo.tileWidth)) {
+        LDBG("Address payload restriction failed for load: " << *op);
+        return;
+      }
+      rowDim = sizeInfo.rowDim;
+      colDim = sizeInfo.colDim;
     }
 
-    constexpr int MIN_PITCH = 64;
-    unsigned colDim = memoryRowMajor ? rank - 1 : rank - 2;
+    // Compute pitch from stride analysis or the 1D→2D reshape attribute.
     int64_t baseWidthBytes = tensorTy.getDimSize(colDim) * elemSizeInBits / 8;
+    constexpr int MIN_PITCH = 64;
 
     int pitch;
-    if (stride == 0)
-      pitch = std::max((int64_t)MIN_PITCH, baseWidthBytes);
-    else
+    int stride; // stride in elements for the row dimension
+    if (has1DReshapeStride) {
+      auto strideAttr = op->getAttrOfType<IntegerAttr>(
+          ttgi::TritonIntelGPUDialect::getBlockIOStrideAttrName());
+      stride = strideAttr.getInt();
       pitch = stride * elemSizeInBits / 8;
+    } else {
+      stride = getStride(strideAnalysis, op.getPtr(), rowDim);
+      if (stride < 0) {
+        LDBG("Cannot compute constant stride for load: " << *op);
+        return;
+      }
+      if (stride == 0)
+        pitch = std::max((int64_t)MIN_PITCH, baseWidthBytes);
+      else
+        pitch = stride * elemSizeInBits / 8;
+    }
 
     // HW requires pitch >= 64 bytes and pitch aligned to 16 bytes.
     if (pitch < MIN_PITCH || (pitch % 16) != 0) {
       LDBG("Invalid pitch " << pitch << " for load: " << *op);
-      return;
-    }
-
-    // Validate that tile computation will succeed during LLVM lowering.
-    Attribute encoding = tensorTy.getEncoding();
-    unsigned contiguousDim = memoryRowMajor ? rank - 1 : rank - 2;
-    LinearLayout llEncoding =
-        cast<ttg::DistributedEncodingTrait>(encoding).toLinearLayout(
-            tensorTy.getShape());
-    if (!ttgi::validate2DBlockLoadTile(llEncoding, contiguousDim,
-                                       elemSizeInBits, tensorTy)) {
-      LDBG("Tile validation failed for load: " << *op);
       return;
     }
 
@@ -220,6 +247,14 @@ private:
         builder, loc, op.getType(), op.getPtr(), baseWidth, baseHeight,
         basePitch, mask, other,
         ttgi::BlockIOModeAttr::get(builder.getContext(), memLayout));
+
+    // Propagate attributes if present.
+    for (StringRef attrName :
+         {ttgi::TritonIntelGPUDialect::getOneMatrixPerLoadAttrName(),
+          ttgi::TritonIntelGPUDialect::getBlockIOStrideAttrName()}) {
+      if (auto attr = op->getAttr(attrName))
+        blockPtrLoadOp->setAttr(attrName, attr);
+    }
 
     op.replaceAllUsesWith(blockPtrLoadOp.getResult());
     op.erase();
@@ -291,9 +326,11 @@ private:
     assert(indices.size() == descRank &&
            "descriptor index count must match descriptor rank");
 
-    // Fold rank-reducing batch indices into base_ptr.
-    unsigned rankDelta = descRank - rank;
-    for (unsigned d = 0; d < rankDelta; ++d) {
+    // Fold batch indices into base_ptr. This handles both rank-reducing loads
+    // (descRank > rank: leading descriptor dims are dropped) and same-rank
+    // loads with rank > 2 (batch dims before the inner-2 dims).
+    unsigned numBatchDims = descRank - 2;
+    for (unsigned d = 0; d < numBatchDims; ++d) {
       Value batchOffset = arith::MulIOp::create(
           builder, loc,
           arith::ExtSIOp::create(builder, loc, builder.getI64Type(),

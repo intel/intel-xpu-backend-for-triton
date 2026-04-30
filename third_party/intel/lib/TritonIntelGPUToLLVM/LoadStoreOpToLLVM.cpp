@@ -3590,7 +3590,7 @@ struct BlockLoad2DParams {
 static BlockLoad2DParams computeBlockLoad2DParams(
     RankedTensorType tensorType, triton::gpu::intel::BlockIOMode memLayout,
     bool oneMatrixPerLoad, const LLVMTypeConverter *typeConverter,
-    Operation *op) {
+    Operation *op, AxisInfo *maskAxisInfo = nullptr) {
   BlockLoad2DParams p;
   p.tensorType = tensorType;
   Attribute encoding = tensorType.getEncoding();
@@ -3608,9 +3608,30 @@ static BlockLoad2DParams computeBlockLoad2DParams(
   p.eltTy = typeConverter->convertType(tensorType.getElementType());
   p.elemSizeInBits = p.eltTy.getIntOrFloatBitWidth();
 
-  BlockIOTileSizeInfo sizeInfo = getBlockIOTileSize<true /*load*/>(
-      p.llEncoding, p.contiguousDim, p.elemSizeInBits,
-      /*maskAxisInfo=*/nullptr, oneMatrixPerLoad);
+  BlockIOTileSizeInfo sizeInfo = BlockIOTileSizeInfo::unknown();
+  if (op->hasAttr(TritonIntelGPUDialect::getBlockIOStrideAttrName())) {
+    // For loads annotated by the 1D→2D reshape, the encoding was inferred
+    // by tt.reshape and may not satisfy getBlockIOTileSize constraints.
+    // Construct tile info manually from the tensor shape (same as stores).
+    auto blockedEnc = dyn_cast<BlockedEncodingAttr>(tensorType.getEncoding());
+    assert(blockedEnc && "1D reshape load must have BlockedEncodingAttr");
+    unsigned numWarpsRow = blockedEnc.getWarpsPerCTA()[0];
+    int height = tensorType.getDimSize(0) / numWarpsRow;
+    int width = tensorType.getDimSize(p.rank - 1);
+    StringAttr kRegister = StringAttr::get(op->getContext(), "register");
+    unsigned regDimSize = p.llEncoding.getInDimSize(kRegister);
+    SetVector<unsigned> regPackBases;
+    for (unsigned i = 1; i < regDimSize; i <<= 1)
+      regPackBases.insert(i);
+    sizeInfo = BlockIOTileSizeInfo(height, width, /*numElemPerPackedVal=*/1,
+                                   /*vBlocks=*/1, /*rowDim=*/0,
+                                   /*colDim=*/p.rank - 1, /*transpose=*/false,
+                                   std::move(regPackBases));
+  } else {
+    sizeInfo = getBlockIOTileSize<true /*load*/>(p.llEncoding, p.contiguousDim,
+                                                 p.elemSizeInBits, maskAxisInfo,
+                                                 oneMatrixPerLoad);
+  }
   assert(sizeInfo.isValid() && "expected valid tile size");
 
   p.tileHeight = sizeInfo.tileHeight;
@@ -3699,22 +3720,22 @@ static BlockLoad2DParams computeBlockLoad2DParams(
 /// The only thing that differs between descriptor and pointer loads is how
 /// each sub-tile's address is computed — this is provided via the
 /// `computeAddress` callback.
-static LogicalResult
-lowerBlockLoad2D(Operation *op, RankedTensorType tensorType,
-                 triton::gpu::intel::BlockIOMode memLayout, Value pitch,
-                 function_ref<SubTileAddress(
-                     unsigned /*registerIdx*/,
-                     ArrayRef<std::pair<StringAttr, Value>> /*offsets*/)>
-                     computeAddress,
-                 ArrayRef<Value> otherElems, ArrayRef<Value> nanMaskElems,
-                 const triton::intel::TargetInfo &targetInfo,
-                 const LLVMTypeConverter *typeConverter, Location loc,
-                 ConversionPatternRewriter &rewriter) {
+static LogicalResult lowerBlockLoad2D(
+    Operation *op, RankedTensorType tensorType,
+    triton::gpu::intel::BlockIOMode memLayout, Value pitch,
+    function_ref<
+        SubTileAddress(unsigned /*registerIdx*/,
+                       ArrayRef<std::pair<StringAttr, Value>> /*offsets*/)>
+        computeAddress,
+    ArrayRef<Value> otherElems, ArrayRef<Value> nanMaskElems,
+    const triton::intel::TargetInfo &targetInfo,
+    const LLVMTypeConverter *typeConverter, Location loc,
+    ConversionPatternRewriter &rewriter, AxisInfo *maskAxisInfo = nullptr) {
 
   bool oneMatrixPerLoad =
       op->hasAttr(TritonIntelGPUDialect::getOneMatrixPerLoadAttrName());
   auto p = computeBlockLoad2DParams(tensorType, memLayout, oneMatrixPerLoad,
-                                    typeConverter, op);
+                                    typeConverter, op, maskAxisInfo);
 
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   MLIRContext *ctx = rewriter.getContext();
@@ -3997,9 +4018,17 @@ struct Subgroup2DBlockPtrLoadOpConversion
           pred};
     };
 
-    return lowerBlockLoad2D(
-        op, tensorType, op.getMemoryLayout(), pitch, computeAddress, otherElems,
-        /*nanMaskElems=*/{}, targetInfo, getTypeConverter(), loc, rewriter);
+    // Get mask axis info for tile size validation (constancy checks).
+    AxisInfo *maskAxisInfo = nullptr;
+    if (op.getMask())
+      maskAxisInfo =
+          const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
+              .getAxisInfo(op.getMask());
+
+    return lowerBlockLoad2D(op, tensorType, op.getMemoryLayout(), pitch,
+                            computeAddress, otherElems,
+                            /*nanMaskElems=*/{}, targetInfo, getTypeConverter(),
+                            loc, rewriter, maskAxisInfo);
   }
 };
 
