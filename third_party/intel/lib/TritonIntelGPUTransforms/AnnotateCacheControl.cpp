@@ -83,8 +83,8 @@ static bool propagateThroughSCF(OpOperand &use,
 
 // Returns true when `.cg` annotation should be suppressed on `loadOp` because
 // the HW access pattern implied by the load's result encoding already yields
-// cross-subgroup L1 reuse. Replaces the older forward-dataflow flowsToDot()
-// heuristic — reviewer feedback on PR #6723.
+// cross-subgroup L1 reuse. Replaces an older forward-dataflow heuristic
+// (see PR #6723 review).
 static bool skipForL1Reuse(tt::LoadOp loadOp) {
   auto tensorTy = dyn_cast<RankedTensorType>(loadOp.getType());
   if (!tensorTy)
@@ -308,19 +308,13 @@ static FuncSkipInfo computeSkipArgs(tt::FuncOp func) {
   };
 
   func.walk([&](Operation *op) {
-    if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
+    if (auto loadOp = dyn_cast<tt::LoadOp>(op))
       collectFor(loadOp.getPtr(), loadedArgs);
-      return;
-    }
-    if (auto storeOp = dyn_cast<tt::StoreOp>(op)) {
+    else if (auto storeOp = dyn_cast<tt::StoreOp>(op)) {
       if (!collectFor(storeOp.getPtr(), storedArgs))
         hasUnresolvedStore = true;
-      return;
-    }
-    if (isa<tt::AtomicRMWOp, tt::AtomicCASOp>(op)) {
+    } else if (isa<tt::AtomicRMWOp, tt::AtomicCASOp>(op))
       info.hasAtomic = true;
-      return;
-    }
   });
 
   // Read-write args are always excluded.

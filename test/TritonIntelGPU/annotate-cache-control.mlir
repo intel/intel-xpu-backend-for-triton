@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-annotate-cache-control | FileCheck %s
+// RUN: env TRITON_INTEL_DISABLE_ANNOTATE_CACHE_CONTROL=0 triton-opt %s -split-input-file -tritonintelgpu-annotate-cache-control | FileCheck %s
 
 // COM: Test a — load that does NOT feed a dot gets CG (cache = 2).
 // COM: Store is intentionally left untouched.
@@ -41,27 +41,28 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Test c — load that feeds a tt.dot through an scf.for iter_arg stays NONE.
+// COM: Test c — load with #blocked encoding that is converted to #dot_a and
+// COM: consumed by tt.dot GETS .cg. The blocked load issues non-overlapping
+// COM: subgroup addresses (no cross-subgroup L1 reuse to preserve); the
+// COM: layout conversion to dot operand happens in registers after the load.
 
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 #dot_b = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // CHECK-LABEL: @gemm_loop_iter_arg_unchanged
-  tt.func public @gemm_loop_iter_arg_unchanged(%aptr: tensor<32x32x!tt.ptr<f16>, #dot_a>,
-                                               %bptr: tensor<32x32x!tt.ptr<f16>, #dot_b>,
-                                               %c: tensor<32x32xf32, #dpas>,
-                                               %lb: index, %ub: index, %step: index)
-      -> tensor<32x32xf32, #dpas> {
+  // CHECK-LABEL: @blocked_to_dot_via_convert_gets_cg
+  tt.func public @blocked_to_dot_via_convert_gets_cg(%aptr: tensor<32x32x!tt.ptr<f16>, #blocked>,
+                                                     %bptr: tensor<32x32x!tt.ptr<f16>, #dot_b>,
+                                                     %c: tensor<32x32xf32, #dpas>) -> tensor<32x32xf32, #dpas> {
+    // CHECK: tt.load {{.*}} cacheModifier = cg
+    %a_blk = tt.load %aptr : tensor<32x32x!tt.ptr<f16>, #blocked>
+    %a = ttg.convert_layout %a_blk : tensor<32x32xf16, #blocked> -> tensor<32x32xf16, #dot_a>
     // CHECK: tt.load
     // CHECK-NOT: cacheModifier = cg
-    %a = tt.load %aptr : tensor<32x32x!tt.ptr<f16>, #dot_a>
-    %res = scf.for %i = %lb to %ub step %step iter_args(%acc = %c) -> tensor<32x32xf32, #dpas> {
-      %b = tt.load %bptr : tensor<32x32x!tt.ptr<f16>, #dot_b>
-      %d = tt.dot %a, %b, %acc : tensor<32x32xf16, #dot_a> * tensor<32x32xf16, #dot_b> -> tensor<32x32xf32, #dpas>
-      scf.yield %d : tensor<32x32xf32, #dpas>
-    }
-    tt.return %res : tensor<32x32xf32, #dpas>
+    %b = tt.load %bptr : tensor<32x32x!tt.ptr<f16>, #dot_b>
+    %d = tt.dot %a, %b, %c : tensor<32x32xf16, #dot_a> * tensor<32x32xf16, #dot_b> -> tensor<32x32xf32, #dpas>
+    tt.return %d : tensor<32x32xf32, #dpas>
   }
 }
 
@@ -421,9 +422,9 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Test s — scf.while feeding a tt.dot: the A operand of a matmul is
-// COM: threaded through an scf.while into the dot. The forward-walk must see
-// COM: this and leave the load with default cache modifier.
+// COM: Test s — dot_op-encoded load whose value is threaded through an scf.while
+// COM: before being consumed by tt.dot. The scf.while is incidental — the
+// COM: encoding gate already blocks .cg on the load.
 
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>

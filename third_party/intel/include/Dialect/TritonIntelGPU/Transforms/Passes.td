@@ -271,7 +271,7 @@ def TritonIntelGPUReduceVariableLiveness
 
 def TritonIntelGPUAnnotateCacheControl
     : Pass<"tritonintelgpu-annotate-cache-control", "mlir::ModuleOp"> {
-  let summary = "Annotate tt.load ops with .cg cache control when data does not flow to a tt.dot";
+  let summary = "Annotate tt.load ops with .cg cache control unless the load's encoding indicates cross-subgroup L1 reuse";
   let description = [{
     Sets `.cg` (L1UC_L3C) cache control on `tt.load` operations whose result
     does not participate in a matrix multiply. GEMM operand loads benefit from
@@ -284,9 +284,17 @@ def TritonIntelGPUAnnotateCacheControl
     cost-model heuristics that preserve L1 locality for loads likely to benefit
     from L1 reuse (e.g. matmul operand loads in complex kernels).
 
-    The heuristic uses a forward use-def walk from `tt.load` results (through
-    `scf.for` iter_args and results) to detect whether the loaded data reaches
-    a `tt.dot`/`tt.dot_scaled`.
+    The pass runs **after** `remove_layout_conversions`, so load-result
+    encodings are stable. The heuristic inspects each `tt.load`'s result
+    encoding: if it is a `DotOperandEncodingAttr` whose parent implements
+    `MmaEncodingTrait` (DPAS / Subgroup2DBlockEncoding), annotation is
+    suppressed — the HW access pattern already yields cross-subgroup L1 reuse
+    because the K dimension is broadcast across warps. Nested
+    `SliceEncodingAttr` layers are unwrapped before the dot-operand check.
+    The load is also suppressed when its result feeds the `aScale`/`bScale`
+    operand of a `tt.dot_scaled` — a single-hop use-site check suffices
+    because AccelerateMatmul materialises scale encodings immediately before
+    the consumer, with no `scf.for` / `convert_layout` in between.
 
     To avoid unnecessary L1 bypass, loads are additionally skipped when their
     pointer root-traces to a kernel argument that falls into any of the
