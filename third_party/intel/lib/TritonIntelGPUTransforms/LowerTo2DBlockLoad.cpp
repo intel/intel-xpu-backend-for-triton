@@ -57,7 +57,7 @@ static bool isMemoryRowMajor(Operation *op) {
       ttgi::TritonIntelGPUDialect::getBlockIOAttrName());
   assert(blockIOAttr && "expected block_io attribute");
   auto mode = ttgi::symbolizeBlockIOMode(blockIOAttr.getValue());
-  return *mode == ttgi::BlockIOMode::RowMajor;
+  return !mode || *mode == ttgi::BlockIOMode::RowMajor;
 }
 
 struct TritonIntelGPULowerTo2DBlockLoadPass
