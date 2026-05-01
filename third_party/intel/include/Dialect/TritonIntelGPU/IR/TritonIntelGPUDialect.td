@@ -129,7 +129,6 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.support_rounded_divide_sqrt";
     }
 
-
     /// FIXME: Remove once IGC can split large 2D block loads.
     /// Get the name of the attribute used to indicate that a load operation
     /// should use 'one matrix per load'.
