@@ -234,7 +234,7 @@ function install_vllm {
 
   # Install xgrammar separately without dependencies (already removed from requirements above)
   # xgrammar depends on triton, but we already have it installed, so --no-deps is safe
-  python -m pip install --no-deps 'xgrammar<1.0.0,>=0.1.32'
+  python -m pip install --no-deps 'xgrammar==0.1.32'
 
   # Install minimal test dependencies only (not the full xpu-test.txt)
   # The full requirements are very large and cause pip resolver issues.
