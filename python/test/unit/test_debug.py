@@ -30,7 +30,7 @@ def test_device_assert(cond, mask, opt_flag, env_var, jit_flag, device):
     result = subprocess.run(
         [sys.executable, kernel_file, "device_assert",
          str(cond), mask_str, opt_flag_str,
-         str(jit_flag), device], capture_output=True, text=True, env=env)
+         str(jit_flag), device], capture_output=True, text=True, env=env, timeout=300)
 
     if should_fail:
         if device == 'xpu':
@@ -84,7 +84,7 @@ def _test_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, tri_func, ref
         result = subprocess.run(
             [sys.executable, kernel_file, "overflow", op,
              str(x), str(y), x_dtype, y_dtype,
-             str(debug), device], capture_output=True, text=True)
+             str(debug), device], capture_output=True, text=True, timeout=300)
         assert result.returncode == -6, (f"Expected SIGABRT but got exit code {result.returncode}. "
                                          f"stdout: {result.stdout}, stderr: {result.stderr}")
         return

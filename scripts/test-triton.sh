@@ -563,7 +563,7 @@ run_debug_tests() {
   cd $TRITON_PROJ/python/test/unit
 
   TRITON_TEST_SUITE=debug \
-    run_pytest_command --verbose -n ${PYTEST_MAX_PROCESSES:-8} test_debug.py test_debuginfo.py test_debug_dump.py --forked --device xpu
+    run_pytest_command --verbose -n ${PYTEST_MAX_PROCESSES:-2} test_debug.py test_debuginfo.py test_debug_dump.py --forked --device xpu
 }
 
 run_warnings_tests() {
