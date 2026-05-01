@@ -148,6 +148,8 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      gpu::intel::createTritonIntelGPUMaterializeBlockPointer);
   ADD_PASS_WRAPPER_0("add_optimize_reduction_locality",
                      gpu::intel::createTritonIntelGPUOptimizeReductionLocality);
+  ADD_PASS_WRAPPER_0("add_lower_to_2d_block_load",
+                     gpu::intel::createTritonIntelGPULowerTo2DBlockLoad);
   ADD_PASS_WRAPPER_0("add_reduce_variable_liveness",
                      gpu::intel::createTritonIntelGPUReduceVariableLiveness);
   ADD_PASS_WRAPPER_0("add_annotate_cache_control",
