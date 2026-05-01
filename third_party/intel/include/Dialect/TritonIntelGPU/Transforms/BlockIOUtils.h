@@ -1,6 +1,9 @@
 #ifndef TRITONINTELGPU_TRANSFORMS_BLOCKIOUTILS_H
 #define TRITONINTELGPU_TRANSFORMS_BLOCKIOUTILS_H
 
+#include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/Support/LogicalResult.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Tools/LinearLayout.h"
 #include "llvm/ADT/SetVector.h"
@@ -53,6 +56,23 @@ getBlockIOTileSize<true>(const LinearLayout &, unsigned, unsigned, AxisInfo *,
 extern template BlockIOTileSizeInfo
 getBlockIOTileSize<false>(const LinearLayout &, unsigned, unsigned, AxisInfo *,
                           bool);
+
+/// Get the DPAS operand index from a tensor type's encoding.
+/// The encoding must be DPAS or DotOperand-with-DPAS parent.
+DpasEncodingAttr::OpIdx getOpIdx(RankedTensorType tensorTy);
+
+/// Get the DPAS layout from a tensor type's encoding.
+/// The encoding must be DPAS or DotOperand-with-DPAS parent.
+DpasEncodingAttr getDpasLayout(RankedTensorType tensorTy);
+
+/// Compute the shuffle mapping for transposed 2D block loads.
+/// Returns failure if the transpose configuration is unsupported.
+/// Used by both the TTGIR validation (to reject unsupported configs)
+/// and the LLVM lowering (to produce the actual mapping).
+FailureOr<LinearLayout> computeTransposeShuffleMapping(
+    RankedTensorType tensorType, const LinearLayout &regMapping,
+    int64_t numElemsPerLoad, unsigned numPackedVals, unsigned tileHeight,
+    unsigned threadsPerWarp, bool hasDPASOperandType, MLIRContext *ctx);
 
 /// Check whether the packed element size and tile width satisfy the
 /// 2D block address payload hardware restrictions.
