@@ -1,5 +1,5 @@
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 285c7b263..a3aca07c7 100644
+index 285c7b263..68281ff5f 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -180,6 +180,8 @@ def kernel_unified_attention_2d(
@@ -11,11 +11,8 @@ index 285c7b263..a3aca07c7 100644
      q_block_global_idx = tl.program_id(0)
      kv_head_idx = tl.program_id(1)
  
-@@ -198,30 +200,32 @@ def kernel_unified_attention_2d(
- 
-     if q_block_local_idx * BLOCK_Q >= cur_batch_query_len:
+@@ -200,28 +202,30 @@ def kernel_unified_attention_2d(
          return
-+    q_block_local_len = min(BLOCK_Q, cur_batch_query_len - q_block_local_idx * BLOCK_Q)
  
      offs_m = tl.arange(0, BLOCK_M)
 -    offs_d = tl.arange(0, HEAD_SIZE_PADDED)
@@ -42,6 +39,7 @@ index 285c7b263..a3aca07c7 100644
 -    )
 +    q_base = (query_ptr + (cur_batch_in_all_start_index + q_block_local_idx * BLOCK_Q) * query_stride_0 +
 +              (kv_head_idx * num_queries_per_kv) * query_stride_1)
++    q_block_local_len = min(BLOCK_Q, cur_batch_query_len - q_block_local_idx * BLOCK_Q)
 +    if HEAD_SIZE == HEAD_SIZE_PADDED:
 +        # This loading is much more efficient on XPU
 +        q_desc = tl.make_tensor_descriptor(base=q_base, shape=(q_block_local_len, num_queries_per_kv * HEAD_SIZE),
@@ -89,13 +87,12 @@ index 285c7b263..a3aca07c7 100644
 +                                           strides=(stride_k_cache_1, stride_k_cache_3),
 +                                           block_shape=(TILE_SIZE, HEAD_SIZE_PADDED))
  
--        # K : (HEAD_SIZE, TILE_SIZE)
+         # K : (HEAD_SIZE, TILE_SIZE)
 -        K_load = tl.load(
 -            key_cache_ptr + k_offset,
 -            mask=dim_mask[:, None] & tile_mask[None, :],
 -            other=0.0,
 -        )
-+        # K : (HEAD_SIZE, BLOCK_SIZE)
 +        offset_in_block = (j * TILE_SIZE) % BLOCK_SIZE
 +        K_load = k_desc.load([offset_in_block, 0]).T
          K, k_token_head_scales = _prepare_kv_tile(
@@ -163,7 +160,7 @@ index 285c7b263..a3aca07c7 100644
      q_block_global_idx = tl.program_id(0)
      kv_head_idx = tl.program_id(1)
      segm_idx = tl.program_id(2)
-@@ -609,28 +598,32 @@ def kernel_unified_attention_3d(
+@@ -609,28 +598,31 @@ def kernel_unified_attention_3d(
          return
  
      offs_m = tl.arange(0, BLOCK_M)
@@ -183,8 +180,6 @@ index 285c7b263..a3aca07c7 100644
      query_mask_0 = tl.where(query_pos < cur_batch_query_len, 1, 0).to(tl.int1)
      query_mask_1 = tl.where(query_offset_1 < num_query_heads, 1, 0).to(tl.int1)
  
-+    q_block_local_len = tl.minimum(BLOCK_Q, cur_batch_query_len - q_block_local_idx * BLOCK_Q)
-+
      # Q : (BLOCK_M, HEAD_SIZE_PADDED)
 -    Q = tl.load(
 -        query_ptr + query_offset,
@@ -193,6 +188,7 @@ index 285c7b263..a3aca07c7 100644
 -    )
 +    q_base = (query_ptr + (cur_batch_in_all_start_index + q_block_local_idx * BLOCK_Q) * query_stride_0 +
 +              (kv_head_idx * num_queries_per_kv) * query_stride_1)
++    q_block_local_len = tl.minimum(BLOCK_Q, cur_batch_query_len - q_block_local_idx * BLOCK_Q)
 +    if HEAD_SIZE == HEAD_SIZE_PADDED:
 +        # This loading is much more efficient on XPU
 +        q_desc = tl.make_tensor_descriptor(base=q_base, shape=(q_block_local_len, num_queries_per_kv * HEAD_SIZE),
@@ -208,7 +204,7 @@ index 285c7b263..a3aca07c7 100644
  
      block_table_offset = seq_idx * block_table_stride
  
-@@ -717,30 +710,22 @@ def kernel_unified_attention_3d(
+@@ -717,30 +709,22 @@ def kernel_unified_attention_3d(
          seq_offset = j * TILE_SIZE + offs_t
          tile_mask = seq_offset < max_seq_prefix_len
  
@@ -240,19 +236,18 @@ index 285c7b263..a3aca07c7 100644
 +                                           strides=(stride_k_cache_1, stride_k_cache_3),
 +                                           block_shape=(TILE_SIZE, HEAD_SIZE_PADDED))
  
--        # K : (HEAD_SIZE, TILE_SIZE)
+         # K : (HEAD_SIZE, TILE_SIZE)
 -        K_load = tl.load(
 -            key_cache_ptr + k_offset,
 -            mask=dim_mask[:, None] & tile_mask[None, :],
 -            other=0.0,
 -        )
-+        # K : (HEAD_SIZE, BLOCK_SIZE)
 +        offset_in_block = (j * TILE_SIZE) % BLOCK_SIZE
 +        K_load = k_desc.load([offset_in_block, 0]).T
          K, k_token_head_scales = _prepare_kv_tile(
              K_load,
              Q,
-@@ -758,11 +743,7 @@ def kernel_unified_attention_3d(
+@@ -758,11 +742,7 @@ def kernel_unified_attention_3d(
          )
  
          # V : (TILE_SIZE, HEAD_SIZE)
@@ -265,7 +260,7 @@ index 285c7b263..a3aca07c7 100644
          V, v_token_head_scales = _prepare_kv_tile(
              V_load,
              Q,
-@@ -887,11 +868,8 @@ def kernel_unified_attention_3d(
+@@ -887,11 +867,8 @@ def kernel_unified_attention_3d(
          L = L * alpha + l_j
          M = m_j
  
@@ -279,7 +274,7 @@ index 285c7b263..a3aca07c7 100644
  
          # acc : (BLOCK_M, HEAD_SIZE_PADDED)
          # Per-token-head quant: apply v_scale to P instead of V.
-@@ -901,18 +879,17 @@ def kernel_unified_attention_3d(
+@@ -901,18 +878,16 @@ def kernel_unified_attention_3d(
          else:
              acc += tl.dot(P.to(V.dtype), V)
  
@@ -305,11 +300,10 @@ index 285c7b263..a3aca07c7 100644
 +        strides=(num_query_heads * NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED, NUM_SEGMENTS_PER_SEQ * HEAD_SIZE_PADDED, 1),
 +        block_shape=(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
 +    segm_output_desc.store([0, 0, 0], acc.reshape(BLOCK_Q, num_queries_per_kv, HEAD_SIZE_PADDED))
-+
      segm_offset = (
          query_offset_0.to(tl.int64) * (num_query_heads * NUM_SEGMENTS_PER_SEQ)
          + query_offset_1 * NUM_SEGMENTS_PER_SEQ
-@@ -1136,40 +1113,29 @@ def unified_attention(
+@@ -1136,40 +1111,29 @@ def unified_attention(
      elif sliding_window_val <= 0:
          chunk_lookback = -1
  
@@ -369,7 +363,7 @@ index 285c7b263..a3aca07c7 100644
              output_ptr=out,
              query_ptr=q,
              key_cache_ptr=k,
-@@ -1231,9 +1197,31 @@ def unified_attention(
+@@ -1231,9 +1195,30 @@ def unified_attention(
              CHUNK_SIZE=chunk_size,
          )
      else:
@@ -377,7 +371,6 @@ index 285c7b263..a3aca07c7 100644
 -            (total_num_q_blocks, num_kv_heads, num_par_softmax_segments)
 -        ](
 +        num_par_softmax_segments = 16
-+
 +        softmax_segm_output = torch.empty(
 +            q.shape[0],
 +            num_query_heads,
