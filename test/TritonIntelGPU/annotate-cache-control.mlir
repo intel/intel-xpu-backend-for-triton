@@ -259,6 +259,38 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
+// COM: Test l2 — user-specified eviction policy (evict_first / evict_last)
+// COM: must NOT be overridden. The lowering maps these to precise LSC cache
+// COM: modes; stamping .cg here would lose the user's intent.
+
+#blocked1d = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @user_evict_first_preserved
+  tt.func public @user_evict_first_preserved(%ptr: tensor<1024x!tt.ptr<f32>, #blocked1d>) -> tensor<1024xf32, #blocked1d> {
+    // CHECK: tt.load
+    // CHECK-NOT: cacheModifier = cg
+    %0 = tt.load %ptr evictionPolicy = evict_first : tensor<1024x!tt.ptr<f32>, #blocked1d>
+    tt.return %0 : tensor<1024xf32, #blocked1d>
+  }
+}
+
+// -----
+
+// COM: Test l3 — evict_last is also honored: pass must not stamp .cg.
+
+#blocked1d = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @user_evict_last_preserved
+  tt.func public @user_evict_last_preserved(%ptr: tensor<1024x!tt.ptr<f32>, #blocked1d>) -> tensor<1024xf32, #blocked1d> {
+    // CHECK: tt.load
+    // CHECK-NOT: cacheModifier = cg
+    %0 = tt.load %ptr evictionPolicy = evict_last : tensor<1024x!tt.ptr<f32>, #blocked1d>
+    tt.return %0 : tensor<1024xf32, #blocked1d>
+  }
+}
+
+// -----
+
 // COM: Test m — forward-flow filter: X is a read-only arg, but its loaded
 // COM: value is combined with DW (an RW arg) and stored back to DW. The
 // COM: forward-flow filter blocks .cg on the load of X to preserve L1
