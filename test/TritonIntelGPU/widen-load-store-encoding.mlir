@@ -115,3 +115,58 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// COM: POSITIVE case — tt.load 128b -> 256b widening.
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_256b_load_store} {
+  // CHECK-LABEL: @widen_load_128b_to_256b
+  tt.func @widen_load_128b_to_256b(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) -> tensor<1024xf32, #blocked> {
+    %range = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+    %ptr_splat = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+    %ptrs = tt.addptr %ptr_splat, %range : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+
+    // CHECK-DAG: ttg.convert_layout %{{.*}} : tensor<1024x!tt.ptr<f32>, #[[$OLD:blocked]]> -> tensor<1024x!tt.ptr<f32>, #[[$NEW:blocked[0-9]*]]>
+    // CHECK: tt.load %{{.*}} : tensor<1024x!tt.ptr<f32>, #[[$NEW]]>
+    // CHECK: ttg.convert_layout %{{.*}} : tensor<1024xf32, #[[$NEW]]> -> tensor<1024xf32, #[[$OLD]]>
+    %val = tt.load %ptrs : tensor<1024x!tt.ptr<f32>, #blocked>
+    tt.return %val : tensor<1024xf32, #blocked>
+  }
+}
+
+// -----
+
+// COM: NEGATIVE case — tt.load with low divisibility.
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_256b_load_store} {
+  // CHECK-LABEL: @no_widen_load_low_divisibility
+  tt.func @no_widen_load_low_divisibility(%arg0: !tt.ptr<f32> {tt.divisibility = 4 : i32}) -> tensor<1024xf32, #blocked> {
+    %range = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+    %ptr_splat = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+    %ptrs = tt.addptr %ptr_splat, %range : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+
+    // CHECK-NOT: convert_layout
+    // CHECK: tt.load %{{.*}} : tensor<1024x!tt.ptr<f32>, #blocked>
+    %val = tt.load %ptrs : tensor<1024x!tt.ptr<f32>, #blocked>
+    tt.return %val : tensor<1024xf32, #blocked>
+  }
+}
+
+// -----
+
+// COM: END-TO-END: tt.load widening + RLC absorbs conversions.
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_256b_load_store} {
+  // E2E-LABEL: @widen_load_then_rlc
+  tt.func @widen_load_then_rlc(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) -> tensor<1024xf32, #blocked> {
+    %range = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+    %ptr_splat = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+    %ptrs = tt.addptr %ptr_splat, %range : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+
+    // E2E-NOT: ttg.convert_layout
+    // E2E: tt.load
+    %val = tt.load %ptrs : tensor<1024x!tt.ptr<f32>, #blocked>
+    tt.return %val : tensor<1024xf32, #blocked>
+  }
+}
