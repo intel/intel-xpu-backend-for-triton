@@ -330,11 +330,29 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
     // insert the remaining register base.
     regPackBases.insert(1 << regBaseIter);
   }
-  return BlockIOTileSizeInfo(tileShape[transpose ? fastChangeDim : rowDim],
-                             tileShape[transpose ? rowDim : fastChangeDim] /
-                                 numElemPerPackedVal,
-                             numElemPerPackedVal, vBlocks, rowDim,
-                             fastChangeDim, transpose, std::move(regPackBases));
+  int tileHeight = tileShape[transpose ? fastChangeDim : rowDim];
+  int tileWidth =
+      tileShape[transpose ? rowDim : fastChangeDim] / numElemPerPackedVal;
+
+  // Cap vBlocks for loads based on HW constraints.
+  if constexpr (isLoad) {
+    constexpr int MAX_WIDTH_BYTES = 64;
+    unsigned packedElemSizeInBits = elemSizeInBits * numElemPerPackedVal;
+    unsigned totalBytesPerRowPerMatrix = tileWidth * packedElemSizeInBits / 8;
+    if (totalBytesPerRowPerMatrix > 0) {
+      vBlocks =
+          std::min(vBlocks, static_cast<unsigned>(MAX_WIDTH_BYTES /
+                                                  totalBytesPerRowPerMatrix));
+    }
+    vBlocks = std::min(vBlocks, 4u);
+    constexpr unsigned GRF_SIZE = 64;
+    if (tileHeight * tileWidth * packedElemSizeInBits / 8 < GRF_SIZE)
+      vBlocks = 1;
+  }
+
+  return BlockIOTileSizeInfo(tileHeight, tileWidth, numElemPerPackedVal,
+                             vBlocks, rowDim, fastChangeDim, transpose,
+                             std::move(regPackBases));
 }
 
 // Explicit instantiations.

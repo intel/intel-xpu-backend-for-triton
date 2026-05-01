@@ -1980,16 +1980,6 @@ public:
     if (totalBytesPerRowPerMatrix > MAX_WIDTH)
       return failure();
 
-    // Load multiple dot operands by enlarging the vBlocks.
-    vBlocks = std::min(vBlocks,
-                       static_cast<int>(MAX_WIDTH / totalBytesPerRowPerMatrix));
-    // vBlocks has HW limitation of 4.
-    vBlocks = std::min(vBlocks, 4);
-    // Limit vBlocks to 1 if block size is smaller than GRF size.
-    const unsigned GRF_SIZE = 64;
-    if (tileHeight * tileWidth * packedElemSizeInBits / 8 < GRF_SIZE)
-      vBlocks = 1;
-
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     MLIRContext *ctx = rewriter.getContext();
@@ -2360,14 +2350,6 @@ struct DescriptorLoadOpToBlockIOConversion
     unsigned totalBytesPerRowPerMatrix = tileWidth * packedElemSizeInBits / 8;
     if (totalBytesPerRowPerMatrix > MAX_WIDTH)
       return failure();
-
-    // Load multiple dot operands by enlarging the vBlocks.
-    vBlocks = std::min(vBlocks,
-                       static_cast<int>(MAX_WIDTH / totalBytesPerRowPerMatrix));
-    vBlocks = std::min(vBlocks, 4);
-    const unsigned GRF_SIZE = 64;
-    if (tileHeight * tileWidth * packedElemSizeInBits / 8 < GRF_SIZE)
-      vBlocks = 1;
 
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
