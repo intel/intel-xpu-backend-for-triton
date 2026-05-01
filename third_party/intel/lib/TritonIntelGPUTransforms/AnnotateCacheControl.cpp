@@ -2,9 +2,12 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include "triton/Tools/LinearLayout.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/MathExtras.h"
 
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
@@ -81,6 +84,18 @@ static bool propagateThroughSCF(OpOperand &use,
   return false;
 }
 
+// Attempts to compute the LinearLayout for the given tensor type.
+// Returns std::nullopt when the layout cannot be computed (e.g. non-power-of-2
+// shapes, which would trigger assertions inside toLinearLayout).
+static std::optional<tt::LinearLayout> tryGetLinearLayout(RankedTensorType ty) {
+  for (int64_t dim : ty.getShape())
+    if (!llvm::isPowerOf2_64(dim))
+      return std::nullopt;
+  if (!ty.getEncoding())
+    return std::nullopt;
+  return ttg::toLinearLayout(ty);
+}
+
 // Returns true when `.cg` annotation should be suppressed on `loadOp` because
 // the HW access pattern implied by the load's result encoding already yields
 // cross-subgroup L1 reuse. Replaces an older forward-dataflow heuristic
@@ -103,6 +118,18 @@ static bool skipForL1Reuse(tt::LoadOp loadOp) {
   if (auto dotEnc = dyn_cast<ttg::DotOperandEncodingAttr>(enc))
     if (isa<ttg::MmaEncodingTrait>(dotEnc.getParent()))
       return true;
+
+  // Warp-broadcast check via LinearLayout: if every warp accesses the same
+  // tensor elements, the data benefits from L1 reuse across subgroups.
+  if (std::optional<tt::LinearLayout> ll = tryGetLinearLayout(tensorTy)) {
+    auto kWarp = StringAttr::get(loadOp.getContext(), "warp");
+    if (!ll->hasInDim(kWarp))
+      return true;
+    SmallVector<StringAttr> outDims(ll->getOutDimNames().begin(),
+                                    ll->getOutDimNames().end());
+    if (ll->sublayoutIsZero({kWarp}, outDims))
+      return true;
+  }
 
   // Scale operand of tt.dot_scaled: scales are consumed by the same
   // DPAS-backed matmul as the A/B operands and benefit from the same

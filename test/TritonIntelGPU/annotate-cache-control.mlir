@@ -475,3 +475,37 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     tt.return
   }
 }
+
+// -----
+
+// COM: Test u — Linear encoding with all-zero warp basis vectors: every warp
+// COM: reads the same data, so L1 reuse is valuable. .cg must NOT be applied.
+// COM: This pattern appears in flex_decoding where Q is broadcast across warps.
+
+// CHECK-LABEL: @load_linear_warp_broadcast
+#linear_wb = #ttg.linear<{register = [[0, 16], [0, 32], [0, 64]], lane = [[0, 1], [0, 2], [0, 4], [0, 8]], warp = [[0, 0]], block = []}>
+module attributes {"ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  tt.func @load_linear_warp_broadcast(%arg0: tensor<1x128x!tt.ptr<f16>, #linear_wb>) -> tensor<1x128xf16, #linear_wb> {
+    // CHECK: tt.load
+    // CHECK-NOT: cacheModifier = cg
+    // CHECK-SAME: tensor<1x128x!tt.ptr<f16>, #{{.*}}>
+    %0 = tt.load %arg0 : tensor<1x128x!tt.ptr<f16>, #linear_wb>
+    tt.return %0 : tensor<1x128xf16, #linear_wb>
+  }
+}
+
+// -----
+
+// COM: Test v — Linear encoding with non-zero warp basis vectors: warps read
+// COM: different data, no cross-warp L1 reuse. .cg should be applied.
+
+// CHECK-LABEL: @load_linear_warp_partitioned
+#linear_wp = #ttg.linear<{register = [[0, 16], [0, 32], [0, 64]], lane = [[0, 1], [0, 2], [0, 4], [0, 8]], warp = [[1, 0]], block = []}>
+module attributes {"ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  tt.func @load_linear_warp_partitioned(%arg0: tensor<2x128x!tt.ptr<f16>, #linear_wp>) -> tensor<2x128xf16, #linear_wp> {
+    // CHECK: tt.load
+    // CHECK-SAME: cacheModifier = cg
+    %0 = tt.load %arg0 : tensor<2x128x!tt.ptr<f16>, #linear_wp>
+    tt.return %0 : tensor<2x128xf16, #linear_wp>
+  }
+}
