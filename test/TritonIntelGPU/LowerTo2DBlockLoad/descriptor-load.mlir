@@ -87,3 +87,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     tt.return %0 : tensor<2x64x32xf16, #dot0>
   }
 }
+
+// -----
+
+// COM: Rank-reducing descriptor load. The descriptor has rank 3 (with a leading
+// COM: size-1 batch dim) but the result tensor has rank 2. The batch index is
+// COM: folded into the base pointer via tt.addptr.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @descriptor_load_rank_reducing
+  tt.func @descriptor_load_rank_reducing(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %batch_idx: i32) -> tensor<64x32xf16, #dot0> {
+    %c1_i32 = arith.constant 1 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c0_i32 = arith.constant 0 : i32
+    %desc = tt.make_tensor_descriptor %arg0, [%c1_i32, %arg1, %arg2], [%arg3, %c1_i64, %c1_i64] : <f16>, <1x64x32xf16>
+    // CHECK: %[[BATCH_EXT:.*]] = arith.extsi %arg4 : i32 to i64
+    // CHECK: %[[BATCH_OFF:.*]] = arith.muli %[[BATCH_EXT]], %arg3
+    // CHECK: %[[ADJ_PTR:.*]] = tt.addptr %arg0, %[[BATCH_OFF]]
+    // CHECK: ttig.2d_block_load %[[ADJ_PTR]]
+    %0 = tt.descriptor_load %desc[%batch_idx, %c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<1x64x32xf16> -> tensor<64x32xf16, #dot0>
+    tt.return %0 : tensor<64x32xf16, #dot0>
+  }
+}
