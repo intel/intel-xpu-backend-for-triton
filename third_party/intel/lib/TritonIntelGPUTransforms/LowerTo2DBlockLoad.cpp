@@ -377,8 +377,7 @@ private:
     Value offsetY = indices[descRank - 2];
 
     // Determine padding mode from the descriptor.
-    bool padNan =
-        makeTensorDescOp->getPadding() == tt::PaddingOption::PAD_NAN;
+    bool padNan = makeTensorDescOp->getPadding() == tt::PaddingOption::PAD_NAN;
     UnitAttr padNanAttr = padNan ? builder.getUnitAttr() : UnitAttr();
 
     auto blockLoadOp = ttgi::Subgroup2DBlockLoadOp::create(

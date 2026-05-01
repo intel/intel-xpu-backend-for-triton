@@ -128,6 +128,9 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
           "support_256b_prefetch",
           &gpu::intel::TritonAnnotateModuleOptions::supportPrefetch256Bytes)
       .def_readwrite(
+          "support_256b_load_store",
+          &gpu::intel::TritonAnnotateModuleOptions::support256bLoadStore)
+      .def_readwrite(
           "support_rounded_divide_sqrt",
           &gpu::intel::TritonAnnotateModuleOptions::supportRoundedDivideSqrt)
       .def_readwrite("threads_per_warp",
@@ -149,6 +152,8 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      gpu::intel::createTritonIntelGPUReduceVariableLiveness);
   ADD_PASS_WRAPPER_0("add_lower_to_2d_block_load",
                      gpu::intel::createTritonIntelGPULowerTo2DBlockLoad);
+  ADD_PASS_WRAPPER_0("add_widen_store_encoding",
+                     gpu::intel::createTritonIntelGPUWidenStoreEncoding);
 }
 
 void init_triton_intel_passes_arith(py::module &&m) {

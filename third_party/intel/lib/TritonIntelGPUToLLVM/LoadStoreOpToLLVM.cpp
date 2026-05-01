@@ -3,6 +3,7 @@
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "triton/Tools/LayoutUtils.h"
@@ -199,19 +200,28 @@ struct LoadStoreConversionBase {
         .getContiguity(ptr);
   }
 
-  /// Maximum number of elements that fit in a 128-bit vector load/store.
-  static unsigned getMaxVecWidth(unsigned pointeeBitWidth) {
-    return std::max(1u, 128 / std::max(8u, pointeeBitWidth));
+  static bool hasSupport256bLoadStore(Operation *op) {
+    auto mod = op->getParentOfType<ModuleOp>();
+    return mod && mod->hasAttr(
+                      TritonIntelGPUDialect::getSupport256bLoadStoreAttrName());
   }
 
-  unsigned getVectorSize(Value ptr) const {
+  /// Maximum number of elements per-thread vector load/store. 128 bits by
+  /// default; 256 bits when the target supports wider load/stores.
+  static unsigned getMaxVecWidth(bool support256bLoadStore,
+                                 unsigned pointeeBitWidth) {
+    unsigned maxBits = support256bLoadStore ? 256u : 128u;
+    return std::max(1u, maxBits / std::max(8u, pointeeBitWidth));
+  }
+
+  unsigned getVectorSize(bool support256bLoadStore, Value ptr) const {
     if (!isa<RankedTensorType>(ptr.getType()))
       return 1;
 
     unsigned contiguity = getContiguity(ptr);
     unsigned pointeeBitWidth = triton::getPointeeBitWidth(ptr.getType());
-    // The maximum vector size is 128 bits.
-    return std::min<unsigned>(getMaxVecWidth(pointeeBitWidth), contiguity);
+    return std::min<unsigned>(
+        getMaxVecWidth(support256bLoadStore, pointeeBitWidth), contiguity);
   }
 
   unsigned getMaskAlignment(Value mask) const {
@@ -222,8 +232,8 @@ struct LoadStoreConversionBase {
   /// Compute vectorization factor for descriptor load/store gather fallback.
   /// Queries the descriptor's address-level AxisInfo (analogous to how
   /// getVectorSize queries the pointer operand's AxisInfo for LoadOp).
-  unsigned getDescriptorVecSize(Value desc, RankedTensorType resultType,
-                                Type valueElemTy,
+  unsigned getDescriptorVecSize(bool support256bLoadStore, Value desc,
+                                RankedTensorType resultType, Type valueElemTy,
                                 StringAttr blockIOAttr) const {
     unsigned rank = resultType.getRank();
     if (rank == 0)
@@ -257,7 +267,7 @@ struct LoadStoreConversionBase {
       return 1; // Stride is not 1 on this dimension
 
     unsigned pointeeBitWidth = valueElemTy.getIntOrFloatBitWidth();
-    unsigned maxVec = getMaxVecWidth(pointeeBitWidth);
+    unsigned maxVec = getMaxVecWidth(support256bLoadStore, pointeeBitWidth);
     unsigned threadContig = contigPerThread[order[0]];
     // Note: descContiguity and threadContig refer to the same logical dimension
     // but are indexed in different coordinate spaces. descContiguity uses
@@ -1887,7 +1897,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     Type valueElemTy =
         typeConverter->convertType(getElementTypeOrSelf(op.getType()));
     unsigned numElems = getTotalElemsPerThread(op.getType());
-    unsigned vec = getVectorSize(ptr);
+    unsigned vec = getVectorSize(hasSupport256bLoadStore(op), ptr);
     if (llMask)
       vec = std::min<size_t>(vec, getMaskAlignment(mask));
 
@@ -2151,10 +2161,10 @@ struct DescriptorLoadOpConversion
 
     // Determine vectorization by querying the descriptor's address-level
     // AxisInfo, analogous to how LoadOp queries getVectorSize(ptr).
-    unsigned vec =
-        getDescriptorVecSize(op.getDesc(), resultType, valueElemTy,
-                             op->getAttrOfType<StringAttr>(
-                                 TritonIntelGPUDialect::getBlockIOAttrName()));
+    unsigned vec = getDescriptorVecSize(
+        hasSupport256bLoadStore(op), op.getDesc(), resultType, valueElemTy,
+        op->getAttrOfType<StringAttr>(
+            TritonIntelGPUDialect::getBlockIOAttrName()));
 
     // vectorized iteration through all pointer elements
     const int valueElemNBits =
@@ -2338,7 +2348,8 @@ struct DescriptorStoreOpConversion
 
     // Determine vectorization by querying the descriptor's address-level
     // AxisInfo, analogous to how StoreOp queries getVectorSize(ptr).
-    unsigned vec = getDescriptorVecSize(op.getDesc(), valueTy, valueElemTy,
+    unsigned vec = getDescriptorVecSize(hasSupport256bLoadStore(op),
+                                        op.getDesc(), valueTy, valueElemTy,
                                         /*blockIOAttr=*/nullptr);
 
     const size_t dtsize =
@@ -2970,7 +2981,7 @@ struct StoreOpConversion
     Type valueTy = op.getValue().getType();
     Type valueElemTy =
         typeConverter->convertType(getElementTypeOrSelf(valueTy));
-    unsigned vec = getVectorSize(ptr);
+    unsigned vec = getVectorSize(hasSupport256bLoadStore(op), ptr);
     if (llMask)
       vec = std::min<size_t>(vec, getMaskAlignment(op.getMask()));
 
@@ -3339,7 +3350,7 @@ struct AtomicRMWOpConversion
     const size_t valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
     auto elemsPerThread = getTotalElemsPerThread(val.getType());
     // vec = 1, numElements = 1 for scalar
-    auto vec = getVectorSize(ptr);
+    unsigned vec = getVectorSize(hasSupport256bLoadStore(op), ptr);
     int numElems = 1;
     // tensor
     if (tensorTy) {
@@ -3947,7 +3958,8 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
       triton::intel::ModuleStrideAnalysis &strideAnalysis,
       PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<
-            triton::gpu::intel::Subgroup2DBlockLoadFromPtrOp>(converter, benefit),
+            triton::gpu::intel::Subgroup2DBlockLoadFromPtrOp>(converter,
+                                                              benefit),
         BlockIOConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
 
   LogicalResult
@@ -4050,7 +4062,7 @@ void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
           typeConverter, targetInfo, axisInfoAnalysis, strideAnalysis,
           benefit.getBenefit() + 2);
   // TTIG 2D block load ops.
-  patterns
-      .add<Subgroup2DBlockLoadOpConversion, Subgroup2DBlockLoadFromPtrOpConversion>(
-          typeConverter, targetInfo, axisInfoAnalysis, strideAnalysis, benefit);
+  patterns.add<Subgroup2DBlockLoadOpConversion,
+               Subgroup2DBlockLoadFromPtrOpConversion>(
+      typeConverter, targetInfo, axisInfoAnalysis, strideAnalysis, benefit);
 }
