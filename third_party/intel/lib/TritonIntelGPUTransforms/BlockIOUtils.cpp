@@ -1,6 +1,8 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/BlockIOUtils.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/MathExtras.h"
 #include <numeric>
@@ -389,6 +391,92 @@ bool check2DBlockAddressPayloadRestriction(unsigned packedElemSizeInBits,
     return false;
   }
   return true;
+}
+
+DpasEncodingAttr::OpIdx getOpIdx(RankedTensorType tensorTy) {
+  if (hasDpasEncoding(tensorTy))
+    return DpasEncodingAttr::OpIdx::OperandC;
+  assert(hasDotDpasEncoding(tensorTy) && "Expecting dot layout");
+  auto dotLayout =
+      cast<triton::gpu::DotOperandEncodingAttr>(tensorTy.getEncoding());
+  return static_cast<DpasEncodingAttr::OpIdx>(dotLayout.getOpIdx());
+}
+
+DpasEncodingAttr getDpasLayout(RankedTensorType tensorTy) {
+  Attribute encoding = tensorTy.getEncoding();
+  return cast<DpasEncodingAttr>(
+      hasDpasEncoding(tensorTy)
+          ? encoding
+          : cast<triton::gpu::DotOperandEncodingAttr>(encoding).getParent());
+}
+
+/// Compute the shuffle mapping for transposed 2D block loads.
+/// Returns failure if the transpose configuration is unsupported.
+FailureOr<LinearLayout> computeTransposeShuffleMapping(
+    RankedTensorType tensorType, const LinearLayout &regMapping,
+    int64_t numElemsPerLoad, unsigned numPackedVals, unsigned tileHeight,
+    unsigned threadsPerWarp, bool hasDPASOperandType, MLIRContext *ctx) {
+  StringAttr kRegister = StringAttr::get(ctx, "register");
+  LinearLayout shuffleMapping =
+      LinearLayout::identity1D(numElemsPerLoad, kRegister, kRegister);
+
+  // Improve this. The current 2D block load only transposes the matrix at
+  // i32 granularity. We still need to perform an additional in-register
+  // transpose from i32 -> (N × ElemSizeInBits) tiles, using the tile width.
+  // At the moment, we can only achieve this using a bitcast operation,
+  // which implicitly uses the sub-group size as the transpose width. To
+  // optimize further, we should implement this with inline VISA
+  // instructions.
+
+  // tileHeight becomes width after transposing.
+  unsigned widthToTranspose = tileHeight;
+  if (hasDPASOperandType) {
+    // For the DPAS related layout, we will do the shuffle at first in the
+    // unpacking of the elements at the DPAS operands granularity.
+    // And then we will do the transposing. So the transposing width is DPAS
+    // op shapes.
+    DpasEncodingAttr::OpIdx opIdx = getOpIdx(tensorType);
+    DpasEncodingAttr dpasLayout = getDpasLayout(tensorType);
+    switch (opIdx) {
+    case DpasEncodingAttr::OpIdx::OperandA: {
+      widthToTranspose = dpasLayout.getDPASInstShapeA()[1];
+      break;
+    }
+    case DpasEncodingAttr::OpIdx::OperandB: {
+      widthToTranspose = dpasLayout.getDPASInstShapeB()[1];
+      break;
+    }
+    case DpasEncodingAttr::OpIdx::OperandC: {
+      widthToTranspose = dpasLayout.getDPASInstShapeC()[1];
+      break;
+    }
+    }
+    // For shuffle the transposed Dot operands matrix, we can shuffle the
+    // loaded matrix in an reverse order.
+    auto invertMapping = regMapping.invert();
+    bool foundSurjective = false;
+    for (unsigned numElemsPerSurjectiveTile = numElemsPerLoad;
+         numElemsPerSurjectiveTile > 0; numElemsPerSurjectiveTile >>= 1) {
+      auto layout =
+          invertMapping.resizeInDim(kRegister, numElemsPerSurjectiveTile)
+              .resizeOutDim(kRegister, numElemsPerSurjectiveTile);
+      if (layout.isSurjective()) {
+        shuffleMapping =
+            layout * LinearLayout::identity1D(numElemsPerLoad /
+                                                  numElemsPerSurjectiveTile,
+                                              kRegister, kRegister);
+        foundSurjective = true;
+        break;
+      }
+    }
+    if (!foundSurjective)
+      return failure();
+  }
+
+  if (numPackedVals > 1 && (widthToTranspose) != threadsPerWarp)
+    return failure();
+
+  return shuffleMapping;
 }
 
 } // namespace mlir::triton::gpu::intel
