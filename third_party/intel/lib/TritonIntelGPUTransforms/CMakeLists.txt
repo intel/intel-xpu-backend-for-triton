@@ -3,6 +3,7 @@ add_triton_library(TritonIntelGPUTransforms
   AnnotateCacheControl.cpp
   BlockIOUtils.cpp
   DecomposeScaledBlocked.cpp
+  FixupDescriptorEncoding.cpp
   HoistLayoutConversions.cpp
   MaterializeBlockPointer.cpp
   OptimizeDotOperands.cpp

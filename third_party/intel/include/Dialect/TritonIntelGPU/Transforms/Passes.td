@@ -151,6 +151,13 @@ def TritonIntelGPUReduceDataDuplication: Pass<"tritonintelgpu-reduce-data-duplic
                            "mlir::triton::TritonDialect"];
 }
 
+def TritonIntelGPUFixupDescriptorEncoding
+    : Pass<"tritonintelgpu-fixup-descriptor-encoding", "mlir::ModuleOp"> {
+  let summary = "Reassign descriptor load/store encodings for 2D block I/O compatibility";
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::gpu::intel::TritonIntelGPUDialect"];
+}
+
 def TritonIntelGPUMaterializeBlockPointer : Pass<"tritonintelgpu-materialize-block-pointer", "mlir::ModuleOp"> {
   let summary = "annotate load operations with information required to exploit 2D block HW instructions";
 
