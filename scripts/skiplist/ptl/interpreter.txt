@@ -1,3 +1,5 @@
-# ptl-809906: test_atomic_rmw crashes pytest workers in interpreter mode across all value ranges
-# Affects {add,max,min} × {int32,uint32,float32,int64,float64} × {all_neg,all_pos,min_neg,...} × all semantics
+# ptl-809906: all atomic RMW tests crash pytest workers in interpreter mode
+# Affects test_atomic_rmw, test_atomic_rmw_predicate, and test_tensor_atomic_rmw
 python/test/unit/language/test_core.py::test_atomic_rmw[r".*"]@regexp
+python/test/unit/language/test_core.py::test_atomic_rmw_predicate[r".*"]@regexp
+python/test/unit/language/test_core.py::test_tensor_atomic_rmw[r".*"]@regexp
