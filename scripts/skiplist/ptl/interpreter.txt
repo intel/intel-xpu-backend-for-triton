@@ -1,5 +1,18 @@
-# ptl-809906: all atomic RMW tests crash pytest workers in interpreter mode
-# Affects test_atomic_rmw, test_atomic_rmw_predicate, and test_tensor_atomic_rmw
+# ptl-809906: all atomic tests crash pytest workers in interpreter mode
+# 12 test functions: test_atomic_rmw, test_atomic_rmw_predicate, test_tensor_atomic_rmw,
+# test_tensor_atomic_add_non_exclusive_offset, test_tensor_atomic_add_shift_1,
+# test_tensor_atomic_add_access_patterns, test_tensor_atomic_rmw_block, test_atomic_cas,
+# test_tensor_atomic_cas, test_atomic_min_max_neg_zero, test_atomic_unsupported_type,
+# test_tensor_atomic_use_result
 python/test/unit/language/test_core.py::test_atomic_rmw[r".*"]@regexp
 python/test/unit/language/test_core.py::test_atomic_rmw_predicate[r".*"]@regexp
 python/test/unit/language/test_core.py::test_tensor_atomic_rmw[r".*"]@regexp
+python/test/unit/language/test_core.py::test_tensor_atomic_add_non_exclusive_offset[r".*"]@regexp
+python/test/unit/language/test_core.py::test_tensor_atomic_add_shift_1[r".*"]@regexp
+python/test/unit/language/test_core.py::test_tensor_atomic_add_access_patterns[r".*"]@regexp
+python/test/unit/language/test_core.py::test_tensor_atomic_rmw_block[r".*"]@regexp
+python/test/unit/language/test_core.py::test_atomic_cas[r".*"]@regexp
+python/test/unit/language/test_core.py::test_tensor_atomic_cas[r".*"]@regexp
+python/test/unit/language/test_core.py::test_atomic_min_max_neg_zero[r".*"]@regexp
+python/test/unit/language/test_core.py::test_atomic_unsupported_type[r".*"]@regexp
+python/test/unit/language/test_core.py::test_tensor_atomic_use_result[r".*"]@regexp
