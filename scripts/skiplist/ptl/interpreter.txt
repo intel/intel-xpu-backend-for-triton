@@ -16,3 +16,5 @@ python/test/unit/language/test_core.py::test_tensor_atomic_cas[r".*"]@regexp
 python/test/unit/language/test_core.py::test_atomic_min_max_neg_zero[r".*"]@regexp
 python/test/unit/language/test_core.py::test_atomic_unsupported_type[r".*"]@regexp
 python/test/unit/language/test_core.py::test_tensor_atomic_use_result[r".*"]@regexp
+# ptl-809906: test_zero_strided_tensors crashes pytest worker in interpreter mode
+python/test/unit/language/test_core.py::test_zero_strided_tensors
