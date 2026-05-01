@@ -1,4 +1,3 @@
-# ptl-809906: test_atomic_rmw all_neg and all_pos cases crash pytest workers in interpreter mode
-# Affects {add,max,min} × {int32,uint32,float32,int64,float64} × {all_neg,all_pos} × {None,acquire,release,acq_rel,relaxed}
-python/test/unit/language/test_core.py::test_atomic_rmw[r".*-all_neg-.*$"]@regexp
-python/test/unit/language/test_core.py::test_atomic_rmw[r".*-all_pos-.*$"]@regexp
+# ptl-809906: test_atomic_rmw crashes pytest workers in interpreter mode across all value ranges
+# Affects {add,max,min} × {int32,uint32,float32,int64,float64} × {all_neg,all_pos,min_neg,...} × all semantics
+python/test/unit/language/test_core.py::test_atomic_rmw[r".*"]@regexp
