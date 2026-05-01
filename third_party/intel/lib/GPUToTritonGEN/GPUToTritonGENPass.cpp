@@ -105,6 +105,8 @@ struct GPUToTritonGENPass
             return TritonGEN::TritonGENMemorySpace::kWorkgroup;
           case mlir::gpu::AddressSpace::Private:
             return TritonGEN::TritonGENMemorySpace::kFunction;
+          case mlir::gpu::AddressSpace::Constant:
+            return TritonGEN::TritonGENMemorySpace::kUniformConstant;
           }
           llvm_unreachable("unknown address space enum value");
           return 0;
