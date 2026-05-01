@@ -69,6 +69,7 @@ inline const std::set<std::string> CACHE_NEUTRAL_ENV_VARS = {
     // clang-format off
     "TRITON_REPRODUCER_PATH",
     "TRITON_ENABLE_PYTHON_STACKTRACE",
+    "TRITON_INTEL_HLC_STATS",
     // clang-format on
 };
 

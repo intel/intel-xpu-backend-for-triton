@@ -287,4 +287,64 @@ def TritonIntelGPUReduceVariableLiveness
                            "mlir::scf::SCFDialect",
                            "mlir::arith::ArithDialect"];
 }
+
+def TritonIntelGPUAnnotateCacheControl
+    : Pass<"tritonintelgpu-annotate-cache-control", "mlir::ModuleOp"> {
+  let summary = "Annotate tt.load ops with .cg cache control unless the load's encoding indicates cross-subgroup L1 reuse";
+  let description = [{
+    Sets `.cg` (L1UC_L3C) cache control on `tt.load` operations whose result
+    does not participate in a matrix multiply. GEMM operand loads benefit from
+    L1 reuse and are left with the default cache modifier; streaming /
+    elementwise loads bypass L1 to avoid thrashing. User-specified cache
+    modifiers are never overridden.
+
+    `.cg` on loads is always coherence-safe: it reads from the shared coherent
+    L3 rather than the incoherent per-core L1. The filters below are
+    cost-model heuristics that preserve L1 locality for loads likely to benefit
+    from L1 reuse (e.g. matmul operand loads in complex kernels).
+
+    The pass runs **after** `remove_layout_conversions`, so load-result
+    encodings are stable. The heuristic inspects each `tt.load`'s result
+    encoding: if it is a `DotOperandEncodingAttr` whose parent implements
+    `MmaEncodingTrait` (DPAS / Subgroup2DBlockEncoding), annotation is
+    suppressed — the HW access pattern already yields cross-subgroup L1 reuse
+    because the K dimension is broadcast across warps. Nested
+    `SliceEncodingAttr` layers are unwrapped before the dot-operand check.
+    The load is also suppressed when its result feeds the `aScale`/`bScale`
+    operand of a `tt.dot_scaled` — a single-hop use-site check suffices
+    because AccelerateMatmul materialises scale encodings immediately before
+    the consumer, with no `scf.for` / `convert_layout` in between.
+
+    To avoid unnecessary L1 bypass, loads are additionally skipped when their
+    pointer root-traces to a kernel argument that falls into any of the
+    following excluded cases (computed per `tt.FuncOp`):
+
+      1. Read-write args: arguments that are both loaded and stored within the
+         same function (producer/consumer scratch buffers where L1 reuse is
+         likely beneficial).
+      2. Atomic kernels: if the function contains any `tt.atomic_rmw` or
+         `tt.atomic_cas`, every pointer-typed entry-block argument is
+         conservatively excluded, even if only some of them are loaded.
+         Atomic kernels often mix matmul operand loads with streaming loads;
+         excluding all args avoids regressing matmul operand L1 reuse.
+      3. Unresolved stores: if any `tt.store` has a pointer SSA chain that
+         cannot be resolved to known roots, every pointer-typed entry-block
+         argument is excluded (we cannot prove which args are written).
+      4. Unresolved load pointer: if a `tt.load`'s own pointer SSA chain hits
+         an op the pass does not whitelist, the load is skipped.
+      5. Forward flow into excluded store: if the loaded value transitively
+         feeds a `tt.store` whose destination resolves to an excluded arg, the
+         load is skipped even if its own pointer is read-only. This is a
+         defensive filter that may be redundant.
+
+    Stores are intentionally left untouched: unlike loads, annotating stores
+    with `.cg` on cross-kernel producer/consumer buffers (e.g. layer-norm
+    backward partial-sum scratch) introduces data races — a true coherence
+    concern.
+  }];
+  let dependentDialects = ["mlir::triton::TritonDialect",
+                           "mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::scf::SCFDialect"];
+}
+
 #endif // TRITON_INTEL_GPU_PASSES
