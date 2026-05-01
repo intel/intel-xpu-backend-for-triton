@@ -1,0 +1,3 @@
+# ptl-809906: test_06_fused_attention[default] exceeds 600s on PTL (Xe3) with HEAD_DIM=64
+# B60 (Xe2) completes in ~390s; PTL compilation overhead pushes it past timeout
+python/test/tutorials/test_tutorials.py::test_06_fused_attention[default]
