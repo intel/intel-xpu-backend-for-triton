@@ -80,10 +80,11 @@ bool check2DBlockAddressPayloadRestriction(unsigned packedElemSizeInBits,
                                            unsigned tileWidth);
 
 /// Validate that a load with the given encoding and element size can be
-/// lowered to 2D block I/O. Checks tile size, HW address restrictions, and
-/// inner-dim constraints. Returns true if valid.
+/// lowered to 2D block I/O. Checks tile size, HW address restrictions,
+/// inner-dim constraints, and transpose shuffle mapping. Returns true if valid.
 bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
-                             unsigned elemSizeInBits);
+                             unsigned elemSizeInBits,
+                             RankedTensorType tensorType);
 
 } // namespace mlir::triton::gpu::intel
 

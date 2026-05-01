@@ -113,7 +113,7 @@ private:
         cast<ttg::DistributedEncodingTrait>(encoding).toLinearLayout(
             tensorTy.getShape());
     if (!ttgi::validate2DBlockLoadTile(llEncoding, contiguousDim,
-                                       elemSizeInBits)) {
+                                       elemSizeInBits, tensorTy)) {
       LDBG("Tile validation failed for descriptor load: " << *op);
       return;
     }
