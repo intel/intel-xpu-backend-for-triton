@@ -410,8 +410,6 @@ DpasEncodingAttr getDpasLayout(RankedTensorType tensorTy) {
           : cast<triton::gpu::DotOperandEncodingAttr>(encoding).getParent());
 }
 
-/// Compute the shuffle mapping for transposed 2D block loads.
-/// Returns failure if the transpose configuration is unsupported.
 FailureOr<LinearLayout> computeTransposeShuffleMapping(
     RankedTensorType tensorType, const LinearLayout &regMapping,
     int64_t numElemsPerLoad, unsigned numPackedVals, unsigned tileHeight,

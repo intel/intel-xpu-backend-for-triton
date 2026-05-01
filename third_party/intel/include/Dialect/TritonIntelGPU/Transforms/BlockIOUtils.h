@@ -58,9 +58,11 @@ getBlockIOTileSize<false>(const LinearLayout &, unsigned, unsigned, AxisInfo *,
                           bool);
 
 /// Get the DPAS operand index from a tensor type's encoding.
+/// The encoding must be DPAS or DotOperand-with-DPAS parent.
 DpasEncodingAttr::OpIdx getOpIdx(RankedTensorType tensorTy);
 
 /// Get the DPAS layout from a tensor type's encoding.
+/// The encoding must be DPAS or DotOperand-with-DPAS parent.
 DpasEncodingAttr getDpasLayout(RankedTensorType tensorTy);
 
 /// Compute the shuffle mapping for transposed 2D block loads.
