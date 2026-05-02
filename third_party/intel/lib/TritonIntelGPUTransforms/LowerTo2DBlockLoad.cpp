@@ -1,11 +1,3 @@
-//===- LowerTo2DBlockLoad.cpp - Lower loads to ttig.2d_block_load ---------===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
-
 #include "intel/include/Analysis/AxisInfoExt.h"
 #include "intel/include/Analysis/StrideInfo.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
@@ -107,7 +99,7 @@ static bool isMemoryRowMajor(Operation *op) {
       ttgi::TritonIntelGPUDialect::getBlockIOAttrName());
   assert(blockIOAttr && "expected block_io attribute");
   auto mode = ttgi::symbolizeBlockIOMode(blockIOAttr.getValue());
-  return *mode == ttgi::BlockIOMode::RowMajor;
+  return !mode || *mode == ttgi::BlockIOMode::RowMajor;
 }
 
 struct TritonIntelGPULowerTo2DBlockLoadPass
@@ -277,7 +269,8 @@ private:
 
     auto descType = cast<tt::TensorDescType>(desc.getType());
     unsigned descRank = descType.getBlockType().getRank();
-    assert(descRank >= rank && "descriptor rank must be >= result tensor rank");
+    assert(descRank == rank &&
+           "descriptor and result tensor must have same rank");
 
     bool memoryRowMajor = isMemoryRowMajor(op);
 
@@ -290,16 +283,6 @@ private:
     if (!ttgi::validate2DBlockLoadTile(llEncoding, contiguousDim,
                                        elemSizeInBits, tensorTy)) {
       LDBG("Tile validation failed for descriptor load: " << *op);
-      return;
-    }
-
-    // For descriptor loads, the 2D block I/O tile must use only the inner 2
-    // dims. Reject if rowDim or colDim falls in a batch dimension.
-    auto sizeInfo = ttgi::getBlockIOTileSize<true>(llEncoding, contiguousDim,
-                                                   elemSizeInBits);
-    int innerDimStart = static_cast<int>(rank - 2);
-    if (sizeInfo.rowDim < innerDimStart || sizeInfo.colDim < innerDimStart) {
-      LDBG("Tile dims outside inner-2 for descriptor load: " << *op);
       return;
     }
 
@@ -322,9 +305,9 @@ private:
     assert(indices.size() == descRank &&
            "descriptor index count must match descriptor rank");
 
-    // Fold batch indices into base_ptr. This handles both rank-reducing loads
-    // (descRank > rank: leading descriptor dims are dropped) and same-rank
-    // loads with rank > 2 (batch dims before the inner-2 dims).
+    // Fold batch indices into base_ptr for rank > 2 loads. The leading
+    // dimensions (before the inner-2 dims) are batch dims whose offsets
+    // are multiplied by the corresponding strides and added to the pointer.
     unsigned numBatchDims = descRank - 2;
     for (unsigned d = 0; d < numBatchDims; ++d) {
       Value batchOffset = arith::MulIOp::create(

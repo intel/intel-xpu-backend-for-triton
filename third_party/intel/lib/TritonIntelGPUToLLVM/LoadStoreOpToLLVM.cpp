@@ -689,20 +689,11 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
   }
 
   static DpasEncodingAttr::OpIdx getOpIdx(RankedTensorType tensorTy) {
-    if (hasDpasEncoding(tensorTy))
-      return DpasEncodingAttr::OpIdx::OperandC;
-
-    assert(hasDotDpasEncoding(tensorTy) && "Expecting dot layout");
-    DotOperandEncodingAttr dotLayout = getDotEncoding(tensorTy).value();
-    return static_cast<DpasEncodingAttr::OpIdx>(dotLayout.getOpIdx());
+    return triton::gpu::intel::getOpIdx(tensorTy);
   }
 
   static DpasEncodingAttr getDpasLayout(RankedTensorType tensorTy) {
-    Attribute encoding = tensorTy.getEncoding();
-    return cast<DpasEncodingAttr>(
-        hasDpasEncoding(tensorTy)
-            ? encoding
-            : getDotEncoding(tensorTy).value().getParent());
+    return triton::gpu::intel::getDpasLayout(tensorTy);
   }
 
   // Returns the pitch (stride in bytes) for a regular pointer.
@@ -899,73 +890,13 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     return cfg;
   }
 
-  /// Compute the shuffle mapping for transposed 2D block loads.
-  /// Returns failure if the transpose configuration is unsupported.
   static FailureOr<LinearLayout> computeTransposeShuffleMapping(
       RankedTensorType tensorType, const LinearLayout &regMapping,
       int64_t numElemsPerLoad, unsigned numPackedVals, unsigned tileHeight,
       unsigned threadsPerWarp, bool hasDPASOperandType, MLIRContext *ctx) {
-    StringAttr kRegister = S("register");
-    LinearLayout shuffleMapping =
-        LinearLayout::identity1D(numElemsPerLoad, kRegister, kRegister);
-
-    // Improve this. The current 2D block load only transposes the matrix at
-    // i32 granularity. We still need to perform an additional in-register
-    // transpose from i32 -> (N × ElemSizeInBits) tiles, using the tile width.
-    // At the moment, we can only achieve this using a bitcast operation,
-    // which implicitly uses the sub-group size as the transpose width. To
-    // optimize further, we should implement this with inline VISA
-    // instructions.
-
-    // tileHeight becomes width after transposing.
-    unsigned widthToTranspose = tileHeight;
-    if (hasDPASOperandType) {
-      // For the DPAS related layout, we will do the shuffle at first in the
-      // unpacking of the elements at the DPAS operands granularity.
-      // And then we will do the transposing. So the transposing width is DPAS
-      // op shapes.
-      DpasEncodingAttr::OpIdx opIdx = getOpIdx(tensorType);
-      DpasEncodingAttr dpasLayout = getDpasLayout(tensorType);
-      switch (opIdx) {
-      case DpasEncodingAttr::OpIdx::OperandA: {
-        widthToTranspose = dpasLayout.getDPASInstShapeA()[1];
-        break;
-      }
-      case DpasEncodingAttr::OpIdx::OperandB: {
-        widthToTranspose = dpasLayout.getDPASInstShapeB()[1];
-        break;
-      }
-      case DpasEncodingAttr::OpIdx::OperandC: {
-        widthToTranspose = dpasLayout.getDPASInstShapeC()[1];
-        break;
-      }
-      }
-      // For shuffle the transposed Dot operands matrix, we can shuffle the
-      // loaded matrix in an reverse order.
-      auto invertMapping = regMapping.invert();
-      bool foundSurjective = false;
-      for (unsigned numElemsPerSurjectiveTile = numElemsPerLoad;
-           numElemsPerSurjectiveTile > 0; numElemsPerSurjectiveTile >>= 1) {
-        auto layout =
-            invertMapping.resizeInDim(kRegister, numElemsPerSurjectiveTile)
-                .resizeOutDim(kRegister, numElemsPerSurjectiveTile);
-        if (layout.isSurjective()) {
-          shuffleMapping =
-              layout * LinearLayout::identity1D(numElemsPerLoad /
-                                                    numElemsPerSurjectiveTile,
-                                                kRegister, kRegister);
-          foundSurjective = true;
-          break;
-        }
-      }
-      if (!foundSurjective)
-        return failure();
-    }
-
-    if (numPackedVals > 1 && (widthToTranspose) != threadsPerWarp)
-      return failure();
-
-    return shuffleMapping;
+    return triton::gpu::intel::computeTransposeShuffleMapping(
+        tensorType, regMapping, numElemsPerLoad, numPackedVals, tileHeight,
+        threadsPerWarp, hasDPASOperandType, ctx);
   }
 
   /// Unpack a 2D block load result into individual element values.

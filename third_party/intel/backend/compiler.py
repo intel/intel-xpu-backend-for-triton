@@ -315,7 +315,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # optimize TTGIR
         passes.ttgpuir.add_coalesce(pm)
         if properties["has_256b_load_store"]:
-            intel.passes.ttgpuir.add_widen_store_encoding(pm)
+            intel.passes.ttgpuir.add_widen_load_store_encoding(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
 
         intel.passes.ttgpuir.add_accelerate_matmul(pm)

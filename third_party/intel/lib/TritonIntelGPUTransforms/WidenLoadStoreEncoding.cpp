@@ -7,7 +7,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/Support/Debug.h"
 
-#define DEBUG_TYPE "tritonintelgpu-widen-store-encoding"
+#define DEBUG_TYPE "tritonintelgpu-widen-load-store-encoding"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
@@ -17,20 +17,29 @@ namespace ttg = mlir::triton::gpu;
 namespace ttgi = mlir::triton::gpu::intel;
 
 namespace mlir::triton::gpu::intel {
-#define GEN_PASS_DEF_TRITONINTELGPUWIDENSTOREENCODING
+#define GEN_PASS_DEF_TRITONINTELGPUWIDENLOADSTOREENCODING
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h.inc"
 } // namespace mlir::triton::gpu::intel
 
 namespace {
 
-// Compute a widened BlockedEncodingAttr for `op`'s value tensor, or return
-// nullptr if the store does not qualify (not a ranked tensor, not blocked,
-// current per-thread width != 128 bits, insufficient alignment/contiguity,
-// or the widened tile would not fit in the CTA shape).
-Attribute tryWidenStoreEncoding(tt::StoreOp op,
-                                tt::intel::ModuleAxisInfoAnalysis &axisInfo) {
-  Value val = op.getValue();
-  auto valTy = dyn_cast<RankedTensorType>(val.getType());
+// Compute a widened BlockedEncodingAttr for `op`'s tensor value, or return
+// nullptr if the op does not qualify (not a supported op kind, not a ranked
+// tensor, not blocked, current per-thread width != 128 bits, insufficient
+// alignment/contiguity, or the widened tile would not fit in the CTA shape).
+Attribute tryWidenEncoding(Operation *op,
+                           tt::intel::ModuleAxisInfoAnalysis &axisInfo) {
+  RankedTensorType valTy;
+  Value ptr;
+  if (auto st = dyn_cast<tt::StoreOp>(op)) {
+    valTy = dyn_cast<RankedTensorType>(st.getValue().getType());
+    ptr = st.getPtr();
+  } else if (auto ld = dyn_cast<tt::LoadOp>(op)) {
+    valTy = dyn_cast<RankedTensorType>(ld.getType());
+    ptr = ld.getPtr();
+  } else {
+    return nullptr;
+  }
   if (!valTy)
     return nullptr;
 
@@ -54,7 +63,6 @@ Attribute tryWidenStoreEncoding(tt::StoreOp op,
   int64_t newSizePerThread = 2 * curSizePerThread;
 
   // getDivisibility and getContiguity are in elements, not bytes.
-  Value ptr = op.getPtr();
   tt::AxisInfo *info = axisInfo.getAxisInfo(ptr);
   if (!info)
     return nullptr;
@@ -84,20 +92,20 @@ Attribute tryWidenStoreEncoding(tt::StoreOp op,
   SmallVector<unsigned> widenedSizePerThread(sizePerThread.begin(),
                                              sizePerThread.end());
   widenedSizePerThread[fastAxis] = newSizePerThread;
-  LDBG("widening store encoding on op: " << *op << " sizePerThread[" << fastAxis
-                                         << "] " << curSizePerThread << " -> "
-                                         << newSizePerThread);
+  LDBG("widening encoding on op: " << *op << " sizePerThread[" << fastAxis
+                                   << "] " << curSizePerThread << " -> "
+                                   << newSizePerThread);
   return ttg::BlockedEncodingAttr::get(
-      op.getContext(), widenedSizePerThread, enc.getThreadsPerWarp(),
+      op->getContext(), widenedSizePerThread, enc.getThreadsPerWarp(),
       enc.getWarpsPerCTA(), order, enc.getCGALayout());
 }
 
-struct TritonIntelGPUWidenStoreEncodingPass
-    : public ttgi::impl::TritonIntelGPUWidenStoreEncodingBase<
-          TritonIntelGPUWidenStoreEncodingPass> {
-  using ttgi::impl::TritonIntelGPUWidenStoreEncodingBase<
-      TritonIntelGPUWidenStoreEncodingPass>::
-      TritonIntelGPUWidenStoreEncodingBase;
+struct TritonIntelGPUWidenLoadStoreEncodingPass
+    : public ttgi::impl::TritonIntelGPUWidenLoadStoreEncodingBase<
+          TritonIntelGPUWidenLoadStoreEncodingPass> {
+  using ttgi::impl::TritonIntelGPUWidenLoadStoreEncodingBase<
+      TritonIntelGPUWidenLoadStoreEncodingPass>::
+      TritonIntelGPUWidenLoadStoreEncodingBase;
 
   void runOnOperation() final {
     ModuleOp mod = getOperation();
@@ -108,15 +116,17 @@ struct TritonIntelGPUWidenStoreEncodingPass
     tt::intel::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
 
     // Collect candidates first: convertDistributedOpEncoding rewrites the
-    // store in place (erasing the old op), which would invalidate a walk.
+    // op in place (erasing the old op), which would invalidate a walk.
     SmallVector<std::pair<Operation *, Attribute>> rewrites;
-    mod.walk([&](tt::StoreOp op) {
-      if (Attribute newEnc = tryWidenStoreEncoding(op, axisInfoAnalysis))
+    mod.walk([&](Operation *op) {
+      if (!isa<tt::LoadOp, tt::StoreOp>(op))
+        return;
+      if (Attribute newEnc = tryWidenEncoding(op, axisInfoAnalysis))
         rewrites.emplace_back(op, newEnc);
     });
 
     for (auto &[op, newEnc] : rewrites)
-      mlir::convertDistributedOpEncoding(newEnc, op);
+      convertDistributedOpEncoding(newEnc, op);
   }
 };
 

@@ -154,8 +154,8 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      gpu::intel::createTritonIntelGPUAnnotateCacheControl);
   ADD_PASS_WRAPPER_0("add_lower_to_2d_block_load",
                      gpu::intel::createTritonIntelGPULowerTo2DBlockLoad);
-  ADD_PASS_WRAPPER_0("add_widen_store_encoding",
-                     gpu::intel::createTritonIntelGPUWidenStoreEncoding);
+  ADD_PASS_WRAPPER_0("add_widen_load_store_encoding",
+                     gpu::intel::createTritonIntelGPUWidenLoadStoreEncoding);
 }
 
 void init_triton_intel_passes_arith(py::module &&m) {

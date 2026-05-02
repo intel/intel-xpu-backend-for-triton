@@ -230,12 +230,19 @@ def _build_test_op_cases():
 
     return test_cases
 
+def _case_id(case):
+    parts = [str(getattr(case, f.name)) for f in fields(Case)]
+    if case.swiglu_opts is not None:
+        parts[-1] = f"swiglu({case.swiglu_opts[0]},{case.swiglu_opts[1]})"
+    return "-".join(parts)
+
 @pytest.mark.parametrize(
     ", ".join(f.name for f in fields(Case)),
     [
         tuple(getattr(case, f.name) for f in fields(Case))
         for case in _build_test_op_cases()
     ],
+    ids=[_case_id(c) for c in _build_test_op_cases()],
 )
 @pytest.mark.parametrize("block_m", [16, 128])
 @pytest.mark.parametrize("do_gather, do_scatter, inner_expt_opt", [
