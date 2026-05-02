@@ -477,4 +477,81 @@ FailureOr<LinearLayout> computeTransposeShuffleMapping(
   return shuffleMapping;
 }
 
+bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
+                             unsigned elemSizeInBits,
+                             RankedTensorType tensorType) {
+  // Descriptor loads have no mask, so maskAxisInfo is nullptr.
+  // oneMatrixPerLoadForBT is not needed for validation — it only limits
+  // transpose tile expansion, which doesn't affect basic validity.
+  auto sizeInfo = getBlockIOTileSize<true>(ll, memContiguousDim, elemSizeInBits,
+                                           /*maskAxisInfo=*/nullptr,
+                                           /*oneMatrixPerLoadForBT=*/false);
+  if (!sizeInfo.isValid())
+    return false;
+
+  // The 2D block I/O tile must use only the inner 2 dims. Reject if
+  // rowDim or colDim falls in a batch dimension.
+  unsigned rank = ll.getNumOutDims();
+  if (rank > 2) {
+    int innerDimStart = static_cast<int>(rank - 2);
+    if (sizeInfo.rowDim < innerDimStart || sizeInfo.colDim < innerDimStart)
+      return false;
+  }
+
+  unsigned packedElemSizeInBits = elemSizeInBits * sizeInfo.numElemPerPackedVal;
+  if (!check2DBlockAddressPayloadRestriction(packedElemSizeInBits,
+                                             sizeInfo.tileWidth))
+    return false;
+
+  constexpr int MAX_WIDTH = 64;
+  unsigned totalBytesPerRowPerMatrix =
+      sizeInfo.tileWidth * packedElemSizeInBits / 8;
+  if (totalBytesPerRowPerMatrix > MAX_WIDTH)
+    return false;
+
+  // For transposed loads, verify computeTransposeShuffleMapping will succeed.
+  // sizeInfo.vBlocks is already capped by getBlockIOTileSize<true>.
+  if (sizeInfo.transpose && sizeInfo.regPackedBases.has_value()) {
+    MLIRContext *ctx = ll.getBases().begin()->first.getContext();
+    StringAttr kRegister = StringAttr::get(ctx, "register");
+    std::vector<std::vector<int>> bases(sizeInfo.regPackedBases->size());
+    llvm::transform(*sizeInfo.regPackedBases, bases.begin(),
+                    [](int base) { return std::vector<int>{base}; });
+    LinearLayout regMapping({{kRegister, bases}},
+                            {{kRegister, ll.getInDimSize(kRegister)}},
+                            /*requireSurjective=*/true);
+
+    unsigned threadsPerWarp = ll.getInDimSize(StringAttr::get(ctx, "lane"));
+    int64_t numElemsPerLoad =
+        mlir::ceil(sizeInfo.tileHeight * sizeInfo.tileWidth *
+                       sizeInfo.numElemPerPackedVal * sizeInfo.vBlocks,
+                   (int)threadsPerWarp);
+
+    bool hasDPASOperandType = false;
+    if (hasDpasEncoding(tensorType) || hasDotDpasEncoding(tensorType)) {
+      auto dpasLayout = getDpasLayout(tensorType);
+      unsigned opsPerChannel = dpasLayout.getOpsPerChannel();
+      auto opIdx = getOpIdx(tensorType);
+
+      bool matchesDPASPrecision =
+          (opsPerChannel == 4 && elemSizeInBits == 8) ||
+          (opsPerChannel == 2 && elemSizeInBits == 16) ||
+          (opsPerChannel == 1 && elemSizeInBits == 32);
+      if (matchesDPASPrecision && (opIdx == DpasEncodingAttr::OpIdx::OperandA ||
+                                   opIdx == DpasEncodingAttr::OpIdx::OperandB))
+        hasDPASOperandType = true;
+      if (opIdx == DpasEncodingAttr::OpIdx::OperandC)
+        hasDPASOperandType = true;
+    }
+
+    if (failed(computeTransposeShuffleMapping(
+            tensorType, regMapping, numElemsPerLoad,
+            sizeInfo.numElemPerPackedVal, sizeInfo.tileHeight, threadsPerWarp,
+            hasDPASOperandType, ctx)))
+      return false;
+  }
+
+  return true;
+}
+
 } // namespace mlir::triton::gpu::intel
