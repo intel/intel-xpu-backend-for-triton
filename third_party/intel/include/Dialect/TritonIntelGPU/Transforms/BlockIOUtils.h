@@ -1,7 +1,9 @@
 #ifndef TRITONINTELGPU_TRANSFORMS_BLOCKIOUTILS_H
 #define TRITONINTELGPU_TRANSFORMS_BLOCKIOUTILS_H
 
+#include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/Support/LogicalResult.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Tools/LinearLayout.h"
 #include "llvm/ADT/SetVector.h"
@@ -55,16 +57,31 @@ extern template BlockIOTileSizeInfo
 getBlockIOTileSize<false>(const LinearLayout &, unsigned, unsigned, AxisInfo *,
                           bool);
 
+/// Get the DPAS operand index from a tensor type's encoding.
+/// The encoding must be DPAS or DotOperand-with-DPAS parent.
+DpasEncodingAttr::OpIdx getOpIdx(RankedTensorType tensorTy);
+
+/// Get the DPAS layout from a tensor type's encoding.
+/// The encoding must be DPAS or DotOperand-with-DPAS parent.
+DpasEncodingAttr getDpasLayout(RankedTensorType tensorTy);
+
+/// Compute the shuffle mapping for transposed 2D block loads.
+/// Returns failure if the transpose configuration is unsupported.
+/// Used by both the TTGIR validation (to reject unsupported configs)
+/// and the LLVM lowering (to produce the actual mapping).
+FailureOr<LinearLayout> computeTransposeShuffleMapping(
+    RankedTensorType tensorType, const LinearLayout &regMapping,
+    int64_t numElemsPerLoad, unsigned numPackedVals, unsigned tileHeight,
+    unsigned threadsPerWarp, bool hasDPASOperandType, MLIRContext *ctx);
+
 /// Check whether the packed element size and tile width satisfy the
 /// 2D block address payload hardware restrictions.
 bool check2DBlockAddressPayloadRestriction(unsigned packedElemSizeInBits,
                                            unsigned tileWidth);
 
 /// Validate that a load with the given encoding and element size can be
-/// lowered to 2D block I/O. This runs getBlockIOTileSize,
-/// check2DBlockAddressPayloadRestriction, and transpose shuffle validation
-/// without producing any IR. Returns true if the load is valid for 2D block
-/// I/O.
+/// lowered to 2D block I/O. Checks tile size, HW address restrictions,
+/// inner-dim constraints, and transpose shuffle mapping. Returns true if valid.
 bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
                              unsigned elemSizeInBits,
                              RankedTensorType tensorType);
