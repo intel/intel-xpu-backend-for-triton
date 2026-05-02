@@ -122,7 +122,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // The base pointer should be passed directly to the 2D block load
     // (alignment handled later by computeAlignedBasePtrWidthAndOffset in
     // TritonGEN lowering). No llvm.inttoptr (alignment) should appear
-    // between the base extraction and the 2D block loads.
+    // between the base pointer and the 2D block loads.
     // CHECK-NOT: llvm.inttoptr
     // CHECK: triton_gen.2Dblockload %arg0
     // CHECK: triton_gen.2Dblockload %arg0

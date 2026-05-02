@@ -269,8 +269,7 @@ private:
 
     auto descType = cast<tt::TensorDescType>(desc.getType());
     unsigned descRank = descType.getBlockType().getRank();
-    assert(descRank == rank &&
-           "descriptor and result tensor must have same rank");
+    assert(descRank >= rank && "descriptor rank must be >= result tensor rank");
 
     bool memoryRowMajor = isMemoryRowMajor(op);
 
@@ -305,9 +304,9 @@ private:
     assert(indices.size() == descRank &&
            "descriptor index count must match descriptor rank");
 
-    // Fold batch indices into base_ptr for rank > 2 loads. The leading
-    // dimensions (before the inner-2 dims) are batch dims whose offsets
-    // are multiplied by the corresponding strides and added to the pointer.
+    // Fold batch indices into base_ptr. This handles both rank-reducing loads
+    // (descRank > rank: leading descriptor dims are dropped) and same-rank
+    // loads with rank > 2 (batch dims before the inner-2 dims).
     unsigned numBatchDims = descRank - 2;
     for (unsigned d = 0; d < numBatchDims; ++d) {
       Value batchOffset = arith::MulIOp::create(
