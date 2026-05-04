@@ -218,16 +218,21 @@ TEST_F(DPAStoLinearLayoutTest, DPAS_withWarpOperandB) {
 }
 
 TEST_F(DPAStoLinearLayoutTest, DPAS_OperandScaleA) {
-  EXPECT_EQ(BlockScaledDPAStoLinearLayout(
-                {128, 2}, dpas({2, 2}, 8, 8, 16, 4, {4, 2}, 32), 3),
-            LinearLayout(
-                {
-                    {S("register"), {{8, 0}, {16, 0}, {0, 1}, {64, 0}}},
-                    {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {0, 0}, {0, 0}}},
-                    {S("warp"), {{0, 0}, {32, 0}}},
-                    {S("block"), {}},
-                },
-                {S("dim0"), S("dim1")}));
+  // Scale operands are warp-broadcast (see BlockScaledDPAStoLinearLayout): all
+  // warp bases are zero. The tile shrinks along the M dimension as a result,
+  // so the remaining dim0 coverage is supplied by additional register bases
+  // instead of by warp identity bases.
+  EXPECT_EQ(
+      BlockScaledDPAStoLinearLayout({128, 2},
+                                    dpas({2, 2}, 8, 8, 16, 4, {4, 2}, 32), 3),
+      LinearLayout(
+          {
+              {S("register"), {{8, 0}, {16, 0}, {0, 1}, {32, 0}, {64, 0}}},
+              {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {0, 0}, {0, 0}}},
+              {S("warp"), {{0, 0}, {0, 0}}},
+              {S("block"), {}},
+          },
+          {S("dim0"), S("dim1")}));
 
   EXPECT_EQ(BlockScaledDPAStoLinearLayout(
                 {128, 4},
@@ -235,23 +240,25 @@ TEST_F(DPAStoLinearLayoutTest, DPAS_OperandScaleA) {
                 3),
             LinearLayout(
                 {
-                    {S("register"), {{0, 1}, {8, 0}, {16, 0}, {0, 2}, {64, 0}}},
+                    {S("register"),
+                     {{0, 1}, {8, 0}, {16, 0}, {0, 2}, {32, 0}, {64, 0}}},
                     {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {0, 0}, {0, 0}}},
-                    {S("warp"), {{0, 0}, {32, 0}}},
+                    {S("warp"), {{0, 0}, {0, 0}}},
                     {S("block"), {}},
                 },
                 {S("dim0"), S("dim1")}));
 
-  EXPECT_EQ(BlockScaledDPAStoLinearLayout(
-                {128, 2}, dpas({2, 2}, 8, 8, 16, 4, {4, 2}, 16), 3),
-            LinearLayout(
-                {
-                    {S("register"), {{8, 0}, {16, 0}, {0, 1}, {64, 0}}},
-                    {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {0, 0}}},
-                    {S("warp"), {{0, 0}, {32, 0}}},
-                    {S("block"), {}},
-                },
-                {S("dim0"), S("dim1")}));
+  EXPECT_EQ(
+      BlockScaledDPAStoLinearLayout({128, 2},
+                                    dpas({2, 2}, 8, 8, 16, 4, {4, 2}, 16), 3),
+      LinearLayout(
+          {
+              {S("register"), {{8, 0}, {16, 0}, {0, 1}, {32, 0}, {64, 0}}},
+              {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {0, 0}}},
+              {S("warp"), {{0, 0}, {0, 0}}},
+              {S("block"), {}},
+          },
+          {S("dim0"), S("dim1")}));
 
   EXPECT_EQ(BlockScaledDPAStoLinearLayout(
                 {128, 4},
@@ -259,9 +266,10 @@ TEST_F(DPAStoLinearLayoutTest, DPAS_OperandScaleA) {
                 3),
             LinearLayout(
                 {
-                    {S("register"), {{0, 1}, {8, 0}, {16, 0}, {0, 2}, {64, 0}}},
+                    {S("register"),
+                     {{0, 1}, {8, 0}, {16, 0}, {0, 2}, {32, 0}, {64, 0}}},
                     {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {0, 0}}},
-                    {S("warp"), {{0, 0}, {32, 0}}},
+                    {S("warp"), {{0, 0}, {0, 0}}},
                     {S("block"), {}},
                 },
                 {S("dim0"), S("dim1")}));
@@ -271,9 +279,14 @@ TEST_F(DPAStoLinearLayoutTest, DPAS_OperandScaleA) {
             LinearLayout(
                 {
                     {S("register"),
-                     {{0, 8, 0}, {0, 16, 0}, {0, 0, 1}, {0, 0, 2}, {0, 64, 0}}},
+                     {{0, 8, 0},
+                      {0, 16, 0},
+                      {0, 0, 1},
+                      {0, 0, 2},
+                      {0, 32, 0},
+                      {0, 64, 0}}},
                     {S("lane"), {{0, 1, 0}, {0, 2, 0}, {0, 4, 0}, {0, 0, 0}}},
-                    {S("warp"), {{0, 0, 0}, {0, 32, 0}}},
+                    {S("warp"), {{0, 0, 0}, {0, 0, 0}}},
                     {S("block"), {}},
                 },
                 {S("dim0"), S("dim1"), S("dim2")}));
@@ -289,25 +302,30 @@ TEST_F(DPAStoLinearLayoutTest, DPAS_OperandScaleA) {
                {{0, 0, 1},
                 {0, 16, 0},
                 {0, 0, 2},
+                {0, 32, 0},
                 {0, 64, 0},
+                {1, 0, 0},
                 {2, 0, 0},
                 {4, 0, 0},
                 {8, 0, 0}}},
               {S("lane"), {{0, 1, 0}, {0, 2, 0}, {0, 4, 0}, {0, 8, 0}}},
-              {S("warp"), {{0, 32, 0}, {1, 0, 0}}},
+              {S("warp"), {{0, 0, 0}, {0, 0, 0}}},
               {S("block"), {}},
           },
           {S("dim0"), S("dim1"), S("dim2")}));
 }
 
 TEST_F(DPAStoLinearLayoutTest, DPAS_OperandScaleB) {
+  // Scale operands are warp-broadcast (see BlockScaledDPAStoLinearLayout): all
+  // warp bases are zero. An extra register basis covers the dim0 elements
+  // that used to be distributed across warps.
   EXPECT_EQ(BlockScaledDPAStoLinearLayout(
                 {128, 2}, dpas({2, 2}, 8, 8, 16, 4, {4, 2}, 32), 4),
             LinearLayout(
                 {
-                    {S("register"), {{16, 0}, {0, 1}, {64, 0}}},
+                    {S("register"), {{16, 0}, {0, 1}, {32, 0}, {64, 0}}},
                     {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 0}}},
-                    {S("warp"), {{32, 0}, {0, 0}}},
+                    {S("warp"), {{0, 0}, {0, 0}}},
                     {S("block"), {}},
                 },
                 {S("dim0"), S("dim1")}));
@@ -315,36 +333,105 @@ TEST_F(DPAStoLinearLayoutTest, DPAS_OperandScaleB) {
                 {128, 2}, dpas({2, 2}, 8, 8, 16, 4, {4, 2}, 16), 4),
             LinearLayout(
                 {
-                    {S("register"), {{16, 0}, {0, 1}, {64, 0}}},
+                    {S("register"), {{16, 0}, {0, 1}, {32, 0}, {64, 0}}},
                     {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}}},
-                    {S("warp"), {{32, 0}, {0, 0}}},
+                    {S("warp"), {{0, 0}, {0, 0}}},
                     {S("block"), {}},
                 },
                 {S("dim0"), S("dim1")}));
-  EXPECT_EQ(BlockScaledDPAStoLinearLayout(
-                {128, 4},
-                dpas({2, 2}, 8, 8, 16, 4, {4, 2}, 32, std::make_optional(2)),
-                4),
-            LinearLayout(
-                {
-                    {S("register"), {{0, 1}, {16, 0}, {0, 2}, {64, 0}}},
-                    {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 0}}},
-                    {S("warp"), {{32, 0}, {0, 0}}},
-                    {S("block"), {}},
-                },
-                {S("dim0"), S("dim1")}));
-  EXPECT_EQ(BlockScaledDPAStoLinearLayout(
-                {128, 4},
-                dpas({2, 2}, 8, 8, 16, 4, {4, 2}, 16, std::make_optional(2)),
-                4),
-            LinearLayout(
-                {
-                    {S("register"), {{0, 1}, {16, 0}, {0, 2}, {64, 0}}},
-                    {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}}},
-                    {S("warp"), {{32, 0}, {0, 0}}},
-                    {S("block"), {}},
-                },
-                {S("dim0"), S("dim1")}));
+  EXPECT_EQ(
+      BlockScaledDPAStoLinearLayout(
+          {128, 4},
+          dpas({2, 2}, 8, 8, 16, 4, {4, 2}, 32, std::make_optional(2)), 4),
+      LinearLayout(
+          {
+              {S("register"), {{0, 1}, {16, 0}, {0, 2}, {32, 0}, {64, 0}}},
+              {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 0}}},
+              {S("warp"), {{0, 0}, {0, 0}}},
+              {S("block"), {}},
+          },
+          {S("dim0"), S("dim1")}));
+  EXPECT_EQ(
+      BlockScaledDPAStoLinearLayout(
+          {128, 4},
+          dpas({2, 2}, 8, 8, 16, 4, {4, 2}, 16, std::make_optional(2)), 4),
+      LinearLayout(
+          {
+              {S("register"), {{0, 1}, {16, 0}, {0, 2}, {32, 0}, {64, 0}}},
+              {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}}},
+              {S("warp"), {{0, 0}, {0, 0}}},
+              {S("block"), {}},
+          },
+          {S("dim0"), S("dim1")}));
+}
+
+TEST_F(DPAStoLinearLayoutTest, BlockScaledScaleOperandWarpBroadcast) {
+  // Preparatory audit for SpatialReuseAnalysis (see
+  // annotate-cc-p1-spatial-reuse.md): the scale-operand branch of
+  // BlockScaledDPAStoLinearLayout must produce a warp-broadcast LinearLayout
+  // (zero warp basis across all output dims). Scales are consumed by the same
+  // DPAS-backed matmul as the A/B operands and benefit from the same
+  // cross-subgroup L1 reuse; a non-zero warp basis here would force
+  // AnnotateCacheControl to keep a use-site scan as a workaround.
+  //
+  // Coverage: opIdx in {3, 4} (scale A, scale B) x MXFP8 (block 16, no
+  // fp4Kpack) / MXFP4 (block 32, fp4Kpack=2) x warp sizes 16 and 32 x 2D and
+  // 3D shapes, mirroring the configurations already asserted in
+  // DPAS_OperandScaleA / DPAS_OperandScaleB above.
+  StringAttr kWarp = S("warp");
+
+  struct Config {
+    SmallVector<int64_t> shape;
+    DpasEncodingAttr dpas;
+    unsigned opIdx;
+    StringRef name;
+  };
+
+  SmallVector<Config> configs = {
+      // 2D, warp size 32, MXFP8, scale A / scale B
+      {{128, 2}, dpas({2, 2}, 8, 8, 16, 4, {4, 2}, 32), 3, "mxfp8-tpw32-A"},
+      {{128, 2}, dpas({2, 2}, 8, 8, 16, 4, {4, 2}, 32), 4, "mxfp8-tpw32-B"},
+      // 2D, warp size 16, MXFP8, scale A / scale B
+      {{128, 2}, dpas({2, 2}, 8, 8, 16, 4, {4, 2}, 16), 3, "mxfp8-tpw16-A"},
+      {{128, 2}, dpas({2, 2}, 8, 8, 16, 4, {4, 2}, 16), 4, "mxfp8-tpw16-B"},
+      // 2D, warp size 32, MXFP4, scale A / scale B
+      {{128, 4},
+       dpas({2, 2}, 8, 8, 16, 4, {4, 2}, 32, std::make_optional(2u)),
+       3,
+       "mxfp4-tpw32-A"},
+      {{128, 4},
+       dpas({2, 2}, 8, 8, 16, 4, {4, 2}, 32, std::make_optional(2u)),
+       4,
+       "mxfp4-tpw32-B"},
+      // 2D, warp size 16, MXFP4, scale A / scale B
+      {{128, 4},
+       dpas({2, 2}, 8, 8, 16, 4, {4, 2}, 16, std::make_optional(2u)),
+       3,
+       "mxfp4-tpw16-A"},
+      {{128, 4},
+       dpas({2, 2}, 8, 8, 16, 4, {4, 2}, 16, std::make_optional(2u)),
+       4,
+       "mxfp4-tpw16-B"},
+      // 3D, warp size 16, MXFP8, scale A
+      {{1, 128, 4},
+       dpas({1, 2, 2}, 8, 8, 16, 4, {1, 4, 2}, 16),
+       3,
+       "mxfp8-3d-A"},
+      // 3D, warp size 16, MXFP4, scale B (mirrors the existing
+      // DPAS_OperandScaleA 3D case shape/dpas, flipped to opIdx=4)
+      {{16, 128, 4},
+       dpas({2, 1, 2}, 8, 8, 16, 4, {1, 4, 2}, 16, std::make_optional(2u)),
+       4,
+       "mxfp4-3d-B"},
+  };
+
+  for (const Config &cfg : configs) {
+    LinearLayout ll =
+        BlockScaledDPAStoLinearLayout(cfg.shape, cfg.dpas, cfg.opIdx);
+    auto outDims = llvm::to_vector(ll.getOutDimNames());
+    EXPECT_TRUE(ll.sublayoutIsZero({kWarp}, outDims))
+        << "config=" << cfg.name.str() << " opIdx=" << cfg.opIdx;
+  }
 }
 
 TEST_F(DPAStoLinearLayoutTest, DPAS_withDPASRepetitions) {

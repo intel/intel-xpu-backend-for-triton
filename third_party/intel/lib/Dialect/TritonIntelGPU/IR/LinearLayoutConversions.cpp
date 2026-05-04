@@ -629,16 +629,20 @@ LinearLayout BlockScaledDPAStoLinearLayout(ArrayRef<int64_t> shape,
     tileLayout *= LinearLayout::identity1D(repCluster[dpasNonKDim], kRegister,
                                            outDimNames[scaleOpNonKDim]);
 
-    // K-dimension is shared among warps
+    // Scale operands are warp-broadcast: every warp in the workgroup accesses
+    // the same scale values (the DPAS-backed matmul reuses the same scale
+    // across all warps that share K), so all warp bases are zero. This lets
+    // SpatialReuseAnalysis recognize cross-subgroup L1 reuse via a plain
+    // sublayoutIsZero({warp}, outDims) check without a use-site scan.
     tileLayout *= LinearLayout::zeros1D(warpsPerCTA[dpasKDim], kWarp,
                                         outDimNames[scaleOpKDim]);
 
-    tileLayout *= LinearLayout::identity1D(warpsPerCTA[dpasNonKDim], kWarp,
-                                           outDimNames[scaleOpNonKDim]);
+    tileLayout *= LinearLayout::zeros1D(warpsPerCTA[dpasNonKDim], kWarp,
+                                        outDimNames[scaleOpNonKDim]);
 
     if (rank == 3)
       tileLayout *=
-          LinearLayout::identity1D(warpsPerCTA[0], kWarp, outDimNames[0]);
+          LinearLayout::zeros1D(warpsPerCTA[0], kWarp, outDimNames[0]);
 
   } else { // Operand Scale B
     auto regBasesB = BlockScaledDPASRegBasesScaleB(opsPerChannel);
@@ -652,15 +656,15 @@ LinearLayout BlockScaledDPAStoLinearLayout(ArrayRef<int64_t> shape,
     tileLayout *= LinearLayout::identity1D(repCluster[dpasNonKDim], kRegister,
                                            outDimNames[scaleOpNonKDim]);
 
-    // K-dimension is shared among warps
-    tileLayout *= LinearLayout::identity1D(warpsPerCTA[dpasNonKDim], kWarp,
-                                           outDimNames[scaleOpNonKDim]);
+    // Scale operands are warp-broadcast (see Scale A branch above).
+    tileLayout *= LinearLayout::zeros1D(warpsPerCTA[dpasNonKDim], kWarp,
+                                        outDimNames[scaleOpNonKDim]);
     tileLayout *= LinearLayout::zeros1D(warpsPerCTA[dpasKDim], kWarp,
                                         outDimNames[scaleOpKDim]);
 
     if (rank == 3)
       tileLayout *=
-          LinearLayout::identity1D(warpsPerCTA[0], kWarp, outDimNames[0]);
+          LinearLayout::zeros1D(warpsPerCTA[0], kWarp, outDimNames[0]);
   }
 
   // Lastly, the layout repeats to match the shape.
