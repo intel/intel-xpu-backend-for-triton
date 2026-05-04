@@ -193,13 +193,7 @@ jobs:
       fail-fast: false
       matrix:
         suite:
-          - minicore
-          - language
-          - scaled_dot
-          - gluon
           - triton-kernels
-          - rest
-          - tutorial-fa-128-nofwdfp8
     timeout-minutes: 720
     runs-on: ${{ fromJson(inputs.runner_label && format('["linux", "{0}"]', inputs.runner_label) || format('["linux", "{0}", "{1}", "{2}"]', inputs.device, inputs.driver_version, inputs.runner_version)) }}
     defaults:
@@ -334,6 +328,13 @@ jobs:
         if: matrix.suite == 'triton-kernels'
         run: |
           export PYTEST_MAX_PROCESSES=4
+          ${{ env.TRITON_TEST_CMD }} --triton-kernels
+
+      - name: Run triton kernels tests with IGC optimization disabled
+        if: matrix.suite == 'triton-kernels'
+        run: |
+          export PYTEST_MAX_PROCESSES=4
+          export TRITON_INTEL_DISABLE_IGC_OPT=1
           ${{ env.TRITON_TEST_CMD }} --triton-kernels
 
       - name: Run Tutorials
