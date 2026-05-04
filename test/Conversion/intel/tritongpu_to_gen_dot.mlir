@@ -576,8 +576,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // CHECK:           %[[C_3_1:.*]] = llvm.insertelement %[[VAL_353]], %[[VAL_416]]{{\[}}%[[CST_7]] : i32] : vector<8xf32>
 
     // COM: Total 16 dpas ops unrolled.
-    // CHECK:           %[[B_0_0:.*]] = llvm.bitcast %[[VAL_237]] : vector<16xf16> to vector<8xi32>
-    // CHECK:           %[[A_0_0:.*]] = llvm.bitcast %[[VAL_93]] : vector<8xf16> to vector<8xi16>
+    // CHECK-DAG:       %[[B_0_0:.*]] = llvm.bitcast %[[VAL_237]] : vector<16xf16> to vector<8xi32>
+    // CHECK-DAG:       %[[A_0_0:.*]] = llvm.bitcast %[[VAL_93]] : vector<8xf16> to vector<8xi16>
     // CHECK:           %[[C_0_0_0:.*]] = llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(%{{.*}}, %[[A_0_0]], %[[B_0_0]], %[[C_0_0]], %{{.*}})
     // CHECK:           %[[A_1_0:.*]] = llvm.bitcast %[[VAL_102]] : vector<8xf16> to vector<8xi16>
     // CHECK:           %[[C_1_0_0:.*]] = llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(%{{.*}}, %[[A_1_0]], %[[B_0_0]], %[[C_1_0]], %{{.*}})
@@ -596,8 +596,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // AGGRESSIVE-REUSE:              %[[C_1_1_0:.*]] = llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(%{{.*}}, %[[A_1_0]], %[[B_0_1]], %[[C_1_1]], %{{.*}})
     // AGGRESSIVE-REUSE:              %[[C_0_1_0:.*]] = llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(%{{.*}}, %[[A_0_0]], %[[B_0_1]], %[[C_0_1]], %{{.*}})
 
-    // CHECK:           %[[B_1_0:.*]] = llvm.bitcast %[[VAL_271]] : vector<16xf16> to vector<8xi32>
-    // CHECK:           %[[A_0_1:.*]] = llvm.bitcast %[[VAL_129]] : vector<8xf16> to vector<8xi16>
+    // CHECK-DAG:       %[[B_1_0:.*]] = llvm.bitcast %[[VAL_271]] : vector<16xf16> to vector<8xi32>
+    // CHECK-DAG:       %[[A_0_1:.*]] = llvm.bitcast %[[VAL_129]] : vector<8xf16> to vector<8xi16>
     // CHECK:           {{.*}} = llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(%{{.*}}, %[[A_0_1]], %[[B_1_0]], %[[C_0_0_0]], %{{.*}})
     // CHECK:           %[[A_1_1:.*]] = llvm.bitcast %[[VAL_138]] : vector<8xf16> to vector<8xi16>
     // CHECK:           {{.*}} = llvm.call spir_funccc @_Z45__spirv_SubgroupMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fi(%{{.*}}, %[[A_1_1]], %[[B_1_0]], %[[C_1_0_0]], %{{.*}})

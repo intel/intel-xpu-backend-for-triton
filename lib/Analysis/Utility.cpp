@@ -18,13 +18,23 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/ADT/SmallSet.h"
 
 namespace mlir {
 
 using namespace triton;
 using namespace triton::gpu;
+
+SmallVector<unsigned> ReduceOpHelper::getOrderWithAxisAtBeginning() {
+  auto order = toLinearEncoding(srcTy).getOrder();
+  auto it = std::find(order.begin(), order.end(), axis);
+  // delete the axis from order
+  order.erase(it);
+  // insert axis at the beginning of order
+  order.insert(order.begin(), axis);
+  return order;
+}
 
 // Cases where distributed shared memory is not required in ConvertLayout:
 // (1) numCTAs == 1
@@ -81,6 +91,29 @@ unsigned ReduceOpHelper::getIntraWarpSizeWithUniqueData() {
 
 bool ReduceOpHelper::isWarpSynchronous() {
   return getWarpsPerCTA(srcEncoding, srcShape)[axis] == 1;
+}
+
+SmallVector<unsigned> ReduceOpHelper::getScratchRepShape() {
+  SmallVector<unsigned> smemShape;
+  // This case doesn't need inter-warp communication
+  if (isWarpSynchronous())
+    return {0, 0};
+
+  smemShape = convertType<unsigned>(srcShape);
+  smemShape[axis] = getInterWarpSizeWithUniqueData();
+
+  return smemShape;
+}
+
+unsigned ReduceOpHelper::getScratchSizeInBytesOld() {
+  auto smemShape = getScratchRepShape();
+  auto elems = product<unsigned>(smemShape);
+
+  unsigned bytesPerElem = 0;
+  for (const auto &ty : srcElementTypes) {
+    bytesPerElem += ceil<unsigned>(ty.getIntOrFloatBitWidth(), 8);
+  }
+  return bytesPerElem * elems;
 }
 
 bool ReduceOpHelper::isReduceWithinCTA() {
@@ -352,7 +385,6 @@ LinearLayout ReduceOpHelper::getInterLayout(const LinearLayout &layout,
       zeroLaneBases.push_back(i);
   }
 
-  auto axisSize = to_vector(layout.getOutDimSizes())[axis];
   auto totalAxisBases = warpAxisBases.size() + blockAxisBases.size();
 
   // First try to place all warp/block axis bases into lane bases that are
@@ -419,7 +451,6 @@ LinearLayout ReduceOpHelper::reducedRegLaneLayout(RankedTensorType srcTy,
   auto *ctx = srcTy.getContext();
   auto kReg = StringAttr::get(ctx, "register");
   auto kLane = StringAttr::get(ctx, "lane");
-  auto kWarp = StringAttr::get(ctx, "warp");
 
   auto reduced = toLinearLayout(srcTy);
   reduced = actionRemoveBroadcastedRegs(reduced).apply(reduced);

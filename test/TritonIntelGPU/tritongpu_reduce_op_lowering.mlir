@@ -9,18 +9,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 64 : i32, "ttg.th
 
   // 1st round intra-warp reduce
   // CHECK: llvm.call spir_funccc @_Z27__spirv_GroupNonUniformIAddiij(%{{.*}}) {{.*}} : (i32, i32, i32) -> i32
-  // CHECK: llvm.store %{{.*}}, %{{.*}} : vector<1xi32>, !llvm.ptr<3>
+  // CHECK: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<3>
 
   // 2nd round inter-warp reduce with problem size 64 with threads_per_warp 32
   // CHECK: llvm.call spir_funccc @_Z7barrierj(%{{.*}}) {{.*}} : (i32) -> ()
-  // CHECK: [[PARTIAL_REDUCE_0:%.*]] = llvm.load %{{.*}} : !llvm.ptr<3> -> vector<1xi32>
+  // CHECK: [[PARTIAL_REDUCE_0:%.*]] = llvm.load %{{.*}} : !llvm.ptr<3> -> i32
   // CHECK: llvm.call spir_funccc @_Z27__spirv_GroupNonUniformIAddiij(%{{.*}}) {{.*}} : (i32, i32, i32) -> i32
-  // CHECK: llvm.store %{{.*}}, %{{.*}} : vector<1xi32>, !llvm.ptr<3>
+  // CHECK: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<3>
 
   // 3rd round inter-warp reduce with problem size 2 with threads_per_warp 32
   // CHECK: llvm.call spir_funccc @_Z7barrierj(%{{.*}}) {{.*}} : (i32) -> ()
-  // CHECK: [[PARTIAL_REDUCE_1:%.*]] = llvm.load %{{.*}} : !llvm.ptr<3> -> vector<1xi32>
+  // CHECK: [[PARTIAL_REDUCE_1:%.*]] = llvm.load %{{.*}} : !llvm.ptr<3> -> i32
   // CHECK: llvm.call spir_funccc @_Z27__spirv_GroupNonUniformIAddiijj(%{{.*}}) {{.*}} : (i32, i32, i32, i32) -> i32
+  // CHECK: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<3>
+
+  // get final result
+  // CHECK: llvm.call spir_funccc @_Z7barrierj(%{{.*}}) {{.*}} : (i32) -> ()
+  // CHECK: [[FINAL_RESULT:%.*]] = llvm.load %{{.*}} : !llvm.ptr<3> -> i32
 
     %g = "tt.reduce" (%f) ({
     ^bb0(%arg0: i32, %arg1: i32):
@@ -66,17 +71,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
 
   // 1st round: intra-warp full reduce across 16 lanes (3 args = Reduce)
   // CHECK: llvm.call spir_funccc @_Z27__spirv_GroupNonUniformIAddiij(%{{.*}}) {{.*}} : (i32, i32, i32) -> i32
-  // CHECK: llvm.store %{{.*}}, %{{.*}} : vector<1xi32>, !llvm.ptr<3>
+  // CHECK: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<3>
 
   // 2nd round: inter-warp reduce with problem size 32 using 16-wide subgroups (3 args = full Reduce)
   // CHECK: llvm.call spir_funccc @_Z7barrierj(%{{.*}}) {{.*}} : (i32) -> ()
-  // CHECK: llvm.load %{{.*}} : !llvm.ptr<3> -> vector<1xi32>
+  // CHECK: llvm.load %{{.*}} : !llvm.ptr<3> -> i32
   // CHECK: llvm.call spir_funccc @_Z27__spirv_GroupNonUniformIAddiij(%{{.*}}) {{.*}} : (i32, i32, i32) -> i32
-  // CHECK: llvm.store %{{.*}}, %{{.*}} : vector<1xi32>, !llvm.ptr<3>
+  // CHECK: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<3>
 
   // 3rd round: inter-warp reduce with remaining 2 values using ClusteredReduce (4 args)
   // CHECK: llvm.call spir_funccc @_Z7barrierj(%{{.*}}) {{.*}} : (i32) -> ()
-  // CHECK: llvm.load %{{.*}} : !llvm.ptr<3> -> vector<1xi32>
+  // CHECK: llvm.load %{{.*}} : !llvm.ptr<3> -> i32
   // CHECK: llvm.call spir_funccc @_Z27__spirv_GroupNonUniformIAddiijj(%{{.*}}) {{.*}} : (i32, i32, i32, i32) -> i32
 
     %g = "tt.reduce" (%f) ({
@@ -101,11 +106,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
   // 1st round: intra-warp full reduce across 16 lanes using GroupNonUniformSMax (3 args = Reduce)
   // CHECK: llvm.call spir_funccc @_Z27__spirv_GroupNonUniformSMaxiij(%{{.*}}) {{.*}} : (i32, i32, i32) -> i32
-  // CHECK: llvm.store %{{.*}}, %{{.*}} : vector<1xi32>, !llvm.ptr<3>
+  // CHECK: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<3>
 
   // 2nd round: inter-warp reduce with 4 warps using ClusteredReduce (4 args)
   // CHECK: llvm.call spir_funccc @_Z7barrierj(%{{.*}}) {{.*}} : (i32) -> ()
-  // CHECK: llvm.load %{{.*}} : !llvm.ptr<3> -> vector<1xi32>
+  // CHECK: llvm.load %{{.*}} : !llvm.ptr<3> -> i32
   // CHECK: llvm.call spir_funccc @_Z27__spirv_GroupNonUniformSMaxiijj(%{{.*}}) {{.*}} : (i32, i32, i32, i32) -> i32
 
     %g = "tt.reduce" (%f) ({
@@ -132,12 +137,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // COM: No intra-warp reduce (threads are [1, 16], no lanes along dim 0).
   // COM: Inter-warp: 4 warps store to shared memory, then ClusteredReduce.
 
-  // Store partial results to shared memory (vectorized as vector<4xf32>)
-  // CHECK:     llvm.store %{{.*}}, %{{.*}} : vector<4xf32>, !llvm.ptr<3>
+  // Store partial results to shared memory (may be vectorized or scalarized)
+  // CHECK:     llvm.store %{{.*}}, %{{.*}} : {{.*}}, !llvm.ptr<3>
   // CHECK:     llvm.call spir_funccc @_Z7barrierj(%{{.*}}) {{.*}} : (i32) -> ()
 
   // Inter-warp reduce: load from shared memory and ClusteredReduce with cluster_size=4 (4 args)
-  // CHECK:     llvm.load %{{.*}} : !llvm.ptr<3> -> vector<4xf32>
+  // CHECK:     llvm.load %{{.*}} : !llvm.ptr<3> -> {{.*}}
   // CHECK:     llvm.call spir_funccc @_Z27__spirv_GroupNonUniformFAddiifj(%{{.*}}) {{.*}} : (i32, i32, f32, i32) -> f32
 
     %g = "tt.reduce" (%f) ({

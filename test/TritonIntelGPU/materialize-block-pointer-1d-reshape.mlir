@@ -1,15 +1,43 @@
 // RUN: triton-opt %s -split-input-file -tritonintelgpu-materialize-block-pointer | FileCheck %s
 
-// COM: Test 1: Canonical strided pattern — 1D store with W=32, S=96, fp16, 1024 elements.
-// COM: The pass should detect the offset pattern:
-// COM:   arith.addi(arith.remui(idx, 32), arith.muli(arith.divui(idx, 32), 96))
-// COM: where idx = tt.make_range(0, 1024), and reshape the 1D store [1024] -> [32, 32]
-// COM: with ttig.block_io = "row_major" and ttig.block_io_stride = 96.
+// COM: Test 1: Single-row tile (H == 1) — reshape optimization fires.
+// COM: numElements=32, W=32, S=96, f16, numWarps=1.
+// COM: H = 32/32 = 1 → the pass should reshape [32] -> [1, 32] and set
+// COM: ttig.block_io = "row_major" with ttig.block_io_stride = 96.
+
+#blocked1d = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @test_single_row_h1
+  tt.func @test_single_row_h1(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: tensor<32xf16, #blocked1d>) {
+    %idx = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32, #blocked1d>
+    %cst32 = arith.constant dense<32> : tensor<32xi32, #blocked1d>
+    %cst96 = arith.constant dense<96> : tensor<32xi32, #blocked1d>
+    %rem = arith.remui %idx, %cst32 : tensor<32xi32, #blocked1d>
+    %div = arith.divui %idx, %cst32 : tensor<32xi32, #blocked1d>
+    %mul = arith.muli %div, %cst96 : tensor<32xi32, #blocked1d>
+    %off = arith.addi %rem, %mul : tensor<32xi32, #blocked1d>
+    %base = tt.splat %arg0 : !tt.ptr<f16> -> tensor<32x!tt.ptr<f16>, #blocked1d>
+    %ptrs = tt.addptr %base, %off : tensor<32x!tt.ptr<f16>, #blocked1d>, tensor<32xi32, #blocked1d>
+    // CHECK: tt.reshape
+    // CHECK: tt.reshape
+    // CHECK: tt.store %{{.*}}, %{{.*}} {ttig.block_io = "row_major", ttig.block_io_stride = 96 : i64} : tensor<1x32x!tt.ptr<f16>
+    tt.store %ptrs, %arg1 : tensor<32x!tt.ptr<f16>, #blocked1d>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Test 2: Multi-row tile (H > 1).
+// COM: numElements=1024, W=32, S=96, fp16, numWarps=4, H = 1024/32 = 32.
+// COM: FIXME: The 2D block store lowering does not correctly handle H > 1
+// COM: because offsetY is hardcoded to 0. Once the lowering is fixed, this
+// COM: test should expect tt.reshape and ttig.block_io attributes.
 
 #blocked1d = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
-  // CHECK-LABEL: tt.func @test_canonical_pattern
-  tt.func @test_canonical_pattern(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: tensor<1024xf16, #blocked1d>) {
+  // CHECK-LABEL: tt.func @test_multi_row_h32
+  tt.func @test_multi_row_h32(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: tensor<1024xf16, #blocked1d>) {
     %idx = tt.make_range {start = 0 : i32, end = 1024 : i32} : tensor<1024xi32, #blocked1d>
     %cst32 = arith.constant dense<32> : tensor<1024xi32, #blocked1d>
     %cst96 = arith.constant dense<96> : tensor<1024xi32, #blocked1d>
@@ -19,9 +47,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %off = arith.addi %rem, %mul : tensor<1024xi32, #blocked1d>
     %base = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1024x!tt.ptr<f16>, #blocked1d>
     %ptrs = tt.addptr %base, %off : tensor<1024x!tt.ptr<f16>, #blocked1d>, tensor<1024xi32, #blocked1d>
-    // CHECK: tt.reshape
-    // CHECK: tt.reshape
-    // CHECK: tt.store %{{.*}}, %{{.*}} {ttig.block_io = "row_major", ttig.block_io_stride = 96 : i64} : tensor<32x32x!tt.ptr<f16>
+    // CHECK-NOT: tt.reshape
+    // CHECK: tt.store %{{.*}}, %{{.*}} : tensor<1024x!tt.ptr<f16>
     tt.store %ptrs, %arg1 : tensor<1024x!tt.ptr<f16>, #blocked1d>
     tt.return
   }
@@ -29,34 +56,35 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
-// COM: Test 2: Masked store with dense<true> constant — should still be reshaped.
+// COM: Test 3: Masked store with dense<true> constant — should still be reshaped.
 // COM: The mask is a direct dense<true> tensor constant (not splat(true)).
 // COM: matchPattern/m_One recognizes this as provably all-true.
 
-#blocked1d = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+#blocked1d = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
   // CHECK-LABEL: tt.func @test_dense_true_mask
-  tt.func @test_dense_true_mask(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: tensor<1024xf16, #blocked1d>) {
-    %idx = tt.make_range {start = 0 : i32, end = 1024 : i32} : tensor<1024xi32, #blocked1d>
-    %cst32 = arith.constant dense<32> : tensor<1024xi32, #blocked1d>
-    %cst96 = arith.constant dense<96> : tensor<1024xi32, #blocked1d>
-    %rem = arith.remui %idx, %cst32 : tensor<1024xi32, #blocked1d>
-    %div = arith.divui %idx, %cst32 : tensor<1024xi32, #blocked1d>
-    %mul = arith.muli %div, %cst96 : tensor<1024xi32, #blocked1d>
-    %off = arith.addi %rem, %mul : tensor<1024xi32, #blocked1d>
-    %base = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1024x!tt.ptr<f16>, #blocked1d>
-    %ptrs = tt.addptr %base, %off : tensor<1024x!tt.ptr<f16>, #blocked1d>, tensor<1024xi32, #blocked1d>
-    %mask = arith.constant dense<true> : tensor<1024xi1, #blocked1d>
+  tt.func @test_dense_true_mask(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: tensor<32xf16, #blocked1d>) {
+    %idx = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32, #blocked1d>
+    %cst32 = arith.constant dense<32> : tensor<32xi32, #blocked1d>
+    %cst96 = arith.constant dense<96> : tensor<32xi32, #blocked1d>
+    %rem = arith.remui %idx, %cst32 : tensor<32xi32, #blocked1d>
+    %div = arith.divui %idx, %cst32 : tensor<32xi32, #blocked1d>
+    %mul = arith.muli %div, %cst96 : tensor<32xi32, #blocked1d>
+    %off = arith.addi %rem, %mul : tensor<32xi32, #blocked1d>
+    %base = tt.splat %arg0 : !tt.ptr<f16> -> tensor<32x!tt.ptr<f16>, #blocked1d>
+    %ptrs = tt.addptr %base, %off : tensor<32x!tt.ptr<f16>, #blocked1d>, tensor<32xi32, #blocked1d>
+    %mask = arith.constant dense<true> : tensor<32xi1, #blocked1d>
     // CHECK: tt.reshape
-    // CHECK: tt.store %{{.*}}, %{{.*}} {ttig.block_io = "row_major", ttig.block_io_stride = 96 : i64} : tensor<32x32x!tt.ptr<f16>
-    tt.store %ptrs, %arg1, %mask : tensor<1024x!tt.ptr<f16>, #blocked1d>
+    // CHECK: tt.reshape
+    // CHECK: tt.store %{{.*}}, %{{.*}} {ttig.block_io = "row_major", ttig.block_io_stride = 96 : i64} : tensor<1x32x!tt.ptr<f16>
+    tt.store %ptrs, %arg1, %mask : tensor<32x!tt.ptr<f16>, #blocked1d>
     tt.return
   }
 }
 
 // -----
 
-// COM: Test 3: Non-canonical index rejection — scaled index.
+// COM: Test 4: Non-canonical index rejection — scaled index.
 // COM: The index is 2 * tt.make_range instead of plain tt.make_range.
 // COM: The isCanonicalLinearIndex check should reject this because remui's
 // COM: LHS is arith.muli, not tt.make_range(0, N).
@@ -86,28 +114,117 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
-// COM: Test 4: Non-trivial mask rejection.
+// COM: Test 5: Non-trivial mask rejection.
 // COM: Same strided offset pattern as Test 1 but the store has a real mask
 // COM: argument (not splat(true)). The pass should reject this and leave the
 // COM: 1D store unchanged.
 
-#blocked1d = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+#blocked1d = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
   // CHECK-LABEL: tt.func @test_non_trivial_mask
-  tt.func @test_non_trivial_mask(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: tensor<1024xf16, #blocked1d>, %mask: tensor<1024xi1, #blocked1d>) {
-    %idx = tt.make_range {start = 0 : i32, end = 1024 : i32} : tensor<1024xi32, #blocked1d>
-    %cst32 = arith.constant dense<32> : tensor<1024xi32, #blocked1d>
-    %cst96 = arith.constant dense<96> : tensor<1024xi32, #blocked1d>
-    %rem = arith.remui %idx, %cst32 : tensor<1024xi32, #blocked1d>
-    %div = arith.divui %idx, %cst32 : tensor<1024xi32, #blocked1d>
-    %mul = arith.muli %div, %cst96 : tensor<1024xi32, #blocked1d>
-    %off = arith.addi %rem, %mul : tensor<1024xi32, #blocked1d>
-    %base = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1024x!tt.ptr<f16>, #blocked1d>
-    %ptrs = tt.addptr %base, %off : tensor<1024x!tt.ptr<f16>, #blocked1d>, tensor<1024xi32, #blocked1d>
+  tt.func @test_non_trivial_mask(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: tensor<32xf16, #blocked1d>, %mask: tensor<32xi1, #blocked1d>) {
+    %idx = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32, #blocked1d>
+    %cst32 = arith.constant dense<32> : tensor<32xi32, #blocked1d>
+    %cst96 = arith.constant dense<96> : tensor<32xi32, #blocked1d>
+    %rem = arith.remui %idx, %cst32 : tensor<32xi32, #blocked1d>
+    %div = arith.divui %idx, %cst32 : tensor<32xi32, #blocked1d>
+    %mul = arith.muli %div, %cst96 : tensor<32xi32, #blocked1d>
+    %off = arith.addi %rem, %mul : tensor<32xi32, #blocked1d>
+    %base = tt.splat %arg0 : !tt.ptr<f16> -> tensor<32x!tt.ptr<f16>, #blocked1d>
+    %ptrs = tt.addptr %base, %off : tensor<32x!tt.ptr<f16>, #blocked1d>, tensor<32xi32, #blocked1d>
     // CHECK-NOT: tt.reshape
     // CHECK: tt.store
     // CHECK-NOT: ttig.block_io
-    tt.store %ptrs, %arg1, %mask : tensor<1024x!tt.ptr<f16>, #blocked1d>
+    tt.store %ptrs, %arg1, %mask : tensor<32x!tt.ptr<f16>, #blocked1d>
     tt.return
+  }
+}
+
+// -----
+
+// COM: Test 6: 1D strided load — gather load with the Inductor offset pattern.
+// COM: W=32, S=96, 1024 elements → H=32. The pass reshapes the 1D load to a
+// COM: 2D block load with an explicit load encoding, inserts ConvertLayoutOp,
+// COM: and reshapes back to 1D.
+
+#blocked1d = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @test_1d_strided_load
+  // CHECK: tt.reshape %{{.*}} allow_reorder efficient_layout
+  // CHECK: tt.load %{{.*}} {ttig.block_io = "row_major", ttig.block_io_stride = 96 : i64}
+  // CHECK: ttg.convert_layout
+  // CHECK: tt.reshape %{{.*}} efficient_layout
+  tt.func @test_1d_strided_load(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> tensor<1024xf16, #blocked1d> {
+    %idx = tt.make_range {start = 0 : i32, end = 1024 : i32} : tensor<1024xi32, #blocked1d>
+    %c32 = arith.constant dense<32> : tensor<1024xi32, #blocked1d>
+    %c96 = arith.constant dense<96> : tensor<1024xi32, #blocked1d>
+    %rem = arith.remui %idx, %c32 : tensor<1024xi32, #blocked1d>
+    %div = arith.divui %idx, %c32 : tensor<1024xi32, #blocked1d>
+    %mul = arith.muli %div, %c96 : tensor<1024xi32, #blocked1d>
+    %off = arith.addi %rem, %mul : tensor<1024xi32, #blocked1d>
+    %base = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1024x!tt.ptr<f16>, #blocked1d>
+    %ptrs = tt.addptr %base, %off : tensor<1024x!tt.ptr<f16>, #blocked1d>, tensor<1024xi32, #blocked1d>
+    %mask = arith.constant dense<true> : tensor<1024xi1, #blocked1d>
+    %result = tt.load %ptrs, %mask : tensor<1024x!tt.ptr<f16>, #blocked1d>
+    tt.return %result : tensor<1024xf16, #blocked1d>
+  }
+}
+
+// -----
+
+// COM: Test 7: 1D strided load with H=1 (W=32, 32 elements). With 4 warps,
+// COM: per-warp height = 1/4, which does not divide evenly. The pass should
+// COM: reject this and leave the 1D load unchanged.
+
+#blocked1d_small = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @test_1d_strided_load_single_row
+  // CHECK-NOT: ttig.block_io
+  // CHECK: tt.load
+  // CHECK-NOT: ttig.block_io
+  tt.func @test_1d_strided_load_single_row(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> tensor<32xf16, #blocked1d_small> {
+    %idx = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32, #blocked1d_small>
+    %c32 = arith.constant dense<32> : tensor<32xi32, #blocked1d_small>
+    %c96 = arith.constant dense<96> : tensor<32xi32, #blocked1d_small>
+    %rem = arith.remui %idx, %c32 : tensor<32xi32, #blocked1d_small>
+    %div = arith.divui %idx, %c32 : tensor<32xi32, #blocked1d_small>
+    %mul = arith.muli %div, %c96 : tensor<32xi32, #blocked1d_small>
+    %off = arith.addi %rem, %mul : tensor<32xi32, #blocked1d_small>
+    %base = tt.splat %arg0 : !tt.ptr<f16> -> tensor<32x!tt.ptr<f16>, #blocked1d_small>
+    %ptrs = tt.addptr %base, %off : tensor<32x!tt.ptr<f16>, #blocked1d_small>, tensor<32xi32, #blocked1d_small>
+    %mask = arith.constant dense<true> : tensor<32xi1, #blocked1d_small>
+    %result = tt.load %ptrs, %mask : tensor<32x!tt.ptr<f16>, #blocked1d_small>
+    tt.return %result : tensor<32xf16, #blocked1d_small>
+  }
+}
+
+// -----
+
+// COM: Test 8: 1D strided load with W < threadsPerWarp (W=16, tpw=32).
+// COM: The pass must bail out — the 2D block load HW delivers the tile into
+// COM: the first W lanes and the remaining lanes' data are not a plain
+// COM: row/col layout.  Constructing a [1,tpw] load encoding would broadcast
+// COM: across lanes and produce an "expensive view" reshape that cannot be
+// COM: lowered (make_llir crash). Regression test for issue #6738.
+
+#blocked1d = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @test_1d_strided_load_narrow_width
+  // CHECK-NOT: ttig.block_io
+  // CHECK: tt.load
+  // CHECK-NOT: ttig.block_io
+  tt.func @test_1d_strided_load_narrow_width(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> tensor<128xf16, #blocked1d> {
+    %idx = tt.make_range {start = 0 : i32, end = 128 : i32} : tensor<128xi32, #blocked1d>
+    %c16 = arith.constant dense<16> : tensor<128xi32, #blocked1d>
+    %c96 = arith.constant dense<96> : tensor<128xi32, #blocked1d>
+    %rem = arith.remui %idx, %c16 : tensor<128xi32, #blocked1d>
+    %div = arith.divui %idx, %c16 : tensor<128xi32, #blocked1d>
+    %mul = arith.muli %div, %c96 : tensor<128xi32, #blocked1d>
+    %off = arith.addi %rem, %mul : tensor<128xi32, #blocked1d>
+    %base = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x!tt.ptr<f16>, #blocked1d>
+    %ptrs = tt.addptr %base, %off : tensor<128x!tt.ptr<f16>, #blocked1d>, tensor<128xi32, #blocked1d>
+    %mask = arith.constant dense<true> : tensor<128xi1, #blocked1d>
+    %result = tt.load %ptrs, %mask : tensor<128x!tt.ptr<f16>, #blocked1d>
+    tt.return %result : tensor<128xf16, #blocked1d>
   }
 }

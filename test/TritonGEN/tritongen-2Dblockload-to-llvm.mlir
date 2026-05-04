@@ -112,8 +112,8 @@ llvm.func @triton_gen.2Dblockload(%ptr : !llvm.ptr<1>, %base_width : i32, %base_
   // CHECK-DAG:   [[ZERO_1:%.*]] = llvm.mlir.constant(0 : i32) : i32
   // CHECK-DAG:   [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK-DAG:   [[UNDEF:%.*]] = llvm.mlir.undef : vector<2xi32>
-  // CHECK-NEXT:  [[COORD0:%.*]] = llvm.insertelement [[ADD_1]], [[UNDEF]][[[ZERO_1]] : i32] : vector<2xi32>
-  // CHECK-NEXT:  [[COORD1:%.*]] = llvm.insertelement %arg5, [[COORD0]][[[ONE]] : i32] : vector<2xi32>
+  // CHECK-DAG:   [[COORD0:%.*]] = llvm.insertelement [[ADD_1]], [[UNDEF]][[[ZERO_1]] : i32] : vector<2xi32>
+  // CHECK-DAG:   [[COORD1:%.*]] = llvm.insertelement %arg5, [[COORD0]][[[ONE]] : i32] : vector<2xi32>
   // CHECK-DAG:   [[ElemSize:%.*]] = llvm.mlir.constant(1 : i32) : i32
   // CHECK-DAG:   [[TileWidth:%.*]] = llvm.mlir.constant(16 : i32) : i32
   // CHECK-DAG:   [[TileHeight:%.*]] = llvm.mlir.constant(8 : i32) : i32

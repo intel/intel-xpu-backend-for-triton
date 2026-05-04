@@ -29,6 +29,7 @@
 #include "intel/include/TritonGENToSPIRV/TritonGENToSPIRVPass.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 #include "PatternTritonGPUOpToLLVM.h"
 
@@ -148,6 +149,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     }
 
     LLVM::LLVMFuncOp newFuncOp = *maybeNewFuncOp;
+    handleArgPtrDatatype(funcOp, newFuncOp);
 
     MLIRContext *ctx = funcOp->getContext();
     auto mod = funcOp->getParentOfType<ModuleOp>();
@@ -218,8 +220,8 @@ public:
     intel::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo,
                                              patterns, axisInfoAnalysis,
                                              strideAnalysis, benefit);
-    mlir::triton::populateReduceOpToLLVMPatterns(typeConverter, patterns,
-                                                 targetInfo, benefit);
+    intel::populateReduceOpToLLVMPatterns(typeConverter, patterns, targetInfo,
+                                          benefit);
     mlir::triton::populateScanOpToLLVMPatterns(typeConverter, patterns,
                                                targetInfo, benefit);
     mlir::triton::populateGatherOpToLLVMPatterns(typeConverter, patterns,
@@ -227,7 +229,6 @@ public:
     mlir::triton::populateViewOpToLLVMPatterns(typeConverter, patterns,
                                                benefit);
 
-    intel::populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns, benefit);
     intel::populateTensorDescOpsToLLVMPatterns(typeConverter, patterns,
                                                benefit);
     intel::populateHistogramOpToLLVMPatterns(typeConverter, patterns,

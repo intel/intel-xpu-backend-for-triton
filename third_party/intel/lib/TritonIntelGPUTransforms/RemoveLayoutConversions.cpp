@@ -25,7 +25,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Tools/Sys/GetEnv.h"
 #include <deque>
 
 namespace mlir::triton::gpu::intel {
@@ -1688,9 +1688,11 @@ void LayoutRematerialization::hoistConvertDotOperand(
     ttg::ConvertLayoutOp convertOp) {
   auto targetType = convertOp.getType();
 
-  // The pass is targeted to NVidia.
+  // Only hoist when the target is a dot operand backed by an MMA-family
+  // parent encoding (NVIDIA MMA on upstream, DPAS on Intel).
   auto dotEnc = dyn_cast<ttg::DotOperandEncodingAttr>(targetType.getEncoding());
-  if (!(dotEnc && isa<ttg::NvidiaMmaEncodingAttr>(dotEnc.getParent())))
+  if (!dotEnc || !isa<ttg::NvidiaMmaEncodingAttr, ttgi::DpasEncodingAttr>(
+                     dotEnc.getParent()))
     return;
 
   auto canBePipelined = [&](ttg::ConvertLayoutOp convertOp) {
@@ -1731,7 +1733,8 @@ void LayoutRematerialization::hoistConvertDotOperand(
   // threads We do views and elementwise pure ops for now
   auto noDataMovement = [](Operation *op) {
     return (op->hasTrait<OpTrait::Elementwise>() && isMemoryEffectFree(op)) ||
-           isa<tt::BroadcastOp, ttg::Fp4ToFpOp, ttg::ConvertLayoutOp>(op) ||
+           isa<tt::BroadcastOp, ttg::Fp4ToFpOp, ttg::ConvertLayoutOp,
+               ttg::UpcastFpOpInterface>(op) ||
            isView(op);
   };
   // Stop the slice as soon as we find an operation that cannot be done without
@@ -1745,6 +1748,29 @@ void LayoutRematerialization::hoistConvertDotOperand(
       convertOp.getSrcMutable(), targetType.getEncoding(), slice, layout, stop);
   if (result.failed())
     return;
+
+  // Bail if any leaf load has a different element bitwidth than the convert
+  // target. The target DotOperandEncodingAttr's kWidth / opsPerChannel is
+  // parameterized for the dot-operand element width; propagating it back
+  // across a width-changing op (e.g. tt.fp_to_fp fp8->fp16, arith.extf)
+  // produces a convert_layout on a narrower element with a layout that does
+  // not match any efficient 2D block I/O or sub-group shuffle, forcing a
+  // sub-group-transpose-through-SLM fallback and disabling block I/O on the
+  // load. See issue #6737.
+  unsigned targetBitwidth = targetType.getElementType().getIntOrFloatBitWidth();
+  for (Value v : slice) {
+    Operation *def = v.getDefiningOp();
+    if (!def || !isa<tt::LoadOp, tt::DescriptorLoadOp>(def))
+      continue;
+    auto loadTy = cast<RankedTensorType>(v.getType());
+    if (loadTy.getElementType().getIntOrFloatBitWidth() != targetBitwidth) {
+      LDBG("  Leaf load element bitwidth ("
+           << loadTy.getElementType().getIntOrFloatBitWidth()
+           << ") differs from convert target bitwidth (" << targetBitwidth
+           << "); skipping hoist to avoid degrading dot-operand encoding");
+      return;
+    }
+  }
 
   IRMapping mapping;
   OpBuilder builder(convertOp.getContext());
@@ -1833,33 +1859,14 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     if (!op)
       continue;
     if (isExtOrBroadcastOp(op)) {
-      SetVector<Value> tempSlice;
-      DenseMap<Value, Attribute> tempLayout;
       Attribute srcEncoding = ttgi::inferSrcEncoding(op, layout[v]);
       if (!srcEncoding)
         return;
-      LogicalResult result = getRematerializableSlice(
-          op->getOpOperand(0), srcEncoding, tempSlice, tempLayout);
-
-      // If a value is already assigned to a _different_ layout,
-      // we cannot propagate past this op (as it would conflict with
-      // an already-assigned layout).
-      for (auto [val, enc] : tempLayout) {
-        auto preexistingLayout = layout.find(val);
-        if (preexistingLayout != layout.end() &&
-            preexistingLayout->second != enc) {
-          result = failure();
-          break;
-        }
-      }
-
       // If we can rematerialize the rest of the ext slice we can ignore this
       // ext as it won't need a convert.
-      if (result.succeeded()) {
-        slice.insert(tempSlice.begin(), tempSlice.end());
-        layout.insert(tempLayout.begin(), tempLayout.end());
+      if (succeeded(getRematerializableSlice(op->getOpOperand(0), srcEncoding,
+                                             slice, layout)))
         continue;
-      }
       // Only apply it if there is a single ext op otherwise we would have to
       // duplicate the convert.
       if (extOrBroadcastOp != nullptr)
@@ -1875,15 +1882,11 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   if (!srcEncoding)
     return;
   // Check that hoisting the convert is actually beneficial.
-  // When the ext/broadcast doesn't increase the byte count (e.g.,
-  // tt.expand_dims adds a unit dimension), newCvtCost == originalCvtCost and
-  // even tiny slice duplication costs would incorrectly block the hoist.
-  // Only apply the cost gate when the new convert is strictly more expensive.
-
+  // Always apply the cost gate (matching upstream) — isRematBeneficial
+  // accounts for slice values with external users, preventing hoists that
+  // would duplicate expensive ops or break dominance.
   int64_t newCvtCost = getConvertCost(extOrBroadcastOp->getOperand(0));
-  int64_t originalCvtCost = getConvertCost(convertOp.getSrc());
-  if (newCvtCost > originalCvtCost &&
-      !isRematBeneficial(convertOp, slice, newCvtCost))
+  if (!isRematBeneficial(convertOp, slice, newCvtCost))
     return;
 
   // Move the convert before the ext op and rewrite the slice.

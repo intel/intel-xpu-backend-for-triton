@@ -72,12 +72,12 @@ def _attn_fwd(sm_scale, M,  #
               BLOCK_M: tl.constexpr,  #
               BLOCK_N: tl.constexpr,  #
               STAGE: tl.constexpr,  #
-              ):  # pylint: disable=unused-argument
+              TWISTED_GRID: tl.constexpr):  # pylint: disable=unused-argument
     dtype = tl.float16
     tl.static_assert(BLOCK_N <= HEAD_DIM)
-    # Grid: (Z, H, num_blocks_m) for N_CTX > 512, (num_blocks_m, 1, Z*H) for N_CTX <= 512
-    if N_CTX <= 512:
-        start_m = tl.program_id(0)
+    # TWISTED_GRID: (1, num_blocks_m, Z*H) otherwise (Z, H, num_blocks_m)
+    if TWISTED_GRID:
+        start_m = tl.program_id(1)
         off_hz = tl.program_id(2)
         off_z = off_hz // H
         off_h = off_hz % H
@@ -130,7 +130,7 @@ def _attn_fwd(sm_scale, M,  #
     m_i += tl.math.log2(l_i)
     acc = acc / l_i[:, None]
     # Compute off_hz based on grid layout
-    if N_CTX <= 512:
+    if TWISTED_GRID:
         off_hz = tl.program_id(2)
     else:
         off_hz = tl.program_id(0) * H + tl.program_id(1)
@@ -463,10 +463,17 @@ class _attention(torch.autograd.Function):
         assert Lk in {16, 32, 64, 128}
         o = torch.empty_like(q)
         stage = 3 if causal else 1
-        grid = lambda args: (q.shape[0], q.shape[1], triton.cdiv(q.shape[2], args['BLOCK_M']))
+        batch = q.shape[0]
+        heads = q.shape[1]
         n_ctx = q.shape[2]
-        if n_ctx <= 512:
-            grid = lambda args: (triton.cdiv(q.shape[2], args['BLOCK_M']), 1, q.shape[0] * q.shape[1])
+        TWISTED_GRID = not (batch == 2 and heads == 16)
+
+        def grid(args):
+            block_m = args['BLOCK_M']
+            num_blocks_m = triton.cdiv(n_ctx, block_m)
+            # TWISTED_GRID grid order: (1, num_blocks_m, batch * heads) Standard grid order: (batch, heads, num_blocks_m)
+            return (1, num_blocks_m, batch * heads) if args['TWISTED_GRID'] else (batch, heads, num_blocks_m)
+
         M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
 
         _attention.tune_attn_fwd[grid](  # pylint: disable=unsubscriptable-object
@@ -476,7 +483,7 @@ class _attention(torch.autograd.Function):
             N_CTX=q.shape[2],  #
             HEAD_DIM=Lk,  #
             STAGE=stage,  #
-        )
+            TWISTED_GRID=TWISTED_GRID)
 
         ctx.save_for_backward(q, k, v, o, M)
         ctx.sm_scale = sm_scale
@@ -610,9 +617,8 @@ def get_benchmark(
         sm_scale = 0.125
         atol = 1e-1 if N_CTX == 16384 else 1e-2
         bwd_atol = 1e-1 if N_CTX >= 4096 else 1e-2
-        # FIXME: use torch sdpa for result check after https://github.com/intel/intel-xpu-backend-for-triton/issues/2042 fixed
-        torch_fn = lambda: torch.nn.functional.scaled_dot_product_attention(q.cpu(), k.cpu(), v.cpu(
-        ), attn_mask=None, dropout_p=0.0, is_causal=CAUSAL, scale=sm_scale)
+        torch_fn = lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0,
+                                                                            is_causal=CAUSAL, scale=sm_scale)
 
         if provider == 'triton':
             triton_fn = lambda: attention(q, k, v, CAUSAL, sm_scale)
@@ -621,7 +627,7 @@ def get_benchmark(
             else:
                 dout = torch.randn_like(q)
                 torch_o = torch_fn()
-                torch_grads = torch.autograd.grad((torch_o, ), (q, k, v), dout.cpu(), retain_graph=True)
+                torch_grads = torch.autograd.grad((torch_o, ), (q, k, v), dout, retain_graph=True)
                 eager_tensors = torch_grads
                 triton_o = triton_fn()
                 triton_grads = torch.autograd.grad((triton_o, ), (q, k, v), dout, retain_graph=True)

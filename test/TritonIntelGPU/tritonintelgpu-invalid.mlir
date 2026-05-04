@@ -1,10 +1,10 @@
 // RUN: triton-opt -split-input-file -verify-diagnostics %s
 // -----
 
-tt.func @ttig.prefetch(%arg0: !tt.ptr<tensor<2x32xf32>>, %arg1: tensor<4x32xi1>) {
+tt.func @ttig.prefetch(%arg0: tensor<2x32x!tt.ptr<f32>>, %arg1: tensor<4x32xi1>) {
   // expected-note@-1 {{prior use here}}
   // expected-error@+1 {{use of value '%arg1' expects different type than prior uses: 'tensor<2x32xi1>' vs 'tensor<4x32xi1>'}}
-  ttig.prefetch %arg0, %arg1 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : !tt.ptr<tensor<2x32xf32>>
+  ttig.prefetch %arg0, %arg1 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<2x32x!tt.ptr<f32>>
   tt.return
 }
 
@@ -99,8 +99,46 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
-tt.func @ttig.descriptor_prefetch.indices_mismatch(%desc: !tt.tensordesc<tensor<256x32xf16>>, %x: i32) {
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  tt.func @ttig.2d_block_load.rank1(%base_ptr: !tt.ptr<f16>, %width: i32, %height: i32, %pitch: i32, %x: i32, %y: i32) -> tensor<32xf16, #ttg.slice<{dim = 0, parent = #dot0}>> {
+    // expected-error @below {{'ttig.2d_block_load' op result tensor must have rank >= 2, got 1}}
+    %0 = ttig.2d_block_load %base_ptr, %width, %height, %pitch[%x, %y] {row_major} : !tt.ptr<f16> -> tensor<32xf16, #ttg.slice<{dim = 0, parent = #dot0}>>
+    tt.return %0 : tensor<32xf16, #ttg.slice<{dim = 0, parent = #dot0}>>
+  }
+}
+
+// -----
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  tt.func @ttig.2d_block_load_from_ptr.rank1(%ptr: tensor<32x!tt.ptr<f16>, #ttg.slice<{dim = 0, parent = #dot0}>>) -> tensor<32xf16, #ttg.slice<{dim = 0, parent = #dot0}>> {
+    // expected-error @below {{'ttig.2d_block_load_from_ptr' op result tensor must have rank >= 2, got 1}}
+    %0 = ttig.2d_block_load_from_ptr %ptr {row_major} {base_width = 64 : i32, base_height = 8 : i32, base_pitch = 256 : i32} : (tensor<32x!tt.ptr<f16>, #ttg.slice<{dim = 0, parent = #dot0}>>) -> (tensor<32xf16, #ttg.slice<{dim = 0, parent = #dot0}>>)
+    tt.return %0 : tensor<32xf16, #ttg.slice<{dim = 0, parent = #dot0}>>
+  }
+}
+
+// -----
+
+// COM: mask-without-other test uses generic format since the custom format
+// COM: requires mask and other to co-occur.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  tt.func @ttig.2d_block_load_from_ptr.mask_without_other(%ptr: tensor<64x32x!tt.ptr<f16>, #dot0>, %mask: tensor<64x32xi1, #dot0>) -> tensor<64x32xf16, #dot0> {
+    // expected-error @below {{'ttig.2d_block_load_from_ptr' op 'other' must be present when 'mask' is present}}
+    %0 = "ttig.2d_block_load_from_ptr"(%ptr, %mask) <{base_width = 64 : i32, base_height = 8 : i32, base_pitch = 256 : i32, memory_layout = 0 : i32, operandSegmentSizes = array<i32: 1, 1, 0>}> : (tensor<64x32x!tt.ptr<f16>, #dot0>, tensor<64x32xi1, #dot0>) -> tensor<64x32xf16, #dot0>
+    tt.return %0 : tensor<64x32xf16, #dot0>
+  }
+}
+
+// -----
+
+tt.func @ttig.descriptor_prefetch.indices_mismatch(%desc: !tt.tensordesc<256x32xf16>, %x: i32) {
   // expected-error @below {{'ttig.descriptor_prefetch' op expected 2 indices, but got 1}}
-  ttig.descriptor_prefetch %desc[%x] : !tt.tensordesc<tensor<256x32xf16>>
+  ttig.descriptor_prefetch %desc[%x] : !tt.tensordesc<256x32xf16>
   tt.return
 }

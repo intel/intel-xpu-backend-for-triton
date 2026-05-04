@@ -14,7 +14,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Operation.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include <triton/Tools/Sys/GetEnv.hpp>
+#include <triton/Tools/Sys/GetEnv.h>
 
 namespace mlir::triton::gpu::intel {
 
@@ -25,10 +25,7 @@ inline unsigned getNumElementsPerThread(
     mlir::triton::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   Value val = getMemAccessPtr(op);
   Type valTy = val.getType();
-  auto ty =
-      isTensorPointerType(valTy)
-          ? cast<RankedTensorType>(cast<PointerType>(valTy).getPointeeType())
-          : cast<RankedTensorType>(valTy);
+  auto ty = cast<RankedTensorType>(valTy);
   auto shapePerCTA = getShapePerCTA(ty);
   mlir::triton::AxisInfo &valInfo = *axisInfoAnalysis.getAxisInfo(val);
 

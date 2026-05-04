@@ -29,6 +29,7 @@ option(TRITON_BUILD_WITH_CCACHE "Build with ccache (if available)" ON)
 option(TRITON_OFFLINE_BUILD "Build without downloading dependencies" OFF)
 option(TRITON_EXT_ENABLED "Build with default visibility for Triton+LLVM symbol exposure to plugin extensions" OFF)
 set(TRITON_CODEGEN_BACKENDS "" CACHE STRING "Enable different codegen backends")
+set(TRITON_VERSION "" CACHE STRING "Triton version string (passed from setup.py)")
 
 set(TRITON_CACHE_PATH "" CACHE PATH "Path to triton cache")
 set(TRITON_LLVM_SYSTEM_SUFFIX "" CACHE STRING "Path to LLVM system suffix")
@@ -42,6 +43,7 @@ set(TRITON_CUDACRT_PATH "" CACHE PATH "Path to CUDA CRT headers.")
 set(TRITON_CUDART_PATH "" CACHE PATH "Path to CUDA Runtime headers")
 set(TRITON_CUPTI_INCLUDE_PATH "" CACHE PATH "Path to CUPTI headers")
 set(TRITON_CUPTI_LIB_PATH "" CACHE PATH "Path to CUPTI libraries")
+set(TRITON_CUPTI_LIB_BLACKWELL_PATH "" CACHE PATH "Path to Blackwell CUPTI libraries")
 
 if (WIN32 AND TRITON_ENABLE_PLUGINS)
   message(FATAL_ERROR "TRITON_ENABLE_PLUGINS=ON is not supported on Windows.")
@@ -88,6 +90,9 @@ endif()
 if(NOT "${TRITON_CUPTI_LIB_PATH}" STREQUAL "")
   list(APPEND TRITON_BUILD_HELPER_COMMON_ARGS --triton-cupti-lib-path "${TRITON_CUPTI_LIB_PATH}")
 endif()
+if(NOT "${TRITON_CUPTI_LIB_BLACKWELL_PATH}" STREQUAL "")
+  list(APPEND TRITON_BUILD_HELPER_COMMON_ARGS --triton-cupti-lib-blackwell-path "${TRITON_CUPTI_LIB_BLACKWELL_PATH}")
+endif()
 
 # Resolve third-party package paths in CMake so direct CMake builds don't rely on setup.py.
 set(TRITON_HAS_LLVM_SYSPATH OFF)
@@ -104,6 +109,13 @@ endif()
 if(NOT "${JSON_SYSPATH}" STREQUAL "" AND NOT DEFINED JSON_INCLUDE_DIR)
   set(JSON_INCLUDE_DIR "${JSON_SYSPATH}/include")
 endif()
+
+# Regenerate Triton Version Header
+configure_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/include/triton/Version.h.in"
+  "${CMAKE_CURRENT_BINARY_DIR}/include/triton/Version.h"
+  @ONLY
+)
 
 # Regenerate configure outputs during `cmake --build` when helper inputs change.
 set_property(
@@ -455,6 +467,23 @@ if(TRITON_BUILD_PYTHON_MODULE)
   endif()
   target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
 
+  if(NOT TRITON_EXT_ENABLED)
+    # When extensions are disabled, only export the Python entrypoint.
+    set(TRITON_EXPORT_SYMBOLS_FILE "${CMAKE_CURRENT_BINARY_DIR}/triton.exports")
+    if(APPLE)
+      set(TRITON_EXPORT_SYMBOLS_FILE_CONTENT "_PyInit_libtriton\n")
+      target_link_options(triton PRIVATE
+        "LINKER:-exported_symbols_list,${TRITON_EXPORT_SYMBOLS_FILE}")
+    elseif(UNIX)
+      set(TRITON_EXPORT_SYMBOLS_FILE_CONTENT
+        "{\n  global:\n    PyInit_libtriton;\n  local:\n    *;\n};\n")
+      target_link_options(triton PRIVATE
+        "LINKER:--version-script,${TRITON_EXPORT_SYMBOLS_FILE}")
+    endif()
+    file(GENERATE OUTPUT "${TRITON_EXPORT_SYMBOLS_FILE}"
+      CONTENT "${TRITON_EXPORT_SYMBOLS_FILE_CONTENT}")
+  endif()
+
   install(TARGETS triton
     COMPONENT libraries
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -475,11 +504,9 @@ if(TRITON_BUILD_PYTHON_MODULE)
     COPYONLY)
 
   # Build plugins when building libtriton since they depend on libtriton.
-  add_subdirectory(examples/plugins)
-endif()
-
-if (UNIX AND NOT APPLE AND NOT TRITON_EXT_ENABLED)
-  set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--exclude-libs,ALL")
+  if(TRITON_EXT_ENABLED)
+    add_subdirectory(examples/plugins)
+  endif()
 endif()
 
 if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)
@@ -525,8 +552,12 @@ install(DIRECTORY ${PROJECT_SOURCE_DIR}/include/
 install(DIRECTORY ${PROJECT_BINARY_DIR}/include/
   COMPONENT headers
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-  FILES_MATCHING PATTERN "*.h.inc")
+  FILES_MATCHING PATTERN "*.h" PATTERN "*.h.inc")
 install(DIRECTORY ${PROJECT_SOURCE_DIR}/include/
   COMPONENT headers
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
   FILES_MATCHING PATTERN "*.td")
+install(DIRECTORY ${PROJECT_SOURCE_DIR}/python/
+  COMPONENT headers
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/python
+  FILES_MATCHING PATTERN "*.h")

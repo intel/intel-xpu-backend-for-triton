@@ -23,7 +23,7 @@
 #include "intel/lib/Target/LLVMIR/LLVMPasses.h"
 
 #include "intel/include/Target/SPIRV/SPIRVTranslation.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Tools/Sys/GetEnv.h"
 
 #include <pybind11/gil.h>
 #include <pybind11/pybind11.h>
@@ -57,8 +57,6 @@ static uint32_t findKernels(llvm::Module &M,
 }
 
 void init_triton_intel_passes_ttir(py::module &&m) {
-  ADD_PASS_WRAPPER_0("add_convert_block_pointer_to_tdesc",
-                     intel::createTritonIntelBlockPointerToTensorDesc);
   ADD_PASS_WRAPPER_0("add_rewrite_tensor_descriptor_to_pointer",
                      intel::createTritonRewriteTensorDescriptorToPointer);
   ADD_PASS_WRAPPER_0("add_remove_masks", intel::createTritonIntelRemoveMasks);
@@ -67,8 +65,10 @@ void init_triton_intel_passes_ttir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_fuse_reshape", intel::createTritonIntelFuseReshape);
   ADD_PASS_WRAPPER_0("add_simplify_signed_arithmetic",
                      intel::createTritonIntelSimplifySignedArithmetic);
-  ADD_PASS_WRAPPER_0("add_rewrite_tensor_pointer",
-                     intel::createTritonIntelRewriteTensorPointer);
+  ADD_PASS_WRAPPER_0("add_fold_true_cmpi",
+                     intel::createTritonIntelGPUFoldTrueCmpI);
+  ADD_FUNC_PASS_WRAPPER_0("add_prepare_if_combining",
+                          intel::createTritonIntelGPUPrepareIfCombining);
 }
 
 void init_triton_intel_passes_ttgpuir(py::module &&m) {
@@ -87,6 +87,9 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      gpu::intel::createTritonIntelGPURemoveLayoutConversions);
   ADD_PASS_WRAPPER_0("add_optimize_dot_operands",
                      gpu::intel::createTritonIntelGPUOptimizeDotOperands);
+  ADD_PASS_OPTION_WRAPPER_1(
+      "add_hoist_layout_conversions",
+      gpu::intel::createTritonIntelGPUHoistLayoutConversions, std::string);
 
   py::class_<gpu::intel::TritonAnnotateModuleOptions>(m,
                                                       "AnnotateModuleOptions")
@@ -124,6 +127,12 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
       .def_readwrite(
           "support_256b_prefetch",
           &gpu::intel::TritonAnnotateModuleOptions::supportPrefetch256Bytes)
+      .def_readwrite(
+          "support_256b_load_store",
+          &gpu::intel::TritonAnnotateModuleOptions::support256bLoadStore)
+      .def_readwrite(
+          "support_rounded_divide_sqrt",
+          &gpu::intel::TritonAnnotateModuleOptions::supportRoundedDivideSqrt)
       .def_readwrite("threads_per_warp",
                      &gpu::intel::TritonAnnotateModuleOptions::threadsPerWarp)
       .def_readwrite("target_arch",
@@ -139,8 +148,14 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      gpu::intel::createTritonIntelGPUMaterializeBlockPointer);
   ADD_PASS_WRAPPER_0("add_optimize_reduction_locality",
                      gpu::intel::createTritonIntelGPUOptimizeReductionLocality);
+  ADD_PASS_WRAPPER_0("add_lower_to_2d_block_load",
+                     gpu::intel::createTritonIntelGPULowerTo2DBlockLoad);
   ADD_PASS_WRAPPER_0("add_reduce_variable_liveness",
                      gpu::intel::createTritonIntelGPUReduceVariableLiveness);
+  ADD_PASS_WRAPPER_0("add_annotate_cache_control",
+                     gpu::intel::createTritonIntelGPUAnnotateCacheControl);
+  ADD_PASS_WRAPPER_0("add_widen_load_store_encoding",
+                     gpu::intel::createTritonIntelGPUWidenLoadStoreEncoding);
 }
 
 void init_triton_intel_passes_arith(py::module &&m) {
@@ -274,22 +289,28 @@ void init_triton_intel(py::module &&m) {
           fpm.addPass(BreakStructPhiNodesPass());
           fpm.addPass(InstCombinePass());
         });
-    pb.registerPeepholeEPCallback(
-        [&](llvm::FunctionPassManager &fpm, llvm::OptimizationLevel level) {
-          // The Triton masked load pattern can generate instances where the
-          // mask value causes undefined behavior in sdiv/srem instructions.
-          // The language allows this UB as the result of those arithmetic
-          // instructions is never used, and control flow to avoid
-          // computation of these instructions would negatively affect
-          // performance. But, LLVM SimplifyCFG aggressively marks code
-          // paths with undefined behavior as dead. This can result in
-          // removal of the mask path and incorrect results from legal
-          // Triton kernels due to masked elements being used in
-          // computation. Run a pass to add a freeze instruction between
-          // masked loads and sdiv/srem to signal to LLVM we consider the
-          // sdiv/srem operands to be well defined.
-          fpm.addPass(FreezeMaskedDivRemPass());
-        });
+    // The Triton masked load pattern can generate instances where the
+    // mask value causes undefined behavior in sdiv/srem instructions.
+    // The language allows this UB as the result of those arithmetic
+    // instructions is never used, and control flow to avoid
+    // computation of these instructions would negatively affect
+    // performance. But, LLVM SimplifyCFG aggressively marks code
+    // paths with undefined behavior as dead. This can result in
+    // removal of the mask path and incorrect results from legal
+    // Triton kernels due to masked elements being used in
+    // computation. Run a pass to guard masked-load phi nodes used
+    // as divisors with select(divisor == 0, 1, divisor) to prevent
+    // LLVM from exploiting the division-by-zero UB.
+    //
+    // This must run before any optimization pass (especially
+    // SimplifyCFG) which can fold conditional blocks that share the
+    // same branch condition, eliminating the phi nodes this pass
+    // needs to match.
+    {
+      llvm::FunctionPassManager fpm;
+      fpm.addPass(GuardMaskedDivRemPass());
+      mpm.addPass(createModuleToFunctionPassAdaptor(std::move(fpm)));
+    }
     mpm.addPass(pb.buildPerModuleDefaultPipeline(opt));
     mpm.run(*mod, mam);
   });
@@ -313,11 +334,9 @@ void init_triton_intel(py::module &&m) {
   // producer flag (e.g. PyTorch flag) to allow the Triton compiler to use the
   // fast math semantics on all arithmetic operations.
   // https://github.com/intel/intel-xpu-backend-for-triton/issues/3862
-  m.def("set_fast_math", [](llvm::Module *mod) {
+  m.def("set_fast_math", [](llvm::Module *mod, bool enableFpFusion) {
     std::optional<bool> fastMath = mlir::triton::tools::isEnvValueBool(
         mlir::triton::tools::getStrEnv("TRITON_INTEL_FAST_MATH"));
-    std::optional<bool> enableFpFusion = mlir::triton::tools::isEnvValueBool(
-        mlir::triton::tools::getStrEnv("TRITON_DEFAULT_FP_FUSION"));
     if (fastMath.has_value() && !fastMath.value())
       return;
 
@@ -326,9 +345,8 @@ void init_triton_intel(py::module &&m) {
       for (Instruction &inst : instructions(func)) {
         if (auto *op = dyn_cast<FPMathOperator>(&inst)) {
           FastMathFlags FMF;
-          // Default to allow contract when default fp fusion is not disabled.
-          if ((!enableFpFusion.has_value() || enableFpFusion.value()) &&
-              !fastMath.has_value()) {
+          // Default to allow contract when fp fusion is enabled.
+          if (enableFpFusion && !fastMath.has_value()) {
             if (op->getOpcode() == Instruction::FAdd ||
                 op->getOpcode() == Instruction::FMul)
               FMF.setAllowContract(true);

@@ -70,13 +70,13 @@ struct KernelArguments {
   std::vector<std::string> out_tensor_names;
   std::string spirv_dump_dir;
 
-  KernelArguments(const std::vector<std::string> &outtensornames) {
-    // Check if the triton_xpu_dump path exists if not point to current
-    // directory
-    auto env_path = std::getenv("TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS");
-    spirv_dump_dir = (env_path != nullptr)
-                         ? env_path
-                         : std::filesystem::current_path().string();
+  KernelArguments(const std::vector<std::string> &outtensornames,
+                  const std::string &dump_dir) {
+    if (dump_dir.empty()) {
+      spirv_dump_dir = std::filesystem::current_path().string();
+    } else {
+      spirv_dump_dir = dump_dir;
+    }
     if (std::filesystem::exists(spirv_dump_dir)) {
       std::ifstream file(spirv_dump_dir + "/args_data.json");
       if (!file.is_open()) {
@@ -463,7 +463,8 @@ int main(int argc, char **argv) {
     initDevices(&q);
 
     // Parse the JSON file and create argument dictionary
-    KernelArguments tritonArgDict(cliopts.output_tensors);
+    KernelArguments tritonArgDict(cliopts.output_tensors,
+                                  cliopts.spirv_dump_dir);
 
     // read spirv
     auto spirv = read_spirv(tritonArgDict.spv_name);

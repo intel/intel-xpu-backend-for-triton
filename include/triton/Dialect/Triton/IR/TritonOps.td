@@ -48,6 +48,8 @@ def TT_IntToPtrOp : TT_Op<"int_to_ptr", [Elementwise,
     let results = (outs TT_PtrLike:$result);
 
     let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
+
+    let hasCanonicalizer = 1;
 }
 
 def TT_PtrToIntOp : TT_Op<"ptr_to_int", [Elementwise,
@@ -205,21 +207,6 @@ def TT_AddPtrOp : TT_Op<"addptr",
     let hasFolder = 1;
 }
 
-def TT_AdvanceOp : TT_Op<"advance",
-                         [Pure,
-                          TypesMatchWith<"result type matches ptr type",
-                                         "result", "ptr", "$_self">]> {
-    let summary = "Advance a tensor pointer by offsets";
-
-    let arguments = (ins TT_TensorPtr:$ptr, Variadic<I32>:$offsets);
-
-    let results = (outs TT_TensorPtr:$result);
-
-    let assemblyFormat = "$ptr `,` `[` $offsets `]` attr-dict `:` type($result)";
-
-    let hasFolder = 1;
-}
-
 //
 // Load/Store Ops
 //
@@ -227,6 +214,7 @@ def TT_LoadOp : TT_Op<"load", [
   SameLoadStoreOperandsAndResultShape,
   SameLoadStoreOperandsAndResultEncoding,
   AttrSizedOperandSegments,
+  DeclareOpInterfaceMethods<PredicatedOpInterface>,
   DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
   DeclareOpInterfaceMethods<InferTypeOpInterface>,
   TypesMatchWith<"result matches ptr type", "ptr", "result", "getPointeeType($_self)">,
@@ -235,16 +223,13 @@ def TT_LoadOp : TT_Op<"load", [
   TypesMatchWith<"other matches ptr type", "ptr", "other", "getPointeeType($_self)",
                  "($_op.getOperands().size() <= 2) || std::equal_to<>()">
 ]> {
-    let summary = "Load from a tensor of pointers or from a tensor pointer";
+    let summary = "Load from a pointer or tensor of pointers";
 
     let arguments = (
       ins
-      AnyTypeOf<[TT_PtrLike, TT_TensorPtr]>:$ptr,
+      TT_PtrLike:$ptr,
       Optional<TT_BoolLike>:$mask,
       Optional<TT_Type>:$other,
-
-      DefaultValuedAttr<DenseI32ArrayAttr, "::llvm::ArrayRef<int32_t>{}">:$boundaryCheck,
-      OptionalAttr<TT_PaddingOptionAttr>:$padding,
       DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
       DefaultValuedAttr<TT_EvictionPolicyAttr, "::mlir::triton::EvictionPolicy::NORMAL">:$evict,
       DefaultValuedAttr<BoolAttr, "false">:$isVolatile
@@ -256,20 +241,8 @@ def TT_LoadOp : TT_Op<"load", [
         // A tensor of pointers or a pointer to a scalar
         OpBuilder<(ins "Value":$ptr, "triton::CacheModifier":$cache,
                        "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
-        // A tensor pointer with boundary check and padding
-        OpBuilder<(ins "Value":$ptr, "ArrayRef<int32_t>":$boundaryCheck,
-                       "std::optional<triton::PaddingOption>":$padding, "triton::CacheModifier":$cache,
-                       "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
         // A tensor of pointers or a pointer to a scalar with mask
         OpBuilder<(ins "Value":$ptr, "Value":$mask, "triton::CacheModifier":$cache,
-                       "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
-        // A tensor of pointers or a pointer to a scalar with mask and other
-        OpBuilder<(ins "Value":$ptr, "Value":$mask, "Value":$other, "triton::CacheModifier":$cache,
-                       "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
-        // A utility function to build the operation with all attributes
-        OpBuilder<(ins "Value":$ptr, "Value":$mask, "Value":$other,
-                       "ArrayRef<int32_t>":$boundaryCheck,
-                       "std::optional<triton::PaddingOption>":$padding, "triton::CacheModifier":$cache,
                        "triton::EvictionPolicy":$evict, "bool":$isVolatile)>
     ];
 
@@ -301,19 +274,19 @@ def TT_LoadOp : TT_Op<"load", [
 def TT_StoreOp : TT_Op<"store", [
   SameLoadStoreOperandsShape,
   SameLoadStoreOperandsEncoding,
+  DeclareOpInterfaceMethods<PredicatedOpInterface>,
   TypesMatchWith<"value type matches ptr type", "ptr", "value",
                  "getPointeeType($_self)">,
   TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
                  "getI1SameShape(getPointeeType($_self))",
                  "($_op.getOperands().size() <= 2) || std::equal_to<>()">
 ]> {
-    let summary = "Store by a tensor of pointers or by a tensor pointer";
+    let summary = "Store through a pointer or tensor of pointers";
 
     let arguments = (ins
-      Arg<AnyTypeOf<[TT_PtrLike, TT_TensorPtr]>, "", [MemWrite<GlobalMemory>]>:$ptr,
+      Arg<TT_PtrLike, "", [MemWrite<GlobalMemory>]>:$ptr,
       TT_Type:$value,
       Optional<TT_BoolLike>:$mask,
-      DefaultValuedAttr<DenseI32ArrayAttr, "::llvm::ArrayRef<int32_t>{}">:$boundaryCheck,
       DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
       DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict,
       UnitAttr:$ignore_cta
@@ -321,13 +294,7 @@ def TT_StoreOp : TT_Op<"store", [
 
     let builders = [
         // A tensor of pointers or a pointer to a scalar
-        OpBuilder<(ins "Value":$ptr, "Value":$value, "triton::CacheModifier":$cache, "triton::EvictionPolicy":$evict)>,
-        // A tensor of pointers or a pointer to a scalar with mask
-        OpBuilder<(ins "Value":$ptr, "Value":$value, "Value":$mask, "triton::CacheModifier":$cache,
-                       "triton::EvictionPolicy":$evict)>,
-        // A tensor pointer with boundary check
-        OpBuilder<(ins "Value":$ptr, "Value":$value, "ArrayRef<int32_t>":$boundaryCheck, "triton::CacheModifier":$cache,
-                       "triton::EvictionPolicy":$evict)>
+        OpBuilder<(ins "Value":$ptr, "Value":$value, "triton::CacheModifier":$cache, "triton::EvictionPolicy":$evict)>
     ];
 
     // Specify cacheModifier and evictionPolicy explicitly, instead of leaving
@@ -351,6 +318,7 @@ def TT_StoreOp : TT_Op<"store", [
 def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [
   SameOperandsAndResultShape,
   SameOperandsAndResultEncoding,
+  DeclareOpInterfaceMethods<PredicatedOpInterface>,
   TypesMatchWith<"ptr type matches value type", "val", "ptr",
                  "getPointerTypeSameShape($_self)">,
   TypesMatchWith<"mask type matches value type",
@@ -382,6 +350,7 @@ def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [
       $atomic_rmw_op `,` $sem `,` $scope `,` $ptr `,` $val (`,` $mask^)?  attr-dict `:`
       functional-type(operands, $result)
     }];
+
 }
 
 def TT_AtomicCASOp : TT_Op<"atomic_cas", [
@@ -522,6 +491,8 @@ def TT_CatOp : TT_Op<"cat", [NoMemoryEffect,
     let results = (outs TT_Tensor:$result);
 
     let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs) `->` type($result)";
+
+    let hasVerifier = 1;
 }
 
 def TT_JoinOp : TT_Op<"join", [
@@ -1008,49 +979,6 @@ def TT_AssertOp : TT_Op<"assert", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
 }
 
 //
-// Make Tensor Pointer Op
-//
-def TT_MakeTensorPtrOp : TT_Op<"make_tensor_ptr",
-                               [Pure,
-                                SameVariadicOperandSize,
-                                TypesMatchWith<"infer pointer type from the result type",
-                                               "result", "base",
-                                               "getPointerType(getElementTypeOfTensorPointerType($_self), getAddressSpace($_self))">]> {
-  let summary = "Make a tensor pointer type with meta information of the parent tensor and the block specified";
-
-  let description = [{
-      `tt.make_tensor_ptr` takes both meta information of the parent tensor and the block tensor, then it returns a
-      pointer to the block tensor, e.g. returns a type of `tt.ptr<tensor<8x8xf16>>`.
-  }];
-
-  // TODO(Chenggang): unify the integer types. Currently we cannot do that due to hardware constraints.
-  let arguments = (ins
-    TT_Ptr:$base,
-    Variadic<I64>:$shape,
-    Variadic<I64>:$strides,
-    Variadic<I32>:$offsets,
-    DenseI32ArrayAttr:$order
-  );
-
-  let results = (outs TT_TensorPtr:$result);
-
-  // TODO(Keren): define a custom assembly format for this op because the result type cannot be printed correctly
-  // Add additional `[]` to increase readability and split variadic lists
-  let assemblyFormat = "$base `,` `[` $shape `]` `,` `[` $strides `]` `,` `[` $offsets `]` attr-dict `:` type($result)";
-
-  let builders = [
-    OpBuilder<(ins
-        "Value":$base,
-        "ValueRange":$shape,
-        "ValueRange":$strides,
-        "ValueRange":$offsets,
-        "ArrayRef<int32_t>":$tensorShape,
-        "ArrayRef<int32_t>":$order
-    )>
-  ];
-}
-
-//
 // Make Tensor Descriptor Op
 //
 def TT_MakeTensorDescOp : TT_Op<"make_tensor_descriptor", [
@@ -1080,11 +1008,6 @@ def TT_MakeTensorDescOp : TT_Op<"make_tensor_descriptor", [
     "triton::PaddingOption":$padding)>
   ];
 
-  let extraClassDeclaration = [{
-    ArrayRef<int64_t> getTensorShape() {
-      return getType().getBlockType().getShape();
-    }
-  }];
 }
 
 // The following ops, including `call`, `func`, and `return` are copied and modified from
@@ -1301,7 +1224,7 @@ def ReturnOp : TT_Op<"return", [Pure, HasParent<"FuncOp">, /*MemRefsNormalizable
 }
 
 
-def TT_DescriptorLoadOp : TT_Op<"descriptor_load", [TT_DescriptorOpInterface]> {
+def TT_DescriptorLoadOp : TT_Op<"descriptor_load", [TT_DescriptorLoadLikeOpInterface]> {
   let summary = "Load from descriptor";
   let description = [{
     This operation will be lowered to Nvidia TMA load operation on targets supporting it.
@@ -1370,7 +1293,7 @@ def TT_DescriptorReduceOp : TT_Op<"descriptor_reduce", [TT_DescriptorStoreLikeOp
   let hasVerifier = 1;
 }
 
-def TT_DescriptorGatherOp : TT_Op<"descriptor_gather", [TT_DescriptorOpInterface]> {
+def TT_DescriptorGatherOp : TT_Op<"descriptor_gather", [TT_DescriptorLoadLikeOpInterface]> {
   let summary = "gather multiple rows from a descriptor into a single tensor";
   let description = [{
     The `tt.descriptor_gather` op will be lowered to NVIDIA TMA
