@@ -1,5 +1,5 @@
-// RUN: env TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=0 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefixes=CHECK,DPAS-LAYOUT
-// RUN: env TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=1 triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefixes=CHECK,ALL-LAYOUT
+// RUN: env TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=0 triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefixes=CHECK,DPAS-LAYOUT
+// RUN: env TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=1 triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefixes=CHECK,ALL-LAYOUT
 
 // Test: MakeTensorDescOp lowers to LLVM struct packing and
 // DescriptorLoadOp with dot_op A encoding generates 2D block loads.
@@ -82,8 +82,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <64x32xf16>
 
     // Verify base pointer alignment: ptr & ~0x3f (clear lower 6 bits).
-    // CHECK: %[[BASE:.*]] = llvm.extractvalue {{.*}}[4]
-    // CHECK: %[[ADDR:.*]] = llvm.ptrtoint %[[BASE]] : !llvm.ptr<1> to i64
+    // CHECK: %[[ADDR:.*]] = llvm.ptrtoint %arg0 : !llvm.ptr<1> to i64
     // CHECK: %[[ALIGNED_ADDR:.*]] = llvm.and %[[ADDR]], {{.*}} : i64
     // CHECK: %[[ALIGNED_PTR:.*]] = llvm.inttoptr %[[ALIGNED_ADDR]] : i64 to !llvm.ptr<1>
 
@@ -123,11 +122,10 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // The base pointer should be passed directly to the 2D block load
     // (alignment handled later by computeAlignedBasePtrWidthAndOffset in
     // TritonGEN lowering). No llvm.inttoptr (alignment) should appear
-    // between the base extraction and the 2D block loads.
-    // CHECK: %[[BASE:.*]] = llvm.extractvalue {{.*}}[4]
+    // between the base pointer and the 2D block loads.
     // CHECK-NOT: llvm.inttoptr
-    // CHECK: triton_gen.2Dblockload %[[BASE]]
-    // CHECK: triton_gen.2Dblockload %[[BASE]]
+    // CHECK: triton_gen.2Dblockload %arg0
+    // CHECK: triton_gen.2Dblockload %arg0
     %load = tt.descriptor_load %desc[%arg4, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0_noalign>
     tt.return
   }

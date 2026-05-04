@@ -24,7 +24,7 @@
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/MathExtras.h"
@@ -3783,7 +3783,8 @@ struct TritonGPUVerifyTensorLayoutInterface
       return true;
     return isa<triton::MakeRangeOp, triton::SplatOp, triton::BroadcastOp,
                triton::LoadOp, triton::StoreOp, triton::JoinOp, triton::SplitOp,
-               triton::gpu::ConvertLayoutOp, triton::gpu::Fp4ToFpOp>(op);
+               triton::gpu::ConvertLayoutOp, triton::gpu::Fp4ToFpOp,
+               triton::gpu::LocalLoadOp, triton::gpu::LocalStoreOp>(op);
   }
 
   LogicalResult verifyTensorLayout(
