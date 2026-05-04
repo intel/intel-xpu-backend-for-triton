@@ -3891,7 +3891,7 @@ struct Subgroup2DBlockLoadOpConversion
             tensorType.getShape());
     assert(llEncoding.has_value() && "expected valid linear layout");
 
-    auto memLayout = op.getMemoryLayout();
+    BlockIOMode memLayout = op.getMemoryLayout();
     bool memoryRowMajor =
         (memLayout == triton::gpu::intel::BlockIOMode::RowMajor);
     unsigned rank = tensorType.getRank();
@@ -3900,7 +3900,7 @@ struct Subgroup2DBlockLoadOpConversion
     Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
 
-    // Tile size computation (no mask for descriptor-based loads).
+    // Tile size computation.
     // FIXME: Remove once IGC can split large 2D block loads.
     std::optional<bool> oneMatrixPerLoadForBT =
         mlir::triton::tools::isEnvValueBool(mlir::triton::tools::getStrEnv(
@@ -3953,7 +3953,7 @@ struct Subgroup2DBlockLoadOpConversion
     Type load2DGenXType = LLVM::getVectorType(packedType, numValuesPerLoad);
     Type unpackedType = LLVM::getVectorType(eltTy, numElemsPerLoad);
 
-    auto dpasCfg = configureDPASLoadTypes(
+    DPASLoadConfig dpasCfg = configureDPASLoadTypes(
         tensorType, eltTy, packedType, load2DGenXType, unpackedType,
         elemSizeInBits, numPackedVals, threadsPerWarp, tileHeight, tileWidth,
         vBlocks, numElemsPerLoad, numValuesPerLoad, isTransposeRequired, ctx);

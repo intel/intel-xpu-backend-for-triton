@@ -32,6 +32,22 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 
 // -----
 
+// COM: Test column-major block load with pad_nan. Exercises the dim-swap in
+// COM: the NaN mask path (surfaceColDim/surfaceRowDim differ from row_major).
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @block_load_column_major_pad_nan
+  tt.func public @block_load_column_major_pad_nan(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32) {
+    // CHECK: triton_gen.2Dblockload {{.*}} transpose = true
+    // CHECK: llvm.select
+    %0 = ttig.2d_block_load %arg0, %arg1, %arg2, %arg3[%arg4, %arg5] {column_major, pad_nan} : !tt.ptr<f16> -> tensor<32x32xf16, #dot1>
+    tt.return
+  }
+}
+
+// -----
+
 // COM: Test column-major (transposed) block load with dot_op B encoding.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>
