@@ -33,7 +33,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1x64x!tt.ptr<f16>, #dot1>
     %3 = tt.addptr %2, %1 : tensor<1x64x!tt.ptr<f16>, #dot1>, tensor<1x64xi32, #dot1>
     %4 = tt.broadcast %3 : tensor<1x64x!tt.ptr<f16>, #dot1> -> tensor<32x64x!tt.ptr<f16>, #dot1>
-    // CHECK: ttig.2d_block_load_from_ptr %4 {column_major}
+    // CHECK: ttig.2d_block_load_from_ptr %4 {column_major} {base_height = 1 : i32, base_pitch = 128 : i32, base_width = 128 : i32}
     %5 = tt.load %4 {ttig.block_io = "column_major"} : tensor<32x64x!tt.ptr<f16>, #dot1>
     tt.return %5 : tensor<32x64xf16, #dot1>
   }

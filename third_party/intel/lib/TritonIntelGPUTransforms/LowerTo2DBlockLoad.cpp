@@ -42,11 +42,14 @@ static bool isBlockIOEligible(OpTy op) {
     return false;
 
   RankedTensorType tensorTy;
-  if constexpr (std::is_same_v<OpTy, tt::LoadOp>)
+  if constexpr (std::is_same_v<OpTy, tt::LoadOp>) {
     tensorTy =
-        cast<RankedTensorType>(tt::getPointeeType(op.getPtr().getType()));
-  else
+        dyn_cast<RankedTensorType>(tt::getPointeeType(op.getPtr().getType()));
+    if (!tensorTy)
+      return false;
+  } else {
     tensorTy = cast<RankedTensorType>(op.getType());
+  }
 
   if (tensorTy.getRank() < 2)
     return false;
@@ -65,8 +68,8 @@ static bool isBlockIOEligible(OpTy op) {
 
 /// Get the stride (in elements) for a given dimension from stride analysis.
 /// Returns -1 if unknown, 0 if zero stride.
-static int getStride(tt::intel::ModuleStrideAnalysis &strideAnalysis, Value ptr,
-                     unsigned dim) {
+static int64_t getStride(tt::intel::ModuleStrideAnalysis &strideAnalysis,
+                         Value ptr, unsigned dim) {
   tt::intel::StrideInfo *info = strideAnalysis.getStrideInfo(ptr);
   if (info) {
     const auto &stride = info->getStride();
@@ -87,7 +90,7 @@ static Value createZeroSplat(OpBuilder &builder, Location loc,
   else if (isa<IntegerType>(elemType))
     zeroAttr = builder.getIntegerAttr(elemType, 0);
   else
-    return nullptr;
+    llvm_unreachable("unsupported element type for zero splat");
   Value zeroVal =
       arith::ConstantOp::create(builder, loc, cast<TypedAttr>(zeroAttr));
   return tt::SplatOp::create(builder, loc, tensorTy, zeroVal);
@@ -306,10 +309,10 @@ private:
 
     // Compute pitch from stride analysis or the 1D->2D reshape attribute.
     int64_t baseWidthBytes = tensorTy.getDimSize(colDim) * elemSizeInBits / 8;
-    constexpr int MIN_PITCH = 64;
+    constexpr int64_t MIN_PITCH = 64;
 
-    int pitch;
-    int stride; // stride in elements for the row dimension
+    int64_t pitch;
+    int64_t stride; // stride in elements for the row dimension
     if (has1DReshapeStride) {
       auto strideAttr = op->getAttrOfType<IntegerAttr>(
           ttgi::TritonIntelGPUDialect::getBlockIOStrideAttrName());
@@ -346,13 +349,8 @@ private:
     // default padding value (the verifier requires 'other' when 'mask' is set).
     Value mask = op.getMask();
     Value other = op.getOther();
-    if (mask && !other) {
+    if (mask && !other)
       other = createZeroSplat(builder, loc, tensorTy);
-      if (!other) {
-        LDBG("Cannot create default 'other' for masked load: " << *op);
-        return;
-      }
-    }
 
     auto blockPtrLoadOp = ttgi::Subgroup2DBlockLoadFromPtrOp::create(
         builder, loc, op.getType(), op.getPtr(), mask, other,
