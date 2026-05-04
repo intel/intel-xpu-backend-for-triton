@@ -9,6 +9,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "intel-alias-reuse"
@@ -43,13 +44,6 @@ public:
   bool empty() const { return roots.empty(); }
 
   bool operator==(const AliasInfo &other) const { return roots == other.roots; }
-
-  /// Pessimistic state: an empty set. We mark unresolved pointers this way and
-  /// recover precision by treating empty-set-vs-empty-set as MayAlias.
-  static AliasInfo getPessimisticValueState(MLIRContext * = nullptr) {
-    return AliasInfo();
-  }
-  static AliasInfo getPessimisticValueState(Value) { return AliasInfo(); }
 
   /// Classic MayAlias join: set union.
   static AliasInfo join(const AliasInfo &lhs, const AliasInfo &rhs) {
@@ -98,9 +92,7 @@ public:
       propagateIfChanged(lattice, lattice->join(AliasInfo(anchor)));
       return;
     }
-    propagateIfChanged(lattice,
-                       lattice->join(AliasInfo::getPessimisticValueState(
-                           lattice->getAnchor())));
+    propagateIfChanged(lattice, lattice->join(AliasInfo()));
   }
 
   LogicalResult
@@ -165,31 +157,20 @@ private:
 /// For descriptor ops, resolves the base pointer via the defining
 /// tt.make_tensor_descriptor op. Returns null Value for anything else.
 Value getMemOpPointer(Operation *op) {
-  if (auto load = dyn_cast<tt::LoadOp>(op))
-    return load.getPtr();
-  if (auto store = dyn_cast<tt::StoreOp>(op))
-    return store.getPtr();
-  if (auto rmw = dyn_cast<tt::AtomicRMWOp>(op))
-    return rmw.getPtr();
-  if (auto cas = dyn_cast<tt::AtomicCASOp>(op))
-    return cas.getPtr();
-  Value desc;
-  if (auto op_ = dyn_cast<tt::DescriptorLoadOp>(op))
-    desc = op_.getDesc();
-  else if (auto op_ = dyn_cast<tt::DescriptorStoreOp>(op))
-    desc = op_.getDesc();
-  else if (auto op_ = dyn_cast<tt::DescriptorGatherOp>(op))
-    desc = op_.getDesc();
-  else if (auto op_ = dyn_cast<tt::DescriptorScatterOp>(op))
-    desc = op_.getDesc();
-  else if (auto op_ = dyn_cast<tt::DescriptorReduceOp>(op))
-    desc = op_.getDesc();
-  if (desc) {
-    if (auto makeDesc = desc.getDefiningOp<tt::MakeTensorDescOp>())
-      return makeDesc.getBase();
-    return Value();
-  }
-  return Value();
+  return TypeSwitch<Operation *, Value>(op)
+      .Case<tt::LoadOp>([](auto op) { return op.getPtr(); })
+      .Case<tt::StoreOp>([](auto op) { return op.getPtr(); })
+      .Case<tt::AtomicRMWOp>([](auto op) { return op.getPtr(); })
+      .Case<tt::AtomicCASOp>([](auto op) { return op.getPtr(); })
+      .Case<tt::DescriptorLoadOp, tt::DescriptorStoreOp, tt::DescriptorGatherOp,
+            tt::DescriptorScatterOp, tt::DescriptorReduceOp>(
+          [](auto op) -> Value {
+            Value desc = op.getDesc();
+            if (auto makeDesc = desc.getDefiningOp<tt::MakeTensorDescOp>())
+              return makeDesc.getBase();
+            return Value();
+          })
+      .Default([](auto) { return Value(); });
 }
 
 /// True iff `op` is one of the memory-effect ops this analysis tracks.
