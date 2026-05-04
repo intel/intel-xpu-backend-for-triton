@@ -1103,7 +1103,7 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
   // agama 1222 L0 driver and later.
   sycl::ext::oneapi::experimental::submit(stream, cgf);
 #else
-  stream.submit(cgf);
+ auto event = stream.submit(cgf);
 #endif
 }
 // end sycl
