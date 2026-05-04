@@ -21,7 +21,7 @@ jobs:
         id: check
         uses: ./.github/actions/check-path-changes
         with:
-          patterns: '^(\.github/workflows/(triton-benchmarks|build-benchmarks-wheel).*\.yml|\.github/actions/install-benchmarks/|benchmarks/|\.github/pins/pytorch.txt)'
+          patterns: '^(\.github/workflows/(triton-benchmarks|build-benchmarks-wheel).*\.yml|\.github/actions/install-benchmarks/|benchmarks/|\.github/pins/pytorch\.txt)'
 
   build-wheel:
     needs: check-paths
