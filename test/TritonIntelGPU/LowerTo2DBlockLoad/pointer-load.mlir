@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load | FileCheck %s --implicit-check-not=tt.load
+// RUN: env TRITON_INTEL_LOWER_PTR_LOAD_TO_2D_BLOCK=1 triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load | FileCheck %s --implicit-check-not=tt.load
 
 // COM: Row-major pointer-based load with broadcast (stride=0). The pass
 // COM: converts this to ttig.2d_block_load_from_ptr, retaining the full
