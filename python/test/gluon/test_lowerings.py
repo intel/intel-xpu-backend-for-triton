@@ -414,6 +414,66 @@ def test_broadcast_generic_linear(src_layout, device):
     torch.testing.assert_close(z, x[:, None] + y[None, :])
 
 
+def _shared_layout_kinds():
+    kinds = ["swizzled_trivial", "swizzled", "padded"]
+    if is_hip():
+        kinds += ["partitioned_swizzled", "partitioned_padded"]
+    return kinds
+
+
+def _make_shared_layout(kind, shape):
+    order = list(reversed(range(len(shape))))
+    if kind == "swizzled_trivial":
+        return ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=order)
+    if kind == "swizzled":
+        return ttgl.SwizzledSharedLayout(vec=4, per_phase=2, max_phase=4, order=order)
+    if kind == "padded":
+        return ttgl.PaddedSharedLayout.with_identity_for(interval_padding_pairs=[[16, 4]], shape=list(shape),
+                                                         order=order)
+    if kind == "partitioned_swizzled":
+        inner = ttgl.SwizzledSharedLayout(vec=4, per_phase=2, max_phase=4, order=order)
+        return PartitionedSharedLayout(num_partitions=2, num_groups=1, partition_dim=0, partition_layout=inner)
+    if kind == "partitioned_padded":
+        inner = ttgl.PaddedSharedLayout.with_identity_for(interval_padding_pairs=[[16, 4]], shape=list(shape),
+                                                          order=order)
+        return PartitionedSharedLayout(num_partitions=2, num_groups=1, partition_dim=0, partition_layout=inner)
+    raise ValueError(f"Unknown shared layout kind: {kind}")
+
+
+@pytest.mark.parametrize("src_layout", _filter_layouts(_swizzled_warp_layouts()))
+@pytest.mark.parametrize("shared_kind", _shared_layout_kinds())
+def test_local_load_store_generic_linear(src_layout, shared_kind, device):
+    """Round-trip through shared memory using a swizzled/non-injective DistributedLinearLayout.
+
+    Exercises local_store (smem.store) and local_load (smem.load) lowerings for
+    GenericLinearEncoding sources across various shared-memory layouts.
+    """
+    shape = tuple(src_layout.shape)
+    shared_layout = _make_shared_layout(shared_kind, shape)
+    num_warps = 2**len(src_layout.warp_bases)
+
+    @gluon.jit
+    def kernel(x_ptr, y_ptr, shape: ttgl.constexpr, layout: ttgl.constexpr, shared_layout: ttgl.constexpr):
+        if len(shape) == 1:
+            offs = ttgl.arange(0, shape[0], layout=layout)
+        else:
+            offs_m = ttgl.arange(0, shape[0], layout=ttgl.SliceLayout(1, layout))[:, None]
+            offs_n = ttgl.arange(0, shape[1], layout=ttgl.SliceLayout(0, layout))[None, :]
+            offs = offs_m * shape[1] + offs_n
+        x = ttgl.load(x_ptr + offs)
+        smem = ttgl.allocate_shared_memory(x.dtype, shape, shared_layout)
+        smem.store(x)
+        y = smem.load(layout)
+        ttgl.store(y_ptr + offs, y)
+
+    torch.manual_seed(0)
+    x = torch.randn(shape, dtype=torch.float32, device=device)
+    y = torch.empty_like(x)
+    kernel[(1, )](x, y, shape, src_layout, shared_layout, num_warps=num_warps)
+
+    torch.testing.assert_close(y, x)
+
+
 def _funky_reduce_layouts():
 
     def ilog2(x):
