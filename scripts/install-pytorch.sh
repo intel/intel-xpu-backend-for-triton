@@ -99,7 +99,7 @@ done
 
 if [ "$VENV" = true ]; then
   echo "**** Activate virtual environment *****"
-  if [[ $OSTYPE = msys ]]; then
+  if [[ $OSTYPE = msys || $OSTYPE = cygwin ]]; then
     source .venv/Scripts/activate
   else
     source .venv/bin/activate
@@ -209,7 +209,7 @@ function pytorch_wheel_exists {
   PYTHON_VERSION=$(python -c "import sys; print(f'{sys.version_info.major}{sys.version_info.minor}')")
   PYTORCH_VERSION=$(<$PYTORCH_PROJ/version.txt)
   PYTORCH_COMMIT=${PYTORCH_PINNED_COMMIT:-main}
-  if [[ $OSTYPE = msys ]]; then
+  if [[ $OSTYPE = msys || $OSTYPE = cygwin ]]; then
     PYTORCH_OS=win
     PYTORCH_ARCH="amd64"
   else
@@ -288,7 +288,7 @@ function build_pytorch {
   pip install 'cmake<4.0.0'
   pip install -r requirements.txt
   pip install cmake ninja
-  if [[ $OSTYPE = msys ]]; then
+  if [[ $OSTYPE = msys || $OSTYPE = cygwin ]]; then
     # Another way (but we don't use conda): conda install -c conda-forge libuv=1.40.0
     # Ref https://github.com/pytorch/pytorch/blob/8c2e45008282cf5202b72a0ecb0c2951438abeea/.ci/pytorch/windows/setup_build.bat#L23
     # This is an artifact (around 330kb) that PyTorch uses, however it may not be very good to use here.
