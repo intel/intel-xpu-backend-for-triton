@@ -23,7 +23,7 @@
 #include "triton/Tools/LinearLayout.h"
 #include <limits>
 #include <optional>
-#include <triton/Tools/Sys/GetEnv.hpp>
+#include <triton/Tools/Sys/GetEnv.h>
 
 using namespace mlir;
 using namespace mlir::triton;
