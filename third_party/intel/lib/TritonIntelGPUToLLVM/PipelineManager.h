@@ -29,6 +29,7 @@
 #include "intel/include/TritonGENToSPIRV/TritonGENToSPIRVPass.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 #include "PatternTritonGPUOpToLLVM.h"
 
@@ -148,6 +149,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     }
 
     LLVM::LLVMFuncOp newFuncOp = *maybeNewFuncOp;
+    handleArgPtrDatatype(funcOp, newFuncOp);
 
     MLIRContext *ctx = funcOp->getContext();
     auto mod = funcOp->getParentOfType<ModuleOp>();

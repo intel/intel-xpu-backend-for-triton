@@ -71,6 +71,11 @@ struct TritonAnnotateModule
           ttgi::TritonIntelGPUDialect::getSupportPrefetch256BAttrName(),
           builder.getUnitAttr());
 
+    if (support256bLoadStore)
+      mod->setAttr(
+          ttgi::TritonIntelGPUDialect::getSupport256bLoadStoreAttrName(),
+          builder.getUnitAttr());
+
     if (supportBfloat16Arithmetic)
       mod->setAttr(
           ttgi::TritonIntelGPUDialect::getSupportBFloat16ArithmeticAttrName(),
@@ -79,6 +84,11 @@ struct TritonAnnotateModule
     if (supportPredicatedIO)
       mod->setAttr(
           ttgi::TritonIntelGPUDialect::getSupportPredicatedIOAttrName(),
+          builder.getUnitAttr());
+
+    if (supportRoundedDivideSqrt)
+      mod->setAttr(
+          ttgi::TritonIntelGPUDialect::getSupportRoundedDivideSqrtAttrName(),
           builder.getUnitAttr());
 
     if (isLTS)
