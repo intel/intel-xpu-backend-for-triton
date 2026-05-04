@@ -44,8 +44,8 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_mul
 // CHECK: #[[$BLOCKED:.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [4, 4], order = [1, 0]}>
 // CHECK: #[[$BLOCKED1:.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 4], warpsPerCTA = [16, 1], order = [1, 0]}>
 // CHECK: #[[$BLOCKED2:.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 8], order = [1, 0]}>
-// CHECK: #[[$LINEARLAYOUT1:.+]] = #ttg.linear<{register = {{\[\[}}0, 1], [8, 0], [16, 0], [0, 2]], lane = {{\[\[}}1, 0], [2, 0], [4, 0], [0, 0]], warp = {{\[\[}}0, 0], [0, 0], [32, 0], [64, 0]], block = []}>
-// CHECK: #[[$LINEARLAYOUT2:.+]] = #ttg.linear<{register = {{\[\[}}0, 1], [16, 0], [0, 2]], lane = {{\[\[}}1, 0], [2, 0], [4, 0], [8, 0]], warp = {{\[\[}}32, 0], [64, 0], [0, 0], [0, 0]], block = []}>
+// CHECK: #[[$LINEARLAYOUT1:.+]] = #ttg.linear<{register = {{\[\[}}0, 1], [8, 0], [16, 0], [0, 2], [32, 0], [64, 0]], lane = {{\[\[}}1, 0], [2, 0], [4, 0], [0, 0]], warp = {{\[\[}}0, 0], [0, 0], [0, 0], [0, 0]], block = []}>
+// CHECK: #[[$LINEARLAYOUT2:.+]] = #ttg.linear<{register = {{\[\[}}0, 1], [16, 0], [0, 2], [32, 0], [64, 0]], lane = {{\[\[}}1, 0], [2, 0], [4, 0], [8, 0]], warp = {{\[\[}}0, 0], [0, 0], [0, 0], [0, 0]], block = []}>
 // CHECK: #[[$DPAS:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, fp4KPack = 2, threadsPerWarp = 16, warpsPerCTA = [4, 4], repCluster = [4, 2], A = [32, 32], B = [32, 32], C = [32, 32]}>
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 8], order = [1, 0]}>
@@ -77,8 +77,8 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_mul
 // CHECK: #[[$BLOCKED:.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [4, 4], order = [1, 0]}>
 // CHECK: #[[$BLOCKED1:.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 4], warpsPerCTA = [16, 1], order = [1, 0]}>
 // CHECK: #[[$BLOCKED2:.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 8], order = [1, 0]}>
-// CHECK: #[[$LINEARLAYOUT1:.+]] = #ttg.linear<{register = {{\[\[}}8, 0], [16, 0], [0, 1]], lane = {{\[\[}}1, 0], [2, 0], [4, 0], [0, 0]], warp = {{\[\[}}0, 0], [0, 0], [32, 0], [64, 0]], block = []}>
-// CHECK: #[[$LINEARLAYOUT2:.+]] = #ttg.linear<{register = {{\[\[}}16, 0], [0, 1]], lane = {{\[\[}}1, 0], [2, 0], [4, 0], [8, 0]], warp = {{\[\[}}32, 0], [64, 0], [0, 0], [0, 0]], block = []}>
+// CHECK: #[[$LINEARLAYOUT1:.+]] = #ttg.linear<{register = {{\[\[}}8, 0], [16, 0], [0, 1], [32, 0], [64, 0]], lane = {{\[\[}}1, 0], [2, 0], [4, 0], [0, 0]], warp = {{\[\[}}0, 0], [0, 0], [0, 0], [0, 0]], block = []}>
+// CHECK: #[[$LINEARLAYOUT2:.+]] = #ttg.linear<{register = {{\[\[}}16, 0], [0, 1], [32, 0], [64, 0]], lane = {{\[\[}}1, 0], [2, 0], [4, 0], [8, 0]], warp = {{\[\[}}0, 0], [0, 0], [0, 0], [0, 0]], block = []}>
 // CHECK: #[[$DPAS:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [4, 4], repCluster = [4, 2], A = [32, 32], B = [32, 32], C = [32, 32]}>
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 8], order = [1, 0]}>
@@ -151,8 +151,8 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_mul
 // CHECK: #[[$BLOCKED_2:.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 8], order = [1, 0]}>
 // CHECK: #[[$BLOCKED_3:.+]] = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 16], warpsPerCTA = [4, 4], order = [1, 0]}>
 // CHECK: #[[$LINEARLAYOUT_0:.+]] = #ttg.linear<{register = {{\[\[}}0, 1], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0], [64, 0]], lane = {{\[\[}}0, 2], [0, 4], [0, 8], [0, 16]], warp = {{\[\[}}0, 32], [0, 64], [0, 128], [1, 0]], block = []}>
-// CHECK: #[[$LINEARLAYOUT_1:.+]] = #ttg.linear<{register = {{\[\[}}8, 0], [16, 0], [0, 1], [0, 2]], lane = {{\[\[}}1, 0], [2, 0], [4, 0], [0, 0]], warp = {{\[\[}}0, 0], [0, 0], [32, 0], [64, 0]], block = []}>
-// CHECK: #[[$LINEARLAYOUT_2:.+]] = #ttg.linear<{register = {{\[\[}}16, 0], [0, 1], [0, 2]], lane = {{\[\[}}1, 0], [2, 0], [4, 0], [8, 0]], warp = {{\[\[}}32, 0], [64, 0], [0, 0], [0, 0]], block = []}>
+// CHECK: #[[$LINEARLAYOUT_1:.+]] = #ttg.linear<{register = {{\[\[}}8, 0], [16, 0], [0, 1], [0, 2], [32, 0], [64, 0]], lane = {{\[\[}}1, 0], [2, 0], [4, 0], [0, 0]], warp = {{\[\[}}0, 0], [0, 0], [0, 0], [0, 0]], block = []}>
+// CHECK: #[[$LINEARLAYOUT_2:.+]] = #ttg.linear<{register = {{\[\[}}16, 0], [0, 1], [0, 2], [32, 0], [64, 0]], lane = {{\[\[}}1, 0], [2, 0], [4, 0], [8, 0]], warp = {{\[\[}}0, 0], [0, 0], [0, 0], [0, 0]], block = []}>
 // CHECK: #[[$DPAS:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 4], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 8], order = [1, 0]}>
@@ -187,8 +187,8 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_mul
 // CHECK: #[[$BLOCKED_2:.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 8], order = [1, 0]}>
 // CHECK: #[[$BLOCKED_3:.+]] = #ttg.blocked<{sizePerThread = [2, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 8], order = [1, 0]}>
 // CHECK: #[[$LINEARLAYOUT_0:.+]] = #ttg.linear<{register = {{\[\[}}1, 0], [0, 64], [8, 0], [16, 0], [32, 0], [64, 0], [128, 0]], lane = {{\[\[}}0, 1], [0, 2], [0, 4], [0, 8]], warp = {{\[\[}}0, 16], [0, 32], [2, 0], [4, 0]], block = []}>
-// CHECK: #[[$LINEARLAYOUT_1:.+]] = #ttg.linear<{register = {{\[\[}}8, 0], [16, 0], [0, 1], [0, 2]], lane = {{\[\[}}1, 0], [2, 0], [4, 0], [0, 0]], warp = {{\[\[}}0, 0], [0, 0], [32, 0], [64, 0]], block = []}>
-// CHECK: #[[$LINEARLAYOUT_2:.+]] = #ttg.linear<{register = {{\[\[}}16, 0], [0, 1], [0, 2]], lane = {{\[\[}}1, 0], [2, 0], [4, 0], [8, 0]], warp = {{\[\[}}32, 0], [64, 0], [0, 0], [0, 0]], block = []}>
+// CHECK: #[[$LINEARLAYOUT_1:.+]] = #ttg.linear<{register = {{\[\[}}8, 0], [16, 0], [0, 1], [0, 2], [32, 0], [64, 0]], lane = {{\[\[}}1, 0], [2, 0], [4, 0], [0, 0]], warp = {{\[\[}}0, 0], [0, 0], [0, 0], [0, 0]], block = []}>
+// CHECK: #[[$LINEARLAYOUT_2:.+]] = #ttg.linear<{register = {{\[\[}}16, 0], [0, 1], [0, 2], [32, 0], [64, 0]], lane = {{\[\[}}1, 0], [2, 0], [4, 0], [8, 0]], warp = {{\[\[}}0, 0], [0, 0], [0, 0], [0, 0]], block = []}>
 // CHECK: #[[$DPAS:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 4], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 8], order = [1, 0]}>
@@ -222,8 +222,8 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_mul
 // CHECK: #[[$BLOCKED1:.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 4], warpsPerCTA = [16, 1], order = [1, 0]}>
 // CHECK: #[[$BLOCKED2:.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 8], order = [1, 0]}>
 // CHECK: #[[$LINEARLAYOUT0:.+]] = #ttg.linear<{register = {{\[\[}}0, 1], [4, 0], [8, 0], [16, 0], [32, 0], [64, 0]], lane = {{\[\[}}0, 2], [0, 4], [0, 8], [0, 16]], warp = {{\[\[}}0, 32], [0, 64], [1, 0], [2, 0]], block = []}>
-// CHECK: #[[$LINEARLAYOUT1:.+]] = #ttg.linear<{register = {{\[\[}}8, 0], [16, 0], [0, 1]], lane = {{\[\[}}1, 0], [2, 0], [4, 0], [0, 0]], warp = {{\[\[}}0, 0], [0, 0], [32, 0], [64, 0]], block = []}>
-// CHECK: #[[$LINEARLAYOUT2:.+]] = #ttg.linear<{register = {{\[\[}}16, 0], [0, 1]], lane = {{\[\[}}1, 0], [2, 0], [4, 0], [8, 0]], warp = {{\[\[}}32, 0], [64, 0], [0, 0], [0, 0]], block = []}>
+// CHECK: #[[$LINEARLAYOUT1:.+]] = #ttg.linear<{register = {{\[\[}}8, 0], [16, 0], [0, 1], [32, 0], [64, 0]], lane = {{\[\[}}1, 0], [2, 0], [4, 0], [0, 0]], warp = {{\[\[}}0, 0], [0, 0], [0, 0], [0, 0]], block = []}>
+// CHECK: #[[$LINEARLAYOUT2:.+]] = #ttg.linear<{register = {{\[\[}}16, 0], [0, 1], [32, 0], [64, 0]], lane = {{\[\[}}1, 0], [2, 0], [4, 0], [8, 0]], warp = {{\[\[}}0, 0], [0, 0], [0, 0], [0, 0]], block = []}>
 // CHECK: #[[$DPAS:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 4], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 8], order = [1, 0]}>
@@ -257,8 +257,8 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, tt
 // CHECK: #[[$BLOCKED1:.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 4], warpsPerCTA = [16, 1], order = [1, 0]}>
 // CHECK: #[[$BLOCKED2:.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 8], order = [1, 0]}>
 // CHECK: #[[$LINEARLAYOUT0:.+]] = #ttg.linear<{register = {{\[\[}}0, 1], [4, 0], [8, 0], [16, 0], [32, 0], [64, 0]], lane = {{\[\[}}0, 2], [0, 4], [0, 8], [0, 16]], warp = {{\[\[}}0, 32], [0, 64], [1, 0], [2, 0]], block = []}>
-// CHECK: #[[$LINEARLAYOUT1:.+]] = #ttg.linear<{register = {{\[\[}}8, 0], [16, 0], [0, 1]], lane = {{\[\[}}1, 0], [2, 0], [4, 0], [0, 0]], warp = {{\[\[}}0, 0], [0, 0], [32, 0], [64, 0]], block = []}>
-// CHECK: #[[$LINEARLAYOUT2:.+]] = #ttg.linear<{register = {{\[\[}}16, 0], [0, 1]], lane = {{\[\[}}1, 0], [2, 0], [4, 0], [8, 0]], warp = {{\[\[}}32, 0], [64, 0], [0, 0], [0, 0]], block = []}>
+// CHECK: #[[$LINEARLAYOUT1:.+]] = #ttg.linear<{register = {{\[\[}}8, 0], [16, 0], [0, 1], [32, 0], [64, 0]], lane = {{\[\[}}1, 0], [2, 0], [4, 0], [0, 0]], warp = {{\[\[}}0, 0], [0, 0], [0, 0], [0, 0]], block = []}>
+// CHECK: #[[$LINEARLAYOUT2:.+]] = #ttg.linear<{register = {{\[\[}}16, 0], [0, 1], [32, 0], [64, 0]], lane = {{\[\[}}1, 0], [2, 0], [4, 0], [8, 0]], warp = {{\[\[}}0, 0], [0, 0], [0, 0], [0, 0]], block = []}>
 // CHECK: #[[$DPAS:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 4], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 8], order = [1, 0]}>
@@ -292,8 +292,8 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bf16_conversion, tt
 // CHECK: #[[$BLOCKED1:.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 4], warpsPerCTA = [16, 1], order = [1, 0]}>
 // CHECK: #[[$BLOCKED2:.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 8], order = [1, 0]}>
 // CHECK: #[[$LINEARLAYOUT0:.+]] = #ttg.linear<{register = {{\[\[}}0, 1], [4, 0], [8, 0], [16, 0], [32, 0], [64, 0]], lane = {{\[\[}}0, 2], [0, 4], [0, 8], [0, 16]], warp = {{\[\[}}0, 32], [0, 64], [1, 0], [2, 0]], block = []}>
-// CHECK: #[[$LINEARLAYOUT1:.+]] = #ttg.linear<{register = {{\[\[}}8, 0], [16, 0], [0, 1]], lane = {{\[\[}}1, 0], [2, 0], [4, 0], [0, 0]], warp = {{\[\[}}0, 0], [0, 0], [32, 0], [64, 0]], block = []}>
-// CHECK: #[[$LINEARLAYOUT2:.+]] = #ttg.linear<{register = {{\[\[}}16, 0], [0, 1]], lane = {{\[\[}}1, 0], [2, 0], [4, 0], [8, 0]], warp = {{\[\[}}32, 0], [64, 0], [0, 0], [0, 0]], block = []}>
+// CHECK: #[[$LINEARLAYOUT1:.+]] = #ttg.linear<{register = {{\[\[}}8, 0], [16, 0], [0, 1], [32, 0], [64, 0]], lane = {{\[\[}}1, 0], [2, 0], [4, 0], [0, 0]], warp = {{\[\[}}0, 0], [0, 0], [0, 0], [0, 0]], block = []}>
+// CHECK: #[[$LINEARLAYOUT2:.+]] = #ttg.linear<{register = {{\[\[}}16, 0], [0, 1], [32, 0], [64, 0]], lane = {{\[\[}}1, 0], [2, 0], [4, 0], [8, 0]], warp = {{\[\[}}0, 0], [0, 0], [0, 0], [0, 0]], block = []}>
 // CHECK: #[[$DPAS:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 4], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 8], order = [1, 0]}>
