@@ -102,8 +102,7 @@ private:
 
     auto descType = cast<tt::TensorDescType>(desc.getType());
     unsigned descRank = descType.getBlockType().getRank();
-    assert(descRank == rank &&
-           "descriptor and result tensor must have same rank");
+    assert(descRank >= rank && "descriptor rank must be >= result tensor rank");
 
     bool memoryRowMajor = isMemoryRowMajor(op);
 
@@ -138,9 +137,9 @@ private:
     assert(indices.size() == descRank &&
            "descriptor index count must match descriptor rank");
 
-    // Fold batch indices into base_ptr for rank > 2 loads. The leading
-    // dimensions (before the inner-2 dims) are batch dims whose offsets
-    // are multiplied by the corresponding strides and added to the pointer.
+    // Fold batch indices into base_ptr. This handles both rank-reducing loads
+    // (descRank > rank: leading descriptor dims are dropped) and same-rank
+    // loads with rank > 2 (batch dims before the inner-2 dims).
     unsigned numBatchDims = descRank - 2;
     for (unsigned d = 0; d < numBatchDims; ++d) {
       Value batchOffset = arith::MulIOp::create(
@@ -159,15 +158,20 @@ private:
       return v;
     };
 
-    // If the pitch stride is a known constant, validate HW constraints
-    // (>= 64 bytes, 16-byte aligned).
-    std::optional<int64_t> pitchStride =
-        tt::intel::getFoldedConstantValue(strides[descRank - 2]);
-    if (pitchStride) {
-      int64_t pitchBytes = *pitchStride * elemSizeInBits / 8;
-      if (pitchBytes < 64 || (pitchBytes % 16) != 0) {
-        LDBG("Invalid pitch " << pitchBytes << " for descriptor load: " << *op);
-        return;
+    // If the pitch stride is a known constant AND the descriptor/result ranks
+    // match, validate HW constraints (>= 64 bytes, 16-byte aligned).
+    // For rank-reducing loads, the stride interpretation may differ from the
+    // 2D surface pitch, so skip static validation (runtime will handle it).
+    if (rank == descRank) {
+      std::optional<int64_t> pitchStride =
+          tt::intel::getFoldedConstantValue(strides[descRank - 2]);
+      if (pitchStride) {
+        int64_t pitchBytes = *pitchStride * elemSizeInBits / 8;
+        if (pitchBytes < 64 || (pitchBytes % 16) != 0) {
+          LDBG("Invalid pitch " << pitchBytes
+                                << " for descriptor load: " << *op);
+          return;
+        }
       }
     }
 
