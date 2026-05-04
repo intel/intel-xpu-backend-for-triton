@@ -8,7 +8,6 @@
 
 namespace mlir {
 namespace triton {
-class MakeTensorPtrOp;
 class MakeTensorDescOp;
 } // namespace triton
 
@@ -41,9 +40,8 @@ void eraseOperations(SmallPtrSetImpl<Operation *> &operations);
 
 // Find the defining operation of type `OpTy` for the given value.
 // Note: traverses block arguments and loop yields, etc...
-template <typename OpTy,
-          typename = std::enable_if<llvm::is_one_of<
-              OpTy, triton::MakeTensorPtrOp, triton::MakeTensorDescOp>::value>>
+template <typename OpTy, typename = std::enable_if<std::is_same<
+                             OpTy, triton::MakeTensorDescOp>::value>>
 std::optional<OpTy> findDefiningOpOfType(Value val) {
   if (auto arg = dyn_cast<BlockArgument>(val)) {
     Operation *parentOp = arg.getParentBlock()->getParentOp();
@@ -65,8 +63,6 @@ std::optional<OpTy> findDefiningOpOfType(Value val) {
     return std::nullopt;
   if (auto callOp = val.getDefiningOp<triton::CallOp>())
     return std::nullopt;
-  if (auto advanceOp = val.getDefiningOp<triton::AdvanceOp>())
-    return findDefiningOpOfType<OpTy>(advanceOp.getPtr());
   if (auto makePtrOp = val.getDefiningOp<OpTy>())
     return makePtrOp;
   if (auto opRes = dyn_cast<OpResult>(val)) {

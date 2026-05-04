@@ -25,6 +25,8 @@ def min_dot_size(target: GPUTarget):
         # For small M/N the input we can still use tensorcores with padding.
         if lhs_bitwidth == 8:
             return (1, 1, 32)
+        elif lhs_bitwidth == 64:
+            return (1, 1, 4)
         else:
             return (1, 1, 16)
 
@@ -361,6 +363,7 @@ class CUDABackend(BaseBackend):
         pm.enable_debug()
 
         if "gsan" in options.instrumentation_mode:
+            # GSan introduces layout conversions, so must come before shared memory allocation
             passes.ttgpuir.add_global_sanitizer(pm)
 
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)

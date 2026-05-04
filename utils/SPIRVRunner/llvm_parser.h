@@ -9,6 +9,7 @@ public:
     std::vector<std::string> output_tensors;
     bool get_kernel_time = false;
     std::vector<std::string> validate_results;
+    std::string spirv_dump_dir;
   };
 
   command_line_parser(int argc, char **argv);

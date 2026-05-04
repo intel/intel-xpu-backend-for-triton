@@ -39,10 +39,7 @@ RankedTensorType getRankedTensorType(OpType op) {
 }
 
 RankedTensorType getRankedTensorType(Type ptrTy) {
-  return tt::isTensorPointerType(ptrTy)
-             ? cast<RankedTensorType>(
-                   cast<tt::PointerType>(ptrTy).getPointeeType())
-             : dyn_cast<RankedTensorType>(ptrTy);
+  return dyn_cast<RankedTensorType>(ptrTy);
 }
 
 static bool isSingleValue(Value value) {
@@ -97,11 +94,6 @@ bool isDivisible(Value value, unsigned divisor) {
 }
 
 Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
-  if (auto makeTensorPtrOp = dyn_cast<MakeTensorPtrOp>(op))
-    return encoding;
-  if (auto advanceOp = dyn_cast<AdvanceOp>(op))
-    return encoding;
-
   if (auto dotEnc = dyn_cast<DotOperandEncodingAttr>(encoding)) {
     if (auto parentEnc = dyn_cast<DpasEncodingAttr>(dotEnc.getParent())) {
       if (auto fp4ToFpOp = dyn_cast<gpu::Fp4ToFpOp>(op)) {
@@ -140,9 +132,13 @@ bool isExpensiveLoadOrStore(Operation *op) {
   // Loads or stores that use a block pointer are expensive if they cannot be
   // lowered to 2D block read/write operations. Temporarily leverage the
   // "ttig.block_io" attribute to filter out inexpensive loads.
+  // Exception: 1D-reshaped loads and stores (indicated by
+  // ttig.block_io_stride) have a specific encoding that matches HW delivery
+  // order and must be anchored.
   Attribute blockIOAttr =
       op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
-  if (blockIOAttr)
+  if (blockIOAttr &&
+      !op->getAttr(TritonIntelGPUDialect::getBlockIOStrideAttrName()))
     return false;
 
   // Loads or stores that use more threads than elements can be presumed to have
@@ -226,13 +222,7 @@ LogicalResult getConvertBackwardSlice(
   enqueue(root, rootEncoding);
 
   auto updateLayout = [&](Value value, Attribute encoding) {
-    assert(isTensorOrTensorPointerType(value.getType()));
-
-    if (RankedTensorType tensorType = getRankedTensorType(value.getType()))
-      if (tensorType.getEncoding() == encoding)
-        return success();
-
-    slice.insert(value);
+    assert(isa<RankedTensorType>(value.getType()));
     Attribute &existing = layout[value];
     if (existing && existing != encoding)
       return failure();
@@ -244,7 +234,7 @@ LogicalResult getConvertBackwardSlice(
     auto [currentValueUse, encoding] = queue.back();
     Value currentValue = currentValueUse->get();
     queue.pop_back();
-    if (!isTensorOrTensorPointerType(currentValue.getType()))
+    if (!isa<RankedTensorType>(currentValue.getType()))
       continue;
 
     // Skip propagating through for op results for now.
@@ -254,6 +244,13 @@ LogicalResult getConvertBackwardSlice(
 
     if (failed(updateLayout(currentValue, encoding)))
       return failure();
+
+    // If the value already has the desired encoding, we can stop here without
+    // adding it to the slice.
+    auto currentValueType = cast<RankedTensorType>(currentValue.getType());
+    if (currentValueType.getEncoding() == encoding)
+      continue;
+    slice.insert(currentValue);
 
     Value existing;
     if (getExistingConversion &&
@@ -292,11 +289,11 @@ LogicalResult getConvertBackwardSlice(
     if (auto *definingOp = currentValue.getDefiningOp()) {
       // If the op has multiple results we need to update all results layout.
       for (Value result : definingOp->getResults()) {
-        if (result == currentValue ||
-            !isTensorOrTensorPointerType(result.getType()))
+        if (result == currentValue || !isa<RankedTensorType>(result.getType()))
           continue;
         if (failed(updateLayout(result, encoding)))
           return failure();
+        slice.insert(result);
       }
       if (isFreeConvert(definingOp)) {
         enqueue(definingOp->getOpOperand(0), encoding);
@@ -318,17 +315,14 @@ LogicalResult getConvertBackwardSlice(
         continue;
       }
       for (auto [i, operand] : llvm::enumerate(definingOp->getOpOperands())) {
-        if (isTensorOrTensorPointerType(operand.get().getType())) {
-          auto srcEncoding = ttgi::inferSrcEncoding(definingOp, encoding);
+        if (isa<RankedTensorType>(operand.get().getType())) {
+          Attribute srcEncoding;
+          if (auto upcast = dyn_cast<gpu::UpcastFpOpInterface>(definingOp))
+            srcEncoding = upcast.inferSrcEncoding(i, encoding);
+          else
+            srcEncoding = ttgi::inferSrcEncoding(definingOp, encoding);
           if (!srcEncoding)
             return failure();
-          // If the inferred layout matches the original one we don't need to
-          // keep propagating.
-          if (auto operandType =
-                  dyn_cast<RankedTensorType>(operand.get().getType())) {
-            if (srcEncoding == operandType.getEncoding())
-              continue;
-          }
           enqueue(operand, srcEncoding);
         }
       }

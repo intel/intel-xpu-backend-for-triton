@@ -2079,9 +2079,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %5 = tt.reshape %4 : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blockedX}>> -> tensor<4x1xi32, #blockedX>
     %6 = arith.extsi %5 : tensor<4x1xi32, #blockedX> to tensor<4x1xi64, #blockedX>
     %7 = arith.addi %2, %6 : tensor<4x1xi64, #blockedX>
-    // CHECK: ttg.convert_layout
-    // CHECK-NOT: scf.for
     // CHECK: arith.extsi
+    // CHECK: arith.extsi
+    // CHECK: ttg.convert_layout
     %8 = scf.for %arg2 = %c0_i32 to %c4_i32 step %c1_i32 iter_args(%arg3 = %5) -> (tensor<4x1xi32, #blockedX>) : i32 {
       scf.yield %5 : tensor<4x1xi32, #blockedX>
     }
@@ -3013,7 +3013,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
 
 // -----
 
-// COM: Test that the the layout conversion is hoisted above the loop.
+// COM: Test that the layout conversion is NOT hoisted above the loop
+// COM: because isRematBeneficial blocks it (tt.load in the slice is expensive).
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
@@ -3025,7 +3026,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %0 = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked1}>>
     %1 = arith.extsi %0 : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked1}>> to tensor<4xi64, #ttg.slice<{dim = 1, parent = #blocked1}>>
     %2 = tt.splat %arg0 : !tt.ptr<i32> -> tensor<4x!tt.ptr<i32>, #ttg.slice<{dim = 1, parent = #blocked1}>>
-    // CHECK: ttg.convert_layout
     %3 = tt.expand_dims %1 {axis = 1 : i32} : tensor<4xi64, #ttg.slice<{dim = 1, parent = #blocked1}>> -> tensor<4x1xi64, #blocked1>
     %4 = tt.addptr %2, %1 : tensor<4x!tt.ptr<i32>, #ttg.slice<{dim = 1, parent = #blocked1}>>, tensor<4xi64, #ttg.slice<{dim = 1, parent = #blocked1}>>
     %5 = tt.load %4 : tensor<4x!tt.ptr<i32>, #ttg.slice<{dim = 1, parent = #blocked1}>>
@@ -3033,14 +3033,93 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %7 = arith.extsi %6 : tensor<4x1xi32, #blocked1> to tensor<4x1xi64, #blocked1>
     %8 = arith.addi %3, %7 : tensor<4x1xi64, #blocked1>
     // CHECK: scf.for
-    // CHECK-NOT: ttg.convert_layout
     %9:2 = scf.for %arg2 = %c0_i32 to %c4_i32 step %c1_i32 iter_args(%arg3 = %6, %arg4 = %c1_i32) -> (tensor<4x1xi32, #blocked1>, i32)  : i32 {
       %13 = arith.addi %arg2, %arg4 : i32
       scf.yield %6, %13 : tensor<4x1xi32, #blocked1>, i32
     }
     %10 = arith.extsi %9#0 : tensor<4x1xi32, #blocked1> to tensor<4x1xi64, #blocked1>
     %11 = arith.addi %8, %10 : tensor<4x1xi64, #blocked1>
+    // CHECK: ttg.convert_layout
     %12 = ttg.convert_layout %11 : tensor<4x1xi64, #blocked1> -> tensor<4x1xi64, #blocked>
     tt.return %12, %9#1 : tensor<4x1xi64, #blocked>, i32
+  }
+}
+
+// -----
+
+// COM: Verify that hoistConvertOnTopOfExtOrBroadcast does not hoist convert_layout
+// COM: when a slice value (sitofp) has an external user (divf). The expand_dims
+// COM: keeps byte count equal, so isRematBeneficial must still be checked to detect
+// COM: the external use and block the hoist.
+// CHECK-LABEL: @no_hoist_convert_sitofp_external_user
+// CHECK: arith.sitofp
+// CHECK: arith.divf
+// CHECK: ttg.convert_layout
+// CHECK: tt.store
+// CHECK: ttg.barrier
+// CHECK: tt.store
+// CHECK: tt.return
+#blocked_nll = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 2], order = [1, 0]}>
+#blocked1_nll = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [2, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32, ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, ttig.support_bfloat16_arithmetic, ttig.support_bfloat16_conversion, ttig.support_predicated_io, ttig.support_subgroup_matrix_multiply_accumulate, ttig.target_arch = "spir64"} {
+  tt.func public @no_hoist_convert_sitofp_external_user(%in_out_ptr0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %in_ptr0: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %in_ptr1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %in_ptr2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %in_ptr3: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %out_ptr1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %r0_numel: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %tmp2 = arith.constant dense<-100> : tensor<1x256xi64, #blocked_nll>
+    %cst = arith.constant dense<0> : tensor<1x256xi64, #blocked_nll>
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<1x256xf32, #blocked_nll>
+    %cst_1 = arith.constant dense<30522> : tensor<1x256xi64, #blocked_nll>
+    %tmp14 = arith.constant dense<30528> : tensor<1x256xi32, #blocked_nll>
+    %r0_index = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 0, parent = #blocked_nll}>>
+    %r0_index_2 = tt.expand_dims %r0_index {axis = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 0, parent = #blocked_nll}>> -> tensor<1x256xi32, #blocked_nll>
+    %tmp0 = tt.splat %in_ptr0 : !tt.ptr<i64> -> tensor<1x256x!tt.ptr<i64>, #blocked_nll>
+    %tmp0_3 = tt.addptr %tmp0, %r0_index_2 : tensor<1x256x!tt.ptr<i64>, #blocked_nll>, tensor<1x256xi32, #blocked_nll>
+    %tmp0_4 = tt.load %tmp0_3 {ttig.block_io = "row_major"} : tensor<1x256x!tt.ptr<i64>, #blocked_nll>
+    %tmp15 = tt.splat %in_ptr2 : !tt.ptr<f32> -> tensor<1x256x!tt.ptr<f32>, #blocked_nll>
+    %tmp15_5 = tt.addptr %tmp15, %r0_index_2 : tensor<1x256x!tt.ptr<f32>, #blocked_nll>, tensor<1x256xi32, #blocked_nll>
+    %tmp15_6 = tt.load %tmp15_5 {ttig.block_io = "row_major"} : tensor<1x256x!tt.ptr<f32>, #blocked_nll>
+    %tmp17 = tt.splat %in_ptr3 : !tt.ptr<f32> -> tensor<1x256x!tt.ptr<f32>, #blocked_nll>
+    %tmp17_7 = tt.addptr %tmp17, %r0_index_2 : tensor<1x256x!tt.ptr<f32>, #blocked_nll>, tensor<1x256xi32, #blocked_nll>
+    %tmp17_8 = tt.load %tmp17_7 {ttig.block_io = "row_major"} : tensor<1x256x!tt.ptr<f32>, #blocked_nll>
+    %tmp2_9 = arith.cmpi ne, %tmp0_4, %tmp2 : tensor<1x256xi64, #blocked_nll>
+    %tmp3 = arith.extui %tmp2_9 : tensor<1x256xi1, #blocked_nll> to tensor<1x256xi64, #blocked_nll>
+    %tmp6 = "tt.reduce"(%tmp3) <{axis = 1 : i32}> ({
+    ^bb0(%tmp6_18: i64, %tmp6_19: i64):
+      %tmp6_20 = arith.addi %tmp6_18, %tmp6_19 : i64
+      tt.reduce.return %tmp6_20 : i64
+    }) : (tensor<1x256xi64, #blocked_nll>) -> tensor<1xi64, #ttg.slice<{dim = 1, parent = #blocked_nll}>>
+    %tmp6_10 = tt.expand_dims %tmp6 {axis = 1 : i32} : tensor<1xi64, #ttg.slice<{dim = 1, parent = #blocked_nll}>> -> tensor<1x1xi64, #blocked_nll>
+    %tmp8 = arith.select %tmp2_9, %tmp0_4, %cst : tensor<1x256xi1, #blocked_nll>, tensor<1x256xi64, #blocked_nll>
+    %tmp10 = arith.addi %tmp8, %cst_1 : tensor<1x256xi64, #blocked_nll>
+    %tmp11 = arith.cmpi slt, %tmp8, %cst : tensor<1x256xi64, #blocked_nll>
+    %tmp12 = arith.select %tmp11, %tmp10, %tmp8 : tensor<1x256xi1, #blocked_nll>, tensor<1x256xi64, #blocked_nll>
+    %0 = arith.cmpi sge, %tmp12, %cst : tensor<1x256xi64, #blocked_nll>
+    %1 = arith.cmpi slt, %tmp12, %cst_1 : tensor<1x256xi64, #blocked_nll>
+    %2 = arith.andi %0, %1 : tensor<1x256xi1, #blocked_nll>
+    tt.assert %2, "index out of bounds: 0 <= tmp12 < 30522" : tensor<1x256xi1, #blocked_nll>
+    %tmp14_11 = arith.muli %r0_index_2, %tmp14 : tensor<1x256xi32, #blocked_nll>
+    %tmp14_12 = arith.extsi %tmp14_11 : tensor<1x256xi32, #blocked_nll> to tensor<1x256xi64, #blocked_nll>
+    %tmp14_13 = arith.addi %tmp12, %tmp14_12 : tensor<1x256xi64, #blocked_nll>
+    %tmp14_14 = tt.splat %in_ptr1 : !tt.ptr<f32> -> tensor<1x256x!tt.ptr<f32>, #blocked_nll>
+    %tmp14_15 = tt.addptr %tmp14_14, %tmp14_13 : tensor<1x256x!tt.ptr<f32>, #blocked_nll>, tensor<1x256xi64, #blocked_nll>
+    %tmp14_16 = tt.load %tmp14_15 evictionPolicy = evict_last : tensor<1x256x!tt.ptr<f32>, #blocked_nll>
+    %tmp16 = arith.subf %tmp14_16, %tmp15_6 : tensor<1x256xf32, #blocked_nll>
+    %tmp18 = arith.subf %tmp16, %tmp17_8 : tensor<1x256xf32, #blocked_nll>
+    %tmp19 = arith.subf %cst_0, %tmp18 : tensor<1x256xf32, #blocked_nll>
+    %tmp21 = arith.select %tmp2_9, %tmp19, %cst_0 : tensor<1x256xi1, #blocked_nll>, tensor<1x256xf32, #blocked_nll>
+    %tmp24 = "tt.reduce"(%tmp21) <{axis = 1 : i32}> ({
+    ^bb0(%tmp24_18: f32, %tmp24_19: f32):
+      %tmp24_20 = arith.addf %tmp24_18, %tmp24_19 : f32
+      tt.reduce.return %tmp24_20 : f32
+    }) : (tensor<1x256xf32, #blocked_nll>) -> tensor<1xf32, #ttg.slice<{dim = 1, parent = #blocked_nll}>>
+    %tmp24_17 = tt.expand_dims %tmp24 {axis = 1 : i32} : tensor<1xf32, #ttg.slice<{dim = 1, parent = #blocked_nll}>> -> tensor<1x1xf32, #blocked_nll>
+    %tmp25 = arith.sitofp %tmp6_10 : tensor<1x1xi64, #blocked_nll> to tensor<1x1xf32, #blocked_nll>
+    %tmp26 = arith.divf %tmp24_17, %tmp25 : tensor<1x1xf32, #blocked_nll>
+    %3 = tt.splat %out_ptr1 : !tt.ptr<f32> -> tensor<1x1x!tt.ptr<f32>, #blocked1_nll>
+    %4 = ttg.convert_layout %tmp25 : tensor<1x1xf32, #blocked_nll> -> tensor<1x1xf32, #blocked1_nll>
+    tt.store %3, %4 {ttig.block_io = "column_major"} : tensor<1x1x!tt.ptr<f32>, #blocked1_nll>
+    ttg.barrier all
+    %5 = tt.splat %in_out_ptr0 : !tt.ptr<f32> -> tensor<1x1x!tt.ptr<f32>, #blocked1_nll>
+    %6 = ttg.convert_layout %tmp26 : tensor<1x1xf32, #blocked_nll> -> tensor<1x1xf32, #blocked1_nll>
+    tt.store %5, %6 {ttig.block_io = "column_major"} : tensor<1x1x!tt.ptr<f32>, #blocked1_nll>
+    tt.return
   }
 }

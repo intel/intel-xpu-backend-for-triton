@@ -20,6 +20,7 @@ from triton_kernels_benchmark.benchmark_testing import (
 )
 from triton_kernels_benchmark.benchmark_shapes_parser import ShapePatternParser
 from triton_kernels_benchmark.configs.benchmark_config_templates import CONFIGS
+from triton_benchmarks_validate import validate_cpp_extensions
 
 
 @dataclass
@@ -85,6 +86,8 @@ class BenchmarkConfigs(MarkArgs):
             run_results.append(run_result)
             if self.reports:
                 run_result.build_report(reports_folder=self.reports, tag=self.tag)
+        if self.collect_only:
+            return
         if self.junit_report and self.reports:
             with open(os.path.join(self.reports, "triton-benchmarks.xml"), "w", encoding="utf-8") as junit_rep_file:
                 junit_rep_file.write(_junit_report(run_results))
@@ -373,7 +376,10 @@ class BenchmarkConfigs(MarkArgs):
 
 
 def main():
-    BenchmarkConfigs.from_args().run()
+    configs = BenchmarkConfigs.from_args()
+    configs.run()
+    if configs.collect_only:
+        validate_cpp_extensions()
 
 
 if __name__ == "__main__":

@@ -274,7 +274,9 @@ def is_enough_memory(x_val):
     enough_memory = required_memory < DEVICE_TOTAL_MEMORY
     if not enough_memory:
         print(f"'{x_val}' combination skipped for '{DEVICE_NAME}'; {required_memory=} but {DEVICE_TOTAL_MEMORY=}")
-    if enough_memory and not dtype.is_floating_point:
+    # Check CPU RAM only for int8 shapes that are validated on CPU (x_val order: B, M, K, N).
+    int8_validated_shapes = [[1, 1024, 1024, 1024], [1, 2048, 2048, 2048], [1, 512, 32768, 8192], [4, 32768, 128, 4096]]
+    if enough_memory and not dtype.is_floating_point and [B, M, K, N] in int8_validated_shapes:
         # a: (B, M, K, int32)
         # b: (B, K, N, int32)
         # torch.matmul result: (B, M, N) int32
@@ -299,9 +301,10 @@ X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
-        line_vals=['triton', 'onednn'],
+        # torch.matmul with int8 on XPU produces incorrect results; exclude onednn for int8.
+        line_vals=['triton'] + ([] if torch.int8 in dtypes() else ['onednn']),
         # label name for the lines
-        line_names=['Triton', 'OneDNN'],
+        line_names=['Triton'] + ([] if torch.int8 in dtypes() else ['OneDNN']),
         # line styles
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel=['GB/s', 'TFlops'],  # label name for the y-axis

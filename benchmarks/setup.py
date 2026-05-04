@@ -137,6 +137,8 @@ setup(
     entry_points={
         "console_scripts": [
             "triton-benchmarks = triton_kernels_benchmark.benchmark_utils:main",
+            "triton-benchmarks-validate = triton_benchmarks_validate:main",
         ],
     },
+    py_modules=["triton_benchmarks_validate"],
 )

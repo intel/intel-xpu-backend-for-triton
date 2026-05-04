@@ -93,6 +93,12 @@ void PrefetchOp::build(OpBuilder &builder, OperationState &state, Value ptr,
   PrefetchOp::build(builder, state, ptr, /*mask=*/{}, cache, evict, isVolatile);
 }
 
+Value PrefetchOp::getPredicateOperand() { return getMask(); }
+void PrefetchOp::setPredicateOperand(Value pred) {
+  getMaskMutable().assign(pred);
+}
+Type PrefetchOp::getPredicateOperandTypeLike() { return getPtr().getType(); }
+
 LogicalResult DescriptorPrefetchOp::verify() {
   auto descType = getDesc().getType();
   unsigned blockRank = descType.getBlockType().getRank();
@@ -112,6 +118,33 @@ LogicalResult SubGroupTransposeOp::verify() {
       srcType.getShape() != ArrayRef<int64_t>(requiredShape))
     return emitOpError("can only be used on tensors of shape <sub_group_size x "
                        "sub_group_size> with no encoding");
+  return success();
+}
+
+LogicalResult Subgroup2DBlockLoadOp::verify() {
+  auto resultType = dyn_cast<RankedTensorType>(getResult().getType());
+  if (!resultType)
+    return emitOpError("result must be a ranked tensor type");
+
+  if (resultType.getRank() < 2)
+    return emitOpError("result tensor must have rank >= 2, got ")
+           << resultType.getRank();
+
+  return success();
+}
+
+LogicalResult Subgroup2DBlockLoadFromPtrOp::verify() {
+  auto resultType = dyn_cast<RankedTensorType>(getResult().getType());
+  if (!resultType)
+    return emitOpError("result must be a ranked tensor type");
+
+  if (resultType.getRank() < 2)
+    return emitOpError("result tensor must have rank >= 2, got ")
+           << resultType.getRank();
+
+  if (getMask() && !getOther())
+    return emitOpError("'other' must be present when 'mask' is present");
+
   return success();
 }
 

@@ -42,6 +42,8 @@ unsigned allocationAnalysisScratchSizeFn(Operation *op) {
         return size == invalidSize ? defaultAllocationAnalysisScratchSizeFn(op)
                                    : size;
       })
+      .Case<ReduceOp>(
+          [](auto op) { return ReduceOpHelper(op).getScratchSizeInBytesOld(); })
       .Default([](Operation *op) {
         return defaultAllocationAnalysisScratchSizeFn(op);
       });
