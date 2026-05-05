@@ -28,42 +28,63 @@ namespace {
 //===----------------------------------------------------------------------===//
 
 /// Lattice element tracking the set of "root" SSA values that a pointer may
-/// resolve to. An empty set is the pessimistic (uninitialized / unresolved)
-/// value: treated as "unknown — MayAlias everything that is also unresolved".
+/// resolve to. Three states:
+///   - Bottom (⊥): default-constructed, uninitialized. No information yet.
+///   - Known: a concrete, possibly multi-element set of root SSA values.
+///   - Unknown (⊤): the pointer has an unresolved/opaque origin and must be
+///     assumed to MayAlias any other pointer.
 ///
-/// `join` is set union (classic may-alias lattice). A non-empty set strictly
-/// dominates the empty set.
+/// Lattice order: ⊥ ⊑ Known ⊑ ⊤. `join` is set union for two Known states;
+/// joining with ⊤ yields ⊤; ⊥ is the identity under join.
 class AliasInfo {
 public:
   AliasInfo() = default;
   explicit AliasInfo(Value root) { roots.insert(root); }
 
-  void insert(Value v) { roots.insert(v); }
+  /// Returns the top lattice element (unknown/opaque pointer origin).
+  static AliasInfo getUnknown() { return AliasInfo(/*unknown=*/true); }
+
+  void insert(Value v) {
+    assert(!unknown && "cannot insert into unknown AliasInfo");
+    roots.insert(v);
+  }
 
   const DenseSet<Value> &getRoots() const { return roots; }
-  bool empty() const { return roots.empty(); }
+  bool isUnknown() const { return unknown; }
+  bool isUninitialized() const { return !unknown && roots.empty(); }
 
-  bool operator==(const AliasInfo &other) const { return roots == other.roots; }
+  bool operator==(const AliasInfo &other) const {
+    return unknown == other.unknown && roots == other.roots;
+  }
 
-  /// Classic MayAlias join: set union.
+  /// May-alias join: ⊤ absorbs, ⊥ is identity, otherwise set union.
   static AliasInfo join(const AliasInfo &lhs, const AliasInfo &rhs) {
+    if (lhs.unknown || rhs.unknown)
+      return getUnknown();
     if (lhs == rhs)
       return lhs;
     AliasInfo ret;
     for (Value v : lhs.roots)
-      ret.insert(v);
+      ret.roots.insert(v);
     for (Value v : rhs.roots)
-      ret.insert(v);
+      ret.roots.insert(v);
     return ret;
   }
 
   void print(raw_ostream &os) const {
+    if (unknown) {
+      os << "unknown";
+      return;
+    }
     os << "roots = {";
     llvm::interleaveComma(roots, os, [&](Value v) { v.print(os); });
     os << "}";
   }
 
 private:
+  explicit AliasInfo(bool unknown) : unknown(unknown) {}
+
+  bool unknown = false;
   DenseSet<Value> roots;
 };
 
@@ -83,13 +104,22 @@ public:
   using dataflow::SparseForwardDataFlowAnalysis<
       dataflow::Lattice<AliasInfo>>::getLatticeElement;
 
-  /// Seeds the lattice for an entry state. When the anchor is a pointer-typed
-  /// entry-block function argument, seed it with itself as its own root. All
-  /// other entry states get the pessimistic empty set.
+  /// Seeds the lattice for an entry state. Pointer-typed entry-block function
+  /// arguments seed with themselves (known root). Any other pointer-typed
+  /// anchor with no defining op in this analysis is seeded as Unknown (⊤).
+  /// Non-pointer anchors get Bottom (⊥); they are irrelevant to the alias
+  /// question but kept monotone.
   void setToEntryState(dataflow::Lattice<AliasInfo> *lattice) override {
     Value anchor = lattice->getAnchor();
-    if (isPointerLike(anchor.getType()) && isEntryBlockFuncArg(anchor)) {
-      propagateIfChanged(lattice, lattice->join(AliasInfo(anchor)));
+    if (isPointerLike(anchor.getType())) {
+      if (isEntryBlockFuncArg(anchor)) {
+        propagateIfChanged(lattice, lattice->join(AliasInfo(anchor)));
+        return;
+      }
+      // Pointer-typed anchor with unresolved origin (e.g., a block argument
+      // not handled by the framework, or a value outside this analysis's
+      // purview). Must be treated as MayAlias anything.
+      propagateIfChanged(lattice, lattice->join(AliasInfo::getUnknown()));
       return;
     }
     propagateIfChanged(lattice, lattice->join(AliasInfo()));
@@ -114,11 +144,15 @@ public:
       return success();
     }
 
-    // Any other op: pointer-typed results get the pessimistic empty set
-    // (unresolved / opaque producer). Non-pointer results are irrelevant to
-    // the alias question; we still push the pessimistic state to keep the
-    // lattice monotone.
-    setAllToEntryStates(results);
+    // Any other op: pointer-typed results come from an opaque producer
+    // (e.g., arith.select between two pointers) and must be treated as
+    // Unknown (⊤) — MayAlias anything. Non-pointer results stay at Bottom.
+    for (auto *result : results) {
+      if (isPointerLike(result->getAnchor().getType()))
+        propagateIfChanged(result, result->join(AliasInfo::getUnknown()));
+      else
+        propagateIfChanged(result, result->join(AliasInfo()));
+    }
     return success();
   }
 
@@ -181,31 +215,6 @@ bool isTrackedMemOp(Operation *op) {
              tt::DescriptorReduceOp>(op);
 }
 
-/// Returns a reference to the root set for `ptr`, or a static empty set if
-/// `ptr` is not in the map.
-const DenseSet<Value> &getOrEmpty(const DenseMap<Value, DenseSet<Value>> &map,
-                                  Value ptr) {
-  static const DenseSet<Value> empty;
-  auto it = map.find(ptr);
-  return it != map.end() ? it->second : empty;
-}
-
-/// Two pointer root sets MayAlias iff:
-///   - Both are empty (both opaque — unknown origin, conservatively MayAlias).
-///   - Both are non-empty and their root sets intersect.
-/// One empty, one non-empty: the non-empty pointer has a known distinct origin,
-/// so we treat it as NoAlias vs. the opaque pointer.
-static bool mayAlias(const DenseSet<Value> &a, const DenseSet<Value> &b) {
-  if (a.empty() && b.empty())
-    return true;
-  if (a.empty() || b.empty())
-    return false;
-  for (const Value &v : a)
-    if (b.count(v))
-      return true;
-  return false;
-}
-
 } // anonymous namespace
 
 //===----------------------------------------------------------------------===//
@@ -238,13 +247,22 @@ AliasReuseAnalysis::AliasReuseAnalysis(tt::FuncOp func) {
     if (pointerRoots.contains(ptr))
       return;
     const auto *lattice = analysis->getLatticeElement(ptr);
-    DenseSet<Value> roots;
-    if (lattice) {
+    RootSnapshot snap;
+    if (!lattice) {
+      // No lattice element computed — conservatively Unknown.
+      snap.unknown = true;
+    } else {
       const AliasInfo &info = lattice->getValue();
-      for (Value r : info.getRoots())
-        roots.insert(r);
+      if (info.isUnknown() || info.isUninitialized()) {
+        // Uninitialized (bottom) also treated as Unknown: the solver never
+        // resolved this pointer, so we cannot prove NoAlias.
+        snap.unknown = true;
+      } else {
+        for (Value r : info.getRoots())
+          snap.roots.insert(r);
+      }
     }
-    pointerRoots.try_emplace(ptr, std::move(roots));
+    pointerRoots.try_emplace(ptr, std::move(snap));
   };
   for (Value ptr : memOpPtrs)
     snapshotRoots(ptr);
@@ -269,18 +287,31 @@ AliasReuseAnalysis::getAliasingMemOps(Operation *queryOp) const {
     return peers;
   }
 
-  const DenseSet<Value> &qRoots = getOrEmpty(pointerRoots, qPtr);
-
   for (auto [mPtr, mOp] : llvm::zip(memOpPtrs, memOps)) {
     if (mOp == queryOp)
       continue;
-    const DenseSet<Value> &mRoots = getOrEmpty(pointerRoots, mPtr);
-    if (mayAlias(qRoots, mRoots))
+    if (mayAlias(qPtr, mPtr))
       peers.push_back(mOp);
   }
 
   LDBG("getAliasingMemOps(" << *queryOp << "): " << peers.size() << " peer(s)");
   return peers;
+}
+
+bool AliasReuseAnalysis::mayAlias(Value a, Value b) const {
+  auto itA = pointerRoots.find(a);
+  auto itB = pointerRoots.find(b);
+  // A pointer with no entry is treated as Unknown (it was never seeded).
+  bool aUnknown = itA == pointerRoots.end() || itA->second.unknown;
+  bool bUnknown = itB == pointerRoots.end() || itB->second.unknown;
+  if (aUnknown || bUnknown)
+    return true;
+  const DenseSet<Value> &ra = itA->second.roots;
+  const DenseSet<Value> &rb = itB->second.roots;
+  for (const Value &v : ra)
+    if (rb.count(v))
+      return true;
+  return false;
 }
 
 ArrayRef<Operation *>

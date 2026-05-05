@@ -304,6 +304,61 @@ TEST_F(AliasReuseAnalysisTest, AtomicResolvedDistinctFromLoad) {
   EXPECT_THAT(analysis.getAliasingMemOps(load), ::testing::IsEmpty());
 }
 
+TEST_F(AliasReuseAnalysisTest, OpaquePointerAliasesResolvedPointer) {
+  // An opaque pointer (produced by an op the analysis doesn't model, e.g.
+  // arith.select) has an unresolved origin. It must conservatively MayAlias
+  // every tracked pointer — including resolved pointers derived directly
+  // from a function argument that the opaque pointer could equal at runtime.
+  auto module = createModule();
+  auto ptrType = getPtrType(builder->getI32Type());
+  auto funcOp = createFunction(module, "test_func", {ptrType, ptrType});
+
+  OpBuilder::InsertionGuard guard(*builder);
+  builder->setInsertionPointToStart(&funcOp.getBody().front());
+
+  auto loc = builder->getUnknownLoc();
+  auto arg0 = funcOp.getArgument(0);
+  auto arg1 = funcOp.getArgument(1);
+
+  // Opaque pointer: could be %arg0 or %arg1 at runtime.
+  auto i1Type = builder->getI1Type();
+  auto condition = builder->create<arith::ConstantOp>(
+      loc, i1Type, builder->getIntegerAttr(i1Type, 1));
+  auto opaquePtr = builder->create<arith::SelectOp>(loc, condition, arg0, arg1);
+
+  // Load from the opaque pointer.
+  auto opaqueLoad = builder->create<triton::LoadOp>(
+      loc, opaquePtr.getResult(), triton::CacheModifier::NONE,
+      triton::EvictionPolicy::NORMAL, false);
+
+  // Load from resolved %arg0 (which the opaque pointer may equal).
+  auto resolvedLoadA =
+      builder->create<triton::LoadOp>(loc, arg0, triton::CacheModifier::NONE,
+                                      triton::EvictionPolicy::NORMAL, false);
+  // Load from resolved %arg1 (same reasoning).
+  auto resolvedLoadB =
+      builder->create<triton::LoadOp>(loc, arg1, triton::CacheModifier::NONE,
+                                      triton::EvictionPolicy::NORMAL, false);
+
+  builder->create<triton::ReturnOp>(loc, ValueRange{});
+
+  mlir::triton::intel::AliasReuseAnalysis analysis(funcOp);
+  // Opaque pointer must MayAlias both resolved pointers.
+  EXPECT_THAT(analysis.getAliasingMemOps(opaqueLoad),
+              ::testing::Contains(resolvedLoadA.getOperation()));
+  EXPECT_THAT(analysis.getAliasingMemOps(opaqueLoad),
+              ::testing::Contains(resolvedLoadB.getOperation()));
+  // And symmetrically: each resolved load must see the opaque load as a peer.
+  EXPECT_THAT(analysis.getAliasingMemOps(resolvedLoadA),
+              ::testing::Contains(opaqueLoad.getOperation()));
+  EXPECT_THAT(analysis.getAliasingMemOps(resolvedLoadB),
+              ::testing::Contains(opaqueLoad.getOperation()));
+  // Resolved-vs-resolved distinct args still NoAlias.
+  EXPECT_THAT(
+      analysis.getAliasingMemOps(resolvedLoadA),
+      ::testing::Not(::testing::Contains(resolvedLoadB.getOperation())));
+}
+
 TEST_F(AliasReuseAnalysisTest, ConvertLayoutPointerPassThrough) {
   auto module = createModule();
   auto ptrType = getPtrType(builder->getF16Type());

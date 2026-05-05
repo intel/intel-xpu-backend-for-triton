@@ -31,11 +31,15 @@ namespace mlir::triton::intel {
 /// before this analysis runs.
 ///
 /// Internally, the analysis runs MLIR's sparse forward dataflow framework to
-/// compute, for every pointer-typed SSA value, the set of "root" values
-/// (entry-block pointer arguments or unresolved opaque producers) it may
-/// resolve to. Two pointers MayAlias iff their root sets intersect. An empty
-/// root set means the pointer origin is opaque; any two opaque-pointer ops
-/// MayAlias each other.
+/// compute, for every pointer-typed SSA value, either:
+///   - a set of "root" SSA values (entry-block pointer arguments) it may
+///     resolve to, or
+///   - an "unknown" marker, meaning the origin is opaque (e.g., passes
+///     through `arith.select`, or any producer not in the passthrough set).
+///
+/// Two pointers MayAlias iff either has the unknown marker, or their root
+/// sets intersect. An unknown pointer conservatively MayAlias every tracked
+/// pointer.
 ///
 /// If the dataflow solver fails to initialize, every query conservatively
 /// returns the full set of memory-effect ops in the function (minus self).
@@ -61,15 +65,28 @@ public:
   getAliasingMemOps(triton::DescriptorLoadOp loadOp) const;
 
 private:
+  /// Returns true if the snapshots for pointers `a` and `b` may alias.
+  /// Either snapshot being `unknown` (opaque origin or missing from the map)
+  /// forces MayAlias; otherwise their root sets must intersect.
+  bool mayAlias(mlir::Value a, mlir::Value b) const;
+
   /// `true` when dataflow initialization failed — forces every query to return
   /// the full memOps list (minus self). This is a correctness fallback, not
   /// policy.
   bool pessimizeAll = false;
 
-  /// Maps a pointer-typed Value to the set of root values it may resolve to.
-  /// An empty set means "unresolved/opaque" — such pointers MayAlias any other
-  /// pointer whose root set is also empty.
-  llvm::DenseMap<mlir::Value, llvm::DenseSet<mlir::Value>> pointerRoots;
+  /// Snapshot of the dataflow lattice element for a tracked pointer.
+  struct RootSnapshot {
+    /// Set of root SSA values this pointer may resolve to. Only meaningful
+    /// when `unknown == false`.
+    llvm::DenseSet<mlir::Value> roots;
+    /// If true, this pointer has opaque/unresolved origin and must be
+    /// treated as MayAlias-everything.
+    bool unknown = false;
+  };
+
+  /// Maps a pointer-typed Value to its lattice snapshot.
+  llvm::DenseMap<mlir::Value, RootSnapshot> pointerRoots;
 
   /// The pointer operand of every tracked memory-effect op in the function.
   /// Parallel to `memOps`.
