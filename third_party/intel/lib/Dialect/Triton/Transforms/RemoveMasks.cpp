@@ -312,7 +312,13 @@ public:
 
     auto cmpOp = cast<arith::CmpIOp>(finalVal.getDefiningOp());
     arith::CmpIPredicate pred = cmpOp.getPredicate();
-    if (!isSupportedBoundPredicate(pred))
+    // The canonical-form recognition and the versioning condition generated
+    // below (RemSIOp + sgt, threshold `UB == ((N - END) / END) + 1`, and
+    // DivSIOp match for the loop upper bound) assume strict signed `<`.
+    // Accepting sle/ult/ule here would silently generate off-by-one
+    // versioning conditions against a DivSIOp-folded upper bound and unsafely
+    // drop the mask in the "then" region.
+    if (pred != arith::CmpIPredicate::slt)
       return false;
 
     Operation *lhs = tt::intel::getFinalValue(cmpOp.getLhs()).getDefiningOp();
