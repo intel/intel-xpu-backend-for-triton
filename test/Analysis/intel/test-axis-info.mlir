@@ -575,7 +575,7 @@ tt.func @for_if_for(%i1: i1, %arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %
 
 // CHECK-LABEL: @permute_2d
 tt.func @permute_2d(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}) {
-  // CHECK: contiguity = [1, 1], divisibility = [1, 1], constancy = [128, 128], constant_value = 1
+  // CHECK: contiguity = [1, 1], divisibility = [1, 1], constancy = [128, 128], constant_value = -1
   %cst = arith.constant dense<true> : tensor<128x128xi1>
   // CHECK-NEXT: contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
   %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
