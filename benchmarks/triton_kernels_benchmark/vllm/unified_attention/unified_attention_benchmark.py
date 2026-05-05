@@ -167,6 +167,7 @@ def is_enough_memory(x_val, safety_factor=0.80):
                          kv_repeat_mem + attn_mem + softmax_mem + empty_mask_mem + mask_mem + sliding_window_mask_mem)
 
     ref_phase_memory = query_mem + kv_cache_mem + bt_mem + ref_memory
+    # Double-counted: output and expected_output both live during assert_close.
     triton_phase_memory = triton_memory + output_mem
     total_memory = max(ref_phase_memory, triton_phase_memory)
 
@@ -305,30 +306,8 @@ def get_unified_attention_benchmark(
         max_num_blocks_per_seq = (max_kv_len + block_size - 1) // block_size
         block_tables = torch.randint(0, num_blocks, (num_seqs, max_num_blocks_per_seq), dtype=torch.int32)
 
-        if provider == 'pytorch':
-
-            def torch_fn():
-                return ref_paged_attn(
-                    query=query,
-                    key_cache=key_cache,
-                    value_cache=value_cache,
-                    query_lens=query_lens,
-                    kv_lens=kv_lens,
-                    block_tables=block_tables,
-                    scale=scale,
-                    sliding_window=sliding_window,
-                    soft_cap=soft_cap,
-                )
-
-            _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
-                torch_fn,
-                n_warmup=n_warmup,
-                n_repeat=10,
-                quantiles=quantiles,
-            )
-
-        elif provider.startswith('triton'):
-            expected_output = ref_paged_attn(
+        def torch_fn():
+            return ref_paged_attn(
                 query=query,
                 key_cache=key_cache,
                 value_cache=value_cache,
@@ -339,6 +318,17 @@ def get_unified_attention_benchmark(
                 sliding_window=sliding_window,
                 soft_cap=soft_cap,
             )
+
+        if provider == 'pytorch':
+            _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
+                torch_fn,
+                n_warmup=n_warmup,
+                n_repeat=10,
+                quantiles=quantiles,
+            )
+
+        elif provider.startswith('triton'):
+            expected_output = torch_fn()
 
             cu_query_lens = torch.tensor([0] + query_lens, dtype=torch.int32).cumsum(dim=0, dtype=torch.int32)
             kv_lens_tensor = torch.tensor(kv_lens, dtype=torch.int32)
