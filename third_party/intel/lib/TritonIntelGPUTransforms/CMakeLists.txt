@@ -5,6 +5,7 @@ add_triton_library(TritonIntelGPUTransforms
   DecomposeScaledBlocked.cpp
   FixupDescriptorEncoding.cpp
   HoistLayoutConversions.cpp
+  LowerTo2DBlockLoad.cpp
   MaterializeBlockPointer.cpp
   OptimizeDotOperands.cpp
   OptimizeReductionLocality.cpp

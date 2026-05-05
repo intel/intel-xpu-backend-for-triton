@@ -7,7 +7,7 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/Transforms/ArithTypeConversion.h"
 #include "triton/Dialect/Triton/Transforms/FunctionTypeConversion.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Tools/Sys/GetEnv.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/Transforms/FuncConversions.h"

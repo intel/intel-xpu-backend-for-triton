@@ -5,3 +5,4 @@ python/test/gluon/test_lowerings.py::test_reshape_generic_linear[r".*"]@regexp
 python/test/gluon/test_lowerings.py::test_permute_generic_linear[r".*"]@regexp
 python/test/gluon/test_lowerings.py::test_split_join_generic_linear[r".*"]@regexp
 python/test/gluon/test_lowerings.py::test_broadcast_generic_linear[r".*"]@regexp
+python/test/gluon/test_lowerings.py::test_local_load_store_generic_linear[r".*"]@regexp

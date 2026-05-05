@@ -14,7 +14,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Operation.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include <triton/Tools/Sys/GetEnv.hpp>
+#include <triton/Tools/Sys/GetEnv.h>
 
 namespace mlir::triton::gpu::intel {
 

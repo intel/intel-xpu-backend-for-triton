@@ -13,3 +13,6 @@ tests/v1/spec_decode/test_max_len.py::test_eagle_max_len
 # Skip tests that query the available free memory
 tests/v1/spec_decode/test_max_len.py::test_ngram_max_len
 tests/v1/spec_decode/test_speculators_eagle3.py::test_eagle3_speculators_model
+
+# mrv2 limitation
+tests/v1/spec_decode/test_eagle.py::test_set_inputs_first_pass_dflash

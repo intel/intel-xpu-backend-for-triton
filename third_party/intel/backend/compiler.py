@@ -391,6 +391,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
 
+        intel.passes.ttgpuir.add_lower_to_2d_block_load(pm)
         passes.convert.add_scf_to_cf(pm)
         passes.gluon.add_inliner(pm)
         passes.convert.add_index_to_llvmir(pm)

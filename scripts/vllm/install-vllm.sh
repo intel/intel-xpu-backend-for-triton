@@ -56,7 +56,7 @@ done
 
 if [ "$VENV" = true ]; then
   echo "**** Activating virtual environment ****"
-  if [[ $OSTYPE = msys ]]; then
+  if [[ $OSTYPE = msys || $OSTYPE = cygwin ]]; then
     source .venv/Scripts/activate
   else
     source .venv/bin/activate
@@ -191,7 +191,7 @@ function install_vllm {
   # Be precise: match torch/torchaudio/torchvision/triton but NOT tritonclient
   # Also remove xgrammar which depends on triton (install it separately later)
   sed -i '/^torch[=>= ]/d; /^torchaudio/d; /^torchvision/d; /^triton[=>= ]/d; /^xgrammar/d; /extra-index-url.*pytorch/d' requirements/xpu.txt requirements/common.txt
-  sed -i '/^torch[=>= ]/d; /^torchaudio/d; /^torchvision/d; /^triton[=>= ]/d; /^xgrammar/d' requirements/test.in
+  sed -i '/^torch[=>= ]/d; /^torchaudio/d; /^torchvision/d; /^triton[=>= ]/d; /^xgrammar/d' requirements/test/xpu.txt
 
   # Create constraints file to prevent pip from replacing pre-installed torch/triton
   # with a PyPI version. common.txt -> transformers -> torch is the main culprit.
