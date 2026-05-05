@@ -537,4 +537,75 @@ TEST_F(AliasReuseAnalysisTest, DescriptorLoadAndRawLoadSameBase) {
               ::testing::Contains(rawload.getOperation()));
 }
 
+TEST_F(AliasReuseAnalysisTest, DescriptorLoadThroughSCFForIterArg) {
+  // When a descriptor flows through scf.for iter_args, the
+  // tt.descriptor_load's getDesc() is a block argument, not a direct
+  // MakeTensorDescOp result. findDefiningOpOfType<> must trace through the
+  // iter_arg back to the original descriptor so the op is not dropped and
+  // its base pointer is resolved correctly.
+  auto module = createModule();
+  auto ptrType = getPtrType(builder->getF32Type());
+  auto funcOp = createFunction(module, "test_func", {ptrType});
+
+  OpBuilder::InsertionGuard guard(*builder);
+  builder->setInsertionPointToStart(&funcOp.getBody().front());
+
+  auto loc = builder->getUnknownLoc();
+  auto base = funcOp.getArgument(0);
+
+  auto i32Type = builder->getI32Type();
+  auto i64Type = builder->getI64Type();
+  auto c128 = builder->create<arith::ConstantOp>(
+      loc, i32Type, builder->getI32IntegerAttr(128));
+  auto c64 = builder->create<arith::ConstantOp>(loc, i32Type,
+                                                builder->getI32IntegerAttr(64));
+  auto c64_i64 = builder->create<arith::ConstantOp>(
+      loc, i64Type, builder->getI64IntegerAttr(64));
+  auto c1 = builder->create<arith::ConstantOp>(loc, i64Type,
+                                               builder->getI64IntegerAttr(1));
+  auto idx0 = builder->create<arith::ConstantOp>(loc, i32Type,
+                                                 builder->getI32IntegerAttr(0));
+  auto idx1 = builder->create<arith::ConstantOp>(loc, i32Type,
+                                                 builder->getI32IntegerAttr(0));
+
+  auto tensorType = RankedTensorType::get({128, 64}, builder->getF32Type());
+  auto descType = triton::TensorDescType::get({128, 64}, builder->getF32Type(),
+                                              Attribute{});
+  auto desc = builder->create<triton::MakeTensorDescOp>(
+      loc, descType, base, ValueRange{c128, c64}, ValueRange{c64_i64, c1});
+
+  auto lb = builder->create<arith::ConstantOp>(loc, i32Type,
+                                               builder->getI32IntegerAttr(0));
+  auto ub = builder->create<arith::ConstantOp>(loc, i32Type,
+                                               builder->getI32IntegerAttr(10));
+  auto step = builder->create<arith::ConstantOp>(loc, i32Type,
+                                                 builder->getI32IntegerAttr(1));
+  auto forOp = builder->create<scf::ForOp>(loc, lb, ub, step, ValueRange{desc});
+
+  triton::DescriptorLoadOp dload;
+  {
+    OpBuilder::InsertionGuard loopGuard(*builder);
+    builder->setInsertionPointToStart(forOp.getBody());
+    auto iterDesc = forOp.getRegionIterArg(0);
+    dload = builder->create<triton::DescriptorLoadOp>(loc, tensorType, iterDesc,
+                                                      ValueRange{idx0, idx1});
+    builder->create<scf::YieldOp>(loc, ValueRange{iterDesc});
+  }
+
+  builder->setInsertionPointAfter(forOp);
+  auto rawload =
+      builder->create<triton::LoadOp>(loc, base, triton::CacheModifier::NONE,
+                                      triton::EvictionPolicy::NORMAL, false);
+
+  builder->create<triton::ReturnOp>(loc, ValueRange{});
+
+  mlir::triton::intel::AliasReuseAnalysis analysis(funcOp);
+  // The descriptor_load inside the loop must resolve through the iter_arg
+  // to `base` and alias the raw load from `base`.
+  EXPECT_THAT(analysis.getAliasingMemOps(dload),
+              ::testing::Contains(rawload.getOperation()));
+  EXPECT_THAT(analysis.getAliasingMemOps(rawload),
+              ::testing::Contains(dload.getOperation()));
+}
+
 } // namespace

@@ -1,5 +1,6 @@
 #include "intel/include/Analysis/AliasReuseAnalysis.h"
 
+#include "intel/include/Utils/Utility.h"
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Operation.h"
@@ -188,8 +189,15 @@ private:
 //===----------------------------------------------------------------------===//
 
 /// Returns the pointer operand for a tracked memory-effect op.
-/// For descriptor ops, resolves the base pointer via the defining
-/// tt.make_tensor_descriptor op. Returns null Value for anything else.
+/// For descriptor ops, traces the base pointer through SCF iter_args,
+/// yields, `scf.if`, `arith.select`, and unrealized casts via
+/// `findDefiningOpOfType<tt::MakeTensorDescOp>`. When that trace fails
+/// (e.g., the descriptor comes from a call, a region with mismatched
+/// branches, or any unmodeled producer), returns the descriptor Value
+/// itself. That value is never seeded by the dataflow, so the snapshot
+/// comes back as uninitialized and the op is conservatively treated as
+/// Unknown — MayAlias everything — rather than being silently dropped.
+/// Returns a null Value for anything else.
 Value getMemOpPointer(Operation *op) {
   return TypeSwitch<Operation *, Value>(op)
       .Case<tt::LoadOp>([](auto op) { return op.getPtr(); })
@@ -200,9 +208,12 @@ Value getMemOpPointer(Operation *op) {
             tt::DescriptorScatterOp, tt::DescriptorReduceOp>(
           [](auto op) -> Value {
             Value desc = op.getDesc();
-            if (auto makeDesc = desc.getDefiningOp<tt::MakeTensorDescOp>())
-              return makeDesc.getBase();
-            return Value();
+            if (std::optional<tt::MakeTensorDescOp> makeDesc =
+                    findDefiningOpOfType<tt::MakeTensorDescOp>(desc))
+              return makeDesc->getBase();
+            // Couldn't resolve to a MakeTensorDescOp — keep the op alive
+            // by returning the descriptor itself as an opaque sentinel.
+            return desc;
           })
       .Default([](auto) { return Value(); });
 }
