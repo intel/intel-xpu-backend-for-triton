@@ -13,6 +13,11 @@
 #   DEBUG_BENCH=1 - run only one configuration (faster for sanity checking)
 set -e
 
+# Workaround for #6759: BMG OOM after Agama 1222 -> 1249 driver bump
+# (run 24712647449: attempt 1 passed on 1222, attempt 2 OOM'd on 1249,
+# same SHA & PyTorch wheel). Remove once the upstream Agama fix lands.
+export PYTORCH_ALLOC_CONF="${PYTORCH_ALLOC_CONF:-expandable_segments:True}"
+
 BENCHMARK_FOLDER="$1"
 shift
 
