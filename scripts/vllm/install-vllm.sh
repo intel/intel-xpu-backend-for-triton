@@ -56,7 +56,7 @@ done
 
 if [ "$VENV" = true ]; then
   echo "**** Activating virtual environment ****"
-  if [[ $OSTYPE = msys ]]; then
+  if [[ $OSTYPE = msys || $OSTYPE = cygwin ]]; then
     source .venv/Scripts/activate
   else
     source .venv/bin/activate

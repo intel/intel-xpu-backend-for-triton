@@ -19,7 +19,7 @@ for arg in "$@"; do
 done
 
 function libigc_version {
-    if [[ $OSTYPE = msys ]]; then
+    if [[ $OSTYPE = msys || $OSTYPE = cygwin ]]; then
         pwsh -Command '
             $igc = @(Get-Process -Name dwm -Module | Where-Object ModuleName -eq 'igc64.dll').FileVersionInfo.FileVersion | Sort-Object -Unique
             if ($igc.Count -gt 1) {
@@ -43,7 +43,7 @@ function libigc_version {
 }
 
 function level_zero_version {
-    if [[ $OSTYPE = msys ]]; then
+    if [[ $OSTYPE = msys || $OSTYPE = cygwin ]]; then
         powershell -Command "(Get-Item C:\Windows\system32\ze_loader.dll).VersionInfo.ProductVersion"
         return
     fi
@@ -57,7 +57,7 @@ function level_zero_version {
 }
 
 function agama_version {
-    if [[ $OSTYPE = msys ]]; then
+    if [[ $OSTYPE = msys || $OSTYPE = cygwin ]]; then
         powershell -Command '(Get-WmiObject Win32_VideoController | where {$_.VideoProcessor -like "*Intel*" }).DriverVersion'
         return
     fi
