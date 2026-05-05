@@ -127,14 +127,10 @@ public:
     for (auto op : descLoadOps)
       convertDescriptorLoadOp(op);
 
-    // Tensor-of-pointer loads are gated behind an env var until the LLVM
-    // lowering for ttig.2d_block_load_from_ptr is landed.
-    if (tt::tools::getBoolEnv("TRITON_INTEL_LOWER_PTR_LOAD_TO_2D_BLOCK")) {
-      SmallVector<tt::LoadOp> loadOps;
-      mod.walk([&](tt::LoadOp op) { loadOps.push_back(op); });
-      for (auto op : loadOps)
-        convertLoadOp(op, strideAnalysis);
-    }
+    SmallVector<tt::LoadOp> loadOps;
+    mod.walk([&](tt::LoadOp op) { loadOps.push_back(op); });
+    for (auto op : loadOps)
+      convertLoadOp(op, strideAnalysis);
   }
 
 private:
