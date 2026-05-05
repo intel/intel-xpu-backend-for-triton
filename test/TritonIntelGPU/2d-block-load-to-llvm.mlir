@@ -96,6 +96,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1x32x!tt.ptr<f16>, #dot0>
     %3 = tt.addptr %2, %1 : tensor<1x32x!tt.ptr<f16>, #dot0>, tensor<1x32xi32, #dot0>
     %4 = tt.broadcast %3 : tensor<1x32x!tt.ptr<f16>, #dot0> -> tensor<64x32x!tt.ptr<f16>, #dot0>
+    // CHECK: llvm.select {{.*}} : i1, i32
     // CHECK: triton_gen.2Dblockload
     // CHECK: llvm.select
     %5 = ttig.2d_block_load_from_ptr %4, %true, %cst {row_major} {base_height = 8 : i32, base_pitch = 64 : i32, base_width = 64 : i32} : (tensor<64x32x!tt.ptr<f16>, #dot0>, tensor<64x32xi1, #dot0>, tensor<64x32xf16, #dot0>) -> tensor<64x32xf16, #dot0>
