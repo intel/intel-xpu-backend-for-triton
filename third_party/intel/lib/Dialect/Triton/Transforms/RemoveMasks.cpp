@@ -28,8 +28,8 @@ namespace mlir::triton::intel {
 
 namespace {
 
-// Returns true if `pred` is a supported bound-check predicate (LHS is the
-// varying index, RHS is the bound).
+// Returns true if `pred` is a supported bound-check predicate in the `<` /
+// `<=` family, independent of which operand is the varying index or bound.
 static bool isSupportedBoundPredicate(arith::CmpIPredicate pred) {
   switch (pred) {
   case arith::CmpIPredicate::slt:
