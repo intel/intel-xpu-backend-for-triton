@@ -316,11 +316,14 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.ttgpuir.add_coalesce(pm)
         if properties["has_256b_load_store"]:
             intel.passes.ttgpuir.add_widen_load_store_encoding(pm)
-        intel.passes.ttgpuir.add_fixup_descriptor_encoding(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
 
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
         intel.passes.ttgpuir.add_materialize_block_pointer(pm)
+        # Must run after MaterializeBlockPointer (which sets ttig.block_io) and before
+        # the next RemoveLayoutConversions (which cleans up the convert_layout ops we
+        # insert here).
+        intel.passes.ttgpuir.add_fixup_descriptor_encoding(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_optimize_dot_operands(pm)
         intel.passes.ttgpuir.add_hoist_layout_conversions(pm, opt.grf_mode)

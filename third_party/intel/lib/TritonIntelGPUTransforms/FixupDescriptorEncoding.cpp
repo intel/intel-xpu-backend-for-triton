@@ -15,6 +15,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/Support/Debug.h"
 
 namespace mlir::triton::gpu::intel {
@@ -40,6 +41,15 @@ struct FixupDescriptorEncodingPass
   void runOnOperation() final {
     ModuleOp mod = getOperation();
 
+    // Opt-in only. Current PVC measurements show that rewriting descriptor
+    // encodings to a 2D-block-IO-compatible form and paying the resulting
+    // ttg.convert_layout cost does not beat main's vectorized scalar gather
+    // path for this workload. Keep the pass available for future revisits
+    // (e.g. when IGC or hardware changes shift the perf trade-off) behind
+    // TRITON_INTEL_FIXUP_DESCRIPTOR_ENCODING=1.
+    if (!tt::tools::getBoolEnv("TRITON_INTEL_FIXUP_DESCRIPTOR_ENCODING"))
+      return;
+
     if (!mod->hasAttr(
             ttgi::TritonIntelGPUDialect::getSupport2DBlockIOAttrName()))
       return;
@@ -54,6 +64,11 @@ struct FixupDescriptorEncodingPass
         return;
       if (!dyn_cast<ttg::BlockedEncodingAttr>(tensorType.getEncoding()))
         return;
+      // Only rewrite ops that will actually lower to 2D block IO.
+      // MaterializeBlockPointer tags exactly those ops with ttig.block_io after
+      // running all alignment/pitch/padding/DPAS-transpose checks.
+      if (!op->hasAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName()))
+        return;
       loadsToFix.push_back(op);
     });
 
@@ -63,6 +78,11 @@ struct FixupDescriptorEncodingPass
       if (!tensorType)
         return;
       if (!dyn_cast<ttg::BlockedEncodingAttr>(tensorType.getEncoding()))
+        return;
+      // Only rewrite ops that will actually lower to 2D block IO.
+      // MaterializeBlockPointer tags exactly those ops with ttig.block_io after
+      // running all alignment/pitch/padding/DPAS-transpose checks.
+      if (!op->hasAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName()))
         return;
       storesToFix.push_back(op);
     });
