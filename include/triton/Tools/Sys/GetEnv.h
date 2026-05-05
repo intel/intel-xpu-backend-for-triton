@@ -1,5 +1,5 @@
-#ifndef TRITON_TOOLS_SYS_GETENV_HPP
-#define TRITON_TOOLS_SYS_GETENV_HPP
+#ifndef TRITON_TOOLS_SYS_GETENV_H
+#define TRITON_TOOLS_SYS_GETENV_H
 
 #include <algorithm>
 #include <assert.h>
@@ -61,6 +61,7 @@ inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
     "TRITON_INTEL_PREDICATED_STORE",
     "TRITON_INTEL_REMOVELAYOUTCONVERSION_SUPPORT_FOR_LOOP",
     "TRITON_INTEL_DISABLE_DESCRIPTOR_GATHER_SCATTER_REWRITE",
+    "TRITON_INTEL_LOWER_PTR_LOAD_TO_2D_BLOCK",
     "TRITON_INTEL_ONE_MATRIX_PER_LOAD_BT",
     // clang-format on
 };
@@ -81,7 +82,7 @@ inline void assertIsRecognized(const std::string &env) {
   bool is_neutral =
       CACHE_NEUTRAL_ENV_VARS.find(env.c_str()) != CACHE_NEUTRAL_ENV_VARS.end();
   std::string errmsg = env + "is not recognized. "
-                             "Please add it to triton/tools/sys/getenv.hpp";
+                             "Please add it to triton/Tools/Sys/GetEnv.h";
   assert((is_invalidating || is_neutral) && errmsg.c_str());
 }
 
