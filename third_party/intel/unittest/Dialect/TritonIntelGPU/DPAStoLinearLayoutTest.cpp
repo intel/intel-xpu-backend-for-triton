@@ -366,13 +366,12 @@ TEST_F(DPAStoLinearLayoutTest, DPAS_OperandScaleB) {
 }
 
 TEST_F(DPAStoLinearLayoutTest, BlockScaledScaleOperandWarpBroadcast) {
-  // Preparatory audit for SpatialReuseAnalysis (see
-  // annotate-cc-p1-spatial-reuse.md): the scale-operand branch of
-  // BlockScaledDPAStoLinearLayout must produce a warp-broadcast LinearLayout
-  // (zero warp basis across all output dims). Scales are consumed by the same
-  // DPAS-backed matmul as the A/B operands and benefit from the same
-  // cross-subgroup L1 reuse; a non-zero warp basis here would force
-  // AnnotateCacheControl to keep a use-site scan as a workaround.
+  // The scale-operand branch of BlockScaledDPAStoLinearLayout must produce a
+  // warp-broadcast LinearLayout (zero warp basis across all output dims).
+  // Scales are consumed by the same DPAS-backed matmul as the A/B operands
+  // and are reused across every warp that shares K, so any non-zero warp
+  // basis would misrepresent the access pattern and block downstream analyses
+  // that rely on `sublayoutIsZero({warp}, outDims)`.
   //
   // Coverage: opIdx in {3, 4} (scale A, scale B) x MXFP8 (block 16, no
   // fp4Kpack) / MXFP4 (block 32, fp4Kpack=2) x warp sizes 16 and 32 x 2D and
@@ -417,8 +416,8 @@ TEST_F(DPAStoLinearLayoutTest, BlockScaledScaleOperandWarpBroadcast) {
        dpas({1, 2, 2}, 8, 8, 16, 4, {1, 4, 2}, 16),
        3,
        "mxfp8-3d-A"},
-      // 3D, warp size 16, MXFP4, scale B (mirrors the existing
-      // DPAS_OperandScaleA 3D case shape/dpas, flipped to opIdx=4)
+      // 3D, warp size 16, MXFP4, scale B (re-asserts the existing 3D
+      // MXFP4 opIdx=4 case in DPAS_OperandScaleA via sublayoutIsZero)
       {{16, 128, 4},
        dpas({2, 1, 2}, 8, 8, 16, 4, {1, 4, 2}, 16, std::make_optional(2u)),
        4,

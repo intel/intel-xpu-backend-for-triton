@@ -631,9 +631,9 @@ LinearLayout BlockScaledDPAStoLinearLayout(ArrayRef<int64_t> shape,
 
     // Scale operands are warp-broadcast: every warp in the workgroup accesses
     // the same scale values (the DPAS-backed matmul reuses the same scale
-    // across all warps that share K), so all warp bases are zero. This lets
-    // SpatialReuseAnalysis recognize cross-subgroup L1 reuse via a plain
-    // sublayoutIsZero({warp}, outDims) check without a use-site scan.
+    // across all warps that share K), so all warp bases are zero. Encoding
+    // this directly in the LinearLayout makes the broadcast pattern
+    // discoverable via `sublayoutIsZero({warp}, outDims)`.
     tileLayout *= LinearLayout::zeros1D(warpsPerCTA[dpasKDim], kWarp,
                                         outDimNames[scaleOpKDim]);
 
