@@ -1,0 +1,2 @@
+# Hangs on b580.
+tests/kernels/attention/test_triton_unified_attention.py::test_triton_unified_attn_fp16_input_fp8_output[0-32768-None-None-16-256-num_heads2-seq_lens2]
