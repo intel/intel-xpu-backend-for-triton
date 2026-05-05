@@ -167,8 +167,10 @@ def is_enough_memory(x_val, safety_factor=0.80):
                          kv_repeat_mem + attn_mem + softmax_mem + empty_mask_mem + mask_mem + sliding_window_mask_mem)
 
     ref_phase_memory = query_mem + kv_cache_mem + bt_mem + ref_memory
-    # Double-counted: output and expected_output both live during assert_close.
-    triton_phase_memory = triton_memory + output_mem
+    # When verify is enabled, expected_output (same shape as output) is live
+    # alongside the triton output tensor during assert_close.
+    expected_output_mem = output_mem if benchmark_suite.BENCHMARKING_CONFIG["verify"] else 0
+    triton_phase_memory = triton_memory + expected_output_mem
     total_memory = max(ref_phase_memory, triton_phase_memory)
 
     threshold = TOTAL_MEMORY_BYTES * safety_factor
@@ -328,7 +330,10 @@ def get_unified_attention_benchmark(
             )
 
         elif provider.startswith('triton'):
-            expected_output = torch_fn()
+            # Only compute the reference output when verification is enabled;
+            # skipping it avoids both the compute cost and the extra memory
+            # allocation during performance-only runs (VERIFY=0).
+            expected_output = torch_fn() if benchmark_suite.BENCHMARKING_CONFIG["verify"] else None
 
             cu_query_lens = torch.tensor([0] + query_lens, dtype=torch.int32).cumsum(dim=0, dtype=torch.int32)
             kv_lens_tensor = torch.tensor(kv_lens, dtype=torch.int32)
