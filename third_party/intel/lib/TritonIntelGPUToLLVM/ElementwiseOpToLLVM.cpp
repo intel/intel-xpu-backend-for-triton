@@ -1238,14 +1238,6 @@ struct TruncFOpConversion
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    auto outElemTy = getElementType(op.getOut());
-    if (outElemTy.isBF16()) {
-      auto inElemTy = getElementType(op.getIn());
-      assert(inElemTy.isF32() && "unsupported conversion");
-      return {// Trunc uses the default rounding mode: RTNE
-              intel::convertFp32ToBf16(loc, rewriter, operands[0][0],
-                                       RoundingMode::RTNE)};
-    }
     return {LLVM::FPTruncOp::create(rewriter, loc, elemTy, operands[0][0])};
   }
 };
