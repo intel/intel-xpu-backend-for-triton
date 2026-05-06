@@ -186,6 +186,21 @@ def TTIG_SubGroupTransposeOp
 }
 
 
+def TTIG_ExtractBasePtrOp : TTIG_Op<"extract_base_ptr", [Pure]> {
+  let summary = "Extract the base pointer from a tensor descriptor";
+  let description = [{
+    Extracts the base pointer from a tensor descriptor value. This allows
+    the LowerTo2DBlockLoad pass to obtain the runtime base pointer from
+    loop-carried descriptors without statically tracing to the defining
+    MakeTensorDescOp.
+  }];
+
+  let arguments = (ins TT_TensorDescType:$desc);
+  let results = (outs TT_Ptr:$result);
+
+  let assemblyFormat = "$desc attr-dict `:` type($desc) `->` type($result)";
+}
+
 def TTIG_Subgroup2DBlockLoadOp : TTIG_Op<"2d_block_load"> {
   let summary = "2D block load from a descriptor-based surface";
   let description = [{

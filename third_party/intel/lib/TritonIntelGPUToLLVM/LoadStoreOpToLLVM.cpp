@@ -4196,6 +4196,29 @@ struct AtomicRMWOpConversion
   }
 };
 
+struct ExtractBasePtrOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::intel::ExtractBasePtrOp> {
+  using ConvertOpToLLVMPattern<
+      triton::gpu::intel::ExtractBasePtrOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::intel::ExtractBasePtrOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // The descriptor struct layout is: { shapes[rank], strides[rank], base }.
+    // The base pointer is the last element.
+    auto descType = cast<triton::TensorDescType>(op.getDesc().getType());
+    unsigned rank = descType.getBlockType().getRank();
+    unsigned basePtrIdx = 2 * rank; // after shapes and strides
+
+    Value basePtr = LLVM::ExtractValueOp::create(
+        rewriter, op.getLoc(),
+        LLVM::LLVMPointerType::get(rewriter.getContext(), 1), adaptor.getDesc(),
+        basePtrIdx);
+    rewriter.replaceOp(op, basePtr);
+    return success();
+  }
+};
+
 struct Subgroup2DBlockLoadOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<
           triton::gpu::intel::Subgroup2DBlockLoadOp>,
@@ -4767,7 +4790,8 @@ void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
                DescriptorStoreOpToBlockIOConversion>(
       typeConverter, targetInfo, axisInfoAnalysis, strideAnalysis,
       benefit.getBenefit() + 2);
-  // TTIG 2D block load (from LowerTo2DBlockLoad TTGIR pass).
+  // TTIG ops from LowerTo2DBlockLoad TTGIR pass.
+  patterns.add<ExtractBasePtrOpConversion>(typeConverter, benefit);
   patterns.add<Subgroup2DBlockLoadOpConversion,
                Subgroup2DBlockLoadFromPtrOpConversion>(
       typeConverter, targetInfo, axisInfoAnalysis, strideAnalysis, benefit);

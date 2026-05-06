@@ -144,3 +144,18 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     tt.return
   }
 }
+
+// -----
+
+// COM: Test that ttig.extract_base_ptr lowers to llvm.extractvalue from the
+// COM: descriptor struct (base pointer is the last element).
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @extract_base_ptr
+  tt.func public @extract_base_ptr(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64) {
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <64x32xf16>
+    // CHECK: llvm.extractvalue {{.*}}[4] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
+    %0 = ttig.extract_base_ptr %desc : <64x32xf16> -> <f16>
+    tt.return
+  }
+}

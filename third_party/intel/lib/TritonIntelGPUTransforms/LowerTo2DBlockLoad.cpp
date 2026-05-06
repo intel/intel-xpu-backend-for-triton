@@ -181,12 +181,13 @@ private:
     auto memLayout = memoryRowMajor ? ttgi::BlockIOMode::RowMajor
                                     : ttgi::BlockIOMode::ColumnMajor;
 
-    // Extract surface parameters from MakeTensorDescOp.
-    // The surface parameters describe the physical memory layout and are the
-    // SAME regardless of row_major/column_major. The memory_layout attribute
-    // tells the LLVM lowering to set contiguousDim, which triggers the
-    // transpose flag in the HW instruction via getBlockIOTileSize.
-    Value basePtr = makeTensorDescOp->getBase();
+    // Extract the runtime base pointer from the descriptor value. This
+    // correctly handles loop-carried descriptors where the base pointer
+    // changes per iteration (e.g., via tt.make_tensor_descriptor inside
+    // the loop with an advanced pointer).
+    Value basePtr = ttgi::ExtractBasePtrOp::create(
+        builder, loc, makeTensorDescOp->getBase().getType(), desc);
+    // Shapes and strides are loop-invariant — use from MakeTensorDescOp.
     Operation::operand_range shapes = makeTensorDescOp->getShape();
     Operation::operand_range strides = makeTensorDescOp->getStrides();
     SmallVector<Value> indices(op.getIndices().begin(), op.getIndices().end());
