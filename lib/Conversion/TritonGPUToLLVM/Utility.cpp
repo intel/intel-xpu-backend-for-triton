@@ -790,10 +790,10 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
 
   // PTX expects the address increments to be done in bytes
   // If we don't perform the computations in i8, the compiler would
-  // have to divide the computation by bitwdith / 8 and then lift this
+  // have to divide the computation by ceil(bitwdith, 8) and then lift this
   // shl, which often it's not able to do.
-  auto i8Tile =
-      LinearLayout::zeros1D(bitwidth / 8, kReg, kOffset, bitwidth / 8);
+  auto i8Tile = LinearLayout::zeros1D(ceil(bitwidth, 8), kReg, kOffset,
+                                      ceil(bitwidth, 8));
   auto i8AddrLayout = i8Tile * addrLayout;
 
   Value blockId = b.i32_val(0);
