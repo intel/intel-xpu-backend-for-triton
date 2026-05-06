@@ -172,9 +172,9 @@ TEST_F(SpatialReuseAnalysisTest, NestedSliceUnwrap) {
 }
 
 TEST_F(SpatialReuseAnalysisTest, ScalarPointerLoad) {
-  // Scalar pointer load (no tensor): generality invariant #5 -- bool
-  // wrapper returns true conservatively; axis-set entry point returns
-  // empty because there are no tensor axes to report.
+  // Scalar pointer load (no tensor): the bool wrapper returns true
+  // conservatively, while the axis-set entry point returns empty
+  // because there are no tensor axes to report.
   auto module = buildModule();
   auto funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
