@@ -35,7 +35,6 @@ TRITON_TEST_SKIPLIST_DIR="$(cd "$TRITON_TEST_SKIPLIST_DIR" && pwd)"
 pytest() {
     pytest_extra_args=(
         "--dist=worksteal"
-        "--timeout=${PYTEST_TIMEOUT:-600}"
     )
 
     if [[ -v TRITON_TEST_SUITE && $TRITON_TEST_REPORTS = true ]]; then
