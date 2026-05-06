@@ -3,7 +3,7 @@ Fused Softmax
 =============
 
 This benchmark is come from the Triton tutorial 02-fused-softmax
-To compare the performance to XeTLA kernel.
+To compare the performance of Triton and oneDNN softmax kernels.
 
 """
 
@@ -15,7 +15,7 @@ import triton.language as tl
 from triton.runtime import driver
 
 import triton_kernels_benchmark as benchmark_suite
-from triton_kernels_benchmark import xetla_kernel, onednn_kernel
+from triton_kernels_benchmark import onednn_kernel
 
 
 @torch.jit.script
@@ -111,7 +111,6 @@ def get_benchmark(providers_filter: Optional[list[str]] = None):
         "triton": "Triton",
         # "torch-native": "Torch (native)",
         # "torch-jit": # "Torch (jit)",
-        "xetla": "XeTLA",
         "onednn": "oneDNN",
     }
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
@@ -123,13 +122,13 @@ def get_benchmark(providers_filter: Optional[list[str]] = None):
             line_arg="provider",  # argument name whose value corresponds to a different line in the plot
             line_vals=list(providers.keys()),  # possible values for `line_arg``
             line_names=list(providers.values()),  # label name for the lines
-            styles=[("blue", "-"), ("green", "-"), ("green", "--"), ("black", ":")],  # line styles
+            styles=[("blue", "-"), ("green", "-")],  # line styles
             ylabel=["GB/s", "TFlops"],  # label name for the y-axis
             plot_name="softmax-performance",  # name for the plot. Used also as a file name for saving the plot.
             args={"M": 4096},  # values for function arguments not in `x_names` and `y_name`
         ))
     def benchmark(M, N, provider):
-        # Maximum across torch-native=10, triton=800, torch-jit=10, xetla=100, onednn=800
+        # Maximum across torch-native=10, triton=800, torch-jit=10, onednn=800
         # For onednn more warmup very slowly makes performance worse
         do_bench = benchmark_suite.get_do_bench(n_warmup=800, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
         x = torch.randn(M, N, device="xpu", dtype=torch.bfloat16)
@@ -144,15 +143,6 @@ def get_benchmark(providers_filter: Optional[list[str]] = None):
 
         elif provider == "torch-jit":
             _, min_ms, max_ms, mean, cv = do_bench(lambda: naive_softmax(x))
-
-        elif provider == "xetla":
-            name = f"softmax_shape_{M}_{N}"
-            func = getattr(xetla_kernel, name)
-            out = torch.empty_like(x, device="xpu")
-            xetla_fn = lambda: func(x, out, 0)
-            torch_fn = lambda: torch.softmax(x, axis=-1)
-            # benchmark_suite.assert_close(xetla_fn, torch_fn, err_msg="xetla to torch")
-            _, min_ms, max_ms, mean, cv = do_bench(xetla_fn)
 
         elif provider == "onednn":
             name = "onednn_softmax"
