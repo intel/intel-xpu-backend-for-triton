@@ -1,4 +1,6 @@
 #include "intel/include/Analysis/TemporalReuseAnalysis.h"
+#include "intel/include/Analysis/AxisInfoExt.h"
+#include "intel/include/Analysis/StrideInfo.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -180,7 +182,9 @@ TEST_F(TemporalReuseAnalysisTest, LoopInvariantPointer) {
   scf::YieldOp::create(*builder, builder->getUnknownLoc());
 
   // Analyze
-  TemporalReuseAnalysis analysis(module);
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
+  mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  TemporalReuseAnalysis analysis(module, strideAnalysis);
 
   EXPECT_TRUE(analysis.hasTemporalReuse(loadOp));
   SmallVector<bool> reuseByDepth = analysis.getReuseByLoopDepth(loadOp);
@@ -241,13 +245,14 @@ TEST_F(TemporalReuseAnalysisTest, StreamingPointerOneDim) {
   scf::YieldOp::create(*builder, builder->getUnknownLoc());
 
   // Analyze
-  TemporalReuseAnalysis analysis(module);
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
+  mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  TemporalReuseAnalysis analysis(module, strideAnalysis);
 
-  EXPECT_TRUE(analysis.hasTemporalReuse(loadOp));
+  EXPECT_FALSE(analysis.hasTemporalReuse(loadOp));
   SmallVector<bool> reuseByDepth = analysis.getReuseByLoopDepth(loadOp);
   ASSERT_EQ(reuseByDepth.size(), 1u);
-  EXPECT_TRUE(reuseByDepth[0]); // Case B/C collapsed: conservative reuse until
-                                // IVStrideInfo lands
+  EXPECT_FALSE(reuseByDepth[0]); // Case C: pure streaming, no temporal reuse
 }
 
 // Test case 3: Load inside scf.for with pointer advancing along K axis only;
@@ -265,45 +270,57 @@ TEST_F(TemporalReuseAnalysisTest, PartialAxisStreaming) {
   scf::ForOp forOp = buildScfFor(*builder, 0, 10, 1);
   Value iv = forOp.getInductionVar();
 
-  // Build blocked encoding for 2D tensor (M, K)
+  // Build K-only IV-dependent offset via expand_dims + broadcast
+  // so IV-stride is [0, 32] (M axis stays, K axis advances).
+  auto c32 =
+      arith::ConstantIndexOp::create(*builder, builder->getUnknownLoc(), 32);
+  auto kStride =
+      arith::MulIOp::create(*builder, builder->getUnknownLoc(), iv, c32);
+
+  Type i64Ty = builder->getI64Type();
+  auto kStrideI64 = arith::IndexCastOp::create(
+      *builder, builder->getUnknownLoc(), i64Ty, kStride);
+
+  // Splat to 1D K-only tensor<32xi64>
+  auto blocked1D = makeBlocked({1}, {32}, {4}, {0});
+  auto ty1D = RankedTensorType::get({32}, i64Ty, blocked1D);
+  auto splat1D =
+      SplatOp::create(*builder, builder->getUnknownLoc(), ty1D, kStrideI64);
+
+  // expand_dims axis=0 -> tensor<1x32xi64>
+  auto blocked2D_1x32 = makeBlocked({1, 1}, {1, 32}, {1, 4}, {1, 0});
+  auto ty1x32 = RankedTensorType::get({1, 32}, i64Ty, blocked2D_1x32);
+  auto expanded = triton::ExpandDimsOp::create(
+      *builder, builder->getUnknownLoc(), ty1x32, splat1D, 0);
+
+  // broadcast to tensor<16x32xi64>
   SmallVector<unsigned> sizePerThread = {1, 1};
   SmallVector<unsigned> threadsPerWarp = {2, 16};
   SmallVector<unsigned> warpsPerCTA = {2, 2};
   SmallVector<unsigned> order = {1, 0};
   BlockedEncodingAttr blocked =
       makeBlocked(sizePerThread, threadsPerWarp, warpsPerCTA, order);
-  auto resultTy = RankedTensorType::get({16, 32}, f16Ty, blocked);
+  auto ty16x32 = RankedTensorType::get({16, 32}, i64Ty, blocked);
+  auto bcast = triton::BroadcastOp::create(*builder, builder->getUnknownLoc(),
+                                           ty16x32, expanded);
 
-  // Splat base pointer
+  // Splat base pointer and addptr
   RankedTensorType ptrTensorTy = makePtrTensorType({16, 32}, f16Ty, blocked);
   auto splatPtr =
       SplatOp::create(*builder, builder->getUnknownLoc(), ptrTensorTy, basePtr);
-
-  // Build stride along K axis (dim 1): IV * 32
-  auto c32 =
-      arith::ConstantIndexOp::create(*builder, builder->getUnknownLoc(), 32);
-  auto kStride =
-      arith::MulIOp::create(*builder, builder->getUnknownLoc(), iv, c32);
-
-  // Convert to i64 and splat
-  Type i64Ty = builder->getI64Type();
-  auto strideTensorTy = RankedTensorType::get({16, 32}, i64Ty, blocked);
-  auto strideI64 = arith::IndexCastOp::create(
-      *builder, builder->getUnknownLoc(), i64Ty, kStride);
-  auto splatStride = SplatOp::create(*builder, builder->getUnknownLoc(),
-                                     strideTensorTy, strideI64);
-
-  // AddPtr: advance along K axis only (M axis stride = 0)
   auto advancedPtr = AddPtrOp::create(*builder, builder->getUnknownLoc(),
-                                      ptrTensorTy, splatPtr, splatStride);
+                                      ptrTensorTy, splatPtr, bcast);
 
   // Load
+  auto resultTy = RankedTensorType::get({16, 32}, f16Ty, blocked);
   LoadOp loadOp = buildLoadOp(*builder, advancedPtr, resultTy);
 
   scf::YieldOp::create(*builder, builder->getUnknownLoc());
 
   // Analyze
-  TemporalReuseAnalysis analysis(module);
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
+  mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  TemporalReuseAnalysis analysis(module, strideAnalysis);
 
   EXPECT_TRUE(analysis.hasTemporalReuse(loadOp));
   SmallVector<bool> reuseByDepth = analysis.getReuseByLoopDepth(loadOp);
@@ -339,7 +356,9 @@ TEST_F(TemporalReuseAnalysisTest, LoadOutsideLoop) {
   LoadOp loadOp = buildLoadOp(*builder, splatPtr, resultTy);
 
   // Analyze
-  TemporalReuseAnalysis analysis(module);
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
+  mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  TemporalReuseAnalysis analysis(module, strideAnalysis);
 
   EXPECT_FALSE(analysis.hasTemporalReuse(loadOp));
   SmallVector<bool> reuseByDepth = analysis.getReuseByLoopDepth(loadOp);
@@ -405,26 +424,27 @@ TEST_F(TemporalReuseAnalysisTest, NestedLoopOuterInvariant) {
   scf::YieldOp::create(*builder, builder->getUnknownLoc());
 
   // Analyze
-  TemporalReuseAnalysis analysis(module);
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
+  mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  TemporalReuseAnalysis analysis(module, strideAnalysis);
 
   EXPECT_TRUE(analysis.hasTemporalReuse(loadOp));
   SmallVector<bool> reuseByDepth = analysis.getReuseByLoopDepth(loadOp);
   ASSERT_EQ(reuseByDepth.size(), 2u);
-  EXPECT_TRUE(reuseByDepth[0]); // Inner loop: Case B/C collapsed
-  EXPECT_TRUE(reuseByDepth[1]); // Outer loop: loop-invariant
+  EXPECT_FALSE(reuseByDepth[0]); // Inner loop: streaming (Case C)
+  EXPECT_TRUE(reuseByDepth[1]);  // Outer loop: loop-invariant (Case A)
 }
 
-// Test case 6: Load whose pointer SSA chain hits an unknown op
+// Test case 6: Load whose pointer is carried through a loop as an iter-arg
+// without being tracked by the dataflow solver.
 // Expected: hasTemporalReuse == true (conservative default)
-TEST_F(TemporalReuseAnalysisTest, UnknownPointerOrigin) {
+TEST_F(TemporalReuseAnalysisTest, LoopCarriedUntrackedPointer) {
   ModuleOp module = buildModule();
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
   Type f16Ty = builder->getF16Type();
-
-  // Build scf.for
-  scf::ForOp forOp = buildScfFor(*builder, 0, 10, 1);
+  BlockArgument basePtr = addPtrArg(funcOp, f16Ty);
 
   // Build blocked encoding
   SmallVector<unsigned> sizePerThread = {1, 1};
@@ -433,23 +453,35 @@ TEST_F(TemporalReuseAnalysisTest, UnknownPointerOrigin) {
   SmallVector<unsigned> order = {1, 0};
   BlockedEncodingAttr blocked =
       makeBlocked(sizePerThread, threadsPerWarp, warpsPerCTA, order);
-  auto resultTy = RankedTensorType::get({16, 32}, f16Ty, blocked);
-
-  // Create a pointer from an unknown source (e.g., a block argument added
-  // inside the loop, which is not a standard pattern but simulates unknown
-  // origin)
   RankedTensorType ptrTensorTy = makePtrTensorType({16, 32}, f16Ty, blocked);
-  Block *loopBody = forOp.getBody();
-  loopBody->addArgument(ptrTensorTy, builder->getUnknownLoc());
-  Value unknownPtr = loopBody->getArgument(loopBody->getNumArguments() - 1);
+  auto initPtr =
+      SplatOp::create(*builder, builder->getUnknownLoc(), ptrTensorTy, basePtr);
 
-  // Load
-  LoadOp loadOp = buildLoadOp(*builder, unknownPtr, resultTy);
+  // Build scf.for carrying the pointer as an iter-arg
+  auto lb =
+      arith::ConstantIndexOp::create(*builder, builder->getUnknownLoc(), 0);
+  auto ub =
+      arith::ConstantIndexOp::create(*builder, builder->getUnknownLoc(), 10);
+  auto step =
+      arith::ConstantIndexOp::create(*builder, builder->getUnknownLoc(), 1);
+  auto forOp = scf::ForOp::create(*builder, builder->getUnknownLoc(), lb, ub,
+                                  step, ValueRange{initPtr});
 
-  scf::YieldOp::create(*builder, builder->getUnknownLoc());
+  builder->setInsertionPointToStart(forOp.getBody());
+  Value carriedPtr = forOp.getRegionIterArgs()[0];
+
+  // Load from carried pointer
+  auto resultTy = RankedTensorType::get({16, 32}, f16Ty, blocked);
+  LoadOp loadOp = buildLoadOp(*builder, carriedPtr, resultTy);
+
+  // Yield unchanged pointer
+  scf::YieldOp::create(*builder, builder->getUnknownLoc(),
+                       ValueRange{carriedPtr});
 
   // Analyze
-  TemporalReuseAnalysis analysis(module);
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
+  mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  TemporalReuseAnalysis analysis(module, strideAnalysis);
 
   EXPECT_TRUE(analysis.hasTemporalReuse(loadOp));
   SmallVector<bool> reuseByDepth = analysis.getReuseByLoopDepth(loadOp);
@@ -497,7 +529,9 @@ TEST_F(TemporalReuseAnalysisTest, WhileLoopInvariant) {
                        ValueRange(carriedPtr));
 
   // Analyze
-  TemporalReuseAnalysis analysis(module);
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
+  mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  TemporalReuseAnalysis analysis(module, strideAnalysis);
 
   EXPECT_TRUE(analysis.hasTemporalReuse(loadOp));
   SmallVector<bool> reuseByDepth = analysis.getReuseByLoopDepth(loadOp);
@@ -534,7 +568,9 @@ TEST_F(TemporalReuseAnalysisTest, DescriptorLoadInvariant) {
   scf::YieldOp::create(*builder, builder->getUnknownLoc());
 
   // Analyze
-  TemporalReuseAnalysis analysis(module);
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
+  mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  TemporalReuseAnalysis analysis(module, strideAnalysis);
 
   EXPECT_TRUE(analysis.hasTemporalReuse(loadOp));
   SmallVector<bool> reuseByDepth = analysis.getReuseByLoopDepth(loadOp);
@@ -577,11 +613,11 @@ TEST_F(TemporalReuseAnalysisTest, DescriptorGatherInvariant) {
   // to avoid a transient mismatch between signature and block.
   Block *block = &funcOp.getBody().front();
   unsigned xArgIdx = block->getNumArguments();
-  funcOp.insertArgument(xArgIdx, indicesXTy, /*argAttrs=*/{},
-                        builder->getUnknownLoc());
+  (void)funcOp.insertArgument(xArgIdx, indicesXTy, /*argAttrs=*/{},
+                              builder->getUnknownLoc());
   unsigned yArgIdx = block->getNumArguments();
-  funcOp.insertArgument(yArgIdx, indicesYTy, /*argAttrs=*/{},
-                        builder->getUnknownLoc());
+  (void)funcOp.insertArgument(yArgIdx, indicesYTy, /*argAttrs=*/{},
+                              builder->getUnknownLoc());
   Value xOffsets = block->getArgument(xArgIdx);
   Value yOffset = block->getArgument(yArgIdx);
 
@@ -592,7 +628,9 @@ TEST_F(TemporalReuseAnalysisTest, DescriptorGatherInvariant) {
   scf::YieldOp::create(*builder, builder->getUnknownLoc());
 
   // Analyze
-  TemporalReuseAnalysis analysis(module);
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
+  mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  TemporalReuseAnalysis analysis(module, strideAnalysis);
 
   EXPECT_TRUE(analysis.hasTemporalReuse(gatherOp));
   SmallVector<bool> reuseByDepth = analysis.getReuseByLoopDepth(gatherOp);
@@ -661,13 +699,90 @@ TEST_F(TemporalReuseAnalysisTest, TwoDeepNestStructuralQuery) {
   scf::YieldOp::create(*builder, builder->getUnknownLoc());
 
   // Analyze
-  TemporalReuseAnalysis analysis(module);
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
+  mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  TemporalReuseAnalysis analysis(module, strideAnalysis);
 
   EXPECT_TRUE(analysis.hasTemporalReuse(loadOp));
   SmallVector<bool> reuseByDepth = analysis.getReuseByLoopDepth(loadOp);
   ASSERT_EQ(reuseByDepth.size(), 2u);
-  EXPECT_TRUE(reuseByDepth[0]); // Innermost: Case B/C collapsed
-  EXPECT_TRUE(reuseByDepth[1]); // Outermost: loop-invariant (Case A)
+  EXPECT_FALSE(reuseByDepth[0]); // Innermost: streaming (Case C)
+  EXPECT_TRUE(reuseByDepth[1]);  // Outermost: loop-invariant (Case A)
+}
+
+// Test case 12: GEMM A-operand pattern (2D tensor with K-loop advancing along K
+// axis only, M axis stays constant). Expected: hasTemporalReuse == true, Case B
+// partial-axis reuse (M axis IV-stride is 0).
+TEST_F(TemporalReuseAnalysisTest, GEMMAOperandCaseB) {
+  ModuleOp module = buildModule();
+  func::FuncOp funcOp = buildFunc(module);
+  builder->setInsertionPointToStart(&funcOp.getBody().front());
+
+  Type f16Ty = builder->getF16Type();
+  BlockArgument basePtr = addPtrArg(funcOp, f16Ty);
+
+  // Build scf.for (K loop)
+  scf::ForOp forOp = buildScfFor(*builder, 0, 10, 1);
+  Value iv = forOp.getInductionVar();
+
+  // Build K-only IV-dependent offset via expand_dims + broadcast
+  // so IV-stride is [0, 32] (M axis stays, K axis advances).
+  // Use different encoding parameters than PartialAxisStreaming to
+  // exercise a different configuration.
+  auto c32 =
+      arith::ConstantIndexOp::create(*builder, builder->getUnknownLoc(), 32);
+  auto kStride =
+      arith::MulIOp::create(*builder, builder->getUnknownLoc(), iv, c32);
+
+  Type i64Ty = builder->getI64Type();
+  auto kStrideI64 = arith::IndexCastOp::create(
+      *builder, builder->getUnknownLoc(), i64Ty, kStride);
+
+  // Splat to 1D K-only tensor<32xi64>
+  auto blocked1D = makeBlocked({1}, {16}, {8}, {0});
+  auto ty1D = RankedTensorType::get({32}, i64Ty, blocked1D);
+  auto splat1D =
+      SplatOp::create(*builder, builder->getUnknownLoc(), ty1D, kStrideI64);
+
+  // expand_dims axis=0 -> tensor<1x32xi64>
+  auto blocked2D_1x32 = makeBlocked({1, 1}, {1, 16}, {1, 8}, {1, 0});
+  auto ty1x32 = RankedTensorType::get({1, 32}, i64Ty, blocked2D_1x32);
+  auto expanded = triton::ExpandDimsOp::create(
+      *builder, builder->getUnknownLoc(), ty1x32, splat1D, 0);
+
+  // broadcast to tensor<16x32xi64>
+  SmallVector<unsigned> sizePerThread = {1, 1};
+  SmallVector<unsigned> threadsPerWarp = {1, 16};
+  SmallVector<unsigned> warpsPerCTA = {4, 1};
+  SmallVector<unsigned> order = {1, 0};
+  BlockedEncodingAttr blocked =
+      makeBlocked(sizePerThread, threadsPerWarp, warpsPerCTA, order);
+  auto ty16x32 = RankedTensorType::get({16, 32}, i64Ty, blocked);
+  auto bcast = triton::BroadcastOp::create(*builder, builder->getUnknownLoc(),
+                                           ty16x32, expanded);
+
+  // Splat base pointer and addptr
+  RankedTensorType ptrTensorTy = makePtrTensorType({16, 32}, f16Ty, blocked);
+  auto splatPtr =
+      SplatOp::create(*builder, builder->getUnknownLoc(), ptrTensorTy, basePtr);
+  auto advancedPtr = AddPtrOp::create(*builder, builder->getUnknownLoc(),
+                                      ptrTensorTy, splatPtr, bcast);
+
+  // Load
+  auto resultTy = RankedTensorType::get({16, 32}, f16Ty, blocked);
+  LoadOp loadOp = buildLoadOp(*builder, advancedPtr, resultTy);
+
+  scf::YieldOp::create(*builder, builder->getUnknownLoc());
+
+  // Analyze
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
+  mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  TemporalReuseAnalysis analysis(module, strideAnalysis);
+
+  EXPECT_TRUE(analysis.hasTemporalReuse(loadOp));
+  SmallVector<bool> reuseByDepth = analysis.getReuseByLoopDepth(loadOp);
+  ASSERT_EQ(reuseByDepth.size(), 1u);
+  EXPECT_TRUE(reuseByDepth[0]); // Case B: M axis IV-stride is 0
 }
 
 } // namespace
