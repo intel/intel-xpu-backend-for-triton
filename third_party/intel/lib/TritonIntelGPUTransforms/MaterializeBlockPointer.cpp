@@ -195,14 +195,14 @@ private:
     if (!tensorTy)
       return;
 
-    if constexpr (std::is_same_v<OpType, tt::LoadOp>) {
-      if (Value mask = op.getMask()) {
-        if (!matchPattern(mask, m_One())) {
-          LDBG("Load op has non-trivial mask, skip block IO attribute");
-          return;
-        }
-      }
-    }
+    // if constexpr (std::is_same_v<OpType, tt::LoadOp>) {
+    //   if (Value mask = op.getMask()) {
+    //     if (!matchPattern(mask, m_One())) {
+    //       LDBG("Load op has non-trivial mask, skip block IO attribute");
+    //       return;
+    //     }
+    //   }
+    // }
 
     unsigned rank = tensorTy.getRank();
 
