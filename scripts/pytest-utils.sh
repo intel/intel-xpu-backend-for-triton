@@ -139,7 +139,7 @@ capture_runtime_env() {
 
 ensure_spirv_dis() {
     # Does not work on Windows
-    if [[ $OSTYPE = msys ]]; then
+    if [[ $OSTYPE = msys || $OSTYPE = cygwin ]]; then
         return
     fi
     export PATH="$HOME/.local/bin:$PATH"
