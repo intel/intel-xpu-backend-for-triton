@@ -102,6 +102,14 @@ public:
     return DescriptorLoadOp::create(b, loc, resultTy, desc);
   }
 
+  // Helper to build a tt.descriptor_load with explicit indices
+  DescriptorLoadOp buildDescriptorLoadOp(OpBuilder &b, Value desc,
+                                         ValueRange indices,
+                                         RankedTensorType resultTy) {
+    Location loc = b.getUnknownLoc();
+    return DescriptorLoadOp::create(b, loc, resultTy, desc, indices);
+  }
+
   // Helper to build a tt.descriptor_gather
   DescriptorGatherOp buildDescriptorGatherOp(OpBuilder &b, Value desc,
                                              Value xOffsets, Value yOffset,
@@ -158,9 +166,6 @@ TEST_F(TemporalReuseAnalysisTest, LoopInvariantPointer) {
   Type f16Ty = builder->getF16Type();
   BlockArgument basePtr = addPtrArg(funcOp, f16Ty);
 
-  // Build scf.for
-  scf::ForOp forOp = buildScfFor(*builder, 0, 10, 1);
-
   // Build blocked encoding for result
   SmallVector<unsigned> sizePerThread = {1, 1};
   SmallVector<unsigned> threadsPerWarp = {2, 16};
@@ -170,10 +175,16 @@ TEST_F(TemporalReuseAnalysisTest, LoopInvariantPointer) {
       makeBlocked(sizePerThread, threadsPerWarp, warpsPerCTA, order);
   auto resultTy = RankedTensorType::get({16, 32}, f16Ty, blocked);
 
-  // Splat the pointer to match result shape
+  // Splat the pointer to match result shape.  The splat must be created
+  // *before* entering the loop body so that `isDefinedOutsideOfLoop`
+  // returns true (Case A).  Creating it inside the body would force the
+  // analysis down the Case B "partial-axis" path instead.
   RankedTensorType ptrTensorTy = makePtrTensorType({16, 32}, f16Ty, blocked);
   auto splatPtr =
       SplatOp::create(*builder, builder->getUnknownLoc(), ptrTensorTy, basePtr);
+
+  // Build scf.for (builder insertion point moves into the loop body).
+  scf::ForOp forOp = buildScfFor(*builder, 0, 10, 1);
 
   // Build load inside loop with loop-invariant pointer
   LoadOp loadOp = buildLoadOp(*builder, splatPtr, resultTy);
@@ -282,13 +293,14 @@ TEST_F(TemporalReuseAnalysisTest, PartialAxisStreaming) {
       *builder, builder->getUnknownLoc(), i64Ty, kStride);
 
   // Splat to 1D K-only tensor<32xi64>
-  auto blocked1D = makeBlocked({1}, {32}, {4}, {0});
+  BlockedEncodingAttr blocked1D = makeBlocked({1}, {32}, {4}, {0});
   auto ty1D = RankedTensorType::get({32}, i64Ty, blocked1D);
   auto splat1D =
       SplatOp::create(*builder, builder->getUnknownLoc(), ty1D, kStrideI64);
 
   // expand_dims axis=0 -> tensor<1x32xi64>
-  auto blocked2D_1x32 = makeBlocked({1, 1}, {1, 32}, {1, 4}, {1, 0});
+  BlockedEncodingAttr blocked2D_1x32 =
+      makeBlocked({1, 1}, {1, 32}, {1, 4}, {1, 0});
   auto ty1x32 = RankedTensorType::get({1, 32}, i64Ty, blocked2D_1x32);
   auto expanded = triton::ExpandDimsOp::create(
       *builder, builder->getUnknownLoc(), ty1x32, splat1D, 0);
@@ -539,7 +551,7 @@ TEST_F(TemporalReuseAnalysisTest, WhileLoopInvariant) {
   EXPECT_TRUE(reuseByDepth[0]); // Case A: loop-invariant via scf.while
 }
 
-// Test case 9: tt.descriptor_load inside scf.for with a loop-invariant
+// Test case 8: tt.descriptor_load inside scf.for with a loop-invariant
 // descriptor (Case A, since the descriptor is a function argument).
 // Expected: hasTemporalReuse == true (validates DescriptorLoadOp overload).
 TEST_F(TemporalReuseAnalysisTest, DescriptorLoadInvariant) {
@@ -578,7 +590,7 @@ TEST_F(TemporalReuseAnalysisTest, DescriptorLoadInvariant) {
   EXPECT_TRUE(reuseByDepth[0]); // Case A: loop-invariant descriptor
 }
 
-// Test case 10: tt.descriptor_gather inside scf.for with Case A loop-invariant
+// Test case 9: tt.descriptor_gather inside scf.for with Case A loop-invariant
 // pointer. Expected: hasTemporalReuse == true (validates DescriptorGatherOp
 // overload)
 TEST_F(TemporalReuseAnalysisTest, DescriptorGatherInvariant) {
@@ -638,7 +650,107 @@ TEST_F(TemporalReuseAnalysisTest, DescriptorGatherInvariant) {
   EXPECT_TRUE(reuseByDepth[0]); // Case A: loop-invariant descriptor
 }
 
-// Test case 11: Load inside two-deep scf.for nest where outer loop is Case A
+// tt.descriptor_load with a loop-invariant descriptor but an IV-derived
+// index operand.  Under the old (desc-only) classifier this reported
+// reuse because the descriptor is a function argument and lands in
+// Case A.  The corrected classifier also inspects `indices`, sees the
+// streaming IV-cast index, and reports no reuse.
+// Expected: hasTemporalReuse == false.
+TEST_F(TemporalReuseAnalysisTest, DescriptorLoadStreamingIndex) {
+  ModuleOp module = buildModule();
+  func::FuncOp funcOp = buildFunc(module);
+  builder->setInsertionPointToStart(&funcOp.getBody().front());
+
+  Type f16Ty = builder->getF16Type();
+  SmallVector<int64_t> descShape = {1024, 1024};
+  BlockArgument desc = addDescArg(funcOp, descShape, f16Ty);
+
+  // Build scf.for (K loop); iv lives inside the loop body.
+  scf::ForOp forOp = buildScfFor(*builder, 0, 10, 1);
+  Value iv = forOp.getInductionVar();
+
+  // Invariant x index (constant 0) and streaming y index (cast from iv).
+  Location loc = builder->getUnknownLoc();
+  auto xIdx =
+      arith::ConstantIntOp::create(*builder, loc, builder->getI32Type(), 0);
+  auto yIdx =
+      arith::IndexCastOp::create(*builder, loc, builder->getI32Type(), iv);
+
+  BlockedEncodingAttr blocked = makeBlocked(/*sizePerThread=*/{1, 1},
+                                            /*threadsPerWarp=*/{1, 16},
+                                            /*warpsPerCTA=*/{4, 1},
+                                            /*order=*/{1, 0});
+  auto resultTy = RankedTensorType::get({64, 64}, f16Ty, blocked);
+
+  DescriptorLoadOp loadOp =
+      buildDescriptorLoadOp(*builder, desc, ValueRange{xIdx, yIdx}, resultTy);
+
+  scf::YieldOp::create(*builder, builder->getUnknownLoc());
+
+  // Analyze
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
+  mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  TemporalReuseAnalysis analysis(module, strideAnalysis);
+
+  EXPECT_FALSE(analysis.hasTemporalReuse(loadOp));
+  SmallVector<bool> reuseByDepth = analysis.getReuseByLoopDepth(loadOp);
+  ASSERT_EQ(reuseByDepth.size(), 1u);
+  EXPECT_FALSE(reuseByDepth[0]); // yIdx streams -> no reuse
+}
+
+// tt.descriptor_gather with a loop-invariant descriptor and xOffsets but
+// an IV-derived scalar y_offset.  Mirrors DescriptorLoadStreamingIndex
+// for the gather op: exercises the multi-operand classification path.
+// Expected: hasTemporalReuse == false.
+TEST_F(TemporalReuseAnalysisTest, DescriptorGatherStreamingYOffset) {
+  ModuleOp module = buildModule();
+  func::FuncOp funcOp = buildFunc(module);
+  builder->setInsertionPointToStart(&funcOp.getBody().front());
+
+  Type f16Ty = builder->getF16Type();
+  // Per tt.descriptor_gather spec, the descriptor block must have 1 row.
+  SmallVector<int64_t> descShape = {1, 32};
+  BlockArgument desc = addDescArg(funcOp, descShape, f16Ty);
+
+  // Invariant xOffsets (func arg); y_offset will be built inside the loop.
+  auto indicesXTy = RankedTensorType::get({16}, builder->getI32Type());
+  Block *block = &funcOp.getBody().front();
+  unsigned xArgIdx = block->getNumArguments();
+  (void)funcOp.insertArgument(xArgIdx, indicesXTy, /*argAttrs=*/{},
+                              builder->getUnknownLoc());
+  Value xOffsets = block->getArgument(xArgIdx);
+
+  // Build scf.for and derive yOffset from the IV.
+  scf::ForOp forOp = buildScfFor(*builder, 0, 10, 1);
+  Value iv = forOp.getInductionVar();
+  Location loc = builder->getUnknownLoc();
+  auto yOffset =
+      arith::IndexCastOp::create(*builder, loc, builder->getI32Type(), iv);
+
+  // Blocked encoding for the 2D gather result (rows x cols).
+  BlockedEncodingAttr blocked = makeBlocked(/*sizePerThread=*/{1, 1},
+                                            /*threadsPerWarp=*/{2, 16},
+                                            /*warpsPerCTA=*/{2, 2},
+                                            /*order=*/{1, 0});
+  auto resultTy = RankedTensorType::get({16, 32}, f16Ty, blocked);
+
+  DescriptorGatherOp gatherOp =
+      buildDescriptorGatherOp(*builder, desc, xOffsets, yOffset, resultTy);
+
+  scf::YieldOp::create(*builder, builder->getUnknownLoc());
+
+  // Analyze
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
+  mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  TemporalReuseAnalysis analysis(module, strideAnalysis);
+
+  EXPECT_FALSE(analysis.hasTemporalReuse(gatherOp));
+  SmallVector<bool> reuseByDepth = analysis.getReuseByLoopDepth(gatherOp);
+  ASSERT_EQ(reuseByDepth.size(), 1u);
+  EXPECT_FALSE(reuseByDepth[0]); // yOffset streams -> no reuse
+}
+
+// Test case 10: Load inside two-deep scf.for nest where outer loop is Case A
 // (loop-invariant) and inner loop was Case C (streaming), now collapsed.
 // Expected: getReuseByLoopDepth == {true, true} (innermost first, outermost
 // last) and hasTemporalReuse == true. Exercises the structural query.
@@ -710,7 +822,7 @@ TEST_F(TemporalReuseAnalysisTest, TwoDeepNestStructuralQuery) {
   EXPECT_TRUE(reuseByDepth[1]);  // Outermost: loop-invariant (Case A)
 }
 
-// Test case 12: GEMM A-operand pattern (2D tensor with K-loop advancing along K
+// Test case 11: GEMM A-operand pattern (2D tensor with K-loop advancing along K
 // axis only, M axis stays constant). Expected: hasTemporalReuse == true, Case B
 // partial-axis reuse (M axis IV-stride is 0).
 TEST_F(TemporalReuseAnalysisTest, GEMMAOperandCaseB) {
@@ -739,13 +851,14 @@ TEST_F(TemporalReuseAnalysisTest, GEMMAOperandCaseB) {
       *builder, builder->getUnknownLoc(), i64Ty, kStride);
 
   // Splat to 1D K-only tensor<32xi64>
-  auto blocked1D = makeBlocked({1}, {16}, {8}, {0});
+  BlockedEncodingAttr blocked1D = makeBlocked({1}, {16}, {8}, {0});
   auto ty1D = RankedTensorType::get({32}, i64Ty, blocked1D);
   auto splat1D =
       SplatOp::create(*builder, builder->getUnknownLoc(), ty1D, kStrideI64);
 
   // expand_dims axis=0 -> tensor<1x32xi64>
-  auto blocked2D_1x32 = makeBlocked({1, 1}, {1, 16}, {1, 8}, {1, 0});
+  BlockedEncodingAttr blocked2D_1x32 =
+      makeBlocked({1, 1}, {1, 16}, {1, 8}, {1, 0});
   auto ty1x32 = RankedTensorType::get({1, 32}, i64Ty, blocked2D_1x32);
   auto expanded = triton::ExpandDimsOp::create(
       *builder, builder->getUnknownLoc(), ty1x32, splat1D, 0);

@@ -2,6 +2,7 @@
 #define TRITON_INTEL_ANALYSIS_TEMPORAL_REUSE_ANALYSIS_H
 
 #include "intel/include/Analysis/StrideInfo.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/SmallVector.h"
 
@@ -48,8 +49,9 @@ namespace mlir::triton::gpu::intel {
 class TemporalReuseAnalysis {
 public:
   TemporalReuseAnalysis(
-      ModuleOp /*m*/, mlir::triton::intel::ModuleStrideAnalysis &strideAnalysis)
-      : strideAnalysis(strideAnalysis) {}
+      ModuleOp module,
+      mlir::triton::intel::ModuleStrideAnalysis &strideAnalysis)
+      : ctx(module.getContext()), strideAnalysis(strideAnalysis) {}
 
   /// Structural query: one bool per enclosing loop (innermost first,
   /// outermost last). Empty vector => load is not inside any loop.
@@ -65,11 +67,19 @@ public:
   bool hasTemporalReuse(mlir::triton::DescriptorGatherOp op) const;
 
 private:
+  MLIRContext *ctx;
   mlir::triton::intel::ModuleStrideAnalysis &strideAnalysis;
 
   /// Shared implementation: classify every enclosing loop of `op` given the
-  /// op's pointer-carrying operand.
-  SmallVector<bool> classify(Operation *op, Value ptr) const;
+  /// set of operands that contribute to the effective address of the load
+  /// (e.g. the pointer for `tt.load`; the descriptor + all scalar/tensor
+  /// index operands for `tt.descriptor_load` and `tt.descriptor_gather`).
+  /// A load has reuse at a given loop level iff every address-determining
+  /// operand is either loop-invariant or holds at least one tensor axis
+  /// fixed across iterations; conversely, if *any* operand advances along
+  /// every one of its axes, the effective address streams and the analysis
+  /// reports no reuse.
+  SmallVector<bool> classify(Operation *op, ValueRange operands) const;
 };
 
 } // namespace mlir::triton::gpu::intel

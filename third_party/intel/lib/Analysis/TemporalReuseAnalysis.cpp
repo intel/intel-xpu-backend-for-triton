@@ -13,77 +13,82 @@ using tt::intel::StrideInfo;
 
 namespace mlir::triton::gpu::intel {
 
+// Per-operand classification at a single loop level.
+enum class OperandClass {
+  Invariant, // Case A: defined outside the loop.
+  Held,      // Case B: at least one axis has IV-stride <= 0.
+  Streaming, // Case C: every axis has IV-stride > 0.
+  Unknown,   // No stride info / loop not tracked -> treated as Held.
+};
+
+static OperandClass classifyOperandAtLoop(LoopLikeOpInterface loop, Value v,
+                                          StrideInfo *si) {
+  if (loop.isDefinedOutsideOfLoop(v))
+    return OperandClass::Invariant;
+  if (!si)
+    return OperandClass::Unknown;
+  const StrideInfo::DimVectorT *ivStride = si->getIVStride(loop);
+  if (!ivStride || ivStride->empty())
+    return OperandClass::Unknown;
+  for (int64_t s : *ivStride) {
+    if (s <= 0)
+      return OperandClass::Held;
+  }
+  return OperandClass::Streaming;
+}
+
 SmallVector<bool> TemporalReuseAnalysis::classify(Operation *op,
-                                                  Value ptr) const {
-  LDBG("classify: " << *op << " ptr=" << ptr);
+                                                  ValueRange operands) const {
+  LDBG("classify: " << *op << " #operands=" << operands.size());
 
   auto innermost = op->getParentOfType<LoopLikeOpInterface>();
   if (!innermost)
     return {};
 
-  StrideInfo *si = strideAnalysis.getStrideInfo(ptr);
+  SmallVector<StrideInfo *> siList;
+  siList.reserve(operands.size());
+  for (Value v : operands)
+    siList.push_back(strideAnalysis.getStrideInfo(v));
 
   SmallVector<bool> result;
   for (auto loop = innermost; loop;
        loop = loop->getParentOfType<LoopLikeOpInterface>()) {
-    // Case A: pointer loop-invariant w.r.t. this loop.
-    if (loop.isDefinedOutsideOfLoop(ptr)) {
-      LDBG("  depth " << result.size() << ": Case A (loop-invariant) -> reuse");
-      result.push_back(true);
-      continue;
-    }
-
-    if (!si) {
-      // No stride info tracked at all -> pessimistic.
-      LDBG("  depth " << result.size()
-                      << ": no stride info -> pessimistic reuse");
-      result.push_back(true);
-      continue;
-    }
-
-    const StrideInfo::DimVectorT *ivStride = si->getIVStride(loop);
-    if (!ivStride || ivStride->empty()) {
-      // This loop not tracked for `ptr` -> pessimistic at this level.
-      LDBG("  depth " << result.size()
-                      << ": no IV-stride for this loop -> pessimistic reuse");
-      result.push_back(true);
-      continue;
-    }
-
-    // Case B vs Case C: any axis with IV stride <= 0 => reuse.
-    bool reuse = false;
-    for (unsigned d = 0, rank = ivStride->size(); d < rank; ++d) {
-      if ((*ivStride)[d] <= 0) {
-        reuse = true;
+    // Reuse iff every operand is invariant or holds at least one axis
+    // fixed across this loop.  If any operand streams along every axis,
+    // the effective address streams and we report no reuse.
+    bool anyStreams = false;
+    for (unsigned i = 0, e = operands.size(); i < e; ++i) {
+      OperandClass c = classifyOperandAtLoop(loop, operands[i], siList[i]);
+      if (c == OperandClass::Streaming) {
+        anyStreams = true;
         break;
       }
     }
-    LLVM_DEBUG({
-      DBGS() << "  depth " << result.size()
-             << (reuse ? ": Case B (partial-axis reuse)"
-                       : ": Case C (pure streaming, no reuse)")
-             << " ivStride=[";
-      llvm::interleaveComma(*ivStride, llvm::dbgs());
-      llvm::dbgs() << "]\n";
-    });
-    result.push_back(reuse);
+    LDBG("  depth " << result.size() << ": "
+                    << (anyStreams ? "no reuse (some operand streams)"
+                                   : "reuse"));
+    result.push_back(!anyStreams);
   }
   return result;
 }
 
 SmallVector<bool>
 TemporalReuseAnalysis::getReuseByLoopDepth(tt::LoadOp op) const {
-  return classify(op, op.getPtr());
+  return classify(op, ValueRange{op.getPtr()});
 }
 
 SmallVector<bool>
 TemporalReuseAnalysis::getReuseByLoopDepth(tt::DescriptorLoadOp op) const {
-  return classify(op, op.getDesc());
+  SmallVector<Value> operands;
+  operands.push_back(op.getDesc());
+  operands.append(op.getIndices().begin(), op.getIndices().end());
+  return classify(op, operands);
 }
 
 SmallVector<bool>
 TemporalReuseAnalysis::getReuseByLoopDepth(tt::DescriptorGatherOp op) const {
-  return classify(op, op.getDesc());
+  return classify(op,
+                  ValueRange{op.getDesc(), op.getXOffsets(), op.getYOffset()});
 }
 
 bool TemporalReuseAnalysis::hasTemporalReuse(tt::LoadOp op) const {
