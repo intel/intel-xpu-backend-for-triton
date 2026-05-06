@@ -40,7 +40,7 @@ SpatialReuseAnalysis::getWarpInvariantOutDims(RankedTensorType ty) const {
 
   LinearLayout ll = ttg::toLinearLayout(ty);
 
-  StringAttr kWarp = StringAttr::get(ctx, "warp");
+  StringAttr kWarp = StringAttr::get(ty.getContext(), "warp");
   if (!ll.hasInDim(kWarp))
     return fullAxisSet(rank);
 
