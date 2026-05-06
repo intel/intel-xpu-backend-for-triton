@@ -78,7 +78,8 @@ TEST_F(SpatialReuseAnalysisTest, BlockedWarpsPartition) {
                                           warpsPerCTA, order, cgaLayout);
   auto ty = RankedTensorType::get({32, 32}, builder->getF32Type(), blocked);
 
-  SpatialReuseAnalysis analysis(&ctx);
+  ModuleOp module = buildModule();
+  SpatialReuseAnalysis analysis(module);
   EXPECT_THAT(analysis.getWarpInvariantOutDims(ty), ElementsAre(1u));
   EXPECT_TRUE(analysis.hasCrossSubgroupReuse(ty));
 }
@@ -92,7 +93,8 @@ TEST_F(SpatialReuseAnalysisTest, DotOperandDpasOpA) {
       DotOperandEncodingAttr::get(&ctx, /*opIdx=*/0, dpas, /*kWidth=*/1);
   auto ty = RankedTensorType::get({64, 64}, builder->getF32Type(), dotOpEnc);
 
-  SpatialReuseAnalysis analysis(&ctx);
+  ModuleOp module = buildModule();
+  SpatialReuseAnalysis analysis(module);
   EXPECT_THAT(analysis.getWarpInvariantOutDims(ty), ElementsAre(1u));
   EXPECT_TRUE(analysis.hasCrossSubgroupReuse(ty));
 }
@@ -106,7 +108,8 @@ TEST_F(SpatialReuseAnalysisTest, DotOperandDpasOpB) {
       DotOperandEncodingAttr::get(&ctx, /*opIdx=*/1, dpas, /*kWidth=*/2);
   auto ty = RankedTensorType::get({64, 64}, builder->getF32Type(), dotOpEnc);
 
-  SpatialReuseAnalysis analysis(&ctx);
+  ModuleOp module = buildModule();
+  SpatialReuseAnalysis analysis(module);
   EXPECT_THAT(analysis.getWarpInvariantOutDims(ty), ElementsAre(0u));
   EXPECT_TRUE(analysis.hasCrossSubgroupReuse(ty));
 }
@@ -125,7 +128,8 @@ TEST_F(SpatialReuseAnalysisTest, BlockScaledScaleOperand) {
   auto linearEnc = LinearEncodingAttr::get(&ctx, ll);
   auto ty = RankedTensorType::get(shape, builder->getF32Type(), linearEnc);
 
-  SpatialReuseAnalysis analysis(&ctx);
+  ModuleOp module = buildModule();
+  SpatialReuseAnalysis analysis(module);
   EXPECT_THAT(analysis.getWarpInvariantOutDims(ty), ElementsAre(0u, 1u));
   EXPECT_TRUE(analysis.hasCrossSubgroupReuse(ty));
 }
@@ -156,7 +160,8 @@ TEST_F(SpatialReuseAnalysisTest, NestedSliceUnwrap) {
   auto ty3D =
       RankedTensorType::get({2, 2, 64}, builder->getF32Type(), blocked3D);
 
-  SpatialReuseAnalysis analysis(&ctx);
+  ModuleOp module = buildModule();
+  SpatialReuseAnalysis analysis(module);
   // 3D: dim 2 has warpsPerCTA==1 → warp-invariant → {2}.
   EXPECT_THAT(analysis.getWarpInvariantOutDims(ty3D), ElementsAre(2u));
   // 1D nested: only remaining dim (parent dim 0) has warpsPerCTA==2 →
@@ -175,16 +180,16 @@ TEST_F(SpatialReuseAnalysisTest, ScalarPointerLoad) {
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
   Type i32Ty = builder->getI32Type();
-  auto ptrTy = tt::PointerType::get(i32Ty, /*addressSpace=*/1);
+  auto ptrTy = PointerType::get(i32Ty, /*addressSpace=*/1);
 
   funcOp.setType(builder->getFunctionType({ptrTy}, {}));
   Block *block = &funcOp.getBody().front();
   block->addArgument(ptrTy, builder->getUnknownLoc());
   BlockArgument ptr = block->getArgument(0);
 
-  auto loadOp = tt::LoadOp::create(*builder, builder->getUnknownLoc(), ptr);
+  auto loadOp = LoadOp::create(*builder, builder->getUnknownLoc(), ptr);
 
-  SpatialReuseAnalysis analysis(&ctx);
+  SpatialReuseAnalysis analysis(module);
   EXPECT_TRUE(analysis.hasCrossSubgroupReuse(loadOp));
   EXPECT_THAT(analysis.getWarpInvariantOutDims(loadOp), IsEmpty());
 }
@@ -195,7 +200,8 @@ TEST_F(SpatialReuseAnalysisTest, NullptrEncoding) {
   auto ty = RankedTensorType::get({32, 32}, builder->getI32Type(),
                                   /*encoding=*/Attribute{});
 
-  SpatialReuseAnalysis analysis(&ctx);
+  ModuleOp module = buildModule();
+  SpatialReuseAnalysis analysis(module);
   EXPECT_THAT(analysis.getWarpInvariantOutDims(ty), ElementsAre(0u, 1u));
   EXPECT_TRUE(analysis.hasCrossSubgroupReuse(ty));
 }
@@ -212,7 +218,8 @@ TEST_F(SpatialReuseAnalysisTest, NonPowerOfTwoShape) {
                                           warpsPerCTA, order, cgaLayout);
   auto ty = RankedTensorType::get({24, 32}, builder->getF32Type(), blocked);
 
-  SpatialReuseAnalysis analysis(&ctx);
+  ModuleOp module = buildModule();
+  SpatialReuseAnalysis analysis(module);
   EXPECT_THAT(analysis.getWarpInvariantOutDims(ty), ElementsAre(0u, 1u));
   EXPECT_TRUE(analysis.hasCrossSubgroupReuse(ty));
 }
@@ -242,7 +249,8 @@ TEST_F(SpatialReuseAnalysisTest, Subgroup2DBlockEncoding) {
   auto ty =
       RankedTensorType::get({32, 64}, builder->getF16Type(), subgroup2DBlock);
 
-  SpatialReuseAnalysis analysis(&ctx);
+  ModuleOp module = buildModule();
+  SpatialReuseAnalysis analysis(module);
   EXPECT_THAT(analysis.getWarpInvariantOutDims(ty), ElementsAre(1u));
   EXPECT_TRUE(analysis.hasCrossSubgroupReuse(ty));
 }
@@ -264,17 +272,17 @@ TEST_F(SpatialReuseAnalysisTest, DescriptorLoadOpOverload) {
   Type elemTy = builder->getF32Type();
   ArrayRef<int64_t> shape = {64, 64};
   auto descTy =
-      tt::TensorDescType::get(shape, elemTy, /*sharedLayout=*/Attribute{});
+      TensorDescType::get(shape, elemTy, /*sharedLayout=*/Attribute{});
 
   funcOp.setType(builder->getFunctionType({descTy}, {}));
   Block *block = &funcOp.getBody().front();
   block->addArgument(descTy, builder->getUnknownLoc());
   BlockArgument desc = block->getArgument(0);
 
-  auto loadOp = tt::DescriptorLoadOp::create(*builder, builder->getUnknownLoc(),
-                                             resultTy, desc);
+  auto loadOp = DescriptorLoadOp::create(*builder, builder->getUnknownLoc(),
+                                         resultTy, desc);
 
-  SpatialReuseAnalysis analysis(&ctx);
+  SpatialReuseAnalysis analysis(module);
   EXPECT_THAT(analysis.getWarpInvariantOutDims(loadOp), ElementsAre(1u));
   EXPECT_TRUE(analysis.hasCrossSubgroupReuse(loadOp));
 }
@@ -299,7 +307,7 @@ TEST_F(SpatialReuseAnalysisTest, DescriptorGatherOpOverload) {
   Type elemTy = builder->getF16Type();
   ArrayRef<int64_t> descShape = {1024, 1024};
   auto descTy =
-      tt::TensorDescType::get(descShape, elemTy, /*sharedLayout=*/Attribute{});
+      TensorDescType::get(descShape, elemTy, /*sharedLayout=*/Attribute{});
   auto indicesXTy = RankedTensorType::get({512}, builder->getI32Type());
   Type indicesYTy = builder->getI32Type();
 
@@ -313,10 +321,10 @@ TEST_F(SpatialReuseAnalysisTest, DescriptorGatherOpOverload) {
   BlockArgument xOffsets = block->getArgument(1);
   BlockArgument yOffset = block->getArgument(2);
 
-  auto gatherOp = tt::DescriptorGatherOp::create(
-      *builder, builder->getUnknownLoc(), resultTy, desc, xOffsets, yOffset);
+  auto gatherOp = DescriptorGatherOp::create(*builder, builder->getUnknownLoc(),
+                                             resultTy, desc, xOffsets, yOffset);
 
-  SpatialReuseAnalysis analysis(&ctx);
+  SpatialReuseAnalysis analysis(module);
   SmallVector<unsigned> opAxes = analysis.getWarpInvariantOutDims(gatherOp);
   SmallVector<unsigned> typeAxes = analysis.getWarpInvariantOutDims(resultTy);
   EXPECT_EQ(opAxes, typeAxes);
@@ -336,7 +344,8 @@ TEST_F(SpatialReuseAnalysisTest, BareRankedTensorType) {
                                           warpsPerCTA, order, cgaLayout);
   auto ty = RankedTensorType::get({32, 32}, builder->getF32Type(), blocked);
 
-  SpatialReuseAnalysis analysis(&ctx);
+  ModuleOp module = buildModule();
+  SpatialReuseAnalysis analysis(module);
   EXPECT_THAT(analysis.getWarpInvariantOutDims(ty), ElementsAre(1u));
   EXPECT_TRUE(analysis.hasCrossSubgroupReuse(ty));
 }

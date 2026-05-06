@@ -1,14 +1,13 @@
 #ifndef TRITON_INTEL_ANALYSIS_SPATIAL_REUSE_ANALYSIS_H
 #define TRITON_INTEL_ANALYSIS_SPATIAL_REUSE_ANALYSIS_H
 
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/MLIRContext.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/SmallVector.h"
 
 namespace mlir::triton::gpu::intel {
-
-namespace tt = ::mlir::triton;
 
 /// Identify the output tensor dimensions on which all warps read the
 /// same coordinate -- i.e. the warp id does not move the access along
@@ -40,7 +39,7 @@ namespace tt = ::mlir::triton;
 ///      (assume sharing on every axis when we cannot prove otherwise).
 class SpatialReuseAnalysis {
 public:
-  explicit SpatialReuseAnalysis(MLIRContext *ctx) : ctx(ctx) {}
+  explicit SpatialReuseAnalysis(ModuleOp module) : ctx(module.getContext()) {}
 
   /// Primary structural query: indices of output dims with zero warp
   /// basis. Empty result means warps strictly partition every axis.
@@ -50,13 +49,14 @@ public:
   bool hasCrossSubgroupReuse(RankedTensorType ty) const;
 
   /// Convenience overloads for read-side memory ops.
-  bool hasCrossSubgroupReuse(tt::LoadOp op) const;
-  bool hasCrossSubgroupReuse(tt::DescriptorLoadOp op) const;
-  bool hasCrossSubgroupReuse(tt::DescriptorGatherOp op) const;
-  SmallVector<unsigned> getWarpInvariantOutDims(tt::LoadOp op) const;
-  SmallVector<unsigned> getWarpInvariantOutDims(tt::DescriptorLoadOp op) const;
+  bool hasCrossSubgroupReuse(mlir::triton::LoadOp op) const;
+  bool hasCrossSubgroupReuse(mlir::triton::DescriptorLoadOp op) const;
+  bool hasCrossSubgroupReuse(mlir::triton::DescriptorGatherOp op) const;
+  SmallVector<unsigned> getWarpInvariantOutDims(mlir::triton::LoadOp op) const;
   SmallVector<unsigned>
-  getWarpInvariantOutDims(tt::DescriptorGatherOp op) const;
+  getWarpInvariantOutDims(mlir::triton::DescriptorLoadOp op) const;
+  SmallVector<unsigned>
+  getWarpInvariantOutDims(mlir::triton::DescriptorGatherOp op) const;
 
 private:
   MLIRContext *ctx;

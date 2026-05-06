@@ -6,6 +6,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/MathExtras.h"
 
+namespace tt = ::mlir::triton;
 namespace ttg = ::mlir::triton::gpu;
 
 namespace mlir::triton::gpu::intel {

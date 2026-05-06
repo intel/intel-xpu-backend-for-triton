@@ -25,12 +25,14 @@ add_triton_ut(
   NAME SpatialReuseAnalysis
   SRCS SpatialReuseAnalysisTest.cpp
   LIBS
-    TritonIntelGPUIR
+    TritonAnalysis
     TritonGPUIR
-    TritonIR
     TritonGPUTransforms
+    TritonIR
     TritonIntelAnalysis
+    TritonIntelGPUIR
     TritonIntelGPUTransforms
+    TritonNvidiaGPUIR
     TritonNvidiaGPUTransforms
     MLIRArithDialect
     MLIRFuncDialect
