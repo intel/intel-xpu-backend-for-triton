@@ -75,9 +75,11 @@ tt.func @ttig.descriptor_prefetch(%desc: !tt.tensordesc<256x32xf16>, %x: i32, %y
 
 // -----
 
-tt.func @ttig.extract_base_ptr(%arg0: !tt.tensordesc<64x32xf16>) {
-  // CHECK-LABEL: @ttig.extract_base_ptr
-  // CHECK: ttig.extract_base_ptr %arg0 : <64x32xf16> -> <f16>
-  %0 = ttig.extract_base_ptr %arg0 : <64x32xf16> -> <f16>
+tt.func @ttig.extract_desc(%arg0: !tt.tensordesc<64x32xf16>) {
+  // CHECK-LABEL: @ttig.extract_desc
+  // CHECK: ttig.extract_desc %arg0[0] : <64x32xf16> -> i64
+  %0 = ttig.extract_desc %arg0[0] : <64x32xf16> -> i64
+  // CHECK: ttig.extract_desc %arg0[4] : <64x32xf16> -> !tt.ptr<f16>
+  %1 = ttig.extract_desc %arg0[4] : <64x32xf16> -> !tt.ptr<f16>
   tt.return
 }

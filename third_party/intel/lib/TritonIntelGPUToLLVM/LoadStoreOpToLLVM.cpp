@@ -4196,25 +4196,21 @@ struct AtomicRMWOpConversion
   }
 };
 
-struct ExtractBasePtrOpConversion
-    : public ConvertOpToLLVMPattern<triton::gpu::intel::ExtractBasePtrOp> {
+struct ExtractDescOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::intel::ExtractDescOp> {
   using ConvertOpToLLVMPattern<
-      triton::gpu::intel::ExtractBasePtrOp>::ConvertOpToLLVMPattern;
+      triton::gpu::intel::ExtractDescOp>::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(triton::gpu::intel::ExtractBasePtrOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::gpu::intel::ExtractDescOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // The descriptor struct layout is: { shapes[rank], strides[rank], base }.
-    // The base pointer is the last element.
-    auto descType = cast<triton::TensorDescType>(op.getDesc().getType());
-    unsigned rank = descType.getBlockType().getRank();
-    unsigned basePtrIdx = 2 * rank; // after shapes and strides
-
-    Value basePtr = LLVM::ExtractValueOp::create(
-        rewriter, op.getLoc(),
-        LLVM::LLVMPointerType::get(rewriter.getContext(), 1), adaptor.getDesc(),
-        basePtrIdx);
-    rewriter.replaceOp(op, basePtr);
+    // Struct layout: { shapes[rank], strides[rank], base_ptr }.
+    // The index attribute directly gives the struct field position.
+    unsigned idx = op.getIndex();
+    Type resultTy = getTypeConverter()->convertType(op.getResult().getType());
+    Value result = LLVM::ExtractValueOp::create(rewriter, op.getLoc(), resultTy,
+                                                adaptor.getDesc(), idx);
+    rewriter.replaceOp(op, result);
     return success();
   }
 };
@@ -4791,7 +4787,7 @@ void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
       typeConverter, targetInfo, axisInfoAnalysis, strideAnalysis,
       benefit.getBenefit() + 2);
   // TTIG ops from LowerTo2DBlockLoad TTGIR pass.
-  patterns.add<ExtractBasePtrOpConversion>(typeConverter, benefit);
+  patterns.add<ExtractDescOpConversion>(typeConverter, benefit);
   patterns.add<Subgroup2DBlockLoadOpConversion,
                Subgroup2DBlockLoadFromPtrOpConversion>(
       typeConverter, targetInfo, axisInfoAnalysis, strideAnalysis, benefit);

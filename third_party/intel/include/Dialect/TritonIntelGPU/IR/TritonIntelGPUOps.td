@@ -186,19 +186,24 @@ def TTIG_SubGroupTransposeOp
 }
 
 
-def TTIG_ExtractBasePtrOp : TTIG_Op<"extract_base_ptr", [Pure]> {
-  let summary = "Extract the base pointer from a tensor descriptor";
+def TTIG_ExtractDescOp : TTIG_Op<"extract_desc", [Pure]> {
+  let summary = "Extract a field from a tensor descriptor struct";
   let description = [{
-    Extracts the base pointer from a tensor descriptor value. This allows
-    the LowerTo2DBlockLoad pass to obtain the runtime base pointer from
-    loop-carried descriptors without statically tracing to the defining
+    Extracts a field from a tensor descriptor by struct index. The descriptor
+    struct layout is { shapes[rank], strides[rank], base_ptr }:
+      - index 0..rank-1: shapes (i64)
+      - index rank..2*rank-1: strides (i64)
+      - index 2*rank: base pointer (tt.ptr)
+
+    This allows the LowerTo2DBlockLoad pass to obtain runtime field values
+    from loop-carried descriptors without statically tracing to the defining
     MakeTensorDescOp.
   }];
 
-  let arguments = (ins TT_TensorDescType:$desc);
-  let results = (outs TT_Ptr:$result);
+  let arguments = (ins TT_TensorDescType:$desc, I32Attr:$index);
+  let results = (outs AnyType:$result);
 
-  let assemblyFormat = "$desc attr-dict `:` type($desc) `->` type($result)";
+  let assemblyFormat = "$desc `[` $index `]` attr-dict `:` type($desc) `->` type($result)";
 }
 
 def TTIG_Subgroup2DBlockLoadOp : TTIG_Op<"2d_block_load"> {
