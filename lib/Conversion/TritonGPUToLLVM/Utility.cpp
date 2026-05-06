@@ -794,9 +794,9 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
   // shl, which often it's not able to do.
   // Use ceil(bitwidth, 8) for sub-byte element types (e.g. i1, i4) to avoid
   // 0-byte element sizes.
-  auto bytesPerElem = ceil(bitwidth, 8u);
-  auto i8Tile = LinearLayout::zeros1D(bytesPerElem, kReg, kOffset,
-                                      bytesPerElem);
+  auto bytesPerElem = ceil(bitwidth, 8);
+  auto i8Tile =
+      LinearLayout::zeros1D(bytesPerElem, kReg, kOffset, bytesPerElem);
   auto i8AddrLayout = i8Tile * addrLayout;
 
   Value blockId = b.i32_val(0);

@@ -2845,9 +2845,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @test_bitwidth_smaller_than_i8(%arg0: tensor<128x1xi1, #blocked0>) {
     // CHECK: nvvm.read.ptx.sreg.tid.x
     // i1 elements are zero-extended to i8 and stored as vector<1xi8>.
+    // CHECK: %[[BYTE_OFF:.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK-NEXT: llvm.mul {{.*}}, %[[BYTE_OFF]] : i32
     // CHECK: llvm.store {{.*}} vector<1xi8>
     %0 = ttg.local_alloc %arg0 : (tensor<128x1xi1, #blocked0>) -> !ttg.memdesc<128x1xi1, #shared, #smem>
     // i1 elements are loaded as i8 and truncated back to i1.
+    // CHECK: %[[BYTE_OFF:.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK-NEXT: llvm.mul {{.*}}, %[[BYTE_OFF]] : i32
     // CHECK: llvm.load {{.*}} i8
     %1 = ttg.local_load %0 : !ttg.memdesc<128x1xi1, #shared, #smem> -> tensor<128x1xi1, #blocked0>
     tt.return
