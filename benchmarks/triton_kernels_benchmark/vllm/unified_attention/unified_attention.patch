@@ -1,8 +1,8 @@
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 1774f1b30..9101e24fe 100644
+index 1774f1b30..235d88fbb 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
-@@ -35,24 +35,60 @@ is_batch_invariant = envs.VLLM_BATCH_INVARIANT
+@@ -35,23 +35,85 @@ is_batch_invariant = envs.VLLM_BATCH_INVARIANT
  float8_info = torch.finfo(current_platform.fp8_dtype())
  
  
@@ -26,8 +26,16 @@ index 1774f1b30..9101e24fe 100644
 +    KV_QUANT_MODE: tl.constexpr,
 +):
 +    """Prepare a loaded KV tile for attention computation.
+ 
+-    Modes handled inside the core kernel:
 +    Casts the raw KV data to Q's dtype and loads per-token-head scales
 +    when applicable:
+ 
+-    - ``KV_QUANT_MODE == 0`` (NONE) and ``2`` (INT8 per-token-head) and
+-      ``3`` (FP8 per-token-head): plain cast.  Per-token-head modes apply
+-      their scales separately on S/P inside the loop.
+-    - ``KV_QUANT_MODE == 1`` (FP8 per-tensor): dequantize using the
+-      tensor-wide scale.
 +    - ``KV_QUANT_MODE == 0``: cast only (no-op for bf16/fp16).
 +    - ``KV_QUANT_MODE == 1`` (FP8 per-tensor): dequantize inline
 +      using the tensor-wide scale.
@@ -38,27 +46,19 @@ index 1774f1b30..9101e24fe 100644
 +    Returns ``(data, token_head_scales)``.  *token_head_scales* is only
 +    meaningful when ``KV_QUANT_MODE >= 2``; callers gate its use on
 +    the same constexpr so the compiler eliminates dead code.
-+    """
+     """
+-    if KV_QUANT_MODE == 1:
 +    # KV_QUANT_MODE values: 0=none, 1=fp8 per-tensor,
 +    #                       2=int8 per-token-head, 3=fp8 per-token-head
- 
--    Modes handled inside the core kernel:
++
 +    # Placeholder scales (float32) — never read when KV_QUANT_MODE < 2.
 +    unused_scales = tile_mask.to(tl.float32)
- 
--    - ``KV_QUANT_MODE == 0`` (NONE) and ``2`` (INT8 per-token-head) and
--      ``3`` (FP8 per-token-head): plain cast.  Per-token-head modes apply
--      their scales separately on S/P inside the loop.
--    - ``KV_QUANT_MODE == 1`` (FP8 per-tensor): dequantize using the
--      tensor-wide scale.
--    """
--    if KV_QUANT_MODE == 1:
++
 +    if KV_QUANT_MODE == 1:  # FP8 per-tensor
          if Q.dtype.is_fp8():
 -            return data.to(Q.dtype)
 -        return (data.to(tl.float32) * tl.load(tensor_scale)).to(Q.dtype)
 -    return data.to(Q.dtype)
--
 +            return data.to(Q.dtype), unused_scales
 +        return (data.to(tl.float32) * tl.load(tensor_scale)).to(Q.dtype), unused_scales
 +    if KV_QUANT_MODE >= 2:  # per-token-head (int8 or fp8)
@@ -74,10 +74,33 @@ index 1774f1b30..9101e24fe 100644
 +    # .to(Q.dtype) is a no-op when data is already Q's type (bf16/fp16),
 +    # but required so Triton sees consistent return types across branches.
 +    return data.to(Q.dtype), unused_scales
++
++
++@triton.jit
++def find_seq_idx(
++    query_start_len_ptr,
++    target_idx,
++    num_seqs,
++    BLOCK_Q: tl.constexpr,
++    use_q_block_mode: tl.constexpr,
++):
++    left: tl.int32 = 0
++    right = num_seqs
++    while left < right:
++        mid = (left + right) // 2
++        val = tl.load(query_start_len_ptr + mid)
++        mid_val = val // BLOCK_Q + mid if use_q_block_mode else val
++
++        if mid_val <= target_idx:
++            left = mid + 1
++        else:
++            right = mid
++
++    return left - 1
+ 
  
  @triton.jit
- def kernel_unified_attention(
-@@ -61,9 +97,6 @@ def kernel_unified_attention(
+@@ -61,9 +123,6 @@ def kernel_unified_attention(
      # three ``segm_*`` tensors and ``output_ptr`` is unused (callers may
      # pass any non-null pointer).
      output_ptr,
@@ -87,7 +110,7 @@ index 1774f1b30..9101e24fe 100644
      # Inputs
      query_ptr,
      key_cache_ptr,
-@@ -112,12 +145,12 @@ def kernel_unified_attention(
+@@ -112,12 +171,12 @@ def kernel_unified_attention(
      stride_v_cache_1: tl.int64,  # int
      stride_v_cache_2: tl.int64,  # int
      stride_v_cache_3: tl.constexpr,  # int
@@ -106,7 +129,7 @@ index 1774f1b30..9101e24fe 100644
      query_start_len_ptr,
      BLOCK_Q: tl.constexpr,
      num_seqs: tl.int32,
-@@ -141,22 +174,27 @@ def kernel_unified_attention(
+@@ -141,22 +200,27 @@ def kernel_unified_attention(
      CHUNK_LOOKBACK: tl.constexpr = -1,
      CHUNK_SIZE: tl.constexpr = -1,
  ):
@@ -142,7 +165,7 @@ index 1774f1b30..9101e24fe 100644
      if q_block_local_idx * BLOCK_Q >= cur_batch_query_len:
          return
  
-@@ -168,38 +206,47 @@ def kernel_unified_attention(
+@@ -168,38 +232,47 @@ def kernel_unified_attention(
          tiles_per_segment = 0
  
      offs_m = tl.arange(0, BLOCK_M)
@@ -206,7 +229,7 @@ index 1774f1b30..9101e24fe 100644
      context_len = seq_len - cur_batch_query_len
  
      if USE_ALIBI_SLOPES:
-@@ -210,59 +257,110 @@ def kernel_unified_attention(
+@@ -210,59 +283,110 @@ def kernel_unified_attention(
      if USE_QQ_BIAS:
          qq_bias_row_ptrs = qq_bias_ptr + query_pos[:, None] * qq_bias_stride_0
  
@@ -359,8 +382,29 @@ index 1774f1b30..9101e24fe 100644
  
          # Per-(token, head) scales for INT8 / FP8 per-token-head modes.
          if USE_PER_TOKEN_HEAD_SCALES:
-@@ -325,13 +423,8 @@ def kernel_unified_attention(
-         M, L, P, alpha = softmax_step(S, M, L)
+@@ -321,17 +445,32 @@ def kernel_unified_attention(
+             S += load_qq_bias_tile(
+                 qq_bias_row_ptrs, seq_offset, context_len, qq_bias_stride_0
+             )
++        # compute running maximum
++        # m_j : (BLOCK_M,)
++        m_j = tl.maximum(M, tl.max(S, axis=1))
+ 
+-        M, L, P, alpha = softmax_step(S, M, L)
++        # For sliding window there's a chance the max is -inf due to masking of
++        # the entire row. In this case we need to set m_j 0 to avoid NaN
++        m_j = tl.where(m_j > float("-inf"), m_j, 0.0)
++
++        # P : (BLOCK_M, TILE_SIZE)
++        P = tl.exp(S - m_j[:, None])
++
++        # l_j : (BLOCK_M,)
++        l_j = tl.sum(P, axis=1)
++
++        # alpha : (BLOCK_M, )
++        alpha = tl.exp(M - m_j)
++
++        # acc : (BLOCK_M, HEAD_SIZE_PADDED)
          acc = acc * alpha[:, None]
  
 -        if SLIDING_WINDOW:
@@ -370,12 +414,16 @@ index 1774f1b30..9101e24fe 100644
 -                V,
 -                0.0,
 -            )
++        # update constants
++        L = L * alpha + l_j
++        M = m_j
++
 +        # In the upstream there is an additional zeroing of V for tokens outside of the sliding window which is redundant.
 +        # Adding it decreases performance for sliding window case
          if USE_PER_TOKEN_HEAD_SCALES:
              # Per-token-head quant: apply v_scale to P instead of V.
              P_v = (P * v_token_head_scales[None, :]).to(V.dtype)
-@@ -341,19 +434,19 @@ def kernel_unified_attention(
+@@ -341,19 +480,19 @@ def kernel_unified_attention(
  
      # ---- Epilogue ---------------------------------------------------------
      if IS_3D:
@@ -407,7 +455,7 @@ index 1774f1b30..9101e24fe 100644
          store_segm_reduce_scalars(
              segm_max_ptr,
              segm_expsum_ptr,
-@@ -372,16 +465,14 @@ def kernel_unified_attention(
+@@ -372,16 +511,14 @@ def kernel_unified_attention(
          if USE_FP8:
              acc = acc * tl.load(out_scale)
              acc = tl.clamp(acc, FP8_MIN, FP8_MAX)
@@ -432,7 +480,7 @@ index 1774f1b30..9101e24fe 100644
  
  
  @triton.jit
-@@ -601,28 +692,25 @@ def unified_attention(
+@@ -601,28 +738,25 @@ def unified_attention(
      elif sliding_window_val <= 0:
          chunk_lookback = -1
  
@@ -476,7 +524,7 @@ index 1774f1b30..9101e24fe 100644
  
      # The kernel signature is the same for 2D and 3D — only the launch
      # grid + a handful of constexpr toggles differ.  Per-token-head scale
-@@ -645,6 +733,30 @@ def unified_attention(
+@@ -645,6 +779,30 @@ def unified_attention(
  
      # 3D needs real segm tensors; 2D never touches them but Triton wants
      # a non-null pointer.  Reuse ``out`` as the placeholder.
@@ -507,7 +555,7 @@ index 1774f1b30..9101e24fe 100644
      segm_output_ptr = softmax_segm_output if use_3d else out
      segm_max_ptr = softmax_segm_max if use_3d else out
      segm_expsum_ptr = softmax_segm_expsum if use_3d else out
-@@ -660,9 +772,6 @@ def unified_attention(
+@@ -660,9 +818,6 @@ def unified_attention(
  
      kernel_unified_attention[grid](
          output_ptr=out,
