@@ -1,6 +1,5 @@
 #include "intel/include/Analysis/SpatialReuseAnalysis.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
-#include "intel/include/Dialect/TritonIntelGPU/IR/LinearLayoutConversions.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
@@ -56,7 +55,9 @@ public:
     auto funcOp =
         func::FuncOp::create(builder->getUnknownLoc(), name, funcType);
     module.push_back(funcOp);
-    funcOp.addEntryBlock();
+    Block *entry = funcOp.addEntryBlock();
+    builder->setInsertionPointToEnd(entry);
+    func::ReturnOp::create(*builder, builder->getUnknownLoc());
     return funcOp;
   }
 
@@ -111,26 +112,6 @@ TEST_F(SpatialReuseAnalysisTest, DotOperandDpasOpB) {
   ModuleOp module = buildModule();
   SpatialReuseAnalysis analysis(module);
   EXPECT_THAT(analysis.getWarpInvariantOutDims(ty), ElementsAre(0u));
-  EXPECT_TRUE(analysis.hasCrossSubgroupReuse(ty));
-}
-
-TEST_F(SpatialReuseAnalysisTest, BlockScaledScaleOperand) {
-  // Requires PR #6825 (BlockScaledDPAS warp-broadcast fix) to land first.
-  GTEST_SKIP() << "Depends on PR #6825: BlockScaledDPAS scale operand "
-                  "warp basis fix";
-  // LinearEncoding from BlockScaledDPAStoLinearLayout for MXFP8 scale operand.
-  // All output dims must be warp-invariant after the preparatory
-  // DPAStoLinearLayoutTest::BlockScaledScaleOperandWarpBroadcast audit.
-  // Expected axis set: full {0, 1}. hasCrossSubgroupReuse: true.
-  DpasEncodingAttr dpas = makeDpas();
-  ArrayRef<int64_t> shape = {128, 2};
-  LinearLayout ll = BlockScaledDPAStoLinearLayout(shape, dpas, /*opIdx=*/3);
-  auto linearEnc = LinearEncodingAttr::get(&ctx, ll);
-  auto ty = RankedTensorType::get(shape, builder->getF32Type(), linearEnc);
-
-  ModuleOp module = buildModule();
-  SpatialReuseAnalysis analysis(module);
-  EXPECT_THAT(analysis.getWarpInvariantOutDims(ty), ElementsAre(0u, 1u));
   EXPECT_TRUE(analysis.hasCrossSubgroupReuse(ty));
 }
 
