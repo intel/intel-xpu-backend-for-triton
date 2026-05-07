@@ -2,7 +2,6 @@
 #define TRITON_INTEL_ANALYSIS_TEMPORAL_REUSE_ANALYSIS_H
 
 #include "intel/include/Analysis/StrideInfo.h"
-#include "mlir/IR/BuiltinOps.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/SmallVector.h"
 
@@ -22,6 +21,13 @@ namespace mlir::triton::gpu::intel {
 ///     Report reuse.
 ///   * Case C — every axis has positive IV-stride across L (pure
 ///     streaming). Report no reuse.
+///
+/// Unknown handling (conservative): if `StrideInfo` has no per-loop
+/// IV-stride entry for this loop, or any axis has unknown IV-stride
+/// (StrideInfo sentinel -1, grouped with 0 via `s <= 0`), the operand is
+/// classified as "held" for L. Such loops therefore report reuse rather
+/// than streaming, which errs on the side of preserving loads the
+/// analysis cannot prove stream.
 ///
 /// `hasTemporalReuse` is the policy wrapper `any_of(getReuseByLoopDepth)`.
 ///
@@ -48,10 +54,9 @@ namespace mlir::triton::gpu::intel {
 ///   }
 class TemporalReuseAnalysis {
 public:
-  TemporalReuseAnalysis(
-      ModuleOp module,
+  explicit TemporalReuseAnalysis(
       mlir::triton::intel::ModuleStrideAnalysis &strideAnalysis)
-      : ctx(module.getContext()), strideAnalysis(strideAnalysis) {}
+      : strideAnalysis(strideAnalysis) {}
 
   /// Structural query: one bool per enclosing loop (innermost first,
   /// outermost last). Empty vector => load is not inside any loop.
@@ -67,7 +72,6 @@ public:
   bool hasTemporalReuse(mlir::triton::DescriptorGatherOp op) const;
 
 private:
-  MLIRContext *ctx;
   mlir::triton::intel::ModuleStrideAnalysis &strideAnalysis;
 
   /// Shared implementation: classify every enclosing loop of `op` given the

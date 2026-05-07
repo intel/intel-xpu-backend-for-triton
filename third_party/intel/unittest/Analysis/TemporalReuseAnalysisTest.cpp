@@ -195,7 +195,7 @@ TEST_F(TemporalReuseAnalysisTest, LoopInvariantPointer) {
   // Analyze
   mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
   mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
-  TemporalReuseAnalysis analysis(module, strideAnalysis);
+  TemporalReuseAnalysis analysis(strideAnalysis);
 
   EXPECT_TRUE(analysis.hasTemporalReuse(loadOp));
   SmallVector<bool> reuseByDepth = analysis.getReuseByLoopDepth(loadOp);
@@ -204,8 +204,8 @@ TEST_F(TemporalReuseAnalysisTest, LoopInvariantPointer) {
 }
 
 // Test case 2: Load inside scf.for with pointer = basePtr + IV*N streaming
-// along sole tensor axis. Expected: hasTemporalReuse == true (Case B/C
-// collapsed)
+// along the sole tensor axis. Every axis has positive IV-stride (Case C),
+// so the load has no temporal reuse.  Expected: hasTemporalReuse == false.
 TEST_F(TemporalReuseAnalysisTest, StreamingPointerOneDim) {
   ModuleOp module = buildModule();
   func::FuncOp funcOp = buildFunc(module);
@@ -258,7 +258,7 @@ TEST_F(TemporalReuseAnalysisTest, StreamingPointerOneDim) {
   // Analyze
   mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
   mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
-  TemporalReuseAnalysis analysis(module, strideAnalysis);
+  TemporalReuseAnalysis analysis(strideAnalysis);
 
   EXPECT_FALSE(analysis.hasTemporalReuse(loadOp));
   SmallVector<bool> reuseByDepth = analysis.getReuseByLoopDepth(loadOp);
@@ -332,7 +332,7 @@ TEST_F(TemporalReuseAnalysisTest, PartialAxisStreaming) {
   // Analyze
   mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
   mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
-  TemporalReuseAnalysis analysis(module, strideAnalysis);
+  TemporalReuseAnalysis analysis(strideAnalysis);
 
   EXPECT_TRUE(analysis.hasTemporalReuse(loadOp));
   SmallVector<bool> reuseByDepth = analysis.getReuseByLoopDepth(loadOp);
@@ -370,7 +370,7 @@ TEST_F(TemporalReuseAnalysisTest, LoadOutsideLoop) {
   // Analyze
   mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
   mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
-  TemporalReuseAnalysis analysis(module, strideAnalysis);
+  TemporalReuseAnalysis analysis(strideAnalysis);
 
   EXPECT_FALSE(analysis.hasTemporalReuse(loadOp));
   SmallVector<bool> reuseByDepth = analysis.getReuseByLoopDepth(loadOp);
@@ -438,7 +438,7 @@ TEST_F(TemporalReuseAnalysisTest, NestedLoopOuterInvariant) {
   // Analyze
   mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
   mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
-  TemporalReuseAnalysis analysis(module, strideAnalysis);
+  TemporalReuseAnalysis analysis(strideAnalysis);
 
   EXPECT_TRUE(analysis.hasTemporalReuse(loadOp));
   SmallVector<bool> reuseByDepth = analysis.getReuseByLoopDepth(loadOp);
@@ -493,7 +493,7 @@ TEST_F(TemporalReuseAnalysisTest, LoopCarriedUntrackedPointer) {
   // Analyze
   mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
   mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
-  TemporalReuseAnalysis analysis(module, strideAnalysis);
+  TemporalReuseAnalysis analysis(strideAnalysis);
 
   EXPECT_TRUE(analysis.hasTemporalReuse(loadOp));
   SmallVector<bool> reuseByDepth = analysis.getReuseByLoopDepth(loadOp);
@@ -501,8 +501,12 @@ TEST_F(TemporalReuseAnalysisTest, LoopCarriedUntrackedPointer) {
   EXPECT_TRUE(reuseByDepth[0]); // Conservative default
 }
 
-// Test case 7: Load inside scf.while whose pointer is carried unchanged from
-// before-region init. Expected: hasTemporalReuse == true
+// Test case 7: Load inside scf.while whose pointer is the `after` region's
+// block argument.  `isDefinedOutsideOfLoop` returns false for the region
+// argument, and StrideInfo does not track scf.while region args, so the
+// classifier falls into the Unknown -> Held conservative path and reports
+// reuse.  Expected: hasTemporalReuse == true (conservative fallback, not
+// Case A).
 TEST_F(TemporalReuseAnalysisTest, WhileLoopInvariant) {
   ModuleOp module = buildModule();
   func::FuncOp funcOp = buildFunc(module);
@@ -543,12 +547,13 @@ TEST_F(TemporalReuseAnalysisTest, WhileLoopInvariant) {
   // Analyze
   mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
   mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
-  TemporalReuseAnalysis analysis(module, strideAnalysis);
+  TemporalReuseAnalysis analysis(strideAnalysis);
 
   EXPECT_TRUE(analysis.hasTemporalReuse(loadOp));
   SmallVector<bool> reuseByDepth = analysis.getReuseByLoopDepth(loadOp);
   ASSERT_EQ(reuseByDepth.size(), 1u);
-  EXPECT_TRUE(reuseByDepth[0]); // Case A: loop-invariant via scf.while
+  EXPECT_TRUE(reuseByDepth[0]); // Conservative fallback (StrideInfo does
+                                // not track scf.while region args)
 }
 
 // Test case 8: tt.descriptor_load inside scf.for with a loop-invariant
@@ -582,7 +587,7 @@ TEST_F(TemporalReuseAnalysisTest, DescriptorLoadInvariant) {
   // Analyze
   mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
   mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
-  TemporalReuseAnalysis analysis(module, strideAnalysis);
+  TemporalReuseAnalysis analysis(strideAnalysis);
 
   EXPECT_TRUE(analysis.hasTemporalReuse(loadOp));
   SmallVector<bool> reuseByDepth = analysis.getReuseByLoopDepth(loadOp);
@@ -642,7 +647,7 @@ TEST_F(TemporalReuseAnalysisTest, DescriptorGatherInvariant) {
   // Analyze
   mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
   mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
-  TemporalReuseAnalysis analysis(module, strideAnalysis);
+  TemporalReuseAnalysis analysis(strideAnalysis);
 
   EXPECT_TRUE(analysis.hasTemporalReuse(gatherOp));
   SmallVector<bool> reuseByDepth = analysis.getReuseByLoopDepth(gatherOp);
@@ -690,7 +695,7 @@ TEST_F(TemporalReuseAnalysisTest, DescriptorLoadStreamingIndex) {
   // Analyze
   mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
   mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
-  TemporalReuseAnalysis analysis(module, strideAnalysis);
+  TemporalReuseAnalysis analysis(strideAnalysis);
 
   EXPECT_FALSE(analysis.hasTemporalReuse(loadOp));
   SmallVector<bool> reuseByDepth = analysis.getReuseByLoopDepth(loadOp);
@@ -742,7 +747,7 @@ TEST_F(TemporalReuseAnalysisTest, DescriptorGatherStreamingYOffset) {
   // Analyze
   mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
   mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
-  TemporalReuseAnalysis analysis(module, strideAnalysis);
+  TemporalReuseAnalysis analysis(strideAnalysis);
 
   EXPECT_FALSE(analysis.hasTemporalReuse(gatherOp));
   SmallVector<bool> reuseByDepth = analysis.getReuseByLoopDepth(gatherOp);
@@ -813,7 +818,7 @@ TEST_F(TemporalReuseAnalysisTest, TwoDeepNestStructuralQuery) {
   // Analyze
   mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
   mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
-  TemporalReuseAnalysis analysis(module, strideAnalysis);
+  TemporalReuseAnalysis analysis(strideAnalysis);
 
   EXPECT_TRUE(analysis.hasTemporalReuse(loadOp));
   SmallVector<bool> reuseByDepth = analysis.getReuseByLoopDepth(loadOp);
@@ -890,7 +895,7 @@ TEST_F(TemporalReuseAnalysisTest, GEMMAOperandCaseB) {
   // Analyze
   mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
   mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
-  TemporalReuseAnalysis analysis(module, strideAnalysis);
+  TemporalReuseAnalysis analysis(strideAnalysis);
 
   EXPECT_TRUE(analysis.hasTemporalReuse(loadOp));
   SmallVector<bool> reuseByDepth = analysis.getReuseByLoopDepth(loadOp);
