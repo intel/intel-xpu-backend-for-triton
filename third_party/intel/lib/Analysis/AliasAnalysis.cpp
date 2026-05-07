@@ -23,7 +23,9 @@ namespace ttg = mlir::triton::gpu;
 
 namespace mlir::triton::intel {
 
-namespace {
+//===----------------------------------------------------------------------===//
+// Helpers
+//===----------------------------------------------------------------------===//
 
 /// True if `type` is a Triton pointer, a Triton tensor descriptor, or a
 /// tensor of Triton pointers. Tensor descriptors are included so that the
@@ -33,13 +35,100 @@ namespace {
 /// dataflow seeding (see `AliasDataflow`) and the interface-tracked pointer
 /// resolution in `getMemOpPointer`; keeping a single definition ensures
 /// op-collection and dataflow seeding agree on what "pointer-like" means.
-bool isPointerLike(Type type) {
+static bool isPointerLike(Type type) {
   if (isa<tt::PointerType, tt::TensorDescType>(type))
     return true;
   if (auto tensorTy = dyn_cast<RankedTensorType>(type))
     return isa<tt::PointerType>(tensorTy.getElementType());
   return false;
 }
+
+/// True iff `op` is one of the "modeled" memory-effect ops with a known
+/// pointer-resolution rule: `tt.load/store/atomic_rmw/atomic_cas` and the
+/// five `tt.descriptor_*` ops. Interface-tracked ops (any
+/// `MemoryEffectOpInterface` op with a Read/Write effect) are additionally
+/// handled via `hasReadOrWriteEffect` + `getMemOpPointer`'s default branch;
+/// see the ctor.
+static bool isTrackedMemOp(Operation *op) {
+  return isa<tt::LoadOp, tt::StoreOp, tt::AtomicRMWOp, tt::AtomicCASOp,
+             tt::DescriptorLoadOp, tt::DescriptorStoreOp,
+             tt::DescriptorGatherOp, tt::DescriptorScatterOp,
+             tt::DescriptorReduceOp>(op);
+}
+
+/// True iff `op` implements `MemoryEffectOpInterface` and has at least one
+/// `MemoryEffects::Read` or `MemoryEffects::Write` effect. Used to identify
+/// interface-tracked peers alongside the nine modeled op types.
+static bool hasReadOrWriteEffect(Operation *op) {
+  auto memEffects = dyn_cast<MemoryEffectOpInterface>(op);
+  if (!memEffects)
+    return false;
+  return memEffects.hasEffect<MemoryEffects::Read>() ||
+         memEffects.hasEffect<MemoryEffects::Write>();
+}
+
+/// Returns the pointer operand for a tracked memory-effect op.
+/// For the nine "modeled" op types (tt.load/store/atomic_rmw/atomic_cas and
+/// the five tt.descriptor_* ops), returns the pointer operand directly. For
+/// descriptor ops, traces the base pointer through SCF iter_args, yields,
+/// `scf.if`, `arith.select`, and unrealized casts via
+/// `findDefiningOpOfType<tt::MakeTensorDescOp>`. When that trace fails
+/// (e.g., the descriptor comes from a call, a region with mismatched
+/// branches, or any unmodeled producer), returns the descriptor Value
+/// itself. That value is never seeded by the dataflow, so the snapshot
+/// comes back as uninitialized and the op is conservatively treated as
+/// Unknown — MayAlias everything — rather than being silently dropped.
+///
+/// For any other op implementing `MemoryEffectOpInterface` with a Read or
+/// Write effect, returns the first pointer-like operand (per
+/// `isPointerLike`). Returns a null Value if the op has no pointer-like
+/// operand; the caller (ctor) still tracks such ops so they act as
+/// universal MayAlias peers.
+///
+/// Returns a null Value for ops that are neither modeled nor interface-
+/// tracked.
+static Value getMemOpPointer(Operation *op) {
+  return TypeSwitch<Operation *, Value>(op)
+      .Case<tt::LoadOp>([](auto op) { return op.getPtr(); })
+      .Case<tt::StoreOp>([](auto op) { return op.getPtr(); })
+      .Case<tt::AtomicRMWOp>([](auto op) { return op.getPtr(); })
+      .Case<tt::AtomicCASOp>([](auto op) { return op.getPtr(); })
+      .Case<tt::DescriptorLoadOp, tt::DescriptorStoreOp, tt::DescriptorGatherOp,
+            tt::DescriptorScatterOp, tt::DescriptorReduceOp>(
+          [](auto op) -> Value {
+            Value desc = op.getDesc();
+            // TODO(#6862): once the worklist-based findAllMakeTensorDescOps
+            // lands, iterate all reachable MakeTensorDescOps and union their
+            // base pointers, degrading to Unknown on any irresolvable base.
+            // The single-op resolution here may pick a stale init-args
+            // descriptor for loop-carried descs.
+            if (std::optional<tt::MakeTensorDescOp> makeDesc =
+                    findDefiningOpOfType<tt::MakeTensorDescOp>(desc))
+              return makeDesc->getBase();
+            // Couldn't resolve to a MakeTensorDescOp — keep the op alive
+            // by returning the descriptor itself as an opaque sentinel.
+            return desc;
+          })
+      .Default([](Operation *op) -> Value {
+        // Interface-tracked path: any op with a Read or Write effect. Find
+        // the single pointer-like operand; if none, return null (the op is
+        // still tracked by the ctor as a universal peer).
+        auto memEffects = dyn_cast<MemoryEffectOpInterface>(op);
+        if (!memEffects)
+          return Value();
+        if (!memEffects.hasEffect<MemoryEffects::Read>() &&
+            !memEffects.hasEffect<MemoryEffects::Write>())
+          return Value();
+        auto isPtr = [](Value v) { return isPointerLike(v.getType()); };
+        assert(llvm::count_if(op->getOperands(), isPtr) <= 1 &&
+               "interface-tracked memory-effect op must have at most one "
+               "pointer-like operand");
+        auto it = llvm::find_if(op->getOperands(), isPtr);
+        return it == op->operand_end() ? Value() : *it;
+      });
+}
+
+namespace {
 
 //===----------------------------------------------------------------------===//
 // AliasInfo lattice element
@@ -191,95 +280,6 @@ private:
     return !body.empty() && owner == &body.front();
   }
 };
-
-//===----------------------------------------------------------------------===//
-// Helpers
-//===----------------------------------------------------------------------===//
-
-/// Returns the pointer operand for a tracked memory-effect op.
-/// For the nine "modeled" op types (tt.load/store/atomic_rmw/atomic_cas and
-/// the five tt.descriptor_* ops), returns the pointer operand directly. For
-/// descriptor ops, traces the base pointer through SCF iter_args, yields,
-/// `scf.if`, `arith.select`, and unrealized casts via
-/// `findDefiningOpOfType<tt::MakeTensorDescOp>`. When that trace fails
-/// (e.g., the descriptor comes from a call, a region with mismatched
-/// branches, or any unmodeled producer), returns the descriptor Value
-/// itself. That value is never seeded by the dataflow, so the snapshot
-/// comes back as uninitialized and the op is conservatively treated as
-/// Unknown — MayAlias everything — rather than being silently dropped.
-///
-/// For any other op implementing `MemoryEffectOpInterface` with a Read or
-/// Write effect, returns the first pointer-like operand (per
-/// `isPointerLike`). Returns a null Value if the op has no pointer-like
-/// operand; the caller (ctor) still tracks such ops so they act as
-/// universal MayAlias peers.
-///
-/// Returns a null Value for ops that are neither modeled nor interface-
-/// tracked.
-Value getMemOpPointer(Operation *op) {
-  return TypeSwitch<Operation *, Value>(op)
-      .Case<tt::LoadOp>([](auto op) { return op.getPtr(); })
-      .Case<tt::StoreOp>([](auto op) { return op.getPtr(); })
-      .Case<tt::AtomicRMWOp>([](auto op) { return op.getPtr(); })
-      .Case<tt::AtomicCASOp>([](auto op) { return op.getPtr(); })
-      .Case<tt::DescriptorLoadOp, tt::DescriptorStoreOp, tt::DescriptorGatherOp,
-            tt::DescriptorScatterOp, tt::DescriptorReduceOp>(
-          [](auto op) -> Value {
-            Value desc = op.getDesc();
-            // TODO(#6862): once the worklist-based findAllMakeTensorDescOps
-            // lands, iterate all reachable MakeTensorDescOps and union their
-            // base pointers, degrading to Unknown on any irresolvable base.
-            // The single-op resolution here may pick a stale init-args
-            // descriptor for loop-carried descs.
-            if (std::optional<tt::MakeTensorDescOp> makeDesc =
-                    findDefiningOpOfType<tt::MakeTensorDescOp>(desc))
-              return makeDesc->getBase();
-            // Couldn't resolve to a MakeTensorDescOp — keep the op alive
-            // by returning the descriptor itself as an opaque sentinel.
-            return desc;
-          })
-      .Default([](Operation *op) -> Value {
-        // Interface-tracked path: any op with a Read or Write effect. Find
-        // the single pointer-like operand; if none, return null (the op is
-        // still tracked by the ctor as a universal peer).
-        auto memEffects = dyn_cast<MemoryEffectOpInterface>(op);
-        if (!memEffects)
-          return Value();
-        if (!memEffects.hasEffect<MemoryEffects::Read>() &&
-            !memEffects.hasEffect<MemoryEffects::Write>())
-          return Value();
-        auto isPtr = [](Value v) { return isPointerLike(v.getType()); };
-        assert(llvm::count_if(op->getOperands(), isPtr) <= 1 &&
-               "interface-tracked memory-effect op must have at most one "
-               "pointer-like operand");
-        auto it = llvm::find_if(op->getOperands(), isPtr);
-        return it == op->operand_end() ? Value() : *it;
-      });
-}
-
-/// True iff `op` is one of the "modeled" memory-effect ops with a known
-/// pointer-resolution rule: `tt.load/store/atomic_rmw/atomic_cas` and the
-/// five `tt.descriptor_*` ops. Interface-tracked ops (any
-/// `MemoryEffectOpInterface` op with a Read/Write effect) are additionally
-/// handled via `hasReadOrWriteEffect` + `getMemOpPointer`'s default branch;
-/// see the ctor.
-bool isTrackedMemOp(Operation *op) {
-  return isa<tt::LoadOp, tt::StoreOp, tt::AtomicRMWOp, tt::AtomicCASOp,
-             tt::DescriptorLoadOp, tt::DescriptorStoreOp,
-             tt::DescriptorGatherOp, tt::DescriptorScatterOp,
-             tt::DescriptorReduceOp>(op);
-}
-
-/// True iff `op` implements `MemoryEffectOpInterface` and has at least one
-/// `MemoryEffects::Read` or `MemoryEffects::Write` effect. Used to identify
-/// interface-tracked peers alongside the nine modeled op types.
-bool hasReadOrWriteEffect(Operation *op) {
-  auto memEffects = dyn_cast<MemoryEffectOpInterface>(op);
-  if (!memEffects)
-    return false;
-  return memEffects.hasEffect<MemoryEffects::Read>() ||
-         memEffects.hasEffect<MemoryEffects::Write>();
-}
 
 } // anonymous namespace
 
