@@ -5,6 +5,8 @@
 #include "mlir/IR/Value.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
+#include <optional>
+
 namespace mlir {
 class FunctionOpInterface;
 class LoopLikeOpInterface;

@@ -7,6 +7,7 @@
 #include "mlir/Interfaces/LoopLikeInterface.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include <optional>
 
@@ -236,6 +237,9 @@ SmallVector<tt::MakeTensorDescOp> findAllMakeTensorDescOps(Value val) {
         return {};
 
       if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
+        // The induction variable (argNumber == 0) is not traceable.
+        if (arg == forOp.getInductionVar())
+          return {};
         unsigned idx = arg.getArgNumber() - 1;
         worklist.push_back(forOp.getInitArgs()[idx]);
         auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
@@ -298,8 +302,9 @@ SmallVector<tt::MakeTensorDescOp> findAllMakeTensorDescOps(Value val) {
         continue;
       }
       if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(defOp)) {
-        if (castOp.getInputs().size() == 1)
-          worklist.push_back(castOp.getInputs()[0]);
+        if (castOp.getInputs().size() != 1)
+          return {};
+        worklist.push_back(castOp.getInputs()[0]);
         continue;
       }
       // Unknown op producing this value — cannot trace through.
