@@ -70,12 +70,20 @@ static MaskClassification classifyMask(arith::CmpIPredicate pred,
   APInt ivMin = isSigned ? ivRange.smin() : ivRange.umin();
   APInt ivMax = isSigned ? ivRange.smax() : ivRange.umax();
 
-  // Widen IV bounds to match constVal's bitwidth so APInt arithmetic and
-  // comparisons use a consistent width.
+  // Widen or narrow IV bounds to match constVal's bitwidth so APInt arithmetic
+  // and comparisons use a consistent width. When narrowing, bail out on any
+  // bound that does not fit in `bitWidth`: a silent truncation would alias a
+  // wide value to a narrow one and could flip the classification from Unknown
+  // to a bogus AlwaysTrue/AlwaysFalse.
   if (ivMin.getBitWidth() < bitWidth) {
     ivMin = isSigned ? ivMin.sext(bitWidth) : ivMin.zext(bitWidth);
     ivMax = isSigned ? ivMax.sext(bitWidth) : ivMax.zext(bitWidth);
   } else if (ivMin.getBitWidth() > bitWidth) {
+    auto fits = [&](const APInt &v) {
+      return isSigned ? v.isSignedIntN(bitWidth) : v.isIntN(bitWidth);
+    };
+    if (!fits(ivMin) || !fits(ivMax))
+      return MaskClassification::Unknown;
     ivMin = ivMin.trunc(bitWidth);
     ivMax = ivMax.trunc(bitWidth);
   }
