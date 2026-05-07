@@ -1,3 +1,5 @@
+#include "intel/include/Analysis/AxisInfoExt.h"
+#include "intel/include/Analysis/StrideInfo.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/BlockIOUtils.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
@@ -9,7 +11,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/LinearLayout.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/Support/Debug.h"
 #include <optional>
 
@@ -30,12 +32,25 @@ namespace mlir::triton::gpu::intel {
 
 namespace {
 
-/// Check whether a descriptor load is eligible for 2D block IO lowering.
-static bool isBlockIOEligible(tt::DescriptorLoadOp op) {
+/// Check whether a load is eligible for 2D block IO lowering.
+template <typename OpTy,
+          std::enable_if_t<
+              llvm::is_one_of<OpTy, tt::LoadOp, tt::DescriptorLoadOp>::value,
+              bool> = true>
+static bool isBlockIOEligible(OpTy op) {
   if (!op->getAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName()))
     return false;
 
-  auto tensorTy = cast<RankedTensorType>(op.getType());
+  RankedTensorType tensorTy;
+  if constexpr (std::is_same_v<OpTy, tt::LoadOp>) {
+    tensorTy =
+        dyn_cast<RankedTensorType>(tt::getPointeeType(op.getPtr().getType()));
+    if (!tensorTy)
+      return false;
+  } else {
+    tensorTy = cast<RankedTensorType>(op.getType());
+  }
+
   if (tensorTy.getRank() < 2)
     return false;
 
@@ -49,6 +64,36 @@ static bool isBlockIOEligible(tt::DescriptorLoadOp op) {
     return false;
 
   return true;
+}
+
+/// Get the stride (in elements) for a given dimension from stride analysis.
+/// Returns -1 if unknown, 0 if zero stride.
+static int64_t getStride(tt::intel::ModuleStrideAnalysis &strideAnalysis,
+                         Value ptr, unsigned dim) {
+  tt::intel::StrideInfo *info = strideAnalysis.getStrideInfo(ptr);
+  if (info) {
+    const auto &stride = info->getStride();
+    if (dim < stride.size())
+      return stride[dim];
+  }
+  return -1;
+}
+
+/// Create a zero-valued splat for the given tensor type. Used when a mask is
+/// present but no explicit 'other' value was provided by the user.
+static Value createZeroSplat(OpBuilder &builder, Location loc,
+                             RankedTensorType tensorTy) {
+  Type elemType = tensorTy.getElementType();
+  Attribute zeroAttr;
+  if (isa<FloatType>(elemType))
+    zeroAttr = builder.getFloatAttr(elemType, 0.0);
+  else if (isa<IntegerType>(elemType))
+    zeroAttr = builder.getIntegerAttr(elemType, 0);
+  else
+    llvm_unreachable("unsupported element type for zero splat");
+  Value zeroVal =
+      arith::ConstantOp::create(builder, loc, cast<TypedAttr>(zeroAttr));
+  return tt::SplatOp::create(builder, loc, tensorTy, zeroVal);
 }
 
 /// Determine whether memory layout is row-major from the block_io attribute.
@@ -74,11 +119,22 @@ public:
             ttgi::TritonIntelGPUDialect::getSupport2DBlockIOAttrName()))
       return;
 
+    tt::intel::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
+    tt::intel::ModuleStrideAnalysis strideAnalysis(mod, axisInfoAnalysis);
+
     SmallVector<tt::DescriptorLoadOp> descLoadOps;
     mod.walk([&](tt::DescriptorLoadOp op) { descLoadOps.push_back(op); });
-
     for (auto op : descLoadOps)
       convertDescriptorLoadOp(op);
+
+    // Tensor-of-pointer loads are gated behind an env var until the LLVM
+    // lowering for ttig.2d_block_load_from_ptr is landed.
+    if (tt::tools::getBoolEnv("TRITON_INTEL_LOWER_PTR_LOAD_TO_2D_BLOCK")) {
+      SmallVector<tt::LoadOp> loadOps;
+      mod.walk([&](tt::LoadOp op) { loadOps.push_back(op); });
+      for (auto op : loadOps)
+        convertLoadOp(op, strideAnalysis);
+    }
   }
 
 private:
@@ -102,8 +158,7 @@ private:
 
     auto descType = cast<tt::TensorDescType>(desc.getType());
     unsigned descRank = descType.getBlockType().getRank();
-    assert(descRank == rank &&
-           "descriptor and result tensor must have same rank");
+    assert(descRank >= rank && "descriptor rank must be >= result tensor rank");
 
     bool memoryRowMajor = isMemoryRowMajor(op);
 
@@ -126,21 +181,29 @@ private:
     auto memLayout = memoryRowMajor ? ttgi::BlockIOMode::RowMajor
                                     : ttgi::BlockIOMode::ColumnMajor;
 
-    // Extract surface parameters from MakeTensorDescOp.
-    // The surface parameters describe the physical memory layout and are the
-    // SAME regardless of row_major/column_major. The memory_layout attribute
-    // tells the LLVM lowering to set contiguousDim, which triggers the
-    // transpose flag in the HW instruction via getBlockIOTileSize.
-    Value basePtr = makeTensorDescOp->getBase();
-    Operation::operand_range shapes = makeTensorDescOp->getShape();
-    Operation::operand_range strides = makeTensorDescOp->getStrides();
+    // Extract all surface parameters from the runtime descriptor value.
+    // This correctly handles loop-carried descriptors where fields change
+    // per iteration. Struct layout: { shapes[rank], strides[rank], base_ptr }.
+    Type i64Ty = builder.getI64Type();
+    Type ptrType =
+        tt::PointerType::get(descType.getBlockType().getElementType(), 1);
+    SmallVector<Value> shapes(descRank);
+    SmallVector<Value> strides(descRank);
+    for (unsigned d = 0; d < descRank; ++d) {
+      shapes[d] = ttgi::ExtractDescOp::create(builder, loc, i64Ty, desc,
+                                              builder.getI32IntegerAttr(d));
+      strides[d] = ttgi::ExtractDescOp::create(
+          builder, loc, i64Ty, desc, builder.getI32IntegerAttr(descRank + d));
+    }
+    Value basePtr = ttgi::ExtractDescOp::create(
+        builder, loc, ptrType, desc, builder.getI32IntegerAttr(2 * descRank));
     SmallVector<Value> indices(op.getIndices().begin(), op.getIndices().end());
     assert(indices.size() == descRank &&
            "descriptor index count must match descriptor rank");
 
-    // Fold batch indices into base_ptr for rank > 2 loads. The leading
-    // dimensions (before the inner-2 dims) are batch dims whose offsets
-    // are multiplied by the corresponding strides and added to the pointer.
+    // Fold batch indices into base_ptr. This handles both rank-reducing loads
+    // (descRank > rank: leading descriptor dims are dropped) and same-rank
+    // loads with rank > 2 (batch dims before the inner-2 dims).
     unsigned numBatchDims = descRank - 2;
     for (unsigned d = 0; d < numBatchDims; ++d) {
       Value batchOffset = arith::MulIOp::create(
@@ -159,15 +222,20 @@ private:
       return v;
     };
 
-    // If the pitch stride is a known constant, validate HW constraints
-    // (>= 64 bytes, 16-byte aligned).
-    std::optional<int64_t> pitchStride =
-        tt::intel::getFoldedConstantValue(strides[descRank - 2]);
-    if (pitchStride) {
-      int64_t pitchBytes = *pitchStride * elemSizeInBits / 8;
-      if (pitchBytes < 64 || (pitchBytes % 16) != 0) {
-        LDBG("Invalid pitch " << pitchBytes << " for descriptor load: " << *op);
-        return;
+    // If the pitch stride is a known constant AND the descriptor/result ranks
+    // match, validate HW constraints (>= 64 bytes, 16-byte aligned).
+    // For rank-reducing loads, the stride interpretation may differ from the
+    // 2D surface pitch, so skip static validation (runtime will handle it).
+    if (rank == descRank) {
+      std::optional<int64_t> pitchStride =
+          tt::intel::getFoldedConstantValue(strides[descRank - 2]);
+      if (pitchStride) {
+        int64_t pitchBytes = *pitchStride * elemSizeInBits / 8;
+        if (pitchBytes < 64 || (pitchBytes % 16) != 0) {
+          LDBG("Invalid pitch " << pitchBytes
+                                << " for descriptor load: " << *op);
+          return;
+        }
       }
     }
 
@@ -205,6 +273,115 @@ private:
     op.replaceAllUsesWith(blockLoadOp.getResult());
     op.erase();
     LDBG("Converted descriptor load to ttig.2d_block_load: " << *blockLoadOp);
+  }
+
+  /// Convert a tt.load to ttig.2d_block_load_from_ptr.
+  void convertLoadOp(tt::LoadOp op,
+                     tt::intel::ModuleStrideAnalysis &strideAnalysis) {
+    if (!isBlockIOEligible(op))
+      return;
+
+    auto tensorTy =
+        cast<RankedTensorType>(tt::getPointeeType(op.getPtr().getType()));
+    unsigned rank = tensorTy.getRank();
+    unsigned elemSizeInBits = tensorTy.getElementTypeBitWidth();
+
+    bool memoryRowMajor = isMemoryRowMajor(op);
+    unsigned contiguousDim = memoryRowMajor ? rank - 1 : rank - 2;
+
+    // For 1D->2D reshape loads, skip tile validation and use the stride
+    // attribute directly for pitch.
+    bool has1DReshapeStride =
+        op->hasAttr(ttgi::TritonIntelGPUDialect::getBlockIOStrideAttrName());
+
+    // Validate tile computation and get the actual row/col dims from the
+    // encoding. These may differ from the conventional rank-2/rank-1 for
+    // rank > 2 tensors.
+    unsigned rowDim, colDim;
+    if (has1DReshapeStride) {
+      // 1D reshape: conventional dims, no tile validation needed.
+      rowDim = memoryRowMajor ? rank - 2 : rank - 1;
+      colDim = memoryRowMajor ? rank - 1 : rank - 2;
+    } else {
+      Attribute encoding = tensorTy.getEncoding();
+      LinearLayout llEncoding =
+          cast<ttg::DistributedEncodingTrait>(encoding).toLinearLayout(
+              tensorTy.getShape());
+      if (!ttgi::validate2DBlockLoadTile(llEncoding, contiguousDim,
+                                         elemSizeInBits, tensorTy)) {
+        LDBG("Tile validation failed for load: " << *op);
+        return;
+      }
+      auto sizeInfo = ttgi::getBlockIOTileSize<true>(
+          llEncoding, contiguousDim, elemSizeInBits, /*maskAxisInfo=*/nullptr,
+          /*oneMatrixPerLoadForBT=*/false);
+      rowDim = sizeInfo.rowDim;
+      colDim = sizeInfo.colDim;
+    }
+
+    // Compute pitch from stride analysis or the 1D->2D reshape attribute.
+    int64_t baseWidthBytes = tensorTy.getDimSize(colDim) * elemSizeInBits / 8;
+    constexpr int64_t MIN_PITCH = 64;
+
+    int64_t pitch;
+    int64_t stride; // stride in elements for the row dimension
+    if (has1DReshapeStride) {
+      auto strideAttr = op->getAttrOfType<IntegerAttr>(
+          ttgi::TritonIntelGPUDialect::getBlockIOStrideAttrName());
+      stride = strideAttr.getInt();
+      pitch = stride * elemSizeInBits / 8;
+    } else {
+      stride = getStride(strideAnalysis, op.getPtr(), rowDim);
+      if (stride < 0) {
+        LDBG("Cannot compute constant stride for load: " << *op);
+        return;
+      }
+      if (stride == 0)
+        pitch = std::max((int64_t)MIN_PITCH, baseWidthBytes);
+      else
+        pitch = stride * elemSizeInBits / 8;
+    }
+
+    // HW requires pitch >= 64 bytes and pitch aligned to 16 bytes.
+    if (pitch < MIN_PITCH || (pitch % 16) != 0) {
+      LDBG("Invalid pitch " << pitch << " for load: " << *op);
+      return;
+    }
+
+    OpBuilder builder(op);
+    Location loc = op.getLoc();
+
+    // Compute constant surface parameters.
+    int64_t baseHeightRows = stride == 0 ? 1 : tensorTy.getDimSize(rowDim);
+
+    auto memLayout = memoryRowMajor ? ttgi::BlockIOMode::RowMajor
+                                    : ttgi::BlockIOMode::ColumnMajor;
+
+    // If mask is present but other is absent, create a zero splat as the
+    // default padding value (the verifier requires 'other' when 'mask' is set).
+    Value mask = op.getMask();
+    Value other = op.getOther();
+    if (mask && !other)
+      other = createZeroSplat(builder, loc, tensorTy);
+
+    auto blockPtrLoadOp = ttgi::Subgroup2DBlockLoadFromPtrOp::create(
+        builder, loc, op.getType(), op.getPtr(), mask, other,
+        builder.getI32IntegerAttr(baseWidthBytes),
+        builder.getI32IntegerAttr(baseHeightRows),
+        builder.getI32IntegerAttr(pitch),
+        ttgi::BlockIOModeAttr::get(builder.getContext(), memLayout));
+
+    // Propagate attributes if present.
+    for (StringRef attrName :
+         {ttgi::TritonIntelGPUDialect::getOneMatrixPerLoadAttrName(),
+          ttgi::TritonIntelGPUDialect::getBlockIOStrideAttrName()}) {
+      if (auto attr = op->getAttr(attrName))
+        blockPtrLoadOp->setAttr(attrName, attr);
+    }
+
+    op.replaceAllUsesWith(blockPtrLoadOp.getResult());
+    op.erase();
+    LDBG("Converted load to ttig.2d_block_load_from_ptr: " << *blockPtrLoadOp);
   }
 };
 

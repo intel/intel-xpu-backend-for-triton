@@ -112,6 +112,61 @@ std::pair<SmallVector<unsigned>, unsigned> distributeTDMWarpsAlignToPartition(
   return {warps, numTDMInstructions};
 }
 
+// Shared layout analysis for TDM gather/scatter, used by both
+// getTDMGatherScatterInstrinsicCount (wait-count pass) and
+// emitTDMGatherScatter (lowering) so the instruction-count logic
+// cannot get out of sync.
+//
+// Uses the LinearLayout of the index tensor to determine:
+// 1. Which registers are broadcasted — remove duplicates
+// 2. Which warps are redundant (freeVarMasks)
+// 3. The effective number of indices per warp and max indices per instruction
+// This analysis is direction-agnostic: the index layout determines which warp
+// owns which rows in LDS, regardless of whether data flows to LDS (gather) or
+// from LDS (scatter).
+struct GatherScatterLayoutAnalysis {
+  triton::LinearLayout indexLL; // post-broadcast-removal
+  ColumnAction removeBcastAction;
+  size_t maxIndicesPerInstr;
+  size_t effectiveRegCount;
+  size_t numInstructions;
+  llvm::MapVector<StringAttr, int32_t> freeVarMasks; // from original layout
+};
+
+GatherScatterLayoutAnalysis
+analyzeGatherScatterLayout(RankedTensorType indicesType) {
+  assert(indicesType.getEncoding());
+
+  bool use32BitIndices =
+      indicesType.getElementType().getIntOrFloatBitWidth() == 32;
+  size_t maxIndicesPerInstr = use32BitIndices ? 8 : 16;
+
+  auto indexLL = triton::gpu::toLinearLayout(indicesType);
+  assert(indexLL.getNumOutDims() == 1 &&
+         "Gather/scatter index layout must have exactly one output dimension");
+  auto freeVarMasks = indexLL.getFreeVariableMasks();
+
+  // Remove broadcasted (duplicated) register entries so indexLL has a compact
+  // register dimension containing only unique index values.
+  auto removeBcastAction = actionRemoveBroadcastedRegs(indexLL);
+  if (!removeBcastAction.isIdentity())
+    indexLL = removeBcastAction.apply(indexLL);
+
+  size_t contigIndiceCount = indexLL.getNumConsecutiveInOut();
+  maxIndicesPerInstr = std::min(maxIndicesPerInstr, contigIndiceCount);
+
+  auto kRegister = StringAttr::get(indicesType.getContext(), "register");
+  size_t effectiveRegCount = indexLL.getInDimSize(kRegister);
+  size_t numInstructions =
+      effectiveRegCount == 0
+          ? 0
+          : llvm::divideCeil(effectiveRegCount, maxIndicesPerInstr);
+
+  return {std::move(indexLL), std::move(removeBcastAction),
+          maxIndicesPerInstr, effectiveRegCount,
+          numInstructions,    std::move(freeVarMasks)};
+}
+
 } // namespace
 
 std::pair<SmallVector<unsigned>, unsigned>
@@ -963,8 +1018,8 @@ void emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
                       ArrayRef<Value> instrDstPtrs, Value pred,
                       Value multicastMask, Value barrier,
                       const triton::LinearLayout &instrSharedLayout,
-                      Value ctaId, bool isLoad,
-                      ArrayRef<unsigned> warpsPerCTA) {
+                      Value ctaId, bool isLoad, ArrayRef<unsigned> warpsPerCTA,
+                      int32_t auxBits) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto v4i32Ty = VectorType::get(4, rewriter.getI32Type());
   auto v8i32Ty = VectorType::get(8, rewriter.getI32Type());
@@ -986,7 +1041,7 @@ void emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
                                        : "llvm.amdgcn.tensor.store.from.lds";
     LLVM::createLLVMIntrinsicCallOp(
         rewriter, loc, intrinsicName, {},
-        {group0, group1, group2, group3, group4Zero, b.i32_val(0)});
+        {group0, group1, group2, group3, group4Zero, b.i32_val(auxBits)});
   } else {
     Value group0 = desc[0];
     Value group1 = desc[1];
@@ -1002,9 +1057,9 @@ void emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
 
     const char *intrinsicName = isLoad ? "llvm.amdgcn.tensor.load.to.lds"
                                        : "llvm.amdgcn.tensor.store.from.lds";
-    LLVM::createLLVMIntrinsicCallOp(
-        rewriter, loc, intrinsicName, {},
-        {group0, group1, group2Zero, group3Zero, group4Zero, b.i32_val(0)});
+    LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsicName, {},
+                                    {group0, group1, group2Zero, group3Zero,
+                                     group4Zero, b.i32_val(auxBits)});
   }
 }
 
@@ -1026,7 +1081,7 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
                       Value pred, Value multicastMask, Type elementType,
                       Value barrierPtr, bool isLoad,
                       const triton::LinearLayout &sharedLayout,
-                      Attribute encoding, Value ctaId) {
+                      Attribute encoding, Value ctaId, int32_t auxBits) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   size_t numDims = blockShape.size();
   assert(numDims <= 5);
@@ -1042,7 +1097,8 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
     emitTDMIntrinsic(rewriter, loc, typeConverter, desc, numDims, elementType,
                      to_vector(blockShape), numWarps, padInterval, padAmount,
                      to_vector(offset), dstPtrs, pred, multicastMask,
-                     barrierPtr, sharedLayout, ctaId, isLoad, warpsPerCTA);
+                     barrierPtr, sharedLayout, ctaId, isLoad, warpsPerCTA,
+                     auxBits);
     return;
   }
 
@@ -1106,20 +1162,12 @@ void emitTDMLoadStore(RewriterBase &rewriter, Location loc,
     emitTDMIntrinsic(rewriter, loc, typeConverter, desc, numDims, elementType,
                      effectiveBlockShape, numWarps, padInterval, padAmount,
                      globalOffset, instrDstPtrs, pred, multicastMask, barrier,
-                     sliceLayout, ctaId, isLoad, warpsPerCTA);
+                     sliceLayout, ctaId, isLoad, warpsPerCTA, auxBits);
   }
 }
 
-// Emit a TDM gather or scatter operation for non-contiguous row access.
-size_t getTDMGatherScatterInstrinsicCount(size_t numIndices,
-                                          bool use32BitIndices) {
-  if (numIndices == 0)
-    return 0;
-
-  // Determine max indices per instruction based on index size
-  size_t maxIndicesPerInstr = use32BitIndices ? 8 : 16;
-
-  return llvm::divideCeil(numIndices, maxIndicesPerInstr);
+size_t getTDMGatherScatterInstrinsicCount(RankedTensorType indicesType) {
+  return analyzeGatherScatterLayout(indicesType).numInstructions;
 }
 
 void emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
@@ -1139,32 +1187,19 @@ void emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
 
   bool use32BitIndices =
       indicesType.getElementType().getIntOrFloatBitWidth() == 32;
-  size_t maxIndicesPerInstr = use32BitIndices ? 8 : 16;
 
-  // Use LinearLayout to determine:
-  // 1. Which registers are broadcasted — remove duplicates
-  // 2. Which warps are redundant — zero the pred to make instruction a no-op
-  // 3. Per-batch LDS row offset — via applyLinearLayout per batch
-  // This analysis is direction-agnostic: the index layout determines which warp
-  // owns which rows in LDS, regardless of whether data flows to LDS (gather) or
-  // from LDS (scatter).
-  auto indexLL = triton::gpu::toLinearLayout(indicesType);
-  assert(indexLL.getNumOutDims() == 1 &&
-         "Gather/scatter index layout must have exactly one output dimension");
-  auto freeVarMasks = indexLL.getFreeVariableMasks();
+  auto analysis = analyzeGatherScatterLayout(indicesType);
+  auto &indexLL = analysis.indexLL;
+  size_t maxIndicesPerInstr = analysis.maxIndicesPerInstr;
 
   auto kRegister = rewriter.getStringAttr("register");
   auto kLane = rewriter.getStringAttr("lane");
   auto kWarp = rewriter.getStringAttr("warp");
 
-  // Remove broadcasted (duplicated) register entries. After this, indexLL
-  // has a compact register dimension and effectiveRowIndices contains only
-  // unique index values.
+  // Apply broadcast removal to the actual row indices.
   SmallVector<Value> effectiveRowIndices(rowIndices.begin(), rowIndices.end());
-  auto removeBcast = actionRemoveBroadcastedRegs(indexLL);
-  if (!removeBcast.isIdentity()) {
-    indexLL = removeBcast.apply(indexLL);
-    effectiveRowIndices = removeBcast.apply(
+  if (!analysis.removeBcastAction.isIdentity()) {
+    effectiveRowIndices = analysis.removeBcastAction.apply(
         SmallVector<Value>(rowIndices.begin(), rowIndices.end()));
   }
 
@@ -1172,7 +1207,7 @@ void emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
 
   // If any warp bits are free, those warps hold redundant copies.
   // Zero the pred so the instruction becomes a no-op.
-  int32_t warpFreeMask = freeVarMasks.lookup(kWarp);
+  int32_t warpFreeMask = analysis.freeVarMasks.lookup(kWarp);
   if (warpFreeMask != 0) {
     Value isActive =
         b.icmp_eq(b.and_(warpId, b.i32_val(warpFreeMask)), b.i32_val(0));
@@ -1188,9 +1223,6 @@ void emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
     pred = b.select(inRange, pred, b.i32_val(0));
   }
 
-  size_t contigIndiceCount = indexLL.getNumConsecutiveInOut();
-  maxIndicesPerInstr = std::min(maxIndicesPerInstr, contigIndiceCount);
-
   // Precompute LDS row offset for each instruction batch via
   // applyLinearLayout with the actual register index and warp ID.
   SmallVector<Value> batchLdsOffsets;
@@ -1204,9 +1236,9 @@ void emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
                                       {kBlock, b.i32_val(0)}});
     batchLdsOffsets.push_back(offsets[0].second);
   }
+  assert(batchLdsOffsets.size() == analysis.numInstructions);
 
   size_t numIndicesPerWarp = effectiveRowIndices.size();
-  size_t numInstructions = batchLdsOffsets.size();
 
   // Get the descriptor groups (gather/scatter uses 2D format — desc has 2
   // vector entries: group0 = <4 x i32>, group1 = <8 x i32>)
@@ -1219,7 +1251,7 @@ void emitTDMGatherScatter(RewriterBase &rewriter, Location loc,
   Value group3Zero = LLVM::ZeroOp::create(rewriter, loc, v4i32Ty);
 
   // Issue multiple TDM instructions if needed
-  for (size_t instrIdx = 0; instrIdx < numInstructions; ++instrIdx) {
+  for (size_t instrIdx = 0; instrIdx < analysis.numInstructions; ++instrIdx) {
     size_t startIdx = instrIdx * maxIndicesPerInstr;
     size_t endIdx = std::min(startIdx + maxIndicesPerInstr, numIndicesPerWarp);
 
