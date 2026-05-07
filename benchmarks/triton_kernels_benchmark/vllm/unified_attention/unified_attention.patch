@@ -1,5 +1,5 @@
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 1774f1b30..96ffed698 100644
+index 1774f1b30..3cb113412 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -35,23 +35,84 @@ is_batch_invariant = envs.VLLM_BATCH_INVARIANT
@@ -25,23 +25,23 @@ index 1774f1b30..96ffed698 100644
 +    KV_QUANT_MODE: tl.constexpr,
 +):
 +    """Prepare a loaded KV tile for attention computation.
- 
--    Modes handled inside the core kernel:
++
 +    Casts the raw KV data to Q's dtype and loads per-token-head scales
 +    when applicable:
  
--    - ``KV_QUANT_MODE == 0`` (NONE) and ``2`` (INT8 per-token-head) and
--      ``3`` (FP8 per-token-head): plain cast.  Per-token-head modes apply
--      their scales separately on S/P inside the loop.
--    - ``KV_QUANT_MODE == 1`` (FP8 per-tensor): dequantize using the
--      tensor-wide scale.
+-    Modes handled inside the core kernel:
 +    - ``KV_QUANT_MODE == 0``: cast only (no-op for bf16/fp16).
 +    - ``KV_QUANT_MODE == 1`` (FP8 per-tensor): dequantize inline
 +      using the tensor-wide scale.
 +    - ``KV_QUANT_MODE >= 2`` (per-token-head int8/fp8): cast to Q's
 +      dtype and return per-head scales separately — the caller applies
 +      them after the dot product for better numerical efficiency.
-+
+ 
+-    - ``KV_QUANT_MODE == 0`` (NONE) and ``2`` (INT8 per-token-head) and
+-      ``3`` (FP8 per-token-head): plain cast.  Per-token-head modes apply
+-      their scales separately on S/P inside the loop.
+-    - ``KV_QUANT_MODE == 1`` (FP8 per-tensor): dequantize using the
+-      tensor-wide scale.
 +    Returns ``(data, token_head_scales)``.  *token_head_scales* is only
 +    meaningful when ``KV_QUANT_MODE >= 2``; callers gate its use on
 +    the same constexpr so the compiler eliminates dead code.
@@ -120,7 +120,7 @@ index 1774f1b30..96ffed698 100644
      # Scalars
      scale,
      k_scale,
-@@ -112,12 +166,12 @@ def kernel_unified_attention(
+@@ -112,15 +166,15 @@ def kernel_unified_attention(
      stride_v_cache_1: tl.int64,  # int
      stride_v_cache_2: tl.int64,  # int
      stride_v_cache_3: tl.constexpr,  # int
@@ -130,15 +130,18 @@ index 1774f1b30..96ffed698 100644
 -    stride_vs_blk: tl.int64,
 -    stride_vs_slot: tl.int64,
 -    stride_vs_head: tl.int64,
+     query_start_len_ptr,
+     BLOCK_Q: tl.constexpr,
+     num_seqs: tl.int32,
 +    stride_ks_blk: tl.int32,
 +    stride_ks_slot: tl.int32,
 +    stride_ks_head: tl.int32,
 +    stride_vs_blk: tl.int32,
 +    stride_vs_slot: tl.int32,
 +    stride_vs_head: tl.int32,
-     query_start_len_ptr,
-     BLOCK_Q: tl.constexpr,
-     num_seqs: tl.int32,
+     BLOCK_M: tl.constexpr,
+     NUM_SEGMENTS_PER_SEQ: tl.constexpr,
+     USE_FP8: tl.constexpr,
 @@ -141,22 +195,27 @@ def kernel_unified_attention(
      CHUNK_LOOKBACK: tl.constexpr = -1,
      CHUNK_SIZE: tl.constexpr = -1,
@@ -397,8 +400,7 @@ index 1774f1b30..96ffed698 100644
 +        # compute running maximum
 +        # m_j : (BLOCK_M,)
 +        m_j = tl.maximum(M, tl.max(S, axis=1))
- 
--        M, L, P, alpha = softmax_step(S, M, L)
++
 +        # For sliding window there's a chance the max is -inf due to masking of
 +        # the entire row. In this case we need to set m_j 0 to avoid NaN
 +        m_j = tl.where(m_j > float("-inf"), m_j, 0.0)
@@ -411,7 +413,8 @@ index 1774f1b30..96ffed698 100644
 +
 +        # alpha : (BLOCK_M, )
 +        alpha = tl.exp(M - m_j)
-+
+ 
+-        M, L, P, alpha = softmax_step(S, M, L)
 +        # acc : (BLOCK_M, HEAD_SIZE_PADDED)
          acc = acc * alpha[:, None]
  
@@ -582,3 +585,22 @@ index 1774f1b30..96ffed698 100644
          scale=softmax_scale,
          k_scale=k_descale,
          v_scale=v_descale,
+@@ -707,15 +853,15 @@ def unified_attention(
+         stride_v_cache_1=v.stride(1),
+         stride_v_cache_2=v.stride(2),
+         stride_v_cache_3=v.stride(3),
++        query_start_len_ptr=cu_seqlens_q,
++        BLOCK_Q=BLOCK_Q,
++        num_seqs=num_seqs,
+         stride_ks_blk=ks_blk,
+         stride_ks_slot=ks_slot,
+         stride_ks_head=ks_head,
+         stride_vs_blk=vs_blk,
+         stride_vs_slot=vs_slot,
+         stride_vs_head=vs_head,
+-        query_start_len_ptr=cu_seqlens_q,
+-        BLOCK_Q=BLOCK_Q,
+-        num_seqs=num_seqs,
+         BLOCK_M=BLOCK_M,
+         NUM_SEGMENTS_PER_SEQ=num_segments,
+         USE_FP8=output_scale is not None,
