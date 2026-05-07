@@ -20,11 +20,18 @@ namespace mlir::triton::intel {
 
 /// Function-local alias analysis.
 ///
-/// For a given `tt.load`, returns all other memory-effect ops
-/// (tt.load / tt.store / tt.atomic_rmw / tt.atomic_cas / tt.descriptor_load /
-/// tt.descriptor_store / tt.descriptor_gather / tt.descriptor_scatter /
-/// tt.descriptor_reduce) in the same function whose pointer operand may alias
-/// the load's pointer, in program order.
+/// For a given memory-effect op, returns all other memory-effect ops in
+/// the same function whose pointer operand may alias the query op's
+/// pointer, in program order. Tracks:
+///   - "Modeled" ops with known pointer resolution:
+///     `tt.load/store/atomic_rmw/atomic_cas` and the five
+///     `tt.descriptor_*` ops (base resolved through
+///     `findDefiningOpOfType<MakeTensorDescOp>`).
+///   - Any other op implementing `MemoryEffectOpInterface` with at
+///     least one `MemoryEffects::Read` or `MemoryEffects::Write`
+///     effect. For these, the pointer is the first pointer-like
+///     operand; if none exists, the op acts as a universal peer
+///     (MayAlias with every tracked op).
 ///
 /// Construct once per `tt::FuncOp`; query per `tt::LoadOp`. Cross-function
 /// aliasing (through call sites) is out of scope — Triton backends inline
@@ -50,9 +57,10 @@ public:
   /// Returns all memory-effect ops in the same function whose pointer operand
   /// may alias `queryOp`'s pointer, in program order. Excludes `queryOp`
   /// itself. An empty result means no aliasing peer was found.
-  /// `queryOp` must be one of the tracked op types (tt.load, tt.store,
-  /// tt.atomic_rmw, tt.atomic_cas, or any tt.descriptor_* op); passing any
-  /// other op returns an empty ArrayRef.
+  /// `queryOp` must be a tracked op: one of the "modeled" types (tt.load,
+  /// tt.store, tt.atomic_rmw, tt.atomic_cas, any tt.descriptor_*) or an op
+  /// implementing `MemoryEffectOpInterface` with a Read or Write effect;
+  /// passing any other op returns an empty ArrayRef.
   /// Callers use `isa<tt::StoreOp>(op)` / `isa<tt::AtomicRMWOp>(op)` /
   /// `isa<tt::DescriptorLoadOp>(op)` etc. to classify peers.
   llvm::ArrayRef<mlir::Operation *>

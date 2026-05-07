@@ -25,13 +25,9 @@ add_triton_ut(
   NAME AliasAnalysis
   SRCS AliasAnalysisTest.cpp
   LIBS
-    TritonIntelGPUIR
-    TritonGPUIR
-    TritonIR
-    TritonGPUTransforms
     TritonIntelAnalysis
-    TritonIntelGPUTransforms
-    TritonNvidiaGPUTransforms
+    TritonGPUIR
+    TritonIntelGPUIR
     MLIRArithDialect
     MLIRFuncDialect
     MLIRSCFDialect
