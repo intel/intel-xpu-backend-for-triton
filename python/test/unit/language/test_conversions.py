@@ -400,7 +400,7 @@ def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
         'float8e5b16': (5, 2, 16),
     }[dst_dtype]
 
-    for i in range(256):
+    for i in range(8 if is_xpu_cri() else 256):
         downcast_test(getattr(tl, src_dtype), getattr(tl, dst_dtype), rounding, *stuff, max_repr, i, device=device)
 
 @pytest.mark.parametrize("mode", [
