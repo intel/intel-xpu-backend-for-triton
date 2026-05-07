@@ -25,7 +25,9 @@ add_mlir_dialect_library(MLIRDialectPlugin
         "$<$<PLATFORM_ID:Darwin>:-undefined dynamic_lookup>"
         )
 
-target_compile_options(MLIRDialectPlugin PRIVATE -fvisibility=hidden)
+if(NOT MSVC)
+    target_compile_options(MLIRDialectPlugin PRIVATE -fvisibility=hidden)
+endif()
 if(DEFINED CMAKE_LIBRARY_OUTPUT_DIRECTORY)
     set_target_properties(MLIRDialectPlugin PROPERTIES
                           LIBRARY_OUTPUT_DIRECTORY

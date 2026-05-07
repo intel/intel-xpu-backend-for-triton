@@ -34,7 +34,11 @@
 #define TRITON_PLUGIN_API_VERSION 2
 
 /// Use this helper macro on the public entry point for a Triton plugin.
+#if defined(_WIN32)
+#define TRITON_PLUGIN_API extern "C" __declspec(dllexport)
+#else
 #define TRITON_PLUGIN_API extern "C" __attribute__((visibility("default")))
+#endif
 
 namespace mlir::triton::plugin {
 
