@@ -246,6 +246,7 @@ jobs:
           name: triton-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
 
       - name: Download PTI wheels
+        if: inputs.build_pti
         uses: actions/download-artifact@v8
         with:
           name: pti-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
@@ -256,6 +257,7 @@ jobs:
           python -c 'import triton; print(triton.__version__)'
 
       - name: Install PTI
+        if: inputs.build_pti
         run: |
           pip install intel_pti-*.whl
           PTI_LIBS_DIR=$(python ./scripts/pti_lib.py)
