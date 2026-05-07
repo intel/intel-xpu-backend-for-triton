@@ -24,9 +24,9 @@ namespace mlir::triton::gpu::intel {
 ///
 /// Unknown handling (conservative): if `StrideInfo` has no per-loop
 /// IV-stride entry for this loop, or any axis has unknown IV-stride
-/// (StrideInfo sentinel -1, grouped with 0 via `s <= 0`), the operand is
-/// classified as "held" for L. Such loops therefore report reuse rather
-/// than streaming, which errs on the side of preserving loads the
+/// (StrideInfo sentinel -1), the operand is classified as "unknown"
+/// (distinct from the "held" proof case) and `classify` conservatively
+/// reports reuse for L. This errs on the side of preserving loads the
 /// analysis cannot prove stream.
 ///
 /// `hasTemporalReuse` is the policy wrapper `any_of(getReuseByLoopDepth)`.
@@ -84,6 +84,8 @@ private:
   /// every one of its axes, the effective address streams and the analysis
   /// reports no reuse.
   SmallVector<bool> classify(Operation *op, ValueRange operands) const;
+
+  template <typename OpT> bool hasTemporalReuseImpl(OpT op) const;
 };
 
 } // namespace mlir::triton::gpu::intel

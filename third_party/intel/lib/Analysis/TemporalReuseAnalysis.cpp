@@ -16,9 +16,12 @@ namespace mlir::triton::gpu::intel {
 // Per-operand classification at a single loop level.
 enum class OperandClass {
   Invariant, // Case A: defined outside the loop.
-  Held,      // Case B: at least one axis has IV-stride <= 0.
+  Held,      // Case B: at least one axis has IV-stride == 0 and no axis has
+             // unknown IV-stride.
   Streaming, // Case C: every axis has IV-stride > 0.
-  Unknown,   // No stride info / loop not tracked -> treated as Held.
+  Unknown,   // No stride info / loop not tracked, or at least one axis has
+             // unknown IV-stride (StrideInfo sentinel -1). Conservatively
+             // treated as reuse by `classify`.
 };
 
 static OperandClass classifyOperandAtLoop(LoopLikeOpInterface loop, Value v,
@@ -30,11 +33,14 @@ static OperandClass classifyOperandAtLoop(LoopLikeOpInterface loop, Value v,
   const StrideInfo::DimVectorT *ivStride = si->getIVStride(loop);
   if (!ivStride || ivStride->empty())
     return OperandClass::Unknown;
+  bool anyHeld = false;
   for (int64_t s : *ivStride) {
-    if (s <= 0)
-      return OperandClass::Held;
+    if (s < 0)
+      return OperandClass::Unknown;
+    if (s == 0)
+      anyHeld = true;
   }
-  return OperandClass::Streaming;
+  return anyHeld ? OperandClass::Held : OperandClass::Streaming;
 }
 
 SmallVector<bool> TemporalReuseAnalysis::classify(Operation *op,
@@ -91,19 +97,22 @@ TemporalReuseAnalysis::getReuseByLoopDepth(tt::DescriptorGatherOp op) const {
                   ValueRange{op.getDesc(), op.getXOffsets(), op.getYOffset()});
 }
 
-bool TemporalReuseAnalysis::hasTemporalReuse(tt::LoadOp op) const {
+template <typename OpT>
+bool TemporalReuseAnalysis::hasTemporalReuseImpl(OpT op) const {
   SmallVector<bool> v = getReuseByLoopDepth(op);
   return llvm::any_of(v, [](bool b) { return b; });
+}
+
+bool TemporalReuseAnalysis::hasTemporalReuse(tt::LoadOp op) const {
+  return hasTemporalReuseImpl(op);
 }
 
 bool TemporalReuseAnalysis::hasTemporalReuse(tt::DescriptorLoadOp op) const {
-  SmallVector<bool> v = getReuseByLoopDepth(op);
-  return llvm::any_of(v, [](bool b) { return b; });
+  return hasTemporalReuseImpl(op);
 }
 
 bool TemporalReuseAnalysis::hasTemporalReuse(tt::DescriptorGatherOp op) const {
-  SmallVector<bool> v = getReuseByLoopDepth(op);
-  return llvm::any_of(v, [](bool b) { return b; });
+  return hasTemporalReuseImpl(op);
 }
 
 } // namespace mlir::triton::gpu::intel

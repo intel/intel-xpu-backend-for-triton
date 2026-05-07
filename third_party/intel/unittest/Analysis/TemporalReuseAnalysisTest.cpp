@@ -44,7 +44,9 @@ public:
     auto funcOp =
         func::FuncOp::create(builder->getUnknownLoc(), name, funcType);
     module.push_back(funcOp);
-    funcOp.addEntryBlock();
+    Block *entry = funcOp.addEntryBlock();
+    builder->setInsertionPointToEnd(entry);
+    func::ReturnOp::create(*builder, builder->getUnknownLoc());
     return funcOp;
   }
 
