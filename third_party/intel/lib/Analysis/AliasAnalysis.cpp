@@ -226,10 +226,10 @@ Value getMemOpPointer(Operation *op) {
             tt::DescriptorScatterOp, tt::DescriptorReduceOp>(
           [](auto op) -> Value {
             Value desc = op.getDesc();
-            // TODO(#6862): once findAllMakeTensorDescOps lands, iterate all
-            // reachable MakeTensorDescOps and union their base pointers
-            // (degrading to Unknown if any base is irresolvable). The
-            // single-op resolution here may pick a stale init-args
+            // TODO(#6862): once the worklist-based findAllMakeTensorDescOps
+            // lands, iterate all reachable MakeTensorDescOps and union their
+            // base pointers, degrading to Unknown on any irresolvable base.
+            // The single-op resolution here may pick a stale init-args
             // descriptor for loop-carried descs.
             if (std::optional<tt::MakeTensorDescOp> makeDesc =
                     findDefiningOpOfType<tt::MakeTensorDescOp>(desc))
@@ -293,14 +293,13 @@ AliasAnalysis::AliasAnalysis(tt::FuncOp func) {
     if (!modeled && !interfaceTracked)
       return;
     Value ptr = getMemOpPointer(op);
-    // For modeled ops, getMemOpPointer is guaranteed non-null for all nine
-    // tracked types (descriptor ops fall back to the descriptor value as an
-    // opaque sentinel). Keep the defensive skip for robustness. For
-    // interface-tracked ops, `ptr` may be null: the op has no pointer-like
-    // operand and will be treated as a universal MayAlias peer by
-    // `getAliasingMemOps`.
-    if (modeled && !ptr)
-      return;
+    // For modeled ops, `getMemOpPointer` is guaranteed non-null: descriptor
+    // ops fall back to the descriptor value as an opaque sentinel, and the
+    // other four types (load/store/atomic_rmw/atomic_cas) directly return
+    // a required operand. For interface-tracked ops, `ptr` may be null:
+    // the op has no pointer-like operand and will be treated as a universal
+    // MayAlias peer by `getAliasingMemOps`.
+    assert((!modeled || ptr) && "modeled op returned null pointer");
     memOps.push_back(op);
     memOpPtrs.push_back(ptr); // may be null for interface-tracked ops
   });

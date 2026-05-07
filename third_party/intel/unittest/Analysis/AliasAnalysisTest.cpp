@@ -53,6 +53,10 @@ public:
   triton::FuncOp createFunctionWithReturn(ModuleOp module, StringRef name,
                                           ArrayRef<Type> argTypes) {
     auto funcOp = createFunction(module, name, argTypes);
+    // createFunction restores the insertion point on exit (via its
+    // InsertionGuard), so we must explicitly re-enter the function body
+    // before creating the terminator.
+    builder->setInsertionPointToStart(&funcOp.getBody().front());
     auto loc = builder->getUnknownLoc();
     auto ret = builder->create<triton::ReturnOp>(loc, ValueRange{});
     builder->setInsertionPoint(ret);
@@ -586,7 +590,7 @@ TEST_F(AliasAnalysisTest, DescriptorThroughSCFIfMismatch) {
               ::testing::Contains(loadA.getOperation()));
 }
 
-TEST_F(AliasAnalysisTest, UnmodeledMemoryOpIsPeer) {
+TEST_F(AliasAnalysisTest, InterfaceTrackedOpWithNoPointerIsPeer) {
   // Verify that ops implementing MemoryEffectOpInterface with Read/Write
   // effects (but not in the 9 modeled types) are tracked as universal peers.
   // `tt.print` has MemWrite<GlobalMemory> and takes no pointer operands

@@ -57,10 +57,12 @@ public:
   /// Returns all memory-effect ops in the same function whose pointer operand
   /// may alias `queryOp`'s pointer, in program order. Excludes `queryOp`
   /// itself. An empty result means no aliasing peer was found.
-  /// `queryOp` must be a tracked op: one of the "modeled" types (tt.load,
-  /// tt.store, tt.atomic_rmw, tt.atomic_cas, any tt.descriptor_*) or an op
-  /// implementing `MemoryEffectOpInterface` with a Read or Write effect;
-  /// passing any other op returns an empty ArrayRef.
+  /// `queryOp` must be a tracked op. Tracked ops fall into two categories:
+  ///   1. "Modeled" types — `tt.load`, `tt.store`, `tt.atomic_rmw`,
+  ///      `tt.atomic_cas`, and any `tt.descriptor_*` op.
+  ///   2. Any op implementing `MemoryEffectOpInterface` with a
+  ///      `MemoryEffects::Read` or `MemoryEffects::Write` effect.
+  /// Passing any other op returns an empty ArrayRef.
   /// Callers use `isa<tt::StoreOp>(op)` / `isa<tt::AtomicRMWOp>(op)` /
   /// `isa<tt::DescriptorLoadOp>(op)` etc. to classify peers.
   llvm::ArrayRef<mlir::Operation *>
