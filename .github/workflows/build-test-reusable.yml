@@ -64,6 +64,10 @@ on:
         description: Use SPIR-V backend
         type: boolean
         default: false
+      build_pti:
+        description: Build PTI from source (if false, use system PTI)
+        type: boolean
+        default: true
 
 permissions: read-all
 
@@ -122,6 +126,7 @@ jobs:
             python -m build --wheel --no-isolation && pip install dist/*.whl
 
       - name: Build PTI
+        if: inputs.build_pti
         run: |
           ./scripts/install-pti.sh --build-level-zero
 
@@ -174,6 +179,7 @@ jobs:
           path: dist/*.whl
 
       - name: Upload PTI wheels
+        if: inputs.build_pti
         uses: actions/upload-artifact@v7
         with:
           name: pti-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
