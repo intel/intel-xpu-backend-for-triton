@@ -96,12 +96,20 @@ private:
     tt::MakeTensorDescOp makeTensorDescOp = allDescs[0];
     LDBG("Make tensor desc op: " << makeTensorDescOp);
 
+    // All candidates must have the same padding.
+    tt::PaddingOption padding = makeTensorDescOp.getPadding();
+    if (!llvm::all_of(allDescs, [&](tt::MakeTensorDescOp d) {
+          return d.getPadding() == padding;
+        })) {
+      LDBG("Inconsistent padding across candidates");
+      return;
+    }
+
     // Propagate padding from MakeTensorDescOp unconditionally so the LLVM
     // lowering can read it even after MakeTensorDescOp has been converted
     // in the same applyPartialConversion phase.
-    op->setAttr(
-        ttgi::TritonIntelGPUDialect::getDescPaddingAttrName(),
-        tt::PaddingOptionAttr::get(context, makeTensorDescOp.getPadding()));
+    op->setAttr(ttgi::TritonIntelGPUDialect::getDescPaddingAttrName(),
+                tt::PaddingOptionAttr::get(context, padding));
 
     Operation::operand_range shape = makeTensorDescOp.getShape();
     unsigned rank = shape.size();
@@ -871,6 +879,14 @@ private:
 
     tt::MakeTensorDescOp makeTensorDescOp = allDescs[0];
     Operation::operand_range shape = makeTensorDescOp.getShape();
+    // All candidates must have the same shape operands.
+    if (!llvm::all_of(allDescs, [&](tt::MakeTensorDescOp d) {
+          return d.getShape() == shape;
+        })) {
+      LDBG("Inconsistent shape across descriptor candidates");
+      return false;
+    }
+
     unsigned rank = shape.size();
     if (rank == 1)
       return false;
