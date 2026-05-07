@@ -144,3 +144,22 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     tt.return
   }
 }
+
+// -----
+
+// COM: Test that ttig.extract_desc lowers to llvm.extractvalue from the
+// COM: descriptor struct at the given index.
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @extract_desc_fields
+  tt.func public @extract_desc_fields(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64) {
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <64x32xf16>
+    // CHECK: llvm.extractvalue {{.*}}[0] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
+    %0 = ttig.extract_desc %desc[0] : <64x32xf16> -> i64
+    // CHECK: llvm.extractvalue {{.*}}[2] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
+    %1 = ttig.extract_desc %desc[2] : <64x32xf16> -> i64
+    // CHECK: llvm.extractvalue {{.*}}[4] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
+    %2 = ttig.extract_desc %desc[4] : <64x32xf16> -> !tt.ptr<f16>
+    tt.return
+  }
+}

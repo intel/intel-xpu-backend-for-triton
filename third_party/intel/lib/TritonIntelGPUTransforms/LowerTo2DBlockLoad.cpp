@@ -181,14 +181,22 @@ private:
     auto memLayout = memoryRowMajor ? ttgi::BlockIOMode::RowMajor
                                     : ttgi::BlockIOMode::ColumnMajor;
 
-    // Extract surface parameters from MakeTensorDescOp.
-    // The surface parameters describe the physical memory layout and are the
-    // SAME regardless of row_major/column_major. The memory_layout attribute
-    // tells the LLVM lowering to set contiguousDim, which triggers the
-    // transpose flag in the HW instruction via getBlockIOTileSize.
-    Value basePtr = makeTensorDescOp->getBase();
-    Operation::operand_range shapes = makeTensorDescOp->getShape();
-    Operation::operand_range strides = makeTensorDescOp->getStrides();
+    // Extract all surface parameters from the runtime descriptor value.
+    // This correctly handles loop-carried descriptors where fields change
+    // per iteration. Struct layout: { shapes[rank], strides[rank], base_ptr }.
+    Type i64Ty = builder.getI64Type();
+    Type ptrType =
+        tt::PointerType::get(descType.getBlockType().getElementType(), 1);
+    SmallVector<Value> shapes(descRank);
+    SmallVector<Value> strides(descRank);
+    for (unsigned d = 0; d < descRank; ++d) {
+      shapes[d] = ttgi::ExtractDescOp::create(builder, loc, i64Ty, desc,
+                                              builder.getI32IntegerAttr(d));
+      strides[d] = ttgi::ExtractDescOp::create(
+          builder, loc, i64Ty, desc, builder.getI32IntegerAttr(descRank + d));
+    }
+    Value basePtr = ttgi::ExtractDescOp::create(
+        builder, loc, ptrType, desc, builder.getI32IntegerAttr(2 * descRank));
     SmallVector<Value> indices(op.getIndices().begin(), op.getIndices().end());
     assert(indices.size() == descRank &&
            "descriptor index count must match descriptor rank");
