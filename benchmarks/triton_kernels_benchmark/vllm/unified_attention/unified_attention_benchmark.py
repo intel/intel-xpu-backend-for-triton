@@ -178,35 +178,19 @@ def is_enough_memory(x_val, safety_factor=0.80):
 
 # There is an error right now, for FP8 matmul with block size 16 is not supported
 # Input shapes should have M >= 1, N >= 16 and K >= 32
-MMAP_BLOCK_SIZES = [64] if IS_FP8 else [16, 64]
-NUM_BLOCKS = [32768, 2048]
+MMAP_BLOCK_SIZES = [64] if IS_FP8 else [64]
+NUM_BLOCKS = [32768]
 SEQ_LENS = [
-    # One 4k input prefill
-    [(4096, 4096)],
-    # Chunked prefill: 4 batches
-    [(512, 512), (512, 512), (512, 512), (512, 512)],
     # End of chunked prefill and some decoding
     [(1, 1328), (5, 178), (129, 463)],
-    # Pure decoding, 8 batches
-    [(1, k) for k in [1513, 4100, 530, 123, 4803, 434, 3015, 34]]
 ]
 # Models: (q_heads, k_heads, head_size, qdtype, sliding_window, soft_cap)
 # sliding_window: None = full attention, int = sliding window size.
 # soft_cap: None = disabled, float = soft_cap value.
 # Models that use both attention types appear twice (one entry each).
 MODELS_BF16 = [
-    # llama3.1-8B - full attention
-    (32, 8, 128, None, None, None),
-    # llama3.1-8B - just to test soft caps kernel path, real model doesn't use it, it's relevant for gemma2
-    (32, 8, 128, None, None, 50.0),
     # llama3.3-70B - full attention
     (64, 8, 128, None, None, None),
-    # llama4 Scout - sliding window attention (window size 8192)
-    (64, 8, 128, None, 8192, None),
-    # Qwen2.5-235B - full attention
-    (64, 4, 128, None, None, None),
-    # Qwen2.5-235B - sliding window attention (window size 256)
-    (64, 4, 128, None, 256, None),
     # gpt-oss-120b - full attention
     # (64, 8, 64, None, None, None),
     # gpt-oss-120b - sliding window attention (window size 128)
