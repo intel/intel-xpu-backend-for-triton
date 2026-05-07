@@ -24,7 +24,6 @@ BENCHMARK_DIR="$(cd "$SCRIPT_DIR/$BENCHMARK_FOLDER" && pwd)"
 NAME="$(basename "$BENCHMARK_DIR")"
 PATCH_FILE="$BENCHMARK_DIR/$NAME.patch"
 BENCHMARK_SCRIPT="$BENCHMARK_DIR/${NAME}_benchmark.py"
-BASE_TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-$REPO_ROOT/triton_cache}"
 
 # Ensure patch is not already applied before baseline
 cd "$VLLM_DIR"
@@ -34,7 +33,7 @@ if git apply --reverse --check "$PATCH_FILE" 2>/dev/null; then
 fi
 
 echo "=== Running benchmark WITHOUT patch ==="
-TRITON_CACHE_DIR="${BASE_TRITON_CACHE_DIR}/cache" TD_PATCHED=0 python "$BENCHMARK_SCRIPT" "$@"
+TD_PATCHED=0 python "$BENCHMARK_SCRIPT" "$@"
 
 echo ""
 echo "=== Applying patch ==="
@@ -42,7 +41,7 @@ git apply "$PATCH_FILE"
 
 echo ""
 echo "=== Running benchmark WITH tensor descriptor patch ==="
-TRITON_CACHE_DIR="${BASE_TRITON_CACHE_DIR}/cache-td" TD_PATCHED=1 python "$BENCHMARK_SCRIPT" "$@"
+TD_PATCHED=1 python "$BENCHMARK_SCRIPT" "$@"
 
 echo ""
 echo "=== Reverting patch ==="
