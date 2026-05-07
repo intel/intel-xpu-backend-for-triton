@@ -177,6 +177,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         dev_prop['has_f4_conversions'] = tgt_prop.get('has_f4_conversions', False)
         dev_prop['has_f8_conversions'] = tgt_prop.get('has_f8_conversions', False)
         dev_prop['has_256b_prefetch'] = tgt_prop.get('has_256b_prefetch', False)
+        # Same Xe3P+ gate as 256B prefetch pending separate driver prop.
+        dev_prop['has_256b_load_store'] = tgt_prop.get('has_256b_prefetch', False)
         dev_prop['has_rounded_divide_sqrt'] = tgt_prop.get('has_rounded_divide_sqrt', not is_lts)
 
         if '__intel_already_queried_extensions__' not in tgt_prop:
@@ -260,6 +262,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         module_opts.support_f4_conversion = properties["has_f4_conversions"]
         module_opts.support_f8_conversion = properties["has_f8_conversions"]
         module_opts.support_256b_prefetch = properties["has_256b_prefetch"]
+        module_opts.support_256b_load_store = properties["has_256b_load_store"]
         module_opts.support_subgroup_matrix_multiply_accumulate_bf8 = properties[
             "has_subgroup_matrix_multiply_accumulate_bfloat8"]
         module_opts.support_rounded_divide_sqrt = properties["has_rounded_divide_sqrt"]
@@ -311,6 +314,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.ttir.add_convert_to_ttgpuir(pm, "xpu", opt.num_warps, opt.warp_size, opt.num_ctas)
         # optimize TTGIR
         passes.ttgpuir.add_coalesce(pm)
+        if properties["has_256b_load_store"]:
+            intel.passes.ttgpuir.add_widen_load_store_encoding(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
 
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
@@ -337,6 +342,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.ttgpuir.add_prefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
+        if not knobs.intel.disable_annotate_cache_control:
+            intel.passes.ttgpuir.add_annotate_cache_control(pm)
         intel.passes.ttgpuir.add_reduce_data_duplication(pm)
         passes.ttgpuir.add_reorder_instructions(pm)
         passes.ttir.add_loop_aware_cse(pm)

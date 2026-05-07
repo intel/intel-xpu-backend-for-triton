@@ -56,7 +56,7 @@
 #include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
 
 #include "triton/Tools/PluginUtils.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Tools/Sys/GetEnv.h"
 
 namespace mlir {
 namespace test {

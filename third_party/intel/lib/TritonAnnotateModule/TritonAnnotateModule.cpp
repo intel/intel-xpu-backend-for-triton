@@ -1,7 +1,7 @@
 #include "intel/include/Analysis/DPAS.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/TritonAnnotateModule/Passes.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Tools/Sys/GetEnv.h"
 
 namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_TRITONANNOTATEMODULE
@@ -69,6 +69,11 @@ struct TritonAnnotateModule
     if (supportPrefetch256Bytes)
       mod->setAttr(
           ttgi::TritonIntelGPUDialect::getSupportPrefetch256BAttrName(),
+          builder.getUnitAttr());
+
+    if (support256bLoadStore)
+      mod->setAttr(
+          ttgi::TritonIntelGPUDialect::getSupport256bLoadStoreAttrName(),
           builder.getUnitAttr());
 
     if (supportBfloat16Arithmetic)
