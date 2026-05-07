@@ -1,8 +1,9 @@
 // RUN: triton-opt %s -triton-intel-remove-masks | FileCheck %s
 
 module {
-  // COM: Test compound AND with both conjuncts always true
-  // COM: ([IV+[0..31]] < 64) AND ([IV+[0..31]] < 64) should be simplified and mask removed
+  // COM: Test compound AND with both conjuncts always true.
+  // COM: ([IV+[0..31]] < 64) AND ([IV+[0..31]] < 64) -- the load's mask is
+  // COM: dropped; the arith.andi and its cmp operands survive as dead IR.
   tt.func public @test_compound_and_both_true(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) -> tensor<32xf32> {
     %cst = arith.constant dense<0.000000e+00> : tensor<32xf32>
     %c0_i32 = arith.constant 0 : i32
@@ -35,9 +36,9 @@ module {
 // -----
 
 module {
-  // COM: Test compound AND with one conjunct always true
-  // COM: ([IV+[0..31]] < 64) AND ([IV+[0..31]] < dynamic) should not be fully removed
-  // COM: The pass may simplify by eliminating the always-true conjunct, leaving dynamic mask
+  // COM: Test compound AND with one conjunct always true, one dynamic.
+  // COM: ([IV+[0..31]] < 64) AND ([IV+[0..31]] < dynamic) -- the overall
+  // COM: classification is Unknown, so the load keeps its full andi mask.
   tt.func public @test_compound_and_one_true(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32) -> tensor<32xf32> {
     %cst = arith.constant dense<0.000000e+00> : tensor<32xf32>
     %c0_i32 = arith.constant 0 : i32
@@ -74,8 +75,9 @@ module {
 // -----
 
 module {
-  // COM: Test nested compound AND with all conjuncts always true
-  // COM: (([IV+[0..31]] < 64) AND ([IV+[0..31]] < 64)) AND ([IV+[0..31]] < 64) should be simplified
+  // COM: Test nested compound AND with all conjuncts always true.
+  // COM: (([IV+[0..31]] < 64) AND ([IV+[0..31]] < 64)) AND ([IV+[0..31]] < 64)
+  // COM: -- the load's mask is dropped; the andi tree survives as dead IR.
   tt.func public @test_nested_and_all_true(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) -> tensor<32xf32> {
     %cst = arith.constant dense<0.000000e+00> : tensor<32xf32>
     %c0_i32 = arith.constant 0 : i32
@@ -110,8 +112,9 @@ module {
 // -----
 
 module {
-  // COM: Test mixed predicates in compound AND
-  // COM: ([IV+[0..31]] < 64) AND ([IV+[0..31]] <= 63) both always true, mask should be removed
+  // COM: Test mixed predicates in compound AND.
+  // COM: ([IV+[0..31]] < 64) AND ([IV+[0..31]] <= 63) -- both always true,
+  // COM: the load's mask is dropped.
   tt.func public @test_mixed_predicates_and(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) -> tensor<32xf32> {
     %cst = arith.constant dense<0.000000e+00> : tensor<32xf32>
     %c0_i32 = arith.constant 0 : i32
@@ -180,8 +183,10 @@ module {
 // -----
 
 module {
-  // COM: Test compound AND where result is used by select operation
-  // COM: Even if mask is always true, if used by select, behavior depends on pass logic
+  // COM: Test compound AND whose mask is also used by a select.
+  // COM: The load's mask and the select's condition resolve to AlwaysTrue, so
+  // COM: the load is replaced by an unmasked load and the select's trueValue
+  // COM: (that unmasked load) is propagated to the downstream arith.addf.
   tt.func public @test_and_used_by_select(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) -> tensor<32xf32> {
     %cst = arith.constant dense<0.000000e+00> : tensor<32xf32>
     %cst_1 = arith.constant dense<1.000000e+00> : tensor<32xf32>
@@ -207,8 +212,10 @@ module {
   }
 
   // CHECK-LABEL: tt.func public @test_and_used_by_select
-  // CHECK:         scf.for
+  // CHECK:         scf.for [[IV:%.+]] = %{{.+}} to %{{.+}} step %{{.+}} iter_args([[ACC:%.+]] = %{{.+}})
   // CHECK:           [[PTR:%.+]] = tt.addptr {{%.+}}, {{%.+}} : tensor<32x!tt.ptr<f32>>, tensor<32xi32>
   // CHECK:           [[LOAD:%.+]] = tt.load [[PTR]] : tensor<32x!tt.ptr<f32>>
-  // COM: The select might be simplified or preserved depending on implementation
+  // COM: The select's trueValue (the unmasked load) is propagated to the addf.
+  // CHECK:           [[NEW:%.+]] = arith.addf [[ACC]], [[LOAD]] : tensor<32xf32>
+  // CHECK:           scf.yield [[NEW]]
 }
