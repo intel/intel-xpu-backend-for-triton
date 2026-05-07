@@ -1,5 +1,5 @@
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 1774f1b30..8752b7602 100644
+index 1774f1b30..b20fceeb7 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -61,9 +61,6 @@ def kernel_unified_attention(
@@ -36,35 +36,36 @@ index 1774f1b30..8752b7602 100644
      query_start_len_ptr,
      BLOCK_Q: tl.constexpr,
      num_seqs: tl.int32,
-@@ -129,6 +116,19 @@ def kernel_unified_attention(
-     # to ``[segm_idx, segm_idx+1) × tiles_per_segment`` and writes
-     # per-segment partials, finalized by ``reduce_segments``.
-     IS_3D: tl.constexpr,
+@@ -135,13 +122,28 @@ def kernel_unified_attention(
+     KV_QUANT_MODE: tl.constexpr = 0,
+     FP8_MIN: tl.constexpr = float8_info.min,
+     FP8_MAX: tl.constexpr = float8_info.max,
 +    # Per-(token, head) scale caches (used iff KV_QUANT_MODE in {2, 3}).
 +    # For other modes callers may pass any non-null pointer.
-+    k_scale_cache_ptr,
-+    v_scale_cache_ptr,
-+    stride_ks_blk: tl.int64,
-+    stride_ks_slot: tl.int64,
-+    stride_ks_head: tl.int64,
-+    stride_vs_blk: tl.int64,
-+    stride_vs_slot: tl.int64,
-+    stride_vs_head: tl.int64,
-+    segm_output_ptr,
-+    segm_max_ptr,
-+    segm_expsum_ptr,
-     # KV cache quantization mode handled inside this kernel via constexpr
-     # branches: NONE (0), FP8_PER_TENSOR (1), INT8_PER_TOKEN_HEAD (2),
-     # FP8_PER_TOKEN_HEAD (3).
-@@ -141,6 +141,8 @@ def kernel_unified_attention(
++    k_scale_cache_ptr=None,
++    v_scale_cache_ptr=None,
++    stride_ks_blk=None,
++    stride_ks_slot=None,
++    stride_ks_head=None,
++    stride_vs_blk=None,
++    stride_vs_slot=None,
++    stride_vs_head=None,
++    segm_output_ptr=None,
++    segm_max_ptr=None,
++    segm_expsum_ptr=None,
+     # Chunked / block-local attention.  ``CHUNK_LOOKBACK >= 0`` enables
+     # chunked masking (used by Gemma3 block-local layers); takes precedence
+     # over ``SLIDING_WINDOW`` inside the helpers.  ``-1`` disables.
      CHUNK_LOOKBACK: tl.constexpr = -1,
      CHUNK_SIZE: tl.constexpr = -1,
  ):
+-    USE_PER_TOKEN_HEAD_SCALES: tl.constexpr = KV_QUANT_MODE >= 2
 +    tl.static_assert(BLOCK_SIZE % TILE_SIZE == 0, "BLOCK_SIZE must be multiple of TILE_SIZE")
 +    tl.static_assert(BLOCK_SIZE >= TILE_SIZE, "BLOCK_SIZE must be >= TILE_SIZE")
-     USE_PER_TOKEN_HEAD_SCALES: tl.constexpr = KV_QUANT_MODE >= 2
++    USE_PER_TOKEN_HEAD_SCALES: tl.constexpr = (KV_QUANT_MODE >= 2) and (KV_QUANT_MODE <= 3)
  
      q_block_global_idx = tl.program_id(0)
+     kv_head_idx = tl.program_id(1)
 @@ -168,28 +170,31 @@ def kernel_unified_attention(
          tiles_per_segment = 0
  
@@ -277,10 +278,27 @@ index 1774f1b30..8752b7602 100644
  
      # The kernel signature is the same for 2D and 3D — only the launch
      # grid + a handful of constexpr toggles differ.  Per-token-head scale
-@@ -645,6 +628,30 @@ def unified_attention(
+@@ -637,17 +620,43 @@ def unified_attention(
+         k_scale_ptr = k_scale_cache
+         v_scale_ptr = v_scale_cache
+     else:
+-        ks_blk = ks_slot = ks_head = 0
+-        vs_blk = vs_slot = vs_head = 0
+-        # Pass the K cache as a stand-in pointer; never dereferenced.
+-        k_scale_ptr = k
+-        v_scale_ptr = v
++        # Values will not be referenced in this case.
++        # Pass None to allow Triton to discard the extraneous parameters and reduce register pressure.
++        ks_blk = ks_slot = ks_head = None
++        vs_blk = vs_slot = vs_head = None
++        k_scale_ptr = None
++        v_scale_ptr = None
  
      # 3D needs real segm tensors; 2D never touches them but Triton wants
      # a non-null pointer.  Reuse ``out`` as the placeholder.
+-    segm_output_ptr = softmax_segm_output if use_3d else out
+-    segm_max_ptr = softmax_segm_max if use_3d else out
+-    segm_expsum_ptr = softmax_segm_expsum if use_3d else out
 +    if use_3d:
 +        num_par_softmax_segments = 16
 +        softmax_segm_output = torch.empty(
@@ -305,10 +323,14 @@ index 1774f1b30..8752b7602 100644
 +            dtype=torch.float32,
 +            device=q.device,
 +        )
-     segm_output_ptr = softmax_segm_output if use_3d else out
-     segm_max_ptr = softmax_segm_max if use_3d else out
-     segm_expsum_ptr = softmax_segm_expsum if use_3d else out
-@@ -660,9 +667,6 @@ def unified_attention(
++    # Pass None to allow Triton to discard the extraneous parameters and reduce register pressure.
++    segm_output_ptr = softmax_segm_output if use_3d else None
++    segm_max_ptr = softmax_segm_max if use_3d else None
++    segm_expsum_ptr = softmax_segm_expsum if use_3d else None
+     num_segments = num_par_softmax_segments if use_3d else 1
+ 
+     grid: tuple[Any, ...]
+@@ -660,9 +669,6 @@ def unified_attention(
  
      kernel_unified_attention[grid](
          output_ptr=out,
@@ -318,7 +340,7 @@ index 1774f1b30..8752b7602 100644
          query_ptr=q,
          key_cache_ptr=k,
          value_cache_ptr=v,
-@@ -671,8 +675,6 @@ def unified_attention(
+@@ -671,8 +677,6 @@ def unified_attention(
          seq_lens_ptr=seqused_k,
          alibi_slopes_ptr=alibi_slopes,
          qq_bias_ptr=qq_bias,
@@ -327,7 +349,7 @@ index 1774f1b30..8752b7602 100644
          scale=softmax_scale,
          k_scale=k_descale,
          v_scale=v_descale,
-@@ -707,12 +709,6 @@ def unified_attention(
+@@ -707,12 +711,6 @@ def unified_attention(
          stride_v_cache_1=v.stride(1),
          stride_v_cache_2=v.stride(2),
          stride_v_cache_3=v.stride(3),
@@ -340,10 +362,10 @@ index 1774f1b30..8752b7602 100644
          query_start_len_ptr=cu_seqlens_q,
          BLOCK_Q=BLOCK_Q,
          num_seqs=num_seqs,
-@@ -720,6 +716,17 @@ def unified_attention(
-         NUM_SEGMENTS_PER_SEQ=num_segments,
+@@ -721,6 +719,17 @@ def unified_attention(
          USE_FP8=output_scale is not None,
          IS_3D=use_3d,
+         KV_QUANT_MODE=kv_quant_mode,
 +        k_scale_cache_ptr=k_scale_ptr,
 +        v_scale_cache_ptr=v_scale_ptr,
 +        stride_ks_blk=ks_blk,
@@ -355,6 +377,6 @@ index 1774f1b30..8752b7602 100644
 +        segm_output_ptr=segm_output_ptr,
 +        segm_max_ptr=segm_max_ptr,
 +        segm_expsum_ptr=segm_expsum_ptr,
-         KV_QUANT_MODE=kv_quant_mode,
          CHUNK_LOOKBACK=chunk_lookback,
          CHUNK_SIZE=chunk_size,
+     )
