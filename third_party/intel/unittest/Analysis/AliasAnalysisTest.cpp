@@ -46,6 +46,26 @@ public:
     return funcOp;
   }
 
+  /// Like createFunction, but appends an empty `tt.return` at the end of
+  /// the entry block and leaves the insertion point immediately BEFORE
+  /// the return so the body can be built without caring about the
+  /// terminator.
+  triton::FuncOp createFunctionWithReturn(ModuleOp module, StringRef name,
+                                          ArrayRef<Type> argTypes) {
+    auto funcOp = createFunction(module, name, argTypes);
+    auto loc = builder->getUnknownLoc();
+    auto ret = builder->create<triton::ReturnOp>(loc, ValueRange{});
+    builder->setInsertionPoint(ret);
+    return funcOp;
+  }
+
+  /// Creates a tt.load with default cache/eviction attributes.
+  triton::LoadOp makeLoad(Value ptr) {
+    return builder->create<triton::LoadOp>(
+        builder->getUnknownLoc(), ptr, triton::CacheModifier::NONE,
+        triton::EvictionPolicy::NORMAL, /*isVolatile=*/false);
+  }
+
   Type getPtrType(Type elemType) {
     return triton::PointerType::get(elemType, 1);
   }
@@ -62,11 +82,7 @@ protected:
 TEST_F(AliasAnalysisTest, TwoLoadsSameArgDifferentOffsets) {
   auto module = createModule();
   auto ptrType = getPtrType(builder->getF16Type());
-  auto funcOp = createFunction(module, "test_func", {ptrType});
-
-  OpBuilder::InsertionGuard guard(*builder);
-  builder->setInsertionPointToStart(&funcOp.getBody().front());
-
+  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
   auto loc = builder->getUnknownLoc();
   auto arg0 = funcOp.getArgument(0);
 
@@ -74,18 +90,12 @@ TEST_F(AliasAnalysisTest, TwoLoadsSameArgDifferentOffsets) {
   auto offset1 = builder->create<arith::ConstantOp>(
       loc, i32Type, builder->getI32IntegerAttr(0));
   auto ptr1 = builder->create<triton::AddPtrOp>(loc, ptrType, arg0, offset1);
-  auto load1 =
-      builder->create<triton::LoadOp>(loc, ptr1, triton::CacheModifier::NONE,
-                                      triton::EvictionPolicy::NORMAL, false);
+  auto load1 = makeLoad(ptr1);
 
   auto offset2 = builder->create<arith::ConstantOp>(
       loc, i32Type, builder->getI32IntegerAttr(16));
   auto ptr2 = builder->create<triton::AddPtrOp>(loc, ptrType, arg0, offset2);
-  auto load2 =
-      builder->create<triton::LoadOp>(loc, ptr2, triton::CacheModifier::NONE,
-                                      triton::EvictionPolicy::NORMAL, false);
-
-  builder->create<triton::ReturnOp>(loc, ValueRange{});
+  auto load2 = makeLoad(ptr2);
 
   mlir::triton::intel::AliasAnalysis analysis(funcOp);
   EXPECT_THAT(analysis.getAliasingMemOps(load1),
@@ -97,23 +107,13 @@ TEST_F(AliasAnalysisTest, TwoLoadsSameArgDifferentOffsets) {
 TEST_F(AliasAnalysisTest, TwoLoadsDistinctArgs) {
   auto module = createModule();
   auto ptrType = getPtrType(builder->getF16Type());
-  auto funcOp = createFunction(module, "test_func", {ptrType, ptrType});
-
-  OpBuilder::InsertionGuard guard(*builder);
-  builder->setInsertionPointToStart(&funcOp.getBody().front());
-
+  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType, ptrType});
   auto loc = builder->getUnknownLoc();
   auto arg0 = funcOp.getArgument(0);
   auto arg1 = funcOp.getArgument(1);
 
-  auto load1 =
-      builder->create<triton::LoadOp>(loc, arg0, triton::CacheModifier::NONE,
-                                      triton::EvictionPolicy::NORMAL, false);
-  auto load2 =
-      builder->create<triton::LoadOp>(loc, arg1, triton::CacheModifier::NONE,
-                                      triton::EvictionPolicy::NORMAL, false);
-
-  builder->create<triton::ReturnOp>(loc, ValueRange{});
+  auto load1 = makeLoad(arg0);
+  auto load2 = makeLoad(arg1);
 
   mlir::triton::intel::AliasAnalysis analysis(funcOp);
   EXPECT_THAT(analysis.getAliasingMemOps(load1), ::testing::IsEmpty());
@@ -123,11 +123,7 @@ TEST_F(AliasAnalysisTest, TwoLoadsDistinctArgs) {
 TEST_F(AliasAnalysisTest, LoadAndStoreSameArg) {
   auto module = createModule();
   auto ptrType = getPtrType(builder->getF16Type());
-  auto funcOp = createFunction(module, "test_func", {ptrType});
-
-  OpBuilder::InsertionGuard guard(*builder);
-  builder->setInsertionPointToStart(&funcOp.getBody().front());
-
+  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
   auto loc = builder->getUnknownLoc();
   auto arg0 = funcOp.getArgument(0);
 
@@ -135,9 +131,7 @@ TEST_F(AliasAnalysisTest, LoadAndStoreSameArg) {
   auto offset1 = builder->create<arith::ConstantOp>(
       loc, i32Type, builder->getI32IntegerAttr(0));
   auto ptr1 = builder->create<triton::AddPtrOp>(loc, ptrType, arg0, offset1);
-  auto load =
-      builder->create<triton::LoadOp>(loc, ptr1, triton::CacheModifier::NONE,
-                                      triton::EvictionPolicy::NORMAL, false);
+  auto load = makeLoad(ptr1);
 
   auto offset2 = builder->create<arith::ConstantOp>(
       loc, i32Type, builder->getI32IntegerAttr(32));
@@ -148,8 +142,6 @@ TEST_F(AliasAnalysisTest, LoadAndStoreSameArg) {
       loc, ptr2, value, triton::CacheModifier::NONE,
       triton::EvictionPolicy::NORMAL);
 
-  builder->create<triton::ReturnOp>(loc, ValueRange{});
-
   mlir::triton::intel::AliasAnalysis analysis(funcOp);
   EXPECT_THAT(analysis.getAliasingMemOps(load),
               ::testing::Contains(storeOp.getOperation()));
@@ -158,26 +150,18 @@ TEST_F(AliasAnalysisTest, LoadAndStoreSameArg) {
 TEST_F(AliasAnalysisTest, LoadAndStoreDistinctArgs) {
   auto module = createModule();
   auto ptrType = getPtrType(builder->getF16Type());
-  auto funcOp = createFunction(module, "test_func", {ptrType, ptrType});
-
-  OpBuilder::InsertionGuard guard(*builder);
-  builder->setInsertionPointToStart(&funcOp.getBody().front());
-
+  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType, ptrType});
   auto loc = builder->getUnknownLoc();
   auto argA = funcOp.getArgument(0);
   auto argB = funcOp.getArgument(1);
 
-  auto load =
-      builder->create<triton::LoadOp>(loc, argA, triton::CacheModifier::NONE,
-                                      triton::EvictionPolicy::NORMAL, false);
+  auto load = makeLoad(argA);
 
   auto value = builder->create<arith::ConstantOp>(
       loc, builder->getF16Type(), builder->getF16FloatAttr(1.0));
   builder->create<triton::StoreOp>(loc, argB, value,
                                    triton::CacheModifier::NONE,
                                    triton::EvictionPolicy::NORMAL);
-
-  builder->create<triton::ReturnOp>(loc, ValueRange{});
 
   mlir::triton::intel::AliasAnalysis analysis(funcOp);
   EXPECT_THAT(analysis.getAliasingMemOps(load), ::testing::IsEmpty());
@@ -186,11 +170,7 @@ TEST_F(AliasAnalysisTest, LoadAndStoreDistinctArgs) {
 TEST_F(AliasAnalysisTest, SCFForIterCarriedPointer_JoinsWithInit) {
   auto module = createModule();
   auto ptrType = getPtrType(builder->getF16Type());
-  auto funcOp = createFunction(module, "test_func", {ptrType});
-
-  OpBuilder::InsertionGuard guard(*builder);
-  builder->setInsertionPointToStart(&funcOp.getBody().front());
-
+  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
   auto loc = builder->getUnknownLoc();
   auto argA = funcOp.getArgument(0);
 
@@ -208,19 +188,16 @@ TEST_F(AliasAnalysisTest, SCFForIterCarriedPointer_JoinsWithInit) {
     OpBuilder::InsertionGuard loopGuard(*builder);
     builder->setInsertionPointToStart(forOp.getBody());
     auto iterPtr = forOp.getRegionIterArg(0);
-    builder->create<triton::LoadOp>(loc, iterPtr, triton::CacheModifier::NONE,
-                                    triton::EvictionPolicy::NORMAL, false);
+    makeLoad(iterPtr);
     builder->create<scf::YieldOp>(loc, ValueRange{iterPtr});
   }
 
-  builder->setInsertionPointAfter(forOp);
+  builder->setInsertionPoint(funcOp.front().getTerminator());
   auto value = builder->create<arith::ConstantOp>(
       loc, builder->getF16Type(), builder->getF16FloatAttr(1.0));
   auto storeOp = builder->create<triton::StoreOp>(
       loc, argA, value, triton::CacheModifier::NONE,
       triton::EvictionPolicy::NORMAL);
-
-  builder->create<triton::ReturnOp>(loc);
 
   triton::LoadOp loadInLoop;
   forOp.getBody()->walk([&](triton::LoadOp op) { loadInLoop = op; });
@@ -233,11 +210,7 @@ TEST_F(AliasAnalysisTest, SCFForIterCarriedPointer_JoinsWithInit) {
 TEST_F(AliasAnalysisTest, OpaqueLoadAliasesOpaqueAtomic) {
   auto module = createModule();
   auto ptrType = getPtrType(builder->getI32Type());
-  auto funcOp = createFunction(module, "test_func", {ptrType, ptrType});
-
-  OpBuilder::InsertionGuard guard(*builder);
-  builder->setInsertionPointToStart(&funcOp.getBody().front());
-
+  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType, ptrType});
   auto loc = builder->getUnknownLoc();
   auto arg0 = funcOp.getArgument(0);
   auto arg1 = funcOp.getArgument(1);
@@ -261,11 +234,7 @@ TEST_F(AliasAnalysisTest, OpaqueLoadAliasesOpaqueAtomic) {
   auto arg1_2 = funcOp.getArgument(1);
   auto opaquePtr2 =
       builder->create<arith::SelectOp>(loc, condition, arg1_2, arg0_2);
-  auto loadOp = builder->create<triton::LoadOp>(
-      loc, opaquePtr2.getResult(), triton::CacheModifier::NONE,
-      triton::EvictionPolicy::NORMAL, false);
-
-  builder->create<triton::ReturnOp>(loc, ValueRange{});
+  auto loadOp = makeLoad(opaquePtr2.getResult());
 
   mlir::triton::intel::AliasAnalysis analysis(funcOp);
   EXPECT_THAT(analysis.getAliasingMemOps(loadOp),
@@ -275,11 +244,7 @@ TEST_F(AliasAnalysisTest, OpaqueLoadAliasesOpaqueAtomic) {
 TEST_F(AliasAnalysisTest, AtomicResolvedDistinctFromLoad) {
   auto module = createModule();
   auto ptrType = getPtrType(builder->getI32Type());
-  auto funcOp = createFunction(module, "test_func", {ptrType, ptrType});
-
-  OpBuilder::InsertionGuard guard(*builder);
-  builder->setInsertionPointToStart(&funcOp.getBody().front());
-
+  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType, ptrType});
   auto loc = builder->getUnknownLoc();
   auto argA = funcOp.getArgument(0);
   auto argB = funcOp.getArgument(1);
@@ -294,11 +259,7 @@ TEST_F(AliasAnalysisTest, AtomicResolvedDistinctFromLoad) {
                                        /*scope=*/triton::MemSyncScope::GPU);
 
   // Load from resolved pointer B (distinct)
-  auto load =
-      builder->create<triton::LoadOp>(loc, argB, triton::CacheModifier::NONE,
-                                      triton::EvictionPolicy::NORMAL, false);
-
-  builder->create<triton::ReturnOp>(loc, ValueRange{});
+  auto load = makeLoad(argB);
 
   mlir::triton::intel::AliasAnalysis analysis(funcOp);
   EXPECT_THAT(analysis.getAliasingMemOps(load), ::testing::IsEmpty());
@@ -311,11 +272,7 @@ TEST_F(AliasAnalysisTest, OpaquePointerAliasesResolvedPointer) {
   // from a function argument that the opaque pointer could equal at runtime.
   auto module = createModule();
   auto ptrType = getPtrType(builder->getI32Type());
-  auto funcOp = createFunction(module, "test_func", {ptrType, ptrType});
-
-  OpBuilder::InsertionGuard guard(*builder);
-  builder->setInsertionPointToStart(&funcOp.getBody().front());
-
+  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType, ptrType});
   auto loc = builder->getUnknownLoc();
   auto arg0 = funcOp.getArgument(0);
   auto arg1 = funcOp.getArgument(1);
@@ -327,20 +284,12 @@ TEST_F(AliasAnalysisTest, OpaquePointerAliasesResolvedPointer) {
   auto opaquePtr = builder->create<arith::SelectOp>(loc, condition, arg0, arg1);
 
   // Load from the opaque pointer.
-  auto opaqueLoad = builder->create<triton::LoadOp>(
-      loc, opaquePtr.getResult(), triton::CacheModifier::NONE,
-      triton::EvictionPolicy::NORMAL, false);
+  auto opaqueLoad = makeLoad(opaquePtr.getResult());
 
   // Load from resolved %arg0 (which the opaque pointer may equal).
-  auto resolvedLoadA =
-      builder->create<triton::LoadOp>(loc, arg0, triton::CacheModifier::NONE,
-                                      triton::EvictionPolicy::NORMAL, false);
+  auto resolvedLoadA = makeLoad(arg0);
   // Load from resolved %arg1 (same reasoning).
-  auto resolvedLoadB =
-      builder->create<triton::LoadOp>(loc, arg1, triton::CacheModifier::NONE,
-                                      triton::EvictionPolicy::NORMAL, false);
-
-  builder->create<triton::ReturnOp>(loc, ValueRange{});
+  auto resolvedLoadB = makeLoad(arg1);
 
   mlir::triton::intel::AliasAnalysis analysis(funcOp);
   // Opaque pointer must MayAlias both resolved pointers.
@@ -374,11 +323,7 @@ TEST_F(AliasAnalysisTest, ConvertLayoutPointerPassThrough) {
       /*warpsPerCTA=*/{1}, /*order=*/{0}, cgaLayout);
   auto tensorPtrTypeWithEnc = RankedTensorType::get({128}, ptrType, blockedEnc);
 
-  auto funcOp = createFunction(module, "test_func", {ptrType});
-
-  OpBuilder::InsertionGuard guard(*builder);
-  builder->setInsertionPointToStart(&funcOp.getBody().front());
-
+  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
   auto loc = builder->getUnknownLoc();
   auto basePtr = funcOp.getArgument(0);
 
@@ -406,8 +351,6 @@ TEST_F(AliasAnalysisTest, ConvertLayoutPointerPassThrough) {
       loc, storePtr, storeValue, triton::CacheModifier::NONE,
       triton::EvictionPolicy::NORMAL);
 
-  builder->create<triton::ReturnOp>(loc, ValueRange{});
-
   mlir::triton::intel::AliasAnalysis analysis(funcOp);
   EXPECT_THAT(analysis.getAliasingMemOps(loadedValue),
               ::testing::Contains(storeOp.getOperation()));
@@ -416,25 +359,13 @@ TEST_F(AliasAnalysisTest, ConvertLayoutPointerPassThrough) {
 TEST_F(AliasAnalysisTest, ThreeLoadsSameArgReturnsBoth) {
   auto module = createModule();
   auto ptrType = getPtrType(builder->getF32Type());
-  auto funcOp = createFunction(module, "test_func", {ptrType});
-
-  OpBuilder::InsertionGuard guard(*builder);
-  builder->setInsertionPointToStart(&funcOp.getBody().front());
-
+  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
   auto loc = builder->getUnknownLoc();
   auto arg0 = funcOp.getArgument(0);
 
-  auto loadA =
-      builder->create<triton::LoadOp>(loc, arg0, triton::CacheModifier::NONE,
-                                      triton::EvictionPolicy::NORMAL, false);
-  auto loadB =
-      builder->create<triton::LoadOp>(loc, arg0, triton::CacheModifier::NONE,
-                                      triton::EvictionPolicy::NORMAL, false);
-  auto loadC =
-      builder->create<triton::LoadOp>(loc, arg0, triton::CacheModifier::NONE,
-                                      triton::EvictionPolicy::NORMAL, false);
-
-  builder->create<triton::ReturnOp>(loc, ValueRange{});
+  auto loadA = makeLoad(arg0);
+  auto loadB = makeLoad(arg0);
+  auto loadC = makeLoad(arg0);
 
   mlir::triton::intel::AliasAnalysis analysis(funcOp);
   EXPECT_THAT(analysis.getAliasingMemOps(loadA),
@@ -450,11 +381,7 @@ TEST_F(AliasAnalysisTest, ThreeLoadsSameArgReturnsBoth) {
 TEST_F(AliasAnalysisTest, DescriptorLoadAndDescriptorStoreSameBase) {
   auto module = createModule();
   auto ptrType = getPtrType(builder->getF32Type());
-  auto funcOp = createFunction(module, "test_func", {ptrType});
-
-  OpBuilder::InsertionGuard guard(*builder);
-  builder->setInsertionPointToStart(&funcOp.getBody().front());
-
+  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
   auto loc = builder->getUnknownLoc();
   auto base = funcOp.getArgument(0);
 
@@ -486,8 +413,6 @@ TEST_F(AliasAnalysisTest, DescriptorLoadAndDescriptorStoreSameBase) {
   auto storeOp = builder->create<triton::DescriptorStoreOp>(
       loc, desc, val, ValueRange{idx0, idx1});
 
-  builder->create<triton::ReturnOp>(loc, ValueRange{});
-
   mlir::triton::intel::AliasAnalysis analysis(funcOp);
   EXPECT_THAT(analysis.getAliasingMemOps(dload),
               ::testing::Contains(storeOp.getOperation()));
@@ -496,11 +421,7 @@ TEST_F(AliasAnalysisTest, DescriptorLoadAndDescriptorStoreSameBase) {
 TEST_F(AliasAnalysisTest, DescriptorLoadAndRawLoadSameBase) {
   auto module = createModule();
   auto ptrType = getPtrType(builder->getF32Type());
-  auto funcOp = createFunction(module, "test_func", {ptrType});
-
-  OpBuilder::InsertionGuard guard(*builder);
-  builder->setInsertionPointToStart(&funcOp.getBody().front());
-
+  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
   auto loc = builder->getUnknownLoc();
   auto base = funcOp.getArgument(0);
 
@@ -526,11 +447,7 @@ TEST_F(AliasAnalysisTest, DescriptorLoadAndRawLoadSameBase) {
       loc, descType, base, ValueRange{c128, c64}, ValueRange{c64_i64, c1});
   auto dload = builder->create<triton::DescriptorLoadOp>(
       loc, tensorType, desc, ValueRange{idx0, idx1});
-  auto rawload =
-      builder->create<triton::LoadOp>(loc, base, triton::CacheModifier::NONE,
-                                      triton::EvictionPolicy::NORMAL, false);
-
-  builder->create<triton::ReturnOp>(loc, ValueRange{});
+  auto rawload = makeLoad(base);
 
   mlir::triton::intel::AliasAnalysis analysis(funcOp);
   EXPECT_THAT(analysis.getAliasingMemOps(dload),
@@ -545,11 +462,7 @@ TEST_F(AliasAnalysisTest, DescriptorLoadThroughSCFForIterArg) {
   // its base pointer is resolved correctly.
   auto module = createModule();
   auto ptrType = getPtrType(builder->getF32Type());
-  auto funcOp = createFunction(module, "test_func", {ptrType});
-
-  OpBuilder::InsertionGuard guard(*builder);
-  builder->setInsertionPointToStart(&funcOp.getBody().front());
-
+  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
   auto loc = builder->getUnknownLoc();
   auto base = funcOp.getArgument(0);
 
@@ -592,12 +505,8 @@ TEST_F(AliasAnalysisTest, DescriptorLoadThroughSCFForIterArg) {
     builder->create<scf::YieldOp>(loc, ValueRange{iterDesc});
   }
 
-  builder->setInsertionPointAfter(forOp);
-  auto rawload =
-      builder->create<triton::LoadOp>(loc, base, triton::CacheModifier::NONE,
-                                      triton::EvictionPolicy::NORMAL, false);
-
-  builder->create<triton::ReturnOp>(loc, ValueRange{});
+  builder->setInsertionPoint(funcOp.front().getTerminator());
+  auto rawload = makeLoad(base);
 
   mlir::triton::intel::AliasAnalysis analysis(funcOp);
   // The descriptor_load inside the loop must resolve through the iter_arg
@@ -606,6 +515,198 @@ TEST_F(AliasAnalysisTest, DescriptorLoadThroughSCFForIterArg) {
               ::testing::Contains(rawload.getOperation()));
   EXPECT_THAT(analysis.getAliasingMemOps(rawload),
               ::testing::Contains(dload.getOperation()));
+}
+
+// ===----------------------------------------------------------------------===//
+// New Tests — Verifying Extended Analysis Behavior
+// ===----------------------------------------------------------------------===//
+
+TEST_F(AliasAnalysisTest, DescriptorThroughSCFIfMismatch) {
+  // When a descriptor escapes an scf.if with mismatched branches (two
+  // MakeTensorDescOps from different base pointers), the descriptor
+  // becomes opaque and should conservatively MayAlias loads from either
+  // base.
+  auto module = createModule();
+  auto ptrType = getPtrType(builder->getF32Type());
+  auto funcOp =
+      createFunctionWithReturn(module, "test_func", {ptrType, ptrType});
+  auto loc = builder->getUnknownLoc();
+  auto baseA = funcOp.getArgument(0);
+  auto baseB = funcOp.getArgument(1);
+
+  auto i1Type = builder->getI1Type();
+  auto i32Type = builder->getI32Type();
+  auto i64Type = builder->getI64Type();
+  auto condition = builder->create<arith::ConstantOp>(
+      loc, i1Type, builder->getIntegerAttr(i1Type, 1));
+
+  auto c128 = builder->create<arith::ConstantOp>(
+      loc, i32Type, builder->getI32IntegerAttr(128));
+  auto c64 = builder->create<arith::ConstantOp>(loc, i32Type,
+                                                builder->getI32IntegerAttr(64));
+  auto c64_i64 = builder->create<arith::ConstantOp>(
+      loc, i64Type, builder->getI64IntegerAttr(64));
+  auto c1 = builder->create<arith::ConstantOp>(loc, i64Type,
+                                               builder->getI64IntegerAttr(1));
+
+  auto tensorType = RankedTensorType::get({128, 64}, builder->getF32Type());
+  auto descType = triton::TensorDescType::get({128, 64}, builder->getF32Type(),
+                                              Attribute{});
+
+  // scf.if with mismatched descriptor branches
+  auto ifOp = builder->create<scf::IfOp>(loc, descType, condition, true);
+  {
+    OpBuilder::InsertionGuard thenGuard(*builder);
+    builder->setInsertionPointToStart(&ifOp.getThenRegion().front());
+    auto descA = builder->create<triton::MakeTensorDescOp>(
+        loc, descType, baseA, ValueRange{c128, c64}, ValueRange{c64_i64, c1});
+    builder->create<scf::YieldOp>(loc, ValueRange{descA.getResult()});
+  }
+  {
+    OpBuilder::InsertionGuard elseGuard(*builder);
+    builder->setInsertionPointToStart(&ifOp.getElseRegion().front());
+    auto descB = builder->create<triton::MakeTensorDescOp>(
+        loc, descType, baseB, ValueRange{c128, c64}, ValueRange{c64_i64, c1});
+    builder->create<scf::YieldOp>(loc, ValueRange{descB.getResult()});
+  }
+
+  auto opaqueDesc = ifOp.getResult(0);
+  auto idx0 = builder->create<arith::ConstantOp>(loc, i32Type,
+                                                 builder->getI32IntegerAttr(0));
+  auto idx1 = builder->create<arith::ConstantOp>(loc, i32Type,
+                                                 builder->getI32IntegerAttr(0));
+  auto dload = builder->create<triton::DescriptorLoadOp>(
+      loc, tensorType, opaqueDesc, ValueRange{idx0, idx1});
+
+  auto loadA = makeLoad(baseA);
+
+  mlir::triton::intel::AliasAnalysis analysis(funcOp);
+  // The opaque descriptor should MayAlias the raw load from baseA.
+  EXPECT_THAT(analysis.getAliasingMemOps(dload),
+              ::testing::Contains(loadA.getOperation()));
+}
+
+TEST_F(AliasAnalysisTest, UnmodeledMemoryOpIsPeer) {
+  // Verify that ops implementing MemoryEffectOpInterface with Read/Write
+  // effects (but not in the 9 modeled types) are tracked as universal peers.
+  // `tt.print` has MemWrite<GlobalMemory> and takes no pointer operands
+  // (only a string prefix + optional variadic scalar args), so it becomes
+  // a tracked op with a null pointer slot — a universal MayAlias peer.
+  auto module = createModule();
+  auto ptrType = getPtrType(builder->getF32Type());
+  auto funcOp =
+      createFunctionWithReturn(module, "test_func", {ptrType, ptrType});
+  auto loc = builder->getUnknownLoc();
+  auto argA = funcOp.getArgument(0);
+  auto argB = funcOp.getArgument(1);
+
+  auto loadA = makeLoad(argA);
+  auto printOp = builder->create<triton::PrintOp>(
+      loc, builder->getStringAttr("dbg"), /*hex=*/builder->getBoolAttr(false),
+      ValueRange{}, builder->getDenseI32ArrayAttr({}));
+  auto loadB = makeLoad(argB);
+
+  mlir::triton::intel::AliasAnalysis analysis(funcOp);
+  // Distinct-arg loads still NoAlias each other.
+  EXPECT_THAT(analysis.getAliasingMemOps(loadA),
+              ::testing::Not(::testing::Contains(loadB.getOperation())));
+  EXPECT_THAT(analysis.getAliasingMemOps(loadB),
+              ::testing::Not(::testing::Contains(loadA.getOperation())));
+  // The interface-tracked print op is a universal peer of both loads.
+  EXPECT_THAT(analysis.getAliasingMemOps(loadA),
+              ::testing::Contains(printOp.getOperation()));
+  EXPECT_THAT(analysis.getAliasingMemOps(loadB),
+              ::testing::Contains(printOp.getOperation()));
+  // And symmetrically: the print op reports both loads as peers.
+  EXPECT_THAT(analysis.getAliasingMemOps(printOp.getOperation()),
+              ::testing::Contains(loadA.getOperation()));
+  EXPECT_THAT(analysis.getAliasingMemOps(printOp.getOperation()),
+              ::testing::Contains(loadB.getOperation()));
+}
+
+TEST_F(AliasAnalysisTest, NonMemoryOpsDoNotPessimize) {
+  // Verify that a function containing only pure ops (no memory effects)
+  // does not pessimize aliasing. Two distinct-arg loads should remain
+  // NoAlias (peer sets empty).
+  auto module = createModule();
+  auto ptrType = getPtrType(builder->getF32Type());
+  auto funcOp =
+      createFunctionWithReturn(module, "test_func", {ptrType, ptrType});
+  auto loc = builder->getUnknownLoc();
+  auto argA = funcOp.getArgument(0);
+  auto argB = funcOp.getArgument(1);
+
+  auto load1 = makeLoad(argA);
+
+  // Pure ops
+  auto i32Type = builder->getI32Type();
+  auto c0 = builder->create<arith::ConstantOp>(loc, i32Type,
+                                               builder->getI32IntegerAttr(0));
+  auto c1 = builder->create<arith::ConstantOp>(loc, i32Type,
+                                               builder->getI32IntegerAttr(1));
+  auto sum = builder->create<arith::AddIOp>(loc, c0, c1);
+  (void)sum;
+
+  auto load2 = makeLoad(argB);
+
+  mlir::triton::intel::AliasAnalysis analysis(funcOp);
+  EXPECT_THAT(analysis.getAliasingMemOps(load1), ::testing::IsEmpty());
+  EXPECT_THAT(analysis.getAliasingMemOps(load2), ::testing::IsEmpty());
+}
+
+TEST_F(AliasAnalysisTest, OpaqueDescriptorPropagatesUnknown) {
+  // Regression test for isPointerLike(TensorDescType) — a descriptor that
+  // escapes control flow (via arith.select) should propagate Unknown and
+  // conservatively MayAlias loads from either candidate base.
+  auto module = createModule();
+  auto ptrType = getPtrType(builder->getF32Type());
+  auto funcOp =
+      createFunctionWithReturn(module, "test_func", {ptrType, ptrType});
+  auto loc = builder->getUnknownLoc();
+  auto baseA = funcOp.getArgument(0);
+  auto baseB = funcOp.getArgument(1);
+
+  auto i1Type = builder->getI1Type();
+  auto i32Type = builder->getI32Type();
+  auto i64Type = builder->getI64Type();
+  auto condition = builder->create<arith::ConstantOp>(
+      loc, i1Type, builder->getIntegerAttr(i1Type, 1));
+
+  auto c128 = builder->create<arith::ConstantOp>(
+      loc, i32Type, builder->getI32IntegerAttr(128));
+  auto c64 = builder->create<arith::ConstantOp>(loc, i32Type,
+                                                builder->getI32IntegerAttr(64));
+  auto c64_i64 = builder->create<arith::ConstantOp>(
+      loc, i64Type, builder->getI64IntegerAttr(64));
+  auto c1 = builder->create<arith::ConstantOp>(loc, i64Type,
+                                               builder->getI64IntegerAttr(1));
+
+  auto tensorType = RankedTensorType::get({128, 64}, builder->getF32Type());
+  auto descType = triton::TensorDescType::get({128, 64}, builder->getF32Type(),
+                                              Attribute{});
+
+  auto descA = builder->create<triton::MakeTensorDescOp>(
+      loc, descType, baseA, ValueRange{c128, c64}, ValueRange{c64_i64, c1});
+  auto descB = builder->create<triton::MakeTensorDescOp>(
+      loc, descType, baseB, ValueRange{c128, c64}, ValueRange{c64_i64, c1});
+
+  // Opaque descriptor via arith.select (not recognized by findDefiningOpOfType)
+  auto opaqueDesc =
+      builder->create<arith::SelectOp>(loc, condition, descA, descB);
+
+  auto idx0 = builder->create<arith::ConstantOp>(loc, i32Type,
+                                                 builder->getI32IntegerAttr(0));
+  auto idx1 = builder->create<arith::ConstantOp>(loc, i32Type,
+                                                 builder->getI32IntegerAttr(0));
+  auto dload = builder->create<triton::DescriptorLoadOp>(
+      loc, tensorType, opaqueDesc.getResult(), ValueRange{idx0, idx1});
+
+  auto loadA = makeLoad(baseA);
+
+  mlir::triton::intel::AliasAnalysis analysis(funcOp);
+  // The opaque descriptor should MayAlias loadA (and symmetrically loadB).
+  EXPECT_THAT(analysis.getAliasingMemOps(dload),
+              ::testing::Contains(loadA.getOperation()));
 }
 
 } // namespace
