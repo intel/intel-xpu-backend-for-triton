@@ -240,7 +240,7 @@ Value getMemOpPointer(Operation *op) {
           })
       .Default([](Operation *op) -> Value {
         // Interface-tracked path: any op with a Read or Write effect. Find
-        // the first pointer-like operand; if none, return null (the op is
+        // the single pointer-like operand; if none, return null (the op is
         // still tracked by the ctor as a universal peer).
         auto memEffects = dyn_cast<MemoryEffectOpInterface>(op);
         if (!memEffects)
@@ -248,10 +248,12 @@ Value getMemOpPointer(Operation *op) {
         if (!memEffects.hasEffect<MemoryEffects::Read>() &&
             !memEffects.hasEffect<MemoryEffects::Write>())
           return Value();
-        for (Value operand : op->getOperands())
-          if (isPointerLike(operand.getType()))
-            return operand;
-        return Value();
+        auto isPtr = [](Value v) { return isPointerLike(v.getType()); };
+        assert(llvm::count_if(op->getOperands(), isPtr) <= 1 &&
+               "interface-tracked memory-effect op must have at most one "
+               "pointer-like operand");
+        auto it = llvm::find_if(op->getOperands(), isPtr);
+        return it == op->operand_end() ? Value() : *it;
       });
 }
 
