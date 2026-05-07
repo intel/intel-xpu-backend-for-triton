@@ -43,6 +43,10 @@ on:
         description: Use Python built with pyenv
         type: boolean
         default: false
+      build_pti:
+        description: Build PTI from source (if false, use system PTI)
+        type: boolean
+        default: true
 
   pull_request:
     branches:
@@ -137,3 +141,4 @@ jobs:
       run_name: ${{ inputs.run_name }}
       enable_unskip: ${{ inputs.enable_unskip || false }}
       use_pyenv_python: ${{ inputs.use_pyenv_python || false }}
+      build_pti: ${{ inputs.build_pti }}
