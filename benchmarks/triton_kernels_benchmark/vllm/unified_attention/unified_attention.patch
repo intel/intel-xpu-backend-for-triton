@@ -1,7 +1,26 @@
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 1774f1b30..c3d7f5e5d 100644
+index 1774f1b30..26bf99492 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
+@@ -112,15 +112,15 @@ def kernel_unified_attention(
+     stride_v_cache_1: tl.int64,  # int
+     stride_v_cache_2: tl.int64,  # int
+     stride_v_cache_3: tl.constexpr,  # int
++    query_start_len_ptr,
++    BLOCK_Q: tl.constexpr,
++    num_seqs: tl.int32,
+     stride_ks_blk: tl.int64,
+     stride_ks_slot: tl.int64,
+     stride_ks_head: tl.int64,
+     stride_vs_blk: tl.int64,
+     stride_vs_slot: tl.int64,
+     stride_vs_head: tl.int64,
+-    query_start_len_ptr,
+-    BLOCK_Q: tl.constexpr,
+-    num_seqs: tl.int32,
+     BLOCK_M: tl.constexpr,
+     NUM_SEGMENTS_PER_SEQ: tl.constexpr,
+     USE_FP8: tl.constexpr,
 @@ -141,6 +141,8 @@ def kernel_unified_attention(
      CHUNK_LOOKBACK: tl.constexpr = -1,
      CHUNK_SIZE: tl.constexpr = -1,
@@ -254,3 +273,22 @@ index 1774f1b30..c3d7f5e5d 100644
      segm_output_ptr = softmax_segm_output if use_3d else out
      segm_max_ptr = softmax_segm_max if use_3d else out
      segm_expsum_ptr = softmax_segm_expsum if use_3d else out
+@@ -707,15 +714,15 @@ def unified_attention(
+         stride_v_cache_1=v.stride(1),
+         stride_v_cache_2=v.stride(2),
+         stride_v_cache_3=v.stride(3),
++        query_start_len_ptr=cu_seqlens_q,
++        BLOCK_Q=BLOCK_Q,
++        num_seqs=num_seqs,
+         stride_ks_blk=ks_blk,
+         stride_ks_slot=ks_slot,
+         stride_ks_head=ks_head,
+         stride_vs_blk=vs_blk,
+         stride_vs_slot=vs_slot,
+         stride_vs_head=vs_head,
+-        query_start_len_ptr=cu_seqlens_q,
+-        BLOCK_Q=BLOCK_Q,
+-        num_seqs=num_seqs,
+         BLOCK_M=BLOCK_M,
+         NUM_SEGMENTS_PER_SEQ=num_segments,
+         USE_FP8=output_scale is not None,
