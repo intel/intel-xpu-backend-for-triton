@@ -2,6 +2,7 @@ add_triton_library(TritonIntelAnalysis
     Allocation.cpp
     AxisInfoExt.cpp
     Liveness.cpp
+    SpatialReuseAnalysis.cpp
     StrideInfo.cpp
     Membar.cpp
     Utility.cpp
