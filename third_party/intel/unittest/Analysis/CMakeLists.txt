@@ -78,3 +78,21 @@ add_triton_ut(
     MLIRFuncDialect
     MLIRSCFDialect
 )
+
+add_triton_ut(
+  NAME ReuseAnalysis
+  SRCS ReuseAnalysisTest.cpp
+  LIBS
+    TritonAnalysis
+    TritonGPUIR
+    TritonGPUTransforms
+    TritonIR
+    TritonIntelAnalysis
+    TritonIntelGPUIR
+    TritonIntelGPUTransforms
+    TritonNvidiaGPUIR
+    TritonNvidiaGPUTransforms
+    MLIRArithDialect
+    MLIRFuncDialect
+    MLIRSCFDialect
+)
