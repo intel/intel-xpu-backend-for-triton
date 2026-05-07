@@ -22,6 +22,23 @@ if(NOT WIN32)
 endif()
 
 add_triton_ut(
+  NAME SpatialReuseAnalysis
+  SRCS SpatialReuseAnalysisTest.cpp
+  LIBS
+    TritonAnalysis
+    TritonGPUIR
+    TritonGPUTransforms
+    TritonIR
+    TritonIntelAnalysis
+    TritonIntelGPUIR
+    TritonIntelGPUTransforms
+    TritonNvidiaGPUIR
+    TritonNvidiaGPUTransforms
+    MLIRArithDialect
+    MLIRFuncDialect
+)
+
+add_triton_ut(
   NAME StrideInfo
   SRCS StrideInfoTest.cpp
   LIBS
