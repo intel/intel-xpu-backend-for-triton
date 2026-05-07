@@ -38,8 +38,8 @@ public:
     builder->setInsertionPointToEnd(module.getBody());
 
     auto funcType = builder->getFunctionType(argTypes, {});
-    auto funcOp = builder->create<triton::FuncOp>(builder->getUnknownLoc(),
-                                                  name, funcType);
+    auto funcOp = triton::FuncOp::create(*builder, builder->getUnknownLoc(),
+                                         name, funcType);
     funcOp.addEntryBlock();
     builder->setInsertionPointToStart(&funcOp.getBody().front());
 
@@ -58,15 +58,15 @@ public:
     // before creating the terminator.
     builder->setInsertionPointToStart(&funcOp.getBody().front());
     auto loc = builder->getUnknownLoc();
-    auto ret = builder->create<triton::ReturnOp>(loc, ValueRange{});
+    auto ret = triton::ReturnOp::create(*builder, loc, ValueRange{});
     builder->setInsertionPoint(ret);
     return funcOp;
   }
 
   /// Creates a tt.load with default cache/eviction attributes.
   triton::LoadOp makeLoad(Value ptr) {
-    return builder->create<triton::LoadOp>(
-        builder->getUnknownLoc(), ptr, triton::CacheModifier::NONE,
+    return triton::LoadOp::create(
+        *builder, builder->getUnknownLoc(), ptr, triton::CacheModifier::NONE,
         triton::EvictionPolicy::NORMAL, /*isVolatile=*/false);
   }
 
@@ -91,14 +91,14 @@ TEST_F(AliasAnalysisTest, TwoLoadsSameArgDifferentOffsets) {
   auto arg0 = funcOp.getArgument(0);
 
   auto i32Type = builder->getI32Type();
-  auto offset1 = builder->create<arith::ConstantOp>(
-      loc, i32Type, builder->getI32IntegerAttr(0));
-  auto ptr1 = builder->create<triton::AddPtrOp>(loc, ptrType, arg0, offset1);
+  auto offset1 = arith::ConstantOp::create(*builder, loc, i32Type,
+                                           builder->getI32IntegerAttr(0));
+  auto ptr1 = triton::AddPtrOp::create(*builder, loc, ptrType, arg0, offset1);
   auto load1 = makeLoad(ptr1);
 
-  auto offset2 = builder->create<arith::ConstantOp>(
-      loc, i32Type, builder->getI32IntegerAttr(16));
-  auto ptr2 = builder->create<triton::AddPtrOp>(loc, ptrType, arg0, offset2);
+  auto offset2 = arith::ConstantOp::create(*builder, loc, i32Type,
+                                           builder->getI32IntegerAttr(16));
+  auto ptr2 = triton::AddPtrOp::create(*builder, loc, ptrType, arg0, offset2);
   auto load2 = makeLoad(ptr2);
 
   mlir::triton::intel::AliasAnalysis analysis(funcOp);
@@ -133,19 +133,19 @@ TEST_F(AliasAnalysisTest, LoadAndStoreSameArg) {
   auto arg0 = funcOp.getArgument(0);
 
   auto i32Type = builder->getI32Type();
-  auto offset1 = builder->create<arith::ConstantOp>(
-      loc, i32Type, builder->getI32IntegerAttr(0));
-  auto ptr1 = builder->create<triton::AddPtrOp>(loc, ptrType, arg0, offset1);
+  auto offset1 = arith::ConstantOp::create(*builder, loc, i32Type,
+                                           builder->getI32IntegerAttr(0));
+  auto ptr1 = triton::AddPtrOp::create(*builder, loc, ptrType, arg0, offset1);
   auto load = makeLoad(ptr1);
 
-  auto offset2 = builder->create<arith::ConstantOp>(
-      loc, i32Type, builder->getI32IntegerAttr(32));
-  auto ptr2 = builder->create<triton::AddPtrOp>(loc, ptrType, arg0, offset2);
-  auto value = builder->create<arith::ConstantOp>(
-      loc, builder->getF16Type(), builder->getF16FloatAttr(1.0));
-  auto storeOp = builder->create<triton::StoreOp>(
-      loc, ptr2, value, triton::CacheModifier::NONE,
-      triton::EvictionPolicy::NORMAL);
+  auto offset2 = arith::ConstantOp::create(*builder, loc, i32Type,
+                                           builder->getI32IntegerAttr(32));
+  auto ptr2 = triton::AddPtrOp::create(*builder, loc, ptrType, arg0, offset2);
+  auto value = arith::ConstantOp::create(*builder, loc, builder->getF16Type(),
+                                         builder->getF16FloatAttr(1.0));
+  auto storeOp = triton::StoreOp::create(*builder, loc, ptr2, value,
+                                         triton::CacheModifier::NONE,
+                                         triton::EvictionPolicy::NORMAL);
 
   mlir::triton::intel::AliasAnalysis analysis(funcOp);
   EXPECT_THAT(analysis.getAliasingMemOps(load),
@@ -163,11 +163,11 @@ TEST_F(AliasAnalysisTest, LoadAndStoreDistinctArgs) {
 
   auto load = makeLoad(argA);
 
-  auto value = builder->create<arith::ConstantOp>(
-      loc, builder->getF16Type(), builder->getF16FloatAttr(1.0));
-  builder->create<triton::StoreOp>(loc, argB, value,
-                                   triton::CacheModifier::NONE,
-                                   triton::EvictionPolicy::NORMAL);
+  auto value = arith::ConstantOp::create(*builder, loc, builder->getF16Type(),
+                                         builder->getF16FloatAttr(1.0));
+  triton::StoreOp::create(*builder, loc, argB, value,
+                          triton::CacheModifier::NONE,
+                          triton::EvictionPolicy::NORMAL);
 
   mlir::triton::intel::AliasAnalysis analysis(funcOp);
   EXPECT_THAT(analysis.getAliasingMemOps(load), ::testing::IsEmpty());
@@ -181,29 +181,30 @@ TEST_F(AliasAnalysisTest, SCFForIterCarriedPointer_JoinsWithInit) {
   auto argA = funcOp.getArgument(0);
 
   auto i32Type = builder->getI32Type();
-  auto lb = builder->create<arith::ConstantOp>(loc, i32Type,
-                                               builder->getI32IntegerAttr(0));
-  auto ub = builder->create<arith::ConstantOp>(loc, i32Type,
-                                               builder->getI32IntegerAttr(10));
-  auto step = builder->create<arith::ConstantOp>(loc, i32Type,
-                                                 builder->getI32IntegerAttr(1));
+  auto lb = arith::ConstantOp::create(*builder, loc, i32Type,
+                                      builder->getI32IntegerAttr(0));
+  auto ub = arith::ConstantOp::create(*builder, loc, i32Type,
+                                      builder->getI32IntegerAttr(10));
+  auto step = arith::ConstantOp::create(*builder, loc, i32Type,
+                                        builder->getI32IntegerAttr(1));
 
-  auto forOp = builder->create<scf::ForOp>(loc, lb, ub, step, ValueRange{argA});
+  auto forOp =
+      scf::ForOp::create(*builder, loc, lb, ub, step, ValueRange{argA});
 
   {
     OpBuilder::InsertionGuard loopGuard(*builder);
     builder->setInsertionPointToStart(forOp.getBody());
     auto iterPtr = forOp.getRegionIterArg(0);
     makeLoad(iterPtr);
-    builder->create<scf::YieldOp>(loc, ValueRange{iterPtr});
+    scf::YieldOp::create(*builder, loc, ValueRange{iterPtr});
   }
 
   builder->setInsertionPoint(funcOp.front().getTerminator());
-  auto value = builder->create<arith::ConstantOp>(
-      loc, builder->getF16Type(), builder->getF16FloatAttr(1.0));
-  auto storeOp = builder->create<triton::StoreOp>(
-      loc, argA, value, triton::CacheModifier::NONE,
-      triton::EvictionPolicy::NORMAL);
+  auto value = arith::ConstantOp::create(*builder, loc, builder->getF16Type(),
+                                         builder->getF16FloatAttr(1.0));
+  auto storeOp = triton::StoreOp::create(*builder, loc, argA, value,
+                                         triton::CacheModifier::NONE,
+                                         triton::EvictionPolicy::NORMAL);
 
   triton::LoadOp loadInLoop;
   forOp.getBody()->walk([&](triton::LoadOp op) { loadInLoop = op; });
@@ -224,23 +225,25 @@ TEST_F(AliasAnalysisTest, OpaqueLoadAliasesOpaqueAtomic) {
 
   // Create an opaque pointer via arith.select (not recognized by analysis)
   auto i1Type = builder->getI1Type();
-  auto condition = builder->create<arith::ConstantOp>(
-      loc, i1Type, builder->getIntegerAttr(i1Type, 1));
-  auto opaquePtr = builder->create<arith::SelectOp>(loc, condition, arg0, arg1);
+  auto condition = arith::ConstantOp::create(
+      *builder, loc, i1Type, builder->getIntegerAttr(i1Type, 1));
+  auto opaquePtr =
+      arith::SelectOp::create(*builder, loc, condition, arg0, arg1);
 
   // Atomic on opaque pointer
-  auto atomicValue = builder->create<arith::ConstantOp>(
-      loc, builder->getI32Type(), builder->getI32IntegerAttr(1));
-  auto atomicOp = builder->create<triton::AtomicRMWOp>(
-      loc, builder->getI32Type(), triton::RMWOp::ADD, opaquePtr.getResult(),
-      atomicValue, /*mask=*/Value(), /*sem=*/triton::MemSemantic::RELAXED,
+  auto atomicValue = arith::ConstantOp::create(
+      *builder, loc, builder->getI32Type(), builder->getI32IntegerAttr(1));
+  auto atomicOp = triton::AtomicRMWOp::create(
+      *builder, loc, builder->getI32Type(), triton::RMWOp::ADD,
+      opaquePtr.getResult(), atomicValue, /*mask=*/Value(),
+      /*sem=*/triton::MemSemantic::RELAXED,
       /*scope=*/triton::MemSyncScope::GPU);
 
   // Load from another opaque pointer (also via select)
   auto arg0_2 = funcOp.getArgument(0);
   auto arg1_2 = funcOp.getArgument(1);
   auto opaquePtr2 =
-      builder->create<arith::SelectOp>(loc, condition, arg1_2, arg0_2);
+      arith::SelectOp::create(*builder, loc, condition, arg1_2, arg0_2);
   auto loadOp = makeLoad(opaquePtr2.getResult());
 
   mlir::triton::intel::AliasAnalysis analysis(funcOp);
@@ -258,13 +261,13 @@ TEST_F(AliasAnalysisTest, AtomicResolvedDistinctFromLoad) {
   auto argB = funcOp.getArgument(1);
 
   // Atomic on resolved pointer A
-  auto atomicValue = builder->create<arith::ConstantOp>(
-      loc, builder->getI32Type(), builder->getI32IntegerAttr(1));
-  builder->create<triton::AtomicRMWOp>(loc, builder->getI32Type(),
-                                       triton::RMWOp::ADD, argA, atomicValue,
-                                       /*mask=*/Value(),
-                                       /*sem=*/triton::MemSemantic::RELAXED,
-                                       /*scope=*/triton::MemSyncScope::GPU);
+  auto atomicValue = arith::ConstantOp::create(
+      *builder, loc, builder->getI32Type(), builder->getI32IntegerAttr(1));
+  triton::AtomicRMWOp::create(*builder, loc, builder->getI32Type(),
+                              triton::RMWOp::ADD, argA, atomicValue,
+                              /*mask=*/Value(),
+                              /*sem=*/triton::MemSemantic::RELAXED,
+                              /*scope=*/triton::MemSyncScope::GPU);
 
   // Load from resolved pointer B (distinct)
   auto load = makeLoad(argB);
@@ -288,9 +291,10 @@ TEST_F(AliasAnalysisTest, OpaquePointerAliasesResolvedPointer) {
 
   // Opaque pointer: could be %arg0 or %arg1 at runtime.
   auto i1Type = builder->getI1Type();
-  auto condition = builder->create<arith::ConstantOp>(
-      loc, i1Type, builder->getIntegerAttr(i1Type, 1));
-  auto opaquePtr = builder->create<arith::SelectOp>(loc, condition, arg0, arg1);
+  auto condition = arith::ConstantOp::create(
+      *builder, loc, i1Type, builder->getIntegerAttr(i1Type, 1));
+  auto opaquePtr =
+      arith::SelectOp::create(*builder, loc, condition, arg0, arg1);
 
   // Load from the opaque pointer.
   auto opaqueLoad = makeLoad(opaquePtr.getResult());
@@ -337,28 +341,29 @@ TEST_F(AliasAnalysisTest, ConvertLayoutPointerPassThrough) {
   auto basePtr = funcOp.getArgument(0);
 
   // Create splat (tensor-of-pointer from scalar pointer)
-  auto splatPtr = builder->create<triton::SplatOp>(loc, tensorPtrType, basePtr);
+  auto splatPtr =
+      triton::SplatOp::create(*builder, loc, tensorPtrType, basePtr);
 
   // Pass through convert_layout (on the pointer tensor)
-  auto convertedPtr = builder->create<triton::gpu::ConvertLayoutOp>(
-      loc, tensorPtrTypeWithEnc, splatPtr);
+  auto convertedPtr = triton::gpu::ConvertLayoutOp::create(
+      *builder, loc, tensorPtrTypeWithEnc, splatPtr);
 
   // Load using the converted pointer
-  auto loadedValue = builder->create<triton::LoadOp>(
-      loc, convertedPtr, triton::CacheModifier::NONE,
+  auto loadedValue = triton::LoadOp::create(
+      *builder, loc, convertedPtr, triton::CacheModifier::NONE,
       triton::EvictionPolicy::NORMAL, false);
 
   // Store using the base pointer (through a different chain)
   auto i32Type = builder->getI32Type();
-  auto offset = builder->create<arith::ConstantOp>(
-      loc, i32Type, builder->getI32IntegerAttr(64));
+  auto offset = arith::ConstantOp::create(*builder, loc, i32Type,
+                                          builder->getI32IntegerAttr(64));
   auto storePtr =
-      builder->create<triton::AddPtrOp>(loc, ptrType, basePtr, offset);
-  auto storeValue = builder->create<arith::ConstantOp>(
-      loc, builder->getF16Type(), builder->getF16FloatAttr(1.0));
-  auto storeOp = builder->create<triton::StoreOp>(
-      loc, storePtr, storeValue, triton::CacheModifier::NONE,
-      triton::EvictionPolicy::NORMAL);
+      triton::AddPtrOp::create(*builder, loc, ptrType, basePtr, offset);
+  auto storeValue = arith::ConstantOp::create(
+      *builder, loc, builder->getF16Type(), builder->getF16FloatAttr(1.0));
+  auto storeOp = triton::StoreOp::create(*builder, loc, storePtr, storeValue,
+                                         triton::CacheModifier::NONE,
+                                         triton::EvictionPolicy::NORMAL);
 
   mlir::triton::intel::AliasAnalysis analysis(funcOp);
   EXPECT_THAT(analysis.getAliasingMemOps(loadedValue),
@@ -396,31 +401,32 @@ TEST_F(AliasAnalysisTest, DescriptorLoadAndDescriptorStoreSameBase) {
 
   auto i32Type = builder->getI32Type();
   auto i64Type = builder->getI64Type();
-  auto c128 = builder->create<arith::ConstantOp>(
-      loc, i32Type, builder->getI32IntegerAttr(128));
-  auto c64 = builder->create<arith::ConstantOp>(loc, i32Type,
-                                                builder->getI32IntegerAttr(64));
-  auto c64_i64 = builder->create<arith::ConstantOp>(
-      loc, i64Type, builder->getI64IntegerAttr(64));
-  auto c1 = builder->create<arith::ConstantOp>(loc, i64Type,
-                                               builder->getI64IntegerAttr(1));
-  auto idx0 = builder->create<arith::ConstantOp>(loc, i32Type,
-                                                 builder->getI32IntegerAttr(0));
-  auto idx1 = builder->create<arith::ConstantOp>(loc, i32Type,
-                                                 builder->getI32IntegerAttr(0));
+  auto c128 = arith::ConstantOp::create(*builder, loc, i32Type,
+                                        builder->getI32IntegerAttr(128));
+  auto c64 = arith::ConstantOp::create(*builder, loc, i32Type,
+                                       builder->getI32IntegerAttr(64));
+  auto c64_i64 = arith::ConstantOp::create(*builder, loc, i64Type,
+                                           builder->getI64IntegerAttr(64));
+  auto c1 = arith::ConstantOp::create(*builder, loc, i64Type,
+                                      builder->getI64IntegerAttr(1));
+  auto idx0 = arith::ConstantOp::create(*builder, loc, i32Type,
+                                        builder->getI32IntegerAttr(0));
+  auto idx1 = arith::ConstantOp::create(*builder, loc, i32Type,
+                                        builder->getI32IntegerAttr(0));
 
   auto tensorType = RankedTensorType::get({128, 64}, builder->getF32Type());
   auto descType = triton::TensorDescType::get({128, 64}, builder->getF32Type(),
                                               Attribute{});
-  auto desc = builder->create<triton::MakeTensorDescOp>(
-      loc, descType, base, ValueRange{c128, c64}, ValueRange{c64_i64, c1});
-  auto dload = builder->create<triton::DescriptorLoadOp>(
-      loc, tensorType, desc, ValueRange{idx0, idx1});
-  auto val = builder->create<arith::ConstantOp>(
-      loc, tensorType,
+  auto desc = triton::MakeTensorDescOp::create(*builder, loc, descType, base,
+                                               ValueRange{c128, c64},
+                                               ValueRange{c64_i64, c1});
+  auto dload = triton::DescriptorLoadOp::create(*builder, loc, tensorType, desc,
+                                                ValueRange{idx0, idx1});
+  auto val = arith::ConstantOp::create(
+      *builder, loc, tensorType,
       DenseElementsAttr::get(tensorType, builder->getF32FloatAttr(1.0)));
-  auto storeOp = builder->create<triton::DescriptorStoreOp>(
-      loc, desc, val, ValueRange{idx0, idx1});
+  auto storeOp = triton::DescriptorStoreOp::create(*builder, loc, desc, val,
+                                                   ValueRange{idx0, idx1});
 
   mlir::triton::intel::AliasAnalysis analysis(funcOp);
   EXPECT_THAT(analysis.getAliasingMemOps(dload),
@@ -436,26 +442,27 @@ TEST_F(AliasAnalysisTest, DescriptorLoadAndRawLoadSameBase) {
 
   auto i32Type = builder->getI32Type();
   auto i64Type = builder->getI64Type();
-  auto c128 = builder->create<arith::ConstantOp>(
-      loc, i32Type, builder->getI32IntegerAttr(128));
-  auto c64 = builder->create<arith::ConstantOp>(loc, i32Type,
-                                                builder->getI32IntegerAttr(64));
-  auto c64_i64 = builder->create<arith::ConstantOp>(
-      loc, i64Type, builder->getI64IntegerAttr(64));
-  auto c1 = builder->create<arith::ConstantOp>(loc, i64Type,
-                                               builder->getI64IntegerAttr(1));
-  auto idx0 = builder->create<arith::ConstantOp>(loc, i32Type,
-                                                 builder->getI32IntegerAttr(0));
-  auto idx1 = builder->create<arith::ConstantOp>(loc, i32Type,
-                                                 builder->getI32IntegerAttr(0));
+  auto c128 = arith::ConstantOp::create(*builder, loc, i32Type,
+                                        builder->getI32IntegerAttr(128));
+  auto c64 = arith::ConstantOp::create(*builder, loc, i32Type,
+                                       builder->getI32IntegerAttr(64));
+  auto c64_i64 = arith::ConstantOp::create(*builder, loc, i64Type,
+                                           builder->getI64IntegerAttr(64));
+  auto c1 = arith::ConstantOp::create(*builder, loc, i64Type,
+                                      builder->getI64IntegerAttr(1));
+  auto idx0 = arith::ConstantOp::create(*builder, loc, i32Type,
+                                        builder->getI32IntegerAttr(0));
+  auto idx1 = arith::ConstantOp::create(*builder, loc, i32Type,
+                                        builder->getI32IntegerAttr(0));
 
   auto tensorType = RankedTensorType::get({128, 64}, builder->getF32Type());
   auto descType = triton::TensorDescType::get({128, 64}, builder->getF32Type(),
                                               Attribute{});
-  auto desc = builder->create<triton::MakeTensorDescOp>(
-      loc, descType, base, ValueRange{c128, c64}, ValueRange{c64_i64, c1});
-  auto dload = builder->create<triton::DescriptorLoadOp>(
-      loc, tensorType, desc, ValueRange{idx0, idx1});
+  auto desc = triton::MakeTensorDescOp::create(*builder, loc, descType, base,
+                                               ValueRange{c128, c64},
+                                               ValueRange{c64_i64, c1});
+  auto dload = triton::DescriptorLoadOp::create(*builder, loc, tensorType, desc,
+                                                ValueRange{idx0, idx1});
   auto rawload = makeLoad(base);
 
   mlir::triton::intel::AliasAnalysis analysis(funcOp);
@@ -477,41 +484,43 @@ TEST_F(AliasAnalysisTest, DescriptorLoadThroughSCFForIterArg) {
 
   auto i32Type = builder->getI32Type();
   auto i64Type = builder->getI64Type();
-  auto c128 = builder->create<arith::ConstantOp>(
-      loc, i32Type, builder->getI32IntegerAttr(128));
-  auto c64 = builder->create<arith::ConstantOp>(loc, i32Type,
-                                                builder->getI32IntegerAttr(64));
-  auto c64_i64 = builder->create<arith::ConstantOp>(
-      loc, i64Type, builder->getI64IntegerAttr(64));
-  auto c1 = builder->create<arith::ConstantOp>(loc, i64Type,
-                                               builder->getI64IntegerAttr(1));
-  auto idx0 = builder->create<arith::ConstantOp>(loc, i32Type,
-                                                 builder->getI32IntegerAttr(0));
-  auto idx1 = builder->create<arith::ConstantOp>(loc, i32Type,
-                                                 builder->getI32IntegerAttr(0));
+  auto c128 = arith::ConstantOp::create(*builder, loc, i32Type,
+                                        builder->getI32IntegerAttr(128));
+  auto c64 = arith::ConstantOp::create(*builder, loc, i32Type,
+                                       builder->getI32IntegerAttr(64));
+  auto c64_i64 = arith::ConstantOp::create(*builder, loc, i64Type,
+                                           builder->getI64IntegerAttr(64));
+  auto c1 = arith::ConstantOp::create(*builder, loc, i64Type,
+                                      builder->getI64IntegerAttr(1));
+  auto idx0 = arith::ConstantOp::create(*builder, loc, i32Type,
+                                        builder->getI32IntegerAttr(0));
+  auto idx1 = arith::ConstantOp::create(*builder, loc, i32Type,
+                                        builder->getI32IntegerAttr(0));
 
   auto tensorType = RankedTensorType::get({128, 64}, builder->getF32Type());
   auto descType = triton::TensorDescType::get({128, 64}, builder->getF32Type(),
                                               Attribute{});
-  auto desc = builder->create<triton::MakeTensorDescOp>(
-      loc, descType, base, ValueRange{c128, c64}, ValueRange{c64_i64, c1});
+  auto desc = triton::MakeTensorDescOp::create(*builder, loc, descType, base,
+                                               ValueRange{c128, c64},
+                                               ValueRange{c64_i64, c1});
 
-  auto lb = builder->create<arith::ConstantOp>(loc, i32Type,
-                                               builder->getI32IntegerAttr(0));
-  auto ub = builder->create<arith::ConstantOp>(loc, i32Type,
-                                               builder->getI32IntegerAttr(10));
-  auto step = builder->create<arith::ConstantOp>(loc, i32Type,
-                                                 builder->getI32IntegerAttr(1));
-  auto forOp = builder->create<scf::ForOp>(loc, lb, ub, step, ValueRange{desc});
+  auto lb = arith::ConstantOp::create(*builder, loc, i32Type,
+                                      builder->getI32IntegerAttr(0));
+  auto ub = arith::ConstantOp::create(*builder, loc, i32Type,
+                                      builder->getI32IntegerAttr(10));
+  auto step = arith::ConstantOp::create(*builder, loc, i32Type,
+                                        builder->getI32IntegerAttr(1));
+  auto forOp =
+      scf::ForOp::create(*builder, loc, lb, ub, step, ValueRange{desc});
 
   triton::DescriptorLoadOp dload;
   {
     OpBuilder::InsertionGuard loopGuard(*builder);
     builder->setInsertionPointToStart(forOp.getBody());
     auto iterDesc = forOp.getRegionIterArg(0);
-    dload = builder->create<triton::DescriptorLoadOp>(loc, tensorType, iterDesc,
-                                                      ValueRange{idx0, idx1});
-    builder->create<scf::YieldOp>(loc, ValueRange{iterDesc});
+    dload = triton::DescriptorLoadOp::create(*builder, loc, tensorType,
+                                             iterDesc, ValueRange{idx0, idx1});
+    scf::YieldOp::create(*builder, loc, ValueRange{iterDesc});
   }
 
   builder->setInsertionPoint(funcOp.front().getTerminator());
@@ -546,46 +555,48 @@ TEST_F(AliasAnalysisTest, DescriptorThroughSCFIfMismatch) {
   auto i1Type = builder->getI1Type();
   auto i32Type = builder->getI32Type();
   auto i64Type = builder->getI64Type();
-  auto condition = builder->create<arith::ConstantOp>(
-      loc, i1Type, builder->getIntegerAttr(i1Type, 1));
+  auto condition = arith::ConstantOp::create(
+      *builder, loc, i1Type, builder->getIntegerAttr(i1Type, 1));
 
-  auto c128 = builder->create<arith::ConstantOp>(
-      loc, i32Type, builder->getI32IntegerAttr(128));
-  auto c64 = builder->create<arith::ConstantOp>(loc, i32Type,
-                                                builder->getI32IntegerAttr(64));
-  auto c64_i64 = builder->create<arith::ConstantOp>(
-      loc, i64Type, builder->getI64IntegerAttr(64));
-  auto c1 = builder->create<arith::ConstantOp>(loc, i64Type,
-                                               builder->getI64IntegerAttr(1));
+  auto c128 = arith::ConstantOp::create(*builder, loc, i32Type,
+                                        builder->getI32IntegerAttr(128));
+  auto c64 = arith::ConstantOp::create(*builder, loc, i32Type,
+                                       builder->getI32IntegerAttr(64));
+  auto c64_i64 = arith::ConstantOp::create(*builder, loc, i64Type,
+                                           builder->getI64IntegerAttr(64));
+  auto c1 = arith::ConstantOp::create(*builder, loc, i64Type,
+                                      builder->getI64IntegerAttr(1));
 
   auto tensorType = RankedTensorType::get({128, 64}, builder->getF32Type());
   auto descType = triton::TensorDescType::get({128, 64}, builder->getF32Type(),
                                               Attribute{});
 
   // scf.if with mismatched descriptor branches
-  auto ifOp = builder->create<scf::IfOp>(loc, descType, condition, true);
+  auto ifOp = scf::IfOp::create(*builder, loc, descType, condition, true);
   {
     OpBuilder::InsertionGuard thenGuard(*builder);
     builder->setInsertionPointToStart(&ifOp.getThenRegion().front());
-    auto descA = builder->create<triton::MakeTensorDescOp>(
-        loc, descType, baseA, ValueRange{c128, c64}, ValueRange{c64_i64, c1});
-    builder->create<scf::YieldOp>(loc, ValueRange{descA.getResult()});
+    auto descA = triton::MakeTensorDescOp::create(*builder, loc, descType,
+                                                  baseA, ValueRange{c128, c64},
+                                                  ValueRange{c64_i64, c1});
+    scf::YieldOp::create(*builder, loc, ValueRange{descA.getResult()});
   }
   {
     OpBuilder::InsertionGuard elseGuard(*builder);
     builder->setInsertionPointToStart(&ifOp.getElseRegion().front());
-    auto descB = builder->create<triton::MakeTensorDescOp>(
-        loc, descType, baseB, ValueRange{c128, c64}, ValueRange{c64_i64, c1});
-    builder->create<scf::YieldOp>(loc, ValueRange{descB.getResult()});
+    auto descB = triton::MakeTensorDescOp::create(*builder, loc, descType,
+                                                  baseB, ValueRange{c128, c64},
+                                                  ValueRange{c64_i64, c1});
+    scf::YieldOp::create(*builder, loc, ValueRange{descB.getResult()});
   }
 
   auto opaqueDesc = ifOp.getResult(0);
-  auto idx0 = builder->create<arith::ConstantOp>(loc, i32Type,
-                                                 builder->getI32IntegerAttr(0));
-  auto idx1 = builder->create<arith::ConstantOp>(loc, i32Type,
-                                                 builder->getI32IntegerAttr(0));
-  auto dload = builder->create<triton::DescriptorLoadOp>(
-      loc, tensorType, opaqueDesc, ValueRange{idx0, idx1});
+  auto idx0 = arith::ConstantOp::create(*builder, loc, i32Type,
+                                        builder->getI32IntegerAttr(0));
+  auto idx1 = arith::ConstantOp::create(*builder, loc, i32Type,
+                                        builder->getI32IntegerAttr(0));
+  auto dload = triton::DescriptorLoadOp::create(
+      *builder, loc, tensorType, opaqueDesc, ValueRange{idx0, idx1});
 
   auto loadA = makeLoad(baseA);
 
@@ -610,9 +621,10 @@ TEST_F(AliasAnalysisTest, InterfaceTrackedOpWithNoPointerIsPeer) {
   auto argB = funcOp.getArgument(1);
 
   auto loadA = makeLoad(argA);
-  auto printOp = builder->create<triton::PrintOp>(
-      loc, builder->getStringAttr("dbg"), /*hex=*/builder->getBoolAttr(false),
-      ValueRange{}, builder->getDenseI32ArrayAttr({}));
+  auto printOp =
+      triton::PrintOp::create(*builder, loc, builder->getStringAttr("dbg"),
+                              /*hex=*/builder->getBoolAttr(false), ValueRange{},
+                              builder->getDenseI32ArrayAttr({}));
   auto loadB = makeLoad(argB);
 
   mlir::triton::intel::AliasAnalysis analysis(funcOp);
@@ -649,11 +661,11 @@ TEST_F(AliasAnalysisTest, NonMemoryOpsDoNotPessimize) {
 
   // Pure ops
   auto i32Type = builder->getI32Type();
-  auto c0 = builder->create<arith::ConstantOp>(loc, i32Type,
-                                               builder->getI32IntegerAttr(0));
-  auto c1 = builder->create<arith::ConstantOp>(loc, i32Type,
-                                               builder->getI32IntegerAttr(1));
-  auto sum = builder->create<arith::AddIOp>(loc, c0, c1);
+  auto c0 = arith::ConstantOp::create(*builder, loc, i32Type,
+                                      builder->getI32IntegerAttr(0));
+  auto c1 = arith::ConstantOp::create(*builder, loc, i32Type,
+                                      builder->getI32IntegerAttr(1));
+  auto sum = arith::AddIOp::create(*builder, loc, c0, c1);
   (void)sum;
 
   auto load2 = makeLoad(argB);
@@ -678,37 +690,40 @@ TEST_F(AliasAnalysisTest, OpaqueDescriptorPropagatesUnknown) {
   auto i1Type = builder->getI1Type();
   auto i32Type = builder->getI32Type();
   auto i64Type = builder->getI64Type();
-  auto condition = builder->create<arith::ConstantOp>(
-      loc, i1Type, builder->getIntegerAttr(i1Type, 1));
+  auto condition = arith::ConstantOp::create(
+      *builder, loc, i1Type, builder->getIntegerAttr(i1Type, 1));
 
-  auto c128 = builder->create<arith::ConstantOp>(
-      loc, i32Type, builder->getI32IntegerAttr(128));
-  auto c64 = builder->create<arith::ConstantOp>(loc, i32Type,
-                                                builder->getI32IntegerAttr(64));
-  auto c64_i64 = builder->create<arith::ConstantOp>(
-      loc, i64Type, builder->getI64IntegerAttr(64));
-  auto c1 = builder->create<arith::ConstantOp>(loc, i64Type,
-                                               builder->getI64IntegerAttr(1));
+  auto c128 = arith::ConstantOp::create(*builder, loc, i32Type,
+                                        builder->getI32IntegerAttr(128));
+  auto c64 = arith::ConstantOp::create(*builder, loc, i32Type,
+                                       builder->getI32IntegerAttr(64));
+  auto c64_i64 = arith::ConstantOp::create(*builder, loc, i64Type,
+                                           builder->getI64IntegerAttr(64));
+  auto c1 = arith::ConstantOp::create(*builder, loc, i64Type,
+                                      builder->getI64IntegerAttr(1));
 
   auto tensorType = RankedTensorType::get({128, 64}, builder->getF32Type());
   auto descType = triton::TensorDescType::get({128, 64}, builder->getF32Type(),
                                               Attribute{});
 
-  auto descA = builder->create<triton::MakeTensorDescOp>(
-      loc, descType, baseA, ValueRange{c128, c64}, ValueRange{c64_i64, c1});
-  auto descB = builder->create<triton::MakeTensorDescOp>(
-      loc, descType, baseB, ValueRange{c128, c64}, ValueRange{c64_i64, c1});
+  auto descA = triton::MakeTensorDescOp::create(*builder, loc, descType, baseA,
+                                                ValueRange{c128, c64},
+                                                ValueRange{c64_i64, c1});
+  auto descB = triton::MakeTensorDescOp::create(*builder, loc, descType, baseB,
+                                                ValueRange{c128, c64},
+                                                ValueRange{c64_i64, c1});
 
   // Opaque descriptor via arith.select (not recognized by findDefiningOpOfType)
   auto opaqueDesc =
-      builder->create<arith::SelectOp>(loc, condition, descA, descB);
+      arith::SelectOp::create(*builder, loc, condition, descA, descB);
 
-  auto idx0 = builder->create<arith::ConstantOp>(loc, i32Type,
-                                                 builder->getI32IntegerAttr(0));
-  auto idx1 = builder->create<arith::ConstantOp>(loc, i32Type,
-                                                 builder->getI32IntegerAttr(0));
-  auto dload = builder->create<triton::DescriptorLoadOp>(
-      loc, tensorType, opaqueDesc.getResult(), ValueRange{idx0, idx1});
+  auto idx0 = arith::ConstantOp::create(*builder, loc, i32Type,
+                                        builder->getI32IntegerAttr(0));
+  auto idx1 = arith::ConstantOp::create(*builder, loc, i32Type,
+                                        builder->getI32IntegerAttr(0));
+  auto dload = triton::DescriptorLoadOp::create(*builder, loc, tensorType,
+                                                opaqueDesc.getResult(),
+                                                ValueRange{idx0, idx1});
 
   auto loadA = makeLoad(baseA);
 
