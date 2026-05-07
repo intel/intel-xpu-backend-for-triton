@@ -1,16 +1,11 @@
 #ifndef TRITON_INTEL_UTILS_UTILITY_H
 #define TRITON_INTEL_UTILS_UTILITY_H
 
-#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Value.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
 namespace mlir {
-namespace triton {
-class MakeTensorDescOp;
-} // namespace triton
-
 class FunctionOpInterface;
 class LoopLikeOpInterface;
 } // namespace mlir
@@ -38,83 +33,15 @@ Value getFinalValue(Value value);
 // Erase the operations in \p operations.
 void eraseOperations(SmallPtrSetImpl<Operation *> &operations);
 
-// Find the defining operation of type `OpTy` for the given value.
-// Note: traverses block arguments and loop yields, etc...
-template <typename OpTy, typename = std::enable_if<std::is_same<
-                             OpTy, triton::MakeTensorDescOp>::value>>
-std::optional<OpTy> findDefiningOpOfType(Value val) {
-  if (auto arg = dyn_cast<BlockArgument>(val)) {
-    Operation *parentOp = arg.getParentBlock()->getParentOp();
-    if (!parentOp || isa<FunctionOpInterface>(parentOp))
-      return std::nullopt;
+// Find all MakeTensorDescOps reachable from the given value.
+// Traverses block arguments, loop yields, if/select branches, etc.
+// Returns a deduplicated list of all reachable ops, or an empty list if any
+// path leads to an untraceable value (e.g., function call, unknown op).
+SmallVector<triton::MakeTensorDescOp> findAllMakeTensorDescOps(Value val);
 
-    Value loopArg;
-    if (auto forOp = dyn_cast<scf::ForOp>(parentOp))
-      loopArg = forOp.getInitArgs()[arg.getArgNumber() - 1];
-    else if (auto whileOp = dyn_cast<scf::WhileOp>(parentOp))
-      loopArg = whileOp.getInits()[arg.getArgNumber()];
-    else
-      llvm_unreachable("Unexpected parent operator");
-
-    return findDefiningOpOfType<OpTy>(loopArg);
-  }
-
-  if (auto poisonOp = val.getDefiningOp<ub::PoisonOp>())
-    return std::nullopt;
-  if (auto callOp = val.getDefiningOp<triton::CallOp>())
-    return std::nullopt;
-  if (auto makePtrOp = val.getDefiningOp<OpTy>())
-    return makePtrOp;
-  if (auto opRes = dyn_cast<OpResult>(val)) {
-    Operation *defOp = opRes.getOwner();
-    if (auto loopOp = dyn_cast<LoopLikeOpInterface>(defOp))
-      return findDefiningOpOfType<OpTy>(
-          loopOp.getYieldedValues()[opRes.getResultNumber()]);
-    if (auto ifOp = dyn_cast<scf::IfOp>(defOp)) {
-      // Give up if the 2 possible definitions aren't the same.
-      Region &thenRgn = ifOp.getThenRegion();
-      Region &elseRgn = ifOp.getElseRegion();
-      if (thenRgn.empty() || elseRgn.empty())
-        return std::nullopt;
-      assert(thenRgn.hasOneBlock() && elseRgn.hasOneBlock() &&
-             "Expecting single blocks on both the 'then' and 'else' regions");
-      auto thenYieldOp =
-               cast<scf::YieldOp>(thenRgn.getBlocks().front().getTerminator()),
-           elseYieldOp =
-               cast<scf::YieldOp>(elseRgn.getBlocks().front().getTerminator());
-      Value thenVal = thenYieldOp->getOperand(opRes.getResultNumber()),
-            elseVal = elseYieldOp->getOperand(opRes.getResultNumber());
-      std::optional<OpTy> thenDef = findDefiningOpOfType<OpTy>(thenVal),
-                          elseDef = findDefiningOpOfType<OpTy>(elseVal);
-      if (!thenDef || !elseDef || *thenDef != *elseDef)
-        return std::nullopt;
-      return thenDef;
-    }
-    if (auto selectOp = dyn_cast<arith::SelectOp>(defOp)) {
-      // Give up if the 2 possible definitions aren't the same.
-      Value trueVal = selectOp.getTrueValue(),
-            falseVal = selectOp.getFalseValue();
-      std::optional<OpTy> trueDef = findDefiningOpOfType<OpTy>(trueVal),
-                          falseDef = findDefiningOpOfType<OpTy>(falseVal);
-      if (!trueDef || !falseDef || *trueDef != *falseDef)
-        return std::nullopt;
-      return trueDef;
-    }
-    if (auto castOp = dyn_cast<mlir::UnrealizedConversionCastOp>(defOp)) {
-      // Follow through unrealized conversion casts inserted by the type
-      // conversion framework (e.g. applyPartialConversion remapping of
-      // function arguments).
-      if (castOp.getInputs().size() == 1)
-        return findDefiningOpOfType<OpTy>(castOp.getInputs()[0]);
-      return std::nullopt;
-    }
-
-    llvm::errs() << "defOp: " << *defOp << "\n";
-    assert(false && "unhandled operation");
-  }
-
-  return std::nullopt;
-}
+// Find the unique MakeTensorDescOp for the given value.
+// Returns the op only if all reachable paths lead to the same one.
+std::optional<triton::MakeTensorDescOp> findMakeTensorDescOp(Value val);
 
 } // namespace mlir::triton::intel
 

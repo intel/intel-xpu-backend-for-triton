@@ -1104,21 +1104,16 @@ class TritonRewriteTensorDescriptorToPointerPass
         unhandledMakeTensorDescOps;
     op->walk([&](Operation *op) {
       TypeSwitch<Operation *>(op)
-          .Case<triton::DescriptorLoadOp,
-                triton::DescriptorStoreOp>([&](auto op) {
-            auto makeTensorDescOp =
-                triton::intel::findDefiningOpOfType<triton::MakeTensorDescOp>(
-                    op.getDesc());
-            if (makeTensorDescOp.has_value())
-              candidateMakeTensorDescOps.insert(*makeTensorDescOp);
-          })
+          .Case<triton::DescriptorLoadOp, triton::DescriptorStoreOp>(
+              [&](auto op) {
+                for (auto d :
+                     triton::intel::findAllMakeTensorDescOps(op.getDesc()))
+                  candidateMakeTensorDescOps.insert(d);
+              })
           .Case<triton::DescriptorGatherOp, triton::DescriptorScatterOp,
                 triton::DescriptorReduceOp>([&](auto op) {
-            auto makeTensorDescOp =
-                triton::intel::findDefiningOpOfType<triton::MakeTensorDescOp>(
-                    op.getDesc());
-            if (makeTensorDescOp.has_value())
-              unhandledMakeTensorDescOps.insert(*makeTensorDescOp);
+            for (auto d : triton::intel::findAllMakeTensorDescOps(op.getDesc()))
+              unhandledMakeTensorDescOps.insert(d);
           })
           .Default([](auto) {});
       return WalkResult::advance();
@@ -1137,14 +1132,14 @@ class TritonRewriteTensorDescriptorToPointerPass
       return TypeSwitch<Operation *, bool>(op)
           .Case<triton::MakeTensorDescOp>(
               [&](auto op) { return candidateMakeTensorDescOps.contains(op); })
-          .Case<triton::DescriptorLoadOp,
-                triton::DescriptorStoreOp>([&](auto op) {
-            auto makeTensorDescOp =
-                triton::intel::findDefiningOpOfType<triton::MakeTensorDescOp>(
-                    op.getDesc());
-            return makeTensorDescOp.has_value() &&
-                   candidateMakeTensorDescOps.contains(*makeTensorDescOp);
-          })
+          .Case<triton::DescriptorLoadOp, triton::DescriptorStoreOp>(
+              [&](auto op) {
+                auto allDescs =
+                    triton::intel::findAllMakeTensorDescOps(op.getDesc());
+                return !allDescs.empty() && llvm::all_of(allDescs, [&](auto d) {
+                  return candidateMakeTensorDescOps.contains(d);
+                });
+              })
           .Default([](auto) { return false; });
     });
     target.addDynamicallyLegalOp<triton::FuncOp>([](triton::FuncOp funcOp) {

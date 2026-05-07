@@ -85,15 +85,15 @@ private:
     LDBG("Considering descriptor op: " << *op);
 
     Value desc = op.getDesc();
-    // Find the make tensor desc operation that created the descriptor.
-    std::optional<tt::MakeTensorDescOp> defOp =
-        tt::intel::findDefiningOpOfType<tt::MakeTensorDescOp>(desc);
-    if (!defOp) {
-      LDBG("Could not find make tensor desc op for: " << *op);
+    // Find all MakeTensorDescOps that could define this descriptor.
+    SmallVector<tt::MakeTensorDescOp> allDescs =
+        tt::intel::findAllMakeTensorDescOps(desc);
+    if (allDescs.empty()) {
+      LDBG("Could not find any make tensor desc op for: " << *op);
       return;
     }
 
-    tt::MakeTensorDescOp makeTensorDescOp = *defOp;
+    tt::MakeTensorDescOp makeTensorDescOp = allDescs[0];
     LDBG("Make tensor desc op: " << makeTensorDescOp);
 
     // Propagate padding from MakeTensorDescOp unconditionally so the LLVM
@@ -127,10 +127,12 @@ private:
            "Tensor descriptor must have stride=1 in last dimension");
 
     // Across Intel platforms, the strictest pitch restriction is to be a
-    // multiple of OWord(128 bits).
-    Value pitch = strides[rank - 2];
-    LDBG("Pitch: " << pitch);
-    if (!ttgi::isDivisible(pitch, llvm::divideCeil(128, elementWidth)))
+    // multiple of OWord(128 bits). All candidates must satisfy this.
+    unsigned pitchDivisor = llvm::divideCeil(128, elementWidth);
+    if (!llvm::all_of(allDescs, [&](tt::MakeTensorDescOp d) {
+          Value pitch = d.getStrides()[rank - 2];
+          return ttgi::isDivisible(pitch, pitchDivisor);
+        }))
       return;
 
     std::optional<ttg::DotOperandEncodingAttr> dotLayout = getDotLayout(op);
@@ -861,12 +863,13 @@ private:
       OpType op, tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) const {
     Value desc = op.getDesc();
 
-    // Find the make tensor desc operation that created the descriptor for the
-    // load/store operation.
-    std::optional<tt::MakeTensorDescOp> defOp =
-        tt::intel::findDefiningOpOfType<tt::MakeTensorDescOp>(desc);
-    assert(defOp && "Expected a make tensor desc op.");
-    tt::MakeTensorDescOp makeTensorDescOp = *defOp;
+    // Find all MakeTensorDescOps that could define this descriptor.
+    SmallVector<tt::MakeTensorDescOp> allDescs =
+        tt::intel::findAllMakeTensorDescOps(desc);
+    if (allDescs.empty())
+      return false;
+
+    tt::MakeTensorDescOp makeTensorDescOp = allDescs[0];
     Operation::operand_range shape = makeTensorDescOp.getShape();
     unsigned rank = shape.size();
     if (rank == 1)
