@@ -43,7 +43,9 @@ public:
     auto funcOp =
         func::FuncOp::create(builder->getUnknownLoc(), name, funcType);
     module.push_back(funcOp);
-    funcOp.addEntryBlock();
+    Block *entry = funcOp.addEntryBlock();
+    builder->setInsertionPointToEnd(entry);
+    func::ReturnOp::create(*builder, builder->getUnknownLoc());
     return funcOp;
   }
 
@@ -336,7 +338,7 @@ TEST_F(StrideInfoTest, NestedLoopsInnerIVOuterValue) {
 // PR-B (TemporalReuseAnalysis) will revisit scf.while when a consumer
 // actually exercises it.
 
-// Test 9: Spatial stride regression — tt.make_range
+// Test 8: Spatial stride regression — tt.make_range
 TEST_F(StrideInfoTest, SpatialRangeStrideOne) {
   ModuleOp module = buildModule();
   func::FuncOp funcOp = buildFunc(module);
@@ -371,7 +373,7 @@ TEST_F(StrideInfoTest, SpatialRangeStrideOne) {
   }
 }
 
-// Test 10: Spatial stride regression — tt.splat(const)
+// Test 9: Spatial stride regression — tt.splat(const)
 TEST_F(StrideInfoTest, SpatialSplatConstant) {
   ModuleOp module = buildModule();
   func::FuncOp funcOp = buildFunc(module);

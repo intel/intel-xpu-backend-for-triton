@@ -68,8 +68,10 @@ StrideInfo StrideInfo::join(const StrideInfo &lhs, const StrideInfo &rhs) {
   DimVectorT spatial = joinColumn(lhs.stride, rhs.stride);
 
   // Union the set of tracked loops.  A missing entry is treated as an
-  // all-zero vector of the shared rank, so: {zero,zero}->zero,
-  // {known,zero}->zero (disagrees -> -1), {known,known}-> agree-or-(-1).
+  // all-zero vector of the shared rank, then joined with `joinColumn`'s
+  // "agree-or-(-1)" rule.  Concretely, per dimension: {0,0} -> 0;
+  // {k,0} or {0,k} -> 0 if k == 0 else -1; {k1,k2} -> k1 if k1 == k2
+  // else -1.
   llvm::SmallSetVector<LoopLikeOpInterface, 4> allLoops;
   for (LoopLikeOpInterface loop : llvm::make_first_range(lhs.ivStrides))
     allLoops.insert(loop);
