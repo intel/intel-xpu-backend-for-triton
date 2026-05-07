@@ -111,7 +111,8 @@ TEST_F(AliasAnalysisTest, TwoLoadsSameArgDifferentOffsets) {
 TEST_F(AliasAnalysisTest, TwoLoadsDistinctArgs) {
   auto module = createModule();
   auto ptrType = getPtrType(builder->getF16Type());
-  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType, ptrType});
+  auto funcOp =
+      createFunctionWithReturn(module, "test_func", {ptrType, ptrType});
   auto loc = builder->getUnknownLoc();
   auto arg0 = funcOp.getArgument(0);
   auto arg1 = funcOp.getArgument(1);
@@ -154,7 +155,8 @@ TEST_F(AliasAnalysisTest, LoadAndStoreSameArg) {
 TEST_F(AliasAnalysisTest, LoadAndStoreDistinctArgs) {
   auto module = createModule();
   auto ptrType = getPtrType(builder->getF16Type());
-  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType, ptrType});
+  auto funcOp =
+      createFunctionWithReturn(module, "test_func", {ptrType, ptrType});
   auto loc = builder->getUnknownLoc();
   auto argA = funcOp.getArgument(0);
   auto argB = funcOp.getArgument(1);
@@ -214,7 +216,8 @@ TEST_F(AliasAnalysisTest, SCFForIterCarriedPointer_JoinsWithInit) {
 TEST_F(AliasAnalysisTest, OpaqueLoadAliasesOpaqueAtomic) {
   auto module = createModule();
   auto ptrType = getPtrType(builder->getI32Type());
-  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType, ptrType});
+  auto funcOp =
+      createFunctionWithReturn(module, "test_func", {ptrType, ptrType});
   auto loc = builder->getUnknownLoc();
   auto arg0 = funcOp.getArgument(0);
   auto arg1 = funcOp.getArgument(1);
@@ -248,7 +251,8 @@ TEST_F(AliasAnalysisTest, OpaqueLoadAliasesOpaqueAtomic) {
 TEST_F(AliasAnalysisTest, AtomicResolvedDistinctFromLoad) {
   auto module = createModule();
   auto ptrType = getPtrType(builder->getI32Type());
-  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType, ptrType});
+  auto funcOp =
+      createFunctionWithReturn(module, "test_func", {ptrType, ptrType});
   auto loc = builder->getUnknownLoc();
   auto argA = funcOp.getArgument(0);
   auto argB = funcOp.getArgument(1);
@@ -276,7 +280,8 @@ TEST_F(AliasAnalysisTest, OpaquePointerAliasesResolvedPointer) {
   // from a function argument that the opaque pointer could equal at runtime.
   auto module = createModule();
   auto ptrType = getPtrType(builder->getI32Type());
-  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType, ptrType});
+  auto funcOp =
+      createFunctionWithReturn(module, "test_func", {ptrType, ptrType});
   auto loc = builder->getUnknownLoc();
   auto arg0 = funcOp.getArgument(0);
   auto arg1 = funcOp.getArgument(1);

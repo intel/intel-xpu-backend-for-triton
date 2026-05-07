@@ -357,8 +357,7 @@ AliasAnalysis::getAliasingMemOps(Operation *queryOp) const {
   // This covers both modeled ops (the 9 specific types) and interface-
   // tracked ops (MemoryEffectOpInterface with Read/Write). Ops outside this
   // set (e.g., arith.addi) return an empty peer list.
-  bool queryTracked =
-      llvm::is_contained(memOps, queryOp);
+  bool queryTracked = llvm::is_contained(memOps, queryOp);
   if (!queryTracked)
     return peers;
 
