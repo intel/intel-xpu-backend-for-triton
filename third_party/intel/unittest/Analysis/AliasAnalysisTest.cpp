@@ -1,4 +1,4 @@
-#include "intel/include/Analysis/AliasReuseAnalysis.h"
+#include "intel/include/Analysis/AliasAnalysis.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -15,7 +15,7 @@ using namespace mlir;
 
 namespace {
 
-class AliasReuseAnalysisTest : public ::testing::Test {
+class AliasAnalysisTest : public ::testing::Test {
 public:
   void SetUp() override {
     ctx.getOrLoadDialect<arith::ArithDialect>();
@@ -59,7 +59,7 @@ protected:
 // Test Alias Detection
 // ===----------------------------------------------------------------------===//
 
-TEST_F(AliasReuseAnalysisTest, TwoLoadsSameArgDifferentOffsets) {
+TEST_F(AliasAnalysisTest, TwoLoadsSameArgDifferentOffsets) {
   auto module = createModule();
   auto ptrType = getPtrType(builder->getF16Type());
   auto funcOp = createFunction(module, "test_func", {ptrType});
@@ -87,14 +87,14 @@ TEST_F(AliasReuseAnalysisTest, TwoLoadsSameArgDifferentOffsets) {
 
   builder->create<triton::ReturnOp>(loc, ValueRange{});
 
-  mlir::triton::intel::AliasReuseAnalysis analysis(funcOp);
+  mlir::triton::intel::AliasAnalysis analysis(funcOp);
   EXPECT_THAT(analysis.getAliasingMemOps(load1),
               ::testing::Contains(load2.getOperation()));
   EXPECT_THAT(analysis.getAliasingMemOps(load2),
               ::testing::Contains(load1.getOperation()));
 }
 
-TEST_F(AliasReuseAnalysisTest, TwoLoadsDistinctArgs) {
+TEST_F(AliasAnalysisTest, TwoLoadsDistinctArgs) {
   auto module = createModule();
   auto ptrType = getPtrType(builder->getF16Type());
   auto funcOp = createFunction(module, "test_func", {ptrType, ptrType});
@@ -115,12 +115,12 @@ TEST_F(AliasReuseAnalysisTest, TwoLoadsDistinctArgs) {
 
   builder->create<triton::ReturnOp>(loc, ValueRange{});
 
-  mlir::triton::intel::AliasReuseAnalysis analysis(funcOp);
+  mlir::triton::intel::AliasAnalysis analysis(funcOp);
   EXPECT_THAT(analysis.getAliasingMemOps(load1), ::testing::IsEmpty());
   EXPECT_THAT(analysis.getAliasingMemOps(load2), ::testing::IsEmpty());
 }
 
-TEST_F(AliasReuseAnalysisTest, LoadAndStoreSameArg) {
+TEST_F(AliasAnalysisTest, LoadAndStoreSameArg) {
   auto module = createModule();
   auto ptrType = getPtrType(builder->getF16Type());
   auto funcOp = createFunction(module, "test_func", {ptrType});
@@ -150,12 +150,12 @@ TEST_F(AliasReuseAnalysisTest, LoadAndStoreSameArg) {
 
   builder->create<triton::ReturnOp>(loc, ValueRange{});
 
-  mlir::triton::intel::AliasReuseAnalysis analysis(funcOp);
+  mlir::triton::intel::AliasAnalysis analysis(funcOp);
   EXPECT_THAT(analysis.getAliasingMemOps(load),
               ::testing::Contains(storeOp.getOperation()));
 }
 
-TEST_F(AliasReuseAnalysisTest, LoadAndStoreDistinctArgs) {
+TEST_F(AliasAnalysisTest, LoadAndStoreDistinctArgs) {
   auto module = createModule();
   auto ptrType = getPtrType(builder->getF16Type());
   auto funcOp = createFunction(module, "test_func", {ptrType, ptrType});
@@ -179,11 +179,11 @@ TEST_F(AliasReuseAnalysisTest, LoadAndStoreDistinctArgs) {
 
   builder->create<triton::ReturnOp>(loc, ValueRange{});
 
-  mlir::triton::intel::AliasReuseAnalysis analysis(funcOp);
+  mlir::triton::intel::AliasAnalysis analysis(funcOp);
   EXPECT_THAT(analysis.getAliasingMemOps(load), ::testing::IsEmpty());
 }
 
-TEST_F(AliasReuseAnalysisTest, SCFForIterCarriedPointer_JoinsWithInit) {
+TEST_F(AliasAnalysisTest, SCFForIterCarriedPointer_JoinsWithInit) {
   auto module = createModule();
   auto ptrType = getPtrType(builder->getF16Type());
   auto funcOp = createFunction(module, "test_func", {ptrType});
@@ -225,12 +225,12 @@ TEST_F(AliasReuseAnalysisTest, SCFForIterCarriedPointer_JoinsWithInit) {
   triton::LoadOp loadInLoop;
   forOp.getBody()->walk([&](triton::LoadOp op) { loadInLoop = op; });
 
-  mlir::triton::intel::AliasReuseAnalysis analysis(funcOp);
+  mlir::triton::intel::AliasAnalysis analysis(funcOp);
   EXPECT_THAT(analysis.getAliasingMemOps(loadInLoop),
               ::testing::Contains(storeOp.getOperation()));
 }
 
-TEST_F(AliasReuseAnalysisTest, OpaqueLoadAliasesOpaqueAtomic) {
+TEST_F(AliasAnalysisTest, OpaqueLoadAliasesOpaqueAtomic) {
   auto module = createModule();
   auto ptrType = getPtrType(builder->getI32Type());
   auto funcOp = createFunction(module, "test_func", {ptrType, ptrType});
@@ -267,12 +267,12 @@ TEST_F(AliasReuseAnalysisTest, OpaqueLoadAliasesOpaqueAtomic) {
 
   builder->create<triton::ReturnOp>(loc, ValueRange{});
 
-  mlir::triton::intel::AliasReuseAnalysis analysis(funcOp);
+  mlir::triton::intel::AliasAnalysis analysis(funcOp);
   EXPECT_THAT(analysis.getAliasingMemOps(loadOp),
               ::testing::Contains(atomicOp.getOperation()));
 }
 
-TEST_F(AliasReuseAnalysisTest, AtomicResolvedDistinctFromLoad) {
+TEST_F(AliasAnalysisTest, AtomicResolvedDistinctFromLoad) {
   auto module = createModule();
   auto ptrType = getPtrType(builder->getI32Type());
   auto funcOp = createFunction(module, "test_func", {ptrType, ptrType});
@@ -300,11 +300,11 @@ TEST_F(AliasReuseAnalysisTest, AtomicResolvedDistinctFromLoad) {
 
   builder->create<triton::ReturnOp>(loc, ValueRange{});
 
-  mlir::triton::intel::AliasReuseAnalysis analysis(funcOp);
+  mlir::triton::intel::AliasAnalysis analysis(funcOp);
   EXPECT_THAT(analysis.getAliasingMemOps(load), ::testing::IsEmpty());
 }
 
-TEST_F(AliasReuseAnalysisTest, OpaquePointerAliasesResolvedPointer) {
+TEST_F(AliasAnalysisTest, OpaquePointerAliasesResolvedPointer) {
   // An opaque pointer (produced by an op the analysis doesn't model, e.g.
   // arith.select) has an unresolved origin. It must conservatively MayAlias
   // every tracked pointer — including resolved pointers derived directly
@@ -342,7 +342,7 @@ TEST_F(AliasReuseAnalysisTest, OpaquePointerAliasesResolvedPointer) {
 
   builder->create<triton::ReturnOp>(loc, ValueRange{});
 
-  mlir::triton::intel::AliasReuseAnalysis analysis(funcOp);
+  mlir::triton::intel::AliasAnalysis analysis(funcOp);
   // Opaque pointer must MayAlias both resolved pointers.
   EXPECT_THAT(analysis.getAliasingMemOps(opaqueLoad),
               ::testing::Contains(resolvedLoadA.getOperation()));
@@ -359,7 +359,7 @@ TEST_F(AliasReuseAnalysisTest, OpaquePointerAliasesResolvedPointer) {
       ::testing::Not(::testing::Contains(resolvedLoadB.getOperation())));
 }
 
-TEST_F(AliasReuseAnalysisTest, ConvertLayoutPointerPassThrough) {
+TEST_F(AliasAnalysisTest, ConvertLayoutPointerPassThrough) {
   auto module = createModule();
   auto ptrType = getPtrType(builder->getF16Type());
 
@@ -408,12 +408,12 @@ TEST_F(AliasReuseAnalysisTest, ConvertLayoutPointerPassThrough) {
 
   builder->create<triton::ReturnOp>(loc, ValueRange{});
 
-  mlir::triton::intel::AliasReuseAnalysis analysis(funcOp);
+  mlir::triton::intel::AliasAnalysis analysis(funcOp);
   EXPECT_THAT(analysis.getAliasingMemOps(loadedValue),
               ::testing::Contains(storeOp.getOperation()));
 }
 
-TEST_F(AliasReuseAnalysisTest, ThreeLoadsSameArgReturnsBoth) {
+TEST_F(AliasAnalysisTest, ThreeLoadsSameArgReturnsBoth) {
   auto module = createModule();
   auto ptrType = getPtrType(builder->getF32Type());
   auto funcOp = createFunction(module, "test_func", {ptrType});
@@ -436,7 +436,7 @@ TEST_F(AliasReuseAnalysisTest, ThreeLoadsSameArgReturnsBoth) {
 
   builder->create<triton::ReturnOp>(loc, ValueRange{});
 
-  mlir::triton::intel::AliasReuseAnalysis analysis(funcOp);
+  mlir::triton::intel::AliasAnalysis analysis(funcOp);
   EXPECT_THAT(analysis.getAliasingMemOps(loadA),
               ::testing::Contains(loadB.getOperation()));
   EXPECT_THAT(analysis.getAliasingMemOps(loadA),
@@ -447,7 +447,7 @@ TEST_F(AliasReuseAnalysisTest, ThreeLoadsSameArgReturnsBoth) {
               ::testing::Contains(loadC.getOperation()));
 }
 
-TEST_F(AliasReuseAnalysisTest, DescriptorLoadAndDescriptorStoreSameBase) {
+TEST_F(AliasAnalysisTest, DescriptorLoadAndDescriptorStoreSameBase) {
   auto module = createModule();
   auto ptrType = getPtrType(builder->getF32Type());
   auto funcOp = createFunction(module, "test_func", {ptrType});
@@ -488,12 +488,12 @@ TEST_F(AliasReuseAnalysisTest, DescriptorLoadAndDescriptorStoreSameBase) {
 
   builder->create<triton::ReturnOp>(loc, ValueRange{});
 
-  mlir::triton::intel::AliasReuseAnalysis analysis(funcOp);
+  mlir::triton::intel::AliasAnalysis analysis(funcOp);
   EXPECT_THAT(analysis.getAliasingMemOps(dload),
               ::testing::Contains(storeOp.getOperation()));
 }
 
-TEST_F(AliasReuseAnalysisTest, DescriptorLoadAndRawLoadSameBase) {
+TEST_F(AliasAnalysisTest, DescriptorLoadAndRawLoadSameBase) {
   auto module = createModule();
   auto ptrType = getPtrType(builder->getF32Type());
   auto funcOp = createFunction(module, "test_func", {ptrType});
@@ -532,12 +532,12 @@ TEST_F(AliasReuseAnalysisTest, DescriptorLoadAndRawLoadSameBase) {
 
   builder->create<triton::ReturnOp>(loc, ValueRange{});
 
-  mlir::triton::intel::AliasReuseAnalysis analysis(funcOp);
+  mlir::triton::intel::AliasAnalysis analysis(funcOp);
   EXPECT_THAT(analysis.getAliasingMemOps(dload),
               ::testing::Contains(rawload.getOperation()));
 }
 
-TEST_F(AliasReuseAnalysisTest, DescriptorLoadThroughSCFForIterArg) {
+TEST_F(AliasAnalysisTest, DescriptorLoadThroughSCFForIterArg) {
   // When a descriptor flows through scf.for iter_args, the
   // tt.descriptor_load's getDesc() is a block argument, not a direct
   // MakeTensorDescOp result. findDefiningOpOfType<> must trace through the
@@ -599,7 +599,7 @@ TEST_F(AliasReuseAnalysisTest, DescriptorLoadThroughSCFForIterArg) {
 
   builder->create<triton::ReturnOp>(loc, ValueRange{});
 
-  mlir::triton::intel::AliasReuseAnalysis analysis(funcOp);
+  mlir::triton::intel::AliasAnalysis analysis(funcOp);
   // The descriptor_load inside the loop must resolve through the iter_arg
   // to `base` and alias the raw load from `base`.
   EXPECT_THAT(analysis.getAliasingMemOps(dload),

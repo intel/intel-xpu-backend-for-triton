@@ -1,5 +1,5 @@
-#ifndef TRITON_INTEL_ANALYSIS_ALIASREUSEANALYSIS_H
-#define TRITON_INTEL_ANALYSIS_ALIASREUSEANALYSIS_H
+#ifndef TRITON_INTEL_ANALYSIS_ALIASANALYSIS_H
+#define TRITON_INTEL_ANALYSIS_ALIASANALYSIS_H
 
 #include "mlir/IR/Value.h"
 #include "llvm/ADT/ArrayRef.h"
@@ -18,7 +18,7 @@ class DescriptorLoadOp;
 
 namespace mlir::triton::intel {
 
-/// Function-local alias-reuse analysis.
+/// Function-local alias analysis.
 ///
 /// For a given `tt.load`, returns all other memory-effect ops
 /// (tt.load / tt.store / tt.atomic_rmw / tt.atomic_cas / tt.descriptor_load /
@@ -43,9 +43,9 @@ namespace mlir::triton::intel {
 ///
 /// If the dataflow solver fails to initialize, every query conservatively
 /// returns the full set of memory-effect ops in the function (minus self).
-class AliasReuseAnalysis {
+class AliasAnalysis {
 public:
-  explicit AliasReuseAnalysis(triton::FuncOp func);
+  explicit AliasAnalysis(triton::FuncOp func);
 
   /// Returns all memory-effect ops in the same function whose pointer operand
   /// may alias `queryOp`'s pointer, in program order. Excludes `queryOp`
@@ -104,4 +104,4 @@ private:
 
 } // namespace mlir::triton::intel
 
-#endif // TRITON_INTEL_ANALYSIS_ALIASREUSEANALYSIS_H
+#endif // TRITON_INTEL_ANALYSIS_ALIASANALYSIS_H

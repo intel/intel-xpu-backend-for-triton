@@ -22,8 +22,8 @@ if(NOT WIN32)
 endif()
 
 add_triton_ut(
-  NAME AliasReuseAnalysis
-  SRCS AliasReuseAnalysisTest.cpp
+  NAME AliasAnalysis
+  SRCS AliasAnalysisTest.cpp
   LIBS
     TritonIntelGPUIR
     TritonGPUIR
@@ -38,7 +38,7 @@ add_triton_ut(
 )
 
 if(NOT WIN32)
-  target_compile_options(AliasReuseAnalysis PRIVATE -Wno-deprecated-declarations)
+  target_compile_options(AliasAnalysis PRIVATE -Wno-deprecated-declarations)
 endif()
 
 add_triton_ut(

@@ -1,4 +1,4 @@
-#include "intel/include/Analysis/AliasReuseAnalysis.h"
+#include "intel/include/Analysis/AliasAnalysis.h"
 
 #include "intel/include/Utils/Utility.h"
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
@@ -13,7 +13,7 @@
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 
-#define DEBUG_TYPE "intel-alias-reuse"
+#define DEBUG_TYPE "intel-alias"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
@@ -229,10 +229,10 @@ bool isTrackedMemOp(Operation *op) {
 } // anonymous namespace
 
 //===----------------------------------------------------------------------===//
-// AliasReuseAnalysis
+// AliasAnalysis
 //===----------------------------------------------------------------------===//
 
-AliasReuseAnalysis::AliasReuseAnalysis(tt::FuncOp func) {
+AliasAnalysis::AliasAnalysis(tt::FuncOp func) {
   // Collect every memory-effect op in program order.
   func.walk([&](Operation *op) {
     if (!isTrackedMemOp(op))
@@ -280,7 +280,7 @@ AliasReuseAnalysis::AliasReuseAnalysis(tt::FuncOp func) {
 }
 
 ArrayRef<Operation *>
-AliasReuseAnalysis::getAliasingMemOps(Operation *queryOp) const {
+AliasAnalysis::getAliasingMemOps(Operation *queryOp) const {
   auto [it, inserted] = resultCache.try_emplace(queryOp);
   if (!inserted)
     return it->second;
@@ -309,7 +309,7 @@ AliasReuseAnalysis::getAliasingMemOps(Operation *queryOp) const {
   return peers;
 }
 
-bool AliasReuseAnalysis::mayAlias(Value a, Value b) const {
+bool AliasAnalysis::mayAlias(Value a, Value b) const {
   auto itA = pointerRoots.find(a);
   auto itB = pointerRoots.find(b);
   // A pointer with no entry is treated as Unknown (it was never seeded).
@@ -326,12 +326,12 @@ bool AliasReuseAnalysis::mayAlias(Value a, Value b) const {
 }
 
 ArrayRef<Operation *>
-AliasReuseAnalysis::getAliasingMemOps(tt::LoadOp loadOp) const {
+AliasAnalysis::getAliasingMemOps(tt::LoadOp loadOp) const {
   return getAliasingMemOps(loadOp.getOperation());
 }
 
 ArrayRef<Operation *>
-AliasReuseAnalysis::getAliasingMemOps(tt::DescriptorLoadOp loadOp) const {
+AliasAnalysis::getAliasingMemOps(tt::DescriptorLoadOp loadOp) const {
   return getAliasingMemOps(loadOp.getOperation());
 }
 
