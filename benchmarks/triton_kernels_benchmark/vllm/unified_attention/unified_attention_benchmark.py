@@ -353,24 +353,45 @@ def get_unified_attention_benchmark(
                 v_descale = torch.rand(scale_shape, dtype=torch.float32)
 
             def triton_fn():
-                unified_attention(
-                    q=maybe_quantized_query,
-                    k=maybe_quantized_key_cache,
-                    v=maybe_quantized_value_cache,
-                    out=output,
-                    cu_seqlens_q=cu_query_lens,
-                    seqused_k=kv_lens_tensor,
-                    max_seqlen_q=max_query_len,
-                    max_seqlen_k=max_kv_len,
-                    softmax_scale=scale,
-                    causal=True,
-                    window_size=window_size,
-                    block_table=block_tables,
-                    softcap=soft_cap if soft_cap is not None else 0,
-                    q_descale=q_descale,
-                    k_descale=k_descale,
-                    v_descale=v_descale,
-                )
+                if is_td_patched:
+                    unified_attention(
+                        q=maybe_quantized_query,
+                        k=maybe_quantized_key_cache,
+                        v=maybe_quantized_value_cache,
+                        out=output,
+                        cu_seqlens_q=cu_query_lens,
+                        seqused_k=kv_lens_tensor,
+                        max_seqlen_q=max_query_len,
+                        max_seqlen_k=max_kv_len,
+                        softmax_scale=scale,
+                        causal=True,
+                        window_size=window_size,
+                        block_table=block_tables,
+                        softcap=soft_cap if soft_cap is not None else 0,
+                        q_descale=q_descale,
+                        k_descale=k_descale,
+                        v_descale=v_descale,
+                        use_td=is_td_patched,
+                    )
+                else:
+                    unified_attention(
+                        q=maybe_quantized_query,
+                        k=maybe_quantized_key_cache,
+                        v=maybe_quantized_value_cache,
+                        out=output,
+                        cu_seqlens_q=cu_query_lens,
+                        seqused_k=kv_lens_tensor,
+                        max_seqlen_q=max_query_len,
+                        max_seqlen_k=max_kv_len,
+                        softmax_scale=scale,
+                        causal=True,
+                        window_size=window_size,
+                        block_table=block_tables,
+                        softcap=soft_cap if soft_cap is not None else 0,
+                        q_descale=q_descale,
+                        k_descale=k_descale,
+                        v_descale=v_descale,
+                    )
                 return output
 
             atol, rtol = 2.5e-2, 1e-2
