@@ -17,6 +17,7 @@ from typing import Optional
 import torch
 
 import triton_kernels_benchmark as benchmark_suite
+from triton_kernels_benchmark.benchmark_testing import BENCHMARKING_CONFIG
 
 # This supports both current upstream and pinned version
 try:
@@ -168,7 +169,7 @@ def is_enough_memory(x_val, safety_factor=0.80):
 
     ref_phase_memory = query_mem + kv_cache_mem + bt_mem + ref_memory
     # Double-counted: output and expected_output both live during assert_close.
-    expected_output_mem = output_mem if benchmark_suite.BENCHMARKING_CONFIG["verify"] else 0
+    expected_output_mem = output_mem if BENCHMARKING_CONFIG["verify"] else 0
     triton_phase_memory = triton_memory + expected_output_mem
     total_memory = max(ref_phase_memory, triton_phase_memory)
 
@@ -329,7 +330,7 @@ def get_unified_attention_benchmark(
             )
 
         elif provider.startswith('triton'):
-            expected_output = torch_fn() if benchmark_suite.BENCHMARKING_CONFIG["verify"] else None
+            expected_output = torch_fn() if BENCHMARKING_CONFIG["verify"] else None
 
             cu_query_lens = torch.tensor([0] + query_lens, dtype=torch.int32).cumsum(dim=0, dtype=torch.int32)
             kv_lens_tensor = torch.tensor(kv_lens, dtype=torch.int32)
