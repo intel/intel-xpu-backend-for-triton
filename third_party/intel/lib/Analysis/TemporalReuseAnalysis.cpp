@@ -30,8 +30,13 @@ static OperandClass classifyOperandAtLoop(LoopLikeOpInterface loop, Value v,
     return OperandClass::Invariant;
   if (!si)
     return OperandClass::Unknown;
+  // Canonical StrideInfo contract (see `StrideInfo.h`): `getIVStride(loop)`
+  // returns `nullptr` iff the value does not depend on `loop`'s IV —
+  // i.e., every axis has stride 0.  That precisely matches `Held`.
   const StrideInfo::DimVectorT *ivStride = si->getIVStride(loop);
-  if (!ivStride || ivStride->empty())
+  if (!ivStride)
+    return OperandClass::Held;
+  if (ivStride->empty())
     return OperandClass::Unknown;
   bool anyHeld = false;
   for (int64_t s : *ivStride) {
