@@ -58,6 +58,9 @@ public:
       visit(op, axisInfoAnalysis, strideAnalysis, context);
     mod.walk(
         [&](tt::DescriptorLoadOp op) { visit(op, axisInfoAnalysis, context); });
+    mod.walk([&](tt::DescriptorGatherOp op) {
+      visit(op, axisInfoAnalysis, context);
+    });
     mod.walk([&](tt::DescriptorStoreOp op) {
       visit(op, axisInfoAnalysis, context);
     });
@@ -66,6 +69,12 @@ public:
 private:
   // Visit method for descriptor operations
   void visit(tt::DescriptorLoadOp op,
+             tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+             MLIRContext *context) const {
+    visitDescriptor(op, op.getResult().getType(), axisInfoAnalysis, context);
+  }
+
+  void visit(tt::DescriptorGatherOp op,
              tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
              MLIRContext *context) const {
     visitDescriptor(op, op.getResult().getType(), axisInfoAnalysis, context);
@@ -117,9 +126,12 @@ private:
     if (rank == 1)
       return;
 
-    if (!satisfies2DBlockReadAlignment(op, axisInfoAnalysis)) {
-      LDBG("Alignment checks failed for: " << *op);
-      return;
+    if constexpr (llvm::is_one_of<OpType, tt::DescriptorLoadOp,
+                                  tt::DescriptorStoreOp>::value) {
+      if (!satisfies2DBlockReadAlignment(op, axisInfoAnalysis)) {
+        LDBG("Alignment checks failed for: " << *op);
+        return;
+      }
     }
 
     unsigned elementWidth = tensorType.getElementTypeBitWidth();
@@ -841,11 +853,13 @@ private:
 
   template <typename OpType,
             typename = std::enable_if_t<llvm::is_one_of<
-                OpType, tt::DescriptorLoadOp, tt::DescriptorStoreOp>::value>>
+                OpType, tt::DescriptorLoadOp, tt::DescriptorStoreOp,
+                tt::DescriptorGatherOp>::value>>
   std::optional<ttg::DotOperandEncodingAttr> getDotLayout(OpType op) const {
     // Get the tensor type from the operation's result (load) or value (store)
     Type resultType;
-    if constexpr (std::is_same_v<OpType, tt::DescriptorLoadOp>) {
+    if constexpr (llvm::is_one_of<OpType, tt::DescriptorLoadOp,
+                                  tt::DescriptorGatherOp>::value) {
       resultType = op.getResult().getType();
     } else {
       resultType = op.getSrc().getType();

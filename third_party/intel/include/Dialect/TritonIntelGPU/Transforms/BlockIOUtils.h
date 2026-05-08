@@ -45,19 +45,20 @@ struct BlockIOTileSizeInfo {
 /// Compute the 2D block I/O tile shape from a LinearLayout.
 /// Returns BlockIOTileSizeInfo::unknown() if the layout does not support
 /// 2D block I/O.
-template <bool isLoad>
+template <bool isLoad, unsigned MAX_TILE_HEIGHT = 64>
 BlockIOTileSizeInfo
 getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
                    unsigned elemSizeInBits, AxisInfo *ptrAxisInfo,
                    AxisInfo *maskAxisInfo, bool oneMatrixPerLoadForBT);
 
-// Explicit instantiation declarations.
-extern template BlockIOTileSizeInfo
-getBlockIOTileSize<true>(const LinearLayout &, unsigned, unsigned, AxisInfo *,
-                         AxisInfo *, bool);
-extern template BlockIOTileSizeInfo
-getBlockIOTileSize<false>(const LinearLayout &, unsigned, unsigned, AxisInfo *,
-                          AxisInfo *, bool);
+BlockIOTileSizeInfo
+get2DBlockLoadTileSize(const LinearLayout &ll, unsigned memContiguousDim,
+                       unsigned elemSizeInBits, AxisInfo *ptrAxisInfo,
+                       AxisInfo *maskAxisInfo, bool oneMatrixPerLoadForBT);
+
+BlockIOTileSizeInfo get1DBlockIOTileSize(const LinearLayout &ll,
+                                         unsigned memContiguousDim,
+                                         unsigned elemSizeInBits);
 
 /// Get the DPAS operand index from a tensor type's encoding.
 /// The encoding must be DPAS or DotOperand-with-DPAS parent.

@@ -146,11 +146,13 @@ static RankedTensorType getNewIndicesType(RankedTensorType type,
 static LogicalResult convertGatherScatterIndices(Operation *op,
                                                  OpOperand &indices,
                                                  ConversionPatternRewriter &b) {
+
+  auto gatherOp = cast<triton::DescriptorGatherOp>(op);
+  auto resutType = cast<RankedTensorType>(gatherOp->getResults()[0].getType());
+  Attribute newEncoding =
+      mlir::inferSrcEncoding(gatherOp, resutType.getEncoding());
   auto type = cast<RankedTensorType>(indices.get().getType());
-  RankedTensorType newType = getNewIndicesType(
-      type, lookupThreadsPerWarp(b), lookupNumWarps(op), lookupNumCTAs(op));
-  if (!newType)
-    return failure();
+  RankedTensorType newType = type.cloneWithEncoding(newEncoding);
   Value index =
       ConvertLayoutOp::create(b, op->getLoc(), newType, indices.get());
   indices.set(index);

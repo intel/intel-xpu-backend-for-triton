@@ -500,6 +500,13 @@ static Attribute inferSrcEncoding(triton::gpu::Fp4ToFpOp op, Attribute dstEnc) {
   return {};
 }
 
+static Attribute inferSrcEncoding(triton::DescriptorGatherOp op,
+                                  Attribute dstEnc) {
+  // The gather encoding always gather along the first dim.
+  return triton::gpu::SliceEncodingAttr::get(
+      op->getContext(), 1, cast<ttg::DistributedEncodingTrait>(dstEnc));
+}
+
 static Attribute inferDstEncoding(triton::TransposeOpInterface op,
                                   Attribute encoding) {
   return inferTransOpDstEncoding(
@@ -588,7 +595,8 @@ Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
           nvidia_gpu::WarpGroupDotWaitOp>(op)) {
     return encoding;
   }
-
+  if (auto gatherOp = dyn_cast<triton::DescriptorGatherOp>(op))
+    return inferSrcEncoding(gatherOp, encoding);
   if (auto reduceOp = dyn_cast<triton::ReduceOp>(op))
     return inferSrcEncoding(reduceOp, encoding);
   if (auto expand = dyn_cast<triton::ExpandDimsOp>(op))
