@@ -130,7 +130,7 @@ public:
     SmallVector<tt::LoadOp> loadOps;
     mod.walk([&](tt::LoadOp op) { loadOps.push_back(op); });
     for (auto op : loadOps)
-      convertLoadOp(op, strideAnalysis);
+      convertLoadOp(op, strideAnalysis, axisInfoAnalysis);
   }
 
 private:
@@ -282,7 +282,8 @@ private:
 
   /// Convert a tt.load to ttig.2d_block_load_from_ptr.
   void convertLoadOp(tt::LoadOp op,
-                     tt::intel::ModuleStrideAnalysis &strideAnalysis) {
+                     tt::intel::ModuleStrideAnalysis &strideAnalysis,
+                     tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
     if (!isBlockIOEligible(op))
       return;
 
@@ -293,6 +294,12 @@ private:
 
     bool memoryRowMajor = isMemoryRowMajor(op);
     unsigned contiguousDim = memoryRowMajor ? rank - 1 : rank - 2;
+
+    // Retrieve mask axis info to validate tile constraints consistently
+    // with the downstream LLVM lowering.
+    tt::AxisInfo *maskAxisInfo = nullptr;
+    if (op.getMask())
+      maskAxisInfo = axisInfoAnalysis.getAxisInfo(op.getMask());
 
     // For 1D->2D reshape loads, skip tile validation and use the stride
     // attribute directly for pitch.
@@ -313,12 +320,13 @@ private:
           cast<ttg::DistributedEncodingTrait>(encoding).toLinearLayout(
               tensorTy.getShape());
       if (!ttgi::validate2DBlockLoadTile(llEncoding, contiguousDim,
-                                         elemSizeInBits, tensorTy)) {
+                                         elemSizeInBits, tensorTy,
+                                         maskAxisInfo)) {
         LDBG("Tile validation failed for load: " << *op);
         return;
       }
       auto sizeInfo = ttgi::getBlockIOTileSize<true>(
-          llEncoding, contiguousDim, elemSizeInBits, /*maskAxisInfo=*/nullptr,
+          llEncoding, contiguousDim, elemSizeInBits, maskAxisInfo,
           /*oneMatrixPerLoadForBT=*/false);
       rowDim = sizeInfo.rowDim;
       colDim = sizeInfo.colDim;
