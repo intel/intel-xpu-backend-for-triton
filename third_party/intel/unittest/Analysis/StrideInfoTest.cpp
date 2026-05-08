@@ -106,12 +106,9 @@ TEST_F(StrideInfoTest, ConstantScalarIVStrideZero) {
   StrideInfo *info = strideAnalysis.getStrideInfo(constOp);
   ASSERT_NE(info, nullptr);
 
-  // IV stride should be 0 or nullptr (both acceptable per plan)
-  const auto *ivStrideVec = info->getIVStride(forOp);
-  if (ivStrideVec != nullptr) {
-    EXPECT_EQ((*ivStrideVec)[0], 0);
-  }
-  // Also check getIVStride(loop, dim) returns 0
+  // Canonical form: constants produce no IV-stride entry.
+  EXPECT_EQ(info->getIVStride(forOp), nullptr);
+  // Scalar getter collapses absent entry to 0.
   EXPECT_EQ(info->getIVStride(forOp, 0), 0);
 }
 
@@ -398,11 +395,8 @@ TEST_F(StrideInfoTest, SpatialRangeStrideOne) {
   // Spatial stride should be 1
   EXPECT_EQ(info->getStride(0), 1);
 
-  // IV stride should be 0 or nullptr (not loop-dependent)
-  const auto *ivStrideVec = info->getIVStride(forOp);
-  if (ivStrideVec != nullptr) {
-    EXPECT_EQ((*ivStrideVec)[0], 0);
-  }
+  // Canonical form: MakeRangeOp has no loop dependence → no IV-stride entry.
+  EXPECT_EQ(info->getIVStride(forOp), nullptr);
 }
 
 // Test 10: Spatial stride regression — tt.splat(const)

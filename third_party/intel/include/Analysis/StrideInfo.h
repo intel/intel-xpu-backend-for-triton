@@ -15,9 +15,10 @@ class ModuleAxisInfoAnalysis;
 /// tile vary across tensor axes), StrideInfo also tracks a per-loop
 /// *temporal* stride — how a value's address shifts per **unit of IV
 /// increase** of a given `LoopLikeOpInterface`.  The IV-stride table is
-/// keyed by the enclosing loop op; an absent entry is semantically
-/// equivalent to an all-zero vector (i.e. the value does not depend on
-/// that loop's IV).
+/// keyed by the enclosing loop op.  **An absent entry is the canonical
+/// and only encoding of "value does not depend on this loop's IV"** —
+/// all-zero vectors are never stored.  A present entry is guaranteed to
+/// carry at least one non-zero dimension.
 ///
 /// NOTE on units: `getIVStride()` reports the delta per unit of IV, not
 /// per iteration.  To obtain the per-iteration address delta, multiply
@@ -65,8 +66,9 @@ public:
   /// we have not yet propagated into).
   int64_t getIVStride(LoopLikeOpInterface loop, size_t dim) const;
 
-  /// Full per-axis IV-unit stride vector for `loop`.  Returns `nullptr`
-  /// when `loop` has no entry (treated as all-zero by consumers).
+  /// Full per-axis IV-unit stride vector for `loop`.  Returns `nullptr` iff
+  /// the value does not depend on `loop`'s IV.  A non-null result is
+  /// guaranteed to have at least one non-zero dimension (asserted).
   const DimVectorT *getIVStride(LoopLikeOpInterface loop) const;
 
   /// Per-iteration address delta along `dim` with respect to `loop`.
