@@ -560,7 +560,7 @@ public:
       // analysis, because getRank() treats scalars as 1-element vectors).
       // Broadcast the scalar's single IV-stride value across every
       // axis of the result tensor.
-      assert(!kv.second.empty() && "scalar IV-stride column is empty");
+      assert(kv.second.size() == 1 && "scalar should have rank-1 IV stride");
       int64_t ivVal = kv.second.front();
       ivStrides[kv.first] = StrideInfo::DimVectorT(resRank, ivVal);
     }
