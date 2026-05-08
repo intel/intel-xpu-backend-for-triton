@@ -86,11 +86,11 @@ private:
   /// set of operands that contribute to the effective address of the load
   /// (e.g. the pointer for `tt.load`; the descriptor + all scalar/tensor
   /// index operands for `tt.descriptor_load` and `tt.descriptor_gather`).
-  /// A load has reuse at a given loop level iff every address-determining
-  /// operand is either loop-invariant or holds at least one tensor axis
-  /// fixed across iterations; conversely, if *any* operand advances along
-  /// every one of its axes, the effective address streams and the analysis
-  /// reports no reuse.
+  /// At each loop level, a load has reuse iff *every* address-determining
+  /// operand is `Invariant`, `Held`, or `Unknown`; if *any* operand is
+  /// `Streaming` (i.e. has at least one tile axis with per-iteration
+  /// advance >= that axis's tile extent), successive tiles are disjoint
+  /// on that axis and the analysis reports no reuse for the loop.
   SmallVector<bool> classify(Operation *op, ValueRange operands) const;
 
   template <typename OpT> bool hasTemporalReuseImpl(OpT op) const;
