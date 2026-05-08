@@ -73,6 +73,13 @@ StrideInfo StrideInfo::join(const StrideInfo &lhs, const StrideInfo &rhs) {
   // "agree-or-(-1)" rule.  Concretely, per dimension: {0,0} -> 0;
   // {k,0} or {0,k} -> 0 if k == 0 else -1; {k1,k2} -> k1 if k1 == k2
   // else -1.
+  //
+  // Note: when one incoming path is loop-variant (stride k != 0) and
+  // the other is loop-invariant (absent entry, treated as 0), the
+  // merged column is -1 for that loop.  This is not pessimism hiding a
+  // better answer — across iterations of the loop the value genuinely
+  // advances by k on some paths and by 0 on others, so no single stride
+  // describes it.  The lattice's -1 ("unknown") is the correct answer.
   llvm::SmallSetVector<LoopLikeOpInterface, 4> allLoops;
   for (LoopLikeOpInterface loop : llvm::make_first_range(lhs.ivStrides))
     allLoops.insert(loop);
