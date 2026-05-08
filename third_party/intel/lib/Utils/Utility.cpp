@@ -3,9 +3,12 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include <optional>
 
 using namespace mlir;
@@ -215,6 +218,108 @@ void eraseOperations(SmallPtrSetImpl<Operation *> &operations) {
       continue;
     op->erase();
   }
+}
+
+SmallVector<tt::MakeTensorDescOp> findAllMakeTensorDescOps(Value val) {
+  llvm::SmallSetVector<tt::MakeTensorDescOp, 4> results;
+  SmallPtrSet<Value, 8> visited;
+  SmallVector<Value, 8> worklist;
+  worklist.push_back(val);
+
+  while (!worklist.empty()) {
+    Value cur = worklist.pop_back_val();
+    if (!visited.insert(cur).second)
+      continue;
+
+    if (auto arg = dyn_cast<BlockArgument>(cur)) {
+      Operation *parentOp = arg.getParentBlock()->getParentOp();
+      if (!parentOp || isa<FunctionOpInterface>(parentOp))
+        return {};
+
+      if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
+        // The induction variable (argNumber == 0) is not traceable.
+        if (arg == forOp.getInductionVar())
+          return {};
+        unsigned idx = arg.getArgNumber() - 1;
+        worklist.push_back(forOp.getInitArgs()[idx]);
+        auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+        worklist.push_back(yieldOp->getOperand(idx));
+        continue;
+      }
+      if (auto whileOp = dyn_cast<scf::WhileOp>(parentOp)) {
+        unsigned idx = arg.getArgNumber();
+        Block *beforeBlock = &whileOp.getBefore().front();
+        Block *afterBlock = &whileOp.getAfter().front();
+        auto condOp = cast<scf::ConditionOp>(beforeBlock->getTerminator());
+        auto afterYieldOp = cast<scf::YieldOp>(afterBlock->getTerminator());
+
+        if (arg.getParentBlock() == beforeBlock) {
+          worklist.push_back(whileOp.getInits()[idx]);
+          worklist.push_back(afterYieldOp->getOperand(idx));
+        } else {
+          worklist.push_back(condOp.getArgs()[idx]);
+        }
+        continue;
+      }
+      // Unknown parent op — cannot trace through.
+      return {};
+    }
+
+    // PoisonOp is an uninitialized placeholder (e.g., in pipelined loops).
+    // It is not a valid definition but does not invalidate other results.
+    if (cur.getDefiningOp<ub::PoisonOp>())
+      continue;
+    if (cur.getDefiningOp<tt::CallOp>())
+      return {};
+    if (auto makeDescOp = cur.getDefiningOp<tt::MakeTensorDescOp>()) {
+      results.insert(makeDescOp);
+      continue;
+    }
+    if (auto opRes = dyn_cast<OpResult>(cur)) {
+      Operation *defOp = opRes.getOwner();
+      if (auto loopOp = dyn_cast<LoopLikeOpInterface>(defOp)) {
+        worklist.push_back(loopOp.getYieldedValues()[opRes.getResultNumber()]);
+        continue;
+      }
+      if (auto ifOp = dyn_cast<scf::IfOp>(defOp)) {
+        Region &thenRgn = ifOp.getThenRegion();
+        Region &elseRgn = ifOp.getElseRegion();
+        if (!thenRgn.empty()) {
+          auto thenYieldOp =
+              cast<scf::YieldOp>(thenRgn.getBlocks().front().getTerminator());
+          worklist.push_back(thenYieldOp->getOperand(opRes.getResultNumber()));
+        }
+        if (!elseRgn.empty()) {
+          auto elseYieldOp =
+              cast<scf::YieldOp>(elseRgn.getBlocks().front().getTerminator());
+          worklist.push_back(elseYieldOp->getOperand(opRes.getResultNumber()));
+        }
+        continue;
+      }
+      if (auto selectOp = dyn_cast<arith::SelectOp>(defOp)) {
+        worklist.push_back(selectOp.getTrueValue());
+        worklist.push_back(selectOp.getFalseValue());
+        continue;
+      }
+      if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(defOp)) {
+        if (castOp.getInputs().size() != 1)
+          return {};
+        worklist.push_back(castOp.getInputs()[0]);
+        continue;
+      }
+      // Unknown op producing this value — cannot trace through.
+      return {};
+    }
+  }
+
+  return results.takeVector();
+}
+
+std::optional<tt::MakeTensorDescOp> findMakeTensorDescOp(Value val) {
+  SmallVector<tt::MakeTensorDescOp> all = findAllMakeTensorDescOps(val);
+  if (all.size() == 1)
+    return all[0];
+  return std::nullopt;
 }
 
 } // namespace mlir::triton::intel

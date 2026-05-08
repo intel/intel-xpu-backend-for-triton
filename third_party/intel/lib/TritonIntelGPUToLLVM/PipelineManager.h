@@ -260,6 +260,7 @@ public:
     populateGpuToLLVMSPVConversionPatterns(typeConverter, patterns);
     populateSPIRVToLLVMConversionPatterns(typeConverter, patterns,
                                           spirv::ClientAPI::OpenCL);
+    mlir::triton::populateFpSanToLLVMPatterns(typeConverter, patterns);
   }
 
 private:

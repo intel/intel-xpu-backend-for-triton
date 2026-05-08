@@ -127,14 +127,10 @@ public:
     for (auto op : descLoadOps)
       convertDescriptorLoadOp(op);
 
-    // Tensor-of-pointer loads are gated behind an env var until the LLVM
-    // lowering for ttig.2d_block_load_from_ptr is landed.
-    if (tt::tools::getBoolEnv("TRITON_INTEL_LOWER_PTR_LOAD_TO_2D_BLOCK")) {
-      SmallVector<tt::LoadOp> loadOps;
-      mod.walk([&](tt::LoadOp op) { loadOps.push_back(op); });
-      for (auto op : loadOps)
-        convertLoadOp(op, strideAnalysis);
-    }
+    SmallVector<tt::LoadOp> loadOps;
+    mod.walk([&](tt::LoadOp op) { loadOps.push_back(op); });
+    for (auto op : loadOps)
+      convertLoadOp(op, strideAnalysis);
   }
 
 private:
@@ -147,12 +143,21 @@ private:
     unsigned rank = tensorTy.getRank();
     unsigned elemSizeInBits = tensorTy.getElementTypeBitWidth();
 
-    // Find the MakeTensorDescOp that created the descriptor.
+    // Find all MakeTensorDescOps that could define this descriptor.
     Value desc = op.getDesc();
-    std::optional<tt::MakeTensorDescOp> makeTensorDescOp =
-        tt::intel::findDefiningOpOfType<tt::MakeTensorDescOp>(desc);
-    if (!makeTensorDescOp) {
+    SmallVector<tt::MakeTensorDescOp> allDescs =
+        tt::intel::findAllMakeTensorDescOps(desc);
+    if (allDescs.empty()) {
       LDBG("Could not find MakeTensorDescOp for: " << *op);
+      return;
+    }
+
+    // All candidates must have the same padding.
+    tt::PaddingOption padding = allDescs[0].getPadding();
+    if (!llvm::all_of(allDescs, [&](tt::MakeTensorDescOp d) {
+          return d.getPadding() == padding;
+        })) {
+      LDBG("Inconsistent padding across descriptor candidates for: " << *op);
       return;
     }
 
@@ -256,7 +261,7 @@ private:
     Value offsetY = indices[descRank - 2];
 
     // Determine padding mode from the descriptor.
-    bool padNan = makeTensorDescOp->getPadding() == tt::PaddingOption::PAD_NAN;
+    bool padNan = padding == tt::PaddingOption::PAD_NAN;
     UnitAttr padNanAttr = padNan ? builder.getUnitAttr() : UnitAttr();
 
     auto blockLoadOp = ttgi::Subgroup2DBlockLoadOp::create(

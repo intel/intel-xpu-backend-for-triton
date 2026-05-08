@@ -884,8 +884,8 @@ LogicalResult LocalScatterOp::verify() {
   return success();
 }
 
-// LocalAtomicScatterAddOp
-LogicalResult LocalAtomicScatterAddOp::verify() {
+// LocalAtomicScatterRMWOp
+LogicalResult LocalAtomicScatterRMWOp::verify() {
   auto dstTy = getDst().getType();
   auto valuesTy = cast<RankedTensorType>(getValues().getType());
   auto indicesTy = cast<RankedTensorType>(getIndices().getType());
@@ -897,7 +897,7 @@ LogicalResult LocalAtomicScatterAddOp::verify() {
   if (!dstTy.getMutableMemory())
     return emitOpError("Cannot store into immutable memory");
 
-  // Local atomic scatter add only supports shared-memory memdescs.
+  // Local atomic scatter RMW only supports shared-memory memdescs.
   if (!isa<SharedEncodingTrait>(dstTy.getEncoding())) {
     return emitError("destination must have shared memory encoding");
   }
