@@ -1,3 +1,13 @@
+add_triton_library(TritonIntelXeAsm
+    XeAsmFormat.cpp
+
+    LINK_LIBS PUBLIC
+    MLIRIR
+    MLIRLLVMDialect
+    MLIRTransforms
+    TritonIR
+)
+
 add_triton_library(TritonIntelGPUToLLVM
     AllocateSharedMemory.cpp
     BF16Casts.cpp
@@ -19,7 +29,6 @@ add_triton_library(TritonIntelGPUToLLVM
     TypeConverter.cpp
     Utility.cpp
     WarpIdOpToLLVM.cpp
-    XeAsmFormat.cpp
 
     DEPENDS
     TritonIntelGPUConversionPassIncGen
@@ -31,6 +40,8 @@ add_triton_library(TritonIntelGPUToLLVM
     TritonGENIR
     TritonGENToLLVM
     TritonGENToSPIRV
+    TritonInstrumentToLLVM
     TritonIntelGPUIR
     TritonIntelUtils
+    TritonIntelXeAsm
 )
