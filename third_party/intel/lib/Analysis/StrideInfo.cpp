@@ -8,6 +8,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/MathExtras.h"
 
 #include <numeric>
 
@@ -33,6 +34,19 @@ static StrideInfo::DimVectorT joinColumn(ArrayRef<int64_t> lhs,
       result.push_back(-1);
   }
   return result;
+}
+
+// Insert `vec` into `ivStrides[loop]` only if it carries meaningful
+// information — i.e. at least one non-zero dimension.  An all-zero vector
+// is semantically equivalent to an absent entry (see StrideInfo class
+// docstring), and is never stored.  All sites that insert into `ivStrides`
+// must go through this helper so the canonical-form invariant holds.
+static void maybeStoreIVStride(
+    DenseMap<LoopLikeOpInterface, StrideInfo::DimVectorT> &ivStrides,
+    LoopLikeOpInterface loop, StrideInfo::DimVectorT vec) {
+  if (llvm::all_of(vec, [](int64_t v) { return v == 0; }))
+    return;
+  ivStrides[loop] = std::move(vec);
 }
 
 // StrideInfo static methods
@@ -68,8 +82,17 @@ StrideInfo StrideInfo::join(const StrideInfo &lhs, const StrideInfo &rhs) {
   DimVectorT spatial = joinColumn(lhs.stride, rhs.stride);
 
   // Union the set of tracked loops.  A missing entry is treated as an
-  // all-zero vector of the shared rank, so: {zero,zero}->zero,
-  // {known,zero}->zero (disagrees -> -1), {known,known}-> agree-or-(-1).
+  // all-zero vector of the shared rank, then joined with `joinColumn`'s
+  // "agree-or-(-1)" rule.  Concretely, per dimension: {0,0} -> 0;
+  // {k,0} or {0,k} -> 0 if k == 0 else -1; {k1,k2} -> k1 if k1 == k2
+  // else -1.
+  //
+  // Note: when one incoming path is loop-variant (stride k != 0) and
+  // the other is loop-invariant (absent entry, treated as 0), the
+  // merged column is -1 for that loop.  This is not pessimism hiding a
+  // better answer — across iterations of the loop the value genuinely
+  // advances by k on some paths and by 0 on others, so no single stride
+  // describes it.  The lattice's -1 ("unknown") is the correct answer.
   llvm::SmallSetVector<LoopLikeOpInterface, 4> allLoops;
   for (LoopLikeOpInterface loop : llvm::make_first_range(lhs.ivStrides))
     allLoops.insert(loop);
@@ -80,9 +103,10 @@ StrideInfo StrideInfo::join(const StrideInfo &lhs, const StrideInfo &rhs) {
   for (LoopLikeOpInterface loop : allLoops) {
     const DimVectorT *l = lhs.getIVStride(loop);
     const DimVectorT *r = rhs.getIVStride(loop);
-    ivStrides[loop] =
+    maybeStoreIVStride(
+        ivStrides, loop,
         joinColumn(l ? ArrayRef<int64_t>(*l) : ArrayRef<int64_t>(zeros),
-                   r ? ArrayRef<int64_t>(*r) : ArrayRef<int64_t>(zeros));
+                   r ? ArrayRef<int64_t>(*r) : ArrayRef<int64_t>(zeros)));
   }
   return StrideInfo(std::move(spatial), std::move(ivStrides));
 }
@@ -101,7 +125,34 @@ StrideInfo::getIVStride(LoopLikeOpInterface loop) const {
       ivStrides.find(loop);
   if (it == ivStrides.end())
     return nullptr;
+  assert(!llvm::all_of(it->second, [](int64_t v) { return v == 0; }) &&
+         "ivStrides invariant violated: stored entry is all-zero");
   return &it->second;
+}
+
+std::optional<int64_t>
+StrideInfo::getPerIterationIVStride(LoopLikeOpInterface loop,
+                                    size_t dim) const {
+  int64_t ivUnitStride = getIVStride(loop, dim);
+  if (ivUnitStride < 0)
+    return std::nullopt;
+  // Only scf.for exposes a constant-step query today; scf.while does not
+  // have a single step to fold in and is deferred (see StrideAnalysis).
+  auto forOp = dyn_cast<scf::ForOp>(loop.getOperation());
+  if (!forOp)
+    return std::nullopt;
+  std::optional<APInt> step = forOp.getConstantStep();
+  if (!step.has_value())
+    return std::nullopt;
+  // Guard against overflow when the step doesn't fit in int64_t or the
+  // product would wrap.
+  if (step->getSignificantBits() > 64)
+    return std::nullopt;
+  int64_t stepVal = step->getSExtValue();
+  int64_t product;
+  if (llvm::MulOverflow(ivUnitStride, stepVal, product))
+    return std::nullopt;
+  return product;
 }
 
 void StrideInfo::print(raw_ostream &os) const {
@@ -115,8 +166,9 @@ void StrideInfo::print(raw_ostream &os) const {
       if (!first)
         os << ", ";
       first = false;
-      os << kv.first->getName() << "@" << static_cast<const void *>(&*kv.first)
-         << ": [";
+      os << kv.first->getName() << "@";
+      kv.first->getLoc().print(os);
+      os << ": [";
       llvm::interleaveComma(kv.second, os);
       os << "]";
     }
@@ -252,7 +304,7 @@ public:
       const StrideInfo::DimVectorT *rc = rhs ? rhs->getIVStride(loop) : nullptr;
       const StrideInfo::DimVectorT &lCol = lc ? *lc : zeros;
       const StrideInfo::DimVectorT *rCol = rc ? rc : (rhs ? &zeros : nullptr);
-      ivStrides[loop] = applyOne(op, lCol, rCol);
+      maybeStoreIVStride(ivStrides, loop, applyOne(op, lCol, rCol));
     }
     return StrideInfo(std::move(spatial), std::move(ivStrides));
   }
@@ -532,9 +584,10 @@ public:
       // analysis, because getRank() treats scalars as 1-element vectors).
       // Broadcast the scalar's single IV-stride value across every
       // axis of the result tensor.
-      assert(!kv.second.empty() && "scalar IV-stride column is empty");
+      assert(kv.second.size() == 1 && "scalar should have rank-1 IV stride");
       int64_t ivVal = kv.second.front();
-      ivStrides[kv.first] = StrideInfo::DimVectorT(resRank, ivVal);
+      maybeStoreIVStride(ivStrides, kv.first,
+                         StrideInfo::DimVectorT(resRank, ivVal));
     }
     return StrideInfo(StrideInfo::DimVectorT(resRank, 0), std::move(ivStrides));
   }
@@ -640,7 +693,8 @@ private:
       // w.r.t. its own loop's IV; no entries for any other loop
       // (implicitly treated as all-zero by downstream consumers).
       DenseMap<LoopLikeOpInterface, StrideInfo::DimVectorT> ivStrides;
-      ivStrides[cast<LoopLikeOpInterface>(op)] = StrideInfo::DimVectorT{1};
+      maybeStoreIVStride(ivStrides, cast<LoopLikeOpInterface>(op),
+                         StrideInfo::DimVectorT{1});
       StrideInfo iv(StrideInfo::DimVectorT{0}, std::move(ivStrides));
       (void)argLattices[0]->join(iv);
     } else {
