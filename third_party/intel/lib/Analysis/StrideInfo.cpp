@@ -8,6 +8,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/MathExtras.h"
 
 #include <numeric>
 
@@ -104,6 +105,31 @@ StrideInfo::getIVStride(LoopLikeOpInterface loop) const {
   if (it == ivStrides.end())
     return nullptr;
   return &it->second;
+}
+
+std::optional<int64_t>
+StrideInfo::getPerIterationIVStride(LoopLikeOpInterface loop,
+                                    size_t dim) const {
+  int64_t ivUnitStride = getIVStride(loop, dim);
+  if (ivUnitStride < 0)
+    return std::nullopt;
+  // Only scf.for exposes a constant-step query today; scf.while does not
+  // have a single step to fold in and is deferred (see StrideAnalysis).
+  auto forOp = dyn_cast<scf::ForOp>(loop.getOperation());
+  if (!forOp)
+    return std::nullopt;
+  std::optional<APInt> step = forOp.getConstantStep();
+  if (!step.has_value())
+    return std::nullopt;
+  // Guard against overflow when the step doesn't fit in int64_t or the
+  // product would wrap.
+  if (step->getSignificantBits() > 64)
+    return std::nullopt;
+  int64_t stepVal = step->getSExtValue();
+  int64_t product;
+  if (llvm::MulOverflow(ivUnitStride, stepVal, product))
+    return std::nullopt;
+  return product;
 }
 
 void StrideInfo::print(raw_ostream &os) const {

@@ -291,7 +291,39 @@ TEST_F(StrideInfoTest, OneDimStreamingAddPtr) {
   EXPECT_EQ(info->getStride(0), 0);
 }
 
-// Test 7: Nested loops — inner IV queried for outer-only-dependent value
+// Test 7: step > 1 — IV-unit stride is independent of loop step; per-iteration
+// stride folds in the step via getPerIterationIVStride().
+TEST_F(StrideInfoTest, StepGreaterThanOne) {
+  ModuleOp module = buildModule();
+  func::FuncOp funcOp = buildFunc(module);
+  builder->setInsertionPointToStart(&funcOp.getBody().front());
+
+  Location loc = builder->getUnknownLoc();
+
+  // scf.for %iv = 0 to 100 step 4 { %off = muli(%iv, 32) }
+  auto forOp = buildScfFor(*builder, 0, 100, 4);
+  Value iv = forOp.getInductionVar();
+  auto c32 = arith::ConstantIndexOp::create(*builder, loc, 32);
+  auto mulOp = arith::MulIOp::create(*builder, loc, iv, c32);
+
+  scf::YieldOp::create(*builder, loc);
+
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
+  ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+
+  StrideInfo *info = strideAnalysis.getStrideInfo(mulOp);
+  ASSERT_NE(info, nullptr);
+
+  // IV-unit stride: delta per unit of IV increase = 32.
+  EXPECT_EQ(info->getIVStride(forOp, 0), 32);
+
+  // Per-iteration stride: delta per loop iteration = 32 * 4 = 128.
+  std::optional<int64_t> perIter = info->getPerIterationIVStride(forOp, 0);
+  ASSERT_TRUE(perIter.has_value());
+  EXPECT_EQ(*perIter, 128);
+}
+
+// Test 8: Nested loops — inner IV queried for outer-only-dependent value
 TEST_F(StrideInfoTest, NestedLoopsInnerIVOuterValue) {
   ModuleOp module = buildModule();
   func::FuncOp funcOp = buildFunc(module);
@@ -338,7 +370,7 @@ TEST_F(StrideInfoTest, NestedLoopsInnerIVOuterValue) {
 // PR-B (TemporalReuseAnalysis) will revisit scf.while when a consumer
 // actually exercises it.
 
-// Test 8: Spatial stride regression — tt.make_range
+// Test 9: Spatial stride regression — tt.make_range
 TEST_F(StrideInfoTest, SpatialRangeStrideOne) {
   ModuleOp module = buildModule();
   func::FuncOp funcOp = buildFunc(module);
@@ -373,7 +405,7 @@ TEST_F(StrideInfoTest, SpatialRangeStrideOne) {
   }
 }
 
-// Test 9: Spatial stride regression — tt.splat(const)
+// Test 10: Spatial stride regression — tt.splat(const)
 TEST_F(StrideInfoTest, SpatialSplatConstant) {
   ModuleOp module = buildModule();
   func::FuncOp funcOp = buildFunc(module);
