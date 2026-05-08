@@ -335,23 +335,24 @@ private:
       return;
     }
 
-    auto contiguousDim = [rank](RankedTensorType tensorTy,
-                                const tt::AxisInfo &axisInfo) {
-      for (int32_t dim = 0; dim < rank; ++dim) {
-        // Limit to full row being contiguous.
-        if (axisInfo.getContiguity(dim) == tensorTy.getDimSize(dim)) {
-          return dim;
-        }
-      }
-      return -1;
-    };
-
-    const int32_t contiguousDimVal = contiguousDim(tensorTy, *axisInfo);
-    if (contiguousDimVal >= 0) {
-      op->setAttr(
-          blockIOAttrName,
-          StringAttr::get(op.getContext(), std::to_string(contiguousDimVal)));
-    }
+    // auto contiguousDim = [rank](RankedTensorType tensorTy,
+    //                             const tt::AxisInfo &axisInfo) {
+    //   for (int32_t dim = 0; dim < rank; ++dim) {
+    //     // Limit to full row being contiguous.
+    //     if (axisInfo.getContiguity(dim) == tensorTy.getDimSize(dim)) {
+    //       return dim;
+    //     }
+    //   }
+    //   return -1;
+    // };
+    //
+    // const int32_t contiguousDimVal = contiguousDim(tensorTy, *axisInfo);
+    // if (contiguousDimVal >= 0) {
+    //   op->setAttr(
+    //       blockIOAttrName,
+    //       StringAttr::get(op.getContext(),
+    //       std::to_string(contiguousDimVal)));
+    // }
   }
 
   /// Look through cast wrappers (index_cast, extui, extsi, trunci, etc.)
