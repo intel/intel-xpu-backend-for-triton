@@ -97,16 +97,11 @@ static Value getMemOpPointer(Operation *op) {
             tt::DescriptorScatterOp, tt::DescriptorReduceOp>(
           [](auto op) -> Value {
             Value desc = op.getDesc();
-            // TODO(#6862): once the worklist-based findAllMakeTensorDescOps
-            // lands, iterate all reachable MakeTensorDescOps and union their
-            // base pointers, degrading to Unknown on any irresolvable base.
-            // The single-op resolution here may pick a stale init-args
-            // descriptor for loop-carried descs.
-            if (std::optional<tt::MakeTensorDescOp> makeDesc =
-                    findDefiningOpOfType<tt::MakeTensorDescOp>(desc))
-              return makeDesc->getBase();
-            // Couldn't resolve to a MakeTensorDescOp — keep the op alive
-            // by returning the descriptor itself as an opaque sentinel.
+            auto allDescs = tt::intel::findAllMakeTensorDescOps(desc);
+            if (allDescs.size() == 1)
+              return allDescs[0].getBase();
+            // Couldn't resolve to a unique MakeTensorDescOp — keep the op
+            // alive by returning the descriptor itself as an opaque sentinel.
             return desc;
           })
       .Default([](Operation *op) -> Value {
