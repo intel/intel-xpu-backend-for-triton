@@ -6,7 +6,9 @@
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/MathExtras.h"
 
 #include <numeric>
 
@@ -15,6 +17,37 @@
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace mlir::triton::intel {
+
+/// Per-axis join for a single stride column, using the "agree or -1" rule.
+/// A -1 on either side propagates to -1.  This is the same rule the
+/// existing spatial-stride `join` has always used, factored out so both
+/// the spatial and IV columns share one implementation.
+static StrideInfo::DimVectorT joinColumn(ArrayRef<int64_t> lhs,
+                                         ArrayRef<int64_t> rhs) {
+  assert(lhs.size() == rhs.size() && "Mismatched column ranks");
+  StrideInfo::DimVectorT result;
+  result.reserve(lhs.size());
+  for (unsigned d = 0, rank = lhs.size(); d < rank; ++d) {
+    if (lhs[d] == rhs[d])
+      result.push_back(lhs[d]);
+    else
+      result.push_back(-1);
+  }
+  return result;
+}
+
+// Insert `vec` into `ivStrides[loop]` only if it carries meaningful
+// information — i.e. at least one non-zero dimension.  An all-zero vector
+// is semantically equivalent to an absent entry (see StrideInfo class
+// docstring), and is never stored.  All sites that insert into `ivStrides`
+// must go through this helper so the canonical-form invariant holds.
+static void maybeStoreIVStride(
+    DenseMap<LoopLikeOpInterface, StrideInfo::DimVectorT> &ivStrides,
+    LoopLikeOpInterface loop, StrideInfo::DimVectorT vec) {
+  if (llvm::all_of(vec, [](int64_t v) { return v == 0; }))
+    return;
+  ivStrides[loop] = std::move(vec);
+}
 
 // StrideInfo static methods
 StrideInfo StrideInfo::getPessimisticValueState(Value value) {
@@ -25,23 +58,122 @@ StrideInfo StrideInfo::getPessimisticValueState(Value value) {
   if (auto descTy = dyn_cast<triton::TensorDescInterface>(ty))
     rank = descTy.getBlockType().getRank();
 
+  // Leave `ivStrides` empty: "no entry" is interpreted as all-zero by
+  // consumers, which is correct for values defined outside every loop.
+  // Values defined *inside* a loop whose defining op hits the pessimistic
+  // path receive pessimism for the IV columns via subsequent arithmetic
+  // visitors (which propagate -1 through the per-column Template Method).
   return StrideInfo(DimVectorT(rank, -1));
 }
 
 StrideInfo StrideInfo::join(const StrideInfo &lhs, const StrideInfo &rhs) {
-  if (lhs.getRank() == 0)
+  if (lhs.getRank() == 0) {
+    assert(lhs.getIVStrides().empty() &&
+           "rank-0 StrideInfo should not carry IV-stride entries");
     return rhs;
-  if (rhs.getRank() == 0)
-    return lhs;
-  assert(lhs.getRank() == rhs.getRank() && "Mismatched ranks");
-  DimVectorT result;
-  for (unsigned d = 0; d < lhs.getRank(); ++d) {
-    if (lhs.stride[d] == rhs.stride[d])
-      result.push_back(lhs.stride[d]);
-    else
-      result.push_back(-1);
   }
-  return StrideInfo(std::move(result));
+  if (rhs.getRank() == 0) {
+    assert(rhs.getIVStrides().empty() &&
+           "rank-0 StrideInfo should not carry IV-stride entries");
+    return lhs;
+  }
+  assert(lhs.getRank() == rhs.getRank() && "Mismatched ranks");
+
+  DimVectorT spatial = joinColumn(lhs.stride, rhs.stride);
+
+  // Union the set of tracked loops.  A missing entry is treated as an
+  // all-zero vector of the shared rank, then joined with `joinColumn`'s
+  // "agree-or-(-1)" rule.  Concretely, per dimension: {0,0} -> 0;
+  // {k,0} or {0,k} -> 0 if k == 0 else -1; {k1,k2} -> k1 if k1 == k2
+  // else -1.
+  //
+  // Note: when one incoming path is loop-variant (stride k != 0) and
+  // the other is loop-invariant (absent entry, treated as 0), the
+  // merged column is -1 for that loop.  This is not pessimism hiding a
+  // better answer — across iterations of the loop the value genuinely
+  // advances by k on some paths and by 0 on others, so no single stride
+  // describes it.  The lattice's -1 ("unknown") is the correct answer.
+  llvm::SmallSetVector<LoopLikeOpInterface, 4> allLoops;
+  for (LoopLikeOpInterface loop : llvm::make_first_range(lhs.ivStrides))
+    allLoops.insert(loop);
+  for (LoopLikeOpInterface loop : llvm::make_first_range(rhs.ivStrides))
+    allLoops.insert(loop);
+  DimVectorT zeros(lhs.getRank(), 0);
+  DenseMap<LoopLikeOpInterface, DimVectorT> ivStrides;
+  for (LoopLikeOpInterface loop : allLoops) {
+    const DimVectorT *l = lhs.getIVStride(loop);
+    const DimVectorT *r = rhs.getIVStride(loop);
+    maybeStoreIVStride(
+        ivStrides, loop,
+        joinColumn(l ? ArrayRef<int64_t>(*l) : ArrayRef<int64_t>(zeros),
+                   r ? ArrayRef<int64_t>(*r) : ArrayRef<int64_t>(zeros)));
+  }
+  return StrideInfo(std::move(spatial), std::move(ivStrides));
+}
+
+int64_t StrideInfo::getIVStride(LoopLikeOpInterface loop, size_t dim) const {
+  DenseMap<LoopLikeOpInterface, DimVectorT>::const_iterator it =
+      ivStrides.find(loop);
+  if (it == ivStrides.end())
+    return 0;
+  return it->second[dim];
+}
+
+const StrideInfo::DimVectorT *
+StrideInfo::getIVStride(LoopLikeOpInterface loop) const {
+  DenseMap<LoopLikeOpInterface, DimVectorT>::const_iterator it =
+      ivStrides.find(loop);
+  if (it == ivStrides.end())
+    return nullptr;
+  assert(!llvm::all_of(it->second, [](int64_t v) { return v == 0; }) &&
+         "ivStrides invariant violated: stored entry is all-zero");
+  return &it->second;
+}
+
+std::optional<int64_t>
+StrideInfo::getPerIterationIVStride(LoopLikeOpInterface loop,
+                                    size_t dim) const {
+  int64_t ivUnitStride = getIVStride(loop, dim);
+  if (ivUnitStride < 0)
+    return std::nullopt;
+  // Only scf.for exposes a constant-step query today; scf.while does not
+  // have a single step to fold in and is deferred (see StrideAnalysis).
+  auto forOp = dyn_cast<scf::ForOp>(loop.getOperation());
+  if (!forOp)
+    return std::nullopt;
+  std::optional<APInt> step = forOp.getConstantStep();
+  if (!step.has_value())
+    return std::nullopt;
+  // Guard against overflow when the step doesn't fit in int64_t or the
+  // product would wrap.
+  if (step->getSignificantBits() > 64)
+    return std::nullopt;
+  int64_t stepVal = step->getSExtValue();
+  int64_t product;
+  if (llvm::MulOverflow(ivUnitStride, stepVal, product))
+    return std::nullopt;
+  return product;
+}
+
+void StrideInfo::print(raw_ostream &os) const {
+  os << "stride = [";
+  llvm::interleaveComma(stride, os);
+  os << "]";
+  if (!ivStrides.empty()) {
+    os << ", iv_strides = {";
+    bool first = true;
+    for (const std::pair<LoopLikeOpInterface, DimVectorT> &kv : ivStrides) {
+      if (!first)
+        os << ", ";
+      first = false;
+      os << kv.first->getName() << "@";
+      kv.first->getLoc().print(os);
+      os << ": [";
+      llvm::interleaveComma(kv.second, os);
+      os << "]";
+    }
+    os << "}";
+  }
 }
 
 using AxisInfoLookupFn = std::function<AxisInfo *(Value)>;
@@ -121,6 +253,73 @@ public:
       ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const = 0;
 };
 
+/// Template Method base for arithmetic visitors that treat the spatial
+/// column and every per-loop IV column the same way.  Subclasses override
+/// one per-column hook (`applyOne`); the base class walks every column
+/// (spatial + union of IV columns from all operand lattices) and assembles
+/// the resulting StrideInfo.
+///
+/// - Binary arithmetic visitors (AddI, SubI, AddPtr, MulI, DivI, RemI)
+///   receive `rhs` as a pointer to the right-hand-side column.
+/// - Unary / shape-transform visitors (Splat, ExpandDims, Broadcast, Trans)
+///   receive `rhs == nullptr` and should ignore it.
+///
+/// Leaf / pessimistic visitors that do not perform per-column arithmetic
+/// (LoadOp, DescriptorLoadOp, PoisonOp, MakeRangeOp, ConstantOp,
+/// MakeTensorDescOp) do **not** use this base — they subclass
+/// StrideInfoVisitorImpl directly and produce a full StrideInfo by hand.
+///
+/// MAINTAINER NOTE: When adding a new arithmetic visitor, prefer
+/// `StrideArithVisitor` over `StrideInfoVisitorImpl`.  The base iterates
+/// every stride column for you, so you cannot forget to propagate an
+/// IV column.  This is the single source of truth for per-axis stride
+/// arithmetic.
+template <typename OpTy>
+class StrideArithVisitor : public StrideInfoVisitorImpl<OpTy> {
+public:
+  StrideInfo getStrideInfo(
+      OpTy op,
+      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const final {
+    assert(!operands.empty() && "Arithmetic visitor requires >= 1 operand");
+    const StrideInfo &lhs = operands[0]->getValue();
+    const StrideInfo *rhs =
+        operands.size() > 1 ? &operands[1]->getValue() : nullptr;
+
+    StrideInfo::DimVectorT spatial =
+        applyOne(op, lhs.getStride(), rhs ? &rhs->getStride() : nullptr);
+
+    // Every IV column present in either operand.
+    llvm::SmallSetVector<LoopLikeOpInterface, 4> allLoops;
+    for (LoopLikeOpInterface loop : llvm::make_first_range(lhs.getIVStrides()))
+      allLoops.insert(loop);
+    if (rhs)
+      for (LoopLikeOpInterface loop :
+           llvm::make_first_range(rhs->getIVStrides()))
+        allLoops.insert(loop);
+
+    StrideInfo::DimVectorT zeros(lhs.getRank(), 0);
+    DenseMap<LoopLikeOpInterface, StrideInfo::DimVectorT> ivStrides;
+    for (LoopLikeOpInterface loop : allLoops) {
+      const StrideInfo::DimVectorT *lc = lhs.getIVStride(loop);
+      const StrideInfo::DimVectorT *rc = rhs ? rhs->getIVStride(loop) : nullptr;
+      const StrideInfo::DimVectorT &lCol = lc ? *lc : zeros;
+      const StrideInfo::DimVectorT *rCol = rc ? rc : (rhs ? &zeros : nullptr);
+      maybeStoreIVStride(ivStrides, loop, applyOne(op, lCol, rCol));
+    }
+    return StrideInfo(std::move(spatial), std::move(ivStrides));
+  }
+
+protected:
+  /// Subclass hook — compute the result of `op` for one stride column.
+  /// For binary ops, `rhs` is non-null and points at the right-hand-side
+  /// column (either the operand's actual column or a zero vector of the
+  /// correct rank when that side has no entry for this loop).  For
+  /// unary/shape-transform ops, `rhs` is `nullptr`.
+  virtual StrideInfo::DimVectorT
+  applyOne(OpTy op, const StrideInfo::DimVectorT &lhs,
+           const StrideInfo::DimVectorT *rhs) const = 0;
+};
+
 class StrideInfoVisitorList {
 public:
   template <typename... Ts, typename = std::enable_if_t<sizeof...(Ts) != 0>>
@@ -146,7 +345,9 @@ private:
   std::vector<std::unique_ptr<StrideInfoVisitor>> visitors;
 };
 
-// PassThrough: stride passes from operand 0
+// PassThrough: stride passes from operand 0.  Returning `operands[0]->
+// getValue()` verbatim correctly carries both the spatial column and the
+// full IV-stride map to the result.
 template <typename OpTy,
           typename =
               std::enable_if_t<OpTy::template hasTrait<OpTrait::OneOperand>()>>
@@ -218,117 +419,117 @@ public:
 };
 
 template <typename OpTy>
-class AddSubStrideVisitor final : public StrideInfoVisitorImpl<OpTy> {
-public:
-  StrideInfo getStrideInfo(
-      OpTy op,
-      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
-    const auto &lhs = operands[0]->getValue();
-    const auto &rhs = operands[1]->getValue();
-    auto rank = lhs.getRank();
+class AddSubStrideVisitor final : public StrideArithVisitor<OpTy> {
+protected:
+  StrideInfo::DimVectorT
+  applyOne(OpTy op, const StrideInfo::DimVectorT &lhs,
+           const StrideInfo::DimVectorT *rhs) const override {
+    assert(rhs && "AddSubStrideVisitor requires two operand columns");
     StrideInfo::DimVectorT stride;
-    for (unsigned d = 0; d < rank; ++d) {
-      if (lhs.getStride(d) < 0 || rhs.getStride(d) < 0) {
+    stride.reserve(lhs.size());
+    for (unsigned d = 0, rank = lhs.size(); d < rank; ++d) {
+      if (lhs[d] < 0 || (*rhs)[d] < 0) {
         stride.push_back(-1);
       } else if constexpr (std::is_same_v<OpTy, arith::SubIOp>) {
-        stride.push_back(
-            std::max(lhs.getStride(d) - rhs.getStride(d), int64_t(-1)));
+        stride.push_back(std::max(lhs[d] - (*rhs)[d], int64_t(-1)));
       } else {
-        stride.push_back(lhs.getStride(d) + rhs.getStride(d));
+        stride.push_back(lhs[d] + (*rhs)[d]);
       }
     }
-    return StrideInfo(std::move(stride));
+    return stride;
   }
 };
 
-class MulIOpStrideVisitor final : public StrideInfoVisitorImpl<arith::MulIOp> {
-public:
-  StrideInfo getStrideInfo(
-      arith::MulIOp op,
-      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
-    const auto &lhs = operands[0]->getValue();
-    const auto &rhs = operands[1]->getValue();
-    auto rank = lhs.getRank();
+class MulIOpStrideVisitor final : public StrideArithVisitor<arith::MulIOp> {
+protected:
+  StrideInfo::DimVectorT
+  applyOne(arith::MulIOp op, const StrideInfo::DimVectorT &lhs,
+           const StrideInfo::DimVectorT *rhs) const override {
+    assert(rhs && "MulIOpStrideVisitor requires two operand columns");
+
+    // Constant detection is an op-level property — it depends on the
+    // defining op of the raw Value, not on the per-column stride.
+    // Call through to the inherited StrideInfoVisitor::getConstantValue().
+    std::optional<int64_t> lhsConst = getConstantValue(op.getLhs());
+    std::optional<int64_t> rhsConst = getConstantValue(op.getRhs());
+
     StrideInfo::DimVectorT stride;
-
-    auto lhsConst = this->getConstantValue(op.getLhs());
-    auto rhsConst = this->getConstantValue(op.getRhs());
-
-    for (unsigned d = 0; d < rank; ++d) {
-      if (lhs.getStride(d) > 0 && rhsConst.has_value()) {
-        int64_t product = lhs.getStride(d) * rhsConst.value();
+    stride.reserve(lhs.size());
+    for (unsigned d = 0, rank = lhs.size(); d < rank; ++d) {
+      if (lhs[d] > 0 && rhsConst.has_value()) {
+        int64_t product = lhs[d] * rhsConst.value();
         stride.push_back(product >= 0 ? product : -1);
-      } else if (rhs.getStride(d) > 0 && lhsConst.has_value()) {
-        int64_t product = lhsConst.value() * rhs.getStride(d);
+      } else if ((*rhs)[d] > 0 && lhsConst.has_value()) {
+        int64_t product = lhsConst.value() * (*rhs)[d];
         stride.push_back(product >= 0 ? product : -1);
       } else {
-        auto strideZero = [&](const StrideInfo &si, Value v) {
-          return this->getConstantValue(v).has_value() ||
-                 si.getStride(d) == 0 || !isa<TensorType>(op.getType());
+        auto strideZero = [&](int64_t col, Value v) {
+          return getConstantValue(v).has_value() || col == 0 ||
+                 !isa<TensorType>(op.getType());
         };
-        if (strideZero(lhs, op.getLhs()) && strideZero(rhs, op.getRhs()))
+        if (strideZero(lhs[d], op.getLhs()) &&
+            strideZero((*rhs)[d], op.getRhs()))
           stride.push_back(0);
         else
           stride.push_back(-1);
       }
     }
-    return StrideInfo(std::move(stride));
+    return stride;
   }
 };
 
 template <typename OpTy>
-class DivOpStrideVisitor final : public StrideInfoVisitorImpl<OpTy> {
-public:
-  StrideInfo getStrideInfo(
-      OpTy op,
-      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
-    const auto &lhs = operands[0]->getValue();
-    const auto &rhs = operands[1]->getValue();
-    auto rank = lhs.getRank();
+class DivOpStrideVisitor final : public StrideArithVisitor<OpTy> {
+protected:
+  StrideInfo::DimVectorT
+  applyOne(OpTy op, const StrideInfo::DimVectorT &lhs,
+           const StrideInfo::DimVectorT *rhs) const override {
+    // `rhs` column is unused here — RHS-constant detection is an op-level
+    // property (we read the defining op via `getConstantValue`).  It must
+    // still be non-null because this is a binary-arithmetic visitor.
+    assert(rhs && "DivOpStrideVisitor requires two operand columns");
+
+    std::optional<int64_t> rhsConst = this->getConstantValue(op.getRhs());
+
     StrideInfo::DimVectorT stride;
-
-    auto rhsConst = this->getConstantValue(op.getRhs());
-
-    for (unsigned d = 0; d < rank; ++d) {
-      if (lhs.getStride(d) > 0 && rhsConst.has_value() &&
-          rhsConst.value() > 0 && lhs.getStride(d) % rhsConst.value() == 0)
-        stride.push_back(lhs.getStride(d) / rhsConst.value());
-      else if (lhs.getStride(d) == 0 && rhsConst.has_value() &&
-               rhsConst.value() != 0)
+    stride.reserve(lhs.size());
+    for (unsigned d = 0, rank = lhs.size(); d < rank; ++d) {
+      if (lhs[d] > 0 && rhsConst.has_value() && rhsConst.value() > 0 &&
+          lhs[d] % rhsConst.value() == 0)
+        stride.push_back(lhs[d] / rhsConst.value());
+      else if (lhs[d] == 0 && rhsConst.has_value() && rhsConst.value() != 0)
         stride.push_back(0);
       else
         stride.push_back(-1);
     }
-    return StrideInfo(std::move(stride));
+    return stride;
   }
 };
 
 template <typename OpTy>
-class RemOpStrideVisitor final : public StrideInfoVisitorImpl<OpTy> {
-public:
-  StrideInfo getStrideInfo(
-      OpTy op,
-      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
-    const auto &lhs = operands[0]->getValue();
-    const auto &rhs = operands[1]->getValue();
-    auto rank = lhs.getRank();
+class RemOpStrideVisitor final : public StrideArithVisitor<OpTy> {
+protected:
+  StrideInfo::DimVectorT
+  applyOne(OpTy op, const StrideInfo::DimVectorT &lhs,
+           const StrideInfo::DimVectorT *rhs) const override {
+    assert(rhs && "RemOpStrideVisitor requires two operand columns");
+
+    std::optional<int64_t> rhsConst = this->getConstantValue(op.getRhs());
+
     StrideInfo::DimVectorT stride;
-
-    auto rhsConst = this->getConstantValue(op.getRhs());
-
-    for (unsigned d = 0; d < rank; ++d) {
-      if (lhs.getStride(d) == 0 && rhs.getStride(d) == 0) {
+    stride.reserve(lhs.size());
+    for (unsigned d = 0, rank = lhs.size(); d < rank; ++d) {
+      if (lhs[d] == 0 && (*rhs)[d] == 0) {
         // Both sides are uniform/constant — result is uniform.
         stride.push_back(0);
-      } else if (lhs.getStride(d) > 0 && rhsConst.has_value() &&
-                 rhsConst.value() > 0) {
+      } else if (lhs[d] > 0 && rhsConst.has_value() && rhsConst.value() > 0) {
         // Stride preserved when range span doesn't cross a modulus boundary.
         // Effective period is gcd(divisibility, modulus) when AxisInfo is
         // available; falls back to modulus otherwise.
         auto resTy = dyn_cast<RankedTensorType>(op.getType());
         if (resTy) {
           int64_t dimSize = resTy.getDimSize(d);
-          int64_t maxVal = lhs.getStride(d) * (dimSize - 1);
+          int64_t maxVal = lhs[d] * (dimSize - 1);
           int64_t modulus = rhsConst.value();
           int64_t g = modulus; // fallback when no AxisInfo
           if (auto *ai = this->axisInfoLookup(op.getLhs())) {
@@ -336,7 +537,7 @@ public:
             g = std::gcd(divisibility, modulus);
           }
           if (maxVal < g)
-            stride.push_back(lhs.getStride(d));
+            stride.push_back(lhs[d]);
           else
             stride.push_back(-1);
         } else {
@@ -346,10 +547,26 @@ public:
         stride.push_back(-1);
       }
     }
-    return StrideInfo(std::move(stride));
+    return stride;
   }
 };
 
+/// SplatOp: a splat takes a scalar and produces a tensor where every
+/// element equals the scalar.  The two stride columns answer different
+/// questions and therefore must be computed independently:
+///
+/// - **Spatial stride** of the result is 0 along every axis, because
+///   neighbouring tensor elements within a single loop iteration are
+///   identical.  This is independent of the scalar's spatial stride.
+/// - **IV stride** of the result equals the scalar's IV stride,
+///   broadcast across every tensor axis.  If the scalar advances by N
+///   per iteration, every element of the splat tensor advances by N
+///   per iteration.  This is the key case for recognising the 1-D
+///   streaming pattern `tt.addptr(splat(base), splat(muli(iv, N)))`.
+///
+/// Because the spatial and IV columns require different logic, `SplatOp`
+/// does not use `StrideArithVisitor`; it overrides `getStrideInfo`
+/// directly and handles both columns by hand.
 class SplatOpStrideVisitor final
     : public StrideInfoVisitorImpl<triton::SplatOp> {
 public:
@@ -357,7 +574,22 @@ public:
       triton::SplatOp op,
       ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
     TensorType retTy = cast<TensorType>(*op->result_type_begin());
-    return StrideInfo(StrideInfo::DimVectorT(retTy.getRank(), 0));
+    unsigned resRank = retTy.getRank();
+
+    const StrideInfo &scalar = operands[0]->getValue();
+    DenseMap<LoopLikeOpInterface, StrideInfo::DimVectorT> ivStrides;
+    for (const std::pair<LoopLikeOpInterface, StrideInfo::DimVectorT> &kv :
+         scalar.getIVStrides()) {
+      // The scalar's IV column is rank-1 (scalars have rank 1 in this
+      // analysis, because getRank() treats scalars as 1-element vectors).
+      // Broadcast the scalar's single IV-stride value across every
+      // axis of the result tensor.
+      assert(kv.second.size() == 1 && "scalar should have rank-1 IV stride");
+      int64_t ivVal = kv.second.front();
+      maybeStoreIVStride(ivStrides, kv.first,
+                         StrideInfo::DimVectorT(resRank, ivVal));
+    }
+    return StrideInfo(StrideInfo::DimVectorT(resRank, 0), std::move(ivStrides));
   }
 };
 
@@ -371,41 +603,44 @@ public:
 };
 
 class ExpandDimsOpStrideVisitor final
-    : public StrideInfoVisitorImpl<triton::ExpandDimsOp> {
-public:
-  StrideInfo getStrideInfo(
-      triton::ExpandDimsOp op,
-      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
-    auto opStride = operands[0]->getValue().getStride();
-    StrideInfo::DimVectorT stride(opStride.begin(), opStride.end());
+    : public StrideArithVisitor<triton::ExpandDimsOp> {
+protected:
+  StrideInfo::DimVectorT
+  applyOne(triton::ExpandDimsOp op, const StrideInfo::DimVectorT &lhs,
+           const StrideInfo::DimVectorT *rhs) const override {
+    assert(!rhs && "ExpandDimsOpStrideVisitor is unary");
+    StrideInfo::DimVectorT stride(lhs.begin(), lhs.end());
     stride.insert(stride.begin() + op.getAxis(), 0);
-    return StrideInfo(std::move(stride));
+    return stride;
   }
 };
 
 class BroadcastOpStrideVisitor final
-    : public StrideInfoVisitorImpl<triton::BroadcastOp> {
-public:
-  StrideInfo getStrideInfo(
-      triton::BroadcastOp op,
-      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
-    return operands[0]->getValue();
+    : public StrideArithVisitor<triton::BroadcastOp> {
+protected:
+  StrideInfo::DimVectorT
+  applyOne(triton::BroadcastOp, const StrideInfo::DimVectorT &lhs,
+           const StrideInfo::DimVectorT *rhs) const override {
+    assert(!rhs && "BroadcastOpStrideVisitor is unary");
+    // Broadcast preserves rank and per-axis values; broadcast axes are
+    // already 0 in the operand column, so a verbatim copy is correct for
+    // every column (spatial + every IV column).
+    return lhs;
   }
 };
 
-class TransOpStrideVisitor final
-    : public StrideInfoVisitorImpl<triton::TransOp> {
-public:
-  StrideInfo getStrideInfo(
-      triton::TransOp op,
-      ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
-    const auto &srcInfo = operands[0]->getValue();
+class TransOpStrideVisitor final : public StrideArithVisitor<triton::TransOp> {
+protected:
+  StrideInfo::DimVectorT
+  applyOne(triton::TransOp op, const StrideInfo::DimVectorT &lhs,
+           const StrideInfo::DimVectorT *rhs) const override {
+    assert(!rhs && "TransOpStrideVisitor is unary");
     auto order = op.getOrder();
     StrideInfo::DimVectorT stride;
-    for (unsigned d = 0; d < srcInfo.getRank(); ++d) {
-      stride.push_back(srcInfo.getStride(order[d]));
-    }
-    return StrideInfo(std::move(stride));
+    stride.reserve(lhs.size());
+    for (unsigned d = 0, rank = lhs.size(); d < rank; ++d)
+      stride.push_back(lhs[order[d]]);
+    return stride;
   }
 };
 
@@ -417,7 +652,7 @@ public:
       ArrayRef<const dataflow::Lattice<StrideInfo> *> operands) const override {
     StrideInfo::DimVectorT result;
     for (Value s : op.getStrides()) {
-      auto val = this->getConstantValue(s);
+      std::optional<int64_t> val = getConstantValue(s);
       result.push_back(val.has_value() ? val.value() : -1);
     }
     return StrideInfo(std::move(result));
@@ -454,10 +689,20 @@ private:
       ValueRange /*nonSuccessorInputs*/,
       ArrayRef<dataflow::Lattice<StrideInfo> *> argLattices) override {
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-      // Induction variable has stride 0 (scalar).
-      auto iv = StrideInfo(StrideInfo::DimVectorT{0});
+      // Induction variable has spatial stride 0 (scalar) and IV stride 1
+      // w.r.t. its own loop's IV; no entries for any other loop
+      // (implicitly treated as all-zero by downstream consumers).
+      DenseMap<LoopLikeOpInterface, StrideInfo::DimVectorT> ivStrides;
+      maybeStoreIVStride(ivStrides, cast<LoopLikeOpInterface>(op),
+                         StrideInfo::DimVectorT{1});
+      StrideInfo iv(StrideInfo::DimVectorT{0}, std::move(ivStrides));
       (void)argLattices[0]->join(iv);
     } else {
+      // scf.while IV-stride seeding is intentionally deferred.  Its
+      // before-region args are control-flow-fed from the init operands, which
+      // bypasses this hook.  Handling it requires overriding the solver's
+      // region-successor propagation; that is out of scope here and will be
+      // revisited when a consumer (PR-B TemporalReuseAnalysis) needs it.
       setAllToEntryStates(argLattices);
     }
   }
@@ -514,20 +759,21 @@ public:
       setAllToEntryStates(results);
       return success();
     }
-    // Override stride from tt.contiguity hint.
+    // Override stride from tt.contiguity hint.  Build a fresh StrideInfo
+    // carrying the patched spatial column and the IV-stride map verbatim.
     if (auto contiguityAttr = op->getDiscardableAttr("tt.contiguity")) {
       if (auto resTy = dyn_cast<RankedTensorType>(op->getResult(0).getType())) {
         AxisInfo::DimVectorT hintContiguity;
         AxisInfo::initDimVectorFromHint(contiguityAttr, &hintContiguity);
-        const auto &stride = curr.getStride();
-        StrideInfo::DimVectorT newStride(stride.begin(), stride.end());
+        StrideInfo::DimVectorT newStride(curr.getStride().begin(),
+                                         curr.getStride().end());
         for (unsigned d = 0; d < curr.getRank() && d < hintContiguity.size();
              ++d) {
           if (newStride[d] < 0 && hintContiguity[d] >= resTy.getDimSize(d)) {
             newStride[d] = 1;
           }
         }
-        curr = StrideInfo(std::move(newStride));
+        curr = StrideInfo(std::move(newStride), curr.getIVStrides());
       }
     }
     for (auto *result : results)
