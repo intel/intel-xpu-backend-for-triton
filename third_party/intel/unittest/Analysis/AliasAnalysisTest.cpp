@@ -473,7 +473,7 @@ TEST_F(AliasAnalysisTest, DescriptorLoadAndRawLoadSameBase) {
 TEST_F(AliasAnalysisTest, DescriptorLoadThroughSCFForIterArg) {
   // When a descriptor flows through scf.for iter_args, the
   // tt.descriptor_load's getDesc() is a block argument, not a direct
-  // MakeTensorDescOp result. findDefiningOpOfType<> must trace through the
+  // MakeTensorDescOp result. findAllMakeTensorDescOps must trace through the
   // iter_arg back to the original descriptor so the op is not dropped and
   // its base pointer is resolved correctly.
   auto module = createModule();
@@ -713,7 +713,7 @@ TEST_F(AliasAnalysisTest, OpaqueDescriptorPropagatesUnknown) {
                                                 ValueRange{c128, c64},
                                                 ValueRange{c64_i64, c1});
 
-  // Opaque descriptor via arith.select (not recognized by findDefiningOpOfType)
+  // Opaque descriptor via arith.select (multiple candidates, no unique result)
   auto opaqueDesc =
       arith::SelectOp::create(*builder, loc, condition, descA, descB);
 

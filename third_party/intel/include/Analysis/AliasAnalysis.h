@@ -26,7 +26,7 @@ namespace mlir::triton::intel {
 ///   - "Modeled" ops with known pointer resolution:
 ///     `tt.load/store/atomic_rmw/atomic_cas` and the five
 ///     `tt.descriptor_*` ops (base resolved through
-///     `findDefiningOpOfType<MakeTensorDescOp>`).
+///     `findAllMakeTensorDescOps`).
 ///   - Any other op implementing `MemoryEffectOpInterface` with at
 ///     least one `MemoryEffects::Read` or `MemoryEffects::Write`
 ///     effect. For these, the pointer is the first pointer-like
