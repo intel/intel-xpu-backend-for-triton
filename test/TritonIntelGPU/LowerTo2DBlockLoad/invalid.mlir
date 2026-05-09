@@ -116,3 +116,27 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     tt.return %13 : tensor<64x32xf16, #dot0>
   }
 }
+
+// -----
+
+// COM: Broadcast load (stride=0) where the tile width is incompatible with
+// COM: threadsPerWarp for the row replication logic. tileWidth=1 with
+// COM: threadsPerWarp=32 does not satisfy tileWidth*2 == threadsPerWarp.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 8], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @broadcast_load_incompatible_tile_width
+  tt.func @broadcast_load_incompatible_tile_width(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32) {
+    %cst = arith.constant dense<4096> : tensor<1x1024xi32, #blocked>
+    %0 = tt.get_program_id x : i32
+    %1 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %2 = tt.expand_dims %1 {axis = 0 : i32} : tensor<1024xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x1024xi32, #blocked>
+    %3 = arith.muli %2, %cst : tensor<1x1024xi32, #blocked>
+    %4 = tt.splat %0 : i32 -> tensor<1x1024xi32, #blocked>
+    %5 = arith.addi %4, %3 : tensor<1x1024xi32, #blocked>
+    %6 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1x1024x!tt.ptr<f32>, #blocked>
+    %7 = tt.addptr %6, %5 : tensor<1x1024x!tt.ptr<f32>, #blocked>, tensor<1x1024xi32, #blocked>
+    // CHECK: tt.load
+    %8 = tt.load %7 {ttig.block_io = "column_major"} : tensor<1x1024x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}

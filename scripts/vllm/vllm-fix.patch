@@ -1,8 +1,8 @@
 diff --git a/tests/conftest.py b/tests/conftest.py
-index f3b22d898..bdb82146a 100644
+index 9ec31d83c..9354d8971 100644
 --- a/tests/conftest.py
 +++ b/tests/conftest.py
-@@ -283,6 +283,11 @@ def workspace_init():
+@@ -284,6 +284,11 @@ def workspace_init():
  
      if torch.cuda.is_available():
          device = torch.device("cuda:0")
@@ -37,29 +37,69 @@ index d78e1947f..e7ffb39e3 100644
  @pytest.mark.parametrize("input_scales", [False])
  def test_fused_moe_batched_experts(
 diff --git a/tests/kernels/moe/utils.py b/tests/kernels/moe/utils.py
-index 4b693d8c8..a04281e13 100644
+index d4b2350f5..f8be5d997 100644
 --- a/tests/kernels/moe/utils.py
 +++ b/tests/kernels/moe/utils.py
-@@ -314,7 +314,13 @@ def make_test_weight(
-                 w_16[idx], None, quant_dtype, per_out_ch_quant, block_shape
-             )
+@@ -313,7 +313,13 @@ def moe_quantize_weights(
+             w[idx], None, quant_dtype, per_token_quant, block_shape
+         )
  
--        w = torch.stack(w_l)
-+        new_shape = torch.Size((len(w_l), ) + w_l[0].shape)
-+        new_w = torch.zeros(new_shape,
-+                            dtype=w_l[0].dtype,
-+                            device=w_l[0].device)
-+        for (i, wt) in enumerate(w_l):
-+            new_w[i] = wt
-+        w = new_w
-         w_s = torch.stack(w_s_l)
-         if e > 0 and w_gs_l[0] is not None:
-             w_gs = torch.stack(w_gs_l)
+-    w = torch.stack(w_l)
++    new_shape = torch.Size((len(w_l), ) + w_l[0].shape)
++    new_w = torch.zeros(new_shape,
++                        dtype=w_l[0].dtype,
++                        device=w_l[0].device)
++    for (i, wt) in enumerate(w_l):
++        new_w[i] = wt
++    w = new_w
+     w_s = torch.stack(w_s_l)
+     w_gs = torch.stack(w_gs_l) if e > 0 and w_gs_l[0] is not None else None
+ 
+diff --git a/vllm/_custom_ops.py b/vllm/_custom_ops.py
+index d9be6a4c4..f78c18318 100644
+--- a/vllm/_custom_ops.py
++++ b/vllm/_custom_ops.py
+@@ -2042,14 +2042,30 @@ def scaled_fp8_quant(
+     if scale is None:
+         if use_per_token_if_dynamic:
+             scale = torch.empty((shape[0], 1), device=input.device, dtype=torch.float32)
+-            torch.ops._C.dynamic_per_token_scaled_fp8_quant(
+-                output, input, scale, scale_ub
+-            )
++            if hasattr(torch.ops._C, 'dynamic_per_token_scaled_fp8_quant'):
++                torch.ops._C.dynamic_per_token_scaled_fp8_quant(
++                    output, input, scale, scale_ub
++                )
++            else:
++                fp8_max = torch.finfo(out_dtype).max
++                amax = input.abs().amax(dim=-1, keepdim=True).clamp(min=1e-12)
++                scale.copy_(amax / fp8_max)
++                output.copy_((input / scale).clamp(-fp8_max, fp8_max).to(out_dtype))
+         else:
+             scale = torch.empty(1, device=input.device, dtype=torch.float32)
+-            torch.ops._C.dynamic_scaled_fp8_quant(output, input, scale)
++            if hasattr(torch.ops._C, 'dynamic_scaled_fp8_quant'):
++                torch.ops._C.dynamic_scaled_fp8_quant(output, input, scale)
++            else:
++                fp8_max = torch.finfo(out_dtype).max
++                amax = input.abs().max().clamp(min=1e-12)
++                scale[0] = amax / fp8_max
++                output.copy_((input / scale).clamp(-fp8_max, fp8_max).to(out_dtype))
+     else:
+-        torch.ops._C.static_scaled_fp8_quant(output, input, scale, group_shape)
++        if hasattr(torch.ops._C, 'static_scaled_fp8_quant'):
++            torch.ops._C.static_scaled_fp8_quant(output, input, scale, group_shape)
++        else:
++            fp8_max = torch.finfo(out_dtype).max
++            output.copy_((input / scale).clamp(-fp8_max, fp8_max).to(out_dtype))
+ 
+     return output, scale
+ 
 diff --git a/vllm/model_executor/layers/fused_moe/fused_batched_moe.py b/vllm/model_executor/layers/fused_moe/fused_batched_moe.py
-index e2b5a8f67..0513a957b 100644
+index bd54cd636..e69e614f3 100644
 --- a/vllm/model_executor/layers/fused_moe/fused_batched_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/fused_batched_moe.py
-@@ -778,7 +778,7 @@ class NaiveBatchedExperts(mk.FusedMoEExpertsModular):
+@@ -620,7 +620,7 @@ class NaiveBatchedExperts(mk.FusedMoEExpertsModular):
              # Indexing expert_num_tokens doesn't work w/cudagraphs or inductor
              if (
                  torch.compiler.is_compiling()
@@ -68,7 +108,7 @@ index e2b5a8f67..0513a957b 100644
              ):
                  num = hidden_states.shape[1]
              else:
-@@ -819,7 +819,7 @@ def batched_moe_kernel_quantize_input(
+@@ -661,7 +661,7 @@ def batched_moe_kernel_quantize_input(
      per_act_token_quant: bool,
      block_shape: list[int] | None = None,
  ) -> tuple[torch.Tensor, torch.Tensor | None]:
@@ -77,3 +117,25 @@ index e2b5a8f67..0513a957b 100644
          # Note: this does a bunch of extra work because expert_num_tokens is
          # ignored but it does support torch.compile + cudagraphs.
          hidden_dim = A.size(-1)
+diff --git a/vllm/platforms/xpu.py b/vllm/platforms/xpu.py
+index bd9006f3f..161a559c1 100644
+--- a/vllm/platforms/xpu.py
++++ b/vllm/platforms/xpu.py
+@@ -8,9 +8,14 @@ from typing import TYPE_CHECKING
+ import torch
+ 
+ # import custom ops, trigger op registration
+-import vllm_xpu_kernels._C  # noqa
+-import vllm_xpu_kernels._moe_C  # noqa
+-import vllm_xpu_kernels._xpu_C  # noqa
++try:
++    import vllm_xpu_kernels._C  # noqa
++    import vllm_xpu_kernels._moe_C  # noqa
++    import vllm_xpu_kernels._xpu_C  # noqa
++except (ImportError, OSError) as e:
++    import logging
++    logging.getLogger(__name__).warning(
++        "Failed to import vllm_xpu_kernels: %s", e)
+ 
+ import vllm.envs as envs
+ from vllm.logger import init_logger
