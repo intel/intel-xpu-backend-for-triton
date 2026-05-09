@@ -109,6 +109,15 @@ LogicalResult DescriptorPrefetchOp::verify() {
   return success();
 }
 
+LogicalResult DescriptorGatherPrefetchOp::verify() {
+  auto offsetXType = dyn_cast<RankedTensorType>(getXOffsets().getType());
+  if (!offsetXType) {
+    return emitOpError("expected ")
+           << " offsetX of tensor type, but got " << getXOffsets().getType();
+  }
+  return success();
+}
+
 LogicalResult SubGroupTransposeOp::verify() {
   RankedTensorType srcType = getSrc().getType();
   auto mod = getOperation()->getParentOfType<mlir::ModuleOp>();
