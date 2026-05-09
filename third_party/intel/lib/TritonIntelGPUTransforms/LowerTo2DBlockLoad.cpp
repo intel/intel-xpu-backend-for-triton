@@ -310,6 +310,8 @@ private:
     // encoding. These may differ from the conventional rank-2/rank-1 for
     // rank > 2 tensors.
     unsigned rowDim, colDim;
+    int tileWidth = -1;
+    int tileHeight = -1;
     if (has1DReshapeStride) {
       // 1D reshape: conventional dims, no tile validation needed.
       rowDim = memoryRowMajor ? rank - 2 : rank - 1;
@@ -330,6 +332,8 @@ private:
           /*oneMatrixPerLoadForBT=*/false);
       rowDim = sizeInfo.rowDim;
       colDim = sizeInfo.colDim;
+      tileWidth = sizeInfo.tileWidth;
+      tileHeight = sizeInfo.tileHeight;
     }
 
     // Compute pitch from stride analysis or the 1D->2D reshape attribute.
@@ -359,6 +363,22 @@ private:
     if (pitch < MIN_PITCH || (pitch % 16) != 0) {
       LDBG("Invalid pitch " << pitch << " for load: " << *op);
       return;
+    }
+
+    // For broadcast loads (stride=0), the LLVM lowering's row replication
+    // requires tileWidth >= threadsPerWarp or tileWidth * 2 == threadsPerWarp.
+    // Reject unsupported configurations.
+    if (stride == 0 && tileHeight > 1 && tileWidth > 0) {
+      unsigned threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(
+          op->getParentOfType<ModuleOp>());
+      if (tileWidth < (int)threadsPerWarp &&
+          (unsigned)tileWidth * 2 != threadsPerWarp) {
+        LDBG("Broadcast load tile width " << tileWidth
+                                          << " incompatible with "
+                                             "threadsPerWarp "
+                                          << threadsPerWarp << " for: " << *op);
+        return;
+      }
     }
 
     OpBuilder builder(op);
