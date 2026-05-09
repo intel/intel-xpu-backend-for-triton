@@ -108,6 +108,40 @@ def TTIG_DescriptorPrefetchOp : TTIG_Op<"descriptor_prefetch", [MemoryEffects<[M
   let hasVerifier = 1;
 }
 
+def TT_DescriptorGatherPrefetchOp : TTIG_Op<"descriptor_gather_prefetch", [MemoryEffects<[MemWrite<L2Cache>]>, TT_DescriptorOpInterface]> {
+  let summary = "prefetch multiple rows from a descriptor into a single tensor";
+  let description = [{
+    The `descriptor_gather_prefetch` operation prefetches multiple rows using a tensor descriptor.
+
+    Example:
+      ```mlir
+      ttig.descriptor_gather_prefetch %desc[%x, %y] cacheModifier = ca evictionPolicy = normal
+          : !tt.tensordesc<1x64xbf16>, tensor<128xi32, #ttg.slice<{dim = 1, parent = #dpas}>>, i32
+
+      It prefetches 128 rows starting from the row at index %x, with a column offset of %y, using the provided cache modifier and eviction policy.
+  }];
+
+  let arguments = (ins
+    Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
+    RankedTensorOf<[I16, I32]>:$x_offsets,
+    I32:$y_offset,
+    DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
+    DefaultValuedAttr<TT_EvictionPolicyAttr, "::mlir::triton::EvictionPolicy::NORMAL">:$evict
+  );
+  let results = (outs);
+
+  let assemblyFormat = [{
+    $desc `[` $x_offsets `,` $y_offset `]`
+    oilist(
+      `cacheModifier` `=` $cache |
+      `evictionPolicy` `=` $evict
+    )
+    attr-dict `:` qualified(type(operands))
+  }];
+
+  let hasVerifier = 1;
+}
+
 // same as tt.broadcast except that we don't require SameOperandsAndResultEncoding
 def TTIG_BroadcastOp : TTIG_Op<"broadcast", [Pure, SameOperandsAndResultElementType]> {
   let summary = "broadcast a tensor";
