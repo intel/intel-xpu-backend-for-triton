@@ -35,15 +35,17 @@ namespace {
 /// candidacy logic.
 struct PrefetchCandidate {
   explicit PrefetchCandidate(Operation *op) : op(op) {
-    assert((isa<tt::LoadOp, tt::DescriptorLoadOp>(op)) &&
-           "only tt::LoadOp and tt::DescriptorLoadOp can be prefetched");
+    assert(
+        (isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op)) &&
+        "only tt::LoadOp, tt::DescriptorLoadOp and tt::DescriptorGatherOp can "
+        "be prefetched");
   }
   Operation *op;
 
   /// Whether \p op has the block_io attribute and rank >= 2 result type,
   /// making it eligible for 2D block prefetching.
   static bool isCandidate(Operation *op) {
-    if (!isa<tt::LoadOp, tt::DescriptorLoadOp>(op))
+    if (!isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op))
       return false;
     if (!op->getAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName()))
       return false;
@@ -227,9 +229,34 @@ static void createPrefetchOp(scf::ForOp &forOp, tt::LoadOp loadOp,
                              bool useAnnotations) {
   OpBuilder builder(forOp);
   builder.setInsertionPoint(loadOp);
-  auto prefetchOp = ttgi::PrefetchOp::create(
-      builder, loadOp->getLoc(), loadOp.getPtr(), loadOp.getMask(),
-      loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
+}
+
+template <class> inline constexpr bool always_false_v = false;
+
+/// Create a prefetch operation for the given load operation.
+template <class OpType>
+void createPrefetchOp(scf::ForOp &forOp, OpType loadOp, bool useAnnotations) {
+  OpBuilder builder(forOp);
+  builder.setInsertionPoint(loadOp);
+
+  Operation *prefetchOp = nullptr;
+  if constexpr (std::is_same_v<OpType, tt::DescriptorLoadOp>) {
+    prefetchOp = ttgi::DescriptorPrefetchOp::create(
+        builder, loadOp->getLoc(), loadOp.getDesc(), loadOp.getIndices(),
+        loadOp.getCache(), loadOp.getEvict());
+  } else if constexpr (std::is_same_v<OpType, tt::DescriptorGatherOp>) {
+    prefetchOp = ttgi::DescriptorGatherPrefetchOp::create(
+        builder, loadOp->getLoc(), loadOp.getDesc(), loadOp.getXOffsets(),
+        loadOp.getYOffset(), triton::CacheModifier::CA,
+        triton::EvictionPolicy::NORMAL);
+  } else if constexpr (std::is_same_v<OpType, tt::LoadOp>) {
+    prefetchOp = ttgi::PrefetchOp::create(
+        builder, loadOp->getLoc(), loadOp.getPtr(), loadOp.getMask(),
+        loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
+  } else {
+    static_assert(always_false_v<OpType> &&
+                  "Unsupported OpType for createPrefetchOp");
+  }
 
   // inherit attributes from the load operation
   auto attrs = loadOp->getAttrDictionary();
@@ -266,39 +293,6 @@ static void createPrefetchOp(scf::ForOp &forOp, tt::LoadOp loadOp,
   }
 }
 
-/// Create a prefetch operation for the given load operation.
-static void createPrefetchOp(scf::ForOp &forOp, tt::DescriptorLoadOp loadOp,
-                             bool useAnnotations) {
-  OpBuilder builder(forOp);
-  builder.setInsertionPoint(loadOp);
-  auto prefetchOp = ttgi::DescriptorPrefetchOp::create(
-      builder, loadOp->getLoc(), loadOp.getDesc(), loadOp.getIndices(),
-      loadOp.getCache(), loadOp.getEvict());
-
-  // inherit attributes from the load operation
-  auto attrs = loadOp->getAttrDictionary();
-  prefetchOp->setAttrs(attrs);
-  // See the LoadOp overload above for the rationale.
-  prefetchOp->removeAttr(tt::kLoopStageAttrName);
-  prefetchOp->removeAttr(tt::kLoopClusterAttrName);
-
-  // See the LoadOp overload above for the rationale.
-  if (useAnnotations) {
-    if (Attribute s = loadOp->getAttr(tt::kLoopStageAttrName)) {
-      prefetchOp->setAttr(tt::kLoopStageAttrName, s);
-      if (auto stageAttr = dyn_cast<IntegerAttr>(s)) {
-        int upstreamStage = stageAttr.getInt();
-        if (upstreamStage != 0)
-          LDBG("annotation-driven prefetch deviates from legacy stage 0: "
-               "stage="
-               << upstreamStage << " for load=" << *loadOp);
-      }
-    }
-    if (Attribute c = loadOp->getAttr(tt::kLoopClusterAttrName))
-      prefetchOp->setAttr(tt::kLoopClusterAttrName, c);
-  }
-}
-
 /// Create prefetch operations for the given load candidates.
 static void createPrefetchOps(scf::ForOp &forOp,
                               ArrayRef<PrefetchCandidate> candidates,
@@ -306,9 +300,10 @@ static void createPrefetchOps(scf::ForOp &forOp,
   assert(!candidates.empty() && "Expecting at least one candidate");
   for (const PrefetchCandidate &candidate : candidates) {
     TypeSwitch<Operation *>(candidate.op)
-        .Case<tt::LoadOp, tt::DescriptorLoadOp>([&](auto loadOp) {
-          createPrefetchOp(forOp, loadOp, useAnnotations);
-        })
+        .Case<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(
+            [&](auto loadOp) {
+              createPrefetchOp(forOp, loadOp, useAnnotations);
+            })
         .Default([](Operation *op) {
           llvm_unreachable("Unsupported load operation type");
         });
@@ -391,7 +386,8 @@ createSchedule(scf::ForOp forOp, int numStages) {
   // Find the prefetch/load ops that will go respectively in stage 0 and stage
   // `numStages - 1`. All the other operations will go in stage `numStages - 1`.
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (isa<ttgi::PrefetchOp, ttgi::DescriptorPrefetchOp>(op))
+    if (isa<ttgi::PrefetchOp, ttgi::DescriptorPrefetchOp,
+            ttgi::DescriptorGatherPrefetchOp>(op))
       prefetchOps.emplace_back(&op);
     if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
       // Loads that are neither tensors nor pointers to tensor are not
@@ -402,7 +398,7 @@ createSchedule(scf::ForOp forOp, int numStages) {
       if (isa<RankedTensorType>(loadOp.getPtr().getType()))
         loadOps.emplace_back(&op);
     }
-    if (isa<tt::DescriptorLoadOp>(op))
+    if (isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op))
       loadOps.emplace_back(&op);
   }
 
