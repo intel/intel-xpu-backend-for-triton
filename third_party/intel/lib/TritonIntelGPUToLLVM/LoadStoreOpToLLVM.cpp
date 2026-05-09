@@ -2083,6 +2083,7 @@ public:
       }
 
       assert(numPackedVals > 0 && "numPackedVals should be greater than zero.");
+      llvm_unreachable("WHITNEY LoadOpToBlockIOConversion");
       Value ret = TritonGEN::Matrix2DBlockLoadOp::create(
           rewriter, loc, load2DGenXType,
           /*ptr*/ addrElem,
@@ -2465,6 +2466,7 @@ struct DescriptorLoadOpToBlockIOConversion
       }
 
       assert(numPackedVals > 0 && "numPackedVals should be greater than zero.");
+      llvm_unreachable("WHITNEY DescriptorLoadOpToBlockIOConversion");
       Value ret = TritonGEN::Matrix2DBlockLoadOp::create(
           rewriter, loc, load2DGenXType,
           /*ptr*/ addrElem,
