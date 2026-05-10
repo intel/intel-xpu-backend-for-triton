@@ -201,6 +201,19 @@ private:
       return;
     }
 
+    // For descriptor loads, the 2D block I/O tile must use only the inner 2
+    // dims. Reject if rowDim or colDim falls in a batch dimension.
+    if (rank > 2) {
+      auto sizeInfo = ttgi::getBlockIOTileSize<true>(
+          llEncoding, contiguousDim, elemSizeInBits,
+          /*maskAxisInfo=*/nullptr, oneMatrixPerLoadForBT);
+      int innerDimStart = static_cast<int>(rank - 2);
+      if (sizeInfo.rowDim < innerDimStart || sizeInfo.colDim < innerDimStart) {
+        LDBG("Batch dim in tile for descriptor load: " << *op);
+        return;
+      }
+    }
+
     OpBuilder builder(op);
     Location loc = op.getLoc();
     Type i32Ty = builder.getI32Type();
