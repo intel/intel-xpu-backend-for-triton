@@ -7,7 +7,7 @@
 
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
 // CHECK-LABEL:   llvm.func spir_kernelcc @prefetch_descriptor_row_major(
-// CHECK-SAME:                                                           %[[BASE:[0-9]+|[a-zA-Z$._-][a-zA-Z0-9$._-]*]]: !llvm.ptr<1>,
+// CHECK-SAME:                                                           %[[BASE:[0-9]+|[a-zA-Z$._-][a-zA-Z0-9$._-]*]]: !llvm.ptr<1> {tt.pointee_type = f16},
 // CHECK-SAME:                                                           %[[BASE_HEIGHT:[0-9]+|[a-zA-Z$._-][a-zA-Z0-9$._-]*]]: i64,
 // CHECK-SAME:                                                           %[[BASE_WIDTH:[0-9]+|[a-zA-Z$._-][a-zA-Z0-9$._-]*]]: i64,
 // CHECK-SAME:                                                           %[[ROW_STRIDE:[0-9]+|[a-zA-Z$._-][a-zA-Z0-9$._-]*]]: i64,

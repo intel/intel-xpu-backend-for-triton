@@ -12,7 +12,7 @@ import torch
 import math
 
 from triton import cdiv
-from triton.language.core import _aggregate as aggregate
+from triton.language.core import PropagateNan
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from triton.experimental import gluon
 import triton.experimental.gluon.language as ttgl
@@ -29,6 +29,27 @@ try:
     from .gfx1250_utils import static_profile, composition
 except ImportError:
     from gfx1250_utils import static_profile, composition
+
+# ===-----------------------------------------------------------------------===#
+# Max/min Utilities
+# ===-----------------------------------------------------------------------===#
+
+_MAX_PROPAGATE_NAN_ALL = ttgl.constexpr(PropagateNan.ALL)
+
+
+@gluon.jit
+def elementwise_max_prop_nan(a, b):
+    return ttgl.maximum(a, b, propagate_nan=_MAX_PROPAGATE_NAN_ALL)
+
+
+@gluon.jit
+def reduce_max_prop_nan(input, axis=None, keep_dims=False):
+    """Returns the max of the input tensor along the provided axis.
+
+    We need this customized impl rather than ttgl.max in order to control NaN
+    behavior. Ignoring NaN would incur extra overhead on AMD GPUs."""
+    return ttgl.reduce(input, axis, elementwise_max_prop_nan, keep_dims=keep_dims)
+
 
 # ===-----------------------------------------------------------------------===#
 # Kernel Utilities
@@ -110,7 +131,7 @@ def get_wmma_layout(shape, num_warps, packed=False, preshuffled=False, warp_axis
     return ttgl.amd.AMDWMMALayout(3, True, warp_bases, reg_bases, instr_shape, rank=rank)
 
 
-@aggregate
+@gluon.aggregate
 class MemoryBlock:
     """
     MemoryBlock groups variables to describe a block of 2D/3D tensor in global memory.
@@ -155,7 +176,7 @@ class MemoryBlock:
         return MemoryBlock(base, offs, mask, block_shape)
 
 
-@aggregate
+@gluon.aggregate
 class MemoryUnit:
     """
     MemoryUnit wraps a global-memory tensor descriptor and its corresponding shared-memory slots.
@@ -192,7 +213,7 @@ class MemoryUnit:
         return MemoryUnit(smem, desc)
 
 
-@aggregate
+@gluon.aggregate
 class KVMemory:
     k_mem: MemoryUnit
     v_mem: MemoryUnit
@@ -355,7 +376,7 @@ class KVMemory:
         return buffer
 
 
-@aggregate
+@gluon.aggregate
 class KVScaleMemory:
     k_mem: MemoryUnit
     v_mem: MemoryUnit
@@ -510,7 +531,7 @@ class KVScaleMemory:
         return buffer
 
 
-@aggregate
+@gluon.aggregate
 class AttentionConfigBase:
     Q_TYPE: ttgl.constexpr  # the data type for Q, either 'e5m2' or 'e4m3'
     P_TYPE: ttgl.constexpr  # the data type for P; we always assume P_TYPE == Q_TYPE
@@ -552,7 +573,7 @@ class AttentionConfigBase:
 
 
 @composition
-@aggregate
+@gluon.aggregate
 class GlobalScaledAttentionConfig:
     base: AttentionConfigBase
 
@@ -616,7 +637,7 @@ class GlobalScaledAttentionConfig:
         self.CONVERT_LAYOUT_TRIVIAL = ttgl.constexpr(True if P_K_WIDTH == 8 else False)
 
 
-@aggregate
+@gluon.aggregate
 class GlobalScaledAttentionProgram:
     cfg: GlobalScaledAttentionConfig
 
@@ -828,8 +849,8 @@ class GlobalScaledAttentionProgram:
 
             qk = self.compute_qk(q, q_scale, k, k_scale, zero)
 
-            m = ttgl.max(qk, -1)
-            m_ij = ttgl.maximum(m_i, m)
+            m = reduce_max_prop_nan(qk, -1)
+            m_ij = elementwise_max_prop_nan(m_i, m)
             m_ij_scaled = m_ij * sm_scale
             qk_shifted = qk * sm_scale - expand_dims(m_ij_scaled, -1)
             p = ttgl.exp2(qk_shifted)
@@ -880,8 +901,8 @@ class GlobalScaledAttentionProgram:
 
         self.issue_global_load_k(2, buf=0)  # ................................. iter 2
 
-        m = ttgl.max(qk, -1)  # ............................................... iter 0
-        m_ij = ttgl.maximum(m_i, m)
+        m = reduce_max_prop_nan(qk, -1)  # .................................... iter 0
+        m_ij = elementwise_max_prop_nan(m_i, m)
         m_ij_scaled = m_ij * sm_scale
         qk_shifted = qk * sm_scale - expand_dims(m_ij_scaled, -1)
         p = ttgl.exp2(qk_shifted)
@@ -915,8 +936,8 @@ class GlobalScaledAttentionProgram:
             self.issue_global_load_k(i + 3, buf=b, pred=pred)  # .............. iter i+3
 
             acc = self.compute_pv(p, p_scale, v, v_scale, acc)  # ............. iter i
-            m = ttgl.max(qk, -1)  # ........................................... iter i+1
-            m_ij = ttgl.maximum(m_i, m)
+            m = reduce_max_prop_nan(qk, -1)  # ................................ iter i+1
+            m_ij = elementwise_max_prop_nan(m_i, m)
             m_ij_scaled = m_ij * sm_scale
             qk_shifted = qk * sm_scale - expand_dims(m_ij_scaled, -1)
             p = ttgl.exp2(qk_shifted)
@@ -939,8 +960,8 @@ class GlobalScaledAttentionProgram:
         v = self.shared_load_v(buf=0)
 
         acc = self.compute_pv(p, p_scale, v, v_scale, acc)  # ................. iter end-2
-        m = ttgl.max(qk, -1)  # ............................................... iter end-1
-        m_ij = ttgl.maximum(m_i, m)
+        m = reduce_max_prop_nan(qk, -1)  # .................................... iter end-1
+        m_ij = elementwise_max_prop_nan(m_i, m)
         m_ij_scaled = m_ij * sm_scale
         qk_shifted = qk * sm_scale - expand_dims(m_ij_scaled, -1)
         p = ttgl.exp2(qk_shifted)
@@ -1002,8 +1023,8 @@ class GlobalScaledAttentionProgram:
         self.issue_global_load_v(0, sub_idx=1, buf=0)  # ...................... iter 0
 
         qk = self.concat_subtile(qk0, qk1)  # ................................. iter 0
-        m = ttgl.max(qk, -1)
-        m_ij = ttgl.maximum(m_i, m)
+        m = reduce_max_prop_nan(qk, -1)
+        m_ij = elementwise_max_prop_nan(m_i, m)
         m_ij_scaled = m_ij * sm_scale
         self.issue_global_load_k(2, sub_idx=0, buf=0)  # ...................... iter 2
 
@@ -1045,8 +1066,8 @@ class GlobalScaledAttentionProgram:
             self.async_wait(4)  # ............................................. iter i
             v1 = self.shared_load_v(sub_idx=1, buf=a)
             qk = self.concat_subtile(qk0, qk1)  # ............................. iter i+1
-            m = ttgl.max(qk, -1)
-            m_ij = ttgl.maximum(m_i, m)
+            m = reduce_max_prop_nan(qk, -1)
+            m_ij = elementwise_max_prop_nan(m_i, m)
             m_ij_scaled = m_ij * sm_scale
             self.issue_global_load_k(i + 3, sub_idx=0, buf=b, pred=pred)  # ... iter i+3
 
@@ -1087,8 +1108,8 @@ class GlobalScaledAttentionProgram:
         qk1 = self.compute_qk(q, q_scale, k1, k_scale, zero)
 
         qk = self.concat_subtile(qk0, qk1)
-        m = ttgl.max(qk, -1)
-        m_ij = ttgl.maximum(m_i, m)
+        m = reduce_max_prop_nan(qk, -1)
+        m_ij = elementwise_max_prop_nan(m_i, m)
         m_ij_scaled = m_ij * sm_scale
         qk0_shifted = qk0 * sm_scale - expand_dims(m_ij_scaled, -1)
         qk1_shifted = qk1 * sm_scale - expand_dims(m_ij_scaled, -1)
@@ -1157,8 +1178,8 @@ class GlobalScaledAttentionProgram:
         self.issue_global_load_v(0, sub_idx=1, buf=0)  # ...................... iter 0
 
         qk = self.concat_subtile(qk0, qk1)  # ................................. iter 0
-        m = ttgl.max(qk, -1)
-        m_ij = ttgl.maximum(m_i, m)
+        m = reduce_max_prop_nan(qk, -1)
+        m_ij = elementwise_max_prop_nan(m_i, m)
         m_ij_scaled = m_ij * sm_scale
         self.issue_global_load_k(2, sub_idx=0, buf=0)  # ...................... iter 2
 
@@ -1205,8 +1226,8 @@ class GlobalScaledAttentionProgram:
             with warp_pipeline_stage("compute2"):
                 acc0 = self.compute_pv(p, p_scale, v0, v_scale, acc0)  # ...... iter i
                 qk = self.concat_subtile(qk0, qk1)  # ......................... iter i+1
-                m = ttgl.max(qk, -1)
-                m_ij = ttgl.maximum(m_i, m)
+                m = reduce_max_prop_nan(qk, -1)
+                m_ij = elementwise_max_prop_nan(m_i, m)
                 m_ij_scaled = m_ij * sm_scale
 
             self.async_wait(4)
@@ -1254,8 +1275,8 @@ class GlobalScaledAttentionProgram:
         qk1 = self.compute_qk(q, q_scale, k1, k_scale, zero)
 
         qk = self.concat_subtile(qk0, qk1)
-        m = ttgl.max(qk, -1)
-        m_ij = ttgl.maximum(m_i, m)
+        m = reduce_max_prop_nan(qk, -1)
+        m_ij = elementwise_max_prop_nan(m_i, m)
         m_ij_scaled = m_ij * sm_scale
 
         qk0_shifted = qk0 * sm_scale - expand_dims(m_ij_scaled, -1)
@@ -1317,8 +1338,8 @@ class GlobalScaledAttentionProgram:
 
         self.issue_global_load_v(1, buf=1)  # ................................. iter 1
 
-        m = ttgl.max(qk, -1)  # ............................................... iter 0
-        m_ij = ttgl.maximum(m_i, m)
+        m = reduce_max_prop_nan(qk, -1)  # .................................... iter 0
+        m_ij = elementwise_max_prop_nan(m_i, m)
         m_ij_scaled = m_ij * sm_scale
         qk_shifted = qk * sm_scale - expand_dims(m_ij_scaled, -1)
         p = ttgl.exp2(qk_shifted)
@@ -1350,8 +1371,8 @@ class GlobalScaledAttentionProgram:
             v = self.shared_load_v(buf=a)  # .................................. iter i
 
             acc = self.compute_pv(p, p_scale, v, v_scale, acc)  # ............. iter i
-            m = ttgl.max(qk, -1)  # ........................................... iter i+1
-            m_ij = ttgl.maximum(m_i, m)
+            m = reduce_max_prop_nan(qk, -1)  # ................................ iter i+1
+            m_ij = elementwise_max_prop_nan(m_i, m)
             m_ij_scaled = m_ij * sm_scale
             qk_shifted = qk * sm_scale - expand_dims(m_ij_scaled, -1)
             p = ttgl.exp2(qk_shifted)
@@ -1376,8 +1397,8 @@ class GlobalScaledAttentionProgram:
         v = self.shared_load_v(buf=a)  # ...................................... iter end-2
 
         acc = self.compute_pv(p, p_scale, v, v_scale, acc)  # ................. iter end-2
-        m = ttgl.max(qk, -1)  # ............................................... iter end-1
-        m_ij = ttgl.maximum(m_i, m)
+        m = reduce_max_prop_nan(qk, -1)  # .................................... iter end-1
+        m_ij = elementwise_max_prop_nan(m_i, m)
         m_ij_scaled = m_ij * sm_scale
         qk_shifted = qk * sm_scale - expand_dims(m_ij_scaled, -1)
         p = ttgl.exp2(qk_shifted)
@@ -1407,7 +1428,7 @@ class GlobalScaledAttentionProgram:
 
 
 @composition
-@aggregate
+@gluon.aggregate
 class BlockScaledAttentionConfig:
     base: AttentionConfigBase
 
@@ -1496,7 +1517,7 @@ class BlockScaledAttentionConfig:
         self.P_SCALING = ttgl.constexpr(P_SCALING)
 
 
-@aggregate
+@gluon.aggregate
 class BlockScaledAttentionProgram:
     cfg: BlockScaledAttentionConfig
 
@@ -1738,7 +1759,7 @@ class BlockScaledAttentionProgram:
 
         x = ttgl.reshape(x, [outer_dim, inner_dim // block_size, block_size])
         x_abs = ttgl.abs(x)
-        x_max = ttgl.max(x_abs, axis=2)
+        x_max = reduce_max_prop_nan(x_abs, axis=2)
 
         dequant_scale = x_max / fp8_max
         dequant_scale = (dequant_scale.to(ttgl.uint32, bitcast=True) + 0x007FFFFF) & 0x7F800000
@@ -1818,8 +1839,8 @@ class BlockScaledAttentionProgram:
 
             qk = self.compute_qk(q, q_scale, k, k_scale, zero)
 
-            m = ttgl.max(qk, -1)
-            m_ij = ttgl.maximum(m_i, m)
+            m = reduce_max_prop_nan(qk, -1)
+            m_ij = elementwise_max_prop_nan(m_i, m)
             m_ij_scaled = m_ij * sm_scale
             qk_shifted = qk * sm_scale - expand_dims(m_ij_scaled, -1)
             p = ttgl.exp2(qk_shifted)
@@ -1872,8 +1893,8 @@ class BlockScaledAttentionProgram:
         self.issue_global_load_k(2, buf=0)  # ................................. iter 2
         self.issue_global_load_k_scale(2, buf=0)  # ........................... iter 2
 
-        m = ttgl.max(qk, -1)  # ............................................... iter 0
-        m_ij = ttgl.maximum(m_i, m)
+        m = reduce_max_prop_nan(qk, -1)  # .................................... iter 0
+        m_ij = elementwise_max_prop_nan(m_i, m)
         m_ij_scaled = m_ij * sm_scale
         qk_shifted = qk * sm_scale - expand_dims(m_ij_scaled, -1)
         p = ttgl.exp2(qk_shifted)
@@ -1911,8 +1932,8 @@ class BlockScaledAttentionProgram:
             self.issue_global_load_k_scale(i + 3, buf=b, pred=pred)  # ........ iter i+3
 
             acc = self.compute_pv(p, p_scale, v, v_scale, acc)  # ............. iter i
-            m = ttgl.max(qk, -1)  # ........................................... iter i+1
-            m_ij = ttgl.maximum(m_i, m)
+            m = reduce_max_prop_nan(qk, -1)  # ................................ iter i+1
+            m_ij = elementwise_max_prop_nan(m_i, m)
             m_ij_scaled = m_ij * sm_scale
             qk_shifted = qk * sm_scale - expand_dims(m_ij_scaled, -1)
             p = ttgl.exp2(qk_shifted)
@@ -1938,8 +1959,8 @@ class BlockScaledAttentionProgram:
         v_scale = self.shared_load_v_scale(buf=0)
 
         acc = self.compute_pv(p, p_scale, v, v_scale, acc)  # ................. iter end-2
-        m = ttgl.max(qk, -1)  # ............................................... iter end-1
-        m_ij = ttgl.maximum(m_i, m)
+        m = reduce_max_prop_nan(qk, -1)  # .................................... iter end-1
+        m_ij = elementwise_max_prop_nan(m_i, m)
         m_ij_scaled = m_ij * sm_scale
         qk_shifted = qk * sm_scale - expand_dims(m_ij_scaled, -1)
         p = ttgl.exp2(qk_shifted)
@@ -2003,8 +2024,8 @@ class BlockScaledAttentionProgram:
         self.issue_global_load_v(0, sub_idx=1, buf=0)  # ...................... iter 0
 
         qk = self.concat_subtile(qk0, qk1)  # ................................. iter 0
-        m = ttgl.max(qk, -1)
-        m_ij = ttgl.maximum(m_i, m)
+        m = reduce_max_prop_nan(qk, -1)
+        m_ij = elementwise_max_prop_nan(m_i, m)
         m_ij_scaled = m_ij * sm_scale
         self.issue_global_load_k(2, sub_idx=0, buf=0)  # ...................... iter 2
         self.issue_global_load_k_scale(2, buf=0)  # ........................... iter 2
@@ -2054,8 +2075,8 @@ class BlockScaledAttentionProgram:
             self.async_wait(5)  # ............................................. iter i
             v1 = self.shared_load_v(sub_idx=1, buf=a)
             qk = self.concat_subtile(qk0, qk1)  # ............................. iter i+1
-            m = ttgl.max(qk, -1)
-            m_ij = ttgl.maximum(m_i, m)
+            m = reduce_max_prop_nan(qk, -1)
+            m_ij = elementwise_max_prop_nan(m_i, m)
             m_ij_scaled = m_ij * sm_scale
             self.issue_global_load_k(i + 3, sub_idx=0, buf=b, pred=pred)  # ... iter i+3
             self.issue_global_load_k_scale(i + 3, buf=b, pred=pred)  # ........ iter i+3
@@ -2103,8 +2124,8 @@ class BlockScaledAttentionProgram:
         qk1 = self.compute_qk(q, q_scale, k1, k1_scale, zero)
 
         qk = self.concat_subtile(qk0, qk1)
-        m = ttgl.max(qk, -1)
-        m_ij = ttgl.maximum(m_i, m)
+        m = reduce_max_prop_nan(qk, -1)
+        m_ij = elementwise_max_prop_nan(m_i, m)
         m_ij_scaled = m_ij * sm_scale
 
         qk0_shifted = qk0 * sm_scale - expand_dims(m_ij_scaled, -1)
@@ -2177,8 +2198,8 @@ class BlockScaledAttentionProgram:
         self.issue_global_load_v(0, sub_idx=1, buf=0)  # ...................... iter 0
 
         qk = self.concat_subtile(qk0, qk1)  # ................................. iter 0
-        m = ttgl.max(qk, -1)
-        m_ij = ttgl.maximum(m_i, m)
+        m = reduce_max_prop_nan(qk, -1)
+        m_ij = elementwise_max_prop_nan(m_i, m)
         m_ij_scaled = m_ij * sm_scale
         self.issue_global_load_k(2, sub_idx=0, buf=0)  # ...................... iter 2
         self.issue_global_load_k_scale(2, buf=0)  # ........................... iter 2
@@ -2231,8 +2252,8 @@ class BlockScaledAttentionProgram:
             with warp_pipeline_stage("compute2"):
                 acc0 = self.compute_pv(p, p_scale, v0, v0_scale, acc0)  # ..... iter i
                 qk = self.concat_subtile(qk0, qk1)  # ......................... iter i+1
-                m = ttgl.max(qk, -1)
-                m_ij = ttgl.maximum(m_i, m)
+                m = reduce_max_prop_nan(qk, -1)
+                m_ij = elementwise_max_prop_nan(m_i, m)
                 m_ij_scaled = m_ij * sm_scale
 
             self.async_wait(7)
@@ -2287,8 +2308,8 @@ class BlockScaledAttentionProgram:
         qk1 = self.compute_qk(q, q_scale, k1, k1_scale, zero)
 
         qk = self.concat_subtile(qk0, qk1)
-        m = ttgl.max(qk, -1)
-        m_ij = ttgl.maximum(m_i, m)
+        m = reduce_max_prop_nan(qk, -1)
+        m_ij = elementwise_max_prop_nan(m_i, m)
         m_ij_scaled = m_ij * sm_scale
 
         qk0_shifted = qk0 * sm_scale - expand_dims(m_ij_scaled, -1)
@@ -2353,8 +2374,8 @@ class BlockScaledAttentionProgram:
         self.issue_global_load_v(1, buf=1)  # ................................. iter 1
         self.issue_global_load_v_scale(1, buf=1)  # ........................... iter 1
 
-        m = ttgl.max(qk, -1)  # ............................................... iter 0
-        m_ij = ttgl.maximum(m_i, m)
+        m = reduce_max_prop_nan(qk, -1)  # .................................... iter 0
+        m_ij = elementwise_max_prop_nan(m_i, m)
         m_ij_scaled = m_ij * sm_scale
         qk_shifted = qk * sm_scale - expand_dims(m_ij_scaled, -1)
         p = ttgl.exp2(qk_shifted)
@@ -2390,8 +2411,8 @@ class BlockScaledAttentionProgram:
             v_scale = self.shared_load_v_scale(buf=a)
 
             acc = self.compute_pv(p, p_scale, v, v_scale, acc)  # ............. iter i
-            m = ttgl.max(qk, -1)  # ........................................... iter i+1
-            m_ij = ttgl.maximum(m_i, m)
+            m = reduce_max_prop_nan(qk, -1)  # ................................ iter i+1
+            m_ij = elementwise_max_prop_nan(m_i, m)
             m_ij_scaled = m_ij * sm_scale
             qk_shifted = qk * sm_scale - expand_dims(m_ij_scaled, -1)
             p = ttgl.exp2(qk_shifted)
@@ -2419,8 +2440,8 @@ class BlockScaledAttentionProgram:
         v_scale = self.shared_load_v_scale(buf=a)
 
         acc = self.compute_pv(p, p_scale, v, v_scale, acc)  # ................. iter end-2
-        m = ttgl.max(qk, -1)  # ............................................... iter end-1
-        m_ij = ttgl.maximum(m_i, m)
+        m = reduce_max_prop_nan(qk, -1)  # .................................... iter end-1
+        m_ij = elementwise_max_prop_nan(m_i, m)
         m_ij_scaled = m_ij * sm_scale
         qk_shifted = qk * sm_scale - expand_dims(m_ij_scaled, -1)
         p = ttgl.exp2(qk_shifted)
@@ -2487,7 +2508,7 @@ def store_output(  #
             acc = acc * expand_dims(l_recip, -1)
 
         else:
-            m_ij = ttgl.max(m_i, 0)
+            m_ij = reduce_max_prop_nan(m_i, 0)
             m_ij_scaled = m_ij * sm_scale
             m_diff = m_i * sm_scale - expand_dims(m_ij_scaled, 0)
             alpha = ttgl.exp2(m_diff)

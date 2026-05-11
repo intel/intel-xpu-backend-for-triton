@@ -1393,8 +1393,9 @@ def torch_gather_rows(input, idx, y, block_y):
 @pytest.mark.parametrize("BLOCK_X, BLOCK_Y", [(32, 32), (64, 128), (16, 128), (512, 16)])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.int8])
 @pytest.mark.parametrize("y", [0, 32, 48])
+@pytest.mark.parametrize("idx_dtype", [torch.int32, torch.int16])
 @pytest.mark.skipif(is_hopper(), reason="TMA Scatter is not supported on hopper")
-def test_tma_gather(X, Y, BLOCK_X, BLOCK_Y, dtype, y, device):
+def test_tma_gather(X, Y, BLOCK_X, BLOCK_Y, dtype, y, idx_dtype, device):
     if BLOCK_X > X or y + BLOCK_Y > Y:
         pytest.xfail()
 
@@ -1405,7 +1406,7 @@ def test_tma_gather(X, Y, BLOCK_X, BLOCK_Y, dtype, y, device):
         input = torch.arange(X * Y, dtype=dtype, device=device).reshape(X, Y)
     output = torch.empty((BLOCK_X, BLOCK_Y), dtype=dtype, device=device)
 
-    idx = torch.randint(BLOCK_X, (BLOCK_X, ), dtype=torch.int32, device=device)
+    idx = torch.randint(BLOCK_X, (BLOCK_X, ), dtype=idx_dtype, device=device)
 
     def alloc_fn(size: int, align: int, steam):
         return torch.empty(size, dtype=torch.int8, device=device)
@@ -1492,9 +1493,10 @@ def tma_scatter_rows_kernel(out_ptr, in_ptr, idx_ptr, y, X: tl.constexpr, Y: tl.
 @pytest.mark.parametrize("BLOCK_X, BLOCK_Y", [(32, 32), (64, 128), (16, 128), (512, 16)])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.int8])
 @pytest.mark.parametrize("y", [0, 32, 48])
+@pytest.mark.parametrize("idx_dtype", [torch.int32, torch.int16])
 @pytest.mark.skipif(is_hopper(), reason="TMA Scatter is not supported on hopper")
 @pytest.mark.skipif(is_sm12x(), reason="TMA Scatter is not supported on sm120")
-def test_tma_scatter(X, Y, BLOCK_X, BLOCK_Y, dtype, y, device):
+def test_tma_scatter(X, Y, BLOCK_X, BLOCK_Y, dtype, y, idx_dtype, device):
     if BLOCK_X > X or y + BLOCK_Y > Y:
         pytest.xfail()
 
@@ -1502,7 +1504,7 @@ def test_tma_scatter(X, Y, BLOCK_X, BLOCK_Y, dtype, y, device):
     input = torch.arange(BLOCK_X * BLOCK_Y, dtype=dtype, device=device).reshape(BLOCK_X, BLOCK_Y)
     output = torch.zeros((X, Y), dtype=dtype, device=device)
 
-    idx = torch.randperm(BLOCK_X, dtype=torch.int32, device=device)
+    idx = torch.randperm(BLOCK_X, dtype=idx_dtype, device=device)
 
     def alloc_fn(size: int, align: int, steam):
         return torch.empty(size, dtype=torch.int8, device=device)

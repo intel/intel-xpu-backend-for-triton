@@ -23,7 +23,7 @@
 #include "intel/lib/Target/LLVMIR/LLVMPasses.h"
 
 #include "intel/include/Target/SPIRV/SPIRVTranslation.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Tools/Sys/GetEnv.h"
 
 #include <pybind11/gil.h>
 #include <pybind11/pybind11.h>
@@ -127,6 +127,12 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
       .def_readwrite(
           "support_256b_prefetch",
           &gpu::intel::TritonAnnotateModuleOptions::supportPrefetch256Bytes)
+      .def_readwrite(
+          "support_256b_load_store",
+          &gpu::intel::TritonAnnotateModuleOptions::support256bLoadStore)
+      .def_readwrite(
+          "support_rounded_divide_sqrt",
+          &gpu::intel::TritonAnnotateModuleOptions::supportRoundedDivideSqrt)
       .def_readwrite("threads_per_warp",
                      &gpu::intel::TritonAnnotateModuleOptions::threadsPerWarp)
       .def_readwrite("target_arch",
@@ -142,8 +148,14 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      gpu::intel::createTritonIntelGPUMaterializeBlockPointer);
   ADD_PASS_WRAPPER_0("add_optimize_reduction_locality",
                      gpu::intel::createTritonIntelGPUOptimizeReductionLocality);
+  ADD_PASS_WRAPPER_0("add_lower_to_2d_block_load",
+                     gpu::intel::createTritonIntelGPULowerTo2DBlockLoad);
   ADD_PASS_WRAPPER_0("add_reduce_variable_liveness",
                      gpu::intel::createTritonIntelGPUReduceVariableLiveness);
+  ADD_PASS_WRAPPER_0("add_annotate_cache_control",
+                     gpu::intel::createTritonIntelGPUAnnotateCacheControl);
+  ADD_PASS_WRAPPER_0("add_widen_load_store_encoding",
+                     gpu::intel::createTritonIntelGPUWidenLoadStoreEncoding);
 }
 
 void init_triton_intel_passes_arith(py::module &&m) {
@@ -322,11 +334,9 @@ void init_triton_intel(py::module &&m) {
   // producer flag (e.g. PyTorch flag) to allow the Triton compiler to use the
   // fast math semantics on all arithmetic operations.
   // https://github.com/intel/intel-xpu-backend-for-triton/issues/3862
-  m.def("set_fast_math", [](llvm::Module *mod) {
+  m.def("set_fast_math", [](llvm::Module *mod, bool enableFpFusion) {
     std::optional<bool> fastMath = mlir::triton::tools::isEnvValueBool(
         mlir::triton::tools::getStrEnv("TRITON_INTEL_FAST_MATH"));
-    std::optional<bool> enableFpFusion = mlir::triton::tools::isEnvValueBool(
-        mlir::triton::tools::getStrEnv("TRITON_DEFAULT_FP_FUSION"));
     if (fastMath.has_value() && !fastMath.value())
       return;
 
@@ -335,9 +345,8 @@ void init_triton_intel(py::module &&m) {
       for (Instruction &inst : instructions(func)) {
         if (auto *op = dyn_cast<FPMathOperator>(&inst)) {
           FastMathFlags FMF;
-          // Default to allow contract when default fp fusion is not disabled.
-          if ((!enableFpFusion.has_value() || enableFpFusion.value()) &&
-              !fastMath.has_value()) {
+          // Default to allow contract when fp fusion is enabled.
+          if (enableFpFusion && !fastMath.has_value()) {
             if (op->getOpcode() == Instruction::FAdd ||
                 op->getOpcode() == Instruction::FMul)
               FMF.setAllowContract(true);

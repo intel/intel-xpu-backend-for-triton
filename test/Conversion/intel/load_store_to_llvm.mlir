@@ -1,5 +1,7 @@
 // RUN: env TRITON_INTEL_PREDICATED_LOAD=1 TRITON_INTEL_PREDICATED_STORE=1  triton-opt %s -split-input-file --convert-triton-intel-gpu-to-llvm | FileCheck %s
 
+// COM: Baseline 128-bit vectorization — ttig.support_256b_load_store is NOT set on the module. See load_store_256b_to_llvm.mlir for the widened variant.
+
 #blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // CHECK-LABEL: global_load_with_attributes
@@ -68,9 +70,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.support_predicated_io} {
   tt.func @load_store_cache_pred(%ptr: tensor<1024x!tt.ptr<f32>, #blocked>, %mask: tensor<1024xi1, #blocked>) {
-    // CHECK: triton_gen.predicated_load {{.*}} {cache_control = L1UC_L3C} : (!llvm.ptr<1>, i64, i1, i32) -> i32
+    // CHECK: triton_gen.predicated_load {{.*}} {cache_control = L1UC_L3C} : (!llvm.ptr<1>, i1, i32) -> i32
     %val = tt.load %ptr, %mask cacheModifier = cg : tensor<1024x!tt.ptr<f32>, #blocked>
-    // CHECK: triton_gen.predicated_store {{.*}} {cache_control = L1WT_L3WT} : (!llvm.ptr<1>, i32, i64, i1) -> ()
+    // CHECK: triton_gen.predicated_store {{.*}} {cache_control = L1WT_L3WT} : (!llvm.ptr<1>, i32, i1) -> ()
     tt.store %ptr, %val, %mask cacheModifier = wt : tensor<1024x!tt.ptr<f32>, #blocked>
     tt.return
   }

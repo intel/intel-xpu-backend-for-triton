@@ -40,6 +40,10 @@ on:
         description: JSON list of benchmarks to skip
         type: string
         default: "[]"
+      env_vars:
+        description: Comma-separated KEY=VALUE pairs to export for benchmark steps
+        type: string
+        default: ""
 
   # This workflow is also called from workflows triton-benchmarks-*.yml.
   workflow_call:
@@ -51,6 +55,10 @@ on:
         description: JSON list of benchmarks to skip
         type: string
         default: "[]"
+      env_vars:
+        description: Comma-separated KEY=VALUE pairs to export for benchmark steps
+        type: string
+        default: ""
 
 # Cancels in-progress PR runs when the PR is updated. Manual runs are never cancelled.
 concurrency:
@@ -82,6 +90,25 @@ jobs:
           cat <<EOF
           ${{ toJSON(inputs) }}
           EOF
+
+      - name: Load additional environment variables
+        if: ${{ inputs.env_vars != '' }}
+        run: |
+          IFS=',' read -ra entries <<< "${{ inputs.env_vars }}"
+
+          for entry in "${entries[@]}"; do
+            # trim leading/trailing whitespace
+            entry="$(echo "$entry" | xargs)"
+
+            [[ -z "$entry" ]] && continue
+
+            if [[ "$entry" =~ ^[A-Z0-9_]+=.*$ ]]; then
+              echo "$entry" >> "$GITHUB_ENV"
+            else
+              echo "Invalid environment variable entry: $entry"
+              exit 1
+            fi
+          done
 
       - name: Checkout repository
         uses: actions/checkout@v6

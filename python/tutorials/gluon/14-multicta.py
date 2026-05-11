@@ -81,7 +81,6 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
 )
 from triton.experimental.gluon.language.nvidia.hopper import mbarrier, tma
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
-from triton.language.core import _aggregate as aggregate
 
 # Re-use baseline tutorials for comparisons.
 t8 = importlib.import_module("08-warp-specialization")
@@ -224,6 +223,7 @@ benchmark_multicta_softmax_f32()
 
 # %%
 # Softmax benchmark results
+# ```text
 # Benchmarking multicta_softmax
 # ============================
 #   shape         CTAs  warps  time (ms)  bandwidth (GB/s)
@@ -238,6 +238,7 @@ benchmark_multicta_softmax_f32()
 #  32768 x 65536      4      4      2.836           6057.26
 #  16384 x 131072     8      4      3.142           5468.66
 #   8192 x 262144    16      4      3.627           4736.15
+# ```
 #
 # We see that here using multiCTA we are able to get very good performance across the board.
 #
@@ -547,12 +548,13 @@ def tma_tcgen05_kernel(a_desc, b_desc, out_desc, NUM_K_TILES: gl.constexpr, acc_
     smem_a = gl.allocate_shared_memory(a_desc.dtype, a_desc.block_shape, a_desc.layout)
     smem_b = gl.allocate_shared_memory(b_desc.dtype, b_desc.block_shape, b_desc.layout)
 
+    acc_tmem = allocate_tensor_memory(gl.float32, [block_m, block_n], acc_tmem_layout)
     tma_bar = mbarrier.allocate_mbarrier(two_ctas=True)
     mma_bar = mbarrier.allocate_mbarrier()
     mbarrier.init(tma_bar, count=1)
-    mbarrier.init(mma_bar, count=tcgen05_mma_barrier_count([smem_a, smem_b], multicast=True))
-
-    acc_tmem = allocate_tensor_memory(gl.float32, [block_m, block_n], acc_tmem_layout)
+    mbarrier.init(
+        mma_bar, count=tcgen05_mma_barrier_count([smem_a, smem_b], multicast=True,
+                                                 two_ctas=acc_tmem.type.layout.two_ctas))
 
     phase_tma = 0
     phase_mma = 0
@@ -680,7 +682,7 @@ def _planar_snake(lin_idx, m_tiles, n_tiles, minor_dim: gl.constexpr, tile_width
     return major, minor
 
 
-@aggregate
+@gluon.aggregate
 class ClcTileSchedulerConsumer:
     has_work: gl.tensor
     tile_id: gl.tensor
@@ -776,7 +778,7 @@ class ClcTileSchedulerConsumer:
         )
 
 
-@aggregate
+@gluon.aggregate
 class MatmulPartitionArgs:
     a_desc: tma.tensor_descriptor
     b_desc: tma.tensor_descriptor
@@ -971,14 +973,6 @@ def matmul_multicta_kernel(
     dtype: gl.constexpr = a_desc.dtype
     a_bufs = gl.allocate_shared_memory(dtype, [STAGES] + a_desc.block_shape, a_desc.layout)
     b_bufs = gl.allocate_shared_memory(dtype, [STAGES] + b_desc.block_shape, b_desc.layout)
-    mma_barrier_count: gl.constexpr = tcgen05_mma_barrier_count([a_bufs.index(0), b_bufs.index(0)], multicast=True)
-
-    load_empty_bars = mbarrier.allocate_mbarrier(batch=STAGES)
-    load_ready_bars = mbarrier.allocate_mbarrier(batch=STAGES, two_ctas=two_ctas)
-    for i in gl.static_range(STAGES):
-        mbarrier.init(load_empty_bars.index(i), count=mma_barrier_count)
-        mbarrier.init(load_ready_bars.index(i), count=1)
-
     tmem_layout: gl.constexpr = TensorMemoryLayout(
         [BLOCK_SIZE_M, block_n // get_split_dim(CGA_LAYOUT, 1)],
         col_stride=1,
@@ -986,6 +980,15 @@ def matmul_multicta_kernel(
         two_ctas=two_ctas,
     )
     acc_bufs = allocate_tensor_memory(gl.float32, [ACC_STAGES, block_m, block_n], tmem_layout)
+    mma_barrier_count: gl.constexpr = tcgen05_mma_barrier_count([a_bufs.index(0), b_bufs.index(0)], multicast=True,
+                                                                two_ctas=acc_bufs.index(0).type.layout.two_ctas)
+
+    load_empty_bars = mbarrier.allocate_mbarrier(batch=STAGES)
+    load_ready_bars = mbarrier.allocate_mbarrier(batch=STAGES, two_ctas=two_ctas)
+    for i in gl.static_range(STAGES):
+        mbarrier.init(load_empty_bars.index(i), count=mma_barrier_count)
+        mbarrier.init(load_ready_bars.index(i), count=1)
+
     acc_empty_bars = mbarrier.allocate_mbarrier(batch=ACC_STAGES, two_ctas=two_ctas)
     acc_ready_bars = mbarrier.allocate_mbarrier(batch=ACC_STAGES)
     for i in gl.static_range(ACC_STAGES):

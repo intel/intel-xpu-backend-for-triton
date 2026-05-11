@@ -43,7 +43,7 @@ function build_level_zero {
   LEVEL_ZERO_VERSION=1.24.2
   LEVEL_ZERO_SHA256=b77e6e28623134ee4e99e2321c127b554bdd5bfa3e80064922eba293041c6c52
 
-  if [[ $OSTYPE = msys ]]; then
+  if [[ $OSTYPE = msys || $OSTYPE = cygwin ]]; then
     pwsh -Command \
       "Invoke-WebRequest -Uri 'https://github.com/oneapi-src/level-zero/archive/refs/tags/v${LEVEL_ZERO_VERSION}.tar.gz' -OutFile 'v${LEVEL_ZERO_VERSION}.tar.gz'"
     ls . -alh
@@ -70,7 +70,7 @@ function build_level_zero {
   cmake --build . --config Release --parallel "$(nproc)"
   cmake --build . --config Release --target install
   export LEVELZERO_INCLUDE_DIR="$L0_INSTALL_PATH/include"
-  if [[ $OSTYPE = msys ]]; then
+  if [[ $OSTYPE = msys || $OSTYPE = cygwin ]]; then
     export LEVELZERO_LIBRARY="$L0_INSTALL_PATH/lib/ze_loader.lib"
   else
     export LEVELZERO_LIBRARY="$L0_INSTALL_PATH/lib/libze_loader.so"

@@ -5,7 +5,6 @@ python/test/unit/language/test_core.py::test_dot3d[r".*-float16-float32"]@regexp
 python/test/unit/language/test_core.py::test_dot3d[r".*-32-32-float16-float16"]@regexp
 
 # https://github.com/intel/intel-xpu-backend-for-triton/issues/983
-python/test/unit/language/test_core.py::test_noinline[shared]
 python/test/unit/language/test_core.py::test_dot_max_num_imprecise_acc[r".*-128-128-256-256"]@regexp
 python/test/unit/language/test_block_pointer.py::test_block_ptr_matmul_no_scf
 python/test/unit/language/test_pipeliner.py::test_pipeline_matmul[True]

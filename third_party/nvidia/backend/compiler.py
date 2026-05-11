@@ -325,8 +325,11 @@ class CUDABackend(BaseBackend):
         passes.common.add_sccp(pm)
         passes.common.add_cse(pm)
         passes.common.add_canonicalizer(pm)
-        if opt.instrumentation_mode == "fpsan":
+        if "fpsan" in opt.instrumentation_mode:
             passes.ttgpuir.add_fp_sanitizer(pm)
+            passes.ttgpuir.add_remove_layout_conversions(pm)
+            passes.common.add_canonicalizer(pm)
+            passes.common.add_cse(pm)
 
         pm.run(mod, 'make_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
@@ -347,8 +350,12 @@ class CUDABackend(BaseBackend):
         passes.gluon.add_canonicalizer(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
 
-        if options.instrumentation_mode == "fpsan":
+        if "fpsan" in options.instrumentation_mode:
             passes.ttgpuir.add_fp_sanitizer(pm)
+        if any(mode in options.instrumentation_mode for mode in ["consan", "fpsan"]):
+            passes.ttgpuir.add_remove_layout_conversions(pm)
+            passes.common.add_canonicalizer(pm)
+            passes.common.add_cse(pm)
 
         pm.run(mod, 'gluon_to_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
@@ -370,6 +377,8 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_allocate_warp_groups(pm)
         passes.convert.add_scf_to_cf(pm)
         passes.gluon.add_inliner(pm)
+        if "consan" in options.instrumentation_mode:
+            passes.ttgpuir.add_prepare_consan_captures(pm, "nvidia")
         nvidia.passes.ttgpuir.add_allocate_shared_memory_nv(pm, capability, ptx_version)
         nvidia.passes.ttnvgpuir.add_allocate_tensor_memory(pm)
         nvidia.passes.ttnvgpuir.add_check_matmul_two_cta(pm)

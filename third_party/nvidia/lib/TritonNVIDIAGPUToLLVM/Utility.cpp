@@ -150,7 +150,7 @@ Value createTMAMulticastMask(Location loc, ConversionPatternRewriter &rewriter,
   return b.shl(b.i32_val(encoding.pattern), base);
 }
 
-static uint32_t getCGABroadcastMask(mlir::triton::gpu::MemDescType barrierTy) {
+uint32_t getCGABroadcastMask(mlir::triton::gpu::MemDescType barrierTy) {
   auto kBlock = StringAttr::get(barrierTy.getContext(), "block");
   return toLinearLayout(barrierTy).getFreeVariableMasks().lookup(kBlock);
 }
@@ -360,8 +360,8 @@ LogicalResult lowerLdStMatrix(
                    {{kOffset, reps.getOutDimSize(kOffset)}}, false);
   // Compute the bits that are moved by one instruction
   // Compute elements for which we can swap the xor by an add
-  auto [nAdditive, permStrides] =
-      actionAdditiveStrides(reps, addrLayout, maskSpanAffineOffset);
+  auto [nAdditive, permStrides] = actionAdditiveStrides(
+      reps, addrLayout, maskSpanAffineOffset, fullTileVec.getInDimSize(kReg));
   reps = permStrides.apply(reps);
   if (isStore) {
     vals = permStrides.apply(vals);
