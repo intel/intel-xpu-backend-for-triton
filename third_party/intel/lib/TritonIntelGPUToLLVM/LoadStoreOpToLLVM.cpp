@@ -158,16 +158,23 @@ static void assertDescriptorInnerShapeCompatible(
 /// time (per thread), the maximum number of bytes per column is 64. We know
 /// that the maximum size for each 2D prefetch is 2048 bytes, therefore the
 /// maximum number of rows is given by 2048/64=32.
-SmallVector<unsigned, 2> get2DPrefetchShapePerWarp(RankedTensorType tensorTy) {
+///
+/// `rowDim`/`colDim` identify the tensor axes that map to the HW prefetch
+/// block's row and column axes (the latter being the one contiguous in
+/// memory). For column-major tensors these differ from rank-2/rank-1, so
+/// the caller must pass the correct dim roles to avoid over-prefetching
+/// across the K dimension.
+SmallVector<unsigned, 2> get2DPrefetchShapePerWarp(RankedTensorType tensorTy,
+                                                   unsigned rowDim,
+                                                   unsigned colDim) {
   Type eltTy = tensorTy.getElementType();
   const ArrayRef<int64_t> tensorShape = tensorTy.getShape();
-  unsigned rank = tensorShape.size();
   unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
   unsigned elemSizeInBytes = elemSizeInBits / 8;
   unsigned maxBytesPerCol = 64;
-  unsigned numRows = std::min<unsigned>(tensorShape[rank - 2], 32);
-  unsigned numCols = std::min<unsigned>(tensorShape[rank - 1],
-                                        maxBytesPerCol / elemSizeInBytes);
+  unsigned numRows = std::min<unsigned>(tensorShape[rowDim], 32);
+  unsigned numCols =
+      std::min<unsigned>(tensorShape[colDim], maxBytesPerCol / elemSizeInBytes);
   return {numRows, numCols};
 }
 
@@ -1269,9 +1276,6 @@ struct PrefetchOpConversion
       return failure();
 
     const bool memoryRowMajor = isMemoryRowMajor(op);
-    // TODO: To support more layouts on memory.
-    if (!memoryRowMajor)
-      return failure();
 
     auto tensorOfPointers = cast<RankedTensorType>(op.getPtr().getType());
     std::optional<DotOperandEncodingAttr> encoding =
@@ -1285,6 +1289,10 @@ struct PrefetchOpConversion
     SmallVector<unsigned> repCluster{cluster.begin(), cluster.end()};
     ArrayRef<int64_t> tensorShape = tensorOfPointers.getShape();
     unsigned rank = tensorShape.size();
+    // HW 2D-block row dim = strided-in-memory; col dim = contiguous.
+    // For row-major: row = rank-2, col = rank-1. Col-major swaps these.
+    const unsigned blockRowDim = memoryRowMajor ? rank - 2 : rank - 1;
+    const unsigned blockColDim = memoryRowMajor ? rank - 1 : rank - 2;
     DpasEncodingAttr::OpIdx opIdx = getOpIdx(tensorOfPointers);
     SmallVector<int64_t> repetitions =
         dpasLayout.getDPASRepetitions(tensorShape, opIdx);
@@ -1323,31 +1331,31 @@ struct PrefetchOpConversion
                                             tensorOfPointers.getEncoding());
 
     Value mask = op.getMask();
-    unsigned maskConstancyHor = std::numeric_limits<unsigned>::max(),
-             maskConstancyVer = std::numeric_limits<unsigned>::max();
+    unsigned maskConstancyCol = std::numeric_limits<unsigned>::max(),
+             maskConstancyRow = std::numeric_limits<unsigned>::max();
     if (mask) {
       // No need to check the constancy of scalar mask.
       if (auto maskTy = dyn_cast_or_null<RankedTensorType>(mask.getType())) {
-        maskConstancyHor = maskConstancyVer = 1;
+        maskConstancyCol = maskConstancyRow = 1;
         AxisInfo *axisInfo =
             const_cast<triton::intel::ModuleAxisInfoAnalysis &>(
                 axisAnalysisPass)
                 .getAxisInfo(mask);
         if (axisInfo) {
-          maskConstancyHor = axisInfo->getConstancy(rank - 1);
-          maskConstancyVer = axisInfo->getConstancy(rank - 2);
+          maskConstancyCol = axisInfo->getConstancy(blockColDim);
+          maskConstancyRow = axisInfo->getConstancy(blockRowDim);
         }
       }
     }
 
     SmallVector<unsigned, 2> prefetchShape =
-        get2DPrefetchShapePerWarp(tensorType);
-    prefetchShape = {std::min<unsigned>(prefetchShape[0], maskConstancyVer),
-                     std::min<unsigned>(prefetchShape[1], maskConstancyHor)};
+        get2DPrefetchShapePerWarp(tensorType, blockRowDim, blockColDim);
+    prefetchShape = {std::min<unsigned>(prefetchShape[0], maskConstancyRow),
+                     std::min<unsigned>(prefetchShape[1], maskConstancyCol)};
 
     SmallVector<int64_t> numPrefetchsPerRep = {
-        mlir::ceil<int64_t>(shardTensorShape[rank - 2], prefetchShape[0]),
-        mlir::ceil<int64_t>(shardTensorShape[rank - 1], prefetchShape[1])};
+        mlir::ceil<int64_t>(shardTensorShape[blockRowDim], prefetchShape[0]),
+        mlir::ceil<int64_t>(shardTensorShape[blockColDim], prefetchShape[1])};
 
     Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
@@ -1399,12 +1407,12 @@ struct PrefetchOpConversion
     }
 
     Value rowStrideInBytes =
-        getPitch(rewriter, op.getPtr(), elemSizeInBits, memoryRowMajor ? 0 : 1);
+        getPitch(rewriter, op.getPtr(), elemSizeInBits, blockRowDim);
     if (!rowStrideInBytes)
       return failure();
 
     // If the stride is 0, we want to load only the first row.
-    int stride = getStride(op.getPtr(), rank - 2);
+    int stride = getStride(op.getPtr(), blockRowDim);
     Value baseHeight = b.i32_val(stride == 0 ? 1 : tileHeightInElem);
     Value baseWidth = b.i32_val(
         std::max(64u, vBlocks * tileWidthInElem * (elemSizeInBits / 8)));
@@ -1427,33 +1435,51 @@ struct PrefetchOpConversion
       assert(remaining == 0 &&
              "batchIdx decomposition inconsistent with totalBatchReps");
 
-      for (unsigned row = 0; row < numReps[rank - 2]; ++row) {
-        for (unsigned col = 0; col < numReps[rank - 1]; ++col) {
+      for (unsigned row = 0; row < numReps[blockRowDim]; ++row) {
+        for (unsigned col = 0; col < numReps[blockColDim]; ++col) {
           // Prefetch the data for each repetition.
           for (int64_t i = 0; i < numPrefetchsPerRep[0]; ++i)
             for (int64_t j = 0; j < numPrefetchsPerRep[1]; ++j) {
-              unsigned offsetN =
-                  col * warpsPerCTA[rank - 1] * shardTensorShape[rank - 1] +
-                  j * prefetchShape[1];
-              unsigned offsetM =
-                  row * warpsPerCTA[rank - 2] * shardTensorShape[rank - 2] +
-                  i * prefetchShape[0];
+              unsigned colOffset = col * warpsPerCTA[blockColDim] *
+                                       shardTensorShape[blockColDim] +
+                                   j * prefetchShape[1];
+              unsigned rowOffset = row * warpsPerCTA[blockRowDim] *
+                                       shardTensorShape[blockRowDim] +
+                                   i * prefetchShape[0];
 
               // Build the full offset key for the baseAddrs/masks map.
+              // baseAddrs/masks are keyed by LOGICAL tensor coordinates
+              // (from emitOffsetForLayout), so dims rank-2 / rank-1 must
+              // receive the offset of whichever role (row/col) maps to
+              // them in the current memory layout.
               SmallVector<unsigned> key;
               for (unsigned d = 0; d < rank - 2; ++d)
                 key.push_back(batchOffsets[d] * warpsPerCTA[d] *
                               shardTensorShape[d]);
-              key.push_back(offsetM);
-              key.push_back(offsetN);
+              key.resize(rank);
+              key[blockRowDim] = rowOffset;
+              key[blockColDim] = colOffset;
+
+              auto baseIt = baseAddrs.find(key);
+              if (baseIt == baseAddrs.end())
+                return rewriter.notifyMatchFailure(
+                    op, "missing base address for prefetch offset key");
 
               Value pred;
-              if (llMask)
-                pred = (maskElems.size() > 1)
-                           ? targetInfo.shuffleIdx(rewriter, loc, masks[key], 0)
-                           : maskElems[0];
-              else
+              if (llMask) {
+                if (maskElems.size() > 1) {
+                  auto maskIt = masks.find(key);
+                  if (maskIt == masks.end())
+                    return rewriter.notifyMatchFailure(
+                        op, "missing mask for prefetch offset key");
+                  pred =
+                      targetInfo.shuffleIdx(rewriter, loc, maskIt->second, 0);
+                } else {
+                  pred = maskElems[0];
+                }
+              } else {
                 pred = b.int_val(1, 1);
+              }
 
               // If the mask exists and evaluates to false, we set offsetY to be
               // equal to baseHeight, which causes the HW to ignore the
@@ -1461,7 +1487,7 @@ struct PrefetchOpConversion
               // prefetched would be outside the baseWidth X baseHeight shape).
               Value offsetY = b.select(pred, b.i32_val(0), baseHeight);
               Value addr =
-                  targetInfo.shuffleIdx(rewriter, loc, baseAddrs[key], 0);
+                  targetInfo.shuffleIdx(rewriter, loc, baseIt->second, 0);
 
               auto newOp = TritonGEN::Matrix2DBlockPrefetchOp::create(
                   rewriter, loc,
