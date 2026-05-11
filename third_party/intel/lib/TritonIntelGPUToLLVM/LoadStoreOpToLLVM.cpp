@@ -2429,16 +2429,18 @@ private:
       auto offsets =
           applyLinearLayout(loc, rewriter, warpMapping, {{kWarp, warpId}});
       Value offsetXIdx = b.add(offsets[0].second, b.i32_val(row * numWarpsM));
-      Value offsetX = b.extract_element(offsetXVec, offsetXIdx);
-      offsetX = b.mul(b.zext(int_ty(64), offsetX), desc.strides[/*row dim*/ 0]);
-      addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, offsetX);
+      Value offsetX =
+          b.zext(int_ty(64), b.extract_element(offsetXVec, offsetXIdx));
+      Value pred = b.icmp_ule(offsetX, desc.shapes[/*row dim*/ 0]);
+      Value offsetXStrided = b.mul(offsetX, desc.strides[/*row dim*/ 0]);
+      addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, offsetXStrided);
       // update offset Y.
       Value offsetY =
           b.mul(offsets[1].second,
                 b.i32_val(prefetchBitsNum * prefetchVecSize / elemSizeInBits));
+      pred = b.and_(pred, b.icmp_ule(b.zext(int_ty(64), offsetY),
+                                     desc.shapes[/*row dim*/ 1]));
       addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, offsetY);
-
-      Value pred = b.icmp_ule(offsetX, desc.shapes[/*row dim*/ 0]);
 
       for (size_t col = 0; col < prefetchOpsNumPerRow; col++) {
         addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem,
@@ -3434,7 +3436,7 @@ struct DescriptorGatherOpConversion
     MLIRContext *ctx = rewriter.getContext();
     // Get the descriptor and indices
     Value llDesc = adaptor.getDesc();
-    SmallVector<Value> offsetX =
+    SmallVector<Value> offsetsX =
         unpackLLElements(loc, adaptor.getXOffsets(), rewriter);
 
     // RankedTensorType offXTy = op.getXOffsets().getType();
@@ -3618,17 +3620,16 @@ struct DescriptorGatherOpConversion
       addrElem = b.bitcast(addrElem, ptr_ty(ctx, 1 /*global*/));
 
       // update offset X.
-      {
-        auto offsets = llEncoding->apply(
-            {{kRegister, registerIdx}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
-        for (auto [dim, offsetIdx] : offsets) {
-          if (dim == str_attr("dim0")) {
-            Value offset64 = b.zext(
-                int_ty(64), b.mul(offsetX[offsetIdx],
-                                  b.trunc(i32_ty, desc.strides[rowDim])));
-            addrElem = b.gep(ptr_ty(ctx, 1), valueElemTy, addrElem, offset64);
-            break;
-          }
+      Value offsetX;
+      auto offsets = llEncoding->apply(
+          {{kRegister, registerIdx}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+
+      for (auto [dim, offsetIdx] : offsets) {
+        if (dim == str_attr("dim0")) {
+          offsetX = b.zext(int_ty(64), offsetsX[offsetIdx]);
+          Value offset64 = b.mul(offsetX, desc.strides[rowDim]);
+          addrElem = b.gep(ptr_ty(ctx, 1), valueElemTy, addrElem, offset64);
+          break;
         }
       }
 
@@ -3636,6 +3637,8 @@ struct DescriptorGatherOpConversion
       // DescriptorLoadOp since we always do boundary checking)
       Value loadPred =
           targetInfo.shuffleIdx(rewriter, loc, maskElems[registerIdx], 0);
+      loadPred =
+          b.and_(loadPred, b.icmp_ule(offsetX, desc.shapes[/*row dim*/ 0]));
 
       auto createLoadWithAttrs = [&]() {
         return SmallVector<Value>{blockIO1D(rewriter, loc, {addrElem})};
