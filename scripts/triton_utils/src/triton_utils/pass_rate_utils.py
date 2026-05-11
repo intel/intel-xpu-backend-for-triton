@@ -459,8 +459,10 @@ class TestReport:
         if len(all_paths) == 0:
             raise ValueError(f"No junit xml found in the reports folder {search_folder}")
 
+        is_tutorial_report = (search_folder_path / "tutorials.xml").is_file()
         empty_subfolders = [
             folder for folder in search_folder_path.iterdir() if folder.is_dir() and not any(folder.glob("*.xml"))
+            and not (is_tutorial_report and re.match(r"\d{2}[a-z]?-", folder.name) and any(folder.glob("*.csv")))
         ]
         if len(empty_subfolders) > 0:
             print(
