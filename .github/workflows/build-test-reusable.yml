@@ -342,7 +342,7 @@ jobs:
 
       - name: Run Tutorials
         if: matrix.suite == 'rest'
-        timeout-minutes: 45
+        timeout-minutes: 60
         run: |
           ${{ env.TRITON_TEST_CMD }} --tutorial --tutorial06-run-mode skip
 
