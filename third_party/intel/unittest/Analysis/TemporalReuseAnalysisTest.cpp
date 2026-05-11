@@ -44,7 +44,9 @@ public:
     auto funcOp =
         func::FuncOp::create(builder->getUnknownLoc(), name, funcType);
     module.push_back(funcOp);
-    funcOp.addEntryBlock();
+    Block *entry = funcOp.addEntryBlock();
+    builder->setInsertionPointToEnd(entry);
+    func::ReturnOp::create(*builder, builder->getUnknownLoc());
     return funcOp;
   }
 
@@ -266,10 +268,11 @@ TEST_F(TemporalReuseAnalysisTest, StreamingPointerOneDim) {
   EXPECT_FALSE(reuseByDepth[0]); // Case C: pure streaming, no temporal reuse
 }
 
-// Test case 3: Load inside scf.for with pointer advancing along K axis only;
-// tensor has M and K axes. Expected: hasTemporalReuse == true (Case B — GEMM
-// A-operand)
-TEST_F(TemporalReuseAnalysisTest, PartialAxisStreaming) {
+// Test case 3: Load inside scf.for with tile [16, 32] and per-iteration
+// advance [0, 32]: axis-1 advance equals tile extent → tiles disjoint along
+// axis 1 → no reuse under axis-disjoint rule. (Note: old 'Case B' rule
+// incorrectly reported reuse on this pattern.)
+TEST_F(TemporalReuseAnalysisTest, KAxisDisjointAdvance) {
   ModuleOp module = buildModule();
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
@@ -334,10 +337,10 @@ TEST_F(TemporalReuseAnalysisTest, PartialAxisStreaming) {
   mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
   TemporalReuseAnalysis analysis(strideAnalysis);
 
-  EXPECT_TRUE(analysis.hasTemporalReuse(loadOp));
+  EXPECT_FALSE(analysis.hasTemporalReuse(loadOp));
   SmallVector<bool> reuseByDepth = analysis.getReuseByLoopDepth(loadOp);
   ASSERT_EQ(reuseByDepth.size(), 1u);
-  EXPECT_TRUE(reuseByDepth[0]); // Case B: K advances but M stays fixed
+  EXPECT_FALSE(reuseByDepth[0]); // Axis-1 disjoint (advance 32 == extent 32)
 }
 
 // Test case 4: Load outside any loop
@@ -655,13 +658,12 @@ TEST_F(TemporalReuseAnalysisTest, DescriptorGatherInvariant) {
   EXPECT_TRUE(reuseByDepth[0]); // Case A: loop-invariant descriptor
 }
 
-// tt.descriptor_load with a loop-invariant descriptor but an IV-derived
-// index operand.  Under the old (desc-only) classifier this reported
-// reuse because the descriptor is a function argument and lands in
-// Case A.  The corrected classifier also inspects `indices`, sees the
-// streaming IV-cast index, and reports no reuse.
-// Expected: hasTemporalReuse == false.
-TEST_F(TemporalReuseAnalysisTest, DescriptorLoadStreamingIndex) {
+// tt.descriptor_load with tile [64, 64] and yIdx advancing by 1 per
+// iteration on axis 1 (1 < 64) → tiles overlap on axis 1 → reuse.
+// Previously (under Case C 'any non-zero advance ⇒ streaming') this was
+// incorrectly classified as no-reuse — exactly the kind of misclassification
+// that drove the #6809 regression.
+TEST_F(TemporalReuseAnalysisTest, DescriptorLoadSmallYIndexAdvance) {
   ModuleOp module = buildModule();
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
@@ -697,17 +699,16 @@ TEST_F(TemporalReuseAnalysisTest, DescriptorLoadStreamingIndex) {
   mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
   TemporalReuseAnalysis analysis(strideAnalysis);
 
-  EXPECT_FALSE(analysis.hasTemporalReuse(loadOp));
+  EXPECT_TRUE(analysis.hasTemporalReuse(loadOp));
   SmallVector<bool> reuseByDepth = analysis.getReuseByLoopDepth(loadOp);
   ASSERT_EQ(reuseByDepth.size(), 1u);
-  EXPECT_FALSE(reuseByDepth[0]); // yIdx streams -> no reuse
+  EXPECT_TRUE(reuseByDepth[0]); // yIdx advances by 1, tile is 64 → reuse
 }
 
-// tt.descriptor_gather with a loop-invariant descriptor and xOffsets but
-// an IV-derived scalar y_offset.  Mirrors DescriptorLoadStreamingIndex
-// for the gather op: exercises the multi-operand classification path.
-// Expected: hasTemporalReuse == false.
-TEST_F(TemporalReuseAnalysisTest, DescriptorGatherStreamingYOffset) {
+// tt.descriptor_gather with tile [16, 32] and yOffset advancing by 1 per
+// iteration on axis 1 (1 < 32) → reuse. Same correctness improvement as
+// DescriptorLoadSmallYIndexAdvance — old rule false-negated.
+TEST_F(TemporalReuseAnalysisTest, DescriptorGatherSmallYOffsetAdvance) {
   ModuleOp module = buildModule();
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
@@ -749,10 +750,10 @@ TEST_F(TemporalReuseAnalysisTest, DescriptorGatherStreamingYOffset) {
   mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
   TemporalReuseAnalysis analysis(strideAnalysis);
 
-  EXPECT_FALSE(analysis.hasTemporalReuse(gatherOp));
+  EXPECT_TRUE(analysis.hasTemporalReuse(gatherOp));
   SmallVector<bool> reuseByDepth = analysis.getReuseByLoopDepth(gatherOp);
   ASSERT_EQ(reuseByDepth.size(), 1u);
-  EXPECT_FALSE(reuseByDepth[0]); // yOffset streams -> no reuse
+  EXPECT_TRUE(reuseByDepth[0]); // yOffset advances by 1, tile is 32 → reuse
 }
 
 // Test case 10: Load inside two-deep scf.for nest where outer loop is Case A
@@ -827,10 +828,11 @@ TEST_F(TemporalReuseAnalysisTest, TwoDeepNestStructuralQuery) {
   EXPECT_TRUE(reuseByDepth[1]);  // Outermost: loop-invariant (Case A)
 }
 
-// Test case 11: GEMM A-operand pattern (2D tensor with K-loop advancing along K
-// axis only, M axis stays constant). Expected: hasTemporalReuse == true, Case B
-// partial-axis reuse (M axis IV-stride is 0).
-TEST_F(TemporalReuseAnalysisTest, GEMMAOperandCaseB) {
+// Test case 11: GEMM A-operand single tt.load across the K-loop: tile [16, 32],
+// advance [0, 32]. Axis 1 (K) advance equals tile extent → disjoint K-blocks →
+// no within-workgroup temporal reuse for this single load. (The reuse exploited
+// by GEMM lives in warp-level spatial sharing, not temporal.)
+TEST_F(TemporalReuseAnalysisTest, GEMMASingleLoadDisjointK) {
   ModuleOp module = buildModule();
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
@@ -897,10 +899,279 @@ TEST_F(TemporalReuseAnalysisTest, GEMMAOperandCaseB) {
   mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
   TemporalReuseAnalysis analysis(strideAnalysis);
 
+  EXPECT_FALSE(analysis.hasTemporalReuse(loadOp));
+  SmallVector<bool> reuseByDepth = analysis.getReuseByLoopDepth(loadOp);
+  ASSERT_EQ(reuseByDepth.size(), 1u);
+  EXPECT_FALSE(reuseByDepth[0]); // Axis-1 disjoint (advance 32 == extent 32)
+}
+
+// Test case 12: All axes have small advance (1 < tile extent on every axis).
+// Targets #6809 regression mode: every axis advances by 1, tile 32x32. Old
+// 'Case C: any non-zero ⇒ streaming' rule misreported this as no-reuse and
+// triggered .cg bypass losing 5.8x performance. New rule correctly reports
+// reuse (1 < 32 on every axis).
+TEST_F(TemporalReuseAnalysisTest, AllAxesSmallAdvance) {
+  ModuleOp module = buildModule();
+  func::FuncOp funcOp = buildFunc(module);
+  builder->setInsertionPointToStart(&funcOp.getBody().front());
+
+  Type f16Ty = builder->getF16Type();
+  BlockArgument basePtr = addPtrArg(funcOp, f16Ty);
+
+  // Build scf.for
+  scf::ForOp forOp = buildScfFor(*builder, 0, 10, 1);
+  Value iv = forOp.getInductionVar();
+
+  // Build blocked encoding for 32x32 tile
+  SmallVector<unsigned> sizePerThread = {1, 1};
+  SmallVector<unsigned> threadsPerWarp = {2, 16};
+  SmallVector<unsigned> warpsPerCTA = {2, 2};
+  SmallVector<unsigned> order = {1, 0};
+  BlockedEncodingAttr blocked =
+      makeBlocked(sizePerThread, threadsPerWarp, warpsPerCTA, order);
+  auto resultTy = RankedTensorType::get({32, 32}, f16Ty, blocked);
+
+  // Splat base pointer
+  RankedTensorType ptrTensorTy = makePtrTensorType({32, 32}, f16Ty, blocked);
+  auto splatPtr =
+      SplatOp::create(*builder, builder->getUnknownLoc(), ptrTensorTy, basePtr);
+
+  // Splat IV to produce [iv, iv, ...] across all elements (advance [1, 1])
+  Type i64Ty = builder->getI64Type();
+  auto ivI64 =
+      arith::IndexCastOp::create(*builder, builder->getUnknownLoc(), i64Ty, iv);
+  auto strideTensorTy = RankedTensorType::get({32, 32}, i64Ty, blocked);
+  auto splatStride = SplatOp::create(*builder, builder->getUnknownLoc(),
+                                     strideTensorTy, ivI64);
+
+  // AddPtr: ptr = basePtr + splat(iv)
+  auto advancedPtr = AddPtrOp::create(*builder, builder->getUnknownLoc(),
+                                      ptrTensorTy, splatPtr, splatStride);
+
+  // Load
+  LoadOp loadOp = buildLoadOp(*builder, advancedPtr, resultTy);
+
+  scf::YieldOp::create(*builder, builder->getUnknownLoc());
+
+  // Analyze
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
+  mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  TemporalReuseAnalysis analysis(strideAnalysis);
+
   EXPECT_TRUE(analysis.hasTemporalReuse(loadOp));
   SmallVector<bool> reuseByDepth = analysis.getReuseByLoopDepth(loadOp);
   ASSERT_EQ(reuseByDepth.size(), 1u);
-  EXPECT_TRUE(reuseByDepth[0]); // Case B: M axis IV-stride is 0
+  EXPECT_TRUE(reuseByDepth[0]); // Every axis: 1 < 32 → reuse
+}
+
+// Test case 13: Partial-overlap half-tile advance. Tile [16, 32], advance
+// [0, 16]. Axis 0: 0 < 16 ✓. Axis 1: 16 < 32 ✓. Held → reuse. Sanity check
+// for partial-overlap reuse.
+TEST_F(TemporalReuseAnalysisTest, PartialOverlapHalfTile) {
+  ModuleOp module = buildModule();
+  func::FuncOp funcOp = buildFunc(module);
+  builder->setInsertionPointToStart(&funcOp.getBody().front());
+
+  Type f16Ty = builder->getF16Type();
+  BlockArgument basePtr = addPtrArg(funcOp, f16Ty);
+
+  // Build scf.for
+  scf::ForOp forOp = buildScfFor(*builder, 0, 10, 1);
+  Value iv = forOp.getInductionVar();
+
+  // Build K-only IV-dependent offset (advance [0, 16])
+  auto c16 =
+      arith::ConstantIndexOp::create(*builder, builder->getUnknownLoc(), 16);
+  auto kStride =
+      arith::MulIOp::create(*builder, builder->getUnknownLoc(), iv, c16);
+
+  Type i64Ty = builder->getI64Type();
+  auto kStrideI64 = arith::IndexCastOp::create(
+      *builder, builder->getUnknownLoc(), i64Ty, kStride);
+
+  // Splat to 1D K-only tensor<32xi64>
+  BlockedEncodingAttr blocked1D = makeBlocked({1}, {32}, {4}, {0});
+  auto ty1D = RankedTensorType::get({32}, i64Ty, blocked1D);
+  auto splat1D =
+      SplatOp::create(*builder, builder->getUnknownLoc(), ty1D, kStrideI64);
+
+  // expand_dims axis=0 -> tensor<1x32xi64>
+  BlockedEncodingAttr blocked2D_1x32 =
+      makeBlocked({1, 1}, {1, 32}, {1, 4}, {1, 0});
+  auto ty1x32 = RankedTensorType::get({1, 32}, i64Ty, blocked2D_1x32);
+  auto expanded = triton::ExpandDimsOp::create(
+      *builder, builder->getUnknownLoc(), ty1x32, splat1D, 0);
+
+  // broadcast to tensor<16x32xi64>
+  SmallVector<unsigned> sizePerThread = {1, 1};
+  SmallVector<unsigned> threadsPerWarp = {2, 16};
+  SmallVector<unsigned> warpsPerCTA = {2, 2};
+  SmallVector<unsigned> order = {1, 0};
+  BlockedEncodingAttr blocked =
+      makeBlocked(sizePerThread, threadsPerWarp, warpsPerCTA, order);
+  auto ty16x32 = RankedTensorType::get({16, 32}, i64Ty, blocked);
+  auto bcast = triton::BroadcastOp::create(*builder, builder->getUnknownLoc(),
+                                           ty16x32, expanded);
+
+  // Splat base pointer and addptr
+  RankedTensorType ptrTensorTy = makePtrTensorType({16, 32}, f16Ty, blocked);
+  auto splatPtr =
+      SplatOp::create(*builder, builder->getUnknownLoc(), ptrTensorTy, basePtr);
+  auto advancedPtr = AddPtrOp::create(*builder, builder->getUnknownLoc(),
+                                      ptrTensorTy, splatPtr, bcast);
+
+  // Load
+  auto resultTy = RankedTensorType::get({16, 32}, f16Ty, blocked);
+  LoadOp loadOp = buildLoadOp(*builder, advancedPtr, resultTy);
+
+  scf::YieldOp::create(*builder, builder->getUnknownLoc());
+
+  // Analyze
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
+  mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  TemporalReuseAnalysis analysis(strideAnalysis);
+
+  EXPECT_TRUE(analysis.hasTemporalReuse(loadOp));
+  SmallVector<bool> reuseByDepth = analysis.getReuseByLoopDepth(loadOp);
+  ASSERT_EQ(reuseByDepth.size(), 1u);
+  EXPECT_TRUE(reuseByDepth[0]); // 0 < 16, 16 < 32 → reuse
+}
+
+// Test case 14: Descending loop (scf.for step=-4) with tile [8]. IV-unit
+// stride 1 × step -4 = -4 per iteration; |-4| < 8 → reuse. Guards against
+// sign bug in |adv| handling. Note: must use negative step, not negative
+// multiplier — negative multipliers hit MulIOpStrideVisitor's
+// product-clamp-to-(-1) and become Unknown.
+TEST_F(TemporalReuseAnalysisTest, NegativeAdvanceDescendingLoop) {
+  ModuleOp module = buildModule();
+  func::FuncOp funcOp = buildFunc(module);
+  builder->setInsertionPointToStart(&funcOp.getBody().front());
+
+  Type f16Ty = builder->getF16Type();
+  BlockArgument basePtr = addPtrArg(funcOp, f16Ty);
+
+  // Build blocked encoding for 1D tile [8]
+  SmallVector<unsigned> sizePerThread = {1};
+  SmallVector<unsigned> threadsPerWarp = {32};
+  SmallVector<unsigned> warpsPerCTA = {4};
+  SmallVector<unsigned> order = {0};
+  BlockedEncodingAttr blocked =
+      makeBlocked(sizePerThread, threadsPerWarp, warpsPerCTA, order);
+  auto resultTy = RankedTensorType::get({8}, f16Ty, blocked);
+
+  // Splat base pointer
+  RankedTensorType ptrTensorTy = makePtrTensorType({8}, f16Ty, blocked);
+  auto splatPtr =
+      SplatOp::create(*builder, builder->getUnknownLoc(), ptrTensorTy, basePtr);
+
+  // Build descending scf.for: iv from 40 down to 0 step -4
+  auto lb =
+      arith::ConstantIndexOp::create(*builder, builder->getUnknownLoc(), 0);
+  auto ub =
+      arith::ConstantIndexOp::create(*builder, builder->getUnknownLoc(), 40);
+  auto step =
+      arith::ConstantIndexOp::create(*builder, builder->getUnknownLoc(), -4);
+  auto forOp = scf::ForOp::create(*builder, builder->getUnknownLoc(), ub, lb,
+                                  step, ValueRange{});
+
+  builder->setInsertionPointToStart(forOp.getBody());
+  Value iv = forOp.getInductionVar();
+
+  // Use IV directly (no multiplier) to get IV-unit stride 1
+  Type i64Ty = builder->getI64Type();
+  auto ivI64 =
+      arith::IndexCastOp::create(*builder, builder->getUnknownLoc(), i64Ty, iv);
+  auto strideTensorTy = RankedTensorType::get({8}, i64Ty, blocked);
+  auto splatStride = SplatOp::create(*builder, builder->getUnknownLoc(),
+                                     strideTensorTy, ivI64);
+
+  // AddPtr
+  auto advancedPtr = AddPtrOp::create(*builder, builder->getUnknownLoc(),
+                                      ptrTensorTy, splatPtr, splatStride);
+
+  // Load
+  LoadOp loadOp = buildLoadOp(*builder, advancedPtr, resultTy);
+
+  scf::YieldOp::create(*builder, builder->getUnknownLoc());
+
+  // Analyze
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
+  mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  TemporalReuseAnalysis analysis(strideAnalysis);
+
+  EXPECT_TRUE(analysis.hasTemporalReuse(loadOp));
+  SmallVector<bool> reuseByDepth = analysis.getReuseByLoopDepth(loadOp);
+  ASSERT_EQ(reuseByDepth.size(), 1u);
+  EXPECT_TRUE(reuseByDepth[0]); // |-4| < 8 → reuse
+}
+
+// Test case 15: Degenerate size-1 axis: tile [1, 16], advance [1, 0]. Axis 0
+// advance equals extent (1 >= 1) → disjoint → no reuse. Covers the corner
+// where a single element advances off the tile.
+TEST_F(TemporalReuseAnalysisTest, SizeOneAxisAnyAdvance) {
+  ModuleOp module = buildModule();
+  func::FuncOp funcOp = buildFunc(module);
+  builder->setInsertionPointToStart(&funcOp.getBody().front());
+
+  Type f16Ty = builder->getF16Type();
+  BlockArgument basePtr = addPtrArg(funcOp, f16Ty);
+
+  // Build scf.for
+  scf::ForOp forOp = buildScfFor(*builder, 0, 10, 1);
+  Value iv = forOp.getInductionVar();
+
+  // Build M-only IV-dependent offset (advance [1, 0] on tile [1, 16])
+  // Use splat to rank 1, then expand_dims to insert axis 0 as IV-dependent
+  Type i64Ty = builder->getI64Type();
+  auto ivI64 =
+      arith::IndexCastOp::create(*builder, builder->getUnknownLoc(), i64Ty, iv);
+
+  // Splat to 1D tensor<1xi64> (IV-stride [1])
+  BlockedEncodingAttr blocked1D = makeBlocked({1}, {1}, {4}, {0});
+  auto ty1 = RankedTensorType::get({1}, i64Ty, blocked1D);
+  auto splat1D =
+      SplatOp::create(*builder, builder->getUnknownLoc(), ty1, ivI64);
+
+  // expand_dims axis=1 -> tensor<1x1xi64>
+  BlockedEncodingAttr blocked2D_1x1 =
+      makeBlocked({1, 1}, {1, 1}, {4, 1}, {1, 0});
+  auto ty1x1 = RankedTensorType::get({1, 1}, i64Ty, blocked2D_1x1);
+  auto expanded = triton::ExpandDimsOp::create(
+      *builder, builder->getUnknownLoc(), ty1x1, splat1D, 1);
+
+  // broadcast to tensor<1x16xi64> (IV-stride [1, 0])
+  SmallVector<unsigned> sizePerThread = {1, 1};
+  SmallVector<unsigned> threadsPerWarp = {1, 16};
+  SmallVector<unsigned> warpsPerCTA = {1, 4};
+  SmallVector<unsigned> order = {1, 0};
+  BlockedEncodingAttr blocked =
+      makeBlocked(sizePerThread, threadsPerWarp, warpsPerCTA, order);
+  auto ty1x16 = RankedTensorType::get({1, 16}, i64Ty, blocked);
+  auto bcast = triton::BroadcastOp::create(*builder, builder->getUnknownLoc(),
+                                           ty1x16, expanded);
+
+  // Splat base pointer and addptr
+  RankedTensorType ptrTensorTy = makePtrTensorType({1, 16}, f16Ty, blocked);
+  auto splatPtr =
+      SplatOp::create(*builder, builder->getUnknownLoc(), ptrTensorTy, basePtr);
+  auto advancedPtr = AddPtrOp::create(*builder, builder->getUnknownLoc(),
+                                      ptrTensorTy, splatPtr, bcast);
+
+  // Load
+  auto resultTy = RankedTensorType::get({1, 16}, f16Ty, blocked);
+  LoadOp loadOp = buildLoadOp(*builder, advancedPtr, resultTy);
+
+  scf::YieldOp::create(*builder, builder->getUnknownLoc());
+
+  // Analyze
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
+  mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  TemporalReuseAnalysis analysis(strideAnalysis);
+
+  EXPECT_FALSE(analysis.hasTemporalReuse(loadOp));
+  SmallVector<bool> reuseByDepth = analysis.getReuseByLoopDepth(loadOp);
+  ASSERT_EQ(reuseByDepth.size(), 1u);
+  EXPECT_FALSE(reuseByDepth[0]); // Axis-0: 1 >= 1 → disjoint
 }
 
 } // namespace

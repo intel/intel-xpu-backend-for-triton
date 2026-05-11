@@ -480,12 +480,10 @@ FailureOr<LinearLayout> computeTransposeShuffleMapping(
 bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
                              unsigned elemSizeInBits,
                              RankedTensorType tensorType,
+                             bool oneMatrixPerLoadForBT,
                              AxisInfo *maskAxisInfo) {
-  // oneMatrixPerLoadForBT is not needed for validation — it only limits
-  // transpose tile expansion, which doesn't affect basic validity.
   auto sizeInfo = getBlockIOTileSize<true>(ll, memContiguousDim, elemSizeInBits,
-                                           maskAxisInfo,
-                                           /*oneMatrixPerLoadForBT=*/false);
+                                           maskAxisInfo, oneMatrixPerLoadForBT);
   if (!sizeInfo.isValid())
     return false;
 

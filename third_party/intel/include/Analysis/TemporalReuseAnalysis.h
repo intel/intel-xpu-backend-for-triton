@@ -14,44 +14,52 @@ namespace mlir::triton::gpu::intel {
 /// The analysis walks outward from each load through its enclosing loops.
 /// For each enclosing loop L (innermost first), it appends one bool to the
 /// result vector:
-///   * Case A — pointer loop-invariant w.r.t. L
-///     (`loop.isDefinedOutsideOfLoop(ptr)`). Report reuse.
-///   * Case B — some tensor axis has IV-stride 0 across L (partial-axis
-///     reuse; e.g. a GEMM A-operand's M axis is held while K advances).
+///   * Case A — operand is loop-invariant w.r.t. L
+///     (`loop.isDefinedOutsideOfLoop(v)`). Report reuse.
+///   * Case B (Held) — every axis has per-iteration advance strictly
+///     less than the tile extent on that axis.  Successive tiles
+///     overlap on every axis, so cache-line reuse is possible.
 ///     Report reuse.
-///   * Case C — every axis has positive IV-stride across L (pure
-///     streaming). Report no reuse.
+///   * Case C (Streaming) — at least one axis has per-iteration
+///     advance >= tile extent on that axis.  Successive tiles are
+///     disjoint on that axis, so no cache-line reuse exists.
+///     Report no reuse.
 ///
-/// Unknown handling (conservative): if `StrideInfo` has no per-loop
-/// IV-stride entry for this loop, or any axis has unknown IV-stride
-/// (StrideInfo sentinel -1, grouped with 0 via `s <= 0`), the operand is
-/// classified as "held" for L. Such loops therefore report reuse rather
-/// than streaming, which errs on the side of preserving loads the
-/// analysis cannot prove stream.
+/// Axis-disjoint rule origin: two axis-aligned tiles overlap iff their
+/// intervals overlap on every axis, and intervals overlap iff the
+/// shift is strictly less than the extent.
+///
+/// Advance is reported at element granularity via
+/// `StrideInfo::getPerIterationIVStride`, which folds in the loop's
+/// constant step.  Dynamic-step loops yield unknown advance and
+/// classify as Unknown (conservative reuse).  Sub-cache-line tiles
+/// may report false "no reuse" at tile edges — safe direction.
+///
+/// Unknown handling (conservative): if `StrideInfo` is absent for the
+/// operand, the loop has a dynamic (non-constant) step, any axis has
+/// unknown advance (StrideInfo sentinel -1), or the StrideInfo rank
+/// does not match the tile rank, the operand is classified as
+/// "unknown" (distinct from the "held" proof case) and `classify`
+/// conservatively reports reuse for L. This errs on the side of
+/// preserving loads the analysis cannot prove stream.
 ///
 /// `hasTemporalReuse` is the policy wrapper `any_of(getReuseByLoopDepth)`.
 ///
 /// Examples — load with reuse vs load without reuse:
 ///
-/// GEMM A-operand (reuse). Inside the K-loop, %a_tile reloads the same M rows
-/// at different K columns on every iteration; the tile stays on the M axis
-/// across iterations. hasTemporalReuse = true.
+/// Example — small-advance sliding access (reuse). Tile [32, 32],
+/// advance [1, 1] per iteration.  Successive tiles overlap on every
+/// axis; cache-line reuse is possible.  hasTemporalReuse = true.
 ///
-///   scf.for %k = %c0 to %K step %BK iter_args(%a_ptr = %a_ptr_init) {
-///     %a_tile = tt.load %a_ptr : tensor<BMxBK x !tt.ptr<f16>>
-///     %a_next = tt.addptr %a_ptr, %k_offsets
-///     scf.yield %a_next
-///   }
-///
-/// 1-D vector copy (no reuse). %ptr advances through distinct BS-element
-/// chunks on every iteration; every axis has positive IV-stride, so the
-/// analysis correctly reports no reuse.
-///
-///   scf.for %i = %c0 to %N step %BS iter_args(%ptr = %ptr_init) {
-///     %x = tt.load %ptr : tensor<BS x !tt.ptr<f32>>
-///     %next = tt.addptr %ptr, %bs_offsets
+///   scf.for %i = %c0 to %N step %c1 iter_args(%p = %p_init) {
+///     %t = tt.load %p : tensor<32x32 x !tt.ptr<f16>>
+///     %next = tt.addptr %p, %one_on_each_axis
 ///     scf.yield %next
 ///   }
+///
+/// Example — full-tile advance (no reuse). Same tile [32, 32] but
+/// advance [0, 32].  Axis-1 advance equals tile extent, so successive
+/// tiles cover disjoint columns.  hasTemporalReuse = false.
 class TemporalReuseAnalysis {
 public:
   explicit TemporalReuseAnalysis(
@@ -78,12 +86,14 @@ private:
   /// set of operands that contribute to the effective address of the load
   /// (e.g. the pointer for `tt.load`; the descriptor + all scalar/tensor
   /// index operands for `tt.descriptor_load` and `tt.descriptor_gather`).
-  /// A load has reuse at a given loop level iff every address-determining
-  /// operand is either loop-invariant or holds at least one tensor axis
-  /// fixed across iterations; conversely, if *any* operand advances along
-  /// every one of its axes, the effective address streams and the analysis
-  /// reports no reuse.
+  /// At each loop level, a load has reuse iff *every* address-determining
+  /// operand is `Invariant`, `Held`, or `Unknown`; if *any* operand is
+  /// `Streaming` (i.e. has at least one tile axis with per-iteration
+  /// advance >= that axis's tile extent), successive tiles are disjoint
+  /// on that axis and the analysis reports no reuse for the loop.
   SmallVector<bool> classify(Operation *op, ValueRange operands) const;
+
+  template <typename OpT> bool hasTemporalReuseImpl(OpT op) const;
 };
 
 } // namespace mlir::triton::gpu::intel

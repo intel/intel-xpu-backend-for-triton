@@ -1829,14 +1829,9 @@ public:
     if (!isBlockIOCandidate(op))
       return failure();
 
-    // FIXME: Remove once IGC can split large 2D block loads.
-    std::optional<bool> oneMatrixPerLoadForBT =
-        mlir::triton::tools::isEnvValueBool(mlir::triton::tools::getStrEnv(
-            "TRITON_INTEL_ONE_MATRIX_PER_LOAD_BT"));
-    if (!oneMatrixPerLoadForBT.has_value())
-      oneMatrixPerLoadForBT =
-          op->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
-                          getOneMatrixPerLoadAttrName());
+    bool oneMatrixPerLoadForBT =
+        op->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
+                        getOneMatrixPerLoadAttrName());
 
     // Get the max tile shape supported by the layout.
     Type resultType = op.getType();
@@ -1885,7 +1880,7 @@ public:
     } else {
       sizeInfo = getBlockIOTileSize<true /*load*/>(
           llEncoding.value(), contiguousDim, elemSizeInBits, maskAxisInfo,
-          oneMatrixPerLoadForBT.has_value() ? *oneMatrixPerLoadForBT : false);
+          oneMatrixPerLoadForBT);
     }
     if (!sizeInfo.isValid())
       return failure();
@@ -2243,16 +2238,12 @@ struct DescriptorLoadOpToBlockIOConversion
 
     // Tile size computation (no mask for descriptors).
     // FIXME: Remove once IGC can split large 2D block loads.
-    std::optional<bool> oneMatrixPerLoadForBT =
-        mlir::triton::tools::isEnvValueBool(mlir::triton::tools::getStrEnv(
-            "TRITON_INTEL_ONE_MATRIX_PER_LOAD_BT"));
-    if (!oneMatrixPerLoadForBT.has_value())
-      oneMatrixPerLoadForBT =
-          op->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
-                          getOneMatrixPerLoadAttrName());
+    bool oneMatrixPerLoadForBT =
+        op->hasAttr(triton::gpu::intel::TritonIntelGPUDialect::
+                        getOneMatrixPerLoadAttrName());
     BlockIOTileSizeInfo sizeInfo = getBlockIOTileSize<true /*load*/>(
         llEncoding.value(), contiguousDim, elemSizeInBits,
-        /*maskAxisInfo=*/nullptr, *oneMatrixPerLoadForBT);
+        /*maskAxisInfo=*/nullptr, oneMatrixPerLoadForBT);
     if (!sizeInfo.isValid())
       return failure();
 
@@ -4254,15 +4245,11 @@ struct Subgroup2DBlockLoadOpConversion
 
     // Tile size computation.
     // FIXME: Remove once IGC can split large 2D block loads.
-    std::optional<bool> oneMatrixPerLoadForBT =
-        mlir::triton::tools::isEnvValueBool(mlir::triton::tools::getStrEnv(
-            "TRITON_INTEL_ONE_MATRIX_PER_LOAD_BT"));
-    if (!oneMatrixPerLoadForBT.has_value())
-      oneMatrixPerLoadForBT =
-          op->hasAttr(TritonIntelGPUDialect::getOneMatrixPerLoadAttrName());
+    bool oneMatrixPerLoadForBT =
+        op->hasAttr(TritonIntelGPUDialect::getOneMatrixPerLoadAttrName());
     BlockIOTileSizeInfo sizeInfo = getBlockIOTileSize<true /*load*/>(
         llEncoding.value(), contiguousDim, elemSizeInBits,
-        /*maskAxisInfo=*/nullptr, *oneMatrixPerLoadForBT);
+        /*maskAxisInfo=*/nullptr, oneMatrixPerLoadForBT);
     assert(sizeInfo.isValid() && "expected valid tile size");
 
     int tileHeight = sizeInfo.tileHeight;
@@ -4518,12 +4505,8 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
 
     // Tile size computation.
     // FIXME: Remove once IGC can split large 2D block loads.
-    std::optional<bool> oneMatrixPerLoadForBT =
-        mlir::triton::tools::isEnvValueBool(mlir::triton::tools::getStrEnv(
-            "TRITON_INTEL_ONE_MATRIX_PER_LOAD_BT"));
-    if (!oneMatrixPerLoadForBT.has_value())
-      oneMatrixPerLoadForBT =
-          op->hasAttr(TritonIntelGPUDialect::getOneMatrixPerLoadAttrName());
+    bool oneMatrixPerLoadForBT =
+        op->hasAttr(TritonIntelGPUDialect::getOneMatrixPerLoadAttrName());
 
     AxisInfo *maskAxisInfo = nullptr;
     if (op.getMask())
@@ -4552,9 +4535,9 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
                                      /*colDim=*/rank - 1, /*transpose=*/false,
                                      std::move(regPackBases));
     } else {
-      sizeInfo = getBlockIOTileSize<true>(
-          *llEncoding, contiguousDim, elemSizeInBits, maskAxisInfo,
-          oneMatrixPerLoadForBT.has_value() ? *oneMatrixPerLoadForBT : false);
+      sizeInfo =
+          getBlockIOTileSize<true>(*llEncoding, contiguousDim, elemSizeInBits,
+                                   maskAxisInfo, oneMatrixPerLoadForBT);
     }
     if (!sizeInfo.isValid())
       return failure();
