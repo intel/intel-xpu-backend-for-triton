@@ -1,5 +1,9 @@
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <level_zero/ze_api.h>
+#include <stdexcept>
+#include <string>
 #include <sycl/sycl.hpp>
 
 extern "C" void waitOnSyclQueue(void *syclQueue) {
@@ -11,6 +15,56 @@ extern "C" void copyDeviceToHostAsync(void *syclQueue, void *dst,
                                       const void *src, size_t size) {
   sycl::queue *queue = static_cast<sycl::queue *>(syclQueue);
   queue->memcpy(dst, src, size);
+}
+
+extern "C" void allocateHostBuffer(void *syclQueue, uint8_t **buffer,
+                                   size_t size) {
+  sycl::queue *queue = static_cast<sycl::queue *>(syclQueue);
+  *buffer = static_cast<uint8_t *>(sycl::malloc_host(size, *queue));
+  if (*buffer == nullptr) {
+    throw std::runtime_error("[PROTON] sycl::malloc_host failed for size " +
+                             std::to_string(size));
+  }
+}
+
+extern "C" void freeHostBuffer(void *syclQueue, uint8_t *buffer) {
+  sycl::queue *queue = static_cast<sycl::queue *>(syclQueue);
+  sycl::free(buffer, *queue);
+}
+
+extern "C" void allocateDeviceBuffer(void *syclQueue, uint8_t **buffer,
+                                     size_t size) {
+  sycl::queue *queue = static_cast<sycl::queue *>(syclQueue);
+  *buffer = static_cast<uint8_t *>(sycl::malloc_device(size, *queue));
+  if (*buffer == nullptr) {
+    throw std::runtime_error("[PROTON] sycl::malloc_device failed for size " +
+                             std::to_string(size));
+  }
+}
+
+extern "C" void freeDeviceBuffer(void *syclQueue, uint8_t *buffer) {
+  sycl::queue *queue = static_cast<sycl::queue *>(syclQueue);
+  sycl::free(buffer, *queue);
+}
+
+extern "C" void memsetAsync(void *syclQueue, void *devicePtr, int32_t value,
+                            size_t size) {
+  sycl::queue *queue = static_cast<sycl::queue *>(syclQueue);
+  queue->memset(devicePtr, static_cast<unsigned char>(value), size);
+}
+
+extern "C" void synchronizeDevice(void *syclQueue) {
+  sycl::queue *queue = static_cast<sycl::queue *>(syclQueue);
+  queue->wait_and_throw();
+}
+
+// Returns the Level-Zero native device handle as a stable map key for
+// MetricBuffer's per-device buffer cache.
+extern "C" void *getDeviceKey(void *syclQueue) {
+  sycl::queue *queue = static_cast<sycl::queue *>(syclQueue);
+  auto native = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
+      queue->get_device());
+  return reinterpret_cast<void *>(native);
 }
 
 // FIXME: Should it be in DeviceInfo class?
