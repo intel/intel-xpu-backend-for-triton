@@ -5,6 +5,7 @@ add_triton_library(TritonIntelAnalysis
     Liveness.cpp
     SpatialReuseAnalysis.cpp
     StrideInfo.cpp
+    TemporalReuseAnalysis.cpp
     Membar.cpp
     Utility.cpp
     Range.cpp

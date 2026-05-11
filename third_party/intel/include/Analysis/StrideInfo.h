@@ -1,6 +1,7 @@
 #ifndef TRITON_INTEL_ANALYSIS_STRIDEINFO_H
 #define TRITON_INTEL_ANALYSIS_STRIDEINFO_H
 
+#include "mlir/Interfaces/LoopLikeInterface.h"
 #include "triton/Analysis/Utility.h"
 
 namespace mlir::triton::intel {
@@ -9,32 +10,86 @@ class ModuleAxisInfoAnalysis;
 
 /// Per-dimension stride tracked by StrideAnalysis.
 ///   -1 = unknown, 0 = broadcast/constant, >0 = known stride.
+///
+/// In addition to the spatial stride (how elements within a single loaded
+/// tile vary across tensor axes), StrideInfo also tracks a per-loop
+/// *temporal* stride — how a value's address shifts per **unit of IV
+/// increase** of a given `LoopLikeOpInterface`.  The IV-stride table is
+/// keyed by the enclosing loop op.  **An absent entry is the canonical
+/// and only encoding of "value does not depend on this loop's IV"** —
+/// all-zero vectors are never stored.  A present entry is guaranteed to
+/// carry at least one non-zero dimension.
+///
+/// NOTE on units: `getIVStride()` reports the delta per unit of IV, not
+/// per iteration.  To obtain the per-iteration address delta, multiply
+/// by the enclosing loop's step (when constant) — use
+/// `getPerIterationIVStride()`, which folds this in and returns
+/// `std::nullopt` for dynamic-step loops.  The native-unit convention
+/// keeps the column meaningful even when the step is not a compile-time
+/// constant, and mirrors the spatial column (which is also in native
+/// element units).
 class StrideInfo {
 public:
   using DimVectorT = SmallVector<int64_t>;
 
   StrideInfo() = default;
   explicit StrideInfo(ArrayRef<int64_t> stride) : stride(stride) {}
+  StrideInfo(DimVectorT spatial,
+             DenseMap<LoopLikeOpInterface, DimVectorT> ivStrides)
+      : stride(std::move(spatial)), ivStrides(std::move(ivStrides)) {}
 
+  /// Spatial stride along `dim`: how many elements apart consecutive lanes
+  /// along that tensor axis are within a single loaded tile.  Values follow
+  /// the lattice convention: -1 = unknown, 0 = broadcast/constant along the
+  /// axis, >0 = known element-count stride.
   int64_t getStride(size_t dim) const { return stride[dim]; }
+
+  /// Full per-axis spatial-stride vector.  Size matches `getRank()`.
   const DimVectorT &getStride() const { return stride; }
+
   unsigned getRank() const { return stride.size(); }
 
   bool operator==(const StrideInfo &other) const {
-    return stride == other.stride;
+    return stride == other.stride && ivStrides == other.ivStrides;
   }
 
   static StrideInfo getPessimisticValueState(Value value);
   static StrideInfo join(const StrideInfo &lhs, const StrideInfo &rhs);
 
-  void print(raw_ostream &os) const {
-    os << "stride = [";
-    llvm::interleaveComma(stride, os);
-    os << "]";
+  void print(raw_ostream &os) const;
+
+  /// Temporal stride of this value along `dim` with respect to `loop`'s IV,
+  /// in IV units (delta per unit of IV increase).  Returns 0 when `loop` is
+  /// not tracked for this value (the consumer interprets "not tracked" as
+  /// "does not depend on this loop's IV", which is correct for values
+  /// defined outside the loop and is the conservative answer for values
+  /// we have not yet propagated into).
+  int64_t getIVStride(LoopLikeOpInterface loop, size_t dim) const;
+
+  /// Full per-axis IV-unit stride vector for `loop`.  Returns `nullptr` iff
+  /// the value does not depend on `loop`'s IV.  A non-null result is
+  /// guaranteed to have at least one non-zero dimension (asserted).
+  const DimVectorT *getIVStride(LoopLikeOpInterface loop) const;
+
+  /// Per-iteration address delta along `dim` with respect to `loop`.
+  /// Equivalent to `getIVStride(loop, dim) * loop.step` when the step is
+  /// a compile-time constant.  Returns `std::nullopt` when the step is
+  /// dynamic, when the underlying IV-unit stride is unknown (-1), or when
+  /// the constant-step multiplication would overflow `int64_t`.  Callers
+  /// that need a concrete per-iteration delta should use this helper
+  /// instead of multiplying by the step manually.
+  std::optional<int64_t> getPerIterationIVStride(LoopLikeOpInterface loop,
+                                                 size_t dim) const;
+
+  /// Enumerate the loops with tracked IV-stride columns.  Used by visitors
+  /// to fold over both operands' loop sets.
+  const DenseMap<LoopLikeOpInterface, DimVectorT> &getIVStrides() const {
+    return ivStrides;
   }
 
 private:
-  DimVectorT stride;
+  DimVectorT stride;                                   // spatial
+  DenseMap<LoopLikeOpInterface, DimVectorT> ivStrides; // per-loop IV
 };
 
 using StrideInfoMapT = DenseMap<Value, StrideInfo>;
