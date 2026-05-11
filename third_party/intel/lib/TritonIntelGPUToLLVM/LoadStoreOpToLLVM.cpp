@@ -40,6 +40,116 @@ using namespace mlir::triton::gpu::intel;
 
 namespace {
 
+enum LSC_DATA_SIZE {
+  LSC_DATA_SIZE_INVALID,
+  LSC_DATA_SIZE_8b,  // DATA:u8...
+  LSC_DATA_SIZE_16b, // DATA:u16...
+  LSC_DATA_SIZE_32b, // DATA:u32...
+  LSC_DATA_SIZE_64b, // DATA:u64...
+                     // data types supporting conversion on load
+  // 8c32b reads load (8) bits, (c)onvert to (32) bits (zero extending)
+  // store truncates
+  //
+  // In DG2 and PVC the upper bits are undefined.
+  // XE2+ makes them zeros.
+  LSC_DATA_SIZE_8c32b,   // DATA:u8c32...   (zero-extend / truncate)
+  LSC_DATA_SIZE_16c32b,  // DATA:u16c32..   (zero-extend / truncate)
+  LSC_DATA_SIZE_16c32bH, // DATA:u16c32h..  h means load to (h)igh 16
+                         // data stored in upper 16; zero-fills bottom 16
+                         // (bfloat raw conversion to 32b float)
+};
+
+// The number of elements per address ("vector" size)
+enum LSC_DATA_ELEMS {
+  LSC_DATA_ELEMS_INVALID,
+  LSC_DATA_ELEMS_1,  // DATA:..x1
+  LSC_DATA_ELEMS_2,  // DATA:..x2
+  LSC_DATA_ELEMS_3,  // DATA:..x3
+  LSC_DATA_ELEMS_4,  // DATA:..x4
+  LSC_DATA_ELEMS_8,  // DATA:..x8
+  LSC_DATA_ELEMS_16, // DATA:..x16
+  LSC_DATA_ELEMS_32, // DATA:..x32
+  LSC_DATA_ELEMS_64, // DATA:..x64
+};
+
+static unsigned get1DBlockIODataSize(unsigned elemSizeInBits) {
+  switch (elemSizeInBits) {
+  case 8:
+    return LSC_DATA_SIZE_8b;
+  case 16:
+    return LSC_DATA_SIZE_16b;
+  case 32:
+    return LSC_DATA_SIZE_32b;
+  case 64:
+    return LSC_DATA_SIZE_64b;
+  default:
+    llvm_unreachable("unsupported element size for block IO");
+  }
+};
+
+static unsigned get1DBlockIOVectorSize(unsigned vecSize) {
+  switch (vecSize) {
+  case 1:
+    return LSC_DATA_ELEMS_1;
+  case 2:
+    return LSC_DATA_ELEMS_2;
+  case 3:
+    return LSC_DATA_ELEMS_3;
+  case 4:
+    return LSC_DATA_ELEMS_4;
+  case 8:
+    return LSC_DATA_ELEMS_8;
+  case 16:
+    return LSC_DATA_ELEMS_16;
+  case 32:
+    return LSC_DATA_ELEMS_32;
+  case 64:
+    return LSC_DATA_ELEMS_64;
+  default:
+    llvm_unreachable("unsupported element size for block IO");
+  }
+};
+
+Value maybeAnd(RewriterBase &rewriter, Location loc, Value a, Value b) {
+  auto tb = TritonLLVMOpBuilder(loc, rewriter);
+  if (a && b) {
+    return tb.and_(a, b);
+  }
+  return a ? a : b;
+}
+
+// Return a predicate that is true only if the current thread holds unique data,
+// according to freeVarsMask. The predicate may be null to indicate no
+// predication is required.
+Value emitRedundantThreadPredicate(
+    const llvm::MapVector<StringAttr, int32_t> &freeVarMasks,
+    ConversionPatternRewriter &rewriter, Location loc,
+    const triton::intel::TargetInfo &targetInfo) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto ctx = rewriter.getContext();
+  auto kLane = str_attr("lane");
+  auto kWarp = str_attr("warp");
+  auto kBlock = str_attr("block");
+
+  Value zero = b.i32_val(0);
+  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+  Value blockId = freeVarMasks.lookup(kBlock) == 0
+                      ? zero
+                      : targetInfo.getClusterCTAId(rewriter, loc);
+
+  Value pred;
+  auto dimNames = {kLane, kWarp, kBlock};
+  auto dimIds = {laneId, warpId, blockId};
+  for (auto [dimName, dimId] : llvm::zip(dimNames, dimIds)) {
+    int32_t mask = freeVarMasks.lookup(dimName);
+    if (mask != 0) {
+      auto dimPred = b.icmp_eq(b.and_(dimId, b.i32_val(mask)), zero);
+      pred = maybeAnd(rewriter, loc, pred, dimPred);
+    }
+  }
+  return pred;
+}
+
 unsigned getCanonicalIndex(unsigned index, unsigned freeVarMask) {
   return index & ~freeVarMask;
 }
@@ -495,8 +605,10 @@ struct LoadStoreConversionBase {
   //   EVICT_LAST  -> L1C_L3C    (cache at all levels: keep the line warm for
   //                              anticipated reuse)
   //   NORMAL      -> DEFAULT    (let the hardware decide)
-  template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
-                                 OpType, LoadOp, DescriptorLoadOp>::value>>
+  template <typename OpType,
+            typename = std::enable_if_t<llvm::is_one_of<
+                OpType, LoadOp, DescriptorLoadOp,
+                triton::gpu::intel::DescriptorGatherPrefetchOp>::value>>
   TritonGEN::LoadCacheControl tritonToIntelCacheModifier(OpType &op) const {
     CacheModifier cacheModifier = op.getCache();
 
@@ -1230,6 +1342,55 @@ struct BlockIOTileSizeInfo {
                       b.icmp_ult(adjustedOffset, shapes[dim]));
     }
   }
+};
+
+struct DescriptorGatherIOConversionBase : public BlockIOConversionBase {
+  using BlockIOConversionBase::BlockIOConversionBase;
+
+  // the block read can do 256 bytes
+  static constexpr unsigned MAX_1D_BLOCK_IO_BITS_NUM = 256 * 32;
+
+#if 0
+  std::tuple<SmallVector<Value>, SmallVector<Value>, SmallVector<Value>>
+  convertTensorDescriptorToTensorOfPtr(
+      Location loc, Value descriptorStruct, ValueRange indices,
+      unsigned gatherDim, RankedTensorType tensorType, unsigned descriptorRank,
+      Type valueElemTy, ConversionPatternRewriter &rewriter,
+      ArrayRef<int32_t> boundaryCheck = {},
+      std::optional<PaddingOption> padding = std::nullopt) const {
+
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    DescriptorFields desc =
+        unpackDescriptor(descriptorStruct, descriptorRank, loc, rewriter);
+    const size_t rank = tensorType.getRank();
+    assert(descriptorRank >= rank &&
+           "descriptor rank must be >= result/source tensor rank");
+    const size_t rankDelta = descriptorRank - rank;
+
+    SmallVector<Value> offsets;
+    offsets.reserve(rank);
+    if (indices.size() == descriptorRank) {
+      for (size_t i = 0; i < rank; ++i)
+        offsets.push_back(indices[i + rankDelta]);
+    } else {
+      assert(indices.size() == rank && "unexpected descriptor indices rank");
+      offsets.append(indices.begin(), indices.end());
+    }
+
+    SmallVector<Value> mappedShapes(rank), mappedStrides(rank);
+    for (size_t i = 0; i < rank; ++i) {
+      mappedShapes[i] = desc.shapes[i + rankDelta];
+      if (gatherDim == i)
+        mappedStrides[i] = b.i64_val(0);
+      else
+        mappedStrides[i] = desc.strides[i + rankDelta];
+    }
+
+    return computeGatherScatterOperands(loc, desc.base, offsets, mappedShapes,
+                                        mappedStrides, tensorType, valueElemTy,
+                                        rewriter, boundaryCheck, padding);
+  }
+#endif
 };
 
 // Compute the 2D prefetch tile shape and warp tiling for cooperative
@@ -2258,6 +2419,218 @@ struct DescriptorPrefetchOpConversion
   }
 };
 
+struct DescriptorGatherPrefetchOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<
+          triton::gpu::intel::DescriptorGatherPrefetchOp>,
+      public DescriptorGatherIOConversionBase {
+  using ConvertTritonGPUOpToLLVMPattern<
+      triton::gpu::intel::DescriptorGatherPrefetchOp>::
+      ConvertTritonGPUOpToLLVMPattern;
+
+  DescriptorGatherPrefetchOpConversion(
+      LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
+      const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
+      triton::intel::ModuleStrideAnalysis &strideAnalysis,
+      PatternBenefit benefit)
+      : ConvertTritonGPUOpToLLVMPattern<
+            triton::gpu::intel::DescriptorGatherPrefetchOp>(converter, benefit),
+        DescriptorGatherIOConversionBase(targetInfo, axisAnalysisPass,
+                                         strideAnalysis) {}
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::intel::DescriptorGatherPrefetchOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+    LogicalResult res =
+        rewriteTensorDescriptorGatherPrefetch(op, adaptor, rewriter);
+
+    // Mirror DescriptorPrefetchOpConversion: prefetch is a hint, so if we can't
+    // lower it, erase it instead of failing the whole pipeline.
+    if (failed(res)) {
+      op.emitWarning("Descriptor gather prefetch operation could not be "
+                     "converted to LLVM. "
+                     "The operation was erased.");
+      rewriter.eraseOp(op);
+    }
+
+    return success();
+  }
+
+private:
+  LogicalResult rewriteTensorDescriptorGatherPrefetch(
+      triton::gpu::intel::DescriptorGatherPrefetchOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const {
+    Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto *typeConverter = getTypeConverter();
+    MLIRContext *ctx = rewriter.getContext();
+
+    Attribute blockIOAttr =
+        op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
+    if (!blockIOAttr) {
+      return failure();
+    }
+    assert(symbolizeBlockIOMode(cast<StringAttr>(blockIOAttr).getValue()) ==
+               BlockIOMode::RowMajor &&
+           "TDESC gather has to be row_major");
+
+    // Unpack descriptor and figure out element type / rank.
+    auto descType = cast<triton::TensorDescType>(op.getDesc().getType());
+    RankedTensorType descTensorType = descType.getBlockType();
+    unsigned descRank = descTensorType.getRank();
+
+    RankedTensorType refType = descTensorType;
+    Type eltTy = typeConverter->convertType(refType.getElementType());
+    unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
+    unsigned blockWidth = refType.getShape()[descRank - 1];
+    unsigned threadsPerWarp =
+        TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());
+    unsigned prefetchBitsNumTotal =
+        std::min(blockWidth * elemSizeInBits, MAX_1D_BLOCK_IO_BITS_NUM);
+    unsigned prefetchBitsNum =
+        std::min(prefetchBitsNumTotal / threadsPerWarp, 32u);
+    unsigned prefetchVecSize =
+        (prefetchBitsNumTotal / threadsPerWarp) / prefetchBitsNum;
+    unsigned prefetchOpsNumPerRow =
+        (blockWidth * elemSizeInBits) / prefetchBitsNumTotal;
+    // llvm::outs() << "johnlu blockWidth:" << blockWidth << "\n";
+    // llvm::outs() << "johnlu elemSizeInBits:" << elemSizeInBits << "\n";
+    // llvm::outs() << "johnlu threadsPerWarp:" << threadsPerWarp << "\n";
+    // llvm::outs() << "johnlu prefetchBitsNum:" << prefetchBitsNum << "\n";
+    // llvm::outs() << "johnlu prefetchVecSize:" << prefetchVecSize << "\n";
+    // llvm::outs() << "johnlu prefetchOpsNumPerRow:" << prefetchOpsNumPerRow <<
+    // "\n";
+
+    auto offsetXType = dyn_cast<RankedTensorType>(op.getXOffsets().getType());
+    auto encoding = offsetXType.getEncoding();
+    std::optional<LinearLayout> llEncoding =
+        cast<DistributedEncodingTrait>(encoding).toLinearLayout(
+            offsetXType.getShape());
+    assert(llEncoding.has_value() &&
+           "unexpected failure when getting linear layout");
+    // llvm::outs() << "johnlu encoding:" << encoding << "\n";
+    // llvm::outs() << "johnlu llEncoding: " << llEncoding << "\n";
+
+    const LinearLayout::BasesT &bases = llEncoding->getBases();
+    auto getBase = [&](const std::string &inDim) {
+      for (const auto &base : bases) {
+        StringAttr attr = base.first;
+        if (attr.getValue().compare(inDim) == 0)
+          return base.second;
+      }
+      llvm_unreachable(("Could not find the input dim:" + inDim +
+                        ", on the ll:" + llEncoding->toString())
+                           .c_str());
+    };
+    const auto &warpBases = getBase("warp");
+    std::vector<std::vector<int>> warpMappingBases(warpBases.size());
+    const auto &regBases = getBase("register");
+    unsigned prefetchRowsNum = 0x1 << regBases.size();
+    int numWarpsM = 1, numWarpsN = 1;
+
+    for (size_t i = 0; i < warpBases.size(); i++) {
+      if (warpBases[i][/*row dim*/ 0] == 0) {
+        if (numWarpsM < prefetchRowsNum) {
+          warpMappingBases[i] = {numWarpsM, 0};
+          numWarpsM <<= 1;
+          continue;
+        } else if (numWarpsN < prefetchOpsNumPerRow) {
+          warpMappingBases[i] = {numWarpsN, 0};
+          numWarpsN <<= 1;
+          continue;
+        }
+      }
+
+      warpMappingBases[i] = {0, 0};
+    }
+    StringAttr kWarp = str_attr("warp");
+    LinearLayout warpMapping(
+        {{kWarp, warpMappingBases}},
+        {{str_attr("dim0"), numWarpsM}, {str_attr("dim1"), numWarpsN}},
+        /*requireSurjective=*/false);
+    // llvm::outs() << "johnlu warpMapping: " << warpMapping << "\n";
+
+    unsigned prefetchRowsNumPerWarp =
+        mlir::ceil(prefetchRowsNum, (unsigned)numWarpsM);
+    unsigned prefetchColsNumPerWarp =
+        mlir::ceil(prefetchOpsNumPerRow, (unsigned)numWarpsN);
+    // llvm::outs() << "johnlu numWarpsM: " << numWarpsM << "\n";
+    // llvm::outs() << "johnlu numWarpsN: " << numWarpsN << "\n";
+    // llvm::outs() << "johnlu prefetchRowsNumPerWarp: " <<
+    // prefetchRowsNumPerWarp << "\n"; llvm::outs() << "johnlu
+    // prefetchColsNumPerWarp: " << prefetchColsNumPerWarp << "\n";
+
+    SmallVector<Value> offsetsX =
+        unpackLLElements(loc, adaptor.getXOffsets(), rewriter);
+    VectorType offsetXVecType = vec_ty(offsetsX[0].getType(), offsetsX.size());
+    Value offsetXVec = b.undef(offsetXVecType);
+    for (size_t i = 0; i < offsetsX.size(); i++) {
+      Value indexVal =
+          LLVM::createIndexConstant(rewriter, loc, typeConverter, i);
+      offsetXVec = b.insert_element(offsetXVec, offsetsX[i], indexVal);
+    }
+    DescriptorFields desc =
+        unpackDescriptor(adaptor.getDesc(), descRank, loc, rewriter);
+    Value baseAddress = desc.base;
+    // update offset Y.
+    baseAddress =
+        b.gep(ptr_ty(ctx, 1), eltTy, baseAddress, adaptor.getYOffset());
+
+    Intrinsic blockIO1D =
+        GenISA<llvm::GenISAIntrinsic::ID::GenISA_LSCSimdBlockPrefetch>(
+            rewriter,
+            mlir::LLVM::LLVMPointerType::get(
+                ctx, TritonGEN::TritonGENMemorySpace::kCrossWorkgroup));
+    Value warpId = arith::IndexCastOp::create(
+        rewriter, loc, i32_ty,
+        mlir::gpu::SubgroupIdOp::create(rewriter, loc,
+                                        /*upperBound=*/nullptr));
+    for (size_t row = 0; row < prefetchColsNumPerWarp; row++) {
+      Value addrElem = targetInfo.shuffleIdx(rewriter, loc, baseAddress, 0);
+      // update offset X.
+      auto offsets =
+          applyLinearLayout(loc, rewriter, warpMapping, {{kWarp, warpId}});
+      Value offsetXIdx = b.add(offsets[0].second, b.i32_val(row * numWarpsM));
+      Value offsetX =
+          b.zext(int_ty(64), b.extract_element(offsetXVec, offsetXIdx));
+      Value pred = b.icmp_ule(offsetX, desc.shapes[/*row dim*/ 0]);
+      Value offsetXStrided = b.mul(offsetX, desc.strides[/*row dim*/ 0]);
+      addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, offsetXStrided);
+      // update offset Y.
+      Value offsetY =
+          b.mul(offsets[1].second,
+                b.i32_val(prefetchBitsNum * prefetchVecSize / elemSizeInBits));
+      pred = b.and_(pred, b.icmp_ule(b.zext(int_ty(64), offsetY),
+                                     desc.shapes[/*row dim*/ 1]));
+      addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, offsetY);
+
+      for (size_t col = 0; col < prefetchOpsNumPerRow; col++) {
+        addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem,
+                         b.i32_val(col * (numWarpsN * prefetchBitsNum *
+                                          prefetchVecSize / elemSizeInBits)));
+        addrElem = b.bitcast(addrElem, ptr_ty(ctx, 1 /*global*/));
+        auto createLoadWithAttrs = [&]() {
+          blockIO1D(
+              rewriter, loc,
+              {addrElem,
+               /*data size*/ b.i32_val(get1DBlockIODataSize(prefetchBitsNum)),
+               /*vector size*/
+               b.i32_val(get1DBlockIOVectorSize(prefetchVecSize)),
+               /*cache controls*/
+               b.i32_val(static_cast<int>(tritonToIntelCacheModifier(op)))});
+          return SmallVector<Value>{};
+        };
+
+        Block &endBlock = LLVM::intel::createPredicatedBlock(
+            rewriter, loc, pred, createLoadWithAttrs);
+      }
+    }
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 struct LoadOpToBlockIOConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>,
       public BlockIOConversionBase {
@@ -2273,77 +2646,6 @@ struct LoadOpToBlockIOConversion
       PatternBenefit benefit)
       : ConvertTritonGPUOpToLLVMPattern<triton::LoadOp>(converter, benefit),
         BlockIOConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
-
-public:
-  enum LSC_DATA_SIZE {
-    LSC_DATA_SIZE_INVALID,
-    LSC_DATA_SIZE_8b,  // DATA:u8...
-    LSC_DATA_SIZE_16b, // DATA:u16...
-    LSC_DATA_SIZE_32b, // DATA:u32...
-    LSC_DATA_SIZE_64b, // DATA:u64...
-                       // data types supporting conversion on load
-    // 8c32b reads load (8) bits, (c)onvert to (32) bits (zero extending)
-    // store truncates
-    //
-    // In DG2 and PVC the upper bits are undefined.
-    // XE2+ makes them zeros.
-    LSC_DATA_SIZE_8c32b,   // DATA:u8c32...   (zero-extend / truncate)
-    LSC_DATA_SIZE_16c32b,  // DATA:u16c32..   (zero-extend / truncate)
-    LSC_DATA_SIZE_16c32bH, // DATA:u16c32h..  h means load to (h)igh 16
-                           // data stored in upper 16; zero-fills bottom 16
-                           // (bfloat raw conversion to 32b float)
-  };
-
-  // The number of elements per address ("vector" size)
-  enum LSC_DATA_ELEMS {
-    LSC_DATA_ELEMS_INVALID,
-    LSC_DATA_ELEMS_1,  // DATA:..x1
-    LSC_DATA_ELEMS_2,  // DATA:..x2
-    LSC_DATA_ELEMS_3,  // DATA:..x3
-    LSC_DATA_ELEMS_4,  // DATA:..x4
-    LSC_DATA_ELEMS_8,  // DATA:..x8
-    LSC_DATA_ELEMS_16, // DATA:..x16
-    LSC_DATA_ELEMS_32, // DATA:..x32
-    LSC_DATA_ELEMS_64, // DATA:..x64
-  };
-
-  static unsigned get1DBlockIODataSize(unsigned elemSizeInBits) {
-    switch (elemSizeInBits) {
-    case 8:
-      return LSC_DATA_SIZE_8b;
-    case 16:
-      return LSC_DATA_SIZE_16b;
-    case 32:
-      return LSC_DATA_SIZE_32b;
-    case 64:
-      return LSC_DATA_SIZE_64b;
-    default:
-      llvm_unreachable("unsupported element size for block IO");
-    }
-  };
-
-  static unsigned get1DBlockIOVectorSize(unsigned vecSize) {
-    switch (vecSize) {
-    case 1:
-      return LSC_DATA_ELEMS_1;
-    case 2:
-      return LSC_DATA_ELEMS_2;
-    case 3:
-      return LSC_DATA_ELEMS_3;
-    case 4:
-      return LSC_DATA_ELEMS_4;
-    case 8:
-      return LSC_DATA_ELEMS_8;
-    case 16:
-      return LSC_DATA_ELEMS_16;
-    case 32:
-      return LSC_DATA_ELEMS_32;
-    case 64:
-      return LSC_DATA_ELEMS_64;
-    default:
-      llvm_unreachable("unsupported element size for block IO");
-    }
-  };
 
   LogicalResult
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
@@ -3274,7 +3576,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
 
 struct DescriptorGatherOpConversion
     : public ConvertOpToLLVMPattern<mlir::triton::gpu::intel::DescriptorGatherOp>,
-      public BlockIOConversionBase {
+      public DescriptorGatherIOConversionBase {
   using ConvertOpToLLVMPattern<
       mlir::triton::gpu::intel::DescriptorGatherOp>::ConvertOpToLLVMPattern;
 
@@ -3284,7 +3586,7 @@ struct DescriptorGatherOpConversion
       triton::intel::ModuleStrideAnalysis &strideAnalysis,
       PatternBenefit benefit)
       : ConvertOpToLLVMPattern<mlir::triton::gpu::intel::DescriptorGatherOp>(converter, benefit),
-        BlockIOConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
+        DescriptorGatherIOConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
 
   LogicalResult
   matchAndRewrite(mlir::triton::gpu::intel::DescriptorGatherOp op,
@@ -3296,7 +3598,7 @@ struct DescriptorGatherOpConversion
     MLIRContext *ctx = rewriter.getContext();
     // Get the descriptor and indices
     Value llDesc = adaptor.getDesc();
-    SmallVector<Value> offsetX =
+    SmallVector<Value> offsetsX =
         unpackLLElements(loc, adaptor.getXOffsets(), rewriter);
     RankedTensorType offXTy = op.getXOffsets().getType();
     std::optional<LinearLayout> offsetsXLLEncoding =
@@ -3908,17 +4210,16 @@ struct DescriptorGatherOpConversion
       addrElem = b.bitcast(addrElem, ptr_ty(ctx, 1 /*global*/));
 
       // update offset X.
-      {
-        auto offsets = llEncoding->apply(
-            {{kRegister, registerIdx}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
-        for (auto [dim, offsetIdx] : offsets) {
-          if (dim == str_attr("dim0")) {
-            Value offset64 = b.zext(
-                int_ty(64), b.mul(offsetX[offsetIdx],
-                                  b.trunc(i32_ty, desc.strides[rowDim])));
-            addrElem = b.gep(ptr_ty(ctx, 1), valueElemTy, addrElem, offset64);
-            break;
-          }
+      Value offsetX;
+      auto offsets = llEncoding->apply(
+          {{kRegister, registerIdx}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+
+      for (auto [dim, offsetIdx] : offsets) {
+        if (dim == str_attr("dim0")) {
+          offsetX = b.zext(int_ty(64), offsetsX[offsetIdx]);
+          Value offset64 = b.mul(offsetX, desc.strides[rowDim]);
+          addrElem = b.gep(ptr_ty(ctx, 1), valueElemTy, addrElem, offset64);
+          break;
         }
       }
 
@@ -3926,6 +4227,8 @@ struct DescriptorGatherOpConversion
       // DescriptorLoadOp since we always do boundary checking)
       Value loadPred =
           targetInfo.shuffleIdx(rewriter, loc, maskElems[registerIdx], 0);
+      loadPred =
+          b.and_(loadPred, b.icmp_ule(offsetX, desc.shapes[/*row dim*/ 0]));
 
       auto createLoadWithAttrs = [&]() {
         return SmallVector<Value>{blockIO1D(rewriter, loc, {addrElem})};
@@ -3950,46 +4253,6 @@ struct DescriptorGatherOpConversion
                                         rewriter, llvmResultStructTy);
     rewriter.replaceOp(op, {resultStruct});
     return success();
-  }
-
-  std::tuple<SmallVector<Value>, SmallVector<Value>, SmallVector<Value>>
-  convertTensorDescriptorToTensorOfPtr(
-      Location loc, Value descriptorStruct, ValueRange indices,
-      unsigned gatherDim, RankedTensorType tensorType, unsigned descriptorRank,
-      Type valueElemTy, ConversionPatternRewriter &rewriter,
-      ArrayRef<int32_t> boundaryCheck = {},
-      std::optional<PaddingOption> padding = std::nullopt) const {
-
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    DescriptorFields desc =
-        unpackDescriptor(descriptorStruct, descriptorRank, loc, rewriter);
-    const size_t rank = tensorType.getRank();
-    assert(descriptorRank >= rank &&
-           "descriptor rank must be >= result/source tensor rank");
-    const size_t rankDelta = descriptorRank - rank;
-
-    SmallVector<Value> offsets;
-    offsets.reserve(rank);
-    if (indices.size() == descriptorRank) {
-      for (size_t i = 0; i < rank; ++i)
-        offsets.push_back(indices[i + rankDelta]);
-    } else {
-      assert(indices.size() == rank && "unexpected descriptor indices rank");
-      offsets.append(indices.begin(), indices.end());
-    }
-
-    SmallVector<Value> mappedShapes(rank), mappedStrides(rank);
-    for (size_t i = 0; i < rank; ++i) {
-      mappedShapes[i] = desc.shapes[i + rankDelta];
-      if (gatherDim == i)
-        mappedStrides[i] = b.i64_val(0);
-      else
-        mappedStrides[i] = desc.strides[i + rankDelta];
-    }
-
-    return computeGatherScatterOperands(loc, desc.base, offsets, mappedShapes,
-                                        mappedStrides, tensorType, valueElemTy,
-                                        rewriter, boundaryCheck, padding);
   }
 };
 
@@ -6283,7 +6546,8 @@ void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
   patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
                DescriptorLoadOpConversion, StoreOpConversion,
                DescriptorStoreOpConversion, PrefetchOpConversion,
-               DescriptorPrefetchOpConversion, DescriptorGatherOpConversion>(
+               DescriptorPrefetchOpConversion,
+               DescriptorGatherPrefetchOpConversion>(
       typeConverter, targetInfo, axisInfoAnalysis, strideAnalysis, benefit);
   // Local atomic scatter RMW (shared memory atomics via indices).
   patterns.add<LocalAtomicScatterRMWOpConversion>(typeConverter, targetInfo,
