@@ -22,6 +22,28 @@ if(NOT WIN32)
 endif()
 
 add_triton_ut(
+  NAME AliasAnalysis
+  SRCS AliasAnalysisTest.cpp
+  LIBS
+    TritonAnalysis
+    TritonGPUIR
+    TritonGPUTransforms
+    TritonIR
+    TritonIntelAnalysis
+    TritonIntelGPUIR
+    TritonIntelGPUTransforms
+    TritonNvidiaGPUIR
+    TritonNvidiaGPUTransforms
+    MLIRArithDialect
+    MLIRFuncDialect
+    MLIRSCFDialect
+)
+
+if(NOT WIN32)
+  target_compile_options(AliasAnalysis PRIVATE -Wno-deprecated-declarations)
+endif()
+
+add_triton_ut(
   NAME SpatialReuseAnalysis
   SRCS SpatialReuseAnalysisTest.cpp
   LIBS

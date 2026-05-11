@@ -13,11 +13,21 @@ class ModuleAxisInfoAnalysis;
 ///
 /// In addition to the spatial stride (how elements within a single loaded
 /// tile vary across tensor axes), StrideInfo also tracks a per-loop
-/// *temporal* stride — how a value's address shifts between successive
-/// iterations of a given `LoopLikeOpInterface`.  The IV-stride table is
-/// keyed by the enclosing loop op; an absent entry is semantically
-/// equivalent to an all-zero vector (i.e. the value does not depend on
-/// that loop's IV).
+/// *temporal* stride — how a value's address shifts per **unit of IV
+/// increase** of a given `LoopLikeOpInterface`.  The IV-stride table is
+/// keyed by the enclosing loop op.  **An absent entry is the canonical
+/// and only encoding of "value does not depend on this loop's IV"** —
+/// all-zero vectors are never stored.  A present entry is guaranteed to
+/// carry at least one non-zero dimension.
+///
+/// NOTE on units: `getIVStride()` reports the delta per unit of IV, not
+/// per iteration.  To obtain the per-iteration address delta, multiply
+/// by the enclosing loop's step (when constant) — use
+/// `getPerIterationIVStride()`, which folds this in and returns
+/// `std::nullopt` for dynamic-step loops.  The native-unit convention
+/// keeps the column meaningful even when the step is not a compile-time
+/// constant, and mirrors the spatial column (which is also in native
+/// element units).
 class StrideInfo {
 public:
   using DimVectorT = SmallVector<int64_t>;
@@ -48,16 +58,28 @@ public:
 
   void print(raw_ostream &os) const;
 
-  /// Temporal stride of this value along `dim` with respect to `loop`'s IV.
-  /// Returns 0 when `loop` is not tracked for this value (the consumer
-  /// interprets "not tracked" as "does not depend on this loop's IV", which
-  /// is correct for values defined outside the loop and is the conservative
-  /// answer for values we have not yet propagated into).
+  /// Temporal stride of this value along `dim` with respect to `loop`'s IV,
+  /// in IV units (delta per unit of IV increase).  Returns 0 when `loop` is
+  /// not tracked for this value (the consumer interprets "not tracked" as
+  /// "does not depend on this loop's IV", which is correct for values
+  /// defined outside the loop and is the conservative answer for values
+  /// we have not yet propagated into).
   int64_t getIVStride(LoopLikeOpInterface loop, size_t dim) const;
 
-  /// Full per-axis vector for `loop`.  Returns `nullptr` when `loop` has no
-  /// entry (treated as all-zero by consumers).
+  /// Full per-axis IV-unit stride vector for `loop`.  Returns `nullptr` iff
+  /// the value does not depend on `loop`'s IV.  A non-null result is
+  /// guaranteed to have at least one non-zero dimension (asserted).
   const DimVectorT *getIVStride(LoopLikeOpInterface loop) const;
+
+  /// Per-iteration address delta along `dim` with respect to `loop`.
+  /// Equivalent to `getIVStride(loop, dim) * loop.step` when the step is
+  /// a compile-time constant.  Returns `std::nullopt` when the step is
+  /// dynamic, when the underlying IV-unit stride is unknown (-1), or when
+  /// the constant-step multiplication would overflow `int64_t`.  Callers
+  /// that need a concrete per-iteration delta should use this helper
+  /// instead of multiplying by the step manually.
+  std::optional<int64_t> getPerIterationIVStride(LoopLikeOpInterface loop,
+                                                 size_t dim) const;
 
   /// Enumerate the loops with tracked IV-stride columns.  Used by visitors
   /// to fold over both operands' loop sets.
