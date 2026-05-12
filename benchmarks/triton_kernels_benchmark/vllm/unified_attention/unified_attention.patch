@@ -1,5 +1,5 @@
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 1774f1b30..009e7980c 100644
+index 1774f1b30..313657168 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -54,16 +54,132 @@ def _cast_kv_tile(data, Q, tensor_scale, KV_QUANT_MODE: tl.constexpr):
@@ -181,12 +181,12 @@ index 1774f1b30..009e7980c 100644
 +    # Per-(token, head) scale caches: used iff KV_QUANT_MODE in {2, 3}.
 +    k_scale_cache_ptr=None,
 +    v_scale_cache_ptr=None,
-+    stride_ks_blk=None,
-+    stride_ks_slot=None,
-+    stride_ks_head=None,
-+    stride_vs_blk=None,
-+    stride_vs_slot=None,
-+    stride_vs_head=None,
++    stride_ks_blk: tl.int64 | None = None,
++    stride_ks_slot: tl.int64 | None = None,
++    stride_ks_head: tl.int64 | None = None,
++    stride_vs_blk: tl.int64 | None = None,
++    stride_vs_slot: tl.int64 | None = None,
++    stride_vs_head: tl.int64 | None = None,
      # KV cache quantization mode handled inside this kernel via constexpr
      # branches: NONE (0), FP8_PER_TENSOR (1), INT8_PER_TOKEN_HEAD (2),
      # FP8_PER_TOKEN_HEAD (3).
@@ -473,7 +473,7 @@ index 1774f1b30..009e7980c 100644
  ):
      assert causal, "Only causal attention is supported"
      assert q_descale is None, "Q scales not supported"
-@@ -608,6 +859,52 @@ def unified_attention(
+@@ -608,21 +859,60 @@ def unified_attention(
          head_size, sliding_window_val, q.element_size(), is_prefill=False
      )
  
@@ -526,7 +526,27 @@ index 1774f1b30..009e7980c 100644
      # Launch the 2D kernel if
      # 1. No intermediate tiled softmax buffers for the 3D kernel have been allocated, or
      # 2. The batch includes at least one prefill request, or
-@@ -637,17 +934,16 @@ def unified_attention(
+-    # 3. The number of sequences exceeds the configured threshold, or
+-    # 4. Batch invariance is enabled
+-    use_3d = not (
+-        seq_threshold_3D is None
+-        or num_par_softmax_segments is None
+-        or softmax_segm_output is None
+-        or softmax_segm_max is None
+-        or softmax_segm_expsum is None
+-        or max_seqlen_q > 1
+-        or num_seqs > seq_threshold_3D
+-        or is_batch_invariant
+-    )
++    # 3. The number of sequences exceeds the configured threshold
++    seq_threshold_3D = 32
++    use_3d = not (max_seqlen_q > 1 or num_seqs > seq_threshold_3D
++            # 2d kernel includes crucial optimizations for models with sliding window
++            or 0 < sliding_window_val <= 1024)
+ 
+     # The kernel signature is the same for 2D and 3D — only the launch
+     # grid + a handful of constexpr toggles differ.  Per-token-head scale
+@@ -637,17 +927,40 @@ def unified_attention(
          k_scale_ptr = k_scale_cache
          v_scale_ptr = v_scale_cache
      else:
@@ -548,13 +568,37 @@ index 1774f1b30..009e7980c 100644
 +        v_scale_ptr = None
 +
 +    # 3D needs real segm tensors; 2D never touches them.
++    if use_3d:
++        num_par_softmax_segments = 16
++        softmax_segm_output = torch.empty(
++            q.shape[0],
++            num_query_heads,
++            num_par_softmax_segments,
++            triton.next_power_of_2(head_size),
++            dtype=torch.float32,
++            device=q.device,
++        )
++        softmax_segm_max = torch.empty(
++            q.shape[0],
++            num_query_heads,
++            num_par_softmax_segments,
++            dtype=torch.float32,
++            device=q.device,
++        )
++        softmax_segm_expsum = torch.empty(
++            q.shape[0],
++            num_query_heads,
++            num_par_softmax_segments,
++            dtype=torch.float32,
++            device=q.device,
++        )
 +    segm_output_ptr = softmax_segm_output if use_3d else None
 +    segm_max_ptr = softmax_segm_max if use_3d else None
 +    segm_expsum_ptr = softmax_segm_expsum if use_3d else None
      num_segments = num_par_softmax_segments if use_3d else 1
  
      grid: tuple[Any, ...]
-@@ -689,7 +985,7 @@ def unified_attention(
+@@ -689,7 +1002,7 @@ def unified_attention(
          BLOCK_SIZE=block_size,
          TILE_SIZE=tile_size,
          HEAD_SIZE=head_size,
@@ -563,7 +607,7 @@ index 1774f1b30..009e7980c 100644
          USE_ALIBI_SLOPES=use_alibi_slopes,
          USE_ALIBI_SQRT=use_alibi_sqrt,
          USE_QQ_BIAS=use_qq_bias,
-@@ -723,6 +1019,8 @@ def unified_attention(
+@@ -723,6 +1036,8 @@ def unified_attention(
          KV_QUANT_MODE=kv_quant_mode,
          CHUNK_LOOKBACK=chunk_lookback,
          CHUNK_SIZE=chunk_size,
@@ -572,7 +616,7 @@ index 1774f1b30..009e7980c 100644
      )
  
      if use_3d:
-@@ -740,7 +1038,7 @@ def unified_attention(
+@@ -740,7 +1055,7 @@ def unified_attention(
              block_table_stride=block_table.stride(0),
              TILE_SIZE=TILE_SIZE_DECODE,
              HEAD_SIZE=head_size,
