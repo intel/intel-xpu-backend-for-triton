@@ -1,5 +1,5 @@
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 1774f1b30..c3435b082 100644
+index 1774f1b30..7858e66d8 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -54,16 +54,132 @@ def _cast_kv_tile(data, Q, tensor_scale, KV_QUANT_MODE: tl.constexpr):
@@ -525,7 +525,35 @@ index 1774f1b30..c3435b082 100644
      # Launch the 2D kernel if
      # 1. No intermediate tiled softmax buffers for the 3D kernel have been allocated, or
      # 2. The batch includes at least one prefill request, or
-@@ -689,7 +985,7 @@ def unified_attention(
+@@ -637,17 +933,16 @@ def unified_attention(
+         k_scale_ptr = k_scale_cache
+         v_scale_ptr = v_scale_cache
+     else:
+-        ks_blk = ks_slot = ks_head = 0
+-        vs_blk = vs_slot = vs_head = 0
+-        # Pass the K cache as a stand-in pointer; never dereferenced.
+-        k_scale_ptr = k
+-        v_scale_ptr = v
+-
+-    # 3D needs real segm tensors; 2D never touches them but Triton wants
+-    # a non-null pointer.  Reuse ``out`` as the placeholder.
+-    segm_output_ptr = softmax_segm_output if use_3d else out
+-    segm_max_ptr = softmax_segm_max if use_3d else out
+-    segm_expsum_ptr = softmax_segm_expsum if use_3d else out
++        # Never dereferenced.
++        ks_blk = ks_slot = ks_head = None
++        vs_blk = vs_slot = vs_head = None
++        k_scale_ptr = None
++        v_scale_ptr = None
++
++    # 3D needs real segm tensors; 2D never touches them.
++    segm_output_ptr = softmax_segm_output if use_3d else None
++    segm_max_ptr = softmax_segm_max if use_3d else None
++    segm_expsum_ptr = softmax_segm_expsum if use_3d else None
+     num_segments = num_par_softmax_segments if use_3d else 1
+ 
+     grid: tuple[Any, ...]
+@@ -689,7 +984,7 @@ def unified_attention(
          BLOCK_SIZE=block_size,
          TILE_SIZE=tile_size,
          HEAD_SIZE=head_size,
@@ -534,7 +562,7 @@ index 1774f1b30..c3435b082 100644
          USE_ALIBI_SLOPES=use_alibi_slopes,
          USE_ALIBI_SQRT=use_alibi_sqrt,
          USE_QQ_BIAS=use_qq_bias,
-@@ -723,6 +1019,8 @@ def unified_attention(
+@@ -723,6 +1018,8 @@ def unified_attention(
          KV_QUANT_MODE=kv_quant_mode,
          CHUNK_LOOKBACK=chunk_lookback,
          CHUNK_SIZE=chunk_size,
@@ -543,7 +571,7 @@ index 1774f1b30..c3435b082 100644
      )
  
      if use_3d:
-@@ -740,7 +1038,7 @@ def unified_attention(
+@@ -740,7 +1037,7 @@ def unified_attention(
              block_table_stride=block_table.stride(0),
              TILE_SIZE=TILE_SIZE_DECODE,
              HEAD_SIZE=head_size,
