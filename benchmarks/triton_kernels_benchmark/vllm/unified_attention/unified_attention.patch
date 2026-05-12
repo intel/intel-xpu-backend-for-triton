@@ -1,5 +1,5 @@
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 1774f1b30..7dc41c98d 100644
+index 1774f1b30..87c4118e8 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -54,16 +54,132 @@ def _cast_kv_tile(data, Q, tensor_scale, KV_QUANT_MODE: tl.constexpr):
@@ -473,7 +473,7 @@ index 1774f1b30..7dc41c98d 100644
  ):
      assert causal, "Only causal attention is supported"
      assert q_descale is None, "Q scales not supported"
-@@ -608,21 +859,60 @@ def unified_attention(
+@@ -608,21 +859,71 @@ def unified_attention(
          head_size, sliding_window_val, q.element_size(), is_prefill=False
      )
  
@@ -484,6 +484,17 @@ index 1774f1b30..7dc41c98d 100644
 +    if use_td:
 +        TILE_SIZE_PREFILL = min(TILE_SIZE_PREFILL, block_size)
 +        TILE_SIZE_DECODE = min(TILE_SIZE_DECODE, block_size)
++
++    if q.element_size() == 1:
++        # Currently triton fails with TILE_SIZE=16 for fp8 inputs
++        TILE_SIZE_PREFILL = TILE_SIZE_DECODE = 32
++    else:
++        # Good config for simplicity
++        TILE_SIZE_PREFILL = TILE_SIZE_DECODE = 16
++    assert TILE_SIZE_PREFILL <= block_size, "TILE_SIZE_PREFILL must be <= block_size"
++    assert TILE_SIZE_DECODE <= block_size, "TILE_SIZE_DECODE must be <= block_size"
++    assert block_size % TILE_SIZE_PREFILL == 0, "block_size must be multiple of TILE_SIZE_PREFILL"
++    assert block_size % TILE_SIZE_DECODE == 0, "block_size must be multiple of TILE_SIZE_DECODE"
 +
 +    # Tensor descriptors for Q load / output store require every element
 +    # of ``block_shape`` to be a power of 2.  ``num_queries_per_kv`` is
@@ -546,7 +557,7 @@ index 1774f1b30..7dc41c98d 100644
  
      # The kernel signature is the same for 2D and 3D — only the launch
      # grid + a handful of constexpr toggles differ.  Per-token-head scale
-@@ -637,17 +927,40 @@ def unified_attention(
+@@ -637,17 +938,40 @@ def unified_attention(
          k_scale_ptr = k_scale_cache
          v_scale_ptr = v_scale_cache
      else:
@@ -598,7 +609,7 @@ index 1774f1b30..7dc41c98d 100644
      num_segments = num_par_softmax_segments if use_3d else 1
  
      grid: tuple[Any, ...]
-@@ -689,7 +1002,7 @@ def unified_attention(
+@@ -689,7 +1013,7 @@ def unified_attention(
          BLOCK_SIZE=block_size,
          TILE_SIZE=tile_size,
          HEAD_SIZE=head_size,
@@ -607,7 +618,7 @@ index 1774f1b30..7dc41c98d 100644
          USE_ALIBI_SLOPES=use_alibi_slopes,
          USE_ALIBI_SQRT=use_alibi_sqrt,
          USE_QQ_BIAS=use_qq_bias,
-@@ -723,6 +1036,8 @@ def unified_attention(
+@@ -723,6 +1047,8 @@ def unified_attention(
          KV_QUANT_MODE=kv_quant_mode,
          CHUNK_LOOKBACK=chunk_lookback,
          CHUNK_SIZE=chunk_size,
@@ -616,7 +627,7 @@ index 1774f1b30..7dc41c98d 100644
      )
  
      if use_3d:
-@@ -740,7 +1055,7 @@ def unified_attention(
+@@ -740,7 +1066,7 @@ def unified_attention(
              block_table_stride=block_table.stride(0),
              TILE_SIZE=TILE_SIZE_DECODE,
              HEAD_SIZE=head_size,
