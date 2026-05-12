@@ -393,40 +393,27 @@ private:
     constexpr int64_t MIN_PITCH = 64;
 
     int64_t pitch;
-    int64_t stride; // stride in elements for the pitch dimension
+    bool isBroadcast = false;
     if (has1DReshapeStride) {
       auto strideAttr = op->getAttrOfType<IntegerAttr>(
           ttgi::TritonIntelGPUDialect::getBlockIOStrideAttrName());
-      stride = strideAttr.getInt();
+      int64_t stride = strideAttr.getInt();
+      isBroadcast = (stride == 0);
       pitch = stride * elemSizeInBits / 8;
     } else {
       // Check if the load is a broadcast: stride=0 along rowDim means all
       // rows are identical, so we only need height=1 with a dummy pitch.
       int64_t rowStride = getStride(strideAnalysis, op.getPtr(), rowDim);
-      if (rowStride == 0) {
-        stride = 0;
+      isBroadcast = (rowStride == 0);
+      if (isBroadcast) {
         pitch = std::max((int64_t)MIN_PITCH, baseWidthBytes);
-      } else if (!isTranspose) {
-        // Non-transposed: rowDim IS the pitch dimension.
-        stride = rowStride;
-        if (stride < 0) {
-          LDBG("Cannot compute constant stride for load: " << *op);
-          return;
-        }
-        pitch = stride * elemSizeInBits / 8;
       } else {
-        // Transposed non-broadcast: pitch comes from colDim (pitchDim).
-        // Keep stride = rowStride (non-zero) so baseHeight uses full dim.
-        stride = rowStride;
         int64_t pitchStride = getStride(strideAnalysis, op.getPtr(), pitchDim);
         if (pitchStride < 0) {
           LDBG("Cannot compute constant stride for load: " << *op);
           return;
         }
-        if (pitchStride == 0)
-          pitch = std::max((int64_t)MIN_PITCH, baseWidthBytes);
-        else
-          pitch = pitchStride * elemSizeInBits / 8;
+        pitch = pitchStride * elemSizeInBits / 8;
       }
     }
 
@@ -436,10 +423,10 @@ private:
       return;
     }
 
-    // For broadcast loads (stride=0), the LLVM lowering's row replication
+    // For broadcast loads, the LLVM lowering's row replication
     // requires tileWidth >= threadsPerWarp or tileWidth * 2 == threadsPerWarp.
     // Reject unsupported configurations.
-    if (stride == 0 && tileHeight > 1 && tileWidth > 0) {
+    if (isBroadcast && tileHeight > 1 && tileWidth > 0) {
       unsigned threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(
           op->getParentOfType<ModuleOp>());
       if (tileWidth < (int)threadsPerWarp &&
@@ -457,7 +444,7 @@ private:
 
     // Compute constant surface parameters.
     int64_t baseHeightRows =
-        stride == 0 ? 1 : tensorTy.getDimSize(surfaceHeightDim);
+        isBroadcast ? 1 : tensorTy.getDimSize(surfaceHeightDim);
 
     auto memLayout = memoryRowMajor ? ttgi::BlockIOMode::RowMajor
                                     : ttgi::BlockIOMode::ColumnMajor;
