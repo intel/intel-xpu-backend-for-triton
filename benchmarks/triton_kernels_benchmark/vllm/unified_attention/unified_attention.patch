@@ -1,5 +1,5 @@
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 1774f1b30..52dec049d 100644
+index 1774f1b30..009e7980c 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -54,16 +54,132 @@ def _cast_kv_tile(data, Q, tensor_scale, KV_QUANT_MODE: tl.constexpr):
@@ -190,7 +190,7 @@ index 1774f1b30..52dec049d 100644
      # KV cache quantization mode handled inside this kernel via constexpr
      # branches: NONE (0), FP8_PER_TENSOR (1), INT8_PER_TOKEN_HEAD (2),
      # FP8_PER_TOKEN_HEAD (3).
-@@ -140,9 +263,20 @@ def kernel_unified_attention(
+@@ -140,8 +263,20 @@ def kernel_unified_attention(
      # over ``SLIDING_WINDOW`` inside the helpers.  ``-1`` disables.
      CHUNK_LOOKBACK: tl.constexpr = -1,
      CHUNK_SIZE: tl.constexpr = -1,
@@ -200,18 +200,19 @@ index 1774f1b30..52dec049d 100644
 +    USE_TD: tl.constexpr = False,
 +    USE_TD_QO: tl.constexpr = False,
  ):
-     USE_PER_TOKEN_HEAD_SCALES: tl.constexpr = KV_QUANT_MODE >= 2
- 
+-    USE_PER_TOKEN_HEAD_SCALES: tl.constexpr = KV_QUANT_MODE >= 2
++    # Per-(token, head) scale caches (used iff KV_QUANT_MODE in {2, 3}).
++    USE_PER_TOKEN_HEAD_SCALES: tl.constexpr = (KV_QUANT_MODE >= 2) and (KV_QUANT_MODE <= 3)
++
 +    if USE_TD:
 +        tl.static_assert(
 +            BLOCK_SIZE % TILE_SIZE == 0,
 +            "USE_TD requires BLOCK_SIZE to be a multiple of TILE_SIZE",
 +        )
-+
+ 
      q_block_global_idx = tl.program_id(0)
      kv_head_idx = tl.program_id(1)
-     segm_idx = tl.program_id(2) if IS_3D else 0
-@@ -167,6 +301,12 @@ def kernel_unified_attention(
+@@ -167,6 +302,12 @@ def kernel_unified_attention(
      else:
          tiles_per_segment = 0
  
@@ -224,7 +225,7 @@ index 1774f1b30..52dec049d 100644
      offs_m = tl.arange(0, BLOCK_M)
      offs_d = tl.arange(0, HEAD_SIZE_PADDED)
      offs_t = tl.arange(0, TILE_SIZE)
-@@ -185,11 +325,27 @@ def kernel_unified_attention(
+@@ -185,11 +326,27 @@ def kernel_unified_attention(
      query_mask_1 = tl.where(query_offset_1 < num_query_heads, 1, 0).to(tl.int1)
  
      # Q : (BLOCK_M, HEAD_SIZE_PADDED)
@@ -257,7 +258,7 @@ index 1774f1b30..52dec049d 100644
  
      block_table_offset = seq_idx * block_table_stride
  
-@@ -237,31 +393,71 @@ def kernel_unified_attention(
+@@ -237,31 +394,71 @@ def kernel_unified_attention(
              block_tables_ptr + block_table_offset + seq_offset // BLOCK_SIZE
          ).to(tl.int64)
  
@@ -353,7 +354,7 @@ index 1774f1b30..52dec049d 100644
          V = _cast_kv_tile(V_load, Q, v_scale, KV_QUANT_MODE)
  
          # Per-(token, head) scales for INT8 / FP8 per-token-head modes.
-@@ -342,18 +538,45 @@ def kernel_unified_attention(
+@@ -342,18 +539,45 @@ def kernel_unified_attention(
      # ---- Epilogue ---------------------------------------------------------
      if IS_3D:
          # Store per-segment partials; finalized by ``reduce_segments``.
@@ -411,7 +412,7 @@ index 1774f1b30..52dec049d 100644
          store_segm_reduce_scalars(
              segm_max_ptr,
              segm_expsum_ptr,
-@@ -372,16 +595,38 @@ def kernel_unified_attention(
+@@ -372,16 +596,38 @@ def kernel_unified_attention(
          if USE_FP8:
              acc = acc * tl.load(out_scale)
              acc = tl.clamp(acc, FP8_MIN, FP8_MAX)
@@ -460,7 +461,7 @@ index 1774f1b30..52dec049d 100644
  
  
  @triton.jit
-@@ -538,6 +783,11 @@ def unified_attention(
+@@ -538,6 +784,11 @@ def unified_attention(
      v_scale_cache=None,  # [num_blocks, block_size, num_kv_heads] float32
      # Chunked attention: restrict attention to aligned blocks with lookback.
      chunk_lookback=-1,
@@ -472,7 +473,7 @@ index 1774f1b30..52dec049d 100644
  ):
      assert causal, "Only causal attention is supported"
      assert q_descale is None, "Q scales not supported"
-@@ -608,6 +858,52 @@ def unified_attention(
+@@ -608,6 +859,52 @@ def unified_attention(
          head_size, sliding_window_val, q.element_size(), is_prefill=False
      )
  
@@ -525,7 +526,7 @@ index 1774f1b30..52dec049d 100644
      # Launch the 2D kernel if
      # 1. No intermediate tiled softmax buffers for the 3D kernel have been allocated, or
      # 2. The batch includes at least one prefill request, or
-@@ -637,17 +933,16 @@ def unified_attention(
+@@ -637,17 +934,16 @@ def unified_attention(
          k_scale_ptr = k_scale_cache
          v_scale_ptr = v_scale_cache
      else:
@@ -553,7 +554,7 @@ index 1774f1b30..52dec049d 100644
      num_segments = num_par_softmax_segments if use_3d else 1
  
      grid: tuple[Any, ...]
-@@ -689,7 +984,7 @@ def unified_attention(
+@@ -689,7 +985,7 @@ def unified_attention(
          BLOCK_SIZE=block_size,
          TILE_SIZE=tile_size,
          HEAD_SIZE=head_size,
@@ -562,7 +563,7 @@ index 1774f1b30..52dec049d 100644
          USE_ALIBI_SLOPES=use_alibi_slopes,
          USE_ALIBI_SQRT=use_alibi_sqrt,
          USE_QQ_BIAS=use_qq_bias,
-@@ -723,6 +1018,8 @@ def unified_attention(
+@@ -723,6 +1019,8 @@ def unified_attention(
          KV_QUANT_MODE=kv_quant_mode,
          CHUNK_LOOKBACK=chunk_lookback,
          CHUNK_SIZE=chunk_size,
@@ -571,7 +572,7 @@ index 1774f1b30..52dec049d 100644
      )
  
      if use_3d:
-@@ -740,7 +1037,7 @@ def unified_attention(
+@@ -740,7 +1038,7 @@ def unified_attention(
              block_table_stride=block_table.stride(0),
              TILE_SIZE=TILE_SIZE_DECODE,
              HEAD_SIZE=head_size,
