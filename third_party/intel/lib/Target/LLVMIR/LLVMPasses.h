@@ -3,9 +3,9 @@
 
 namespace llvm {
 
-struct GuardMaskedDivRemPass : PassInfoMixin<GuardMaskedDivRemPass> {
+struct FreezeMaskedDivRemPass : PassInfoMixin<FreezeMaskedDivRemPass> {
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
-  static StringRef name() { return "GuardMaskedDivRemPass"; }
+  static StringRef name() { return "FreezeMaskedDivRemPass"; }
 };
 
 struct ExpandSaddWithOverflowPass : PassInfoMixin<ExpandSaddWithOverflowPass> {

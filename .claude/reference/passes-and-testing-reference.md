@@ -129,7 +129,7 @@ Module attributes for device capabilities are listed in `intel-gpu-hardware.md` 
 
 | Transform | File | Description |
 |-----------|------|-------------|
-| LLVMIRGuardMaskedDivRem | `LLVMIRGuardMaskedDivRem.cpp` | Guard masked div/rem against zero divisors |
+| LLVMIRFreezeMaskedDivRem | `LLVMIRFreezeMaskedDivRem.cpp` | Insert freeze for masked div/rem |
 | PostProcess | `PostProcess.cpp` | Final LLVM IR cleanup |
 
 ## From intel-testing.md
