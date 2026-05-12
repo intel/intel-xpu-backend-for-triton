@@ -100,6 +100,7 @@ jobs:
           LEVEL_ZERO_VERSION=$LEVEL_ZERO_VERSION
           GPU_DEVICE=$GPU_DEVICE
           AGAMA_VERSION=$AGAMA_VERSION
+          COMPILER_VERSION=$COMPILER_VERSION
           EOF
 
       - name: Upload test logs
