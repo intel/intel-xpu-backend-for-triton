@@ -350,6 +350,7 @@ private:
     unsigned rowDim, colDim;
     int tileWidth = -1;
     int tileHeight = -1;
+    bool isTranspose = false;
     if (has1DReshapeStride) {
       // 1D reshape: conventional dims, no tile validation needed.
       rowDim = memoryRowMajor ? rank - 2 : rank - 1;
@@ -372,29 +373,61 @@ private:
       colDim = sizeInfo.colDim;
       tileWidth = sizeInfo.tileWidth;
       tileHeight = sizeInfo.tileHeight;
+      isTranspose = sizeInfo.transpose;
     }
 
+    // For the 2D block load surface, the pitch dimension is always the
+    // non-contiguous memory direction. For transposed loads, rowDim is the
+    // memory-contiguous dim and colDim is non-contiguous, so pitch uses colDim.
+    unsigned pitchDim = isTranspose ? colDim : rowDim;
+
     // Compute pitch from stride analysis or the 1D->2D reshape attribute.
-    int64_t baseWidthBytes = tensorTy.getDimSize(colDim) * elemSizeInBits / 8;
+    // For the HW surface: width is along memory-contiguous direction, height
+    // is along non-contiguous. For transposed loads, rowDim is the contiguous
+    // dim and colDim is non-contiguous, so we swap which dim provides
+    // width/height.
+    unsigned surfaceWidthDim = isTranspose ? rowDim : colDim;
+    unsigned surfaceHeightDim = isTranspose ? colDim : rowDim;
+    int64_t baseWidthBytes =
+        tensorTy.getDimSize(surfaceWidthDim) * elemSizeInBits / 8;
     constexpr int64_t MIN_PITCH = 64;
 
     int64_t pitch;
-    int64_t stride; // stride in elements for the row dimension
+    int64_t stride; // stride in elements for the pitch dimension
     if (has1DReshapeStride) {
       auto strideAttr = op->getAttrOfType<IntegerAttr>(
           ttgi::TritonIntelGPUDialect::getBlockIOStrideAttrName());
       stride = strideAttr.getInt();
       pitch = stride * elemSizeInBits / 8;
     } else {
-      stride = getStride(strideAnalysis, op.getPtr(), rowDim);
-      if (stride < 0) {
-        LDBG("Cannot compute constant stride for load: " << *op);
-        return;
-      }
-      if (stride == 0)
+      // Check if the load is a broadcast: stride=0 along rowDim means all
+      // rows are identical, so we only need height=1 with a dummy pitch.
+      int64_t rowStride = getStride(strideAnalysis, op.getPtr(), rowDim);
+      if (rowStride == 0) {
+        stride = 0;
         pitch = std::max((int64_t)MIN_PITCH, baseWidthBytes);
-      else
+      } else if (!isTranspose) {
+        // Non-transposed: rowDim IS the pitch dimension.
+        stride = rowStride;
+        if (stride < 0) {
+          LDBG("Cannot compute constant stride for load: " << *op);
+          return;
+        }
         pitch = stride * elemSizeInBits / 8;
+      } else {
+        // Transposed non-broadcast: pitch comes from colDim (pitchDim).
+        // Keep stride = rowStride (non-zero) so baseHeight uses full dim.
+        stride = rowStride;
+        int64_t pitchStride = getStride(strideAnalysis, op.getPtr(), pitchDim);
+        if (pitchStride < 0) {
+          LDBG("Cannot compute constant stride for load: " << *op);
+          return;
+        }
+        if (pitchStride == 0)
+          pitch = std::max((int64_t)MIN_PITCH, baseWidthBytes);
+        else
+          pitch = pitchStride * elemSizeInBits / 8;
+      }
     }
 
     // HW requires pitch >= 64 bytes and pitch aligned to 16 bytes.
@@ -423,7 +456,8 @@ private:
     Location loc = op.getLoc();
 
     // Compute constant surface parameters.
-    int64_t baseHeightRows = stride == 0 ? 1 : tensorTy.getDimSize(rowDim);
+    int64_t baseHeightRows =
+        stride == 0 ? 1 : tensorTy.getDimSize(surfaceHeightDim);
 
     auto memLayout = memoryRowMajor ? ttgi::BlockIOMode::RowMajor
                                     : ttgi::BlockIOMode::ColumnMajor;

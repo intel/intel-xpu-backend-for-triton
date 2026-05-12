@@ -33,7 +33,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1x64x!tt.ptr<f16>, #dot1>
     %3 = tt.addptr %2, %1 : tensor<1x64x!tt.ptr<f16>, #dot1>, tensor<1x64xi32, #dot1>
     %4 = tt.broadcast %3 : tensor<1x64x!tt.ptr<f16>, #dot1> -> tensor<32x64x!tt.ptr<f16>, #dot1>
-    // CHECK: ttig.2d_block_load_from_ptr %4 {column_major} {base_height = 1 : i32, base_pitch = 128 : i32, base_width = 128 : i32}
+    // CHECK: ttig.2d_block_load_from_ptr %4 {column_major} {base_height = 1 : i32, base_pitch = 64 : i32, base_width = 64 : i32}
     %5 = tt.load %4 {ttig.block_io = "column_major"} : tensor<32x64x!tt.ptr<f16>, #dot1>
     tt.return %5 : tensor<32x64xf16, #dot1>
   }
@@ -142,6 +142,36 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     // CHECK-SAME: ttig.one_matrix_per_load
     %5 = tt.load %4 {ttig.block_io = "row_major", ttig.one_matrix_per_load} : tensor<64x32x!tt.ptr<f16>, #dot0>
     tt.return %5 : tensor<64x32xf16, #dot0>
+  }
+}
+
+// -----
+
+// COM: Non-broadcast transposed pointer load. Memory is column-major
+// COM: (contiguous in dim 0), with a valid pitch along dim 1. This exercises
+// COM: the transpose pitch fix: pitch must use colDim (the non-contiguous
+// COM: memory direction) instead of rowDim.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @non_broadcast_column_major
+  tt.func @non_broadcast_column_major(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> tensor<32x64xf16, #dot1> {
+    // Build ptr[i, j] = arg0 + i + j * 128  (stride[0]=1, stride[1]=128)
+    %0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 1, parent = #dot1}>>
+    %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<32xi32, #ttg.slice<{dim = 1, parent = #dot1}>> -> tensor<32x1xi32, #dot1>
+    %2 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #dot1}>>
+    %3 = tt.expand_dims %2 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #dot1}>> -> tensor<1x64xi32, #dot1>
+    %cst_stride = arith.constant dense<128> : tensor<1x64xi32, #dot1>
+    %4 = arith.muli %3, %cst_stride : tensor<1x64xi32, #dot1>
+    %5 = tt.broadcast %1 : tensor<32x1xi32, #dot1> -> tensor<32x64xi32, #dot1>
+    %6 = tt.broadcast %4 : tensor<1x64xi32, #dot1> -> tensor<32x64xi32, #dot1>
+    %7 = arith.addi %5, %6 : tensor<32x64xi32, #dot1>
+    %8 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<32x64x!tt.ptr<f16>, #dot1>
+    %9 = tt.addptr %8, %7 : tensor<32x64x!tt.ptr<f16>, #dot1>, tensor<32x64xi32, #dot1>
+    // CHECK: ttig.2d_block_load_from_ptr %9 {column_major}
+    // CHECK-SAME: base_pitch = 256
+    %10 = tt.load %9 {ttig.block_io = "column_major"} : tensor<32x64x!tt.ptr<f16>, #dot1>
+    tt.return %10 : tensor<32x64xf16, #dot1>
   }
 }
 
