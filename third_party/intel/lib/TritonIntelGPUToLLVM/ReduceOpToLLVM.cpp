@@ -327,12 +327,19 @@ private:
         vectorCombineRegion ? *vectorCombineRegion : op.getCombineOp();
 
     Operation &combinerOp = combineRegion.front().front();
-
-#if !TRITON_INTEL_REDUCE_USE_LEFT_FOLD_THREAD_REDUCE
     unsigned arity = targetInfo.getReductionTreeArity(&combinerOp);
-#endif
 
-    // Perform a tree reduction
+    // Use a deterministic left fold for sub-32-bit float types to avoid
+    // extra reassociation error in low-precision reductions (fp16/bf16).
+    // For float32 and wider float types, use a tree reduction which
+    // matches the upstream accumulation order and avoids tolerance
+    // regressions in float32 reduction accuracy tests.
+    // Non-float types keep left fold (integer addition is associative,
+    // so the reduction order does not affect the result).
+    bool useLeftFold =
+        TRITON_INTEL_REDUCE_USE_LEFT_FOLD_THREAD_REDUCE &&
+        !(isa<FloatType>(elemTy) && elemTy.getIntOrFloatBitWidth() >= 32);
+
     unsigned numOperands = accs.size();
     SmallVector<SmallVector<Value>> reduced(numOperands);
     unsigned regs = accs.front().size();
@@ -347,17 +354,15 @@ private:
         vals.push_back(std::move(cur));
       }
 
-#if TRITON_INTEL_REDUCE_USE_LEFT_FOLD_THREAD_REDUCE
-      // Use a deterministic left fold to avoid extra reassociation error in
-      // low-precision reductions.
-      SmallVector<Value> acc = vals.front();
-      for (unsigned i = 1; i < vals.size(); ++i) {
-        accumulate(loc, rewriter, combineRegion, acc, vals[i]);
+      SmallVector<Value> acc;
+      if (useLeftFold) {
+        acc = vals.front();
+        for (unsigned i = 1; i < vals.size(); ++i) {
+          accumulate(loc, rewriter, combineRegion, acc, vals[i]);
+        }
+      } else {
+        acc = treeReduce(loc, rewriter, combineRegion, std::move(vals), arity);
       }
-#else
-      auto acc =
-          treeReduce(loc, rewriter, combineRegion, std::move(vals), arity);
-#endif
       for (unsigned opIdx = 0; opIdx < numOperands; ++opIdx) {
         reduced[opIdx].push_back(acc[opIdx]);
       }
