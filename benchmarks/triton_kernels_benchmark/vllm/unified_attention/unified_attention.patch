@@ -1,5 +1,5 @@
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 1774f1b30..0413b6c2d 100644
+index 1774f1b30..9ea4ee601 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -7,7 +7,7 @@
@@ -190,12 +190,12 @@ index 1774f1b30..0413b6c2d 100644
 +    # Per-(token, head) scale caches: used iff KV_QUANT_MODE in {2, 3}.
 +    k_scale_cache_ptr=None,
 +    v_scale_cache_ptr=None,
-+    stride_ks_blk: Optional[tl.int64] = None,
-+    stride_ks_slot: Optional[tl.int64] = None,
-+    stride_ks_head: Optional[tl.int64] = None,
-+    stride_vs_blk: Optional[tl.int64] = None,
-+    stride_vs_slot: Optional[tl.int64] = None,
-+    stride_vs_head: Optional[tl.int64] = None,
++    stride_ks_blk: Optional[int] = None,
++    stride_ks_slot: Optional[int] = None,
++    stride_ks_head: Optional[int] = None,
++    stride_vs_blk: Optional[int] = None,
++    stride_vs_slot: Optional[int] = None,
++    stride_vs_head: Optional[int] = None,
      # KV cache quantization mode handled inside this kernel via constexpr
      # branches: NONE (0), FP8_PER_TENSOR (1), INT8_PER_TOKEN_HEAD (2),
      # FP8_PER_TOKEN_HEAD (3).
