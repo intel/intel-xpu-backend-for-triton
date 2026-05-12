@@ -328,8 +328,7 @@ IntegerRangeAnalysis::getTripCount(LoopLikeOpInterface loop) const {
   const unsigned width = ConstantIntRanges::getStorageBitwidth(iv->getType());
 
   auto getLoopRangeInfo = [&](std::optional<OpFoldResult> loopBound,
-                              Block *block,
-                              std::optional<bool> getUpper = std::nullopt,
+                              Block *block, bool getUpper,
                               std::optional<APInt> defaultVal = std::nullopt) {
     if (loopBound) {
       if (auto attr = dyn_cast<Attribute>(*loopBound)) {
@@ -366,7 +365,8 @@ IntegerRangeAnalysis::getTripCount(LoopLikeOpInterface loop) const {
   // We can assume step is 1 if no range information as that gives us the upper
   // bound of the number of iterations.
   APInt stepValDefault = {width, 1, /*isSigned=*/true};
-  APInt stepVal = getLoopRangeInfo(step, block, std::nullopt, stepValDefault);
+  APInt stepVal =
+      getLoopRangeInfo(step, block, /*getUpper=*/false, stepValDefault);
 
   if (stepVal.isNegative())
     std::swap(min, max);
