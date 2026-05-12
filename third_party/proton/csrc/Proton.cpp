@@ -184,11 +184,12 @@ static void initProton(pybind11::module &&m) {
         MetricKernelLaunchState metricKernelLaunchState{
             MetricKernelLaunchConfig{
                 reinterpret_cast<void *>(tensorMetricKernel),
-                tensorMetricKernelNumThreads, tensorMetricKernelSharedMemBytes},
+                reinterpret_cast<void *>(stream), tensorMetricKernelNumThreads,
+                tensorMetricKernelSharedMemBytes},
             MetricKernelLaunchConfig{
                 reinterpret_cast<void *>(scalarMetricKernel),
-                scalarMetricKernelNumThreads, scalarMetricKernelSharedMemBytes},
-            reinterpret_cast<void *>(stream)};
+                reinterpret_cast<void *>(stream), scalarMetricKernelNumThreads,
+                scalarMetricKernelSharedMemBytes}};
         SessionManager::instance().setMetricKernels(metricKernelLaunchState);
       },
       pybind11::arg("tensorMetricKernel"), pybind11::arg("scalarMetricKernel"),
@@ -206,14 +207,14 @@ static void initProton(pybind11::module &&m) {
          unsigned int tensorMetricKernelSharedMemBytes,
          unsigned int scalarMetricKernelNumThreads,
          unsigned int scalarMetricKernelSharedMemBytes) {
+        void *streamPtr = reinterpret_cast<void *>(stream);
         MetricKernelLaunchState metricKernelLaunchState{
             MetricKernelLaunchConfig{tensorMetricKernel.get_pointer(),
-                                     tensorMetricKernelNumThreads,
+                                     streamPtr, tensorMetricKernelNumThreads,
                                      tensorMetricKernelSharedMemBytes},
             MetricKernelLaunchConfig{scalarMetricKernel.get_pointer(),
-                                     scalarMetricKernelNumThreads,
-                                     scalarMetricKernelSharedMemBytes},
-            reinterpret_cast<void *>(stream)};
+                                     streamPtr, scalarMetricKernelNumThreads,
+                                     scalarMetricKernelSharedMemBytes}};
         SessionManager::instance().setMetricKernels(metricKernelLaunchState);
       },
       pybind11::arg("tensorMetricKernel"), pybind11::arg("scalarMetricKernel"),
