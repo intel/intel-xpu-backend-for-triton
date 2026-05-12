@@ -145,3 +145,35 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           %[[TRUE:.*]] = arith.constant dense<true> : tensor<32xi1>
 // CHECK:           tt.return %[[TRUE]] : tensor<32xi1>
 // CHECK:         }
+
+// -----
+
+// Comparisons between loop-carried accumulators and loaded values must NOT be
+// folded. The accumulator starts at INT64_MAX but gets updated each iteration,
+// so "accumulator < loaded_value" is not always false despite the initial value.
+// This is a regression test for a bug where getTripCount returned 0 due to
+// std::optional<bool> misuse, preventing iter_arg range propagation.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @loop_carried_cmpi_not_folded(%arg0: !tt.ptr<i64>, %lb: i32, %ub: i32) -> tensor<32xi64> {
+    %c32 = arith.constant 32 : i32
+    %cst_max = arith.constant dense<9223372036854775807> : tensor<32xi64>
+    %cst_zero = arith.constant dense<0> : tensor<32xi64>
+    %range = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32>
+    %ptr_splat = tt.splat %arg0 : !tt.ptr<i64> -> tensor<32x!tt.ptr<i64>>
+    %result = scf.for %iv = %lb to %ub step %c32 iter_args(%acc = %cst_max) -> (tensor<32xi64>) : i32 {
+      %iv_splat = tt.splat %iv : i32 -> tensor<32xi32>
+      %offsets = arith.addi %iv_splat, %range : tensor<32xi32>
+      %ptrs = tt.addptr %ptr_splat, %offsets : tensor<32x!tt.ptr<i64>>, tensor<32xi32>
+      %loaded = tt.load %ptrs : tensor<32x!tt.ptr<i64>>
+      %cmp = arith.cmpi slt, %acc, %loaded : tensor<32xi64>
+      %new_acc = arith.select %cmp, %acc, %loaded : tensor<32xi1>, tensor<32xi64>
+      scf.yield %new_acc : tensor<32xi64>
+    }
+    tt.return %result : tensor<32xi64>
+  }
+}
+
+// CHECK-LABEL:   tt.func @loop_carried_cmpi_not_folded
+// CHECK:           scf.for
+// CHECK:             arith.cmpi slt
+// CHECK:           tt.return
