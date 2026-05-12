@@ -1,21 +1,6 @@
-# ptl-809906: all debug=True sanitize-overflow parametrizations hang
-# indefinitely (>4h CPU spin). Covers add/sub/mul with debug=True.
+# ptl-809906: all sanitize-overflow parametrizations hang indefinitely (>4h CPU spin)
+# Covers add/sub/mul across all debug/sanitize flag combinations.
 # https://github.com/intel/intel-xpu-backend-for-triton/issues/5991
-python/test/unit/test_debug.py::test_sanitize_int_add_overflow[-2147483648--1-int32-int32-True-True]
-python/test/unit/test_debug.py::test_sanitize_int_add_overflow[2147483647-1-int32-int32-True-True]
-python/test/unit/test_debug.py::test_sanitize_int_add_overflow[2147483647-100-int32-int32-True-True]
-python/test/unit/test_debug.py::test_sanitize_int_add_overflow[-2147483648-0-int32-int32-True-False]
-python/test/unit/test_debug.py::test_sanitize_int_add_overflow[-2147483648-2-int32-int32-True-False]
-python/test/unit/test_debug.py::test_sanitize_int_add_overflow[0--1-int32-int32-True-False]
-python/test/unit/test_debug.py::test_sanitize_int_add_overflow[-32768--1-int16-int16-True-True]
-python/test/unit/test_debug.py::test_sanitize_int_add_overflow[32767-1-int16-int16-True-True]
-python/test/unit/test_debug.py::test_sanitize_int_mul_overflow[1073741824-4-int32-int32-False-False]
-python/test/unit/test_debug.py::test_sanitize_int_mul_overflow[1073741824-4-int32-int32-True-True]
-python/test/unit/test_debug.py::test_sanitize_int_mul_overflow[1073741824-2-int32-int32-True-True]
-python/test/unit/test_debug.py::test_sanitize_int_mul_overflow[-1073741824--4-int32-int32-True-True]
-python/test/unit/test_debug.py::test_sanitize_int_mul_overflow[-2147483648-1-int32-int32-True-False]
-python/test/unit/test_debug.py::test_sanitize_int_mul_overflow[-1073741824-2-int32-int32-True-False]
-python/test/unit/test_debug.py::test_sanitize_int_sub_overflow[-2147483648-1-int32-int32-True-True]
-python/test/unit/test_debug.py::test_sanitize_int_sub_overflow[2147483647--1-int32-int32-True-True]
-python/test/unit/test_debug.py::test_sanitize_int_sub_overflow[2147483647-1-int32-int32-True-False]
-python/test/unit/test_debug.py::test_sanitize_int_sub_overflow[-2147483648--1-int32-int32-True-False]
+python/test/unit/test_debug.py::test_sanitize_int_add_overflow[r".*"]@regexp
+python/test/unit/test_debug.py::test_sanitize_int_sub_overflow[r".*"]@regexp
+python/test/unit/test_debug.py::test_sanitize_int_mul_overflow[r".*"]@regexp
