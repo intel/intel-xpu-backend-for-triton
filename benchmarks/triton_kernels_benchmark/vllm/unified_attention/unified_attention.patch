@@ -1,16 +1,7 @@
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 1774f1b30..c09377e53 100644
+index 1774f1b30..8ff1a7270 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
-@@ -7,7 +7,7 @@
- #  - Chih-Chieh Yang <chih.chieh.yang@ibm.com>
- #  - Thomas Parnell <tpa@zurich.ibm.com>
- 
--from typing import Any
-+from typing import Any, Optional
- 
- import torch
- 
 @@ -54,16 +54,132 @@ def _cast_kv_tile(data, Q, tensor_scale, KV_QUANT_MODE: tl.constexpr):
      return data.to(Q.dtype)
  
