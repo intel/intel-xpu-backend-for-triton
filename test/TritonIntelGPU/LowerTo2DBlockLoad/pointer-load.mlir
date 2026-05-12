@@ -110,6 +110,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
+// COM: Rank-3 pointer load where getBlockIOTileSize assigns rowDim to a batch
+// COM: dimension (dim 0). The pass must still convert it — the downstream
+// COM: lowering handles batch dims by folding them into the base pointer.
+#linear = #ttg.linear<{register = [[1, 0, 0], [2, 0, 0], [0, 0, 16], [0, 0, 32], [0, 0, 64]], lane = [[0, 0, 1], [0, 0, 2], [0, 0, 4], [0, 0, 8]], warp = [[0, 0, 0]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @rank3_batch_dim_load
+  tt.func @rank3_batch_dim_load(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> tensor<4x1x128xf16, #linear> {
+    %0 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<4x1x128x!tt.ptr<f16>, #linear>
+    // CHECK: ttig.2d_block_load_from_ptr
+    %1 = tt.load %0 {ttig.block_io = "row_major"} : tensor<4x1x128x!tt.ptr<f16>, #linear>
+    tt.return %1 : tensor<4x1x128xf16, #linear>
+  }
+}
+
+// -----
+
 // COM: Pointer load with ttig.one_matrix_per_load attribute. The pass must
 // COM: propagate this attribute to the resulting ttig.2d_block_load_from_ptr.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>

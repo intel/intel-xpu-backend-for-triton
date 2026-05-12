@@ -487,15 +487,6 @@ bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
   if (!sizeInfo.isValid())
     return false;
 
-  // The 2D block I/O tile must use only the inner 2 dims. Reject if
-  // rowDim or colDim falls in a batch dimension.
-  unsigned rank = ll.getNumOutDims();
-  if (rank > 2) {
-    int innerDimStart = static_cast<int>(rank - 2);
-    if (sizeInfo.rowDim < innerDimStart || sizeInfo.colDim < innerDimStart)
-      return false;
-  }
-
   unsigned packedElemSizeInBits = elemSizeInBits * sizeInfo.numElemPerPackedVal;
   if (!check2DBlockAddressPayloadRestriction(packedElemSizeInBits,
                                              sizeInfo.tileWidth))
