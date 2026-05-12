@@ -203,6 +203,46 @@ jobs:
           fi
           pip install -e .
 
+      - name: Report environment details
+        timeout-minutes: 1
+        run: |
+          mkdir -p inductor_log
+          TIMESTAMP=$(date '+%Y%m%d%H%M%S')
+          echo "TIMESTAMP=$TIMESTAMP" >> "${GITHUB_ENV}"
+
+          source ./scripts/capture-hw-details.sh --quiet
+
+          cat <<EOF | tee inductor_log/.env
+          TIMESTAMP=$TIMESTAMP
+          JOB_NAME=${{ join(inputs.*, '-') }}
+          GITHUB_RUN_ID=$GITHUB_RUN_ID
+          GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER
+          GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT
+          E2E_MODE=${{ inputs.mode }}
+          E2E_TEST_MODE=${{ inputs.test_mode }}
+          E2E_SUITE=${{ inputs.suite }}
+          E2E_DTYPE=${{ inputs.dtype }}
+          PYTHON_VERSION=$PYTHON_VERSION
+          PYTORCH_REPO=$PYTORCH_REPO
+          PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID
+          PYTORCH_VERSION=$PYTORCH_VERSION
+          LLVM_REPO=llvm/llvm-project
+          LLVM_COMMIT_ID=$LLVM_COMMIT_ID
+          BENCHMARK_REPO=$BENCHMARK_REPO
+          BENCHMARK_COMMIT_ID=$BENCHMARK_COMMIT_ID
+          TRITON_REPO=$GITHUB_REPOSITORY
+          TRITON_COMMIT_ID=$GITHUB_SHA
+          TORCHVISION_COMMIT_ID=$TORCHVISION_COMMIT_ID
+          TORCHAUDIO_COMMIT_ID=$TORCHAUDIO_COMMIT_ID
+          TIMM_COMMIT_ID=$TIMM_COMMIT_ID
+          LIBIGC1_VERSION=$LIBIGC1_VERSION
+          LEVEL_ZERO_VERSION=$LEVEL_ZERO_VERSION
+          GPU_DEVICE=$GPU_DEVICE
+          AGAMA_VERSION=$AGAMA_VERSION
+          COMPILER_VERSION=$COMPILER_VERSION
+          OS=${{ runner.os }}
+          EOF
+
       - name: Run e2e ${{ inputs.test_mode }} tests
         env:
           HUGGING_FACE_HUB_TOKEN: ${{ secrets.HUGGING_FACE_HUB_TOKEN }}
@@ -243,46 +283,6 @@ jobs:
           else
             bash -e $GITHUB_WORKSPACE/scripts/inductor_xpu_test.sh ${{ inputs.suite }} ${{ inputs.dtype }} ${{ inputs.mode }} ${{ inputs.test_mode }} xpu 0 static 1 0
           fi
-
-      - name: Report environment details
-        timeout-minutes: 1
-        run: |
-          mkdir -p inductor_log
-          TIMESTAMP=$(date '+%Y%m%d%H%M%S')
-          echo "TIMESTAMP=$TIMESTAMP" >> "${GITHUB_ENV}"
-
-          source ./scripts/capture-hw-details.sh --quiet
-
-          cat <<EOF | tee inductor_log/.env
-          TIMESTAMP=$TIMESTAMP
-          JOB_NAME=${{ join(inputs.*, '-') }}
-          GITHUB_RUN_ID=$GITHUB_RUN_ID
-          GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER
-          GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT
-          E2E_MODE=${{ inputs.mode }}
-          E2E_TEST_MODE=${{ inputs.test_mode }}
-          E2E_SUITE=${{ inputs.suite }}
-          E2E_DTYPE=${{ inputs.dtype }}
-          PYTHON_VERSION=$PYTHON_VERSION
-          PYTORCH_REPO=$PYTORCH_REPO
-          PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID
-          PYTORCH_VERSION=$PYTORCH_VERSION
-          LLVM_REPO=llvm/llvm-project
-          LLVM_COMMIT_ID=$LLVM_COMMIT_ID
-          BENCHMARK_REPO=$BENCHMARK_REPO
-          BENCHMARK_COMMIT_ID=$BENCHMARK_COMMIT_ID
-          TRITON_REPO=$GITHUB_REPOSITORY
-          TRITON_COMMIT_ID=$GITHUB_SHA
-          TORCHVISION_COMMIT_ID=$TORCHVISION_COMMIT_ID
-          TORCHAUDIO_COMMIT_ID=$TORCHAUDIO_COMMIT_ID
-          TIMM_COMMIT_ID=$TIMM_COMMIT_ID
-          LIBIGC1_VERSION=$LIBIGC1_VERSION
-          LEVEL_ZERO_VERSION=$LEVEL_ZERO_VERSION
-          GPU_DEVICE=$GPU_DEVICE
-          AGAMA_VERSION=$AGAMA_VERSION
-          COMPILER_VERSION=$COMPILER_VERSION
-          OS=${{ runner.os }}
-          EOF
 
       - name: Copy reports
         run: |
