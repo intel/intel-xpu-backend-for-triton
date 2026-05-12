@@ -3438,27 +3438,47 @@ struct DescriptorGatherOpConversion
     Value llDesc = adaptor.getDesc();
     SmallVector<Value> offsetsX =
         unpackLLElements(loc, adaptor.getXOffsets(), rewriter);
+    RankedTensorType offXTy = op.getXOffsets().getType();
+    std::optional<LinearLayout> offsetsXLLEncoding =
+        cast<DistributedEncodingTrait>(offXTy.getEncoding())
+            .toLinearLayout(offXTy.getShape());
+    assert(offsetsXLLEncoding.has_value() &&
+           "unexpected failure when getting linear layout");
 
-    // RankedTensorType offXTy = op.getXOffsets().getType();
-    //
-    // Attribute encoding = offXTy.getEncoding();
-    // std::optional<LinearLayout> llEncoding =
-    //     cast<DistributedEncodingTrait>(encoding).toLinearLayout(
-    //         offXTy.getShape());
-    // assert(llEncoding.has_value() &&
-    //        "unexpected failure when getting linear layout");
-    // llvm::outs() << "johnlu llEncoding: " << llEncoding << "\n";
     Value offsetY = adaptor.getYOffset();
-
     // Get result type information
     auto resultType = cast<RankedTensorType>(op.getType());
-    Attribute encoding = resultType.getEncoding();
     std::optional<LinearLayout> llEncoding =
-        cast<DistributedEncodingTrait>(encoding).toLinearLayout(
-            resultType.getShape());
+        cast<DistributedEncodingTrait>(resultType.getEncoding())
+            .toLinearLayout(resultType.getShape());
     assert(llEncoding.has_value() &&
            "unexpected failure when getting linear layout");
     // llvm::outs() << "johnlu llEncoding: " << llEncoding << "\n";
+
+    auto outDimSize = offsetsXLLEncoding->getOutDimSizeLog2(str_attr("dim0"));
+    auto inDimSize = offsetsXLLEncoding->getInDimSize(str_attr("register"));
+    std::vector<std::vector<int>> offsetBases(outDimSize, {0});
+    const LinearLayout::BasesT &_bases = offsetsXLLEncoding->getBases();
+    for (const auto &base : _bases) {
+      StringAttr attr = base.first;
+      if (attr.getValue().compare(str_attr("register")) == 0) {
+        auto regBases = base.second;
+        for (size_t i = 0; i < regBases.size(); ++i) {
+          if (regBases[i][0]) {
+            offsetBases[llvm::Log2_32(regBases[i][0])] = {1 << i};
+          }
+        }
+        break;
+      }
+    }
+    LinearLayout offMapping({{str_attr("dim0"), offsetBases}},
+                            {{str_attr("dim0"), inDimSize}},
+                            /*requireSurjective=*/false);
+    offMapping *=
+        LinearLayout::zeros1D(llEncoding->getOutDimSize(str_attr("dim1")),
+                              str_attr("dim1"), str_attr("dim0"));
+    offMapping = llEncoding->compose(offMapping);
+    // llvm::outs() << "johnlu offMapping: " << offMapping << "\n";
 
     size_t resultRank = resultType.getRank();
     Type valueElemTy = typeConverter->convertType(resultType.getElementType());
@@ -3621,16 +3641,14 @@ struct DescriptorGatherOpConversion
 
       // update offset X.
       Value offsetX;
-      auto offsets = llEncoding->apply(
+      auto offsets = offMapping.apply(
           {{kRegister, registerIdx}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
 
       for (auto [dim, offsetIdx] : offsets) {
-        if (dim == str_attr("dim0")) {
-          offsetX = b.zext(int_ty(64), offsetsX[offsetIdx]);
-          Value offset64 = b.mul(offsetX, desc.strides[rowDim]);
-          addrElem = b.gep(ptr_ty(ctx, 1), valueElemTy, addrElem, offset64);
-          break;
-        }
+        offsetX = b.zext(int_ty(64), offsetsX[offsetIdx]);
+        Value offset64 = b.mul(offsetX, desc.strides[rowDim]);
+        addrElem = b.gep(ptr_ty(ctx, 1), valueElemTy, addrElem, offset64);
+        break;
       }
 
       // Get the predicate mask for this element (always present for
