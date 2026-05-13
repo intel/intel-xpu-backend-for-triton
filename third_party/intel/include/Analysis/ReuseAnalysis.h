@@ -3,6 +3,7 @@
 
 #include "intel/include/Analysis/SpatialReuseAnalysis.h"
 #include "intel/include/Analysis/TemporalReuseAnalysis.h"
+#include "llvm/ADT/STLExtras.h"
 
 namespace mlir::triton::gpu::intel {
 
@@ -18,13 +19,12 @@ public:
                 mlir::triton::intel::ModuleStrideAnalysis &strideAnalysis)
       : spatial(m), temporal(strideAnalysis) {}
 
-  bool anyReuse(mlir::triton::LoadOp op) const {
-    return spatial.hasCrossSubgroupReuse(op) || temporal.hasTemporalReuse(op);
-  }
-  bool anyReuse(mlir::triton::DescriptorLoadOp op) const {
-    return spatial.hasCrossSubgroupReuse(op) || temporal.hasTemporalReuse(op);
-  }
-  bool anyReuse(mlir::triton::DescriptorGatherOp op) const {
+  template <typename OpTy,
+            typename = std::enable_if_t<
+                llvm::is_one_of<OpTy, mlir::triton::LoadOp,
+                                mlir::triton::DescriptorLoadOp,
+                                mlir::triton::DescriptorGatherOp>::value>>
+  bool anyReuse(OpTy op) const {
     return spatial.hasCrossSubgroupReuse(op) || temporal.hasTemporalReuse(op);
   }
 
