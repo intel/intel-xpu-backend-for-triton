@@ -673,7 +673,7 @@ run_tutorial_tests() {
   # autotuning, sys.argv manipulation, and global allocator changes that are not
   # safe to parallelize with pytest-xdist.
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=tutorials \
-    run_pytest_command -vvv --device xpu test_tutorials.py --tutorial06-mode "$TUTORIAL06_RUN_MODE"
+    run_pytest_command -vvv -s --device xpu test_tutorials.py --tutorial06-mode "$TUTORIAL06_RUN_MODE"
 
   # Restore the original reports directory.
   TRITON_TEST_REPORTS_DIR="$saved_reports_dir"

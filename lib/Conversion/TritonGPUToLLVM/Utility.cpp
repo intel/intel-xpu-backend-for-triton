@@ -790,10 +790,13 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
 
   // PTX expects the address increments to be done in bytes
   // If we don't perform the computations in i8, the compiler would
-  // have to divide the computation by bitwdith / 8 and then lift this
+  // have to divide the computation by ceil(bitwidth, 8) and then lift this
   // shl, which often it's not able to do.
+  // Use ceil(bitwidth, 8) for sub-byte element types (e.g. i1, i4) to avoid
+  // 0-byte element sizes.
+  auto bytesPerElem = ceil(bitwidth, 8);
   auto i8Tile =
-      LinearLayout::zeros1D(bitwidth / 8, kReg, kOffset, bitwidth / 8);
+      LinearLayout::zeros1D(bytesPerElem, kReg, kOffset, bytesPerElem);
   auto i8AddrLayout = i8Tile * addrLayout;
 
   Value blockId = b.i32_val(0);
@@ -815,7 +818,7 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
 
   // It's fine that we don't compute the offset in bytes as affineOffset
   // will be folded into a constant
-  auto affineOffsetI8 = b.mul(affineOffset, b.i32_val(bitwidth / 8));
+  auto affineOffsetI8 = b.mul(affineOffset, b.i32_val(bytesPerElem));
   bool hasPadding = !paddingShifts.empty();
   Value paddedAffineOffsetI8 = b.i32_val(0);
   if (hasPadding && maskSpanAffineOffset != 0) {
@@ -834,7 +837,7 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
   for (int i = 0; i < cvt.getInDimSize(kReg); i += nAdditive) {
     auto idxAndBlock =
         reps.apply({{kReg, i}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
-    auto regIdxI8 = idxAndBlock[0].second * (bitwidth / 8);
+    auto regIdxI8 = idxAndBlock[0].second * bytesPerElem;
     Value offset = b.xor_(regBaseI8, b.i32_val(regIdxI8));
     if (hasPadding) {
       offset = applyPadding(loc, rewriter, offset, paddingShifts);
@@ -849,7 +852,7 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
       // all these constants will go as immediate values to LDS/STS
       auto idxAndBlockAdd =
           reps.apply({{kReg, j}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
-      auto regIdxAddI8 = idxAndBlockAdd[0].second * (bitwidth / 8);
+      auto regIdxAddI8 = idxAndBlockAdd[0].second * bytesPerElem;
       // `actionAdditiveStrides` forces `regIdxAddI8` and `offset` to be bitwise
       // disjoint, so we can calculate their padding contributions separately.
       regIdxAddI8 = applyPadding(regIdxAddI8, paddingShifts);
@@ -1446,23 +1449,30 @@ static Value getScratchPtrImpl(Location loc, RewriterBase &rewriter,
     gridDim[k] = GetNumProgramsOp::create(rewriter, loc, k);
 
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value linearId = gridIdx[2];
+  auto zextToI64 = [&](Value value) {
+    if (value.getType() == i64_ty)
+      return value;
+    return b.zext(i64_ty, value).getResult();
+  };
+  Value linearId = zextToI64(gridIdx[2]);
   for (int k = 0; k < 2; ++k)
-    linearId = b.add(gridIdx[1 - k], b.mul(linearId, gridDim[1 - k]));
+    linearId = b.add(zextToI64(gridIdx[1 - k]),
+                     b.mul(linearId, zextToI64(gridDim[1 - k])));
 
   auto numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
   if (numCTAs > 1) {
-    linearId = b.mul(linearId, b.i32_val(numCTAs));
+    linearId = b.mul(linearId, b.i64_val(numCTAs));
     // currentCTA sets whether to rebase the linearId to the CTA id or
     // just keep the pointer to the whole tensor
     if (currentCTA)
-      linearId = b.add(linearId, targetInfo.getClusterCTAId(rewriter, loc));
+      linearId =
+          b.add(linearId, zextToI64(targetInfo.getClusterCTAId(rewriter, loc)));
   }
 
   auto allocSize = allocSizeAttrVal.getValue().getZExtValue();
-  Value offset = b.mul(linearId, b.i32_val(allocSize));
+  Value offset = b.mul(linearId, b.i64_val(allocSize));
   if (allocOffset)
-    offset = b.add(offset, allocOffset);
+    offset = b.add(offset, zextToI64(allocOffset));
 
   auto *ctx = rewriter.getContext();
   return b.gep(mlir::LLVM::LLVMPointerType::get(ctx, 1), i8_ty, gmemBase,

@@ -56,8 +56,7 @@ public:
         llvm::TypeSwitch<Operation *>(srcOp)
             .Case<tt::DescriptorLoadOp>([&](auto descLoadOp) {
               auto makeTensorDescOp =
-                  *tt::intel::findDefiningOpOfType<tt::MakeTensorDescOp>(
-                      descLoadOp.getDesc());
+                  *tt::intel::findMakeTensorDescOp(descLoadOp.getDesc());
               manager.createChains(makeTensorDescOp, reshapeOp);
             })
             .Default([](Operation *) {});
@@ -265,8 +264,7 @@ private:
       return false;
 
     std::optional<tt::MakeTensorDescOp> makeTensorDescOp =
-        tt::intel::findDefiningOpOfType<tt::MakeTensorDescOp>(
-            descLoadOp.getDesc());
+        tt::intel::findMakeTensorDescOp(descLoadOp.getDesc());
     if (!makeTensorDescOp)
       return false;
 

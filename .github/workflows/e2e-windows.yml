@@ -230,6 +230,46 @@ jobs:
           pip install -e .
           '
 
+      - name: Identify GPU
+        timeout-minutes: 1
+        run: |
+          # Initializing oneAPI to enable sycl-ls, which is used in capture-hw-details.sh on Windows.
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          bash -c './scripts/capture-hw-details.sh | tee -a $GITHUB_ENV'
+
+      - name: Report environment details
+        shell: bash
+        run: |
+          mkdir -p /c/gh${{ github.run_id }}/inductor_log
+          cat <<EOF | tee /c/gh${{ github.run_id }}/inductor_log/e2e.env
+          TIMESTAMP=$(date '+%Y%m%d%H%M%S')
+          JOB_NAME=${{ join(inputs.*, '-') }}
+          GITHUB_RUN_ID=$GITHUB_RUN_ID
+          GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER
+          GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT
+          E2E_MODE=${{ inputs.mode }}
+          E2E_TEST_MODE=${{ inputs.test_mode }}
+          E2E_SUITE=${{ inputs.suite }}
+          E2E_DTYPE=${{ inputs.dtype }}
+          PYTHON_VERSION=$PYTHON_VERSION
+          PYTORCH_REPO=pytorch/pytorch
+          PYTORCH_COMMIT_ID=$(<.github/pins/pytorch.txt)"
+          PYTORCH_VERSION=$PYTORCH_VERSION
+          BENCHMARK_REPO=$BENCHMARK_REPO
+          BENCHMARK_COMMIT_ID=$BENCHMARK_COMMIT_ID
+          TRITON_REPO=$GITHUB_REPOSITORY
+          TRITON_COMMIT_ID=$GITHUB_SHA
+          TORCHVISION_COMMIT_ID=$TORCHVISION_COMMIT_ID
+          TORCHAUDIO_COMMIT_ID=$TORCHAUDIO_COMMIT_ID
+          TIMM_COMMIT_ID=$TIMM_COMMIT_ID
+          LIBIGC1_VERSION=$LIBIGC1_VERSION
+          LEVEL_ZERO_VERSION=$LEVEL_ZERO_VERSION
+          GPU_DEVICE=$GPU_DEVICE
+          AGAMA_VERSION=$AGAMA_VERSION
+          COMPILER_VERSION=$COMPILER_VERSION
+          OS=${{ runner.os }}
+          EOF
+
       - name: Run e2e tests
         env:
           HUGGING_FACE_HUB_TOKEN: ${{ secrets.HUGGING_FACE_HUB_TOKEN }}
@@ -298,46 +338,6 @@ jobs:
             done
           done
           '
-
-
-      - name: Identify GPU
-        timeout-minutes: 1
-        run: |
-          # Initializing oneAPI to enable sycl-ls, which is used in capture-hw-details.sh on Windows.
-          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
-          bash -c './scripts/capture-hw-details.sh | tee -a $GITHUB_ENV'
-
-      - name: Report environment details
-        shell: bash
-        run: |
-          mkdir -p /c/gh${{ github.run_id }}/inductor_log
-          cat <<EOF | tee /c/gh${{ github.run_id }}/inductor_log/e2e.env
-          TIMESTAMP=$(date '+%Y%m%d%H%M%S')
-          JOB_NAME=${{ join(inputs.*, '-') }}
-          GITHUB_RUN_ID=$GITHUB_RUN_ID
-          GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER
-          GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT
-          E2E_MODE=${{ inputs.mode }}
-          E2E_TEST_MODE=${{ inputs.test_mode }}
-          E2E_SUITE=${{ inputs.suite }}
-          E2E_DTYPE=${{ inputs.dtype }}
-          PYTHON_VERSION=$PYTHON_VERSION
-          PYTORCH_REPO=pytorch/pytorch
-          PYTORCH_COMMIT_ID=$(<.github/pins/pytorch.txt)"
-          PYTORCH_VERSION=$PYTORCH_VERSION
-          BENCHMARK_REPO=$BENCHMARK_REPO
-          BENCHMARK_COMMIT_ID=$BENCHMARK_COMMIT_ID
-          TRITON_REPO=$GITHUB_REPOSITORY
-          TRITON_COMMIT_ID=$GITHUB_SHA
-          TORCHVISION_COMMIT_ID=$TORCHVISION_COMMIT_ID
-          TORCHAUDIO_COMMIT_ID=$TORCHAUDIO_COMMIT_ID
-          TIMM_COMMIT_ID=$TIMM_COMMIT_ID
-          LIBIGC1_VERSION=$LIBIGC1_VERSION
-          LEVEL_ZERO_VERSION=$LEVEL_ZERO_VERSION
-          GPU_DEVICE=$GPU_DEVICE
-          AGAMA_VERSION=$AGAMA_VERSION
-          OS=${{ runner.os }}
-          EOF
 
       - name: Upload test logs
         uses: actions/upload-artifact@v7
