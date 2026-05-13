@@ -16,6 +16,7 @@ import signal
 import re
 import os
 import subprocess
+import warnings
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
 
@@ -81,8 +82,12 @@ def extract_spill_size_from_zebin(file):
         elf = ELFFile(f)
         zeinfo = elf.get_section_by_name(".ze_info")
         if zeinfo is None:
-            raise IntelGPUError('Internal Triton ZEBIN codegen error:'
-                                'Section .ze_info not found in zebin')
+            warnings.warn(
+                'Section .ze_info not found in zebin; cannot extract spill_size. '
+                'Auto-GRF mode selection will be skipped for this kernel.',
+                stacklevel=2,
+            )
+            return 0
         text = zeinfo.data().decode('utf-8')
         match = SPILL_SIZE_RE.search(text)
         if match is not None:
