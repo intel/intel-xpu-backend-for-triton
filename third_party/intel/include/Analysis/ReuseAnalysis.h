@@ -20,10 +20,9 @@ public:
       : spatial(m), temporal(strideAnalysis) {}
 
   template <typename OpTy,
-            typename = std::enable_if_t<
-                llvm::is_one_of<OpTy, mlir::triton::LoadOp,
-                                mlir::triton::DescriptorLoadOp,
-                                mlir::triton::DescriptorGatherOp>::value>>
+            typename = std::enable_if_t<llvm::is_one_of<
+                OpTy, mlir::triton::LoadOp, mlir::triton::DescriptorLoadOp,
+                mlir::triton::DescriptorGatherOp>::value>>
   bool anyReuse(OpTy op) const {
     return spatial.hasCrossSubgroupReuse(op) || temporal.hasTemporalReuse(op);
   }
