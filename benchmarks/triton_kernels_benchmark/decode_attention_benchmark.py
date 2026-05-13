@@ -22,7 +22,7 @@ def gen_args(B, N_CTX, H_Q, H_KV, D, dtype, device):
     # o will have the same shape as q
     o = torch.zeros(B, H_Q, D, dtype=dtype, device=device)
 
-    b_seq_len = torch.full((B, ), N_CTX, device=device)
+    b_seq_len = torch.full((B, ), N_CTX, dtype=torch.int32, device=device)
 
     kv_indptr = torch.zeros((B + 1, ), dtype=torch.int32, device=device)
     kv_indptr[1:B + 1] = torch.cumsum(b_seq_len[:B], dim=0)
@@ -41,6 +41,26 @@ def gen_args(B, N_CTX, H_Q, H_KV, D, dtype, device):
 
     return (q, k_buffer, v_buffer, o, kv_indptr, kv_indices, attn_logits, attn_lse, num_kv_splits, max_kv_splits,
             sm_scale)
+
+
+def _repeat_kv_heads(x, num_q_heads):
+    if x.shape[1] == num_q_heads:
+        return x
+    return torch.repeat_interleave(x, num_q_heads // x.shape[1], dim=1)
+
+
+def _decode_attention_torch_ref(q, k_buffer, v_buffer, kv_indptr, sm_scale):
+    output = torch.empty_like(q)
+    for b in range(q.shape[0]):
+        kv_start = int(kv_indptr[b].item())
+        kv_end = int(kv_indptr[b + 1].item())
+        k = _repeat_kv_heads(k_buffer[kv_start:kv_end], q.shape[1]).float()
+        v = _repeat_kv_heads(v_buffer[kv_start:kv_end], q.shape[1]).float()
+        q_row = q[b].float()
+        attn = torch.einsum("hd,shd->hs", q_row, k) * sm_scale
+        attn = torch.softmax(attn, dim=-1)
+        output[b] = torch.einsum("hs,shd->hd", attn, v).to(output.dtype)
+    return output
 
 
 def get_dtype(dtype_str: str):
@@ -95,6 +115,15 @@ def benchmark(B, SEQ_LENS, H_Q, H_KV, D, MODE, DTYPE, provider):
     if provider == 'triton' and MODE == 'fwd':
         triton_fn = lambda: decode_attention_fwd(q, k_buffer, v_buffer, o, kv_indptr, kv_indices, attn_logits, attn_lse,
                                                  num_kv_splits, max_kv_splits, sm_scale)
+        B_ref = min(B, 4)
+        N_CTX_ref = min(N_CTX, 128)
+        q_ref, k_ref, v_ref, o_ref, kv_indptr_ref, kv_indices_ref, attn_logits_ref, attn_lse_ref, num_kv_splits_ref, max_kv_splits_ref, sm_scale_ref = gen_args(
+            B_ref, N_CTX_ref, H_Q, H_KV, D, dtype, 'xpu')
+        triton_ref_fn = lambda: decode_attention_fwd(q_ref, k_ref, v_ref, o_ref, kv_indptr_ref, kv_indices_ref,
+                                                     attn_logits_ref, attn_lse_ref, num_kv_splits_ref,
+                                                     max_kv_splits_ref, sm_scale_ref)
+        torch_ref_fn = lambda: _decode_attention_torch_ref(q_ref, k_ref, v_ref, kv_indptr_ref, sm_scale_ref)
+        benchmark_suit.assert_close(triton_ref_fn, torch_ref_fn, atol=3e-2, rtol=3e-2, err_msg='decode_attention')
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
 
     else:

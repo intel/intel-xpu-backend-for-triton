@@ -55,6 +55,43 @@ def gen_args(B, EXTEND_LEN, PREFIX_LEN, H_Q, H_KV, D, dtype, device):
     return params
 
 
+def _repeat_kv_heads(x, num_q_heads):
+    if x.shape[1] == num_q_heads:
+        return x
+    return torch.repeat_interleave(x, num_q_heads // x.shape[1], dim=1)
+
+
+def _extended_attention_torch_ref(q_extend, k_extend, v_extend, k_buffer, v_buffer, qo_indptr, kv_indptr, kv_indices):
+    output = torch.empty_like(q_extend)
+    num_batches = qo_indptr.numel() - 1
+
+    for b in range(num_batches):
+        q_start = int(qo_indptr[b].item())
+        q_end = int(qo_indptr[b + 1].item())
+        q_len = q_end - q_start
+        kv_start = int(kv_indptr[b].item())
+        kv_end = int(kv_indptr[b + 1].item())
+        prefix_indices = kv_indices[kv_start:kv_end].long()
+        prefix_len = int(prefix_indices.numel())
+        total_len = prefix_len + q_len
+
+        q = q_extend[q_start:q_end].float()
+        k = torch.cat([k_buffer[prefix_indices], k_extend[q_start:q_end]], dim=0)
+        v = torch.cat([v_buffer[prefix_indices], v_extend[q_start:q_end]], dim=0)
+        k = _repeat_kv_heads(k, q.shape[1]).float()
+        v = _repeat_kv_heads(v, q.shape[1]).float()
+
+        attn = torch.einsum("thd,shd->hts", q, k) * (q.shape[-1]**-0.5)
+        q_idx = torch.arange(q_len, device=q.device).unsqueeze(1)
+        k_idx = torch.arange(total_len, device=q.device).unsqueeze(0)
+        causal_mask = k_idx > (prefix_len + q_idx)
+        attn = attn.masked_fill(causal_mask.unsqueeze(0), float("-inf"))
+        attn = torch.softmax(attn, dim=-1)
+        output[q_start:q_end] = torch.einsum("hts,shd->thd", attn, v).to(output.dtype)
+
+    return output
+
+
 def get_dtype(dtype_str: str):
     if dtype_str == 'bfloat16':
         return torch.bfloat16
@@ -112,6 +149,20 @@ def benchmark(B, EXTEND_LEN, PREFIX_LEN, H_Q, H_KV, D, MODE, DTYPE, provider):
     if provider == 'triton' and MODE == 'fwd':
         triton_fn = lambda: extend_attention_fwd(q_extend, k_extend, v_extend, o_extend, k_buffer, v_buffer, qo_indptr,
                                                  kv_indptr, kv_indices, custom_mask, True, mask_indptr, max_len_extend)
+        B_ref = min(B, 2)
+        EXTEND_LEN_ref = min(EXTEND_LEN, 32)
+        PREFIX_LEN_ref = min(PREFIX_LEN, 128)
+        params_ref = gen_args(B_ref, EXTEND_LEN_ref, PREFIX_LEN_ref, H_Q, H_KV, D, dtype, 'xpu')
+        q_extend_ref, k_extend_ref, v_extend_ref, o_extend_ref = params_ref[0]
+        k_buffer_ref, v_buffer_ref = params_ref[1]
+        qo_indptr_ref, kv_indptr_ref, kv_indices_ref, max_len_extend_ref = params_ref[2]
+        triton_ref_fn = lambda: extend_attention_fwd(q_extend_ref, k_extend_ref, v_extend_ref, o_extend_ref,
+                                                     k_buffer_ref, v_buffer_ref, qo_indptr_ref, kv_indptr_ref,
+                                                     kv_indices_ref, custom_mask, True, mask_indptr, max_len_extend_ref)
+        torch_ref_fn = lambda: _extended_attention_torch_ref(q_extend_ref, k_extend_ref, v_extend_ref, k_buffer_ref,
+                                                              v_buffer_ref, qo_indptr_ref, kv_indptr_ref,
+                                                              kv_indices_ref)
+        benchmark_suit.assert_close(triton_ref_fn, torch_ref_fn, atol=3e-2, rtol=3e-2, err_msg='extended_attention')
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
 
     else:

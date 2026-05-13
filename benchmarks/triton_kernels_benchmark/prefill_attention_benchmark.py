@@ -15,11 +15,34 @@ def gen_args(B, SEQ_LENS, H_Q, H_KV, D, dtype, device):
     v = torch.randn((B * N_CTX, H_KV, D), device=device, dtype=dtype)
     o = torch.zeros((B * N_CTX, H_Q, D), device=device, dtype=dtype)
 
-    # Create b_start_loc and b_seq_len tensors
-    b_start_loc = torch.tensor([0, SEQ_LENS], device=device)
-    b_seq_len = torch.tensor([SEQ_LENS], device=device)
+    # Create per-batch metadata for flattened [B * N_CTX, ...] layout
+    b_start_loc = torch.arange(0, (B + 1) * SEQ_LENS, SEQ_LENS, dtype=torch.int32, device=device)
+    b_seq_len = torch.full((B, ), SEQ_LENS, dtype=torch.int32, device=device)
 
     return (q, k, v, o, b_start_loc, b_seq_len, max_seq_len)
+
+
+def _repeat_kv_heads(x, num_q_heads):
+    if x.shape[1] == num_q_heads:
+        return x
+    return torch.repeat_interleave(x, num_q_heads // x.shape[1], dim=1)
+
+
+def _prefill_attention_torch_ref(q, k, v, b_start_loc, b_seq_len, is_causal):
+    output = torch.empty_like(q)
+    for b in range(b_seq_len.numel()):
+        start = int(b_start_loc[b].item())
+        seq_len = int(b_seq_len[b].item())
+        q_slice = q[start:start + seq_len].float()
+        k_slice = _repeat_kv_heads(k[start:start + seq_len], q.shape[1]).float()
+        v_slice = _repeat_kv_heads(v[start:start + seq_len], q.shape[1]).float()
+        attn = torch.einsum("thd,shd->hts", q_slice, k_slice) * (q_slice.shape[-1]**-0.5)
+        if is_causal:
+            causal_mask = torch.triu(torch.ones((seq_len, seq_len), dtype=torch.bool, device=q.device), diagonal=1)
+            attn = attn.masked_fill(causal_mask.unsqueeze(0), float("-inf"))
+        attn = torch.softmax(attn, dim=-1)
+        output[start:start + seq_len] = torch.einsum("hts,shd->thd", attn, v_slice).to(output.dtype)
+    return output
 
 
 def get_dtype(dtype_str: str):
@@ -72,6 +95,15 @@ def benchmark(B, SEQ_LENS, H_Q, H_KV, D, CAUSAL, MODE, DTYPE, provider):
     quantiles = [0.5, 0.0, 1.0]
     if provider == 'triton' and MODE == 'fwd':
         triton_fn = lambda: context_attention_fwd(q, k, v, o, b_start_loc, b_seq_len, max_seq_len, is_causal=CAUSAL)
+        B_ref = min(B, 2)
+        SEQ_LENS_ref = min(SEQ_LENS, 64)
+        q_ref, k_ref, v_ref, o_ref, b_start_loc_ref, b_seq_len_ref, max_seq_len_ref = gen_args(
+            B_ref, SEQ_LENS_ref, H_Q, H_KV, D, dtype, 'xpu')
+        triton_ref_fn = lambda: context_attention_fwd(q_ref, k_ref, v_ref, o_ref, b_start_loc_ref, b_seq_len_ref,
+                                                      max_seq_len_ref, is_causal=CAUSAL)
+        torch_ref_fn = lambda: _prefill_attention_torch_ref(q_ref, k_ref, v_ref, b_start_loc_ref, b_seq_len_ref,
+                                                             CAUSAL)
+        benchmark_suit.assert_close(triton_ref_fn, torch_ref_fn, atol=3e-2, rtol=3e-2, err_msg='prefill_attention')
         _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10,
                                                                  quantiles=quantiles)
     else:
