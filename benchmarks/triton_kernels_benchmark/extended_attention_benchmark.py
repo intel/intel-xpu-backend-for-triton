@@ -3,6 +3,12 @@ from sglang.srt.layers.attention.triton_ops.extend_attention import (
     extend_attention_fwd, )
 import triton_kernels_benchmark as benchmark_suit
 
+VALIDATION_ATOL = 3e-2
+VALIDATION_RTOL = 3e-2
+VALIDATION_MAX_B = 2
+VALIDATION_MAX_EXTEND_LEN = 32
+VALIDATION_MAX_PREFIX_LEN = 128
+
 
 # pylint: disable=unused-argument
 def gen_args(B, EXTEND_LEN, PREFIX_LEN, H_Q, H_KV, D, dtype, device):
@@ -149,10 +155,10 @@ def benchmark(B, EXTEND_LEN, PREFIX_LEN, H_Q, H_KV, D, MODE, DTYPE, provider):
     if provider == 'triton' and MODE == 'fwd':
         triton_fn = lambda: extend_attention_fwd(q_extend, k_extend, v_extend, o_extend, k_buffer, v_buffer, qo_indptr,
                                                  kv_indptr, kv_indices, custom_mask, True, mask_indptr, max_len_extend)
-        B_ref = min(B, 2)
-        EXTEND_LEN_ref = min(EXTEND_LEN, 32)
-        PREFIX_LEN_ref = min(PREFIX_LEN, 128)
-        params_ref = gen_args(B_ref, EXTEND_LEN_ref, PREFIX_LEN_ref, H_Q, H_KV, D, dtype, 'xpu')
+        B_val = min(B, VALIDATION_MAX_B)
+        EXTEND_LEN_val = min(EXTEND_LEN, VALIDATION_MAX_EXTEND_LEN)
+        PREFIX_LEN_val = min(PREFIX_LEN, VALIDATION_MAX_PREFIX_LEN)
+        params_ref = gen_args(B_val, EXTEND_LEN_val, PREFIX_LEN_val, H_Q, H_KV, D, dtype, 'xpu')
         q_extend_ref, k_extend_ref, v_extend_ref, o_extend_ref = params_ref[0]
         k_buffer_ref, v_buffer_ref = params_ref[1]
         qo_indptr_ref, kv_indptr_ref, kv_indices_ref, max_len_extend_ref = params_ref[2]
@@ -162,7 +168,8 @@ def benchmark(B, EXTEND_LEN, PREFIX_LEN, H_Q, H_KV, D, MODE, DTYPE, provider):
         torch_ref_fn = lambda: _extended_attention_torch_ref(q_extend_ref, k_extend_ref, v_extend_ref, k_buffer_ref,
                                                               v_buffer_ref, qo_indptr_ref, kv_indptr_ref,
                                                               kv_indices_ref)
-        benchmark_suit.assert_close(triton_ref_fn, torch_ref_fn, atol=3e-2, rtol=3e-2, err_msg='extended_attention')
+        benchmark_suit.assert_close(
+            triton_ref_fn, torch_ref_fn, atol=VALIDATION_ATOL, rtol=VALIDATION_RTOL, err_msg='extended_attention')
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
 
     else:

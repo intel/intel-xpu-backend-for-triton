@@ -4,6 +4,11 @@ from sglang.srt.layers.attention.triton_ops.decode_attention import decode_atten
 
 import triton_kernels_benchmark as benchmark_suit
 
+VALIDATION_ATOL = 3e-2
+VALIDATION_RTOL = 3e-2
+VALIDATION_MAX_B = 4
+VALIDATION_MAX_N_CTX = 128
+
 
 def gen_args(B, N_CTX, H_Q, H_KV, D, dtype, device):
 
@@ -115,15 +120,16 @@ def benchmark(B, SEQ_LENS, H_Q, H_KV, D, MODE, DTYPE, provider):
     if provider == 'triton' and MODE == 'fwd':
         triton_fn = lambda: decode_attention_fwd(q, k_buffer, v_buffer, o, kv_indptr, kv_indices, attn_logits, attn_lse,
                                                  num_kv_splits, max_kv_splits, sm_scale)
-        B_ref = min(B, 4)
-        N_CTX_ref = min(N_CTX, 128)
+        B_val = min(B, VALIDATION_MAX_B)
+        N_CTX_val = min(N_CTX, VALIDATION_MAX_N_CTX)
         q_ref, k_ref, v_ref, o_ref, kv_indptr_ref, kv_indices_ref, attn_logits_ref, attn_lse_ref, num_kv_splits_ref, max_kv_splits_ref, sm_scale_ref = gen_args(
-            B_ref, N_CTX_ref, H_Q, H_KV, D, dtype, 'xpu')
+            B_val, N_CTX_val, H_Q, H_KV, D, dtype, 'xpu')
         triton_ref_fn = lambda: decode_attention_fwd(q_ref, k_ref, v_ref, o_ref, kv_indptr_ref, kv_indices_ref,
                                                      attn_logits_ref, attn_lse_ref, num_kv_splits_ref,
                                                      max_kv_splits_ref, sm_scale_ref)
         torch_ref_fn = lambda: _decode_attention_torch_ref(q_ref, k_ref, v_ref, kv_indptr_ref, sm_scale_ref)
-        benchmark_suit.assert_close(triton_ref_fn, torch_ref_fn, atol=3e-2, rtol=3e-2, err_msg='decode_attention')
+        benchmark_suit.assert_close(
+            triton_ref_fn, torch_ref_fn, atol=VALIDATION_ATOL, rtol=VALIDATION_RTOL, err_msg='decode_attention')
         _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
 
     else:

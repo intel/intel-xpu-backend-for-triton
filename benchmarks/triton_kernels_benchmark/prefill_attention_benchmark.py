@@ -4,6 +4,11 @@ from sglang.srt.layers.attention.triton_ops.prefill_attention import context_att
 
 import triton_kernels_benchmark as benchmark_suit
 
+VALIDATION_ATOL = 3e-2
+VALIDATION_RTOL = 3e-2
+VALIDATION_MAX_B = 2
+VALIDATION_MAX_SEQ_LENS = 64
+
 
 def gen_args(B, SEQ_LENS, H_Q, H_KV, D, dtype, device):
     max_seq_len = SEQ_LENS
@@ -95,15 +100,16 @@ def benchmark(B, SEQ_LENS, H_Q, H_KV, D, CAUSAL, MODE, DTYPE, provider):
     quantiles = [0.5, 0.0, 1.0]
     if provider == 'triton' and MODE == 'fwd':
         triton_fn = lambda: context_attention_fwd(q, k, v, o, b_start_loc, b_seq_len, max_seq_len, is_causal=CAUSAL)
-        B_ref = min(B, 2)
-        SEQ_LENS_ref = min(SEQ_LENS, 64)
+        B_val = min(B, VALIDATION_MAX_B)
+        SEQ_LENS_val = min(SEQ_LENS, VALIDATION_MAX_SEQ_LENS)
         q_ref, k_ref, v_ref, o_ref, b_start_loc_ref, b_seq_len_ref, max_seq_len_ref = gen_args(
-            B_ref, SEQ_LENS_ref, H_Q, H_KV, D, dtype, 'xpu')
+            B_val, SEQ_LENS_val, H_Q, H_KV, D, dtype, 'xpu')
         triton_ref_fn = lambda: context_attention_fwd(q_ref, k_ref, v_ref, o_ref, b_start_loc_ref, b_seq_len_ref,
                                                       max_seq_len_ref, is_causal=CAUSAL)
         torch_ref_fn = lambda: _prefill_attention_torch_ref(q_ref, k_ref, v_ref, b_start_loc_ref, b_seq_len_ref,
                                                              CAUSAL)
-        benchmark_suit.assert_close(triton_ref_fn, torch_ref_fn, atol=3e-2, rtol=3e-2, err_msg='prefill_attention')
+        benchmark_suit.assert_close(
+            triton_ref_fn, torch_ref_fn, atol=VALIDATION_ATOL, rtol=VALIDATION_RTOL, err_msg='prefill_attention')
         _, min_ms, max_ms, mean_ms, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10,
                                                                  quantiles=quantiles)
     else:
