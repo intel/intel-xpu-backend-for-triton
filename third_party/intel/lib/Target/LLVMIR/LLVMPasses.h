@@ -13,4 +13,16 @@ struct ExpandSaddWithOverflowPass : PassInfoMixin<ExpandSaddWithOverflowPass> {
   static StringRef name() { return "ExpandSaddWithOverflowPass"; }
 };
 
+struct ExpandSubByteBitReversePass
+    : PassInfoMixin<ExpandSubByteBitReversePass> {
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
+  static StringRef name() { return "ExpandSubByteBitReversePass"; }
+};
+
+struct ExpandSubByteBitwiseAndPass
+    : PassInfoMixin<ExpandSubByteBitwiseAndPass> {
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
+  static StringRef name() { return "ExpandSubByteBitwiseAndPass"; }
+};
+
 } // namespace llvm

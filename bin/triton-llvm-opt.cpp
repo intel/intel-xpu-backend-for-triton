@@ -53,6 +53,15 @@ static cl::opt<bool> ExpandSaddOverflow(
     llvm::cl::desc("expand llvm.sadd.with.overflow into plain arithmetic"),
     cl::init(false));
 
+static cl::opt<bool> ExpandSubByteBitReverse(
+    "expand-subbyte-bitreverse",
+    llvm::cl::desc("rewrite sub-byte llvm.bitreverse.iN via an i32 bitreverse"),
+    cl::init(false));
+
+static cl::opt<bool> ExpandSubByteBitwiseAnd(
+    "expand-subbyte-bitwise-and",
+    llvm::cl::desc("widen sub-byte `and iN` through i32"), cl::init(false));
+
 namespace {
 static std::function<Error(Module *)> makeOptimizingPipeline() {
   return [](Module *m) -> Error {
@@ -72,6 +81,10 @@ static std::function<Error(Module *)> makeOptimizingPipeline() {
     ModulePassManager mpm;
     if (ExpandSaddOverflow)
       mpm.addPass(ExpandSaddWithOverflowPass());
+    if (ExpandSubByteBitReverse)
+      mpm.addPass(ExpandSubByteBitReversePass());
+    if (ExpandSubByteBitwiseAnd)
+      mpm.addPass(ExpandSubByteBitwiseAndPass());
     llvm::FunctionPassManager fpm;
     if (BreakStructPhiNodes)
       fpm.addPass(BreakStructPhiNodesPass());

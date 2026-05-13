@@ -64,6 +64,71 @@ void expandSaddWithOverflow(Module &module) {
   }
 }
 
+// SPV_INTEL_int4 does not permit OpBitReverse on sub-byte OpTypeInt. Widen
+// via i32 bitreverse (supported by SPV_KHR_bit_instructions):
+//   zext iN -> i32; bitreverse.i32; lshr (32-N); trunc i32 -> iN
+void expandSubByteBitReverse(Module &module) {
+  SmallVector<CallInst *> calls;
+
+  for (auto &func : module)
+    for (auto &block : func)
+      for (auto &inst : block)
+        if (auto *call = dyn_cast<CallInst>(&inst))
+          if (auto *callee = call->getCalledFunction())
+            if (callee->getIntrinsicID() == Intrinsic::bitreverse) {
+              auto *intTy = dyn_cast<IntegerType>(call->getType());
+              if (intTy && intTy->getBitWidth() < 8)
+                calls.push_back(call);
+            }
+
+  for (CallInst *call : calls) {
+    IRBuilder<> builder(call);
+    auto *narrowTy = cast<IntegerType>(call->getType());
+    unsigned narrowBits = narrowTy->getBitWidth();
+    Type *i32Ty = builder.getInt32Ty();
+
+    Value *zext = builder.CreateZExt(call->getArgOperand(0), i32Ty);
+    Value *rev32 = builder.CreateIntrinsic(Intrinsic::bitreverse, {i32Ty},
+                                           {zext}, /*FMFSource=*/nullptr);
+    Value *shr =
+        builder.CreateLShr(rev32, ConstantInt::get(i32Ty, 32 - narrowBits));
+    Value *result = builder.CreateTrunc(shr, narrowTy);
+
+    call->replaceAllUsesWith(result);
+    call->eraseFromParent();
+  }
+}
+
+// SPV_INTEL_int4 does not permit OpBitwiseAnd on sub-byte OpTypeInt. Widen
+// through i32:
+//   zext iN -> i32 (both operands); and i32; trunc i32 -> iN
+void expandSubByteBitwiseAnd(Module &module) {
+  SmallVector<BinaryOperator *> ands;
+
+  for (auto &func : module)
+    for (auto &block : func)
+      for (auto &inst : block)
+        if (inst.getOpcode() == Instruction::And) {
+          auto *intTy = dyn_cast<IntegerType>(inst.getType());
+          if (intTy && intTy->getBitWidth() < 8)
+            ands.push_back(cast<BinaryOperator>(&inst));
+        }
+
+  for (BinaryOperator *op : ands) {
+    IRBuilder<> builder(op);
+    auto *narrowTy = cast<IntegerType>(op->getType());
+    Type *i32Ty = builder.getInt32Ty();
+
+    Value *a32 = builder.CreateZExt(op->getOperand(0), i32Ty);
+    Value *b32 = builder.CreateZExt(op->getOperand(1), i32Ty);
+    Value *r32 = builder.CreateAnd(a32, b32);
+    Value *result = builder.CreateTrunc(r32, narrowTy);
+
+    op->replaceAllUsesWith(result);
+    op->eraseFromParent();
+  }
+}
+
 void postProcessLLVMIR(llvm::Module &mod) {
   // __devicelib_assert_fail must be a declaration so that
   // IGC can replace it with a runtime assert function.
@@ -79,6 +144,10 @@ void postProcessLLVMIR(llvm::Module &mod) {
   // Pre-expand llvm.sadd.with.overflow.* so the SPIR-V translator never
   // links in the {iN, i1} emulation function that triggers the IGC bug.
   expandSaddWithOverflow(mod);
+
+  // Widen sub-byte bit ops forbidden by SPV_INTEL_int4.
+  expandSubByteBitReverse(mod);
+  expandSubByteBitwiseAnd(mod);
 }
 
 } // namespace mlir::triton::intel
@@ -86,5 +155,17 @@ void postProcessLLVMIR(llvm::Module &mod) {
 PreservedAnalyses ExpandSaddWithOverflowPass::run(Module &M,
                                                   ModuleAnalysisManager &) {
   mlir::triton::intel::expandSaddWithOverflow(M);
+  return PreservedAnalyses::none();
+}
+
+PreservedAnalyses ExpandSubByteBitReversePass::run(Module &M,
+                                                   ModuleAnalysisManager &) {
+  mlir::triton::intel::expandSubByteBitReverse(M);
+  return PreservedAnalyses::none();
+}
+
+PreservedAnalyses ExpandSubByteBitwiseAndPass::run(Module &M,
+                                                   ModuleAnalysisManager &) {
+  mlir::triton::intel::expandSubByteBitwiseAnd(M);
   return PreservedAnalyses::none();
 }
