@@ -53,6 +53,7 @@ env:
     inductor/test_max_autotune.py
     inductor/test_compile_subprocess.py
     inductor/test_analysis.py
+    inductor/test_cooperative_reductions.py
 
 jobs:
   compute-params:
