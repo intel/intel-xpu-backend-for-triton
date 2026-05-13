@@ -55,46 +55,6 @@ index a1594634f..959dd8c1d 100644
      w_s = torch.stack(w_s_l)
      w_gs = torch.stack(w_gs_l) if e > 0 and w_gs_l[0] is not None else None
  
-diff --git a/vllm/_custom_ops.py b/vllm/_custom_ops.py
-index 564276ada..a3094d26a 100644
---- a/vllm/_custom_ops.py
-+++ b/vllm/_custom_ops.py
-@@ -2057,14 +2057,30 @@ def scaled_fp8_quant(
-     if scale is None:
-         if use_per_token_if_dynamic:
-             scale = torch.empty((shape[0], 1), device=input.device, dtype=torch.float32)
--            torch.ops._C.dynamic_per_token_scaled_fp8_quant(
--                output, input, scale, scale_ub
--            )
-+            if hasattr(torch.ops._C, 'dynamic_per_token_scaled_fp8_quant'):
-+                torch.ops._C.dynamic_per_token_scaled_fp8_quant(
-+                    output, input, scale, scale_ub
-+                )
-+            else:
-+                fp8_max = torch.finfo(out_dtype).max
-+                amax = input.abs().amax(dim=-1, keepdim=True).clamp(min=1e-12)
-+                scale.copy_(amax / fp8_max)
-+                output.copy_((input / scale).clamp(-fp8_max, fp8_max).to(out_dtype))
-         else:
-             scale = torch.empty(1, device=input.device, dtype=torch.float32)
--            torch.ops._C.dynamic_scaled_fp8_quant(output, input, scale)
-+            if hasattr(torch.ops._C, 'dynamic_scaled_fp8_quant'):
-+                torch.ops._C.dynamic_scaled_fp8_quant(output, input, scale)
-+            else:
-+                fp8_max = torch.finfo(out_dtype).max
-+                amax = input.abs().max().clamp(min=1e-12)
-+                scale[0] = amax / fp8_max
-+                output.copy_((input / scale).clamp(-fp8_max, fp8_max).to(out_dtype))
-     else:
--        torch.ops._C.static_scaled_fp8_quant(output, input, scale, group_shape)
-+        if hasattr(torch.ops._C, 'static_scaled_fp8_quant'):
-+            torch.ops._C.static_scaled_fp8_quant(output, input, scale, group_shape)
-+        else:
-+            fp8_max = torch.finfo(out_dtype).max
-+            output.copy_((input / scale).clamp(-fp8_max, fp8_max).to(out_dtype))
- 
-     return output, scale
- 
 diff --git a/vllm/model_executor/layers/fused_moe/fused_batched_moe.py b/vllm/model_executor/layers/fused_moe/fused_batched_moe.py
 index 8638a1146..730617d8e 100644
 --- a/vllm/model_executor/layers/fused_moe/fused_batched_moe.py
@@ -117,28 +77,6 @@ index 8638a1146..730617d8e 100644
          # Note: this does a bunch of extra work because expert_num_tokens is
          # ignored but it does support torch.compile + cudagraphs.
          hidden_dim = A.size(-1)
-diff --git a/vllm/platforms/xpu.py b/vllm/platforms/xpu.py
-index bd9006f3f..161a559c1 100644
---- a/vllm/platforms/xpu.py
-+++ b/vllm/platforms/xpu.py
-@@ -8,9 +8,14 @@ from typing import TYPE_CHECKING
- import torch
- 
- # import custom ops, trigger op registration
--import vllm_xpu_kernels._C  # noqa
--import vllm_xpu_kernels._moe_C  # noqa
--import vllm_xpu_kernels._xpu_C  # noqa
-+try:
-+    import vllm_xpu_kernels._C  # noqa
-+    import vllm_xpu_kernels._moe_C  # noqa
-+    import vllm_xpu_kernels._xpu_C  # noqa
-+except (ImportError, OSError) as e:
-+    import logging
-+    logging.getLogger(__name__).warning(
-+        "Failed to import vllm_xpu_kernels: %s", e)
- 
- import vllm.envs as envs
- from vllm.logger import init_logger
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
 index 1774f1b30..257481768 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
