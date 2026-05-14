@@ -21,6 +21,8 @@ BlockIOTileSizeInfo
 getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
                    unsigned elemSizeInBits, AxisInfo *maskAxisInfo,
                    bool oneMatrixPerLoadForBT) {
+  assert((isLoad || !oneMatrixPerLoadForBT) &&
+         "oneMatrixPerLoadForBT must be false for stores");
 
   if (elemSizeInBits > 64)
     return BlockIOTileSizeInfo::unknown();
