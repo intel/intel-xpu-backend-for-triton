@@ -1917,7 +1917,7 @@ module {
 
 
 def test_local_alloc_sub_byte_element_type(device, tmp_path: pathlib.Path):
-    # Regression test for https://github.com/triton-lang/triton/pull/6851.
+    # Regression test for https://github.com/triton-lang/triton/pull/10285.
     # Previously, local_alloc for sub-byte element types (e.g. i1) would compute
     # an allocation size of 0 (bitwidth/8 = 1/8 = 0), while the lowering used
     # ceil(bitwidth, 8) = 1 byte per element, causing a size mismatch.
@@ -1951,8 +1951,8 @@ def test_local_alloc_sub_byte_element_type(device, tmp_path: pathlib.Path):
     kernel = triton.compile(str(temp_file))
 
     from triton.runtime.driver import driver
-    device = driver.active.get_current_device()
+    current_device = driver.active.get_current_device()
 
     module, function, n_regs, n_spills, n_max_threads = driver.active.utils.load_binary(
         kernel.name, kernel.kernel, kernel.metadata.shared, kernel.metadata.build_flags,
-        not kernel.metadata.generate_native_code, device)
+        not kernel.metadata.generate_native_code, current_device)
