@@ -159,3 +159,163 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// COM: Positive case: a W-chain where an intermediate convert_layout
+// COM: (blocked -> blocked2) sits between the load and the dot-operand
+// COM: convert. Both the intermediate convert and the DPAS consumer are inside
+// COM: the loop. hoistConvertDotOperand should propagate through the absorbed
+// COM: convert and place the dot-operand convert next to the load.
+// COM:
+// COM: Before:
+// COM:   load(blocked) -> convert_layout(blocked2) -> addf(blocked2)
+// COM:     -> convert_layout(dot_op) -> dot
+// COM: After:
+// COM:   load(blocked) -> convert_layout(dot_op) -> addf(dot_op) -> dot
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [2, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked3 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @hoist_through_convert_in_loop
+  tt.func public @hoist_through_convert_in_loop(
+      %arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>,
+      %arg2: !tt.ptr<f32>, %arg4: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c0_i64 = arith.constant 0 : i64
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x256xf32, #dpas>
+    %desc_a = tt.make_tensor_descriptor %arg0, [%arg4, %arg4], [%c0_i64, %c1_i64] : <f16>, <64x32xf16>
+    %desc_b = tt.make_tensor_descriptor %arg1, [%arg4, %arg4], [%c0_i64, %c1_i64] : <f16>, <32x256xf16>
+    // CHECK: scf.for
+    // CHECK:   %[[A:.*]] = tt.descriptor_load {{.*}} -> tensor<64x32xf16, #blocked>
+    // CHECK:   %[[A_DOT:.*]] = ttg.convert_layout %[[A]] : tensor<64x32xf16, #blocked> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+    // CHECK:   arith.addf %[[A_DOT]], %[[A_DOT]] : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+    // CHECK:   tt.dot
+    // CHECK:   scf.yield
+    %result = scf.for %iv = %c0_i32 to %arg4 step %c32_i32 iter_args(%acc = %cst) -> (tensor<64x256xf32, #dpas>) : i32 {
+      %a = tt.descriptor_load %desc_a[%c0_i32, %iv] : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #blocked>
+      %a2 = ttg.convert_layout %a : tensor<64x32xf16, #blocked> -> tensor<64x32xf16, #blocked2>
+      %a3 = arith.addf %a2, %a2 : tensor<64x32xf16, #blocked2>
+      %a_dot = ttg.convert_layout %a3 : tensor<64x32xf16, #blocked2> -> tensor<64x32xf16, #dot0>
+      %b = tt.descriptor_load %desc_b[%iv, %c0_i32] : !tt.tensordesc<32x256xf16> -> tensor<32x256xf16, #blocked3>
+      %b_dot = ttg.convert_layout %b : tensor<32x256xf16, #blocked3> -> tensor<32x256xf16, #dot1>
+      %d = tt.dot %a_dot, %b_dot, %acc, inputPrecision = tf32 : tensor<64x32xf16, #dot0> * tensor<32x256xf16, #dot1> -> tensor<64x256xf32, #dpas>
+      scf.yield %d : tensor<64x256xf32, #dpas>
+    }
+    %desc_c = tt.make_tensor_descriptor %arg2, [%arg4, %arg4], [%c0_i64, %c1_i64] : <f32>, <64x256xf32>
+    tt.descriptor_store %desc_c[%c0_i32, %c0_i32], %result : !tt.tensordesc<64x256xf32>, tensor<64x256xf32, #dpas>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Negative case (G1): a slice value produced by the absorbed
+// COM: convert_layout has two users — one inside the slice (addf feeding the
+// COM: dot) and one outside (a store). The single-use guard must prevent the
+// COM: hoist so that the store's input is not broken.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [2, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked3 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @hoist_bail_on_multi_use
+  tt.func public @hoist_bail_on_multi_use(
+      %arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>,
+      %arg2: !tt.ptr<f32>, %arg3: tensor<64x32x!tt.ptr<f16>, #blocked2>,
+      %arg4: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c0_i64 = arith.constant 0 : i64
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x256xf32, #dpas>
+    %desc_a = tt.make_tensor_descriptor %arg0, [%arg4, %arg4], [%c0_i64, %c1_i64] : <f16>, <64x32xf16>
+    %desc_b = tt.make_tensor_descriptor %arg1, [%arg4, %arg4], [%c0_i64, %c1_i64] : <f16>, <32x256xf16>
+    // COM: The load result feeds both the addf (via the intermediate convert,
+    // COM: inside the slice) and a store (directly, outside the slice). G1
+    // COM: detects the out-of-slice user and prevents propagating through the
+    // COM: intermediate convert. The intermediate convert is preserved for the
+    // COM: store; the dot gets its own direct convert from the load.
+    // CHECK: scf.for
+    // CHECK-DAG:   ttg.convert_layout {{.*}} -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+    // CHECK-DAG:   ttg.convert_layout {{.*}} -> tensor<64x32xf16, #blocked>
+    // CHECK:   tt.dot
+    // CHECK:   scf.yield
+    %result = scf.for %iv = %c0_i32 to %arg4 step %c32_i32 iter_args(%acc = %cst) -> (tensor<64x256xf32, #dpas>) : i32 {
+      %a = tt.descriptor_load %desc_a[%c0_i32, %iv] : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #blocked>
+      %a2 = ttg.convert_layout %a : tensor<64x32xf16, #blocked> -> tensor<64x32xf16, #blocked2>
+      %a3 = arith.addf %a2, %a2 : tensor<64x32xf16, #blocked2>
+      %a_dot = ttg.convert_layout %a3 : tensor<64x32xf16, #blocked2> -> tensor<64x32xf16, #dot0>
+      %b = tt.descriptor_load %desc_b[%iv, %c0_i32] : !tt.tensordesc<32x256xf16> -> tensor<32x256xf16, #blocked3>
+      %b_dot = ttg.convert_layout %b : tensor<32x256xf16, #blocked3> -> tensor<32x256xf16, #dot1>
+      %d = tt.dot %a_dot, %b_dot, %acc, inputPrecision = tf32 : tensor<64x32xf16, #dot0> * tensor<32x256xf16, #dot1> -> tensor<64x256xf32, #dpas>
+      // COM: This store uses %a2 directly, putting a user of the absorbed
+      // COM: convert's result outside the slice.
+      tt.store %arg3, %a2 : tensor<64x32x!tt.ptr<f16>, #blocked2>
+      scf.yield %d : tensor<64x256xf32, #dpas>
+    }
+    %desc_c = tt.make_tensor_descriptor %arg2, [%arg4, %arg4], [%c0_i64, %c1_i64] : <f32>, <64x256xf32>
+    tt.descriptor_store %desc_c[%c0_i32, %c0_i32], %result : !tt.tensordesc<64x256xf32>, tensor<64x256xf32, #dpas>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Preheader load case: the load and intermediate convert are in the
+// COM: function entry block (preheader). LayoutPropagation runs before
+// COM: hoistConvertDotOperand and assigns #dot0 to the preheader convert's
+// COM: result, so by the time hoisting runs the #dot0 convert is already in
+// COM: the preheader. hoistConvertDotOperand then hoists normally (no
+// COM: propagation through convert needed).
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [2, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked3 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @hoist_bail_on_out_of_loop_root
+  tt.func public @hoist_bail_on_out_of_loop_root(
+      %arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>,
+      %arg2: !tt.ptr<f32>, %arg4: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c0_i64 = arith.constant 0 : i64
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x256xf32, #dpas>
+    %desc_a = tt.make_tensor_descriptor %arg0, [%arg4, %arg4], [%c0_i64, %c1_i64] : <f16>, <64x32xf16>
+    %desc_b = tt.make_tensor_descriptor %arg1, [%arg4, %arg4], [%c0_i64, %c1_i64] : <f16>, <32x256xf16>
+    // COM: LayoutPropagation converts the preheader chain to #dot0 before
+    // COM: hoistConvertDotOperand runs, so the #dot0 convert lands in the
+    // COM: preheader and the loop body only sees addf + dot.
+    %a = tt.descriptor_load %desc_a[%c0_i32, %c0_i32] : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #blocked>
+    // CHECK: ttg.convert_layout {{.*}} -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+    %a2 = ttg.convert_layout %a : tensor<64x32xf16, #blocked> -> tensor<64x32xf16, #blocked2>
+    // CHECK: scf.for
+    // CHECK:   arith.addf {{.*}} : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+    // CHECK:   tt.dot
+    // CHECK:   scf.yield
+    %result = scf.for %iv = %c0_i32 to %arg4 step %c32_i32 iter_args(%acc = %cst) -> (tensor<64x256xf32, #dpas>) : i32 {
+      %a3 = arith.addf %a2, %a2 : tensor<64x32xf16, #blocked2>
+      %a_dot = ttg.convert_layout %a3 : tensor<64x32xf16, #blocked2> -> tensor<64x32xf16, #dot0>
+      %b = tt.descriptor_load %desc_b[%iv, %c0_i32] : !tt.tensordesc<32x256xf16> -> tensor<32x256xf16, #blocked3>
+      %b_dot = ttg.convert_layout %b : tensor<32x256xf16, #blocked3> -> tensor<32x256xf16, #dot1>
+      %d = tt.dot %a_dot, %b_dot, %acc, inputPrecision = tf32 : tensor<64x32xf16, #dot0> * tensor<32x256xf16, #dot1> -> tensor<64x256xf32, #dpas>
+      scf.yield %d : tensor<64x256xf32, #dpas>
+    }
+    %desc_c = tt.make_tensor_descriptor %arg2, [%arg4, %arg4], [%c0_i64, %c1_i64] : <f32>, <64x256xf32>
+    tt.descriptor_store %desc_c[%c0_i32, %c0_i32], %result : !tt.tensordesc<64x256xf32>, tensor<64x256xf32, #dpas>
+    tt.return
+  }
+}
