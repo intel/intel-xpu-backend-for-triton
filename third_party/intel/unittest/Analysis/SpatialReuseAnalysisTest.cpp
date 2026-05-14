@@ -251,7 +251,7 @@ TEST_F(SpatialReuseAnalysisTest, DescriptorLoadOpOverload) {
       RankedTensorType::get({64, 64}, builder->getF32Type(), dotOpEnc);
 
   Type elemTy = builder->getF32Type();
-  ArrayRef<int64_t> shape = {64, 64};
+  SmallVector<int64_t> shape = {64, 64};
   auto descTy =
       TensorDescType::get(shape, elemTy, /*sharedLayout=*/Attribute{});
 
@@ -286,7 +286,7 @@ TEST_F(SpatialReuseAnalysisTest, DescriptorGatherOpOverload) {
       RankedTensorType::get({16, 32}, builder->getF16Type(), blocked);
 
   Type elemTy = builder->getF16Type();
-  ArrayRef<int64_t> descShape = {1024, 1024};
+  SmallVector<int64_t> descShape = {1024, 1024};
   auto descTy =
       TensorDescType::get(descShape, elemTy, /*sharedLayout=*/Attribute{});
   auto indicesXTy = RankedTensorType::get({512}, builder->getI32Type());
