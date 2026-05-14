@@ -719,18 +719,6 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     return nullptr;
   }
 
-  // getBlockIOTileSize and BlockIOTileSizeInfo have been moved to
-  // intel/include/Dialect/TritonIntelGPU/Transforms/BlockIOUtils.h
-  template <bool isLoad>
-  static BlockIOTileSizeInfo
-  getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
-                     unsigned elemSizeInBits, AxisInfo *maskAxisInfo = nullptr,
-                     bool oneMatrixPerLoadForBT = false) {
-    return triton::gpu::intel::getBlockIOTileSize<isLoad>(
-        ll, memContiguousDim, elemSizeInBits, maskAxisInfo,
-        oneMatrixPerLoadForBT);
-  }
-
   /// Configuration produced by configureDPASLoadTypes().
   struct DPASLoadConfig {
     Type packedDPASOperandType; // null if not DPAS
@@ -2440,7 +2428,8 @@ struct DescriptorStoreOpToBlockIOConversion
     AxisInfo *maskAxisInfo = nullptr;
 
     BlockIOTileSizeInfo sizeInfo = getBlockIOTileSize<false /*store*/>(
-        llEncoding.value(), contiguousDim, elemSizeInBits, maskAxisInfo);
+        llEncoding.value(), contiguousDim, elemSizeInBits, maskAxisInfo,
+        /*oneMatrixPerLoadForBT=*/false);
     if (!sizeInfo.isValid())
       return failure();
 
@@ -2700,7 +2689,8 @@ struct StoreOpToBlockIOConversion
                                      std::move(regPackBases));
     } else {
       sizeInfo = getBlockIOTileSize<false /*store*/>(
-          llEncoding.value(), contiguousDim, elemSizeInBits, maskAxisInfo);
+          llEncoding.value(), contiguousDim, elemSizeInBits, maskAxisInfo,
+          /*oneMatrixPerLoadForBT=*/false);
     }
 
     if (!sizeInfo.isValid())
