@@ -15,6 +15,10 @@ on:
         description: vLLM pin (commit hash), keep empty for default
         type: string
         default: ""
+      vllm_xpu_kernels_pin:
+        description: vLLM XPU kernels pin (commit hash), keep empty for default
+        type: string
+        default: ""
   # This workflow is also called from workflows vllm-benchmarks-*.yml.
   workflow_call:
     inputs:
@@ -27,6 +31,10 @@ on:
         default: "test"
       vllm_pin:
         description: vLLM pin (commit hash), keep empty for default
+        type: string
+        default: ""
+      vllm_xpu_kernels_pin:
+        description: vLLM XPU kernels pin (commit hash), keep empty for default
         type: string
         default: ""
 
@@ -64,8 +72,14 @@ jobs:
       - name: Override vLLM pin
         if: ${{ inputs.vllm_pin }}
         run: |
-          echo "${{ inputs.vllm_pin }}" > benchmarks/vllm/vllm-pin.txt
+          echo "${{ inputs.vllm_pin }}" > scripts/vllm/vllm-pin.txt
           echo "Overriding vLLM pin to: ${{ inputs.vllm_pin }}"
+
+      - name: Override vLLM XPU kernels pin
+        if: ${{ inputs.vllm_xpu_kernels_pin }}
+        run: |
+          echo "${{ inputs.vllm_xpu_kernels_pin }}" > scripts/vllm/vllm-xpu-kernels-pin.txt
+          echo "Overriding vLLM XPU kernels pin to: ${{ inputs.vllm_xpu_kernels_pin }}"
 
       - name: Install Python (from pyenv) ${{ inputs.python_version }}
         uses: ./.github/actions/setup-pyenv-python

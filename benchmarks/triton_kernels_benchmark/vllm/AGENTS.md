@@ -18,9 +18,10 @@ Note that during VLLM installation we never want to install triton or pytorch, w
 The new pin no longer has an IPEX dependency. We never install IPEX in our environments.
 
 Key files for the installation procedure:
-1. [`vllm-pin.txt`](vllm-pin.txt) - vllm pin that we currently use for benchmarking and testing. CI also uses this pin.
-2. [`vllm-fix.patch`](vllm-fix.patch) - patch that is applied to the pin above to make tests and benchmarks run.
-3. [`scripts/test-triton.sh`](../../scripts/test-triton.sh) - script that CI and developers use to install vllm and run tests
+1. [`vllm-pin.txt`](../../scripts/vllm/vllm-pin.txt) - vllm pin that we currently use for benchmarking and testing. CI also uses this pin.
+2. [`vllm-xpu-kernels-pin.txt`](../../scripts/vllm/vllm-xpu-kernels-pin.txt) - vllm-xpu-kernels pin. Kernels are built from source to ensure compatibility with local triton/torch.
+3. [`vllm-fix.patch`](../../scripts/vllm/vllm-fix.patch) - patch that is applied to the vllm pin above to make tests and benchmarks run.
+4. [`scripts/test-triton.sh`](../../scripts/test-triton.sh) - script that CI and developers use to install vllm and run tests
 
 # Environment
 
@@ -80,7 +81,7 @@ During a pin update you need to:
 5. Ensure that the benchmarks for `batched_moe` and `unified_attention` folders work as expected. That includes checking that appropriate patch can be applied wihout any issues. Try to keep the patch minimal, for example, by keeping the same line breaks as in the upstream. You can use `DEBUG_BENCH=1` env variable to test if benchmark runs.
 6. Update this instruction if something changed.
 
-To install vllm you need to first remove it with `rm -rf vllm` and uninstall with `pip uninstall vllm`.
+To install vllm you need to first remove it with `rm -rf vllm vllm-xpu-kernels` and uninstall with `python -m pip uninstall -y vllm vllm-xpu-kernels`.
 
 # How to update patch
 
