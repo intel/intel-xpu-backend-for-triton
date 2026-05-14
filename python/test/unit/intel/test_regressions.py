@@ -1914,3 +1914,45 @@ module {
     module, function, n_regs, n_spills, n_max_threads = driver.active.utils.load_binary(
         kernel.name, kernel.kernel, kernel.metadata.shared, kernel.metadata.build_flags,
         not kernel.metadata.generate_native_code, device)
+
+
+def test_local_alloc_sub_byte_element_type(device, tmp_path: pathlib.Path):
+    # Regression test for https://github.com/triton-lang/triton/pull/6851.
+    # Previously, local_alloc for sub-byte element types (e.g. i1) would compute
+    # an allocation size of 0 (bitwidth/8 = 1/8 = 0), while the lowering used
+    # ceil(bitwidth, 8) = 1 byte per element, causing a size mismatch.
+    # This test verifies that local_alloc and local_load work end-to-end for i1.
+    ir = """
+    #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+    #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+    #smem = #ttg.shared_memory
+    module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+      tt.func public @test_local_alloc_i1(%arg0: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i8> {tt.divisibility = 16 : i32}) {
+        %range = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+        %range2d = tt.expand_dims %range {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi32, #blocked>
+        %ptr0 = tt.splat %arg0 : !tt.ptr<i8> -> tensor<128x1x!tt.ptr<i8>, #blocked>
+        %addr0 = tt.addptr %ptr0, %range2d : tensor<128x1x!tt.ptr<i8>, #blocked>, tensor<128x1xi32, #blocked>
+        %vals_i8 = tt.load %addr0 : tensor<128x1x!tt.ptr<i8>, #blocked>
+        %zero_i8 = arith.constant dense<0> : tensor<128x1xi8, #blocked>
+        %vals_i1 = arith.cmpi ne, %vals_i8, %zero_i8 : tensor<128x1xi8, #blocked>
+        %smem = ttg.local_alloc %vals_i1 : (tensor<128x1xi1, #blocked>) -> !ttg.memdesc<128x1xi1, #shared, #smem>
+        %loaded_i1 = ttg.local_load %smem : !ttg.memdesc<128x1xi1, #shared, #smem> -> tensor<128x1xi1, #blocked>
+        %loaded_i8 = arith.extui %loaded_i1 : tensor<128x1xi1, #blocked> to tensor<128x1xi8, #blocked>
+        %ptr1 = tt.splat %arg1 : !tt.ptr<i8> -> tensor<128x1x!tt.ptr<i8>, #blocked>
+        %addr1 = tt.addptr %ptr1, %range2d : tensor<128x1x!tt.ptr<i8>, #blocked>, tensor<128x1xi32, #blocked>
+        tt.store %addr1, %loaded_i8 : tensor<128x1x!tt.ptr<i8>, #blocked>
+        tt.return
+      }
+    }
+    """
+
+    temp_file = tmp_path / "test_local_alloc_i1.ttgir"
+    temp_file.write_text(ir)
+    kernel = triton.compile(str(temp_file))
+
+    from triton.runtime.driver import driver
+    device = driver.active.get_current_device()
+
+    module, function, n_regs, n_spills, n_max_threads = driver.active.utils.load_binary(
+        kernel.name, kernel.kernel, kernel.metadata.shared, kernel.metadata.build_flags,
+        not kernel.metadata.generate_native_code, device)
