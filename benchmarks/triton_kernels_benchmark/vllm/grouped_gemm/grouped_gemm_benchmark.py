@@ -14,7 +14,7 @@ import triton_kernels_benchmark as benchmark_suite
 
 
 def _has_cutlass_grouped_gemm_interface() -> bool:
-    return hasattr(torch.ops, "_xpu_C") and hasattr(torch.ops._xpu_C, "cutlass_grouped_gemm_interface")
+    return hasattr(getattr(torch.ops, "_xpu_C", None), "cutlass_grouped_gemm_interface")
 
 
 @triton.autotune(
@@ -122,15 +122,17 @@ def grouped_gemm_triton(
     offsets = torch.cumsum(rows_per_expert, dim=0, dtype=torch.int64) - rows_per_expert.to(torch.int64)
 
     max_rows_per_expert = int(rows_per_expert.max().item())
-    grid = lambda META: (
-        triton.cdiv(max_rows_per_expert, META["BLOCK_SIZE_M"]) * triton.cdiv(ptr_B.shape[2], META["BLOCK_SIZE_N"]),
-        ptr_B.shape[0],
-    )
+
+    def compute_grid(META):
+        return (
+            triton.cdiv(max_rows_per_expert, META["BLOCK_SIZE_M"]) * triton.cdiv(ptr_B.shape[2], META["BLOCK_SIZE_N"]),
+            ptr_B.shape[0],
+        )
 
     dummy_bias = ptr_D.new_zeros((ptr_B.shape[0], ptr_B.shape[2]))
     bias = ptr_bias if ptr_bias is not None else dummy_bias
 
-    grouped_gemm_kernel[grid](
+    grouped_gemm_kernel[compute_grid](
         ptr_A,
         ptr_B,
         bias,
