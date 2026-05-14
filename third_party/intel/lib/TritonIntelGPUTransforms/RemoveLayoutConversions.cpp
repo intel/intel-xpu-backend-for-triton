@@ -224,7 +224,8 @@ public:
   getConvertBackwardSlice(OpOperand &root, Attribute rootEncoding,
                           SetVector<Value> &slice,
                           DenseMap<Value, Attribute> &layout,
-                          std::function<bool(Operation *)> stopPropagation);
+                          std::function<bool(Operation *)> stopPropagation,
+                          bool propagateThroughConvertLayout = false);
 
   LogicalResult getRematerializableSlice(
       OpOperand &root, Attribute rootEncoding, SetVector<Value> &sliceArg,
@@ -1334,7 +1335,8 @@ void LayoutRematerialization::forwardPropagateRemat(
 LogicalResult LayoutRematerialization::getConvertBackwardSlice(
     OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
     DenseMap<Value, Attribute> &layout,
-    std::function<bool(Operation *)> stopPropagation) {
+    std::function<bool(Operation *)> stopPropagation,
+    bool propagateThroughConvertLayout) {
   // Allow re-using existing conversions for a value. Check dominance of any
   // reusable materializations against the root value. This is sufficient
   // because the conversions are processed in post-order.
@@ -1363,7 +1365,8 @@ LogicalResult LayoutRematerialization::getConvertBackwardSlice(
   };
 
   return ttgi::getConvertBackwardSlice(root, slice, rootEncoding, layout,
-                                       stopPropagation, getExistingConversion);
+                                       stopPropagation, getExistingConversion,
+                                       propagateThroughConvertLayout);
 }
 
 LogicalResult LayoutRematerialization::getRematerializableSlice(
@@ -1745,9 +1748,43 @@ void LayoutRematerialization::hoistConvertDotOperand(
   DenseMap<Value, Attribute> layout;
   // Set-up the conversion "cache"
   LogicalResult result = getConvertBackwardSlice(
-      convertOp.getSrcMutable(), targetType.getEncoding(), slice, layout, stop);
+      convertOp.getSrcMutable(), targetType.getEncoding(), slice, layout, stop,
+      /*propagateThroughConvertLayout=*/true);
   if (result.failed())
     return;
+
+  // G1 — Single-use guard: every slice value (except the root convert's src)
+  // must have all its users inside the slice. Prevents duplication when a
+  // slice value feeds multiple consumers outside.
+  for (Value v : slice) {
+    if (v == convertOp.getSrc())
+      continue;
+    for (Operation *user : v.getUsers()) {
+      bool userInSlice = llvm::any_of(
+          user->getResults(), [&](Value res) { return slice.count(res); });
+      if (!userInSlice && user != convertOp) {
+        LDBG("  Slice value " << v << " has user outside slice: " << *user
+                              << "; skipping hoist");
+        return;
+      }
+    }
+  }
+
+  // G2 — Root-in-loop guard: any absorbed ConvertLayoutOp must be in the same
+  // loop (or a child) as the convertOp being hoisted. Prevents preheader bloat
+  // with no pipelining benefit.
+  for (Value v : slice) {
+    Operation *def = v.getDefiningOp();
+    if (!def || !isa<ttg::ConvertLayoutOp>(def))
+      continue;
+    Region *convertRegion = convertOp->getParentRegion();
+    if (!convertRegion->isAncestor(def->getParentRegion())) {
+      LDBG("  Absorbed ConvertLayoutOp " << *def
+                                         << " is outside convertOp's region; "
+                                            "skipping hoist");
+      return;
+    }
+  }
 
   // Bail if any leaf load has a different element bitwidth than the convert
   // target. The target DotOperandEncodingAttr's kWidth / opsPerChannel is
