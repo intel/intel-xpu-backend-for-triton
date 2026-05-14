@@ -146,6 +146,10 @@ jobs:
           pip install -r scripts\requirements-test.txt
           pip uninstall pytest_forked -y
 
+      - name: Pause for debug
+        run: |
+          Start-Sleep -Seconds 7200
+
       - name: Run unit tests
         if: ${{ !cancelled() }}
         run: |
