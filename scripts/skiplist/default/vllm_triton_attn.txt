@@ -10,3 +10,4 @@ tests/kernels/attention/test_triton_unified_attention.py::test_triton_unified_at
 tests/kernels/attention/test_triton_unified_attention.py::test_triton_unified_attn_fp16_input_fp8_output[0-32768-None-128-16-128-num_heads0-seq_lens2]
 tests/kernels/attention/test_triton_unified_attention.py::test_triton_unified_attn_fp16_input_fp8_output[0-32768-None-128-16-128-num_heads1-seq_lens2]
 tests/kernels/attention/test_triton_unified_attention.py::test_triton_unified_attn_fp16_input_fp8_output[0-32768-None-128-16-128-num_heads2-seq_lens2]
+tests/kernels/attention/test_triton_unified_attention.py::test_triton_unified_attn_fp16_input_fp8_output[0-32768-None-128-16-256-num_heads0-seq_lens2]
