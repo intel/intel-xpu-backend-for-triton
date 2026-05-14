@@ -8,6 +8,7 @@
 #include "Profiler/Instrumentation/InstrumentationProfiler.h"
 #include "Profiler/Roctracer/RoctracerProfiler.h"
 #include "Profiler/Xpupti/XpuptiProfiler.h"
+#include "Runtime/XpuRuntime.h"
 #include "Utility/String.h"
 
 namespace proton {
@@ -24,7 +25,8 @@ Profiler *makeProfiler(const std::string &name, void *sycl_queue = nullptr,
     return &InstrumentationProfiler::instance();
   } else if (proton::toLower(name) == "xpupti") {
     xpu::PROTON_UTILS = utils_cache_path;
-    return &XpuptiProfiler::instance().setSyclQueue(sycl_queue);
+    XpuRuntime::instance().setSyclQueue(sycl_queue);
+    return &XpuptiProfiler::instance();
   }
   throw std::runtime_error("Unknown profiler: " + name);
 }

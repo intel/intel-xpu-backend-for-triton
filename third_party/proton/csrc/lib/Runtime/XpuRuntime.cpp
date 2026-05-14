@@ -1,9 +1,80 @@
-// FIXME: this code is copied from HipRuntime.cpp, need to adapt it.
 #include "Runtime/XpuRuntime.h"
 
 #include "Driver/GPU/XpuApi.h"
 #include <algorithm>
 #include <cstdint>
+#include <stdexcept>
+#include <string>
+
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
+
+namespace {
+
+typedef void (*CopyDeviceToHostAsyncFunc)(void *, void *, const void *, size_t);
+typedef void (*WaitOnSyclQueueFunc)(void *);
+typedef void (*AllocateHostBufferFunc)(void *, uint8_t **, size_t);
+typedef void (*FreeHostBufferFunc)(void *, uint8_t *);
+typedef void (*AllocateDeviceBufferFunc)(void *, uint8_t **, size_t);
+typedef void (*FreeDeviceBufferFunc)(void *, uint8_t *);
+typedef void (*MemsetAsyncFunc)(void *, void *, int32_t, size_t);
+typedef void (*SynchronizeDeviceFunc)(void *);
+typedef void *(*GetDeviceKeyFunc)(void *);
+
+template <typename Fn> Fn loadProtonUtilsSymbol(const char *name) {
+  const std::string &path = proton::xpu::PROTON_UTILS;
+  if (path.empty()) {
+    throw std::runtime_error(
+        std::string("[PROTON] PROTON_UTILS path is empty; cannot resolve ") +
+        name);
+  }
+#if defined(_WIN32)
+  HMODULE handle = LoadLibrary(path.data());
+  if (!handle) {
+    throw std::runtime_error(std::string("[PROTON] Failed to load ") + path +
+                             ", code: " + std::to_string(GetLastError()));
+  }
+  auto fn = reinterpret_cast<Fn>(GetProcAddress(handle, name));
+  if (!fn) {
+    long err = GetLastError();
+    FreeLibrary(handle);
+    throw std::runtime_error(std::string("[PROTON] Failed to resolve ") + name +
+                             ", code: " + std::to_string(err));
+  }
+  return fn;
+#else
+  void *handle = dlopen(path.data(), RTLD_LAZY);
+  if (!handle) {
+    throw std::runtime_error(std::string("[PROTON] Failed to load ") + path +
+                             ": " + dlerror());
+  }
+  dlerror();
+  auto fn = reinterpret_cast<Fn>(dlsym(handle, name));
+  const char *err = dlerror();
+  if (err) {
+    dlclose(handle);
+    throw std::runtime_error(std::string("[PROTON] Failed to resolve ") + name +
+                             ": " + err);
+  }
+  return fn;
+#endif
+}
+
+static void *requireSyclQueue() {
+  void *q = proton::XpuRuntime::instance().getSyclQueue();
+  if (q == nullptr) {
+    throw std::runtime_error("[PROTON] XpuRuntime has no SYCL queue; "
+                             "Session activation did not call setSyclQueue.");
+  }
+  return q;
+}
+
+} // namespace
 
 namespace proton {
 
@@ -13,124 +84,87 @@ void XpuRuntime::launchKernel(void *kernel, unsigned int gridDimX,
                               unsigned int blockDimZ,
                               unsigned int sharedMemBytes, void *stream,
                               void **kernelParams, void **extra) {
-  /*
-  auto status = xpu::launchKernel<true>(
-      reinterpret_cast<hipFunction_t>(kernel), gridDimX, gridDimY, gridDimZ,
-      blockDimX, blockDimY, blockDimZ, sharedMemBytes,
-      reinterpret_cast<hipStream_t>(stream), kernelParams, extra);
-  (void)status;
-  */
+  throw std::runtime_error(
+      "[PROTON] XpuRuntime::launchKernel is not implemented on XPU.");
 }
 
 void XpuRuntime::memset(void *devicePtr, uint32_t value, size_t size,
                         void *stream) {
-  /*
-  auto status = xpu::memsetD32Async<true>(
-      reinterpret_cast<hipDeviceptr_t>(devicePtr), value,
-      size / sizeof(uint32_t), reinterpret_cast<hipStream_t>(stream));
-  (void)status;
-  */
+  static auto memsetFn = loadProtonUtilsSymbol<MemsetAsyncFunc>("memsetAsync");
+  memsetFn(stream, devicePtr, static_cast<int32_t>(value), size);
 }
 
 void XpuRuntime::allocateHostBuffer(uint8_t **buffer, size_t size,
                                     bool mapped) {
-  /*
-  (void)xpu::memAllocHost<true>(reinterpret_cast<void **>(buffer), size);
-  */
+  static auto allocFn =
+      loadProtonUtilsSymbol<AllocateHostBufferFunc>("allocateHostBuffer");
+  allocFn(requireSyclQueue(), buffer, size);
 }
 
 void XpuRuntime::getHostDevicePointer(uint8_t *hostPtr, uint8_t **devicePtr) {
-  /*
-  hipDeviceptr_t devicePtrV;
-  (void)hip::memHostGetDevicePointer<true>(&devicePtrV, hostPtr, 0);
-  *devicePtr = reinterpret_cast<uint8_t *>(devicePtrV);
-  */
+  // SYCL USM host pointers are device-accessible at the same VA.
+  *devicePtr = hostPtr;
 }
 
 void XpuRuntime::freeHostBuffer(uint8_t *buffer) {
-  /*
-  (void)xpu::memFreeHost<true>(buffer);
-  */
+  static auto freeFn =
+      loadProtonUtilsSymbol<FreeHostBufferFunc>("freeHostBuffer");
+  freeFn(requireSyclQueue(), buffer);
 }
 
 void XpuRuntime::allocateDeviceBuffer(uint8_t **buffer, size_t size) {
-  /*
-  hipDeviceptr_t devicePtr;
-  (void)xpu::memAlloc<true>(reinterpret_cast<void **>(&devicePtr), size);
-  *buffer = reinterpret_cast<uint8_t *>(devicePtr);
-  */
+  static auto allocFn =
+      loadProtonUtilsSymbol<AllocateDeviceBufferFunc>("allocateDeviceBuffer");
+  allocFn(requireSyclQueue(), buffer, size);
 }
 
 void XpuRuntime::freeDeviceBuffer(uint8_t *buffer) {
-  /*
-  hipDeviceptr_t devicePtr = reinterpret_cast<hipDeviceptr_t>(buffer);
-  (void)xpu::memFree<true>(devicePtr);
-  */
+  static auto freeFn =
+      loadProtonUtilsSymbol<FreeDeviceBufferFunc>("freeDeviceBuffer");
+  freeFn(requireSyclQueue(), buffer);
 }
 
 void XpuRuntime::copyDeviceToHostAsync(void *dst, const void *src, size_t size,
                                        void *stream) {
-  /*
-  (void)xpu::memcpyDToHAsync<true>(
-      dst, reinterpret_cast<hipDeviceptr_t>(const_cast<void *>(src)), size,
-      reinterpret_cast<hipStream_t>(stream));
-  */
+  static auto copyFn =
+      loadProtonUtilsSymbol<CopyDeviceToHostAsyncFunc>("copyDeviceToHostAsync");
+  copyFn(stream, dst, src, size);
 }
 
 void *XpuRuntime::getDevice() {
-  /*
-  hipDevice_t device;
-  (void)xpu::ctxGetDevice<true>(&device);
-  return reinterpret_cast<void *>(static_cast<uintptr_t>(device));
-  */
-  return nullptr;
+  static auto keyFn = loadProtonUtilsSymbol<GetDeviceKeyFunc>("getDeviceKey");
+  void *q = XpuRuntime::instance().getSyclQueue();
+  if (q == nullptr) {
+    // Non-null sentinel so MetricBuffer does not alias with backends that
+    // return nullptr from getDevice.
+    return reinterpret_cast<void *>(static_cast<uintptr_t>(1));
+  }
+  return keyFn(q);
 }
 
-void *XpuRuntime::getPriorityStream() {
-  /*
-  hipStream_t stream;
-  int lowestPriority, highestPriority;
-  (void)xpu::ctxGetStreamPriorityRange<true>(&lowestPriority, &highestPriority);
-  (void)xpu::streamCreateWithPriority<true>(&stream, hipStreamNonBlocking,
-                                            highestPriority);
-  return reinterpret_cast<void *>(stream);
-  */
-  return nullptr;
-}
+void *XpuRuntime::getPriorityStream() { return nullptr; }
 
 void XpuRuntime::synchronizeStream(void *stream) {
-  /*
-  (void)xpu::streamSynchronize<true>(reinterpret_cast<hipStream_t>(stream));
-  */
+  static auto waitFn =
+      loadProtonUtilsSymbol<WaitOnSyclQueueFunc>("waitOnSyclQueue");
+  waitFn(stream);
 }
 
-void XpuRuntime::synchronizeDevice() { /*(void)xpu::deviceSynchronize<true>();*/
+void XpuRuntime::synchronizeDevice() {
+  static auto syncFn =
+      loadProtonUtilsSymbol<SynchronizeDeviceFunc>("synchronizeDevice");
+  syncFn(requireSyclQueue());
 }
 
 void XpuRuntime::destroyStream(void *stream) {
-  // (void)xpu::streamDestroy<true>(reinterpret_cast<hipStream_t>(stream));
+  // No-op: SYCL queues are owned by the Triton driver.
 }
 
 void XpuRuntime::processHostBuffer(
     uint8_t *hostBuffer, size_t hostBufferSize, uint8_t *deviceBuffer,
     size_t deviceBufferSize, void *stream,
     std::function<void(uint8_t *, size_t)> callback) {
-  /*
-  int64_t chunkSize = std::min(hostBufferSize, deviceBufferSize);
-  int64_t sizeLeftOnDevice = deviceBufferSize;
-  while (chunkSize > 0) {
-    (void)xpu::memcpyDToHAsync<true>(
-        reinterpret_cast<void *>(hostBuffer),
-        reinterpret_cast<hipDeviceptr_t>(deviceBuffer), chunkSize,
-        reinterpret_cast<hipStream_t>(stream));
-    (void)xpu::streamSynchronize<true>(reinterpret_cast<hipStream_t>(stream));
-    callback(hostBuffer, chunkSize);
-    hostBuffer += chunkSize;
-    deviceBuffer += chunkSize;
-    sizeLeftOnDevice -= chunkSize;
-    chunkSize =
-        std::min(static_cast<int64_t>(hostBufferSize), sizeLeftOnDevice);
-  }
-  */
+  throw std::runtime_error(
+      "[PROTON] XpuRuntime::processHostBuffer is not implemented on XPU.");
 }
 } // namespace proton
