@@ -198,6 +198,12 @@ def get_grouped_gemm_benchmark(providers_filter: Optional[list[str]] = None):
             rows_per_expert[0] = 1
             total_m = 1
 
+        # expert_first_token_offset[i] is the first token row index for expert i
+        # in the flattened activation matrix (exclusive prefix sum of rows_per_expert).
+        expert_first_token_offset = (
+            torch.cumsum(rows_per_expert.to(torch.int64), dim=0) - rows_per_expert.to(torch.int64)
+        )
+
         ptr_A = torch.randn((total_m, K), device="xpu", dtype=torch.bfloat16)
         ptr_B = torch.randn((num_experts, K, N), device="xpu", dtype=torch.bfloat16)
         ptr_bias = torch.randn((num_experts, N), device="xpu", dtype=torch.bfloat16) if has_bias else None
@@ -219,7 +225,7 @@ def get_grouped_gemm_benchmark(providers_filter: Optional[list[str]] = None):
                         ptr_scales=None,
                         ptr_bias=ptr_bias,
                         ptr_D=out_ref,
-                        rows_per_expert=rows_per_expert,
+                        expert_first_token_offset=expert_first_token_offset,
                         N=N,
                         K=K,
                         num_experts=num_experts,
@@ -246,7 +252,7 @@ def get_grouped_gemm_benchmark(providers_filter: Optional[list[str]] = None):
                     ptr_scales=None,
                     ptr_bias=ptr_bias,
                     ptr_D=out_cutlass,
-                    rows_per_expert=rows_per_expert,
+                    expert_first_token_offset=expert_first_token_offset,
                     N=N,
                     K=K,
                     num_experts=num_experts,
