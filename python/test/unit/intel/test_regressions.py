@@ -1916,20 +1916,27 @@ module {
         not kernel.metadata.generate_native_code, device)
 
 
-def test_local_alloc_sub_byte_element_type(device, tmp_path: pathlib.Path):
+@pytest.mark.parametrize("blocked", [
+    # row-major: threads laid out along the first dimension
+    "#ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>",
+    # column-major: threads laid out along the second dimension
+    "#ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [0, 1]}>",
+])
+def test_local_alloc_sub_byte_element_type(device, tmp_path: pathlib.Path, blocked):
     # Regression test for https://github.com/triton-lang/triton/pull/10285.
     # Previously, local_alloc for sub-byte element types (e.g. i1) would compute
     # an allocation size of 0 (bitwidth/8 = 1/8 = 0), while the lowering used
     # ceil(bitwidth, 8) = 1 byte per element, causing a size mismatch.
-    # This test verifies that local_alloc and local_load work end-to-end for i1.
-    ir = """
-    #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
-    #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+    # This test verifies that local_alloc and local_load work end-to-end for i1
+    # with two different blocked layouts.
+    ir = f"""
+    #blocked = {blocked}
+    #shared = #ttg.swizzled_shared<{{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}}>
     #smem = #ttg.shared_memory
-    module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-      tt.func public @test_local_alloc_i1(%arg0: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i8> {tt.divisibility = 16 : i32}) {
-        %range = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
-        %range2d = tt.expand_dims %range {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi32, #blocked>
+    module attributes {{"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32}} {{
+      tt.func public @test_local_alloc_i1(%arg0: !tt.ptr<i8> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<i8> {{tt.divisibility = 16 : i32}}) {{
+        %range = tt.make_range {{end = 128 : i32, start = 0 : i32}} : tensor<128xi32, #ttg.slice<{{dim = 1, parent = #blocked}}>>
+        %range2d = tt.expand_dims %range {{axis = 1 : i32}} : tensor<128xi32, #ttg.slice<{{dim = 1, parent = #blocked}}>> -> tensor<128x1xi32, #blocked>
         %ptr0 = tt.splat %arg0 : !tt.ptr<i8> -> tensor<128x1x!tt.ptr<i8>, #blocked>
         %addr0 = tt.addptr %ptr0, %range2d : tensor<128x1x!tt.ptr<i8>, #blocked>, tensor<128x1xi32, #blocked>
         %vals_i8 = tt.load %addr0 : tensor<128x1x!tt.ptr<i8>, #blocked>
@@ -1942,8 +1949,8 @@ def test_local_alloc_sub_byte_element_type(device, tmp_path: pathlib.Path):
         %addr1 = tt.addptr %ptr1, %range2d : tensor<128x1x!tt.ptr<i8>, #blocked>, tensor<128x1xi32, #blocked>
         tt.store %addr1, %loaded_i8 : tensor<128x1x!tt.ptr<i8>, #blocked>
         tt.return
-      }
-    }
+      }}
+    }}
     """
 
     import torch
