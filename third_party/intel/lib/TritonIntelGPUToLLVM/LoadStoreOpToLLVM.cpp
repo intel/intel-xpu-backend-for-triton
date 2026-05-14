@@ -2428,7 +2428,8 @@ struct DescriptorStoreOpToBlockIOConversion
     AxisInfo *maskAxisInfo = nullptr;
 
     BlockIOTileSizeInfo sizeInfo = getBlockIOTileSize<false /*store*/>(
-        llEncoding.value(), contiguousDim, elemSizeInBits, maskAxisInfo);
+        llEncoding.value(), contiguousDim, elemSizeInBits, maskAxisInfo,
+        /*oneMatrixPerLoadForBT=*/false);
     if (!sizeInfo.isValid())
       return failure();
 
@@ -2688,7 +2689,8 @@ struct StoreOpToBlockIOConversion
                                      std::move(regPackBases));
     } else {
       sizeInfo = getBlockIOTileSize<false /*store*/>(
-          llEncoding.value(), contiguousDim, elemSizeInBits, maskAxisInfo);
+          llEncoding.value(), contiguousDim, elemSizeInBits, maskAxisInfo,
+          /*oneMatrixPerLoadForBT=*/false);
     }
 
     if (!sizeInfo.isValid())
@@ -3818,7 +3820,8 @@ struct Subgroup2DBlockLoadOpConversion
     auto sizeInfo = getBlockIOTileSize<true>(
         cast<DistributedEncodingTrait>(tensorType.getEncoding())
             .toLinearLayout(tensorType.getShape()),
-        contiguousDim, elemSizeInBits);
+        contiguousDim, elemSizeInBits, /*maskAxisInfo=*/nullptr,
+        /*oneMatrixPerLoadForBT=*/false);
     unsigned blockRowIdx =
         sizeInfo.transpose ? sizeInfo.colDim : sizeInfo.rowDim;
     unsigned blockColIdx =
@@ -3944,7 +3947,8 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
     auto sizeInfo = getBlockIOTileSize<true>(
         cast<DistributedEncodingTrait>(tensorType.getEncoding())
             .toLinearLayout(tensorType.getShape()),
-        contiguousDim, tensorType.getElementType().getIntOrFloatBitWidth());
+        contiguousDim, tensorType.getElementType().getIntOrFloatBitWidth(),
+        /*maskAxisInfo=*/nullptr, /*oneMatrixPerLoadForBT=*/false);
     int colDim = sizeInfo.colDim;
     int rowDim = sizeInfo.rowDim;
     bool isTranspose = sizeInfo.transpose;

@@ -46,8 +46,8 @@ struct BlockIOTileSizeInfo {
 template <bool isLoad>
 BlockIOTileSizeInfo
 getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
-                   unsigned elemSizeInBits, AxisInfo *maskAxisInfo = nullptr,
-                   bool oneMatrixPerLoadForBT = false);
+                   unsigned elemSizeInBits, AxisInfo *maskAxisInfo,
+                   bool oneMatrixPerLoadForBT);
 
 // Explicit instantiation declarations.
 extern template BlockIOTileSizeInfo
