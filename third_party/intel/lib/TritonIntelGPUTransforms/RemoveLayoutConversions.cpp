@@ -1824,8 +1824,8 @@ void LayoutRematerialization::hoistConvertDotOperand(
   rewriteSlice(innerSlice, layout, convertOp, mapping);
 }
 
-// For convert left we try to hoist them above type extension to reduce the
-// cost of the convert.
+// For convert left we try to hoist them above type extension to reduce the cost
+// of the convert.
 void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     ttg::ConvertLayoutOp convertOp) {
   // DotOperand is hoisted by hoistDotOperand
@@ -1916,8 +1916,7 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
 void LayoutRematerialization::hoistConvertIntoConditionals(
     ttg::ConvertLayoutOp convertOp) {
   // Take the backward slice of tensor dependencies rooted at the conversion,
-  // stopping at conditionals. This subslice is used to initialize the
-  // analysis.
+  // stopping at conditionals. This subslice is used to initialize the analysis.
   SetVector<Value> slice;
   DenseMap<Value, Attribute> layout;
   auto isIfOp = [](Operation *op) { return isa<scf::IfOp>(op); };
@@ -1926,17 +1925,17 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
                                       layout, isIfOp)))
     return;
 
-  // These are the conditional edges above which conversions should be
-  // hoisted. The value represents the `scf.if` op result and the operand
-  // represents the edge into one of the branches.
+  // These are the conditional edges above which conversions should be hoisted.
+  // The value represents the `scf.if` op result and the operand represents the
+  // edge into one of the branches.
   SmallVector<std::pair<Value, OpOperand *>> hoistAbove;
 
-  // The list of `scf.if` op results in the slice that are not
-  // rematerializable. Hoisting is terminated at these values.
+  // The list of `scf.if` op results in the slice that are not rematerializable.
+  // Hoisting is terminated at these values.
   SmallVector<OpResult> terminals;
 
-  // This loop recurses through the subslices of the backwards dependencies,
-  // so re-query the size of `slice`.
+  // This loop recurses through the subslices of the backwards dependencies, so
+  // re-query the size of `slice`.
   for (unsigned i = 0; i != slice.size(); ++i) {
     Value v = slice[i];
     auto ifOp = v.getDefiningOp<scf::IfOp>();
