@@ -964,10 +964,10 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     cfg.numElems = getTotalElemsPerThread(tensorType);
 
     // Compute initial load types.
-    cfg.numElemsPerLoad = mlir::ceil(
-        sizeInfo.tileHeight * sizeInfo.tileWidth *
-            static_cast<int>(cfg.numPackedVals) * sizeInfo.vBlocks,
-        static_cast<int>(threadsPerWarp));
+    cfg.numElemsPerLoad =
+        mlir::ceil(sizeInfo.tileHeight * sizeInfo.tileWidth *
+                       static_cast<int>(cfg.numPackedVals) * sizeInfo.vBlocks,
+                   static_cast<int>(threadsPerWarp));
     cfg.numValuesPerLoad = mlir::ceil(static_cast<int>(cfg.numElemsPerLoad),
                                       static_cast<int>(cfg.numPackedVals));
     cfg.packedType = IntegerType::get(ctx, cfg.packedElemSizeInBits);
@@ -3613,6 +3613,135 @@ struct ExtractDescOpConversion
   }
 };
 
+/// Per-sub-tile addressing result, produced by the addressing callback
+/// passed to lowerBlockLoad2D.
+struct SubTileAddress {
+  Value addrElem;           // base pointer for this sub-tile
+  Value offsetX;            // X coordinate (surface column, in elements)
+  Value offsetY;            // Y coordinate (surface row)
+  Value adjustedBaseWidth;  // possibly widened base_width (bytes)
+  Value adjustedBaseHeight; // base_height (used for HW OOB)
+  Value pred;               // mask predicate, or null
+};
+
+/// Common lowering body for ttig.2d_block_load and ttig.2d_block_load_from_ptr.
+///
+/// Computes tile parameters, runs the sub-tile splitting loop, emits
+/// triton_gen.2Dblockload for each sub-tile, and replaces the op with the
+/// packed result.
+///
+/// The only thing that differs between descriptor and pointer loads is how
+/// each sub-tile's address is computed — provided via `computeAddress`.
+/// `staticBaseHeight` enables row-broadcast for stride=0 pointer loads.
+static LogicalResult lowerBlockLoad2D(
+    Operation *op, const BlockIOConversionBase::Block2DLoadConfig &cfg,
+    const LinearLayout &llEncoding, Value pitch,
+    function_ref<SubTileAddress(unsigned registerIdx,
+                                ArrayRef<std::pair<StringAttr, Value>> offsets)>
+        computeAddress,
+    ArrayRef<Value> otherElems, ArrayRef<Value> nanMaskElems,
+    std::optional<int> staticBaseHeight,
+    const triton::intel::TargetInfo &targetInfo,
+    const LLVMTypeConverter *typeConverter, Location loc,
+    ConversionPatternRewriter &rewriter) {
+
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  MLIRContext *ctx = rewriter.getContext();
+
+  StringAttr kRegister = S("register");
+  StringAttr kLane = S("lane");
+  StringAttr kWarp = S("warp");
+  StringAttr kBlock = S("block");
+
+  Value warpId = arith::IndexCastOp::create(
+      rewriter, loc, i32_ty,
+      mlir::gpu::SubgroupIdOp::create(rewriter, loc,
+                                      /*upperBound=*/nullptr));
+
+  SmallVector<Value> unpackedLoadedVals(cfg.numElems);
+  for (size_t elemIdx = 0; elemIdx < cfg.numElems;
+       elemIdx += cfg.numElemsPerLoad) {
+    unsigned registerIdx =
+        cfg.regMapping.apply({{kRegister, elemIdx}})[0].second;
+
+    auto offsets = applyLinearLayout(loc, rewriter, llEncoding,
+                                     {{kRegister, b.i32_val(registerIdx)},
+                                      {kLane, b.i32_val(0)},
+                                      {kWarp, warpId},
+                                      {kBlock, b.i32_val(0)}});
+
+    auto addr = computeAddress(registerIdx, offsets);
+
+    Value offsetY = addr.offsetY;
+    if (addr.pred)
+      offsetY = b.select(addr.pred, offsetY, addr.adjustedBaseHeight);
+
+    Value ret = TritonGEN::Matrix2DBlockLoadOp::create(
+        rewriter, loc, cfg.load2DGenXType,
+        /*ptr*/ addr.addrElem,
+        /*base_width*/ addr.adjustedBaseWidth,
+        /*base_height*/ addr.adjustedBaseHeight,
+        /*base_pitch*/ pitch,
+        /*x*/ b.udiv(addr.offsetX, b.i32_val(cfg.numPackedVals)),
+        /*y*/ offsetY,
+        /*elem_size_in_bits*/ cfg.packedElemSizeInBits,
+        /*tile_width*/ cfg.tileWidth,
+        /*tile_height*/ cfg.tileHeight,
+        /*v_blocks*/ cfg.vBlocks,
+        /*transpose*/ cfg.isTransposeRequired,
+        /*vnni_transform*/ !cfg.isTransposeRequired && cfg.useVNNIFormat);
+
+    // When staticBaseHeight == 1 but tileHeight > 1 (stride=0 broadcast),
+    // only the first row contains valid data. Replicate it across the tile.
+    if (staticBaseHeight &&
+        *staticBaseHeight < static_cast<int>(cfg.tileHeight) &&
+        *staticBaseHeight == 1) {
+      unsigned numIndicesPerMatrix = cfg.numValuesPerLoad / cfg.vBlocks;
+      SmallVector<int32_t> shuffleIndices(cfg.numValuesPerLoad);
+
+      VectorType vecTy = vec_ty(cfg.packedType, cfg.vBlocks);
+      Value firstIndexVec = b.undef(vecTy);
+
+      for (unsigned valueIndex = 0; valueIndex < cfg.numValuesPerLoad;
+           ++valueIndex) {
+        unsigned firstIndexVecIdx = valueIndex / numIndicesPerMatrix;
+        if (valueIndex % numIndicesPerMatrix == 0) {
+          Value oldVal = b.extract_element(ret, b.i32_val(valueIndex));
+          Value newVal = oldVal;
+          if (cfg.tileWidth < cfg.threadsPerWarp) {
+            assert(cfg.tileWidth * 2 == cfg.threadsPerWarp &&
+                   "Expecting tileWidth to be 2x threadsPerWarp");
+            Value threadId = getThreadId(rewriter, loc);
+            newVal = targetInfo.shuffleIdx(
+                rewriter, loc, oldVal,
+                b.urem(threadId, b.i32_val(cfg.tileWidth)));
+          }
+          firstIndexVec =
+              b.insert_element(firstIndexVec.getType(), firstIndexVec, newVal,
+                               b.i32_val(firstIndexVecIdx));
+        }
+        shuffleIndices[valueIndex] = firstIndexVecIdx;
+      }
+      DenseI32ArrayAttr attr = rewriter.getDenseI32ArrayAttr(shuffleIndices);
+      ret = LLVM::ShuffleVectorOp::create(rewriter, loc, cfg.load2DGenXType,
+                                          firstIndexVec, firstIndexVec, attr);
+    }
+
+    BlockIOConversionBase::unpackBlockLoadResult(
+        ret, unpackedLoadedVals, elemIdx, cfg.regMapping, cfg.shuffleMapping,
+        cfg.packedDPASOperandType, cfg.unpackedType, cfg.numValuesPerLoad,
+        cfg.numPackedVals, addr.pred, otherElems, nanMaskElems, loc, rewriter,
+        ctx);
+  }
+
+  Type llvmResultStructTy =
+      typeConverter->convertType(op->getResult(0).getType());
+  Value resultStruct = packLLElements(loc, typeConverter, unpackedLoadedVals,
+                                      rewriter, llvmResultStructTy);
+  rewriter.replaceOp(op, {resultStruct});
+  return success();
+}
+
 struct Subgroup2DBlockLoadOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<
           triton::gpu::intel::Subgroup2DBlockLoadOp>,
@@ -3668,17 +3797,6 @@ struct Subgroup2DBlockLoadOpConversion
     Block2DLoadConfig cfg = buildBlock2DLoadConfig(
         tensorType, eltTy, sizeInfo, *llEncoding, threadsPerWarp, ctx);
 
-    StringAttr kRegister = S("register");
-    StringAttr kLane = S("lane");
-    StringAttr kWarp = S("warp");
-    StringAttr kBlock = S("block");
-
-    // Read surface params from the op. The TTGIR pass stores these in
-    // physical descriptor order (descRank-1 for width/X, descRank-2 for
-    // height/Y). The per-tile offset mapping below uses surfaceColDim
-    // (= contiguousDim) and blockColIdx/blockRowIdx to route baseOffsetX/Y
-    // to the correct HW X/Y coordinates, which works for both row_major
-    // and column_major without swapping.
     Value basePtr = adaptor.getBasePtr();
     Value baseWidth = adaptor.getBaseWidth();
     Value baseHeight = adaptor.getBaseHeight();
@@ -3736,32 +3854,15 @@ struct Subgroup2DBlockLoadOpConversion
           buildNaNMasks(loc, resultOffsets, resultShapes, tensorType, rewriter);
     }
 
-    Value warpId = arith::IndexCastOp::create(
-        rewriter, loc, i32_ty,
-        mlir::gpu::SubgroupIdOp::create(rewriter, loc,
-                                        /*upperBound=*/nullptr));
-
     unsigned blockRowIdx = cfg.isTransposeRequired ? cfg.colDim : cfg.rowDim;
     unsigned blockColIdx = cfg.isTransposeRequired ? cfg.rowDim : cfg.colDim;
 
-    SmallVector<Value> unpackedLoadedVals(cfg.numElems);
-    for (size_t elemIdx = 0; elemIdx < cfg.numElems;
-         elemIdx += cfg.numElemsPerLoad) {
-      unsigned registerIdx =
-          cfg.regMapping.apply({{kRegister, elemIdx}})[0].second;
-
-      auto offsets = applyLinearLayout(loc, rewriter, *llEncoding,
-                                       {{kRegister, b.i32_val(registerIdx)},
-                                        {kLane, b.i32_val(0)},
-                                        {kWarp, warpId},
-                                        {kBlock, b.i32_val(0)}});
-
+    // Per-sub-tile: combine base offsets with linear layout offsets.
+    auto computeAddress =
+        [&](unsigned /*registerIdx*/,
+            ArrayRef<std::pair<StringAttr, Value>> offsets) -> SubTileAddress {
       Value addrElem = basePtr;
       Value offsetX, offsetY;
-      Value adjustedBaseWidth = baseWidth;
-      Value adjustedBaseHeight = baseHeight;
-
-      // Combine base offsets with per-sub-tile offsets from the layout.
       unsigned surfaceColDim = contiguousDim;
       unsigned surfaceRowDim =
           (contiguousDim == rank - 1) ? rank - 2 : rank - 1;
@@ -3778,44 +3879,21 @@ struct Subgroup2DBlockLoadOpConversion
           offsetX = adjustedOffset;
         else {
           // Batch dimensions: fold into base pointer via GEP.
-          Value strideInElems = b.zext(
-              int_ty(64), b.mul(adjustedBaseHeight, b.udiv(pitch, elemBytes)));
+          Value strideInElems =
+              b.zext(int_ty(64), b.mul(baseHeight, b.udiv(pitch, elemBytes)));
           Value offset64 = b.zext(int_ty(64), adjustedOffset);
           Value batchOffset = b.mul(offset64, strideInElems);
           addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, batchOffset);
         }
       }
+      return {addrElem,        offsetX, offsetY, baseWidth, baseHeight,
+              /*pred=*/Value()};
+    };
 
-      assert(cfg.numPackedVals > 0 &&
-             "numPackedVals should be greater than zero.");
-      Value ret = TritonGEN::Matrix2DBlockLoadOp::create(
-          rewriter, loc, cfg.load2DGenXType,
-          /*ptr*/ addrElem,
-          /*base_width*/ adjustedBaseWidth,
-          /*base_height*/ adjustedBaseHeight,
-          /*base_pitch*/ pitch,
-          /*x*/ b.udiv(offsetX, b.i32_val(cfg.numPackedVals)),
-          /*y*/ offsetY,
-          /*elem_size_in_bits*/ cfg.packedElemSizeInBits,
-          /*tile_width*/ cfg.tileWidth,
-          /*tile_height*/ cfg.tileHeight,
-          /*v_blocks*/ cfg.vBlocks,
-          /*transpose*/ cfg.isTransposeRequired,
-          /*vnni_transform*/ !cfg.isTransposeRequired && cfg.useVNNIFormat);
-
-      unpackBlockLoadResult(
-          ret, unpackedLoadedVals, elemIdx, cfg.regMapping, cfg.shuffleMapping,
-          cfg.packedDPASOperandType, cfg.unpackedType, cfg.numValuesPerLoad,
-          cfg.numPackedVals, /*pred=*/Value(),
-          /*otherElems=*/{}, nanMaskElems, loc, rewriter, ctx);
-    }
-
-    auto typeConverter = getTypeConverter();
-    Type llvmResultStructTy = typeConverter->convertType(op.getType());
-    Value resultStruct = packLLElements(loc, typeConverter, unpackedLoadedVals,
-                                        rewriter, llvmResultStructTy);
-    rewriter.replaceOp(op, {resultStruct});
-    return success();
+    return lowerBlockLoad2D(op, cfg, *llEncoding, pitch, computeAddress,
+                            /*otherElems=*/{}, nanMaskElems,
+                            /*staticBaseHeight=*/std::nullopt, targetInfo,
+                            getTypeConverter(), loc, rewriter);
   }
 };
 
@@ -3877,9 +3955,6 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
         op->hasAttr(TritonIntelGPUDialect::getBlockIOStrideAttrName());
     auto blockedEnc = dyn_cast<BlockedEncodingAttr>(encoding);
     if (has1DReshapeStride && blockedEnc && rank == 2) {
-      // For loads annotated by the 1D->2D reshape, the explicit load encoding
-      // has sizePerThread=[H/warps, 1], threadsPerWarp=[1, tpw]. This matches
-      // 2D block load HW delivery (lane k = col k, registers = rows).
       unsigned numWarpsRow = blockedEnc.getWarpsPerCTA()[0];
       int height = tensorType.getDimSize(0) / numWarpsRow;
       int width = tensorType.getDimSize(rank - 1);
@@ -3905,11 +3980,6 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
 
     Block2DLoadConfig cfg = buildBlock2DLoadConfig(
         tensorType, eltTy, sizeInfo, *llEncoding, threadsPerWarp, ctx);
-
-    StringAttr kRegister = S("register");
-    StringAttr kLane = S("lane");
-    StringAttr kWarp = S("warp");
-    StringAttr kBlock = S("block");
 
     // Unpack pointer elements.
     SmallVector<Value> ptrElems =
@@ -3952,114 +4022,33 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
     Value baseHeight = b.i32_val(op.getBaseHeight());
     Value pitch = b.i32_val(op.getBasePitch());
 
-    Value warpId = arith::IndexCastOp::create(
-        rewriter, loc, i32_ty,
-        mlir::gpu::SubgroupIdOp::create(rewriter, loc,
-                                        /*upperBound=*/nullptr));
+    unsigned blockColIdx = cfg.isTransposeRequired ? cfg.rowDim : cfg.colDim;
 
-    SmallVector<Value> unpackedLoadedVals(cfg.numElems);
-    for (size_t elemIdx = 0; elemIdx < cfg.numElems;
-         elemIdx += cfg.numElemsPerLoad) {
-      unsigned registerIdx =
-          cfg.regMapping.apply({{kRegister, elemIdx}})[0].second;
-
-      auto offsets = applyLinearLayout(loc, rewriter, *llEncoding,
-                                       {{kRegister, b.i32_val(registerIdx)},
-                                        {kLane, b.i32_val(0)},
-                                        {kWarp, warpId},
-                                        {kBlock, b.i32_val(0)}});
-
-      // Use the top-left address of the block.
+    // Per-sub-tile: use ptrElems[registerIdx] with subtraction-based
+    // addressing.
+    auto computeAddress =
+        [&](unsigned registerIdx,
+            ArrayRef<std::pair<StringAttr, Value>> offsets) -> SubTileAddress {
       Value addrElem =
           targetInfo.shuffleIdx(rewriter, loc, ptrElems[registerIdx], 0);
-      Value adjustedBaseWidth = baseWidth, adjustedBaseHeight = baseHeight;
-      Value pred;
-
-      // Adjust base address and width using the column offset.
-      unsigned blockColIdx = cfg.isTransposeRequired ? cfg.rowDim : cfg.colDim;
       Value offsetX = offsets[blockColIdx].second;
-      Value offsetY = b.i32_val(0);
       Value negativeOffsetX = b.sub(b.i32_val(0), offsetX);
       addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, negativeOffsetX);
-      adjustedBaseWidth =
+      Value adjustedBaseWidth =
           b.add(baseWidth, b.mul(offsetX, b.i32_val(elemSizeInBits / 8)));
 
+      Value pred;
       if (maskElems.size())
         pred = targetInfo.shuffleIdx(rewriter, loc, maskElems[registerIdx], 0);
 
-      if (pred) {
-        // We leverage the GPU block I/O hardware out-of-bound protection
-        // feature by setting the offset to an invalid value when 'pred'
-        // is false (the HW will not read out-of-bounds values). Later on,
-        // after issuing the 2d block read operation, we will select the
-        // result of the load only if the mask evaluate to true, otherwise
-        // we will use 'other'.
-        offsetY = b.select(pred, offsetY, adjustedBaseHeight);
-      }
+      return {addrElem,          offsetX,    /*offsetY=*/b.i32_val(0),
+              adjustedBaseWidth, baseHeight, pred};
+    };
 
-      Value ret = TritonGEN::Matrix2DBlockLoadOp::create(
-          rewriter, loc, cfg.load2DGenXType,
-          /*ptr*/ addrElem,
-          /*base_width*/ adjustedBaseWidth,
-          /*base_height*/ adjustedBaseHeight,
-          /*base_pitch*/ pitch,
-          /*x*/ b.udiv(offsetX, b.i32_val(cfg.numPackedVals)),
-          /*y*/ offsetY,
-          /*elem_size_in_bits*/ cfg.packedElemSizeInBits,
-          /*tile_width*/ cfg.tileWidth,
-          /*tile_height*/ cfg.tileHeight,
-          /*v_blocks*/ cfg.vBlocks,
-          /*transpose*/ cfg.isTransposeRequired,
-          /*vnni_transform*/ !cfg.isTransposeRequired && cfg.useVNNIFormat);
-
-      // When baseHeight == 1 but tileHeight > 1 (stride=0 broadcast), only
-      // the first row contains valid data. Replicate it across the tile.
-      if (op.getBaseHeight() < static_cast<int>(cfg.tileHeight) &&
-          op.getBaseHeight() == 1) {
-        unsigned numIndicesPerMatrix = cfg.numValuesPerLoad / cfg.vBlocks;
-        SmallVector<int32_t> shuffleIndices(cfg.numValuesPerLoad);
-
-        VectorType vecTy = vec_ty(cfg.packedType, cfg.vBlocks);
-        Value firstIndexVec = b.undef(vecTy);
-
-        for (unsigned valueIndex = 0; valueIndex < cfg.numValuesPerLoad;
-             ++valueIndex) {
-          unsigned firstIndexVecIdx = valueIndex / numIndicesPerMatrix;
-          if (valueIndex % numIndicesPerMatrix == 0) {
-            Value oldVal = b.extract_element(ret, b.i32_val(valueIndex));
-            Value newVal = oldVal;
-            if (cfg.tileWidth < cfg.threadsPerWarp) {
-              assert(cfg.tileWidth * 2 == cfg.threadsPerWarp &&
-                     "Expecting tileWidth to be 2x threadsPerWarp");
-              Value threadId = getThreadId(rewriter, loc);
-              newVal = targetInfo.shuffleIdx(
-                  rewriter, loc, oldVal,
-                  b.urem(threadId, b.i32_val(cfg.tileWidth)));
-            }
-            firstIndexVec =
-                b.insert_element(firstIndexVec.getType(), firstIndexVec, newVal,
-                                 b.i32_val(firstIndexVecIdx));
-          }
-          shuffleIndices[valueIndex] = firstIndexVecIdx;
-        }
-        DenseI32ArrayAttr attr = rewriter.getDenseI32ArrayAttr(shuffleIndices);
-        ret = LLVM::ShuffleVectorOp::create(rewriter, loc, cfg.load2DGenXType,
-                                            firstIndexVec, firstIndexVec, attr);
-      }
-
-      unpackBlockLoadResult(ret, unpackedLoadedVals, elemIdx, cfg.regMapping,
-                            cfg.shuffleMapping, cfg.packedDPASOperandType,
-                            cfg.unpackedType, cfg.numValuesPerLoad,
-                            cfg.numPackedVals, pred, otherElems,
-                            /*nanMaskElems=*/{}, loc, rewriter, ctx);
-    }
-
-    Type llvmResultStructTy = getTypeConverter()->convertType(op.getType());
-    Value resultStruct =
-        packLLElements(loc, getTypeConverter(), unpackedLoadedVals, rewriter,
-                       llvmResultStructTy);
-    rewriter.replaceOp(op, {resultStruct});
-    return success();
+    return lowerBlockLoad2D(op, cfg, *llEncoding, pitch, computeAddress,
+                            otherElems, /*nanMaskElems=*/{},
+                            /*staticBaseHeight=*/op.getBaseHeight(), targetInfo,
+                            getTypeConverter(), loc, rewriter);
   }
 };
 
