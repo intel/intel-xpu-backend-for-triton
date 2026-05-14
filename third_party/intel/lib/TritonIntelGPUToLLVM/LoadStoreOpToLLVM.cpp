@@ -734,7 +734,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
   };
 
   /// Full configuration for emitting a 2D block load sequence.
-  /// Produced by configureBlock2DLoad() from a BlockIOTileSizeInfo.
+  /// Produced by buildBlock2DLoadConfig() from a BlockIOTileSizeInfo.
   struct Block2DLoadConfig {
     // Tile geometry (post-DPAS configuration — may differ from sizeInfo).
     unsigned tileHeight;
@@ -762,7 +762,6 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     // Mappings for register indexing and shuffle.
     LinearLayout regMapping;
     LinearLayout shuffleMapping;
-    LinearLayout llEncoding;
   };
 
   /// Configure load types for DPAS encoding.
@@ -949,7 +948,6 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     cfg.colDim = sizeInfo.colDim;
     cfg.isTransposeRequired = sizeInfo.transpose;
     cfg.threadsPerWarp = threadsPerWarp;
-    cfg.llEncoding = llEncoding;
 
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
     cfg.packedElemSizeInBits = elemSizeInBits * cfg.numPackedVals;
@@ -966,12 +964,12 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     cfg.numElems = getTotalElemsPerThread(tensorType);
 
     // Compute initial load types.
-    cfg.numElemsPerLoad =
-        mlir::ceil(sizeInfo.tileHeight * sizeInfo.tileWidth *
-                       (int)cfg.numPackedVals * sizeInfo.vBlocks,
-                   (int)threadsPerWarp);
-    cfg.numValuesPerLoad =
-        mlir::ceil((int)cfg.numElemsPerLoad, (int)cfg.numPackedVals);
+    cfg.numElemsPerLoad = mlir::ceil(
+        sizeInfo.tileHeight * sizeInfo.tileWidth *
+            static_cast<int>(cfg.numPackedVals) * sizeInfo.vBlocks,
+        static_cast<int>(threadsPerWarp));
+    cfg.numValuesPerLoad = mlir::ceil(static_cast<int>(cfg.numElemsPerLoad),
+                                      static_cast<int>(cfg.numPackedVals));
     cfg.packedType = IntegerType::get(ctx, cfg.packedElemSizeInBits);
     cfg.load2DGenXType =
         LLVM::getVectorType(cfg.packedType, cfg.numValuesPerLoad);
@@ -3752,7 +3750,7 @@ struct Subgroup2DBlockLoadOpConversion
       unsigned registerIdx =
           cfg.regMapping.apply({{kRegister, elemIdx}})[0].second;
 
-      auto offsets = applyLinearLayout(loc, rewriter, cfg.llEncoding,
+      auto offsets = applyLinearLayout(loc, rewriter, *llEncoding,
                                        {{kRegister, b.i32_val(registerIdx)},
                                         {kLane, b.i32_val(0)},
                                         {kWarp, warpId},
@@ -3965,7 +3963,7 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
       unsigned registerIdx =
           cfg.regMapping.apply({{kRegister, elemIdx}})[0].second;
 
-      auto offsets = applyLinearLayout(loc, rewriter, cfg.llEncoding,
+      auto offsets = applyLinearLayout(loc, rewriter, *llEncoding,
                                        {{kRegister, b.i32_val(registerIdx)},
                                         {kLane, b.i32_val(0)},
                                         {kWarp, warpId},
@@ -4016,7 +4014,8 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
 
       // When baseHeight == 1 but tileHeight > 1 (stride=0 broadcast), only
       // the first row contains valid data. Replicate it across the tile.
-      if (op.getBaseHeight() < (int)cfg.tileHeight && op.getBaseHeight() == 1) {
+      if (op.getBaseHeight() < static_cast<int>(cfg.tileHeight) &&
+          op.getBaseHeight() == 1) {
         unsigned numIndicesPerMatrix = cfg.numValuesPerLoad / cfg.vBlocks;
         SmallVector<int32_t> shuffleIndices(cfg.numValuesPerLoad);
 
