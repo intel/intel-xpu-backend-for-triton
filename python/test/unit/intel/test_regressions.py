@@ -1946,13 +1946,18 @@ def test_local_alloc_sub_byte_element_type(device, tmp_path: pathlib.Path):
     }
     """
 
+    import torch
+    # Input: mix of zero and non-zero values to exercise both i1 paths.
+    x = torch.tensor([i % 3 - 1 for i in range(128)], dtype=torch.int8, device=device).reshape(128, 1)
+    z = torch.zeros(128, 1, dtype=torch.int8, device=device)
+
     temp_file = tmp_path / "test_local_alloc_i1.ttgir"
     temp_file.write_text(ir)
     kernel = triton.compile(str(temp_file))
 
-    from triton.runtime.driver import driver
-    current_device = driver.active.get_current_device()
+    kernel[(1, 1, 1)](x.data_ptr(), z.data_ptr())
 
-    module, function, n_regs, n_spills, n_max_threads = driver.active.utils.load_binary(
-        kernel.name, kernel.kernel, kernel.metadata.shared, kernel.metadata.build_flags,
-        not kernel.metadata.generate_native_code, current_device)
+    # The kernel reads i8, casts to i1 (!=0), stores/loads via shared memory,
+    # then zero-extends back to i8 and writes out. Expected: 1 if input != 0 else 0.
+    expected = (x != 0).to(torch.int8)
+    assert torch.equal(z, expected)
