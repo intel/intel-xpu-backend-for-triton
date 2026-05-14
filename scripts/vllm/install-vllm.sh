@@ -67,13 +67,19 @@ fi
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 SCRIPTS_DIR=$ROOT/scripts
 VLLM_PROJ=$ROOT/vllm
+VLLM_XPU_KERNELS_PROJ=$ROOT/vllm-xpu-kernels
 
 # Use VLLM_PIN environment variable if set, otherwise read from file
 if [ -z "${VLLM_PIN:-}" ]; then
   VLLM_PIN="$(<"$ROOT/scripts/vllm/vllm-pin.txt")"
 fi
+# Use VLLM_XPU_KERNELS_PIN environment variable if set, otherwise read from file
+if [ -z "${VLLM_XPU_KERNELS_PIN:-}" ]; then
+  VLLM_XPU_KERNELS_PIN="$(<"$ROOT/scripts/vllm/vllm-xpu-kernels-pin.txt")"
+fi
 
 echo "**** vLLM pin: $VLLM_PIN ****"
+echo "**** vLLM XPU kernels pin: $VLLM_XPU_KERNELS_PIN ****"
 
 ############################################################################
 # Smoke test function (defined early so it can be called from early-exit path)
@@ -110,14 +116,14 @@ if python -m pip show vllm >/dev/null 2>&1; then
   if [ "$FORCE_REINSTALL" = false ]; then
     echo "**** vLLM is already installed, skipping. ****"
     echo "**** Use --force-reinstall to force reinstallation. ****"
-    echo "**** To get a clean install: rm -rf $VLLM_PROJ && python -m pip uninstall -y vllm ****"
+    echo "**** To get a clean install: rm -rf $VLLM_PROJ $VLLM_XPU_KERNELS_PROJ && python -m pip uninstall -y vllm vllm-xpu-kernels ****"
     if [ "$SMOKE_TEST" = true ]; then
       smoke_test_vllm
     fi
     exit 0
   fi
-  echo "**** --force-reinstall: uninstalling existing vLLM. ****"
-  python -m pip uninstall -y vllm
+  echo "**** --force-reinstall: uninstalling existing vLLM and vLLM XPU kernels. ****"
+  python -m pip uninstall -y vllm vllm-xpu-kernels
 fi
 
 ############################################################################
@@ -130,6 +136,13 @@ function clone_vllm {
   git checkout "$VLLM_PIN"
 }
 
+function clone_vllm_xpu_kernels {
+  echo "**** Cloning vLLM XPU kernels into $VLLM_XPU_KERNELS_PROJ ****"
+  git clone https://github.com/vllm-project/vllm-xpu-kernels.git "$VLLM_XPU_KERNELS_PROJ"
+  cd "$VLLM_XPU_KERNELS_PROJ"
+  git checkout "$VLLM_XPU_KERNELS_PIN"
+}
+
 if [ -d "$VLLM_PROJ" ]; then
   if [ "$FORCE_REINSTALL" = true ]; then
     echo "**** Removing existing $VLLM_PROJ ****"
@@ -140,6 +153,18 @@ if [ -d "$VLLM_PROJ" ]; then
   fi
 else
   clone_vllm
+fi
+
+if [ -d "$VLLM_XPU_KERNELS_PROJ" ]; then
+  if [ "$FORCE_REINSTALL" = true ]; then
+    echo "**** Removing existing $VLLM_XPU_KERNELS_PROJ ****"
+    rm -rf "$VLLM_XPU_KERNELS_PROJ"
+    clone_vllm_xpu_kernels
+  else
+    echo "**** Reusing existing $VLLM_XPU_KERNELS_PROJ directory. ****"
+  fi
+else
+  clone_vllm_xpu_kernels
 fi
 
 ############################################################################
@@ -190,8 +215,9 @@ function install_vllm {
   # Strip torch/triton pins from requirements (use pre-installed nightly wheels)
   # Be precise: match torch/torchaudio/torchvision/triton but NOT tritonclient
   # Also remove xgrammar which depends on triton (install it separately later)
-  sed -i '/^torch[=>= ]/d; /^torchaudio/d; /^torchvision/d; /^triton[=>= ]/d; /^xgrammar/d; /extra-index-url.*pytorch/d' requirements/xpu.txt requirements/common.txt
-  sed -i '/^torch[=>= ]/d; /^torchaudio/d; /^torchvision/d; /^triton[=>= ]/d; /^xgrammar/d' requirements/test/xpu.txt
+  # ALSO remove vllm_xpu_kernels wheel dependency since we build from source
+  sed -i '/^torch[=>= ]/d; /^torchaudio/d; /^torchvision/d; /^triton[=>= ]/d; /^xgrammar/d; /^vllm_xpu_kernels/d; /extra-index-url.*pytorch/d' requirements/xpu.txt requirements/common.txt
+  sed -i '/^torch[=>= ]/d; /^torchaudio/d; /^torchvision/d; /^triton[=>= ]/d; /^xgrammar/d; /^vllm_xpu_kernels/d' requirements/test/xpu.txt
 
   # Create constraints file to prevent pip from replacing pre-installed torch/triton
   # with a PyPI version. common.txt -> transformers -> torch is the main culprit.
@@ -248,6 +274,7 @@ function install_vllm {
   cp -r tests "$ROOT/benchmarks/triton_kernels_benchmark/vllm/batched_moe/tests"
 
   # Install vLLM in editable mode (--no-deps: don't resolve deps again)
+  VLLM_TARGET_DEVICE=xpu python -m pip install --no-deps --no-build-isolation -e "$VLLM_XPU_KERNELS_PROJ"
   VLLM_TARGET_DEVICE=xpu python -m pip install --no-deps --no-build-isolation -e .
 
   echo "**** vLLM installed successfully ****"
