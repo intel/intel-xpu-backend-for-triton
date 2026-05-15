@@ -9,7 +9,7 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
-from triton_kernels_benchmark import xetla_kernel
+from triton_kernels_benchmark import sycl_tla_kernel
 
 
 @triton.autotune(
@@ -136,18 +136,17 @@ matmul = _matmul.apply
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
-        line_vals=['triton', 'xetla'],
+        line_vals=['triton', 'onednn', 'sycl-tla'],
         # label name for the lines
-        line_names=['Triton', 'XeTLA'],
+        line_names=['Triton', 'OneDNN', 'SYCL-TLA'],
         # line styles
-        styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
+        styles=[('green', '-'), ('green', '--'), ('blue', '-')],
         ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
         plot_name='matmul-splitk-performance',
         # name for the plot. Used also as a file name for saving the plot.
         args={},
     ))
 def benchmark(M, N, K, provider):
-    # Maximum across onednn=10, triton=100, xetla=300
     do_bench = benchmark_suite.get_do_bench(n_warmup=300, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
     torch.manual_seed(0)
     a = torch.rand((M, K), device='xpu', dtype=torch.bfloat16)
@@ -162,18 +161,20 @@ def benchmark(M, N, K, provider):
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
         benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
         _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
-    elif provider == 'xetla':
+    elif provider == 'sycl-tla':
         c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
-        acc = torch.zeros((M, N), device='xpu', dtype=torch.float32)
-        cnt = torch.zeros((M, N), device='xpu', dtype=torch.int32)
+        k_ratio = K // max(M, 1)
+        split_k = 8 if k_ratio >= 16 else 4 if k_ratio >= 4 else 2
 
-        name = f'gemm_splitk_shape_{M}_{K}_{N}'
-        func = getattr(xetla_kernel, name)
-        xetla_fn = lambda: func(a, b, c, acc, cnt)
+        def sycl_tla_fn():
+            c.zero_()
+            sycl_tla_kernel.gemm_splitk(a, b, c, M, N, K, split_k)
+            return c
+
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
-
-        # benchmark_suite.assert_close(xetla_fn, torch_fn, atol=1e-4, rtol=1.0, err_msg='xetla to torch')
-        _, min_ms, max_ms, mean_ms, cv = do_bench(xetla_fn)
+        rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
+        benchmark_suite.assert_close(sycl_tla_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='sycl-tla to torch')
+        _, min_ms, max_ms, mean_ms, cv = do_bench(sycl_tla_fn)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 
