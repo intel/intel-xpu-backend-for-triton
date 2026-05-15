@@ -7,6 +7,10 @@
 #include <level_zero/ze_api.h>
 #include <sycl/sycl.hpp>
 
+#if __SYCL_COMPILER_VERSION >= 20260204
+#include <sycl/ext/oneapi/experimental/enqueue_functions.hpp>
+#endif
+
 // helpers to check for ze errors
 #define ZE_CHECK(ans) {{\
     gpuAssert((ans), __FILE__, __LINE__);\
@@ -173,7 +177,13 @@ int32_t {kernel_name}(sycl::queue &stream, {signature}) {{
         cgh.parallel_for(parallel_work_size, sycl_kernel);
     }}
   }};
+#if __SYCL_COMPILER_VERSION >= 20260204
+  // Use eventless kernel submission. queue::submit() creates SYCL event which
+  // is redundant for our use case.
+  sycl::ext::oneapi::experimental::submit(stream, cgf);
+#else
   stream.submit(cgf);
+#endif
   stream.wait_and_throw();
   return 0;
 }}

@@ -14,7 +14,14 @@
 #include <vector>
 
 #include <level_zero/ze_api.h>
+
+#define __DPCPP_ENABLE_UNFINISHED_KHR_EXTENSIONS
 #include <sycl/sycl.hpp>
+
+#if __SYCL_COMPILER_VERSION >= 20260204
+#include <sycl/khr/free_function_commands.hpp>
+#endif
+
 #if defined(TRITON_INTEL_INJECT_PYTORCH)
 #include <ATen/record_function.h>
 #endif
@@ -1090,7 +1097,14 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
       cgh.parallel_for(parallel_work_size, kernel_ptr);
     }
   };
-  auto event = stream.submit(cgf);
+#if __SYCL_COMPILER_VERSION >= 20260204
+  // Event-less kernel submission.
+  // Eventless submission fails with agama 1146 but passes with
+  // agama 1222 L0 driver and later.
+  sycl::ext::oneapi::experimental::submit(stream, cgf);
+#else
+ auto event = stream.submit(cgf);
+#endif
 }
 // end sycl
 
