@@ -3,7 +3,6 @@ from triton_kernels_benchmark.benchmark_testing import BenchmarkCategory, Benchm
 from triton_kernels_benchmark import (
     fused_softmax,
     gemm_benchmark,
-    gemm_block_ptr_benchmark,
     gemm_tensor_of_ptr_benchmark,
     flash_attention_benchmark,
     prefix_sums,
@@ -30,13 +29,6 @@ CONFIGS = [
         run_opts={},
         categories={BenchmarkCategory.EXPERIMENTAL, BenchmarkCategory.GEMM},
         description="GEMM kernel benchmark - with tensor of pointer",
-    ),
-    BenchmarkConfig(
-        key="gemm-block-ptr",
-        get_benchmark=gemm_block_ptr_benchmark.get_benchmark,
-        run_opts={},
-        categories={BenchmarkCategory.EXPERIMENTAL, BenchmarkCategory.GEMM},
-        description="GEMM kernel benchmark - with legacy block pointer",
     ),
     BenchmarkConfig(
         key="gemm_bt",
