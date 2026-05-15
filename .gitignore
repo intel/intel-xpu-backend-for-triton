@@ -23,6 +23,7 @@ python/triton/FileCheck
 
 benchmarks/dist
 benchmarks/*.egg-info/
+scripts/**/*.egg-info/
 benchmarks/**/*.so
 .scripts_cache/
 
