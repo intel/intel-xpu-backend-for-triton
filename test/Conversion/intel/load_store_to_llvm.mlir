@@ -87,7 +87,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.sup
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.support_predicated_io} {
   // CHECK-LABEL: load_evict_first_predicated
   tt.func @load_evict_first_predicated(%ptr: tensor<1024x!tt.ptr<f32>, #blocked>, %mask: tensor<1024xi1, #blocked>) {
-    // CHECK: triton_gen.predicated_load {{.*}} {cache_control = L1IAR_L3C} : (!llvm.ptr<1>, i64, i1, i32) -> i32
+    // CHECK: triton_gen.predicated_load {{.*}} {cache_control = L1IAR_L3C} : (!llvm.ptr<1>, i1, i32) -> i32
     %val = tt.load %ptr, %mask evictionPolicy = evict_first : tensor<1024x!tt.ptr<f32>, #blocked>
     tt.return
   }
@@ -102,7 +102,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.sup
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.support_predicated_io} {
   // CHECK-LABEL: load_evict_last_predicated
   tt.func @load_evict_last_predicated(%ptr: tensor<1024x!tt.ptr<f32>, #blocked>, %mask: tensor<1024xi1, #blocked>) {
-    // CHECK: triton_gen.predicated_load {{.*}} {cache_control = L1C_L3C} : (!llvm.ptr<1>, i64, i1, i32) -> i32
+    // CHECK: triton_gen.predicated_load {{.*}} {cache_control = L1C_L3C} : (!llvm.ptr<1>, i1, i32) -> i32
     %val = tt.load %ptr, %mask evictionPolicy = evict_last : tensor<1024x!tt.ptr<f32>, #blocked>
     tt.return
   }
@@ -116,7 +116,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.sup
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.support_predicated_io} {
   // CHECK-LABEL: explicit_cache_wins_over_eviction
   tt.func @explicit_cache_wins_over_eviction(%ptr: tensor<1024x!tt.ptr<f32>, #blocked>, %mask: tensor<1024xi1, #blocked>) {
-    // CHECK: triton_gen.predicated_load {{.*}} {cache_control = L1UC_L3C} : (!llvm.ptr<1>, i64, i1, i32) -> i32
+    // CHECK: triton_gen.predicated_load {{.*}} {cache_control = L1UC_L3C} : (!llvm.ptr<1>, i1, i32) -> i32
     %val = tt.load %ptr, %mask cacheModifier = cg evictionPolicy = evict_last : tensor<1024x!tt.ptr<f32>, #blocked>
     tt.return
   }
@@ -154,7 +154,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.sup
   // CHECK-LABEL: descriptor_load_evict_first_predicated
   tt.func @descriptor_load_evict_first_predicated(%desc: !tt.tensordesc<128xf32>) {
     %c0_i32 = arith.constant 0 : i32
-    // CHECK: triton_gen.predicated_load {{.*}} {cache_control = L1IAR_L3C} : (!llvm.ptr<1>, i64, i1, i32) -> i32
+    // CHECK: triton_gen.predicated_load {{.*}} {cache_control = L1IAR_L3C} : (!llvm.ptr<1>, i1, i32) -> i32
     %val = tt.descriptor_load %desc[%c0_i32] evictionPolicy = evict_first : !tt.tensordesc<128xf32> -> tensor<128xf32, #blocked>
     tt.return
   }
