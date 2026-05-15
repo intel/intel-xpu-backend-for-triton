@@ -7,11 +7,14 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/CommandLine.h"
 
 namespace tt = mlir::triton;
+namespace ttg = mlir::triton::gpu;
 namespace tti = mlir::triton::intel;
 
 namespace mlir::triton::gpu::intel {
@@ -23,6 +26,25 @@ namespace {
 
 using AliasKind = tti::AliasAnalysis::PointerRootKind;
 using RootsResult = tti::AliasAnalysis::PointerRootsResult;
+
+//===----------------------------------------------------------------------===//
+// Tunable budget knobs for EVICT_LAST promotion (Phase 2 of A2).
+// Exposed as `cl::opt` so Phase 3 measurement can refine without recompiling.
+// See `functional-weaving-seahorse.md` §2.1 "Budget constants and rule
+// (canonical)" for the policy these knobs implement.
+//===----------------------------------------------------------------------===//
+
+static llvm::cl::opt<int64_t> kEvictLastPerLoadBudgetBytes(
+    "tritonintelgpu-evict-last-per-load-bytes",
+    llvm::cl::desc("Per-load tile-byte budget for promoting tt.load to "
+                   "EVICT_LAST in AnnotateCacheControl"),
+    llvm::cl::init(32 * 1024));
+
+static llvm::cl::opt<int64_t> kEvictLastPerLoopBudgetBytes(
+    "tritonintelgpu-evict-last-per-loop-bytes",
+    llvm::cl::desc("Per-loop running-total tile-byte budget for EVICT_LAST "
+                   "promotion in AnnotateCacheControl"),
+    llvm::cl::init(48 * 1024));
 
 //===----------------------------------------------------------------------===//
 // Helpers
@@ -285,6 +307,160 @@ static bool valueFlowsToSkippedStore(Value root,
 }
 
 //===----------------------------------------------------------------------===//
+// EVICT_LAST policy helpers: dot-feed predicate and per-loop budget tracker.
+//===----------------------------------------------------------------------===//
+
+/// True iff every transitive user of `v` reaches a `tt::DotOp` or
+/// `tt::DotScaledOp` operand through layout-only intermediates.
+///
+/// Layout-only intermediate ops accepted: `ttg::ConvertLayoutOp`,
+/// `tt::BroadcastOp`, `tt::ExpandDimsOp`, `tt::TransOp`, `tt::ReshapeOp`.
+/// Multi-consumer intermediates where any consumer is non-layout-only reject
+/// the chain.
+///
+/// Loop-carried block arguments / `scf::YieldOp` carries are followed only for
+/// `scf::ForOp` (the canonical pipelined-load shape). `scf::IfOp` /
+/// `scf::WhileOp` carries are intentionally not supported in this predicate.
+///
+/// Reject (any of these aborts the predicate as a leaf):
+///   - any `arith::*` op (including `arith::SelectOp`),
+///   - `tt::ReduceOp`, `tt::StoreOp`, `func::ReturnOp`,
+///   - any other terminator,
+///   - any op not in the layout-only set and not a dot consumer.
+///
+/// Bounded DFS depth = 8 to keep the predicate cheap.
+static bool feedsDotOperand(Value v) {
+  constexpr unsigned kMaxDepth = 8;
+
+  SetVector<Value> visited;
+  // Worklist of (value, depth) pairs.
+  SmallVector<std::pair<Value, unsigned>> worklist;
+  worklist.push_back({v, 0});
+  visited.insert(v);
+
+  while (!worklist.empty()) {
+    auto [cur, depth] = worklist.pop_back_val();
+    if (depth > kMaxDepth)
+      return false;
+
+    // The chain must reach at least one user; an unused load value is not a
+    // dot operand.
+    if (cur.use_empty())
+      return false;
+
+    for (OpOperand &use : cur.getUses()) {
+      Operation *user = use.getOwner();
+
+      // Leaf accept: dot or dot_scaled operand.
+      if (isa<tt::DotOp, tt::DotScaledOp>(user))
+        continue;
+
+      // Layout-only intermediates: must have a single user (otherwise some
+      // sibling consumer might pull the value into a streaming pattern).
+      if (isa<ttg::ConvertLayoutOp, tt::BroadcastOp, tt::ExpandDimsOp,
+              tt::TransOp, tt::ReshapeOp>(user)) {
+        if (!user->hasOneUse())
+          return false;
+        for (Value res : user->getResults())
+          if (visited.insert(res))
+            worklist.push_back({res, depth + 1});
+        continue;
+      }
+
+      // scf.for loop-carried argument: follow the carry through the matching
+      // region iter-arg AND the matching for-result.
+      if (auto forOp = dyn_cast<scf::ForOp>(user)) {
+        unsigned operandIdx = use.getOperandNumber();
+        unsigned numCtrl = forOp.getNumControlOperands();
+        if (operandIdx < numCtrl)
+          return false; // Control operand (lb/ub/step) — not a data carry.
+        unsigned iterIdx = operandIdx - numCtrl;
+        Value iterArg = forOp.getRegionIterArg(iterIdx);
+        Value forRes = forOp.getResult(iterIdx);
+        if (visited.insert(iterArg))
+          worklist.push_back({iterArg, depth + 1});
+        if (visited.insert(forRes))
+          worklist.push_back({forRes, depth + 1});
+        continue;
+      }
+
+      // scf.yield inside an scf.for: carry the value to the for-result + the
+      // next iteration's iter-arg.
+      if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
+        auto forOp = dyn_cast<scf::ForOp>(yieldOp->getParentOp());
+        if (!forOp)
+          return false; // Only scf.for carries are supported here.
+        unsigned idx = use.getOperandNumber();
+        Value forRes = forOp.getResult(idx);
+        Value iterArg = forOp.getRegionIterArg(idx);
+        if (visited.insert(forRes))
+          worklist.push_back({forRes, depth + 1});
+        if (visited.insert(iterArg))
+          worklist.push_back({iterArg, depth + 1});
+        continue;
+      }
+
+      // Anything else: reject the whole chain.
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/// Returns the total tile size in bytes for a `tt.load` result, or 0 if the
+/// result is not a ranked tensor or its element type's bit-width is not a
+/// positive multiple of 8.
+static int64_t computeTileBytes(tt::LoadOp load) {
+  auto ty = dyn_cast<RankedTensorType>(load.getType());
+  if (!ty)
+    return 0;
+  unsigned bits = ty.getElementTypeBitWidth();
+  if (bits == 0 || bits % 8 != 0)
+    return 0;
+  int64_t numElements = ty.getNumElements();
+  if (numElements <= 0)
+    return 0;
+  return numElements * static_cast<int64_t>(bits / 8);
+}
+
+/// Returns the nearest enclosing `scf::ForOp` for `load`, or null if the load
+/// is not lexically inside any `scf.for`.
+static scf::ForOp nearestEnclosingFor(tt::LoadOp load) {
+  return load->getParentOfType<scf::ForOp>();
+}
+
+/// Per-function tracker for the EVICT_LAST per-loop byte budget. Implements
+/// the canonical rule from the plan §2.1: a load is admitted iff its tile
+/// bytes are within `kEvictLastPerLoadBudgetBytes` AND, if enclosed in an
+/// `scf::ForOp`, the running total in that loop's bucket plus the candidate's
+/// tile bytes does not exceed `kEvictLastPerLoopBudgetBytes`. Outside-loop
+/// loads are subject to the per-load cap only and never touch any bucket.
+struct EvictLastBudgetTracker {
+  llvm::DenseMap<scf::ForOp, int64_t> bytesPromotedPerLoop;
+
+  bool fits(tt::LoadOp load) const {
+    int64_t tileBytes = computeTileBytes(load);
+    if (tileBytes <= 0)
+      return false;
+    if (tileBytes > kEvictLastPerLoadBudgetBytes)
+      return false;
+    scf::ForOp loop = nearestEnclosingFor(load);
+    if (!loop)
+      return true; // Outside any loop: per-load cap only.
+    int64_t already = bytesPromotedPerLoop.lookup(loop);
+    return already + tileBytes <= kEvictLastPerLoopBudgetBytes;
+  }
+
+  void account(tt::LoadOp load) {
+    scf::ForOp loop = nearestEnclosingFor(load);
+    if (!loop)
+      return; // Outside-loop loads do not consume any per-loop bucket.
+    bytesPromotedPerLoop[loop] += computeTileBytes(load);
+  }
+};
+
+//===----------------------------------------------------------------------===//
 // Per-function context
 //===----------------------------------------------------------------------===//
 
@@ -293,6 +469,7 @@ struct FuncContext {
   std::unique_ptr<tti::AliasAnalysis> alias;
   bool hasAtomic;
   SetVector<BlockArgument> skipped;
+  EvictLastBudgetTracker evictLastBudget;
 };
 
 //===----------------------------------------------------------------------===//
@@ -325,6 +502,7 @@ struct AnnotateCacheControlPass
           std::move(alias),
           hasAtomic,
           std::move(skipped),
+          EvictLastBudgetTracker(),
       };
 
       func.walk([&](tt::LoadOp load) {
@@ -344,9 +522,35 @@ struct AnnotateCacheControlPass
   }
 
 private:
+  /// Three-requirement gate for promoting a load to EVICT_LAST. All three
+  /// must hold:
+  ///   1. Spatial known cross-subgroup reuse (drops temporal-only).
+  ///   2. The load reaches a `tt.dot` / `tt.dot_scaled` operand through
+  ///      layout-only ops only.
+  ///   3. The per-load + per-loop byte budget admits this load.
+  /// `knownReuse(load)` is checked separately by the caller in `tryAnnotate`
+  /// — this helper layers on the additional policy filters.
+  static bool shouldUseEvictLast(tt::LoadOp load, FuncContext &ctx) {
+    // Requirement 1: spatial known reuse only — drop temporal-only.
+    if (!ctx.reuse.getSpatial().knownCrossSubgroupReuse(load))
+      return false;
+    // Requirement 2: load value reaches a tt.dot or tt.dot_scaled operand,
+    // possibly through layout-only ops.
+    if (!feedsDotOperand(load.getResult()))
+      return false;
+    // Requirement 3: per-load + per-loop byte budget.
+    if (!ctx.evictLastBudget.fits(load))
+      return false;
+    return true;
+  }
+
   static bool tryAnnotate(tt::LoadOp load, FuncContext &ctx) {
     // Gate 1: user override — never overwrite an explicitly-set cache modifier.
     if (load.getCache() != tt::CacheModifier::NONE)
+      return false;
+
+    // Gate 1b: explicit eviction policy set by frontend — never overwrite.
+    if (load.getEvict() != tt::EvictionPolicy::NORMAL)
       return false;
 
     // Gate 2: scalar loads don't get encoding-based annotation.
@@ -354,13 +558,13 @@ private:
     if (!loadTy)
       return false;
 
-    // Gate 3: reuse analysis (P1 OR P2). Only consult when an encoding is
-    // present. Without an encoding, SpatialReuseAnalysis is conservative
-    // (reuse = true), which would incorrectly suppress `.cg` on bare
-    // tensor<Nx!tt.ptr<T>> loads (test f).
-    if (loadTy.getEncoding() && ctx.reuse.anyReuse(load))
-      return false;
-
+    // Gates 4-7: structural disqualifiers. These BLOCK BOTH `.cg` AND
+    // `EVICT_LAST` — a load that flows through atomic context, has unknown
+    // root pointers, aliases a writing peer, or feeds a skipped store should
+    // remain at the default cache policy regardless of reuse signal. We
+    // evaluate them BEFORE the reuse decision so the same suppression covers
+    // both annotations (see plan §2.1, Finding 4 resolution).
+    //
     // Gate 4: atomic policy — in atomic kernels, any load whose pointer roots
     // to an entry-block pointer arg is suppressed (cost-model policy — see
     // the pass description in Passes.td).
@@ -382,6 +586,27 @@ private:
     if (valueFlowsToSkippedStore(load.getResult(), *ctx.alias, ctx.skipped))
       return false;
 
+    // Gate 3 (split):
+    //  - encoded type AND any reuse signal -> suppress `.cg` (today's
+    //    behavior preserved);
+    //  - additionally, when reuse is *known* AND `shouldUseEvictLast`
+    //    accepts the candidate, promote to `EVICT_LAST`;
+    //  - any other Gate-3 hit stays at the default policy (no `.cg`,
+    //    no `EVICT_LAST`).
+    //
+    // Mutual exclusion: only one of `setEvictAttr` or `setCacheAttr` is
+    // ever called per load — guaranteed by the early-return structure.
+    if (loadTy.getEncoding() && ctx.reuse.anyReuse(load)) {
+      if (ctx.reuse.knownReuse(load) && shouldUseEvictLast(load, ctx)) {
+        load.setEvictAttr(tt::EvictionPolicyAttr::get(
+            load.getContext(), tt::EvictionPolicy::EVICT_LAST));
+        ctx.evictLastBudget.account(load);
+        return true;
+      }
+      return false; // Reuse suspected but not promoted: no `.cg`.
+    }
+
+    // Default: no reuse evidence -> tag with `.cg` to bypass L1.
     load.setCacheAttr(
         tt::CacheModifierAttr::get(load.getContext(), tt::CacheModifier::CG));
     return true;
