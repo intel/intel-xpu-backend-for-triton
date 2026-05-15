@@ -10,6 +10,7 @@
 #include "mlir/IR/MLIRContext.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 using namespace mlir;
@@ -211,6 +212,123 @@ TEST_F(ReuseAnalysisTest, UnionFalse) {
   ttgi::ReuseAnalysis analysis(module, strideAnalysis);
 
   EXPECT_FALSE(analysis.anyReuse(loadOp));
+}
+
+// Phase 1.6 Tests — knownReuse
+
+TEST_F(ReuseAnalysisTest, Known_TrueFromSpatial) {
+  // Mirror UnionTrueFromSpatial (line 116): DPAS dot-operand A with warp-
+  // invariant K (dim 1), load outside any loop. Spatial known reuse fires,
+  // temporal does not. Expected: knownReuse == true.
+  auto module = createModule();
+  auto f16Ty = builder->getF16Type();
+  auto ptrType = getPtrType(f16Ty);
+  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
+  auto loc = builder->getUnknownLoc();
+  auto basePtr = funcOp.getArgument(0);
+
+  auto dpasEnc = makeDpas(/*repeatCount=*/8, /*systolicDepth=*/8,
+                          /*executionSize=*/16, /*opsPerChannel=*/2,
+                          /*warpsPerCTA=*/{4, 1}, /*repCluster=*/{1, 1},
+                          /*threadsPerWarp=*/16);
+  auto dotOpEnc = ttg::DotOperandEncodingAttr::get(&ctx, /*opIdx=*/0, dpasEnc,
+                                                   /*kWidth=*/1);
+  auto resultTy = RankedTensorType::get({8, 16}, f16Ty, dotOpEnc);
+  auto ptrTensorTy = RankedTensorType::get({8, 16}, ptrType, dotOpEnc);
+
+  auto splatPtr = tt::SplatOp::create(*builder, loc, ptrTensorTy, basePtr);
+  auto loadOp = makeLoad(splatPtr, resultTy);
+
+  tti::ModuleAxisInfoAnalysis axisInfo(module);
+  tti::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  ttgi::ReuseAnalysis analysis(module, strideAnalysis);
+
+  EXPECT_TRUE(analysis.knownReuse(loadOp));
+  // Regression guard: anyReuse still true.
+  EXPECT_TRUE(analysis.anyReuse(loadOp));
+}
+
+TEST_F(ReuseAnalysisTest, Known_TrueFromTemporal) {
+  // Mirror UnionTrueFromTemporal (line 149): 1-D blocked encoding with warps
+  // tiling the only axis (no spatial reuse), but pointer is loop-invariant
+  // inside scf.for (temporal proven reuse). Expected: knownReuse == true.
+  auto module = createModule();
+  auto f16Ty = builder->getF16Type();
+  auto ptrType = getPtrType(f16Ty);
+  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
+  auto loc = builder->getUnknownLoc();
+  auto basePtr = funcOp.getArgument(0);
+
+  auto blocked = makeBlocked(/*sizePerThread=*/{1}, /*threadsPerWarp=*/{32},
+                             /*warpsPerCTA=*/{4}, /*order=*/{0});
+  auto resultTy = RankedTensorType::get({128}, f16Ty, blocked);
+  auto ptrTensorTy = RankedTensorType::get({128}, ptrType, blocked);
+
+  auto splatPtr = tt::SplatOp::create(*builder, loc, ptrTensorTy, basePtr);
+
+  auto i32Type = builder->getI32Type();
+  auto lb = arith::ConstantOp::create(*builder, loc, i32Type,
+                                      builder->getI32IntegerAttr(0));
+  auto ub = arith::ConstantOp::create(*builder, loc, i32Type,
+                                      builder->getI32IntegerAttr(10));
+  auto step = arith::ConstantOp::create(*builder, loc, i32Type,
+                                        builder->getI32IntegerAttr(1));
+  auto forOp = scf::ForOp::create(*builder, loc, lb, ub, step);
+
+  tt::LoadOp loadOp;
+  {
+    OpBuilder::InsertionGuard loopGuard(*builder);
+    builder->setInsertionPointToStart(forOp.getBody());
+    loadOp = makeLoad(splatPtr, resultTy);
+  }
+
+  tti::ModuleAxisInfoAnalysis axisInfo(module);
+  tti::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  ttgi::ReuseAnalysis analysis(module, strideAnalysis);
+
+  EXPECT_TRUE(analysis.knownReuse(loadOp));
+  EXPECT_TRUE(analysis.anyReuse(loadOp));
+}
+
+TEST_F(ReuseAnalysisTest, Known_FalseFromConservativeFallback_NonPow2) {
+  // Central regression guard for the API split: encoded load with
+  // non-power-of-2 shape (24x32). Spatial analysis falls back to fullAxisSet
+  // (anyReuse = true), but knownCrossSubgroupReuse returns false. Expected:
+  //   - getSpatial().getWarpInvariantOutDims(ty) returns {0, 1} (fallback)
+  //   - getSpatial().knownCrossSubgroupReuse(ty) == false
+  //   - knownReuse(loadOp) == false
+  //   - anyReuse(loadOp) == true (conservative positive preserved)
+  auto module = createModule();
+  auto f32Ty = builder->getF32Type();
+  auto ptrType = getPtrType(f32Ty);
+  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
+  auto loc = builder->getUnknownLoc();
+  auto basePtr = funcOp.getArgument(0);
+
+  // Blocked encoding with warpsPerCTA=[4,1]. If shape were 32x32, dim 1 would
+  // be warp-invariant (known reuse). With actual shape 24x32, non-pow2 triggers
+  // fallback.
+  auto blocked =
+      makeBlocked(/*sizePerThread=*/{1, 1}, /*threadsPerWarp=*/{1, 32},
+                  /*warpsPerCTA=*/{4, 1}, /*order=*/{1, 0});
+  auto resultTy = RankedTensorType::get({24, 32}, f32Ty, blocked);
+  auto ptrTensorTy = RankedTensorType::get({24, 32}, ptrType, blocked);
+
+  auto splatPtr = tt::SplatOp::create(*builder, loc, ptrTensorTy, basePtr);
+  auto loadOp = makeLoad(splatPtr, resultTy);
+
+  tti::ModuleAxisInfoAnalysis axisInfo(module);
+  tti::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  ttgi::ReuseAnalysis analysis(module, strideAnalysis);
+
+  // Existing accessor returns fallback full axis set.
+  EXPECT_THAT(analysis.getSpatial().getWarpInvariantOutDims(resultTy),
+              ::testing::ElementsAre(0u, 1u));
+  // New known accessor returns false.
+  EXPECT_FALSE(analysis.getSpatial().knownCrossSubgroupReuse(resultTy));
+  EXPECT_FALSE(analysis.knownReuse(loadOp));
+  // Conservative anyReuse still true (regression guard).
+  EXPECT_TRUE(analysis.anyReuse(loadOp));
 }
 
 } // namespace

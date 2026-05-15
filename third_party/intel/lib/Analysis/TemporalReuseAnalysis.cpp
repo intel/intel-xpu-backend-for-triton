@@ -192,4 +192,86 @@ bool TemporalReuseAnalysis::hasTemporalReuse(tt::DescriptorGatherOp op) const {
   return hasTemporalReuseImpl(op);
 }
 
+// Honest single-loop check: returns true iff every address-determining
+// operand classifies as Invariant or Held at `loop`. Returns false on
+// the first operand that classifies as Streaming OR Unknown. Does NOT
+// go through `classify`'s aggregated per-loop result (which collapses
+// Streaming + Unknown into Streaming, masking the Unknown evidence —
+// see the header comment on `provenTemporalReuse`).
+static bool everyOperandIsInvariantOrHeld(
+    LoopLikeOpInterface loop, Operation *op, ValueRange operands,
+    ArrayRef<StrideInfo *> siList, ArrayRef<int64_t> tileShape,
+    ArrayRef<std::optional<unsigned>> scalarAxes) {
+  for (unsigned i = 0, e = operands.size(); i < e; ++i) {
+    OperandClass c = classifyOperandAtLoop(loop, operands[i], siList[i],
+                                           tileShape, scalarAxes[i]);
+    if (c == OperandClass::Streaming || c == OperandClass::Unknown)
+      return false;
+  }
+  return true;
+}
+
+template <typename OpT>
+bool TemporalReuseAnalysis::provenTemporalReuseImpl(OpT op) const {
+  // Derive address-determining operands the same way `classify` does:
+  // - tt.load: pointer.
+  // - tt.descriptor_load: descriptor + scalar indices.
+  // - tt.descriptor_gather: descriptor + xOffsets + yOffset.
+  SmallVector<Value> operands;
+  if constexpr (std::is_same_v<OpT, tt::LoadOp>) {
+    operands.push_back(op.getPtr());
+  } else if constexpr (std::is_same_v<OpT, tt::DescriptorLoadOp>) {
+    operands.push_back(op.getDesc());
+    operands.append(op.getIndices().begin(), op.getIndices().end());
+  } else if constexpr (std::is_same_v<OpT, tt::DescriptorGatherOp>) {
+    operands.push_back(op.getDesc());
+    operands.push_back(op.getXOffsets());
+    operands.push_back(op.getYOffset());
+  }
+
+  Operation *opPtr = op.getOperation();
+  auto innermost = opPtr->template getParentOfType<LoopLikeOpInterface>();
+  if (!innermost)
+    return false; // No enclosing loop -> no proof of reuse.
+
+  SmallVector<int64_t> tileShape = getTileShape(opPtr);
+
+  SmallVector<StrideInfo *> siList;
+  siList.reserve(operands.size());
+  for (Value v : operands)
+    siList.push_back(strideAnalysis.getStrideInfo(v));
+
+  // Replicate scalarAxis derivation from `classify`.
+  SmallVector<std::optional<unsigned>> scalarAxes(operands.size(),
+                                                  std::nullopt);
+  if (isa<tt::DescriptorLoadOp>(opPtr)) {
+    for (unsigned i = 1; i < operands.size(); ++i)
+      scalarAxes[i] = i - 1;
+  } else if (isa<tt::DescriptorGatherOp>(opPtr)) {
+    if (operands.size() >= 3)
+      scalarAxes[2] = 1;
+  }
+
+  for (auto loop = innermost; loop;
+       loop = loop->getParentOfType<LoopLikeOpInterface>()) {
+    if (!everyOperandIsInvariantOrHeld(loop, opPtr, operands, siList, tileShape,
+                                       scalarAxes))
+      return false;
+  }
+  return true;
+}
+
+bool TemporalReuseAnalysis::provenTemporalReuse(tt::LoadOp op) const {
+  return provenTemporalReuseImpl(op);
+}
+
+bool TemporalReuseAnalysis::provenTemporalReuse(tt::DescriptorLoadOp op) const {
+  return provenTemporalReuseImpl(op);
+}
+
+bool TemporalReuseAnalysis::provenTemporalReuse(
+    tt::DescriptorGatherOp op) const {
+  return provenTemporalReuseImpl(op);
+}
+
 } // namespace mlir::triton::gpu::intel

@@ -27,6 +27,28 @@ public:
     return spatial.hasCrossSubgroupReuse(op) || temporal.hasTemporalReuse(op);
   }
 
+  /// Known reuse: spatial proves cross-subgroup reuse (non-empty known
+  /// dims) OR temporal proves Held/Invariant on every enclosing loop.
+  /// Either signal alone is sufficient, matching the candidate set:
+  /// spatial catches the canonical DPAS-A pattern (load in K-loop, dot-
+  /// operand encoding warp-broadcast on K) where the temporal side
+  /// reports Streaming on K; temporal catches loop-invariant scalar
+  /// broadcasts the spatial side cannot see.
+  ///
+  /// Unlike `anyReuse`, `knownReuse` requires a positive proof on at
+  /// least one of the two sides — neither structural fallback paths in
+  /// `SpatialReuseAnalysis` nor `OperandClass::Unknown` on the temporal
+  /// side count. Suitable for forcing actions (e.g. setting
+  /// EVICT_LAST); use `anyReuse` to suppress an action.
+  template <typename OpTy,
+            typename = std::enable_if_t<llvm::is_one_of<
+                OpTy, mlir::triton::LoadOp, mlir::triton::DescriptorLoadOp,
+                mlir::triton::DescriptorGatherOp>::value>>
+  bool knownReuse(OpTy op) const {
+    return spatial.knownCrossSubgroupReuse(op) ||
+           temporal.provenTemporalReuse(op);
+  }
+
   /// Accessors for consumers that need the richer per-dim or per-loop queries.
   const SpatialReuseAnalysis &getSpatial() const { return spatial; }
   const TemporalReuseAnalysis &getTemporal() const { return temporal; }
