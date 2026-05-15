@@ -1914,4 +1914,3 @@ module {
     module, function, n_regs, n_spills, n_max_threads = driver.active.utils.load_binary(
         kernel.name, kernel.kernel, kernel.metadata.shared, kernel.metadata.build_flags,
         not kernel.metadata.generate_native_code, device)
-
