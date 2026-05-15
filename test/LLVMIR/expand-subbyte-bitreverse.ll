@@ -39,7 +39,22 @@ define i32 @bitrev_i32(i32 %x) {
   ret i32 %r
 }
 
+; Vector of sub-byte integers is widened element-wise via <K x i32>.
+; CHECK-LABEL: @bitrev_v4i4
+define <4 x i4> @bitrev_v4i4(<4 x i4> %x) {
+; CHECK-NOT: call <4 x i4> @llvm.bitreverse.v4i4
+; CHECK:     [[ZEXT:%.*]] = zext <4 x i4> %x to <4 x i32>
+; CHECK:     [[REV:%.*]]  = call <4 x i32> @llvm.bitreverse.v4i32(<4 x i32> [[ZEXT]])
+; CHECK:     [[SHR:%.*]]  = lshr <4 x i32> [[REV]], {{.*}}
+; CHECK:     [[RES:%.*]]  = trunc <4 x i32> [[SHR]] to <4 x i4>
+; CHECK:     ret <4 x i4> [[RES]]
+  %r = call <4 x i4> @llvm.bitreverse.v4i4(<4 x i4> %x)
+  ret <4 x i4> %r
+}
+
 declare i3  @llvm.bitreverse.i3(i3)
 declare i4  @llvm.bitreverse.i4(i4)
 declare i8  @llvm.bitreverse.i8(i8)
 declare i32 @llvm.bitreverse.i32(i32)
+declare <4 x i4>  @llvm.bitreverse.v4i4(<4 x i4>)
+declare <4 x i32> @llvm.bitreverse.v4i32(<4 x i32>)

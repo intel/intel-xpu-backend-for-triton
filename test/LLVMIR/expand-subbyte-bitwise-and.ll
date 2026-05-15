@@ -31,3 +31,16 @@ define i8 @and_i8(i8 %a, i8 %b) {
   %r = and i8 %a, %b
   ret i8 %r
 }
+
+; Vector sub-byte `and` is widened element-wise via <K x i32>.
+; CHECK-LABEL: @and_v4i4
+define <4 x i4> @and_v4i4(<4 x i4> %a, <4 x i4> %b) {
+; CHECK-NOT: and <4 x i4>
+; CHECK:     [[A32:%.*]] = zext <4 x i4> %a to <4 x i32>
+; CHECK:     [[B32:%.*]] = zext <4 x i4> %b to <4 x i32>
+; CHECK:     [[R32:%.*]] = and <4 x i32> [[A32]], [[B32]]
+; CHECK:     [[RES:%.*]] = trunc <4 x i32> [[R32]] to <4 x i4>
+; CHECK:     ret <4 x i4> [[RES]]
+  %r = and <4 x i4> %a, %b
+  ret <4 x i4> %r
+}
