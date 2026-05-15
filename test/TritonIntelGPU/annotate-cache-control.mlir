@@ -42,20 +42,24 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // -----
 
 // COM: Test c — load with #blocked encoding that is converted to #dot_a and
-// COM: consumed by tt.dot GETS .cg. The blocked load issues non-overlapping
-// COM: subgroup addresses (no cross-subgroup L1 reuse to preserve); the
-// COM: layout conversion to dot operand happens in registers after the load.
+// COM: consumed by tt.dot. warpsPerCTA = [1, 4]: warps tile only dim 1, so
+// COM: every warp reads the SAME rows on dim 0. SpatialReuseAnalysis (P1)
+// COM: structurally detects dim 0's zero warp basis and reports
+// COM: cross-subgroup reuse: the load is correctly left with the default
+// COM: cache modifier. The %b load has a dot-operand encoding (dim K
+// COM: warp-broadcast), also correctly skipped.
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 #dot_b = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // CHECK-LABEL: @blocked_to_dot_via_convert_gets_cg
-  tt.func public @blocked_to_dot_via_convert_gets_cg(%aptr: tensor<32x32x!tt.ptr<f16>, #blocked>,
-                                                     %bptr: tensor<32x32x!tt.ptr<f16>, #dot_b>,
-                                                     %c: tensor<32x32xf32, #dpas>) -> tensor<32x32xf32, #dpas> {
-    // CHECK: tt.load {{.*}} cacheModifier = cg
+  // CHECK-LABEL: @blocked_to_dot_via_convert_warp_broadcast
+  tt.func public @blocked_to_dot_via_convert_warp_broadcast(%aptr: tensor<32x32x!tt.ptr<f16>, #blocked>,
+                                                            %bptr: tensor<32x32x!tt.ptr<f16>, #dot_b>,
+                                                            %c: tensor<32x32xf32, #dpas>) -> tensor<32x32xf32, #dpas> {
+    // CHECK: tt.load
+    // CHECK-NOT: cacheModifier = cg
     %a_blk = tt.load %aptr : tensor<32x32x!tt.ptr<f16>, #blocked>
     %a = ttg.convert_layout %a_blk : tensor<32x32xf16, #blocked> -> tensor<32x32xf16, #dot_a>
     // CHECK: tt.load
@@ -473,5 +477,109 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK-NOT: cacheModifier = cg
     %0 = tt.load %p : tensor<16x!tt.ptr<f16>, #slice_1d>
     tt.return
+  }
+}
+
+// -----
+
+// COM: Test u — KV-cache decode regression guard (#6809). Pointer is defined
+// COM: outside the scf.for: TemporalReuseAnalysis reports Invariant → reuse on
+// COM: the enclosing loop. Load must NOT get .cg even though it is read-only
+// COM: and does not feed a dot.
+
+#blocked1d = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @kv_cache_decode_loop_invariant
+  tt.func public @kv_cache_decode_loop_invariant(%kv: tensor<32x!tt.ptr<f32>, #blocked1d>,
+                                                 %out: tensor<32x!tt.ptr<f32>, #blocked1d>,
+                                                 %lb: i32, %ub: i32, %step: i32) {
+    scf.for %q = %lb to %ub step %step : i32 {
+      // CHECK: tt.load
+      // CHECK-NOT: cacheModifier = cg
+      %v = tt.load %kv : tensor<32x!tt.ptr<f32>, #blocked1d>
+      tt.store %out, %v : tensor<32x!tt.ptr<f32>, #blocked1d>
+    }
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Test w — pure streaming in a loop: the pointer advances by exactly
+// COM: the tile extent (32) per iteration, so successive tiles are disjoint.
+// COM: TemporalReuseAnalysis reports Streaming on the enclosing loop → no
+// COM: temporal reuse. Load gets .cg.
+
+#blocked1d = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @streaming_loop_gets_cg
+  tt.func public @streaming_loop_gets_cg(%in: !tt.ptr<f32>,
+                                         %out: !tt.ptr<f32>,
+                                         %lb: i32, %ub: i32) {
+    %c32 = arith.constant 32 : i32
+    %r = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #blocked1d>
+    %s = tt.splat %in : !tt.ptr<f32> -> tensor<32x!tt.ptr<f32>, #blocked1d>
+    %sout = tt.splat %out : !tt.ptr<f32> -> tensor<32x!tt.ptr<f32>, #blocked1d>
+    %p0 = tt.addptr %s, %r : tensor<32x!tt.ptr<f32>, #blocked1d>, tensor<32xi32, #blocked1d>
+    %po0 = tt.addptr %sout, %r : tensor<32x!tt.ptr<f32>, #blocked1d>, tensor<32xi32, #blocked1d>
+    scf.for %i = %lb to %ub step %c32 : i32 {
+      %iv = tt.splat %i : i32 -> tensor<32xi32, #blocked1d>
+      %pp = tt.addptr %p0, %iv : tensor<32x!tt.ptr<f32>, #blocked1d>, tensor<32xi32, #blocked1d>
+      %poo = tt.addptr %po0, %iv : tensor<32x!tt.ptr<f32>, #blocked1d>, tensor<32xi32, #blocked1d>
+      // CHECK: tt.load {{.*}} cacheModifier = cg
+      %v = tt.load %pp : tensor<32x!tt.ptr<f32>, #blocked1d>
+      tt.store %poo, %v : tensor<32x!tt.ptr<f32>, #blocked1d>
+    }
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Test x — two read-only loads of the same arg at different offsets:
+// COM: they alias each other (per AliasAnalysisTest TwoLoadsSameArgDifferentOffsets)
+// COM: but no peer has a write effect, so `aliasesWritingPeer` returns false
+// COM: for both. Both loads get .cg.
+
+#blocked1d = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @two_readonly_loads_same_arg
+  tt.func public @two_readonly_loads_same_arg(%X: tensor<32x!tt.ptr<f32>, #blocked1d>,
+                                              %off0: tensor<32xi32, #blocked1d>,
+                                              %off1: tensor<32xi32, #blocked1d>)
+      -> (tensor<32xf32, #blocked1d>, tensor<32xf32, #blocked1d>) {
+    %p0 = tt.addptr %X, %off0 : tensor<32x!tt.ptr<f32>, #blocked1d>, tensor<32xi32, #blocked1d>
+    %p1 = tt.addptr %X, %off1 : tensor<32x!tt.ptr<f32>, #blocked1d>, tensor<32xi32, #blocked1d>
+    // CHECK: tt.load {{.*}} cacheModifier = cg
+    %a = tt.load %p0 : tensor<32x!tt.ptr<f32>, #blocked1d>
+    // CHECK: tt.load {{.*}} cacheModifier = cg
+    %b = tt.load %p1 : tensor<32x!tt.ptr<f32>, #blocked1d>
+    tt.return %a, %b : tensor<32xf32, #blocked1d>, tensor<32xf32, #blocked1d>
+  }
+}
+
+// -----
+
+// COM: Test y — scale-operand LinearEncodingAttr load. Regression guard for
+// COM: deletion of the use-site `tt.dot_scaled` scan in the old pass: after
+// COM: deletion, the ONLY mechanism that keeps `.cg` off the scale load is
+// COM: SpatialReuseAnalysis structurally catching the scale encoding's
+// COM: warp-invariant basis (zero warp dim in the LinearLayout). If this test
+// COM: ever regresses, `BlockScaledDPAStoLinearLayout`'s warp basis for the
+// COM: scale encoding is wrong — not the pass.
+// COM:
+// COM: The `warp = [[0, 0], [0, 0]]` basis below encodes "every warp reads
+// COM: the same coordinates": P1 reports cross-subgroup reuse and the load
+// COM: is left with the default cache modifier.
+
+#ll_scale = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4]], lane = [[1, 0], [2, 0], [4, 0], [8, 0]], warp = [[0, 0], [0, 0]], block = []}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @scale_encoding_load_unchanged
+  tt.func public @scale_encoding_load_unchanged(%sptr: tensor<16x8x!tt.ptr<i8>, #ll_scale>)
+      -> tensor<16x8xi8, #ll_scale> {
+    // CHECK: tt.load
+    // CHECK-NOT: cacheModifier = cg
+    %s = tt.load %sptr : tensor<16x8x!tt.ptr<i8>, #ll_scale>
+    tt.return %s : tensor<16x8xi8, #ll_scale>
   }
 }

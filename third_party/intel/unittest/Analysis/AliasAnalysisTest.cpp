@@ -733,4 +733,122 @@ TEST_F(AliasAnalysisTest, OpaqueDescriptorPropagatesUnknown) {
               ::testing::Contains(loadA.getOperation()));
 }
 
+// ===----------------------------------------------------------------------===//
+// Test PointerRoots accessor
+// ===----------------------------------------------------------------------===//
+
+using ::mlir::triton::intel::AliasAnalysis;
+
+TEST_F(AliasAnalysisTest, PointerRootsKnownViaAddPtr) {
+  auto module = createModule();
+  auto ptrType = getPtrType(builder->getF16Type());
+  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
+  auto loc = builder->getUnknownLoc();
+  auto arg0 = funcOp.getArgument(0);
+
+  auto i32Type = builder->getI32Type();
+  auto off = arith::ConstantOp::create(*builder, loc, i32Type,
+                                       builder->getI32IntegerAttr(16));
+  auto ptr = triton::AddPtrOp::create(*builder, loc, ptrType, arg0, off);
+  auto load = makeLoad(ptr);
+
+  AliasAnalysis analysis(funcOp);
+  auto result = analysis.getPointerRoots(load.getPtr());
+  EXPECT_EQ(result.kind, AliasAnalysis::PointerRootKind::Known);
+  EXPECT_THAT(result.roots, ::testing::ElementsAre(arg0));
+}
+
+TEST_F(AliasAnalysisTest, PointerRootsKnownViaSplat) {
+  auto module = createModule();
+  auto ptrType = getPtrType(builder->getF16Type());
+  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
+  auto loc = builder->getUnknownLoc();
+  auto arg0 = funcOp.getArgument(0);
+
+  auto splatType = RankedTensorType::get({16}, ptrType);
+  auto splat = triton::SplatOp::create(*builder, loc, splatType, arg0);
+  auto load = makeLoad(splat);
+
+  AliasAnalysis analysis(funcOp);
+  auto result = analysis.getPointerRoots(load.getPtr());
+  EXPECT_EQ(result.kind, AliasAnalysis::PointerRootKind::Known);
+  EXPECT_THAT(result.roots, ::testing::ElementsAre(arg0));
+}
+
+TEST_F(AliasAnalysisTest, PointerRootsUnknownViaArithSelect) {
+  auto module = createModule();
+  auto ptrType = getPtrType(builder->getF16Type());
+  auto funcOp = createFunctionWithReturn(
+      module, "test_func", {ptrType, ptrType, builder->getI1Type()});
+  auto loc = builder->getUnknownLoc();
+  auto arg0 = funcOp.getArgument(0);
+  auto arg1 = funcOp.getArgument(1);
+  auto cond = funcOp.getArgument(2);
+
+  // arith.select on pointers: opaque producer — must be Unknown.
+  auto sel = arith::SelectOp::create(*builder, loc, cond, arg0, arg1);
+  auto load = makeLoad(sel.getResult());
+
+  AliasAnalysis analysis(funcOp);
+  auto result = analysis.getPointerRoots(load.getPtr());
+  EXPECT_EQ(result.kind, AliasAnalysis::PointerRootKind::Unknown);
+  EXPECT_TRUE(result.roots.empty());
+}
+
+TEST_F(AliasAnalysisTest, PointerRootsNotTrackedForNonMemOpPointer) {
+  auto module = createModule();
+  auto ptrType = getPtrType(builder->getF16Type());
+  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
+  auto loc = builder->getUnknownLoc();
+  auto arg0 = funcOp.getArgument(0);
+
+  // Build a pointer value that is never used by a tracked memory op. The
+  // analysis only seeds the pointerRoots map from collected mem-op pointers,
+  // so this value is NotTracked.
+  auto i32Type = builder->getI32Type();
+  auto off = arith::ConstantOp::create(*builder, loc, i32Type,
+                                       builder->getI32IntegerAttr(4));
+  auto ptr = triton::AddPtrOp::create(*builder, loc, ptrType, arg0, off);
+  // No load/store consumes `ptr`.
+
+  AliasAnalysis analysis(funcOp);
+  auto result = analysis.getPointerRoots(ptr.getResult());
+  EXPECT_EQ(result.kind, AliasAnalysis::PointerRootKind::NotTracked);
+  EXPECT_TRUE(result.roots.empty());
+}
+
+TEST_F(AliasAnalysisTest, PointerRootsKnownThroughScfForIterArg) {
+  auto module = createModule();
+  auto ptrType = getPtrType(builder->getF16Type());
+  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
+  auto loc = builder->getUnknownLoc();
+  auto arg0 = funcOp.getArgument(0);
+
+  auto i32Type = builder->getI32Type();
+  auto lb = arith::ConstantOp::create(*builder, loc, i32Type,
+                                      builder->getI32IntegerAttr(0));
+  auto ub = arith::ConstantOp::create(*builder, loc, i32Type,
+                                      builder->getI32IntegerAttr(4));
+  auto step = arith::ConstantOp::create(*builder, loc, i32Type,
+                                        builder->getI32IntegerAttr(1));
+
+  auto forOp =
+      scf::ForOp::create(*builder, loc, lb, ub, step, ValueRange{arg0});
+
+  {
+    OpBuilder::InsertionGuard guard(*builder);
+    builder->setInsertionPointToStart(forOp.getBody());
+    auto iter = forOp.getRegionIterArg(0);
+    auto load = makeLoad(iter);
+    (void)load;
+    scf::YieldOp::create(*builder, loc, ValueRange{iter});
+  }
+
+  AliasAnalysis analysis(funcOp);
+  auto iter = forOp.getRegionIterArg(0);
+  auto result = analysis.getPointerRoots(iter);
+  EXPECT_EQ(result.kind, AliasAnalysis::PointerRootKind::Known);
+  EXPECT_THAT(result.roots, ::testing::ElementsAre(arg0));
+}
+
 } // namespace
