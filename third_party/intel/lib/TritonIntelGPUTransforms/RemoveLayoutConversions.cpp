@@ -1757,18 +1757,21 @@ void LayoutRematerialization::hoistConvertDotOperand(
   // not match any efficient 2D block I/O or sub-group shuffle, forcing a
   // sub-group-transpose-through-SLM fallback and disabling block I/O on the
   // load. See issue #6737.
-  unsigned targetBitwidth = targetType.getElementType().getIntOrFloatBitWidth();
-  for (Value v : slice) {
-    Operation *def = v.getDefiningOp();
-    if (!def || !isa<tt::LoadOp, tt::DescriptorLoadOp>(def))
-      continue;
-    auto loadTy = cast<RankedTensorType>(v.getType());
-    if (loadTy.getElementType().getIntOrFloatBitWidth() != targetBitwidth) {
-      LDBG("  Leaf load element bitwidth ("
-           << loadTy.getElementType().getIntOrFloatBitWidth()
-           << ") differs from convert target bitwidth (" << targetBitwidth
-           << "); skipping hoist to avoid degrading dot-operand encoding");
-      return;
+  Type elemType = targetType.getElementType();
+  if (elemType.isIntOrFloat()) {
+    unsigned targetBitwidth = elemType.getIntOrFloatBitWidth();
+    for (Value v : slice) {
+      Operation *def = v.getDefiningOp();
+      if (!def || !isa<tt::LoadOp, tt::DescriptorLoadOp>(def))
+        continue;
+      auto loadTy = cast<RankedTensorType>(v.getType());
+      if (loadTy.getElementType().getIntOrFloatBitWidth() != targetBitwidth) {
+        LDBG("  Leaf load element bitwidth ("
+             << loadTy.getElementType().getIntOrFloatBitWidth()
+             << ") differs from convert target bitwidth (" << targetBitwidth
+             << "); skipping hoist to avoid degrading dot-operand encoding");
+        return;
+      }
     }
   }
 

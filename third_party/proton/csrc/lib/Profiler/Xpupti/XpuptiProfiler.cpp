@@ -415,8 +415,8 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doStart() {
 
 void XpuptiProfiler::XpuptiProfilerPimpl::doFlush() {
   XpuptiProfiler &profiler = threadState.profiler;
-  if (profiler.syclQueue != nullptr) {
-    callWaitOnSyclQueue(profiler.syclQueue);
+  if (void *syclQueue = XpuRuntime::instance().getSyclQueue()) {
+    callWaitOnSyclQueue(syclQueue);
   }
 
   profiler.correlation.flush(
