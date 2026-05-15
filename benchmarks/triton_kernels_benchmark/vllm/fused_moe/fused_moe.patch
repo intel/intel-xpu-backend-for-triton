@@ -106,6 +106,3 @@ diff --git a/vllm/model_executor/layers/fused_moe/fused_moe.py b/vllm/model_exec
 +        BLOCK_SIZE_M=config["BLOCK_SIZE_M"]
 +        # **config,
      )
-
-
-
