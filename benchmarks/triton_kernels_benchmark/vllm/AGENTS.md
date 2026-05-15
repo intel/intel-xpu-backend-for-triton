@@ -41,12 +41,16 @@ You can activate that env with: `source .venv/bin/activate`
 Currently there are the following benchmarks:
 1. [`batched_moe`](batched_moe/) - benchmark with Batched Mixture of Experts GEMM operation.
 2. [`unified_attention`](unified_attention/) - benchmark with unified attention.
+3. [`fused_moe`](fused_moe/) - benchmark with fused MoE grouped GEMM path.
+4. [`grouped_gemm`](grouped_gemm/) - benchmark comparing `torch.ops._xpu_C.cutlass_grouped_gemm_interface` against a Triton implementation.
 
 Since XPU Triton requires usage of tensor descriptors, we run benchmarks two times. The first time we run the unmodified vllm version, then we patch the kernel code with tensor descriptor usage and get new performance numbers.
 
-Both benchmarks follow the same structure. For each benchmark folder (e.g. [`batched_moe/`](batched_moe/), [`unified_attention/`](unified_attention/)):
+Most benchmark folders follow the same structure. For each patch-based benchmark folder (e.g. [`batched_moe/`](batched_moe/), [`unified_attention/`](unified_attention/), [`fused_moe/`](fused_moe/)):
 1. `<name>_benchmark.py` - Python script that runs the benchmark using code from vllm. As it imports the relevant kernel from vllm, it will just use whatever is available.
 2. `<name>.patch` - patch that we'll apply to the cloned vllm repo to add necessary changes to improve performance. Note that this patch should be generated after the general patch is applied so it should not duplicate changes from the general patch.
+
+The [`grouped_gemm/`](grouped_gemm/) benchmark is self-contained in TritonXPU and does not require a patch file.
 
 The shared [`run_benchmark.sh`](run_benchmark.sh) script orchestrates both steps. It takes the benchmark folder name as the first argument and derives the patch file and benchmark script from the `NAME` convention above. It applies the pattern: run without patch (`TD_PATCHED=0`), apply patch, run again (`TD_PATCHED=1`), revert patch. Any extra arguments (e.g. `--reports`) are forwarded to the benchmark script.
 
