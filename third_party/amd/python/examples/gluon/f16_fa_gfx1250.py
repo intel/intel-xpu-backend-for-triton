@@ -5,7 +5,6 @@ This file implements a BSHD Flash Attention and tests against torch reference.
 import torch
 from triton.experimental import gluon
 import triton.experimental.gluon.language as gl
-from triton.language.core import _aggregate as aggregate
 import pytest
 
 
@@ -29,7 +28,7 @@ except ImportError:
     from gfx1250_utils import static_profile
 
 
-@aggregate
+@gluon.aggregate
 class AttentionConfig:
     SEQLEN_Q: gl.constexpr
     SEQLEN_K: gl.constexpr
@@ -84,7 +83,7 @@ class AttentionConfig:
         self.p_layout = gl.constexpr(gl.DotOperandLayout(0, self.pv_layout, 8))
 
 
-@aggregate
+@gluon.aggregate
 class AttentionProgram:
     cfg: AttentionConfig
 
@@ -546,9 +545,9 @@ def attn_fwd_pipelined_kernel(q_ptr, k_ptr, v_ptr, out_ptr,  #
     # SM0_t0
     p, alpha, m_i = pgm.softmax_part0(qk, m_i)
 
-    # GLDS_V_t1, GLDS_K_t2
-    pgm.tdm_load_global_to_shared_v([BLOCK_N, 0], buffer_index=1)
+    # GLDS_K_t2, GLDS_V_t1,
     pgm.tdm_load_global_to_shared_k([2 * BLOCK_N, 0], buffer_index=0)
+    pgm.tdm_load_global_to_shared_v([BLOCK_N, 0], buffer_index=1)
 
     # LR_K_t1
     k = pgm.tdm_shared_load_k(1, wait_count=3)
@@ -725,9 +724,9 @@ def attn_fwd_pingpong_pipelined_kernel(q_ptr, k_ptr, v_ptr, out_ptr,  #
     # SM0_t0
     p, alpha, m_i = pgm.softmax_part0(qk, m_i)
 
-    # GLDS_V_t1, GLDS_K_t2
-    pgm.tdm_load_global_to_shared_v([BLOCK_N, 0], buffer_index=1)
+    # GLDS_K_t2, GLDS_V_t1
     pgm.tdm_load_global_to_shared_k([2 * BLOCK_N, 0], buffer_index=0)
+    pgm.tdm_load_global_to_shared_v([BLOCK_N, 0], buffer_index=1)
 
     # LR_K_t1
     k = pgm.tdm_shared_load_k(1, wait_count=3)

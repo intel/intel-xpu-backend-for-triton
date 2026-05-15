@@ -21,7 +21,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Tools/Sys/GetEnv.h"
 #include <list>
 #include <unordered_set>
 
@@ -34,7 +34,9 @@ namespace mlir {
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
-static std::pair<Operation *, Operation *>
+namespace {
+
+std::pair<Operation *, Operation *>
 createAsyncCopy(const DenseMap<Channel *, Value> &bufferMap, Channel *c,
                 Operation *op, SmallVector<AsyncTaskId> &asyncTasksPC,
                 Value bufferIdx, Value bufferIdxExtract) {
@@ -92,7 +94,7 @@ createAsyncCopy(const DenseMap<Channel *, Value> &bufferMap, Channel *c,
 
 // Create a local copy for a channel that is populated by the producer and
 // accessed by the consumer.
-static std::pair<Operation *, Operation *>
+std::pair<Operation *, Operation *>
 createLocalCopy(const DenseMap<Channel *, Value> &bufferMap, Channel *channel,
                 Value srcBufferIdx, Value dstBufferIdx) {
   Operation *srcOp = channel->getSrcOp();
@@ -143,7 +145,7 @@ createLocalCopy(const DenseMap<Channel *, Value> &bufferMap, Channel *channel,
   return {copy, sharedLoad};
 }
 
-static int getTMALoadSize(tt::DescriptorLoadOp &tmaLoad) {
+int getTMALoadSize(tt::DescriptorLoadOp &tmaLoad) {
   auto tensorTy = cast<RankedTensorType>(tmaLoad->getResult(0).getType());
   int loadSize = product(tensorTy.getShape());
   return loadSize * tensorTy.getElementType().getIntOrFloatBitWidth() / 8;
@@ -176,6 +178,8 @@ Value getBufferForPipelineStage(OpBuilderWithAsyncTaskIds &builder,
       buffer.getLoc(), subviewTy, buffer, bufferIdx);
 }
 
+} // namespace
+
 Operation *optimizeTMALoads(OpBuilderWithAsyncTaskIds &builder,
                             SmallVector<tt::DescriptorLoadOp> &tmaLoads,
                             SmallVector<Value> &buffers, Value barrierAlloc,
@@ -200,8 +204,8 @@ Operation *optimizeTMALoads(OpBuilderWithAsyncTaskIds &builder,
   auto prodBarrier =
       getBarrierForPipelineStage(builder, barrierAlloc, bufferIdx);
   auto pred = builder.createWithAsyncTaskIds<arith::ConstantIntOp>(loc, 1, 1);
-  auto expect = builder.createWithAsyncTaskIds<ttng::BarrierExpectOp>(
-      loc, prodBarrier, sizeInBytes, pred);
+  builder.createWithAsyncTaskIds<ttng::BarrierExpectOp>(loc, prodBarrier,
+                                                        sizeInBytes, pred);
 
   // Convert all the producers to async_tma_copy_global_to_local
   Operation *copy = nullptr;
@@ -221,8 +225,7 @@ Operation *optimizeTMALoads(OpBuilderWithAsyncTaskIds &builder,
       getBarrierForPipelineStage(builder, barrierAlloc, bufferIdxExtract);
   phase = builder.createWithAsyncTaskIds<arith::ExtSIOp>(
       loc, builder.getI32Type(), phase);
-  auto wait = builder.createWithAsyncTaskIds<ttng::WaitBarrierOp>(
-      loc, consBarrier, phase);
+  builder.createWithAsyncTaskIds<ttng::WaitBarrierOp>(loc, consBarrier, phase);
 
   // Convert all the consumers to local_load
   for (auto [tmaLoad, buffer] : zip(tmaLoads, buffers)) {

@@ -13,12 +13,14 @@
 #include "triton/Dialect/TritonInstrument/Transforms/Passes.h"
 #include "triton/Target/LLVMIR/Passes.h"
 #include "triton/Tools/PluginUtils.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Tools/Sys/GetEnv.h"
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <string>
 
 namespace py = pybind11;
+
+namespace {
 
 void init_triton_analysis(py::module &&m) {
   py::class_<mlir::ModuleAllocation>(m, "allocation", py::module_local())
@@ -93,6 +95,12 @@ void init_triton_passes_ttgpuir(py::module &&m) {
                      createTritonGPUCoalesceAsyncCopy);
   ADD_PASS_WRAPPER_0("add_global_sanitizer",
                      createTritonInstrumentGlobalSanitizer);
+  m.def("add_prepare_consan_captures",
+        [](PassManager &pm, const std::string &target) {
+          TritonInstrumentPrepareConSanCapturesOptions options;
+          options.target = target;
+          pm.addPass(createTritonInstrumentPrepareConSanCaptures(options));
+        });
   ADD_PASS_WRAPPER_0("add_concurrency_sanitizer",
                      createTritonInstrumentConcurrencySanitizer);
   ADD_PASS_WRAPPER_0("add_fp_sanitizer", createTritonInstrumentFpSanitizer);
@@ -141,6 +149,8 @@ void init_gluon_passes(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_infer_coalesced_encodings",
                      gluon::createGluonInferCoalescedEncodingsPass);
 }
+
+} // namespace
 
 void init_triton_passes(py::module &&m) {
   init_triton_analysis(m.def_submodule("analysis"));

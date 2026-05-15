@@ -8,6 +8,7 @@
 #include "Profiler/Instrumentation/InstrumentationProfiler.h"
 #include "Profiler/Roctracer/RoctracerProfiler.h"
 #include "Profiler/Xpupti/XpuptiProfiler.h"
+#include "Runtime/XpuRuntime.h"
 #include "Utility/String.h"
 
 namespace proton {
@@ -24,7 +25,8 @@ Profiler *makeProfiler(const std::string &name, void *sycl_queue = nullptr,
     return &InstrumentationProfiler::instance();
   } else if (proton::toLower(name) == "xpupti") {
     xpu::PROTON_UTILS = utils_cache_path;
-    return &XpuptiProfiler::instance().setSyclQueue(sycl_queue);
+    XpuRuntime::instance().setSyclQueue(sycl_queue);
+    return &XpuptiProfiler::instance();
   }
   throw std::runtime_error("Unknown profiler: " + name);
 }
@@ -94,7 +96,7 @@ Profiler *SessionManager::validateAndSetProfilerMode(Profiler *profiler,
 }
 
 std::unique_ptr<Session> SessionManager::makeSession(
-    size_t id, const std::string &path, const std::string &profilerName,
+    const std::string &path, const std::string &profilerName,
     const std::string &contextSourceName, const std::string &dataName,
     const std::string &mode, void *sycl_queue,
     const std::string &utils_cache_path) {
@@ -102,8 +104,8 @@ std::unique_ptr<Session> SessionManager::makeSession(
   profiler = validateAndSetProfilerMode(profiler, mode);
   auto contextSource = makeContextSource(contextSourceName);
   auto data = makeData(dataName, path, contextSource.get());
-  auto *session = new Session(id, path, profiler, std::move(contextSource),
-                              std::move(data));
+  auto *session =
+      new Session(path, profiler, std::move(contextSource), std::move(data));
   return std::unique_ptr<Session>(session);
 }
 
@@ -199,9 +201,8 @@ size_t SessionManager::addSession(const std::string &path,
     return sessionId;
   }
   auto sessionId = nextSessionId++;
-  auto newSession =
-      makeSession(sessionId, path, profilerName, contextSourceName, dataName,
-                  mode, sycl_queue, utils_cache_path);
+  auto newSession = makeSession(path, profilerName, contextSourceName, dataName,
+                                mode, sycl_queue, utils_cache_path);
   sessionPaths[path] = sessionId;
   sessions[sessionId] = std::move(newSession);
   return sessionId;

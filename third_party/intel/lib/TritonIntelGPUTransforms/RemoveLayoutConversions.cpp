@@ -25,7 +25,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Tools/Sys/GetEnv.h"
 #include <deque>
 
 namespace mlir::triton::gpu::intel {
@@ -1733,7 +1733,8 @@ void LayoutRematerialization::hoistConvertDotOperand(
   // threads We do views and elementwise pure ops for now
   auto noDataMovement = [](Operation *op) {
     return (op->hasTrait<OpTrait::Elementwise>() && isMemoryEffectFree(op)) ||
-           isa<tt::BroadcastOp, ttg::Fp4ToFpOp, ttg::ConvertLayoutOp>(op) ||
+           isa<tt::BroadcastOp, ttg::Fp4ToFpOp, ttg::ConvertLayoutOp,
+               ttg::UpcastFpOpInterface>(op) ||
            isView(op);
   };
   // Stop the slice as soon as we find an operation that cannot be done without
@@ -1756,18 +1757,21 @@ void LayoutRematerialization::hoistConvertDotOperand(
   // not match any efficient 2D block I/O or sub-group shuffle, forcing a
   // sub-group-transpose-through-SLM fallback and disabling block I/O on the
   // load. See issue #6737.
-  unsigned targetBitwidth = targetType.getElementType().getIntOrFloatBitWidth();
-  for (Value v : slice) {
-    Operation *def = v.getDefiningOp();
-    if (!def || !isa<tt::LoadOp, tt::DescriptorLoadOp>(def))
-      continue;
-    auto loadTy = cast<RankedTensorType>(v.getType());
-    if (loadTy.getElementType().getIntOrFloatBitWidth() != targetBitwidth) {
-      LDBG("  Leaf load element bitwidth ("
-           << loadTy.getElementType().getIntOrFloatBitWidth()
-           << ") differs from convert target bitwidth (" << targetBitwidth
-           << "); skipping hoist to avoid degrading dot-operand encoding");
-      return;
+  Type elemType = targetType.getElementType();
+  if (elemType.isIntOrFloat()) {
+    unsigned targetBitwidth = elemType.getIntOrFloatBitWidth();
+    for (Value v : slice) {
+      Operation *def = v.getDefiningOp();
+      if (!def || !isa<tt::LoadOp, tt::DescriptorLoadOp>(def))
+        continue;
+      auto loadTy = cast<RankedTensorType>(v.getType());
+      if (loadTy.getElementType().getIntOrFloatBitWidth() != targetBitwidth) {
+        LDBG("  Leaf load element bitwidth ("
+             << loadTy.getElementType().getIntOrFloatBitWidth()
+             << ") differs from convert target bitwidth (" << targetBitwidth
+             << "); skipping hoist to avoid degrading dot-operand encoding");
+        return;
+      }
     }
   }
 

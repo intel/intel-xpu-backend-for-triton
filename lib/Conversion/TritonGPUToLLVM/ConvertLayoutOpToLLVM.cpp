@@ -42,8 +42,6 @@ struct ConvertLayoutOpConversion
     auto dstTy = op.getType();
 
     LinearLayout conversion = minimalCvtLayout(srcTy, dstTy);
-    LinearLayout srcLayout = toLinearLayout(srcTy);
-    LinearLayout dstLayout = toLinearLayout(dstTy);
 
     auto kBlock = str_attr("block");
     auto kWarp = str_attr("warp");
@@ -51,6 +49,13 @@ struct ConvertLayoutOpConversion
     auto kRegister = str_attr("register");
 
     auto dims = conversion.getInDimNames();
+    auto srcEnc = cast<RankedTensorType>(srcTy).getEncoding();
+    auto dstEnc = cast<RankedTensorType>(dstTy).getEncoding();
+    if ((isGenericLinearEncoding(srcEnc) || isGenericLinearEncoding(dstEnc)) &&
+        llvm::range_size(dims) > 1)
+      return op.emitError("ConvertLayoutOp  supports GenericLinearEncoding "
+                          " only when the conversion is transfer between "
+                          "values in the same thread.");
     bool alwaysUseWarpShuffle = cvtAlwaysUseWarpShuffle(op);
     assert(to_vector(conversion.getInDimNames()) ==
            to_vector(conversion.getOutDimNames()));
@@ -167,7 +172,12 @@ struct ConvertLayoutOpConversion
     // At this point we have a type that's at least 8-bit
     // and we don't have broadcasting in the registers
     auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
-    auto smem = optimalSwizzlingLdSt(srcLayout, dstLayout, bitwidth);
+    int numBanks = targetInfo.getSharedMemoryBanks();
+    int32_t vecBitwidth =
+        triton::gpu::getVecBitwidthLdSt(srcLayout, dstLayout, bitwidth);
+    auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
+    auto smem = optimalSwizzlingLdSt(srcLayout, dstLayout, bitwidth, numBanks,
+                                     srcTile, dstTile);
 
     // Extract reps from smem
     auto kReg = str_attr("register");

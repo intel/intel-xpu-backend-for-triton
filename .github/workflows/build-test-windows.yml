@@ -105,6 +105,7 @@ jobs:
           LEVEL_ZERO_VERSION=$LEVEL_ZERO_VERSION
           AGAMA_VERSION=$AGAMA_VERSION
           GPU_DEVICE=$GPU_DEVICE
+          COMPILER_VERSION=$COMPILER_VERSION
           EOF
 
       - name: Clean up Triton cache
@@ -122,16 +123,6 @@ jobs:
           cd ${{ env.NEW_WORKSPACE }}
           pip install -U pybind11 cmake
           pip install -v '.[build,tests,tutorials]'
-
-      - name: Build && Install PTI
-        run: |
-          .venv\Scripts\activate.ps1
-          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
-          cd ${{ env.NEW_WORKSPACE }}
-          bash -c './scripts/install-pti.sh --build-level-zero'
-          $PTI_LIBS_DIR = python ./scripts/pti_lib.py
-          ls $PTI_LIBS_DIR
-          echo "PATH=$PTI_LIBS_DIR;$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Triton version
         run: |

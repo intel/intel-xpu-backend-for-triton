@@ -928,8 +928,7 @@ ValueRange TCGen5MMAOp::getCompletionBarrierPreds() {
 
 static void appendMulticastDesc(SmallVectorImpl<Value> &descs,
                                 TypedValue<MemDescType> desc) {
-  if (isa<SharedEncodingTrait>(desc.getType().getEncoding()))
-    descs.push_back(desc);
+  descs.push_back(desc);
 }
 
 SmallVector<Value> TCGen5MMAOp::getCompletionDescs() {
@@ -1343,7 +1342,8 @@ LogicalResult TMEMLoadOp::verify() {
     // kReg bases along N then cross-warp/block reduction becomes needed.
     auto kReg = StringAttr::get(regTy.getContext(), "register");
     int dimM = 0, dimN = 1;
-    auto regDims = toLinearEncoding(regTy).basesPerDim(kReg);
+    auto regDims =
+        toLinearEncoding(regTy).basesPerDim(kReg, /*skipBroadcast=*/true);
     if (regDims[dimN] != toLinearLayout(regTy).getOutDimSizes().begin()[dimN] ||
         regDims[dimM] != 1) {
       return emitOpError("tmem_load reduction with N dimension sharded across "

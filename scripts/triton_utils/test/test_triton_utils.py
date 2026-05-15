@@ -443,6 +443,51 @@ def test_report_directory_layout(  # pylint: disable=R0913, R0914, R0917
         assert 'WARNING: No junit xml files' in std_err
 
 
+def test_tutorial_benchmark_dirs_do_not_warn(capsys, tmp_path):
+    (tmp_path / 'tutorials.xml').write_text(
+        TESTS_WITH_DIFFERENT_STATUSES['language.xml'], encoding='utf-8')
+    for name in ('01-vector-add', '02-fused-softmax', '03a-matrix-multiplication-tensor-descriptor'):
+        d = tmp_path / name
+        d.mkdir()
+        (d / f'{name}-performance.csv').write_text('col1,col2\n1,2\n', encoding='utf-8')
+    broken = tmp_path / 'broken-report'
+    broken.mkdir()
+    (broken / 'warnings.json').write_text('{}', encoding='utf-8')
+    config = triton_utils.Config(action='pass_rate', reports=str(tmp_path))
+    triton_utils.PassRateActionRunner(config)()
+    _, std_err = capsys.readouterr()
+    assert '01-vector-add' not in std_err
+    assert '02-fused-softmax' not in std_err
+    assert '03a-matrix-multiplication-tensor-descriptor' not in std_err
+    assert 'WARNING: No junit xml files' in std_err
+    assert 'broken-report' in std_err
+
+
+def test_tutorial_dir_without_csv_still_warns(capsys, tmp_path):
+    (tmp_path / 'tutorials.xml').write_text(
+        TESTS_WITH_DIFFERENT_STATUSES['language.xml'], encoding='utf-8')
+    d = tmp_path / '03a-matrix-multiplication-tensor-descriptor'
+    d.mkdir()
+    config = triton_utils.Config(action='pass_rate', reports=str(tmp_path))
+    triton_utils.PassRateActionRunner(config)()
+    _, std_err = capsys.readouterr()
+    assert 'WARNING: No junit xml files' in std_err
+    assert '03a-matrix-multiplication-tensor-descriptor' in std_err
+
+
+def test_csv_dirs_without_tutorials_xml_still_warn(capsys, tmp_path):
+    (tmp_path / 'language.xml').write_text(
+        TESTS_WITH_DIFFERENT_STATUSES['language.xml'], encoding='utf-8')
+    d = tmp_path / '01-vector-add'
+    d.mkdir()
+    (d / '01-vector-add-performance.csv').write_text('col1,col2\n1,2\n', encoding='utf-8')
+    config = triton_utils.Config(action='pass_rate', reports=str(tmp_path))
+    triton_utils.PassRateActionRunner(config)()
+    _, std_err = capsys.readouterr()
+    assert 'WARNING: No junit xml files' in std_err
+    assert '01-vector-add' in std_err
+
+
 @pytest.mark.parametrize(
     ('layout', 'exclude_subdir_patterns', 'include_subdir_patterns', 'passed', 'skipped', 'xfailed', 'failed'),
     [

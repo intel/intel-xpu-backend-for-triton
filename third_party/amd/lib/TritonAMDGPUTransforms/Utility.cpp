@@ -11,8 +11,10 @@
 
 namespace tt = triton;
 namespace ttg = triton::gpu;
+using mlir::triton::amdgpu::TargetFeatures;
 
-namespace deduceMin {
+namespace {
+
 int deduceMinCountInBlock(Block &block,
                           const std::function<int(Operation *)> &countFunc);
 
@@ -59,17 +61,15 @@ int deduceMinCountInBlock(Block &block,
     return 0;
   return deduceMinCountBetweeOps(&block.front(), &block.back(), countFunc);
 }
-} // namespace deduceMin
 
 int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
                              const std::function<int(Operation *)> &countFunc,
                              int pathSum, int foundMin) {
-  using namespace deduceMin;
   // If the value is not defined in the same region as the consumer we need to
   // peel the parent region of consumer until we arrive at value's region
   while (consumerOp->getParentRegion() != defValue.getParentRegion()) {
-    pathSum += deduceMin::deduceMinCountBetweeOps(
-        &consumerOp->getBlock()->front(), consumerOp, countFunc);
+    pathSum += deduceMinCountBetweeOps(&consumerOp->getBlock()->front(),
+                                       consumerOp, countFunc);
     consumerOp = consumerOp->getParentOp();
   }
 
@@ -114,6 +114,8 @@ int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
   // Unsupported value, return 0 conservatively.
   return 0;
 }
+
+} // namespace
 
 int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
                              llvm::function_ref<int(Operation *)> countFunc) {
@@ -402,7 +404,7 @@ static ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
 static triton::gpu::PaddedSharedEncodingAttr
 composePaddedLayoutWMMA(int opIdx, unsigned vecWidth,
                         ttg::TensorOrMemDesc srcTy, ArrayRef<unsigned> order,
-                        const triton::AMD::TargetInfo &targetInfo) {
+                        const TargetFeatures &targetFeatures) {
   auto shape = srcTy.getShape();
   auto CGALayout = ttg::getCGALayout(srcTy.getEncoding());
   auto blockShapePerCTA =
@@ -420,7 +422,8 @@ composePaddedLayoutWMMA(int opIdx, unsigned vecWidth,
     // 2× ensures the stride (in dwords) is an odd multiple of the combined
     // row-access width, distributing all 16 lanes' bank accesses across
     // disjoint banks and eliminating conflicts for tile widths >= 32.
-    if (auto ldsParams = targetInfo.queryLDSTransLoadParams(typeWidthInBit)) {
+    if (auto ldsParams =
+            targetFeatures.queryLDSTransLoadParams(typeWidthInBit)) {
       padAmount = 2 * ldsParams->instBitWidth / typeWidthInBit;
     }
   } else {
@@ -457,9 +460,38 @@ composePaddedLayoutWMMA(int opIdx, unsigned vecWidth,
   unsigned bankWrapInterval = ldsNumBanks * ldsBankWidthInBytes / elemBytes;
   unsigned padInterval =
       std::max(static_cast<unsigned>(innerDimLength), bankWrapInterval);
+
+  // TDM only supports a maximum pad interval of 256 * 32bit.
+  // TODO: this will produce conflicts for very large INNER_DIMS (>1024bytes),
+  // we could scale the pad amount if this becomes an issue.
+  unsigned maxPadIntervalElems = 256u * 32u / typeWidthInBit;
+  padInterval = std::min(padInterval, maxPadIntervalElems);
+
   auto *context = srcTy.getContext();
   return triton::gpu::PaddedSharedEncodingAttr::get(
       context, {{padInterval, padAmount}}, order, shape, CGALayout);
+}
+
+ttg::SliceEncodingAttr
+getTDMGatherScatterIndexEncoding(Operation *op, RankedTensorType indicesType) {
+  MLIRContext *ctx = op->getContext();
+  unsigned idxBitWidth = indicesType.getElementType().getIntOrFloatBitWidth();
+  assert((idxBitWidth == 16 || idxBitWidth == 32) &&
+         "TDM gather/scatter indices must be i16 or i32");
+  unsigned maxIndicesPerInstr = 256 / idxBitWidth;
+
+  unsigned numWarps = ttg::lookupNumWarps(op);
+  unsigned threadsPerWarp =
+      ttg::TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());
+  auto cgaLayout = ttg::CGAEncodingAttr::get1CTALayout(ctx, /*rank=*/2);
+
+  std::array<unsigned, 2> sizePerThread = {1, maxIndicesPerInstr};
+  std::array<unsigned, 2> tPerWarp = {threadsPerWarp, 1};
+  std::array<unsigned, 2> warpsPerCTA = {1, numWarps};
+  std::array<unsigned, 2> order = {0, 1};
+  auto parentEnc = ttg::BlockedEncodingAttr::get(ctx, sizePerThread, tPerWarp,
+                                                 warpsPerCTA, order, cgaLayout);
+  return ttg::SliceEncodingAttr::get(ctx, /*dim=*/0, parentEnc);
 }
 
 ttg::SharedEncodingTrait getEncodingFromDescriptor(Operation *op,
@@ -476,22 +508,23 @@ ttg::SharedEncodingTrait getEncodingFromDescriptor(Operation *op,
 }
 
 ttg::PaddedSharedEncodingAttr
-composePaddedLayout(const tt::AMD::TargetInfo &targetInfo, int opIdx,
+composePaddedLayout(const TargetFeatures &targetFeatures, int opIdx,
                     unsigned vecWidth, ttg::TensorOrMemDesc srcTy,
                     ArrayRef<unsigned> sharedOrder,
                     ttg::DotOperandEncodingAttr dotOpEnc, bool useAsyncCopy) {
-  if (targetInfo.getISAFamily() == triton::AMD::ISAFamily::CDNA4) {
+  if (targetFeatures.isCDNA4()) {
     if (!dotOpEnc)
       return {};
-    return composePaddedLayoutForAsyncCopyCDNA4(
-        dotOpEnc, srcTy, sharedOrder, useAsyncCopy, targetInfo.getWarpSize());
+    return composePaddedLayoutForAsyncCopyCDNA4(dotOpEnc, srcTy, sharedOrder,
+                                                useAsyncCopy,
+                                                targetFeatures.getWarpSize());
   }
 
-  if (targetInfo.getISAFamily() == triton::AMD::ISAFamily::GFX1250) {
+  if (targetFeatures.isGFX1250()) {
     if (!srcTy.getElementType().isIntOrFloat())
       return {};
     return composePaddedLayoutWMMA(opIdx, vecWidth, srcTy, sharedOrder,
-                                   targetInfo);
+                                   targetFeatures);
   }
 
   return {};

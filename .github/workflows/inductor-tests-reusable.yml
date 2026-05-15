@@ -71,12 +71,6 @@ jobs:
           pip install 'pandas<3.0' scipy tqdm
           pip uninstall pytest-skip
 
-      - name: Run inductor tests
-        run: |
-          export PYTORCH_TESTING_DEVICE_ONLY_FOR="xpu"
-          export TRITON_LESS_FLEX_ATTN_BWD_CONFIGS="1"
-          bash scripts/test-pytorch.sh ${{ inputs.suite }}
-
       - name: Report environment details
         if: always()
         timeout-minutes: 1
@@ -100,7 +94,14 @@ jobs:
           LEVEL_ZERO_VERSION=$LEVEL_ZERO_VERSION
           GPU_DEVICE=$GPU_DEVICE
           AGAMA_VERSION=$AGAMA_VERSION
+          COMPILER_VERSION=$COMPILER_VERSION
           EOF
+
+      - name: Run inductor tests
+        run: |
+          export PYTORCH_TESTING_DEVICE_ONLY_FOR="xpu"
+          export TRITON_LESS_FLEX_ATTN_BWD_CONFIGS="1"
+          bash scripts/test-pytorch.sh ${{ inputs.suite }}
 
       - name: Upload test logs
         if: always()

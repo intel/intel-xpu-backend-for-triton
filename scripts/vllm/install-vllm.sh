@@ -56,7 +56,7 @@ done
 
 if [ "$VENV" = true ]; then
   echo "**** Activating virtual environment ****"
-  if [[ $OSTYPE = msys ]]; then
+  if [[ $OSTYPE = msys || $OSTYPE = cygwin ]]; then
     source .venv/Scripts/activate
   else
     source .venv/bin/activate
@@ -191,7 +191,7 @@ function install_vllm {
   # Be precise: match torch/torchaudio/torchvision/triton but NOT tritonclient
   # Also remove xgrammar which depends on triton (install it separately later)
   sed -i '/^torch[=>= ]/d; /^torchaudio/d; /^torchvision/d; /^triton[=>= ]/d; /^xgrammar/d; /extra-index-url.*pytorch/d' requirements/xpu.txt requirements/common.txt
-  sed -i '/^torch[=>= ]/d; /^torchaudio/d; /^torchvision/d; /^triton[=>= ]/d; /^xgrammar/d' requirements/test.in
+  sed -i '/^torch[=>= ]/d; /^torchaudio/d; /^torchvision/d; /^triton[=>= ]/d; /^xgrammar/d' requirements/test/xpu.txt
 
   # Create constraints file to prevent pip from replacing pre-installed torch/triton
   # with a PyPI version. common.txt -> transformers -> torch is the main culprit.
@@ -234,7 +234,7 @@ function install_vllm {
 
   # Install xgrammar separately without dependencies (already removed from requirements above)
   # xgrammar depends on triton, but we already have it installed, so --no-deps is safe
-  python -m pip install --no-deps 'xgrammar<1.0.0,>=0.1.32'
+  python -m pip install --no-deps 'xgrammar==0.1.32'
 
   # Install minimal test dependencies only (not the full xpu-test.txt)
   # The full requirements are very large and cause pip resolver issues.

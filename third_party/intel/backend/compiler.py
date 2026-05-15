@@ -16,6 +16,7 @@ import signal
 import re
 import os
 import subprocess
+import warnings
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
 
@@ -81,8 +82,12 @@ def extract_spill_size_from_zebin(file):
         elf = ELFFile(f)
         zeinfo = elf.get_section_by_name(".ze_info")
         if zeinfo is None:
-            raise IntelGPUError('Internal Triton ZEBIN codegen error:'
-                                'Section .ze_info not found in zebin')
+            warnings.warn(
+                'Section .ze_info not found in zebin; cannot extract spill_size. '
+                'Auto-GRF mode selection will be skipped for this kernel.',
+                stacklevel=2,
+            )
+            return 0
         text = zeinfo.data().decode('utf-8')
         match = SPILL_SIZE_RE.search(text)
         if match is not None:
@@ -177,6 +182,9 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         dev_prop['has_f4_conversions'] = tgt_prop.get('has_f4_conversions', False)
         dev_prop['has_f8_conversions'] = tgt_prop.get('has_f8_conversions', False)
         dev_prop['has_256b_prefetch'] = tgt_prop.get('has_256b_prefetch', False)
+        # Same Xe3P+ gate as 256B prefetch pending separate driver prop.
+        dev_prop['has_256b_load_store'] = tgt_prop.get('has_256b_prefetch', False)
+        dev_prop['has_rounded_divide_sqrt'] = tgt_prop.get('has_rounded_divide_sqrt', not is_lts)
 
         if '__intel_already_queried_extensions__' not in tgt_prop:
             # All GPUs with the same device_id have the same extensions, so we just
@@ -191,6 +199,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     def parse_options(self, opts) -> Any:
         args = {k: v for k, v in opts.items() if k in XPUOptions.__dataclass_fields__}
         args["allow_fp8e4nv"] = True
+        if "enable_fp_fusion" not in args:
+            args["enable_fp_fusion"] = knobs.language.default_fp_fusion
         return XPUOptions(**args)
 
     def pack_metadata(self, metadata):
@@ -257,8 +267,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         module_opts.support_f4_conversion = properties["has_f4_conversions"]
         module_opts.support_f8_conversion = properties["has_f8_conversions"]
         module_opts.support_256b_prefetch = properties["has_256b_prefetch"]
+        module_opts.support_256b_load_store = properties["has_256b_load_store"]
         module_opts.support_subgroup_matrix_multiply_accumulate_bf8 = properties[
             "has_subgroup_matrix_multiply_accumulate_bfloat8"]
+        module_opts.support_rounded_divide_sqrt = properties["has_rounded_divide_sqrt"]
         module_opts.threads_per_warp = opt.warp_size
         module_opts.target_arch = cls.target_arch
 
@@ -307,6 +319,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.ttir.add_convert_to_ttgpuir(pm, "xpu", opt.num_warps, opt.warp_size, opt.num_ctas)
         # optimize TTGIR
         passes.ttgpuir.add_coalesce(pm)
+        if properties["has_256b_load_store"]:
+            intel.passes.ttgpuir.add_widen_load_store_encoding(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
 
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
@@ -333,6 +347,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.ttgpuir.add_prefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
+        if not knobs.intel.disable_annotate_cache_control:
+            intel.passes.ttgpuir.add_annotate_cache_control(pm)
         intel.passes.ttgpuir.add_reduce_data_duplication(pm)
         passes.ttgpuir.add_reorder_instructions(pm)
         passes.ttir.add_loop_aware_cse(pm)
@@ -379,6 +395,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
 
+        intel.passes.ttgpuir.add_lower_to_2d_block_load(pm)
         passes.convert.add_scf_to_cf(pm)
         passes.gluon.add_inliner(pm)
         passes.convert.add_index_to_llvmir(pm)
@@ -426,7 +443,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         llvm.init_targets()
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
-        intel.set_fast_math(llvm_mod)
+        intel.set_fast_math(llvm_mod, metadata['enable_fp_fusion'])
         if options.extern_libs:
             paths = [path for (name, path) in options.extern_libs]
             llvm.link_extern_libs(llvm_mod, paths)

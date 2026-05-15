@@ -15,7 +15,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Tools/Sys/GetEnv.h"
 
 #include "llvm/Support/MathExtras.h"
 
@@ -132,9 +132,13 @@ bool isExpensiveLoadOrStore(Operation *op) {
   // Loads or stores that use a block pointer are expensive if they cannot be
   // lowered to 2D block read/write operations. Temporarily leverage the
   // "ttig.block_io" attribute to filter out inexpensive loads.
+  // Exception: 1D-reshaped loads and stores (indicated by
+  // ttig.block_io_stride) have a specific encoding that matches HW delivery
+  // order and must be anchored.
   Attribute blockIOAttr =
       op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
-  if (blockIOAttr)
+  if (blockIOAttr &&
+      !op->getAttr(TritonIntelGPUDialect::getBlockIOStrideAttrName()))
     return false;
 
   // Loads or stores that use more threads than elements can be presumed to have
@@ -312,7 +316,11 @@ LogicalResult getConvertBackwardSlice(
       }
       for (auto [i, operand] : llvm::enumerate(definingOp->getOpOperands())) {
         if (isa<RankedTensorType>(operand.get().getType())) {
-          auto srcEncoding = ttgi::inferSrcEncoding(definingOp, encoding);
+          Attribute srcEncoding;
+          if (auto upcast = dyn_cast<gpu::UpcastFpOpInterface>(definingOp))
+            srcEncoding = upcast.inferSrcEncoding(i, encoding);
+          else
+            srcEncoding = ttgi::inferSrcEncoding(definingOp, encoding);
           if (!srcEncoding)
             return failure();
           enqueue(operand, srcEncoding);

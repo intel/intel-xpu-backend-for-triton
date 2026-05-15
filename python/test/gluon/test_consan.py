@@ -8,7 +8,7 @@ from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia import blackwell
 from triton.experimental.gluon.language.nvidia import hopper
 from triton.experimental.gluon.language.nvidia import ampere
-from triton.experimental.gluon.language.nvidia.blackwell import allocate_tensor_memory, mbarrier, tma
+from triton.experimental.gluon.language.nvidia.blackwell import allocate_tensor_memory, clc, mbarrier, tma
 from triton._internal_testing import is_cuda, run_in_process
 
 
@@ -184,7 +184,7 @@ def test_async_tma_kernel(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
         bar = mbarrier.allocate_mbarrier()
         mbarrier.init(bar, count=1)
         mbarrier.expect(bar, input_desc.nbytes_per_cta)
-        tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem)
+        tma.async_load(input_desc, [0, 0], bar, smem)
         mbarrier.wait(bar, 0, pred=(not FAILURE), deps=[smem])
         val = smem.load(blocked_layout)
         mbarrier.wait(bar, 0, pred=FAILURE, deps=[smem])
@@ -206,6 +206,37 @@ def test_async_tma_kernel(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
 
 @pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
                    run=False)
+def test_local_load_before_first_write(device, run_wrapper, monkeypatch, num_ctas):
+    if run_wrapper:
+        result = run_in_process(test_local_load_before_first_write, (device, False, monkeypatch, num_ctas))
+        assert_expected_cuda_failure(result.exc)
+        assert "Buffer being read before any write" in result.driver_stderr_output
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def kernel(output):
+        block_m: ttgl.constexpr = XBLOCK * ttgl.num_ctas()
+        cga_layout: ttgl.constexpr = default_cga_layout(ttgl.num_ctas(), 2)
+        blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[32, 1],
+                                                            warps_per_cta=[4, 1], order=[0, 1], cga_layout=cga_layout)
+        smem_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2,
+                                                             cga_layout=cga_layout)
+        smem = ttgl.allocate_shared_memory(ttgl.float16, [block_m, XBLOCK], smem_layout)
+        val = smem.load(blocked_layout)
+        offs_m = ttgl.arange(0, block_m, ttgl.SliceLayout(1, blocked_layout))[:, None]
+        offs_n = ttgl.arange(0, XBLOCK, ttgl.SliceLayout(0, blocked_layout))[None, :]
+        ttgl.store(output + offs_m * XBLOCK + offs_n, val)
+
+    output = torch.empty((XBLOCK.value * num_ctas, XBLOCK.value), device=device, dtype=torch.float16)
+    kernel[(1, )](output, num_warps=4, num_ctas=num_ctas)
+
+
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
+                   run=False)
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_async_tma_multicast_kernel(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     if num_ctas == 1:
@@ -214,7 +245,8 @@ def test_async_tma_multicast_kernel(FAILURE, device, run_wrapper, monkeypatch, n
         result = run_in_process(test_async_tma_multicast_kernel, (FAILURE, device, False, monkeypatch, num_ctas))
         if FAILURE:
             assert_expected_cuda_failure(result.exc)
-            assert "Buffer being accessed has outstanding writes" in result.driver_stderr_output
+            assert ("Buffer being read before any write" in result.driver_stderr_output
+                    or "Buffer being accessed has outstanding writes" in result.driver_stderr_output)
         else:
             assert result.exc is None
             assert result.driver_stderr_output == ""
@@ -233,7 +265,7 @@ def test_async_tma_multicast_kernel(FAILURE, device, run_wrapper, monkeypatch, n
         bar = mbarrier.allocate_mbarrier()
         mbarrier.init(bar, count=1)
         mbarrier.expect(bar, input_desc.nbytes_per_cta)
-        tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem, multicast=True)
+        tma.async_load(input_desc, [0, 0], bar, smem, multicast=True)
         mbarrier.wait(bar, 0, pred=(not FAILURE), deps=[smem])
         val = smem.load(blocked_layout)
         mbarrier.wait(bar, 0, pred=FAILURE, deps=[smem])
@@ -250,6 +282,155 @@ def test_async_tma_multicast_kernel(FAILURE, device, run_wrapper, monkeypatch, n
                                            cga_layout=multicast_cga_layout(num_ctas, 2))
     input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK.value, XBLOCK.value], shared_layout)
     kernel[(1, )](input_desc, output, FAILURE=FAILURE, num_warps=4, num_ctas=num_ctas)
+
+
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell", run=False)
+def test_collapsed_wait_does_not_publish_peer_cta(device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_collapsed_wait_does_not_publish_peer_cta, (device, False, monkeypatch))
+        assert_expected_cuda_failure(result.exc)
+        assert "Buffer being accessed has outstanding writes" in result.driver_stderr_output
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def kernel(a_desc, b_desc):
+        blocked_a: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [32, 1], [4, 1], [0, 1], ((1, 0), ))
+        smem_a = ttgl.allocate_shared_memory(ttgl.float16, [256, 128], a_desc.layout)
+        smem_b = ttgl.allocate_shared_memory(
+            ttgl.float16, [128, 128],
+            ttgl.NVMMASharedLayout.get_default_for([128, 128], ttgl.float16, cga_layout=((0, 1), )))
+        tma_bar = mbarrier.allocate_mbarrier(two_ctas=True)
+        mbarrier.init(tma_bar, count=1)
+        mbarrier.expect(tma_bar, a_desc.nbytes_per_cta + b_desc.nbytes_per_cta)
+        tma.async_load(a_desc, [0, 0], tma_bar, smem_a)
+        tma.async_load(b_desc, [0, 0], tma_bar, smem_b)
+        mbarrier.wait(tma_bar, 0, deps=[smem_a, smem_b])
+        val = smem_a.load(blocked_a)
+        smem_a.store(val)
+
+        acc_layout: ttgl.constexpr = blackwell.TensorMemoryLayout([128, 128], col_stride=1, cga_layout=((1, 0), ),
+                                                                  two_ctas=True)
+        acc = blackwell.allocate_tensor_memory(ttgl.float32, [256, 128], acc_layout)
+        blackwell.tcgen05_mma(smem_a, smem_b, acc, use_acc=False)
+
+    a = torch.randn((256, 128), device=device, dtype=torch.float16)
+    b = torch.randn((128, 128), device=device, dtype=torch.float16)
+    a_layout = ttgl.NVMMASharedLayout.get_default_for([256, 128], ttgl.float16, cga_layout=((1, 0), ))
+    b_layout = ttgl.NVMMASharedLayout.get_default_for([128, 128], ttgl.float16, cga_layout=((0, 1), ))
+    a_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(a, [256, 128], a_layout)
+    b_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(b, [128, 128], b_layout)
+    kernel[(1, )](a_desc, b_desc, num_warps=4, num_ctas=2)
+
+
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell", run=False)
+@pytest.mark.parametrize("FAILURE", [True, False])
+def test_clc_result_visibility(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
+    if run_wrapper:
+        result = run_in_process(test_clc_result_visibility, (FAILURE, device, False, monkeypatch, num_ctas))
+        if FAILURE:
+            assert_expected_cuda_failure(result.exc)
+            assert ("Buffer being accessed has outstanding writes" in result.driver_stderr_output
+                    or "Buffer being read before any write" in result.driver_stderr_output)
+        else:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def kernel(out, FAILURE: ttgl.constexpr):
+        cga_layout: ttgl.constexpr = multicast_cga_layout(ttgl.num_ctas(), 1)
+        layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0], cga_layout=cga_layout)
+        clc_result = ttgl.allocate_shared_memory(ttgl.int64, [2], layout)
+        clc_bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(clc_bar, count=1)
+
+        clc.try_cancel(clc_result, clc_bar)
+        mbarrier.expect(clc_bar, 16)
+        mbarrier.wait(clc_bar, 0, pred=(not FAILURE))
+        response = clc.load_result(clc_result)
+        mbarrier.wait(clc_bar, 0, pred=FAILURE)
+        mbarrier.invalidate(clc_bar)
+
+        ttgl.store(out + ttgl.program_id(0), response.is_canceled())
+
+    output = torch.empty((1, ), device=device, dtype=torch.bool)
+    kernel[(1, )](output, FAILURE=FAILURE, num_warps=4, num_ctas=num_ctas)
+
+
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell", run=False)
+def test_clc_double_try_cancel_result_overwrite(device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_clc_double_try_cancel_result_overwrite, (device, False, monkeypatch))
+        assert result.exc is None
+        assert result.driver_stderr_output == ""
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def kernel():
+        cga_layout: ttgl.constexpr = multicast_cga_layout(ttgl.num_ctas(), 1)
+        layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0], cga_layout=cga_layout)
+        result = ttgl.allocate_shared_memory(ttgl.int64, [2], layout)
+        bars = mbarrier.allocate_mbarrier(batch=2)
+        mbarrier.init(bars.index(0), count=1)
+        mbarrier.init(bars.index(1), count=1)
+
+        mbarrier.expect(bars.index(0), 16)
+        clc.try_cancel(result, bars.index(0))
+        mbarrier.expect(bars.index(1), 16)
+        clc.try_cancel(result, bars.index(1))
+
+        mbarrier.wait(bars.index(0), 0)
+        mbarrier.wait(bars.index(1), 0)
+
+    kernel[(1, )](num_warps=4, num_ctas=2)
+
+
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell", run=False)
+def test_clc_result_reuse_after_cluster_barrier(device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_clc_result_reuse_after_cluster_barrier, (device, False, monkeypatch))
+        assert result.exc is None
+        assert result.driver_stderr_output == ""
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def kernel(out):
+        cga_layout: ttgl.constexpr = [[0]]
+        layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0], cga_layout=cga_layout)
+        clc_result = ttgl.allocate_shared_memory(ttgl.int64, [2], layout)
+        clc_bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(clc_bar, count=1)
+
+        mbarrier.expect(clc_bar, 16)
+        clc.try_cancel(clc_result, clc_bar)
+        mbarrier.wait(clc_bar, 0)
+        first = clc.load_result(clc_result)
+        ttgl.barrier(cluster=True)
+
+        mbarrier.expect(clc_bar, 16)
+        clc.try_cancel(clc_result, clc_bar)
+        mbarrier.wait(clc_bar, 1)
+        second = clc.load_result(clc_result)
+        ttgl.store(out + ttgl.program_id(0), first.is_canceled() | second.is_canceled())
+
+    output = torch.empty((1, ), device=device, dtype=torch.bool)
+    kernel[(1, )](output, num_warps=4, num_ctas=2)
 
 
 @pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
@@ -278,7 +459,7 @@ def test_async_tma_multicast_kernel_reuse(device, run_wrapper, monkeypatch, num_
         for phase in ttgl.static_range(2):
             mbarrier.expect(bar, input_desc.nbytes_per_cta)
             ttgl.barrier(cluster=True)
-            tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem, multicast=True)
+            tma.async_load(input_desc, [0, 0], bar, smem, multicast=True)
             mbarrier.wait(bar, phase % 2, deps=[smem])
             ttgl.barrier(cluster=True)
         val = smem.load(blocked_layout)
@@ -323,7 +504,7 @@ def test_async_tma_multicast_kernel_local_store_race(device, run_wrapper, monkey
         bar = mbarrier.allocate_mbarrier()
         mbarrier.init(bar, count=1)
         mbarrier.expect(bar, input_desc.nbytes_per_cta)
-        tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem, multicast=True)
+        tma.async_load(input_desc, [0, 0], bar, smem, multicast=True)
         ttgl.barrier(cluster=True)
         smem.store(ttgl.full([XBLOCK, XBLOCK], 1, ttgl.float16, blocked_layout))
         mbarrier.wait(bar, 0, deps=[smem])
@@ -372,8 +553,8 @@ def test_async_tma_kernel_2bufs_1bar(FAILURE, device, run_wrapper, monkeypatch, 
         bar = mbarrier.allocate_mbarrier()
         mbarrier.init(bar, count=1)
         mbarrier.expect(bar, a_desc.nbytes_per_cta + b_desc.nbytes_per_cta)
-        tma.async_copy_global_to_shared(a_desc, [0, 0], bar, a_smem)
-        tma.async_copy_global_to_shared(b_desc, [0, 0], bar, b_smem)
+        tma.async_load(a_desc, [0, 0], bar, a_smem)
+        tma.async_load(b_desc, [0, 0], bar, b_smem)
         mbarrier.wait(bar, 0, pred=(not FAILURE), deps=[a_smem, b_smem])
         val = a_smem.load(blocked_layout)
         val = val + b_smem.load(blocked_layout)
@@ -421,7 +602,7 @@ def test_async_tma_expect_bytes_mismatch(EXPECT_DELTA, device, run_wrapper, monk
         bar = mbarrier.allocate_mbarrier()
         mbarrier.init(bar, count=1)
         mbarrier.expect(bar, input_desc.nbytes_per_cta + EXPECT_DELTA)
-        tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem)
+        tma.async_load(input_desc, [0, 0], bar, smem)
         mbarrier.wait(bar, 0, deps=[smem])
         val = smem.load(blocked_layout)
         mbarrier.invalidate(bar)
@@ -468,8 +649,8 @@ def test_tma_interleave_kernel(FAILURE, device, run_wrapper, monkeypatch, num_ct
         mbarrier.init(bar.index(1), count=1)
         mbarrier.expect(bar.index(0), input_desc.nbytes_per_cta)
         mbarrier.expect(bar.index(1), input_desc.nbytes_per_cta)
-        tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(0), smem.index(0))
-        tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(1), smem.index(1))
+        tma.async_load(input_desc, [0, 0], bar.index(0), smem.index(0))
+        tma.async_load(input_desc, [0, 0], bar.index(1), smem.index(1))
 
         mbarrier.wait(bar.index(0), 0, deps=[smem.index(0)])
         if not FAILURE:
@@ -527,9 +708,9 @@ def test_tma_wait_tracks_only_waited_barrier(FAILURE, device, run_wrapper, monke
         mbarrier.init(bar.index(1), count=1)
 
         mbarrier.expect(bar.index(0), input_desc.nbytes_per_cta)
-        tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(0), smem.index(0))
+        tma.async_load(input_desc, [0, 0], bar.index(0), smem.index(0))
         mbarrier.expect(bar.index(1), input_desc.nbytes_per_cta)
-        tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(1), smem.index(1))
+        tma.async_load(input_desc, [0, 0], bar.index(1), smem.index(1))
 
         mbarrier.wait(bar.index(1), 0)
 
@@ -557,6 +738,68 @@ def test_tma_wait_tracks_only_waited_barrier(FAILURE, device, run_wrapper, monke
                                            cga_layout=default_cga_layout(num_ctas, 2))
     input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [block_m, XBLOCK.value], shared_layout)
     kernel[(1, )](input_desc, output, FAILURE=FAILURE, num_warps=4, num_ctas=num_ctas)
+
+
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer",
+                   run=False)
+@pytest.mark.parametrize("WAIT_LATEST", [True, False])
+def test_tma_wait_does_not_publish_overwritten_row(WAIT_LATEST, device, run_wrapper, monkeypatch, num_ctas):
+    if run_wrapper:
+        result = run_in_process(test_tma_wait_does_not_publish_overwritten_row,
+                                (WAIT_LATEST, device, False, monkeypatch, num_ctas))
+        if WAIT_LATEST:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        else:
+            assert_expected_cuda_failure(result.exc)
+            assert "Buffer being accessed has outstanding writes" in result.driver_stderr_output
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def kernel(input_desc, out, WAIT_LATEST: ttgl.constexpr):
+        block_m: ttgl.constexpr = XBLOCK * ttgl.num_ctas()
+        cga_layout: ttgl.constexpr = default_cga_layout(ttgl.num_ctas(), 2)
+        smem = ttgl.allocate_shared_memory(ttgl.float16, [block_m, XBLOCK], input_desc.layout)
+        bar = mbarrier.allocate_mbarrier(batch=2)
+        mbarrier.init(bar.index(0), count=1)
+        mbarrier.init(bar.index(1), count=1)
+
+        mbarrier.expect(bar.index(0), input_desc.nbytes_per_cta)
+        tma.async_load(input_desc, [0, 0], bar.index(0), smem)
+        mbarrier.expect(bar.index(1), input_desc.nbytes_per_cta)
+        tma.async_load(input_desc, [0, 0], bar.index(1), smem)
+
+        if WAIT_LATEST:
+            mbarrier.wait(bar.index(1), 0)
+        else:
+            mbarrier.wait(bar.index(0), 0)
+
+        blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[32, 1],
+                                                            warps_per_cta=[4, 1], order=[0, 1], cga_layout=cga_layout)
+        val = smem.load(blocked_layout)
+        out_m = ttgl.arange(0, block_m, ttgl.SliceLayout(1, blocked_layout))[:, None]
+        out_n = ttgl.arange(0, XBLOCK, ttgl.SliceLayout(0, blocked_layout))[None, :]
+        ttgl.store(out + out_m * XBLOCK + out_n, val)
+
+        if WAIT_LATEST:
+            mbarrier.wait(bar.index(0), 0)
+        else:
+            mbarrier.wait(bar.index(1), 0)
+
+        mbarrier.invalidate(bar.index(0))
+        mbarrier.invalidate(bar.index(1))
+
+    block_m = XBLOCK.value * num_ctas
+    input = torch.randn((block_m, XBLOCK.value), device=device, dtype=torch.float16)
+    output = torch.empty_like(input)
+    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2,
+                                           cga_layout=default_cga_layout(num_ctas, 2))
+    input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [block_m, XBLOCK.value], shared_layout)
+    kernel[(1, )](input_desc, output, WAIT_LATEST=WAIT_LATEST, num_warps=4, num_ctas=num_ctas)
 
 
 @pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires ampere or newer",
@@ -628,9 +871,11 @@ def test_tma_store(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
         cga_layout: ttgl.constexpr = default_cga_layout(ttgl.num_ctas(), 2)
         smem_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2,
                                                              cga_layout=cga_layout)
-        smem = ttgl.allocate_shared_memory(ttgl.float16, [2, block_m, XBLOCK], smem_layout)
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, XBLOCK], threads_per_warp=[32, 1],
                                                             warps_per_cta=[4, 1], order=[0, 1], cga_layout=cga_layout)
+        smem = ttgl.allocate_shared_memory(ttgl.float16, [2, block_m, XBLOCK], smem_layout)
+        for i in ttgl.static_range(2):
+            smem.index(i).store(ttgl.zeros([block_m, XBLOCK], ttgl.float16, blocked_layout))
         val = ttgl.full([block_m, XBLOCK], 42, ttgl.float16, blocked_layout)
         tma.async_copy_shared_to_global(output_desc, [0, 0], smem.index(0))
         tma.async_copy_shared_to_global(output_desc, [0, 0], smem.index(1))
@@ -664,7 +909,11 @@ def test_tcgen5_mma(FAILURE, MEM_ACCESS_KIND, TWO_CTAS, device, run_wrapper, mon
             if MEM_ACCESS_KIND == "tma_cp":
                 # shmem operands are being read by the tcgen05_mma
                 assert "Buffer being accessed has outstanding reads" in result.driver_stderr_output
-            elif MEM_ACCESS_KIND in ["tmem_load", "tmem_store"]:
+            elif MEM_ACCESS_KIND == "tmem_load":
+                # tmem is being written by the tcgen05_mma
+                assert ("Buffer being accessed has outstanding writes" in result.driver_stderr_output
+                        or "Buffer being read before any write." in result.driver_stderr_output)
+            elif MEM_ACCESS_KIND == "tmem_store":
                 # tmem is being written by the tcgen05_mma
                 assert "Buffer being accessed has outstanding writes" in result.driver_stderr_output
         else:
@@ -687,19 +936,28 @@ def test_tcgen5_mma(FAILURE, MEM_ACCESS_KIND, TWO_CTAS, device, run_wrapper, mon
             cga_layout=mma_cga_layout(ttgl.num_ctas(), 2, TWO_CTAS),
             two_ctas=TWO_CTAS,
         )
-        smem_a_blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(
-            size_per_thread=[1, XBLOCK], threads_per_warp=[32, 1], warps_per_cta=[4, 1], order=[0, 1],
-            cga_layout=mma_cga_layout(ttgl.num_ctas(), 0, TWO_CTAS))
+        smem_a_blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 4], threads_per_warp=[32, 1],
+                                                                   warps_per_cta=[4, 1], order=[0, 1],
+                                                                   cga_layout=input_desc.layout.cga_layout)
         acc_blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, XBLOCK], threads_per_warp=[32, 1],
                                                                 warps_per_cta=[4, 1], order=[0, 1],
                                                                 cga_layout=acc_layout.cga_layout)
-        smemA = ttgl.allocate_shared_memory(ttgl.float16, [block_m, XBLOCK], input_desc.layout)
+        smemA = ttgl.allocate_shared_memory(ttgl.float16, [block_m, XBLOCK], input_desc.layout,
+                                            value=ttgl.zeros([block_m, XBLOCK], ttgl.float16, smem_a_blocked_layout))
+        smem_b_layout: ttgl.constexpr = ttgl.NVMMASharedLayout.get_default_for([XBLOCK, block_n], ttgl.float16,
+                                                                               cga_layout=mma_cga_layout(
+                                                                                   ttgl.num_ctas(), 1, TWO_CTAS))
+        smem_b_blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 4], threads_per_warp=[32, 1],
+                                                                   warps_per_cta=[4, 1], order=[0, 1],
+                                                                   cga_layout=smem_b_layout.cga_layout)
         smemB = ttgl.allocate_shared_memory(
             ttgl.float16,
             [XBLOCK, block_n],
-            ttgl.NVMMASharedLayout.get_default_for([XBLOCK, block_n], ttgl.float16,
-                                                   cga_layout=mma_cga_layout(ttgl.num_ctas(), 1, TWO_CTAS)),
+            smem_b_layout,
+            value=ttgl.zeros([XBLOCK, block_n], ttgl.float16, smem_b_blocked_layout),
         )
+        if TWO_CTAS:
+            ttgl.barrier(cluster=True)
         mma_bar = mbarrier.allocate_mbarrier()
         acc = blackwell.allocate_tensor_memory(ttgl.float32, [block_m, block_n], acc_layout)
         mbarrier.init(mma_bar, count=1)
@@ -715,7 +973,7 @@ def test_tcgen5_mma(FAILURE, MEM_ACCESS_KIND, TWO_CTAS, device, run_wrapper, mon
 
         if MEM_ACCESS_KIND == "tma_cp":
             mbarrier.expect(tma_bar, input_desc.nbytes_per_cta)
-            tma.async_copy_global_to_shared(input_desc, [0, 0], tma_bar, smemA)
+            tma.async_load(input_desc, [0, 0], tma_bar, smemA)
             mbarrier.wait(tma_bar, 0)
             mbarrier.invalidate(tma_bar)
         elif MEM_ACCESS_KIND == "local_store":
@@ -747,7 +1005,8 @@ def test_tcgen5_mma(FAILURE, MEM_ACCESS_KIND, TWO_CTAS, device, run_wrapper, mon
                   num_warps=4, num_ctas=num_ctas)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer",
+                   run=False)
 @pytest.mark.parametrize("FAILURE", [True, False])
 @pytest.mark.parametrize("MEM_ACCESS_KIND", ["local_store", "tmem_load"])
 def test_tcgen5_copy(FAILURE, MEM_ACCESS_KIND, device, run_wrapper, monkeypatch, num_ctas):
@@ -832,8 +1091,16 @@ def test_warpgroup_mma(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
                                                                cga_layout=cga_layout_a)
         smem_layout_b: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2,
                                                                cga_layout=cga_layout_b)
-        smemA = ttgl.allocate_shared_memory(ttgl.float16, [block_m, XBLOCK], smem_layout_a)
-        smemB = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, block_n], smem_layout_b)
+        smem_a_init_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 4], threads_per_warp=[32, 1],
+                                                                warps_per_cta=[4, 1], order=[0, 1],
+                                                                cga_layout=smem_layout_a.cga_layout)
+        smem_b_init_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 4], threads_per_warp=[32, 1],
+                                                                warps_per_cta=[4, 1], order=[0, 1],
+                                                                cga_layout=smem_layout_b.cga_layout)
+        smemA = ttgl.allocate_shared_memory(ttgl.float16, [block_m, XBLOCK], smem_layout_a,
+                                            value=ttgl.zeros([block_m, XBLOCK], ttgl.float16, smem_a_init_layout))
+        smemB = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, block_n], smem_layout_b,
+                                            value=ttgl.zeros([XBLOCK, block_n], ttgl.float16, smem_b_init_layout))
 
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, XBLOCK], threads_per_warp=[32, 1],
                                                             warps_per_cta=[4, 1], order=[0, 1], cga_layout=cga_layout_a)
@@ -879,8 +1146,16 @@ def test_warpgroup_mma2(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
                                                                cga_layout=cga_layout_a)
         smem_layout_b: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2,
                                                                cga_layout=cga_layout_b)
-        smemA = ttgl.allocate_shared_memory(ttgl.float16, [block_m, XBLOCK], smem_layout_a)
-        smemB = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, block_n], smem_layout_b)
+        smem_a_init_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 4], threads_per_warp=[32, 1],
+                                                                warps_per_cta=[4, 1], order=[0, 1],
+                                                                cga_layout=smem_layout_a.cga_layout)
+        smem_b_init_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 4], threads_per_warp=[32, 1],
+                                                                warps_per_cta=[4, 1], order=[0, 1],
+                                                                cga_layout=smem_layout_b.cga_layout)
+        smemA = ttgl.allocate_shared_memory(ttgl.float16, [block_m, XBLOCK], smem_layout_a,
+                                            value=ttgl.zeros([block_m, XBLOCK], ttgl.float16, smem_a_init_layout))
+        smemB = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, block_n], smem_layout_b,
+                                            value=ttgl.zeros([XBLOCK, block_n], ttgl.float16, smem_b_init_layout))
 
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, XBLOCK], threads_per_warp=[32, 1],
                                                             warps_per_cta=[4, 1], order=[0, 1], cga_layout=cga_layout_a)
@@ -932,12 +1207,22 @@ def test_tcgen5_mma_multibar(BUF_IDX, BAR_IDX, device, run_wrapper, monkeypatch,
         acc_blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, XBLOCK], threads_per_warp=[32, 1],
                                                                 warps_per_cta=[4, 1], order=[0, 1],
                                                                 cga_layout=acc_layout.cga_layout)
-        smemA = ttgl.allocate_shared_memory(ttgl.float16, [block_m, XBLOCK], input_desc.layout)
+        smem_a_blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 4], threads_per_warp=[32, 1],
+                                                                   warps_per_cta=[4, 1], order=[0, 1],
+                                                                   cga_layout=input_desc.layout.cga_layout)
+        smemA = ttgl.allocate_shared_memory(ttgl.float16, [block_m, XBLOCK], input_desc.layout,
+                                            value=ttgl.zeros([block_m, XBLOCK], ttgl.float16, smem_a_blocked_layout))
+        smem_b_layout: ttgl.constexpr = ttgl.NVMMASharedLayout.get_default_for([XBLOCK, block_n], ttgl.float16,
+                                                                               cga_layout=mma_cga_layout(
+                                                                                   ttgl.num_ctas(), 1))
+        smem_b_blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 4], threads_per_warp=[32, 1],
+                                                                   warps_per_cta=[4, 1], order=[0, 1],
+                                                                   cga_layout=smem_b_layout.cga_layout)
         smemB = ttgl.allocate_shared_memory(
             ttgl.float16,
             [XBLOCK, block_n],
-            ttgl.NVMMASharedLayout.get_default_for([XBLOCK, block_n], ttgl.float16,
-                                                   cga_layout=mma_cga_layout(ttgl.num_ctas(), 1)),
+            smem_b_layout,
+            value=ttgl.zeros([XBLOCK, block_n], ttgl.float16, smem_b_blocked_layout),
         )
         bar = mbarrier.allocate_mbarrier(batch=4)
         acc = blackwell.allocate_tensor_memory(ttgl.float32, [2, block_m, block_n], acc_layout)
@@ -1027,18 +1312,18 @@ def test_multibuffered_loop(FAILURE, device, run_wrapper, monkeypatch, num_ctas)
 
         # ins_id = 0
         mbarrier.expect(barLoadA.index(ins_id), a_desc.nbytes_per_cta)
-        tma.async_copy_global_to_shared(a_desc, [0, 0], barLoadA.index(ins_id), smemA.index(ins_id))
+        tma.async_load(a_desc, [0, 0], barLoadA.index(ins_id), smemA.index(ins_id))
 
         mbarrier.expect(barLoadB.index(ins_id), b_desc.nbytes_per_cta)
-        tma.async_copy_global_to_shared(b_desc, [0, 0], barLoadB.index(ins_id), smemB.index(ins_id))
+        tma.async_load(b_desc, [0, 0], barLoadB.index(ins_id), smemB.index(ins_id))
         ins_id = inc_mod(ins_id, num_buffers)
 
         # ins_id = 1
         mbarrier.expect(barLoadA.index(ins_id), a_desc.nbytes_per_cta)
-        tma.async_copy_global_to_shared(a_desc, [0, 0], barLoadA.index(ins_id), smemA.index(ins_id))
+        tma.async_load(a_desc, [0, 0], barLoadA.index(ins_id), smemA.index(ins_id))
 
         mbarrier.expect(barLoadB.index(ins_id), b_desc.nbytes_per_cta)
-        tma.async_copy_global_to_shared(b_desc, [0, 0], barLoadB.index(ins_id), smemB.index(ins_id))
+        tma.async_load(b_desc, [0, 0], barLoadB.index(ins_id), smemB.index(ins_id))
         ins_id = inc_mod(ins_id, num_buffers)
 
         mbarrier.wait(barLoadA.index(ext_id), phase)
@@ -1053,10 +1338,10 @@ def test_multibuffered_loop(FAILURE, device, run_wrapper, monkeypatch, num_ctas)
         for i in range(ub):
             if i < ub - 2:
                 mbarrier.expect(barLoadA.index(ins_id), a_desc.nbytes_per_cta)
-                tma.async_copy_global_to_shared(a_desc, [0, 0], barLoadA.index(ins_id), smemA.index(ins_id))
+                tma.async_load(a_desc, [0, 0], barLoadA.index(ins_id), smemA.index(ins_id))
 
                 mbarrier.expect(barLoadB.index(ins_id), b_desc.nbytes_per_cta)
-                tma.async_copy_global_to_shared(b_desc, [0, 0], barLoadB.index(ins_id), smemB.index(ins_id))
+                tma.async_load(b_desc, [0, 0], barLoadB.index(ins_id), smemB.index(ins_id))
                 ins_id = inc_mod(ins_id, num_buffers)
 
             if i < ub - 1:
@@ -1105,7 +1390,8 @@ def test_tma_tcgen05_mma_multicast_loop(FAILURE, device, run_wrapper, monkeypatc
         result = run_in_process(test_tma_tcgen05_mma_multicast_loop, (FAILURE, device, False, monkeypatch, num_ctas))
         if FAILURE:
             assert_expected_cuda_failure(result.exc)
-            assert "Buffer being accessed has outstanding" in result.driver_stderr_output
+            assert ("Buffer being accessed has outstanding" in result.driver_stderr_output
+                    or "Buffer being read before any write" in result.driver_stderr_output)
         else:
             assert result.exc is None
             assert result.driver_stderr_output == ""
@@ -1133,20 +1419,21 @@ def test_tma_tcgen05_mma_multicast_loop(FAILURE, device, run_wrapper, monkeypatc
             ttgl.NVMMASharedLayout.get_default_for([XBLOCK, block_n], ttgl.float16,
                                                    cga_layout=mma_cga_layout(ttgl.num_ctas(), 1, True)),
         )
+        acc = blackwell.allocate_tensor_memory(ttgl.float32, [block_m, block_n], acc_layout)
         tma_bar = mbarrier.allocate_mbarrier(two_ctas=True)
         mbarrier.init(tma_bar, count=1)
         mma_bar = mbarrier.allocate_mbarrier()
-        mma_bar_count: ttgl.constexpr = blackwell.tcgen05_mma_barrier_count([smemA, smemB], True)
+        mma_bar_count: ttgl.constexpr = blackwell.tcgen05_mma_barrier_count([smemA, smemB], True,
+                                                                            acc.type.layout.two_ctas)
         mbarrier.init(mma_bar, count=mma_bar_count)
-        acc = blackwell.allocate_tensor_memory(ttgl.float32, [block_m, block_n], acc_layout)
 
         phase_tma = 0
         phase_mma = 0
         for k in range(num_k_tiles):
             offs_k = k * XBLOCK
             mbarrier.expect(tma_bar, a_desc.nbytes_per_cta + b_desc.nbytes_per_cta)
-            tma.async_copy_global_to_shared(a_desc, [0, offs_k], tma_bar, smemA, multicast=True)
-            tma.async_copy_global_to_shared(b_desc, [offs_k, 0], tma_bar, smemB, multicast=True)
+            tma.async_load(a_desc, [0, offs_k], tma_bar, smemA, multicast=True)
+            tma.async_load(b_desc, [offs_k, 0], tma_bar, smemB, multicast=True)
             if not FAILURE:
                 mbarrier.wait(tma_bar, phase_tma, deps=[smemA, smemB])
             blackwell.tcgen05_mma(smemA, smemB, acc, use_acc=k != 0, multicast=True, mbarriers=[mma_bar])
@@ -1171,6 +1458,135 @@ def test_tma_tcgen05_mma_multicast_loop(FAILURE, device, run_wrapper, monkeypatc
         ttgl.NVMMASharedLayout.get_default_for([XBLOCK.value, block_n], ttgl.float16,
                                                cga_layout=mma_cga_layout(num_ctas, 1, True)))
     kernel[(1, )](a_desc, b_desc, FAILURE=FAILURE, num_warps=4, num_ctas=num_ctas)
+
+
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer",
+                   run=False)
+def test_tma_tcgen05_mma_missing_multicast(device, run_wrapper, monkeypatch, num_ctas):
+    if num_ctas != 4:
+        pytest.skip("Need 4 CTAs to exercise the missing tcgen05_mma multicast race")
+    if run_wrapper:
+        result = run_in_process(test_tma_tcgen05_mma_missing_multicast, (device, False, monkeypatch, num_ctas))
+        assert_expected_cuda_failure(result.exc)
+        assert "Buffer being accessed has outstanding" in result.driver_stderr_output
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def kernel(a_desc, b_desc):
+        num_k_tiles: ttgl.constexpr = 4
+        block_m: ttgl.constexpr = mma_block_m(ttgl.num_ctas())
+        block_n: ttgl.constexpr = mma_block_n(ttgl.num_ctas())
+        acc_layout: ttgl.constexpr = blackwell.TensorMemoryLayout(
+            [XBLOCK, XBLOCK],
+            col_stride=1,
+            cga_layout=mma_cga_layout(ttgl.num_ctas(), 2, True),
+            two_ctas=True,
+        )
+        smemA = ttgl.allocate_shared_memory(ttgl.float16, [block_m, XBLOCK], a_desc.layout)
+        smemB = ttgl.allocate_shared_memory(
+            ttgl.float16,
+            [XBLOCK, block_n],
+            ttgl.NVMMASharedLayout.get_default_for([XBLOCK, block_n], ttgl.float16,
+                                                   cga_layout=mma_cga_layout(ttgl.num_ctas(), 1, True)),
+        )
+        acc = blackwell.allocate_tensor_memory(ttgl.float32, [block_m, block_n], acc_layout)
+        tma_bar = mbarrier.allocate_mbarrier(two_ctas=True)
+        mbarrier.init(tma_bar, count=1)
+        mma_bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(mma_bar, count=blackwell.tcgen05_mma_barrier_count([smemA, smemB], False,
+                                                                         acc.type.layout.two_ctas))
+
+        phase_tma = 0
+        phase_mma = 0
+        for k in range(num_k_tiles):
+            offs_k = k * XBLOCK
+            mbarrier.expect(tma_bar, a_desc.nbytes_per_cta + b_desc.nbytes_per_cta)
+            tma.async_load(a_desc, [0, offs_k], tma_bar, smemA, multicast=True)
+            tma.async_load(b_desc, [offs_k, 0], tma_bar, smemB, multicast=True)
+            mbarrier.wait(tma_bar, phase_tma, deps=[smemA, smemB])
+
+            # Missing multicast=True is the bug under test. The next iteration
+            # reuses smemA/smemB after a local completion wait.
+            blackwell.tcgen05_mma(smemA, smemB, acc, use_acc=k != 0, mbarriers=[mma_bar])
+            mbarrier.wait(mma_bar, phase_mma, deps=[smemA, smemB])
+            phase_tma = (phase_tma + 1) % 2
+            phase_mma = (phase_mma + 1) % 2
+
+        mbarrier.invalidate(tma_bar)
+        mbarrier.invalidate(mma_bar)
+
+    block_m = mma_block_m(num_ctas)
+    block_n = mma_block_n(num_ctas)
+    num_k_tiles = 4
+    a = torch.randn((block_m, XBLOCK.value * num_k_tiles), device=device, dtype=torch.float16)
+    b = torch.randn((XBLOCK.value * num_k_tiles, block_n), device=device, dtype=torch.float16)
+    a_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(
+        a, [block_m, XBLOCK.value],
+        ttgl.NVMMASharedLayout.get_default_for([block_m, XBLOCK.value], ttgl.float16,
+                                               cga_layout=mma_cga_layout(num_ctas, 0, True)))
+    b_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(
+        b, [XBLOCK.value, block_n],
+        ttgl.NVMMASharedLayout.get_default_for([XBLOCK.value, block_n], ttgl.float16,
+                                               cga_layout=mma_cga_layout(num_ctas, 1, True)))
+    kernel[(1, )](a_desc, b_desc, num_warps=4, num_ctas=num_ctas)
+
+
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer",
+                   run=False)
+@pytest.mark.parametrize("OVERCOUNTED", [False, True])
+def test_tcgen5_commit_multicast_barrier_count(OVERCOUNTED, device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_tcgen5_commit_multicast_barrier_count, (OVERCOUNTED, device, False, monkeypatch))
+        if OVERCOUNTED:
+            assert_expected_cuda_failure(result.exc)
+            assert "Deadlock detected" in result.driver_stderr_output
+        else:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def kernel(a_desc, b_desc, OVERCOUNTED: ttgl.constexpr):
+        block_m: ttgl.constexpr = 256
+        block_n: ttgl.constexpr = 128
+        smem_a = ttgl.allocate_shared_memory(ttgl.float16, [block_m, XBLOCK], a_desc.layout)
+        smem_b = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, block_n], b_desc.layout)
+        acc_layout: ttgl.constexpr = blackwell.TensorMemoryLayout([XBLOCK, XBLOCK], col_stride=1, cga_layout=((1, 0), ),
+                                                                  two_ctas=True)
+        acc = allocate_tensor_memory(ttgl.float32, [block_m, block_n], acc_layout)
+
+        tma_bar = mbarrier.allocate_mbarrier(two_ctas=True)
+        commit_bar = mbarrier.allocate_mbarrier()
+        count: ttgl.constexpr = blackwell.tcgen05_mma_barrier_count([smem_a, smem_b], True, acc.type.layout.two_ctas)
+        mbarrier.init(tma_bar, count=1)
+        mbarrier.init(commit_bar, count=count + OVERCOUNTED)
+        mbarrier.expect(tma_bar, a_desc.nbytes_per_cta + b_desc.nbytes_per_cta)
+        tma.async_load(a_desc, [0, 0], tma_bar, smem_a, multicast=True)
+        tma.async_load(b_desc, [0, 0], tma_bar, smem_b, multicast=True)
+        mbarrier.wait(tma_bar, 0, deps=[smem_a, smem_b])
+        mbarrier.invalidate(tma_bar)
+
+        blackwell.tcgen05_mma(smem_a, smem_b, acc, use_acc=False, multicast=True)
+        blackwell.tcgen05_commit(commit_bar, descs=[smem_a, smem_b])
+        mbarrier.wait(commit_bar, 0)
+
+    a = torch.randn((256, XBLOCK.value), device=device, dtype=torch.float16)
+    b = torch.randn((XBLOCK.value, 128), device=device, dtype=torch.float16)
+    a_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(
+        a, [256, XBLOCK.value],
+        ttgl.NVMMASharedLayout.get_default_for([256, XBLOCK.value], ttgl.float16, cga_layout=((1, 0), )))
+    b_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(
+        b, [XBLOCK.value, 128],
+        ttgl.NVMMASharedLayout.get_default_for([XBLOCK.value, 128], ttgl.float16, cga_layout=((0, 1), )))
+    kernel[(1, )](a_desc, b_desc, OVERCOUNTED=OVERCOUNTED, num_warps=4, num_ctas=2)
 
 
 @pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] != 9, reason="Requires hopper", run=False)
@@ -1215,10 +1631,10 @@ def test_multibuffered_wgmma_loop(FAILURE, device, run_wrapper, monkeypatch, num
 
         # ins_id = 0
         mbarrier.expect(barLoadA.index(ins_id), a_desc.nbytes_per_cta)
-        tma.async_copy_global_to_shared(a_desc, [0, 0], barLoadA.index(ins_id), smemA.index(ins_id))
+        tma.async_load(a_desc, [0, 0], barLoadA.index(ins_id), smemA.index(ins_id))
 
         mbarrier.expect(barLoadB.index(ins_id), b_desc.nbytes_per_cta)
-        tma.async_copy_global_to_shared(b_desc, [0, 0], barLoadB.index(ins_id), smemB.index(ins_id))
+        tma.async_load(b_desc, [0, 0], barLoadB.index(ins_id), smemB.index(ins_id))
         ins_id = inc_mod(ins_id, num_buffers)
 
         # ins_id = 1
@@ -1226,10 +1642,10 @@ def test_multibuffered_wgmma_loop(FAILURE, device, run_wrapper, monkeypatch, num
         for i in range(ub):
             if i < ub - 1:
                 mbarrier.expect(barLoadA.index(ins_id), a_desc.nbytes_per_cta)
-                tma.async_copy_global_to_shared(a_desc, [0, 0], barLoadA.index(ins_id), smemA.index(ins_id))
+                tma.async_load(a_desc, [0, 0], barLoadA.index(ins_id), smemA.index(ins_id))
 
                 mbarrier.expect(barLoadB.index(ins_id), b_desc.nbytes_per_cta)
-                tma.async_copy_global_to_shared(b_desc, [0, 0], barLoadB.index(ins_id), smemB.index(ins_id))
+                tma.async_load(b_desc, [0, 0], barLoadB.index(ins_id), smemB.index(ins_id))
                 ins_id = inc_mod(ins_id, num_buffers)
 
             mbarrier.wait(barLoadA.index(ext_id), phase)
@@ -1297,6 +1713,8 @@ def test_ws_store_wait_load(FAILURE, device, run_wrapper, monkeypatch, num_ctas)
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32],
                                                             warps_per_cta=[4], order=[0], cga_layout=cga_layout)
         smem = ttgl.allocate_shared_memory(ttgl.float16, [2, block_x], smem_layout)
+        for i in ttgl.static_range(2):
+            smem.index(i).store(ttgl.zeros([block_x], ttgl.float16, blocked_layout))
         bar = mbarrier.allocate_mbarrier(batch=2)
         for i in range(2):
             mbarrier.init(bar.index(i), count=1)
@@ -1351,6 +1769,8 @@ def test_ws_load_wait_store(FAILURE, device, run_wrapper, monkeypatch, num_ctas)
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32],
                                                             warps_per_cta=[4], order=[0], cga_layout=cga_layout)
         smem = ttgl.allocate_shared_memory(ttgl.float16, [2, block_x], smem_layout)
+        for i in ttgl.static_range(2):
+            smem.index(i).store(ttgl.zeros([block_x], ttgl.float16, blocked_layout))
         bar = mbarrier.allocate_mbarrier(batch=2)
         for i in range(2):
             mbarrier.init(bar.index(i), count=1)
@@ -1414,6 +1834,8 @@ def test_ws_two_loads_two_bars(MISSING_BAR, device, run_wrapper, monkeypatch, nu
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32],
                                                             warps_per_cta=[4], order=[0], cga_layout=cga_layout)
         smem = ttgl.allocate_shared_memory(ttgl.float16, [3, block_x], smem_layout)
+        for i in ttgl.static_range(3):
+            smem.index(i).store(ttgl.zeros([block_x], ttgl.float16, blocked_layout))
         bar = mbarrier.allocate_mbarrier(batch=3)
         for i in range(3):
             mbarrier.init(bar.index(i), count=1)
@@ -1475,6 +1897,8 @@ def test_ws_two_loads_one_bar(FAILURE, device, run_wrapper, monkeypatch, num_cta
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32],
                                                             warps_per_cta=[4], order=[0], cga_layout=cga_layout)
         smem = ttgl.allocate_shared_memory(ttgl.float16, [3, block_x], smem_layout)
+        for i in ttgl.static_range(3):
+            smem.index(i).store(ttgl.zeros([block_x], ttgl.float16, blocked_layout))
         bar = mbarrier.allocate_mbarrier(batch=2)
         mbarrier.init(bar.index(0), count=2)
         mbarrier.init(bar.index(1), count=1)
@@ -1559,6 +1983,8 @@ def test_ws_two_loads_two_bars_loop(MISSING_BAR, device, run_wrapper, monkeypatc
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32],
                                                             warps_per_cta=[4], order=[0], cga_layout=cga_layout)
         smem = ttgl.allocate_shared_memory(ttgl.float16, [3, block_x], smem_layout)
+        for i in ttgl.static_range(3):
+            smem.index(i).store(ttgl.zeros([block_x], ttgl.float16, blocked_layout))
         bar = mbarrier.allocate_mbarrier(batch=4)
         for i in range(4):
             mbarrier.init(bar.index(i), count=1)
@@ -1627,6 +2053,8 @@ def test_ws_load_ordering(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32],
                                                             warps_per_cta=[4], order=[0], cga_layout=cga_layout)
         smem = ttgl.allocate_shared_memory(ttgl.float16, [3, block_x], smem_layout)
+        for i in ttgl.static_range(3):
+            smem.index(i).store(ttgl.zeros([block_x], ttgl.float16, blocked_layout))
         bar = mbarrier.allocate_mbarrier(batch=3)
         for i in range(3):
             mbarrier.init(bar.index(i), count=1)
@@ -1718,6 +2146,8 @@ def test_ws_two_producers_two_consumers(MISSING_BAR, device, run_wrapper, monkey
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32],
                                                             warps_per_cta=[4], order=[0], cga_layout=cga_layout)
         smem = ttgl.allocate_shared_memory(ttgl.float16, [4, block_x], smem_layout)
+        for i in ttgl.static_range(4):
+            smem.index(i).store(ttgl.zeros([block_x], ttgl.float16, blocked_layout))
         bar = mbarrier.allocate_mbarrier(batch=4)
         for i in range(4):
             mbarrier.init(bar.index(i), count=2)
@@ -1792,6 +2222,8 @@ def test_ws_different_warp_sizes(MISSING_BAR, device, run_wrapper, monkeypatch, 
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32],
                                                             warps_per_cta=[4], order=[0], cga_layout=cga_layout)
         smem = ttgl.allocate_shared_memory(ttgl.float16, [3, block_x], smem_layout)
+        for i in ttgl.static_range(3):
+            smem.index(i).store(ttgl.zeros([block_x], ttgl.float16, blocked_layout))
         bar = mbarrier.allocate_mbarrier(batch=3)
         for i in range(3):
             mbarrier.init(bar.index(i), count=1)
@@ -1868,6 +2300,8 @@ def test_ws_async_copy_commits(FAILURE, device, run_wrapper, monkeypatch, num_ct
         smem = ttgl.allocate_shared_memory(ttgl.float16, [4, block_x], smem_layout)
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[block_x], threads_per_warp=[32],
                                                             warps_per_cta=[4], order=[0], cga_layout=cga_layout)
+        for i in ttgl.static_range(4):
+            smem.index(i).store(ttgl.zeros([block_x], ttgl.float16, blocked_layout))
         ttgl.warp_specialize([
             (ws_prog, (input, smem, FAILURE, blocked_layout, 0)),
             (ws_prog, (input, smem, FAILURE, blocked_layout, 2)),
@@ -1923,6 +2357,8 @@ def test_ws_async_copy_wait_visibility(FAILURE, device, run_wrapper, monkeypatch
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[block_x], threads_per_warp=[32],
                                                             warps_per_cta=[4], order=[0], cga_layout=cga_layout)
         smem = ttgl.allocate_shared_memory(ttgl.float16, [2, block_x], smem_layout)
+        for i in ttgl.static_range(2):
+            smem.index(i).store(ttgl.zeros([block_x], ttgl.float16, blocked_layout))
         bar = mbarrier.allocate_mbarrier(batch=1)
         mbarrier.init(bar.index(0), count=1)
         ttgl.warp_specialize([
@@ -1985,10 +2421,19 @@ def test_ws_wgmma_wait_visibility(FAILURE, device, run_wrapper, monkeypatch, num
                                                                cga_layout=cga_layout_b)
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, XBLOCK], threads_per_warp=[32, 1],
                                                             warps_per_cta=[4, 1], order=[0, 1], cga_layout=cga_layout_a)
+        smem_a_init_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 4], threads_per_warp=[32, 1],
+                                                                warps_per_cta=[4, 1], order=[0, 1],
+                                                                cga_layout=smem_layout_a.cga_layout)
+        smem_b_init_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 4], threads_per_warp=[32, 1],
+                                                                warps_per_cta=[4, 1], order=[0, 1],
+                                                                cga_layout=smem_layout_b.cga_layout)
         mma_layout: ttgl.constexpr = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1],
                                                                  instr_shape=[16, 32, 16], cga_layout=cga_layout_c)
         smemA = ttgl.allocate_shared_memory(ttgl.float16, [2, block_m, XBLOCK], smem_layout_a)
         smemB = ttgl.allocate_shared_memory(ttgl.float16, [2, XBLOCK, block_n], smem_layout_b)
+        for i in ttgl.static_range(2):
+            smemA.index(i).store(ttgl.zeros([block_m, XBLOCK], ttgl.float16, smem_a_init_layout))
+            smemB.index(i).store(ttgl.zeros([XBLOCK, block_n], ttgl.float16, smem_b_init_layout))
         bar = mbarrier.allocate_mbarrier(batch=1)
         mbarrier.init(bar.index(0), count=1)
         ttgl.warp_specialize([
@@ -2029,6 +2474,81 @@ def test_deadlock_two_partitions(device, run_wrapper, monkeypatch, num_ctas):
         ], [4], [32])
 
     kernel[(1, )](num_warps=4, num_ctas=num_ctas)
+
+
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+def test_deadlock_with_padded_warp_specialize_partition(device, run_wrapper, monkeypatch, num_ctas):
+    if run_wrapper:
+        result = run_in_process(test_deadlock_with_padded_warp_specialize_partition,
+                                (device, False, monkeypatch, num_ctas))
+        assert_expected_cuda_failure(result.exc)
+        assert "Deadlock detected" in result.driver_stderr_output
+        return
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def wait_forever(bar):
+        mbarrier.wait(bar, phase=0)
+
+    @gluon.jit
+    def done(bar):
+        pass
+
+    @gluon.jit
+    def kernel():
+        bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(bar, count=1)
+        ttgl.warp_specialize([
+            (done, (bar, )),
+            (wait_forever, (bar, )),
+            (wait_forever, (bar, )),
+            (wait_forever, (bar, )),
+        ], [1, 1, 1], [32, 32, 32])
+
+    kernel[(1, )](num_warps=4, num_ctas=num_ctas)
+
+
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+@pytest.mark.parametrize("TWO_CTAS", [False, True], ids=["single-cta-barrier", "two-cta-barrier"])
+def test_deadlock_after_other_partition_returns(TWO_CTAS, device, run_wrapper, monkeypatch, num_ctas):
+    if TWO_CTAS and num_ctas == 1:
+        pytest.skip("two-CTA barriers require at least two CTAs")
+    if run_wrapper:
+        result = run_in_process(test_deadlock_after_other_partition_returns,
+                                (TWO_CTAS, device, False, monkeypatch, num_ctas))
+        assert_expected_cuda_failure(result.exc)
+        assert "Deadlock detected" in result.driver_stderr_output
+        return
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def done(bar):
+        pass
+
+    @gluon.jit
+    def wait_forever(bar):
+        mbarrier.wait(bar.index(0), phase=0)
+
+    @gluon.jit
+    def complete_and_return(bar):
+        mbarrier.arrive(bar.index(1), count=1)
+
+    @gluon.jit
+    def kernel(TWO_CTAS: ttgl.constexpr):
+        bar = mbarrier.allocate_mbarrier(batch=2, two_ctas=TWO_CTAS)
+        mbarrier.init(bar.index(0), count=1)
+        mbarrier.init(bar.index(1), count=1)
+        ttgl.warp_specialize([
+            (done, (bar, )),
+            (wait_forever, (bar, )),
+            (complete_and_return, (bar, )),
+        ], [4, 4], [32, 32])
+
+    kernel[(1, )](TWO_CTAS, num_warps=4, num_ctas=num_ctas)
 
 
 @pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
@@ -2136,13 +2656,13 @@ def test_deadlock_exempt_when_tma_signals(device, run_wrapper, monkeypatch, num_
     @gluon.jit
     def ws_default(input_desc, smem, bar):
         mbarrier.expect(bar.index(0), input_desc.nbytes_per_cta)
-        tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(0), smem.index(0))
+        tma.async_load(input_desc, [0, 0], bar.index(0), smem.index(0))
         mbarrier.wait(bar.index(0), phase=0)
 
     @gluon.jit
     def ws_1(input_desc, smem, bar):
         mbarrier.expect(bar.index(1), input_desc.nbytes_per_cta)
-        tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(1), smem.index(1))
+        tma.async_load(input_desc, [0, 0], bar.index(1), smem.index(1))
         mbarrier.wait(bar.index(1), phase=0)
 
     @gluon.jit
@@ -2291,11 +2811,15 @@ def test_aliasing_shared_visibility_outstanding_write(MISSING_BAR, OVERLAP, devi
     if run_wrapper:
         result = run_in_process(test_aliasing_shared_visibility_outstanding_write,
                                 (MISSING_BAR, OVERLAP, device, False, monkeypatch, num_ctas))
-        if MISSING_BAR and OVERLAP:
+        if not OVERLAP:
+            assert_expected_cuda_failure(result.exc)
+            assert "Buffer being read before any write" in result.driver_stderr_output
+        elif MISSING_BAR:
             assert result.exc is not None
             assert_expected_cuda_failure(result.exc)
             # The race can be reported from either side depending on timing.
-            assert "Buffer being accessed has outstanding" in result.driver_stderr_output
+            assert ("Buffer being read before any write" in result.driver_stderr_output
+                    or "Buffer being accessed has outstanding" in result.driver_stderr_output)
         else:
             assert result.exc is None
             assert result.driver_stderr_output == ""
@@ -2348,6 +2872,61 @@ def test_aliasing_shared_visibility_outstanding_write(MISSING_BAR, OVERLAP, devi
     kernel[(1, )](MISSING_BAR=MISSING_BAR, OVERLAP=OVERLAP, num_warps=4, num_ctas=num_ctas)
 
 
+@pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper", run=False)
+def test_aliasing_tma_overwrite_clears_stale_write_visibility(device, run_wrapper, monkeypatch, num_ctas):
+    if run_wrapper:
+        result = run_in_process(test_aliasing_tma_overwrite_clears_stale_write_visibility,
+                                (device, False, monkeypatch, num_ctas))
+        assert result.exc is None
+        assert result.driver_stderr_output == ""
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def writer(full: ttgl.constexpr, tail: ttgl.constexpr, input_desc, bar: ttgl.constexpr,
+               blocked_layout_wide: ttgl.constexpr):
+        block_m: ttgl.constexpr = XBLOCK * ttgl.num_ctas()
+        vals = ttgl.full([block_m, XBLOCK * 2], 42.0, ttgl.float16, blocked_layout_wide)
+        full.store(vals)
+        mbarrier.expect(bar.index(0), input_desc.nbytes_per_cta)
+        tma.async_load(input_desc, [0, 0], bar.index(0), tail)
+
+    @gluon.jit
+    def reader(tail: ttgl.constexpr, dummy: ttgl.constexpr, bar: ttgl.constexpr, blocked_layout: ttgl.constexpr):
+        mbarrier.wait(bar.index(0), phase=0)
+        val = tail.load(blocked_layout)
+        dummy.store(val)
+
+    @gluon.jit
+    def kernel(input_desc):
+        block_m: ttgl.constexpr = XBLOCK * ttgl.num_ctas()
+        cga_layout: ttgl.constexpr = default_cga_layout(ttgl.num_ctas(), 2)
+        smem_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2,
+                                                             cga_layout=cga_layout)
+        blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, XBLOCK], threads_per_warp=[32, 1],
+                                                            warps_per_cta=[4, 1], order=[0, 1], cga_layout=cga_layout)
+        blocked_layout_wide: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[2, XBLOCK], threads_per_warp=[32, 1],
+                                                                 warps_per_cta=[4, 1], order=[0,
+                                                                                              1], cga_layout=cga_layout)
+        full = ttgl.allocate_shared_memory(ttgl.float16, [block_m, XBLOCK * 2], smem_layout)
+        tail = full.slice(XBLOCK, XBLOCK, dim=1)
+        dummy = ttgl.allocate_shared_memory(ttgl.float16, [block_m, XBLOCK], smem_layout)
+        bar = mbarrier.allocate_mbarrier(batch=1)
+        mbarrier.init(bar.index(0), count=1)
+        ttgl.warp_specialize([(writer, (full, tail, input_desc, bar, blocked_layout_wide)),
+                              (reader, (tail, dummy, bar, blocked_layout))], [4], [32])
+
+    block_m = XBLOCK.value * num_ctas
+    input = torch.randn((block_m, XBLOCK.value), device=device, dtype=torch.float16)
+    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2,
+                                           cga_layout=default_cga_layout(num_ctas, 2))
+    input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [block_m, XBLOCK.value], shared_layout)
+    kernel[(1, )](input_desc, num_warps=4, num_ctas=num_ctas)
+
+
 @pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer",
                    run=False)
 @pytest.mark.parametrize("FAILURE", [True, False])
@@ -2395,10 +2974,15 @@ def test_aliasing_tensor_visibility_outstanding_read(FAILURE, device, run_wrappe
         blocked_layout_write: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, XBLOCK // 2],
                                                                   threads_per_warp=[32, 1], warps_per_cta=[4, 1],
                                                                   order=[0, 1], cga_layout=cga_layout)
+        blocked_layout_full: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, XBLOCK * 2],
+                                                                 threads_per_warp=[32, 1], warps_per_cta=[4, 1],
+                                                                 order=[0, 1], cga_layout=cga_layout)
         smem = ttgl.allocate_shared_memory(ttgl.float32, [block_m, XBLOCK], smem_layout)
         tmem_layout: ttgl.constexpr = blackwell.TensorMemoryLayout([XBLOCK, XBLOCK * 2], col_stride=1,
                                                                    cga_layout=cga_layout)
-        tmem = blackwell.allocate_tensor_memory(ttgl.float32, [block_m, XBLOCK * 2], tmem_layout)
+        tmem = blackwell.allocate_tensor_memory(
+            ttgl.float32, [block_m, XBLOCK * 2], tmem_layout, value=ttgl.zeros([block_m, XBLOCK * 2], ttgl.float32,
+                                                                               blocked_layout_full))
         bar = mbarrier.allocate_mbarrier(batch=1)
         mbarrier.init(bar.index(0), count=1)
         alias0 = tmem.slice(0, XBLOCK)
@@ -2481,20 +3065,29 @@ def test_aliasing_commit_tracking(MISSING_WAIT, OVERLAP, device, run_wrapper, mo
 @gluon.jit
 def async_copy_mma_write_after_read_kernel(a_ptr, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
                                            BLOCK_K: ttgl.constexpr):
+    a_smem_layout: ttgl.constexpr = ttgl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], ttgl.float16,
+                                                                           cga_layout=mma_cga_layout(
+                                                                               ttgl.num_ctas(), 0))
     blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 4], threads_per_warp=[32, 1],
                                                         warps_per_cta=[ttgl.num_warps(), 1], order=[0, 1],
-                                                        cga_layout=mma_cga_layout(ttgl.num_ctas(), 0))
+                                                        cga_layout=a_smem_layout.cga_layout)
     a_smem = ttgl.allocate_shared_memory(
         ttgl.float16,
         [BLOCK_M, BLOCK_K],
-        ttgl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], ttgl.float16,
-                                               cga_layout=mma_cga_layout(ttgl.num_ctas(), 0)),
+        a_smem_layout,
+        value=ttgl.zeros([BLOCK_M, BLOCK_K], ttgl.float16, blocked_layout),
     )
+    b_smem_layout: ttgl.constexpr = ttgl.NVMMASharedLayout.get_default_for([BLOCK_K, BLOCK_N], ttgl.float16,
+                                                                           cga_layout=mma_cga_layout(
+                                                                               ttgl.num_ctas(), 1))
+    blocked_layout_b: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 4], threads_per_warp=[32, 1],
+                                                          warps_per_cta=[ttgl.num_warps(), 1], order=[0, 1],
+                                                          cga_layout=b_smem_layout.cga_layout)
     b_smem = ttgl.allocate_shared_memory(
         ttgl.float16,
         [BLOCK_K, BLOCK_N],
-        ttgl.NVMMASharedLayout.get_default_for([BLOCK_K, BLOCK_N], ttgl.float16,
-                                               cga_layout=mma_cga_layout(ttgl.num_ctas(), 1)),
+        b_smem_layout,
+        value=ttgl.zeros([BLOCK_K, BLOCK_N], ttgl.float16, blocked_layout_b),
     )
 
     bar = mbarrier.allocate_mbarrier()
@@ -2533,17 +3126,23 @@ def test_mma_read_async_copy_write(run_wrapper, monkeypatch, num_ctas):
 @gluon.jit
 def load_local_alloc_mma_write_after_read_kernel(a_ptr, K, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
                                                  BLOCK_K: ttgl.constexpr):
-    blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 4], threads_per_warp=[32, 1],
-                                                        warps_per_cta=[ttgl.num_warps(), 1], order=[0, 1],
-                                                        cga_layout=mma_cga_layout(ttgl.num_ctas(), 0))
     a_smem_layout: ttgl.constexpr = ttgl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], ttgl.float16,
                                                                            cga_layout=mma_cga_layout(
                                                                                ttgl.num_ctas(), 0))
+    blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 4], threads_per_warp=[32, 1],
+                                                        warps_per_cta=[ttgl.num_warps(), 1], order=[0, 1],
+                                                        cga_layout=a_smem_layout.cga_layout)
+    b_smem_layout: ttgl.constexpr = ttgl.NVMMASharedLayout.get_default_for([BLOCK_K, BLOCK_N], ttgl.float16,
+                                                                           cga_layout=mma_cga_layout(
+                                                                               ttgl.num_ctas(), 1))
+    blocked_layout_b: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 4], threads_per_warp=[32, 1],
+                                                          warps_per_cta=[ttgl.num_warps(), 1], order=[0, 1],
+                                                          cga_layout=b_smem_layout.cga_layout)
     b_smem = ttgl.allocate_shared_memory(
         ttgl.float16,
         [BLOCK_K, BLOCK_N],
-        ttgl.NVMMASharedLayout.get_default_for([BLOCK_K, BLOCK_N], ttgl.float16,
-                                               cga_layout=mma_cga_layout(ttgl.num_ctas(), 1)),
+        b_smem_layout,
+        value=ttgl.zeros([BLOCK_K, BLOCK_N], ttgl.float16, blocked_layout_b),
     )
 
     bar = mbarrier.allocate_mbarrier()

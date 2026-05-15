@@ -38,7 +38,6 @@ from triton._internal_testing import (
     is_hip_gfx1250,
     is_xpu,
     is_xpu_cri,
-    get_arch,
     torch_float8_dtypes,
     torch_dtypes,
     numpy_random,
@@ -938,6 +937,25 @@ def test_unary_op(dtype_x, expr, num_ctas, device):
     _test_unary(dtype_x, expr, device=device, num_ctas=num_ctas)
 
 
+@triton.jit
+def _neg_signed_zero_kernel(x_ptr, y_ptr):
+    offsets = tl.arange(0, 2)
+    x = tl.load(x_ptr + offsets)
+    tl.store(y_ptr + offsets, -x)
+
+
+@pytest.mark.interpreter
+def test_neg_preserves_signed_zero(device):
+    x = np.array([0.0, -0.0], dtype=np.float32)
+    y = np.empty_like(x)
+    x_tri = to_triton(x, device=device)
+    y_tri = to_triton(y, device=device)
+
+    _neg_signed_zero_kernel[(1, )](x_tri, y_tri)
+
+    np.testing.assert_array_equal(np.signbit(to_numpy(y_tri)), np.array([True, False]))
+
+
 # ----------------
 # test math ops
 # ----------------
@@ -1053,6 +1071,29 @@ def test_precise_math(expr_prec, expr_ref, num_ctas, device):
             out_ref = torch.div(x.cpu().to(torch.float64),
                                 y.cpu().to(torch.float64)).to(torch.float32).to(device=device)
     assert torch.all(out == out_ref)  # bitwise exact
+
+
+@pytest.mark.interpreter
+def test_fdiv_ieee_rounding(device):
+
+    @triton.jit
+    def kernel(X, Y, OUT_IEEE, OUT_RN, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        x = tl.load(X + offs)
+        y = tl.load(Y + offs)
+        ieee = tl.math.fdiv(x, y, ieee_rounding=True)
+        rn = tl.math.div_rn(x, y)
+        tl.store(OUT_IEEE + offs, ieee)
+        tl.store(OUT_RN + offs, rn)
+
+    shape = (128, )
+    x = torch.randn(shape, dtype=torch.float32, device=device)
+    y = torch.randn(shape, dtype=torch.float32, device=device) + 1e-6
+    out_ieee = torch.zeros(shape, dtype=torch.float32, device=device)
+    out_rn = torch.zeros(shape, dtype=torch.float32, device=device)
+
+    kernel[(1, )](x, y, out_ieee, out_rn, BLOCK=shape[0], num_ctas=1)
+    assert torch.all(out_ieee == out_rn)  # bitwise exact
 
 
 # ----------------
@@ -3200,6 +3241,12 @@ def get_test_dot_base_cases():
 
 
 # M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
+def get_test_dot_small_fp64_cases():
+    return [(*shape, 1, False, False, 'none', 'ieee', 'float64', 'float64', 1, None)
+            for shape in [(8, 8, 4), (8, 8, 8), (16, 8, 4), (8, 8, 16)]]
+
+
+# M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
 def get_test_dot_softmax():
     return [(128, 128, 64, 8, False, False, 'softmax', 'ieee', 'float16', 'float32', 1, None)]
 
@@ -3327,7 +3374,8 @@ def get_test_small_dots_cases():
     get_test_dot_small_mn_wmma_cases() + \
     get_test_dot_small_k_wmma_cases() + \
     get_test_dot_softmax() + \
-    get_test_small_dots_cases())
+    get_test_small_dots_cases() + \
+    get_test_dot_small_fp64_cases())
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size,
              num_ctas, device):
@@ -3341,7 +3389,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
             if (M < 8 or N < 16 or (K < 16 and in_dtype == 'float16') or (K < 8 and in_dtype == 'float32')):
                 pytest.xfail("XPU: small dots are not supported")
         elif not is_hip() and K < 16:
-            pytest.skip("small dots are supported only on HIP at the moment")
+            if in_dtype != 'float64':
+                pytest.skip("small dots are supported only on HIP at the moment")
         if is_cuda():
             capability = torch.cuda.get_device_capability()
 
@@ -4456,7 +4505,7 @@ def test_masked_load_shared_memory(dtype, device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("cache", ["", ".ca", ".cg", ".cv"])
+@pytest.mark.parametrize("cache", ["", ".ca", ".cg", ".cs", ".cv"])
 def test_load_cache_modifier(cache, device):
     src = torch.empty(128, device=device)
     dst = torch.empty(128, device=device)
@@ -4470,34 +4519,77 @@ def test_load_cache_modifier(cache, device):
     pgm = _kernel[(1, )](dst, src, CACHE=cache)
 
     if is_hip():
-        target_arch = get_arch()
-        # TODO: support testing for remaining architectures
-        if 'gfx94' not in target_arch:
-            return
         amdgcn = pgm.asm['amdgcn']
-        cg_cache_modifier_str = 'nt'
-        cv_cache_modifier_str = 'sc0 sc1'
         buffer_load_line = [line for line in amdgcn.splitlines() if "buffer_load" in line]
         global_load_line = [line for line in amdgcn.splitlines() if "global_load" in line]
-        load_line = global_load_line[0] if global_load_line else buffer_load_line[0]
-        if cache == '' or cache == '.ca':
-            assert cg_cache_modifier_str not in load_line
-        if cache == '.cg':
-            assert cg_cache_modifier_str in load_line
-        if cache == '.cv':
-            assert cv_cache_modifier_str in load_line
+        compiled_cache_modifiers = "invalid"
+        expected_cache_modifiers = {}
+        if is_hip_cdna() or is_hip_cdna2():
+            # cache modifiers are not properly supported on CDNA1 and CDNA2, just check that kernel runs
+            return
+        if buffer_load_line:
+            # ", [0-9a-z]" matches last operand, which is expected to be constant
+            # (offen)? matches an optional flag, the rest is expected to be cache related flags
+            m = re.match(".*, [0-9a-z]* (offen)? *(.*)$", buffer_load_line[0])
+            compiled_cache_modifiers = m.group(2)
+            if is_hip_cdna():
+                expected_cache_modifiers = {"": "", \
+                                            ".ca": "", \
+                                            ".cg": "sc0 nt", \
+                                            ".cs": "sc0 nt", \
+                                            ".cv": "sc0 sc1"}
+            elif is_hip_rdna3():
+                expected_cache_modifiers = {"": "", \
+                                            ".ca": "", \
+                                            ".cg": "glc", \
+                                            ".cs": "glc slc dlc", \
+                                            ".cv": "glc slc dlc"}
+            elif is_hip_rdna4() or is_hip_gfx1250():
+                expected_cache_modifiers = {"": "", \
+                                            ".ca": "", \
+                                            ".cg": "scope:SCOPE_DEV", \
+                                            ".cs": "th:TH_LOAD_NT", \
+                                            ".cv": "th:TH_LOAD_BYPASS scope:SCOPE_SYS"}
+        else:
+            assert global_load_line
+            # .*, [0-9a-z\[\]:]* matches last operand
+            # (scale_offset)? optional flag, the reset is expected to be cache flags
+            m = re.match(".*, [0-9a-z\\[\\]:]*( scale_offset)? *(.*)$", global_load_line[0])
+            compiled_cache_modifiers = m.group(2)
+
+            if is_hip_cdna():
+                expected_cache_modifiers = {"": "", \
+                                            ".ca": "", \
+                                            ".cg": "nt", \
+                                            ".cs": "nt", \
+                                            ".cv": "sc0 sc1"}
+            elif is_hip_rdna3():
+                expected_cache_modifiers = {"": "", \
+                                            ".ca": "", \
+                                            ".cg": "slc dlc", \
+                                            ".cs": "slc dlc", \
+                                            ".cv": "glc dlc"}
+            elif is_hip_rdna4() or is_hip_gfx1250():
+                expected_cache_modifiers = {"": "", \
+                                            ".ca": "", \
+                                            ".cg": "th:TH_LOAD_NT", \
+                                            ".cs": "th:TH_LOAD_NT", \
+                                            ".cv": "th:TH_LOAD_NT scope:SCOPE_SYS"}
+        for cache_mod in expected_cache_modifiers:
+            if cache_mod == cache:
+                assert compiled_cache_modifiers == expected_cache_modifiers[cache_mod]
+            else:
+                assert compiled_cache_modifiers != expected_cache_modifiers[cache_mod] or expected_cache_modifiers[
+                    cache_mod] == expected_cache_modifiers[cache]
 
     if is_cuda():
         ptx = pgm.asm['ptx']
-        if cache == '':
-            assert 'ld.global.ca' not in ptx
-            assert 'ld.global.cg' not in ptx
-        if cache == '.cg':
-            assert 'ld.global.cg' in ptx
-            assert 'ld.global.ca' not in ptx
-        if cache == '.ca':
-            assert 'ld.global.ca' in ptx
-            assert 'ld.global.cg' not in ptx
+        all_modifiers = ['.ca', '.cg', '.cs', '.cv']
+        for modifier in all_modifiers:
+            if modifier == cache:
+                assert f'ld.global{modifier}' in ptx
+            else:
+                assert f'ld.global{modifier}' not in ptx
 
 
 @pytest.mark.interpreter
@@ -4598,53 +4690,81 @@ def test_store_cache_modifier(cache, device):
     pgm = _kernel[(1, )](dst, src, CACHE=cache)
 
     if is_hip():
-        target_arch = get_arch()
-        # TODO: support testing for remaining architectures
-        if 'gfx94' not in target_arch:
-            return
         amdgcn = pgm.asm['amdgcn']
-        cs_cache_modifier_str = 'nt'
-        wt_cache_modifier_str = 'sc0 sc1'
+
         buffer_store_line = [line for line in amdgcn.splitlines() if "buffer_store" in line]
         global_store_line = [line for line in amdgcn.splitlines() if "global_store" in line]
-        store_line = global_store_line[0] if global_store_line else buffer_store_line[0]
-        if cache == '' or cache == '.cg':
-            assert cs_cache_modifier_str not in store_line
-            assert wt_cache_modifier_str not in store_line
-        if cache == '.cs':
-            assert cs_cache_modifier_str in store_line
-            assert wt_cache_modifier_str not in store_line
-        if cache == '.wt':
-            assert cs_cache_modifier_str not in store_line
-            assert wt_cache_modifier_str in store_line
+        compiled_cache_modifiers = "invalid"
+        expected_cache_modifiers = {}
+        if is_hip_cdna() or is_hip_cdna2():
+            # cache modifiers are not properly supported on CDNA1 and CDNA2, just check that kernel runs
+            return
+        if buffer_store_line:
+            # ", [0-9a-z]" matches last operand, which is expected to be constant
+            # (offen)? matches an optional flag, the rest is expected to be cache related flags
+            m = re.match(".*, [0-9a-z]* (offen)? *(.*)$", buffer_store_line[0])
+            compiled_cache_modifiers = m.group(2)
+            if is_hip_cdna():
+                expected_cache_modifiers = {"": "", \
+                                            ".wb": "", \
+                                            ".cg": "", \
+                                            ".cs": "sc0 nt", \
+                                            ".wt": "sc0 sc1"}
+            elif is_hip_rdna3():
+                expected_cache_modifiers = {"": "", \
+                                            ".wb": "", \
+                                            ".cg": "", \
+                                            ".cs": "glc slc dlc", \
+                                            ".wt": "glc slc dlc"}
+            elif is_hip_rdna4() or is_hip_gfx1250():
+                expected_cache_modifiers = {"": "", \
+                                            ".wb": "", \
+                                            ".cg": "scope:SCOPE_DEV", \
+                                            ".cs": "th:TH_STORE_NT"}
+                if is_hip_rdna4():
+                    expected_cache_modifiers[".wt"] = "scope:SCOPE_SYS"
+                elif is_hip_gfx1250():
+                    expected_cache_modifiers[".wt"] = "th:TH_STORE_BYPASS scope:SCOPE_SYS"
+        else:
+            assert global_store_line
+            # .*, [0-9a-z\[\]:]* matches last operand
+            # (scale_offset)? optional flag, the reset is expected to be cache flags
+            m = re.match(".*, [0-9a-z\\[\\]:]*( scale_offset)? *(.*)$", global_store_line[0])
+            compiled_cache_modifiers = m.group(2)
+
+            if is_hip_cdna():
+                expected_cache_modifiers = {"": "", \
+                                            ".wb": "", \
+                                            ".cg": "", \
+                                            ".cs": "nt", \
+                                            ".wt": "sc0 sc1"}
+            elif is_hip_rdna3():
+                expected_cache_modifiers = {"": "", \
+                                            ".wb": "", \
+                                            ".cg": "", \
+                                            ".cs": "glc slc dlc", \
+                                            ".wt": "dlc"}
+            elif is_hip_rdna4() or is_hip_gfx1250():
+                expected_cache_modifiers = {"": "", \
+                                            ".wb": "", \
+                                            ".cg": "", \
+                                            ".cs": "th:TH_STORE_NT", \
+                                            ".wt": "th:TH_STORE_NT scope:SCOPE_SYS"}
+        for cache_mod in expected_cache_modifiers:
+            if cache_mod == cache:
+                assert compiled_cache_modifiers == expected_cache_modifiers[cache_mod]
+            else:
+                assert compiled_cache_modifiers != expected_cache_modifiers[cache_mod] or expected_cache_modifiers[
+                    cache_mod] == expected_cache_modifiers[cache]
 
     if is_cuda():
         ptx = pgm.asm['ptx']
-        if cache == '':
-            assert 'st.global.wb' not in ptx
-            assert 'st.global.cg' not in ptx
-            assert 'st.global.cs' not in ptx
-            assert 'st.global.wt' not in ptx
-        if cache == '.wb':
-            assert 'st.global.wb' in ptx
-            assert 'st.global.cg' not in ptx
-            assert 'st.global.cs' not in ptx
-            assert 'st.global.wt' not in ptx
-        if cache == '.cg':
-            assert 'st.global.wb' not in ptx
-            assert 'st.global.cg' in ptx
-            assert 'st.global.cs' not in ptx
-            assert 'st.global.wt' not in ptx
-        if cache == '.cs':
-            assert 'st.global.wb' not in ptx
-            assert 'st.global.cg' not in ptx
-            assert 'st.global.cs' in ptx
-            assert 'st.global.wt' not in ptx
-        if cache == '.wt':
-            assert 'st.global.wb' not in ptx
-            assert 'st.global.cg' not in ptx
-            assert 'st.global.cs' not in ptx
-            assert 'st.global.wt' in ptx
+        all_modifiers = ['.wb', '.cg', '.cs', '.wt']
+        for modifier in all_modifiers:
+            if modifier == cache:
+                assert f'st.global{modifier}' in ptx
+            else:
+                assert f'st.global{modifier}' not in ptx
 
 
 @pytest.mark.interpreter
@@ -5987,9 +6107,10 @@ def test_enable_fp_fusion(enable_fp_fusion, default_override, device, fresh_knob
     else:
         h = mul_add.warmup(data, grid=(1, ), enable_fp_fusion=enable_fp_fusion)
 
-    if not is_cuda():
-        return
-    found_fma = re.search(r'(mad|fma)\.r[nzmp]\.(ftz\.)?f32', h.asm["ptx"]) is not None
+    if is_cuda():
+        found_fma = re.search(r'(mad|fma)\.r[nzmp]\.(ftz\.)?f32', h.asm["ptx"]) is not None
+    else:
+        found_fma = "fmul contract" in h.asm["llir"] and "fadd contract" in h.asm["llir"]
     assert found_fma == enable_fp_fusion
 
 

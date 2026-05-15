@@ -42,6 +42,10 @@ public:
     return isa<ttng::TMAOpInterface>(op);
   }
 
+  bool isCLCOp(Operation *op) const override {
+    return isa<ttng::CLCTryCancelOp>(op);
+  }
+
   std::optional<BarrierInitInfo>
   getBarrierInitInfo(Operation *op) const override {
     if (auto initOp = dyn_cast<ttng::InitBarrierOp>(op)) {
@@ -89,8 +93,6 @@ public:
     };
     if (auto initOp = dyn_cast<ttng::InitBarrierOp>(op))
       mask = getBarrierMask(initOp.getAlloc());
-    if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op))
-      mask = getBarrierMask(expectOp.getAlloc());
     if (auto waitOp = dyn_cast<ttng::WaitBarrierOp>(op))
       mask = getBarrierMask(waitOp.getAlloc());
     if (auto invalOp = dyn_cast<ttng::InvalBarrierOp>(op))
@@ -101,6 +103,11 @@ public:
     }
     if (auto storeOp = dyn_cast<ttng::TMAStoreLikeOpInterface>(op))
       mask = getBlockBroadcastMask(storeOp.getSrc().getType());
+    if (isa<ttng::CLCTryCancelOp>(op) && ttg::lookupNumCTAs(op) > 1) {
+      Value ctaId = tti::ExperimentalClusterCTAIdOp::create(b, b.getLoc());
+      return arith::CmpIOp::create(b, arith::CmpIPredicate::eq, ctaId,
+                                   arith::ConstantIntOp::create(b, 0, 32));
+    }
 
     // In 2CTA tcgen05 and tmem_copy, only the even CTA in each (i, i^1) pair
     // issues the op.
@@ -122,13 +129,10 @@ public:
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
       info->pred = expectOp.getPred();
-      auto barrierTy = expectOp.getAlloc().getType();
-      int txCount = expectOp.getSize() * ttg::lookupNumCTAs(op) /
-                    barrierTy.getNumElements();
-      info->barriers.push_back({expectOp.getBarrier(), nullptr,
-                                /*count=*/1,
-                                MemEffectsOpInfo::BarrierTrackingMode::Frontier,
-                                /*txCount=*/txCount});
+      info->barriers.push_back(
+          {expectOp.getBarrier(), nullptr,
+           /*count=*/1, MemEffectsOpInfo::BarrierTrackingMode::Frontier,
+           /*txCount=*/static_cast<int>(expectOp.getSize())});
     }
     if (auto loadOp = dyn_cast<ttng::TMEMLoadOp>(op)) {
       info.emplace();
@@ -225,6 +229,23 @@ public:
            /*txCount=*/-txCount});
       info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
                                         loadOp.getResult());
+    }
+    if (auto tryCancelOp = dyn_cast<ttng::CLCTryCancelOp>(op)) {
+      info.emplace();
+      info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
+      info->barriers.push_back(
+          {tryCancelOp.getMbarrier(), nullptr, /*count=*/0,
+           MemEffectsOpInfo::BarrierTrackingMode::EffectWrites,
+           /*txCount=*/
+           -static_cast<int>(tti::getMemDescLength(tryCancelOp.getResult()))});
+      info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
+                                        tryCancelOp.getResult());
+    }
+    if (auto loadResultOp = dyn_cast<ttng::CLCLoadResultOp>(op)) {
+      info.emplace();
+      info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
+      info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Read,
+                                        loadResultOp.getSrc());
     }
     if (auto storeOp = dyn_cast<ttng::TMAStoreLikeOpInterface>(op)) {
       info.emplace();
