@@ -2435,9 +2435,12 @@ private:
     unsigned prefetchRowsNum = 0x1 << regBases.size();
     int numWarpsM = 1, numWarpsN = 1;
 
+    static const bool useCoorpPrefetch =
+        tools::getBoolEnv("TRITON_INTEL_ENABLE_COORP_GATHER_PREFETCH");
+
     for (size_t i = 0; i < warpBases.size(); i++) {
       if (warpBases[i][/*row dim*/ 0] == 0) {
-        if (numWarpsM < prefetchRowsNum) {
+        if (useCoorpPrefetch & (numWarpsM < prefetchRowsNum)) {
           warpMappingBases[i] = {numWarpsM, 0};
           numWarpsM <<= 1;
           continue;
@@ -2471,10 +2474,12 @@ private:
         unpackLLElements(loc, adaptor.getXOffsets(), rewriter);
     VectorType offsetXVecType = vec_ty(offsetsX[0].getType(), offsetsX.size());
     Value offsetXVec = b.undef(offsetXVecType);
-    for (size_t i = 0; i < offsetsX.size(); i++) {
-      Value indexVal =
-          LLVM::createIndexConstant(rewriter, loc, typeConverter, i);
-      offsetXVec = b.insert_element(offsetXVec, offsetsX[i], indexVal);
+    if (useCoorpPrefetch) {
+      for (size_t i = 0; i < offsetsX.size(); i++) {
+        Value indexVal =
+            LLVM::createIndexConstant(rewriter, loc, typeConverter, i);
+        offsetXVec = b.insert_element(offsetXVec, offsetsX[i], indexVal);
+      }
     }
     DescriptorFields desc =
         unpackDescriptor(adaptor.getDesc(), descRank, loc, rewriter);
@@ -2492,14 +2497,19 @@ private:
         rewriter, loc, i32_ty,
         mlir::gpu::SubgroupIdOp::create(rewriter, loc,
                                         /*upperBound=*/nullptr));
-    for (size_t row = 0; row < prefetchColsNumPerWarp; row++) {
+    for (size_t row = 0; row < prefetchRowsNumPerWarp; row++) {
       Value addrElem = targetInfo.shuffleIdx(rewriter, loc, baseAddress, 0);
       // update offset X.
       auto offsets =
           applyLinearLayout(loc, rewriter, warpMapping, {{kWarp, warpId}});
-      Value offsetXIdx = b.add(offsets[0].second, b.i32_val(row * numWarpsM));
-      Value offsetX =
-          b.zext(int_ty(64), b.extract_element(offsetXVec, offsetXIdx));
+      Value offsetX;
+      if (useCoorpPrefetch) {
+        Value offsetXIdx = b.add(offsets[0].second, b.i32_val(row * numWarpsM));
+        offsetX = b.zext(int_ty(64), b.extract_element(offsetXVec, offsetXIdx));
+      } else {
+        offsetX = b.zext(int_ty(64), offsetsX[row]);
+      }
+
       Value pred = b.icmp_ule(offsetX, desc.shapes[/*row dim*/ 0]);
       Value offsetXStrided = b.mul(offsetX, desc.strides[/*row dim*/ 0]);
       addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, offsetXStrided);
@@ -2511,7 +2521,7 @@ private:
                                      desc.shapes[/*row dim*/ 1]));
       addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, offsetY);
 
-      for (size_t col = 0; col < prefetchOpsNumPerRow; col++) {
+      for (size_t col = 0; col < prefetchColsNumPerWarp; col++) {
         addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem,
                          b.i32_val(col * (numWarpsN * prefetchBitsNum *
                                           prefetchVecSize / elemSizeInBits)));
