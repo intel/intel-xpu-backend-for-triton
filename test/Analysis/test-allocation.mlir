@@ -1089,7 +1089,7 @@ tt.func @partitioned_shared_padded_alloc() {
 
 // Regression test for sub-byte element types (i1): bytes per element must use
 // ceil(bitwidth, 8) = 1, not bitwidth/8 = 0, to avoid a zero-size allocation.
-// 32x16 = 512 elements, ceil(1, 8) = 1 byte/elem -> size = 512.
+// 32x16 = 512 elements, ceil(1 bit / 8 bits per byte) = 1 byte/elem -> size = 512.
 // expected-remark @below {{sub_byte_elem_type_alloc}}
 // expected-remark @below {{size = 512}}
 tt.func @sub_byte_elem_type_alloc() {
