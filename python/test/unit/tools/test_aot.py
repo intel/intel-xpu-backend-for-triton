@@ -369,12 +369,9 @@ int main(int argc, char ** argv) {{
 
     // initialize sycl handles
     sycl::queue q{{sycl::gpu_selector_v}};
-    sycl::ext::intel::device_ptr<sycl::float16> A =
-        sycl::malloc_device<sycl::float16>(M * K * 2, q);
-    sycl::ext::intel::device_ptr<sycl::float16> B =
-        sycl::malloc_device<sycl::float16>(K * N * 2, q);
-    sycl::ext::intel::device_ptr<sycl::float16> C =
-        sycl::malloc_device<sycl::float16>(M * N * 4, q);
+    sycl::float16* A = sycl::malloc_device<sycl::float16>(M * K * 2, q);
+    sycl::float16* B = sycl::malloc_device<sycl::float16>(K * N * 2, q);
+    sycl::float16* C = sycl::malloc_device<sycl::float16>(M * N * 4, q);
 
     // initialize input data
     int16_t hA[M * K];
