@@ -496,6 +496,16 @@ struct LoadStoreConversionBase {
   }
 
   // Convert Triton cache modifier to Intel GEN load cache control enum.
+  //
+  // Explicit cache modifiers (cg/cv/ca) always win. When no cache modifier is
+  // set, fall back to the frontend-provided eviction policy hint (e.g.
+  // inductor's `eviction_policy='evict_last'`) and route it to the closest
+  // LSC cache mode:
+  //   EVICT_FIRST -> L1IAR_L3C  (invalidate-after-read: data is used once;
+  //                              free the L1 line immediately after delivery)
+  //   EVICT_LAST  -> L1C_L3C    (cache at all levels: keep the line warm for
+  //                              anticipated reuse)
+  //   NORMAL      -> DEFAULT    (let the hardware decide)
   template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
                                  OpType, LoadOp, DescriptorLoadOp>::value>>
   TritonGEN::LoadCacheControl tritonToIntelCacheModifier(OpType &op) const {
@@ -509,6 +519,14 @@ struct LoadStoreConversionBase {
      **/
     switch (cacheModifier) {
     case CacheModifier::NONE:
+      switch (op.getEvict()) {
+      case EvictionPolicy::EVICT_FIRST:
+        return TritonGEN::LoadCacheControl::L1IAR_L3C;
+      case EvictionPolicy::EVICT_LAST:
+        return TritonGEN::LoadCacheControl::L1C_L3C;
+      case EvictionPolicy::NORMAL:
+        break;
+      }
       return TritonGEN::LoadCacheControl::DEFAULT;
     case CacheModifier::CG:
       return TritonGEN::LoadCacheControl::L1UC_L3C;
@@ -549,8 +567,9 @@ struct LoadStoreConversionBase {
     }
   }
 
-  template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
-                                 OpType, LoadOp, StoreOp>::value>>
+  template <typename OpType,
+            typename = std::enable_if_t<llvm::is_one_of<
+                OpType, LoadOp, StoreOp, DescriptorLoadOp>::value>>
   bool getNonTemporalFlag(OpType op) const {
     switch (op.getCache()) {
     case triton::CacheModifier::CG:
@@ -558,6 +577,16 @@ struct LoadStoreConversionBase {
     case triton::CacheModifier::CV:
       return true;
     case triton::CacheModifier::CA:
+      return false;
+    case triton::CacheModifier::NONE:
+      // No explicit cache modifier: derive from eviction policy hint.
+      // EVICT_FIRST implies single-use; map to nontemporal so IGC bypasses L1.
+      // EVICT_LAST implies reuse; keep the default (temporal) behavior.
+      // Only load ops carry eviction policy; stores always return false here.
+      if constexpr (std::is_same_v<OpType, LoadOp> ||
+                    std::is_same_v<OpType, DescriptorLoadOp>)
+        return op.getEvict() == triton::EvictionPolicy::EVICT_FIRST;
+      return false;
     default:
       return false;
     }
@@ -2267,7 +2296,7 @@ struct DescriptorLoadOpConversion
       auto createLoadWithAttrs = [&]() {
         return SmallVector<Value>{b.load(retTy, addrElem, alignment,
                                          /*isVolatile=*/false,
-                                         /*isNonTemporal=*/false)};
+                                         getNonTemporalFlag(op))};
       };
 
       Value ret;
