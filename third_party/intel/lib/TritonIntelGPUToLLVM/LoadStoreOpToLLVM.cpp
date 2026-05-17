@@ -4018,7 +4018,7 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
     }
 
     // Surface parameters from op attributes.
-    Value baseWidth = b.i32_val(op.getBaseWidth());
+    Value baseWidth = b.i32_val(op.getBaseWidth() * cfg.vBlocks);
     Value baseHeight = b.i32_val(op.getBaseHeight());
     Value pitch = b.i32_val(op.getBasePitch());
 

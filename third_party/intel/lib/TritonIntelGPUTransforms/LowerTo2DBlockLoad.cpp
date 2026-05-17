@@ -350,6 +350,7 @@ private:
     unsigned rowDim, colDim;
     int tileWidth = -1;
     int tileHeight = -1;
+    int numPackedVals = -1;
     bool isTranspose = false;
     if (has1DReshapeStride) {
       // 1D reshape: conventional dims, no tile validation needed.
@@ -374,6 +375,7 @@ private:
       tileWidth = sizeInfo.tileWidth;
       tileHeight = sizeInfo.tileHeight;
       isTranspose = sizeInfo.transpose;
+      numPackedVals = sizeInfo.numElemPerPackedVal;
     }
 
     // For the 2D block load surface, the pitch dimension is always the
@@ -388,8 +390,6 @@ private:
     // width/height.
     unsigned surfaceWidthDim = isTranspose ? rowDim : colDim;
     unsigned surfaceHeightDim = isTranspose ? colDim : rowDim;
-    int64_t baseWidthBytes =
-        tensorTy.getDimSize(surfaceWidthDim) * elemSizeInBits / 8;
     constexpr int64_t MIN_PITCH = 64;
 
     int64_t pitch;
@@ -405,6 +405,16 @@ private:
       // rows are identical, so we only need height=1 with a dummy pitch.
       int64_t rowStride = getStride(strideAnalysis, op.getPtr(), rowDim);
       isBroadcast = (rowStride == 0);
+    }
+
+    int64_t perWarpWidth;
+    if (isBroadcast || has1DReshapeStride)
+      perWarpWidth = tensorTy.getDimSize(surfaceWidthDim);
+    else
+      perWarpWidth = tileWidth * numPackedVals;
+    int64_t baseWidthBytes = perWarpWidth * elemSizeInBits / 8;
+
+    if (!has1DReshapeStride) {
       if (isBroadcast) {
         pitch = std::max((int64_t)MIN_PITCH, baseWidthBytes);
       } else {
@@ -443,8 +453,13 @@ private:
     Location loc = op.getLoc();
 
     // Compute constant surface parameters.
+    // For broadcast loads, height is always 1.
+    // For non-broadcast, use the per-warp height from getBlockIOTileSize.
     int64_t baseHeightRows =
-        isBroadcast ? 1 : tensorTy.getDimSize(surfaceHeightDim);
+        isBroadcast
+            ? 1
+            : (has1DReshapeStride ? tensorTy.getDimSize(surfaceHeightDim)
+                                  : tileHeight);
 
     auto memLayout = memoryRowMajor ? ttgi::BlockIOMode::RowMajor
                                     : ttgi::BlockIOMode::ColumnMajor;
