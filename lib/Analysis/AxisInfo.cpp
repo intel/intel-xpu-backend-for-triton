@@ -454,13 +454,9 @@ private:
     // when divisibility >= contiguity: the window starts at k*div and has
     // length cont <= div, so it stays within [k*div, (k+1)*div - 1] which
     // never spans zero.
-    if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
-        AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
-      if constexpr (!std::is_same_v<OpTy, arith::DivSIOp>) {
-        constancy = std::max(constancy, gcd(lhs.getContiguity(dim),
-                                            lhs.getDivisibility(dim),
-                                            rhs.getDivisibility(dim)));
-      } else if (lhs.getDivisibility(dim) >= lhs.getContiguity(dim)) {
+    if constexpr (!std::is_same_v<OpTy, arith::DivSIOp>) {
+      if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
+          AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
         constancy = std::max(constancy, gcd(lhs.getContiguity(dim),
                                             lhs.getDivisibility(dim),
                                             rhs.getDivisibility(dim)));
@@ -529,12 +525,9 @@ private:
     // For signed remainder, we can still apply this optimization when the
     // contiguous window is guaranteed not to cross zero (divisibility >=
     // contiguity ensures the window stays within one sign region).
-    if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
+    if constexpr (!std::is_same_v<OpTy, arith::RemSIOp>) {
+      if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
         AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
-      if constexpr (!std::is_same_v<OpTy, arith::RemSIOp>) {
-        contiguity = gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
-                         rhs.getDivisibility(dim));
-      } else if (lhs.getDivisibility(dim) >= lhs.getContiguity(dim)) {
         contiguity = gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
                          rhs.getDivisibility(dim));
       }
