@@ -827,7 +827,6 @@ struct BlockIOTileSizeInfo {
 };
 #endif
 
-
   /// Configuration produced by configureDPASLoadTypes().
   struct DPASLoadConfig {
     Type packedDPASOperandType; // null if not DPAS
@@ -3503,9 +3502,11 @@ struct DescriptorGatherOpConversion
                BlockIOMode::RowMajor &&
            "TDESC gather has to be row_major");
 
-    unsigned elemSizeInBits = valueElemTy.getIntOrFloatBitWidth();
-    BlockIOTileSizeInfo sizeInfo = get1DBlockIOTileSize(
-        llEncoding.value(), resultRank - 1, elemSizeInBits);
+    unsigned elemSizeInBits = std::max(8u, valueElemTy.getIntOrFloatBitWidth());
+    BlockIOTileSizeInfo sizeInfo =
+        getBlockIOTileSize<true, 8>(llEncoding.value(), resultRank - 1,
+                                    elemSizeInBits, nullptr, nullptr, false);
+
     if (!sizeInfo.isValid())
       return failure();
     // Extract members to regular variables for C++17 compatibility
@@ -3513,12 +3514,12 @@ struct DescriptorGatherOpConversion
     int tileHeight = sizeInfo.tileHeight;
     int tileWidth = sizeInfo.tileWidth;
     int numPackedVals = sizeInfo.numElemPerPackedVal;
-    int vBlocks = sizeInfo.vBlocks;
+    int vBlocks = 1; // sizeInfo.vBlocks;
     int rowDim = sizeInfo.rowDim;
     int colDim = sizeInfo.colDim;
     bool isTransposeRequired = sizeInfo.transpose;
     bool useVNNIFormat = sizeInfo.vnni;
-    assert(tileHeight == 1 && "1D block I/O should have tileHeight of 1");
+    // assert(tileHeight == 1 && "1D block I/O should have tileHeight of 1");
     assert(isTransposeRequired == false &&
            "1D block I/O should not require transpose");
     assert(useVNNIFormat == false &&
@@ -3527,13 +3528,18 @@ struct DescriptorGatherOpConversion
     assert(colDim == 1 && "only support colDim=1 for 1D block I/O");
     unsigned threadsPerWarp =
         TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());
-    assert(tileWidth == threadsPerWarp &&
-           "1D block I/O should have tileWidth equal to threads per warp");
+    // assert(tileWidth == threadsPerWarp &&
+    //        "1D block I/O should have tileWidth equal to threads per warp");
     std::optional<SetVector<unsigned>> regPackedBases =
         std::move(sizeInfo.regPackedBases);
 
-    unsigned numValuesPerLoad = vBlocks;
-    unsigned numElemsPerLoad = numPackedVals * numValuesPerLoad;
+    unsigned bytesPerLane = 16;
+    unsigned bytesPerRow = numPackedVals * tileWidth * elemSizeInBits / 8;
+    unsigned lanesPerRow = ceil(bytesPerRow, bytesPerLane);
+    assert(lanesPerRow * tileHeight == threadsPerWarp &&
+           "wrong in vector gather");
+    unsigned numValuesPerLoad = tileHeight * tileWidth / threadsPerWarp;
+    unsigned numElemsPerLoad = numValuesPerLoad * numPackedVals;
     DescriptorFields desc = unpackDescriptor(llDesc, descRank, loc, rewriter);
 
     StringAttr kRegister = S("register");
@@ -3555,11 +3561,101 @@ struct DescriptorGatherOpConversion
     // llvm::outs() << "shuffleMapping: " << shuffleMapping << "\n";
     // Get padding from the propagated attribute (set by
     // MaterializeBlockPointer).
+    Type packedType = IntegerType::get(ctx, elemSizeInBits * numPackedVals);
+    Type load1DGenXType = LLVM::getVectorType(packedType, numValuesPerLoad);
+    Type unpackedType = LLVM::getVectorType(valueElemTy, numElemsPerLoad);
+
     PaddingOption padding = PaddingOption::PAD_ZERO;
     if (auto paddingAttr = op->getAttrOfType<triton::PaddingOptionAttr>(
             TritonIntelGPUDialect::getDescPaddingAttrName()))
       padding = paddingAttr.getValue();
 
+    SmallVector<Value> loadedVals(numElems);
+    Value warpId = arith::IndexCastOp::create(
+        rewriter, loc, i32_ty,
+        mlir::gpu::SubgroupIdOp::create(rewriter, loc,
+                                        /*upperBound=*/nullptr));
+    for (size_t elemIdx = 0; elemIdx < numElems; elemIdx += numElemsPerLoad) {
+      unsigned registerIdx = regMapping.apply({{kRegister, elemIdx}})[0].second;
+
+      Value addrElem = desc.base;
+      // update offset Y.
+      addrElem = b.gep(ptr_ty(ctx, 1), valueElemTy, addrElem, offsetY);
+      auto offsets = applyLinearLayout(loc, rewriter, *llEncoding,
+                                       {{kRegister, b.i32_val(registerIdx)},
+                                        {kLane, b.i32_val(0)},
+                                        {kWarp, warpId},
+                                        {kBlock, b.i32_val(0)}});
+      for (auto [dim, offsetPair] : llvm::enumerate(offsets)) {
+        if (dim == colDim) {
+          addrElem =
+              b.gep(ptr_ty(ctx, 1), valueElemTy, addrElem, offsetPair.second);
+        }
+      }
+
+      SmallVector<Value> addrs;
+      for (size_t i = 0; i < tileHeight; ++i) {
+        Value indexVal =
+            LLVM::createIndexConstant(rewriter, loc, typeConverter, i);
+        unsigned offsetIdx =
+            regMapping.apply({{kRegister, elemIdx + i}})[0].second;
+        auto offsets = offMapping.apply(
+            {{kRegister, offsetIdx}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+
+        for (auto [dim, offsetIdx] : offsets) {
+          // Update offset X
+          Value offsetX = b.zext(int_ty(64), offsetsX[offsetIdx]);
+          Value offset64 = b.mul(offsetX, desc.strides[rowDim]);
+          Value addr0 = b.gep(ptr_ty(ctx, 1), valueElemTy, addrElem, offset64);
+          Value addr1 = b.gep(ptr_ty(ctx, 1), valueElemTy, addr0,
+                              b.i32_val(bytesPerLane * 8 / elemSizeInBits));
+          // Update offset Y
+          addrs.push_back(addr0);
+          addrs.push_back(addr1);
+          break;
+        }
+      }
+
+      constexpr StringLiteral abDecl = R"({
+  .decl ADDR v_type=G type=uq num_elts=16 align=wordx32
+  mov (M1_NM, 1) $ADDR(0, 0)<1> $1(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(0, 1)<1> $2(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(0, 2)<1> $3(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(0, 3)<1> $4(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(0, 4)<1> $5(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(0, 5)<1> $6(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(0, 6)<1> $7(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(0, 7)<1> $8(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(1, 0)<1> $9(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(1, 1)<1> $10(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(1, 2)<1> $11(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(1, 3)<1> $12(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(1, 4)<1> $13(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(1, 5)<1> $14(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(1, 6)<1> $15(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(1, 7)<1> $16(0, 0)<0;1,0>
+  lsc_load.ugm (M1, 16)  $0:d32x4  flat[ADDR]:a64
+})";
+
+      std::string simdAsm = abDecl.str();
+
+      XeBuilder xeBuilder;
+      XeInstr &loadGather = *xeBuilder.create<XeInstr>(simdAsm);
+      XeBuilder::Operand *res = xeBuilder.newOperand("=rw");
+      SmallVector<XeBuilder::Operand *> args{res};
+      for (size_t i = 0; i < addrs.size(); ++i) {
+        args.push_back(xeBuilder.newOperand(addrs[i], "rw"));
+      }
+
+      loadGather(args, /*onlyAttachMLIRArgs=*/true);
+      Value ret = xeBuilder.launch(rewriter, loc, load1DGenXType, false);
+
+      unpackBlockLoadResult(ret, loadedVals, elemIdx, regMapping,
+                            shuffleMapping, {}, unpackedType, numValuesPerLoad,
+                            numPackedVals, {}, {},
+                            /*nanMaskElems=*/{}, loc, rewriter, ctx);
+    }
+#if 0
     // Boundary check all dimensions — tensor descriptors always encode shape
     // bounds and don't have a user-facing boundaryCheck attribute.
     SmallVector<int32_t> allDims(resultRank);
@@ -3626,25 +3722,6 @@ struct DescriptorGatherOpConversion
       //     loadedVals.push_back(loadedVals[canonicalVecStart + iVec]);
       //   continue;
       // }
-
-      unsigned registerIdx = regMapping.apply({{kRegister, elemIdx}})[0].second;
-
-      // Value addrElem = desc.base;
-      // // update offset Y.
-      // {
-      //   auto offsets = applyLinearLayout(loc, rewriter, *llEncoding,
-      //                                    {{kRegister,
-      //                                    b.i32_val(registerIdx)},
-      //                                     {kLane, b.i32_val(0)},
-      //                                     {kWarp, warpId},
-      //                                     {kBlock, b.i32_val(0)}});
-      //   for (auto [dim, offsetPair] : llvm::enumerate(offsets)) {
-      //     if (dim == colDim) {
-      //       addrElem = b.gep(ptr_ty(ctx, 1), valueElemTy, addrElem,
-      //       offsetPair.second);
-      //     }
-      //   }
-      // }
       Value addrElem =
           targetInfo.shuffleIdx(rewriter, loc, ptrElems[registerIdx], 0);
       addrElem = b.bitcast(addrElem, ptr_ty(ctx, 1 /*global*/));
@@ -3690,7 +3767,7 @@ struct DescriptorGatherOpConversion
                             numPackedVals, maskElems[registerIdx], otherElems,
                             /*nanMaskElems=*/{}, loc, rewriter, ctx);
     } // end vec
-
+#endif
     Type llvmResultStructTy = typeConverter->convertType(op.getType());
     Value resultStruct = packLLElements(loc, typeConverter, loadedVals,
                                         rewriter, llvmResultStructTy);
@@ -4139,7 +4216,8 @@ struct DescriptorStoreOpToBlockIOConversion
     AxisInfo *maskAxisInfo = nullptr;
 
     BlockIOTileSizeInfo sizeInfo = getBlockIOTileSize<false /*store*/>(
-        llEncoding.value(), contiguousDim, elemSizeInBits, nullptr, maskAxisInfo,
+        llEncoding.value(), contiguousDim, elemSizeInBits, nullptr,
+        maskAxisInfo,
         /*oneMatrixPerLoadForBT=*/false);
     if (!sizeInfo.isValid())
       return failure();
@@ -4406,7 +4484,8 @@ struct StoreOpToBlockIOConversion
                                      false, std::move(regPackBases));
     } else {
       sizeInfo = getBlockIOTileSize<false /*store*/>(
-          llEncoding.value(), contiguousDim, elemSizeInBits, nullptr, maskAxisInfo,
+          llEncoding.value(), contiguousDim, elemSizeInBits, nullptr,
+          maskAxisInfo,
           /*oneMatrixPerLoadForBT=*/false);
     }
 
