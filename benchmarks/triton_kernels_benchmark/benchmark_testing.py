@@ -273,7 +273,10 @@ def do_bench_proton(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=
             if sync_submitting:
                 synchronize()
 
-    proton.start()
+    # Use a pid-suffixed profile name so parallel workers (e.g. pytest-xdist)
+    # don't clobber each other's ./proton.hatchet output.
+    profile_name = f"proton-{os.getpid()}"
+    proton.start(profile_name)
     # Benchmark
     for idx in range(n_repeat):
         # we don't want `fn` to accumulate gradient values
@@ -292,8 +295,10 @@ def do_bench_proton(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=
     # Record clocks
     synchronize()
     proton.finalize()
-    with open("./proton.hatchet", encoding="utf-8") as f:
+    hatchet_path = f"./{profile_name}.hatchet"
+    with open(hatchet_path, encoding="utf-8") as f:
         data = json.load(f)
+    os.remove(hatchet_path)
 
     profiling_func_filter = filter(
         lambda x: x["frame"]["name"].startswith("__profile_kernel_of_func"
