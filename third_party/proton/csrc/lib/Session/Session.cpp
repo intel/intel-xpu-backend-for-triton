@@ -9,6 +9,7 @@
 #include "Profiler/Roctracer/RoctracerProfiler.h"
 #include "Profiler/Xpupti/XpuptiProfiler.h"
 #include "Runtime/XpuRuntime.h"
+#include "Utility/Errors.h"
 #include "Utility/String.h"
 
 namespace proton {
@@ -28,7 +29,7 @@ Profiler *makeProfiler(const std::string &name, void *sycl_queue = nullptr,
     XpuRuntime::instance().setSyclQueue(sycl_queue);
     return &XpuptiProfiler::instance();
   }
-  throw std::runtime_error("Unknown profiler: " + name);
+  throw makeInvalidArgument("Unknown profiler: " + name);
 }
 
 std::unique_ptr<Data> makeData(const std::string &dataName,
@@ -39,7 +40,7 @@ std::unique_ptr<Data> makeData(const std::string &dataName,
   } else if (toLower(dataName) == "trace") {
     return std::make_unique<TraceData>(path, contextSource);
   }
-  throw std::runtime_error("Unknown data: " + dataName);
+  throw makeInvalidArgument("Unknown data: " + dataName);
 }
 
 std::unique_ptr<ContextSource>
@@ -49,15 +50,15 @@ makeContextSource(const std::string &contextSourceName) {
   } else if (toLower(contextSourceName) == "python") {
     return std::make_unique<PythonContextSource>();
   }
-  throw std::runtime_error("Unknown context source: " + contextSourceName);
+  throw makeInvalidArgument("Unknown context source: " + contextSourceName);
 }
 
 void throwIfSessionNotInitialized(
     const std::map<size_t, std::unique_ptr<Session>> &sessions,
     size_t sessionId) {
   if (!sessions.count(sessionId)) {
-    throw std::runtime_error("Session has not been initialized: " +
-                             std::to_string(sessionId));
+    throw makeOutOfRange("Session has not been initialized: " +
+                         std::to_string(sessionId));
   }
 }
 
@@ -88,8 +89,8 @@ Profiler *SessionManager::validateAndSetProfilerMode(Profiler *profiler,
   for (auto &[id, session] : sessions) {
     if (session->getProfiler() == profiler &&
         session->getProfiler()->getMode() != modeAndOptions) {
-      throw std::runtime_error("Cannot add a session with the same profiler "
-                               "but a different mode than existing sessions");
+      throw makeInvalidArgument("Cannot add a session with the same profiler "
+                                "but a different mode than existing sessions");
     }
   }
   return profiler->setMode(modeAndOptions);
@@ -342,8 +343,7 @@ std::vector<uint8_t> SessionManager::getDataMsgPack(size_t sessionId,
   auto *session = getSessionOrThrow(sessionId);
   auto *treeData = dynamic_cast<TreeData *>(session->data.get());
   if (!treeData) {
-    throw std::runtime_error(
-        "Only TreeData is supported for getData() for now");
+    throw makeLogicError("Only TreeData is supported for getData() for now");
   }
   return treeData->toMsgPack(phase);
 }
@@ -353,8 +353,7 @@ std::string SessionManager::getData(size_t sessionId, size_t phase) {
   auto *session = getSessionOrThrow(sessionId);
   auto *treeData = dynamic_cast<TreeData *>(session->data.get());
   if (!treeData) {
-    throw std::runtime_error(
-        "Only TreeData is supported for getData() for now");
+    throw makeLogicError("Only TreeData is supported for getData() for now");
   }
   return treeData->toJsonString(phase);
 }
