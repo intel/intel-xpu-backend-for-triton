@@ -2,9 +2,16 @@
 
 Regression coverage for https://github.com/intel/intel-xpu-backend-for-triton/issues/6901:
 a missing `.ze_info` section must not raise; it must warn and return 0.
+
+Regression coverage for https://github.com/intel/intel-xpu-backend-for-triton/issues/6941:
+a degenerate zebin (no `.text.<kernel>` and no `.symtab`) must be re-raised as
+`subprocess.CalledProcessError` so the existing 256-GRF retry path catches it.
 """
 import struct
+import subprocess
 import warnings
+
+import pytest
 
 from triton.backends.intel.compiler import extract_spill_size_from_zebin
 
@@ -82,7 +89,7 @@ def _write_elf(tmp_path, sections):
 
 
 def test_missing_ze_info_warns_and_returns_zero(tmp_path):
-    zebin = _write_elf(tmp_path, [(".text", b"\x00\x00\x00\x00")])
+    zebin = _write_elf(tmp_path, [(".text.kernel", b"\x00\x00\x00\x00"), (".symtab", b"\x00")])
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
@@ -91,6 +98,13 @@ def test_missing_ze_info_warns_and_returns_zero(tmp_path):
     assert result == 0
     assert any(".ze_info" in str(w.message) for w in caught), \
         f"expected a warning mentioning .ze_info, got: {[str(w.message) for w in caught]}"
+
+
+def test_degenerate_zebin_raises(tmp_path):
+    zebin = _write_elf(tmp_path, [(".note.intelgt.compat", b"\x00")])
+
+    with pytest.raises(subprocess.CalledProcessError):
+        extract_spill_size_from_zebin(zebin)
 
 
 def test_ze_info_with_spill_size_returns_value(tmp_path):

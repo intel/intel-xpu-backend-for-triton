@@ -80,23 +80,23 @@ SPILL_SIZE_RE = re.compile(r'spill_size\s*[:=]\s*(\d+)')
 def extract_spill_size_from_zebin(file):
     with open(file, 'rb') as f:
         elf = ELFFile(f)
-        has_text = any(s.name.startswith('.text.') for s in elf.iter_sections())
-        has_symtab = elf.get_section_by_name('.symtab') is not None
-        if not has_text or not has_symtab:
-            # IGC can exit 0 on PTSS overflow yet emit a degenerate zebin.
-            # Observed on LTS2 line; rolling libigc instead
-            # exits non-zero. Re-raise as CalledProcessError so the existing
-            # 256-GRF retry path in make_zebin catches it, matching the
-            # rolling code path.
-            raise subprocess.CalledProcessError(
-                returncode=-11,
-                cmd='ocloc',
-                output=('Degenerate zebin: missing .text/.symtab. '
-                        'IGC likely failed (e.g. PTSS overflow) without '
-                        'reporting a non-zero exit code.'),
-            )
         zeinfo = elf.get_section_by_name(".ze_info")
         if zeinfo is None:
+            has_text = any(s.name.startswith('.text.') for s in elf.iter_sections())
+            has_symtab = elf.get_section_by_name('.symtab') is not None
+            if not has_text or not has_symtab:
+                # IGC can exit 0 on PTSS overflow yet emit a degenerate zebin.
+                # Observed on LTS2 line; rolling libigc instead
+                # exits non-zero. Re-raise as CalledProcessError so the existing
+                # 256-GRF retry path in make_zebin catches it, matching the
+                # rolling code path.
+                raise subprocess.CalledProcessError(
+                    returncode=-11,
+                    cmd='ocloc',
+                    output=('Degenerate zebin: missing .text/.symtab. '
+                            'IGC likely failed (e.g. PTSS overflow) without '
+                            'reporting a non-zero exit code.'),
+                )
             warnings.warn(
                 'Section .ze_info not found in zebin; cannot extract spill_size. '
                 'Auto-GRF mode selection will be skipped for this kernel.',
