@@ -11,7 +11,9 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/CommandLine.h"
+#include <type_traits>
 
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
@@ -169,9 +171,11 @@ static bool hasWriteEffect(Operation *op) {
 /// Read-only peers (e.g. a second `tt.load` of the same arg) are not a reason
 /// to suppress `.cg`: see AliasAnalysisTest.cpp TwoLoadsSameArgDifferentOffsets
 /// — read-only loads from the same arg alias each other and `.cg` is still
-/// correct for both.
-static bool aliasesWritingPeer(tt::LoadOp load,
-                               const tti::AliasAnalysis &alias) {
+/// correct for both. Constrained to the load op types that
+/// `AliasAnalysis::getAliasingMemOps` accepts.
+template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
+                             OpTy, tt::LoadOp, tt::DescriptorLoadOp>::value>>
+static bool aliasesWritingPeer(OpTy load, const tti::AliasAnalysis &alias) {
   for (Operation *peer : alias.getAliasingMemOps(load))
     if (hasWriteEffect(peer))
       return true;
@@ -408,11 +412,12 @@ static bool feedsDotOperand(Value v) {
   return true;
 }
 
-/// Returns the total tile size in bytes for a `tt.load` result, or 0 if the
-/// result is not a ranked tensor or its element type's bit-width is not a
-/// positive multiple of 8.
-static int64_t computeTileBytes(tt::LoadOp load) {
-  auto ty = dyn_cast<RankedTensorType>(load.getType());
+/// Returns the total tile size in bytes for a load-like op's result value, or
+/// 0 if the result is not a ranked tensor or its element type's bit-width is
+/// not a positive multiple of 8. Works for any op with a single tensor result
+/// (`tt.load`, `tt.descriptor_load`, ...).
+static int64_t computeTileBytes(Value result) {
+  auto ty = dyn_cast<RankedTensorType>(result.getType());
   if (!ty)
     return 0;
   unsigned bits = ty.getElementTypeBitWidth();
@@ -424,12 +429,6 @@ static int64_t computeTileBytes(tt::LoadOp load) {
   return numElements * static_cast<int64_t>(bits / 8);
 }
 
-/// Returns the nearest enclosing `scf::ForOp` for `load`, or null if the load
-/// is not lexically inside any `scf.for`.
-static scf::ForOp nearestEnclosingFor(tt::LoadOp load) {
-  return load->getParentOfType<scf::ForOp>();
-}
-
 /// Per-function tracker for the EVICT_LAST per-loop byte budget. Implements
 /// the canonical rule from the plan §2.1: a load is admitted iff its tile
 /// bytes are within `kEvictLastPerLoadBudgetBytes` AND, if enclosed in an
@@ -439,24 +438,28 @@ static scf::ForOp nearestEnclosingFor(tt::LoadOp load) {
 struct EvictLastBudgetTracker {
   llvm::DenseMap<scf::ForOp, int64_t> bytesPromotedPerLoop;
 
-  bool fits(tt::LoadOp load) const {
-    int64_t tileBytes = computeTileBytes(load);
+  template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
+                               OpTy, tt::LoadOp, tt::DescriptorLoadOp>::value>>
+  bool fits(OpTy load) const {
+    int64_t tileBytes = computeTileBytes(load.getResult());
     if (tileBytes <= 0)
       return false;
     if (tileBytes > kEvictLastPerLoadBudgetBytes)
       return false;
-    scf::ForOp loop = nearestEnclosingFor(load);
+    scf::ForOp loop = load->template getParentOfType<scf::ForOp>();
     if (!loop)
       return true; // Outside any loop: per-load cap only.
     int64_t already = bytesPromotedPerLoop.lookup(loop);
     return already + tileBytes <= kEvictLastPerLoopBudgetBytes;
   }
 
-  void account(tt::LoadOp load) {
-    scf::ForOp loop = nearestEnclosingFor(load);
+  template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
+                               OpTy, tt::LoadOp, tt::DescriptorLoadOp>::value>>
+  void account(OpTy load) {
+    scf::ForOp loop = load->template getParentOfType<scf::ForOp>();
     if (!loop)
       return; // Outside-loop loads do not consume any per-loop bucket.
-    bytesPromotedPerLoop[loop] += computeTileBytes(load);
+    bytesPromotedPerLoop[loop] += computeTileBytes(load.getResult());
   }
 };
 
@@ -505,9 +508,12 @@ struct AnnotateCacheControlPass
           EvictLastBudgetTracker(),
       };
 
-      func.walk([&](tt::LoadOp load) {
-        if (tryAnnotate(load, ctx))
-          changed = true;
+      func.walk([&](Operation *op) {
+        llvm::TypeSwitch<Operation *>(op)
+            .Case<tt::LoadOp, tt::DescriptorLoadOp>([&](auto load) {
+              if (tryAnnotate(load, ctx))
+                changed = true;
+            });
       });
     });
 
@@ -530,7 +536,9 @@ private:
   ///   3. The per-load + per-loop byte budget admits this load.
   /// `knownReuse(load)` is checked separately by the caller in `tryAnnotate`
   /// — this helper layers on the additional policy filters.
-  static bool shouldUseEvictLast(tt::LoadOp load, FuncContext &ctx) {
+  template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
+                               OpTy, tt::LoadOp, tt::DescriptorLoadOp>::value>>
+  static bool shouldUseEvictLast(OpTy load, FuncContext &ctx) {
     // Requirement 1: spatial known reuse only — drop temporal-only.
     if (!ctx.reuse.getSpatial().knownCrossSubgroupReuse(load))
       return false;
@@ -544,58 +552,96 @@ private:
     return true;
   }
 
-  static bool tryAnnotate(tt::LoadOp load, FuncContext &ctx) {
-    // Gate 1: user override — never overwrite an explicitly-set cache modifier.
+  /// Returns true when the load should be skipped because its pointer roots
+  /// fail the atomic/unresolved-origin disqualifiers.
+  ///
+  /// `tt.load` exposes a pointer operand: in atomic kernels we drop loads
+  /// rooted in entry-block pointer args, and we drop loads whose roots can't
+  /// be resolved.
+  ///
+  /// `tt.descriptor_load` has no pointer operand to inspect, so the check
+  /// degrades to "skip on atomic". The equivalent of root-based filtering is
+  /// already provided by `ctx.skipped` (see `computeSkippedArgs`), which
+  /// excludes every pointer-typed entry-block arg in atomic / unresolved-store
+  /// cases.
+  template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
+                               OpTy, tt::LoadOp, tt::DescriptorLoadOp>::value>>
+  static bool failsPointerArgGates(OpTy load, FuncContext &ctx) {
+    if constexpr (std::is_same_v<OpTy, tt::LoadOp>) {
+      if (ctx.hasAtomic && isPointerArgRooted(load.getPtr(), *ctx.alias))
+        return true;
+      return ptrRootsUnknown(load.getPtr(), *ctx.alias);
+    }
+    return ctx.hasAtomic;
+  }
+
+  /// Default-branch policy for the no-reuse fall-through. `tt.load` is tagged
+  /// with `.cg` to bypass L1; `tt.descriptor_load` is left alone because the
+  /// 2D-block-I/O lowering for descriptor loads (see `LowerTo2DBlockLoad`)
+  /// drops the cache modifier when rewriting to `ttig.2d_block_load`, so the
+  /// `.cg` annotation would never reach the hardware.
+  template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
+                               OpTy, tt::LoadOp, tt::DescriptorLoadOp>::value>>
+  static bool applyNoReuseDefault(OpTy load) {
+    if constexpr (std::is_same_v<OpTy, tt::LoadOp>) {
+      load.setCacheAttr(
+          tt::CacheModifierAttr::get(load.getContext(), tt::CacheModifier::CG));
+      return true;
+    }
+    return false;
+  }
+
+  /// Annotate a load (`tt.load` or `tt.descriptor_load`) with the appropriate
+  /// cache control. The op-kind-specific behavior is isolated in
+  /// `failsPointerArgGates` (atomic / unresolved-pointer-roots check) and
+  /// `applyNoReuseDefault` (no-reuse fall-through); everything else is
+  /// identical between the two op kinds.
+  ///
+  /// The structural disqualifiers (atomic / unresolved roots, aliasing-write
+  /// peer, forward flow into a skipped store) BLOCK BOTH `.cg` AND
+  /// `EVICT_LAST` — a load that flows through atomic context, has unknown
+  /// root pointers, aliases a writing peer, or feeds a skipped store should
+  /// remain at the default cache policy regardless of reuse signal. We
+  /// evaluate them BEFORE the reuse decision so the same suppression covers
+  /// both annotations.
+  ///
+  /// The reuse-driven decision splits as follows:
+  ///   - encoded type AND any reuse signal -> suppress `.cg`;
+  ///   - additionally, when reuse is *known* AND `shouldUseEvictLast` accepts
+  ///     the candidate, promote to `EVICT_LAST`;
+  ///   - any other reuse-branch hit stays at the default policy.
+  /// Mutual exclusion: only one of `setEvictAttr` or `setCacheAttr` is ever
+  /// called per load — guaranteed by the early-return structure.
+  template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
+                               OpTy, tt::LoadOp, tt::DescriptorLoadOp>::value>>
+  static bool tryAnnotate(OpTy load, FuncContext &ctx) {
+    // Frontend cache override — never overwrite an explicitly-set modifier.
     if (load.getCache() != tt::CacheModifier::NONE)
       return false;
 
-    // Gate 1b: explicit eviction policy set by frontend — never overwrite.
+    // Frontend eviction-policy override — never overwrite.
     if (load.getEvict() != tt::EvictionPolicy::NORMAL)
       return false;
 
-    // Gate 2: scalar loads don't get encoding-based annotation.
+    // Scalar loads don't get encoding-based annotation.
     auto loadTy = dyn_cast<RankedTensorType>(load.getType());
     if (!loadTy)
       return false;
 
-    // Gates 4-7: structural disqualifiers. These BLOCK BOTH `.cg` AND
-    // `EVICT_LAST` — a load that flows through atomic context, has unknown
-    // root pointers, aliases a writing peer, or feeds a skipped store should
-    // remain at the default cache policy regardless of reuse signal. We
-    // evaluate them BEFORE the reuse decision so the same suppression covers
-    // both annotations (see plan §2.1, Finding 4 resolution).
-    //
-    // Gate 4: atomic policy — in atomic kernels, any load whose pointer roots
-    // to an entry-block pointer arg is suppressed (cost-model policy — see
-    // the pass description in Passes.td).
-    if (ctx.hasAtomic && isPointerArgRooted(load.getPtr(), *ctx.alias))
+    // Pointer-rooted disqualifiers (op-kind-specific).
+    if (failsPointerArgGates(load, ctx))
       return false;
 
-    // Gate 5: unresolved pointer origin — conservative skip.
-    if (ptrRootsUnknown(load.getPtr(), *ctx.alias))
-      return false;
-
-    // Gate 6: alias analysis — suppress only on aliasing with a write peer.
+    // Alias analysis — suppress only on aliasing with a write peer.
     // Two read-only loads of the same arg are fine; both can keep `.cg`.
     if (aliasesWritingPeer(load, *ctx.alias))
       return false;
 
-    // Gate 7: forward data-flow into a store on an excluded arg. Retained
-    // verbatim — alias analysis cannot replace it (see §"What stays and why"
-    // in annotate-cc-rewrite.md).
+    // Forward data-flow into a store on an excluded arg.
     if (valueFlowsToSkippedStore(load.getResult(), *ctx.alias, ctx.skipped))
       return false;
 
-    // Gate 3 (split):
-    //  - encoded type AND any reuse signal -> suppress `.cg` (today's
-    //    behavior preserved);
-    //  - additionally, when reuse is *known* AND `shouldUseEvictLast`
-    //    accepts the candidate, promote to `EVICT_LAST`;
-    //  - any other Gate-3 hit stays at the default policy (no `.cg`,
-    //    no `EVICT_LAST`).
-    //
-    // Mutual exclusion: only one of `setEvictAttr` or `setCacheAttr` is
-    // ever called per load — guaranteed by the early-return structure.
+    // Reuse-driven decision.
     if (loadTy.getEncoding() && ctx.reuse.anyReuse(load)) {
       if (ctx.reuse.knownReuse(load) && shouldUseEvictLast(load, ctx)) {
         load.setEvictAttr(tt::EvictionPolicyAttr::get(
@@ -603,13 +649,11 @@ private:
         ctx.evictLastBudget.account(load);
         return true;
       }
-      return false; // Reuse suspected but not promoted: no `.cg`.
+      return false; // Reuse suspected but not promoted.
     }
 
-    // Default: no reuse evidence -> tag with `.cg` to bypass L1.
-    load.setCacheAttr(
-        tt::CacheModifierAttr::get(load.getContext(), tt::CacheModifier::CG));
-    return true;
+    // No reuse evidence -> op-kind-specific default.
+    return applyNoReuseDefault(load);
   }
 };
 
