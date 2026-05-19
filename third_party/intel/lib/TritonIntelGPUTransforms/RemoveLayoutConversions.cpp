@@ -1770,22 +1770,6 @@ void LayoutRematerialization::hoistConvertDotOperand(
     }
   }
 
-  // G2 — Root-in-loop guard: any absorbed ConvertLayoutOp must be in the same
-  // loop (or a child) as the convertOp being hoisted. Prevents preheader bloat
-  // with no pipelining benefit.
-  for (Value v : slice) {
-    Operation *def = v.getDefiningOp();
-    if (!def || !isa<ttg::ConvertLayoutOp>(def))
-      continue;
-    Region *convertRegion = convertOp->getParentRegion();
-    if (!convertRegion->isAncestor(def->getParentRegion())) {
-      LDBG("  Absorbed ConvertLayoutOp " << *def
-                                         << " is outside convertOp's region; "
-                                            "skipping hoist");
-      return;
-    }
-  }
-
   // Bail if any leaf load has a different element bitwidth than the convert
   // target. The target DotOperandEncodingAttr's kWidth / opsPerChannel is
   // parameterized for the dot-operand element width; propagating it back
