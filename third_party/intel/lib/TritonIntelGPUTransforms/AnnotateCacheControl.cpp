@@ -2,6 +2,7 @@
 #include "intel/include/Analysis/AxisInfoExt.h"
 #include "intel/include/Analysis/ReuseAnalysis.h"
 #include "intel/include/Analysis/StrideInfo.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -153,10 +154,19 @@ static bool isPointerArgRooted(Value ptr, const tti::AliasAnalysis &alias) {
 /// cache-control policy: any `tt.store`, `tt.atomic_*`, their descriptor
 /// counterparts, or any op implementing `MemoryEffectOpInterface` with a
 /// `MemoryEffects::Write` effect.
+///
+/// Cache-fill prefetches (`ttig.prefetch`, `ttig.descriptor_prefetch`) are
+/// excluded: they declare `MemWrite<L2Cache>` to keep the optimizer from
+/// CSE/DCE-ing them, but they do not mutate observable memory. Treating them
+/// as writing peers would block evict_last promotion of any load on the same
+/// pointer (the canonical Pipeline-pass shape: pre-prefetch + in-loop
+/// prefetch + load on the same iter-arg).
 static bool hasWriteEffect(Operation *op) {
   if (isa<tt::StoreOp, tt::AtomicRMWOp, tt::AtomicCASOp, tt::DescriptorStoreOp,
           tt::DescriptorScatterOp, tt::DescriptorReduceOp>(op))
     return true;
+  if (isa<ttg::intel::PrefetchOp, ttg::intel::DescriptorPrefetchOp>(op))
+    return false;
   if (auto effectOp = dyn_cast<MemoryEffectOpInterface>(op)) {
     SmallVector<MemoryEffects::EffectInstance> effects;
     effectOp.getEffects(effects);

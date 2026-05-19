@@ -707,3 +707,35 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     tt.return %d : tensor<128x128xf32, #dpas_k>
   }
 }
+
+// -----
+
+// COM: Test l — `ttig.prefetch` on the same pointer as a dot-fed load must
+// COM: NOT block evict_last promotion. ttig.prefetch declares
+// COM: `MemWrite<L2Cache>` purely to keep the optimizer from CSE/DCE-ing it;
+// COM: it does not mutate observable memory. Treating it as a writing peer
+// COM: (the prior bug) blocked Phase 2 promotion in the canonical Pipeline
+// COM: shape: pre-prefetch + in-loop prefetch + load on the same pointer.
+
+#dpas_l = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot_a_l = #ttg.dot_op<{opIdx = 0, parent = #dpas_l, kWidth = 1}>
+#dot_b_l = #ttg.dot_op<{opIdx = 1, parent = #dpas_l, kWidth = 2}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @prefetch_same_ptr_does_not_block_evict_last
+  tt.func public @prefetch_same_ptr_does_not_block_evict_last(%aptr: tensor<32x32x!tt.ptr<f16>, #dot_a_l>,
+                                                              %bptr: tensor<32x32x!tt.ptr<f16>, #dot_b_l>,
+                                                              %c: tensor<32x32xf32, #dpas_l>) -> tensor<32x32xf32, #dpas_l> {
+    ttig.prefetch %aptr {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x32x!tt.ptr<f16>, #dot_a_l>
+    ttig.prefetch %bptr {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x32x!tt.ptr<f16>, #dot_b_l>
+    // CHECK: tt.load
+    // CHECK-NOT: cacheModifier = cg
+    // CHECK-SAME: evictionPolicy = evict_last
+    %a = tt.load %aptr : tensor<32x32x!tt.ptr<f16>, #dot_a_l>
+    // CHECK: tt.load
+    // CHECK-NOT: cacheModifier = cg
+    // CHECK-SAME: evictionPolicy = evict_last
+    %b = tt.load %bptr : tensor<32x32x!tt.ptr<f16>, #dot_b_l>
+    %d = tt.dot %a, %b, %c : tensor<32x32xf16, #dot_a_l> * tensor<32x32xf16, #dot_b_l> -> tensor<32x32xf32, #dpas_l>
+    tt.return %d : tensor<32x32xf32, #dpas_l>
+  }
+}

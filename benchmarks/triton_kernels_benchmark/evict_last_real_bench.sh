@@ -8,6 +8,12 @@
 
 set -euo pipefail
 
+# Source oneAPI environment ONCE at top of wrapper. setvars.sh references
+# unset variables, so we temporarily disable `-u` while sourcing it.
+set +u
+source /opt/intel/oneapi/setvars.sh > /dev/null 2>&1
+set -u
+
 if [ $# -lt 1 ]; then
     echo "Usage: $0 <gemm | attention-subset-fwd> [baseline_ref] [patched_ref]"
     exit 1
@@ -69,13 +75,27 @@ for SIDE in baseline patched; do
         DUMP_DIR="$RUN_DIR/dump"
         mkdir -p "$RUN_DIR" "$CACHE_DIR" "$DUMP_DIR"
 
+        # Re-source oneAPI env immediately before invocation. The top-of-
+        # script source can be lost if compile-triton.sh's pip install
+        # subprocess resets LD_LIBRARY_PATH inheritance. libsycl.so.8 lives
+        # in /opt/intel/oneapi/compiler/2025.3/lib/. Note: setvars.sh has an
+        # idempotence guard via SETVARS_COMPLETED — we unset it to force a
+        # fresh export.
+        set +u
+        unset SETVARS_COMPLETED
+        source /opt/intel/oneapi/setvars.sh > /dev/null 2>&1
+        set -u
+
         # Both benchmarks are env-var driven (no argparse). Device defaults to xpu.
         # gemm_benchmark.py honors TRANSPOSE_A / TRANSPOSE_B env vars.
         # flash_attention_benchmark.py honors FA_KERNEL_MODE (default 'fwd').
+        # AnnotateCacheControl is opt-in; enable it on both sides so the A/B
+        # measures Phase 2 promotion delta vs Phase 1 (cache-control-on baseline).
         if [ "$BENCHMARK" = "gemm" ]; then
             TRITON_CACHE_DIR="$CACHE_DIR" \
             TRITON_KERNEL_DUMP=1 \
             TRITON_DUMP_DIR="$DUMP_DIR" \
+            TRITON_INTEL_DISABLE_ANNOTATE_CACHE_CONTROL=0 \
             /home/jovyan/.conda/bin/python \
                 benchmarks/triton_kernels_benchmark/gemm_benchmark.py \
                 > "$RUN_DIR/stdout.txt" 2>&1
@@ -91,6 +111,7 @@ for SIDE in baseline patched; do
             TRITON_CACHE_DIR="$CACHE_DIR" \
             TRITON_KERNEL_DUMP=1 \
             TRITON_DUMP_DIR="$DUMP_DIR" \
+            TRITON_INTEL_DISABLE_ANNOTATE_CACHE_CONTROL=0 \
             FA_KERNEL_MODE=fwd \
             /home/jovyan/.conda/bin/python \
                 benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py \

@@ -8,12 +8,25 @@
 
 set -euo pipefail
 
+# Source oneAPI environment ONCE at top of wrapper. Subsequent subprocesses
+# (compile-triton.sh's child shell, python driver) inherit LD_LIBRARY_PATH
+# via env. setvars.sh references unset variables, so we temporarily disable
+# `-u` while sourcing it.
+set +u
+source /opt/intel/oneapi/setvars.sh > /dev/null 2>&1
+set -u
+
 BASELINE_REF="${1:-main}"
 PATCHED_REF="${2:-etiotto/known-reuse-evict-last}"
 
 WORKDIR="/tmp/evict_last_wt"
 OUTPUT_DIR="/tmp/evict_last_micro"
 CSV_PATH="$OUTPUT_DIR/results.csv"
+
+# Path to the microbench python driver in the primary worktree. The baseline
+# worktree is checked out at origin/main and won't have this file, so we copy
+# it in before each run.
+MICROBENCH_PY_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/evict_last_microbench.py"
 
 mkdir -p "$OUTPUT_DIR"
 rm -f "$CSV_PATH"
@@ -50,6 +63,10 @@ for SIDE in baseline patched; do
     echo "Building..."
     PATH="/home/jovyan/.conda/bin:$PATH" MAX_JOBS=12 /bin/bash scripts/compile-triton.sh
 
+    # Stage the microbench python driver into the worktree (baseline tree is
+    # checked out at origin/main and lacks this file).
+    cp "$MICROBENCH_PY_SRC" benchmarks/triton_kernels_benchmark/evict_last_microbench.py
+
     # Run each shape. Per plan §3.2, the 5 repeat-runs MUST be independent
     # subprocesses (fresh JIT state, fresh autotune cache). We invoke the
     # python driver 5 times with --repeat-runs 1 each.
@@ -61,9 +78,25 @@ for SIDE in baseline patched; do
             DUMP_DIR="$OUTPUT_DIR/$SIDE/$SHAPE/run_$RUN/dump"
             mkdir -p "$CACHE_DIR" "$DUMP_DIR"
 
+            # Re-source oneAPI env immediately before invocation. The top-of-
+            # script source can be lost if compile-triton.sh's pip install
+            # subprocess resets LD_LIBRARY_PATH inheritance. libsycl.so.8 lives
+            # in /opt/intel/oneapi/compiler/2025.3/lib/. Note: setvars.sh has
+            # an idempotence guard via SETVARS_COMPLETED, so we unset it to
+            # force a fresh export.
+            set +u
+            unset SETVARS_COMPLETED
+            source /opt/intel/oneapi/setvars.sh > /dev/null 2>&1
+            set -u
+
+            # AnnotateCacheControl is opt-in (TRITON_INTEL_DISABLE_ANNOTATE_CACHE_CONTROL
+            # defaults to True). Enable on both baseline and patched so the
+            # comparison reflects Phase 2 promotion vs Phase 1 baseline behavior
+            # (rather than pass-disabled-vs-enabled).
             TRITON_CACHE_DIR="$CACHE_DIR" \
             TRITON_KERNEL_DUMP=1 \
             TRITON_DUMP_DIR="$DUMP_DIR" \
+            TRITON_INTEL_DISABLE_ANNOTATE_CACHE_CONTROL=0 \
             /home/jovyan/.conda/bin/python \
                 benchmarks/triton_kernels_benchmark/evict_last_microbench.py \
                 --shape "$SHAPE" \
