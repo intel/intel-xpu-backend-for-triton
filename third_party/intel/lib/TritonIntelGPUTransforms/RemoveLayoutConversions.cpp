@@ -1753,9 +1753,9 @@ void LayoutRematerialization::hoistConvertDotOperand(
   if (result.failed())
     return;
 
-  // G1 — Single-use guard: every slice value (except the root convert's src)
-  // must have all its users inside the slice. Prevents duplication when a
-  // slice value feeds multiple consumers outside.
+  // Bail if any slice value (other than the root convert's source) has a user
+  // outside the slice. Hoisting in that case would either strand the outside
+  // user without its input or force duplication of the slice; both are wrong.
   for (Value v : slice) {
     if (v == convertOp.getSrc())
       continue;
