@@ -87,16 +87,11 @@ def extract_spill_size_from_zebin(file):
             if not has_text or not has_symtab:
                 # IGC can exit 0 on PTSS overflow yet emit a degenerate zebin.
                 # Observed on LTS2 line; rolling libigc instead
-                # exits non-zero. Re-raise as CalledProcessError so the existing
-                # 256-GRF retry path in make_zebin catches it, matching the
-                # rolling code path.
-                raise subprocess.CalledProcessError(
-                    returncode=-11,
-                    cmd='ocloc',
-                    output=('Degenerate zebin: missing .text/.symtab. '
-                            'IGC likely failed (e.g. PTSS overflow) without '
-                            'reporting a non-zero exit code.'),
-                )
+                # exits non-zero. Raise so the existing 256-GRF retry path
+                # in make_zebin catches it, matching the rolling code path.
+                raise IntelGPUError('Degenerate zebin: missing .text/.symtab. '
+                                    'IGC likely failed (e.g. PTSS overflow) without '
+                                    'reporting a non-zero exit code.')
             warnings.warn(
                 'Section .ze_info not found in zebin; cannot extract spill_size. '
                 'Auto-GRF mode selection will be skipped for this kernel.',
@@ -542,11 +537,13 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                         # re-run with double GRF mode
                         ocloc_cmd[-1] = metadata["build_flags"] + shader_dump_opt
                         subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
-            except subprocess.CalledProcessError as e:
+            except (subprocess.CalledProcessError, IntelGPUError) as e:
                 # If GRF mode was not explicitly set, retry with large GRF mode
                 # before giving up. This handles cases where the default GRF mode
                 # doesn't provide enough registers (e.g., scratch space exceeds
-                # HW PTSS limit).
+                # HW PTSS limit). Also covers degenerate zebin (no .text/.symtab)
+                # detected by extract_spill_size_from_zebin (LTS2 IGC silent
+                # PTSS overflow).
                 retry_succeeded = False
                 if options.grf_mode == 'default' and \
                         "-cl-intel-256-GRF-per-thread" not in metadata.get("build_flags", ""):
@@ -560,6 +557,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                         pass
 
                 if not retry_succeeded:
+                    if isinstance(e, IntelGPUError):
+                        raise
                     if e.returncode == 255:
                         error = 'Internal Triton ZEBIN codegen error'
                     elif e.returncode == 128 + signal.SIGSEGV:

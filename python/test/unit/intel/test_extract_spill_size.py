@@ -4,16 +4,16 @@ Regression coverage for https://github.com/intel/intel-xpu-backend-for-triton/is
 a missing `.ze_info` section must not raise; it must warn and return 0.
 
 Regression coverage for https://github.com/intel/intel-xpu-backend-for-triton/issues/6941:
-a degenerate zebin (no `.text.<kernel>` and no `.symtab`) must be re-raised as
-`subprocess.CalledProcessError` so the existing 256-GRF retry path catches it.
+a degenerate zebin (no `.text.<kernel>` and no `.symtab`) must be raised as
+`IntelGPUError` so the existing 256-GRF retry path catches it.
 """
 import struct
-import subprocess
 import warnings
 
 import pytest
 
 from triton.backends.intel.compiler import extract_spill_size_from_zebin
+from triton.runtime.errors import IntelGPUError
 
 
 def _build_elf64(sections):
@@ -103,7 +103,7 @@ def test_missing_ze_info_warns_and_returns_zero(tmp_path):
 def test_degenerate_zebin_raises(tmp_path):
     zebin = _write_elf(tmp_path, [(".note.intelgt.compat", b"\x00")])
 
-    with pytest.raises(subprocess.CalledProcessError):
+    with pytest.raises(IntelGPUError):
         extract_spill_size_from_zebin(zebin)
 
 
