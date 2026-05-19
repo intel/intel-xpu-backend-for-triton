@@ -169,6 +169,7 @@ jobs:
 
       - name: Install transformers package
         if: inputs.suite == 'all' || inputs.suite == 'huggingface'
+        shell: bash
         run: |
           cd /c/pytorch
           pip install -r .ci/docker/ci_commit_pins/huggingface-requirements.txt
