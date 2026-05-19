@@ -74,6 +74,27 @@ public:
   llvm::ArrayRef<mlir::Operation *>
   getAliasingMemOps(triton::DescriptorLoadOp loadOp) const;
 
+  /// Three-state classification of a pointer's origin. The enum makes
+  /// `Unknown` vs `NotTracked` impossible to conflate at the call site.
+  enum class PointerRootKind { Known, Unknown, NotTracked };
+
+  /// Root-query result for a pointer.
+  struct PointerRootsResult {
+    PointerRootKind kind;
+    /// Populated only when `kind == Known`.
+    llvm::SmallVector<mlir::Value> roots;
+  };
+
+  /// Returns the root set for `ptr`, distinguishing Known / Unknown /
+  /// NotTracked. `Known` means the dataflow solver resolved the pointer to a
+  /// non-empty set of entry-block pointer arguments. `Unknown` means the
+  /// solver marked the pointer's origin opaque (e.g., `arith.select` fallback).
+  /// `NotTracked` means the pointer was never seeded in the solver (it is not
+  /// a memory-effect op operand). `Unknown` and `NotTracked` are both
+  /// conservative: a caller that wants "is this pointer known?" should pattern
+  /// match on `kind == Known`.
+  PointerRootsResult getPointerRoots(mlir::Value ptr) const;
+
 private:
   /// Returns true if the snapshots for pointers `a` and `b` may alias.
   /// Either snapshot being `unknown` (opaque origin or missing from the map)
