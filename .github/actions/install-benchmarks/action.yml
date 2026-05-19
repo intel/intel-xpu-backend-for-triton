@@ -29,7 +29,7 @@ runs:
         # Uninstall first to ensure clean install. We can't use --force-reinstall
         # because it would reinstall torch and clobber the XPU-specific PyTorch build.
         # Plain pip install won't upgrade because the wheel uses a PEP 440 local
-        # version (3.7.1+git...) and pip treats different local suffixes as the same.
+        # version (3.7.2+git...) and pip treats different local suffixes as the same.
         pip uninstall -y triton-kernels-benchmark 2>/dev/null || true
         cd "$RUNNER_TEMP/benchmarks-wheel-same-run"
         pip install *.whl
