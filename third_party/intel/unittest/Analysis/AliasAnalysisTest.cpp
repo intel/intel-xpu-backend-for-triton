@@ -874,8 +874,8 @@ TEST_F(AliasAnalysisTest, ThreeDistinctArgsThroughScfForAreNonAliasing) {
   auto step = arith::ConstantOp::create(*builder, loc, i32Type,
                                         builder->getI32IntegerAttr(1));
 
-  auto forOp = scf::ForOp::create(*builder, loc, lb, ub, step,
-                                  ValueRange{aPtr, bPtr});
+  auto forOp =
+      scf::ForOp::create(*builder, loc, lb, ub, step, ValueRange{aPtr, bPtr});
 
   triton::LoadOp loadA, loadB;
   {

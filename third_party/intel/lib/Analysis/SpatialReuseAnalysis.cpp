@@ -210,8 +210,7 @@ SpatialReuseAnalysis::knownWarpBroadcastFactor(tt::DescriptorLoadOp op) const {
   return knownWarpBroadcastFactor(rt);
 }
 
-std::optional<unsigned>
-SpatialReuseAnalysis::knownWarpBroadcastFactor(
+std::optional<unsigned> SpatialReuseAnalysis::knownWarpBroadcastFactor(
     tt::DescriptorGatherOp op) const {
   auto rt = dyn_cast<RankedTensorType>(op.getType());
   if (!rt)

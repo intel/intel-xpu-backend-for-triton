@@ -555,7 +555,8 @@ TEST_F(SpatialReuseAnalysisTest,
   EXPECT_EQ(*factor, 4u);
 }
 
-TEST_F(SpatialReuseAnalysisTest, BroadcastFactor_BlockedFullPartition_FactorOne) {
+TEST_F(SpatialReuseAnalysisTest,
+       BroadcastFactor_BlockedFullPartition_FactorOne) {
   // Blocked encoding with warpsPerCTA = [4, 1]: warps tile dim 0 (factor 4 on
   // that axis). Dim 1 has Wn = 1 — there's exactly one warp per col so no
   // real broadcast there either. Total factor = 1.
