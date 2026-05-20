@@ -13,6 +13,10 @@
 
 namespace mlir::triton::intel {
 class SPIRVTargetInfo : public TargetInfo {
+public:
+  explicit SPIRVTargetInfo(unsigned localMemSizeBytes = 131072)
+      : TargetInfo(localMemSizeBytes) {}
+
 protected:
   bool isSupportedWarpReduceOp(Operation *op, unsigned numLanesToReduce,
                                unsigned warpSize) const final;

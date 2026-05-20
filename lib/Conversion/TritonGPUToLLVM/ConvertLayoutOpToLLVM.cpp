@@ -229,26 +229,45 @@ struct ConvertLayoutOpConversion
       }
     };
 
-    // Phase 1: store all reps into disjoint SLM slices.
-    for (int i = 0; i < nReps; ++i) {
-      auto tileInVals =
-          ArrayRef<Value>(permutedInVals).slice(i * tileSize, tileSize);
-      auto affineOffset = b.i32_val(i * repStrideElems);
-      lowerLdStShared(loc, ctx, storeCvt, tileInVals, llvmElemTy, smemBase,
-                      /*paddingShifts=*/{}, affineOffset, maskSpanAffineOffset,
-                      rewriter, targetInfo);
-    }
+    // Determine how many reps can be batched into a single store-barrier-load
+    // group given the SLM budget exposed by the target.  When batchReps ==
+    // nReps the whole conversion uses only one barrier; when batchReps == 1 it
+    // falls back to the classic per-rep schedule.
+    unsigned maxSLMBytes = targetInfo.getMaxSLMBytesForSwizzledCvt();
+    unsigned bytesPerRep = repStrideElems * bitwidth / 8;
+    int batchReps =
+        (bytesPerRep > 0 && maxSLMBytes != std::numeric_limits<unsigned>::max())
+            ? std::max(1, static_cast<int>(maxSLMBytes / bytesPerRep))
+            : static_cast<int>(nReps);
+    batchReps = std::min(batchReps, static_cast<int>(nReps));
 
-    // Ensure all stores are visible before any rep loads.
-    emitBarrier();
+    for (int batchStart = 0; batchStart < static_cast<int>(nReps);
+         batchStart += batchReps) {
+      int batchEnd = std::min(batchStart + batchReps, static_cast<int>(nReps));
 
-    // Phase 2: load all reps from their corresponding SLM slices.
-    for (int i = 0; i < nReps; ++i) {
-      auto affineOffset = b.i32_val(i * repStrideElems);
-      auto tileOutVals = lowerLdStShared(
-          loc, ctx, loadCvt, {}, llvmElemTy, smemBase, /*paddingShifts=*/{},
-          affineOffset, maskSpanAffineOffset, rewriter, targetInfo);
-      llvm::append_range(outVals, tileOutVals);
+      // Phase 1: store all reps in this batch into disjoint SLM slices.
+      for (int i = batchStart; i < batchEnd; ++i) {
+        int slot = i - batchStart;
+        auto tileInVals =
+            ArrayRef<Value>(permutedInVals).slice(i * tileSize, tileSize);
+        auto affineOffset = b.i32_val(slot * repStrideElems);
+        lowerLdStShared(loc, ctx, storeCvt, tileInVals, llvmElemTy, smemBase,
+                        /*paddingShifts=*/{}, affineOffset,
+                        maskSpanAffineOffset, rewriter, targetInfo);
+      }
+
+      // Ensure all stores in this batch are visible before loads.
+      emitBarrier();
+
+      // Phase 2: load all reps in this batch from their SLM slices.
+      for (int i = batchStart; i < batchEnd; ++i) {
+        int slot = i - batchStart;
+        auto affineOffset = b.i32_val(slot * repStrideElems);
+        auto tileOutVals = lowerLdStShared(
+            loc, ctx, loadCvt, {}, llvmElemTy, smemBase, /*paddingShifts=*/{},
+            affineOffset, maskSpanAffineOffset, rewriter, targetInfo);
+        llvm::append_range(outVals, tileOutVals);
+      }
     }
 
     // Undo the permLoad used to divideRight

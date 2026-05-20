@@ -195,6 +195,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # Same Xe3P+ gate as 256B prefetch pending separate driver prop.
         dev_prop['has_256b_load_store'] = tgt_prop.get('has_256b_prefetch', False)
         dev_prop['has_rounded_divide_sqrt'] = tgt_prop.get('has_rounded_divide_sqrt', not is_lts)
+        dev_prop['local_mem_size'] = tgt_prop.get('local_mem_size', 131072)
 
         if '__intel_already_queried_extensions__' not in tgt_prop:
             # All GPUs with the same device_id have the same extensions, so we just
@@ -283,6 +284,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         module_opts.support_rounded_divide_sqrt = properties["has_rounded_divide_sqrt"]
         module_opts.threads_per_warp = opt.warp_size
         module_opts.target_arch = cls.target_arch
+        module_opts.local_mem_size = properties["local_mem_size"]
 
     @classmethod
     @track

@@ -17,7 +17,8 @@
 namespace mlir::triton::intel {
 class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
-  TargetInfo() = default;
+  explicit TargetInfo(unsigned localMemSizeBytes = 131072)
+      : localMemSizeBytes(localMemSizeBytes) {}
 
   bool supportMaximumMinimum() const override;
 
@@ -71,6 +72,8 @@ public:
                   StringRef file, StringRef func, int line) const override;
   int getSharedAddressSpace() const override;
 
+  unsigned getMaxSLMBytesForSwizzledCvt() const override;
+
   bool supportVectorizedAtomics() const override;
 
   int getAddressSpace(Attribute addressSpace) const override;
@@ -87,6 +90,8 @@ protected:
                               unsigned warpSize) const = 0;
 
 private:
+  unsigned localMemSizeBytes;
+
   LLVM::GlobalOp getGlobalString(Location loc, RewriterBase &rewriter,
                                  StringRef name, StringRef value,
                                  unsigned addressSpace) const;

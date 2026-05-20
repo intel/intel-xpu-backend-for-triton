@@ -11,6 +11,7 @@
 #include "SPIRVTargetInfo.h"
 #include "Utility.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENMemorySpace.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 
 #if defined(_MSC_VER) && !defined(__clang__)
 // from https://gist.github.com/pps83/3210a2f980fd02bb2ba2e5a1fc4a2ef0
@@ -59,6 +60,10 @@ void TargetInfo::clusterBarrier(Location loc, RewriterBase &rewriter) const {
 void TargetInfo::warpSync(Location loc, RewriterBase &rewriter) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   b.barrier(triton::gpu::AddrSpace::Local);
+}
+
+unsigned TargetInfo::getMaxSLMBytesForSwizzledCvt() const {
+  return localMemSizeBytes;
 }
 
 Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
@@ -251,8 +256,14 @@ Value TargetInfo::getGlobalStringStart(Location loc, RewriterBase &rewriter,
 }
 
 std::unique_ptr<TargetInfo> createTargetInfo(ModuleOp mod) {
-  if (triton::gpu::intel::hasSpirvTargetArch(mod))
-    return std::unique_ptr<TargetInfo>(new SPIRVTargetInfo());
+  if (triton::gpu::intel::hasSpirvTargetArch(mod)) {
+    unsigned localMemBytes = 131072; // default (128 KB for PVC/BMG)
+    if (auto attr = mod->getAttrOfType<IntegerAttr>(
+            triton::gpu::intel::TritonIntelGPUDialect::
+                getLocalMemSizeAttrName()))
+      localMemBytes = attr.getInt();
+    return std::unique_ptr<TargetInfo>(new SPIRVTargetInfo(localMemBytes));
+  }
   llvm_unreachable("createTargetInfo: unsupported target arch");
 }
 

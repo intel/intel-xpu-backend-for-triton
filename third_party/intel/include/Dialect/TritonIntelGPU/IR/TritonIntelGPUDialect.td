@@ -141,6 +141,12 @@ def TritonIntelGPU_Dialect : Dialect {
     static constexpr llvm::StringRef getDescPaddingAttrName() {
       return "ttig.desc_padding";
     }
+
+    /// Get the name of the attribute used to store the local (shared) memory
+    /// size in bytes available on the target device.
+    static constexpr llvm::StringRef getLocalMemSizeAttrName() {
+      return "ttig.local_mem_size";
+    }
   }];
 
   let useDefaultAttributePrinterParser = 1;

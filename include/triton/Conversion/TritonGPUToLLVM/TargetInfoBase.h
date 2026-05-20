@@ -98,6 +98,14 @@ public:
 
   virtual int getSharedMemoryBanks() const { return 32; }
 
+  /// Maximum bytes to allocate as shared memory for a single swizzled
+  /// ConvertLayoutOp. The lowering batches reps so that the total SLM used
+  /// stays within this budget, falling back to per-rep store/barrier/load when
+  /// the full batch would exceed it. Default is unlimited.
+  virtual unsigned getMaxSLMBytesForSwizzledCvt() const {
+    return std::numeric_limits<unsigned>::max();
+  }
+
   virtual int getSharedAddressSpace() const = 0;
 
   virtual int getAddressSpace(Attribute addressSpace) const = 0;

@@ -59,7 +59,9 @@ def TritonAnnotateModule: Pass<"triton-annotate-module", "mlir::ModuleOp"> {
     Option<"support256bLoadStore", "support-256b-load-store", "bool", /*default*/"false",
            "whether 256-bit per-thread elementwise load/store is supported">,
     Option<"supportRoundedDivideSqrt", "support-rounded-divide-sqrt", "bool", /*default*/"false",
-           "whether rounded divide and sqrt operations are available">
+           "whether rounded divide and sqrt operations are available">,
+    Option<"localMemSize", "local-mem-size", "unsigned", /*default*/"131072",
+           "local shared memory size in bytes available on the target device">
   ];
 }
 

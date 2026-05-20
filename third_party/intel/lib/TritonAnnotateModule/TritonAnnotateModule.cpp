@@ -95,6 +95,9 @@ struct TritonAnnotateModule
       mod->setAttr(ttgi::TritonIntelGPUDialect::getIsLTSAttrName(),
                    builder.getUnitAttr());
 
+    mod->setAttr(ttgi::TritonIntelGPUDialect::getLocalMemSizeAttrName(),
+                 builder.getI32IntegerAttr(localMemSize));
+
     setThreadsPerWarp(mod);
   }
 

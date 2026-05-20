@@ -1,5 +1,6 @@
 #include "intel/include/Analysis/Allocation.h"
 #include "intel/include/Analysis/Utility.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -18,10 +19,9 @@ std::pair<unsigned, unsigned> getNumScratchElemsAndRepsSwizzledCvt(
       actionRemoveBroadcastedRegs(srcLayout).apply(srcLayout);
   auto dstLayoutNoBroadcast =
       actionRemoveBroadcastedRegs(dstLayout).apply(dstLayout);
-  auto smem = gpu::optimalSwizzlingLdSt(srcLayoutNoBroadcast,
-                                        dstLayoutNoBroadcast,
-                                        getBitwidth(srcTy), numBanks,
-                                        srcTile, dstTile);
+  auto smem =
+      gpu::optimalSwizzlingLdSt(srcLayoutNoBroadcast, dstLayoutNoBroadcast,
+                                getBitwidth(srcTy), numBanks, srcTile, dstTile);
   auto reps = smem.getInDimSize(StringAttr::get(ctx, "reps"));
   auto nBlocks = product(triton::gpu::getCTASplitNum(
       gpu::LinearEncodingAttr::get(ctx, srcLayout)));
@@ -57,18 +57,32 @@ unsigned allocationAnalysisScratchSizeFn(gpu::ConvertLayoutOp convertLayout) {
     return 0;
 
   // For the generic swizzled path, the lowering writes each rep to a disjoint
-  // SLM slice (offset = rep * elemsPerRep) so all stores can be batched before
-  // a single barrier. Allocate elemsPerRep * nReps elements accordingly.
+  // SLM slice (offset = slot * elemsPerRep) so all reps in a batch can be
+  // stored before a single barrier.  The lowering processes reps in chunks of
+  // batchReps chosen so that batchReps * bytesPerRep fits in the device's
+  // local memory (ttig.local_mem_size), matching
+  // TargetInfo::getMaxSLMBytesForSwizzledCvt().
   auto [elemsPerRep, reps] = getNumScratchElemsAndRepsSwizzledCvt(srcTy, dstTy);
-  return elemsPerRep * reps * getBitwidth(srcTy) / 8;
+  unsigned bytesPerRep = elemsPerRep * getBitwidth(srcTy) / 8;
+  if (bytesPerRep == 0)
+    return 0;
+  // Read the local memory size from the module attribute set by AnnotateModule.
+  // Falls back to 131072 (128 KB, typical Intel PVC/BMG) if not present.
+  unsigned maxSLMBytes = 131072;
+  if (auto mod = convertLayout->getParentOfType<ModuleOp>())
+    if (auto attr = mod->getAttrOfType<IntegerAttr>(
+            gpu::intel::TritonIntelGPUDialect::getLocalMemSizeAttrName()))
+      maxSLMBytes = attr.getInt();
+  unsigned batchReps = std::min(reps, maxSLMBytes / bytesPerRep);
+  batchReps = std::max(1u, batchReps);
+  return bytesPerRep * batchReps;
 }
 } // namespace
 
 unsigned allocationAnalysisScratchSizeFn(Operation *op) {
   return TypeSwitch<Operation *, unsigned>(op)
-      .Case<gpu::ConvertLayoutOp>([](auto op) {
-        return allocationAnalysisScratchSizeFn(op);
-      })
+      .Case<gpu::ConvertLayoutOp>(
+          [](auto op) { return allocationAnalysisScratchSizeFn(op); })
       .Case<ReduceOp>(
           [](auto op) { return ReduceOpHelper(op).getScratchSizeInBytesOld(); })
       .Default([](Operation *op) {
