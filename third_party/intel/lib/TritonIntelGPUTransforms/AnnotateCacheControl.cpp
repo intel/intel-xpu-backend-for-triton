@@ -538,12 +538,18 @@ struct AnnotateCacheControlPass
   }
 
 private:
-  /// Three-requirement gate for promoting a load to EVICT_LAST. All three
+  /// Four-requirement gate for promoting a load to EVICT_LAST. All four
   /// must hold:
   ///   1. Spatial known cross-subgroup reuse (drops temporal-only).
-  ///   2. The load reaches a `tt.dot` / `tt.dot_scaled` operand through
+  ///   2. Warp-broadcast factor >= 2: at least 2 warps share the same
+  ///      address. Without this, a DPAS dot operand with `warpsPerCTA`
+  ///      that does not tile its non-K axis (factor == 1) would be
+  ///      promoted purely on the strength of K being warp-invariant —
+  ///      a degenerate "reuse" with no real cross-warp sharing. See
+  ///      .claude/reference/v5b-over-promotion-finding-2026-05-20.md.
+  ///   3. The load reaches a `tt.dot` / `tt.dot_scaled` operand through
   ///      layout-only ops only.
-  ///   3. The per-load + per-loop byte budget admits this load.
+  ///   4. The per-load + per-loop byte budget admits this load.
   /// `knownReuse(load)` is checked separately by the caller in `tryAnnotate`
   /// — this helper layers on the additional policy filters.
   template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
@@ -552,11 +558,18 @@ private:
     // Requirement 1: spatial known reuse only — drop temporal-only.
     if (!ctx.reuse.getSpatial().knownCrossSubgroupReuse(load))
       return false;
-    // Requirement 2: load value reaches a tt.dot or tt.dot_scaled operand,
+    // Requirement 2: non-trivial warp-broadcast factor. A factor of 1 means
+    // warps strictly partition the tensor, so no inter-warp reuse exists
+    // even though the layout has a warp-invariant axis.
+    std::optional<unsigned> factor =
+        ctx.reuse.getSpatial().knownWarpBroadcastFactor(load);
+    if (!factor || *factor < 2)
+      return false;
+    // Requirement 3: load value reaches a tt.dot or tt.dot_scaled operand,
     // possibly through layout-only ops.
     if (!feedsDotOperand(load.getResult()))
       return false;
-    // Requirement 3: per-load + per-loop byte budget.
+    // Requirement 4: per-load + per-loop byte budget.
     if (!ctx.evictLastBudget.fits(load))
       return false;
     return true;

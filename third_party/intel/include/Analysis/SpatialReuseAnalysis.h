@@ -100,6 +100,26 @@ public:
   bool knownCrossSubgroupReuse(mlir::triton::DescriptorLoadOp op) const;
   bool knownCrossSubgroupReuse(mlir::triton::DescriptorGatherOp op) const;
 
+  /// Returns the warp-broadcast factor: the number of warps that map to
+  /// the same (lane, register) coordinate of the tensor — i.e., 2^k
+  /// where k is the number of all-zero basis vectors of the "warp"
+  /// in-dim in the LinearLayout. Factor == 1 means warps strictly
+  /// partition the tensor (no broadcast); factor >= 2 means at least 2
+  /// warps share the same address.
+  ///
+  /// Same fallback semantics as `knownWarpInvariantOutDims`: returns
+  /// `std::nullopt` when the encoding is null, any shape dim is non-
+  /// power-of-2, the layout has no "warp" in-dim, or the load has no
+  /// RankedTensorType. Callers that *force* a positive action (e.g.,
+  /// gating EVICT_LAST on broadcast >= 2) must use this accessor.
+  std::optional<unsigned> knownWarpBroadcastFactor(RankedTensorType ty) const;
+  std::optional<unsigned>
+  knownWarpBroadcastFactor(mlir::triton::LoadOp op) const;
+  std::optional<unsigned>
+  knownWarpBroadcastFactor(mlir::triton::DescriptorLoadOp op) const;
+  std::optional<unsigned>
+  knownWarpBroadcastFactor(mlir::triton::DescriptorGatherOp op) const;
+
 private:
   MLIRContext *ctx;
 };

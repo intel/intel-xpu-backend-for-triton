@@ -46,16 +46,27 @@ for SIDE in baseline patched; do
     echo "=== Building $SIDE ($REF) ==="
     SIDE_WORKDIR="$WORKDIR/$SIDE"
 
-    # Create or reuse worktree
+    # Create or reuse worktree.
+    #
+    # Resolve $REF to a commit SHA via the primary worktree (so a local
+    # branch tip is found even when not pushed). Use detached-HEAD
+    # checkouts in the per-side worktree to avoid colliding with the same
+    # branch checked out elsewhere (a hard error in `git worktree`).
+    REF_SHA=$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --verify "$REF" 2>/dev/null \
+              || git rev-parse --verify "$REF")
     if [ -d "$SIDE_WORKDIR" ]; then
         echo "Worktree $SIDE_WORKDIR already exists, reusing."
         cd "$SIDE_WORKDIR"
-        git fetch
-        git checkout "$REF"
-        git pull --ff-only || true
+        # Only re-fetch + checkout if the worktree HEAD doesn't already match.
+        if [ "$(git rev-parse HEAD)" != "$REF_SHA" ]; then
+            git fetch
+            git checkout --detach "$REF_SHA"
+        else
+            echo "Worktree already at $REF ($REF_SHA), skipping checkout."
+        fi
     else
-        echo "Creating worktree at $SIDE_WORKDIR for $REF"
-        git worktree add "$SIDE_WORKDIR" "$REF"
+        echo "Creating worktree at $SIDE_WORKDIR for $REF ($REF_SHA)"
+        git worktree add --detach "$SIDE_WORKDIR" "$REF_SHA"
         cd "$SIDE_WORKDIR"
     fi
 

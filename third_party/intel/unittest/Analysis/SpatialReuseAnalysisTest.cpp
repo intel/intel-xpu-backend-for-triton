@@ -457,4 +457,122 @@ TEST_F(SpatialReuseAnalysisTest, BareRankedTensorType) {
   EXPECT_TRUE(analysis.hasCrossSubgroupReuse(ty));
 }
 
+//===----------------------------------------------------------------------===//
+// knownWarpBroadcastFactor — phase-3 tightening for EVICT_LAST gating
+//===----------------------------------------------------------------------===//
+
+TEST_F(SpatialReuseAnalysisTest, BroadcastFactor_NullEncoding_ReturnsNullopt) {
+  // Same fallback semantics as knownWarpInvariantOutDims: null encoding
+  // returns nullopt (caller must not promote).
+  auto ty = RankedTensorType::get({32, 32}, builder->getI32Type(),
+                                  /*encoding=*/Attribute{});
+
+  ModuleOp module = buildModule();
+  SpatialReuseAnalysis analysis(module);
+  EXPECT_FALSE(analysis.knownWarpBroadcastFactor(ty).has_value());
+}
+
+TEST_F(SpatialReuseAnalysisTest, BroadcastFactor_NonPow2_ReturnsNullopt) {
+  SmallVector<unsigned> sizePerThread = {1, 1};
+  SmallVector<unsigned> threadsPerWarp = {1, 32};
+  SmallVector<unsigned> warpsPerCTA = {1, 1};
+  SmallVector<unsigned> order = {1, 0};
+  auto cgaLayout = CGAEncodingAttr::get1CTALayout(&ctx, /*rank=*/2);
+  auto blocked = BlockedEncodingAttr::get(&ctx, sizePerThread, threadsPerWarp,
+                                          warpsPerCTA, order, cgaLayout);
+  auto ty = RankedTensorType::get({24, 32}, builder->getF32Type(), blocked);
+
+  ModuleOp module = buildModule();
+  SpatialReuseAnalysis analysis(module);
+  EXPECT_FALSE(analysis.knownWarpBroadcastFactor(ty).has_value());
+}
+
+TEST_F(SpatialReuseAnalysisTest, BroadcastFactor_DotOpA_TilesM_FactorEqualsWn) {
+  // DPAS dot-op-A with warpsPerCTA = [Wm, Wn] = [2, 2]:
+  //   - K (dim 1) is warp-broadcast → factor on K = Wn = 2.
+  //   - M (dim 0) is partitioned by Wm warps.
+  // Total broadcast factor = Wn = 2.
+  DpasEncodingAttr dpas = makeDpas(/*warps=*/{2, 2});
+  auto dotOpEnc =
+      DotOperandEncodingAttr::get(&ctx, /*opIdx=*/0, dpas, /*kWidth=*/1);
+  auto ty = RankedTensorType::get({64, 64}, builder->getF32Type(), dotOpEnc);
+
+  ModuleOp module = buildModule();
+  SpatialReuseAnalysis analysis(module);
+  std::optional<unsigned> factor = analysis.knownWarpBroadcastFactor(ty);
+  ASSERT_TRUE(factor.has_value());
+  EXPECT_EQ(*factor, 2u);
+}
+
+TEST_F(SpatialReuseAnalysisTest,
+       BroadcastFactor_DotOpA_DegenerateNTiling_FactorOne) {
+  // DPAS dot-op-A with warpsPerCTA = [Wm=4, Wn=1]: warps tile only M.
+  // K is "warp-invariant" but only 1 warp owns each row, so no real
+  // cross-warp reuse. Factor must be 1 — the gate `factor >= 2` rejects.
+  // This is the canonical V.5b over-promotion case (`warpsPerCTA = [1, N]`
+  // for the B operand and its symmetric `[M, 1]` for A).
+  DpasEncodingAttr dpas = makeDpas(/*warps=*/{4, 1});
+  auto dotOpEnc =
+      DotOperandEncodingAttr::get(&ctx, /*opIdx=*/0, dpas, /*kWidth=*/1);
+  auto ty = RankedTensorType::get({64, 64}, builder->getF32Type(), dotOpEnc);
+
+  ModuleOp module = buildModule();
+  SpatialReuseAnalysis analysis(module);
+  std::optional<unsigned> factor = analysis.knownWarpBroadcastFactor(ty);
+  ASSERT_TRUE(factor.has_value());
+  EXPECT_EQ(*factor, 1u);
+}
+
+TEST_F(SpatialReuseAnalysisTest,
+       BroadcastFactor_DotOpB_DegenerateMTiling_FactorOne) {
+  // Symmetric: DPAS dot-op-B with warpsPerCTA = [1, 4]. K is the warp-
+  // broadcast axis but only 1 warp owns each column → factor 1.
+  DpasEncodingAttr dpas = makeDpas(/*warps=*/{1, 4});
+  auto dotOpEnc =
+      DotOperandEncodingAttr::get(&ctx, /*opIdx=*/1, dpas, /*kWidth=*/2);
+  auto ty = RankedTensorType::get({64, 64}, builder->getF32Type(), dotOpEnc);
+
+  ModuleOp module = buildModule();
+  SpatialReuseAnalysis analysis(module);
+  std::optional<unsigned> factor = analysis.knownWarpBroadcastFactor(ty);
+  ASSERT_TRUE(factor.has_value());
+  EXPECT_EQ(*factor, 1u);
+}
+
+TEST_F(SpatialReuseAnalysisTest,
+       BroadcastFactor_DotOpA_FullBroadcast_FactorEqualsTotalWarps) {
+  // warpsPerCTA = [1, 4]: M is not partitioned (Wm=1) and K is warp-broadcast
+  // by construction. No warp basis touches any axis of A → factor = 4.
+  DpasEncodingAttr dpas = makeDpas(/*warps=*/{1, 4});
+  auto dotOpEnc =
+      DotOperandEncodingAttr::get(&ctx, /*opIdx=*/0, dpas, /*kWidth=*/1);
+  auto ty = RankedTensorType::get({64, 64}, builder->getF32Type(), dotOpEnc);
+
+  ModuleOp module = buildModule();
+  SpatialReuseAnalysis analysis(module);
+  std::optional<unsigned> factor = analysis.knownWarpBroadcastFactor(ty);
+  ASSERT_TRUE(factor.has_value());
+  EXPECT_EQ(*factor, 4u);
+}
+
+TEST_F(SpatialReuseAnalysisTest, BroadcastFactor_BlockedFullPartition_FactorOne) {
+  // Blocked encoding with warpsPerCTA = [4, 1]: warps tile dim 0 (factor 4 on
+  // that axis). Dim 1 has Wn = 1 — there's exactly one warp per col so no
+  // real broadcast there either. Total factor = 1.
+  SmallVector<unsigned> sizePerThread = {1, 1};
+  SmallVector<unsigned> threadsPerWarp = {1, 32};
+  SmallVector<unsigned> warpsPerCTA = {4, 1};
+  SmallVector<unsigned> order = {1, 0};
+  auto cgaLayout = CGAEncodingAttr::get1CTALayout(&ctx, /*rank=*/2);
+  auto blocked = BlockedEncodingAttr::get(&ctx, sizePerThread, threadsPerWarp,
+                                          warpsPerCTA, order, cgaLayout);
+  auto ty = RankedTensorType::get({32, 32}, builder->getF32Type(), blocked);
+
+  ModuleOp module = buildModule();
+  SpatialReuseAnalysis analysis(module);
+  std::optional<unsigned> factor = analysis.knownWarpBroadcastFactor(ty);
+  ASSERT_TRUE(factor.has_value());
+  EXPECT_EQ(*factor, 1u);
+}
+
 } // namespace

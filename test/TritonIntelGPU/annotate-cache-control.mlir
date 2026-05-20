@@ -19,8 +19,11 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // -----
 
 // COM: Test b — load that directly feeds a tt.dot gets evict_last (spatial known reuse on dot-operand encoding).
+// COM: warpsPerCTA = [2, 2]: both A and B operands have warp-broadcast factor 2,
+// COM: passing the Phase 3 `factor >= 2` gate. (warpsPerCTA = [4, 1] would
+// COM: rejected because the A operand would have broadcast factor 1.)
 
-#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 #dot_b = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
@@ -57,14 +60,25 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // -----
 
 // COM: Test c — load with #blocked encoding that is converted to #dot_a and
-// COM: consumed by tt.dot. warpsPerCTA = [1, 4]: warps tile only dim 1, so
-// COM: every warp reads the SAME rows on dim 0. SpatialReuseAnalysis (P1)
-// COM: structurally detects dim 0's zero warp basis and reports
-// COM: cross-subgroup reuse: the loads get evict_last. The %b load has a
-// COM: dot-operand encoding (dim K warp-broadcast), also gets evict_last.
+// COM: consumed by tt.dot. warpsPerCTA = [1, 4] on the blocked encoding,
+// COM: warpsPerCTA = [2, 2] on the dpas. Both loads pass the Phase 3
+// COM: factor>=2 gate:
+// COM:   - %a_blk: blocked tile per warp = sizePerThread × threadsPerWarp
+// COM:     = [1, 16]. With warpsPerCTA = [1, 4] the per-CTA tile is
+// COM:     [1, 64], which is *wider than the tensor* (32 cols). Two
+// COM:     warps wrap onto each column band → broadcast factor 2 on the
+// COM:     LinearLayout (a warp basis is all-zero across out-dims).
+// COM:     This is real cross-warp reuse, correctly accepted.
+// COM:   - %b: dot_b on dpas#warpsPerCTA=[2,2]; warp basis tiling M is
+// COM:     all-zero on B's [K, N] axes. Factor 2.
+// COM:
+// COM: The Phase 3 gate is *layout-driven*: it inspects the LinearLayout
+// COM: directly rather than reading warpsPerCTA heuristically, so
+// COM: tile-overflow broadcast (warp tile larger than tensor) is detected
+// COM: where a naive Wn-only check would miss it.
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
-#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 #dot_b = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
@@ -659,8 +673,11 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // COM: Test j — budget overflow: first dot-fed load fits, second
 // COM: exceeds the per-loop running total. First gets evict_last,
 // COM: second stays at default (Gate 3 still suppresses .cg).
+// COM: warpsPerCTA = [2, 2]: both A and B operands have factor 2, so both
+// COM: pass the new factor>=2 gate. The budget gate is what decides which
+// COM: gets evict_last (account-as-you-go: A admitted, B exceeds).
 
-#dpas_j = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dpas_j = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot_a_j = #ttg.dot_op<{opIdx = 0, parent = #dpas_j, kWidth = 1}>
 #dot_b_j = #ttg.dot_op<{opIdx = 1, parent = #dpas_j, kWidth = 2}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
@@ -717,7 +734,10 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // COM: (the prior bug) blocked Phase 2 promotion in the canonical Pipeline
 // COM: shape: pre-prefetch + in-loop prefetch + load on the same pointer.
 
-#dpas_l = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+// COM: warpsPerCTA = [2, 2]: both operands have factor 2, satisfying the
+// COM: factor>=2 gate. (warpsPerCTA = [4, 1] would reject the A operand.)
+
+#dpas_l = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot_a_l = #ttg.dot_op<{opIdx = 0, parent = #dpas_l, kWidth = 1}>
 #dot_b_l = #ttg.dot_op<{opIdx = 1, parent = #dpas_l, kWidth = 2}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
@@ -737,5 +757,42 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     %b = tt.load %bptr : tensor<32x32x!tt.ptr<f16>, #dot_b_l>
     %d = tt.dot %a, %b, %c : tensor<32x32xf16, #dot_a_l> * tensor<32x32xf16, #dot_b_l> -> tensor<32x32xf32, #dpas_l>
     tt.return %d : tensor<32x32xf32, #dpas_l>
+  }
+}
+
+// -----
+
+// COM: Test m — Phase 3 broadcast-factor gate. With warpsPerCTA = [4, 1]
+// COM: (Wm = 4, Wn = 1), the A operand is loaded into a [M, K] tile that
+// COM: warps strictly partition by M (no warp shares any row of A). Even
+// COM: though the K axis is "warp-invariant" structurally, the broadcast
+// COM: factor is 1 — no real cross-warp reuse — and the new gate must
+// COM: REJECT promotion. The B operand has factor 4 (warp basis tiles M
+// COM: which doesn't appear on B) and is correctly promoted. This is the
+// COM: canonical V.5b over-promotion case.
+// COM:
+// COM: Reference: .claude/reference/v5b-over-promotion-finding-2026-05-20.md
+
+#dpas_m = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot_a_m = #ttg.dot_op<{opIdx = 0, parent = #dpas_m, kWidth = 1}>
+#dot_b_m = #ttg.dot_op<{opIdx = 1, parent = #dpas_m, kWidth = 2}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @factor_one_rejects_evict_last_factor_n_accepts
+  tt.func public @factor_one_rejects_evict_last_factor_n_accepts(%aptr: tensor<32x32x!tt.ptr<f16>, #dot_a_m>,
+                                                                 %bptr: tensor<32x32x!tt.ptr<f16>, #dot_b_m>,
+                                                                 %c: tensor<32x32xf32, #dpas_m>) -> tensor<32x32xf32, #dpas_m> {
+    // A operand: factor = 1 → rejected. Reuse-suspected branch returns
+    // false → no annotation set; load stays at default cache + default eviction.
+    // CHECK: tt.load
+    // CHECK-NOT: cacheModifier = cg
+    // CHECK-NOT: evictionPolicy = evict_last
+    %a = tt.load %aptr : tensor<32x32x!tt.ptr<f16>, #dot_a_m>
+    // B operand: factor = 4 → accepted, promoted to evict_last.
+    // CHECK: tt.load
+    // CHECK-NOT: cacheModifier = cg
+    // CHECK-SAME: evictionPolicy = evict_last
+    %b = tt.load %bptr : tensor<32x32x!tt.ptr<f16>, #dot_b_m>
+    %d = tt.dot %a, %b, %c : tensor<32x32xf16, #dot_a_m> * tensor<32x32xf16, #dot_b_m> -> tensor<32x32xf32, #dpas_m>
+    tt.return %d : tensor<32x32xf32, #dpas_m>
   }
 }
