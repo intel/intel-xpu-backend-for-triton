@@ -19,7 +19,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
                     offset_y, dtype: tl.constexpr, start_m, qk_scale,  #
                     BLOCK_M: tl.constexpr, HEAD_DIM: tl.constexpr, BLOCK_N: tl.constexpr,  #
                     STAGE: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,  #
-                    N_CTX: tl.constexpr):
+                    N_CTX: tl.constexpr, FP8_INPUT: tl.constexpr):
     # range of values handled by this stage
     if STAGE == 1:
         lo, hi = 0, start_m * BLOCK_M
@@ -30,7 +30,11 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
     else:
         lo, hi = 0, N_CTX
     offsetk_y = offset_y + lo
-    offsetv_y = offset_y + lo
+    if FP8_INPUT:
+        # For FP8, v is stored transposed as [HEAD_DIM, y_dim] with strides [N_CTX, 1]
+        offsetv_y = offset_y * HEAD_DIM + lo
+    else:
+        offsetv_y = offset_y + lo
     # loop over k, v and update accumulator
     for start_n in tl.range(lo, hi, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
@@ -52,7 +56,11 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         # -- update output accumulator --
         acc = acc * alpha[:, None]
         # prepare p and v for the dot
-        v = desc_v.load([offsetv_y, 0])
+        if FP8_INPUT:
+            # v is stored transposed; load [HEAD_DIM, BLOCK_N] then transpose to [BLOCK_N, HEAD_DIM]
+            v = desc_v.load([0, offsetv_y]).T
+        else:
+            v = desc_v.load([offsetv_y, 0])
         p = p.to(dtype)
         acc = tl.dot(p, v, acc)
         # update m_i and l_i
@@ -72,8 +80,9 @@ def _attn_fwd(sm_scale, M,  #
               BLOCK_M: tl.constexpr,  #
               BLOCK_N: tl.constexpr,  #
               STAGE: tl.constexpr,  #
-              TWISTED_GRID: tl.constexpr):  # pylint: disable=unused-argument
-    dtype = tl.float16
+              TWISTED_GRID: tl.constexpr,  # pylint: disable=unused-argument
+              FP8_INPUT: tl.constexpr):
+    dtype = tl.float8e5 if FP8_INPUT else tl.float16
     tl.static_assert(BLOCK_N <= HEAD_DIM)
     # TWISTED_GRID: (1, num_blocks_m, Z*H) otherwise (Z, H, num_blocks_m)
     if TWISTED_GRID:
@@ -89,8 +98,13 @@ def _attn_fwd(sm_scale, M,  #
     y_dim = Z * H * N_CTX
     desc_q = tl.make_tensor_descriptor(Q, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
                                        block_shape=[BLOCK_M, HEAD_DIM])
-    desc_v = tl.make_tensor_descriptor(V, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
-                                       block_shape=[BLOCK_N, HEAD_DIM])
+    if FP8_INPUT:
+        # v is stored transposed as [HEAD_DIM, y_dim] with strides [N_CTX, 1]
+        desc_v = tl.make_tensor_descriptor(V, shape=[HEAD_DIM, y_dim], strides=[N_CTX, 1],
+                                           block_shape=[HEAD_DIM, BLOCK_N])
+    else:
+        desc_v = tl.make_tensor_descriptor(V, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
+                                           block_shape=[BLOCK_N, HEAD_DIM])
     desc_k = tl.make_tensor_descriptor(K, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
                                        block_shape=[BLOCK_N, HEAD_DIM])
     desc_o = tl.make_tensor_descriptor(O, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
@@ -118,14 +132,14 @@ def _attn_fwd(sm_scale, M,  #
                                         desc_k, desc_v,  #
                                         offset_y, dtype, start_m, qk_scale,  #
                                         BLOCK_M, HEAD_DIM, BLOCK_N,  #
-                                        4 - STAGE, offs_m, offs_n, N_CTX)
+                                        4 - STAGE, offs_m, offs_n, N_CTX, FP8_INPUT)
     # stage 2: on-band
     if STAGE & 2:
         acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q,  #
                                         desc_k, desc_v,  #
                                         offset_y, dtype, start_m, qk_scale,  #
                                         BLOCK_M, HEAD_DIM, BLOCK_N,  #
-                                        2, offs_m, offs_n, N_CTX)
+                                        2, offs_m, offs_n, N_CTX, FP8_INPUT)
     # epilogue
     m_i += tl.math.log2(l_i)
     acc = acc / l_i[:, None]
@@ -458,8 +472,15 @@ class _attention(torch.autograd.Function):
     @staticmethod
     def forward(ctx, q, k, v, causal, sm_scale):
         # shape constraints
-        Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
-        assert Lq == Lk and Lk == Lv
+        Lq, Lk = q.shape[-1], k.shape[-1]
+        fp8_input = q.dtype == torch.float8_e5m2
+        if fp8_input:
+            # v is stored transposed as [Z, H, HEAD_DIM, N_CTX] for fp8
+            assert Lq == Lk and Lk == v.shape[-2], \
+                f'For FP8 input, HEAD_DIM must match across q, k, and transposed v: Lq={Lq}, Lk={Lk}, v.shape[-2]={v.shape[-2]}'
+        else:
+            assert Lq == Lk and Lk == v.shape[-1], \
+                f'HEAD_DIM must match across q, k, and v: Lq={Lq}, Lk={Lk}, v.shape[-1]={v.shape[-1]}'
         assert Lk in {16, 32, 64, 128}
         o = torch.empty_like(q)
         stage = 3 if causal else 1
@@ -483,7 +504,8 @@ class _attention(torch.autograd.Function):
             N_CTX=q.shape[2],  #
             HEAD_DIM=Lk,  #
             STAGE=stage,  #
-            TWISTED_GRID=TWISTED_GRID)
+            TWISTED_GRID=TWISTED_GRID,  #
+            FP8_INPUT=fp8_input)
 
         ctx.save_for_backward(q, k, v, o, M)
         ctx.sm_scale = sm_scale
@@ -540,6 +562,7 @@ def get_benchmark(
     providers_filter: Optional[list[str]] = None,
     fa_kernel_mode='fwd',
     attn_fwd=_attn_fwd,
+    use_fp8=False,
 ):
     """
     Returns a Mark object containing a Benchmark object constructed at runtime and parameterized by the provided option values.
@@ -551,8 +574,9 @@ def get_benchmark(
 
     supported_providers = {
         'triton': 'Triton',
-        'sycl-tla': 'SYCL-TLA',
     }
+    if not use_fp8:
+        supported_providers['sycl-tla'] = 'SYCL-TLA'
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
     # Initialize _attention class forward kernel (untuned for the advanced path and tuned for the default path).
@@ -621,7 +645,16 @@ def get_benchmark(
                                                                             is_causal=CAUSAL, scale=sm_scale)
 
         if provider == 'triton':
-            triton_fn = lambda: attention(q, k, v, CAUSAL, sm_scale)
+            if use_fp8:
+                assert MODE == 'fwd', 'FP8 is only supported for forward mode'
+                q_fp8 = q.detach().to(torch.float8_e5m2)
+                k_fp8 = k.detach().to(torch.float8_e5m2)
+                # v is stored transposed as [Z, H, HEAD_DIM, N_CTX] for fp8
+                v_fp8 = v.detach().permute(0, 1, 3, 2).contiguous().to(torch.float8_e5m2)
+                triton_fn = lambda: attention(q_fp8, k_fp8, v_fp8, CAUSAL, sm_scale)
+            else:
+                triton_fn = lambda: attention(q, k, v, CAUSAL, sm_scale)
+
             if MODE == 'fwd':
                 benchmark_suite.assert_close(triton_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='triton to torch')
             else:
@@ -674,7 +707,6 @@ def get_benchmark(
 
                 _, min_ms, max_ms, mean, cv = do_bench(sycl_tla_bwd_fn, grad_to_none=(q, k, v),
                                                        benchmark_label='ScaledDotProductFlashAttentionBackward0')
-
         else:
             raise NotImplementedError(f'Unsupported provider {provider}')
 
@@ -691,5 +723,6 @@ def get_benchmark(
 
 
 if __name__ == '__main__':
-    _benchmark = get_benchmark(fa_kernel_mode=os.getenv('FA_KERNEL_MODE', 'fwd'), )
+    is_fp8 = os.getenv('FP8', '0') == '1'
+    _benchmark = get_benchmark(fa_kernel_mode=os.getenv('FA_KERNEL_MODE', 'fwd'), use_fp8=is_fp8)
     _benchmark.run(show_plots=False, print_data=True)
