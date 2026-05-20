@@ -214,7 +214,7 @@ struct ConvertLayoutOpConversion
 
     assert(permutedInVals.size() == tileSize * nReps);
     SmallVector<Value> outVals;
-    auto affineOffset = b.i32_val(0);
+    int repStrideElems = storeCvt.getOutDimSize(kOffset);
     auto maskSpanAffineOffset = 0;
 
     bool isWarpSync = mlir::isCvtDimSync(srcLayout, dstLayout, kWarp);
@@ -229,17 +229,22 @@ struct ConvertLayoutOpConversion
       }
     };
 
+    // Phase 1: store all reps into disjoint SLM slices.
     for (int i = 0; i < nReps; ++i) {
-      if (i > 0)
-        emitBarrier();
       auto tileInVals =
           ArrayRef<Value>(permutedInVals).slice(i * tileSize, tileSize);
-      // Store
+      auto affineOffset = b.i32_val(i * repStrideElems);
       lowerLdStShared(loc, ctx, storeCvt, tileInVals, llvmElemTy, smemBase,
                       /*paddingShifts=*/{}, affineOffset, maskSpanAffineOffset,
                       rewriter, targetInfo);
-      emitBarrier();
-      // Load
+    }
+
+    // Ensure all stores are visible before any rep loads.
+    emitBarrier();
+
+    // Phase 2: load all reps from their corresponding SLM slices.
+    for (int i = 0; i < nReps; ++i) {
+      auto affineOffset = b.i32_val(i * repStrideElems);
       auto tileOutVals = lowerLdStShared(
           loc, ctx, loadCvt, {}, llvmElemTy, smemBase, /*paddingShifts=*/{},
           affineOffset, maskSpanAffineOffset, rewriter, targetInfo);
