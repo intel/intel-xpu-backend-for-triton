@@ -79,6 +79,27 @@ public:
   bool hasTemporalReuse(mlir::triton::DescriptorLoadOp op) const;
   bool hasTemporalReuse(mlir::triton::DescriptorGatherOp op) const;
 
+  /// Proven temporal reuse: load is inside at least one loop AND every
+  /// enclosing loop has every address-determining operand classify as
+  /// Invariant or Held with NO Unknown operand at any depth. Streaming
+  /// OR Unknown at any depth (or any operand at any depth) -> false.
+  /// Load outside any loop -> false (no proof of reuse without a loop).
+  ///
+  /// Scalar loads are handled the same way as in the existing temporal
+  /// API: tile shape degenerates to {1} (see TemporalReuseAnalysis.cpp
+  /// getTileShape) and the per-operand rule applies. The accessor does
+  /// NOT special-case scalar loads to false.
+  ///
+  /// This accessor is a *positive proof predicate* that folds all
+  /// operand and loop-depth evidence honestly. It does NOT go through
+  /// an aggregated per-loop OperandClass (which would lose Unknown when
+  /// a same-loop operand is Streaming). Suitable for forcing actions
+  /// like EVICT_LAST, unlike hasTemporalReuse which returns true on
+  /// Unknown.
+  bool provenTemporalReuse(mlir::triton::LoadOp op) const;
+  bool provenTemporalReuse(mlir::triton::DescriptorLoadOp op) const;
+  bool provenTemporalReuse(mlir::triton::DescriptorGatherOp op) const;
+
 private:
   mlir::triton::intel::ModuleStrideAnalysis &strideAnalysis;
 
@@ -94,6 +115,7 @@ private:
   SmallVector<bool> classify(Operation *op, ValueRange operands) const;
 
   template <typename OpT> bool hasTemporalReuseImpl(OpT op) const;
+  template <typename OpT> bool provenTemporalReuseImpl(OpT op) const;
 };
 
 } // namespace mlir::triton::gpu::intel
