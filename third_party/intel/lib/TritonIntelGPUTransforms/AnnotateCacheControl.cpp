@@ -642,11 +642,13 @@ private:
     if (load.getCache() != tt::CacheModifier::NONE)
       return false;
 
-    // Frontend eviction-policy override — never overwrite.
+    // Gate 1b: user-specified eviction policy (e.g. evict_first/evict_last
+    // from inductor) is honored at lowering time via LSC cache modes — do
+    // not override it here.
     if (load.getEvict() != tt::EvictionPolicy::NORMAL)
       return false;
 
-    // Scalar loads don't get encoding-based annotation.
+    // Gate 2: scalar loads don't get encoding-based annotation.
     auto loadTy = dyn_cast<RankedTensorType>(load.getType());
     if (!loadTy)
       return false;

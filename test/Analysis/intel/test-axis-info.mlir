@@ -160,6 +160,10 @@ tt.func @div() {
   %10 = tt.make_range {end = 8320 : i32, start = 8192 : i32} : tensor<128xi32>
   // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [64], constant_value = <none>
   %11 = arith.divsi %10, %4 : tensor<128xi32>
+  // CHECK-NEXT: contiguity = [128], divisibility = [32], constancy = [1], constant_value = <none>
+  %12 = tt.make_range {end = 160 : i32, start = 32 : i32} : tensor<128xi32>
+  // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>
+  %13 = arith.divsi %12, %4 : tensor<128xi32>
   tt.return
 }
 

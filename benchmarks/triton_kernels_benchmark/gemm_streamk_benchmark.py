@@ -292,5 +292,9 @@ def benchmark(M, N, K, provider):
     return (gbps(mean_ms), gbps(max_ms), gbps(min_ms)), (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
 
 
+def get_benchmark(providers_filter=None):
+    return benchmark
+
+
 if __name__ == '__main__':
     benchmark.run(show_plots=False, print_data=True)

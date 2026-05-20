@@ -1,6 +1,7 @@
 # ruff: noqa: F821,F841
 import contextlib
 import itertools
+import pathlib
 import re
 from typing import Optional
 import math
@@ -1364,6 +1365,30 @@ def test_noinline(mode, device):
     elif mode == "shared":
         ref = torch.full((16, 16), 16, device=device, dtype=torch.float32)
         assert torch.equal(z, ref + x + y)
+
+
+@triton.jit(noinline=True)
+def noinline_load_block_fn(ptr, BLOCK_SIZE: tl.constexpr):
+    offsets = tl.arange(0, BLOCK_SIZE)
+    return tl.load(ptr + offsets)
+
+
+def test_noinline_returns_tensor(device):
+
+    @triton.jit
+    def kernel(X, Y, Z, BLOCK_SIZE: tl.constexpr):
+        x = noinline_load_block_fn(X, BLOCK_SIZE)
+        y = noinline_load_block_fn(Y, BLOCK_SIZE)
+        offsets = tl.arange(0, BLOCK_SIZE)
+        tl.store(Z + offsets, x + y)
+
+    BLOCK_SIZE = 128
+    torch.manual_seed(0)
+    x = torch.randn(BLOCK_SIZE, device=device, dtype=torch.float32)
+    y = torch.randn(BLOCK_SIZE, device=device, dtype=torch.float32)
+    z = torch.empty_like(x)
+    kernel[(1, )](x, y, z, BLOCK_SIZE=BLOCK_SIZE, num_warps=1)
+    assert torch.equal(z, x + y)
 
 
 # ---------------
@@ -3355,7 +3380,10 @@ def get_test_small_dots_cases():
     if not (is_cuda() or is_xpu()):
         return []
     return [(2, 4, 32, 1, False, False, 'None', 'ieee', 'float16', 'float32', 1, None),
-            (1, 2, 32, 1, False, False, 'None', 'ieee', 'float8e5', 'float32', 1, None)]
+            (1, 2, 32, 1, False, False, 'None', 'ieee', 'float8e5', 'float32', 1, None),
+            # N=8: TF32 K=8 (wgmma.m64n8k8, sm90+) and FP16 K=16 (wgmma.m64n8k16)
+            (64, 8, 8, 4, False, False, 'None', 'tf32', 'float32', 'float32', 1, None),
+            (64, 8, 16, 4, False, False, 'None', 'ieee', 'float16', 'float32', 1, None)]
 
 
 @pytest.mark.interpreter
@@ -3389,7 +3417,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
             if (M < 8 or N < 16 or (K < 16 and in_dtype == 'float16') or (K < 8 and in_dtype == 'float32')):
                 pytest.xfail("XPU: small dots are not supported")
         elif not is_hip() and K < 16:
-            if in_dtype != 'float64':
+            tf32_n8 = (in_dtype == 'float32' and N == 8 and K == 8 and input_precision == 'tf32')
+            if in_dtype != 'float64' and not tf32_n8:
                 pytest.skip("small dots are supported only on HIP at the moment")
         if is_cuda():
             capability = torch.cuda.get_device_capability()
@@ -3635,12 +3664,15 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     # make sure ld/st are vectorized
     ptx = pgm.asm['ptx']
 
-    if (K > 16 or N > 16 or M > 16) and (M * N // (num_warps * 32) >= 4):
-        # XXX: skip small sizes because they are not vectorized
+    # XXX: skip small sizes because they are not vectorized; with runtime
+    # strides, v4 needs the contiguous dim >= 16 (K for loads, N for stores).
+    enough_work = (M * N // (num_warps * 32) >= 4) and (K > 16 or N > 16 or M > 16)
+    if enough_work and K >= 16:
         if 'float64' in in_dtype:
             assert 'ld.global.v2.b64' in ptx
         else:
             assert 'ld.global.v4' in ptx
+    if enough_work and N >= 16:
         if 'float8' in in_dtype:
             assert 'st.global.v2' in ptx
         elif 'float64' in in_dtype:
@@ -3698,6 +3730,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         assert re.search(pattern, ptx, flags=re.DOTALL)
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, num_warps, mma, kpack",
                          [(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, 4, mma, kpack)
                           for M, N, K in itertools.product([32, 64, 128], [32, 64, 128], [64, 128])
@@ -3708,6 +3741,9 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                           for mma in (mma_nonk_sizes if is_hip() else [16])
                           for kpack in ([1, 2] if (is_hip() and not (is_hip_cdna4() or is_hip_gfx1250())) else [1])])
 def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, num_warps, mma, kpack, device):
+    if is_interpreter() and normal_type != "fp16":
+        pytest.xfail("bfloat16 is not supported in the interpreter")
+
     is_SM120 = False
     if is_cuda():
         cc = torch.cuda.get_device_capability()
@@ -3957,6 +3993,8 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
     if is_hip_rdna3() and mxfp_type == "e4m3" and normal_type == "fp16":
         large_tolerance = True
     if is_SM120:
+        large_tolerance = True
+    if mxfp_type == 'e4m3' and is_interpreter():
         large_tolerance = True
     atol = 2e-4 if large_tolerance else 1e-5
     rtol = 2e-2 if large_tolerance else 1e-2
@@ -7092,3 +7130,56 @@ def test_libdevice_rint(dtype_str, device):
     rint_kernel[(triton.cdiv(numel, BLOCK_SIZE), )](res_out, x_tri, numel, BLOCK_SIZE)
     ref_out = np.rint(x_np)
     np.testing.assert_allclose(to_numpy(res_out), ref_out, rtol=0, atol=0, equal_nan=True)
+
+
+@pytest.mark.parametrize("blocked", [
+    # row-major: threads laid out along the first dimension
+    "#ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>",
+    # column-major: threads laid out along the second dimension
+    "#ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [0, 1]}>",
+])
+def test_local_alloc_sub_byte_element_type(device, tmp_path: pathlib.Path, blocked):
+    # Regression test for https://github.com/triton-lang/triton/pull/10285.
+    # Previously, local_alloc for sub-byte element types (e.g. i1) would compute
+    # an allocation size of 0 (bitwidth/8 = 1/8 = 0), while the lowering used
+    # ceil(bitwidth, 8) = 1 byte per element, causing a size mismatch.
+    # This test verifies that local_alloc and local_load work end-to-end for i1
+    # with two different blocked layouts.
+    ir = f"""
+    #blocked = {blocked}
+    #shared = #ttg.swizzled_shared<{{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}}>
+    #smem = #ttg.shared_memory
+    module attributes {{"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32}} {{
+      tt.func public @test_local_alloc_i1(%arg0: !tt.ptr<i8> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<i8> {{tt.divisibility = 16 : i32}}) {{
+        %range = tt.make_range {{end = 128 : i32, start = 0 : i32}} : tensor<128xi32, #ttg.slice<{{dim = 1, parent = #blocked}}>>
+        %range2d = tt.expand_dims %range {{axis = 1 : i32}} : tensor<128xi32, #ttg.slice<{{dim = 1, parent = #blocked}}>> -> tensor<128x1xi32, #blocked>
+        %ptr0 = tt.splat %arg0 : !tt.ptr<i8> -> tensor<128x1x!tt.ptr<i8>, #blocked>
+        %addr0 = tt.addptr %ptr0, %range2d : tensor<128x1x!tt.ptr<i8>, #blocked>, tensor<128x1xi32, #blocked>
+        %vals_i8 = tt.load %addr0 : tensor<128x1x!tt.ptr<i8>, #blocked>
+        %zero_i8 = arith.constant dense<0> : tensor<128x1xi8, #blocked>
+        %vals_i1 = arith.cmpi ne, %vals_i8, %zero_i8 : tensor<128x1xi8, #blocked>
+        %smem = ttg.local_alloc %vals_i1 : (tensor<128x1xi1, #blocked>) -> !ttg.memdesc<128x1xi1, #shared, #smem>
+        %loaded_i1 = ttg.local_load %smem : !ttg.memdesc<128x1xi1, #shared, #smem> -> tensor<128x1xi1, #blocked>
+        %loaded_i8 = arith.extui %loaded_i1 : tensor<128x1xi1, #blocked> to tensor<128x1xi8, #blocked>
+        %ptr1 = tt.splat %arg1 : !tt.ptr<i8> -> tensor<128x1x!tt.ptr<i8>, #blocked>
+        %addr1 = tt.addptr %ptr1, %range2d : tensor<128x1x!tt.ptr<i8>, #blocked>, tensor<128x1xi32, #blocked>
+        tt.store %addr1, %loaded_i8 : tensor<128x1x!tt.ptr<i8>, #blocked>
+        tt.return
+      }}
+    }}
+    """
+
+    # Input: mix of zero and non-zero values to exercise both i1 paths.
+    x = torch.tensor([i % 3 - 1 for i in range(128)], dtype=torch.int8, device=device).reshape(128, 1)
+    z = torch.zeros(128, 1, dtype=torch.int8, device=device)
+
+    temp_file = tmp_path / "test_local_alloc_i1.ttgir"
+    temp_file.write_text(ir)
+    kernel = triton.compile(str(temp_file))
+
+    kernel[(1, 1, 1)](x.data_ptr(), z.data_ptr())
+
+    # The kernel reads i8, casts to i1 (!=0), stores/loads via shared memory,
+    # then zero-extends back to i8 and writes out. Expected: 1 if input != 0 else 0.
+    expected = (x != 0).to(torch.int8)
+    assert torch.equal(z, expected)

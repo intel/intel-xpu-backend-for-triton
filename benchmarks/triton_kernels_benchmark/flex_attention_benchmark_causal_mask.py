@@ -333,5 +333,28 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
     return (gbps(mean), gbps(max_ms), gbps(min_ms)), (tflops(mean), tflops(max_ms), tflops(min_ms)), cv
 
 
+def get_benchmark(providers_filter=None, fa_kernel_mode='fwd', batch_size=1):  # pylint: disable=W0613,W0621
+    local_batch_sizes = [16, 32, 64] if os.getenv('THROUGHPUT_TEST', '0') == '1' else [batch_size]
+    if 'B580' in torch.xpu.get_device_name():
+        local_batch_sizes = [size for size in local_batch_sizes if size < 16]
+    base = benchmark.benchmarks
+    base_shapes = [x[1:-1] for x in base.x_vals]
+    x_vals = [[z, *params, fa_kernel_mode] for z in local_batch_sizes for params in base_shapes]
+    if fa_kernel_mode == 'bwd':
+        x_vals += [[z, h, h, seq_len, seq_len, 128, 128, fa_kernel_mode]
+                   for z in local_batch_sizes
+                   for h in [1, 2, 4, 16, 24, 32]
+                   for seq_len in [4096, 8192]]
+
+    @benchmark_suite.perf_report(
+        benchmark_suite.Benchmark(x_names=base.x_names, x_vals=x_vals, line_arg=base.line_arg, line_vals=base.line_vals,
+                                  line_names=base.line_names, styles=base.styles, ylabel=base.ylabel,
+                                  plot_name=base.plot_name, args=base.args))
+    def _benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provider):
+        return benchmark.fn(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provider)
+
+    return _benchmark
+
+
 if __name__ == '__main__':
     benchmark.run(show_plots=False, print_data=True)

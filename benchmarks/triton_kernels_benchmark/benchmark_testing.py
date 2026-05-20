@@ -273,7 +273,10 @@ def do_bench_proton(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=
             if sync_submitting:
                 synchronize()
 
-    proton.start()
+    # Use a pid-suffixed profile name so parallel workers (e.g. pytest-xdist)
+    # don't clobber each other's ./proton.hatchet output.
+    profile_name = f"proton-{os.getpid()}"
+    proton.start(profile_name)
     # Benchmark
     for idx in range(n_repeat):
         # we don't want `fn` to accumulate gradient values
@@ -292,8 +295,10 @@ def do_bench_proton(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=
     # Record clocks
     synchronize()
     proton.finalize()
-    with open("./proton.hatchet", encoding="utf-8") as f:
+    hatchet_path = f"./{profile_name}.hatchet"
+    with open(hatchet_path, encoding="utf-8") as f:
         data = json.load(f)
+    os.remove(hatchet_path)
 
     profiling_func_filter = filter(
         lambda x: x["frame"]["name"].startswith("__profile_kernel_of_func"
@@ -764,7 +769,12 @@ class BenchmarkRunResult(_BenchmarkSummary, ABC):
             [c for c in res_df.columns if c.endswith(("-min", "-max", "-CV"))], )
         providers = self.selected_providers.values()
         metric_cols = [column for column in res_df.columns if _keep_column(column)]
-        column_tuples = [tuple(col.split("-", 1)) for col in metric_cols]
+        column_tuples = []
+        for col in metric_cols:
+            for provider in providers:
+                if col.startswith(provider + "-"):
+                    column_tuples.append((provider, col[len(provider) + 1:]))
+                    break
         metrics_df = res_df[metric_cols].copy()
         metrics_df.index = res_df[shape_name]
         metrics_df.index.name = shape_name
@@ -790,22 +800,51 @@ class BenchmarkRunResult(_BenchmarkSummary, ABC):
 
 
 @dataclass
-class BenchmarkConfig:
+class BenchmarkConfig:  # pylint: disable=too-many-instance-attributes
     key: str
     get_benchmark: Callable[..., Mark]
     categories: Set[BenchmarkCategory]
     description: str = ""
     providers_filter: Optional[list[str]] = None
-    run_opts: Dict[str, Union[str, bool, List[str]]] = field(default_factory=dict)
+    run_opts: Dict[str, Union[str, bool, int, List[str]]] = field(default_factory=dict)
+    report_name: Optional[str] = None
+    report_file_prefix: Optional[str] = None
+
+    @property
+    def benchmark_report_name(self) -> str:
+        return self.report_name if self.report_name else self.key
+
+    @property
+    def benchmark_report_file_prefix(self) -> str:
+        return self.report_file_prefix if self.report_file_prefix else self.benchmark_report_name
 
     def _get_benchmark(self, apply_providers_filter=True) -> Mark:
         run_opts = self.run_opts
-        if self.providers_filter and apply_providers_filter:
-            run_opts = run_opts | {"providers_filter": self.providers_filter}
         mark = self.get_benchmark(**run_opts)
         if not isinstance(mark.benchmarks, Benchmark):
             raise NotImplementedError(
                 "Benchmark config list is not supported, exactly one benchmark config is expected.")
+        if self.providers_filter and apply_providers_filter:
+            bench = mark.benchmarks
+            indices = [i for i, p in enumerate(bench.line_vals) if p in self.providers_filter]
+            if not indices:
+                raise AssertionError(
+                    f"No providers selected from {bench.line_vals} for {self.providers_filter} filter.")
+            filtered_bench = Benchmark(
+                x_names=bench.x_names,
+                x_vals=bench.x_vals,
+                line_arg=bench.line_arg,
+                line_vals=[bench.line_vals[i] for i in indices],
+                line_names=[bench.line_names[i] for i in indices],
+                plot_name=bench.plot_name,
+                args=bench.args,
+                xlabel=bench.xlabel,
+                ylabel=bench.ylabel,
+                x_log=bench.x_log,
+                y_log=bench.y_log,
+                styles=[bench.styles[i] for i in indices] if bench.styles else None,
+            )
+            return Mark(mark.fn, filtered_bench)
         return mark
 
 
@@ -846,7 +885,7 @@ class BenchmarkConfigRunResult(BenchmarkRunResult, BenchmarkConfig):
         start_time = time.perf_counter()
         # FIXME: Eliminate mark_args argument
         # This is useful for unit testing, composite becnhmark configs and results caching
-        self.res_df_list = (self.get_benchmark().run_constrained(shapes=self.selected_shapes, mark_args=args)
+        self.res_df_list = (self._get_benchmark().run_constrained(shapes=self.selected_shapes, mark_args=args)
                             if self.res_df_list is None else self.res_df_list)
         self.run_time = time.perf_counter() - start_time
         return self
@@ -857,16 +896,19 @@ class BenchmarkConfigRunResult(BenchmarkRunResult, BenchmarkConfig):
             column for column in res_df.select_dtypes(include=["number", "bool"]).columns
             if column in self.shape_dimensions
         ]
+        has_mask = "MASK" in self.shape_dimensions and "MASK" in res_df.columns
+        if has_mask:
+            shape_cols_for_report_builder.append("MASK")
         for provider_key, provider_label in self.selected_providers.items():
             report_args = build_report.PassedArgs(
                 source=f"{reports_folder}/{self.plot_name}.csv",
-                target=f"{reports_folder}/{self.key}-{provider_key}-report.csv",
+                target=f"{reports_folder}/{self.benchmark_report_file_prefix}-{provider_key}-report.csv",
                 param_cols=",".join(shape_cols_for_report_builder),
-                benchmark=self.key,
+                benchmark=self.benchmark_report_name,
                 compiler=str(provider_key),
                 tflops_col=f"{provider_label}-{self.compute_metric}",
                 hbm_col=f"{provider_label}-{self.memory_metric}",
                 tag=tag,
-                mask=False,
+                mask=has_mask,
             )
             build_report.build_report(report_args, res_df)

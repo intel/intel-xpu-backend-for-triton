@@ -314,6 +314,9 @@ LogicalResult getConvertBackwardSlice(
         enqueue(gather.getIndicesMutable(), srcEncoding);
         continue;
       }
+      // Cannot remat across tt.call: callee signature wouldn't update.
+      if (isa<tt::CallOp>(definingOp))
+        return failure();
       for (auto [i, operand] : llvm::enumerate(definingOp->getOpOperands())) {
         if (isa<RankedTensorType>(operand.get().getType())) {
           Attribute srcEncoding;

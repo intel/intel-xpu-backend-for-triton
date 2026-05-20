@@ -1,5 +1,5 @@
 """isort:skip_file"""
-__version__ = '3.7.1'
+__version__ = '3.7.2'
 
 # ---------------------------------------
 # Note: import order is significant here.
