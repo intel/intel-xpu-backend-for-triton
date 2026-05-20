@@ -3,8 +3,8 @@
 
 module {
   // COM: Ensure that the 'threads-per-warp' attribute is set according to the option.
-  // CHECK-NO-BDPAS: module attributes {"ttg.threads-per-warp" = 32 : i32, ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, ttig.support_subgroup_matrix_multiply_accumulate, ttig.target_arch = "spir64"}
-  // CHECK-BDPAS: module attributes {"ttg.threads-per-warp" = 32 : i32, ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_subgroup_scaled_matrix_multiply_accumulate, ttig.target_arch = "spir64"}
+  // CHECK-NO-BDPAS: module attributes {"ttg.threads-per-warp" = 32 : i32, ttig.local_mem_size = 131072 : i32, ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, ttig.support_subgroup_matrix_multiply_accumulate, ttig.target_arch = "spir64"}
+  // CHECK-BDPAS: module attributes {"ttg.threads-per-warp" = 32 : i32, ttig.local_mem_size = 131072 : i32, ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_subgroup_scaled_matrix_multiply_accumulate, ttig.target_arch = "spir64"}
 
   tt.func @kernel() {
     tt.return
@@ -16,8 +16,8 @@ module {
 module {
   // COM: Ensure that the 'threads-per-warp' attribute is overwritten when the kernel contains a 'tt.dot'
   //      operation that can be lowered to DPAS instructions.
-  // CHECK-NO-BDPAS: module attributes {"ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, ttig.support_subgroup_matrix_multiply_accumulate, ttig.target_arch = "spir64"}
-  // CHECK-BDPAS: module attributes {"ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_subgroup_scaled_matrix_multiply_accumulate, ttig.target_arch = "spir64"}
+  // CHECK-NO-BDPAS: module attributes {"ttg.threads-per-warp" = 16 : i32, ttig.local_mem_size = 131072 : i32, ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, ttig.support_subgroup_matrix_multiply_accumulate, ttig.target_arch = "spir64"}
+  // CHECK-BDPAS: module attributes {"ttg.threads-per-warp" = 16 : i32, ttig.local_mem_size = 131072 : i32, ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_subgroup_scaled_matrix_multiply_accumulate, ttig.target_arch = "spir64"}
 
   tt.func @kernel() {
     %a = arith.constant dense<1.00e+00> : tensor<128x32xf16>
