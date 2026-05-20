@@ -7,6 +7,8 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/SmallVector.h"
 
+#include <optional>
+
 namespace mlir::triton::gpu::intel {
 
 /// Identify the output tensor dimensions on which all warps read the
@@ -57,6 +59,66 @@ public:
   getWarpInvariantOutDims(mlir::triton::DescriptorLoadOp op) const;
   SmallVector<unsigned>
   getWarpInvariantOutDims(mlir::triton::DescriptorGatherOp op) const;
+
+  /// Return the warp-invariant out-dim set ONLY when the underlying
+  /// LinearLayout was actually inspected (no fallback was taken).
+  /// Returns std::nullopt when:
+  ///   - encoding is null,
+  ///   - any shape dim is non-power-of-2,
+  ///   - the layout has no "warp" in-dim,
+  ///   - load type is not a RankedTensorType (scalar loads).
+  ///
+  /// Returned dims are warp-broadcast under the inspected LinearLayout
+  /// (their lane and register bases vary but the warp basis is zero).
+  /// For distributed encodings this generally implies all warps in a
+  /// CTA see the same logical out-dim coordinate (and, in turn, the
+  /// same address modulo the encoding's element layout), but this is
+  /// LAYOUT-DERIVED EVIDENCE, NOT A PROOF OF IDENTICAL ADDRESSES OR
+  /// CACHE LINES. Sufficient signal to motivate EVICT_LAST on the
+  /// canonical DPAS-operand-load pattern; not sufficient to assert
+  /// reuse on arbitrary encodings without a separate same-address
+  /// argument.
+  ///
+  /// Callers that *force* a positive action (e.g. setting EVICT_LAST)
+  /// must use this accessor; the existing getWarpInvariantOutDims
+  /// returns a conservative full set on fallback paths and is suitable
+  /// only for *suppressing* a positive action.
+  std::optional<SmallVector<unsigned>>
+  knownWarpInvariantOutDims(RankedTensorType ty) const;
+
+  std::optional<SmallVector<unsigned>>
+  knownWarpInvariantOutDims(mlir::triton::LoadOp op) const;
+  std::optional<SmallVector<unsigned>>
+  knownWarpInvariantOutDims(mlir::triton::DescriptorLoadOp op) const;
+  std::optional<SmallVector<unsigned>>
+  knownWarpInvariantOutDims(mlir::triton::DescriptorGatherOp op) const;
+
+  /// Convenience: known cross-subgroup reuse. Returns true iff
+  /// knownWarpInvariantOutDims has a non-empty value.
+  bool knownCrossSubgroupReuse(RankedTensorType ty) const;
+  bool knownCrossSubgroupReuse(mlir::triton::LoadOp op) const;
+  bool knownCrossSubgroupReuse(mlir::triton::DescriptorLoadOp op) const;
+  bool knownCrossSubgroupReuse(mlir::triton::DescriptorGatherOp op) const;
+
+  /// Returns the warp-broadcast factor: the number of warps that map to
+  /// the same (lane, register) coordinate of the tensor — i.e., 2^k
+  /// where k is the number of all-zero basis vectors of the "warp"
+  /// in-dim in the LinearLayout. Factor == 1 means warps strictly
+  /// partition the tensor (no broadcast); factor >= 2 means at least 2
+  /// warps share the same address.
+  ///
+  /// Same fallback semantics as `knownWarpInvariantOutDims`: returns
+  /// `std::nullopt` when the encoding is null, any shape dim is non-
+  /// power-of-2, the layout has no "warp" in-dim, or the load has no
+  /// RankedTensorType. Callers that *force* a positive action (e.g.,
+  /// gating EVICT_LAST on broadcast >= 2) must use this accessor.
+  std::optional<unsigned> knownWarpBroadcastFactor(RankedTensorType ty) const;
+  std::optional<unsigned>
+  knownWarpBroadcastFactor(mlir::triton::LoadOp op) const;
+  std::optional<unsigned>
+  knownWarpBroadcastFactor(mlir::triton::DescriptorLoadOp op) const;
+  std::optional<unsigned>
+  knownWarpBroadcastFactor(mlir::triton::DescriptorGatherOp op) const;
 
 private:
   MLIRContext *ctx;
