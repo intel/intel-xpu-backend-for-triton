@@ -1,7 +1,6 @@
 #include "intel/include/Analysis/Allocation.h"
 #include "intel/include/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
-#include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 namespace mlir::triton::intel {
@@ -9,31 +8,9 @@ namespace {
 constexpr int kPtrBitWidth = 64;
 constexpr unsigned invalidSize = -1;
 
-std::pair<unsigned, unsigned> getNumScratchElemsAndRepsSwizzledCvt(
-    RankedTensorType srcTy, RankedTensorType dstTy, int numBanks = 32,
-    gpu::LocalMemOpTile srcTile = {}, gpu::LocalMemOpTile dstTile = {}) {
-  auto srcLayout = gpu::toLinearLayout(srcTy);
-  auto dstLayout = gpu::toLinearLayout(dstTy);
-  auto *ctx = srcLayout.getInDimNames().begin()->getContext();
-  auto srcLayoutNoBroadcast =
-      actionRemoveBroadcastedRegs(srcLayout).apply(srcLayout);
-  auto dstLayoutNoBroadcast =
-      actionRemoveBroadcastedRegs(dstLayout).apply(dstLayout);
-  auto smem =
-      gpu::optimalSwizzlingLdSt(srcLayoutNoBroadcast, dstLayoutNoBroadcast,
-                                getBitwidth(srcTy), numBanks, srcTile, dstTile);
-  auto reps = smem.getInDimSize(StringAttr::get(ctx, "reps"));
-  auto nBlocks = product(triton::gpu::getCTASplitNum(
-      gpu::LinearEncodingAttr::get(ctx, srcLayout)));
-  unsigned elemsPerRep = smem.getTotalOutDimSize() / (reps * nBlocks);
-  return {elemsPerRep, static_cast<unsigned>(reps)};
-}
-
 unsigned allocationAnalysisScratchSizeFn(gpu::ConvertLayoutOp convertLayout) {
   RankedTensorType srcTy = convertLayout.getSrc().getType();
   RankedTensorType dstTy = convertLayout.getResult().getType();
-  if (!cvtNeedsSharedMemory(srcTy, dstTy))
-    return 0;
   if (gpu::intel::cvtIsSubGroupShuffle(srcTy, dstTy))
     return 0;
   if (gpu::intel::cvtIsSubGroupTranspose(srcTy, dstTy)) {
@@ -54,9 +31,7 @@ unsigned allocationAnalysisScratchSizeFn(gpu::ConvertLayoutOp convertLayout) {
     unsigned numMatrixCells = (numElements / subGroupSize) * (subGroupSize + 1);
     return numMatrixCells * bytesPerElement;
   }
-
-  auto [elemsPerRep, reps] = getNumScratchElemsAndRepsSwizzledCvt(srcTy, dstTy);
-  return elemsPerRep * reps * getBitwidth(srcTy) / 8;
+  return invalidSize;
 }
 } // namespace
 
