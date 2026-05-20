@@ -114,6 +114,16 @@ CONFIGS = [
         report_file_prefix="attn",
     ),
     BenchmarkConfig(
+        key="flash_attention_fp8",
+        get_benchmark=flash_attention_benchmark.get_benchmark,
+        run_opts={"fa_kernel_mode": "fwd"},
+        providers_filter=["triton-fp8"],
+        categories={BenchmarkCategory.OPTIONAL, BenchmarkCategory.FLASH_ATTENTION},
+        description="FlashAttention FP8 forward kernel benchmark",
+        report_name="flash-attn-fp8",
+        report_file_prefix="attn-fp8",
+    ),
+    BenchmarkConfig(
         key="flash_attention_bwd",
         get_benchmark=flash_attention_benchmark.get_benchmark,
         run_opts={"fa_kernel_mode": "bwd"},
