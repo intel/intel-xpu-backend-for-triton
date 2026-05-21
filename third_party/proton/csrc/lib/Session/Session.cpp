@@ -6,6 +6,7 @@
 #include "Driver/GPU/XpuApi.h"
 #include "Profiler/Cupti/CuptiProfiler.h"
 #include "Profiler/Instrumentation/InstrumentationProfiler.h"
+#include "Profiler/RocprofSDK/RocprofSDKProfiler.h"
 #include "Profiler/Roctracer/RoctracerProfiler.h"
 #include "Profiler/Xpupti/XpuptiProfiler.h"
 #include "Runtime/XpuRuntime.h"
@@ -20,6 +21,10 @@ Profiler *makeProfiler(const std::string &name, void *sycl_queue = nullptr,
                        const std::string &utils_cache_path = "") {
   if (proton::toLower(name) == "cupti") {
     return &CuptiProfiler::instance();
+#ifndef _WIN32
+  } else if (proton::toLower(name) == "rocprofiler") {
+    return &RocprofSDKProfiler::instance();
+#endif
   } else if (proton::toLower(name) == "roctracer") {
     return &RoctracerProfiler::instance();
   } else if (proton::toLower(name) == "instrumentation") {

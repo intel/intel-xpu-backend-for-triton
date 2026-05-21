@@ -100,9 +100,41 @@ classifyOperandAtLoop(LoopLikeOpInterface loop, Value v, StrideInfo *si,
   return anyUnknown ? OperandClass::Unknown : OperandClass::Held;
 }
 
-SmallVector<bool> TemporalReuseAnalysis::classify(Operation *op,
-                                                  ValueRange operands) const {
-  LDBG("classify: " << *op << " #operands=" << operands.size());
+// Per-operand `scalarAxis` derivation, replicated for every load op
+// type. Encapsulates the wiring between the address-determining
+// operand list and the descriptor block axis each scalar operand
+// indexes (see comments below for the per-op-type semantics).
+static SmallVector<std::optional<unsigned>> getScalarAxes(Operation *op,
+                                                          ValueRange operands) {
+  SmallVector<std::optional<unsigned>> scalarAxes(operands.size(),
+                                                  std::nullopt);
+  // - tt.load: single pointer-tensor operand, no scalarAxis.
+  // - tt.descriptor_load: operand 0 is `desc` (tensor path); operands
+  //   1..N are scalar indices, one per descriptor block axis.
+  // - tt.descriptor_gather: operands are `desc` (tensor), `xOffsets`
+  //   (rank-1 tensor -> rank mismatch -> Unknown path), `yOffset`
+  //   (scalar indexing block axis 1).
+  if (isa<tt::DescriptorLoadOp>(op)) {
+    for (unsigned i = 1; i < operands.size(); ++i)
+      scalarAxes[i] = i - 1;
+  } else if (isa<tt::DescriptorGatherOp>(op)) {
+    if (operands.size() >= 3)
+      scalarAxes[2] = 1;
+  }
+  return scalarAxes;
+}
+
+// Build the full per-loop, per-operand classification matrix for `op`.
+// Outer index: enclosing loop depth (0 = innermost). Inner index:
+// position in `operands`. Empty result iff `op` has no enclosing loop.
+//
+// Both `hasTemporalReuse` (suppress-side) and `provenTemporalReuse`
+// (force-side) reduce this matrix; they differ only in *how* they
+// fold the per-operand classes per loop.
+static SmallVector<SmallVector<OperandClass>>
+classifyMatrix(tt::intel::ModuleStrideAnalysis &strideAnalysis, Operation *op,
+               ValueRange operands) {
+  LDBG("classifyMatrix: " << *op << " #operands=" << operands.size());
 
   auto innermost = op->getParentOfType<LoopLikeOpInterface>();
   if (!innermost)
@@ -115,39 +147,53 @@ SmallVector<bool> TemporalReuseAnalysis::classify(Operation *op,
   for (Value v : operands)
     siList.push_back(strideAnalysis.getStrideInfo(v));
 
-  // Determine the per-operand scalarAxis mapping based on op type.
-  // - tt.load: single pointer-tensor operand, no scalarAxis.
-  // - tt.descriptor_load: operand 0 is `desc` (tensor path); operands
-  //   1..N are scalar indices, one per descriptor block axis.
-  // - tt.descriptor_gather: operands are `desc` (tensor), `xOffsets`
-  //   (rank-1 tensor -> rank mismatch -> Unknown path), `yOffset`
-  //   (scalar indexing block axis 1).
-  SmallVector<std::optional<unsigned>> scalarAxes(operands.size(),
-                                                  std::nullopt);
-  if (isa<tt::DescriptorLoadOp>(op)) {
-    for (unsigned i = 1; i < operands.size(); ++i)
-      scalarAxes[i] = i - 1;
-  } else if (isa<tt::DescriptorGatherOp>(op)) {
-    // operands: [desc, xOffsets, yOffset]
-    // yOffset is at index 2 and indexes axis 1 (column) of the 1-row
-    // descriptor block.
-    if (operands.size() >= 3)
-      scalarAxes[2] = 1;
-  }
+  SmallVector<std::optional<unsigned>> scalarAxes = getScalarAxes(op, operands);
 
-  SmallVector<bool> result;
+  SmallVector<SmallVector<OperandClass>> matrix;
   for (auto loop = innermost; loop;
        loop = loop->getParentOfType<LoopLikeOpInterface>()) {
-    bool anyStreams = false;
-    for (unsigned i = 0, e = operands.size(); i < e; ++i) {
-      OperandClass c = classifyOperandAtLoop(loop, operands[i], siList[i],
-                                             tileShape, scalarAxes[i]);
-      if (c == OperandClass::Streaming) {
-        anyStreams = true;
-        break;
-      }
-    }
-    LDBG("  depth " << result.size() << ": "
+    SmallVector<OperandClass> perOperand;
+    perOperand.reserve(operands.size());
+    for (unsigned i = 0, e = operands.size(); i < e; ++i)
+      perOperand.push_back(classifyOperandAtLoop(loop, operands[i], siList[i],
+                                                 tileShape, scalarAxes[i]));
+    matrix.push_back(std::move(perOperand));
+  }
+  return matrix;
+}
+
+// Address-determining operands per load op type. Mirrors the per-op
+// dispatch previously inlined in `classifyMatrix` callers and in
+// `provenTemporalReuseImpl` — keeping it in one place ensures the two
+// reductions classify the same operand set.
+static SmallVector<Value> getAddressOperands(Operation *op) {
+  SmallVector<Value> operands;
+  if (auto load = dyn_cast<tt::LoadOp>(op)) {
+    operands.push_back(load.getPtr());
+  } else if (auto descLoad = dyn_cast<tt::DescriptorLoadOp>(op)) {
+    operands.push_back(descLoad.getDesc());
+    operands.append(descLoad.getIndices().begin(), descLoad.getIndices().end());
+  } else if (auto gather = dyn_cast<tt::DescriptorGatherOp>(op)) {
+    operands.push_back(gather.getDesc());
+    operands.push_back(gather.getXOffsets());
+    operands.push_back(gather.getYOffset());
+  } else {
+    llvm_unreachable("unsupported load op type");
+  }
+  return operands;
+}
+
+// Suppress-side fold: at each loop, report reuse unless *some* operand
+// is `Streaming` (Unknown collapses to reuse — conservative).
+static SmallVector<bool>
+reduceForReuse(ArrayRef<SmallVector<OperandClass>> matrix) {
+  SmallVector<bool> result;
+  result.reserve(matrix.size());
+  for (unsigned depth = 0, e = matrix.size(); depth < e; ++depth) {
+    bool anyStreams = llvm::any_of(matrix[depth], [](OperandClass c) {
+      return c == OperandClass::Streaming;
+    });
+    LDBG("  depth " << depth << ": "
                     << (anyStreams ? "no reuse (some operand streams)"
                                    : "reuse"));
     result.push_back(!anyStreams);
@@ -155,23 +201,38 @@ SmallVector<bool> TemporalReuseAnalysis::classify(Operation *op,
   return result;
 }
 
+// Force-side fold: true iff *every* loop has *every* operand in
+// {Invariant, Held}. Streaming OR Unknown at any (loop, operand) cell
+// defeats the proof.
+static bool reduceForProof(ArrayRef<SmallVector<OperandClass>> matrix) {
+  if (matrix.empty())
+    return false; // No enclosing loop -> no proof of reuse.
+  return llvm::all_of(matrix, [](ArrayRef<OperandClass> perOperand) {
+    return llvm::all_of(perOperand, [](OperandClass c) {
+      return c == OperandClass::Invariant || c == OperandClass::Held;
+    });
+  });
+}
+
+template <typename OpT>
+SmallVector<bool> TemporalReuseAnalysis::getReuseByLoopDepthImpl(OpT op) const {
+  return reduceForReuse(
+      classifyMatrix(strideAnalysis, op, getAddressOperands(op)));
+}
+
 SmallVector<bool>
 TemporalReuseAnalysis::getReuseByLoopDepth(tt::LoadOp op) const {
-  return classify(op, ValueRange{op.getPtr()});
+  return getReuseByLoopDepthImpl(op);
 }
 
 SmallVector<bool>
 TemporalReuseAnalysis::getReuseByLoopDepth(tt::DescriptorLoadOp op) const {
-  SmallVector<Value> operands;
-  operands.push_back(op.getDesc());
-  operands.append(op.getIndices().begin(), op.getIndices().end());
-  return classify(op, operands);
+  return getReuseByLoopDepthImpl(op);
 }
 
 SmallVector<bool>
 TemporalReuseAnalysis::getReuseByLoopDepth(tt::DescriptorGatherOp op) const {
-  return classify(op,
-                  ValueRange{op.getDesc(), op.getXOffsets(), op.getYOffset()});
+  return getReuseByLoopDepthImpl(op);
 }
 
 template <typename OpT>
@@ -192,73 +253,10 @@ bool TemporalReuseAnalysis::hasTemporalReuse(tt::DescriptorGatherOp op) const {
   return hasTemporalReuseImpl(op);
 }
 
-// Honest single-loop check: returns true iff every address-determining
-// operand classifies as Invariant or Held at `loop`. Returns false on
-// the first operand that classifies as Streaming OR Unknown. Does NOT
-// go through `classify`'s aggregated per-loop result (which collapses
-// Streaming + Unknown into Streaming, masking the Unknown evidence —
-// see the header comment on `provenTemporalReuse`).
-static bool everyOperandIsInvariantOrHeld(
-    LoopLikeOpInterface loop, Operation *op, ValueRange operands,
-    ArrayRef<StrideInfo *> siList, ArrayRef<int64_t> tileShape,
-    ArrayRef<std::optional<unsigned>> scalarAxes) {
-  for (unsigned i = 0, e = operands.size(); i < e; ++i) {
-    OperandClass c = classifyOperandAtLoop(loop, operands[i], siList[i],
-                                           tileShape, scalarAxes[i]);
-    if (c == OperandClass::Streaming || c == OperandClass::Unknown)
-      return false;
-  }
-  return true;
-}
-
 template <typename OpT>
 bool TemporalReuseAnalysis::provenTemporalReuseImpl(OpT op) const {
-  // Derive address-determining operands the same way `classify` does:
-  // - tt.load: pointer.
-  // - tt.descriptor_load: descriptor + scalar indices.
-  // - tt.descriptor_gather: descriptor + xOffsets + yOffset.
-  SmallVector<Value> operands;
-  if constexpr (std::is_same_v<OpT, tt::LoadOp>) {
-    operands.push_back(op.getPtr());
-  } else if constexpr (std::is_same_v<OpT, tt::DescriptorLoadOp>) {
-    operands.push_back(op.getDesc());
-    operands.append(op.getIndices().begin(), op.getIndices().end());
-  } else if constexpr (std::is_same_v<OpT, tt::DescriptorGatherOp>) {
-    operands.push_back(op.getDesc());
-    operands.push_back(op.getXOffsets());
-    operands.push_back(op.getYOffset());
-  }
-
-  Operation *opPtr = op.getOperation();
-  auto innermost = opPtr->template getParentOfType<LoopLikeOpInterface>();
-  if (!innermost)
-    return false; // No enclosing loop -> no proof of reuse.
-
-  SmallVector<int64_t> tileShape = getTileShape(opPtr);
-
-  SmallVector<StrideInfo *> siList;
-  siList.reserve(operands.size());
-  for (Value v : operands)
-    siList.push_back(strideAnalysis.getStrideInfo(v));
-
-  // Replicate scalarAxis derivation from `classify`.
-  SmallVector<std::optional<unsigned>> scalarAxes(operands.size(),
-                                                  std::nullopt);
-  if (isa<tt::DescriptorLoadOp>(opPtr)) {
-    for (unsigned i = 1; i < operands.size(); ++i)
-      scalarAxes[i] = i - 1;
-  } else if (isa<tt::DescriptorGatherOp>(opPtr)) {
-    if (operands.size() >= 3)
-      scalarAxes[2] = 1;
-  }
-
-  for (auto loop = innermost; loop;
-       loop = loop->getParentOfType<LoopLikeOpInterface>()) {
-    if (!everyOperandIsInvariantOrHeld(loop, opPtr, operands, siList, tileShape,
-                                       scalarAxes))
-      return false;
-  }
-  return true;
+  return reduceForProof(
+      classifyMatrix(strideAnalysis, op, getAddressOperands(op)));
 }
 
 bool TemporalReuseAnalysis::provenTemporalReuse(tt::LoadOp op) const {
