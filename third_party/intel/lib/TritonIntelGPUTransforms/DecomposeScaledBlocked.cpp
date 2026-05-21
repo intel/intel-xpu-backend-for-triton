@@ -138,9 +138,10 @@ private:
       scale = ConvertLayoutOp::create(rewriter, loc, sliceType, scale);
     }
     auto expandScale = ExpandDimsOp::create(rewriter, loc, scale, rank);
-    // 2.2) Broadcast the dimension to size 32
+    int32_t scaleFactor = scaledDotOp.deduceScaleFactor();
+    // 2.2) Broadcast the dimension to the microscaling factor.
     auto scaleShape = to_vector(scaleTy.getShape());
-    scaleShape.push_back(32);
+    scaleShape.push_back(scaleFactor);
     auto broadcastScale = BroadcastOp::create(
         rewriter, loc, expandScale.getType().clone(scaleShape), expandScale);
     // 2.3) Transpose the dimension to the scaled dimension
@@ -150,7 +151,7 @@ private:
         TransOp::create(rewriter, loc, broadcastScale, transposeOrder);
     // 2.4) Reshape to the shape of v
     scaleShape.pop_back();
-    scaleShape[dim] *= 32;
+    scaleShape[dim] *= scaleFactor;
     auto reshapeScale =
         ReshapeOp::create(rewriter, loc, scaleShape, transposedScale);
     return reshapeScale;

@@ -27,6 +27,14 @@ if (NOT oneDNNLibrary_FOUND)
 
     set(oneDNNLibrary_INCLUDE_DIR "${oneDNNLibrary_SOURCE_DIR}/include" CACHE INTERNAL "oneDNNLibrary_SOURCE_DIR")
 
+    # Build oneDNN as a subdirectory so the dnnl target is available.
+    set(DNNL_CPU_RUNTIME "SEQ" CACHE STRING "" FORCE)
+    set(DNNL_GPU_RUNTIME "SYCL" CACHE STRING "" FORCE)
+    set(DNNL_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(DNNL_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(ONEDNN_BUILD_GRAPH OFF CACHE BOOL "" FORCE)
+    add_subdirectory(${oneDNNLibrary_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR}/oneDNNLibrary-build)
+
     find_package_handle_standard_args(
             oneDNNLibrary
             FOUND_VAR oneDNNLibrary_FOUND
