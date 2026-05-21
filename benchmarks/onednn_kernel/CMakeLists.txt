@@ -9,8 +9,8 @@ target_compile_options(onednn_kernel PRIVATE "-fsycl")
 target_compile_options(onednn_kernel PRIVATE "-DDNNL_CPU_RUNTIME=SYCL")
 target_compile_options(onednn_kernel PRIVATE "-DDNNL_GPU_RUNTIME=SYCL")
 
-target_link_options(onednn_kernel PRIVATE ${oneDNN_KERNEL_FLAGS} -ldnnl)
-target_link_libraries(onednn_kernel PUBLIC ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY})
+target_link_options(onednn_kernel PRIVATE ${oneDNN_KERNEL_FLAGS})
+target_link_libraries(onednn_kernel PUBLIC ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY} dnnl)
 
 target_include_directories(onednn_kernel PUBLIC "${oneDNNLibrary_INCLUDE_DIR}")
 
