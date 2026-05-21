@@ -1,4 +1,3 @@
-add_subdirectory(Backend)
 add_subdirectory(Context)
 add_subdirectory(Data)
 add_subdirectory(Utility)

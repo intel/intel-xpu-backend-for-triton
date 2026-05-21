@@ -1,7 +1,4 @@
 #include "Profiler/Instrumentation/InstrumentationProfiler.h"
-#include "Backend/Backend.h"
-#include "Device.h"
-#include "Runtime/Runtime.h"
 #include "TraceDataIO/CircularLayoutParser.h"
 
 #include "Runtime/CudaRuntime.h"
@@ -11,12 +8,10 @@
 #include "Utility/String.h"
 #include <algorithm>
 #include <cstdint>
-#include <functional>
 #include <limits>
 #include <map>
 #include <numeric>
 #include <stdexcept>
-#include <string>
 #include <utility>
 
 namespace proton {
@@ -57,22 +52,15 @@ void InstrumentationProfiler::doSetMode(
   if (modeAndOptions.empty()) {
     throw makeInvalidArgument("Mode cannot be empty");
   }
-
-  const auto requestedDeviceName = proton::toLower(modeAndOptions[0]);
-  const auto runtimes = getRuntimeRegistrations();
-  auto runtimeIt =
-      std::find_if(runtimes.begin(), runtimes.end(),
-                   [&](const RuntimeRegistration &registration) {
-                     return requestedDeviceName ==
-                            proton::toLower(registration.getDeviceName());
-                   });
-  if (runtimeIt == runtimes.end()) {
-    throw makeInvalidArgument(
-        "Unknown or unsupported device type for instrumentation backend: " +
-        modeAndOptions[0]);
+  if (proton::toLower(modeAndOptions[0]) ==
+      proton::toLower(DeviceTraits<DeviceType::CUDA>::name)) {
+    runtime = &CudaRuntime::instance();
+  } else if (proton::toLower(modeAndOptions[0]) ==
+             proton::toLower(DeviceTraits<DeviceType::HIP>::name)) {
+    runtime = &HipRuntime::instance();
+  } else {
+    throw makeInvalidArgument("Unknown device type: " + modeAndOptions[0]);
   }
-  runtime = runtimeIt->getInstance()();
-
   for (size_t i = 1; i < modeAndOptions.size(); ++i) {
     auto delimiterPos = modeAndOptions[i].find('=');
     if (delimiterPos != std::string::npos) {
