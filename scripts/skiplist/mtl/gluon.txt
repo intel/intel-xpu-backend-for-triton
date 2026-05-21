@@ -9,3 +9,4 @@ python/test/gluon/test_lowerings.py::test_local_load_store_generic_linear[r".*"]
 
 # https://github.com/intel/intel-xpu-backend-for-triton/issues/6836
 python/test/gluon/test_core.py::test_shared_atomic_scatter_rmw[r".*"]@regexp
+python/test/gluon/test_core.py::test_shared_atomic_scatter_rmw_broadcast

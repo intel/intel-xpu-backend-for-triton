@@ -79,21 +79,40 @@ public:
   bool hasTemporalReuse(mlir::triton::DescriptorLoadOp op) const;
   bool hasTemporalReuse(mlir::triton::DescriptorGatherOp op) const;
 
+  /// Proven temporal reuse: load is inside at least one loop AND every
+  /// enclosing loop has every address-determining operand classify as
+  /// Invariant or Held with NO Unknown operand at any depth. Streaming
+  /// OR Unknown at any depth (or any operand at any depth) -> false.
+  /// Load outside any loop -> false (no proof of reuse without a loop).
+  ///
+  /// Scalar loads are handled the same way as in the existing temporal
+  /// API: tile shape degenerates to {1} (see TemporalReuseAnalysis.cpp
+  /// getTileShape) and the per-operand rule applies. The accessor does
+  /// NOT special-case scalar loads to false.
+  ///
+  /// This accessor reduces the same per-(loop, operand) classification
+  /// matrix used by `hasTemporalReuse` with a stricter policy: true iff
+  /// every cell is `Invariant` or `Held`. Streaming OR Unknown at any
+  /// cell defeats the proof — Unknown is rejected even when another
+  /// operand at the same loop is Streaming. Suitable for forcing
+  /// actions like EVICT_LAST, unlike hasTemporalReuse which returns
+  /// true on Unknown.
+  bool provenTemporalReuse(mlir::triton::LoadOp op) const;
+  bool provenTemporalReuse(mlir::triton::DescriptorLoadOp op) const;
+  bool provenTemporalReuse(mlir::triton::DescriptorGatherOp op) const;
+
 private:
   mlir::triton::intel::ModuleStrideAnalysis &strideAnalysis;
 
-  /// Shared implementation: classify every enclosing loop of `op` given the
-  /// set of operands that contribute to the effective address of the load
-  /// (e.g. the pointer for `tt.load`; the descriptor + all scalar/tensor
-  /// index operands for `tt.descriptor_load` and `tt.descriptor_gather`).
-  /// At each loop level, a load has reuse iff *every* address-determining
-  /// operand is `Invariant`, `Held`, or `Unknown`; if *any* operand is
-  /// `Streaming` (i.e. has at least one tile axis with per-iteration
-  /// advance >= that axis's tile extent), successive tiles are disjoint
-  /// on that axis and the analysis reports no reuse for the loop.
-  SmallVector<bool> classify(Operation *op, ValueRange operands) const;
-
+  /// Shared implementation. The classification matrix used to derive
+  /// both the suppress-side reuse vector and the force-side proof bit
+  /// is built by a file-static helper in TemporalReuseAnalysis.cpp;
+  /// these templates dispatch on the load op type and reduce that
+  /// matrix in two different ways.
+  template <typename OpT>
+  SmallVector<bool> getReuseByLoopDepthImpl(OpT op) const;
   template <typename OpT> bool hasTemporalReuseImpl(OpT op) const;
+  template <typename OpT> bool provenTemporalReuseImpl(OpT op) const;
 };
 
 } // namespace mlir::triton::gpu::intel
