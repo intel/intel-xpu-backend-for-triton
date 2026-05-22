@@ -178,6 +178,19 @@ def _resize_cache(x: torch.Tensor, v: tuple[int, ...]) -> torch.Tensor:
     return x.flatten()[:prod(v)].view(*v)
 
 
+def _normalize_fp8_scale(scale: torch.Tensor | None) -> torch.Tensor | None:
+    if scale is None:
+        return None
+    return scale.reshape(1) if scale.numel() == 1 else scale
+
+
+def _dequantize_fp8(tensor: torch.Tensor, scale: torch.Tensor | None) -> torch.Tensor:
+    dequantized = tensor.to(torch.float32)
+    if scale is not None:
+        dequantized = dequantized * scale.to(torch.float32)
+    return dequantized
+
+
 RECIPE_TO_DTYPE = {
     "bf16": (torch.bfloat16, None),
     "fp16": (torch.float16, None),
@@ -288,12 +301,12 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_fp8
         M = num_tokens
         N = output_hidden_size
         K = hidden_size
-        is_fp8 = dtype == torch.float8_e4m3fn
+        use_fp8 = dtype == torch.float8_e4m3fn
         output_dtype = torch.bfloat16
         scores = torch.randn((M, num_experts), device=DEVICE, dtype=torch.float32)
         topk_weights, topk_ids = torch.topk(scores, k=topk, dim=-1, sorted=False)
 
-        if is_fp8:
+        if use_fp8:
             hidden_states, input_A, input_scales = make_quantized_test_activations(
                 1,
                 M,
@@ -303,7 +316,7 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_fp8
             )
             hidden_states = hidden_states.squeeze(0)
             input_A = input_A.squeeze(0)
-            input_scales = input_scales.reshape(1)
+            input_scales = _normalize_fp8_scale(input_scales)
 
             _, input_B, weight_scales, _ = make_test_weight(
                 num_experts,
@@ -312,8 +325,9 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_fp8
                 in_dtype=output_dtype,
                 quant_dtype=dtype,
             )
-            input_B_ref = (input_B.to(torch.float32) * weight_scales.to(torch.float32)).transpose(1, 2).contiguous()
-            hidden_states_ref = input_A.to(torch.float32) * input_scales.to(torch.float32)
+            weight_scales = _normalize_fp8_scale(weight_scales)
+            input_B_ref = _dequantize_fp8(input_B, weight_scales).transpose(1, 2).contiguous()
+            hidden_states_ref = _dequantize_fp8(input_A, input_scales)
         else:
             hidden_states = torch.randn((M, K), device=DEVICE, dtype=output_dtype) / 16
             input_A = hidden_states
@@ -324,7 +338,7 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_fp8
 
         # Reference output
         output_ref = ref_grouped_gemm(
-            input_A=(hidden_states_ref if is_fp8 else hidden_states).to(output_dtype),
+            input_A=(hidden_states_ref if use_fp8 else hidden_states).to(output_dtype),
             input_B=input_B_ref.to(output_dtype),
             topk_ids=topk_ids,
             topk=topk,
@@ -375,7 +389,7 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_fp8
                     topk,
                     config,
                     tl.bfloat16,
-                    is_fp8,
+                    use_fp8,
                     False,
                     False,
                     False,
@@ -434,7 +448,7 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_fp8
             raise NotImplementedError(f'Unsupported provider {provider}')
 
         def gbps(ms):
-            n_bytes = 1 if is_fp8 else 2
+            n_bytes = 1 if use_fp8 else 2
             total_bytes = (
                 # B matrix: only load weights for activated experts
                 num_activated_experts * K * N * n_bytes +
