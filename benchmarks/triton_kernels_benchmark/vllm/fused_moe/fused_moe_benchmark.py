@@ -356,7 +356,7 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_fp8
             ),
             (m, topk, n),
         )
-        config = get_default_config(m, num_experts, n, k, topk, "fp8_w8a8" if is_fp8 else output_dtype)
+        config = get_default_config(m, num_experts, n, k, topk, "fp8_w8a8" if use_fp8 else "bf16")
         sorted_token_ids, expert_ids, num_tokens_post_padded = torch_moe_align_block_size(
             topk_ids=topk_ids,
             block_size=config["BLOCK_SIZE_M"],
