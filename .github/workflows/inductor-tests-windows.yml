@@ -9,22 +9,9 @@ on:
         type: string
         default: ""
       suite:
-        description: Space separated lists of test suites or "all"
+        description: Space separated lists of test suites, "all"
         type: string
-        default: >-
-          inductor/test_kernel_benchmark.py
-          inductor/test_codegen_triton.py
-          inductor/test_triton_extension_backend.py
-          inductor/test_triton_heuristics.py
-          inductor/test_triton_wrapper.py
-          inductor/test_triton_kernels.py
-          inductor/test_gpu_cpp_wrapper.py
-          inductor/test_aot_inductor.py
-          inductor/test_select_algorithm.py
-          inductor/test_max_autotune.py
-          inductor/test_compile_subprocess.py
-          inductor/test_analysis.py
-          inductor/test_cooperative_reductions.py
+        default: "all"
       runner_label:
         description: Runner label, keep empty for default
         type: string
@@ -149,8 +136,13 @@ jobs:
           cd ${{ env.NEW_WORKSPACE }}
 
           $env:PYTORCH_TESTING_DEVICE_ONLY_FOR = "bmg"
-          $env:TRITON_LESS_FLEX_ATTN_BWD_CONFIGS = "1"
-          bash scripts/test-pytorch.sh ${{ inputs.suite }}
+
+          $suiteInput = "${{ inputs.suite }}"
+          if ($suiteInput -eq "all") {
+            $suiteInput = (bash -lc "tr '\n' ' ' < .github/workflows/inductor-tests-default-suite.txt | xargs")
+          }
+
+          bash scripts/test-pytorch.sh $suiteInput
 
       - name: Upload test logs
         if: always()
