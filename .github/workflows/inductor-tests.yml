@@ -9,9 +9,9 @@ on:
         type: string
         default: ""
       suite:
-        description: Space separated lists of test suites, "all"
+        description: Space separated lists of test suites or "all"
         type: string
-        default: "all"
+        default: ""
       runner_label:
         description: Runner label, keep empty for default
         type: string
@@ -51,7 +51,7 @@ jobs:
       - id: set_suite
         run: |
           SUITE="${{ inputs.suite }}"
-          if [ "${SUITE}" = "all" ]; then
+          if [ -z "${SUITE}" ]; then
             echo "Using default suite"
             SUITE="$(tr '\n' ' ' < .github/workflows/inductor-tests-default-suite.txt | xargs)"
           fi

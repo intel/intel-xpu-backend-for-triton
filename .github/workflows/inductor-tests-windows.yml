@@ -9,9 +9,9 @@ on:
         type: string
         default: ""
       suite:
-        description: Space separated lists of test suites, "all"
+        description: Space separated lists of test suites or "all"
         type: string
-        default: "all"
+        default: ""
       runner_label:
         description: Runner label, keep empty for default
         type: string
@@ -138,7 +138,7 @@ jobs:
           $env:PYTORCH_TESTING_DEVICE_ONLY_FOR = "bmg"
 
           $suiteInput = "${{ inputs.suite }}"
-          if ($suiteInput -eq "all") {
+          if ($suiteInput -eq "") {
             $suiteInput = (bash -lc "tr '\n' ' ' < .github/workflows/inductor-tests-default-suite.txt | xargs")
           }
 
