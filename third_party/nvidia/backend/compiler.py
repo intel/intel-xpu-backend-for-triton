@@ -535,16 +535,14 @@ class CUDABackend(BaseBackend):
                     with open(flog.name) as log_file:
                         print(log_file.read())
 
-                # Skip deleting on Windows to avoid
-                # PermissionError: [WinError 32] The process cannot access the file because it is being used by another process
-                if os.path.exists(fsrc.name) and os.name != "nt":
+                if os.path.exists(fsrc.name):
                     os.remove(fsrc.name)
-                if os.path.exists(flog.name) and os.name != "nt":
+                if os.path.exists(flog.name):
                     os.remove(flog.name)
             except subprocess.CalledProcessError as e:
                 with open(flog.name) as log_file:
                     log = log_file.read()
-                if os.path.exists(flog.name) and os.name != "nt":
+                if os.path.exists(flog.name):
                     os.remove(flog.name)
 
                 if e.returncode == 255:
