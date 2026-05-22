@@ -2,6 +2,8 @@
 
 // COM: Test a — load that does NOT feed a dot gets CG (cache = 2).
 // COM: Store is intentionally left untouched.
+// COM: See lane_broadcast_slice_blocked1_no_cg and lane_broadcast_slice_blocked2_no_cg
+// COM: below for the contrast: encoded loads where the new gate 3b suppresses cg.
 
 #blocked1d = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
@@ -13,6 +15,44 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK-NOT: cacheModifier = cg
     tt.store %out, %0 : tensor<1024x!tt.ptr<f32>, #blocked1d>
     tt.return
+  }
+}
+
+// -----
+
+// COM: Regression guard for PR fixing the lane-broadcast false-negative on
+// COM: SliceEncodingAttr-derived loads. The parent layout's lane bases lie
+// COM: along the sliced-out axis (dim 1), so all 16 lanes load the same
+// COM: address — this is broadcast, not streaming. Gate 3b correctly
+// COM: suppresses cg annotation.
+
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @lane_broadcast_slice_blocked1_no_cg
+  tt.func public @lane_broadcast_slice_blocked1_no_cg(%ptr: tensor<16x!tt.ptr<i32>, #ttg.slice<{dim = 1, parent = #blocked1}>>) -> tensor<16xi32, #ttg.slice<{dim = 1, parent = #blocked1}>> {
+    // CHECK: tt.load
+    // CHECK-NOT: cacheModifier = cg
+    %0 = tt.load %ptr : tensor<16x!tt.ptr<i32>, #ttg.slice<{dim = 1, parent = #blocked1}>>
+    tt.return %0 : tensor<16xi32, #ttg.slice<{dim = 1, parent = #blocked1}>>
+  }
+}
+
+// -----
+
+// COM: Regression guard for PR fixing the lane-broadcast false-negative on
+// COM: SliceEncodingAttr-derived loads. The parent layout's lane bases lie
+// COM: along the sliced-out axis (dim 1), so 8 of the lanes (3 of 4 lane
+// COM: basis vectors) load the same address — this is broadcast, not streaming.
+// COM: Gate 3b correctly suppresses cg annotation.
+
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @lane_broadcast_slice_blocked2_no_cg
+  tt.func public @lane_broadcast_slice_blocked2_no_cg(%ptr: tensor<16x!tt.ptr<i32>, #ttg.slice<{dim = 1, parent = #blocked2}>>) -> tensor<16xi32, #ttg.slice<{dim = 1, parent = #blocked2}>> {
+    // CHECK: tt.load
+    // CHECK-NOT: cacheModifier = cg
+    %0 = tt.load %ptr : tensor<16x!tt.ptr<i32>, #ttg.slice<{dim = 1, parent = #blocked2}>>
+    tt.return %0 : tensor<16xi32, #ttg.slice<{dim = 1, parent = #blocked2}>>
   }
 }
 

@@ -576,4 +576,129 @@ TEST_F(SpatialReuseAnalysisTest,
   EXPECT_EQ(*factor, 1u);
 }
 
+//===----------------------------------------------------------------------===//
+// knownLaneBroadcastFactor — gate 3b for lane-coordinate broadcast
+//===----------------------------------------------------------------------===//
+
+TEST_F(SpatialReuseAnalysisTest, KnownLaneBroadcastFactor_SliceBlockedFamily1) {
+  // SliceEncodingAttr over parent=#blocked1 (regressing fused-MoE encoding
+  // family 1). Parent layout places lanes along the sliced-out axis (dim 1),
+  // so after slicing, all 4 lane basis vectors become all-zero on the
+  // surviving dim 0 → factor = 2^4 = 16.
+  // Parent: threadsPerWarp=[1,16], warpsPerCTA=[4,1].
+  SmallVector<unsigned> sizePerThread = {1, 8};
+  SmallVector<unsigned> threadsPerWarp = {1, 16};
+  SmallVector<unsigned> warpsPerCTA = {4, 1};
+  SmallVector<unsigned> order = {1, 0};
+  auto cgaLayout = CGAEncodingAttr::get1CTALayout(&ctx, /*rank=*/2);
+  auto blocked1 = BlockedEncodingAttr::get(&ctx, sizePerThread, threadsPerWarp,
+                                           warpsPerCTA, order, cgaLayout);
+  auto slice = SliceEncodingAttr::get(&ctx, /*dim=*/1, blocked1);
+  auto ty = RankedTensorType::get({16}, builder->getI32Type(), slice);
+
+  ModuleOp module = buildModule();
+  SpatialReuseAnalysis analysis(module);
+  std::optional<unsigned> factor = analysis.knownLaneBroadcastFactor(ty);
+  ASSERT_TRUE(factor.has_value());
+  EXPECT_EQ(*factor, 16u);
+}
+
+TEST_F(SpatialReuseAnalysisTest, KnownLaneBroadcastFactor_SliceBlockedFamily2) {
+  // SliceEncodingAttr over parent=#blocked2 (regressing fused-MoE encoding
+  // family 2). Parent: threadsPerWarp=[2,8], warpsPerCTA=[4,1]. After slicing
+  // dim 1, 3 of 4 lane basis vectors become all-zero on dim 0 → factor = 2^3
+  // = 8.
+  SmallVector<unsigned> sizePerThread = {1, 8};
+  SmallVector<unsigned> threadsPerWarp = {2, 8};
+  SmallVector<unsigned> warpsPerCTA = {4, 1};
+  SmallVector<unsigned> order = {1, 0};
+  auto cgaLayout = CGAEncodingAttr::get1CTALayout(&ctx, /*rank=*/2);
+  auto blocked2 = BlockedEncodingAttr::get(&ctx, sizePerThread, threadsPerWarp,
+                                           warpsPerCTA, order, cgaLayout);
+  auto slice = SliceEncodingAttr::get(&ctx, /*dim=*/1, blocked2);
+  auto ty = RankedTensorType::get({16}, builder->getI32Type(), slice);
+
+  ModuleOp module = buildModule();
+  SpatialReuseAnalysis analysis(module);
+  std::optional<unsigned> factor = analysis.knownLaneBroadcastFactor(ty);
+  ASSERT_TRUE(factor.has_value());
+  EXPECT_EQ(*factor, 8u);
+}
+
+TEST_F(SpatialReuseAnalysisTest,
+       KnownLaneBroadcastFactor_SliceDpasParent_FullBroadcast) {
+  // SliceEncodingAttr over parent=#mma (DPAS with warpsPerCTA=[1,4],
+  // threadsPerWarp=16). The DPAS layout places lanes along the N axis (dim 1),
+  // so slicing dim=1 makes every lane basis vector all-zero on the surviving
+  // dim 0 → all 16 lanes broadcast. Factor = 16.
+  //
+  // For the actual regressing kernel this load type also appears (sibling
+  // %offs_token_26 at parent=#mma). It is suppressed by gate 3 (warp
+  // broadcast on dim 0 since warpsPerCTA=[1,4]) BEFORE gate 3b is consulted,
+  // so this case is benign in practice. The factor value here is documented
+  // as evidence of what gate 3b *would* do if reached, but the gate's order
+  // ensures gate 3 wins first for this encoding family.
+  DpasEncodingAttr dpas = makeDpas(/*warps=*/{1, 4}, /*repeatCount=*/8,
+                                   /*systolicDepth=*/8, /*executionSize=*/16,
+                                   /*opsPerChannel=*/2, /*repCluster=*/{1, 1},
+                                   /*threadsPerWarp=*/16);
+  auto slice = SliceEncodingAttr::get(&ctx, /*dim=*/1, dpas);
+  auto ty = RankedTensorType::get({16}, builder->getI32Type(), slice);
+
+  ModuleOp module = buildModule();
+  SpatialReuseAnalysis analysis(module);
+  std::optional<unsigned> factor = analysis.knownLaneBroadcastFactor(ty);
+  ASSERT_TRUE(factor.has_value());
+  EXPECT_EQ(*factor, 16u);
+}
+
+TEST_F(SpatialReuseAnalysisTest,
+       KnownLaneBroadcastFactor_StreamingBlocked1D_NoBroadcast) {
+  // Genuine streaming 1-D blocked encoding: 1024 elements distributed across
+  // warps and lanes. No lane broadcasts, factor = 1.
+  SmallVector<unsigned> sizePerThread = {1};
+  SmallVector<unsigned> threadsPerWarp = {16};
+  SmallVector<unsigned> warpsPerCTA = {4};
+  SmallVector<unsigned> order = {0};
+  auto cgaLayout = CGAEncodingAttr::get1CTALayout(&ctx, /*rank=*/1);
+  auto blocked1d = BlockedEncodingAttr::get(&ctx, sizePerThread, threadsPerWarp,
+                                            warpsPerCTA, order, cgaLayout);
+  auto ty = RankedTensorType::get({1024}, builder->getF32Type(), blocked1d);
+
+  ModuleOp module = buildModule();
+  SpatialReuseAnalysis analysis(module);
+  std::optional<unsigned> factor = analysis.knownLaneBroadcastFactor(ty);
+  ASSERT_TRUE(factor.has_value());
+  EXPECT_EQ(*factor, 1u);
+}
+
+TEST_F(SpatialReuseAnalysisTest, KnownLaneBroadcastFactor_FallbackCases) {
+  // Two fallback cases: null encoding and non-pow2 shape both return nullopt.
+  // (The third fallback — no "lane" in-dim — is hard to construct from a real
+  // distributed encoding, as every concrete distributed encoding has a "lane"
+  // in-dim. We don't test it here; the unit test for knownWarpBroadcastFactor
+  // doesn't test the analogous warp-absent branch either.)
+
+  // Case 1: null encoding → nullopt
+  auto tyNullEnc = RankedTensorType::get({32}, builder->getF32Type(),
+                                         /*encoding=*/Attribute{});
+
+  // Case 2: non-pow2 shape → nullopt
+  SmallVector<unsigned> sizePerThread = {1};
+  SmallVector<unsigned> threadsPerWarp = {16};
+  SmallVector<unsigned> warpsPerCTA = {4};
+  SmallVector<unsigned> order = {0};
+  auto cgaLayout = CGAEncodingAttr::get1CTALayout(&ctx, /*rank=*/1);
+  auto blocked1d = BlockedEncodingAttr::get(&ctx, sizePerThread, threadsPerWarp,
+                                            warpsPerCTA, order, cgaLayout);
+  auto tyNonPow2 =
+      RankedTensorType::get({17}, builder->getF32Type(), blocked1d);
+
+  ModuleOp module = buildModule();
+  SpatialReuseAnalysis analysis(module);
+
+  EXPECT_FALSE(analysis.knownLaneBroadcastFactor(tyNullEnc).has_value());
+  EXPECT_FALSE(analysis.knownLaneBroadcastFactor(tyNonPow2).has_value());
+}
+
 } // namespace
