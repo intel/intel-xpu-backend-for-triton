@@ -2,21 +2,7 @@
 #define TRITON_HIPBLAS_INSTANCE_H
 
 #include "hipblas_types.h"
-#if defined(_WIN32)
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
-// tricky one
-// otherwise there may be a compilation error of
-// llvm/TargetParser/TargetParser.h due to a coincidence between the macro name
-// and one of the values in the enum:
-// https://github.com/llvm/llvm-project/blame/bb38b48910967041045997a0c1293ee2ba834196/llvm/include/llvm/TargetParser/TargetParser.h#L166-L170C3
-#ifdef NO_ERROR
-#undef NO_ERROR
-#endif
-#else
 #include <dlfcn.h>
-#endif
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -84,9 +70,6 @@ class HipblasLtInstance {
   hipblasLtMatmulPreference_t preference = NULL;
 
   void loadHipBlasDylib() {
-#if defined(_WIN32)
-    assert(0 && "Not implemented on Windows");
-#else
     if (dylibHandle == nullptr) {
       // First reuse the existing handle
       dylibHandle = dlopen(name, RTLD_NOLOAD);
@@ -133,16 +116,9 @@ class HipblasLtInstance {
                                std::string(name) +
                                "`: " + std::string(dlsym_error));
     }
-#endif
   }
 
-  void unloadHipBlasDylib() {
-#if defined(_WIN32)
-    assert(0 && "Not implemented on Windows");
-#else
-    dlclose(dylibHandle);
-#endif
-  }
+  void unloadHipBlasDylib() { dlclose(dylibHandle); }
 
   void successOrExit(hipblasStatus_t status, const std::string &context = "") {
     if (status != HIPBLAS_STATUS_SUCCESS) {
