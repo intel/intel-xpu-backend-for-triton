@@ -21,7 +21,7 @@ Key files for the installation procedure:
 1. [`vllm-pin.txt`](../../scripts/vllm/vllm-pin.txt) - vllm pin that we currently use for benchmarking and testing. CI also uses this pin.
 2. [`vllm-xpu-kernels-pin.txt`](../../scripts/vllm/vllm-xpu-kernels-pin.txt) - vllm-xpu-kernels pin. Kernels are built from source to ensure compatibility with local triton/torch.
 3. [`vllm-fix.patch`](../../scripts/vllm/vllm-fix.patch) - patch that is applied to the vllm pin above to make tests and benchmarks run.
-4. [`scripts/test-triton.sh`](../../scripts/test-triton.sh) - script that CI and developers use to install vllm and run tests
+4. [`scripts/test-triton.sh`](../../scripts/test-triton.sh) - script that CI and developers use to install vllm and run tests.
 
 # Environment
 

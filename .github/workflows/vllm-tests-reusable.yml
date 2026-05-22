@@ -39,6 +39,7 @@ env:
   # Increase this value to reset cache
   PIP_CACHE_NUMBER: 1
   HF_TOKEN: ${{ secrets.HF_TOKEN || '' }}
+  GH_TOKEN: ${{ github.token }}
 
 jobs:
   setup:
