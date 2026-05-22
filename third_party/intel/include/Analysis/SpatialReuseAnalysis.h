@@ -145,6 +145,47 @@ public:
     return knownWarpBroadcastFactor(cast<RankedTensorType>(op.getType()));
   }
 
+  /// Returns the lane-broadcast factor: the number of lanes within a warp
+  /// that map to the same logical out-dim coordinate of the result tensor —
+  /// i.e., 2^k where k is the number of all-zero basis vectors of the
+  /// "lane" in-dim in the LinearLayout. Factor == 1 means lanes strictly
+  /// partition the tensor (no broadcast); factor >= 2 means at least 2
+  /// lanes within the same warp share the same coordinate.
+  ///
+  /// This is LANE-COORDINATE BROADCAST UNDER THE INSPECTED LinearLayout,
+  /// NOT ADDRESS REUSE. As with `knownWarpInvariantOutDims`, the result is
+  /// derived from layout structure (basis vectors of the "lane" in-dim);
+  /// it is layout-derived evidence, not a proof of identical addresses or
+  /// cache lines. In canonical `tt.load %p` form the encoding fully
+  /// determines the address, so a factor >= 2 implies redundant per-lane
+  /// reads — but a load whose pointer arithmetic injects per-lane offsets
+  /// outside the encoding's reach can violate that implication.
+  ///
+  /// Same fallback semantics as `knownWarpBroadcastFactor`: returns
+  /// `std::nullopt` on null encoding, non-pow2 shape, or missing "lane"
+  /// in-dim. Suitable for **suppress-side** decisions (e.g. gating off
+  /// `cg`); not sufficient evidence for forcing a positive action. The
+  /// asymmetric-cost rationale: the worst case for a false suppress is
+  /// the L1 bandwidth of one load, while the worst case for a false
+  /// promote (currently observed) is a multi-x slowdown from cross-tile
+  /// L3 round-trips on a hot lane-broadcast scalar table.
+  std::optional<unsigned> knownLaneBroadcastFactor(RankedTensorType ty) const;
+
+  /// Op-result overload for `tt.load` (result may be scalar).
+  std::optional<unsigned>
+  knownLaneBroadcastFactor(mlir::triton::LoadOp op) const;
+
+  /// Op-result overload for descriptor-load-like ops (see corresponding
+  /// `knownWarpInvariantOutDims` template above).
+  template <
+      typename OpTy,
+      std::enable_if_t<llvm::is_one_of<OpTy, mlir::triton::DescriptorLoadOp,
+                                       mlir::triton::DescriptorGatherOp>::value,
+                       int> = 0>
+  std::optional<unsigned> knownLaneBroadcastFactor(OpTy op) const {
+    return knownLaneBroadcastFactor(cast<RankedTensorType>(op.getType()));
+  }
+
 private:
   MLIRContext *ctx;
 };

@@ -367,6 +367,26 @@ private:
     if (loadTy.getEncoding() && ctx.reuse.anyReuse(load))
       return false;
 
+    // Gate 3b: lane-broadcast suppression.
+    //
+    // SpatialReuseAnalysis::hasCrossSubgroupReuse only counts cross-WARP
+    // broadcast. When a SliceEncodingAttr's parent layout placed lane
+    // basis vectors along the sliced-out axis, those bases become all-zero
+    // on the surviving out-dim — every lane in the warp issues the same
+    // address. Such loads are not streaming; bypassing L1 with `.cg` for
+    // them produces redundant DRAM/L3 traffic and, on dual-tile PVC,
+    // forces cross-tile coherence on every reload.
+    //
+    // Suppress only when the layout structurally proves lane-broadcast
+    // (factor >= 2). std::nullopt (any fallback case) means "no proof"
+    // → fall through to subsequent gates.
+    if (loadTy.getEncoding()) {
+      std::optional<unsigned> laneFactor =
+          ctx.reuse.getSpatial().knownLaneBroadcastFactor(load);
+      if (laneFactor && *laneFactor >= 2)
+        return false;
+    }
+
     // Gate 4: atomic policy — in atomic kernels, any load whose pointer roots
     // to an entry-block pointer arg is suppressed (cost-model policy — see
     // the pass description in Passes.td).
