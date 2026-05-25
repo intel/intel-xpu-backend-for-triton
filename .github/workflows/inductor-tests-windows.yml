@@ -139,8 +139,10 @@ jobs:
 
           $suiteInput = "${{ inputs.suite }}"
           if ($suiteInput -eq "") {
+            Write-Output "Using test suites from .github/workflows/inductor-tests-default-suite.txt"
             $suiteInput = (bash -lc "tr '\n' ' ' < .github/workflows/inductor-tests-default-suite.txt | xargs")
           }
+          Write-Output "suiteInput: '$suiteInput'"
 
           bash scripts/test-pytorch.sh $suiteInput
 
