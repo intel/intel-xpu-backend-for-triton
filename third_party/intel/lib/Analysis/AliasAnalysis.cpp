@@ -123,8 +123,6 @@ static Value getMemOpPointer(Operation *op) {
       });
 }
 
-namespace {
-
 //===----------------------------------------------------------------------===//
 // AliasInfo lattice element
 //===----------------------------------------------------------------------===//
@@ -275,8 +273,6 @@ private:
     return !body.empty() && owner == &body.front();
   }
 };
-
-} // anonymous namespace
 
 //===----------------------------------------------------------------------===//
 // AliasAnalysis
