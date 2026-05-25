@@ -54,6 +54,17 @@ extern "C" EXPORT_FUNC const char *parse_device_arch(uint64_t dev_arch) {
     arch = "ptl_u";
     break;
 #endif
+#if __SYCL_COMPILER_VERSION >= 20260331
+  case sycl::ext::oneapi::experimental::architecture::intel_gpu_nvl_s:
+    arch = "nvl_s";
+    break;
+  case sycl::ext::oneapi::experimental::architecture::intel_gpu_nvl_u:
+    arch = "nvl_u";
+    break;
+  case sycl::ext::oneapi::experimental::architecture::intel_gpu_nvl_p:
+    arch = "nvl_p";
+    break;
+#endif
   case sycl::ext::oneapi::experimental::architecture::unknown:
     arch = "unknown";
     break;
