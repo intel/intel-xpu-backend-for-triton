@@ -205,6 +205,9 @@ jobs:
           ${{ toJSON(inputs) }}
           EOF
 
+      - name: Clear Triton kernel cache
+        run: rm -rf ~/.triton/cache/
+
       - name: Checkout repository
         uses: actions/checkout@v6
 
