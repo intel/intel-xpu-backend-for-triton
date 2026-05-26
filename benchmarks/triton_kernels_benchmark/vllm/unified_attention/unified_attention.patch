@@ -35,8 +35,8 @@ index 257481768..99a15faa2 100644
 +
 +@triton.autotune(
 +    configs=[
-+        triton.Config({"TILE_SIZE": 16}),
-+        triton.Config({"TILE_SIZE": 32}),
++        triton.Config({"TILE_SIZE": 16}, num_stages=2),
++        triton.Config({"TILE_SIZE": 32}, num_stages=2),
 +    ],
 +    key=["BLOCK_SIZE", "HEAD_SIZE", "IS_FP8_INPUT", "IS_3D", "BLOCK_Q"],
 +    prune_configs_by={"early_config_prune": prune_unified_attention_configs},
