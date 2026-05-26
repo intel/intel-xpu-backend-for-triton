@@ -458,6 +458,32 @@ def TritonGEN_PredicatedStoreOp
   }];
 }
 
+def TritonGEN_SubGroupBitcastShuffleOp
+    : TritonGEN_Op<"sub_group_bitcast_shuffle"> {
+  let summary = "Sub-group bitcast shuffle";
+
+  let description = [{
+    The `triton_gen.sub_group_bitcast_shuffle` broadcasts and reinterprets a
+    vector of values across work-items in a sub-group. Each work-item provides
+    an input vector which is reinterpreted as an output vector with a different
+    element type but equal total bit size.
+
+    Example:
+    ```mlir
+    %0 = triton_gen.sub_group_bitcast_shuffle %val : vector<4xi8> -> vector<2xi16>
+    ```
+  }];
+
+  let arguments = (ins FixedVectorOfNonZeroRankOf<[AnyInteger]>:$value);
+  let results = (outs FixedVectorOfNonZeroRankOf<[AnyInteger]>:$result);
+
+  let assemblyFormat = [{
+    $value attr-dict `:` type($value) `->` type($result)
+  }];
+
+  let hasVerifier = 1;
+}
+
 def TritonGEN_FToTf32Op
     : TritonGEN_Op<"f_to_tf32", [SameOperandsAndResultType]> {
   let summary = "Rounding instruction from float to tensor float (TF32) data format";

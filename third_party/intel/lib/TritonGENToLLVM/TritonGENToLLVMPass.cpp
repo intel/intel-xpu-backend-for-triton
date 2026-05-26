@@ -1311,6 +1311,30 @@ struct TritonFToTf32OpLowering
   }
 };
 
+struct TritonSubGroupBitcastShuffleLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::SubGroupBitcastShuffleOp> {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::SubGroupBitcastShuffleOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::SubGroupBitcastShuffleOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Type inputType = op.getValue().getType();
+    Type resultType = op.getResult().getType();
+
+    std::string funcName =
+        "llvm.genx.GenISA.SubgroupBitcastShuffle." +
+        getGenISATypeMangling(resultType) + "." +
+        getGenISATypeMangling(inputType);
+
+    LLVM::CallOp call = intel::createDeviceFunctionCall(
+        rewriter, funcName, resultType, {inputType}, {op.getValue()}, {},
+        intel::convergentNoUnwindWillReturnAttrs);
+    rewriter.replaceOp(op, call.getResult());
+    return success();
+  }
+};
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -1360,6 +1384,6 @@ void mlir::triton::populateTritonGENToLLVMConversionPatterns(
                TritonMatrixDPASLowering, TritonMatrixBlockScaleDPASLowering,
                TritonSubGroupBlockReadLowering,
                TritonSubGroupBlockWriteLowering, TritonPredicatedLoadOpLowering,
-               TritonPredicatedStoreOpLowering, TritonFToTf32OpLowering>(
-      converter);
+               TritonPredicatedStoreOpLowering, TritonFToTf32OpLowering,
+               TritonSubGroupBitcastShuffleLowering>(converter);
 }

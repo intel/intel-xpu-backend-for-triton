@@ -5,8 +5,6 @@
 #include "intel/include/Analysis/Utility.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 
-#include "intel/lib/TritonGENToLLVM/GenIntrinsicHelper.h"
-
 namespace mlir::triton::gpu {
 namespace {
 
@@ -538,9 +536,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                vecSize / packedRegisterSize);
     VectorType vecType = vec_ty(elementType, vecSize);
 
-    intel::Intrinsic reinterpretCast =
-        intel::GenISA<llvm::GenISAIntrinsic::ID::GenISA_SubgroupBitcastShuffle>(
-            rewriter, reinterType, vecType);
     int numElems = inVals.size();
     SmallVector<Value> result;
     for (size_t i = 0; i < numElems; i += vecSize) {
@@ -550,8 +545,11 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         slice.push_back(inVals[regId]);
       }
       Value vec = packLLVector(loc, slice, rewriter);
-      Value reinterVec =
-          b.bitcast(reinterpretCast(rewriter, loc, vec), vecType);
+      Value shuffled =
+          TritonGEN::SubGroupBitcastShuffleOp::create(rewriter, loc, reinterType,
+                                                      vec)
+              ->getResult(0);
+      Value reinterVec = b.bitcast(shuffled, vecType);
       SmallVector<Value> unpackedVec =
           unpackLLVector(loc, reinterVec, rewriter);
       for (size_t j = 0; j < vecSize; ++j) {

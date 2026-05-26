@@ -461,6 +461,25 @@ LogicalResult tt::TritonGEN::Matrix2DBlockStoreOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
+// triton_gen.sub_group_bitcast_shuffle
+//===----------------------------------------------------------------------===//
+
+LogicalResult tt::TritonGEN::SubGroupBitcastShuffleOp::verify() {
+  VectorType inputType = getValue().getType();
+  VectorType resultType = getResult().getType();
+  unsigned inputBits =
+      inputType.getNumElements() *
+      inputType.getElementType().getIntOrFloatBitWidth();
+  unsigned resultBits =
+      resultType.getNumElements() *
+      resultType.getElementType().getIntOrFloatBitWidth();
+  if (inputBits != resultBits)
+    return emitOpError(
+        "input and result must have the same total number of bits");
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // gen.2Dblockprefetch
 //===----------------------------------------------------------------------===//
 
