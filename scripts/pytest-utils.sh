@@ -163,7 +163,7 @@ ensure_spirv_dis() {
     local build_dir
     build_dir="$(mktemp -d)"
     git clone https://github.com/KhronosGroup/SPIRV-Tools.git "$build_dir/SPIRV-Tools"
-    git -C "$build_dir/SPIRV-Tools" checkout 3c042c509786feb4c7aa7164f2c7c224d386ebfc
+    git -C "$build_dir/SPIRV-Tools" checkout bf3ad6e795df95455c206452ce78a6c0277a5dd3
     python3 "$build_dir/SPIRV-Tools/utils/git-sync-deps"
     cmake -B "$build_dir/build" -S "$build_dir/SPIRV-Tools" -DCMAKE_BUILD_TYPE=Release -DSPIRV_SKIP_TESTS=ON
     cmake --build "$build_dir/build" -j"$(nproc)" --target spirv-dis
