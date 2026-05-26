@@ -689,7 +689,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // -----
 
 // COM: Test h — known cross-subgroup reuse on a load that does NOT
-// COM: reach a tt.dot. shouldUseEvictLast rejects (requirement 2).
+// COM: reach a tt.dot. shouldUseEvictLast rejects (requirement 3).
 // COM: Gate 3 still suppresses .cg.
 
 #blocked2d_h = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -842,8 +842,6 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // COM: REJECT promotion. The B operand has factor 4 (warp basis tiles M
 // COM: which doesn't appear on B) and is correctly promoted. This is the
 // COM: canonical V.5b over-promotion case.
-// COM:
-// COM: Reference: .claude/reference/v5b-over-promotion-finding-2026-05-20.md
 
 #dpas_m = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot_a_m = #ttg.dot_op<{opIdx = 0, parent = #dpas_m, kWidth = 1}>

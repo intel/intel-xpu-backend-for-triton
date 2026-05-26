@@ -31,10 +31,10 @@ using AliasKind = tti::AliasAnalysis::PointerRootKind;
 using RootsResult = tti::AliasAnalysis::PointerRootsResult;
 
 //===----------------------------------------------------------------------===//
-// Tunable budget knobs for EVICT_LAST promotion (Phase 2 of A2).
-// Exposed as `cl::opt` so Phase 3 measurement can refine without recompiling.
-// See `functional-weaving-seahorse.md` §2.1 "Budget constants and rule
-// (canonical)" for the policy these knobs implement.
+// Tunable budget knobs for EVICT_LAST promotion. Exposed as `cl::opt` so
+// measurement can refine the defaults without recompiling. The per-load knob
+// caps a single load's tile bytes; the per-loop knob caps the running total
+// across all promoted loads in the enclosing loop, bounding total L1 pressure.
 //===----------------------------------------------------------------------===//
 
 static llvm::cl::opt<int64_t> kEvictLastPerLoadBudgetBytes(
@@ -545,8 +545,7 @@ private:
   ///      address. Without this, a DPAS dot operand with `warpsPerCTA`
   ///      that does not tile its non-K axis (factor == 1) would be
   ///      promoted purely on the strength of K being warp-invariant —
-  ///      a degenerate "reuse" with no real cross-warp sharing. See
-  ///      .claude/reference/v5b-over-promotion-finding-2026-05-20.md.
+  ///      a degenerate "reuse" with no real cross-warp sharing.
   ///   3. The load reaches a `tt.dot` / `tt.dot_scaled` operand through
   ///      layout-only ops only.
   ///   4. The per-load + per-loop byte budget admits this load.
