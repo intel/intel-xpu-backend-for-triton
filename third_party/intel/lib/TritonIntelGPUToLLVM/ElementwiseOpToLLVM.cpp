@@ -1,6 +1,5 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
-#include "Utils/LLVMIntr.h"
 #include "mlir/Conversion/ArithCommon/AttrToLLVMConverter.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/MLIRContext.h"
@@ -1319,75 +1318,41 @@ struct AbsFOpConversion
   }
 };
 
-struct PreciseSqrtOpConversion
-    : ElementwiseOpConversionBase<PreciseSqrtOp, PreciseSqrtOpConversion> {
+template <typename TritonOp>
+struct OpToExternCallConversion
+    : public ElementwiseOpConversionBase<TritonOp,
+                                         OpToExternCallConversion<TritonOp>> {
   using Base =
-      ElementwiseOpConversionBase<PreciseSqrtOp, PreciseSqrtOpConversion>;
+      ElementwiseOpConversionBase<TritonOp, OpToExternCallConversion<TritonOp>>;
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
-  SmallVector<Value> createDestOps(PreciseSqrtOp op, Adaptor adaptor,
+  explicit OpToExternCallConversion(LLVMTypeConverter &typeConverter,
+                                    ModuleAxisInfoAnalysis &axisAnalysisPass,
+                                    StringRef externFuncName,
+                                    PatternBenefit benefit)
+      : Base::ElementwiseOpConversionBase(typeConverter, axisAnalysisPass,
+                                          benefit),
+        funcName(externFuncName) {}
+
+  SmallVector<Value> createDestOps(TritonOp op, Adaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
-                                   Type elemTy,
-                                   MultipleOperandsRange operandsRanges,
+                                   Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    namespace intel = mlir::triton::gpu::intel;
-
-    if (mlir::LLVM::intel::hasModuleAttr(
-            op, intel::TritonIntelGPUDialect::
-                    getSupportRoundedDivideSqrtAttrName())) {
-      SmallVector<Type> operandTypes(ValueRange(operandsRanges[0]).getTypes());
-      std::string fnName = intel::mangle("sqrt_cr", operandTypes);
-      LLVM::CallOp callOp = intel::createDeviceFunctionCall(
-          rewriter, fnName, elemTy, operandTypes, operandsRanges[0],
-          /*paramAttrs=*/{}, intel::noUnwindWillReturnAttrs);
-      return {callOp.getResult()};
-    }
-
-    // Fallback: use type-appropriate __imf_sqrt*_rn builtin.
-    StringRef fnName = elemTy.isF32() ? "__imf_sqrtf_rn" : "__imf_sqrt_rn";
-    SmallVector<Type> argTypes(ValueRange(operandsRanges[0]).getTypes());
-    LLVM::CallOp callOp = intel::createDeviceFunctionCall(
-        rewriter, fnName, elemTy, argTypes, operandsRanges[0],
-        /*paramAttrs=*/{}, intel::noUnwindWillReturnAttrs);
+    Type funcType = getFunctionType(elemTy, operands[0]);
+    SmallVector<Type> operandTypes(ValueRange(operands[0]).getTypes());
+    std::string fnName =
+        mlir::triton::gpu::intel::mangle(funcName, operandTypes);
+    LLVM::LLVMFuncOp funcOp =
+        appendOrGetExternFuncOp(rewriter, op, fnName, funcType);
+    funcOp.setCConv(triton::gpu::intel::getDefaultCConv(op));
+    auto callOp = LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]);
+    callOp.setCConv(funcOp.getCConv());
     return {callOp.getResult()};
   }
-};
 
-struct PreciseDivFOpConversion
-    : ElementwiseOpConversionBase<triton::PreciseDivFOp,
-                                  PreciseDivFOpConversion> {
-  using Base = ElementwiseOpConversionBase<triton::PreciseDivFOp,
-                                           PreciseDivFOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-
-  SmallVector<Value> createDestOps(triton::PreciseDivFOp op, Adaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy,
-                                   MultipleOperandsRange operandsRanges,
-                                   Location loc) const {
-    namespace intel = mlir::triton::gpu::intel;
-
-    if (mlir::LLVM::intel::hasModuleAttr(
-            op, intel::TritonIntelGPUDialect::
-                    getSupportRoundedDivideSqrtAttrName())) {
-      SmallVector<Type> operandTypes(ValueRange(operandsRanges[0]).getTypes());
-      std::string fnName = intel::mangle("divide_cr", operandTypes);
-      LLVM::CallOp callOp = intel::createDeviceFunctionCall(
-          rewriter, fnName, elemTy, operandTypes, operandsRanges[0],
-          /*paramAttrs=*/{}, intel::noUnwindWillReturnAttrs);
-      return {callOp.getResult()};
-    }
-
-    // Fallback: use type-appropriate __imf_*div_rn builtin.
-    StringRef fnName = elemTy.isF32() ? "__imf_fdiv_rn" : "__imf_ddiv_rn";
-    SmallVector<Type> argTypes(ValueRange(operandsRanges[0]).getTypes());
-    LLVM::CallOp callOp = intel::createDeviceFunctionCall(
-        rewriter, fnName, elemTy, argTypes, operandsRanges[0],
-        /*paramAttrs=*/{}, intel::noUnwindWillReturnAttrs);
-    return {callOp.getResult()};
-  }
+private:
+  StringRef funcName;
 };
 
 // Following two patterns are copied from the common part to fix-up calling
@@ -1462,10 +1427,10 @@ void populateElementwiseOpToLLVMPatterns(
     ModuleAxisInfoAnalysis &axisInfoAnalysis, const TargetInfoBase &targetInfo,
     PatternBenefit benefit) {
 
-  patterns.add<PreciseSqrtOpConversion>(typeConverter, axisInfoAnalysis,
-                                        benefit);
-  patterns.add<PreciseDivFOpConversion>(typeConverter, axisInfoAnalysis,
-                                        benefit);
+  patterns.add<OpToExternCallConversion<triton::PreciseSqrtOp>>(
+      typeConverter, axisInfoAnalysis, "sqrt_cr", benefit);
+  patterns.add<OpToExternCallConversion<triton::PreciseDivFOp>>(
+      typeConverter, axisInfoAnalysis, "divide_cr", benefit);
   patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis, targetInfo,
                                     benefit);
   patterns.add<ExternElementwiseOpConversion>(typeConverter, axisInfoAnalysis,

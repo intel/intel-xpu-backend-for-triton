@@ -130,9 +130,6 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
       .def_readwrite(
           "support_256b_load_store",
           &gpu::intel::TritonAnnotateModuleOptions::support256bLoadStore)
-      .def_readwrite(
-          "support_rounded_divide_sqrt",
-          &gpu::intel::TritonAnnotateModuleOptions::supportRoundedDivideSqrt)
       .def_readwrite("threads_per_warp",
                      &gpu::intel::TritonAnnotateModuleOptions::threadsPerWarp)
       .def_readwrite("target_arch",
