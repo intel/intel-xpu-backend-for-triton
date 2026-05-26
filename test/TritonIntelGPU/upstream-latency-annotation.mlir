@@ -1,5 +1,5 @@
 // RUN: triton-opt %s -split-input-file -tritongpu-assign-latencies=num-stages=3 -tritongpu-schedule-loops | FileCheck %s --check-prefix=ANNOTATE
-// RUN: triton-opt %s -split-input-file -tritongpu-assign-latencies=num-stages=3 -tritongpu-schedule-loops -tritonintelgpu-pipeline=num-stages=3 | FileCheck %s --check-prefix=PIPELINE
+// RUN: env TRITON_INTEL_ANNOTATE_LATENCIES=1 triton-opt %s -split-input-file -tritongpu-assign-latencies=num-stages=3 -tritongpu-schedule-loops -tritonintelgpu-pipeline=num-stages=3 | FileCheck %s --check-prefix=PIPELINE
 
 // COM: Verifies that the upstream `tritongpu-assign-latencies` and
 // COM: `tritongpu-schedule-loops` passes annotate Intel TTGIR (ANNOTATE prefix)
@@ -34,15 +34,19 @@ module attributes {ttig.support_subgroup_matrix_multiply_accumulate, ttig.suppor
     // ANNOTATE: tt.dot
     // ANNOTATE: tt.scheduled_max_stage = {{[0-9]+}} : i32
 
-    // COM: Intel pipeline pass produces 4 hoisted prefetches (2 per stage, 2 stages)
-    // COM: and maintains prefetch-load-dot ordering inside the loop.
-    // PIPELINE-COUNT-4: ttig.descriptor_prefetch
+    // COM: Intel pipeline pass produces exactly 4 hoisted prefetches (2 per stage, 2 stages)
+    // COM: and exactly 2 in-loop prefetches, all carrying loop.stage = 0 and loop.cluster
+    // COM: copied from the source load. PIPELINE-COUNT enforces the exact prefetch count;
+    // COM: the per-line PIPELINE checks then verify each carries the expected attrs.
+    // PIPELINE-COUNT-4: ttig.descriptor_prefetch {{.*}}loop.cluster = {{[0-9]+}} : i32, loop.stage = 0 : i32
     // PIPELINE: scf.for
-    // PIPELINE: ttig.descriptor_prefetch
-    // PIPELINE: ttig.descriptor_prefetch
+    // PIPELINE-COUNT-2: ttig.descriptor_prefetch {{.*}}loop.cluster = {{[0-9]+}} : i32, loop.stage = 0 : i32
     // PIPELINE: tt.descriptor_load
     // PIPELINE: tt.descriptor_load
     // PIPELINE: tt.dot
+    // COM: Catch any extra prefetches beyond the 4+2 expected. CHECK-NOT applies between
+    // COM: the previous match and the next, so this guards everything from tt.dot to EOF.
+    // PIPELINE-NOT: ttig.descriptor_prefetch
 
     %result:2 = scf.for %k = %c0_i32 to %c64_i32 step %c1_i32 iter_args(%acc = %cst, %koff = %c0_i32) -> (tensor<128x256xf32, #mma>, i32) : i32 {
       %a3d = tt.descriptor_load %descA[%c0_i32, %c0_i32, %koff] {ttig.block_io = "row_major"} : !tt.tensordesc<1x128x64xf16> -> tensor<1x128x64xf16, #blocked3d>
