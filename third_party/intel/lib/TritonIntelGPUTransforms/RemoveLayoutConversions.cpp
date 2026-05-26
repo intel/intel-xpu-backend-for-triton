@@ -2148,13 +2148,21 @@ public:
 
     // 5. Apply clean up patterns to remove dead convert and dead code generated
     // by the previous transformations.
-    RewritePatternSet cleanUpPatterns2(context);
-    scf::ForOp::getCanonicalizationPatterns(cleanUpPatterns2, context);
-    scf::IfOp::getCanonicalizationPatterns(cleanUpPatterns2, context);
-    ttg::ConvertLayoutOp::getCanonicalizationPatterns(cleanUpPatterns2,
-                                                      context);
-    if (applyPatternsGreedily(m, std::move(cleanUpPatterns2)).failed()) {
+    // ConvertLayoutOp canonicalization must converge.
+    RewritePatternSet convertCleanup(context);
+    ttg::ConvertLayoutOp::getCanonicalizationPatterns(convertCleanup, context);
+    if (applyPatternsGreedily(m, std::move(convertCleanup)).failed()) {
       signalPassFailure();
+    }
+
+    // scf canonicalization is best-effort: deeply unrolled scf.if regions
+    // carrying tensor values can drive the greedy rewriter to non-convergence
+    // (see upstream PR #10132 / pytorch/pytorch#180908).
+    RewritePatternSet scfCleanup(context);
+    scf::ForOp::getCanonicalizationPatterns(scfCleanup, context);
+    scf::IfOp::getCanonicalizationPatterns(scfCleanup, context);
+    if (applyPatternsGreedily(m, std::move(scfCleanup)).failed()) {
+      LLVM_DEBUG(DBGS() << "scf cleanup did not converge\n");
     }
     LLVM_DEBUG({
       DBGS() << "Module after final cleanups:\n";
