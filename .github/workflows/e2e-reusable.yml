@@ -210,6 +210,8 @@ jobs:
           cd torch-xpu-ops
           git checkout $PYTORCH_XPU_OPS_REF
           cd ..
+          sudo apt-get update
+          sudo apt-get install -y rsync
           rsync -avz ./torch-xpu-ops/.ci/benchmarks/ ./benchmarks/dynamo/
 
       - name: Run e2e ${{ inputs.test_mode }} tests
