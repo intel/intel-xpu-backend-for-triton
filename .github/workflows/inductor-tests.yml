@@ -11,7 +11,7 @@ on:
       suite:
         description: Space separated lists of test suites or "all"
         type: string
-        default:  ""
+        default: ""
       runner_label:
         description: Runner label, keep empty for default
         type: string
@@ -39,33 +39,21 @@ on:
 
 permissions: read-all
 
-env:
-  DEFAULT_SUITE: >-
-    inductor/test_kernel_benchmark.py
-    inductor/test_codegen_triton.py
-    inductor/test_triton_extension_backend.py
-    inductor/test_triton_heuristics.py
-    inductor/test_triton_wrapper.py
-    inductor/test_triton_kernels.py
-    inductor/test_gpu_cpp_wrapper.py
-    inductor/test_aot_inductor.py
-    inductor/test_select_algorithm.py
-    inductor/test_max_autotune.py
-    inductor/test_compile_subprocess.py
-    inductor/test_analysis.py
-
 jobs:
   compute-params:
     runs-on: linux
     outputs:
       suite: ${{ steps.set_suite.outputs.suite }}
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
       - id: set_suite
         run: |
           SUITE="${{ inputs.suite }}"
           if [ -z "${SUITE}" ]; then
             echo "Using default suite"
-            SUITE="${DEFAULT_SUITE}"
+            SUITE="$(tr '\n' ' ' < .github/workflows/inductor-tests-default-suite.txt | xargs)"
           fi
           echo "suite=${SUITE}" >> "$GITHUB_OUTPUT"
 
