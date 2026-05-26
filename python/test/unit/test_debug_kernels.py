@@ -33,6 +33,18 @@ def run_device_assert_kernel(cond, mask, opt_flag, jit_flag, device):
     return _run_and_catch(lambda: _kernel[(1, )](cond, mask, **kwargs), device)
 
 
+def run_device_assert_barrier_kernel(device):
+    tensor = torch.zeros([16], dtype=torch.int32, device=device)
+
+    @triton.jit
+    def _kernel(in_ptr0):
+        xindex = tl.arange(0, 8)
+        tmp0 = tl.load(in_ptr0 + xindex)
+        tl.device_assert(tmp0 < 1)
+
+    return _run_and_catch(lambda: _kernel[(1, )](tensor), device)
+
+
 @triton.jit
 def _kernel_add(X, Y, Z):
     tl.store(Z, tl.load(X) + tl.load(Y))
@@ -73,6 +85,12 @@ if __name__ == "__main__":
         device = sys.argv[6]
         triton.knobs.refresh_knobs()
         exit_code = run_device_assert_kernel(cond, mask, opt_flag, jit_flag, device)
+        sys.exit(exit_code)
+
+    elif test_type == "device_assert_barrier":
+        device = sys.argv[2]
+        triton.knobs.refresh_knobs()
+        exit_code = run_device_assert_barrier_kernel(device)
         sys.exit(exit_code)
 
     elif test_type == "overflow":
