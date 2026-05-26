@@ -203,6 +203,15 @@ jobs:
           fi
           pip install -e .
 
+      - name: Sync model list
+        run: |
+          PYTORCH_XPU_OPS_REF="$(curl -s https://raw.githubusercontent.com/pytorch/pytorch/$(<.github/pins/pytorch.txt)/third_party/xpu.txt)"
+          git clone https://github.com/intel/torch-xpu-ops.git
+          cd torch-xpu-ops
+          git checkout $PYTORCH_XPU_OPS_REF
+          cd ..
+          rsync -avz ./torch-xpu-ops/.ci/benchmarks/ ./benchmarks/dynamo/
+
       - name: Run e2e ${{ inputs.test_mode }} tests
         env:
           HUGGING_FACE_HUB_TOKEN: ${{ secrets.HUGGING_FACE_HUB_TOKEN }}
