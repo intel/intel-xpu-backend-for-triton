@@ -1,0 +1,14 @@
+// RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm --convert-tritongen-to-llvm | FileCheck %s
+
+// Basic 32x32xf8E5M2 mma -> dot A reinterpret test
+
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1], A = [8, 32], B = [32, 16], C = [8, 16]}>
+#dot_a = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL:   llvm.func spir_kernelcc @test_reinterpret(
+  tt.func @test_reinterpret(%arg0: tensor<32x32xf8E5M2, #mma>) -> tensor<32x32xf8E5M2, #dot_a> {
+    %0 = ttg.convert_layout %arg0 : tensor<32x32xf8E5M2, #mma> -> tensor<32x32xf8E5M2, #dot_a>
+    tt.return %0 : tensor<32x32xf8E5M2, #dot_a>
+  }
+}
