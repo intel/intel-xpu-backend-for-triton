@@ -202,11 +202,9 @@ private:
         totalNumElems = product<int64_t>(shapePerCTA);
       }
 
-      // Use ceil(bitwidth, 8) for sub-byte element types (e.g. i1, i4) to
-      // avoid 0-byte element sizes, consistent with the lowering in lowerLdSt.
-      int64_t bytesPerElem = ceil<int64_t>(
-          getIntOrFloatOrPtrBitWidth(allocType.getElementType()), 8);
-      int64_t totalBytes = totalNumElems * bytesPerElem;
+      int64_t totalBytes =
+          totalNumElems *
+          getIntOrFloatOrPtrBitWidth(allocType.getElementType()) / 8;
       int64_t pieceSize = totalBytes / numLogicalPieces;
 
       // Each partition buffer contains all groups concatenated
@@ -229,11 +227,8 @@ private:
       auto shapePerCTA = gpu::getAllocationShapePerCTA(allocType);
       numElems = product<int64_t>(shapePerCTA);
     }
-    // Use ceil(bitwidth, 8) for sub-byte element types (e.g. i1, i4) to
-    // avoid 0-byte element sizes, consistent with the lowering in lowerLdSt.
-    int64_t bytesPerElem = ceil<int64_t>(
-        getIntOrFloatOrPtrBitWidth(allocType.getElementType()), 8);
-    int64_t bytes = numElems * bytesPerElem;
+    int64_t bytes =
+        numElems * getIntOrFloatOrPtrBitWidth(allocType.getElementType()) / 8;
 
     allocation->addBuffer<BufferT::BufferKind::Explicit>(alloc, bytes,
                                                          alignment);
