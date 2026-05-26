@@ -46,6 +46,7 @@ jobs:
       integration_matrix: ${{ steps.matrix.outputs.integration_matrix }}
       e2e_matrix: ${{ steps.matrix.outputs.e2e_matrix }}
       pytorch-commit-id: ${{ steps.commit-id.outputs.commit_id }}
+      inductor-suite: ${{ steps.default-inductor-suite.outputs.suite }}
 
     steps:
       - name: Inputs
@@ -78,25 +79,19 @@ jobs:
           }'
           echo e2e_matrix=$e2e_matrix | tee -a $GITHUB_OUTPUT
 
+      - name: Resolve default inductor suite
+        id: default-inductor-suite
+        run: |
+          SUITE="$(tr '\n' ' ' < .github/workflows/inductor-tests-default-suite.txt | xargs)"
+          echo "suite=$SUITE" | tee -a $GITHUB_OUTPUT
+
   inductor-tests:
     name: Inductor tests
     needs: prepare
     uses: ./.github/workflows/inductor-tests-reusable.yml
     with:
       pytorch_ref: ${{ needs.prepare.outputs.pytorch-commit-id }}
-      suite: >-
-        inductor/test_kernel_benchmark.py
-        inductor/test_codegen_triton.py
-        inductor/test_triton_extension_backend.py
-        inductor/test_triton_heuristics.py
-        inductor/test_triton_wrapper.py
-        inductor/test_triton_kernels.py
-        inductor/test_gpu_cpp_wrapper.py
-        inductor/test_aot_inductor.py
-        inductor/test_select_algorithm.py
-        inductor/test_max_autotune.py
-        inductor/test_compile_subprocess.py
-        inductor/test_analysis.py
+      suite: ${{ needs.prepare.outputs.inductor-suite }}
       runner_label: ${{ inputs.runner_label }}
       python_version: "3.10"
 

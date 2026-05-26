@@ -45,19 +45,19 @@ def test_device_assert(cond, mask, opt_flag, env_var, jit_flag, device):
 
 
 @pytest.mark.forked
-def test_device_assert_barrier(monkeypatch, device):
-    monkeypatch.setenv("TRITON_DEBUG", "1")
-    triton.knobs.refresh_knobs()
-    tensor = torch.zeros([16], dtype=torch.int32, device=device)
+def test_device_assert_barrier(device):
+    """Subprocess solution to handle XPU SIGABRT from device_assert infrastructure.
+    See: https://github.com/pytorch/pytorch/issues/142135"""
+    kernel_file = os.path.join(os.path.dirname(__file__), "test_debug_kernels.py")
 
-    @triton.jit
-    def _kernel(in_ptr0):
-        xindex = tl.arange(0, 8)
-        tmp0 = tl.load(in_ptr0 + xindex)
-        tl.device_assert(tmp0 < 1)
+    env = os.environ.copy()
+    env["TRITON_DEBUG"] = "1"
 
-    _kernel[(1, )](tensor)
-    getattr(torch, device).synchronize()
+    result = subprocess.run([sys.executable, kernel_file, "device_assert_barrier", device], capture_output=True,
+                            text=True, env=env)
+
+    assert result.returncode == 0, (f"Expected success but got exit code {result.returncode}. "
+                                    f"stdout: {result.stdout}, stderr: {result.stderr}")
 
 
 @pytest.mark.parametrize("cond", [False, True])
