@@ -24,7 +24,6 @@ from triton_kernels.numerics_details.mxfp import upcast_from_mxfp, downcast_to_m
 from triton_kernels.swiglu import swiglu_fn, swiglu, PrecisionConfig as SwiGLUPrecisionConfig
 
 from triton_kernels.testing import assert_close
-from triton._internal_testing import is_hip_gfx1250
 
 # Handle imports for both pytest (module context) and direct execution
 try:
@@ -1322,7 +1321,6 @@ def matmul(a, b, bias, a_ragged_metadata: RaggedTensorMetadata | None = None,
     return out_final, k
 
 
-@pytest.mark.xfail(not is_hip_gfx1250(), reason="AMD gfx1250-only example", run=False)
 @pytest.mark.parametrize("m, n, k", [(300, 400, 416), (128, 128, 512)])
 @pytest.mark.parametrize("block_m, block_n, block_k", [(128, 128, 256), (256, 256, 256)])
 @pytest.mark.parametrize("dtype_a, dtype_b", [("float8_e5m2", "mxfloat4_e2m1"), ("float8_e4m3fn", "mxfloat4_e2m1"),
