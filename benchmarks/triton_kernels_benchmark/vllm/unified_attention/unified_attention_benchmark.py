@@ -11,6 +11,10 @@ Unified Attention benchmark
 This benchmark is based on the test_triton_unified_attention.py tests
 """
 import os
+import atexit
+import csv
+import importlib
+import sys
 from itertools import product
 from typing import Optional
 
@@ -19,14 +23,15 @@ import torch
 import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark.benchmark_testing import BENCHMARKING_CONFIG
 
-# This supports both current upstream and pinned version
+# This supports both current upstream and pinned version.
 try:
-    from vllm.attention.ops.triton_unified_attention import unified_attention
+    _unified_attention_module = importlib.import_module("vllm.attention.ops.triton_unified_attention")
 except ImportError:
-    from vllm.v1.attention.ops.triton_unified_attention import unified_attention
+    _unified_attention_module = importlib.import_module("vllm.v1.attention.ops.triton_unified_attention")
 except ImportError as e:
     raise ImportError(
         "Could not import unified_attention from vLLM. Please ensure vLLM is installed and accessible.") from e
+unified_attention = _unified_attention_module.unified_attention
 from vllm.platforms import current_platform
 
 float8_info = torch.finfo(current_platform.fp8_dtype())
@@ -34,6 +39,213 @@ float8_info = torch.finfo(current_platform.fp8_dtype())
 TOTAL_MEMORY_BYTES = benchmark_suite.get_total_gpu_memory_bytes()
 
 IS_FP8 = (os.getenv('FP8', '0') == '1')
+
+AUTOTUNE_DECISIONS_FILE = "unified-attention-autotune-decisions.csv"
+AUTOTUNE_DECISION_ROWS: list[dict[str, object]] = []
+
+
+def _next_power_of_2(value: int) -> int:
+    return 1 << (value - 1).bit_length()
+
+
+def _reports_dir_from_argv() -> str:
+    reports_dir = os.getenv("UA_AUTOTUNE_DECISION_REPORTS", "")
+    if reports_dir:
+        return reports_dir
+
+    argv = sys.argv[1:]
+    for idx, arg in enumerate(argv):
+        if arg == "--reports" and idx + 1 < len(argv):
+            reports_dir = argv[idx + 1]
+        elif arg.startswith("--reports="):
+            reports_dir = arg.split("=", 1)[1]
+    return reports_dir
+
+
+def _format_csv_value(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple, dict)):
+        return repr(value)
+    return str(value)
+
+
+def _config_kwargs(config: object) -> dict[str, object]:
+    if config is None:
+        return {}
+    kwargs = dict(getattr(config, "kwargs", {}) or {})
+    for attr in ("num_warps", "num_stages", "num_ctas"):
+        value = getattr(config, attr, None)
+        if value is not None:
+            kwargs[attr] = value
+    return kwargs
+
+
+def _format_config(config: object) -> str:
+    if isinstance(config, str):
+        return config
+    kwargs = _config_kwargs(config)
+    return ";".join(f"{key}={_format_csv_value(kwargs[key])}" for key in sorted(kwargs))
+
+
+def _config_value(config: object, key: str) -> object:
+    return _config_kwargs(config).get(key, "")
+
+
+def _get_unified_attention_kernel() -> object:
+    return getattr(_unified_attention_module, "kernel_unified_attention", None)
+
+
+def _get_pruned_configs(kernel: object, meta: dict[str, object]) -> list[object]:
+    if kernel is None or not hasattr(kernel, "prune_configs"):
+        return []
+
+    old_nargs = getattr(kernel, "nargs", None)
+    try:
+        kernel.nargs = {}
+        return list(kernel.prune_configs(dict(meta)))
+    except Exception as exc:  # pragma: no cover - diagnostic path only
+        return [f"error={type(exc).__name__}:{exc}"]
+    finally:
+        try:
+            kernel.nargs = old_nargs
+        except Exception:
+            pass
+
+
+def _autotune_meta_for_row(
+    q_heads: int,
+    k_heads: int,
+    head_size: int,
+    qdtype: torch.dtype | None,
+    seq_lens: list[tuple[int, int]],
+    sliding_window: int | None,
+    block_size: int,
+) -> dict[str, object]:
+    num_queries_per_kv = q_heads // k_heads
+    block_m = 16 if num_queries_per_kv <= 16 else _next_power_of_2(num_queries_per_kv)
+    block_q = block_m // num_queries_per_kv
+    max_query_len = max(query_len for query_len, _ in seq_lens)
+    sliding_window_val = sliding_window if sliding_window is not None else 0
+    use_3d = not (max_query_len > 1 or len(seq_lens) > 32 or 0 < sliding_window_val <= 1024)
+    return {
+        "BLOCK_SIZE": block_size,
+        "HEAD_SIZE": head_size,
+        "IS_FP8_INPUT": qdtype is not None and qdtype.itemsize == 1,
+        "IS_3D": use_3d,
+        "BLOCK_Q": block_q,
+    }
+
+
+def _record_autotune_decision(
+    *,
+    provider: str,
+    q_heads: int,
+    k_heads: int,
+    head_size: int,
+    qdtype: torch.dtype | None,
+    seq_lens: list[tuple[int, int]],
+    sliding_window: int | None,
+    soft_cap: float | None,
+    num_blocks: int,
+    block_size: int,
+    mean_ms: float,
+    cv: float,
+) -> None:
+    kernel = _get_unified_attention_kernel()
+    if kernel is None or not hasattr(kernel, "configs"):
+        return
+
+    selected_config = getattr(kernel, "best_config", None)
+    if selected_config is None:
+        return
+
+    meta = _autotune_meta_for_row(q_heads, k_heads, head_size, qdtype, seq_lens, sliding_window, block_size)
+    pruned_configs = _get_pruned_configs(kernel, meta)
+    key_names = list(getattr(kernel, "keys", []) or [])
+    key_values = {key: meta.get(key, "") for key in key_names}
+
+    row = {
+        "td_patched": os.getenv("TD_PATCHED", "0"),
+        "benchmark_dtype": "fp8" if IS_FP8 else "bf16",
+        "provider": provider,
+        "q_heads": q_heads,
+        "k_heads": k_heads,
+        "head_size": head_size,
+        "qdtype": _format_csv_value(qdtype),
+        "seq_lens": _format_csv_value(seq_lens),
+        "sliding_window": _format_csv_value(sliding_window),
+        "soft_cap": _format_csv_value(soft_cap),
+        "num_blocks": num_blocks,
+        "block_size": block_size,
+        "is_prefill": max(query_len for query_len, _ in seq_lens) > 1,
+        "autotune_key_names": ";".join(key_names),
+        "autotune_key_values": _format_csv_value(key_values),
+        "selected_config": _format_config(selected_config),
+        "selected_TILE_SIZE": _config_value(selected_config, "TILE_SIZE"),
+        "selected_num_warps": _config_value(selected_config, "num_warps"),
+        "selected_num_stages": _config_value(selected_config, "num_stages"),
+        "configs_after_prune": "|".join(_format_config(config) for config in pruned_configs),
+        "autotune_cache_size": len(getattr(kernel, "cache", {}) or {}),
+        "mean_ms": mean_ms,
+        "cv": cv,
+    }
+    for key in ("BLOCK_SIZE", "HEAD_SIZE", "IS_FP8_INPUT", "IS_3D", "BLOCK_Q"):
+        row[f"key_{key}"] = meta[key]
+    AUTOTUNE_DECISION_ROWS.append(row)
+
+
+def _write_autotune_decisions() -> None:
+    if not AUTOTUNE_DECISION_ROWS:
+        return
+
+    reports_dir = _reports_dir_from_argv()
+    if not reports_dir:
+        return
+
+    os.makedirs(reports_dir, exist_ok=True)
+    report_path = os.path.join(reports_dir, AUTOTUNE_DECISIONS_FILE)
+    fieldnames = [
+        "td_patched",
+        "benchmark_dtype",
+        "provider",
+        "q_heads",
+        "k_heads",
+        "head_size",
+        "qdtype",
+        "seq_lens",
+        "sliding_window",
+        "soft_cap",
+        "num_blocks",
+        "block_size",
+        "is_prefill",
+        "autotune_key_names",
+        "autotune_key_values",
+        "key_BLOCK_SIZE",
+        "key_HEAD_SIZE",
+        "key_IS_FP8_INPUT",
+        "key_IS_3D",
+        "key_BLOCK_Q",
+        "selected_config",
+        "selected_TILE_SIZE",
+        "selected_num_warps",
+        "selected_num_stages",
+        "configs_after_prune",
+        "autotune_cache_size",
+        "mean_ms",
+        "cv",
+    ]
+    write_header = not os.path.exists(report_path) or os.path.getsize(report_path) == 0
+    with open(report_path, "a", newline="", encoding="utf-8") as report_file:
+        writer = csv.DictWriter(report_file, fieldnames=fieldnames, extrasaction="ignore")
+        if write_header:
+            writer.writeheader()
+        writer.writerows(AUTOTUNE_DECISION_ROWS)
+    print(f"Wrote unified attention autotune decisions to {report_path}")
+    AUTOTUNE_DECISION_ROWS.clear()
+
+
+atexit.register(_write_autotune_decisions)
 
 
 def ref_paged_attn(
@@ -391,6 +603,20 @@ def get_unified_attention_benchmark(
                 n_warmup=n_warmup,
                 n_repeat=10,
                 quantiles=quantiles,
+            )
+            _record_autotune_decision(
+                provider=provider,
+                q_heads=q_heads,
+                k_heads=k_heads,
+                head_size=head_size,
+                qdtype=qdtype,
+                seq_lens=seq_lens,
+                sliding_window=sliding_window,
+                soft_cap=soft_cap,
+                num_blocks=num_blocks,
+                block_size=block_size,
+                mean_ms=mean_ms,
+                cv=cv,
             )
         else:
             raise NotImplementedError(f'Unsupported provider {provider}')
