@@ -58,10 +58,13 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Test b — load that directly feeds a tt.dot gets evict_last (spatial known reuse on dot-operand encoding).
-// COM: warpsPerCTA = [2, 2]: both A and B operands have warp-broadcast factor 2,
-// COM: passing the Phase 3 `factor >= 2` gate. (warpsPerCTA = [4, 1] would
-// COM: rejected because the A operand would have broadcast factor 1.)
+// COM: Test b — dot-operand loads inside scf.for get evict_last.
+// COM: warpsPerCTA = [2, 2] gives both A and B warp-broadcast factor 2 (req 2).
+// COM: The pointers are loop-invariant function args, so every address-determining
+// COM: operand classifies as Invariant at the enclosing loop -> provenTemporalReuse
+// COM: returns true (req 3). Both loads promote.
+// COM: (warpsPerCTA = [4, 1] would be rejected: the A operand would have broadcast
+// COM: factor 1, failing req 2.)
 
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
@@ -91,10 +94,10 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Test c — load with #blocked encoding that is converted to #dot_a and
-// COM: consumed by tt.dot. warpsPerCTA = [1, 4] on the blocked encoding,
-// COM: warpsPerCTA = [2, 2] on the dpas. Both loads pass the Phase 3
-// COM: factor>=2 gate:
+// COM: Test c — load with #blocked encoding converted to #dot_a, dot inside
+// COM: scf.for. warpsPerCTA = [1, 4] on the blocked encoding, [2, 2] on the
+// COM: dpas. Both loads pass req 2 (factor>=2) and req 3 (provenTemporalReuse,
+// COM: via Invariant pointer):
 // COM:   - %a_blk: blocked tile per warp = sizePerThread × threadsPerWarp
 // COM:     = [1, 16]. With warpsPerCTA = [1, 4] the per-CTA tile is
 // COM:     [1, 64], which is *wider than the tensor* (32 cols). Two
@@ -104,7 +107,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // COM:   - %b: dot_b on dpas#warpsPerCTA=[2,2]; warp basis tiling M is
 // COM:     all-zero on B's [K, N] axes. Factor 2.
 // COM:
-// COM: The Phase 3 gate is *layout-driven*: it inspects the LinearLayout
+// COM: The factor>=2 gate is *layout-driven*: it inspects the LinearLayout
 // COM: directly rather than reading warpsPerCTA heuristically, so
 // COM: tile-overflow broadcast (warp tile larger than tensor) is detected
 // COM: where a naive Wn-only check would miss it.
