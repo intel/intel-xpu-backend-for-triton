@@ -143,18 +143,7 @@ ensure_spirv_dis() {
         return
     fi
     export PATH="$HOME/.local/bin:$PATH"
-    # Minimum version required for SPV_INTEL_predicated_io support.
-    local min_version="2026.2"
-    local spirv_dis="$(which spirv-dis || true)"
-    if [[ $spirv_dis ]]; then
-        local version
-        version="$("$spirv_dis" --version 2>&1 | grep -oP 'SPIRV-Tools v\K[0-9]+\.[0-9]+')"
-        if [[ $version ]] && printf '%s\n' "$min_version" "$version" | sort -V -C; then
-            echo "Found spirv-dis $version at $spirv_dis"
-            return
-        fi
-        echo "Found spirv-dis at $spirv_dis but version $version < $min_version"
-    fi
+    # Build spirv-dis from source with SPV_INTEL_predicated_io support.
     # FIXME: Switch back to Vulkan SDK tarball once the next SDK release includes
     # SPV_INTEL_predicated_io support (KhronosGroup/SPIRV-Tools#6665).
     # curl -sSL https://sdk.lunarg.com/sdk/download/latest/linux/vulkan-sdk.tar.xz | tar Jxf - -C $HOME/.local/bin --strip-components 3 --no-anchored spirv-dis
