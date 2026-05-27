@@ -499,6 +499,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     StringAttr kRegister = str_attr("register");
     StringAttr kLane = str_attr("lane");
 
+    llvm::outs() << "comp: " << comp << "\n";
     unsigned packedRegisterSize = 1;
     for (size_t i = 0; i < comp.getInDimSizeLog2(kLane); i++) {
       auto lane2Reg =
@@ -522,8 +523,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         regMapBases[packRegIdx++] = {1 << i};
       } else {
         auto reg2Reg = bases[comp.getOutDimIndex(kRegister)];
-        regMapBases[llvm::Log2_32(packedRegisterSize) + llvm::Log2_32(reg2Reg) -
-                    1] = {1 << i};
+        regMapBases[llvm::Log2_32(reg2Reg)] = {1 << i};
       }
     }
     assert(checkedPackRegisterSize == 1 &&
@@ -545,10 +545,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         slice.push_back(inVals[regId]);
       }
       Value vec = packLLVector(loc, slice, rewriter);
-      Value shuffled =
-          TritonGEN::SubGroupBitcastShuffleOp::create(rewriter, loc, reinterType,
-                                                      vec)
-              ->getResult(0);
+      Value shuffled = TritonGEN::SubGroupBitcastShuffleOp::create(
+                           rewriter, loc, reinterType, vec)
+                           ->getResult(0);
       Value reinterVec = b.bitcast(shuffled, vecType);
       SmallVector<Value> unpackedVec =
           unpackLLVector(loc, reinterVec, rewriter);

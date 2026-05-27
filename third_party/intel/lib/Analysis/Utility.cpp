@@ -388,6 +388,12 @@ bool cvtIsSubGroupReinterpret(RankedTensorType srcTy, RankedTensorType dstTy) {
   if (packedRegisterSize == 1)
     return false;
 
+  // IGC doesn't support bitcast >= i128. Fallback to shared memory in this
+  // case.
+  Type elemType = srcTy.getElementType();
+  if (packedRegisterSize * elemType.getIntOrFloatBitWidth() >= 128)
+    return false;
+
   unsigned threadsPerWarp = conversion->getInDimSize(kLane);
   for (size_t i = 0; i < conversion->getInDimSizeLog2(kRegister); i++) {
     // Check the packed Register M -> Lane (threadsPerWarp/packedRegisterSize).
