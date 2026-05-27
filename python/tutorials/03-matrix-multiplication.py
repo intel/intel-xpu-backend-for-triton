@@ -165,6 +165,10 @@ def is_xpu():
     return triton.runtime.driver.active.get_current_target().backend == "xpu"
 
 
+def is_xpu_cri():
+    return triton.runtime.driver.active.get_current_target().arch['arch'] == "cri"
+
+
 def get_xpu_autotune_config():
     return [
         triton.Config(
@@ -394,8 +398,9 @@ def matmul(a, b, activation=""):
 # We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS).
 
 torch.manual_seed(0)
-a = torch.rand((512, 512), device=DEVICE, dtype=torch.float16) - 0.5
-b = torch.rand((512, 512), device=DEVICE, dtype=torch.float16) - 0.5
+matmul_size = 256 if is_xpu_cri() else 512
+a = torch.rand((matmul_size, matmul_size), device=DEVICE, dtype=torch.float16) - 0.5
+b = torch.rand((matmul_size, matmul_size), device=DEVICE, dtype=torch.float16) - 0.5
 triton_output = matmul(a, b)
 torch_output = torch.matmul(a, b)
 print(f"triton_output_with_fp16_inputs={triton_output}")
@@ -409,8 +414,8 @@ else:
 TORCH_HAS_FP8 = hasattr(torch, "float8_e5m2")
 if TORCH_HAS_FP8 and is_cuda():
     torch.manual_seed(0)
-    a = torch.randn((512, 512), device=DEVICE, dtype=torch.float16)
-    b = torch.randn((512, 512), device=DEVICE, dtype=torch.float16)
+    a = torch.randn((matmul_size, matmul_size), device=DEVICE, dtype=torch.float16)
+    b = torch.randn((matmul_size, matmul_size), device=DEVICE, dtype=torch.float16)
     a = a.to(torch.float8_e5m2)
     # pre-transpose b for efficiency.
     b = b.T

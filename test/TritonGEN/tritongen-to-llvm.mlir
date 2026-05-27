@@ -332,3 +332,15 @@ llvm.func @triton_gen.bdpas.f32_accum(%c: vector<8xf32>, %a : vector<8xi16>, %b 
   %0 = triton_gen.bdpas %c, %a, %b {pa = e2m1, pb = e2m1, rc = 8} {operandSegmentSizes = array<i32: 1, 1, 1, 0, 0>} : (vector<8xf32>, vector<8xi16>, vector<8xi32>) -> vector<8xf32>
   llvm.return
 }
+
+// -----
+
+// CHECK: llvm.func spir_funccc @llvm.genx.GenISA.SubgroupBitcastShuffle.v2i16.v4i8(vector<4xi8>) -> vector<2xi16> attributes {convergent, no_unwind, will_return}
+
+llvm.func @triton_gen.sub_group_bitcast_shuffle(%val : vector<4xi8>) -> vector<2xi16> {
+  // CHECK-LABEL: llvm.func @triton_gen.sub_group_bitcast_shuffle(
+  // CHECK:         [[RES:%.*]] = llvm.call spir_funccc @llvm.genx.GenISA.SubgroupBitcastShuffle.v2i16.v4i8(%arg0) {{.*}} : (vector<4xi8>) -> vector<2xi16>
+  // CHECK:         llvm.return [[RES]]
+  %0 = triton_gen.sub_group_bitcast_shuffle %val : vector<4xi8> -> vector<2xi16>
+  llvm.return %0 : vector<2xi16>
+}
