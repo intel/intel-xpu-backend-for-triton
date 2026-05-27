@@ -27,6 +27,7 @@ from triton_benchmarks_validate import validate_cpp_extensions
 
 def _collect_configs():
     """Auto-discover BENCHMARK_CONFIGS from all modules in the package."""
+    import warnings  # pylint: disable=import-outside-toplevel
     import triton_kernels_benchmark  # pylint: disable=import-outside-toplevel
     configs = []
     for _, module_name, is_pkg in pkgutil.iter_modules(triton_kernels_benchmark.__path__):
@@ -34,7 +35,12 @@ def _collect_configs():
             continue
         try:
             mod = importlib.import_module(f"triton_kernels_benchmark.{module_name}")
-        except ImportError:
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            warnings.warn(
+                f"Failed to import benchmark module 'triton_kernels_benchmark.{module_name}': "
+                f"{type(e).__name__}: {e}",
+                stacklevel=2,
+            )
             continue
         if hasattr(mod, "BENCHMARK_CONFIGS"):
             configs.extend(mod.BENCHMARK_CONFIGS)
