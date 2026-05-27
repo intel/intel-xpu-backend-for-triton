@@ -905,11 +905,24 @@ class BenchmarkConfigRunResult(BenchmarkRunResult, BenchmarkConfig):
             f"Shape dimensions: {self.shape_dimensions}",
             f"Shapes pattern: {str(self.shape_pattern) if str(self.shape_pattern) else 'Not set'}",
             f"Supported shapes: {_shapes_repr(self.supported_shapes)}",
-            f"Selected shapes: {_shapes_repr(self.supported_shapes)}",
+            f"Selected shapes: {_shapes_repr(self.selected_shapes)}",
             f"Supported providers: {self.supported_providers}",
             f"Selected providers: {self.selected_providers}",
         ]
         return "\n".join(str_repr)
+
+    def to_dict(self) -> Dict:
+        return {
+            "key": self.key,
+            "categories": [category.value for category in self.categories],
+            "run_opts": self.run_opts,
+            "shape_dimensions": self.shape_dimensions,
+            "shape_pattern": str(self.shape_pattern) if self.shape_pattern else None,
+            "supported_shapes": [str(s) for s in self.supported_shapes],
+            "selected_shapes": [str(s) for s in self.selected_shapes],
+            "supported_providers": self.supported_providers,
+            "selected_providers": self.selected_providers,
+        }
 
     def run(self, args: MarkArgs) -> BenchmarkConfigRunResult:
         start_time = time.perf_counter()

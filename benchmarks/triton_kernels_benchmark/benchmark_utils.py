@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Any, Dict, List, Optional, Set
 from dataclasses import asdict, dataclass, fields
 
 import argparse
 import importlib
+import json
 import pkgutil
 import time
 import datetime
@@ -79,17 +80,24 @@ class BenchmarkConfigs(MarkArgs):
                 return (df_to_print.copy().reset_index().to_json(orient="records", lines=True))
             return df_to_print
 
-        def _json_print(obj: Union[str, pd.DataFrame]):
-            if self.json_output and isinstance(obj, pd.DataFrame):
-                print(obj.copy().reset_index().to_json(orient="records", lines=True))
-            elif not self.json_output:
+        def _json_print(obj):
+            if self.json_output:
+                if isinstance(obj, pd.DataFrame):
+                    print(obj.copy().reset_index().to_json(orient="records", lines=True))
+                elif isinstance(obj, dict):
+                    print(json.dumps(obj))
+                # Skip plain strings in json mode (status messages like "Running gemm")
+            else:
                 print(obj)
 
         run_results = []
         start_t = time.perf_counter()
         run_results = []
         for config in self.configs:
-            _json_print(str(config))
+            if self.json_output:
+                _json_print(config.to_dict())
+            else:
+                _json_print(str(config))
             if self.collect_only:
                 continue
             _json_print(f"Running {config.key}")
@@ -133,7 +141,7 @@ class BenchmarkConfigs(MarkArgs):
             known_configs[key]
             for key in selected_config_keys
             if {category.value
-                for category in known_configs[key].categories}.issubset(categories_filter)
+                for category in known_configs[key].categories} & set(categories_filter)
         ]
         if not selected_configs:
             raise AssertionError(f"No configs are selected from {config_filter} category {categories_filter}")
@@ -285,7 +293,7 @@ class BenchmarkConfigs(MarkArgs):
                 action="append",
                 dest="categories_filter",
                 choices=categories,
-                default=categories,
+                default=None,
                 metavar="CATEGORY",
                 help=str(
                     "Filter ALL configs to the ones in the provided category list and run COMMAND."
@@ -364,7 +372,7 @@ class BenchmarkConfigs(MarkArgs):
         args = parser.parse_args(argv)
 
         args.collect_only = args.command == "describe"
-        args.categories_filter = args.categories_filter if hasattr(args, "categories_filter") else categories
+        args.categories_filter = args.categories_filter if getattr(args, "categories_filter", None) else categories
         args.reports = args.reports if hasattr(args, "reports") else ""
         args.junit_report = args.junit_report if hasattr(args, "junit_report") else False
 
