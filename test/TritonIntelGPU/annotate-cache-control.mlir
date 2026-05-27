@@ -84,19 +84,6 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
   }
 }
 
-// COM: Test b2 — encoded fallback regression guard (API split).
-// COM:
-// COM: The intended lit case was an encoded non-power-of-2 load
-// COM: (e.g. tensor<24x32xf32> with a blocked encoding) where spatial
-// COM: anyReuse falls back to true but knownCrossSubgroupReuse returns
-// COM: false, so the load gets neither .cg nor evict_last. MLIR's tensor
-// COM: verifier rejects non-power-of-2 element counts under blocked
-// COM: encodings before AnnotateCacheControl can run, so this case
-// COM: cannot be expressed at the lit level. Coverage is moved to the
-// COM: analysis-level unit test:
-// COM:   ReuseAnalysisTest::Known_FalseFromConservativeFallback_NonPow2
-// COM: which is the central regression test for the API split.
-
 // -----
 
 // COM: Test c — load with #blocked encoding that is converted to #dot_a and
