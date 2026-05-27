@@ -123,15 +123,22 @@ HAS_HOST_TENSOR_DESC = supports_tma() and hasattr(triton.tools.tensor_descriptor
 HAS_WARP_SPECIALIZE = supports_ws() and HAS_TENSOR_DESC
 
 
+def is_xpu_cri():
+    return triton.runtime.driver.active.get_current_target().arch['arch'] == "cri"
+
+
 def matmul_get_configs(pre_hook=None):
+    stages_range = [2] if is_xpu_cri() else [2, 3, 4]
+    warps_range = [4] if is_xpu_cri() else [4, 8]
+
     return [
         triton.Config({'BLOCK_SIZE_M': BM, 'BLOCK_SIZE_N': BN, "BLOCK_SIZE_K": BK, "GROUP_SIZE_M": 8}, num_stages=s,
                       num_warps=w, pre_hook=pre_hook)
         for BM in [128]
         for BN in [128, 256]
         for BK in [64, 128]
-        for s in ([2, 3, 4])
-        for w in [4, 8]
+        for s in stages_range
+        for w in warps_range
     ]
 
 
@@ -404,6 +411,9 @@ def matmul_persistent(a, b):
 
 
 def matmul_tma_persistent_get_configs(pre_hook=None):
+    stages_range = [2] if is_xpu_cri() else [2, 3, 4]
+    warps_range = [4] if is_xpu_cri() else [4, 8]
+
     return [
         triton.Config(
             {
@@ -413,8 +423,8 @@ def matmul_tma_persistent_get_configs(pre_hook=None):
         for BM in [128]  #
         for BN in [128, 256]  #
         for BK in [64, 128]  #
-        for s in ([2, 3, 4])  #
-        for w in [4, 8]  #
+        for s in stages_range  #
+        for w in warps_range  #
         for SUBTILE in [True, False]  #
     ]
 
@@ -693,8 +703,8 @@ def bench_fn(label, reps, warmup_reps, fn, *args):
 
 
 def bench(K, dtype, reps=100, warmup_reps=100):
-    M = 8192
-    N = 8192
+    M = 256 if is_xpu_cri() else 8192
+    N = 256 if is_xpu_cri() else 8192
     if not is_enough_memory(M, N, K, dtype):
         return
 
@@ -777,9 +787,11 @@ def show_profile(precision, profile_name):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("-K", type=int, required=False, default=512)
+    default_K = 256 if is_xpu_cri() else 512
+    default_K_step = 256 if is_xpu_cri() else 512
+    parser.add_argument("-K", type=int, required=False, default=default_K)
     parser.add_argument("--K_range", type=int, nargs=2)
-    parser.add_argument("--K_step", type=int, default=512)
+    parser.add_argument("--K_step", type=int, default=default_K_step)
     parser.add_argument("--prec", type=str, choices=["fp8", "fp16"], default="fp16")
     args = parser.parse_args()
 
@@ -795,7 +807,8 @@ if __name__ == "__main__":
         torch.manual_seed(0)
 
         validate(32, 32, 32, dtype)
-        validate(8192, 8192, args.K_range[0], dtype)
+        validation_size = 256 if is_xpu_cri() else 8192
+        validate(validation_size, validation_size, args.K_range[0], dtype)
         if os.name != "nt":
             proton.start("matmul", hook="triton")
             proton.deactivate()
