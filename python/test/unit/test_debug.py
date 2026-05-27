@@ -1,4 +1,5 @@
 import pytest
+import signal
 import torch
 import triton.language as tl
 import triton
@@ -25,6 +26,12 @@ def _run_expect_zero_device_assert(device):
 
 
 def test_expect_zero_device_assert(device):
+    if device == 'xpu':
+        # XPU device-side asserts abort the process via SIGABRT, not a RuntimeError (issue #2755).
+        with pytest.raises(RuntimeError, match=str(-signal.SIGABRT)):
+            run_in_process(_run_expect_zero_device_assert, (device, ), env={"TRITON_DEBUG": "1"})
+        return
+
     result = run_in_process(_run_expect_zero_device_assert, (device, ), env={"TRITON_DEBUG": "1"})
     assert isinstance(result.exc, RuntimeError)
 
@@ -34,7 +41,6 @@ def test_expect_zero_device_assert(device):
 @pytest.mark.parametrize('opt_flag', [True, False, None])
 @pytest.mark.parametrize('env_var', [True, False])
 @pytest.mark.parametrize('jit_flag', [True, False])
-@pytest.mark.forked
 def test_device_assert(cond, mask, opt_flag, env_var, jit_flag, device):
     """Temporary subprocess solution due to:
     https://github.com/pytorch/pytorch/issues/142135"""
@@ -66,7 +72,6 @@ def test_device_assert(cond, mask, opt_flag, env_var, jit_flag, device):
                                         f"stdout: {result.stdout}, stderr: {result.stderr}")
 
 
-@pytest.mark.forked
 def test_device_assert_barrier(device):
     """Subprocess solution to handle XPU SIGABRT from device_assert infrastructure.
     See: https://github.com/pytorch/pytorch/issues/142135"""
@@ -138,7 +143,6 @@ def _test_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, tri_func, ref
     (-2**15, -1, 'int16', 'int16', True, True),
     (2**15 - 1, 1, 'int16', 'int16', True, True),
 ])
-@pytest.mark.forked
 def test_sanitize_int_add_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, device):
 
     @triton.jit
@@ -159,7 +163,6 @@ def test_sanitize_int_add_overflow(x, y, x_dtype, y_dtype, debug, should_overflo
     (-2**31, 1, 'int32', 'int32', True, False),
     (-2**30, 2, 'int32', 'int32', True, False),
 ])
-@pytest.mark.forked
 def test_sanitize_int_mul_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, device):
 
     @triton.jit
@@ -179,7 +182,6 @@ def test_sanitize_int_mul_overflow(x, y, x_dtype, y_dtype, debug, should_overflo
     (2**31 - 1, 1, 'int32', 'int32', True, False),
     (-2**31, -1, 'int32', 'int32', True, False),
 ])
-@pytest.mark.forked
 def test_sanitize_int_sub_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, device):
 
     @triton.jit
