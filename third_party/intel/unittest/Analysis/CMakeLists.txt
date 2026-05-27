@@ -118,20 +118,3 @@ add_triton_ut(
     MLIRFuncDialect
     MLIRSCFDialect
 )
-
-add_triton_ut(
-  NAME IntelUtility
-  SRCS UtilityTest.cpp
-  LIBS
-    TritonAnalysis
-    TritonGPUIR
-    TritonGPUTransforms
-    TritonIR
-    TritonIntelAnalysis
-    TritonIntelGPUIR
-    TritonIntelGPUTransforms
-    TritonNvidiaGPUIR
-    TritonNvidiaGPUTransforms
-    MLIRArithDialect
-    MLIRFuncDialect
-)
