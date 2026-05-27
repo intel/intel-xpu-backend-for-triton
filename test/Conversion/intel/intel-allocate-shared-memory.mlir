@@ -97,3 +97,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     tt.return %0 : tensor<32x128xf32, #blocked1>
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 4], warpsPerCTA = [1, 1], order = [1, 0]}>
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [2, 1], A = [16, 8], B = [8, 16], C = [16, 16]}>
+
+// CHECK-LABEL: module attributes
+// CHECK-SAME: ttg.shared = 1024 : i32
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  tt.func public @test_reinterpret(%arg0: tensor<16x16xf32, #mma>, %arg1: tensor<16x16xf16, #mma>)  -> (tensor<16x16xf32, #blocked>, tensor<16x16xf16, #blocked>) {
+    // CHECK: ttg.convert_layout {{.*}} : tensor<16x16xf16
+    %1 = ttg.convert_layout %arg1 : tensor<16x16xf16, #mma> -> tensor<16x16xf16, #blocked>
+    // CHECK: ttg.convert_layout {{.*}} {allocation.offset = 0 : i32} : tensor<16x16xf32
+    %0 = ttg.convert_layout %arg0 : tensor<16x16xf32, #mma> -> tensor<16x16xf32, #blocked>
+    tt.return %0, %1 : tensor<16x16xf32, #blocked>, tensor<16x16xf16, #blocked>
+  }
+}
