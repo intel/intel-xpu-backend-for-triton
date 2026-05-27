@@ -267,17 +267,6 @@ private:
         return false;
       }
 
-      // Hardware 2D block IO encodes the surface pitch in 24 bits, so a
-      // pitch >= (1 << 24) bytes cannot be expressed. Tagging such a load
-      // as block-IO would later fail verification of triton_gen.2Dblockload
-      // ("4th operand (base pitch) should be <= 24 bits"). Bail out so the
-      // load falls back to the regular vectorized lowering.
-      if (otherDimStride * elemSizeInBytes > (int64_t(1) << 24)) {
-        LDBG("Pitch exceeds 24-bit hardware limit: "
-             << (otherDimStride * elemSizeInBytes));
-        return false;
-      }
-
       // Base pointer can be compensate by the offset and base width, where they
       // each has restriction that it has to be 4 bytes aligned.
       if (axisInfo.getDivisibility(fastChangeDim) % 4 != 0) {

@@ -709,8 +709,12 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
       return b.i32_val(MIN_PITCH);
 
     if (stride > 0) {
-      unsigned pitch = (unsigned)stride * elemSizeInBits / 8;
-      if (pitch < MIN_PITCH)
+      // Surface pitch is encoded in 24 bits in the 2D block IO message
+      // descriptor (see `triton_gen.2Dblockload` / `2Dblockstore` verifier in
+      // TritonGENOps.cpp). A constant pitch above this limit is unsupported.
+      constexpr int64_t MAX_PITCH = int64_t(1) << 24;
+      int64_t pitch = int64_t(stride) * elemSizeInBits / 8;
+      if (pitch < MIN_PITCH || pitch > MAX_PITCH)
         return nullptr; // unsupported pitch
       return b.i32_val(pitch);
     }
