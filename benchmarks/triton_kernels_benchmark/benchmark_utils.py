@@ -4,6 +4,8 @@ from typing import Any, Dict, List, Optional, Set, Union
 from dataclasses import asdict, dataclass, fields
 
 import argparse
+import importlib
+import pkgutil
 import time
 import datetime
 
@@ -19,8 +21,26 @@ from triton_kernels_benchmark.benchmark_testing import (
     MarkArgs,
 )
 from triton_kernels_benchmark.benchmark_shapes_parser import ShapePatternParser
-from triton_kernels_benchmark.configs.benchmark_config_templates import CONFIGS
 from triton_benchmarks_validate import validate_cpp_extensions
+
+
+def _collect_configs():
+    """Auto-discover BENCHMARK_CONFIGS from all modules in the package."""
+    import triton_kernels_benchmark  # pylint: disable=import-outside-toplevel
+    configs = []
+    for _, module_name, is_pkg in pkgutil.iter_modules(triton_kernels_benchmark.__path__):
+        if is_pkg:
+            continue
+        try:
+            mod = importlib.import_module(f"triton_kernels_benchmark.{module_name}")
+        except ImportError:
+            continue
+        if hasattr(mod, "BENCHMARK_CONFIGS"):
+            configs.extend(mod.BENCHMARK_CONFIGS)
+    return sorted(configs, key=lambda c: c.key)
+
+
+CONFIGS = _collect_configs()
 
 
 @dataclass

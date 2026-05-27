@@ -848,6 +848,36 @@ class BenchmarkConfig:  # pylint: disable=too-many-instance-attributes
         return mark
 
 
+def register(key, categories, description, run_opts=None, report_name=None, report_file_prefix=None):
+    """Decorator that registers a BenchmarkConfig for auto-discovery.
+
+    Attaches a BENCHMARK_CONFIGS list to the decorated function's module.
+    Use with @register(...) on get_benchmark functions in benchmark files.
+
+    Categories can be strings (e.g. "core", "gemm") or BenchmarkCategory enums.
+    """
+    resolved_categories = {BenchmarkCategory(c) if isinstance(c, str) else c for c in categories}
+
+    def decorator(fn):
+        import sys  # pylint: disable=import-outside-toplevel
+        module = sys.modules[fn.__module__]
+        if not hasattr(module, "BENCHMARK_CONFIGS"):
+            module.BENCHMARK_CONFIGS = []
+        module.BENCHMARK_CONFIGS.append(
+            BenchmarkConfig(
+                key=key,
+                get_benchmark=fn,
+                run_opts=run_opts or {},
+                categories=resolved_categories,
+                description=description,
+                report_name=report_name,
+                report_file_prefix=report_file_prefix,
+            ))
+        return fn
+
+    return decorator
+
+
 @dataclass
 class BenchmarkConfigRunResult(BenchmarkRunResult, BenchmarkConfig):
 

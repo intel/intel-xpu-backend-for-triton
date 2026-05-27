@@ -325,6 +325,25 @@ def is_enough_memory(x_val):
 X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
 
 
+@benchmark_suite.register(
+    key='gemm',
+    categories={'core', 'gemm'},
+    description='Triton GEMM kernel benchmark',
+)
+@benchmark_suite.register(
+    key='gemm_bt',
+    run_opts={'transpose_b': True},
+    categories={'core', 'gemm'},
+    description='Triton GEMM (A@B^t) kernel benchmark',
+    report_name='gemm-bt',
+)
+@benchmark_suite.register(
+    key='gemm_at',
+    run_opts={'transpose_a': True},
+    categories={'optional', 'gemm'},
+    description='Triton GEMM (A^t@B) kernel benchmark',
+    report_name='gemm-at',
+)
 def get_benchmark(
     providers_filter: Optional[list[str]] = None,
     transpose_a=False,

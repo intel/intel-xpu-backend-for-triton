@@ -363,6 +363,18 @@ def benchmark(B, M, N, K, dtype, provider):
     return (gbps(mean_ms), gbps(max_ms), gbps(min_ms)), (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
 
 
+@benchmark_suite.register(
+    key='gemm-postop-addmatrix',
+    categories={'optional', 'gemm'},
+    description='Triton GEMM + PostOp (add matrix) kernel benchmark bfloat16',
+    report_file_prefix='gemm-postop-addmatrix-bfloat16',
+)
+@benchmark_suite.register(
+    key='gemm-postop-addmatrix-int8',
+    run_opts={'int8_only': True},
+    categories={'optional', 'gemm'},
+    description='Triton GEMM + PostOp (add matrix) kernel benchmark int8',
+)
 def get_benchmark(providers_filter=None, int8_only=False):
     if not int8_only:
         return benchmark

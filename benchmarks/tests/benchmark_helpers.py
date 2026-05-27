@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import fields
 
 from triton_kernels_benchmark.benchmark_testing import BenchmarkConfigRunResult
-from triton_kernels_benchmark.configs.benchmark_config_templates import CONFIGS
+from triton_kernels_benchmark.benchmark_utils import CONFIGS
 
 
 def make_cfg(template, providers: list[str] | None = None) -> BenchmarkConfigRunResult:

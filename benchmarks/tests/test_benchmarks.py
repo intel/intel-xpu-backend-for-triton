@@ -12,8 +12,7 @@ from triton_kernels_benchmark.benchmark_testing import (
     BenchmarkCategory,
     MarkArgs,
 )
-from triton_kernels_benchmark.benchmark_utils import BenchmarkConfigs
-from triton_kernels_benchmark.configs.benchmark_config_templates import CONFIGS
+from triton_kernels_benchmark.benchmark_utils import BenchmarkConfigs, CONFIGS
 
 
 def _collect_cases() -> List[Tuple[str, str, str]]:
