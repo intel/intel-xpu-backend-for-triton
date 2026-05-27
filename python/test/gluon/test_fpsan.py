@@ -1457,7 +1457,7 @@ def _mm_scaled_payload_u32(a_u8: np.ndarray, b_u8: np.ndarray, a_scale_u8: np.nd
 
 def test_dot_fma(device, fresh_knobs):
     if device != "cuda":
-        pytest.skip("dot_fma not yet supported on non-CUDA backends")
+        pytest.xfail("dot_fma not yet supported on non-CUDA backends")
     _require_backend(device)
 
     B = 16
@@ -2106,7 +2106,7 @@ def test_reduction_matches_loop(device, fresh_knobs):
     _assert_payload_equal(reduce_out, loop_out)
 
 
-@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
+@pytest.mark.xfail(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4", run=False)
 def test_mfma_dot(device, fresh_knobs):
     _require_backend(device)
 
@@ -2167,7 +2167,7 @@ def test_mfma_dot(device, fresh_knobs):
     _assert_payload_equal(out, exp_bits)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires gfx1250")
+@pytest.mark.xfail(not is_hip_gfx1250(), reason="Requires gfx1250", run=False)
 def test_wmma_dot(device, fresh_knobs):
     _require_backend(device)
 
