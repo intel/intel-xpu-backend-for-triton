@@ -299,7 +299,7 @@ index 257481768..99a15faa2 100644
      segm_output_ptr = softmax_segm_output if use_3d else None
      segm_max_ptr = softmax_segm_max if use_3d else None
      segm_expsum_ptr = softmax_segm_expsum if use_3d else None
-@@ -657,10 +695,9 @@ def unified_attention(
+@@ -657,10 +695,8 @@ def unified_attention(
      grid: tuple[Any, ...]
      if not use_3d:
          grid = (total_num_q_blocks, num_kv_heads)
@@ -307,11 +307,10 @@ index 257481768..99a15faa2 100644
      else:
          grid = (total_num_q_blocks, num_kv_heads, num_par_softmax_segments)
 -        tile_size = TILE_SIZE_DECODE
-+        TILE_SIZE_DECODE = 32 if is_fp8_input else 16
  
      kernel_unified_attention[grid](
          output_ptr=out,
-@@ -686,7 +723,6 @@ def unified_attention(
+@@ -686,7 +722,6 @@ def unified_attention(
          output_stride_1=out.stride(1),
          qq_bias_stride_0=qq_bias.stride(0) if use_qq_bias else 0,
          BLOCK_SIZE=block_size,
@@ -319,7 +318,7 @@ index 257481768..99a15faa2 100644
          HEAD_SIZE=head_size,
          HEAD_SIZE_PADDED=triton.next_power_of_2(head_size),
          USE_ALIBI_SLOPES=use_alibi_slopes,
-@@ -712,6 +748,7 @@ def unified_attention(
+@@ -712,6 +747,7 @@ def unified_attention(
          BLOCK_M=BLOCK_M,
          NUM_SEGMENTS_PER_SEQ=num_segments,
          USE_FP8=output_scale is not None,
