@@ -2162,7 +2162,7 @@ public:
     scf::ForOp::getCanonicalizationPatterns(scfCleanup, context);
     scf::IfOp::getCanonicalizationPatterns(scfCleanup, context);
     if (applyPatternsGreedily(m, std::move(scfCleanup)).failed()) {
-      LLVM_DEBUG(DBGS() << "scf cleanup did not converge\n");
+      LDBG("scf cleanup did not converge");
     }
     LLVM_DEBUG({
       DBGS() << "Module after final cleanups:\n";
