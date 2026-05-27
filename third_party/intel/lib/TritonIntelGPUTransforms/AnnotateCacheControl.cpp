@@ -321,106 +321,8 @@ static bool valueFlowsToSkippedStore(Value root,
 }
 
 //===----------------------------------------------------------------------===//
-// EVICT_LAST policy helpers: dot-feed predicate and per-loop budget tracker.
+// EVICT_LAST policy helpers: per-loop budget tracker.
 //===----------------------------------------------------------------------===//
-
-/// True iff every transitive user of `v` reaches a `tt::DotOp` or
-/// `tt::DotScaledOp` operand through layout-only intermediates.
-///
-/// Layout-only intermediate ops accepted: `ttg::ConvertLayoutOp`,
-/// `tt::BroadcastOp`, `tt::ExpandDimsOp`, `tt::TransOp`, `tt::ReshapeOp`.
-/// Multi-consumer intermediates where any consumer is non-layout-only reject
-/// the chain.
-///
-/// Loop-carried block arguments / `scf::YieldOp` carries are followed only for
-/// `scf::ForOp` (the canonical pipelined-load shape). `scf::IfOp` /
-/// `scf::WhileOp` carries are intentionally not supported in this predicate.
-///
-/// Reject (any of these aborts the predicate as a leaf):
-///   - any `arith::*` op (including `arith::SelectOp`),
-///   - `tt::ReduceOp`, `tt::StoreOp`, `func::ReturnOp`,
-///   - any other terminator,
-///   - any op not in the layout-only set and not a dot consumer.
-///
-/// Bounded DFS depth = 8 to keep the predicate cheap.
-static bool feedsDotOperand(Value v) {
-  constexpr unsigned kMaxDepth = 8;
-
-  SetVector<Value> visited;
-  // Worklist of (value, depth) pairs.
-  SmallVector<std::pair<Value, unsigned>> worklist;
-  worklist.push_back({v, 0});
-  visited.insert(v);
-
-  while (!worklist.empty()) {
-    auto [cur, depth] = worklist.pop_back_val();
-    if (depth > kMaxDepth)
-      return false;
-
-    // The chain must reach at least one user; an unused load value is not a
-    // dot operand.
-    if (cur.use_empty())
-      return false;
-
-    for (OpOperand &use : cur.getUses()) {
-      Operation *user = use.getOwner();
-
-      // Leaf accept: dot or dot_scaled operand.
-      if (isa<tt::DotOp, tt::DotScaledOp>(user))
-        continue;
-
-      // Layout-only intermediates: must have a single user (otherwise some
-      // sibling consumer might pull the value into a streaming pattern).
-      if (isa<ttg::ConvertLayoutOp, tt::BroadcastOp, tt::ExpandDimsOp,
-              tt::TransOp, tt::ReshapeOp>(user)) {
-        if (!user->hasOneUse())
-          return false;
-        for (Value res : user->getResults())
-          if (visited.insert(res))
-            worklist.push_back({res, depth + 1});
-        continue;
-      }
-
-      // scf.for loop-carried argument: follow the carry through the matching
-      // region iter-arg AND the matching for-result.
-      if (auto forOp = dyn_cast<scf::ForOp>(user)) {
-        unsigned operandIdx = use.getOperandNumber();
-        unsigned numCtrl = forOp.getNumControlOperands();
-        if (operandIdx < numCtrl)
-          return false; // Control operand (lb/ub/step) — not a data carry.
-        unsigned iterIdx = operandIdx - numCtrl;
-        Value iterArg = forOp.getRegionIterArg(iterIdx);
-        Value forRes = forOp.getResult(iterIdx);
-        if (visited.insert(iterArg))
-          worklist.push_back({iterArg, depth + 1});
-        if (visited.insert(forRes))
-          worklist.push_back({forRes, depth + 1});
-        continue;
-      }
-
-      // scf.yield inside an scf.for: carry the value to the for-result + the
-      // next iteration's iter-arg.
-      if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
-        auto forOp = dyn_cast<scf::ForOp>(yieldOp->getParentOp());
-        if (!forOp)
-          return false; // Only scf.for carries are supported here.
-        unsigned idx = use.getOperandNumber();
-        Value forRes = forOp.getResult(idx);
-        Value iterArg = forOp.getRegionIterArg(idx);
-        if (visited.insert(forRes))
-          worklist.push_back({forRes, depth + 1});
-        if (visited.insert(iterArg))
-          worklist.push_back({iterArg, depth + 1});
-        continue;
-      }
-
-      // Anything else: reject the whole chain.
-      return false;
-    }
-  }
-
-  return true;
-}
 
 /// Returns the total tile size in bytes for a load-like op's result value, or
 /// 0 if the result is not a ranked tensor or its element type's bit-width is
@@ -546,8 +448,11 @@ private:
   ///      that does not tile its non-K axis (factor == 1) would be
   ///      promoted purely on the strength of K being warp-invariant —
   ///      a degenerate "reuse" with no real cross-warp sharing.
-  ///   3. The load reaches a `tt.dot` / `tt.dot_scaled` operand through
-  ///      layout-only ops only.
+  ///   3. Proven temporal reuse across enclosing loops: every
+  ///      address-determining operand classifies as Invariant or Held at
+  ///      every enclosing loop level (Streaming or Unknown defeats the
+  ///      proof). This is the underlying property EVICT_LAST relies on —
+  ///      successive loop iterations re-touch the same cache lines.
   ///   4. The per-load + per-loop byte budget admits this load.
   /// `knownReuse(load)` is checked separately by the caller in `tryAnnotate`
   /// — this helper layers on the additional policy filters.
@@ -564,9 +469,8 @@ private:
         ctx.reuse.getSpatial().knownWarpBroadcastFactor(load);
     if (!factor || *factor < 2)
       return false;
-    // Requirement 3: load value reaches a tt.dot or tt.dot_scaled operand,
-    // possibly through layout-only ops.
-    if (!feedsDotOperand(load.getResult()))
+    // Requirement 3: proven temporal reuse across enclosing loops.
+    if (!ctx.reuse.getTemporal().provenTemporalReuse(load))
       return false;
     // Requirement 4: per-load + per-loop byte budget.
     if (!ctx.evictLastBudget.fits(load))

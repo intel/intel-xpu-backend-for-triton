@@ -70,17 +70,22 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
   // CHECK-LABEL: @gemm_operand_load_evict_last
   tt.func public @gemm_operand_load_evict_last(%aptr: tensor<32x32x!tt.ptr<f16>, #dot_a>,
                                                %bptr: tensor<32x32x!tt.ptr<f16>, #dot_b>,
-                                               %c: tensor<32x32xf32, #dpas>) -> tensor<32x32xf32, #dpas> {
-    // CHECK: tt.load
-    // CHECK-NOT: cacheModifier = cg
-    // CHECK-SAME: evictionPolicy = evict_last
-    %a = tt.load %aptr : tensor<32x32x!tt.ptr<f16>, #dot_a>
-    // CHECK: tt.load
-    // CHECK-NOT: cacheModifier = cg
-    // CHECK-SAME: evictionPolicy = evict_last
-    %b = tt.load %bptr : tensor<32x32x!tt.ptr<f16>, #dot_b>
-    %d = tt.dot %a, %b, %c : tensor<32x32xf16, #dot_a> * tensor<32x32xf16, #dot_b> -> tensor<32x32xf32, #dpas>
-    tt.return %d : tensor<32x32xf32, #dpas>
+                                               %c_init: tensor<32x32xf32, #dpas>,
+                                               %lb: index, %ub: index, %step: index) -> tensor<32x32xf32, #dpas> {
+    // CHECK: scf.for
+    %r = scf.for %i = %lb to %ub step %step iter_args(%c = %c_init) -> tensor<32x32xf32, #dpas> {
+      // CHECK: tt.load
+      // CHECK-NOT: cacheModifier = cg
+      // CHECK-SAME: evictionPolicy = evict_last
+      %a = tt.load %aptr : tensor<32x32x!tt.ptr<f16>, #dot_a>
+      // CHECK: tt.load
+      // CHECK-NOT: cacheModifier = cg
+      // CHECK-SAME: evictionPolicy = evict_last
+      %b = tt.load %bptr : tensor<32x32x!tt.ptr<f16>, #dot_b>
+      %d = tt.dot %a, %b, %c : tensor<32x32xf16, #dot_a> * tensor<32x32xf16, #dot_b> -> tensor<32x32xf32, #dpas>
+      scf.yield %d : tensor<32x32xf32, #dpas>
+    }
+    tt.return %r : tensor<32x32xf32, #dpas>
   }
 }
 
@@ -112,18 +117,23 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
   // CHECK-LABEL: @blocked_to_dot_via_convert_warp_broadcast_evict_last
   tt.func public @blocked_to_dot_via_convert_warp_broadcast_evict_last(%aptr: tensor<32x32x!tt.ptr<f16>, #blocked>,
                                                                        %bptr: tensor<32x32x!tt.ptr<f16>, #dot_b>,
-                                                                       %c: tensor<32x32xf32, #dpas>) -> tensor<32x32xf32, #dpas> {
-    // CHECK: tt.load
-    // CHECK-NOT: cacheModifier = cg
-    // CHECK-SAME: evictionPolicy = evict_last
-    %a_blk = tt.load %aptr : tensor<32x32x!tt.ptr<f16>, #blocked>
-    %a = ttg.convert_layout %a_blk : tensor<32x32xf16, #blocked> -> tensor<32x32xf16, #dot_a>
-    // CHECK: tt.load
-    // CHECK-NOT: cacheModifier = cg
-    // CHECK-SAME: evictionPolicy = evict_last
-    %b = tt.load %bptr : tensor<32x32x!tt.ptr<f16>, #dot_b>
-    %d = tt.dot %a, %b, %c : tensor<32x32xf16, #dot_a> * tensor<32x32xf16, #dot_b> -> tensor<32x32xf32, #dpas>
-    tt.return %d : tensor<32x32xf32, #dpas>
+                                                                       %c_init: tensor<32x32xf32, #dpas>,
+                                                                       %lb: index, %ub: index, %step: index) -> tensor<32x32xf32, #dpas> {
+    // CHECK: scf.for
+    %r = scf.for %i = %lb to %ub step %step iter_args(%c = %c_init) -> tensor<32x32xf32, #dpas> {
+      // CHECK: tt.load
+      // CHECK-NOT: cacheModifier = cg
+      // CHECK-SAME: evictionPolicy = evict_last
+      %a_blk = tt.load %aptr : tensor<32x32x!tt.ptr<f16>, #blocked>
+      %a = ttg.convert_layout %a_blk : tensor<32x32xf16, #blocked> -> tensor<32x32xf16, #dot_a>
+      // CHECK: tt.load
+      // CHECK-NOT: cacheModifier = cg
+      // CHECK-SAME: evictionPolicy = evict_last
+      %b = tt.load %bptr : tensor<32x32x!tt.ptr<f16>, #dot_b>
+      %d = tt.dot %a, %b, %c : tensor<32x32xf16, #dot_a> * tensor<32x32xf16, #dot_b> -> tensor<32x32xf32, #dpas>
+      scf.yield %d : tensor<32x32xf32, #dpas>
+    }
+    tt.return %r : tensor<32x32xf32, #dpas>
   }
 }
 
@@ -803,19 +813,24 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
   // CHECK-LABEL: @prefetch_same_ptr_does_not_block_evict_last
   tt.func public @prefetch_same_ptr_does_not_block_evict_last(%aptr: tensor<32x32x!tt.ptr<f16>, #dot_a_l>,
                                                               %bptr: tensor<32x32x!tt.ptr<f16>, #dot_b_l>,
-                                                              %c: tensor<32x32xf32, #dpas_l>) -> tensor<32x32xf32, #dpas_l> {
+                                                              %c_init: tensor<32x32xf32, #dpas_l>,
+                                                              %lb: index, %ub: index, %step: index) -> tensor<32x32xf32, #dpas_l> {
     ttig.prefetch %aptr {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x32x!tt.ptr<f16>, #dot_a_l>
     ttig.prefetch %bptr {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x32x!tt.ptr<f16>, #dot_b_l>
-    // CHECK: tt.load
-    // CHECK-NOT: cacheModifier = cg
-    // CHECK-SAME: evictionPolicy = evict_last
-    %a = tt.load %aptr : tensor<32x32x!tt.ptr<f16>, #dot_a_l>
-    // CHECK: tt.load
-    // CHECK-NOT: cacheModifier = cg
-    // CHECK-SAME: evictionPolicy = evict_last
-    %b = tt.load %bptr : tensor<32x32x!tt.ptr<f16>, #dot_b_l>
-    %d = tt.dot %a, %b, %c : tensor<32x32xf16, #dot_a_l> * tensor<32x32xf16, #dot_b_l> -> tensor<32x32xf32, #dpas_l>
-    tt.return %d : tensor<32x32xf32, #dpas_l>
+    // CHECK: scf.for
+    %r = scf.for %i = %lb to %ub step %step iter_args(%c = %c_init) -> tensor<32x32xf32, #dpas_l> {
+      // CHECK: tt.load
+      // CHECK-NOT: cacheModifier = cg
+      // CHECK-SAME: evictionPolicy = evict_last
+      %a = tt.load %aptr : tensor<32x32x!tt.ptr<f16>, #dot_a_l>
+      // CHECK: tt.load
+      // CHECK-NOT: cacheModifier = cg
+      // CHECK-SAME: evictionPolicy = evict_last
+      %b = tt.load %bptr : tensor<32x32x!tt.ptr<f16>, #dot_b_l>
+      %d = tt.dot %a, %b, %c : tensor<32x32xf16, #dot_a_l> * tensor<32x32xf16, #dot_b_l> -> tensor<32x32xf32, #dpas_l>
+      scf.yield %d : tensor<32x32xf32, #dpas_l>
+    }
+    tt.return %r : tensor<32x32xf32, #dpas_l>
   }
 }
 
@@ -837,19 +852,24 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
   // CHECK-LABEL: @factor_one_rejects_evict_last_factor_n_accepts
   tt.func public @factor_one_rejects_evict_last_factor_n_accepts(%aptr: tensor<32x32x!tt.ptr<f16>, #dot_a_m>,
                                                                  %bptr: tensor<32x32x!tt.ptr<f16>, #dot_b_m>,
-                                                                 %c: tensor<32x32xf32, #dpas_m>) -> tensor<32x32xf32, #dpas_m> {
-    // A operand: factor = 1 → rejected. Reuse-suspected branch returns
-    // false → no annotation set; load stays at default cache + default eviction.
-    // CHECK: tt.load
-    // CHECK-NOT: cacheModifier = cg
-    // CHECK-NOT: evictionPolicy = evict_last
-    %a = tt.load %aptr : tensor<32x32x!tt.ptr<f16>, #dot_a_m>
-    // B operand: factor = 4 → accepted, promoted to evict_last.
-    // CHECK: tt.load
-    // CHECK-NOT: cacheModifier = cg
-    // CHECK-SAME: evictionPolicy = evict_last
-    %b = tt.load %bptr : tensor<32x32x!tt.ptr<f16>, #dot_b_m>
-    %d = tt.dot %a, %b, %c : tensor<32x32xf16, #dot_a_m> * tensor<32x32xf16, #dot_b_m> -> tensor<32x32xf32, #dpas_m>
-    tt.return %d : tensor<32x32xf32, #dpas_m>
+                                                                 %c_init: tensor<32x32xf32, #dpas_m>,
+                                                                 %lb: index, %ub: index, %step: index) -> tensor<32x32xf32, #dpas_m> {
+    // CHECK: scf.for
+    %r = scf.for %i = %lb to %ub step %step iter_args(%c = %c_init) -> tensor<32x32xf32, #dpas_m> {
+      // A operand: factor = 1 → rejected. Reuse-suspected branch returns
+      // false → no annotation set; load stays at default cache + default eviction.
+      // CHECK: tt.load
+      // CHECK-NOT: cacheModifier = cg
+      // CHECK-NOT: evictionPolicy = evict_last
+      %a = tt.load %aptr : tensor<32x32x!tt.ptr<f16>, #dot_a_m>
+      // B operand: factor = 4 → accepted, promoted to evict_last.
+      // CHECK: tt.load
+      // CHECK-NOT: cacheModifier = cg
+      // CHECK-SAME: evictionPolicy = evict_last
+      %b = tt.load %bptr : tensor<32x32x!tt.ptr<f16>, #dot_b_m>
+      %d = tt.dot %a, %b, %c : tensor<32x32xf16, #dot_a_m> * tensor<32x32xf16, #dot_b_m> -> tensor<32x32xf32, #dpas_m>
+      scf.yield %d : tensor<32x32xf32, #dpas_m>
+    }
+    tt.return %r : tensor<32x32xf32, #dpas_m>
   }
 }
