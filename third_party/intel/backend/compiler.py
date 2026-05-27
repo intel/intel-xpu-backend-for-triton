@@ -306,6 +306,11 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.common.add_symbol_dce(pm)
         passes.ttir.add_loop_unroll(pm)
         pm.run(mod, 'make_ttir')
+
+        driver_version = metadata["target"].arch.get("driver_version")
+        if cls.is_lts(driver_version) and intel.has_precise_divide_sqrt(mod):
+            metadata["build_flags"] = "-cl-fp32-correctly-rounded-divide-sqrt"
+
         return mod
 
     @classmethod
@@ -317,6 +322,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         module_opts = intel.passes.ttgpuir.AnnotateModuleOptions()
         cls.annotate_module(module_opts, properties, opt)
         module_opts.is_lts = cls.is_lts(metadata["target"].arch.get("driver_version"))
+        module_opts.use_cl_rounded_divide_sqrt = (module_opts.is_lts and intel.has_precise_divide_sqrt(mod))
         intel.passes.ttgpuir.add_triton_annotate_module(pm, module_opts)
         pm.run(mod, 'annotate_module')
 
