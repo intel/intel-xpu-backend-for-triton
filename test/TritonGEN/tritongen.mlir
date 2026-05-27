@@ -102,4 +102,11 @@ llvm.func @triton_gen.predicated_store(%ptr : !llvm.ptr<1>, %value : i32, %predi
   triton_gen.predicated_store %ptr, %value, %predicate {cache_control = Default} : (!llvm.ptr<1>, i32, i1) -> ()
   llvm.return
 }
+
+llvm.func @triton_gen.sub_group_bitcast_shuffle(%val : vector<4xi8>) -> vector<2xi16> {
+  // CHECK:      llvm.func @triton_gen.sub_group_bitcast_shuffle(%arg0: vector<4xi8>) -> vector<2xi16> {
+  // CHECK-NEXT:   %0 = triton_gen.sub_group_bitcast_shuffle %arg0 : vector<4xi8> -> vector<2xi16>
+  %0 = triton_gen.sub_group_bitcast_shuffle %val : vector<4xi8> -> vector<2xi16>
+  llvm.return %0 : vector<2xi16>
+}
 }
