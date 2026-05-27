@@ -553,3 +553,11 @@ llvm.func @matrix_2Dblockprefetch(%ptr : !llvm.ptr, %base_width : i32, %base_hei
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=1, tile_height=32, v_blocks=1, cache_control=Default} : (!llvm.ptr, i32, i32, i32, i32, i32)
   llvm.return
 }
+
+// -----
+
+llvm.func @triton_gen.sub_group_bitcast_shuffle_invalid(%val : vector<4xi8>) -> vector<4xi16> {
+  // expected-error @+1 {{'triton_gen.sub_group_bitcast_shuffle' op input and result must have the same total number of bits}}
+  %0 = triton_gen.sub_group_bitcast_shuffle %val : vector<4xi8> -> vector<4xi16>
+  llvm.return %0 : vector<4xi16>
+}
