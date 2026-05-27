@@ -92,25 +92,25 @@ auto attention_08(const at::Tensor &Q, const at::Tensor &K, const at::Tensor &V,
         "Query result for SM count per device: " << hw_info.sm_count);
   }
 
-  if (HeadSizeVO == 64 && Causal == true) {
+  if (HeadSizeVO == 64 && Causal) {
     // Instantiate and run the benchmark
     auto kernel =
         ::FMHARunner<FMHAPrefill_HF16_HF16_HF16_FP32_RCR_h64_Causal_FixedLen>();
     kernel.run(options, hw_info, Q, K, V, O);
     return 0;
-  } else if (HeadSizeVO == 64 && Causal != true) {
+  } else if (HeadSizeVO == 64 && !Causal) {
     // Instantiate and run the benchmark
     auto kernel = ::FMHARunner<
         FMHAPrefill_HF16_HF16_HF16_FP32_RCR_h64_NonCausal_FixedLen>();
     kernel.run(options, hw_info, Q, K, V, O);
     return 0;
-  } else if (HeadSizeVO == 128 && Causal == true) {
+  } else if (HeadSizeVO == 128 && Causal) {
     // Instantiate and run the benchmark
     auto kernel = ::FMHARunner<
         FMHAPrefill_HF16_HF16_HF16_FP32_RCR_h128_Causal_FixedLen>();
     kernel.run(options, hw_info, Q, K, V, O);
     return 0;
-  } else if (HeadSizeVO == 128 && Causal != true) {
+  } else if (HeadSizeVO == 128 && !Causal) {
     // Instantiate and run the benchmark
     auto kernel = ::FMHARunner<
         FMHAPrefill_HF16_HF16_HF16_FP32_RCR_h128_NonCausal_FixedLen>();
