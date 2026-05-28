@@ -512,6 +512,40 @@ def _reciprocal_involution_kernel(x_ptr, out_ptr, n_elements, BLOCK: gl.constexp
     gl.store(out_ptr + offs, z, mask=mask)
 
 
+@gluon.jit
+def _expect_zero_upper_triangle_kernel(x_ptr, out_ptr, N: gl.constexpr, THREADS_PER_WARP: gl.constexpr):
+    layout: gl.constexpr = gl.BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [4, 1], [1, 0])
+    row = gl.arange(0, N, layout=gl.SliceLayout(1, layout))[:, None]
+    col = gl.arange(0, N, layout=gl.SliceLayout(0, layout))[None, :]
+    upper_triangle = col > row
+    x = gl.load(x_ptr + row * N + col)
+    x = gl.where(upper_triangle, x - 1.0e30, x)
+    y = gl.exp(x)
+    y = gl.expect_zero(y, upper_triangle)
+    gl.store(out_ptr + row * N + col, y)
+
+
+def test_expect_zero_upper_triangle_exp(device, fresh_knobs):
+    _require_backend(device)
+
+    N = 32
+    torch.manual_seed(0)
+    x = torch.randn((N, N), dtype=torch.float32, device=device)
+    regular_out = torch.empty_like(x)
+    fpsan_out = torch.empty_like(x)
+    upper_triangle = torch.triu(torch.ones_like(x, dtype=torch.bool), diagonal=1)
+
+    fresh_knobs.compilation.instrumentation_mode = ""
+    _expect_zero_upper_triangle_kernel[(1, )](x, regular_out, N=N, THREADS_PER_WARP=THREADS_PER_WARP)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+    _expect_zero_upper_triangle_kernel[(1, )](x, fpsan_out, N=N, THREADS_PER_WARP=THREADS_PER_WARP)
+
+    assert torch.equal(regular_out[upper_triangle], torch.zeros_like(regular_out[upper_triangle]))
+    assert torch.equal(fpsan_out[upper_triangle], torch.zeros_like(fpsan_out[upper_triangle]))
+    assert not torch.equal(regular_out, fpsan_out)
+
+
 @pytest.mark.parametrize("op", ["mul_one", "add_zero"])
 def test_constant_identity_noop(device, op, fresh_knobs):
     _require_backend(device)
@@ -1457,7 +1491,7 @@ def _mm_scaled_payload_u32(a_u8: np.ndarray, b_u8: np.ndarray, a_scale_u8: np.nd
 
 def test_dot_fma(device, fresh_knobs):
     if device != "cuda":
-        pytest.skip("dot_fma not yet supported on non-CUDA backends")
+        pytest.xfail("dot_fma not yet supported on non-CUDA backends")
     _require_backend(device)
 
     B = 16
@@ -2106,7 +2140,7 @@ def test_reduction_matches_loop(device, fresh_knobs):
     _assert_payload_equal(reduce_out, loop_out)
 
 
-@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
+@pytest.mark.xfail(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4", run=False)
 def test_mfma_dot(device, fresh_knobs):
     _require_backend(device)
 
@@ -2167,7 +2201,7 @@ def test_mfma_dot(device, fresh_knobs):
     _assert_payload_equal(out, exp_bits)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires gfx1250")
+@pytest.mark.xfail(not is_hip_gfx1250(), reason="Requires gfx1250", run=False)
 def test_wmma_dot(device, fresh_knobs):
     _require_backend(device)
 
