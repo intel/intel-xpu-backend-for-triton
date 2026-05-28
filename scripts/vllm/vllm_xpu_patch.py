@@ -212,7 +212,7 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
 
         elif ptype == "tensor_cuda_method":
             # Replace .cuda() with .xpu()
-            lines[line_idx] = re.sub(r"\.cuda\(\)", r".xpu()", line)
+            lines[line_idx] = line.replace(".cuda()", ".xpu()")
 
     return "\n".join(lines)
 
