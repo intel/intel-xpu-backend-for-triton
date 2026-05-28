@@ -1,4 +1,6 @@
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Pass/PassManager.h"
 #include "passes.h"
 
@@ -133,6 +135,9 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
       .def_readwrite(
           "support_rounded_divide_sqrt",
           &gpu::intel::TritonAnnotateModuleOptions::supportRoundedDivideSqrt)
+      .def_readwrite(
+          "use_cl_rounded_divide_sqrt",
+          &gpu::intel::TritonAnnotateModuleOptions::useClRoundedDivideSqrt)
       .def_readwrite("threads_per_warp",
                      &gpu::intel::TritonAnnotateModuleOptions::threadsPerWarp)
       .def_readwrite("target_arch",
@@ -328,6 +333,16 @@ void init_triton_intel(py::module &&m) {
   m.def("get_threads_per_warp", [](mlir::ModuleOp &mod) -> py::object {
     auto ret = mlir::triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
     return py::int_(ret);
+  });
+
+  m.def("has_precise_divide_sqrt", [](mlir::ModuleOp &mod) -> bool {
+    using namespace mlir;
+    WalkResult result = mod.walk([&](Operation *op) {
+      if (isa<mlir::triton::PreciseDivFOp, mlir::triton::PreciseSqrtOp>(op))
+        return WalkResult::interrupt();
+      return WalkResult::advance();
+    });
+    return result.wasInterrupted();
   });
 
   // FIXME: This is for internal experimentation. In the end we will need a

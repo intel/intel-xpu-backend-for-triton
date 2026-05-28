@@ -1,4 +1,4 @@
-# No module named test_mamba_mixer2
+# Multi GPU
 tests/kernels/mamba/test_mamba_mixer2.py::test_mixer2_gated_norm_multi_gpu[dtype0-hidden_size_n_groups0-128-8]
 tests/kernels/mamba/test_mamba_mixer2.py::test_mixer2_gated_norm_multi_gpu[dtype0-hidden_size_n_groups1-128-8]
 tests/kernels/mamba/test_mamba_mixer2.py::test_mixer2_gated_norm_multi_gpu[dtype0-hidden_size_n_groups2-128-8]
@@ -7,4 +7,3 @@ tests/kernels/mamba/test_mamba_mixer2.py::test_mixer2_gated_norm_multi_gpu[dtype
 tests/kernels/mamba/test_causal_conv1d.py::test_causal_conv1d_varlen
 tests/kernels/mamba/test_mamba_ssm.py::test_selective_scan
 tests/kernels/mamba/test_mamba_ssm.py::test_selective_scan_varlen
-tests/kernels/mamba/test_mamba_ssm.py::test_selective_state_update
