@@ -11,6 +11,7 @@
 #include "mlir/IR/Visitors.h"
 #include "mlir/Interfaces/CastInterfaces.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
 #include <optional>
@@ -30,6 +31,19 @@ namespace mlir::triton::gpu::intel {
 } // namespace mlir::triton::gpu::intel
 
 namespace {
+
+/// True if `TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS` is explicitly set to a
+/// falsy value. When that env var is "0" (e.g. on the CRI simulator to avoid
+/// a hang), `LoadStoreOpToLLVM.cpp::isBlockIOCandidate()` rejects non-DPAS
+/// 2D block loads/stores and they fall through to the regular gather, which
+/// cannot correctly handle the [H,W] register-strides-rows encoding produced
+/// by the 1D->2D reshape rewrites.
+static bool isBlockIOForAllLayoutsExplicitlyDisabled() {
+  auto enableBlockIOForAllLayout = tt::tools::isEnvValueBool(
+      tt::tools::getStrEnv("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS"));
+  return enableBlockIOForAllLayout.has_value() &&
+         !enableBlockIOForAllLayout.value();
+}
 
 struct TritonIntelGPUMaterializeBlockPointerPass
     : public triton::gpu::intel::impl::
@@ -624,6 +638,12 @@ private:
                              MLIRContext *ctx) const {
     LDBG("Attempting 1D strided store reshape for: " << *op);
 
+    if (isBlockIOForAllLayoutsExplicitlyDisabled()) {
+      LDBG("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=0 disables non-DPAS 2D "
+           "block stores; skip 1D->2D store reshape");
+      return;
+    }
+
     // Reject masked stores — we only handle unmasked or provably all-true.
     if (Value mask = op.getMask()) {
       if (!matchPattern(mask, m_One())) {
@@ -683,6 +703,12 @@ private:
   void reshape1DStridedLoad(tt::LoadOp op, RankedTensorType ptrTensorTy,
                             MLIRContext *ctx) const {
     LDBG("Attempting 1D strided load reshape for: " << *op);
+
+    if (isBlockIOForAllLayoutsExplicitlyDisabled()) {
+      LDBG("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=0 disables non-DPAS 2D "
+           "block loads; skip 1D->2D load reshape");
+      return;
+    }
 
     // For loads, we allow masks (the load path handles them).
     // However, the strided pattern matcher needs the ptr, not mask.
