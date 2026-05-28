@@ -1344,6 +1344,15 @@ struct PreciseSqrtOpConversion
       return {callOp.getResult()};
     }
 
+    // Rely on `-cl-fp32-correctly-rounded-divide-sqrt` for precise sqrt on
+    // LTS drivers when no regular div/sqrt ops are present.
+    if (mlir::LLVM::intel::hasModuleAttr(
+            op, intel::TritonIntelGPUDialect::
+                    getUseClRoundedDivideSqrtAttrName())) {
+      return {LLVM::SqrtOp::create(rewriter, loc, elemTy, operandsRanges[0],
+                                   adaptor.getAttributes().getValue())};
+    }
+
     // Fallback: use type-appropriate __imf_sqrt*_rn builtin.
     StringRef fnName = elemTy.isF32() ? "__imf_sqrtf_rn" : "__imf_sqrt_rn";
     SmallVector<Type> argTypes(ValueRange(operandsRanges[0]).getTypes());
@@ -1378,6 +1387,15 @@ struct PreciseDivFOpConversion
           rewriter, fnName, elemTy, operandTypes, operandsRanges[0],
           /*paramAttrs=*/{}, intel::noUnwindWillReturnAttrs);
       return {callOp.getResult()};
+    }
+
+    // Rely on `-cl-fp32-correctly-rounded-divide-sqrt` for precise division
+    // on LTS drivers when no regular div/sqrt ops are present.
+    if (mlir::LLVM::intel::hasModuleAttr(
+            op, intel::TritonIntelGPUDialect::
+                    getUseClRoundedDivideSqrtAttrName())) {
+      return {LLVM::FDivOp::create(rewriter, loc, elemTy, operandsRanges[0][0],
+                                   operandsRanges[0][1])};
     }
 
     // Fallback: use type-appropriate __imf_*div_rn builtin.
