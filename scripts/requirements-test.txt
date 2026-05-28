@@ -4,7 +4,6 @@ autopep8
 isort
 numpy
 pytest
-pytest-forked
 pytest-xdist
 scipy>=1.7.1
 llnl-hatchet
@@ -18,7 +17,6 @@ tabulate
 
 # Used by test-triton.sh
 pytest-xdist
-pytest-forked
 pytest-rerunfailures
 pytest-skip>=0.2.0
 pytest-timeout
