@@ -602,8 +602,8 @@ def get_benchmark(
         # For FWD mode in triton & sycl-tla: Some configs increase performance with warmup as a step function, but some slowly decrease with saturation
         # Performance is best at 250-400ms range, but we want stable, not just best at ~600ms (triton/sycl-tla providers)
         n_warmup_fwd = 600
-        # For BWD mode: Performance doesn't really improve much with warmup for triton, but xetla benefit from more warmup
-        n_warmup_bwd = 400  # Maximum across xetla=400, triton=10, onednn=10
+        # For BWD mode: Performance doesn't really improve much with warmup for triton
+        n_warmup_bwd = 400  # Maximum across sycl-tla=400, triton=10, onednn=10
         n_warmup = n_warmup_fwd if MODE == 'fwd' else n_warmup_bwd
         do_bench = benchmark_suite.get_do_bench(n_warmup=n_warmup, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
         if MODE not in modes:
