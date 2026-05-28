@@ -16,4 +16,9 @@ target_include_directories(onednn_kernel PUBLIC "${oneDNNLibrary_INCLUDE_DIR}")
 
 add_subdirectory(softmax)
 
+set_target_properties(onednn_kernel PROPERTIES
+    INSTALL_RPATH "$ORIGIN/lib"
+    BUILD_WITH_INSTALL_RPATH TRUE
+)
+
 install(TARGETS onednn_kernel LIBRARY DESTINATION .)
