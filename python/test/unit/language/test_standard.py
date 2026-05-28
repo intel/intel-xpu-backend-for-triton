@@ -48,15 +48,23 @@ def test_sort(M, N, k, descending, dtype_str, device):
         tl.store(Z + offs_z, z)
 
     z_shape = (M, N if k is None else k)
-    x = numpy_random((M, N), dtype_str=dtype_str)
-    x = torch.from_numpy(x).to(device)
+    x_np = numpy_random((M, N), dtype_str=dtype_str)
+    x_cpu = torch.from_numpy(x_np)
+    x = x_cpu.to(device)
     z = torch.empty(z_shape, dtype=x.dtype, device=x.device)
     if k is None or x.numel() < k:
-        y = torch.sort(x, descending=descending)[0]
+        y = torch.sort(x_cpu, descending=descending)[0]
     else:
-        y = torch.topk(x, k=k, largest=descending).values
+        y = torch.topk(x_cpu, k=k, largest=descending).values
     sort_kernel[(1, )](x, x.stride(0), z, z.stride(0), M, N, k, descending, num_warps=8)
-    assert (y == z).all(), (y, z)
+    assert (y == z.cpu()).all(), (y, z)
+
+
+def test_torch_topk_xpu_regression(device):
+    x = torch.from_numpy(numpy_random((8, 64), dtype_str='float32'))
+    cpu = torch.topk(x, k=8).values
+    xpu = torch.topk(x.to(device), k=8).values.cpu()
+    assert (cpu == xpu).all(), (cpu, xpu)
 
 
 # ---------------
