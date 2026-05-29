@@ -2,7 +2,7 @@ diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attenti
 index 257481768..99a15faa2 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
-@@ -54,6 +54,41 @@ def _cast_kv_tile(data, Q, tensor_scale, KV_QUANT_MODE: tl.constexpr):
+@@ -54,6 +54,40 @@ def _cast_kv_tile(data, Q, tensor_scale, KV_QUANT_MODE: tl.constexpr):
      return data.to(Q.dtype)
  
  
@@ -43,7 +43,7 @@ index 257481768..99a15faa2 100644
  @triton.jit
  def kernel_unified_attention(
      # Output destinations.  In 2D mode we write the final result into
-@@ -111,6 +146,7 @@ def kernel_unified_attention(
+@@ -111,6 +145,7 @@ def kernel_unified_attention(
      BLOCK_M: tl.constexpr,
      NUM_SEGMENTS_PER_SEQ: tl.constexpr,
      USE_FP8: tl.constexpr,
@@ -51,7 +51,7 @@ index 257481768..99a15faa2 100644
      # Toggles 2D vs 3D layout.  The 2D path runs the full sequence in one
      # tile loop and writes to ``output_ptr``.  The 3D path scopes the loop
      # to ``[segm_idx, segm_idx+1) × tiles_per_segment`` and writes
-@@ -145,6 +181,9 @@ def kernel_unified_attention(
+@@ -145,6 +180,9 @@ def kernel_unified_attention(
      CHUNK_LOOKBACK: tl.constexpr = -1,
      CHUNK_SIZE: tl.constexpr = -1,
  ):
@@ -61,7 +61,7 @@ index 257481768..99a15faa2 100644
      # Per-(token, head) scale caches (used iff KV_QUANT_MODE in {2, 3}).
      USE_PER_TOKEN_HEAD_SCALES: tl.constexpr = (KV_QUANT_MODE >= 2) and (KV_QUANT_MODE <= 3)
  
-@@ -173,28 +212,31 @@ def kernel_unified_attention(
+@@ -173,28 +211,31 @@ def kernel_unified_attention(
          tiles_per_segment = 0
  
      offs_m = tl.arange(0, BLOCK_M)
@@ -106,7 +106,7 @@ index 257481768..99a15faa2 100644
  
      block_table_offset = seq_idx * block_table_stride
  
-@@ -238,35 +280,23 @@ def kernel_unified_attention(
+@@ -238,35 +279,23 @@ def kernel_unified_attention(
          seq_offset = j * TILE_SIZE + offs_t
          tile_mask = seq_offset < max_seq_prefix_len
  
@@ -156,7 +156,7 @@ index 257481768..99a15faa2 100644
          V = _cast_kv_tile(V_load, Q, v_scale, KV_QUANT_MODE)
  
          # Per-(token, head) scales for INT8 / FP8 per-token-head modes.
-@@ -330,13 +360,8 @@ def kernel_unified_attention(
+@@ -330,13 +359,8 @@ def kernel_unified_attention(
          M, L, P, alpha = softmax_step(S, M, L)
          acc = acc * alpha[:, None]
  
@@ -172,7 +172,7 @@ index 257481768..99a15faa2 100644
          if USE_PER_TOKEN_HEAD_SCALES:
              # Per-token-head quant: apply v_scale to P instead of V.
              P_v = (P * v_token_head_scales[None, :]).to(V.dtype)
-@@ -346,19 +371,19 @@ def kernel_unified_attention(
+@@ -346,19 +370,19 @@ def kernel_unified_attention(
  
      # ---- Epilogue ---------------------------------------------------------
      if IS_3D:
@@ -204,7 +204,7 @@ index 257481768..99a15faa2 100644
          store_segm_reduce_scalars(
              segm_max_ptr,
              segm_expsum_ptr,
-@@ -377,16 +402,14 @@ def kernel_unified_attention(
+@@ -377,16 +401,14 @@ def kernel_unified_attention(
          if USE_FP8:
              acc = acc * tl.load(out_scale)
              acc = tl.clamp(acc, FP8_MIN, FP8_MAX)
@@ -229,7 +229,7 @@ index 257481768..99a15faa2 100644
  
  
  @triton.jit
-@@ -606,28 +629,19 @@ def unified_attention(
+@@ -606,28 +628,17 @@ def unified_attention(
      elif sliding_window_val <= 0:
          chunk_lookback = -1
  
@@ -265,7 +265,7 @@ index 257481768..99a15faa2 100644
  
      # The kernel signature is the same for 2D and 3D — only the launch
      # grid + a handful of constexpr toggles differ.  Per-token-head scale
-@@ -649,6 +663,30 @@ def unified_attention(
+@@ -649,6 +660,30 @@ def unified_attention(
          v_scale_ptr = None
  
      # 3D needs real segm tensors; 2D never touches them.
@@ -296,7 +296,7 @@ index 257481768..99a15faa2 100644
      segm_output_ptr = softmax_segm_output if use_3d else None
      segm_max_ptr = softmax_segm_max if use_3d else None
      segm_expsum_ptr = softmax_segm_expsum if use_3d else None
-@@ -657,10 +695,9 @@ def unified_attention(
+@@ -657,10 +692,9 @@ def unified_attention(
      grid: tuple[Any, ...]
      if not use_3d:
          grid = (total_num_q_blocks, num_kv_heads)
@@ -308,7 +308,7 @@ index 257481768..99a15faa2 100644
  
      kernel_unified_attention[grid](
          output_ptr=out,
-@@ -686,7 +723,6 @@ def unified_attention(
+@@ -686,7 +720,6 @@ def unified_attention(
          output_stride_1=out.stride(1),
          qq_bias_stride_0=qq_bias.stride(0) if use_qq_bias else 0,
          BLOCK_SIZE=block_size,
@@ -316,7 +316,7 @@ index 257481768..99a15faa2 100644
          HEAD_SIZE=head_size,
          HEAD_SIZE_PADDED=triton.next_power_of_2(head_size),
          USE_ALIBI_SLOPES=use_alibi_slopes,
-@@ -712,6 +748,7 @@ def unified_attention(
+@@ -712,6 +745,7 @@ def unified_attention(
          BLOCK_M=BLOCK_M,
          NUM_SEGMENTS_PER_SEQ=num_segments,
          USE_FP8=output_scale is not None,
