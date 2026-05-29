@@ -81,71 +81,43 @@ static SmallVector<Value> Fp8E5M2_to_Bf16(Location loc,
   a1 = b.insert_element(fp8x4VecTy, a1, v[3], b.i32_val(3));
   a1 = b.bitcast(a1, i32_ty);
 
-  Value b0 = b.and_(i32_ty, a0, b.i32_val(0x7fff7fff));
-  Value b1 = b.and_(i32_ty, a1, b.i32_val(0x7fff7fff));
-  // In i32 original fp8 exponent is b0 >> 26
-  // bf16's 5-bit exponent in the top 2 bytes of i32 is at b0 >> 23
-  // 2^5-1 << 23 = 0xf800000
-  b0 = b.lshr(i32_ty, b0, b.i32_val(3));
-  b1 = b.lshr(i32_ty, b1, b.i32_val(3));
+  // FP8E5M2 -> BF16 via mask-free i32-domain fmul rebias.
+  //
+  // Algorithm (per pack `a` holding 2 FP8 bytes in bits [15:8] of each i16
+  // half, i.e. byte i sits in the high byte of i32 lane i):
+  //   1. Strip the sign bits with `and 0x7fff7fff`.
+  //   2. Shift the magnitude right by 3. This relocates the 5-bit fp8
+  //      exponent + 2-bit mantissa into the bf16 [exponent | mantissa]
+  //      positions, treating the bf16 bit pattern as `magnitude * 2^-112`.
+  //   3. OR the original sign bits back in. The resulting i32 holds two
+  //      bf16-shaped lanes.
+  //   4. Bitcast to <2 x bfloat> and multiply by the bf16x2 splat 2^112
+  //      (raw 0x7780). One fmul lifts the magnitude back to bf16 range and
+  //      handles fp8 subnormals -> bf16 normals in the same step.
+  //
+  // The i32-domain shape (no trunc/mask immediately upstream of the bf16
+  // multiply) avoids the IGC FTZ bug that motivated the i16-domain shape in
+  // the sibling Fp8E4M3Nv_to_Bf16 path. NumPy validation matches the
+  // existing E5M2 converter for all 256 fp8 byte values.
+  auto rescalePack = [&](Value pack) {
+    Value nosign = b.and_(i32_ty, pack, b.i32_val(0x7fff7fff));
+    Value shifted = b.lshr(i32_ty, nosign, b.i32_val(3));
+    Value sign = b.and_(i32_ty, pack, b.i32_val(0x80008000));
+    Value withSign = b.or_(i32_ty, shifted, sign);
 
-  Value c0 = b.and_(i32_ty, b0, b.i32_val(0xffff0000));
-  Value c1 = b.shl(i32_ty, b0, b.i32_val(16));
-  Value c2 = b.and_(i32_ty, b1, b.i32_val(0xffff0000));
-  Value c3 = b.shl(i32_ty, b1, b.i32_val(16));
+    auto bf16x2VecTy = vec_ty(bf16_ty, 2);
+    Value asBf16x2 = b.bitcast(withSign, bf16x2VecTy);
 
-  auto i32x4VecTy = vec_ty(i32_ty, 4);
-  Value predefined = b.undef(i32x4VecTy);
-  predefined =
-      b.insert_element(i32x4VecTy, predefined, b.i32_val(0x0), b.i32_val(0));
-  predefined = b.insert_element(i32x4VecTy, predefined, b.i32_val(0x37800000),
-                                b.i32_val(1));
-  predefined = b.insert_element(i32x4VecTy, predefined, b.i32_val(0x38000000),
-                                b.i32_val(2));
-  predefined = b.insert_element(i32x4VecTy, predefined, b.i32_val(0x38400000),
-                                b.i32_val(3));
-  // Check if the exponent is zero, i.e. subnormal number.
-  // depending on the significand value normalization goes like:
-  //  [00] -> 0x0
-  //  [01] -> exp=127-16, sig=0x0
-  //  [10] -> exp=127-15, sig=0x0
-  //  [11] -> exp=127-15, sig=b1000...
-  Value cmp0 = b.icmp_eq(b.and_(c0, b.i32_val(0xf800000)), b.i32_val(0));
-  Value cmp1 = b.icmp_eq(b.and_(c1, b.i32_val(0xf800000)), b.i32_val(0));
-  Value cmp2 = b.icmp_eq(b.and_(c2, b.i32_val(0xf800000)), b.i32_val(0));
-  Value cmp3 = b.icmp_eq(b.and_(c3, b.i32_val(0xf800000)), b.i32_val(0));
+    Value bf16Mul = b.bf16_val(std::ldexp(1.0f, 112));
+    Value mulBf16 = b.undef(bf16x2VecTy);
+    mulBf16 = b.insert_element(bf16x2VecTy, mulBf16, bf16Mul, b.i32_val(0));
+    mulBf16 = b.insert_element(bf16x2VecTy, mulBf16, bf16Mul, b.i32_val(1));
 
-  Value predef_idx0 = b.lshr(b.and_(c0, b.i32_val(3 << 21)), b.i32_val(21));
-  Value predef_idx1 = b.lshr(b.and_(c1, b.i32_val(3 << 21)), b.i32_val(21));
-  Value predef_idx2 = b.lshr(b.and_(c2, b.i32_val(3 << 21)), b.i32_val(21));
-  Value predef_idx3 = b.lshr(b.and_(c3, b.i32_val(3 << 21)), b.i32_val(21));
+    return b.fmul(bf16x2VecTy, asBf16x2, mulBf16);
+  };
 
-  Value normalized0 = b.extract_element(i32_ty, predefined, predef_idx0);
-  Value normalized1 = b.extract_element(i32_ty, predefined, predef_idx1);
-  Value normalized2 = b.extract_element(i32_ty, predefined, predef_idx2);
-  Value normalized3 = b.extract_element(i32_ty, predefined, predef_idx3);
-
-  Value d0 = b.add(i32_ty, c0, b.i32_val(0x38000000));
-  Value d1 = b.add(i32_ty, c1, b.i32_val(0x38000000));
-  Value d2 = b.add(i32_ty, c2, b.i32_val(0x38000000));
-  Value d3 = b.add(i32_ty, c3, b.i32_val(0x38000000));
-
-  Value res0 = b.select(cmp0, normalized0, d0);
-  Value res1 = b.select(cmp1, normalized1, d1);
-  Value res2 = b.select(cmp2, normalized2, d2);
-  Value res3 = b.select(cmp3, normalized3, d3);
-
-  Value f0 = b.or_(i32_ty, res0, b.lshr(i32_ty, res1, b.i32_val(16)));
-  Value f1 = b.or_(i32_ty, res2, b.lshr(i32_ty, res3, b.i32_val(16)));
-
-  Value sign0 = b.and_(i32_ty, a0, b.i32_val(0x80008000));
-  Value sign1 = b.and_(i32_ty, a1, b.i32_val(0x80008000));
-
-  auto bf16x2VecTy = vec_ty(bf16_ty, 2);
-  Value bf16x2Vec0 = b.or_(i32_ty, sign0, f0);
-  Value bf16x2Vec1 = b.or_(i32_ty, sign1, f1);
-  bf16x2Vec0 = b.bitcast(bf16x2Vec0, bf16x2VecTy);
-  bf16x2Vec1 = b.bitcast(bf16x2Vec1, bf16x2VecTy);
+  Value bf16x2Vec0 = rescalePack(a0);
+  Value bf16x2Vec1 = rescalePack(a1);
 
   return {b.extract_element(bf16_ty, bf16x2Vec0, b.i32_val(0)),
           b.extract_element(bf16_ty, bf16x2Vec0, b.i32_val(1)),
