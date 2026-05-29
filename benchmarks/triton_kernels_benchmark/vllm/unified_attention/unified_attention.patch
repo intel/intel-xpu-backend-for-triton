@@ -24,8 +24,7 @@ index 257481768..99a15faa2 100644
 +            continue
 +
 +        if is_3d:
-+            fixed_tile_size = 32 if is_fp8_input else 16
-+            if tile_size != fixed_tile_size:
++            if not is_fp8_input and tile_size != 16:
 +                continue
 +
 +        valid_configs.append(config)
@@ -242,8 +241,6 @@ index 257481768..99a15faa2 100644
 -    )
 +    # Tile size is selected by Triton autotuning between 16 and 32.
 +    is_fp8_input = q.element_size() == 1
-+    if is_fp8_input and block_size < 32:
-+        raise ValueError(f"FP8 input mode requires block_size >= 32, got {block_size}")
  
      # Launch the 2D kernel if
      # 1. No intermediate tiled softmax buffers for the 3D kernel have been allocated, or
