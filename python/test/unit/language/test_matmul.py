@@ -1421,8 +1421,6 @@ def test_batched_mxfp(BATCH_SIZE, BLOCK_BATCH_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, N
             triton.runtime.driver.active.get_current_device())["max_shared_mem"]
         if dot_op_slm >= max_slm:
             pytest.xfail("Config requires too much shared memory")
-        if is_xpu_cri() and ([BLOCK_M, BLOCK_N, BLOCK_K] == [64, 64, 128]):
-            pytest.skip("FIXME: #929")
 
     torch.manual_seed(42)
     dtype_src_str = "float8e5"
