@@ -1066,10 +1066,10 @@ def test_precise_math(expr_prec, expr_ref, num_ctas, device):
     if is_xpu():
         # use cpu result as reference, see https://github.com/llvm/llvm-project/issues/88222
         if (expr_prec.count('sqrt') > 0):
-            out_ref = torch.sqrt(x.cpu().to(torch.float64)).to(torch.float32).to(device=device)
+            out_ref = torch.sqrt(x.cpu().to(torch.float64)).to(torch.float32)
         elif (expr_prec.count('div') > 0):
-            out_ref = torch.div(x.cpu().to(torch.float64),
-                                y.cpu().to(torch.float64)).to(torch.float32).to(device=device)
+            out_ref = torch.div(x.cpu().to(torch.float64), y.cpu().to(torch.float64)).to(torch.float32)
+        out = out.cpu()
     assert torch.all(out == out_ref)  # bitwise exact
 
 
