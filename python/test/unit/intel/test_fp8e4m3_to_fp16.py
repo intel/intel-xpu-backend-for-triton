@@ -1,7 +1,7 @@
 """
 Regression test for FP8E4M3FN -> FP16 conversion.
 
-Guards the fma-based converter optimization that replaces the 22-op lookup
+Guards the fmul-based converter optimization that replaces the 22-op lookup
 table with a single fmul. Validates bit-exact output across all 256 possible
 fp8 byte values.
 
@@ -20,7 +20,7 @@ from triton._internal_testing import is_xpu
 
 def expected_fp16_for_byte(byte: int) -> int:
     """
-    Reference implementation of the fma-based converter.
+    Reference implementation of the fmul-based converter.
 
     Returns the fp16 bit pattern (uint16) that the Triton converter produces
     for the given fp8 byte value.
