@@ -3432,6 +3432,15 @@ struct AtomicRMWOpConversion
     Value threadPred =
         emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
 
+    bool support16BitAtomics = moduleOp->hasAttr(
+        TritonIntelGPUDialect::getSupport16BitAtomicsAttrName());
+    if (valueElemNBits == 16 && !support16BitAtomics &&
+        !supports16BitEmulation(atomicRmwAttr, valueElemTy))
+      return op.emitError(
+          "16-bit atomic RMW is only emulated for fp16/bf16 with "
+          "FADD/MAX/MIN/XCHG when the target lacks native 16-bit atomics; "
+          "this operation or element type is not supported");
+
     auto vecTy = vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
     for (size_t i = 0; i < elemsPerThread; i += vec) {
@@ -3463,8 +3472,6 @@ struct AtomicRMWOpConversion
       // TODO: check device capabilities to avoid unnecessary emulation or
       // emit unsupported feature error.
       Value ret;
-      bool support16BitAtomics = moduleOp->hasAttr(
-          TritonIntelGPUDialect::getSupport16BitAtomicsAttrName());
       if (valueElemNBits == 16 && !support16BitAtomics) {
         op.emitWarning("'tt.atomic_rmw' op fp16/bf16 datatype is not supported "
                        "in the target HW, software emulation is an "
@@ -3530,6 +3537,24 @@ struct AtomicRMWOpConversion
                                   getTypeConverter());
     }
     return success();
+  }
+
+  // emulate16BitsAtomicRmw only implements fp16/bf16 (FADD + FP MAX/MIN/XCHG).
+  // Must stay in sync with the switch there: integer 16-bit ops would either
+  // hit llvm_unreachable or be silently miscompiled as floating-point MAX/MIN.
+  static bool supports16BitEmulation(mlir::triton::RMWOp atomicOp,
+                                     Type valueElemTy) {
+    if (!isa<mlir::Float16Type, mlir::BFloat16Type>(valueElemTy))
+      return false;
+    switch (atomicOp) {
+    case RMWOp::FADD:
+    case RMWOp::MAX:
+    case RMWOp::MIN:
+    case RMWOp::XCHG:
+      return true;
+    default:
+      return false;
+    }
   }
 
   // Emulate 16-bit atomicrmw through a loop with 32-bit cmpxchg.
@@ -4181,6 +4206,12 @@ struct LocalAtomicScatterRMWOpConversion
     bool returnOld = !op.getResult().use_empty();
 
     bool needs16BitEmulation = requires16BitEmulation(op, info.llvmElemTy);
+    if (needs16BitEmulation &&
+        !AtomicRMWOpConversion::supports16BitEmulation(rmwOp, info.llvmElemTy))
+      return op.emitError(
+          "16-bit atomic RMW is only emulated for fp16/bf16 with "
+          "FADD/MAX/MIN/XCHG when the target lacks native 16-bit atomics; "
+          "this operation or element type is not supported");
 
     Value zero = emitZeroConstant(b, info.llvmElemTy);
 
