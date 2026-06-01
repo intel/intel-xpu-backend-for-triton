@@ -196,8 +196,10 @@ def filter_traceback(e: BaseException):
 class CompileTimer:
 
     def __init__(self) -> None:
-        # #5665: use perf_counter_ns instead of time.time(). Windows time.time()
-        # has ~16ms resolution, rounding sub-ms stages (store_results) to 0.
+        # #5665:
+        #   - time.time() ticks every 15.6ms on Windows
+        #   - store_results returns ~us, so every value below 15600us will not be counted.
+        #   - perf_counter_ns ticks every ~100ns, fine enough to see us-scale durations.
         self.start: int = time.perf_counter_ns()
         self.ir_initialization_end: int | None = None
         self.lowering_stage_ends: list[tuple[str, int]] = []
