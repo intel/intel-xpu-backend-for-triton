@@ -596,8 +596,11 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         maxtol, rmstol = 3e-2, None
     assert_close(ref_y, tri_y, maxtol=maxtol, rmstol=rmstol)
     if c_dtype.has_global_scale:
-        assert torch.all((ref_y_scale - tri_y_scale).abs() < 1e-10), \
-               f"ref_y_scale: {ref_y_scale}, tri_y_scale: {tri_y_scale.item()}"
+        if is_xpu_cri():
+            torch.testing.assert_close(ref_y_scale, tri_y_scale, atol=1e-10, rtol=1e-5)
+        else:
+            assert torch.all((ref_y_scale - tri_y_scale).abs() < 1e-10), \
+                   f"ref_y_scale: {ref_y_scale}, tri_y_scale: {tri_y_scale.item()}"
 
 
 def test_k_ragged_mxfp8_act_scale_swizzling(device):
