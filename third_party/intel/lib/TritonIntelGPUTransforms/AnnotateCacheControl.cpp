@@ -341,12 +341,12 @@ static int64_t computeTileBytes(Value result) {
   return numElements * static_cast<int64_t>(bits / 8);
 }
 
-/// Per-function tracker for the EVICT_LAST per-loop byte budget. Implements
-/// the canonical rule from the plan §2.1: a load is admitted iff its tile
-/// bytes are within `kEvictLastPerLoadBudgetBytes` AND, if enclosed in an
-/// `scf::ForOp`, the running total in that loop's bucket plus the candidate's
-/// tile bytes does not exceed `kEvictLastPerLoopBudgetBytes`. Outside-loop
-/// loads are subject to the per-load cap only and never touch any bucket.
+/// Per-function tracker for the EVICT_LAST per-loop byte budget. A load is
+/// admitted iff its tile bytes are within `kEvictLastPerLoadBudgetBytes` AND,
+/// if enclosed in an `scf::ForOp`, the running total in that loop's bucket
+/// plus the candidate's tile bytes does not exceed
+/// `kEvictLastPerLoopBudgetBytes`. Outside-loop loads are subject to the
+/// per-load cap only and never touch any bucket.
 struct EvictLastBudgetTracker {
   llvm::DenseMap<scf::ForOp, int64_t> bytesPromotedPerLoop;
 
