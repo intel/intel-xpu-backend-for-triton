@@ -2976,11 +2976,9 @@ def shared_atomic_scatter_rmw_broadcast_kernel(
     ttgl.store(final_ptr + offsets_2d, final)
 
 
-def test_shared_atomic_scatter_rmw_broadcast():
+def test_shared_atomic_scatter_rmw_broadcast(device):
     if is_hip_cdna() or is_hip_rdna():
         pytest.skip("Shared atomic_scatter_rmw is not supported on AMD")
-
-    device = torch.device("cuda")
     N, M = 16, 32
     values = torch.arange(N, dtype=torch.float32, device=device) + 1.0
     old = torch.empty((N, M), dtype=torch.float32, device=device)
