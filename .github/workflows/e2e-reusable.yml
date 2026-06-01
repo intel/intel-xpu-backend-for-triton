@@ -203,6 +203,17 @@ jobs:
           fi
           pip install -e .
 
+      - name: Sync model list from torch-xpu-ops
+        run: |
+          PYTORCH_XPU_OPS_REF="$(curl -s https://raw.githubusercontent.com/pytorch/pytorch/$(<.github/pins/pytorch.txt)/third_party/xpu.txt)"
+          git clone https://github.com/intel/torch-xpu-ops.git
+          cd torch-xpu-ops
+          git checkout $PYTORCH_XPU_OPS_REF
+          cd ..
+          sudo apt-get update
+          sudo apt-get install -y rsync
+          rsync -avz ./torch-xpu-ops/.ci/benchmarks/ ./pytorch/benchmarks/dynamo/
+
       - name: Report environment details
         timeout-minutes: 1
         run: |

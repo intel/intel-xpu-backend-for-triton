@@ -103,7 +103,7 @@ def get_src_element_ty_size(dtype_str):
                                                                    (256, 128, 32, 4), (64, 512, 32, 2),
                                                                    (512, 64, 32, 2), (64, 16, 64, 4)])
 @pytest.mark.parametrize("NUM_CTAS", [1, 2])
-@pytest.mark.parametrize("NUM_WARPS", [4, 8])
+@pytest.mark.parametrize("NUM_WARPS", [32 if is_xpu_cri() else 4, 8])
 @pytest.mark.parametrize("EPILOGUE_SUBTILE", [True, False])
 @pytest.mark.parametrize("LAYOUT_16x256", [True, False])
 def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, NUM_WARPS, NUM_CTAS, device,
@@ -285,7 +285,7 @@ def simple_persistent_kernel(a_ptr, b_ptr, c_ptr, M, N, K, stride_am, stride_ak,
 
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 16), (64, 128, 32), (32, 32, 32), (256, 128, 16),
                                                        (64, 512, 16), (512, 64, 16), (64, 16, 16)])
-@pytest.mark.parametrize("NUM_WARPS", [4, 8])
+@pytest.mark.parametrize("NUM_WARPS", [32 if is_xpu_cri() else 4, 8])
 @pytest.mark.parametrize("DISALLOW_ACC_MULTI_BUFFER", [True, False])
 def test_simple_persistent_matmul(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, DISALLOW_ACC_MULTI_BUFFER, device):
     M, N, K = 1024, 512, 256
@@ -377,12 +377,14 @@ def fp8e8m0_to_float32(scale):
                                                        (128, 256, 256), (128, 128, 64), (128, 64, 128), (128, 16, 256),
                                                        (128, 16, 64)])
 @pytest.mark.parametrize("NUM_STAGES", [1, 3])
-@pytest.mark.parametrize("NUM_WARPS", [4, 8])
+@pytest.mark.parametrize("NUM_WARPS", [32 if is_xpu_cri() else 4, 8])
 @pytest.mark.parametrize("nonKDim", ([0, 16, 32] if (is_hip_cdna() or is_hip_gfx1250()) else [0]))
 def test_mxfp(BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS, device):
     M = 1024
     N = 512
     K = 2048
+    if is_xpu_cri():
+        M, N, K = 256, 256, 512
     if K % BLOCK_K != 0:
         pytest.skip("Kernel requires shapes aligned by K dimension")
     if is_cuda() and torch.cuda.get_device_capability()[0] < 10:
@@ -869,6 +871,8 @@ def test_lhs_in_tmem(BLOCK_M, BLOCK_N, BLOCK_K, a_trans, dtype_src_str, device, 
     M = 1024
     N = 512
     K = 256
+    if is_xpu_cri():
+        M, N, K = 256, 256, 256
     _knob_promote_lhs_to_tmem(monkeypatch)
     torch.manual_seed(42)
     if dtype_src_str == "float8e5":
@@ -1417,8 +1421,6 @@ def test_batched_mxfp(BATCH_SIZE, BLOCK_BATCH_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, N
             triton.runtime.driver.active.get_current_device())["max_shared_mem"]
         if dot_op_slm >= max_slm:
             pytest.xfail("Config requires too much shared memory")
-        if is_xpu_cri() and ([BLOCK_M, BLOCK_N, BLOCK_K] == [64, 64, 128]):
-            pytest.skip("FIXME: #929")
 
     torch.manual_seed(42)
     dtype_src_str = "float8e5"
