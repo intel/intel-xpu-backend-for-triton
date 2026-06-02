@@ -10,6 +10,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
+#include <cmath>
 
 using mlir::triton::gpu::ElementwiseOpConversionBase;
 using mlir::triton::gpu::MultipleOperandsRange;
@@ -520,82 +521,57 @@ static SmallVector<Value> Fp8E4M3Nv_to_Bf16(Location loc,
   a1 = b.insert_element(fp8x4VecTy, a1, v[3], b.i32_val(3));
   a1 = b.bitcast(a1, i32_ty);
 
-  Value b0 = b.and_(i32_ty, a0, b.i32_val(0x7fff7fff));
-  Value b1 = b.and_(i32_ty, a1, b.i32_val(0x7fff7fff));
-  b0 = b.lshr(i32_ty, b0, b.i32_val(4));
-  b1 = b.lshr(i32_ty, b1, b.i32_val(4));
-
-  Value c0 = b.and_(i32_ty, b0, b.i32_val(0xffff0000));
-  Value c1 = b.shl(i32_ty, b0, b.i32_val(16));
-  Value c2 = b.and_(i32_ty, b1, b.i32_val(0xffff0000));
-  Value c3 = b.shl(i32_ty, b1, b.i32_val(16));
-
-  // Check if the exponent is zero, i.e. subnormal number.
-  // fp8e4 has a bias of 7
-  // depending on the significand value normalization goes like:
-  //  [000] -> 0x0
-  //  [001] -> exp=127-9, sig=0x0
-  //  [010] -> exp=127-8, sig=0x0
-  //  [011] -> exp=127-8, sig=b1000...
-  //  [100] -> exp=127-7, sig=0x0
-  //  [101] -> exp=127-7, sig=b0100...
-  //  [110] -> exp=127-7, sig=b1000...
-  //  [111] -> exp=127-7, sig=b1100...
-  Value cmp0 = b.icmp_eq(b.and_(c0, b.i32_val(0xf800000)), b.i32_val(0));
-  Value cmp1 = b.icmp_eq(b.and_(c1, b.i32_val(0xf800000)), b.i32_val(0));
-  Value cmp2 = b.icmp_eq(b.and_(c2, b.i32_val(0xf800000)), b.i32_val(0));
-  Value cmp3 = b.icmp_eq(b.and_(c3, b.i32_val(0xf800000)), b.i32_val(0));
-
-  auto i32x8VecTy = vec_ty(i32_ty, 8);
-  Value predefined = b.undef(i32x8VecTy);
-  predefined =
-      b.insert_element(i32x8VecTy, predefined, b.i32_val(0x0), b.i32_val(0));
-  predefined = b.insert_element(i32x8VecTy, predefined, b.i32_val(0x3B000000),
-                                b.i32_val(1));
-  predefined = b.insert_element(i32x8VecTy, predefined, b.i32_val(0x3B800000),
-                                b.i32_val(2));
-  predefined = b.insert_element(i32x8VecTy, predefined, b.i32_val(0x3BC00000),
-                                b.i32_val(3));
-  predefined = b.insert_element(i32x8VecTy, predefined, b.i32_val(0x3C000000),
-                                b.i32_val(4));
-  predefined = b.insert_element(i32x8VecTy, predefined, b.i32_val(0x3C200000),
-                                b.i32_val(5));
-  predefined = b.insert_element(i32x8VecTy, predefined, b.i32_val(0x3C400000),
-                                b.i32_val(6));
-  predefined = b.insert_element(i32x8VecTy, predefined, b.i32_val(0x3C600000),
-                                b.i32_val(7));
-
-  Value predef_idx0 = b.lshr(b.and_(c0, b.i32_val(7 << 20)), b.i32_val(20));
-  Value predef_idx1 = b.lshr(b.and_(c1, b.i32_val(7 << 20)), b.i32_val(20));
-  Value predef_idx2 = b.lshr(b.and_(c2, b.i32_val(7 << 20)), b.i32_val(20));
-  Value predef_idx3 = b.lshr(b.and_(c3, b.i32_val(7 << 20)), b.i32_val(20));
-
-  Value normalized0 = b.extract_element(i32_ty, predefined, predef_idx0);
-  Value normalized1 = b.extract_element(i32_ty, predefined, predef_idx1);
-  Value normalized2 = b.extract_element(i32_ty, predefined, predef_idx2);
-  Value normalized3 = b.extract_element(i32_ty, predefined, predef_idx3);
-
-  Value d0 = b.add(i32_ty, c0, b.i32_val(0x3c000000));
-  Value d1 = b.add(i32_ty, c1, b.i32_val(0x3c000000));
-  Value d2 = b.add(i32_ty, c2, b.i32_val(0x3c000000));
-  Value d3 = b.add(i32_ty, c3, b.i32_val(0x3c000000));
-
-  Value res0 = b.select(cmp0, normalized0, d0);
-  Value res1 = b.select(cmp1, normalized1, d1);
-  Value res2 = b.select(cmp2, normalized2, d2);
-  Value res3 = b.select(cmp3, normalized3, d3);
-
-  Value f0 = b.or_(i32_ty, res0, b.lshr(i32_ty, res1, b.i32_val(16)));
-  Value f1 = b.or_(i32_ty, res2, b.lshr(i32_ty, res3, b.i32_val(16)));
-
-  Value sign0 = b.and_(i32_ty, a0, b.i32_val(0x80008000));
-  Value sign1 = b.and_(i32_ty, a1, b.i32_val(0x80008000));
-
+  // FP8E4M3FN -> BF16 via single fmul rebias.
+  //
+  // Algorithm (per pack `a` holding 2 FP8 bytes in upper half of each i16 lane,
+  // i.e. byte i sits in bits [15:8] of i16 lane i):
+  //   1. Drop the sign bit and shift the magnitude right by 4 so the fp8
+  //      exp/mantissa fields land in the bf16 [3+4 mantissa | exp] positions.
+  //      The result, masked to the 8 magnitude bits (0x07F0 in i16), is a bf16
+  //      bit pattern whose value is `magnitude * 2^-120`.
+  //   2. Multiply by the bf16 constant 2^120 (bf16 raw bits 0x7B80) to lift the
+  //      magnitude back into normal bf16 range. Subnormal fp8 inputs become
+  //      normal bf16 outputs through this single fmul (verified bit-exact for
+  //      all 256 fp8 byte values vs NumPy and GPU reference).
+  //   3. Re-pack two bf16 lanes back into i32 and OR in the original sign bits.
+  //
+  // i16-domain mask shape (lshr i16 + and i16 + bitcast) is required to dodge
+  // an IGC FTZ bug on PVC: an i32-domain mask (and i32, 0x07F007F0) followed
+  // by two `trunc i32 to i16` feeding bf16 fmul silently zeroes the low bf16
+  // lane on that path.
+  Value bf16Mul = b.bf16_val(std::ldexp(1.0f, 120));
   auto bf16x2VecTy = vec_ty(bf16_ty, 2);
-  Value bf16x2Vec0 = b.or_(i32_ty, sign0, f0);
-  Value bf16x2Vec1 = b.or_(i32_ty, sign1, f1);
-  bf16x2Vec0 = b.bitcast(bf16x2Vec0, bf16x2VecTy);
-  bf16x2Vec1 = b.bitcast(bf16x2Vec1, bf16x2VecTy);
+
+  auto rescaleLane = [&](Value pack) {
+    // Lo lane: low 16 bits of `pack`.
+    auto lo16 = b.trunc(i16_ty, pack);
+    auto loSh = b.lshr(i16_ty, lo16, b.i16_val(4));
+    auto loM = b.and_(i16_ty, loSh, b.i16_val(0x07F0));
+    auto loBf = b.bitcast(loM, bf16_ty);
+    auto loX = b.fmul(bf16_ty, loBf, bf16Mul);
+    auto loO = b.bitcast(loX, i16_ty);
+
+    // Hi lane: upper 16 bits of `pack`.
+    auto hi32 = b.lshr(i32_ty, pack, b.i32_val(16));
+    auto hi16 = b.trunc(i16_ty, hi32);
+    auto hiSh = b.lshr(i16_ty, hi16, b.i16_val(4));
+    auto hiM = b.and_(i16_ty, hiSh, b.i16_val(0x07F0));
+    auto hiBf = b.bitcast(hiM, bf16_ty);
+    auto hiX = b.fmul(bf16_ty, hiBf, bf16Mul);
+    auto hiO = b.bitcast(hiX, i16_ty);
+
+    // Repack two i16 -> i32 and OR in the preserved sign bits of `pack`.
+    auto loZ = b.zext(i32_ty, loO);
+    auto hiZ = b.zext(i32_ty, hiO);
+    auto hiSh2 = b.shl(i32_ty, hiZ, b.i32_val(16));
+    auto packed = b.or_(i32_ty, hiSh2, loZ);
+    auto signs = b.and_(i32_ty, pack, b.i32_val(0x80008000));
+    auto bf16x2 = b.or_(i32_ty, packed, signs);
+    return b.bitcast(bf16x2, bf16x2VecTy);
+  };
+
+  auto bf16x2Vec0 = rescaleLane(a0);
+  auto bf16x2Vec1 = rescaleLane(a1);
 
   return {b.extract_element(bf16_ty, bf16x2Vec0, b.i32_val(0)),
           b.extract_element(bf16_ty, bf16x2Vec0, b.i32_val(1)),
