@@ -1479,6 +1479,11 @@ struct SigmoidConversion : public ConvertOpToLLVMPattern<arith::DivFOp> {
   LogicalResult
   matchAndRewrite(arith::DivFOp op, OpAdaptor /*adaptor*/,
                   ConversionPatternRewriter &rewriter) const override {
+    if (!mlir::LLVM::intel::hasModuleAttr(
+            op, triton::gpu::intel::TritonIntelGPUDialect::
+                    getSupportSigmoidAttrName()))
+      return failure();
+
     // Match a / (1 + exp(b)); expArg = b.
     Value expArg;
     if (!matchSigmoidDenom(op.getRhs(), expArg))

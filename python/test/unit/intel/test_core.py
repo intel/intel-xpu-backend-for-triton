@@ -1117,6 +1117,8 @@ def test_silu_sigmoid_optimization(device):
     meta = silu_kernel[(2, )](x_gpu, y_gpu, n, BLOCK=512)
 
     torch.testing.assert_close(y_gpu.cpu(), torch.nn.functional.silu(x_cpu), rtol=1e-5, atol=1e-5)
-    llir = meta.asm.get('llir')
-    assert "__spirv_FSigmoidINTEL" in llir, f"Expected __spirv_FSigmoidINTEL in llir output, got:\n{llir}"
-    assert "fmul" in llir, f"Expected fmul (x * sigmoid) in llir output, got:\n{llir}"
+    ttgir = meta.asm.get('ttgir')
+    if 'ttig.is_lts' not in ttgir:
+        llir = meta.asm.get('llir')
+        assert "__spirv_FSigmoidINTEL" in llir, f"Expected __spirv_FSigmoidINTEL in llir output, got:\n{llir}"
+        assert "fmul" in llir, f"Expected fmul (x * sigmoid) in llir output, got:\n{llir}"
