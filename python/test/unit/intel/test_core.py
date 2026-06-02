@@ -1095,3 +1095,28 @@ def test_host_memory_access(device, pinned):
     else:
         with pytest.raises(ValueError, match="Pointer argument"):
             add_one_kernel[(1, )](cpu_tensor, out_tensor, N, BLOCK=BLOCK)
+
+
+def test_silu_sigmoid_optimization(device):
+    n = 1024
+
+    @triton.jit
+    def silu_kernel(X, Y, N, BLOCK: tl.constexpr):
+        pid = tl.program_id(0)
+        offs = pid * BLOCK + tl.arange(0, BLOCK)
+        mask = offs < N
+
+        x = tl.load(X + offs, mask=mask)
+        y = x / (1 + tl.exp(-x))
+        tl.store(Y + offs, y, mask=mask)
+
+    x_cpu = torch.randn(n, dtype=torch.float32)
+    x_gpu = x_cpu.to(device)
+    y_gpu = torch.empty_like(x_gpu)
+
+    meta = silu_kernel[(2, )](x_gpu, y_gpu, n, BLOCK=512)
+
+    torch.testing.assert_close(y_gpu.cpu(), torch.nn.functional.silu(x_cpu), rtol=1e-5, atol=1e-5)
+    llir = meta.asm.get('llir')
+    assert "__spirv_FSigmoidINTEL" in llir, f"Expected __spirv_FSigmoidINTEL in llir output, got:\n{llir}"
+    assert "fmul" in llir, f"Expected fmul (x * sigmoid) in llir output, got:\n{llir}"
