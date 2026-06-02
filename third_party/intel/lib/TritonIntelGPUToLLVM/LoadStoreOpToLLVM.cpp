@@ -3432,6 +3432,15 @@ struct AtomicRMWOpConversion
     Value threadPred =
         emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
 
+    bool support16BitAtomics = moduleOp->hasAttr(
+        TritonIntelGPUDialect::getSupport16BitAtomicsAttrName());
+    if (valueElemNBits == 16 && !support16BitAtomics &&
+        !supports16BitEmulation(atomicRmwAttr, valueElemTy))
+      return op.emitError(
+          "16-bit atomic RMW is only emulated for fp16/bf16 with "
+          "FADD/MAX/MIN/XCHG when the target lacks native 16-bit atomics; "
+          "this operation or element type is not supported");
+
     auto vecTy = vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
     for (size_t i = 0; i < elemsPerThread; i += vec) {
@@ -3463,13 +3472,11 @@ struct AtomicRMWOpConversion
       // TODO: check device capabilities to avoid unnecessary emulation or
       // emit unsupported feature error.
       Value ret;
-      bool support16BitAtomics = moduleOp->hasAttr(
-          TritonIntelGPUDialect::getSupport16BitAtomicsAttrName());
       if (valueElemNBits == 16 && !support16BitAtomics) {
         op.emitWarning("'tt.atomic_rmw' op fp16/bf16 datatype is not supported "
                        "in the target HW, software emulation is an "
                        "experimental feature (use at own risk)");
-        Block *endBlock = emulate16BitsAtomicRmw(
+        Block *endBlock = AtomicRMWOpConversion::emulate16BitsAtomicRmw(
             rewriter, loc, atomicRmwAttr, valueElemTy, rmwPtr, rmwVal,
             maybeAnd(rewriter, loc, b.true_val(), rmwMask), {zero});
         ret = endBlock->getArgument(0);
@@ -3532,12 +3539,32 @@ struct AtomicRMWOpConversion
     return success();
   }
 
+  // emulate16BitsAtomicRmw only implements fp16/bf16 (FADD + FP MAX/MIN/XCHG).
+  // Must stay in sync with the switch there: integer 16-bit ops would either
+  // hit llvm_unreachable or be silently miscompiled as floating-point MAX/MIN.
+  static bool supports16BitEmulation(mlir::triton::RMWOp atomicOp,
+                                     Type valueElemTy) {
+    if (!isa<mlir::Float16Type, mlir::BFloat16Type>(valueElemTy))
+      return false;
+    switch (atomicOp) {
+    case RMWOp::FADD:
+    case RMWOp::MAX:
+    case RMWOp::MIN:
+    case RMWOp::XCHG:
+      return true;
+    default:
+      return false;
+    }
+  }
+
   // Emulate 16-bit atomicrmw through a loop with 32-bit cmpxchg.
   // TODO: optimize for the case when rmwMask is a true constant?
-  Block *emulate16BitsAtomicRmw(ConversionPatternRewriter &rewriter,
-                                Location loc, mlir::triton::RMWOp atomicOp,
-                                Type valueElemTy, Value rmwPtr, Value rmwVal,
-                                Value rmwMask, ArrayRef<Value> ops) const {
+  static Block *emulate16BitsAtomicRmw(ConversionPatternRewriter &rewriter,
+                                       Location loc,
+                                       mlir::triton::RMWOp atomicOp,
+                                       Type valueElemTy, Value rmwPtr,
+                                       Value rmwVal, Value rmwMask,
+                                       ArrayRef<Value> ops) {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     Block *insertionBlock = rewriter.getInsertionBlock();
     Block *headerBlock =
@@ -4081,6 +4108,196 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
   }
 };
 
+// -----------------------------------------------------------------------
+// LocalAtomicScatterRMWOp lowering
+// -----------------------------------------------------------------------
+
+struct LocalAtomicScatterRMWInfo {
+  RankedTensorType valuesTy;
+  Type llvmElemTy;
+  LinearLayout regLayout;
+  ColumnAction removeBroadcast;
+  Value threadPred;
+  SmallVector<Value> values;
+  SmallVector<Value> maskValues;
+  SmallVector<Value> ptrs;
+};
+
+// Ported from NVIDIA backend
+static FailureOr<LocalAtomicScatterRMWInfo>
+prepareLocalAtomicScatterRMW(triton::gpu::LocalAtomicScatterRMWOp op, Value dst,
+                             Value indices, Value inputValues, Value mask,
+                             ConversionPatternRewriter &rewriter,
+                             const triton::intel::TargetInfo &targetInfo,
+                             const LLVMTypeConverter *typeConverter) {
+  auto loc = op.getLoc();
+  auto valuesTy = cast<RankedTensorType>(op.getValues().getType());
+  auto memDescTy = cast<MemDescType>(op.getDst().getType());
+  if (isa<triton::gpu::PartitionedSharedEncodingAttr>(
+          memDescTy.getEncoding())) {
+    return failure();
+  }
+
+  auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
+  auto smemObj =
+      LLVM::getSharedMemoryObjectFromStruct(loc, dst, llvmElemTy, rewriter);
+  SmallVector<Value> idxValues = unpackLLElements(loc, indices, rewriter);
+  SmallVector<Value> values = unpackLLElements(loc, inputValues, rewriter);
+  SmallVector<Value> maskValues;
+  if (mask)
+    maskValues = unpackLLElements(loc, mask, rewriter);
+
+  LinearLayout regLayout = toLinearLayout(valuesTy);
+  auto freeVarMasks = regLayout.getFreeVariableMasks();
+  auto removeBroadcast = actionRemoveBroadcastedRegs(regLayout);
+  Value threadPred =
+      emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
+  LinearLayout activeRegLayout = regLayout;
+  if (!removeBroadcast.isIdentity()) {
+    activeRegLayout = removeBroadcast.apply(regLayout);
+    values = removeBroadcast.apply(values);
+    idxValues = removeBroadcast.apply(idxValues);
+    if (!maskValues.empty())
+      maskValues = removeBroadcast.apply(maskValues);
+  }
+  SmallVector<SmallVector<Value>> srcIndices =
+      emitIndices(loc, rewriter, targetInfo, activeRegLayout, valuesTy,
+                  /*withCTAOffset=*/true);
+
+  SmallVector<Value> ptrs =
+      computeLocalPtrs(loc, memDescTy, smemObj, llvmElemTy, idxValues,
+                       srcIndices, op.getAxis(), rewriter);
+
+  return LocalAtomicScatterRMWInfo{valuesTy,        llvmElemTy, regLayout,
+                                   removeBroadcast, threadPred, values,
+                                   maskValues,      ptrs};
+}
+
+struct LocalAtomicScatterRMWOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<
+          triton::gpu::LocalAtomicScatterRMWOp> {
+
+  LocalAtomicScatterRMWOpConversion(const LLVMTypeConverter &converter,
+                                    const triton::intel::TargetInfo &targetInfo,
+                                    PatternBenefit benefit)
+      : ConvertTritonGPUOpToLLVMPattern<triton::gpu::LocalAtomicScatterRMWOp>(
+            converter, benefit),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::LocalAtomicScatterRMWOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    RMWOp rmwOp = op.getAtomicRmwOp();
+    std::optional<LLVM::AtomicBinOp> atomicBinOp = matchAtomicOp(rmwOp);
+    if (!atomicBinOp)
+      return op.emitError("unsupported atomic RMW operation for XPU backend");
+
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto lowering = prepareLocalAtomicScatterRMW(
+        op, adaptor.getDst(), adaptor.getIndices(), adaptor.getValues(),
+        op.getMask() ? adaptor.getMask() : Value(), rewriter, targetInfo,
+        getTypeConverter());
+
+    if (failed(lowering))
+      return failure();
+
+    LocalAtomicScatterRMWInfo &info = *lowering;
+    bool returnOld = !op.getResult().use_empty();
+
+    bool needs16BitEmulation = requires16BitEmulation(op, info.llvmElemTy);
+    if (needs16BitEmulation &&
+        !AtomicRMWOpConversion::supports16BitEmulation(rmwOp, info.llvmElemTy))
+      return op.emitError(
+          "16-bit atomic RMW is only emulated for fp16/bf16 with "
+          "FADD/MAX/MIN/XCHG when the target lacks native 16-bit atomics; "
+          "this operation or element type is not supported");
+
+    Value zero = emitZeroConstant(b, info.llvmElemTy);
+
+    SmallVector<Value> results;
+    if (returnOld)
+      results.reserve(info.ptrs.size());
+
+    for (auto [i, ptrAndValue] :
+         llvm::enumerate(llvm::zip(info.ptrs, info.values))) {
+      auto [elemPtr, packedVal] = ptrAndValue;
+      Value elemVal = b.bitcast(packedVal, info.llvmElemTy);
+      Value pred =
+          maybeAnd(rewriter, loc, info.threadPred,
+                   info.maskValues.empty() ? Value() : info.maskValues[i]);
+
+      Value ret = emitOneAtomicRMW(b, rewriter, loc, info.llvmElemTy, rmwOp,
+                                   *atomicBinOp, elemPtr, elemVal, pred, zero,
+                                   needs16BitEmulation);
+      if (returnOld)
+        results.push_back(ret);
+    }
+
+    if (!returnOld) {
+      rewriter.eraseOp(op);
+      return success();
+    }
+
+    if (!info.removeBroadcast.isIdentity())
+      results = broadcastAs(results, info.regLayout);
+
+    finalizeTensorAtomicResults(op, info.valuesTy, rewriter, results,
+                                info.llvmElemTy, b, info.threadPred, targetInfo,
+                                getTypeConverter());
+    return success();
+  }
+
+private:
+  bool requires16BitEmulation(Operation *op, Type llvmElemTy) const {
+    bool support16BitAtomics = op->getParentOfType<ModuleOp>()->hasAttr(
+        TritonIntelGPUDialect::getSupport16BitAtomicsAttrName());
+    return llvmElemTy.getIntOrFloatBitWidth() == 16 && !support16BitAtomics;
+  }
+
+  Value emitZeroConstant(TritonLLVMOpBuilder &b, Type llvmElemTy) const {
+    return TypeSwitch<mlir::Type, Value>(llvmElemTy)
+        .Case<mlir::IntegerType>(
+            [&](auto ty) { return b.int_val(ty.getWidth(), 0); })
+        .Case<mlir::Float16Type>([&](auto) { return b.f16_val(0); })
+        .Case<mlir::BFloat16Type>([&](auto) { return b.bf16_val(0); })
+        .Case<mlir::Float32Type>([&](auto) { return b.f32_val(0); })
+        .Case<mlir::Float64Type>([&](auto) { return b.f64_val(0); });
+  }
+
+  // Emit one atomic RMW for a single element pointer, returning the old value.
+  // 16-bit types without native HW support use CAS-loop emulation.
+  Value emitOneAtomicRMW(TritonLLVMOpBuilder &b,
+                         ConversionPatternRewriter &rewriter, Location loc,
+                         Type llvmElemTy, RMWOp rmwOp,
+                         LLVM::AtomicBinOp atomicBinOp, Value elemPtr,
+                         Value elemVal, Value pred, Value zero,
+                         bool needs16BitEmulation) const {
+    if (needs16BitEmulation) {
+      Value casGuard = pred ? pred : b.true_val();
+      Block *endBlock = AtomicRMWOpConversion::emulate16BitsAtomicRmw(
+          rewriter, loc, rmwOp, llvmElemTy, elemPtr, elemVal, casGuard, {zero});
+      return endBlock->getArgument(0);
+    }
+
+    auto createAtomicOp = [&]() -> SmallVector<Value, 1> {
+      auto atomRMW =
+          LLVM::AtomicRMWOp::create(rewriter, loc, atomicBinOp, elemPtr,
+                                    elemVal, LLVM::AtomicOrdering::monotonic);
+      return {atomRMW.getRes()};
+    };
+
+    if (pred) {
+      Block *endBlock = &LLVM::intel::createPredicatedBlock(
+          rewriter, loc, pred, {zero}, createAtomicOp);
+      return endBlock->getArgument(0);
+    }
+    return createAtomicOp()[0];
+  }
+
+  const triton::intel::TargetInfo &targetInfo;
+};
+
 } // namespace
 
 void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
@@ -4094,6 +4311,9 @@ void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
                DescriptorStoreOpConversion, PrefetchOpConversion,
                DescriptorPrefetchOpConversion>(
       typeConverter, targetInfo, axisInfoAnalysis, strideAnalysis, benefit);
+  // Local atomic scatter RMW (shared memory atomics via indices).
+  patterns.add<LocalAtomicScatterRMWOpConversion>(typeConverter, targetInfo,
+                                                  benefit);
   // Block IO store patterns (loads are handled via ttig.2d_block_load path).
   patterns
       .add<StoreOpToBlockIOConversion, DescriptorStoreOpToBlockIOConversion>(
