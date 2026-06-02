@@ -195,8 +195,14 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
             lines[line_idx] = line.replace("torch.cuda.Stream()", "torch.xpu.Stream()")
 
         elif ptype == "cuda_get_device_capability":
-            # Replace torch.cuda.get_device_capability() with torch.xpu.get_device_capability()
-            lines[line_idx] = line.replace("torch.cuda.get_device_capability()", "torch.xpu.get_device_capability()")
+            # XPU tests do not need CUDA SM-specific capability gates. Use a
+            # stable CUDA-like tuple instead of torch.xpu.get_device_capability(),
+            # whose return shape is not compatible with CUDA tuple checks.
+            lines[line_idx] = re.sub(
+                r"torch\.cuda\.get_device_capability\([^)]*\)",
+                "(9, 0)",
+                line,
+            )
 
         elif ptype == "device_capability_compare":
             # Handle: if current_platform.get_device_capability() < (X, Y):
