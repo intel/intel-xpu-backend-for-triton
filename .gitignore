@@ -112,6 +112,7 @@ AGENTS.override.md
 
 # Third-party repos cloned for testing/benchmarking (root-level only)
 /vllm/
+/vllm-xpu-kernels/
 /pytorch/
 /sglang/
 /Liger-Kernel/
