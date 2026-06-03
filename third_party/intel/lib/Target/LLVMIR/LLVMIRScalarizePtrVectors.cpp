@@ -39,10 +39,11 @@ static bool scalarizePtrVectorRoot(InsertElementInst *root) {
 
     Value *idx = ee->getIndexOperand();
     if (auto *cst = dyn_cast<ConstantInt>(idx)) {
+      // Out-of-bounds index is poison; replace it either way so the
+      // extractelement still gets erased below.
       unsigned i = cst->getZExtValue();
-      if (i >= numElems)
-        continue;
-      ee->replaceAllUsesWith(elements[i]);
+      ee->replaceAllUsesWith(i < numElems ? elements[i]
+                                          : PoisonValue::get(ee->getType()));
     } else {
       IRBuilder<> builder(ee);
       Value *result = elements[numElems - 1];
