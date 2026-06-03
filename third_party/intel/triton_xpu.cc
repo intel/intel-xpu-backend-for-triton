@@ -104,6 +104,8 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
       .def_readwrite(
           "support_16bit_atomics",
           &gpu::intel::TritonAnnotateModuleOptions::support16BitAtomics)
+      .def_readwrite("support_sigmoid",
+                     &gpu::intel::TritonAnnotateModuleOptions::supportSigmoid)
       .def_readwrite("support_2d_block_io",
                      &gpu::intel::TritonAnnotateModuleOptions::support2DBlockIO)
       .def_readwrite(

@@ -1531,6 +1531,87 @@ protected:
   const TargetInfoBase &targetInfo;
 };
 
+// Match a / (1 + exp(b)), setting expArg = b. Returns false if the RHS
+// doesn't have that shape. Does not inspect the sign of b — callers emit
+// fsigm(-b) so the folder handles any double-negation.
+static bool matchSigmoidDenom(Value value, Value &expArg) {
+  auto addOp = value.getDefiningOp<arith::AddFOp>();
+  if (!addOp)
+    return false;
+
+  Value expCandidate;
+  if (matchPattern(addOp.getLhs(), m_OneFloat()))
+    expCandidate = addOp.getRhs();
+  else if (matchPattern(addOp.getRhs(), m_OneFloat()))
+    expCandidate = addOp.getLhs();
+  else
+    return false;
+
+  auto expOp = expCandidate.getDefiningOp<math::ExpOp>();
+  if (!expOp)
+    return false;
+
+  // Fuse only when exp has a single consumer to keep the rewrite profitable.
+  if (!expOp->hasOneUse())
+    return false;
+
+  expArg = expOp.getOperand();
+  return true;
+}
+
+struct SigmoidConversion : public ConvertOpToLLVMPattern<arith::DivFOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(arith::DivFOp op, OpAdaptor /*adaptor*/,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!mlir::LLVM::intel::hasModuleAttr(
+            op, triton::gpu::intel::TritonIntelGPUDialect::
+                    getSupportSigmoidAttrName()))
+      return failure();
+
+    // Match a / (1 + exp(b)); expArg = b.
+    Value expArg;
+    if (!matchSigmoidDenom(op.getRhs(), expArg))
+      return failure();
+
+    Type srcElemTy = getElementTypeOrSelf(op.getType());
+    Type elemTy = getTypeConverter()->convertType(srcElemTy);
+
+    // Remap both the exp argument (b) and the dividend (a).
+    Value expArgRemapped = rewriter.getRemappedValue(expArg);
+    if (!expArgRemapped)
+      return failure();
+    Value lhsRemapped = rewriter.getRemappedValue(op.getLhs());
+    if (!lhsRemapped)
+      return failure();
+
+    Location loc = op.getLoc();
+    SmallVector<Value> expArgVals =
+        unpackLLElements(loc, expArgRemapped, rewriter);
+    SmallVector<Value> lhsVals = unpackLLElements(loc, lhsRemapped, rewriter);
+    SmallVector<Value> resultVals;
+    resultVals.reserve(expArgVals.size());
+
+    // Emit a * fsigm(-b) for each element. The folder eliminates the double
+    // negation when b is already negated (the common x/(1+exp(-x)) case).
+    TritonLLVMIRRewriter b(loc, rewriter);
+    for (size_t i = 0; i < expArgVals.size(); ++i) {
+      Value negB = LLVM::FNegOp::create(rewriter, loc, expArgVals[i]);
+      auto sigmoidResult = mlir::triton::intel::convertWithFunctionCall(
+          b, negB, "__spirv_FSigmoidINTEL", elemTy, elemTy);
+      Value result =
+          LLVM::FMulOp::create(rewriter, loc, lhsVals[i], sigmoidResult);
+      resultVals.push_back(result);
+    }
+
+    Value packed = packLLElements(loc, getTypeConverter(), resultVals, rewriter,
+                                  op.getType());
+    rewriter.replaceOp(op, packed);
+    return success();
+  }
+};
+
 struct ExternElementwiseOpConversion
     : public ElementwiseOpConversionBase<ExternElementwiseOp,
                                          ExternElementwiseOpConversion> {
@@ -1582,6 +1663,7 @@ void populateElementwiseOpToLLVMPatterns(
       benefit.getBenefit() - 1);
 
   patterns.add<AbsFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<SigmoidConversion>(typeConverter, benefit.getBenefit() + 10);
   patterns.add<ElementwiseOpConversion<arith::DivFOp, LLVM::FDivOp>>(
       typeConverter, axisInfoAnalysis, benefit);
   patterns.add<ElementwiseOpConversion<arith::MulFOp, LLVM::FMulOp>>(
