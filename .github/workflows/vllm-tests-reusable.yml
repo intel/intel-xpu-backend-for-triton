@@ -15,6 +15,10 @@ on:
         description: vLLM XPU kernels pin (commit hash), keep empty for default
         type: string
         default: ""
+      triton_repo_branch:
+        description: Branch to fetch prebuilt vLLM XPU kernels wheels from, keep empty for default
+        type: string
+        default: ""
       skip_list:
         description: Skip list directory override
         type: string
@@ -208,53 +212,63 @@ jobs:
           echo "TRITON_TEST_CMD=${{ needs.setup.outputs.test-triton-command }}" | tee -a $GITHUB_ENV
           echo "VLLM_PIN=${{ inputs.vllm_pin }}" | tee -a $GITHUB_ENV
 
+      - name: Install vllm
+        id: install-vllm
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          install_args=()
+          if [[ -n "${{ inputs.triton_repo_branch }}" ]]; then
+            install_args+=(--triton-repo-branch "${{ inputs.triton_repo_branch }}")
+          fi
+          ./scripts/vllm/install-vllm.sh "${install_args[@]}"
+
       - name: Create reports dir
         run: |
           mkdir -p reports
 
       - name: Run spec-decode tests
-        if: ${{ matrix.suite == 'vllm-spec-decode' && steps.install.outcome == 'success' && !cancelled() }}
+        if: ${{ matrix.suite == 'vllm-spec-decode' && steps.install-vllm.outcome == 'success' && !cancelled() }}
         run: |
           ${{ env.TRITON_TEST_CMD }} --vllm-spec-decode
 
       - name: Run mrv2 tests
-        if: ${{ matrix.suite == 'vllm-mrv2' && steps.install.outcome == 'success' && !cancelled() }}
+        if: ${{ matrix.suite == 'vllm-mrv2' && steps.install-vllm.outcome == 'success' && !cancelled() }}
         run: |
           ${{ env.TRITON_TEST_CMD }} --vllm-mrv2
 
       - name: Run moe tests
-        if: ${{ matrix.suite == 'vllm-moe' && steps.install.outcome == 'success' && !cancelled() }}
+        if: ${{ matrix.suite == 'vllm-moe' && steps.install-vllm.outcome == 'success' && !cancelled() }}
         run: |
           ${{ env.TRITON_TEST_CMD }} --vllm-moe
 
       - name: Run triton-attn tests
-        if: ${{ matrix.suite == 'vllm-triton-attn' && steps.install.outcome == 'success' && !cancelled() }}
+        if: ${{ matrix.suite == 'vllm-triton-attn' && steps.install-vllm.outcome == 'success' && !cancelled() }}
         run: |
           ${{ env.TRITON_TEST_CMD }} --vllm-triton-attn
 
       - name: Run mamba tests
-        if: ${{ matrix.suite == 'vllm-mamba' && steps.install.outcome == 'success' && !cancelled() }}
+        if: ${{ matrix.suite == 'vllm-mamba' && steps.install-vllm.outcome == 'success' && !cancelled() }}
         run: |
           ${{ env.TRITON_TEST_CMD }} --vllm-mamba
 
       - name: Run quant tests
-        if: ${{ matrix.suite == 'vllm-quant' && steps.install.outcome == 'success' && !cancelled() }}
+        if: ${{ matrix.suite == 'vllm-quant' && steps.install-vllm.outcome == 'success' && !cancelled() }}
         run: |
           ${{ env.TRITON_TEST_CMD }} --vllm-quant
 
       # vllm-rest groups short suites: gdn-attn, linear-attn, deepgemm
       - name: Run gdn-attn tests
-        if: ${{ matrix.suite == 'vllm-rest' && steps.install.outcome == 'success' && !cancelled() }}
+        if: ${{ matrix.suite == 'vllm-rest' && steps.install-vllm.outcome == 'success' && !cancelled() }}
         run: |
           ${{ env.TRITON_TEST_CMD }} --vllm-gdn-attn
 
       - name: Run linear-attn tests
-        if: ${{ matrix.suite == 'vllm-rest' && steps.install.outcome == 'success' && !cancelled() }}
+        if: ${{ matrix.suite == 'vllm-rest' && steps.install-vllm.outcome == 'success' && !cancelled() }}
         run: |
           ${{ env.TRITON_TEST_CMD }} --vllm-linear-attn
 
       - name: Run deepgemm tests
-        if: ${{ matrix.suite == 'vllm-rest' && steps.install.outcome == 'success' && !cancelled() }}
+        if: ${{ matrix.suite == 'vllm-rest' && steps.install-vllm.outcome == 'success' && !cancelled() }}
         run: |
           ${{ env.TRITON_TEST_CMD }} --vllm-deepgemm
 
