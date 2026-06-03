@@ -48,9 +48,7 @@ Operation *createIglpOpt(PatternRewriter &rewriter, Location loc, int value) {
 struct InstructionSchedHintsRewriter
     : public OpRewritePattern<triton::amdgpu::InstructionSchedHint> {
 
-  InstructionSchedHintsRewriter(MLIRContext *ctx, StringRef arch,
-                                int32_t numStages)
-      : OpRewritePattern(ctx), numStages(numStages) {}
+  InstructionSchedHintsRewriter(MLIRContext *ctx) : OpRewritePattern(ctx) {}
 
   LogicalResult
   matchAndRewrite(triton::amdgpu::InstructionSchedHint instructionSchedHint,
@@ -94,18 +92,15 @@ struct InstructionSchedHintsRewriter
     rewriter.eraseOp(instructionSchedHint);
     return success();
   }
-
-private:
-  int32_t numStages;
 };
 
 struct TritonAMDGPULowerInstructionSchedHints
     : public triton::impl::TritonAMDGPULowerInstructionSchedHintsBase<
           TritonAMDGPULowerInstructionSchedHints> {
 
-  explicit TritonAMDGPULowerInstructionSchedHints(StringRef arch,
+  explicit TritonAMDGPULowerInstructionSchedHints(StringRef gfxArch,
                                                   int32_t numStages) {
-    this->arch = arch.str();
+    this->gfxArch = gfxArch.str();
     this->numStages = numStages;
   }
 
@@ -121,8 +116,7 @@ struct TritonAMDGPULowerInstructionSchedHints
 
     RewritePatternSet patterns(ctx);
 
-    patterns.add<InstructionSchedHintsRewriter>(ctx, this->arch,
-                                                this->numStages);
+    patterns.add<InstructionSchedHintsRewriter>(ctx);
 
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns)))) {
@@ -184,9 +178,9 @@ struct TritonAMDGPUInsertInstructionSchedHints
 
 namespace mlir::triton {
 std::unique_ptr<OperationPass<ModuleOp>>
-createTritonAMDGPULowerInstructionSchedHintsPass(StringRef arch,
+createTritonAMDGPULowerInstructionSchedHintsPass(StringRef gfxArch,
                                                  int32_t numStages) {
-  return std::make_unique<TritonAMDGPULowerInstructionSchedHints>(arch,
+  return std::make_unique<TritonAMDGPULowerInstructionSchedHints>(gfxArch,
                                                                   numStages);
 }
 

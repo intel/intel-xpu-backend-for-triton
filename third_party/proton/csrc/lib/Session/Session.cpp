@@ -6,8 +6,11 @@
 #include "Driver/GPU/XpuApi.h"
 #include "Profiler/Cupti/CuptiProfiler.h"
 #include "Profiler/Instrumentation/InstrumentationProfiler.h"
+#include "Profiler/RocprofSDK/RocprofSDKProfiler.h"
 #include "Profiler/Roctracer/RoctracerProfiler.h"
 #include "Profiler/Xpupti/XpuptiProfiler.h"
+#include "Runtime/XpuRuntime.h"
+#include "Utility/Errors.h"
 #include "Utility/String.h"
 
 namespace proton {
@@ -18,15 +21,20 @@ Profiler *makeProfiler(const std::string &name, void *sycl_queue = nullptr,
                        const std::string &utils_cache_path = "") {
   if (proton::toLower(name) == "cupti") {
     return &CuptiProfiler::instance();
+#ifndef _WIN32
+  } else if (proton::toLower(name) == "rocprofiler") {
+    return &RocprofSDKProfiler::instance();
+#endif
   } else if (proton::toLower(name) == "roctracer") {
     return &RoctracerProfiler::instance();
   } else if (proton::toLower(name) == "instrumentation") {
     return &InstrumentationProfiler::instance();
   } else if (proton::toLower(name) == "xpupti") {
     xpu::PROTON_UTILS = utils_cache_path;
-    return &XpuptiProfiler::instance().setSyclQueue(sycl_queue);
+    XpuRuntime::instance().setSyclQueue(sycl_queue);
+    return &XpuptiProfiler::instance();
   }
-  throw std::runtime_error("Unknown profiler: " + name);
+  throw makeInvalidArgument("Unknown profiler: " + name);
 }
 
 std::unique_ptr<Data> makeData(const std::string &dataName,
@@ -37,7 +45,7 @@ std::unique_ptr<Data> makeData(const std::string &dataName,
   } else if (toLower(dataName) == "trace") {
     return std::make_unique<TraceData>(path, contextSource);
   }
-  throw std::runtime_error("Unknown data: " + dataName);
+  throw makeInvalidArgument("Unknown data: " + dataName);
 }
 
 std::unique_ptr<ContextSource>
@@ -47,15 +55,15 @@ makeContextSource(const std::string &contextSourceName) {
   } else if (toLower(contextSourceName) == "python") {
     return std::make_unique<PythonContextSource>();
   }
-  throw std::runtime_error("Unknown context source: " + contextSourceName);
+  throw makeInvalidArgument("Unknown context source: " + contextSourceName);
 }
 
 void throwIfSessionNotInitialized(
     const std::map<size_t, std::unique_ptr<Session>> &sessions,
     size_t sessionId) {
   if (!sessions.count(sessionId)) {
-    throw std::runtime_error("Session has not been initialized: " +
-                             std::to_string(sessionId));
+    throw makeOutOfRange("Session has not been initialized: " +
+                         std::to_string(sessionId));
   }
 }
 
@@ -86,15 +94,15 @@ Profiler *SessionManager::validateAndSetProfilerMode(Profiler *profiler,
   for (auto &[id, session] : sessions) {
     if (session->getProfiler() == profiler &&
         session->getProfiler()->getMode() != modeAndOptions) {
-      throw std::runtime_error("Cannot add a session with the same profiler "
-                               "but a different mode than existing sessions");
+      throw makeInvalidArgument("Cannot add a session with the same profiler "
+                                "but a different mode than existing sessions");
     }
   }
   return profiler->setMode(modeAndOptions);
 }
 
 std::unique_ptr<Session> SessionManager::makeSession(
-    size_t id, const std::string &path, const std::string &profilerName,
+    const std::string &path, const std::string &profilerName,
     const std::string &contextSourceName, const std::string &dataName,
     const std::string &mode, void *sycl_queue,
     const std::string &utils_cache_path) {
@@ -102,8 +110,8 @@ std::unique_ptr<Session> SessionManager::makeSession(
   profiler = validateAndSetProfilerMode(profiler, mode);
   auto contextSource = makeContextSource(contextSourceName);
   auto data = makeData(dataName, path, contextSource.get());
-  auto *session = new Session(id, path, profiler, std::move(contextSource),
-                              std::move(data));
+  auto *session =
+      new Session(path, profiler, std::move(contextSource), std::move(data));
   return std::unique_ptr<Session>(session);
 }
 
@@ -199,9 +207,8 @@ size_t SessionManager::addSession(const std::string &path,
     return sessionId;
   }
   auto sessionId = nextSessionId++;
-  auto newSession =
-      makeSession(sessionId, path, profilerName, contextSourceName, dataName,
-                  mode, sycl_queue, utils_cache_path);
+  auto newSession = makeSession(path, profilerName, contextSourceName, dataName,
+                                mode, sycl_queue, utils_cache_path);
   sessionPaths[path] = sessionId;
   sessions[sessionId] = std::move(newSession);
   return sessionId;
@@ -341,8 +348,7 @@ std::vector<uint8_t> SessionManager::getDataMsgPack(size_t sessionId,
   auto *session = getSessionOrThrow(sessionId);
   auto *treeData = dynamic_cast<TreeData *>(session->data.get());
   if (!treeData) {
-    throw std::runtime_error(
-        "Only TreeData is supported for getData() for now");
+    throw makeLogicError("Only TreeData is supported for getData() for now");
   }
   return treeData->toMsgPack(phase);
 }
@@ -352,8 +358,7 @@ std::string SessionManager::getData(size_t sessionId, size_t phase) {
   auto *session = getSessionOrThrow(sessionId);
   auto *treeData = dynamic_cast<TreeData *>(session->data.get());
   if (!treeData) {
-    throw std::runtime_error(
-        "Only TreeData is supported for getData() for now");
+    throw makeLogicError("Only TreeData is supported for getData() for now");
   }
   return treeData->toJsonString(phase);
 }

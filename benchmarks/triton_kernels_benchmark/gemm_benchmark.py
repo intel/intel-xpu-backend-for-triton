@@ -6,7 +6,6 @@ This benchmark uses the modern tl.make_tensor_descriptor API.
 For the legacy block pointer API, see gemm_block_ptr_benchmark.py.
 
 This benchmark is come from the Triton tutorial 03a-matrix-multiplication-tensor-descriptor.py
-To compare the performance to XeTLA kernel.
 
 """
 from typing import Callable, List, Optional
@@ -17,7 +16,6 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
-from triton_kernels_benchmark import xetla_kernel
 from triton_kernels_benchmark import sycl_tla_kernel
 
 
@@ -346,7 +344,7 @@ def get_benchmark(
     # use_sycl-tla
     if not (transpose_a or transpose_b):
         if torch.xpu.get_device_name() != 'Intel(R) Arc(TM) Graphics':
-            # FIXME: enable sycl-tla on LNL
+            # SYCL-TLA only targets PVC/BMG; LNL (Arc iGPU) is not in its target list
             supported_providers['sycl-tla'] = 'SYCL-TLA'
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
@@ -365,14 +363,14 @@ def get_benchmark(
             # label name for the lines
             line_names=list(providers.values()),
             # line styles
-            styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
+            styles=[('green', '-'), ('green', '--'), ('blue', '-')],
             ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
             plot_name=plot_name,
             # name for the plot. Used also as a file name for saving the plot.
             args={},
         ))
     def benchmark(B, M, N, K, provider):
-        # Maximum across onednn=600, triton=800, xetla=10, sycl-tla=600
+        # Maximum across onednn=600, triton=800, sycl-tla=600
         do_bench = benchmark_suite.get_do_bench(n_warmup=800, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
         a_shape, b_shape = get_shapes(B, M, N, K, transpose_a=transpose_a, transpose_b=transpose_b)
 
@@ -413,35 +411,6 @@ def get_benchmark(
             rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
             benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
             _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
-
-        elif provider == 'xetla':
-            if B == 1:
-                c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
-                cnt = torch.zeros((M, N), device='xpu', dtype=torch.int32)
-            else:
-                c = torch.zeros((B, M, N), device='xpu', dtype=torch.float32)
-                cnt = torch.zeros((B, M, N), device='xpu', dtype=torch.int32)
-            name = f'gemm_shape_{B}_{M}_{K}_{N}'
-            # FIXME: Use gemm_streamk_benchmark.py when Triton streamk can get
-            # better performance.
-            if (B, M, N, K) == (1, 3072, 3072, 4096):
-                name = 'gemm_streamk_shape_3072_4096_3072'
-            func = getattr(xetla_kernel, name)
-
-            def xetla_func_with_acc_allocation():
-                # allocating `acc` matrix on every function call, to be as similar as
-                # possible to the triton kernel, which also does this on every call.
-                if B == 1:
-                    acc = torch.zeros((M, N), device='xpu', dtype=torch.float32)
-                else:
-                    acc = torch.zeros((B, M, N), device='xpu', dtype=torch.float32)
-                return func(a, b, c, acc, cnt)
-
-            xetla_fn = xetla_func_with_acc_allocation
-            torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
-
-            # benchmark_suite.assert_close(xetla_fn, torch_fn, atol=1e-4, rtol=1.0, err_msg='xetla to torch')
-            _, min_ms, max_ms, mean_ms, cv = do_bench(xetla_fn)
 
         elif provider == 'sycl-tla':
             name = 'gemm'

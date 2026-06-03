@@ -47,7 +47,7 @@ public:
 private:
   bool isCandidate(tt::DescriptorLoadOp loadOp) const {
     std::optional<tt::MakeTensorDescOp> makeTensorDescOp =
-        tt::intel::findDefiningOpOfType<tt::MakeTensorDescOp>(loadOp.getDesc());
+        tt::intel::findMakeTensorDescOp(loadOp.getDesc());
     if (!makeTensorDescOp)
       return false;
 
@@ -252,8 +252,7 @@ private:
       SmallVectorImpl<Operation *> &selectedOps,
       std::unordered_map<Operation *, Value> &selectedOpToStride) const {
     auto makeTensorDescOp =
-        *tt::intel::findDefiningOpOfType<tt::MakeTensorDescOp>(
-            descLoadOp.getDesc());
+        *tt::intel::findMakeTensorDescOp(descLoadOp.getDesc());
 
     OperandRange strides = makeTensorDescOp.getStrides();
     for (Value stride : llvm::reverse(strides)) {

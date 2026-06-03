@@ -44,9 +44,18 @@ sys.path.insert(0, os.path.dirname(__file__))
 from python.build_helpers import get_base_dir, get_cmake_dir
 
 
-def is_git_repo():
-    """Return True if this file resides in a git repository"""
-    return (Path(__file__).parent / ".git").is_dir()
+def is_git_repo() -> bool:
+    """Return True if this file resides at the root of a git repository."""
+    expected_toplevel = Path(__file__).parent.resolve()
+
+    try:
+        stdout: str = subprocess.check_output(['git', 'rev-parse', '--show-toplevel'], cwd=expected_toplevel,
+                                              stderr=subprocess.DEVNULL).strip().decode('utf-8')
+    except subprocess.CalledProcessError:
+        return False
+    actual_toplevel = Path(stdout).resolve()
+
+    return actual_toplevel == expected_toplevel
 
 
 @dataclass
@@ -255,6 +264,10 @@ class CMakeBuild(build_ext):
         if cupti_include_dir == "":
             cupti_include_dir = os.path.join(get_base_dir(), "third_party", "nvidia", "backend", "include")
         cmake_args += ["-DCUPTI_INCLUDE_DIR=" + cupti_include_dir]
+        rocm_include_dir = get_env_with_keys(["TRITON_ROCM_INCLUDE_PATH"])
+        if rocm_include_dir == "":
+            rocm_include_dir = os.path.join(get_base_dir(), "third_party", "amd", "backend", "include")
+        cmake_args += ["-DROCM_INCLUDE_DIR=" + rocm_include_dir]
         roctracer_include_dir = get_env_with_keys(["TRITON_ROCTRACER_INCLUDE_PATH"])
         if roctracer_include_dir == "":
             roctracer_include_dir = os.path.join(get_base_dir(), "third_party", "amd", "backend", "include")
@@ -563,7 +576,7 @@ def get_triton_version_suffix():
 
 
 # keep it separate for easy substitution
-TRITON_VERSION = "3.7.1" + get_triton_version_suffix()
+TRITON_VERSION = "3.7.2" + get_triton_version_suffix()
 
 # Dynamically define supported Python versions and classifiers
 MIN_PYTHON = (3, 10)

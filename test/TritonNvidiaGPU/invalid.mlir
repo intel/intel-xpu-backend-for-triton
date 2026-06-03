@@ -187,7 +187,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
 // -----
 
 #nvmma = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0], [0, 1]]}>
-#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1], [2]]}>
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0], [0]]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, "ttng.two-ctas" = true, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @async_tma_copy_global_to_local_requires_two_cta_barrier_layout(
@@ -195,9 +195,9 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
     %true = arith.constant true
     %c0_i32 = arith.constant 0 : i32
     %0 = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
-    %1 = ttg.local_alloc : () -> !ttg.memdesc<4xi64, #barrier, #smem, mutable>
-    // expected-error @below {{TMA barrier cga_layout must be [[0], [1]], got [[1], [2]]}}
-    ttng.async_tma_copy_global_to_local %arg0[%c0_i32, %c0_i32] %0, %1, %true : !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<4xi64, #barrier, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    // expected-error @below {{TMA barrier cga_layout must be [[1], [2]] or [[0], [1]], got [[0], [0]]}}
+    ttng.async_tma_copy_global_to_local %arg0[%c0_i32, %c0_i32] %0, %1, %true : !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
     tt.return
   }
 }
@@ -730,6 +730,17 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @wait_barrier_invalid_cga_layout(%bar: !ttg.memdesc<4xi64, #shared_bad, #smem, mutable>, %phase: i32) {
     // expected-error @below {{broadcasted cluster barriers require bases to be the sequence}}
     ttng.wait_barrier %bar, %phase : !ttg.memdesc<4xi64, #shared_bad, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func public @memdesc_reinterpret_changed_storage_size_tmem(%arg0: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory>) {
+    // expected-error @+1 {{source and result must have the same logical storage size}}
+    %0 = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory> -> !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory>
     tt.return
   }
 }

@@ -160,6 +160,10 @@ tt.func @div() {
   %10 = tt.make_range {end = 8320 : i32, start = 8192 : i32} : tensor<128xi32>
   // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [64], constant_value = <none>
   %11 = arith.divsi %10, %4 : tensor<128xi32>
+  // CHECK-NEXT: contiguity = [128], divisibility = [32], constancy = [1], constant_value = <none>
+  %12 = tt.make_range {end = 160 : i32, start = 32 : i32} : tensor<128xi32>
+  // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>
+  %13 = arith.divsi %12, %4 : tensor<128xi32>
   tt.return
 }
 
@@ -575,7 +579,7 @@ tt.func @for_if_for(%i1: i1, %arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %
 
 // CHECK-LABEL: @permute_2d
 tt.func @permute_2d(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}) {
-  // CHECK: contiguity = [1, 1], divisibility = [1, 1], constancy = [128, 128], constant_value = 1
+  // CHECK: contiguity = [1, 1], divisibility = [1, 1], constancy = [128, 128], constant_value = -1
   %cst = arith.constant dense<true> : tensor<128x128xi1>
   // CHECK-NEXT: contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>
   %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x128xf32>

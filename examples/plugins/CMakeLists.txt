@@ -1,8 +1,3 @@
-if (NOT TRITON_ENABLE_PLUGINS)
-  message(STATUS "TRITON_ENABLE_PLUGINS=OFF: skipping Triton example plugin libraries")
-  return()
-endif()
-
 set(LLVM_TARGET_DEFINITIONS Passes.td)
 mlir_tablegen(Passes.h.inc -gen-pass-decls -name Plugins)
 add_public_tablegen_target(TritonPluginsIncGen)

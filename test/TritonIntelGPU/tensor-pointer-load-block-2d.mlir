@@ -2,9 +2,7 @@
 
 // COM: Regression extracted from torchbench DCGAN on the LTS driver path:
 // COM: tensor<1024x1xf32> with ttig.block_io = "row_major" and
-// COM: threadsPerWarp = 32. Before the fix this hit an assertion in
-// COM: LoadOpToBlockIOConversion; after the fix the pattern returns failure()
-// COM: and the load is lowered via the generic scalar path.
+// COM: threadsPerWarp = 32. The load is lowered via the generic scalar path.
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32, ttig.is_lts, ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, ttig.support_bfloat16_conversion, ttig.support_subgroup_matrix_multiply_accumulate, ttig.target_arch = "spir64"} {
   // CHECK-LABEL: @triton_poi_fused_convolution_0

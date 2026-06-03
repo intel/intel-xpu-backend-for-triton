@@ -17,7 +17,7 @@ Device getDevice(DeviceType type, uint64_t index) {
   if (type == DeviceType::XPU) {
     return xpu::getDevice(index);
   }
-  throw std::runtime_error("DeviceType not supported");
+  throw makeInvalidArgument("DeviceType not supported");
 }
 
 const std::string getDeviceTypeString(DeviceType type) {
@@ -28,7 +28,7 @@ const std::string getDeviceTypeString(DeviceType type) {
   } else if (type == DeviceType::XPU) {
     return DeviceTraits<DeviceType::XPU>::name;
   }
-  throw std::runtime_error("DeviceType not supported");
+  throw makeInvalidArgument("DeviceType not supported");
 }
 
 } // namespace proton

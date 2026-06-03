@@ -162,38 +162,40 @@ llvm.func @triton_gen.sub_group_block_write(%ptr: !llvm.ptr<1>, %val : i32) {
 
 // -----
 
-llvm.func @triton_gen.predicated_load(%ptr : !llvm.ptr<1>, %alignment : i64, %predicate : i1, %default_value : i32) {
-  // CHECK:     llvm.func @triton_gen.predicated_load(%arg0: !llvm.ptr<1>, %arg1: i64, %arg2: i1, %arg3: i32) {
-  // CHECK:       %0 = llvm.call spir_funccc @llvm.genx.GenISA.PredicatedLoad.i32.p1i32.i32({{.*}}) {{{.*}}} : (!llvm.ptr<1>, i64, i1, i32) -> i32
-  %0 = triton_gen.predicated_load %ptr, %alignment, %predicate, %default_value {cache_control = Default} : (!llvm.ptr<1>, i64, i1, i32) -> i32
+// CHECK: llvm.func spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi(!llvm.ptr<1>, i1, i32) -> i32 attributes {no_unwind, will_return}
+llvm.func @triton_gen.predicated_load(%ptr : !llvm.ptr<1>, %predicate : i1, %default_value : i32) {
+  // CHECK:     llvm.func @triton_gen.predicated_load(%arg0: !llvm.ptr<1>, %arg1: i1, %arg2: i32) {
+  // CHECK:       %0 = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi(%arg0, %arg1, %arg2) {{.*}} : (!llvm.ptr<1>, i1, i32) -> i32
+  %0 = triton_gen.predicated_load %ptr, %predicate, %default_value {cache_control = Default} : (!llvm.ptr<1>, i1, i32) -> i32
   llvm.return
 }
 
 // -----
 
-llvm.func @triton_gen.predicated_load(%ptr : !llvm.ptr<1>, %alignment : i64, %predicate : i1, %default_value : i32) {
-  // CHECK:     llvm.func @triton_gen.predicated_load(%arg0: !llvm.ptr<1>, %arg1: i64, %arg2: i1, %arg3: i32) {
-  // CHECK:       %0 = llvm.call spir_funccc @llvm.genx.GenISA.PredicatedLoad.i32.p1i32.i32({{.*}}) {{{.*}}, triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.load_cache_control<0, Uncached, 0>, #triton_gen.load_cache_control<1, Uncached, 0>>, {{.*}}} : (!llvm.ptr<1>, i64, i1, i32) -> i32
-  %0 = triton_gen.predicated_load %ptr, %alignment, %predicate, %default_value {cache_control = L1UC_L3UC} : (!llvm.ptr<1>, i64, i1, i32) -> i32
+llvm.func @triton_gen.predicated_load(%ptr : !llvm.ptr<1>, %predicate : i1, %default_value : i32) {
+  // CHECK:     llvm.func @triton_gen.predicated_load(%arg0: !llvm.ptr<1>, %arg1: i1, %arg2: i32) {
+  // CHECK:       %0 = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi({{.*}}) {{{.*}}, triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.load_cache_control<0, Uncached, 0>, #triton_gen.load_cache_control<1, Uncached, 0>>, {{.*}}} : (!llvm.ptr<1>, i1, i32) -> i32
+  %0 = triton_gen.predicated_load %ptr, %predicate, %default_value {cache_control = L1UC_L3UC} : (!llvm.ptr<1>, i1, i32) -> i32
   llvm.return
 }
 
 // -----
 
-llvm.func @triton_gen.predicated_store(%ptr : !llvm.ptr<1>, %value : i32, %alignment : i64, %predicate : i1) {
-  // CHECK:      llvm.func @triton_gen.predicated_store(%arg0: !llvm.ptr<1>, %arg1: i32, %arg2: i64, %arg3: i1) {
+// CHECK: llvm.func spir_funccc @_Z28__spirv_PredicatedStoreINTELPU3AS1vib(!llvm.ptr<1>, i32, i1) attributes {no_unwind, will_return}
+llvm.func @triton_gen.predicated_store(%ptr : !llvm.ptr<1>, %value : i32, %predicate : i1) {
+  // CHECK:      llvm.func @triton_gen.predicated_store(%arg0: !llvm.ptr<1>, %arg1: i32, %arg2: i1) {
   // CHECK-NOT:  {{.*}} triton_gen.DecorationCacheControlINTEL = {{.*}}
-  // CHECK:        llvm.call spir_funccc @llvm.genx.GenISA.PredicatedStore.p1i32.i32{{.*}}
-  triton_gen.predicated_store %ptr, %value, %alignment, %predicate {cache_control = Default} : (!llvm.ptr<1>, i32, i64, i1) -> ()
+  // CHECK:        llvm.call spir_funccc @_Z28__spirv_PredicatedStoreINTELPU3AS1vib(%arg0, %arg1, %arg2) {{.*}} : (!llvm.ptr<1>, i32, i1) -> ()
+  triton_gen.predicated_store %ptr, %value, %predicate {cache_control = Default} : (!llvm.ptr<1>, i32, i1) -> ()
   llvm.return
 }
 
 // -----
 
-llvm.func @triton_gen.predicated_store(%ptr : !llvm.ptr<1>, %value : i32, %alignment : i64, %predicate : i1) {
-  // CHECK:      llvm.func @triton_gen.predicated_store(%arg0: !llvm.ptr<1>, %arg1: i32, %arg2: i64, %arg3: i1) {
-  // CHECK:        llvm.call spir_funccc @llvm.genx.GenISA.PredicatedStore.p1i32.i32({{.*}}) {{{.*}}, triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.store_cache_control<0, Uncached, 0>, #triton_gen.store_cache_control<1, Uncached, 0>>, {{.*}}} : (!llvm.ptr<1>, i32, i64, i1) -> ()
-  triton_gen.predicated_store %ptr, %value, %alignment, %predicate {cache_control = L1UC_L3UC} : (!llvm.ptr<1>, i32, i64, i1) -> ()
+llvm.func @triton_gen.predicated_store(%ptr : !llvm.ptr<1>, %value : i32, %predicate : i1) {
+  // CHECK:      llvm.func @triton_gen.predicated_store(%arg0: !llvm.ptr<1>, %arg1: i32, %arg2: i1) {
+  // CHECK:        llvm.call spir_funccc @_Z28__spirv_PredicatedStoreINTELPU3AS1vib({{.*}}) {{{.*}}, triton_gen.DecorationCacheControlINTEL = #triton_gen.decoration_cache_control<#triton_gen.store_cache_control<0, Uncached, 0>, #triton_gen.store_cache_control<1, Uncached, 0>>, {{.*}}} : (!llvm.ptr<1>, i32, i1) -> ()
+  triton_gen.predicated_store %ptr, %value, %predicate {cache_control = L1UC_L3UC} : (!llvm.ptr<1>, i32, i1) -> ()
   llvm.return
 }
 
@@ -329,4 +331,16 @@ llvm.func @triton_gen.bdpas.f32_accum(%c: vector<8xf32>, %a : vector<8xi16>, %b 
   // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8(%arg0, %arg1, %arg2, [[SCALE_A]], [[SCALE_B]], [[PREC_A]], [[PREC_B]]) {{.*}} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, vector<2xi8>, vector<2xi8>, i32, i32) -> vector<8xf32>
   %0 = triton_gen.bdpas %c, %a, %b {pa = e2m1, pb = e2m1, rc = 8} {operandSegmentSizes = array<i32: 1, 1, 1, 0, 0>} : (vector<8xf32>, vector<8xi16>, vector<8xi32>) -> vector<8xf32>
   llvm.return
+}
+
+// -----
+
+// CHECK: llvm.func spir_funccc @llvm.genx.GenISA.SubgroupBitcastShuffle.v2i16.v4i8(vector<4xi8>) -> vector<2xi16> attributes {convergent, no_unwind, will_return}
+
+llvm.func @triton_gen.sub_group_bitcast_shuffle(%val : vector<4xi8>) -> vector<2xi16> {
+  // CHECK-LABEL: llvm.func @triton_gen.sub_group_bitcast_shuffle(
+  // CHECK:         [[RES:%.*]] = llvm.call spir_funccc @llvm.genx.GenISA.SubgroupBitcastShuffle.v2i16.v4i8(%arg0) {{.*}} : (vector<4xi8>) -> vector<2xi16>
+  // CHECK:         llvm.return [[RES]]
+  %0 = triton_gen.sub_group_bitcast_shuffle %val : vector<4xi8> -> vector<2xi16>
+  llvm.return %0 : vector<2xi16>
 }

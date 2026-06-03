@@ -1,13 +1,24 @@
+#include "intel/include/Analysis/AliasAnalysis.h"
+#include "intel/include/Analysis/AxisInfoExt.h"
+#include "intel/include/Analysis/ReuseAnalysis.h"
+#include "intel/include/Analysis/StrideInfo.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/CommandLine.h"
+#include <type_traits>
 
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
+namespace tti = mlir::triton::intel;
 
 namespace mlir::triton::gpu::intel {
 
@@ -16,15 +27,40 @@ namespace mlir::triton::gpu::intel {
 
 namespace {
 
-// Propagates a use of `v` through structured control flow, inserting any
-// downstream values that may transitively carry data from `v` into `worklist`.
-// Returns true if the caller should skip the default fallback (i.e. the use
-// was already handled here). Handles scf.for (init -> iter_arg, result),
-// scf.if (yield -> result), and scf.while (init -> before-region arg,
-// condition -> after-region arg + while result, after-region yield ->
-// before-region arg).
-static bool propagateThroughSCF(OpOperand &use,
-                                llvm::SetVector<Value> &worklist) {
+using AliasKind = tti::AliasAnalysis::PointerRootKind;
+using RootsResult = tti::AliasAnalysis::PointerRootsResult;
+
+//===----------------------------------------------------------------------===//
+// Tunable budget knobs for EVICT_LAST promotion. Exposed as `cl::opt` so
+// measurement can refine the defaults without recompiling. The per-load knob
+// caps a single load's tile bytes; the per-loop knob caps the running total
+// across all promoted loads in the enclosing loop, bounding total L1 pressure.
+//===----------------------------------------------------------------------===//
+
+static llvm::cl::opt<int64_t> kEvictLastPerLoadBudgetBytes(
+    "tritonintelgpu-evict-last-per-load-bytes",
+    llvm::cl::desc("Per-load tile-byte budget for promoting tt.load to "
+                   "EVICT_LAST in AnnotateCacheControl"),
+    llvm::cl::init(32 * 1024));
+
+static llvm::cl::opt<int64_t> kEvictLastPerLoopBudgetBytes(
+    "tritonintelgpu-evict-last-per-loop-bytes",
+    llvm::cl::desc("Per-loop running-total tile-byte budget for EVICT_LAST "
+                   "promotion in AnnotateCacheControl"),
+    llvm::cl::init(48 * 1024));
+
+//===----------------------------------------------------------------------===//
+// Helpers
+//===----------------------------------------------------------------------===//
+
+/// Propagates a use of `v` through structured control flow, inserting any
+/// downstream values that may transitively carry data from `v` into `worklist`.
+/// Returns true if the caller should skip the default fallback (i.e. the use
+/// was already handled here). Handles scf.for (init -> iter_arg, result),
+/// scf.if (yield -> result), and scf.while (init -> before-region arg,
+/// condition -> after-region arg + while result, after-region yield ->
+/// before-region arg).
+static bool propagateThroughSCF(OpOperand &use, SetVector<Value> &worklist) {
   Operation *user = use.getOwner();
 
   if (auto forOp = dyn_cast<scf::ForOp>(user)) {
@@ -81,174 +117,180 @@ static bool propagateThroughSCF(OpOperand &use,
   return false;
 }
 
-// Returns true when `.cg` annotation should be suppressed on `loadOp` because
-// the HW access pattern implied by the load's result encoding already yields
-// cross-subgroup L1 reuse. Replaces an older forward-dataflow heuristic
-// (see PR #6723 review).
-static bool skipForL1Reuse(tt::LoadOp loadOp) {
-  auto tensorTy = dyn_cast<RankedTensorType>(loadOp.getType());
-  if (!tensorTy)
+/// True if `arg` is an entry-block block-argument of some FunctionOpInterface.
+static bool isEntryBlockFuncArg(Value v) {
+  auto arg = dyn_cast<BlockArgument>(v);
+  if (!arg)
     return false;
-  Attribute enc = tensorTy.getEncoding();
-  if (!enc)
+  Block *owner = arg.getOwner();
+  if (!owner)
     return false;
+  auto funcOp = dyn_cast_or_null<FunctionOpInterface>(owner->getParentOp());
+  if (!funcOp)
+    return false;
+  Region &body = funcOp.getFunctionBody();
+  return !body.empty() && owner == &body.front();
+}
 
-  // Unwrap SliceEncodingAttr chain (may be nested).
-  while (auto sliceEnc = dyn_cast<ttg::SliceEncodingAttr>(enc))
-    enc = sliceEnc.getParent();
+/// Returns true iff `ptr`'s origin is opaque (Unknown) or was never seeded
+/// by the alias analysis (NotTracked). Both cases are conservatively treated
+/// as "origin unresolved" by callers — we cannot prove the pointer is safe
+/// for L1 bypass in the presence of an unknown root.
+static bool ptrRootsUnknown(Value ptr, const tti::AliasAnalysis &alias) {
+  return alias.getPointerRoots(ptr).kind != AliasKind::Known;
+}
 
-  // DotOperandEncodingAttr whose parent is a DPAS/MMA-family encoding
-  // (DpasEncodingAttr and Subgroup2DBlockEncodingAttr both implement
-  // MmaEncodingTrait).
-  if (auto dotEnc = dyn_cast<ttg::DotOperandEncodingAttr>(enc))
-    if (isa<ttg::MmaEncodingTrait>(dotEnc.getParent()))
-      return true;
+/// Returns true iff every root of `ptr` is an entry-block function argument.
+/// Used by the atomic-policy gate. `Unknown` / `NotTracked` return false —
+/// the caller (`ptrRootsUnknown` gate) handles those separately.
+static bool isPointerArgRooted(Value ptr, const tti::AliasAnalysis &alias) {
+  RootsResult result = alias.getPointerRoots(ptr);
+  if (result.kind != AliasKind::Known || result.roots.empty())
+    return false;
+  return llvm::all_of(result.roots, isEntryBlockFuncArg);
+}
 
-  // Scale operand of tt.dot_scaled: scales are consumed by the same
-  // DPAS-backed matmul as the A/B operands and benefit from the same
-  // cross-subgroup L1 reuse, so `.cg` would defeat that. The
-  // LinearEncodingAttr built by BlockScaledDPAStoLinearLayout has no
-  // signature we can match by attribute, so use a use-site check instead.
-  // A single-hop walk suffices because AccelerateMatmul materialises the
-  // scale encoding immediately before the tt.dot_scaled consumer — no
-  // scf.for / convert_layout sits between them at this pass position.
-  for (OpOperand &use : loadOp.getResult().getUses()) {
-    if (auto ds = dyn_cast<tt::DotScaledOp>(use.getOwner()))
-      if (use.get() == ds.getAScale() || use.get() == ds.getBScale())
+/// Returns true iff `op` is a write-effect memory op with respect to the
+/// cache-control policy: any `tt.store`, `tt.atomic_*`, their descriptor
+/// counterparts, or any op implementing `MemoryEffectOpInterface` with a
+/// `MemoryEffects::Write` effect.
+///
+/// Cache-fill prefetches (`ttig.prefetch`, `ttig.descriptor_prefetch`) are
+/// excluded: they declare `MemWrite<L2Cache>` to keep the optimizer from
+/// CSE/DCE-ing them, but they do not mutate observable memory. Treating them
+/// as writing peers would block evict_last promotion of any load on the same
+/// pointer (the canonical Pipeline-pass shape: pre-prefetch + in-loop
+/// prefetch + load on the same iter-arg).
+static bool hasWriteEffect(Operation *op) {
+  if (isa<tt::StoreOp, tt::AtomicRMWOp, tt::AtomicCASOp, tt::DescriptorStoreOp,
+          tt::DescriptorScatterOp, tt::DescriptorReduceOp>(op))
+    return true;
+  if (isa<ttg::intel::PrefetchOp, ttg::intel::DescriptorPrefetchOp>(op))
+    return false;
+  if (auto effectOp = dyn_cast<MemoryEffectOpInterface>(op)) {
+    SmallVector<MemoryEffects::EffectInstance> effects;
+    effectOp.getEffects(effects);
+    for (const auto &effect : effects)
+      if (isa<MemoryEffects::Write>(effect.getEffect()))
         return true;
   }
-
   return false;
 }
 
-// Tracks kernel-argument pointers where `.cg` annotation is suppressed to
-// preserve L1 locality for loads that may benefit from L1 reuse.
-struct FuncSkipInfo {
-  llvm::DenseSet<BlockArgument> skipArgs;
-  bool hasAtomic = false;
-};
-
-// Walks the pointer SSA chain backward and collects all entry-block
-// BlockArguments of `func` that `ptr` may resolve to. Returns true iff every
-// path in the SSA chain bottomed out at a known handled op. Returns false if
-// any path hit an unknown producer — the caller should skip annotation.
-static bool collectRoots(Value ptr, tt::FuncOp func,
-                         llvm::SmallVectorImpl<BlockArgument> &roots,
-                         llvm::DenseSet<Value> &visited) {
-  if (!ptr)
-    return false;
-  if (!visited.insert(ptr).second)
-    return true;
-
-  Block &entryBlock = func.getBody().front();
-
-  if (auto blockArg = dyn_cast<BlockArgument>(ptr)) {
-    if (blockArg.getOwner() == &entryBlock) {
-      roots.push_back(blockArg);
+/// Returns true iff `load` has at least one aliasing peer with a write effect.
+/// Read-only peers (e.g. a second `tt.load` of the same arg) are not a reason
+/// to suppress `.cg`: see AliasAnalysisTest.cpp TwoLoadsSameArgDifferentOffsets
+/// — read-only loads from the same arg alias each other and `.cg` is still
+/// correct for both. Constrained to the load op types that
+/// `AliasAnalysis::getAliasingMemOps` accepts.
+template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
+                             OpTy, tt::LoadOp, tt::DescriptorLoadOp>::value>>
+static bool aliasesWritingPeer(OpTy load, const tti::AliasAnalysis &alias) {
+  for (Operation *peer : alias.getAliasingMemOps(load))
+    if (hasWriteEffect(peer))
       return true;
-    }
-    // Region iter_arg of an scf.for: follow matching init + yield operands.
-    if (auto forOp = dyn_cast<scf::ForOp>(blockArg.getOwner()->getParentOp())) {
-      unsigned argIdx = blockArg.getArgNumber();
-      // argIdx 0 is the induction variable; iter_args start at 1.
-      if (argIdx == 0)
-        return false;
-      unsigned iterIdx = argIdx - 1;
-      if (iterIdx >= forOp.getInitArgs().size())
-        return false;
-      bool resolved =
-          collectRoots(forOp.getInitArgs()[iterIdx], func, roots, visited);
-      auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
-      if (iterIdx < yieldOp.getNumOperands())
-        resolved &=
-            collectRoots(yieldOp.getOperand(iterIdx), func, roots, visited);
-      else
-        resolved = false;
-      return resolved;
-    }
-    return false;
-  }
-
-  Operation *defOp = ptr.getDefiningOp();
-  if (!defOp)
-    return false;
-
-  // Pointer arithmetic / shape/layout reshuffling: follow operand 0.
-  if (isa<tt::AddPtrOp, tt::SplatOp, tt::BroadcastOp, tt::BitcastOp,
-          tt::ExpandDimsOp, tt::ReshapeOp, tt::TransOp, ttg::ConvertLayoutOp>(
-          defOp)) {
-    return collectRoots(defOp->getOperand(0), func, roots, visited);
-  }
-
-  // scf.for result: forward to matching init and yield operands.
-  if (auto forOp = dyn_cast<scf::ForOp>(defOp)) {
-    auto result = cast<OpResult>(ptr);
-    unsigned iterIdx = result.getResultNumber();
-    bool resolved = true;
-    if (iterIdx < forOp.getInitArgs().size())
-      resolved &=
-          collectRoots(forOp.getInitArgs()[iterIdx], func, roots, visited);
-    else
-      resolved = false;
-    auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
-    if (iterIdx < yieldOp.getNumOperands())
-      resolved &=
-          collectRoots(yieldOp.getOperand(iterIdx), func, roots, visited);
-    else
-      resolved = false;
-    return resolved;
-  }
-
-  // scf.if result: follow both branches.
-  if (auto ifOp = dyn_cast<scf::IfOp>(defOp)) {
-    auto result = cast<OpResult>(ptr);
-    unsigned idx = result.getResultNumber();
-    bool resolved = true;
-    for (Region *region : {&ifOp.getThenRegion(), &ifOp.getElseRegion()}) {
-      if (region->empty())
-        continue;
-      auto yieldOp = cast<scf::YieldOp>(region->front().getTerminator());
-      if (idx < yieldOp.getNumOperands())
-        resolved &= collectRoots(yieldOp.getOperand(idx), func, roots, visited);
-      else
-        resolved = false;
-    }
-    return resolved;
-  }
-
-  // Unknown producer: signal incomplete resolution to the caller.
   return false;
 }
 
-// Returns true if `.cg` annotation should be skipped for a load at `ptr`:
-// (a) the pointer SSA chain could not be fully resolved to entry-block function
-// arguments, OR (b) any resolved root is in `skipArgs`.
-static bool shouldSkipLoad(Value ptr, tt::FuncOp func,
-                           const llvm::DenseSet<BlockArgument> &skipArgs) {
-  llvm::SmallVector<BlockArgument, 4> roots;
-  llvm::DenseSet<Value> visited;
-  bool resolved = collectRoots(ptr, func, roots, visited);
-  if (!resolved)
+/// Returns true iff the function contains any atomic memory op.
+static bool funcContainsAtomic(tt::FuncOp func) {
+  auto result = func.walk([&](Operation *op) {
+    if (isa<tt::AtomicRMWOp, tt::AtomicCASOp>(op))
+      return WalkResult::interrupt();
+    return WalkResult::advance();
+  });
+  return result.wasInterrupted();
+}
+
+/// Computes the set of entry-block pointer arguments on which `.cg` annotation
+/// must be suppressed to preserve L1 locality:
+///   - read-write args (loaded AND stored within the same function), OR
+///   - if any store's pointer origin is unresolved, all pointer args, OR
+///   - if the function contains atomics, all pointer args.
+static SetVector<BlockArgument>
+computeSkippedArgs(tt::FuncOp func, const tti::AliasAnalysis &alias,
+                   bool hasAtomic) {
+  SetVector<BlockArgument> skipped;
+  DenseSet<BlockArgument> loadedArgs;
+  DenseSet<BlockArgument> storedArgs;
+  bool hasUnresolvedStore = false;
+
+  auto collectRootArgs = [&](Value ptr, DenseSet<BlockArgument> &sink) -> bool {
+    RootsResult result = alias.getPointerRoots(ptr);
+    if (result.kind != AliasKind::Known)
+      return false;
+    for (Value r : result.roots)
+      if (auto arg = dyn_cast<BlockArgument>(r);
+          arg && isEntryBlockFuncArg(arg))
+        sink.insert(arg);
     return true;
-  for (BlockArgument arg : roots) {
-    if (skipArgs.contains(arg))
-      return true;
+  };
+
+  func.walk([&](Operation *op) {
+    if (auto loadOp = dyn_cast<tt::LoadOp>(op))
+      collectRootArgs(loadOp.getPtr(), loadedArgs);
+    else if (auto storeOp = dyn_cast<tt::StoreOp>(op)) {
+      if (!collectRootArgs(storeOp.getPtr(), storedArgs))
+        hasUnresolvedStore = true;
+    }
+  });
+
+  // Read-write args are always excluded.
+  for (BlockArgument arg : loadedArgs)
+    if (storedArgs.contains(arg))
+      skipped.insert(arg);
+
+  // Atomic kernels and unresolved-store functions: exclude every pointer-typed
+  // entry-block arg. The rationale matches the original pass:
+  //   - atomic kernels often mix matmul operand loads with streaming loads
+  //     and we cannot distinguish them;
+  //   - unresolved stores mean we cannot prove which args are written.
+  if (hasAtomic || hasUnresolvedStore) {
+    for (BlockArgument arg : func.getBody().front().getArguments()) {
+      Type argTy = arg.getType();
+      if (isa<tt::PointerType>(argTy)) {
+        skipped.insert(arg);
+      } else if (auto tensorTy = dyn_cast<RankedTensorType>(argTy)) {
+        if (isa<tt::PointerType>(tensorTy.getElementType()))
+          skipped.insert(arg);
+      }
+    }
   }
+
+  return skipped;
+}
+
+/// Returns true iff the store's pointer origin is unknown OR any of its
+/// roots intersects the `skipped` arg set.
+static bool storePtrIsSkipped(Value storePtr, const tti::AliasAnalysis &alias,
+                              const SetVector<BlockArgument> &skipped) {
+  RootsResult result = alias.getPointerRoots(storePtr);
+  if (result.kind != AliasKind::Known)
+    return true;
+  for (Value r : result.roots)
+    if (auto arg = dyn_cast<BlockArgument>(r); arg && skipped.contains(arg))
+      return true;
   return false;
 }
 
-// Returns true if any transitive forward user of `root` is a `tt.store` whose
-// destination pointer resolves to an arg in `skipArgs`. This catches the
-// pattern where the loaded value is reduced into a read-write accumulator
-// buffer even though the load's own pointer is read-only.
-// Walks through scf.for/scf.if/scf.while.
-static bool
-valueFlowsToSkippedStore(Value root, tt::FuncOp func,
-                         const llvm::DenseSet<BlockArgument> &skipArgs) {
-  if (skipArgs.empty())
+/// Returns true iff any transitive forward user of `root` is a `tt.store`
+/// whose destination pointer root-intersects `skipped` (or is unknown). This
+/// catches the pattern where the loaded value is reduced into a read-write
+/// accumulator buffer even though the load's own pointer is read-only.
+/// Walks through scf.for/scf.if/scf.while via `propagateThroughSCF`.
+///
+/// This filter is retained because the alias analysis (P3) cannot replace it:
+/// the filter tracks data flow, not pointer aliasing. See
+/// `annotate-cc-rewrite.md` §"What stays and why" — tests m, p, r have the
+/// pattern `load %X; ...; store %DW, derived_from_load` where `%X` and `%DW`
+/// are distinct args with disjoint root sets.
+static bool valueFlowsToSkippedStore(Value root,
+                                     const tti::AliasAnalysis &alias,
+                                     const SetVector<BlockArgument> &skipped) {
+  if (skipped.empty())
     return false;
 
-  llvm::SetVector<Value> worklist;
+  SetVector<Value> worklist;
   worklist.insert(root);
 
   for (unsigned i = 0; i < worklist.size(); ++i) {
@@ -261,7 +303,7 @@ valueFlowsToSkippedStore(Value root, tt::FuncOp func,
         // pointer or mask operand, it's irrelevant to where the loaded *data*
         // ends up.
         if (use.get() == storeOp.getValue() &&
-            shouldSkipLoad(storeOp.getPtr(), func, skipArgs))
+            storePtrIsSkipped(storeOp.getPtr(), alias, skipped))
           return true;
         continue;
       }
@@ -278,69 +320,76 @@ valueFlowsToSkippedStore(Value root, tt::FuncOp func,
   return false;
 }
 
-// Scans `func` once to determine which entry-block pointer arguments should
-// have `.cg` annotation suppressed. `.cg` (L1UC_L3C) on loads is always
-// coherence-safe because it reads from the shared L3 rather than the
-// incoherent per-core L1. These filters preserve L1 locality for loads that
-// may benefit from L1 reuse (e.g. matmul operand loads in complex kernels):
-//   - read-write args (loaded AND stored within the same function), OR
-//   - if the function contains any atomic op, every pointer-typed entry-block
-//     arg is excluded (atomic kernels often mix matmul operand loads with
-//     streaming loads; excluding all args avoids regressing matmul operand
-//     L1 reuse), OR
-//   - if any store's pointer could not be resolved to known roots (so we
-//     cannot tell which args are actually written), treat every pointer-typed
-//     entry-block arg as potentially read-write.
-static FuncSkipInfo computeSkipArgs(tt::FuncOp func) {
-  FuncSkipInfo info;
-  llvm::DenseSet<BlockArgument> loadedArgs;
-  llvm::DenseSet<BlockArgument> storedArgs;
-  bool hasUnresolvedStore = false;
+//===----------------------------------------------------------------------===//
+// EVICT_LAST policy helpers: per-loop budget tracker.
+//===----------------------------------------------------------------------===//
 
-  auto collectFor = [&](Value ptr,
-                        llvm::DenseSet<BlockArgument> &sink) -> bool {
-    llvm::SmallVector<BlockArgument, 4> roots;
-    llvm::DenseSet<Value> visited;
-    bool resolved = collectRoots(ptr, func, roots, visited);
-    for (BlockArgument arg : roots)
-      sink.insert(arg);
-    return resolved;
-  };
-
-  func.walk([&](Operation *op) {
-    if (auto loadOp = dyn_cast<tt::LoadOp>(op))
-      collectFor(loadOp.getPtr(), loadedArgs);
-    else if (auto storeOp = dyn_cast<tt::StoreOp>(op)) {
-      if (!collectFor(storeOp.getPtr(), storedArgs))
-        hasUnresolvedStore = true;
-    } else if (isa<tt::AtomicRMWOp, tt::AtomicCASOp>(op))
-      info.hasAtomic = true;
-  });
-
-  // Read-write args are always excluded.
-  for (BlockArgument arg : loadedArgs) {
-    if (storedArgs.contains(arg))
-      info.skipArgs.insert(arg);
-  }
-  // If the function has any atomic, exclude every pointer-typed entry-block
-  // arg — atomic kernels often mix matmul operand loads with streaming loads
-  // and we cannot distinguish them; excluding all args preserves L1 reuse.
-  // Likewise, if any store has an unresolved pointer, we can't prove which
-  // args are written; treat every pointer arg as potentially RW.
-  if (info.hasAtomic || hasUnresolvedStore) {
-    for (BlockArgument arg : func.getBody().front().getArguments()) {
-      Type argTy = arg.getType();
-      if (isa<tt::PointerType>(argTy))
-        info.skipArgs.insert(arg);
-      else if (auto tensorTy = dyn_cast<RankedTensorType>(argTy)) {
-        if (isa<tt::PointerType>(tensorTy.getElementType()))
-          info.skipArgs.insert(arg);
-      }
-    }
-  }
-
-  return info;
+/// Returns the total tile size in bytes for a load-like op's result value, or
+/// 0 if the result is not a ranked tensor or its element type's bit-width is
+/// not a positive multiple of 8. Works for any op with a single tensor result
+/// (`tt.load`, `tt.descriptor_load`, ...).
+static int64_t computeTileBytes(Value result) {
+  auto ty = dyn_cast<RankedTensorType>(result.getType());
+  if (!ty)
+    return 0;
+  unsigned bits = ty.getElementTypeBitWidth();
+  if (bits == 0 || bits % 8 != 0)
+    return 0;
+  int64_t numElements = ty.getNumElements();
+  if (numElements <= 0)
+    return 0;
+  return numElements * static_cast<int64_t>(bits / 8);
 }
+
+/// Per-function tracker for the EVICT_LAST per-loop byte budget. A load is
+/// admitted iff its tile bytes are within `kEvictLastPerLoadBudgetBytes` AND,
+/// if enclosed in an `scf::ForOp`, the running total in that loop's bucket
+/// plus the candidate's tile bytes does not exceed
+/// `kEvictLastPerLoopBudgetBytes`. Outside-loop loads are subject to the
+/// per-load cap only and never touch any bucket.
+struct EvictLastBudgetTracker {
+  llvm::DenseMap<scf::ForOp, int64_t> bytesPromotedPerLoop;
+
+  template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
+                               OpTy, tt::LoadOp, tt::DescriptorLoadOp>::value>>
+  bool fits(OpTy load) const {
+    int64_t tileBytes = computeTileBytes(load.getResult());
+    if (tileBytes <= 0)
+      return false;
+    if (tileBytes > kEvictLastPerLoadBudgetBytes)
+      return false;
+    scf::ForOp loop = load->template getParentOfType<scf::ForOp>();
+    if (!loop)
+      return true; // Outside any loop: per-load cap only.
+    int64_t already = bytesPromotedPerLoop.lookup(loop);
+    return already + tileBytes <= kEvictLastPerLoopBudgetBytes;
+  }
+
+  template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
+                               OpTy, tt::LoadOp, tt::DescriptorLoadOp>::value>>
+  void account(OpTy load) {
+    scf::ForOp loop = load->template getParentOfType<scf::ForOp>();
+    if (!loop)
+      return; // Outside-loop loads do not consume any per-loop bucket.
+    bytesPromotedPerLoop[loop] += computeTileBytes(load.getResult());
+  }
+};
+
+//===----------------------------------------------------------------------===//
+// Per-function context
+//===----------------------------------------------------------------------===//
+
+struct FuncContext {
+  ReuseAnalysis reuse;
+  std::unique_ptr<tti::AliasAnalysis> alias;
+  bool hasAtomic;
+  SetVector<BlockArgument> skipped;
+  EvictLastBudgetTracker evictLastBudget;
+};
+
+//===----------------------------------------------------------------------===//
+// Pass
+//===----------------------------------------------------------------------===//
 
 struct AnnotateCacheControlPass
     : public impl::TritonIntelGPUAnnotateCacheControlBase<
@@ -350,28 +399,33 @@ struct AnnotateCacheControlPass
 
   void runOnOperation() final {
     ModuleOp moduleOp = getOperation();
+    // ModuleStrideAnalysis requires a ModuleAxisInfoAnalysis& (StrideInfo.h).
+    tti::ModuleAxisInfoAnalysis axisInfo(moduleOp);
+    tti::ModuleStrideAnalysis strideAnalysis(moduleOp, axisInfo);
     bool changed = false;
 
     moduleOp.walk([&](tt::FuncOp func) {
       if (func.getBody().empty())
         return;
 
-      FuncSkipInfo info = computeSkipArgs(func);
+      auto alias = std::make_unique<tti::AliasAnalysis>(func);
+      bool hasAtomic = funcContainsAtomic(func);
+      SetVector<BlockArgument> skipped =
+          computeSkippedArgs(func, *alias, hasAtomic);
+      FuncContext ctx{
+          ReuseAnalysis(moduleOp, strideAnalysis),
+          std::move(alias),
+          hasAtomic,
+          std::move(skipped),
+          EvictLastBudgetTracker(),
+      };
 
-      func.walk([&](tt::LoadOp loadOp) {
-        if (loadOp.getCache() != tt::CacheModifier::NONE)
-          return;
-        if (!isa<RankedTensorType>(loadOp.getType()))
-          return;
-        if (skipForL1Reuse(loadOp))
-          return;
-        if (shouldSkipLoad(loadOp.getPtr(), func, info.skipArgs))
-          return;
-        if (valueFlowsToSkippedStore(loadOp.getResult(), func, info.skipArgs))
-          return;
-        loadOp.setCacheAttr(tt::CacheModifierAttr::get(loadOp.getContext(),
-                                                       tt::CacheModifier::CG));
-        changed = true;
+      func.walk([&](Operation *op) {
+        llvm::TypeSwitch<Operation *>(op)
+            .Case<tt::LoadOp, tt::DescriptorLoadOp>([&](auto load) {
+              if (tryAnnotate(load, ctx))
+                changed = true;
+            });
       });
     });
 
@@ -383,6 +437,171 @@ struct AnnotateCacheControlPass
 
     if (!changed)
       markAllAnalysesPreserved();
+  }
+
+private:
+  /// Four-requirement gate for promoting a load to EVICT_LAST. All four
+  /// must hold:
+  ///   1. Spatial known cross-subgroup reuse (drops temporal-only).
+  ///   2. Warp-broadcast factor >= 2: at least 2 warps share the same
+  ///      address. Without this, a DPAS dot operand with `warpsPerCTA`
+  ///      that does not tile its non-K axis (factor == 1) would be
+  ///      promoted purely on the strength of K being warp-invariant —
+  ///      a degenerate "reuse" with no real cross-warp sharing.
+  ///   3. Proven temporal reuse across enclosing loops: every
+  ///      address-determining operand classifies as Invariant or Held at
+  ///      every enclosing loop level (Streaming or Unknown defeats the
+  ///      proof). This is the underlying property EVICT_LAST relies on —
+  ///      successive loop iterations re-touch the same cache lines.
+  ///   4. The per-load + per-loop byte budget admits this load.
+  /// `knownReuse(load)` is checked separately by the caller in `tryAnnotate`
+  /// — this helper layers on the additional policy filters.
+  template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
+                               OpTy, tt::LoadOp, tt::DescriptorLoadOp>::value>>
+  static bool shouldUseEvictLast(OpTy load, FuncContext &ctx) {
+    // Requirement 1: spatial known reuse only — drop temporal-only.
+    if (!ctx.reuse.getSpatial().knownCrossSubgroupReuse(load))
+      return false;
+    // Requirement 2: non-trivial warp-broadcast factor. A factor of 1 means
+    // warps strictly partition the tensor, so no inter-warp reuse exists
+    // even though the layout has a warp-invariant axis.
+    std::optional<unsigned> factor =
+        ctx.reuse.getSpatial().knownWarpBroadcastFactor(load);
+    if (!factor || *factor < 2)
+      return false;
+    // Requirement 3: proven temporal reuse across enclosing loops.
+    if (!ctx.reuse.getTemporal().provenTemporalReuse(load))
+      return false;
+    // Requirement 4: per-load + per-loop byte budget.
+    if (!ctx.evictLastBudget.fits(load))
+      return false;
+    return true;
+  }
+
+  /// Returns true when the load should be skipped because its pointer roots
+  /// fail the atomic/unresolved-origin disqualifiers.
+  ///
+  /// `tt.load` exposes a pointer operand: in atomic kernels we drop loads
+  /// rooted in entry-block pointer args, and we drop loads whose roots can't
+  /// be resolved.
+  ///
+  /// `tt.descriptor_load` has no pointer operand to inspect, so the check
+  /// degrades to "skip on atomic". The equivalent of root-based filtering is
+  /// already provided by `ctx.skipped` (see `computeSkippedArgs`), which
+  /// excludes every pointer-typed entry-block arg in atomic / unresolved-store
+  /// cases.
+  template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
+                               OpTy, tt::LoadOp, tt::DescriptorLoadOp>::value>>
+  static bool failsPointerArgGates(OpTy load, FuncContext &ctx) {
+    if constexpr (std::is_same_v<OpTy, tt::LoadOp>) {
+      if (ctx.hasAtomic && isPointerArgRooted(load.getPtr(), *ctx.alias))
+        return true;
+      return ptrRootsUnknown(load.getPtr(), *ctx.alias);
+    }
+    return ctx.hasAtomic;
+  }
+
+  /// Default-branch policy for the no-reuse fall-through. `tt.load` is tagged
+  /// with `.cg` to bypass L1; `tt.descriptor_load` is left alone because the
+  /// 2D-block-I/O lowering for descriptor loads (see `LowerTo2DBlockLoad`)
+  /// drops the cache modifier when rewriting to `ttig.2d_block_load`, so the
+  /// `.cg` annotation would never reach the hardware.
+  template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
+                               OpTy, tt::LoadOp, tt::DescriptorLoadOp>::value>>
+  static bool applyNoReuseDefault(OpTy load) {
+    if constexpr (std::is_same_v<OpTy, tt::LoadOp>) {
+      load.setCacheAttr(
+          tt::CacheModifierAttr::get(load.getContext(), tt::CacheModifier::CG));
+      return true;
+    }
+    return false;
+  }
+
+  /// Annotate a load (`tt.load` or `tt.descriptor_load`) with the appropriate
+  /// cache control. The op-kind-specific behavior is isolated in
+  /// `failsPointerArgGates` (atomic / unresolved-pointer-roots check) and
+  /// `applyNoReuseDefault` (no-reuse fall-through); everything else is
+  /// identical between the two op kinds.
+  ///
+  /// The structural disqualifiers (atomic / unresolved roots, aliasing-write
+  /// peer, forward flow into a skipped store) BLOCK BOTH `.cg` AND
+  /// `EVICT_LAST` — a load that flows through atomic context, has unknown
+  /// root pointers, aliases a writing peer, or feeds a skipped store should
+  /// remain at the default cache policy regardless of reuse signal. We
+  /// evaluate them BEFORE the reuse decision so the same suppression covers
+  /// both annotations.
+  ///
+  /// The reuse-driven decision splits as follows:
+  ///   - encoded type AND any reuse signal -> suppress `.cg`;
+  ///   - additionally, when reuse is *known* AND `shouldUseEvictLast` accepts
+  ///     the candidate, promote to `EVICT_LAST`;
+  ///   - any other reuse-branch hit stays at the default policy.
+  /// Mutual exclusion: only one of `setEvictAttr` or `setCacheAttr` is ever
+  /// called per load — guaranteed by the early-return structure.
+  template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
+                               OpTy, tt::LoadOp, tt::DescriptorLoadOp>::value>>
+  static bool tryAnnotate(OpTy load, FuncContext &ctx) {
+    // Frontend cache override — never overwrite an explicitly-set modifier.
+    if (load.getCache() != tt::CacheModifier::NONE)
+      return false;
+
+    // Gate 1b: user-specified eviction policy (e.g. evict_first/evict_last
+    // from inductor) is honored at lowering time via LSC cache modes — do
+    // not override it here.
+    if (load.getEvict() != tt::EvictionPolicy::NORMAL)
+      return false;
+
+    // Gate 2: scalar loads don't get encoding-based annotation.
+    auto loadTy = dyn_cast<RankedTensorType>(load.getType());
+    if (!loadTy)
+      return false;
+
+    // Pointer-rooted disqualifiers (op-kind-specific).
+    if (failsPointerArgGates(load, ctx))
+      return false;
+
+    // Gate 3b: lane-broadcast suppression.
+    //
+    // SpatialReuseAnalysis::hasCrossSubgroupReuse only counts cross-WARP
+    // broadcast. When a SliceEncodingAttr's parent layout placed lane
+    // basis vectors along the sliced-out axis, those bases become all-zero
+    // on the surviving out-dim — every lane in the warp issues the same
+    // address. Such loads are not streaming; bypassing L1 with `.cg` for
+    // them produces redundant DRAM/L3 traffic and, on dual-tile PVC,
+    // forces cross-tile coherence on every reload.
+    //
+    // Suppress only when the layout structurally proves lane-broadcast
+    // (factor >= 2). std::nullopt (any fallback case) means "no proof"
+    // → fall through to subsequent gates.
+    if (loadTy.getEncoding()) {
+      std::optional<unsigned> laneFactor =
+          ctx.reuse.getSpatial().knownLaneBroadcastFactor(load);
+      if (laneFactor && *laneFactor >= 2)
+        return false;
+    }
+
+    // Alias analysis — suppress only on aliasing with a write peer.
+    // Two read-only loads of the same arg are fine; both can keep `.cg`.
+    if (aliasesWritingPeer(load, *ctx.alias))
+      return false;
+
+    // Forward data-flow into a store on an excluded arg.
+    if (valueFlowsToSkippedStore(load.getResult(), *ctx.alias, ctx.skipped))
+      return false;
+
+    // Reuse-driven decision.
+    if (loadTy.getEncoding() && ctx.reuse.anyReuse(load)) {
+      if (ctx.reuse.knownReuse(load) && shouldUseEvictLast(load, ctx)) {
+        load.setEvictAttr(tt::EvictionPolicyAttr::get(
+            load.getContext(), tt::EvictionPolicy::EVICT_LAST));
+        ctx.evictLastBudget.account(load);
+        return true;
+      }
+      return false; // Reuse suspected but not promoted.
+    }
+
+    // No reuse evidence -> op-kind-specific default.
+    return applyNoReuseDefault(load);
   }
 };
 

@@ -195,7 +195,7 @@ public:
     if (intAttr || boolAttr) {
       int64_t value{};
       if (intAttr)
-        value = intAttr.getValue().getZExtValue();
+        value = intAttr.getValue().getSExtValue();
       else
         value = boolAttr.getValue() ? 1 : 0;
       return AxisInfo(/*contiguity=*/{1},
@@ -206,7 +206,7 @@ public:
     // TODO: generalize to dense attr
     auto splatAttr = dyn_cast<SplatElementsAttr>(op.getValue());
     if (splatAttr && splatAttr.getElementType().isIntOrIndex()) {
-      int64_t value = splatAttr.template getSplatValue<APInt>().getZExtValue();
+      int64_t value = splatAttr.template getSplatValue<APInt>().getSExtValue();
       TensorType ty = cast<TensorType>(splatAttr.getType());
       return AxisInfo(
           /*contiguity=*/AxisInfo::DimVectorT(ty.getRank(), 1),
@@ -444,11 +444,27 @@ private:
     // the minimal constancy is gcd(d_lhs, d_rhs).
     // Since gcd(d_lhs, d_rhs) maybe > len(lhs),
     // we need to use another gcd to get the actual constancy.
+    //
+    // NOTE: This only holds when the division rounds consistently in one
+    // direction. For signed division (DivSIOp), truncation toward zero means
+    // the constancy pattern breaks at the zero crossing:
+    //   sdiv([-2, -1, 0, 1], 2) = [-1, 0, 0, 0]  (not pairwise constant)
+    // For signed division, we can still apply this optimization when the
+    // contiguous window is guaranteed not to cross zero. This is the case
+    // when divisibility >= contiguity: the window starts at k*div and has
+    // length cont <= div, so it stays within [k*div, (k+1)*div - 1] which
+    // never spans zero.
     if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
         AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
-      constancy = std::max(constancy,
-                           gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
-                               rhs.getDivisibility(dim)));
+      if constexpr (!std::is_same_v<OpTy, arith::DivSIOp>) {
+        constancy = std::max(constancy, gcd(lhs.getContiguity(dim),
+                                            lhs.getDivisibility(dim),
+                                            rhs.getDivisibility(dim)));
+      } else if (lhs.getDivisibility(dim) >= lhs.getContiguity(dim)) {
+        constancy = std::max(constancy, gcd(lhs.getContiguity(dim),
+                                            lhs.getDivisibility(dim),
+                                            rhs.getDivisibility(dim)));
+      }
     }
     return constancy;
   }
@@ -506,10 +522,22 @@ private:
     // The minimal contiguity is gcd(d_lhs, d_rhs).
     // Since gcd(d_lhs, d_rhs) maybe > len(lhs),
     // we need to use another gcd to get the actual contiguity.
+    //
+    // NOTE: For signed remainder (RemSIOp), the contiguity pattern breaks
+    // at the zero crossing because srem produces negative results for
+    // negative dividends: srem([-2, -1, 0, 1], 2) = [0, -1, 0, 1]
+    // For signed remainder, we can still apply this optimization when the
+    // contiguous window is guaranteed not to cross zero (divisibility >=
+    // contiguity ensures the window stays within one sign region).
     if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
         AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
-      contiguity = gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
-                       rhs.getDivisibility(dim));
+      if constexpr (!std::is_same_v<OpTy, arith::RemSIOp>) {
+        contiguity = gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
+                         rhs.getDivisibility(dim));
+      } else if (lhs.getDivisibility(dim) >= lhs.getContiguity(dim)) {
+        contiguity = gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
+                         rhs.getDivisibility(dim));
+      }
     }
     return contiguity;
   }
@@ -966,8 +994,12 @@ public:
                                   rhsInfo.getConstancy(d), condConstancy[d]));
           contiguity.push_back(gcd(lhsInfo.getContiguity(d),
                                    rhsInfo.getContiguity(d), condConstancy[d]));
+          // getDivisibilityFromContiguity does not see condConstancy; clamp
+          // by the just-computed output contiguity so the result remains
+          // sound when condConstancy reduces it below the input contiguities.
           divisibility.push_back(
-              getDivisibilityFromContiguity(lhsInfo, rhsInfo, d));
+              gcd(getDivisibilityFromContiguity(lhsInfo, rhsInfo, d),
+                  contiguity.back()));
         }
       }
       if (lhsInfo.getConstantValue().has_value() &&

@@ -427,7 +427,7 @@ def TritonGEN_PredicatedLoadOp
     conditionally based on the predicate. If the predicate is true, the value
     is loaded from the specified pointer; otherwise, a default value is used.
   }];
-  let arguments = (ins Arg<LLVM_AnyPointer, "", [MemRead]>:$ptr, I64:$alignment,
+  let arguments = (ins Arg<LLVM_AnyPointer, "", [MemRead]>:$ptr,
       I1:$predicate, AnyType:$default_value,
       DefaultValuedAttr<TritonGEN_LoadCacheControl,
                         "::mlir::triton::TritonGEN::LoadCacheControl::"
@@ -448,7 +448,7 @@ def TritonGEN_PredicatedStoreOp
     is stored to the specified pointer; otherwise, no operation is performed.
   }];
   let arguments = (ins Arg<LLVM_AnyPointer, "", [MemWrite]>:$ptr,
-      AnyType:$value, I64:$alignment, I1:$predicate,
+      AnyType:$value, I1:$predicate,
       DefaultValuedAttr<TritonGEN_StoreCacheControl,
                         "::mlir::triton::TritonGEN::StoreCacheControl::"
                         "DEFAULT">:$cache_control);
@@ -456,6 +456,32 @@ def TritonGEN_PredicatedStoreOp
   let assemblyFormat = [{
     operands ` ` `{` `cache_control` `=` $cache_control `}` attr-dict `:` functional-type(operands, results)
   }];
+}
+
+def TritonGEN_SubGroupBitcastShuffleOp
+    : TritonGEN_Op<"sub_group_bitcast_shuffle"> {
+  let summary = "Sub-group bitcast shuffle";
+
+  let description = [{
+    The `triton_gen.sub_group_bitcast_shuffle` broadcasts and reinterprets a
+    vector of values across work-items in a sub-group. Each work-item provides
+    an input vector which is reinterpreted as an output vector with a different
+    element type but equal total bit size.
+
+    Example:
+    ```mlir
+    %0 = triton_gen.sub_group_bitcast_shuffle %val : vector<4xi8> -> vector<2xi16>
+    ```
+  }];
+
+  let arguments = (ins FixedVectorOfNonZeroRankOf<[AnyInteger]>:$value);
+  let results = (outs FixedVectorOfNonZeroRankOf<[AnyInteger]>:$result);
+
+  let assemblyFormat = [{
+    $value attr-dict `:` type($value) `->` type($result)
+  }];
+
+  let hasVerifier = 1;
 }
 
 def TritonGEN_FToTf32Op

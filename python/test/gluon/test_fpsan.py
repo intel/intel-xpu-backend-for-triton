@@ -160,6 +160,11 @@ def _expected_sub_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarray:
     return _payload_u32_to_f32_bits_i32(x_u32 - y_u32)
 
 
+def _expected_neg_i32(x_i32: np.ndarray) -> np.ndarray:
+    x_u32 = _mix_f32_bits_to_payload_u32(x_i32).astype(np.uint64)
+    return _payload_u32_to_f32_bits_i32(np.uint64(0) - x_u32)
+
+
 def _expected_mul_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarray:
     x_u32 = _mix_f32_bits_to_payload_u32(x_i32).astype(np.uint64)
     y_u32 = _mix_f32_bits_to_payload_u32(y_i32).astype(np.uint64)
@@ -507,6 +512,40 @@ def _reciprocal_involution_kernel(x_ptr, out_ptr, n_elements, BLOCK: gl.constexp
     gl.store(out_ptr + offs, z, mask=mask)
 
 
+@gluon.jit
+def _expect_zero_upper_triangle_kernel(x_ptr, out_ptr, N: gl.constexpr, THREADS_PER_WARP: gl.constexpr):
+    layout: gl.constexpr = gl.BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [4, 1], [1, 0])
+    row = gl.arange(0, N, layout=gl.SliceLayout(1, layout))[:, None]
+    col = gl.arange(0, N, layout=gl.SliceLayout(0, layout))[None, :]
+    upper_triangle = col > row
+    x = gl.load(x_ptr + row * N + col)
+    x = gl.where(upper_triangle, x - 1.0e30, x)
+    y = gl.exp(x)
+    y = gl.expect_zero(y, upper_triangle)
+    gl.store(out_ptr + row * N + col, y)
+
+
+def test_expect_zero_upper_triangle_exp(device, fresh_knobs):
+    _require_backend(device)
+
+    N = 32
+    torch.manual_seed(0)
+    x = torch.randn((N, N), dtype=torch.float32, device=device)
+    regular_out = torch.empty_like(x)
+    fpsan_out = torch.empty_like(x)
+    upper_triangle = torch.triu(torch.ones_like(x, dtype=torch.bool), diagonal=1)
+
+    fresh_knobs.compilation.instrumentation_mode = ""
+    _expect_zero_upper_triangle_kernel[(1, )](x, regular_out, N=N, THREADS_PER_WARP=THREADS_PER_WARP)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+    _expect_zero_upper_triangle_kernel[(1, )](x, fpsan_out, N=N, THREADS_PER_WARP=THREADS_PER_WARP)
+
+    assert torch.equal(regular_out[upper_triangle], torch.zeros_like(regular_out[upper_triangle]))
+    assert torch.equal(fpsan_out[upper_triangle], torch.zeros_like(fpsan_out[upper_triangle]))
+    assert not torch.equal(regular_out, fpsan_out)
+
+
 @pytest.mark.parametrize("op", ["mul_one", "add_zero"])
 def test_constant_identity_noop(device, op, fresh_knobs):
     _require_backend(device)
@@ -644,7 +683,10 @@ def _unary_math_kernel(x_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOCK: gl.c
     offs = pid * BLOCK + gl.arange(0, BLOCK, layout=layout)
     mask = offs < n_elements
     x = gl.load(x_ptr + offs, mask=mask, other=0.0)
-    z = getattr(gl, OP)(x)
+    if OP == "neg":
+        z = -x
+    else:
+        z = getattr(gl, OP)(x)
     gl.store(out_ptr + offs, z, mask=mask)
 
 
@@ -745,6 +787,7 @@ def _cossin_identity_kernel(x_ptr, y_ptr, lhs_ptr, rhs_ptr, n_elements, MODE: gl
     [
         "exp",
         "exp2",
+        "neg",
         "log",
         "log2",
         "cos",
@@ -786,6 +829,8 @@ def test_unary_math_identity(device, op, fresh_knobs):
         exp_bits = _expected_exp_i32(x_bits)
     elif op == "exp2":
         exp_bits = _expected_exp2_i32(x_bits)
+    elif op == "neg":
+        exp_bits = _expected_neg_i32(x_bits)
     elif op == "cos":
         exp_bits = _expected_cos_i32(x_bits)
     elif op == "sin":
@@ -1284,6 +1329,19 @@ def _mm_payload_u32(a_i32: np.ndarray, b_i32: np.ndarray, c_i32: np.ndarray = No
     return _unmix_payload_u32_to_f32_bits_i32(out.astype(np.uint32))
 
 
+def _bmm_payload_u32(a_i32: np.ndarray, b_i32: np.ndarray, c_i32: np.ndarray = None) -> np.ndarray:
+    assert a_i32.ndim == 3
+    assert b_i32.ndim == 3
+    assert c_i32 is None or c_i32.ndim == 3
+    assert a_i32.shape[0] == b_i32.shape[0]
+    assert c_i32 is None or a_i32.shape[0] == c_i32.shape[0]
+    out = np.empty((a_i32.shape[0], a_i32.shape[1], b_i32.shape[2]), dtype=np.int32)
+    for batch in range(a_i32.shape[0]):
+        c_batch = c_i32[batch] if c_i32 is not None else None
+        out[batch] = _mm_payload_u32(a_i32[batch], b_i32[batch], c_batch)
+    return out
+
+
 def _unpack_element(data: np.ndarray, row: int, col: int, pack: int, pack_axis: int = 1) -> np.uint64:
     if pack_axis == 1:
         raw = np.uint64(data[row, col // pack])
@@ -1433,7 +1491,7 @@ def _mm_scaled_payload_u32(a_u8: np.ndarray, b_u8: np.ndarray, a_scale_u8: np.nd
 
 def test_dot_fma(device, fresh_knobs):
     if device != "cuda":
-        pytest.skip("dot_fma not yet supported on non-CUDA backends")
+        pytest.xfail("dot_fma not yet supported on non-CUDA backends")
     _require_backend(device)
 
     B = 16
@@ -1480,7 +1538,68 @@ def test_dot_fma(device, fresh_knobs):
     cw = triton.TensorWrapper(c, dtype=torch.float32)
     outw = triton.TensorWrapper(out, dtype=torch.float32)
 
-    kernel[(1, )](aw, bw, cw, outw, THREADS_PER_WARP=THREADS_PER_WARP)
+    compiled = kernel[(1, )](aw, bw, cw, outw, THREADS_PER_WARP=THREADS_PER_WARP)
+    ttgir = compiled.asm["ttgir"]
+    assert "ttng.tc_gen5_mma" not in ttgir
+    assert "ttng.warp_group_dot" not in ttgir
+
+    _assert_payload_equal(out, exp_bits)
+
+
+def test_dot_fma_batched(device, fresh_knobs):
+    if device != "cuda":
+        pytest.skip("dot_fma not yet supported on non-CUDA backends")
+    _require_backend(device)
+
+    BATCH_SIZE = 2
+    B = 16
+    BATCH = gl.constexpr(BATCH_SIZE)
+    BLOCK = gl.constexpr(B)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, c_ptr, out_ptr, THREADS_PER_WARP: gl.constexpr):
+        layout: gl.constexpr = gl.BlockedLayout([1, 1, 1], [1, THREADS_PER_WARP, 1], [1, 4, 1], [2, 1, 0])
+        lhs_layout: gl.constexpr = gl.DotOperandLayout(parent=layout, operand_index=0, k_width=0)
+        rhs_layout: gl.constexpr = gl.DotOperandLayout(parent=layout, operand_index=1, k_width=0)
+
+        offs_batch = gl.arange(0, BATCH, layout=gl.SliceLayout(1, parent=gl.SliceLayout(2, layout)))[:, None, None]
+        offs_m = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, parent=gl.SliceLayout(2, layout)))[None, :, None]
+        offs_n = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, parent=gl.SliceLayout(1, layout)))[None, None, :]
+        offs_k_a = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, parent=gl.SliceLayout(1, layout)))[None, None, :]
+        offs_k_b = gl.arange(0, BLOCK, layout=gl.SliceLayout(0, parent=gl.SliceLayout(2, layout)))[None, :, None]
+
+        a_offs = offs_batch * BLOCK * BLOCK + offs_m * BLOCK + offs_k_a
+        b_offs = offs_batch * BLOCK * BLOCK + offs_k_b * BLOCK + offs_n
+        out_offs = offs_batch * BLOCK * BLOCK + offs_m * BLOCK + offs_n
+
+        a = gl.convert_layout(gl.load(a_ptr + a_offs), lhs_layout)
+        b = gl.convert_layout(gl.load(b_ptr + b_offs), rhs_layout)
+        c = gl.load(c_ptr + out_offs)
+        out = gl.dot_fma(a, b, c)
+        gl.store(out_ptr + out_offs, out)
+
+    rs = np.random.RandomState(1)
+    a_bits = rs.randint(-(2**31), 2**31 - 1, size=(BATCH_SIZE, B, B), dtype=np.int32)
+    b_bits = rs.randint(-(2**31), 2**31 - 1, size=(BATCH_SIZE, B, B), dtype=np.int32)
+    c_bits = rs.randint(-(2**31), 2**31 - 1, size=(BATCH_SIZE, B, B), dtype=np.int32)
+    exp_bits = _bmm_payload_u32(a_bits, b_bits, c_bits)
+
+    a = torch.tensor(a_bits, device=device, dtype=torch.int32)
+    b = torch.tensor(b_bits, device=device, dtype=torch.int32)
+    c = torch.tensor(c_bits, device=device, dtype=torch.int32)
+    out = torch.empty((BATCH_SIZE, B, B), device=device, dtype=torch.int32)
+
+    aw = triton.TensorWrapper(a, dtype=torch.float32)
+    bw = triton.TensorWrapper(b, dtype=torch.float32)
+    cw = triton.TensorWrapper(c, dtype=torch.float32)
+    outw = triton.TensorWrapper(out, dtype=torch.float32)
+
+    compiled = kernel[(1, )](aw, bw, cw, outw, THREADS_PER_WARP=THREADS_PER_WARP)
+    ttgir = compiled.asm["ttgir"]
+    assert "ttng.tc_gen5_mma" not in ttgir
+    assert "ttng.warp_group_dot" not in ttgir
 
     _assert_payload_equal(out, exp_bits)
 
@@ -2021,7 +2140,7 @@ def test_reduction_matches_loop(device, fresh_knobs):
     _assert_payload_equal(reduce_out, loop_out)
 
 
-@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
+@pytest.mark.xfail(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4", run=False)
 def test_mfma_dot(device, fresh_knobs):
     _require_backend(device)
 
@@ -2082,7 +2201,7 @@ def test_mfma_dot(device, fresh_knobs):
     _assert_payload_equal(out, exp_bits)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires gfx1250")
+@pytest.mark.xfail(not is_hip_gfx1250(), reason="Requires gfx1250", run=False)
 def test_wmma_dot(device, fresh_knobs):
     _require_backend(device)
 

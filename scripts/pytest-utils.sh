@@ -139,16 +139,23 @@ capture_runtime_env() {
 
 ensure_spirv_dis() {
     # Does not work on Windows
-    if [[ $OSTYPE = msys ]]; then
+    if [[ $OSTYPE = msys || $OSTYPE = cygwin ]]; then
         return
     fi
     export PATH="$HOME/.local/bin:$PATH"
-    local spirv_dis="$(which spirv-dis || true)"
-    if [[ $spirv_dis ]]; then
-        echo "Found spirv-dis at $spirv_dis"
-        return
-    fi
-    echo "Installing spirv-dis to $HOME/.local/bin"
+    # Build spirv-dis from source with SPV_INTEL_predicated_io support.
+    # FIXME: Switch back to Vulkan SDK tarball once the next SDK release includes
+    # SPV_INTEL_predicated_io support (KhronosGroup/SPIRV-Tools#6665).
+    # curl -sSL https://sdk.lunarg.com/sdk/download/latest/linux/vulkan-sdk.tar.xz | tar Jxf - -C $HOME/.local/bin --strip-components 3 --no-anchored spirv-dis
+    echo "Building spirv-dis from source to $HOME/.local/bin"
     mkdir -p ~/.local/bin
-    curl -sSL https://sdk.lunarg.com/sdk/download/latest/linux/vulkan-sdk.tar.xz | tar Jxf - -C $HOME/.local/bin --strip-components 3 --no-anchored spirv-dis
+    local build_dir
+    build_dir="$(mktemp -d)"
+    git clone https://github.com/KhronosGroup/SPIRV-Tools.git "$build_dir/SPIRV-Tools"
+    git -C "$build_dir/SPIRV-Tools" checkout 4c2ec2a09b7fbeff1dc64cb9f857d77403a3c25f
+    python3 "$build_dir/SPIRV-Tools/utils/git-sync-deps"
+    cmake -B "$build_dir/build" -S "$build_dir/SPIRV-Tools" -DCMAKE_BUILD_TYPE=Release -DSPIRV_SKIP_TESTS=ON
+    cmake --build "$build_dir/build" -j"$(nproc)" --target spirv-dis
+    cp "$build_dir/build/tools/spirv-dis" "$HOME/.local/bin/"
+    rm -rf "$build_dir"
 }

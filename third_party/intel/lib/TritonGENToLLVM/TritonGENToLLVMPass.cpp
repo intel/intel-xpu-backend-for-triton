@@ -36,7 +36,7 @@
 
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Tools/Sys/GetEnv.h"
 
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
@@ -1227,15 +1227,14 @@ struct TritonPredicatedLoadOpLowering
     Type resType = op.getRes().getType();
 
     // Create a call to the SPIR-V builtin for predicated load.
-    std::string typeMangling = getGenISATypeMangling(resType);
-    std::string funcName = "llvm.genx.GenISA.PredicatedLoad." + typeMangling +
-                           ".p1" + typeMangling + "." + typeMangling;
-    SmallVector<Type> argTypes{ptr_ty(ctx, 1), int_ty(64), int_ty(1), resType};
-    SmallVector<Value> args{op.getPtr(), op.getAlignment(), op.getPredicate(),
+    SmallVector<Type> argTypes{ptr_ty(ctx, 1), int_ty(1), resType};
+    std::string fnName = "__spirv_PredicatedLoadINTEL";
+    fnName = intel::mangle(fnName, argTypes);
+    SmallVector<Value> args{op.getPtr(), op.getPredicate(),
                             op.getDefaultValue()};
 
     LLVM::CallOp callOp = intel::createDeviceFunctionCall(
-        rewriter, funcName, resType, argTypes, args, {},
+        rewriter, fnName, resType, argTypes, args, {},
         intel::noUnwindWillReturnAttrs);
 
     if (std::optional<TritonGEN::DecorationCacheControlAttr> optCacheControls =
@@ -1263,18 +1262,13 @@ struct TritonPredicatedStoreOpLowering
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     Type valType = op.getValue().getType();
     // Create a call to the SPIR-V builtin for predicated store.
-    std::string typeMangling = getGenISATypeMangling(valType);
-    std::string ptrTypeMangling = getGenISATypeMangling(valType);
-    if (auto vecTy = dyn_cast<VectorType>(valType))
-      ptrTypeMangling = getGenISATypeMangling(vecTy.getElementType());
-    std::string funcName = "llvm.genx.GenISA.PredicatedStore.p1" +
-                           ptrTypeMangling + "." + typeMangling;
-    SmallVector<Type> argTypes{ptr_ty(ctx, 1), valType, int_ty(64), int_ty(1)};
-    SmallVector<Value> args{op.getPtr(), op.getValue(), op.getAlignment(),
-                            op.getPredicate()};
+    SmallVector<Type> argTypes{ptr_ty(ctx, 1), valType, int_ty(1)};
+    std::string fnName = "__spirv_PredicatedStoreINTEL";
+    fnName = intel::mangle(fnName, argTypes);
+    SmallVector<Value> args{op.getPtr(), op.getValue(), op.getPredicate()};
 
     LLVM::CallOp callOp = intel::createDeviceFunctionCall(
-        rewriter, funcName, void_ty(ctx), argTypes, args, {},
+        rewriter, fnName, void_ty(ctx), argTypes, args, {},
         intel::noUnwindWillReturnAttrs);
 
     if (std::optional<TritonGEN::DecorationCacheControlAttr> optCacheControls =
@@ -1313,6 +1307,29 @@ struct TritonFToTf32OpLowering
         rewriter, fnName, retType, {argTypes}, {args}, {},
         intel::noUnwindWillReturnAttrs);
     rewriter.replaceOp(op, callOp);
+    return success();
+  }
+};
+
+struct TritonSubGroupBitcastShuffleLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::SubGroupBitcastShuffleOp> {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::SubGroupBitcastShuffleOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::SubGroupBitcastShuffleOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Type inputType = op.getValue().getType();
+    Type resultType = op.getResult().getType();
+
+    std::string funcName = "llvm.genx.GenISA.SubgroupBitcastShuffle." +
+                           getGenISATypeMangling(resultType) + "." +
+                           getGenISATypeMangling(inputType);
+
+    LLVM::CallOp call = intel::createDeviceFunctionCall(
+        rewriter, funcName, resultType, {inputType}, {op.getValue()}, {},
+        intel::convergentNoUnwindWillReturnAttrs);
+    rewriter.replaceOp(op, call.getResult());
     return success();
   }
 };
@@ -1362,10 +1379,11 @@ void mlir::triton::populateTritonGENToLLVMConversionPatterns(
       .add<TritonMatrix2DBlockLoadLowering, TritonMatrix2DBlockStoreLowering,
            TritonMatrix2DBlockPrefetchLowering>(converter, emitter);
 
-  patterns.add<TritonSplitBarrierArriveLowering, TritonSplitBarrierWaitLowering,
-               TritonMatrixDPASLowering, TritonMatrixBlockScaleDPASLowering,
-               TritonSubGroupBlockReadLowering,
-               TritonSubGroupBlockWriteLowering, TritonPredicatedLoadOpLowering,
-               TritonPredicatedStoreOpLowering, TritonFToTf32OpLowering>(
-      converter);
+  patterns
+      .add<TritonSplitBarrierArriveLowering, TritonSplitBarrierWaitLowering,
+           TritonMatrixDPASLowering, TritonMatrixBlockScaleDPASLowering,
+           TritonSubGroupBlockReadLowering, TritonSubGroupBlockWriteLowering,
+           TritonPredicatedLoadOpLowering, TritonPredicatedStoreOpLowering,
+           TritonFToTf32OpLowering, TritonSubGroupBitcastShuffleLowering>(
+          converter);
 }

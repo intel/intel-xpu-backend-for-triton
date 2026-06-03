@@ -39,8 +39,8 @@ bool areSafeToOverlapSubGroupTransposeOps(Operation *lhsOp, Operation *rhsOp) {
 
   // Check the types of source and result are the same, i.e., we are expressing
   // the same kind of transposition.
-  if (lhsTranspose.getSrc().getType() != lhsTranspose.getSrc().getType() ||
-      lhsTranspose.getResult().getType() != lhsTranspose.getResult().getType())
+  if (lhsTranspose.getSrc().getType() != rhsTranspose.getSrc().getType() ||
+      lhsTranspose.getResult().getType() != rhsTranspose.getResult().getType())
     return false;
 
   // Check both have the same offset and thus these operation can be overlapped.

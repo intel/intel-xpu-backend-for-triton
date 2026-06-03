@@ -32,6 +32,12 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.support_16bit_atomics";
     }
 
+    /// Get the name of the attribute used to indicate whether the sigmoid
+    /// operation is available.
+    static constexpr llvm::StringRef getSupportSigmoidAttrName() {
+      return "ttig.support_sigmoid";
+    }
+
     /// Get the name of the attribute used to indicate whether subgroup 2D block
     /// operations (e.g., 2D block read/write) are available.
     static constexpr llvm::StringRef getSupport2DBlockIOAttrName() {
@@ -127,6 +133,14 @@ def TritonIntelGPU_Dialect : Dialect {
     /// and sqrt operations are available.
     static constexpr llvm::StringRef getSupportRoundedDivideSqrtAttrName() {
       return "ttig.support_rounded_divide_sqrt";
+    }
+
+    /// Get the name of the attribute used to indicate that the
+    /// -cl-fp32-correctly-rounded-divide-sqrt build flag will be applied,
+    /// i.e. the kernel runs on an LTS driver and contains only precise
+    /// div/sqrt ops (no regular arith::DivFOp or math::SqrtOp).
+    static constexpr llvm::StringRef getUseClRoundedDivideSqrtAttrName() {
+      return "ttig.use_cl_rounded_divide_sqrt";
     }
 
     /// FIXME: Remove once IGC can split large 2D block loads.

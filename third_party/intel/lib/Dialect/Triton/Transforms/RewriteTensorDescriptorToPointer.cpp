@@ -7,7 +7,7 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/Transforms/ArithTypeConversion.h"
 #include "triton/Dialect/Triton/Transforms/FunctionTypeConversion.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Tools/Sys/GetEnv.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/Transforms/FuncConversions.h"
@@ -1104,21 +1104,16 @@ class TritonRewriteTensorDescriptorToPointerPass
         unhandledMakeTensorDescOps;
     op->walk([&](Operation *op) {
       TypeSwitch<Operation *>(op)
-          .Case<triton::DescriptorLoadOp,
-                triton::DescriptorStoreOp>([&](auto op) {
-            auto makeTensorDescOp =
-                triton::intel::findDefiningOpOfType<triton::MakeTensorDescOp>(
-                    op.getDesc());
-            if (makeTensorDescOp.has_value())
-              candidateMakeTensorDescOps.insert(*makeTensorDescOp);
-          })
+          .Case<triton::DescriptorLoadOp, triton::DescriptorStoreOp>(
+              [&](auto op) {
+                for (auto d :
+                     triton::intel::findAllMakeTensorDescOps(op.getDesc()))
+                  candidateMakeTensorDescOps.insert(d);
+              })
           .Case<triton::DescriptorGatherOp, triton::DescriptorScatterOp,
                 triton::DescriptorReduceOp>([&](auto op) {
-            auto makeTensorDescOp =
-                triton::intel::findDefiningOpOfType<triton::MakeTensorDescOp>(
-                    op.getDesc());
-            if (makeTensorDescOp.has_value())
-              unhandledMakeTensorDescOps.insert(*makeTensorDescOp);
+            for (auto d : triton::intel::findAllMakeTensorDescOps(op.getDesc()))
+              unhandledMakeTensorDescOps.insert(d);
           })
           .Default([](auto) {});
       return WalkResult::advance();
@@ -1127,26 +1122,37 @@ class TritonRewriteTensorDescriptorToPointerPass
       candidateMakeTensorDescOps.remove(op);
 
     mlir::ConversionTarget target(getContext());
-    target.addDynamicallyLegalDialect<
-        mlir::arith::ArithDialect, mlir::scf::SCFDialect,
-        mlir::triton::TritonDialect>([&](mlir::Operation *op) {
-      if (!hasATensorDescriptorType(op->getOperandTypes()) &&
-          !hasATensorDescriptorType(op->getResultTypes()))
-        return true;
+    target.addDynamicallyLegalDialect<mlir::arith::ArithDialect,
+                                      mlir::scf::SCFDialect,
+                                      mlir::triton::TritonDialect>(
+        [&](mlir::Operation *op) {
+          if (!hasATensorDescriptorType(op->getOperandTypes()) &&
+              !hasATensorDescriptorType(op->getResultTypes()))
+            return true;
 
-      return TypeSwitch<Operation *, bool>(op)
-          .Case<triton::MakeTensorDescOp>(
-              [&](auto op) { return candidateMakeTensorDescOps.contains(op); })
-          .Case<triton::DescriptorLoadOp,
-                triton::DescriptorStoreOp>([&](auto op) {
-            auto makeTensorDescOp =
-                triton::intel::findDefiningOpOfType<triton::MakeTensorDescOp>(
-                    op.getDesc());
-            return makeTensorDescOp.has_value() &&
-                   candidateMakeTensorDescOps.contains(*makeTensorDescOp);
-          })
-          .Default([](auto) { return false; });
-    });
+          // Check if all tensor descriptor values in the op trace back to
+          // candidate MakeTensorDescOps.
+          auto allDescValuesAreCandidate = [&](Operation *op) {
+            for (Value operand : op->getOperands()) {
+              if (!isa<triton::TensorDescType>(operand.getType()))
+                continue;
+              auto allDescs = triton::intel::findAllMakeTensorDescOps(operand);
+              if (allDescs.empty())
+                return false;
+              if (!llvm::all_of(allDescs, [&](auto d) {
+                    return candidateMakeTensorDescOps.contains(d);
+                  }))
+                return false;
+            }
+            return true;
+          };
+
+          return TypeSwitch<Operation *, bool>(op)
+              .Case<triton::MakeTensorDescOp>([&](auto op) {
+                return candidateMakeTensorDescOps.contains(op);
+              })
+              .Default([&](auto *op) { return allDescValuesAreCandidate(op); });
+        });
     target.addDynamicallyLegalOp<triton::FuncOp>([](triton::FuncOp funcOp) {
       return !hasATensorDescriptorType(funcOp.getFunctionType().getInputs()) &&
              !hasATensorDescriptorType(funcOp.getFunctionType().getResults());

@@ -5,6 +5,7 @@ import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton._internal_testing import is_xpu, is_cuda, is_hip, is_hopper_or_newer, get_hip_lds_size
+from triton._C.libtriton.gluon_ir import make_cga_layout
 from triton.experimental.gluon.language.amd.gfx1250 import PartitionedSharedLayout
 
 THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
@@ -38,9 +39,41 @@ def _filter_layouts(layouts):
     return [l for l in layouts if _is_layout_applicable(l)]
 
 
+@gluon.constexpr_function
+def _make_cga_broadcast(rank: ttgl.constexpr, num_ctas: ttgl.constexpr):
+    if num_ctas == 1:
+        return []
+    n = num_ctas.bit_length() - 1
+    return [[0] * rank for _ in range(n)]
+
+
 @gluon.jit
 def _combine(a, b):
     return a + b
+
+
+@gluon.jit
+def convert_1d_to_2d_slice_cga_kernel(out, HEAD: ttgl.constexpr, NUM_CTAS: ttgl.constexpr):
+    layout_d: ttgl.constexpr = ttgl.BlockedLayout(
+        [1],
+        [32],
+        [ttgl.num_warps()],
+        [0],
+        _make_cga_broadcast(1, NUM_CTAS),
+    )
+    layout_nd: ttgl.constexpr = ttgl.BlockedLayout(
+        [1, 1],
+        [1, 32],
+        [ttgl.num_warps(), 1],
+        [1, 0],
+        _make_cga_broadcast(2, NUM_CTAS),
+    )
+
+    d = ttgl.arange(0, HEAD, layout=layout_d)
+    x = d.to(ttgl.float32)
+    dd = ttgl.arange(0, HEAD, layout=ttgl.SliceLayout(0, layout_nd))
+    y = ttgl.convert_layout(x, ttgl.SliceLayout(0, layout_nd))
+    ttgl.store(out + dd, y)
 
 
 @gluon.jit
@@ -128,6 +161,17 @@ def test_scan_blocked_broadcast_layout_multiblock(device):
     scan_kernel[(1, )](x, y, M, 1, src_layout, 0, num_warps=2)
 
     torch.testing.assert_close(y, torch.cumsum(x, dim=0))
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("num_ctas", [2, 4, 8])
+def test_convert_1d_to_2d_slice_cga(num_ctas, device):
+    head = 64
+    out = torch.empty((head, ), device=device, dtype=torch.float32)
+
+    convert_1d_to_2d_slice_cga_kernel[(1, )](out, head, num_ctas, num_warps=2, num_ctas=num_ctas)
+
+    torch.testing.assert_close(out, torch.arange(head, device=device, dtype=torch.float32))
 
 
 def _swizzled_warp_layouts_1d():
@@ -412,6 +456,120 @@ def test_broadcast_generic_linear(src_layout, device):
     z = torch.zeros((M, N), dtype=torch.float32, device=device)
     kernel[(1, )](x, y, z, M, N, src_layout, num_warps=num_warps)
     torch.testing.assert_close(z, x[:, None] + y[None, :])
+
+
+def _shared_layout_kinds():
+    kinds = ["swizzled_trivial", "swizzled", "padded"]
+    if is_hip():
+        kinds += ["partitioned_swizzled", "partitioned_padded"]
+    return kinds
+
+
+def _make_shared_layout(kind, shape):
+    order = list(reversed(range(len(shape))))
+    if kind == "swizzled_trivial":
+        return ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=order)
+    if kind == "swizzled":
+        return ttgl.SwizzledSharedLayout(vec=4, per_phase=2, max_phase=4, order=order)
+    if kind == "padded":
+        return ttgl.PaddedSharedLayout.with_identity_for(interval_padding_pairs=[[16, 4]], shape=list(shape),
+                                                         order=order)
+    if kind == "partitioned_swizzled":
+        inner = ttgl.SwizzledSharedLayout(vec=4, per_phase=2, max_phase=4, order=order)
+        return PartitionedSharedLayout(num_partitions=2, num_groups=1, partition_dim=0, partition_layout=inner)
+    if kind == "partitioned_padded":
+        inner = ttgl.PaddedSharedLayout.with_identity_for(interval_padding_pairs=[[16, 4]], shape=list(shape),
+                                                          order=order)
+        return PartitionedSharedLayout(num_partitions=2, num_groups=1, partition_dim=0, partition_layout=inner)
+    raise ValueError(f"Unknown shared layout kind: {kind}")
+
+
+@pytest.mark.parametrize("src_layout", _filter_layouts(_swizzled_warp_layouts()))
+@pytest.mark.parametrize("shared_kind", _shared_layout_kinds())
+def test_local_load_store_generic_linear(src_layout, shared_kind, device):
+    """Round-trip through shared memory using a swizzled/non-injective DistributedLinearLayout.
+
+    Exercises local_store (smem.store) and local_load (smem.load) lowerings for
+    GenericLinearEncoding sources across various shared-memory layouts.
+    """
+    shape = tuple(src_layout.shape)
+    shared_layout = _make_shared_layout(shared_kind, shape)
+    num_warps = 2**len(src_layout.warp_bases)
+
+    @gluon.jit
+    def kernel(x_ptr, y_ptr, shape: ttgl.constexpr, layout: ttgl.constexpr, shared_layout: ttgl.constexpr):
+        if len(shape) == 1:
+            offs = ttgl.arange(0, shape[0], layout=layout)
+        else:
+            offs_m = ttgl.arange(0, shape[0], layout=ttgl.SliceLayout(1, layout))[:, None]
+            offs_n = ttgl.arange(0, shape[1], layout=ttgl.SliceLayout(0, layout))[None, :]
+            offs = offs_m * shape[1] + offs_n
+        x = ttgl.load(x_ptr + offs)
+        smem = ttgl.allocate_shared_memory(x.dtype, shape, shared_layout)
+        smem.store(x)
+        y = smem.load(layout)
+        ttgl.store(y_ptr + offs, y)
+
+    torch.manual_seed(0)
+    x = torch.randn(shape, dtype=torch.float32, device=device)
+    y = torch.empty_like(x)
+    kernel[(1, )](x, y, shape, src_layout, shared_layout, num_warps=num_warps)
+
+    torch.testing.assert_close(y, x)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+def test_local_store_tmem_32x32b_2cta_splitm_to_splitk(device):
+    shape = (256, 128)
+    src_layout = ttgl.DistributedLinearLayout(
+        reg_bases=[[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [128, 0]],
+        lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]],
+        warp_bases=[[32, 0], [64, 0]],
+        block_bases=[[0, 64]],
+        shape=list(shape),
+    )
+    dst_layout = ttgl.BlockedLayout(
+        size_per_thread=[1, shape[1]],
+        threads_per_warp=[THREADS_PER_WARP, 1],
+        warps_per_cta=[4, 1],
+        order=[0, 1],
+        cga_layout=[[1, 0]],
+    )
+    shared_layout = ttgl.NVMMASharedLayout(
+        swizzle_byte_width=128,
+        transposed=False,
+        element_bitwidth=16,
+        rank=2,
+        cga_layout=[[1, 0]],
+    )
+
+    @gluon.jit
+    def kernel(x_ptr, y_ptr, shape: ttgl.constexpr, src_layout: ttgl.constexpr, dst_layout: ttgl.constexpr,
+               shared_layout: ttgl.constexpr):
+        K: ttgl.constexpr = shape[0]
+        M: ttgl.constexpr = shape[1]
+        src_offs_k = ttgl.arange(0, K, layout=ttgl.SliceLayout(1, src_layout))[:, None]
+        src_offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(0, src_layout))[None, :]
+        src_offs = src_offs_k * M + src_offs_m
+
+        x = ttgl.load(x_ptr + src_offs)
+        smem = ttgl.allocate_shared_memory(x.dtype, shape, shared_layout)
+        smem.store(x)
+        ttgl.barrier(cluster=True)
+        y = smem.load(dst_layout)
+
+        dst_offs_k = ttgl.arange(0, K, layout=ttgl.SliceLayout(1, dst_layout))[:, None]
+        dst_offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(0, dst_layout))[None, :]
+        dst_offs = dst_offs_k * M + dst_offs_m
+        ttgl.store(y_ptr + dst_offs, y)
+
+    torch.manual_seed(0)
+    x = torch.randn(shape, dtype=torch.float16, device=device)
+    y = torch.empty_like(x)
+
+    kernel[(1, )](x, y, shape, src_layout, dst_layout, shared_layout, num_warps=4, num_ctas=2)
+
+    torch.testing.assert_close(y, x, rtol=0, atol=0)
 
 
 def _funky_reduce_layouts():
@@ -801,12 +959,64 @@ _intermediate_layouts = _filter_layouts([
 ])
 
 
+def _with_cga_layout(layout, cga_layout):
+    if isinstance(layout, ttgl.BlockedLayout):
+        return ttgl.BlockedLayout(layout.size_per_thread, layout.threads_per_warp, layout.warps_per_cta, layout.order,
+                                  cga_layout=cga_layout)
+    if isinstance(layout, ttgl.NVMMADistributedLayout):
+        return ttgl.NVMMADistributedLayout(layout.version, layout.warps_per_cta, layout.instr_shape,
+                                           cga_layout=cga_layout)
+    if isinstance(layout, ttgl.DotOperandLayout):
+        return ttgl.DotOperandLayout(parent=_with_cga_layout(layout.parent, cga_layout),
+                                     operand_index=layout.operand_index, k_width=layout.k_width)
+    if isinstance(layout, ttgl.SliceLayout):
+        parent_cga_layout = [basis[:layout.dim] + [0] + basis[layout.dim:] for basis in cga_layout]
+        return ttgl.SliceLayout(dim=layout.dim, parent=_with_cga_layout(layout.parent, parent_cga_layout))
+    if isinstance(layout, ttgl.SwizzledSharedLayout):
+        return ttgl.SwizzledSharedLayout(layout.vec, layout.per_phase, layout.max_phase, layout.order,
+                                         cga_layout=cga_layout)
+    raise AssertionError(f"Unsupported multi-CTA layout {type(layout)}")
+
+
+_single_cta_convert2d_layout_cases = [(None, None, interm_layout, src_layout, dst_layout)
+                                      for interm_layout in _intermediate_layouts
+                                      for src_layout in _2d_layouts
+                                      for dst_layout in _2d_layouts]
+# Pair each layout with the next one so multi-CTA coverage stays small while every layout appears as source and dest.
+_multi_cta_2d_layout_pairs = list(zip(_2d_layouts, _2d_layouts[1:] + _2d_layouts[:1]))
+# Use different source/destination CGA shapes to cover CTA repartitioning during convert_layout.
+_multi_cta_cga_layout_pairs = [([1, 4], [2, 2]), ([4, 1], [2, 2])]
+_multi_cta_convert2d_layout_cases = [(src_ctas_per_cga, dst_ctas_per_cga, None, src_layout, dst_layout)
+                                     for src_ctas_per_cga, dst_ctas_per_cga in _multi_cta_cga_layout_pairs
+                                     for src_layout, dst_layout in _multi_cta_2d_layout_pairs]
+_convert2d_layout_cases = _single_cta_convert2d_layout_cases + _multi_cta_convert2d_layout_cases
+
+
 @pytest.mark.parametrize("M, N", [[64, 1], [64, 64], [64, 128], [1, 64]])
 @pytest.mark.parametrize("dtype", ["float16"])
-@pytest.mark.parametrize("src_layout", _2d_layouts)
-@pytest.mark.parametrize("interm_layout", _intermediate_layouts)
-@pytest.mark.parametrize("dst_layout", _2d_layouts)
-def test_convert2d_layouts(M, N, src_layout, interm_layout, dst_layout, dtype, device):
+@pytest.mark.parametrize("src_ctas_per_cga, dst_ctas_per_cga, interm_layout, src_layout, dst_layout",
+                         _convert2d_layout_cases)
+def test_convert2d_layouts(M, N, src_ctas_per_cga, dst_ctas_per_cga, interm_layout, src_layout, dst_layout, dtype,
+                           device):
+    num_ctas = 1
+    if src_ctas_per_cga is not None:
+        if not is_cuda() or not is_hopper_or_newer():
+            pytest.xfail("num_ctas > 1 requires NVIDIA Hopper or newer")
+        if M % src_ctas_per_cga[0] != 0 or N % src_ctas_per_cga[1] != 0:
+            pytest.xfail("Shape must be divisible by the source CGA shape")
+        if M % dst_ctas_per_cga[0] != 0 or N % dst_ctas_per_cga[1] != 0:
+            pytest.xfail("Shape must be divisible by the destination CGA shape")
+        if src_ctas_per_cga[0] * src_ctas_per_cga[1] != dst_ctas_per_cga[0] * dst_ctas_per_cga[1]:
+            pytest.xfail("Source and destination CGA shapes must have the same number of CTAs")
+        src_cga_layout = make_cga_layout(src_ctas_per_cga, src_ctas_per_cga, [1, 0])
+        dst_cga_layout = make_cga_layout(dst_ctas_per_cga, dst_ctas_per_cga, [1, 0])
+        num_ctas = src_ctas_per_cga[0] * src_ctas_per_cga[1]
+        src_layout = _with_cga_layout(src_layout, src_cga_layout)
+        dst_layout = _with_cga_layout(dst_layout, dst_cga_layout)
+    else:
+        if dst_ctas_per_cga is not None:
+            pytest.xfail("Destination CGA shape requires a source CGA shape")
+
     if str(src_layout) == str(dst_layout):
         pytest.xfail("Source and destination layouts are the same")
 
@@ -870,9 +1080,12 @@ def test_convert2d_layouts(M, N, src_layout, interm_layout, dst_layout, dtype, d
     torch_dtype = getattr(torch, dtype)
     x = torch.randn((M, N), dtype=torch_dtype, device=device)
     y = torch.zeros_like(x)
-    kernel[(1, )](x, y, M, N, src_layout, dst_layout, interm_layout)
+    compiled = kernel[(1, )](x, y, M, N, src_layout, dst_layout, interm_layout, num_ctas=num_ctas)
 
     torch.testing.assert_close(y, x, rtol=0, atol=0)
+    if src_ctas_per_cga != dst_ctas_per_cga:
+        assert "ld.shared::cluster" in compiled.asm["ptx"]
+        assert "st.shared::cluster" not in compiled.asm["ptx"]
 
 
 # MMA layout pairs for MMA-to-MMA conversion tests
@@ -1672,14 +1885,56 @@ def test_gather_layouts(axis, src_layout, index_layout, src_shape, idx_shape, de
 
 @pytest.mark.parametrize("M, N, M_tile_size, N_tile_size",
                          [[128, 128, 64, 64], [128, 128, 64, 32], [128, 64, 64, 32], [256, 128, 64, 64]])
-def test_memdesc_subslice(M, N, M_tile_size, N_tile_size, device):
+@pytest.mark.parametrize("shared_layout_cfg", [
+    pytest.param(("swizzled", None, None, None), id="swizzled"),
+    pytest.param(("partitioned-swizzled", 0, 2, 1), id="partitioned-swizzled-dim0-p2-g1"),
+    pytest.param(("partitioned-swizzled", 0, 2, 2), id="partitioned-swizzled-dim0-p2-g2"),
+    pytest.param(("partitioned-swizzled", 0, 4, 1), id="partitioned-swizzled-dim0-p4-g1"),
+    pytest.param(("partitioned-swizzled", 1, 2, 1), id="partitioned-swizzled-dim1-p2-g1"),
+    pytest.param(("partitioned-swizzled", 1, 2, 2), id="partitioned-swizzled-dim1-p2-g2"),
+    pytest.param(("partitioned-swizzled", 1, 4, 1), id="partitioned-swizzled-dim1-p4-g1"),
+    pytest.param(("partitioned-padded", 0, 2, 1), id="partitioned-padded-dim0-p2-g1"),
+    pytest.param(("partitioned-padded", 0, 2, 2), id="partitioned-padded-dim0-p2-g2"),
+    pytest.param(("partitioned-padded", 0, 4, 1), id="partitioned-padded-dim0-p4-g1"),
+    pytest.param(("partitioned-padded", 1, 2, 1), id="partitioned-padded-dim1-p2-g1"),
+    pytest.param(("partitioned-padded", 1, 2, 2), id="partitioned-padded-dim1-p2-g2"),
+    pytest.param(("partitioned-padded", 1, 4, 1), id="partitioned-padded-dim1-p4-g1"),
+])
+def test_memdesc_subslice(M, N, M_tile_size, N_tile_size, shared_layout_cfg, device):
     if M % M_tile_size != 0 or N % N_tile_size != 0:
         pytest.xfail(f"Shape size ({M}, {N}) must be divisible by tile size ({M_tile_size}, {N_tile_size})")
+
+    layout_type, partition_dim, num_partitions, num_groups = shared_layout_cfg
+    if layout_type == "swizzled":
+        shared_layout = ttgl.SwizzledSharedLayout(vec=8, per_phase=1, max_phase=8, order=[1, 0])
+    else:
+        assert layout_type in ("partitioned-swizzled", "partitioned-padded")
+        if not is_hip():
+            pytest.skip("PartitionedSharedLayout is supported only on AMD backend")
+        if layout_type == "partitioned-swizzled":
+            inner_layout = ttgl.SwizzledSharedLayout(vec=4, per_phase=2, max_phase=8, order=[1, 0])
+        else:
+            pad_interval, pad_amount = 16, 4
+            # Skip cases that would not fit in LDS on the current architecture.
+            elem_size = 2  # float16
+            padded_bytes = ((M * N * (pad_interval + pad_amount)) // pad_interval) * elem_size
+            if padded_bytes >= get_hip_lds_size():
+                pytest.skip(f"Partitioned-padded allocation ({padded_bytes} B) exceeds LDS ({get_hip_lds_size()} B)")
+            inner_layout = ttgl.PaddedSharedLayout.with_identity_for(
+                interval_padding_pairs=[[pad_interval, pad_amount]],
+                shape=[M, N],
+                order=[1, 0],
+            )
+        shared_layout = PartitionedSharedLayout(
+            num_partitions=num_partitions,
+            num_groups=num_groups,
+            partition_dim=partition_dim,
+            partition_layout=inner_layout,
+        )
 
     num_rows_per_warp = THREADS_PER_WARP // 4
     blocked_layout = ttgl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[num_rows_per_warp, 4],
                                         warps_per_cta=[4, 1], order=[1, 0])
-    shared_layout = ttgl.SwizzledSharedLayout(vec=8, per_phase=1, max_phase=8, order=[1, 0])
 
     @gluon.jit
     def kernel(
@@ -1712,6 +1967,55 @@ def test_memdesc_subslice(M, N, M_tile_size, N_tile_size, device):
     kernel[(1, )](out, M, N, M_tile_size, N_tile_size, blocked_layout, shared_layout)
 
     out_ref = torch.arange(0, M * N, device=device).reshape((M, N)).to(torch.float16)
+    torch.testing.assert_close(out, out_ref, rtol=0, atol=0)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="num_ctas > 1 requires NVIDIA SM90+ (Hopper)")
+def test_memdesc_subslice_two_cta_broadcasted_cga(device):
+    ALLOC = 512
+    SLICE = 256
+    NUM_CTAS = 2
+    alloc_layout = ttgl.BlockedLayout([4], [THREADS_PER_WARP], [4], [0], cga_layout=[[0]])
+    load_layout = ttgl.BlockedLayout([2], [THREADS_PER_WARP], [4], [0], cga_layout=[[0]])
+    store_layout = ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0], cga_layout=[[1]])
+    shared_layout = ttgl.SwizzledSharedLayout(
+        vec=1,
+        per_phase=1,
+        max_phase=1,
+        order=[0],
+        cga_layout=[[0]],
+    )
+
+    @gluon.jit
+    def kernel(
+        in_ptr,
+        out_ptr,
+        ALLOC: ttgl.constexpr,
+        SLICE: ttgl.constexpr,
+        alloc_layout: ttgl.constexpr,
+        load_layout: ttgl.constexpr,
+        store_layout: ttgl.constexpr,
+        shared_layout: ttgl.constexpr,
+    ):
+        alloc_offs = ttgl.arange(0, ALLOC, layout=alloc_layout)
+        vals = ttgl.load(in_ptr + alloc_offs)
+
+        smem = ttgl.allocate_shared_memory(vals.dtype, (ALLOC, ), shared_layout, value=vals)
+        ttgl.barrier(cluster=True)
+
+        tile = smem.slice(0, SLICE)
+        tile_vals = tile.load(load_layout)
+
+        store_offs = ttgl.arange(0, SLICE, layout=store_layout)
+        store_vals = ttgl.convert_layout(tile_vals, store_layout)
+        ttgl.store(out_ptr + store_offs, store_vals + store_offs + 1)
+
+    inp = torch.arange(0, ALLOC, device=device, dtype=torch.int32)
+    out = torch.zeros((SLICE, ), device=device, dtype=torch.int32)
+    kernel[(1, )](inp, out, ALLOC, SLICE, alloc_layout, load_layout, store_layout, shared_layout, num_warps=4,
+                  num_ctas=NUM_CTAS)
+
+    out_ref = inp[:SLICE] + torch.arange(1, SLICE + 1, device=device, dtype=torch.int32)
     torch.testing.assert_close(out, out_ref, rtol=0, atol=0)
 
 

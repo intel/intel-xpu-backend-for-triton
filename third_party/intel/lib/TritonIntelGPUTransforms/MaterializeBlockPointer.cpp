@@ -11,6 +11,7 @@
 #include "mlir/IR/Visitors.h"
 #include "mlir/Interfaces/CastInterfaces.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
 #include <optional>
@@ -30,6 +31,19 @@ namespace mlir::triton::gpu::intel {
 } // namespace mlir::triton::gpu::intel
 
 namespace {
+
+/// True if `TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS` is explicitly set to a
+/// falsy value. When that env var is "0" (e.g. on the CRI simulator to avoid
+/// a hang), `LoadStoreOpToLLVM.cpp::isBlockIOCandidate()` rejects non-DPAS
+/// 2D block loads/stores and they fall through to the regular gather, which
+/// cannot correctly handle the [H,W] register-strides-rows encoding produced
+/// by the 1D->2D reshape rewrites.
+static bool isBlockIOForAllLayoutsExplicitlyDisabled() {
+  auto enableBlockIOForAllLayout = tt::tools::isEnvValueBool(
+      tt::tools::getStrEnv("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS"));
+  return enableBlockIOForAllLayout.has_value() &&
+         !enableBlockIOForAllLayout.value();
+}
 
 struct TritonIntelGPUMaterializeBlockPointerPass
     : public triton::gpu::intel::impl::
@@ -85,23 +99,31 @@ private:
     LDBG("Considering descriptor op: " << *op);
 
     Value desc = op.getDesc();
-    // Find the make tensor desc operation that created the descriptor.
-    std::optional<tt::MakeTensorDescOp> defOp =
-        tt::intel::findDefiningOpOfType<tt::MakeTensorDescOp>(desc);
-    if (!defOp) {
-      LDBG("Could not find make tensor desc op for: " << *op);
+    // Find all MakeTensorDescOps that could define this descriptor.
+    SmallVector<tt::MakeTensorDescOp> allDescs =
+        tt::intel::findAllMakeTensorDescOps(desc);
+    if (allDescs.empty()) {
+      LDBG("Could not find any make tensor desc op for: " << *op);
       return;
     }
 
-    tt::MakeTensorDescOp makeTensorDescOp = *defOp;
+    tt::MakeTensorDescOp makeTensorDescOp = allDescs[0];
     LDBG("Make tensor desc op: " << makeTensorDescOp);
+
+    // All candidates must have the same padding.
+    tt::PaddingOption padding = makeTensorDescOp.getPadding();
+    if (!llvm::all_of(allDescs, [&](tt::MakeTensorDescOp d) {
+          return d.getPadding() == padding;
+        })) {
+      LDBG("Inconsistent padding across candidates");
+      return;
+    }
 
     // Propagate padding from MakeTensorDescOp unconditionally so the LLVM
     // lowering can read it even after MakeTensorDescOp has been converted
     // in the same applyPartialConversion phase.
-    op->setAttr(
-        ttgi::TritonIntelGPUDialect::getDescPaddingAttrName(),
-        tt::PaddingOptionAttr::get(context, makeTensorDescOp.getPadding()));
+    op->setAttr(ttgi::TritonIntelGPUDialect::getDescPaddingAttrName(),
+                tt::PaddingOptionAttr::get(context, padding));
 
     Operation::operand_range shape = makeTensorDescOp.getShape();
     unsigned rank = shape.size();
@@ -127,10 +149,12 @@ private:
            "Tensor descriptor must have stride=1 in last dimension");
 
     // Across Intel platforms, the strictest pitch restriction is to be a
-    // multiple of OWord(128 bits).
-    Value pitch = strides[rank - 2];
-    LDBG("Pitch: " << pitch);
-    if (!ttgi::isDivisible(pitch, llvm::divideCeil(128, elementWidth)))
+    // multiple of OWord(128 bits). All candidates must satisfy this.
+    unsigned pitchDivisor = llvm::divideCeil(128, elementWidth);
+    if (!llvm::all_of(allDescs, [&](tt::MakeTensorDescOp d) {
+          Value pitch = d.getStrides()[rank - 2];
+          return ttgi::isDivisible(pitch, pitchDivisor);
+        }))
       return;
 
     std::optional<ttg::DotOperandEncodingAttr> dotLayout = getDotLayout(op);
@@ -614,6 +638,12 @@ private:
                              MLIRContext *ctx) const {
     LDBG("Attempting 1D strided store reshape for: " << *op);
 
+    if (isBlockIOForAllLayoutsExplicitlyDisabled()) {
+      LDBG("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=0 disables non-DPAS 2D "
+           "block stores; skip 1D->2D store reshape");
+      return;
+    }
+
     // Reject masked stores — we only handle unmasked or provably all-true.
     if (Value mask = op.getMask()) {
       if (!matchPattern(mask, m_One())) {
@@ -673,6 +703,12 @@ private:
   void reshape1DStridedLoad(tt::LoadOp op, RankedTensorType ptrTensorTy,
                             MLIRContext *ctx) const {
     LDBG("Attempting 1D strided load reshape for: " << *op);
+
+    if (isBlockIOForAllLayoutsExplicitlyDisabled()) {
+      LDBG("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=0 disables non-DPAS 2D "
+           "block loads; skip 1D->2D load reshape");
+      return;
+    }
 
     // For loads, we allow masks (the load path handles them).
     // However, the strided pattern matcher needs the ptr, not mask.
@@ -861,13 +897,22 @@ private:
       OpType op, tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) const {
     Value desc = op.getDesc();
 
-    // Find the make tensor desc operation that created the descriptor for the
-    // load/store operation.
-    std::optional<tt::MakeTensorDescOp> defOp =
-        tt::intel::findDefiningOpOfType<tt::MakeTensorDescOp>(desc);
-    assert(defOp && "Expected a make tensor desc op.");
-    tt::MakeTensorDescOp makeTensorDescOp = *defOp;
+    // Find all MakeTensorDescOps that could define this descriptor.
+    SmallVector<tt::MakeTensorDescOp> allDescs =
+        tt::intel::findAllMakeTensorDescOps(desc);
+    if (allDescs.empty())
+      return false;
+
+    tt::MakeTensorDescOp makeTensorDescOp = allDescs[0];
     Operation::operand_range shape = makeTensorDescOp.getShape();
+    // All candidates must have the same shape operands.
+    if (!llvm::all_of(allDescs, [&](tt::MakeTensorDescOp d) {
+          return d.getShape() == shape;
+        })) {
+      LDBG("Inconsistent shape across descriptor candidates");
+      return false;
+    }
+
     unsigned rank = shape.size();
     if (rank == 1)
       return false;

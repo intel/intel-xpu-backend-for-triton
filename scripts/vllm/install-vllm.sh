@@ -2,261 +2,368 @@
 
 set -euo pipefail
 
-OLD_DIR="$(pwd)"
+readonly ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+readonly DEFAULT_BRANCH="main"
+readonly SCRIPTS_DIR="$ROOT/scripts"
+readonly VLLM_PROJ="$ROOT/vllm"
+readonly VLLM_XPU_KERNELS_PROJ="$ROOT/vllm-xpu-kernels"
 
-FORCE_REINSTALL=false
-SKIP_INSTALL=false
-SMOKE_TEST=false
-VENV=false
+# Check if the specified package is installed and matches the pinned commit.
+# Returns 0 if the installed package is correct, 1 if it needs to be installed/reinstalled.
+check_installed_package() {
+  local package="$1"
+  local pinned_commit="$2"
+  local force="$3"
+  local latest="$4"
+
+  if ! python -m pip show "$package" &>/dev/null; then
+    return 1
+  fi
+
+  if [[ "$latest" == true ]]; then
+    echo "*** --latest specified: ignoring installed $package. ***"
+    python -m pip uninstall -y "$package"
+
+    return 1
+  fi
+
+  local current_commit="$(python -m pip show "$package" | awk '/^Version:/ {print $2}')"
+  current_commit="${current_commit#*+g}"
+  current_commit="${current_commit%%.*}"
+  echo "*** $package is installed at commit: $current_commit. ***"
+
+  if [[ "$pinned_commit" == "$current_commit"* ]]; then
+    if [[ "$force" == false ]]; then
+      echo "*** Installed $package matches the pinned commit: $pinned_commit. ***"
+      return 0
+    fi
+
+    echo "*** --force-reinstall specified: ignoring installed $package. ***"
+  else
+    echo "*** Installed $package commit ($current_commit) does not match the pinned commit ($pinned_commit). ***"
+  fi
+
+  if [[ "$force" == false ]]; then
+    echo "ERROR: Installed $package does not match the pinned commit and --force-reinstall is not specified." >&2
+    exit 1
+  fi
+
+  python -m pip uninstall -y "$package"
+
+  return 1
+}
+
+show_installs() {
+  echo "*** Installed versions: ***"
+  echo "vllm: $(python -m pip show vllm | awk '/^Version:/ {print $2}')."
+  echo "vllm-xpu-kernels: $(python -m pip show vllm-xpu-kernels | awk '/^Version:/ {print $2}')."
+}
+
+update_submodules_and_clean() {
+  local repo_dir="$1"
+
+  git -C "$repo_dir" submodule update --init --recursive
+  git -C "$repo_dir" clean -xffd
+}
+
+# Clone the repository at the specified commit, or main if no commit is provided.
+# Returns 0 on success, 1 on failure.
+clone_repo() {
+  local target_dir="$1"
+  local repo_url="$2"
+  local pinned_commit="$3"
+  local latest="$4"
+
+  rm -rf "$target_dir"
+  git clone --single-branch -b "$DEFAULT_BRANCH" "$repo_url" "$target_dir"
+
+  if [[ "$latest" == false ]]; then
+    git -C "$target_dir" checkout "$pinned_commit"
+  fi
+
+  update_submodules_and_clean "$target_dir"
+}
+
+# Prepare the source code for the project by cloning or resetting to the pinned commit.
+# Returns 0 on success, 1 on failure.
+prepare_source() {
+  local target_dir="$1"
+  local repo_url="$2"
+  local pinned_commit="$3"
+  local latest="$4"
+
+  local needs_clone=true
+  if [[ -d "$target_dir" ]]; then
+    if [[ "$clean" == false ]]; then
+      echo "*** --no-clean specified: reusing source at $target_dir without cleanup. ***"
+      return 0
+    fi
+
+    local reset_ref="${pinned_commit:-$DEFAULT_BRANCH}"
+    if [[ "$latest" == true ]]; then
+      echo "*** --latest specified: resetting to the latest commit on $DEFAULT_BRANCH. ***"
+      reset_ref="origin/$DEFAULT_BRANCH"
+    fi
+
+    if (git -C "$target_dir" fetch --recurse-submodules && \
+        git -C "$target_dir" reset --hard "$reset_ref" && \
+        update_submodules_and_clean "$target_dir"); then
+      needs_clone=false
+    fi
+  fi
+
+  if [[ "$needs_clone" == true ]]; then
+    clone_repo "$target_dir" "$repo_url" "$pinned_commit" "$latest"
+  fi
+}
+
+# Install vLLM in editable mode from the source directory.
+install_vllm() {
+  if [[ ! -d "$VLLM_PROJ/tests" ]]; then
+    echo "ERROR: tests dir not found in vLLM." >&2
+    exit 1
+  fi
+
+  local benchmark_tests_dir="$ROOT/benchmarks/triton_kernels_benchmark/vllm/batched_moe/tests"
+  rm -rf "$benchmark_tests_dir"
+  cp -r "$VLLM_PROJ/tests" "$benchmark_tests_dir"
+
+  sed -i \
+    -e '/^pytest-shard/d' \
+    -e '/^torch/d' \
+    -e '/^triton/d' \
+    -e '/^vllm[_-]xpu[_-]kernels/d' \
+    -e '/^xgrammar/d' \
+    -e '/^--extra-index-url.*https:\/\/download\.pytorch\.org\/whl/d' \
+    "$VLLM_PROJ/requirements/xpu.txt"
+  python -m pip install -r "$VLLM_PROJ/requirements/xpu.txt"
+
+  VLLM_TARGET_DEVICE=xpu python -m pip install --no-deps --no-build-isolation -e "$VLLM_PROJ"
+}
+
+cd "$ROOT"
+
+build_vllm=false
+prepare_source_only=false
+latest=false
+force_reinstall=false
+check_wheel=false
+use_venv=false
+clean=true
+triton_repo=intel/intel-xpu-backend-for-triton
+triton_repo_branch=$DEFAULT_BRANCH
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --source)
+      build_vllm=true
+      shift
+      ;;
+    --prepare-source)
+      build_vllm=true
+      prepare_source_only=true
+      shift
+      ;;
+    --latest)
+      build_vllm=true
+      latest=true
+      shift
+      ;;
     --force-reinstall)
-      FORCE_REINSTALL=true
+      force_reinstall=true
       shift
       ;;
-    --skip-install)
-      # Clone and patch only, do not python -m pip install
-      SKIP_INSTALL=true
-      shift
-      ;;
-    --smoke-test)
-      # Run smoke tests after installation (requires GPU)
-      SMOKE_TEST=true
+    --check-wheel)
+      check_wheel=true
       shift
       ;;
     --venv)
-      VENV=true
+      use_venv=true
       shift
+      ;;
+    -nc|--no-clean)
+      clean=false
+      shift
+      ;;
+    --triton-repo)
+      if [[ -z "${2:-}" ]]; then
+        echo "ERROR: --triton-repo requires an argument." >&2
+        exit 1
+      fi
+      triton_repo="$2"
+      shift 2
+      ;;
+    --triton-repo-branch)
+      if [[ -z "${2:-}" ]]; then
+        echo "ERROR: --triton-repo-branch requires an argument." >&2
+        exit 1
+      fi
+      triton_repo_branch="$2"
+      shift 2
       ;;
     --help)
       cat <<EOF
-Usage: ./install-vllm.sh [options]
+Usage: $0 [options]
 
 Options:
-  --force-reinstall  Force reinstallation even if vLLM is already installed.
-  --skip-install     Clone and patch only, skip python -m pip install.
-  --smoke-test       Run smoke tests after install (requires XPU device).
-  --venv             Activate .venv/ before installation (uv/venv compatible).
-  --help             Show this help message and exit.
+  --source                       Build vLLM XPU kernels from source using pinned commit.
+
+  --prepare-source               Prepare vLLM and vLLM XPU kernels source only (clone/reset + patch), without
+                                 build/install. With --no-clean and an existing source tree, checkout/reset and
+                                 patching are skipped and the tree is reused as-is.
+
+  --latest                       Build vLLM and vLLM XPU kernels from the latest commits in the $DEFAULT_BRANCH branch.
+
+  --force-reinstall              Force reinstallation of vLLM and vLLM XPU kernels.
+
+  --check-wheel                  Check if a prebuilt vLLM XPU kernels wheel already exists before building.
+
+  --venv                         Activate Python virtual environment from .venv/ before installation.
+
+  -nc, --no-clean                Reuse existing vLLM and vLLM XPU kernels source trees without cleanup; skips
+                                 checkout/reset and patching when source exists.
+
+  --triton-repo <repo>           GitHub repo to fetch prebuilt vLLM XPU kernels wheels from
+                                 (default: intel/intel-xpu-backend-for-triton).
+
+  --triton-repo-branch <branch>  Branch to fetch prebuilt vLLM XPU kernels wheels from (default: $DEFAULT_BRANCH).
+
+  --help                         Show this help message and exit.
 
 Examples:
-  ./install-vllm.sh --venv
-  ./install-vllm.sh --venv --force-reinstall
-  ./install-vllm.sh --venv --smoke-test
+  ./install-vllm.sh --source
+  ./install-vllm.sh --prepare-source
+  ./install-vllm.sh --prepare-source --latest
+  ./install-vllm.sh --latest --venv
+  ./install-vllm.sh --triton-repo my_fork/intel-xpu-backend-for-triton --triton-repo-branch dev
 EOF
       exit 0
       ;;
     *)
-      echo "Unknown argument: $1."
+      echo "ERROR: Unknown argument: $1." >&2
       exit 1
       ;;
   esac
 done
 
-if [ "$VENV" = true ]; then
-  echo "**** Activating virtual environment ****"
-  if [[ $OSTYPE = msys ]]; then
-    source .venv/Scripts/activate
-  else
-    source .venv/bin/activate
+if [[ "$use_venv" == true ]]; then
+  echo "*** --venv specified: activating virtual environment from .venv. ***"
+  source .venv/bin/activate
+fi
+
+vllm_pinned_commit=""
+vllm_xpu_kernels_pinned_commit=""
+
+if [[ "$latest" == false ]]; then
+  vllm_pinned_commit="$(<"$SCRIPTS_DIR/vllm/vllm-pin.txt")"
+  echo "*** Using the pinned vllm commit: $vllm_pinned_commit. ***"
+
+  vllm_xpu_kernels_pinned_commit="$(<"$SCRIPTS_DIR/vllm/vllm-xpu-kernels-pin.txt")"
+  echo "*** Using the pinned vllm-xpu-kernels commit: $vllm_xpu_kernels_pinned_commit. ***"
+fi
+
+if [[ "$prepare_source_only" == false ]]; then
+  correct_vllm_installed=false
+  correct_vllm_xpu_kernels_installed=false
+
+  if check_installed_package "vllm" "${vllm_pinned_commit:-}" "$force_reinstall" "$latest"; then
+    correct_vllm_installed=true
   fi
-fi
 
-# intel-xpu-backend-for-triton project root
-ROOT=$(cd "$(dirname "$0")/../.." && pwd)
-SCRIPTS_DIR=$ROOT/scripts
-VLLM_PROJ=$ROOT/vllm
+  if check_installed_package "vllm-xpu-kernels" "${vllm_xpu_kernels_pinned_commit:-}" "$force_reinstall" "$latest"; then
+    correct_vllm_xpu_kernels_installed=true
+  fi
 
-# Use VLLM_PIN environment variable if set, otherwise read from file
-if [ -z "${VLLM_PIN:-}" ]; then
-  VLLM_PIN="$(<"$ROOT/scripts/vllm/vllm-pin.txt")"
-fi
+  if [[ "$correct_vllm_installed" == true && "$correct_vllm_xpu_kernels_installed" == true ]]; then
+    show_installs
 
-echo "**** vLLM pin: $VLLM_PIN ****"
-
-############################################################################
-# Smoke test function (defined early so it can be called from early-exit path)
-
-function smoke_test_vllm {
-  echo "**** Running vLLM smoke tests ****"
-
-  python -c "import torch; print(f'torch={torch.__version__}, xpu={torch.xpu.is_available()}')"
-  python -c "import triton; print(f'triton={triton.__version__}')"
-  python -c "import vllm; print(f'vllm={getattr(vllm, \"__version__\", \"installed (no version attr)\")}')"
-
-  python -c "
-import torch
-if torch.xpu.is_available():
-    print(f'XPU device: {torch.xpu.get_device_name(0)}')
-    x = torch.randn(4, 4, device='xpu')
-    print(f'Tensor on XPU: {x.device}')
-else:
-    print('WARNING: No XPU device available')
-"
-
-  python -c "
-from vllm.platforms import current_platform
-print(f'Platform: {current_platform.device_type}')
-"
-
-  echo "**** Smoke tests passed ****"
-}
-
-############################################################################
-# Check if already installed
-
-if python -m pip show vllm >/dev/null 2>&1; then
-  if [ "$FORCE_REINSTALL" = false ]; then
-    echo "**** vLLM is already installed, skipping. ****"
-    echo "**** Use --force-reinstall to force reinstallation. ****"
-    echo "**** To get a clean install: rm -rf $VLLM_PROJ && python -m pip uninstall -y vllm ****"
-    if [ "$SMOKE_TEST" = true ]; then
-      smoke_test_vllm
-    fi
+    echo "*** Both vllm and vllm-xpu-kernels are installed at the correct commits. ***"
     exit 0
   fi
-  echo "**** --force-reinstall: uninstalling existing vLLM. ****"
-  python -m pip uninstall -y vllm
 fi
 
-############################################################################
-# Clone and checkout pinned commit
+prepare_source "$VLLM_PROJ" "https://github.com/vllm-project/vllm.git" "${vllm_pinned_commit:-}" "$latest"
+git -C "$VLLM_PROJ" apply "$SCRIPTS_DIR/vllm/vllm-fix.patch"
+python "$SCRIPTS_DIR/vllm/vllm_xpu_patch.py" "$VLLM_PROJ"
 
-function clone_vllm {
-  echo "**** Cloning vLLM into $VLLM_PROJ ****"
-  git clone https://github.com/vllm-project/vllm.git "$VLLM_PROJ"
-  cd "$VLLM_PROJ"
-  git checkout "$VLLM_PIN"
-}
-
-if [ -d "$VLLM_PROJ" ]; then
-  if [ "$FORCE_REINSTALL" = true ]; then
-    echo "**** Removing existing $VLLM_PROJ ****"
-    rm -rf "$VLLM_PROJ"
-    clone_vllm
-  else
-    echo "**** Reusing existing $VLLM_PROJ directory. ****"
-  fi
-else
-  clone_vllm
-fi
-
-############################################################################
-# Patch for XPU
-
-function patch_vllm {
-  cd "$VLLM_PROJ"
-
-  # Apply the main vLLM fix patch (conftest, batched_moe, fused_batched_moe, etc.)
-  if git apply --check "$ROOT/scripts/vllm/vllm-fix.patch" 2>/dev/null; then
-    git apply "$ROOT/scripts/vllm/vllm-fix.patch"
-    echo "**** Applied vllm-fix.patch ****"
-  else
-    echo "**** vllm-fix.patch already applied or conflicts, skipping. ****"
+if [[ "$build_vllm" == false ]]; then
+  if ! command -v gh &>/dev/null; then
+    echo "ERROR: gh is not installed." >&2
+    exit 1
   fi
 
-  # AST-based XPU adaptation for spec_decode/mrv2 test files
-  python "$SCRIPTS_DIR/vllm/vllm_xpu_patch.py" "$VLLM_PROJ"
+  if ! command -v jq &>/dev/null; then
+    echo "ERROR: jq is not installed." >&2
+    exit 1
+  fi
 
-  echo "**** vLLM patched for XPU ****"
-}
+  echo "*** Downloading nightly builds. ***"
+  run_id="$(gh run list --workflow nightly-wheels.yml --branch "$triton_repo_branch" -R "$triton_repo" --json databaseId,conclusion | jq -r '[.[] | select(.conclusion=="success")][0].databaseId')"
+  temp_dir="$(mktemp -d)"
+  wheel_pattern="wheels-vllm-py$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")-*"
+  gh run download "$run_id" \
+    --repo "$triton_repo" \
+    --pattern "$wheel_pattern" \
+    --dir "$temp_dir"
+  echo "*** Installing vLLM XPU kernels from nightly builds. ***"
+  python -m pip install "$temp_dir"/$wheel_pattern/vllm_xpu_kernels-*.whl
+  rm -rf "$temp_dir"
+  echo "*** Installing vLLM from source. ***"
+  install_vllm
+  show_installs
 
-patch_vllm
-
-############################################################################
-# Install
-
-if [ "$SKIP_INSTALL" = true ]; then
-  echo "**** --skip-install: skipping python -m pip install. ****"
   exit 0
 fi
 
-function install_vllm {
-  cd "$VLLM_PROJ"
+echo "*** Base directory: $ROOT. ***"
+echo "*** vLLM project: $VLLM_PROJ. ***"
+echo "*** vLLM XPU kernels project: $VLLM_XPU_KERNELS_PROJ. ***"
 
-  # Verify torch is pre-installed (from nightly wheels)
-  if ! python -m pip show torch >/dev/null 2>&1; then
-    echo "ERROR: torch must be installed before running this script."
-    echo "Install nightly wheels first: triton-utils wheels -D ./wheels --wheel-set torch"
-    exit 1
-  fi
+if [[ "$prepare_source_only" == true ]]; then
+  prepare_source "$VLLM_XPU_KERNELS_PROJ" "https://github.com/vllm-project/vllm-xpu-kernels.git" "${vllm_xpu_kernels_pinned_commit:-}" "$latest"
 
-  # vLLM installs pytest-shard which conflicts with pytest-skip.
-  # We need pytest-skip for Triton skip lists (--skip-from-file).
-  # Uninstall pytest-shard instead - we don't need it for our runs.
-  python -m pip uninstall pytest-shard -y 2>/dev/null || true
-
-  # Strip torch/triton pins from requirements (use pre-installed nightly wheels)
-  # Be precise: match torch/torchaudio/torchvision/triton but NOT tritonclient
-  # Also remove xgrammar which depends on triton (install it separately later)
-  sed -i '/^torch[=>= ]/d; /^torchaudio/d; /^torchvision/d; /^triton[=>= ]/d; /^xgrammar/d; /extra-index-url.*pytorch/d' requirements/xpu.txt requirements/common.txt
-  sed -i '/^torch[=>= ]/d; /^torchaudio/d; /^torchvision/d; /^triton[=>= ]/d; /^xgrammar/d' requirements/test/xpu.txt
-
-  # Create constraints file to prevent pip from replacing pre-installed torch/triton
-  # with a PyPI version. common.txt -> transformers -> torch is the main culprit.
-  # Also xgrammar -> triton can pull in unwanted triton versions.
-  # Extract package==version from pip freeze, stripping @ file:// URLs
-  CONSTRAINTS=$(mktemp)
-  python -m pip freeze | grep -iE '^(torch|triton)' | sed 's/ @ file:\/\/.*//' > "$CONSTRAINTS" || true
-  echo "**** Using constraints: $(cat "$CONSTRAINTS") ****"
-
-  # Dry-run first: verify pip won't replace torch/triton with unwanted versions
-  echo "**** Dry-run: checking for unintended torch/triton replacements ****"
-  DRY_OUTPUT=$(python -m pip install --dry-run -c "$CONSTRAINTS" -r requirements/xpu.txt 2>&1) || true
-
-  # Extract "Would install" line and check for torch/triton packages
-  # Exclude: torchvision, torchaudio, tritonclient (these are OK to install)
-  # Check if torch or triton would be installed/upgraded (not already satisfied)
-  if echo "$DRY_OUTPUT" | grep "Would install" | grep -E " (torch|triton)-[0-9]" | grep -vE " (torchvision|torchaudio|tritonclient)-"; then
-    echo "WARNING: pip would install/replace torch or triton packages:"
-    echo "$DRY_OUTPUT" | grep "Would install"
-    echo ""
-    echo "This likely means a transitive dependency is pulling in torch."
-    echo "Check constraints file: $CONSTRAINTS"
-    echo "Aborting to prevent nightly wheels from being overwritten."
-    rm -f "$CONSTRAINTS"
-    exit 1
-  fi
-
-  # Additional check: if "torch is already installed" appears, that's fine
-  if echo "$DRY_OUTPUT" | grep -q "torch is already installed"; then
-    echo "**** Dry-run: torch is already installed (good) ****"
-  fi
-  if echo "$DRY_OUTPUT" | grep -q "triton is already installed"; then
-    echo "**** Dry-run: triton is already installed (good) ****"
-  fi
-
-  echo "**** Dry-run passed: torch/triton will not be replaced ****"
-
-  # Install XPU requirements with torch/triton constrained
-  python -m pip install -c "$CONSTRAINTS" -r requirements/xpu.txt
-
-  # Install xgrammar separately without dependencies (already removed from requirements above)
-  # xgrammar depends on triton, but we already have it installed, so --no-deps is safe
-  python -m pip install --no-deps 'xgrammar==0.1.32'
-
-  # Install minimal test dependencies only (not the full xpu-test.txt)
-  # The full requirements are very large and cause pip resolver issues.
-  # We only need a small subset for the tests we actually run.
-  python -m pip install cachetools cbor2 blake3 pybase64 openai_harmony tblib accelerate
-
-  rm -f "$CONSTRAINTS"
-
-  # Copy tests for benchmark use
-  rm -rf "$ROOT/benchmarks/triton_kernels_benchmark/vllm/batched_moe/tests"
-  cp -r tests "$ROOT/benchmarks/triton_kernels_benchmark/vllm/batched_moe/tests"
-
-  # Install vLLM in editable mode (--no-deps: don't resolve deps again)
-  VLLM_TARGET_DEVICE=xpu python -m pip install --no-deps --no-build-isolation -e .
-
-  echo "**** vLLM installed successfully ****"
-}
-
-install_vllm
-
-if [ "$SMOKE_TEST" = true ]; then
-  smoke_test_vllm
+  echo "*** vLLM source prepared at $VLLM_PROJ. ***"
+  echo "*** Current commit: $(git -C "$VLLM_PROJ" rev-parse HEAD). ***"
+  echo "*** vLLM XPU kernels source prepared at $VLLM_XPU_KERNELS_PROJ. ***"
+  echo "*** Current commit: $(git -C "$VLLM_XPU_KERNELS_PROJ" rev-parse HEAD). ***"
+  exit 0
 fi
 
-cd "$OLD_DIR"
+vllm_xpu_kernels_wheel_exists=false
+if [[ "$latest" == true ]]; then
+  echo "*** --latest specified: skipping wheel check.  ***"
+elif [[ -d "$VLLM_XPU_KERNELS_PROJ/dist" ]]; then
+  python_version="$(python -c "import sys; print(f'{sys.version_info.major}{sys.version_info.minor}')")"
+  wheel_pattern="vllm_xpu_kernels-*+g${vllm_xpu_kernels_pinned_commit:0:7}.d*-cp${python_version}-cp${python_version}-linux_x86_64.whl"
+  wheel="$(find "$VLLM_XPU_KERNELS_PROJ/dist" -maxdepth 1 -type f -name "$wheel_pattern" -printf '%f\n' 2>/dev/null | head -n 1)"
+
+  if [[ -n "$wheel" ]]; then
+    echo "*** Found vllm_xpu_kernels wheel: $wheel. ***"
+    vllm_xpu_kernels_wheel_exists=true
+  else
+    echo "*** No matching wheel in $VLLM_XPU_KERNELS_PROJ/dist. ***"
+  fi
+else
+  echo "*** $VLLM_XPU_KERNELS_PROJ/dist does not exist. ***"
+fi
+
+if [[ "$check_wheel" == false ]] || [[ "$vllm_xpu_kernels_wheel_exists" == false ]]; then
+  prepare_source "$VLLM_XPU_KERNELS_PROJ" "https://github.com/vllm-project/vllm-xpu-kernels.git" "${vllm_xpu_kernels_pinned_commit:-}" "$latest"
+
+  sed -i \
+    -e '/"torch/d' \
+    "$VLLM_XPU_KERNELS_PROJ/pyproject.toml"
+
+  sed -i \
+    -e '/^torch/d' \
+    -e '/^triton/d' \
+    -e '/^--extra-index-url.*https:\/\/download\.pytorch\.org\/whl/d' \
+    "$VLLM_XPU_KERNELS_PROJ/requirements.txt"
+  python -m pip install -r "$VLLM_XPU_KERNELS_PROJ/requirements.txt"
+  VLLM_TARGET_DEVICE=xpu python -m build --wheel --no-isolation "$VLLM_XPU_KERNELS_PROJ"
+fi
+
+install_vllm
+python -m pip install "$VLLM_XPU_KERNELS_PROJ"/dist/*.whl
+
+show_installs

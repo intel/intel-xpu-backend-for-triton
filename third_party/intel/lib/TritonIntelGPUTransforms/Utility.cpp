@@ -15,7 +15,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Tools/Sys/GetEnv.h"
 
 #include "llvm/Support/MathExtras.h"
 
@@ -314,6 +314,9 @@ LogicalResult getConvertBackwardSlice(
         enqueue(gather.getIndicesMutable(), srcEncoding);
         continue;
       }
+      // Cannot remat across tt.call: callee signature wouldn't update.
+      if (isa<tt::CallOp>(definingOp))
+        return failure();
       for (auto [i, operand] : llvm::enumerate(definingOp->getOpOperands())) {
         if (isa<RankedTensorType>(operand.get().getType())) {
           Attribute srcEncoding;

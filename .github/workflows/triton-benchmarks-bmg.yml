@@ -21,7 +21,7 @@ jobs:
         id: check
         uses: ./.github/actions/check-path-changes
         with:
-          patterns: '^(\.github/workflows/(triton-benchmarks|build-benchmarks-wheel).*\.yml|\.github/actions/install-benchmarks/|benchmarks/)'
+          patterns: '^(\.github/workflows/(triton-benchmarks|build-benchmarks-wheel).*\.yml|\.github/actions/install-benchmarks/|benchmarks/|\.github/pins/pytorch\.txt)'
 
   build-wheel:
     needs: check-paths
@@ -38,4 +38,4 @@ jobs:
     uses: ./.github/workflows/triton-benchmarks.yml
     with:
       runner_label: b580
-      skip_benchmarks: "['flex_attention_benchmark_batch16-causal_mask.py']"
+      skip_benchmarks: '["flex-attention-causal-batch16"]'

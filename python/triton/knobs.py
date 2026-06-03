@@ -17,7 +17,8 @@ from triton._C.libtriton import getenv, getenv_bool  # type: ignore
 
 if TYPE_CHECKING:
     from .runtime.cache import CacheManager, RemoteCacheBackend
-    from .runtime.jit import JitFunctionInfo, KernelParam
+    from .runtime.jit import JitFunctionInfo, KernelParam, JITFunction
+    from .runtime.autotuner import Config
     from .compiler.compiler import ASTSource, LazyDict, IRSource
 
 
@@ -418,9 +419,17 @@ class compilation_knobs(base_knobs):
     listener: Union[CompilationListener, None] = None
 
 
+class AutotuneListener(Protocol):
+
+    def __call__(self, *, fn: JITFunction, key: tuple, best_config: Config, configs_timings: dict[Config, list[float]],
+                 duration: Optional[float], cache_hit: bool) -> None:
+        ...
+
+
 class autotuning_knobs(base_knobs):
     cache: env_bool = env_bool("TRITON_CACHE_AUTOTUNING")
     print: env_bool = env_bool("TRITON_PRINT_AUTOTUNING")
+    listener: Union[AutotuneListener, None] = None
 
 
 class LaunchHook(Protocol):
@@ -558,7 +567,7 @@ class intel_knobs(base_knobs):
     gen_native_code: env_bool = env_bool("TRITON_XPU_GEN_NATIVE_CODE", False)
     opt_reduction_locality: env_bool = env_bool("TRITON_INTEL_OPTIMIZE_REDUCTION_LOCALITY", False)
     disable_igc_opt: env_bool = env_bool("TRITON_INTEL_DISABLE_IGC_OPT", False)
-    disable_annotate_cache_control: env_bool = env_bool("TRITON_INTEL_DISABLE_ANNOTATE_CACHE_CONTROL", True)
+    disable_annotate_cache_control: env_bool = env_bool("TRITON_INTEL_DISABLE_ANNOTATE_CACHE_CONTROL", False)
 
     enable_dump_spirv_kernel_args: env_bool = env_bool("TRITON_XPU_ENABLE_DUMP_SPIRV_KERNEL_ARGS", False)
     dump_spirv_kernel_args_dir: env_opt_str = env_opt_str("TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS_DIR")

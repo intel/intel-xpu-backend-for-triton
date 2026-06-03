@@ -1,7 +1,7 @@
 #include "intel/include/Analysis/DPAS.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/TritonAnnotateModule/Passes.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
+#include "triton/Tools/Sys/GetEnv.h"
 
 namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_TRITONANNOTATEMODULE
@@ -66,6 +66,10 @@ struct TritonAnnotateModule
           ttgi::TritonIntelGPUDialect::getSupport16BitAtomicsAttrName(),
           builder.getUnitAttr());
 
+    if (supportSigmoid)
+      mod->setAttr(ttgi::TritonIntelGPUDialect::getSupportSigmoidAttrName(),
+                   builder.getUnitAttr());
+
     if (supportPrefetch256Bytes)
       mod->setAttr(
           ttgi::TritonIntelGPUDialect::getSupportPrefetch256BAttrName(),
@@ -89,6 +93,11 @@ struct TritonAnnotateModule
     if (supportRoundedDivideSqrt)
       mod->setAttr(
           ttgi::TritonIntelGPUDialect::getSupportRoundedDivideSqrtAttrName(),
+          builder.getUnitAttr());
+
+    if (useClRoundedDivideSqrt)
+      mod->setAttr(
+          ttgi::TritonIntelGPUDialect::getUseClRoundedDivideSqrtAttrName(),
           builder.getUnitAttr());
 
     if (isLTS)

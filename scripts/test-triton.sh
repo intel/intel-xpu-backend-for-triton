@@ -415,7 +415,7 @@ if [ "$TEST_DEFAULT" = true ]; then
 fi
 
 if [ "$VENV" = true ]; then
-  if [[ $OSTYPE = msys ]]; then
+  if [[ $OSTYPE = msys || $OSTYPE = cygwin ]]; then
     source .venv/Scripts/activate
   else
     source .venv/bin/activate
@@ -563,7 +563,7 @@ run_debug_tests() {
   cd $TRITON_PROJ/python/test/unit
 
   TRITON_TEST_SUITE=debug \
-    run_pytest_command --verbose -n ${PYTEST_MAX_PROCESSES:-8} test_debug.py test_debuginfo.py test_debug_dump.py --forked --device xpu
+    run_pytest_command --verbose -n ${PYTEST_MAX_PROCESSES:-8} test_debug.py test_debuginfo.py test_debug_dump.py --device xpu
 }
 
 run_warnings_tests() {
@@ -673,7 +673,7 @@ run_tutorial_tests() {
   # autotuning, sys.argv manipulation, and global allocator changes that are not
   # safe to parallelize with pytest-xdist.
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=tutorials \
-    run_pytest_command -vvv --device xpu test_tutorials.py --tutorial06-mode "$TUTORIAL06_RUN_MODE"
+    run_pytest_command -vvv -s --device xpu test_tutorials.py --tutorial06-mode "$TUTORIAL06_RUN_MODE"
 
   # Restore the original reports directory.
   TRITON_TEST_REPORTS_DIR="$saved_reports_dir"
@@ -793,6 +793,18 @@ run_test_deps_install() {
   pip install pytest pytest-cov pytest-xdist
 }
 
+run_vllm_test_deps_install() {
+  run_test_deps_install
+  python -m pip install \
+    accelerate \
+    blake3 \
+    cachetools \
+    cbor2 \
+    openai_harmony \
+    pybase64 \
+    tblib
+}
+
 run_sglang_install() {
   echo "************************************************"
   echo "******    Installing SGLang                 ****"
@@ -878,7 +890,7 @@ run_vllm_install() {
   echo "************************************************"
   echo "vllm pin: $(<"$TRITON_PROJ/scripts/vllm/vllm-pin.txt")"
 
-  "$SCRIPTS_DIR/vllm/install-vllm.sh" $([ "$VENV" = true ] && echo --venv) --smoke-test
+  "$SCRIPTS_DIR/vllm/install-vllm.sh" $([ "$VENV" = true ] && echo "--venv")
 }
 
 
@@ -893,7 +905,7 @@ run_vllm_tests() {
   echo "************************************************"
 
   run_vllm_install
-  run_test_deps_install
+  run_vllm_test_deps_install
 
   cd vllm
   # FIXME: Make batched_moe and triton_unified_attention proper test suites.
@@ -910,7 +922,7 @@ run_vllm_spec_decode_tests() {
   echo "********************************************************"
 
   run_vllm_install
-  run_test_deps_install
+  run_vllm_test_deps_install
 
   cd vllm
   # Include test_max_len.py fully (small file, extra tests won't hurt) to keep
@@ -932,7 +944,7 @@ run_vllm_mrv2_tests() {
   echo "********************************************************"
 
   run_vllm_install
-  run_test_deps_install
+  run_vllm_test_deps_install
 
   cd vllm
   VLLM_USE_V2_MODEL_RUNNER=1 TRITON_TEST_SUITE=vllm_mrv2 \
@@ -951,7 +963,7 @@ run_vllm_moe_tests() {
   echo "********************************************************"
 
   run_vllm_install
-  run_test_deps_install
+  run_vllm_test_deps_install
 
   cd vllm
   # MOE Triton kernels: moe_mmk, expert_triton_kernel, batched_triton_kernel,
@@ -977,7 +989,7 @@ run_vllm_triton_attn_tests() {
   echo "********************************************************"
 
   run_vllm_install
-  run_test_deps_install
+  run_vllm_test_deps_install
 
   cd vllm
   # Triton attention kernels: merge_attn_states_kernel, _fwd_kernel_stage1,
@@ -998,7 +1010,7 @@ run_vllm_gdn_attn_tests() {
   echo "********************************************************"
 
   run_vllm_install
-  run_test_deps_install
+  run_vllm_test_deps_install
 
   cd vllm
   # GDN (Gated Delta Net) attention kernels used by Qwen3-Next:
@@ -1019,7 +1031,7 @@ run_vllm_mamba_tests() {
   echo "********************************************************"
 
   run_vllm_install
-  run_test_deps_install
+  run_vllm_test_deps_install
 
   cd vllm
   # Mamba kernels: _causal_conv1d_fwd_kernel, _causal_conv1d_update_kernel,
@@ -1041,7 +1053,7 @@ run_vllm_quant_tests() {
   echo "********************************************************"
 
   run_vllm_install
-  run_test_deps_install
+  run_vllm_test_deps_install
 
   cd vllm
   # Quantization Triton kernels: scaled_mm_kernel, awq_dequantize_kernel,
@@ -1067,7 +1079,7 @@ run_vllm_linear_attn_tests() {
   echo "********************************************************"
 
   run_vllm_install
-  run_test_deps_install
+  run_vllm_test_deps_install
 
   cd vllm
   # Linear attention kernels (MiniMax-Text / Lightning Attention):
@@ -1085,7 +1097,7 @@ run_vllm_deepgemm_tests() {
   echo "********************************************************"
 
   run_vllm_install
-  run_test_deps_install
+  run_vllm_test_deps_install
 
   cd vllm
   # DeepGemm MOE kernels: _silu_mul_fp8_quant_deep_gemm, apply_expert_map,

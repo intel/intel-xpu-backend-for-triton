@@ -13,6 +13,12 @@
 #   DEBUG_BENCH=1 - run only one configuration (faster for sanity checking)
 set -e
 
+# Workaround for #6759: BMG OOM after Agama 1222 -> 1249 driver bump.
+# expandable_segments alone causes UR_RESULT_ERROR_DEVICE_LOST in CI; pairs with
+# torch.xpu.set_per_process_memory_fraction(1.0) called early in the benchmark
+# to materialize the virtual segment via the working init path.
+export PYTORCH_ALLOC_CONF="${PYTORCH_ALLOC_CONF:-expandable_segments:True}"
+
 BENCHMARK_FOLDER="$1"
 shift
 

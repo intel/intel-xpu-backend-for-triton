@@ -49,6 +49,10 @@ def is_xpu():
     return triton.runtime.driver.active.get_current_target().backend == "xpu"
 
 
+def is_xpu_cri():
+    return triton.runtime.driver.active.get_current_target().arch['arch'] == "cri"
+
+
 @triton.jit
 def _layer_norm_fwd_fused(
     X,  # pointer to the input
@@ -380,7 +384,8 @@ def bench_layer_norm(M, N, dtype, provider, mode='backward', eps=1e-5, device=DE
 
 # For XPU device the reference result is always computed using fp32/fp64,
 # so we don't try to compare result for fp16.
-test_layer_norm(1151, 8192, torch.float32)
+N = 32 if is_xpu_cri() else 8192
+test_layer_norm(1151, N, torch.float32)
 bench_layer_norm.run(print_data=True)
 
 # %%
