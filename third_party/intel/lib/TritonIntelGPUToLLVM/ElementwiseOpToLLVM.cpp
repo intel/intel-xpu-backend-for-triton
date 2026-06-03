@@ -62,9 +62,9 @@ static SmallVector<Value> Fp8E5M2_to_Fp16(Location loc,
   return result;
 }
 
-static SmallVector<Value> Fp8E5M2_to_Bf16(Location loc,
-                                          ConversionPatternRewriter &rewriter,
-                                          const SmallVector<Value> &v) {
+static SmallVector<Value>
+Fp8E5M2_to_Bf16Table(Location loc, ConversionPatternRewriter &rewriter,
+                     const SmallVector<Value> &v) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
   Value a0 = b.undef(fp8x4VecTy);
@@ -146,6 +146,71 @@ static SmallVector<Value> Fp8E5M2_to_Bf16(Location loc,
   Value bf16x2Vec1 = b.or_(i32_ty, sign1, f1);
   bf16x2Vec0 = b.bitcast(bf16x2Vec0, bf16x2VecTy);
   bf16x2Vec1 = b.bitcast(bf16x2Vec1, bf16x2VecTy);
+
+  return {b.extract_element(bf16_ty, bf16x2Vec0, b.i32_val(0)),
+          b.extract_element(bf16_ty, bf16x2Vec0, b.i32_val(1)),
+          b.extract_element(bf16_ty, bf16x2Vec1, b.i32_val(0)),
+          b.extract_element(bf16_ty, bf16x2Vec1, b.i32_val(1))};
+}
+
+static SmallVector<Value> Fp8E5M2_to_Bf16(Location loc,
+                                          ConversionPatternRewriter &rewriter,
+                                          const SmallVector<Value> &v) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto fp8x4VecTy = vec_ty(i8_ty, 4);
+  Value a0 = b.undef(fp8x4VecTy);
+  a0 = b.insert_element(fp8x4VecTy, a0, b.int_val(8, 0), b.i32_val(0));
+  a0 = b.insert_element(fp8x4VecTy, a0, v[0], b.i32_val(1));
+  a0 = b.insert_element(fp8x4VecTy, a0, b.int_val(8, 0), b.i32_val(2));
+  a0 = b.insert_element(fp8x4VecTy, a0, v[1], b.i32_val(3));
+  a0 = b.bitcast(a0, i32_ty);
+
+  Value a1 = b.undef(fp8x4VecTy);
+  a1 = b.insert_element(fp8x4VecTy, a1, b.int_val(8, 0), b.i32_val(0));
+  a1 = b.insert_element(fp8x4VecTy, a1, v[2], b.i32_val(1));
+  a1 = b.insert_element(fp8x4VecTy, a1, b.int_val(8, 0), b.i32_val(2));
+  a1 = b.insert_element(fp8x4VecTy, a1, v[3], b.i32_val(3));
+  a1 = b.bitcast(a1, i32_ty);
+
+  // FP8E5M2 -> BF16 via mask-free i32-domain fmul rebias. This path is
+  // selected when native bf16 arithmetic is available (non-LTS drivers);
+  // Fp8E5M2_to_Bf16Table provides the LTS fallback using pure-integer logic.
+  //
+  // Algorithm (per pack `a` holding 2 FP8 bytes in bits [15:8] of each i16
+  // half, i.e. byte i sits in the high byte of i32 lane i):
+  //   1. Strip the sign bits with `and 0x7fff7fff`.
+  //   2. Shift the magnitude right by 3. This relocates the 5-bit fp8
+  //      exponent + 2-bit mantissa into the bf16 [exponent | mantissa]
+  //      positions, treating the bf16 bit pattern as `magnitude * 2^-112`.
+  //   3. OR the original sign bits back in. The resulting i32 holds two
+  //      bf16-shaped lanes.
+  //   4. Bitcast to <2 x bfloat> and multiply by the bf16x2 splat 2^112
+  //      (raw 0x7780). One fmul lifts the magnitude back to bf16 range and
+  //      handles fp8 subnormals -> bf16 normals in the same step.
+  //
+  // The i32-domain shape (no trunc/mask immediately upstream of the bf16
+  // multiply) avoids the IGC FTZ bug that motivated the i16-domain shape in
+  // the sibling Fp8E4M3Nv_to_Bf16 path. NumPy validation matches the
+  // existing E5M2 converter for all 256 fp8 byte values.
+  auto rescalePack = [&](Value pack) {
+    Value nosign = b.and_(i32_ty, pack, b.i32_val(0x7fff7fff));
+    Value shifted = b.lshr(i32_ty, nosign, b.i32_val(3));
+    Value sign = b.and_(i32_ty, pack, b.i32_val(0x80008000));
+    Value withSign = b.or_(i32_ty, shifted, sign);
+
+    auto bf16x2VecTy = vec_ty(bf16_ty, 2);
+    Value asBf16x2 = b.bitcast(withSign, bf16x2VecTy);
+
+    Value bf16Mul = b.bf16_val(std::ldexp(1.0f, 112));
+    Value mulBf16 = b.undef(bf16x2VecTy);
+    mulBf16 = b.insert_element(bf16x2VecTy, mulBf16, bf16Mul, b.i32_val(0));
+    mulBf16 = b.insert_element(bf16x2VecTy, mulBf16, bf16Mul, b.i32_val(1));
+
+    return b.fmul(bf16x2VecTy, asBf16x2, mulBf16);
+  };
+
+  Value bf16x2Vec0 = rescalePack(a0);
+  Value bf16x2Vec1 = rescalePack(a1);
 
   return {b.extract_element(bf16_ty, bf16x2Vec0, b.i32_val(0)),
           b.extract_element(bf16_ty, bf16x2Vec0, b.i32_val(1)),
@@ -1078,7 +1143,10 @@ struct FpToFpOpConversion
               {BuiltinConvert<BUILTIN_HFTOBF8, Float8E5M2Type>, 1, 16},
               {Fp_to_Fp8_RTNE<Float16Type, Float8E5M2Type>, 1}}},
             // F8 -> BF16
-            {{F8E5M2TyID, BF16TyID, undefRounding}, {Fp8E5M2_to_Bf16, 4}},
+            {{F8E5M2TyID, BF16TyID, undefRounding},
+             {HasAttr<SUPPORT_BF16_ARITH>,
+              {Fp8E5M2_to_Bf16, 4},
+              {Fp8E5M2_to_Bf16Table, 4}}},
             {{F8E4M3TyID, BF16TyID, undefRounding},
              {HasAttr<SUPPORT_BF16_ARITH>,
               {Fp8E4M3Nv_to_Bf16, 4},
