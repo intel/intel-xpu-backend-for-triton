@@ -656,7 +656,11 @@ def get_benchmark(
                 triton_fn = lambda: attention(q, k, v, CAUSAL, sm_scale)
 
             if MODE == 'fwd':
-                benchmark_suite.assert_close(triton_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='triton to torch')
+                if use_fp8:
+                    benchmark_suite.assert_close(lambda: triton_fn().to(torch.float16), torch_fn, atol=atol, rtol=1e-3,
+                                                 err_msg='triton to torch')
+                else:
+                    benchmark_suite.assert_close(triton_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='triton to torch')
             else:
                 dout = torch.randn_like(q)
                 torch_o = torch_fn()
