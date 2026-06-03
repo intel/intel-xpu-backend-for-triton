@@ -83,7 +83,10 @@ applies.
 
 5. **Block-pointer loads/stores never carry `mask=`/`other=`** (the API forbids
    it). Their only masking is `boundary_check`, handled by Rules 3–4. A `mask=`
-   only appears on legacy *tensor-of-pointer* loads — see Rule 9.
+   on the *input* only appears on legacy *tensor-of-pointer* loads — see Rule 9.
+   (The skill itself only *emits* a `mask=` tensor-of-pointer load in the single
+   sanctioned case of a non-unit-stride rank-1 block pointer that has no legal
+   descriptor — see Rule 11.)
 
 6. **Transpose (`order=(0, 1)` in the block pointer).** Do NOT emit a descriptor
    whose last stride ≠ 1 — that drops off the fast path. Instead describe the
@@ -125,12 +128,31 @@ applies.
       outer index must be a per-program scalar (e.g. `program_id`, a scalar
       load). If an outer index is itself a vector/range it cannot be folded —
       flag it and keep the original.
-    - **Rank 1** → still translate to a 1D descriptor:
+    - **Rank 1, unit stride** (`strides=(1,)`) → translate to a 1D descriptor:
       `tl.make_tensor_descriptor(base, shape=(N,), strides=(1,), block_shape=(BLOCK,))`,
       `desc.load([off])` / `desc.store([off], val)`. Note that XPU does **not**
       give 1D descriptors 2D block I/O today (the 1D fast path is pending), so
       flag that this load lowers via the pointer path — the form is correct and
       forward-compatible.
+    - **Rank 1, non-unit stride** (a strided 1D view, e.g. SGLang FLA's
+      `p_beta` = `tl.make_block_ptr(beta + bos*H + i_h, (T,), (H,), (i_t*BT,), (BT,), (0,))`
+      with stride `H != 1`) → **no legal descriptor exists**: a descriptor's last
+      (here only) stride must be 1, so `strides=(H,)` fails to compile (`Tensor
+      descriptor last dim must be 1 but got H`). This is the one case where a
+      `boundary_check` **cannot** be modernized into a descriptor at all — so do
+      **not** emit a descriptor. Reproduce the access as an explicit
+      tensor-of-pointer load/store whose `mask` re-expresses the original
+      `boundary_check` (it stays on the pointer path — no 2D block I/O — which is
+      the only correct option here, unlike Rule 9 which *removes* such masks by
+      folding them into a descriptor `shape`):
+      ```python
+      o = i_t * BT + tl.arange(0, BT)
+      b_beta = tl.load(beta + bos*H + i_h + o*H, mask=o < T, other=0.0)
+      # strided rank-1 store: tl.store(g + bos*H + i_h + o*H, b_val, mask=o < T)
+      ```
+      If the offset advances in a loop, fold the running offset into `o` exactly
+      as Rule 2 does for descriptors. Report this under "Changes made" (it emits
+      no descriptor), and flag it off the 2D-block fast path.
 
 12. **Block pointer received as a helper argument.** A block pointer can never
     arrive from host launch (there is no host-side block-pointer object); it can
@@ -160,7 +182,10 @@ applies.
    OWord-pitched → same 2D-block-I/O the block pointer used). For any descriptor
    that could **not** be put on the fast path, flag it with the reason
    (untraceable across `tt.call`, non-OWord pitch, not feeding a `tl.dot`,
-   rank>2 unfoldable, rank-1). Do not over-promise: the README's ">2x" figure is
+   rank>2 unfoldable, rank-1 unit-stride 1D descriptor). A non-unit-stride rank-1
+   block pointer (Rule 11) emits **no** descriptor — report it under "Changes
+   made" as a masked tensor-of-pointer load on the pointer path, not as a
+   per-descriptor note. Do not over-promise: the README's ">2x" figure is
    vs *tensor-of-pointers*, not vs block pointers.
 4. **Caller-affecting changes** (only if Rule 12 fired) — the changed helper
    signature and the list of call sites to update.
@@ -169,8 +194,14 @@ applies.
 
 - Zero `tl.make_block_ptr` / `tl.advance` remain (unless Rule 12 deliberately
   keeps a block-ptr arg pending a caller fix you've flagged).
-- Number of `make_tensor_descriptor` ≈ number of distinct block pointers.
+- Number of `make_tensor_descriptor` ≈ number of distinct block pointers, minus
+  any non-unit-stride rank-1 pointers that became masked tensor-of-pointer loads
+  (Rule 11).
 - Every descriptor has last stride == 1 (transposes via `.T`, not last-stride≠1).
+- **No descriptor was emitted for a non-unit-stride rank-1 block pointer** — each
+  such pointer became a masked `tl.load`/`tl.store` whose `mask=` reproduces the
+  original `boundary_check`, flagged off the fast path (Rule 11). (A `strides=(S,)`
+  descriptor with `S != 1` would not compile.)
 - Descriptors are created in the function that loads from them (Rule 12).
 - `padding_option="nan"` carried to the constructor iff the source used it.
 - No `triton.set_allocator` / host-launch change anywhere in the output.

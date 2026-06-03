@@ -352,6 +352,51 @@ def run_copy1d(kernel, dtype=torch.float32):
 
 
 # --------------------------------------------------------------------------- #
+# Rule 11 (rank-1, NON-unit stride): a strided 1D view, e.g. column h of an
+# (N, H) tensor read with stride H — exactly SGLang FLA's p_beta/p_g pattern
+# tl.make_block_ptr(beta + ... + i_h, (T,), (H,), (i_t*BT,), (BT,), (0,)).
+# A descriptor's last (only) stride must be 1, so strides=(H,) is ILLEGAL
+# ("Tensor descriptor last dim must be 1 but got H"). The AFTER kernel therefore
+# does NOT build a descriptor: it reproduces the boundary_check as a masked
+# tensor-of-pointer load (no 2D block I/O — pointer path).
+# --------------------------------------------------------------------------- #
+@triton.jit
+def copy1d_strided_before(x_ptr, y_ptr, col, N, H, BLOCK: tl.constexpr):
+    pid = tl.program_id(0)
+    x_bp = tl.make_block_ptr(base=x_ptr + col, shape=(N, ), strides=(H, ), offsets=(pid * BLOCK, ),
+                             block_shape=(BLOCK, ), order=(0, ))
+    y_bp = tl.make_block_ptr(base=y_ptr + col, shape=(N, ), strides=(H, ), offsets=(pid * BLOCK, ),
+                             block_shape=(BLOCK, ), order=(0, ))
+    v = tl.load(x_bp, boundary_check=(0, ))
+    tl.store(y_bp, v + 1.0, boundary_check=(0, ))
+
+
+@triton.jit
+def copy1d_strided_after(x_ptr, y_ptr, col, N, H, BLOCK: tl.constexpr):
+    pid = tl.program_id(0)
+    # Non-unit stride (H) => no legal 1D descriptor. Reproduce boundary_check as a
+    # mask on an explicit tensor-of-pointer load/store (Rule 11, strided rank-1).
+    o = pid * BLOCK + tl.arange(0, BLOCK)
+    v = tl.load(x_ptr + col + o * H, mask=o < N, other=0.0)
+    tl.store(y_ptr + col + o * H, v + 1.0, mask=o < N)
+
+
+def run_copy1d_strided(kernel, dtype=torch.float32):
+    torch.manual_seed(0)  # identical inputs for BEFORE and AFTER kernels
+    N = 8192 + 17  # non-multiple of BLOCK so the edge is masked
+    H = 8  # inner stride: x is logically (N, H), we touch column `col`
+    col = 3
+    BLOCK = 1024
+    x = torch.randn((N, H), device="xpu", dtype=dtype)
+    y = torch.zeros((N, H), device="xpu", dtype=dtype)
+    grid = (triton.cdiv(N, BLOCK), )
+    kernel[grid](x, y, col, N, H, BLOCK)
+    ref = y.clone()
+    ref[:, col] = x[:, col] + 1.0
+    return y, ref
+
+
+# --------------------------------------------------------------------------- #
 # Registry of validated pairs.
 # --------------------------------------------------------------------------- #
 @dataclass
@@ -376,7 +421,10 @@ PAIRS: list[RulePair] = [
     RulePair("gemm_kmask", "R9(boundary)", gemm_kmask_before, gemm_kmask_after, run_gemm_kmask,
              notes="boundary mask folds into shape"),
     RulePair("copy1d", "R11(rank1)", copy1d_before, copy1d_after, run_copy1d, expect_block_io=False,
-             notes="rank-1: 1D descriptor, lowers via pointer path (no block I/O today)"),
+             notes="rank-1 unit-stride: 1D descriptor, lowers via pointer path (no block I/O today)"),
+    RulePair("copy1d_strided", "R11(rank1-strided)", copy1d_strided_before, copy1d_strided_after, run_copy1d_strided,
+             expect_block_io=False,
+             notes="rank-1 NON-unit stride: no legal descriptor -> masked tensor-of-pointer load (pointer path)"),
 ]
 # NOTE: R5 (no-op), R10 (annotation hygiene, source-level only), R12
 # (block-ptr-as-helper-argument, an interface change) are validated separately

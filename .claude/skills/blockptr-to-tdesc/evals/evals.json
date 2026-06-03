@@ -40,7 +40,14 @@
       "id": 6,
       "name": "rank1-vector-add",
       "prompt": "Can this 1D kernel use tensor descriptors instead of block pointers on XPU?\n\n```python\n@triton.jit\ndef add1(x_ptr, y_ptr, out_ptr, N, BLOCK: tl.constexpr):\n    pid = tl.program_id(0)\n    x_bp = tl.make_block_ptr(base=x_ptr, shape=(N,), strides=(1,),\n                             offsets=(pid * BLOCK,), block_shape=(BLOCK,), order=(0,))\n    y_bp = tl.make_block_ptr(base=y_ptr, shape=(N,), strides=(1,),\n                             offsets=(pid * BLOCK,), block_shape=(BLOCK,), order=(0,))\n    o_bp = tl.make_block_ptr(base=out_ptr, shape=(N,), strides=(1,),\n                             offsets=(pid * BLOCK,), block_shape=(BLOCK,), order=(0,))\n    x = tl.load(x_bp, boundary_check=(0,))\n    y = tl.load(y_bp, boundary_check=(0,))\n    tl.store(o_bp, x + y, boundary_check=(0,))\n```",
-      "expected_output": "Translated to 1D tensor descriptors (shape=(N,), strides=(1,), block_shape=(BLOCK,)) with desc.load([pid*BLOCK]) / desc.store. Explicitly flags that XPU does not give 1D descriptors 2D block I/O today (lowers via pointer path) but the form is correct and forward-compatible. Does NOT leave it as a block pointer.",
+      "expected_output": "Translated to 1D tensor descriptors (shape=(N,), strides=(1,), block_shape=(BLOCK,)) with desc.load([pid*BLOCK]) / desc.store. Explicitly flags that XPU does not give 1D descriptors 2D block I/O today (lowers via pointer path) but the form is correct and forward-compatible. Does NOT leave it as a block pointer. Applies only because the rank-1 stride is 1; a non-unit stride would require a masked pointer load instead (see eval 7).",
+      "files": []
+    },
+    {
+      "id": 7,
+      "name": "rank1-strided-masked",
+      "prompt": "Convert this 1D block-pointer kernel to tensor descriptors for XPU. Note beta is a strided view (stride H, not 1) because it indexes head i_h of a [T, H] tensor:\n\n```python\n@triton.jit\ndef scale_beta(beta, out_ptr, bos, i_h, H: tl.constexpr, T, i_t, BT: tl.constexpr):\n    p_beta = tl.make_block_ptr(beta + bos * H + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,))\n    b_beta = tl.load(p_beta, boundary_check=(0,))\n    p_out = tl.make_block_ptr(out_ptr + bos * H + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,))\n    tl.store(p_out, b_beta * 2.0, boundary_check=(0,))\n```",
+      "expected_output": "Recognizes the rank-1 block pointer has a NON-UNIT stride (H), so it CANNOT become tl.make_tensor_descriptor (a descriptor's last/only stride must be 1; strides=(H,) fails to compile with 'Tensor descriptor last dim must be 1 but got H'). Translates to a masked tensor-of-pointer load/store reproducing the original boundary_check: o = i_t*BT + tl.arange(0, BT); b_beta = tl.load(beta + bos*H + i_h + o*H, mask=o < T, other=0.0); tl.store(out_ptr + bos*H + i_h + o*H, b_beta * 2.0, mask=o < T). Reports it under Changes-made (emits NO descriptor), flagged off the 2D-block fast path. Explicitly does NOT emit a descriptor with strides=(H,). Notes this differs from Rule 9 (which removes a mask by folding into shape) because no legal descriptor exists here.",
       "files": []
     }
   ]

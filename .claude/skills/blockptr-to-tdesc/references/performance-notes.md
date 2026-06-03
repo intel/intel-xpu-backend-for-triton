@@ -78,7 +78,11 @@ Translate anyway (the user wants the modern API), but flag the reason:
   is set.
 - **rank>2 not foldable** — an outer index that is a vector/range (not a
   per-program scalar) cannot fold into `base`.
-- **rank-1** — no block I/O today.
+- **rank-1, unit stride** — a legal 1D descriptor, but no block I/O today
+  (pointer path).
+- **rank-1, non-unit stride** — *no legal descriptor exists* (a descriptor's last
+  stride must be 1). Do **not** emit one; translate to a masked tensor-of-pointer
+  load/store (Rule 11). Pointer path, no block I/O.
 
 ## No host-side allocator on XPU (verified)
 

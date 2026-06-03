@@ -7,10 +7,12 @@ kernel in `scripts/validate_rules.py`.
 > (PVC) via `scripts/validate_rules.py --check-ir` (result: `ALL VALIDATED`,
 > exit 0). Every pair below passed both (a) numeric equality before≡after≡
 > reference (`torch.testing.assert_close`) and (b) the IR check confirming the
-> AFTER descriptor kernel lowers to `Subgroup2DBlock` 2D-block-I/O — except
-> `copy1d` (rank-1), which is correctly correctness-only with no 2D block I/O
-> today (by design). Re-run any time on an XPU host (after initializing the
-> oneAPI runtime): `python scripts/validate_rules.py --check-ir`.
+> AFTER descriptor kernel lowers to `Subgroup2DBlock` 2D-block-I/O — except the
+> two rank-1 pairs (`copy1d`, unit-stride 1D descriptor; and `copy1d_strided`,
+> the non-unit-stride masked-pointer fallback), which are correctly
+> correctness-only with no 2D block I/O today (by design). Re-run any time on an
+> XPU host (after initializing the oneAPI runtime):
+> `python scripts/validate_rules.py --check-ir`.
 
 The canonical real-world reference is the repo's own GEMM benchmark:
 `benchmarks/triton_kernels_benchmark/gemm_block_ptr_benchmark.py` (before) vs
@@ -143,11 +145,12 @@ v = tl.where(mask, v, other)   # load full block, re-apply predicate in register
 
 ---
 
-## 5. Rank-1 copy (Rule 11, rank-1)
+## 5. Rank-1 copy, unit stride (Rule 11, rank-1)
 
 Translate to a **1D descriptor**. XPU does not give 1D descriptors 2D block I/O
 today (the 1D fast path is pending), so flag that this lowers via the pointer
-path — but the form is correct and forward-compatible.
+path — but the form is correct and forward-compatible. (Validated by the
+`copy1d` pair.)
 
 **Before:**
 ```python
@@ -161,6 +164,35 @@ v = tl.load(x_bp, boundary_check=(0,))
 x_desc = tl.make_tensor_descriptor(base=x_ptr, shape=(N,), strides=(1,), block_shape=(BLOCK,))
 v = x_desc.load([pid * BLOCK])
 ```
+
+---
+
+## 5b. Rank-1, non-unit stride → masked pointer load (Rule 11, rank-1 strided)
+
+A strided 1D view (last/only stride `!= 1`) **cannot** be a descriptor — its last
+stride must be 1, so `strides=(H,)` fails to compile (`Tensor descriptor last dim
+must be 1 but got H`). This is the one `boundary_check` that cannot be folded into
+a descriptor `shape`; reproduce it as an explicit `mask=` on a tensor-of-pointer
+load/store (pointer path, no 2D block I/O). This is SGLang FLA's `p_beta`/`p_g`
+pattern. (Validated by the `copy1d_strided` pair.)
+
+**Before:**
+```python
+p_beta = tl.make_block_ptr(beta + bos * H + i_h, (T,), (H,),
+                           (i_t * BT,), (BT,), (0,))   # stride H != 1
+b_beta = tl.load(p_beta, boundary_check=(0,))
+```
+
+**After:**
+```python
+o = i_t * BT + tl.arange(0, BT)
+b_beta = tl.load(beta + bos * H + i_h + o * H, mask=o < T, other=0.0)
+# strided rank-1 store: tl.store(g + bos * H + i_h + o * H, b_val, mask=o < T)
+```
+Do **not** write `tl.make_tensor_descriptor(beta + ..., (T,), (H,), (BT,))` — a
+non-unit last stride does not compile. Unlike Rule 9 (which *removes* a boundary
+mask by folding it into a descriptor `shape`), here the mask is *retained* on the
+pointer path because no legal descriptor exists.
 
 ---
 
