@@ -18,6 +18,7 @@
 
 #include "attention/attention.hpp"
 #include "gemm/gemm.hpp"
+#include "gemm_splitk/gemm_splitk.hpp"
 
 ////////////////////////////////////////////////////////////////////////////////
 // PYBIND MODULE
@@ -25,5 +26,6 @@
 
 PYBIND11_MODULE(sycl_tla_kernel, m) {
   m.def("gemm", &gemm_kernel, "gemm (SYCL-TLA)");
+  m.def("gemm_splitk", &gemm_splitk_kernel, "gemm split-K (SYCL-TLA)");
   m.def("attention", &attention_kernel, "attention (SYCL-TLA)");
 }
