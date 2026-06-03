@@ -297,7 +297,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.ttir.add_triton_licm(pm)
         intel.passes.ttir.add_remove_masks(pm)
         intel.passes.ttir.add_stride_versioning(pm)
-        intel.passes.ttir.add_fuse_reshape(pm)
         intel.passes.ttir.add_fold_true_cmpi(pm)
         intel.passes.ttir.add_prepare_if_combining(pm)
         passes.common.add_canonicalizer(pm)
