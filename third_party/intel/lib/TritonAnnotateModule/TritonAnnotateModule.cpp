@@ -100,6 +100,10 @@ struct TritonAnnotateModule
       mod->setAttr(ttgi::TritonIntelGPUDialect::getIsLTSAttrName(),
                    builder.getUnitAttr());
 
+    if (isFastMath)
+      mod->setAttr(ttgi::TritonIntelGPUDialect::getFastMathAttrName(),
+                   builder.getUnitAttr());
+
     setThreadsPerWarp(mod);
   }
 
