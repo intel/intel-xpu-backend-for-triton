@@ -103,7 +103,14 @@ private:
     if (!descLoadOp || !descLoadOp->hasOneUse())
       return false;
 
-    if (cast<RankedTensorType>(descLoadOp.getType()).getRank() < 2)
+    auto resultRank = cast<RankedTensorType>(descLoadOp.getType()).getRank();
+    if (resultRank < 2)
+      return false;
+
+    // Reject rank-reducing descriptor loads where the descriptor block type
+    // rank differs from the result rank (the fuse logic assumes they match).
+    auto descType = cast<tt::TensorDescType>(descLoadOp.getDesc().getType());
+    if (descType.getBlockType().getRank() != resultRank)
       return false;
 
     // Validate that the transpose only swaps the innermost 2 dimensions
