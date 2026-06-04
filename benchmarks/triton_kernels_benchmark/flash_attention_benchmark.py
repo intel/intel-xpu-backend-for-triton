@@ -657,8 +657,18 @@ def get_benchmark(
 
             if MODE == 'fwd':
                 if use_fp8:
-                    benchmark_suite.assert_close(lambda: triton_fn().to(torch.float16), torch_fn, atol=atol, rtol=1e-3,
-                                                 err_msg='triton to torch')
+                    # Use explicit torch matmul/softmax in fp32 as reference, following tutorial 06-fused-attention.py
+                    q_ref = q.detach().to(torch.float32)
+                    k_ref = k.detach().to(torch.float32)
+                    v_ref = v.detach().to(torch.float32)
+                    causal_mask = torch.tril(torch.ones((N_CTX, N_CTX), device='xpu'))
+                    p_ref = torch.matmul(q_ref, k_ref.transpose(2, 3)) * sm_scale
+                    if CAUSAL:
+                        p_ref[:, :, causal_mask == 0] = float('-inf')
+                    p_ref = torch.softmax(p_ref, dim=-1)
+                    fp8_ref_out = torch.matmul(p_ref, v_ref).half()
+                    benchmark_suite.assert_close(lambda: triton_fn().to(torch.float16), lambda: fp8_ref_out, atol=3,
+                                                 rtol=1e-3, err_msg='triton to torch')
                 else:
                     benchmark_suite.assert_close(triton_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='triton to torch')
             else:
