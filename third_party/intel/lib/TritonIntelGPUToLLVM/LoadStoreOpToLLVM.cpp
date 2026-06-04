@@ -473,21 +473,26 @@ struct LoadStoreConversionBase {
             op, TritonIntelGPUDialect::getSupportPredicatedIOAttrName()))
       return false;
 
-    // There's an IGC bug with predicated load so it is disabled by default.
-    // On the other hand, predicated store is expected to be correct and it is
-    // enabled by default. Both can be overridden by env vars.
-    static const bool canUsePredicatedLoad =
-        tools::getBoolEnv("TRITON_INTEL_PREDICATED_LOAD");
+    // Predicated load is enabled by default for LoadOp but disabled by default
+    // for DescriptorLoadOp. DescriptorLoadOp always generates boundary-check
+    // predicates (even when all elements are in-bounds), and the predicated
+    // load intrinsic prevents IGC from optimizing these uniformly-true
+    // predicates as effectively as the control-flow-based approach. Both can be
+    // overridden by env vars. Predicated store is enabled by default for both
+    // op types.
+    static const std::optional<bool> usePredicatedLoad =
+        tools::isEnvValueBool(tools::getStrEnv("TRITON_INTEL_PREDICATED_LOAD"));
     static const std::optional<bool> usePredicatedStore = tools::isEnvValueBool(
         tools::getStrEnv("TRITON_INTEL_PREDICATED_STORE"));
 
     // SPIRV predicated load/store does not support volatile qualifier.
     if constexpr (std::is_same_v<OpType, LoadOp>) {
-      return canUsePredicatedLoad && !op.getIsVolatile();
+      return (!usePredicatedLoad.has_value() || usePredicatedLoad.value()) &&
+             !op.getIsVolatile();
     } else if constexpr (std::is_same_v<OpType, StoreOp>) {
       return !usePredicatedStore.has_value() || usePredicatedStore.value();
     } else if constexpr (std::is_same_v<OpType, DescriptorLoadOp>) {
-      return canUsePredicatedLoad;
+      return usePredicatedLoad.has_value() && usePredicatedLoad.value();
     } else if constexpr (std::is_same_v<OpType, DescriptorStoreOp>) {
       return !usePredicatedStore.has_value() || usePredicatedStore.value();
     }

@@ -66,6 +66,10 @@ struct TritonAnnotateModule
           ttgi::TritonIntelGPUDialect::getSupport16BitAtomicsAttrName(),
           builder.getUnitAttr());
 
+    if (supportSigmoid)
+      mod->setAttr(ttgi::TritonIntelGPUDialect::getSupportSigmoidAttrName(),
+                   builder.getUnitAttr());
+
     if (supportPrefetch256Bytes)
       mod->setAttr(
           ttgi::TritonIntelGPUDialect::getSupportPrefetch256BAttrName(),
