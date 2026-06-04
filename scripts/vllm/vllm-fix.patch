@@ -14,6 +14,24 @@ index 779bd475f..808ab3650 100644
          init_workspace_manager(device)
      yield
      reset_workspace_manager()
+diff --git a/tests/utils.py b/tests/utils.py
+index 8989a1c3a..16f0620d1 100644
+--- a/tests/utils.py
++++ b/tests/utils.py
+@@ -1545,7 +1545,12 @@ def spawn_new_process_for_each_test(f: Callable[_P, None]) -> Callable[_P, None]:
+ 
+             repo_root = str(VLLM_PATH.resolve())
+             env = os.environ.copy()
+-            env["PYTHONPATH"] = repo_root + os.pathsep + env.get("PYTHONPATH", "")
++            test_module_dir = str(Path(f.__code__.co_filename).resolve().parent)
++            env["PYTHONPATH"] = os.pathsep.join(
++                path
++                for path in (repo_root, test_module_dir, env.get("PYTHONPATH", ""))
++                if path
++            )
+ 
+             result = subprocess.run(
+                 [sys.executable, "-c", child_script],
 diff --git a/tests/kernels/moe/test_batched_moe.py b/tests/kernels/moe/test_batched_moe.py
 index d78e1947f..e7ffb39e3 100644
 --- a/tests/kernels/moe/test_batched_moe.py
