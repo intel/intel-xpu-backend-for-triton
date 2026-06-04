@@ -11,7 +11,7 @@ tt.func public @fuseLoadWithReshape1(%arg0: tensor<256x32xbf16>, %arg1: !tt.ptr<
   %c1024_i64 = arith.constant 1024 : i64
   %cst = arith.constant dense<0.000000e+00> : tensor<256x256xf32>
   %0 = tt.make_tensor_descriptor %arg1, [%c1_i32, %c64_i32, %c1024_i32], [%c1024_i64, %c4_i64, %c1_i64] : <bf16>, <1x32x256xbf16>
-  %3 = tt.descriptor_load %0[%c2_i32, %c1_i32, %c0_i32]  : !tt.tensordesc<1x32x256xbf16> -> tensor<1x32x256xbf16>
+  %3 = tt.descriptor_load %0[%c2_i32, %c1_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<1x32x256xbf16> -> tensor<1x32x256xbf16>
   %4 = tt.reshape %3 : tensor<1x32x256xbf16> -> tensor<32x256xbf16>
   %5 = tt.dot %arg0, %4, %cst, inputPrecision = tf32 : tensor<256x32xbf16> * tensor<32x256xbf16> -> tensor<256x256xf32>
   tt.return
@@ -25,7 +25,7 @@ tt.func public @fuseLoadWithReshape1(%arg0: tensor<256x32xbf16>, %arg1: !tt.ptr<
 // CHECK: [[DESC:%.*]] = tt.make_tensor_descriptor %arg1, [[[ADD1]], %c1024_i32], [%c4_i64, %c1_i64] : <bf16>, <32x256xbf16>
 // CHECK: [[MUL2:%.*]] = arith.muli %c2_i32, [[TRUNC]] : i32
 // CHECK: [[ADD2:%.*]] = arith.addi [[MUL2]], %c1_i32 : i32
-// CHECK: [[LOAD_B:%.*]] = tt.descriptor_load [[DESC]][[[ADD2]], %c0_i32] : !tt.tensordesc<32x256xbf16> -> tensor<32x256xbf16>
+// CHECK: [[LOAD_B:%.*]] = tt.descriptor_load [[DESC]][[[ADD2]], %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<32x256xbf16> -> tensor<32x256xbf16>
 // CHECK: tt.dot {{.*}}, [[LOAD_B]], {{.*}}, inputPrecision = tf32 : tensor<256x32xbf16> * tensor<32x256xbf16> -> tensor<256x256xf32>
 
 // -----
@@ -41,7 +41,7 @@ tt.func public @fuseLoadWithReshape2(%arg0: tensor<32x256xbf16>, %arg1: !tt.ptr<
   %cst = arith.constant dense<0.000000e+00> : tensor<256x256xf32>
   %0 = tt.make_tensor_descriptor %arg1, [%c512_i32, %c1024_i32, %c32_i32], [%c1024_i64, %c1_i64, %c512_i64]: <bf16>, <1x256x32xbf16>
   %res:2 = scf.for %arg3 = %c0_i32 to %c1024_i32 step %c32_i32 iter_args(%arg4 = %cst, %arg5 = %c0_i32) -> (tensor<256x256xf32>, i32) : i32 {
-    %1 = tt.descriptor_load %0[%c32_i32, %c32_i32, %c0_i32] : !tt.tensordesc<1x256x32xbf16> -> tensor<1x256x32xbf16>
+    %1 = tt.descriptor_load %0[%c32_i32, %c32_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<1x256x32xbf16> -> tensor<1x256x32xbf16>
     %2 = tt.reshape %1 : tensor<1x256x32xbf16> -> tensor<256x32xbf16>
     %4 = tt.dot %2, %arg0, %arg4, inputPrecision = tf32 : tensor<256x32xbf16> * tensor<32x256xbf16> -> tensor<256x256xf32>
     %5 = arith.addi %arg5, %c32_i32 : i32
@@ -59,5 +59,5 @@ tt.func public @fuseLoadWithReshape2(%arg0: tensor<32x256xbf16>, %arg1: !tt.ptr<
 // CHECK: scf.for
 // CHECK:   [[MUL2:%.*]] = arith.muli %c32_i32, [[TRUNC]] : i32
 // CHECK:   [[ADD2:%.*]] = arith.addi [[MUL2]], %c32_i32 : i32
-// CHECK:   [[LOAD_A:%.*]] = tt.descriptor_load [[DESC]][[[ADD2]], %c0_i32] : !tt.tensordesc<256x32xbf16> -> tensor<256x32xbf16>
+// CHECK:   [[LOAD_A:%.*]] = tt.descriptor_load [[DESC]][[[ADD2]], %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<256x32xbf16> -> tensor<256x32xbf16>
 // CHECK:   tt.dot [[LOAD_A]], {{.*}}, {{.*}}, inputPrecision = tf32 : tensor<256x32xbf16> * tensor<32x256xbf16> -> tensor<256x256xf32>

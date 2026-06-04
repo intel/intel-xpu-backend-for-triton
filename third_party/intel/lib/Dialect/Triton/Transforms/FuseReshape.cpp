@@ -1,4 +1,5 @@
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Utils/DefUseChain.h"
 #include "intel/include/Utils/Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -20,6 +21,7 @@
 
 using namespace mlir;
 namespace tt = mlir::triton;
+namespace ttgi = mlir::triton::gpu::intel;
 
 namespace mlir::triton::intel {
 #define GEN_PASS_DEF_TRITONINTELFUSERESHAPE
@@ -261,6 +263,9 @@ private:
 
   bool isCandidate(tt::DescriptorLoadOp descLoadOp) const {
     if (!descLoadOp->hasOneUse())
+      return false;
+
+    if (!descLoadOp->getAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName()))
       return false;
 
     std::optional<tt::MakeTensorDescOp> makeTensorDescOp =
