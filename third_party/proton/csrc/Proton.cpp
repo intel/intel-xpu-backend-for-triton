@@ -172,9 +172,12 @@ static void initProton(pybind11::module &&m) {
 
   m.def(
       "add_metrics",
-      [](size_t scopeId, const std::map<std::string, MetricValueType> &metrics,
+      [](size_t scopeId,
+         const std::map<std::string, PythonMetricValueType> &metrics,
          const std::map<std::string, TensorMetric> &tensorMetrics) {
-        SessionManager::instance().addMetrics(scopeId, metrics, tensorMetrics);
+        auto convertedMetrics = convertPythonMetrics(metrics);
+        SessionManager::instance().addMetrics(scopeId, convertedMetrics,
+                                              tensorMetrics);
       },
       pybind11::arg("scopeId"), pybind11::arg("metrics"),
       pybind11::arg("tensorMetrics") = std::map<std::string, TensorMetric>());

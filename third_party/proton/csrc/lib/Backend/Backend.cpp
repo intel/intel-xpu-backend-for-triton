@@ -1,12 +1,15 @@
 #include "Backend/Backend.h"
 #include "Driver/GPU/CudaApi.h"
 #include "Driver/GPU/HipApi.h"
+#include "Driver/GPU/XpuApi.h"
 #include "Profiler/Cupti/CuptiProfiler.h"
 #include "Profiler/Instrumentation/InstrumentationProfiler.h"
 #include "Profiler/RocprofSDK/RocprofSDKProfiler.h"
 #include "Profiler/Roctracer/RoctracerProfiler.h"
+#include "Profiler/Xpupti/XpuptiProfiler.h"
 #include "Runtime/CudaRuntime.h"
 #include "Runtime/HipRuntime.h"
+#include "Runtime/XpuRuntime.h"
 #include <vector>
 
 namespace proton {
@@ -14,11 +17,16 @@ namespace proton {
 const std::vector<ProfilerRegistration> getProfilerRegistrations() {
   std::vector<ProfilerRegistration> registeredProfilers = {
       {"cupti", "cuda", []() { return &CuptiProfiler::instance(); }},
+#ifndef _WIN32
+      // RocprofSDKProfiler is not built on Windows (see
+      // Profiler/CMakeLists.txt).
       {"rocprofiler", "hip", []() { return &RocprofSDKProfiler::instance(); }},
+#endif
       {"roctracer", {}, []() { return &RoctracerProfiler::instance(); }},
       {"instrumentation",
        {},
        []() { return &InstrumentationProfiler::instance(); }},
+      {"xpupti", "xpu", []() { return &XpuptiProfiler::instance(); }},
   };
   for (const auto &backend : getBackendRegistrations()) {
     const auto &profiler = backend.getProfiler();
@@ -34,6 +42,8 @@ const std::vector<DeviceRegistration> getDeviceRegistrations() {
        [](uint64_t index) { return cuda::getDevice(index); }},
       {"HIP", DeviceType::HIP,
        [](uint64_t index) { return hip::getDevice(index); }},
+      {"XPU", DeviceType::XPU,
+       [](uint64_t index) { return xpu::getDevice(index); }},
   };
   for (const auto &backend : getBackendRegistrations()) {
     const auto &device = backend.getDevice();
@@ -47,6 +57,7 @@ const std::vector<RuntimeRegistration> getRuntimeRegistrations() {
   std::vector<RuntimeRegistration> registeredRuntimes = {
       {"CUDA", []() { return &CudaRuntime::instance(); }},
       {"HIP", []() { return &HipRuntime::instance(); }},
+      {"XPU", []() { return &XpuRuntime::instance(); }},
   };
   for (const auto &backend : getBackendRegistrations()) {
     const auto &runtime = backend.getRuntime();
