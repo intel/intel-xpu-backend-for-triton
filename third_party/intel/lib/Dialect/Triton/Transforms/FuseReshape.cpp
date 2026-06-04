@@ -184,9 +184,8 @@ private:
         builder, loc, arith::MulIOp::create(builder, loc, offsets[0], trunc),
         newOffsets[newOutermostDimIdx]);
 
-    auto resType = cast<tt::TensorDescType>(newDesc.getType()).getBlockType();
     auto newDescLoadOp = tt::DescriptorLoadOp::create(
-        builder, descLoadOp.getLoc(), resType, newDesc, newOffsets,
+        builder, descLoadOp.getLoc(), reshapeOp.getType(), newDesc, newOffsets,
         descLoadOp.getCache(), descLoadOp.getEvict());
     newDescLoadOp->setAttrs(descLoadOp->getAttrs());
 
