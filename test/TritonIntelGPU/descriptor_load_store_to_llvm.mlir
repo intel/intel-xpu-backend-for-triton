@@ -321,3 +321,75 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     tt.return %load : tensor<4x16xf16, #blocked>
   }
 }
+
+// -----
+
+// Test rank reduction from a 4D descriptor (1x1x4x4) to a 2D tensor (4x4):
+// lowering must keep boundary checks for all descriptor dimensions, including
+// the leading reduced singleton dimensions.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_predicated_io"} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @rank_reducing_load
+  tt.func public @rank_reducing_load(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32) -> (tensor<4x4xf32, #blocked>) {
+    %c1_i32 = arith.constant 1 : i32
+    %c4_i32 = arith.constant 4 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c4_i64 = arith.constant 4 : i64
+    %c16_i64 = arith.constant 16 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%c1_i32, %c1_i32, %c4_i32, %c4_i32], [%c16_i64, %c16_i64, %c4_i64, %c1_i64] : <f32>, <1x1x4x4xf32>
+
+    // CHECK: %[[DESC:.*]] = llvm.insertvalue %{{.*}}, %{{.*}}[8] : !llvm.struct<(i64, i64, i64, i64, i64, i64, i64, i64, ptr<1>)>
+    // CHECK-DAG: %[[SHAPE0:.*]] = llvm.extractvalue %[[DESC]][0] : !llvm.struct<(i64, i64, i64, i64, i64, i64, i64, i64, ptr<1>)>
+    // CHECK-DAG: %[[SHAPE1:.*]] = llvm.extractvalue %[[DESC]][1] : !llvm.struct<(i64, i64, i64, i64, i64, i64, i64, i64, ptr<1>)>
+    // CHECK-DAG: %[[SHAPE2:.*]] = llvm.extractvalue %[[DESC]][2] : !llvm.struct<(i64, i64, i64, i64, i64, i64, i64, i64, ptr<1>)>
+    // CHECK-DAG: %[[SHAPE3:.*]] = llvm.extractvalue %[[DESC]][3] : !llvm.struct<(i64, i64, i64, i64, i64, i64, i64, i64, ptr<1>)>
+    // CHECK-DAG: %[[SHAPE0_I32:.*]] = llvm.trunc %[[SHAPE0]] : i64 to i32
+    // CHECK-DAG: %[[SHAPE1_I32:.*]] = llvm.trunc %[[SHAPE1]] : i64 to i32
+    // CHECK-DAG: %[[SHAPE2_I32:.*]] = llvm.trunc %[[SHAPE2]] : i64 to i32
+    // CHECK-DAG: %[[SHAPE3_I32:.*]] = llvm.trunc %[[SHAPE3]] : i64 to i32
+    // CHECK: llvm.icmp "slt" %{{.*}}, %[[SHAPE0_I32]] : i32
+    // CHECK: llvm.icmp "slt" %{{.*}}, %[[SHAPE1_I32]] : i32
+    // CHECK: llvm.icmp "slt" %{{.*}}, %[[SHAPE2_I32]] : i32
+    // CHECK: llvm.icmp "slt" %{{.*}}, %[[SHAPE3_I32]] : i32
+    %load = tt.descriptor_load %desc[%arg1, %arg2, %arg3, %arg4] : !tt.tensordesc<1x1x4x4xf32> -> tensor<4x4xf32, #blocked>
+    tt.return %load : tensor<4x4xf32, #blocked>
+  }
+}
+
+// -----
+
+// Test rank reduction from a 4D descriptor (1x1x4x4) to a 2D tensor (4x4):
+// store lowering must keep boundary checks for all descriptor dimensions,
+// including the leading reduced singleton dimensions.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_predicated_io"} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @rank_reducing_store
+  tt.func public @rank_reducing_store(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: tensor<4x4xf32, #blocked>) {
+    %c1_i32 = arith.constant 1 : i32
+    %c4_i32 = arith.constant 4 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c4_i64 = arith.constant 4 : i64
+    %c16_i64 = arith.constant 16 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%c1_i32, %c1_i32, %c4_i32, %c4_i32], [%c16_i64, %c16_i64, %c4_i64, %c1_i64] : <f32>, <1x1x4x4xf32>
+
+    // CHECK: %[[DESC:.*]] = llvm.insertvalue %{{.*}}, %{{.*}}[8] : !llvm.struct<(i64, i64, i64, i64, i64, i64, i64, i64, ptr<1>)>
+    // CHECK-DAG: %[[SHAPE0:.*]] = llvm.extractvalue %[[DESC]][0] : !llvm.struct<(i64, i64, i64, i64, i64, i64, i64, i64, ptr<1>)>
+    // CHECK-DAG: %[[SHAPE1:.*]] = llvm.extractvalue %[[DESC]][1] : !llvm.struct<(i64, i64, i64, i64, i64, i64, i64, i64, ptr<1>)>
+    // CHECK-DAG: %[[SHAPE2:.*]] = llvm.extractvalue %[[DESC]][2] : !llvm.struct<(i64, i64, i64, i64, i64, i64, i64, i64, ptr<1>)>
+    // CHECK-DAG: %[[SHAPE3:.*]] = llvm.extractvalue %[[DESC]][3] : !llvm.struct<(i64, i64, i64, i64, i64, i64, i64, i64, ptr<1>)>
+    // CHECK-DAG: %[[SHAPE0_I32:.*]] = llvm.trunc %[[SHAPE0]] : i64 to i32
+    // CHECK-DAG: %[[SHAPE1_I32:.*]] = llvm.trunc %[[SHAPE1]] : i64 to i32
+    // CHECK-DAG: %[[SHAPE2_I32:.*]] = llvm.trunc %[[SHAPE2]] : i64 to i32
+    // CHECK-DAG: %[[SHAPE3_I32:.*]] = llvm.trunc %[[SHAPE3]] : i64 to i32
+    // CHECK: llvm.icmp "slt" %{{.*}}, %[[SHAPE0_I32]] : i32
+    // CHECK: llvm.icmp "slt" %{{.*}}, %[[SHAPE1_I32]] : i32
+    // CHECK: llvm.icmp "slt" %{{.*}}, %[[SHAPE2_I32]] : i32
+    // CHECK: llvm.icmp "slt" %{{.*}}, %[[SHAPE3_I32]] : i32
+    tt.descriptor_store %desc[%arg1, %arg2, %arg3, %arg4], %arg5 : !tt.tensordesc<1x1x4x4xf32>, tensor<4x4xf32, #blocked>
+    tt.return
+  }
+}
