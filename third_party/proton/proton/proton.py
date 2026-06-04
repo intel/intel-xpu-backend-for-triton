@@ -5,6 +5,7 @@ import runpy
 import traceback
 from .profile import start, finalize, _select_backend
 from .flags import flags
+from triton._C.libproton import proton as libproton
 
 
 def parse_arguments():
