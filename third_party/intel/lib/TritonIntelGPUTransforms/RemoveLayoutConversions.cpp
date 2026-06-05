@@ -907,6 +907,67 @@ bool canBeRemat(Operation *op) {
   return true;
 }
 
+// Helper: check if an operation is a pure shape-changing operation that
+// doesn't duplicate data (ExpandDims, Trans, Broadcast).
+static bool isShapeChangeOp(Operation *op) {
+  return isa<tt::ExpandDimsOp, tt::TransOp, tt::BroadcastOp>(op);
+}
+
+// Return true if the op is an expensive load that is a candidate for
+// rematerialization in the specific safe pattern: the load has exactly one use
+// (a ttg::ConvertLayoutOp), and that convert feeds into a linear single-use
+// chain of shape-change ops (ExpandDims/Trans/Broadcast). This pattern is
+// provably a non-duplicating relabel (rematerialization is in-place), matching
+// the #7091 descriptor-operand case. Multi-use loads and loads feeding
+// dot-operands or other expensive consumers are correctly rejected by the
+// canBeRemat anchor, which this helper should NOT bypass.
+bool isExpensiveLoadRematCandidate(Operation *op) {
+  // 1. Must be a Load or DescriptorLoad
+  if (!isa<tt::LoadOp, tt::DescriptorLoadOp>(op))
+    return false;
+
+  // 2. Must be expensive (only expensive loads need the bypass; cheap loads
+  //    already pass canBeRemat)
+  if (!ttgi::isExpensiveLoadOrStore(op))
+    return false;
+
+  // 3. Must have exactly one use
+  Value loadResult = op->getResult(0);
+  if (!loadResult.hasOneUse())
+    return false;
+
+  // 4. That single use must be a ConvertLayoutOp
+  Operation *user = *loadResult.getUsers().begin();
+  if (!isa<ttg::ConvertLayoutOp>(user))
+    return false;
+
+  // 5. The ConvertLayoutOp must feed a shape-change chain (ExpandDims/Trans/
+  //    Broadcast), not a real-layout consumer such as a dot or store. This is
+  //    the discriminator between the #7091 descriptor-operand pattern (safe,
+  //    non-duplicating relabel) and dot-operand / conflict cases that the
+  //    expensive-load anchor legitimately protects. Walk the chain: it must be
+  //    a single-use linear sequence of shape-change ops. A fork (multiple uses)
+  //    while still in the shape-change region would duplicate the load, so
+  //    reject. The chain ends when it reaches a non-shape-change consumer (the
+  //    terminus), which is the normal compute that consumes the reshaped value.
+  Value current = user->getResult(0);
+  // The convert's immediate consumer must itself be a shape-change op;
+  // otherwise the convert feeds a real-layout consumer (e.g. a dot) and the
+  // bypass must not apply.
+  if (!current.hasOneUse() || !isShapeChangeOp(*current.getUsers().begin()))
+    return false;
+
+  while (current.hasOneUse() && isShapeChangeOp(*current.getUsers().begin()))
+    current = (*current.getUsers().begin())->getResult(0);
+
+  // If the chain forks (multiple uses) while still inside the shape-change
+  // region, the load would be duplicated across consumers; reject.
+  if (!current.hasOneUse() && llvm::any_of(current.getUsers(), isShapeChangeOp))
+    return false;
+
+  return true;
+}
+
 void LayoutRematerialization::updateRematMapping(
     SmallVector<std::tuple<Value, Value>> &values) {
   for (auto [old, newV] : values) {
@@ -1382,7 +1443,7 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
   // Check if all the operations in the slice can be rematerialized.
   for (Value v : slice) {
     if (Operation *op = v.getDefiningOp()) {
-      if (!canBeRemat(op))
+      if (!canBeRemat(op) && !isExpensiveLoadRematCandidate(op))
         return failure();
     }
   }
@@ -1557,7 +1618,8 @@ static bool isRematBeneficial(ttg::ConvertLayoutOp convertOp,
 
     if (isa<arith::ConstantOp>(op)) {
       continue;
-    } else if (isa<tt::LoadOp>(op) || isa<ttg::LocalLoadOp>(op)) {
+    } else if (isa<tt::LoadOp, tt::DescriptorLoadOp>(op) ||
+               isa<ttg::LocalLoadOp>(op)) {
       for (Value result : op->getResults())
         rematerialisationCost += 8 * getByteCount(result);
     } else if (isa<arith::ArithDialect, math::MathDialect>(dialect)) {
@@ -1594,6 +1656,29 @@ void LayoutRematerialization::backwardRematerialization(
     if (isa<ttg::BlockedEncodingAttr>(dotLayout.getParent()))
       return;
   Value oldV = convertOp.getSrc();
+  // When rematerializing an expensive load past the canBeRemat anchor (the
+  // #7091 descriptor-operand pattern), only do so if the convert's target
+  // layout is non-degenerate. Earlier RLC runs may still carry the initial
+  // (degenerate, sizePerThread all-ones) layout from convert_to_ttgpuir;
+  // baking that onto the load freezes a bad layout that then forward-propagates
+  // onto the shared main tile. Deferring until the target layout has been
+  // healed (non-degenerate) by later passes preserves the good fixpoint that
+  // the unrematerialized path reaches.
+  if (Operation *defOp = oldV.getDefiningOp();
+      defOp && isExpensiveLoadRematCandidate(defOp)) {
+    Attribute targetEnc = targetType.getEncoding();
+    Attribute parentEnc = targetEnc;
+    if (auto sliceEnc = dyn_cast<ttg::SliceEncodingAttr>(targetEnc))
+      parentEnc = sliceEnc.getParent();
+    if (auto blockedEnc = dyn_cast<ttg::BlockedEncodingAttr>(parentEnc)) {
+      bool degenerate = llvm::all_of(blockedEnc.getSizePerThread(),
+                                     [](unsigned v) { return v == 1; });
+      if (degenerate) {
+        LDBG("  skip expensive-load remat: degenerate target layout");
+        return;
+      }
+    }
+  }
   LDBG("check backward remat with source " << oldV << " encoding "
                                            << targetType.getEncoding());
   // Check to see if there are existing remat'ed values for the pair of oldValue
@@ -2026,6 +2111,15 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
     OpBuilder b(edge->getOwner());
     hoistRemat(b, edge->get(), layout.at(result));
   }
+
+  // Check that rematerializing the slice is actually beneficial before
+  // rewriting. This prevents cloning expensive loads into conditional branches
+  // when the duplication cost exceeds the convert cost. Use newCvtCost=0
+  // (matching backwardRematerialization pattern) since we're hoisting into
+  // branches where the convert would be eliminated.
+  if (!isRematBeneficial(convertOp, slice, /*newCvtCost=*/0))
+    return;
+
   rewriteSlice(slice, layout, convertOp, mapping);
 }
 
