@@ -316,6 +316,8 @@ void init_triton_intel(py::module &&m) {
     {
       llvm::FunctionPassManager fpm;
       fpm.addPass(GuardMaskedDivRemPass());
+      // Remove dynamic indexing of `<N x ptr>` vectors before SPIR-V.
+      fpm.addPass(ScalarizePtrVectorsPass());
       mpm.addPass(createModuleToFunctionPassAdaptor(std::move(fpm)));
     }
     mpm.addPass(pb.buildPerModuleDefaultPipeline(opt));
