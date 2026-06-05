@@ -810,6 +810,7 @@ enter_vllm_test_env() {
     echo "ERROR: $(pwd)/vllm not found. Run './scripts/test-triton.sh --install-vllm' or './scripts/vllm/install-vllm.sh' first." >&2
     exit 1
   fi
+
   run_vllm_test_deps_install
   cd vllm
 }
