@@ -16,7 +16,7 @@ on:
         type: string
         default: ""
       triton_repo_branch:
-        description: Branch to fetch prebuilt vLLM XPU kernels wheels from, keep empty for default
+        description: Branch to fetch prebuilt vLLM XPU kernels wheels from, keep empty to use the dispatching ref
         type: string
         default: ""
       skip_list:
@@ -216,11 +216,8 @@ jobs:
         id: install-vllm
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
-          install_args=()
-          if [[ -n "${{ inputs.triton_repo_branch }}" ]]; then
-            install_args+=(--triton-repo-branch "${{ inputs.triton_repo_branch }}")
-          fi
-          ./scripts/vllm/install-vllm.sh "${install_args[@]}"
+          ./scripts/vllm/install-vllm.sh \
+            --triton-repo-branch "${{ inputs.triton_repo_branch || github.ref_name }}"
 
       - name: Create reports dir
         run: |

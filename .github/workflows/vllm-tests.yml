@@ -17,7 +17,7 @@ on:
         type: string
         default: ""
       triton_repo_branch:
-        description: Branch to fetch prebuilt vLLM XPU kernels wheels from, keep empty for default
+        description: Branch to fetch prebuilt vLLM XPU kernels wheels from, keep empty to use the dispatching ref
         type: string
         default: ""
       skip_list:
