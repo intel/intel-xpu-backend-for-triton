@@ -18,10 +18,6 @@ UTILS_CACHE_PATH = None
 
 def _select_backend() -> str:
     backend = triton.runtime.driver.active.get_current_target().backend
-    if backend == "cuda":
-        return "cupti"
-    if backend == "hip":
-        return "rocprofiler"
     if backend == "xpu":
         global UTILS_CACHE_PATH
         UTILS_CACHE_PATH = triton.runtime.driver.active.build_proton_help_lib()
@@ -33,8 +29,7 @@ def _select_backend() -> str:
                         break
         except importlib.metadata.PackageNotFoundError:
             pass
-        return "xpupti"
-    raise ValueError("No backend is available for the current target.")
+    return libproton.select_profiler_from_triton_backend(backend)
 
 
 def _get_mode_str(backend: str, mode: Optional[Union[str, BaseMode]]) -> str:
