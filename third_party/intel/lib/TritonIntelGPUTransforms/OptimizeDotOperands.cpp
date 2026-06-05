@@ -107,12 +107,6 @@ private:
     if (resultRank < 2)
       return false;
 
-    // Reject rank-reducing descriptor loads where the descriptor block type
-    // rank differs from the result rank (the fuse logic assumes they match).
-    auto descType = cast<tt::TensorDescType>(descLoadOp.getDesc().getType());
-    if (descType.getBlockType().getRank() != resultRank)
-      return false;
-
     // Validate that the transpose only swaps the innermost 2 dimensions
     // (identity on outer dims). block_io = "column_major" in the lowering
     // only handles this inner-2-dim swap.
@@ -155,9 +149,10 @@ private:
 
     // Keep the original descriptor — do NOT reverse it.
     // The descriptor is always row-major (stride-1 on last dim).
-    auto descType = cast<tt::TensorDescType>(descLoadOp.getDesc().getType());
-    RankedTensorType blockType = descType.getBlockType();
-    ArrayRef<int64_t> origShape = blockType.getShape();
+    // Use the result type shape (not the descriptor block type shape) to handle
+    // rank-reducing descriptor loads where block type rank > result rank.
+    auto resultType = cast<RankedTensorType>(descLoadOp.getType());
+    ArrayRef<int64_t> origShape = resultType.getShape();
     ArrayRef<int> perm = transOp.getOrder();
     SmallVector<int64_t> transposedShape(origShape.size());
     for (unsigned i = 0; i < origShape.size(); ++i)

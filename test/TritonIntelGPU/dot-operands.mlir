@@ -91,10 +91,11 @@ module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 8 : i32, "ttg.thr
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 #dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
 module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // CHECK-LABEL: tt.func @do_not_fuse_rank_reducing_descriptor_load
-  // CHECK: tt.descriptor_load {{.*}} {ttig.block_io = "row_major"}
-  // CHECK: tt.trans
-  tt.func @do_not_fuse_rank_reducing_descriptor_load(%ptr: !tt.ptr<f16>, %a: tensor<64x32xf16, #dot0>) -> tensor<64x64xf32, #dpas> {
+  // CHECK-LABEL: tt.func @fuse_rank_reducing_descriptor_load
+  // CHECK-NOT: tt.trans
+  // CHECK: %[[LD:.*]] = tt.descriptor_load {{.*}} {ttig.block_io = "column_major"} : !tt.tensordesc<1x64x32xf16> -> tensor<32x64xf16, #[[BCOL:[a-z]+]]>
+  // CHECK: ttg.convert_layout %[[LD]] : tensor<32x64xf16, #[[BCOL]]> -> tensor<32x64xf16, {{.*}}>
+  tt.func @fuse_rank_reducing_descriptor_load(%ptr: !tt.ptr<f16>, %a: tensor<64x32xf16, #dot0>) -> tensor<64x64xf32, #dpas> {
     %c0_i32 = arith.constant 0 : i32
     %c1_i32 = arith.constant 1 : i32
     %c1_i64 = arith.constant 1 : i64
