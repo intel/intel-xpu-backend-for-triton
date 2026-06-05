@@ -157,27 +157,6 @@ private:
         }))
       return;
 
-    std::optional<ttg::DotOperandEncodingAttr> dotLayout = getDotLayout(op);
-    if (dotLayout) {
-      // Check if the load is being used by a tt.dot operation, and if so is
-      // this the first operand and is it a transposed row major matrix. If
-      // so, skip the block descriptor attribute as performance is worse than
-      // if we remove the tensor descriptor.
-      LDBG("dotLayout: " << *dotLayout);
-      auto opIdx =
-          static_cast<ttgi::DpasEncodingAttr::OpIdx>(dotLayout->getOpIdx());
-      auto dotOrder = tt::gpu::getThreadOrder(tensorType);
-      // Row-major means the last dim (rank-1) is the fastest-varying, i.e.,
-      // it appears first in the thread order vector.
-      const bool valueRowMajor =
-          (dotOrder[0] == rank - 1 && dotOrder[1] == rank - 2);
-      if (opIdx == ttgi::DpasEncodingAttr::OpIdx::OperandA && !valueRowMajor) {
-        LDBG("Skipping block descriptor attribute for transposed A matrix in "
-             "dot operation");
-        return;
-      }
-    }
-
     // Tensor descriptors are always row major.
     op->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
                 StringAttr::get(context, "row_major"));
