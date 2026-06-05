@@ -19,10 +19,6 @@ on:
         description: vLLM XPU kernels pin (commit hash), keep empty for default
         type: string
         default: ""
-      triton_repo_branch:
-        description: Branch to fetch prebuilt vLLM XPU kernels wheels from, keep empty for default
-        type: string
-        default: ""
   # This workflow is also called from workflows vllm-benchmarks-*.yml.
   workflow_call:
     inputs:
@@ -39,10 +35,6 @@ on:
         default: ""
       vllm_xpu_kernels_pin:
         description: vLLM XPU kernels pin (commit hash), keep empty for default
-        type: string
-        default: ""
-      triton_repo_branch:
-        description: Branch to fetch prebuilt vLLM XPU kernels wheels from, keep empty for default
         type: string
         default: ""
 
@@ -131,11 +123,8 @@ jobs:
         id: install-vllm
         if: ${{ steps.install-benchmarks.outcome == 'success' && !cancelled() }}
         run: |
-          install_args=()
-          if [[ -n "${{ inputs.triton_repo_branch }}" ]]; then
-            install_args+=(--triton-repo-branch "${{ inputs.triton_repo_branch }}")
-          fi
-          ./scripts/vllm/install-vllm.sh "${install_args[@]}"
+          source ./scripts/capture-hw-details.sh
+          ./scripts/test-triton.sh --install-vllm --skip-pip-install --skip-pytorch-install
 
       - name: Run vllm unified attention bf16
         if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}

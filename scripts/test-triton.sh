@@ -904,6 +904,7 @@ run_vllm_tests() {
   echo "******    Running vLLM Triton tests       ******"
   echo "************************************************"
 
+  run_vllm_install
   run_vllm_test_deps_install
 
   cd vllm
@@ -920,6 +921,7 @@ run_vllm_spec_decode_tests() {
   echo "******  Running vLLM Spec Decode tests           *******"
   echo "********************************************************"
 
+  run_vllm_install
   run_vllm_test_deps_install
 
   cd vllm
@@ -941,6 +943,7 @@ run_vllm_mrv2_tests() {
   echo "******  Running vLLM MRv2 tests                  *******"
   echo "********************************************************"
 
+  run_vllm_install
   run_vllm_test_deps_install
 
   cd vllm
@@ -959,6 +962,7 @@ run_vllm_moe_tests() {
   echo "******  Running vLLM MOE Triton kernel tests     *******"
   echo "********************************************************"
 
+  run_vllm_install
   run_vllm_test_deps_install
 
   cd vllm
@@ -984,6 +988,7 @@ run_vllm_triton_attn_tests() {
   echo "******  Running vLLM Triton Attention tests      *******"
   echo "********************************************************"
 
+  run_vllm_install
   run_vllm_test_deps_install
 
   cd vllm
@@ -1004,6 +1009,7 @@ run_vllm_gdn_attn_tests() {
   echo "******  Running vLLM GDN Attention tests         *******"
   echo "********************************************************"
 
+  run_vllm_install
   run_vllm_test_deps_install
 
   cd vllm
@@ -1024,6 +1030,7 @@ run_vllm_mamba_tests() {
   echo "******  Running vLLM Mamba tests                 *******"
   echo "********************************************************"
 
+  run_vllm_install
   run_vllm_test_deps_install
 
   cd vllm
@@ -1045,6 +1052,7 @@ run_vllm_quant_tests() {
   echo "******  Running vLLM Quantization Triton tests   *******"
   echo "********************************************************"
 
+  run_vllm_install
   run_vllm_test_deps_install
 
   cd vllm
@@ -1070,6 +1078,7 @@ run_vllm_linear_attn_tests() {
   echo "******  Running vLLM Linear Attention tests      *******"
   echo "********************************************************"
 
+  run_vllm_install
   run_vllm_test_deps_install
 
   cd vllm
@@ -1087,6 +1096,7 @@ run_vllm_deepgemm_tests() {
   echo "******  Running vLLM DeepGemm tests              *******"
   echo "********************************************************"
 
+  run_vllm_install
   run_vllm_test_deps_install
 
   cd vllm
