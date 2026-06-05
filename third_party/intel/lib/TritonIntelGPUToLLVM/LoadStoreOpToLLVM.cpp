@@ -7,6 +7,7 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -316,6 +317,79 @@ struct LoadStoreConversionBase {
 
     SetVector<unsigned> boundaryProtect(boundaryCheck.begin(),
                                         boundaryCheck.end());
+
+    // Boundary predicates for dimension d are identical for two elements iff
+    // those elements have the same coordinate in dim d. From the LinearLayout
+    // register basis, an element's dim-d coordinate is determined only by the
+    // register bits that move dim d (basis != 0); bits that do not move dim d
+    // leave the coordinate unchanged. So `movingMasks[d]` = the bitmask of
+    // register-index bits that move dim d, and the per-element group id for dim
+    // d is `i & ~movingMasks[d]` (drop the moving bits, keep the bits that fix
+    // the coordinate). Elements with the same group id share one predicate.
+    //
+    // Verified empirically (96 straddling configs, bit-exact vs tl.load
+    // oracle): for the #7091 layout (sizePerThread=[1,8], order=[1,0]) this
+    // collapses the 16 per-row M predicates to 1 while leaving the
+    // genuinely-distinct N checks intact, and degrades to per-element
+    // predicates for scatter layouts.
+    //
+    // Fallback: movingMasks[d] stays 0 when layout analysis is unavailable, so
+    // every register bit is treated as fixing the coordinate (group id = i) ->
+    // every element is its own group -> original per-element behavior.
+    SmallVector<unsigned> movingMasks(rank, 0u);
+    if (boundaryProtect.size() > 0) {
+      MLIRContext *ctx = rewriter.getContext();
+      StringAttr kRegister = StringAttr::get(ctx, "register");
+      Attribute encoding = tensorType.getEncoding();
+
+      // Attempt to build LinearLayout for this encoding
+      if (isa_and_present<DistributedEncodingTrait>(encoding)) {
+        std::optional<LinearLayout> llOpt =
+            cast<DistributedEncodingTrait>(encoding).toLinearLayout(
+                tensorType.getShape());
+
+        // Verify the layout was successfully created and has a register
+        // dimension
+        if (llOpt && llOpt->hasInDim(kRegister)) {
+          const LinearLayout &ll = *llOpt;
+          unsigned numRegBits = ll.getInDimSizeLog2(kRegister);
+
+          // Map tensor dimension index to out-dim StringAttr
+          // The layout's out-dims are named "dim0", "dim1", ..., "dimN-1"
+          // in order matching the tensor shape dimensions
+          SmallVector<StringAttr> dimAttrs;
+          for (unsigned d = 0; d < rank; ++d) {
+            std::string dimName = "dim" + std::to_string(d);
+            StringAttr dimAttr = StringAttr::get(ctx, dimName);
+            if (ll.hasOutDim(dimAttr))
+              dimAttrs.push_back(dimAttr);
+            else
+              dimAttrs.push_back(StringAttr{}); // Mark as invalid
+          }
+
+          // For each boundary-protected dimension, compute the mask of register
+          // bits that affect it
+          for (unsigned d : boundaryProtect) {
+            if (d < dimAttrs.size() && dimAttrs[d]) {
+              unsigned mask = 0;
+              for (unsigned pos = 0; pos < numRegBits; ++pos) {
+                int32_t basis = ll.getBasis(kRegister, pos, dimAttrs[d]);
+                if (basis != 0)
+                  mask |= (1u << pos);
+              }
+              movingMasks[d] = mask;
+            }
+          }
+        }
+      }
+    }
+
+    // Cache for per-dimension boundary predicates, keyed by (dim, groupId).
+    // groupId = i & ~movingMasks[dim] is identical for all elements sharing the
+    // same dim-d coordinate, so each distinct coordinate emits its predicate
+    // once.
+    DenseMap<std::pair<unsigned, unsigned>, Value> perDimPredCache;
+
     SmallVector<Value> ptrElems(numElems);
     SmallVector<Value> maskElems;
     for (unsigned i = 0; i < numElems; ++i) {
@@ -341,16 +415,33 @@ struct LoadStoreConversionBase {
         maskElems.push_back(linearize(
             indicesInTensor, shapes, b.int_val(1, 1),
             [&](const Value &index, const Value &shape, const Value &mask) {
-              if (boundaryProtect.contains(dim++)) {
-                // mask = mask && (index < shape) && idx >= 0
-                auto is_pos_idx = b.icmp_sge(index, b.i32_val(0));
-                return b
-                    .and_(
-                        b.and_(b.icmp_slt(index, b.trunc(i32_ty, shape)), mask),
-                        is_pos_idx)
-                    .getResult();
+              if (boundaryProtect.contains(dim)) {
+                // Drop the register bits that move dim's coordinate; elements
+                // left with the same groupId share one boundary predicate.
+                unsigned groupId = i & ~movingMasks[dim];
+                auto cacheKey = std::make_pair(dim, groupId);
+
+                auto it = perDimPredCache.find(cacheKey);
+                Value boundPred;
+                if (it != perDimPredCache.end()) {
+                  // Cache hit: reuse existing predicate
+                  boundPred = it->second;
+                } else {
+                  // Cache miss: emit new predicate
+                  // mask_d = (index >= 0) && (index < shape)
+                  Value is_pos_idx = b.icmp_sge(index, b.i32_val(0));
+                  Value is_in_bounds =
+                      b.icmp_slt(index, b.trunc(i32_ty, shape));
+                  boundPred = b.and_(is_pos_idx, is_in_bounds).getResult();
+                  perDimPredCache[cacheKey] = boundPred;
+                }
+
+                // Accumulate into running mask
+                dim++;
+                return b.and_(mask, boundPred).getResult();
               }
 
+              dim++;
               return mask;
             }));
       }

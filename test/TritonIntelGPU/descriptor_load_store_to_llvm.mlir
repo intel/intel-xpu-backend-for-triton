@@ -35,17 +35,15 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK: %[[IDX0_GE_ZERO:.*]] = llvm.icmp "sge" %{{.*}}, %[[ZERO0]] : i32
     // CHECK: %[[SHAPE0_I32:.*]] = llvm.trunc %[[SHAPE0]] : i64 to i32
     // CHECK: %[[IDX0_LT_SHAPE0:.*]] = llvm.icmp "slt" %{{.*}}, %[[SHAPE0_I32]] : i32
-    // CHECK: %[[DIM0_INBOUNDS:.*]] = llvm.and %[[IDX0_LT_SHAPE0]], %{{.*}} : i1
-    // CHECK: %[[DIM0_PRED:.*]] = llvm.and %[[DIM0_INBOUNDS]], %[[IDX0_GE_ZERO]] : i1
+    // CHECK: %[[DIM0_PRED:.*]] = llvm.and %[[IDX0_GE_ZERO]], %[[IDX0_LT_SHAPE0]] : i1
 
     // Verify boundary checking: index1 >= 0 AND index1 < shape1
     // CHECK: %[[ZERO1:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: %[[IDX1_GE_ZERO:.*]] = llvm.icmp "sge" %{{.*}}, %[[ZERO1]] : i32
     // CHECK: %[[SHAPE1_I32:.*]] = llvm.trunc %[[SHAPE1]] : i64 to i32
     // CHECK: %[[IDX1_LT_SHAPE1:.*]] = llvm.icmp "slt" %{{.*}}, %[[SHAPE1_I32]] : i32
-
-    // CHECK: %[[DIM1_INBOUNDS:.*]] = llvm.and %[[IDX1_LT_SHAPE1]], %[[DIM0_PRED]] : i1
-    // CHECK: %[[PRED:.*]] = llvm.and %[[DIM1_INBOUNDS]], %[[IDX1_GE_ZERO]] : i1
+    // CHECK: %[[DIM1_PRED:.*]] = llvm.and %[[IDX1_GE_ZERO]], %[[IDX1_LT_SHAPE1]] : i1
+    // CHECK: %[[PRED:.*]] = llvm.and %{{.*}}, %[[DIM1_PRED]] : i1
 
     // Verify predicated load: conditional branch based on bounds check
     // If in-bounds, go to load block; otherwise skip with default value
@@ -96,17 +94,15 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK: %[[IDX0_GE_ZERO:.*]] = llvm.icmp "sge" %{{.*}}, %[[ZERO0]] : i32
     // CHECK: %[[SHAPE0_I32:.*]] = llvm.trunc %[[SHAPE0]] : i64 to i32
     // CHECK: %[[IDX0_LT_SHAPE0:.*]] = llvm.icmp "slt" %{{.*}}, %[[SHAPE0_I32]] : i32
-    // CHECK: %[[DIM0_INBOUNDS:.*]] = llvm.and %[[IDX0_LT_SHAPE0]], %{{.*}} : i1
-    // CHECK: %[[DIM0_PRED:.*]] = llvm.and %[[DIM0_INBOUNDS]], %[[IDX0_GE_ZERO]] : i1
+    // CHECK: %[[DIM0_PRED:.*]] = llvm.and %[[IDX0_GE_ZERO]], %[[IDX0_LT_SHAPE0]] : i1
 
     // Verify boundary checking: index1 >= 0 AND index1 < shape1
     // CHECK: %[[ZERO1:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: %[[IDX1_GE_ZERO:.*]] = llvm.icmp "sge" %{{.*}}, %[[ZERO1]] : i32
     // CHECK: %[[SHAPE1_I32:.*]] = llvm.trunc %[[SHAPE1]] : i64 to i32
     // CHECK: %[[IDX1_LT_SHAPE1:.*]] = llvm.icmp "slt" %{{.*}}, %[[SHAPE1_I32]] : i32
-
-    // CHECK: %[[DIM1_INBOUNDS:.*]] = llvm.and %[[IDX1_LT_SHAPE1]], %[[DIM0_PRED]] : i1
-    // CHECK: %[[PRED:.*]] = llvm.and %[[DIM1_INBOUNDS]], %[[IDX1_GE_ZERO]] : i1
+    // CHECK: %[[DIM1_PRED:.*]] = llvm.and %[[IDX1_GE_ZERO]], %[[IDX1_LT_SHAPE1]] : i1
+    // CHECK: %[[PRED:.*]] = llvm.and %{{.*}}, %[[DIM1_PRED]] : i1
 
     // Verify predicated load: uses triton_gen.predicated_load intrinsic
     // with bounds predicate instead of branching.
@@ -149,17 +145,15 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK: %[[S_IDX0_GE_ZERO:.*]] = llvm.icmp "sge" %{{.*}}, %[[S_ZERO0]] : i32
     // CHECK: %[[S_SHAPE0_I32:.*]] = llvm.trunc %[[SHAPE0]] : i64 to i32
     // CHECK: %[[S_IDX0_LT_SHAPE0:.*]] = llvm.icmp "slt" %{{.*}}, %[[S_SHAPE0_I32]] : i32
-    // CHECK: %[[S_DIM0_INBOUNDS:.*]] = llvm.and %[[S_IDX0_LT_SHAPE0]], %{{.*}} : i1
-    // CHECK: %[[S_DIM0_PRED:.*]] = llvm.and %[[S_DIM0_INBOUNDS]], %[[S_IDX0_GE_ZERO]] : i1
+    // CHECK: %[[S_DIM0_PRED:.*]] = llvm.and %[[S_IDX0_GE_ZERO]], %[[S_IDX0_LT_SHAPE0]] : i1
 
     // Verify boundary checking: index1 >= 0 AND index1 < shape1
     // CHECK: %[[S_ZERO1:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: %[[S_IDX1_GE_ZERO:.*]] = llvm.icmp "sge" %{{.*}}, %[[S_ZERO1]] : i32
     // CHECK: %[[S_SHAPE1_I32:.*]] = llvm.trunc %[[SHAPE1]] : i64 to i32
     // CHECK: %[[S_IDX1_LT_SHAPE1:.*]] = llvm.icmp "slt" %{{.*}}, %[[S_SHAPE1_I32]] : i32
-
-    // CHECK: %[[S_DIM1_INBOUNDS:.*]] = llvm.and %[[S_IDX1_LT_SHAPE1]], %[[S_DIM0_PRED]] : i1
-    // CHECK: %[[S_PRED:.*]] = llvm.and %[[S_DIM1_INBOUNDS]], %[[S_IDX1_GE_ZERO]] : i1
+    // CHECK: %[[S_DIM1_PRED:.*]] = llvm.and %[[S_IDX1_GE_ZERO]], %[[S_IDX1_LT_SHAPE1]] : i1
+    // CHECK: %[[S_PRED:.*]] = llvm.and %{{.*}}, %[[S_DIM1_PRED]] : i1
 
     // Verify the thread redundancy predicate is combined with boundary mask.
     // The thread predicate (from redundant-thread elimination) is AND'd with
@@ -215,17 +209,15 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK: %[[S_IDX0_GE_ZERO:.*]] = llvm.icmp "sge" %{{.*}}, %[[S_ZERO0]] : i32
     // CHECK: %[[S_SHAPE0_I32:.*]] = llvm.trunc %[[SHAPE0]] : i64 to i32
     // CHECK: %[[S_IDX0_LT_SHAPE0:.*]] = llvm.icmp "slt" %{{.*}}, %[[S_SHAPE0_I32]] : i32
-    // CHECK: %[[S_DIM0_INBOUNDS:.*]] = llvm.and %[[S_IDX0_LT_SHAPE0]], %{{.*}} : i1
-    // CHECK: %[[S_DIM0_PRED:.*]] = llvm.and %[[S_DIM0_INBOUNDS]], %[[S_IDX0_GE_ZERO]] : i1
+    // CHECK: %[[S_DIM0_PRED:.*]] = llvm.and %[[S_IDX0_GE_ZERO]], %[[S_IDX0_LT_SHAPE0]] : i1
 
     // Verify boundary checking: index1 >= 0 AND index1 < shape1
     // CHECK: %[[S_ZERO1:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: %[[S_IDX1_GE_ZERO:.*]] = llvm.icmp "sge" %{{.*}}, %[[S_ZERO1]] : i32
     // CHECK: %[[S_SHAPE1_I32:.*]] = llvm.trunc %[[SHAPE1]] : i64 to i32
     // CHECK: %[[S_IDX1_LT_SHAPE1:.*]] = llvm.icmp "slt" %{{.*}}, %[[S_SHAPE1_I32]] : i32
-
-    // CHECK: %[[S_DIM1_INBOUNDS:.*]] = llvm.and %[[S_IDX1_LT_SHAPE1]], %[[S_DIM0_PRED]] : i1
-    // CHECK: %[[S_PRED:.*]] = llvm.and %[[S_DIM1_INBOUNDS]], %[[S_IDX1_GE_ZERO]] : i1
+    // CHECK: %[[S_DIM1_PRED:.*]] = llvm.and %[[S_IDX1_GE_ZERO]], %[[S_IDX1_LT_SHAPE1]] : i1
+    // CHECK: %[[S_PRED:.*]] = llvm.and %{{.*}}, %[[S_DIM1_PRED]] : i1
 
     // Verify the thread redundancy predicate is combined with boundary mask.
     // The thread predicate (from redundant-thread elimination) is AND'd with
@@ -292,6 +284,81 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK: triton_gen.predicated_store {{.*}}, %{{.*}}, %{{.*}} {cache_control = Default} : (!llvm.ptr<1>, vector<2xi32>, i1)
     tt.descriptor_store %desc[%arg1, %arg2], %load : !tt.tensordesc<4x16xf16>, tensor<4x16xf16, #blocked>
     tt.return %load : tensor<4x16xf16, #blocked>
+  }
+}
+
+// -----
+
+// COM: Test predicate sharing for tile-uniform dimensions (issue #7091)
+// COM: With sizePerThread=[1,8] and order=[1,0], dim 0 (M) is uniform across
+// COM: a thread's 8 registers (all registers have the same M coordinate).
+// COM: The optimization emits only 1 M-dim boundary check per distinct M value,
+// COM: reusing it for all 8 elements in that row.
+
+#blocked_tile_uniform = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, "ttig.support_predicated_io"} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @descriptor_load_tile_uniform_7091
+  tt.func public @descriptor_load_tile_uniform_7091(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32) -> (tensor<2x128xf16, #blocked_tile_uniform>) {
+    %c2_i32 = arith.constant 2 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %c128_i64 = arith.constant 128 : i64
+    %c1_i64 = arith.constant 1 : i64
+    // stride = [128, 1] → row-major
+    %desc = tt.make_tensor_descriptor %arg0, [%c2_i32, %c128_i32], [%c128_i64, %c1_i64] : <f16>, <2x128xf16>
+
+    // COM: Tile-uniform predicate sharing. With sizePerThread=[1,8] order=[1,0],
+    // COM: registers within a row share a boundary coordinate, so one per-group
+    // COM: predicate is emitted ONCE and REUSED across several element masks
+    // COM: rather than recomputed per element. The grouping signal: a single
+    // COM: shared per-group predicate Value (defined as `and` of its sge & slt
+    // COM: terms) is fed as the RHS of multiple later AND combinations. With the
+    // COM: old per-element construction every element recomputed its own, so no
+    // COM: such reuse existed. CHECK-COUNT-2 locks at least two reuses.
+    // COM: The first element computes two per-dim group predicates; the second
+    // COM: of them is the SHARED per-group predicate that later elements reuse
+    // COM: (instead of recomputing). Anchor past the first two `and`s, capture
+    // COM: the shared predicate, then assert it is reused by two later masks.
+    // CHECK: llvm.and %{{[0-9]+}}, %{{[0-9]+}} : i1
+    // CHECK: llvm.and %{{[0-9]+}}, %{{[0-9]+}} : i1
+    // CHECK: %[[SHARED:[0-9]+]] = llvm.and %{{[0-9]+}}, %{{[0-9]+}} : i1
+    // CHECK: llvm.and %{{[0-9]+}}, %[[SHARED]] : i1
+    // CHECK: llvm.and %{{[0-9]+}}, %[[SHARED]] : i1
+
+    %load = tt.descriptor_load %desc[%arg1, %arg2] : !tt.tensordesc<2x128xf16> -> tensor<2x128xf16, #blocked_tile_uniform>
+    tt.return %load : tensor<2x128xf16, #blocked_tile_uniform>
+  }
+}
+
+// -----
+
+// COM: Test predicate per-group emission for non-uniform dimensions (issue #7091)
+// COM: With sizePerThread=[2,4], dim 0 has 2 distinct M values per thread
+// COM: → 2 coordinate groups → 2 M-dim boundary checks (not collapsed).
+
+#blocked_non_uniform = #ttg.blocked<{sizePerThread = [2, 4], threadsPerWarp = [16, 2], warpsPerCTA = [1, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, "ttig.support_predicated_io"} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @descriptor_load_non_uniform
+  tt.func public @descriptor_load_non_uniform(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32) -> (tensor<32x8xf16, #blocked_non_uniform>) {
+    %c32_i32 = arith.constant 32 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %c8_i64 = arith.constant 8 : i64
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%c32_i32, %c8_i32], [%c8_i64, %c1_i64] : <f16>, <32x8xf16>
+
+    // COM: Verify M-dim (dim 0) checks are emitted per coordinate group.
+    // COM: Each thread has 2 distinct M coordinates (sizePerThread=[2,4]).
+    // COM: With non-uniform coordinates, each group gets its own boundary check.
+    // CHECK: %[[SHAPE0:.*]] = llvm.extractvalue %{{.*}}[0] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
+    // COM: Verify multiple M-dim checks exist (at least 2 for the 2 M values per thread)
+    // CHECK: %{{.*}} = llvm.trunc %[[SHAPE0]] : i64 to i32
+    // CHECK: llvm.icmp "slt" %{{.*}}, %{{.*}} : i32
+    // CHECK: %{{.*}} = llvm.trunc %[[SHAPE0]] : i64 to i32
+    // CHECK: llvm.icmp "slt" %{{.*}}, %{{.*}} : i32
+
+    %load = tt.descriptor_load %desc[%arg1, %arg2] : !tt.tensordesc<32x8xf16> -> tensor<32x8xf16, #blocked_non_uniform>
+    tt.return %load : tensor<32x8xf16, #blocked_non_uniform>
   }
 }
 
