@@ -348,6 +348,42 @@ bool isLayoutAnchor(Operation *op) {
   if (auto reshape = dyn_cast<tt::ReshapeOp>(op))
     return reshape.getAllowReorder();
 
+  // Anchor a convert_layout that feeds a descriptor store when the chain of
+  // converts behind it performs a net order change (a transpose).  Coalesce
+  // inserts such a chain to give the store its coalesced (row-major) layout;
+  // without anchoring it, forward propagation from an (expensive) load strips
+  // the chain and demotes the store to a scalar scatter.  Unlike a store (which
+  // has no result and so cannot be anchored), the convert has a result and can.
+  //
+  // The order change is checked across the whole convert chain (root source ->
+  // store-feeding convert), not on a single convert: the store-feeding convert
+  // is frequently a same-order re-tiling whose transpose lives one convert
+  // upstream.  Gating on the net change keeps a genuine transpose (issue #7093)
+  // while still folding a chain that ends at the same order it started (e.g. a
+  // dot result re-tiled for the store, issue #4866).
+  if (auto convertOp = dyn_cast<ttg::ConvertLayoutOp>(op)) {
+    bool feedsDescStore =
+        llvm::any_of(convertOp.getResult().getUsers(), [](Operation *user) {
+          return isa<tt::DescriptorStoreOp>(user);
+        });
+    if (feedsDescStore) {
+      // Walk up consecutive converts to the root source of the chain.
+      Value root = convertOp.getSrc();
+      while (auto upConvert = root.getDefiningOp<ttg::ConvertLayoutOp>())
+        root = upConvert.getSrc();
+      auto rootTy = dyn_cast<RankedTensorType>(root.getType());
+      auto dstTy = dyn_cast<RankedTensorType>(convertOp.getType());
+      if (rootTy && dstTy) {
+        auto rootBlocked =
+            dyn_cast<ttg::BlockedEncodingAttr>(rootTy.getEncoding());
+        auto dstBlocked =
+            dyn_cast<ttg::BlockedEncodingAttr>(dstTy.getEncoding());
+        if (rootBlocked && dstBlocked)
+          return rootBlocked.getOrder() != dstBlocked.getOrder();
+      }
+    }
+  }
+
   return false;
 }
 
