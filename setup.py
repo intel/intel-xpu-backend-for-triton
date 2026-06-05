@@ -567,7 +567,7 @@ TRITON_VERSION = "3.7.2" + get_triton_version_suffix()
 
 # Dynamically define supported Python versions and classifiers
 MIN_PYTHON = (3, 10)
-MAX_PYTHON = (3, 14)
+MAX_PYTHON = (3, 15)
 
 PYTHON_REQUIRES = f">={MIN_PYTHON[0]}.{MIN_PYTHON[1]},<{MAX_PYTHON[0]}.{MAX_PYTHON[1] + 1}"
 BASE_CLASSIFIERS = [
