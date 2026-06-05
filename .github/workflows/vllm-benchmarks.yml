@@ -131,8 +131,7 @@ jobs:
         id: install-vllm
         if: ${{ steps.install-benchmarks.outcome == 'success' && !cancelled() }}
         run: |
-          ./scripts/vllm/install-vllm.sh \
-            --triton-repo-branch "${{ inputs.triton_repo_branch || github.ref_name }}"
+          ./scripts/vllm/install-vllm.sh --triton-repo-branch "${{ inputs.triton_repo_branch || github.ref_name }}"
 
       - name: Run vllm unified attention bf16
         if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
