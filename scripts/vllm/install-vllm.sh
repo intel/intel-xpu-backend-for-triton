@@ -283,8 +283,10 @@ if [[ "$prepare_source_only" == false ]]; then
 fi
 
 prepare_source "$VLLM_PROJ" "https://github.com/vllm-project/vllm.git" "${vllm_pinned_commit:-}" "$latest"
-git -C "$VLLM_PROJ" apply "$SCRIPTS_DIR/vllm/vllm-fix.patch"
-python "$SCRIPTS_DIR/vllm/vllm_xpu_patch.py" "$VLLM_PROJ"
+if [[ "$clean" == true ]]; then
+  git -C "$VLLM_PROJ" apply "$SCRIPTS_DIR/vllm/vllm-fix.patch"
+  python "$SCRIPTS_DIR/vllm/vllm_xpu_patch.py" "$VLLM_PROJ"
+fi
 
 if [[ "$build_vllm" == false ]]; then
   if ! command -v gh &>/dev/null; then
