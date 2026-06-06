@@ -23,3 +23,24 @@ llvm.func @triton_gen.cache_controls(%arg0: !llvm.ptr) {
 // CHECK-DAG: ![[#CACHECONTROL3]] = !{i32 6443, i32 1, i32 3, i32 1}
 // CHECK-DAG: ![[#CACHECONTROL4]] = !{i32 6443, i32 0, i32 0, i32 0}
 // CHECK-DAG: ![[#CACHECONTROL5]] = !{i32 6442, i32 0, i32 1, i32 1}
+
+// -----
+
+llvm.func @_Z16__spirv_ocl_sqrtf(f32) -> f32
+
+// CHECK-LABEL: define void @triton_gen.fp_rounding_mode(
+// CHECK-SAME:                                           ptr %[[#ARG0:]]) {
+llvm.func @triton_gen.fp_rounding_mode(%arg0: !llvm.ptr) {
+  %0 = llvm.load %arg0 : !llvm.ptr -> f32
+  %1 = llvm.load %arg0 : !llvm.ptr -> f32
+  // CHECK: %[[#SQRT:]] = call float @_Z16__spirv_ocl_sqrtf(float %[[#]]), !spirv.Decorations ![[#ROUNDING0:]]
+  %2 = llvm.call @_Z16__spirv_ocl_sqrtf(%0) {triton_gen.FPRoundingMode = 0 : i32} : (f32) -> f32
+  // CHECK: %[[#DIV:]] = fdiv float %[[#]], %[[#]], !spirv.Decorations ![[#ROUNDING0]]
+  %3 = llvm.fdiv %0, %1 {triton_gen.FPRoundingMode = 0 : i32} : f32
+  llvm.store %2, %arg0 : f32, !llvm.ptr
+  llvm.store %3, %arg0 : f32, !llvm.ptr
+  llvm.return
+}
+
+// CHECK-DAG: ![[#ROUNDING0]] = !{![[#ROUNDING1:]]}
+// CHECK-DAG: ![[#ROUNDING1]] = !{i32 39, i32 0}

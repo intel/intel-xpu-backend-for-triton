@@ -1,0 +1,72 @@
+diff --git a/include/LLVMSPIRVExtensions.inc b/include/LLVMSPIRVExtensions.inc
+index 23f3bf97..d30e0282 100644
+--- a/include/LLVMSPIRVExtensions.inc
++++ b/include/LLVMSPIRVExtensions.inc
+@@ -94,3 +94,4 @@ EXT(SPV_INTEL_sigmoid)
+ EXT(SPV_INTEL_float4)
+ EXT(SPV_INTEL_fp_conversions)
+ EXT(SPV_KHR_float_controls2)
++EXT(SPV_INTEL_rounded_divide_sqrt)
+diff --git a/lib/SPIRV/SPIRVWriter.cpp b/lib/SPIRV/SPIRVWriter.cpp
+index 83470eb4..a64e8293 100644
+--- a/lib/SPIRV/SPIRVWriter.cpp
++++ b/lib/SPIRV/SPIRVWriter.cpp
+@@ -3345,8 +3345,25 @@ bool LLVMToSPIRVBase::transDecoration(Value *V, SPIRVValue *BV) {
+   if (Instruction *Inst = dyn_cast<Instruction>(V)) {
+     if (shouldTryToAddMemAliasingDecoration(Inst))
+       transMemAliasingINTELDecorations(Inst, BV);
+-    if (auto *IDecoMD = Inst->getMetadata(SPIRV_MD_DECORATIONS))
++    if (auto *IDecoMD = Inst->getMetadata(SPIRV_MD_DECORATIONS)) {
+       transMetadataDecorations(IDecoMD, BV);
++      // Check if FPRoundingMode decoration is applied to fdiv or sqrt call,
++      // which requires SPV_INTEL_rounded_divide_sqrt.
++      if (BM->isAllowedToUseExtension(
++              ExtensionID::SPV_INTEL_rounded_divide_sqrt)) {
++        bool isFDivOrSqrt = Inst->getOpcode() == Instruction::FDiv;
++        if (!isFDivOrSqrt) {
++          if (auto *CI = dyn_cast<CallInst>(Inst))
++            if (Function *F = CI->getCalledFunction())
++              if (F->getName().contains("sqrt"))
++                isFDivOrSqrt = true;
++        }
++        if (isFDivOrSqrt && BV->hasDecorate(DecorationFPRoundingMode)) {
++          BM->addCapability(internal::CapabilityRoundedDivideSqrtINTEL);
++          BM->addExtension(ExtensionID::SPV_INTEL_rounded_divide_sqrt);
++        }
++      }
++    }
+     if (BV->isInst())
+       addFPBuiltinDecoration(BM, Inst, static_cast<SPIRVInstruction *>(BV));
+   }
+diff --git a/lib/SPIRV/libSPIRV/SPIRVNameMapEnum.h b/lib/SPIRV/libSPIRV/SPIRVNameMapEnum.h
+index fe1506fc..a63a8ad4 100644
+--- a/lib/SPIRV/libSPIRV/SPIRVNameMapEnum.h
++++ b/lib/SPIRV/libSPIRV/SPIRVNameMapEnum.h
+@@ -683,6 +683,7 @@ template <> inline void SPIRVMap<Capability, std::string>::init() {
+       "CooperativeMatrixCheckedInstructionsINTEL");
+   add(internal::CapabilityCooperativeMatrixOffsetInstructionsINTEL,
+       "CooperativeMatrixOffsetInstructionsINTEL");
++  add(internal::CapabilityRoundedDivideSqrtINTEL, "RoundedDivideSqrtINTEL");
+   add(internal::CapabilitySubgroupRequirementsINTEL,
+       "SubgroupRequirementsINTEL");
+   add(internal::CapabilityTaskSequenceINTEL, "TaskSequenceINTEL");
+diff --git a/lib/SPIRV/libSPIRV/spirv_internal.hpp b/lib/SPIRV/libSPIRV/spirv_internal.hpp
+index 16244e47..cc95b28e 100644
+--- a/lib/SPIRV/libSPIRV/spirv_internal.hpp
++++ b/lib/SPIRV/libSPIRV/spirv_internal.hpp
+@@ -119,6 +119,7 @@ enum InternalCapability {
+   ICapabilityCooperativeMatrixInvocationInstructionsINTEL = 6435,
+   ICapabilityCooperativeMatrixTF32ComponentTypeINTEL = 6436,
+   ICapabilityCooperativeMatrixBFloat16ComponentTypeINTEL = 6437,
++  ICapabilityRoundedDivideSqrtINTEL = 6265,
+   ICapabilitySubgroupRequirementsINTEL = 6445,
+   ICapabilityBindlessImagesINTEL = 6528
+ };
+@@ -191,6 +192,7 @@ _SPIRV_OP(Capability, MaskedGatherScatterINTEL)
+ _SPIRV_OP(Op, MaskedGatherINTEL)
+ _SPIRV_OP(Op, MaskedScatterINTEL)
+ 
++_SPIRV_OP(Capability, RoundedDivideSqrtINTEL)
+ _SPIRV_OP(Capability, SubgroupRequirementsINTEL)
+ 
+ _SPIRV_OP(Capability, TaskSequenceINTEL)
