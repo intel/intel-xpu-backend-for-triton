@@ -73,30 +73,6 @@ if (NOT SPIRVToLLVMTranslator_FOUND)
             if(NOT PATCH_RESULT EQUAL 0)
                 message(FATAL_ERROR "Failed to apply revert_3609.patch to SPIRV-LLVM-Translator")
             endif()
-
-            # FIXME: Don't apply patch when translator is updated to support SPV_INTEL_rounded_divide_sqrt
-            execute_process(
-                COMMAND git apply --check ${CMAKE_CURRENT_LIST_DIR}/rounded_divide_sqrt.patch
-                WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
-                ERROR_QUIET
-                RESULT_VARIABLE PATCH_RESULT
-            )
-            if(PATCH_RESULT EQUAL 0)
-                execute_process(
-                        COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/rounded_divide_sqrt.patch
-                        WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
-                        RESULT_VARIABLE PATCH_RESULT
-                )
-            else()
-                execute_process( # Check if the patch is already applied
-                        COMMAND git apply --reverse --check ${CMAKE_CURRENT_LIST_DIR}/rounded_divide_sqrt.patch
-                        WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
-                        RESULT_VARIABLE PATCH_RESULT
-                )
-            endif()
-            if(NOT PATCH_RESULT EQUAL 0)
-                message(FATAL_ERROR "Failed to apply rounded_divide_sqrt.patch to SPIRV-LLVM-Translator")
-            endif()
     endif()
 
     set(SPIRVToLLVMTranslator_INCLUDE_DIR "${SPIRVToLLVMTranslator_SOURCE_DIR}/include"
