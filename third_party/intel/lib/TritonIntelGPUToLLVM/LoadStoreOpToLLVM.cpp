@@ -245,7 +245,7 @@ struct LoadStoreConversionBase {
     if (!descAxisInfo || static_cast<unsigned>(descAxisInfo->getRank()) != rank)
       return 1;
 
-    LinearEncodingAttr linAttr = triton::gpu::toLinearEncoding(resultType);
+    auto linAttr = triton::gpu::toGenericLinearEncoding(resultType);
     SmallVector<unsigned> order = linAttr.getOrder();
     SmallVector<unsigned> contigPerThread = linAttr.getContigPerThread();
 
