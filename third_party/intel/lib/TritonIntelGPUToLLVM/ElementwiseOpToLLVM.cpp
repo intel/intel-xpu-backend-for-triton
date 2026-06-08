@@ -1462,6 +1462,57 @@ struct ExpOpConversionApprox
   }
 };
 
+// Emit an LLVM intrinsic call with the fast fast-math flag under
+// ttig.fast_math. F32-only; returns {} otherwise so the caller falls through to
+// the upstream pattern which calls the precise SPIR-V vendor library.
+static SmallVector<Value>
+emitFastMathF32Intrinsic(Operation *op, ConversionPatternRewriter &rewriter,
+                         Type elemTy, MultipleOperandsRange operands,
+                         Location loc, StringRef llvmIntrinsicName) {
+  if (elemTy.getIntOrFloatBitWidth() != 32)
+    return {};
+  if (!op->getParentOfType<ModuleOp>()->hasAttr(
+          triton::gpu::intel::TritonIntelGPUDialect::getFastMathAttrName()))
+    return {};
+  Type funcType = getFunctionType(elemTy, operands[0]);
+  LLVM::LLVMFuncOp funcOp =
+      appendOrGetExternFuncOp(rewriter, op, llvmIntrinsicName, funcType);
+  auto call = LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0][0]);
+  call.setFastmathFlagsAttr(LLVM::FastmathFlagsAttr::get(
+      rewriter.getContext(), LLVM::FastmathFlags::fast));
+  return {call.getResult()};
+}
+
+struct SinOpConversionApprox
+    : ElementwiseOpConversionBase<math::SinOp, SinOpConversionApprox> {
+  using Base = ElementwiseOpConversionBase<math::SinOp, SinOpConversionApprox>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(math::SinOp op, Adaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    return emitFastMathF32Intrinsic(op, rewriter, elemTy, operands, loc,
+                                    "llvm.sin.f32");
+  }
+};
+
+struct CosOpConversionApprox
+    : ElementwiseOpConversionBase<math::CosOp, CosOpConversionApprox> {
+  using Base = ElementwiseOpConversionBase<math::CosOp, CosOpConversionApprox>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(math::CosOp op, Adaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    return emitFastMathF32Intrinsic(op, rewriter, elemTy, operands, loc,
+                                    "llvm.cos.f32");
+  }
+};
+
 struct AbsFOpConversion
     : ElementwiseOpConversionBase<math::AbsFOp, AbsFOpConversion> {
   using Base = ElementwiseOpConversionBase<math::AbsFOp, AbsFOpConversion>;
@@ -1779,6 +1830,10 @@ void populateElementwiseOpToLLVMPatterns(
   // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
   // a vendor specific math library for higher-precision calculation
   patterns.add<ExpOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
+  // SinOpConversionApprox / CosOpConversionApprox lower llvm.sin.f32 /
+  // llvm.cos.f32 with the fast fast-math flag.
+  patterns.add<SinOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<CosOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
   // TODO(FIXME): spirv's OpenCL extension (fmin/fmax) does not support
   // nan propagation. Set these conversion benefit to the max benefit:
   // PatternBenefit::ImpossibleToMatchSentinel - 1 to make sure the
