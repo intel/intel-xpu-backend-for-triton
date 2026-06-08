@@ -2,8 +2,8 @@ name: Install vllm
 description: Install vLLM and vLLM XPU kernels, building from source on PRs that touch wheel-trigger files
 
 inputs:
-  use-branch-wheels:
-    description: Use prebuilt vLLM XPU kernels wheels from the current branch (must have a successful nightly build)
+  use-branch-wheel:
+    description: Use prebuilt vLLM XPU kernels wheel from the current branch (must have a successful nightly build)
     required: false
     default: "false"
 
@@ -23,8 +23,8 @@ runs:
         if echo "$changed" | grep -qE '^(\.github/workflows/nightly-wheels\.yml|scripts/vllm/install-vllm\.sh|scripts/vllm/vllm-xpu-kernels-pin\.txt)$'; then
           echo "*** Wheel-trigger files changed: building vLLM XPU kernels from source. ***"
           install_args+=(--source)
-        elif [[ "${{ inputs.use-branch-wheels }}" == "true" ]]; then
-          echo "*** use-branch-wheels=true: fetching wheels from ${{ github.ref_name }}. ***"
+        elif [[ "${{ inputs.use-branch-wheel }}" == "true" ]]; then
+          echo "*** use-branch-wheel=true: fetching wheel from ${{ github.ref_name }}. ***"
           install_args+=(--triton-repo-branch "${{ github.ref_name }}")
         else
           echo "*** Using main nightly wheels (default). ***"
