@@ -15,10 +15,6 @@ on:
         description: vLLM XPU kernels pin (commit hash), keep empty for default
         type: string
         default: ""
-      triton_repo_branch:
-        description: Branch to fetch prebuilt vLLM XPU kernels wheels from, keep empty to use the dispatching ref
-        type: string
-        default: ""
       skip_list:
         description: Skip list directory override
         type: string
@@ -216,7 +212,7 @@ jobs:
         id: install-vllm
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         run: |
-          ./scripts/vllm/install-vllm.sh --triton-repo-branch "${{ inputs.triton_repo_branch || github.ref_name }}"
+          ./scripts/vllm/install-vllm.sh
 
       - name: Create reports dir
         run: |
