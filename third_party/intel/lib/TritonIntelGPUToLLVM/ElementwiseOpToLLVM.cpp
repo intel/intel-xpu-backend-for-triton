@@ -1435,7 +1435,7 @@ struct ExpOpConversionApprox
   }
 };
 
-// Emit an LLVM intrinsic call with the afn fast-math flag under ttig.fast_math.
+// Emit an LLVM intrinsic call with the fast fast-math flag under ttig.fast_math.
 // F32-only; returns {} otherwise so the caller falls through to the upstream
 // pattern which calls the precise SPIR-V vendor library.
 static SmallVector<Value>
@@ -1452,7 +1452,7 @@ emitFastMathF32Intrinsic(Operation *op, ConversionPatternRewriter &rewriter,
       appendOrGetExternFuncOp(rewriter, op, llvmIntrinsicName, funcType);
   auto call = LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0][0]);
   call.setFastmathFlagsAttr(LLVM::FastmathFlagsAttr::get(
-      rewriter.getContext(), LLVM::FastmathFlags::afn));
+      rewriter.getContext(), LLVM::FastmathFlags::fast));
   return {call.getResult()};
 }
 
@@ -1804,7 +1804,7 @@ void populateElementwiseOpToLLVMPatterns(
   // a vendor specific math library for higher-precision calculation
   patterns.add<ExpOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
   // SinOpConversionApprox / CosOpConversionApprox lower llvm.sin.f32 /
-  // llvm.cos.f32 with the afn fast-math flag.
+  // llvm.cos.f32 with the fast fast-math flag.
   patterns.add<SinOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<CosOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
   // TODO(FIXME): spirv's OpenCL extension (fmin/fmax) does not support
