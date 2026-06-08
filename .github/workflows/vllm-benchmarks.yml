@@ -19,6 +19,10 @@ on:
         description: vLLM XPU kernels pin (commit hash), keep empty for default
         type: string
         default: ""
+      use_branch_wheels:
+        description: Use prebuilt vLLM XPU kernels wheels from this branch (must have a successful nightly build)
+        type: boolean
+        default: false
   # This workflow is also called from workflows vllm-benchmarks-*.yml.
   workflow_call:
     inputs:
@@ -37,6 +41,10 @@ on:
         description: vLLM XPU kernels pin (commit hash), keep empty for default
         type: string
         default: ""
+      use_branch_wheels:
+        description: Use prebuilt vLLM XPU kernels wheels from this branch (must have a successful nightly build)
+        type: boolean
+        default: false
 
   schedule:
     - cron: "0 8 * * *"
@@ -122,8 +130,9 @@ jobs:
       - name: Install vllm
         id: install-vllm
         if: ${{ steps.install-benchmarks.outcome == 'success' && !cancelled() }}
-        run: |
-          ./scripts/vllm/install-vllm.sh
+        uses: ./.github/actions/install-vllm
+        with:
+          use-branch-wheels: ${{ inputs.use_branch_wheels }}
 
       - name: Run vllm unified attention bf16
         if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}

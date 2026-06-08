@@ -151,7 +151,7 @@ check_wheel=false
 use_venv=false
 clean=true
 triton_repo=intel/intel-xpu-backend-for-triton
-triton_repo_branch=""
+triton_repo_branch=$DEFAULT_BRANCH
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -226,10 +226,7 @@ Options:
   --triton-repo <repo>           GitHub repo to fetch prebuilt vLLM XPU kernels wheels from
                                  (default: intel/intel-xpu-backend-for-triton).
 
-  --triton-repo-branch <branch>  Branch to fetch prebuilt vLLM XPU kernels wheels from. When set, only that branch is
-                                 tried. When unset, GITHUB_REF_NAME is tried first, falling back to $DEFAULT_BRANCH if
-                                 it has no nightly runs. If GITHUB_REF_NAME has nightly runs but none of the recent ones
-                                 completed successfully, the script errors out.
+  --triton-repo-branch <branch>  Branch to fetch prebuilt vLLM XPU kernels wheels from (default: $DEFAULT_BRANCH).
 
   --help                         Show this help message and exit.
 
@@ -302,40 +299,8 @@ if [[ "$build_vllm" == false ]]; then
     exit 1
   fi
 
-  branches_to_try=()
-  if [[ -n "$triton_repo_branch" ]]; then
-    branches_to_try+=("$triton_repo_branch")
-  else
-    current_branch="${GITHUB_REF_NAME:-}"
-    if [[ -n "$current_branch" && "$current_branch" != "$DEFAULT_BRANCH" ]]; then
-      branches_to_try+=("$current_branch")
-    fi
-    branches_to_try+=("$DEFAULT_BRANCH")
-  fi
-
-  run_id=""
-  for branch in "${branches_to_try[@]}"; do
-    runs_json="$(gh run list --workflow nightly-wheels.yml --branch "$branch" -R "$triton_repo" --limit 7 --json databaseId,conclusion)"
-    run_id="$(echo "$runs_json" | jq -r '[.[] | select(.conclusion=="success")][0].databaseId // empty')"
-    if [[ -n "$run_id" ]]; then
-      echo "*** Found nightly builds on $branch (run $run_id). ***"
-      break
-    fi
-
-    if [[ "$(echo "$runs_json" | jq -r 'length')" -gt 0 ]]; then
-      echo "ERROR: $branch has nightly runs but none of the recent ones completed successfully." >&2
-      exit 1
-    fi
-
-    echo "*** No nightly builds found on $branch. ***"
-  done
-
-  if [[ -z "$run_id" ]]; then
-    echo "ERROR: No nightly builds found on any of ${branches_to_try[*]}." >&2
-    exit 1
-  fi
-
   echo "*** Downloading nightly builds. ***"
+  run_id="$(gh run list --workflow nightly-wheels.yml --branch "$triton_repo_branch" -R "$triton_repo" --json databaseId,conclusion | jq -r '[.[] | select(.conclusion=="success")][0].databaseId')"
   temp_dir="$(mktemp -d)"
   wheel_pattern="wheels-vllm-py$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")-*"
   gh run download "$run_id" \

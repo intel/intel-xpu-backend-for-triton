@@ -1,0 +1,32 @@
+name: Install vllm
+description: Install vLLM and vLLM XPU kernels, building from source on PRs that touch wheel-trigger files
+
+inputs:
+  use-branch-wheels:
+    description: Use prebuilt vLLM XPU kernels wheels from the current branch (must have a successful nightly build)
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Install vllm
+      shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+      run: |
+        # nightly-wheels.yml triggers on PRs only when these files change. If the current
+        # branch touched any of them, the wheels on main don't reflect this branch's
+        # changes, so build vLLM XPU kernels from source. Otherwise default to the main
+        # nightly wheels, with an opt-in to use this branch's wheels if they exist.
+        git fetch --depth=1 origin main
+        changed="$(git diff --name-only origin/main...HEAD)"
+        install_args=()
+        if echo "$changed" | grep -qE '^(\.github/workflows/nightly-wheels\.yml|scripts/vllm/install-vllm\.sh|scripts/vllm/vllm-xpu-kernels-pin\.txt)$'; then
+          echo "*** Wheel-trigger files changed: building vLLM XPU kernels from source. ***"
+          install_args+=(--source)
+        elif [[ "${{ inputs.use-branch-wheels }}" == "true" ]]; then
+          echo "*** use-branch-wheels=true: fetching wheels from ${{ github.ref_name }}. ***"
+          install_args+=(--triton-repo-branch "${{ github.ref_name }}")
+        else
+          echo "*** Using main nightly wheels (default). ***"
+        fi
+        ./scripts/vllm/install-vllm.sh "${install_args[@]}"

@@ -31,6 +31,10 @@ on:
         description: Use Python built with pyenv
         type: boolean
         default: true
+      use_branch_wheels:
+        description: Use prebuilt vLLM XPU kernels wheels from this branch (must have a successful nightly build)
+        type: boolean
+        default: false
 
 permissions: read-all
 
@@ -211,8 +215,9 @@ jobs:
       - name: Install vllm
         id: install-vllm
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
-        run: |
-          ./scripts/vllm/install-vllm.sh
+        uses: ./.github/actions/install-vllm
+        with:
+          use-branch-wheels: ${{ inputs.use_branch_wheels }}
 
       - name: Create reports dir
         run: |
