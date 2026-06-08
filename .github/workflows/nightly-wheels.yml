@@ -41,6 +41,7 @@ jobs:
           - "3.12"
           - "3.13"
           - "3.14"
+          - "3.15.0-beta.2"
       fail-fast: false
       max-parallel: 2
     defaults:
@@ -86,6 +87,7 @@ jobs:
             python -m build --wheel --no-isolation && pip install dist/*.whl
 
       - name: Install torchvision package
+        if: "!startsWith(matrix.python, '3.15')"
         uses: ./.github/actions/install-dependency
         with:
           package: torchvision
@@ -94,6 +96,7 @@ jobs:
           extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
 
       - name: Install torchaudio package
+        if: "!startsWith(matrix.python, '3.15')"
         uses: ./.github/actions/install-dependency
         with:
           package: torchaudio
@@ -102,6 +105,7 @@ jobs:
           extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
 
       - name: Install timm package
+        if: "!startsWith(matrix.python, '3.15')"
         uses: ./.github/actions/install-dependency
         with:
           package: timm
@@ -110,6 +114,7 @@ jobs:
           extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
 
       - name: Install transformers package
+        if: "!startsWith(matrix.python, '3.15')"
         run: |
           cd pytorch
           pip install -r .ci/docker/ci_commit_pins/huggingface-requirements.txt
@@ -124,9 +129,9 @@ jobs:
           mkdir -p wheels
           cp -L pytorch/dist/*.whl wheels/
           cp -L dist/*.whl wheels/
-          cp -L torchvision*/dist/*.whl wheels/
-          cp -L torchaudio*/dist/*.whl wheels/
-          cp -L timm*/dist/*.whl wheels/
+          cp -L torchvision*/dist/*.whl wheels/ 2>/dev/null || true
+          cp -L torchaudio*/dist/*.whl wheels/ 2>/dev/null || true
+          cp -L timm*/dist/*.whl wheels/ 2>/dev/null || true
           ls -lh wheels/
 
       - name: Prepare vLLM wheels for upload

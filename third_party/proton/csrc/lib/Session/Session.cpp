@@ -1,4 +1,5 @@
 #include "Session/Session.h"
+#include "Backend/Backend.h"
 #include "Context/Python.h"
 #include "Context/Shadow.h"
 #include "Data/TraceData.h"
@@ -6,35 +7,42 @@
 #include "Driver/GPU/XpuApi.h"
 #include "Profiler/Cupti/CuptiProfiler.h"
 #include "Profiler/Instrumentation/InstrumentationProfiler.h"
+#include "Profiler/Profiler.h"
 #include "Profiler/RocprofSDK/RocprofSDKProfiler.h"
 #include "Profiler/Roctracer/RoctracerProfiler.h"
-#include "Profiler/Xpupti/XpuptiProfiler.h"
 #include "Runtime/XpuRuntime.h"
 #include "Utility/Errors.h"
 #include "Utility/String.h"
+#include <algorithm>
+#include <functional>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace proton {
 
 namespace {
 
+// XPU profiling needs a SYCL queue handle and the path to the helper lib
+// before the profiler instance is touched. They are threaded through
+// libproton.start() and applied to the XPU runtime here.
 Profiler *makeProfiler(const std::string &name, void *sycl_queue = nullptr,
                        const std::string &utils_cache_path = "") {
-  if (proton::toLower(name) == "cupti") {
-    return &CuptiProfiler::instance();
-#ifndef _WIN32
-  } else if (proton::toLower(name) == "rocprofiler") {
-    return &RocprofSDKProfiler::instance();
-#endif
-  } else if (proton::toLower(name) == "roctracer") {
-    return &RoctracerProfiler::instance();
-  } else if (proton::toLower(name) == "instrumentation") {
-    return &InstrumentationProfiler::instance();
-  } else if (proton::toLower(name) == "xpupti") {
+  if (proton::toLower(name) == "xpupti") {
     xpu::PROTON_UTILS = utils_cache_path;
     XpuRuntime::instance().setSyclQueue(sycl_queue);
-    return &XpuptiProfiler::instance();
   }
-  throw makeInvalidArgument("Unknown profiler: " + name);
+  const auto profilers = getProfilerRegistrations();
+  auto itr = std::find_if(profilers.begin(), profilers.end(),
+                          [&](const ProfilerRegistration &entry) {
+                            return proton::toLower(name) ==
+                                   proton::toLower(entry.getName());
+                          });
+  if (itr == profilers.end()) {
+    throw makeInvalidArgument("Unknown profiler: " + name);
+  }
+  return itr->getInstance()();
 }
 
 std::unique_ptr<Data> makeData(const std::string &dataName,
