@@ -2362,13 +2362,9 @@ struct DescriptorStoreOpConversion
     assertDescriptorInnerShapeCompatible(op, descTensorType.getShape(),
                                          valueTy.getShape());
 
-    // Only supports the rank reduce of [1, 1, M, N] to [M, N].
-    auto descBlockShape = descTensorType.getShape();
-    const size_t rankDelta = descRank - resultRank;
-    for (int i = 0; i < rankDelta; ++i) {
-      if (descBlockShape[i] != 1)
-        llvm_unreachable("unsupported reduce rank in desc load");
-    }
+
+    // Rank-reducing descriptor stores are validated by
+    // assertDescriptorInnerShapeCompatible() above.
 
     // Boundary check all dimensions — tensor descriptors always encode shape
     // bounds and don't have a user-facing boundaryCheck attribute.
