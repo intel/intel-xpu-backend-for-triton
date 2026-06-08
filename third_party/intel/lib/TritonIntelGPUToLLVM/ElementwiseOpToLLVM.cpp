@@ -17,6 +17,17 @@ using mlir::triton::gpu::MultipleOperandsRange;
 
 namespace {
 
+static LLVM::MemoryEffectsAttr
+getReadNoneMemoryEffectsAttr(ConversionPatternRewriter &rewriter) {
+  return rewriter.getAttr<LLVM::MemoryEffectsAttr>(
+      /*other=*/LLVM::ModRefInfo::NoModRef,
+      /*argMem=*/LLVM::ModRefInfo::NoModRef,
+      /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef,
+      /*errnoMem=*/LLVM::ModRefInfo::NoModRef,
+      /*targetMem0=*/LLVM::ModRefInfo::NoModRef,
+      /*targetMem1=*/LLVM::ModRefInfo::NoModRef);
+}
+
 /* ----- FP8E5M2 ------ */
 // This data-type is the standard FP8E5M2 format
 static SmallVector<Value>
@@ -1486,6 +1497,8 @@ struct PreciseSqrtOpConversion
                                    MultipleOperandsRange operandsRanges,
                                    Location loc) const {
     namespace intel = mlir::triton::gpu::intel;
+    auto funcAttrs = intel::noUnwindWillReturnAttrs;
+    funcAttrs.memEffectsAttr = getReadNoneMemoryEffectsAttr(rewriter);
 
     if (mlir::LLVM::intel::hasModuleAttr(
             op, intel::TritonIntelGPUDialect::
@@ -1494,7 +1507,7 @@ struct PreciseSqrtOpConversion
       std::string fnName = intel::mangle("sqrt_cr", operandTypes);
       LLVM::CallOp callOp = intel::createDeviceFunctionCall(
           rewriter, fnName, elemTy, operandTypes, operandsRanges[0],
-          /*paramAttrs=*/{}, intel::noUnwindWillReturnAttrs);
+          /*paramAttrs=*/{}, funcAttrs);
       return {callOp.getResult()};
     }
 
@@ -1512,7 +1525,7 @@ struct PreciseSqrtOpConversion
     SmallVector<Type> argTypes(ValueRange(operandsRanges[0]).getTypes());
     LLVM::CallOp callOp = intel::createDeviceFunctionCall(
         rewriter, fnName, elemTy, argTypes, operandsRanges[0],
-        /*paramAttrs=*/{}, intel::noUnwindWillReturnAttrs);
+        /*paramAttrs=*/{}, funcAttrs);
     return {callOp.getResult()};
   }
 };
@@ -1531,6 +1544,8 @@ struct PreciseDivFOpConversion
                                    MultipleOperandsRange operandsRanges,
                                    Location loc) const {
     namespace intel = mlir::triton::gpu::intel;
+    auto funcAttrs = intel::noUnwindWillReturnAttrs;
+    funcAttrs.memEffectsAttr = getReadNoneMemoryEffectsAttr(rewriter);
 
     if (mlir::LLVM::intel::hasModuleAttr(
             op, intel::TritonIntelGPUDialect::
@@ -1539,7 +1554,7 @@ struct PreciseDivFOpConversion
       std::string fnName = intel::mangle("divide_cr", operandTypes);
       LLVM::CallOp callOp = intel::createDeviceFunctionCall(
           rewriter, fnName, elemTy, operandTypes, operandsRanges[0],
-          /*paramAttrs=*/{}, intel::noUnwindWillReturnAttrs);
+          /*paramAttrs=*/{}, funcAttrs);
       return {callOp.getResult()};
     }
 
@@ -1557,7 +1572,7 @@ struct PreciseDivFOpConversion
     SmallVector<Type> argTypes(ValueRange(operandsRanges[0]).getTypes());
     LLVM::CallOp callOp = intel::createDeviceFunctionCall(
         rewriter, fnName, elemTy, argTypes, operandsRanges[0],
-        /*paramAttrs=*/{}, intel::noUnwindWillReturnAttrs);
+        /*paramAttrs=*/{}, funcAttrs);
     return {callOp.getResult()};
   }
 };
