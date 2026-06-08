@@ -226,10 +226,9 @@ Options:
   --triton-repo <repo>           GitHub repo to fetch prebuilt vLLM XPU kernels wheels from
                                  (default: intel/intel-xpu-backend-for-triton).
 
-  --triton-repo-branch <branch>  Branch to fetch prebuilt vLLM XPU kernels wheels from. When set,
-                                 only that branch is tried. When unset, GITHUB_REF_NAME is tried
-                                 first, falling back to $DEFAULT_BRANCH if it has no nightly runs.
-                                 If GITHUB_REF_NAME has nightly runs but none of the recent ones
+  --triton-repo-branch <branch>  Branch to fetch prebuilt vLLM XPU kernels wheels from. When set, only that branch is
+                                 tried. When unset, GITHUB_REF_NAME is tried first, falling back to $DEFAULT_BRANCH if
+                                 it has no nightly runs. If GITHUB_REF_NAME has nightly runs but none of the recent ones
                                  succeeded, the script errors out.
 
   --help                         Show this help message and exit.
