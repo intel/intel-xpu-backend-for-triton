@@ -104,16 +104,6 @@ def _find_cuda_patterns(source: str) -> list[dict]:
                 "col": node.col_offset,
             })
 
-        # torch.cuda.Stream() calls
-        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "Stream"
-                and isinstance(node.func.value, ast.Attribute) and node.func.value.attr == "cuda"
-                and isinstance(node.func.value.value, ast.Name) and node.func.value.value.id == "torch"):
-            patterns.append({
-                "type": "cuda_stream",
-                "line": node.lineno,
-                "col": node.col_offset,
-            })
-
         # torch.cuda.get_device_capability() calls
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                 and node.func.attr == "get_device_capability" and isinstance(node.func.value, ast.Attribute)
@@ -189,10 +179,6 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
                 r"torch.manual_seed(\1)",
                 line,
             )
-
-        elif ptype == "cuda_stream":
-            # Replace torch.cuda.Stream() with torch.xpu.Stream()
-            lines[line_idx] = line.replace("torch.cuda.Stream()", "torch.xpu.Stream()")
 
         elif ptype == "cuda_get_device_capability":
             # Replace torch.cuda.get_device_capability() with torch.xpu.get_device_capability()
