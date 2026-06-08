@@ -17,7 +17,7 @@ runs:
         if [[ "${{ inputs.use-branch-wheel }}" == "true" ]]; then
           install_args+=(--triton-repo-branch "${{ github.ref_name }}")
         else
-          if gh api "repos/${{ github.repository }}/compare/main...${{ github.sha }}" \
+          if gh api "repos/${{ github.repository }}/compare/${{ github.event.repository.default_branch }}...${{ github.sha }}" \
               --jq '.files[].filename' | grep -qxF \
               -e .github/workflows/nightly-wheels.yml \
               -e scripts/vllm/install-vllm.sh \
