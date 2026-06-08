@@ -3,7 +3,7 @@ Regression test for FP8E4M3FN -> FP16 conversion.
 
 Guards the fmul-based converter optimization that replaces the 22-op lookup
 table with a single fmul. Validates bit-exact output across all 256 possible
-fp8 byte values.
+fp8 byte values, including NaN propagation.
 
 NOTE: This test validates the SOFTWARE fallback converter (used on PVC/Max).
 On Xe3P+ with ttig.support_f8_conversion, the SPIR-V builtin path is used
@@ -20,27 +20,32 @@ from triton._internal_testing import is_xpu
 
 def expected_fp16_for_byte(byte: int) -> int:
     """
-    Reference implementation of the fmul-based converter.
+    Reference implementation of the fmul-based converter with NaN propagation.
 
     Returns the fp16 bit pattern (uint16) that the Triton converter produces
     for the given fp8 byte value.
 
     Algorithm:
     1. Strip sign: u = byte & 0x7F
-    2. Shift to fp16 layout: shifted = u << 7
+    2. NaN check: if u == 0x7F, return fp16 NaN (0x7E00) with sign preserved
+    3. Shift to fp16 layout: shifted = u << 7
        - fp8: 1 sign + 4 exp + 3 mantissa
        - fp16: 1 sign + 5 exp + 10 mantissa
        - After <<7, bits land at fp16 positions with exp bias still 7
-    3. Multiply by 256.0 (2^8) to rebias from 7 to 15
+    4. Multiply by 256.0 (2^8) to rebias from 7 to 15
        - For normals: (1 + m/8) * 2^(e-7) * 256 = (1 + m/8) * 2^(e+1)
        - For subnormals: same multiplier works due to mantissa position
-    4. Restore sign bit from byte bit 7 to fp16 bit 15
+    5. Restore sign bit from byte bit 7 to fp16 bit 15
 
-    NOTE: FP8 NaN bytes (0x7f, 0xff) are NOT preserved as fp16 NaN.
-    The converter produces ±480.0 (fp16 bits 0x5F80 / 0xDF80).
+    NOTE: FP8 NaN bytes (0x7f, 0xff) produce fp16 NaN (0x7E00 / 0xFE00)
+    with the sign bit preserved. This matches AMD and NVIDIA software converters.
     """
     # Strip sign, take 7 bits of exp+mantissa
     u = byte & 0x7F
+    sign_bit = (byte & 0x80) << 8
+    # NaN: fp8 abs == 0x7F -> fp16 NaN 0x7E00 with sign preserved
+    if u == 0x7F:
+        return (0x7E00 | sign_bit) & 0xFFFF
     # Shift to align with fp16 layout
     shifted = (u << 7) & 0xFFFF
     # Bitcast to fp16
@@ -50,7 +55,6 @@ def expected_fp16_for_byte(byte: int) -> int:
     h_out = float(np.float16(h_in) * mul)
     out_bits = struct.unpack('<H', struct.pack('<e', h_out))[0]
     # Restore sign bit: byte bit 7 -> fp16 bit 15
-    sign_bit = (byte & 0x80) << 8
     return (out_bits | sign_bit) & 0xFFFF
 
 

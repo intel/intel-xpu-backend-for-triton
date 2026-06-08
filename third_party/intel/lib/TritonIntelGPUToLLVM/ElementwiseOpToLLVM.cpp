@@ -360,9 +360,9 @@ Fp16_to_Fp8E4M3B15(Location loc, ConversionPatternRewriter &rewriter,
 // on real GPU outputs across 33.6M bf16 attention outputs (decode_8 and
 // prefill_4k shapes).
 //
-// Note: this matches the prior implementation's NaN behavior (fp8 NaN
-// bytes 0x7f/0xff produce +/-480.0, not fp16 NaN). Strict NaN propagation
-// would be a separate change and likely require the SPIR-V builtin path.
+// NaN propagation: fp8 NaN bytes (abs == 0x7F, i.e. 0x7F and 0xFF) produce
+// fp16 NaN (0x7E00) with the sign bit preserved. This matches the behavior of
+// the AMD and NVIDIA software converters.
 static SmallVector<Value> Fp8E4M3Nv_to_Fp16(Location loc,
                                             ConversionPatternRewriter &rewriter,
                                             const SmallVector<Value> &v) {
@@ -405,6 +405,30 @@ static SmallVector<Value> Fp8E4M3Nv_to_Fp16(Location loc,
   Value iOut = b.bitcast(hOut, i32_ty);
   Value signs = b.and_(i32_ty, packi32, b.i32_val(0x80008000));
   Value iSigned = b.or_(i32_ty, iOut, signs);
+
+  // NaN fixup: fp8 NaN byte (abs == 0x7F) must produce fp16 NaN (0x7E00)
+  // with the sign preserved, not ±480.0.  Check both 16-bit lanes in the
+  // packed i32 domain.  `stripped` has abs(byte0) in bits [6:0] and
+  // abs(byte1) in bits [22:16].
+  Value isNan0 = b.icmp_eq(b.and_(i32_ty, stripped, b.i32_val(0x0000007F)),
+                           b.i32_val(0x0000007F));
+  Value isNan1 = b.icmp_eq(b.and_(i32_ty, stripped, b.i32_val(0x007F0000)),
+                           b.i32_val(0x007F0000));
+  // fp16 0x7E00 with the lane's sign bit OR-ed in.
+  Value nan0 = b.or_(i32_ty, b.i32_val(0x00007E00),
+                     b.and_(i32_ty, signs, b.i32_val(0x00008000)));
+  Value nan1 = b.or_(i32_ty, b.i32_val(0x7E000000),
+                     b.and_(i32_ty, signs, b.i32_val(0x80000000)));
+  // Splice nan0 into the low 16-bit lane of iSigned when lane 0 is NaN.
+  iSigned = b.select(
+      isNan0,
+      b.or_(i32_ty, b.and_(i32_ty, iSigned, b.i32_val(0xFFFF0000)), nan0),
+      iSigned);
+  // Splice nan1 into the high 16-bit lane of iSigned when lane 1 is NaN.
+  iSigned = b.select(
+      isNan1,
+      b.or_(i32_ty, b.and_(i32_ty, iSigned, b.i32_val(0x0000FFFF)), nan1),
+      iSigned);
 
   Value result = b.bitcast(iSigned, fp16x2VecTy);
   return {b.extract_element(f16_ty, result, b.i32_val(0)),
