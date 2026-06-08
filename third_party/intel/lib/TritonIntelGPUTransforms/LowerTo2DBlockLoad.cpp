@@ -38,9 +38,6 @@ template <typename OpTy,
               llvm::is_one_of<OpTy, tt::LoadOp, tt::DescriptorLoadOp>::value,
               bool> = true>
 static bool isBlockIOEligible(OpTy op) {
-  if (!op->getAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName()))
-    return false;
-
   RankedTensorType tensorTy;
   if constexpr (std::is_same_v<OpTy, tt::LoadOp>) {
     tensorTy =
@@ -51,19 +48,7 @@ static bool isBlockIOEligible(OpTy op) {
     tensorTy = cast<RankedTensorType>(op.getType());
   }
 
-  if (tensorTy.getRank() < 2)
-    return false;
-
-  bool hasDpas =
-      ttgi::hasDpasEncoding(tensorTy) || ttgi::hasDotDpasEncoding(tensorTy);
-
-  std::optional<bool> enableBlockIOForAllLayout = tt::tools::isEnvValueBool(
-      tt::tools::getStrEnv("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS"));
-  if (enableBlockIOForAllLayout.has_value() &&
-      !enableBlockIOForAllLayout.value() && !hasDpas)
-    return false;
-
-  return true;
+  return ttgi::isBlockIOEligible(op, tensorTy);
 }
 
 /// Get the stride (in elements) for a given dimension from stride analysis.
@@ -94,15 +79,6 @@ static Value createZeroSplat(OpBuilder &builder, Location loc,
   Value zeroVal =
       arith::ConstantOp::create(builder, loc, cast<TypedAttr>(zeroAttr));
   return tt::SplatOp::create(builder, loc, tensorTy, zeroVal);
-}
-
-/// Determine whether memory layout is row-major from the block_io attribute.
-static bool isMemoryRowMajor(Operation *op) {
-  auto blockIOAttr = op->getAttrOfType<StringAttr>(
-      ttgi::TritonIntelGPUDialect::getBlockIOAttrName());
-  assert(blockIOAttr && "expected block_io attribute");
-  auto mode = ttgi::symbolizeBlockIOMode(blockIOAttr.getValue());
-  return !mode || *mode == ttgi::BlockIOMode::RowMajor;
 }
 
 struct TritonIntelGPULowerTo2DBlockLoadPass
@@ -183,7 +159,7 @@ private:
     unsigned descRank = descType.getBlockType().getRank();
     assert(descRank >= rank && "descriptor rank must be >= result tensor rank");
 
-    bool memoryRowMajor = isMemoryRowMajor(op);
+    bool memoryRowMajor = ttgi::isMemoryRowMajor(op);
 
     // Validate that tile computation will succeed during LLVM lowering.
     bool oneMatrixPerLoadForBT =
@@ -329,7 +305,7 @@ private:
     unsigned rank = tensorTy.getRank();
     unsigned elemSizeInBits = tensorTy.getElementTypeBitWidth();
 
-    bool memoryRowMajor = isMemoryRowMajor(op);
+    bool memoryRowMajor = ttgi::isMemoryRowMajor(op);
     unsigned contiguousDim = memoryRowMajor ? rank - 1 : rank - 2;
 
     bool oneMatrixPerLoadForBT =

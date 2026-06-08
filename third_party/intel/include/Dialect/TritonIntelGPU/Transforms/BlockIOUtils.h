@@ -88,6 +88,19 @@ bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
                              bool oneMatrixPerLoadForBT = false,
                              AxisInfo *maskAxisInfo = nullptr);
 
+/// Determine whether memory layout is row-major from the block_io attribute.
+bool isMemoryRowMajor(Operation *op);
+
+/// Check whether a load is eligible for 2D block IO lowering based on
+/// attributes and encoding. Performs the same checks as the template
+/// isBlockIOEligible but usable from generic Operation* contexts.
+bool isBlockIOEligible(Operation *loadOp, RankedTensorType tensorTy);
+
+/// Estimate the hardware message count for a load with the given type and
+/// encoding. Higher values indicate more HW cost. Used for cost modeling in
+/// RemoveLayoutConversions. Returns a comparable scalar (not cycle-accurate).
+int64_t estimateLoadHWCost(RankedTensorType type, Operation *loadOp);
+
 } // namespace mlir::triton::gpu::intel
 
 #endif // TRITONINTELGPU_TRANSFORMS_BLOCKIOUTILS_H

@@ -18,6 +18,7 @@
 #include "mlir/Transforms/RegionUtils.h"
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/BlockIOUtils.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "triton/Analysis/Utility.h"
@@ -1584,6 +1585,50 @@ static bool isRematBeneficial(ttg::ConvertLayoutOp convertOp,
   return convertLayoutCost >= rematerialisationCost;
 }
 
+/// Check whether rematerializing \p slice with the target layouts in \p layout
+/// would degrade a load that currently uses the 2D block I/O hardware path by
+/// relabeling it into a less efficient encoding (a worse block tile, or a
+/// demotion to the per-element gather fallback).
+///
+/// The veto is intentionally scoped to loads whose CURRENT encoding is 2D
+/// block I/O eligible. For ordinary (gather) loads the existing canBeRemat /
+/// isRematBeneficial cost model already governs rematerialization correctly —
+/// e.g. duplicating a cheap small load to remove a convert is desirable — and
+/// the message-count proxy is not a meaningful signal there. Only the
+/// 2D-block path has the silent cliff this guard protects against (issue
+/// #7080): an encoding change that keeps the load legal but collapses its
+/// hardware tile (e.g. tile height 32 → 1, 4× more messages).
+static bool rematDegradesLoad(const SetVector<Value> &slice,
+                              const DenseMap<Value, Attribute> &layout) {
+  for (Value v : slice) {
+    Operation *defOp = v.getDefiningOp();
+    if (!defOp || !isa<tt::LoadOp, tt::DescriptorLoadOp>(defOp))
+      continue;
+
+    auto it = layout.find(v);
+    if (it == layout.end())
+      continue; // Not relabeled.
+
+    auto curTy = dyn_cast<RankedTensorType>(v.getType());
+    if (!curTy)
+      continue;
+
+    // Only guard loads that currently ride the 2D block I/O hardware path.
+    if (!ttgi::isBlockIOEligible(defOp, curTy))
+      continue;
+
+    RankedTensorType tgtTy = curTy.cloneWithEncoding(it->second);
+
+    int64_t cur = ttgi::estimateLoadHWCost(curTy, defOp);
+    int64_t tgt = ttgi::estimateLoadHWCost(tgtTy, defOp);
+
+    if (tgt > cur)
+      return true; // STRICT > — equal-cost must NOT veto.
+  }
+
+  return false;
+}
+
 void LayoutRematerialization::backwardRematerialization(
     ttg::ConvertLayoutOp convertOp) {
   RankedTensorType targetType = convertOp.getType();
@@ -1618,7 +1663,13 @@ void LayoutRematerialization::backwardRematerialization(
     return;
   }
 
-  // 2. Determine whether rematerialisation is beneficial.
+  // 2. Veto if rematerialization would degrade a load encoding.
+  if (rematDegradesLoad(slice, layout)) {
+    LDBG("  skip remat: would degrade a load encoding");
+    return;
+  }
+
+  // 3. Determine whether rematerialisation is beneficial.
   if (!isRematBeneficial(convertOp, slice, /*newCvtCost=*/0)) {
     LDBG("  skipped rematerialization");
     return;
@@ -1637,7 +1688,7 @@ void LayoutRematerialization::backwardRematerialization(
     if (Operation *op = v.getDefiningOp())
       sliceOps.insert(op);
 
-  // 3. Rewrite the slice.
+  // 4. Rewrite the slice.
   rewriteSlice(slice, layout, convertOp);
 
   // Build forward propagation candidates using pre-rewrite analysis.
@@ -1660,7 +1711,7 @@ void LayoutRematerialization::backwardRematerialization(
     }
   }
 
-  // 4. Forward propagate remat values created during backward propagation.
+  // 5. Forward propagate remat values created during backward propagation.
   forwardPropagateRemat(forwardPropagateCandidates);
 }
 
@@ -1888,6 +1939,10 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   // Always apply the cost gate (matching upstream) — isRematBeneficial
   // accounts for slice values with external users, preventing hoists that
   // would duplicate expensive ops or break dominance.
+  if (rematDegradesLoad(slice, layout)) {
+    LDBG("  skip remat: would degrade a load encoding");
+    return;
+  }
   int64_t newCvtCost = getConvertCost(extOrBroadcastOp->getOperand(0));
   if (!isRematBeneficial(convertOp, slice, newCvtCost))
     return;
@@ -2025,6 +2080,13 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
   for (auto [result, edge] : hoistAbove) {
     OpBuilder b(edge->getOwner());
     hoistRemat(b, edge->get(), layout.at(result));
+  }
+
+  // Do not hoist a convert into conditionals if doing so would degrade a load
+  // that currently rides the 2D block I/O hardware path (issue #7080).
+  if (rematDegradesLoad(slice, layout)) {
+    LDBG("  skip remat: would degrade a load encoding");
+    return;
   }
   rewriteSlice(slice, layout, convertOp, mapping);
 }
