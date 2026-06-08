@@ -1435,9 +1435,9 @@ struct ExpOpConversionApprox
   }
 };
 
-// Emit an LLVM intrinsic call with the fast fast-math flag under ttig.fast_math.
-// F32-only; returns {} otherwise so the caller falls through to the upstream
-// pattern which calls the precise SPIR-V vendor library.
+// Emit an LLVM intrinsic call with the fast fast-math flag under
+// ttig.fast_math. F32-only; returns {} otherwise so the caller falls through to
+// the upstream pattern which calls the precise SPIR-V vendor library.
 static SmallVector<Value>
 emitFastMathF32Intrinsic(Operation *op, ConversionPatternRewriter &rewriter,
                          Type elemTy, MultipleOperandsRange operands,
