@@ -10,7 +10,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Install vllm
+    - name: Run install-vllm.sh
       shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
       run: |
         # nightly-wheels.yml triggers on PRs only when these files change. If the current
