@@ -32,7 +32,7 @@ on:
         type: boolean
         default: true
       use_branch_wheel:
-        description: Use prebuilt vLLM XPU kernels wheel from this branch (must have a successful nightly build)
+        description: Use prebuilt vLLM XPU kernels wheel from the current branch (must have a successful nightly build)
         type: boolean
         default: false
 

@@ -20,7 +20,7 @@ on:
         type: string
         default: ""
       use_branch_wheel:
-        description: Use prebuilt vLLM XPU kernels wheel from this branch (must have a successful nightly build)
+        description: Use prebuilt vLLM XPU kernels wheel from the current branch (must have a successful nightly build)
         type: boolean
         default: false
   # This workflow is also called from workflows vllm-benchmarks-*.yml.
@@ -42,7 +42,7 @@ on:
         type: string
         default: ""
       use_branch_wheel:
-        description: Use prebuilt vLLM XPU kernels wheel from this branch (must have a successful nightly build)
+        description: Use prebuilt vLLM XPU kernels wheel from the current branch (must have a successful nightly build)
         type: boolean
         default: false
 
