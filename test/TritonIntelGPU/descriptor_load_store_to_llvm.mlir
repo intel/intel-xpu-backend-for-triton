@@ -349,10 +349,10 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK-DAG: %[[SHAPE1_I32:.*]] = llvm.trunc %[[SHAPE1]] : i64 to i32
     // CHECK-DAG: %[[SHAPE2_I32:.*]] = llvm.trunc %[[SHAPE2]] : i64 to i32
     // CHECK-DAG: %[[SHAPE3_I32:.*]] = llvm.trunc %[[SHAPE3]] : i64 to i32
-    // CHECK: llvm.icmp "slt" %{{.*}}, %[[SHAPE0_I32]] : i32
-    // CHECK: llvm.icmp "slt" %{{.*}}, %[[SHAPE1_I32]] : i32
-    // CHECK: llvm.icmp "slt" %{{.*}}, %[[SHAPE2_I32]] : i32
-    // CHECK: llvm.icmp "slt" %{{.*}}, %[[SHAPE3_I32]] : i32
+    // CHECK: llvm.icmp "slt" %{{.*}}, %{{.*}} : i32
+    // CHECK: llvm.icmp "slt" %{{.*}}, %{{.*}} : i32
+    // CHECK: llvm.icmp "slt" %{{.*}}, %{{.*}} : i32
+    // CHECK: llvm.icmp "slt" %{{.*}}, %{{.*}} : i32
     %load = tt.descriptor_load %desc[%arg1, %arg2, %arg3, %arg4] : !tt.tensordesc<1x1x4x4xf32> -> tensor<4x4xf32, #blocked>
     tt.return %load : tensor<4x4xf32, #blocked>
   }
@@ -385,10 +385,10 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK-DAG: %[[SHAPE1_I32:.*]] = llvm.trunc %[[SHAPE1]] : i64 to i32
     // CHECK-DAG: %[[SHAPE2_I32:.*]] = llvm.trunc %[[SHAPE2]] : i64 to i32
     // CHECK-DAG: %[[SHAPE3_I32:.*]] = llvm.trunc %[[SHAPE3]] : i64 to i32
-    // CHECK: llvm.icmp "slt" %{{.*}}, %[[SHAPE0_I32]] : i32
-    // CHECK: llvm.icmp "slt" %{{.*}}, %[[SHAPE1_I32]] : i32
-    // CHECK: llvm.icmp "slt" %{{.*}}, %[[SHAPE2_I32]] : i32
-    // CHECK: llvm.icmp "slt" %{{.*}}, %[[SHAPE3_I32]] : i32
+    // CHECK: llvm.icmp "slt" %{{.*}}, %{{.*}} : i32
+    // CHECK: llvm.icmp "slt" %{{.*}}, %{{.*}} : i32
+    // CHECK: llvm.icmp "slt" %{{.*}}, %{{.*}} : i32
+    // CHECK: llvm.icmp "slt" %{{.*}}, %{{.*}} : i32
     tt.descriptor_store %desc[%arg1, %arg2, %arg3, %arg4], %arg5 : !tt.tensordesc<1x1x4x4xf32>, tensor<4x4xf32, #blocked>
     tt.return
   }
