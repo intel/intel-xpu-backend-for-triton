@@ -62,9 +62,9 @@ static SmallVector<Value> Fp8E5M2_to_Fp16(Location loc,
   return result;
 }
 
-static SmallVector<Value> Fp8E5M2_to_Bf16(Location loc,
-                                          ConversionPatternRewriter &rewriter,
-                                          const SmallVector<Value> &v) {
+static SmallVector<Value>
+Fp8E5M2_to_Bf16Table(Location loc, ConversionPatternRewriter &rewriter,
+                     const SmallVector<Value> &v) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
   Value a0 = b.undef(fp8x4VecTy);
@@ -146,6 +146,71 @@ static SmallVector<Value> Fp8E5M2_to_Bf16(Location loc,
   Value bf16x2Vec1 = b.or_(i32_ty, sign1, f1);
   bf16x2Vec0 = b.bitcast(bf16x2Vec0, bf16x2VecTy);
   bf16x2Vec1 = b.bitcast(bf16x2Vec1, bf16x2VecTy);
+
+  return {b.extract_element(bf16_ty, bf16x2Vec0, b.i32_val(0)),
+          b.extract_element(bf16_ty, bf16x2Vec0, b.i32_val(1)),
+          b.extract_element(bf16_ty, bf16x2Vec1, b.i32_val(0)),
+          b.extract_element(bf16_ty, bf16x2Vec1, b.i32_val(1))};
+}
+
+static SmallVector<Value> Fp8E5M2_to_Bf16(Location loc,
+                                          ConversionPatternRewriter &rewriter,
+                                          const SmallVector<Value> &v) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto fp8x4VecTy = vec_ty(i8_ty, 4);
+  Value a0 = b.undef(fp8x4VecTy);
+  a0 = b.insert_element(fp8x4VecTy, a0, b.int_val(8, 0), b.i32_val(0));
+  a0 = b.insert_element(fp8x4VecTy, a0, v[0], b.i32_val(1));
+  a0 = b.insert_element(fp8x4VecTy, a0, b.int_val(8, 0), b.i32_val(2));
+  a0 = b.insert_element(fp8x4VecTy, a0, v[1], b.i32_val(3));
+  a0 = b.bitcast(a0, i32_ty);
+
+  Value a1 = b.undef(fp8x4VecTy);
+  a1 = b.insert_element(fp8x4VecTy, a1, b.int_val(8, 0), b.i32_val(0));
+  a1 = b.insert_element(fp8x4VecTy, a1, v[2], b.i32_val(1));
+  a1 = b.insert_element(fp8x4VecTy, a1, b.int_val(8, 0), b.i32_val(2));
+  a1 = b.insert_element(fp8x4VecTy, a1, v[3], b.i32_val(3));
+  a1 = b.bitcast(a1, i32_ty);
+
+  // FP8E5M2 -> BF16 via mask-free i32-domain fmul rebias. This path is
+  // selected when native bf16 arithmetic is available (non-LTS drivers);
+  // Fp8E5M2_to_Bf16Table provides the LTS fallback using pure-integer logic.
+  //
+  // Algorithm (per pack `a` holding 2 FP8 bytes in bits [15:8] of each i16
+  // half, i.e. byte i sits in the high byte of i32 lane i):
+  //   1. Strip the sign bits with `and 0x7fff7fff`.
+  //   2. Shift the magnitude right by 3. This relocates the 5-bit fp8
+  //      exponent + 2-bit mantissa into the bf16 [exponent | mantissa]
+  //      positions, treating the bf16 bit pattern as `magnitude * 2^-112`.
+  //   3. OR the original sign bits back in. The resulting i32 holds two
+  //      bf16-shaped lanes.
+  //   4. Bitcast to <2 x bfloat> and multiply by the bf16x2 splat 2^112
+  //      (raw 0x7780). One fmul lifts the magnitude back to bf16 range and
+  //      handles fp8 subnormals -> bf16 normals in the same step.
+  //
+  // The i32-domain shape (no trunc/mask immediately upstream of the bf16
+  // multiply) avoids the IGC FTZ bug that motivated the i16-domain shape in
+  // the sibling Fp8E4M3Nv_to_Bf16 path. NumPy validation matches the
+  // existing E5M2 converter for all 256 fp8 byte values.
+  auto rescalePack = [&](Value pack) {
+    Value nosign = b.and_(i32_ty, pack, b.i32_val(0x7fff7fff));
+    Value shifted = b.lshr(i32_ty, nosign, b.i32_val(3));
+    Value sign = b.and_(i32_ty, pack, b.i32_val(0x80008000));
+    Value withSign = b.or_(i32_ty, shifted, sign);
+
+    auto bf16x2VecTy = vec_ty(bf16_ty, 2);
+    Value asBf16x2 = b.bitcast(withSign, bf16x2VecTy);
+
+    Value bf16Mul = b.bf16_val(std::ldexp(1.0f, 112));
+    Value mulBf16 = b.undef(bf16x2VecTy);
+    mulBf16 = b.insert_element(bf16x2VecTy, mulBf16, bf16Mul, b.i32_val(0));
+    mulBf16 = b.insert_element(bf16x2VecTy, mulBf16, bf16Mul, b.i32_val(1));
+
+    return b.fmul(bf16x2VecTy, asBf16x2, mulBf16);
+  };
+
+  Value bf16x2Vec0 = rescalePack(a0);
+  Value bf16x2Vec1 = rescalePack(a1);
 
   return {b.extract_element(bf16_ty, bf16x2Vec0, b.i32_val(0)),
           b.extract_element(bf16_ty, bf16x2Vec0, b.i32_val(1)),
@@ -502,6 +567,108 @@ static SmallVector<Value> Fp_to_Fp8_RTNE(Location loc,
   return {b.select(isNan, b.i8_val(DST_NAN), b.trunc(i8_ty, val))};
 }
 
+static SmallVector<Value>
+Fp8E4M3Nv_to_Bf16Table(Location loc, ConversionPatternRewriter &rewriter,
+                       const SmallVector<Value> &v) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto fp8x4VecTy = vec_ty(i8_ty, 4);
+  Value a0 = b.undef(fp8x4VecTy);
+  a0 = b.insert_element(fp8x4VecTy, a0, b.int_val(8, 0), b.i32_val(0));
+  a0 = b.insert_element(fp8x4VecTy, a0, v[0], b.i32_val(1));
+  a0 = b.insert_element(fp8x4VecTy, a0, b.int_val(8, 0), b.i32_val(2));
+  a0 = b.insert_element(fp8x4VecTy, a0, v[1], b.i32_val(3));
+  a0 = b.bitcast(a0, i32_ty);
+
+  Value a1 = b.undef(fp8x4VecTy);
+  a1 = b.insert_element(fp8x4VecTy, a1, b.int_val(8, 0), b.i32_val(0));
+  a1 = b.insert_element(fp8x4VecTy, a1, v[2], b.i32_val(1));
+  a1 = b.insert_element(fp8x4VecTy, a1, b.int_val(8, 0), b.i32_val(2));
+  a1 = b.insert_element(fp8x4VecTy, a1, v[3], b.i32_val(3));
+  a1 = b.bitcast(a1, i32_ty);
+
+  Value b0 = b.and_(i32_ty, a0, b.i32_val(0x7fff7fff));
+  Value b1 = b.and_(i32_ty, a1, b.i32_val(0x7fff7fff));
+  b0 = b.lshr(i32_ty, b0, b.i32_val(4));
+  b1 = b.lshr(i32_ty, b1, b.i32_val(4));
+
+  Value c0 = b.and_(i32_ty, b0, b.i32_val(0xffff0000));
+  Value c1 = b.shl(i32_ty, b0, b.i32_val(16));
+  Value c2 = b.and_(i32_ty, b1, b.i32_val(0xffff0000));
+  Value c3 = b.shl(i32_ty, b1, b.i32_val(16));
+
+  // Check if the exponent is zero, i.e. subnormal number.
+  // fp8e4 has a bias of 7
+  // depending on the significand value normalization goes like:
+  //  [000] -> 0x0
+  //  [001] -> exp=127-9, sig=0x0
+  //  [010] -> exp=127-8, sig=0x0
+  //  [011] -> exp=127-8, sig=b1000...
+  //  [100] -> exp=127-7, sig=0x0
+  //  [101] -> exp=127-7, sig=b0100...
+  //  [110] -> exp=127-7, sig=b1000...
+  //  [111] -> exp=127-7, sig=b1100...
+  Value cmp0 = b.icmp_eq(b.and_(c0, b.i32_val(0xf800000)), b.i32_val(0));
+  Value cmp1 = b.icmp_eq(b.and_(c1, b.i32_val(0xf800000)), b.i32_val(0));
+  Value cmp2 = b.icmp_eq(b.and_(c2, b.i32_val(0xf800000)), b.i32_val(0));
+  Value cmp3 = b.icmp_eq(b.and_(c3, b.i32_val(0xf800000)), b.i32_val(0));
+
+  auto i32x8VecTy = vec_ty(i32_ty, 8);
+  Value predefined = b.undef(i32x8VecTy);
+  predefined =
+      b.insert_element(i32x8VecTy, predefined, b.i32_val(0x0), b.i32_val(0));
+  predefined = b.insert_element(i32x8VecTy, predefined, b.i32_val(0x3B000000),
+                                b.i32_val(1));
+  predefined = b.insert_element(i32x8VecTy, predefined, b.i32_val(0x3B800000),
+                                b.i32_val(2));
+  predefined = b.insert_element(i32x8VecTy, predefined, b.i32_val(0x3BC00000),
+                                b.i32_val(3));
+  predefined = b.insert_element(i32x8VecTy, predefined, b.i32_val(0x3C000000),
+                                b.i32_val(4));
+  predefined = b.insert_element(i32x8VecTy, predefined, b.i32_val(0x3C200000),
+                                b.i32_val(5));
+  predefined = b.insert_element(i32x8VecTy, predefined, b.i32_val(0x3C400000),
+                                b.i32_val(6));
+  predefined = b.insert_element(i32x8VecTy, predefined, b.i32_val(0x3C600000),
+                                b.i32_val(7));
+
+  Value predef_idx0 = b.lshr(b.and_(c0, b.i32_val(7 << 20)), b.i32_val(20));
+  Value predef_idx1 = b.lshr(b.and_(c1, b.i32_val(7 << 20)), b.i32_val(20));
+  Value predef_idx2 = b.lshr(b.and_(c2, b.i32_val(7 << 20)), b.i32_val(20));
+  Value predef_idx3 = b.lshr(b.and_(c3, b.i32_val(7 << 20)), b.i32_val(20));
+
+  Value normalized0 = b.extract_element(i32_ty, predefined, predef_idx0);
+  Value normalized1 = b.extract_element(i32_ty, predefined, predef_idx1);
+  Value normalized2 = b.extract_element(i32_ty, predefined, predef_idx2);
+  Value normalized3 = b.extract_element(i32_ty, predefined, predef_idx3);
+
+  Value d0 = b.add(i32_ty, c0, b.i32_val(0x3c000000));
+  Value d1 = b.add(i32_ty, c1, b.i32_val(0x3c000000));
+  Value d2 = b.add(i32_ty, c2, b.i32_val(0x3c000000));
+  Value d3 = b.add(i32_ty, c3, b.i32_val(0x3c000000));
+
+  Value res0 = b.select(cmp0, normalized0, d0);
+  Value res1 = b.select(cmp1, normalized1, d1);
+  Value res2 = b.select(cmp2, normalized2, d2);
+  Value res3 = b.select(cmp3, normalized3, d3);
+
+  Value f0 = b.or_(i32_ty, res0, b.lshr(i32_ty, res1, b.i32_val(16)));
+  Value f1 = b.or_(i32_ty, res2, b.lshr(i32_ty, res3, b.i32_val(16)));
+
+  Value sign0 = b.and_(i32_ty, a0, b.i32_val(0x80008000));
+  Value sign1 = b.and_(i32_ty, a1, b.i32_val(0x80008000));
+
+  auto bf16x2VecTy = vec_ty(bf16_ty, 2);
+  Value bf16x2Vec0 = b.or_(i32_ty, sign0, f0);
+  Value bf16x2Vec1 = b.or_(i32_ty, sign1, f1);
+  bf16x2Vec0 = b.bitcast(bf16x2Vec0, bf16x2VecTy);
+  bf16x2Vec1 = b.bitcast(bf16x2Vec1, bf16x2VecTy);
+
+  return {b.extract_element(bf16_ty, bf16x2Vec0, b.i32_val(0)),
+          b.extract_element(bf16_ty, bf16x2Vec0, b.i32_val(1)),
+          b.extract_element(bf16_ty, bf16x2Vec1, b.i32_val(0)),
+          b.extract_element(bf16_ty, bf16x2Vec1, b.i32_val(1))};
+}
+
 static SmallVector<Value> Fp8E4M3Nv_to_Bf16(Location loc,
                                             ConversionPatternRewriter &rewriter,
                                             const SmallVector<Value> &v) {
@@ -521,7 +688,10 @@ static SmallVector<Value> Fp8E4M3Nv_to_Bf16(Location loc,
   a1 = b.insert_element(fp8x4VecTy, a1, v[3], b.i32_val(3));
   a1 = b.bitcast(a1, i32_ty);
 
-  // FP8E4M3FN -> BF16 via single fmul rebias.
+  // FP8E4M3FN -> BF16 via single fmul rebias. This path requires native bf16
+  // arithmetic support and is selected only when
+  // ttig.support_bfloat16_arithmetic is present (non-LTS drivers);
+  // Fp8E4M3Nv_to_Bf16Table provides the LTS fallback.
   //
   // Algorithm (per pack `a` holding 2 FP8 bytes in upper half of each i16 lane,
   // i.e. byte i sits in bits [15:8] of i16 lane i):
@@ -742,6 +912,8 @@ template <typename Ty> Type toType(TritonLLVMIRRewriter &b) {
 
 constexpr const auto SUPPORT_F8_CONV =
     triton::gpu::intel::TritonIntelGPUDialect::getSupportF8ConversionAttrName;
+constexpr const auto SUPPORT_BF16_ARITH = triton::gpu::intel::
+    TritonIntelGPUDialect::getSupportBFloat16ArithmeticAttrName;
 constexpr const char BUILTIN_HFTOHF8[] =
     "__builtin_spirv_ClampConvertFP16ToE4M3INTEL";
 constexpr const char BUILTIN_HFTOBF8[] =
@@ -971,8 +1143,14 @@ struct FpToFpOpConversion
               {BuiltinConvert<BUILTIN_HFTOBF8, Float8E5M2Type>, 1, 16},
               {Fp_to_Fp8_RTNE<Float16Type, Float8E5M2Type>, 1}}},
             // F8 -> BF16
-            {{F8E5M2TyID, BF16TyID, undefRounding}, {Fp8E5M2_to_Bf16, 4}},
-            {{F8E4M3TyID, BF16TyID, undefRounding}, {Fp8E4M3Nv_to_Bf16, 4}},
+            {{F8E5M2TyID, BF16TyID, undefRounding},
+             {HasAttr<SUPPORT_BF16_ARITH>,
+              {Fp8E5M2_to_Bf16, 4},
+              {Fp8E5M2_to_Bf16Table, 4}}},
+            {{F8E4M3TyID, BF16TyID, undefRounding},
+             {HasAttr<SUPPORT_BF16_ARITH>,
+              {Fp8E4M3Nv_to_Bf16, 4},
+              {Fp8E4M3Nv_to_Bf16Table, 4}}},
             // BF16 -> F8
             {{BF16TyID, F8E5M2TyID, RoundingMode::RTZ}, {Bf16_to_Fp8E5M2, 4}},
             {{BF16TyID, F8E5M2TyID, RoundingMode::RTNE},
@@ -1421,6 +1599,87 @@ protected:
   const TargetInfoBase &targetInfo;
 };
 
+// Match a / (1 + exp(b)), setting expArg = b. Returns false if the RHS
+// doesn't have that shape. Does not inspect the sign of b — callers emit
+// fsigm(-b) so the folder handles any double-negation.
+static bool matchSigmoidDenom(Value value, Value &expArg) {
+  auto addOp = value.getDefiningOp<arith::AddFOp>();
+  if (!addOp)
+    return false;
+
+  Value expCandidate;
+  if (matchPattern(addOp.getLhs(), m_OneFloat()))
+    expCandidate = addOp.getRhs();
+  else if (matchPattern(addOp.getRhs(), m_OneFloat()))
+    expCandidate = addOp.getLhs();
+  else
+    return false;
+
+  auto expOp = expCandidate.getDefiningOp<math::ExpOp>();
+  if (!expOp)
+    return false;
+
+  // Fuse only when exp has a single consumer to keep the rewrite profitable.
+  if (!expOp->hasOneUse())
+    return false;
+
+  expArg = expOp.getOperand();
+  return true;
+}
+
+struct SigmoidConversion : public ConvertOpToLLVMPattern<arith::DivFOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(arith::DivFOp op, OpAdaptor /*adaptor*/,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!mlir::LLVM::intel::hasModuleAttr(
+            op, triton::gpu::intel::TritonIntelGPUDialect::
+                    getSupportSigmoidAttrName()))
+      return failure();
+
+    // Match a / (1 + exp(b)); expArg = b.
+    Value expArg;
+    if (!matchSigmoidDenom(op.getRhs(), expArg))
+      return failure();
+
+    Type srcElemTy = getElementTypeOrSelf(op.getType());
+    Type elemTy = getTypeConverter()->convertType(srcElemTy);
+
+    // Remap both the exp argument (b) and the dividend (a).
+    Value expArgRemapped = rewriter.getRemappedValue(expArg);
+    if (!expArgRemapped)
+      return failure();
+    Value lhsRemapped = rewriter.getRemappedValue(op.getLhs());
+    if (!lhsRemapped)
+      return failure();
+
+    Location loc = op.getLoc();
+    SmallVector<Value> expArgVals =
+        unpackLLElements(loc, expArgRemapped, rewriter);
+    SmallVector<Value> lhsVals = unpackLLElements(loc, lhsRemapped, rewriter);
+    SmallVector<Value> resultVals;
+    resultVals.reserve(expArgVals.size());
+
+    // Emit a * fsigm(-b) for each element. The folder eliminates the double
+    // negation when b is already negated (the common x/(1+exp(-x)) case).
+    TritonLLVMIRRewriter b(loc, rewriter);
+    for (size_t i = 0; i < expArgVals.size(); ++i) {
+      Value negB = LLVM::FNegOp::create(rewriter, loc, expArgVals[i]);
+      auto sigmoidResult = mlir::triton::intel::convertWithFunctionCall(
+          b, negB, "__spirv_FSigmoidINTEL", elemTy, elemTy);
+      Value result =
+          LLVM::FMulOp::create(rewriter, loc, lhsVals[i], sigmoidResult);
+      resultVals.push_back(result);
+    }
+
+    Value packed = packLLElements(loc, getTypeConverter(), resultVals, rewriter,
+                                  op.getType());
+    rewriter.replaceOp(op, packed);
+    return success();
+  }
+};
+
 struct ExternElementwiseOpConversion
     : public ElementwiseOpConversionBase<ExternElementwiseOp,
                                          ExternElementwiseOpConversion> {
@@ -1472,6 +1731,7 @@ void populateElementwiseOpToLLVMPatterns(
       benefit.getBenefit() - 1);
 
   patterns.add<AbsFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<SigmoidConversion>(typeConverter, benefit.getBenefit() + 10);
   patterns.add<ElementwiseOpConversion<arith::DivFOp, LLVM::FDivOp>>(
       typeConverter, axisInfoAnalysis, benefit);
   patterns.add<ElementwiseOpConversion<arith::MulFOp, LLVM::FMulOp>>(

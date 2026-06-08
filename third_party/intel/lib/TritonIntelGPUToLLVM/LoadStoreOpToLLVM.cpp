@@ -34,46 +34,6 @@ using namespace mlir::triton::gpu::intel;
 
 namespace {
 
-Value maybeAnd(RewriterBase &rewriter, Location loc, Value a, Value b) {
-  auto tb = TritonLLVMOpBuilder(loc, rewriter);
-  if (a && b) {
-    return tb.and_(a, b);
-  }
-  return a ? a : b;
-}
-
-// Return a predicate that is true only if the current thread holds unique data,
-// according to freeVarsMask. The predicate may be null to indicate no
-// predication is required.
-Value emitRedundantThreadPredicate(
-    const llvm::MapVector<StringAttr, int32_t> &freeVarMasks,
-    ConversionPatternRewriter &rewriter, Location loc,
-    const triton::intel::TargetInfo &targetInfo) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto ctx = rewriter.getContext();
-  auto kLane = str_attr("lane");
-  auto kWarp = str_attr("warp");
-  auto kBlock = str_attr("block");
-
-  Value zero = b.i32_val(0);
-  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
-  Value blockId = freeVarMasks.lookup(kBlock) == 0
-                      ? zero
-                      : targetInfo.getClusterCTAId(rewriter, loc);
-
-  Value pred;
-  auto dimNames = {kLane, kWarp, kBlock};
-  auto dimIds = {laneId, warpId, blockId};
-  for (auto [dimName, dimId] : llvm::zip(dimNames, dimIds)) {
-    int32_t mask = freeVarMasks.lookup(dimName);
-    if (mask != 0) {
-      auto dimPred = b.icmp_eq(b.and_(dimId, b.i32_val(mask)), zero);
-      pred = maybeAnd(rewriter, loc, pred, dimPred);
-    }
-  }
-  return pred;
-}
-
 unsigned getCanonicalIndex(unsigned index, unsigned freeVarMask) {
   return index & ~freeVarMask;
 }
@@ -245,7 +205,7 @@ struct LoadStoreConversionBase {
     if (!descAxisInfo || static_cast<unsigned>(descAxisInfo->getRank()) != rank)
       return 1;
 
-    LinearEncodingAttr linAttr = triton::gpu::toLinearEncoding(resultType);
+    auto linAttr = triton::gpu::toGenericLinearEncoding(resultType);
     SmallVector<unsigned> order = linAttr.getOrder();
     SmallVector<unsigned> contigPerThread = linAttr.getContigPerThread();
 
@@ -473,21 +433,26 @@ struct LoadStoreConversionBase {
             op, TritonIntelGPUDialect::getSupportPredicatedIOAttrName()))
       return false;
 
-    // There's an IGC bug with predicated load so it is disabled by default.
-    // On the other hand, predicated store is expected to be correct and it is
-    // enabled by default. Both can be overridden by env vars.
-    static const bool canUsePredicatedLoad =
-        tools::getBoolEnv("TRITON_INTEL_PREDICATED_LOAD");
+    // Predicated load is enabled by default for LoadOp but disabled by default
+    // for DescriptorLoadOp. DescriptorLoadOp always generates boundary-check
+    // predicates (even when all elements are in-bounds), and the predicated
+    // load intrinsic prevents IGC from optimizing these uniformly-true
+    // predicates as effectively as the control-flow-based approach. Both can be
+    // overridden by env vars. Predicated store is enabled by default for both
+    // op types.
+    static const std::optional<bool> usePredicatedLoad =
+        tools::isEnvValueBool(tools::getStrEnv("TRITON_INTEL_PREDICATED_LOAD"));
     static const std::optional<bool> usePredicatedStore = tools::isEnvValueBool(
         tools::getStrEnv("TRITON_INTEL_PREDICATED_STORE"));
 
     // SPIRV predicated load/store does not support volatile qualifier.
     if constexpr (std::is_same_v<OpType, LoadOp>) {
-      return canUsePredicatedLoad && !op.getIsVolatile();
+      return (!usePredicatedLoad.has_value() || usePredicatedLoad.value()) &&
+             !op.getIsVolatile();
     } else if constexpr (std::is_same_v<OpType, StoreOp>) {
       return !usePredicatedStore.has_value() || usePredicatedStore.value();
     } else if constexpr (std::is_same_v<OpType, DescriptorLoadOp>) {
-      return canUsePredicatedLoad;
+      return usePredicatedLoad.has_value() && usePredicatedLoad.value();
     } else if constexpr (std::is_same_v<OpType, DescriptorStoreOp>) {
       return !usePredicatedStore.has_value() || usePredicatedStore.value();
     }

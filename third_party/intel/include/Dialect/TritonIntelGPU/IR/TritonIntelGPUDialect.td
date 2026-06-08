@@ -32,6 +32,12 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.support_16bit_atomics";
     }
 
+    /// Get the name of the attribute used to indicate whether the sigmoid
+    /// operation is available.
+    static constexpr llvm::StringRef getSupportSigmoidAttrName() {
+      return "ttig.support_sigmoid";
+    }
+
     /// Get the name of the attribute used to indicate whether subgroup 2D block
     /// operations (e.g., 2D block read/write) are available.
     static constexpr llvm::StringRef getSupport2DBlockIOAttrName() {
