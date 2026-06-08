@@ -11,7 +11,7 @@ runs:
   using: composite
   steps:
     - name: Run install-vllm.sh
-      shell: bash --noprofile --norc -euo pipefail
+      shell: bash --noprofile --norc -euo pipefail {0}
       run: |
         install_args=()
         if [[ "${{ inputs.use-branch-wheel }}" == "true" ]]; then
