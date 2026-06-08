@@ -26,6 +26,8 @@ def compute_block_k(k: int | None, is_persistent: bool, precision_config):
 
 
 def compute_split_k(block_k: int, k: int | None, grid_size: int) -> int:
+    if grid_size == 0:
+        return 1
     device_props = torch.xpu.get_device_properties(0)
     n_sms = device_props.gpu_subslice_count
     split_k = n_sms // grid_size
