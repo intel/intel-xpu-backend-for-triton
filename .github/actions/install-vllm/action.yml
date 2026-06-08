@@ -1,5 +1,5 @@
 name: Install vllm
-description: Install vLLM and vLLM XPU kernels, building from source on PRs that touch wheel-trigger files
+description: Install vLLM and vLLM XPU kernels
 
 inputs:
   use-branch-wheel:
@@ -11,22 +11,19 @@ runs:
   using: composite
   steps:
     - name: Run install-vllm.sh
-      shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+      shell: bash --noprofile --norc -euo pipefail
       run: |
-        # nightly-wheels.yml triggers on PRs only when these files change. If the current
-        # branch touched any of them, the wheels on main don't reflect this branch's
-        # changes, so build vLLM XPU kernels from source. Otherwise default to the main
-        # nightly wheels, with an opt-in to use this branch's wheels if they exist.
-        git fetch --depth=1 origin main
-        changed="$(git diff --name-only origin/main...HEAD)"
         install_args=()
-        if echo "$changed" | grep -qE '^(\.github/workflows/nightly-wheels\.yml|scripts/vllm/install-vllm\.sh|scripts/vllm/vllm-xpu-kernels-pin\.txt)$'; then
-          echo "*** Wheel-trigger files changed: building vLLM XPU kernels from source. ***"
-          install_args+=(--source)
-        elif [[ "${{ inputs.use-branch-wheel }}" == "true" ]]; then
-          echo "*** use-branch-wheel=true: fetching wheel from ${{ github.ref_name }}. ***"
+        if [[ "${{ inputs.use-branch-wheel }}" == "true" ]]; then
           install_args+=(--triton-repo-branch "${{ github.ref_name }}")
         else
-          echo "*** Using main nightly wheels (default). ***"
+          git fetch -q --depth=1 origin main
+          if git diff --name-only origin/main...HEAD | grep -qxF \
+              -e .github/workflows/nightly-wheels.yml \
+              -e scripts/vllm/install-vllm.sh \
+              -e scripts/vllm/vllm-xpu-kernels-pin.txt; then
+            install_args+=(--source)
+            . /opt/intel/oneapi/setvars.sh > /dev/null
+          fi
         fi
         ./scripts/vllm/install-vllm.sh "${install_args[@]}"
