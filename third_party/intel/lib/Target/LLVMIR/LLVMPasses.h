@@ -8,6 +8,11 @@ struct GuardMaskedDivRemPass : PassInfoMixin<GuardMaskedDivRemPass> {
   static StringRef name() { return "GuardMaskedDivRemPass"; }
 };
 
+struct ScalarizePtrVectorsPass : PassInfoMixin<ScalarizePtrVectorsPass> {
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+  static StringRef name() { return "ScalarizePtrVectorsPass"; }
+};
+
 struct ExpandSaddWithOverflowPass : PassInfoMixin<ExpandSaddWithOverflowPass> {
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
   static StringRef name() { return "ExpandSaddWithOverflowPass"; }

@@ -29,6 +29,14 @@ def round_f32_to_tf32(x: tl.tensor):
     ASM: tl.constexpr = "cvt.rn.tf32.f32 $0, $1;" if cuda_capability_geq(9, 0) else "cvt.rna.tf32.f32 $0, $1;"
     return tl.inline_asm_elementwise(ASM, "=r, r", [x], dtype=tl.float32, is_pure=True, pack=1)
 
+
+@triton.jit
+def _compute_packed_n_w(N, W_N_DIVISOR: tl.constexpr, SWIZZLE_MX_VALUE: tl.constexpr):
+    packed_n_w = tl.cdiv(N, W_N_DIVISOR)
+    if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
+        packed_n_w = tl.cdiv(packed_n_w, 64) * 64
+    return packed_n_w
+
 _matmul_repr = make_matmul_repr("_matmul", [0, 1, 2])
 @triton.jit(do_not_specialize=["TOKENS_PER_EXPT_FOR_ANNOTATION"],
             repr=_matmul_repr, launch_metadata=matmul_launch_metadata)
@@ -245,14 +253,18 @@ def _matmul(
 
     if RAGGED_DIMENSION == "K":
         K_W = tl.multiple_of(tl.load(WSliceOffs + pid_s + 1), W_SLICE_SIZES_DIVISIBILITY)
-        if PACKED_BLOCK_K_W > BLOCK_K:
-            K_W = K_W * (PACKED_BLOCK_K_W // BLOCK_K)
-        else:
-            K_W = K_W // (BLOCK_K // PACKED_BLOCK_K_W)
         K_X = tl.multiple_of(tl.load(XSliceOffs + pid_s + 1), X_SLICE_SIZES_DIVISIBILITY)
     else:
-        K_W = K * (PACKED_BLOCK_K_W // BLOCK_K) if PACKED_BLOCK_K_W >= BLOCK_K else K // (BLOCK_K // PACKED_BLOCK_K_W)
+        if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
+            # Hopper value swizzling physically pads K to a full 64-row tile.
+            K_W = tl.cdiv(K, 64) * 64
+        else:
+            K_W = K
         K_X = K
+    if PACKED_BLOCK_K_W > BLOCK_K:
+        K_W = K_W * (PACKED_BLOCK_K_W // BLOCK_K)
+    else:
+        K_W = K_W // (BLOCK_K // PACKED_BLOCK_K_W)
 
     loop_k = tl.multiple_of(tl.load(XSliceSizes + pid_s), X_SLICE_SIZES_DIVISIBILITY) if RAGGED_DIMENSION == "K" else K - off_k_x
     k_tiles = tl.cdiv(loop_k, BLOCK_K * SPLIT_K)
@@ -334,10 +346,8 @@ def _matmul(
 
     # B pointers
     offs_w_n = pid_n * PACKED_BLOCK_N_W + tl.arange(0, PACKED_BLOCK_N_W)
-    N_W = N
-    if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
-        N_W = tl.cdiv(N_W, 64) * 64
-    offs_w_n = tl.max_contiguous(tl.multiple_of(offs_w_n % (N_W // W_N_DIVISOR), PACKED_BLOCK_N_W), PACKED_BLOCK_N_W)
+    packed_n_w = _compute_packed_n_w(N, W_N_DIVISOR, SWIZZLE_MX_VALUE)
+    offs_w_n = tl.max_contiguous(tl.multiple_of(offs_w_n % packed_n_w, PACKED_BLOCK_N_W), PACKED_BLOCK_N_W)
 
     if is_x_microscaled:
         XMxScale += start_z.to(index_type) * stride_x_mx_z

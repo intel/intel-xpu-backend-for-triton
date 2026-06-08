@@ -143,3 +143,71 @@ index 56f1d1c1d..5c458b2de 100644
      num_segments = num_par_softmax_segments if use_3d else 1
  
      grid: tuple[Any, ...]
+@@ -660,9 +664,6 @@ def unified_attention(
+ 
+     kernel_unified_attention[grid](
+         output_ptr=out,
+-        segm_output_ptr=segm_output_ptr,
+-        segm_max_ptr=segm_max_ptr,
+-        segm_expsum_ptr=segm_expsum_ptr,
+         query_ptr=q,
+         key_cache_ptr=k,
+         value_cache_ptr=v,
+@@ -671,8 +672,6 @@ def unified_attention(
+         seq_lens_ptr=seqused_k,
+         alibi_slopes_ptr=alibi_slopes,
+         qq_bias_ptr=qq_bias,
+-        k_scale_cache_ptr=k_scale_ptr,
+-        v_scale_cache_ptr=v_scale_ptr,
+         scale=softmax_scale,
+         k_scale=k_descale,
+         v_scale=v_descale,
+@@ -707,12 +706,6 @@ def unified_attention(
+         stride_v_cache_1=v.stride(1),
+         stride_v_cache_2=v.stride(2),
+         stride_v_cache_3=v.stride(3),
+-        stride_ks_blk=ks_blk,
+-        stride_ks_slot=ks_slot,
+-        stride_ks_head=ks_head,
+-        stride_vs_blk=vs_blk,
+-        stride_vs_slot=vs_slot,
+-        stride_vs_head=vs_head,
+         query_start_len_ptr=cu_seqlens_q,
+         BLOCK_Q=BLOCK_Q,
+         num_seqs=num_seqs,
+@@ -721,6 +714,17 @@ def unified_attention(
+         USE_FP8=output_scale is not None,
+         IS_3D=use_3d,
+         KV_QUANT_MODE=kv_quant_mode,
++        k_scale_cache_ptr=k_scale_ptr,
++        v_scale_cache_ptr=v_scale_ptr,
++        stride_ks_blk=ks_blk,
++        stride_ks_slot=ks_slot,
++        stride_ks_head=ks_head,
++        stride_vs_blk=vs_blk,
++        stride_vs_slot=vs_slot,
++        stride_vs_head=vs_head,
++        segm_output_ptr=segm_output_ptr,
++        segm_max_ptr=segm_max_ptr,
++        segm_expsum_ptr=segm_expsum_ptr,
+         CHUNK_LOOKBACK=chunk_lookback,
+         CHUNK_SIZE=chunk_size,
+     )
+diff --git a/tests/kernels/mamba/test_mamba_ssm.py b/tests/kernels/mamba/test_mamba_ssm.py
+index 81715be98..b6a067330 100644
+--- a/tests/kernels/mamba/test_mamba_ssm.py
++++ b/tests/kernels/mamba/test_mamba_ssm.py
+@@ -77,10 +77,9 @@ def selective_state_update_ref(
+     dB = rearrange(dt, "b h d -> b h d 1") * rearrange(
+         B, "b h n -> b h 1 n"
+     )  # (batch, nheads, dim, dstate)
+-    state.copy_(
+-        state * dA + dB * rearrange(x, "b h d -> b h d 1")
+-    )  # (batch, dim, dstate
+-    out = torch.einsum("bhdn,bhn->bhd", state.to(C.dtype), C)
++    updated_state = state * dA + dB * rearrange(x, "b h d -> b h d 1")
++    out = torch.einsum("bhdn,bhn->bhd", updated_state.to(C.dtype), C)
++    state.copy_(updated_state)  # (batch, dim, dstate)
+     if D is not None:
+         out += (x * D).to(out.dtype)
+     out = (out if z is None else out * F.silu(z)).to(x.dtype)

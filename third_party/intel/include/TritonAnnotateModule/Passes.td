@@ -43,6 +43,8 @@ def TritonAnnotateModule: Pass<"triton-annotate-module", "mlir::ModuleOp"> {
            "whether B/HF8 <-> HF conversion instruction is available">,
     Option<"support16BitAtomics", "support-16bit-atomics", "bool", /*default*/"false",
            "whether 16bit atomic operations are available">,
+    Option<"supportSigmoid", "support-sigmoid", "bool", /*default*/"false",
+           "whether sigmoid operation is available">,
     Option<"supportBfloat16Arithmetic", "support-bfloat16-arithmetic", "bool", /*default*/"false",
            "whether bfloat16 arithmetic is supported">,
     Option<"supportPredicatedIO", "support-predicated-io", "bool", /*default*/"false",
