@@ -229,8 +229,8 @@ Options:
   --triton-repo-branch <branch>  Branch to fetch prebuilt vLLM XPU kernels wheels from. When set,
                                  only that branch is tried. When unset, GITHUB_REF_NAME is tried
                                  first, falling back to $DEFAULT_BRANCH if it has no nightly runs.
-                                 If GITHUB_REF_NAME has nightly runs but the recent ones all
-                                 failed, the script errors out.
+                                 If GITHUB_REF_NAME has nightly runs but none of the recent ones
+                                 succeeded, the script errors out.
 
   --help                         Show this help message and exit.
 
@@ -323,7 +323,7 @@ if [[ "$build_vllm" == false ]]; then
       break
     fi
     if [[ "$(echo "$runs_json" | jq -r 'length')" -gt 0 ]]; then
-      echo "ERROR: $branch has nightly runs but the recent ones all failed." >&2
+      echo "ERROR: $branch has nightly runs but none of the recent ones succeeded." >&2
       exit 1
     fi
     echo "*** No nightly builds found on $branch. ***"
