@@ -2132,13 +2132,9 @@ struct DescriptorLoadOpConversion
     RankedTensorType descTensorType = descType.getBlockType();
     size_t descRank = descTensorType.getRank();
 
-    // Only supports the rank reduce of [1, 1, M, N] to [M, N].
-    auto descBlockShape = descTensorType.getShape();
-    const size_t rankDelta = descRank - resultRank;
-    for (int i = 0; i < rankDelta; ++i) {
-      if (descBlockShape[i] != 1)
-        llvm_unreachable("unsupported reduce rank in desc load");
-    }
+
+    // Rank-reducing descriptor loads are validated by
+    // assertDescriptorInnerShapeCompatible() below.
 
     auto blockIOAttr = op->getAttrOfType<StringAttr>(
         TritonIntelGPUDialect::getBlockIOAttrName());
