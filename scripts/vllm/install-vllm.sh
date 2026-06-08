@@ -321,10 +321,12 @@ if [[ "$build_vllm" == false ]]; then
       echo "*** Found nightly builds on $branch (run $run_id). ***"
       break
     fi
+
     if [[ "$(echo "$runs_json" | jq -r 'length')" -gt 0 ]]; then
       echo "ERROR: $branch has nightly runs but none of the recent ones completed successfully." >&2
       exit 1
     fi
+
     echo "*** No nightly builds found on $branch. ***"
   done
 
