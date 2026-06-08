@@ -27,6 +27,26 @@ def TritonIntelGPUAccelerateMatmul
   ];
 }
 
+def TritonIntelGPUFoldFpToFp
+    : Pass<"tritonintelgpu-fold-fp-to-fp", "mlir::ModuleOp"> {
+  let summary = "Fold redundant tt.fp_to_fp cast chains";
+
+  let description = [{
+    Fold an `A -> B -> C` chain of `tt.fp_to_fp` casts into a single `A -> C`
+    cast when the outer cast `B -> C` is lossless (`B` is a subset of `C`),
+    dropping the redundant narrow intermediate `B`. Losslessness is decided from
+    `llvm::APFloat` semantics (mantissa precision + exponent range), so type
+    width alone is never trusted.
+
+    Dropping the intermediate is more accurate than the double cast and so is
+    NOT value-preserving; it changes fp8 numerics. The fold is therefore gated
+    behind the `TRITON_INTEL_FOLD_LOSSY_FPCAST` env var (cache-invalidating),
+    default-on with opt-out via `TRITON_INTEL_FOLD_LOSSY_FPCAST=0`.
+  }];
+
+  let dependentDialects = ["mlir::triton::TritonDialect"];
+}
+
 def TritonIntelGPUOptimizeDotOperands
     : Pass<"tritonintelgpu-optimize-dot-operands", "mlir::ModuleOp"> {
   let summary = "Intel optimize dot operands";

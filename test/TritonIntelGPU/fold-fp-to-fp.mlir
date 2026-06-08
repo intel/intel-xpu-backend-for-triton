@@ -1,9 +1,9 @@
 // default (unset) -> fold ON
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-accelerate-matmul | FileCheck %s --check-prefixes=CHECK,FOLD
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-fold-fp-to-fp | FileCheck %s --check-prefixes=CHECK,FOLD
 // explicit on -> fold
-// RUN: env TRITON_INTEL_FOLD_LOSSY_FPCAST=1 triton-opt %s -split-input-file -tritonintelgpu-accelerate-matmul | FileCheck %s --check-prefixes=CHECK,FOLD
+// RUN: env TRITON_INTEL_FOLD_LOSSY_FPCAST=1 triton-opt %s -split-input-file -tritonintelgpu-fold-fp-to-fp | FileCheck %s --check-prefixes=CHECK,FOLD
 // explicit opt-out -> keep both casts
-// RUN: env TRITON_INTEL_FOLD_LOSSY_FPCAST=0 triton-opt %s -split-input-file -tritonintelgpu-accelerate-matmul | FileCheck %s --check-prefixes=CHECK,NOFOLD
+// RUN: env TRITON_INTEL_FOLD_LOSSY_FPCAST=0 triton-opt %s -split-input-file -tritonintelgpu-fold-fp-to-fp | FileCheck %s --check-prefixes=CHECK,NOFOLD
 
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 
