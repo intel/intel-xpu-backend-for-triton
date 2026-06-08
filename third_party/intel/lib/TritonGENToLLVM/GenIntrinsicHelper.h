@@ -49,11 +49,6 @@ public:
     intrinsicDecl = appendOrGetGenISADeclaration(builder, INST_ID, {&retTy...});
   }
 
-  explicit GenISA(OpBuilder &builder) {
-    // get GenISA intrinsic declaration.
-    intrinsicDecl = appendOrGetGenISADeclaration(builder, INST_ID, {});
-  }
-
   template <typename... Args>
   LLVM::CallOp operator()(OpBuilder &rewriter, Location loc, Args... args) {
     auto funName = intrinsicDecl.getName();
@@ -64,13 +59,6 @@ public:
     return funCall;
   }
 };
-
-template <llvm::GenISAIntrinsic::ID INST_ID>
-llvm::raw_ostream &operator<<(llvm::raw_ostream &os,
-                              const GenISA<INST_ID> &intr) {
-  intr.print(os);
-  return os;
-}
 
 class GenISA_Prefetching_2D
     : public GenISA<llvm::GenISAIntrinsic::ID::GenISA_LSC2DBlockPrefetch> {
