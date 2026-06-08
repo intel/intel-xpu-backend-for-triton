@@ -18,11 +18,13 @@
 #include "mlir/Transforms/RegionUtils.h"
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/BlockIOUtils.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/Sys/GetEnv.h"
@@ -348,19 +350,29 @@ bool isLayoutAnchor(Operation *op) {
   if (auto reshape = dyn_cast<tt::ReshapeOp>(op))
     return reshape.getAllowReorder();
 
-  // Anchor a convert_layout that feeds a descriptor store when the chain of
-  // converts behind it performs a net order change (a transpose).  Coalesce
-  // inserts such a chain to give the store its coalesced (row-major) layout;
-  // without anchoring it, forward propagation from an (expensive) load strips
-  // the chain and demotes the store to a scalar scatter.  Unlike a store (which
-  // has no result and so cannot be anchored), the convert has a result and can.
+  // Anchor a convert_layout that feeds a descriptor store when folding it would
+  // demote the store from a 2D block write to a scalar scatter.
   //
-  // The order change is checked across the whole convert chain (root source ->
-  // store-feeding convert), not on a single convert: the store-feeding convert
-  // is frequently a same-order re-tiling whose transpose lives one convert
-  // upstream.  Gating on the net change keeps a genuine transpose (issue #7093)
-  // while still folding a chain that ends at the same order it started (e.g. a
-  // dot result re-tiled for the store, issue #4866).
+  // The descriptor-store fast path emits a 2D block write iff consecutive lanes
+  // of the store operand's layout advance along the memory-contiguous tensor
+  // dimension (exactly the gate in getBlockIOTileSize<false>:
+  // transpose := laneFastDim != memContiguousDim). Coalesce inserts this
+  // convert to give the store its coalesced (row-major) layout, so dst is
+  // block-write-eligible by construction. Forward propagation from an
+  // (expensive) load would otherwise strip the convert and replace the store
+  // operand with the chain's root layout; if root distributes lanes along a
+  // different dimension than dst, that fold turns the block write into a
+  // scatter (issue #7093). Unlike a store (no result, cannot be anchored), the
+  // convert has a result and can.
+  //
+  // The lane-fast-dim is compared across the whole convert chain (root source
+  // -> store-feeding convert), not on a single convert: the store-feeding
+  // convert is frequently a same-order re-tiling whose lane transpose lives one
+  // convert upstream. Comparing lane-fast-dims (not the `order` attribute)
+  // distinguishes a genuine within-subgroup transpose -- which can keep the
+  // SAME `order` while flipping the lane distribution (#7093) -- from a pure
+  // re-tiling that ends with the same lane-fast-dim it started (e.g. a dot
+  // result re-tiled for the store, issue #4866), which still folds.
   if (auto convertOp = dyn_cast<ttg::ConvertLayoutOp>(op)) {
     bool feedsDescStore =
         llvm::any_of(convertOp.getResult().getUsers(), [](Operation *user) {
@@ -374,12 +386,21 @@ bool isLayoutAnchor(Operation *op) {
       auto rootTy = dyn_cast<RankedTensorType>(root.getType());
       auto dstTy = dyn_cast<RankedTensorType>(convertOp.getType());
       if (rootTy && dstTy) {
-        auto rootBlocked =
-            dyn_cast<ttg::BlockedEncodingAttr>(rootTy.getEncoding());
-        auto dstBlocked =
-            dyn_cast<ttg::BlockedEncodingAttr>(dstTy.getEncoding());
-        if (rootBlocked && dstBlocked)
-          return rootBlocked.getOrder() != dstBlocked.getOrder();
+        // The descriptor-store fast path is a 2D block write iff consecutive
+        // lanes advance along the memory-contiguous tensor dim. Folding this
+        // convert replaces the store operand's layout (dst) with root's; if the
+        // two layouts distribute lanes along different dims, that fold turns a
+        // block write into a scalar scatter. Anchor to prevent it.
+        MLIRContext *ctx = op->getContext();
+        std::optional<unsigned> rootLaneDim =
+            ttgi::getLaneFastChangeDim(ttg::toLinearLayout(rootTy), ctx);
+        std::optional<unsigned> dstLaneDim =
+            ttgi::getLaneFastChangeDim(ttg::toLinearLayout(dstTy), ctx);
+        // Conservative fallback: if either lane base is not a clean single-dim
+        // stride, the store can't be a 2D block write anyway -> nothing to
+        // protect -> don't anchor (fold by default, as before).
+        if (rootLaneDim && dstLaneDim)
+          return *rootLaneDim != *dstLaneDim;
       }
     }
   }

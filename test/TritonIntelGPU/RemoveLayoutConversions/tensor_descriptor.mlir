@@ -129,3 +129,30 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+
+// COM: ============================================================
+// COM: Test 6: Descriptor store PRESERVES a SAME-order convert whose
+// COM: lane distribution is transposed (threadsPerWarp [16,1] -> [1,16],
+// COM: both order = [1,0]). The `order` attribute is identical on both
+// COM: sides, so an order-based check would wrongly fold; the lane-fast
+// COM: dim differs (0 -> 1), so the convert is a genuine within-subgroup
+// COM: transpose that must be anchored (else the row-major store demotes
+// COM: to a scalar scatter). GitHub issue #7093 (same-order gap).
+// COM: ============================================================
+
+// CHECK-LABEL: @descriptor_store_same_order_lane_transpose_preserved
+// CHECK: %[[CVT:.*]] = ttg.convert_layout {{.*}} -> tensor<16x64xf16, #blocked1>
+// CHECK: tt.descriptor_store {{.*}}, %[[CVT]] : !tt.tensordesc<16x64xf16>, tensor<16x64xf16, #blocked1>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  tt.func @descriptor_store_same_order_lane_transpose_preserved(%desc: !tt.tensordesc<16x64xf16>, %src: tensor<16x64xf16, #blocked>) {
+    %c0 = arith.constant 0 : i32
+    %cvt = ttg.convert_layout %src : tensor<16x64xf16, #blocked> -> tensor<16x64xf16, #blocked1>
+    tt.descriptor_store %desc[%c0, %c0], %cvt : !tt.tensordesc<16x64xf16>, tensor<16x64xf16, #blocked1>
+    tt.return
+  }
+}

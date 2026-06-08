@@ -14,6 +14,21 @@ template <typename T> static T product(const std::vector<T> &vec) {
                          std::multiplies<T>());
 }
 
+std::optional<unsigned> getLaneFastChangeDim(const LinearLayout &ll,
+                                             MLIRContext *ctx) {
+  auto kLane = StringAttr::get(ctx, "lane");
+  if (!ll.hasInDim(kLane))
+    return std::nullopt;
+  // First lane basis vector (fastest-varying lane bit). Mirrors the gate in
+  // getBlockIOTileSize<false>: the lane base must move along exactly one tensor
+  // dimension, else the layout is not a clean 2D block-I/O tile.
+  ArrayRef<int32_t> laneBase0 = ll.getBasis(kLane, /*pos=*/0);
+  if (llvm::count_if(laneBase0, [](int32_t x) { return x > 0; }) != 1)
+    return std::nullopt;
+  auto it = llvm::find_if(laneBase0, [](int32_t x) { return x > 0; });
+  return static_cast<unsigned>(std::distance(laneBase0.begin(), it));
+}
+
 // Return the tileHeight, tileWidth, numElemPerPackedVal, vBlocks, row Dim and
 // column Dim.
 template <bool isLoad>
