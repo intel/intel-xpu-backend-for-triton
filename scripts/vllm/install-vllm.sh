@@ -228,7 +228,9 @@ Options:
 
   --triton-repo-branch <branch>  Branch to fetch prebuilt vLLM XPU kernels wheels from. When set,
                                  only that branch is tried. When unset, GITHUB_REF_NAME is tried
-                                 first, falling back to $DEFAULT_BRANCH.
+                                 first, falling back to $DEFAULT_BRANCH if it has no nightly runs.
+                                 If GITHUB_REF_NAME has nightly runs but none succeeded, the script
+                                 errors out.
 
   --help                         Show this help message and exit.
 
@@ -314,10 +316,15 @@ if [[ "$build_vllm" == false ]]; then
 
   run_id=""
   for branch in "${branches_to_try[@]}"; do
-    run_id="$(gh run list --workflow nightly-wheels.yml --branch "$branch" -R "$triton_repo" --json databaseId,conclusion | jq -r '[.[] | select(.conclusion=="success")][0].databaseId // empty')"
+    runs_json="$(gh run list --workflow nightly-wheels.yml --branch "$branch" -R "$triton_repo" --json databaseId,conclusion)"
+    run_id="$(echo "$runs_json" | jq -r '[.[] | select(.conclusion=="success")][0].databaseId // empty')"
     if [[ -n "$run_id" ]]; then
       echo "*** Found nightly builds on $branch (run $run_id). ***"
       break
+    fi
+    if [[ "$(echo "$runs_json" | jq -r 'length')" -gt 0 ]]; then
+      echo "ERROR: $branch has nightly runs but none succeeded." >&2
+      exit 1
     fi
     echo "*** No nightly builds found on $branch. ***"
   done
