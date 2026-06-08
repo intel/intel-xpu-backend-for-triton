@@ -423,9 +423,15 @@ MODELS_BF16 = [
     # Qwen2.5-235B - sliding window attention (window size 256)
     (64, 4, 128, None, 256, None),
     # gpt-oss-120b - full attention
-    # (64, 8, 64, None, None, None),
+    (64, 8, 64, None, None, None),
     # gpt-oss-120b - sliding window attention (window size 128)
-    # (64, 8, 64, None, 128, None),
+    (64, 8, 64, None, 128, None),
+    # Full multi-head attention style workload with q_heads == k_heads.
+    # This covers a q:k ratio of 1 and the resulting BLOCK_Q=16 path.
+    (32, 32, 128, None, None, None),
+    # Large-head GQA workload / correctness coverage.
+    # This exercises the HEAD_SIZE=256 autotune key path.
+    (64, 8, 256, None, None, None),
 ]
 
 MODELS_FP8 = [
