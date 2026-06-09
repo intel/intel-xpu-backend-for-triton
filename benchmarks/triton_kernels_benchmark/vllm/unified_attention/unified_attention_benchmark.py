@@ -139,6 +139,7 @@ def _autotune_meta_for_row(
 
 def _record_autotune_decision(
     *,
+    benchmark_name: str,
     provider: str,
     q_heads: int,
     k_heads: int,
@@ -156,16 +157,24 @@ def _record_autotune_decision(
     if kernel is None or not hasattr(kernel, "configs"):
         return
 
-    selected_config = getattr(kernel, "best_config", None)
+    meta = _autotune_meta_for_row(q_heads, k_heads, head_size, qdtype, seq_lens, sliding_window, block_size)
+    selected_config = None
+    if meta["IS_3D"]:
+        selected_config = getattr(_unified_attention_module, "LAST_UNIFIED_ATTENTION_3D_CONFIG", None)
+    if selected_config is None:
+        selected_config = getattr(kernel, "best_config", None)
     if selected_config is None:
         return
 
-    meta = _autotune_meta_for_row(q_heads, k_heads, head_size, qdtype, seq_lens, sliding_window, block_size)
     pruned_configs = _get_pruned_configs(kernel, meta)
     key_names = list(getattr(kernel, "keys", []) or [])
     key_values = {key: meta.get(key, "") for key in key_names}
+    autotune_cache = getattr(kernel, "cache", {}) or {}
+    if meta["IS_3D"]:
+        autotune_cache = getattr(_unified_attention_module, "UNIFIED_ATTENTION_3D_TILE_CACHE", {}) or autotune_cache
 
     row = {
+        "benchmark_name": benchmark_name,
         "td_patched": os.getenv("TD_PATCHED", "0"),
         "benchmark_dtype": "fp8" if IS_FP8 else "bf16",
         "provider": provider,
@@ -186,7 +195,7 @@ def _record_autotune_decision(
         "selected_num_warps": _config_value(selected_config, "num_warps"),
         "selected_num_stages": _config_value(selected_config, "num_stages"),
         "configs_after_prune": "|".join(_format_config(config) for config in pruned_configs),
-        "autotune_cache_size": len(getattr(kernel, "cache", {}) or {}),
+        "autotune_cache_size": len(autotune_cache),
         "mean_ms": mean_ms,
         "cv": cv,
     }
@@ -206,6 +215,7 @@ def _write_autotune_decisions() -> None:
     os.makedirs(reports_dir, exist_ok=True)
     report_path = os.path.join(reports_dir, AUTOTUNE_DECISIONS_FILE)
     fieldnames = [
+        "benchmark_name",
         "td_patched",
         "benchmark_dtype",
         "provider",
@@ -405,6 +415,16 @@ SEQ_LENS = [
     # Pure decoding, 8 batches
     [(1, k) for k in [1513, 4100, 530, 123, 4803, 434, 3015, 34]]
 ]
+SEQ_LENS_3D_TARGETED = [
+    # Single-sequence decode with an odd KV length.
+    [(1, 257)],
+    # Boundary-heavy decode lengths around powers of two and segment/tile cut points.
+    [(1, k) for k in [255, 256, 257, 511, 512, 513, 1023, 1024]],
+    # Existing long decode shape, kept here so the focused plot overlaps the main sweep.
+    [(1, k) for k in [1513, 4100, 530, 123, 4803, 434, 3015, 34]],
+    # Maximum sequence count that still selects the 3D path with the current threshold.
+    [(1, k) for k in ([64, 128, 256, 512, 1024, 2048, 4096, 8192] * 4)],
+]
 # Models: (q_heads, k_heads, head_size, qdtype, sliding_window, soft_cap)
 # sliding_window: None = full attention, int = sliding window size.
 # soft_cap: None = disabled, float = soft_cap value.
@@ -441,13 +461,48 @@ MODELS_FP8 = [
     (64, 8, 128, torch.float8_e4m3fn, 8192, None),
 ]
 
+MODELS_3D_TARGETED_BF16 = [
+    # Llama-style GQA.
+    (32, 8, 128, None, None, None),
+    # Soft-cap path coverage.
+    (32, 8, 128, None, None, 50.0),
+    # Wider query-head count / BLOCK_Q=2.
+    (64, 8, 128, None, None, None),
+    # Large sliding window that still selects 3D.
+    (64, 8, 128, None, 8192, None),
+    # Smaller head size.
+    (64, 8, 64, None, None, None),
+    # Large head size.
+    (64, 8, 256, None, None, None),
+    # MHA-style q:k ratio of 1 / BLOCK_Q=16.
+    (32, 32, 128, None, None, None),
+]
 
-def _build_attention_configs(model_configs):
+MODELS_3D_TARGETED_FP8 = [
+    # FP8 full-attention and large-window paths. TILE_SIZE=16 is pruned for FP8.
+    (64, 8, 128, torch.float8_e4m3fn, None, None),
+    (64, 8, 128, torch.float8_e4m3fn, 8192, None),
+]
+
+
+def _is_3d_config(x_val) -> bool:
+    q_heads, k_heads, head_size, qdtype, seq_lens, sliding_window, _soft_cap, _num_blocks, block_size = x_val
+    meta = _autotune_meta_for_row(q_heads, k_heads, head_size, qdtype, seq_lens, sliding_window, block_size)
+    return bool(meta["IS_3D"])
+
+
+def _build_attention_configs(model_configs, seq_lens_configs=SEQ_LENS, num_blocks_configs=NUM_BLOCKS,
+                             block_size_configs=None, require_3d=False):
+    if block_size_configs is None:
+        block_size_configs = MMAP_BLOCK_SIZES
+
     configs = []
     for model_config in model_configs:
         *base_config, sliding_window, soft_cap = model_config
-        for seq_lens, num_blocks, block_size in product(SEQ_LENS, NUM_BLOCKS, MMAP_BLOCK_SIZES):
+        for seq_lens, num_blocks, block_size in product(seq_lens_configs, num_blocks_configs, block_size_configs):
             x_val = (*base_config, seq_lens, sliding_window, soft_cap, num_blocks, block_size)
+            if require_3d and not _is_3d_config(x_val):
+                continue
             qdtype = x_val[3]
             if qdtype is not None and qdtype.itemsize < 2 and x_val[-1] < 32:
                 print("Skipping configuration due to incompatible q_dtype and block_size.")
@@ -461,17 +516,31 @@ def _build_attention_configs(model_configs):
 
 ATTENTION_CONFIGS_BF16 = _build_attention_configs(MODELS_BF16)
 ATTENTION_CONFIGS_FP8 = _build_attention_configs(MODELS_FP8)
+ATTENTION_3D_CONFIGS_BF16 = _build_attention_configs(MODELS_3D_TARGETED_BF16,
+                                                     seq_lens_configs=SEQ_LENS_3D_TARGETED,
+                                                     num_blocks_configs=[2048],
+                                                     block_size_configs=[16, 64],
+                                                     require_3d=True)
+ATTENTION_3D_CONFIGS_FP8 = _build_attention_configs(MODELS_3D_TARGETED_FP8,
+                                                    seq_lens_configs=SEQ_LENS_3D_TARGETED,
+                                                    num_blocks_configs=[2048],
+                                                    block_size_configs=[64],
+                                                    require_3d=True)
 
 # To debug if the benchmark runs at all, without waiting for all configurations to run
 if os.getenv('DEBUG_BENCH', '0') == '1':
     ATTENTION_CONFIGS_BF16 = ATTENTION_CONFIGS_BF16[:1]
     ATTENTION_CONFIGS_FP8 = ATTENTION_CONFIGS_FP8[:1]
+    ATTENTION_3D_CONFIGS_BF16 = ATTENTION_3D_CONFIGS_BF16[:1]
+    ATTENTION_3D_CONFIGS_FP8 = ATTENTION_3D_CONFIGS_FP8[:1]
 
 
 def get_unified_attention_benchmark(
     providers_filter: Optional[list[str]] = None,
     is_fp8=False,
     is_td_patched=False,
+    configs_override=None,
+    plot_name_base='unified-attention-performance',
 ):
     supported_providers = {
         'triton' + ('-td' if is_td_patched else ''): 'triton' + ('-td' if is_td_patched else ''),
@@ -482,7 +551,11 @@ def get_unified_attention_benchmark(
         del supported_providers['triton']
 
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
-    configs = ATTENTION_CONFIGS_FP8 if is_fp8 else ATTENTION_CONFIGS_BF16
+    if configs_override is not None:
+        configs = configs_override
+    else:
+        configs = ATTENTION_CONFIGS_FP8 if is_fp8 else ATTENTION_CONFIGS_BF16
+    benchmark_name = plot_name_base + ('-td' if is_td_patched else '')
 
     @benchmark_suite.perf_report(
         benchmark_suite.Benchmark(
@@ -496,7 +569,7 @@ def get_unified_attention_benchmark(
             line_names=list(providers.values()),
             styles=[('green', '-'), ('blue', '--'), ('orange', ':')],
             ylabel=['GB/s', 'TFlops'],
-            plot_name='unified-attention-performance' + ('-td' if is_td_patched else ''),
+            plot_name=benchmark_name,
             args={},
         ))
     def benchmark(q_heads, k_heads, head_size, qdtype, seq_lens, sliding_window, soft_cap, num_blocks, block_size,
@@ -611,6 +684,7 @@ def get_unified_attention_benchmark(
                 quantiles=quantiles,
             )
             _record_autotune_decision(
+                benchmark_name=benchmark_name,
                 provider=provider,
                 q_heads=q_heads,
                 k_heads=k_heads,
@@ -658,7 +732,26 @@ def get_unified_attention_benchmark(
     return benchmark
 
 
+def get_unified_attention_3d_benchmark(
+    providers_filter: Optional[list[str]] = None,
+    is_fp8=False,
+    is_td_patched=False,
+):
+    configs = ATTENTION_3D_CONFIGS_FP8 if is_fp8 else ATTENTION_3D_CONFIGS_BF16
+    return get_unified_attention_benchmark(
+        providers_filter=providers_filter,
+        is_fp8=is_fp8,
+        is_td_patched=is_td_patched,
+        configs_override=configs,
+        plot_name_base='unified-attention-3d-performance',
+    )
+
+
 if __name__ == '__main__':
     is_td_patched = os.getenv('TD_PATCHED', '0') == '1'
-    _benchmark_attention = get_unified_attention_benchmark(is_fp8=IS_FP8, is_td_patched=is_td_patched)
-    _benchmark_attention.run(show_plots=False, print_data=True)
+    if os.getenv('UA_RUN_MAIN_BENCH', '1') == '1':
+        _benchmark_attention = get_unified_attention_benchmark(is_fp8=IS_FP8, is_td_patched=is_td_patched)
+        _benchmark_attention.run(show_plots=False, print_data=True)
+    if os.getenv('UA_RUN_TARGETED_3D_BENCH', '1') == '1':
+        _benchmark_attention_3d = get_unified_attention_3d_benchmark(is_fp8=IS_FP8, is_td_patched=is_td_patched)
+        _benchmark_attention_3d.run(show_plots=False, print_data=True)
