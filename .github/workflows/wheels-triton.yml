@@ -1,4 +1,4 @@
-name: Triton wheels
+name: Triton wheels for Windows
 
 on:
   workflow_dispatch:
@@ -26,6 +26,8 @@ jobs:
     steps:
       - name: Checkout Triton repository
         uses: actions/checkout@v6
+        with:
+          ref: 'release/3.7.1'
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -69,7 +71,7 @@ jobs:
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
 
           $env:CIBW_BUILD_VERBOSITY = "1"
-          $env:CIBW_SKIP = "cp{35,36,37}-*"
+          $env:CIBW_SKIP = "cp{35,36,37,38,39}-*"
           $env:CIBW_BUILD = "cp" + "${{ matrix.python}}".replace(".", "") + "*-win_amd64"
           $env:CIBW_CACHE_PATH = "${{ env.NEW_WORKSPACE }}/cibw"
 
