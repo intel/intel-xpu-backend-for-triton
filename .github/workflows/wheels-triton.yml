@@ -55,15 +55,6 @@ jobs:
           .venv\Scripts\activate.ps1
           pip install cibuildwheel
 
-      - name: Set Triton version
-        shell: bash
-        run: |
-          cd /c/gh${{ github.run_id }}
-          version="$(./scripts/triton-version.sh)"
-          version="$version.post$GITHUB_RUN_NUMBER+git$(git rev-parse --short=7 HEAD)"
-          ./scripts/triton-version.sh "$version"
-          echo "Triton version: $(./scripts/triton-version.sh)"
-
       - name: Build Triton wheels
         run: |
           cd ${{ env.NEW_WORKSPACE }}
