@@ -825,53 +825,6 @@ private:
   template <typename OpType,
             typename = std::enable_if_t<llvm::is_one_of<
                 OpType, tt::DescriptorLoadOp, tt::DescriptorStoreOp>::value>>
-  std::optional<ttg::DotOperandEncodingAttr> getDotLayout(OpType op) const {
-    // Get the tensor type from the operation's result (load) or value (store)
-    Type resultType;
-    if constexpr (std::is_same_v<OpType, tt::DescriptorLoadOp>) {
-      resultType = op.getResult().getType();
-    } else {
-      resultType = op.getSrc().getType();
-    }
-    RankedTensorType tensorType = ttgi::getRankedTensorType(resultType);
-    if (!tensorType)
-      return std::nullopt;
-
-    auto dotLayout = ttgi::getDotEncoding(tensorType);
-    if (dotLayout)
-      return dotLayout;
-
-    auto allUsersAreConvertOps = [](Operation::user_range users) {
-      return llvm::all_of(users, [](Operation *user) {
-        return isa<ttg::ConvertLayoutOp>(user);
-      });
-    };
-
-    auto allUserHaveIdenticalLayout = [](Operation::user_range users) {
-      Attribute firstUserLayout =
-          cast<ttg::ConvertLayoutOp>(*users.begin()).getType().getEncoding();
-      return llvm::all_of(users, [&firstUserLayout](Operation *user) {
-        return firstUserLayout ==
-               cast<ttg::ConvertLayoutOp>(user).getType().getEncoding();
-      });
-    };
-
-    Operation::user_range users = op->getUsers();
-    if (!users.empty() && allUsersAreConvertOps(users) &&
-        allUserHaveIdenticalLayout(users)) {
-      Attribute firstUserLayout =
-          cast<ttg::ConvertLayoutOp>(*users.begin()).getType().getEncoding();
-      if (isa<ttg::DotOperandEncodingAttr>(firstUserLayout))
-        return dyn_cast<ttg::DotOperandEncodingAttr>(firstUserLayout);
-      return std::nullopt;
-    }
-
-    return std::nullopt;
-  }
-
-  template <typename OpType,
-            typename = std::enable_if_t<llvm::is_one_of<
-                OpType, tt::DescriptorLoadOp, tt::DescriptorStoreOp>::value>>
   bool satisfies2DBlockReadAlignment(
       OpType op, tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) const {
     Value desc = op.getDesc();
