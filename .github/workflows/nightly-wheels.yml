@@ -56,17 +56,6 @@ jobs:
           # cmake 3.22.1 does not work with the recent torchaudio: https://github.com/intel/intel-xpu-backend-for-triton/issues/2079
           pip install cmake build
 
-      - name: Setup PyTorch
-        id: setup-pytorch
-        uses: ./.github/actions/setup-pytorch
-
-      - name: Identify pinned versions
-        run: |
-          cd pytorch
-          echo "TORCHVISION_COMMIT_ID=$(<.github/ci_commit_pins/vision.txt)" | tee -a $GITHUB_ENV
-          echo "TORCHAUDIO_COMMIT_ID=$(<.github/ci_commit_pins/audio.txt)" | tee -a $GITHUB_ENV
-          echo "TIMM_COMMIT_ID=$(<.ci/docker/ci_commit_pins/timm.txt)" | tee -a $GITHUB_ENV
-
       - name: Identify Triton commit id
         run: |
           echo "TRITON_COMMIT_ID=$(git rev-parse HEAD)" >> $GITHUB_ENV
@@ -78,43 +67,10 @@ jobs:
             DEBUG=1
             python -m build --wheel --no-isolation && pip install dist/*.whl
 
-      - name: Install torchvision package
-        uses: ./.github/actions/install-dependency
-        with:
-          package: torchvision
-          repository: pytorch/vision
-          ref: ${{ env.TORCHVISION_COMMIT_ID }}
-          extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
-
-      - name: Install torchaudio package
-        uses: ./.github/actions/install-dependency
-        with:
-          package: torchaudio
-          repository: pytorch/audio
-          ref: ${{ env.TORCHAUDIO_COMMIT_ID }}
-          extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
-
-      - name: Install timm package
-        uses: ./.github/actions/install-dependency
-        with:
-          package: timm
-          repository: huggingface/pytorch-image-models
-          ref: ${{ env.TIMM_COMMIT_ID }}
-          extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
-
-      - name: Install transformers package
-        run: |
-          cd pytorch
-          pip install -r .ci/docker/ci_commit_pins/huggingface-requirements.txt
-
       - name: Prepare wheels for upload
         run: |
           mkdir -p wheels
-          cp -L pytorch/dist/*.whl wheels/
           cp -L dist/*.whl wheels/
-          cp -L torchvision*/dist/*.whl wheels/
-          cp -L torchaudio*/dist/*.whl wheels/
-          cp -L timm*/dist/*.whl wheels/
           ls -lh wheels/
 
       - name: Report environment details
@@ -128,19 +84,15 @@ jobs:
           GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER
           GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT
           PYTHON_VERSION=$PYTHON_VERSION
-          PYTORCH_REPO=$PYTORCH_REPO
-          PYTORCH_COMMIT_ID=$PYTORCH_COMMIT_ID
           LLVM_REPO=llvm/llvm-project
           LLVM_COMMIT_ID=$LLVM_COMMIT_ID
           TRITON_REPO=intel/intel-xpu-backend-for-triton
           TRITON_COMMIT_ID=$TRITON_COMMIT_ID
-          TORCHVISION_COMMIT_ID=$TORCHVISION_COMMIT_ID
-          TORCHAUDIO_COMMIT_ID=$TORCHAUDIO_COMMIT_ID
           EOF
 
-      - name: Upload PyTorch wheels to artifacts
+      - name: Upload Triton wheels to artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: wheels-pytorch-py${{ matrix.python }}-${{ env.TIMESTAMP }}
+          name: triton-release-wheels-py${{ matrix.python }}-${{ env.TIMESTAMP }}
           path: wheels
           include-hidden-files: true
