@@ -669,8 +669,8 @@ def get_benchmark(
                             p_ref[:, :, causal_mask == 0] = float('-inf')
                         p_ref = torch.softmax(p_ref, dim=-1)
                         fp8_ref_out = torch.matmul(p_ref, v_ref).half()
-                        benchmark_suite.assert_close(lambda: triton_fn().to(torch.float16), lambda: fp8_ref_out,
-                                                     atol=3, rtol=1e-3, err_msg='triton to torch')
+                        benchmark_suite.assert_close(lambda: triton_fn().to(torch.float16), lambda: fp8_ref_out, atol=3,
+                                                     rtol=1e-3, err_msg='triton to torch')
                 else:
                     benchmark_suite.assert_close(triton_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='triton to torch')
             else:
