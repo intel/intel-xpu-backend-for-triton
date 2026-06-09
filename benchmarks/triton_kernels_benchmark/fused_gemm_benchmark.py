@@ -211,8 +211,9 @@ def benchmark(M, N, K, provider):
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 
-    # Two GEMMs (w_g and w_fc): each contributes 2 * M * N * K FLOPs
-    tflops = lambda ms: 2 * 2 * M * N * K * 1e-12 / (ms * 1e-3)
+    # Two parallel GEMMs (w_g and w_fc), each with 2 * M * N * K multiply-add FLOPs
+    num_gemms = 2
+    tflops = lambda ms: num_gemms * 2 * M * N * K * 1e-12 / (ms * 1e-3)
     # Memory: x (M*K), w_g (K*N), w_fc (K*N), b_g (N), b_fc (N), y (M*N) -- all bfloat16 (2 bytes)
     gbps = lambda ms: (M * K + 2 * K * N + 2 * N + M * N) * 2 * 1e-9 / (ms * 1e-3)
 
