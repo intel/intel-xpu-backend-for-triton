@@ -306,6 +306,26 @@ index 1774f1b30..257481768 100644
          CHUNK_LOOKBACK=chunk_lookback,
          CHUNK_SIZE=chunk_size,
      )
+diff --git a/tests/kernels/mamba/test_mamba_mixer2.py b/tests/kernels/mamba/test_mamba_mixer2.py
+index 973e788..b3f9bca 100644
+--- a/tests/kernels/mamba/test_mamba_mixer2.py
++++ b/tests/kernels/mamba/test_mamba_mixer2.py
+@@ -98,6 +98,7 @@ def mixer2_gated_norm_tensor_parallel(
+     # create gated-norm with TP
+-    mixer = Mixer2RMSNormGated(
+-        full_hidden_size=hidden_size,
+-        full_n_groups=n_groups,
+-    )
++    with ensure_current_vllm_config():
++        mixer = Mixer2RMSNormGated(
++            full_hidden_size=hidden_size,
++            full_n_groups=n_groups,
++        )
+     mixer.weight.weight_loader(mixer.weight, weight)  # load
+@@ -117,2 +118,3 @@ def mixer2_gated_norm_tensor_parallel(
+         ),
++        ensure_current_vllm_config(),
+     ):
 diff --git a/tests/kernels/mamba/test_mamba_ssm.py b/tests/kernels/mamba/test_mamba_ssm.py
 index 81715be98..b6a067330 100644
 --- a/tests/kernels/mamba/test_mamba_ssm.py
