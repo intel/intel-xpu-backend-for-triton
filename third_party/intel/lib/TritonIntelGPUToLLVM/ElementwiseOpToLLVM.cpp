@@ -575,7 +575,7 @@ static SmallVector<Value> Fp_to_Fp8_RTNE(Location loc,
   } else {
     val = b.bitcast(val, srcITy);
   }
-  Value sign = b.and_(val, ival(1L << (SrcBits - 1)));
+  Value sign = b.and_(val, ival(1ULL << (SrcBits - 1)));
   Value nosign = b.and_(val, ival(SRC_MASK));
   Value exp = b.lshr(nosign, ival(SrcMBits));
   Value man = b.and_(nosign, ival(SRC_MMASK));
