@@ -169,7 +169,8 @@ public:
   virtual ~MaskValidatorBase() = default;
 
   // Check whether the given mask is valid.
-  virtual bool isValidMask(scf::ForOp &forOp, Value mask) const = 0;
+  virtual bool isValidMask(scf::ForOp &forOp, Value mask,
+                           Operation *op) const = 0;
 
   // Create the loop versioning condition based on the mask.
   virtual Value getVersioningCond(scf::ForOp &forOp, Value mask) const = 0;
@@ -183,11 +184,11 @@ public:
   RemovableMaskValidator(DataFlowSolver *solver)
       : MaskValidatorBase(), solver(solver) {}
 
-  virtual bool isValidMask(scf::ForOp &forOp, Value mask) const {
+  virtual bool isValidMask(scf::ForOp &forOp, Value mask, Operation *op) const {
     MaskClassification cls = classify(forOp, mask);
     if (cls == MaskClassification::Unknown)
       return false;
-    registerMaskValue(mask, cls == MaskClassification::AlwaysTrue);
+    registerMaskValue(op, cls == MaskClassification::AlwaysTrue);
     return true;
   }
 
@@ -203,10 +204,12 @@ public:
   }
 
 private:
-  // Record the final mask value for all users of `mask`.
-  void registerMaskValue(Value mask, bool maskVal) const {
-    for (Operation *user : mask.getUsers())
-      opToMaskValue.insert({user, maskVal});
+  // Record the final mask value for the given masked operation.
+  // Fixes #6871: each operation must record only its own mask, not the masks of
+  // its other users (which would poison the map for ops consuming two masks,
+  // e.g. an arith.select using one mask as condition and another as true-value).
+  void registerMaskValue(Operation *op, bool maskVal) const {
+    opToMaskValue.insert({op, maskVal});
   }
 
   // Dispatch on the mask's defining op: `arith.andi` is combined recursively,
@@ -310,7 +313,7 @@ public:
   };
 
   // Check whether the mask is equivalent to the form: `END-1 < N-i*END`.
-  virtual bool isValidMask(scf::ForOp &forOp, Value mask) const {
+  virtual bool isValidMask(scf::ForOp &forOp, Value mask, Operation *op) const {
     Value finalVal = tt::intel::getFinalValue(mask);
     assert(finalVal && "Expecting a valid mask");
 
@@ -456,7 +459,8 @@ private:
   // Assuming the mask is equivalent to the form: `END < N-i*END`, returns a
   // structure containing `N` and `END`.
   MaskInfo getMaskInfo(scf::ForOp &forOp, Value mask) const {
-    assert(isValidMask(forOp, mask) && "Expecting a valid mask");
+    assert(isValidMask(forOp, mask, /*op=*/nullptr) &&
+           "Expecting a valid mask");
 
     Value finalMask = tt::intel::getFinalValue(mask);
     auto cmpOp = cast<arith::CmpIOp>(finalMask.getDefiningOp());
@@ -474,7 +478,7 @@ public:
   //   - N < M (with i1 data type)
   //   - [0..END] < splat(N)
   //   - splat(N) < [0..END]
-  virtual bool isValidMask(scf::ForOp &forOp, Value mask) const {
+  virtual bool isValidMask(scf::ForOp &forOp, Value mask, Operation *op) const {
     Value finalVal = tt::intel::getFinalValue(mask);
     assert(finalVal && "Expecting a valid mask");
 
@@ -520,7 +524,7 @@ public:
   } // namespace
 
   virtual Value getVersioningCond(scf::ForOp &forOp, Value mask) const {
-    assert(isValidMask(forOp, mask) && "Invalid mask");
+    assert(isValidMask(forOp, mask, /*op=*/nullptr) && "Invalid mask");
 
     OpBuilder builder(forOp);
     Location loc = forOp.getLoc();
@@ -576,7 +580,7 @@ public:
     auto collectMaskedOps = [&](auto ops, MaskedOperations &maskedOps) {
       for (Operation *op : ops) {
         Value mask = getMask(op);
-        if (mask && maskValidator.isValidMask(forOp, mask)) {
+        if (mask && maskValidator.isValidMask(forOp, mask, op)) {
           maskedOps.insert(op);
           LLVM_DEBUG(llvm::dbgs()
                      << maskValidator.getName()
