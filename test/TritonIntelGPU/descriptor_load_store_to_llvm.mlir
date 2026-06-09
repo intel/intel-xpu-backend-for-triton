@@ -331,7 +331,12 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
 
 module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_predicated_io"} {
-  // CHECK-LABEL: llvm.func spir_kernelcc @rank_reducing_load
+  // CHECK-LABEL:   llvm.func spir_kernelcc @rank_reducing_load(
+  // CHECK-SAME:      %[[ARG0:.*]]: !llvm.ptr<1> {tt.pointee_type = f32},
+  // CHECK-SAME:      %[[OFFSET0:[^:]+]]: i32,
+  // CHECK-SAME:      %[[OFFSET1:[^:]+]]: i32,
+  // CHECK-SAME:      %[[OFFSET2:[^:]+]]: i32,
+  // CHECK-SAME:      %[[OFFSET3:[^:]+]]: i32,
   tt.func public @rank_reducing_load(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32) -> (tensor<4x4xf32, #blocked>) {
     %c1_i32 = arith.constant 1 : i32
     %c4_i32 = arith.constant 4 : i32
@@ -345,14 +350,18 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK-DAG: %[[SHAPE1:.*]] = llvm.extractvalue %[[DESC]][1] : !llvm.struct<(i64, i64, i64, i64, i64, i64, i64, i64, ptr<1>)>
     // CHECK-DAG: %[[SHAPE2:.*]] = llvm.extractvalue %[[DESC]][2] : !llvm.struct<(i64, i64, i64, i64, i64, i64, i64, i64, ptr<1>)>
     // CHECK-DAG: %[[SHAPE3:.*]] = llvm.extractvalue %[[DESC]][3] : !llvm.struct<(i64, i64, i64, i64, i64, i64, i64, i64, ptr<1>)>
+
+    // CHECK-DAG: %[[LINEAR_OFF2:.*]] = llvm.add {{.*}}, %[[OFFSET2]] : i32
+    // CHECK-DAG: %[[LINEAR_OFF3:.*]] = llvm.add {{.*}}, %[[OFFSET3]] : i32
+
     // CHECK-DAG: %[[SHAPE0_I32:.*]] = llvm.trunc %[[SHAPE0]] : i64 to i32
+    // CHECK-DAG: %[[BOUNDRY_CHECK0:.*]] = llvm.icmp "slt" %[[OFFSET0]], %[[SHAPE0_I32]] : i32
     // CHECK-DAG: %[[SHAPE1_I32:.*]] = llvm.trunc %[[SHAPE1]] : i64 to i32
+    // CHECK-DAG: %[[BOUNDRY_CHECK1:.*]] = llvm.icmp "slt" %[[OFFSET1]], %[[SHAPE1_I32]] : i32
     // CHECK-DAG: %[[SHAPE2_I32:.*]] = llvm.trunc %[[SHAPE2]] : i64 to i32
+    // CHECK-DAG: %[[BOUNDRY_CHECK2:.*]] = llvm.icmp "slt" %[[LINEAR_OFF2]], %[[SHAPE2_I32]] : i32
     // CHECK-DAG: %[[SHAPE3_I32:.*]] = llvm.trunc %[[SHAPE3]] : i64 to i32
-    // CHECK: llvm.icmp "slt" %{{.*}}, %{{.*}} : i32
-    // CHECK: llvm.icmp "slt" %{{.*}}, %{{.*}} : i32
-    // CHECK: llvm.icmp "slt" %{{.*}}, %{{.*}} : i32
-    // CHECK: llvm.icmp "slt" %{{.*}}, %{{.*}} : i32
+    // CHECK-DAG: %[[BOUNDRY_CHECK3:.*]] = llvm.icmp "slt" %[[LINEAR_OFF3]], %[[SHAPE3_I32]] : i32
     %load = tt.descriptor_load %desc[%arg1, %arg2, %arg3, %arg4] : !tt.tensordesc<1x1x4x4xf32> -> tensor<4x4xf32, #blocked>
     tt.return %load : tensor<4x4xf32, #blocked>
   }
@@ -367,7 +376,12 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
 
 module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_predicated_io"} {
-  // CHECK-LABEL: llvm.func spir_kernelcc @rank_reducing_store
+  // CHECK-LABEL:   llvm.func spir_kernelcc @rank_reducing_store(
+  // CHECK-SAME:      %[[ARG0:.*]]: !llvm.ptr<1> {tt.pointee_type = f32},
+  // CHECK-SAME:      %[[OFFSET0:[^:]+]]: i32,
+  // CHECK-SAME:      %[[OFFSET1:[^:]+]]: i32,
+  // CHECK-SAME:      %[[OFFSET2:[^:]+]]: i32,
+  // CHECK-SAME:      %[[OFFSET3:[^:]+]]: i32,
   tt.func public @rank_reducing_store(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: tensor<4x4xf32, #blocked>) {
     %c1_i32 = arith.constant 1 : i32
     %c4_i32 = arith.constant 4 : i32
@@ -381,14 +395,18 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK-DAG: %[[SHAPE1:.*]] = llvm.extractvalue %[[DESC]][1] : !llvm.struct<(i64, i64, i64, i64, i64, i64, i64, i64, ptr<1>)>
     // CHECK-DAG: %[[SHAPE2:.*]] = llvm.extractvalue %[[DESC]][2] : !llvm.struct<(i64, i64, i64, i64, i64, i64, i64, i64, ptr<1>)>
     // CHECK-DAG: %[[SHAPE3:.*]] = llvm.extractvalue %[[DESC]][3] : !llvm.struct<(i64, i64, i64, i64, i64, i64, i64, i64, ptr<1>)>
+
+    // CHECK-DAG: %[[LINEAR_OFF2:.*]] = llvm.add {{.*}}, %[[OFFSET2]] : i32
+    // CHECK-DAG: %[[LINEAR_OFF3:.*]] = llvm.add {{.*}}, %[[OFFSET3]] : i32
+
     // CHECK-DAG: %[[SHAPE0_I32:.*]] = llvm.trunc %[[SHAPE0]] : i64 to i32
+    // CHECK-DAG: %[[BOUNDRY_CHECK0:.*]] = llvm.icmp "slt" %[[OFFSET0]], %[[SHAPE0_I32]] : i32
     // CHECK-DAG: %[[SHAPE1_I32:.*]] = llvm.trunc %[[SHAPE1]] : i64 to i32
+    // CHECK-DAG: %[[BOUNDRY_CHECK1:.*]] = llvm.icmp "slt" %[[OFFSET1]], %[[SHAPE1_I32]] : i32
     // CHECK-DAG: %[[SHAPE2_I32:.*]] = llvm.trunc %[[SHAPE2]] : i64 to i32
+    // CHECK-DAG: %[[BOUNDRY_CHECK2:.*]] = llvm.icmp "slt" %[[LINEAR_OFF2]], %[[SHAPE2_I32]] : i32
     // CHECK-DAG: %[[SHAPE3_I32:.*]] = llvm.trunc %[[SHAPE3]] : i64 to i32
-    // CHECK: llvm.icmp "slt" %{{.*}}, %{{.*}} : i32
-    // CHECK: llvm.icmp "slt" %{{.*}}, %{{.*}} : i32
-    // CHECK: llvm.icmp "slt" %{{.*}}, %{{.*}} : i32
-    // CHECK: llvm.icmp "slt" %{{.*}}, %{{.*}} : i32
+    // CHECK-DAG: %[[BOUNDRY_CHECK3:.*]] = llvm.icmp "slt" %[[LINEAR_OFF3]], %[[SHAPE3_I32]] : i32
     tt.descriptor_store %desc[%arg1, %arg2, %arg3, %arg4], %arg5 : !tt.tensordesc<1x1x4x4xf32>, tensor<4x4xf32, #blocked>
     tt.return
   }

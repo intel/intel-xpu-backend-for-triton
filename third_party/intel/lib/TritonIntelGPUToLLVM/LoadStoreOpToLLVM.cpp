@@ -2148,8 +2148,6 @@ struct DescriptorLoadOpConversion
 
     // Boundary check all dimensions — tensor descriptors always encode shape
     // bounds and don't have a user-facing boundaryCheck attribute.
-    // auto descType = cast<triton::TensorDescType>(op.getDesc().getType());
-    RankedTensorType tensorType = descType.getBlockType();
     SmallVector<int32_t> allDims(descRank);
     for (size_t i = 0; i < descRank; ++i)
       allDims[i] = static_cast<int32_t>(i);
@@ -2179,8 +2177,8 @@ struct DescriptorLoadOpConversion
       std::swap(permShapes[descRank - 2], permShapes[descRank - 1]);
       std::swap(permStrides[descRank - 2], permStrides[descRank - 1]);
       std::swap(permOffsets[descRank - 2], permOffsets[descRank - 1]);
-      SmallVector<Value> mappedShapes(resultRank), mappedStrides(resultRank),
-          mappedOffsets(resultRank);
+      SmallVector<Value> mappedShapes(descRank), mappedStrides(descRank),
+          mappedOffsets(descRank);
       for (size_t i = 0; i < descRank; ++i) {
         mappedShapes[i] = permShapes[i];
         mappedStrides[i] = permStrides[i];
