@@ -1,6 +1,7 @@
 #include "intel/include/Analysis/AxisInfoExt.h"
 #include "intel/include/Analysis/StrideInfo.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/BlockIOUtils.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "intel/include/Utils/Utility.h"
@@ -527,22 +528,19 @@ private:
       return std::nullopt;
     }
 
+    // Surface pitch is encoded in 24 bits in the 2D block IO message
+    // descriptor.
+    constexpr int64_t maxPitchBytes = int64_t(1) << 24;
+    if (S * elemBytes > maxPitchBytes) {
+      LDBG("Pitch " << S * elemBytes
+                    << " bytes exceeds 24-bit HW limit, skip 1D reshape");
+      return std::nullopt;
+    }
+
     // Tile width must satisfy HW limits per element size.
-    auto isValidTileWidth = [](unsigned bits, int64_t w) -> bool {
-      switch (bits) {
-      case 8:
-        return w >= 4 && w <= 64;
-      case 16:
-        return w >= 2 && w <= 32;
-      case 32:
-        return w <= 16;
-      case 64:
-        return w <= 8;
-      default:
-        return false;
-      }
-    };
-    if (!isValidTileWidth(elemBits, W)) {
+    // The reshape always produces numElemPerPackedVal == 1, so
+    // packedElemSizeInBits == elemBits.
+    if (!ttgi::check2DBlockAddressPayloadRestriction(elemBits, W)) {
       LDBG("Tile width " << W << " invalid for " << elemBits
                          << "-bit elements, skip 1D reshape");
       return std::nullopt;
@@ -554,6 +552,13 @@ private:
         static_cast<unsigned>(H / numWarps) > maxPerWarpHeight) {
       LDBG("Per-warp height " << H / numWarps << " exceeds max "
                               << maxPerWarpHeight << ", skip 1D reshape");
+      return std::nullopt;
+    }
+
+    // Reject if non-DPAS 2D block IO is explicitly disabled at runtime.
+    if (isBlockIOForAllLayoutsExplicitlyDisabled()) {
+      LDBG("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=0 disables non-DPAS 2D "
+           "block IO; skip 1D reshape");
       return std::nullopt;
     }
 
