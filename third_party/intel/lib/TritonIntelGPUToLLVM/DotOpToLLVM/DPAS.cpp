@@ -161,19 +161,13 @@ public:
     });
 
 #if 0
-    auto mod = op->getParentOfType<ModuleOp>();
-    auto warpSize =
-        i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
-    Value warpId = udiv(getThreadId(rewriter, loc), warpSize);
-    Value laneId = urem(getThreadId(rewriter, loc), warpSize);
-    Value programId =
-        targetInfo.programId(rewriter, loc,
-                             rewriter.getInsertionBlock()->getParent()->getParentOfType<ModuleOp>(),
-                             0);
+    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+    auto pid = targetInfo.programId(
+        rewriter, loc, op->template getParentOfType<ModuleOp>(), ProgramIDDim::X);
 #endif
 
     auto generateDPASOp = [&](unsigned b, unsigned m, unsigned n, unsigned k) {
-      auto tb = TritonLLVMOpBuilder(loc, rewriter);
+      auto tb = TritonLLVMIRRewriter(loc, rewriter);
       Value valA = ha.at({b, m, k});
       Value valB = hb.at({b, n, k});
       Value valc = fc.at({b, m, n});
@@ -186,9 +180,63 @@ public:
                                  dpasEncoding.getRepeatCount());
 
       if constexpr (std::is_same<OpTy, DotOp>::value) {
-        fc.at({b, m, n}) = TritonGEN::MatrixDPASOp::create(
+        // Value r0 = tb.bitcast(tb.extract_element(valA, tb.i32_val(0)),
+        // i16_ty); Value r1 = tb.bitcast(tb.extract_element(valA,
+        // tb.i32_val(1)), i16_ty); Value r2 =
+        // tb.bitcast(tb.extract_element(valA, tb.i32_val(2)), i16_ty); Value r3
+        // = tb.bitcast(tb.extract_element(valA, tb.i32_val(3)), i16_ty); Value
+        // r4 = tb.bitcast(tb.extract_element(valA, tb.i32_val(4)), i16_ty);
+        // Value r5 = tb.bitcast(tb.extract_element(valA, tb.i32_val(5)),
+        // i16_ty); Value r6 = tb.bitcast(tb.extract_element(valA,
+        // tb.i32_val(6)), i16_ty); Value r7 =
+        // tb.bitcast(tb.extract_element(valA, tb.i32_val(7)), i16_ty); r0 =
+        // triton::intel::convertWithFunctionCall(
+        //     tb, r0, "__spirv_ConvertBF16ToFINTEL", i16_ty, f32_ty,
+        //     triton::gpu::intel::TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName());
+        //
+        // r1 = triton::intel::convertWithFunctionCall(
+        //     tb, r1, "__spirv_ConvertBF16ToFINTEL", i16_ty, f32_ty,
+        //     triton::gpu::intel::TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName());
+        //
+        // r2 = triton::intel::convertWithFunctionCall(
+        //     tb, r2, "__spirv_ConvertBF16ToFINTEL", i16_ty, f32_ty,
+        //     triton::gpu::intel::TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName());
+        //
+        // r3 = triton::intel::convertWithFunctionCall(
+        //     tb, r3, "__spirv_ConvertBF16ToFINTEL", i16_ty, f32_ty,
+        //     triton::gpu::intel::TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName());
+        //
+        // r4 = triton::intel::convertWithFunctionCall(
+        //     tb, r4, "__spirv_ConvertBF16ToFINTEL", i16_ty, f32_ty,
+        //     triton::gpu::intel::TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName());
+        //
+        // r5 = triton::intel::convertWithFunctionCall(
+        //     tb, r5, "__spirv_ConvertBF16ToFINTEL", i16_ty, f32_ty,
+        //     triton::gpu::intel::TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName());
+        //
+        // r6 = triton::intel::convertWithFunctionCall(
+        //     tb, r6, "__spirv_ConvertBF16ToFINTEL", i16_ty, f32_ty,
+        //     triton::gpu::intel::TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName());
+        //
+        // r7 = triton::intel::convertWithFunctionCall(
+        //     tb, r7, "__spirv_ConvertBF16ToFINTEL", i16_ty, f32_ty,
+        //     triton::gpu::intel::TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName());
+        // targetInfo.printf(
+        //     rewriter,
+        //       "johnlu dpas acc: pid: %d, warp id: %d, lane id: %d m %d n %d k
+        //       %d a %f, %f, %f, %f, %f, %f, %f, %f",
+        //           {pid, warpId, laneId, tb.i32_val(m), tb.i32_val(n),
+        //           tb.i32_val(k), r0, r1, r2, r3, r4, r5, r6, r7});
+
+        auto acc = TritonGEN::MatrixDPASOp::create(
             rewriter, loc, dTy, tb.bitcast(valc, cTy), tb.bitcast(valA, aTy),
             tb.bitcast(valB, bTy), pA, pB, RC);
+        fc.at({b, m, n}) = acc;
+        // targetInfo.printf(
+        //     rewriter,
+        //     "johnlu dpas acc: pid: %d, warp id: %d, lane id: %d m %d n %d k
+        //     %d acc %f", {pid, warpId, laneId, tb.i32_val(m), tb.i32_val(n),
+        //     tb.i32_val(k), acc});
       } else if constexpr (std::is_same<OpTy, DotScaledOp>::value) {
         Value sA;
         if (!scaleA.empty())
