@@ -41,7 +41,7 @@ warnings.filterwarnings("ignore", message="Package .* is absent from the `packag
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from python.build_helpers import get_base_dir, get_cmake_dir
+from python.build_helpers import check_env_flag, get_base_dir, get_cmake_dir
 
 
 def is_git_repo() -> bool:
@@ -128,11 +128,6 @@ class BackendInstaller:
             BackendInstaller.prepare(backend_name, backend_src_dir=backend_src_dir, is_external=True)
             for backend_name, backend_src_dir in zip(backend_names, backend_dirs)
         ]
-
-
-# Taken from https://github.com/pytorch/pytorch/blob/master/tools/setup_helpers/env.py
-def check_env_flag(name: str, default: str = "") -> bool:
-    return os.getenv(name, default).upper() in ["ON", "1", "YES", "TRUE", "Y"]
 
 
 def get_build_type():
@@ -580,7 +575,7 @@ TRITON_VERSION = "3.7.2" + get_triton_version_suffix()
 
 # Dynamically define supported Python versions and classifiers
 MIN_PYTHON = (3, 10)
-MAX_PYTHON = (3, 14)
+MAX_PYTHON = (3, 15)
 
 PYTHON_REQUIRES = f">={MIN_PYTHON[0]}.{MIN_PYTHON[1]},<{MAX_PYTHON[0]}.{MAX_PYTHON[1] + 1}"
 BASE_CLASSIFIERS = [

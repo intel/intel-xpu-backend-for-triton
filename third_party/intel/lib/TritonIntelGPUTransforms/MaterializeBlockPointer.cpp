@@ -157,27 +157,6 @@ private:
         }))
       return;
 
-    std::optional<ttg::DotOperandEncodingAttr> dotLayout = getDotLayout(op);
-    if (dotLayout) {
-      // Check if the load is being used by a tt.dot operation, and if so is
-      // this the first operand and is it a transposed row major matrix. If
-      // so, skip the block descriptor attribute as performance is worse than
-      // if we remove the tensor descriptor.
-      LDBG("dotLayout: " << *dotLayout);
-      auto opIdx =
-          static_cast<ttgi::DpasEncodingAttr::OpIdx>(dotLayout->getOpIdx());
-      auto dotOrder = tt::gpu::getThreadOrder(tensorType);
-      // Row-major means the last dim (rank-1) is the fastest-varying, i.e.,
-      // it appears first in the thread order vector.
-      const bool valueRowMajor =
-          (dotOrder[0] == rank - 1 && dotOrder[1] == rank - 2);
-      if (opIdx == ttgi::DpasEncodingAttr::OpIdx::OperandA && !valueRowMajor) {
-        LDBG("Skipping block descriptor attribute for transposed A matrix in "
-             "dot operation");
-        return;
-      }
-    }
-
     // Tensor descriptors are always row major.
     op->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
                 StringAttr::get(context, "row_major"));
@@ -841,53 +820,6 @@ private:
     // Replace and erase.
     op.replaceAllUsesWith(reshapeBack.getResult());
     op.erase();
-  }
-
-  template <typename OpType,
-            typename = std::enable_if_t<llvm::is_one_of<
-                OpType, tt::DescriptorLoadOp, tt::DescriptorStoreOp>::value>>
-  std::optional<ttg::DotOperandEncodingAttr> getDotLayout(OpType op) const {
-    // Get the tensor type from the operation's result (load) or value (store)
-    Type resultType;
-    if constexpr (std::is_same_v<OpType, tt::DescriptorLoadOp>) {
-      resultType = op.getResult().getType();
-    } else {
-      resultType = op.getSrc().getType();
-    }
-    RankedTensorType tensorType = ttgi::getRankedTensorType(resultType);
-    if (!tensorType)
-      return std::nullopt;
-
-    auto dotLayout = ttgi::getDotEncoding(tensorType);
-    if (dotLayout)
-      return dotLayout;
-
-    auto allUsersAreConvertOps = [](Operation::user_range users) {
-      return llvm::all_of(users, [](Operation *user) {
-        return isa<ttg::ConvertLayoutOp>(user);
-      });
-    };
-
-    auto allUserHaveIdenticalLayout = [](Operation::user_range users) {
-      Attribute firstUserLayout =
-          cast<ttg::ConvertLayoutOp>(*users.begin()).getType().getEncoding();
-      return llvm::all_of(users, [&firstUserLayout](Operation *user) {
-        return firstUserLayout ==
-               cast<ttg::ConvertLayoutOp>(user).getType().getEncoding();
-      });
-    };
-
-    Operation::user_range users = op->getUsers();
-    if (!users.empty() && allUsersAreConvertOps(users) &&
-        allUserHaveIdenticalLayout(users)) {
-      Attribute firstUserLayout =
-          cast<ttg::ConvertLayoutOp>(*users.begin()).getType().getEncoding();
-      if (isa<ttg::DotOperandEncodingAttr>(firstUserLayout))
-        return dyn_cast<ttg::DotOperandEncodingAttr>(firstUserLayout);
-      return std::nullopt;
-    }
-
-    return std::nullopt;
   }
 
   template <typename OpType,
