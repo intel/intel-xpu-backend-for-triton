@@ -10,10 +10,21 @@ index 2574817..2ac8b72 100644
      init_softmax_M,
      load_qq_bias_tile,
      resolve_seq_and_query_len,
-@@ -54,6 +53,41 @@ def _cast_kv_tile(data, Q, tensor_scale, KV_QUANT_MODE: tl.constexpr):
+@@ -54,6 +53,61 @@ def _cast_kv_tile(data, Q, tensor_scale, KV_QUANT_MODE: tl.constexpr):
      return data.to(Q.dtype)
- 
- 
+
+
++def _power_of_2_bucket(value: int) -> int:
++    """Bucket a dynamic shape into a power-of-2 cache key.
++
++    Used to build the 3D autotune key without making each exact ``num_seqs`` /
++    ``max_seqlen_k`` produce its own cache entry.
++    """
++    if value <= 1:
++        return max(value, 0)
++    return 1 << (value - 1).bit_length()
++
++
 +def prune_unified_attention_configs(configs, named_args, **kwargs):
 +    """Prune autotune configs for unified_attention kernel.
 +
@@ -46,17 +57,29 @@ index 2574817..2ac8b72 100644
 +        triton.Config({"TILE_SIZE": 16}, num_stages=2),
 +        triton.Config({"TILE_SIZE": 32}, num_stages=2),
 +    ],
-+    key=["BLOCK_SIZE", "HEAD_SIZE", "IS_FP8_INPUT", "IS_3D", "BLOCK_Q"],
++    key=[
++        "BLOCK_SIZE",
++        "HEAD_SIZE",
++        "IS_FP8_INPUT",
++        "IS_3D",
++        "BLOCK_Q",
++        "NUM_SEQS_BUCKET",
++        "MAX_SEQLEN_K_BUCKET",
++        "EFFECTIVE_MAX_SEQLEN_K_BUCKET",
++    ],
 +    prune_configs_by={"early_config_prune": prune_unified_attention_configs},
 +)
  @triton.jit
  def kernel_unified_attention(
      # Output destinations.  In 2D mode we write the final result into
-@@ -111,6 +145,7 @@ def kernel_unified_attention(
+@@ -111,6 +149,10 @@ def kernel_unified_attention(
      BLOCK_M: tl.constexpr,
      NUM_SEGMENTS_PER_SEQ: tl.constexpr,
      USE_FP8: tl.constexpr,
 +    IS_FP8_INPUT: tl.constexpr,
++    NUM_SEQS_BUCKET: tl.constexpr,
++    MAX_SEQLEN_K_BUCKET: tl.constexpr,
++    EFFECTIVE_MAX_SEQLEN_K_BUCKET: tl.constexpr,
      # Toggles 2D vs 3D layout.  The 2D path runs the full sequence in one
      # tile loop and writes to ``output_ptr``.  The 3D path scopes the loop
      # to ``[segm_idx, segm_idx+1) × tiles_per_segment`` and writes
@@ -332,10 +355,10 @@ index 2574817..2ac8b72 100644
      overall_expsum = tl.sum(segm_expsum)
  
      # load, rescale, and add segment attention outputs
-@@ -606,28 +642,17 @@ def unified_attention(
+@@ -606,28 +642,27 @@ def unified_attention(
      elif sliding_window_val <= 0:
          chunk_lookback = -1
- 
+
 -    TILE_SIZE_PREFILL = _get_tile_size(
 -        head_size, sliding_window_val, q.element_size(), is_prefill=True
 -    )
@@ -344,7 +367,17 @@ index 2574817..2ac8b72 100644
 -    )
 +    # Tile size is selected by Triton autotuning between 16 and 32.
 +    is_fp8_input = q.element_size() == 1
- 
++
++    # Bucket dynamic 3D shapes into the autotune key so that nearby ``num_seqs``
++    # / ``max_seqlen_k`` values share a cached config without each exact value
++    # producing its own cache entry.
++    num_seqs_bucket = _power_of_2_bucket(num_seqs)
++    max_seqlen_k_bucket = _power_of_2_bucket(max_seqlen_k)
++    effective_max_seqlen_k = max_seqlen_k
++    if sliding_window_val > 0:
++        effective_max_seqlen_k = min(effective_max_seqlen_k, sliding_window_val)
++    effective_max_seqlen_k_bucket = _power_of_2_bucket(effective_max_seqlen_k)
+
      # Launch the 2D kernel if
      # 1. No intermediate tiled softmax buffers for the 3D kernel have been allocated, or
      # 2. The batch includes at least one prefill request, or
@@ -418,11 +451,14 @@ index 2574817..2ac8b72 100644
          HEAD_SIZE=head_size,
          HEAD_SIZE_PADDED=triton.next_power_of_2(head_size),
          USE_ALIBI_SLOPES=use_alibi_slopes,
-@@ -712,6 +758,7 @@ def unified_attention(
+@@ -712,6 +765,10 @@ def unified_attention(
          BLOCK_M=BLOCK_M,
          NUM_SEGMENTS_PER_SEQ=num_segments,
          USE_FP8=output_scale is not None,
 +        IS_FP8_INPUT=is_fp8_input,
++        NUM_SEQS_BUCKET=num_seqs_bucket,
++        MAX_SEQLEN_K_BUCKET=max_seqlen_k_bucket,
++        EFFECTIVE_MAX_SEQLEN_K_BUCKET=effective_max_seqlen_k_bucket,
          IS_3D=use_3d,
          KV_QUANT_MODE=kv_quant_mode,
          k_scale_cache_ptr=k_scale_ptr,
