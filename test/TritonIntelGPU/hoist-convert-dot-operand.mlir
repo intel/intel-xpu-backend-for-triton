@@ -159,3 +159,99 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// COM: Chained FP8 matmul with fp_to_fp downcast between the two dots. Three
+// COM: distinct backward-propagation targets are exercised:
+// COM:   A operand (%x) — load → convert: the blocked layout collapses and the
+// COM:     splat/load land directly in dot_op<opIdx=0, kWidth=2>.
+// COM:   B operand (%y) — splat/expand_dims/broadcast/addptr chain + load: the
+// COM:     entire chain is rewritten to dot_op<opIdx=1, kWidth=4>.
+// COM:   B operand (%w) — pointer arithmetic chain starts in a different
+// COM:     blocked layout (different splat shape), so the hoist cannot collapse
+// COM:     the chain all the way; it leaves a single convert_layout next to the
+// COM:     splat/broadcast and rewrites the downstream addptr/load in dot_op.
+// COM:
+// COM: Between the two dots, tt.fp_to_fp downcasts the f32 mma result to
+// COM: f8E4M3FN. The convert_layout from #mma to dot_op<opIdx=0> must NOT hoist
+// COM: past fp_to_fp — same barrier as @no_hoist_across_fp8_upcast.
+
+#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
+#blocked3 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [2, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked4 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 4], A = [32, 32], B = [32, 64], C = [32, 64]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @chain_fp8_dots_hoist_through_pointer_arith
+  tt.func public @chain_fp8_dots_hoist_through_pointer_arith(
+      %X: !tt.ptr<f8E4M3FN> {tt.divisibility = 16 : i32},
+      %Y: !tt.ptr<f8E4M3FN> {tt.divisibility = 16 : i32},
+      %W: !tt.ptr<f8E4M3FN> {tt.divisibility = 16 : i32},
+      %Z: !tt.ptr<f32>      {tt.divisibility = 16 : i32}) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
+
+    // A operand: convert-next-to-load is fully absorbed. Splat/load produce
+    // dot_op<opIdx=0, kWidth=2> directly.
+    //
+    // CHECK: tt.splat %arg0 : !tt.ptr<f8E4M3FN> -> tensor<128x64x!tt.ptr<f8E4M3FN>, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+    // CHECK: %[[X:.*]] = tt.load {{.*}} {ttig.block_io = "row_major"} : tensor<128x64x!tt.ptr<f8E4M3FN>, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+    %Xp = tt.splat %X : !tt.ptr<f8E4M3FN> -> tensor<128x64x!tt.ptr<f8E4M3FN>, #blocked4>
+    %x = tt.load %Xp {ttig.block_io = "row_major"} : tensor<128x64x!tt.ptr<f8E4M3FN>, #blocked4>
+
+    // B operand (Y): full splat/expand_dims/broadcast/addptr chain rewritten to
+    // dot_op<opIdx=1, kWidth=4>. No intermediate convert_layout remains.
+    //
+    // CHECK: tt.splat %arg1 : !tt.ptr<f8E4M3FN> -> tensor<64x1x!tt.ptr<f8E4M3FN>, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+    // CHECK: tt.expand_dims {{.*}} : tensor<128xi32, {{.*}}> -> tensor<1x128xi32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+    // CHECK: tt.addptr {{.*}} : tensor<64x128x!tt.ptr<f8E4M3FN>, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+    // CHECK: %[[Y:.*]] = tt.load {{.*}} {ttig.block_io = "row_major"} : tensor<64x128x!tt.ptr<f8E4M3FN>, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+    %Ys_19 = tt.splat %Y : !tt.ptr<f8E4M3FN> -> tensor<64x1x!tt.ptr<f8E4M3FN>, #blocked3>
+    %Ys_21 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked3}>>
+    %Ys_23 = tt.expand_dims %Ys_21 {axis = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked3}>> -> tensor<1x128xi32, #blocked3>
+    %Ys_25 = tt.broadcast %Ys_19 : tensor<64x1x!tt.ptr<f8E4M3FN>, #blocked3> -> tensor<64x128x!tt.ptr<f8E4M3FN>, #blocked3>
+    %Ys_26 = tt.broadcast %Ys_23 : tensor<1x128xi32, #blocked3> -> tensor<64x128xi32, #blocked3>
+    %Ys_27 = tt.addptr %Ys_25, %Ys_26 : tensor<64x128x!tt.ptr<f8E4M3FN>, #blocked3>, tensor<64x128xi32, #blocked3>
+    %y = tt.load %Ys_27 {ttig.block_io = "row_major"} : tensor<64x128x!tt.ptr<f8E4M3FN>, #blocked3>
+
+    // B operand (W): splat starts in a different blocked layout so the hoist
+    // cannot collapse the chain entirely. One convert_layout remains — between
+    // the broadcast and the addptr — with all downstream ops in dot_op.
+    //
+    // CHECK: %[[SPW:.*]] = tt.splat %arg2 : !tt.ptr<f8E4M3FN> -> tensor<128x1x!tt.ptr<f8E4M3FN>, #blocked>
+    // CHECK: %[[BW:.*]] = tt.broadcast %[[SPW]] : tensor<128x1x!tt.ptr<f8E4M3FN>, #blocked> -> tensor<128x128x!tt.ptr<f8E4M3FN>, #blocked>
+    // CHECK: ttg.convert_layout %[[BW]] : tensor<128x128x!tt.ptr<f8E4M3FN>, #blocked> -> tensor<128x128x!tt.ptr<f8E4M3FN>, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+    // CHECK: tt.addptr {{.*}} : tensor<128x128x!tt.ptr<f8E4M3FN>, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+    // CHECK: %[[W:.*]] = tt.load {{.*}} {ttig.block_io = "row_major"} : tensor<128x128x!tt.ptr<f8E4M3FN>, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+    %Ws_29 = tt.splat %W : !tt.ptr<f8E4M3FN> -> tensor<128x1x!tt.ptr<f8E4M3FN>, #blocked2>
+    %Ws_31 = tt.broadcast %Ws_29 : tensor<128x1x!tt.ptr<f8E4M3FN>, #blocked2> -> tensor<128x128x!tt.ptr<f8E4M3FN>, #blocked2>
+    %Ws_32 = ttg.convert_layout %Ws_31 : tensor<128x128x!tt.ptr<f8E4M3FN>, #blocked2> -> tensor<128x128x!tt.ptr<f8E4M3FN>, #blocked3>
+    %Ws_33 = tt.broadcast %Ys_23 : tensor<1x128xi32, #blocked3> -> tensor<128x128xi32, #blocked3>
+    %Ws_35 = tt.addptr %Ws_32, %Ws_33 : tensor<128x128x!tt.ptr<f8E4M3FN>, #blocked3>, tensor<128x128xi32, #blocked3>
+    %w = tt.load %Ws_35 {ttig.block_io = "row_major"} : tensor<128x128x!tt.ptr<f8E4M3FN>, #blocked3>
+
+    // First dot: operands consumed directly, no extra convert_layout.
+    //
+    // CHECK: %[[Z:.*]] = tt.dot %[[X]], %[[Y]]{{.*}}-> tensor<128x128xf32, #mma>
+    %x_41 = ttg.convert_layout %x : tensor<128x64xf8E4M3FN, #blocked4> -> tensor<128x64xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+    %y_42 = ttg.convert_layout %y : tensor<64x128xf8E4M3FN, #blocked3> -> tensor<64x128xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+    %cst2 = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #mma>
+    %z = tt.dot %x_41, %y_42, %cst2 : tensor<128x64xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<64x128xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>> -> tensor<128x128xf32, #mma>
+
+    // fp_to_fp barrier: the convert_layout from #mma to dot_op<opIdx=0> must
+    // not hoist past tt.fp_to_fp. Expect fp_to_fp -> convert_layout -> dot.
+    //
+    // CHECK: %[[Z8:.*]] = tt.fp_to_fp %[[Z]], rounding = rtne : tensor<128x128xf32, #mma> -> tensor<128x128xf8E4M3FN, #mma>
+    // CHECK: %[[Z8DOT:.*]] = ttg.convert_layout %[[Z8]] : tensor<128x128xf8E4M3FN, #mma> -> tensor<128x128xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+    // CHECK: tt.dot %[[Z8DOT]], %[[W]], {{.*}} -> tensor<128x128xf32, #mma>
+    // CHECK: tt.store
+    %z_44 = tt.fp_to_fp %z, rounding = rtne : tensor<128x128xf32, #mma> -> tensor<128x128xf8E4M3FN, #mma>
+    %z_47 = ttg.convert_layout %z_44 : tensor<128x128xf8E4M3FN, #mma> -> tensor<128x128xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+    %w_48 = ttg.convert_layout %w : tensor<128x128xf8E4M3FN, #blocked3> -> tensor<128x128xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+    %cst3 = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #mma>
+    %z_49 = tt.dot %z_47, %w_48, %cst3 : tensor<128x128xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<128x128xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>> -> tensor<128x128xf32, #mma>
+    %Zp = tt.splat %Z : !tt.ptr<f32> -> tensor<128x128x!tt.ptr<f32>, #mma>
+    tt.store %Zp, %z_49 : tensor<128x128x!tt.ptr<f32>, #mma>
+    tt.return
+  }
+}

@@ -11,6 +11,10 @@ public:
   XpuRuntime() : Runtime(DeviceType::XPU) {}
   ~XpuRuntime() = default;
 
+  // Set by Session::makeProfiler for the xpupti backend.
+  void setSyclQueue(void *syclQueue) { syclQueue_ = syclQueue; }
+  void *getSyclQueue() const { return syclQueue_; }
+
   void launchKernel(void *kernel, unsigned int gridDimX, unsigned int gridDimY,
                     unsigned int gridDimZ, unsigned int blockDimX,
                     unsigned int blockDimY, unsigned int blockDimZ,
@@ -35,6 +39,9 @@ public:
                     uint8_t *deviceBuffer, size_t deviceBufferSize,
                     void *stream,
                     std::function<void(uint8_t *, size_t)> callback) override;
+
+private:
+  void *syclQueue_{nullptr};
 };
 
 } // namespace proton

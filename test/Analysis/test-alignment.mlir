@@ -266,7 +266,7 @@ tt.func @rem() {
   %13 = arith.remsi %0, %12 : tensor<128xi32>
   // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
   %14 = arith.remsi %12, %0 : tensor<128xi32>
-  // expected-remark @below {{contiguity = [32], divisibility = [32], constancy = [1], constant_value = <none>}}
+  // expected-remark @below {{contiguity = [1], divisibility = [32], constancy = [1], constant_value = <none>}}
   %15 = arith.remsi %12, %4 : tensor<128xi32>
   // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
   %16 = arith.remsi %4, %12 : tensor<128xi32>
@@ -1141,6 +1141,24 @@ tt.func @select_same_value_constancy() {
   %rhs = arith.constant dense<42> : tensor<4xi32>
   // expected-remark @below {{constancy = [4], constant_value = 42}}
   %sel = arith.select %cond, %lhs, %rhs : tensor<4xi1>, tensor<4xi32>
+  tt.return
+}
+
+// -----
+
+// Regression: SelectOp must clamp divisibility when condConstancy reduces the
+// output contiguity below either input's contiguity. Otherwise the helper
+// getDivisibilityFromContiguity overestimates divisibility because it does not
+// see condConstancy. See issue triton-lang/triton#10067.
+tt.func @select_cond_constancy_clamps_divisibility(%arg0: tensor<8xi1>) {
+  // expected-remark @below {{contiguity = [8], divisibility = [8], constancy = [1], constant_value = <none>}}
+  %lhs = tt.make_range {end = 16 : i32, start = 8 : i32} : tensor<8xi32>
+  // expected-remark @below {{contiguity = [8], divisibility = [16], constancy = [1], constant_value = <none>}}
+  %rhs = tt.make_range {end = 24 : i32, start = 16 : i32} : tensor<8xi32>
+  // %arg0 has unknown contents, so condConstancy = 1. Output contiguity must
+  // collapse to gcd(8, 8, 1) = 1; divisibility must clamp to 1 (not gcd(8, 16) = 8).
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %sel = arith.select %arg0, %lhs, %rhs : tensor<8xi1>, tensor<8xi32>
   tt.return
 }
 

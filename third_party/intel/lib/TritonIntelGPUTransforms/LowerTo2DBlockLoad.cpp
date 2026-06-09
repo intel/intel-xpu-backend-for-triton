@@ -263,7 +263,8 @@ private:
     };
 
     // If the pitch stride is a known constant AND the descriptor/result ranks
-    // match, validate HW constraints (>= 64 bytes, 16-byte aligned).
+    // match, validate HW constraints (>= 64 bytes, 16-byte aligned, encoded
+    // in 24 bits per the `triton_gen.2Dblockload` verifier).
     // For rank-reducing loads, the stride interpretation may differ from the
     // 2D surface pitch, so skip static validation (runtime will handle it).
     if (rank == descRank) {
@@ -271,7 +272,8 @@ private:
           tt::intel::getFoldedConstantValue(strides[descRank - 2]);
       if (pitchStride) {
         int64_t pitchBytes = *pitchStride * elemSizeInBits / 8;
-        if (pitchBytes < 64 || (pitchBytes % 16) != 0) {
+        if (pitchBytes < 64 || (pitchBytes % 16) != 0 ||
+            pitchBytes > (int64_t(1) << 24)) {
           LDBG("Invalid pitch " << pitchBytes
                                 << " for descriptor load: " << *op);
           return;
@@ -350,6 +352,7 @@ private:
     unsigned rowDim, colDim;
     int tileWidth = -1;
     int tileHeight = -1;
+    int numPackedVals = -1;
     bool isTranspose = false;
     if (has1DReshapeStride) {
       // 1D reshape: conventional dims, no tile validation needed.
@@ -374,6 +377,7 @@ private:
       tileWidth = sizeInfo.tileWidth;
       tileHeight = sizeInfo.tileHeight;
       isTranspose = sizeInfo.transpose;
+      numPackedVals = sizeInfo.numElemPerPackedVal;
     }
 
     // For the 2D block load surface, the pitch dimension is always the
@@ -388,9 +392,10 @@ private:
     // width/height.
     unsigned surfaceWidthDim = isTranspose ? rowDim : colDim;
     unsigned surfaceHeightDim = isTranspose ? colDim : rowDim;
-    int64_t baseWidthBytes =
-        tensorTy.getDimSize(surfaceWidthDim) * elemSizeInBits / 8;
     constexpr int64_t MIN_PITCH = 64;
+    // Surface pitch is encoded in 24 bits in the 2D block IO message
+    // descriptor (see `triton_gen.2Dblockload` verifier in TritonGENOps.cpp).
+    constexpr int64_t MAX_PITCH = int64_t(1) << 24;
 
     int64_t pitch;
     bool isBroadcast = false;
@@ -405,6 +410,16 @@ private:
       // rows are identical, so we only need height=1 with a dummy pitch.
       int64_t rowStride = getStride(strideAnalysis, op.getPtr(), rowDim);
       isBroadcast = (rowStride == 0);
+    }
+
+    int64_t perWarpWidth;
+    if (isBroadcast || has1DReshapeStride)
+      perWarpWidth = tensorTy.getDimSize(surfaceWidthDim);
+    else
+      perWarpWidth = tileWidth * numPackedVals;
+    int64_t baseWidthBytes = perWarpWidth * elemSizeInBits / 8;
+
+    if (!has1DReshapeStride) {
       if (isBroadcast) {
         pitch = std::max((int64_t)MIN_PITCH, baseWidthBytes);
       } else {
@@ -417,8 +432,9 @@ private:
       }
     }
 
-    // HW requires pitch >= 64 bytes and pitch aligned to 16 bytes.
-    if (pitch < MIN_PITCH || (pitch % 16) != 0) {
+    // HW requires pitch >= 64 bytes, aligned to 16 bytes, and encoded in
+    // 24 bits.
+    if (pitch < MIN_PITCH || (pitch % 16) != 0 || pitch > MAX_PITCH) {
       LDBG("Invalid pitch " << pitch << " for load: " << *op);
       return;
     }
@@ -443,8 +459,13 @@ private:
     Location loc = op.getLoc();
 
     // Compute constant surface parameters.
+    // For broadcast loads, height is always 1.
+    // For non-broadcast, use the per-warp height from getBlockIOTileSize.
     int64_t baseHeightRows =
-        isBroadcast ? 1 : tensorTy.getDimSize(surfaceHeightDim);
+        isBroadcast
+            ? 1
+            : (has1DReshapeStride ? tensorTy.getDimSize(surfaceHeightDim)
+                                  : tileHeight);
 
     auto memLayout = memoryRowMajor ? ttgi::BlockIOMode::RowMajor
                                     : ttgi::BlockIOMode::ColumnMajor;

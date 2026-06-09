@@ -820,6 +820,20 @@ def double_as_longlong(arg0, _semantic=None):
 
 
 @core.extern
+def fast_sinf(arg0, _semantic=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__imf_sinf_la", core.dtype("fp32")),
+    }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
+def fast_cosf(arg0, _semantic=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__imf_cosf_la", core.dtype("fp32")),
+    }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
 def fast_log2f(arg0, _semantic=None):
     return core.extern_elementwise("", "", [arg0], {
         (core.dtype("fp32"), ): ("__imf_fast_log2f", core.dtype("fp32")),

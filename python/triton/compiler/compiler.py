@@ -196,28 +196,32 @@ def filter_traceback(e: BaseException):
 class CompileTimer:
 
     def __init__(self) -> None:
-        self.start: float = time.time()
-        self.ir_initialization_end: float | None = None
-        self.lowering_stage_ends: list[tuple[str, float]] = []
-        self.store_results_end: float | None = None
+        # #5665:
+        #   - time.time() ticks every 15.6ms on Windows
+        #   - store_results returns ~us, so every value below 15600us will not be counted.
+        #   - perf_counter_ns ticks every ~100ns, fine enough to see us-scale durations.
+        self.start: int = time.perf_counter_ns()
+        self.ir_initialization_end: int | None = None
+        self.lowering_stage_ends: list[tuple[str, int]] = []
+        self.store_results_end: int | None = None
 
     def finished_ir_initialization(self) -> None:
-        self.ir_initialization_end = time.time()
+        self.ir_initialization_end = time.perf_counter_ns()
 
     def stage_finished(self, stage_name: str) -> None:
-        self.lowering_stage_ends.append((stage_name, time.time()))
+        self.lowering_stage_ends.append((stage_name, time.perf_counter_ns()))
 
     def end(self) -> knobs.CompileTimes:
-        timestamp = time.time()
+        timestamp = time.perf_counter_ns()
         if self.ir_initialization_end is None:
             self.ir_initialization_end = timestamp
         else:
             self.store_results_end = timestamp
 
-        def delta(start: float, end: float | None) -> int:
+        def delta(start: int, end: int | None) -> int:
             if end is None:
                 return 0
-            return int((end - start) * 1000000)
+            return (end - start) // 1000
 
         lowering_stage_durations = []
         stage_start = self.ir_initialization_end

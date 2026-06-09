@@ -1757,18 +1757,21 @@ void LayoutRematerialization::hoistConvertDotOperand(
   // not match any efficient 2D block I/O or sub-group shuffle, forcing a
   // sub-group-transpose-through-SLM fallback and disabling block I/O on the
   // load. See issue #6737.
-  unsigned targetBitwidth = targetType.getElementType().getIntOrFloatBitWidth();
-  for (Value v : slice) {
-    Operation *def = v.getDefiningOp();
-    if (!def || !isa<tt::LoadOp, tt::DescriptorLoadOp>(def))
-      continue;
-    auto loadTy = cast<RankedTensorType>(v.getType());
-    if (loadTy.getElementType().getIntOrFloatBitWidth() != targetBitwidth) {
-      LDBG("  Leaf load element bitwidth ("
-           << loadTy.getElementType().getIntOrFloatBitWidth()
-           << ") differs from convert target bitwidth (" << targetBitwidth
-           << "); skipping hoist to avoid degrading dot-operand encoding");
-      return;
+  Type elemType = targetType.getElementType();
+  if (elemType.isIntOrFloat()) {
+    unsigned targetBitwidth = elemType.getIntOrFloatBitWidth();
+    for (Value v : slice) {
+      Operation *def = v.getDefiningOp();
+      if (!def || !isa<tt::LoadOp, tt::DescriptorLoadOp>(def))
+        continue;
+      auto loadTy = cast<RankedTensorType>(v.getType());
+      if (loadTy.getElementType().getIntOrFloatBitWidth() != targetBitwidth) {
+        LDBG("  Leaf load element bitwidth ("
+             << loadTy.getElementType().getIntOrFloatBitWidth()
+             << ") differs from convert target bitwidth (" << targetBitwidth
+             << "); skipping hoist to avoid degrading dot-operand encoding");
+        return;
+      }
     }
   }
 
@@ -2145,13 +2148,21 @@ public:
 
     // 5. Apply clean up patterns to remove dead convert and dead code generated
     // by the previous transformations.
-    RewritePatternSet cleanUpPatterns2(context);
-    scf::ForOp::getCanonicalizationPatterns(cleanUpPatterns2, context);
-    scf::IfOp::getCanonicalizationPatterns(cleanUpPatterns2, context);
-    ttg::ConvertLayoutOp::getCanonicalizationPatterns(cleanUpPatterns2,
-                                                      context);
-    if (applyPatternsGreedily(m, std::move(cleanUpPatterns2)).failed()) {
+    // ConvertLayoutOp canonicalization must converge.
+    RewritePatternSet convertCleanup(context);
+    ttg::ConvertLayoutOp::getCanonicalizationPatterns(convertCleanup, context);
+    if (applyPatternsGreedily(m, std::move(convertCleanup)).failed()) {
       signalPassFailure();
+    }
+
+    // scf canonicalization is best-effort: deeply unrolled scf.if regions
+    // carrying tensor values can drive the greedy rewriter to non-convergence
+    // (see upstream PR #10132 / pytorch/pytorch#180908).
+    RewritePatternSet scfCleanup(context);
+    scf::ForOp::getCanonicalizationPatterns(scfCleanup, context);
+    scf::IfOp::getCanonicalizationPatterns(scfCleanup, context);
+    if (applyPatternsGreedily(m, std::move(scfCleanup)).failed()) {
+      LDBG("scf cleanup did not converge");
     }
     LLVM_DEBUG({
       DBGS() << "Module after final cleanups:\n";

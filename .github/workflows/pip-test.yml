@@ -50,17 +50,10 @@ jobs:
           gh_token: ${{ secrets.GITHUB_TOKEN }}
           python_version: ${{ env.PYTHON_VERSION }}
           # transformers package is required for the inductor (e2e) test
-          wheels_pattern: 'torch-*.whl'
+          wheels_pattern: 'torch*'
 
       - name: Install Triton
         uses: ./.github/actions/setup-triton
-
-      - name: Build && Install PTI
-        run: |
-          ./scripts/install-pti.sh --build-level-zero
-          PTI_LIBS_DIR=$(python ./scripts/pti_lib.py)
-          ls $PTI_LIBS_DIR
-          echo "LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH" | tee -a $GITHUB_ENV
 
       - name: Install runtime dependencies
         run: |

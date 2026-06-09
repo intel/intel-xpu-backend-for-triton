@@ -43,6 +43,8 @@ def TritonAnnotateModule: Pass<"triton-annotate-module", "mlir::ModuleOp"> {
            "whether B/HF8 <-> HF conversion instruction is available">,
     Option<"support16BitAtomics", "support-16bit-atomics", "bool", /*default*/"false",
            "whether 16bit atomic operations are available">,
+    Option<"supportSigmoid", "support-sigmoid", "bool", /*default*/"false",
+           "whether sigmoid operation is available">,
     Option<"supportBfloat16Arithmetic", "support-bfloat16-arithmetic", "bool", /*default*/"false",
            "whether bfloat16 arithmetic is supported">,
     Option<"supportPredicatedIO", "support-predicated-io", "bool", /*default*/"false",
@@ -59,7 +61,11 @@ def TritonAnnotateModule: Pass<"triton-annotate-module", "mlir::ModuleOp"> {
     Option<"support256bLoadStore", "support-256b-load-store", "bool", /*default*/"false",
            "whether 256-bit per-thread elementwise load/store is supported">,
     Option<"supportRoundedDivideSqrt", "support-rounded-divide-sqrt", "bool", /*default*/"false",
-           "whether rounded divide and sqrt operations are available">
+           "whether rounded divide and sqrt operations are available">,
+    Option<"useClRoundedDivideSqrt", "use-cl-rounded-divide-sqrt", "bool", /*default*/"false",
+           "whether to emit plain LLVM div/sqrt ops relying on the -cl-fp32-correctly-rounded-divide-sqrt build flag">,
+    Option<"isFastMath", "is-fast-math", "bool", /*default*/"false",
+           "whether fast-math approximations are allowed (set by TRITON_INTEL_FAST_MATH=1)">
   ];
 }
 

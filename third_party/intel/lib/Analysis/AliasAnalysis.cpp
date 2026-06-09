@@ -123,8 +123,6 @@ static Value getMemOpPointer(Operation *op) {
       });
 }
 
-namespace {
-
 //===----------------------------------------------------------------------===//
 // AliasInfo lattice element
 //===----------------------------------------------------------------------===//
@@ -276,8 +274,6 @@ private:
   }
 };
 
-} // anonymous namespace
-
 //===----------------------------------------------------------------------===//
 // AliasAnalysis
 //===----------------------------------------------------------------------===//
@@ -396,6 +392,25 @@ bool AliasAnalysis::mayAlias(Value a, Value b) const {
     if (rb.count(v))
       return true;
   return false;
+}
+
+AliasAnalysis::PointerRootsResult
+AliasAnalysis::getPointerRoots(Value ptr) const {
+  PointerRootsResult result;
+  auto it = pointerRoots.find(ptr);
+  if (it == pointerRoots.end()) {
+    result.kind = PointerRootKind::NotTracked;
+    return result;
+  }
+  if (it->second.unknown) {
+    result.kind = PointerRootKind::Unknown;
+    return result;
+  }
+  result.kind = PointerRootKind::Known;
+  result.roots.reserve(it->second.roots.size());
+  for (Value v : it->second.roots)
+    result.roots.push_back(v);
+  return result;
 }
 
 ArrayRef<Operation *>

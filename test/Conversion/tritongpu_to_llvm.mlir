@@ -2280,10 +2280,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-LABEL: test_local_atomic_inc_dead
   // CHECK: llvm.inline_asm has_side_effects asm_dialect = att
   // CHECK-SAME: red.shared.cta.relaxed.inc.u32
+  // CHECK-SAME: "r,b"
   tt.func public @test_local_atomic_inc_dead(%arg0: tensor<1xi32, #blocked>) {
     %c1 = arith.constant dense<1> : tensor<1xi32, #blocked>
     %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1xi32, #shared, #smem, mutable>
     %1 = ttg.local_atomic_scatter_rmw add, %0[%arg0], %c1 {axis = 0 : i32} : (!ttg.memdesc<1xi32, #shared, #smem, mutable>, tensor<1xi32, #blocked>, tensor<1xi32, #blocked>) -> tensor<1xi32, #blocked>
+    tt.return
+  }
+
+  // CHECK-LABEL: test_local_atomic_add_dead
+  // CHECK: llvm.inline_asm has_side_effects asm_dialect = att
+  // CHECK-SAME: red.shared.cta.relaxed.add.u32
+  // CHECK-SAME: "r,r,b"
+  tt.func public @test_local_atomic_add_dead(%arg0: tensor<1xi32, #blocked>) {
+    %c2 = arith.constant dense<2> : tensor<1xi32, #blocked>
+    %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1xi32, #shared, #smem, mutable>
+    %1 = ttg.local_atomic_scatter_rmw add, %0[%arg0], %c2 {axis = 0 : i32} : (!ttg.memdesc<1xi32, #shared, #smem, mutable>, tensor<1xi32, #blocked>, tensor<1xi32, #blocked>) -> tensor<1xi32, #blocked>
     tt.return
   }
 }
@@ -2681,7 +2693,7 @@ tt.func private @memdesc_reinterpret(%arg0: !ttg.memdesc<4x1024xi64, #shared0, #
   // CHECK: [[BASE_PTR:%.*]] = llvm.extractvalue %arg0[0]
   // CHECK: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
   // CHECK: [[PTR:%.*]] = llvm.getelementptr [[BASE_PTR]][[[C0]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i64
-  ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<4x1024xi64, #shared0, #ttg.shared_memory, mutable> -> !ttg.memdesc<4x4x2048xi32, #shared1, #ttg.shared_memory, mutable>
+  ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<4x1024xi64, #shared0, #ttg.shared_memory, mutable> -> !ttg.memdesc<4x1x2048xi32, #shared1, #ttg.shared_memory, mutable>
   // CHECK: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
   // CHECK: [[S0:%.*]] = llvm.mlir.undef
   // CHECK: [[S1:%.*]] = llvm.insertvalue [[PTR]], [[S0]][0]
@@ -2813,32 +2825,6 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.prof
   // CHECK: llvm.getelementptr %arg1[%[[TOTAL_OFFSET]]] : (!llvm.ptr<1>, i64) -> !llvm.ptr<1>, i8
   tt.func @profile_scratch_ptr_uses_i64() {
     %0 = ttg.global_scratch_alloc {alignment = 128 : i32, third_party_allocation, nbytes = 2304 : i32, ttg.global_scratch_memory_offset = 0 : i32} : !tt.ptr<i32>
-    tt.return
-  }
-}
-
-// -----
-
-// Test that local_alloc and local_load for sub-byte element types (i1) are
-// lowered correctly. With bytesPerElem = ceil(bitwidth, 8) = 1, each element
-// is stored/loaded as an i8 byte with correct non-zero byte offsets.
-#blocked0 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  // CHECK-LABEL: test_bitwidth_smaller_than_i8
-  tt.func @test_bitwidth_smaller_than_i8(%arg0: tensor<128x1xi1, #blocked0>) {
-    // CHECK: nvvm.read.ptx.sreg.tid.x
-    // i1 elements are zero-extended to i8 and stored as vector<1xi8>.
-    // CHECK: %[[BYTE_OFF:.*]] = llvm.mlir.constant(1 : i32) : i32
-    // CHECK-NEXT: llvm.mul {{.*}}, %[[BYTE_OFF]] : i32
-    // CHECK: llvm.store {{.*}} vector<1xi8>
-    %0 = ttg.local_alloc %arg0 : (tensor<128x1xi1, #blocked0>) -> !ttg.memdesc<128x1xi1, #shared, #smem>
-    // i1 elements are loaded as i8 and truncated back to i1.
-    // CHECK: %[[BYTE_OFF:.*]] = llvm.mlir.constant(1 : i32) : i32
-    // CHECK-NEXT: llvm.mul {{.*}}, %[[BYTE_OFF]] : i32
-    // CHECK: llvm.load {{.*}} i8
-    %1 = ttg.local_load %0 : !ttg.memdesc<128x1xi1, #shared, #smem> -> tensor<128x1xi1, #blocked0>
     tt.return
   }
 }

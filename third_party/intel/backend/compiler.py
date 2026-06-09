@@ -82,6 +82,16 @@ def extract_spill_size_from_zebin(file):
         elf = ELFFile(f)
         zeinfo = elf.get_section_by_name(".ze_info")
         if zeinfo is None:
+            has_text = any(s.name.startswith('.text.') for s in elf.iter_sections())
+            has_symtab = elf.get_section_by_name('.symtab') is not None
+            if not has_text or not has_symtab:
+                # IGC can exit 0 on PTSS overflow yet emit a degenerate zebin.
+                # Observed on LTS2 line; rolling libigc instead
+                # exits non-zero. Raise so the existing 256-GRF retry path
+                # in make_zebin catches it, matching the rolling code path.
+                raise IntelGPUError('Degenerate zebin: missing .text/.symtab. '
+                                    'IGC likely failed (e.g. PTSS overflow) without '
+                                    'reporting a non-zero exit code.')
             warnings.warn(
                 'Section .ze_info not found in zebin; cannot extract spill_size. '
                 'Auto-GRF mode selection will be skipped for this kernel.',
@@ -185,6 +195,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # Same Xe3P+ gate as 256B prefetch pending separate driver prop.
         dev_prop['has_256b_load_store'] = tgt_prop.get('has_256b_prefetch', False)
         dev_prop['has_rounded_divide_sqrt'] = tgt_prop.get('has_rounded_divide_sqrt', not is_lts)
+        dev_prop['has_sigmoid'] = tgt_prop.get('has_sigmoid', False)
 
         if '__intel_already_queried_extensions__' not in tgt_prop:
             # All GPUs with the same device_id have the same extensions, so we just
@@ -257,6 +268,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # Annotate module with information required by subsequent transformations.
         module_opts.min_sg_size = min(properties["sub_group_sizes"])
         module_opts.support_16bit_atomics = properties["has_16bit_atomics"]
+        module_opts.support_sigmoid = properties["has_sigmoid"]
         module_opts.support_2d_block_io = properties["has_2d_block_io"]
         module_opts.support_bfloat16_arithmetic = properties["has_bfloat16_arithmetic"]
         module_opts.support_bfloat16_conversion = properties["has_bfloat16_conversion"]
@@ -296,6 +308,11 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.common.add_symbol_dce(pm)
         passes.ttir.add_loop_unroll(pm)
         pm.run(mod, 'make_ttir')
+
+        driver_version = metadata["target"].arch.get("driver_version")
+        if cls.is_lts(driver_version) and intel.has_precise_divide_sqrt(mod):
+            metadata["build_flags"] = "-cl-fp32-correctly-rounded-divide-sqrt"
+
         return mod
 
     @classmethod
@@ -307,6 +324,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         module_opts = intel.passes.ttgpuir.AnnotateModuleOptions()
         cls.annotate_module(module_opts, properties, opt)
         module_opts.is_lts = cls.is_lts(metadata["target"].arch.get("driver_version"))
+        module_opts.use_cl_rounded_divide_sqrt = (module_opts.is_lts and intel.has_precise_divide_sqrt(mod))
+        module_opts.is_fast_math = knobs.intel.fast_math
         intel.passes.ttgpuir.add_triton_annotate_module(pm, module_opts)
         pm.run(mod, 'annotate_module')
 
@@ -328,6 +347,9 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_optimize_dot_operands(pm)
         intel.passes.ttgpuir.add_hoist_layout_conversions(pm, opt.grf_mode)
+        if os.environ.get("TRITON_INTEL_ANNOTATE_LATENCIES", "0") == "1":
+            passes.ttgpuir.add_assign_latencies(pm, opt.num_stages)
+            passes.ttgpuir.add_schedule_loops(pm)
         intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier)
 
         if (opt.reduce_variable_liveness):
@@ -527,11 +549,13 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                         # re-run with double GRF mode
                         ocloc_cmd[-1] = metadata["build_flags"] + shader_dump_opt
                         subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
-            except subprocess.CalledProcessError as e:
+            except (subprocess.CalledProcessError, IntelGPUError) as e:
                 # If GRF mode was not explicitly set, retry with large GRF mode
                 # before giving up. This handles cases where the default GRF mode
                 # doesn't provide enough registers (e.g., scratch space exceeds
-                # HW PTSS limit).
+                # HW PTSS limit). Also covers degenerate zebin (no .text/.symtab)
+                # detected by extract_spill_size_from_zebin (LTS2 IGC silent
+                # PTSS overflow).
                 retry_succeeded = False
                 if options.grf_mode == 'default' and \
                         "-cl-intel-256-GRF-per-thread" not in metadata.get("build_flags", ""):
@@ -545,6 +569,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                         pass
 
                 if not retry_succeeded:
+                    if isinstance(e, IntelGPUError):
+                        raise
                     if e.returncode == 255:
                         error = 'Internal Triton ZEBIN codegen error'
                     elif e.returncode == 128 + signal.SIGSEGV:

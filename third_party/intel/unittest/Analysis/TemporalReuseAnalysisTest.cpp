@@ -1174,4 +1174,263 @@ TEST_F(TemporalReuseAnalysisTest, SizeOneAxisAnyAdvance) {
   EXPECT_FALSE(reuseByDepth[0]); // Axis-0: 1 >= 1 → disjoint
 }
 
+// Phase 1.6 Tests — provenTemporalReuse
+
+TEST_F(TemporalReuseAnalysisTest, Proven_LoopInvariantPointer_True) {
+  // Mirror LoopInvariantPointer (line 162): loop-invariant pointer inside
+  // scf.for. Expected: provenTemporalReuse == true (every operand Invariant).
+  ModuleOp module = buildModule();
+  func::FuncOp funcOp = buildFunc(module);
+  builder->setInsertionPointToStart(&funcOp.getBody().front());
+
+  Type f16Ty = builder->getF16Type();
+  BlockArgument basePtr = addPtrArg(funcOp, f16Ty);
+
+  SmallVector<unsigned> sizePerThread = {1, 1};
+  SmallVector<unsigned> threadsPerWarp = {2, 16};
+  SmallVector<unsigned> warpsPerCTA = {2, 2};
+  SmallVector<unsigned> order = {1, 0};
+  BlockedEncodingAttr blocked =
+      makeBlocked(sizePerThread, threadsPerWarp, warpsPerCTA, order);
+  auto resultTy = RankedTensorType::get({16, 32}, f16Ty, blocked);
+
+  RankedTensorType ptrTensorTy = makePtrTensorType({16, 32}, f16Ty, blocked);
+  auto splatPtr =
+      SplatOp::create(*builder, builder->getUnknownLoc(), ptrTensorTy, basePtr);
+
+  scf::ForOp forOp = buildScfFor(*builder, 0, 10, 1);
+  LoadOp loadOp = buildLoadOp(*builder, splatPtr, resultTy);
+  scf::YieldOp::create(*builder, builder->getUnknownLoc());
+
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
+  mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  TemporalReuseAnalysis analysis(strideAnalysis);
+
+  EXPECT_TRUE(analysis.provenTemporalReuse(loadOp));
+  // Regression guard: existing hasTemporalReuse still true.
+  EXPECT_TRUE(analysis.hasTemporalReuse(loadOp));
+}
+
+TEST_F(TemporalReuseAnalysisTest, Proven_StreamingPointerOneDim_False) {
+  // Mirror StreamingPointerOneDim (line 211): pointer advances every iteration.
+  // Expected: provenTemporalReuse == false (Streaming defeats proof).
+  ModuleOp module = buildModule();
+  func::FuncOp funcOp = buildFunc(module);
+  builder->setInsertionPointToStart(&funcOp.getBody().front());
+
+  Type f16Ty = builder->getF16Type();
+  BlockArgument basePtr = addPtrArg(funcOp, f16Ty);
+
+  scf::ForOp forOp = buildScfFor(*builder, 0, 10, 1);
+  Value iv = forOp.getInductionVar();
+
+  SmallVector<unsigned> sizePerThread = {1};
+  SmallVector<unsigned> threadsPerWarp = {32};
+  SmallVector<unsigned> warpsPerCTA = {4};
+  SmallVector<unsigned> order = {0};
+  BlockedEncodingAttr blocked =
+      makeBlocked(sizePerThread, threadsPerWarp, warpsPerCTA, order);
+  auto resultTy = RankedTensorType::get({128}, f16Ty, blocked);
+
+  RankedTensorType ptrTensorTy = makePtrTensorType({128}, f16Ty, blocked);
+  auto splatPtr =
+      SplatOp::create(*builder, builder->getUnknownLoc(), ptrTensorTy, basePtr);
+
+  auto c128 =
+      arith::ConstantIndexOp::create(*builder, builder->getUnknownLoc(), 128);
+  auto stride =
+      arith::MulIOp::create(*builder, builder->getUnknownLoc(), iv, c128);
+
+  Type i64Ty = builder->getI64Type();
+  auto strideTensorTy = RankedTensorType::get({128}, i64Ty, blocked);
+  auto strideI64 = arith::IndexCastOp::create(
+      *builder, builder->getUnknownLoc(), i64Ty, stride);
+  auto splatStride = SplatOp::create(*builder, builder->getUnknownLoc(),
+                                     strideTensorTy, strideI64);
+
+  auto advancedPtr = AddPtrOp::create(*builder, builder->getUnknownLoc(),
+                                      ptrTensorTy, splatPtr, splatStride);
+  LoadOp loadOp = buildLoadOp(*builder, advancedPtr, resultTy);
+  scf::YieldOp::create(*builder, builder->getUnknownLoc());
+
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
+  mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  TemporalReuseAnalysis analysis(strideAnalysis);
+
+  EXPECT_FALSE(analysis.provenTemporalReuse(loadOp));
+  EXPECT_FALSE(analysis.hasTemporalReuse(loadOp));
+}
+
+TEST_F(TemporalReuseAnalysisTest, Proven_AllAxesSmallAdvance_True) {
+  // Mirror AllAxesSmallAdvance (line 913): advance [1,1] < tile [32,32].
+  // Expected: provenTemporalReuse == true (Held on every axis).
+  ModuleOp module = buildModule();
+  func::FuncOp funcOp = buildFunc(module);
+  builder->setInsertionPointToStart(&funcOp.getBody().front());
+
+  Type f16Ty = builder->getF16Type();
+  BlockArgument basePtr = addPtrArg(funcOp, f16Ty);
+
+  scf::ForOp forOp = buildScfFor(*builder, 0, 10, 1);
+  Value iv = forOp.getInductionVar();
+
+  SmallVector<unsigned> sizePerThread = {1, 1};
+  SmallVector<unsigned> threadsPerWarp = {2, 16};
+  SmallVector<unsigned> warpsPerCTA = {2, 2};
+  SmallVector<unsigned> order = {1, 0};
+  BlockedEncodingAttr blocked =
+      makeBlocked(sizePerThread, threadsPerWarp, warpsPerCTA, order);
+  auto resultTy = RankedTensorType::get({32, 32}, f16Ty, blocked);
+
+  RankedTensorType ptrTensorTy = makePtrTensorType({32, 32}, f16Ty, blocked);
+  auto splatPtr =
+      SplatOp::create(*builder, builder->getUnknownLoc(), ptrTensorTy, basePtr);
+
+  Type i64Ty = builder->getI64Type();
+  auto ivI64 =
+      arith::IndexCastOp::create(*builder, builder->getUnknownLoc(), i64Ty, iv);
+  auto strideTensorTy = RankedTensorType::get({32, 32}, i64Ty, blocked);
+  auto splatStride = SplatOp::create(*builder, builder->getUnknownLoc(),
+                                     strideTensorTy, ivI64);
+
+  auto advancedPtr = AddPtrOp::create(*builder, builder->getUnknownLoc(),
+                                      ptrTensorTy, splatPtr, splatStride);
+  LoadOp loadOp = buildLoadOp(*builder, advancedPtr, resultTy);
+  scf::YieldOp::create(*builder, builder->getUnknownLoc());
+
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
+  mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  TemporalReuseAnalysis analysis(strideAnalysis);
+
+  EXPECT_TRUE(analysis.provenTemporalReuse(loadOp));
+  EXPECT_TRUE(analysis.hasTemporalReuse(loadOp));
+}
+
+TEST_F(TemporalReuseAnalysisTest,
+       Proven_NestedLoopOuterInvariantInnerStreaming_False) {
+  // Mirror NestedLoopOuterInvariant (line 385): outer loop invariant, inner
+  // loop streaming. Existing hasTemporalReuse returns true (outer wins).
+  // New provenTemporalReuse must return false (Streaming on inner defeats
+  // proof).
+  ModuleOp module = buildModule();
+  func::FuncOp funcOp = buildFunc(module);
+  builder->setInsertionPointToStart(&funcOp.getBody().front());
+
+  Type f16Ty = builder->getF16Type();
+  BlockArgument basePtr = addPtrArg(funcOp, f16Ty);
+
+  scf::ForOp outerFor = buildScfFor(*builder, 0, 10, 1);
+  scf::ForOp innerFor = buildScfFor(*builder, 0, 10, 1);
+  Value innerIV = innerFor.getInductionVar();
+
+  SmallVector<unsigned> sizePerThread = {1};
+  SmallVector<unsigned> threadsPerWarp = {32};
+  SmallVector<unsigned> warpsPerCTA = {4};
+  SmallVector<unsigned> order = {0};
+  BlockedEncodingAttr blocked =
+      makeBlocked(sizePerThread, threadsPerWarp, warpsPerCTA, order);
+  auto resultTy = RankedTensorType::get({128}, f16Ty, blocked);
+
+  RankedTensorType ptrTensorTy = makePtrTensorType({128}, f16Ty, blocked);
+  auto splatPtr =
+      SplatOp::create(*builder, builder->getUnknownLoc(), ptrTensorTy, basePtr);
+
+  auto c128 =
+      arith::ConstantIndexOp::create(*builder, builder->getUnknownLoc(), 128);
+  auto stride =
+      arith::MulIOp::create(*builder, builder->getUnknownLoc(), innerIV, c128);
+
+  Type i64Ty = builder->getI64Type();
+  auto strideTensorTy = RankedTensorType::get({128}, i64Ty, blocked);
+  auto strideI64 = arith::IndexCastOp::create(
+      *builder, builder->getUnknownLoc(), i64Ty, stride);
+  auto splatStride = SplatOp::create(*builder, builder->getUnknownLoc(),
+                                     strideTensorTy, strideI64);
+
+  auto advancedPtr = AddPtrOp::create(*builder, builder->getUnknownLoc(),
+                                      ptrTensorTy, splatPtr, splatStride);
+  LoadOp loadOp = buildLoadOp(*builder, advancedPtr, resultTy);
+
+  scf::YieldOp::create(*builder, builder->getUnknownLoc());
+
+  builder->setInsertionPointAfter(innerFor);
+  scf::YieldOp::create(*builder, builder->getUnknownLoc());
+
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
+  mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  TemporalReuseAnalysis analysis(strideAnalysis);
+
+  EXPECT_FALSE(analysis.provenTemporalReuse(loadOp));
+  // Regression guard: existing API returns true (outer loop wins).
+  EXPECT_TRUE(analysis.hasTemporalReuse(loadOp));
+}
+
+TEST_F(TemporalReuseAnalysisTest, Proven_LoadOutsideLoop_False) {
+  // Mirror LoadOutsideLoop (line 348): load not inside any loop.
+  // Expected: provenTemporalReuse == false (no loop -> no proof of reuse).
+  ModuleOp module = buildModule();
+  func::FuncOp funcOp = buildFunc(module);
+  builder->setInsertionPointToStart(&funcOp.getBody().front());
+
+  Type f16Ty = builder->getF16Type();
+  BlockArgument basePtr = addPtrArg(funcOp, f16Ty);
+
+  SmallVector<unsigned> sizePerThread = {1, 1};
+  SmallVector<unsigned> threadsPerWarp = {2, 16};
+  SmallVector<unsigned> warpsPerCTA = {2, 2};
+  SmallVector<unsigned> order = {1, 0};
+  BlockedEncodingAttr blocked =
+      makeBlocked(sizePerThread, threadsPerWarp, warpsPerCTA, order);
+  auto resultTy = RankedTensorType::get({16, 32}, f16Ty, blocked);
+
+  RankedTensorType ptrTensorTy = makePtrTensorType({16, 32}, f16Ty, blocked);
+  auto splatPtr =
+      SplatOp::create(*builder, builder->getUnknownLoc(), ptrTensorTy, basePtr);
+
+  LoadOp loadOp = buildLoadOp(*builder, splatPtr, resultTy);
+
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
+  mlir::triton::intel::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+  TemporalReuseAnalysis analysis(strideAnalysis);
+
+  EXPECT_FALSE(analysis.provenTemporalReuse(loadOp));
+  EXPECT_FALSE(analysis.hasTemporalReuse(loadOp));
+}
+
+// NOTE — Unknown-rejection coverage gap.
+//
+// `provenTemporalReuse` is designed to reject loads whose
+// classifyOperandAtLoop returns Streaming OR Unknown for any
+// address-determining operand at any enclosing loop depth (see
+// `everyOperandIsInvariantOrHeld` in TemporalReuseAnalysis.cpp).
+//
+// The Streaming-rejection branch is exercised by:
+//   - Proven_StreamingPointerOneDim_False
+//   - Proven_NestedLoopOuterInvariantInnerStreaming_False
+//
+// The Unknown-rejection branch is NOT directly unit-tested. Producing
+// a value that classifyOperandAtLoop classifies as Unknown requires
+// either:
+//   (a) a value StrideAnalysis cannot track AND `isDefinedOutsideOfLoop`
+//       returns false on, OR
+//   (b) a multi-operand op (e.g. `tt.descriptor_load`) where one scalar
+//       index is Streaming and another is Unknown at the same loop depth.
+//
+// Candidates explored and rejected for this Phase-1 land:
+//   - scf.for iter-args fed by Splat(basePtr): StrideAnalysis propagates
+//     through these as Held (see Proven_LoopInvariantPointer_True for
+//     the positive case).
+//   - scf.while after-block args: same story; comments in the existing
+//     `WhileLoopInvariant` test (line 513) about "Unknown -> Held
+//     conservative path" are stale.
+//   - tt.load + AddPtr(carriedPtr, IV*const): the AddPtr's result
+//     classifies as Streaming on its own; tt.load sees ONE operand,
+//     not two. Cannot mix Streaming + Unknown at load granularity.
+//
+// The Unknown-rejection branch is exercised indirectly by integration
+// tests on real kernels where StrideAnalysis legitimately can't track
+// some address derivation (e.g. opaque function calls, address chains
+// through scf.if). A future patch that adds tt.descriptor_load test
+// infrastructure can extend this file to add direct coverage.
+
 } // namespace
