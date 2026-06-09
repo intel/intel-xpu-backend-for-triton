@@ -17,6 +17,17 @@ using mlir::triton::gpu::MultipleOperandsRange;
 
 namespace {
 
+static LLVM::MemoryEffectsAttr
+getReadNoneMemoryEffectsAttr(ConversionPatternRewriter &rewriter) {
+  return rewriter.getAttr<LLVM::MemoryEffectsAttr>(
+      /*other=*/LLVM::ModRefInfo::NoModRef,
+      /*argMem=*/LLVM::ModRefInfo::NoModRef,
+      /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef,
+      /*errnoMem=*/LLVM::ModRefInfo::NoModRef,
+      /*targetMem0=*/LLVM::ModRefInfo::NoModRef,
+      /*targetMem1=*/LLVM::ModRefInfo::NoModRef);
+}
+
 /* ----- FP8E5M2 ------ */
 // This data-type is the standard FP8E5M2 format
 static SmallVector<Value>
@@ -564,7 +575,7 @@ static SmallVector<Value> Fp_to_Fp8_RTNE(Location loc,
   } else {
     val = b.bitcast(val, srcITy);
   }
-  Value sign = b.and_(val, ival(1L << (SrcBits - 1)));
+  Value sign = b.and_(val, ival(1ULL << (SrcBits - 1)));
   Value nosign = b.and_(val, ival(SRC_MASK));
   Value exp = b.lshr(nosign, ival(SrcMBits));
   Value man = b.and_(nosign, ival(SRC_MMASK));
@@ -1462,6 +1473,57 @@ struct ExpOpConversionApprox
   }
 };
 
+// Emit an LLVM intrinsic call with the fast fast-math flag under
+// ttig.fast_math. F32-only; returns {} otherwise so the caller falls through to
+// the upstream pattern which calls the precise SPIR-V vendor library.
+static SmallVector<Value>
+emitFastMathF32Intrinsic(Operation *op, ConversionPatternRewriter &rewriter,
+                         Type elemTy, MultipleOperandsRange operands,
+                         Location loc, StringRef llvmIntrinsicName) {
+  if (elemTy.getIntOrFloatBitWidth() != 32)
+    return {};
+  if (!op->getParentOfType<ModuleOp>()->hasAttr(
+          triton::gpu::intel::TritonIntelGPUDialect::getFastMathAttrName()))
+    return {};
+  Type funcType = getFunctionType(elemTy, operands[0]);
+  LLVM::LLVMFuncOp funcOp =
+      appendOrGetExternFuncOp(rewriter, op, llvmIntrinsicName, funcType);
+  auto call = LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0][0]);
+  call.setFastmathFlagsAttr(LLVM::FastmathFlagsAttr::get(
+      rewriter.getContext(), LLVM::FastmathFlags::fast));
+  return {call.getResult()};
+}
+
+struct SinOpConversionApprox
+    : ElementwiseOpConversionBase<math::SinOp, SinOpConversionApprox> {
+  using Base = ElementwiseOpConversionBase<math::SinOp, SinOpConversionApprox>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(math::SinOp op, Adaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    return emitFastMathF32Intrinsic(op, rewriter, elemTy, operands, loc,
+                                    "llvm.sin.f32");
+  }
+};
+
+struct CosOpConversionApprox
+    : ElementwiseOpConversionBase<math::CosOp, CosOpConversionApprox> {
+  using Base = ElementwiseOpConversionBase<math::CosOp, CosOpConversionApprox>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(math::CosOp op, Adaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    return emitFastMathF32Intrinsic(op, rewriter, elemTy, operands, loc,
+                                    "llvm.cos.f32");
+  }
+};
+
 struct AbsFOpConversion
     : ElementwiseOpConversionBase<math::AbsFOp, AbsFOpConversion> {
   using Base = ElementwiseOpConversionBase<math::AbsFOp, AbsFOpConversion>;
@@ -1513,6 +1575,8 @@ struct PreciseSqrtOpConversion
                                    MultipleOperandsRange operandsRanges,
                                    Location loc) const {
     namespace intel = mlir::triton::gpu::intel;
+    auto funcAttrs = intel::noUnwindWillReturnAttrs;
+    funcAttrs.memEffectsAttr = getReadNoneMemoryEffectsAttr(rewriter);
 
     if (mlir::LLVM::intel::hasModuleAttr(
             op, intel::TritonIntelGPUDialect::
@@ -1521,7 +1585,7 @@ struct PreciseSqrtOpConversion
       std::string fnName = intel::mangle("sqrt_cr", operandTypes);
       LLVM::CallOp callOp = intel::createDeviceFunctionCall(
           rewriter, fnName, elemTy, operandTypes, operandsRanges[0],
-          /*paramAttrs=*/{}, intel::noUnwindWillReturnAttrs);
+          /*paramAttrs=*/{}, funcAttrs);
       return {callOp.getResult()};
     }
 
@@ -1539,7 +1603,7 @@ struct PreciseSqrtOpConversion
     SmallVector<Type> argTypes(ValueRange(operandsRanges[0]).getTypes());
     LLVM::CallOp callOp = intel::createDeviceFunctionCall(
         rewriter, fnName, elemTy, argTypes, operandsRanges[0],
-        /*paramAttrs=*/{}, intel::noUnwindWillReturnAttrs);
+        /*paramAttrs=*/{}, funcAttrs);
     return {callOp.getResult()};
   }
 };
@@ -1558,6 +1622,8 @@ struct PreciseDivFOpConversion
                                    MultipleOperandsRange operandsRanges,
                                    Location loc) const {
     namespace intel = mlir::triton::gpu::intel;
+    auto funcAttrs = intel::noUnwindWillReturnAttrs;
+    funcAttrs.memEffectsAttr = getReadNoneMemoryEffectsAttr(rewriter);
 
     if (mlir::LLVM::intel::hasModuleAttr(
             op, intel::TritonIntelGPUDialect::
@@ -1566,7 +1632,7 @@ struct PreciseDivFOpConversion
       std::string fnName = intel::mangle("divide_cr", operandTypes);
       LLVM::CallOp callOp = intel::createDeviceFunctionCall(
           rewriter, fnName, elemTy, operandTypes, operandsRanges[0],
-          /*paramAttrs=*/{}, intel::noUnwindWillReturnAttrs);
+          /*paramAttrs=*/{}, funcAttrs);
       return {callOp.getResult()};
     }
 
@@ -1584,7 +1650,7 @@ struct PreciseDivFOpConversion
     SmallVector<Type> argTypes(ValueRange(operandsRanges[0]).getTypes());
     LLVM::CallOp callOp = intel::createDeviceFunctionCall(
         rewriter, fnName, elemTy, argTypes, operandsRanges[0],
-        /*paramAttrs=*/{}, intel::noUnwindWillReturnAttrs);
+        /*paramAttrs=*/{}, funcAttrs);
     return {callOp.getResult()};
   }
 };
@@ -1779,6 +1845,10 @@ void populateElementwiseOpToLLVMPatterns(
   // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
   // a vendor specific math library for higher-precision calculation
   patterns.add<ExpOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
+  // SinOpConversionApprox / CosOpConversionApprox lower llvm.sin.f32 /
+  // llvm.cos.f32 with the fast fast-math flag.
+  patterns.add<SinOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<CosOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
   // TODO(FIXME): spirv's OpenCL extension (fmin/fmax) does not support
   // nan propagation. Set these conversion benefit to the max benefit:
   // PatternBenefit::ImpossibleToMatchSentinel - 1 to make sure the
