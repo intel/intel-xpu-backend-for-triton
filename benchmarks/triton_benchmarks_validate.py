@@ -12,7 +12,7 @@ import os
 import sys
 import sysconfig
 
-REQUIRED_CPP_EXTENSIONS = ("xetla_kernel", "sycl_tla_kernel", "onednn_kernel")
+REQUIRED_CPP_EXTENSIONS = ("sycl_tla_kernel", "onednn_kernel")
 
 
 def _find_package_dir():
