@@ -325,6 +325,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         cls.annotate_module(module_opts, properties, opt)
         module_opts.is_lts = cls.is_lts(metadata["target"].arch.get("driver_version"))
         module_opts.use_cl_rounded_divide_sqrt = (module_opts.is_lts and intel.has_precise_divide_sqrt(mod))
+        module_opts.is_fast_math = knobs.intel.fast_math
         intel.passes.ttgpuir.add_triton_annotate_module(pm, module_opts)
         pm.run(mod, 'annotate_module')
 
