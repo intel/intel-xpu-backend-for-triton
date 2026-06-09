@@ -207,7 +207,8 @@ private:
   // Record the final mask value for the given masked operation.
   // Fixes #6871: each operation must record only its own mask, not the masks of
   // its other users (which would poison the map for ops consuming two masks,
-  // e.g. an arith.select using one mask as condition and another as true-value).
+  // e.g. an arith.select using one mask as condition and another as
+  // true-value).
   void registerMaskValue(Operation *op, bool maskVal) const {
     opToMaskValue.insert({op, maskVal});
   }
