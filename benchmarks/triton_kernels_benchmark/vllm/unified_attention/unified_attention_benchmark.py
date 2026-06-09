@@ -172,6 +172,9 @@ def _record_autotune_decision(
     autotune_cache = getattr(kernel, "cache", {}) or {}
     if meta["IS_3D"]:
         autotune_cache = getattr(_unified_attention_module, "UNIFIED_ATTENTION_3D_TILE_CACHE", {}) or autotune_cache
+    selected_num_segments = _config_value(selected_config, "NUM_SEGMENTS_PER_SEQ")
+    if meta["IS_3D"] and selected_num_segments == "":
+        selected_num_segments = 16
 
     row = {
         "benchmark_name": benchmark_name,
@@ -192,6 +195,7 @@ def _record_autotune_decision(
         "autotune_key_values": _format_csv_value(key_values),
         "selected_config": _format_config(selected_config),
         "selected_TILE_SIZE": _config_value(selected_config, "TILE_SIZE"),
+        "selected_NUM_SEGMENTS_PER_SEQ": selected_num_segments,
         "selected_num_warps": _config_value(selected_config, "num_warps"),
         "selected_num_stages": _config_value(selected_config, "num_stages"),
         "configs_after_prune": "|".join(_format_config(config) for config in pruned_configs),
@@ -238,6 +242,7 @@ def _write_autotune_decisions() -> None:
         "key_BLOCK_Q",
         "selected_config",
         "selected_TILE_SIZE",
+        "selected_NUM_SEGMENTS_PER_SEQ",
         "selected_num_warps",
         "selected_num_stages",
         "configs_after_prune",
