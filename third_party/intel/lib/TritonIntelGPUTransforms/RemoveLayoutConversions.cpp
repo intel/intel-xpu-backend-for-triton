@@ -2093,12 +2093,14 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
   // Rematerialize failed hoists right before the condtional, and hoist those
   // that succeeded into the branch and then rewrite the slice.
   IRMapping mapping;
+  SmallVector<Operation *> newConverts;
   auto hoistRemat = [&](OpBuilder &b, Value v, Attribute encoding) {
     auto tensorType = cast<RankedTensorType>(v.getType());
     auto newType = tensorType.cloneWithEncoding(encoding);
     Value newCvt =
         ttg::ConvertLayoutOp::create(b, convertOp.getLoc(), newType, v);
 
+    newConverts.push_back(newCvt.getDefiningOp());
     mapping.map(v, newCvt);
     slice.remove(v);
   };
@@ -2117,8 +2119,12 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
   // when the duplication cost exceeds the convert cost. Use newCvtCost=0
   // (matching backwardRematerialization pattern) since we're hoisting into
   // branches where the convert would be eliminated.
-  if (!isRematBeneficial(convertOp, slice, /*newCvtCost=*/0))
+  if (!isRematBeneficial(convertOp, slice, /*newCvtCost=*/0)) {
+    // Clean up orphaned convert ops created by hoistRemat before returning.
+    for (auto it = newConverts.rbegin(); it != newConverts.rend(); ++it)
+      (*it)->erase();
     return;
+  }
 
   rewriteSlice(slice, layout, convertOp, mapping);
 }
