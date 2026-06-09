@@ -606,6 +606,8 @@ setup(
         "__pycache__",
         "__pycache__/*",
         "*.py[cod]",
+        "*.pdb",
+        "*.ilk",
     ]},
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
     cmdclass={
