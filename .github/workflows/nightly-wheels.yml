@@ -45,6 +45,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          ref: '432512b'
 
       - name: Install Python ${{ matrix.python }}
         uses: actions/setup-python@v6
