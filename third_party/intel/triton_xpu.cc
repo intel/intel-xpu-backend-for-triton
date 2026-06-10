@@ -104,6 +104,8 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
       .def_readwrite(
           "support_16bit_atomics",
           &gpu::intel::TritonAnnotateModuleOptions::support16BitAtomics)
+      .def_readwrite("support_sigmoid",
+                     &gpu::intel::TritonAnnotateModuleOptions::supportSigmoid)
       .def_readwrite("support_2d_block_io",
                      &gpu::intel::TritonAnnotateModuleOptions::support2DBlockIO)
       .def_readwrite(
@@ -142,7 +144,9 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      &gpu::intel::TritonAnnotateModuleOptions::threadsPerWarp)
       .def_readwrite("target_arch",
                      &gpu::intel::TritonAnnotateModuleOptions::targetArch)
-      .def_readwrite("is_lts", &gpu::intel::TritonAnnotateModuleOptions::isLTS);
+      .def_readwrite("is_lts", &gpu::intel::TritonAnnotateModuleOptions::isLTS)
+      .def_readwrite("is_fast_math",
+                     &gpu::intel::TritonAnnotateModuleOptions::isFastMath);
   ADD_PASS_OPTION_WRAPPER_1("add_triton_annotate_module",
                             gpu::intel::createTritonAnnotateModule,
                             gpu::intel::TritonAnnotateModuleOptions);
@@ -314,6 +318,8 @@ void init_triton_intel(py::module &&m) {
     {
       llvm::FunctionPassManager fpm;
       fpm.addPass(GuardMaskedDivRemPass());
+      // Remove dynamic indexing of `<N x ptr>` vectors before SPIR-V.
+      fpm.addPass(ScalarizePtrVectorsPass());
       mpm.addPass(createModuleToFunctionPassAdaptor(std::move(fpm)));
     }
     mpm.addPass(pb.buildPerModuleDefaultPipeline(opt));

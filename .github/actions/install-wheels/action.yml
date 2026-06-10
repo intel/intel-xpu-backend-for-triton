@@ -56,7 +56,7 @@ runs:
         mkdir -p ~/wheels
         gh run download ${{ steps.run_id.outputs.run_id }} \
           --repo ${{ inputs.repository }} \
-          --pattern "*-py${{ inputs.python_version }}*" \
+          --pattern "*${{ inputs.wheels_pattern }}py${{ inputs.python_version }}*" \
           --dir ~/wheels
 
     - name: Install wheels
@@ -65,4 +65,4 @@ runs:
         set -x
         shopt -s extglob
         cd ~/wheels/*-py${{ inputs.python_version }}*
-        ${{ inputs.install_cmd }} ${{ inputs.wheels_pattern }}
+        ${{ inputs.install_cmd }} ${{ inputs.wheels_pattern }}.whl

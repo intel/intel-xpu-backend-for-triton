@@ -196,28 +196,32 @@ def filter_traceback(e: BaseException):
 class CompileTimer:
 
     def __init__(self) -> None:
-        self.start: float = time.time()
-        self.ir_initialization_end: float | None = None
-        self.lowering_stage_ends: list[tuple[str, float]] = []
-        self.store_results_end: float | None = None
+        # #5665:
+        #   - time.time() ticks every 15.6ms on Windows
+        #   - store_results returns ~us, so every value below 15600us will not be counted.
+        #   - perf_counter_ns ticks every ~100ns, fine enough to see us-scale durations.
+        self.start: int = time.perf_counter_ns()
+        self.ir_initialization_end: int | None = None
+        self.lowering_stage_ends: list[tuple[str, int]] = []
+        self.store_results_end: int | None = None
 
     def finished_ir_initialization(self) -> None:
-        self.ir_initialization_end = time.time()
+        self.ir_initialization_end = time.perf_counter_ns()
 
     def stage_finished(self, stage_name: str) -> None:
-        self.lowering_stage_ends.append((stage_name, time.time()))
+        self.lowering_stage_ends.append((stage_name, time.perf_counter_ns()))
 
     def end(self) -> knobs.CompileTimes:
-        timestamp = time.time()
+        timestamp = time.perf_counter_ns()
         if self.ir_initialization_end is None:
             self.ir_initialization_end = timestamp
         else:
             self.store_results_end = timestamp
 
-        def delta(start: float, end: float | None) -> int:
+        def delta(start: int, end: int | None) -> int:
             if end is None:
                 return 0
-            return int((end - start) * 1000000)
+            return (end - start) // 1000
 
         lowering_stage_durations = []
         stage_start = self.ir_initialization_end
@@ -485,14 +489,20 @@ class CompiledKernel:
         if knobs.runtime.kernel_load_start_hook is not None:
             knobs.runtime.kernel_load_start_hook(self.module, self.function, self.name, self.metadata_group, self.hash)
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
-        self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
-            self.name, self.kernel, self.metadata.shared, self.metadata.build_flags,
-            not self.metadata.generate_native_code, device)
-        # PyTorch could use the updated build flags in load binary.
-        if hasattr(driver.active.utils, "get_last_selected_build_flags"):
-            new_build_flags = driver.active.utils.get_last_selected_build_flags()
-            if new_build_flags != self.metadata.build_flags:
-                self.metadata = self.metadata._replace(build_flags=new_build_flags)
+        # `build_flags`/`generate_native_code` are Intel/XPU-specific metadata fields.
+        # Backends that don't define them (e.g. NVIDIA/CUDA) use the plain load_binary signature.
+        if hasattr(self.metadata, "build_flags"):
+            self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
+                self.name, self.kernel, self.metadata.shared, self.metadata.build_flags,
+                not self.metadata.generate_native_code, device)
+            # PyTorch could use the updated build flags in load binary.
+            if hasattr(driver.active.utils, "get_last_selected_build_flags"):
+                new_build_flags = driver.active.utils.get_last_selected_build_flags()
+                if new_build_flags != self.metadata.build_flags:
+                    self.metadata = self.metadata._replace(build_flags=new_build_flags)
+        else:
+            self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
+                self.name, self.kernel, self.metadata.shared, device)
 
         if hasattr(self.metadata, "threads_per_warp"):
             warp_size = self.metadata.threads_per_warp
