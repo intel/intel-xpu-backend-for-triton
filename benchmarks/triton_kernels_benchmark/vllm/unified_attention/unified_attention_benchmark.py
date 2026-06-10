@@ -66,6 +66,7 @@ def _call_xeforge_unified_attention(uattn_fn, q, k, v, out, cu_seqlens_q, sequse
         kv_quant_mode=kv_quant_mode,
     )
 
+
 float8_info = torch.finfo(current_platform.fp8_dtype())
 
 TOTAL_MEMORY_BYTES = benchmark_suite.get_total_gpu_memory_bytes()
