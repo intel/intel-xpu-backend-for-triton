@@ -1,3 +1,6 @@
+# Model Runner V2 does not support draft_model speculative method: https://github.com/intel/intel-xpu-backend-for-triton/issues/7166
+tests/v1/spec_decode/test_eagle.py::test_propose_stores_probabilistic_draft_probs
+
 # Skip tests using Llama-3.1-8B-Instruct
 tests/v1/spec_decode/test_eagle.py::test_prepare_next_token_ids
 tests/v1/spec_decode/test_eagle.py::test_prepare_inputs
