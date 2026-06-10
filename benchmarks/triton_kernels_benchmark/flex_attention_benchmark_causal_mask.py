@@ -333,6 +333,38 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
     return (gbps(mean), gbps(max_ms), gbps(min_ms)), (tflops(mean), tflops(max_ms), tflops(min_ms)), cv
 
 
+@benchmark_suite.register(
+    key='flex-attention-causal',
+    run_opts={'fa_kernel_mode': 'fwd', 'batch_size': 1},
+    categories={'optional', 'flash_attention'},
+    description='FlexAttention Causal Mask fwd kernel benchmark',
+    report_name='flex-attn-causal',
+    report_file_prefix='flexAttnCausal',
+)
+@benchmark_suite.register(
+    key='flex-attention-causal-batch4',
+    run_opts={'fa_kernel_mode': 'fwd', 'batch_size': 4},
+    categories={'optional', 'flash_attention'},
+    description='FlexAttention (batch_size=4) Causal Mask fwd kernel benchmark',
+    report_name='flex-attn-causal-batch4',
+    report_file_prefix='flexAttnCausal-batch4',
+)
+@benchmark_suite.register(
+    key='flex-attention-causal-batch16',
+    run_opts={'fa_kernel_mode': 'fwd', 'batch_size': 16},
+    categories={'optional', 'flash_attention'},
+    description='FlexAttention (batch_size=16) Causal Mask fwd kernel benchmark',
+    report_name='flex-attn-causal-batch16',
+    report_file_prefix='flexAttnCausal-batch16',
+)
+@benchmark_suite.register(
+    key='flex-attention-causal-bwd',
+    run_opts={'fa_kernel_mode': 'bwd', 'batch_size': 1},
+    categories={'optional', 'flash_attention'},
+    description='FlexAttention Causal Mask bwd kernel benchmark',
+    report_name='flex-attn-causal-bwd',
+    report_file_prefix='flexAttnCausal-bwd',
+)
 def get_benchmark(providers_filter=None, fa_kernel_mode='fwd', batch_size=1):  # pylint: disable=W0613,W0621
     local_batch_sizes = [16, 32, 64] if os.getenv('THROUGHPUT_TEST', '0') == '1' else [batch_size]
     if 'B580' in torch.xpu.get_device_name():

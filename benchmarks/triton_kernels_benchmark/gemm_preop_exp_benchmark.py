@@ -289,6 +289,11 @@ def benchmark(B, M, N, K, provider):
     return (gbps(mean_ms), gbps(max_ms), gbps(min_ms)), (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
 
 
+@benchmark_suite.register(
+    key='gemm-preop-exp',
+    categories={'optional', 'gemm'},
+    description='Triton GEMM + PreOp (exp) kernel benchmark',
+)
 def get_benchmark(providers_filter=None):
     return benchmark
 

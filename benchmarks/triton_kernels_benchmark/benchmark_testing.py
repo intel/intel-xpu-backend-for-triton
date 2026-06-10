@@ -846,6 +846,36 @@ class BenchmarkConfig:  # pylint: disable=too-many-instance-attributes
         return mark
 
 
+def register(key, categories, description, run_opts=None, report_name=None, report_file_prefix=None):
+    """Decorator that registers a BenchmarkConfig for auto-discovery.
+
+    Attaches a BENCHMARK_CONFIGS list to the decorated function's module.
+    Use with @register(...) on get_benchmark functions in benchmark files.
+
+    Categories can be strings (e.g. "core", "gemm") or BenchmarkCategory enums.
+    """
+    resolved_categories = {BenchmarkCategory(c) if isinstance(c, str) else c for c in categories}
+
+    def decorator(fn):
+        import sys  # pylint: disable=import-outside-toplevel
+        module = sys.modules[fn.__module__]
+        if not hasattr(module, "BENCHMARK_CONFIGS"):
+            module.BENCHMARK_CONFIGS = []
+        module.BENCHMARK_CONFIGS.append(
+            BenchmarkConfig(
+                key=key,
+                get_benchmark=fn,
+                run_opts=run_opts or {},
+                categories=resolved_categories,
+                description=description,
+                report_name=report_name,
+                report_file_prefix=report_file_prefix,
+            ))
+        return fn
+
+    return decorator
+
+
 @dataclass
 class BenchmarkConfigRunResult(BenchmarkRunResult, BenchmarkConfig):
 
@@ -873,11 +903,24 @@ class BenchmarkConfigRunResult(BenchmarkRunResult, BenchmarkConfig):
             f"Shape dimensions: {self.shape_dimensions}",
             f"Shapes pattern: {str(self.shape_pattern) if str(self.shape_pattern) else 'Not set'}",
             f"Supported shapes: {_shapes_repr(self.supported_shapes)}",
-            f"Selected shapes: {_shapes_repr(self.supported_shapes)}",
+            f"Selected shapes: {_shapes_repr(self.selected_shapes)}",
             f"Supported providers: {self.supported_providers}",
             f"Selected providers: {self.selected_providers}",
         ]
         return "\n".join(str_repr)
+
+    def to_dict(self) -> Dict:
+        return {
+            "key": self.key,
+            "categories": [category.value for category in self.categories],
+            "run_opts": self.run_opts,
+            "shape_dimensions": self.shape_dimensions,
+            "shape_pattern": str(self.shape_pattern) if self.shape_pattern else None,
+            "supported_shapes": [str(s) for s in self.supported_shapes],
+            "selected_shapes": [str(s) for s in self.selected_shapes],
+            "supported_providers": self.supported_providers,
+            "selected_providers": self.selected_providers,
+        }
 
     def run(self, args: MarkArgs) -> BenchmarkConfigRunResult:
         start_time = time.perf_counter()

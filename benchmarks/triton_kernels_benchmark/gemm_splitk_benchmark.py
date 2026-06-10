@@ -184,6 +184,11 @@ def benchmark(M, N, K, provider):
     return (gbps(mean_ms), gbps(max_ms), gbps(min_ms)), (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
 
 
+@benchmark_suite.register(
+    key='gemm-splitk',
+    categories={'optional', 'gemm'},
+    description='Triton GEMM (split-k) kernel benchmark',
+)
 def get_benchmark(providers_filter=None):  # pylint: disable=W0613
     return benchmark
 

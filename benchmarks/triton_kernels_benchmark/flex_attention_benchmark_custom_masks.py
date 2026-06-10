@@ -227,6 +227,14 @@ def benchmark(Z, H, N_CTX, D_HEAD, MASK, MODE, provider):
     return (gbps(mean), gbps(max_ms), gbps(min_ms)), (tflops(mean), tflops(max_ms), tflops(min_ms)), cv
 
 
+@benchmark_suite.register(
+    key='flex-attention-custom-masks',
+    run_opts={'fa_kernel_mode': 'fwd'},
+    categories={'optional', 'flash_attention'},
+    description='FlexAttention Custom Masks fwd kernel benchmark',
+    report_name='flex-attn-masks',
+    report_file_prefix='flexAttnMasks',
+)
 def get_benchmark(providers_filter=None, fa_kernel_mode='fwd'):  # pylint: disable=W0613,W0621
     base = benchmark.benchmarks
     x_vals = [[*x[:-1], fa_kernel_mode] for x in list(base.x_vals)]

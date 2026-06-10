@@ -14,6 +14,7 @@ import triton
 import triton.language as tl
 
 from triton_kernels_benchmark import gemm_benchmark
+import triton_kernels_benchmark as benchmark_suite
 
 
 @triton.autotune(
@@ -122,6 +123,11 @@ def matmul_kernel_with_block_pointers_batched(
     tl.store(c_block_ptr, c, boundary_check=(0, 1))
 
 
+@benchmark_suite.register(
+    key='gemm-block-ptr',
+    categories={'experimental', 'gemm'},
+    description='GEMM kernel benchmark - with legacy block pointer',
+)
 def get_benchmark(
     providers_filter: Optional[List[str]] = None,
     transpose_a=False,

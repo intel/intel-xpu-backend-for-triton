@@ -14,6 +14,7 @@ import triton
 import triton.language as tl
 
 from triton_kernels_benchmark import gemm_benchmark
+import triton_kernels_benchmark as benchmark_suite
 
 
 @triton.autotune(
@@ -124,6 +125,11 @@ def matmul_kernel_batched(
     tl.store(c_ptrs, c, mask=c_mask)
 
 
+@benchmark_suite.register(
+    key='gemm-tensor-of-ptr',
+    categories={'experimental', 'gemm'},
+    description='GEMM kernel benchmark - with tensor of pointer',
+)
 def get_benchmark(
     providers_filter: Optional[List[str]] = None,
     transpose_a=False,

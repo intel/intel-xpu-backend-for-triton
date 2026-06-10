@@ -101,6 +101,11 @@ def softmax(x, y):
     return y
 
 
+@benchmark_suite.register(
+    key="softmax",
+    categories={"core", "softmax"},
+    description="Triton Softmax kernel benchmark",
+)
 def get_benchmark(providers_filter: Optional[list[str]] = None):
     """
     Returns a Mark object containing a Benchmark object constructed at runtime and parameterized by the provided option values.

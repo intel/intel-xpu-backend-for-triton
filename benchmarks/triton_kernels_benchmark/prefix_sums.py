@@ -17,6 +17,12 @@ def scan_kernel(x_ptr, BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr,  
     tl.store(x_ptr + range_m[:, None] * BLOCK_SIZE_N + range_n[None, :], x)
 
 
+@benchmark_suite.register(
+    key="prefix-sums",
+    categories={"optional", "prefix_sums"},
+    description="Prefix Sums kernel benchmark",
+    report_name="prefix_sums",
+)
 def get_benchmark(providers_filter: Optional[List[str]] = None):
     """
     Returns a Mark object containing a Benchmark object constructed at runtime and parameterized by the provided option values.

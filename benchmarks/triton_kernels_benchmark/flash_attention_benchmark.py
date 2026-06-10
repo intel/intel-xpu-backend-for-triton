@@ -536,6 +536,22 @@ class _attention(torch.autograd.Function):
 attention = _attention.apply
 
 
+@benchmark_suite.register(
+    key='flash_attention',
+    run_opts={'fa_kernel_mode': 'fwd'},
+    categories={'core', 'flash_attention'},
+    description='FlashAttention forward kernel benchmark',
+    report_name='flash-attn',
+    report_file_prefix='attn',
+)
+@benchmark_suite.register(
+    key='flash_attention_bwd',
+    run_opts={'fa_kernel_mode': 'bwd'},
+    categories={'optional', 'flash_attention'},
+    description='FlashAttention backward kernel benchmark',
+    report_name='flash-attn-bwd',
+    report_file_prefix='attn-bwd',
+)
 def get_benchmark(
     providers_filter: Optional[list[str]] = None,
     fa_kernel_mode='fwd',
