@@ -35,7 +35,7 @@ index d956e29e3..96a701128 100644
 -  COMPILE_FLAGS ${SPINLOOP_COMPILE_FLAGS}
 -  USE_SABI 3.11
 -  WITH_SOABI)
-
+ 
  #
  # Forward the non-CUDA device extensions to external CMake scripts.
 diff --git a/setup.py b/setup.py
@@ -45,11 +45,11 @@ index b674d55a1..545b638dc 100644
 @@ -1043,7 +1043,8 @@ if _is_cuda() or _is_hip():
      # copying the relevant .py files from the source repository.
      ext_modules.append(CMakeExtension(name="vllm.triton_kernels", optional=True))
-
+ 
 -ext_modules.append(CMakeExtension(name="vllm.spinloop"))
 +if sys.version_info >= (3, 11):
 +    ext_modules.append(CMakeExtension(name="vllm.spinloop"))
-
+ 
  if _is_hip():
      ext_modules.append(CMakeExtension(name="vllm._rocm_C"))
 diff --git a/tests/conftest.py b/tests/conftest.py
@@ -57,7 +57,7 @@ index ebf9608b0..16fa7a7f6 100644
 --- a/tests/conftest.py
 +++ b/tests/conftest.py
 @@ -293,6 +293,11 @@ def workspace_init():
-
+ 
      if torch.cuda.is_available():
          device = torch.device("cuda:0")
 +    elif torch.xpu.is_available():
@@ -73,7 +73,7 @@ index 8989a1c3a..16f0620d1 100644
 --- a/tests/utils.py
 +++ b/tests/utils.py
 @@ -1731,8 +1731,13 @@ def spawn_new_process_for_each_test(f: Callable[_P, None]) -> Callable[_P, None]:
-
+ 
              repo_root = str(VLLM_PATH.resolve())
              env = os.environ.copy()
 -            env["PYTHONPATH"] = repo_root + os.pathsep + env.get("PYTHONPATH", "")
@@ -84,7 +84,7 @@ index 8989a1c3a..16f0620d1 100644
 +                if path
 +            )
              env[_SPAWN_CHILD_ENV] = "1"
-
+ 
              result = subprocess.run(
                  [sys.executable, "-c", child_script],
 diff --git a/tests/kernels/mamba/utils.py b/tests/kernels/mamba/utils.py
@@ -134,7 +134,7 @@ index 4899de44a..aee58d32c 100644
 @@ -317,7 +317,13 @@ def moe_quantize_weights(
              w[idx], None, quant_dtype, per_token_quant, block_shape
          )
-
+ 
 -    w = torch.stack(w_l)
 +    new_shape = torch.Size((len(w_l), ) + w_l[0].shape)
 +    new_w = torch.zeros(new_shape,
@@ -145,7 +145,7 @@ index 4899de44a..aee58d32c 100644
 +    w = new_w
      w_s = torch.stack(w_s_l)
      w_gs = torch.stack(w_gs_l) if e > 0 and w_gs_l[0] is not None else None
-
+ 
 diff --git a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
 index 1f5724ac3..8bbbab3e5 100644
 --- a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
@@ -208,10 +208,10 @@ index 56f1d1c1d..0ffe85054 100644
 +        KV_QUANT_MODE <= 3
 +    )
      USE_FP8_Q_DESCALE: tl.constexpr = KV_QUANT_MODE == 1 and Q_IS_FP8
-
+ 
      if USE_TD:
 @@ -933,9 +943,9 @@ def unified_attention(
-
+ 
      # The kernel signature is the same for 2D and 3D — only the launch
      # grid + a handful of constexpr toggles differ.  Per-token-head scale
 -    # caches and their strides are required arguments; non-per-token-head
@@ -247,7 +247,7 @@ index 56f1d1c1d..0ffe85054 100644
 +    segm_max_ptr = softmax_segm_max if use_3d else None
 +    segm_expsum_ptr = softmax_segm_expsum if use_3d else None
      num_segments = num_par_softmax_segments if use_3d else 1
-
+ 
      grid: tuple[Any, ...]
 diff --git a/tests/kernels/mamba/test_mamba_mixer2.py b/tests/kernels/mamba/test_mamba_mixer2.py
 index 973e788..e474275 100644
