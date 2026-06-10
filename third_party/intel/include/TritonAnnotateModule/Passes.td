@@ -63,7 +63,9 @@ def TritonAnnotateModule: Pass<"triton-annotate-module", "mlir::ModuleOp"> {
     Option<"supportRoundedDivideSqrt", "support-rounded-divide-sqrt", "bool", /*default*/"false",
            "whether rounded divide and sqrt operations are available">,
     Option<"useClRoundedDivideSqrt", "use-cl-rounded-divide-sqrt", "bool", /*default*/"false",
-           "whether to emit plain LLVM div/sqrt ops relying on the -cl-fp32-correctly-rounded-divide-sqrt build flag">
+           "whether to emit plain LLVM div/sqrt ops relying on the -cl-fp32-correctly-rounded-divide-sqrt build flag">,
+    Option<"isFastMath", "is-fast-math", "bool", /*default*/"false",
+           "whether fast-math approximations are allowed (set by TRITON_INTEL_FAST_MATH=1)">
   ];
 }
 

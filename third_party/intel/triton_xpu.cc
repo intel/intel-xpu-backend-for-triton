@@ -144,7 +144,9 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      &gpu::intel::TritonAnnotateModuleOptions::threadsPerWarp)
       .def_readwrite("target_arch",
                      &gpu::intel::TritonAnnotateModuleOptions::targetArch)
-      .def_readwrite("is_lts", &gpu::intel::TritonAnnotateModuleOptions::isLTS);
+      .def_readwrite("is_lts", &gpu::intel::TritonAnnotateModuleOptions::isLTS)
+      .def_readwrite("is_fast_math",
+                     &gpu::intel::TritonAnnotateModuleOptions::isFastMath);
   ADD_PASS_OPTION_WRAPPER_1("add_triton_annotate_module",
                             gpu::intel::createTritonAnnotateModule,
                             gpu::intel::TritonAnnotateModuleOptions);

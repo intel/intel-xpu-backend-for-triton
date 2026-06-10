@@ -57,6 +57,16 @@ extern template BlockIOTileSizeInfo
 getBlockIOTileSize<false>(const LinearLayout &, unsigned, unsigned, AxisInfo *,
                           bool);
 
+/// Return the tensor dimension along which consecutive lanes (the fastest-
+/// varying lane bit) advance in `ll` -- the dimension the hardware vectorizes
+/// for 2D block I/O. This is the dimension getBlockIOTileSize uses to decide
+/// block-I/O vs. scatter (block I/O requires it to equal the memory-contiguous
+/// dimension). Returns std::nullopt when the first lane basis vector is not a
+/// clean single-dimension stride, in which case the layout is not a 2D block
+/// I/O candidate.
+std::optional<unsigned> getLaneFastChangeDim(const LinearLayout &ll,
+                                             MLIRContext *ctx);
+
 /// Get the DPAS operand index from a tensor type's encoding.
 /// The encoding must be DPAS or DotOperand-with-DPAS parent.
 DpasEncodingAttr::OpIdx getOpIdx(RankedTensorType tensorTy);
