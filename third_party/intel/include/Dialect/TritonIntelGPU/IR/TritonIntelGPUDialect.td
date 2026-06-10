@@ -32,6 +32,12 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.support_16bit_atomics";
     }
 
+    /// Get the name of the attribute used to indicate whether the sigmoid
+    /// operation is available.
+    static constexpr llvm::StringRef getSupportSigmoidAttrName() {
+      return "ttig.support_sigmoid";
+    }
+
     /// Get the name of the attribute used to indicate whether subgroup 2D block
     /// operations (e.g., 2D block read/write) are available.
     static constexpr llvm::StringRef getSupport2DBlockIOAttrName() {
@@ -121,6 +127,12 @@ def TritonIntelGPU_Dialect : Dialect {
     /// per-thread elementwise load/store vectorization is supported.
     static constexpr llvm::StringRef getSupport256bLoadStoreAttrName() {
       return "ttig.support_256b_load_store";
+    }
+
+    /// Get the name of the attribute used to indicate whether fast-math
+    /// approximations are allowed (set when TRITON_INTEL_FAST_MATH=1).
+    static constexpr llvm::StringRef getFastMathAttrName() {
+      return "ttig.fast_math";
     }
 
     /// Get the name of the attribute used to indicate whether rounded divide

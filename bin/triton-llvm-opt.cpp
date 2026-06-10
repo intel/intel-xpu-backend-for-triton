@@ -48,6 +48,12 @@ static cl::opt<bool> GuardMaskedDivRem(
     llvm::cl::desc("run pass to guard masked div/rem against zero divisors"),
     cl::init(false));
 
+static cl::opt<bool> ScalarizePtrVectors(
+    "scalarize-ptr-vectors",
+    llvm::cl::desc("rewrite dynamic indexing of `<N x ptr>` vectors into "
+                   "scalar select cascades"),
+    cl::init(false));
+
 static cl::opt<bool> ExpandSaddOverflow(
     "expand-sadd-overflow",
     llvm::cl::desc("expand llvm.sadd.with.overflow into plain arithmetic"),
@@ -90,6 +96,8 @@ static std::function<Error(Module *)> makeOptimizingPipeline() {
       fpm.addPass(BreakStructPhiNodesPass());
     if (GuardMaskedDivRem)
       fpm.addPass(GuardMaskedDivRemPass());
+    if (ScalarizePtrVectors)
+      fpm.addPass(ScalarizePtrVectorsPass());
     mpm.addPass(createModuleToFunctionPassAdaptor(std::move(fpm)));
     mpm.run(*m, mam);
     return Error::success();

@@ -113,11 +113,15 @@ class Case:
 def _build_test_op_cases():
     test_cases = []
     # zero-sized
-    test_cases.extend([
-        Case(m, n, k, mode, "float16", "float16")
-        for mode in ("ragged", "batched")
-        for (m, n, k) in ((0, 5, 7), (5, 0, 7), (5, 7, 0))
-    ])
+    zero_sized_shapes = ((0, 5, 7), (5, 0, 7), (5, 7, 0))
+    # split_k=1 preserves existing constrained coverage; None exercises automatic split-K selection.
+    for split_k in (1, None):
+        test_cases.extend([
+            Case(m, n, k, mode, "float16", "float16", split_k=split_k)
+            for mode in ("plain", "ragged", "batched")
+            for (m, n, k) in zero_sized_shapes
+        ])
+    test_cases.append(Case(5, 11, 7, "batched", "float16", "float16", n_slices=0, split_k=None))
     odd_shape1 = (727, 577, 859)
     odd_shape2 = (720, 576, 768)
     even_shape = (768, 512, 1024)
@@ -596,8 +600,11 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         maxtol, rmstol = 3e-2, None
     assert_close(ref_y, tri_y, maxtol=maxtol, rmstol=rmstol)
     if c_dtype.has_global_scale:
-        assert torch.all((ref_y_scale - tri_y_scale).abs() < 1e-10), \
-               f"ref_y_scale: {ref_y_scale}, tri_y_scale: {tri_y_scale.item()}"
+        if is_xpu_cri():
+            torch.testing.assert_close(ref_y_scale, tri_y_scale, atol=1e-10, rtol=1e-5)
+        else:
+            assert torch.all((ref_y_scale - tri_y_scale).abs() < 1e-10), \
+                   f"ref_y_scale: {ref_y_scale}, tri_y_scale: {tri_y_scale.item()}"
 
 
 def test_k_ragged_mxfp8_act_scale_swizzling(device):

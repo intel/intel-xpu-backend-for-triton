@@ -195,6 +195,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # Same Xe3P+ gate as 256B prefetch pending separate driver prop.
         dev_prop['has_256b_load_store'] = tgt_prop.get('has_256b_prefetch', False)
         dev_prop['has_rounded_divide_sqrt'] = tgt_prop.get('has_rounded_divide_sqrt', not is_lts)
+        dev_prop['has_sigmoid'] = tgt_prop.get('has_sigmoid', False)
 
         if '__intel_already_queried_extensions__' not in tgt_prop:
             # All GPUs with the same device_id have the same extensions, so we just
@@ -267,6 +268,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # Annotate module with information required by subsequent transformations.
         module_opts.min_sg_size = min(properties["sub_group_sizes"])
         module_opts.support_16bit_atomics = properties["has_16bit_atomics"]
+        module_opts.support_sigmoid = properties["has_sigmoid"]
         module_opts.support_2d_block_io = properties["has_2d_block_io"]
         module_opts.support_bfloat16_arithmetic = properties["has_bfloat16_arithmetic"]
         module_opts.support_bfloat16_conversion = properties["has_bfloat16_conversion"]
@@ -323,6 +325,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         cls.annotate_module(module_opts, properties, opt)
         module_opts.is_lts = cls.is_lts(metadata["target"].arch.get("driver_version"))
         module_opts.use_cl_rounded_divide_sqrt = (module_opts.is_lts and intel.has_precise_divide_sqrt(mod))
+        module_opts.is_fast_math = knobs.intel.fast_math
         intel.passes.ttgpuir.add_triton_annotate_module(pm, module_opts)
         pm.run(mod, 'annotate_module')
 
@@ -344,6 +347,9 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_optimize_dot_operands(pm)
         intel.passes.ttgpuir.add_hoist_layout_conversions(pm, opt.grf_mode)
+        if os.environ.get("TRITON_INTEL_ANNOTATE_LATENCIES", "0") == "1":
+            passes.ttgpuir.add_assign_latencies(pm, opt.num_stages)
+            passes.ttgpuir.add_schedule_loops(pm)
         intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier)
 
         if (opt.reduce_variable_liveness):
