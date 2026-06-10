@@ -51,8 +51,9 @@ jobs:
           echo "nvidia=$(sha256sum $nvidia_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
           echo "json=$(cat $json_file)" >> $GITHUB_OUTPUT
         shell: bash
-      - name: Cache build dependencies
-        uses: actions/cache@v5
+      - name: Restore build dependencies cache
+        id: restore-build-deps-cache
+        uses: actions/cache/restore@v5
         with:
           # Note that we cannot use environment variables here given there is
           # no shell to interpret them in the paths.
@@ -114,3 +115,12 @@ jobs:
 
           mkdir -p ~/.ccache
           du -h -d 1 ~/.ccache
+      - name: Save build dependencies cache
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ~/.triton/llvm
+            ~/.triton/nvidia
+            ~/.triton/json
+          key: ${{ steps.restore-build-deps-cache.outputs.cache-primary-key }}

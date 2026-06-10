@@ -254,7 +254,13 @@ struct LoadStoreConversionBase {
       std::optional<PaddingOption> padding = std::nullopt) const {
 
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    size_t rank = tensorType.getRank();
+    assert(offsets.size() == shapes.size() &&
+           offsets.size() == strides.size() &&
+           "invalid length of offsets, shapes and strides");
+    size_t tensorRank = tensorType.getRank();
+    size_t pointerRank = offsets.size();
+    assert(pointerRank >= tensorRank &&
+           "descriptor rank must be >= result/source tensor rank");
     const unsigned numElems = getTotalElemsPerThread(tensorType);
 
     // Get the LLVM values for indices in block
@@ -280,9 +286,13 @@ struct LoadStoreConversionBase {
     SmallVector<Value> maskElems;
     for (unsigned i = 0; i < numElems; ++i) {
       SmallVector<Value> index = indices[i];
-      SmallVector<Value> indicesInTensor(rank);
-      for (unsigned j = 0; j < rank; ++j)
-        indicesInTensor[j] = b.add(index[j], offsets[j]);
+      SmallVector<Value> indicesInTensor(pointerRank);
+      for (unsigned j = 0; j < pointerRank - tensorRank; ++j) {
+        indicesInTensor[j] = offsets[j];
+      }
+      for (unsigned j = 0; j < tensorRank; ++j)
+        indicesInTensor[j + (pointerRank - tensorRank)] =
+            b.add(index[j], offsets[j + (pointerRank - tensorRank)]);
 
       // Get the LLVM values for pointers
       Value offset = linearize(
@@ -359,25 +369,19 @@ struct LoadStoreConversionBase {
 
     DescriptorFields desc =
         unpackDescriptor(descriptorStruct, descriptorRank, loc, rewriter);
-    const size_t rank = tensorType.getRank();
-    assert(descriptorRank >= rank &&
-           "descriptor rank must be >= result/source tensor rank");
-    const size_t rankDelta = descriptorRank - rank;
 
     SmallVector<Value> offsets;
-    offsets.reserve(rank);
-    if (indices.size() == descriptorRank) {
-      for (size_t i = 0; i < rank; ++i)
-        offsets.push_back(indices[i + rankDelta]);
-    } else {
-      assert(indices.size() == rank && "unexpected descriptor indices rank");
-      offsets.append(indices.begin(), indices.end());
-    }
+    offsets.reserve(descriptorRank);
+    assert(indices.size() == descriptorRank &&
+           "unexpected descriptor indices rank");
+    for (size_t i = 0; i < descriptorRank; ++i)
+      offsets.push_back(indices[i]);
 
-    SmallVector<Value> mappedShapes(rank), mappedStrides(rank);
-    for (size_t i = 0; i < rank; ++i) {
-      mappedShapes[i] = desc.shapes[i + rankDelta];
-      mappedStrides[i] = desc.strides[i + rankDelta];
+    SmallVector<Value> mappedShapes(descriptorRank),
+        mappedStrides(descriptorRank);
+    for (size_t i = 0; i < descriptorRank; ++i) {
+      mappedShapes[i] = desc.shapes[i];
+      mappedStrides[i] = desc.strides[i];
     }
 
     return computeGatherScatterOperands(loc, desc.base, offsets, mappedShapes,
@@ -2119,7 +2123,6 @@ struct DescriptorLoadOpConversion
 
     // Get result type information
     auto resultType = cast<RankedTensorType>(op.getType());
-    size_t resultRank = resultType.getRank();
     Type valueElemTy = typeConverter->convertType(resultType.getElementType());
     unsigned numElems = getTotalElemsPerThread(resultType);
 
@@ -2144,8 +2147,8 @@ struct DescriptorLoadOpConversion
 
     // Boundary check all dimensions — tensor descriptors always encode shape
     // bounds and don't have a user-facing boundaryCheck attribute.
-    SmallVector<int32_t> allDims(resultRank);
-    for (size_t i = 0; i < resultRank; ++i)
+    SmallVector<int32_t> allDims(descRank);
+    for (size_t i = 0; i < descRank; ++i)
       allDims[i] = static_cast<int32_t>(i);
 
     // Reuse the shared gather/scatter operand computation.
@@ -2173,13 +2176,12 @@ struct DescriptorLoadOpConversion
       std::swap(permShapes[descRank - 2], permShapes[descRank - 1]);
       std::swap(permStrides[descRank - 2], permStrides[descRank - 1]);
       std::swap(permOffsets[descRank - 2], permOffsets[descRank - 1]);
-      SmallVector<Value> mappedShapes(resultRank), mappedStrides(resultRank),
-          mappedOffsets(resultRank);
-      const size_t rankDelta = descRank - resultRank;
-      for (size_t i = 0; i < resultRank; ++i) {
-        mappedShapes[i] = permShapes[i + rankDelta];
-        mappedStrides[i] = permStrides[i + rankDelta];
-        mappedOffsets[i] = permOffsets[i + rankDelta];
+      SmallVector<Value> mappedShapes(descRank), mappedStrides(descRank),
+          mappedOffsets(descRank);
+      for (size_t i = 0; i < descRank; ++i) {
+        mappedShapes[i] = permShapes[i];
+        mappedStrides[i] = permStrides[i];
+        mappedOffsets[i] = permOffsets[i];
       }
       std::tie(ptrElems, maskElems, otherElems) = computeGatherScatterOperands(
           loc, desc.base, mappedOffsets, mappedShapes, mappedStrides,
@@ -2353,8 +2355,8 @@ struct DescriptorStoreOpConversion
 
     // Boundary check all dimensions — tensor descriptors always encode shape
     // bounds and don't have a user-facing boundaryCheck attribute.
-    SmallVector<int32_t> allDims(valueTy.getRank());
-    for (size_t i = 0; i < valueTy.getRank(); ++i)
+    SmallVector<int32_t> allDims(descRank);
+    for (size_t i = 0; i < descRank; ++i)
       allDims[i] = static_cast<int32_t>(i);
 
     // Reuse the shared gather/scatter operand computation.
