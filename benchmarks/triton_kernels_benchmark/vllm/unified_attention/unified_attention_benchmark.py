@@ -28,11 +28,8 @@ except ImportError as e:
     raise ImportError(
         "Could not import unified_attention from vLLM. Please ensure vLLM is installed and accessible.") from e
 from vllm.platforms import current_platform
+from vllm_xpu_kernels.flash_attn_interface import flash_attn_varlen_func as sycl_tla_attention
 
-try:
-    from vllm_xpu_kernels.flash_attn_interface import flash_attn_varlen_func as sycl_tla_attention
-except Exception:
-    sycl_tla_attention = None
 
 float8_info = torch.finfo(current_platform.fp8_dtype())
 
