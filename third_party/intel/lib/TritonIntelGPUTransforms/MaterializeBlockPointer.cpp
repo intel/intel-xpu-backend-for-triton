@@ -555,13 +555,6 @@ private:
       return std::nullopt;
     }
 
-    // Reject if non-DPAS 2D block IO is explicitly disabled at runtime.
-    if (isBlockIOForAllLayoutsExplicitlyDisabled()) {
-      LDBG("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=0 disables non-DPAS 2D "
-           "block IO; skip 1D reshape");
-      return std::nullopt;
-    }
-
     return StridedPatternInfo{W, H, S, numWarps, elemBits, elemBytes, ptr};
   }
 
