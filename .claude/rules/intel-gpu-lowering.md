@@ -82,14 +82,6 @@ For SPIR-V stores, the value is first stored to a local alloca, then a pointer t
 
 Prefetch always uses SPIR-V (never falls back to GenISA) — `isSPVBuiltinAvailableImpl` returns `true` unconditionally for prefetch.
 
-### Unsupported SPIR-V 2D Block Load Signatures
-The following 2D block load configurations fall back to GenISA even on non-LTS drivers:
-- 8-bit, 8×8, v_blocks=1, no VNNI (`intel_sub_group_2d_block_read_8b_8r8x1c`)
-- 8-bit, 8×8, v_blocks=2, no VNNI (`intel_sub_group_2d_block_read_8b_8r8x2c`)
-- 8-bit, 8×8, v_blocks=4, no VNNI (`intel_sub_group_2d_block_read_8b_8r8x4c`)
-- 8-bit, 32×8, v_blocks=4, no VNNI (`intel_sub_group_2d_block_read_8b_32r8x4c`)
-- 32-bit, 32×4, v_blocks=1, transpose (`intel_sub_group_2d_block_read_transpose_32b_32r4x1c`)
-
 ### 64-Byte Alignment Compensation
 Hardware requires 64-byte aligned base addresses. The lowering compensates non-aligned addresses:
 ```
