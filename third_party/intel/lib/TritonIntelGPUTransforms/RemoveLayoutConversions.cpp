@@ -355,15 +355,13 @@ bool isLayoutAnchor(Operation *op) {
   //
   // The descriptor-store fast path emits a 2D block write iff consecutive lanes
   // of the store operand's layout advance along the memory-contiguous tensor
-  // dimension (exactly the gate in getBlockIOTileSize<false>:
-  // transpose := laneFastDim != memContiguousDim). Coalesce inserts this
-  // convert to give the store its coalesced (row-major) layout, so dst is
-  // block-write-eligible by construction. Forward propagation from an
-  // (expensive) load would otherwise strip the convert and replace the store
-  // operand with the chain's root layout; if root distributes lanes along a
-  // different dimension than dst, that fold turns the block write into a
-  // scatter (issue #7093). Unlike a store (no result, cannot be anchored), the
-  // convert has a result and can.
+  // dimension. Coalesce inserts this convert to give the store its coalesced
+  // (row-major) layout, so dst is block-write-eligible by construction. Forward
+  // propagation from an (expensive) load would otherwise strip the convert and
+  // replace the store operand with the chain's root layout; if root distributes
+  // lanes along a different dimension than dst, that fold turns the block write
+  // into a scatter (issue #7093). Unlike a store (no result, cannot be
+  // anchored), the convert has a result and can.
   //
   // The lane-fast-dim is compared across the whole convert chain (root source
   // -> store-feeding convert), not on a single convert: the store-feeding
