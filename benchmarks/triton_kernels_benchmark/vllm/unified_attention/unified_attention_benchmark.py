@@ -44,11 +44,13 @@ XEFORGE_UNIFIED_ATTENTIONS = {
 
 
 def _call_xeforge_unified_attention(uattn_fn, q, k, v, out, cu_seqlens_q, seqused_k, max_seqlen_q, softmax_scale,
-                                    window_size, block_table, softcap, k_descale, v_descale):
-    # xeforge kernels use kv_quant_mode=1 (per-tensor) when q is fp8; descales are
-    # passed through as-is. The vLLM-only `causal`/`max_seqlen_k`/`q_descale`/
-    # `use_td` parameters have no xeforge equivalent and are dropped.
-    kv_quant_mode = 1 if q.dtype == current_platform.fp8_dtype() else 0
+                                    window_size, block_table, softcap):
+    # Match the vLLM call this benchmark makes: kv_quant_mode=0 even when q/k/v
+    # are fp8. vLLM's fp8 path here is also kv_quant_mode=0 (KV_QUANT_MODE=0
+    # +Q_IS_FP8 means the descales are never read by the kernel), so xeforge
+    # runs the same path. The vLLM-only `causal`/`max_seqlen_k`/`q_descale`/
+    # `k_descale`/`v_descale`/`use_td` parameters have no xeforge equivalent
+    # and are dropped.
     uattn_fn(
         q=q,
         k=k,
@@ -61,9 +63,7 @@ def _call_xeforge_unified_attention(uattn_fn, q, k, v, out, cu_seqlens_q, sequse
         softmax_scale=softmax_scale,
         window_size=window_size,
         softcap=softcap,
-        k_descale=k_descale if k_descale is not None else 1.0,
-        v_descale=v_descale if v_descale is not None else 1.0,
-        kv_quant_mode=kv_quant_mode,
+        kv_quant_mode=0,
     )
 
 
@@ -415,8 +415,6 @@ def get_unified_attention_benchmark(
                         window_size=window_size,
                         block_table=block_tables,
                         softcap=soft_cap if soft_cap is not None else 0.0,
-                        k_descale=k_descale,
-                        v_descale=v_descale,
                     )
                 else:
                     unified_attention(
