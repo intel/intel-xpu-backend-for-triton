@@ -30,7 +30,6 @@ except ImportError as e:
 from vllm.platforms import current_platform
 from vllm_xpu_kernels.flash_attn_interface import flash_attn_varlen_func as sycl_tla_attention
 
-
 float8_info = torch.finfo(current_platform.fp8_dtype())
 
 TOTAL_MEMORY_BYTES = benchmark_suite.get_total_gpu_memory_bytes()
