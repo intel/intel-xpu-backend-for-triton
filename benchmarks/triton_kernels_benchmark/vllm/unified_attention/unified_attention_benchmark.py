@@ -11,6 +11,7 @@ Unified Attention benchmark
 This benchmark is based on the test_triton_unified_attention.py tests
 """
 import os
+import sys
 from itertools import product
 from typing import Optional
 
@@ -28,6 +29,42 @@ except ImportError as e:
     raise ImportError(
         "Could not import unified_attention from vLLM. Please ensure vLLM is installed and accessible.") from e
 from vllm.platforms import current_platform
+
+# Local xeforge variants live as standalone modules under ./xeforge/
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'xeforge'))
+from t102_gepa_v1_triton import unified_attention as unified_attention_t102  # noqa: E402
+from t121_seeds_gepa_v2_triton import unified_attention as unified_attention_t121  # noqa: E402
+from t145_epsilon_gepa_v2_triton import unified_attention as unified_attention_t145  # noqa: E402
+
+XEFORGE_UNIFIED_ATTENTIONS = {
+    'triton-t102': unified_attention_t102,
+    'triton-t121': unified_attention_t121,
+    'triton-t145': unified_attention_t145,
+}
+
+
+def _call_xeforge_unified_attention(uattn_fn, q, k, v, out, cu_seqlens_q, seqused_k, max_seqlen_q, softmax_scale,
+                                    window_size, block_table, softcap, k_descale, v_descale):
+    # xeforge kernels use kv_quant_mode=1 (per-tensor) when q is fp8; descales are
+    # passed through as-is. The vLLM-only `causal`/`max_seqlen_k`/`q_descale`/
+    # `use_td` parameters have no xeforge equivalent and are dropped.
+    kv_quant_mode = 1 if q.dtype == current_platform.fp8_dtype() else 0
+    uattn_fn(
+        q=q,
+        k=k,
+        v=v,
+        out=out,
+        cu_seqlens_q=cu_seqlens_q,
+        max_seqlen_q=max_seqlen_q,
+        seqused_k=seqused_k,
+        block_table=block_table,
+        softmax_scale=softmax_scale,
+        window_size=window_size,
+        softcap=softcap,
+        k_descale=k_descale if k_descale is not None else 1.0,
+        v_descale=v_descale if v_descale is not None else 1.0,
+        kv_quant_mode=kv_quant_mode,
+    )
 
 float8_info = torch.finfo(current_platform.fp8_dtype())
 
@@ -259,6 +296,8 @@ def get_unified_attention_benchmark(
         'triton' + ('-td' if is_td_patched else ''): 'triton' + ('-td' if is_td_patched else ''),
         'pytorch': 'pytorch',
     }
+    for xeforge_name in XEFORGE_UNIFIED_ATTENTIONS:
+        supported_providers[xeforge_name] = xeforge_name
     if os.getenv("TRITON_INTERPRET", "0") == "1" and is_td_patched:
         # Skip triton providers if interpreter is used because if fails
         del supported_providers['triton']
@@ -276,7 +315,7 @@ def get_unified_attention_benchmark(
             line_arg='provider',
             line_vals=list(providers.keys()),
             line_names=list(providers.values()),
-            styles=[('green', '-'), ('blue', '--'), ('orange', ':')],
+            styles=[('green', '-'), ('blue', '--'), ('orange', ':'), ('red', '-.'), ('purple', '-'), ('brown', '--')],
             ylabel=['GB/s', 'TFlops'],
             plot_name='unified-attention-performance' + ('-td' if is_td_patched else ''),
             args={},
@@ -358,26 +397,46 @@ def get_unified_attention_benchmark(
                 k_descale = torch.rand(scale_shape, dtype=torch.float32)
                 v_descale = torch.rand(scale_shape, dtype=torch.float32)
 
+            xeforge_fn = XEFORGE_UNIFIED_ATTENTIONS.get(provider)
+
             def triton_fn():
-                unified_attention(
-                    q=maybe_quantized_query,
-                    k=maybe_quantized_key_cache,
-                    v=maybe_quantized_value_cache,
-                    out=output,
-                    cu_seqlens_q=cu_query_lens,
-                    seqused_k=kv_lens_tensor,
-                    max_seqlen_q=max_query_len,
-                    max_seqlen_k=max_kv_len,
-                    softmax_scale=scale,
-                    causal=True,
-                    window_size=window_size,
-                    block_table=block_tables,
-                    softcap=soft_cap if soft_cap is not None else 0,
-                    q_descale=q_descale,
-                    k_descale=k_descale,
-                    v_descale=v_descale,
-                    use_td=is_td_patched,
-                )
+                if xeforge_fn is not None:
+                    _call_xeforge_unified_attention(
+                        xeforge_fn,
+                        q=maybe_quantized_query,
+                        k=maybe_quantized_key_cache,
+                        v=maybe_quantized_value_cache,
+                        out=output,
+                        cu_seqlens_q=cu_query_lens,
+                        seqused_k=kv_lens_tensor,
+                        max_seqlen_q=max_query_len,
+                        softmax_scale=scale,
+                        window_size=window_size,
+                        block_table=block_tables,
+                        softcap=soft_cap if soft_cap is not None else 0.0,
+                        k_descale=k_descale,
+                        v_descale=v_descale,
+                    )
+                else:
+                    unified_attention(
+                        q=maybe_quantized_query,
+                        k=maybe_quantized_key_cache,
+                        v=maybe_quantized_value_cache,
+                        out=output,
+                        cu_seqlens_q=cu_query_lens,
+                        seqused_k=kv_lens_tensor,
+                        max_seqlen_q=max_query_len,
+                        max_seqlen_k=max_kv_len,
+                        softmax_scale=scale,
+                        causal=True,
+                        window_size=window_size,
+                        block_table=block_tables,
+                        softcap=soft_cap if soft_cap is not None else 0,
+                        q_descale=q_descale,
+                        k_descale=k_descale,
+                        v_descale=v_descale,
+                        use_td=is_td_patched,
+                    )
                 return output
 
             atol, rtol = 2.5e-2, 1e-2
