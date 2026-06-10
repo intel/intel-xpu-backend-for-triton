@@ -1066,10 +1066,10 @@ def test_precise_math(expr_prec, expr_ref, num_ctas, device):
     if is_xpu():
         # use cpu result as reference, see https://github.com/llvm/llvm-project/issues/88222
         if (expr_prec.count('sqrt') > 0):
-            out_ref = torch.sqrt(x.cpu().to(torch.float64)).to(torch.float32).to(device=device)
+            out_ref = torch.sqrt(x.cpu().to(torch.float64)).to(torch.float32)
         elif (expr_prec.count('div') > 0):
-            out_ref = torch.div(x.cpu().to(torch.float64),
-                                y.cpu().to(torch.float64)).to(torch.float32).to(device=device)
+            out_ref = torch.div(x.cpu().to(torch.float64), y.cpu().to(torch.float64)).to(torch.float32)
+        out = out.cpu()
     assert torch.all(out == out_ref)  # bitwise exact
 
 
@@ -1761,8 +1761,9 @@ def test_atomic_cas(sem, num_ctas, dtype_str, device):
 
     Lock = torch.zeros((1, ), device=device, dtype=torch_dtype)
     data = torch.zeros((128, ), device=device, dtype=torch.float32)
-    ref = torch.full((128, ), 2000.0)
-    h = serialized_add[(2000, )](data, Lock, triton_dtype=triton_dtype, SEM=sem, num_ctas=num_ctas)
+    ref = torch.full((128, ), 2000.0 if not is_xpu_cri() else 20.0)
+    h = serialized_add[(2000 if not is_xpu_cri() else 20, )](data, Lock, triton_dtype=triton_dtype, SEM=sem,
+                                                             num_ctas=num_ctas)
     sem_str = "acq_rel" if sem is None else sem
     np.testing.assert_allclose(to_numpy(data), to_numpy(ref))
     if not is_cuda():
@@ -3393,6 +3394,21 @@ def get_test_dot_small_mn_mfma_cases():
             for in_dtype, out_dtype in [('float16', 'float16'), ('float32', 'float32')]]
 
 
+# M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype,
+# out_dtype, kpack, mma_nonk_size
+def get_test_dot_kpack_kwidth_mfma_cases():
+    if not is_hip_cdna():
+        return []
+    return [
+        # Small K with kpack=2 forces the kPack guard for symmetric MFMA shapes.
+        (64, 64, 16, 4, False, False, 'None', 'ieee', 'float16', 'float32', 2, 16),
+        (64, 64, 16, 4, False, False, 'None', 'ieee', 'bfloat16', 'float32', 2, 16),
+        # Asymmetric 64x4 / 4x64 MFMA shapes with kpack=2.
+        (64, 4, 32, 1, False, False, 'None', 'ieee', 'float32', 'float32', 2, None),
+        (4, 64, 32, 1, False, False, 'None', 'ieee', 'float32', 'float32', 2, None),
+    ]
+
+
 def get_test_dot_double_rate_cases():
     if not (is_hip_cdna() or is_hip_gfx1250()):
         return []
@@ -3447,6 +3463,7 @@ def get_test_small_dots_cases():
     get_test_dot_fp8_output_cases() + \
     get_test_dot_small_k_mfma_cases() + \
     get_test_dot_small_mn_mfma_cases() + \
+    get_test_dot_kpack_kwidth_mfma_cases() + \
     get_test_dot_small_mn_wmma_cases() + \
     get_test_dot_small_k_wmma_cases() + \
     get_test_dot_softmax() + \

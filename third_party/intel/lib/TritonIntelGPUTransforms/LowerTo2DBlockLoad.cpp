@@ -263,7 +263,8 @@ private:
     };
 
     // If the pitch stride is a known constant AND the descriptor/result ranks
-    // match, validate HW constraints (>= 64 bytes, 16-byte aligned).
+    // match, validate HW constraints (>= 64 bytes, 16-byte aligned, encoded
+    // in 24 bits per the `triton_gen.2Dblockload` verifier).
     // For rank-reducing loads, the stride interpretation may differ from the
     // 2D surface pitch, so skip static validation (runtime will handle it).
     if (rank == descRank) {
@@ -271,7 +272,8 @@ private:
           tt::intel::getFoldedConstantValue(strides[descRank - 2]);
       if (pitchStride) {
         int64_t pitchBytes = *pitchStride * elemSizeInBits / 8;
-        if (pitchBytes < 64 || (pitchBytes % 16) != 0) {
+        if (pitchBytes < 64 || (pitchBytes % 16) != 0 ||
+            pitchBytes > (int64_t(1) << 24)) {
           LDBG("Invalid pitch " << pitchBytes
                                 << " for descriptor load: " << *op);
           return;
@@ -391,6 +393,9 @@ private:
     unsigned surfaceWidthDim = isTranspose ? rowDim : colDim;
     unsigned surfaceHeightDim = isTranspose ? colDim : rowDim;
     constexpr int64_t MIN_PITCH = 64;
+    // Surface pitch is encoded in 24 bits in the 2D block IO message
+    // descriptor (see `triton_gen.2Dblockload` verifier in TritonGENOps.cpp).
+    constexpr int64_t MAX_PITCH = int64_t(1) << 24;
 
     int64_t pitch;
     bool isBroadcast = false;
@@ -427,8 +432,9 @@ private:
       }
     }
 
-    // HW requires pitch >= 64 bytes and pitch aligned to 16 bytes.
-    if (pitch < MIN_PITCH || (pitch % 16) != 0) {
+    // HW requires pitch >= 64 bytes, aligned to 16 bytes, and encoded in
+    // 24 bits.
+    if (pitch < MIN_PITCH || (pitch % 16) != 0 || pitch > MAX_PITCH) {
       LDBG("Invalid pitch " << pitch << " for load: " << *op);
       return;
     }
