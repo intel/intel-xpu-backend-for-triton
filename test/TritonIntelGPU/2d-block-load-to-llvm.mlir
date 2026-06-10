@@ -74,8 +74,9 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1x32x!tt.ptr<f16>, #dot0>
     %3 = tt.addptr %2, %1 : tensor<1x32x!tt.ptr<f16>, #dot0>, tensor<1x32xi32, #dot0>
     %4 = tt.broadcast %3 : tensor<1x32x!tt.ptr<f16>, #dot0> -> tensor<64x32x!tt.ptr<f16>, #dot0>
+    %pitch = arith.constant 64 : i32
     // CHECK-COUNT-2: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 2, transpose = false, vnni_transform = false, cache_control = Default}
-    %5 = ttig.2d_block_load_from_ptr %4 {row_major} {base_height = 1 : i32, base_pitch = 64 : i32, base_width = 64 : i32} : (tensor<64x32x!tt.ptr<f16>, #dot0>) -> tensor<64x32xf16, #dot0>
+    %5 = ttig.2d_block_load_from_ptr %4, %pitch {row_major} {base_height = 1 : i32, base_width = 64 : i32} : (tensor<64x32x!tt.ptr<f16>, #dot0>, i32) -> tensor<64x32xf16, #dot0>
     tt.return
   }
 }
@@ -96,10 +97,11 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1x32x!tt.ptr<f16>, #dot0>
     %3 = tt.addptr %2, %1 : tensor<1x32x!tt.ptr<f16>, #dot0>, tensor<1x32xi32, #dot0>
     %4 = tt.broadcast %3 : tensor<1x32x!tt.ptr<f16>, #dot0> -> tensor<64x32x!tt.ptr<f16>, #dot0>
+    %pitch = arith.constant 64 : i32
     // CHECK: llvm.select {{.*}} : i1, i32
     // CHECK: triton_gen.2Dblockload
     // CHECK: llvm.select
-    %5 = ttig.2d_block_load_from_ptr %4, %true, %cst {row_major} {base_height = 8 : i32, base_pitch = 64 : i32, base_width = 64 : i32} : (tensor<64x32x!tt.ptr<f16>, #dot0>, tensor<64x32xi1, #dot0>, tensor<64x32xf16, #dot0>) -> tensor<64x32xf16, #dot0>
+    %5 = ttig.2d_block_load_from_ptr %4, %pitch, %true, %cst {row_major} {base_height = 8 : i32, base_width = 64 : i32} : (tensor<64x32x!tt.ptr<f16>, #dot0>, i32, tensor<64x32xi1, #dot0>, tensor<64x32xf16, #dot0>) -> tensor<64x32xf16, #dot0>
     tt.return
   }
 }
@@ -118,9 +120,10 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1x32x!tt.ptr<f16>, #dot0>
     %3 = tt.addptr %2, %1 : tensor<1x32x!tt.ptr<f16>, #dot0>, tensor<1x32xi32, #dot0>
     %4 = tt.broadcast %3 : tensor<1x32x!tt.ptr<f16>, #dot0> -> tensor<64x32x!tt.ptr<f16>, #dot0>
+    %pitch = arith.constant 64 : i32
     // CHECK: triton_gen.2Dblockload
     // CHECK: llvm.shufflevector
-    %5 = ttig.2d_block_load_from_ptr %4 {row_major} {base_height = 1 : i32, base_pitch = 64 : i32, base_width = 64 : i32} : (tensor<64x32x!tt.ptr<f16>, #dot0>) -> tensor<64x32xf16, #dot0>
+    %5 = ttig.2d_block_load_from_ptr %4, %pitch {row_major} {base_height = 1 : i32, base_width = 64 : i32} : (tensor<64x32x!tt.ptr<f16>, #dot0>, i32) -> tensor<64x32xf16, #dot0>
     tt.return
   }
 }
@@ -139,8 +142,9 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1x16x!tt.ptr<f16>, #blocked>
     %3 = tt.addptr %2, %1 : tensor<1x16x!tt.ptr<f16>, #blocked>, tensor<1x16xi32, #blocked>
     %4 = tt.broadcast %3 : tensor<1x16x!tt.ptr<f16>, #blocked> -> tensor<64x16x!tt.ptr<f16>, #blocked>
+    %pitch = arith.constant 128 : i32
     // CHECK: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, transpose = false, vnni_transform = false, cache_control = Default}
-    %5 = ttig.2d_block_load_from_ptr %4 {row_major} {base_height = 64 : i32, base_pitch = 128 : i32, base_width = 32 : i32, ttig.block_io_stride = 64 : i64} : (tensor<64x16x!tt.ptr<f16>, #blocked>) -> tensor<64x16xf16, #blocked>
+    %5 = ttig.2d_block_load_from_ptr %4, %pitch {row_major} {base_height = 64 : i32, base_width = 32 : i32, ttig.block_io_stride = 64 : i64} : (tensor<64x16x!tt.ptr<f16>, #blocked>, i32) -> tensor<64x16xf16, #blocked>
     tt.return
   }
 }

@@ -108,7 +108,24 @@ StrideInfo StrideInfo::join(const StrideInfo &lhs, const StrideInfo &rhs) {
         joinColumn(l ? ArrayRef<int64_t>(*l) : ArrayRef<int64_t>(zeros),
                    r ? ArrayRef<int64_t>(*r) : ArrayRef<int64_t>(zeros)));
   }
-  return StrideInfo(std::move(spatial), std::move(ivStrides));
+
+  // Runtime stride value: keep it on an axis only when both sides agree on
+  // the same SSA value, otherwise drop to null (same idea as the join of
+  // AxisInfo::constantValue).
+  StrideValueVectorT strideValues;
+  const StrideValueVectorT &lv = lhs.getStrideValues();
+  const StrideValueVectorT &rv = rhs.getStrideValues();
+  if (!lv.empty() || !rv.empty()) {
+    strideValues.resize(lhs.getRank());
+    for (unsigned d = 0, rank = lhs.getRank(); d < rank; ++d) {
+      Value a = d < lv.size() ? lv[d] : Value();
+      Value b = d < rv.size() ? rv[d] : Value();
+      strideValues[d] = (a && a == b) ? a : Value();
+    }
+  }
+
+  return StrideInfo(std::move(spatial), std::move(ivStrides),
+                    std::move(strideValues));
 }
 
 int64_t StrideInfo::getIVStride(LoopLikeOpInterface loop, size_t dim) const {
@@ -174,6 +191,19 @@ void StrideInfo::print(raw_ostream &os) const {
     }
     os << "}";
   }
+  if (!strideValues.empty()) {
+    os << ", stride_values = {";
+    bool first = true;
+    for (unsigned d = 0, rank = strideValues.size(); d < rank; ++d) {
+      if (!strideValues[d])
+        continue;
+      if (!first)
+        os << ", ";
+      first = false;
+      os << d << ": " << strideValues[d];
+    }
+    os << "}";
+  }
 }
 
 using AxisInfoLookupFn = std::function<AxisInfo *(Value)>;
@@ -222,6 +252,12 @@ public:
 
   void setAxisInfoLookup(AxisInfoLookupFn fn) {
     axisInfoLookup = std::move(fn);
+  }
+
+  /// Public wrapper over `getConstantValue` so free helpers can reuse the
+  /// same constant detection.
+  std::optional<int64_t> getConstantValueForStride(Value v) const {
+    return getConstantValue(v);
   }
 
 protected:
@@ -306,7 +342,14 @@ public:
       const StrideInfo::DimVectorT *rCol = rc ? rc : (rhs ? &zeros : nullptr);
       maybeStoreIVStride(ivStrides, loop, applyOne(op, lCol, rCol));
     }
-    return StrideInfo(std::move(spatial), std::move(ivStrides));
+
+    // Runtime stride value (spatial axes only). The default hook returns
+    // nothing; a visitor opts in only where the value is safe to name.
+    StrideInfo::StrideValueVectorT strideValues =
+        applyStrideValues(op, lhs, rhs, spatial);
+
+    return StrideInfo(std::move(spatial), std::move(ivStrides),
+                      std::move(strideValues));
   }
 
 protected:
@@ -318,6 +361,16 @@ protected:
   virtual StrideInfo::DimVectorT
   applyOne(OpTy op, const StrideInfo::DimVectorT &lhs,
            const StrideInfo::DimVectorT *rhs) const = 0;
+
+  /// Subclass hook: name the runtime stride value for each spatial axis of
+  /// the result (`resultSpatial` is the already-computed integer column).
+  /// Defaults to "none"; a visitor overrides only when a bare SSA scalar
+  /// really is the element stride.
+  virtual StrideInfo::StrideValueVectorT
+  applyStrideValues(OpTy op, const StrideInfo &lhs, const StrideInfo *rhs,
+                    const StrideInfo::DimVectorT &resultSpatial) const {
+    return {};
+  }
 };
 
 class StrideInfoVisitorList {
@@ -421,6 +474,30 @@ public:
 template <typename OpTy>
 class AddSubStrideVisitor final : public StrideArithVisitor<OpTy> {
 protected:
+  StrideInfo::StrideValueVectorT applyStrideValues(
+      OpTy op, const StrideInfo &lhs, const StrideInfo *rhs,
+      const StrideInfo::DimVectorT &resultSpatial) const override {
+    // `a + b` (or addptr): the result stride is the sum, so a single value
+    // names it only when one side carries the runtime stride and the other
+    // adds nothing (stride 0). If both sides name a value we cannot keep it,
+    // since `s + s` is `2*s`. Subtraction keeps only the left side's value.
+    if (!rhs)
+      return {};
+    unsigned rank = lhs.getRank();
+    StrideInfo::StrideValueVectorT values(rank);
+    for (unsigned d = 0; d < rank; ++d) {
+      Value ls = lhs.getStrideValue(d);
+      Value rs = rhs->getStrideValue(d);
+      if (ls && lhs.getStride(d) < 0 && rhs->getStride(d) == 0) {
+        values[d] = ls;
+      } else if constexpr (!std::is_same_v<OpTy, arith::SubIOp>) {
+        if (rs && rhs->getStride(d) < 0 && lhs.getStride(d) == 0)
+          values[d] = rs;
+      }
+    }
+    return values;
+  }
+
   StrideInfo::DimVectorT
   applyOne(OpTy op, const StrideInfo::DimVectorT &lhs,
            const StrideInfo::DimVectorT *rhs) const override {
@@ -440,8 +517,49 @@ protected:
   }
 };
 
+/// Look through int casts and a splat; return the splatted scalar if it's a
+/// runtime (non-constant) value, else null.
+static Value getNonConstSplatScalar(Value v, const StrideInfoVisitor &visitor) {
+  while (Operation *def = v.getDefiningOp()) {
+    if (isa<arith::ExtSIOp, arith::ExtUIOp, arith::TruncIOp,
+            arith::IndexCastOp>(def)) {
+      v = def->getOperand(0);
+      continue;
+    }
+    break;
+  }
+  auto splat = v.getDefiningOp<triton::SplatOp>();
+  if (!splat)
+    return {};
+  Value scalar = splat.getSrc();
+  if (visitor.getConstantValueForStride(scalar))
+    return {};
+  return scalar;
+}
+
 class MulIOpStrideVisitor final : public StrideArithVisitor<arith::MulIOp> {
 protected:
+  StrideInfo::StrideValueVectorT applyStrideValues(
+      arith::MulIOp op, const StrideInfo &lhs, const StrideInfo *rhs,
+      const StrideInfo::DimVectorT &resultSpatial) const override {
+    // `index * splat(s)`: when one side steps by exactly 1, the per-element
+    // stride is exactly the scalar `s`, so we can name it. Any other step
+    // would make the stride `c * s`, which is not a single value, so we skip.
+    if (!rhs)
+      return {};
+    unsigned rank = lhs.getRank();
+    StrideInfo::StrideValueVectorT values(rank);
+    Value rhsScalar = getNonConstSplatScalar(op.getRhs(), *this);
+    Value lhsScalar = getNonConstSplatScalar(op.getLhs(), *this);
+    for (unsigned d = 0; d < rank; ++d) {
+      if (lhs.getStride(d) == 1 && rhsScalar)
+        values[d] = rhsScalar;
+      else if (rhs->getStride(d) == 1 && lhsScalar)
+        values[d] = lhsScalar;
+    }
+    return values;
+  }
+
   StrideInfo::DimVectorT
   applyOne(arith::MulIOp op, const StrideInfo::DimVectorT &lhs,
            const StrideInfo::DimVectorT *rhs) const override {
@@ -613,6 +731,18 @@ protected:
     stride.insert(stride.begin() + op.getAxis(), 0);
     return stride;
   }
+
+  StrideInfo::StrideValueVectorT
+  applyStrideValues(triton::ExpandDimsOp op, const StrideInfo &lhs,
+                    const StrideInfo *,
+                    const StrideInfo::DimVectorT &) const override {
+    const StrideInfo::StrideValueVectorT &src = lhs.getStrideValues();
+    if (src.empty())
+      return {};
+    StrideInfo::StrideValueVectorT values(src.begin(), src.end());
+    values.insert(values.begin() + op.getAxis(), Value());
+    return values;
+  }
 };
 
 class BroadcastOpStrideVisitor final
@@ -626,6 +756,21 @@ protected:
     // already 0 in the operand column, so a verbatim copy is correct for
     // every column (spatial + every IV column).
     return lhs;
+  }
+
+  StrideInfo::StrideValueVectorT applyStrideValues(
+      triton::BroadcastOp op, const StrideInfo &lhs, const StrideInfo *,
+      const StrideInfo::DimVectorT &resultSpatial) const override {
+    // A broadcast axis becomes uniform (stride 0), so its runtime stride no
+    // longer means anything: drop it there and pass the other axes through.
+    const StrideInfo::StrideValueVectorT &src = lhs.getStrideValues();
+    if (src.empty())
+      return {};
+    StrideInfo::StrideValueVectorT values(src.begin(), src.end());
+    for (unsigned d = 0, e = values.size(); d < e; ++d)
+      if (d < resultSpatial.size() && resultSpatial[d] == 0)
+        values[d] = Value();
+    return values;
   }
 };
 
@@ -641,6 +786,20 @@ protected:
     for (unsigned d = 0, rank = lhs.size(); d < rank; ++d)
       stride.push_back(lhs[order[d]]);
     return stride;
+  }
+
+  StrideInfo::StrideValueVectorT
+  applyStrideValues(triton::TransOp op, const StrideInfo &lhs,
+                    const StrideInfo *,
+                    const StrideInfo::DimVectorT &) const override {
+    const StrideInfo::StrideValueVectorT &src = lhs.getStrideValues();
+    if (src.empty())
+      return {};
+    ArrayRef<int32_t> order = op.getOrder();
+    StrideInfo::StrideValueVectorT values(src.size());
+    for (unsigned d = 0, rank = src.size(); d < rank; ++d)
+      values[d] = src[order[d]];
+    return values;
   }
 };
 
@@ -775,7 +934,8 @@ public:
             newStride[d] = 1;
           }
         }
-        curr = StrideInfo(std::move(newStride), curr.getIVStrides());
+        curr = StrideInfo(std::move(newStride), curr.getIVStrides(),
+                          curr.getStrideValues());
       }
     }
     for (auto *result : results)
