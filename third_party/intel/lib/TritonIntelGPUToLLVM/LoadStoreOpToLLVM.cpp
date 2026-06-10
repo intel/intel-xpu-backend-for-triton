@@ -2123,7 +2123,6 @@ struct DescriptorLoadOpConversion
 
     // Get result type information
     auto resultType = cast<RankedTensorType>(op.getType());
-    size_t resultRank = resultType.getRank();
     Type valueElemTy = typeConverter->convertType(resultType.getElementType());
     unsigned numElems = getTotalElemsPerThread(resultType);
 
