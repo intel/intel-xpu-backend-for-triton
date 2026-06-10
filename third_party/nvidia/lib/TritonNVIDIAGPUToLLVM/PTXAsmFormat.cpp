@@ -144,7 +144,7 @@ std::string PTXBuilder::dump() const {
     lines.push_back(exec->dump());
   }
 
-  return strJoin(lines, "\n\t");
+  return strJoin(lines, " ");
 }
 
 PTXInstrExecution &PTXInstrCommon::call(ArrayRef<Operand *> oprs,
