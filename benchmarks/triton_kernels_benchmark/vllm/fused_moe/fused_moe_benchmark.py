@@ -22,11 +22,7 @@ import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
 from vllm.model_executor.layers.fused_moe.fused_moe import invoke_fused_moe_triton_kernel, get_default_config
-
-try:
-    from vllm_xpu_kernels.fused_moe_interface import cutlass_grouped_gemm as sycl_tla_grouped_gemm
-except Exception:
-    sycl_tla_grouped_gemm = None
+from vllm_xpu_kernels.fused_moe_interface import cutlass_grouped_gemm as sycl_tla_grouped_gemm
 
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
@@ -253,9 +249,8 @@ def ref_grouped_gemm(input_A, input_B, topk_ids, topk):
 def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_td_patched=False):
     supported_providers = {
         'triton' + ('-td' if is_td_patched else ''): 'triton' + ('-td' if is_td_patched else ''),
+        'sycl-tla': 'SYCL-TLA',
     }
-
-    supported_providers['sycl-tla'] = 'SYCL-TLA'
 
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
@@ -361,6 +356,7 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_td_
             )
 
         elif provider == 'sycl-tla':
+            # TODO: time SYCL-TLA's grouping/gather alongside the GEMM (via a native prologue) to match Triton's in-kernel gather and make the comparison fair.
             flat_expert_indices = topk_ids.view(-1)
             _, input_A_grouped, _ = ref_prologue(input_A, None, flat_expert_indices, topk, num_experts, "bf16")
             rows_per_expert = flat_expert_indices.bincount(minlength=num_experts).to(torch.int32).tolist()
