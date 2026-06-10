@@ -130,3 +130,56 @@ def test_tdesc_load_zero_padding(M, N, dtype_str, device, tmp_path: pathlib.Path
     expected[:, N - 1] = 0
 
     assert torch.equal(x, expected)
+
+
+@pytest.mark.parametrize("M, N", [[64, 32], [32, 16], [16, 16]])
+@pytest.mark.parametrize("dtype_str", ["float32", "float16", "int8"])
+@pytest.mark.skipif(not is_xpu(), reason="Tensor descriptor tests are specific to the XPU backend")
+def test_tdesc_rank_reducing_load_store(M, N, dtype_str, device, tmp_path: pathlib.Path):
+    num_warps = 4
+    threads_per_warp = 32
+
+    ty = {"float32": "f32", "float16": "f16", "int8": "i8"}[dtype_str]
+    mn = M * N
+
+    ir = f"""
+    #blocked = #ttg.blocked<{{sizePerThread = [1, 1], threadsPerWarp = [1, {threads_per_warp}], warpsPerCTA = [1, {num_warps}], order = [1, 0]}}>
+    module attributes {{ttg.target = "xpu", "ttg.num-warps" = {num_warps} : i32, "ttg.threads-per-warp" = {threads_per_warp} : i32}} {{
+        tt.func public @descriptor_rank_reduce_load_store(%arg0: !tt.ptr<{ty}> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<{ty}> {{tt.divisibility = 16 : i32}}) {{
+            %c1_i32 = arith.constant 1 : i32
+            %c0_i32 = arith.constant 0 : i32
+            %cM_i32 = arith.constant {M} : i32
+            %cN_i32 = arith.constant {N} : i32
+            %c1_i64 = arith.constant 1 : i64
+            %cN_i64 = arith.constant {N} : i64
+            %cMN_i64 = arith.constant {mn} : i64
+
+            // 4D descriptor reduced to a 2D tensor: leading singleton dimensions
+            // use stride M*N so their zero offsets keep the same contiguous view.
+            %src_desc = tt.make_tensor_descriptor %arg0, [%c1_i32, %c1_i32, %cM_i32, %cN_i32], [%cMN_i64, %cMN_i64, %cN_i64, %c1_i64]
+                        : !tt.ptr<{ty}>, !tt.tensordesc<1x1x{M}x{N}x{ty}>
+            %data = tt.descriptor_load %src_desc [%c0_i32, %c0_i32, %c0_i32, %c0_i32]
+                    : !tt.tensordesc<1x1x{M}x{N}x{ty}> -> tensor<{M}x{N}x{ty}, #blocked>
+
+            %dst_desc = tt.make_tensor_descriptor %arg1, [%c1_i32, %c1_i32, %cM_i32, %cN_i32], [%cMN_i64, %cMN_i64, %cN_i64, %c1_i64]
+                        : !tt.ptr<{ty}>, !tt.tensordesc<1x1x{M}x{N}x{ty}>
+            tt.descriptor_store %dst_desc [%c0_i32, %c0_i32, %c0_i32, %c0_i32], %data
+                                : !tt.tensordesc<1x1x{M}x{N}x{ty}>, tensor<{M}x{N}x{ty}, #blocked>
+            tt.return
+        }}
+    }}
+    """
+
+    torch_dtype = getattr(torch, dtype_str)
+    if torch_dtype.is_floating_point:
+        a = torch.randn((M, N), dtype=torch_dtype, device=device)
+    else:
+        a = torch.randint(low=-127, high=128, size=(M, N), dtype=torch_dtype, device=device)
+
+    x = torch.empty_like(a)
+    temp_file = tmp_path / "test_tdesc_rank_reducing_load_store.ttgir"
+    temp_file.write_text(ir)
+    kernel = triton.compile(str(temp_file))
+
+    kernel[(1, 1, 1)](a, x)
+    assert torch.equal(a, x)
