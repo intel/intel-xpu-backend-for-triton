@@ -560,4 +560,35 @@ bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
   return true;
 }
 
+bool validate2DBlockStoreTile(const LinearLayout &ll, unsigned memContiguousDim,
+                              unsigned elemSizeInBits,
+                              RankedTensorType tensorType,
+                              AxisInfo *maskAxisInfo,
+                              BlockIOTileSizeInfo &sizeInfoOut) {
+  // Compute the store tile geometry and reject configurations the 2D block
+  // store cannot express. This mirrors the checks the store lowering applies;
+  // keeping them here (rather than duplicated inline in each store lowering
+  // pattern) makes this the single source of truth for store eligibility.
+  BlockIOTileSizeInfo sizeInfo = getBlockIOTileSize</*isLoad=*/false>(
+      ll, memContiguousDim, elemSizeInBits, maskAxisInfo,
+      /*oneMatrixPerLoadForBT=*/false);
+  if (!sizeInfo.isValid())
+    return false;
+
+  unsigned packedElemSizeInBits = elemSizeInBits * sizeInfo.numElemPerPackedVal;
+  if (!check2DBlockAddressPayloadRestriction(packedElemSizeInBits,
+                                             sizeInfo.tileWidth))
+    return false;
+
+  // 2D block store does not support transpose.
+  if (sizeInfo.transpose)
+    return false;
+
+  // The store always issues a single v-block per message.
+  sizeInfo.vBlocks = 1;
+
+  sizeInfoOut = sizeInfo;
+  return true;
+}
+
 } // namespace mlir::triton::gpu::intel
