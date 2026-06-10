@@ -72,7 +72,7 @@ diff --git a/tests/utils.py b/tests/utils.py
 index 8989a1c3a..16f0620d1 100644
 --- a/tests/utils.py
 +++ b/tests/utils.py
-@@ -1545,7 +1545,12 @@ def spawn_new_process_for_each_test(f: Callable[_P, None]) -> Callable[_P, None]:
+@@ -1731,8 +1731,13 @@ def spawn_new_process_for_each_test(f: Callable[_P, None]) -> Callable[_P, None]:
 
              repo_root = str(VLLM_PATH.resolve())
              env = os.environ.copy()
@@ -83,6 +83,7 @@ index 8989a1c3a..16f0620d1 100644
 +                for path in (repo_root, test_module_dir, env.get("PYTHONPATH", ""))
 +                if path
 +            )
+             env[_SPAWN_CHILD_ENV] = "1"
 
              result = subprocess.run(
                  [sys.executable, "-c", child_script],
