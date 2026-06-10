@@ -24,6 +24,8 @@ from vllm.model_executor.layers.fused_moe.fused_batched_moe import invoke_moe_ba
 from tests.kernels.moe.utils import make_quantized_test_activations, make_test_weight
 from tests.kernels.quant_utils import native_batched_masked_quant_matmul
 
+from vllm_xpu_kernels.fused_moe_interface import cutlass_grouped_gemm as sycl_tla_grouped_gemm
+
 # Benchmark shapes for batched MoE
 # (E: num_experts, M: max_tokens_per_expert, K: hidden_dim, N: intermediate_dim, fp8, block_quant)
 # BATCHED_MM_X_VALS = [(E, M, K, N, False, False) for E in [8, 32] for M in [32, 224, 512] for K in [128, 1024] for N in [128, 1024]]
@@ -125,6 +127,10 @@ def get_batched_mm_benchmark(
     if is_fp8:
         # pytorch is very slow with fp8 case, for (8, 64, 1024, 2048) case it has ~0.15 TFlops vs 1.5 for triton
         del supported_providers['pytorch']
+
+    # SYCL-TLA grouped GEMM is bf16-only here; skip it for fp8 and when the kernels aren't importable.
+    if not is_fp8:
+        supported_providers['sycl-tla'] = 'SYCL-TLA'
 
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
     configs = MM_CONFIGS_FP8 if is_fp8 else MM_CONFIGS_BF16
@@ -229,6 +235,30 @@ def get_batched_mm_benchmark(
             benchmark_suite.assert_close(triton_fn, torch_fn, atol=atol, rtol=rtol, err_msg='triton to torch')
             _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
                 triton_fn,
+                n_warmup=n_warmup,
+                n_repeat=10,
+                quantiles=quantiles,
+            )
+
+        elif provider == 'sycl-tla':
+            counts = num_expert_tokens.tolist()
+            input_A_grouped = torch.cat([A_q[e, :counts[e], :] for e in range(num_experts)], dim=0).contiguous()
+            input_B_grouped = B_q.transpose(1, 2).contiguous()
+            output_sycl = torch.empty((input_A_grouped.shape[0], N), device='xpu', dtype=dtype)
+
+            ref_full = torch_fn()
+            ref_grouped = torch.cat([ref_full[e, :counts[e], :] for e in range(num_experts)], dim=0)
+
+            # TODO: use a native on-device SYCL-TLA prologue; for now we pre-group with a torch
+            # gather outside timing, so these numbers are optimistic vs Triton's in-kernel masking.
+            def sycl_tla_fn():
+                sycl_tla_grouped_gemm(input_A_grouped, input_B_grouped, None, output_sycl, counts, N, K, num_experts)
+                return output_sycl
+
+            benchmark_suite.assert_close(sycl_tla_fn, lambda: ref_grouped, atol=atol, rtol=rtol,
+                                         err_msg='sycl-tla to torch')
+            _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
+                sycl_tla_fn,
                 n_warmup=n_warmup,
                 n_repeat=10,
                 quantiles=quantiles,
