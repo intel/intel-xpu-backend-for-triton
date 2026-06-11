@@ -211,7 +211,7 @@ private:
   void sync(ConversionPatternRewriter &rewriter, Location loc,
             bool crossCTA) const {
     if (crossCTA) {
-      targetInfo.clusterBarrier(loc, rewriter);
+      targetInfo.clusterBarrier(loc, rewriter, /*sourceOp=*/nullptr);
     } else {
       targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
     }
