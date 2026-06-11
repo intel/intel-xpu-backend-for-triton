@@ -161,6 +161,7 @@ def TritonIntelGPU_Dialect : Dialect {
     static constexpr llvm::StringRef getDescPaddingAttrName() {
       return "ttig.desc_padding";
     }
+
   }];
 
   let useDefaultAttributePrinterParser = 1;

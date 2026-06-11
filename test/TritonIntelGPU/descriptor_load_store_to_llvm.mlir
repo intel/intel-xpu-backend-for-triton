@@ -13,8 +13,9 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
   tt.func public @load(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32) -> (tensor<4x4xf32, #blocked>) {
     %c1_i64 = arith.constant 1 : i64
     %c4_i64 = arith.constant 4 : i64
-    %c4_i32 = arith.constant 4 : i32
-    %0 = tt.make_tensor_descriptor %arg0, [%c4_i32, %c4_i32], [%c1_i64, %c4_i64] {order = array<i32: 0>} : <f32>, <4x4xf32>
+    %c5_i32 = arith.constant 5 : i32
+    // shape=[5,5] is not divisible by block_shape=[4,4], so boundary checks are generated.
+    %0 = tt.make_tensor_descriptor %arg0, [%c5_i32, %c5_i32], [%c1_i64, %c4_i64] {order = array<i32: 0>} : <f32>, <4x4xf32>
 
     // Verify the tensor descriptor is constructed as an LLVM struct with:
     //   [0]: shape0 (i64), [1]: shape1 (i64), [2]: stride0 (i64), [3]: stride1 (i64), [4]: base_ptr (ptr<1>)
@@ -74,8 +75,9 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
   tt.func public @predicated_load(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32) -> (tensor<4x4xf32, #blocked>) {
     %c1_i64 = arith.constant 1 : i64
     %c4_i64 = arith.constant 4 : i64
-    %c4_i32 = arith.constant 4 : i32
-    %0 = tt.make_tensor_descriptor %arg0, [%c4_i32, %c4_i32], [%c1_i64, %c4_i64] {order = array<i32: 0>} : <f32>, <4x4xf32>
+    %c5_i32 = arith.constant 5 : i32
+    // shape=[5,5] is not divisible by block_shape=[4,4], so boundary checks are generated.
+    %0 = tt.make_tensor_descriptor %arg0, [%c5_i32, %c5_i32], [%c1_i64, %c4_i64] {order = array<i32: 0>} : <f32>, <4x4xf32>
 
     // Verify the tensor descriptor is constructed as an LLVM struct with:
     //   [0]: shape0 (i64), [1]: shape1 (i64), [2]: stride0 (i64), [3]: stride1 (i64), [4]: base_ptr (ptr<1>)
@@ -129,8 +131,9 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
   tt.func public @store(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32, %arg3: tensor<4x4xf32, #blocked>) {
     %c1_i64 = arith.constant 1 : i64
     %c4_i64 = arith.constant 4 : i64
-    %c4_i32 = arith.constant 4 : i32
-    %0 = tt.make_tensor_descriptor %arg0, [%c4_i32, %c4_i32], [%c1_i64, %c4_i64] {order = array<i32: 0>} : <f32>, <4x4xf32>
+    %c5_i32 = arith.constant 5 : i32
+    // shape=[5,5] is not divisible by block_shape=[4,4], so boundary checks are generated.
+    %0 = tt.make_tensor_descriptor %arg0, [%c5_i32, %c5_i32], [%c1_i64, %c4_i64] {order = array<i32: 0>} : <f32>, <4x4xf32>
     // Verify the tensor descriptor is constructed as an LLVM struct
     // CHECK: %[[DESC:.*]] = llvm.insertvalue %{{.*}}, %{{.*}}[4] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
 
@@ -195,8 +198,9 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
   tt.func public @predicated_store(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32, %arg3: tensor<4x4xf32, #blocked>) {
     %c1_i64 = arith.constant 1 : i64
     %c4_i64 = arith.constant 4 : i64
-    %c4_i32 = arith.constant 4 : i32
-    %0 = tt.make_tensor_descriptor %arg0, [%c4_i32, %c4_i32], [%c1_i64, %c4_i64] {order = array<i32: 0>} : <f32>, <4x4xf32>
+    %c5_i32 = arith.constant 5 : i32
+    // shape=[5,5] is not divisible by block_shape=[4,4], so boundary checks are generated.
+    %0 = tt.make_tensor_descriptor %arg0, [%c5_i32, %c5_i32], [%c1_i64, %c4_i64] {order = array<i32: 0>} : <f32>, <4x4xf32>
     // Verify the tensor descriptor is constructed as an LLVM struct
     // CHECK: %[[DESC:.*]] = llvm.insertvalue %{{.*}}, %{{.*}}[4] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
 
@@ -270,6 +274,8 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 // Test vectorized descriptor load and store: with sizePerThread > 1 and stride-1
 // on the fast dimension, the gather fallback should emit wider (vectorized) I/O.
 // Here sizePerThread=[1,4] with f16 gives vec=4 (4*16=64 bits < 128 bit max).
+// Dynamic shapes are used so boundary checks are not elided (and predicated I/O
+// is exercised).
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
 
@@ -280,16 +286,19 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     %c16_i32 = arith.constant 16 : i32
     %c16_i64 = arith.constant 16 : i64
     %c1_i64 = arith.constant 1 : i64
+    // shape=[4,16] is exactly divisible by block_shape=[4,16], so all boundary
+    // checks are elided and unconditional (non-predicated) I/O is emitted.
     // stride = [16, 1] → stride-1 on dim 1 (the fast dimension with order=[1,0])
     %desc = tt.make_tensor_descriptor %arg0, [%c4_i32, %c16_i32], [%c16_i64, %c1_i64] : <f16>, <4x16xf16>
 
     // With vec=4 and f16: totalWidth=64, maxWordWidth=32, width=32, nWords=2.
-    // Return type is vector<2xi32>. Verify wider-than-scalar predicated loads.
-    // CHECK: triton_gen.predicated_load {{.*}} : (!llvm.ptr<1>, i1, vector<2xi32>) -> vector<2xi32>
+    // All dims in-bounds → unconditional vector load (no predicate, no branch).
+    // CHECK: llvm.load %{{.*}} {alignment = 8 : i64} : !llvm.ptr<1> -> vector<2xi32>
     %load = tt.descriptor_load %desc[%arg1, %arg2] : !tt.tensordesc<4x16xf16> -> tensor<4x16xf16, #blocked>
 
-    // Verify wider-than-scalar predicated stores with the same descriptor.
-    // CHECK: triton_gen.predicated_store {{.*}}, %{{.*}}, %{{.*}} {cache_control = Default} : (!llvm.ptr<1>, vector<2xi32>, i1)
+    // Store still uses predicated_store for the thread-redundancy predicate,
+    // but there is no boundary-check mask (all dims in-bounds).
+    // CHECK: triton_gen.predicated_store {{.*}} : (!llvm.ptr<1>, vector<2xi32>, i1)
     tt.descriptor_store %desc[%arg1, %arg2], %load : !tt.tensordesc<4x16xf16>, tensor<4x16xf16, #blocked>
     tt.return %load : tensor<4x16xf16, #blocked>
   }
@@ -299,17 +308,19 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
 
 // Negative test: stride != 1 on the fast dimension prevents vectorization.
 // With stride[1] unknown (not constant 1), vec should be 1, producing scalar I/O.
+// Dynamic shapes are used so boundary checks are not elided.
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
 
 module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_predicated_io"} {
   // CHECK-LABEL: llvm.func spir_kernelcc @no_vec_non_unit_stride
   tt.func public @no_vec_non_unit_stride(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32, %arg3: i64) -> (tensor<4x16xf16, #blocked>) {
-    %c4_i32 = arith.constant 4 : i32
-    %c16_i32 = arith.constant 16 : i32
+    %c5_i32 = arith.constant 5 : i32
+    %c17_i32 = arith.constant 17 : i32
     %c16_i64 = arith.constant 16 : i64
+    // shape=[5,17]: 5%4!=0 and 17%16!=0, boundary checks are generated.
     // stride = [16, %arg3] → stride on dim 1 is unknown (not constant 1)
-    %desc = tt.make_tensor_descriptor %arg0, [%c4_i32, %c16_i32], [%c16_i64, %arg3] : <f16>, <4x16xf16>
+    %desc = tt.make_tensor_descriptor %arg0, [%c5_i32, %c17_i32], [%c16_i64, %arg3] : <f16>, <4x16xf16>
 
     // With unknown stride on the fast dimension, vec=1. Loads should be 16-bit (scalar f16).
     // CHECK: triton_gen.predicated_load {{.*}} : (!llvm.ptr<1>, i1, i16) -> i16
@@ -325,8 +336,10 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
 // -----
 
 // Test rank reduction from a 4D descriptor (1x1x4x4) to a 2D tensor (4x4):
-// lowering must keep boundary checks for all descriptor dimensions, including
-// the leading reduced singleton dimensions.
+// lowering must keep boundary checks for descriptor dimensions whose shape is
+// not provably divisible by the block shape at compile time. The leading
+// singleton dimensions (block_shape=1) are always in-bounds so their checks
+// are elided; dims 2 and 3 use dynamic shapes and require runtime checks.
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
 
@@ -337,27 +350,25 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
   // CHECK-SAME:      %[[OFFSET1:[^:]+]]: i32,
   // CHECK-SAME:      %[[OFFSET2:[^:]+]]: i32,
   // CHECK-SAME:      %[[OFFSET3:[^:]+]]: i32,
-  tt.func public @rank_reducing_load(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32) -> (tensor<4x4xf32, #blocked>) {
+  // CHECK-SAME:      %[[SHAPE2ARG:[^:]+]]: i32,
+  // CHECK-SAME:      %[[SHAPE3ARG:[^:]+]]: i32,
+  tt.func public @rank_reducing_load(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i32) -> (tensor<4x4xf32, #blocked>) {
     %c1_i32 = arith.constant 1 : i32
-    %c4_i32 = arith.constant 4 : i32
     %c1_i64 = arith.constant 1 : i64
     %c4_i64 = arith.constant 4 : i64
     %c16_i64 = arith.constant 16 : i64
-    %desc = tt.make_tensor_descriptor %arg0, [%c1_i32, %c1_i32, %c4_i32, %c4_i32], [%c16_i64, %c16_i64, %c4_i64, %c1_i64] : <f32>, <1x1x4x4xf32>
+    // Dynamic shapes for dims 2 and 3: isDivisible cannot prove divisibility,
+    // so boundary checks are generated for those dimensions.
+    %desc = tt.make_tensor_descriptor %arg0, [%c1_i32, %c1_i32, %arg5, %arg6], [%c16_i64, %c16_i64, %c4_i64, %c1_i64] : <f32>, <1x1x4x4xf32>
 
     // CHECK: %[[DESC:.*]] = llvm.insertvalue %{{.*}}, %{{.*}}[8] : !llvm.struct<(i64, i64, i64, i64, i64, i64, i64, i64, ptr<1>)>
-    // CHECK-DAG: %[[SHAPE0:.*]] = llvm.extractvalue %[[DESC]][0] : !llvm.struct<(i64, i64, i64, i64, i64, i64, i64, i64, ptr<1>)>
-    // CHECK-DAG: %[[SHAPE1:.*]] = llvm.extractvalue %[[DESC]][1] : !llvm.struct<(i64, i64, i64, i64, i64, i64, i64, i64, ptr<1>)>
     // CHECK-DAG: %[[SHAPE2:.*]] = llvm.extractvalue %[[DESC]][2] : !llvm.struct<(i64, i64, i64, i64, i64, i64, i64, i64, ptr<1>)>
     // CHECK-DAG: %[[SHAPE3:.*]] = llvm.extractvalue %[[DESC]][3] : !llvm.struct<(i64, i64, i64, i64, i64, i64, i64, i64, ptr<1>)>
 
     // CHECK-DAG: %[[LINEAR_OFF2:.*]] = llvm.add {{.*}}, %[[OFFSET2]] : i32
     // CHECK-DAG: %[[LINEAR_OFF3:.*]] = llvm.add {{.*}}, %[[OFFSET3]] : i32
 
-    // CHECK-DAG: %[[SHAPE0_I32:.*]] = llvm.trunc %[[SHAPE0]] : i64 to i32
-    // CHECK-DAG: %[[BOUNDRY_CHECK0:.*]] = llvm.icmp "slt" %[[OFFSET0]], %[[SHAPE0_I32]] : i32
-    // CHECK-DAG: %[[SHAPE1_I32:.*]] = llvm.trunc %[[SHAPE1]] : i64 to i32
-    // CHECK-DAG: %[[BOUNDRY_CHECK1:.*]] = llvm.icmp "slt" %[[OFFSET1]], %[[SHAPE1_I32]] : i32
+    // Dims 0 and 1 have block_shape=1 so are always in-bounds: no icmp for them.
     // CHECK-DAG: %[[SHAPE2_I32:.*]] = llvm.trunc %[[SHAPE2]] : i64 to i32
     // CHECK-DAG: %[[BOUNDRY_CHECK2:.*]] = llvm.icmp "slt" %[[LINEAR_OFF2]], %[[SHAPE2_I32]] : i32
     // CHECK-DAG: %[[SHAPE3_I32:.*]] = llvm.trunc %[[SHAPE3]] : i64 to i32
@@ -370,8 +381,10 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
 // -----
 
 // Test rank reduction from a 4D descriptor (1x1x4x4) to a 2D tensor (4x4):
-// store lowering must keep boundary checks for all descriptor dimensions,
-// including the leading reduced singleton dimensions.
+// store lowering must keep boundary checks for descriptor dimensions whose
+// shape is not provably divisible by the block shape. The leading singleton
+// dimensions (block_shape=1) are always in-bounds; dims 2 and 3 use dynamic
+// shapes and require runtime checks.
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
 
@@ -382,32 +395,30 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
   // CHECK-SAME:      %[[OFFSET1:[^:]+]]: i32,
   // CHECK-SAME:      %[[OFFSET2:[^:]+]]: i32,
   // CHECK-SAME:      %[[OFFSET3:[^:]+]]: i32,
-  tt.func public @rank_reducing_store(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: tensor<4x4xf32, #blocked>) {
+  // CHECK-SAME:      %[[SHAPE2ARG:[^:]+]]: i32,
+  // CHECK-SAME:      %[[SHAPE3ARG:[^:]+]]: i32,
+  tt.func public @rank_reducing_store(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i32, %arg7: tensor<4x4xf32, #blocked>) {
     %c1_i32 = arith.constant 1 : i32
-    %c4_i32 = arith.constant 4 : i32
     %c1_i64 = arith.constant 1 : i64
     %c4_i64 = arith.constant 4 : i64
     %c16_i64 = arith.constant 16 : i64
-    %desc = tt.make_tensor_descriptor %arg0, [%c1_i32, %c1_i32, %c4_i32, %c4_i32], [%c16_i64, %c16_i64, %c4_i64, %c1_i64] : <f32>, <1x1x4x4xf32>
+    // Dynamic shapes for dims 2 and 3: isDivisible cannot prove divisibility,
+    // so boundary checks are generated for those dimensions.
+    %desc = tt.make_tensor_descriptor %arg0, [%c1_i32, %c1_i32, %arg5, %arg6], [%c16_i64, %c16_i64, %c4_i64, %c1_i64] : <f32>, <1x1x4x4xf32>
 
     // CHECK: %[[DESC:.*]] = llvm.insertvalue %{{.*}}, %{{.*}}[8] : !llvm.struct<(i64, i64, i64, i64, i64, i64, i64, i64, ptr<1>)>
-    // CHECK-DAG: %[[SHAPE0:.*]] = llvm.extractvalue %[[DESC]][0] : !llvm.struct<(i64, i64, i64, i64, i64, i64, i64, i64, ptr<1>)>
-    // CHECK-DAG: %[[SHAPE1:.*]] = llvm.extractvalue %[[DESC]][1] : !llvm.struct<(i64, i64, i64, i64, i64, i64, i64, i64, ptr<1>)>
     // CHECK-DAG: %[[SHAPE2:.*]] = llvm.extractvalue %[[DESC]][2] : !llvm.struct<(i64, i64, i64, i64, i64, i64, i64, i64, ptr<1>)>
     // CHECK-DAG: %[[SHAPE3:.*]] = llvm.extractvalue %[[DESC]][3] : !llvm.struct<(i64, i64, i64, i64, i64, i64, i64, i64, ptr<1>)>
 
     // CHECK-DAG: %[[LINEAR_OFF2:.*]] = llvm.add {{.*}}, %[[OFFSET2]] : i32
     // CHECK-DAG: %[[LINEAR_OFF3:.*]] = llvm.add {{.*}}, %[[OFFSET3]] : i32
 
-    // CHECK-DAG: %[[SHAPE0_I32:.*]] = llvm.trunc %[[SHAPE0]] : i64 to i32
-    // CHECK-DAG: %[[BOUNDRY_CHECK0:.*]] = llvm.icmp "slt" %[[OFFSET0]], %[[SHAPE0_I32]] : i32
-    // CHECK-DAG: %[[SHAPE1_I32:.*]] = llvm.trunc %[[SHAPE1]] : i64 to i32
-    // CHECK-DAG: %[[BOUNDRY_CHECK1:.*]] = llvm.icmp "slt" %[[OFFSET1]], %[[SHAPE1_I32]] : i32
+    // Dims 0 and 1 have block_shape=1 so are always in-bounds: no icmp for them.
     // CHECK-DAG: %[[SHAPE2_I32:.*]] = llvm.trunc %[[SHAPE2]] : i64 to i32
     // CHECK-DAG: %[[BOUNDRY_CHECK2:.*]] = llvm.icmp "slt" %[[LINEAR_OFF2]], %[[SHAPE2_I32]] : i32
     // CHECK-DAG: %[[SHAPE3_I32:.*]] = llvm.trunc %[[SHAPE3]] : i64 to i32
     // CHECK-DAG: %[[BOUNDRY_CHECK3:.*]] = llvm.icmp "slt" %[[LINEAR_OFF3]], %[[SHAPE3_I32]] : i32
-    tt.descriptor_store %desc[%arg1, %arg2, %arg3, %arg4], %arg5 : !tt.tensordesc<1x1x4x4xf32>, tensor<4x4xf32, #blocked>
+    tt.descriptor_store %desc[%arg1, %arg2, %arg3, %arg4], %arg7 : !tt.tensordesc<1x1x4x4xf32>, tensor<4x4xf32, #blocked>
     tt.return
   }
 }

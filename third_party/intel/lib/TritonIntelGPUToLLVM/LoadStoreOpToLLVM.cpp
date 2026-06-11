@@ -2145,11 +2145,22 @@ struct DescriptorLoadOpConversion
             TritonIntelGPUDialect::getDescPaddingAttrName()))
       padding = paddingAttr.getValue();
 
-    // Boundary check all dimensions — tensor descriptors always encode shape
-    // bounds and don't have a user-facing boundaryCheck attribute.
-    SmallVector<int32_t> allDims(descRank);
-    for (size_t i = 0; i < descRank; ++i)
-      allDims[i] = static_cast<int32_t>(i);
+    // Build the boundary-check dimension list. Skip dimensions where every
+    // MakeTensorDescOp defining this descriptor has shape[i] provably divisible
+    // by blockShape[i] — those elements are always in-bounds at runtime.
+    ArrayRef<int64_t> blockShape = descTensorType.getShape();
+    SmallVector<MakeTensorDescOp> allDescs =
+        mlir::triton::intel::findAllMakeTensorDescOps(op.getDesc());
+    SmallVector<int32_t> allDims;
+    for (size_t i = 0; i < descRank; ++i) {
+      int64_t bs = blockShape[i];
+      if (!allDescs.empty() && bs > 0 &&
+          llvm::all_of(allDescs, [&](MakeTensorDescOp d) {
+            return isDivisible(d.getShape()[i], bs);
+          }))
+        continue;
+      allDims.push_back(i);
+    }
 
     // Reuse the shared gather/scatter operand computation.
     // For column_major descriptor loads the result type has its inner 2
@@ -2226,36 +2237,10 @@ struct DescriptorLoadOpConversion
       const size_t nWords = std::max<size_t>(1, totalWidth / width);
       assert((width / valueElemNBits) * nWords * numVecs == numElems);
 
-      // Get the predicate mask for this element (always present for
-      // DescriptorLoadOp since we always do boundary checking)
-      Value pred = maskElems[vecStart];
-
       SmallVector<Type> retTys(nWords, IntegerType::get(ctx, width));
       Type retTy = retTys.size() > 1
                        ? vec_ty(IntegerType::get(ctx, width), nWords)
                        : retTys[0];
-
-      // Build the "other" value for out-of-bounds (same pattern as LoadOp)
-      Value other_ = b.undef(retTy);
-      for (size_t ii = 0; ii < nWords; ++ii) {
-        size_t size = width / valueElemNBits;
-        VectorType vecTy = vec_ty(valueElemTy, size);
-        Value v = b.undef(vecTy);
-        for (size_t s = 0; s < size; ++s) {
-          Value falseVal = otherElems[vecStart + ii * size + s];
-          Value sVal = createIndexAttrConstant(
-              rewriter, loc, typeConverter->getIndexType(), s);
-          v = b.insert_element(vecTy, v, falseVal, sVal);
-        }
-        v = b.bitcast(v, IntegerType::get(ctx, width));
-        other_ = (nWords > 1)
-                     ? b.insert_element(retTy, other_, v,
-                                        createIndexAttrConstant(
-                                            rewriter, loc,
-                                            typeConverter->getIndexType(), ii))
-                     : v;
-      }
-      assert(other_ && "Expecting a valid value");
 
       Value addrElem = b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
       uint32_t alignment = nWords * width / 8;
@@ -2267,17 +2252,45 @@ struct DescriptorLoadOpConversion
       };
 
       Value ret;
-      // NOTE: For DescriptorLoadOp, pred is always present since we always
-      // perform boundary checking for the gather fallback.
-      if (canUsePredicatedInstructions(op)) {
-        auto cacheModifier = tritonToIntelCacheModifier(op);
-        ret = TritonGEN::PredicatedLoadOp::create(
-            rewriter, loc, retTy, addrElem, pred, other_, cacheModifier);
+      if (maskElems.empty()) {
+        // All dimensions are provably in-bounds: emit an unconditional load.
+        ret = createLoadWithAttrs()[0];
       } else {
-        Block &endBlock = LLVM::intel::createPredicatedBlock(
-            rewriter, loc, pred, SmallVector<Value, 1>{other_},
-            createLoadWithAttrs);
-        ret = *endBlock.args_begin();
+        Value pred = maskElems[vecStart];
+
+        // Build the "other" value for out-of-bounds elements.
+        Value other_ = b.undef(retTy);
+        for (size_t ii = 0; ii < nWords; ++ii) {
+          size_t size = width / valueElemNBits;
+          VectorType vecTy = vec_ty(valueElemTy, size);
+          Value v = b.undef(vecTy);
+          for (size_t s = 0; s < size; ++s) {
+            Value falseVal = otherElems[vecStart + ii * size + s];
+            Value sVal = createIndexAttrConstant(
+                rewriter, loc, typeConverter->getIndexType(), s);
+            v = b.insert_element(vecTy, v, falseVal, sVal);
+          }
+          v = b.bitcast(v, IntegerType::get(ctx, width));
+          other_ =
+              (nWords > 1)
+                  ? b.insert_element(
+                        retTy, other_, v,
+                        createIndexAttrConstant(
+                            rewriter, loc, typeConverter->getIndexType(), ii))
+                  : v;
+        }
+        assert(other_ && "Expecting a valid value");
+
+        if (canUsePredicatedInstructions(op)) {
+          auto cacheModifier = tritonToIntelCacheModifier(op);
+          ret = TritonGEN::PredicatedLoadOp::create(
+              rewriter, loc, retTy, addrElem, pred, other_, cacheModifier);
+        } else {
+          Block &endBlock = LLVM::intel::createPredicatedBlock(
+              rewriter, loc, pred, SmallVector<Value, 1>{other_},
+              createLoadWithAttrs);
+          ret = *endBlock.args_begin();
+        }
       }
       assert(ret && "Expecting a valid value");
 
@@ -2353,11 +2366,20 @@ struct DescriptorStoreOpConversion
     assertDescriptorInnerShapeCompatible(op, descTensorType.getShape(),
                                          valueTy.getShape());
 
-    // Boundary check all dimensions — tensor descriptors always encode shape
-    // bounds and don't have a user-facing boundaryCheck attribute.
-    SmallVector<int32_t> allDims(descRank);
-    for (size_t i = 0; i < descRank; ++i)
-      allDims[i] = static_cast<int32_t>(i);
+    // Build the boundary-check dimension list (same logic as load).
+    ArrayRef<int64_t> blockShape = descTensorType.getShape();
+    SmallVector<MakeTensorDescOp> allDescs =
+        mlir::triton::intel::findAllMakeTensorDescOps(op.getDesc());
+    SmallVector<int32_t> allDims;
+    for (size_t i = 0; i < descRank; ++i) {
+      int64_t bs = blockShape[i];
+      if (!allDescs.empty() && bs > 0 &&
+          llvm::all_of(allDescs, [&](MakeTensorDescOp d) {
+            return isDivisible(d.getShape()[i], bs);
+          }))
+        continue;
+      allDims.push_back(i);
+    }
 
     // Reuse the shared gather/scatter operand computation.
     SmallVector<Value> ptrElems, maskElems, dummyOther;
