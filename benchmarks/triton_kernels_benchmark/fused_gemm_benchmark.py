@@ -10,8 +10,6 @@ This pattern is common in LLM architectures (e.g., Llama, Mistral) as the
 feed-forward network's SwiGLU activation layer.
 
 """
-from typing import List
-
 import torch
 import triton
 import triton.language as tl
@@ -26,7 +24,7 @@ def native_torch_fused_gemm(x, w_g, w_fc, b_g, b_fc):
     return gate * fc
 
 
-def get_fused_gemm_autotune_configs() -> List[triton.Config]:
+def get_fused_gemm_autotune_configs() -> list[triton.Config]:
     return [
         triton.Config(
             {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8, 'grf_mode': '256'},
@@ -139,7 +137,7 @@ def fused_gemm_swiglu_kernel(
 # Representative shapes for LLM feed-forward SwiGLU layers.
 # Each entry is [M, N, K] where x is (M, K), w_g/w_fc are (K, N), and y is (M, N).
 X_VALS = [
-    [1024, 5504, 4096],   # Llama-2 7B
+    [1024, 5504, 4096],  # Llama-2 7B
     [2048, 5504, 4096],
     [4096, 5504, 4096],
     [8192, 5504, 4096],
@@ -147,7 +145,7 @@ X_VALS = [
     [2048, 14336, 4096],
     [4096, 14336, 4096],
     [8192, 14336, 4096],
-    [1024, 8192, 7168],   # DeepSeek-R1 style
+    [1024, 8192, 7168],  # DeepSeek-R1 style
     [4096, 8192, 7168],
     [8192, 8192, 7168],
 ]
@@ -220,6 +218,7 @@ def benchmark(M, N, K, provider):
     return (gbps(mean_ms), gbps(max_ms), gbps(min_ms)), (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
 
 
+# pylint: disable=unused-argument
 def get_benchmark(providers_filter=None):
     return benchmark
 
