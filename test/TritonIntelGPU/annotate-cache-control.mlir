@@ -58,55 +58,85 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Test b — load that directly feeds a tt.dot stays NONE.
+// COM: Test b — dot-operand loads inside scf.for get evict_last.
+// COM: warpsPerCTA = [2, 2] gives both A and B warp-broadcast factor 2 (req 2).
+// COM: The pointers are loop-invariant function args, so every address-determining
+// COM: operand classifies as Invariant at the enclosing loop -> provenTemporalReuse
+// COM: returns true (req 3). Both loads promote.
+// COM: (warpsPerCTA = [4, 1] would be rejected: the A operand would have broadcast
+// COM: factor 1, failing req 2.)
 
-#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 #dot_b = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // CHECK-LABEL: @gemm_operand_load_unchanged
-  tt.func public @gemm_operand_load_unchanged(%aptr: tensor<32x32x!tt.ptr<f16>, #dot_a>,
-                                              %bptr: tensor<32x32x!tt.ptr<f16>, #dot_b>,
-                                              %c: tensor<32x32xf32, #dpas>) -> tensor<32x32xf32, #dpas> {
-    // CHECK: tt.load
-    // CHECK-NOT: cacheModifier = cg
-    %a = tt.load %aptr : tensor<32x32x!tt.ptr<f16>, #dot_a>
-    // CHECK: tt.load
-    // CHECK-NOT: cacheModifier = cg
-    %b = tt.load %bptr : tensor<32x32x!tt.ptr<f16>, #dot_b>
-    %d = tt.dot %a, %b, %c : tensor<32x32xf16, #dot_a> * tensor<32x32xf16, #dot_b> -> tensor<32x32xf32, #dpas>
-    tt.return %d : tensor<32x32xf32, #dpas>
+  // CHECK-LABEL: @gemm_operand_load_evict_last
+  tt.func public @gemm_operand_load_evict_last(%aptr: tensor<32x32x!tt.ptr<f16>, #dot_a>,
+                                               %bptr: tensor<32x32x!tt.ptr<f16>, #dot_b>,
+                                               %c_init: tensor<32x32xf32, #dpas>,
+                                               %lb: index, %ub: index, %step: index) -> tensor<32x32xf32, #dpas> {
+    // CHECK: scf.for
+    %r = scf.for %i = %lb to %ub step %step iter_args(%c = %c_init) -> tensor<32x32xf32, #dpas> {
+      // CHECK: tt.load
+      // CHECK-NOT: cacheModifier = cg
+      // CHECK-SAME: evictionPolicy = evict_last
+      %a = tt.load %aptr : tensor<32x32x!tt.ptr<f16>, #dot_a>
+      // CHECK: tt.load
+      // CHECK-NOT: cacheModifier = cg
+      // CHECK-SAME: evictionPolicy = evict_last
+      %b = tt.load %bptr : tensor<32x32x!tt.ptr<f16>, #dot_b>
+      %d = tt.dot %a, %b, %c : tensor<32x32xf16, #dot_a> * tensor<32x32xf16, #dot_b> -> tensor<32x32xf32, #dpas>
+      scf.yield %d : tensor<32x32xf32, #dpas>
+    }
+    tt.return %r : tensor<32x32xf32, #dpas>
   }
 }
 
 // -----
 
-// COM: Test c — load with #blocked encoding that is converted to #dot_a and
-// COM: consumed by tt.dot. warpsPerCTA = [1, 4]: warps tile only dim 1, so
-// COM: every warp reads the SAME rows on dim 0. SpatialReuseAnalysis (P1)
-// COM: structurally detects dim 0's zero warp basis and reports
-// COM: cross-subgroup reuse: the load is correctly left with the default
-// COM: cache modifier. The %b load has a dot-operand encoding (dim K
-// COM: warp-broadcast), also correctly skipped.
+// COM: Test c — load with #blocked encoding converted to #dot_a, dot inside
+// COM: scf.for. warpsPerCTA = [1, 4] on the blocked encoding, [2, 2] on the
+// COM: dpas. Both loads pass req 2 (factor>=2) and req 3 (provenTemporalReuse,
+// COM: via Invariant pointer):
+// COM:   - %a_blk: blocked tile per warp = sizePerThread × threadsPerWarp
+// COM:     = [1, 16]. With warpsPerCTA = [1, 4] the per-CTA tile is
+// COM:     [1, 64], which is *wider than the tensor* (32 cols). Two
+// COM:     warps wrap onto each column band → broadcast factor 2 on the
+// COM:     LinearLayout (a warp basis is all-zero across out-dims).
+// COM:     This is real cross-warp reuse, correctly accepted.
+// COM:   - %b: dot_b on dpas#warpsPerCTA=[2,2]; warp basis tiling M is
+// COM:     all-zero on B's [K, N] axes. Factor 2.
+// COM:
+// COM: The factor>=2 gate is *layout-driven*: it inspects the LinearLayout
+// COM: directly rather than reading warpsPerCTA heuristically, so
+// COM: tile-overflow broadcast (warp tile larger than tensor) is detected
+// COM: where a naive Wn-only check would miss it.
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
-#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 #dot_b = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // CHECK-LABEL: @blocked_to_dot_via_convert_warp_broadcast
-  tt.func public @blocked_to_dot_via_convert_warp_broadcast(%aptr: tensor<32x32x!tt.ptr<f16>, #blocked>,
-                                                            %bptr: tensor<32x32x!tt.ptr<f16>, #dot_b>,
-                                                            %c: tensor<32x32xf32, #dpas>) -> tensor<32x32xf32, #dpas> {
-    // CHECK: tt.load
-    // CHECK-NOT: cacheModifier = cg
-    %a_blk = tt.load %aptr : tensor<32x32x!tt.ptr<f16>, #blocked>
-    %a = ttg.convert_layout %a_blk : tensor<32x32xf16, #blocked> -> tensor<32x32xf16, #dot_a>
-    // CHECK: tt.load
-    // CHECK-NOT: cacheModifier = cg
-    %b = tt.load %bptr : tensor<32x32x!tt.ptr<f16>, #dot_b>
-    %d = tt.dot %a, %b, %c : tensor<32x32xf16, #dot_a> * tensor<32x32xf16, #dot_b> -> tensor<32x32xf32, #dpas>
-    tt.return %d : tensor<32x32xf32, #dpas>
+  // CHECK-LABEL: @blocked_to_dot_via_convert_warp_broadcast_evict_last
+  tt.func public @blocked_to_dot_via_convert_warp_broadcast_evict_last(%aptr: tensor<32x32x!tt.ptr<f16>, #blocked>,
+                                                                       %bptr: tensor<32x32x!tt.ptr<f16>, #dot_b>,
+                                                                       %c_init: tensor<32x32xf32, #dpas>,
+                                                                       %lb: index, %ub: index, %step: index) -> tensor<32x32xf32, #dpas> {
+    // CHECK: scf.for
+    %r = scf.for %i = %lb to %ub step %step iter_args(%c = %c_init) -> tensor<32x32xf32, #dpas> {
+      // CHECK: tt.load
+      // CHECK-NOT: cacheModifier = cg
+      // CHECK-SAME: evictionPolicy = evict_last
+      %a_blk = tt.load %aptr : tensor<32x32x!tt.ptr<f16>, #blocked>
+      %a = ttg.convert_layout %a_blk : tensor<32x32xf16, #blocked> -> tensor<32x32xf16, #dot_a>
+      // CHECK: tt.load
+      // CHECK-NOT: cacheModifier = cg
+      // CHECK-SAME: evictionPolicy = evict_last
+      %b = tt.load %bptr : tensor<32x32x!tt.ptr<f16>, #dot_b>
+      %d = tt.dot %a, %b, %c : tensor<32x32xf16, #dot_a> * tensor<32x32xf16, #dot_b> -> tensor<32x32xf32, #dpas>
+      scf.yield %d : tensor<32x32xf32, #dpas>
+    }
+    tt.return %r : tensor<32x32xf32, #dpas>
   }
 }
 
@@ -653,5 +683,196 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK-NOT: cacheModifier = cg
     %s = tt.load %sptr : tensor<16x8x!tt.ptr<i8>, #ll_scale>
     tt.return %s : tensor<16x8xi8, #ll_scale>
+  }
+}
+
+// -----
+
+// COM: Test h — known cross-subgroup reuse on a load that does NOT
+// COM: reach a tt.dot. shouldUseEvictLast rejects (requirement 3).
+// COM: Gate 3 still suppresses .cg.
+
+#blocked2d_h = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @known_reuse_no_dot_consumer
+  tt.func public @known_reuse_no_dot_consumer(%ptr: tensor<32x32x!tt.ptr<f32>, #blocked2d_h>,
+                                              %out: tensor<32x32x!tt.ptr<f32>, #blocked2d_h>) {
+    // CHECK: tt.load
+    // CHECK-NOT: cacheModifier = cg
+    // CHECK-NOT: evictionPolicy = evict_last
+    %0 = tt.load %ptr : tensor<32x32x!tt.ptr<f32>, #blocked2d_h>
+    tt.store %out, %0 : tensor<32x32x!tt.ptr<f32>, #blocked2d_h>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Test i — temporal-only proof, no spatial proof, dot-fed.
+// COM: shouldUseEvictLast rejects (requirement 1: spatial-only).
+// COM: Documents the conservative scope of the first land.
+
+#blocked2d_i = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 4], warpsPerCTA = [2, 2], order = [1, 0]}>
+#dpas_i = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot_a_i = #ttg.dot_op<{opIdx = 0, parent = #dpas_i, kWidth = 1}>
+#dot_b_i = #ttg.dot_op<{opIdx = 1, parent = #dpas_i, kWidth = 2}>
+// COM: B operand is passed as a function arg (not loaded inside the loop) so
+// COM: the only in-loop load is the temporal-only candidate. Operand-B loads
+// COM: with parent dpas warpsPerCTA=[4,1] would otherwise have spatial known
+// COM: reuse on N and get evict_last, which is correct behavior but would
+// COM: confuse FileCheck-NOT scoping inside the loop body.
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @temporal_only_dot_load_no_promote
+  tt.func public @temporal_only_dot_load_no_promote(%aptr: tensor<32x32x!tt.ptr<f16>, #blocked2d_i>,
+                                                    %b: tensor<32x32xf16, #dot_b_i>,
+                                                    %c_init: tensor<32x32xf32, #dpas_i>,
+                                                    %lb: index, %ub: index, %step: index) -> tensor<32x32xf32, #dpas_i> {
+    %result = scf.for %i = %lb to %ub step %step iter_args(%c = %c_init) -> tensor<32x32xf32, #dpas_i> {
+      // CHECK: tt.load
+      // CHECK-NOT: cacheModifier = cg
+      // CHECK-NOT: evictionPolicy = evict_last
+      %a_blk = tt.load %aptr : tensor<32x32x!tt.ptr<f16>, #blocked2d_i>
+      %a = ttg.convert_layout %a_blk : tensor<32x32xf16, #blocked2d_i> -> tensor<32x32xf16, #dot_a_i>
+      %d = tt.dot %a, %b, %c : tensor<32x32xf16, #dot_a_i> * tensor<32x32xf16, #dot_b_i> -> tensor<32x32xf32, #dpas_i>
+      scf.yield %d : tensor<32x32xf32, #dpas_i>
+    }
+    tt.return %result : tensor<32x32xf32, #dpas_i>
+  }
+}
+
+// -----
+
+// COM: Test j — budget overflow: first dot-fed load fits, second
+// COM: exceeds the per-loop running total. First gets evict_last,
+// COM: second stays at default (Gate 3 still suppresses .cg).
+// COM: warpsPerCTA = [2, 2]: both A and B operands have factor 2, so both
+// COM: pass the new factor>=2 gate. The budget gate is what decides which
+// COM: gets evict_last (account-as-you-go: A admitted, B exceeds).
+
+#dpas_j = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot_a_j = #ttg.dot_op<{opIdx = 0, parent = #dpas_j, kWidth = 1}>
+#dot_b_j = #ttg.dot_op<{opIdx = 1, parent = #dpas_j, kWidth = 2}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @budget_overflow_first_fits_second_doesnt
+  tt.func public @budget_overflow_first_fits_second_doesnt(%aptr: tensor<128x128x!tt.ptr<f16>, #dot_a_j>,
+                                                           %bptr: tensor<128x128x!tt.ptr<f16>, #dot_b_j>,
+                                                           %c_init: tensor<128x128xf32, #dpas_j>,
+                                                           %lb: index, %ub: index, %step: index) -> tensor<128x128xf32, #dpas_j> {
+    // CHECK: scf.for
+    %r = scf.for %i = %lb to %ub step %step iter_args(%c = %c_init) -> tensor<128x128xf32, #dpas_j> {
+      // CHECK: tt.load
+      // CHECK-NOT: cacheModifier = cg
+      // CHECK-SAME: evictionPolicy = evict_last
+      %a = tt.load %aptr : tensor<128x128x!tt.ptr<f16>, #dot_a_j>
+      // CHECK: tt.load
+      // CHECK-NOT: cacheModifier = cg
+      // CHECK-NOT: evictionPolicy = evict_last
+      %b = tt.load %bptr : tensor<128x128x!tt.ptr<f16>, #dot_b_j>
+      %d = tt.dot %a, %b, %c : tensor<128x128xf16, #dot_a_j> * tensor<128x128xf16, #dot_b_j> -> tensor<128x128xf32, #dpas_j>
+      scf.yield %d : tensor<128x128xf32, #dpas_j>
+    }
+    tt.return %r : tensor<128x128xf32, #dpas_j>
+  }
+}
+
+// -----
+
+// COM: Test k — single tile exceeds per-load budget cap. Rejected.
+
+#dpas_k = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot_a_k = #ttg.dot_op<{opIdx = 0, parent = #dpas_k, kWidth = 1}>
+#dot_b_k = #ttg.dot_op<{opIdx = 1, parent = #dpas_k, kWidth = 2}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @per_load_budget_exceeded
+  tt.func public @per_load_budget_exceeded(%aptr: tensor<128x256x!tt.ptr<f16>, #dot_a_k>,
+                                           %bptr: tensor<256x128x!tt.ptr<f16>, #dot_b_k>,
+                                           %c: tensor<128x128xf32, #dpas_k>) -> tensor<128x128xf32, #dpas_k> {
+    // CHECK: tt.load
+    // CHECK-NOT: cacheModifier = cg
+    // CHECK-NOT: evictionPolicy = evict_last
+    %a = tt.load %aptr : tensor<128x256x!tt.ptr<f16>, #dot_a_k>
+    %b = tt.load %bptr : tensor<256x128x!tt.ptr<f16>, #dot_b_k>
+    %d = tt.dot %a, %b, %c : tensor<128x256xf16, #dot_a_k> * tensor<256x128xf16, #dot_b_k> -> tensor<128x128xf32, #dpas_k>
+    tt.return %d : tensor<128x128xf32, #dpas_k>
+  }
+}
+
+// -----
+
+// COM: Test l — `ttig.prefetch` on the same pointer as a dot-fed load must
+// COM: NOT block evict_last promotion. ttig.prefetch declares
+// COM: `MemWrite<L2Cache>` purely to keep the optimizer from CSE/DCE-ing it;
+// COM: it does not mutate observable memory. Treating it as a writing peer
+// COM: (the prior bug) blocked Phase 2 promotion in the canonical Pipeline
+// COM: shape: pre-prefetch + in-loop prefetch + load on the same pointer.
+
+// COM: warpsPerCTA = [2, 2]: both operands have factor 2, satisfying the
+// COM: factor>=2 gate. (warpsPerCTA = [4, 1] would reject the A operand.)
+
+#dpas_l = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot_a_l = #ttg.dot_op<{opIdx = 0, parent = #dpas_l, kWidth = 1}>
+#dot_b_l = #ttg.dot_op<{opIdx = 1, parent = #dpas_l, kWidth = 2}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @prefetch_same_ptr_does_not_block_evict_last
+  tt.func public @prefetch_same_ptr_does_not_block_evict_last(%aptr: tensor<32x32x!tt.ptr<f16>, #dot_a_l>,
+                                                              %bptr: tensor<32x32x!tt.ptr<f16>, #dot_b_l>,
+                                                              %c_init: tensor<32x32xf32, #dpas_l>,
+                                                              %lb: index, %ub: index, %step: index) -> tensor<32x32xf32, #dpas_l> {
+    ttig.prefetch %aptr {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x32x!tt.ptr<f16>, #dot_a_l>
+    ttig.prefetch %bptr {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<32x32x!tt.ptr<f16>, #dot_b_l>
+    // CHECK: scf.for
+    %r = scf.for %i = %lb to %ub step %step iter_args(%c = %c_init) -> tensor<32x32xf32, #dpas_l> {
+      // CHECK: tt.load
+      // CHECK-NOT: cacheModifier = cg
+      // CHECK-SAME: evictionPolicy = evict_last
+      %a = tt.load %aptr : tensor<32x32x!tt.ptr<f16>, #dot_a_l>
+      // CHECK: tt.load
+      // CHECK-NOT: cacheModifier = cg
+      // CHECK-SAME: evictionPolicy = evict_last
+      %b = tt.load %bptr : tensor<32x32x!tt.ptr<f16>, #dot_b_l>
+      %d = tt.dot %a, %b, %c : tensor<32x32xf16, #dot_a_l> * tensor<32x32xf16, #dot_b_l> -> tensor<32x32xf32, #dpas_l>
+      scf.yield %d : tensor<32x32xf32, #dpas_l>
+    }
+    tt.return %r : tensor<32x32xf32, #dpas_l>
+  }
+}
+
+// -----
+
+// COM: Test m — Phase 3 broadcast-factor gate. With warpsPerCTA = [4, 1]
+// COM: (Wm = 4, Wn = 1), the A operand is loaded into a [M, K] tile that
+// COM: warps strictly partition by M (no warp shares any row of A). Even
+// COM: though the K axis is "warp-invariant" structurally, the broadcast
+// COM: factor is 1 — no real cross-warp reuse — and the new gate must
+// COM: REJECT promotion. The B operand has factor 4 (warp basis tiles M
+// COM: which doesn't appear on B) and is correctly promoted. This is the
+// COM: canonical V.5b over-promotion case.
+
+#dpas_m = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot_a_m = #ttg.dot_op<{opIdx = 0, parent = #dpas_m, kWidth = 1}>
+#dot_b_m = #ttg.dot_op<{opIdx = 1, parent = #dpas_m, kWidth = 2}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @factor_one_rejects_evict_last_factor_n_accepts
+  tt.func public @factor_one_rejects_evict_last_factor_n_accepts(%aptr: tensor<32x32x!tt.ptr<f16>, #dot_a_m>,
+                                                                 %bptr: tensor<32x32x!tt.ptr<f16>, #dot_b_m>,
+                                                                 %c_init: tensor<32x32xf32, #dpas_m>,
+                                                                 %lb: index, %ub: index, %step: index) -> tensor<32x32xf32, #dpas_m> {
+    // CHECK: scf.for
+    %r = scf.for %i = %lb to %ub step %step iter_args(%c = %c_init) -> tensor<32x32xf32, #dpas_m> {
+      // A operand: factor = 1 → rejected. Reuse-suspected branch returns
+      // false → no annotation set; load stays at default cache + default eviction.
+      // CHECK: tt.load
+      // CHECK-NOT: cacheModifier = cg
+      // CHECK-NOT: evictionPolicy = evict_last
+      %a = tt.load %aptr : tensor<32x32x!tt.ptr<f16>, #dot_a_m>
+      // B operand: factor = 4 → accepted, promoted to evict_last.
+      // CHECK: tt.load
+      // CHECK-NOT: cacheModifier = cg
+      // CHECK-SAME: evictionPolicy = evict_last
+      %b = tt.load %bptr : tensor<32x32x!tt.ptr<f16>, #dot_b_m>
+      %d = tt.dot %a, %b, %c : tensor<32x32xf16, #dot_a_m> * tensor<32x32xf16, #dot_b_m> -> tensor<32x32xf32, #dpas_m>
+      scf.yield %d : tensor<32x32xf32, #dpas_m>
+    }
+    tt.return %r : tensor<32x32xf32, #dpas_m>
   }
 }

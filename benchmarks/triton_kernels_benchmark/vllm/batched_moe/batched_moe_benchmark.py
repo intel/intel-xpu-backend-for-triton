@@ -18,7 +18,7 @@ import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
 
-from vllm.model_executor.layers.fused_moe.fused_batched_moe import invoke_moe_batched_triton_kernel
+from vllm.model_executor.layers.fused_moe.experts.fused_batched_moe import invoke_moe_batched_triton_kernel
 
 # Import utility functions from vLLM tests
 from tests.kernels.moe.utils import make_quantized_test_activations, make_test_weight

@@ -1,0 +1,28 @@
+name: Install vllm
+description: Install vLLM and vLLM XPU kernels
+
+inputs:
+  use-branch-wheel:
+    description: Use prebuilt vLLM XPU kernels wheel from the current branch (must have a successful nightly build)
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Run install-vllm.sh
+      shell: bash --noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+      run: |
+        install_args=()
+        if [[ "${{ inputs.use-branch-wheel }}" == "true" ]]; then
+          install_args+=(--triton-repo-branch "${{ github.ref_name }}")
+        else
+          if gh api "repos/${{ github.repository }}/compare/main...${{ github.sha }}" \
+              --jq '.files[].filename' | grep -qxF \
+              -e .github/workflows/nightly-wheels.yml \
+              -e scripts/vllm/install-vllm.sh \
+              -e scripts/vllm/vllm-xpu-kernels-pin.txt; then
+            install_args+=(--source)
+          fi
+        fi
+        ./scripts/vllm/install-vllm.sh "${install_args[@]}"

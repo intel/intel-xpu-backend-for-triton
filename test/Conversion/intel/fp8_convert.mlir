@@ -71,3 +71,34 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return %dst : tensor<32xf16, #blocked>
   }
 }
+
+// -----
+
+// f32 -> f8E4M3FN goes through Fp_to_Fp8_RTNE<Float32Type, ...> which uses
+// `1ULL << (SrcBits - 1)` as the sign-bit mask; with `SrcBits == 32` this
+// must materialize as the i32 constant `0x80000000` (-2147483648 signed).
+// A regression to `1L << 31` would crash on Windows MSVC (LLP64).
+#blocked = #ttg.blocked<{sizePerThread = [16], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.min_sg_size = 16 : i32, ttig.target_arch = "spir64" } {
+  tt.func public @convert_f32_to_f8E4M3FN(%src: tensor<16xf32, #blocked>) -> tensor<16xf8E4M3FN, #blocked> {
+    %dst = tt.fp_to_fp %src, rounding = rtne : tensor<16xf32, #blocked> -> tensor<16xf8E4M3FN, #blocked>
+    // CHECK-LABEL: llvm.func spir_kernelcc @convert_f32_to_f8E4M3FN
+    // CHECK: llvm.mlir.constant(-2147483648 : i32) : i32
+    // CHECK: llvm.intr.nearbyint
+    tt.return %dst : tensor<16xf8E4M3FN, #blocked>
+  }
+}
+
+// -----
+
+// f32 -> f8E5M2 takes the same Fp_to_Fp8_RTNE<Float32Type, ...> path.
+#blocked = #ttg.blocked<{sizePerThread = [16], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.min_sg_size = 16 : i32, ttig.target_arch = "spir64" } {
+  tt.func public @convert_f32_to_f8E5M2(%src: tensor<16xf32, #blocked>) -> tensor<16xf8E5M2, #blocked> {
+    %dst = tt.fp_to_fp %src, rounding = rtne : tensor<16xf32, #blocked> -> tensor<16xf8E5M2, #blocked>
+    // CHECK-LABEL: llvm.func spir_kernelcc @convert_f32_to_f8E5M2
+    // CHECK: llvm.mlir.constant(-2147483648 : i32) : i32
+    // CHECK: llvm.intr.nearbyint
+    tt.return %dst : tensor<16xf8E5M2, #blocked>
+  }
+}

@@ -7,10 +7,14 @@
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
+#include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
+#include <cstdlib>
+#include <cstring>
 #include <limits>
 
 #define DEBUG_TYPE "tritonintelgpu-pipeline"
@@ -112,6 +116,61 @@ collectPrefetchCandidates(scf::ForOp forOp, int numStages) {
   return candidates;
 }
 
+/// Return true iff upstream loop scheduling annotations are present on \p forOp
+/// and cover every prefetch candidate, so Intel's pipeliner can validate the
+/// upstream contract. The check is observational: callers do not branch on it
+/// today, but a `false` return signals that we cannot rely on the annotations
+/// being a faithful description of the candidate set.
+///
+/// All of the following must hold:
+///   1. The opt-in env var TRITON_INTEL_ANNOTATE_LATENCIES is "1" (matching
+///      the activation in third_party/intel/backend/compiler.py).
+///   2. tt::CoarseSchedule::deSerialize succeeds, which requires
+///      `tt.scheduled_max_stage` on the for-op.
+///   3. Every candidate carries `loop.stage`. The only sanctioned exception is
+///      the Xe3P+ elementwise carve-out (loads that do not feed a dot), which
+///      upstream cannot annotate because the upstream scheduler keys on dot
+///      operands -- see collectPrefetchCandidates.
+static bool annotationsAreUsable(scf::ForOp forOp,
+                                 ArrayRef<PrefetchCandidate> candidates) {
+  // (1) Env-var gate. Read with std::getenv to match compiler.py's
+  // `os.environ.get(...) == "1"` semantics and avoid the assertIsRecognized
+  // allowlist in mlir::triton::tools::getBoolEnv.
+  const char *envVal = std::getenv("TRITON_INTEL_ANNOTATE_LATENCIES");
+  if (!envVal || std::strcmp(envVal, "1") != 0) {
+    LDBG(
+        "annotationsAreUsable: env-off (TRITON_INTEL_ANNOTATE_LATENCIES != 1)");
+    return false;
+  }
+
+  // (2) `tt.scheduled_max_stage` must be on the for-op. deSerialize returns
+  // failure() when the attr is absent.
+  tt::CoarseSchedule upstream;
+  if (failed(upstream.deSerialize(forOp, /*normalizeClusterId=*/true))) {
+    LDBG("annotationsAreUsable: no tt.scheduled_max_stage on for-op");
+    return false;
+  }
+
+  // (3) Each candidate must carry loop.stage, except the Xe3P+ elementwise
+  // carve-out (a candidate that does not feed a dot, on a module that supports
+  // 256B prefetch -- see collectPrefetchCandidates lines 100-110).
+  ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
+  bool enableElementwisePrefetch = moduleOp->hasAttr(
+      ttgi::TritonIntelGPUDialect::getSupportPrefetch256BAttrName());
+  for (const PrefetchCandidate &c : candidates) {
+    if (c.op->hasAttr(tt::kLoopStageAttrName))
+      continue;
+    bool isElementwiseCarveOut =
+        enableElementwisePrefetch && !PrefetchCandidate::feedsDot(c.op);
+    if (isElementwiseCarveOut)
+      continue;
+    LDBG("annotationsAreUsable: candidate without loop.stage: " << *c.op);
+    return false;
+  }
+
+  return true;
+}
+
 } // namespace
 
 /// Replace the ForOp's yield with a new one with the given operands appended.
@@ -164,7 +223,8 @@ static ttg::DotOperandEncodingAttr allTransitiveUsesHaveDotEncoding(Value val) {
 }
 
 /// Create a prefetch operation for the given load operation.
-static void createPrefetchOp(scf::ForOp &forOp, tt::LoadOp loadOp) {
+static void createPrefetchOp(scf::ForOp &forOp, tt::LoadOp loadOp,
+                             bool useAnnotations) {
   OpBuilder builder(forOp);
   builder.setInsertionPoint(loadOp);
   auto prefetchOp = ttgi::PrefetchOp::create(
@@ -174,10 +234,41 @@ static void createPrefetchOp(scf::ForOp &forOp, tt::LoadOp loadOp) {
   // inherit attributes from the load operation
   auto attrs = loadOp->getAttrDictionary();
   prefetchOp->setAttrs(attrs);
+  // Drop upstream scheduling attrs that may have been attached by
+  // `tritongpu-assign-latencies` / `tritongpu-schedule-loops`. The Intel
+  // pipeliner owns scheduling for prefetch ops and would otherwise produce
+  // self-inconsistent IR (legacy stage assignment + upstream stage attr).
+  // `tt.latency` was already consumed by the upstream passes.
+  prefetchOp->removeAttr(tt::kLoopStageAttrName);
+  prefetchOp->removeAttr(tt::kLoopClusterAttrName);
+
+  // When the upstream annotation contract is in effect, copy the source
+  // load's `loop.stage` / `loop.cluster` onto the new prefetch op so that
+  // `createSchedule` can read the upstream-picked stage instead of the
+  // hardcoded legacy value (0). The load itself still carries the attrs;
+  // the strip above only cleared the dictionary copy on the prefetch op.
+  if (useAnnotations) {
+    if (Attribute s = loadOp->getAttr(tt::kLoopStageAttrName)) {
+      prefetchOp->setAttr(tt::kLoopStageAttrName, s);
+      // Warn if upstream picked a non-zero stage (the legacy hardcoded
+      // value is 0; any other value means this PR shifts the prefetch
+      // off the legacy stage).
+      if (auto stageAttr = dyn_cast<IntegerAttr>(s)) {
+        int upstreamStage = stageAttr.getInt();
+        if (upstreamStage != 0)
+          LDBG("annotation-driven prefetch deviates from legacy stage 0: "
+               "stage="
+               << upstreamStage << " for load=" << *loadOp);
+      }
+    }
+    if (Attribute c = loadOp->getAttr(tt::kLoopClusterAttrName))
+      prefetchOp->setAttr(tt::kLoopClusterAttrName, c);
+  }
 }
 
 /// Create a prefetch operation for the given load operation.
-static void createPrefetchOp(scf::ForOp &forOp, tt::DescriptorLoadOp loadOp) {
+static void createPrefetchOp(scf::ForOp &forOp, tt::DescriptorLoadOp loadOp,
+                             bool useAnnotations) {
   OpBuilder builder(forOp);
   builder.setInsertionPoint(loadOp);
   auto prefetchOp = ttgi::DescriptorPrefetchOp::create(
@@ -187,16 +278,37 @@ static void createPrefetchOp(scf::ForOp &forOp, tt::DescriptorLoadOp loadOp) {
   // inherit attributes from the load operation
   auto attrs = loadOp->getAttrDictionary();
   prefetchOp->setAttrs(attrs);
+  // See the LoadOp overload above for the rationale.
+  prefetchOp->removeAttr(tt::kLoopStageAttrName);
+  prefetchOp->removeAttr(tt::kLoopClusterAttrName);
+
+  // See the LoadOp overload above for the rationale.
+  if (useAnnotations) {
+    if (Attribute s = loadOp->getAttr(tt::kLoopStageAttrName)) {
+      prefetchOp->setAttr(tt::kLoopStageAttrName, s);
+      if (auto stageAttr = dyn_cast<IntegerAttr>(s)) {
+        int upstreamStage = stageAttr.getInt();
+        if (upstreamStage != 0)
+          LDBG("annotation-driven prefetch deviates from legacy stage 0: "
+               "stage="
+               << upstreamStage << " for load=" << *loadOp);
+      }
+    }
+    if (Attribute c = loadOp->getAttr(tt::kLoopClusterAttrName))
+      prefetchOp->setAttr(tt::kLoopClusterAttrName, c);
+  }
 }
 
 /// Create prefetch operations for the given load candidates.
 static void createPrefetchOps(scf::ForOp &forOp,
-                              ArrayRef<PrefetchCandidate> candidates) {
+                              ArrayRef<PrefetchCandidate> candidates,
+                              bool useAnnotations) {
   assert(!candidates.empty() && "Expecting at least one candidate");
   for (const PrefetchCandidate &candidate : candidates) {
     TypeSwitch<Operation *>(candidate.op)
-        .Case<tt::LoadOp, tt::DescriptorLoadOp>(
-            [&](auto loadOp) { createPrefetchOp(forOp, loadOp); })
+        .Case<tt::LoadOp, tt::DescriptorLoadOp>([&](auto loadOp) {
+          createPrefetchOp(forOp, loadOp, useAnnotations);
+        })
         .Default([](Operation *op) {
           llvm_unreachable("Unsupported load operation type");
         });
@@ -326,8 +438,22 @@ createSchedule(scf::ForOp forOp, int numStages) {
          [&](Operation *op) { return stage1deps.count(op); });
 
   // Then Schedule stage 0.
-  addOps(forOp, 0, schedule,
-         [&](Operation *op) { return prefetchAndDeps.count(op); });
+  // Prefetch ops: stage from `loop.stage` attr (set by `createPrefetchOp`
+  // when `useAnnotations` is true) or 0 (legacy hardcoded value, also the
+  // value upstream picks for direct-feed-to-dot loads in 3-stage matmul
+  // loops). Non-prefetch members of `prefetchAndDeps` (the backward
+  // dependencies) stay at stage 0.
+  for (Operation &op : forOp.getBody()->without_terminator()) {
+    if (!prefetchAndDeps.count(&op))
+      continue;
+    unsigned stage = 0;
+    if (isa<ttgi::PrefetchOp, ttgi::DescriptorPrefetchOp>(&op)) {
+      if (auto stageAttr =
+              op.getAttrOfType<IntegerAttr>(tt::kLoopStageAttrName))
+        stage = stageAttr.getInt();
+    }
+    schedule.emplace_back(&op, stage);
+  }
 
   // Schedule stage `numStage - 1` first.
   // Finally schedule the dot ops in stage `numStage - 1` so that they get
@@ -378,8 +504,15 @@ bool ttgi::preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
            << " in " << numStages << " stages\n";
   });
 
+  // When the upstream annotation pipeline has run and covers every
+  // candidate, drive the prefetch op's stage from upstream's
+  // `loop.stage` / `loop.cluster` attrs instead of hardcoding stage 0.
+  // Other ops keep the stages Intel picks today.
+  bool useAnnotations = annotationsAreUsable(forOp, candidates);
+  LDBG("Pipeline path: " << (useAnnotations ? "annotation-driven" : "legacy"));
+
   // 2. Create the prefetching operations for the loads collected.
-  createPrefetchOps(forOp, candidates);
+  createPrefetchOps(forOp, candidates, useAnnotations);
 
   // 3. Create the final schedule for the kernel loop. This will dictate the
   // stages and order of operations to the pipeline expander.
@@ -393,7 +526,10 @@ bool ttgi::preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
         s = std::move(schedule);
       };
   options.peelEpilogue = false;
-  options.predicateFn = predicateOp;
+  // Qualify with `::` so unqualified lookup doesn't pick up
+  // `mlir::triton::predicateOp` (a different overload declared in
+  // PipeliningUtility.h that would crash on `ttig.descriptor_prefetch`).
+  options.predicateFn = ::predicateOp;
   options.supportDynamicLoops = true;
   options.annotateFn = [](Operation *op,
                           mlir::scf::PipeliningOption::PipelinerPart part,

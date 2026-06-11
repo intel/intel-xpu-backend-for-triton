@@ -14,6 +14,21 @@ template <typename T> static T product(const std::vector<T> &vec) {
                          std::multiplies<T>());
 }
 
+std::optional<unsigned> getLaneFastChangeDim(const LinearLayout &ll,
+                                             MLIRContext *ctx) {
+  auto kLane = StringAttr::get(ctx, "lane");
+  if (!ll.hasInDim(kLane))
+    return std::nullopt;
+  // First lane basis vector (fastest-varying lane bit). Mirrors the gate in
+  // getBlockIOTileSize<false>: the lane base must move along exactly one tensor
+  // dimension, else the layout is not a clean 2D block-I/O tile.
+  ArrayRef<int32_t> laneBase0 = ll.getBasis(kLane, /*pos=*/0);
+  if (llvm::count_if(laneBase0, [](int32_t x) { return x > 0; }) != 1)
+    return std::nullopt;
+  auto it = llvm::find_if(laneBase0, [](int32_t x) { return x > 0; });
+  return static_cast<unsigned>(std::distance(laneBase0.begin(), it));
+}
+
 // Return the tileHeight, tileWidth, numElemPerPackedVal, vBlocks, row Dim and
 // column Dim.
 template <bool isLoad>
@@ -542,6 +557,37 @@ bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
       return false;
   }
 
+  return true;
+}
+
+bool validate2DBlockStoreTile(const LinearLayout &ll, unsigned memContiguousDim,
+                              unsigned elemSizeInBits,
+                              RankedTensorType tensorType,
+                              AxisInfo *maskAxisInfo,
+                              BlockIOTileSizeInfo &sizeInfoOut) {
+  // Compute the store tile geometry and reject configurations the 2D block
+  // store cannot express. This mirrors the checks the store lowering applies;
+  // keeping them here (rather than duplicated inline in each store lowering
+  // pattern) makes this the single source of truth for store eligibility.
+  BlockIOTileSizeInfo sizeInfo = getBlockIOTileSize</*isLoad=*/false>(
+      ll, memContiguousDim, elemSizeInBits, maskAxisInfo,
+      /*oneMatrixPerLoadForBT=*/false);
+  if (!sizeInfo.isValid())
+    return false;
+
+  unsigned packedElemSizeInBits = elemSizeInBits * sizeInfo.numElemPerPackedVal;
+  if (!check2DBlockAddressPayloadRestriction(packedElemSizeInBits,
+                                             sizeInfo.tileWidth))
+    return false;
+
+  // 2D block store does not support transpose.
+  if (sizeInfo.transpose)
+    return false;
+
+  // The store always issues a single v-block per message.
+  sizeInfo.vBlocks = 1;
+
+  sizeInfoOut = sizeInfo;
   return true;
 }
 

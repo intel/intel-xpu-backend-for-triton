@@ -1,0 +1,6 @@
+# Split-K GEMM shapes — high-K shapes where split-K parallelization is beneficial
+
+PvcGemmSplitKBF16BF16FP32_RRR_1 --bm_name=bf16_bf16_fp32 --m=512 --k=32768 --n=8192
+PvcGemmSplitKBF16BF16FP32_RRR_1 --bm_name=bf16_bf16_fp32 --m=1024 --k=28672 --n=8192
+PvcGemmSplitKBF16BF16FP32_RRR_1 --bm_name=bf16_bf16_fp32 --m=3072 --k=4096 --n=3072
+PvcGemmSplitKBF16BF16FP32_RRR_1 --bm_name=bf16_bf16_fp32 --m=4096 --k=4096 --n=4096
