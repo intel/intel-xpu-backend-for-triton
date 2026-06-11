@@ -29,8 +29,8 @@ def winner_configs(autotune_json, keep_top):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("cache_dir", type=Path)
-    ap.add_argument("--keep-top", type=int, default=2,
-                    help="Per autotuned kernel, keep this many configs (winner first). Default 2.")
+    ap.add_argument("--keep-top", type=int, default=1,
+                    help="Per autotuned kernel, keep this many configs (winner first). Default 1.")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
