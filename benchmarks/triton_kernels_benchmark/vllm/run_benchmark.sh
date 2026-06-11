@@ -11,6 +11,10 @@
 # Environment variables forwarded to the benchmark script:
 #   FP8=1         - enable FP8 configurations
 #   DEBUG_BENCH=1 - run only one configuration (faster for sanity checking)
+#   PRUNE_CACHE=1 - redirect TRITON_CACHE_DIR to a per-run dir and, after the
+#                   benchmark completes, delete every autotune candidate that
+#                   wasn't the winner. The surviving cache is saved next to the
+#                   benchmark output so its IR (.ttgir/.llir/.spv) can be diffed.
 set -e
 
 # Workaround for #6759: BMG OOM after Agama 1222 -> 1249 driver bump.
@@ -44,9 +48,29 @@ echo ""
 echo "=== Applying patch ==="
 git apply "$PATCH_FILE"
 
+if [[ -n "$PRUNE_CACHE" ]]; then
+    if [[ -z "$TRITON_CACHE_DIR" ]]; then
+        # No user-supplied cache dir — allocate a per-run one so we never touch ~/.triton/cache.
+        TRITON_CACHE_DIR="$BENCHMARK_DIR/triton_cache_$$"
+        rm -rf "$TRITON_CACHE_DIR"
+        mkdir -p "$TRITON_CACHE_DIR"
+        export TRITON_CACHE_DIR
+        echo "=== PRUNE_CACHE=1, allocated TRITON_CACHE_DIR=$TRITON_CACHE_DIR ==="
+    else
+        echo "=== PRUNE_CACHE=1, pruning user-supplied TRITON_CACHE_DIR=$TRITON_CACHE_DIR ==="
+    fi
+fi
+
 echo ""
 echo "=== Running benchmark WITH tensor descriptor patch ==="
 TD_PATCHED=1 python "$BENCHMARK_SCRIPT" "$@"
+
+if [[ -n "$PRUNE_CACHE" ]]; then
+    echo ""
+    echo "=== Pruning autotune losers from $TRITON_CACHE_DIR ==="
+    python "$SCRIPT_DIR/prune_autotune_cache.py" "$TRITON_CACHE_DIR" \
+        ${PRUNE_KEEP_TOP:+--keep-top "$PRUNE_KEEP_TOP"}
+fi
 
 echo ""
 echo "=== Reverting patch ==="
