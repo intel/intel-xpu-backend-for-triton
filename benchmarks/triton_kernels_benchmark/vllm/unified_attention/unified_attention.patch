@@ -1,5 +1,34 @@
+diff --git a/vllm/v1/attention/ops/triton_attention_helpers.py b/vllm/v1/attention/ops/triton_attention_helpers.py
+index 6ed50f6a2..9f15cdf03 100644
+--- a/vllm/v1/attention/ops/triton_attention_helpers.py
++++ b/vllm/v1/attention/ops/triton_attention_helpers.py
+@@ -31,8 +31,8 @@ def apply_softcap(S, x):
+     ``x * tanh(S / x)`` rewritten to avoid a direct ``tanh`` call.
+     """
+     Sdiv = S / x
+-    p1 = tl.exp(Sdiv)
+-    p2 = tl.exp(-Sdiv)
++    p1 = tl.math.exp2(Sdiv * 1.4426950408889634)
++    p2 = tl.math.exp2(-Sdiv * 1.4426950408889634)
+     return x * (p1 - p2) / (p1 + p2)
+ 
+ 
+@@ -373,11 +373,11 @@ def softmax_step(S, M, L):
+     # the entire row. In this case we need to set m_j 0 to avoid NaN
+     m_j = tl.where(m_j > float("-inf"), m_j, 0.0)
+     # P : (BLOCK_M, TILE_SIZE)
+-    P = tl.exp(S - m_j[:, None])
++    P = tl.math.exp2((S - m_j[:, None]) * 1.4426950408889634)
+     # l_j : (BLOCK_M,)
+     l_j = tl.sum(P, axis=1)
+     # alpha : (BLOCK_M, )
+-    alpha = tl.exp(M - m_j)
++    alpha = tl.math.exp2((M - m_j) * 1.4426950408889634)
+     # update constants
+     L_new = L * alpha + l_j
+     return m_j, L_new, P, alpha
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 0ffe85054..3aaed2ad3 100644
+index 0ffe85054..ed75f2108 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -279,6 +279,9 @@ def kernel_unified_attention(
@@ -28,6 +57,24 @@ index 0ffe85054..3aaed2ad3 100644
          if USE_PER_TOKEN_HEAD_SCALES:
              # Per-token-head quant: apply v_scale to P instead of V.
              P_v = (P * v_token_head_scales[None, :]).to(V.dtype)
+@@ -708,7 +706,7 @@ def reduce_segments(
+ 
+     # load and rescale segment exp sums
+     segm_expsum = tl.load(segm_expsum_ptr + segm_offset, mask=segm_mask, other=0.0)
+-    segm_expsum = segm_expsum * tl.exp(segm_max - overall_max)
++    segm_expsum = segm_expsum * tl.math.exp2((segm_max - overall_max) * 1.4426950408889634)
+     overall_expsum = tl.sum(segm_expsum)
+ 
+     # load, rescale, and add segment attention outputs
+@@ -724,7 +722,7 @@ def reduce_segments(
+         mask=segm_mask[:, None] & dim_mask[None, :],
+         other=0.0,
+     )
+-    segm_output *= tl.exp(segm_max - overall_max)[:, None]
++    segm_output *= tl.math.exp2((segm_max - overall_max) * 1.4426950408889634)[:, None]
+     acc_sum = tl.sum(segm_output, axis=0)
+     # safely divide by overall_expsum, returning 0.0 if overall_expsum is 0
+     acc = tl.where(overall_expsum == 0.0, 0.0, acc_sum / overall_expsum)
 @@ -847,7 +845,7 @@ def unified_attention(
      head_size = q.shape[2]
  
