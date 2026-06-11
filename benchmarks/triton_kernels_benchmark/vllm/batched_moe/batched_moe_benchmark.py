@@ -128,7 +128,6 @@ def get_batched_mm_benchmark(
         # pytorch is very slow with fp8 case, for (8, 64, 1024, 2048) case it has ~0.15 TFlops vs 1.5 for triton
         del supported_providers['pytorch']
 
-    # SYCL-TLA grouped GEMM is bf16-only here; skip it for fp8 and when the kernels aren't importable.
     if not is_fp8:
         supported_providers['sycl-tla'] = 'SYCL-TLA'
 
