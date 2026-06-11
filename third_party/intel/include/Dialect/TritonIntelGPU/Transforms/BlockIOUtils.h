@@ -98,6 +98,22 @@ bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
                              bool oneMatrixPerLoadForBT = false,
                              AxisInfo *maskAxisInfo = nullptr);
 
+/// Validate that a store with the given encoding and element size can be
+/// lowered to 2D block I/O, applying the constraints the store lowering
+/// enforces: a valid tile shape, the HW address payload restriction, no
+/// transpose, and a single v-block. On success returns true and writes the
+/// validated tile geometry (with vBlocks forced to 1) into \p sizeInfoOut; on
+/// failure returns false and leaves \p sizeInfoOut unspecified.
+///
+/// This is the single source of truth for 2D block store eligibility, shared
+/// by the store lowering patterns in LoadStoreOpToLLVM.cpp so their tile
+/// validation cannot drift.
+bool validate2DBlockStoreTile(const LinearLayout &ll, unsigned memContiguousDim,
+                              unsigned elemSizeInBits,
+                              RankedTensorType tensorType,
+                              AxisInfo *maskAxisInfo,
+                              BlockIOTileSizeInfo &sizeInfoOut);
+
 } // namespace mlir::triton::gpu::intel
 
 #endif // TRITONINTELGPU_TRANSFORMS_BLOCKIOUTILS_H
