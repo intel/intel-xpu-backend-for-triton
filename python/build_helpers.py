@@ -503,7 +503,7 @@ def download_and_copy_dependencies(helper_args: BuildHelperArgs):
 
     # We download a separate ptxas for blackwell, since there are some bugs when using it for hopper
     download_and_copy(
-        name="nvcc",
+        name="nvcc-blackwell",
         src_func=lambda system, arch, version: f"cuda_nvcc-{system}-{arch}-{version}-archive/bin/ptxas{exe_extension}",
         dst_path="bin/ptxas-blackwell",
         override_path=helper_args.ptxas_blackwell_path,
@@ -536,7 +536,7 @@ def download_and_copy_dependencies(helper_args: BuildHelperArgs):
     )
     crt = "crt" if int(nvidia_toolchain_version["cudacrt"].split(".")[0]) >= 13 else "nvcc"
     download_and_copy(
-        name="nvcc",
+        name="nvcc-crt",
         src_func=lambda system, arch, version: f"cuda_{crt}-{system}-{arch}-{version}-archive/include",
         dst_path="include",
         override_path=helper_args.cudacrt_path,
@@ -576,7 +576,7 @@ def download_and_copy_dependencies(helper_args: BuildHelperArgs):
         helper_args=helper_args,
     )
     download_and_copy(
-        name="cupti",
+        name="cupti-blackwell",
         src_func=lambda system, arch, version: f"cuda_cupti-{system}-{arch}-{version}-archive/lib",
         dst_path="lib/cupti-blackwell",
         override_path=helper_args.cupti_lib_blackwell_path,
