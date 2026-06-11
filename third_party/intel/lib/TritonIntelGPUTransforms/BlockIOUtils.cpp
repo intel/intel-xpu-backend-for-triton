@@ -566,7 +566,8 @@ bool isMemoryRowMajor(Operation *op) {
   auto blockIOAttr = op->getAttrOfType<StringAttr>(
       TritonIntelGPUDialect::getBlockIOAttrName());
   assert(blockIOAttr && "expected block_io attribute");
-  auto mode = symbolizeBlockIOMode(blockIOAttr.getValue());
+  std::optional<BlockIOMode> mode =
+      symbolizeBlockIOMode(blockIOAttr.getValue());
   return !mode || *mode == BlockIOMode::RowMajor;
 }
 
@@ -592,20 +593,18 @@ bool isBlockIOEligible(Operation *loadOp, RankedTensorType tensorTy) {
 // fallback when 2D block I/O does not apply). The cost is the number of
 // vectorized memory accesses: numElements / vectorization width, where the
 // width is the layout's contiguity along the fastest-varying dimension.
-// Deliberately omits descriptor address-level AxisInfo (unavailable in RLC;
-// it cancels in a sign-only comparison — same op/descriptor on both sides).
-static int64_t estimateGatherCost(RankedTensorType type) {
+static unsigned estimateGatherCost(RankedTensorType type) {
   triton::gpu::LinearEncodingAttr lin = triton::gpu::toLinearEncoding(type);
   SmallVector<unsigned> order = triton::gpu::getOrder(lin, type.getShape());
   SmallVector<unsigned> contig = triton::gpu::getContigPerThread(type);
   unsigned gatherVec = order.empty() ? 1u : std::max(1u, contig[order[0]]);
-  return llvm::divideCeil(static_cast<int64_t>(type.getNumElements()),
-                          static_cast<int64_t>(gatherVec));
+  return llvm::divideCeil(static_cast<unsigned>(type.getNumElements()),
+                          gatherVec);
 }
 
-int64_t estimateLoadHWCost(RankedTensorType type, Operation *loadOp) {
+unsigned estimateLoadHWCost(RankedTensorType type, Operation *loadOp) {
   // Anything that cannot use 2D block I/O is costed as a gather.
-  if (type.getRank() < 2 || !isBlockIOEligible(loadOp, type))
+  if (!isBlockIOEligible(loadOp, type))
     return estimateGatherCost(type);
 
   unsigned elemSizeInBits = type.getElementTypeBitWidth();
@@ -642,14 +641,14 @@ int64_t estimateLoadHWCost(RankedTensorType type, Operation *loadOp) {
   // must be multiplied back in to recover the element-column span. Full-tensor
   // extents are used so two candidate encodings compare apples-to-apples.
   ArrayRef<int64_t> shape = type.getShape();
-  int64_t rows = shape[info.rowDim];
-  int64_t cols = shape[info.colDim];
-  int64_t colsPerMessage = static_cast<int64_t>(info.tileWidth) *
-                           info.numElemPerPackedVal * info.vBlocks;
-  if (info.tileHeight <= 0 || colsPerMessage <= 0)
+  unsigned rows = static_cast<unsigned>(shape[info.rowDim]);
+  unsigned cols = static_cast<unsigned>(shape[info.colDim]);
+  unsigned colsPerMessage =
+      info.tileWidth * info.numElemPerPackedVal * info.vBlocks;
+  if (info.tileHeight == 0 || colsPerMessage == 0)
     return estimateGatherCost(type);
 
-  return llvm::divideCeil(rows, static_cast<int64_t>(info.tileHeight)) *
+  return llvm::divideCeil(rows, info.tileHeight) *
          llvm::divideCeil(cols, colsPerMessage);
 }
 

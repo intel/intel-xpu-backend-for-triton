@@ -1673,8 +1673,8 @@ static bool rematDegradesLoad(const SetVector<Value> &slice,
 
     RankedTensorType tgtTy = curTy.cloneWithEncoding(it->second);
 
-    int64_t cur = ttgi::estimateLoadHWCost(curTy, defOp);
-    int64_t tgt = ttgi::estimateLoadHWCost(tgtTy, defOp);
+    unsigned cur = ttgi::estimateLoadHWCost(curTy, defOp);
+    unsigned tgt = ttgi::estimateLoadHWCost(tgtTy, defOp);
 
     if (tgt > cur)
       return true; // STRICT > — equal-cost must NOT veto.

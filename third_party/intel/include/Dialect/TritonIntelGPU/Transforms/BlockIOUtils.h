@@ -5,7 +5,9 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Support/LogicalResult.h"
 #include "triton/Analysis/AxisInfo.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Tools/LinearLayout.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include <optional>
 
@@ -102,14 +104,24 @@ bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
 bool isMemoryRowMajor(Operation *op);
 
 /// Check whether a load is eligible for 2D block IO lowering based on
-/// attributes and encoding. Performs the same checks as the template
-/// isBlockIOEligible but usable from generic Operation* contexts.
+/// attributes and encoding. Callers holding a generic Operation* that has
+/// already been confirmed to be tt::LoadOp or tt::DescriptorLoadOp may use
+/// this overload directly.
 bool isBlockIOEligible(Operation *loadOp, RankedTensorType tensorTy);
+
+/// Type-safe overload restricted to tt::LoadOp and tt::DescriptorLoadOp.
+template <typename OpTy,
+          std::enable_if_t<llvm::is_one_of<OpTy, triton::LoadOp,
+                                           triton::DescriptorLoadOp>::value,
+                           bool> = true>
+bool isBlockIOEligible(OpTy loadOp, RankedTensorType tensorTy) {
+  return isBlockIOEligible(loadOp.getOperation(), tensorTy);
+}
 
 /// Estimate the hardware message count for a load with the given type and
 /// encoding. Higher values indicate more HW cost. Used for cost modeling in
 /// RemoveLayoutConversions. Returns a comparable scalar (not cycle-accurate).
-int64_t estimateLoadHWCost(RankedTensorType type, Operation *loadOp);
+unsigned estimateLoadHWCost(RankedTensorType type, Operation *loadOp);
 
 } // namespace mlir::triton::gpu::intel
 
