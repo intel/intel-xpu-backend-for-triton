@@ -962,20 +962,32 @@ bool canBeRemat(Operation *op) {
   return true;
 }
 
-// Helper: check if an operation is a pure shape-changing operation that
-// doesn't duplicate data (ExpandDims, Trans, Broadcast).
-static bool isShapeChangeOp(Operation *op) {
+// Returns true for shape-changing ops that carry no encoding constraint of
+// their own (ExpandDims, Trans, Broadcast). Ops such as ReshapeOp and GatherOp
+// are deliberately excluded: they may carry an efficient_layout attribute that
+// ties them to a specific encoding, so rematerializing a load into their input
+// encoding could violate that constraint.
+static bool isUnconstrainedShapeOp(Operation *op) {
   return isa<tt::ExpandDimsOp, tt::TransOp, tt::BroadcastOp>(op);
 }
 
 // Return true if the op is an expensive load that is a candidate for
-// rematerialization in the specific safe pattern: the load has exactly one use
-// (a ttg::ConvertLayoutOp), and that convert feeds into a linear single-use
-// chain of shape-change ops (ExpandDims/Trans/Broadcast). This pattern is
-// provably a non-duplicating relabel (rematerialization is in-place), matching
-// the #7091 descriptor-operand case. Multi-use loads and loads feeding
-// dot-operands or other expensive consumers are correctly rejected by the
-// canBeRemat anchor, which this helper should NOT bypass.
+// rematerialization in the specific safe pattern below. The load has exactly
+// one use (a ttg::ConvertLayoutOp), and that convert feeds a linear
+// single-use chain of unconstrained shape ops (see isUnconstrainedShapeOp)
+// before reaching the real compute consumer. Example:
+//
+//   %0 = tt.descriptor_load %desc[%c0] : ... -> tensor<1024xf16, #src>
+//   %1 = ttg.convert_layout %0 : tensor<1024xf16, #src>
+//                             -> tensor<1024xf16, #ttg.slice<{dim=1, ...}>>
+//   %2 = tt.expand_dims %1 {axis = 1} : ... -> tensor<1024x1xf16, #A>
+//   %3 = tt.trans %2 ...
+//   %4 = tt.broadcast %3 ...
+//
+// The convert is eliminated and the load is rematerialized directly into the
+// slice encoding. Multi-use loads and loads feeding dot-operands or other
+// expensive consumers are correctly rejected by the canBeRemat anchor, which
+// this helper should NOT bypass.
 bool isExpensiveLoadRematCandidate(Operation *op) {
   // 1. Must be a Load or DescriptorLoad
   if (!isa<tt::LoadOp, tt::DescriptorLoadOp>(op))
@@ -996,31 +1008,33 @@ bool isExpensiveLoadRematCandidate(Operation *op) {
   if (!isa<ttg::ConvertLayoutOp>(user))
     return false;
 
-  // 5. The ConvertLayoutOp must feed a shape-change chain (ExpandDims/Trans/
-  //    Broadcast), not a real-layout consumer such as a dot or store. This is
-  //    the discriminator between the #7091 descriptor-operand pattern (safe,
-  //    non-duplicating relabel) and dot-operand / conflict cases that the
-  //    expensive-load anchor legitimately protects. Walk the chain: it must be
-  //    a single-use linear sequence of shape-change ops. A fork (multiple uses)
-  //    while still in the shape-change region would duplicate the load, so
-  //    reject. The chain ends when it reaches a non-shape-change consumer (the
-  //    terminus), which is the normal compute that consumes the reshaped value.
+  // 5. The ConvertLayoutOp must feed a single-use linear chain of unconstrained
+  //    shape ops (see isUnconstrainedShapeOp), not a real-layout consumer such
+  //    as a dot or store. A fork in the chain would duplicate the load; reject.
   Value current = user->getResult(0);
-  // The convert's immediate consumer must itself be a shape-change op;
-  // otherwise the convert feeds a real-layout consumer (e.g. a dot) and the
-  // bypass must not apply.
-  if (!current.hasOneUse() || !isShapeChangeOp(*current.getUsers().begin()))
+  if (!current.hasOneUse() ||
+      !isUnconstrainedShapeOp(*current.getUsers().begin()))
     return false;
 
-  while (current.hasOneUse() && isShapeChangeOp(*current.getUsers().begin()))
+  while (current.hasOneUse() &&
+         isUnconstrainedShapeOp(*current.getUsers().begin()))
     current = (*current.getUsers().begin())->getResult(0);
 
-  // If the chain forks (multiple uses) while still inside the shape-change
-  // region, the load would be duplicated across consumers; reject.
-  if (!current.hasOneUse() && llvm::any_of(current.getUsers(), isShapeChangeOp))
+  if (!current.hasOneUse() &&
+      llvm::any_of(current.getUsers(), isUnconstrainedShapeOp))
     return false;
 
   return true;
+}
+
+// Return true if \p op may be rematerialized as part of a backward slice:
+// either it is rematerializable by kind (canBeRemat), or it is the narrow
+// expensive-load exception that is provably a non-duplicating relabel
+// (isExpensiveLoadRematCandidate). canBeRemat anchors expensive loads; this
+// wrapper lets that one safe pattern through without weakening the anchor for
+// any other caller of canBeRemat.
+static bool isRematerializableInSlice(Operation *op) {
+  return canBeRemat(op) || isExpensiveLoadRematCandidate(op);
 }
 
 void LayoutRematerialization::updateRematMapping(
@@ -1498,7 +1512,7 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
   // Check if all the operations in the slice can be rematerialized.
   for (Value v : slice) {
     if (Operation *op = v.getDefiningOp()) {
-      if (!canBeRemat(op) && !isExpensiveLoadRematCandidate(op))
+      if (!isRematerializableInSlice(op))
         return failure();
     }
   }
@@ -1711,14 +1725,19 @@ void LayoutRematerialization::backwardRematerialization(
     if (isa<ttg::BlockedEncodingAttr>(dotLayout.getParent()))
       return;
   Value oldV = convertOp.getSrc();
-  // When rematerializing an expensive load past the canBeRemat anchor (the
-  // #7091 descriptor-operand pattern), only do so if the convert's target
-  // layout is non-degenerate. Earlier RLC runs may still carry the initial
-  // (degenerate, sizePerThread all-ones) layout from convert_to_ttgpuir;
-  // baking that onto the load freezes a bad layout that then forward-propagates
-  // onto the shared main tile. Deferring until the target layout has been
-  // healed (non-degenerate) by later passes preserves the good fixpoint that
-  // the unrematerialized path reaches.
+  // When rematerializing an expensive load past the canBeRemat anchor, only do
+  // so if the convert's target layout is non-degenerate (sizePerThread not
+  // all-ones). Earlier RLC runs may still carry the initial placeholder layout
+  // from convert_to_ttgpuir; baking that onto the load freezes a bad layout
+  // that then forward-propagates onto the shared main tile. Example of the
+  // degenerate case to skip:
+  //
+  //   %0 = tt.descriptor_load ... -> tensor<1024xf16, #src>
+  //   %1 = ttg.convert_layout %0 -> tensor<1024xf16,
+  //          #ttg.slice<{dim=1, parent=#blocked<sizePerThread=[1,1],...>}>>
+  //
+  // Deferring until the target layout has been healed by later passes
+  // preserves the good fixpoint that the unrematerialized path reaches.
   if (Operation *defOp = oldV.getDefiningOp();
       defOp && isExpensiveLoadRematCandidate(defOp)) {
     Attribute targetEnc = targetType.getEncoding();
