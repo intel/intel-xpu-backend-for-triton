@@ -399,6 +399,21 @@ private:
     SmallVector<Value> innerIndices(indices.begin() + numBatchDims,
                                     indices.end());
 
+    // For column-major descriptor loads, the result type has its inner-2
+    // dimensions transposed relative to the descriptor's natural order (e.g.,
+    // descriptor [N, K] produces result [K, N]). Swap the inner-2 dimensions
+    // of shapes, strides, and indices so they align with the result type.
+    auto blockIOAttr = op->getAttrOfType<StringAttr>(
+        ttgi::TritonIntelGPUDialect::getBlockIOAttrName());
+    bool permuteDescDim =
+        blockIOAttr && ttgi::symbolizeBlockIOMode(blockIOAttr.getValue()) ==
+                           ttgi::BlockIOMode::ColumnMajor;
+    if (permuteDescDim && rank >= 2) {
+      std::swap(innerShapes[rank - 2], innerShapes[rank - 1]);
+      std::swap(innerStrides[rank - 2], innerStrides[rank - 1]);
+      std::swap(innerIndices[rank - 2], innerIndices[rank - 1]);
+    }
+
     // Build pointer tensor: for each element (i0, i1, ..., iR-1),
     //   ptr[i0][i1]...[iR-1] = base + sum_d((indices[d] + id) * stride[d])
     auto ptrTensorTy = RankedTensorType::get(shape, ptrElemType, encoding);
@@ -482,6 +497,10 @@ private:
     Value other = createPaddingValue(builder, loc, resultTy, padding);
 
     // Create tt.load with pointer tensor, mask, and padding value.
+    // Note: the generated load has no block_io attribute and will lower as a
+    // generic masked gather. This is intentional — loads reaching this fallback
+    // failed 2D block IO eligibility, so vectorization via getDescriptorVecSize
+    // would not apply anyway.
     auto loadOp = tt::LoadOp::create(builder, loc, ptrTensor, mask, other,
                                      tt::CacheModifier::NONE,
                                      tt::EvictionPolicy::NORMAL, false);
