@@ -51,7 +51,8 @@ void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
   b.barrier(targets);
 }
 
-void TargetInfo::clusterBarrier(Location loc, RewriterBase &rewriter) const {
+void TargetInfo::clusterBarrier(Location loc, RewriterBase &rewriter,
+                                Operation * /*sourceOp*/) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   b.barrier(triton::gpu::AddrSpace::Local);
 }
