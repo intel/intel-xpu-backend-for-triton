@@ -1,8 +1,10 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/BlockIOUtils.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/MathExtras.h"
 #include <numeric>
@@ -589,6 +591,96 @@ bool validate2DBlockStoreTile(const LinearLayout &ll, unsigned memContiguousDim,
 
   sizeInfoOut = sizeInfo;
   return true;
+}
+
+bool isMemoryRowMajor(Operation *op) {
+  auto blockIOAttr = op->getAttrOfType<StringAttr>(
+      TritonIntelGPUDialect::getBlockIOAttrName());
+  assert(blockIOAttr && "expected block_io attribute");
+  std::optional<BlockIOMode> mode =
+      symbolizeBlockIOMode(blockIOAttr.getValue());
+  return !mode || *mode == BlockIOMode::RowMajor;
+}
+
+bool isBlockIOEligible(Operation *loadOp, RankedTensorType tensorTy) {
+  if (!loadOp->hasAttr(TritonIntelGPUDialect::getBlockIOAttrName()))
+    return false;
+
+  if (tensorTy.getRank() < 2)
+    return false;
+
+  bool hasDpas = hasDpasEncoding(tensorTy) || hasDotDpasEncoding(tensorTy);
+
+  std::optional<bool> enableBlockIOForAllLayout = triton::tools::isEnvValueBool(
+      triton::tools::getStrEnv("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS"));
+  if (enableBlockIOForAllLayout.has_value() &&
+      !enableBlockIOForAllLayout.value() && !hasDpas)
+    return false;
+
+  return true;
+}
+
+// Cost of a load that delivers its data via a per-element gather (the
+// fallback when 2D block I/O does not apply). The cost is the number of
+// vectorized memory accesses: numElements / vectorization width, where the
+// width is the layout's contiguity along the fastest-varying dimension.
+static unsigned estimateGatherCost(RankedTensorType type) {
+  triton::gpu::LinearEncodingAttr lin = triton::gpu::toLinearEncoding(type);
+  SmallVector<unsigned> order = triton::gpu::getOrder(lin, type.getShape());
+  SmallVector<unsigned> contig = triton::gpu::getContigPerThread(type);
+  unsigned gatherVec = order.empty() ? 1u : std::max(1u, contig[order[0]]);
+  return llvm::divideCeil(static_cast<unsigned>(type.getNumElements()),
+                          gatherVec);
+}
+
+unsigned estimateLoadHWCost(RankedTensorType type, Operation *loadOp) {
+  // Anything that cannot use 2D block I/O is costed as a gather.
+  if (!isBlockIOEligible(loadOp, type))
+    return estimateGatherCost(type);
+
+  unsigned elemSizeInBits = type.getElementTypeBitWidth();
+  if (elemSizeInBits > 64)
+    return estimateGatherCost(type);
+
+  bool rowMajor = isMemoryRowMajor(loadOp);
+  unsigned rank = type.getRank();
+  unsigned contiguousDim = rowMajor ? rank - 1 : rank - 2;
+
+  LinearLayout ll =
+      cast<triton::gpu::DistributedEncodingTrait>(type.getEncoding())
+          .toLinearLayout(type.getShape());
+
+  bool oneMatrixPerLoadForBT =
+      loadOp->hasAttr(TritonIntelGPUDialect::getOneMatrixPerLoadAttrName());
+
+  if (!validate2DBlockLoadTile(ll, contiguousDim, elemSizeInBits, type,
+                               oneMatrixPerLoadForBT,
+                               /*maskAxisInfo=*/nullptr))
+    return estimateGatherCost(type);
+
+  BlockIOTileSizeInfo info =
+      getBlockIOTileSize<true>(ll, contiguousDim, elemSizeInBits,
+                               /*maskAxisInfo=*/nullptr, oneMatrixPerLoadForBT);
+  if (!info.isValid())
+    return estimateGatherCost(type);
+
+  // Number of 2D block messages = ceil(rows / tileHeight) *
+  // ceil(cols / colsPerMessage), where one message spans tileHeight rows and
+  // (tileWidth * numElemPerPackedVal * vBlocks) element-columns. tileWidth is
+  // measured in PACKED values (see getBlockIOTileSize: tileWidth =
+  // tileShape[fastChangeDim] / numElemPerPackedVal), so the packing factor
+  // must be multiplied back in to recover the element-column span. Full-tensor
+  // extents are used so two candidate encodings compare apples-to-apples.
+  ArrayRef<int64_t> shape = type.getShape();
+  unsigned rows = static_cast<unsigned>(shape[info.rowDim]);
+  unsigned cols = static_cast<unsigned>(shape[info.colDim]);
+  unsigned colsPerMessage =
+      info.tileWidth * info.numElemPerPackedVal * info.vBlocks;
+  if (info.tileHeight == 0 || colsPerMessage == 0)
+    return estimateGatherCost(type);
+
+  return llvm::divideCeil(rows, info.tileHeight) *
+         llvm::divideCeil(cols, colsPerMessage);
 }
 
 } // namespace mlir::triton::gpu::intel
