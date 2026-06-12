@@ -488,17 +488,40 @@ private:
           tt::AddPtrOp::create(builder, loc, ptrTensorTy, ptrTensor, offset);
 
       // Build mask for this dimension: 0 <= indices[d] + range < shape[d].
-      Value zero = arith::ConstantIntOp::create(builder, loc, 0, 64);
-      Value splatZero = tt::SplatOp::create(builder, loc, i64TensorTy, zero);
-      Value cmpLower = arith::CmpIOp::create(
-          builder, loc, arith::CmpIPredicate::sge, broadcasted, splatZero);
+      // For the stride-1 (contiguous) dimension, use a scalar comparison to
+      // preserve mask constancy for vectorization. Per-element comparison
+      // along this dimension gives constancy=1, which forces scalar loads in
+      // the LLVM lowering (getMaskAlignment reduces vec to 1).
+      // A scalar check matches DescriptorLoadOpConversion's behavior where
+      // the first element's predicate gates the entire vector chunk.
+      std::optional<int64_t> strideVal =
+          tt::intel::getFoldedConstantValue(innerStrides[d]);
+      bool isContiguousDim = strideVal && *strideVal == 1;
 
-      Value splatShape =
-          tt::SplatOp::create(builder, loc, i64TensorTy, innerShapes[d]);
-      Value cmpUpper = arith::CmpIOp::create(
-          builder, loc, arith::CmpIPredicate::slt, broadcasted, splatShape);
+      Value dimMask;
+      if (isContiguousDim) {
+        // Scalar: (offset + blockSize) <= shape → all elements in bounds.
+        Value blockSize =
+            arith::ConstantIntOp::create(builder, loc, shape[d], 64);
+        Value end = arith::AddIOp::create(builder, loc, indexI64, blockSize);
+        Value scalarCmp = arith::CmpIOp::create(
+            builder, loc, arith::CmpIPredicate::sle, end, innerShapes[d]);
+        auto i1TensorTy =
+            RankedTensorType::get(shape, builder.getI1Type(), encoding);
+        dimMask = tt::SplatOp::create(builder, loc, i1TensorTy, scalarCmp);
+      } else {
+        Value zero = arith::ConstantIntOp::create(builder, loc, 0, 64);
+        Value splatZero = tt::SplatOp::create(builder, loc, i64TensorTy, zero);
+        Value cmpLower = arith::CmpIOp::create(
+            builder, loc, arith::CmpIPredicate::sge, broadcasted, splatZero);
 
-      Value dimMask = arith::AndIOp::create(builder, loc, cmpLower, cmpUpper);
+        Value splatShape =
+            tt::SplatOp::create(builder, loc, i64TensorTy, innerShapes[d]);
+        Value cmpUpper = arith::CmpIOp::create(
+            builder, loc, arith::CmpIPredicate::slt, broadcasted, splatShape);
+
+        dimMask = arith::AndIOp::create(builder, loc, cmpLower, cmpUpper);
+      }
 
       if (!mask)
         mask = dimMask;
