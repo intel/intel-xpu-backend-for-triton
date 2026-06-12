@@ -516,7 +516,7 @@ LLVM does not have a stable API, so the Triton build will not work at an
 arbitrary LLVM version.
 
 1. Find the version of LLVM that Triton builds against.
-Check `cmake/llvm-hash.txt` to see the current version.
+Check `cmake/llvm-info.json` (the `llvm_hash` field) to see the current version.
 
 2. Checkout LLVM at this revision to the directory `llvm`,
 which must be in the same directory as `intel-xpu-backend-for-triton`:

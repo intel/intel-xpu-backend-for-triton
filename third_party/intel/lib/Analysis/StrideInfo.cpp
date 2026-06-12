@@ -708,6 +708,8 @@ private:
   }
 
 public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(StrideAnalysis)
+
   StrideAnalysis(DataFlowSolver &solver, AxisInfoLookupFn axisInfoLookup)
       : dataflow::SparseForwardDataFlowAnalysis<dataflow::Lattice<StrideInfo>>(
             solver) {

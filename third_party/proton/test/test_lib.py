@@ -5,6 +5,7 @@ Python API correctness tests involving GPU kernels should be placed in `test_api
 Profile correctness tests involving GPU kernels should be placed in `test_profile.py`.
 """
 import pathlib
+import sys
 import pytest
 
 import triton._C.libproton.proton as libproton
@@ -95,3 +96,28 @@ def test_tensor_metric_construction():
     metric = libproton.TensorMetric(123, libproton.metric_type_double_index)
     assert metric.ptr == 123
     assert metric.index == libproton.metric_type_double_index
+
+
+def test_select_profiling_backend_for_triton_backend():
+    selected_profiler = libproton.select_profiler_from_triton_backend("cuda")
+    assert selected_profiler == "cupti"
+    if sys.platform != "win32":
+        # rocprofiler is not built on Windows.
+        selected_profiler = libproton.select_profiler_from_triton_backend("hip")
+        assert selected_profiler == "rocprofiler"
+    selected_profiler = libproton.select_profiler_from_triton_backend("xpu")
+    assert selected_profiler == "xpupti"
+
+    with pytest.raises(ValueError, match="No profiler registered for triton backend invalid_triton_backend"):
+        libproton.select_profiler_from_triton_backend("invalid_triton_backend")
+
+
+def test_get_available_profiling_backends():
+    profilers = libproton.get_available_profilers()
+    assert "cupti" in profilers
+    assert "roctracer" in profilers
+    if sys.platform != "win32":
+        # rocprofiler is not built on Windows.
+        assert "rocprofiler" in profilers
+    assert "instrumentation" in profilers
+    assert "xpupti" in profilers

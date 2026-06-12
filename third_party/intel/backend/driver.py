@@ -331,6 +331,14 @@ def compile_module_from_src(src: str, name: str):
 # Utils
 # ------------------------
 
+PEAK_DRAM_GBPS = {
+    "Intel(R) Data Center GPU Max 1100": 1228.8,
+    "Intel(R) Data Center GPU Max 1550": 3276.8,
+    "Intel(R) Arc(TM) B580 Graphics": 456.0,
+    "Intel(R) Arc(TM) B570 Graphics": 380.0,
+    "Intel(R) Arc(TM) B560 Graphics": 456.0,
+}
+
 
 class XPUUtils(object):
     _instance = None
@@ -384,6 +392,10 @@ class XPUUtils(object):
     def memset(self, ptr, value, count):
         """Wrapper for SYCL queue memset"""
         return self.sycl_queue_memset((self.get_sycl_queue(), ptr, value, count))
+
+    def get_bandwidth(self, device):
+        import torch
+        return PEAK_DRAM_GBPS.get(torch.xpu.get_device_name(device))
 
 
 # ------------------------

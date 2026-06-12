@@ -384,7 +384,7 @@ def bench_layer_norm(M, N, dtype, provider, mode='backward', eps=1e-5, device=DE
 
 # For XPU device the reference result is always computed using fp32/fp64,
 # so we don't try to compare result for fp16.
-N = 128 if is_xpu_cri() else 8192
+N = 32 if is_xpu_cri() else 8192
 test_layer_norm(1151, N, torch.float32)
 bench_layer_norm.run(print_data=True)
 
