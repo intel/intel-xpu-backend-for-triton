@@ -272,6 +272,9 @@ class CMakeBuild(build_ext):
         if xpupti_include_dir == "":
             xpupti_include_dir = os.path.join(get_base_dir(), "third_party", "intel", "backend", "proton", "include")
         cmake_args += ["-DXPUPTI_INCLUDE_DIR=" + xpupti_include_dir]
+        rocprofiler_sdk_include_dir = get_env_with_keys(["TRITON_ROCPROFILER_SDK_INCLUDE_PATH"])
+        if rocprofiler_sdk_include_dir:
+            cmake_args += ["-DROCPROFILER_SDK_INCLUDE_DIR=" + rocprofiler_sdk_include_dir]
         return cmake_args
 
     def build_extension(self, ext):
@@ -363,6 +366,8 @@ class CMakeBuild(build_ext):
             "TRITON_CUPTI_INCLUDE_PATH",
             "TRITON_CUPTI_LIB_PATH",
             "TRITON_CUPTI_LIB_BLACKWELL_PATH",
+            "TRITON_ROCPROFILER_SDK_INCLUDE_PATH",
+            "TRITON_ROCPROFILER_SDK_LIB_PATH",
             "TRITON_NVDISASM_PATH",
             "TRITON_PTXAS_PATH",
             "TRITON_PTXAS_BLACKWELL_PATH",

@@ -4122,9 +4122,10 @@ prepareLocalAtomicScatterRMW(triton::gpu::LocalAtomicScatterRMWOp op, Value dst,
       emitIndices(loc, rewriter, targetInfo, activeRegLayout, valuesTy,
                   /*withCTAOffset=*/true);
 
-  SmallVector<Value> ptrs =
-      computeLocalPtrs(loc, memDescTy, smemObj, llvmElemTy, idxValues,
-                       srcIndices, op.getAxis(), rewriter);
+  SmallVector<Value> ptrs = llvm::map_to_vector(
+      computeLocalAddrs(loc, memDescTy, smemObj, llvmElemTy, idxValues,
+                        srcIndices, op.getAxis(), rewriter),
+      [](const LocalSharedMemoryAddress &addr) { return addr.ptr; });
 
   return LocalAtomicScatterRMWInfo{valuesTy,        llvmElemTy, regLayout,
                                    removeBroadcast, threadPred, values,
