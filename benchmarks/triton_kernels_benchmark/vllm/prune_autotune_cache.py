@@ -47,7 +47,7 @@ def main():
     # 2) For each autotuned kernel name, build the keeper set of (num_warps, num_stages).
     keepers = {}  # kernel_name -> set of (num_warps, num_stages) to keep
     for af in autotune_files:
-        kernel_name = af.name[: -len(".autotune.json")]
+        kernel_name = af.name[:-len(".autotune.json")]
         data = load_json(af)
         winners = winner_configs(data, args.keep_top)
         keepers.setdefault(kernel_name, set()).update(winners)
