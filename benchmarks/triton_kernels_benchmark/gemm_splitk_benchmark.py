@@ -52,7 +52,7 @@ def _kernel(A, B, C,  #
     for _ in range(0, K, BLOCK_K * SPLIT_K):
         a = a_desc.load([pid_m * BLOCK_M, off_k])
         b = b_desc.load([off_k, pid_n * BLOCK_N])
-        acc += tl.dot(a, b, out_dtype=acc_dtype)
+        acc = tl.dot(a, b, acc, out_dtype=acc_dtype)
         off_k += BLOCK_K * SPLIT_K
     acc = acc.to(C.dtype.element_ty)
 

@@ -39,10 +39,11 @@ You can check if triton is currently available by running one of the [tutorials]
 Basic rules:
 
 1. **Use Tensor Descriptors:** For inputs and outputs of matmul operations (`tl.dot`), use Tensor Descriptors. This utilizes hardware-optimized DPAS operations and 2D block IO HW operations. You can often expect more than 2x performance improvement compared to the basic tensor of pointers approach. Use device side Tensor Descriptors (defined inside a kernel), not host side (defined in CPU code and passed to the kernel).
-2. **Type Annotations:** Use proper type annotations for your kernels. Good type annotations allow for better optimization, but be careful to avoid excessive recompilation.
-3. **Benchmark:** Experiment with the performance of your kernel. You can use `triton.testing.do_bench` for basic benchmarking, as demonstrated in the [tutorials](../python/tutorials/02-fused-softmax.py).
-4. **Tiling and Autotuning:** Pick appropriate tiling for your machine and tensor shapes.
-5. **Grid Dimension Ordering:** On XPU, the first grid dimension changes fastest. Place computation tile indices on `axis=0` and batch/expert indices on higher dimensions to preserve cache locality. Misordering can cost 20% to 2x performance.
+2. **Use explicit accumulator in `tl.dot`:** Always write `accumulator = tl.dot(a, b, accumulator)` instead of `accumulator += tl.dot(a, b)`. The explicit form maps directly to a single DPAS instruction. The `+=` form relies on the compiler's `CombineOps` pass to fold the separate add back into the dot, which can fail (e.g., when the dot result has multiple uses or flows through control flow).
+3. **Type Annotations:** Use proper type annotations for your kernels. Good type annotations allow for better optimization, but be careful to avoid excessive recompilation.
+4. **Benchmark:** Experiment with the performance of your kernel. You can use `triton.testing.do_bench` for basic benchmarking, as demonstrated in the [tutorials](../python/tutorials/02-fused-softmax.py).
+5. **Tiling and Autotuning:** Pick appropriate tiling for your machine and tensor shapes.
+6. **Grid Dimension Ordering:** On XPU, the first grid dimension changes fastest. Place computation tile indices on `axis=0` and batch/expert indices on higher dimensions to preserve cache locality. Misordering can cost 20% to 2x performance.
 
 More details below.
 
@@ -122,7 +123,7 @@ off_k = 0
 for _ in range(0, K, BLOCK_SIZE_K):
     a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
     b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
-    accumulator += tl.dot(a, b)
+    accumulator = tl.dot(a, b, accumulator)
     off_k += BLOCK_SIZE_K
 ```
 
