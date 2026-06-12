@@ -159,22 +159,16 @@ If another dependency-bearing value is introduced later, it is added to this
 dictionary and to `DEPENDENT_3D_CONFIG_KEYS`. Both kernels then consume the same
 policy automatically.
 
-## Step 4: Normalize Pruning Context
+## Step 4: Pass Pruning Inputs Explicitly
 
-The current pruning rules need only block size, input type, and path:
+The current pruning rules need only block size, input type, and path. Pass
+those values directly instead of creating a separate pruning-context object.
+This keeps the initial patch small and makes each validation dependency visible
+at its call site.
 
-```python
-def _make_autotune_context(kwargs, *, is_3d):
-    return {
-        "block_size": kwargs["BLOCK_SIZE"],
-        "is_fp8_input": kwargs["IS_FP8_INPUT"],
-        "is_3d": is_3d,
-    }
-```
-
-A dictionary is used instead of a dataclass to keep the first patch small. It
-can become a typed object later if the context gains enough fields or behavior
-to justify one.
+A context dictionary or typed object is not required by Triton autotuning. One
+can be introduced later if the pruning rules gain enough fields or behavior
+that the repeated explicit signatures become unwieldy.
 
 ## Step 5: Separate Shared And Local Validation
 
@@ -182,9 +176,11 @@ Shared validation enforces both ordinary tile legality and the permanent 3D
 singleton contract:
 
 ```python
-def _is_valid_shared_config(config, ctx):
-    if ctx["is_3d"]:
-        required = required_3d_shared_config(ctx["is_fp8_input"])
+def _is_valid_shared_config(
+    config, *, block_size, is_fp8_input, is_3d
+):
+    if is_3d:
+        required = required_3d_shared_config(is_fp8_input)
         for key in DEPENDENT_3D_CONFIG_KEYS:
             if key not in config.kwargs:
                 raise ValueError(
@@ -194,11 +190,9 @@ def _is_valid_shared_config(config, ctx):
                 return False
 
     tile_size = config.kwargs["TILE_SIZE"]
-    block_size = ctx["block_size"]
-
     if tile_size > block_size or block_size % tile_size != 0:
         return False
-    if ctx["is_fp8_input"] and tile_size != 32:
+    if is_fp8_input and tile_size != 32:
         return False
 
     return True
@@ -207,11 +201,15 @@ def _is_valid_shared_config(config, ctx):
 The initial local validators deliberately accept every config:
 
 ```python
-def _is_valid_attention_local_config(config, ctx):
+def _is_valid_attention_local_config(
+    config, *, block_size, is_fp8_input, is_3d
+):
     return True
 
 
-def _is_valid_reduce_local_config(config, ctx):
+def _is_valid_reduce_local_config(
+    config, *, block_size, is_fp8_input, is_3d
+):
     return True
 ```
 
@@ -223,26 +221,44 @@ or reducer-only rules should not be added to `_is_valid_shared_config`.
 One generic helper applies shared validation followed by kernel-local validation:
 
 ```python
-def _prune_configs(configs, ctx, local_validator):
+def _prune_configs(
+    configs, local_validator, *, block_size, is_fp8_input, is_3d
+):
     return [
         config
         for config in configs
-        if _is_valid_shared_config(config, ctx)
-        and local_validator(config, ctx)
+        if _is_valid_shared_config(
+            config,
+            block_size=block_size,
+            is_fp8_input=is_fp8_input,
+            is_3d=is_3d,
+        )
+        and local_validator(
+            config,
+            block_size=block_size,
+            is_fp8_input=is_fp8_input,
+            is_3d=is_3d,
+        )
     ]
 
 
 def prune_attention_configs(configs, named_args, **kwargs):
-    ctx = _make_autotune_context(kwargs, is_3d=kwargs["IS_3D"])
     return _prune_configs(
-        configs, ctx, _is_valid_attention_local_config
+        configs,
+        _is_valid_attention_local_config,
+        block_size=kwargs["BLOCK_SIZE"],
+        is_fp8_input=kwargs["IS_FP8_INPUT"],
+        is_3d=kwargs["IS_3D"],
     )
 
 
 def prune_reduce_configs(configs, named_args, **kwargs):
-    ctx = _make_autotune_context(kwargs, is_3d=True)
     return _prune_configs(
-        configs, ctx, _is_valid_reduce_local_config
+        configs,
+        _is_valid_reduce_local_config,
+        block_size=kwargs["BLOCK_SIZE"],
+        is_fp8_input=kwargs["IS_FP8_INPUT"],
+        is_3d=True,
     )
 ```
 
