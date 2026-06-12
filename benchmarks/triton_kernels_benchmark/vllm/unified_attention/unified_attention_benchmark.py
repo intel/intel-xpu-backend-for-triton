@@ -285,10 +285,6 @@ if os.getenv('DEBUG_BENCH', '0') == '1':
     ATTENTION_CONFIGS_BF16 = ATTENTION_CONFIGS_BF16[:1]
     ATTENTION_CONFIGS_FP8 = ATTENTION_CONFIGS_FP8[:1]
 
-# Pin run to a single shape (llama3.1-8B prefill, 4k, num_blocks=2048, block_size=16).
-# Comment out this block to restore the full sweep.
-ATTENTION_CONFIGS_BF16 = [(32, 8, 128, None, [(4096, 4096)], None, None, 2048, 16)]
-ATTENTION_CONFIGS_FP8 = []
 
 def get_unified_attention_benchmark(
     providers_filter: Optional[list[str]] = None,
