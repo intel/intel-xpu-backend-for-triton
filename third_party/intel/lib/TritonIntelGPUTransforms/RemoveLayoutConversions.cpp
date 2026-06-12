@@ -18,11 +18,13 @@
 #include "mlir/Transforms/RegionUtils.h"
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/BlockIOUtils.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/Sys/GetEnv.h"
@@ -347,6 +349,59 @@ bool isLayoutAnchor(Operation *op) {
   // all.)
   if (auto reshape = dyn_cast<tt::ReshapeOp>(op))
     return reshape.getAllowReorder();
+
+  // Anchor a convert_layout that feeds a descriptor store when folding it would
+  // demote the store from a 2D block write to a scalar scatter.
+  //
+  // The descriptor-store fast path emits a 2D block write iff consecutive lanes
+  // of the store operand's layout advance along the memory-contiguous tensor
+  // dimension. Coalesce inserts this convert to give the store its coalesced
+  // (row-major) layout, so dst is block-write-eligible by construction. Forward
+  // propagation from an (expensive) load would otherwise strip the convert and
+  // replace the store operand with the chain's root layout; if root distributes
+  // lanes along a different dimension than dst, that fold turns the block write
+  // into a scatter (issue #7093). Unlike a store (no result, cannot be
+  // anchored), the convert has a result and can.
+  //
+  // The lane-fast-dim is compared across the whole convert chain (root source
+  // -> store-feeding convert), not on a single convert: the store-feeding
+  // convert is frequently a same-order re-tiling whose lane transpose lives one
+  // convert upstream. Comparing lane-fast-dims (not the `order` attribute)
+  // distinguishes a genuine within-subgroup transpose -- which can keep the
+  // SAME `order` while flipping the lane distribution (#7093) -- from a pure
+  // re-tiling that ends with the same lane-fast-dim it started (e.g. a dot
+  // result re-tiled for the store, issue #4866), which still folds.
+  if (auto convertOp = dyn_cast<ttg::ConvertLayoutOp>(op)) {
+    bool feedsDescStore =
+        llvm::any_of(convertOp.getResult().getUsers(), [](Operation *user) {
+          return isa<tt::DescriptorStoreOp>(user);
+        });
+    if (feedsDescStore) {
+      // Walk up consecutive converts to the root source of the chain.
+      Value root = convertOp.getSrc();
+      while (auto upConvert = root.getDefiningOp<ttg::ConvertLayoutOp>())
+        root = upConvert.getSrc();
+      auto rootTy = dyn_cast<RankedTensorType>(root.getType());
+      auto dstTy = dyn_cast<RankedTensorType>(convertOp.getType());
+      if (rootTy && dstTy) {
+        // The descriptor-store fast path is a 2D block write iff consecutive
+        // lanes advance along the memory-contiguous tensor dim. Folding this
+        // convert replaces the store operand's layout (dst) with root's; if the
+        // two layouts distribute lanes along different dims, that fold turns a
+        // block write into a scalar scatter. Anchor to prevent it.
+        MLIRContext *ctx = op->getContext();
+        std::optional<unsigned> rootLaneDim =
+            ttgi::getLaneFastChangeDim(ttg::toLinearLayout(rootTy), ctx);
+        std::optional<unsigned> dstLaneDim =
+            ttgi::getLaneFastChangeDim(ttg::toLinearLayout(dstTy), ctx);
+        // Conservative fallback: if either lane base is not a clean single-dim
+        // stride, the store can't be a 2D block write anyway -> nothing to
+        // protect -> don't anchor (fold by default, as before).
+        if (rootLaneDim && dstLaneDim)
+          return *rootLaneDim != *dstLaneDim;
+      }
+    }
+  }
 
   return false;
 }
@@ -1584,6 +1639,50 @@ static bool isRematBeneficial(ttg::ConvertLayoutOp convertOp,
   return convertLayoutCost >= rematerialisationCost;
 }
 
+/// Check whether rematerializing \p slice with the target layouts in \p layout
+/// would degrade a load that currently uses the 2D block I/O hardware path by
+/// relabeling it into a less efficient encoding (a worse block tile, or a
+/// demotion to the per-element gather fallback).
+///
+/// The veto is intentionally scoped to loads whose CURRENT encoding is 2D
+/// block I/O eligible. For ordinary (gather) loads the existing canBeRemat /
+/// isRematBeneficial cost model already governs rematerialization correctly —
+/// e.g. duplicating a cheap small load to remove a convert is desirable — and
+/// the message-count proxy is not a meaningful signal there. Only the
+/// 2D-block path has the silent cliff this guard protects against (issue
+/// #7080): an encoding change that keeps the load legal but collapses its
+/// hardware tile (e.g. tile height 32 → 1, 4× more messages).
+static bool rematDegradesLoad(const SetVector<Value> &slice,
+                              const DenseMap<Value, Attribute> &layout) {
+  for (Value v : slice) {
+    Operation *defOp = v.getDefiningOp();
+    if (!defOp || !isa<tt::LoadOp, tt::DescriptorLoadOp>(defOp))
+      continue;
+
+    auto it = layout.find(v);
+    if (it == layout.end())
+      continue; // Not relabeled.
+
+    auto curTy = dyn_cast<RankedTensorType>(v.getType());
+    if (!curTy)
+      continue;
+
+    // Only guard loads that currently ride the 2D block I/O hardware path.
+    if (!ttgi::isBlockIOEligible(defOp, curTy))
+      continue;
+
+    RankedTensorType tgtTy = curTy.cloneWithEncoding(it->second);
+
+    unsigned cur = ttgi::estimateLoadHWCost(curTy, defOp);
+    unsigned tgt = ttgi::estimateLoadHWCost(tgtTy, defOp);
+
+    if (tgt > cur)
+      return true; // STRICT > — equal-cost must NOT veto.
+  }
+
+  return false;
+}
+
 void LayoutRematerialization::backwardRematerialization(
     ttg::ConvertLayoutOp convertOp) {
   RankedTensorType targetType = convertOp.getType();
@@ -1618,7 +1717,13 @@ void LayoutRematerialization::backwardRematerialization(
     return;
   }
 
-  // 2. Determine whether rematerialisation is beneficial.
+  // 2. Veto if rematerialization would degrade a load encoding.
+  if (rematDegradesLoad(slice, layout)) {
+    LDBG("  skip remat: would degrade a load encoding");
+    return;
+  }
+
+  // 3. Determine whether rematerialisation is beneficial.
   if (!isRematBeneficial(convertOp, slice, /*newCvtCost=*/0)) {
     LDBG("  skipped rematerialization");
     return;
@@ -1637,7 +1742,7 @@ void LayoutRematerialization::backwardRematerialization(
     if (Operation *op = v.getDefiningOp())
       sliceOps.insert(op);
 
-  // 3. Rewrite the slice.
+  // 4. Rewrite the slice.
   rewriteSlice(slice, layout, convertOp);
 
   // Build forward propagation candidates using pre-rewrite analysis.
@@ -1660,7 +1765,7 @@ void LayoutRematerialization::backwardRematerialization(
     }
   }
 
-  // 4. Forward propagate remat values created during backward propagation.
+  // 5. Forward propagate remat values created during backward propagation.
   forwardPropagateRemat(forwardPropagateCandidates);
 }
 
@@ -1888,6 +1993,10 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   // Always apply the cost gate (matching upstream) — isRematBeneficial
   // accounts for slice values with external users, preventing hoists that
   // would duplicate expensive ops or break dominance.
+  if (rematDegradesLoad(slice, layout)) {
+    LDBG("  skip remat: would degrade a load encoding");
+    return;
+  }
   int64_t newCvtCost = getConvertCost(extOrBroadcastOp->getOperand(0));
   if (!isRematBeneficial(convertOp, slice, newCvtCost))
     return;
@@ -2025,6 +2134,13 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
   for (auto [result, edge] : hoistAbove) {
     OpBuilder b(edge->getOwner());
     hoistRemat(b, edge->get(), layout.at(result));
+  }
+
+  // Do not hoist a convert into conditionals if doing so would degrade a load
+  // that currently rides the 2D block I/O hardware path (issue #7080).
+  if (rematDegradesLoad(slice, layout)) {
+    LDBG("  skip remat: would degrade a load encoding");
+    return;
   }
   rewriteSlice(slice, layout, convertOp, mapping);
 }

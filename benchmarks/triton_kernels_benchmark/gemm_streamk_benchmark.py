@@ -10,7 +10,7 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
-from triton_kernels_benchmark import xetla_kernel
+from triton_kernels_benchmark import sycl_tla_kernel
 
 
 # pylint: disable=unused-argument
@@ -78,7 +78,7 @@ def mac_loop(
     for _ in range(start_iter, end_iter):
         a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
         b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
-        acc += tl.dot(a, b)
+        acc = tl.dot(a, b, acc)
         off_k += BLOCK_SIZE_K
 
     if remain_iters == 0 and end_iter % iters_per_tile == 0:
@@ -174,7 +174,7 @@ def full_tiles(
     for _ in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
         b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
-        acc += tl.dot(a, b)
+        acc = tl.dot(a, b, acc)
         off_k += BLOCK_SIZE_K
 
     c_desc = tl.make_tensor_descriptor(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
@@ -246,18 +246,18 @@ def matmul(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor):
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
-        line_vals=['triton', 'xetla'],
+        line_vals=['triton', 'onednn', 'sycl-tla'],
         # label name for the lines
-        line_names=['Triton', 'XeTLA'],
+        line_names=['Triton', 'OneDNN', 'SYCL-TLA'],
         # line styles
-        styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
+        styles=[('green', '-'), ('green', '--'), ('blue', '-')],
         ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
         plot_name='matmul-streamk-performance',
         # name for the plot. Used also as a file name for saving the plot.
         args={},
     ))
 def benchmark(M, N, K, provider):
-    # Maximum across onednn=10, triton=1000, xetla=100
+    # n_warmup set to maximum across providers: onednn=10, triton=1000, sycl-tla=100
     do_bench = benchmark_suite.get_do_bench(n_warmup=1000, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
     torch.manual_seed(0)
     a = torch.rand((M, K), device='xpu', dtype=torch.bfloat16)
@@ -271,18 +271,14 @@ def benchmark(M, N, K, provider):
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
         benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=1e-2, err_msg='triton to torch')
         _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
-    elif provider == 'xetla':
+    elif provider == 'sycl-tla':
+        # NOTE: SYCL-TLA doesn't have a stream-k matmul op
         c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
-        acc = torch.zeros((M, N), device='xpu', dtype=torch.float32)
-        cnt = torch.zeros((M, N), device='xpu', dtype=torch.int32)
-
-        name = f'gemm_streamk_shape_{M}_{K}_{N}'
-        func = getattr(xetla_kernel, name)
-        xetla_fn = lambda: func(a, b, c, acc, cnt)
+        func = getattr(sycl_tla_kernel, 'gemm')
+        sycl_tla_fn = lambda: (func(a, b, c, M, N, K, 1), c)[1]
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
-
-        # benchmark_suite.assert_close(xetla_fn, torch_fn, atol=1e-4, rtol=1.0, err_msg='xetla to torch')
-        _, min_ms, max_ms, mean_ms, cv = do_bench(xetla_fn)
+        benchmark_suite.assert_close(sycl_tla_fn, torch_fn, atol=1e-4, rtol=1e-2, err_msg='sycl-tla to torch')
+        _, min_ms, max_ms, mean_ms, cv = do_bench(sycl_tla_fn)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
 

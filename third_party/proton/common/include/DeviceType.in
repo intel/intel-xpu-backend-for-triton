@@ -1,0 +1,16 @@
+#ifndef PROTON_COMMON_DEVICE_TYPE_H_
+#define PROTON_COMMON_DEVICE_TYPE_H_
+
+namespace proton {
+
+enum class DeviceType {
+  XPU,
+  HIP,
+  CUDA,
+@BACKEND_DEVICE_TAGS@
+  COUNT
+};
+
+} // namespace proton
+
+#endif // PROTON_COMMON_DEVICE_TYPE_H_

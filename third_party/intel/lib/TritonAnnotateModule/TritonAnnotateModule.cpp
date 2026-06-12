@@ -66,6 +66,10 @@ struct TritonAnnotateModule
           ttgi::TritonIntelGPUDialect::getSupport16BitAtomicsAttrName(),
           builder.getUnitAttr());
 
+    if (supportSigmoid)
+      mod->setAttr(ttgi::TritonIntelGPUDialect::getSupportSigmoidAttrName(),
+                   builder.getUnitAttr());
+
     if (supportPrefetch256Bytes)
       mod->setAttr(
           ttgi::TritonIntelGPUDialect::getSupportPrefetch256BAttrName(),
@@ -98,6 +102,10 @@ struct TritonAnnotateModule
 
     if (isLTS)
       mod->setAttr(ttgi::TritonIntelGPUDialect::getIsLTSAttrName(),
+                   builder.getUnitAttr());
+
+    if (isFastMath)
+      mod->setAttr(ttgi::TritonIntelGPUDialect::getFastMathAttrName(),
                    builder.getUnitAttr());
 
     setThreadsPerWarp(mod);

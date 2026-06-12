@@ -102,7 +102,7 @@ def make_default_opt_flags_intel(
         split_k = max_allowable_mn(constraints["max_allowable_mn"], m, n, constraints.get("split_k"))
     elif constraints.get("split_k", None) is not None:
         split_k = constraints["split_k"]
-    elif is_persistent or enforce_bitwise_invariance or precision_config.act_scale is not None or precision_config.out_scale is not None:
+    elif is_persistent or enforce_bitwise_invariance or precision_config.a_mx_scale is not None or precision_config.c_mx_scale is not None:
         split_k = 1
     else:
         estimated_actual_grid_size = opt_flags_intel.compute_grid_size(None, m, n, block_m, block_n)
@@ -202,7 +202,7 @@ def make_default_opt_flags_amd(
     elif can_use_split_k and not enforce_bitwise_invariance:
         grid_size = grid_m * ((n + block_n - 1) // block_n)
         n_cu = torch.cuda.get_device_properties(0).multi_processor_count
-        split_k = max(1, n_cu // grid_size)
+        split_k = 1 if grid_size == 0 else max(1, n_cu // grid_size)
     # w_cache_modifier:
     w_cache_modifier = ".cg" if block_m <= 32 else None
     # num_warps, num_stages
@@ -278,6 +278,7 @@ def make_default_opt_flags_nvidia(
     has_y_acc_in,
     constraints,
     x_uses_tma_when_persistent=True,
+    w_transpose=False,
     mx_block_size=None,
     epilogue_reduction_n=1,
 ):
@@ -447,7 +448,8 @@ def make_default_opt_flags_nvidia(
     num_stages = -1
     for ep in subtiles_to_check:
         ns = opt_flags_nvidia.compute_num_stages(*compute_num_stages_args, epilogue_subtile=ep,
-                                                 occupancy_target=occupancy_target)
+                                                 occupancy_target=occupancy_target,
+                                                 w_transpose=w_transpose)
         if ns > num_stages:
             epilogue_subtile, num_stages = ep, ns
 
@@ -553,9 +555,12 @@ def make_opt_flags(
     block_k,
     mx_block_size=None,
     x_uses_tma_when_persistent=True,
+    w_transpose=False,
     rhs_layout=None,
     epilogue_reduction_n=1,
 ):
+    # Empty outputs do not launch a kernel, so persistent TMA constraints are vacuous.
+    can_use_persistent_tma = can_use_persistent_tma or batch_size * m * n == 0
     opt_flags_constraints = _get_opt_flags_constraints()
     if opt_flags_constraints.get("is_persistent", False) and not can_use_persistent_tma:
         raise InapplicableConstraint("cannot enforce `is_persistent=True` constraint")
@@ -591,6 +596,7 @@ def make_opt_flags(
         return make_default_opt_flags_nvidia(
             *args,
             x_uses_tma_when_persistent=x_uses_tma_when_persistent,
+            w_transpose=w_transpose,
             mx_block_size=mx_block_size,
             epilogue_reduction_n=epilogue_reduction_n,
         )

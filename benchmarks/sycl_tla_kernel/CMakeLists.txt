@@ -64,8 +64,22 @@ add_custom_command(
     VERBATIM
 )
 
+# Split-K GEMM configuration (reuses config-tool.py with --dims mnk)
+set(GEMM_SPLITK_CONFIG_INPUT ${CMAKE_CURRENT_SOURCE_DIR}/gemm_splitk/input_gemm_splitk.in)
+set(GEMM_SPLITK_CONFIG_OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/gemm_splitk_table.hpp)
+set(GEMM_SPLITK_CONFIG_NAME "gemm_splitk_config")
+
+add_custom_command(
+    OUTPUT ${GEMM_SPLITK_CONFIG_OUTPUT}
+    COMMAND ${CMAKE_COMMAND} -E echo "Generating Split-K GEMM config header..."
+    COMMAND ${Python3_EXECUTABLE} ${CONFIG_TOOL} ${GEMM_SPLITK_CONFIG_INPUT} -o ${GEMM_SPLITK_CONFIG_OUTPUT} --name ${GEMM_SPLITK_CONFIG_NAME} --dims mnk
+    DEPENDS ${GEMM_SPLITK_CONFIG_INPUT} ${CONFIG_TOOL}
+    COMMENT "Generate Split-K GEMM configuration"
+    VERBATIM
+)
+
 # Create a target that other targets can depend on
-add_custom_target(generate_gemm_config DEPENDS ${GEMM_CONFIG_OUTPUT})
+add_custom_target(generate_gemm_config DEPENDS ${GEMM_CONFIG_OUTPUT} ${GEMM_SPLITK_CONFIG_OUTPUT})
 
 Python3_add_library(sycl_tla_kernel MODULE WITH_SOABI python_main.cpp)
 
@@ -74,6 +88,7 @@ target_compile_options(sycl_tla_kernel PRIVATE "-DCUTLASS_ENABLE_SYCL")
 target_compile_options(sycl_tla_kernel PRIVATE "-DSYCL_INTEL_TARGET")
 target_compile_definitions(sycl_tla_kernel PRIVATE GEMM_CONFIG_HEADER=\"${GEMM_CONFIG_OUTPUT}\")
 target_compile_definitions(sycl_tla_kernel PRIVATE GEMM_CONFIG_NAME=\"${GEMM_CONFIG_NAME}\")
+target_compile_definitions(sycl_tla_kernel PRIVATE GEMM_SPLITK_CONFIG_HEADER=\"${GEMM_SPLITK_CONFIG_OUTPUT}\")
 
 target_link_options(sycl_tla_kernel PRIVATE ${SYCL_TLA_KERNEL_FLAGS})
 target_link_libraries(sycl_tla_kernel PUBLIC ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY})
@@ -83,6 +98,7 @@ target_include_directories(sycl_tla_kernel PUBLIC "${SyclTlaLibrary_INCLUDE_DIR}
 add_dependencies(sycl_tla_kernel generate_gemm_config)
 
 add_subdirectory(gemm)
+add_subdirectory(gemm_splitk)
 add_subdirectory(attention)
 
 install(TARGETS sycl_tla_kernel LIBRARY DESTINATION .)

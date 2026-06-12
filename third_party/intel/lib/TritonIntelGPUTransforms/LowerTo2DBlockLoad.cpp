@@ -38,9 +38,6 @@ template <typename OpTy,
               llvm::is_one_of<OpTy, tt::LoadOp, tt::DescriptorLoadOp>::value,
               bool> = true>
 static bool isBlockIOEligible(OpTy op) {
-  if (!op->getAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName()))
-    return false;
-
   RankedTensorType tensorTy;
   if constexpr (std::is_same_v<OpTy, tt::LoadOp>) {
     tensorTy =
@@ -51,19 +48,7 @@ static bool isBlockIOEligible(OpTy op) {
     tensorTy = cast<RankedTensorType>(op.getType());
   }
 
-  if (tensorTy.getRank() < 2)
-    return false;
-
-  bool hasDpas =
-      ttgi::hasDpasEncoding(tensorTy) || ttgi::hasDotDpasEncoding(tensorTy);
-
-  std::optional<bool> enableBlockIOForAllLayout = tt::tools::isEnvValueBool(
-      tt::tools::getStrEnv("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS"));
-  if (enableBlockIOForAllLayout.has_value() &&
-      !enableBlockIOForAllLayout.value() && !hasDpas)
-    return false;
-
-  return true;
+  return ttgi::isBlockIOEligible(op, tensorTy);
 }
 
 /// Get the stride (in elements) for a given dimension from stride analysis.
@@ -94,15 +79,6 @@ static Value createZeroSplat(OpBuilder &builder, Location loc,
   Value zeroVal =
       arith::ConstantOp::create(builder, loc, cast<TypedAttr>(zeroAttr));
   return tt::SplatOp::create(builder, loc, tensorTy, zeroVal);
-}
-
-/// Determine whether memory layout is row-major from the block_io attribute.
-static bool isMemoryRowMajor(Operation *op) {
-  auto blockIOAttr = op->getAttrOfType<StringAttr>(
-      ttgi::TritonIntelGPUDialect::getBlockIOAttrName());
-  assert(blockIOAttr && "expected block_io attribute");
-  auto mode = ttgi::symbolizeBlockIOMode(blockIOAttr.getValue());
-  return !mode || *mode == ttgi::BlockIOMode::RowMajor;
 }
 
 struct TritonIntelGPULowerTo2DBlockLoadPass
@@ -183,7 +159,7 @@ private:
     unsigned descRank = descType.getBlockType().getRank();
     assert(descRank >= rank && "descriptor rank must be >= result tensor rank");
 
-    bool memoryRowMajor = isMemoryRowMajor(op);
+    bool memoryRowMajor = ttgi::isMemoryRowMajor(op);
 
     // Validate that tile computation will succeed during LLVM lowering.
     bool oneMatrixPerLoadForBT =
@@ -263,7 +239,8 @@ private:
     };
 
     // If the pitch stride is a known constant AND the descriptor/result ranks
-    // match, validate HW constraints (>= 64 bytes, 16-byte aligned).
+    // match, validate HW constraints (>= 64 bytes, 16-byte aligned, encoded
+    // in 24 bits per the `triton_gen.2Dblockload` verifier).
     // For rank-reducing loads, the stride interpretation may differ from the
     // 2D surface pitch, so skip static validation (runtime will handle it).
     if (rank == descRank) {
@@ -271,7 +248,8 @@ private:
           tt::intel::getFoldedConstantValue(strides[descRank - 2]);
       if (pitchStride) {
         int64_t pitchBytes = *pitchStride * elemSizeInBits / 8;
-        if (pitchBytes < 64 || (pitchBytes % 16) != 0) {
+        if (pitchBytes < 64 || (pitchBytes % 16) != 0 ||
+            pitchBytes > (int64_t(1) << 24)) {
           LDBG("Invalid pitch " << pitchBytes
                                 << " for descriptor load: " << *op);
           return;
@@ -327,7 +305,7 @@ private:
     unsigned rank = tensorTy.getRank();
     unsigned elemSizeInBits = tensorTy.getElementTypeBitWidth();
 
-    bool memoryRowMajor = isMemoryRowMajor(op);
+    bool memoryRowMajor = ttgi::isMemoryRowMajor(op);
     unsigned contiguousDim = memoryRowMajor ? rank - 1 : rank - 2;
 
     bool oneMatrixPerLoadForBT =
@@ -391,6 +369,9 @@ private:
     unsigned surfaceWidthDim = isTranspose ? rowDim : colDim;
     unsigned surfaceHeightDim = isTranspose ? colDim : rowDim;
     constexpr int64_t MIN_PITCH = 64;
+    // Surface pitch is encoded in 24 bits in the 2D block IO message
+    // descriptor (see `triton_gen.2Dblockload` verifier in TritonGENOps.cpp).
+    constexpr int64_t MAX_PITCH = int64_t(1) << 24;
 
     int64_t pitch;
     bool isBroadcast = false;
@@ -427,8 +408,9 @@ private:
       }
     }
 
-    // HW requires pitch >= 64 bytes and pitch aligned to 16 bytes.
-    if (pitch < MIN_PITCH || (pitch % 16) != 0) {
+    // HW requires pitch >= 64 bytes, aligned to 16 bytes, and encoded in
+    // 24 bits.
+    if (pitch < MIN_PITCH || (pitch % 16) != 0 || pitch > MAX_PITCH) {
       LDBG("Invalid pitch " << pitch << " for load: " << *op);
       return;
     }

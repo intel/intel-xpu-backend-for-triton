@@ -1914,3 +1914,59 @@ module {
     module, function, n_regs, n_spills, n_max_threads = driver.active.utils.load_binary(
         kernel.name, kernel.kernel, kernel.metadata.shared, kernel.metadata.build_flags,
         not kernel.metadata.generate_native_code, device)
+
+
+def test_regression_7022(device, tmp_path: pathlib.Path):
+    ir = """
+module {
+  tt.func public @triton_per_fused__softmax__softmax_backward_data__to_copy_add_native_dropout_backward_sum_view_12(%in_ptr0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %in_ptr1: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %in_ptr2: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %in_ptr3: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %out_ptr0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %xnumel: i32 {tt.divisibility = 16 : i32}, %r0_numel: i32) attributes {noinline = false} {
+    %cst = arith.constant dense<12582912> : tensor<1x8xi32>
+    %c8_i32 = arith.constant 8 : i32
+    %xoffset = tt.get_program_id x : i32
+    %xoffset_0 = arith.muli %xoffset, %c8_i32 : i32
+    %xindex = tt.make_range {end = 8 : i32, start = 0 : i32} : tensor<8xi32>
+    %xindex_1 = tt.expand_dims %xindex {axis = 1 : i32} : tensor<8xi32> -> tensor<8x1xi32>
+    %xindex_2 = tt.splat %xoffset_0 : i32 -> tensor<8x1xi32>
+    %xindex_3 = arith.addi %xindex_2, %xindex_1 : tensor<8x1xi32>
+    %r0_index = tt.expand_dims %xindex {axis = 0 : i32} : tensor<8xi32> -> tensor<1x8xi32>
+    %tmp0 = arith.muli %r0_index, %cst : tensor<1x8xi32>
+    %tmp0_4 = tt.broadcast %xindex_3 : tensor<8x1xi32> -> tensor<8x8xi32>
+    %tmp0_5 = tt.broadcast %tmp0 : tensor<1x8xi32> -> tensor<8x8xi32>
+    %tmp0_6 = arith.addi %tmp0_4, %tmp0_5 : tensor<8x8xi32>
+    %tmp0_7 = tt.splat %in_ptr0 : !tt.ptr<bf16> -> tensor<8x8x!tt.ptr<bf16>>
+    %tmp0_8 = tt.addptr %tmp0_7, %tmp0_6 : tensor<8x8x!tt.ptr<bf16>>, tensor<8x8xi32>
+    %tmp0_9 = tt.load %tmp0_8 : tensor<8x8x!tt.ptr<bf16>>
+    %tmp0_10 = arith.extf %tmp0_9 : tensor<8x8xbf16> to tensor<8x8xf32>
+    %tmp1 = tt.splat %in_ptr1 : !tt.ptr<bf16> -> tensor<8x8x!tt.ptr<bf16>>
+    %tmp1_11 = tt.addptr %tmp1, %tmp0_6 : tensor<8x8x!tt.ptr<bf16>>, tensor<8x8xi32>
+    %tmp1_12 = tt.load %tmp1_11 : tensor<8x8x!tt.ptr<bf16>>
+    %tmp1_13 = arith.extf %tmp1_12 : tensor<8x8xbf16> to tensor<8x8xf32>
+    %tmp3 = tt.splat %in_ptr2 : !tt.ptr<bf16> -> tensor<8x8x!tt.ptr<bf16>>
+    %tmp3_14 = tt.addptr %tmp3, %tmp0_6 : tensor<8x8x!tt.ptr<bf16>>, tensor<8x8xi32>
+    %tmp3_15 = tt.load %tmp3_14 : tensor<8x8x!tt.ptr<bf16>>
+    %tmp3_16 = arith.extf %tmp3_15 : tensor<8x8xbf16> to tensor<8x8xf32>
+    %tmp5 = tt.splat %in_ptr3 : !tt.ptr<bf16> -> tensor<8x8x!tt.ptr<bf16>>
+    %tmp5_17 = tt.addptr %tmp5, %tmp0_6 : tensor<8x8x!tt.ptr<bf16>>, tensor<8x8xi32>
+    %tmp5_18 = tt.load %tmp5_17 : tensor<8x8x!tt.ptr<bf16>>
+    %tmp5_19 = arith.extf %tmp5_18 : tensor<8x8xbf16> to tensor<8x8xf32>
+    %tmp2 = arith.addf %tmp0_10, %tmp1_13 : tensor<8x8xf32>
+    %tmp4 = arith.addf %tmp2, %tmp3_16 : tensor<8x8xf32>
+    %tmp6 = arith.addf %tmp4, %tmp5_19 : tensor<8x8xf32>
+    %tmp10 = "tt.reduce"(%tmp6) <{axis = 1 : i32}> ({
+    ^bb0(%tmp10_21: f32, %tmp10_22: f32):
+      %tmp10_23 = arith.addf %tmp10_21, %tmp10_22 : f32
+      tt.reduce.return %tmp10_23 : f32
+    }) : (tensor<8x8xf32>) -> tensor<8xf32>
+    %tmp10_20 = tt.expand_dims %tmp10 {axis = 1 : i32} : tensor<8xf32> -> tensor<8x1xf32>
+    %0 = tt.splat %out_ptr0 : !tt.ptr<bf16> -> tensor<8x1x!tt.ptr<bf16>>
+    %1 = tt.addptr %0, %xindex_3 : tensor<8x1x!tt.ptr<bf16>>, tensor<8x1xi32>
+    %2 = arith.truncf %tmp10_20 : tensor<8x1xf32> to tensor<8x1xbf16>
+    tt.store %1, %2 : tensor<8x1x!tt.ptr<bf16>>
+    tt.return
+  }
+}
+    """
+
+    temp_file = tmp_path / "test_regression_7022.ttir"
+    temp_file.write_text(ir)
+    triton.compile(str(temp_file))

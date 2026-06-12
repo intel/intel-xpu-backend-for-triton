@@ -34,46 +34,6 @@ using namespace mlir::triton::gpu::intel;
 
 namespace {
 
-Value maybeAnd(RewriterBase &rewriter, Location loc, Value a, Value b) {
-  auto tb = TritonLLVMOpBuilder(loc, rewriter);
-  if (a && b) {
-    return tb.and_(a, b);
-  }
-  return a ? a : b;
-}
-
-// Return a predicate that is true only if the current thread holds unique data,
-// according to freeVarsMask. The predicate may be null to indicate no
-// predication is required.
-Value emitRedundantThreadPredicate(
-    const llvm::MapVector<StringAttr, int32_t> &freeVarMasks,
-    ConversionPatternRewriter &rewriter, Location loc,
-    const triton::intel::TargetInfo &targetInfo) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto ctx = rewriter.getContext();
-  auto kLane = str_attr("lane");
-  auto kWarp = str_attr("warp");
-  auto kBlock = str_attr("block");
-
-  Value zero = b.i32_val(0);
-  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
-  Value blockId = freeVarMasks.lookup(kBlock) == 0
-                      ? zero
-                      : targetInfo.getClusterCTAId(rewriter, loc);
-
-  Value pred;
-  auto dimNames = {kLane, kWarp, kBlock};
-  auto dimIds = {laneId, warpId, blockId};
-  for (auto [dimName, dimId] : llvm::zip(dimNames, dimIds)) {
-    int32_t mask = freeVarMasks.lookup(dimName);
-    if (mask != 0) {
-      auto dimPred = b.icmp_eq(b.and_(dimId, b.i32_val(mask)), zero);
-      pred = maybeAnd(rewriter, loc, pred, dimPred);
-    }
-  }
-  return pred;
-}
-
 unsigned getCanonicalIndex(unsigned index, unsigned freeVarMask) {
   return index & ~freeVarMask;
 }
@@ -245,7 +205,7 @@ struct LoadStoreConversionBase {
     if (!descAxisInfo || static_cast<unsigned>(descAxisInfo->getRank()) != rank)
       return 1;
 
-    LinearEncodingAttr linAttr = triton::gpu::toLinearEncoding(resultType);
+    auto linAttr = triton::gpu::toGenericLinearEncoding(resultType);
     SmallVector<unsigned> order = linAttr.getOrder();
     SmallVector<unsigned> contigPerThread = linAttr.getContigPerThread();
 
@@ -294,7 +254,13 @@ struct LoadStoreConversionBase {
       std::optional<PaddingOption> padding = std::nullopt) const {
 
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    size_t rank = tensorType.getRank();
+    assert(offsets.size() == shapes.size() &&
+           offsets.size() == strides.size() &&
+           "invalid length of offsets, shapes and strides");
+    size_t tensorRank = tensorType.getRank();
+    size_t pointerRank = offsets.size();
+    assert(pointerRank >= tensorRank &&
+           "descriptor rank must be >= result/source tensor rank");
     const unsigned numElems = getTotalElemsPerThread(tensorType);
 
     // Get the LLVM values for indices in block
@@ -320,9 +286,13 @@ struct LoadStoreConversionBase {
     SmallVector<Value> maskElems;
     for (unsigned i = 0; i < numElems; ++i) {
       SmallVector<Value> index = indices[i];
-      SmallVector<Value> indicesInTensor(rank);
-      for (unsigned j = 0; j < rank; ++j)
-        indicesInTensor[j] = b.add(index[j], offsets[j]);
+      SmallVector<Value> indicesInTensor(pointerRank);
+      for (unsigned j = 0; j < pointerRank - tensorRank; ++j) {
+        indicesInTensor[j] = offsets[j];
+      }
+      for (unsigned j = 0; j < tensorRank; ++j)
+        indicesInTensor[j + (pointerRank - tensorRank)] =
+            b.add(index[j], offsets[j + (pointerRank - tensorRank)]);
 
       // Get the LLVM values for pointers
       Value offset = linearize(
@@ -399,25 +369,19 @@ struct LoadStoreConversionBase {
 
     DescriptorFields desc =
         unpackDescriptor(descriptorStruct, descriptorRank, loc, rewriter);
-    const size_t rank = tensorType.getRank();
-    assert(descriptorRank >= rank &&
-           "descriptor rank must be >= result/source tensor rank");
-    const size_t rankDelta = descriptorRank - rank;
 
     SmallVector<Value> offsets;
-    offsets.reserve(rank);
-    if (indices.size() == descriptorRank) {
-      for (size_t i = 0; i < rank; ++i)
-        offsets.push_back(indices[i + rankDelta]);
-    } else {
-      assert(indices.size() == rank && "unexpected descriptor indices rank");
-      offsets.append(indices.begin(), indices.end());
-    }
+    offsets.reserve(descriptorRank);
+    assert(indices.size() == descriptorRank &&
+           "unexpected descriptor indices rank");
+    for (size_t i = 0; i < descriptorRank; ++i)
+      offsets.push_back(indices[i]);
 
-    SmallVector<Value> mappedShapes(rank), mappedStrides(rank);
-    for (size_t i = 0; i < rank; ++i) {
-      mappedShapes[i] = desc.shapes[i + rankDelta];
-      mappedStrides[i] = desc.strides[i + rankDelta];
+    SmallVector<Value> mappedShapes(descriptorRank),
+        mappedStrides(descriptorRank);
+    for (size_t i = 0; i < descriptorRank; ++i) {
+      mappedShapes[i] = desc.shapes[i];
+      mappedStrides[i] = desc.strides[i];
     }
 
     return computeGatherScatterOperands(loc, desc.base, offsets, mappedShapes,
@@ -473,21 +437,26 @@ struct LoadStoreConversionBase {
             op, TritonIntelGPUDialect::getSupportPredicatedIOAttrName()))
       return false;
 
-    // There's an IGC bug with predicated load so it is disabled by default.
-    // On the other hand, predicated store is expected to be correct and it is
-    // enabled by default. Both can be overridden by env vars.
-    static const bool canUsePredicatedLoad =
-        tools::getBoolEnv("TRITON_INTEL_PREDICATED_LOAD");
+    // Predicated load is enabled by default for LoadOp but disabled by default
+    // for DescriptorLoadOp. DescriptorLoadOp always generates boundary-check
+    // predicates (even when all elements are in-bounds), and the predicated
+    // load intrinsic prevents IGC from optimizing these uniformly-true
+    // predicates as effectively as the control-flow-based approach. Both can be
+    // overridden by env vars. Predicated store is enabled by default for both
+    // op types.
+    static const std::optional<bool> usePredicatedLoad =
+        tools::isEnvValueBool(tools::getStrEnv("TRITON_INTEL_PREDICATED_LOAD"));
     static const std::optional<bool> usePredicatedStore = tools::isEnvValueBool(
         tools::getStrEnv("TRITON_INTEL_PREDICATED_STORE"));
 
     // SPIRV predicated load/store does not support volatile qualifier.
     if constexpr (std::is_same_v<OpType, LoadOp>) {
-      return canUsePredicatedLoad && !op.getIsVolatile();
+      return (!usePredicatedLoad.has_value() || usePredicatedLoad.value()) &&
+             !op.getIsVolatile();
     } else if constexpr (std::is_same_v<OpType, StoreOp>) {
       return !usePredicatedStore.has_value() || usePredicatedStore.value();
     } else if constexpr (std::is_same_v<OpType, DescriptorLoadOp>) {
-      return canUsePredicatedLoad;
+      return usePredicatedLoad.has_value() && usePredicatedLoad.value();
     } else if constexpr (std::is_same_v<OpType, DescriptorStoreOp>) {
       return !usePredicatedStore.has_value() || usePredicatedStore.value();
     }
@@ -2154,7 +2123,6 @@ struct DescriptorLoadOpConversion
 
     // Get result type information
     auto resultType = cast<RankedTensorType>(op.getType());
-    size_t resultRank = resultType.getRank();
     Type valueElemTy = typeConverter->convertType(resultType.getElementType());
     unsigned numElems = getTotalElemsPerThread(resultType);
 
@@ -2179,8 +2147,8 @@ struct DescriptorLoadOpConversion
 
     // Boundary check all dimensions — tensor descriptors always encode shape
     // bounds and don't have a user-facing boundaryCheck attribute.
-    SmallVector<int32_t> allDims(resultRank);
-    for (size_t i = 0; i < resultRank; ++i)
+    SmallVector<int32_t> allDims(descRank);
+    for (size_t i = 0; i < descRank; ++i)
       allDims[i] = static_cast<int32_t>(i);
 
     // Reuse the shared gather/scatter operand computation.
@@ -2208,13 +2176,12 @@ struct DescriptorLoadOpConversion
       std::swap(permShapes[descRank - 2], permShapes[descRank - 1]);
       std::swap(permStrides[descRank - 2], permStrides[descRank - 1]);
       std::swap(permOffsets[descRank - 2], permOffsets[descRank - 1]);
-      SmallVector<Value> mappedShapes(resultRank), mappedStrides(resultRank),
-          mappedOffsets(resultRank);
-      const size_t rankDelta = descRank - resultRank;
-      for (size_t i = 0; i < resultRank; ++i) {
-        mappedShapes[i] = permShapes[i + rankDelta];
-        mappedStrides[i] = permStrides[i + rankDelta];
-        mappedOffsets[i] = permOffsets[i + rankDelta];
+      SmallVector<Value> mappedShapes(descRank), mappedStrides(descRank),
+          mappedOffsets(descRank);
+      for (size_t i = 0; i < descRank; ++i) {
+        mappedShapes[i] = permShapes[i];
+        mappedStrides[i] = permStrides[i];
+        mappedOffsets[i] = permOffsets[i];
       }
       std::tie(ptrElems, maskElems, otherElems) = computeGatherScatterOperands(
           loc, desc.base, mappedOffsets, mappedShapes, mappedStrides,
@@ -2388,8 +2355,8 @@ struct DescriptorStoreOpConversion
 
     // Boundary check all dimensions — tensor descriptors always encode shape
     // bounds and don't have a user-facing boundaryCheck attribute.
-    SmallVector<int32_t> allDims(valueTy.getRank());
-    for (size_t i = 0; i < valueTy.getRank(); ++i)
+    SmallVector<int32_t> allDims(descRank);
+    for (size_t i = 0; i < descRank; ++i)
       allDims[i] = static_cast<int32_t>(i);
 
     // Reuse the shared gather/scatter operand computation.
@@ -2564,26 +2531,18 @@ struct DescriptorStoreOpToBlockIOConversion
     // propagated here.
     AxisInfo *maskAxisInfo = nullptr;
 
-    BlockIOTileSizeInfo sizeInfo = getBlockIOTileSize<false /*store*/>(
-        llEncoding.value(), contiguousDim, elemSizeInBits, maskAxisInfo,
-        /*oneMatrixPerLoadForBT=*/false);
-    if (!sizeInfo.isValid())
+    // Validate the store tile through the shared helper: it computes the tile
+    // geometry, enforces the HW address payload restriction, rejects transpose,
+    // and forces vBlocks to 1.
+    BlockIOTileSizeInfo sizeInfo = BlockIOTileSizeInfo::unknown();
+    if (!validate2DBlockStoreTile(llEncoding.value(), contiguousDim,
+                                  elemSizeInBits, tensorType, maskAxisInfo,
+                                  sizeInfo))
       return failure();
 
     auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
           isTransposeRequired, regPackedBases] = std::move(sizeInfo);
-
     unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
-    if (!check2DBlockAddressPayloadRestriction(packedElemSizeInBits, tileWidth))
-      return failure();
-
-    // Limit vBlock to 1 for stores.
-    vBlocks = 1;
-
-    if (isTransposeRequired) {
-      // 2D Block store doesn't support transpose.
-      return failure();
-    }
 
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -2824,29 +2783,28 @@ struct StoreOpToBlockIOConversion
                                      /*vBlocks=*/1, /*rowDim=*/0,
                                      /*colDim=*/rank - 1, /*transpose=*/false,
                                      std::move(regPackBases));
+      // The reshape path bypasses getBlockIOTileSize (and thus
+      // validate2DBlockStoreTile), so apply the HW address payload restriction
+      // here; vBlocks and transpose are already fixed (1 / false) above.
+      if (!sizeInfo.isValid())
+        return failure();
+      if (!check2DBlockAddressPayloadRestriction(
+              elemSizeInBits * sizeInfo.numElemPerPackedVal,
+              sizeInfo.tileWidth))
+        return failure();
     } else {
-      sizeInfo = getBlockIOTileSize<false /*store*/>(
-          llEncoding.value(), contiguousDim, elemSizeInBits, maskAxisInfo,
-          /*oneMatrixPerLoadForBT=*/false);
+      // Validate through the shared helper (the single source of truth for 2D
+      // block store eligibility): tile geometry, HW address payload
+      // restriction, no transpose, vBlocks forced to 1.
+      if (!validate2DBlockStoreTile(llEncoding.value(), contiguousDim,
+                                    elemSizeInBits, tensorType, maskAxisInfo,
+                                    sizeInfo))
+        return failure();
     }
-
-    if (!sizeInfo.isValid())
-      return failure();
 
     auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
           isTransposeRequired, regPackedBases] = std::move(sizeInfo);
-
     unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
-    if (!check2DBlockAddressPayloadRestriction(packedElemSizeInBits, tileWidth))
-      return failure();
-
-    // Limit vBlock to 1
-    vBlocks = 1;
-
-    if (isTransposeRequired) {
-      // 2D Block store doesn't support transpose.
-      return failure();
-    }
 
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -3432,6 +3390,15 @@ struct AtomicRMWOpConversion
     Value threadPred =
         emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
 
+    bool support16BitAtomics = moduleOp->hasAttr(
+        TritonIntelGPUDialect::getSupport16BitAtomicsAttrName());
+    if (valueElemNBits == 16 && !support16BitAtomics &&
+        !supports16BitEmulation(atomicRmwAttr, valueElemTy))
+      return op.emitError(
+          "16-bit atomic RMW is only emulated for fp16/bf16 with "
+          "FADD/MAX/MIN/XCHG when the target lacks native 16-bit atomics; "
+          "this operation or element type is not supported");
+
     auto vecTy = vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
     for (size_t i = 0; i < elemsPerThread; i += vec) {
@@ -3463,13 +3430,11 @@ struct AtomicRMWOpConversion
       // TODO: check device capabilities to avoid unnecessary emulation or
       // emit unsupported feature error.
       Value ret;
-      bool support16BitAtomics = moduleOp->hasAttr(
-          TritonIntelGPUDialect::getSupport16BitAtomicsAttrName());
       if (valueElemNBits == 16 && !support16BitAtomics) {
         op.emitWarning("'tt.atomic_rmw' op fp16/bf16 datatype is not supported "
                        "in the target HW, software emulation is an "
                        "experimental feature (use at own risk)");
-        Block *endBlock = emulate16BitsAtomicRmw(
+        Block *endBlock = AtomicRMWOpConversion::emulate16BitsAtomicRmw(
             rewriter, loc, atomicRmwAttr, valueElemTy, rmwPtr, rmwVal,
             maybeAnd(rewriter, loc, b.true_val(), rmwMask), {zero});
         ret = endBlock->getArgument(0);
@@ -3532,12 +3497,32 @@ struct AtomicRMWOpConversion
     return success();
   }
 
+  // emulate16BitsAtomicRmw only implements fp16/bf16 (FADD + FP MAX/MIN/XCHG).
+  // Must stay in sync with the switch there: integer 16-bit ops would either
+  // hit llvm_unreachable or be silently miscompiled as floating-point MAX/MIN.
+  static bool supports16BitEmulation(mlir::triton::RMWOp atomicOp,
+                                     Type valueElemTy) {
+    if (!isa<mlir::Float16Type, mlir::BFloat16Type>(valueElemTy))
+      return false;
+    switch (atomicOp) {
+    case RMWOp::FADD:
+    case RMWOp::MAX:
+    case RMWOp::MIN:
+    case RMWOp::XCHG:
+      return true;
+    default:
+      return false;
+    }
+  }
+
   // Emulate 16-bit atomicrmw through a loop with 32-bit cmpxchg.
   // TODO: optimize for the case when rmwMask is a true constant?
-  Block *emulate16BitsAtomicRmw(ConversionPatternRewriter &rewriter,
-                                Location loc, mlir::triton::RMWOp atomicOp,
-                                Type valueElemTy, Value rmwPtr, Value rmwVal,
-                                Value rmwMask, ArrayRef<Value> ops) const {
+  static Block *emulate16BitsAtomicRmw(ConversionPatternRewriter &rewriter,
+                                       Location loc,
+                                       mlir::triton::RMWOp atomicOp,
+                                       Type valueElemTy, Value rmwPtr,
+                                       Value rmwVal, Value rmwMask,
+                                       ArrayRef<Value> ops) {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     Block *insertionBlock = rewriter.getInsertionBlock();
     Block *headerBlock =
@@ -4081,6 +4066,197 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
   }
 };
 
+// -----------------------------------------------------------------------
+// LocalAtomicScatterRMWOp lowering
+// -----------------------------------------------------------------------
+
+struct LocalAtomicScatterRMWInfo {
+  RankedTensorType valuesTy;
+  Type llvmElemTy;
+  LinearLayout regLayout;
+  ColumnAction removeBroadcast;
+  Value threadPred;
+  SmallVector<Value> values;
+  SmallVector<Value> maskValues;
+  SmallVector<Value> ptrs;
+};
+
+// Ported from NVIDIA backend
+static FailureOr<LocalAtomicScatterRMWInfo>
+prepareLocalAtomicScatterRMW(triton::gpu::LocalAtomicScatterRMWOp op, Value dst,
+                             Value indices, Value inputValues, Value mask,
+                             ConversionPatternRewriter &rewriter,
+                             const triton::intel::TargetInfo &targetInfo,
+                             const LLVMTypeConverter *typeConverter) {
+  auto loc = op.getLoc();
+  auto valuesTy = cast<RankedTensorType>(op.getValues().getType());
+  auto memDescTy = cast<MemDescType>(op.getDst().getType());
+  if (isa<triton::gpu::PartitionedSharedEncodingAttr>(
+          memDescTy.getEncoding())) {
+    return failure();
+  }
+
+  auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
+  auto smemObj =
+      LLVM::getSharedMemoryObjectFromStruct(loc, dst, llvmElemTy, rewriter);
+  SmallVector<Value> idxValues = unpackLLElements(loc, indices, rewriter);
+  SmallVector<Value> values = unpackLLElements(loc, inputValues, rewriter);
+  SmallVector<Value> maskValues;
+  if (mask)
+    maskValues = unpackLLElements(loc, mask, rewriter);
+
+  LinearLayout regLayout = toLinearLayout(valuesTy);
+  auto freeVarMasks = regLayout.getFreeVariableMasks();
+  auto removeBroadcast = actionRemoveBroadcastedRegs(regLayout);
+  Value threadPred =
+      emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
+  LinearLayout activeRegLayout = regLayout;
+  if (!removeBroadcast.isIdentity()) {
+    activeRegLayout = removeBroadcast.apply(regLayout);
+    values = removeBroadcast.apply(values);
+    idxValues = removeBroadcast.apply(idxValues);
+    if (!maskValues.empty())
+      maskValues = removeBroadcast.apply(maskValues);
+  }
+  SmallVector<SmallVector<Value>> srcIndices =
+      emitIndices(loc, rewriter, targetInfo, activeRegLayout, valuesTy,
+                  /*withCTAOffset=*/true);
+
+  SmallVector<Value> ptrs = llvm::map_to_vector(
+      computeLocalAddrs(loc, memDescTy, smemObj, llvmElemTy, idxValues,
+                        srcIndices, op.getAxis(), rewriter),
+      [](const LocalSharedMemoryAddress &addr) { return addr.ptr; });
+
+  return LocalAtomicScatterRMWInfo{valuesTy,        llvmElemTy, regLayout,
+                                   removeBroadcast, threadPred, values,
+                                   maskValues,      ptrs};
+}
+
+struct LocalAtomicScatterRMWOpConversion
+    : public ConvertTritonGPUOpToLLVMPattern<
+          triton::gpu::LocalAtomicScatterRMWOp> {
+
+  LocalAtomicScatterRMWOpConversion(const LLVMTypeConverter &converter,
+                                    const triton::intel::TargetInfo &targetInfo,
+                                    PatternBenefit benefit)
+      : ConvertTritonGPUOpToLLVMPattern<triton::gpu::LocalAtomicScatterRMWOp>(
+            converter, benefit),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::LocalAtomicScatterRMWOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    RMWOp rmwOp = op.getAtomicRmwOp();
+    std::optional<LLVM::AtomicBinOp> atomicBinOp = matchAtomicOp(rmwOp);
+    if (!atomicBinOp)
+      return op.emitError("unsupported atomic RMW operation for XPU backend");
+
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto lowering = prepareLocalAtomicScatterRMW(
+        op, adaptor.getDst(), adaptor.getIndices(), adaptor.getValues(),
+        op.getMask() ? adaptor.getMask() : Value(), rewriter, targetInfo,
+        getTypeConverter());
+
+    if (failed(lowering))
+      return failure();
+
+    LocalAtomicScatterRMWInfo &info = *lowering;
+    bool returnOld = !op.getResult().use_empty();
+
+    bool needs16BitEmulation = requires16BitEmulation(op, info.llvmElemTy);
+    if (needs16BitEmulation &&
+        !AtomicRMWOpConversion::supports16BitEmulation(rmwOp, info.llvmElemTy))
+      return op.emitError(
+          "16-bit atomic RMW is only emulated for fp16/bf16 with "
+          "FADD/MAX/MIN/XCHG when the target lacks native 16-bit atomics; "
+          "this operation or element type is not supported");
+
+    Value zero = emitZeroConstant(b, info.llvmElemTy);
+
+    SmallVector<Value> results;
+    if (returnOld)
+      results.reserve(info.ptrs.size());
+
+    for (auto [i, ptrAndValue] :
+         llvm::enumerate(llvm::zip(info.ptrs, info.values))) {
+      auto [elemPtr, packedVal] = ptrAndValue;
+      Value elemVal = b.bitcast(packedVal, info.llvmElemTy);
+      Value pred =
+          maybeAnd(rewriter, loc, info.threadPred,
+                   info.maskValues.empty() ? Value() : info.maskValues[i]);
+
+      Value ret = emitOneAtomicRMW(b, rewriter, loc, info.llvmElemTy, rmwOp,
+                                   *atomicBinOp, elemPtr, elemVal, pred, zero,
+                                   needs16BitEmulation);
+      if (returnOld)
+        results.push_back(ret);
+    }
+
+    if (!returnOld) {
+      rewriter.eraseOp(op);
+      return success();
+    }
+
+    if (!info.removeBroadcast.isIdentity())
+      results = broadcastAs(results, info.regLayout);
+
+    finalizeTensorAtomicResults(op, info.valuesTy, rewriter, results,
+                                info.llvmElemTy, b, info.threadPred, targetInfo,
+                                getTypeConverter());
+    return success();
+  }
+
+private:
+  bool requires16BitEmulation(Operation *op, Type llvmElemTy) const {
+    bool support16BitAtomics = op->getParentOfType<ModuleOp>()->hasAttr(
+        TritonIntelGPUDialect::getSupport16BitAtomicsAttrName());
+    return llvmElemTy.getIntOrFloatBitWidth() == 16 && !support16BitAtomics;
+  }
+
+  Value emitZeroConstant(TritonLLVMOpBuilder &b, Type llvmElemTy) const {
+    return TypeSwitch<mlir::Type, Value>(llvmElemTy)
+        .Case<mlir::IntegerType>(
+            [&](auto ty) { return b.int_val(ty.getWidth(), 0); })
+        .Case<mlir::Float16Type>([&](auto) { return b.f16_val(0); })
+        .Case<mlir::BFloat16Type>([&](auto) { return b.bf16_val(0); })
+        .Case<mlir::Float32Type>([&](auto) { return b.f32_val(0); })
+        .Case<mlir::Float64Type>([&](auto) { return b.f64_val(0); });
+  }
+
+  // Emit one atomic RMW for a single element pointer, returning the old value.
+  // 16-bit types without native HW support use CAS-loop emulation.
+  Value emitOneAtomicRMW(TritonLLVMOpBuilder &b,
+                         ConversionPatternRewriter &rewriter, Location loc,
+                         Type llvmElemTy, RMWOp rmwOp,
+                         LLVM::AtomicBinOp atomicBinOp, Value elemPtr,
+                         Value elemVal, Value pred, Value zero,
+                         bool needs16BitEmulation) const {
+    if (needs16BitEmulation) {
+      Value casGuard = pred ? pred : b.true_val();
+      Block *endBlock = AtomicRMWOpConversion::emulate16BitsAtomicRmw(
+          rewriter, loc, rmwOp, llvmElemTy, elemPtr, elemVal, casGuard, {zero});
+      return endBlock->getArgument(0);
+    }
+
+    auto createAtomicOp = [&]() -> SmallVector<Value, 1> {
+      auto atomRMW =
+          LLVM::AtomicRMWOp::create(rewriter, loc, atomicBinOp, elemPtr,
+                                    elemVal, LLVM::AtomicOrdering::monotonic);
+      return {atomRMW.getRes()};
+    };
+
+    if (pred) {
+      Block *endBlock = &LLVM::intel::createPredicatedBlock(
+          rewriter, loc, pred, {zero}, createAtomicOp);
+      return endBlock->getArgument(0);
+    }
+    return createAtomicOp()[0];
+  }
+
+  const triton::intel::TargetInfo &targetInfo;
+};
+
 } // namespace
 
 void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
@@ -4094,6 +4270,9 @@ void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
                DescriptorStoreOpConversion, PrefetchOpConversion,
                DescriptorPrefetchOpConversion>(
       typeConverter, targetInfo, axisInfoAnalysis, strideAnalysis, benefit);
+  // Local atomic scatter RMW (shared memory atomics via indices).
+  patterns.add<LocalAtomicScatterRMWOpConversion>(typeConverter, targetInfo,
+                                                  benefit);
   // Block IO store patterns (loads are handled via ttig.2d_block_load path).
   patterns
       .add<StoreOpToBlockIOConversion, DescriptorStoreOpToBlockIOConversion>(

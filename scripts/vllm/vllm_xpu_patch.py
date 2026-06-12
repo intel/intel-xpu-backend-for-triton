@@ -148,6 +148,16 @@ def _find_cuda_patterns(source: str) -> list[dict]:
                     "col": node.col_offset,
                 })
 
+        # .cuda() method calls on tensors (e.g., tensor.cuda())
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Attribute) and func.attr == "cuda":
+                patterns.append({
+                    "type": "tensor_cuda_method",
+                    "line": node.lineno,
+                    "col": node.col_offset,
+                })
+
     return patterns
 
 
@@ -199,6 +209,10 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
                 r"if (cap := current_platform.get_device_capability()) is not None and cap \1",
                 line,
             )
+
+        elif ptype == "tensor_cuda_method":
+            # Replace .cuda() with .xpu()
+            lines[line_idx] = line.replace(".cuda()", ".xpu()")
 
     return "\n".join(lines)
 

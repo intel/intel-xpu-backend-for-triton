@@ -33,6 +33,7 @@ except ImportError as e:
         "Could not import unified_attention from vLLM. Please ensure vLLM is installed and accessible.") from e
 unified_attention = _unified_attention_module.unified_attention
 from vllm.platforms import current_platform
+from vllm_xpu_kernels.flash_attn_interface import flash_attn_varlen_func as sycl_tla_attention
 
 float8_info = torch.finfo(current_platform.fp8_dtype())
 
@@ -510,6 +511,9 @@ def get_unified_attention_benchmark(
         # Skip triton providers if interpreter is used because if fails
         del supported_providers['triton']
 
+    if not is_fp8:
+        supported_providers['sycl-tla'] = 'SYCL-TLA'
+
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
     if configs_override is not None:
         configs = configs_override
@@ -627,6 +631,7 @@ def get_unified_attention_benchmark(
                     q_descale=q_descale,
                     k_descale=k_descale,
                     v_descale=v_descale,
+                    use_td=is_td_patched,
                 )
                 return output
 
@@ -657,6 +662,38 @@ def get_unified_attention_benchmark(
                 block_size=block_size,
                 mean_ms=mean_ms,
                 cv=cv,
+            )
+        elif provider == 'sycl-tla':
+            expected_output = torch_fn() if BENCHMARKING_CONFIG["verify"] else None
+
+            cu_query_lens = torch.tensor([0] + query_lens, dtype=torch.int32).cumsum(dim=0, dtype=torch.int32)
+            kv_lens_tensor = torch.tensor(kv_lens, dtype=torch.int32)
+
+            def sycl_tla_fn():
+                return sycl_tla_attention(
+                    q=query,
+                    k=key_cache,
+                    v=value_cache,
+                    max_seqlen_q=max_query_len,
+                    cu_seqlens_q=cu_query_lens,
+                    max_seqlen_k=max_kv_len,
+                    seqused_k=kv_lens_tensor,
+                    softmax_scale=scale,
+                    causal=True,
+                    window_size=list(window_size),
+                    block_table=block_tables,
+                    softcap=soft_cap if soft_cap is not None else 0,
+                )
+
+            benchmark_suite.assert_close(sycl_tla_fn, lambda: expected_output, atol=2.5e-2, rtol=1e-2,
+                                         err_msg='sycl-tla to torch')
+            del expected_output
+
+            _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
+                sycl_tla_fn,
+                n_warmup=n_warmup,
+                n_repeat=10,
+                quantiles=quantiles,
             )
         else:
             raise NotImplementedError(f'Unsupported provider {provider}')

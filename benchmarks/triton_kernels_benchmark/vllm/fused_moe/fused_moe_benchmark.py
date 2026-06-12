@@ -22,6 +22,7 @@ import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
 from vllm.model_executor.layers.fused_moe.fused_moe import invoke_fused_moe_triton_kernel, get_default_config
+from vllm_xpu_kernels.fused_moe_interface import cutlass_grouped_gemm as sycl_tla_grouped_gemm
 
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
@@ -248,6 +249,7 @@ def ref_grouped_gemm(input_A, input_B, topk_ids, topk):
 def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_td_patched=False):
     supported_providers = {
         'triton' + ('-td' if is_td_patched else ''): 'triton' + ('-td' if is_td_patched else ''),
+        'sycl-tla': 'SYCL-TLA',
     }
 
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
@@ -308,6 +310,9 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_td_
         # Total number of (token, expert) route pairs
         num_routed_tokens = m * topk
 
+        quantiles = [0.5, 0.0, 1.0]
+        n_warmup = 600
+
         if provider.startswith('triton'):
 
             def triton_fn():
@@ -334,29 +339,47 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_td_
                     None,
                 )
                 return workspace
+
+            triton_fn()  # workspace updated in-place
+            output = workspace.clone().view(-1, n)
+            num_output_tokens = m * topk
+            valid_sorted_token_ids = sorted_token_ids[sorted_token_ids < num_output_tokens].to(torch.long)
+            assert valid_sorted_token_ids.numel() == num_output_tokens
+            output_triton_grouped = output[valid_sorted_token_ids]
+            torch.testing.assert_close(output_triton_grouped, output_ref, rtol=2e-2, atol=1e-2)
+
+            _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
+                triton_fn,
+                n_warmup=n_warmup,
+                n_repeat=10,
+                quantiles=quantiles,
+            )
+
+        elif provider == 'sycl-tla':
+            # TODO: time SYCL-TLA's grouping/gather alongside the GEMM (via a native prologue) to match Triton's in-kernel gather and make the comparison fair.
+            flat_expert_indices = topk_ids.view(-1)
+            _, input_A_grouped, _ = ref_prologue(input_A, None, flat_expert_indices, topk, num_experts, "bf16")
+            rows_per_expert = flat_expert_indices.bincount(minlength=num_experts).to(torch.int32).tolist()
+            input_B_grouped = input_B.transpose(1, 2).contiguous()
+            output_sycl = torch.empty((input_A_grouped.shape[0], n), dtype=input_A.dtype, device=DEVICE)
+
+            def sycl_tla_fn():
+                sycl_tla_grouped_gemm(input_A_grouped, input_B_grouped, None, output_sycl, rows_per_expert, n, k,
+                                      num_experts)
+                return output_sycl
+
+            sycl_tla_fn()
+            torch.testing.assert_close(output_sycl, output_ref, rtol=2e-2, atol=1e-2)
+
+            _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
+                sycl_tla_fn,
+                n_warmup=n_warmup,
+                n_repeat=10,
+                quantiles=quantiles,
+            )
+
         else:
             raise NotImplementedError(f'Unsupported provider {provider}')
-
-        # Triton output
-        triton_fn()  # workspace updated in-place
-        output = workspace.clone().view(-1, n)
-        num_output_tokens = m * topk
-        valid_sorted_token_ids = sorted_token_ids[sorted_token_ids < num_output_tokens].to(torch.long)
-        assert valid_sorted_token_ids.numel() == num_output_tokens
-        output_triton_grouped = output[valid_sorted_token_ids]
-
-        # Correctness check
-        torch.testing.assert_close(output_triton_grouped, output_ref, rtol=2e-2, atol=1e-2)
-
-        quantiles = [0.5, 0.0, 1.0]
-        n_warmup = 600
-
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
-            triton_fn,
-            n_warmup=n_warmup,
-            n_repeat=10,
-            quantiles=quantiles,
-        )
 
         def gbps(ms):
             n_bytes = 2  # bfloat16

@@ -12,6 +12,10 @@ on:
         description: vLLM pin (commit hash), keep empty for default
         type: string
         default: ""
+      vllm_xpu_kernels_pin:
+        description: vLLM XPU kernels pin (commit hash), keep empty for default
+        type: string
+        default: ""
       skip_list:
         description: Skip list
         type: string
@@ -26,6 +30,10 @@ on:
         default: false
       use_pyenv_python:
         description: Use Python built with pyenv
+        type: boolean
+        default: false
+      use_branch_wheel:
+        description: Use prebuilt vLLM XPU kernels wheel from the current branch (must have a successful nightly build)
         type: boolean
         default: false
 
@@ -47,8 +55,10 @@ jobs:
     with:
       runner_label: ${{ inputs.runner_label || '' }}
       vllm_pin: ${{ inputs.vllm_pin || '' }}
+      vllm_xpu_kernels_pin: ${{ inputs.vllm_xpu_kernels_pin || '' }}
       python_version: "3.12"
       skip_list: ${{ inputs.skip_list || '' }}
       ignore_errors: ${{ inputs.ignore_errors || false }}
       use_pyenv_python: ${{ inputs.use_pyenv_python || true }}
+      use_branch_wheel: ${{ inputs.use_branch_wheel || false }}
     secrets: inherit
