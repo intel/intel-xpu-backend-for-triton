@@ -1,7 +1,8 @@
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
+index 0ffe85054..805005d6d 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
-@@ -279,6 +279,9 @@
+@@ -279,6 +279,9 @@ def kernel_unified_attention(
      USE_TD_QO: tl.constexpr = False,
      Q_IS_FP8: tl.constexpr = False,
  ):
@@ -11,7 +12,7 @@ diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attenti
      # Per-(token, head) scale caches: used iff KV_QUANT_MODE in {2, 3}.
      USE_PER_TOKEN_HEAD_SCALES: tl.constexpr = (KV_QUANT_MODE >= 2) and (
          KV_QUANT_MODE <= 3
-@@ -540,19 +543,14 @@
+@@ -540,19 +543,14 @@ def kernel_unified_attention(
          M, L, P, alpha = softmax_step(S, M, L)
          acc = acc * alpha[:, None]
  
@@ -35,7 +36,16 @@ diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attenti
  
      # ---- Epilogue ---------------------------------------------------------
      if IS_3D:
-@@ -872,12 +870,16 @@
+@@ -847,7 +845,7 @@ def unified_attention(
+     head_size = q.shape[2]
+ 
+     BLOCK_M = (
+-        16 if num_queries_per_kv <= 16 else triton.next_power_of_2(num_queries_per_kv)
++        32 if num_queries_per_kv <= 32 else triton.next_power_of_2(num_queries_per_kv)
+     )
+     BLOCK_Q = BLOCK_M // num_queries_per_kv
+ 
+@@ -872,12 +870,16 @@ def unified_attention(
      elif sliding_window_val <= 0:
          chunk_lookback = -1
  
@@ -58,7 +68,7 @@ diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attenti
  
      # USE_TD requires BLOCK_SIZE % TILE_SIZE == 0 (enforced by a
      # ``tl.static_assert`` in the kernel).  The default prefill tile
-@@ -928,18 +930,11 @@
+@@ -928,18 +930,11 @@ def unified_attention(
      # Launch the 2D kernel if
      # 1. No intermediate tiled softmax buffers for the 3D kernel have been allocated, or
      # 2. The batch includes at least one prefill request, or
@@ -82,7 +92,7 @@ diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attenti
  
      # The kernel signature is the same for 2D and 3D — only the launch
      # grid + a handful of constexpr toggles differ.  Per-token-head scale
-@@ -960,6 +955,30 @@
+@@ -960,6 +955,30 @@ def unified_attention(
          v_scale_ptr = None
      # 3D needs real segm tensors; 2D never touches them.  Pass ``None`` in
      # 2D mode so Triton can skip materialising these pointer arguments.
