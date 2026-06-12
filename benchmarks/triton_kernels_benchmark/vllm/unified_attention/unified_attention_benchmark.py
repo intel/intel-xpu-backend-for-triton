@@ -38,6 +38,8 @@ from t145_epsilon_gepa_v2_triton import unified_attention as unified_attention_t
 
 XEFORGE_UNIFIED_ATTENTIONS = {
     'triton-t102': unified_attention_t102,
+    'triton-t121': unified_attention_t121,
+    'triton-t145': unified_attention_t145,
 }
 
 
@@ -293,6 +295,7 @@ def get_unified_attention_benchmark(
 ):
     supported_providers = {
         'triton' + ('-td' if is_td_patched else ''): 'triton' + ('-td' if is_td_patched else ''),
+        'pytorch': 'pytorch',
     }
     for xeforge_name in XEFORGE_UNIFIED_ATTENTIONS:
         supported_providers[xeforge_name] = xeforge_name

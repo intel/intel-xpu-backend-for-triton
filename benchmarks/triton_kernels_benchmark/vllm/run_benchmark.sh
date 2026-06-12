@@ -42,7 +42,8 @@ if git apply --reverse --check "$PATCH_FILE" 2>/dev/null; then
     git apply -R "$PATCH_FILE"
 fi
 
-echo "=== Skipping unpatched baseline ==="
+echo "=== Running benchmark WITHOUT patch ==="
+TD_PATCHED=0 python "$BENCHMARK_SCRIPT" "$@"
 
 echo ""
 echo "=== Applying patch ==="
