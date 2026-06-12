@@ -363,19 +363,38 @@ private:
     Type i64Ty = builder.getI64Type();
     Type ptrElemType = tt::PointerType::get(elemTy, 1);
 
-    // Extract descriptor fields using ExtractDescOp.
+    // Extract descriptor fields. Prefer using values from MakeTensorDescOp
+    // directly when available — this preserves AxisInfo provenance so the
+    // downstream LLVM lowering can infer contiguity and vectorize properly.
+    // ExtractDescOp produces opaque runtime values that AxisInfo cannot
+    // analyze, leading to scalar (vec=1) loads.
     Value desc = op.getDesc();
     SmallVector<Value> descShapes(descRank);
     SmallVector<Value> descStrides(descRank);
-    for (unsigned d = 0; d < descRank; ++d) {
-      descShapes[d] = ttgi::ExtractDescOp::create(builder, loc, i64Ty, desc,
-                                                  builder.getI32IntegerAttr(d));
-      descStrides[d] = ttgi::ExtractDescOp::create(
-          builder, loc, i64Ty, desc, builder.getI32IntegerAttr(descRank + d));
+    Value basePtr;
+    SmallVector<tt::MakeTensorDescOp> allDescs =
+        tt::intel::findAllMakeTensorDescOps(desc);
+    if (!allDescs.empty()) {
+      tt::MakeTensorDescOp makeDesc = allDescs[0];
+      basePtr = makeDesc.getBase();
+      for (unsigned d = 0; d < descRank; ++d) {
+        descShapes[d] =
+            arith::ExtSIOp::create(builder, loc, i64Ty, makeDesc.getShape()[d]);
+        descStrides[d] = makeDesc.getStrides()[d];
+      }
+    } else {
+      // Opaque descriptor (function argument, untraceable control flow) —
+      // fall back to ExtractDescOp.
+      for (unsigned d = 0; d < descRank; ++d) {
+        descShapes[d] = ttgi::ExtractDescOp::create(
+            builder, loc, i64Ty, desc, builder.getI32IntegerAttr(d));
+        descStrides[d] = ttgi::ExtractDescOp::create(
+            builder, loc, i64Ty, desc, builder.getI32IntegerAttr(descRank + d));
+      }
+      basePtr =
+          ttgi::ExtractDescOp::create(builder, loc, ptrElemType, desc,
+                                      builder.getI32IntegerAttr(2 * descRank));
     }
-    Value basePtr =
-        ttgi::ExtractDescOp::create(builder, loc, ptrElemType, desc,
-                                    builder.getI32IntegerAttr(2 * descRank));
 
     SmallVector<Value> indices(op.getIndices().begin(), op.getIndices().end());
     assert(indices.size() == descRank &&
@@ -489,18 +508,12 @@ private:
 
     // Determine padding value from the descriptor.
     tt::PaddingOption padding = tt::PaddingOption::PAD_ZERO;
-    SmallVector<tt::MakeTensorDescOp> allDescs =
-        tt::intel::findAllMakeTensorDescOps(desc);
     if (!allDescs.empty())
       padding = allDescs[0].getPadding();
 
     Value other = createPaddingValue(builder, loc, resultTy, padding);
 
     // Create tt.load with pointer tensor, mask, and padding value.
-    // Note: the generated load has no block_io attribute and will lower as a
-    // generic masked gather. This is intentional — loads reaching this fallback
-    // failed 2D block IO eligibility, so vectorization via getDescriptorVecSize
-    // would not apply anyway.
     auto loadOp = tt::LoadOp::create(builder, loc, ptrTensor, mask, other,
                                      tt::CacheModifier::NONE,
                                      tt::EvictionPolicy::NORMAL, false);
