@@ -1,49 +1,186 @@
+diff --git a/tests/v1/attention/test_triton_unified_attention_autotune.py b/tests/v1/attention/test_triton_unified_attention_autotune.py
+new file mode 100644
+index 0000000..1450b37
+--- /dev/null
++++ b/tests/v1/attention/test_triton_unified_attention_autotune.py
+@@ -0,0 +1,71 @@
++import pytest
++import triton
++
++from vllm.v1.attention.ops.triton_unified_attention import (
++    ATTENTION_AUTOTUNE_CONFIGS,
++    REDUCE_AUTOTUNE_CONFIGS,
++    prune_attention_configs,
++    prune_reduce_configs,
++)
++
++
++def _tile_sizes(configs):
++    return {config.kwargs["TILE_SIZE"] for config in configs}
++
++
++@pytest.mark.parametrize(
++    ("block_size", "is_fp8_input", "expected"),
++    [
++        (16, False, {16}),
++        (64, False, {16}),
++        (64, True, {32}),
++    ],
++)
++def test_3d_shared_tile_is_singleton(block_size, is_fp8_input, expected):
++    kwargs = {
++        "BLOCK_SIZE": block_size,
++        "IS_FP8_INPUT": is_fp8_input,
++        "IS_3D": True,
++    }
++
++    attention_tiles = _tile_sizes(
++        prune_attention_configs(
++            ATTENTION_AUTOTUNE_CONFIGS,
++            None,
++            **kwargs,
++        )
++    )
++    reduce_tiles = _tile_sizes(
++        prune_reduce_configs(
++            REDUCE_AUTOTUNE_CONFIGS,
++            None,
++            **kwargs,
++        )
++    )
++
++    assert attention_tiles == reduce_tiles == expected
++    assert len(attention_tiles) == 1
++
++
++def test_2d_attention_retains_multiple_legal_tiles():
++    attention_tiles = _tile_sizes(
++        prune_attention_configs(
++            ATTENTION_AUTOTUNE_CONFIGS,
++            None,
++            BLOCK_SIZE=64,
++            IS_FP8_INPUT=False,
++            IS_3D=False,
++        )
++    )
++
++    assert attention_tiles == {16, 32}
++
++
++def test_3d_shared_config_requires_tile_size():
++    with pytest.raises(ValueError, match="TILE_SIZE"):
++        prune_reduce_configs(
++            [triton.Config({})],
++            None,
++            BLOCK_SIZE=64,
++            IS_FP8_INPUT=False,
++        )
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 0ffe85054..efe963bc2 100644
+index 0ffe850..21285e5 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
-@@ -175,6 +175,40 @@ def _store_output_td(
+@@ -175,6 +175,100 @@ def _store_output_td(
      )
  
  
-+def prune_unified_attention_configs(configs, named_args, **kwargs):
-+    """Prune autotune configs for unified_attention kernel."""
-+    block_size = kwargs["BLOCK_SIZE"]
-+    is_fp8_input = kwargs["IS_FP8_INPUT"]
-+    is_3d = kwargs["IS_3D"]
++ATTENTION_AUTOTUNE_CONFIGS = [
++    triton.Config({"TILE_SIZE": 16}, num_stages=2),
++    triton.Config({"TILE_SIZE": 32}, num_stages=2),
++]
 +
-+    valid_configs = []
-+    for config in configs:
-+        tile_size = config.kwargs["TILE_SIZE"]
++REDUCE_AUTOTUNE_CONFIGS = [
++    triton.Config({"TILE_SIZE": 16}, num_stages=2),
++    triton.Config({"TILE_SIZE": 32}, num_stages=2),
++]
 +
-+        if tile_size > block_size:
-+            continue
-+        if block_size % tile_size != 0:
-+            continue
-+        if is_fp8_input and tile_size != 32:
-+            continue
++ATTENTION_AUTOTUNE_KEY = [
++    "BLOCK_SIZE",
++    "HEAD_SIZE",
++    "IS_FP8_INPUT",
++    "IS_3D",
++    "BLOCK_Q",
++]
 +
-+        if is_3d:
-+            if not is_fp8_input and tile_size != 16:
-+                continue
++REDUCE_AUTOTUNE_KEY = [
++    "BLOCK_SIZE",
++    "IS_FP8_INPUT",
++]
 +
-+        valid_configs.append(config)
++DEPENDENT_3D_CONFIG_KEYS = ("TILE_SIZE",)
 +
-+    return valid_configs
++
++def required_3d_shared_config(is_fp8_input):
++    """Return the single legal producer/reducer config for 3D attention."""
++    return {"TILE_SIZE": 32 if is_fp8_input else 16}
++
++
++def _make_autotune_context(kwargs, *, is_3d):
++    return {
++        "block_size": kwargs["BLOCK_SIZE"],
++        "is_fp8_input": kwargs["IS_FP8_INPUT"],
++        "is_3d": is_3d,
++    }
++
++
++def _is_valid_shared_config(config, ctx):
++    """Validate config values that affect the producer/reducer contract."""
++    if ctx["is_3d"]:
++        required = required_3d_shared_config(ctx["is_fp8_input"])
++        for key in DEPENDENT_3D_CONFIG_KEYS:
++            if key not in config.kwargs:
++                raise ValueError(f"Missing dependent 3D config value: {key}")
++            if config.kwargs[key] != required[key]:
++                return False
++
++    tile_size = config.kwargs["TILE_SIZE"]
++    block_size = ctx["block_size"]
++
++    if tile_size > block_size or block_size % tile_size != 0:
++        return False
++    if ctx["is_fp8_input"] and tile_size != 32:
++        return False
++
++    return True
++
++
++def _is_valid_attention_local_config(config, ctx):
++    """Validate attention-only configs; TILE_SIZE is shared in 3D."""
++    return True
++
++
++def _is_valid_reduce_local_config(config, ctx):
++    """Validate reducer-only configs; none exist in the initial config space."""
++    return True
++
++
++def _prune_configs(configs, ctx, local_validator):
++    return [
++        config
++        for config in configs
++        if _is_valid_shared_config(config, ctx)
++        and local_validator(config, ctx)
++    ]
++
++
++def prune_attention_configs(configs, named_args, **kwargs):
++    ctx = _make_autotune_context(kwargs, is_3d=kwargs["IS_3D"])
++    return _prune_configs(configs, ctx, _is_valid_attention_local_config)
++
++
++def prune_reduce_configs(configs, named_args, **kwargs):
++    ctx = _make_autotune_context(kwargs, is_3d=True)
++    return _prune_configs(configs, ctx, _is_valid_reduce_local_config)
 +
 +
 +@triton.autotune(
-+    configs=[
-+        triton.Config({"TILE_SIZE": 16}, num_stages=2),
-+        triton.Config({"TILE_SIZE": 32}, num_stages=2),
-+    ],
-+    key=["BLOCK_SIZE", "HEAD_SIZE", "IS_FP8_INPUT", "IS_3D", "BLOCK_Q"],
-+    prune_configs_by={"early_config_prune": prune_unified_attention_configs},
++    configs=ATTENTION_AUTOTUNE_CONFIGS,
++    key=ATTENTION_AUTOTUNE_KEY,
++    prune_configs_by={"early_config_prune": prune_attention_configs},
 +)
  @triton.jit
  def kernel_unified_attention(
      # Output destination for the 2D path.  In 3D mode per-segment partials
-@@ -277,8 +311,12 @@ def kernel_unified_attention(
+@@ -277,8 +371,12 @@ def kernel_unified_attention(
      # (see ``unified_attention`` wrapper for the gating rules).
      USE_TD: tl.constexpr = False,
      USE_TD_QO: tl.constexpr = False,
@@ -56,7 +193,7 @@ index 0ffe85054..efe963bc2 100644
      # Per-(token, head) scale caches: used iff KV_QUANT_MODE in {2, 3}.
      USE_PER_TOKEN_HEAD_SCALES: tl.constexpr = (KV_QUANT_MODE >= 2) and (
          KV_QUANT_MODE <= 3
-@@ -540,13 +578,8 @@ def kernel_unified_attention(
+@@ -540,13 +638,8 @@ def kernel_unified_attention(
          M, L, P, alpha = softmax_step(S, M, L)
          acc = acc * alpha[:, None]
  
@@ -72,7 +209,35 @@ index 0ffe85054..efe963bc2 100644
          if USE_PER_TOKEN_HEAD_SCALES:
              # Per-token-head quant: apply v_scale to P instead of V.
              P_v = (P * v_token_head_scales[None, :]).to(V.dtype)
-@@ -872,20 +905,8 @@ def unified_attention(
+@@ -652,6 +745,11 @@ def kernel_unified_attention(
+             )
+
+
++@triton.autotune(
++    configs=REDUCE_AUTOTUNE_CONFIGS,
++    key=REDUCE_AUTOTUNE_KEY,
++    prune_configs_by={"early_config_prune": prune_reduce_configs},
++)
+ @triton.jit
+ def reduce_segments(
+     output_ptr,  # [num_tokens, num_query_heads, head_size]
+@@ -666,6 +764,7 @@ def reduce_segments(
+     output_stride_0: tl.int64,  # int
+     output_stride_1: tl.int64,  # int, should be equal to head_size
+     block_table_stride: tl.int64,  # int
++    BLOCK_SIZE: tl.constexpr,  # int
+     TILE_SIZE: tl.constexpr,  # int
+     HEAD_SIZE: tl.constexpr,  # int, must be power of 2
+     HEAD_SIZE_PADDED: tl.constexpr,  # int, must be power of 2
+@@ -673,6 +772,7 @@ def reduce_segments(
+     BLOCK_Q: tl.constexpr,  # int
+     NUM_SEGMENTS_PER_SEQ: tl.constexpr,  # int
+     USE_FP8: tl.constexpr,  # bool
++    IS_FP8_INPUT: tl.constexpr,  # bool
+     FP8_MIN: tl.constexpr = float8_info.min,
+     FP8_MAX: tl.constexpr = float8_info.max,
+ ):
+@@ -872,20 +972,8 @@ def unified_attention(
      elif sliding_window_val <= 0:
          chunk_lookback = -1
  
@@ -95,7 +260,7 @@ index 0ffe85054..efe963bc2 100644
  
      # Tensor descriptors for Q load / output store require every element
      # of ``block_shape`` to be a power of 2.  ``num_queries_per_kv`` is
-@@ -928,18 +949,11 @@ def unified_attention(
+@@ -928,18 +1016,11 @@ def unified_attention(
      # Launch the 2D kernel if
      # 1. No intermediate tiled softmax buffers for the 3D kernel have been allocated, or
      # 2. The batch includes at least one prefill request, or
@@ -119,7 +284,7 @@ index 0ffe85054..efe963bc2 100644
  
      # The kernel signature is the same for 2D and 3D — only the launch
      # grid + a handful of constexpr toggles differ.  Per-token-head scale
-@@ -960,6 +974,30 @@ def unified_attention(
+@@ -960,6 +1041,30 @@ def unified_attention(
          v_scale_ptr = None
      # 3D needs real segm tensors; 2D never touches them.  Pass ``None`` in
      # 2D mode so Triton can skip materialising these pointer arguments.
@@ -150,7 +315,7 @@ index 0ffe85054..efe963bc2 100644
      segm_output_ptr = softmax_segm_output if use_3d else None
      segm_max_ptr = softmax_segm_max if use_3d else None
      segm_expsum_ptr = softmax_segm_expsum if use_3d else None
-@@ -968,10 +1006,9 @@ def unified_attention(
+@@ -968,10 +1073,8 @@ def unified_attention(
      grid: tuple[Any, ...]
      if not use_3d:
          grid = (total_num_q_blocks, num_kv_heads)
@@ -158,11 +323,10 @@ index 0ffe85054..efe963bc2 100644
      else:
          grid = (total_num_q_blocks, num_kv_heads, num_par_softmax_segments)
 -        tile_size = TILE_SIZE_DECODE
-+        TILE_SIZE_DECODE = 32 if is_fp8_input else 16
  
      kernel_unified_attention[grid](
          output_ptr=out,
-@@ -1003,7 +1040,6 @@ def unified_attention(
+@@ -1003,7 +1106,6 @@ def unified_attention(
          output_stride_1=out.stride(1),
          qq_bias_stride_0=qq_bias.stride(0) if use_qq_bias else 0,
          BLOCK_SIZE=block_size,
@@ -170,7 +334,7 @@ index 0ffe85054..efe963bc2 100644
          HEAD_SIZE=head_size,
          HEAD_SIZE_PADDED=head_size_padded,
          USE_ALIBI_SLOPES=use_alibi_slopes,
-@@ -1037,6 +1073,7 @@ def unified_attention(
+@@ -1037,6 +1139,7 @@ def unified_attention(
          USE_FP8=output_scale is not None,
          IS_3D=use_3d,
          KV_QUANT_MODE=kv_quant_mode,
@@ -178,3 +342,17 @@ index 0ffe85054..efe963bc2 100644
          Q_IS_FP8=(q.dtype == current_platform.fp8_dtype()),
          CHUNK_LOOKBACK=chunk_lookback,
          CHUNK_SIZE=chunk_size,
+@@ -1057,11 +1160,12 @@ def unified_attention(
+             output_stride_0=out.stride(0),
+             output_stride_1=out.stride(1),
+             block_table_stride=block_table.stride(0),
+-            TILE_SIZE=TILE_SIZE_DECODE,
++            BLOCK_SIZE=block_size,
+             HEAD_SIZE=head_size,
+             HEAD_SIZE_PADDED=head_size_padded,
+             query_start_len_ptr=cu_seqlens_q,
+             BLOCK_Q=BLOCK_Q,
+             NUM_SEGMENTS_PER_SEQ=num_par_softmax_segments,
+             USE_FP8=output_scale is not None,
++            IS_FP8_INPUT=is_fp8_input,
+         )
