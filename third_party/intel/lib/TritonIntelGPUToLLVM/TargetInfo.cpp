@@ -69,8 +69,7 @@ Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
 }
 
 void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
-                              std::optional<Value> ctaId, Value val,
-                              Value pred) const {
+                              Value ctaId, Value val, Value pred) const {
   LLVM::intel::createPredicatedBlock(rewriter, loc, pred, [&] {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     b.store(val, ptr);
@@ -79,8 +78,8 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
 }
 
 Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
-                              std::optional<Value> ctaId, Type elemTy,
-                              Value pred, Operation *localLoadOp) const {
+                              Value ctaId, Type elemTy, Value pred,
+                              Operation *localLoadOp) const {
   assert(cast<mlir::LLVM::LLVMPointerType>(ptr.getType()).getAddressSpace() ==
              3 &&
          "Invalid addr space for loadShared");
