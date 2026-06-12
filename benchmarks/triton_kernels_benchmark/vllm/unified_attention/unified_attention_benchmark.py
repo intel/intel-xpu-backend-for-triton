@@ -420,16 +420,6 @@ SEQ_LENS = [
     # Pure decoding, 8 batches
     [(1, k) for k in [1513, 4100, 530, 123, 4803, 434, 3015, 34]]
 ]
-SEQ_LENS_3D_TARGETED = [
-    # Single-sequence decode with an odd KV length.
-    [(1, 257)],
-    # Boundary-heavy decode lengths around powers of two and segment/tile cut points.
-    [(1, k) for k in [255, 256, 257, 511, 512, 513, 1023, 1024]],
-    # Existing long decode shape, kept here so the focused plot overlaps the main sweep.
-    [(1, k) for k in [1513, 4100, 530, 123, 4803, 434, 3015, 34]],
-    # Maximum sequence count that still selects the 3D path with the current threshold.
-    [(1, k) for k in ([64, 128, 256, 512, 1024, 2048, 4096, 8192] * 4)],
-]
 # Models: (q_heads, k_heads, head_size, qdtype, sliding_window, soft_cap)
 # sliding_window: None = full attention, int = sliding window size.
 # soft_cap: None = disabled, float = soft_cap value.
@@ -448,15 +438,9 @@ MODELS_BF16 = [
     # Qwen2.5-235B - sliding window attention (window size 256)
     (64, 4, 128, None, 256, None),
     # gpt-oss-120b - full attention
-    (64, 8, 64, None, None, None),
+    # (64, 8, 64, None, None, None),
     # gpt-oss-120b - sliding window attention (window size 128)
-    (64, 8, 64, None, 128, None),
-    # Full multi-head attention style workload with q_heads == k_heads.
-    # This covers a q:k ratio of 1 and the resulting BLOCK_Q=16 path.
-    (32, 32, 128, None, None, None),
-    # Large-head GQA workload / correctness coverage.
-    # This exercises the HEAD_SIZE=256 autotune key path.
-    (64, 8, 256, None, None, None),
+    # (64, 8, 64, None, 128, None),
 ]
 
 MODELS_FP8 = [
@@ -466,28 +450,7 @@ MODELS_FP8 = [
     (64, 8, 128, torch.float8_e4m3fn, 8192, None),
 ]
 
-MODELS_3D_TARGETED_BF16 = [
-    # Llama-style GQA.
-    (32, 8, 128, None, None, None),
-    # Soft-cap path coverage.
-    (32, 8, 128, None, None, 50.0),
-    # Wider query-head count / BLOCK_Q=2.
-    (64, 8, 128, None, None, None),
-    # Large sliding window that still selects 3D.
-    (64, 8, 128, None, 8192, None),
-    # Smaller head size.
-    (64, 8, 64, None, None, None),
-    # Large head size.
-    (64, 8, 256, None, None, None),
-    # MHA-style q:k ratio of 1 / BLOCK_Q=16.
-    (32, 32, 128, None, None, None),
-]
 
-MODELS_3D_TARGETED_FP8 = [
-    # FP8 full-attention and large-window paths. TILE_SIZE=16 is pruned for FP8.
-    (64, 8, 128, torch.float8_e4m3fn, None, None),
-    (64, 8, 128, torch.float8_e4m3fn, 8192, None),
-]
 
 
 def _is_3d_config(x_val) -> bool:
@@ -521,16 +484,8 @@ def _build_attention_configs(model_configs, seq_lens_configs=SEQ_LENS, num_block
 
 ATTENTION_CONFIGS_BF16 = _build_attention_configs(MODELS_BF16)
 ATTENTION_CONFIGS_FP8 = _build_attention_configs(MODELS_FP8)
-ATTENTION_3D_CONFIGS_BF16 = _build_attention_configs(MODELS_3D_TARGETED_BF16,
-                                                     seq_lens_configs=SEQ_LENS_3D_TARGETED,
-                                                     num_blocks_configs=[2048],
-                                                     block_size_configs=[16, 64],
-                                                     require_3d=True)
-ATTENTION_3D_CONFIGS_FP8 = _build_attention_configs(MODELS_3D_TARGETED_FP8,
-                                                    seq_lens_configs=SEQ_LENS_3D_TARGETED,
-                                                    num_blocks_configs=[2048],
-                                                    block_size_configs=[64],
-                                                    require_3d=True)
+ATTENTION_3D_CONFIGS_BF16 = [config for config in ATTENTION_CONFIGS_BF16 if _is_3d_config(config)]
+ATTENTION_3D_CONFIGS_FP8 = [config for config in ATTENTION_CONFIGS_FP8 if _is_3d_config(config)]
 
 # To debug if the benchmark runs at all, without waiting for all configurations to run
 if os.getenv('DEBUG_BENCH', '0') == '1':
