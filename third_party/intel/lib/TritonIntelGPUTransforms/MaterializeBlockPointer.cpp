@@ -253,20 +253,20 @@ private:
         return false;
       }
 
-      // Value -1 is used to represent the unknown stride.
+      // Runtime stride (-1) is OK if AxisInfo proves 16-byte alignment.
       int64_t otherDimStride =
           strideInfo ? strideInfo->getStride(otherDim) : -1;
-      if (otherDimStride < 0) {
-        LDBG("Found unknown stride: " << otherDimStride);
-        return false;
-      }
-
-      // Surface pitch is required to be 16 bytes aligned.
       Type elemTy =
           cast<tt::PointerType>(tensorTy.getElementType()).getPointeeType();
       unsigned elemSizeInBytes = elemTy.getIntOrFloatBitWidth() / 8;
-      if ((otherDimStride * elemSizeInBytes) % 16 != 0) {
-        LDBG("Found Non 16 bytes aligned stride: " << otherDimStride);
+      if (otherDimStride >= 0) {
+        if ((otherDimStride * elemSizeInBytes) % 16 != 0) {
+          LDBG("Non 16-byte aligned stride: " << otherDimStride);
+          return false;
+        }
+      } else if (axisInfo.getDivisibility(otherDim) % 16 != 0) {
+        LDBG("Runtime stride: divisibility "
+             << axisInfo.getDivisibility(otherDim) << " < 16 bytes");
         return false;
       }
 

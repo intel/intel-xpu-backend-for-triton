@@ -1,6 +1,8 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/BlockIOUtils.h"
+#include "intel/include/Analysis/StrideInfo.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -10,6 +12,32 @@
 #include <numeric>
 
 namespace mlir::triton::gpu::intel {
+
+Value getRuntimeStrideValue(triton::intel::ModuleStrideAnalysis &strideAnalysis,
+                            Value ptr, unsigned dim) {
+  if (triton::intel::StrideInfo *info = strideAnalysis.getStrideInfo(ptr))
+    return info->getStrideValue(dim);
+  return {};
+}
+
+Value materializePitchBytes(OpBuilder &builder, Location loc, Value stride,
+                            unsigned elemSizeInBytes) {
+  Type i32Ty = builder.getI32Type();
+  Value strideI32 = stride;
+  if (stride.getType().isIndex()) {
+    strideI32 = arith::IndexCastOp::create(builder, loc, i32Ty, stride);
+  } else if (auto intTy = dyn_cast<IntegerType>(stride.getType())) {
+    if (intTy.getWidth() < 32)
+      strideI32 = arith::ExtSIOp::create(builder, loc, i32Ty, stride);
+    else if (intTy.getWidth() > 32)
+      strideI32 = arith::TruncIOp::create(builder, loc, i32Ty, stride);
+  } else {
+    return {};
+  }
+  Value elemSizeV = arith::ConstantOp::create(
+      builder, loc, builder.getI32IntegerAttr(elemSizeInBytes));
+  return arith::MulIOp::create(builder, loc, strideI32, elemSizeV);
+}
 
 template <typename T> static T product(const std::vector<T> &vec) {
   return std::accumulate(vec.begin(), vec.end(), static_cast<T>(1),
