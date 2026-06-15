@@ -683,7 +683,7 @@ void IntegerRangeAnalysis::visitRegionSuccessors(
       } else {
         // Else, propagate pred operands.
         auto operLat = *getLatticeElementFor(point, oper);
-        changed = argLat->join(operLat);
+        changed = argLat->join(operLat.getValue());
         LLVM_DEBUG({
           if (changed == ChangeResult::Change) {
             DBGS() << "Operand lattice ";

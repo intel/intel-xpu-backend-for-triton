@@ -17,6 +17,7 @@ from setuptools.command.build_py import build_py
 from setuptools.command.develop import develop
 from setuptools.command.egg_info import egg_info
 from setuptools.command.install import install
+from setuptools.command.install_lib import install_lib
 from setuptools.command.sdist import sdist
 
 from dataclasses import dataclass
@@ -41,7 +42,7 @@ warnings.filterwarnings("ignore", message="Package .* is absent from the `packag
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from python.build_helpers import get_base_dir, get_cmake_dir
+from python.build_helpers import check_env_flag, get_base_dir, get_cmake_dir
 
 
 def is_git_repo() -> bool:
@@ -128,11 +129,6 @@ class BackendInstaller:
             BackendInstaller.prepare(backend_name, backend_src_dir=backend_src_dir, is_external=True)
             for backend_name, backend_src_dir in zip(backend_names, backend_dirs)
         ]
-
-
-# Taken from https://github.com/pytorch/pytorch/blob/master/tools/setup_helpers/env.py
-def check_env_flag(name: str, default: str = "") -> bool:
-    return os.getenv(name, default).upper() in ["ON", "1", "YES", "TRUE", "Y"]
 
 
 def get_build_type():
@@ -276,6 +272,9 @@ class CMakeBuild(build_ext):
         if xpupti_include_dir == "":
             xpupti_include_dir = os.path.join(get_base_dir(), "third_party", "intel", "backend", "proton", "include")
         cmake_args += ["-DXPUPTI_INCLUDE_DIR=" + xpupti_include_dir]
+        rocprofiler_sdk_include_dir = get_env_with_keys(["TRITON_ROCPROFILER_SDK_INCLUDE_PATH"])
+        if rocprofiler_sdk_include_dir:
+            cmake_args += ["-DROCPROFILER_SDK_INCLUDE_DIR=" + rocprofiler_sdk_include_dir]
         return cmake_args
 
     def build_extension(self, ext):
@@ -367,6 +366,8 @@ class CMakeBuild(build_ext):
             "TRITON_CUPTI_INCLUDE_PATH",
             "TRITON_CUPTI_LIB_PATH",
             "TRITON_CUPTI_LIB_BLACKWELL_PATH",
+            "TRITON_ROCPROFILER_SDK_INCLUDE_PATH",
+            "TRITON_ROCPROFILER_SDK_LIB_PATH",
             "TRITON_NVDISASM_PATH",
             "TRITON_PTXAS_PATH",
             "TRITON_PTXAS_BLACKWELL_PATH",
@@ -390,6 +391,18 @@ class CMakeBuild(build_ext):
         update_symlink(Path(self.base_dir) / "compile_commands.json", cmake_dir / "compile_commands.json")
         subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=cmake_dir)
         subprocess.check_call(["cmake", "--build", ".", "--target", "mlir-doc"], cwd=cmake_dir)
+
+
+class InstallLib(install_lib):
+
+    def run(self):
+        super().run()
+
+        if os.name == "nt":
+            # Make sure that Triton wheel for Windows does not include any unnecessary files.
+            for ext in (".ilk", ):
+                for f in Path(self.install_dir).rglob(f"*{ext}"):
+                    f.unlink()
 
 
 backends = [*BackendInstaller.copy(["intel", "nvidia", "amd"]), *BackendInstaller.copy_externals()]
@@ -580,7 +593,7 @@ TRITON_VERSION = "3.7.2" + get_triton_version_suffix()
 
 # Dynamically define supported Python versions and classifiers
 MIN_PYTHON = (3, 10)
-MAX_PYTHON = (3, 14)
+MAX_PYTHON = (3, 15)
 
 PYTHON_REQUIRES = f">={MIN_PYTHON[0]}.{MIN_PYTHON[1]},<{MAX_PYTHON[0]}.{MAX_PYTHON[1] + 1}"
 BASE_CLASSIFIERS = [
@@ -616,6 +629,7 @@ setup(
     cmdclass={
         "bdist_wheel": plugin_bdist_wheel,
         "build_ext": CMakeBuild,
+        "install_lib": InstallLib,
         "build_py": CMakeBuildPy,
         "clean": CMakeClean,
         "develop": plugin_develop,

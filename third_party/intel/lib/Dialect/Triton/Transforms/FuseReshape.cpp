@@ -1,4 +1,5 @@
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "intel/include/Utils/DefUseChain.h"
 #include "intel/include/Utils/Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -6,6 +7,7 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/IRMapping.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/IR/ValueRange.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Support/LLVM.h"
@@ -273,7 +275,37 @@ private:
     assert((tensorTy.getRank() == 3 && tensorTy.getDimSize(0) == 1) &&
            "Unexpected tensor type");
 
+    // The fusion collapses dimensions using strides[0] / strides[1]. This is
+    // only valid when strides[0] is an exact multiple of strides[1]. Reject
+    // cases where divisibility cannot be proven (e.g., padded strides).
+    OperandRange strides = makeTensorDescOp->getStrides();
+    if (!isProvablyDivisible(strides[0], strides[1]))
+      return false;
+
     return true;
+  }
+
+  /// Return true if \p numerator is provably divisible by \p denominator.
+  static bool isProvablyDivisible(Value numerator, Value denominator) {
+    // If both are the same value, trivially divisible.
+    if (numerator == denominator)
+      return true;
+
+    // If numerator is defined by arith.muli and one operand is the
+    // denominator, it is divisible.
+    if (auto mulOp = numerator.getDefiningOp<arith::MulIOp>()) {
+      if (mulOp.getLhs() == denominator || mulOp.getRhs() == denominator)
+        return true;
+    }
+
+    // If denominator is a constant, use isDivisible which leverages
+    // tt.divisibility attributes on function arguments and constants.
+    APInt denVal;
+    if (matchPattern(denominator, m_ConstantInt(&denVal)) && !denVal.isZero())
+      return mlir::triton::gpu::intel::isDivisible(numerator,
+                                                   denVal.getZExtValue());
+
+    return false;
   }
 
   // If \p user is not \p sentinel, propagate \p newVal to \p user. Otherwise
