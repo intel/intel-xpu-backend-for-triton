@@ -89,7 +89,7 @@ def matmul_kernel_with_tensor_descriptors(
     for _ in range(0, K, BLOCK_SIZE_K):
         a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
         b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
-        accumulator += tl.dot(a, b)
+        accumulator = tl.dot(a, b, accumulator)
         off_k += BLOCK_SIZE_K
 
     d_desc = tl.make_tensor_descriptor(base=d_ptr, shape=(M, N), strides=(stride_dm, stride_dn),
@@ -165,7 +165,7 @@ def matmul_kernel_with_tensor_descriptors_batched(
     for _ in range(0, K, BLOCK_SIZE_K):
         a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
         b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
-        accumulator += tl.dot(a, b)
+        accumulator = tl.dot(a, b, accumulator)
         off_k += BLOCK_SIZE_K
 
     offset_d = bid.to(tl.int64) * stride_dz
