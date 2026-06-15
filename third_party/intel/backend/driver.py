@@ -371,8 +371,12 @@ class XPUUtils(object):
         self._initialized = True
 
     def get_current_device(self):
-        import torch
-        return torch.xpu.current_device()
+        try:
+            from torch._C import _xpu_getDevice
+            return _xpu_getDevice()
+        except ImportError:
+            import torch
+            return torch.xpu.current_device()
 
     def get_sycl_queue(self):
         import torch
@@ -624,8 +628,12 @@ class XPUDriver(DriverBase):
         return self.utils.get_current_device()
 
     def get_current_stream(self, device):
-        import torch
-        return torch.xpu.current_stream().sycl_queue
+        try:
+            from torch._C import _xpu_getCurrentRawStream
+            return _xpu_getCurrentRawStream(device)
+        except ImportError:
+            import torch
+            return torch.xpu.current_stream().sycl_queue
 
     @lru_cache
     def _construct_target(self, device):
