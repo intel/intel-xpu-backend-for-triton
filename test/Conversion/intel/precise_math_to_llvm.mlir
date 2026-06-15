@@ -2,14 +2,14 @@
 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 
-// COM: Test that precise sqrt and divf lower to sqrt_cr/divide_cr builtins
-// COM: when ttig.support_rounded_divide_sqrt is present.
+// COM: Test that precise sqrt and divf lower to OpenCL sqrt builtin/llvm.fdiv
+// COM: with FPRoundingMode attribute when ttig.support_rounded_divide_sqrt is present.
 module attributes {"ttg.num-warps" = 4 : i32, ttig.support_rounded_divide_sqrt} {
   // CHECK-LABEL: @precise_math_rounded_divide_sqrt
   tt.func public @precise_math_rounded_divide_sqrt(%arg0: tensor<128xf32, #blocked>, %arg1: tensor<128xf32, #blocked>) {
-    // CHECK: llvm.call spir_funccc @_Z7sqrt_crf
+    // CHECK: llvm.call spir_funccc @_Z16__spirv_ocl_sqrtf({{.*}}) {{{.*}}triton_gen.FPRoundingMode = 0 : i32{{.*}}}
     %0 = tt.precise_sqrt %arg0 : tensor<128xf32, #blocked>
-    // CHECK: llvm.call spir_funccc @_Z9divide_crff
+    // CHECK: llvm.fdiv {{.*}} {triton_gen.FPRoundingMode = 0 : i32}
     %1 = tt.precise_divf %arg0, %arg1 : tensor<128xf32, #blocked>
     tt.return
   }
