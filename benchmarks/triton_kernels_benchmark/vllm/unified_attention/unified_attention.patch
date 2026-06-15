@@ -10,21 +10,10 @@ index 0ffe850..35eea81 100644
      init_softmax_M,
      load_qq_bias_tile,
      resolve_seq_and_query_len,
-@@ -55,6 +54,44 @@ def _cast_kv_tile(data, Q, tensor_scale, KV_QUANT_MODE: tl.constexpr):
+@@ -55,6 +54,33 @@ def _cast_kv_tile(data, Q, tensor_scale, KV_QUANT_MODE: tl.constexpr):
      return data.to(Q.dtype)
 
 
-+def _power_of_2_bucket(value: int) -> int:
-+    """Bucket a dynamic shape into a power-of-2 cache key.
-+
-+    Used to build the 3D autotune key without making each exact ``num_seqs`` /
-+    ``max_seqlen_k`` produce its own cache entry.
-+    """
-+    if value <= 1:
-+        return max(value, 0)
-+    return 1 << (value - 1).bit_length()
-+
-+
 +def prune_unified_attention_configs(configs, named_args, **kwargs):
 +    """Prune autotune configs for unified_attention kernel.
 +
@@ -55,7 +44,7 @@ index 0ffe850..35eea81 100644
  # ---------------------------------------------------------------------------
  # Tensor-descriptor (TD) helpers
  #
-@@ -175,6 +212,23 @@ def _store_output_td(
+@@ -175,6 +201,14 @@ def _store_output_td(
      )
 
 
@@ -64,29 +53,17 @@ index 0ffe850..35eea81 100644
 +        triton.Config({"TILE_SIZE": 16}, num_stages=2),
 +        triton.Config({"TILE_SIZE": 32}, num_stages=2),
 +    ],
-+    key=[
-+        "BLOCK_SIZE",
-+        "HEAD_SIZE",
-+        "IS_FP8_INPUT",
-+        "IS_3D",
-+        "BLOCK_Q",
-+        "NUM_SEQS_BUCKET",
-+        "MAX_SEQLEN_K_BUCKET",
-+        "EFFECTIVE_MAX_SEQLEN_K_BUCKET",
-+    ],
++    key=["BLOCK_SIZE", "HEAD_SIZE", "IS_FP8_INPUT", "IS_3D", "BLOCK_Q"],
 +    prune_configs_by={"early_config_prune": prune_unified_attention_configs},
 +)
  @triton.jit
  def kernel_unified_attention(
      # Output destination for the 2D path.  In 3D mode per-segment partials
-@@ -232,6 +286,10 @@ def kernel_unified_attention(
+@@ -232,6 +266,7 @@ def kernel_unified_attention(
      BLOCK_M: tl.constexpr,
      NUM_SEGMENTS_PER_SEQ: tl.constexpr,
      USE_FP8: tl.constexpr,
 +    IS_FP8_INPUT: tl.constexpr,
-+    NUM_SEQS_BUCKET: tl.constexpr,
-+    MAX_SEQLEN_K_BUCKET: tl.constexpr,
-+    EFFECTIVE_MAX_SEQLEN_K_BUCKET: tl.constexpr,
      # Toggles 2D vs 3D layout.  The 2D path runs the full sequence in one
      # tile loop and writes to ``output_ptr``.  The 3D path scopes the loop
      # to ``[segm_idx, segm_idx+1) × tiles_per_segment`` and writes
@@ -243,7 +220,7 @@ index 0ffe850..35eea81 100644
      )
      BLOCK_Q = BLOCK_M // num_queries_per_kv
  
-@@ -872,20 +932,18 @@ def unified_attention(
+@@ -872,20 +912,9 @@ def unified_attention(
      elif sliding_window_val <= 0:
          chunk_lookback = -1
 
@@ -263,16 +240,7 @@ index 0ffe850..35eea81 100644
 -    if use_td:
 -        TILE_SIZE_PREFILL = min(TILE_SIZE_PREFILL, block_size)
 -        TILE_SIZE_DECODE = min(TILE_SIZE_DECODE, block_size)
-+    # Bucket dynamic 3D shapes into the autotune key so that nearby ``num_seqs``
-+    # / ``max_seqlen_k`` values share a cached config without each exact value
-+    # producing its own cache entry.
-+    num_seqs_bucket = _power_of_2_bucket(num_seqs)
-+    max_seqlen_k_bucket = _power_of_2_bucket(max_seqlen_k)
-+    effective_max_seqlen_k = max_seqlen_k
-+    if sliding_window_val > 0:
-+        effective_max_seqlen_k = min(effective_max_seqlen_k, sliding_window_val)
-+    effective_max_seqlen_k_bucket = _power_of_2_bucket(effective_max_seqlen_k)
-
+ 
      # Tensor descriptors for Q load / output store require every element
      # of ``block_shape`` to be a power of 2.  ``num_queries_per_kv`` is
 @@ -928,18 +986,11 @@ def unified_attention(
@@ -349,14 +317,11 @@ index 0ffe850..35eea81 100644
          HEAD_SIZE=head_size,
          HEAD_SIZE_PADDED=head_size_padded,
          USE_ALIBI_SLOPES=use_alibi_slopes,
-@@ -1035,6 +1107,10 @@ def unified_attention(
+@@ -1035,6 +1087,7 @@ def unified_attention(
          BLOCK_M=BLOCK_M,
          NUM_SEGMENTS_PER_SEQ=num_segments,
          USE_FP8=output_scale is not None,
 +        IS_FP8_INPUT=is_fp8_input,
-+        NUM_SEQS_BUCKET=num_seqs_bucket,
-+        MAX_SEQLEN_K_BUCKET=max_seqlen_k_bucket,
-+        EFFECTIVE_MAX_SEQLEN_K_BUCKET=effective_max_seqlen_k_bucket,
          IS_3D=use_3d,
          KV_QUANT_MODE=kv_quant_mode,
          Q_IS_FP8=(q.dtype == current_platform.fp8_dtype()),
