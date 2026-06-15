@@ -2,12 +2,19 @@
 #define TRITONINTELGPU_TRANSFORMS_BLOCKIOUTILS_H
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
+#include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Support/LogicalResult.h"
 #include "triton/Analysis/AxisInfo.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Tools/LinearLayout.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include <optional>
+
+namespace mlir::triton::intel {
+class ModuleStrideAnalysis;
+} // namespace mlir::triton::intel
 
 namespace mlir::triton::gpu::intel {
 
@@ -97,6 +104,53 @@ bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
                              RankedTensorType tensorType,
                              bool oneMatrixPerLoadForBT = false,
                              AxisInfo *maskAxisInfo = nullptr);
+
+/// Validate that a store with the given encoding and element size can be
+/// lowered to 2D block I/O, applying the constraints the store lowering
+/// enforces: a valid tile shape, the HW address payload restriction, no
+/// transpose, and a single v-block. On success returns true and writes the
+/// validated tile geometry (with vBlocks forced to 1) into \p sizeInfoOut; on
+/// failure returns false and leaves \p sizeInfoOut unspecified.
+///
+/// This is the single source of truth for 2D block store eligibility, shared
+/// by the store lowering patterns in LoadStoreOpToLLVM.cpp so their tile
+/// validation cannot drift.
+bool validate2DBlockStoreTile(const LinearLayout &ll, unsigned memContiguousDim,
+                              unsigned elemSizeInBits,
+                              RankedTensorType tensorType,
+                              AxisInfo *maskAxisInfo,
+                              BlockIOTileSizeInfo &sizeInfoOut);
+
+/// Determine whether memory layout is row-major from the block_io attribute.
+bool isMemoryRowMajor(Operation *op);
+
+/// Check whether a load is eligible for 2D block IO lowering based on
+/// attributes and encoding. Callers holding a generic Operation* that has
+/// already been confirmed to be tt::LoadOp or tt::DescriptorLoadOp may use
+/// this overload directly.
+bool isBlockIOEligible(Operation *loadOp, RankedTensorType tensorTy);
+
+/// Type-safe overload restricted to tt::LoadOp and tt::DescriptorLoadOp.
+template <typename OpTy,
+          std::enable_if_t<llvm::is_one_of<OpTy, triton::LoadOp,
+                                           triton::DescriptorLoadOp>::value,
+                           bool> = true>
+bool isBlockIOEligible(OpTy loadOp, RankedTensorType tensorTy) {
+  return isBlockIOEligible(loadOp.getOperation(), tensorTy);
+}
+
+/// Estimate the hardware message count for a load with the given type and
+/// encoding. Higher values indicate more HW cost. Used for cost modeling in
+/// RemoveLayoutConversions. Returns a comparable scalar (not cycle-accurate).
+unsigned estimateLoadHWCost(RankedTensorType type, Operation *loadOp);
+
+/// Runtime stride value along `dim`; null if none.
+Value getRuntimeStrideValue(triton::intel::ModuleStrideAnalysis &strideAnalysis,
+                            Value ptr, unsigned dim);
+
+/// Build `stride * elemSizeInBytes` as an i32; null for non-integer stride.
+Value materializePitchBytes(OpBuilder &builder, Location loc, Value stride,
+                            unsigned elemSizeInBytes);
 
 } // namespace mlir::triton::gpu::intel
 

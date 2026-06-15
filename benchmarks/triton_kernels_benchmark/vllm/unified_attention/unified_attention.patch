@@ -1,5 +1,5 @@
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 0ffe85054..8471906ab 100644
+index 0ffe85054..805005d6d 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -279,6 +279,9 @@ def kernel_unified_attention(
@@ -12,7 +12,7 @@ index 0ffe85054..8471906ab 100644
      # Per-(token, head) scale caches: used iff KV_QUANT_MODE in {2, 3}.
      USE_PER_TOKEN_HEAD_SCALES: tl.constexpr = (KV_QUANT_MODE >= 2) and (
          KV_QUANT_MODE <= 3
-@@ -540,13 +543,8 @@ def kernel_unified_attention(
+@@ -540,19 +543,14 @@ def kernel_unified_attention(
          M, L, P, alpha = softmax_step(S, M, L)
          acc = acc * alpha[:, None]
  
@@ -28,6 +28,23 @@ index 0ffe85054..8471906ab 100644
          if USE_PER_TOKEN_HEAD_SCALES:
              # Per-token-head quant: apply v_scale to P instead of V.
              P_v = (P * v_token_head_scales[None, :]).to(V.dtype)
+-            acc += tl.dot(P_v, V)
++            acc = tl.dot(P_v, V, acc)
+         else:
+-            acc += tl.dot(P.to(V.dtype), V)
++            acc = tl.dot(P.to(V.dtype), V, acc)
+ 
+     # ---- Epilogue ---------------------------------------------------------
+     if IS_3D:
+@@ -847,7 +845,7 @@ def unified_attention(
+     head_size = q.shape[2]
+ 
+     BLOCK_M = (
+-        16 if num_queries_per_kv <= 16 else triton.next_power_of_2(num_queries_per_kv)
++        32 if num_queries_per_kv <= 32 else triton.next_power_of_2(num_queries_per_kv)
+     )
+     BLOCK_Q = BLOCK_M // num_queries_per_kv
+ 
 @@ -872,12 +870,16 @@ def unified_attention(
      elif sliding_window_val <= 0:
          chunk_lookback = -1

@@ -78,7 +78,7 @@ def mac_loop(
     for _ in range(start_iter, end_iter):
         a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
         b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
-        acc += tl.dot(a, b)
+        acc = tl.dot(a, b, acc)
         off_k += BLOCK_SIZE_K
 
     if remain_iters == 0 and end_iter % iters_per_tile == 0:
@@ -174,7 +174,7 @@ def full_tiles(
     for _ in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
         b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
-        acc += tl.dot(a, b)
+        acc = tl.dot(a, b, acc)
         off_k += BLOCK_SIZE_K
 
     c_desc = tl.make_tensor_descriptor(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
