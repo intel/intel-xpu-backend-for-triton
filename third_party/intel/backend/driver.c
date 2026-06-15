@@ -15,10 +15,7 @@
 
 #include <level_zero/ze_api.h>
 
-#if __SYCL_COMPILER_VERSION >= 20260204
 #define __DPCPP_ENABLE_UNFINISHED_KHR_EXTENSIONS
-#endif
-
 #include <sycl/sycl.hpp>
 
 #if __SYCL_COMPILER_VERSION >= 20260204
