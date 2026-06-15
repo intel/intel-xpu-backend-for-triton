@@ -84,7 +84,9 @@ bool check2DBlockAddressPayloadRestriction(unsigned packedElemSizeInBits,
 /// inner-dim constraints, and transpose shuffle mapping. Returns true if valid.
 bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
                              unsigned elemSizeInBits,
-                             RankedTensorType tensorType);
+                             RankedTensorType tensorType,
+                             bool oneMatrixPerLoadForBT = false,
+                             bool requireTranspose = false);
 
 } // namespace mlir::triton::gpu::intel
 
