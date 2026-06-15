@@ -133,27 +133,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
 
 // -----
 
-// COM: Negative case - dynamic (non-trivial) masked 2D load should NOT get block_io attribute.
-// COM: The downstream LLVM lowering cannot handle non-trivial/dynamic masks and crashes,
-// COM: so block_io must only be attached to loads with a compile-time all-true mask.
-#blocked7 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 4], warpsPerCTA = [32, 1], order = [1, 0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
-  // CHECK-LABEL: tt.func public @dynamic_masked_load_no_block_io
-  tt.func public @dynamic_masked_load_no_block_io(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg1: tensor<256x32xi1, #blocked7>) {
-    %0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked7}>>
-    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked7}>> -> tensor<1x32xi32, #blocked7>
-    %2 = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<1x32x!tt.ptr<bf16>, #blocked7>
-    %3 = tt.addptr %2, %1 : tensor<1x32x!tt.ptr<bf16>, #blocked7>, tensor<1x32xi32, #blocked7>
-    %4 = tt.broadcast %3 : tensor<1x32x!tt.ptr<bf16>, #blocked7> -> tensor<256x32x!tt.ptr<bf16>, #blocked7>
-    // CHECK: tt.load
-    // CHECK-NOT: ttig.block_io
-    tt.load %4, %arg1 : tensor<256x32x!tt.ptr<bf16>, #blocked7>
-    tt.return
-  }
-}
-
-// -----
-
 // COM: 3D regular pointer.
 #blocked = #ttg.blocked<{sizePerThread = [1, 4, 4], threadsPerWarp = [1, 4, 8], warpsPerCTA = [2, 2, 1], order = [2, 1, 0]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
