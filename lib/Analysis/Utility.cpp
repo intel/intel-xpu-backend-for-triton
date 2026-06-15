@@ -2,7 +2,6 @@
 
 #include <deque>
 
-#include "intel/include/Analysis/Utility.h"
 #include "mlir/Analysis/DataFlow/ConstantPropagationAnalysis.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -1361,8 +1360,7 @@ bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
 
 bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
   return !cvtReordersRegisters(srcTy, dstTy) &&
-         !cvtNeedsWarpShuffle(srcTy, dstTy) &&
-         !triton::gpu::intel::isDpasToDotShortcut(srcTy, dstTy);
+         !cvtNeedsWarpShuffle(srcTy, dstTy);
 }
 
 std::unique_ptr<DataFlowSolver> createDataFlowSolver() {
