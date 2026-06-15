@@ -10,6 +10,7 @@ from triton_kernels_benchmark import (
     gemm_preop_exp_benchmark,
     gemm_postop_gelu_benchmark,
     gemm_postop_addmatrix_benchmark,
+    fused_gemm_benchmark,
     flash_attention_benchmark,
     flex_attention_benchmark_causal_mask,
     flex_attention_benchmark_custom_masks,
@@ -103,6 +104,13 @@ CONFIGS = [
         run_opts={"int8_only": True},
         categories={BenchmarkCategory.OPTIONAL, BenchmarkCategory.GEMM},
         description="Triton GEMM + PostOp (add matrix) kernel benchmark int8",
+    ),
+    BenchmarkConfig(
+        key="fused-gemm",
+        get_benchmark=fused_gemm_benchmark.get_benchmark,
+        run_opts={},
+        categories={BenchmarkCategory.OPTIONAL, BenchmarkCategory.GEMM},
+        description="Triton Fused GEMM SwiGLU kernel benchmark",
     ),
     BenchmarkConfig(
         key="flash_attention",
