@@ -91,10 +91,10 @@ index 0ffe850..35eea81 100644
      if IS_3D:
          tiles_per_segment = cdiv_fn(seq_len, NUM_SEGMENTS_PER_SEQ * TILE_SIZE)
          if segm_idx * tiles_per_segment * TILE_SIZE >= seq_len:
-+            # This segment covers no keys for this sequence.  Write the
-+            # ``-inf`` sentinel into its segment-max slot (and 0 into expsum)
-+            # so ``reduce_segments`` skips it without recomputing the segment
-+            # layout from ``TILE_SIZE``.
++            # This segment covers no keys for this sequence.
++            # Write -inf to the segment maximum and 0 to its exponential sum
++            # so reduce_segments can skip this segment without reconstructing
++            # the segment layout from TILE_SIZE.
 +            store_segm_reduce_scalars(
 +                segm_max_ptr,
 +                segm_expsum_ptr,
@@ -190,9 +190,9 @@ index 0ffe850..35eea81 100644
 
 -    # load segment maxima
 +    # Determine which segments are live directly from the data, not by
-+    # recomputing the segment layout from ``TILE_SIZE``. The producer writes a
-+    # ``-inf`` sentinel into the segment-max slot of every segment it does not
-+    # compute, so a slot is valid iff its max is finite.
++    # reconstructing the segment layout from TILE_SIZE. The producer writes
++    # -inf to the maximum slot of every inactive segment, so a slot is valid
++    # only when its maximum is finite.
      segm_offset = (
          query_token_idx.to(tl.int64) * (num_query_heads * NUM_SEGMENTS_PER_SEQ)
          + query_head_idx * NUM_SEGMENTS_PER_SEQ
