@@ -10,6 +10,7 @@ from triton_kernels_benchmark import (
     gemm_preop_exp_benchmark,
     gemm_postop_gelu_benchmark,
     gemm_postop_addmatrix_benchmark,
+    fused_gemm_benchmark,
     flash_attention_benchmark,
     flex_attention_benchmark_causal_mask,
     flex_attention_benchmark_custom_masks,
@@ -105,6 +106,13 @@ CONFIGS = [
         description="Triton GEMM + PostOp (add matrix) kernel benchmark int8",
     ),
     BenchmarkConfig(
+        key="fused-gemm",
+        get_benchmark=fused_gemm_benchmark.get_benchmark,
+        run_opts={},
+        categories={BenchmarkCategory.OPTIONAL, BenchmarkCategory.GEMM},
+        description="Triton Fused GEMM SwiGLU kernel benchmark",
+    ),
+    BenchmarkConfig(
         key="flash_attention",
         get_benchmark=flash_attention_benchmark.get_benchmark,
         run_opts={"fa_kernel_mode": "fwd"},
@@ -112,6 +120,15 @@ CONFIGS = [
         description="FlashAttention forward kernel benchmark",
         report_name="flash-attn",
         report_file_prefix="attn",
+    ),
+    BenchmarkConfig(
+        key="flash_attention_fp8",
+        get_benchmark=flash_attention_benchmark.get_benchmark,
+        run_opts={"fa_kernel_mode": "fwd", "use_fp8": True},
+        categories={BenchmarkCategory.OPTIONAL, BenchmarkCategory.FLASH_ATTENTION},
+        description="FlashAttention FP8 forward kernel benchmark",
+        report_name="flash-attn-fp8",
+        report_file_prefix="attn-fp8",
     ),
     BenchmarkConfig(
         key="flash_attention_bwd",

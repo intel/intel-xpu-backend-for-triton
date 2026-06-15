@@ -32,6 +32,10 @@ on:
         description: Use Python built with pyenv
         type: boolean
         default: false
+      use_branch_wheel:
+        description: Use prebuilt vLLM XPU kernels wheel from the current branch (must have a successful nightly build)
+        type: boolean
+        default: false
 
   schedule:
     # Thursday/Sunday 2:05AM PST (UTC-8) or 3:05AM PDT (UTC-7)
@@ -56,4 +60,5 @@ jobs:
       skip_list: ${{ inputs.skip_list || '' }}
       ignore_errors: ${{ inputs.ignore_errors || false }}
       use_pyenv_python: ${{ inputs.use_pyenv_python || true }}
+      use_branch_wheel: ${{ inputs.use_branch_wheel || false }}
     secrets: inherit
