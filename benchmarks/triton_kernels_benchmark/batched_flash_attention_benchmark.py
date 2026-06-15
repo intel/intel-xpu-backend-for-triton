@@ -562,9 +562,10 @@ def get_benchmark(providers_filter: Optional[List[str]] = None):
         ))
     def benchmark(TOTAL_TOKENS, NUM_SEGMENTS, MAX_SEGMENT_LENGTH, SEGMENT_STDDEV_OVER_MEAN, H_Q, H_KV, D_HEAD_QK,
                   D_HEAD_V, provider):
-        del MAX_SEGMENT_LENGTH, SEGMENT_STDDEV_OVER_MEAN
         do_bench = benchmark_suite.get_do_bench(n_warmup=400, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
         case = find_segment_case(TOTAL_TOKENS, NUM_SEGMENTS)
+        assert case["max_segment_length"] == MAX_SEGMENT_LENGTH
+        assert math.isclose(case["segment_stddev_over_mean"], SEGMENT_STDDEV_OVER_MEAN, rel_tol=0.0, abs_tol=1e-6)
         boundaries = torch.tensor(case["boundaries"], device="xpu", dtype=torch.int64)
         lengths = boundaries[1:] - boundaries[:-1]
         bitmap = build_segment_bitmap(boundaries, TOTAL_TOKENS, "xpu")
@@ -584,7 +585,8 @@ def get_benchmark(providers_filter: Optional[List[str]] = None):
 
         total_pairs = sum(int(length.item()) * (int(length.item()) + 1) // 2 for length in lengths)
         tflops = lambda ms: (2 * total_pairs * H_Q * (D_HEAD_QK + D_HEAD_V) * 1e-12) / (ms * 1e-3)
-        moved_bytes = (q.numel() + k.numel() + v.numel()) * q.element_size() + TOTAL_TOKENS * H_Q * D_HEAD_V * q.element_size()
+        moved_bytes = ((q.numel() + k.numel() + v.numel()) * q.element_size() +
+                       TOTAL_TOKENS * H_Q * D_HEAD_V * q.element_size())
         gbps = lambda ms: (moved_bytes * 1e-9) / (ms * 1e-3)
         return (gbps(mean_ms), gbps(max_ms), gbps(min_ms)), (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
 
