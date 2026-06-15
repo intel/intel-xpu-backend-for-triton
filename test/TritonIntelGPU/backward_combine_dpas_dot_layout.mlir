@@ -277,10 +277,14 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32}
 
 // -----
 
-// CHECK: #[[$BLOCKED:.+]] = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [2, 1], order = [1, 0]}>
+// COM: The convert target (#blocked1) is a 2D-block-valid layout for the
+// COM: 4x128 tile, so backward-propagating it onto the descriptor_load does
+// COM: not degrade the hardware 2D block load path (issue #7080 cost model).
+// COM: The convert is removed and the load directly produces #blocked1.
+// CHECK: #[[$BLOCKED:.+]] = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [2, 16], warpsPerCTA = [1, 2], order = [1, 0]}>
 // CHECK-NOT: #ttg.blocked
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 2], order = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [2, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [2, 16], warpsPerCTA = [1, 2], order = [1, 0]}>
 module attributes {"ttg.num-warps" = 2 : i32, ttig.support_2d_block_io} {
 // CHECK-LABEL: @test_tdesc_layout_backward
   tt.func public @test_tdesc_layout_backward(%ptr: !tt.ptr<f16>) -> tensor<4x128xf16, #blocked1> {

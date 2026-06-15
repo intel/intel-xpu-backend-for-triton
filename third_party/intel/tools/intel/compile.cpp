@@ -164,6 +164,11 @@ int32_t {kernel_name}(sycl::queue &stream, {signature}) {{
         set_argument(cgh, idx, type, params[idx]);
         idx++;
     }}
+    // Set scratch memory arguments (global_scratch, profile_scratch). These are
+    // appended to params[] by the AOT compiler but are not part of the arg_types
+    // list, so they must be bound explicitly here (mirrors the JIT launcher in driver.c).
+    set_scalar_arg<void *>(cgh, num_params - 2, params[num_params - 2]);
+    set_scalar_arg<void *>(cgh, num_params - 1, params[num_params - 1]);
     if (static_cast<bool>({shared})) {{
         using share_mem_t = sycl::local_accessor<int8_t, 1>;
         share_mem_t local_buffer = share_mem_t({shared}, cgh);

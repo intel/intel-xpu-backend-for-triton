@@ -2531,26 +2531,18 @@ struct DescriptorStoreOpToBlockIOConversion
     // propagated here.
     AxisInfo *maskAxisInfo = nullptr;
 
-    BlockIOTileSizeInfo sizeInfo = getBlockIOTileSize<false /*store*/>(
-        llEncoding.value(), contiguousDim, elemSizeInBits, maskAxisInfo,
-        /*oneMatrixPerLoadForBT=*/false);
-    if (!sizeInfo.isValid())
+    // Validate the store tile through the shared helper: it computes the tile
+    // geometry, enforces the HW address payload restriction, rejects transpose,
+    // and forces vBlocks to 1.
+    BlockIOTileSizeInfo sizeInfo = BlockIOTileSizeInfo::unknown();
+    if (!validate2DBlockStoreTile(llEncoding.value(), contiguousDim,
+                                  elemSizeInBits, tensorType, maskAxisInfo,
+                                  sizeInfo))
       return failure();
 
     auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
           isTransposeRequired, regPackedBases] = std::move(sizeInfo);
-
     unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
-    if (!check2DBlockAddressPayloadRestriction(packedElemSizeInBits, tileWidth))
-      return failure();
-
-    // Limit vBlock to 1 for stores.
-    vBlocks = 1;
-
-    if (isTransposeRequired) {
-      // 2D Block store doesn't support transpose.
-      return failure();
-    }
 
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -2791,29 +2783,28 @@ struct StoreOpToBlockIOConversion
                                      /*vBlocks=*/1, /*rowDim=*/0,
                                      /*colDim=*/rank - 1, /*transpose=*/false,
                                      std::move(regPackBases));
+      // The reshape path bypasses getBlockIOTileSize (and thus
+      // validate2DBlockStoreTile), so apply the HW address payload restriction
+      // here; vBlocks and transpose are already fixed (1 / false) above.
+      if (!sizeInfo.isValid())
+        return failure();
+      if (!check2DBlockAddressPayloadRestriction(
+              elemSizeInBits * sizeInfo.numElemPerPackedVal,
+              sizeInfo.tileWidth))
+        return failure();
     } else {
-      sizeInfo = getBlockIOTileSize<false /*store*/>(
-          llEncoding.value(), contiguousDim, elemSizeInBits, maskAxisInfo,
-          /*oneMatrixPerLoadForBT=*/false);
+      // Validate through the shared helper (the single source of truth for 2D
+      // block store eligibility): tile geometry, HW address payload
+      // restriction, no transpose, vBlocks forced to 1.
+      if (!validate2DBlockStoreTile(llEncoding.value(), contiguousDim,
+                                    elemSizeInBits, tensorType, maskAxisInfo,
+                                    sizeInfo))
+        return failure();
     }
-
-    if (!sizeInfo.isValid())
-      return failure();
 
     auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
           isTransposeRequired, regPackedBases] = std::move(sizeInfo);
-
     unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
-    if (!check2DBlockAddressPayloadRestriction(packedElemSizeInBits, tileWidth))
-      return failure();
-
-    // Limit vBlock to 1
-    vBlocks = 1;
-
-    if (isTransposeRequired) {
-      // 2D Block store doesn't support transpose.
-      return failure();
-    }
 
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -4131,9 +4122,10 @@ prepareLocalAtomicScatterRMW(triton::gpu::LocalAtomicScatterRMWOp op, Value dst,
       emitIndices(loc, rewriter, targetInfo, activeRegLayout, valuesTy,
                   /*withCTAOffset=*/true);
 
-  SmallVector<Value> ptrs =
-      computeLocalPtrs(loc, memDescTy, smemObj, llvmElemTy, idxValues,
-                       srcIndices, op.getAxis(), rewriter);
+  SmallVector<Value> ptrs = llvm::map_to_vector(
+      computeLocalAddrs(loc, memDescTy, smemObj, llvmElemTy, idxValues,
+                        srcIndices, op.getAxis(), rewriter),
+      [](const LocalSharedMemoryAddress &addr) { return addr.ptr; });
 
   return LocalAtomicScatterRMWInfo{valuesTy,        llvmElemTy, regLayout,
                                    removeBroadcast, threadPred, values,
