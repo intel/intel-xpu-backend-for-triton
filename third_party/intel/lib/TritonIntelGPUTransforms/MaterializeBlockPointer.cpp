@@ -184,6 +184,7 @@ private:
         return;
       }
     }
+
     if constexpr (std::is_same_v<OpType, tt::StoreOp>) {
       if (rank == 1) {
         reshape1DStridedStore(op, tensorTy, context);

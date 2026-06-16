@@ -132,13 +132,18 @@ bool isExpensiveLoadOrStore(Operation *op) {
   // Loads or stores that use a block pointer are expensive if they cannot be
   // lowered to 2D block read/write operations. Temporarily leverage the
   // "ttig.block_io" attribute to filter out inexpensive loads.
-  // Exception: 1D-reshaped loads and stores (indicated by
-  // ttig.block_io_stride) have a specific encoding that matches HW delivery
-  // order and must be anchored.
+  // Exceptions that must remain anchored:
+  //  - 1D-reshaped ops (ttig.block_io_stride): encoding matches HW delivery.
+  //  - Masked ops: the 2D block I/O conversion may reject them due to
+  //    insufficient mask constancy, so their layout must be preserved.
   Attribute blockIOAttr =
       op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
+  bool hasMask = false;
+  if (auto loadOp = dyn_cast<tt::LoadOp>(op))
+    hasMask = loadOp.getMask() != nullptr;
   if (blockIOAttr &&
-      !op->getAttr(TritonIntelGPUDialect::getBlockIOStrideAttrName()))
+      !op->getAttr(TritonIntelGPUDialect::getBlockIOStrideAttrName()) &&
+      !hasMask)
     return false;
 
   // Loads or stores that use more threads than elements can be presumed to have
