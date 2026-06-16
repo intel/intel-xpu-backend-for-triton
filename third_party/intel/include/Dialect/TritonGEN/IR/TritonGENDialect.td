@@ -29,6 +29,12 @@ def TritonGEN_Dialect : Dialect {
     static constexpr ::llvm::StringRef getCacheControlsAttrName() {
       return ::llvm::StringLiteral("triton_gen.DecorationCacheControlINTEL");
     }
+
+    /// Get the name for the attribute used to specify FPRoundingMode
+    /// decorations (SPV_INTEL_rounded_divide_sqrt).
+    static constexpr ::llvm::StringRef getFPRoundingModeAttrName() {
+      return ::llvm::StringLiteral("triton_gen.FPRoundingMode");
+    }
   }];
 }
 

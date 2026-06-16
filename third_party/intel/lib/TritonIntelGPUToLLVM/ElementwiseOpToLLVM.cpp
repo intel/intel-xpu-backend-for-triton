@@ -4,6 +4,7 @@
 #include "mlir/Conversion/ArithCommon/AttrToLLVMConverter.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/MLIRContext.h"
+#include "third_party/intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "third_party/intel/include/Dialect/TritonIntelGPU/IR/Utils.h"
 #include "third_party/intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "third_party/intel/lib/Utils/Mangling.h"
@@ -1582,10 +1583,15 @@ struct PreciseSqrtOpConversion
             op, intel::TritonIntelGPUDialect::
                     getSupportRoundedDivideSqrtAttrName())) {
       SmallVector<Type> operandTypes(ValueRange(operandsRanges[0]).getTypes());
-      std::string fnName = intel::mangle("sqrt_cr", operandTypes);
+      std::string fnName = intel::mangle("__spirv_ocl_sqrt", operandTypes);
       LLVM::CallOp callOp = intel::createDeviceFunctionCall(
           rewriter, fnName, elemTy, operandTypes, operandsRanges[0],
           /*paramAttrs=*/{}, funcAttrs);
+      // Attach FPRoundingMode decoration (RTE=0) for
+      // SPV_INTEL_rounded_divide_sqrt.
+      callOp->setAttr(mlir::triton::TritonGEN::TritonGENDialect::
+                          getFPRoundingModeAttrName(),
+                      rewriter.getI32IntegerAttr(0));
       return {callOp.getResult()};
     }
 
@@ -1628,12 +1634,14 @@ struct PreciseDivFOpConversion
     if (mlir::LLVM::intel::hasModuleAttr(
             op, intel::TritonIntelGPUDialect::
                     getSupportRoundedDivideSqrtAttrName())) {
-      SmallVector<Type> operandTypes(ValueRange(operandsRanges[0]).getTypes());
-      std::string fnName = intel::mangle("divide_cr", operandTypes);
-      LLVM::CallOp callOp = intel::createDeviceFunctionCall(
-          rewriter, fnName, elemTy, operandTypes, operandsRanges[0],
-          /*paramAttrs=*/{}, funcAttrs);
-      return {callOp.getResult()};
+      auto fdivOp = LLVM::FDivOp::create(
+          rewriter, loc, elemTy, operandsRanges[0][0], operandsRanges[0][1]);
+      // Attach FPRoundingMode decoration (RTE=0) for
+      // SPV_INTEL_rounded_divide_sqrt.
+      fdivOp->setAttr(mlir::triton::TritonGEN::TritonGENDialect::
+                          getFPRoundingModeAttrName(),
+                      rewriter.getI32IntegerAttr(0));
+      return {fdivOp};
     }
 
     // Rely on `-cl-fp32-correctly-rounded-divide-sqrt` for precise division
