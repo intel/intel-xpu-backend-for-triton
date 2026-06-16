@@ -2145,9 +2145,14 @@ struct DescriptorLoadOpConversion
             TritonIntelGPUDialect::getDescPaddingAttrName()))
       padding = paddingAttr.getValue();
 
-    // Build the boundary-check dimension list. Skip dimensions where every
-    // MakeTensorDescOp defining this descriptor has shape[i] provably divisible
-    // by blockShape[i] — those elements are always in-bounds at runtime.
+    // Build the boundary-check dimension list. A dimension is safe to exclude
+    // from boundary checking only when both conditions hold:
+    //   1. Every MakeTensorDescOp has shape[i] divisible by blockShape[i], and
+    //   2. The load offset[i] is divisible by blockShape[i].
+    // Together these guarantee that the block either lies entirely within bounds
+    // or starts beyond the tensor (undefined behaviour), so no per-element
+    // clipping is needed. blockShape[i]==1 is the trivial case (every offset
+    // is divisible by 1) and is handled without querying isDivisible.
     ArrayRef<int64_t> blockShape = descTensorType.getShape();
     SmallVector<MakeTensorDescOp> allDescs =
         mlir::triton::intel::findAllMakeTensorDescOps(op.getDesc());
@@ -2157,7 +2162,9 @@ struct DescriptorLoadOpConversion
       if (!allDescs.empty() && bs > 0 &&
           llvm::all_of(allDescs, [&](MakeTensorDescOp d) {
             return isDivisible(d.getShape()[i], bs);
-          }))
+          }) &&
+          (bs == 1 ||
+           isDivisible(op.getIndices()[i], static_cast<unsigned>(bs))))
         continue;
       allDims.push_back(i);
     }
@@ -2376,7 +2383,9 @@ struct DescriptorStoreOpConversion
       if (!allDescs.empty() && bs > 0 &&
           llvm::all_of(allDescs, [&](MakeTensorDescOp d) {
             return isDivisible(d.getShape()[i], bs);
-          }))
+          }) &&
+          (bs == 1 ||
+           isDivisible(op.getIndices()[i], static_cast<unsigned>(bs))))
         continue;
       allDims.push_back(i);
     }

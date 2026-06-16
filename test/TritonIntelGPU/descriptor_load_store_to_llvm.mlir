@@ -281,13 +281,14 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_predicated_io"} {
   // CHECK-LABEL: llvm.func spir_kernelcc @vectorized_descriptor_load_store
-  tt.func public @vectorized_descriptor_load_store(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32) -> (tensor<4x16xf16, #blocked>) {
+  tt.func public @vectorized_descriptor_load_store(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 4 : i32}, %arg2: i32 {tt.divisibility = 16 : i32}) -> (tensor<4x16xf16, #blocked>) {
     %c4_i32 = arith.constant 4 : i32
     %c16_i32 = arith.constant 16 : i32
     %c16_i64 = arith.constant 16 : i64
     %c1_i64 = arith.constant 1 : i64
-    // shape=[4,16] is exactly divisible by block_shape=[4,16], so all boundary
-    // checks are elided and unconditional (non-predicated) I/O is emitted.
+    // shape=[4,16] is divisible by block_shape=[4,16], and both offsets carry
+    // tt.divisibility matching the block shape, so all boundary checks are
+    // elided and unconditional (non-predicated) I/O is emitted.
     // stride = [16, 1] → stride-1 on dim 1 (the fast dimension with order=[1,0])
     %desc = tt.make_tensor_descriptor %arg0, [%c4_i32, %c16_i32], [%c16_i64, %c1_i64] : <f16>, <4x16xf16>
 
