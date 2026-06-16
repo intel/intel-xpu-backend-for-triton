@@ -11,6 +11,7 @@
 #include "mlir/IR/Visitors.h"
 #include "mlir/Interfaces/CastInterfaces.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
 #include <optional>
@@ -30,6 +31,19 @@ namespace mlir::triton::gpu::intel {
 } // namespace mlir::triton::gpu::intel
 
 namespace {
+
+/// True if `TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS` is explicitly set to a
+/// falsy value. When that env var is "0" (e.g. on the CRI simulator to avoid
+/// a hang), `LoadStoreOpToLLVM.cpp::isBlockIOCandidate()` rejects non-DPAS
+/// 2D block loads/stores and they fall through to the regular gather, which
+/// cannot correctly handle the [H,W] register-strides-rows encoding produced
+/// by the 1D->2D reshape rewrites.
+static bool isBlockIOForAllLayoutsExplicitlyDisabled() {
+  auto enableBlockIOForAllLayout = tt::tools::isEnvValueBool(
+      tt::tools::getStrEnv("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS"));
+  return enableBlockIOForAllLayout.has_value() &&
+         !enableBlockIOForAllLayout.value();
+}
 
 struct TritonIntelGPUMaterializeBlockPointerPass
     : public triton::gpu::intel::impl::
@@ -143,27 +157,6 @@ private:
         }))
       return;
 
-    std::optional<ttg::DotOperandEncodingAttr> dotLayout = getDotLayout(op);
-    if (dotLayout) {
-      // Check if the load is being used by a tt.dot operation, and if so is
-      // this the first operand and is it a transposed row major matrix. If
-      // so, skip the block descriptor attribute as performance is worse than
-      // if we remove the tensor descriptor.
-      LDBG("dotLayout: " << *dotLayout);
-      auto opIdx =
-          static_cast<ttgi::DpasEncodingAttr::OpIdx>(dotLayout->getOpIdx());
-      auto dotOrder = tt::gpu::getThreadOrder(tensorType);
-      // Row-major means the last dim (rank-1) is the fastest-varying, i.e.,
-      // it appears first in the thread order vector.
-      const bool valueRowMajor =
-          (dotOrder[0] == rank - 1 && dotOrder[1] == rank - 2);
-      if (opIdx == ttgi::DpasEncodingAttr::OpIdx::OperandA && !valueRowMajor) {
-        LDBG("Skipping block descriptor attribute for transposed A matrix in "
-             "dot operation");
-        return;
-      }
-    }
-
     // Tensor descriptors are always row major.
     op->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
                 StringAttr::get(context, "row_major"));
@@ -260,20 +253,20 @@ private:
         return false;
       }
 
-      // Value -1 is used to represent the unknown stride.
+      // Runtime stride (-1) is OK if AxisInfo proves 16-byte alignment.
       int64_t otherDimStride =
           strideInfo ? strideInfo->getStride(otherDim) : -1;
-      if (otherDimStride < 0) {
-        LDBG("Found unknown stride: " << otherDimStride);
-        return false;
-      }
-
-      // Surface pitch is required to be 16 bytes aligned.
       Type elemTy =
           cast<tt::PointerType>(tensorTy.getElementType()).getPointeeType();
       unsigned elemSizeInBytes = elemTy.getIntOrFloatBitWidth() / 8;
-      if ((otherDimStride * elemSizeInBytes) % 16 != 0) {
-        LDBG("Found Non 16 bytes aligned stride: " << otherDimStride);
+      if (otherDimStride >= 0) {
+        if ((otherDimStride * elemSizeInBytes) % 16 != 0) {
+          LDBG("Non 16-byte aligned stride: " << otherDimStride);
+          return false;
+        }
+      } else if (axisInfo.getDivisibility(otherDim) % 16 != 0) {
+        LDBG("Runtime stride: divisibility "
+             << axisInfo.getDivisibility(otherDim) << " < 16 bytes");
         return false;
       }
 
@@ -624,6 +617,12 @@ private:
                              MLIRContext *ctx) const {
     LDBG("Attempting 1D strided store reshape for: " << *op);
 
+    if (isBlockIOForAllLayoutsExplicitlyDisabled()) {
+      LDBG("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=0 disables non-DPAS 2D "
+           "block stores; skip 1D->2D store reshape");
+      return;
+    }
+
     // Reject masked stores — we only handle unmasked or provably all-true.
     if (Value mask = op.getMask()) {
       if (!matchPattern(mask, m_One())) {
@@ -683,6 +682,12 @@ private:
   void reshape1DStridedLoad(tt::LoadOp op, RankedTensorType ptrTensorTy,
                             MLIRContext *ctx) const {
     LDBG("Attempting 1D strided load reshape for: " << *op);
+
+    if (isBlockIOForAllLayoutsExplicitlyDisabled()) {
+      LDBG("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=0 disables non-DPAS 2D "
+           "block loads; skip 1D->2D load reshape");
+      return;
+    }
 
     // For loads, we allow masks (the load path handles them).
     // However, the strided pattern matcher needs the ptr, not mask.
@@ -815,53 +820,6 @@ private:
     // Replace and erase.
     op.replaceAllUsesWith(reshapeBack.getResult());
     op.erase();
-  }
-
-  template <typename OpType,
-            typename = std::enable_if_t<llvm::is_one_of<
-                OpType, tt::DescriptorLoadOp, tt::DescriptorStoreOp>::value>>
-  std::optional<ttg::DotOperandEncodingAttr> getDotLayout(OpType op) const {
-    // Get the tensor type from the operation's result (load) or value (store)
-    Type resultType;
-    if constexpr (std::is_same_v<OpType, tt::DescriptorLoadOp>) {
-      resultType = op.getResult().getType();
-    } else {
-      resultType = op.getSrc().getType();
-    }
-    RankedTensorType tensorType = ttgi::getRankedTensorType(resultType);
-    if (!tensorType)
-      return std::nullopt;
-
-    auto dotLayout = ttgi::getDotEncoding(tensorType);
-    if (dotLayout)
-      return dotLayout;
-
-    auto allUsersAreConvertOps = [](Operation::user_range users) {
-      return llvm::all_of(users, [](Operation *user) {
-        return isa<ttg::ConvertLayoutOp>(user);
-      });
-    };
-
-    auto allUserHaveIdenticalLayout = [](Operation::user_range users) {
-      Attribute firstUserLayout =
-          cast<ttg::ConvertLayoutOp>(*users.begin()).getType().getEncoding();
-      return llvm::all_of(users, [&firstUserLayout](Operation *user) {
-        return firstUserLayout ==
-               cast<ttg::ConvertLayoutOp>(user).getType().getEncoding();
-      });
-    };
-
-    Operation::user_range users = op->getUsers();
-    if (!users.empty() && allUsersAreConvertOps(users) &&
-        allUserHaveIdenticalLayout(users)) {
-      Attribute firstUserLayout =
-          cast<ttg::ConvertLayoutOp>(*users.begin()).getType().getEncoding();
-      if (isa<ttg::DotOperandEncodingAttr>(firstUserLayout))
-        return dyn_cast<ttg::DotOperandEncodingAttr>(firstUserLayout);
-      return std::nullopt;
-    }
-
-    return std::nullopt;
   }
 
   template <typename OpType,

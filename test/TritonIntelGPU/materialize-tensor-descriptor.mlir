@@ -120,3 +120,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, ttg.target = "xpu", "ttg.num-warps"
     tt.return
   }
 }
+
+// -----
+
+// COM: rank-reducing 3D descriptor load.
+#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 16], warpsPerCTA = [8, 4], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 4], warpsPerCTA = [32, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, ttg.target = "xpu", "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @materialize_tensor_descriptor(
+  tt.func public @materialize_tensor_descriptor(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %pitch: i64 {tt.divisibility = 16 : i32}) ->  tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>  {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+
+    %a_desc_2 = tt.make_tensor_descriptor %arg0, [%c0_i32, %c0_i32, %c0_i32], [%pitch, %pitch, %c1_i64] : <f16>, <1x256x32xf16>
+    // CHECK: tt.descriptor_load {{.*}} {ttig.block_io = "row_major"{{.*}}}
+    %a_11 = tt.descriptor_load %a_desc_2[%c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<1x256x32xf16> -> tensor<256x32xf16, #blocked1>
+    %a_13 = ttg.convert_layout %a_11 : tensor<256x32xf16, #blocked1> -> tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    tt.return %a_13 : tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+  }
+}

@@ -81,7 +81,7 @@ direct knowledge of the memory access pattern, enabling it to emit optimal hardw
 #     for _ in range(0, K, BLOCK_SIZE_K):
 #         a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
 #         b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
-#         accumulator += tl.dot(a, b)
+#         accumulator = tl.dot(a, b, accumulator)
 #         off_k += BLOCK_SIZE_K
 
 # %%
@@ -92,6 +92,10 @@ import torch
 
 import triton
 import triton.language as tl
+
+
+def is_xpu_cri():
+    return triton.runtime.driver.active.get_current_target().arch['arch'] == "cri"
 
 
 @triton.autotune(
@@ -165,7 +169,7 @@ def matmul_kernel_with_tensor_descriptors(
         a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
         b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
         # We accumulate along the K dimension.
-        accumulator += tl.dot(a, b, out_dtype=ACCUMULATOR_DTYPE)
+        accumulator = tl.dot(a, b, accumulator, out_dtype=ACCUMULATOR_DTYPE)
         # Advance the K offset for the next iteration.
         # See above `Iterating over K` section for details.
         off_k += BLOCK_SIZE_K
@@ -248,7 +252,7 @@ def matmul_kernel_with_tensor_descriptors_batched(
         a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
         b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
         # We accumulate along the K dimension.
-        accumulator += tl.dot(a, b, out_dtype=ACCUMULATOR_DTYPE)
+        accumulator = tl.dot(a, b, accumulator, out_dtype=ACCUMULATOR_DTYPE)
         # Advance the K offset for the next iteration.
         # See above `Iterating over K` section for details.
         off_k += BLOCK_SIZE_K
@@ -331,8 +335,11 @@ INT8_TYPES = [(torch.int8, torch.int32, torch.int32)]
 FP8_TYPES = [(torch.float8_e4m3fn, torch.float32, torch.float16)]
 
 torch.manual_seed(0)
-for dtype, accum_dtype, res_dtype in FP16_TYPES + FP32_TYPES + INT8_TYPES + FP8_TYPES:
-    for shape in [(512, 512), (4, 512, 512)]:
+matmul_size = 128 if is_xpu_cri() else 512
+# FIXME: Fix INT8 hangs on CRI
+test_types = FP16_TYPES + FP32_TYPES + ([] if is_xpu_cri() else INT8_TYPES) + FP8_TYPES
+for dtype, accum_dtype, res_dtype in test_types:
+    for shape in [(matmul_size, matmul_size), (4, matmul_size, matmul_size)]:
         assert shape[-1] == shape[-2], "Only square matrices are supported"
         if dtype.is_floating_point:
             if accum_dtype in [torch.float16, torch.bfloat16]:

@@ -563,7 +563,7 @@ run_debug_tests() {
   cd $TRITON_PROJ/python/test/unit
 
   TRITON_TEST_SUITE=debug \
-    run_pytest_command --verbose -n ${PYTEST_MAX_PROCESSES:-8} test_debug.py test_debuginfo.py test_debug_dump.py --forked --device xpu
+    run_pytest_command --verbose -n ${PYTEST_MAX_PROCESSES:-8} test_debug.py test_debuginfo.py test_debug_dump.py --device xpu
 }
 
 run_warnings_tests() {
@@ -793,6 +793,28 @@ run_test_deps_install() {
   pip install pytest pytest-cov pytest-xdist
 }
 
+run_vllm_test_deps_install() {
+  run_test_deps_install
+  python -m pip install \
+    accelerate \
+    blake3 \
+    cachetools \
+    cbor2 \
+    openai_harmony \
+    pybase64 \
+    tblib
+}
+
+enter_vllm_test_env() {
+  if [ ! -d "vllm" ]; then
+    echo "ERROR: $(pwd)/vllm not found. Run './scripts/test-triton.sh --install-vllm' or './scripts/vllm/install-vllm.sh' first." >&2
+    exit 1
+  fi
+
+  run_vllm_test_deps_install
+  cd vllm
+}
+
 run_sglang_install() {
   echo "************************************************"
   echo "******    Installing SGLang                 ****"
@@ -878,7 +900,7 @@ run_vllm_install() {
   echo "************************************************"
   echo "vllm pin: $(<"$TRITON_PROJ/scripts/vllm/vllm-pin.txt")"
 
-  "$SCRIPTS_DIR/vllm/install-vllm.sh" $([ "$VENV" = true ] && echo --venv) --smoke-test
+  "$SCRIPTS_DIR/vllm/install-vllm.sh" $([ "$VENV" = true ] && echo "--venv")
 }
 
 
@@ -892,10 +914,7 @@ run_vllm_tests() {
   echo "******    Running vLLM Triton tests       ******"
   echo "************************************************"
 
-  run_vllm_install
-  run_test_deps_install
-
-  cd vllm
+  enter_vllm_test_env
   # FIXME: Make batched_moe and triton_unified_attention proper test suites.
   # run_vllm_tests should eventually run all vllm testsuites.
   run_pytest_command -vvv \
@@ -909,10 +928,7 @@ run_vllm_spec_decode_tests() {
   echo "******  Running vLLM Spec Decode tests           *******"
   echo "********************************************************"
 
-  run_vllm_install
-  run_test_deps_install
-
-  cd vllm
+  enter_vllm_test_env
   # Include test_max_len.py fully (small file, extra tests won't hurt) to keep
   # everything in a single pytest command and avoid overwriting the junit report.
   VLLM_USE_V2_MODEL_RUNNER=1 TRITON_TEST_SUITE=vllm_spec_decode \
@@ -931,10 +947,7 @@ run_vllm_mrv2_tests() {
   echo "******  Running vLLM MRv2 tests                  *******"
   echo "********************************************************"
 
-  run_vllm_install
-  run_test_deps_install
-
-  cd vllm
+  enter_vllm_test_env
   VLLM_USE_V2_MODEL_RUNNER=1 TRITON_TEST_SUITE=vllm_mrv2 \
     run_pytest_command -vvv \
       tests/v1/worker/test_gpu_model_runner.py \
@@ -950,10 +963,7 @@ run_vllm_moe_tests() {
   echo "******  Running vLLM MOE Triton kernel tests     *******"
   echo "********************************************************"
 
-  run_vllm_install
-  run_test_deps_install
-
-  cd vllm
+  enter_vllm_test_env
   # MOE Triton kernels: moe_mmk, expert_triton_kernel, batched_triton_kernel,
   # write_zeros_to_output, count_expert_num_tokens, fused_moe_kernel,
   # fused_moe_kernel_gpta_awq, _silu_mul_fp8_quant_deep_gemm, apply_expert_map,
@@ -976,10 +986,7 @@ run_vllm_triton_attn_tests() {
   echo "******  Running vLLM Triton Attention tests      *******"
   echo "********************************************************"
 
-  run_vllm_install
-  run_test_deps_install
-
-  cd vllm
+  enter_vllm_test_env
   # Triton attention kernels: merge_attn_states_kernel, _fwd_kernel_stage1,
   # _fwd_grouped_kernel_stage1, _fwd_kernel_stage2, kernel_unified_attention_2d,
   # kernel_unified_attention_3d, reduce_segments
@@ -997,10 +1004,7 @@ run_vllm_gdn_attn_tests() {
   echo "******  Running vLLM GDN Attention tests         *******"
   echo "********************************************************"
 
-  run_vllm_install
-  run_test_deps_install
-
-  cd vllm
+  enter_vllm_test_env
   # GDN (Gated Delta Net) attention kernels used by Qwen3-Next:
   # chunk_gated_delta_rule_fwd_kernel, chunk_fwd_kernel_o,
   # chunk_scaled_dot_kkt_fwd_kernel, chunk_local_cumsum_*_kernel,
@@ -1018,10 +1022,7 @@ run_vllm_mamba_tests() {
   echo "******  Running vLLM Mamba tests                 *******"
   echo "********************************************************"
 
-  run_vllm_install
-  run_test_deps_install
-
-  cd vllm
+  enter_vllm_test_env
   # Mamba kernels: _causal_conv1d_fwd_kernel, _causal_conv1d_update_kernel,
   # fused_gdn_gating_kernel, _selective_scan_update_kernel, softplus,
   # bmm_chunk_fwd_kernel, chunk_scan_fwd_kernel, chunk_cumsum_fwd_kernel,
@@ -1040,10 +1041,7 @@ run_vllm_quant_tests() {
   echo "******  Running vLLM Quantization Triton tests   *******"
   echo "********************************************************"
 
-  run_vllm_install
-  run_test_deps_install
-
-  cd vllm
+  enter_vllm_test_env
   # Quantization Triton kernels: scaled_mm_kernel, awq_dequantize_kernel,
   # awq_gemm_kernel, round_int8, _per_token_quant_int8,
   # _per_token_group_quant_int8, _w8a8_block_int8_matmul,
@@ -1066,10 +1064,7 @@ run_vllm_linear_attn_tests() {
   echo "******  Running vLLM Linear Attention tests      *******"
   echo "********************************************************"
 
-  run_vllm_install
-  run_test_deps_install
-
-  cd vllm
+  enter_vllm_test_env
   # Linear attention kernels (MiniMax-Text / Lightning Attention):
   # _fwd_diag_kernel, _fwd_kv_parallel, _fwd_kv_reduce,
   # _fwd_none_diag_kernel, linear_attn_decode_kernel
@@ -1084,10 +1079,7 @@ run_vllm_deepgemm_tests() {
   echo "******  Running vLLM DeepGemm tests              *******"
   echo "********************************************************"
 
-  run_vllm_install
-  run_test_deps_install
-
-  cd vllm
+  enter_vllm_test_env
   # DeepGemm MOE kernels: _silu_mul_fp8_quant_deep_gemm, apply_expert_map,
   # _fwd_kernel_ep_scatter_1, _fwd_kernel_ep_scatter_2, _fwd_kernel_ep_gather
   TRITON_TEST_SUITE=vllm_deepgemm \

@@ -20,7 +20,7 @@ runs:
     - name: Get LLVM commit id
       shell: bash
       run: |
-        LLVM_COMMIT_ID=$(<cmake/llvm-hash.txt)
+        LLVM_COMMIT_ID=$(jq -r '.llvm_hash' cmake/llvm-info.json)
         echo "LLVM_COMMIT_ID=$LLVM_COMMIT_ID" | tee -a $GITHUB_ENV
 
     - name: Generate LLVM cache key
@@ -98,7 +98,7 @@ runs:
       if: inputs.build_llvm == 'false'
       shell: bash
       run: |
-        LLVM_HASH="$(<cmake/llvm-hash.txt)"
+        LLVM_HASH="$(sha256sum cmake/llvm-info.json | cut -d\  -f1)"
         TRITON_LLVM_CACHE_KEY=$(echo $LLVM_HASH ${{ hashFiles('setup.py') }} | sha256sum - | cut -d\  -f1)
         echo "TRITON_LLVM_CACHE_KEY=$TRITON_LLVM_CACHE_KEY" | tee -a $GITHUB_ENV
 

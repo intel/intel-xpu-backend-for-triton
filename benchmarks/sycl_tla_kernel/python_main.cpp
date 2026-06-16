@@ -20,6 +20,7 @@
 #include "attention/benchmark_runner.hpp"
 #include "attention/fmha_configuration.hpp"
 #include "gemm/gemm.hpp"
+#include "gemm_splitk/gemm_splitk.hpp"
 
 // Example FMHA configuration struct (user should adapt as needed)
 using FMHAPrefill_HF16_HF16_HF16_FP32_RCR_h64_NonCausal_FixedLen =
@@ -128,5 +129,6 @@ auto attention_08(const at::Tensor &Q, const at::Tensor &K, const at::Tensor &V,
 
 PYBIND11_MODULE(sycl_tla_kernel, m) {
   m.def("gemm", &gemm_kernel, "gemm (SYCL-TLA)");
+  m.def("gemm_splitk", &gemm_splitk_kernel, "gemm split-K (SYCL-TLA)");
   m.def("attention", &attention_08, "attention (SYCL-TLA)");
 }

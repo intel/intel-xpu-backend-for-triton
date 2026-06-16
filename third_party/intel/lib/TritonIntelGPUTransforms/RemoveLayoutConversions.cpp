@@ -18,11 +18,13 @@
 #include "mlir/Transforms/RegionUtils.h"
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/BlockIOUtils.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/Sys/GetEnv.h"
@@ -347,6 +349,59 @@ bool isLayoutAnchor(Operation *op) {
   // all.)
   if (auto reshape = dyn_cast<tt::ReshapeOp>(op))
     return reshape.getAllowReorder();
+
+  // Anchor a convert_layout that feeds a descriptor store when folding it would
+  // demote the store from a 2D block write to a scalar scatter.
+  //
+  // The descriptor-store fast path emits a 2D block write iff consecutive lanes
+  // of the store operand's layout advance along the memory-contiguous tensor
+  // dimension. Coalesce inserts this convert to give the store its coalesced
+  // (row-major) layout, so dst is block-write-eligible by construction. Forward
+  // propagation from an (expensive) load would otherwise strip the convert and
+  // replace the store operand with the chain's root layout; if root distributes
+  // lanes along a different dimension than dst, that fold turns the block write
+  // into a scatter (issue #7093). Unlike a store (no result, cannot be
+  // anchored), the convert has a result and can.
+  //
+  // The lane-fast-dim is compared across the whole convert chain (root source
+  // -> store-feeding convert), not on a single convert: the store-feeding
+  // convert is frequently a same-order re-tiling whose lane transpose lives one
+  // convert upstream. Comparing lane-fast-dims (not the `order` attribute)
+  // distinguishes a genuine within-subgroup transpose -- which can keep the
+  // SAME `order` while flipping the lane distribution (#7093) -- from a pure
+  // re-tiling that ends with the same lane-fast-dim it started (e.g. a dot
+  // result re-tiled for the store, issue #4866), which still folds.
+  if (auto convertOp = dyn_cast<ttg::ConvertLayoutOp>(op)) {
+    bool feedsDescStore =
+        llvm::any_of(convertOp.getResult().getUsers(), [](Operation *user) {
+          return isa<tt::DescriptorStoreOp>(user);
+        });
+    if (feedsDescStore) {
+      // Walk up consecutive converts to the root source of the chain.
+      Value root = convertOp.getSrc();
+      while (auto upConvert = root.getDefiningOp<ttg::ConvertLayoutOp>())
+        root = upConvert.getSrc();
+      auto rootTy = dyn_cast<RankedTensorType>(root.getType());
+      auto dstTy = dyn_cast<RankedTensorType>(convertOp.getType());
+      if (rootTy && dstTy) {
+        // The descriptor-store fast path is a 2D block write iff consecutive
+        // lanes advance along the memory-contiguous tensor dim. Folding this
+        // convert replaces the store operand's layout (dst) with root's; if the
+        // two layouts distribute lanes along different dims, that fold turns a
+        // block write into a scalar scatter. Anchor to prevent it.
+        MLIRContext *ctx = op->getContext();
+        std::optional<unsigned> rootLaneDim =
+            ttgi::getLaneFastChangeDim(ttg::toLinearLayout(rootTy), ctx);
+        std::optional<unsigned> dstLaneDim =
+            ttgi::getLaneFastChangeDim(ttg::toLinearLayout(dstTy), ctx);
+        // Conservative fallback: if either lane base is not a clean single-dim
+        // stride, the store can't be a 2D block write anyway -> nothing to
+        // protect -> don't anchor (fold by default, as before).
+        if (rootLaneDim && dstLaneDim)
+          return *rootLaneDim != *dstLaneDim;
+      }
+    }
+  }
 
   return false;
 }
@@ -907,6 +962,81 @@ bool canBeRemat(Operation *op) {
   return true;
 }
 
+// Returns true for shape-changing ops that carry no encoding constraint of
+// their own (ExpandDims, Trans, Broadcast). Ops such as ReshapeOp and GatherOp
+// are deliberately excluded: they may carry an efficient_layout attribute that
+// ties them to a specific encoding, so rematerializing a load into their input
+// encoding could violate that constraint.
+static bool isUnconstrainedShapeOp(Operation *op) {
+  return isa<tt::ExpandDimsOp, tt::TransOp, tt::BroadcastOp>(op);
+}
+
+// Return true if the op is an expensive load that is a candidate for
+// rematerialization in the specific safe pattern below. The load has exactly
+// one use (a ttg::ConvertLayoutOp), and that convert feeds a linear
+// single-use chain of unconstrained shape ops (see isUnconstrainedShapeOp)
+// before reaching the real compute consumer. Example:
+//
+//   %0 = tt.descriptor_load %desc[%c0] : ... -> tensor<1024xf16, #src>
+//   %1 = ttg.convert_layout %0 : tensor<1024xf16, #src>
+//                             -> tensor<1024xf16, #ttg.slice<{dim=1, ...}>>
+//   %2 = tt.expand_dims %1 {axis = 1} : ... -> tensor<1024x1xf16, #A>
+//   %3 = tt.trans %2 ...
+//   %4 = tt.broadcast %3 ...
+//
+// The convert is eliminated and the load is rematerialized directly into the
+// slice encoding. Multi-use loads and loads feeding dot-operands or other
+// expensive consumers are correctly rejected by the canBeRemat anchor, which
+// this helper should NOT bypass.
+bool isExpensiveLoadRematCandidate(Operation *op) {
+  // 1. Must be a Load or DescriptorLoad
+  if (!isa<tt::LoadOp, tt::DescriptorLoadOp>(op))
+    return false;
+
+  // 2. Must be expensive (only expensive loads need the bypass; cheap loads
+  //    already pass canBeRemat)
+  if (!ttgi::isExpensiveLoadOrStore(op))
+    return false;
+
+  // 3. Must have exactly one use
+  Value loadResult = op->getResult(0);
+  if (!loadResult.hasOneUse())
+    return false;
+
+  // 4. That single use must be a ConvertLayoutOp
+  Operation *user = *loadResult.getUsers().begin();
+  if (!isa<ttg::ConvertLayoutOp>(user))
+    return false;
+
+  // 5. The ConvertLayoutOp must feed a single-use linear chain of unconstrained
+  //    shape ops (see isUnconstrainedShapeOp), not a real-layout consumer such
+  //    as a dot or store. A fork in the chain would duplicate the load; reject.
+  Value current = user->getResult(0);
+  if (!current.hasOneUse() ||
+      !isUnconstrainedShapeOp(*current.getUsers().begin()))
+    return false;
+
+  while (current.hasOneUse() &&
+         isUnconstrainedShapeOp(*current.getUsers().begin()))
+    current = (*current.getUsers().begin())->getResult(0);
+
+  if (!current.hasOneUse() &&
+      llvm::any_of(current.getUsers(), isUnconstrainedShapeOp))
+    return false;
+
+  return true;
+}
+
+// Return true if \p op may be rematerialized as part of a backward slice:
+// either it is rematerializable by kind (canBeRemat), or it is the narrow
+// expensive-load exception that is provably a non-duplicating relabel
+// (isExpensiveLoadRematCandidate). canBeRemat anchors expensive loads; this
+// wrapper lets that one safe pattern through without weakening the anchor for
+// any other caller of canBeRemat.
+static bool isRematerializableInSlice(Operation *op) {
+  return canBeRemat(op) || isExpensiveLoadRematCandidate(op);
+}
+
 void LayoutRematerialization::updateRematMapping(
     SmallVector<std::tuple<Value, Value>> &values) {
   for (auto [old, newV] : values) {
@@ -1382,7 +1512,7 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
   // Check if all the operations in the slice can be rematerialized.
   for (Value v : slice) {
     if (Operation *op = v.getDefiningOp()) {
-      if (!canBeRemat(op))
+      if (!isRematerializableInSlice(op))
         return failure();
     }
   }
@@ -1557,7 +1687,8 @@ static bool isRematBeneficial(ttg::ConvertLayoutOp convertOp,
 
     if (isa<arith::ConstantOp>(op)) {
       continue;
-    } else if (isa<tt::LoadOp>(op) || isa<ttg::LocalLoadOp>(op)) {
+    } else if (isa<tt::LoadOp, tt::DescriptorLoadOp>(op) ||
+               isa<ttg::LocalLoadOp>(op)) {
       for (Value result : op->getResults())
         rematerialisationCost += 8 * getByteCount(result);
     } else if (isa<arith::ArithDialect, math::MathDialect>(dialect)) {
@@ -1584,6 +1715,50 @@ static bool isRematBeneficial(ttg::ConvertLayoutOp convertOp,
   return convertLayoutCost >= rematerialisationCost;
 }
 
+/// Check whether rematerializing \p slice with the target layouts in \p layout
+/// would degrade a load that currently uses the 2D block I/O hardware path by
+/// relabeling it into a less efficient encoding (a worse block tile, or a
+/// demotion to the per-element gather fallback).
+///
+/// The veto is intentionally scoped to loads whose CURRENT encoding is 2D
+/// block I/O eligible. For ordinary (gather) loads the existing canBeRemat /
+/// isRematBeneficial cost model already governs rematerialization correctly —
+/// e.g. duplicating a cheap small load to remove a convert is desirable — and
+/// the message-count proxy is not a meaningful signal there. Only the
+/// 2D-block path has the silent cliff this guard protects against (issue
+/// #7080): an encoding change that keeps the load legal but collapses its
+/// hardware tile (e.g. tile height 32 → 1, 4× more messages).
+static bool rematDegradesLoad(const SetVector<Value> &slice,
+                              const DenseMap<Value, Attribute> &layout) {
+  for (Value v : slice) {
+    Operation *defOp = v.getDefiningOp();
+    if (!defOp || !isa<tt::LoadOp, tt::DescriptorLoadOp>(defOp))
+      continue;
+
+    auto it = layout.find(v);
+    if (it == layout.end())
+      continue; // Not relabeled.
+
+    auto curTy = dyn_cast<RankedTensorType>(v.getType());
+    if (!curTy)
+      continue;
+
+    // Only guard loads that currently ride the 2D block I/O hardware path.
+    if (!ttgi::isBlockIOEligible(defOp, curTy))
+      continue;
+
+    RankedTensorType tgtTy = curTy.cloneWithEncoding(it->second);
+
+    unsigned cur = ttgi::estimateLoadHWCost(curTy, defOp);
+    unsigned tgt = ttgi::estimateLoadHWCost(tgtTy, defOp);
+
+    if (tgt > cur)
+      return true; // STRICT > — equal-cost must NOT veto.
+  }
+
+  return false;
+}
+
 void LayoutRematerialization::backwardRematerialization(
     ttg::ConvertLayoutOp convertOp) {
   RankedTensorType targetType = convertOp.getType();
@@ -1594,6 +1769,34 @@ void LayoutRematerialization::backwardRematerialization(
     if (isa<ttg::BlockedEncodingAttr>(dotLayout.getParent()))
       return;
   Value oldV = convertOp.getSrc();
+  // When rematerializing an expensive load past the canBeRemat anchor, only do
+  // so if the convert's target layout is non-degenerate (sizePerThread not
+  // all-ones). Earlier RLC runs may still carry the initial placeholder layout
+  // from convert_to_ttgpuir; baking that onto the load freezes a bad layout
+  // that then forward-propagates onto the shared main tile. Example of the
+  // degenerate case to skip:
+  //
+  //   %0 = tt.descriptor_load ... -> tensor<1024xf16, #src>
+  //   %1 = ttg.convert_layout %0 -> tensor<1024xf16,
+  //          #ttg.slice<{dim=1, parent=#blocked<sizePerThread=[1,1],...>}>>
+  //
+  // Deferring until the target layout has been healed by later passes
+  // preserves the good fixpoint that the unrematerialized path reaches.
+  if (Operation *defOp = oldV.getDefiningOp();
+      defOp && isExpensiveLoadRematCandidate(defOp)) {
+    Attribute targetEnc = targetType.getEncoding();
+    Attribute parentEnc = targetEnc;
+    if (auto sliceEnc = dyn_cast<ttg::SliceEncodingAttr>(targetEnc))
+      parentEnc = sliceEnc.getParent();
+    if (auto blockedEnc = dyn_cast<ttg::BlockedEncodingAttr>(parentEnc)) {
+      bool degenerate = llvm::all_of(blockedEnc.getSizePerThread(),
+                                     [](unsigned v) { return v == 1; });
+      if (degenerate) {
+        LDBG("  skip expensive-load remat: degenerate target layout");
+        return;
+      }
+    }
+  }
   LDBG("check backward remat with source " << oldV << " encoding "
                                            << targetType.getEncoding());
   // Check to see if there are existing remat'ed values for the pair of oldValue
@@ -1618,7 +1821,13 @@ void LayoutRematerialization::backwardRematerialization(
     return;
   }
 
-  // 2. Determine whether rematerialisation is beneficial.
+  // 2. Veto if rematerialization would degrade a load encoding.
+  if (rematDegradesLoad(slice, layout)) {
+    LDBG("  skip remat: would degrade a load encoding");
+    return;
+  }
+
+  // 3. Determine whether rematerialisation is beneficial.
   if (!isRematBeneficial(convertOp, slice, /*newCvtCost=*/0)) {
     LDBG("  skipped rematerialization");
     return;
@@ -1637,7 +1846,7 @@ void LayoutRematerialization::backwardRematerialization(
     if (Operation *op = v.getDefiningOp())
       sliceOps.insert(op);
 
-  // 3. Rewrite the slice.
+  // 4. Rewrite the slice.
   rewriteSlice(slice, layout, convertOp);
 
   // Build forward propagation candidates using pre-rewrite analysis.
@@ -1660,7 +1869,7 @@ void LayoutRematerialization::backwardRematerialization(
     }
   }
 
-  // 4. Forward propagate remat values created during backward propagation.
+  // 5. Forward propagate remat values created during backward propagation.
   forwardPropagateRemat(forwardPropagateCandidates);
 }
 
@@ -1888,6 +2097,10 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   // Always apply the cost gate (matching upstream) — isRematBeneficial
   // accounts for slice values with external users, preventing hoists that
   // would duplicate expensive ops or break dominance.
+  if (rematDegradesLoad(slice, layout)) {
+    LDBG("  skip remat: would degrade a load encoding");
+    return;
+  }
   int64_t newCvtCost = getConvertCost(extOrBroadcastOp->getOperand(0));
   if (!isRematBeneficial(convertOp, slice, newCvtCost))
     return;
@@ -2008,12 +2221,14 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
   // Rematerialize failed hoists right before the condtional, and hoist those
   // that succeeded into the branch and then rewrite the slice.
   IRMapping mapping;
+  SmallVector<Operation *> newConverts;
   auto hoistRemat = [&](OpBuilder &b, Value v, Attribute encoding) {
     auto tensorType = cast<RankedTensorType>(v.getType());
     auto newType = tensorType.cloneWithEncoding(encoding);
     Value newCvt =
         ttg::ConvertLayoutOp::create(b, convertOp.getLoc(), newType, v);
 
+    newConverts.push_back(newCvt.getDefiningOp());
     mapping.map(v, newCvt);
     slice.remove(v);
   };
@@ -2026,6 +2241,28 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
     OpBuilder b(edge->getOwner());
     hoistRemat(b, edge->get(), layout.at(result));
   }
+
+  // Do not hoist a convert into conditionals if doing so would degrade a load
+  // that currently rides the 2D block I/O hardware path (issue #7080).
+  if (rematDegradesLoad(slice, layout)) {
+    LDBG("  skip remat: would degrade a load encoding");
+    for (auto it = newConverts.rbegin(); it != newConverts.rend(); ++it)
+      (*it)->erase();
+    return;
+  }
+
+  // Check that rematerializing the slice is actually beneficial before
+  // rewriting. This prevents cloning expensive loads into conditional branches
+  // when the duplication cost exceeds the convert cost. Use newCvtCost=0
+  // (matching backwardRematerialization pattern) since we're hoisting into
+  // branches where the convert would be eliminated.
+  if (!isRematBeneficial(convertOp, slice, /*newCvtCost=*/0)) {
+    // Clean up orphaned convert ops created by hoistRemat before returning.
+    for (auto it = newConverts.rbegin(); it != newConverts.rend(); ++it)
+      (*it)->erase();
+    return;
+  }
+
   rewriteSlice(slice, layout, convertOp, mapping);
 }
 
@@ -2148,13 +2385,21 @@ public:
 
     // 5. Apply clean up patterns to remove dead convert and dead code generated
     // by the previous transformations.
-    RewritePatternSet cleanUpPatterns2(context);
-    scf::ForOp::getCanonicalizationPatterns(cleanUpPatterns2, context);
-    scf::IfOp::getCanonicalizationPatterns(cleanUpPatterns2, context);
-    ttg::ConvertLayoutOp::getCanonicalizationPatterns(cleanUpPatterns2,
-                                                      context);
-    if (applyPatternsGreedily(m, std::move(cleanUpPatterns2)).failed()) {
+    // ConvertLayoutOp canonicalization must converge.
+    RewritePatternSet convertCleanup(context);
+    ttg::ConvertLayoutOp::getCanonicalizationPatterns(convertCleanup, context);
+    if (applyPatternsGreedily(m, std::move(convertCleanup)).failed()) {
       signalPassFailure();
+    }
+
+    // scf canonicalization is best-effort: deeply unrolled scf.if regions
+    // carrying tensor values can drive the greedy rewriter to non-convergence
+    // (see upstream PR #10132 / pytorch/pytorch#180908).
+    RewritePatternSet scfCleanup(context);
+    scf::ForOp::getCanonicalizationPatterns(scfCleanup, context);
+    scf::IfOp::getCanonicalizationPatterns(scfCleanup, context);
+    if (applyPatternsGreedily(m, std::move(scfCleanup)).failed()) {
+      LDBG("scf cleanup did not converge");
     }
     LLVM_DEBUG({
       DBGS() << "Module after final cleanups:\n";

@@ -1,6 +1,7 @@
 import re
 import math
 import pathlib
+from unittest import mock
 
 import numpy as np
 import pytest
@@ -1095,3 +1096,53 @@ def test_host_memory_access(device, pinned):
     else:
         with pytest.raises(ValueError, match="Pointer argument"):
             add_one_kernel[(1, )](cpu_tensor, out_tensor, N, BLOCK=BLOCK)
+
+
+def version_key(v):
+    main, _, local = v.partition("+")
+    parts = tuple(map(int, main.split(".")))
+    return parts + ((int(local), ) if local else ())
+
+
+def test_silu_sigmoid_optimization(device, monkeypatch):
+    monkeypatch.setenv("TRITON_ALWAYS_COMPILE", "1")
+    n = 1024
+
+    @triton.jit
+    def silu_kernel(X, Y, N, BLOCK: tl.constexpr):
+        pid = tl.program_id(0)
+        offs = pid * BLOCK + tl.arange(0, BLOCK)
+        mask = offs < N
+
+        x = tl.load(X + offs, mask=mask)
+        y = x / (1 + tl.exp(-x))
+        tl.store(Y + offs, y, mask=mask)
+
+    x_cpu = torch.randn(n, dtype=torch.float32)
+    x_gpu = x_cpu.to(device)
+    y_gpu = torch.empty_like(x_gpu)
+
+    device = triton.runtime.driver.active.get_current_device()
+    # To avoid crash on LTS drivers without sigmoid support,
+    # we check the driver version and mock the device capability if needed.
+    if version_key(torch.xpu.get_device_capability(device)['driver_version']) >= version_key('1.14.37435+12'):
+
+        old_func = torch.xpu.get_device_capability
+
+        def mock_func(*args, **kwargs):
+            cap = old_func(*args, **kwargs)
+            cap['has_sigmoid'] = True
+            return cap
+
+        triton.backends.backends['intel'].driver._construct_target.cache_clear()
+        with mock.patch('torch.xpu.get_device_capability', new=mock_func):
+            meta = silu_kernel[(2, )](x_gpu, y_gpu, n, BLOCK=512)
+            llir = meta.asm.get('llir')
+            assert "__spirv_FSigmoidINTEL" in llir, f"Expected __spirv_FSigmoidINTEL in llir output, got:\n{llir}"
+            assert "fmul" in llir, f"Expected fmul (x * sigmoid) in llir output, got:\n{llir}"
+    else:
+        meta = silu_kernel[(2, )](x_gpu, y_gpu, n, BLOCK=512)
+        llir = meta.asm.get('llir')
+        assert "__spirv_FSigmoidINTEL" not in llir, f"Not expected __spirv_FSigmoidINTEL in llir output, got:\n{llir}"
+
+    torch.testing.assert_close(y_gpu.cpu(), torch.nn.functional.silu(x_cpu), rtol=1e-5, atol=1e-5)

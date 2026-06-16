@@ -10,12 +10,16 @@ on:
     paths:
       - .github/workflows/nightly-wheels.yml
       - .github/pins/pytorch.txt
+      - scripts/vllm/install-vllm.sh
+      - scripts/vllm/vllm-xpu-kernels-pin.txt
   pull_request:
     branches:
       - main
     paths:
       - .github/workflows/nightly-wheels.yml
       - .github/pins/pytorch.txt
+      - scripts/vllm/install-vllm.sh
+      - scripts/vllm/vllm-xpu-kernels-pin.txt
 
 permissions: read-all
 
@@ -37,6 +41,7 @@ jobs:
           - "3.12"
           - "3.13"
           - "3.14"
+          - "3.15.0-beta.2"
       fail-fast: false
       max-parallel: 2
     defaults:
@@ -66,6 +71,9 @@ jobs:
           echo "TORCHVISION_COMMIT_ID=$(<.github/ci_commit_pins/vision.txt)" | tee -a $GITHUB_ENV
           echo "TORCHAUDIO_COMMIT_ID=$(<.github/ci_commit_pins/audio.txt)" | tee -a $GITHUB_ENV
           echo "TIMM_COMMIT_ID=$(<.ci/docker/ci_commit_pins/timm.txt)" | tee -a $GITHUB_ENV
+          cd ..
+          echo "VLLM_PIN=$(<scripts/vllm/vllm-pin.txt)" | tee -a $GITHUB_ENV
+          echo "VLLM_XPU_KERNELS_PIN=$(<scripts/vllm/vllm-xpu-kernels-pin.txt)" | tee -a $GITHUB_ENV
 
       - name: Identify Triton commit id
         run: |
@@ -79,6 +87,7 @@ jobs:
             python -m build --wheel --no-isolation && pip install dist/*.whl
 
       - name: Install torchvision package
+        if: "!startsWith(matrix.python, '3.15')"
         uses: ./.github/actions/install-dependency
         with:
           package: torchvision
@@ -87,6 +96,7 @@ jobs:
           extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
 
       - name: Install torchaudio package
+        if: "!startsWith(matrix.python, '3.15')"
         uses: ./.github/actions/install-dependency
         with:
           package: torchaudio
@@ -95,6 +105,7 @@ jobs:
           extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
 
       - name: Install timm package
+        if: "!startsWith(matrix.python, '3.15')"
         uses: ./.github/actions/install-dependency
         with:
           package: timm
@@ -103,26 +114,41 @@ jobs:
           extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
 
       - name: Install transformers package
+        if: "!startsWith(matrix.python, '3.15')"
         run: |
           cd pytorch
           pip install -r .ci/docker/ci_commit_pins/huggingface-requirements.txt
+
+      - name: Install vLLM and vLLM XPU kernels
+        if: contains(fromJSON('["3.10", "3.11", "3.12"]'), matrix.python)
+        run: |
+          scripts/vllm/install-vllm.sh --source --force-reinstall
 
       - name: Prepare wheels for upload
         run: |
           mkdir -p wheels
           cp -L pytorch/dist/*.whl wheels/
           cp -L dist/*.whl wheels/
-          cp -L torchvision*/dist/*.whl wheels/
-          cp -L torchaudio*/dist/*.whl wheels/
-          cp -L timm*/dist/*.whl wheels/
+          cp -L torchvision*/dist/*.whl wheels/ 2>/dev/null || true
+          cp -L torchaudio*/dist/*.whl wheels/ 2>/dev/null || true
+          cp -L timm*/dist/*.whl wheels/ 2>/dev/null || true
           ls -lh wheels/
+
+      - name: Prepare vLLM wheels for upload
+        if: contains(fromJSON('["3.10", "3.11", "3.12"]'), matrix.python)
+        run: |
+          mkdir -p wheels-vllm
+          cp -L vllm-xpu-kernels/dist/*.whl wheels-vllm/
+          ls -lh wheels-vllm/
 
       - name: Report environment details
         run: |
+          reports_file="wheels/.env"
+
           TIMESTAMP=$(date '+%Y%m%d')
           echo "TIMESTAMP=$TIMESTAMP" >> "${GITHUB_ENV}"
 
-          cat <<EOF | tee wheels/.env
+          cat <<EOF | tee "$reports_file"
           TIMESTAMP=$TIMESTAMP
           GITHUB_RUN_ID=$GITHUB_RUN_ID
           GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER
@@ -136,11 +162,22 @@ jobs:
           TRITON_COMMIT_ID=$TRITON_COMMIT_ID
           TORCHVISION_COMMIT_ID=$TORCHVISION_COMMIT_ID
           TORCHAUDIO_COMMIT_ID=$TORCHAUDIO_COMMIT_ID
+          VLLM_PIN=$VLLM_PIN
+          VLLM_XPU_KERNELS_PIN=$VLLM_XPU_KERNELS_PIN
           EOF
+          ./scripts/capture-hw-details.sh | tee -a "$reports_file"
 
       - name: Upload PyTorch wheels to artifacts
         uses: actions/upload-artifact@v7
         with:
           name: wheels-pytorch-py${{ matrix.python }}-${{ env.TIMESTAMP }}
           path: wheels
+          include-hidden-files: true
+
+      - name: Upload vLLM wheels to artifacts
+        if: contains(fromJSON('["3.10", "3.11", "3.12"]'), matrix.python)
+        uses: actions/upload-artifact@v7
+        with:
+          name: wheels-vllm-py${{ matrix.python }}-${{ env.TIMESTAMP }}
+          path: wheels-vllm
           include-hidden-files: true

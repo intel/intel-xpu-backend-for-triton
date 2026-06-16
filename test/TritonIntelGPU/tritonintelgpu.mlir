@@ -47,17 +47,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
-  tt.func @ttig.2d_block_load_from_ptr(%ptr: tensor<64x32x!tt.ptr<f16>, #dot0>) -> tensor<64x32xf16, #dot0> {
+  tt.func @ttig.2d_block_load_from_ptr(%ptr: tensor<64x32x!tt.ptr<f16>, #dot0>, %pitch: i32) -> tensor<64x32xf16, #dot0> {
     // CHECK-LABEL: @ttig.2d_block_load_from_ptr
-    // CHECK: ttig.2d_block_load_from_ptr %arg0 {row_major} {base_height = 8 : i32, base_pitch = 256 : i32, base_width = 64 : i32}
-    %0 = ttig.2d_block_load_from_ptr %ptr {row_major} {base_width = 64 : i32, base_height = 8 : i32, base_pitch = 256 : i32} : (tensor<64x32x!tt.ptr<f16>, #dot0>) -> (tensor<64x32xf16, #dot0>)
+    // CHECK: ttig.2d_block_load_from_ptr %arg0, %arg1 {row_major} {base_height = 8 : i32, base_width = 64 : i32}
+    %0 = ttig.2d_block_load_from_ptr %ptr, %pitch {row_major} {base_width = 64 : i32, base_height = 8 : i32} : (tensor<64x32x!tt.ptr<f16>, #dot0>, i32) -> (tensor<64x32xf16, #dot0>)
     tt.return %0 : tensor<64x32xf16, #dot0>
   }
 
-  tt.func @ttig.2d_block_load_from_ptr_with_mask(%ptr: tensor<64x32x!tt.ptr<f16>, #dot0>, %mask: tensor<64x32xi1, #dot0>, %other: tensor<64x32xf16, #dot0>) -> tensor<64x32xf16, #dot0> {
+  tt.func @ttig.2d_block_load_from_ptr_with_mask(%ptr: tensor<64x32x!tt.ptr<f16>, #dot0>, %mask: tensor<64x32xi1, #dot0>, %other: tensor<64x32xf16, #dot0>, %pitch: i32) -> tensor<64x32xf16, #dot0> {
     // CHECK-LABEL: @ttig.2d_block_load_from_ptr_with_mask
-    // CHECK: ttig.2d_block_load_from_ptr %arg0, %arg1, %arg2 {row_major} {base_height = 8 : i32, base_pitch = 256 : i32, base_width = 64 : i32}
-    %0 = ttig.2d_block_load_from_ptr %ptr, %mask, %other {row_major} {base_width = 64 : i32, base_height = 8 : i32, base_pitch = 256 : i32} : (tensor<64x32x!tt.ptr<f16>, #dot0>, tensor<64x32xi1, #dot0>, tensor<64x32xf16, #dot0>) -> (tensor<64x32xf16, #dot0>)
+    // CHECK: ttig.2d_block_load_from_ptr %arg0, %arg3, %arg1, %arg2 {row_major} {base_height = 8 : i32, base_width = 64 : i32}
+    %0 = ttig.2d_block_load_from_ptr %ptr, %pitch, %mask, %other {row_major} {base_width = 64 : i32, base_height = 8 : i32} : (tensor<64x32x!tt.ptr<f16>, #dot0>, i32, tensor<64x32xi1, #dot0>, tensor<64x32xf16, #dot0>) -> (tensor<64x32xf16, #dot0>)
     tt.return %0 : tensor<64x32xf16, #dot0>
   }
 }
