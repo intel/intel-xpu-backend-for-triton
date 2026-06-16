@@ -343,10 +343,12 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_fp8
             topk_ids=topk_ids,
             topk=topk,
         )
+        if use_fp8:
+            del hidden_states
 
-        m = input_A.shape[0]
-        k = input_A.shape[1]
-        n = input_B.shape[-1]
+        m = M
+        n = N
+        k = K
         ws_shape = (m, topk, max(n, k))
         workspace = _resize_cache(
             torch.empty(
@@ -410,8 +412,8 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_fp8
             torch.testing.assert_close(
                 output_triton_grouped,
                 output_ref,
-                rtol=6e-2 if is_fp8 else 2e-2,
-                atol=6e-2 if is_fp8 else 1e-2,
+                rtol=6e-2 if use_fp8 else 2e-2,
+                atol=6e-2 if use_fp8 else 1e-2,
             )
 
             _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
