@@ -159,4 +159,31 @@ def TritonIntelGPUPrepareIfCombining
   let dependentDialects = ["mlir::scf::SCFDialect"];
 }
 
+def TritonIntelReassociateDotScale
+    : Pass<"triton-intel-reassociate-dot-scale", "mlir::ModuleOp"> {
+  let summary = "Reassociate a scalar scale across a dot to enable hoisting";
+  let description = [{
+    Rewrites `scale * tt.dot(a, b, 0)` into `tt.dot(scale * a, b, 0)` (or scaling
+    `b` instead), when `scale` is a uniform scalar broadcast. This is a
+    floating-point reassociation that changes rounding, so it only fires when
+    fast-math is enabled. The rewrite is applied only when it exposes a loop
+    invariant code motion opportunity: the dot must be inside a loop, the dot
+    itself loop-variant, the scalar and the chosen operand loop-invariant, and
+    the other operand loop-variant. After the rewrite the scaled operand is
+    hoisted out of the loop by `triton-licm`.
+
+    The transformation requires a zero accumulator: the algebra
+    `c * (a @ b) = (c * a) @ b` only holds when the dot accumulator is zero.
+  }];
+  let options = [
+    Option<"fastMath", "fast-math", "bool", /*default*/"false",
+           "enable the fast-math-gated reassociation">,
+  ];
+  let dependentDialects = [
+    "mlir::arith::ArithDialect",
+    "mlir::scf::SCFDialect",
+    "mlir::triton::TritonDialect"
+  ];
+}
+
 #endif // TRITON_DIALECT_TRITON_INTEL_TRANSFORMS_PASSES
