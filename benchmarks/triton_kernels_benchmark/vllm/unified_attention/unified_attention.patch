@@ -1,5 +1,5 @@
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 0ffe85054..5f617d7fc 100644
+index 0ffe85054..8a61372de 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -279,6 +279,9 @@ def kernel_unified_attention(
@@ -25,7 +25,7 @@ index 0ffe85054..5f617d7fc 100644
 +            S += tl.dot(Q_scaled, K) * k_token_head_scales[None, :]
          else:
 -            S += score_scale * tl.dot(Q, K)
-+            S += tl.dot(Q_scaled, K)
++            S = tl.dot(Q_scaled, K, S)
  
          if USE_SOFTCAP:
              S = apply_softcap(S, softcap)
