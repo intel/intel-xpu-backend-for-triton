@@ -1,3 +1,0 @@
-# Other
-tests/kernels/mamba/test_mamba_ssm.py::test_selective_scan
-tests/kernels/mamba/test_mamba_ssm.py::test_selective_scan_varlen

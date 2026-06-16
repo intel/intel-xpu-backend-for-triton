@@ -85,11 +85,75 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 8], warpsPerCTA = [4, 2], order = [1, 0]}>
+
+// CHECK-DAG: #[[$BLOCKED:.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
+// CHECK-DAG: #[[$BLOCKED1:.+]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 8], warpsPerCTA = [4, 2], order = [1, 0]}>
+
+// COM: ============================================================
+// COM: Test 4: Issue #7080 — 2D block I/O cost model prevents
+// COM: degradation. Descriptor_load in a better block-io layout
+// COM: (higher vectorization, sizePerThread=[1,4]) is NOT
+// COM: rematerialized into a worse layout (scatter-like [1,1])
+// COM: even though backward remat would eliminate the convert.
+// COM: The convert_layout is PRESERVED to avoid de-vectorizing
+// COM: the hardware 2D block load.
+// COM: ============================================================
+
+// CHECK-LABEL: @block_io_descriptor_load_not_degraded
+// CHECK: %[[LOAD:.*]] = tt.descriptor_load {{.*}} -> tensor<32x32xf16, #[[$BLOCKED1]]>
+// CHECK: ttg.convert_layout %[[LOAD]] : tensor<32x32xf16, #[[$BLOCKED1]]> -> tensor<32x32xf16, #[[$BLOCKED]]>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  tt.func @block_io_descriptor_load_not_degraded(%desc: !tt.tensordesc<32x32xf16>, %out: tensor<32x32x!tt.ptr<f16>, #blocked>) {
+    %c0 = arith.constant 0 : i32
+    %load = tt.descriptor_load %desc[%c0, %c0] {ttig.block_io = "row_major"} : !tt.tensordesc<32x32xf16> -> tensor<32x32xf16, #blocked1>
+    %cvt = ttg.convert_layout %load : tensor<32x32xf16, #blocked1> -> tensor<32x32xf16, #blocked>
+    tt.store %out, %cvt : tensor<32x32x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 8], warpsPerCTA = [4, 2], order = [1, 0]}>
+#blocked3 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 2], warpsPerCTA = [1, 8], order = [1, 0]}>
+
+// CHECK: #[[$BLOCKED3:.+]] = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 2], warpsPerCTA = [1, 8], order = [1, 0]}>
+
+// COM: ============================================================
+// COM: Test 5: Issue #7080 — 2D block I/O cost model ALLOWS an
+// COM: improving remat. The source layout (#blocked1, warpsPerCTA
+// COM: [4,2]) yields a 2D block tile of height 2 (16 messages for a
+// COM: 32x32 tile); the target layout (#blocked3, warpsPerCTA [1,8])
+// COM: yields tile height 32 (4 messages) — strictly cheaper. The
+// COM: cost model permits the remat: the convert_layout is
+// COM: ELIMINATED and the descriptor_load directly produces the
+// COM: better encoding. This is the case a blunt "block_io load ->
+// COM: blocked target = reject" guard would wrongly forbid.
+// COM: ============================================================
+
+// CHECK-LABEL: @block_io_descriptor_load_improved
+// CHECK-NOT: ttg.convert_layout
+// CHECK: %[[LOAD:.*]] = tt.descriptor_load {{.*}} -> tensor<32x32xf16, #[[$BLOCKED3]]>
+// CHECK: tt.store {{.*}}, %[[LOAD]] : tensor<32x32x!tt.ptr<f16>, #[[$BLOCKED3]]>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  tt.func @block_io_descriptor_load_improved(%desc: !tt.tensordesc<32x32xf16>, %out: tensor<32x32x!tt.ptr<f16>, #blocked3>) {
+    %c0 = arith.constant 0 : i32
+    %load = tt.descriptor_load %desc[%c0, %c0] {ttig.block_io = "row_major"} : !tt.tensordesc<32x32xf16> -> tensor<32x32xf16, #blocked1>
+    %cvt = ttg.convert_layout %load : tensor<32x32xf16, #blocked1> -> tensor<32x32xf16, #blocked3>
+    tt.store %out, %cvt : tensor<32x32x!tt.ptr<f16>, #blocked3>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 
 // COM: ============================================================
-// COM: Test 4: Descriptor store PRESERVES an order-changing (transpose)
+// COM: Test 6: Descriptor store PRESERVES an order-changing (transpose)
 // COM: convert_layout. Coalesce inserts a [0,1] -> [1,0] convert so the
 // COM: store is row-major / coalesced; RLC must NOT fold it away (doing
 // COM: so demotes the store to a scalar scatter). GitHub issue #7093.
@@ -113,7 +177,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 
 // COM: ============================================================
-// COM: Test 5: Descriptor store still FOLDS a same-order convert_layout
+// COM: Test 7: Descriptor store still FOLDS a same-order convert_layout
 // COM: ([1,0] -> [1,0]). Such a convert is only a re-tiling, not a
 // COM: transpose, so it must not be anchored (cf. issue #4866).
 // COM: ============================================================
@@ -136,7 +200,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 
 // COM: ============================================================
-// COM: Test 6: Descriptor store PRESERVES a SAME-order convert whose
+// COM: Test 8: Descriptor store PRESERVES a SAME-order convert whose
 // COM: lane distribution is transposed (threadsPerWarp [16,1] -> [1,16],
 // COM: both order = [1,0]). The `order` attribute is identical on both
 // COM: sides, so an order-based check would wrongly fold; the lane-fast
@@ -154,5 +218,73 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     %cvt = ttg.convert_layout %src : tensor<16x64xf16, #blocked> -> tensor<16x64xf16, #blocked1>
     tt.descriptor_store %desc[%c0, %c0], %cvt : !tt.tensordesc<16x64xf16>, tensor<16x64xf16, #blocked1>
     tt.return
+  }
+}
+
+// -----
+
+#blocked1 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [8], order = [0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 32], warpsPerCTA = [2, 4], order = [1, 0]}>
+
+// CHECK-DAG: #[[$BLOCKED:.+]] = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 32], warpsPerCTA = [2, 4], order = [1, 0]}>
+// CHECK-DAG: #[[$BLOCKED1:.+]] = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>
+
+// COM: ============================================================
+// COM: Test 7: Issue #7091 — Expensive descriptor_load rematerialized
+// COM: into slice layout when sole consumer is convert_layout feeding
+// COM: single-use expand_dims/trans/broadcast chain (non-degenerate
+// COM: target). The convert_layout is eliminated; descriptor_load
+// COM: directly produces the slice encoding.
+// COM: ============================================================
+
+// CHECK-LABEL: @descriptor_load_rematerialized_into_slice
+// CHECK-NOT: ttg.convert_layout
+// CHECK: %[[LOAD:.*]] = tt.descriptor_load {{.*}} -> tensor<1024xf16, #ttg.slice<{dim = 1, parent = #[[$BLOCKED1]]}>>
+// CHECK: %[[EXPAND:.*]] = tt.expand_dims %[[LOAD]] {axis = 1 : i32} : tensor<1024xf16, #ttg.slice<{dim = 1, parent = #[[$BLOCKED1]]}>> -> tensor<1024x1xf16, #[[$BLOCKED1]]>
+// CHECK: %[[TRANS:.*]] = tt.trans %[[EXPAND]] {{.*}} -> tensor<1x1024xf16, #[[$BLOCKED]]>
+// CHECK: %[[BCAST:.*]] = tt.broadcast %[[TRANS]] : tensor<1x1024xf16, #[[$BLOCKED]]> -> tensor<4x1024xf16, #[[$BLOCKED]]>
+// CHECK: tt.return %[[BCAST]]
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @descriptor_load_rematerialized_into_slice(%desc: !tt.tensordesc<1024xf16>) -> tensor<4x1024xf16, #blocked> {
+    %c0 = arith.constant 0 : i32
+    %0 = tt.descriptor_load %desc[%c0] : !tt.tensordesc<1024xf16> -> tensor<1024xf16, #blocked1>
+    %1 = ttg.convert_layout %0 : tensor<1024xf16, #blocked1> -> tensor<1024xf16, #ttg.slice<{dim = 1, parent = #blocked2}>>
+    %2 = tt.expand_dims %1 {axis = 1 : i32} : tensor<1024xf16, #ttg.slice<{dim = 1, parent = #blocked2}>> -> tensor<1024x1xf16, #blocked2>
+    %3 = tt.trans %2 {order = array<i32: 1, 0>} : tensor<1024x1xf16, #blocked2> -> tensor<1x1024xf16, #blocked>
+    %4 = tt.broadcast %3 : tensor<1x1024xf16, #blocked> -> tensor<4x1024xf16, #blocked>
+    tt.return %4 : tensor<4x1024xf16, #blocked>
+  }
+}
+
+// -----
+
+#blocked1 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [8], order = [0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [8, 1], order = [0, 1]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 8], order = [1, 0]}>
+
+// CHECK-DAG: #[[$BLOCKED1:.+]] = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [8], order = [0]}>
+// CHECK-DAG: #[[$BLOCKED2:.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [8, 1], order = [0, 1]}>
+
+// COM: ============================================================
+// COM: Test 8: Negative guard for issue #7091 — When target slice
+// COM: parent layout is degenerate (sizePerThread all-ones),
+// COM: descriptor_load is NOT rematerialized. The convert_layout
+// COM: is preserved to prevent layout-fixpoint regressions.
+// COM: ============================================================
+
+// CHECK-LABEL: @descriptor_load_not_rematerialized_degenerate
+// CHECK: %[[LOAD:.*]] = tt.descriptor_load {{.*}} -> tensor<1024xf16, #[[$BLOCKED1]]>
+// CHECK: %[[CVT:.*]] = ttg.convert_layout %[[LOAD]] : tensor<1024xf16, #[[$BLOCKED1]]> -> tensor<1024xf16, #ttg.slice<{dim = 1, parent = #[[$BLOCKED2]]}>>
+// CHECK: %[[EXPAND:.*]] = tt.expand_dims %[[CVT]] {axis = 1 : i32} : tensor<1024xf16, #ttg.slice<{dim = 1, parent = #[[$BLOCKED2]]}>> -> tensor<1024x1xf16, #[[$BLOCKED2]]>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @descriptor_load_not_rematerialized_degenerate(%desc: !tt.tensordesc<1024xf16>) -> tensor<4x1024xf16, #blocked> {
+    %c0 = arith.constant 0 : i32
+    %0 = tt.descriptor_load %desc[%c0] : !tt.tensordesc<1024xf16> -> tensor<1024xf16, #blocked1>
+    %1 = ttg.convert_layout %0 : tensor<1024xf16, #blocked1> -> tensor<1024xf16, #ttg.slice<{dim = 1, parent = #blocked2}>>
+    %2 = tt.expand_dims %1 {axis = 1 : i32} : tensor<1024xf16, #ttg.slice<{dim = 1, parent = #blocked2}>> -> tensor<1024x1xf16, #blocked2>
+    %3 = tt.trans %2 {order = array<i32: 1, 0>} : tensor<1024x1xf16, #blocked2> -> tensor<1x1024xf16, #blocked>
+    %4 = tt.broadcast %3 : tensor<1x1024xf16, #blocked> -> tensor<4x1024xf16, #blocked>
+    tt.return %4 : tensor<4x1024xf16, #blocked>
   }
 }

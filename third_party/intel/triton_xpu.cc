@@ -351,33 +351,29 @@ void init_triton_intel(py::module &&m) {
     return result.wasInterrupted();
   });
 
-  // FIXME: This is for internal experimentation. In the end we will need a
-  // producer flag (e.g. PyTorch flag) to allow the Triton compiler to use the
-  // fast math semantics on all arithmetic operations.
+  // Set fast-math flags on floating-point instructions.
+  // The fastMath parameter is resolved by the Python layer from
+  // TRITON_INTEL_FAST_MATH and TORCHINDUCTOR_USE_FAST_MATH env vars.
   // https://github.com/intel/intel-xpu-backend-for-triton/issues/3862
-  m.def("set_fast_math", [](llvm::Module *mod, bool enableFpFusion) {
-    std::optional<bool> fastMath = mlir::triton::tools::isEnvValueBool(
-        mlir::triton::tools::getStrEnv("TRITON_INTEL_FAST_MATH"));
-    if (fastMath.has_value() && !fastMath.value())
-      return;
-
-    using namespace llvm;
-    for (Function &func : *mod) {
-      for (Instruction &inst : instructions(func)) {
-        if (auto *op = dyn_cast<FPMathOperator>(&inst)) {
-          FastMathFlags FMF;
-          // Default to allow contract when fp fusion is enabled.
-          if (enableFpFusion && !fastMath.has_value()) {
-            if (op->getOpcode() == Instruction::FAdd ||
-                op->getOpcode() == Instruction::FMul)
-              FMF.setAllowContract(true);
-          } else if (fastMath.has_value() && fastMath.value())
-            FMF.setFast(true);
-          inst.setFastMathFlags(FMF);
-        }
-      }
-    }
-  });
+  m.def("set_fast_math",
+        [](llvm::Module *mod, bool enableFpFusion, bool fastMath) {
+          using namespace llvm;
+          for (Function &func : *mod) {
+            for (Instruction &inst : instructions(func)) {
+              if (auto *op = dyn_cast<FPMathOperator>(&inst)) {
+                FastMathFlags FMF;
+                if (fastMath) {
+                  FMF.setFast(true);
+                } else if (enableFpFusion) {
+                  if (op->getOpcode() == Instruction::FAdd ||
+                      op->getOpcode() == Instruction::FMul)
+                    FMF.setAllowContract(true);
+                }
+                inst.setFastMathFlags(FMF);
+              }
+            }
+          }
+        });
 
   m.def("set_spv_target_triple", [](llvm::Module *mod) {
     std::string triple = "spir64-unknown-unknown";
