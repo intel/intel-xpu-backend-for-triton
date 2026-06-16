@@ -1,8 +1,143 @@
+diff --git a/tests/v1/attention/test_triton_unified_attention_autotune.py b/tests/v1/attention/test_triton_unified_attention_autotune.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/v1/attention/test_triton_unified_attention_autotune.py
+@@ -0,0 +1,59 @@
++from vllm.v1.attention.ops.triton_unified_attention import (
++    ATTENTION_AUTOTUNE_CONFIGS,
++    REDUCE_AUTOTUNE_CONFIGS,
++    derive_block_q,
++    prune_attention_configs,
++    prune_reduce_configs,
++)
++
++
++def _block_ms(configs):
++    return {config.kwargs["BLOCK_M"] for config in configs}
++
++
++def _derived_block_qs(configs, num_queries_per_kv):
++    return {
++        derive_block_q(config.kwargs["BLOCK_M"], num_queries_per_kv)
++        for config in configs
++    }
++
++
++def test_attention_autotunes_only_block_m():
++    attention_configs = prune_attention_configs(
++        ATTENTION_AUTOTUNE_CONFIGS,
++        None,
++        BLOCK_SIZE=64,
++        HEAD_SIZE=128,
++        IS_3D=False,
++        num_queries_per_kv=4,
++        TILE_SIZE=16,
++    )
++
++    assert _block_ms(attention_configs) == {16, 32, 64}
++    assert _derived_block_qs(attention_configs, 4) == {4, 8, 16}
++    assert all("BLOCK_Q" not in config.kwargs for config in attention_configs)
++    assert all("TILE_SIZE" not in config.kwargs for config in attention_configs)
++
++
++def test_attention_prunes_block_m_with_non_power_of_two_derived_block_q():
++    attention_configs = prune_attention_configs(
++        ATTENTION_AUTOTUNE_CONFIGS,
++        None,
++        BLOCK_SIZE=64,
++        HEAD_SIZE=128,
++        IS_3D=False,
++        num_queries_per_kv=10,
++        TILE_SIZE=16,
++    )
++
++    assert _block_ms(attention_configs) == {16}
++    assert _derived_block_qs(attention_configs, 10) == {1}
++
++
++def test_reduce_autotune_is_blank_placeholder():
++    reduce_configs = prune_reduce_configs(
++        REDUCE_AUTOTUNE_CONFIGS,
++        None,
++    )
++
++    assert [config.kwargs for config in reduce_configs] == [{}]
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 0ffe85054..805005d6d 100644
+index 0ffe85054..00000000 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
-@@ -279,6 +279,9 @@ def kernel_unified_attention(
+@@ -6,8 +6,6 @@
+ #  - Jan van Lunteren <jvl@zurich.ibm.com>
+ #  - Chih-Chieh Yang <chih.chieh.yang@ibm.com>
+ #  - Thomas Parnell <tpa@zurich.ibm.com>
+-
+-from typing import Any
+ 
+ import torch
+ 
+@@ -175,6 +173,60 @@
+     )
+ 
+ 
++ATTENTION_AUTOTUNE_CONFIGS = [
++    triton.Config({"BLOCK_M": block_m}, num_stages=2)
++    for block_m in (16, 32, 64)
++]
++
++REDUCE_AUTOTUNE_CONFIGS = [
++    triton.Config({}, num_stages=2),
++]
++
++ATTENTION_AUTOTUNE_KEY = [
++    "BLOCK_SIZE",
++    "HEAD_SIZE",
++    "IS_3D",
++    "num_queries_per_kv",
++    "TILE_SIZE",
++]
++
++REDUCE_AUTOTUNE_KEY = []
++
++
++def derive_block_q(block_m, num_queries_per_kv):
++    return block_m // num_queries_per_kv
++
++
++def _is_power_of_2(value):
++    return value > 0 and (value & (value - 1)) == 0
++
++
++def prune_attention_configs(configs, named_args, **kwargs):
++    return [
++        config
++        for config in configs
++        if _is_power_of_2(
++            derive_block_q(config.kwargs["BLOCK_M"], kwargs["num_queries_per_kv"])
++        )
++    ]
++
++
++def prune_reduce_configs(configs, named_args, **kwargs):
++    return configs
++
++
++@triton.autotune(
++    configs=ATTENTION_AUTOTUNE_CONFIGS,
++    key=ATTENTION_AUTOTUNE_KEY,
++    prune_configs_by={"early_config_prune": prune_attention_configs},
++)
++@triton.heuristics(
++    {
++        "BLOCK_Q": lambda args: derive_block_q(
++            args["BLOCK_M"], args["num_queries_per_kv"]
++        )
++    }
++)
+ @triton.jit
+ def kernel_unified_attention(
+     # Output destination for the 2D path.  In 3D mode per-segment partials
+@@ -279,6 +331,9 @@
      USE_TD_QO: tl.constexpr = False,
      Q_IS_FP8: tl.constexpr = False,
  ):
@@ -12,7 +147,7 @@ index 0ffe85054..805005d6d 100644
      # Per-(token, head) scale caches: used iff KV_QUANT_MODE in {2, 3}.
      USE_PER_TOKEN_HEAD_SCALES: tl.constexpr = (KV_QUANT_MODE >= 2) and (
          KV_QUANT_MODE <= 3
-@@ -540,19 +543,14 @@ def kernel_unified_attention(
+@@ -540,19 +595,14 @@
          M, L, P, alpha = softmax_step(S, M, L)
          acc = acc * alpha[:, None]
  
@@ -36,16 +171,42 @@ index 0ffe85054..805005d6d 100644
  
      # ---- Epilogue ---------------------------------------------------------
      if IS_3D:
-@@ -847,7 +845,7 @@ def unified_attention(
+@@ -652,6 +702,11 @@
+             )
+ 
+ 
++@triton.autotune(
++    configs=REDUCE_AUTOTUNE_CONFIGS,
++    key=REDUCE_AUTOTUNE_KEY,
++    prune_configs_by={"early_config_prune": prune_reduce_configs},
++)
+ @triton.jit
+ def reduce_segments(
+     output_ptr,  # [num_tokens, num_query_heads, head_size]
+@@ -846,22 +901,6 @@
+     num_queries_per_kv = num_query_heads // num_kv_heads
      head_size = q.shape[2]
  
-     BLOCK_M = (
+-    BLOCK_M = (
 -        16 if num_queries_per_kv <= 16 else triton.next_power_of_2(num_queries_per_kv)
-+        32 if num_queries_per_kv <= 32 else triton.next_power_of_2(num_queries_per_kv)
-     )
-     BLOCK_Q = BLOCK_M // num_queries_per_kv
+-    )
+-    BLOCK_Q = BLOCK_M // num_queries_per_kv
+-
+-    # Ideally we would launch with kernel with:
+-    # \sum_i[ceil(query_len[i] / BLOCK_Q)] blocks.
+-    # However, it is slow to realize the query_lens on cpu.
+-    # Instead we use upper-bound:
+-    # \sum_i[ceil(query_len[i] / BLOCK_Q)]
+-    #   <= \sum_i[floor(query_len[i] / BLOCK_Q) + 1]
+-    #    = \sum_i[floor(query_len[i] / BLOCK_Q)] + num_seqs
+-    #   <= floor(\sum_i(query_len[i]) / BLOCK_Q) + num_seqs
+-    #    = floor(q.shape[0] / BLOCK_Q) + num_seqs
+-    total_num_q_blocks = q.shape[0] // BLOCK_Q + num_seqs
+-
+     sliding_window_val = 1 + window_size[0] if window_size[0] >= 0 else 0
  
-@@ -872,12 +870,16 @@ def unified_attention(
+     # Compute chunked block size from sliding window if needed.
+@@ -872,12 +911,16 @@
      elif sliding_window_val <= 0:
          chunk_lookback = -1
  
@@ -68,7 +229,7 @@ index 0ffe85054..805005d6d 100644
  
      # USE_TD requires BLOCK_SIZE % TILE_SIZE == 0 (enforced by a
      # ``tl.static_assert`` in the kernel).  The default prefill tile
-@@ -928,18 +930,11 @@ def unified_attention(
+@@ -928,18 +971,11 @@
      # Launch the 2D kernel if
      # 1. No intermediate tiled softmax buffers for the 3D kernel have been allocated, or
      # 2. The batch includes at least one prefill request, or
@@ -92,7 +253,7 @@ index 0ffe85054..805005d6d 100644
  
      # The kernel signature is the same for 2D and 3D — only the launch
      # grid + a handful of constexpr toggles differ.  Per-token-head scale
-@@ -960,6 +955,30 @@ def unified_attention(
+@@ -960,17 +996,47 @@
          v_scale_ptr = None
      # 3D needs real segm tensors; 2D never touches them.  Pass ``None`` in
      # 2D mode so Triton can skip materialising these pointer arguments.
@@ -123,3 +284,44 @@ index 0ffe85054..805005d6d 100644
      segm_output_ptr = softmax_segm_output if use_3d else None
      segm_max_ptr = softmax_segm_max if use_3d else None
      segm_expsum_ptr = softmax_segm_expsum if use_3d else None
+     num_segments = num_par_softmax_segments if use_3d else 1
+ 
+-    grid: tuple[Any, ...]
+     if not use_3d:
+-        grid = (total_num_q_blocks, num_kv_heads)
++        grid = lambda meta: (
++            q.shape[0] // meta["BLOCK_Q"] + num_seqs,
++            num_kv_heads,
++        )
+         tile_size = TILE_SIZE_PREFILL
+     else:
+-        grid = (total_num_q_blocks, num_kv_heads, num_par_softmax_segments)
++        grid = lambda meta: (
++            q.shape[0] // meta["BLOCK_Q"] + num_seqs,
++            num_kv_heads,
++            num_par_softmax_segments,
++        )
+         tile_size = TILE_SIZE_DECODE
+ 
+     kernel_unified_attention[grid](
+@@ -1030,9 +1096,7 @@
+         stride_vs_slot=vs_slot,
+         stride_vs_head=vs_head,
+         query_start_len_ptr=cu_seqlens_q,
+-        BLOCK_Q=BLOCK_Q,
+         num_seqs=num_seqs,
+-        BLOCK_M=BLOCK_M,
+         NUM_SEGMENTS_PER_SEQ=num_segments,
+         USE_FP8=output_scale is not None,
+         IS_3D=use_3d,
+@@ -1061,7 +1125,9 @@
+             HEAD_SIZE=head_size,
+             HEAD_SIZE_PADDED=head_size_padded,
+             query_start_len_ptr=cu_seqlens_q,
+-            BLOCK_Q=BLOCK_Q,
++            # reduce_segments passes use_q_block_mode=False to find_seq_idx,
++            # so BLOCK_Q is not used for sequence lookup in this kernel.
++            BLOCK_Q=1,
+             NUM_SEGMENTS_PER_SEQ=num_par_softmax_segments,
+             USE_FP8=output_scale is not None,
+         )
