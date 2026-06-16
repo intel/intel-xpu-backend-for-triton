@@ -31,12 +31,20 @@ class ModuleAxisInfoAnalysis;
 class StrideInfo {
 public:
   using DimVectorT = SmallVector<int64_t>;
+  /// One entry per axis: the SSA value behind a runtime stride (see
+  /// `getStrideValue`), or null where there isn't one.
+  using StrideValueVectorT = SmallVector<Value>;
 
   StrideInfo() = default;
   explicit StrideInfo(ArrayRef<int64_t> stride) : stride(stride) {}
   StrideInfo(DimVectorT spatial,
              DenseMap<LoopLikeOpInterface, DimVectorT> ivStrides)
       : stride(std::move(spatial)), ivStrides(std::move(ivStrides)) {}
+  StrideInfo(DimVectorT spatial,
+             DenseMap<LoopLikeOpInterface, DimVectorT> ivStrides,
+             StrideValueVectorT strideValues)
+      : stride(std::move(spatial)), ivStrides(std::move(ivStrides)),
+        strideValues(canonicalizeStrideValues(std::move(strideValues))) {}
 
   /// Spatial stride along `dim`: how many elements apart consecutive lanes
   /// along that tensor axis are within a single loaded tile.  Values follow
@@ -47,10 +55,32 @@ public:
   /// Full per-axis spatial-stride vector.  Size matches `getRank()`.
   const DimVectorT &getStride() const { return stride; }
 
+  /// The SSA value behind a runtime stride along `dim`, or null if there is
+  /// none. Set only when the constant stride is unknown (`getStride(dim) < 0`)
+  /// but the value can still be named, so a consumer can use it instead of
+  /// digging through the IR.
+  Value getStrideValue(size_t dim) const {
+    return dim < strideValues.size() ? strideValues[dim] : Value();
+  }
+
+  /// Full per-axis symbolic-stride vector.  Either empty (no symbolic source
+  /// for any axis) or exactly `getRank()`-sized.
+  const StrideValueVectorT &getStrideValues() const { return strideValues; }
+
   unsigned getRank() const { return stride.size(); }
 
   bool operator==(const StrideInfo &other) const {
-    return stride == other.stride && ivStrides == other.ivStrides;
+    return stride == other.stride && ivStrides == other.ivStrides &&
+           strideValues == other.strideValues;
+  }
+
+  /// Collapse an all-null vector to empty, so "no runtime stride" compares
+  /// equal regardless of rank (keeps the lattice equality well-behaved).
+  static StrideValueVectorT
+  canonicalizeStrideValues(StrideValueVectorT strideValues) {
+    if (llvm::all_of(strideValues, [](Value v) { return !v; }))
+      return {};
+    return strideValues;
   }
 
   static StrideInfo getPessimisticValueState(Value value);
@@ -90,6 +120,7 @@ public:
 private:
   DimVectorT stride;                                   // spatial
   DenseMap<LoopLikeOpInterface, DimVectorT> ivStrides; // per-loop IV
+  StrideValueVectorT strideValues; // symbolic spatial-stride source per axis
 };
 
 using StrideInfoMapT = DenseMap<Value, StrideInfo>;

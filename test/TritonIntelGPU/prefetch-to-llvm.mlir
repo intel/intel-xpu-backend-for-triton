@@ -95,3 +95,47 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, ttig.t
     tt.return
   }
 }
+
+// -----
+
+// COM: Prefetch of a tensor-of-pointers whose row stride (`lda`) is a runtime
+// COM: scalar, as in grouped GEMM. The pitch can't be a compile-time constant,
+// COM: so the lowering recovers the runtime stride and materializes
+// COM: pitch = lda * elemSize, then feeds it to the HW 2D block prefetch.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @prefetch_runtime_stride
+  tt.func public @prefetch_runtime_stride(%arg0: !tt.ptr<f16>, %lda: i32 {tt.divisibility = 16 : i32}) {
+    %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>}>>
+    %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>}>> -> tensor<64x1xi32, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
+    %lda_splat = tt.splat %lda : i32 -> tensor<64x1xi32, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
+    %3 = arith.muli %1, %lda_splat : tensor<64x1xi32, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
+    %4 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>}>>
+    %5 = tt.expand_dims %4 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>}>> -> tensor<1x32xi32, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
+    %6 = tt.broadcast %3 : tensor<64x1xi32, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>> -> tensor<64x32xi32, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
+    %7 = tt.broadcast %5 : tensor<1x32xi32, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>> -> tensor<64x32xi32, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
+    %8 = arith.addi %6, %7 : tensor<64x32xi32, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
+    %9 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<64x32x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
+    %tp = tt.addptr %9, %8 : tensor<64x32x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>, tensor<64x32xi32, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
+    // CHECK: %[[PITCH:.*]] = llvm.mul %arg1, %{{.*}} : i32
+    // CHECK: triton_gen.2Dblockprefetch %{{.*}}, %{{.*}}, %{{.*}}, %[[PITCH]],
+    ttig.prefetch %tp {cache = 1 : i32, evict = 1 : i32, isVolatile = false, ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Prefetch of a tensor-of-pointers whose stride is neither a compile-time
+// COM: constant nor a recoverable runtime value (the pointer tensor is a bare
+// COM: function argument). The lowering must cleanly bail to a no-op rather
+// COM: than emit a malformed prefetch.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @prefetch_unknown_stride
+  // CHECK-NOT: triton_gen.2Dblockprefetch
+  tt.func public @prefetch_unknown_stride(%arg0: tensor<64x32x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>) {
+    ttig.prefetch %arg0 {cache = 1 : i32, evict = 1 : i32, isVolatile = false, ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
+    tt.return
+  }
+}
