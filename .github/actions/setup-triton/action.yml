@@ -115,6 +115,8 @@ runs:
 
     - name: Build Triton
       shell: bash
+      env:
+        TRITON_EXT_ENABLED: ON
       run: |
         pip install -r python/requirements.txt
         ${{ inputs.command }}

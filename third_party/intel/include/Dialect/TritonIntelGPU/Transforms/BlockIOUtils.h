@@ -2,6 +2,7 @@
 #define TRITONINTELGPU_TRANSFORMS_BLOCKIOUTILS_H
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
+#include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Support/LogicalResult.h"
 #include "triton/Analysis/AxisInfo.h"
@@ -10,6 +11,10 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include <optional>
+
+namespace mlir::triton::intel {
+class ModuleStrideAnalysis;
+} // namespace mlir::triton::intel
 
 namespace mlir::triton::gpu::intel {
 
@@ -138,6 +143,14 @@ bool isBlockIOEligible(OpTy loadOp, RankedTensorType tensorTy) {
 /// encoding. Higher values indicate more HW cost. Used for cost modeling in
 /// RemoveLayoutConversions. Returns a comparable scalar (not cycle-accurate).
 unsigned estimateLoadHWCost(RankedTensorType type, Operation *loadOp);
+
+/// Runtime stride value along `dim`; null if none.
+Value getRuntimeStrideValue(triton::intel::ModuleStrideAnalysis &strideAnalysis,
+                            Value ptr, unsigned dim);
+
+/// Build `stride * elemSizeInBytes` as an i32; null for non-integer stride.
+Value materializePitchBytes(OpBuilder &builder, Location loc, Value stride,
+                            unsigned elemSizeInBytes);
 
 } // namespace mlir::triton::gpu::intel
 
