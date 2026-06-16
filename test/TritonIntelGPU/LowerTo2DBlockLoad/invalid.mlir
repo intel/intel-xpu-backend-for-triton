@@ -119,6 +119,34 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
+// COM: 1D-reshaped pointer load with a non-trivial mask. The mask has
+// COM: constancy=1 along the fast-change dimension because each element is
+// COM: independently compared against a runtime bound. The LLVM lowering uses
+// COM: a per-tile predicate (broadcast from lane 0), so insufficient mask
+// COM: constancy must prevent conversion to 2D block load.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @masked_1d_reshape_load_non_uniform
+  tt.func @masked_1d_reshape_load_non_uniform(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32) -> tensor<64x32xf16, #dot0> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x32xf16, #dot0>
+    %0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>>
+    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>> -> tensor<1x32xi32, #dot0>
+    %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1x32x!tt.ptr<f16>, #dot0>
+    %3 = tt.addptr %2, %1 : tensor<1x32x!tt.ptr<f16>, #dot0>, tensor<1x32xi32, #dot0>
+    %4 = tt.broadcast %3 : tensor<1x32x!tt.ptr<f16>, #dot0> -> tensor<64x32x!tt.ptr<f16>, #dot0>
+    // Mask with constancy=1 along fast-change dim (each col independently checked).
+    %bound = tt.splat %arg1 : i32 -> tensor<1x32xi32, #dot0>
+    %mask2d = arith.cmpi slt, %1, %bound : tensor<1x32xi32, #dot0>
+    %mask = tt.broadcast %mask2d : tensor<1x32xi1, #dot0> -> tensor<64x32xi1, #dot0>
+    // CHECK: tt.load
+    %5 = tt.load %4, %mask, %cst {ttig.block_io = "row_major", ttig.block_io_stride = 256 : i64} : tensor<64x32x!tt.ptr<f16>, #dot0>
+    tt.return %5 : tensor<64x32xf16, #dot0>
+  }
+}
+
+// -----
+
 // COM: Broadcast load (stride=0) where the tile width is incompatible with
 // COM: threadsPerWarp for the row replication logic. tileWidth=1 with
 // COM: threadsPerWarp=32 does not satisfy tileWidth*2 == threadsPerWarp.
