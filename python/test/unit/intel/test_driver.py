@@ -185,3 +185,36 @@ def test_auto_grf_on_build_failure(device, monkeypatch, capfd, grf_mode, expect_
     else:
         assert "retrying with large GRF mode" not in outs
         assert "Build failed" not in outs
+
+
+def test_sycl_global_range_overflow(device):
+    # for details: https://github.com/intel/intel-xpu-backend-for-triton/issues/7201
+
+    @triton.jit
+    def add_kernel(
+        in_ptr0,
+        in_ptr1,
+        out_ptr,
+        n_elements,
+        BLOCK_SIZE: "tl.constexpr",
+    ):
+        pid = tl.program_id(axis=0).to(tl.int64)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(in_ptr0 + offsets, mask=mask)
+        y = tl.load(in_ptr1 + offsets, mask=mask)
+        output = x + y
+        tl.store(out_ptr + offsets, output, mask=mask)
+
+    n = 1379584
+    x = torch.randint(0, 100, (n, 2048), dtype=torch.int8, device=device)
+    output = torch.empty_like(x)
+    n_elements = output.numel()
+
+    def grid(meta):
+        return (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
+
+    add_kernel[grid](x, x, output, n_elements, 16)
+
+    torch.testing.assert_close(output.cpu(), (x + x).cpu(), rtol=0, atol=0)
