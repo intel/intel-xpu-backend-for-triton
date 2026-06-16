@@ -3,10 +3,9 @@
 This package exists solely to satisfy package managers expecting
 a distribution named `triton`.
 
-Installing (with --extra-index-url=https://download.pytorch.org/whl/xpu):
+Installing:
 
-    triton==3.7.1+xpu
-
+    pip install --extra-index-url https://download.pytorch.org/whl/xpu triton==3.7.1+xpu
 automatically installs:
 
     triton-xpu==3.7.1
