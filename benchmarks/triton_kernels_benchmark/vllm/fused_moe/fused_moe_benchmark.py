@@ -318,7 +318,7 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_fp8
             input_A = input_A.squeeze(0)
             input_scales = _normalize_fp8_scale(input_scales)
 
-            _, input_B, weight_scales, _ = make_test_weight(
+            input_B_orig, input_B, weight_scales, _ = make_test_weight(
                 num_experts,
                 N,
                 K,
@@ -344,7 +344,8 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_fp8
             topk=topk,
         )
         if use_fp8:
-            del hidden_states
+            # Free unused bf16 originals in the fp8 case.
+            del hidden_states, input_B_orig
 
         m = M
         n = N
