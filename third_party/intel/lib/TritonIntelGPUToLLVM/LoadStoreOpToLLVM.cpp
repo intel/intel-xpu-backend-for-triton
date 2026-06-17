@@ -2181,10 +2181,11 @@ struct DescriptorLoadOpConversion
     // from boundary checking only when both conditions hold:
     //   1. Every MakeTensorDescOp has shape[i] divisible by blockShape[i], and
     //   2. The load offset[i] is divisible by blockShape[i].
-    // Together these guarantee that the block either lies entirely within bounds
-    // or starts beyond the tensor (undefined behaviour), so no per-element
-    // clipping is needed. blockShape[i]==1 is the trivial case (every offset
-    // is divisible by 1) and is handled without querying isDivisible.
+    // Together these guarantee that the block either lies entirely within
+    // bounds or starts beyond the tensor (undefined behaviour), so no
+    // per-element clipping is needed. blockShape[i]==1 is the trivial case
+    // (every offset is divisible by 1) and is handled without querying
+    // isDivisible.
     ArrayRef<int64_t> blockShape = descTensorType.getShape();
     SmallVector<MakeTensorDescOp> allDescs =
         mlir::triton::intel::findAllMakeTensorDescOps(op.getDesc());
@@ -2192,9 +2193,10 @@ struct DescriptorLoadOpConversion
     for (size_t i = 0; i < descRank; ++i) {
       int64_t bs = blockShape[i];
       if (!allDescs.empty() && bs > 0 &&
-          llvm::all_of(allDescs, [&](MakeTensorDescOp d) {
-            return isDivisible(d.getShape()[i], bs);
-          }) &&
+          llvm::all_of(allDescs,
+                       [&](MakeTensorDescOp d) {
+                         return isDivisible(d.getShape()[i], bs);
+                       }) &&
           (bs == 1 ||
            isDivisible(op.getIndices()[i], static_cast<unsigned>(bs))))
         continue;
@@ -2413,9 +2415,10 @@ struct DescriptorStoreOpConversion
     for (size_t i = 0; i < descRank; ++i) {
       int64_t bs = blockShape[i];
       if (!allDescs.empty() && bs > 0 &&
-          llvm::all_of(allDescs, [&](MakeTensorDescOp d) {
-            return isDivisible(d.getShape()[i], bs);
-          }) &&
+          llvm::all_of(allDescs,
+                       [&](MakeTensorDescOp d) {
+                         return isDivisible(d.getShape()[i], bs);
+                       }) &&
           (bs == 1 ||
            isDivisible(op.getIndices()[i], static_cast<unsigned>(bs))))
         continue;
