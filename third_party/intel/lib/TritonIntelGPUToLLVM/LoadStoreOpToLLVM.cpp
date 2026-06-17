@@ -2306,6 +2306,9 @@ struct DescriptorLoadOpToBlockIOConversion
                             {{kRegister, llEncoding->getInDimSize(kRegister)}},
                             /*requireSurjective=*/true);
 
+    if (permuteDescDim && !isTransposeRequired)
+      return failure();
+
     // Unpack descriptor struct: { shape[rank], stride[rank], base }.
     DescriptorFields desc =
         unpackDescriptor(adaptor.getDesc(), descRank, loc, rewriter);
@@ -2317,13 +2320,6 @@ struct DescriptorLoadOpToBlockIOConversion
       std::swap(desc.shapes[descRank - 2], desc.shapes[descRank - 1]);
       std::swap(desc.strides[descRank - 2], desc.strides[descRank - 1]);
     }
-
-    // column_major descriptor loads must always produce transposed block I/O
-    // (contiguousDim = rank-2 forces transpose in getBlockIOTileSize). If this
-    // invariant breaks, the surface parameters below would be incorrect because
-    // they index the already-swapped shapes/strides via isTransposeRequired.
-    assert((!permuteDescDim || isTransposeRequired) &&
-           "column_major descriptor load expects transposed block I/O");
 
     Value elemBytes = b.i32_val(elemSizeInBits / 8);
     Value surfaceWidth = b.trunc(
@@ -3121,7 +3117,8 @@ struct DescriptorStoreOpToBlockIOConversion
         blockIOAttr &&
         "block_io attribute required; checked by isDescriptorBlockIOCandidate");
     const bool memoryRowMajor = (blockIOAttr.getValue() == "row_major");
-    assert(memoryRowMajor && "column_major descriptor store not yet supported");
+    if (!memoryRowMajor)
+      return failure();
 
     // Get source tensor type and encoding.
     auto tensorType = cast<RankedTensorType>(op.getSrc().getType());

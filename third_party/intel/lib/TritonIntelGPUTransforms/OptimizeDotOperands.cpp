@@ -1,5 +1,4 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
-#include "intel/include/Dialect/TritonIntelGPU/Transforms/BlockIOUtils.h"
 #include "intel/include/Utils/Utility.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -14,7 +13,6 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
 #include <optional>
@@ -140,28 +138,6 @@ private:
     StringAttr attr = descLoadOp->getAttrOfType<StringAttr>(blockIOAttrName);
     if (!attr || ttgi::symbolizeBlockIOMode(attr.getValue()) !=
                      ttgi::BlockIOMode::RowMajor)
-      return false;
-
-    // Skip fusion if a column-major load can't produce the layout tt.trans
-    // requires.
-    auto transposedType = cast<RankedTensorType>(transOp.getType());
-    unsigned rank = transposedType.getRank();
-    auto distEnc =
-        dyn_cast<ttg::DistributedEncodingTrait>(transposedType.getEncoding());
-    if (!distEnc)
-      return false;
-    tt::LinearLayout ll = distEnc.toLinearLayout(transposedType.getShape());
-
-    std::optional<bool> oneMatrixPerLoadForBT = tt::tools::isEnvValueBool(
-        tt::tools::getStrEnv("TRITON_INTEL_ONE_MATRIX_PER_LOAD_BT"));
-    if (!oneMatrixPerLoadForBT.has_value())
-      oneMatrixPerLoadForBT = descLoadOp->hasAttr(
-          ttgi::TritonIntelGPUDialect::getOneMatrixPerLoadAttrName());
-
-    if (!ttgi::validate2DBlockLoadTile(ll, /*memContiguousDim=*/rank - 2,
-                                       transposedType.getElementTypeBitWidth(),
-                                       transposedType, *oneMatrixPerLoadForBT,
-                                       /*requireTranspose=*/true))
       return false;
 
     return true;
