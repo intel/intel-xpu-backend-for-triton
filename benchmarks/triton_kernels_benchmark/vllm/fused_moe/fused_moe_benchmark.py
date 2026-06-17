@@ -21,7 +21,9 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
+from tests.kernels.moe.utils import make_quantized_test_activations, make_test_weight
 from vllm.model_executor.layers.fused_moe.fused_moe import invoke_fused_moe_triton_kernel, get_default_config
+from vllm_xpu_kernels.fused_moe_interface import cutlass_grouped_gemm as sycl_tla_grouped_gemm
 
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
@@ -110,13 +112,19 @@ def torch_moe_align_block_size(
 def is_enough_memory(x_val, safety_factor=0.80):
     M, N, K, num_experts, topk, dtype, has_bias = x_val
 
-    n_bytes = 2  # bfloat16
-    # A: input activations (M, K)
-    a_mem = M * K * n_bytes
-    # B: weight matrices (num_experts, K, N)
-    b_mem = num_experts * K * N * n_bytes
+    fp8 = dtype == torch.float8_e4m3fn
+
+    # A and B bf16 originals (always allocated, freed later in fp8 case)
+    a_mem = M * K * 2
+    b_mem = num_experts * K * N * 2
+
+    if fp8:
+        # fp8 copies + scales
+        a_mem += M * K + 4
+        b_mem += num_experts * K * N + num_experts * 4
+
     # C: output workspace (M, topk, N)
-    out_mem = M * topk * N * n_bytes
+    out_mem = M * topk * N * 2
 
     required_memory = a_mem + b_mem + out_mem
     return required_memory < DEVICE_TOTAL_MEMORY_BYTES * safety_factor
@@ -134,7 +142,7 @@ def filter_by_memory(configs):
 
 # Benchmark configurations: (M, N, K, num_experts, topk, dtype, has_bias)
 # Each tuple represents one fused MoE GEMM call with the given token count M.
-MM_CONFIGS = [
+MM_CONFIGS_BF16 = [
     # Qwen3-30B-A3B-Instruct w13 with MNK factors (80, 768 * 2 // 4, 2048), num_experts=128, topk=8
     [80, 768 * 2 // 4, 2048, 128, 8, torch.bfloat16, False],
     # Qwen3-30B-A3B-Instruct w2 with MNK factors (80, 2048, 768 * 2 // 2 // 4), num_experts=128, topk=8
@@ -149,11 +157,16 @@ MM_CONFIGS = [
     [8192, 8192 * 2, 5120, 16, 1, torch.bfloat16, False],
 ]
 
-MM_CONFIGS = filter_by_memory(MM_CONFIGS)
+MM_CONFIGS_FP8 = [[M, N, K, num_experts, topk, torch.float8_e4m3fn, has_bias]
+                  for M, N, K, num_experts, topk, _, has_bias in MM_CONFIGS_BF16]
+
+MM_CONFIGS_BF16 = filter_by_memory(MM_CONFIGS_BF16)
+MM_CONFIGS_FP8 = filter_by_memory(MM_CONFIGS_FP8)
 
 # To debug if the benchmark runs at all, without waiting for all configurations to run
 if os.getenv('DEBUG_BENCH', '0') == '1':
-    MM_CONFIGS = MM_CONFIGS[:1]
+    MM_CONFIGS_BF16 = MM_CONFIGS_BF16[:1]
+    MM_CONFIGS_FP8 = MM_CONFIGS_FP8[:1]
 
 
 def _resize_cache(x: torch.Tensor, v: tuple[int, ...]) -> torch.Tensor:
@@ -163,6 +176,19 @@ def _resize_cache(x: torch.Tensor, v: tuple[int, ...]) -> torch.Tensor:
     """
     assert prod(v) <= x.numel(), f"Requested view {v} with {prod(v)} elements exceeds tensor size {x.numel()}"
     return x.flatten()[:prod(v)].view(*v)
+
+
+def _normalize_fp8_scale(scale: torch.Tensor | None) -> torch.Tensor | None:
+    if scale is None:
+        return None
+    return scale.reshape(1) if scale.numel() == 1 else scale
+
+
+def _dequantize_fp8(tensor: torch.Tensor, scale: torch.Tensor | None) -> torch.Tensor:
+    dequantized = tensor.to(torch.float32)
+    if scale is not None:
+        dequantized = dequantized * scale.to(torch.float32)
+    return dequantized
 
 
 RECIPE_TO_DTYPE = {
@@ -245,17 +271,19 @@ def ref_grouped_gemm(input_A, input_B, topk_ids, topk):
     return ref
 
 
-def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_td_patched=False):
+def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_fp8=False, is_td_patched=False):
     supported_providers = {
         'triton' + ('-td' if is_td_patched else ''): 'triton' + ('-td' if is_td_patched else ''),
+        'sycl-tla': 'SYCL-TLA',
     }
 
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
+    configs = MM_CONFIGS_FP8 if is_fp8 else MM_CONFIGS_BF16
 
     @benchmark_suite.perf_report(
         benchmark_suite.Benchmark(
             x_names=['num_tokens', 'output_hidden_size', 'hidden_size', 'num_experts', 'topk', 'dtype', 'has_bias'],
-            x_vals=MM_CONFIGS,
+            x_vals=configs,
             line_arg='provider',
             line_vals=list(providers.keys()),
             line_names=list(providers.values()),
@@ -273,29 +301,65 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_td_
         M = num_tokens
         N = output_hidden_size
         K = hidden_size
+        use_fp8 = dtype == torch.float8_e4m3fn
+        output_dtype = torch.bfloat16
         scores = torch.randn((M, num_experts), device=DEVICE, dtype=torch.float32)
         topk_weights, topk_ids = torch.topk(scores, k=topk, dim=-1, sorted=False)
-        hidden_states = torch.randn((M, K), device=DEVICE, dtype=torch.bfloat16) / 16
-        input_B = torch.randn((num_experts, K, N), dtype=dtype, device=DEVICE)
+
+        if use_fp8:
+            hidden_states, input_A, input_scales = make_quantized_test_activations(
+                1,
+                M,
+                K,
+                in_dtype=output_dtype,
+                quant_dtype=dtype,
+            )
+            hidden_states = hidden_states.squeeze(0)
+            input_A = input_A.squeeze(0)
+            input_scales = _normalize_fp8_scale(input_scales)
+
+            input_B_orig, input_B, weight_scales, _ = make_test_weight(
+                num_experts,
+                N,
+                K,
+                in_dtype=output_dtype,
+                quant_dtype=dtype,
+            )
+            weight_scales = _normalize_fp8_scale(weight_scales)
+            input_B_ref = _dequantize_fp8(input_B, weight_scales).transpose(1, 2).contiguous()
+            hidden_states_ref = _dequantize_fp8(input_A, input_scales)
+        else:
+            hidden_states = torch.randn((M, K), device=DEVICE, dtype=output_dtype) / 16
+            input_A = hidden_states
+            input_scales = None
+            input_B_ref = torch.randn((num_experts, K, N), dtype=output_dtype, device=DEVICE)
+            input_B = input_B_ref.transpose(1, 2).contiguous()
+            weight_scales = None
 
         # Reference output
-        output_ref = ref_grouped_gemm(input_A=hidden_states, input_B=input_B, topk_ids=topk_ids, topk=topk)
+        output_ref = ref_grouped_gemm(
+            input_A=(hidden_states_ref if use_fp8 else hidden_states).to(output_dtype),
+            input_B=input_B_ref.to(output_dtype),
+            topk_ids=topk_ids,
+            topk=topk,
+        )
+        if use_fp8:
+            # Free unused bf16 originals in the fp8 case.
+            del hidden_states, input_B_orig
 
-        input_A = hidden_states
-        m = input_A.shape[0]
-        k = input_A.shape[1]
-        n = input_B.shape[-1]
-        input_B = input_B.transpose(1, 2).contiguous()
+        m = M
+        n = N
+        k = K
         ws_shape = (m, topk, max(n, k))
         workspace = _resize_cache(
             torch.empty(
                 ws_shape[0] * ws_shape[1] * ws_shape[2],
-                dtype=input_A.dtype,
+                dtype=output_dtype,
                 device=input_A.device,
             ),
             (m, topk, n),
         )
-        config = get_default_config(m, num_experts, n, k, topk, dtype)
+        config = get_default_config(m, num_experts, n, k, topk, "fp8_w8a8" if use_fp8 else "bf16")
         sorted_token_ids, expert_ids, num_tokens_post_padded = torch_moe_align_block_size(
             topk_ids=topk_ids,
             block_size=config["BLOCK_SIZE_M"],
@@ -308,6 +372,9 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_td_
         # Total number of (token, expert) route pairs
         num_routed_tokens = m * topk
 
+        quantiles = [0.5, 0.0, 1.0]
+        n_warmup = 600
+
         if provider.startswith('triton'):
 
             def triton_fn():
@@ -315,8 +382,8 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_td_
                     input_A,
                     input_B,
                     workspace,
-                    None,  # input scales
-                    None,  # weight scales
+                    input_scales,
+                    weight_scales,
                     None,  # topk_weights
                     sorted_token_ids,  # sorted_token_ids
                     expert_ids,  # expert_ids
@@ -325,7 +392,7 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_td_
                     topk,
                     config,
                     tl.bfloat16,
-                    False,
+                    use_fp8,
                     False,
                     False,
                     False,
@@ -334,39 +401,64 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_td_
                     None,
                 )
                 return workspace
+
+            triton_fn()  # workspace updated in-place
+            output = workspace.clone().view(-1, n)
+            num_output_tokens = m * topk
+            valid_sorted_token_ids = sorted_token_ids[sorted_token_ids < num_output_tokens].to(torch.long)
+            assert valid_sorted_token_ids.numel() == num_output_tokens
+            output_triton_grouped = output[valid_sorted_token_ids]
+
+            # Correctness check
+            torch.testing.assert_close(
+                output_triton_grouped,
+                output_ref,
+                rtol=6e-2 if use_fp8 else 2e-2,
+                atol=6e-2 if use_fp8 else 1e-2,
+            )
+
+            _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
+                triton_fn,
+                n_warmup=n_warmup,
+                n_repeat=10,
+                quantiles=quantiles,
+            )
+
+        elif provider == 'sycl-tla':
+            # TODO: time SYCL-TLA's grouping/gather alongside the GEMM (via a native prologue) to match Triton's in-kernel gather and make the comparison fair.
+            flat_expert_indices = topk_ids.view(-1)
+            _, input_A_grouped, _ = ref_prologue(input_A, None, flat_expert_indices, topk, num_experts, "bf16")
+            rows_per_expert = flat_expert_indices.bincount(minlength=num_experts).to(torch.int32).tolist()
+            input_B_grouped = input_B.transpose(1, 2).contiguous()
+            output_sycl = torch.empty((input_A_grouped.shape[0], n), dtype=input_A.dtype, device=DEVICE)
+
+            def sycl_tla_fn():
+                sycl_tla_grouped_gemm(input_A_grouped, input_B_grouped, None, output_sycl, rows_per_expert, n, k,
+                                      num_experts)
+                return output_sycl
+
+            sycl_tla_fn()
+            torch.testing.assert_close(output_sycl, output_ref, rtol=2e-2, atol=1e-2)
+
+            _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
+                sycl_tla_fn,
+                n_warmup=n_warmup,
+                n_repeat=10,
+                quantiles=quantiles,
+            )
+
         else:
             raise NotImplementedError(f'Unsupported provider {provider}')
 
-        # Triton output
-        triton_fn()  # workspace updated in-place
-        output = workspace.clone().view(-1, n)
-        num_output_tokens = m * topk
-        valid_sorted_token_ids = sorted_token_ids[sorted_token_ids < num_output_tokens].to(torch.long)
-        assert valid_sorted_token_ids.numel() == num_output_tokens
-        output_triton_grouped = output[valid_sorted_token_ids]
-
-        # Correctness check
-        torch.testing.assert_close(output_triton_grouped, output_ref, rtol=2e-2, atol=1e-2)
-
-        quantiles = [0.5, 0.0, 1.0]
-        n_warmup = 600
-
-        _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
-            triton_fn,
-            n_warmup=n_warmup,
-            n_repeat=10,
-            quantiles=quantiles,
-        )
-
         def gbps(ms):
-            n_bytes = 2  # bfloat16
+            n_bytes = 1 if use_fp8 else 2
             total_bytes = (
                 # B matrix: only load weights for activated experts
                 num_activated_experts * K * N * n_bytes +
                 # A matrix: each token is read once per expert assignment (topk times total)
                 num_routed_tokens * K * n_bytes +
                 # C matrix: output (one entry per routed token)
-                num_routed_tokens * N * n_bytes)
+                num_routed_tokens * N * 2)
             return total_bytes * 1e-9 / (ms * 1e-3)
 
         def tflops(ms):
@@ -383,5 +475,5 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_td_
 if __name__ == '__main__':
     is_td_patched = os.getenv('TD_PATCHED', '0') == '1'
     print('Running fused MoE benchmark...')
-    _benchmark_mm = get_fused_moe_benchmark(is_td_patched=is_td_patched)
+    _benchmark_mm = get_fused_moe_benchmark(is_fp8=(os.getenv('FP8', '0') == '1'), is_td_patched=is_td_patched)
     _benchmark_mm.run(show_plots=False, print_data=True)

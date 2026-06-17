@@ -45,6 +45,10 @@ on:
         description: Use prebuilt vLLM XPU kernels wheel from the current branch (must have a successful nightly build)
         type: boolean
         default: false
+  pull_request:
+    branches:
+      - main
+    types: [labeled]
 
   schedule:
     - cron: "0 8 * * *"
@@ -61,6 +65,7 @@ env:
 jobs:
   build:
     name: vLLM benchmarks
+    if: github.event_name != 'pull_request' || github.event.label.name == 'run-benchmarks'
     runs-on:
       - linux
       - ${{ inputs.runner_label || 'max1550' }}
@@ -231,7 +236,7 @@ jobs:
             --benchmark moe-fp8-benchmark \
             --param_cols="num_experts,max_tokens_per_expert,K,N"
 
-      - name: Run vllm fused moe
+      - name: Run vllm fused moe bf16
         if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
         run: |
           source ./scripts/capture-hw-details.sh
@@ -253,6 +258,30 @@ jobs:
             --tag $TAG \
             --bgroup vllm \
             --benchmark fused-moe-benchmark \
+            --param_cols="num_tokens,output_hidden_size,hidden_size,num_experts,topk"
+
+      - name: Run vllm fused moe fp8
+        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
+        run: |
+          source ./scripts/capture-hw-details.sh
+
+          cd benchmarks/triton_kernels_benchmark/vllm
+          FP8="1" bash run_benchmark.sh fused_moe --reports $REPORTS
+          # Transform baseline results
+          python ../../transform_results.py \
+            $REPORTS/fused-moe-gemm-performance.csv \
+            $REPORTS/fused-moe-gemm-fp8-report.csv \
+            --tag $TAG \
+            --bgroup vllm \
+            --benchmark fused-moe-fp8-benchmark \
+            --param_cols="num_tokens,output_hidden_size,hidden_size,num_experts,topk"
+          # Transform tensor descriptor patched results
+          python ../../transform_results.py \
+            $REPORTS/fused-moe-gemm-performance-td.csv \
+            $REPORTS/fused-moe-gemm-fp8-td-report.csv \
+            --tag $TAG \
+            --bgroup vllm \
+            --benchmark fused-moe-fp8-benchmark \
             --param_cols="num_tokens,output_hidden_size,hidden_size,num_experts,topk"
 
       - name: Upload benchmark reports

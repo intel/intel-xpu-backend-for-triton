@@ -126,6 +126,18 @@ loadCacheControlToCacheControls(Builder &builder,
 }
 
 static bool isSPVBuiltinAvailableImpl(TritonGEN::Matrix2DBlockLoadOp op) {
+  // FIXME: The following signatures are not valid in SPV interface.
+
+  // intel_sub_group_2d_block_read_64b_2r8x1c
+  if (op.getElemSizeInBits() == 64 && op.getTileHeight() == 2 &&
+      op.getTileWidth() == 8 && op.getVBlocks() == 1)
+    return false;
+
+  // intel_sub_group_2d_block_read_64b_4r4x1c
+  if (op.getElemSizeInBits() == 64 && op.getTileHeight() == 4 &&
+      op.getTileWidth() == 4 && op.getVBlocks() == 1)
+    return false;
+
   // FIXME: The SPV block load only support subgroup size 16.
   int subGroupSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(
       op->getParentOfType<mlir::ModuleOp>());

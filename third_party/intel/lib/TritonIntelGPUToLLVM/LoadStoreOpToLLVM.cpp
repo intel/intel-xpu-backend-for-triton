@@ -694,7 +694,8 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     return triton::gpu::intel::getDpasLayout(tensorTy);
   }
 
-  // Returns the pitch (stride in bytes) for a regular pointer.
+  // Pitch (row stride in bytes) for a regular pointer, or null when it is not
+  // a usable compile-time constant. Prefetch falls back to getRuntimePitch().
   Value getPitch(ConversionPatternRewriter &rewriter, Value ptr,
                  unsigned elemSizeInBits, unsigned dim) const {
     Location loc = ptr.getLoc();
@@ -713,8 +714,31 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
       return b.i32_val(pitch);
     }
     assert(stride == -1 && "invalid stride < 0");
-
     return nullptr;
+  }
+
+  // Recover a runtime pitch when the constant stride is unknown: build
+  // pitch = runtime_stride * elemSizeInBytes, like the 2D block load does.
+  // Returns null if there is no runtime stride or the row is too narrow.
+  //
+  // A runtime pitch cannot be range-checked at compile time and the verifier
+  // only checks constant pitches, so we reuse the load path guards: the
+  // 16-byte alignment is proven by MaterializeBlockPointer, and the
+  // full_row >= 64 check below covers the minimum. Only prefetch uses this;
+  // the store path still needs a constant pitch.
+  Value getRuntimePitch(ConversionPatternRewriter &rewriter, Value ptr,
+                        unsigned elemSizeInBits, unsigned dim,
+                        int64_t fullRowElems) const {
+    Location loc = ptr.getLoc();
+
+    constexpr int64_t MIN_PITCH = 64;
+    if (fullRowElems * elemSizeInBits / 8 < MIN_PITCH)
+      return nullptr;
+
+    Value lda = getRuntimeStrideValue(strideAnalysis, ptr, dim);
+    if (!lda)
+      return nullptr;
+    return materializePitchBytes(rewriter, loc, lda, elemSizeInBits / 8);
   }
 
   /// Configuration produced by configureDPASLoadTypes().
@@ -1492,8 +1516,16 @@ struct PrefetchOpConversion
         masks[offset] = maskElems[i];
     }
 
+    unsigned pitchDim = memoryRowMajor ? 0 : 1;
     Value rowStrideInBytes =
-        getPitch(rewriter, op.getPtr(), elemSizeInBits, memoryRowMajor ? 0 : 1);
+        getPitch(rewriter, op.getPtr(), elemSizeInBits, pitchDim);
+    if (!rowStrideInBytes) {
+      // No constant pitch: a prefetch may use a runtime stride. The full row
+      // width is the contiguous tensor dimension.
+      int64_t fullRowElems = tensorShape[memoryRowMajor ? rank - 1 : rank - 2];
+      rowStrideInBytes = getRuntimePitch(rewriter, op.getPtr(), elemSizeInBits,
+                                         pitchDim, fullRowElems);
+    }
     if (!rowStrideInBytes)
       return failure();
 
@@ -4062,10 +4094,9 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
       }
     }
 
-    // Surface parameters from op attributes.
     Value baseWidth = b.i32_val(op.getBaseWidth() * cfg.vBlocks);
     Value baseHeight = b.i32_val(op.getBaseHeight());
-    Value pitch = b.i32_val(op.getBasePitch());
+    Value pitch = adaptor.getBasePitch();
 
     unsigned blockColIdx = cfg.isTransposeRequired ? cfg.rowDim : cfg.colDim;
 
@@ -4153,9 +4184,10 @@ prepareLocalAtomicScatterRMW(triton::gpu::LocalAtomicScatterRMWOp op, Value dst,
       emitIndices(loc, rewriter, targetInfo, activeRegLayout, valuesTy,
                   /*withCTAOffset=*/true);
 
-  SmallVector<Value> ptrs =
-      computeLocalPtrs(loc, memDescTy, smemObj, llvmElemTy, idxValues,
-                       srcIndices, op.getAxis(), rewriter);
+  SmallVector<Value> ptrs = llvm::map_to_vector(
+      computeLocalAddrs(loc, memDescTy, smemObj, llvmElemTy, idxValues,
+                        srcIndices, op.getAxis(), rewriter),
+      [](const LocalSharedMemoryAddress &addr) { return addr.ptr; });
 
   return LocalAtomicScatterRMWInfo{valuesTy,        llvmElemTy, regLayout,
                                    removeBroadcast, threadPred, values,

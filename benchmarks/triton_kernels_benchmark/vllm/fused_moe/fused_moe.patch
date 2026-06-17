@@ -81,13 +81,15 @@ diff --git a/vllm/model_executor/layers/fused_moe/fused_moe.py b/vllm/model_exec
          if use_int8_w8a16:
              accumulator = tl.dot(a, b.to(compute_type), acc=accumulator)
 @@ -528,9 +531,6 @@
-                     accumulator += tl.dot(a, b)
+-                    accumulator += tl.dot(a, b)
++                    accumulator = tl.dot(a, b, accumulator)
          else:
-             accumulator += tl.dot(a, b)
+-            accumulator += tl.dot(a, b)
++            accumulator = tl.dot(a, b, accumulator)
 -        # Advance the ptrs to the next K block.
 -        a_ptrs += BLOCK_SIZE_K * stride_ak
 -        b_ptrs += BLOCK_SIZE_K * stride_bk
-
+ 
      # Dequantization for supported quantization schemes:
      #   - int8_w8a16
 @@ -800,6 +800,7 @@

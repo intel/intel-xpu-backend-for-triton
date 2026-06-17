@@ -81,7 +81,7 @@ direct knowledge of the memory access pattern, enabling it to emit optimal hardw
 #     for _ in range(0, K, BLOCK_SIZE_K):
 #         a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
 #         b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
-#         accumulator += tl.dot(a, b)
+#         accumulator = tl.dot(a, b, accumulator)
 #         off_k += BLOCK_SIZE_K
 
 # %%
@@ -169,7 +169,7 @@ def matmul_kernel_with_tensor_descriptors(
         a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
         b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
         # We accumulate along the K dimension.
-        accumulator += tl.dot(a, b, out_dtype=ACCUMULATOR_DTYPE)
+        accumulator = tl.dot(a, b, accumulator, out_dtype=ACCUMULATOR_DTYPE)
         # Advance the K offset for the next iteration.
         # See above `Iterating over K` section for details.
         off_k += BLOCK_SIZE_K
@@ -252,7 +252,7 @@ def matmul_kernel_with_tensor_descriptors_batched(
         a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
         b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
         # We accumulate along the K dimension.
-        accumulator += tl.dot(a, b, out_dtype=ACCUMULATOR_DTYPE)
+        accumulator = tl.dot(a, b, accumulator, out_dtype=ACCUMULATOR_DTYPE)
         # Advance the K offset for the next iteration.
         # See above `Iterating over K` section for details.
         off_k += BLOCK_SIZE_K
