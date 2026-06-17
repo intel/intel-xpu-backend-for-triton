@@ -25,29 +25,14 @@ def native_torch_fused_gemm(x, w_g, w_fc, b_g, b_fc):
 
 
 def get_fused_gemm_autotune_configs() -> list[triton.Config]:
-    return [
-        triton.Config(
-            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8, 'grf_mode': '256'},
-            num_stages=3, num_warps=8),
-        triton.Config(
-            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'grf_mode': '256'},
-            num_stages=3, num_warps=8),
-        triton.Config(
-            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'grf_mode': '256'},
-            num_stages=3, num_warps=16),
-        triton.Config(
-            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'grf_mode': '256'},
-            num_stages=3, num_warps=32),
-        triton.Config(
-            {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4, 'grf_mode': '256'},
-            num_stages=3, num_warps=16),
-        triton.Config(
-            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '256'},
-            num_stages=3, num_warps=16),
-        triton.Config(
-            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8, 'grf_mode': '256'},
-            num_stages=3, num_warps=32),
-    ]
+    return [ triton.Config({'BLOCK_SIZE_M': BM, 'BLOCK_SIZE_N': BN, 'BLOCK_SIZE_K': BK, 'GROUP_SIZE_M': G}, num_stages=s, num_warps=w) \
+             for BM in [128, 256] \
+             for BN in [64, 128] \
+             for BK in [32, 64] \
+             for G in [4, 8, 16] \
+             for s in [2, 3, 4] \
+             for w in [8, 16, 32] \
+   ]
 
 
 @triton.autotune(
@@ -105,8 +90,6 @@ def fused_gemm_swiglu_kernel(
     )
 
     offset_n = off_n + tl.arange(0, BLOCK_SIZE_N)
-    b_g = tl.load(b_g_ptr + offset_n, mask=offset_n < N, other=0.0)
-    b_fc = tl.load(b_fc_ptr + offset_n, mask=offset_n < N, other=0.0)
 
     acc_g = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     acc_fc = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
@@ -119,6 +102,8 @@ def fused_gemm_swiglu_kernel(
         acc_fc = tl.dot(x, w_fc, acc_fc)
         off_k += BLOCK_SIZE_K
 
+    b_g = tl.load(b_g_ptr + offset_n, mask=offset_n < N, other=0.0)
+    b_fc = tl.load(b_fc_ptr + offset_n, mask=offset_n < N, other=0.0)
     acc_g += b_g[None, :]
     acc_fc += b_fc[None, :]
 
