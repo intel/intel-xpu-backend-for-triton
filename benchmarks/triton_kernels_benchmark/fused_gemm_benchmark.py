@@ -101,8 +101,6 @@ def fused_gemm_swiglu_kernel(
     )
 
     offset_n = off_n + tl.arange(0, BLOCK_SIZE_N)
-    b_g = tl.load(b_g_ptr + offset_n, mask=offset_n < N, other=0.0)
-    b_fc = tl.load(b_fc_ptr + offset_n, mask=offset_n < N, other=0.0)
 
     acc_g = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     acc_fc = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
@@ -113,6 +111,8 @@ def fused_gemm_swiglu_kernel(
         acc_g = tl.dot(x, w_g, acc_g)
         acc_fc = tl.dot(x, w_fc, acc_fc)
 
+    b_g = tl.load(b_g_ptr + offset_n, mask=offset_n < N, other=0.0)
+    b_fc = tl.load(b_fc_ptr + offset_n, mask=offset_n < N, other=0.0)
     acc_g += b_g[None, :]
     acc_fc += b_fc[None, :]
 
