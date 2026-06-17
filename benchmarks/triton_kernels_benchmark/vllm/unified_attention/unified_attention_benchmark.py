@@ -11,6 +11,9 @@ Unified Attention benchmark
 This benchmark is based on the test_triton_unified_attention.py tests
 """
 import os
+import atexit
+import csv
+import sys
 from itertools import product
 from typing import Optional
 
@@ -30,11 +33,363 @@ except ImportError as e:
 from vllm.platforms import current_platform
 from vllm_xpu_kernels.flash_attn_interface import flash_attn_varlen_func as sycl_tla_attention
 
+_unified_attention_module = sys.modules[unified_attention.__module__]
+_original_unified_attention = unified_attention
+_LAST_UNIFIED_ATTENTION_LOCALS: dict[str, object] = {}
+
+
+def _trace_unified_attention(frame, event, arg):
+    if event == 'return' and frame.f_code is _original_unified_attention.__code__:
+        _LAST_UNIFIED_ATTENTION_LOCALS.clear()
+        _LAST_UNIFIED_ATTENTION_LOCALS.update(frame.f_locals)
+    return _trace_unified_attention
+
+
+def _recording_unified_attention(*args, **kwargs):
+    previous_trace = sys.gettrace()
+    _LAST_UNIFIED_ATTENTION_LOCALS.clear()
+    sys.settrace(_trace_unified_attention)
+    try:
+        return _original_unified_attention(*args, **kwargs)
+    finally:
+        sys.settrace(previous_trace)
+
+
+unified_attention = _recording_unified_attention
+
 float8_info = torch.finfo(current_platform.fp8_dtype())
 
 TOTAL_MEMORY_BYTES = benchmark_suite.get_total_gpu_memory_bytes()
 
 IS_FP8 = (os.getenv('FP8', '0') == '1')
+AUTOTUNE_DECISIONS_FILE = 'unified-attention-autotune-decisions.csv'
+AUTOTUNE_DECISION_ROWS: list[dict[str, object]] = []
+AUTOTUNE_KEY_COLUMNS = [
+    'BLOCK_SIZE',
+    'HEAD_SIZE',
+    'IS_FP8_INPUT',
+    'IS_3D',
+    'BLOCK_Q',
+    'num_queries_per_kv',
+    'TILE_SIZE',
+    'BLOCK_M',
+    'NUM_SEQS_BUCKET',
+    'MAX_SEQLEN_K_BUCKET',
+    'EFFECTIVE_MAX_SEQLEN_K_BUCKET',
+]
+AUTOTUNE_DECISION_FIELDNAMES = [
+    'benchmark_name',
+    'td_patched',
+    'benchmark_dtype',
+    'provider',
+    'q_heads',
+    'k_heads',
+    'head_size',
+    'qdtype',
+    'seq_lens',
+    'sliding_window',
+    'soft_cap',
+    'num_blocks',
+    'block_size',
+    'is_prefill',
+    'autotune_key_names',
+    'autotune_key_values',
+    'key_BLOCK_SIZE',
+    'key_HEAD_SIZE',
+    'key_IS_FP8_INPUT',
+    'key_IS_3D',
+    'key_BLOCK_Q',
+    'key_num_queries_per_kv',
+    'key_TILE_SIZE',
+    'key_BLOCK_M',
+    'key_NUM_SEQS_BUCKET',
+    'key_MAX_SEQLEN_K_BUCKET',
+    'key_EFFECTIVE_MAX_SEQLEN_K_BUCKET',
+    'selected_config',
+    'selected_TILE_SIZE',
+    'selected_BLOCK_Q',
+    'actual_TILE_SIZE',
+    'actual_BLOCK_Q',
+    'actual_num_warps',
+    'actual_num_stages',
+    'selected_NUM_SEGMENTS_PER_SEQ',
+    'selected_num_warps',
+    'selected_num_stages',
+    'configs_after_prune',
+    'autotune_cache_size',
+    'mean_ms',
+    'cv',
+]
+
+
+def _reports_dir_from_argv() -> str:
+    reports_dir = os.getenv('UA_AUTOTUNE_DECISION_REPORTS', '')
+    if reports_dir:
+        return reports_dir
+
+    argv = sys.argv[1:]
+    for idx, arg in enumerate(argv):
+        if arg == '--reports' and idx + 1 < len(argv):
+            reports_dir = argv[idx + 1]
+        elif arg.startswith('--reports='):
+            reports_dir = arg.split('=', 1)[1]
+    return reports_dir
+
+
+def _format_csv_value(value: object) -> str:
+    if value is None:
+        return ''
+    if isinstance(value, (list, tuple, dict)):
+        return repr(value)
+    return str(value)
+
+
+def _config_kwargs(config: object) -> dict[str, object]:
+    if config is None:
+        return {}
+    kwargs = dict(getattr(config, 'kwargs', {}) or {})
+    for attr in ('num_warps', 'num_stages', 'num_ctas'):
+        value = getattr(config, attr, None)
+        if value is not None:
+            kwargs[attr] = value
+    return kwargs
+
+
+def _format_config(config: object) -> str:
+    if isinstance(config, str):
+        return config
+    kwargs = _config_kwargs(config)
+    return ';'.join(f'{key}={_format_csv_value(kwargs[key])}' for key in sorted(kwargs))
+
+
+def _config_value(config: object, key: str) -> object:
+    return _config_kwargs(config).get(key, '')
+
+
+def _observed_value(*names: str) -> object:
+    for name in names:
+        if name in _LAST_UNIFIED_ATTENTION_LOCALS:
+            return _LAST_UNIFIED_ATTENTION_LOCALS[name]
+    return ''
+
+
+def _actual_tile_size(config: object) -> object:
+    config_value = _config_value(config, 'TILE_SIZE')
+    if config_value != '':
+        return config_value
+
+    observed_tile_size = _observed_value('tile_size', 'TILE_SIZE')
+    if observed_tile_size != '':
+        return observed_tile_size
+
+    use_3d = _LAST_UNIFIED_ATTENTION_LOCALS.get('use_3d')
+    if use_3d is True:
+        return _observed_value('TILE_SIZE_DECODE')
+    if use_3d is False:
+        return _observed_value('TILE_SIZE_PREFILL')
+    return ''
+
+
+def _int_value(value: object) -> int | None:
+    if value == '' or value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return None
+
+
+def _actual_block_q(config: object, q_heads: int, k_heads: int) -> object:
+    config_value = _config_value(config, 'BLOCK_Q')
+    if config_value != '':
+        return config_value
+
+    observed = _observed_value('BLOCK_Q')
+    if observed != '':
+        return observed
+
+    block_m = _int_value(_actual_block_m(config))
+    num_queries = _int_value(_num_queries_per_kv(q_heads, k_heads))
+    if block_m is not None and num_queries not in (None, 0):
+        return block_m // num_queries
+    return ''
+
+
+def _actual_config_value(config: object, key: str, default: object = '') -> object:
+    config_value = _config_value(config, key)
+    if config_value != '':
+        return config_value
+
+    observed = _observed_value(key)
+    if observed != '':
+        return observed
+    return default
+
+
+def _is_fp8_input(qdtype: torch.dtype | None) -> bool:
+    observed = _observed_value('is_fp8_input', 'IS_FP8_INPUT', 'Q_IS_FP8')
+    if observed != '':
+        return bool(observed)
+    return qdtype is not None and getattr(qdtype, 'itemsize', 0) == 1
+
+
+def _is_3d() -> object:
+    return _observed_value('use_3d', 'IS_3D')
+
+
+def _num_queries_per_kv(q_heads: int, k_heads: int) -> object:
+    observed = _observed_value('num_queries_per_kv')
+    if observed != '':
+        return observed
+    return q_heads // k_heads
+
+
+def _actual_block_m(config: object) -> object:
+    config_value = _config_value(config, 'BLOCK_M')
+    if config_value != '':
+        return config_value
+    return _observed_value('BLOCK_M')
+
+
+def _autotune_key_values(qdtype: torch.dtype | None, head_size: int, seq_lens: list[tuple[int, int]],
+                         block_size: int, config: object, q_heads: int, k_heads: int) -> dict[str, object]:
+    return {
+        'BLOCK_SIZE': block_size,
+        'HEAD_SIZE': head_size,
+        'IS_FP8_INPUT': _is_fp8_input(qdtype),
+        'IS_3D': _is_3d(),
+        'BLOCK_Q': _actual_block_q(config, q_heads, k_heads),
+        'num_queries_per_kv': _num_queries_per_kv(q_heads, k_heads),
+        'TILE_SIZE': _actual_tile_size(config),
+        'BLOCK_M': _actual_block_m(config),
+        'NUM_SEQS_BUCKET': _observed_value('NUM_SEQS_BUCKET', 'num_seqs_bucket'),
+        'MAX_SEQLEN_K_BUCKET': _observed_value('MAX_SEQLEN_K_BUCKET', 'max_seqlen_k_bucket'),
+        'EFFECTIVE_MAX_SEQLEN_K_BUCKET': _observed_value(
+            'EFFECTIVE_MAX_SEQLEN_K_BUCKET', 'effective_max_seqlen_k_bucket'
+        ),
+    }
+
+
+def _get_pruned_configs(kernel: object, meta: dict[str, object]) -> list[object]:
+    if kernel is None or not hasattr(kernel, 'prune_configs'):
+        return []
+
+    old_nargs = getattr(kernel, 'nargs', None)
+    try:
+        kernel.nargs = {}
+        return list(kernel.prune_configs(dict(meta)))
+    except Exception as exc:  # pragma: no cover - diagnostic path only
+        return [f'error={type(exc).__name__}:{exc}']
+    finally:
+        try:
+            kernel.nargs = old_nargs
+        except Exception:
+            pass
+
+
+def _autotune_cache(kernel: object, is_3d: object) -> object:
+    if is_3d is True:
+        cache = getattr(_unified_attention_module, 'UNIFIED_ATTENTION_3D_TILE_CACHE', None)
+        if cache is not None:
+            return cache
+    return getattr(kernel, 'cache', {}) or {}
+
+
+def _record_autotune_decision(
+    *,
+    benchmark_name: str,
+    provider: str,
+    q_heads: int,
+    k_heads: int,
+    head_size: int,
+    qdtype: torch.dtype | None,
+    seq_lens: list[tuple[int, int]],
+    sliding_window: int | None,
+    soft_cap: float | None,
+    num_blocks: int,
+    block_size: int,
+    mean_ms: float,
+    cv: float,
+) -> None:
+    kernel = getattr(_unified_attention_module, 'kernel_unified_attention', None)
+    is_3d = _is_3d()
+    selected_config = None
+    if is_3d is True:
+        selected_config = getattr(_unified_attention_module, 'LAST_UNIFIED_ATTENTION_3D_CONFIG', None)
+    if selected_config is None and kernel is not None:
+        selected_config = getattr(kernel, 'best_config', None)
+    if selected_config is None:
+        selected_config = ''
+
+    key_names = list(getattr(kernel, 'keys', []) or []) if kernel is not None else []
+    key_values = _autotune_key_values(qdtype, head_size, seq_lens, block_size, selected_config, q_heads, k_heads)
+    pruned_configs = _get_pruned_configs(kernel, key_values)
+    autotune_cache = _autotune_cache(kernel, is_3d)
+    selected_num_segments = _config_value(selected_config, 'NUM_SEGMENTS_PER_SEQ')
+    if is_3d is True and selected_num_segments == '':
+        selected_num_segments = _observed_value('num_segments', 'num_par_softmax_segments')
+
+    row = {
+        'benchmark_name': benchmark_name,
+        'td_patched': os.getenv('TD_PATCHED', '0'),
+        'benchmark_dtype': 'fp8' if IS_FP8 else 'bf16',
+        'provider': provider,
+        'q_heads': q_heads,
+        'k_heads': k_heads,
+        'head_size': head_size,
+        'qdtype': _format_csv_value(qdtype),
+        'seq_lens': _format_csv_value(seq_lens),
+        'sliding_window': _format_csv_value(sliding_window),
+        'soft_cap': _format_csv_value(soft_cap),
+        'num_blocks': num_blocks,
+        'block_size': block_size,
+        'is_prefill': max(query_len for query_len, _ in seq_lens) > 1,
+        'autotune_key_names': ';'.join(key_names),
+        'autotune_key_values': _format_csv_value({key: key_values.get(key, '') for key in key_names}),
+        'selected_config': _format_config(selected_config),
+        'selected_TILE_SIZE': _config_value(selected_config, 'TILE_SIZE'),
+        'selected_BLOCK_Q': _config_value(selected_config, 'BLOCK_Q'),
+        'actual_TILE_SIZE': _actual_tile_size(selected_config),
+        'actual_BLOCK_Q': _actual_block_q(selected_config, q_heads, k_heads),
+        'actual_num_warps': _actual_config_value(selected_config, 'num_warps', 4),
+        'actual_num_stages': _actual_config_value(selected_config, 'num_stages', 2),
+        'selected_NUM_SEGMENTS_PER_SEQ': selected_num_segments,
+        'selected_num_warps': _config_value(selected_config, 'num_warps'),
+        'selected_num_stages': _config_value(selected_config, 'num_stages'),
+        'configs_after_prune': '|'.join(_format_config(config) for config in pruned_configs),
+        'autotune_cache_size': len(autotune_cache),
+        'mean_ms': mean_ms,
+        'cv': cv,
+    }
+    for key in AUTOTUNE_KEY_COLUMNS:
+        row[f'key_{key}'] = key_values.get(key, '')
+    AUTOTUNE_DECISION_ROWS.append(row)
+
+
+def _write_autotune_decisions() -> None:
+    if not AUTOTUNE_DECISION_ROWS:
+        return
+
+    reports_dir = _reports_dir_from_argv()
+    if not reports_dir:
+        return
+
+    os.makedirs(reports_dir, exist_ok=True)
+    report_path = os.path.join(reports_dir, AUTOTUNE_DECISIONS_FILE)
+    write_header = not os.path.exists(report_path) or os.path.getsize(report_path) == 0
+    with open(report_path, 'a', newline='', encoding='utf-8') as report_file:
+        writer = csv.DictWriter(report_file, fieldnames=AUTOTUNE_DECISION_FIELDNAMES, extrasaction='ignore')
+        if write_header:
+            writer.writeheader()
+        writer.writerows(AUTOTUNE_DECISION_ROWS)
+    print(f'Wrote unified attention autotune decisions to {report_path}')
+    AUTOTUNE_DECISION_ROWS.clear()
+
+
+atexit.register(_write_autotune_decisions)
 
 
 def ref_paged_attn(
@@ -405,6 +760,21 @@ def get_unified_attention_benchmark(
                 n_warmup=n_warmup,
                 n_repeat=10,
                 quantiles=quantiles,
+            )
+            _record_autotune_decision(
+                benchmark_name='unified-attention-performance' + ('-td' if is_td_patched else ''),
+                provider=provider,
+                q_heads=q_heads,
+                k_heads=k_heads,
+                head_size=head_size,
+                qdtype=qdtype,
+                seq_lens=seq_lens,
+                sliding_window=sliding_window,
+                soft_cap=soft_cap,
+                num_blocks=num_blocks,
+                block_size=block_size,
+                mean_ms=mean_ms,
+                cv=cv,
             )
         elif provider == 'sycl-tla':
             expected_output = torch_fn() if BENCHMARKING_CONFIG["verify"] else None
