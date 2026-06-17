@@ -25,6 +25,38 @@ if (NOT SyclTlaLibrary_FOUND)
        FetchContent_Populate(sycl-tla-library)
     endif()
 
+    # Apply local patches to the fetched SYCL-TLA source.
+    # 0001: causal FMHA forward hangs on Xe because the new mainloop uses a
+    # workgroup-scope split barrier inside a K-loop whose trip count is
+    # per-subgroup under causal masking (divergent -> deadlock). The legacy
+    # kernel already guards this with subgroup scope; this patch applies the
+    # same fix to applications/flash_attention_v2/collective/xe_fmha_fwd_mainloop.hpp.
+    file(GLOB SyclTlaLibrary_PATCHES
+         "${CMAKE_CURRENT_SOURCE_DIR}/sycl_tla_kernel/patches/*.patch")
+    foreach(_patch ${SyclTlaLibrary_PATCHES})
+        # Idempotent: skip if already applied (git apply --reverse --check succeeds).
+        execute_process(
+            COMMAND git apply --reverse --check "${_patch}"
+            WORKING_DIRECTORY "${SyclTlaLibrary_SOURCE_DIR}"
+            RESULT_VARIABLE _already_applied
+            OUTPUT_QUIET ERROR_QUIET)
+        if(_already_applied EQUAL 0)
+            message(STATUS "SYCL-TLA patch already applied: ${_patch}")
+        else()
+            execute_process(
+                COMMAND git apply "${_patch}"
+                WORKING_DIRECTORY "${SyclTlaLibrary_SOURCE_DIR}"
+                RESULT_VARIABLE _patch_result
+                OUTPUT_VARIABLE _patch_output
+                ERROR_VARIABLE _patch_output)
+            if(NOT _patch_result EQUAL 0)
+                message(FATAL_ERROR
+                    "Failed to apply SYCL-TLA patch ${_patch}:\n${_patch_output}")
+            endif()
+            message(STATUS "Applied SYCL-TLA patch: ${_patch}")
+        endif()
+    endforeach()
+
     set(SyclTlaLibrary_INCLUDE_DIR "${SyclTlaLibrary_SOURCE_DIR}/include" CACHE INTERNAL "SyclTlaLibrary_SOURCE_DIR")
     set(SyclTlaLibrary_INCLUDE_TOOL_DIR "${SyclTlaLibrary_SOURCE_DIR}/tools/util/include" CACHE INTERNAL "SyclTlaLibrary_SOURCE_DIR")
     set(SyclTlaLibrary_INCLUDE_APPLICATION_DIR "${SyclTlaLibrary_SOURCE_DIR}/applications" CACHE INTERNAL "SyclTlaLibrary_SOURCE_DIR")
