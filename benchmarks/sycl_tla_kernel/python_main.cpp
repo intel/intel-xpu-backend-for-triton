@@ -16,7 +16,6 @@
     }                                                                          \
   }
 
-#include "attention/attention.hpp"
 #include "attention/benchmark_runner.hpp"
 #include "attention/fmha_configuration.hpp"
 #include "gemm/gemm.hpp"
@@ -93,34 +92,24 @@ auto attention_08(const at::Tensor &Q, const at::Tensor &K, const at::Tensor &V,
         "Query result for SM count per device: " << hw_info.sm_count);
   }
 
-  if (HeadSizeVO == 64 && Causal == true) {
-    // Instantiate and run the benchmark
-    auto kernel =
-        ::FMHARunner<FMHAPrefill_HF16_HF16_HF16_FP32_RCR_h64_Causal_FixedLen>();
-    kernel.run(options, hw_info, Q, K, V, O);
-    return 0;
-  } else if (HeadSizeVO == 64 && Causal != true) {
-    // Instantiate and run the benchmark
-    auto kernel = ::FMHARunner<
-        FMHAPrefill_HF16_HF16_HF16_FP32_RCR_h64_NonCausal_FixedLen>();
-    kernel.run(options, hw_info, Q, K, V, O);
-    return 0;
-  } else if (HeadSizeVO == 128 && Causal == true) {
-    // Instantiate and run the benchmark
-    auto kernel = ::FMHARunner<
-        FMHAPrefill_HF16_HF16_HF16_FP32_RCR_h128_Causal_FixedLen>();
-    kernel.run(options, hw_info, Q, K, V, O);
-    return 0;
-  } else if (HeadSizeVO == 128 && Causal != true) {
-    // Instantiate and run the benchmark
-    auto kernel = ::FMHARunner<
-        FMHAPrefill_HF16_HF16_HF16_FP32_RCR_h128_NonCausal_FixedLen>();
-    kernel.run(options, hw_info, Q, K, V, O);
-    return 0;
+  if (HeadSizeVO == 64 && Causal) {
+    ::FMHARunner<FMHAPrefill_HF16_HF16_HF16_FP32_RCR_h64_Causal_FixedLen>().run(
+        options, hw_info, Q, K, V, O);
+  } else if (HeadSizeVO == 64 && !Causal) {
+    ::FMHARunner<FMHAPrefill_HF16_HF16_HF16_FP32_RCR_h64_NonCausal_FixedLen>()
+        .run(options, hw_info, Q, K, V, O);
+  } else if (HeadSizeVO == 128 && Causal) {
+    ::FMHARunner<FMHAPrefill_HF16_HF16_HF16_FP32_RCR_h128_Causal_FixedLen>()
+        .run(options, hw_info, Q, K, V, O);
+  } else if (HeadSizeVO == 128 && !Causal) {
+    ::FMHARunner<FMHAPrefill_HF16_HF16_HF16_FP32_RCR_h128_NonCausal_FixedLen>()
+        .run(options, hw_info, Q, K, V, O);
   } else {
-    std::cerr << "Unsupported HeadSizeVO: " << HeadSizeVO << std::endl;
-    return -1;
+    TORCH_CHECK(false,
+                "sycl-tla attention: unsupported HeadSizeVO=", HeadSizeVO,
+                " (supported: 64, 128)");
   }
+  return 0;
 }
 
 ////////////////////////////////////////////////////////////////////////////////

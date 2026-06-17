@@ -6,7 +6,7 @@
  * modification, are permitted provided that the following conditions are met:
  *
  * 1. Redistributions of source code must retain the above copyright notice,
- *this list of conditions and the following disclaimer.
+ * this list of conditions and the following disclaimer.
  *
  * 2. Redistributions in binary form must reproduce the above copyright notice,
  * this list of conditions and the following disclaimer in the documentation
@@ -19,14 +19,14 @@
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
  * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- *ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
- *LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- *CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- *SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- *INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- *CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- *ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- *POSSIBILITY OF SUCH DAMAGE.
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
  *
  **************************************************************************************************/
 #pragma once
@@ -163,10 +163,11 @@ template <class FMHAConfiguration> struct FMHARunner {
 
     decltype(problem_shape_in) problem_size;
 
-    static_assert(isVarLen == false &&
+    static_assert(isVarLen == false,
                   "Variable length sequences not supported in this runner");
-    assert(options.seq_len_kv_cache == 0 &&
-           "KV cache not supported in this runner");
+    TORCH_CHECK(options.seq_len_kv_cache == 0,
+                "sycl-tla attention: KV cache not supported (seq_len_kv_cache=",
+                options.seq_len_kv_cache, ")");
     problem_size = problem_shape_in;
     shape.batch = options.batch;
     shape.num_heads_q = options.num_heads_q;
@@ -199,8 +200,8 @@ template <class FMHAConfiguration> struct FMHARunner {
     stride_V_cache = cutlass::make_cute_packed_stride(StrideV{}, shape_V_cache);
     stride_O = cutlass::make_cute_packed_stride(StrideO{}, shape_O);
 
-    static_assert(PagedKV == false && "PagedKV not supported in this runner");
-    static_assert(isVarLen == false && "only support fixed length");
+    static_assert(PagedKV == false, "PagedKV not supported in this runner");
+    static_assert(isVarLen == false, "only support fixed length");
 
     return shape;
   }
@@ -270,13 +271,11 @@ template <class FMHAConfiguration> struct FMHARunner {
     size_t workspace_size = FMHAKernel::get_workspace_size(arguments);
     cutlass::device_memory::allocation<uint8_t> workspace(workspace_size);
 
-    if (!FMHAKernel::can_implement(arguments)) {
-      std::cout << "Invalid Problem Size: " << options.batch << 'x'
-                << options.num_heads_q << 'x' << options.seq_len_qo << 'x'
-                << options.seq_len_kv << 'x' << options.head_size_qk
-                << std::endl;
-      return;
-    }
+    TORCH_CHECK(FMHAKernel::can_implement(arguments),
+                "sycl-tla attention: kernel cannot implement problem size ",
+                options.batch, 'x', options.num_heads_q, 'x',
+                options.seq_len_qo, 'x', options.seq_len_kv, 'x',
+                options.head_size_qk);
     CUTLASS_CHECK(FMHAKernel::initialize_workspace(arguments, workspace.get()));
     typename FMHAKernel::Params params =
         FMHAKernel::to_underlying_arguments(arguments, workspace.get());
