@@ -214,3 +214,25 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32,
     tt.return
   }
 }
+
+
+// -----
+
+// COM: Ensure offsets derived from a loop induction variable preserve divisibility for block IO lowering.
+#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @offset_loop_var
+  tt.func public @offset_loop_var(%x_ptr: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %w_g_ptr: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %w_fc_ptr: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %b_g_ptr: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %b_fc_ptr: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %y_ptr: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %M: i32 {tt.divisibility = 16 : i32}, %N: i32 {tt.divisibility = 16 : i32}, %K: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c64_i32 = arith.constant 64 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %desc_x = arith.extsi %K : i32 to i64
+    %desc = tt.make_tensor_descriptor %x_ptr, [%M, %K], [%desc_x, %c1_i64] : <bf16>, <128x64xbf16>
+    scf.for %k = %c0_i32 to %K step %c64_i32 : i32 {
+      // CHECK: tt.descriptor_load {{.*}} {ttig.block_io = "row_major", ttig.desc_padding = 1 : i32}
+      %x = tt.descriptor_load %desc[%c128_i32, %k] : !tt.tensordesc<128x64xbf16> -> tensor<128x64xbf16, #blocked>
+    }
+    tt.return
+  }
+}
