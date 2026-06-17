@@ -397,8 +397,40 @@ bool isLayoutAnchor(Operation *op) {
         // Conservative fallback: if either lane base is not a clean single-dim
         // stride, the store can't be a 2D block write anyway -> nothing to
         // protect -> don't anchor (fold by default, as before).
-        if (rootLaneDim && dstLaneDim)
-          return *rootLaneDim != *dstLaneDim;
+        if (rootLaneDim && dstLaneDim) {
+          // Keep the lane-transpose guard (#7093): a convert that changes the
+          // lane-fast dim must be anchored or the row-major store demotes to a
+          // scatter.
+          if (*rootLaneDim != *dstLaneDim)
+            return true;
+          // Same lane-fast dim. Anchor iff dst is the canonical coalesced
+          // descriptor-store layout that tritongpu-coalesce assigns AND the
+          // chain root is not a dot result.
+          //
+          // Folding a canonical dst back to the producer's (compute) layout
+          // demotes global store coalescing (issue #7104), so anchor by
+          // default. The one exception is a dot result re-tiled for the store
+          // (issue #4866): there the store SHOULD take the dot-result layout
+          // and the convert must fold, so a dot-defined root suppresses the
+          // anchor. The root is the value the convert-chain walk stopped on;
+          // its defining op is the layout the store would actually fold to
+          // (elementwise/load producers read as non-dot and still anchor).
+          // Block args / iter_args / non-dot producers return false from both
+          // getDefiningOp<tt::DotOp>() and getDefiningOp<tt::DotScaledOp>(), so
+          // rootIsDot is false and the predicate anchors -- the safe default,
+          // since anchoring an already-canonical dst is
+          // performance-neutral-or-better and only #4866-style dot folding must
+          // be preserved.
+          bool rootIsDot = root.getDefiningOp<tt::DotOp>() ||
+                           root.getDefiningOp<tt::DotScaledOp>();
+          int numWarps = ttg::lookupNumWarps(op);
+          int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(
+              op->getParentOfType<ModuleOp>());
+          Attribute canonical = ttgi::canonicalCoalescedDescStoreLayout(
+              dstTy, numWarps, threadsPerWarp);
+          bool dstIsCanonical = dstTy.getEncoding() == canonical;
+          return dstIsCanonical && !rootIsDot;
+        }
       }
     }
   }

@@ -144,6 +144,16 @@ bool isBlockIOEligible(OpTy loadOp, RankedTensorType tensorTy) {
 /// RemoveLayoutConversions. Returns a comparable scalar (not cycle-accurate).
 unsigned estimateLoadHWCost(RankedTensorType type, Operation *loadOp);
 
+/// Return the canonical memory-coalesced layout that tritongpu-coalesce assigns
+/// to a descriptor load/store operand of the given type — sizePerThread
+/// vectorized along the contiguous (last) dim, row-major order, warps/threads
+/// distributed by BlockedEncodingAttr::get. RemoveLayoutConversions uses this
+/// to recognize (and preserve) a Coalesce-inserted convert feeding a
+/// tt.descriptor_store: folding it back to the producer's compute layout
+/// demotes the store's global coalescing (issue #7104).
+Attribute canonicalCoalescedDescStoreLayout(RankedTensorType type, int numWarps,
+                                            int threadsPerWarp);
+
 /// Runtime stride value along `dim`; null if none.
 Value getRuntimeStrideValue(triton::intel::ModuleStrideAnalysis &strideAnalysis,
                             Value ptr, unsigned dim);
