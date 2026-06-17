@@ -274,7 +274,7 @@ def ref_grouped_gemm(input_A, input_B, topk_ids, topk):
 def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_fp8=False, is_td_patched=False):
     supported_providers = {
         'triton' + ('-td' if is_td_patched else ''): 'triton' + ('-td' if is_td_patched else ''),
-        'sycl-tla': 'SYCL-TLA',
+        'sycl-tla': 'sycl-tla',
     }
 
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
