@@ -31,6 +31,7 @@ if (NOT SyclTlaLibrary_FOUND)
     # per-subgroup under causal masking (divergent -> deadlock). The legacy
     # kernel already guards this with subgroup scope; this patch applies the
     # same fix to applications/flash_attention_v2/collective/xe_fmha_fwd_mainloop.hpp.
+    # Remove once https://github.com/intel/sycl-tla/pull/830 fix is present
     file(GLOB SyclTlaLibrary_PATCHES
          "${CMAKE_CURRENT_SOURCE_DIR}/sycl_tla_kernel/patches/*.patch")
     foreach(_patch ${SyclTlaLibrary_PATCHES})
