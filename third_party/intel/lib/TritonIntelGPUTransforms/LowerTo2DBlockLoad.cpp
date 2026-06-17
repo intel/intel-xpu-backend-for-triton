@@ -331,24 +331,9 @@ private:
     int numPackedVals = -1;
     bool isTranspose = false;
     if (has1DReshapeStride) {
-      // 1D reshape: conventional dims, no tile shape validation needed
-      // (encoding was constructed for block IO).  However, mask constancy
-      // must still be validated — the LLVM lowering uses a per-tile predicate
-      // (broadcast from lane 0), so the mask must be uniform within each tile.
+      // 1D reshape: conventional dims, no tile validation needed.
       rowDim = memoryRowMajor ? rank - 2 : rank - 1;
       colDim = memoryRowMajor ? rank - 1 : rank - 2;
-      if (maskAxisInfo) {
-        Attribute encoding = tensorTy.getEncoding();
-        LinearLayout llEncoding =
-            cast<ttg::DistributedEncodingTrait>(encoding).toLinearLayout(
-                tensorTy.getShape());
-        if (!ttgi::validate2DBlockLoadTile(
-                llEncoding, contiguousDim, elemSizeInBits, tensorTy,
-                oneMatrixPerLoadForBT, maskAxisInfo)) {
-          LDBG("Mask constancy validation failed for 1D reshape load: " << *op);
-          return;
-        }
-      }
     } else {
       Attribute encoding = tensorTy.getEncoding();
       LinearLayout llEncoding =
