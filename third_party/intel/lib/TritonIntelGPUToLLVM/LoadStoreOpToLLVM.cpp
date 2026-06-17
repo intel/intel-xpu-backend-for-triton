@@ -2082,7 +2082,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       Value ret;
       if (!pred)
         ret = createLoadWithAttrs()[0];
-      else if (canUsePredicatedInstructions(op)) {
+      else if (canUsePredicatedInstructions(op) && isa<VectorType>(retTy)) {
         auto cacheModifier = tritonToIntelCacheModifier(op);
         ret = TritonGEN::PredicatedLoadOp::create(
             rewriter, loc, retTy, addrElem, pred, other_, cacheModifier);
