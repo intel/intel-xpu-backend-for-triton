@@ -36,4 +36,3 @@ echo "Applying PyTorch patches in $REPO_ROOT"
 
 # put your patch applies here
 apply_patch patch/175168-revert.patch
-apply_patch patch/accuracy-tolerance.patch
