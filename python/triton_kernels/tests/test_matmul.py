@@ -366,6 +366,11 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
             pytest.xfail("nvfp4 not supported on XPU")
         if swiglu_opts is not None and do_gamma:
             pytest.xfail("NYI: swiglu and gamma not supported together")
+        if act_dtype_str == "float64":
+            # check maximum shared memory
+            if triton.runtime.driver.active.utils.get_device_properties(
+                    triton.runtime.driver.active.get_current_device())["max_shared_mem"] < 196608:
+                pytest.xfail("XPU: Not enough shared memory for float64")
 
     if "float8_e4m3fnuz" in (weight_dtype_str, act_dtype_str) and not is_hip_cdna3():
         pytest.xfail("float8_e4m3fnuz only tested on AMD CDNA3 Platform")
