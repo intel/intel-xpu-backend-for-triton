@@ -4063,9 +4063,16 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
       }
     }
 
-    Value baseWidth = b.i32_val(op.getBaseWidth() * cfg.vBlocks);
-    Value baseHeight = b.i32_val(op.getBaseHeight());
+    // base_width, base_height, and pitch are now runtime i32 operands.
+    Value baseWidth = adaptor.getBaseWidth();
+    Value baseHeight = adaptor.getBaseHeight();
     Value pitch = adaptor.getBasePitch();
+
+    // When NOT using HW boundary checking, scale baseWidth by vBlocks
+    // (the original tile-mode behavior).
+    bool hwBoundaryCheck = op.usesHwBoundaryCheck();
+    if (!hwBoundaryCheck && cfg.vBlocks > 1)
+      baseWidth = b.mul(baseWidth, b.i32_val(cfg.vBlocks));
 
     unsigned blockColIdx = cfg.isTransposeRequired ? cfg.rowDim : cfg.colDim;
 
@@ -4079,8 +4086,16 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
       Value offsetX = offsets[blockColIdx].second;
       Value negativeOffsetX = b.sub(b.i32_val(0), offsetX);
       addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, negativeOffsetX);
+
+      // In HW boundary-check mode, DON'T add offsetX to baseWidth.
+      // The surface bounds represent the valid region from the warp's
+      // column start; offsetX is the sub-tile's position within that region.
+      // The hardware correctly zero-fills elements where
+      // (offsetX + i) >= (shape - warp_col_start).
       Value adjustedBaseWidth =
-          b.add(baseWidth, b.mul(offsetX, b.i32_val(elemSizeInBits / 8)));
+          hwBoundaryCheck
+              ? baseWidth
+              : b.add(baseWidth, b.mul(offsetX, b.i32_val(elemSizeInBits / 8)));
 
       Value pred;
       if (maskElems.size())
@@ -4090,10 +4105,16 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
               adjustedBaseWidth, baseHeight, pred};
     };
 
+    // staticBaseHeight is used for broadcast (stride=0) row replication.
+    // With runtime base_height, try to extract a constant value for this.
+    std::optional<int> staticBaseHeight;
+    APInt constHeight;
+    if (matchPattern(op.getBaseHeight(), m_ConstantInt(&constHeight)))
+      staticBaseHeight = constHeight.getSExtValue();
+
     return lowerBlockLoad2D(op, cfg, *llEncoding, pitch, computeAddress,
-                            otherElems, /*nanMaskElems=*/{},
-                            /*staticBaseHeight=*/op.getBaseHeight(), targetInfo,
-                            getTypeConverter(), loc, rewriter);
+                            otherElems, /*nanMaskElems=*/{}, staticBaseHeight,
+                            targetInfo, getTypeConverter(), loc, rewriter);
   }
 };
 

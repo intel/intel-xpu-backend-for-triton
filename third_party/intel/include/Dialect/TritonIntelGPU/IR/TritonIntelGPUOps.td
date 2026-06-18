@@ -278,28 +278,41 @@ def TTIG_Subgroup2DBlockLoadFromPtrOp : TTIG_Op<"2d_block_load_from_ptr", [
     and known `row_stride`. Creating this op from a ptr tensor that does not
     satisfy this precondition produces undefined behavior at lowering.
 
-    `base_pitch` (row stride in bytes) is a runtime `i32` operand, matching
-    `ttig.2d_block_load` and `triton_gen.2Dblockload`. A compile-time pitch is
-    just an `arith.constant`; a runtime one (e.g. grouped-GEMM `lda`) is the
-    computed SSA value.
+    `base_width` (surface width in bytes), `base_height` (surface height in
+    rows), and `base_pitch` (row stride in bytes) are runtime `i32` operands,
+    matching `ttig.2d_block_load` and `triton_gen.2Dblockload`. Compile-time
+    values are just `arith.constant`; runtime ones (e.g. tensor dimensions
+    from boundary-check mask extraction) are computed SSA values.
+
+    The hardware uses `base_width` and `base_height` for implicit boundary
+    checking: elements outside the surface are zero-filled. When a
+    boundary-check mask is stripped (because `other=0` matches hardware
+    zero-fill), the extracted bounds become `base_width`/`base_height`.
   }];
 
   let arguments = (ins
     Arg<TT_PtrLike, "tensor of pointers to the memory surface",
         [MemRead<GlobalMemory>]>:$ptr,
+    I32:$base_width,
+    I32:$base_height,
     I32:$base_pitch,
     Optional<TT_BoolLike>:$mask,
     Optional<TT_Type>:$other,
-    I32Attr:$base_width,
-    I32Attr:$base_height,
-    TTIG_BlockIOMode:$memory_layout
+    TTIG_BlockIOMode:$memory_layout,
+    OptionalAttr<UnitAttr>:$hw_boundary_check
   );
 
   let results = (outs TT_Tensor:$result);
   let assemblyFormat = [{
-    $ptr `,` $base_pitch (`,` $mask^ `,` $other)?
+    $ptr `,` $base_width `,` $base_height `,` $base_pitch
+    (`,` $mask^ `,` $other)?
     ` ` `{` $memory_layout `}`
     attr-dict `:` functional-type(operands, results)
+  }];
+  let extraClassDeclaration = [{
+    /// Whether this op uses hardware boundary checking (base_width/base_height
+    /// represent actual tensor bounds, not tile dimensions).
+    bool usesHwBoundaryCheck() { return getHwBoundaryCheckAttr() != nullptr; }
   }];
   let hasVerifier = 1;
 }

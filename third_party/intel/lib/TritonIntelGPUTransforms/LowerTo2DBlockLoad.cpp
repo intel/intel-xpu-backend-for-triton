@@ -190,6 +190,121 @@ static bool isBoundaryCheckMask(Value mask) {
   return isBoundaryCheckComponent(mask);
 }
 
+/// Extract the upper-bound scalar from a cmpi slt boundary check.
+/// Returns the scalar Value from `splat(shape)` on the RHS.
+static Value extractUpperBoundScalar(arith::CmpIOp cmpOp) {
+  if (cmpOp.getPredicate() != arith::CmpIPredicate::slt)
+    return nullptr;
+  // RHS should be tt.splat(scalar_shape)
+  if (auto splatOp = cmpOp.getRhs().getDefiningOp<tt::SplatOp>())
+    return splatOp.getSrc();
+  // Or a dense constant splat
+  DenseElementsAttr attr;
+  if (matchPattern(cmpOp.getRhs(), m_Constant(&attr)) && attr.isSplat()) {
+    // Can't easily get a scalar Value from a dense attr in this context
+    return nullptr;
+  }
+  return nullptr;
+}
+
+/// Extract the offset scalar from the LHS of a cmpi slt boundary check.
+/// The LHS pattern is: expand_dims(splat(offset) + ext(make_range(0, N)))
+/// or variations thereof. We look for a `tt.splat` feeding an `arith.addi`.
+/// If there's no addi (just a range), offset is implicitly 0.
+static Value extractOffsetScalar(arith::CmpIOp cmpOp, OpBuilder &builder) {
+  Value lhs = cmpOp.getLhs();
+  // Peel through expand_dims
+  while (auto expandOp = lhs.getDefiningOp<tt::ExpandDimsOp>())
+    lhs = expandOp.getSrc();
+  // Peel through arith.extsi
+  while (auto extOp = lhs.getDefiningOp<arith::ExtSIOp>())
+    lhs = extOp.getIn();
+  // Look for arith.addi(splat(offset), range_stuff) or
+  // arith.addi(range_stuff, splat(offset))
+  if (auto addOp = lhs.getDefiningOp<arith::AddIOp>()) {
+    if (auto splatOp = addOp.getLhs().getDefiningOp<tt::SplatOp>())
+      return splatOp.getSrc();
+    if (auto splatOp = addOp.getRhs().getDefiningOp<tt::SplatOp>())
+      return splatOp.getSrc();
+  }
+  // No addi found — offset is 0 (just a make_range or plain range).
+  // This handles the pattern: cmpi slt, make_range(0, N), splat(shape)
+  if (lhs.getDefiningOp<tt::MakeRangeOp>()) {
+    Type i32Ty = builder.getI32Type();
+    return arith::ConstantOp::create(builder, cmpOp.getLoc(), i32Ty,
+                                     builder.getI32IntegerAttr(0));
+  }
+  return nullptr;
+}
+
+/// Given a boundary-check mask dimension component (after peeling
+/// broadcast/expand_dims), find the upper-bound cmpi slt and extract
+/// (shape, offset) scalars. Returns (shape_scalar, offset_scalar) or
+/// (nullptr, nullptr) if extraction fails.
+static std::pair<Value, Value> extractBoundFromComponent(Value val,
+                                                         OpBuilder &builder) {
+  if (!val)
+    return {nullptr, nullptr};
+  Operation *defOp = val.getDefiningOp();
+  if (!defOp)
+    return {nullptr, nullptr};
+  // Peel broadcast
+  if (auto broadcastOp = dyn_cast<tt::BroadcastOp>(defOp))
+    return extractBoundFromComponent(broadcastOp.getSrc(), builder);
+  // Peel expand_dims
+  if (auto expandOp = dyn_cast<tt::ExpandDimsOp>(defOp))
+    return extractBoundFromComponent(expandOp.getSrc(), builder);
+  // andi(lower_bound, upper_bound) — we want the upper bound (slt)
+  if (auto andOp = dyn_cast<arith::AndIOp>(defOp)) {
+    // Try LHS
+    auto [shape, offset] = extractBoundFromComponent(andOp.getLhs(), builder);
+    if (shape)
+      return {shape, offset};
+    // Try RHS
+    return extractBoundFromComponent(andOp.getRhs(), builder);
+  }
+  // Leaf: cmpi slt
+  if (auto cmpOp = dyn_cast<arith::CmpIOp>(defOp)) {
+    if (cmpOp.getPredicate() == arith::CmpIPredicate::slt) {
+      Value shape = extractUpperBoundScalar(cmpOp);
+      Value offset = extractOffsetScalar(cmpOp, builder);
+      if (shape && offset)
+        return {shape, offset};
+    }
+  }
+  return {nullptr, nullptr};
+}
+
+/// Given a full boundary-check mask (andi tree of per-dimension checks),
+/// extract the valid dimension size (shape - offset) for each checked
+/// dimension. Returns pairs of (shape, offset) for up to 2 dimensions.
+/// The first element corresponds to the first andi operand found with
+/// a per-row shape (height dim), the second to per-col (width dim).
+static SmallVector<std::pair<Value, Value>, 2>
+extractBoundsFromMask(Value mask, OpBuilder &builder) {
+  SmallVector<std::pair<Value, Value>, 2> bounds;
+  if (!mask)
+    return bounds;
+  Operation *defOp = mask.getDefiningOp();
+  if (!defOp)
+    return bounds;
+  // Top-level andi: each operand is a per-dimension check
+  if (auto andOp = dyn_cast<arith::AndIOp>(defOp)) {
+    auto lhsBound = extractBoundFromComponent(andOp.getLhs(), builder);
+    auto rhsBound = extractBoundFromComponent(andOp.getRhs(), builder);
+    if (lhsBound.first)
+      bounds.push_back(lhsBound);
+    if (rhsBound.first)
+      bounds.push_back(rhsBound);
+  } else {
+    // Single dimension check
+    auto bound = extractBoundFromComponent(mask, builder);
+    if (bound.first)
+      bounds.push_back(bound);
+  }
+  return bounds;
+}
+
 /// Strip boundary-check components from a mask, returning the non-boundary
 /// portion. If the entire mask is a boundary check, returns nullptr.
 /// For an andi(A, B) where one operand is a boundary check and the other is
@@ -650,23 +765,57 @@ private:
     // Strip boundary-check portions from the mask when the padding value is
     // zero. The 2D block load hardware performs implicit boundary checking
     // (OOB elements are zero-filled), making boundary-check masks redundant
-    // when other=0.
+    // when other=0. We extract (shape, offset) from the mask to compute the
+    // valid surface dimensions: base_width = (shape_col - offset_col) *
+    // elemSize, base_height = shape_row - offset_row.
+    bool useHwBoundaryCheck = false;
+    Value hwBaseWidth, hwBaseHeight;
     if (canStripBoundaryMask) {
-      LDBG("Stripping boundary-check mask (implicit HW boundary check): "
-           << *op);
-      mask = nullptr;
-      other = nullptr;
-    } else if (mask && isZeroConstant(other)) {
-      // Partial stripping: if the mask is andi(boundary, non_boundary), keep
-      // only the non-boundary portion.
-      Value strippedMask = stripBoundaryCheckFromMask(mask);
-      if (strippedMask != mask) {
-        LDBG("Partially stripping boundary-check from mask: " << *op);
-        mask = strippedMask;
-        if (!mask)
-          other = nullptr;
+      auto bounds = extractBoundsFromMask(origMask, builder);
+      if (!bounds.empty()) {
+        LDBG("Stripping boundary-check mask (implicit HW boundary check): "
+             << *op);
+        mask = nullptr;
+        other = nullptr;
+        useHwBoundaryCheck = true;
+
+        // Compute base_width and base_height from extracted bounds.
+        // Each bound gives (shape, offset) for one dimension. We compute
+        // (shape - offset) as the valid count, then multiply by elemSize for
+        // the width dimension.
+        Type i32Ty = builder.getI32Type();
+        for (auto &[shape, offset] : bounds) {
+          // Truncate from i64 to i32 if needed.
+          if (shape.getType().getIntOrFloatBitWidth() > 32)
+            shape = arith::TruncIOp::create(builder, loc, i32Ty, shape);
+          if (offset.getType().getIntOrFloatBitWidth() > 32)
+            offset = arith::TruncIOp::create(builder, loc, i32Ty, offset);
+          Value validCount = arith::SubIOp::create(builder, loc, shape, offset);
+          // Heuristic: the bound with larger shape is likely the height (row)
+          // dimension; otherwise it's width. For now, assign first bound to
+          // height and second to width. TODO: use expand_dims axis info for
+          // precise dimension mapping.
+          if (!hwBaseHeight) {
+            hwBaseHeight = validCount;
+          } else {
+            hwBaseWidth = arith::MulIOp::create(
+                builder, loc, validCount,
+                arith::ConstantOp::create(
+                    builder, loc,
+                    builder.getI32IntegerAttr(elemSizeInBits / 8)));
+          }
+        }
       }
     }
+
+    // Fall back to tile dimensions when bounds extraction failed or mask
+    // was not stripped.
+    if (!hwBaseWidth)
+      hwBaseWidth = arith::ConstantOp::create(
+          builder, loc, builder.getI32IntegerAttr(baseWidthBytes));
+    if (!hwBaseHeight)
+      hwBaseHeight = arith::ConstantOp::create(
+          builder, loc, builder.getI32IntegerAttr(baseHeightRows));
 
     // Pitch is a single i32 operand: the runtime value when we have one, an
     // arith.constant otherwise (the lowering and asserts treat both the same).
@@ -678,10 +827,10 @@ private:
                   builder.getI32IntegerAttr(static_cast<int32_t>(pitch)));
 
     auto blockPtrLoadOp = ttgi::Subgroup2DBlockLoadFromPtrOp::create(
-        builder, loc, op.getType(), op.getPtr(), pitchOperand, mask, other,
-        builder.getI32IntegerAttr(baseWidthBytes),
-        builder.getI32IntegerAttr(baseHeightRows),
-        ttgi::BlockIOModeAttr::get(builder.getContext(), memLayout));
+        builder, loc, op.getType(), op.getPtr(), hwBaseWidth, hwBaseHeight,
+        pitchOperand, mask, other,
+        ttgi::BlockIOModeAttr::get(builder.getContext(), memLayout),
+        useHwBoundaryCheck ? builder.getUnitAttr() : UnitAttr());
 
     // Propagate attributes if present.
     if (oneMatrixPerLoadForBT)
