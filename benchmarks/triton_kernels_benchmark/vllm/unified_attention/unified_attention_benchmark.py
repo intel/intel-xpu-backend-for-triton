@@ -620,7 +620,7 @@ def get_unified_attention_benchmark(
         del supported_providers['triton']
 
     if not is_fp8:
-        supported_providers['sycl-tla'] = 'SYCL-TLA'
+        supported_providers['sycl-tla'] = 'sycl-tla'
 
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
     configs = ATTENTION_CONFIGS_FP8 if is_fp8 else ATTENTION_CONFIGS_BF16
