@@ -5,7 +5,6 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/ADT/APFloat.h"
 
 using namespace mlir;
@@ -38,13 +37,15 @@ static bool isLosslessFpCast(Type from, Type to) {
 }
 
 // Fold `inner: A -> B` feeding `outer: B -> C` into a single `A -> C` when the
-// outer cast `B -> C` is lossless (B is a subset of C). This drops a redundant
-// narrow intermediate; the result is more accurate than the double cast, so it
-// is NOT value-preserving (gated by TRITON_INTEL_FOLD_LOSSY_FPCAST, default
-// on).
+// outer cast `B -> C` is lossless (B is a subset of C). When the inner cast
+// A -> B is itself lossless (pure widen), dropping B is exact and the fold is
+// always legal. When the inner cast is a real downcast, dropping B changes
+// numerics and the fold is only legal under fast-math.
 class FoldNarrowFpToFpIntermediate : public OpRewritePattern<tt::FpToFpOp> {
 public:
-  using OpRewritePattern<tt::FpToFpOp>::OpRewritePattern;
+  FoldNarrowFpToFpIntermediate(MLIRContext *context, bool fastMath,
+                               int benefit = 1)
+      : OpRewritePattern<tt::FpToFpOp>(context, benefit), fastMath(fastMath) {}
 
   LogicalResult matchAndRewrite(tt::FpToFpOp outer,
                                 PatternRewriter &rewriter) const override {
@@ -59,6 +60,12 @@ public:
     // Only fold when the outer widen B -> C loses nothing.
     if (!isLosslessFpCast(bTy, cTy))
       return rewriter.notifyMatchFailure(outer, "outer cast is not lossless");
+
+    // Inner cast lossy (real downcast): folding changes numerics, so it's
+    // legal only under fast-math.
+    if (!isLosslessFpCast(aTy, bTy) && !fastMath)
+      return rewriter.notifyMatchFailure(
+          outer, "inner cast is lossy; fold needs fast-math");
 
     // Determine rounding for the merged A -> C op. A downcast requires a
     // rounding mode (see FpToFpOp::verify); a lossless cast does not need one.
@@ -81,26 +88,23 @@ public:
                                               inner.getSrc(), rounding);
     return success();
   }
+
+private:
+  bool fastMath;
 };
 
 class TritonIntelGPUFoldFpToFpPass
     : public triton::gpu::intel::impl::TritonIntelGPUFoldFpToFpBase<
           TritonIntelGPUFoldFpToFpPass> {
 public:
-  void runOnOperation() override {
-    // Drop redundant narrow fp intermediates (default on; opt out by setting
-    // TRITON_INTEL_FOLD_LOSSY_FPCAST to a false value). Changes fp8 numerics.
-    bool foldNarrowIntermediate =
-        tt::tools::isEnvValueBool(
-            tt::tools::getStrEnv("TRITON_INTEL_FOLD_LOSSY_FPCAST"))
-            .value_or(true);
-    if (!foldNarrowIntermediate)
-      return;
+  using triton::gpu::intel::impl::TritonIntelGPUFoldFpToFpBase<
+      TritonIntelGPUFoldFpToFpPass>::TritonIntelGPUFoldFpToFpBase;
 
+  void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
     RewritePatternSet patterns(context);
-    patterns.add<FoldNarrowFpToFpIntermediate>(context);
+    patterns.add<FoldNarrowFpToFpIntermediate>(context, fastMath);
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
   }

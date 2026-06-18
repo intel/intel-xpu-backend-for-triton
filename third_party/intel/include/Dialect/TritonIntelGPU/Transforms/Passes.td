@@ -38,13 +38,21 @@ def TritonIntelGPUFoldFpToFp
     `llvm::APFloat` semantics (mantissa precision + exponent range), so type
     width alone is never trusted.
 
-    Dropping the intermediate is more accurate than the double cast and so is
-    NOT value-preserving; it changes fp8 numerics. The fold is therefore gated
-    behind the `TRITON_INTEL_FOLD_LOSSY_FPCAST` env var (cache-invalidating),
-    default-on with opt-out via `TRITON_INTEL_FOLD_LOSSY_FPCAST=0`.
+    Two regimes:
+      * Inner cast `A -> B` is itself lossless (a pure widen, e.g.
+        `f8E5M2 -> f16 -> f32`). Dropping `B` preserves the result exactly, so
+        the fold runs unconditionally (strict-FP legal).
+      * Inner cast `A -> B` is lossy (a real downcast, e.g. user-inserted
+        `f32 -> f8 -> f16`). Dropping `B` changes the numerical result, so the
+        fold runs only under fast-math.
   }];
 
   let dependentDialects = ["mlir::triton::TritonDialect"];
+
+  let options = [
+    Option<"fastMath", "fast-math", "bool", /*default*/"false",
+           "Enable lossy fold (drop user-inserted narrow intermediates)">,
+  ];
 }
 
 def TritonIntelGPUOptimizeDotOperands

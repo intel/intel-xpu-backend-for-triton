@@ -1,21 +1,19 @@
-// default (unset) -> fold ON
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-fold-fp-to-fp | FileCheck %s --check-prefixes=CHECK,FOLD
-// explicit on -> fold
-// RUN: env TRITON_INTEL_FOLD_LOSSY_FPCAST=1 triton-opt %s -split-input-file -tritonintelgpu-fold-fp-to-fp | FileCheck %s --check-prefixes=CHECK,FOLD
-// explicit opt-out -> keep both casts
-// RUN: env TRITON_INTEL_FOLD_LOSSY_FPCAST=0 triton-opt %s -split-input-file -tritonintelgpu-fold-fp-to-fp | FileCheck %s --check-prefixes=CHECK,NOFOLD
+// fast-math off (default): only chains with a lossless inner cast fold.
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-fold-fp-to-fp | FileCheck %s --check-prefixes=CHECK,NOFM
+// fast-math on: chains with a lossy inner cast also fold.
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-fold-fp-to-fp=fast-math=true | FileCheck %s --check-prefixes=CHECK,FM
 
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 
-// COM: f32 -> f8E5M2 -> f16. Outer f8E5M2->f16 is lossless (f8E5M2 subset of f16),
-// COM: so the narrow fp8 intermediate is dropped, leaving a single f32 -> f16 rtne.
+// COM: f32 -> f8E5M2 -> f16. Inner f32->f8 is a real (lossy) downcast; outer
+// COM: f8->f16 is lossless. Folds only under fast-math.
 module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: @fold_f32_f8_f16
   tt.func @fold_f32_f8_f16(%arg0: tensor<128x32xf32, #mma>) -> tensor<128x32xf16, #mma> {
-    // FOLD: %[[R:.*]] = tt.fp_to_fp %arg0, rounding = rtne : tensor<128x32xf32, #mma> -> tensor<128x32xf16, #mma>
-    // FOLD-NOT: f8E5M2
-    // NOFOLD: %[[P:.*]] = tt.fp_to_fp %arg0, rounding = rtne : tensor<128x32xf32, #mma> -> tensor<128x32xf8E5M2, #mma>
-    // NOFOLD: tt.fp_to_fp %[[P]] : tensor<128x32xf8E5M2, #mma> -> tensor<128x32xf16, #mma>
+    // FM: %[[R:.*]] = tt.fp_to_fp %arg0, rounding = rtne : tensor<128x32xf32, #mma> -> tensor<128x32xf16, #mma>
+    // FM-NOT: f8E5M2
+    // NOFM: %[[P:.*]] = tt.fp_to_fp %arg0, rounding = rtne : tensor<128x32xf32, #mma> -> tensor<128x32xf8E5M2, #mma>
+    // NOFM: tt.fp_to_fp %[[P]] : tensor<128x32xf8E5M2, #mma> -> tensor<128x32xf16, #mma>
     %0 = tt.fp_to_fp %arg0, rounding = rtne : tensor<128x32xf32, #mma> -> tensor<128x32xf8E5M2, #mma>
     %1 = tt.fp_to_fp %0 : tensor<128x32xf8E5M2, #mma> -> tensor<128x32xf16, #mma>
     tt.return %1 : tensor<128x32xf16, #mma>
@@ -26,7 +24,8 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 
-// COM: Lossy outer cast (f16 -> f8E5M2). Must NOT fold regardless of flag.
+// COM: Lossy outer cast (f16 -> f8E5M2). Outer is not a widen, so the chain
+// COM: never folds, regardless of fast-math.
 module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: @no_fold_lossy_outer
   tt.func @no_fold_lossy_outer(%arg0: tensor<128x32xf32, #mma>) -> tensor<128x32xf8E5M2, #mma> {
@@ -43,7 +42,7 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32}
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 
 // COM: Differing-tradeoff intermediate. f8E4M3 is NOT a subset of f8E5M2 (more
-// COM: mantissa, less exponent range), so outer cast is lossy -> must NOT fold.
+// COM: mantissa, less exponent range), so outer cast is lossy -> never folds.
 module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: @no_fold_f8e4m3_f8e5m2
   tt.func @no_fold_f8e4m3_f8e5m2(%arg0: tensor<128x32xf32, #mma>) -> tensor<128x32xf8E5M2, #mma> {
@@ -59,18 +58,53 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 
-// COM: Value-preserving widen chain f8E5M2 -> f16 -> f32. Outer f16->f32 is
-// COM: lossless, so it folds to a single f8E5M2 -> f32. The merged A -> C is a
-// COM: pure widen, so no rounding mode is attached.
+// COM: Differing-tradeoff intermediate at 16 bits: bf16 is NOT a subset of f16
+// COM: (more exponent range, less mantissa), so outer cast is lossy -> never folds.
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @no_fold_bf16_f16
+  tt.func @no_fold_bf16_f16(%arg0: tensor<128x32xf32, #mma>) -> tensor<128x32xf16, #mma> {
+    // CHECK: tt.fp_to_fp %arg0, rounding = rtne : tensor<128x32xf32, #mma> -> tensor<128x32xbf16, #mma>
+    // CHECK: tt.fp_to_fp {{.*}} -> tensor<128x32xf16, #mma>
+    %0 = tt.fp_to_fp %arg0, rounding = rtne : tensor<128x32xf32, #mma> -> tensor<128x32xbf16, #mma>
+    %1 = tt.fp_to_fp %0, rounding = rtne : tensor<128x32xbf16, #mma> -> tensor<128x32xf16, #mma>
+    tt.return %1 : tensor<128x32xf16, #mma>
+  }
+}
+
+// -----
+
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+
+// COM: Pure widen chain f8E5M2 -> f16 -> f32. Both inner and outer casts are
+// COM: lossless, so dropping f16 preserves the result exactly. Always folds,
+// COM: even with fast-math off (strict-FP legal). Merged op needs no rounding.
 module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: @fold_widen_chain_no_rounding
   tt.func @fold_widen_chain_no_rounding(%arg0: tensor<128x32xf8E5M2, #mma>) -> tensor<128x32xf32, #mma> {
-    // FOLD: %[[R:.*]] = tt.fp_to_fp %arg0 : tensor<128x32xf8E5M2, #mma> -> tensor<128x32xf32, #mma>
-    // FOLD-NOT: f16
-    // NOFOLD: %[[P:.*]] = tt.fp_to_fp %arg0 : tensor<128x32xf8E5M2, #mma> -> tensor<128x32xf16, #mma>
-    // NOFOLD: tt.fp_to_fp %[[P]] : tensor<128x32xf16, #mma> -> tensor<128x32xf32, #mma>
+    // CHECK: %[[R:.*]] = tt.fp_to_fp %arg0 : tensor<128x32xf8E5M2, #mma> -> tensor<128x32xf32, #mma>
+    // CHECK-NOT: f16
     %0 = tt.fp_to_fp %arg0 : tensor<128x32xf8E5M2, #mma> -> tensor<128x32xf16, #mma>
     %1 = tt.fp_to_fp %0 : tensor<128x32xf16, #mma> -> tensor<128x32xf32, #mma>
     tt.return %1 : tensor<128x32xf32, #mma>
+  }
+}
+
+// -----
+
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+
+// COM: f32 -> f16 -> f64. Inner f32->f16 is lossy (downcast); outer f16->f64
+// COM: is lossless. Folds only under fast-math; merged f32 -> f64 is itself a
+// COM: pure widen so it drops its rounding mode.
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @fold_f32_f16_f64
+  tt.func @fold_f32_f16_f64(%arg0: tensor<128x32xf32, #mma>) -> tensor<128x32xf64, #mma> {
+    // FM: %[[R:.*]] = tt.fp_to_fp %arg0 : tensor<128x32xf32, #mma> -> tensor<128x32xf64, #mma>
+    // FM-NOT: f16
+    // NOFM: %[[P:.*]] = tt.fp_to_fp %arg0, rounding = rtne : tensor<128x32xf32, #mma> -> tensor<128x32xf16, #mma>
+    // NOFM: tt.fp_to_fp %[[P]] : tensor<128x32xf16, #mma> -> tensor<128x32xf64, #mma>
+    %0 = tt.fp_to_fp %arg0, rounding = rtne : tensor<128x32xf32, #mma> -> tensor<128x32xf16, #mma>
+    %1 = tt.fp_to_fp %0 : tensor<128x32xf16, #mma> -> tensor<128x32xf64, #mma>
+    tt.return %1 : tensor<128x32xf64, #mma>
   }
 }

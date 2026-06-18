@@ -590,6 +590,11 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     maxtol, rmstol = None, None
     if c_dtype.is_nvfp4 and a_dtype.is_nvfp4 and b_dtype.is_nvfp4:
         maxtol, rmstol = 6e-1, 4e-2
+    elif c_dtype.is_nvfp4 and swiglu_opts is not None:
+        # The Intel fp_to_fp fold drops the f8 intermediate that the reference
+        # path keeps, so a few elements land in an adjacent nvfp4 bucket
+        # (×1.5 step in e2m1).
+        maxtol, rmstol = 6e-1, 4e-2
     elif c_dtype.has_mx_scale:
         maxtol, rmstol = 4e-1, 4e-2
     elif b_dtype.is_mxfloat4:
