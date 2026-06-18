@@ -25,14 +25,25 @@ def native_torch_fused_gemm(x, w_g, w_fc, b_g, b_fc):
 
 
 def get_fused_gemm_autotune_configs() -> list[triton.Config]:
-    return [ triton.Config({'BLOCK_SIZE_M': BM, 'BLOCK_SIZE_N': BN, 'BLOCK_SIZE_K': BK, 'GROUP_SIZE_M': G}, num_stages=s, num_warps=w) \
-             for BM in [128, 256] \
-             for BN in [64, 128] \
-             for BK in [32, 64] \
-             for G in [4, 8, 16] \
-             for s in [2, 3, 4] \
-             for w in [8, 16, 32] \
-   ]
+    return [
+        triton.Config(
+            {
+                'BLOCK_SIZE_M': BM,
+                'BLOCK_SIZE_N': BN,
+                'BLOCK_SIZE_K': BK,
+                'GROUP_SIZE_M': G,
+                'grf_mode': '256',
+            },
+            num_stages=s,
+            num_warps=w,
+        )
+        for BM in [128, 256]
+        for BN in [64, 128]
+        for BK in [32, 64]
+        for G in [4, 8, 16]
+        for s in [2, 3, 4]
+        for w in [8, 16, 32]
+    ]
 
 
 @triton.autotune(
