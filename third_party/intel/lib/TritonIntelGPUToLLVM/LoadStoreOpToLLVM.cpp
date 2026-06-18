@@ -454,9 +454,13 @@ struct LoadStoreConversionBase {
       if (op.getIsVolatile())
         return false;
       // FIXME: Scalar PredicatedLoadINTEL has a known issue producing
-      // incorrect results for non-contiguous accesses (#7235). Disable by
-      // default for scalar types unless explicitly requested via env var.
-      // Remove this workaround once the driver issue is resolved.
+      // incorrect results for non-contiguous accesses (#7235). We disable
+      // it for all scalar (non-vectorized) loads as a conservative
+      // workaround — in practice scalar loads arise from strided access
+      // patterns where the bug manifests. This routes them through the
+      // control-flow fallback (if pred: load, else: other) which is
+      // slightly less efficient but correct. Remove this workaround once
+      // the driver issue is resolved.
       if (loadTy && !isa<VectorType>(loadTy)) {
         return usePredicatedLoad.has_value() && usePredicatedLoad.value();
       }
