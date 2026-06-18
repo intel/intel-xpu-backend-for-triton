@@ -108,3 +108,48 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32}
     tt.return %1 : tensor<128x32xf64, #mma>
   }
 }
+
+// -----
+
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+
+// COM: Mirrors the nvfp4 + swiglu epilogue failure (issue #6993). A user
+// COM: downcast to f8E4M3FN feeds the f8 -> bf16 upcast that AccelerateMatmul
+// COM: inserts to satisfy DPAS input limits. Inner f32->f8E4M3FN is a real
+// COM: (lossy) downcast; outer f8E4M3FN->bf16 is a lossless widen. Folding to
+// COM: f32 -> bf16 drops the f8 round-trip and is more accurate than the
+// COM: reference, so it must fold only under fast-math.
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @fold_f32_f8e4m3_bf16
+  tt.func @fold_f32_f8e4m3_bf16(%arg0: tensor<128x32xf32, #mma>) -> tensor<128x32xbf16, #mma> {
+    // FM: %[[R:.*]] = tt.fp_to_fp %arg0, rounding = rtne : tensor<128x32xf32, #mma> -> tensor<128x32xbf16, #mma>
+    // FM-NOT: f8E4M3FN
+    // NOFM: %[[P:.*]] = tt.fp_to_fp %arg0, rounding = rtne : tensor<128x32xf32, #mma> -> tensor<128x32xf8E4M3FN, #mma>
+    // NOFM: tt.fp_to_fp %[[P]] : tensor<128x32xf8E4M3FN, #mma> -> tensor<128x32xbf16, #mma>
+    %0 = tt.fp_to_fp %arg0, rounding = rtne : tensor<128x32xf32, #mma> -> tensor<128x32xf8E4M3FN, #mma>
+    %1 = tt.fp_to_fp %0 : tensor<128x32xf8E4M3FN, #mma> -> tensor<128x32xbf16, #mma>
+    tt.return %1 : tensor<128x32xbf16, #mma>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
+
+// COM: Same nvfp4 + swiglu chain as above but on a blocked layout, as it
+// COM: appears after remove-layout-conversions in the real pipeline. The fold
+// COM: is decided from element types only, so the blocked encoding folds
+// COM: identically: f32 -> f8E4M3FN -> bf16 collapses to f32 -> bf16 under
+// COM: fast-math.
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: @fold_f32_f8e4m3_bf16_blocked
+  tt.func @fold_f32_f8e4m3_bf16_blocked(%arg0: tensor<128x32xf32, #blocked>) -> tensor<128x32xbf16, #blocked> {
+    // FM: %[[R:.*]] = tt.fp_to_fp %arg0, rounding = rtne : tensor<128x32xf32, #blocked> -> tensor<128x32xbf16, #blocked>
+    // FM-NOT: f8E4M3FN
+    // NOFM: %[[P:.*]] = tt.fp_to_fp %arg0, rounding = rtne : tensor<128x32xf32, #blocked> -> tensor<128x32xf8E4M3FN, #blocked>
+    // NOFM: tt.fp_to_fp %[[P]] : tensor<128x32xf8E4M3FN, #blocked> -> tensor<128x32xbf16, #blocked>
+    %0 = tt.fp_to_fp %arg0, rounding = rtne : tensor<128x32xf32, #blocked> -> tensor<128x32xf8E4M3FN, #blocked>
+    %1 = tt.fp_to_fp %0 : tensor<128x32xf8E4M3FN, #blocked> -> tensor<128x32xbf16, #blocked>
+    tt.return %1 : tensor<128x32xbf16, #blocked>
+  }
+}
