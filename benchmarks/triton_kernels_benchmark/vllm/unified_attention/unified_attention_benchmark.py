@@ -187,26 +187,37 @@ NUM_BLOCKS = [32768, 2048]
 SEQ_LENS = [
     # One 4k input prefill
     [(4096, 4096)],
-    # Chunked prefill: 4 batches
-    [(512, 512), (512, 512), (512, 512), (512, 512)],
+    # One 7k input prefill (worst-case shape for TD seen in E2E sharegpt runs).
+    [(7168, 7168)],
+    # Chunked prefill: 4 batches of 2k tokens (closer to vLLM default chunk size).
+    [(2048, 2048)] * 4,
+    # Chunked prefill: 2 batches of 8k tokens (large-chunk regime).
+    [(8192, 8192)] * 2,
     # End of chunked prefill and some decoding
     [(1, 1328), (5, 178), (129, 463)],
     # Pure decoding, 8 batches
-    [(1, k) for k in [1513, 4100, 530, 123, 4803, 434, 3015, 34]]
+    [(1, k) for k in [1513, 4100, 530, 123, 4803, 434, 3015, 34]],
+    # Long-context pure decoding (post-prefill tail of 7k/1k-style workloads).
+    [(1, k) for k in [7168, 8192, 12288, 16384]],
+    # High-concurrency continuous batching (max_concurrency=256 in vLLM):
+    # 248 decode steps with realistic kv_len mix + 8 small (256-token) prefill chunks.
+    # Mirrors sharegpt steady-state where the E2E TD speedup actually lives.
+    [(1, k) for k in ([1513, 4100, 530, 123, 4803, 434, 3015, 34, 256, 1024, 768, 2048, 192, 384, 1280, 96] *
+                      16)[:248]] + [(256, 256)] * 8,
 ]
 # Models: (q_heads, k_heads, head_size, qdtype, sliding_window, soft_cap)
 # sliding_window: None = full attention, int = sliding window size.
 # soft_cap: None = disabled, float = soft_cap value.
 # Models that use both attention types appear twice (one entry each).
 MODELS_BF16 = [
-    # llama3.1-8B - full attention
+    # llama3.1-8B / Qwen3-4B-thinking - full attention (same attention shape)
     (32, 8, 128, None, None, None),
-    # llama3.1-8B - just to test soft caps kernel path, real model doesn't use it, it's relevant for gemma2
-    (32, 8, 128, None, None, 50.0),
     # llama3.3-70B - full attention
     (64, 8, 128, None, None, None),
     # llama4 Scout - sliding window attention (window size 8192)
     (64, 8, 128, None, 8192, None),
+    # Qwen2-7B - full attention (worst-case shape for TD on E2E sharegpt)
+    (28, 4, 128, None, None, None),
     # Qwen2.5-235B - full attention
     (64, 4, 128, None, None, None),
     # Qwen2.5-235B - sliding window attention (window size 256)
