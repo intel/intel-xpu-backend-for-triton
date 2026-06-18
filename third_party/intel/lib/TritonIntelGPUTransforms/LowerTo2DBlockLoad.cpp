@@ -392,7 +392,7 @@ private:
     }
 
     int64_t perWarpWidth;
-    if (isBroadcast || has1DReshapeStride)
+    if (has1DReshapeStride)
       perWarpWidth = tensorTy.getDimSize(surfaceWidthDim);
     else
       perWarpWidth = tileWidth * numPackedVals;
@@ -400,7 +400,12 @@ private:
 
     if (!has1DReshapeStride) {
       if (isBroadcast) {
-        pitch = std::max((int64_t)MIN_PITCH, baseWidthBytes);
+        // Use the full surface row width (in bytes) as the baseline pitch.
+        // Lowering may widen base_width (e.g. due to alignment), so ensure the
+        // dummy pitch doesn't end up smaller than base_width.
+        int64_t fullRowBytes =
+            tensorTy.getDimSize(surfaceWidthDim) * elemSizeInBits / 8;
+        pitch = std::max(MIN_PITCH, fullRowBytes);
       } else {
         int64_t pitchStride = getStride(strideAnalysis, op.getPtr(), pitchDim);
         if (pitchStride < 0) {
