@@ -1837,18 +1837,22 @@ class _block_ptr:
 
     __triton_block_ptr__ = True
 
-    def __init__(self, base, shape, strides, offsets, block_shape, order, _semantic=None):
+    def __init__(self, base, shape, strides, offsets, block_shape, order, _semantic=None,
+                 _inner_stride_one=None):
         if not base.type.is_ptr() or base.type.is_block():
             raise ValueError("Expected `base` to be a scalar pointer type")
         if isinstance(base.type.element_ty, block_type):
             raise ValueError("Expected `base` to point to a scalar element type")
 
-        # Check if inner stride is a compile-time literal 1 before canonicalization
-        # converts values to IR tensors. We intentionally only match Python int/constexpr
-        # values here; once wrapped in a tensor the constant is opaque to the frontend.
-        last_stride_val = _unwrap_if_constexpr(_as_list_like(strides)[-1])
-        inner_stride_is_one = isinstance(last_stride_val, int) and last_stride_val == 1
-        self._inner_stride_one = constexpr(inner_stride_is_one)
+        if _inner_stride_one is not None:
+            self._inner_stride_one = _inner_stride_one
+        else:
+            # Check if inner stride is a compile-time literal 1 before canonicalization
+            # converts values to IR tensors. We intentionally only match Python int/constexpr
+            # values here; once wrapped in a tensor the constant is opaque to the frontend.
+            last_stride_val = _unwrap_if_constexpr(_as_list_like(strides)[-1])
+            inner_stride_is_one = isinstance(last_stride_val, int) and last_stride_val == 1
+            self._inner_stride_one = constexpr(inner_stride_is_one)
 
         self.base = base
         self.shape = _canonicalize_block_ptr_dynamic_tuple(shape, "shape", _semantic)
@@ -1898,12 +1902,8 @@ class _block_ptr:
             raise ValueError(f"Expected `offsets` to have length {len(self.offsets)} but received {len(offsets)}")
         for old_offset, delta in zip(self.offsets, offsets):
             new_offsets.append(add(old_offset, delta, _semantic=_semantic))
-        result = _block_ptr(self.base, self.shape, self.strides, tuple(new_offsets), self.block_shape, self.order,
-                            _semantic=_semantic)
-        # Propagate stride eligibility since self.strides are already tensors
-        # and _unwrap_if_constexpr won't recover the original int value.
-        object.__setattr__(result, '_inner_stride_one', self._inner_stride_one)
-        return result
+        return _block_ptr(self.base, self.shape, self.strides, tuple(new_offsets), self.block_shape, self.order,
+                          _semantic=_semantic, _inner_stride_one=self._inner_stride_one)
 
     def _is_tdesc_eligible(self, boundary_check, _semantic):
         """Check if this block pointer can be lowered to a tensor descriptor."""
