@@ -1837,8 +1837,7 @@ class _block_ptr:
 
     __triton_block_ptr__ = True
 
-    def __init__(self, base, shape, strides, offsets, block_shape, order, _semantic=None,
-                 _inner_stride_one=None):
+    def __init__(self, base, shape, strides, offsets, block_shape, order, _semantic=None, _inner_stride_one=None):
         if not base.type.is_ptr() or base.type.is_block():
             raise ValueError("Expected `base` to be a scalar pointer type")
         if isinstance(base.type.element_ty, block_type):
