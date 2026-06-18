@@ -3117,8 +3117,7 @@ struct DescriptorStoreOpToBlockIOConversion
         blockIOAttr &&
         "block_io attribute required; checked by isDescriptorBlockIOCandidate");
     const bool memoryRowMajor = (blockIOAttr.getValue() == "row_major");
-    if (!memoryRowMajor)
-      return failure();
+    assert(memoryRowMajor && "column_major descriptor store not yet supported");
 
     // Get source tensor type and encoding.
     auto tensorType = cast<RankedTensorType>(op.getSrc().getType());
