@@ -23,15 +23,16 @@ index 0ffe850..88da01e 100644
      )
  
  
-+# Attention-kernel (num_warps, num_stages) candidates.  num_stages spans 1..3
-+# (deeper software pipelining can hide 2D-block-load latency).  num_warps=16 and
-+# num_stages=4 are excluded: an on-device winner-logging sweep never selected
-+# either across the benchmark shapes (16 warps over-subscribes XPU occupancy;
-+# stage-4 pipelining never paid off), so they were only autotune overhead.
++# Attention-kernel (num_warps, num_stages) candidates.  num_stages=1 is
++# excluded because the targeted UA sweeps never selected it; stages 2 and 3
++# keep the useful pipelining choices while reducing autotune overhead.
++# num_warps=16 and num_stages=4 are excluded: an on-device winner-logging
++# sweep never selected either across the benchmark shapes (16 warps
++# over-subscribes XPU occupancy; stage-4 pipelining never paid off).
 +ATTENTION_WARP_STAGE_CANDIDATES = [
 +    (num_warps, num_stages)
 +    for num_warps in (2, 4, 8)
-+    for num_stages in (1, 2, 3)
++    for num_stages in (2, 3)
 +]
 +
 +# Intel-XPU-specific launch knobs probed only for the attention kernel, where
@@ -58,18 +59,18 @@ index 0ffe850..88da01e 100644
 +        num_stages=num_stages,
 +    )
 +    for block_m in (16, 32, 64)
-+    for tile_size in (16, 32)
++    # Keep TILE_SIZE in the autotune config so this axis can be reopened later,
++    # but restrict the current search to the only value that won in analysis.
++    for tile_size in (16,)
 +    for num_warps, num_stages, extra in ATTENTION_KNOB_VARIANTS
 +]
 +
-+# reduce_segments is a memory-bound merge with a single short loop: it wants a
-+# low warp count (high occupancy is wasted) and shallow pipelining, so its
-+# num_warps is trimmed to {1, 2, 4} and num_stages to {1, 2}.  grf_mode /
-+# warp_size are not probed here (no DPAS, negligible register pressure).
++# reduce_segments is a memory-bound merge with a single short loop.  Analysis
++# selected (num_warps=4, num_stages=2) for every 3D row, so keep that winner
++# plus one low-warp safety config.
 +REDUCE_WARP_STAGE_CANDIDATES = [
-+    (num_warps, num_stages)
-+    for num_warps in (1, 2, 4)
-+    for num_stages in (1, 2)
++    (2, 2),
++    (4, 2),
 +]
 +
 +REDUCE_AUTOTUNE_CONFIGS = [
@@ -146,8 +147,9 @@ index 0ffe850..88da01e 100644
 +def prune_attention_configs(configs, named_args, **kwargs):
 +    """Prune autotune configs for the unified_attention kernel.
 +
-+    Two independent values are tuned: ``BLOCK_M`` (query-block height) and
-+    ``TILE_SIZE`` (KV tile depth).
++    ``BLOCK_M`` is tuned while ``TILE_SIZE`` remains a config field so the axis
++    can be reopened later.  The current config list fixes TILE_SIZE to 16, the
++    only value that won in the targeted analysis.
 +
 +    ``BLOCK_M`` is only legal when the derived ``BLOCK_Q = BLOCK_M //
 +    num_queries_per_kv`` is a positive power of 2 (tensor-descriptor block
@@ -155,10 +157,8 @@ index 0ffe850..88da01e 100644
 +
 +    ``TILE_SIZE`` must divide ``BLOCK_SIZE`` and, for fp8 inputs, must be 32
 +    (Triton currently fails with ``TILE_SIZE=16`` for fp8). The 3D (decode)
-+    path is free to pick either tile size: ``reduce_segments`` no longer
-+    recomputes the segment layout from ``TILE_SIZE`` (it relies on the
-+    in-kernel ``-inf`` sentinel instead), so producer and reducer no longer
-+    need to agree on a fixed tile.
++    path no longer requires the reducer to reconstruct the segment layout from
++    ``TILE_SIZE`` (it relies on the in-kernel ``-inf`` sentinel instead).
 +    """
 +    block_size = kwargs["BLOCK_SIZE"]
 +    is_fp8_input = kwargs["IS_FP8_INPUT"]
