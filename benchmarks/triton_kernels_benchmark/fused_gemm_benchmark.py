@@ -110,14 +110,12 @@ def fused_gemm_swiglu_kernel(
 
     acc_g = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     acc_fc = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
-    off_k = 0
-    for _ in range(0, K, BLOCK_SIZE_K):
-        x = desc_x.load([off_m, off_k])
-        w_g = desc_wg.load([off_k, off_n])
-        w_fc = desc_wfc.load([off_k, off_n])
+    for k in range(0, K, BLOCK_SIZE_K):
+        x = desc_x.load([off_m, k])
+        w_g = desc_wg.load([k, off_n])
+        w_fc = desc_wfc.load([k, off_n])
         acc_g = tl.dot(x, w_g, acc_g)
         acc_fc = tl.dot(x, w_fc, acc_fc)
-        off_k += BLOCK_SIZE_K
 
     acc_g += b_g[None, :]
     acc_fc += b_fc[None, :]

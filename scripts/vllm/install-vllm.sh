@@ -124,10 +124,6 @@ install_vllm() {
     exit 1
   fi
 
-  local benchmark_tests_dir="$ROOT/benchmarks/triton_kernels_benchmark/vllm/batched_moe/tests"
-  rm -rf "$benchmark_tests_dir"
-  cp -r "$VLLM_PROJ/tests" "$benchmark_tests_dir"
-
   sed -i \
     -e '/^pytest-shard/d' \
     -e '/^torch/d' \
