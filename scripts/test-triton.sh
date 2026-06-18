@@ -965,7 +965,7 @@ run_vllm_mrv2_tests() {
 
 run_vllm_moe_tests() {
   echo "********************************************************"
-  echo "******  Running vLLM MOE Triton kernel tests     *******"
+  echo "******  Running vLLM MOE tests                   *******"
   echo "********************************************************"
 
   enter_vllm_test_env
@@ -1043,7 +1043,7 @@ run_vllm_mamba_tests() {
 
 run_vllm_quant_tests() {
   echo "********************************************************"
-  echo "******  Running vLLM Quantization Triton tests   *******"
+  echo "******  Running vLLM Quantization tests          *******"
   echo "********************************************************"
 
   enter_vllm_test_env
