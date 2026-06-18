@@ -202,8 +202,9 @@ SEQ_LENS = [
     # High-concurrency continuous batching (max_concurrency=256 in vLLM):
     # 248 decode steps with realistic kv_len mix + 8 small (256-token) prefill chunks.
     # Mirrors sharegpt steady-state where the E2E TD speedup actually lives.
-    [(1, k) for k in ([1513, 4100, 530, 123, 4803, 434, 3015, 34, 256, 1024, 768, 2048, 192, 384, 1280, 96] *
-                      16)[:248]] + [(256, 256)] * 8,
+    [(1, k)
+     for k in ([1513, 4100, 530, 123, 4803, 434, 3015, 34, 256, 1024, 768, 2048, 192, 384, 1280, 96] * 16)[:248]] +
+    [(256, 256)] * 8,
 ]
 # Models: (q_heads, k_heads, head_size, qdtype, sliding_window, soft_cap)
 # sliding_window: None = full attention, int = sliding window size.
