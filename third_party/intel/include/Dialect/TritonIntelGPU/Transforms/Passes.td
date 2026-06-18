@@ -393,4 +393,33 @@ def TritonIntelGPULowerTo2DBlockLoad
   ];
 }
 
+def TritonIntelGPUCanonicalizePointers
+    : Pass<"tritonintelgpu-canonicalize-pointers", "mlir::ModuleOp"> {
+  let summary = "Canonicalize pointers: decompose tensor-pointer arithmetic "
+                "into scalar-base + tensor-offset form";
+  let description = [{
+    Traces every tt.ptr-typed function argument through its transitive uses and
+    decomposes tensor pointer arithmetic into a FatPtr{scalar_base,
+    tensor_offset} pair. Uniform (scalar-extractable) parts of each offset are
+    hoisted onto the scalar base pointer; only the non-uniform residual remains
+    as the tensor offset. At load/store sites the pass materializes
+    splat(scalar_base) + tensor_offset.
+
+    This reduces register pressure for pointer-heavy kernels by replacing
+    loop-carried tensor<Nx!tt.ptr> iter_args with scalar !tt.ptr iter_args.
+  }];
+  let dependentDialects = [
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::arith::ArithDialect",
+    "mlir::scf::SCFDialect",
+    "mlir::cf::ControlFlowDialect"
+  ];
+  let options = [
+    Option<"enableLargeTensorPtrCanon", "enable-large-tensor-ptr-canon",
+           "bool", /*default=*/"false",
+           "Enable canonicalization for pointers to tensors larger than 2GB">
+  ];
+}
+
 #endif // TRITON_INTEL_GPU_PASSES
