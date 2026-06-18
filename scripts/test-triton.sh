@@ -914,12 +914,16 @@ run_vllm_tests() {
   echo "******    Running vLLM Triton tests       ******"
   echo "************************************************"
 
-  enter_vllm_test_env
-  # FIXME: Make batched_moe and triton_unified_attention proper test suites.
-  # run_vllm_tests should eventually run all vllm testsuites.
-  run_pytest_command -vvv \
-    tests/kernels/moe/test_batched_moe.py \
-    tests/kernels/attention/test_triton_unified_attention.py
+  run_vllm_spec_decode_tests
+  run_vllm_mrv2_tests
+  run_vllm_moe_tests
+  run_vllm_triton_attn_tests
+  run_vllm_gdn_attn_tests
+  run_vllm_mamba_tests
+  run_vllm_quant_tests
+  run_vllm_linear_attn_tests
+  run_vllm_deepgemm_tests
+  run_vllm_kda_tests
 }
 
 
