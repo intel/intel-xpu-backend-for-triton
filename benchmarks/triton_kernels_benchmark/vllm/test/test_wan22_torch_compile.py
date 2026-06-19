@@ -39,8 +39,6 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-pytestmark = pytest.mark.skip(reason="WAN torch.compile tests are not stable for CI")
-
 # Skip this module in mini scope (use test_wan22_kernels_mini.py instead)
 SKIP_IN_MINI_SCOPE = True
 
