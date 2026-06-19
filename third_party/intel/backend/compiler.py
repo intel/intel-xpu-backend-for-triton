@@ -294,6 +294,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.common.add_inliner(pm)
         intel.passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         passes.common.add_cse(pm)
+        intel.passes.ttir.add_reassociate_dot_scale(pm, knobs.intel.fast_math)
         passes.ttir.add_triton_licm(pm)
         intel.passes.ttir.add_remove_masks(pm)
         intel.passes.ttir.add_stride_versioning(pm)
