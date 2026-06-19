@@ -196,7 +196,7 @@ def test_sycl_global_range_overflow(device):
         in_ptr1,
         out_ptr,
         n_elements,
-        BLOCK_SIZE: "tl.constexpr",
+        BLOCK_SIZE: tl.constexpr,
     ):
         pid = tl.program_id(axis=0).to(tl.int64)
         block_start = pid * BLOCK_SIZE
