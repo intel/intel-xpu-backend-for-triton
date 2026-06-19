@@ -1,6 +1,7 @@
 #include "intel/include/Analysis/AxisInfoExt.h"
 #include "intel/include/Analysis/StrideInfo.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/BlockIOUtils.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "intel/include/Utils/Utility.h"
@@ -253,20 +254,20 @@ private:
         return false;
       }
 
-      // Value -1 is used to represent the unknown stride.
+      // Runtime stride (-1) is OK if AxisInfo proves 16-byte alignment.
       int64_t otherDimStride =
           strideInfo ? strideInfo->getStride(otherDim) : -1;
-      if (otherDimStride < 0) {
-        LDBG("Found unknown stride: " << otherDimStride);
-        return false;
-      }
-
-      // Surface pitch is required to be 16 bytes aligned.
       Type elemTy =
           cast<tt::PointerType>(tensorTy.getElementType()).getPointeeType();
       unsigned elemSizeInBytes = elemTy.getIntOrFloatBitWidth() / 8;
-      if ((otherDimStride * elemSizeInBytes) % 16 != 0) {
-        LDBG("Found Non 16 bytes aligned stride: " << otherDimStride);
+      if (otherDimStride >= 0) {
+        if ((otherDimStride * elemSizeInBytes) % 16 != 0) {
+          LDBG("Non 16-byte aligned stride: " << otherDimStride);
+          return false;
+        }
+      } else if (axisInfo.getDivisibility(otherDim) % 16 != 0) {
+        LDBG("Runtime stride: divisibility "
+             << axisInfo.getDivisibility(otherDim) << " < 16 bytes");
         return false;
       }
 
@@ -527,22 +528,19 @@ private:
       return std::nullopt;
     }
 
+    // Surface pitch is encoded in 24 bits in the 2D block IO message
+    // descriptor.
+    constexpr int64_t maxPitchBytes = int64_t(1) << 24;
+    if (S * elemBytes > maxPitchBytes) {
+      LDBG("Pitch " << S * elemBytes
+                    << " bytes exceeds 24-bit HW limit, skip 1D reshape");
+      return std::nullopt;
+    }
+
     // Tile width must satisfy HW limits per element size.
-    auto isValidTileWidth = [](unsigned bits, int64_t w) -> bool {
-      switch (bits) {
-      case 8:
-        return w >= 4 && w <= 64;
-      case 16:
-        return w >= 2 && w <= 32;
-      case 32:
-        return w <= 16;
-      case 64:
-        return w <= 8;
-      default:
-        return false;
-      }
-    };
-    if (!isValidTileWidth(elemBits, W)) {
+    // The reshape always produces numElemPerPackedVal == 1, so
+    // packedElemSizeInBits == elemBits.
+    if (!ttgi::check2DBlockAddressPayloadRestriction(elemBits, W)) {
       LDBG("Tile width " << W << " invalid for " << elemBits
                          << "-bit elements, skip 1D reshape");
       return std::nullopt;
