@@ -72,6 +72,18 @@ bool isDivisible(Value value, unsigned divisor) {
       return divisibilityAttr &&
              divisibilityAttr.getValue().getZExtValue() % divisor == 0;
     }
+    if (scf::ForOp forOp = dyn_cast<scf::ForOp>(parentOp)) {
+      // Nested loops aren't currently handled.
+      if (forOp->template getParentOfType<scf::ForOp>())
+        return false;
+      if (!forOp.getSingleInductionVar())
+        return false;
+      // Check only if the block arg is the loop-var.
+      if (blockArg != forOp.getInductionVar())
+        return false;
+      return isDivisible(forOp.getLowerBound(), divisor) &&
+             isDivisible(forOp.getStep(), divisor);
+    }
   }
 
   // Case 3: Value is defined by a muli operation.
