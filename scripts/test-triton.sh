@@ -806,13 +806,14 @@ run_vllm_test_deps_install() {
 }
 
 enter_vllm_test_env() {
-  if [ ! -d "vllm" ]; then
-    echo "ERROR: $(pwd)/vllm not found. Run './scripts/test-triton.sh --install-vllm' or './scripts/vllm/install-vllm.sh' first." >&2
+  local vllm_dir="$TRITON_PROJ/vllm"
+  if [ ! -d "$vllm_dir" ]; then
+    echo "ERROR: $vllm_dir not found. Run './scripts/test-triton.sh --install-vllm' or './scripts/vllm/install-vllm.sh' first." >&2
     exit 1
   fi
 
   run_vllm_test_deps_install
-  cd vllm
+  cd "$vllm_dir"
 }
 
 run_sglang_install() {
@@ -914,12 +915,16 @@ run_vllm_tests() {
   echo "******    Running vLLM Triton tests       ******"
   echo "************************************************"
 
-  enter_vllm_test_env
-  # FIXME: Make batched_moe and triton_unified_attention proper test suites.
-  # run_vllm_tests should eventually run all vllm testsuites.
-  run_pytest_command -vvv \
-    tests/kernels/moe/test_batched_moe.py \
-    tests/kernels/attention/test_triton_unified_attention.py
+  run_vllm_spec_decode_tests
+  run_vllm_mrv2_tests
+  run_vllm_moe_tests
+  run_vllm_triton_attn_tests
+  run_vllm_gdn_attn_tests
+  run_vllm_mamba_tests
+  run_vllm_quant_tests
+  run_vllm_linear_attn_tests
+  run_vllm_deepgemm_tests
+  run_vllm_kda_tests
 }
 
 
@@ -960,7 +965,7 @@ run_vllm_mrv2_tests() {
 
 run_vllm_moe_tests() {
   echo "********************************************************"
-  echo "******  Running vLLM MOE Triton kernel tests     *******"
+  echo "******  Running vLLM MOE tests                   *******"
   echo "********************************************************"
 
   enter_vllm_test_env
@@ -1038,7 +1043,7 @@ run_vllm_mamba_tests() {
 
 run_vllm_quant_tests() {
   echo "********************************************************"
-  echo "******  Running vLLM Quantization Triton tests   *******"
+  echo "******  Running vLLM Quantization tests          *******"
   echo "********************************************************"
 
   enter_vllm_test_env
