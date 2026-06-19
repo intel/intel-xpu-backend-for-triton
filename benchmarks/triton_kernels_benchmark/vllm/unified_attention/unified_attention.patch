@@ -204,7 +204,7 @@ index 0ffe85054..00000000 100644
  
      # The kernel signature is the same for 2D and 3D — only the launch
      # grid + a handful of constexpr toggles differ.  Per-token-head scale
-@@ -960,17 +996,47 @@
+@@ -960,17 +996,57 @@
          v_scale_ptr = None
      # 3D needs real segm tensors; 2D never touches them.  Pass ``None`` in
      # 2D mode so Triton can skip materialising these pointer arguments.
@@ -238,6 +238,16 @@ index 0ffe85054..00000000 100644
      num_segments = num_par_softmax_segments if use_3d else 1
  
 -    grid: tuple[Any, ...]
++    # Ideally we would launch with:
++    # \sum_i[ceil(query_len[i] / BLOCK_Q)] blocks.
++    # However, it is slow to realize the query_lens on CPU.
++    # Instead use the upper bound:
++    # \sum_i[ceil(query_len[i] / BLOCK_Q)]
++    #   <= \sum_i[floor(query_len[i] / BLOCK_Q) + 1]
++    #    = \sum_i[floor(query_len[i] / BLOCK_Q)] + num_seqs
++    #   <= floor(\sum_i(query_len[i]) / BLOCK_Q) + num_seqs
++    #    = floor(q.shape[0] / BLOCK_Q) + num_seqs
++    # BLOCK_Q is autotuned, so compute the grid from meta.
      if not use_3d:
 -        grid = (total_num_q_blocks, num_kv_heads)
 +        grid = lambda meta: (
