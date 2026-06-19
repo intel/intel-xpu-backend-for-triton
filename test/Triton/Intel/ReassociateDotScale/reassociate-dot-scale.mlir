@@ -159,6 +159,48 @@ module {
   // CHECK: %[[NEW_DOT:.*]] = tt.dot %[[SCALED_A]], %[[B_LOAD]]
 }
 
+// -----
+
+module {
+  // COM: Scale narrower than the dot operand. The scale tensor (and dot result)
+  // COM: are f16 while the operands are f32, so the scale is extended up to the
+  // COM: f32 compute type (lossless) before the multiply. The compute type
+  // COM: matches the f32 operand, so no operand extf and no product truncf are
+  // COM: emitted — only the scale scalar is extended.
+  // CHECK-LABEL: tt.func public @scale_narrower_than_operand
+  tt.func public @scale_narrower_than_operand(%a_inv: tensor<128x64xf32>, %b_ptr: !tt.ptr<f32>, %scale_scalar: f16, %lb: i32, %ub: i32, %step: i32) -> tensor<128x128xf16> {
+    %c64 = arith.constant 64 : i32
+    %zero_acc = arith.constant dense<0.000000e+00> : tensor<128x128xf16>
+
+    %result = scf.for %iv = %lb to %ub step %step iter_args(%acc = %zero_acc) -> (tensor<128x128xf16>) : i32 {
+      %b_offset = arith.muli %iv, %c64 : i32
+      %b_ptr_off = tt.addptr %b_ptr, %b_offset : !tt.ptr<f32>, i32
+      %b_ptr_splat = tt.splat %b_ptr_off : !tt.ptr<f32> -> tensor<64x128x!tt.ptr<f32>>
+      %b_var = tt.load %b_ptr_splat : tensor<64x128x!tt.ptr<f32>>
+
+      %dot_res = tt.dot %a_inv, %b_var, %zero_acc, inputPrecision = tf32 : tensor<128x64xf32> * tensor<64x128xf32> -> tensor<128x128xf16>
+      %scale_splat = tt.splat %scale_scalar : f16 -> tensor<128x128xf16>
+      %scaled_dot = arith.mulf %scale_splat, %dot_res : tensor<128x128xf16>
+
+      %acc_new = arith.addf %acc, %scaled_dot : tensor<128x128xf16>
+      scf.yield %acc_new : tensor<128x128xf16>
+    }
+    tt.return %result : tensor<128x128xf16>
+  }
+
+  // CHECK: scf.for
+  // CHECK: %[[B_LOAD:.*]] = tt.load
+  // COM: Scale scalar extended f16 -> f32 before the splat (compute in f32)
+  // CHECK: %[[SCALE_EXT:.*]] = arith.extf %{{.*}} : f16 to f32
+  // CHECK: %[[SCALE_SPLAT:.*]] = tt.splat %[[SCALE_EXT]] : f32 -> tensor<128x64xf32>
+  // COM: No extf on the operand — it is already f32
+  // CHECK-NOT: arith.extf %{{.*}} : tensor
+  // CHECK: %[[SCALED_A:.*]] = arith.mulf %{{.*}}, %[[SCALE_SPLAT]] fastmath<reassoc> : tensor<128x64xf32>
+  // COM: No truncf — compute type matches the f32 operand type
+  // CHECK-NOT: arith.truncf
+  // CHECK: %[[NEW_DOT:.*]] = tt.dot %[[SCALED_A]], %[[B_LOAD]]
+}
+
 //===----------------------------------------------------------------------===//
 // NEGATIVE TESTS — must NOT rewrite (IR structure preserved)
 //===----------------------------------------------------------------------===//

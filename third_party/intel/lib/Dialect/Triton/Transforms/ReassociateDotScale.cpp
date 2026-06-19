@@ -136,13 +136,17 @@ public:
           dotOp, "both operands variant (no hoisting opportunity)");
     }
 
-    // Step 6: Compute-type safety
+    // Step 6: Select the compute type. The scale multiply is performed in the
+    // wider of the scale and target element types so it is always lossless,
+    // then the result is converted back to the target type. A narrower scale is
+    // extended up to the target type (exact); a wider scale instead widens the
+    // target and truncates the product back down.
     auto targetTy = cast<RankedTensorType>(target.getType());
     auto targetElemTy = cast<FloatType>(targetTy.getElementType());
-    if (scaleElemTy.getIntOrFloatBitWidth() <
-        targetElemTy.getIntOrFloatBitWidth())
-      return rewriter.notifyMatchFailure(
-          mulOp, "scale element type is narrower than target");
+    FloatType computeElemTy = scaleElemTy.getIntOrFloatBitWidth() >=
+                                      targetElemTy.getIntOrFloatBitWidth()
+                                  ? scaleElemTy
+                                  : targetElemTy;
 
     // REWRITE
     LDBG("Applying reassociation on " << *mulOp);
@@ -153,16 +157,21 @@ public:
           rewriter, loc, FloatAttr::get(scaleElemTy, constantSplatValue));
     }
 
+    // Widen the scale scalar up to the compute type if it is narrower
+    // (lossless). Extending before the splat keeps the conversion on a scalar.
+    if (scaleElemTy != computeElemTy)
+      scalarValue =
+          arith::ExtFOp::create(rewriter, loc, computeElemTy, scalarValue);
+
     // Build splat to target shape in compute type
     RankedTensorType splatTy = RankedTensorType::get(
-        targetTy.getShape(), scaleElemTy, targetTy.getEncoding());
+        targetTy.getShape(), computeElemTy, targetTy.getEncoding());
     Value scaleSplat = tt::SplatOp::create(rewriter, loc, splatTy, scalarValue);
 
     // Widen target if needed
     Value targetExt = target;
-    if (targetElemTy != scaleElemTy) {
+    if (targetElemTy != computeElemTy)
       targetExt = arith::ExtFOp::create(rewriter, loc, splatTy, target);
-    }
 
     // Multiply with reassoc fastmath flag
     auto fmf = arith::FastMathFlagsAttr::get(rewriter.getContext(),
@@ -170,11 +179,10 @@ public:
     Value scaledExt =
         arith::MulFOp::create(rewriter, loc, targetExt, scaleSplat, fmf);
 
-    // Truncate back if widened
+    // Truncate back to the target type if we computed in a wider type
     Value scaled = scaledExt;
-    if (targetElemTy != scaleElemTy) {
+    if (targetElemTy != computeElemTy)
       scaled = arith::TruncFOp::create(rewriter, loc, targetTy, scaledExt);
-    }
 
     // Build new dot in original operand positions
     Value newA = (opIdx == 0) ? scaled : dotOp.getA();
