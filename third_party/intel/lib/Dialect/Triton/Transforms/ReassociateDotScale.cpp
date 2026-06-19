@@ -71,6 +71,13 @@ public:
 
     if (auto splat = scaleVal.getDefiningOp<tt::SplatOp>()) {
       scalarValue = splat.getSrc();
+      // Integer dots are intentionally out of scope. The reassociation is
+      // algebraically valid for integers, but scaling a narrow integer DPAS
+      // operand (i8/u8/i4) by an arbitrary scale overflows, and widening the
+      // operand to avoid that defeats the integer DPAS lowering this rewrite
+      // exists to preserve. (Integer scales also reach the dot via muli/sitofp,
+      // not this mulf pattern.) The guard is also load-bearing: it protects the
+      // cast below from a non-float splat source.
       if (!isa<FloatType>(scalarValue.getType()))
         return rewriter.notifyMatchFailure(
             mulOp, "splat source is not a float scalar");

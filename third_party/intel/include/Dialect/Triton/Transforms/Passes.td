@@ -174,6 +174,11 @@ def TritonIntelReassociateDotScale
 
     The transformation requires a zero accumulator: the algebra
     `c * (a @ b) = (c * a) @ b` only holds when the dot accumulator is zero.
+
+    The rewrite is floating-point only by design. The reassociation is
+    algebraically valid for integer dots, but scaling a narrow integer DPAS
+    operand (i8/u8/i4) overflows, and widening it to avoid overflow defeats the
+    integer DPAS lowering this rewrite is meant to preserve.
   }];
   let options = [
     Option<"fastMath", "fast-math", "bool", /*default*/"false",
