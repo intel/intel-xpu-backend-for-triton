@@ -1118,13 +1118,10 @@ run_vllm_inductor_tests() {
   echo "******  Running vLLM Inductor tests              *******"
   echo "********************************************************"
 
-  # Validates torch.compile/inductor-generated Triton fused kernels for shapes
-  # captured from vllm model profiling. Does not require a vllm checkout — only
-  # optionally uses vllm_xpu_kernels (installed by --install-vllm) for SYCL
-  # kernel comparisons.
-  cd "$TRITON_PROJ/benchmarks/triton_kernels_benchmark/vllm/test"
+  cd "$TRITON_PROJ/benchmarks/triton_kernels_benchmark/vllm"
   TRITON_TEST_SUITE=vllm_inductor \
-    run_pytest_command -vvv -s --device xpu test_wan22_torch_compile.py
+    run_pytest_command -vvv \
+      test/test_wan22_torch_compile.py
 }
 
 
