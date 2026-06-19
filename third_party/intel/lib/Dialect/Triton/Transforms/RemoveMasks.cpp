@@ -341,11 +341,6 @@ private:
 
   // Classify a single `arith.cmpi` mask against the loop IV range.
   MaskClassification classifyCmp(scf::ForOp &forOp, Value finalVal) const {
-    std::optional<ConstantIntRanges> optRange =
-        tt::intel::collectLoopIVRange(forOp, *solver);
-    if (!optRange)
-      return MaskClassification::Unknown;
-
     if (!finalVal.getDefiningOp() ||
         !isa<arith::CmpIOp>(finalVal.getDefiningOp()))
       return MaskClassification::Unknown;

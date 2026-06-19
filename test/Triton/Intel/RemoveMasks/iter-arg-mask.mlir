@@ -38,7 +38,7 @@ module {
     tt.return
   }
 
-  // CHECK: tt.func public @test_iter_arg_k_mask
+  // CHECK-LABEL: @test_iter_arg_k_mask
   // COM: The mask is proven always-true and directly removed.
   // CHECK: scf.for
   // CHECK:   tt.load {{%[0-9]+}} : tensor<32x!tt.ptr<f16>>
