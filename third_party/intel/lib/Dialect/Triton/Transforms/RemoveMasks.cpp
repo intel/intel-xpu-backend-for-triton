@@ -28,14 +28,17 @@ namespace mlir::triton::intel {
 
 namespace {
 
-// Returns true if `pred` is a supported bound-check predicate in the `<` /
-// `<=` family, independent of which operand is the varying index or bound.
+// Returns true if `pred` is a supported bound-check predicate.
 static bool isSupportedBoundPredicate(arith::CmpIPredicate pred) {
   switch (pred) {
   case arith::CmpIPredicate::slt:
   case arith::CmpIPredicate::sle:
   case arith::CmpIPredicate::ult:
   case arith::CmpIPredicate::ule:
+  case arith::CmpIPredicate::sge:
+  case arith::CmpIPredicate::sgt:
+  case arith::CmpIPredicate::uge:
+  case arith::CmpIPredicate::ugt:
     return true;
   default:
     return false;
@@ -62,9 +65,14 @@ static MaskClassification classifyMask(arith::CmpIPredicate pred,
   assert(isSupportedBoundPredicate(pred) && "Unsupported predicate");
 
   bool isSigned =
-      (pred == arith::CmpIPredicate::slt || pred == arith::CmpIPredicate::sle);
+      (pred == arith::CmpIPredicate::slt || pred == arith::CmpIPredicate::sle ||
+       pred == arith::CmpIPredicate::sge || pred == arith::CmpIPredicate::sgt);
+  bool isLessThan =
+      (pred == arith::CmpIPredicate::slt || pred == arith::CmpIPredicate::ult ||
+       pred == arith::CmpIPredicate::sle || pred == arith::CmpIPredicate::ule);
   bool isStrict =
-      (pred == arith::CmpIPredicate::slt || pred == arith::CmpIPredicate::ult);
+      (pred == arith::CmpIPredicate::slt || pred == arith::CmpIPredicate::ult ||
+       pred == arith::CmpIPredicate::sgt || pred == arith::CmpIPredicate::ugt);
 
   unsigned bitWidth = constVal.getBitWidth();
   APInt ivMin = isSigned ? ivRange.smin() : ivRange.umin();
@@ -111,18 +119,34 @@ static MaskClassification classifyMask(arith::CmpIPredicate pred,
     return isSigned ? a.sge(b) : a.uge(b);
   };
 
-  if (isStrict) {
-    // `<`  (slt or ult)
-    if (lt(maxElem, constVal))
-      return MaskClassification::AlwaysTrue;
-    if (ge(minElem, constVal))
-      return MaskClassification::AlwaysFalse;
+  if (isLessThan) {
+    if (isStrict) {
+      // `<`  (slt or ult): AlwaysTrue if maxElem < constVal
+      if (lt(maxElem, constVal))
+        return MaskClassification::AlwaysTrue;
+      if (ge(minElem, constVal))
+        return MaskClassification::AlwaysFalse;
+    } else {
+      // `<=` (sle or ule): AlwaysTrue if maxElem <= constVal
+      if (le(maxElem, constVal))
+        return MaskClassification::AlwaysTrue;
+      if (gt(minElem, constVal))
+        return MaskClassification::AlwaysFalse;
+    }
   } else {
-    // `<=` (sle or ule)
-    if (le(maxElem, constVal))
-      return MaskClassification::AlwaysTrue;
-    if (gt(minElem, constVal))
-      return MaskClassification::AlwaysFalse;
+    if (isStrict) {
+      // `>`  (sgt or ugt): AlwaysTrue if minElem > constVal
+      if (gt(minElem, constVal))
+        return MaskClassification::AlwaysTrue;
+      if (le(maxElem, constVal))
+        return MaskClassification::AlwaysFalse;
+    } else {
+      // `>=` (sge or uge): AlwaysTrue if minElem >= constVal
+      if (ge(minElem, constVal))
+        return MaskClassification::AlwaysTrue;
+      if (lt(maxElem, constVal))
+        return MaskClassification::AlwaysFalse;
+    }
   }
   return MaskClassification::Unknown;
 }
@@ -203,16 +227,6 @@ public:
     return opToMaskValue[op];
   }
 
-private:
-  // Record the final mask value for the given masked operation.
-  // Fixes #6871: each operation must record only its own mask, not the masks of
-  // its other users (which would poison the map for ops consuming two masks,
-  // e.g. an arith.select using one mask as condition and another as
-  // true-value).
-  void registerMaskValue(Operation *op, bool maskVal) const {
-    opToMaskValue.insert({op, maskVal});
-  }
-
   // Dispatch on the mask's defining op: `arith.andi` is combined recursively,
   // otherwise fall through to cmp classification.
   MaskClassification classify(scf::ForOp &forOp, Value mask) const {
@@ -222,6 +236,12 @@ private:
     if (auto andOp = dyn_cast_or_null<arith::AndIOp>(finalVal.getDefiningOp()))
       return classifyAnd(forOp, andOp);
     return classifyCmp(forOp, finalVal);
+  }
+
+private:
+  // Record the final mask value for the given masked operation.
+  void registerMaskValue(Operation *op, bool maskVal) const {
+    opToMaskValue.insert({op, maskVal});
   }
 
   // Combine classifications of the two operands of an `arith.andi` mask:
@@ -239,6 +259,106 @@ private:
         rhsCls == MaskClassification::AlwaysTrue)
       return MaskClassification::AlwaysTrue;
     return MaskClassification::Unknown;
+  }
+
+  // Check whether a value is the loop induction variable or a loop iter_arg
+  // that is equivalent to the IV (same init as lower bound, same step).
+  // Returns the IV range if so, std::nullopt otherwise.
+  std::optional<ConstantIntRanges> getIVEquivalentRange(scf::ForOp &forOp,
+                                                        Value val) const {
+    std::optional<ConstantIntRanges> ivRange =
+        tt::intel::collectLoopIVRange(forOp, *solver);
+    if (!ivRange)
+      return std::nullopt;
+
+    // Case 1: val is directly the loop IV.
+    if (val == forOp.getSingleInductionVar())
+      return ivRange;
+
+    // Case 2: val (before getFinalValue resolution) is a loop iter_arg with
+    // the same behavior as the IV: init == lower_bound, yield == self + step.
+    // We need to check the ORIGINAL value before getFinalValue resolved it
+    // to the init. Unfortunately getFinalValue already resolved it, so we
+    // check if the resolved value equals the loop's lower bound constant.
+    // Then verify the iter_arg's yield is iter_arg + step.
+    //
+    // However, this approach is fragile. Instead, use a different strategy:
+    // check if `val` resolved to the loop's lower bound constant (meaning it
+    // was an iter_arg with that init), and if the loop has a matching iter_arg.
+    // We look for iter_args whose init matches the loop lower bound and whose
+    // yield increments by the loop step.
+    OpFoldResult lbOFR = *forOp.getSingleLowerBound();
+    OpFoldResult stepOFR = *forOp.getSingleStep();
+
+    // Get the loop bounds as constants.
+    auto getConstant = [](OpFoldResult ofr) -> std::optional<int64_t> {
+      if (auto attr = dyn_cast<Attribute>(ofr)) {
+        if (auto intAttr = dyn_cast_or_null<IntegerAttr>(attr))
+          return intAttr.getInt();
+        return std::nullopt;
+      }
+      APInt intVal;
+      if (matchPattern(cast<Value>(ofr), m_ConstantInt(&intVal)))
+        return intVal.getSExtValue();
+      return std::nullopt;
+    };
+
+    std::optional<int64_t> lbConst = getConstant(lbOFR);
+    std::optional<int64_t> stepConst = getConstant(stepOFR);
+    if (!lbConst || !stepConst)
+      return std::nullopt;
+
+    // Check if `val` is a constant matching the loop's lower bound.
+    // This happens when getFinalValue resolved an iter_arg to its init.
+    auto matchesInt = [](Value v, int64_t expected) -> bool {
+      APInt intVal;
+      if (matchPattern(v, m_ConstantInt(&intVal)))
+        return intVal.getSExtValue() == expected;
+      DenseElementsAttr denseAttr;
+      if (matchPattern(v, m_Constant(&denseAttr)) && denseAttr.isSplat()) {
+        if (auto intAttr =
+                dyn_cast<IntegerAttr>(denseAttr.getSplatValue<Attribute>()))
+          return intAttr.getInt() == expected;
+      }
+      return false;
+    };
+
+    if (!matchesInt(val, *lbConst))
+      return std::nullopt;
+
+    // val resolved to the loop's lower bound. Now verify there exists an
+    // iter_arg in this loop that starts at lb and yields (self + step).
+    // Check all iter_args.
+    auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+    unsigned numIVs = forOp.getNumInductionVars();
+    for (unsigned i = 0, e = forOp.getNumRegionIterArgs(); i < e; ++i) {
+      Value initArg = forOp.getInitArgs()[i];
+      // Check init == lower_bound.
+      if (!matchesInt(initArg, *lbConst)) {
+        continue;
+      }
+
+      // Check yield == iter_arg + step.
+      Value yieldVal = yieldOp.getOperand(i);
+      auto yieldAdd = yieldVal.getDefiningOp<arith::AddIOp>();
+      if (!yieldAdd)
+        continue;
+
+      BlockArgument iterArg = forOp.getRegionIterArg(i);
+      Value yieldAddLhs = yieldAdd.getLhs();
+      Value yieldAddRhs = yieldAdd.getRhs();
+
+      bool lhsIsIterArg = (yieldAddLhs == iterArg);
+      bool rhsIsIterArg = (yieldAddRhs == iterArg);
+      if (!lhsIsIterArg && !rhsIsIterArg)
+        continue;
+
+      Value stepOperand = lhsIsIterArg ? yieldAddRhs : yieldAddLhs;
+      if (matchesInt(stepOperand, *stepConst))
+        return ivRange; // This iter_arg has the same range as the IV.
+    }
+
+    return std::nullopt;
   }
 
   // Classify a single `arith.cmpi` mask against the loop IV range.
@@ -266,8 +386,14 @@ private:
       return MaskClassification::Unknown;
 
     auto getIntConstantValue = [](Operation *op) -> std::optional<APInt> {
+      // Scalar integer constant (after getFinalValue peeled tt.splat).
+      APInt intVal;
+      if (op->getNumResults() > 0 &&
+          matchPattern(op->getResult(0), m_ConstantInt(&intVal)))
+        return intVal;
+      // Dense tensor constant splat.
       DenseElementsAttr constAttr;
-      if (matchPattern(op, m_Constant(&constAttr))) {
+      if (matchPattern(op, m_Constant(&constAttr)) && constAttr.isSplat()) {
         auto attr = constAttr.getSplatValue<Attribute>();
         if (auto intAttr = dyn_cast_or_null<IntegerAttr>(attr))
           return intAttr.getValue();
@@ -286,7 +412,11 @@ private:
 
     Value addLhs = tt::intel::getFinalValue(addOp.getLhs());
     Value addRhs = tt::intel::getFinalValue(addOp.getRhs());
-    if (addLhs != forOp.getSingleInductionVar())
+
+    // Check if addLhs is the loop IV or an IV-equivalent iter_arg.
+    std::optional<ConstantIntRanges> lhsRange =
+        getIVEquivalentRange(forOp, addLhs);
+    if (!lhsRange)
       return MaskClassification::Unknown;
 
     auto makeRangeOp =
@@ -294,7 +424,7 @@ private:
     if (!makeRangeOp)
       return MaskClassification::Unknown;
 
-    return classifyMask(pred, *optRange, makeRangeOp.getStart(),
+    return classifyMask(pred, *lhsRange, makeRangeOp.getStart(),
                         makeRangeOp.getEnd(), *constIntVal);
   }
 
@@ -479,21 +609,39 @@ public:
   //   - N < M (with i1 data type)
   //   - [0..END] < splat(N)
   //   - splat(N) < [0..END]
+  //   - arith.andi of valid sub-masks (compound boundary checks)
+  //   - (splat(offset) + ext(make_range(0, END))) cmp dense<constant>
+  //     (boundary checks from RewriteTensorDescriptorToPointer)
   virtual bool isValidMask(scf::ForOp &forOp, Value mask, Operation *op) const {
     Value finalVal = tt::intel::getFinalValue(mask);
     assert(finalVal && "Expecting a valid mask");
 
-    if (!finalVal.getDefiningOp() ||
-        !isa<arith::CmpIOp>(finalVal.getDefiningOp()))
+    if (!finalVal.getDefiningOp())
+      return false;
+
+    // Handle compound andi masks by recursing into both operands.
+    if (auto andOp = dyn_cast<arith::AndIOp>(finalVal.getDefiningOp()))
+      return isValidMask(forOp, andOp.getLhs(), op) &&
+             isValidMask(forOp, andOp.getRhs(), op);
+
+    if (!isa<arith::CmpIOp>(finalVal.getDefiningOp()))
       return false;
 
     auto cmpOp = cast<arith::CmpIOp>(finalVal.getDefiningOp());
     arith::CmpIPredicate pred = cmpOp.getPredicate();
-    if (!isSupportedBoundPredicate(pred))
-      return false;
 
     bool isInLoop = (cmpOp->getParentOfType<scf::ForOp>() == forOp);
     if (isInLoop)
+      return false;
+
+    // Boundary-check pattern from RewriteTensorDescriptorToPointer:
+    // (splat(offset) + ext(make_range(start, end))) cmp dense<constant>
+    // Accepts all comparison predicates (including sge for >= 0 checks).
+    if (isBoundaryCheckPattern(cmpOp))
+      return true;
+
+    // Original patterns only support < / <= predicates.
+    if (!isSupportedBoundPredicate(pred))
       return false;
 
     Value lhsVal = tt::intel::getFinalValue(cmpOp.getLhs());
@@ -522,7 +670,7 @@ public:
     }
 
     return false;
-  } // namespace
+  }
 
   virtual Value getVersioningCond(scf::ForOp &forOp, Value mask) const {
     assert(isValidMask(forOp, mask, /*op=*/nullptr) && "Invalid mask");
@@ -530,6 +678,14 @@ public:
     OpBuilder builder(forOp);
     Location loc = forOp.getLoc();
     Value finalMask = tt::intel::getFinalValue(mask);
+
+    // Handle compound andi: AND the versioning conditions of both operands.
+    if (auto andOp = dyn_cast<arith::AndIOp>(finalMask.getDefiningOp())) {
+      Value lhsCond = getVersioningCond(forOp, andOp.getLhs());
+      Value rhsCond = getVersioningCond(forOp, andOp.getRhs());
+      return builder.createOrFold<arith::AndIOp>(loc, lhsCond, rhsCond);
+    }
+
     auto cmpOp = cast<arith::CmpIOp>(finalMask.getDefiningOp());
     arith::CmpIPredicate pred = cmpOp.getPredicate();
     Value lhsVal = tt::intel::getFinalValue(cmpOp.getLhs());
@@ -561,11 +717,161 @@ public:
       return builder.createOrFold<arith::CmpIOp>(loc, pred, lhsVal, cstOp);
     }
 
+    // Boundary-check pattern: (splat(offset) + ext(make_range)) cmp constant
+    // Generate scalar versioning condition.
+    if (isBoundaryCheckPattern(cmpOp))
+      return getBoundaryCheckVersioningCond(cmpOp, builder, loc);
+
     llvm_unreachable("Unexpected mask");
     return {};
   }
 
   virtual std::string getName() const { return "InvariantMaskValidator"; }
+
+private:
+  // Check if a cmpi is a boundary-check from RewriteTensorDescriptorToPointer:
+  //   (splat(offset) + ext(make_range(start, end))) cmp dense<constant>
+  // Also handles: (ext(make_range) + splat(offset)) and commuted forms.
+  // Check if a value is a uniform constant (dense splat or tt.splat of scalar
+  // constant).
+  static bool isUniformConstant(Value val) {
+    // Dense constant splat.
+    DenseElementsAttr attr;
+    if (matchPattern(val, m_Constant(&attr)) && attr.isSplat())
+      return true;
+    // tt.splat of a scalar constant.
+    if (auto splatOp = val.getDefiningOp<tt::SplatOp>()) {
+      Value src = splatOp.getSrc();
+      return src.getDefiningOp<arith::ConstantIntOp>() ||
+             src.getDefiningOp<arith::ConstantOp>();
+    }
+    return false;
+  }
+
+  // Extract the scalar constant value from a uniform constant (dense splat or
+  // tt.splat).
+  static std::optional<APInt> getUniformConstantValue(Value val) {
+    DenseElementsAttr attr;
+    if (matchPattern(val, m_Constant(&attr)) && attr.isSplat()) {
+      if (auto intAttr = dyn_cast<IntegerAttr>(attr.getSplatValue<Attribute>()))
+        return intAttr.getValue();
+      return std::nullopt;
+    }
+    if (auto splatOp = val.getDefiningOp<tt::SplatOp>()) {
+      Value src = splatOp.getSrc();
+      if (auto constOp = src.getDefiningOp<arith::ConstantIntOp>()) {
+        unsigned bitWidth = src.getType().getIntOrFloatBitWidth();
+        return APInt(bitWidth, constOp.value());
+      }
+      if (auto constOp = src.getDefiningOp<arith::ConstantOp>()) {
+        if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue()))
+          return intAttr.getValue();
+      }
+    }
+    return std::nullopt;
+  }
+
+  static bool isBoundaryCheckPattern(arith::CmpIOp cmpOp) {
+    // RHS must be a uniform constant (dense splat or tt.splat of scalar).
+    Value rhs = cmpOp.getRhs();
+    if (!isUniformConstant(rhs))
+      return false;
+
+    // LHS must be an addi containing a splat and an ext(make_range).
+    Value lhs = cmpOp.getLhs();
+    // Peel through expand_dims.
+    while (auto expandOp = lhs.getDefiningOp<tt::ExpandDimsOp>())
+      lhs = expandOp.getSrc();
+
+    auto addOp = lhs.getDefiningOp<arith::AddIOp>();
+    if (!addOp)
+      return false;
+
+    // One operand should be a splat (the offset), the other should contain
+    // a make_range (possibly through extsi).
+    auto hasSplat = [](Value v) {
+      return v.getDefiningOp<tt::SplatOp>() != nullptr;
+    };
+    auto hasMakeRange = [](Value v) {
+      // Peel extsi.
+      if (auto extOp = v.getDefiningOp<arith::ExtSIOp>())
+        v = extOp.getIn();
+      return v.getDefiningOp<tt::MakeRangeOp>() != nullptr;
+    };
+
+    return (hasSplat(addOp.getLhs()) && hasMakeRange(addOp.getRhs())) ||
+           (hasSplat(addOp.getRhs()) && hasMakeRange(addOp.getLhs()));
+  }
+
+  // Generate scalar versioning condition for a boundary-check pattern.
+  // For (splat(offset) + ext(make_range(start, end))) < dense<bound>:
+  //   condition = offset + (end - 1) < bound   (all elements in range satisfy)
+  // For (splat(offset) + ext(make_range(start, end))) >= dense<bound>:
+  //   condition = offset + start >= bound       (min element satisfies)
+  static Value getBoundaryCheckVersioningCond(arith::CmpIOp cmpOp,
+                                              OpBuilder &builder,
+                                              Location loc) {
+    arith::CmpIPredicate pred = cmpOp.getPredicate();
+
+    // Extract the constant bound from RHS.
+    std::optional<APInt> optBoundVal = getUniformConstantValue(cmpOp.getRhs());
+    assert(optBoundVal && "Expected uniform constant RHS");
+    APInt boundVal = *optBoundVal;
+
+    // Extract offset scalar and make_range from LHS.
+    Value lhs = cmpOp.getLhs();
+    while (auto expandOp = lhs.getDefiningOp<tt::ExpandDimsOp>())
+      lhs = expandOp.getSrc();
+    auto addOp = cast<arith::AddIOp>(lhs.getDefiningOp());
+
+    Value offsetVal;
+    tt::MakeRangeOp rangeOp;
+    if (addOp.getLhs().getDefiningOp<tt::SplatOp>()) {
+      offsetVal = addOp.getLhs().getDefiningOp<tt::SplatOp>().getSrc();
+      Value rangeV = addOp.getRhs();
+      if (auto extOp = rangeV.getDefiningOp<arith::ExtSIOp>())
+        rangeV = extOp.getIn();
+      rangeOp = cast<tt::MakeRangeOp>(rangeV.getDefiningOp());
+    } else {
+      offsetVal = addOp.getRhs().getDefiningOp<tt::SplatOp>().getSrc();
+      Value rangeV = addOp.getLhs();
+      if (auto extOp = rangeV.getDefiningOp<arith::ExtSIOp>())
+        rangeV = extOp.getIn();
+      rangeOp = cast<tt::MakeRangeOp>(rangeV.getDefiningOp());
+    }
+
+    // For < / <= predicates: use max element = offset + (end - 1)
+    //   "all elements < bound" iff "offset + (end-1) < bound"
+    // For >= / > predicates: use min element = offset + start
+    //   "all elements >= bound" iff "offset + start >= bound"
+    unsigned bitWidth = boundVal.getBitWidth();
+    int64_t rangeAdjust;
+    if (pred == arith::CmpIPredicate::slt ||
+        pred == arith::CmpIPredicate::ult ||
+        pred == arith::CmpIPredicate::sle || pred == arith::CmpIPredicate::ule)
+      rangeAdjust = rangeOp.getEnd() - 1;
+    else
+      rangeAdjust = rangeOp.getStart(); // sge, sgt, uge, ugt
+
+    // Build: offset + rangeAdjust
+    Type scalarTy = builder.getIntegerType(bitWidth);
+    // Extend offset to match bound bitwidth if needed.
+    if (offsetVal.getType().getIntOrFloatBitWidth() < bitWidth)
+      offsetVal = arith::ExtSIOp::create(builder, loc, scalarTy, offsetVal);
+    else if (offsetVal.getType().getIntOrFloatBitWidth() > bitWidth)
+      offsetVal = arith::TruncIOp::create(builder, loc, scalarTy, offsetVal);
+
+    Value lhsScalar = offsetVal;
+    if (rangeAdjust != 0) {
+      Value adjustVal =
+          arith::ConstantIntOp::create(builder, loc, scalarTy, rangeAdjust);
+      lhsScalar = arith::AddIOp::create(builder, loc, offsetVal, adjustVal);
+    }
+
+    Value boundConst = arith::ConstantIntOp::create(builder, loc, scalarTy,
+                                                    boundVal.getSExtValue());
+    return arith::CmpIOp::create(builder, loc, pred, lhsScalar, boundConst);
+  }
 };
 
 // Collects masked operations in a loop that satisfy the condition imposed by
@@ -819,6 +1125,124 @@ public:
             dropMask(op, maskVal);
           }
         }
+      }
+      return WalkResult::advance();
+    });
+
+    // Simplify compound masks by replacing always-true sub-components with
+    // constant true. This handles the case where a mask is andi(invariant_part,
+    // loop_dependent_part) and the loop_dependent_part is provably always-true.
+    // After simplification, the remaining invariant parts can be handled by
+    // InvariantMaskValidator below.
+    moduleOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
+      if (scf::ForOp forOp = dyn_cast<scf::ForOp>(op)) {
+        if (forOp->template getParentOfType<scf::ForOp>())
+          return WalkResult::advance();
+        if (!forOp.getSingleInductionVar())
+          return WalkResult::advance();
+
+        // Only process loops that have masked loads.
+        bool hasMaskedLoads = false;
+        for (auto loadOp : forOp.getOps<tt::LoadOp>()) {
+          if (loadOp.getMask()) {
+            hasMaskedLoads = true;
+            break;
+          }
+        }
+        if (!hasMaskedLoads)
+          return WalkResult::advance();
+
+        RemovableMaskValidator maskValidator(solver.get());
+
+        // Collect andi ops inside the loop whose operands might be
+        // simplifiable (e.g., K-dimension masks that are always true).
+        SmallVector<arith::AndIOp> andisToSimplify;
+        forOp->walk(
+            [&](arith::AndIOp andOp) { andisToSimplify.push_back(andOp); });
+
+        // Two-pass approach: first classify, then replace (to avoid
+        // invalidating iterators during replacement).
+        // Pass 1: Classify K-dimension andis (children).
+        IRRewriter rewriter(&getContext());
+        SmallVector<std::pair<arith::AndIOp, int>> replacements;
+        // -1 = no action, 0 = both true, 1 = lhs true, 2 = rhs true
+        for (arith::AndIOp andOp : andisToSimplify) {
+          auto trySimplifyOperand = [&](Value operand) -> bool {
+            Value finalVal = tt::intel::getFinalValue(operand);
+            DenseElementsAttr attr;
+            if (matchPattern(finalVal, m_Constant(&attr)) && attr.isSplat()) {
+              if (auto intAttr =
+                      dyn_cast<IntegerAttr>(attr.getSplatValue<Attribute>()))
+                if (intAttr.getValue().isOne())
+                  return true;
+            }
+            if (!finalVal.getDefiningOp())
+              return false;
+            MaskClassification cls = maskValidator.classify(forOp, operand);
+            return cls == MaskClassification::AlwaysTrue;
+          };
+
+          bool lhsTrue = trySimplifyOperand(andOp.getLhs());
+          bool rhsTrue = trySimplifyOperand(andOp.getRhs());
+
+          if (lhsTrue && rhsTrue)
+            replacements.push_back({andOp, 0});
+          else if (lhsTrue)
+            replacements.push_back({andOp, 1});
+          else if (rhsTrue)
+            replacements.push_back({andOp, 2});
+        }
+
+        // Pass 2: Apply replacements.
+        for (auto &[andOp, action] : replacements) {
+          if (action == 0) {
+            rewriter.setInsertionPoint(andOp);
+            auto trueAttr =
+                DenseElementsAttr::get(cast<ShapedType>(andOp.getType()), true);
+            Value trueConst =
+                arith::ConstantOp::create(rewriter, andOp.getLoc(), trueAttr);
+            rewriter.replaceOp(andOp, trueConst);
+          } else if (action == 1) {
+            rewriter.replaceOp(andOp, andOp.getRhs());
+          } else if (action == 2) {
+            rewriter.replaceOp(andOp, andOp.getLhs());
+          }
+        }
+
+        // Pass 3: Re-check parent andis after children were simplified.
+        // Walk load masks again — after K masks were stripped, parent andis
+        // may now have a constant-true operand.
+        SmallVector<std::pair<arith::AndIOp, bool>> parentReplacements;
+        for (auto loadOp : forOp.getOps<tt::LoadOp>()) {
+          Value mask = loadOp.getMask();
+          if (!mask)
+            continue;
+          Value finalMask = tt::intel::getFinalValue(mask);
+          if (!finalMask.getDefiningOp())
+            continue;
+          auto andOp = dyn_cast<arith::AndIOp>(finalMask.getDefiningOp());
+          if (!andOp)
+            continue;
+
+          auto isConstTrue = [](Value v) -> bool {
+            Value fv = tt::intel::getFinalValue(v);
+            DenseElementsAttr attr;
+            if (matchPattern(fv, m_Constant(&attr)) && attr.isSplat()) {
+              if (auto intAttr =
+                      dyn_cast<IntegerAttr>(attr.getSplatValue<Attribute>()))
+                return intAttr.getValue().isOne();
+            }
+            return false;
+          };
+
+          if (isConstTrue(andOp.getLhs()))
+            parentReplacements.push_back({andOp, true}); // replace with RHS
+          else if (isConstTrue(andOp.getRhs()))
+            parentReplacements.push_back({andOp, false}); // replace with LHS
+        }
+        for (auto &[andOp, replaceWithRhs] : parentReplacements)
+          rewriter.replaceOp(andOp,
+                             replaceWithRhs ? andOp.getRhs() : andOp.getLhs());
       }
       return WalkResult::advance();
     });
