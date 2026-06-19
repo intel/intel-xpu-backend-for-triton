@@ -11,7 +11,7 @@ index 0ffe85054..00000000 100644
  
  import torch
  
-@@ -175,6 +173,60 @@
+@@ -175,6 +173,59 @@
      )
  
  
@@ -29,7 +29,6 @@ index 0ffe85054..00000000 100644
 +    "HEAD_SIZE",
 +    "IS_3D",
 +    "num_queries_per_kv",
-+    "TILE_SIZE",
 +]
 +
 +REDUCE_AUTOTUNE_KEY = []
