@@ -122,7 +122,7 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
         cc = cxx
 
         if cxx is icpx:
-            ccflags += ["-fsycl"]
+            ccflags += ["-fsycl", "-fno-sycl-id-queries-fit-in-int"]
         else:
             if os.name != "nt":
                 ccflags += ["--std=c++17"]
