@@ -38,12 +38,13 @@ module {
     tt.return
   }
 
-  // CHECK: tt.func public @test_extsi_iv_mask
+  // CHECK-LABEL: @test_extsi_iv_mask
   // COM: The mask (extsi(IV) + extsi(range(0,32))) < 576 is always true since
   // COM: IV ranges [0, 544] and max element = 544 + 31 = 575 < 576.
   // COM: Without ExtSI peeling in getFinalValue, the IV cannot be resolved
   // COM: and the mask would remain.
   // CHECK: scf.for
+  // CHECK-NOT: tt.load {{.*}}, {{.*}},
   // CHECK:   tt.load {{%[0-9]+}} : tensor<32x32x!tt.ptr<f16>>
   // CHECK: }
 }
