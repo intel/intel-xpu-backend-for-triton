@@ -28,14 +28,17 @@ namespace mlir::triton::intel {
 
 namespace {
 
-// Returns true if `pred` is a supported bound-check predicate in the `<` /
-// `<=` family, independent of which operand is the varying index or bound.
+// Returns true if `pred` is a supported bound-check predicate.
 static bool isSupportedBoundPredicate(arith::CmpIPredicate pred) {
   switch (pred) {
   case arith::CmpIPredicate::slt:
   case arith::CmpIPredicate::sle:
   case arith::CmpIPredicate::ult:
   case arith::CmpIPredicate::ule:
+  case arith::CmpIPredicate::sge:
+  case arith::CmpIPredicate::sgt:
+  case arith::CmpIPredicate::uge:
+  case arith::CmpIPredicate::ugt:
     return true;
   default:
     return false;
@@ -62,9 +65,14 @@ static MaskClassification classifyMask(arith::CmpIPredicate pred,
   assert(isSupportedBoundPredicate(pred) && "Unsupported predicate");
 
   bool isSigned =
-      (pred == arith::CmpIPredicate::slt || pred == arith::CmpIPredicate::sle);
+      (pred == arith::CmpIPredicate::slt || pred == arith::CmpIPredicate::sle ||
+       pred == arith::CmpIPredicate::sge || pred == arith::CmpIPredicate::sgt);
+  bool isLessThan =
+      (pred == arith::CmpIPredicate::slt || pred == arith::CmpIPredicate::ult ||
+       pred == arith::CmpIPredicate::sle || pred == arith::CmpIPredicate::ule);
   bool isStrict =
-      (pred == arith::CmpIPredicate::slt || pred == arith::CmpIPredicate::ult);
+      (pred == arith::CmpIPredicate::slt || pred == arith::CmpIPredicate::ult ||
+       pred == arith::CmpIPredicate::sgt || pred == arith::CmpIPredicate::ugt);
 
   unsigned bitWidth = constVal.getBitWidth();
   APInt ivMin = isSigned ? ivRange.smin() : ivRange.umin();
@@ -111,18 +119,34 @@ static MaskClassification classifyMask(arith::CmpIPredicate pred,
     return isSigned ? a.sge(b) : a.uge(b);
   };
 
-  if (isStrict) {
-    // `<`  (slt or ult)
-    if (lt(maxElem, constVal))
-      return MaskClassification::AlwaysTrue;
-    if (ge(minElem, constVal))
-      return MaskClassification::AlwaysFalse;
+  if (isLessThan) {
+    if (isStrict) {
+      // `<`  (slt or ult): AlwaysTrue if maxElem < constVal
+      if (lt(maxElem, constVal))
+        return MaskClassification::AlwaysTrue;
+      if (ge(minElem, constVal))
+        return MaskClassification::AlwaysFalse;
+    } else {
+      // `<=` (sle or ule): AlwaysTrue if maxElem <= constVal
+      if (le(maxElem, constVal))
+        return MaskClassification::AlwaysTrue;
+      if (gt(minElem, constVal))
+        return MaskClassification::AlwaysFalse;
+    }
   } else {
-    // `<=` (sle or ule)
-    if (le(maxElem, constVal))
-      return MaskClassification::AlwaysTrue;
-    if (gt(minElem, constVal))
-      return MaskClassification::AlwaysFalse;
+    if (isStrict) {
+      // `>`  (sgt or ugt): AlwaysTrue if minElem > constVal
+      if (gt(minElem, constVal))
+        return MaskClassification::AlwaysTrue;
+      if (le(maxElem, constVal))
+        return MaskClassification::AlwaysFalse;
+    } else {
+      // `>=` (sge or uge): AlwaysTrue if minElem >= constVal
+      if (ge(minElem, constVal))
+        return MaskClassification::AlwaysTrue;
+      if (lt(maxElem, constVal))
+        return MaskClassification::AlwaysFalse;
+    }
   }
   return MaskClassification::Unknown;
 }
@@ -140,9 +164,7 @@ static Operation *dropMask(Operation *op, bool maskVal) {
               loadOp.getEvict(), loadOp.getIsVolatile());
           loadOp->replaceAllUsesWith(newLoadOp);
         } else {
-          Operation *cstOp =
-              arith::ConstantOp::create(builder, loc, loadOp.getOther());
-          loadOp->replaceAllUsesWith(cstOp);
+          loadOp->replaceAllUsesWith(ValueRange{loadOp.getOther()});
         }
       })
       .Case<arith::SelectOp>([&](auto selectOp) {
@@ -488,6 +510,15 @@ public:
     auto cmpOp = cast<arith::CmpIOp>(finalVal.getDefiningOp());
     arith::CmpIPredicate pred = cmpOp.getPredicate();
     if (!isSupportedBoundPredicate(pred))
+      return false;
+
+    // The '>=' and '>' predicates are supported in classifyMask (loop-dependent
+    // path) but not yet handled by getVersioningCond which always uses END-1 as
+    // the scalar threshold -- correct for '<' and '<=' but wrong for '>=' and
+    // '>'.
+    if (pred == arith::CmpIPredicate::sge ||
+        pred == arith::CmpIPredicate::sgt ||
+        pred == arith::CmpIPredicate::uge || pred == arith::CmpIPredicate::ugt)
       return false;
 
     bool isInLoop = (cmpOp->getParentOfType<scf::ForOp>() == forOp);
