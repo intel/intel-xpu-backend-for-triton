@@ -2182,23 +2182,19 @@ struct DescriptorLoadOpConversion
     //   1. Every MakeTensorDescOp has shape[i] divisible by blockShape[i], and
     //   2. The load offset[i] is divisible by blockShape[i].
     // Together these guarantee that the block either lies entirely within
-    // bounds or starts beyond the tensor (undefined behaviour), so no
-    // per-element clipping is needed. blockShape[i]==1 is the trivial case
-    // (every offset is divisible by 1) and is handled without querying
-    // isDivisible.
+    // bounds or starts beyond the tensor, so no per-element clipping is needed.
     ArrayRef<int64_t> blockShape = descTensorType.getShape();
     SmallVector<MakeTensorDescOp> allDescs =
         mlir::triton::intel::findAllMakeTensorDescOps(op.getDesc());
     SmallVector<int32_t> allDims;
     for (size_t i = 0; i < descRank; ++i) {
       int64_t bs = blockShape[i];
-      if (!allDescs.empty() && bs > 0 &&
+      if (!allDescs.empty() &&
           llvm::all_of(allDescs,
                        [&](MakeTensorDescOp d) {
                          return isDivisible(d.getShape()[i], bs);
                        }) &&
-          (bs == 1 ||
-           isDivisible(op.getIndices()[i], static_cast<unsigned>(bs))))
+          isDivisible(op.getIndices()[i], static_cast<unsigned>(bs)))
         continue;
       allDims.push_back(i);
     }
@@ -2414,13 +2410,12 @@ struct DescriptorStoreOpConversion
     SmallVector<int32_t> allDims;
     for (size_t i = 0; i < descRank; ++i) {
       int64_t bs = blockShape[i];
-      if (!allDescs.empty() && bs > 0 &&
+      if (!allDescs.empty() &&
           llvm::all_of(allDescs,
                        [&](MakeTensorDescOp d) {
                          return isDivisible(d.getShape()[i], bs);
                        }) &&
-          (bs == 1 ||
-           isDivisible(op.getIndices()[i], static_cast<unsigned>(bs))))
+          isDivisible(op.getIndices()[i], static_cast<unsigned>(bs)))
         continue;
       allDims.push_back(i);
     }
