@@ -23,24 +23,14 @@ index 0ffe850..88da01e 100644
      )
  
  
-+# Attention-kernel (num_warps, num_stages) candidates.  num_stages=1 is
-+# excluded because the targeted UA sweeps never selected it; stages 2 and 3
-+# keep the useful pipelining choices while reducing autotune overhead.
-+# num_warps=16 and num_stages=4 are excluded: an on-device winner-logging
-+# sweep never selected either across the benchmark shapes (16 warps
-+# over-subscribes XPU occupancy; stage-4 pipelining never paid off).
++# Sweep-selected warp/stage candidates; skip options that did not win.
 +ATTENTION_WARP_STAGE_CANDIDATES = [
 +    (num_warps, num_stages)
 +    for num_warps in (2, 4, 8)
 +    for num_stages in (2, 3)
 +]
 +
-+# Intel-XPU-specific launch knobs probed only for the attention kernel, where
-+# register pressure and DPAS sub-group width matter.  grf_mode='256' gives each
-+# thread a larger register file (requires num_warps <= 32); warp_size=16 matches
-+# the DPAS sub-group width on PVC/BMG.  Kept as a curated subset (not a full
-+# cross product with every warp/stage pair) so the search space stays bounded;
-+# the prune callback further trims the BLOCK_M x TILE_SIZE axis per shape.
++# XPU launch knobs for attention only; keep observed winners to bound search.
 +ATTENTION_KNOB_VARIANTS = [
 +    # (num_warps, num_stages, extra_kwargs)
 +    *[(w, s, {}) for w, s in ATTENTION_WARP_STAGE_CANDIDATES],
@@ -59,15 +49,12 @@ index 0ffe850..88da01e 100644
 +        num_stages=num_stages,
 +    )
 +    for block_m in (16, 32, 64)
-+    # Keep TILE_SIZE in the autotune config so this axis can be reopened later,
-+    # but restrict the current search to the only value that won in analysis.
++    # Keep TILE_SIZE configurable, but search only the observed winner.
 +    for tile_size in (16,)
 +    for num_warps, num_stages, extra in ATTENTION_KNOB_VARIANTS
 +]
 +
-+# reduce_segments is a memory-bound merge with a single short loop.  Analysis
-+# selected (num_warps=4, num_stages=2) for every 3D row, so keep that winner
-+# plus one low-warp safety config.
++# reduce_segments is memory-bound; keep the winner plus a low-warp backup.
 +REDUCE_WARP_STAGE_CANDIDATES = [
 +    (2, 2),
 +    (4, 2),
@@ -78,26 +65,20 @@ index 0ffe850..88da01e 100644
 +    for num_warps, num_stages in REDUCE_WARP_STAGE_CANDIDATES
 +]
 +
-+# Sequence-shape buckets.  The kernel is shared across decode / chunked / prefill
-+# work shapes; a config tuned for one (e.g. grf_mode=256 for a single large
-+# prefill sequence) regresses when silently reused for another (many medium
-+# prefill sequences, or pure decode).  IS_3D only partially separates these (it
-+# is also gated on num_seqs), so we add two low-cardinality buckets derived from
-+# the *work shape* rather than raw, high-cardinality num_seqs / seqlen values.
-+# Both are plain ints computed host-side and passed as constexprs.
++# Low-cardinality buckets keep decode/chunked/prefill regimes separated.
 +def q_len_bucket(max_seqlen_q):
-+    """Bucket the per-program query length (decode vs chunked vs prefill)."""
++    """Bucket query work shape."""
 +    if max_seqlen_q <= 1:
-+        return 0  # pure decode
++        return 0  # decode
 +    if max_seqlen_q <= 16:
-+        return 1  # tiny / chunked-prefill tail
++        return 1  # chunk tail
 +    if max_seqlen_q <= 512:
 +        return 2  # medium prefill
 +    return 3  # large prefill
 +
 +
 +def kv_len_bucket(max_seqlen_k):
-+    """Bucket the K-loop length (short-context / sliding vs long-context)."""
++    """Bucket K-loop length."""
 +    if max_seqlen_k <= 256:
 +        return 0
 +    if max_seqlen_k <= 1024:
@@ -107,14 +88,7 @@ index 0ffe850..88da01e 100644
 +    return 3
 +
 +
-+# KV_QUANT_MODE, SLIDING_WINDOW and USE_SOFTCAP are added because this kernel is
-+# shared across regimes (we do not split into separate kernels): the best launch
-+# config differs between them, so they must distinguish autotune cache entries.
-+# USE_SOFTCAP gates a per-tile tanh in the inner loop, shifting the
-+# compute/register balance enough to change the optimal config.  Q_LEN_BUCKET /
-+# KV_LEN_BUCKET capture the dominant work shape so a decode / multi-sequence
-+# prefill batch does not reuse a config overfit to a single large-prefill
-+# sequence.  All are low-cardinality constexprs in practice.
++# Separate quantization, windowing, softcap, and work-shape regimes.
 +ATTENTION_AUTOTUNE_KEY = [
 +    "BLOCK_SIZE",
 +    "HEAD_SIZE",
@@ -145,20 +119,10 @@ index 0ffe850..88da01e 100644
 +
 +
 +def prune_attention_configs(configs, named_args, **kwargs):
-+    """Prune autotune configs for the unified_attention kernel.
++    """Keep only legal UA autotune configs.
 +
-+    ``BLOCK_M`` is tuned while ``TILE_SIZE`` remains a config field so the axis
-+    can be reopened later.  The current config list fixes TILE_SIZE to 16, the
-+    only value that won in the targeted analysis.
-+
-+    ``BLOCK_M`` is only legal when the derived ``BLOCK_Q = BLOCK_M //
-+    num_queries_per_kv`` is a positive power of 2 (tensor-descriptor block
-+    shapes require it).
-+
-+    ``TILE_SIZE`` must divide ``BLOCK_SIZE`` and, for fp8 inputs, must be 32
-+    (Triton currently fails with ``TILE_SIZE=16`` for fp8). The 3D (decode)
-+    path no longer requires the reducer to reconstruct the segment layout from
-+    ``TILE_SIZE`` (it relies on the in-kernel ``-inf`` sentinel instead).
++    BLOCK_Q must be a positive power of 2. TILE_SIZE must divide BLOCK_SIZE;
++    fp8 currently requires TILE_SIZE=32.
 +    """
 +    block_size = kwargs["BLOCK_SIZE"]
 +    is_fp8_input = kwargs["IS_FP8_INPUT"]
@@ -207,8 +171,7 @@ index 0ffe850..88da01e 100644
      NUM_SEGMENTS_PER_SEQ: tl.constexpr,
      USE_FP8: tl.constexpr,
 +    IS_FP8_INPUT: tl.constexpr,
-+    # Work-shape buckets: autotune-key only (decode vs prefill granularity and
-+    # K-loop length).  Not used by device math; see q_len_bucket / kv_len_bucket.
++    # Autotune-key buckets only; device math does not read them.
 +    Q_LEN_BUCKET: tl.constexpr,
 +    KV_LEN_BUCKET: tl.constexpr,
      # Toggles 2D vs 3D layout.  The 2D path runs the full sequence in one
@@ -238,10 +201,7 @@ index 0ffe850..88da01e 100644
      if IS_3D:
          tiles_per_segment = cdiv_fn(seq_len, NUM_SEGMENTS_PER_SEQ * TILE_SIZE)
          if segm_idx * tiles_per_segment * TILE_SIZE >= seq_len:
-+            # This segment covers no keys for this sequence.
-+            # Write -inf to the segment maximum and 0 to its exponential sum
-+            # so reduce_segments can skip this segment without reconstructing
-+            # the segment layout from TILE_SIZE.
++            # Mark inactive segments with neutral reduce values.
 +            store_segm_reduce_scalars(
 +                segm_max_ptr,
 +                segm_expsum_ptr,
@@ -309,8 +269,7 @@ index 0ffe850..88da01e 100644
 -                V,
 -                0.0,
 -            )
-+        # In the upstream there is an additional zeroing of V for tokens outside of the sliding window which is redundant.
-+        # Adding it decreases performance for sliding window case
++        # Upstream sliding-window V zeroing is redundant and slower here.
          if USE_PER_TOKEN_HEAD_SCALES:
              # Per-token-head quant: apply v_scale to P instead of V.
              P_v = (P * v_token_head_scales[None, :]).to(V.dtype)
@@ -365,10 +324,7 @@ index 0ffe850..88da01e 100644
      dim_mask = tl.where(tl.arange(0, HEAD_SIZE_PADDED) < HEAD_SIZE, 1, 0).to(tl.int1)
  
 -    # load segment maxima
-+    # Determine which segments are live directly from the data, not by
-+    # reconstructing the segment layout from TILE_SIZE. The producer writes
-+    # -inf to the maximum slot of every inactive segment, so a slot is valid
-+    # only when its maximum is finite.
++    # Inactive segments are marked by -inf maxima from the producer.
      segm_offset = (
          query_token_idx.to(tl.int64) * (num_query_heads * NUM_SEGMENTS_PER_SEQ)
          + query_head_idx * NUM_SEGMENTS_PER_SEQ
@@ -420,11 +376,10 @@ index 0ffe850..88da01e 100644
 -    TILE_SIZE_DECODE = _get_tile_size(
 -        head_size, sliding_window_val, q.element_size(), is_prefill=False
 -    )
-+    # Tile size is selected by Triton autotuning between 16 and 32.
++    # Tile size is autotuned.
 +    is_fp8_input = q.element_size() == 1
 +
-+    # Work-shape buckets for the autotune key (computed host-side, no device
-+    # sync: max_seqlen_q / max_seqlen_k are already-resolved Python ints).
++    # Autotune-key buckets; max_seqlen_* are already Python ints.
 +    q_len_bucket_val = q_len_bucket(max_seqlen_q)
 +    kv_len_bucket_val = kv_len_bucket(max_seqlen_k)
  
@@ -457,7 +412,7 @@ index 0ffe850..88da01e 100644
 +    # 3. The number of sequences exceeds the configured threshold
 +    seq_threshold_3D = 32
 +    use_3d = not (max_seqlen_q > 1 or num_seqs > seq_threshold_3D
-+            # 2d kernel includes crucial optimizations for models with sliding window
++            # Sliding-window shapes need the 2D path.
 +            or 0 < sliding_window_val <= 1024)
  
      # The kernel signature is the same for 2D and 3D — only the launch
@@ -496,9 +451,7 @@ index 0ffe850..88da01e 100644
      num_segments = num_par_softmax_segments if use_3d else 1
  
 -    grid: tuple[Any, ...]
-+    # Upper-bound on the number of query blocks: BLOCK_Q is supplied per
-+    # autotune config (via the BLOCK_Q heuristic) so the grid is a callable
-+    # that reads it from ``meta``.
++    # BLOCK_Q is autotuned, so compute the grid from meta.
      if not use_3d:
 -        grid = (total_num_q_blocks, num_kv_heads)
 -        tile_size = TILE_SIZE_PREFILL
@@ -549,9 +502,7 @@ index 0ffe850..88da01e 100644
              HEAD_SIZE_PADDED=head_size_padded,
              query_start_len_ptr=cu_seqlens_q,
 -            BLOCK_Q=BLOCK_Q,
-+            # reduce_segments no longer derives the segment layout from the
-+            # sequence index (the -inf sentinel marks inactive segments), so
-+            # BLOCK_Q is unused here; pass a constant to satisfy the signature.
++            # BLOCK_Q is unused; inactive segments are sentinel-marked.
 +            BLOCK_Q=1,
              NUM_SEGMENTS_PER_SEQ=num_par_softmax_segments,
              USE_FP8=output_scale is not None,
