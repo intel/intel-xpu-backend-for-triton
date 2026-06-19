@@ -274,32 +274,26 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 // Test vectorized descriptor load and store: with sizePerThread > 1 and stride-1
 // on the fast dimension, the gather fallback should emit wider (vectorized) I/O.
 // Here sizePerThread=[1,4] with f16 gives vec=4 (4*16=64 bits < 128 bit max).
-// Dynamic shapes are used so boundary checks are not elided (and predicated I/O
-// is exercised).
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
 
 module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_predicated_io"} {
   // CHECK-LABEL: llvm.func spir_kernelcc @vectorized_descriptor_load_store
-  tt.func public @vectorized_descriptor_load_store(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 4 : i32}, %arg2: i32 {tt.divisibility = 16 : i32}) -> (tensor<4x16xf16, #blocked>) {
+  tt.func public @vectorized_descriptor_load_store(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32) -> (tensor<4x16xf16, #blocked>) {
     %c4_i32 = arith.constant 4 : i32
     %c16_i32 = arith.constant 16 : i32
     %c16_i64 = arith.constant 16 : i64
     %c1_i64 = arith.constant 1 : i64
-    // shape=[4,16] is divisible by block_shape=[4,16], and both offsets carry
-    // tt.divisibility matching the block shape, so all boundary checks are
-    // elided and unconditional (non-predicated) I/O is emitted.
     // stride = [16, 1] → stride-1 on dim 1 (the fast dimension with order=[1,0])
     %desc = tt.make_tensor_descriptor %arg0, [%c4_i32, %c16_i32], [%c16_i64, %c1_i64] : <f16>, <4x16xf16>
 
     // With vec=4 and f16: totalWidth=64, maxWordWidth=32, width=32, nWords=2.
-    // All dims in-bounds → unconditional vector load (no predicate, no branch).
-    // CHECK: llvm.load %{{.*}} {alignment = 8 : i64} : !llvm.ptr<1> -> vector<2xi32>
+    // Return type is vector<2xi32>. Verify wider-than-scalar predicated loads.
+    // CHECK: triton_gen.predicated_load {{.*}} : (!llvm.ptr<1>, i1, vector<2xi32>) -> vector<2xi32>
     %load = tt.descriptor_load %desc[%arg1, %arg2] : !tt.tensordesc<4x16xf16> -> tensor<4x16xf16, #blocked>
 
-    // Store still uses predicated_store for the thread-redundancy predicate,
-    // but there is no boundary-check mask (all dims in-bounds).
-    // CHECK: triton_gen.predicated_store {{.*}} : (!llvm.ptr<1>, vector<2xi32>, i1)
+    // Verify wider-than-scalar predicated stores with the same descriptor.
+    // CHECK: triton_gen.predicated_store {{.*}} {cache_control = Default} : (!llvm.ptr<1>, vector<2xi32>, i1)
     tt.descriptor_store %desc[%arg1, %arg2], %load : !tt.tensordesc<4x16xf16>, tensor<4x16xf16, #blocked>
     tt.return %load : tensor<4x16xf16, #blocked>
   }
