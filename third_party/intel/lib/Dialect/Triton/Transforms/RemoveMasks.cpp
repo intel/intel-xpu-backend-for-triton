@@ -514,9 +514,10 @@ public:
     if (!isSupportedBoundPredicate(pred))
       return false;
 
-    // The >= / > predicates are supported in classifyMask (loop-dependent path)
-    // but not yet handled by getVersioningCond which always uses END-1 as the
-    // scalar threshold — correct for < / <= but wrong for >= / >.
+    // The '>=' and '>' predicates are supported in classifyMask (loop-dependent
+    // path) but not yet handled by getVersioningCond which always uses END-1 as
+    // the scalar threshold -- correct for '<' and '<=' but wrong for '>=' and
+    // '>'.
     if (pred == arith::CmpIPredicate::sge ||
         pred == arith::CmpIPredicate::sgt ||
         pred == arith::CmpIPredicate::uge || pred == arith::CmpIPredicate::ugt)
