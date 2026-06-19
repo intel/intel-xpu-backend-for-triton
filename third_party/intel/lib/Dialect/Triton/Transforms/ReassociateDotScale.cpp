@@ -23,6 +23,14 @@ namespace mlir::triton::intel {
 
 namespace {
 
+// Carries the unpacked scalar scale and its element type.
+struct ScaleInfo {
+  Value scalarValue;
+  FloatType elemTy;
+  bool isConstantSplat = false;
+  APFloat constantValue{0.0};
+};
+
 struct ReassociateDotScalePattern : public OpRewritePattern<arith::MulFOp> {
 public:
   ReassociateDotScalePattern(MLIRContext *context, int benefit = 1)
@@ -30,176 +38,194 @@ public:
 
   LogicalResult matchAndRewrite(arith::MulFOp mulOp,
                                 PatternRewriter &rewriter) const override {
-    Location loc = mulOp.getLoc();
-
-    // Step 1: Identify dot operand vs scale operand
-    Value dotOperand, scaleVal;
     tt::DotOp dotOp;
+    Value scaleVal;
+    if (failed(findDotAndScale(mulOp, rewriter, dotOp, scaleVal)))
+      return failure();
+
+    if (failed(validateDot(dotOp, rewriter)))
+      return failure();
+
+    ScaleInfo scale;
+    if (failed(extractScaleScalar(mulOp, scaleVal, rewriter, scale)))
+      return failure();
+
+    Value target;
+    unsigned opIdx;
+    if (failed(selectTargetOperand(dotOp, scale, rewriter, target, opIdx)))
+      return failure();
+
+    return rewriteWithScaledOperand(mulOp, dotOp, target, opIdx, scale,
+                                    rewriter);
+  }
+
+private:
+  // Step 1: Identify which mulOp operand is the dot result and which is the
+  // scale. Fails if neither operand is a DotOp result, or if both are.
+  LogicalResult findDotAndScale(arith::MulFOp mulOp, PatternRewriter &rewriter,
+                                tt::DotOp &dotOp, Value &scaleVal) const {
     for (unsigned i = 0; i < 2; ++i) {
-      Value operand = mulOp.getOperand(i);
-      if (auto defDotOp = operand.getDefiningOp<tt::DotOp>()) {
+      if (auto defDotOp = mulOp.getOperand(i).getDefiningOp<tt::DotOp>()) {
+        if (mulOp.getOperand(1 - i).getDefiningOp<tt::DotOp>())
+          return rewriter.notifyMatchFailure(mulOp,
+                                             "both operands are DotOp results");
         dotOp = defDotOp;
-        dotOperand = operand;
         scaleVal = mulOp.getOperand(1 - i);
-        break;
+        return success();
       }
     }
+    return rewriter.notifyMatchFailure(mulOp,
+                                       "neither operand is a DotOp result");
+  }
 
-    if (!dotOp)
-      return rewriter.notifyMatchFailure(mulOp,
-                                         "neither operand is a DotOp result");
-
-    // Short-circuit: if both operands are dots (unlikely but possible), fail
-    if (mulOp.getOperand(0).getDefiningOp<tt::DotOp>() &&
-        mulOp.getOperand(1).getDefiningOp<tt::DotOp>())
-      return rewriter.notifyMatchFailure(mulOp,
-                                         "both operands are DotOp results");
-
-    // Step 2: Dot result must have exactly one use
+  // Step 2: Validate the dot: single use and zero accumulator.
+  LogicalResult validateDot(tt::DotOp dotOp, PatternRewriter &rewriter) const {
     if (!dotOp->hasOneUse())
       return rewriter.notifyMatchFailure(dotOp, "dot result has multiple uses");
-
-    // Step 3: Accumulator must be zero
     if (!matchPattern(dotOp.getC(), m_AnyZeroFloat()))
       return rewriter.notifyMatchFailure(dotOp, "accumulator is not zero");
+    return success();
+  }
 
-    // Step 4: Scale must be a uniform scalar broadcast
-    Value scalarValue;
-    FloatType scaleElemTy;
-    bool isConstantSplat = false;
-    APFloat constantSplatValue(0.0);
-
+  // Step 3: Verify the scale is a uniform float scalar broadcast and unpack it.
+  // Accepts tt.splat of a float scalar, or arith.constant dense float splat.
+  // Integer dots are intentionally out of scope: the reassociation is
+  // algebraically valid for integers, but scaling a narrow DPAS operand
+  // (i8/u8/i4) overflows, and widening it defeats the integer DPAS lowering
+  // this rewrite exists to preserve. Integer scales also reach the dot via
+  // muli/sitofp, not the mulf pattern this rewrite matches.
+  LogicalResult extractScaleScalar(arith::MulFOp mulOp, Value scaleVal,
+                                   PatternRewriter &rewriter,
+                                   ScaleInfo &info) const {
     if (auto splat = scaleVal.getDefiningOp<tt::SplatOp>()) {
-      scalarValue = splat.getSrc();
-      // Integer dots are intentionally out of scope. The reassociation is
-      // algebraically valid for integers, but scaling a narrow integer DPAS
-      // operand (i8/u8/i4) by an arbitrary scale overflows, and widening the
-      // operand to avoid that defeats the integer DPAS lowering this rewrite
-      // exists to preserve. (Integer scales also reach the dot via muli/sitofp,
-      // not this mulf pattern.) The guard is also load-bearing: it protects the
-      // cast below from a non-float splat source.
-      if (!isa<FloatType>(scalarValue.getType()))
+      info.scalarValue = splat.getSrc();
+      // The float guard also protects the cast<FloatType> below.
+      if (!isa<FloatType>(info.scalarValue.getType()))
         return rewriter.notifyMatchFailure(
             mulOp, "splat source is not a float scalar");
-      scaleElemTy = cast<FloatType>(scalarValue.getType());
-    } else if (auto constOp = scaleVal.getDefiningOp<arith::ConstantOp>()) {
-      if (auto denseAttr = dyn_cast<DenseElementsAttr>(constOp.getValue())) {
-        if (!denseAttr.isSplat())
-          return rewriter.notifyMatchFailure(mulOp, "constant is not a splat");
-        auto splatAttr = denseAttr.getSplatValue<Attribute>();
-        if (auto floatAttr = dyn_cast<FloatAttr>(splatAttr)) {
-          constantSplatValue = floatAttr.getValue();
-          scaleElemTy = cast<FloatType>(floatAttr.getType());
-          isConstantSplat = true;
-        } else {
-          return rewriter.notifyMatchFailure(
-              mulOp, "splat constant is not float-typed");
-        }
-      } else {
-        return rewriter.notifyMatchFailure(mulOp, "constant is not dense");
-      }
-    } else {
-      return rewriter.notifyMatchFailure(
-          mulOp, "scale is not a splat or constant splat");
+      info.elemTy = cast<FloatType>(info.scalarValue.getType());
+      return success();
     }
 
-    // Step 5: Heuristic (LICM-opportunity test)
+    if (auto constOp = scaleVal.getDefiningOp<arith::ConstantOp>()) {
+      auto denseAttr = dyn_cast<DenseElementsAttr>(constOp.getValue());
+      if (!denseAttr)
+        return rewriter.notifyMatchFailure(mulOp, "constant is not dense");
+      if (!denseAttr.isSplat())
+        return rewriter.notifyMatchFailure(mulOp, "constant is not a splat");
+      auto floatAttr =
+          dyn_cast<FloatAttr>(denseAttr.getSplatValue<Attribute>());
+      if (!floatAttr)
+        return rewriter.notifyMatchFailure(mulOp,
+                                           "splat constant is not float-typed");
+      info.elemTy = cast<FloatType>(floatAttr.getType());
+      info.constantValue = floatAttr.getValue();
+      info.isConstantSplat = true;
+      return success();
+    }
+
+    return rewriter.notifyMatchFailure(
+        mulOp, "scale is not a splat or constant splat");
+  }
+
+  // Step 4: Pick the loop-invariant operand to absorb the scale.  The scale
+  // itself must also be loop-invariant, and the other operand loop-variant
+  // (otherwise the whole dot is already hoistable and the rewrite adds no
+  // value).
+  LogicalResult selectTargetOperand(tt::DotOp dotOp, const ScaleInfo &scale,
+                                    PatternRewriter &rewriter, Value &target,
+                                    unsigned &opIdx) const {
     auto loop = dotOp->getParentOfType<LoopLikeOpInterface>();
     if (!loop)
       return rewriter.notifyMatchFailure(dotOp, "dot is not inside a loop");
 
+    // Constant splats are always loop-invariant.
+    bool scaleInv =
+        scale.isConstantSplat || loop.isDefinedOutsideOfLoop(scale.scalarValue);
+    if (!scaleInv)
+      return rewriter.notifyMatchFailure(dotOp, "scale is not loop-invariant");
+
     bool aInv = loop.isDefinedOutsideOfLoop(dotOp.getA());
     bool bInv = loop.isDefinedOutsideOfLoop(dotOp.getB());
-    // For the scale, check the underlying scalar if splat, otherwise the splat
-    // constant is invariant
-    bool scaleInv = isConstantSplat || loop.isDefinedOutsideOfLoop(scalarValue);
-
-    if (!scaleInv)
-      return rewriter.notifyMatchFailure(mulOp, "scale is not loop-invariant");
 
     if (aInv && bInv)
       return rewriter.notifyMatchFailure(
           dotOp, "both operands invariant (dot already hoistable)");
 
-    Value target;
-    unsigned opIdx;
     if (aInv && !bInv) {
       target = dotOp.getA();
       opIdx = 0;
       LDBG("Targeting operand A for scaling");
-    } else if (bInv && !aInv) {
+      return success();
+    }
+    if (bInv && !aInv) {
       target = dotOp.getB();
       opIdx = 1;
       LDBG("Targeting operand B for scaling");
-    } else {
-      return rewriter.notifyMatchFailure(
-          dotOp, "both operands variant (no hoisting opportunity)");
+      return success();
     }
+    return rewriter.notifyMatchFailure(
+        dotOp, "both operands variant (no hoisting opportunity)");
+  }
 
-    // Step 6: Select the compute type. The scale multiply is performed in the
-    // wider of the scale and target element types so it is always lossless,
-    // then the result is converted back to the target type. A narrower scale is
-    // extended up to the target type (exact); a wider scale instead widens the
-    // target and truncates the product back down.
+  // Step 5: Perform the rewrite. The scale multiply is performed in the wider
+  // of the scale and target element types so it is always lossless, then the
+  // result is converted back to the target type.
+  LogicalResult rewriteWithScaledOperand(arith::MulFOp mulOp, tt::DotOp dotOp,
+                                         Value target, unsigned opIdx,
+                                         const ScaleInfo &scale,
+                                         PatternRewriter &rewriter) const {
+    LDBG("Applying reassociation on " << *mulOp);
+    Location loc = mulOp.getLoc();
+
     auto targetTy = cast<RankedTensorType>(target.getType());
     auto targetElemTy = cast<FloatType>(targetTy.getElementType());
-    FloatType computeElemTy = scaleElemTy.getIntOrFloatBitWidth() >=
+    FloatType computeElemTy = scale.elemTy.getIntOrFloatBitWidth() >=
                                       targetElemTy.getIntOrFloatBitWidth()
-                                  ? scaleElemTy
+                                  ? scale.elemTy
                                   : targetElemTy;
 
-    // REWRITE
-    LDBG("Applying reassociation on " << *mulOp);
-
-    // Materialize scalar if needed
-    if (isConstantSplat) {
+    // Materialize the scalar for constant splats.
+    Value scalarValue = scale.scalarValue;
+    if (scale.isConstantSplat)
       scalarValue = arith::ConstantOp::create(
-          rewriter, loc, FloatAttr::get(scaleElemTy, constantSplatValue));
-    }
+          rewriter, loc, FloatAttr::get(scale.elemTy, scale.constantValue));
 
-    // Widen the scale scalar up to the compute type if it is narrower
-    // (lossless). Extending before the splat keeps the conversion on a scalar.
-    if (scaleElemTy != computeElemTy)
+    // Extend the scale scalar to the compute type if it is narrower (lossless).
+    // Extending before the splat keeps the conversion on a scalar.
+    if (scale.elemTy != computeElemTy)
       scalarValue =
           arith::ExtFOp::create(rewriter, loc, computeElemTy, scalarValue);
 
-    // Build splat to target shape in compute type
     RankedTensorType splatTy = RankedTensorType::get(
         targetTy.getShape(), computeElemTy, targetTy.getEncoding());
     Value scaleSplat = tt::SplatOp::create(rewriter, loc, splatTy, scalarValue);
 
-    // Widen target if needed
+    // Widen the target operand if the compute type is wider.
     Value targetExt = target;
     if (targetElemTy != computeElemTy)
       targetExt = arith::ExtFOp::create(rewriter, loc, splatTy, target);
 
-    // Multiply with reassoc fastmath flag
     auto fmf = arith::FastMathFlagsAttr::get(rewriter.getContext(),
                                              arith::FastMathFlags::reassoc);
     Value scaledExt =
         arith::MulFOp::create(rewriter, loc, targetExt, scaleSplat, fmf);
 
-    // Truncate back to the target type if we computed in a wider type
+    // Truncate the product back to the target type if we widened.
     Value scaled = scaledExt;
     if (targetElemTy != computeElemTy)
       scaled = arith::TruncFOp::create(rewriter, loc, targetTy, scaledExt);
 
-    // Build new dot in original operand positions
     Value newA = (opIdx == 0) ? scaled : dotOp.getA();
     Value newB = (opIdx == 1) ? scaled : dotOp.getB();
-    RankedTensorType resultTy =
-        cast<RankedTensorType>(dotOp.getResult().getType());
-
+    auto resultTy = cast<RankedTensorType>(dotOp.getResult().getType());
     auto newDot = tt::DotOp::create(rewriter, loc, resultTy, newA, newB,
                                     dotOp.getC(), dotOp.getInputPrecision(),
                                     dotOp.getMaxNumImpreciseAcc());
-
     LDBG("Created new dot: " << *newDot);
 
-    // Replace mulOp with new dot and erase the now-dead old dot
     rewriter.replaceOp(mulOp, newDot.getResult());
     rewriter.eraseOp(dotOp);
-
     return success();
   }
 };
