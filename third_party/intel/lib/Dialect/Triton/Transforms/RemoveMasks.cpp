@@ -266,12 +266,10 @@ private:
       return MaskClassification::Unknown;
 
     auto getIntConstantValue = [](Operation *op) -> std::optional<APInt> {
-      DenseElementsAttr constAttr;
-      if (matchPattern(op, m_Constant(&constAttr))) {
-        auto attr = constAttr.getSplatValue<Attribute>();
-        if (auto intAttr = dyn_cast_or_null<IntegerAttr>(attr))
-          return intAttr.getValue();
-      }
+      APInt intVal;
+      if (op->getNumResults() > 0 &&
+          matchPattern(op->getResult(0), m_ConstantInt(&intVal)))
+        return intVal;
       return std::nullopt;
     };
 
