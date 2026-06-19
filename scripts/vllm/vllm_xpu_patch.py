@@ -56,7 +56,7 @@ def _find_cuda_patterns(source: str) -> list[dict]:
                     "col": node.value.col_offset,
                 })
 
-        # torch.device("cuda") calls
+        # torch.device("cuda") and torch.device(f"cuda:{index}") calls
         if isinstance(node, ast.Call):
             func = node.func
             is_torch_device = (isinstance(func, ast.Attribute) and func.attr == "device"
@@ -68,6 +68,15 @@ def _find_cuda_patterns(source: str) -> list[dict]:
                     "line": node.args[0].lineno,
                     "col": node.args[0].col_offset,
                 })
+            if is_torch_device and node.args and isinstance(node.args[0], ast.JoinedStr):
+                for v in node.args[0].values:
+                    if isinstance(v, ast.Constant) and isinstance(v.value, str) and v.value.startswith("cuda:"):
+                        patterns.append({
+                            "type": "torch_device_fstring",
+                            "line": node.args[0].lineno,
+                            "col": node.args[0].col_offset,
+                        })
+                        break
 
         # torch.set_default_device("cuda") calls
         if isinstance(node, ast.Call):
@@ -173,6 +182,10 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
         if ptype in ("device_kwarg", "torch_device", "torch_set_default_device", "device_default_param"):
             # Replace "cuda" with "xpu" in device arguments
             lines[line_idx] = line.replace('"cuda"', '"xpu"', 1)
+
+        elif ptype == "torch_device_fstring":
+            # Replace f"cuda:" with f"xpu:" in torch.device call
+            lines[line_idx] = line.replace('f"cuda:', 'f"xpu:', 1).replace("f'cuda:", "f'xpu:", 1)
 
         elif ptype == "var_assign_cuda":
             # Replace device = "cuda" with device = "xpu"
