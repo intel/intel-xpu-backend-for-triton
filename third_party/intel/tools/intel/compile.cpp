@@ -134,7 +134,7 @@ int32_t {kernel_name}(sycl::queue &stream, {signature}) {{
   uint32_t num_params = sizeof(params)/sizeof(params[0]);
   uint32_t expected_num_params = sycl_kernel.get_info<sycl::info::kernel::num_args>();
 
-  size_t global_range_x = {gridX} * {threads_per_warp} * {num_warps};
+  size_t global_range_x = static_cast<size_t>({gridX}) * {threads_per_warp} * {num_warps};
   size_t global_range_y = {gridY};
   size_t global_range_z = {gridZ};
   size_t local_range_x = {num_warps} * {threads_per_warp};
