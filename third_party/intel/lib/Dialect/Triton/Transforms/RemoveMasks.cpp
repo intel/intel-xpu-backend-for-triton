@@ -164,9 +164,7 @@ static Operation *dropMask(Operation *op, bool maskVal) {
               loadOp.getEvict(), loadOp.getIsVolatile());
           loadOp->replaceAllUsesWith(newLoadOp);
         } else {
-          Operation *cstOp =
-              arith::ConstantOp::create(builder, loc, loadOp.getOther());
-          loadOp->replaceAllUsesWith(cstOp);
+          loadOp->replaceAllUsesWith(ValueRange{loadOp.getOther()});
         }
       })
       .Case<arith::SelectOp>([&](auto selectOp) {
@@ -514,6 +512,14 @@ public:
     auto cmpOp = cast<arith::CmpIOp>(finalVal.getDefiningOp());
     arith::CmpIPredicate pred = cmpOp.getPredicate();
     if (!isSupportedBoundPredicate(pred))
+      return false;
+
+    // The >= / > predicates are supported in classifyMask (loop-dependent path)
+    // but not yet handled by getVersioningCond which always uses END-1 as the
+    // scalar threshold — correct for < / <= but wrong for >= / >.
+    if (pred == arith::CmpIPredicate::sge ||
+        pred == arith::CmpIPredicate::sgt ||
+        pred == arith::CmpIPredicate::uge || pred == arith::CmpIPredicate::ugt)
       return false;
 
     bool isInLoop = (cmpOp->getParentOfType<scf::ForOp>() == forOp);
