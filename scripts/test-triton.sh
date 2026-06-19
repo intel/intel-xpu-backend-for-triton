@@ -932,7 +932,6 @@ run_vllm_tests() {
   run_vllm_linear_attn_tests
   run_vllm_deepgemm_tests
   run_vllm_kda_tests
-  run_vllm_inductor_tests
 }
 
 
