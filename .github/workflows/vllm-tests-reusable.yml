@@ -269,6 +269,11 @@ jobs:
         run: |
           ${{ env.TRITON_TEST_CMD }} --vllm-deepgemm
 
+      - name: Run inductor tests
+        if: ${{ matrix.suite == 'vllm-rest' && steps.install-vllm.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --vllm-inductor
+
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}
         uses: ./.github/actions/save
