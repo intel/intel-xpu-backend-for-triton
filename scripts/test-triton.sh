@@ -43,6 +43,7 @@ TEST:
     --vllm-linear-attn
     --vllm-deepgemm
     --vllm-kda
+    --vllm-inductor
     --install-vllm
     --sglang
     --install-sglang
@@ -113,6 +114,7 @@ TEST_VLLM_QUANT=false
 TEST_VLLM_LINEAR_ATTN=false
 TEST_VLLM_DEEPGEMM=false
 TEST_VLLM_KDA=false
+TEST_VLLM_INDUCTOR=false
 INSTALL_VLLM=false
 TEST_TRITON_KERNELS=false
 VENV=false
@@ -340,6 +342,11 @@ while (( $# != 0 )); do
       ;;
     --vllm-kda)
       TEST_VLLM_KDA=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --vllm-inductor)
+      TEST_VLLM_INDUCTOR=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -925,6 +932,7 @@ run_vllm_tests() {
   run_vllm_linear_attn_tests
   run_vllm_deepgemm_tests
   run_vllm_kda_tests
+  run_vllm_inductor_tests
 }
 
 
@@ -1106,6 +1114,21 @@ run_vllm_kda_tests() {
 }
 
 
+run_vllm_inductor_tests() {
+  echo "********************************************************"
+  echo "******  Running vLLM Inductor tests              *******"
+  echo "********************************************************"
+
+  # Validates torch.compile/inductor-generated Triton fused kernels for shapes
+  # captured from vllm model profiling. Does not require a vllm checkout — only
+  # optionally uses vllm_xpu_kernels (installed by --install-vllm) for SYCL
+  # kernel comparisons.
+  cd "$TRITON_PROJ/benchmarks/triton_kernels_benchmark/vllm/test"
+  TRITON_TEST_SUITE=vllm_inductor \
+    run_pytest_command -vvv -s --device xpu test_wan22_torch_compile.py
+}
+
+
 run_triton_kernels_tests() {
   echo "***************************************************"
   echo "******    Running Triton Kernels tests      *******"
@@ -1249,6 +1272,9 @@ test_triton() {
   fi
   if [ "$TEST_VLLM_KDA" == true ]; then
     run_vllm_kda_tests
+  fi
+  if [ "$TEST_VLLM_INDUCTOR" == true ]; then
+    run_vllm_inductor_tests
   fi
   if [ "$TEST_TRITON_KERNELS" == true ]; then
     run_triton_kernels_tests
