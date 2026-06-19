@@ -994,7 +994,8 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
 
   uint32_t expected_num_params =
       kernel_ptr.get_info<sycl::info::kernel::num_args>();
-  size_t global_range_x = gridX * threads_per_warp * num_warps;
+  size_t global_range_x =
+      static_cast<size_t>(gridX) * threads_per_warp * num_warps;
   size_t global_range_y = gridY;
   size_t global_range_z = gridZ;
   size_t local_range_x = num_warps * threads_per_warp;
