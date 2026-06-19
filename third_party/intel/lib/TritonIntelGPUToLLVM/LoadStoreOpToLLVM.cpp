@@ -251,6 +251,7 @@ struct LoadStoreConversionBase {
       Location loc, Value base, ArrayRef<Value> offsets, ArrayRef<Value> shapes,
       ArrayRef<Value> strides, RankedTensorType tensorType, Type valueElemTy,
       ConversionPatternRewriter &rewriter, ArrayRef<int32_t> boundaryCheck = {},
+      ArrayRef<int32_t> blockLevelCheck = {},
       std::optional<PaddingOption> padding = std::nullopt) const {
 
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -282,6 +283,8 @@ struct LoadStoreConversionBase {
 
     SetVector<unsigned> boundaryProtect(boundaryCheck.begin(),
                                         boundaryCheck.end());
+    SetVector<unsigned> blockLevelProtect(blockLevelCheck.begin(),
+                                          blockLevelCheck.end());
     SmallVector<Value> ptrElems(numElems);
     SmallVector<Value> maskElems;
     for (unsigned i = 0; i < numElems; ++i) {
@@ -305,23 +308,33 @@ struct LoadStoreConversionBase {
       ptrElems[i] = b.gep(ptr_ty(rewriter.getContext(), 1 /*global*/),
                           valueElemTy, base, offset);
 
-      if (boundaryProtect.size() > 0) {
+      if (boundaryProtect.size() > 0 || blockLevelProtect.size() > 0) {
         // Get the LLVM values for mask
         unsigned dim = 0;
         maskElems.push_back(linearize(
             indicesInTensor, shapes, b.int_val(1, 1),
             [&](const Value &index, const Value &shape, const Value &mask) {
-              if (boundaryProtect.contains(dim++)) {
-                // mask = mask && (index < shape) && idx >= 0
+              Value result = mask;
+              if (boundaryProtect.contains(dim)) {
+                // Per-element check: mask = mask && (index < shape) && idx >= 0
                 auto is_pos_idx = b.icmp_sge(index, b.i32_val(0));
-                return b
-                    .and_(
-                        b.and_(b.icmp_slt(index, b.trunc(i32_ty, shape)), mask),
-                        is_pos_idx)
-                    .getResult();
+                result =
+                    b.and_(b.and_(b.icmp_slt(index, b.trunc(i32_ty, shape)),
+                                  result),
+                           is_pos_idx)
+                        .getResult();
+              } else if (blockLevelProtect.contains(dim)) {
+                // Block-level check: use base offset only (no per-thread index)
+                Value baseOffset = offsets[dim];
+                auto is_pos_offset = b.icmp_sge(baseOffset, b.i32_val(0));
+                result = b.and_(b.and_(b.icmp_slt(baseOffset,
+                                                  b.trunc(i32_ty, shape)),
+                                       result),
+                                is_pos_offset)
+                             .getResult();
               }
-
-              return mask;
+              dim++;
+              return result;
             }));
       }
     }
@@ -365,6 +378,7 @@ struct LoadStoreConversionBase {
       Location loc, Value descriptorStruct, ValueRange indices,
       RankedTensorType tensorType, unsigned descriptorRank, Type valueElemTy,
       ConversionPatternRewriter &rewriter, ArrayRef<int32_t> boundaryCheck = {},
+      ArrayRef<int32_t> blockLevelCheck = {},
       std::optional<PaddingOption> padding = std::nullopt) const {
 
     DescriptorFields desc =
@@ -384,9 +398,9 @@ struct LoadStoreConversionBase {
       mappedStrides[i] = desc.strides[i];
     }
 
-    return computeGatherScatterOperands(loc, desc.base, offsets, mappedShapes,
-                                        mappedStrides, tensorType, valueElemTy,
-                                        rewriter, boundaryCheck, padding);
+    return computeGatherScatterOperands(
+        loc, desc.base, offsets, mappedShapes, mappedStrides, tensorType,
+        valueElemTy, rewriter, boundaryCheck, blockLevelCheck, padding);
   }
 
   /// Build per-element NaN masks for out-of-bounds elements.
@@ -2177,16 +2191,22 @@ struct DescriptorLoadOpConversion
             TritonIntelGPUDialect::getDescPaddingAttrName()))
       padding = paddingAttr.getValue();
 
-    // Build the boundary-check dimension list. A dimension is safe to exclude
-    // from boundary checking only when both conditions hold:
-    //   1. Every MakeTensorDescOp has shape[i] divisible by blockShape[i], and
-    //   2. The load offset[i] is divisible by blockShape[i].
-    // Together these guarantee that the block either lies entirely within
-    // bounds or starts beyond the tensor, so no per-element clipping is needed.
+    // Build the boundary-check dimension lists. Classify each dimension:
+    //   - perElementDims: shape[i] or offset[i] is NOT divisible by
+    //   blockShape[i].
+    //     These require per-element mask: (offset[i]+index[i]) < shape[i] &&
+    //     (offset[i]+index[i]) >= 0.
+    //   - blockLevelDims: Both shape[i] and offset[i] ARE divisible by
+    //   blockShape[i].
+    //     These use a uniform (block-level) check on the base offset only:
+    //     offset[i] < shape[i] && offset[i] >= 0. Divisibility means the tile
+    //     is all-in or all-out, but NOT necessarily in-bounds — a fully
+    //     out-of-bounds tile (offset >= shape) must be predicated to preserve
+    //     zero-padding semantics.
     ArrayRef<int64_t> blockShape = descTensorType.getShape();
     SmallVector<MakeTensorDescOp> allDescs =
         mlir::triton::intel::findAllMakeTensorDescOps(op.getDesc());
-    SmallVector<int32_t> allDims;
+    SmallVector<int32_t> perElementDims, blockLevelDims;
     for (size_t i = 0; i < descRank; ++i) {
       int64_t bs = blockShape[i];
       if (!allDescs.empty() &&
@@ -2194,9 +2214,11 @@ struct DescriptorLoadOpConversion
                        [&](MakeTensorDescOp d) {
                          return isDivisible(d.getShape()[i], bs);
                        }) &&
-          isDivisible(op.getIndices()[i], static_cast<unsigned>(bs)))
-        continue;
-      allDims.push_back(i);
+          isDivisible(op.getIndices()[i], static_cast<unsigned>(bs))) {
+        blockLevelDims.push_back(i);
+      } else {
+        perElementDims.push_back(i);
+      }
     }
 
     // Reuse the shared gather/scatter operand computation.
@@ -2233,12 +2255,13 @@ struct DescriptorLoadOpConversion
       }
       std::tie(ptrElems, maskElems, otherElems) = computeGatherScatterOperands(
           loc, desc.base, mappedOffsets, mappedShapes, mappedStrides,
-          resultType, valueElemTy, rewriter, allDims, padding);
+          resultType, valueElemTy, rewriter, perElementDims, blockLevelDims,
+          padding);
     } else {
       std::tie(ptrElems, maskElems, otherElems) =
-          convertTensorDescriptorToTensorOfPtr(loc, llDesc, indices, resultType,
-                                               descRank, valueElemTy, rewriter,
-                                               allDims, padding);
+          convertTensorDescriptorToTensorOfPtr(
+              loc, llDesc, indices, resultType, descRank, valueElemTy, rewriter,
+              perElementDims, blockLevelDims, padding);
     }
 
     // Determine vectorization by querying the descriptor's address-level
@@ -2290,7 +2313,8 @@ struct DescriptorLoadOpConversion
 
       Value ret;
       if (maskElems.empty()) {
-        // All dimensions are provably in-bounds: emit an unconditional load.
+        // No boundary checks needed (neither per-element nor block-level): emit
+        // an unconditional load.
         ret = createLoadWithAttrs()[0];
       } else {
         Value pred = maskElems[vecStart];
@@ -2403,11 +2427,11 @@ struct DescriptorStoreOpConversion
     assertDescriptorInnerShapeCompatible(op, descTensorType.getShape(),
                                          valueTy.getShape());
 
-    // Build the boundary-check dimension list (same logic as load).
+    // Build the boundary-check dimension lists (same logic as load).
     ArrayRef<int64_t> blockShape = descTensorType.getShape();
     SmallVector<MakeTensorDescOp> allDescs =
         mlir::triton::intel::findAllMakeTensorDescOps(op.getDesc());
-    SmallVector<int32_t> allDims;
+    SmallVector<int32_t> perElementDims, blockLevelDims;
     for (size_t i = 0; i < descRank; ++i) {
       int64_t bs = blockShape[i];
       if (!allDescs.empty() &&
@@ -2415,9 +2439,11 @@ struct DescriptorStoreOpConversion
                        [&](MakeTensorDescOp d) {
                          return isDivisible(d.getShape()[i], bs);
                        }) &&
-          isDivisible(op.getIndices()[i], static_cast<unsigned>(bs)))
-        continue;
-      allDims.push_back(i);
+          isDivisible(op.getIndices()[i], static_cast<unsigned>(bs))) {
+        blockLevelDims.push_back(i);
+      } else {
+        perElementDims.push_back(i);
+      }
     }
 
     // Reuse the shared gather/scatter operand computation.
@@ -2425,7 +2451,7 @@ struct DescriptorStoreOpConversion
     std::tie(ptrElems, maskElems, dummyOther) =
         convertTensorDescriptorToTensorOfPtr(loc, llDesc, indices, valueTy,
                                              descRank, valueElemTy, rewriter,
-                                             allDims);
+                                             perElementDims, blockLevelDims);
 
     // Unpack the value elements
     auto valueElems = unpackLLElements(loc, llValue, rewriter);
