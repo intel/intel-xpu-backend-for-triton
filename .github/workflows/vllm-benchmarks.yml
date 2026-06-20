@@ -61,6 +61,7 @@ env:
   TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number)) || (github.event_name == 'schedule' && 'ci') || 'test' }}
   HF_TOKEN: ${{ secrets.HF_TOKEN || '' }}
   GH_TOKEN: ${{ github.token }}
+  TRITON_INTEL_PREDICATED_LOAD: "1"
 
 jobs:
   build:
