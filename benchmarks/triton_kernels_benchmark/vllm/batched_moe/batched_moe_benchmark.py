@@ -243,11 +243,15 @@ def get_batched_mm_benchmark(
             counts = num_expert_tokens.tolist()
             input_A_grouped = torch.cat([A_q[e, :counts[e], :] for e in range(num_experts)], dim=0).contiguous()
 
-            del B_q, B, C, ref
+            # Free batched-format tensors unused by the grouped path, then empty_cache():
+            # del alone keeps them reserved, so input_B_grouped stacks on top and OOMs BMG.
+            del B, B_q, B_scale, C, ref
+            torch.xpu.empty_cache()
+
             input_B_grouped = torch.empty((num_experts, K, N), device='xpu', dtype=dtype)
             input_B_grouped.normal_().div_(15)
-            output_sycl = torch.empty((input_A_grouped.shape[0], N), device='xpu', dtype=dtype)
             ref_grouped = torch.cat([A_q[e, :counts[e], :] @ input_B_grouped[e] for e in range(num_experts)], dim=0)
+            output_sycl = torch.empty((input_A_grouped.shape[0], N), device='xpu', dtype=dtype)
 
             # TODO: use a native on-device SYCL-TLA prologue; for now we strip per-expert padding with a
             # torch compaction outside timing, so these numbers are optimistic vs Triton's in-kernel masking.
