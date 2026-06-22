@@ -152,6 +152,8 @@ def _find_buggy_d16_prefetch_calls(llir):
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 @pytest.mark.parametrize("num_stages", [2, 3])
 @pytest.mark.skipif(not is_xpu(), reason="XPU compiler target required (compile-only, no kernel launch)")
+@pytest.mark.xfail(not triton.runtime.driver.active.get_current_target().arch['has_subgroup_2d_block_io'],
+                   reason="d16 prefetch path is not exercised on targets without 2D block I/O", run=False)
 def test_d16_prefetch_ir_no_buggy_split_tdesc(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, dtype, num_stages, device):
     """Compile-only check: lowered LLIR must not contain a (2, 16, *, 2, ...) prefetch call.
 
@@ -160,12 +162,13 @@ def test_d16_prefetch_ir_no_buggy_split_tdesc(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_
     on CRI. The fix collapses the split, so the corresponding call should be
     `(2, 32, X, 1, ...)` (single-block).
 
-    This compile-only check runs on any XPU build host (no CRI/BMG required), so
-    a regression of PYTORCHDGQ-9207 is caught in standard CI rather than only on
-    the daily CRI job. Skips if zero d16 prefetch calls are emitted, since the
-    @pytest.mark.skipif(not is_xpu()) guard does not imply has_subgroup_2d_block_io —
-    on XPU hosts without 2D block I/O support the compiler emits no d16 prefetch
-    calls and we have nothing to check.
+    This compile-only check runs on any XPU build host with 2D block I/O support
+    (no CRI/BMG required), so a regression of PYTORCHDGQ-9207 is caught in
+    standard CI rather than only on the daily CRI job. xfail-with-run=False on
+    targets that lack `has_subgroup_2d_block_io` (matches the project pattern in
+    test_block_load.py:18). Asserts that at least one d16 prefetch was emitted —
+    zero d16 prefetches on a capable target would mean the compiler silently
+    stopped prefetching, which itself is a regression.
     """
     M, N, K = 128, 128, 128
     a = torch.empty((M, K), device=device, dtype=dtype)
@@ -191,9 +194,8 @@ def test_d16_prefetch_ir_no_buggy_split_tdesc(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_
 
     llir = compiled.asm.get("llir", "")
     n_d16 = sum(1 for m in _LLIR_PREFETCH_CALL.finditer(llir) if int(m.group(1)) == 2)
-    if n_d16 == 0:
-        pytest.skip("No d16 2D block prefetch calls emitted — target lacks 2D block I/O support, "
-                    "so this configuration cannot exercise the regression path.")
+    assert n_d16 > 0, ("Compiler emitted zero d16 2D block prefetch calls on a 2D-block-I/O-capable target — "
+                       "this is itself a regression (the optimization silently stopped firing).")
     buggy = _find_buggy_d16_prefetch_calls(llir)
     assert not buggy, (f"Found {len(buggy)} buggy d16 prefetch call(s) (tile_width=16, v_blocks=2) in LLIR. "
                        f"This is the PYTORCHDGQ-9207 crash shape — block_width(32B) × array_length(2) = 64 != 128. "
@@ -208,6 +210,8 @@ def test_d16_prefetch_ir_no_buggy_split_tdesc(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 @pytest.mark.parametrize("num_stages", [2, 3])
 @pytest.mark.skipif(not is_xpu(), reason="XPU compiler target required (compile-only, no kernel launch)")
+@pytest.mark.xfail(not triton.runtime.driver.active.get_current_target().arch['has_subgroup_2d_block_io'],
+                   reason="d16 prefetch path is not exercised on targets without 2D block I/O", run=False)
 def test_d16_prefetch_ir_no_buggy_split_ptrs(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, dtype, num_stages, device):
     """Compile-only check for the regular-pointer prefetch path.
 
@@ -242,9 +246,8 @@ def test_d16_prefetch_ir_no_buggy_split_ptrs(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_S
 
     llir = compiled.asm.get("llir", "")
     n_d16 = sum(1 for m in _LLIR_PREFETCH_CALL.finditer(llir) if int(m.group(1)) == 2)
-    if n_d16 == 0:
-        pytest.skip("No d16 2D block prefetch calls emitted — target lacks 2D block I/O support, "
-                    "so this configuration cannot exercise the regression path.")
+    assert n_d16 > 0, ("Compiler emitted zero d16 2D block prefetch calls on a 2D-block-I/O-capable target — "
+                       "this is itself a regression (the optimization silently stopped firing).")
     buggy = _find_buggy_d16_prefetch_calls(llir)
     assert not buggy, (f"Found {len(buggy)} buggy d16 prefetch call(s) (tile_width=16, v_blocks=2) in LLIR. "
                        f"This is the PYTORCHDGQ-9207 crash shape — block_width(32B) × array_length(2) = 64 != 128. "
@@ -277,7 +280,7 @@ def test_d16_prefetch_tensor_desc(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, dtyp
     c = torch.empty((M, N), device=device, dtype=dtype)
 
     grid = (triton.cdiv(M, BLOCK_SIZE_M) * triton.cdiv(N, BLOCK_SIZE_N), )
-    _matmul_kernel_tdesc[grid](
+    compiled = _matmul_kernel_tdesc[grid](
         a,
         b,
         c,
@@ -292,6 +295,13 @@ def test_d16_prefetch_tensor_desc(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, dtyp
         BLOCK_SIZE_K=BLOCK_SIZE_K,
         NUM_STAGES=num_stages,
     )
+
+    # Verify a d16 prefetch was actually emitted — guards against the compiler
+    # silently dropping the optimization (which would let correctness checks
+    # pass while losing the perf path under test).
+    llir = compiled.asm.get("llir", "")
+    n_d16 = sum(1 for m in _LLIR_PREFETCH_CALL.finditer(llir) if int(m.group(1)) == 2)
+    assert n_d16 > 0, "Expected at least one d16 2D block prefetch in LLIR but found none."
 
     ref = torch.matmul(a.float(), b.float()).to(dtype)
     torch.testing.assert_close(c, ref, atol=1e-2, rtol=1e-2)
@@ -321,7 +331,7 @@ def test_d16_prefetch_tensor_of_ptr(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, dt
     c = torch.empty((M, N), device=device, dtype=dtype)
 
     grid = (triton.cdiv(M, BLOCK_SIZE_M) * triton.cdiv(N, BLOCK_SIZE_N), )
-    _matmul_kernel_ptrs[grid](
+    compiled = _matmul_kernel_ptrs[grid](
         a,
         b,
         c,
@@ -339,6 +349,13 @@ def test_d16_prefetch_tensor_of_ptr(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, dt
         BLOCK_SIZE_K=BLOCK_SIZE_K,
         NUM_STAGES=num_stages,
     )
+
+    # Verify a d16 prefetch was actually emitted — guards against the compiler
+    # silently dropping the optimization (which would let correctness checks
+    # pass while losing the perf path under test).
+    llir = compiled.asm.get("llir", "")
+    n_d16 = sum(1 for m in _LLIR_PREFETCH_CALL.finditer(llir) if int(m.group(1)) == 2)
+    assert n_d16 > 0, "Expected at least one d16 2D block prefetch in LLIR but found none."
 
     ref = torch.matmul(a.float(), b.float()).to(dtype)
     torch.testing.assert_close(c, ref, atol=1e-2, rtol=1e-2)
