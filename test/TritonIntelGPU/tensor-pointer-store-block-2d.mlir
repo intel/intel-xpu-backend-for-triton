@@ -205,3 +205,29 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     tt.return
   }
 }
+
+// -----
+
+// COM: Regression test for stride=0 row-major pointer stores. Broadcasting a
+// COM: single row across the row dimension makes the row stride zero, while the
+// COM: non-zero column start forces base-width alignment compensation to widen
+// COM: the emitted block store's base_width. The lowering must still use 2D
+// COM: block store by synthesizing a pitch from the full surface width.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: @broadcast_row_major_pointer_store
+  // CHECK-NOT: triton_gen.2Dblockstore
+  // ALL-LAYOUT-LABEL: @broadcast_row_major_pointer_store
+  // ALL-LAYOUT: %[[PITCH:.*]] = llvm.mlir.constant(128 : i32) : i32
+  // ALL-LAYOUT: triton_gen.2Dblockstore {{.*}}, %[[PITCH]], {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 1, v_blocks = 1, cache_control = Default}
+  tt.func public @broadcast_row_major_pointer_store(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+    %0 = tt.make_range {end = 84 : i32, start = 20 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #blocked>
+    %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1x64x!tt.ptr<f16>, #blocked>
+    %3 = tt.addptr %2, %1 : tensor<1x64x!tt.ptr<f16>, #blocked>, tensor<1x64xi32, #blocked>
+    %addr = tt.broadcast %3 : tensor<1x64x!tt.ptr<f16>, #blocked> -> tensor<64x64x!tt.ptr<f16>, #blocked>
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf16, #blocked>
+    tt.store %addr, %cst {ttig.block_io = "row_major"} : tensor<64x64x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+}
