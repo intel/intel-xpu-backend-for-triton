@@ -19,7 +19,7 @@ index 0ffe850..88da01e 100644
      init_softmax_M,
      load_qq_bias_tile,
      resolve_seq_and_query_len,
-@@ -175,6 +172,182 @@ def _store_output_td(
+@@ -175,6 +172,146 @@ def _store_output_td(
      )
  
  
@@ -166,7 +166,7 @@ index 0ffe850..88da01e 100644
  @triton.jit
  def kernel_unified_attention(
      # Output destination for the 2D path.  In 3D mode per-segment partials
-@@ -232,6 +405,11 @@ def kernel_unified_attention(
+@@ -232,6 +405,10 @@ def kernel_unified_attention(
      BLOCK_M: tl.constexpr,
      NUM_SEGMENTS_PER_SEQ: tl.constexpr,
      USE_FP8: tl.constexpr,
@@ -187,7 +187,7 @@ index 0ffe850..88da01e 100644
      # Per-(token, head) scale caches: used iff KV_QUANT_MODE in {2, 3}.
      USE_PER_TOKEN_HEAD_SCALES: tl.constexpr = (KV_QUANT_MODE >= 2) and (
          KV_QUANT_MODE <= 3
-@@ -308,9 +489,33 @@ def kernel_unified_attention(
+@@ -308,9 +489,30 @@ def kernel_unified_attention(
      if q_block_local_idx * BLOCK_Q >= cur_batch_query_len:
          return
  
@@ -258,7 +258,7 @@ index 0ffe850..88da01e 100644
  
          if USE_SOFTCAP:
              S = apply_softcap(S, softcap)
-@@ -540,19 +738,14 @@ def kernel_unified_attention(
+@@ -540,19 +738,13 @@ def kernel_unified_attention(
          M, L, P, alpha = softmax_step(S, M, L)
          acc = acc * alpha[:, None]
  
@@ -301,7 +301,7 @@ index 0ffe850..88da01e 100644
      HEAD_SIZE: tl.constexpr,  # int, must be power of 2
      HEAD_SIZE_PADDED: tl.constexpr,  # int, must be power of 2
      query_start_len_ptr,  # [num_seqs+1]
-@@ -679,36 +876,24 @@ def reduce_segments(
+@@ -679,36 +876,21 @@ def reduce_segments(
      query_token_idx = tl.program_id(0)
      query_head_idx = tl.program_id(1)
  
@@ -366,7 +366,7 @@ index 0ffe850..88da01e 100644
      sliding_window_val = 1 + window_size[0] if window_size[0] >= 0 else 0
  
      # Compute chunked block size from sliding window if needed.
-@@ -872,20 +1041,14 @@ def unified_attention(
+@@ -872,20 +1041,13 @@ def unified_attention(
      elif sliding_window_val <= 0:
          chunk_lookback = -1
  
@@ -417,7 +417,7 @@ index 0ffe850..88da01e 100644
  
      # The kernel signature is the same for 2D and 3D — only the launch
      # grid + a handful of constexpr toggles differ.  Per-token-head scale
-@@ -960,18 +1116,49 @@ def unified_attention(
+@@ -960,18 +1116,47 @@ def unified_attention(
          v_scale_ptr = None
      # 3D needs real segm tensors; 2D never touches them.  Pass ``None`` in
      # 2D mode so Triton can skip materialising these pointer arguments.
@@ -493,7 +493,7 @@ index 0ffe850..88da01e 100644
          IS_3D=use_3d,
          KV_QUANT_MODE=kv_quant_mode,
          Q_IS_FP8=(q.dtype == current_platform.fp8_dtype()),
-@@ -1057,11 +1244,13 @@ def unified_attention(
+@@ -1057,11 +1244,11 @@ def unified_attention(
              output_stride_0=out.stride(0),
              output_stride_1=out.stride(1),
              block_table_stride=block_table.stride(0),
