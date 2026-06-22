@@ -704,7 +704,6 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     int stride = getStride(ptr, dim);
     // If the stride is 0, we assume a minimum pitch of 64 bytes.
     constexpr int MIN_PITCH = 64;
-
     if (stride == 0)
       return b.i32_val(MIN_PITCH);
 
