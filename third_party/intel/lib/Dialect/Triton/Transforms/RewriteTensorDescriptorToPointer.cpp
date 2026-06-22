@@ -1098,6 +1098,9 @@ class TritonRewriteTensorDescriptorToPointerPass
       (void)applyPatternsGreedily(op, std::move(patterns));
     }
 
+    auto rewriteGather =
+        tools::getBoolEnv("TRITON_INTEL_ENABLE_DESCRIPTOR_GATHER_REWRITE");
+
     llvm::SmallSetVector<triton::MakeTensorDescOp, 4>
         candidateMakeTensorDescOps;
     llvm::SmallSetVector<triton::MakeTensorDescOp, 4>
@@ -1110,10 +1113,21 @@ class TritonRewriteTensorDescriptorToPointerPass
                      triton::intel::findAllMakeTensorDescOps(op.getDesc()))
                   candidateMakeTensorDescOps.insert(d);
               })
-          .Case<triton::DescriptorGatherOp, triton::DescriptorScatterOp,
-                triton::DescriptorReduceOp>([&](auto op) {
-            for (auto d : triton::intel::findAllMakeTensorDescOps(op.getDesc()))
-              unhandledMakeTensorDescOps.insert(d);
+          .Case<triton::DescriptorScatterOp, triton::DescriptorReduceOp>(
+              [&](auto op) {
+                for (auto d :
+                     triton::intel::findAllMakeTensorDescOps(op.getDesc()))
+                  unhandledMakeTensorDescOps.insert(d);
+              })
+          .Case<triton::DescriptorGatherOp>([&](auto op) {
+            for (auto d :
+                 triton::intel::findAllMakeTensorDescOps(op.getDesc())) {
+              if (rewriteGather) {
+                unhandledMakeTensorDescOps.insert(d);
+              } else {
+                candidateMakeTensorDescOps.insert(d);
+              }
+            }
           })
           .Default([](auto) {});
       return WalkResult::advance();
@@ -1151,6 +1165,8 @@ class TritonRewriteTensorDescriptorToPointerPass
               .Case<triton::MakeTensorDescOp>([&](auto op) {
                 return candidateMakeTensorDescOps.contains(op);
               })
+              .Case<triton::DescriptorGatherOp>(
+                  [&](auto op) { return !rewriteGather; })
               .Default([&](auto *op) { return allDescValuesAreCandidate(op); });
         });
     target.addDynamicallyLegalOp<triton::FuncOp>([](triton::FuncOp funcOp) {
@@ -1204,10 +1220,12 @@ class TritonRewriteTensorDescriptorToPointerPass
     mlir::scf::populateSCFStructuralTypeConversions(converter, patterns);
     triton::populateArithTypeConversions(converter, patterns);
 
-    patterns
-        .add<RewriteMakeTensorDesc, RewriteLoadPattern, RewriteStorePattern,
-             RewriteGatherPattern, RewriteScatterPattern, RewriteReducePattern>(
-            converter, &getContext());
+    patterns.add<RewriteMakeTensorDesc, RewriteLoadPattern, RewriteStorePattern,
+                 /*RewriteGatherPattern,*/ RewriteScatterPattern,
+                 RewriteReducePattern>(converter, &getContext());
+    if (rewriteGather) {
+      patterns.add<RewriteGatherPattern>(converter, &getContext());
+    }
 
     ConversionConfig config;
     config.buildMaterializations = false;
