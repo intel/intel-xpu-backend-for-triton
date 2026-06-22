@@ -403,6 +403,15 @@ bool isLayoutAnchor(Operation *op) {
           // scatter.
           if (*rootLaneDim != *dstLaneDim)
             return true;
+          // The canonical-coalesced anchor below protects a 2D block write
+          // from demotion. A rank<2 store can never be a 2D block write, and a
+          // 1D store operand is frequently produced by a tt.reshape whose
+          // RLC-chosen (reshape-free) layout is NOT the coalesced canonical;
+          // forcing the canonical layout onto the reshape output corrupts the
+          // store (issue #7104 follow-up: test_trans_4d). Nothing to protect
+          // for rank<2 -> fold by default.
+          if (dstTy.getRank() < 2)
+            return false;
           // Same lane-fast dim. Anchor iff dst is the canonical coalesced
           // descriptor-store layout that tritongpu-coalesce assigns AND the
           // chain root is not a dot result.
