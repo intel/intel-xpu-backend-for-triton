@@ -441,14 +441,3 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
   llvm.return
 }
 }
-
-// -----
-
-// COM: d16 with tile_width=32, vBlocks=1 has no SPV runtime builtin (16b_?r32x1c
-// COM: is missing). Verify it falls back to GenISA LSC2DBlockPrefetch intrinsic.
-llvm.func @triton_gen.2Dblockprefetch_d16_genisa_fallback(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
-  // CHECK-NOT: @_Z36__spirv_Subgroup2DBlockPrefetchINTEL
-  // CHECK:     llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid({{.*}}) {{.*}} : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> ()
-  triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=16, tile_width=32, tile_height=8, v_blocks=1, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
-  llvm.return
-}

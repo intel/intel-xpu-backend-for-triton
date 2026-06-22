@@ -37,7 +37,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK: %[[VAL_13:.*]] = llvm.ptrtoint %[[ADDR_0]] : !llvm.ptr<1> to i64
     // CHECK: %[[UNIFIED_BASE:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflelj(%[[VAL_13]], %[[CST_0]]) {convergent, no_unwind, will_return} : (i64, i32) -> i64
     // CHECK: %[[VAL_26:.*]] = llvm.inttoptr %[[UNIFIED_BASE]] : i64 to !llvm.ptr<1>
-    // CHECK: triton_gen.2Dblockprefetch %[[VAL_26]], %[[BASE_WIDTH]], %[[BASE_HEIGHT]], %[[PITCH]], %[[CST_0_]], %[[OFFSET_Y]] {elem_size_in_bits = 16, tile_width = 32, tile_height = 8, v_blocks = 1, cache_control = L1C_L3C}
+    // CHECK: triton_gen.2Dblockprefetch %[[VAL_26]], %[[BASE_WIDTH]], %[[BASE_HEIGHT]], %[[PITCH]], %[[CST_0_]], %[[OFFSET_Y]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 2, cache_control = L1C_L3C}
 
     // CHECK: %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: %[[VAL_29:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflecj(%{{.*}}, %[[CST_0]]) {convergent, no_unwind, will_return} : (i8, i32) -> i8
@@ -48,7 +48,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK: %[[VAL_32:.*]] = llvm.ptrtoint %[[ADDR_16]] : !llvm.ptr<1> to i64
     // CHECK: %[[VAL_33:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflelj(%[[VAL_32]], %[[CST_0]]) {convergent, no_unwind, will_return} : (i64, i32) -> i64
     // CHECK: %[[VAL_34:.*]] = llvm.inttoptr %[[VAL_33]] : i64 to !llvm.ptr<1>
-    // CHECK: triton_gen.2Dblockprefetch %[[VAL_34]], %[[BASE_WIDTH]], %[[BASE_HEIGHT]], %[[PITCH]], %[[CST_0_]], %[[VAL_31]] {elem_size_in_bits = 16, tile_width = 32, tile_height = 8, v_blocks = 1, cache_control = L1C_L3C}
+    // CHECK: triton_gen.2Dblockprefetch %[[VAL_34]], %[[BASE_WIDTH]], %[[BASE_HEIGHT]], %[[PITCH]], %[[CST_0_]], %[[VAL_31]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 2, cache_control = L1C_L3C}
 
     // CHECK: %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: %[[VAL_36:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflecj(%{{.*}}, %[[CST_0]]) {convergent, no_unwind, will_return} : (i8, i32) -> i8
@@ -59,7 +59,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK: %[[VAL_39:.*]] = llvm.ptrtoint %[[ADDR_32]] : !llvm.ptr<1> to i64
     // CHECK: %[[VAL_40:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflelj(%[[VAL_39]], %[[CST_0]]) {convergent, no_unwind, will_return} : (i64, i32) -> i64
     // CHECK: %[[VAL_41:.*]] = llvm.inttoptr %[[VAL_40]] : i64 to !llvm.ptr<1>
-    // CHECK: triton_gen.2Dblockprefetch %[[VAL_41]], %[[BASE_WIDTH]], %[[BASE_HEIGHT]], %[[PITCH]], %[[CST_0_]], %[[VAL_38]] {elem_size_in_bits = 16, tile_width = 32, tile_height = 8, v_blocks = 1, cache_control = L1C_L3C}
+    // CHECK: triton_gen.2Dblockprefetch %[[VAL_41]], %[[BASE_WIDTH]], %[[BASE_HEIGHT]], %[[PITCH]], %[[CST_0_]], %[[VAL_38]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 2, cache_control = L1C_L3C}
 
     // CHECK: %[[CST_0:.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK: %[[VAL_43:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflecj(%{{.*}}, %[[CST_0]]) {convergent, no_unwind, will_return} : (i8, i32) -> i8
@@ -70,12 +70,12 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK: %[[VAL_46:.*]] = llvm.ptrtoint %[[ADDR_48]] : !llvm.ptr<1> to i64
     // CHECK: %[[VAL_47:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflelj(%[[VAL_46]], %[[CST_0]]) {convergent, no_unwind, will_return} : (i64, i32) -> i64
     // CHECK: %[[VAL_48:.*]] = llvm.inttoptr %[[VAL_47]] : i64 to !llvm.ptr<1>
-    // CHECK: triton_gen.2Dblockprefetch %[[VAL_48]], %[[BASE_WIDTH]], %[[BASE_HEIGHT]], %[[PITCH]], %[[CST_0_]], %[[VAL_45]] {elem_size_in_bits = 16, tile_width = 32, tile_height = 8, v_blocks = 1, cache_control = L1C_L3C}
+    // CHECK: triton_gen.2Dblockprefetch %[[VAL_48]], %[[BASE_WIDTH]], %[[BASE_HEIGHT]], %[[PITCH]], %[[CST_0_]], %[[VAL_45]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 2, cache_control = L1C_L3C}
 
     %mask_tensor = arith.constant dense<1> : tensor<64x32xi1, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
     ttig.prefetch %tensor_of_ptr, %mask_tensor {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 1>, ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
 
-    // CHECK-COUNT-4: triton_gen.2Dblockprefetch {{.*}} {elem_size_in_bits = 16, tile_width = 32, tile_height = 8, v_blocks = 1, cache_control = L1C_L3C}
+    // CHECK-COUNT-4: triton_gen.2Dblockprefetch {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 2, cache_control = L1C_L3C}
 
     ttig.prefetch %tensor_of_ptr {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 1>, ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
 

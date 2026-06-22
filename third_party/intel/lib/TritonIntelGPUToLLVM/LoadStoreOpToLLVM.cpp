@@ -1270,6 +1270,14 @@ static LogicalResult emit2DBlockPrefetchOps(
       tileWidthInElem = 32;
     }
     break;
+  case 16:
+    if (tileWidthInElem == 32) {
+      // OCL interface supports 16b_?r16x2c for 64 bytes per row of 16 bits
+      // element.
+      vBlocks = 2;
+      tileWidthInElem = 16;
+    }
+    break;
   }
 
   StringAttr kOffset = S("offset");
@@ -1471,6 +1479,14 @@ struct PrefetchOpConversion
         // element.
         vBlocks = 2;
         tileWidthInElem = 32;
+      }
+      break;
+    case 16:
+      if (tileWidthInElem == 32) {
+        // OCL interface supports 16b_?r16x2c for 64 bytes per row of 16 bits
+        // element.
+        vBlocks = 2;
+        tileWidthInElem = 16;
       }
       break;
     }
