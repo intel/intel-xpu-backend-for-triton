@@ -138,7 +138,7 @@ index 0ffe85054..00000000 100644
 +)
  @triton.jit
  def kernel_unified_attention(
-      # Output destination for the 2D path.  In 3D mode per-segment partials
+     # Output destination for the 2D path.  In 3D mode per-segment partials
 @@ -232,6 +298,7 @@ def kernel_unified_attention(
      BLOCK_M: tl.constexpr,
      NUM_SEGMENTS_PER_SEQ: tl.constexpr,
@@ -266,7 +266,7 @@ index 0ffe85054..00000000 100644
 +)
  @triton.jit
  def reduce_segments(
-      output_ptr,  # [num_tokens, num_query_heads, head_size]
+     output_ptr,  # [num_tokens, num_query_heads, head_size]
 @@ -666,11 +753,9 @@ def reduce_segments(
      output_stride_0: tl.int64,  # int
      output_stride_1: tl.int64,  # int, should be equal to head_size
