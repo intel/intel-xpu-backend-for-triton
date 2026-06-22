@@ -129,7 +129,7 @@ def get_batched_mm_benchmark(
         del supported_providers['pytorch']
 
     if not is_fp8:
-        supported_providers['sycl-tla'] = 'SYCL-TLA'
+        supported_providers['sycl-tla'] = 'sycl-tla'
 
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
     configs = MM_CONFIGS_FP8 if is_fp8 else MM_CONFIGS_BF16
