@@ -236,7 +236,7 @@ jobs:
             --benchmark moe-fp8-benchmark \
             --param_cols="num_experts,max_tokens_per_expert,K,N"
 
-      - name: Run vllm fused moe
+      - name: Run vllm fused moe bf16
         if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
         run: |
           source ./scripts/capture-hw-details.sh
