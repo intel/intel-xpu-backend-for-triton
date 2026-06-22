@@ -747,6 +747,37 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     assert(stride == -1 && "invalid stride < 0");
     return nullptr;
   }
+#if 0
+struct BlockIOTileSizeInfo {
+  BlockIOTileSizeInfo() = delete;
+  BlockIOTileSizeInfo(int tileHeight, int tileWidth, int numElemPerPackedVal,
+                      int vBlocks, int rowDim, int colDim, bool transpose,
+                      bool vnni,
+                      std::optional<SetVector<unsigned>> regPackedBases)
+      : tileHeight(tileHeight), tileWidth(tileWidth),
+        numElemPerPackedVal(numElemPerPackedVal), vBlocks(vBlocks),
+        rowDim(rowDim), colDim(colDim), transpose(transpose), vnni(vnni),
+        regPackedBases(regPackedBases) {}
+  static BlockIOTileSizeInfo unknown() {
+    return {-1, -1, -1, -1, -1, -1, false, false, std::nullopt};
+  }
+
+  int tileHeight;
+  int tileWidth;
+  int numElemPerPackedVal;
+  int vBlocks;
+  int rowDim;
+  int colDim;
+  bool transpose;
+  bool vnni;
+  std::optional<SetVector<unsigned>> regPackedBases;
+
+  bool isValid() const {
+    return tileHeight >= 0 && tileWidth >= 0 && numElemPerPackedVal >= 0 &&
+           vBlocks >= 0 && rowDim >= 0 && colDim >= 0;
+  }
+};
+#endif
 
   // Recover a runtime pitch when the constant stride is unknown: build
   // pitch = runtime_stride * elemSizeInBytes, like the 2D block load does.
@@ -1527,7 +1558,7 @@ struct PrefetchOpConversion
     AxisInfo *ptrAxisInfo =
         const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
             .getAxisInfo(op.getPtr());
-    BlockIOTileSizeInfo sizeInfo = getBlockIOTileSize<true /*load*/>(
+    BlockIOTileSizeInfo sizeInfo = get2DBlockLoadTileSize(
         llEncoding.value(), contiguousDim, elemSizeInBits, ptrAxisInfo,
         maskAxisInfo, false);
     if (!sizeInfo.isValid())
@@ -2379,14 +2410,20 @@ public:
       sizeInfo = BlockIOTileSizeInfo(height, width, /*numElemPerPackedVal=*/1,
                                      /*vBlocks=*/1, /*rowDim=*/0,
                                      /*colDim=*/rank - 1, /*transpose=*/false,
-                                     std::move(regPackBases));
+                                     /*vnni=*/false, std::move(regPackBases));
     } else {
-      AxisInfo *ptrAxisInfo =
-          const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
-              .getAxisInfo(op.getPtr());
-      sizeInfo = getBlockIOTileSize<true /*load*/>(
-          llEncoding.value(), contiguousDim, elemSizeInBits, ptrAxisInfo, maskAxisInfo,
-          oneMatrixPerLoadForBT);
+      if (!use1DBlockIO) {
+        AxisInfo *ptrAxisInfo =
+            const_cast<triton::intel::ModuleAxisInfoAnalysis &>(
+                axisAnalysisPass)
+                .getAxisInfo(op.getPtr());
+        sizeInfo = get2DBlockLoadTileSize(llEncoding.value(), contiguousDim,
+                                          elemSizeInBits, ptrAxisInfo,
+                                          maskAxisInfo, oneMatrixPerLoadForBT);
+      } else {
+        sizeInfo = get1DBlockIOTileSize(llEncoding.value(), contiguousDim,
+                                        elemSizeInBits);
+      }
     }
     if (!sizeInfo.isValid())
       return failure();
@@ -2399,6 +2436,7 @@ public:
     int rowDim = sizeInfo.rowDim;
     int colDim = sizeInfo.colDim;
     bool isTransposeRequired = sizeInfo.transpose;
+    bool useVNNIFormat = sizeInfo.vnni;
     std::optional<SetVector<unsigned>> regPackedBases =
         std::move(sizeInfo.regPackedBases);
 
@@ -2484,8 +2522,11 @@ public:
 
     int64_t numElemsPerLoad = mlir::ceil(
         tileHeight * tileWidth * numPackedVals * vBlocks, (int)threadsPerWarp);
-    unsigned numValuesPerLoad = mlir::ceil((int)numElemsPerLoad, numPackedVals);
-    Type packedType = IntegerType::get(ctx, packedElemSizeInBits);
+    unsigned numValuesPerLoad =
+        mlir::ceil((unsigned)numElemsPerLoad,
+                   useVNNIFormat ? (32 / elemSizeInBits) : numPackedVals);
+    Type packedType =
+        useVNNIFormat ? i32_ty : IntegerType::get(ctx, packedElemSizeInBits);
     Type load2DGenXType = LLVM::getVectorType(packedType, numValuesPerLoad);
     Type unpackedType = LLVM::getVectorType(eltTy, numElemsPerLoad);
 
@@ -2509,7 +2550,7 @@ public:
     unpackedType = dpasCfg.unpackedType;
     load2DGenXType = dpasCfg.load2DGenXType;
     packedType = dpasCfg.packedType;
-    bool useVNNIFormat = dpasCfg.useVNNIFormat;
+    useVNNIFormat |= dpasCfg.useVNNIFormat;
     tileHeight = dpasCfg.tileHeight;
     tileWidth = dpasCfg.tileWidth;
     vBlocks = dpasCfg.vBlocks;
@@ -3231,6 +3272,727 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
   }
 };
 
+struct DescriptorGatherOpConversion
+    : public ConvertOpToLLVMPattern<mlir::triton::gpu::intel::DescriptorGatherOp>,
+      public BlockIOConversionBase {
+  using ConvertOpToLLVMPattern<
+      mlir::triton::gpu::intel::DescriptorGatherOp>::ConvertOpToLLVMPattern;
+
+  DescriptorGatherOpConversion(
+      LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
+      const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
+      triton::intel::ModuleStrideAnalysis &strideAnalysis,
+      PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<mlir::triton::gpu::intel::DescriptorGatherOp>(converter, benefit),
+        BlockIOConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
+
+  LogicalResult
+  matchAndRewrite(mlir::triton::gpu::intel::DescriptorGatherOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto typeConverter = getTypeConverter();
+    MLIRContext *ctx = rewriter.getContext();
+    // Get the descriptor and indices
+    Value llDesc = adaptor.getDesc();
+    SmallVector<Value> offsetX =
+        unpackLLElements(loc, adaptor.getXOffsets(), rewriter);
+    RankedTensorType offXTy = op.getXOffsets().getType();
+    std::optional<LinearLayout> offsetsXLLEncoding =
+        cast<DistributedEncodingTrait>(offXTy.getEncoding())
+            .toLinearLayout(offXTy.getShape());
+    assert(offsetsXLLEncoding.has_value() &&
+           "unexpected failure when getting linear layout");
+
+    Value offsetY = adaptor.getYOffset();
+    // Get result type information
+    auto resultType = cast<RankedTensorType>(op.getType());
+    std::optional<LinearLayout> llEncoding =
+        cast<DistributedEncodingTrait>(resultType.getEncoding())
+            .toLinearLayout(resultType.getShape());
+    assert(llEncoding.has_value() &&
+           "unexpected failure when getting linear layout");
+    // llvm::outs() << "johnlu llEncoding: " << llEncoding << "\n";
+    auto subLayout = llEncoding->sublayout(
+        llvm::to_vector(llEncoding->getInDimNames()), {str_attr("dim0")});
+    // llvm::outs() << "johnlu subLayout: " << subLayout << "\n";
+    // llvm::outs() << "johnlu offsetsXLLEncoding: " << offsetsXLLEncoding <<
+    // "\n";
+    auto regMLayout = subLayout.invertAndCompose(*offsetsXLLEncoding);
+    // llvm::outs() << "johnlu subLayout.invertCompse: " << regMLayout << "\n";
+
+    StringAttr kRegister = S("register");
+    StringAttr kLane = S("lane");
+    StringAttr kWarp = S("warp");
+    StringAttr kBlock = S("block");
+
+    std::optional<LinearLayout> conversion = regMLayout.quotient(kBlock);
+    assert(conversion && "invalid quotient by block");
+    conversion = conversion->quotient(kWarp);
+    assert(conversion && "invalid quotient by warp");
+    conversion = conversion->quotient(kLane);
+    assert(conversion && "invalid quotient by lane");
+    // llvm::outs() << "johnlu conversion: " << *conversion << "\n";
+    auto offsetYLayout = llEncoding->sublayout(kRegister, {str_attr("dim1")});
+    // llvm::outs() << "johnlu offsetYLayout: " << offsetYLayout << "\n";
+    //  *conversion *= offsetYLayout;
+    //  llvm::outs() << "johnlu conversion: " << *conversion << "\n";
+
+    size_t resultRank = resultType.getRank();
+    Type valueElemTy = typeConverter->convertType(resultType.getElementType());
+    unsigned numElems = getTotalElemsPerThread(resultType);
+
+    auto descType = cast<triton::TensorDescType>(op.getDesc().getType());
+    RankedTensorType descTensorType = descType.getBlockType();
+    size_t descRank = descTensorType.getRank();
+    // auto blockIOAttr = op->getAttrOfType<StringAttr>(
+    //     TritonIntelGPUDialect::getBlockIOAttrName());
+    // assert(symbolizeBlockIOMode(blockIOAttr.getValue()) ==
+    //            BlockIOMode::RowMajor &&
+    //        "TDESC gather has to be row_major");
+
+    unsigned elemSizeInBits = std::max(8u, valueElemTy.getIntOrFloatBitWidth());
+    BlockIOTileSizeInfo sizeInfo =
+        getBlockIOTileSize<true, 8>(llEncoding.value(), resultRank - 1,
+                                    elemSizeInBits, nullptr, nullptr, false);
+
+    if (!sizeInfo.isValid())
+      return failure();
+    // Extract members to regular variables for C++17 compatibility
+    // (capturing structured bindings in lambdas requires C++20)
+    int tileHeight = sizeInfo.tileHeight;
+    int tileWidth = sizeInfo.tileWidth;
+    int numPackedVals = sizeInfo.numElemPerPackedVal;
+    int vBlocks = 1; // sizeInfo.vBlocks;
+    int rowDim = sizeInfo.rowDim;
+    int colDim = sizeInfo.colDim;
+    bool isTransposeRequired = sizeInfo.transpose;
+    bool useVNNIFormat = sizeInfo.vnni;
+    // assert(tileHeight == 1 && "1D block I/O should have tileHeight of 1");
+    assert(isTransposeRequired == false &&
+           "1D block I/O should not require transpose");
+    assert(useVNNIFormat == false &&
+           "1D block I/O should not require useVNNIFormat");
+    assert(rowDim == 0 && "only support rowDim=0 for 1D block I/O");
+    assert(colDim == 1 && "only support colDim=1 for 1D block I/O");
+    // assert(tileWidth == threadsPerWarp &&
+    //        "1D block I/O should have tileWidth equal to threads per warp");
+    std::optional<SetVector<unsigned>> regPackedBases =
+        std::move(sizeInfo.regPackedBases);
+
+    unsigned bytesPerRow = numPackedVals * tileWidth * elemSizeInBits / 8;
+    unsigned bytesPerLane = 8; // 16
+    unsigned maxBytes = 8;
+    unsigned lanesPerRow = ceil(bytesPerRow, bytesPerLane);
+    unsigned numPtrsPerLoad = lanesPerRow * tileHeight;
+    unsigned threadsPerWarp =
+        TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());
+    assert((numPtrsPerLoad == 16 || numPtrsPerLoad == 32) &&
+           "wrong in vector gather");
+    // unsigned numValuesPerLoad = tileHeight * tileWidth / threadsPerWarp;
+    unsigned numValuesPerLoad = bytesPerLane / maxBytes;
+    unsigned numElemsPerLoad =
+        (tileHeight * tileWidth / threadsPerWarp) * numPackedVals;
+
+    auto getBase = [&](const LinearLayout &ll, const std::string &inDim) {
+      const LinearLayout::BasesT &bases = ll.getBases();
+      for (const auto &base : bases) {
+        StringAttr attr = base.first;
+        if (attr.getValue().compare(inDim) == 0)
+          return base.second;
+      }
+      llvm_unreachable(("Could not find the input dim:" + inDim +
+                        ", on the ll:" + ll.toString())
+                           .c_str());
+    };
+#if 0
+    auto outDimSize = offsetsXLLEncoding->getOutDimSizeLog2(str_attr("dim0"));
+    std::vector<std::vector<int>> offsetBases(outDimSize, {0});
+    const LinearLayout::BasesT &_bases = offsetsXLLEncoding->getBases();
+    for (const auto &base : _bases) {
+      StringAttr attr = base.first;
+      if (attr.getValue().compare(str_attr("register")) == 0) {
+        auto regBases = base.second;
+        for (size_t i = 0; i < regBases.size(); ++i) {
+          if (regBases[i][0]) {
+            // llvm::outs() << "offsetBases[" << llvm::Log2_32(regBases[i][0]) << "] {"
+            //              << (1 << i) <<
+            //              "}\n";
+            offsetBases[llvm::Log2_32(regBases[i][0])] = {1 << i};
+          } else {
+            // llvm::outs() << "offsetBases[" << llvm::Log2_32(regBases[i][0]) << "] {"
+            //              << 0 <<
+            //              "}\n";
+            offsetBases[llvm::Log2_32(regBases[i][0])] = {0};
+          }
+        }
+        break;
+      }
+    }
+#endif
+    std::vector<std::vector<int>> laneBases;
+    for (size_t i = 0; i < llvm::Log2_32(threadsPerWarp); ++i) {
+      if (i < llvm::Log2_32(lanesPerRow)) {
+        // llvm::outs() << "bases {0, "
+        //              << ((bytesPerLane / (elemSizeInBits / 8)) << i) <<
+        //              "}\n";
+        laneBases.push_back(
+            {0, (int)(bytesPerLane / (elemSizeInBits / 8)) << i});
+      } else {
+        // llvm::outs() << "bases {" << (1 << (i - llvm::Log2_32(lanesPerRow)))
+        //              << ", 0}\n";
+        laneBases.push_back({1 << (i - llvm::Log2_32(lanesPerRow)), 0});
+      }
+    }
+
+    // llvm::outs() << "offx_idx inDimSize:" << inDimSize << "\n";
+    auto offsetXIndexBases = getBase(*conversion, "register");
+    auto offsetYBases = getBase(offsetYLayout, "register");
+    std::vector<std::vector<int>> offsetMapBases;
+    for (auto const &[oXI, oY] : llvm::zip(offsetXIndexBases, offsetYBases)) {
+      offsetMapBases.push_back({oXI[0], oY[0]});
+      // llvm::outs() << "offsetMapBases {" << oXI[0] << ", " << oY[0] << "}\n";
+    }
+    auto inDimSize = offsetsXLLEncoding->getInDimSize(str_attr("register"));
+    LinearLayout offMapping(
+        {{str_attr("register"), offsetMapBases}, {str_attr("lane"), laneBases}},
+        {{str_attr("offx_idx"), inDimSize},
+         {str_attr("dim1"), llEncoding->getOutDimSize(str_attr("dim1"))}},
+        /*requireSurjective=*/false);
+    // llvm::outs() << "johnlu offMapping: " << offMapping << "\n";
+
+    DescriptorFields desc = unpackDescriptor(llDesc, descRank, loc, rewriter);
+    assert(regPackedBases.has_value() &&
+           "invalid register bases for packing elems.");
+    std::vector<std::vector<int>> bases(regPackedBases->size());
+    llvm::transform(*regPackedBases, bases.begin(),
+                    [&](int base) { return std::vector<int>{base}; });
+    LinearLayout regMapping({{kRegister, bases}},
+                            {{kRegister, llEncoding->getInDimSize(kRegister)}},
+                            /*requireSurjective=*/true);
+    LinearLayout shuffleMapping =
+        LinearLayout::identity1D(numElemsPerLoad, kRegister, kRegister);
+
+    // llvm::outs() << "regMapping: " << regMapping << "\n";
+    // llvm::outs() << "shuffleMapping: " << shuffleMapping << "\n";
+    // Get padding from the propagated attribute (set by
+    // MaterializeBlockPointer).
+    Type dpasType = IntegerType::get(ctx, bytesPerLane * 8);
+    Type packedType = IntegerType::get(ctx, bytesPerLane * 8);
+    Type load1DGenXType = LLVM::getVectorType(packedType, numValuesPerLoad);
+    Type unpackedType = LLVM::getVectorType(valueElemTy, numElemsPerLoad);
+    // llvm::outs() << "dpasType: " << dpasType << "\n";
+    // llvm::outs() << "packedType: " << packedType << "\n";
+    // llvm::outs() << "load1DGenXType: " << load1DGenXType << "\n";
+    // llvm::outs() << "unpackedType: " << unpackedType << "\n";
+    uint32_t alignment = bytesPerLane;
+    // llvm::outs() << "alignment: " << alignment << "\n";
+
+    PaddingOption padding = PaddingOption::PAD_ZERO;
+    if (auto paddingAttr = op->getAttrOfType<triton::PaddingOptionAttr>(
+            TritonIntelGPUDialect::getDescPaddingAttrName()))
+      padding = paddingAttr.getValue();
+
+    SmallVector<Value> loadedVals(numElems);
+    // Value warpId = arith::IndexCastOp::create(
+    //     rewriter, loc, i32_ty,
+    //     mlir::gpu::SubgroupIdOp::create(rewriter, loc,
+    //     /*upperBound=*/nullptr));
+    auto pid = targetInfo.programId(
+        rewriter, loc, op->getParentOfType<ModuleOp>(), ProgramIDDim::X);
+
+    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+
+    VectorType offsetXVecType = vec_ty(offsetsX[0].getType(), offsetsX.size());
+    Value offsetXVec = b.undef(offsetXVecType);
+    for (size_t i = 0; i < offsetsX.size(); i++) {
+      Value indexVal =
+          LLVM::createIndexConstant(rewriter, loc, typeConverter, i);
+      offsetXVec = b.insert_element(offsetXVec, offsetsX[i], indexVal);
+    }
+
+    // Intrinsic reinterpretCast =
+    //     GenISA<llvm::GenISAIntrinsic::ID::GenISA_SubgroupBitcastShuffle>(
+    //         rewriter, unpackedType, dpasType);
+
+    for (size_t elemIdx = 0; elemIdx < numElems; elemIdx += numElemsPerLoad) {
+      unsigned registerIdx = regMapping.apply({{kRegister, elemIdx}})[0].second;
+
+      Value addrElem = desc.base;
+      // update offset Y.
+      addrElem = b.gep(ptr_ty(ctx, 1), valueElemTy, addrElem, offsetY);
+#if 0
+      auto offsets = applyLinearLayout(loc, rewriter, *llEncoding,
+                                       {{kRegister, b.i32_val(registerIdx)},
+                                        {kLane, b.i32_val(0)},
+                                        {kWarp, warpId},
+                                        {kBlock, b.i32_val(0)}});
+      for (auto [dim, offsetPair] : llvm::enumerate(offsets)) {
+        if (dim == colDim) {
+          addrElem =
+              b.gep(ptr_ty(ctx, 1), valueElemTy, addrElem, offsetPair.second);
+        }
+      }
+#endif
+#if 0
+      // Make a nonuniform pointer of vector.
+      {
+        constexpr StringLiteral nonUniformPtrDefine = R"({
+  .decl ADDR v_type=G type=uq num_elts=16 align=wordx32 alias=<$0, 0>
+  mov (M1_NM, 1) $ADDR(0, 0)<1> $1(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(0, 1)<1> $2(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(0, 2)<1> $3(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(0, 3)<1> $4(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(0, 4)<1> $5(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(0, 5)<1> $6(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(0, 6)<1> $7(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(0, 7)<1> $8(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(1, 0)<1> $9(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(1, 1)<1> $10(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(1, 2)<1> $11(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(1, 3)<1> $12(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(1, 4)<1> $13(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(1, 5)<1> $14(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(1, 6)<1> $15(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(1, 7)<1> $16(0, 0)<0;1,0>
+})";
+        XeBuilder xeBuilder;
+        XeInstr &packPtr =
+            *xeBuilder.create<XeInstr>(nonUniformPtrDefine.str());
+        XeBuilder::Operand *res = xeBuilder.newOperand("=rw");
+        SmallVector<XeBuilder::Operand *> args{res};
+        for (size_t i = 0; i < tileHeight; ++i) {
+          unsigned offsetIdx =
+              regMapping.apply({{kRegister, elemIdx + i}})[0].second;
+          auto offsets = offMapping.apply(
+              {{kRegister, offsetIdx}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+
+          for (auto [dim, offsetIdx] : offsets) {
+            // Update offset X
+            Value offsetX = b.zext(int_ty(64), offsetsX[offsetIdx]);
+            Value offset64 = b.mul(offsetX, desc.strides[rowDim]);
+            Value addr0 =
+                b.gep(ptr_ty(ctx, 1), valueElemTy, addrElem, offset64);
+            Value addr1 = b.gep(ptr_ty(ctx, 1), valueElemTy, addr0,
+                                b.i32_val(bytesPerLane * 8 / elemSizeInBits));
+            // Update offset Y
+            args.push_back(xeBuilder.newOperand(b.ptrtoint(i64_ty, addr0), "rw"));
+            args.push_back(xeBuilder.newOperand(b.ptrtoint(i64_ty, addr1), "rw"));
+            break;
+          }
+        }
+
+        packPtr(args, /*onlyAttachMLIRArgs=*/true);
+
+        addrElem = xeBuilder.launch(rewriter, loc, i64_ty, false);
+      }
+
+      // Load with the nonuniform pointer
+      Value ret;
+      {
+        constexpr StringLiteral gatherLoad = R"({
+  .decl ADDR v_type=G type=uq num_elts=16 align=wordx32 alias=<$1, 0>
+  lsc_load.ugm (M1, 16)  $0:d32x4  flat[ADDR]:a64
+})";
+
+        XeBuilder xeBuilder;
+        XeInstr &loadGather = *xeBuilder.create<XeInstr>(gatherLoad.str());
+        XeBuilder::Operand *res = xeBuilder.newOperand("=rw");
+        XeBuilder::Operand *addr = xeBuilder.newOperand(addrElem, "rw");
+        SmallVector<XeBuilder::Operand *> args{res, addr};
+        loadGather(args, /*onlyAttachMLIRArgs=*/true);
+        ret = xeBuilder.launch(rewriter, loc, load1DGenXType, false);
+      }
+#elif 1
+      SmallVector<Value> addrs, predicts;
+      auto linearOffsetY =
+          offMapping.apply({{kRegister, registerIdx}, {kLane, 0}})[1];
+      assert(linearOffsetY.first == str_attr("dim1"));
+      addrElem = b.gep(ptr_ty(ctx, 1), valueElemTy, addrElem,
+                       b.i32_val(linearOffsetY.second));
+      SmallVector<Value> uniformOffsetsX;
+      for (size_t i = 0; i < tileHeight; ++i) {
+        unsigned newRegIdx = regMapping.apply(
+                                           {{ kRegister,
+                                              elemIdx + i }})[0]
+                                 .second;
+        auto offsetXIdx =
+            offMapping.apply({{kRegister, newRegIdx}, {kLane, 0}})[0];
+        assert(offsetXIdx.first == str_attr("offx_idx"));
+        unsigned elemNum = bytesPerLane * 8 / elemSizeInBits;
+        Value offsetUniform = targetInfo.shuffleIdx(
+            rewriter, loc, offsetsX[offsetXIdx.second], 0);
+        uniformOffsetsX.push_back(offsetUniform);
+        Value offsetX = b.zext(int_ty(64), offsetUniform);
+        Value pred = b.icmp_ult(offsetX, desc.shapes[0]);
+        Value offset64 = b.mul(offsetX, desc.strides[rowDim]);
+
+        Value offsetY0 = b.i32_val(0 * elemNum);
+        Value offsetY1 = b.i32_val(1 * elemNum);
+        Value offsetY2 = b.i32_val(2 * elemNum);
+        Value offsetY3 = b.i32_val(3 * elemNum);
+        predicts.push_back(b.and_(
+            pred, b.icmp_ult(b.zext(int_ty(64), b.add(offsetY0, offsetY)),
+                             desc.shapes[1])));
+        predicts.push_back(b.and_(
+            pred, b.icmp_ult(b.zext(int_ty(64), b.add(offsetY1, offsetY)),
+                             desc.shapes[1])));
+        predicts.push_back(b.and_(
+            pred, b.icmp_ult(b.zext(int_ty(64), b.add(offsetY2, offsetY)),
+                             desc.shapes[1])));
+        predicts.push_back(b.and_(
+            pred, b.icmp_ult(b.zext(int_ty(64), b.add(offsetY3, offsetY)),
+                             desc.shapes[1])));
+
+        Value addr0 = b.gep(ptr_ty(ctx, 1), valueElemTy, addrElem, offset64);
+        Value addr1 = b.gep(ptr_ty(ctx, 1), valueElemTy, addr0, offsetY1);
+        Value addr2 = b.gep(ptr_ty(ctx, 1), valueElemTy, addr0, offsetY2);
+        Value addr3 = b.gep(ptr_ty(ctx, 1), valueElemTy, addr0, offsetY3);
+
+        // Update offset Y
+        addrs.push_back(b.ptrtoint(i64_ty, addr0));
+        addrs.push_back(b.ptrtoint(i64_ty, addr1));
+        addrs.push_back(b.ptrtoint(i64_ty, addr2));
+        addrs.push_back(b.ptrtoint(i64_ty, addr3));
+      }
+      Value ptrVec = b.undef(vec_ty(i64_ty, addrs.size()));
+      Value predVec = b.undef(vec_ty(i1_ty, addrs.size()));
+      for (size_t i = 0; i < addrs.size(); ++i) {
+        Value sVal = createIndexAttrConstant(rewriter, loc,
+                                             typeConverter->getIndexType(), i);
+        ptrVec = b.insert_element(ptrVec, addrs[i], sVal);
+        predVec = b.insert_element(predVec, predicts[i], sVal);
+      }
+
+      constexpr StringLiteral abDecl = R"({
+  .decl RET v_type=G type=uq num_elts=32 align=wordx32 alias=<$0, 0>
+  .decl ADDR v_type=G type=uq num_elts=32 align=wordx32 alias=<$1, 0>
+  .decl PRED v_type=P num_elts=32
+  cmp.eq (M1_NM, 32) PRED 0x1:b $2(0, 0)<1;1,0>
+  (PRED) lsc_load.ugm (M1_NM, 32)  RET:d64  flat[ADDR]:a64
+})";
+
+      std::string simdAsm = abDecl.str();
+
+      XeBuilder xeBuilder;
+      XeInstr &loadGather = *xeBuilder.create<XeInstr>(simdAsm);
+      XeBuilder::Operand *res = xeBuilder.newOperand("=rw");
+      XeBuilder::Operand *ptrs = xeBuilder.newOperand(ptrVec, "rw.u");
+      XeBuilder::Operand *preds = xeBuilder.newOperand(predVec, "rw.u");
+      SmallVector<XeBuilder::Operand *> args{res, ptrs, preds};
+      loadGather(args, /*onlyAttachMLIRArgs=*/true);
+      Value ret = xeBuilder.launch(rewriter, loc, unpackedType, false);
+
+#if 0
+      Value r0 = b.bitcast(b.extract_element(ret, b.i32_val(0)), i16_ty);
+      Value r1 = b.bitcast(b.extract_element(ret, b.i32_val(1)), i16_ty);
+      Value r2 = b.bitcast(b.extract_element(ret, b.i32_val(2)), i16_ty);
+      Value r3 = b.bitcast(b.extract_element(ret, b.i32_val(3)), i16_ty);
+      Value r4 = b.bitcast(b.extract_element(ret, b.i32_val(4)), i16_ty);
+      Value r5 = b.bitcast(b.extract_element(ret, b.i32_val(5)), i16_ty);
+      Value r6 = b.bitcast(b.extract_element(ret, b.i32_val(6)), i16_ty);
+      Value r7 = b.bitcast(b.extract_element(ret, b.i32_val(7)), i16_ty);
+      TritonLLVMIRRewriter tb(loc, rewriter);
+      r0 = triton::intel::convertWithFunctionCall(
+          tb, r0, "__spirv_ConvertBF16ToFINTEL", i16_ty, f32_ty,
+          TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName());
+
+      r1 = triton::intel::convertWithFunctionCall(
+          tb, r1, "__spirv_ConvertBF16ToFINTEL", i16_ty, f32_ty,
+          TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName());
+
+      r2 = triton::intel::convertWithFunctionCall(
+          tb, r2, "__spirv_ConvertBF16ToFINTEL", i16_ty, f32_ty,
+          TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName());
+
+      r3 = triton::intel::convertWithFunctionCall(
+          tb, r3, "__spirv_ConvertBF16ToFINTEL", i16_ty, f32_ty,
+          TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName());
+
+      r4 = triton::intel::convertWithFunctionCall(
+          tb, r4, "__spirv_ConvertBF16ToFINTEL", i16_ty, f32_ty,
+          TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName());
+
+      r5 = triton::intel::convertWithFunctionCall(
+          tb, r5, "__spirv_ConvertBF16ToFINTEL", i16_ty, f32_ty,
+          TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName());
+
+      r6 = triton::intel::convertWithFunctionCall(
+          tb, r6, "__spirv_ConvertBF16ToFINTEL", i16_ty, f32_ty,
+          TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName());
+
+      r7 = triton::intel::convertWithFunctionCall(
+          tb, r7, "__spirv_ConvertBF16ToFINTEL", i16_ty, f32_ty,
+          TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName());
+      targetInfo.printf(
+          rewriter,
+          "johnlu load: pid: %d, warp id: %d, lane id: %d addr %p offsetX (%d, %d, %d, %d, %d, %d, %d, %d) offsetY %d ret %f, %f, %f, %f, %f, %f, %f, %f",
+          {pid, warpId, laneId, addrs[0], uniformOffsetsX[0], uniformOffsetsX[1], uniformOffsetsX[2], uniformOffsetsX[3], uniformOffsetsX[4], uniformOffsetsX[5], uniformOffsetsX[6], uniformOffsetsX[7], offsetY, r0, r1,
+           r2, r3, r4, r5, r6, r7});
+#endif
+
+#else
+
+      Value offsetXIdx, offsetX, linearOffsetY;
+      {
+        auto offsets = applyLinearLayout(
+            loc, rewriter, offMapping,
+            {{kRegister, b.i32_val(registerIdx)}, {kLane, laneId}});
+        for (auto [dim, offsetPair] : llvm::enumerate(offsets)) {
+          if (dim == colDim) {
+            linearOffsetY = offsetPair.second;
+            addrElem =
+                b.gep(ptr_ty(ctx, 1), valueElemTy, addrElem, linearOffsetY);
+            continue;
+          } else if (dim == rowDim) { // Update offset X
+            offsetXIdx = offsetPair.second;
+            offsetX = b.zext(int_ty(64),
+                             b.extract_element(offsetXVec, offsetPair.second));
+            Value offset64 = b.mul(offsetX, desc.strides[rowDim]);
+            addrElem = b.gep(ptr_ty(ctx, 1), valueElemTy, addrElem, offset64);
+            continue;
+          }
+          llvm_unreachable("unexpected dim in offset mapping");
+        }
+      }
+      // Value ret = b.undef(load1DGenXType);
+      Value ret = b.load(load1DGenXType, addrElem, alignment,
+                         /*isVolatile=*/false, /*isNonTemporal=*/false);
+      // ret = b.bitcast(ret, dpasType);
+
+      // /// Inlined ASM
+      // {
+      //   .decl DPAS_TRANS v_type=G type=ud num_elts=32 align=wordx32
+      //   alias=<V0318, 0>
+      // }
+      /// End Inlined ASM
+      constexpr StringLiteral transposeVal = R"({
+        .decl DPAS_TRANS v_type=G type=ud num_elts=64 align=wordx32 alias=<$1, 0>
+        .decl DPAS v_type=G type=ud num_elts=64 align=wordx32 alias=<$0, 0>
+         mov (M1_NM, 16) DPAS(0,0)<4>  DPAS_TRANS(0,0)<1;1,0>
+         mov (M1_NM, 16) DPAS(0,1)<4>  DPAS_TRANS(1,0)<1;1,0>
+         mov (M1_NM, 16) DPAS(0,2)<4>  DPAS_TRANS(2,0)<1;1,0>
+         mov (M1_NM, 16) DPAS(0,3)<4>  DPAS_TRANS(3,0)<1;1,0>
+      })";
+
+      XeBuilder xeBuilder;
+      XeInstr &transOp = *xeBuilder.create<XeInstr>(transposeVal.str());
+      XeBuilder::Operand *res = xeBuilder.newOperand("=rw");
+      XeBuilder::Operand *re = xeBuilder.newOperand(ret, "rw");
+      SmallVector<XeBuilder::Operand *> args{res, re};
+      transOp(args, /*onlyAttachMLIRArgs=*/true);
+      ret = xeBuilder.launch(rewriter, loc, unpackedType, false);
+      // ret = b.bitcast(ret, unpackedType);
+      // ret = reinterpretCast(rewriter, loc, ret);
+
+#endif
+#if 0
+      TritonLLVMIRRewriter tb(loc, rewriter);
+      Value r0 = b.bitcast(b.extract_element(ret, b.i32_val(0)), i16_ty);
+      Value r1 = b.bitcast(b.extract_element(ret, b.i32_val(1)), i16_ty);
+      Value r2 = b.bitcast(b.extract_element(ret, b.i32_val(2)), i16_ty);
+      Value r3 = b.bitcast(b.extract_element(ret, b.i32_val(3)), i16_ty);
+      Value r4 = b.bitcast(b.extract_element(ret, b.i32_val(4)), i16_ty);
+      Value r5 = b.bitcast(b.extract_element(ret, b.i32_val(5)), i16_ty);
+      Value r6 = b.bitcast(b.extract_element(ret, b.i32_val(6)), i16_ty);
+      Value r7 = b.bitcast(b.extract_element(ret, b.i32_val(7)), i16_ty);
+      r0 = triton::intel::convertWithFunctionCall(
+          tb, r0, "__spirv_ConvertBF16ToFINTEL", i16_ty, f32_ty,
+          TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName());
+
+      r1 = triton::intel::convertWithFunctionCall(
+          tb, r1, "__spirv_ConvertBF16ToFINTEL", i16_ty, f32_ty,
+          TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName());
+
+      r2 = triton::intel::convertWithFunctionCall(
+          tb, r2, "__spirv_ConvertBF16ToFINTEL", i16_ty, f32_ty,
+          TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName());
+
+      r3 = triton::intel::convertWithFunctionCall(
+          tb, r3, "__spirv_ConvertBF16ToFINTEL", i16_ty, f32_ty,
+          TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName());
+
+      r4 = triton::intel::convertWithFunctionCall(
+          tb, r4, "__spirv_ConvertBF16ToFINTEL", i16_ty, f32_ty,
+          TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName());
+
+      r5 = triton::intel::convertWithFunctionCall(
+          tb, r5, "__spirv_ConvertBF16ToFINTEL", i16_ty, f32_ty,
+          TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName());
+
+      r6 = triton::intel::convertWithFunctionCall(
+          tb, r6, "__spirv_ConvertBF16ToFINTEL", i16_ty, f32_ty,
+          TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName());
+
+      r7 = triton::intel::convertWithFunctionCall(
+          tb, r7, "__spirv_ConvertBF16ToFINTEL", i16_ty, f32_ty,
+          TritonIntelGPUDialect::getSupportBFloat16ConversionAttrName());
+      targetInfo.printf(
+          rewriter,
+          "johnlu load: pid: %d, warp id: %d, lane id: %d addr %p offsetY %d ret %f, %f, %f, %f, %f, %f, %f, %f",
+          {pid, warpId, laneId, addrs[0], offsetY, r0, r1,
+           r2, r3, r4, r5, r6, r7});
+#endif
+      unpackBlockLoadResult(ret, loadedVals, elemIdx, regMapping,
+                            shuffleMapping, {}, unpackedType, numValuesPerLoad,
+                            numPackedVals, {}, {},
+                            /*nanMaskElems=*/{}, loc, rewriter, ctx);
+    }
+#if 0
+    // Boundary check all dimensions — tensor descriptors always encode shape
+    // bounds and don't have a user-facing boundaryCheck attribute.
+    SmallVector<int32_t> allDims(resultRank);
+    for (size_t i = 0; i < resultRank; ++i)
+      allDims[i] = static_cast<int32_t>(i);
+
+    // Reuse the shared gather/scatter operand computation.
+    SmallVector<Value> ptrElems, maskElems, otherElems;
+    std::tie(ptrElems, maskElems, otherElems) =
+        convertTensorDescriptorToTensorOfPtr(
+            loc, llDesc, {b.i32_val(0), offsetY}, rowDim, resultType, descRank,
+            valueElemTy, rewriter, allDims, padding);
+
+    // Determine vectorization by querying the descriptor's address-level
+    // AxisInfo, analogous to how LoadOp queries getVectorSize(ptr).
+    // unsigned vec = getDescriptorVecSize(
+    //     hasSupport256bLoadStore(op), op.getDesc(), resultType, valueElemTy,
+    //     op->getAttrOfType<StringAttr>(
+    //         TritonIntelGPUDialect::getBlockIOAttrName()));
+    //
+    // // vectorized iteration through all pointer elements
+    const int valueElemNBits =
+        std::max(8u, valueElemTy.getIntOrFloatBitWidth());
+    // const int numVecs = numElems / vec;
+
+    // Load redundantly in all dims except reg
+    llvm::MapVector<StringAttr, int> freeVarMasks =
+        getFreeVariableMasks(resultType);
+    uint32_t regMask = freeVarMasks[str_attr("register")];
+
+    // const size_t maxWordWidth = std::max<size_t>(32, valueElemNBits);
+    // const size_t totalWidth = valueElemNBits * vec;
+    // const size_t width = std::min(totalWidth, maxWordWidth);
+    // const size_t nWords = std::max<size_t>(1, totalWidth / width);
+    // assert((width / valueElemNBits) * nWords * numVecs == numElems);
+
+    // SmallVector<Type> retTys(nWords, IntegerType::get(ctx, width));
+    Type packedType = IntegerType::get(ctx, valueElemNBits * numPackedVals);
+    Type load1DGenXType = LLVM::getVectorType(packedType, vBlocks);
+    Type unpackedType =
+        LLVM::getVectorType(valueElemTy, numPackedVals * vBlocks);
+    Intrinsic blockIO1D = blockIO1D =
+        GenISA<llvm::GenISAIntrinsic::ID::GenISA_simdBlockRead>(
+            rewriter, load1DGenXType,
+            mlir::LLVM::LLVMPointerType::get(
+                ctx, TritonGEN::TritonGENMemorySpace::kCrossWorkgroup));
+
+    SmallVector<Value> loadedVals(numElems);
+    // unsigned ptrIdx = 0;
+    // for(auto &p: ptrElems) {
+    //   targetInfo.printf(
+    //       rewriter,
+    //       "johnlu load: pid: %d, warp id: %d, lane id: %d ptr[%d] %p",
+    //       {pid, warpId, laneId, b.i32_val(ptrIdx++), p});
+    // }
+    for (size_t elemIdx = 0; elemIdx < numElems; elemIdx += numElemsPerLoad) {
+      // if (unsigned canonicalVecStart = getCanonicalIndex(vecStart, regMask);
+      //     vecStart != canonicalVecStart) {
+      //   // For redundant registers, refer back to the canonical load
+      //   for (unsigned iVec = 0; iVec < vec; ++iVec)
+      //     loadedVals.push_back(loadedVals[canonicalVecStart + iVec]);
+      //   continue;
+      // }
+      Value addrElem =
+          targetInfo.shuffleIdx(rewriter, loc, ptrElems[registerIdx], 0);
+      addrElem = b.bitcast(addrElem, ptr_ty(ctx, 1 /*global*/));
+
+      // update offset X.
+      {
+        auto offsets = llEncoding->apply(
+            {{kRegister, registerIdx}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+        for (auto [dim, offsetIdx] : offsets) {
+          if (dim == str_attr("dim0")) {
+            Value offset64 = b.zext(
+                int_ty(64), b.mul(offsetX[offsetIdx],
+                                  b.trunc(i32_ty, desc.strides[rowDim])));
+            addrElem = b.gep(ptr_ty(ctx, 1), valueElemTy, addrElem, offset64);
+            break;
+          }
+        }
+      }
+
+      // Get the predicate mask for this element (always present for
+      // DescriptorLoadOp since we always do boundary checking)
+      Value loadPred =
+          targetInfo.shuffleIdx(rewriter, loc, maskElems[registerIdx], 0);
+
+      auto createLoadWithAttrs = [&]() {
+        return SmallVector<Value>{blockIO1D(rewriter, loc, {addrElem})};
+      };
+
+      Value ret;
+      Block &endBlock = LLVM::intel::createPredicatedBlock(
+          rewriter, loc, loadPred,
+          SmallVector<Value, 1>{b.undef(load1DGenXType)}, createLoadWithAttrs);
+      ret = *endBlock.args_begin();
+      assert(ret && "Expecting a valid value");
+
+
+      unpackBlockLoadResult(ret, loadedVals, elemIdx, regMapping,
+                            shuffleMapping, {}, unpackedType, numValuesPerLoad,
+                            numPackedVals, maskElems[registerIdx], otherElems,
+                            /*nanMaskElems=*/{}, loc, rewriter, ctx);
+    } // end vec
+#endif
+    Type llvmResultStructTy = typeConverter->convertType(op.getType());
+    Value resultStruct = packLLElements(loc, typeConverter, loadedVals,
+                                        rewriter, llvmResultStructTy);
+    rewriter.replaceOp(op, {resultStruct});
+    return success();
+  }
+
+  std::tuple<SmallVector<Value>, SmallVector<Value>, SmallVector<Value>>
+  convertTensorDescriptorToTensorOfPtr(
+      Location loc, Value descriptorStruct, ValueRange indices,
+      unsigned gatherDim, RankedTensorType tensorType, unsigned descriptorRank,
+      Type valueElemTy, ConversionPatternRewriter &rewriter,
+      ArrayRef<int32_t> boundaryCheck = {},
+      std::optional<PaddingOption> padding = std::nullopt) const {
+
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    DescriptorFields desc =
+        unpackDescriptor(descriptorStruct, descriptorRank, loc, rewriter);
+    const size_t rank = tensorType.getRank();
+    assert(descriptorRank >= rank &&
+           "descriptor rank must be >= result/source tensor rank");
+    const size_t rankDelta = descriptorRank - rank;
+
+    SmallVector<Value> offsets;
+    offsets.reserve(rank);
+    if (indices.size() == descriptorRank) {
+      for (size_t i = 0; i < rank; ++i)
+        offsets.push_back(indices[i + rankDelta]);
+    } else {
+      assert(indices.size() == rank && "unexpected descriptor indices rank");
+      offsets.append(indices.begin(), indices.end());
+    }
+
+    SmallVector<Value> mappedShapes(rank), mappedStrides(rank);
+    for (size_t i = 0; i < rank; ++i) {
+      mappedShapes[i] = desc.shapes[i + rankDelta];
+      if (gatherDim == i)
+        mappedStrides[i] = b.i64_val(0);
+      else
+        mappedStrides[i] = desc.strides[i + rankDelta];
+    }
+
+    return computeGatherScatterOperands(loc, desc.base, offsets, mappedShapes,
+                                        mappedStrides, tensorType, valueElemTy,
+                                        rewriter, boundaryCheck, padding);
+  }
+};
+
 struct DescriptorLoadOpConversion
     : public ConvertOpToLLVMPattern<triton::DescriptorLoadOp>,
       public LoadStoreConversionBase {
@@ -3735,8 +4497,8 @@ struct DescriptorStoreOpToBlockIOConversion
     // and forces vBlocks to 1.
     BlockIOTileSizeInfo sizeInfo = BlockIOTileSizeInfo::unknown();
     if (!validate2DBlockStoreTile(llEncoding.value(), contiguousDim,
-                                  elemSizeInBits, tensorType, nullptr, maskAxisInfo,
-                                  sizeInfo))
+                                  elemSizeInBits, tensorType, nullptr,
+                                  maskAxisInfo, sizeInfo))
       return failure();
 
     auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
@@ -4009,8 +4771,8 @@ struct StoreOpToBlockIOConversion
       // block store eligibility): tile geometry, HW address payload
       // restriction, no transpose, vBlocks forced to 1.
       if (!validate2DBlockStoreTile(llEncoding.value(), contiguousDim,
-                                    elemSizeInBits, tensorType, nullptr, maskAxisInfo,
-                                    sizeInfo))
+                                    elemSizeInBits, tensorType, nullptr,
+                                    maskAxisInfo, sizeInfo))
         return failure();
     }
 
@@ -5056,7 +5818,7 @@ struct Subgroup2DBlockLoadOpConversion
     // FIXME: Remove once IGC can split large 2D block loads.
     bool oneMatrixPerLoadForBT =
         op->hasAttr(TritonIntelGPUDialect::getOneMatrixPerLoadAttrName());
-    BlockIOTileSizeInfo sizeInfo = getBlockIOTileSize<true /*load*/>(
+    BlockIOTileSizeInfo sizeInfo = get2DBlockLoadTileSize(
         llEncoding.value(), contiguousDim, elemSizeInBits, nullptr,
         /*maskAxisInfo=*/nullptr, oneMatrixPerLoadForBT);
     assert(sizeInfo.isValid() && "expected valid tile size");
@@ -5242,8 +6004,8 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
                                      /*vnni=*/false, std::move(regPackBases));
     } else {
       sizeInfo =
-          getBlockIOTileSize<true>(*llEncoding, contiguousDim, elemSizeInBits,
-                                   nullptr, maskAxisInfo, oneMatrixPerLoadForBT);
+          get2DBlockLoadTileSize(*llEncoding, contiguousDim, elemSizeInBits,
+                                 nullptr, maskAxisInfo, oneMatrixPerLoadForBT);
     }
     if (!sizeInfo.isValid())
       return failure();
@@ -5521,7 +6283,7 @@ void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
   patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
                DescriptorLoadOpConversion, StoreOpConversion,
                DescriptorStoreOpConversion, PrefetchOpConversion,
-               DescriptorPrefetchOpConversion>(
+               DescriptorPrefetchOpConversion, DescriptorGatherOpConversion>(
       typeConverter, targetInfo, axisInfoAnalysis, strideAnalysis, benefit);
   // Local atomic scatter RMW (shared memory atomics via indices).
   patterns.add<LocalAtomicScatterRMWOpConversion>(typeConverter, targetInfo,
