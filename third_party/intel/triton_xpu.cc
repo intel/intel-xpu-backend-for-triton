@@ -71,6 +71,8 @@ void init_triton_intel_passes_ttir(py::module &&m) {
                      intel::createTritonIntelGPUFoldTrueCmpI);
   ADD_FUNC_PASS_WRAPPER_0("add_prepare_if_combining",
                           intel::createTritonIntelGPUPrepareIfCombining);
+  ADD_PASS_OPTION_WRAPPER_1("add_reassociate_dot_scale",
+                            intel::createTritonIntelReassociateDotScale, bool);
 }
 
 void init_triton_intel_passes_ttgpuir(py::module &&m) {
@@ -79,6 +81,8 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_gen_to_llvm", createConvertTritonGENToLLVM);
   ADD_PASS_WRAPPER_0("add_accelerate_matmul",
                      gpu::intel::createTritonIntelGPUAccelerateMatmul);
+  ADD_PASS_WRAPPER_0("add_fold_fp_to_fp",
+                     gpu::intel::createTritonIntelGPUFoldFpToFp);
   ADD_PASS_WRAPPER_0("add_rewrite_stack_ptr",
                      gpu::intel::createTritonIntelGPURewriteStackPtr);
   ADD_PASS_OPTION_WRAPPER_2(

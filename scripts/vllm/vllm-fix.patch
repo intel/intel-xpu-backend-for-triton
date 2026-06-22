@@ -52,22 +52,25 @@ index b674d55a1..545b638dc 100644
  
  if _is_hip():
      ext_modules.append(CMakeExtension(name="vllm._rocm_C"))
-diff --git a/tests/conftest.py b/tests/conftest.py
-index ebf9608b0..16fa7a7f6 100644
---- a/tests/conftest.py
-+++ b/tests/conftest.py
-@@ -293,6 +293,11 @@ def workspace_init():
+diff --git a/tests/utils.py b/tests/utils.py
+index 8989a1c3a..16f0620d1 100644
+--- a/tests/utils.py
++++ b/tests/utils.py
+@@ -1731,8 +1731,13 @@ def spawn_new_process_for_each_test(f: Callable[_P, None]) -> Callable[_P, None]:
  
-     if torch.cuda.is_available():
-         device = torch.device("cuda:0")
-+    elif torch.xpu.is_available():
-+        device = torch.device("xpu:0")
-+    else:
-+        device = None
-+    if device is not None:
-         init_workspace_manager(device)
-     yield
-     reset_workspace_manager()
+             repo_root = str(VLLM_PATH.resolve())
+             env = os.environ.copy()
+-            env["PYTHONPATH"] = repo_root + os.pathsep + env.get("PYTHONPATH", "")
++            test_module_dir = str(Path(f.__code__.co_filename).resolve().parent)
++            env["PYTHONPATH"] = os.pathsep.join(
++                path
++                for path in (repo_root, test_module_dir, env.get("PYTHONPATH", ""))
++                if path
++            )
+             env[_SPAWN_CHILD_ENV] = "1"
+ 
+             result = subprocess.run(
+                 [sys.executable, "-c", child_script],
 diff --git a/tests/kernels/mamba/utils.py b/tests/kernels/mamba/utils.py
 index fb8a4b0a2..7ab490aaf 100644
 --- a/tests/kernels/mamba/utils.py
@@ -189,3 +192,32 @@ index 56f1d1c1d..0ffe85054 100644
      num_segments = num_par_softmax_segments if use_3d else 1
  
      grid: tuple[Any, ...]
+diff --git a/tests/kernels/mamba/test_mamba_mixer2.py b/tests/kernels/mamba/test_mamba_mixer2.py
+index 973e788..e474275 100644
+--- a/tests/kernels/mamba/test_mamba_mixer2.py
++++ b/tests/kernels/mamba/test_mamba_mixer2.py
+@@ -14,2 +14,3 @@ from vllm.distributed.parallel_state import (
+ from vllm.model_executor.layers.mamba.mamba_mixer2 import Mixer2RMSNormGated
++from vllm.platforms import current_platform
+ from vllm.utils.system_utils import update_environment_variables
+@@ -88,3 +89,3 @@ def mixer2_gated_norm_tensor_parallel(
+     # initialize distributed
+-    init_distributed_environment()
++    init_distributed_environment(backend=current_platform.dist_backend)
+     with ensure_current_vllm_config():
+@@ -98,6 +99,7 @@ def mixer2_gated_norm_tensor_parallel(
+     # create gated-norm with TP
+-    mixer = Mixer2RMSNormGated(
+-        full_hidden_size=hidden_size,
+-        full_n_groups=n_groups,
+-    )
++    with ensure_current_vllm_config():
++        mixer = Mixer2RMSNormGated(
++            full_hidden_size=hidden_size,
++            full_n_groups=n_groups,
++        )
+     mixer.weight.weight_loader(mixer.weight, weight)  # load
+@@ -117,2 +119,3 @@ def mixer2_gated_norm_tensor_parallel(
+         ),
++        ensure_current_vllm_config(),
+     ):
