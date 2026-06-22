@@ -198,6 +198,16 @@ static Value clonePtrForTile(OpBuilder &builder, tt::LoadOp loadOp,
           shape[kDim] > static_cast<int64_t>(kTile)) {
         auto newType = adjustTensorType(origResultType, kDim, kTile);
         cloned->getResult(i).setType(newType);
+        // For arith.constant, also update the value attribute to match
+        if (auto constOp = dyn_cast<arith::ConstantOp>(cloned)) {
+          if (auto denseAttr = dyn_cast<DenseElementsAttr>(constOp.getValue())) {
+            if (denseAttr.isSplat()) {
+              auto newAttr = DenseElementsAttr::get(
+                  newType, denseAttr.getSplatValue<Attribute>());
+              constOp.setValueAttr(newAttr);
+            }
+          }
+        }
       }
     }
     mapping.map(op->getResults(), cloned->getResults());
@@ -298,13 +308,17 @@ static LogicalResult decomposeDot(tt::DotOp dotOp, unsigned kTile) {
   Value loopAPtr = forOp.getRegionIterArg(1);
   Value loopBPtr = forOp.getRegionIterArg(2);
 
-  // Load A tile
-  auto aTileType = adjustTensorType(aType, kDimA, kTile);
-  Value aTile = tt::LoadOp::create(builder, loc, aTileType, loopAPtr);
+  // Load A tile — type inferred from tiled pointer
+  auto aTileLoad = tt::LoadOp::create(
+      builder, loc, loopAPtr, aLoad.getCache(), aLoad.getEvict(),
+      aLoad.getIsVolatile());
+  Value aTile = aTileLoad.getResult();
 
-  // Load B tile
-  auto bTileType = adjustTensorType(bType, kDimB, kTile);
-  Value bTile = tt::LoadOp::create(builder, loc, bTileType, loopBPtr);
+  // Load B tile — type inferred from tiled pointer
+  auto bTileLoad = tt::LoadOp::create(
+      builder, loc, loopBPtr, bLoad.getCache(), bLoad.getEvict(),
+      bLoad.getIsVolatile());
+  Value bTile = bTileLoad.getResult();
 
   // Apply intermediate ops on A (extf, convert_layout, etc.)
   Value aPrepared = aTile;
