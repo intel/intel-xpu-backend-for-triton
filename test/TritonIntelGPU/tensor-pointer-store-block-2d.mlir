@@ -218,6 +218,8 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
   // CHECK-LABEL: @broadcast_row_major_pointer_store
   // CHECK-NOT: triton_gen.2Dblockstore
   // ALL-LAYOUT-LABEL: @broadcast_row_major_pointer_store
+  // COM: surface width = 64 elements and f16 elements are 2 bytes, so the
+  // COM: synthesized full-row pitch is 64 * 2 = 128 bytes.
   // ALL-LAYOUT: %[[PITCH:.*]] = llvm.mlir.constant(128 : i32) : i32
   // ALL-LAYOUT: triton_gen.2Dblockstore {{.*}}, %[[PITCH]], {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 1, v_blocks = 1, cache_control = Default}
   tt.func public @broadcast_row_major_pointer_store(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
