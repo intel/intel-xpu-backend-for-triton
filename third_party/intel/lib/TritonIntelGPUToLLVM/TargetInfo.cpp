@@ -8,6 +8,7 @@
 
 #include "TargetInfo.h"
 #include "intel/include/TritonIntelGPUToLLVM/XeAsmFormat.h"
+#include <TritonGENToLLVM/GenIntrinsicHelper.h>
 #include <llvm/ADT/TypeSwitch.h>
 #include <llvm/Support/FormatVariadic.h>
 
@@ -222,14 +223,40 @@ bool TargetInfo::warpBatchReduce(RewriterBase &rewriter, Location loc,
     }
     SmallVector<SmallVector<Value>> resultAccs(inputAccs.size() / accSize);
 
+    enum class WaveOps : unsigned int {
+      SUM,
+      PROD,
+      UMIN,
+      UMAX,
+      IMIN,
+      IMAX,
+      OR,
+      XOR,
+      AND,
+      FSUM,
+      FPROD,
+      FMIN,
+      FMAX,
+      UNDEF
+    };
     std::string batchedHorizontalReduce;
+    auto waveOps = WaveOps::UNDEF;
     // TODO: support all possible reduction modes
     TypeSwitch<Operation *>(reduceOp)
-        .Case<arith::AddFOp>([&](auto) { batchedHorizontalReduce = "add"; })
-        .Case<arith::MaxNumFOp>([&](auto) { batchedHorizontalReduce = "max"; })
+        .Case<arith::AddFOp>([&](auto) {
+          batchedHorizontalReduce = "add";
+          waveOps = WaveOps::FSUM;
+        })
+        .Case<arith::MaxNumFOp>([&](auto) {
+          batchedHorizontalReduce = "max";
+          waveOps = WaveOps::FMAX;
+        })
         .Default(
             [&](auto) { llvm_unreachable("Unhandled batched reduce kind"); });
 
+    gpu::intel::Intrinsic waveAll =
+        gpu::intel::GenISA<llvm::GenISAIntrinsic::ID::GenISA_WaveAll>(rewriter,
+                                                                      reduceTy);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto laneId = getLaneId(rewriter, loc);
     auto reducePartial = b.udiv(laneId, b.i32_val(numLaneToReduce));
@@ -245,25 +272,37 @@ bool TargetInfo::warpBatchReduce(RewriterBase &rewriter, Location loc,
                 auto b = TritonLLVMOpBuilder(loc, rewriter);
                 return b.insert_element(reduceTy, acc, src, b.i32_val(index));
               });
-          XeBuilder xeBuilder;
-          XeSIMDReduceInstr &bReduceOp = *xeBuilder.create<XeSIMDReduceInstr>(
-              batchedHorizontalReduce, warpSize, numLaneToReduce, accSize,
-              elemType, minSGSize == 8 ? Xe : Xe2);
-          // The VISA inline asm doesn't support uniform result type. "=rw.u"
-          //    auto res = vISABuilder.newOperand("=rw.u");
-          XeBuilder::Operand *res = xeBuilder.newOperand("=rw");
-          XeBuilder::Operand *in = xeBuilder.newOperand(batchedReduceVal, "rw");
-          bReduceOp({res, in}, /*onlyAttachMLIRArgs=*/true);
-          // Type resultTy = reduceTy.getElementType();
-          Value result = xeBuilder.launch(rewriter, loc, elemType, false);
           SmallVector<Value> ret(accSize);
-          for (unsigned j = 0; j < accSize; ++j) {
-            if (numResultPerRow > 1) {
-              ret[j] = LLVM::intel::shuffleIdx(
-                  loc, rewriter, result,
-                  b.add(b.i32_val(j * numResultPerRow), reducePartial));
-            } else {
-              ret[j] = LLVM::intel::shuffleIdx(loc, rewriter, result, j);
+          if (warpSize == numLaneToReduce) {
+            Value result =
+                waveAll(rewriter, loc,
+                        {batchedReduceVal, b.i8_val((unsigned)waveOps),
+                         b.i1_val(1), b.i32_val(0)});
+
+            for (unsigned j = 0; j < accSize; ++j) {
+              ret[j] = b.extract_element(result, b.i32_val(j));
+            }
+          } else {
+            XeBuilder xeBuilder;
+            XeSIMDReduceInstr &bReduceOp = *xeBuilder.create<XeSIMDReduceInstr>(
+                batchedHorizontalReduce, warpSize, numLaneToReduce, accSize,
+                elemType, minSGSize == 8 ? Xe : Xe2);
+            // The VISA inline asm doesn't support uniform result type. "=rw.u"
+            //    auto res = vISABuilder.newOperand("=rw.u");
+            XeBuilder::Operand *res = xeBuilder.newOperand("=rw");
+            XeBuilder::Operand *in =
+                xeBuilder.newOperand(batchedReduceVal, "rw");
+            bReduceOp({res, in}, /*onlyAttachMLIRArgs=*/true);
+            // Type resultTy = reduceTy.getElementType();
+            Value result = xeBuilder.launch(rewriter, loc, elemType, false);
+            for (unsigned j = 0; j < accSize; ++j) {
+              if (numResultPerRow > 1) {
+                ret[j] = LLVM::intel::shuffleIdx(
+                    loc, rewriter, result,
+                    b.add(b.i32_val(j * numResultPerRow), reducePartial));
+              } else {
+                ret[j] = LLVM::intel::shuffleIdx(loc, rewriter, result, j);
+              }
             }
           }
           return ret;
