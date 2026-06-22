@@ -184,9 +184,10 @@ def is_enough_memory(x_val, safety_factor=0.80):
 # Input shapes should have M >= 1, N >= 16 and K >= 32
 MMAP_BLOCK_SIZES = [64] if IS_FP8 else [16, 64]
 NUM_BLOCKS = [32768, 2048]
-# Heavy seq_lens skip the (num_blocks=32768, block_size=16) cell to keep CI runtime
-# bounded. block_size=64 + num_blocks=2048 still exercises the regime, and
-# is_enough_memory() filters anything left over.
+# Heavy seq_lens skip the block_size=16 cells to keep CI runtime bounded.
+# block_size=64 still exercises both num_blocks values (2048 and 32768), covering
+# realistic small- and large-KV-cache deployments. is_enough_memory() filters
+# anything left over.
 SEQ_LENS_LIGHT = [
     # One 4k input prefill
     [(4096, 4096)],
@@ -202,12 +203,12 @@ SEQ_LENS_HEAVY = [
     [(2048, 2048)] * 4,
     # Chunked prefill: 2 batches of 8k tokens (large-chunk regime).
     [(8192, 8192)] * 2,
-    # High-concurrency continuous batching (max_concurrency=128 in vLLM):
-    # 124 decode steps with realistic kv_len mix + 4 small (256-token) prefill chunks.
+    # High-concurrency continuous batching (max_concurrency=256 in vLLM):
+    # 248 decode steps with realistic kv_len mix + 8 small (256-token) prefill chunks.
     # Mirrors sharegpt steady-state where the E2E TD speedup actually lives.
     [(1, k)
-     for k in ([1513, 4100, 530, 123, 4803, 434, 3015, 34, 256, 1024, 768, 2048, 192, 384, 1280, 96] * 8)[:124]] +
-    [(256, 256)] * 4,
+     for k in ([1513, 4100, 530, 123, 4803, 434, 3015, 34, 256, 1024, 768, 2048, 192, 384, 1280, 96] * 16)[:248]] +
+    [(256, 256)] * 8,
 ]
 SEQ_LENS = SEQ_LENS_LIGHT + SEQ_LENS_HEAVY
 # Models: (q_heads, k_heads, head_size, qdtype, sliding_window, soft_cap)
@@ -247,8 +248,8 @@ def _build_attention_configs(model_configs):
     for model_config in model_configs:
         *base_config, sliding_window, soft_cap = model_config
         for seq_lens, num_blocks, block_size in product(SEQ_LENS, NUM_BLOCKS, MMAP_BLOCK_SIZES):
-            # Heavy seq_lens only run with block_size=64 and num_blocks=2048 to bound CI time.
-            if id(seq_lens) in heavy and (block_size != 64 or num_blocks != 2048):
+            # Heavy seq_lens only run with block_size=64 to bound CI time.
+            if id(seq_lens) in heavy and block_size != 64:
                 continue
             x_val = (*base_config, seq_lens, sliding_window, soft_cap, num_blocks, block_size)
             qdtype = x_val[3]
