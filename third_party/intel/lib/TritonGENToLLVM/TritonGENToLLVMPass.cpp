@@ -190,6 +190,13 @@ static bool isSPVBuiltinAvailableImpl(TritonGEN::Matrix2DBlockStoreOp op) {
 }
 
 static bool isSPVBuiltinAvailableImpl(TritonGEN::Matrix2DBlockPrefetchOp op) {
+  // The SPV runtime library only has builtins for d16 with tile_width=16
+  // (i.e. 16b_?r16x2c). The 16b_?r32x1c configuration is not available,
+  // so fall back to GenISA which supports any hardware-valid configuration.
+  if (op.getElemSizeInBits() == 16 && op.getTileWidth() == 32 &&
+      op.getVBlocks() == 1)
+    return false;
+
   return true;
 }
 
