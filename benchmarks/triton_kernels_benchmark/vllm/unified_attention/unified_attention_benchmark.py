@@ -185,27 +185,24 @@ def is_enough_memory(x_val, safety_factor=0.80):
 MMAP_BLOCK_SIZES = [64] if IS_FP8 else [16, 64]
 NUM_BLOCKS = [32768, 2048]
 # Heavy seq_lens skip the block_size=16 cells to keep CI runtime bounded.
-# block_size=64 still exercises both num_blocks values (2048 and 32768), covering
-# realistic small- and large-KV-cache deployments. is_enough_memory() filters
-# anything left over.
+# block_size=64 still exercises both num_blocks values (2048 and 32768).
 SEQ_LENS_LIGHT = [
     # One 4k input prefill
     [(4096, 4096)],
     # Pure decoding, 8 batches
     [(1, k) for k in [1513, 4100, 530, 123, 4803, 434, 3015, 34]],
-    # Long-context pure decoding (post-prefill tail of 7k/1k-style workloads).
+    # Long-context pure decoding
     [(1, k) for k in [7168, 8192, 12288, 16384]],
 ]
 SEQ_LENS_HEAVY = [
-    # One 7k input prefill (worst-case shape for TD seen in E2E sharegpt runs).
+    # One 7k input prefill
     [(7168, 7168)],
-    # Chunked prefill: 4 batches of 2k tokens (closer to vLLM default chunk size).
+    # Chunked prefill: 4 batches of 2k tokens
     [(2048, 2048)] * 4,
-    # Chunked prefill: 2 batches of 8k tokens (large-chunk regime).
+    # Chunked prefill: 2 batches of 8k tokens
     [(8192, 8192)] * 2,
-    # High-concurrency continuous batching (max_concurrency=256 in vLLM):
-    # 248 decode steps with realistic kv_len mix + 8 small (256-token) prefill chunks.
-    # Mirrors sharegpt steady-state where the E2E TD speedup actually lives.
+    # High-concurrency continuous batching: 248 decode steps with kv_len mix
+    # + 8 small (256-token) prefill chunks
     [(1, k)
      for k in ([1513, 4100, 530, 123, 4803, 434, 3015, 34, 256, 1024, 768, 2048, 192, 384, 1280, 96] * 16)[:248]] +
     [(256, 256)] * 8,
@@ -216,22 +213,18 @@ SEQ_LENS = SEQ_LENS_LIGHT + SEQ_LENS_HEAVY
 # soft_cap: None = disabled, float = soft_cap value.
 # Models that use both attention types appear twice (one entry each).
 MODELS_BF16 = [
-    # llama3.1-8B / Qwen3-4B-thinking - full attention (same attention shape)
+    # llama3.1-8B / Qwen3-4B-thinking - full attention
     (32, 8, 128, None, None, None),
     # llama3.3-70B - full attention
     (64, 8, 128, None, None, None),
     # llama4 Scout - sliding window attention (window size 8192)
     (64, 8, 128, None, 8192, None),
-    # Qwen2-7B - full attention (worst-case shape for TD on E2E sharegpt)
+    # Qwen2-7B - full attention
     (28, 4, 128, None, None, None),
     # Qwen2.5-235B - full attention
     (64, 4, 128, None, None, None),
     # Qwen2.5-235B - sliding window attention (window size 256)
     (64, 4, 128, None, 256, None),
-    # gpt-oss-120b - full attention
-    # (64, 8, 64, None, None, None),
-    # gpt-oss-120b - sliding window attention (window size 128)
-    # (64, 8, 64, None, 128, None),
 ]
 
 MODELS_FP8 = [
