@@ -156,8 +156,8 @@ Value getFinalValue(Value value) {
     return value;
   }
 
-  if (isa<tt::ExpandDimsOp, tt::BroadcastOp, tt::SplatOp, arith::IndexCastOp>(
-          defOp))
+  if (isa<tt::ExpandDimsOp, tt::BroadcastOp, tt::SplatOp, arith::IndexCastOp,
+          arith::ExtSIOp, arith::ExtUIOp>(defOp))
     return getFinalValue(defOp->getOperand(0));
 
   if (auto addOp = dyn_cast<arith::AddIOp>(defOp)) {

@@ -27,6 +27,33 @@ def TritonIntelGPUAccelerateMatmul
   ];
 }
 
+def TritonIntelGPUFoldFpToFp
+    : Pass<"tritonintelgpu-fold-fp-to-fp", "mlir::ModuleOp"> {
+  let summary = "Fold redundant tt.fp_to_fp cast chains";
+
+  let description = [{
+    Fold an `A -> B -> C` chain of `tt.fp_to_fp` casts into a single `A -> C`
+    cast when the outer cast `B -> C` is lossless (`B` is a subset of `C`),
+    dropping the redundant narrow intermediate `B`. Losslessness is decided from
+    `llvm::APFloat` semantics (mantissa precision + exponent range), so type
+    width alone is never trusted.
+
+    Two regimes:
+      * Inner cast `A -> B` is itself lossless (a pure widen, e.g.
+        `f8E5M2 -> f16 -> f32`). Dropping `B` preserves the result exactly, so
+        the fold runs unconditionally (strict-FP legal).
+      * Inner cast `A -> B` is lossy (a real downcast, e.g. user-inserted
+        `f32 -> f8 -> f16`). Dropping `B` changes the numerical result, so the
+        fold runs only under fast-math.
+
+    Fast-math is read from the `ttig.fast_math` module attribute (set from the
+    `TRITON_INTEL_FAST_MATH` environment variable by the annotate-module pass),
+    not a pass option.
+  }];
+
+  let dependentDialects = ["mlir::triton::TritonDialect"];
+}
+
 def TritonIntelGPUOptimizeDotOperands
     : Pass<"tritonintelgpu-optimize-dot-operands", "mlir::ModuleOp"> {
   let summary = "Intel optimize dot operands";
