@@ -590,14 +590,6 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     maxtol, rmstol = None, None
     if c_dtype.is_nvfp4 and a_dtype.is_nvfp4 and b_dtype.is_nvfp4:
         maxtol, rmstol = 6e-1, 4e-2
-    elif c_dtype.is_nvfp4 and swiglu_opts is not None:
-        # On XPU the fp_to_fp fold (on under the default enable_fp_fusion) drops
-        # the f8 intermediate AccelerateMatmul inserts for the nvfp4 epilogue, so
-        # the kernel and the f32-direct reference are two valid nvfp4 quantizers
-        # that disagree on a few boundary elements by one e2m1 bucket (×1.5 step).
-        # Keep rmstol strict so the bulk must match tightly; loosen only maxtol to
-        # admit that rare one-bucket drift.
-        maxtol, rmstol = 6e-1, 4e-2
     elif c_dtype.has_mx_scale:
         maxtol, rmstol = 4e-1, 4e-2
     elif b_dtype.is_mxfloat4:
