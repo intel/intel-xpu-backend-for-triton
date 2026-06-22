@@ -85,6 +85,8 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      gpu::intel::createTritonIntelGPUFoldFpToFp);
   ADD_PASS_WRAPPER_0("add_decompose_fma_dots",
                      gpu::intel::createTritonIntelGPUDecomposeFMADots);
+  ADD_PASS_WRAPPER_0("add_cooperative_fma_dots",
+                     gpu::intel::createTritonIntelGPUCooperativeFMADots);
   ADD_PASS_WRAPPER_0("add_rewrite_stack_ptr",
                      gpu::intel::createTritonIntelGPURewriteStackPtr);
   ADD_PASS_OPTION_WRAPPER_2(

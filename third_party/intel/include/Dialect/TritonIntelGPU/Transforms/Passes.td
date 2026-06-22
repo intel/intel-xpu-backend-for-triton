@@ -74,6 +74,35 @@ def TritonIntelGPUDecomposeFMADots
   ];
 }
 
+def TritonIntelGPUCooperativeFMADots
+    : Pass<"tritonintelgpu-cooperative-fma-dots", "mlir::ModuleOp"> {
+  let summary = "K-tile FMA dots to contain register pressure before LLVM unrolling";
+
+  let description = [{
+    On non-DPAS Intel GPUs, FMA lowering fully unrolls the K dimension, requiring
+    each thread to hold all its operand values in registers simultaneously. For
+    matmul shapes that already pass DecomposeFMADots' coarse threshold, the
+    unrolled form can still produce register schedules that exceed the 4KB GRF
+    and spill to PTSS.
+
+    This pass rewrites qualifying dots into an `scf.for` over K-chunks of
+    `kChunk` elements, shrinking the live operand window and freeing GRF for
+    the accumulator before LLVM commits the worst-case allocation. Composes
+    with DecomposeFMADots and skips DPAS-encoded dots.
+
+    Cost model fires only when:
+      - result encoding is BlockedEncodingAttr,
+      - pressureReduction = origPressure / chunkPressure >= 2.0x,
+      - shuffleRatio < 0.5,
+      - kChunk in {32, 16, 8, 4, 2} divides K and clears the threshold.
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::TritonGPUDialect"
+  ];
+}
+
 def TritonIntelGPUOptimizeDotOperands
     : Pass<"tritonintelgpu-optimize-dot-operands", "mlir::ModuleOp"> {
   let summary = "Intel optimize dot operands";
