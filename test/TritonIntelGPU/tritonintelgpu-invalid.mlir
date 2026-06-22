@@ -114,9 +114,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
-  tt.func @ttig.2d_block_load_from_ptr.rank1(%ptr: tensor<32x!tt.ptr<f16>, #ttg.slice<{dim = 0, parent = #dot0}>>) -> tensor<32xf16, #ttg.slice<{dim = 0, parent = #dot0}>> {
+  tt.func @ttig.2d_block_load_from_ptr.rank1(%ptr: tensor<32x!tt.ptr<f16>, #ttg.slice<{dim = 0, parent = #dot0}>>, %pitch: i32) -> tensor<32xf16, #ttg.slice<{dim = 0, parent = #dot0}>> {
     // expected-error @below {{'ttig.2d_block_load_from_ptr' op result tensor must have rank >= 2, got 1}}
-    %0 = ttig.2d_block_load_from_ptr %ptr {row_major} {base_width = 64 : i32, base_height = 8 : i32, base_pitch = 256 : i32} : (tensor<32x!tt.ptr<f16>, #ttg.slice<{dim = 0, parent = #dot0}>>) -> (tensor<32xf16, #ttg.slice<{dim = 0, parent = #dot0}>>)
+    %0 = ttig.2d_block_load_from_ptr %ptr, %pitch {row_major} {base_width = 64 : i32, base_height = 8 : i32} : (tensor<32x!tt.ptr<f16>, #ttg.slice<{dim = 0, parent = #dot0}>>, i32) -> (tensor<32xf16, #ttg.slice<{dim = 0, parent = #dot0}>>)
     tt.return %0 : tensor<32xf16, #ttg.slice<{dim = 0, parent = #dot0}>>
   }
 }
@@ -128,9 +128,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
-  tt.func @ttig.2d_block_load_from_ptr.mask_without_other(%ptr: tensor<64x32x!tt.ptr<f16>, #dot0>, %mask: tensor<64x32xi1, #dot0>) -> tensor<64x32xf16, #dot0> {
+  tt.func @ttig.2d_block_load_from_ptr.mask_without_other(%ptr: tensor<64x32x!tt.ptr<f16>, #dot0>, %mask: tensor<64x32xi1, #dot0>, %pitch: i32) -> tensor<64x32xf16, #dot0> {
     // expected-error @below {{'ttig.2d_block_load_from_ptr' op 'other' must be present when 'mask' is present}}
-    %0 = "ttig.2d_block_load_from_ptr"(%ptr, %mask) <{base_width = 64 : i32, base_height = 8 : i32, base_pitch = 256 : i32, memory_layout = 0 : i32, operandSegmentSizes = array<i32: 1, 1, 0>}> : (tensor<64x32x!tt.ptr<f16>, #dot0>, tensor<64x32xi1, #dot0>) -> tensor<64x32xf16, #dot0>
+    %0 = "ttig.2d_block_load_from_ptr"(%ptr, %pitch, %mask) <{base_width = 64 : i32, base_height = 8 : i32, memory_layout = 0 : i32, operandSegmentSizes = array<i32: 1, 1, 1, 0>}> : (tensor<64x32x!tt.ptr<f16>, #dot0>, i32, tensor<64x32xi1, #dot0>) -> tensor<64x32xf16, #dot0>
     tt.return %0 : tensor<64x32xf16, #dot0>
   }
 }

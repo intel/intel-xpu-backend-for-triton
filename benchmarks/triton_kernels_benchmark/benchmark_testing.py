@@ -726,8 +726,6 @@ class _BenchmarkSummary(ABC):
     def reference_provider(self) -> Optional[str]:
         all_providers = list(self.selected_providers.keys())
         non_triton_providers = [provider for provider in all_providers if not provider.startswith("triton")]
-        if "xetla" in non_triton_providers:
-            return "xetla"
         if "onednn" in non_triton_providers:
             return "onednn"
         if len(all_providers) < 2:

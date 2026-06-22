@@ -1,17 +1,62 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/BlockIOUtils.h"
+#include "intel/include/Analysis/StrideInfo.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/MathExtras.h"
 #include <numeric>
 
 namespace mlir::triton::gpu::intel {
 
+Value getRuntimeStrideValue(triton::intel::ModuleStrideAnalysis &strideAnalysis,
+                            Value ptr, unsigned dim) {
+  if (triton::intel::StrideInfo *info = strideAnalysis.getStrideInfo(ptr))
+    return info->getStrideValue(dim);
+  return {};
+}
+
+Value materializePitchBytes(OpBuilder &builder, Location loc, Value stride,
+                            unsigned elemSizeInBytes) {
+  Type i32Ty = builder.getI32Type();
+  Value strideI32 = stride;
+  if (stride.getType().isIndex()) {
+    strideI32 = arith::IndexCastOp::create(builder, loc, i32Ty, stride);
+  } else if (auto intTy = dyn_cast<IntegerType>(stride.getType())) {
+    if (intTy.getWidth() < 32)
+      strideI32 = arith::ExtSIOp::create(builder, loc, i32Ty, stride);
+    else if (intTy.getWidth() > 32)
+      strideI32 = arith::TruncIOp::create(builder, loc, i32Ty, stride);
+  } else {
+    return {};
+  }
+  Value elemSizeV = arith::ConstantOp::create(
+      builder, loc, builder.getI32IntegerAttr(elemSizeInBytes));
+  return arith::MulIOp::create(builder, loc, strideI32, elemSizeV);
+}
+
 template <typename T> static T product(const std::vector<T> &vec) {
   return std::accumulate(vec.begin(), vec.end(), static_cast<T>(1),
                          std::multiplies<T>());
+}
+
+std::optional<unsigned> getLaneFastChangeDim(const LinearLayout &ll,
+                                             MLIRContext *ctx) {
+  auto kLane = StringAttr::get(ctx, "lane");
+  if (!ll.hasInDim(kLane))
+    return std::nullopt;
+  // First lane basis vector (fastest-varying lane bit). Mirrors the gate in
+  // getBlockIOTileSize<false>: the lane base must move along exactly one tensor
+  // dimension, else the layout is not a clean 2D block-I/O tile.
+  ArrayRef<int32_t> laneBase0 = ll.getBasis(kLane, /*pos=*/0);
+  if (llvm::count_if(laneBase0, [](int32_t x) { return x > 0; }) != 1)
+    return std::nullopt;
+  auto it = llvm::find_if(laneBase0, [](int32_t x) { return x > 0; });
+  return static_cast<unsigned>(std::distance(laneBase0.begin(), it));
 }
 
 // Return the tileHeight, tileWidth, numElemPerPackedVal, vBlocks, row Dim and
@@ -543,6 +588,127 @@ bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
   }
 
   return true;
+}
+
+bool validate2DBlockStoreTile(const LinearLayout &ll, unsigned memContiguousDim,
+                              unsigned elemSizeInBits,
+                              RankedTensorType tensorType,
+                              AxisInfo *maskAxisInfo,
+                              BlockIOTileSizeInfo &sizeInfoOut) {
+  // Compute the store tile geometry and reject configurations the 2D block
+  // store cannot express. This mirrors the checks the store lowering applies;
+  // keeping them here (rather than duplicated inline in each store lowering
+  // pattern) makes this the single source of truth for store eligibility.
+  BlockIOTileSizeInfo sizeInfo = getBlockIOTileSize</*isLoad=*/false>(
+      ll, memContiguousDim, elemSizeInBits, maskAxisInfo,
+      /*oneMatrixPerLoadForBT=*/false);
+  if (!sizeInfo.isValid())
+    return false;
+
+  unsigned packedElemSizeInBits = elemSizeInBits * sizeInfo.numElemPerPackedVal;
+  if (!check2DBlockAddressPayloadRestriction(packedElemSizeInBits,
+                                             sizeInfo.tileWidth))
+    return false;
+
+  // 2D block store does not support transpose.
+  if (sizeInfo.transpose)
+    return false;
+
+  // The store always issues a single v-block per message.
+  sizeInfo.vBlocks = 1;
+
+  sizeInfoOut = sizeInfo;
+  return true;
+}
+
+bool isMemoryRowMajor(Operation *op) {
+  auto blockIOAttr = op->getAttrOfType<StringAttr>(
+      TritonIntelGPUDialect::getBlockIOAttrName());
+  assert(blockIOAttr && "expected block_io attribute");
+  std::optional<BlockIOMode> mode =
+      symbolizeBlockIOMode(blockIOAttr.getValue());
+  return !mode || *mode == BlockIOMode::RowMajor;
+}
+
+bool isBlockIOEligible(Operation *loadOp, RankedTensorType tensorTy) {
+  if (!loadOp->hasAttr(TritonIntelGPUDialect::getBlockIOAttrName()))
+    return false;
+
+  if (tensorTy.getRank() < 2)
+    return false;
+
+  bool hasDpas = hasDpasEncoding(tensorTy) || hasDotDpasEncoding(tensorTy);
+
+  std::optional<bool> enableBlockIOForAllLayout = triton::tools::isEnvValueBool(
+      triton::tools::getStrEnv("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS"));
+  if (enableBlockIOForAllLayout.has_value() &&
+      !enableBlockIOForAllLayout.value() && !hasDpas)
+    return false;
+
+  return true;
+}
+
+// Cost of a load that delivers its data via a per-element gather (the
+// fallback when 2D block I/O does not apply). The cost is the number of
+// vectorized memory accesses: numElements / vectorization width, where the
+// width is the layout's contiguity along the fastest-varying dimension.
+static unsigned estimateGatherCost(RankedTensorType type) {
+  triton::gpu::LinearEncodingAttr lin = triton::gpu::toLinearEncoding(type);
+  SmallVector<unsigned> order = triton::gpu::getOrder(lin, type.getShape());
+  SmallVector<unsigned> contig = triton::gpu::getContigPerThread(type);
+  unsigned gatherVec = order.empty() ? 1u : std::max(1u, contig[order[0]]);
+  return llvm::divideCeil(static_cast<unsigned>(type.getNumElements()),
+                          gatherVec);
+}
+
+unsigned estimateLoadHWCost(RankedTensorType type, Operation *loadOp) {
+  // Anything that cannot use 2D block I/O is costed as a gather.
+  if (!isBlockIOEligible(loadOp, type))
+    return estimateGatherCost(type);
+
+  unsigned elemSizeInBits = type.getElementTypeBitWidth();
+  if (elemSizeInBits > 64)
+    return estimateGatherCost(type);
+
+  bool rowMajor = isMemoryRowMajor(loadOp);
+  unsigned rank = type.getRank();
+  unsigned contiguousDim = rowMajor ? rank - 1 : rank - 2;
+
+  LinearLayout ll =
+      cast<triton::gpu::DistributedEncodingTrait>(type.getEncoding())
+          .toLinearLayout(type.getShape());
+
+  bool oneMatrixPerLoadForBT =
+      loadOp->hasAttr(TritonIntelGPUDialect::getOneMatrixPerLoadAttrName());
+
+  if (!validate2DBlockLoadTile(ll, contiguousDim, elemSizeInBits, type,
+                               oneMatrixPerLoadForBT,
+                               /*maskAxisInfo=*/nullptr))
+    return estimateGatherCost(type);
+
+  BlockIOTileSizeInfo info =
+      getBlockIOTileSize<true>(ll, contiguousDim, elemSizeInBits,
+                               /*maskAxisInfo=*/nullptr, oneMatrixPerLoadForBT);
+  if (!info.isValid())
+    return estimateGatherCost(type);
+
+  // Number of 2D block messages = ceil(rows / tileHeight) *
+  // ceil(cols / colsPerMessage), where one message spans tileHeight rows and
+  // (tileWidth * numElemPerPackedVal * vBlocks) element-columns. tileWidth is
+  // measured in PACKED values (see getBlockIOTileSize: tileWidth =
+  // tileShape[fastChangeDim] / numElemPerPackedVal), so the packing factor
+  // must be multiplied back in to recover the element-column span. Full-tensor
+  // extents are used so two candidate encodings compare apples-to-apples.
+  ArrayRef<int64_t> shape = type.getShape();
+  unsigned rows = static_cast<unsigned>(shape[info.rowDim]);
+  unsigned cols = static_cast<unsigned>(shape[info.colDim]);
+  unsigned colsPerMessage =
+      info.tileWidth * info.numElemPerPackedVal * info.vBlocks;
+  if (info.tileHeight == 0 || colsPerMessage == 0)
+    return estimateGatherCost(type);
+
+  return llvm::divideCeil(rows, info.tileHeight) *
+         llvm::divideCeil(cols, colsPerMessage);
 }
 
 } // namespace mlir::triton::gpu::intel

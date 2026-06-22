@@ -17,12 +17,12 @@ Intel® XPU Backend for Triton\* is an out of tree backend module for [Triton](h
   * [Intel® Data Center Flex Series](https://www.intel.com/content/www/us/en/products/details/discrete-gpus/data-center-gpu/flex-series.html)
   * [Intel® Arc A770](https://www.intel.com/content/www/us/en/products/sku/229151/intel-arc-a770-graphics-16gb/specifications.html)
   * [Intel® Arc B580](https://www.intel.com/content/www/us/en/products/sku/241598/intel-arc-b580-graphics/specifications.html)
-  * [Intel® Arc Pro B60](https://www.intel.com/content/www/us/en/products/sku/243916/intel-arc-pro-b60-graphics/specifications.html)
+  * [Intel® Arc™ Pro B-Series Graphics](https://www.intel.com/content/www/us/en/ark/products/series/242616/intel-arc-pro-b-series-graphics.html)
 * GPU Drivers:
   * Latest [Long Term Support (LTS) Release](https://dgpu-docs.intel.com/driver/installation-lts2.html)
   * Latest [The Kobuk team Intel® Graphics PPA](https://dgpu-docs.intel.com/driver/client/overview.html#ubuntu-latest)
 * Toolchain:
-  * [Intel® Deep Learning Essentials 2025.3.2](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html?packages=dl-essentials&dl-lin=offline&dl-essentials-os=linux)
+  * [Intel® Deep Learning Essentials 2026.0](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html?packages=dl-essentials&dl-lin=offline&dl-essentials-os=linux)
 
 Note that Intel® XPU Backend for Triton\* is not compatible with Intel® Extension for PyTorch\* and Intel® oneAPI Base Toolkit\*.
 
@@ -39,10 +39,11 @@ You can check if triton is currently available by running one of the [tutorials]
 Basic rules:
 
 1. **Use Tensor Descriptors:** For inputs and outputs of matmul operations (`tl.dot`), use Tensor Descriptors. This utilizes hardware-optimized DPAS operations and 2D block IO HW operations. You can often expect more than 2x performance improvement compared to the basic tensor of pointers approach. Use device side Tensor Descriptors (defined inside a kernel), not host side (defined in CPU code and passed to the kernel).
-2. **Type Annotations:** Use proper type annotations for your kernels. Good type annotations allow for better optimization, but be careful to avoid excessive recompilation.
-3. **Benchmark:** Experiment with the performance of your kernel. You can use `triton.testing.do_bench` for basic benchmarking, as demonstrated in the [tutorials](../python/tutorials/02-fused-softmax.py).
-4. **Tiling and Autotuning:** Pick appropriate tiling for your machine and tensor shapes.
-5. **Grid Dimension Ordering:** On XPU, the first grid dimension changes fastest. Place computation tile indices on `axis=0` and batch/expert indices on higher dimensions to preserve cache locality. Misordering can cost 20% to 2x performance.
+2. **Use explicit accumulator in `tl.dot`:** Always write `accumulator = tl.dot(a, b, accumulator)` instead of `accumulator += tl.dot(a, b)`. The explicit form maps directly to a single DPAS instruction. The `+=` form relies on the compiler's `CombineOps` pass to fold the separate add back into the dot, which can fail (e.g., when the dot result has multiple uses or flows through control flow).
+3. **Type Annotations:** Use proper type annotations for your kernels. Good type annotations allow for better optimization, but be careful to avoid excessive recompilation.
+4. **Benchmark:** Experiment with the performance of your kernel. You can use `triton.testing.do_bench` for basic benchmarking, as demonstrated in the [tutorials](../python/tutorials/02-fused-softmax.py).
+5. **Tiling and Autotuning:** Pick appropriate tiling for your machine and tensor shapes.
+6. **Grid Dimension Ordering:** On XPU, the first grid dimension changes fastest. Place computation tile indices on `axis=0` and batch/expert indices on higher dimensions to preserve cache locality. Misordering can cost 20% to 2x performance.
 
 More details below.
 
@@ -122,7 +123,7 @@ off_k = 0
 for _ in range(0, K, BLOCK_SIZE_K):
     a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
     b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
-    accumulator += tl.dot(a, b)
+    accumulator = tl.dot(a, b, accumulator)
     off_k += BLOCK_SIZE_K
 ```
 
@@ -441,7 +442,7 @@ grid = lambda META: (
 ## Prerequisites
 
 1. Latest [Rolling Release](https://dgpu-docs.intel.com/driver/installation-rolling.html) or [Long Term Support Release](https://dgpu-docs.intel.com/driver/installation-lts2.html) of GPU driver
-2. [Intel® Deep Learning Essentials 2025.3.2](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html?packages=dl-essentials&dl-lin=offline&dl-essentials-os=linux)
+2. [Intel® Deep Learning Essentials 2026.0](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html?packages=dl-essentials&dl-lin=offline&dl-essentials-os=linux)
 
 ## Install PyTorch and Triton from nightly wheels
 
@@ -516,7 +517,7 @@ LLVM does not have a stable API, so the Triton build will not work at an
 arbitrary LLVM version.
 
 1. Find the version of LLVM that Triton builds against.
-Check `cmake/llvm-hash.txt` to see the current version.
+Check `cmake/llvm-info.json` (the `llvm_hash` field) to see the current version.
 
 2. Checkout LLVM at this revision to the directory `llvm`,
 which must be in the same directory as `intel-xpu-backend-for-triton`:

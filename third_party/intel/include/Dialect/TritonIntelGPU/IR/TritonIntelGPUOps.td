@@ -277,22 +277,27 @@ def TTIG_Subgroup2DBlockLoadFromPtrOp : TTIG_Op<"2d_block_load_from_ptr", [
     `ptr[i,j] = base + i*row_stride + j*elem_size` for a constant `base`
     and known `row_stride`. Creating this op from a ptr tensor that does not
     satisfy this precondition produces undefined behavior at lowering.
+
+    `base_pitch` (row stride in bytes) is a runtime `i32` operand, matching
+    `ttig.2d_block_load` and `triton_gen.2Dblockload`. A compile-time pitch is
+    just an `arith.constant`; a runtime one (e.g. grouped-GEMM `lda`) is the
+    computed SSA value.
   }];
 
   let arguments = (ins
     Arg<TT_PtrLike, "tensor of pointers to the memory surface",
         [MemRead<GlobalMemory>]>:$ptr,
+    I32:$base_pitch,
     Optional<TT_BoolLike>:$mask,
     Optional<TT_Type>:$other,
     I32Attr:$base_width,
     I32Attr:$base_height,
-    I32Attr:$base_pitch,
     TTIG_BlockIOMode:$memory_layout
   );
 
   let results = (outs TT_Tensor:$result);
   let assemblyFormat = [{
-    $ptr (`,` $mask^ `,` $other)?
+    $ptr `,` $base_pitch (`,` $mask^ `,` $other)?
     ` ` `{` $memory_layout `}`
     attr-dict `:` functional-type(operands, results)
   }];

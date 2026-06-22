@@ -28,14 +28,17 @@ namespace mlir::triton::intel {
 
 namespace {
 
-// Returns true if `pred` is a supported bound-check predicate in the `<` /
-// `<=` family, independent of which operand is the varying index or bound.
+// Returns true if `pred` is a supported bound-check predicate.
 static bool isSupportedBoundPredicate(arith::CmpIPredicate pred) {
   switch (pred) {
   case arith::CmpIPredicate::slt:
   case arith::CmpIPredicate::sle:
   case arith::CmpIPredicate::ult:
   case arith::CmpIPredicate::ule:
+  case arith::CmpIPredicate::sge:
+  case arith::CmpIPredicate::sgt:
+  case arith::CmpIPredicate::uge:
+  case arith::CmpIPredicate::ugt:
     return true;
   default:
     return false;
@@ -62,9 +65,14 @@ static MaskClassification classifyMask(arith::CmpIPredicate pred,
   assert(isSupportedBoundPredicate(pred) && "Unsupported predicate");
 
   bool isSigned =
-      (pred == arith::CmpIPredicate::slt || pred == arith::CmpIPredicate::sle);
+      (pred == arith::CmpIPredicate::slt || pred == arith::CmpIPredicate::sle ||
+       pred == arith::CmpIPredicate::sge || pred == arith::CmpIPredicate::sgt);
+  bool isLessThan =
+      (pred == arith::CmpIPredicate::slt || pred == arith::CmpIPredicate::ult ||
+       pred == arith::CmpIPredicate::sle || pred == arith::CmpIPredicate::ule);
   bool isStrict =
-      (pred == arith::CmpIPredicate::slt || pred == arith::CmpIPredicate::ult);
+      (pred == arith::CmpIPredicate::slt || pred == arith::CmpIPredicate::ult ||
+       pred == arith::CmpIPredicate::sgt || pred == arith::CmpIPredicate::ugt);
 
   unsigned bitWidth = constVal.getBitWidth();
   APInt ivMin = isSigned ? ivRange.smin() : ivRange.umin();
@@ -111,18 +119,34 @@ static MaskClassification classifyMask(arith::CmpIPredicate pred,
     return isSigned ? a.sge(b) : a.uge(b);
   };
 
-  if (isStrict) {
-    // `<`  (slt or ult)
-    if (lt(maxElem, constVal))
-      return MaskClassification::AlwaysTrue;
-    if (ge(minElem, constVal))
-      return MaskClassification::AlwaysFalse;
+  if (isLessThan) {
+    if (isStrict) {
+      // `<`  (slt or ult): AlwaysTrue if maxElem < constVal
+      if (lt(maxElem, constVal))
+        return MaskClassification::AlwaysTrue;
+      if (ge(minElem, constVal))
+        return MaskClassification::AlwaysFalse;
+    } else {
+      // `<=` (sle or ule): AlwaysTrue if maxElem <= constVal
+      if (le(maxElem, constVal))
+        return MaskClassification::AlwaysTrue;
+      if (gt(minElem, constVal))
+        return MaskClassification::AlwaysFalse;
+    }
   } else {
-    // `<=` (sle or ule)
-    if (le(maxElem, constVal))
-      return MaskClassification::AlwaysTrue;
-    if (gt(minElem, constVal))
-      return MaskClassification::AlwaysFalse;
+    if (isStrict) {
+      // `>`  (sgt or ugt): AlwaysTrue if minElem > constVal
+      if (gt(minElem, constVal))
+        return MaskClassification::AlwaysTrue;
+      if (le(maxElem, constVal))
+        return MaskClassification::AlwaysFalse;
+    } else {
+      // `>=` (sge or uge): AlwaysTrue if minElem >= constVal
+      if (ge(minElem, constVal))
+        return MaskClassification::AlwaysTrue;
+      if (lt(maxElem, constVal))
+        return MaskClassification::AlwaysFalse;
+    }
   }
   return MaskClassification::Unknown;
 }
@@ -140,9 +164,7 @@ static Operation *dropMask(Operation *op, bool maskVal) {
               loadOp.getEvict(), loadOp.getIsVolatile());
           loadOp->replaceAllUsesWith(newLoadOp);
         } else {
-          Operation *cstOp =
-              arith::ConstantOp::create(builder, loc, loadOp.getOther());
-          loadOp->replaceAllUsesWith(cstOp);
+          loadOp->replaceAllUsesWith(ValueRange{loadOp.getOther()});
         }
       })
       .Case<arith::SelectOp>([&](auto selectOp) {
@@ -169,7 +191,8 @@ public:
   virtual ~MaskValidatorBase() = default;
 
   // Check whether the given mask is valid.
-  virtual bool isValidMask(scf::ForOp &forOp, Value mask) const = 0;
+  virtual bool isValidMask(scf::ForOp &forOp, Value mask,
+                           Operation *op) const = 0;
 
   // Create the loop versioning condition based on the mask.
   virtual Value getVersioningCond(scf::ForOp &forOp, Value mask) const = 0;
@@ -183,11 +206,11 @@ public:
   RemovableMaskValidator(DataFlowSolver *solver)
       : MaskValidatorBase(), solver(solver) {}
 
-  virtual bool isValidMask(scf::ForOp &forOp, Value mask) const {
+  virtual bool isValidMask(scf::ForOp &forOp, Value mask, Operation *op) const {
     MaskClassification cls = classify(forOp, mask);
     if (cls == MaskClassification::Unknown)
       return false;
-    registerMaskValue(mask, cls == MaskClassification::AlwaysTrue);
+    registerMaskValue(op, cls == MaskClassification::AlwaysTrue);
     return true;
   }
 
@@ -202,13 +225,6 @@ public:
     return opToMaskValue[op];
   }
 
-private:
-  // Record the final mask value for all users of `mask`.
-  void registerMaskValue(Value mask, bool maskVal) const {
-    for (Operation *user : mask.getUsers())
-      opToMaskValue.insert({user, maskVal});
-  }
-
   // Dispatch on the mask's defining op: `arith.andi` is combined recursively,
   // otherwise fall through to cmp classification.
   MaskClassification classify(scf::ForOp &forOp, Value mask) const {
@@ -218,6 +234,16 @@ private:
     if (auto andOp = dyn_cast_or_null<arith::AndIOp>(finalVal.getDefiningOp()))
       return classifyAnd(forOp, andOp);
     return classifyCmp(forOp, finalVal);
+  }
+
+private:
+  // Record the final mask value for the given masked operation.
+  // Fixes #6871: each operation must record only its own mask, not the masks of
+  // its other users (which would poison the map for ops consuming two masks,
+  // e.g. an arith.select using one mask as condition and another as
+  // true-value).
+  void registerMaskValue(Operation *op, bool maskVal) const {
+    opToMaskValue.insert({op, maskVal});
   }
 
   // Combine classifications of the two operands of an `arith.andi` mask:
@@ -237,14 +263,84 @@ private:
     return MaskClassification::Unknown;
   }
 
+  // Check whether a value is the loop induction variable or a loop iter_arg
+  // that is equivalent to the IV (same init as lower bound, same step).
+  std::optional<ConstantIntRanges> getIVEquivalentRange(scf::ForOp &forOp,
+                                                        Value val) const {
+    std::optional<ConstantIntRanges> ivRange =
+        tt::intel::collectLoopIVRange(forOp, *solver);
+    if (!ivRange)
+      return std::nullopt;
+
+    if (val == forOp.getSingleInductionVar())
+      return ivRange;
+
+    // Check if val resolved (via getFinalValue) to the loop's lower bound
+    // constant, meaning it was an iter_arg with that init. Verify there
+    // exists an iter_arg with init == lb and yield == self + step.
+    OpFoldResult lbOFR = *forOp.getSingleLowerBound();
+    OpFoldResult stepOFR = *forOp.getSingleStep();
+
+    auto getConstant = [](OpFoldResult ofr) -> std::optional<int64_t> {
+      if (auto attr = dyn_cast<Attribute>(ofr)) {
+        if (auto intAttr = dyn_cast_or_null<IntegerAttr>(attr))
+          return intAttr.getInt();
+        return std::nullopt;
+      }
+      APInt intVal;
+      if (matchPattern(cast<Value>(ofr), m_ConstantInt(&intVal)))
+        return intVal.getSExtValue();
+      return std::nullopt;
+    };
+
+    std::optional<int64_t> lbConst = getConstant(lbOFR);
+    std::optional<int64_t> stepConst = getConstant(stepOFR);
+    if (!lbConst || !stepConst)
+      return std::nullopt;
+
+    auto matchesInt = [](Value v, int64_t expected) -> bool {
+      APInt intVal;
+      if (matchPattern(v, m_ConstantInt(&intVal)))
+        return intVal.getSExtValue() == expected;
+      DenseElementsAttr denseAttr;
+      if (matchPattern(v, m_Constant(&denseAttr)) && denseAttr.isSplat()) {
+        if (auto intAttr =
+                dyn_cast<IntegerAttr>(denseAttr.getSplatValue<Attribute>()))
+          return intAttr.getInt() == expected;
+      }
+      return false;
+    };
+
+    if (!matchesInt(val, *lbConst))
+      return std::nullopt;
+
+    auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+    for (unsigned i = 0, e = forOp.getNumRegionIterArgs(); i < e; ++i) {
+      Value initArg = forOp.getInitArgs()[i];
+      if (!matchesInt(initArg, *lbConst))
+        continue;
+
+      Value yieldVal = yieldOp.getOperand(i);
+      auto yieldAdd = yieldVal.getDefiningOp<arith::AddIOp>();
+      if (!yieldAdd)
+        continue;
+
+      BlockArgument iterArg = forOp.getRegionIterArg(i);
+      bool lhsIsIterArg = (yieldAdd.getLhs() == iterArg);
+      bool rhsIsIterArg = (yieldAdd.getRhs() == iterArg);
+      if (!lhsIsIterArg && !rhsIsIterArg)
+        continue;
+
+      Value stepOperand = lhsIsIterArg ? yieldAdd.getRhs() : yieldAdd.getLhs();
+      if (matchesInt(stepOperand, *stepConst))
+        return ivRange;
+    }
+
+    return std::nullopt;
+  }
+
   // Classify a single `arith.cmpi` mask against the loop IV range.
   MaskClassification classifyCmp(scf::ForOp &forOp, Value finalVal) const {
-    // Ensure the loop range is known.
-    std::optional<ConstantIntRanges> optRange =
-        tt::intel::collectLoopIVRange(forOp, *solver);
-    if (!optRange)
-      return MaskClassification::Unknown;
-
     if (!finalVal.getDefiningOp() ||
         !isa<arith::CmpIOp>(finalVal.getDefiningOp()))
       return MaskClassification::Unknown;
@@ -262,12 +358,10 @@ private:
       return MaskClassification::Unknown;
 
     auto getIntConstantValue = [](Operation *op) -> std::optional<APInt> {
-      DenseElementsAttr constAttr;
-      if (matchPattern(op, m_Constant(&constAttr))) {
-        auto attr = constAttr.getSplatValue<Attribute>();
-        if (auto intAttr = dyn_cast_or_null<IntegerAttr>(attr))
-          return intAttr.getValue();
-      }
+      APInt intVal;
+      if (op->getNumResults() > 0 &&
+          matchPattern(op->getResult(0), m_ConstantInt(&intVal)))
+        return intVal;
       return std::nullopt;
     };
 
@@ -282,7 +376,10 @@ private:
 
     Value addLhs = tt::intel::getFinalValue(addOp.getLhs());
     Value addRhs = tt::intel::getFinalValue(addOp.getRhs());
-    if (addLhs != forOp.getSingleInductionVar())
+
+    std::optional<ConstantIntRanges> lhsRange =
+        getIVEquivalentRange(forOp, addLhs);
+    if (!lhsRange)
       return MaskClassification::Unknown;
 
     auto makeRangeOp =
@@ -290,7 +387,7 @@ private:
     if (!makeRangeOp)
       return MaskClassification::Unknown;
 
-    return classifyMask(pred, *optRange, makeRangeOp.getStart(),
+    return classifyMask(pred, *lhsRange, makeRangeOp.getStart(),
                         makeRangeOp.getEnd(), *constIntVal);
   }
 
@@ -310,7 +407,7 @@ public:
   };
 
   // Check whether the mask is equivalent to the form: `END-1 < N-i*END`.
-  virtual bool isValidMask(scf::ForOp &forOp, Value mask) const {
+  virtual bool isValidMask(scf::ForOp &forOp, Value mask, Operation *op) const {
     Value finalVal = tt::intel::getFinalValue(mask);
     assert(finalVal && "Expecting a valid mask");
 
@@ -456,7 +553,8 @@ private:
   // Assuming the mask is equivalent to the form: `END < N-i*END`, returns a
   // structure containing `N` and `END`.
   MaskInfo getMaskInfo(scf::ForOp &forOp, Value mask) const {
-    assert(isValidMask(forOp, mask) && "Expecting a valid mask");
+    assert(isValidMask(forOp, mask, /*op=*/nullptr) &&
+           "Expecting a valid mask");
 
     Value finalMask = tt::intel::getFinalValue(mask);
     auto cmpOp = cast<arith::CmpIOp>(finalMask.getDefiningOp());
@@ -474,7 +572,7 @@ public:
   //   - N < M (with i1 data type)
   //   - [0..END] < splat(N)
   //   - splat(N) < [0..END]
-  virtual bool isValidMask(scf::ForOp &forOp, Value mask) const {
+  virtual bool isValidMask(scf::ForOp &forOp, Value mask, Operation *op) const {
     Value finalVal = tt::intel::getFinalValue(mask);
     assert(finalVal && "Expecting a valid mask");
 
@@ -485,6 +583,15 @@ public:
     auto cmpOp = cast<arith::CmpIOp>(finalVal.getDefiningOp());
     arith::CmpIPredicate pred = cmpOp.getPredicate();
     if (!isSupportedBoundPredicate(pred))
+      return false;
+
+    // The '>=' and '>' predicates are supported in classifyMask (loop-dependent
+    // path) but not yet handled by getVersioningCond which always uses END-1 as
+    // the scalar threshold -- correct for '<' and '<=' but wrong for '>=' and
+    // '>'.
+    if (pred == arith::CmpIPredicate::sge ||
+        pred == arith::CmpIPredicate::sgt ||
+        pred == arith::CmpIPredicate::uge || pred == arith::CmpIPredicate::ugt)
       return false;
 
     bool isInLoop = (cmpOp->getParentOfType<scf::ForOp>() == forOp);
@@ -520,7 +627,7 @@ public:
   } // namespace
 
   virtual Value getVersioningCond(scf::ForOp &forOp, Value mask) const {
-    assert(isValidMask(forOp, mask) && "Invalid mask");
+    assert(isValidMask(forOp, mask, /*op=*/nullptr) && "Invalid mask");
 
     OpBuilder builder(forOp);
     Location loc = forOp.getLoc();
@@ -576,7 +683,7 @@ public:
     auto collectMaskedOps = [&](auto ops, MaskedOperations &maskedOps) {
       for (Operation *op : ops) {
         Value mask = getMask(op);
-        if (mask && maskValidator.isValidMask(forOp, mask)) {
+        if (mask && maskValidator.isValidMask(forOp, mask, op)) {
           maskedOps.insert(op);
           LLVM_DEBUG(llvm::dbgs()
                      << maskValidator.getName()

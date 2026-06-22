@@ -35,7 +35,7 @@ make dev-install
 - Set `TRITON_BUILD_WITH_CCACHE=true` for faster rebuilds.
 - Set `TRITON_BUILD_WITH_CLANG_LLD=true` to use clang/lld (faster linking).
 - Use `pip install -e . --no-build-isolation` for faster incremental builds.
-- LLVM version is pinned in `cmake/llvm-hash.txt`.
+- LLVM version is pinned in `cmake/llvm-info.json` (the `llvm_hash` field).
 
 ### Key Source Directories
 

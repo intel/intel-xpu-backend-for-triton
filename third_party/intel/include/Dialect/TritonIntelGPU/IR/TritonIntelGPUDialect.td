@@ -129,6 +129,12 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.support_256b_load_store";
     }
 
+    /// Get the name of the attribute used to indicate whether fast-math
+    /// approximations are allowed (set when TRITON_INTEL_FAST_MATH=1).
+    static constexpr llvm::StringRef getFastMathAttrName() {
+      return "ttig.fast_math";
+    }
+
     /// Get the name of the attribute used to indicate whether rounded divide
     /// and sqrt operations are available.
     static constexpr llvm::StringRef getSupportRoundedDivideSqrtAttrName() {
@@ -154,14 +160,6 @@ def TritonIntelGPU_Dialect : Dialect {
     /// from MakeTensorDescOp to descriptor load/store operations.
     static constexpr llvm::StringRef getDescPaddingAttrName() {
       return "ttig.desc_padding";
-    }
-
-    /// Get the name of the attribute used to indicate that fast-math
-    /// semantics are enabled, allowing numerically lossy transformations
-    /// (e.g. dropping a narrow fp_to_fp intermediate). Set from the
-    /// `TRITON_INTEL_FAST_MATH` environment variable.
-    static constexpr llvm::StringRef getFastMathAttrName() {
-      return "ttig.fast_math";
     }
   }];
 

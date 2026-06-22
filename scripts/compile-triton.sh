@@ -108,7 +108,7 @@ build_llvm() {
   if [ ! -d "$LLVM_PROJ" ]; then
     echo "**** Cloning $LLVM_PROJ ****"
     cd $BASE
-    LLVM_COMMIT_ID="$(<$BASE/$TRITON_PROJ_NAME/cmake/llvm-hash.txt)"
+    LLVM_COMMIT_ID="$(jq -r '.llvm_hash' "$BASE/$TRITON_PROJ_NAME/cmake/llvm-info.json")"
     git clone --recurse-submodules --jobs 8 https://github.com/llvm/llvm-project.git llvm
     cd llvm
     git checkout $LLVM_COMMIT_ID
@@ -116,6 +116,8 @@ build_llvm() {
   fi
 
   echo "****** Configuring $LLVM_PROJ ******"
+
+  LLVM_DISTRIBUTION_COMPONENTS=${LLVM_DISTRIBUTION_COMPONENTS:-"llvm-headers;llvm-libraries;cmake-exports;mlir-headers;mlir-libraries;mlir-cmake-exports;lld-headers;lld-libraries;lld-cmake-exports;clang;clang-resource-headers;FileCheck;not;split-file;llc;opt;llvm-config;mlir-tblgen;mlir-translate"}
 
   ADDITIONAL_FLAGS=""
   if [ "$CCACHE" = true ]
@@ -137,6 +139,7 @@ build_llvm() {
     -DLLVM_ENABLE_PROJECTS="mlir;llvm;lld;clang" \
     -DLLVM_TARGETS_TO_BUILD="X86;NVPTX;AMDGPU;SPIRV" \
     -DLLVM_INSTALL_UTILS=true \
+    -DLLVM_DISTRIBUTION_COMPONENTS="$LLVM_DISTRIBUTION_COMPONENTS" \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
     -DCMAKE_INSTALL_PREFIX=$PACKAGES_DIR/llvm \
     -DCMAKE_C_COMPILER=$C_COMPILER \
@@ -145,7 +148,7 @@ build_llvm() {
 
   echo "****** Building $LLVM_PROJ ******"
   ninja
-  ninja install
+  ninja install-distribution
   ninja check-mlir
 }
 
