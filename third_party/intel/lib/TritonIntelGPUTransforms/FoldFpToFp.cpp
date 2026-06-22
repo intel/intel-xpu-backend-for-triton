@@ -44,9 +44,7 @@ static bool isLosslessFpCast(Type from, Type to) {
 // numerics and the fold is only legal under fast-math.
 class FoldNarrowFpToFpIntermediate : public OpRewritePattern<tt::FpToFpOp> {
 public:
-  FoldNarrowFpToFpIntermediate(MLIRContext *context, bool fastMath,
-                               int benefit = 1)
-      : OpRewritePattern<tt::FpToFpOp>(context, benefit), fastMath(fastMath) {}
+  using OpRewritePattern<tt::FpToFpOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(tt::FpToFpOp outer,
                                 PatternRewriter &rewriter) const override {
@@ -63,7 +61,10 @@ public:
       return rewriter.notifyMatchFailure(outer, "outer cast is not lossless");
 
     // Inner cast lossy (real downcast): folding changes numerics, so it's
-    // legal only under fast-math.
+    // legal only under fast-math (the `ttig.fast_math` module attribute, set
+    // from TRITON_INTEL_FAST_MATH by the annotate-module pass).
+    bool fastMath = outer->getParentOfType<ModuleOp>()->hasAttr(
+        triton::gpu::intel::TritonIntelGPUDialect::getFastMathAttrName());
     if (!isLosslessFpCast(aTy, bTy) && !fastMath)
       return rewriter.notifyMatchFailure(
           outer, "inner cast is lossy; fold needs fast-math");
@@ -89,9 +90,6 @@ public:
                                               inner.getSrc(), rounding);
     return success();
   }
-
-private:
-  bool fastMath;
 };
 
 class TritonIntelGPUFoldFpToFpPass
@@ -104,12 +102,8 @@ public:
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
-    // Fast-math (set from TRITON_INTEL_FAST_MATH via the annotate-module pass)
-    // enables the numerically lossy fold of a narrow downcast intermediate.
-    bool fastMath = mod->hasAttr(
-        triton::gpu::intel::TritonIntelGPUDialect::getFastMathAttrName());
     RewritePatternSet patterns(context);
-    patterns.add<FoldNarrowFpToFpIntermediate>(context, fastMath);
+    patterns.add<FoldNarrowFpToFpIntermediate>(context);
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
   }
