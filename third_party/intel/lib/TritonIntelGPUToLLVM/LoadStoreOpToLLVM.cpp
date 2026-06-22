@@ -704,6 +704,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     int stride = getStride(ptr, dim);
     // If the stride is 0, we assume a minimum pitch of 64 bytes.
     constexpr int MIN_PITCH = 64;
+
     if (stride == 0)
       return b.i32_val(MIN_PITCH);
 
@@ -2877,7 +2878,24 @@ struct StoreOpToBlockIOConversion
     } else {
       // Always get the stride of the row dim since block store only supports
       // row major matrix.
-      pitch = getPitch(rewriter, ptr, elemSizeInBits, rowDim);
+      int64_t rowStride = getStride(ptr, rowDim);
+      if (rowStride == 0) {
+        // stride=0 along rowDim means each row is mapped to the same location.
+        // It must be a store height=1 tile. We can set the pitch to an
+        // arbitrary value since the row offset is always 0, as long as we can
+        // satisfy the HW address payload restriction for the given tile width
+        // and element size. To keep it simple, we can just set the pitch to
+        // surface width * element size to avoid issue pitch < base_width caused
+        // by the compensation of the base address alignment.
+        if (tileHeight != 1)
+          return failure();
+        constexpr int64_t MIN_PITCH = 64;
+        int64_t surfaceWidth = tensorType.getDimSize(colDim);
+        pitch =
+            b.i32_val(std::max(MIN_PITCH, surfaceWidth * elemSizeInBits / 8));
+      } else {
+        pitch = getPitch(rewriter, ptr, elemSizeInBits, rowDim);
+      }
     }
     if (!pitch)
       return failure();
