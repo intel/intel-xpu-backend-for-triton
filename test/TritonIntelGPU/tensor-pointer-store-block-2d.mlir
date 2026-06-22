@@ -223,6 +223,8 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
   // ALL-LAYOUT: %[[PITCH:.*]] = llvm.mlir.constant(128 : i32) : i32
   // ALL-LAYOUT: triton_gen.2Dblockstore {{.*}}, %[[PITCH]], {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 1, v_blocks = 1, cache_control = Default}
   tt.func public @broadcast_row_major_pointer_store(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+    // COM: start=20 gives a non-zero column offset so alignment compensation
+    // COM: widens base_width, while end=84 keeps the broadcasted row width at 64.
     %0 = tt.make_range {end = 84 : i32, start = 20 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
     %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #blocked>
     %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1x64x!tt.ptr<f16>, #blocked>
