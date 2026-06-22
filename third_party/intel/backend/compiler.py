@@ -4,7 +4,7 @@ from triton.backends.intel.driver import compile_module_from_src
 from triton.backends.intel.track import track
 from triton.backends.intel.extension_utils import query_device_extensions
 from triton import knobs
-from triton.runtime.errors import IntelGPUError
+from triton.runtime.errors import IntelGPUError, OutOfResources
 
 from dataclasses import dataclass
 import functools
@@ -75,6 +75,12 @@ class XPUOptions:
 
 
 SPILL_SIZE_RE = re.compile(r'spill_size\s*[:=]\s*(\d+)')
+PTSS_OVERFLOW_RE = re.compile(
+    r'total scratch space.*?(\d+)\s*bytes.*?max permitted PTSS\s*(\d+)\s*bytes'
+    r'|scratch space exceeds.*?limit'
+    r'|per.thread scratch space.*?exceed',
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def extract_spill_size_from_zebin(file):
@@ -566,13 +572,27 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                     try:
                         subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
                         retry_succeeded = True
-                    except subprocess.CalledProcessError:
-                        # Retry also failed — raise the original error below.
-                        pass
+                    except subprocess.CalledProcessError as retry_e:
+                        retry_output = retry_e.output if hasattr(retry_e, 'output') else ''
+                        ptss_match = PTSS_OVERFLOW_RE.search(retry_output)
+                        if ptss_match:
+                            required = int(ptss_match.group(1)) if ptss_match.group(1) else 0
+                            limit = int(ptss_match.group(2)) if ptss_match.group(2) else 0
+                            raise OutOfResources(required, limit, "per-thread scratch space (PTSS)") from retry_e
 
                 if not retry_succeeded:
                     if isinstance(e, IntelGPUError):
-                        raise
+                        raise OutOfResources(
+                            0, 0,
+                            "per-thread scratch space (PTSS). "
+                            "The kernel's register spill exceeds hardware limits"
+                        ) from e
+                    output = e.output if hasattr(e, 'output') else ''
+                    ptss_match = PTSS_OVERFLOW_RE.search(output)
+                    if ptss_match:
+                        required = int(ptss_match.group(1)) if ptss_match.group(1) else 0
+                        limit = int(ptss_match.group(2)) if ptss_match.group(2) else 0
+                        raise OutOfResources(required, limit, "per-thread scratch space (PTSS)") from e
                     if e.returncode == 255:
                         error = 'Internal Triton ZEBIN codegen error'
                     elif e.returncode == 128 + signal.SIGSEGV:
