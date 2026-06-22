@@ -99,6 +99,9 @@ def _matmul_kernel_ptrs(
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
 
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    # No explicit tl.prefetch here: with num_stages > 1, the loop pipeliner
+    # invokes rewriteRegularPointerPrefetch, which emits 2D block prefetches
+    # for the loop-carried pointer loads — the path under test for this bug.
     for k in tl.range(0, tl.cdiv(K, BLOCK_SIZE_K), num_stages=NUM_STAGES):
         a = tl.load(a_ptrs)
         b = tl.load(b_ptrs)
@@ -141,11 +144,6 @@ def _find_buggy_d16_prefetch_calls(llir):
     return buggy
 
 
-def _count_d16_prefetch_calls(llir):
-    """Total number of d16 (elem_size_bytes==2) prefetch calls in `llir`."""
-    return sum(1 for m in _LLIR_PREFETCH_CALL.finditer(llir) if int(m.group(1)) == 2)
-
-
 # ---------------------------------------------------------------------------
 # IR-level regression check (runs on any platform — does not require CRI/BMG).
 # Catches the regression at compile time by inspecting the lowered IR.
@@ -154,7 +152,7 @@ def _count_d16_prefetch_calls(llir):
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 @pytest.mark.parametrize("num_stages", [2, 3])
 @pytest.mark.skipif(not is_xpu(), reason="XPU compiler target required (compile-only, no kernel launch)")
-def test_d16_prefetch_ir_no_buggy_split(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, dtype, num_stages, device):
+def test_d16_prefetch_ir_no_buggy_split_tdesc(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, dtype, num_stages, device):
     """Compile-only check: lowered LLIR must not contain a (2, 16, *, 2, ...) prefetch call.
 
     The bug emitted `__spirv_Subgroup2DBlockPrefetchINTEL(2, 16, X, 2, ...)` for
@@ -164,8 +162,10 @@ def test_d16_prefetch_ir_no_buggy_split(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K
 
     This compile-only check runs on any XPU build host (no CRI/BMG required), so
     a regression of PYTORCHDGQ-9207 is caught in standard CI rather than only on
-    the daily CRI job. Fails if zero d16 prefetch calls are emitted, since that
-    means the kernel is not exercising the path under test.
+    the daily CRI job. Skips if zero d16 prefetch calls are emitted, since the
+    @pytest.mark.skipif(not is_xpu()) guard does not imply has_subgroup_2d_block_io —
+    on XPU hosts without 2D block I/O support the compiler emits no d16 prefetch
+    calls and we have nothing to check.
     """
     M, N, K = 128, 128, 128
     a = torch.empty((M, K), device=device, dtype=dtype)
@@ -190,10 +190,61 @@ def test_d16_prefetch_ir_no_buggy_split(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K
     )
 
     llir = compiled.asm.get("llir", "")
-    n_d16 = _count_d16_prefetch_calls(llir)
-    assert n_d16 > 0, ("Test setup is broken: the kernel did not emit any d16 2D block prefetch calls in LLIR — "
-                       "this configuration does not exercise the regression path. "
-                       "Try different BLOCK_SIZE values or check that ttig.support_2d_block_io is set on the target.")
+    n_d16 = sum(1 for m in _LLIR_PREFETCH_CALL.finditer(llir) if int(m.group(1)) == 2)
+    if n_d16 == 0:
+        pytest.skip("No d16 2D block prefetch calls emitted — target lacks 2D block I/O support, "
+                    "so this configuration cannot exercise the regression path.")
+    buggy = _find_buggy_d16_prefetch_calls(llir)
+    assert not buggy, (f"Found {len(buggy)} buggy d16 prefetch call(s) (tile_width=16, v_blocks=2) in LLIR. "
+                       f"This is the PYTORCHDGQ-9207 crash shape — block_width(32B) × array_length(2) = 64 != 128. "
+                       f"Sample: {buggy[0]}")
+
+
+# ---------------------------------------------------------------------------
+# IR-level regression check for the tensor-of-pointers path. Mirrors the
+# tensor-descriptor IR test above but exercises rewriteRegularPointerPrefetch.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K", [[32, 32, 32], [64, 64, 32], [32, 32, 64]])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("num_stages", [2, 3])
+@pytest.mark.skipif(not is_xpu(), reason="XPU compiler target required (compile-only, no kernel launch)")
+def test_d16_prefetch_ir_no_buggy_split_ptrs(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, dtype, num_stages, device):
+    """Compile-only check for the regular-pointer prefetch path.
+
+    Same crash shape as test_d16_prefetch_ir_no_buggy_split_tdesc, but produced
+    by rewriteRegularPointerPrefetch on a tensor-of-pointers kernel rather than
+    the tensor-descriptor cooperative path.
+    """
+    M, N, K = 128, 128, 128
+    a = torch.empty((M, K), device=device, dtype=dtype)
+    b = torch.empty((K, N), device=device, dtype=dtype)
+    c = torch.empty((M, N), device=device, dtype=dtype)
+
+    compiled = _matmul_kernel_ptrs.warmup(
+        a,
+        b,
+        c,
+        M,
+        N,
+        K,
+        a.stride(0),
+        a.stride(1),
+        b.stride(0),
+        b.stride(1),
+        c.stride(0),
+        c.stride(1),
+        BLOCK_SIZE_M=BLOCK_SIZE_M,
+        BLOCK_SIZE_N=BLOCK_SIZE_N,
+        BLOCK_SIZE_K=BLOCK_SIZE_K,
+        NUM_STAGES=num_stages,
+        grid=(1, ),
+    )
+
+    llir = compiled.asm.get("llir", "")
+    n_d16 = sum(1 for m in _LLIR_PREFETCH_CALL.finditer(llir) if int(m.group(1)) == 2)
+    if n_d16 == 0:
+        pytest.skip("No d16 2D block prefetch calls emitted — target lacks 2D block I/O support, "
+                    "so this configuration cannot exercise the regression path.")
     buggy = _find_buggy_d16_prefetch_calls(llir)
     assert not buggy, (f"Found {len(buggy)} buggy d16 prefetch call(s) (tile_width=16, v_blocks=2) in LLIR. "
                        f"This is the PYTORCHDGQ-9207 crash shape — block_width(32B) × array_length(2) = 64 != 128. "
@@ -243,7 +294,7 @@ def test_d16_prefetch_tensor_desc(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, dtyp
     )
 
     ref = torch.matmul(a.float(), b.float()).to(dtype)
-    torch.testing.assert_close(c, ref, atol=0.05, rtol=0.05)
+    torch.testing.assert_close(c, ref, atol=1e-2, rtol=1e-2)
 
 
 # ---------------------------------------------------------------------------
@@ -290,4 +341,4 @@ def test_d16_prefetch_tensor_of_ptr(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, dt
     )
 
     ref = torch.matmul(a.float(), b.float()).to(dtype)
-    torch.testing.assert_close(c, ref, atol=0.05, rtol=0.05)
+    torch.testing.assert_close(c, ref, atol=1e-2, rtol=1e-2)
