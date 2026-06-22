@@ -27,7 +27,8 @@ namespace {
 constexpr unsigned K_PRESSURE_THRESHOLD_BYTES = 4096;
 
 /// Estimate per-thread register pressure from a dot with BlockedEncoding.
-/// Returns the approximate bytes each thread needs live for the K-loop.
+/// FMA lowering fully unrolls K, so each thread must hold all A and B values
+/// for its repetitions simultaneously. Returns approximate live bytes.
 static unsigned estimatePerThreadBytes(tt::DotOp dotOp) {
   auto aType = cast<RankedTensorType>(dotOp.getA().getType());
   auto bType = cast<RankedTensorType>(dotOp.getB().getType());
@@ -39,17 +40,37 @@ static unsigned estimatePerThreadBytes(tt::DotOp dotOp) {
 
   unsigned rank = aType.getRank();
   unsigned kDimA = rank - 1;
-  unsigned kDimB = rank - 2;
 
+  int64_t M = resultType.getShape()[rank - 2];
+  int64_t N = resultType.getShape()[rank - 1];
   int64_t K = aType.getShape()[kDimA];
   unsigned elemBits = aType.getElementTypeBitWidth();
   unsigned elemBytes = std::max(1u, elemBits / 8);
+  unsigned accBytes = resultType.getElementTypeBitWidth() / 8;
 
   auto sizePerThread = enc.getSizePerThread();
+  auto threadsPerWarp = enc.getThreadsPerWarp();
+  auto warpsPerCTA = enc.getWarpsPerCTA();
+
   unsigned mSpt = sizePerThread[rank - 2];
   unsigned nSpt = sizePerThread[rank - 1];
+  unsigned mTpw = threadsPerWarp[rank - 2];
+  unsigned nTpw = threadsPerWarp[rank - 1];
+  unsigned mWpc = warpsPerCTA[rank - 2];
+  unsigned nWpc = warpsPerCTA[rank - 1];
 
-  return (mSpt * K + K * nSpt) * elemBytes;
+  unsigned ctaTileM = mSpt * mTpw * mWpc;
+  unsigned ctaTileN = nSpt * nTpw * nWpc;
+  unsigned mReps = (ctaTileM > 0) ? M / ctaTileM : 1;
+  unsigned nReps = (ctaTileN > 0) ? N / ctaTileN : 1;
+
+  // Each thread holds: mReps*mSpt*K operand-A values + K*nReps*nSpt operand-B
+  // values + mReps*mSpt*nReps*nSpt accumulators
+  unsigned aBytes = mReps * mSpt * K * elemBytes;
+  unsigned bBytes = K * nReps * nSpt * elemBytes;
+  unsigned cBytes = mReps * mSpt * nReps * nSpt * accBytes;
+
+  return aBytes + bBytes + cBytes;
 }
 
 /// Select a K tile size that is compatible with the encoding.
