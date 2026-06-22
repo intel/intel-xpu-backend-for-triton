@@ -2,6 +2,7 @@ add_triton_library(TritonIntelGPUTransforms
   AccelerateMatmul.cpp
   AnnotateCacheControl.cpp
   BlockIOUtils.cpp
+  DecomposeFMADots.cpp
   DecomposeScaledBlocked.cpp
   FoldFpToFp.cpp
   HoistLayoutConversions.cpp

@@ -54,6 +54,26 @@ def TritonIntelGPUFoldFpToFp
   let dependentDialects = ["mlir::triton::TritonDialect"];
 }
 
+def TritonIntelGPUDecomposeFMADots
+    : Pass<"tritonintelgpu-decompose-fma-dots", "mlir::ModuleOp"> {
+  let summary = "Decompose large blocked-encoding dot ops into K-tiled loops";
+
+  let description = [{
+    On non-DPAS Intel GPUs, large tt.dot operations with BlockedEncoding and
+    large K dimensions cause per-thread scratch space (PTSS) overflow during
+    FMA lowering. This pass decomposes such dots into scf.for loops that
+    accumulate partial products with smaller K tiles, reducing per-iteration
+    register pressure.
+  }];
+
+  let dependentDialects = [
+    "mlir::arith::ArithDialect",
+    "mlir::scf::SCFDialect",
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::TritonGPUDialect"
+  ];
+}
+
 def TritonIntelGPUOptimizeDotOperands
     : Pass<"tritonintelgpu-optimize-dot-operands", "mlir::ModuleOp"> {
   let summary = "Intel optimize dot operands";
