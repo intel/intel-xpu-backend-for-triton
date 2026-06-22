@@ -155,6 +155,14 @@ def TritonIntelGPU_Dialect : Dialect {
     static constexpr llvm::StringRef getDescPaddingAttrName() {
       return "ttig.desc_padding";
     }
+
+    /// Get the name of the attribute used to indicate that fast-math
+    /// semantics are enabled, allowing numerically lossy transformations
+    /// (e.g. dropping a narrow fp_to_fp intermediate). Set from the
+    /// `TRITON_INTEL_FAST_MATH` environment variable.
+    static constexpr llvm::StringRef getFastMathAttrName() {
+      return "ttig.fast_math";
+    }
   }];
 
   let useDefaultAttributePrinterParser = 1;

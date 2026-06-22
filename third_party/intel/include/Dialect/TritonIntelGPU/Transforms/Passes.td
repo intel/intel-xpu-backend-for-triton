@@ -45,14 +45,13 @@ def TritonIntelGPUFoldFpToFp
       * Inner cast `A -> B` is lossy (a real downcast, e.g. user-inserted
         `f32 -> f8 -> f16`). Dropping `B` changes the numerical result, so the
         fold runs only under fast-math.
+
+    Fast-math is read from the `ttig.fast_math` module attribute (set from the
+    `TRITON_INTEL_FAST_MATH` environment variable by the annotate-module pass),
+    not a pass option.
   }];
 
   let dependentDialects = ["mlir::triton::TritonDialect"];
-
-  let options = [
-    Option<"fastMath", "fast-math", "bool", /*default*/"false",
-           "Enable lossy fold (drop user-inserted narrow intermediates)">,
-  ];
 }
 
 def TritonIntelGPUOptimizeDotOperands

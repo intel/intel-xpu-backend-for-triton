@@ -1,3 +1,4 @@
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 
 #include "mlir/IR/PatternMatch.h"
@@ -103,6 +104,10 @@ public:
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
+    // Fast-math (set from TRITON_INTEL_FAST_MATH via the annotate-module pass)
+    // enables the numerically lossy fold of a narrow downcast intermediate.
+    bool fastMath = mod->hasAttr(
+        triton::gpu::intel::TritonIntelGPUDialect::getFastMathAttrName());
     RewritePatternSet patterns(context);
     patterns.add<FoldNarrowFpToFpIntermediate>(context, fastMath);
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())

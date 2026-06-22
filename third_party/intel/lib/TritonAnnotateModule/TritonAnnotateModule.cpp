@@ -104,6 +104,15 @@ struct TritonAnnotateModule
       mod->setAttr(ttgi::TritonIntelGPUDialect::getIsLTSAttrName(),
                    builder.getUnitAttr());
 
+    // Fast-math is opt-in via TRITON_INTEL_FAST_MATH=1. When set, numerically
+    // lossy transformations (e.g. dropping a narrow fp_to_fp intermediate) are
+    // allowed. Passes read this via getFastMathAttrName().
+    if (tt::tools::isEnvValueBool(
+            tt::tools::getStrEnv("TRITON_INTEL_FAST_MATH"))
+            .value_or(false))
+      mod->setAttr(ttgi::TritonIntelGPUDialect::getFastMathAttrName(),
+                   builder.getUnitAttr());
+
     setThreadsPerWarp(mod);
   }
 
