@@ -572,12 +572,20 @@ public:
   //   - N < M (with i1 data type)
   //   - [0..END] < splat(N)
   //   - splat(N) < [0..END]
+  //   - arith.andi of valid sub-masks (compound boundary checks)
   virtual bool isValidMask(scf::ForOp &forOp, Value mask, Operation *op) const {
     Value finalVal = tt::intel::getFinalValue(mask);
     assert(finalVal && "Expecting a valid mask");
 
-    if (!finalVal.getDefiningOp() ||
-        !isa<arith::CmpIOp>(finalVal.getDefiningOp()))
+    if (!finalVal.getDefiningOp())
+      return false;
+
+    // Handle compound andi masks by recursing into both operands.
+    if (auto andOp = dyn_cast<arith::AndIOp>(finalVal.getDefiningOp()))
+      return isValidMask(forOp, andOp.getLhs(), op) &&
+             isValidMask(forOp, andOp.getRhs(), op);
+
+    if (!isa<arith::CmpIOp>(finalVal.getDefiningOp()))
       return false;
 
     auto cmpOp = cast<arith::CmpIOp>(finalVal.getDefiningOp());
@@ -632,6 +640,14 @@ public:
     OpBuilder builder(forOp);
     Location loc = forOp.getLoc();
     Value finalMask = tt::intel::getFinalValue(mask);
+
+    // Handle compound andi: AND the versioning conditions of both operands.
+    if (auto andOp = dyn_cast<arith::AndIOp>(finalMask.getDefiningOp())) {
+      Value lhsCond = getVersioningCond(forOp, andOp.getLhs());
+      Value rhsCond = getVersioningCond(forOp, andOp.getRhs());
+      return builder.createOrFold<arith::AndIOp>(loc, lhsCond, rhsCond);
+    }
+
     auto cmpOp = cast<arith::CmpIOp>(finalMask.getDefiningOp());
     arith::CmpIPredicate pred = cmpOp.getPredicate();
     Value lhsVal = tt::intel::getFinalValue(cmpOp.getLhs());
