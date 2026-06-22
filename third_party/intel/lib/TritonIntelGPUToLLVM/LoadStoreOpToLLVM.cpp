@@ -2253,10 +2253,28 @@ struct DescriptorLoadOpConversion
         mappedStrides[i] = permStrides[i];
         mappedOffsets[i] = permOffsets[i];
       }
+      // The shapes/offsets above have had their inner two dimensions swapped,
+      // so the dimension indices in perElementDims/blockLevelDims (which were
+      // built in descriptor space) must be permuted to match the new order.
+      // Outer (batch) dimensions are unaffected; only the innermost two swap.
+      auto permDimIdx = [&](int32_t dim) -> int32_t {
+        int32_t last = static_cast<int32_t>(descRank) - 1;
+        int32_t secondLast = last - 1;
+        if (dim == secondLast)
+          return last;
+        if (dim == last)
+          return secondLast;
+        return dim;
+      };
+      SmallVector<int32_t> permPerElementDims, permBlockLevelDims;
+      for (int32_t d : perElementDims)
+        permPerElementDims.push_back(permDimIdx(d));
+      for (int32_t d : blockLevelDims)
+        permBlockLevelDims.push_back(permDimIdx(d));
       std::tie(ptrElems, maskElems, otherElems) = computeGatherScatterOperands(
           loc, desc.base, mappedOffsets, mappedShapes, mappedStrides,
-          resultType, valueElemTy, rewriter, perElementDims, blockLevelDims,
-          padding);
+          resultType, valueElemTy, rewriter, permPerElementDims,
+          permBlockLevelDims, padding);
     } else {
       std::tie(ptrElems, maskElems, otherElems) =
           convertTensorDescriptorToTensorOfPtr(
