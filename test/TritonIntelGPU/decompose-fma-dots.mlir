@@ -80,3 +80,46 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32,
     tt.return %result : tensor<64x128xf32, #blocked4>
   }
 }
+
+// -----
+
+// Test 4: f32 dot with inputPrecision = ieee (= 2) on FMA hardware.
+// f32 ieee lowers via FMA the same way f16 does, and the doubled element
+// size means smaller shapes already trip the pressure threshold.
+// Shape 64x64x128, spt=[1,1], tpw=[2,16], wpc=[4,1]:
+//   ctaTileM = 1*2*4 = 8, ctaTileN = 1*16*1 = 16
+//   mReps = 64/8 = 8, nReps = 64/16 = 4
+//   aBytes = 8*1*128*4 = 4096
+//   bBytes = 128*4*1*4 = 2048
+//   cBytes = 8*1*4*1*4 = 128
+//   total = 6272 > 4096  -> decompose
+//   perCTAK = 1*16*1 = 16, selectKTile(128) -> 32
+#blocked6 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked7 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [1, 4], order = [0, 1]}>
+#dot0d = #ttg.dot_op<{opIdx = 0, parent = #blocked6}>
+#dot1d = #ttg.dot_op<{opIdx = 1, parent = #blocked6}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @f32_ieee_dot_decomposed
+  // CHECK: scf.for
+  // CHECK:   tt.dot
+  // CHECK-NOT: inputPrecision = tf32
+  // CHECK-NOT: inputPrecision = tf32x3
+  // CHECK:   scf.yield
+  tt.func public @f32_ieee_dot_decomposed(
+      %base_a: !tt.ptr<f32>,
+      %base_b: !tt.ptr<f32>) -> tensor<64x64xf32, #blocked6> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #blocked6>
+    %a_splat = tt.splat %base_a : !tt.ptr<f32> -> tensor<64x128x!tt.ptr<f32>, #blocked6>
+    %c0a = arith.constant dense<0> : tensor<64x128xi32, #blocked6>
+    %a_ptr = tt.addptr %a_splat, %c0a : tensor<64x128x!tt.ptr<f32>, #blocked6>, tensor<64x128xi32, #blocked6>
+    %a = tt.load %a_ptr : tensor<64x128x!tt.ptr<f32>, #blocked6>
+    %a_cvt = ttg.convert_layout %a : tensor<64x128xf32, #blocked6> -> tensor<64x128xf32, #dot0d>
+    %b_splat = tt.splat %base_b : !tt.ptr<f32> -> tensor<128x64x!tt.ptr<f32>, #blocked7>
+    %c0b = arith.constant dense<0> : tensor<128x64xi32, #blocked7>
+    %b_ptr = tt.addptr %b_splat, %c0b : tensor<128x64x!tt.ptr<f32>, #blocked7>, tensor<128x64xi32, #blocked7>
+    %b = tt.load %b_ptr : tensor<128x64x!tt.ptr<f32>, #blocked7>
+    %b_cvt = ttg.convert_layout %b : tensor<128x64xf32, #blocked7> -> tensor<128x64xf32, #dot1d>
+    %result = tt.dot %a_cvt, %b_cvt, %cst {inputPrecision = 2 : i32, maxNumImpreciseAcc = 0 : i32} : tensor<64x128xf32, #dot0d> * tensor<128x64xf32, #dot1d> -> tensor<64x64xf32, #blocked6>
+    tt.return %result : tensor<64x64xf32, #blocked6>
+  }
+}
