@@ -47,12 +47,21 @@ def _has_dpas() -> bool:
 
 @triton.jit
 def _matmul_kernel(
-    a_ptr, b_ptr, c_ptr,
-    M, N, K,
-    stride_am, stride_ak,
-    stride_bk, stride_bn,
-    stride_cm, stride_cn,
-    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
+    a_ptr,
+    b_ptr,
+    c_ptr,
+    M,
+    N,
+    K,
+    stride_am,
+    stride_ak,
+    stride_bk,
+    stride_bn,
+    stride_cm,
+    stride_cn,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_K: tl.constexpr,
 ):
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
@@ -69,8 +78,7 @@ def _matmul_kernel(
         a_ptrs += BLOCK_K * stride_ak
         b_ptrs += BLOCK_K * stride_bk
     c_ptrs = c_ptr + (offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn)
-    tl.store(c_ptrs, acc.to(tl.float16),
-             mask=(offs_m[:, None] < M) & (offs_n[None, :] < N))
+    tl.store(c_ptrs, acc.to(tl.float16), mask=(offs_m[:, None] < M) & (offs_n[None, :] < N))
 
 
 # A tile config known to spill past the 256 KB ARL-S PTSS limit when
@@ -84,11 +92,21 @@ def _launch_overflowing_kernel():
     c = torch.zeros((_OVERFLOW_M, _OVERFLOW_N), device='xpu', dtype=torch.float16)
     grid = (1, 1)
     _matmul_kernel[grid](
-        a, b, c, _OVERFLOW_M, _OVERFLOW_N, _OVERFLOW_K,
-        a.stride(0), a.stride(1),
-        b.stride(0), b.stride(1),
-        c.stride(0), c.stride(1),
-        BLOCK_M=_OVERFLOW_M, BLOCK_N=_OVERFLOW_N, BLOCK_K=_OVERFLOW_K,
+        a,
+        b,
+        c,
+        _OVERFLOW_M,
+        _OVERFLOW_N,
+        _OVERFLOW_K,
+        a.stride(0),
+        a.stride(1),
+        b.stride(0),
+        b.stride(1),
+        c.stride(0),
+        c.stride(1),
+        BLOCK_M=_OVERFLOW_M,
+        BLOCK_N=_OVERFLOW_N,
+        BLOCK_K=_OVERFLOW_K,
         num_warps=4,
     )
     torch.xpu.synchronize()
@@ -116,8 +134,7 @@ def test_ptss_overflow_raises_out_of_resources(generate_native_code, monkeypatch
     surfaces a different exception, autotune sweeps that include this tile
     config will fail hard instead of skipping it.
     """
-    monkeypatch.setenv("TRITON_XPU_GEN_NATIVE_CODE",
-                       "1" if generate_native_code else "0")
+    monkeypatch.setenv("TRITON_XPU_GEN_NATIVE_CODE", "1" if generate_native_code else "0")
     # Force fresh compilation so the path under test actually runs.
     cache_dir = os.path.expanduser("~/.triton/cache")
     if os.path.isdir(cache_dir):
@@ -129,5 +146,4 @@ def test_ptss_overflow_raises_out_of_resources(generate_native_code, monkeypatch
 
     msg = str(excinfo.value)
     assert "scratch" in msg.lower() or "ptss" in msg.lower(), (
-        f"OutOfResources should mention scratch/PTSS; got: {msg!r}"
-    )
+        f"OutOfResources should mention scratch/PTSS; got: {msg!r}")

@@ -583,10 +583,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                 if not retry_succeeded:
                     if isinstance(e, IntelGPUError):
                         raise OutOfResources(
-                            0, 0,
-                            "per-thread scratch space (PTSS). "
-                            "The kernel's register spill exceeds hardware limits"
-                        ) from e
+                            0, 0, "per-thread scratch space (PTSS). "
+                            "The kernel's register spill exceeds hardware limits") from e
                     output = e.output if hasattr(e, 'output') else ''
                     ptss_match = PTSS_OVERFLOW_RE.search(output)
                     if ptss_match:
