@@ -5,6 +5,13 @@ space (256 KB on ARL-S) and verifies that the failure surfaces as
 `triton.runtime.errors.OutOfResources` rather than an opaque
 `IntelGPUError` / `ZE_RESULT_ERROR_MODULE_BUILD_FAILURE`.
 
+The `OutOfResources` class specifically (not just any failure) matters
+because it's the exception class `triton.runtime.autotuner.Autotuner`
+catches and treats as "skip this config." Surfacing the failure as
+`IntelGPUError` instead would cause autotune sweeps that include a
+PTSS-overflowing tile config to fail hard rather than skip it. This is
+the user-visible behavior change this PR enables.
+
 Both compilation paths are exercised:
   * `generate_native_code = True`  -> AOT ocloc compile (compiler.py path)
   * `generate_native_code = False` -> JIT online compile via Level Zero

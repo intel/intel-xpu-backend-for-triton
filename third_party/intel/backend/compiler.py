@@ -573,24 +573,23 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                         subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
                         retry_succeeded = True
                     except subprocess.CalledProcessError as retry_e:
-                        retry_output = retry_e.output if hasattr(retry_e, 'output') else ''
-                        ptss_match = PTSS_OVERFLOW_RE.search(retry_output)
-                        if ptss_match:
+                        if ptss_match := PTSS_OVERFLOW_RE.search(retry_e.output or ''):
                             required = int(ptss_match.group(1)) if ptss_match.group(1) else 0
                             limit = int(ptss_match.group(2)) if ptss_match.group(2) else 0
                             raise OutOfResources(required, limit, "per-thread scratch space (PTSS)") from retry_e
 
                 if not retry_succeeded:
-                    if isinstance(e, IntelGPUError):
-                        raise OutOfResources(
-                            0, 0, "per-thread scratch space (PTSS). "
-                            "The kernel's register spill exceeds hardware limits") from e
-                    output = e.output if hasattr(e, 'output') else ''
-                    ptss_match = PTSS_OVERFLOW_RE.search(output)
-                    if ptss_match:
+                    # Only reclassify as OutOfResources when ocloc's stderr explicitly
+                    # reports a PTSS overflow. Other IntelGPUErrors (e.g. degenerate
+                    # zebin from extract_spill_size_from_zebin, ocloc SIGSEGV) keep
+                    # their original error class so the user sees the real cause.
+                    output = getattr(e, 'output', '') or ''
+                    if ptss_match := PTSS_OVERFLOW_RE.search(output):
                         required = int(ptss_match.group(1)) if ptss_match.group(1) else 0
                         limit = int(ptss_match.group(2)) if ptss_match.group(2) else 0
                         raise OutOfResources(required, limit, "per-thread scratch space (PTSS)") from e
+                    if isinstance(e, IntelGPUError):
+                        raise
                     if e.returncode == 255:
                         error = 'Internal Triton ZEBIN codegen error'
                     elif e.returncode == 128 + signal.SIGSEGV:
