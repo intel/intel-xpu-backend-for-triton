@@ -56,6 +56,10 @@ static bool isSingleValue(Value value) {
 }
 
 bool isDivisible(Value value, unsigned divisor) {
+  // Every integer is divisible by 1, regardless of how `value` is defined.
+  if (divisor == 1)
+    return true;
+
   // Case 1: Value is defined by a constant operation
   if (auto constantOp = value.getDefiningOp<arith::ConstantOp>()) {
     auto integerAttr = dyn_cast<IntegerAttr>(constantOp.getValue());
