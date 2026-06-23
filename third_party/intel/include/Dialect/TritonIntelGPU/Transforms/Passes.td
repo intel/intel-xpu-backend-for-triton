@@ -497,4 +497,20 @@ def TritonIntelGPULoopDistribute
   ];
 }
 
+def TritonIntelGPURewriteDescriptorGatherScatter
+    : Pass<"tritonintelgpu-rewrite-descriptor-gather-scatter", "mlir::ModuleOp"> {
+  let summary = "Rewrite tt descriptor gather/scatter to ttig descriptor gather/scatter";
+
+  let description = [{
+    Rewrites `tt.descriptor_gather` and `tt.descriptor_scatter` operations to
+    `ttig.descriptor_gather` and `ttig.descriptor_scatter` operations.
+    This pass is intended to run before descriptor-to-pointer rewriting.
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::intel::TritonIntelGPUDialect"
+  ];
+}
+
 #endif // TRITON_INTEL_GPU_PASSES
