@@ -1,7 +1,0 @@
-# https://github.com/intel/intel-xpu-backend-for-triton/issues/5991
-python/test/unit/test_debug.py::test_sanitize_int_add_overflow[-2147483648-0-int32-int32-True-False]
-python/test/unit/test_debug.py::test_sanitize_int_add_overflow[-2147483648-2-int32-int32-True-False]
-python/test/unit/test_debug.py::test_sanitize_int_add_overflow[0--1-int32-int32-True-False]
-python/test/unit/test_debug.py::test_sanitize_int_sub_overflow[-2147483648--1-int32-int32-True-False]
-python/test/unit/test_debug.py::test_sanitize_int_mul_overflow[1073741824-4-int32-int32-False-False]
-python/test/unit/test_debug.py::test_sanitize_int_sub_overflow[2147483647-1-int32-int32-True-False]

@@ -435,4 +435,71 @@ TEST_F(StrideInfoTest, SpatialSplatConstant) {
   EXPECT_EQ(info->getIVStride(forOp, 0), 0);
 }
 
+// Test 11: Symbolic stride channel. muli(make_range, splat(lda)) names `lda`
+// as the runtime stride source along the varying axis, while a constant
+// multiplier yields no symbolic source.
+TEST_F(StrideInfoTest, SymbolicStrideValueFromRuntimeScalar) {
+  ModuleOp module = buildModule();
+  func::FuncOp funcOp = buildFunc(module);
+
+  // Add a runtime i32 `lda` argument.
+  Block *block = &funcOp.getBody().front();
+  Type i32Ty = builder->getI32Type();
+  FunctionType newFuncType =
+      builder->getFunctionType({i32Ty}, funcOp.getFunctionType().getResults());
+  funcOp.setType(newFuncType);
+  BlockArgument lda = block->addArgument(i32Ty, builder->getUnknownLoc());
+
+  builder->setInsertionPointToStart(block);
+  Location loc = builder->getUnknownLoc();
+
+  // make_range : tensor<64xi32> (spatial stride 1 along dim 0)
+  auto encoding = makeBlocked({1}, {16}, {4}, {0});
+  auto rangeTy = RankedTensorType::get({64}, i32Ty, encoding);
+  auto rangeOp = MakeRangeOp::create(*builder, loc, rangeTy, 0, 64);
+
+  // splat(lda) : tensor<64xi32> and the product range * splat(lda).
+  auto ldaSplat = SplatOp::create(*builder, loc, rangeTy, lda);
+  auto mulOp = arith::MulIOp::create(*builder, loc, rangeOp, ldaSplat);
+
+  func::ReturnOp::create(*builder, loc);
+
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
+  ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+
+  StrideInfo *info = strideAnalysis.getStrideInfo(mulOp);
+  ASSERT_NE(info, nullptr);
+  // The constant stride is unknown (-1: runtime), but the symbolic source is
+  // exactly the `lda` argument.
+  EXPECT_EQ(info->getStride(0), -1);
+  EXPECT_EQ(info->getStrideValue(0), Value(lda));
+}
+
+// Test 12: A constant multiplier produces a known stride and NO symbolic
+// source (the constant path is preferred and getStrideValue stays null).
+TEST_F(StrideInfoTest, ConstantStrideHasNoSymbolicValue) {
+  ModuleOp module = buildModule();
+  func::FuncOp funcOp = buildFunc(module);
+  builder->setInsertionPointToStart(&funcOp.getBody().front());
+
+  Location loc = builder->getUnknownLoc();
+  Type i32Ty = builder->getI32Type();
+
+  auto encoding = makeBlocked({1}, {16}, {4}, {0});
+  auto rangeTy = RankedTensorType::get({64}, i32Ty, encoding);
+  auto rangeOp = MakeRangeOp::create(*builder, loc, rangeTy, 0, 64);
+  auto c128 = arith::ConstantOp::create(
+      *builder, loc,
+      SplatElementsAttr::get(rangeTy, builder->getI32IntegerAttr(128)));
+  auto mulOp = arith::MulIOp::create(*builder, loc, rangeOp, c128);
+
+  mlir::triton::intel::ModuleAxisInfoAnalysis axisInfo(module);
+  ModuleStrideAnalysis strideAnalysis(module, axisInfo);
+
+  StrideInfo *info = strideAnalysis.getStrideInfo(mulOp);
+  ASSERT_NE(info, nullptr);
+  EXPECT_EQ(info->getStride(0), 128);
+  EXPECT_EQ(info->getStrideValue(0), Value());
+}
+
 } // namespace

@@ -64,8 +64,8 @@ static int64_t getStride(tt::intel::ModuleStrideAnalysis &strideAnalysis,
   return -1;
 }
 
-/// Create a zero-valued splat for the given tensor type. Used when a mask is
-/// present but no explicit 'other' value was provided by the user.
+/// Zero splat for tensorTy, used as the default `other` for a masked load
+/// when the user did not pass one.
 static Value createZeroSplat(OpBuilder &builder, Location loc,
                              RankedTensorType tensorTy) {
   Type elemType = tensorTy.getElementType();
@@ -373,7 +373,10 @@ private:
     // descriptor (see `triton_gen.2Dblockload` verifier in TritonGENOps.cpp).
     constexpr int64_t MAX_PITCH = int64_t(1) << 24;
 
-    int64_t pitch;
+    // Pitch is either a compile-time constant or a runtime SSA value,
+    // never both.
+    int64_t pitch = -1;
+    Value pitchValue;
     bool isBroadcast = false;
     if (has1DReshapeStride) {
       auto strideAttr = op->getAttrOfType<IntegerAttr>(
@@ -382,14 +385,14 @@ private:
       isBroadcast = (stride == 0);
       pitch = stride * elemSizeInBits / 8;
     } else {
-      // Check if the load is a broadcast: stride=0 along rowDim means all
-      // rows are identical, so we only need height=1 with a dummy pitch.
+      // stride=0 along rowDim means every row is the same: treat it as a
+      // broadcast and load height=1 with a dummy pitch.
       int64_t rowStride = getStride(strideAnalysis, op.getPtr(), rowDim);
       isBroadcast = (rowStride == 0);
     }
 
     int64_t perWarpWidth;
-    if (isBroadcast || has1DReshapeStride)
+    if (has1DReshapeStride)
       perWarpWidth = tensorTy.getDimSize(surfaceWidthDim);
     else
       perWarpWidth = tileWidth * numPackedVals;
@@ -397,22 +400,55 @@ private:
 
     if (!has1DReshapeStride) {
       if (isBroadcast) {
-        pitch = std::max((int64_t)MIN_PITCH, baseWidthBytes);
+        // Use the full surface row width (in bytes) as the baseline pitch.
+        // Lowering may widen base_width (e.g. due to alignment), so ensure the
+        // dummy pitch doesn't end up smaller than base_width.
+        int64_t fullRowBytes =
+            tensorTy.getDimSize(surfaceWidthDim) * elemSizeInBits / 8;
+        pitch = std::max(MIN_PITCH, fullRowBytes);
       } else {
         int64_t pitchStride = getStride(strideAnalysis, op.getPtr(), pitchDim);
         if (pitchStride < 0) {
-          LDBG("Cannot compute constant stride for load: " << *op);
-          return;
+          // No constant stride: use the runtime stride that StrideAnalysis
+          // recovered. MaterializeBlockPointer already checked its 16-byte
+          // alignment.
+          Value lda = ttgi::getRuntimeStrideValue(strideAnalysis, op.getPtr(),
+                                                  pitchDim);
+          if (!lda) {
+            LDBG("No runtime stride source for load: " << *op);
+            return;
+          }
+          OpBuilder bld(op);
+          pitchValue = ttgi::materializePitchBytes(bld, op.getLoc(), lda,
+                                                   elemSizeInBits / 8);
+          if (!pitchValue) {
+            LDBG("Unsupported lda type: " << lda.getType());
+            return;
+          }
+        } else {
+          pitch = pitchStride * elemSizeInBits / 8;
         }
-        pitch = pitchStride * elemSizeInBits / 8;
       }
     }
 
-    // HW requires pitch >= 64 bytes, aligned to 16 bytes, and encoded in
-    // 24 bits.
-    if (pitch < MIN_PITCH || (pitch % 16) != 0 || pitch > MAX_PITCH) {
-      LDBG("Invalid pitch " << pitch << " for load: " << *op);
-      return;
+    // The HW needs pitch >= 64 bytes, a multiple of 16, and within 24 bits.
+    // For a constant pitch we just check it. For a runtime pitch we can't,
+    // so we rely on the checks already done: MaterializeBlockPointer proved
+    // the stride is 16-byte aligned, `lda >= K` keeps pitch >= the row width,
+    // and the row-width check below covers the 64-byte minimum.
+    if (!pitchValue) {
+      if (pitch < MIN_PITCH || (pitch % 16) != 0 || pitch > MAX_PITCH) {
+        LDBG("Invalid pitch " << pitch << " for load: " << *op);
+        return;
+      }
+    } else {
+      int64_t fullRowBytes =
+          tensorTy.getDimSize(surfaceWidthDim) * elemSizeInBits / 8;
+      if (fullRowBytes < MIN_PITCH) {
+        LDBG("Runtime pitch: full row width " << fullRowBytes << " < "
+                                              << MIN_PITCH << " bytes");
+        return;
+      }
     }
 
     // For broadcast loads, the LLVM lowering's row replication
@@ -453,11 +489,18 @@ private:
     if (mask && !other)
       other = createZeroSplat(builder, loc, tensorTy);
 
+    // Pitch is a single i32 operand: the runtime value when we have one, an
+    // arith.constant otherwise (the lowering and asserts treat both the same).
+    Value pitchOperand =
+        pitchValue
+            ? pitchValue
+            : arith::ConstantOp::create(
+                  builder, loc,
+                  builder.getI32IntegerAttr(static_cast<int32_t>(pitch)));
     auto blockPtrLoadOp = ttgi::Subgroup2DBlockLoadFromPtrOp::create(
-        builder, loc, op.getType(), op.getPtr(), mask, other,
+        builder, loc, op.getType(), op.getPtr(), pitchOperand, mask, other,
         builder.getI32IntegerAttr(baseWidthBytes),
         builder.getI32IntegerAttr(baseHeightRows),
-        builder.getI32IntegerAttr(pitch),
         ttgi::BlockIOModeAttr::get(builder.getContext(), memLayout));
 
     // Propagate attributes if present.

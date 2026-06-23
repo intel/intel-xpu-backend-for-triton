@@ -294,6 +294,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.common.add_inliner(pm)
         intel.passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         passes.common.add_cse(pm)
+        intel.passes.ttir.add_reassociate_dot_scale(pm, knobs.intel.fast_math)
         passes.ttir.add_triton_licm(pm)
         intel.passes.ttir.add_remove_masks(pm)
         intel.passes.ttir.add_stride_versioning(pm)
@@ -345,6 +346,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
         intel.passes.ttgpuir.add_materialize_block_pointer(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
+        intel.passes.ttgpuir.add_fold_fp_to_fp(pm)
         intel.passes.ttgpuir.add_optimize_dot_operands(pm)
         intel.passes.ttgpuir.add_hoist_layout_conversions(pm, opt.grf_mode)
         if os.environ.get("TRITON_INTEL_ANNOTATE_LATENCIES", "0") == "1":
@@ -465,7 +467,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         llvm.init_targets()
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
-        intel.set_fast_math(llvm_mod, metadata['enable_fp_fusion'])
+        intel.set_fast_math(llvm_mod, metadata['enable_fp_fusion'], knobs.intel.fast_math)
         if options.extern_libs:
             paths = [path for (name, path) in options.extern_libs]
             llvm.link_extern_libs(llvm_mod, paths)

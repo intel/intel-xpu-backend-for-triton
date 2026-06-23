@@ -49,7 +49,7 @@ jobs:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Install Python ${{ matrix.python }}
         uses: actions/setup-python@v6
@@ -143,10 +143,12 @@ jobs:
 
       - name: Report environment details
         run: |
+          reports_file="wheels/.env"
+
           TIMESTAMP=$(date '+%Y%m%d')
           echo "TIMESTAMP=$TIMESTAMP" >> "${GITHUB_ENV}"
 
-          cat <<EOF | tee wheels/.env
+          cat <<EOF | tee "$reports_file"
           TIMESTAMP=$TIMESTAMP
           GITHUB_RUN_ID=$GITHUB_RUN_ID
           GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER
@@ -163,6 +165,7 @@ jobs:
           VLLM_PIN=$VLLM_PIN
           VLLM_XPU_KERNELS_PIN=$VLLM_XPU_KERNELS_PIN
           EOF
+          ./scripts/capture-hw-details.sh | tee -a "$reports_file"
 
       - name: Upload PyTorch wheels to artifacts
         uses: actions/upload-artifact@v7

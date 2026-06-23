@@ -45,6 +45,10 @@ on:
         description: Use prebuilt vLLM XPU kernels wheel from the current branch (must have a successful nightly build)
         type: boolean
         default: false
+  pull_request:
+    branches:
+      - main
+    types: [labeled]
 
   schedule:
     - cron: "0 8 * * *"
@@ -61,6 +65,7 @@ env:
 jobs:
   build:
     name: vLLM benchmarks
+    if: github.event_name != 'pull_request' || github.event.label.name == 'run-benchmarks'
     runs-on:
       - linux
       - ${{ inputs.runner_label || 'max1550' }}
@@ -76,7 +81,7 @@ jobs:
           EOF
 
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Override vLLM pin
         if: ${{ inputs.vllm_pin }}
@@ -231,7 +236,7 @@ jobs:
             --benchmark moe-fp8-benchmark \
             --param_cols="num_experts,max_tokens_per_expert,K,N"
 
-      - name: Run vllm fused moe
+      - name: Run vllm fused moe bf16
         if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
         run: |
           source ./scripts/capture-hw-details.sh

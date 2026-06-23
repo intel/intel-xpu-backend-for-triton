@@ -11,12 +11,16 @@ batched MoE implementations using vLLM kernels.
 
 """
 import os
+import sys
 from typing import Optional
 
 import torch
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
+
+# Make vLLM's `tests/` package importable from its source checkout at <repo>/vllm/.
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "vllm")))
 
 from vllm.model_executor.layers.fused_moe.experts.fused_batched_moe import invoke_moe_batched_triton_kernel
 
