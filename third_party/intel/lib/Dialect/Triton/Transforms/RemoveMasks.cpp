@@ -755,12 +755,12 @@ private:
 
     // One operand should be a splat (the offset), the other should contain
     // a make_range (possibly through extsi).
-    auto hasSplat = [](Value v) { return !v.getDefiningOp<tt::SplatOp>(); };
+    auto hasSplat = [](Value v) { return v.getDefiningOp<tt::SplatOp>(); };
     auto hasMakeRange = [](Value v) {
       // Peel extsi.
       if (auto extOp = v.getDefiningOp<arith::ExtSIOp>())
         v = extOp.getIn();
-      return !v.getDefiningOp<tt::MakeRangeOp>();
+      return v.getDefiningOp<tt::MakeRangeOp>();
     };
 
     return (hasSplat(addOp.getLhs()) && hasMakeRange(addOp.getRhs())) ||
