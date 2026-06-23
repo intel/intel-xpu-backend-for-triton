@@ -6,7 +6,7 @@
 
 // COM: Test case: f16 blocked prefetch, 128x64 tensor, 4 warps.
 // COM: With 128x64xf16 and 4 warps (256B prefetch support enabled):
-// COM:   tileHeight=32, tileWidth=32 -> vBlocks=2, tile_width=16
+// COM:   tileHeight=32, tileWidth=32 -> vBlocks=1, tile_width=32
 // COM:   warpsM=2, warpsN=2
 // COM:   numTilesPerWarp = (128*64) / (32*32*4) = 2
 // COM: Expect 2 triton_gen.2Dblockprefetch ops per prefetch invocation.
@@ -28,7 +28,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     %9 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x64x!tt.ptr<f16>, #blocked>
     %ptr = tt.addptr %9, %8 : tensor<128x64x!tt.ptr<f16>, #blocked>, tensor<128x64xi32, #blocked>
 
-    // CHECK-COUNT-2: triton_gen.2Dblockprefetch {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 2, cache_control = L1C_L3C}
+    // CHECK-COUNT-2: triton_gen.2Dblockprefetch {{.*}} {elem_size_in_bits = 16, tile_width = 32, tile_height = 32, v_blocks = 1, cache_control = L1C_L3C}
     ttig.prefetch %ptr {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, ttig.block_io = "row_major"} : tensor<128x64x!tt.ptr<f16>, #blocked>
 
     tt.return
@@ -101,9 +101,9 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     // COM: prefetch when the predicate is false. Check that the prefetch is
     // COM: still emitted (twice) and that its offsetY comes from an llvm.select.
     // CHECK: %[[SEL0:.*]] = llvm.select %{{.*}}, %{{.*}}, %{{.*}} : i1, i32
-    // CHECK-NEXT: triton_gen.2Dblockprefetch %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[SEL0]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 2, cache_control = L1C_L3C}
+    // CHECK-NEXT: triton_gen.2Dblockprefetch %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[SEL0]] {elem_size_in_bits = 16, tile_width = 32, tile_height = 32, v_blocks = 1, cache_control = L1C_L3C}
     // CHECK: %[[SEL1:.*]] = llvm.select %{{.*}}, %{{.*}}, %{{.*}} : i1, i32
-    // CHECK-NEXT: triton_gen.2Dblockprefetch %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[SEL1]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 2, cache_control = L1C_L3C}
+    // CHECK-NEXT: triton_gen.2Dblockprefetch %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[SEL1]] {elem_size_in_bits = 16, tile_width = 32, tile_height = 32, v_blocks = 1, cache_control = L1C_L3C}
     ttig.prefetch %ptr, %mask {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 0>, ttig.block_io = "row_major"} : tensor<128x64x!tt.ptr<f16>, #blocked>
 
     tt.return
@@ -146,9 +146,9 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     // COM: The uniform `%pred` is folded into offsetY via llvm.select; the
     // COM: per-element `%boundsMask` is dropped (safe for a prefetch hint).
     // CHECK: %[[SEL0:.*]] = llvm.select %{{.*}}, %{{.*}}, %{{.*}} : i1, i32
-    // CHECK-NEXT: triton_gen.2Dblockprefetch %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[SEL0]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 2, cache_control = L1C_L3C}
+    // CHECK-NEXT: triton_gen.2Dblockprefetch %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[SEL0]] {elem_size_in_bits = 16, tile_width = 32, tile_height = 32, v_blocks = 1, cache_control = L1C_L3C}
     // CHECK: %[[SEL1:.*]] = llvm.select %{{.*}}, %{{.*}}, %{{.*}} : i1, i32
-    // CHECK-NEXT: triton_gen.2Dblockprefetch %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[SEL1]] {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 2, cache_control = L1C_L3C}
+    // CHECK-NEXT: triton_gen.2Dblockprefetch %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[SEL1]] {elem_size_in_bits = 16, tile_width = 32, tile_height = 32, v_blocks = 1, cache_control = L1C_L3C}
     ttig.prefetch %ptr, %mask {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 1, 0>, ttig.block_io = "row_major"} : tensor<128x64x!tt.ptr<f16>, #blocked>
 
     tt.return
@@ -214,7 +214,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     %9 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x64x!tt.ptr<f16>, #blocked>
     %ptr = tt.addptr %9, %8 : tensor<128x64x!tt.ptr<f16>, #blocked>, tensor<128x64xi32, #blocked>
 
-    // CHECK-COUNT-2: triton_gen.2Dblockprefetch {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 2, cache_control = L1UC_L3C}
+    // CHECK-COUNT-2: triton_gen.2Dblockprefetch {{.*}} {elem_size_in_bits = 16, tile_width = 32, tile_height = 32, v_blocks = 1, cache_control = L1UC_L3C}
     ttig.prefetch %ptr {boundaryCheck = array<i32>, cache = 3 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, ttig.block_io = "row_major"} : tensor<128x64x!tt.ptr<f16>, #blocked>
 
     tt.return
