@@ -36,7 +36,7 @@ module {
     tt.return
   }
 
-  // CHECK: tt.func public @test_invariant_boundary_check
+  // CHECK-LABEL: tt.func public @test_invariant_boundary_check
   // COM: The invariant boundary-check mask triggers loop versioning.
   // COM: The "then" branch (mask is true) has unmasked loads.
   // CHECK: scf.if

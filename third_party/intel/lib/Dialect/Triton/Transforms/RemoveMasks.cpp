@@ -819,11 +819,8 @@ private:
 
     // Build: offset + rangeAdjust
     Type scalarTy = builder.getIntegerType(bitWidth);
-    // Extend offset to match bound bitwidth if needed.
-    if (offsetVal.getType().getIntOrFloatBitWidth() < bitWidth)
-      offsetVal = arith::ExtSIOp::create(builder, loc, scalarTy, offsetVal);
-    else if (offsetVal.getType().getIntOrFloatBitWidth() > bitWidth)
-      offsetVal = arith::TruncIOp::create(builder, loc, scalarTy, offsetVal);
+    assert(offsetVal.getType().getIntOrFloatBitWidth() == bitWidth &&
+           "offset and bound widths must match for a valid arith.cmpi");
 
     Value lhsScalar = offsetVal;
     if (rangeAdjust != 0) {
