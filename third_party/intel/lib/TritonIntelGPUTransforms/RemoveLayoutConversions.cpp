@@ -430,6 +430,11 @@ bool isLayoutAnchor(Operation *op) {
           // since anchoring an already-canonical dst is
           // performance-neutral-or-better and only #4866-style dot folding must
           // be preserved.
+          // A descriptor-store operand is always a distributed (tensor)
+          // encoding; guard so a non-distributed encoding can't reach the
+          // unsafe shared-layout toLinearLayout path below.
+          if (!isa<ttg::DistributedEncodingTrait>(dstTy.getEncoding()))
+            return false;
           bool rootIsDot = root.getDefiningOp<tt::DotOp>() ||
                            root.getDefiningOp<tt::DotScaledOp>();
           int numWarps = ttg::lookupNumWarps(op);
@@ -437,7 +442,15 @@ bool isLayoutAnchor(Operation *op) {
               op->getParentOfType<ModuleOp>());
           Attribute canonical = ttgi::canonicalCoalescedDescStoreLayout(
               dstTy, numWarps, threadsPerWarp);
-          bool dstIsCanonical = dstTy.getEncoding() == canonical;
+          // dst and the canonical coalesced layout may be spelled differently
+          // (different sizePerThread / warp tiling) yet describe the same
+          // physical thread->element mapping. Compare via LinearLayout so any
+          // encoding physically identical to the coalesced layout matches
+          // (issue #7104).
+          bool dstIsCanonical = ttg::areLayoutsEquivalent(
+              dstTy.getShape(),
+              cast<ttg::LayoutEncodingTrait>(dstTy.getEncoding()),
+              cast<ttg::LayoutEncodingTrait>(canonical));
           return dstIsCanonical && !rootIsDot;
         }
       }
