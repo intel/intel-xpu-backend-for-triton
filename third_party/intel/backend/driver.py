@@ -228,11 +228,64 @@ class SpirvUtils:
         # we will need to rewrite the line in the general part of the code:
         # driver.active.utils.load_binary(self.name, self.kernel, self.metadata.shared, self.metadata.build_flags, device) ->
         # driver.active.utils.load_binary((self.name, self.kernel, self.metadata.shared, self.metadata.build_flags, device))
+        # When the JIT online compile (SPIR-V -> ZEBIN) hits PTSS overflow on
+        # non-DPAS hardware, IGC writes the diagnostic to the C-level stderr
+        # before Level Zero raises ZE_RESULT_ERROR_MODULE_BUILD_FAILURE. The
+        # bytes never enter Python's sys.stderr, so we redirect FD 2 around
+        # the call and inspect the raw output for the PTSS marker. On match,
+        # raise OutOfResources so autotune can skip the offending tile.
+        import re as _re
+        captured_stderr = ''
+        saved_fd = None
+        tmp_path = None
         try:
-            return self.shared_library.load_binary(args)
+            try:
+                saved_fd = os.dup(2)
+                tmp_fd, tmp_path = tempfile.mkstemp(prefix="triton-stderr-", suffix=".log")
+                os.dup2(tmp_fd, 2)
+                os.close(tmp_fd)
+            except OSError:
+                saved_fd = None  # fall through; just won't get the stderr capture
+            try:
+                return self.shared_library.load_binary(args)
+            finally:
+                if saved_fd is not None:
+                    try:
+                        os.dup2(saved_fd, 2)
+                        os.close(saved_fd)
+                    except OSError:
+                        pass
+                if tmp_path is not None:
+                    try:
+                        with open(tmp_path, 'r', errors='replace') as _f:
+                            captured_stderr = _f.read()
+                    except OSError:
+                        captured_stderr = ''
+                    # Replay so the user still sees the original diagnostic.
+                    if captured_stderr:
+                        try:
+                            sys.stderr.write(captured_stderr)
+                            sys.stderr.flush()
+                        except Exception:
+                            pass
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
         except Exception as e:
+            from triton.runtime.errors import IntelGPUError, OutOfResources
+            ptss_re = _re.compile(
+                r'total scratch space.*?(\d+)\s*bytes.*?max permitted PTSS\s*(\d+)\s*bytes'
+                r'|scratch space exceeds.*?limit'
+                r'|per.thread scratch space.*?exceed',
+                _re.IGNORECASE | _re.DOTALL,
+            )
+            m = ptss_re.search(captured_stderr)
+            if m:
+                required = int(m.group(1)) if m.group(1) else 0
+                limit = int(m.group(2)) if m.group(2) else 0
+                raise OutOfResources(required, limit, "per-thread scratch space (PTSS)") from e
             if str(e).startswith("ZE_"):
-                from triton.runtime.errors import IntelGPUError
                 raise IntelGPUError("Error during Intel load_binary: " + str(e)) from e
             else:
                 raise e
