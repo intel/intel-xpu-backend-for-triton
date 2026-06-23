@@ -295,11 +295,6 @@ def get_unified_attention_benchmark(
         quantiles = [0.5, 0.0, 1.0]
 
         torch.set_default_device("xpu")
-        # Workaround for #6759 (BMG OOM after Agama 1222 -> 1249). Pairs with
-        # PYTORCH_ALLOC_CONF=expandable_segments:True from run_benchmark.sh: the
-        # explicit fraction call materializes the virtual segment via the init
-        # path that does not trigger UR_RESULT_ERROR_DEVICE_LOST.
-        torch.xpu.set_per_process_memory_fraction(1.0)
 
         num_seqs = len(seq_lens)
         query_lens = [x[0] for x in seq_lens]
