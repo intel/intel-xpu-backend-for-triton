@@ -52,22 +52,6 @@ index b674d55a1..545b638dc 100644
  
  if _is_hip():
      ext_modules.append(CMakeExtension(name="vllm._rocm_C"))
-diff --git a/tests/conftest.py b/tests/conftest.py
-index ebf9608b0..16fa7a7f6 100644
---- a/tests/conftest.py
-+++ b/tests/conftest.py
-@@ -293,6 +293,11 @@ def workspace_init():
- 
-     if torch.cuda.is_available():
-         device = torch.device("cuda:0")
-+    elif torch.xpu.is_available():
-+        device = torch.device("xpu:0")
-+    else:
-+        device = None
-+    if device is not None:
-         init_workspace_manager(device)
-     yield
-     reset_workspace_manager()
 diff --git a/tests/utils.py b/tests/utils.py
 index 8989a1c3a..16f0620d1 100644
 --- a/tests/utils.py
