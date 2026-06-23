@@ -1,0 +1,58 @@
+diff --git a/tests/conftest.py b/tests/conftest.py
+index 4fc43ef04..2c3a26737 100644
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -1508,6 +1508,53 @@ def pytest_addoption(parser):
+         "--optional", action="store_true", default=False, help="run optional test"
+     )
+ 
++from collections import defaultdict
++
++class _KernelTestMapRecorder:
++    def __init__(self):
++        self.included_kernels: set[str] | None = None
++        self.kernel_to_tests: defaultdict[str, set[str]] = defaultdict(set)
++        self.out_path: str | None = None
++
++    def launch_hook(self, metadata) -> None:
++        kernel_name = metadata.get()["name"]
++
++        if self.included_kernels is not None and kernel_name not in self.included_kernels:
++            return
++
++        # PYTEST_CURRENT_TEST has a trailing " (<STAGE>)" suffix.
++        self.kernel_to_tests[kernel_name].add(os.environ["PYTEST_CURRENT_TEST"].rsplit(" ", 1)[0])
++
++_kernel_test_map_recorder = _KernelTestMapRecorder()
++
++def pytest_configure(config):
++    out_path = os.environ.get("VLLM_KERNEL_TEST_MAP_OUT")
++    if not out_path:
++        return
++
++    kernel_names = os.environ.get("VLLM_KERNEL_TEST_MAP_NAMES", "").strip()
++    _kernel_test_map_recorder.included_kernels = {
++        kernel_name.strip() for kernel_name in kernel_names.split(",") if kernel_name.strip()
++    } if kernel_names else None
++
++    import triton
++    triton.knobs.runtime.launch_enter_hook.add(_kernel_test_map_recorder.launch_hook)
++
++    _kernel_test_map_recorder.out_path = out_path
++
++def pytest_sessionfinish(session, exitstatus):
++    if _kernel_test_map_recorder.out_path is None:
++        return
++
++    with open(_kernel_test_map_recorder.out_path, "w") as f:
++        json.dump(
++            {
++                kernel: sorted(tests)
++                for kernel, tests in sorted(_kernel_test_map_recorder.kernel_to_tests.items())
++            },
++            f,
++            indent=4
++        )
+ 
+ def pytest_collection_modifyitems(config, items):
+     if config.getoption("--optional"):
