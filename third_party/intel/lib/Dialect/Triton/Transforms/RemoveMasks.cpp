@@ -272,12 +272,24 @@ private:
     if (!ivRange)
       return std::nullopt;
 
-    if (val == forOp.getSingleInductionVar())
+    // Peel view/cast ops to find the block argument `val` is derived from. We
+    // stop at the block argument instead of resolving it to its init value, so
+    // the specific iter_arg backing `val` can be checked below.
+    while (Operation *defOp = val.getDefiningOp()) {
+      if (!isa<tt::ExpandDimsOp, tt::BroadcastOp, tt::SplatOp,
+               arith::IndexCastOp, arith::ExtSIOp, arith::ExtUIOp>(defOp))
+        return std::nullopt;
+      val = defOp->getOperand(0);
+    }
+    auto blockArg = dyn_cast<BlockArgument>(val);
+    if (!blockArg || blockArg.getOwner() != forOp.getBody())
+      return std::nullopt;
+
+    if (blockArg == forOp.getInductionVar())
       return ivRange;
 
-    // Check if val resolved (via getFinalValue) to the loop's lower bound
-    // constant, meaning it was an iter_arg with that init. Verify there
-    // exists an iter_arg with init == lb and yield == self + step.
+    // `val` is an iter_arg: prove it is IV-equivalent (init == lb and
+    // yield == self + step).
     OpFoldResult lbOFR = *forOp.getSingleLowerBound();
     OpFoldResult stepOFR = *forOp.getSingleStep();
 
@@ -311,32 +323,25 @@ private:
       return false;
     };
 
-    if (!matchesInt(val, *lbConst))
+    unsigned i = blockArg.getArgNumber() - forOp.getNumInductionVars();
+    if (!matchesInt(forOp.getInitArgs()[i], *lbConst))
       return std::nullopt;
 
     auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
-    for (unsigned i = 0, e = forOp.getNumRegionIterArgs(); i < e; ++i) {
-      Value initArg = forOp.getInitArgs()[i];
-      if (!matchesInt(initArg, *lbConst))
-        continue;
+    auto yieldAdd = yieldOp.getOperand(i).getDefiningOp<arith::AddIOp>();
+    if (!yieldAdd)
+      return std::nullopt;
 
-      Value yieldVal = yieldOp.getOperand(i);
-      auto yieldAdd = yieldVal.getDefiningOp<arith::AddIOp>();
-      if (!yieldAdd)
-        continue;
+    bool lhsIsIterArg = (yieldAdd.getLhs() == blockArg);
+    bool rhsIsIterArg = (yieldAdd.getRhs() == blockArg);
+    if (!lhsIsIterArg && !rhsIsIterArg)
+      return std::nullopt;
 
-      BlockArgument iterArg = forOp.getRegionIterArg(i);
-      bool lhsIsIterArg = (yieldAdd.getLhs() == iterArg);
-      bool rhsIsIterArg = (yieldAdd.getRhs() == iterArg);
-      if (!lhsIsIterArg && !rhsIsIterArg)
-        continue;
+    Value stepOperand = lhsIsIterArg ? yieldAdd.getRhs() : yieldAdd.getLhs();
+    if (!matchesInt(stepOperand, *stepConst))
+      return std::nullopt;
 
-      Value stepOperand = lhsIsIterArg ? yieldAdd.getRhs() : yieldAdd.getLhs();
-      if (matchesInt(stepOperand, *stepConst))
-        return ivRange;
-    }
-
-    return std::nullopt;
+    return ivRange;
   }
 
   // Classify a single `arith.cmpi` mask against the loop IV range.
@@ -374,11 +379,12 @@ private:
     if (!addOp)
       return MaskClassification::Unknown;
 
-    Value addLhs = tt::intel::getFinalValue(addOp.getLhs());
     Value addRhs = tt::intel::getFinalValue(addOp.getRhs());
 
+    // Pass the un-collapsed lhs so getIVEquivalentRange sees the actual
+    // iter_arg rather than its init constant.
     std::optional<ConstantIntRanges> lhsRange =
-        getIVEquivalentRange(forOp, addLhs);
+        getIVEquivalentRange(forOp, addOp.getLhs());
     if (!lhsRange)
       return MaskClassification::Unknown;
 

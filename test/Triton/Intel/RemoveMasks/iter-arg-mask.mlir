@@ -44,3 +44,50 @@ module {
   // CHECK:   tt.load {{%[0-9]+}} : tensor<32x!tt.ptr<f16>>
   // CHECK: }
 }
+
+// -----
+
+module {
+  // COM: Regression test: a "decoy" iter_arg that is IV-equivalent (init = lb,
+  // COM: step = loop step) must NOT vouch for an UNRELATED offset iter_arg that
+  // COM: steps differently. Here off_k steps by 2048 (true range [0, 6144]), so
+  // COM: the mask (off_k + range(0,32)) < 4096 is NOT always-true and must be
+  // COM: kept. The decoy off_decoy steps by 32 (== loop step); the pass must
+  // COM: not use it to classify off_k's mask.
+  tt.func public @test_decoy_iter_arg_mask(
+      %ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+    %c0_i32 = arith.constant 0 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %c2048_i32 = arith.constant 2048 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %c4096_i64 = arith.constant 4096 : i64
+    %cst = arith.constant dense<0.000000e+00> : tensor<32xf16>
+
+    %k_range = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32>
+    %k_range_i64 = arith.extsi %k_range : tensor<32xi32> to tensor<32xi64>
+    %base_splat = tt.splat %ptr : !tt.ptr<f16> -> tensor<32x!tt.ptr<f16>>
+
+    %res:2 = scf.for %iv = %c0_i32 to %c128_i32 step %c32_i32
+        iter_args(%off_k = %c0_i32, %off_decoy = %c0_i32) -> (i32, i32) : i32 {
+      %off_k_i64 = arith.extsi %off_k : i32 to i64
+      %k_splat = tt.splat %off_k_i64 : i64 -> tensor<32xi64>
+      %k_offset = arith.addi %k_splat, %k_range_i64 : tensor<32xi64>
+      %k_ub = tt.splat %c4096_i64 : i64 -> tensor<32xi64>
+      %k_mask = arith.cmpi slt, %k_offset, %k_ub : tensor<32xi64>
+
+      %loaded = tt.load %base_splat, %k_mask, %cst : tensor<32x!tt.ptr<f16>>
+
+      // off_k steps by 2048 (NOT the loop step); off_decoy steps by 32.
+      %next_off_k = arith.addi %off_k, %c2048_i32 : i32
+      %next_decoy = arith.addi %off_decoy, %c32_i32 : i32
+      scf.yield %next_off_k, %next_decoy : i32, i32
+    }
+    tt.return
+  }
+
+  // CHECK-LABEL: @test_decoy_iter_arg_mask
+  // COM: The mask must be preserved (load keeps its mask + default operands).
+  // CHECK: scf.for
+  // CHECK:   tt.load {{%[0-9]+}}, {{%[0-9]+}}, {{%[a-z0-9_]+}} : tensor<32x!tt.ptr<f16>>
+  // CHECK: }
+}
