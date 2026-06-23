@@ -304,4 +304,48 @@ def TTIG_Subgroup2DBlockLoadFromPtrOp : TTIG_Op<"2d_block_load_from_ptr", [
   let hasVerifier = 1;
 }
 
+def TTIG_DescriptorGatherOp : TTIG_Op<"descriptor_gather", [TT_DescriptorLoadLikeOpInterface]> {
+  let summary = "gather multiple rows from a descriptor into a single tensor";
+  let description = [{
+    The `ttig.descriptor_gather` op has same semantic to the `ttg.descriptor_gather`.
+    It's verifier and infer is Intel specific.
+  }];
+
+  let arguments = (ins
+    Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
+    RankedTensorOf<[I16, I32]>:$x_offsets,
+    I32:$y_offset
+  );
+  let results = (outs TT_Tensor:$result);
+
+  let assemblyFormat = [{
+    $desc `[` $x_offsets `,` $y_offset `]`
+    attr-dict `:` functional-type(operands, results)
+  }];
+
+  let hasVerifier = 1;
+}
+
+def TTIG_DescriptorScatterOp : TTIG_Op<"descriptor_scatter", [TT_DescriptorStoreLikeOpInterface]> {
+  let summary = "scatter multiple rows to a descriptor from a single tensor";
+  let description = [{
+    The `ttig.descriptor_scatter` op has same semantic to the `ttg.descriptor_scatter`.
+    It's verifier and infer is Intel specific.
+  }];
+
+  let arguments = (ins
+    Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$desc,
+    RankedTensorOf<[I16, I32]>:$x_offsets,
+    I32:$y_offset,
+    TT_Tensor:$src
+  );
+
+  let assemblyFormat = [{
+    $desc `[` $x_offsets `,` $y_offset `]` `,` $src
+    attr-dict `:` type(operands)
+  }];
+
+  let hasVerifier = 1;
+}
+
 #endif

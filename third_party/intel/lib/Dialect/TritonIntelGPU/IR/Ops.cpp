@@ -148,4 +148,75 @@ LogicalResult Subgroup2DBlockLoadFromPtrOp::verify() {
   return success();
 }
 
+// -- DescriptorGatherOp
+LogicalResult verifyGatherScatterResultType(Operation *op,
+                                            ShapedType resultType,
+                                            ShapedType indicesType) {
+  if (indicesType.getRank() != 1)
+    return op->emitOpError("x offsets must be a 1D tensor, but got ")
+           << indicesType;
+  if (resultType.getRank() != 2)
+    return op->emitOpError("result must be a 2D tensor, but got ")
+           << resultType;
+
+  Type dtype = resultType.getElementType();
+  if (dtype.getIntOrFloatBitWidth() > 64)
+    return op->emitOpError("dtype cannot be greater than 32 bits");
+
+  unsigned minCols = 32 / dtype.getIntOrFloatBitWidth() * 8;
+  if (unsigned cols = resultType.getShape()[1]; cols < minCols) {
+    return op->emitOpError("must have at least ")
+           << minCols << " columns for " << dtype << ", but got " << cols;
+  }
+
+  if (resultType.getShape()[0] != indicesType.getShape()[0]) {
+    return op->emitOpError("result tensor must have as many rows as indices (")
+           << indicesType.getShape()[0] << "), but got " << resultType;
+  }
+
+  return success();
+}
+
+LogicalResult verifyGatherScatterOp(Operation *op, ShapedType blockType,
+                                    ShapedType resultType,
+                                    ShapedType indicesType) {
+  // Gather from `!tt.tensordesc<1xMxdtype>`.
+  if (blockType.getRank() != 2) {
+    return op->emitOpError("descriptor block must be a 2D tensor, but got ")
+           << blockType;
+  }
+  if (blockType.getShape()[0] != 1) {
+    return op->emitOpError("descriptor block must have exactly 1 row, but got ")
+           << blockType;
+  }
+
+  // With x offsets `tensor<Nxinttype>` into `tensor<NxMxdtype>`.
+  if (failed(verifyGatherScatterResultType(op, resultType, indicesType)))
+    return failure();
+
+  if (resultType.getShape()[1] != blockType.getShape()[1]) {
+    return op->emitOpError("result tensor number of columns must match block (")
+           << blockType.getShape()[1] << "), but got " << resultType;
+  }
+  if (resultType.getElementType() != blockType.getElementType()) {
+    return op->emitOpError("result tensor element type must match block (")
+           << blockType.getElementType() << "), but got " << resultType;
+  }
+
+  return success();
+}
+
+LogicalResult DescriptorGatherOp::verify() {
+  return intel::verifyGatherScatterOp(
+      *this, getDesc().getType().getSignlessBlockType(), getResult().getType(),
+      getXOffsets().getType());
+}
+
+// -- DescriptorScatterOp --
+LogicalResult DescriptorScatterOp::verify() {
+  return intel::verifyGatherScatterOp(
+      *this, getDesc().getType().getSignlessBlockType(), getSrc().getType(),
+      getXOffsets().getType());
+}
+
 } // namespace mlir::triton::gpu::intel

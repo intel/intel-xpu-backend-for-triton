@@ -142,3 +142,59 @@ tt.func @ttig.descriptor_prefetch.indices_mismatch(%desc: !tt.tensordesc<256x32x
   ttig.descriptor_prefetch %desc[%x] : !tt.tensordesc<256x32xf16>
   tt.return
 }
+
+// -----
+
+tt.func @invalid_desc_gather(%arg0: !tt.tensordesc<128xbf16>, %arg1: tensor<32xi32>, %arg2: i32) {
+  // expected-error @below {{block must be a 2D tensor}}
+  %0 = ttig.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<128xbf16>, tensor<32xi32>, i32) -> tensor<32xbf16>
+  tt.return
+}
+
+// -----
+
+tt.func @invalid_desc_gather(%arg0: !tt.tensordesc<2x128xbf16>, %arg1: tensor<32xi32>, %arg2: i32) {
+  // expected-error @below {{block must have exactly 1 row}}
+  %0 = ttig.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<2x128xbf16>, tensor<32xi32>, i32) -> tensor<32x128xbf16>
+  tt.return
+}
+
+// -----
+
+tt.func @invalid_desc_gather(%arg0: !tt.tensordesc<1x128xbf16>, %arg1: tensor<1x32xi32>, %arg2: i32) {
+  // expected-error @below {{x offsets must be a 1D tensor}}
+  %0 = ttig.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<1x128xbf16>, tensor<1x32xi32>, i32) -> tensor<32x128xbf16>
+  tt.return
+}
+
+// -----
+
+tt.func @invalid_desc_gather(%arg0: !tt.tensordesc<1x128xbf16>, %arg1: tensor<32xi32>, %arg2: i32) {
+  // expected-error @below {{result must be a 2D tensor}}
+  %0 = ttig.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<1x128xbf16>, tensor<32xi32>, i32) -> tensor<128xbf16>
+  tt.return
+}
+
+// -----
+
+tt.func @invalid_desc_gather(%arg0: !tt.tensordesc<1x128xbf16>, %arg1: tensor<32xi32>, %arg2: i32) {
+  // expected-error @below {{result tensor number of columns must match block (128)}}
+  %0 = ttig.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<1x128xbf16>, tensor<32xi32>, i32) -> tensor<32x64xbf16>
+  tt.return
+}
+
+// -----
+
+tt.func @invalid_desc_gather(%arg0: !tt.tensordesc<1x128xbf16>, %arg1: tensor<32xi32>, %arg2: i32) {
+  // expected-error @below {{result tensor must have as many rows as indices (32)}}
+  %0 = ttig.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<1x128xbf16>, tensor<32xi32>, i32) -> tensor<64x128xbf16>
+  tt.return
+}
+
+// -----
+
+tt.func @invalid_desc_gather(%arg0: !tt.tensordesc<1x128xbf16>, %arg1: tensor<32xi32>, %arg2: i32) {
+  // expected-error @below {{result tensor element type must match block ('bf16')}}
+  %0 = ttig.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<1x128xbf16>, tensor<32xi32>, i32) -> tensor<32x128xf32>
+  tt.return
+}
