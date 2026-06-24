@@ -329,8 +329,8 @@ def TTIG_DescriptorGatherOp : TTIG_Op<"descriptor_gather", [TT_DescriptorLoadLik
 def TTIG_DescriptorScatterOp : TTIG_Op<"descriptor_scatter", [TT_DescriptorStoreLikeOpInterface]> {
   let summary = "scatter multiple rows to a descriptor from a single tensor";
   let description = [{
-    The `ttig.descriptor_scatter` op has same semantic to the `ttg.descriptor_scatter`.
-    It's verifier and infer is Intel specific.
+    The `ttig.descriptor_scatter` op has the same semantics as `tt.descriptor_scatter`.
+    Its verifier and layout inference are Intel-specific.
   }];
 
   let arguments = (ins
