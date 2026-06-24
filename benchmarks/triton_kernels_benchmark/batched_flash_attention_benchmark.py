@@ -315,7 +315,7 @@ def build_cases() -> list[dict[str, float | int | tuple[int, ...]]]:
     cases = [{
         "total_tokens": 289239, "num_segments": 256, "segment_stddev_over_mean": stddev, "H_Q": H_Q, "H_KV": H_KV,
         "D_HEAD_QK": D_HEAD_QK, "D_HEAD_V": D_HEAD_V
-    } for stddev in [0.0, 0.5, 1.0, 2.0, 4.0]]
+    } for stddev in [0.5, 5.0, 50.0, 500.0, 1000.0]]
     return cases
 
 
