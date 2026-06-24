@@ -195,7 +195,22 @@ jobs:
           pip install cmake
 
       - name: Setup PyTorch
+        id: setup-pytorch
         uses: ./.github/actions/setup-pytorch
+
+      - name: Identify torchvision pin
+        if: ${{ matrix.suite == 'vllm-mrv2' || matrix.suite == 'vllm-rest' }}
+        run: |
+          echo "TORCHVISION_COMMIT_ID=$(<pytorch/.github/ci_commit_pins/vision.txt)" | tee -a "$GITHUB_ENV"
+
+      - name: Install torchvision package
+        if: ${{ matrix.suite == 'vllm-mrv2' || matrix.suite == 'vllm-rest' }}
+        uses: ./.github/actions/install-dependency
+        with:
+          package: torchvision
+          repository: pytorch/vision
+          ref: ${{ env.TORCHVISION_COMMIT_ID }}
+          extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
 
       - name: Install Triton from wheel
         id: install

@@ -1,8 +1,8 @@
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 0ffe85054..8a61372de 100644
+index 86ead168e..b288ea7fa 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
-@@ -279,6 +279,9 @@ def kernel_unified_attention(
+@@ -282,6 +282,9 @@ def kernel_unified_attention(
      USE_TD_QO: tl.constexpr = False,
      Q_IS_FP8: tl.constexpr = False,
  ):
@@ -12,7 +12,7 @@ index 0ffe85054..8a61372de 100644
      # Per-(token, head) scale caches: used iff KV_QUANT_MODE in {2, 3}.
      USE_PER_TOKEN_HEAD_SCALES: tl.constexpr = (KV_QUANT_MODE >= 2) and (
          KV_QUANT_MODE <= 3
-@@ -513,12 +516,12 @@ def kernel_unified_attention(
+@@ -522,12 +525,12 @@ def kernel_unified_attention(
  
          # S : (BLOCK_M, TILE_SIZE)
          S = tl.zeros(shape=(BLOCK_M, TILE_SIZE), dtype=tl.float32)
@@ -29,17 +29,25 @@ index 0ffe85054..8a61372de 100644
  
          if USE_SOFTCAP:
              S = apply_softcap(S, softcap)
-@@ -540,19 +543,14 @@ def kernel_unified_attention(
+@@ -549,27 +552,14 @@ def kernel_unified_attention(
          M, L, P, alpha = softmax_step(S, M, L)
          acc = acc * alpha[:, None]
  
 -        if SLIDING_WINDOW:
 -            qpos_lo = q_block_local_idx * BLOCK_Q
--            V = tl.where(
--                (context_len + qpos_lo - seq_offset[:, None]) < SLIDING_WINDOW,
--                V,
--                0.0,
--            )
+-            dist = context_len + qpos_lo - seq_offset[:, None]
+-            if USE_PER_SEQ_CAUSAL:
+-                is_causal_seq = tl.load(per_seq_causal_ptr + seq_idx)
+-                sw_mask_v = tl.where(
+-                    is_causal_seq,
+-                    dist < SLIDING_WINDOW,
+-                    (dist < SLIDING_WINDOW) & (dist > -SLIDING_WINDOW),
+-                )
+-            elif USE_CAUSAL:
+-                sw_mask_v = dist < SLIDING_WINDOW
+-            else:
+-                sw_mask_v = (dist < SLIDING_WINDOW) & (dist > -SLIDING_WINDOW)
+-            V = tl.where(sw_mask_v, V, 0.0)
 +        # In the upstream there is an additional zeroing of V for tokens outside of the sliding window which is redundant.
 +        # Adding it decreases performance for sliding window case
          if USE_PER_TOKEN_HEAD_SCALES:
@@ -53,7 +61,7 @@ index 0ffe85054..8a61372de 100644
  
      # ---- Epilogue ---------------------------------------------------------
      if IS_3D:
-@@ -847,7 +845,7 @@ def unified_attention(
+@@ -868,7 +858,7 @@ def unified_attention(
      head_size = q.shape[2]
  
      BLOCK_M = (
@@ -62,7 +70,7 @@ index 0ffe85054..8a61372de 100644
      )
      BLOCK_Q = BLOCK_M // num_queries_per_kv
  
-@@ -872,12 +870,16 @@ def unified_attention(
+@@ -913,12 +903,16 @@ def unified_attention(
      elif sliding_window_val <= 0:
          chunk_lookback = -1
  
@@ -83,9 +91,9 @@ index 0ffe85054..8a61372de 100644
 +    assert block_size % TILE_SIZE_PREFILL == 0, "block_size must be multiple of TILE_SIZE_PREFILL"
 +    assert block_size % TILE_SIZE_DECODE == 0, "block_size must be multiple of TILE_SIZE_DECODE"
  
-     # USE_TD requires BLOCK_SIZE % TILE_SIZE == 0 (enforced by a
-     # ``tl.static_assert`` in the kernel).  The default prefill tile
-@@ -928,18 +930,11 @@ def unified_attention(
+     # Wider KV tile for the tuned large-head path (see above). Only the 2D
+     # path (used when max_seqlen_q > 1) reads TILE_SIZE_PREFILL.
+@@ -974,18 +968,11 @@ def unified_attention(
      # Launch the 2D kernel if
      # 1. No intermediate tiled softmax buffers for the 3D kernel have been allocated, or
      # 2. The batch includes at least one prefill request, or
@@ -109,7 +117,7 @@ index 0ffe85054..8a61372de 100644
  
      # The kernel signature is the same for 2D and 3D — only the launch
      # grid + a handful of constexpr toggles differ.  Per-token-head scale
-@@ -960,6 +955,30 @@ def unified_attention(
+@@ -1006,6 +993,30 @@ def unified_attention(
          v_scale_ptr = None
      # 3D needs real segm tensors; 2D never touches them.  Pass ``None`` in
      # 2D mode so Triton can skip materialising these pointer arguments.
