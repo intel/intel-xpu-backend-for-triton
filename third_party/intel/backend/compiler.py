@@ -345,6 +345,14 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if properties["has_256b_load_store"]:
             intel.passes.ttgpuir.add_widen_load_store_encoding(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
+        # CanonicalizePointers must run BEFORE accelerate_matmul: once DPAS
+        # (dot_op) encodings are applied to the pointer tensors, the pass's
+        # rewrites produce IR that crashes LowerTo2DBlockLoad's AxisInfoAnalysis.
+        # The trailing canonicalizer folds the zero offsets / identity arithmetic
+        # and removes the unrealized_conversion_casts the pass leaves behind.
+        if not knobs.intel.disable_canonicalize_pointers:
+            intel.passes.ttgpuir.add_canonicalize_pointers(pm, True)
+            passes.common.add_canonicalizer(pm)
 
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
         intel.passes.ttgpuir.add_materialize_block_pointer(pm)
