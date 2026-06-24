@@ -29,13 +29,13 @@ def load_if(block_ptr, EVEN_M: tl.constexpr, EVEN_N: tl.constexpr):
 @triton.jit
 def store_if(block_ptr, value, EVEN_M: tl.constexpr, EVEN_N: tl.constexpr):
     if EVEN_M & EVEN_N:
-        return tl.store(block_ptr, value)
+        tl.store(block_ptr, value)
     if EVEN_M:
-        return tl.store(block_ptr, value, boundary_check=(1, ))
+        tl.store(block_ptr, value, boundary_check=(1, ))
     if EVEN_N:
-        return tl.store(block_ptr, value, boundary_check=(0, ))
-
-    return tl.store(block_ptr, value, boundary_check=(0, 1))
+        tl.store(block_ptr, value, boundary_check=(0, ))
+    else:
+        tl.store(block_ptr, value, boundary_check=(0, 1))
 
 
 @triton.jit
@@ -313,9 +313,9 @@ def segment_stats(boundaries: torch.Tensor):
 def build_cases() -> list[dict[str, float | int | tuple[int, ...]]]:
     H_Q, H_KV, D_HEAD_QK, D_HEAD_V = 8, 8, 64, 64
     cases = [{
-        "total_tokens": 289239, "num_segments": 256, "segment_stddev_over_mean": 0.5, "H_Q": H_Q, "H_KV": H_KV,
+        "total_tokens": 289239, "num_segments": 256, "segment_stddev_over_mean": stddev, "H_Q": H_Q, "H_KV": H_KV,
         "D_HEAD_QK": D_HEAD_QK, "D_HEAD_V": D_HEAD_V
-    }]
+    } for stddev in [0.0, 0.5, 1.0, 2.0, 4.0]]
     return cases
 
 
