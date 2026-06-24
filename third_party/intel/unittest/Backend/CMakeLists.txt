@@ -9,7 +9,7 @@
 # SYCL compiler -- and QUIET does not suppress a FATAL_ERROR. That aborts the
 # whole CMake configure. Probe for the compiler first and bail out cleanly when
 # it is missing, mirroring the runtime driver's `find_sycl()` lookup of `icpx`.
-find_program(ICPX_EXECUTABLE NAMES icpx icx)
+find_program(ICPX_EXECUTABLE NAMES icpx)
 
 if(NOT ICPX_EXECUTABLE)
   message(STATUS "SYCL compiler (icpx) not found: skipping ArchParser unit test")
