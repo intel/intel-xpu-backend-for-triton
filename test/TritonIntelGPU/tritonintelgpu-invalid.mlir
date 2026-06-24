@@ -198,3 +198,19 @@ tt.func @invalid_desc_gather(%arg0: !tt.tensordesc<1x128xbf16>, %arg1: tensor<32
   %0 = ttig.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<1x128xbf16>, tensor<32xi32>, i32) -> tensor<32x128xf32>
   tt.return
 }
+
+// -----
+
+tt.func @invalid_desc_gather_i64_too_few_cols(%arg0: !tt.tensordesc<1x2xi64>, %arg1: tensor<32xi32>, %arg2: i32) {
+  // expected-error @below {{must have at least 4 columns}}
+  %0 = ttig.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<1x2xi64>, tensor<32xi32>, i32) -> tensor<32x2xi64>
+  tt.return
+}
+
+// -----
+
+tt.func @invalid_desc_scatter_src_rank(%arg0: !tt.tensordesc<1x128xbf16>, %arg1: tensor<32xi32>, %arg2: i32, %arg3: tensor<128xbf16>) {
+  // expected-error @below {{result must be a 2D tensor}}
+  ttig.descriptor_scatter %arg0[%arg1, %arg2], %arg3 : !tt.tensordesc<1x128xbf16>, tensor<32xi32>, i32, tensor<128xbf16>
+  tt.return
+}
