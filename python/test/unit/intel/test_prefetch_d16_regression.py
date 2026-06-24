@@ -115,33 +115,69 @@ def _matmul_kernel_ptrs(
     tl.store(c_ptrs, accumulator.to(c_ptr.dtype.element_ty))
 
 
-# The lowered LLVM IR contains the SPIRV prefetch call with positional integer args:
-#   __spirv_Subgroup2DBlockPrefetchINTEL...(i32 elem_size_bytes, i32 tile_width,
-#                                           i32 tile_height, i32 v_blocks, ...)
-# The original bug emitted (i32 2, i32 16, i32 X, i32 2, ...) — d16 (2 bytes),
-# tile_width=16, any tile_height, v_blocks=2 → block_width × array_length = 32 × 2
-# = 64 ≠ 128 → CB_FATAL on CRI.
-_LLIR_PREFETCH_CALL = re.compile(
+# The lowered LLVM IR contains the prefetch via one of two lowering paths,
+# depending on whether the runtime SPV builtin library has the requested shape:
+#
+#   1. SPIRV builtin (used for shapes the SPV runtime supports):
+#        @_Z<n>__spirv_Subgroup2DBlockPrefetchINTEL<...>(
+#          i32 elem_size_BYTES, i32 tile_width, i32 tile_height, i32 v_blocks, ...)
+#      The original bug emitted (i32 2, i32 16, i32 X, i32 2, ...) here: d16
+#      (2 bytes), tile_width=16, v_blocks=2 → block_width × array_length =
+#      32 × 2 = 64 ≠ 128 → CB_FATAL on CRI.
+#
+#   2. GenISA fallback (used when isSPVBuiltinAvailableImpl returns false —
+#      e.g. d16 tile_width=32 vBlocks=1, the shape the fix lowers to):
+#        @llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid(
+#          ptr, i32 base_w-1, i32 base_h-1, i32 pitch-1, i32 x, i32 y,
+#          i32 elem_size_BITS, i32 tile_width, i32 tile_height, i32 v_blocks, ...)
+#      Note the elem-size unit difference: SPIRV uses BYTES, GenISA uses BITS.
+#
+# We must scan both to count d16 prefetches correctly: post-fix, d16 lowerings
+# go through GenISA, not SPIRV.
+_LLIR_PREFETCH_CALL_SPIRV = re.compile(
     r"@_Z\d+__spirv_Subgroup2DBlockPrefetchINTEL\w*\("
     r"\s*i32\s+(\d+)\s*,"  # elem_size_bytes
     r"\s*i32\s+(\d+)\s*,"  # tile_width
     r"\s*i32\s+(\d+)\s*,"  # tile_height
     r"\s*i32\s+(\d+)\s*,",  # v_blocks
 )
+_LLIR_PREFETCH_CALL_GENISA = re.compile(
+    r"@llvm\.genx\.GenISA\.LSC2DBlockPrefetch\.isVoid\("
+    r"[^,]+,"               # ptr
+    r"\s*i32\s+\S+\s*,"     # base_width - 1 (may be a value ref)
+    r"\s*i32\s+\S+\s*,"     # base_height - 1
+    r"\s*i32\s+\S+\s*,"     # pitch - 1
+    r"\s*i32\s+\S+\s*,"     # x
+    r"\s*i32\s+\S+\s*,"     # y
+    r"\s*i32\s+(\d+)\s*,"   # elem_size_bits
+    r"\s*i32\s+(\d+)\s*,"   # tile_width
+    r"\s*i32\s+(\d+)\s*,"   # tile_height
+    r"\s*i32\s+(\d+)\s*,",  # v_blocks
+)
+
+
+def _iter_d16_prefetch_calls(llir):
+    """Yield (tile_width, tile_height, v_blocks) for every d16 prefetch call
+    in `llir`, covering both the SPIRV builtin and the GenISA fallback path."""
+    for m in _LLIR_PREFETCH_CALL_SPIRV.finditer(llir):
+        elem_bytes, tile_w, tile_h, v_blocks = (int(g) for g in m.groups())
+        if elem_bytes == 2:  # SPIRV passes elem size in bytes; d16 == 2 bytes
+            yield (tile_w, tile_h, v_blocks)
+    for m in _LLIR_PREFETCH_CALL_GENISA.finditer(llir):
+        elem_bits, tile_w, tile_h, v_blocks = (int(g) for g in m.groups())
+        if elem_bits == 16:  # GenISA passes elem size in bits; d16 == 16 bits
+            yield (tile_w, tile_h, v_blocks)
 
 
 def _find_buggy_d16_prefetch_calls(llir):
     """Return a list of (tile_width, tile_height, v_blocks) for every d16 prefetch
     call in `llir` that matches the buggy crash shape (tile_width=16, v_blocks=2).
 
-    On a fixed compiler this list will be empty.
+    On a fixed compiler this list will be empty (the fix collapses the split to
+    tile_width=32, v_blocks=1 and routes that shape through the GenISA fallback).
     """
-    buggy = []
-    for m in _LLIR_PREFETCH_CALL.finditer(llir):
-        elem_bytes, tile_w, tile_h, v_blocks = (int(g) for g in m.groups())
-        if elem_bytes == 2 and tile_w == 16 and v_blocks == 2:
-            buggy.append((tile_w, tile_h, v_blocks))
-    return buggy
+    return [(tw, th, vb) for (tw, th, vb) in _iter_d16_prefetch_calls(llir)
+            if tw == 16 and vb == 2]
 
 
 # ---------------------------------------------------------------------------
@@ -193,7 +229,7 @@ def test_d16_prefetch_ir_no_buggy_split_tdesc(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_
     )
 
     llir = compiled.asm.get("llir", "")
-    n_d16 = sum(1 for m in _LLIR_PREFETCH_CALL.finditer(llir) if int(m.group(1)) == 2)
+    n_d16 = sum(1 for _ in _iter_d16_prefetch_calls(llir))
     assert n_d16 > 0, ("Compiler emitted zero d16 2D block prefetch calls on a 2D-block-I/O-capable target — "
                        "this is itself a regression (the optimization silently stopped firing).")
     buggy = _find_buggy_d16_prefetch_calls(llir)
@@ -245,7 +281,7 @@ def test_d16_prefetch_ir_no_buggy_split_ptrs(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_S
     )
 
     llir = compiled.asm.get("llir", "")
-    n_d16 = sum(1 for m in _LLIR_PREFETCH_CALL.finditer(llir) if int(m.group(1)) == 2)
+    n_d16 = sum(1 for _ in _iter_d16_prefetch_calls(llir))
     assert n_d16 > 0, ("Compiler emitted zero d16 2D block prefetch calls on a 2D-block-I/O-capable target — "
                        "this is itself a regression (the optimization silently stopped firing).")
     buggy = _find_buggy_d16_prefetch_calls(llir)
@@ -300,7 +336,7 @@ def test_d16_prefetch_tensor_desc(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, dtyp
     # silently dropping the optimization (which would let correctness checks
     # pass while losing the perf path under test).
     llir = compiled.asm.get("llir", "")
-    n_d16 = sum(1 for m in _LLIR_PREFETCH_CALL.finditer(llir) if int(m.group(1)) == 2)
+    n_d16 = sum(1 for _ in _iter_d16_prefetch_calls(llir))
     assert n_d16 > 0, "Expected at least one d16 2D block prefetch in LLIR but found none."
 
     ref = torch.matmul(a.float(), b.float()).to(dtype)
@@ -354,7 +390,7 @@ def test_d16_prefetch_tensor_of_ptr(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, dt
     # silently dropping the optimization (which would let correctness checks
     # pass while losing the perf path under test).
     llir = compiled.asm.get("llir", "")
-    n_d16 = sum(1 for m in _LLIR_PREFETCH_CALL.finditer(llir) if int(m.group(1)) == 2)
+    n_d16 = sum(1 for _ in _iter_d16_prefetch_calls(llir))
     assert n_d16 > 0, "Expected at least one d16 2D block prefetch in LLIR but found none."
 
     ref = torch.matmul(a.float(), b.float()).to(dtype)
