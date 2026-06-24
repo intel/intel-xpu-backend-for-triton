@@ -208,7 +208,7 @@ LogicalResult verifyGatherScatterOp(Operation *op, ShapedType blockType,
 }
 
 LogicalResult DescriptorGatherOp::verify() {
-  return verifyGatherScatterOp(
+  return intel::verifyGatherScatterOp(
       *this, getDesc().getType().getSignlessBlockType(), getResult().getType(),
       getXOffsets().getType());
 }
