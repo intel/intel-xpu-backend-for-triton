@@ -397,8 +397,62 @@ bool isLayoutAnchor(Operation *op) {
         // Conservative fallback: if either lane base is not a clean single-dim
         // stride, the store can't be a 2D block write anyway -> nothing to
         // protect -> don't anchor (fold by default, as before).
-        if (rootLaneDim && dstLaneDim)
-          return *rootLaneDim != *dstLaneDim;
+        if (rootLaneDim && dstLaneDim) {
+          // Keep the lane-transpose guard (#7093): a convert that changes the
+          // lane-fast dim must be anchored or the row-major store demotes to a
+          // scatter.
+          if (*rootLaneDim != *dstLaneDim)
+            return true;
+          // The canonical-coalesced anchor below protects a 2D block write
+          // from demotion. A rank<2 store can never be a 2D block write, and a
+          // 1D store operand is frequently produced by a tt.reshape whose
+          // RLC-chosen (reshape-free) layout is NOT the coalesced canonical;
+          // forcing the canonical layout onto the reshape output corrupts the
+          // store (issue #7104 follow-up: test_trans_4d). Nothing to protect
+          // for rank<2 -> fold by default.
+          if (dstTy.getRank() < 2)
+            return false;
+          // Same lane-fast dim. Anchor iff dst is the canonical coalesced
+          // descriptor-store layout that tritongpu-coalesce assigns AND the
+          // chain root is not a dot result.
+          //
+          // Folding a canonical dst back to the producer's (compute) layout
+          // demotes global store coalescing (issue #7104), so anchor by
+          // default. The one exception is a dot result re-tiled for the store
+          // (issue #4866): there the store SHOULD take the dot-result layout
+          // and the convert must fold, so a dot-defined root suppresses the
+          // anchor. The root is the value the convert-chain walk stopped on;
+          // its defining op is the layout the store would actually fold to
+          // (elementwise/load producers read as non-dot and still anchor).
+          // Block args / iter_args / non-dot producers return false from both
+          // getDefiningOp<tt::DotOp>() and getDefiningOp<tt::DotScaledOp>(), so
+          // rootIsDot is false and the predicate anchors -- the safe default,
+          // since anchoring an already-canonical dst is
+          // performance-neutral-or-better and only #4866-style dot folding must
+          // be preserved.
+          // A descriptor-store operand is always a distributed (tensor)
+          // encoding; guard so a non-distributed encoding can't reach the
+          // unsafe shared-layout toLinearLayout path below.
+          if (!isa<ttg::DistributedEncodingTrait>(dstTy.getEncoding()))
+            return false;
+          bool rootIsDot = root.getDefiningOp<tt::DotOp>() ||
+                           root.getDefiningOp<tt::DotScaledOp>();
+          int numWarps = ttg::lookupNumWarps(op);
+          int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(
+              op->getParentOfType<ModuleOp>());
+          Attribute canonical = ttgi::canonicalCoalescedDescStoreLayout(
+              dstTy, numWarps, threadsPerWarp);
+          // dst and the canonical coalesced layout may be spelled differently
+          // (different sizePerThread / warp tiling) yet describe the same
+          // physical thread->element mapping. Compare via LinearLayout so any
+          // encoding physically identical to the coalesced layout matches
+          // (issue #7104).
+          bool dstIsCanonical = ttg::areLayoutsEquivalent(
+              dstTy.getShape(),
+              cast<ttg::LayoutEncodingTrait>(dstTy.getEncoding()),
+              cast<ttg::LayoutEncodingTrait>(canonical));
+          return dstIsCanonical && !rootIsDot;
+        }
       }
     }
   }

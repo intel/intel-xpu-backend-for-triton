@@ -251,6 +251,7 @@ struct LoadStoreConversionBase {
       Location loc, Value base, ArrayRef<Value> offsets, ArrayRef<Value> shapes,
       ArrayRef<Value> strides, RankedTensorType tensorType, Type valueElemTy,
       ConversionPatternRewriter &rewriter, ArrayRef<int32_t> boundaryCheck = {},
+      ArrayRef<int32_t> blockLevelCheck = {},
       std::optional<PaddingOption> padding = std::nullopt) const {
 
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -282,6 +283,8 @@ struct LoadStoreConversionBase {
 
     SetVector<unsigned> boundaryProtect(boundaryCheck.begin(),
                                         boundaryCheck.end());
+    SetVector<unsigned> blockLevelProtect(blockLevelCheck.begin(),
+                                          blockLevelCheck.end());
     SmallVector<Value> ptrElems(numElems);
     SmallVector<Value> maskElems;
     for (unsigned i = 0; i < numElems; ++i) {
@@ -305,23 +308,33 @@ struct LoadStoreConversionBase {
       ptrElems[i] = b.gep(ptr_ty(rewriter.getContext(), 1 /*global*/),
                           valueElemTy, base, offset);
 
-      if (boundaryProtect.size() > 0) {
+      if (boundaryProtect.size() > 0 || blockLevelProtect.size() > 0) {
         // Get the LLVM values for mask
         unsigned dim = 0;
         maskElems.push_back(linearize(
             indicesInTensor, shapes, b.int_val(1, 1),
             [&](const Value &index, const Value &shape, const Value &mask) {
-              if (boundaryProtect.contains(dim++)) {
-                // mask = mask && (index < shape) && idx >= 0
+              Value result = mask;
+              if (boundaryProtect.contains(dim)) {
+                // Per-element check: mask = mask && (index < shape) && idx >= 0
                 auto is_pos_idx = b.icmp_sge(index, b.i32_val(0));
-                return b
-                    .and_(
-                        b.and_(b.icmp_slt(index, b.trunc(i32_ty, shape)), mask),
-                        is_pos_idx)
-                    .getResult();
+                result =
+                    b.and_(b.and_(b.icmp_slt(index, b.trunc(i32_ty, shape)),
+                                  result),
+                           is_pos_idx)
+                        .getResult();
+              } else if (blockLevelProtect.contains(dim)) {
+                // Block-level check: use base offset only (no per-thread index)
+                Value baseOffset = offsets[dim];
+                auto is_pos_offset = b.icmp_sge(baseOffset, b.i32_val(0));
+                result = b.and_(b.and_(b.icmp_slt(baseOffset,
+                                                  b.trunc(i32_ty, shape)),
+                                       result),
+                                is_pos_offset)
+                             .getResult();
               }
-
-              return mask;
+              dim++;
+              return result;
             }));
       }
     }
@@ -365,6 +378,7 @@ struct LoadStoreConversionBase {
       Location loc, Value descriptorStruct, ValueRange indices,
       RankedTensorType tensorType, unsigned descriptorRank, Type valueElemTy,
       ConversionPatternRewriter &rewriter, ArrayRef<int32_t> boundaryCheck = {},
+      ArrayRef<int32_t> blockLevelCheck = {},
       std::optional<PaddingOption> padding = std::nullopt) const {
 
     DescriptorFields desc =
@@ -384,9 +398,9 @@ struct LoadStoreConversionBase {
       mappedStrides[i] = desc.strides[i];
     }
 
-    return computeGatherScatterOperands(loc, desc.base, offsets, mappedShapes,
-                                        mappedStrides, tensorType, valueElemTy,
-                                        rewriter, boundaryCheck, padding);
+    return computeGatherScatterOperands(
+        loc, desc.base, offsets, mappedShapes, mappedStrides, tensorType,
+        valueElemTy, rewriter, boundaryCheck, blockLevelCheck, padding);
   }
 
   /// Build per-element NaN masks for out-of-bounds elements.
@@ -2161,11 +2175,35 @@ struct DescriptorLoadOpConversion
             TritonIntelGPUDialect::getDescPaddingAttrName()))
       padding = paddingAttr.getValue();
 
-    // Boundary check all dimensions — tensor descriptors always encode shape
-    // bounds and don't have a user-facing boundaryCheck attribute.
-    SmallVector<int32_t> allDims(descRank);
-    for (size_t i = 0; i < descRank; ++i)
-      allDims[i] = static_cast<int32_t>(i);
+    // Build the boundary-check dimension lists. Classify each dimension:
+    //   - perElementDims: shape[i] or offset[i] is NOT divisible by
+    //   blockShape[i].
+    //     These require per-element mask: (offset[i]+index[i]) < shape[i] &&
+    //     (offset[i]+index[i]) >= 0.
+    //   - blockLevelDims: Both shape[i] and offset[i] ARE divisible by
+    //   blockShape[i].
+    //     These use a uniform (block-level) check on the base offset only:
+    //     offset[i] < shape[i] && offset[i] >= 0. Divisibility means the tile
+    //     is all-in or all-out, but NOT necessarily in-bounds — a fully
+    //     out-of-bounds tile (offset >= shape) must be predicated to preserve
+    //     zero-padding semantics.
+    ArrayRef<int64_t> blockShape = descTensorType.getShape();
+    SmallVector<MakeTensorDescOp> allDescs =
+        mlir::triton::intel::findAllMakeTensorDescOps(op.getDesc());
+    SmallVector<int32_t> perElementDims, blockLevelDims;
+    for (size_t i = 0; i < descRank; ++i) {
+      int64_t bs = blockShape[i];
+      if (!allDescs.empty() &&
+          llvm::all_of(allDescs,
+                       [&](MakeTensorDescOp d) {
+                         return isDivisible(d.getShape()[i], bs);
+                       }) &&
+          isDivisible(op.getIndices()[i], static_cast<unsigned>(bs))) {
+        blockLevelDims.push_back(i);
+      } else {
+        perElementDims.push_back(i);
+      }
+    }
 
     // Reuse the shared gather/scatter operand computation.
     // For column_major descriptor loads the result type has its inner 2
@@ -2199,14 +2237,33 @@ struct DescriptorLoadOpConversion
         mappedStrides[i] = permStrides[i];
         mappedOffsets[i] = permOffsets[i];
       }
+      // The shapes/offsets above have had their inner two dimensions swapped,
+      // so the dimension indices in perElementDims/blockLevelDims (which were
+      // built in descriptor space) must be permuted to match the new order.
+      // Outer (batch) dimensions are unaffected; only the innermost two swap.
+      auto permDimIdx = [&](int32_t dim) -> int32_t {
+        int32_t last = static_cast<int32_t>(descRank) - 1;
+        int32_t secondLast = last - 1;
+        if (dim == secondLast)
+          return last;
+        if (dim == last)
+          return secondLast;
+        return dim;
+      };
+      SmallVector<int32_t> permPerElementDims, permBlockLevelDims;
+      for (int32_t d : perElementDims)
+        permPerElementDims.push_back(permDimIdx(d));
+      for (int32_t d : blockLevelDims)
+        permBlockLevelDims.push_back(permDimIdx(d));
       std::tie(ptrElems, maskElems, otherElems) = computeGatherScatterOperands(
           loc, desc.base, mappedOffsets, mappedShapes, mappedStrides,
-          resultType, valueElemTy, rewriter, allDims, padding);
+          resultType, valueElemTy, rewriter, permPerElementDims,
+          permBlockLevelDims, padding);
     } else {
       std::tie(ptrElems, maskElems, otherElems) =
-          convertTensorDescriptorToTensorOfPtr(loc, llDesc, indices, resultType,
-                                               descRank, valueElemTy, rewriter,
-                                               allDims, padding);
+          convertTensorDescriptorToTensorOfPtr(
+              loc, llDesc, indices, resultType, descRank, valueElemTy, rewriter,
+              perElementDims, blockLevelDims, padding);
     }
 
     // Determine vectorization by querying the descriptor's address-level
@@ -2242,36 +2299,10 @@ struct DescriptorLoadOpConversion
       const size_t nWords = std::max<size_t>(1, totalWidth / width);
       assert((width / valueElemNBits) * nWords * numVecs == numElems);
 
-      // Get the predicate mask for this element (always present for
-      // DescriptorLoadOp since we always do boundary checking)
-      Value pred = maskElems[vecStart];
-
       SmallVector<Type> retTys(nWords, IntegerType::get(ctx, width));
       Type retTy = retTys.size() > 1
                        ? vec_ty(IntegerType::get(ctx, width), nWords)
                        : retTys[0];
-
-      // Build the "other" value for out-of-bounds (same pattern as LoadOp)
-      Value other_ = b.undef(retTy);
-      for (size_t ii = 0; ii < nWords; ++ii) {
-        size_t size = width / valueElemNBits;
-        VectorType vecTy = vec_ty(valueElemTy, size);
-        Value v = b.undef(vecTy);
-        for (size_t s = 0; s < size; ++s) {
-          Value falseVal = otherElems[vecStart + ii * size + s];
-          Value sVal = createIndexAttrConstant(
-              rewriter, loc, typeConverter->getIndexType(), s);
-          v = b.insert_element(vecTy, v, falseVal, sVal);
-        }
-        v = b.bitcast(v, IntegerType::get(ctx, width));
-        other_ = (nWords > 1)
-                     ? b.insert_element(retTy, other_, v,
-                                        createIndexAttrConstant(
-                                            rewriter, loc,
-                                            typeConverter->getIndexType(), ii))
-                     : v;
-      }
-      assert(other_ && "Expecting a valid value");
 
       Value addrElem = b.bitcast(ptrElems[vecStart], ptr_ty(ctx, 1 /*global*/));
       uint32_t alignment = nWords * width / 8;
@@ -2283,17 +2314,46 @@ struct DescriptorLoadOpConversion
       };
 
       Value ret;
-      // NOTE: For DescriptorLoadOp, pred is always present since we always
-      // perform boundary checking for the gather fallback.
-      if (canUsePredicatedInstructions(op)) {
-        auto cacheModifier = tritonToIntelCacheModifier(op);
-        ret = TritonGEN::PredicatedLoadOp::create(
-            rewriter, loc, retTy, addrElem, pred, other_, cacheModifier);
+      if (maskElems.empty()) {
+        // No boundary checks needed (neither per-element nor block-level): emit
+        // an unconditional load.
+        ret = createLoadWithAttrs()[0];
       } else {
-        Block &endBlock = LLVM::intel::createPredicatedBlock(
-            rewriter, loc, pred, SmallVector<Value, 1>{other_},
-            createLoadWithAttrs);
-        ret = *endBlock.args_begin();
+        Value pred = maskElems[vecStart];
+
+        // Build the "other" value for out-of-bounds elements.
+        Value other_ = b.undef(retTy);
+        for (size_t ii = 0; ii < nWords; ++ii) {
+          size_t size = width / valueElemNBits;
+          VectorType vecTy = vec_ty(valueElemTy, size);
+          Value v = b.undef(vecTy);
+          for (size_t s = 0; s < size; ++s) {
+            Value falseVal = otherElems[vecStart + ii * size + s];
+            Value sVal = createIndexAttrConstant(
+                rewriter, loc, typeConverter->getIndexType(), s);
+            v = b.insert_element(vecTy, v, falseVal, sVal);
+          }
+          v = b.bitcast(v, IntegerType::get(ctx, width));
+          other_ =
+              (nWords > 1)
+                  ? b.insert_element(
+                        retTy, other_, v,
+                        createIndexAttrConstant(
+                            rewriter, loc, typeConverter->getIndexType(), ii))
+                  : v;
+        }
+        assert(other_ && "Expecting a valid value");
+
+        if (canUsePredicatedInstructions(op)) {
+          auto cacheModifier = tritonToIntelCacheModifier(op);
+          ret = TritonGEN::PredicatedLoadOp::create(
+              rewriter, loc, retTy, addrElem, pred, other_, cacheModifier);
+        } else {
+          Block &endBlock = LLVM::intel::createPredicatedBlock(
+              rewriter, loc, pred, SmallVector<Value, 1>{other_},
+              createLoadWithAttrs);
+          ret = *endBlock.args_begin();
+        }
       }
       assert(ret && "Expecting a valid value");
 
@@ -2369,18 +2429,31 @@ struct DescriptorStoreOpConversion
     assertDescriptorInnerShapeCompatible(op, descTensorType.getShape(),
                                          valueTy.getShape());
 
-    // Boundary check all dimensions — tensor descriptors always encode shape
-    // bounds and don't have a user-facing boundaryCheck attribute.
-    SmallVector<int32_t> allDims(descRank);
-    for (size_t i = 0; i < descRank; ++i)
-      allDims[i] = static_cast<int32_t>(i);
+    // Build the boundary-check dimension lists (same logic as load).
+    ArrayRef<int64_t> blockShape = descTensorType.getShape();
+    SmallVector<MakeTensorDescOp> allDescs =
+        mlir::triton::intel::findAllMakeTensorDescOps(op.getDesc());
+    SmallVector<int32_t> perElementDims, blockLevelDims;
+    for (size_t i = 0; i < descRank; ++i) {
+      int64_t bs = blockShape[i];
+      if (!allDescs.empty() &&
+          llvm::all_of(allDescs,
+                       [&](MakeTensorDescOp d) {
+                         return isDivisible(d.getShape()[i], bs);
+                       }) &&
+          isDivisible(op.getIndices()[i], static_cast<unsigned>(bs))) {
+        blockLevelDims.push_back(i);
+      } else {
+        perElementDims.push_back(i);
+      }
+    }
 
     // Reuse the shared gather/scatter operand computation.
     SmallVector<Value> ptrElems, maskElems, dummyOther;
     std::tie(ptrElems, maskElems, dummyOther) =
         convertTensorDescriptorToTensorOfPtr(loc, llDesc, indices, valueTy,
                                              descRank, valueElemTy, rewriter,
-                                             allDims);
+                                             perElementDims, blockLevelDims);
 
     // Unpack the value elements
     auto valueElems = unpackLLElements(loc, llValue, rewriter);
@@ -2861,7 +2934,24 @@ struct StoreOpToBlockIOConversion
     } else {
       // Always get the stride of the row dim since block store only supports
       // row major matrix.
-      pitch = getPitch(rewriter, ptr, elemSizeInBits, rowDim);
+      int64_t rowStride = getStride(ptr, rowDim);
+      if (rowStride == 0) {
+        // stride=0 along rowDim means each row is mapped to the same location.
+        // It must be a store height=1 tile. We can set the pitch to an
+        // arbitrary value since the row offset is always 0, as long as we can
+        // satisfy the HW address payload restriction for the given tile width
+        // and element size. To keep it simple, we can just set the pitch to
+        // surface width * element size to avoid issue pitch < base_width caused
+        // by the compensation of the base address alignment.
+        if (tileHeight != 1)
+          return failure();
+        constexpr int64_t MIN_PITCH = 64;
+        int64_t surfaceWidth = tensorType.getDimSize(colDim);
+        pitch =
+            b.i32_val(std::max(MIN_PITCH, surfaceWidth * elemSizeInBits / 8));
+      } else {
+        pitch = getPitch(rewriter, ptr, elemSizeInBits, rowDim);
+      }
     }
     if (!pitch)
       return failure();
