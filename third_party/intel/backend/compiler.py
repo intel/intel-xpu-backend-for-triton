@@ -74,6 +74,9 @@ class XPUOptions:
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
+# Aligned with max_reg_spill in third_party/intel/backend/driver.c
+MAX_REG_SPILL = 1000
+
 SPILL_SIZE_RE = re.compile(r'spill_size\s*[:=]\s*(\d+)')
 
 
@@ -550,9 +553,9 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                 subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
                 if options.grf_mode == 'default':
                     spill_size = extract_spill_size_from_zebin(fbin)
-                    # The threshold of 1000 for spill_size is chosen based on empirical observations
+                    # The threshold for spill_size is chosen based on empirical observations
                     # and aligned with triton/backends/intel/driver.c
-                    if spill_size > 1000:
+                    if spill_size > MAX_REG_SPILL:
                         metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
                         # re-run with double GRF mode
                         ocloc_cmd[-1] = metadata["build_flags"] + shader_dump_opt

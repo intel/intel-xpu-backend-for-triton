@@ -46,7 +46,7 @@ jobs:
       suite: ${{ steps.set_suite.outputs.suite }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - id: set_suite
         run: |
