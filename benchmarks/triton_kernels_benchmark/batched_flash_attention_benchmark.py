@@ -1,4 +1,3 @@
-import math
 from typing import List, Optional
 
 import torch
@@ -16,6 +15,18 @@ def fwd_autotune_config() -> list[triton.Config]:
 
 
 @triton.jit
+def load_if(block_ptr, EVEN_M: tl.constexpr, EVEN_N: tl.constexpr):
+    if EVEN_M & EVEN_N:
+        return tl.load(block_ptr)
+    if EVEN_M:
+        return tl.load(block_ptr, boundary_check=(1, ), padding_option="zero")
+    if EVEN_N:
+        return tl.load(block_ptr, boundary_check=(0, ), padding_option="zero")
+
+    return tl.load(block_ptr, boundary_check=(0, 1), padding_option="zero")
+
+
+@triton.jit
 def store_if(block_ptr, value, EVEN_M: tl.constexpr, EVEN_N: tl.constexpr):
     if EVEN_M & EVEN_N:
         return tl.store(block_ptr, value)
@@ -23,28 +34,29 @@ def store_if(block_ptr, value, EVEN_M: tl.constexpr, EVEN_N: tl.constexpr):
         return tl.store(block_ptr, value, boundary_check=(1, ))
     if EVEN_N:
         return tl.store(block_ptr, value, boundary_check=(0, ))
+
     return tl.store(block_ptr, value, boundary_check=(0, 1))
 
 
 @triton.jit
-def segment_mask(q_attn_arg, k_attn_arg, q_offset, k_offset, MASK_TYPE: tl.constexpr):
+def mask_fn(q_attn_arg, k_attn_arg, q_offset, k_offset, TYPE: tl.constexpr):
     tril_causal = q_offset[:, None] >= k_offset[None, :]
     triu_causal = q_offset[:, None] <= k_offset[None, :]
 
-    if MASK_TYPE == 1:
+    if TYPE == 1:
         return ((triu_causal & ((q_attn_arg[:, None] == k_attn_arg[None, :]) | (k_attn_arg[None, :] == 0))) |
                 (q_offset[:, None] == k_offset[None, :]))
     return ((tril_causal & ((q_attn_arg[:, None] == k_attn_arg[None, :]) | (k_attn_arg[None, :] == 0))) |
             (q_offset[:, None] == k_offset[None, :]))
 
 
-def keep(config: triton.Config) -> bool:
-    block_m = config.kwargs["BLOCK_M"]
-    block_n = config.kwargs["BLOCK_N"]
-    return block_m % block_n == 0
+def keep(config):
+    m = config.kwargs["BLOCK_M"]
+    n = config.kwargs["BLOCK_N"]
+    return m % n == 0
 
 
-@triton.autotune(list(filter(keep, fwd_autotune_config())), key=["QK_DIM", "V_DIM", "MASK_TYPE", "SPARSE_OPT"])
+@triton.autotune(list(filter(keep, fwd_autotune_config())), key=["QK_DIM", "V_DIM", "MASK_FN", "SPARSE_OPT"])
 @triton.jit
 def fa_fwd_kernel(
     q_ptr,
@@ -61,7 +73,7 @@ def fa_fwd_kernel(
     scale,
     QK_DIM: tl.constexpr,
     V_DIM: tl.constexpr,
-    MASK_TYPE: tl.constexpr,
+    MASK_FN: tl.constexpr,
     SPARSE_OPT: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_N: tl.constexpr,
@@ -88,7 +100,7 @@ def fa_fwd_kernel(
         begin = 0
         end = k_len
     else:
-        if MASK_TYPE & 1:
+        if MASK_FN & 1:
             begin = start_m * BLOCK_M
             if begin >= k_len:
                 return
@@ -160,7 +172,7 @@ def fa_fwd_kernel(
         start_n = tl.multiple_of(start_n, BLOCK_N).to(tl.int32)
         k_attn_arg = desc_k_attn_arg.load([start_n])
         offset_n = start_n + tl.arange(0, BLOCK_N)
-        mask = segment_mask(q_attn_arg, k_attn_arg, offset_m, offset_n, MASK_TYPE)
+        mask = mask_fn(q_attn_arg, k_attn_arg, offset_m, offset_n, MASK_FN)
         if not SPARSE_OPT or tl.sum(mask.cast(tl.int32)) != 0:
             k = desc_k.load([start_n, 0]).T
             s = tl.dot(q, k)
@@ -182,339 +194,132 @@ def fa_fwd_kernel(
     store_if(l_block_ptr, l, False, True)
 
 
-class FlashAttentionFunc(torch.autograd.Function):
-
-    @staticmethod
-    def forward(ctx, q, k, v, q_attn_arg, k_attn_arg, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, scale,
-                mask_type, sparse_opt):
-        del ctx, max_seqlen_k
-        q_len, q_head, qk_dim = q.shape
-        _, kv_head, v_dim = v.shape
-        batch_size = cu_seqlens_q.shape[0] - 1
-        o = q.new_empty(q_len, q_head, v_dim)
-        l = q.new_empty(q_len, q_head, dtype=torch.float32)
-        grid = lambda META: (triton.cdiv(max_seqlen_q, META["BLOCK_M"]), q_head, batch_size)
-        fa_fwd_kernel[grid](
-            q,
-            k,
-            v,
-            o,
-            l,
-            q_attn_arg,
-            k_attn_arg,
-            cu_seqlens_q,
-            cu_seqlens_k,
-            q_head,
-            kv_head,
-            scale,
-            QK_DIM=qk_dim,
-            V_DIM=v_dim,
-            MASK_TYPE=mask_type,
-            SPARSE_OPT=sparse_opt,
-        )
-        return o
-
-    @staticmethod
-    def backward(ctx, do):
-        del ctx, do
-        raise NotImplementedError("Backward is not implemented for this benchmark kernel.")
+def batched_attention(q, k, v, q_attn_arg, k_attn_arg, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, scale, mask_opt,
+                      sparse_opt):
+    q_len, q_head, qk_dim = q.shape
+    _, kv_head, v_dim = v.shape
+    batch_size = cu_seqlens_q.shape[0] - 1
+    o = q.new_empty(q_len, q_head, v_dim)
+    l = q.new_empty(q_len, q_head, dtype=torch.float32)
+    grid = lambda META: (triton.cdiv(max_seqlen_q, META["BLOCK_M"]), q_head, batch_size)
+    fa_fwd_kernel[grid](
+        q,
+        k,
+        v,
+        o,
+        l,
+        q_attn_arg,
+        k_attn_arg,
+        cu_seqlens_q,
+        cu_seqlens_k,
+        q_head,
+        kv_head,
+        scale,
+        QK_DIM=qk_dim,
+        V_DIM=v_dim,
+        MASK_FN=mask_opt,
+        SPARSE_OPT=sparse_opt,
+    )
+    return o
 
 
-SEGMENTS = (
-    0,
-    815,
-    2662,
-    3696,
-    4205,
-    4260,
-    6400,
-    7692,
-    9724,
-    11612,
-    13456,
-    15059,
-    15063,
-    16247,
-    16472,
-    18443,
-    20446,
-    22620,
-    22737,
-    23162,
-    23975,
-    25445,
-    25742,
-    26565,
-    27804,
-    30076,
-    31338,
-    33447,
-    35157,
-    35795,
-    36803,
-    38544,
-    38644,
-    39378,
-    39881,
-    41685,
-    41822,
-    42406,
-    44670,
-    44946,
-    45490,
-    47751,
-    49294,
-    50984,
-    52108,
-    52833,
-    53098,
-    54556,
-    56467,
-    58098,
-    59197,
-    60809,
-    62970,
-    63847,
-    64881,
-    65983,
-    67028,
-    67515,
-    67706,
-    70003,
-    70423,
-    72233,
-    74482,
-    74989,
-    77367,
-    79581,
-    80151,
-    80601,
-    81491,
-    82091,
-    82726,
-    84478,
-    85556,
-    87059,
-    88251,
-    88692,
-    89212,
-    90458,
-    90882,
-    92738,
-    93401,
-    95358,
-    97675,
-    98416,
-    100023,
-    101428,
-    102701,
-    104792,
-    106530,
-    106807,
-    107291,
-    108186,
-    108337,
-    108944,
-    109878,
-    111355,
-    112949,
-    114344,
-    114561,
-    116084,
-    118253,
-    118556,
-    120632,
-    121577,
-    123437,
-    123764,
-    125412,
-    125954,
-    127380,
-    127924,
-    128987,
-    129938,
-    130291,
-    132373,
-    132847,
-    133707,
-    133717,
-    134601,
-    136841,
-    137322,
-    137864,
-    139213,
-    141481,
-    142857,
-    144252,
-    144257,
-    145789,
-    147496,
-    149144,
-    151172,
-    152389,
-    152645,
-    154002,
-    154082,
-    154914,
-    156059,
-    156725,
-    157045,
-    159061,
-    159280,
-    161568,
-    163440,
-    165193,
-    165376,
-    166290,
-    168111,
-    170436,
-    170698,
-    171371,
-    173469,
-    173537,
-    174810,
-    176698,
-    178118,
-    179830,
-    180269,
-    181195,
-    181208,
-    181950,
-    182610,
-    184040,
-    184653,
-    185667,
-    186563,
-    188779,
-    190454,
-    190526,
-    191035,
-    191048,
-    192824,
-    192861,
-    193942,
-    194282,
-    195820,
-    196073,
-    196314,
-    196441,
-    197905,
-    198502,
-    200360,
-    202601,
-    204139,
-    204981,
-    205451,
-    206656,
-    207981,
-    208951,
-    209998,
-    211277,
-    211808,
-    212506,
-    214416,
-    215648,
-    216853,
-    217601,
-    219416,
-    220891,
-    223061,
-    223235,
-    224385,
-    226595,
-    227784,
-    228919,
-    231246,
-    232673,
-    233371,
-    233950,
-    234809,
-    236214,
-    238203,
-    240320,
-    242388,
-    242616,
-    244742,
-    247017,
-    247918,
-    249400,
-    251482,
-    252192,
-    252693,
-    253478,
-    255100,
-    255659,
-    256491,
-    256725,
-    257184,
-    258575,
-    260887,
-    262431,
-    263829,
-    263851,
-    264037,
-    266019,
-    266156,
-    267827,
-    268054,
-    269866,
-    270622,
-    270757,
-    270932,
-    271567,
-    271670,
-    272503,
-    273925,
-    275065,
-    276403,
-    278555,
-    278973,
-    280973,
-    281804,
-    283180,
-    284834,
-    285496,
-    287827,
-    288868,
-    289109,
-    289239,
-)
+def random_segments(
+    total: int,
+    num_segments: int,
+    target_stddev: float,
+    stddev_tol: float = 1.0,
+    max_length: int | None = None,
+    max_trials: int = 1000,
+    device: str = "xpu",
+):
+    """
+    Generate random segment boundaries with a target segment length stddev.
 
-SEGMENT_PREFIXES = (33, 65, 129, len(SEGMENTS))
+    Returns:
+        boundaries: (num_segments + 1,)
+        lengths: (num_segments,)
+        max_len: int
+        stddev: float
+    """
+    if total <= 0:
+        raise ValueError("total must be > 0")
+    if num_segments <= 0:
+        raise ValueError("num_segments must be > 0")
+    if total < num_segments:
+        raise ValueError("total must be >= num_segments to keep all segments non-empty")
+    if target_stddev < 0:
+        raise ValueError("target_stddev must be >= 0")
+
+    mean_len = total / num_segments
+    target_cv = target_stddev / mean_len if mean_len > 0 else 0.0
+
+    # Dirichlet concentration controls variability:
+    # larger alpha -> lower variance
+    alpha = max(0.01, 1.0 / (target_cv**2 + 1e-12))
+
+    for _ in range(max_trials):
+        probs = torch.distributions.Dirichlet(torch.full((num_segments, ), alpha)).sample()
+        lengths = torch.round(probs * total).long()
+        lengths = torch.clamp(lengths, min=1)
+
+        diff = total - int(lengths.sum().item())
+
+        while diff > 0:
+            idx = torch.randint(num_segments, (1, ))
+            lengths[idx] += 1
+            diff -= 1
+
+        while diff < 0:
+            valid = torch.nonzero(lengths > 1).squeeze()
+            if valid.numel() == 0:
+                break
+            ridx = torch.randint(valid.numel(), (1, ))
+            idx = valid[ridx]
+            lengths[idx] -= 1
+            diff += 1
+
+        stddev = lengths.float().std(unbiased=False)
+
+        if max_length is not None and int(lengths.max().item()) > max_length:
+            continue
+
+        if abs(float(stddev.item()) - target_stddev) > stddev_tol:
+            continue
+
+        boundaries = torch.cat([torch.tensor([0], dtype=lengths.dtype), lengths.cumsum(0)]).to(device=device)
+
+        return boundaries, lengths, int(lengths.max().item()), float(stddev.item())
+
+    raise RuntimeError(f"Failed to sample segments with target_stddev={target_stddev} "
+                       f"within tolerance={stddev_tol} after {max_trials} trials")
 
 
-def segment_stats(boundaries: List[int]) -> dict[str, float | int]:
-    lengths = [boundaries[i + 1] - boundaries[i] for i in range(len(boundaries) - 1)]
-    mean = sum(lengths) / len(lengths)
-    variance = sum((length - mean)**2 for length in lengths) / len(lengths)
+def segment_stats(boundaries: torch.Tensor):
+    lengths = boundaries[1:] - boundaries[:-1]
+
+    max_length = lengths.max().item()
+
+    mean = lengths.float().mean()
+    std = lengths.float().std(unbiased=False)  # population std
+    cv = (std / mean).item()
+
     return {
-        "num_segments": len(lengths),
-        "total_tokens": boundaries[-1],
-        "max_segment_length": max(lengths),
-        "segment_stddev_over_mean": math.sqrt(variance) / mean,
+        "lengths": lengths,
+        "max_length": max_length,
+        "cv": cv,
     }
 
 
 def build_cases() -> list[dict[str, float | int | tuple[int, ...]]]:
-    cases = []
-    for boundaries_count in SEGMENT_PREFIXES:
-        boundaries = SEGMENTS[:boundaries_count]
-        stats = segment_stats(list(boundaries))
-        cases.append({
-            **stats,
-            "boundaries": boundaries,
-        })
+    H_Q, H_KV, D_HEAD_QK, D_HEAD_V = 8, 8, 64, 64
+    cases = [{
+        "total_tokens": 289239, "num_segments": 256, "segment_stddev_over_mean": 0.5, "H_Q": H_Q, "H_KV": H_KV,
+        "D_HEAD_QK": D_HEAD_QK, "D_HEAD_V": D_HEAD_V
+    }]
     return cases
 
 
 SEGMENT_CASES = build_cases()
-
-
-def find_segment_case(total_tokens: int, num_segments: int) -> dict[str, float | int | tuple[int, ...]]:
-    for case in SEGMENT_CASES:
-        if case["total_tokens"] == total_tokens and case["num_segments"] == num_segments:
-            return case
-    raise KeyError(f"No segment case for total_tokens={total_tokens}, num_segments={num_segments}")
 
 
 def build_segment_bitmap(boundaries: torch.Tensor, total_tokens: int, device: str) -> torch.Tensor:
@@ -531,12 +336,11 @@ def get_benchmark(providers_filter: Optional[List[str]] = None):
     x_vals = [[
         case["total_tokens"],
         case["num_segments"],
-        case["max_segment_length"],
-        round(case["segment_stddev_over_mean"], 6),
-        8,
-        8,
-        64,
-        64,
+        case["segment_stddev_over_mean"],
+        case["H_Q"],
+        case["H_KV"],
+        case["D_HEAD_QK"],
+        case["D_HEAD_V"],
     ] for case in SEGMENT_CASES]
 
     @benchmark_suite.perf_report(
@@ -544,7 +348,6 @@ def get_benchmark(providers_filter: Optional[List[str]] = None):
             x_names=[
                 "TOTAL_TOKENS",
                 "NUM_SEGMENTS",
-                "MAX_SEGMENT_LENGTH",
                 "SEGMENT_STDDEV_OVER_MEAN",
                 "H_Q",
                 "H_KV",
@@ -560,15 +363,10 @@ def get_benchmark(providers_filter: Optional[List[str]] = None):
             plot_name="batched-flash-attn-performance",
             args={},
         ))
-    def benchmark(TOTAL_TOKENS, NUM_SEGMENTS, MAX_SEGMENT_LENGTH, SEGMENT_STDDEV_OVER_MEAN, H_Q, H_KV, D_HEAD_QK,
-                  D_HEAD_V, provider):
+    def benchmark(TOTAL_TOKENS, NUM_SEGMENTS, SEGMENT_STDDEV_OVER_MEAN, H_Q, H_KV, D_HEAD_QK, D_HEAD_V, provider):
         do_bench = benchmark_suite.get_do_bench(n_warmup=400, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
-        case = find_segment_case(TOTAL_TOKENS, NUM_SEGMENTS)
-        assert case["max_segment_length"] == MAX_SEGMENT_LENGTH
-        assert math.isclose(case["segment_stddev_over_mean"], SEGMENT_STDDEV_OVER_MEAN, rel_tol=0.0, abs_tol=1e-6)
-        boundaries = torch.tensor(case["boundaries"], device="xpu", dtype=torch.int64)
-        lengths = boundaries[1:] - boundaries[:-1]
-        bitmap = build_segment_bitmap(boundaries, TOTAL_TOKENS, "xpu")
+        segments, _, max_len, _ = random_segments(TOTAL_TOKENS, NUM_SEGMENTS, SEGMENT_STDDEV_OVER_MEAN)
+        bitmap = build_segment_bitmap(segments, TOTAL_TOKENS, "xpu")
         dtype = torch.float16
         q = torch.randn((TOTAL_TOKENS, H_Q, D_HEAD_QK), dtype=dtype, device="xpu")
         k = torch.randn((TOTAL_TOKENS, H_KV, D_HEAD_QK), dtype=dtype, device="xpu")
@@ -576,13 +374,12 @@ def get_benchmark(providers_filter: Optional[List[str]] = None):
         scale = 0.125
 
         if provider == "triton":
-            triton_fn = lambda: FlashAttentionFunc.apply(q, k, v, bitmap, bitmap, boundaries, boundaries,
-                                                         case["max_segment_length"], case["max_segment_length"], scale, 1,
-                                                         False)
+            triton_fn = lambda: batched_attention(q, k, v, bitmap, bitmap, segments, segments, max_len, scale, 1, False)
             _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
         else:
             raise NotImplementedError(f"Unsupported provider {provider}")
 
+        lengths = segments[1:] - segments[:-1]
         total_pairs = sum(int(length.item()) * (int(length.item()) + 1) // 2 for length in lengths)
         tflops = lambda ms: (2 * total_pairs * H_Q * (D_HEAD_QK + D_HEAD_V) * 1e-12) / (ms * 1e-3)
         moved_bytes = ((q.numel() + k.numel() + v.numel()) * q.element_size() +
