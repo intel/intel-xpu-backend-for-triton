@@ -1,76 +1,48 @@
-diff --git a/CMakeLists.txt b/CMakeLists.txt
-index d956e29e3..96a701128 100644
---- a/CMakeLists.txt
-+++ b/CMakeLists.txt
-@@ -114,20 +114,23 @@ endif()
- # CPU builds define the target before the early return)
- # This extension requires SABI 3.11 since it relies on Py_buffer support. Loading
- # failure is handled gracefully on vLLM side for lower Python versions.
-+# Skip the target entirely on Python < 3.11 so the build doesn't break.
- #
--set(VLLM_SPINLOOP_EXT_SRC "csrc/spinloop.cpp")
--set(SPINLOOP_COMPILE_FLAGS "")
--if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64")
--  list(APPEND SPINLOOP_COMPILE_FLAGS "-mmwaitx")
-+if(Python_VERSION VERSION_GREATER_EQUAL "3.11")
-+  set(VLLM_SPINLOOP_EXT_SRC "csrc/spinloop.cpp")
-+  set(SPINLOOP_COMPILE_FLAGS "")
-+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64")
-+    list(APPEND SPINLOOP_COMPILE_FLAGS "-mmwaitx")
-+  endif()
-+  define_extension_target(
-+    spinloop
-+    DESTINATION vllm
-+    LANGUAGE CXX
-+    SOURCES ${VLLM_SPINLOOP_EXT_SRC}
-+    COMPILE_FLAGS ${SPINLOOP_COMPILE_FLAGS}
-+    USE_SABI 3.11
-+    WITH_SOABI)
- endif()
--define_extension_target(
--  spinloop
--  DESTINATION vllm
--  LANGUAGE CXX
--  SOURCES ${VLLM_SPINLOOP_EXT_SRC}
--  COMPILE_FLAGS ${SPINLOOP_COMPILE_FLAGS}
--  USE_SABI 3.11
--  WITH_SOABI)
+diff --git a/tests/kernels/mamba/test_mamba_mixer2.py b/tests/kernels/mamba/test_mamba_mixer2.py
+index 973e7885c..e474275f5 100644
+--- a/tests/kernels/mamba/test_mamba_mixer2.py
++++ b/tests/kernels/mamba/test_mamba_mixer2.py
+@@ -12,6 +12,7 @@ from vllm.distributed.parallel_state import (
+     initialize_model_parallel,
+ )
+ from vllm.model_executor.layers.mamba.mamba_mixer2 import Mixer2RMSNormGated
++from vllm.platforms import current_platform
+ from vllm.utils.system_utils import update_environment_variables
+ from vllm.utils.torch_utils import set_random_seed
  
- #
- # Forward the non-CUDA device extensions to external CMake scripts.
-diff --git a/setup.py b/setup.py
-index b674d55a1..545b638dc 100644
---- a/setup.py
-+++ b/setup.py
-@@ -1043,7 +1043,8 @@ if _is_cuda() or _is_hip():
-     # copying the relevant .py files from the source repository.
-     ext_modules.append(CMakeExtension(name="vllm.triton_kernels", optional=True))
+@@ -86,7 +87,7 @@ def mixer2_gated_norm_tensor_parallel(
+     )
  
--ext_modules.append(CMakeExtension(name="vllm.spinloop"))
-+if sys.version_info >= (3, 11):
-+    ext_modules.append(CMakeExtension(name="vllm.spinloop"))
+     # initialize distributed
+-    init_distributed_environment()
++    init_distributed_environment(backend=current_platform.dist_backend)
+     with ensure_current_vllm_config():
+         initialize_model_parallel(tensor_model_parallel_size=world_size)
  
- if _is_hip():
-     ext_modules.append(CMakeExtension(name="vllm._rocm_C"))
-diff --git a/tests/utils.py b/tests/utils.py
-index 8989a1c3a..16f0620d1 100644
---- a/tests/utils.py
-+++ b/tests/utils.py
-@@ -1731,8 +1731,13 @@ def spawn_new_process_for_each_test(f: Callable[_P, None]) -> Callable[_P, None]:
+@@ -96,10 +97,11 @@ def mixer2_gated_norm_tensor_parallel(
+     gate_states = torch.randn(batch_size, seq_len, hidden_size)
  
-             repo_root = str(VLLM_PATH.resolve())
-             env = os.environ.copy()
--            env["PYTHONPATH"] = repo_root + os.pathsep + env.get("PYTHONPATH", "")
-+            test_module_dir = str(Path(f.__code__.co_filename).resolve().parent)
-+            env["PYTHONPATH"] = os.pathsep.join(
-+                path
-+                for path in (repo_root, test_module_dir, env.get("PYTHONPATH", ""))
-+                if path
-+            )
-             env[_SPAWN_CHILD_ENV] = "1"
+     # create gated-norm with TP
+-    mixer = Mixer2RMSNormGated(
+-        full_hidden_size=hidden_size,
+-        full_n_groups=n_groups,
+-    )
++    with ensure_current_vllm_config():
++        mixer = Mixer2RMSNormGated(
++            full_hidden_size=hidden_size,
++            full_n_groups=n_groups,
++        )
+     mixer.weight.weight_loader(mixer.weight, weight)  # load
  
-             result = subprocess.run(
-                 [sys.executable, "-c", child_script],
+     # create gated-norm without TP to compute reference
+@@ -115,6 +117,7 @@ def mixer2_gated_norm_tensor_parallel(
+             "get_tensor_model_parallel_rank",
+             return_value=0,
+         ),
++        ensure_current_vllm_config(),
+     ):
+         mixer_single_gpu = Mixer2RMSNormGated(
+             full_hidden_size=hidden_size,
 diff --git a/tests/kernels/mamba/utils.py b/tests/kernels/mamba/utils.py
 index fb8a4b0a2..7ab490aaf 100644
 --- a/tests/kernels/mamba/utils.py
@@ -89,8 +61,26 @@ index fb8a4b0a2..7ab490aaf 100644
      if D is not None:
          out += (x * D).to(out.dtype)
      out = (out if z is None else out * F.silu(z)).to(x.dtype)
+diff --git a/tests/utils.py b/tests/utils.py
+index db5905b92..83e5ae765 100644
+--- a/tests/utils.py
++++ b/tests/utils.py
+@@ -1775,7 +1775,12 @@ def spawn_new_process_for_each_test(f: Callable[_P, None]) -> Callable[_P, None]
+ 
+             repo_root = str(VLLM_PATH.resolve())
+             env = os.environ.copy()
+-            env["PYTHONPATH"] = repo_root + os.pathsep + env.get("PYTHONPATH", "")
++            test_module_dir = str(Path(f.__code__.co_filename).resolve().parent)
++            env["PYTHONPATH"] = os.pathsep.join(
++                path
++                for path in (repo_root, test_module_dir, env.get("PYTHONPATH", ""))
++                if path
++            )
+             env[_SPAWN_CHILD_ENV] = "1"
+ 
+             result = subprocess.run(
 diff --git a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
-index 1f5724ac3..8bbbab3e5 100644
+index 21bda8e17..e7f11e934 100644
 --- a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
 @@ -618,7 +618,7 @@ class NaiveBatchedExperts(mk.FusedMoEExpertsModular):
@@ -112,10 +102,10 @@ index 1f5724ac3..8bbbab3e5 100644
          # ignored but it does support torch.compile + cudagraphs.
          hidden_dim = A.size(-1)
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 56f1d1c1d..0ffe85054 100644
+index f39e44286..86ead168e 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
-@@ -248,12 +248,19 @@ def kernel_unified_attention(
+@@ -251,12 +251,19 @@ def kernel_unified_attention(
      # Per-(token, head) scale caches: used iff KV_QUANT_MODE in {2, 3}.
      k_scale_cache_ptr=None,
      v_scale_cache_ptr=None,
@@ -141,7 +131,7 @@ index 56f1d1c1d..0ffe85054 100644
      # KV cache quantization mode handled inside this kernel via constexpr
      # branches: NONE (0), FP8_PER_TENSOR (1), INT8_PER_TOKEN_HEAD (2),
      # FP8_PER_TOKEN_HEAD (3).
-@@ -272,7 +279,10 @@ def kernel_unified_attention(
+@@ -275,7 +282,10 @@ def kernel_unified_attention(
      USE_TD_QO: tl.constexpr = False,
      Q_IS_FP8: tl.constexpr = False,
  ):
@@ -153,7 +143,7 @@ index 56f1d1c1d..0ffe85054 100644
      USE_FP8_Q_DESCALE: tl.constexpr = KV_QUANT_MODE == 1 and Q_IS_FP8
  
      if USE_TD:
-@@ -933,9 +943,9 @@ def unified_attention(
+@@ -979,9 +989,9 @@ def unified_attention(
  
      # The kernel signature is the same for 2D and 3D — only the launch
      # grid + a handful of constexpr toggles differ.  Per-token-head scale
@@ -166,7 +156,7 @@ index 56f1d1c1d..0ffe85054 100644
      if use_per_token_head_scales:
          ks_strides = k_scale_cache.stride()
          vs_strides = v_scale_cache.stride()
-@@ -944,16 +954,15 @@ def unified_attention(
+@@ -990,16 +1000,15 @@ def unified_attention(
          k_scale_ptr = k_scale_cache
          v_scale_ptr = v_scale_cache
      else:
@@ -192,32 +182,3 @@ index 56f1d1c1d..0ffe85054 100644
      num_segments = num_par_softmax_segments if use_3d else 1
  
      grid: tuple[Any, ...]
-diff --git a/tests/kernels/mamba/test_mamba_mixer2.py b/tests/kernels/mamba/test_mamba_mixer2.py
-index 973e788..e474275 100644
---- a/tests/kernels/mamba/test_mamba_mixer2.py
-+++ b/tests/kernels/mamba/test_mamba_mixer2.py
-@@ -14,2 +14,3 @@ from vllm.distributed.parallel_state import (
- from vllm.model_executor.layers.mamba.mamba_mixer2 import Mixer2RMSNormGated
-+from vllm.platforms import current_platform
- from vllm.utils.system_utils import update_environment_variables
-@@ -88,3 +89,3 @@ def mixer2_gated_norm_tensor_parallel(
-     # initialize distributed
--    init_distributed_environment()
-+    init_distributed_environment(backend=current_platform.dist_backend)
-     with ensure_current_vllm_config():
-@@ -98,6 +99,7 @@ def mixer2_gated_norm_tensor_parallel(
-     # create gated-norm with TP
--    mixer = Mixer2RMSNormGated(
--        full_hidden_size=hidden_size,
--        full_n_groups=n_groups,
--    )
-+    with ensure_current_vllm_config():
-+        mixer = Mixer2RMSNormGated(
-+            full_hidden_size=hidden_size,
-+            full_n_groups=n_groups,
-+        )
-     mixer.weight.weight_loader(mixer.weight, weight)  # load
-@@ -117,2 +119,3 @@ def mixer2_gated_norm_tensor_parallel(
-         ),
-+        ensure_current_vllm_config(),
-     ):
