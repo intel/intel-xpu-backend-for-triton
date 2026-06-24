@@ -160,10 +160,11 @@ LogicalResult verifyGatherScatterResultType(Operation *op,
            << resultType;
 
   Type dtype = resultType.getElementType();
-  if (dtype.getIntOrFloatBitWidth() > 64)
-    return op->emitOpError("dtype cannot be greater than 32 bits");
+  unsigned bitWidth = dtype.getIntOrFloatBitWidth();
+  if (bitWidth > 64)
+    return op->emitOpError("dtype cannot be greater than 64 bits");
 
-  unsigned minCols = 32 / dtype.getIntOrFloatBitWidth() * 8;
+  unsigned minCols = 256 / bitWidth;
   if (unsigned cols = resultType.getShape()[1]; cols < minCols) {
     return op->emitOpError("must have at least ")
            << minCols << " columns for " << dtype << ", but got " << cols;
