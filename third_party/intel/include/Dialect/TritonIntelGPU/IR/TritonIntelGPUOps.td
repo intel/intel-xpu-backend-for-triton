@@ -307,8 +307,8 @@ def TTIG_Subgroup2DBlockLoadFromPtrOp : TTIG_Op<"2d_block_load_from_ptr", [
 def TTIG_DescriptorGatherOp : TTIG_Op<"descriptor_gather", [TT_DescriptorLoadLikeOpInterface]> {
   let summary = "gather multiple rows from a descriptor into a single tensor";
   let description = [{
-    The `ttig.descriptor_gather` op has same semantic to the `ttg.descriptor_gather`.
-    It's verifier and infer is Intel specific.
+    The `ttig.descriptor_gather` op has the same semantics as `tt.descriptor_gather`.
+    Its verifier and layout inference are Intel-specific.
   }];
 
   let arguments = (ins
