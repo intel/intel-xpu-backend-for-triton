@@ -215,7 +215,7 @@ LogicalResult DescriptorGatherOp::verify() {
 
 // -- DescriptorScatterOp --
 LogicalResult DescriptorScatterOp::verify() {
-  return intel::verifyGatherScatterOp(
+  return verifyGatherScatterOp(
       *this, getDesc().getType().getSignlessBlockType(), getSrc().getType(),
       getXOffsets().getType());
 }
