@@ -1,8 +1,11 @@
+import tempfile
+
 import pytest
 import triton
 import triton.language as tl
 
 from triton._internal_testing import numpy_random, to_triton, is_xpu_cri
+from triton.backends.intel.compiler import MAX_REG_SPILL, extract_spill_size_from_zebin
 
 
 def test_empty_kernel(device):
@@ -18,7 +21,7 @@ def test_empty_kernel(device):
 
 @pytest.mark.xfail(is_xpu_cri(), reason="unable to get spill_size")
 def test_auto_large_grf(device):
-    SIZE = 1024
+    SIZE = 2048
 
     @triton.jit
     def kernel(X, SIZE: tl.constexpr):
@@ -27,6 +30,13 @@ def test_auto_large_grf(device):
         tl.store(X + x, y)
 
     x = to_triton(numpy_random(SIZE, dtype_str="float32"), device=device, dst_type="float32")
-    # Triton XPU will auto choose large GRF mode for grf_mode='default'
+    # Triton XPU will choose large GRF mode when spill_size > MAX_REG_SPILL.
     k = kernel[(1, )](x, SIZE=SIZE, num_warps=1, generate_native_code=True, grf_mode='default')
+    with tempfile.NamedTemporaryFile(mode='wb', suffix='.zebin') as f:
+        f.write(k.kernel)
+        f.flush()
+        spill_size = extract_spill_size_from_zebin(f.name)
+    if spill_size <= MAX_REG_SPILL:
+        pytest.skip(f"Kernel did not spill above MAX_REG_SPILL ({spill_size} <= {MAX_REG_SPILL}); "
+                    "auto-large-GRF path was not exercised. Consider increasing SIZE.")
     assert "-cl-intel-256-GRF-per-thread" in k.metadata.build_flags
