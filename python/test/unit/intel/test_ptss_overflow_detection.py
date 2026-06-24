@@ -22,7 +22,6 @@ don't trigger the FMA-induced spill that motivates this fix.
 
 Related: https://github.com/intel/intel-xpu-backend-for-triton/issues/7273
 """
-import os
 import shutil
 
 import pytest
@@ -134,7 +133,7 @@ def _launch_overflowing_kernel():
     ],
     ids=["jit", "aot"],
 )
-def test_ptss_overflow_raises_out_of_resources(generate_native_code, monkeypatch):
+def test_ptss_overflow_raises_out_of_resources(generate_native_code, monkeypatch, fresh_triton_cache):
     """Both AOT and JIT compilation paths should map PTSS overflow to OutOfResources.
 
     The autotuner only catches `OutOfResources`. If either compilation path
@@ -142,11 +141,8 @@ def test_ptss_overflow_raises_out_of_resources(generate_native_code, monkeypatch
     config will fail hard instead of skipping it.
     """
     monkeypatch.setenv("TRITON_XPU_GEN_NATIVE_CODE", "1" if generate_native_code else "0")
-    # Force fresh compilation so the path under test actually runs.
-    cache_dir = os.path.expanduser("~/.triton/cache")
-    if os.path.isdir(cache_dir):
-        import shutil
-        shutil.rmtree(cache_dir, ignore_errors=True)
+    # The fresh_triton_cache fixture forces always_compile so the path under
+    # test actually runs without disturbing the on-disk cache.
 
     with pytest.raises(OutOfResources) as excinfo:
         _launch_overflowing_kernel()

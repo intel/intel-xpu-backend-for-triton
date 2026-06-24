@@ -572,11 +572,12 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                     try:
                         subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
                         retry_succeeded = True
-                    except subprocess.CalledProcessError as retry_e:
-                        if ptss_match := PTSS_OVERFLOW_RE.search(retry_e.output or ''):
-                            required = int(ptss_match.group(1)) if ptss_match.group(1) else 0
-                            limit = int(ptss_match.group(2)) if ptss_match.group(2) else 0
-                            raise OutOfResources(required, limit, "per-thread scratch space (PTSS)") from retry_e
+                    except subprocess.CalledProcessError:
+                        # Retry also failed — fall through to the original error
+                        # handling below, which will classify based on `e.output`
+                        # (the original failure's stderr) and raise either
+                        # OutOfResources or re-raise the original error.
+                        pass
 
                 if not retry_succeeded:
                     # Only reclassify as OutOfResources when ocloc's stderr explicitly
