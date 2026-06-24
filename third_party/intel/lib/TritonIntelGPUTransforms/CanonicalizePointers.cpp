@@ -1782,7 +1782,7 @@ public:
   matchAndRewrite_(UnrealizedConversionCastOp castOp, OneToNOpAdaptor adaptor,
                    ConversionPatternRewriter &rewriter) const override {
     if (castOp.use_empty()) {
-      castOp.erase();
+      rewriter.eraseOp(castOp);
       return success();
     }
     ArrayRef<ValueRange> remappedOperands = adaptor.getOperands();
@@ -1813,7 +1813,7 @@ public:
         fatPtrs.at({fatPtrBase, fatPtrOffset});
     auto newPtr = createTensorPointer(rewriter, fatPtrBase, fatPtrOffset,
                                       castOp.getLoc(), fatPtrAttrs);
-    rewriter.replaceAllUsesWith(newPtr, fatPtrBase);
+    rewriter.replaceAllUsesWith(castOp.getResult(0), newPtr);
     rewriter.eraseOp(castOp);
     return success();
   }
