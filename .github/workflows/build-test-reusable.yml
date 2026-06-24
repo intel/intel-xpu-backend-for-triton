@@ -118,6 +118,7 @@ jobs:
           build_llvm: ${{ inputs.build_llvm }}
           use_spirv_backend: ${{ inputs.use_spirv_backend }}
           command: >
+            source /opt/intel/oneapi/setvars.sh &&
             DEBUG=1
             python -m build --wheel --no-isolation && pip install dist/*.whl
 
