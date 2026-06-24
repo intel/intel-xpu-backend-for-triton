@@ -711,4 +711,32 @@ unsigned estimateLoadHWCost(RankedTensorType type, Operation *loadOp) {
          llvm::divideCeil(cols, colsPerMessage);
 }
 
+Attribute canonicalCoalescedDescStoreLayout(RankedTensorType type, int numWarps,
+                                            int threadsPerWarp) {
+  // Replicate lib/Dialect/TritonGPU/Transforms/Coalesce.cpp's
+  // pickDescriptorLoadStoreLayout EXACTLY. This is the canonical layout that
+  // tritongpu-coalesce inserts for descriptor stores.
+  auto shapePerCTA = triton::gpu::getShapePerCTA(type);
+  int numElems = mlir::product<int64_t>(shapePerCTA);
+  int numThreads = numWarps * threadsPerWarp;
+  int numElemsPerThread = std::max(numElems / numThreads, 1);
+
+  // 128-bit max per-thread vector access (the coalesced-access granularity);
+  // mirrors Coalesce.cpp. Divide by the element width to get elements/lane.
+  int maxVectorSize = 128 / type.getElementTypeBitWidth();
+
+  int vectorSize = std::min(numElemsPerThread, maxVectorSize);
+  SmallVector<unsigned> sizePerThread(type.getRank(), 1);
+  sizePerThread.back() = vectorSize;
+
+  SmallVector<unsigned> order =
+      getMatrixOrder(type.getRank(), /*rowMajor*/ true);
+  auto cgaLayout = triton::gpu::getCGALayout(type.getEncoding());
+
+  Attribute layout = triton::gpu::BlockedEncodingAttr::get(
+      type.getContext(), type.getShape(), sizePerThread, order, numWarps,
+      threadsPerWarp, cgaLayout);
+  return layout;
+}
+
 } // namespace mlir::triton::gpu::intel
