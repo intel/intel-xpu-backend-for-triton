@@ -2,6 +2,20 @@
 # runtime by the Python driver using `icpx`. To unit-test it we need the SYCL
 # toolchain at configure time. When it is not available (the common case for a
 # plain build), skip this test so the rest of the build is unaffected.
+#
+# NOTE: do not call find_package(IntelSYCL) unconditionally. On a host with a
+# partial oneAPI install (e.g. the Windows CI runner), IntelSYCLConfig.cmake is
+# present and gets executed, but raises a FATAL_ERROR when it cannot locate the
+# SYCL compiler -- and QUIET does not suppress a FATAL_ERROR. That aborts the
+# whole CMake configure. Probe for the compiler first and bail out cleanly when
+# it is missing, mirroring the runtime driver's `find_sycl()` lookup of `icpx`.
+find_program(ICPX_EXECUTABLE NAMES icpx icx)
+
+if(NOT ICPX_EXECUTABLE)
+  message(STATUS "SYCL compiler (icpx) not found: skipping ArchParser unit test")
+  return()
+endif()
+
 find_package(IntelSYCL QUIET)
 
 if(NOT IntelSYCL_FOUND)
