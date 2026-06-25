@@ -29,12 +29,15 @@ def load_if(block_ptr, EVEN_M: tl.constexpr, EVEN_N: tl.constexpr):
 @triton.jit
 def store_if(block_ptr, value, EVEN_M: tl.constexpr, EVEN_N: tl.constexpr):
     if EVEN_M & EVEN_N:
-        return tl.store(block_ptr, value)
+        tl.store(block_ptr, value)
+        return
     if EVEN_M:
-        return tl.store(block_ptr, value, boundary_check=(1, ))
+        tl.store(block_ptr, value, boundary_check=(1, ))
+        return
     if EVEN_N:
-        return tl.store(block_ptr, value, boundary_check=(0, ))
-    return tl.store(block_ptr, value, boundary_check=(0, 1))
+        tl.store(block_ptr, value, boundary_check=(0, ))
+        return
+    tl.store(block_ptr, value, boundary_check=(0, 1))
 
 
 @triton.jit
