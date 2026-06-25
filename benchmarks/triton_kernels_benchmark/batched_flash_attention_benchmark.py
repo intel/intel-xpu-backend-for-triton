@@ -380,7 +380,7 @@ def get_benchmark(providers_filter: Optional[List[str]] = None):
             raise NotImplementedError(f"Unsupported provider {provider}")
 
         lengths = segments[1:] - segments[:-1]
-        total_pairs = sum(int(length.item()) * (int(length.item()) + 1) // 2 for length in lengths)
+        total_pairs = int(((lengths * (lengths + 1)) // 2).sum().item())
         tflops = lambda ms: (2 * total_pairs * H_Q * (D_HEAD_QK + D_HEAD_V) * 1e-12) / (ms * 1e-3)
         moved_bytes = ((q.numel() + k.numel() + v.numel()) * q.element_size() +
                        TOTAL_TOKENS * H_Q * D_HEAD_V * q.element_size())
