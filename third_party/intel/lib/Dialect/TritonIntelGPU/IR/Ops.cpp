@@ -149,9 +149,9 @@ LogicalResult Subgroup2DBlockLoadFromPtrOp::verify() {
 }
 
 // -- DescriptorGatherOp
-LogicalResult verifyGatherScatterResultType(Operation *op,
-                                            ShapedType resultType,
-                                            ShapedType indicesType) {
+static LogicalResult verifyGatherScatterResultType(Operation *op,
+                                                   ShapedType resultType,
+                                                   ShapedType indicesType) {
   if (indicesType.getRank() != 1)
     return op->emitOpError("x offsets must be a 1D tensor, but got ")
            << indicesType;
@@ -178,9 +178,9 @@ LogicalResult verifyGatherScatterResultType(Operation *op,
   return success();
 }
 
-LogicalResult verifyGatherScatterOp(Operation *op, ShapedType blockType,
-                                    ShapedType resultType,
-                                    ShapedType indicesType) {
+static LogicalResult verifyGatherScatterOp(Operation *op, ShapedType blockType,
+                                           ShapedType resultType,
+                                           ShapedType indicesType) {
   // Gather from `!tt.tensordesc<1xMxdtype>`.
   if (blockType.getRank() != 2) {
     return op->emitOpError("descriptor block must be a 2D tensor, but got ")
