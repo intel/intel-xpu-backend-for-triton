@@ -109,6 +109,14 @@ bool isDivisible(Value value, unsigned divisor) {
   return false;
 }
 
+static Attribute inferSrcEncoding(ttgi::DescriptorGatherOp op,
+                                  Attribute dstEnc) {
+  // only the offsets require the slice encoding, the base pointer is a scalar
+  // and does not require any encoding.
+  return SliceEncodingAttr::get(op->getContext(), 1,
+                                cast<DistributedEncodingTrait>(dstEnc));
+}
+
 Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
   if (auto dotEnc = dyn_cast<DotOperandEncodingAttr>(encoding)) {
     if (auto parentEnc = dyn_cast<DpasEncodingAttr>(dotEnc.getParent())) {
@@ -127,6 +135,9 @@ Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
       }
     }
   }
+
+  if (auto gatherOp = dyn_cast<ttgi::DescriptorGatherOp>(op))
+    return inferSrcEncoding(gatherOp, encoding);
 
   return mlir::inferSrcEncoding(op, encoding);
 }
