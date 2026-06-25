@@ -29,13 +29,12 @@ def load_if(block_ptr, EVEN_M: tl.constexpr, EVEN_N: tl.constexpr):
 @triton.jit
 def store_if(block_ptr, value, EVEN_M: tl.constexpr, EVEN_N: tl.constexpr):
     if EVEN_M & EVEN_N:
-        tl.store(block_ptr, value)
+        return tl.store(block_ptr, value)
     if EVEN_M:
-        tl.store(block_ptr, value, boundary_check=(1, ))
+        return tl.store(block_ptr, value, boundary_check=(1, ))
     if EVEN_N:
-        tl.store(block_ptr, value, boundary_check=(0, ))
-    else:
-        tl.store(block_ptr, value, boundary_check=(0, 1))
+        return tl.store(block_ptr, value, boundary_check=(0, ))
+    return tl.store(block_ptr, value, boundary_check=(0, 1))
 
 
 @triton.jit
@@ -231,6 +230,7 @@ def random_segments(
     max_length: int | None = None,
     max_trials: int = 1000,
     device: str = "xpu",
+    seed: int | None = None,
 ):
     """
     Generate random segment boundaries with a target segment length stddev.
@@ -249,6 +249,9 @@ def random_segments(
         raise ValueError("total must be >= num_segments to keep all segments non-empty")
     if target_stddev < 0:
         raise ValueError("target_stddev must be >= 0")
+
+    if seed is not None:
+        torch.manual_seed(seed)
 
     mean_len = total / num_segments
     target_cv = target_stddev / mean_len if mean_len > 0 else 0.0
@@ -365,7 +368,9 @@ def get_benchmark(providers_filter: Optional[List[str]] = None):
         ))
     def benchmark(TOTAL_TOKENS, NUM_SEGMENTS, SEGMENT_STDDEV_OVER_MEAN, H_Q, H_KV, D_HEAD_QK, D_HEAD_V, provider):
         do_bench = benchmark_suite.get_do_bench(n_warmup=400, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
-        segments, _, max_len, _ = random_segments(TOTAL_TOKENS, NUM_SEGMENTS, SEGMENT_STDDEV_OVER_MEAN)
+        mean_len = TOTAL_TOKENS / NUM_SEGMENTS
+        segments, _, max_len, _ = random_segments(TOTAL_TOKENS, NUM_SEGMENTS, SEGMENT_STDDEV_OVER_MEAN * mean_len,
+                                                  seed=42)
         bitmap = build_segment_bitmap(segments, TOTAL_TOKENS, "xpu")
         dtype = torch.float16
         q = torch.randn((TOTAL_TOKENS, H_Q, D_HEAD_QK), dtype=dtype, device="xpu")
