@@ -4,7 +4,7 @@ from triton.backends.intel.driver import compile_module_from_src
 from triton.backends.intel.track import track
 from triton.backends.intel.extension_utils import query_device_extensions
 from triton import knobs
-from triton.runtime.errors import IntelGPUError
+from triton.runtime.errors import IntelGPUError, OutOfResources
 
 from dataclasses import dataclass
 import functools
@@ -78,6 +78,12 @@ class XPUOptions:
 MAX_REG_SPILL = 1000
 
 SPILL_SIZE_RE = re.compile(r'spill_size\s*[:=]\s*(\d+)')
+PTSS_OVERFLOW_RE = re.compile(
+    r'total scratch space.*?(\d+)\s*bytes.*?max permitted PTSS\s*(\d+)\s*bytes'
+    r'|scratch space exceeds.*?limit'
+    r'|per.thread scratch space.*?exceed',
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def extract_spill_size_from_zebin(file):
@@ -345,6 +351,14 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if properties["has_256b_load_store"]:
             intel.passes.ttgpuir.add_widen_load_store_encoding(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
+        # CanonicalizePointers must run BEFORE accelerate_matmul: once DPAS
+        # (dot_op) encodings are applied to the pointer tensors, the pass's
+        # rewrites produce IR that crashes LowerTo2DBlockLoad's AxisInfoAnalysis.
+        # The trailing canonicalizer folds the zero offsets / identity arithmetic
+        # and removes the unrealized_conversion_casts the pass leaves behind.
+        if not knobs.intel.disable_canonicalize_pointers:
+            intel.passes.ttgpuir.add_canonicalize_pointers(pm, True)
+            passes.common.add_canonicalizer(pm)
 
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
         intel.passes.ttgpuir.add_stage_large_fma_dots_via_slm(pm)
@@ -571,10 +585,22 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                         subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
                         retry_succeeded = True
                     except subprocess.CalledProcessError:
-                        # Retry also failed — raise the original error below.
+                        # Retry also failed — fall through to the original error
+                        # handling below, which will classify based on `e.output`
+                        # (the original failure's stderr) and raise either
+                        # OutOfResources or re-raise the original error.
                         pass
 
                 if not retry_succeeded:
+                    # Only reclassify as OutOfResources when ocloc's stderr explicitly
+                    # reports a PTSS overflow. Other IntelGPUErrors (e.g. degenerate
+                    # zebin from extract_spill_size_from_zebin, ocloc SIGSEGV) keep
+                    # their original error class so the user sees the real cause.
+                    output = getattr(e, 'output', '') or ''
+                    if ptss_match := PTSS_OVERFLOW_RE.search(output):
+                        required = int(ptss_match.group(1)) if ptss_match.group(1) else 0
+                        limit = int(ptss_match.group(2)) if ptss_match.group(2) else 0
+                        raise OutOfResources(required, limit, "per-thread scratch space (PTSS)") from e
                     if isinstance(e, IntelGPUError):
                         raise
                     if e.returncode == 255:
