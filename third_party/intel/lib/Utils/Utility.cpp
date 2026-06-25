@@ -269,8 +269,24 @@ SmallVector<tt::MakeTensorDescOp> findAllMakeTensorDescOps(Value val) {
     // It is not a valid definition but does not invalidate other results.
     if (cur.getDefiningOp<ub::PoisonOp>())
       continue;
-    if (cur.getDefiningOp<tt::CallOp>())
-      return {};
+    if (auto callOp = cur.getDefiningOp<tt::CallOp>()) {
+      unsigned resultIndex = cast<OpResult>(cur).getResultNumber();
+      ModuleOp moduleOp = callOp->getParentOfType<ModuleOp>();
+      if (!moduleOp)
+        return {};
+      auto funcOp = moduleOp.lookupSymbol<tt::FuncOp>(callOp.getCallee());
+      if (!funcOp)
+        return {};
+      for (Block &block : funcOp.getBody()) {
+        auto returnOp = dyn_cast<tt::ReturnOp>(block.getTerminator());
+        if (!returnOp)
+          continue;
+        if (resultIndex >= returnOp.getOperands().size())
+          return {};
+        worklist.push_back(returnOp.getOperands()[resultIndex]);
+      }
+      continue;
+    }
     if (auto makeDescOp = cur.getDefiningOp<tt::MakeTensorDescOp>()) {
       results.insert(makeDescOp);
       continue;
