@@ -19,7 +19,7 @@ endif()
 
 set(_ARCH_PARSER_SRC ${CMAKE_CURRENT_SOURCE_DIR}/../../backend/arch_parser.c)
 set(_ARCH_PARSER_TEST ${CMAKE_CURRENT_SOURCE_DIR}/ArchParserTest.cpp)
-set(_ARCH_PARSER_BIN ${CMAKE_CURRENT_BINARY_DIR}/ArchParser)
+set(_ARCH_PARSER_BIN ${CMAKE_CURRENT_BINARY_DIR}/ArchParserTest)
 
 # GoogleTest is built by the host compiler, but its static archives are ELF and
 # ABI-compatible with icpx (both use libstdc++ on Linux), so icpx can link them.
