@@ -228,21 +228,21 @@ def batched_attention(q, k, v, q_attn_arg, k_attn_arg, cu_seqlens_q, cu_seqlens_
 def random_segments(
     total: int,
     num_segments: int,
-    target_stddev: float,
-    stddev_tol: float = 1.0,
+    target_cv: float,
+    cv_tol: float = 1.0,
     max_length: int | None = None,
     max_trials: int = 1000,
     device: str = "xpu",
     seed: int | None = None,
 ):
     """
-    Generate random segment boundaries with a target segment length stddev.
+    Generate random segment boundaries with a target coefficient of variation (CV = stddev / mean).
 
     Returns:
         boundaries: (num_segments + 1,)
         lengths: (num_segments,)
         max_len: int
-        stddev: float
+        cv: float
     """
     if total <= 0:
         raise ValueError("total must be > 0")
@@ -250,14 +250,13 @@ def random_segments(
         raise ValueError("num_segments must be > 0")
     if total < num_segments:
         raise ValueError("total must be >= num_segments to keep all segments non-empty")
-    if target_stddev < 0:
-        raise ValueError("target_stddev must be >= 0")
+    if target_cv < 0:
+        raise ValueError("target_cv must be >= 0")
 
     if seed is not None:
         torch.manual_seed(seed)
 
     mean_len = total / num_segments
-    target_cv = target_stddev / mean_len if mean_len > 0 else 0.0
 
     # Dirichlet concentration controls variability:
     # larger alpha -> lower variance
@@ -284,20 +283,20 @@ def random_segments(
             lengths[idx] -= 1
             diff += 1
 
-        stddev = lengths.float().std(unbiased=False)
+        realized_cv = float(lengths.float().std(unbiased=False).item()) / mean_len if mean_len > 0 else 0.0
 
         if max_length is not None and int(lengths.max().item()) > max_length:
             continue
 
-        if abs(float(stddev.item()) - target_stddev) > stddev_tol:
+        if abs(realized_cv - target_cv) > cv_tol:
             continue
 
         boundaries = torch.cat([torch.tensor([0], dtype=lengths.dtype), lengths.cumsum(0)]).to(device=device)
 
-        return boundaries, lengths, int(lengths.max().item()), float(stddev.item())
+        return boundaries, lengths, int(lengths.max().item()), realized_cv
 
-    raise RuntimeError(f"Failed to sample segments with target_stddev={target_stddev} "
-                       f"within tolerance={stddev_tol} after {max_trials} trials")
+    raise RuntimeError(f"Failed to sample segments with target_cv={target_cv} "
+                       f"within tolerance={cv_tol} after {max_trials} trials")
 
 
 def segment_stats(boundaries: torch.Tensor):
@@ -371,9 +370,7 @@ def get_benchmark(providers_filter: Optional[List[str]] = None):
         ))
     def benchmark(TOTAL_TOKENS, NUM_SEGMENTS, SEGMENT_STDDEV_OVER_MEAN, H_Q, H_KV, D_HEAD_QK, D_HEAD_V, provider):
         do_bench = benchmark_suite.get_do_bench(n_warmup=400, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
-        mean_len = TOTAL_TOKENS / NUM_SEGMENTS
-        segments, _, max_len, _ = random_segments(TOTAL_TOKENS, NUM_SEGMENTS, SEGMENT_STDDEV_OVER_MEAN * mean_len,
-                                                  seed=42)
+        segments, _, max_len, _ = random_segments(TOTAL_TOKENS, NUM_SEGMENTS, SEGMENT_STDDEV_OVER_MEAN, seed=42)
         bitmap = build_segment_bitmap(segments, TOTAL_TOKENS, "xpu")
         dtype = torch.float16
         q = torch.randn((TOTAL_TOKENS, H_Q, D_HEAD_QK), dtype=dtype, device="xpu")
