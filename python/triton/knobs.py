@@ -438,6 +438,15 @@ class compilation_knobs(base_knobs):
     disable_line_info: env_bool = env_bool("TRITON_DISABLE_LINE_INFO")
     front_end_debugging: env_bool = env_bool("TRITON_FRONT_END_DEBUGGING")
     allow_non_constexpr_globals: env_bool = env_bool("TRITON_ALLOW_NON_CONSTEXPR_GLOBALS")
+    # Debug/benchmark only: on TMA-capable NVIDIA targets (sm>=9.0), force the
+    # `make_tensor_descriptor` -> pointer rewrite that is normally reserved for
+    # pre-Hopper. Lets us measure the non-TMA fallback path on Hopper/Blackwell.
+    # NVIDIA-only — other backends select descriptor lowering differently.
+    nvidia_force_td_test: env_bool = env_bool("TRITON_INTEL_NVIDIA_FORCE_TD_TEST")
+    # Debug/benchmark only: disable the Hopper+ loop-recreated-descriptor gate,
+    # so a descriptor recreated in a loop keeps the raw per-iteration
+    # tensormap_create (the un-optimized TMA baseline). NVIDIA-only.
+    nvidia_disable_loop_td_rewrite: env_bool = env_bool("TRITON_INTEL_NVIDIA_DISABLE_LOOP_TD_REWRITE")
     # Instrumentation mode is checked on every run, which is expensive.
     # We cache the value here to avoid the expensive check on every run.
     instrumentation_mode: str = env_str("TRITON_INSTRUMENTATION_MODE", "").get()

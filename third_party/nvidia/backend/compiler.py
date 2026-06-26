@@ -246,8 +246,19 @@ class CUDABackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
-        if capability // 10 < 9:
-            passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
+        # Descriptor lowering choice (always the same pass, different mode):
+        #  * Pre-Hopper (no TMA) or TRITON_INTEL_NVIDIA_FORCE_TD_TEST: STATIC
+        #    rewrite — demote every descriptor to pointers (loop_recreated=False).
+        #  * Hopper+: DYNAMIC rewrite (loop_recreated=True) — demote only
+        #    descriptors recreated in a loop and not hoistable (per-iteration
+        #    tensormap_create, ~2.5x slower than a pointer load); leave hoistable
+        #    / out-of-loop descriptors on the fast TMA path. No-ops if none match.
+        #  * TRITON_INTEL_NVIDIA_DISABLE_LOOP_TD_REWRITE: skip entirely, keep the
+        #    raw per-iteration tensormap_create (un-optimized TMA baseline, A/B).
+        if capability // 10 < 9 or knobs.compilation.nvidia_force_td_test:
+            passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm, False)
+        elif not knobs.compilation.nvidia_disable_loop_td_rewrite:
+            passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm, True)
         passes.common.add_canonicalizer(pm)
         passes.ttir.add_combine(pm)
         passes.ttir.add_reorder_broadcast(pm)

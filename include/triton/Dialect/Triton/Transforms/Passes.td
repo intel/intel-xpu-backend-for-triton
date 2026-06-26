@@ -41,7 +41,20 @@ def TritonRewriteTensorDescriptorToPointer : Pass</*cli-arg*/"triton-rewrite-ten
     This pass rewrites all load/store semantics initiated by a `tt.make_tensor_descriptor` into pointer semantics. After
     this pass, `tt.make_tensor_descriptor`  will disappear, and it generates logics to compute the pointer/mask/other
     for each load/store.
+
+    With `loop-recreated-only`, the rewrite is selective: only descriptors that
+    are recreated inside a loop AND cannot be hoisted out (their operands are not
+    loop-invariant per LICM's rule) are demoted to pointers; every other
+    descriptor is left untouched (e.g. to keep the TMA path on Hopper+). Used on
+    TMA-capable NVIDIA targets, where a per-iteration `tensormap_create` is
+    slower than a pointer load but a hoistable descriptor should stay on TMA.
   }];
+
+  let options = [
+    Option<"loopRecreatedOnly", "loop-recreated-only", "bool", /*default=*/"false",
+           "Only rewrite descriptors recreated in a loop and not hoistable; "
+           "leave all other descriptors untouched (default: rewrite all).">,
+  ];
 
   let dependentDialects = ["mlir::triton::TritonDialect"];
 }

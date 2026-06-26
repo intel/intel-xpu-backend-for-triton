@@ -1,0 +1,502 @@
+diff --git a/include/triton/Dialect/Triton/Transforms/Passes.td b/include/triton/Dialect/Triton/Transforms/Passes.td
+index bc163b10f..21a48a35c 100644
+--- a/include/triton/Dialect/Triton/Transforms/Passes.td
++++ b/include/triton/Dialect/Triton/Transforms/Passes.td
+@@ -41,8 +41,21 @@ def TritonRewriteTensorDescriptorToPointer : Pass</*cli-arg*/"triton-rewrite-ten
+     This pass rewrites all load/store semantics initiated by a `tt.make_tensor_descriptor` into pointer semantics. After
+     this pass, `tt.make_tensor_descriptor`  will disappear, and it generates logics to compute the pointer/mask/other
+     for each load/store.
++
++    With `loop-recreated-only`, the rewrite is selective: only descriptors that
++    are recreated inside a loop AND cannot be hoisted out (their operands are not
++    loop-invariant per LICM's rule) are demoted to pointers; every other
++    descriptor is left untouched (e.g. to keep the TMA path on Hopper+). Used on
++    TMA-capable NVIDIA targets, where a per-iteration `tensormap_create` is
++    slower than a pointer load but a hoistable descriptor should stay on TMA.
+   }];
+ 
++  let options = [
++    Option<"loopRecreatedOnly", "loop-recreated-only", "bool", /*default=*/"false",
++           "Only rewrite descriptors recreated in a loop and not hoistable; "
++           "leave all other descriptors untouched (default: rewrite all).">,
++  ];
++
+   let dependentDialects = ["mlir::triton::TritonDialect"];
+ }
+ 
+diff --git a/lib/Dialect/Triton/Transforms/RewriteTensorDescriptorToPointer.cpp b/lib/Dialect/Triton/Transforms/RewriteTensorDescriptorToPointer.cpp
+index 30e6dac6f..d73221665 100644
+--- a/lib/Dialect/Triton/Transforms/RewriteTensorDescriptorToPointer.cpp
++++ b/lib/Dialect/Triton/Transforms/RewriteTensorDescriptorToPointer.cpp
+@@ -7,15 +7,21 @@
+ 
+ #include "mlir/Dialect/SCF/IR/SCF.h"
+ #include "mlir/Dialect/SCF/Transforms/Patterns.h"
++#include "mlir/Dialect/UB/IR/UBOps.h"
+ #include "mlir/IR/Attributes.h"
+ #include "mlir/IR/BuiltinAttributes.h"
+ #include "mlir/IR/Operation.h"
+ #include "mlir/IR/ValueRange.h"
++#include "mlir/Interfaces/LoopLikeInterface.h"
++#include "mlir/Interfaces/SideEffectInterfaces.h"
+ #include "mlir/Support/LLVM.h"
+ #include "llvm/ADT/ArrayRef.h"
++#include "llvm/ADT/DenseMap.h"
+ #include "llvm/ADT/STLExtras.h"
++#include "llvm/ADT/SmallPtrSet.h"
+ #include "llvm/ADT/SmallVector.h"
+ #include "llvm/ADT/SmallVectorExtras.h"
++#include "llvm/ADT/TypeSwitch.h"
+ #include "llvm/Support/LogicalResult.h"
+ #include "llvm/Support/raw_ostream.h"
+ #include <mlir/Dialect/Arith/IR/Arith.h>
+@@ -42,6 +48,127 @@ bool hasATensorDescriptorType(mlir::TypeRange types) {
+ 
+ using namespace mlir;
+ 
++/// Trace a tensor-descriptor Value back to its defining `MakeTensorDescOp`(s),
++/// threading through scf iter-args/results, select, and casts. Returns empty
++/// ("cannot classify", handled conservatively by callers) for a value we can't
++/// see through (function arg, call, induction var, unknown op). Kept in sync
++/// with third_party/intel/lib/Utils/Utility.cpp (upstream can't depend on it).
++static SmallVector<triton::MakeTensorDescOp>
++findAllMakeTensorDescOps(Value val) {
++  llvm::SmallSetVector<triton::MakeTensorDescOp, 4> results;
++  SmallPtrSet<Value, 8> visited;
++  SmallVector<Value, 8> worklist{val};
++
++  while (!worklist.empty()) {
++    Value cur = worklist.pop_back_val();
++    if (!visited.insert(cur).second)
++      continue;
++
++    if (auto arg = dyn_cast<BlockArgument>(cur)) {
++      Operation *parentOp = arg.getParentBlock()->getParentOp();
++      if (!parentOp || isa<FunctionOpInterface>(parentOp))
++        return {};
++      if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
++        if (arg == forOp.getInductionVar())
++          return {};
++        unsigned idx = arg.getArgNumber() - 1;
++        worklist.push_back(forOp.getInitArgs()[idx]);
++        auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
++        worklist.push_back(yieldOp->getOperand(idx));
++        continue;
++      }
++      if (auto whileOp = dyn_cast<scf::WhileOp>(parentOp)) {
++        unsigned idx = arg.getArgNumber();
++        Block *beforeBlock = &whileOp.getBefore().front();
++        Block *afterBlock = &whileOp.getAfter().front();
++        auto condOp = cast<scf::ConditionOp>(beforeBlock->getTerminator());
++        auto afterYieldOp = cast<scf::YieldOp>(afterBlock->getTerminator());
++        if (arg.getParentBlock() == beforeBlock) {
++          worklist.push_back(whileOp.getInits()[idx]);
++          worklist.push_back(afterYieldOp->getOperand(idx));
++        } else {
++          worklist.push_back(condOp.getArgs()[idx]);
++        }
++        continue;
++      }
++      return {}; // unknown parent op
++    }
++
++    // Poison placeholder (e.g. pipelined-loop init): skip, don't invalidate.
++    if (cur.getDefiningOp<ub::PoisonOp>())
++      continue;
++    if (cur.getDefiningOp<triton::CallOp>())
++      return {};
++    if (auto makeDescOp = cur.getDefiningOp<triton::MakeTensorDescOp>()) {
++      results.insert(makeDescOp);
++      continue;
++    }
++    if (auto opRes = dyn_cast<OpResult>(cur)) {
++      Operation *defOp = opRes.getOwner();
++      if (auto loopOp = dyn_cast<LoopLikeOpInterface>(defOp)) {
++        worklist.push_back(loopOp.getYieldedValues()[opRes.getResultNumber()]);
++        continue;
++      }
++      if (auto ifOp = dyn_cast<scf::IfOp>(defOp)) {
++        for (Region *rgn : {&ifOp.getThenRegion(), &ifOp.getElseRegion()}) {
++          if (rgn->empty())
++            continue;
++          auto y = cast<scf::YieldOp>(rgn->front().getTerminator());
++          worklist.push_back(y->getOperand(opRes.getResultNumber()));
++        }
++        continue;
++      }
++      if (auto selectOp = dyn_cast<arith::SelectOp>(defOp)) {
++        worklist.push_back(selectOp.getTrueValue());
++        worklist.push_back(selectOp.getFalseValue());
++        continue;
++      }
++      if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(defOp)) {
++        if (castOp.getInputs().size() != 1)
++          return {};
++        worklist.push_back(castOp.getInputs()[0]);
++        continue;
++      }
++      return {}; // unknown defining op
++    }
++    return {};
++  }
++  return results.takeVector();
++}
++
++/// True if `value` would be loop-invariant *after* LICM, replicating
++/// mlir::moveLoopInvariantCode's rule (pure op + recursively-invariant
++/// operands). We can't just query LICM: this pass runs in make_ttir, before
++/// triton-licm in make_ttgir, so hoistable temporaries are still in the loop.
++/// Recursion stops at impure ops, so an in-loop `tt.load` base (the paged-KV
++/// case) stays loop-varying. `memo` collapses diamond operand DAGs to O(N).
++static bool isLoopInvariantAfterLICM(Value value, LoopLikeOpInterface loop,
++                                     llvm::DenseMap<Value, bool> &memo) {
++  if (loop.isDefinedOutsideOfLoop(value))
++    return true;
++  if (auto it = memo.find(value); it != memo.end())
++    return it->second;
++  Operation *def = value.getDefiningOp();
++  bool invariant =
++      def && isPure(def) && llvm::all_of(def->getOperands(), [&](Value v) {
++        return isLoopInvariantAfterLICM(v, loop, memo);
++      });
++  memo[value] = invariant;
++  return invariant;
++}
++
++/// A descriptor in a loop that LICM can't hoist is rebuilt each iteration,
++/// paying a per-iteration tensormap_create on Hopper+ — the case we demote.
++static bool isLoopRecreatedDescriptor(triton::MakeTensorDescOp desc) {
++  auto loop = desc->getParentOfType<LoopLikeOpInterface>();
++  if (!loop)
++    return false; // out of loop -> hoistable / one-shot, keep it
++  llvm::DenseMap<Value, bool> memo;
++  return !llvm::all_of(desc->getOperands(), [&](Value v) {
++    return isLoopInvariantAfterLICM(v, loop, memo);
++  });
++}
++
+ /**
+  * @brief Filter out operand segment sizes from the list of attributes since
+  * this attribute is operation specific and shouldn't be set arbitrarily.
+@@ -543,18 +670,62 @@ struct RewriteReducePattern : OpConversionPattern<triton::DescriptorReduceOp> {
+ class TritonRewriteTensorDescriptorToPointerPass
+     : public impl::TritonRewriteTensorDescriptorToPointerBase<
+           TritonRewriteTensorDescriptorToPointerPass> {
++public:
++  using TritonRewriteTensorDescriptorToPointerBase::
++      TritonRewriteTensorDescriptorToPointerBase;
++
+   void runOnOperation() override {
+     auto op = getOperation();
+ 
++    // loop-recreated-only mode: only these descriptors (and ops tracing to
++    // them) are illegal; everything else keeps the TMA path.
++    llvm::SmallSetVector<triton::MakeTensorDescOp, 4> candidates;
++    if (loopRecreatedOnly) {
++      op->walk([&](triton::MakeTensorDescOp desc) {
++        if (isLoopRecreatedDescriptor(desc))
++          candidates.insert(desc);
++      });
++      // No loop-recreated descriptor: leave the module untouched (all TMA).
++      if (candidates.empty())
++        return;
++    }
++
++    // True if op's descriptor operands all trace (only) to candidates.
++    auto usesCandidateDesc = [&](mlir::Operation *o) {
++      for (Value operand : o->getOperands()) {
++        if (!isa<triton::TensorDescType>(operand.getType()))
++          continue;
++        auto descs = findAllMakeTensorDescOps(operand);
++        if (descs.empty())
++          return false; // untraceable -> not a candidate we own
++        if (!llvm::all_of(descs,
++                          [&](auto d) { return candidates.contains(d); }))
++          return false;
++      }
++      return true;
++    };
++
+     mlir::ConversionTarget target(getContext());
+-    target.addDynamicallyLegalDialect<mlir::arith::ArithDialect,
+-                                      mlir::scf::SCFDialect,
+-                                      mlir::triton::TritonDialect>(
+-        [](mlir::Operation *op) {
+-          return !hasATensorDescriptorType(op->getOperandTypes()) &&
+-                 !hasATensorDescriptorType(op->getResultTypes());
+-        });
+-    target.addDynamicallyLegalOp<triton::FuncOp>([](triton::FuncOp funcOp) {
++    target.addDynamicallyLegalDialect<
++        mlir::arith::ArithDialect, mlir::scf::SCFDialect,
++        mlir::triton::TritonDialect>([&](mlir::Operation *op) {
++      if (!hasATensorDescriptorType(op->getOperandTypes()) &&
++          !hasATensorDescriptorType(op->getResultTypes()))
++        return true; // no descriptor involved -> always legal
++      if (!loopRecreatedOnly)
++        return false; // static mode: every descriptor op is illegal (rewrite
++                      // all)
++      // Dynamic mode: illegal only if it derives from a candidate.
++      return TypeSwitch<mlir::Operation *, bool>(op)
++          .Case<triton::MakeTensorDescOp>(
++              [&](auto d) { return !candidates.contains(d); })
++          .Default([&](mlir::Operation *o) { return !usesCandidateDesc(o); });
++    });
++    target.addDynamicallyLegalOp<triton::FuncOp>([&](triton::FuncOp funcOp) {
++      // Candidates are loop-local, so signatures stay legal in dynamic mode;
++      // static mode rewrites any descriptor-typed signature.
++      if (loopRecreatedOnly)
++        return true;
+       return !hasATensorDescriptorType(funcOp.getFunctionType().getInputs()) &&
+              !hasATensorDescriptorType(funcOp.getFunctionType().getResults());
+     });
+diff --git a/python/src/passes.cc b/python/src/passes.cc
+index 95e0ccde9..98dcada85 100644
+--- a/python/src/passes.cc
++++ b/python/src/passes.cc
+@@ -45,8 +45,8 @@ void init_triton_passes_ttir(py::module &&m) {
+   using namespace mlir::triton;
+   ADD_PASS_WRAPPER_0("add_combine", createTritonCombineOps);
+   ADD_PASS_WRAPPER_0("add_reorder_broadcast", createTritonReorderBroadcast);
+-  ADD_PASS_WRAPPER_0("add_rewrite_tensor_descriptor_to_pointer",
+-                     createTritonRewriteTensorDescriptorToPointer);
++  ADD_PASS_OPTION_WRAPPER_1("add_rewrite_tensor_descriptor_to_pointer",
++                            createTritonRewriteTensorDescriptorToPointer, bool);
+   ADD_PASS_WRAPPER_0("add_loop_unroll", createTritonLoopUnroll);
+   ADD_PASS_WRAPPER_0("add_triton_licm", createTritonLoopInvariantCodeMotion);
+   ADD_PASS_WRAPPER_0("add_loop_aware_cse", createTritonLoopAwareCSE);
+diff --git a/python/triton/knobs.py b/python/triton/knobs.py
+index 254e2b554..fd9e2d504 100644
+--- a/python/triton/knobs.py
++++ b/python/triton/knobs.py
+@@ -438,6 +438,15 @@ class compilation_knobs(base_knobs):
+     disable_line_info: env_bool = env_bool("TRITON_DISABLE_LINE_INFO")
+     front_end_debugging: env_bool = env_bool("TRITON_FRONT_END_DEBUGGING")
+     allow_non_constexpr_globals: env_bool = env_bool("TRITON_ALLOW_NON_CONSTEXPR_GLOBALS")
++    # Debug/benchmark only: on TMA-capable NVIDIA targets (sm>=9.0), force the
++    # `make_tensor_descriptor` -> pointer rewrite that is normally reserved for
++    # pre-Hopper. Lets us measure the non-TMA fallback path on Hopper/Blackwell.
++    # NVIDIA-only — other backends select descriptor lowering differently.
++    nvidia_force_td_test: env_bool = env_bool("TRITON_INTEL_NVIDIA_FORCE_TD_TEST")
++    # Debug/benchmark only: disable the Hopper+ loop-recreated-descriptor gate,
++    # so a descriptor recreated in a loop keeps the raw per-iteration
++    # tensormap_create (the un-optimized TMA baseline). NVIDIA-only.
++    nvidia_disable_loop_td_rewrite: env_bool = env_bool("TRITON_INTEL_NVIDIA_DISABLE_LOOP_TD_REWRITE")
+     # Instrumentation mode is checked on every run, which is expensive.
+     # We cache the value here to avoid the expensive check on every run.
+     instrumentation_mode: str = env_str("TRITON_INSTRUMENTATION_MODE", "").get()
+diff --git a/test/Triton/rewrite-tensor-descriptor-loop-recreated.mlir b/test/Triton/rewrite-tensor-descriptor-loop-recreated.mlir
+new file mode 100644
+index 000000000..191887b40
+--- /dev/null
++++ b/test/Triton/rewrite-tensor-descriptor-loop-recreated.mlir
+@@ -0,0 +1,171 @@
++// Selectivity of `--triton-rewrite-tensor-descriptor-to-pointer=loop-recreated-only=true`.
++//
++// In loop-recreated-only mode the pass demotes ONLY descriptors that are
++// recreated inside a loop and cannot be hoisted (operands not loop-invariant).
++// Everything else — out-of-loop descriptors, and loop descriptors whose operands
++// are all loop-invariant (LICM would hoist them) — stays a `!tt.tensordesc` and
++// keeps the TMA path.
++//
++// Default (static) mode rewrites ALL descriptors; that is covered by
++// rewrite-tensor-descriptor-to-pointer.mlir. Here we only test the selective mode.
++//
++// NOTE: run on a build that INCLUDES the loop-recreated-only patch. On an
++// unpatched Triton the option is unknown and triton-opt errors out.
++
++// RUN: triton-opt %s -split-input-file \
++// RUN:   --triton-rewrite-tensor-descriptor-to-pointer=loop-recreated-only=true \
++// RUN:   | FileCheck %s
++
++// -----
++// Case 1: descriptor recreated in a loop with a loop-VARYING base (base depends
++// on the induction variable) -> DEMOTED to a masked pointer load; no descriptor
++// op survives inside the loop.
++//
++// The realistic paged-KV pattern derives the base from an in-loop
++// `tt.load(block_table[j])`. We instead make the base depend directly on the
++// induction variable so the loop body contains exactly ONE `tt.load` (the
++// demoted one). That keeps the CHECK-NOT bracket [scf.for .. tt.load] tight: if
++// demotion did NOT happen there would be no `tt.load` at all and the final
++// CHECK would fail — i.e. the assertion is non-vacuous.
++
++// CHECK-LABEL: @loop_varying_demoted
++module {
++  tt.func public @loop_varying_demoted(
++      %kv: !tt.ptr<bf16>, %stride1: i64)
++      -> tensor<16x128xbf16> {
++    %c0 = arith.constant 0 : i32
++    %c1 = arith.constant 1 : i32
++    %c16 = arith.constant 16 : i32
++    %c128 = arith.constant 128 : i32
++    %c1_i64 = arith.constant 1 : i64
++    %c32 = arith.constant 32 : i32
++    %cst = arith.constant dense<0.0> : tensor<16x128xbf16>
++    // CHECK: scf.for
++    %r = scf.for %j = %c0 to %c32 step %c1 iter_args(%acc = %cst) -> (tensor<16x128xbf16>) : i32 {
++      // base depends on the induction variable -> loop-varying -> demoted, so
++      // these two ops vanish and a masked tt.load takes their place.
++      // CHECK-NOT: tt.make_tensor_descriptor
++      // CHECK-NOT: tt.descriptor_load
++      // CHECK: tt.load
++      %base = tt.addptr %kv, %j : !tt.ptr<bf16>, i32
++      %desc = tt.make_tensor_descriptor %base, [%c16, %c128], [%stride1, %c1_i64] {order = array<i32: 1, 0>} : <bf16>, <16x128xbf16>
++      %tile = tt.descriptor_load %desc[%c0, %c0] : !tt.tensordesc<16x128xbf16> -> tensor<16x128xbf16>
++      scf.yield %tile : tensor<16x128xbf16>
++    }
++    tt.return %r : tensor<16x128xbf16>
++  }
++}
++
++// -----
++// Case 2: descriptor built INSIDE a loop but from loop-INVARIANT operands only
++// (function args) -> LICM could hoist it, so it is KEPT as a descriptor.
++
++// CHECK-LABEL: @loop_invariant_kept
++module {
++  tt.func public @loop_invariant_kept(
++      %base: !tt.ptr<bf16>, %s0: i32, %s1: i32, %st0: i64, %st1: i64)
++      -> tensor<16x128xbf16> {
++    %c0 = arith.constant 0 : i32
++    %c1 = arith.constant 1 : i32
++    %c32 = arith.constant 32 : i32
++    %cst = arith.constant dense<0.0> : tensor<16x128xbf16>
++    %r = scf.for %j = %c0 to %c32 step %c1 iter_args(%acc = %cst) -> (tensor<16x128xbf16>) : i32 {
++      // all operands are loop-invariant -> kept on the TMA path
++      // CHECK: tt.make_tensor_descriptor
++      %desc = tt.make_tensor_descriptor %base, [%s0, %s1], [%st0, %st1] {order = array<i32: 1, 0>} : <bf16>, <16x128xbf16>
++      // CHECK: tt.descriptor_load
++      %tile = tt.descriptor_load %desc[%c0, %c0] : !tt.tensordesc<16x128xbf16> -> tensor<16x128xbf16>
++      scf.yield %tile : tensor<16x128xbf16>
++    }
++    tt.return %r : tensor<16x128xbf16>
++  }
++}
++
++// -----
++// Case 2b: descriptor built inside a loop from an in-loop TEMPORARY that is
++// itself computed only from loop-invariant operands (`%t = arith.muli %st0,
++// %st1`). A shallow "all operands defined outside the loop?" check would see
++// `%t` defined in-loop and wrongly demote the descriptor — but LICM would hoist
++// `%t` first and then the descriptor, so it must be KEPT. This is the
++// transitive-invariance case the recursive check exists for.
++
++// CHECK-LABEL: @loop_invariant_via_temporary_kept
++module {
++  tt.func public @loop_invariant_via_temporary_kept(
++      %base: !tt.ptr<bf16>, %s0: i32, %s1: i32, %st0: i64, %st1: i64)
++      -> tensor<16x128xbf16> {
++    %c0 = arith.constant 0 : i32
++    %c1 = arith.constant 1 : i32
++    %c32 = arith.constant 32 : i32
++    %cst = arith.constant dense<0.0> : tensor<16x128xbf16>
++    %r = scf.for %j = %c0 to %c32 step %c1 iter_args(%acc = %cst) -> (tensor<16x128xbf16>) : i32 {
++      // %t depends only on loop-invariant args -> LICM hoists it, so the
++      // descriptor is hoistable and stays on the TMA path.
++      // CHECK: tt.make_tensor_descriptor
++      %t = arith.muli %st0, %st1 : i64
++      %desc = tt.make_tensor_descriptor %base, [%s0, %s1], [%t, %st1] {order = array<i32: 1, 0>} : <bf16>, <16x128xbf16>
++      // CHECK: tt.descriptor_load
++      %tile = tt.descriptor_load %desc[%c0, %c0] : !tt.tensordesc<16x128xbf16> -> tensor<16x128xbf16>
++      scf.yield %tile : tensor<16x128xbf16>
++    }
++    tt.return %r : tensor<16x128xbf16>
++  }
++}
++
++// -----
++// Case 3: descriptor built OUTSIDE any loop -> KEPT (not our target).
++
++// CHECK-LABEL: @out_of_loop_kept
++module {
++  tt.func public @out_of_loop_kept(
++      %base: !tt.ptr<bf16>, %s0: i32, %s1: i32, %st0: i64, %st1: i64)
++      -> tensor<16x128xbf16> {
++    %c0 = arith.constant 0 : i32
++    // CHECK: tt.make_tensor_descriptor
++    %desc = tt.make_tensor_descriptor %base, [%s0, %s1], [%st0, %st1] {order = array<i32: 1, 0>} : <bf16>, <16x128xbf16>
++    // CHECK: tt.descriptor_load
++    %tile = tt.descriptor_load %desc[%c0, %c0] : !tt.tensordesc<16x128xbf16> -> tensor<16x128xbf16>
++    tt.return %tile : tensor<16x128xbf16>
++  }
++}
++
++// -----
++// Case 4: MIXED — an out-of-loop descriptor (KEPT) and a loop-varying descriptor
++// (DEMOTED) in one function. Per-descriptor selectivity: the out-of-loop
++// descriptor + its load stay TMA; the in-loop pair becomes a masked tt.load and
++// no descriptor op survives after the loop header.
++
++// CHECK-LABEL: @mixed_only_varying_demoted
++module {
++  tt.func public @mixed_only_varying_demoted(
++      %kv: !tt.ptr<bf16>, %base2: !tt.ptr<bf16>,
++      %s0: i32, %s1: i32, %stride0: i64, %stride1: i64)
++      -> (tensor<16x128xbf16>, tensor<16x128xbf16>) {
++    %c0 = arith.constant 0 : i32
++    %c1 = arith.constant 1 : i32
++    %c16 = arith.constant 16 : i32
++    %c128 = arith.constant 128 : i32
++    %c1_i64 = arith.constant 1 : i64
++    %c32 = arith.constant 32 : i32
++    %cst = arith.constant dense<0.0> : tensor<16x128xbf16>
++    // out-of-loop descriptor: kept, along with its descriptor_load
++    // CHECK: tt.make_tensor_descriptor
++    %descA = tt.make_tensor_descriptor %base2, [%s0, %s1], [%stride0, %stride1] {order = array<i32: 1, 0>} : <bf16>, <16x128xbf16>
++    // CHECK: tt.descriptor_load
++    %tileA = tt.descriptor_load %descA[%c0, %c0] : !tt.tensordesc<16x128xbf16> -> tensor<16x128xbf16>
++    // CHECK: scf.for
++    // Past this point no descriptor op survives: the in-loop one was demoted.
++    // The loop body has exactly one tt.load (the demoted one), so this bracket
++    // is tight — see the note on Case 1.
++    // CHECK-NOT: tt.make_tensor_descriptor
++    // CHECK-NOT: tt.descriptor_load
++    // CHECK: tt.load
++    %r = scf.for %j = %c0 to %c32 step %c1 iter_args(%acc = %cst) -> (tensor<16x128xbf16>) : i32 {
++      %base = tt.addptr %kv, %j : !tt.ptr<bf16>, i32
++      %descB = tt.make_tensor_descriptor %base, [%c16, %c128], [%stride1, %c1_i64] {order = array<i32: 1, 0>} : <bf16>, <16x128xbf16>
++      %tileB = tt.descriptor_load %descB[%c0, %c0] : !tt.tensordesc<16x128xbf16> -> tensor<16x128xbf16>
++      scf.yield %tileB : tensor<16x128xbf16>
++    }
++    tt.return %tileA, %r : tensor<16x128xbf16>, tensor<16x128xbf16>
++  }
++}
+diff --git a/third_party/amd/backend/compiler.py b/third_party/amd/backend/compiler.py
+index 2f02084c5..df2c634b4 100644
+--- a/third_party/amd/backend/compiler.py
++++ b/third_party/amd/backend/compiler.py
+@@ -241,7 +241,7 @@ class HIPBackend(BaseBackend):
+         pm.enable_debug()
+         passes.common.add_inliner(pm)
+         if not amd.supports_tdm(options.arch):
+-            passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
++            passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm, False)
+         passes.common.add_canonicalizer(pm)
+         passes.ttir.add_combine(pm)
+         passes.ttir.add_reorder_broadcast(pm)
+diff --git a/third_party/nvidia/backend/compiler.py b/third_party/nvidia/backend/compiler.py
+index f49e10f73..aff14e3cf 100644
+--- a/third_party/nvidia/backend/compiler.py
++++ b/third_party/nvidia/backend/compiler.py
+@@ -246,8 +246,19 @@ class CUDABackend(BaseBackend):
+         pm = ir.pass_manager(mod.context)
+         pm.enable_debug()
+         passes.common.add_inliner(pm)
+-        if capability // 10 < 9:
+-            passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
++        # Descriptor lowering choice (always the same pass, different mode):
++        #  * Pre-Hopper (no TMA) or TRITON_INTEL_NVIDIA_FORCE_TD_TEST: STATIC
++        #    rewrite — demote every descriptor to pointers (loop_recreated=False).
++        #  * Hopper+: DYNAMIC rewrite (loop_recreated=True) — demote only
++        #    descriptors recreated in a loop and not hoistable (per-iteration
++        #    tensormap_create, ~2.5x slower than a pointer load); leave hoistable
++        #    / out-of-loop descriptors on the fast TMA path. No-ops if none match.
++        #  * TRITON_INTEL_NVIDIA_DISABLE_LOOP_TD_REWRITE: skip entirely, keep the
++        #    raw per-iteration tensormap_create (un-optimized TMA baseline, A/B).
++        if capability // 10 < 9 or knobs.compilation.nvidia_force_td_test:
++            passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm, False)
++        elif not knobs.compilation.nvidia_disable_loop_td_rewrite:
++            passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm, True)
+         passes.common.add_canonicalizer(pm)
+         passes.ttir.add_combine(pm)
+         passes.ttir.add_reorder_broadcast(pm)

@@ -7,15 +7,21 @@
 
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SCF/Transforms/Patterns.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/ValueRange.h"
+#include "mlir/Interfaces/LoopLikeInterface.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SmallVectorExtras.h"
+#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/raw_ostream.h"
 #include <mlir/Dialect/Arith/IR/Arith.h>
@@ -41,6 +47,127 @@ bool hasATensorDescriptorType(mlir::TypeRange types) {
 }
 
 using namespace mlir;
+
+/// Trace a tensor-descriptor Value back to its defining `MakeTensorDescOp`(s),
+/// threading through scf iter-args/results, select, and casts. Returns empty
+/// ("cannot classify", handled conservatively by callers) for a value we can't
+/// see through (function arg, call, induction var, unknown op). Kept in sync
+/// with third_party/intel/lib/Utils/Utility.cpp (upstream can't depend on it).
+static SmallVector<triton::MakeTensorDescOp>
+findAllMakeTensorDescOps(Value val) {
+  llvm::SmallSetVector<triton::MakeTensorDescOp, 4> results;
+  SmallPtrSet<Value, 8> visited;
+  SmallVector<Value, 8> worklist{val};
+
+  while (!worklist.empty()) {
+    Value cur = worklist.pop_back_val();
+    if (!visited.insert(cur).second)
+      continue;
+
+    if (auto arg = dyn_cast<BlockArgument>(cur)) {
+      Operation *parentOp = arg.getParentBlock()->getParentOp();
+      if (!parentOp || isa<FunctionOpInterface>(parentOp))
+        return {};
+      if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
+        if (arg == forOp.getInductionVar())
+          return {};
+        unsigned idx = arg.getArgNumber() - 1;
+        worklist.push_back(forOp.getInitArgs()[idx]);
+        auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+        worklist.push_back(yieldOp->getOperand(idx));
+        continue;
+      }
+      if (auto whileOp = dyn_cast<scf::WhileOp>(parentOp)) {
+        unsigned idx = arg.getArgNumber();
+        Block *beforeBlock = &whileOp.getBefore().front();
+        Block *afterBlock = &whileOp.getAfter().front();
+        auto condOp = cast<scf::ConditionOp>(beforeBlock->getTerminator());
+        auto afterYieldOp = cast<scf::YieldOp>(afterBlock->getTerminator());
+        if (arg.getParentBlock() == beforeBlock) {
+          worklist.push_back(whileOp.getInits()[idx]);
+          worklist.push_back(afterYieldOp->getOperand(idx));
+        } else {
+          worklist.push_back(condOp.getArgs()[idx]);
+        }
+        continue;
+      }
+      return {}; // unknown parent op
+    }
+
+    // Poison placeholder (e.g. pipelined-loop init): skip, don't invalidate.
+    if (cur.getDefiningOp<ub::PoisonOp>())
+      continue;
+    if (cur.getDefiningOp<triton::CallOp>())
+      return {};
+    if (auto makeDescOp = cur.getDefiningOp<triton::MakeTensorDescOp>()) {
+      results.insert(makeDescOp);
+      continue;
+    }
+    if (auto opRes = dyn_cast<OpResult>(cur)) {
+      Operation *defOp = opRes.getOwner();
+      if (auto loopOp = dyn_cast<LoopLikeOpInterface>(defOp)) {
+        worklist.push_back(loopOp.getYieldedValues()[opRes.getResultNumber()]);
+        continue;
+      }
+      if (auto ifOp = dyn_cast<scf::IfOp>(defOp)) {
+        for (Region *rgn : {&ifOp.getThenRegion(), &ifOp.getElseRegion()}) {
+          if (rgn->empty())
+            continue;
+          auto y = cast<scf::YieldOp>(rgn->front().getTerminator());
+          worklist.push_back(y->getOperand(opRes.getResultNumber()));
+        }
+        continue;
+      }
+      if (auto selectOp = dyn_cast<arith::SelectOp>(defOp)) {
+        worklist.push_back(selectOp.getTrueValue());
+        worklist.push_back(selectOp.getFalseValue());
+        continue;
+      }
+      if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(defOp)) {
+        if (castOp.getInputs().size() != 1)
+          return {};
+        worklist.push_back(castOp.getInputs()[0]);
+        continue;
+      }
+      return {}; // unknown defining op
+    }
+    return {};
+  }
+  return results.takeVector();
+}
+
+/// True if `value` would be loop-invariant *after* LICM, replicating
+/// mlir::moveLoopInvariantCode's rule (pure op + recursively-invariant
+/// operands). We can't just query LICM: this pass runs in make_ttir, before
+/// triton-licm in make_ttgir, so hoistable temporaries are still in the loop.
+/// Recursion stops at impure ops, so an in-loop `tt.load` base (the paged-KV
+/// case) stays loop-varying. `memo` collapses diamond operand DAGs to O(N).
+static bool isLoopInvariantAfterLICM(Value value, LoopLikeOpInterface loop,
+                                     llvm::DenseMap<Value, bool> &memo) {
+  if (loop.isDefinedOutsideOfLoop(value))
+    return true;
+  if (auto it = memo.find(value); it != memo.end())
+    return it->second;
+  Operation *def = value.getDefiningOp();
+  bool invariant =
+      def && isPure(def) && llvm::all_of(def->getOperands(), [&](Value v) {
+        return isLoopInvariantAfterLICM(v, loop, memo);
+      });
+  memo[value] = invariant;
+  return invariant;
+}
+
+/// A descriptor in a loop that LICM can't hoist is rebuilt each iteration,
+/// paying a per-iteration tensormap_create on Hopper+ — the case we demote.
+static bool isLoopRecreatedDescriptor(triton::MakeTensorDescOp desc) {
+  auto loop = desc->getParentOfType<LoopLikeOpInterface>();
+  if (!loop)
+    return false; // out of loop -> hoistable / one-shot, keep it
+  llvm::DenseMap<Value, bool> memo;
+  return !llvm::all_of(desc->getOperands(), [&](Value v) {
+    return isLoopInvariantAfterLICM(v, loop, memo);
+  });
+}
 
 /**
  * @brief Filter out operand segment sizes from the list of attributes since
@@ -543,18 +670,62 @@ struct RewriteReducePattern : OpConversionPattern<triton::DescriptorReduceOp> {
 class TritonRewriteTensorDescriptorToPointerPass
     : public impl::TritonRewriteTensorDescriptorToPointerBase<
           TritonRewriteTensorDescriptorToPointerPass> {
+public:
+  using TritonRewriteTensorDescriptorToPointerBase::
+      TritonRewriteTensorDescriptorToPointerBase;
+
   void runOnOperation() override {
     auto op = getOperation();
 
+    // loop-recreated-only mode: only these descriptors (and ops tracing to
+    // them) are illegal; everything else keeps the TMA path.
+    llvm::SmallSetVector<triton::MakeTensorDescOp, 4> candidates;
+    if (loopRecreatedOnly) {
+      op->walk([&](triton::MakeTensorDescOp desc) {
+        if (isLoopRecreatedDescriptor(desc))
+          candidates.insert(desc);
+      });
+      // No loop-recreated descriptor: leave the module untouched (all TMA).
+      if (candidates.empty())
+        return;
+    }
+
+    // True if op's descriptor operands all trace (only) to candidates.
+    auto usesCandidateDesc = [&](mlir::Operation *o) {
+      for (Value operand : o->getOperands()) {
+        if (!isa<triton::TensorDescType>(operand.getType()))
+          continue;
+        auto descs = findAllMakeTensorDescOps(operand);
+        if (descs.empty())
+          return false; // untraceable -> not a candidate we own
+        if (!llvm::all_of(descs,
+                          [&](auto d) { return candidates.contains(d); }))
+          return false;
+      }
+      return true;
+    };
+
     mlir::ConversionTarget target(getContext());
-    target.addDynamicallyLegalDialect<mlir::arith::ArithDialect,
-                                      mlir::scf::SCFDialect,
-                                      mlir::triton::TritonDialect>(
-        [](mlir::Operation *op) {
-          return !hasATensorDescriptorType(op->getOperandTypes()) &&
-                 !hasATensorDescriptorType(op->getResultTypes());
-        });
-    target.addDynamicallyLegalOp<triton::FuncOp>([](triton::FuncOp funcOp) {
+    target.addDynamicallyLegalDialect<
+        mlir::arith::ArithDialect, mlir::scf::SCFDialect,
+        mlir::triton::TritonDialect>([&](mlir::Operation *op) {
+      if (!hasATensorDescriptorType(op->getOperandTypes()) &&
+          !hasATensorDescriptorType(op->getResultTypes()))
+        return true; // no descriptor involved -> always legal
+      if (!loopRecreatedOnly)
+        return false; // static mode: every descriptor op is illegal (rewrite
+                      // all)
+      // Dynamic mode: illegal only if it derives from a candidate.
+      return TypeSwitch<mlir::Operation *, bool>(op)
+          .Case<triton::MakeTensorDescOp>(
+              [&](auto d) { return !candidates.contains(d); })
+          .Default([&](mlir::Operation *o) { return !usesCandidateDesc(o); });
+    });
+    target.addDynamicallyLegalOp<triton::FuncOp>([&](triton::FuncOp funcOp) {
+      // Candidates are loop-local, so signatures stay legal in dynamic mode;
+      // static mode rewrites any descriptor-typed signature.
+      if (loopRecreatedOnly)
+        return true;
       return !hasATensorDescriptorType(funcOp.getFunctionType().getInputs()) &&
              !hasATensorDescriptorType(funcOp.getFunctionType().getResults());
     });
