@@ -76,6 +76,7 @@ void registerTestMembarPass();
 void registerTestAMDGPUMembarPass();
 void registerTestTritonAMDGPURangeAnalysis();
 void registerTestLoopPeelingPass();
+void registerTestRegisterPressurePass();
 namespace proton {
 void registerTestScopeIdAllocationPass();
 } // namespace proton
@@ -103,6 +104,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::test::registerTestLoopPeelingPass();
   mlir::test::registerTestAMDGPUMembarPass();
   mlir::test::registerTestTritonAMDGPURangeAnalysis();
+  mlir::test::registerTestRegisterPressurePass();
   mlir::triton::registerConvertTritonToTritonGPUPass();
   mlir::triton::intel::registerTritonIntelFuseReshape();
   mlir::triton::intel::registerTritonIntelRemoveMasks();
