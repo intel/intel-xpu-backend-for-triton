@@ -143,12 +143,19 @@ inline std::optional<bool> isEnvValueBool(std::string str) {
   return std::nullopt;
 }
 
+// Last build log captured by create_module() on failure, exposed so the
+// caller (driver.c) can inspect it to classify the error (e.g. raise
+// OutOfResources on PTSS overflow). Thread-local: each call clears it.
+inline thread_local std::string g_last_module_build_log;
+
 std::tuple<ze_module_handle_t, ze_result_t>
 create_module(ze_context_handle_t context, ze_device_handle_t device,
               uint8_t *binary_ptr, size_t binary_size, const char *build_flags,
               const bool is_spv = true) {
   assert(binary_ptr != nullptr && "binary_ptr should not be NULL");
   assert(build_flags != nullptr && "build_flags should not be NULL");
+
+  g_last_module_build_log.clear();
 
   const ze_module_format_t format =
       is_spv ? ZE_MODULE_FORMAT_IL_SPIRV : ZE_MODULE_FORMAT_NATIVE;
@@ -172,6 +179,7 @@ create_module(ze_context_handle_t context, ze_device_handle_t device,
       free(strLog);
       ZE_CHECK(error_no_build_log);
     }
+    g_last_module_build_log.assign(strLog, szLog ? szLog - 1 : 0);
     std::cerr << "L0 build module failed. Log: " << strLog << std::endl;
     free(strLog);
     ZE_CHECK(zeModuleBuildLogDestroy(buildlog));
