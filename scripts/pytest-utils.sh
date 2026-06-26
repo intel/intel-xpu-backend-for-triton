@@ -137,25 +137,93 @@ capture_runtime_env() {
     python -c 'import torch; print(torch.__version__)' > $TRITON_TEST_REPORTS_DIR/pytorch_version.txt
 }
 
+# Hex-encoded SPIR-V module declaring OpCapability PredicatedIOINTEL (6257) and
+# using OpPredicatedLoad/StoreINTEL. spirv-dis disassembles it (exit 0) only when
+# it understands SPV_INTEL_predicated_io; older builds fail with
+# "Invalid capability operand: 6257". spirv-dis reads this hex text from stdin,
+# so no binary fixture is needed. Never pass --handle-unknown-opcodes: it would
+# re-emit unknown ops and exit 0, hiding the missing support.
+PREDICATED_IO_PROBE="\
+07230203 00010000 00000000 0000000c 00000000 00020011 00000004 00020011 00000006 \
+00020011 00001871 0007000a 5f565053 45544e49 72705f4c 63696465 64657461 006f695f \
+0003000e 00000001 00000002 0005000f 00000006 00000008 626f7270 00000065 00020013 \
+00000001 00030021 00000002 00000001 00020014 00000003 00040015 00000004 00000020 \
+00000000 00040020 00000005 00000007 00000004 00030029 00000003 00000006 0004002b \
+00000004 00000007 00000000 00050036 00000001 00000008 00000000 00000002 000200f8 \
+00000009 0004003b 00000005 0000000a 00000007 00061872 00000004 0000000b 0000000a \
+00000006 00000007 00041873 0000000a 0000000b 00000006 000100fd 00010038"
+
+spirv_dis_supports_predicated_io() {
+    local spirv_dis="$1"
+    [[ -x "$spirv_dis" ]] || command -v -- "$spirv_dis" >/dev/null 2>&1 || return 1
+    printf '%s' "$PREDICATED_IO_PROBE" | "$spirv_dis" - >/dev/null 2>&1
+}
+
+find_spirv_dis_with_predicated_io() {
+    local path_dir candidate_dir candidate
+    local IFS=:
+    for path_dir in $PATH; do
+        [[ -n "$path_dir" ]] || path_dir=.
+        candidate_dir="$(cd -- "$path_dir" 2>/dev/null && pwd -P)" || continue
+        candidate="$candidate_dir/spirv-dis"
+        if spirv_dis_supports_predicated_io "$candidate"; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
 ensure_spirv_dis() {
     # Does not work on Windows
     if [[ $OSTYPE = msys || $OSTYPE = cygwin ]]; then
         return
     fi
+
     export PATH="$HOME/.local/bin:$PATH"
-    # Build spirv-dis from source with SPV_INTEL_predicated_io support.
-    # FIXME: Switch back to Vulkan SDK tarball once the next SDK release includes
-    # SPV_INTEL_predicated_io support (KhronosGroup/SPIRV-Tools#6665).
-    # curl -sSL https://sdk.lunarg.com/sdk/download/latest/linux/vulkan-sdk.tar.xz | tar Jxf - -C $HOME/.local/bin --strip-components 3 --no-anchored spirv-dis
+
+    # Make a capable spirv-dis the first one on PATH: triton.knobs.intel.spirv_dis
+    # resolves via shutil.which("spirv-dis") and does not check the extension, so
+    # the probed binary must win PATH order. A user may point at one explicitly
+    # via TRITON_SPIRV_DIS_PATH.
+    if [[ -n "${TRITON_SPIRV_DIS_PATH:-}" ]]; then
+        if spirv_dis_supports_predicated_io "$TRITON_SPIRV_DIS_PATH"; then
+            export PATH="$(cd -- "$(dirname -- "$TRITON_SPIRV_DIS_PATH")" && pwd -P):$PATH"
+            echo "Using spirv-dis from TRITON_SPIRV_DIS_PATH: $TRITON_SPIRV_DIS_PATH"
+            return
+        fi
+        echo "TRITON_SPIRV_DIS_PATH does not support SPV_INTEL_predicated_io: $TRITON_SPIRV_DIS_PATH" >&2
+        return 1
+    fi
+
+    local capable_spirv_dis
+    if capable_spirv_dis="$(find_spirv_dis_with_predicated_io)"; then
+        export PATH="$(cd -- "$(dirname -- "$capable_spirv_dis")" && pwd -P):$PATH"
+        echo "Using existing spirv-dis with SPV_INTEL_predicated_io support: $capable_spirv_dis"
+        return
+    fi
+
+    # No capable spirv-dis on PATH: build from source.
+    # The commit is pinned because SPV_INTEL_predicated_io support is not in any
+    # tagged SPIRV-Tools release yet (post-v2026.2, KhronosGroup/SPIRV-Tools#6665).
+    # FIXME: Switch back to Vulkan SDK tarball once a released SDK includes it.
     echo "Building spirv-dis from source to $HOME/.local/bin"
-    mkdir -p ~/.local/bin
-    local build_dir
-    build_dir="$(mktemp -d)"
-    git clone https://github.com/KhronosGroup/SPIRV-Tools.git "$build_dir/SPIRV-Tools"
-    git -C "$build_dir/SPIRV-Tools" checkout 4c2ec2a09b7fbeff1dc64cb9f857d77403a3c25f
-    python3 "$build_dir/SPIRV-Tools/utils/git-sync-deps"
-    cmake -B "$build_dir/build" -S "$build_dir/SPIRV-Tools" -DCMAKE_BUILD_TYPE=Release -DSPIRV_SKIP_TESTS=ON
-    cmake --build "$build_dir/build" -j"$(nproc)" --target spirv-dis
-    cp "$build_dir/build/tools/spirv-dis" "$HOME/.local/bin/"
-    rm -rf "$build_dir"
+    mkdir -p "$HOME/.local/bin"
+    (
+        set -e
+        build_dir="$(mktemp -d)"
+        trap 'rm -rf "$build_dir"' EXIT
+        git clone https://github.com/KhronosGroup/SPIRV-Tools.git "$build_dir/SPIRV-Tools"
+        git -C "$build_dir/SPIRV-Tools" checkout 4c2ec2a09b7fbeff1dc64cb9f857d77403a3c25f
+        python3 "$build_dir/SPIRV-Tools/utils/git-sync-deps"
+        cmake -B "$build_dir/build" -S "$build_dir/SPIRV-Tools" -DCMAKE_BUILD_TYPE=Release -DSPIRV_SKIP_TESTS=ON
+        cmake --build "$build_dir/build" -j"$(nproc)" --target spirv-dis
+        cp "$build_dir/build/tools/spirv-dis" "$HOME/.local/bin/"
+    ) || return 1
+
+    local built_spirv_dis="$HOME/.local/bin/spirv-dis"
+    if ! spirv_dis_supports_predicated_io "$built_spirv_dis"; then
+        echo "Built spirv-dis does not support SPV_INTEL_predicated_io: $built_spirv_dis" >&2
+        return 1
+    fi
 }
