@@ -12,7 +12,10 @@ def device(request):
 
 @pytest.fixture
 def fresh_triton_cache():
+    import tempfile
     from triton import knobs
-    with knobs.compilation.scope():
-        knobs.compilation.always_compile = True
-        yield
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with knobs.cache.scope(), knobs.compilation.scope(), knobs.runtime.scope():
+            knobs.cache.dir = tmpdir
+            knobs.compilation.always_compile = True
+            yield tmpdir
