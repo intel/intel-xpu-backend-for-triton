@@ -12,6 +12,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/Sys/GetEnv.h"
+#include "llvm/ADT/APFloat.h"
 #include "llvm/Support/Debug.h"
 #include <optional>
 
@@ -81,6 +82,49 @@ static Value createZeroSplat(OpBuilder &builder, Location loc,
   return tt::SplatOp::create(builder, loc, tensorTy, zeroVal);
 }
 
+/// Compute the 1D SliceEncoding for a given dimension of a higher-rank
+/// encoding.  This encoding is suitable for tt.make_range results that will
+/// be expanded back to full rank via tt.expand_dims.
+static Attribute get1DSliceEncoding(MLIRContext *ctx, unsigned dim,
+                                    unsigned rank, Attribute encoding) {
+  // Slice away all dimensions except `dim`, in reverse expansion order.
+  // Expansion order is: j = 0, 1, ..., rank-1 (skipping dim).
+  // So slice order is: j = rank-1, ..., 0 (skipping dim).
+  Attribute enc = encoding;
+  for (int j = rank - 1; j >= 0; --j) {
+    if (static_cast<unsigned>(j) == dim)
+      continue;
+    enc = ttg::SliceEncodingAttr::get(ctx, j,
+                                      cast<ttg::DistributedEncodingTrait>(enc));
+  }
+  return enc;
+}
+
+/// Create a padding value (zero or NaN) for the given tensor type.
+static Value createPaddingValue(OpBuilder &builder, Location loc,
+                                RankedTensorType tensorTy,
+                                tt::PaddingOption padding) {
+  Type elemType = tensorTy.getElementType();
+  if (padding == tt::PaddingOption::PAD_NAN && isa<FloatType>(elemType)) {
+    auto floatTy = cast<FloatType>(elemType);
+    auto nan = llvm::APFloat::getNaN(floatTy.getFloatSemantics());
+    auto attr =
+        SplatElementsAttr::get(tensorTy, builder.getFloatAttr(floatTy, nan));
+    return arith::ConstantOp::create(builder, loc, attr);
+  }
+  // Default: zero padding.
+  Attribute zeroAttr;
+  if (isa<FloatType>(elemType))
+    zeroAttr = builder.getFloatAttr(elemType, 0.0);
+  else if (isa<IntegerType>(elemType))
+    zeroAttr = builder.getIntegerAttr(elemType, 0);
+  else
+    llvm_unreachable("unsupported element type for padding value");
+  Value zeroVal =
+      arith::ConstantOp::create(builder, loc, cast<TypedAttr>(zeroAttr));
+  return tt::SplatOp::create(builder, loc, tensorTy, zeroVal);
+}
+
 struct TritonIntelGPULowerTo2DBlockLoadPass
     : public ttgi::impl::TritonIntelGPULowerTo2DBlockLoadBase<
           TritonIntelGPULowerTo2DBlockLoadPass> {
@@ -118,8 +162,10 @@ public:
 
     SmallVector<tt::DescriptorLoadOp> descLoadOps;
     mod.walk([&](tt::DescriptorLoadOp op) { descLoadOps.push_back(op); });
-    for (auto op : descLoadOps)
-      convertDescriptorLoadOp(op);
+    for (auto op : descLoadOps) {
+      if (!convertDescriptorLoadTo2DBlockLoad(op))
+        lowerDescriptorLoadToLoad(op);
+    }
 
     SmallVector<tt::LoadOp> loadOps;
     mod.walk([&](tt::LoadOp op) { loadOps.push_back(op); });
@@ -128,10 +174,11 @@ public:
   }
 
 private:
-  /// Convert a tt.descriptor_load to ttig.2d_block_load.
-  void convertDescriptorLoadOp(tt::DescriptorLoadOp op) {
+  /// Try to convert a tt.descriptor_load to ttig.2d_block_load.
+  /// Returns true if the conversion succeeded, false otherwise.
+  bool convertDescriptorLoadTo2DBlockLoad(tt::DescriptorLoadOp op) {
     if (!isBlockIOEligible(op))
-      return;
+      return false;
 
     auto tensorTy = cast<RankedTensorType>(op.getType());
     unsigned rank = tensorTy.getRank();
@@ -143,7 +190,7 @@ private:
         tt::intel::findAllMakeTensorDescOps(desc);
     if (allDescs.empty()) {
       LDBG("Could not find MakeTensorDescOp for: " << *op);
-      return;
+      return false;
     }
 
     // All candidates must have the same padding.
@@ -152,7 +199,7 @@ private:
           return d.getPadding() == padding;
         })) {
       LDBG("Inconsistent padding across descriptor candidates for: " << *op);
-      return;
+      return false;
     }
 
     auto descType = cast<tt::TensorDescType>(desc.getType());
@@ -174,7 +221,7 @@ private:
                                        elemSizeInBits, tensorTy,
                                        oneMatrixPerLoadForBT)) {
       LDBG("Tile validation failed for descriptor load: " << *op);
-      return;
+      return false;
     }
 
     // For descriptor loads, the 2D block I/O tile must use only the inner 2
@@ -186,7 +233,7 @@ private:
       int innerDimStart = static_cast<int>(rank - 2);
       if (sizeInfo.rowDim < innerDimStart || sizeInfo.colDim < innerDimStart) {
         LDBG("Batch dim in tile for descriptor load: " << *op);
-        return;
+        return false;
       }
     }
 
@@ -252,7 +299,7 @@ private:
             pitchBytes > (int64_t(1) << 24)) {
           LDBG("Invalid pitch " << pitchBytes
                                 << " for descriptor load: " << *op);
-          return;
+          return false;
         }
       }
     }
@@ -291,6 +338,212 @@ private:
     op.replaceAllUsesWith(blockLoadOp.getResult());
     op.erase();
     LDBG("Converted descriptor load to ttig.2d_block_load: " << *blockLoadOp);
+    return true;
+  }
+
+  /// Lower a tt.descriptor_load to tt.load when 2D block load is not possible.
+  /// Constructs a pointer tensor and boundary-checking mask from the descriptor
+  /// fields.
+  void lowerDescriptorLoadToLoad(tt::DescriptorLoadOp op) {
+    auto resultTy = cast<RankedTensorType>(op.getType());
+    Attribute encoding = resultTy.getEncoding();
+    if (!encoding)
+      return;
+
+    Type elemTy = resultTy.getElementType();
+    unsigned rank = resultTy.getRank();
+    ArrayRef<int64_t> shape = resultTy.getShape();
+
+    auto descType = cast<tt::TensorDescType>(op.getDesc().getType());
+    unsigned descRank = descType.getBlockType().getRank();
+
+    OpBuilder builder(op);
+    Location loc = op.getLoc();
+    MLIRContext *ctx = builder.getContext();
+    Type i64Ty = builder.getI64Type();
+    Type ptrElemType = tt::PointerType::get(elemTy, 1);
+
+    // Extract descriptor fields. Prefer using values from MakeTensorDescOp
+    // directly when available — this preserves AxisInfo provenance so the
+    // downstream LLVM lowering can infer contiguity and vectorize properly.
+    // ExtractDescOp produces opaque runtime values that AxisInfo cannot
+    // analyze, leading to scalar (vec=1) loads.
+    Value desc = op.getDesc();
+    SmallVector<Value> descShapes(descRank);
+    SmallVector<Value> descStrides(descRank);
+    Value basePtr;
+    SmallVector<tt::MakeTensorDescOp> allDescs =
+        tt::intel::findAllMakeTensorDescOps(desc);
+    if (!allDescs.empty()) {
+      tt::MakeTensorDescOp makeDesc = allDescs[0];
+      basePtr = makeDesc.getBase();
+      for (unsigned d = 0; d < descRank; ++d) {
+        descShapes[d] =
+            arith::ExtSIOp::create(builder, loc, i64Ty, makeDesc.getShape()[d]);
+        descStrides[d] = makeDesc.getStrides()[d];
+      }
+    } else {
+      // Opaque descriptor (function argument, untraceable control flow) —
+      // fall back to ExtractDescOp.
+      for (unsigned d = 0; d < descRank; ++d) {
+        descShapes[d] = ttgi::ExtractDescOp::create(
+            builder, loc, i64Ty, desc, builder.getI32IntegerAttr(d));
+        descStrides[d] = ttgi::ExtractDescOp::create(
+            builder, loc, i64Ty, desc, builder.getI32IntegerAttr(descRank + d));
+      }
+      basePtr =
+          ttgi::ExtractDescOp::create(builder, loc, ptrElemType, desc,
+                                      builder.getI32IntegerAttr(2 * descRank));
+    }
+
+    SmallVector<Value> indices(op.getIndices().begin(), op.getIndices().end());
+    assert(indices.size() == descRank &&
+           "descriptor index count must match descriptor rank");
+
+    // Fold batch dimensions into base pointer.
+    unsigned numBatchDims = descRank - rank;
+    for (unsigned d = 0; d < numBatchDims; ++d) {
+      Value batchOffset = arith::MulIOp::create(
+          builder, loc, arith::ExtSIOp::create(builder, loc, i64Ty, indices[d]),
+          descStrides[d]);
+      basePtr = tt::AddPtrOp::create(builder, loc, basePtr.getType(), basePtr,
+                                     batchOffset);
+    }
+
+    // Work with inner dimensions only.
+    SmallVector<Value> innerShapes(descShapes.begin() + numBatchDims,
+                                   descShapes.end());
+    SmallVector<Value> innerStrides(descStrides.begin() + numBatchDims,
+                                    descStrides.end());
+    SmallVector<Value> innerIndices(indices.begin() + numBatchDims,
+                                    indices.end());
+
+    // For column-major descriptor loads, the result type has its inner-2
+    // dimensions transposed relative to the descriptor's natural order (e.g.,
+    // descriptor [N, K] produces result [K, N]). Swap the inner-2 dimensions
+    // of shapes, strides, and indices so they align with the result type.
+    auto blockIOAttr = op->getAttrOfType<StringAttr>(
+        ttgi::TritonIntelGPUDialect::getBlockIOAttrName());
+    bool permuteDescDim =
+        blockIOAttr && ttgi::symbolizeBlockIOMode(blockIOAttr.getValue()) ==
+                           ttgi::BlockIOMode::ColumnMajor;
+    if (permuteDescDim && rank >= 2) {
+      std::swap(innerShapes[rank - 2], innerShapes[rank - 1]);
+      std::swap(innerStrides[rank - 2], innerStrides[rank - 1]);
+      std::swap(innerIndices[rank - 2], innerIndices[rank - 1]);
+    }
+
+    // Build pointer tensor: for each element (i0, i1, ..., iR-1),
+    //   ptr[i0][i1]...[iR-1] = base + sum_d((indices[d] + id) * stride[d])
+    auto ptrTensorTy = RankedTensorType::get(shape, ptrElemType, encoding);
+    auto i64TensorTy = RankedTensorType::get(shape, i64Ty, encoding);
+
+    Value ptrTensor = tt::SplatOp::create(builder, loc, ptrTensorTy, basePtr);
+    Value mask;
+
+    for (unsigned d = 0; d < rank; ++d) {
+      // Compute 1D slice encoding for this dimension.
+      Attribute enc1D = get1DSliceEncoding(ctx, d, rank, encoding);
+
+      // Create range [0, 1, ..., shape[d]-1].
+      auto range1DTy =
+          RankedTensorType::get({shape[d]}, builder.getI32Type(), enc1D);
+      Value range =
+          tt::MakeRangeOp::create(builder, loc, range1DTy, 0, shape[d]);
+
+      // Extend to i64.
+      auto range1DI64Ty = RankedTensorType::get({shape[d]}, i64Ty, enc1D);
+      Value rangeI64 =
+          arith::ExtSIOp::create(builder, loc, range1DI64Ty, range);
+
+      // Add index offset: indices[d] + range.
+      Value indexI64 =
+          arith::ExtSIOp::create(builder, loc, i64Ty, innerIndices[d]);
+      Value splatIndex =
+          tt::SplatOp::create(builder, loc, range1DI64Ty, indexI64);
+      Value offsetRange =
+          arith::AddIOp::create(builder, loc, splatIndex, rangeI64);
+
+      // Expand to full rank via expand_dims (encoding inferred via
+      // SliceEncoding -> parent).
+      Value expanded = offsetRange;
+      for (unsigned j = 0; j < rank; ++j) {
+        if (j == d)
+          continue;
+        expanded = tt::ExpandDimsOp::create(builder, loc, expanded, j);
+      }
+
+      // Broadcast to full shape.
+      Value broadcasted =
+          tt::BroadcastOp::create(builder, loc, i64TensorTy, expanded);
+
+      // Compute pointer contribution: broadcasted * stride[d].
+      Value splatStride =
+          tt::SplatOp::create(builder, loc, i64TensorTy, innerStrides[d]);
+      Value offset =
+          arith::MulIOp::create(builder, loc, broadcasted, splatStride);
+
+      // Add to pointer tensor.
+      ptrTensor =
+          tt::AddPtrOp::create(builder, loc, ptrTensorTy, ptrTensor, offset);
+
+      // Build mask for this dimension: 0 <= indices[d] + range < shape[d].
+      // For the stride-1 (contiguous) dimension, use a scalar comparison to
+      // preserve mask constancy for vectorization. Per-element comparison
+      // along this dimension gives constancy=1, which forces scalar loads in
+      // the LLVM lowering (getMaskAlignment reduces vec to 1).
+      // A scalar check matches DescriptorLoadOpConversion's behavior where
+      // the first element's predicate gates the entire vector chunk.
+      std::optional<int64_t> strideVal =
+          tt::intel::getFoldedConstantValue(innerStrides[d]);
+      bool isContiguousDim = strideVal && *strideVal == 1;
+
+      Value dimMask;
+      if (isContiguousDim) {
+        // Scalar: (offset + blockSize) <= shape → all elements in bounds.
+        Value blockSize =
+            arith::ConstantIntOp::create(builder, loc, shape[d], 64);
+        Value end = arith::AddIOp::create(builder, loc, indexI64, blockSize);
+        Value scalarCmp = arith::CmpIOp::create(
+            builder, loc, arith::CmpIPredicate::sle, end, innerShapes[d]);
+        auto i1TensorTy =
+            RankedTensorType::get(shape, builder.getI1Type(), encoding);
+        dimMask = tt::SplatOp::create(builder, loc, i1TensorTy, scalarCmp);
+      } else {
+        Value zero = arith::ConstantIntOp::create(builder, loc, 0, 64);
+        Value splatZero = tt::SplatOp::create(builder, loc, i64TensorTy, zero);
+        Value cmpLower = arith::CmpIOp::create(
+            builder, loc, arith::CmpIPredicate::sge, broadcasted, splatZero);
+
+        Value splatShape =
+            tt::SplatOp::create(builder, loc, i64TensorTy, innerShapes[d]);
+        Value cmpUpper = arith::CmpIOp::create(
+            builder, loc, arith::CmpIPredicate::slt, broadcasted, splatShape);
+
+        dimMask = arith::AndIOp::create(builder, loc, cmpLower, cmpUpper);
+      }
+
+      if (!mask)
+        mask = dimMask;
+      else
+        mask = arith::AndIOp::create(builder, loc, mask, dimMask);
+    }
+
+    // Determine padding value from the descriptor.
+    tt::PaddingOption padding = tt::PaddingOption::PAD_ZERO;
+    if (!allDescs.empty())
+      padding = allDescs[0].getPadding();
+
+    Value other = createPaddingValue(builder, loc, resultTy, padding);
+
+    // Create tt.load with pointer tensor, mask, and padding value.
+    auto loadOp = tt::LoadOp::create(builder, loc, ptrTensor, mask, other,
+                                     tt::CacheModifier::NONE,
+                                     tt::EvictionPolicy::NORMAL, false);
+
+    op.replaceAllUsesWith(loadOp.getResult());
+    op.erase();
+    LDBG("Lowered descriptor load to tt.load: " << *loadOp);
   }
 
   /// Convert a tt.load to ttig.2d_block_load_from_ptr.
