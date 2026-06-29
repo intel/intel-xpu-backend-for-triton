@@ -1,16 +1,6 @@
-//===- RegisterPressure.h - Register Pressure Analysis ---------*- C++ -*-===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
-//
 // This file declares the RegisterPressureAnalysis class, which computes
 // per-thread register pressure in bytes using liveness information and
 // per-thread element distribution from distributed encodings.
-//
-//===----------------------------------------------------------------------===//
 
 #ifndef TRITON_INTEL_ANALYSIS_REGISTER_PRESSURE_H
 #define TRITON_INTEL_ANALYSIS_REGISTER_PRESSURE_H
