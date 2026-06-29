@@ -186,34 +186,22 @@ bwd_configs = [
 
 
 def filter_func(_dict):
-    # These combinations result in the following error:
-    # Segmentation fault from GPU at 0xff00ffffffe00000, ctx_id: 1 (CCS) type: 0 \
-    #   (NotPresent), level: 1 (PDE), access: 0 (Read), banned: 1, aborting.
-    skip_dicts = [
-        {'BLOCK_M1': 32, 'BLOCK_N1': 64, 'BLOCK_M2': 64, 'BLOCK_N2': 32, 'grf_mode': '256'},
-        {'BLOCK_M1': 32, 'BLOCK_N1': 64, 'BLOCK_M2': 128, 'BLOCK_N2': 32, 'grf_mode': '256'},
-        {'BLOCK_M1': 32, 'BLOCK_N1': 64, 'BLOCK_M2': 128, 'BLOCK_N2': 64, 'grf_mode': '256'},
-        {'BLOCK_M1': 64, 'BLOCK_N1': 64, 'BLOCK_M2': 128, 'BLOCK_N2': 32, 'grf_mode': '256'},
-        {'BLOCK_M1': 64, 'BLOCK_N1': 64, 'BLOCK_M2': 128, 'BLOCK_N2': 64, 'grf_mode': '256'},
-    ]
-    if _dict.kwargs in skip_dicts:
-        return False
-    return True
+    # The fused backward kernel reuses program_id(0) for both the dK/dV tile
+    # (start_n = pid * BLOCK_N1) and the dQ tile (start_m = pid * BLOCK_M2),
+    # while the launch grid is sized as N_CTX // BLOCK_N1.  The dQ path is
+    # therefore only correct when BLOCK_N1 == BLOCK_M2; otherwise the dQ grid
+    # is mis-sized and dQ/dK are computed over the wrong token ranges.
+    # Historically this manifested as a GPU segfault for a subset of the
+    # mismatched configs; post the modulo-axisinfo fix (#6227) it instead
+    # produces silently wrong gradients.  Restrict autotuning to the configs
+    # the kernel actually supports.
+    return _dict.kwargs['BLOCK_N1'] == _dict.kwargs['BLOCK_M2']
 
 
 bwd_configs = list(filter(filter_func, bwd_configs))
 
 
-def early_prune(prune_configs, named_args, **kwargs):
-    if named_args['H'] == 48 and named_args['N_CTX'] == 1024 and kwargs['HEAD_DIM'] == 64:
-        # FIXME: benchmark_suite.assert_close fails for this configuration
-        bad_case = {'BLOCK_M1': 64, 'BLOCK_N1': 128, 'BLOCK_M2': 64, 'BLOCK_N2': 64, 'grf_mode': '256'}
-        prune_configs = list(filter(lambda cfg: cfg.kwargs != bad_case, prune_configs))
-    return prune_configs
-
-
-bwd_tuner = triton.autotune(bwd_configs, key=['N_CTX', 'HEAD_DIM'],
-                            prune_configs_by={'early_config_prune': early_prune})
+bwd_tuner = triton.autotune(bwd_configs, key=['N_CTX', 'HEAD_DIM'])
 
 
 @triton.jit
