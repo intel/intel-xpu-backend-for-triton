@@ -1781,6 +1781,17 @@ struct PrefetchOpConversion
     // tile height, so the hardware's bounds checking spans the whole tensor.
     Value baseWidth = b.i64_val(stride);
     Value baseHeight = b.i64_val(tensorShape[rank - 2]);
+    if (stride == 0) {
+      // Broadcast row (e.g. M == 1): use a single row and a valid pitch from
+      // the contiguous dimension instead of stride 0 (see #7267).
+      constexpr int64_t MIN_PITCH = 64;
+      int64_t surfaceWidthBytes =
+          tensorShape[rank - 1] * static_cast<int64_t>(elemSizeInBytes);
+      rowStride = b.i64_val(std::max<int64_t>(MIN_PITCH, surfaceWidthBytes) /
+                            elemSizeInBytes);
+      baseWidth = rowStride;
+      baseHeight = b.i64_val(1);
+    }
 
     // Offsets start at 0; per-warp offsets computed by emit2DBlockPrefetchOps.
     Value offsetBaseX = b.i32_val(0);
