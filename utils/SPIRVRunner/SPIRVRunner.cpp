@@ -1,4 +1,7 @@
 #include <level_zero/ze_api.h>
+#if __SYCL_COMPILER_VERSION >= 20260204
+#include <sycl/ext/oneapi/experimental/enqueue_functions.hpp>
+#endif
 #include <sycl/sycl.hpp>
 #include <torch/torch.h>
 
@@ -319,7 +322,13 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
     double duration = static_cast<double>(end - start) / 1000000;
     std::cout << "Kernel execution time: " << duration << " ms" << std::endl;
   } else {
+#if __SYCL_COMPILER_VERSION >= 20260204
+    // Use eventless kernel submission. queue::submit() creates SYCL event which
+    // is redundant for our use case.
+    sycl::ext::oneapi::experimental::submit(stream, cgf);
+#else
     stream.submit(cgf);
+#endif
   }
   stream.wait_and_throw();
 }
@@ -429,12 +438,17 @@ std::vector<TensorBuffer> launchKernel(sycl::queue stream, sycl::kernel kernel,
 
   // copy back the output tensors
   for (const auto &item : triton_args.host_outbuffers) {
-    stream
-        .memcpy(tensor_ptr(item.buffer_ptr),
-                triton_args.dev_buffers.at(item.index),
-                item.buffer_ptr.nbytes())
-        .wait_and_throw();
+#if __SYCL_COMPILER_VERSION >= 20260204
+    sycl::ext::oneapi::experimental::memcpy(
+        stream, tensor_ptr(item.buffer_ptr),
+        triton_args.dev_buffers.at(item.index), item.buffer_ptr.nbytes());
+#else
+    stream.memcpy(tensor_ptr(item.buffer_ptr),
+                  triton_args.dev_buffers.at(item.index),
+                  item.buffer_ptr.nbytes());
+#endif
   }
+  stream.wait_and_throw();
 
   for (auto *dev_ptr : triton_args.dev_buffers) {
     if (dev_ptr)
