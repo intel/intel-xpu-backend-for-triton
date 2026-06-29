@@ -1,10 +1,20 @@
-# Skip tests using Llama-3-8B-Instruct:
-tests/v1/spec_decode/test_max_len.py::test_eagle_max_len
+# draft_model unsupported:
+tests/v1/spec_decode/test_eagle.py::test_set_inputs_first_pass_draft_model
 
-# Skip tests that query the available free memory:
-# Model Runner V2 does not yet support: ngram/ngram_gpu speculative decoding 
-tests/v1/spec_decode/test_max_len.py::test_ngram_max_len
-tests/v1/spec_decode/test_speculators_eagle3.py::test_eagle3_speculators_model
+# parallel drafting for EAGLE unsupported:
+tests/v1/spec_decode/test_eagle.py::test_set_inputs_first_pass_parallel_drafting
 
 # Model Runner V2 does not support draft_model speculative method: https://github.com/intel/intel-xpu-backend-for-triton/issues/7166
 tests/v1/spec_decode/test_eagle.py::test_propose_stores_probabilistic_draft_probs
+
+# ModuleNotFoundError: No module named 'torchvision':
+tests/v1/spec_decode/test_max_len.py::test_eagle_max_len
+
+# The following tests fail early due to other issues, but also will fail when querying the available free memory:
+
+# Model Runner V2 does not yet support: ngram/ngram_gpu speculative decoding 
+tests/v1/spec_decode/test_max_len.py::test_ngram_max_len
+
+# AssertionError: Handler already registered for <function current_stream ...>
+#tests/v1/spec_decode/test_speculators_eagle3.py::test_eagle3_speculators_model
+
