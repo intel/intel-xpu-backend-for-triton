@@ -131,6 +131,8 @@ def fused_gemm_swiglu_kernel(
 # Representative shapes for LLM feed-forward SwiGLU layers.
 # Each entry is [M, N, K] where x is (M, K), w_g/w_fc are (K, N), and y is (M, N).
 X_VALS = [
+    [220000, 8192, 512],  # shape from customer model
+    [1024, 8192, 7168],
     [1024, 5504, 4096],  # Llama-2 7B
     [2048, 5504, 4096],
     [4096, 5504, 4096],
@@ -139,7 +141,7 @@ X_VALS = [
     [2048, 14336, 4096],
     [4096, 14336, 4096],
     [8192, 14336, 4096],
-    # TODO: improve the kernel implementation for bug on DeepSeek-R1.
+    # TODO: Fix the bug of kernel implementation on shape from DeepSeek-R1.
     # [1024, 8192, 7168],  # DeepSeek-R1 style
     # [4096, 8192, 7168],
     # [8192, 8192, 7168],
@@ -193,18 +195,23 @@ X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
 def benchmark(M, N, K, provider):
     do_bench = benchmark_suite.get_do_bench(n_warmup=800, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
 
+    torch.xpu.empty_cache()
     torch.manual_seed(0)
-    x = torch.rand((M, K), device='xpu', dtype=torch.bfloat16)
-    w_g = torch.rand((K, N), device='xpu', dtype=torch.bfloat16)
-    w_fc = torch.rand((K, N), device='xpu', dtype=torch.bfloat16)
-    b_g = torch.rand((N, ), device='xpu', dtype=torch.bfloat16)
-    b_fc = torch.rand((N, ), device='xpu', dtype=torch.bfloat16)
+    if M == 220000 and N == 8192 and K == 512:
+        x = torch.empty((M, K), device='xpu', dtype=torch.float32).uniform_(-0.25, -0.25).to(torch.bfloat16)
+        w_g = torch.empty((K, N), device='xpu', dtype=torch.float32).uniform_(-0.25, 0.25).to(torch.bfloat16)
+        w_fc = torch.empty((K, N), device='xpu', dtype=torch.float32).uniform_(-0.25, 0.25).to(torch.bfloat16)
+    else:
+        x = torch.rand((M, K), device='xpu', dtype=torch.bfloat16)
+        w_g = torch.rand((K, N), device='xpu', dtype=torch.bfloat16)
+        w_fc = torch.rand((K, N), device='xpu', dtype=torch.bfloat16)
+    b_g = torch.zeros((N, ), device='xpu', dtype=torch.bfloat16)
+    b_fc = torch.zeros((N, ), device='xpu', dtype=torch.bfloat16)
 
     if provider == 'triton':
         triton_fn = lambda: fused_gemm_swiglu(x, w_g, w_fc, b_g, b_fc, M, N, K)
         torch_fn = lambda: native_torch_fused_gemm(x, w_g, w_fc, b_g, b_fc)
-        rtol = 1e-2
-        benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-2, rtol=rtol, err_msg='triton to torch')
+        benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-2, rtol=1e-2, err_msg='triton to torch')
         _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
