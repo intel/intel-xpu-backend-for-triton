@@ -36,8 +36,8 @@ def store_if(block_ptr, value, EVEN_M: tl.constexpr, EVEN_N: tl.constexpr):
         return
     if EVEN_N:
         tl.store(block_ptr, value, boundary_check=(0, ))
-        return
-    tl.store(block_ptr, value, boundary_check=(0, 1))
+    else:
+        tl.store(block_ptr, value, boundary_check=(0, 1))
 
 
 @triton.jit
