@@ -17,6 +17,21 @@ from triton_kernels_benchmark import (
     prefix_sums,
 )
 
+
+def _lazy_get_benchmark(module_name):
+    # vLLM modules import vllm at module load; defer that until the benchmark is actually run.
+    def factory(**kwargs):
+        import importlib  # pylint: disable=import-outside-toplevel
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError as err:
+            raise ImportError(f"Failed to import '{module_name}'; vLLM benchmarks require vLLM to be installed "
+                              "(see .github/actions/install-vllm).") from err
+        return module.get_benchmark(**kwargs)
+
+    return factory
+
+
 CONFIGS = [
     BenchmarkConfig(
         key="softmax",
@@ -191,5 +206,62 @@ CONFIGS = [
         categories={BenchmarkCategory.OPTIONAL, BenchmarkCategory.PREFIX_SUMS},
         description="Prefix Sums kernel benchmark",
         report_name="prefix_sums",
+    ),
+    BenchmarkConfig(
+        key="vllm-unified-attention",
+        get_benchmark=_lazy_get_benchmark(
+            "triton_kernels_benchmark.vllm.unified_attention.unified_attention_benchmark"),
+        run_opts={},
+        categories={BenchmarkCategory.VLLM, BenchmarkCategory.FLASH_ATTENTION},
+        description="vLLM unified attention kernel benchmark (bf16)",
+        report_name="unified-attn-bf16",
+        long_report_group="vllm",
+        long_report_param_cols="q_heads,k_heads,head_size,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size",
+        describe_metadata_only=True,
+    ),
+    BenchmarkConfig(
+        key="vllm-unified-attention-fp8",
+        get_benchmark=_lazy_get_benchmark(
+            "triton_kernels_benchmark.vllm.unified_attention.unified_attention_benchmark"),
+        run_opts={"is_fp8": True},
+        categories={BenchmarkCategory.VLLM, BenchmarkCategory.FLASH_ATTENTION},
+        description="vLLM unified attention kernel benchmark (fp8)",
+        report_name="unified-attn-fp8",
+        long_report_group="vllm",
+        long_report_param_cols="q_heads,k_heads,head_size,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size",
+        describe_metadata_only=True,
+    ),
+    BenchmarkConfig(
+        key="vllm-batched-moe",
+        get_benchmark=_lazy_get_benchmark("triton_kernels_benchmark.vllm.batched_moe.batched_moe_benchmark"),
+        run_opts={},
+        categories={BenchmarkCategory.VLLM, BenchmarkCategory.GEMM},
+        description="vLLM batched MoE GEMM kernel benchmark (bf16)",
+        report_name="moe-bf16-benchmark",
+        long_report_group="vllm",
+        long_report_param_cols="num_experts,max_tokens_per_expert,K,N",
+        describe_metadata_only=True,
+    ),
+    BenchmarkConfig(
+        key="vllm-batched-moe-fp8",
+        get_benchmark=_lazy_get_benchmark("triton_kernels_benchmark.vllm.batched_moe.batched_moe_benchmark"),
+        run_opts={"is_fp8": True},
+        categories={BenchmarkCategory.VLLM, BenchmarkCategory.GEMM},
+        description="vLLM batched MoE GEMM kernel benchmark (fp8)",
+        report_name="moe-fp8-benchmark",
+        long_report_group="vllm",
+        long_report_param_cols="num_experts,max_tokens_per_expert,K,N",
+        describe_metadata_only=True,
+    ),
+    BenchmarkConfig(
+        key="vllm-fused-moe",
+        get_benchmark=_lazy_get_benchmark("triton_kernels_benchmark.vllm.fused_moe.fused_moe_benchmark"),
+        run_opts={},
+        categories={BenchmarkCategory.VLLM, BenchmarkCategory.GEMM},
+        description="vLLM fused MoE GEMM kernel benchmark (bf16)",
+        report_name="fused-moe-benchmark",
+        long_report_group="vllm",
+        long_report_param_cols="num_tokens,output_hidden_size,hidden_size,num_experts,topk",
+        describe_metadata_only=True,
     ),
 ]
