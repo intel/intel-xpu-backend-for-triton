@@ -13,10 +13,9 @@ with open(sys.argv[1]) as f:
 
 with open(sys.argv[2], "w") as f:
     json.dump(
-        {
-            kernel: sorted({test.split("::", 1)[0] for test in tests})
-            for kernel, tests in data.items()
-        },
+        {kernel: sorted({test.split("::", 1)[0]
+                         for test in tests})
+         for kernel, tests in data.items()},
         f,
         indent=4,
         sort_keys=True,
