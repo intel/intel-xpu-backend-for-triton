@@ -294,7 +294,7 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_fp8
             line_names=list(providers.values()),
             styles=[('green', '-'), ('blue', '--'), ('red', ':')],
             ylabel=['GB/s', 'TFlops'],
-            plot_name='fused-moe-gemm-performance' + ('-td' if is_td_patched else ''),
+            plot_name='fused-moe-gemm-performance' + ('-fp8' if is_fp8 else '') + ('-td' if is_td_patched else ''),
             args={},
         ))
     def benchmark(num_tokens, output_hidden_size, hidden_size, num_experts, topk, dtype, has_bias, provider):
@@ -475,6 +475,16 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_fp8
         return (gbps(mean_ms), gbps(max_ms), gbps(min_ms)), (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
 
     return benchmark
+
+
+def get_benchmark(providers_filter: Optional[list[str]] = None, is_fp8=False, is_td_patched=None):
+    if is_td_patched is None:
+        is_td_patched = os.getenv('TD_PATCHED', '0') == '1'
+    return get_fused_moe_benchmark(
+        providers_filter=providers_filter,
+        is_fp8=is_fp8,
+        is_td_patched=is_td_patched,
+    )
 
 
 if __name__ == '__main__':
