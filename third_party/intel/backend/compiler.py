@@ -374,6 +374,12 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if (opt.reduce_variable_liveness):
             intel.passes.ttgpuir.add_reduce_variable_liveness(pm)
 
+        # Off by default: code sinking is perf-neutral on measured kernels (it
+        # reliably reduces register spills, but the relieved traffic is not on
+        # the critical path on current HW). Opt in via the env var for A/B work.
+        if knobs.intel.enable_code_sinking:
+            intel.passes.ttgpuir.add_code_sinking(pm)
+
         passes.ttir.add_loop_aware_cse(pm)
         passes.ttgpuir.add_fuse_nested_loops(pm)
 
