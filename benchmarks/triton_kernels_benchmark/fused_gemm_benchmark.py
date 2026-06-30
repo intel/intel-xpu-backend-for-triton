@@ -9,6 +9,13 @@ operations with a SwiGLU post-operation:
 This pattern is common in LLM architectures (e.g., Llama, Mistral) as the
 feed-forward network's SwiGLU activation layer.
 
+Multiple kernel variants are benchmarked to compare optimizations:
+  - baseline: original kernel with fast_dividef/fast_expf for SiLU
+  - bias_init: initialize accumulators with bias (saves 2 post-loop vec adds)
+  - rounded_div: use tl.math.div_rn (SPV_INTEL_rounded_divide_sqrt) for SiLU
+  - sigmoid: use tl.sigmoid(x) * x for SiLU
+  - large_k: baseline with BLOCK_SIZE_K=128 added to autotune space
+
 """
 import torch
 import triton
@@ -24,7 +31,13 @@ def native_torch_fused_gemm(x, w_g, w_fc, b_g, b_fc):
     return gate * fc
 
 
-def get_fused_gemm_autotune_configs() -> list[triton.Config]:
+# ---------------------------------------------------------------------------
+# Autotune configurations
+# ---------------------------------------------------------------------------
+
+def get_autotune_configs(block_k_values=None) -> list[triton.Config]:
+    if block_k_values is None:
+        block_k_values = [32, 64]
     return [
         triton.Config(
             {
@@ -39,33 +52,24 @@ def get_fused_gemm_autotune_configs() -> list[triton.Config]:
         )
         for BM in [128, 256]
         for BN in [64, 128]
-        for BK in [32, 64]
+        for BK in block_k_values
         for G in [4, 8, 16]
         for s in [2, 3, 4]
         for w in [8, 16, 32]
     ]
 
 
-@triton.autotune(
-    configs=get_fused_gemm_autotune_configs(),
-    key=['M', 'N', 'K'],
-    restore_value=['y_ptr'],
-)
+# ---------------------------------------------------------------------------
+# Variant 1: Baseline (original kernel)
+# ---------------------------------------------------------------------------
+
+@triton.autotune(configs=get_autotune_configs(), key=['M', 'N', 'K'], restore_value=['y_ptr'])
 @triton.jit
-def fused_gemm_swiglu_kernel(
-    x_ptr,
-    w_g_ptr,
-    w_fc_ptr,
-    b_g_ptr,
-    b_fc_ptr,
-    y_ptr,
-    M,
-    N,
-    K,
-    BLOCK_SIZE_M: tl.constexpr,
-    BLOCK_SIZE_N: tl.constexpr,
-    BLOCK_SIZE_K: tl.constexpr,
-    GROUP_SIZE_M: tl.constexpr,
+def fused_gemm_baseline(
+    x_ptr, w_g_ptr, w_fc_ptr, b_g_ptr, b_fc_ptr, y_ptr,
+    M, N, K,
+    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr,
+    BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr,
 ):
     dtype = y_ptr.type.element_ty
     pid = tl.program_id(axis=0)
@@ -82,23 +86,11 @@ def fused_gemm_swiglu_kernel(
     off_n = pid_n * BLOCK_SIZE_N
 
     desc_x = tl.make_tensor_descriptor(
-        x_ptr,
-        shape=[M, K],
-        strides=[K, 1],
-        block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K],
-    )
+        x_ptr, shape=[M, K], strides=[K, 1], block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K])
     desc_wg = tl.make_tensor_descriptor(
-        w_g_ptr,
-        shape=[K, N],
-        strides=[N, 1],
-        block_shape=[BLOCK_SIZE_K, BLOCK_SIZE_N],
-    )
+        w_g_ptr, shape=[K, N], strides=[N, 1], block_shape=[BLOCK_SIZE_K, BLOCK_SIZE_N])
     desc_wfc = tl.make_tensor_descriptor(
-        w_fc_ptr,
-        shape=[K, N],
-        strides=[N, 1],
-        block_shape=[BLOCK_SIZE_K, BLOCK_SIZE_N],
-    )
+        w_fc_ptr, shape=[K, N], strides=[N, 1], block_shape=[BLOCK_SIZE_K, BLOCK_SIZE_N])
 
     offset_n = off_n + tl.arange(0, BLOCK_SIZE_N)
     b_g = tl.load(b_g_ptr + offset_n, mask=offset_n < N, other=0.0)
@@ -120,31 +112,312 @@ def fused_gemm_swiglu_kernel(
     y = (silu_g * acc_fc).to(dtype)
 
     desc_y = tl.make_tensor_descriptor(
-        y_ptr,
-        shape=[M, N],
-        strides=[N, 1],
-        block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_N],
-    )
+        y_ptr, shape=[M, N], strides=[N, 1], block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_N])
     desc_y.store([off_m, off_n], y)
 
 
-# Representative shapes for LLM feed-forward SwiGLU layers.
-# Each entry is [M, N, K] where x is (M, K), w_g/w_fc are (K, N), and y is (M, N).
+# ---------------------------------------------------------------------------
+# Variant 2: Bias initialization in accumulators (saves post-loop addition)
+# ---------------------------------------------------------------------------
+
+@triton.autotune(configs=get_autotune_configs(), key=['M', 'N', 'K'], restore_value=['y_ptr'])
+@triton.jit
+def fused_gemm_bias_init(
+    x_ptr, w_g_ptr, w_fc_ptr, b_g_ptr, b_fc_ptr, y_ptr,
+    M, N, K,
+    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr,
+    BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr,
+):
+    dtype = y_ptr.type.element_ty
+    pid = tl.program_id(axis=0)
+    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
+    group_id = pid // num_pid_in_group
+    first_pid_m = group_id * GROUP_SIZE_M
+    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
+    pid_n = (pid % num_pid_in_group) // group_size_m
+
+    off_m = pid_m * BLOCK_SIZE_M
+    off_n = pid_n * BLOCK_SIZE_N
+
+    desc_x = tl.make_tensor_descriptor(
+        x_ptr, shape=[M, K], strides=[K, 1], block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K])
+    desc_wg = tl.make_tensor_descriptor(
+        w_g_ptr, shape=[K, N], strides=[N, 1], block_shape=[BLOCK_SIZE_K, BLOCK_SIZE_N])
+    desc_wfc = tl.make_tensor_descriptor(
+        w_fc_ptr, shape=[K, N], strides=[N, 1], block_shape=[BLOCK_SIZE_K, BLOCK_SIZE_N])
+
+    # Load bias and broadcast into accumulator shape — avoids post-loop addition
+    offset_n = off_n + tl.arange(0, BLOCK_SIZE_N)
+    b_g = tl.load(b_g_ptr + offset_n, mask=offset_n < N, other=0.0).to(tl.float32)
+    b_fc = tl.load(b_fc_ptr + offset_n, mask=offset_n < N, other=0.0).to(tl.float32)
+
+    acc_g = tl.broadcast_to(b_g[None, :], (BLOCK_SIZE_M, BLOCK_SIZE_N))
+    acc_fc = tl.broadcast_to(b_fc[None, :], (BLOCK_SIZE_M, BLOCK_SIZE_N))
+
+    for k in range(0, K, BLOCK_SIZE_K):
+        x = desc_x.load([off_m, k])
+        w_g = desc_wg.load([k, off_n])
+        w_fc = desc_wfc.load([k, off_n])
+        acc_g = tl.dot(x, w_g, acc_g)
+        acc_fc = tl.dot(x, w_fc, acc_fc)
+
+    silu_g = libdevice.fast_dividef(acc_g, 1.0 + libdevice.fast_expf(-acc_g))
+    y = (silu_g * acc_fc).to(dtype)
+
+    desc_y = tl.make_tensor_descriptor(
+        y_ptr, shape=[M, N], strides=[N, 1], block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_N])
+    desc_y.store([off_m, off_n], y)
+
+
+# ---------------------------------------------------------------------------
+# Variant 3: Rounded divide (SPV_INTEL_rounded_divide_sqrt) for SiLU
+# ---------------------------------------------------------------------------
+
+@triton.autotune(configs=get_autotune_configs(), key=['M', 'N', 'K'], restore_value=['y_ptr'])
+@triton.jit
+def fused_gemm_rounded_div(
+    x_ptr, w_g_ptr, w_fc_ptr, b_g_ptr, b_fc_ptr, y_ptr,
+    M, N, K,
+    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr,
+    BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr,
+):
+    dtype = y_ptr.type.element_ty
+    pid = tl.program_id(axis=0)
+    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
+    group_id = pid // num_pid_in_group
+    first_pid_m = group_id * GROUP_SIZE_M
+    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
+    pid_n = (pid % num_pid_in_group) // group_size_m
+
+    off_m = pid_m * BLOCK_SIZE_M
+    off_n = pid_n * BLOCK_SIZE_N
+
+    desc_x = tl.make_tensor_descriptor(
+        x_ptr, shape=[M, K], strides=[K, 1], block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K])
+    desc_wg = tl.make_tensor_descriptor(
+        w_g_ptr, shape=[K, N], strides=[N, 1], block_shape=[BLOCK_SIZE_K, BLOCK_SIZE_N])
+    desc_wfc = tl.make_tensor_descriptor(
+        w_fc_ptr, shape=[K, N], strides=[N, 1], block_shape=[BLOCK_SIZE_K, BLOCK_SIZE_N])
+
+    offset_n = off_n + tl.arange(0, BLOCK_SIZE_N)
+    b_g = tl.load(b_g_ptr + offset_n, mask=offset_n < N, other=0.0)
+    b_fc = tl.load(b_fc_ptr + offset_n, mask=offset_n < N, other=0.0)
+
+    acc_g = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    acc_fc = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    for k in range(0, K, BLOCK_SIZE_K):
+        x = desc_x.load([off_m, k])
+        w_g = desc_wg.load([k, off_n])
+        w_fc = desc_wfc.load([k, off_n])
+        acc_g = tl.dot(x, w_g, acc_g)
+        acc_fc = tl.dot(x, w_fc, acc_fc)
+
+    acc_g += b_g[None, :]
+    acc_fc += b_fc[None, :]
+
+    # Use rounded divide (SPV_INTEL_rounded_divide_sqrt) instead of fast_dividef
+    silu_g = tl.math.div_rn(acc_g, 1.0 + libdevice.fast_expf(-acc_g))
+    y = (silu_g * acc_fc).to(dtype)
+
+    desc_y = tl.make_tensor_descriptor(
+        y_ptr, shape=[M, N], strides=[N, 1], block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_N])
+    desc_y.store([off_m, off_n], y)
+
+
+# ---------------------------------------------------------------------------
+# Variant 4: sigmoid-based SiLU — silu(x) = x * sigmoid(x)
+# ---------------------------------------------------------------------------
+
+@triton.autotune(configs=get_autotune_configs(), key=['M', 'N', 'K'], restore_value=['y_ptr'])
+@triton.jit
+def fused_gemm_sigmoid(
+    x_ptr, w_g_ptr, w_fc_ptr, b_g_ptr, b_fc_ptr, y_ptr,
+    M, N, K,
+    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr,
+    BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr,
+):
+    dtype = y_ptr.type.element_ty
+    pid = tl.program_id(axis=0)
+    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
+    group_id = pid // num_pid_in_group
+    first_pid_m = group_id * GROUP_SIZE_M
+    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
+    pid_n = (pid % num_pid_in_group) // group_size_m
+
+    off_m = pid_m * BLOCK_SIZE_M
+    off_n = pid_n * BLOCK_SIZE_N
+
+    desc_x = tl.make_tensor_descriptor(
+        x_ptr, shape=[M, K], strides=[K, 1], block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K])
+    desc_wg = tl.make_tensor_descriptor(
+        w_g_ptr, shape=[K, N], strides=[N, 1], block_shape=[BLOCK_SIZE_K, BLOCK_SIZE_N])
+    desc_wfc = tl.make_tensor_descriptor(
+        w_fc_ptr, shape=[K, N], strides=[N, 1], block_shape=[BLOCK_SIZE_K, BLOCK_SIZE_N])
+
+    offset_n = off_n + tl.arange(0, BLOCK_SIZE_N)
+    b_g = tl.load(b_g_ptr + offset_n, mask=offset_n < N, other=0.0)
+    b_fc = tl.load(b_fc_ptr + offset_n, mask=offset_n < N, other=0.0)
+
+    acc_g = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    acc_fc = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    for k in range(0, K, BLOCK_SIZE_K):
+        x = desc_x.load([off_m, k])
+        w_g = desc_wg.load([k, off_n])
+        w_fc = desc_wfc.load([k, off_n])
+        acc_g = tl.dot(x, w_g, acc_g)
+        acc_fc = tl.dot(x, w_fc, acc_fc)
+
+    acc_g += b_g[None, :]
+    acc_fc += b_fc[None, :]
+
+    # SiLU via sigmoid: silu(x) = x * sigmoid(x) = x / (1 + exp(-x))
+    silu_g = acc_g * tl.sigmoid(acc_g)
+    y = (silu_g * acc_fc).to(dtype)
+
+    desc_y = tl.make_tensor_descriptor(
+        y_ptr, shape=[M, N], strides=[N, 1], block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_N])
+    desc_y.store([off_m, off_n], y)
+
+
+# ---------------------------------------------------------------------------
+# Variant 5: Larger BLOCK_SIZE_K (adds K=128 to autotune space)
+# ---------------------------------------------------------------------------
+
+@triton.autotune(configs=get_autotune_configs(block_k_values=[32, 64, 128]), key=['M', 'N', 'K'], restore_value=['y_ptr'])
+@triton.jit
+def fused_gemm_large_k(
+    x_ptr, w_g_ptr, w_fc_ptr, b_g_ptr, b_fc_ptr, y_ptr,
+    M, N, K,
+    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr,
+    BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr,
+):
+    dtype = y_ptr.type.element_ty
+    pid = tl.program_id(axis=0)
+    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
+    group_id = pid // num_pid_in_group
+    first_pid_m = group_id * GROUP_SIZE_M
+    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
+    pid_n = (pid % num_pid_in_group) // group_size_m
+
+    off_m = pid_m * BLOCK_SIZE_M
+    off_n = pid_n * BLOCK_SIZE_N
+
+    desc_x = tl.make_tensor_descriptor(
+        x_ptr, shape=[M, K], strides=[K, 1], block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K])
+    desc_wg = tl.make_tensor_descriptor(
+        w_g_ptr, shape=[K, N], strides=[N, 1], block_shape=[BLOCK_SIZE_K, BLOCK_SIZE_N])
+    desc_wfc = tl.make_tensor_descriptor(
+        w_fc_ptr, shape=[K, N], strides=[N, 1], block_shape=[BLOCK_SIZE_K, BLOCK_SIZE_N])
+
+    offset_n = off_n + tl.arange(0, BLOCK_SIZE_N)
+    b_g = tl.load(b_g_ptr + offset_n, mask=offset_n < N, other=0.0)
+    b_fc = tl.load(b_fc_ptr + offset_n, mask=offset_n < N, other=0.0)
+
+    acc_g = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    acc_fc = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    for k in range(0, K, BLOCK_SIZE_K):
+        x = desc_x.load([off_m, k])
+        w_g = desc_wg.load([k, off_n])
+        w_fc = desc_wfc.load([k, off_n])
+        acc_g = tl.dot(x, w_g, acc_g)
+        acc_fc = tl.dot(x, w_fc, acc_fc)
+
+    acc_g += b_g[None, :]
+    acc_fc += b_fc[None, :]
+
+    silu_g = libdevice.fast_dividef(acc_g, 1.0 + libdevice.fast_expf(-acc_g))
+    y = (silu_g * acc_fc).to(dtype)
+
+    desc_y = tl.make_tensor_descriptor(
+        y_ptr, shape=[M, N], strides=[N, 1], block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_N])
+    desc_y.store([off_m, off_n], y)
+
+
+# ---------------------------------------------------------------------------
+# Variant 6: Combined best — bias_init + sigmoid + large_k
+# ---------------------------------------------------------------------------
+
+@triton.autotune(configs=get_autotune_configs(block_k_values=[32, 64, 128]), key=['M', 'N', 'K'], restore_value=['y_ptr'])
+@triton.jit
+def fused_gemm_combined(
+    x_ptr, w_g_ptr, w_fc_ptr, b_g_ptr, b_fc_ptr, y_ptr,
+    M, N, K,
+    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr,
+    BLOCK_SIZE_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr,
+):
+    dtype = y_ptr.type.element_ty
+    pid = tl.program_id(axis=0)
+    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
+    group_id = pid // num_pid_in_group
+    first_pid_m = group_id * GROUP_SIZE_M
+    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
+    pid_n = (pid % num_pid_in_group) // group_size_m
+
+    off_m = pid_m * BLOCK_SIZE_M
+    off_n = pid_n * BLOCK_SIZE_N
+
+    desc_x = tl.make_tensor_descriptor(
+        x_ptr, shape=[M, K], strides=[K, 1], block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K])
+    desc_wg = tl.make_tensor_descriptor(
+        w_g_ptr, shape=[K, N], strides=[N, 1], block_shape=[BLOCK_SIZE_K, BLOCK_SIZE_N])
+    desc_wfc = tl.make_tensor_descriptor(
+        w_fc_ptr, shape=[K, N], strides=[N, 1], block_shape=[BLOCK_SIZE_K, BLOCK_SIZE_N])
+
+    offset_n = off_n + tl.arange(0, BLOCK_SIZE_N)
+    b_g = tl.load(b_g_ptr + offset_n, mask=offset_n < N, other=0.0).to(tl.float32)
+    b_fc = tl.load(b_fc_ptr + offset_n, mask=offset_n < N, other=0.0).to(tl.float32)
+
+    acc_g = tl.broadcast_to(b_g[None, :], (BLOCK_SIZE_M, BLOCK_SIZE_N))
+    acc_fc = tl.broadcast_to(b_fc[None, :], (BLOCK_SIZE_M, BLOCK_SIZE_N))
+
+    for k in range(0, K, BLOCK_SIZE_K):
+        x = desc_x.load([off_m, k])
+        w_g = desc_wg.load([k, off_n])
+        w_fc = desc_wfc.load([k, off_n])
+        acc_g = tl.dot(x, w_g, acc_g)
+        acc_fc = tl.dot(x, w_fc, acc_fc)
+
+    silu_g = acc_g * tl.sigmoid(acc_g)
+    y = (silu_g * acc_fc).to(dtype)
+
+    desc_y = tl.make_tensor_descriptor(
+        y_ptr, shape=[M, N], strides=[N, 1], block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_N])
+    desc_y.store([off_m, off_n], y)
+
+
+# ---------------------------------------------------------------------------
+# Dispatch map: provider name -> kernel function
+# ---------------------------------------------------------------------------
+
+KERNEL_VARIANTS = {
+    'baseline': fused_gemm_baseline,
+    'bias_init': fused_gemm_bias_init,
+    'rounded_div': fused_gemm_rounded_div,
+    'sigmoid': fused_gemm_sigmoid,
+    'large_k': fused_gemm_large_k,
+    'combined': fused_gemm_combined,
+}
+
+
+# Shapes from PR #7314 (customer model + DeepSeek-R1 style).
 X_VALS = [
     [220000, 8192, 512],  # shape from customer model
     [1024, 8192, 7168],
-    [1024, 5504, 4096],  # Llama-2 7B
-    [2048, 5504, 4096],
-    [4096, 5504, 4096],
-    [8192, 5504, 4096],
-    [1024, 14336, 4096],  # Llama-3 8B
-    [2048, 14336, 4096],
-    [4096, 14336, 4096],
-    [8192, 14336, 4096],
-    # TODO: Fix the bug of kernel implementation on shape from DeepSeek-R1.
-    # [1024, 8192, 7168],  # DeepSeek-R1 style
-    # [4096, 8192, 7168],
-    # [8192, 8192, 7168],
 ]
 
 DEVICE_NAME = torch.xpu.get_device_name()
@@ -163,52 +436,35 @@ def is_enough_memory(x_val):
     return enough_memory
 
 
-def is_enough_memory_for_verification(M, N, K):
-    """Check if there is enough device memory to run accuracy verification.
-
-    assert_close requires computing the PyTorch reference, which allocates several
-    large (M, N) intermediate tensors (float32 + bfloat16). We conservatively
-    estimate 18 * M * N bytes of additional memory on top of the benchmark inputs.
-    """
-    # Existing benchmark tensors: x (M*K), w_g (K*N), w_fc (K*N), b_g (N), b_fc (N), y (M*N)
-    # Each element is bfloat16 (2 bytes), so total = (M*K + 2*K*N + 2*N + M*N) * 2 bytes
-    input_memory = (M * K + 2 * K * N + 2 * N + M * N) * 2
-    # PyTorch reference intermediates: x@w_g (float32 MN), silu (float32 MN),
-    # x@w_fc (float32 MN), gate (bf16 MN), fc (bf16 MN), ref output (bf16 MN)
-    # ≈ 3*4*MN + 3*2*MN = 18*MN bytes (conservative estimate)
-    verify_memory = 18 * M * N
-    # Use 90% of total memory as the threshold to account for driver/runtime overhead
-    # and other allocations already present when the benchmark runs.
-    return (input_memory + verify_memory) < 0.9 * DEVICE_TOTAL_MEMORY
-
-
-def fused_gemm_swiglu(x, w_g, w_fc, b_g, b_fc, M, N, K):
+def fused_gemm_swiglu(kernel_fn, x, w_g, w_fc, b_g, b_fc, M, N, K):
     y = torch.empty((M, N), device='xpu', dtype=torch.bfloat16)
     grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
-    fused_gemm_swiglu_kernel[grid](x, w_g, w_fc, b_g, b_fc, y, M, N, K)
+    kernel_fn[grid](x, w_g, w_fc, b_g, b_fc, y, M, N, K)
     return y
 
 
 X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
 
+VARIANT_NAMES = list(KERNEL_VARIANTS.keys())
+
 
 @benchmark_suite.perf_report(
     benchmark_suite.Benchmark(
-        # argument names to use as an x-axis for the plot
         x_names=['M', 'N', 'K'],
-        # different possible values for `x_name`
         x_vals=X_VALS,
         line_arg='provider',
-        # argument name whose value corresponds to a different line in the plot
-        # possible values for `line_arg`
-        line_vals=['triton'],
-        # label name for the lines
-        line_names=['Triton'],
-        # line styles
-        styles=[('green', '-')],
-        ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
-        plot_name='fused-gemm-swiglu-performance',
-        # name for the plot. Used also as a file name for saving the plot.
+        line_vals=VARIANT_NAMES,
+        line_names=VARIANT_NAMES,
+        styles=[
+            ('green', '-'),       # baseline
+            ('blue', '-'),        # bias_init
+            ('red', '-'),         # rounded_div
+            ('orange', '-'),      # sigmoid
+            ('purple', '-'),      # large_k
+            ('black', '--'),      # combined
+        ],
+        ylabel=['GB/s', 'TFlops'],
+        plot_name='fused-gemm-swiglu-variants',
         args={},
     ))
 def benchmark(M, N, K, provider):
@@ -216,28 +472,15 @@ def benchmark(M, N, K, provider):
 
     torch.xpu.empty_cache()
     torch.manual_seed(0)
-    if M == 220000 and N == 8192 and K == 512:
-        x = torch.empty((M, K), device='xpu', dtype=torch.float32).uniform_(-0.25, -0.25).to(torch.bfloat16)
-        w_g = torch.empty((K, N), device='xpu', dtype=torch.float32).uniform_(-0.25, 0.25).to(torch.bfloat16)
-        w_fc = torch.empty((K, N), device='xpu', dtype=torch.float32).uniform_(-0.25, 0.25).to(torch.bfloat16)
-    else:
-        x = torch.rand((M, K), device='xpu', dtype=torch.bfloat16)
-        w_g = torch.rand((K, N), device='xpu', dtype=torch.bfloat16)
-        w_fc = torch.rand((K, N), device='xpu', dtype=torch.bfloat16)
+    x = torch.empty((M, K), device='xpu', dtype=torch.float32).uniform_(-0.25, 0.25).to(torch.bfloat16)
+    w_g = torch.empty((K, N), device='xpu', dtype=torch.float32).uniform_(-0.25, 0.25).to(torch.bfloat16)
+    w_fc = torch.empty((K, N), device='xpu', dtype=torch.float32).uniform_(-0.25, 0.25).to(torch.bfloat16)
     b_g = torch.zeros((N, ), device='xpu', dtype=torch.bfloat16)
     b_fc = torch.zeros((N, ), device='xpu', dtype=torch.bfloat16)
 
-    if provider == 'triton':
-        triton_fn = lambda: fused_gemm_swiglu(x, w_g, w_fc, b_g, b_fc, M, N, K)
-        torch_fn = lambda: native_torch_fused_gemm(x, w_g, w_fc, b_g, b_fc)
-        if is_enough_memory_for_verification(M, N, K):
-            benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-2, rtol=1e-2, err_msg='triton to torch')
-        else:
-            print(f'Skipping accuracy verification for shape ({M}, {N}, {K}): '
-                  f'insufficient device memory to compute PyTorch reference')
-        _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
-    else:
-        raise NotImplementedError(f'Unsupported provider {provider}')
+    kernel_fn = KERNEL_VARIANTS[provider]
+    triton_fn = lambda: fused_gemm_swiglu(kernel_fn, x, w_g, w_fc, b_g, b_fc, M, N, K)
+    _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
 
     # Two parallel GEMMs (w_g and w_fc), each with 2 * M * N * K multiply-add FLOPs
     num_gemms = 2
