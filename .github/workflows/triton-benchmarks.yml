@@ -138,12 +138,11 @@ jobs:
           mkdir reports
           echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
 
-      - name: Install benchmarks
+      - name: Install benchmarks from source
         id: install
-        uses: ./.github/actions/install-benchmarks
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          github-token: ${{ github.token }}
+        run: |
+          cd benchmarks
+          pip install --no-build-isolation .
 
       - name: Run Triton Softmax kernel benchmark
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'softmax')) && !contains(fromJson(inputs.skip_benchmarks || '[]'), 'softmax') }}
