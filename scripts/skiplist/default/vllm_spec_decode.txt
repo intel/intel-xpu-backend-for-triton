@@ -16,5 +16,5 @@ tests/v1/spec_decode/test_max_len.py::test_eagle_max_len
 tests/v1/spec_decode/test_max_len.py::test_ngram_max_len
 
 # AssertionError: Handler already registered for <function current_stream ...>
-#tests/v1/spec_decode/test_speculators_eagle3.py::test_eagle3_speculators_model
+tests/v1/spec_decode/test_speculators_eagle3.py::test_eagle3_speculators_model
 
