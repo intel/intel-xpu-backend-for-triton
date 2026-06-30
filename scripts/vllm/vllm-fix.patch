@@ -182,21 +182,42 @@ index f39e44286..86ead168e 100644
      num_segments = num_par_softmax_segments if use_3d else 1
  
      grid: tuple[Any, ...]
+diff --git a/vllm/model_executor/layers/fused_moe/experts/batched_deep_gemm_moe.py b/vllm/model_executor/layers/fused_moe/experts/batched_deep_gemm_moe.py
+index c8611217a..ec63dd73c 100644
+--- a/vllm/model_executor/layers/fused_moe/experts/batched_deep_gemm_moe.py
++++ b/vllm/model_executor/layers/fused_moe/experts/batched_deep_gemm_moe.py
+@@ -210,9 +210,13 @@ def persistent_masked_m_silu_mul_quant(
+         DeepGemmQuantScaleFMT.UE8M0,
+     ]
+ 
+-    device_capability = current_platform.get_device_capability(device_id=y.device.index)
+-    assert device_capability is not None
+-    cuda_arch = device_capability.to_int()
++    cuda_arch = 0
++    if current_platform.is_cuda():
++        device_capability = current_platform.get_device_capability(
++            device_id=y.device.index
++        )
++        assert device_capability is not None
++        cuda_arch = device_capability.to_int()
+ 
+     if current_platform.is_cuda() and cuda_arch >= 80:
+         torch.ops._C.persistent_masked_m_silu_mul_quant(
 diff --git a/tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py b/tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py
-index 6a5fad826..63a76332a 100644
+index 6a5fad826..829cc3cd7 100644
 --- a/tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py
 +++ b/tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py
-@@ -210,6 +210,10 @@ def token_random(E, T, H2, tokens_per_expert):
-     return y
+@@ -288,8 +288,8 @@ def test_silu_mul_fp8_quant_deep_gemm(E: int, T: int, H: int, fp8_type: torch.dt
+         for e in range(E):
+             nt = tokens_per_expert[e].item()
  
- 
-+@pytest.mark.skipif(
-+    not current_platform.is_cuda(),
-+    reason="DeepGEMM SiLU FP8 quant path requires CUDA device capability",
-+)
- @pytest.mark.parametrize("E,T,H,fp8_type", CASES)
- @torch.inference_mode()
- def test_silu_mul_fp8_quant_deep_gemm(E: int, T: int, H: int, fp8_type: torch.dtype):
+-            if current_platform.is_rocm():
+-                # On ROCm the Triton fallback kernel uses f32 math
++            if current_platform.is_rocm() or current_platform.is_xpu():
++                # On ROCm/XPU the Triton fallback kernel uses f32 math
+                 # intrinsics (tl.exp) that may differ from PyTorch's
+                 # torch.exp by 1 ULP.  At FP8 quantization
+                 # boundaries this can flip one representable value.
 diff --git a/tests/kernels/moe/test_moe.py b/tests/kernels/moe/test_moe.py
 index 9a317d40f..781807622 100644
 --- a/tests/kernels/moe/test_moe.py
