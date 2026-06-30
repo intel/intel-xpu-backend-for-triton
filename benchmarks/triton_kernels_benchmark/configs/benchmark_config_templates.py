@@ -1,6 +1,7 @@
 from triton_kernels_benchmark.benchmark_testing import BenchmarkCategory, BenchmarkConfig
 
 from triton_kernels_benchmark import (
+    batched_flash_attention_benchmark,
     fused_softmax,
     gemm_benchmark,
     gemm_block_ptr_benchmark,
@@ -138,6 +139,15 @@ CONFIGS = [
         description="FlashAttention backward kernel benchmark",
         report_name="flash-attn-bwd",
         report_file_prefix="attn-bwd",
+    ),
+    BenchmarkConfig(
+        key="batched-flash-attention",
+        get_benchmark=batched_flash_attention_benchmark.get_benchmark,
+        run_opts={},
+        categories={BenchmarkCategory.OPTIONAL, BenchmarkCategory.FLASH_ATTENTION},
+        description="Batched variable-length FlashAttention forward kernel benchmark",
+        report_name="batched-flash-attn",
+        report_file_prefix="batched-flash-attn",
     ),
     BenchmarkConfig(
         key="flex-attention-causal",
