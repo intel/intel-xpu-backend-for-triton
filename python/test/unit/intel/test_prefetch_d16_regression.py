@@ -14,10 +14,6 @@ Two layers of verification:
    regardless of whether the test machine is CRI/BMG/PVC.
 2. **End-to-end (XPU only)**: run the matmul and check correctness against
    torch.matmul. On CRI this is what previously crashed.
-
-References:
-    PYTORCHDGQ-9207
-    https://gfxspecs.intel.com/Predator/Home/Index/57329
 """
 
 import re
@@ -199,9 +195,9 @@ def test_d16_prefetch_ir_no_buggy_split_tdesc(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_
     `(2, 32, X, 1, ...)` (single-block).
 
     This compile-only check runs on any XPU build host with 2D block I/O support
-    (no CRI/BMG required), so a regression of PYTORCHDGQ-9207 is caught in
-    standard CI rather than only on the daily CRI job. xfail-with-run=False on
-    targets that lack `has_subgroup_2d_block_io` (matches the project pattern in
+    (no CRI/BMG required), so a regression is caught in standard CI rather than
+    only on the daily CRI job. xfail-with-run=False on targets that lack
+    `has_subgroup_2d_block_io` (matches the project pattern in
     test_block_load.py:18). Asserts that at least one d16 prefetch was emitted —
     zero d16 prefetches on a capable target would mean the compiler silently
     stopped prefetching, which itself is a regression.
@@ -234,7 +230,7 @@ def test_d16_prefetch_ir_no_buggy_split_tdesc(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_
                        "this is itself a regression (the optimization silently stopped firing).")
     buggy = _find_buggy_d16_prefetch_calls(llir)
     assert not buggy, (f"Found {len(buggy)} buggy d16 prefetch call(s) (tile_width=16, v_blocks=2) in LLIR. "
-                       f"This is the PYTORCHDGQ-9207 crash shape — block_width(32B) × array_length(2) = 64 != 128. "
+                       f"This is the crash shape — block_width(32B) × array_length(2) = 64 != 128. "
                        f"Sample: {buggy[0]}")
 
 
@@ -286,7 +282,7 @@ def test_d16_prefetch_ir_no_buggy_split_ptrs(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_S
                        "this is itself a regression (the optimization silently stopped firing).")
     buggy = _find_buggy_d16_prefetch_calls(llir)
     assert not buggy, (f"Found {len(buggy)} buggy d16 prefetch call(s) (tile_width=16, v_blocks=2) in LLIR. "
-                       f"This is the PYTORCHDGQ-9207 crash shape — block_width(32B) × array_length(2) = 64 != 128. "
+                       f"This is the crash shape — block_width(32B) × array_length(2) = 64 != 128. "
                        f"Sample: {buggy[0]}")
 
 
