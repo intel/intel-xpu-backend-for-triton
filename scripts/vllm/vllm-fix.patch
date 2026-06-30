@@ -182,3 +182,94 @@ index f39e44286..86ead168e 100644
      num_segments = num_par_softmax_segments if use_3d else 1
  
      grid: tuple[Any, ...]
+diff --git a/tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py b/tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py
+index 6a5fad826..63a76332a 100644
+--- a/tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py
++++ b/tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py
+@@ -210,6 +210,10 @@ def token_random(E, T, H2, tokens_per_expert):
+     return y
+ 
+ 
++@pytest.mark.skipif(
++    not current_platform.is_cuda(),
++    reason="DeepGEMM SiLU FP8 quant path requires CUDA device capability",
++)
+ @pytest.mark.parametrize("E,T,H,fp8_type", CASES)
+ @torch.inference_mode()
+ def test_silu_mul_fp8_quant_deep_gemm(E: int, T: int, H: int, fp8_type: torch.dtype):
+diff --git a/tests/kernels/moe/test_moe.py b/tests/kernels/moe/test_moe.py
+index 9a317d40f..781807622 100644
+--- a/tests/kernels/moe/test_moe.py
++++ b/tests/kernels/moe/test_moe.py
+@@ -57,6 +57,19 @@ from vllm.utils.math_utils import next_power_of_2
+ from vllm.utils.torch_utils import set_random_seed
+ 
+ 
++def _get_free_mem_or_skip() -> int:
++    if current_platform.is_cuda():
++        return torch.cuda.mem_get_info()[0]
++    if current_platform.device_type == "xpu":
++        if not hasattr(torch, "xpu") or not hasattr(torch.xpu, "mem_get_info"):
++            pytest.skip("XPU free-memory query is unavailable")
++        try:
++            return torch.xpu.mem_get_info()[0]
++        except Exception as exc:
++            pytest.skip(f"XPU free-memory query is unavailable: {exc}")
++    pytest.skip(f"Unsupported platform: {current_platform.device_type}")
++
++
+ def iterative_moe(
+     hidden_states: torch.Tensor,
+     w1: torch.Tensor,
+@@ -406,7 +419,7 @@ def test_fused_moe_int64_overflow(workspace_init):
+     Reproduces the scenario from PR #34279.
+     """
+     # ~12 GB GPU memory needed for intermediate caches
+-    free_mem = torch.cuda.mem_get_info()[0]
++    free_mem = _get_free_mem_or_skip()
+     if free_mem < 12 * 1024**3:
+         pytest.skip("Insufficient GPU memory for overflow test")
+ 
+diff --git a/tests/kernels/utils.py b/tests/kernels/utils.py
+index 12ff3830c..04da1ac74 100644
+--- a/tests/kernels/utils.py
++++ b/tests/kernels/utils.py
+@@ -885,6 +885,7 @@ def torch_experts(
+     f32 = torch.float32
+ 
+     act = op_registry[activation.custom_op_name]
++    act_fn = act(compile_native=False)
+ 
+     for i in range(num_experts):
+         mask = topk_ids == i
+@@ -893,7 +894,7 @@ def torch_experts(
+                 tmp1 = a[mask] @ w1[i].transpose(0, 1)
+                 if b_bias1 is not None:
+                     tmp1 = tmp1 + b_bias1[i].view(1, -1).to(tmp1.dtype)
+-                tmp2 = act()(tmp1)
++                tmp2 = act_fn(tmp1)
+                 out[mask] = tmp2 @ w2[i].transpose(0, 1)
+                 if b_bias2 is not None:
+                     out[mask] = out[mask] + b_bias2[i].view(1, -1).to(tmp1.dtype)
+diff --git a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
+index 1f5724ac3..c56bc8ee1 100644
+--- a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
++++ b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
+@@ -618,7 +618,7 @@ class NaiveBatchedExperts(mk.FusedMoEExpertsModular):
+             # Indexing expert_num_tokens doesn't work w/cudagraphs or inductor
+             if (
+                 torch.compiler.is_compiling()
+-                or torch.cuda.is_current_stream_capturing()
++                or (current_platform.is_cuda() and torch.cuda.is_current_stream_capturing())
+             ):
+                 num = hidden_states.shape[1]
+             else:
+@@ -659,7 +659,7 @@ def batched_moe_kernel_quantize_input(
+     per_act_token_quant: bool,
+     block_shape: list[int] | None = None,
+ ) -> tuple[torch.Tensor, torch.Tensor | None]:
+-    if torch.compiler.is_compiling() or torch.cuda.is_current_stream_capturing():
++    if torch.compiler.is_compiling() or (current_platform.is_cuda() and torch.cuda.is_current_stream_capturing()):
+         # Note: this does a bunch of extra work because expert_num_tokens is
+         # ignored but it does support torch.compile + cudagraphs.
+         hidden_dim = A.size(-1)
