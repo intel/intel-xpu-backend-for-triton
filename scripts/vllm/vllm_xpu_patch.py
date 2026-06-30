@@ -91,6 +91,18 @@ def _find_cuda_patterns(source: str) -> list[dict]:
                     "col": node.args[0].col_offset,
                 })
 
+        # Tensor/device helper positional moves: tensor.to("cuda"),
+        # helper.to_device("cuda").
+        if isinstance(node, ast.Call):
+            func = node.func
+            if (isinstance(func, ast.Attribute) and func.attr in ("to", "to_device") and node.args
+                    and isinstance(node.args[0], ast.Constant) and node.args[0].value == "cuda"):
+                patterns.append({
+                    "type": "device_posarg",
+                    "line": node.args[0].lineno,
+                    "col": node.args[0].col_offset,
+                })
+
         # torch.cuda.is_available() calls
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
             func = node.func
@@ -179,7 +191,13 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
         line = lines[line_idx]
         ptype = pattern["type"]
 
-        if ptype in ("device_kwarg", "torch_device", "torch_set_default_device", "device_default_param"):
+        if ptype in (
+            "device_kwarg",
+            "torch_device",
+            "torch_set_default_device",
+            "device_default_param",
+            "device_posarg",
+        ):
             # Replace "cuda" with "xpu" in device arguments
             lines[line_idx] = line.replace('"cuda"', '"xpu"', 1)
 
