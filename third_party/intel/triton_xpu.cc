@@ -157,6 +157,9 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
 
   ADD_PASS_WRAPPER_0("add_reduce_data_duplication",
                      gpu::intel::createTritonIntelGPUReduceDataDuplication);
+  ADD_PASS_OPTION_WRAPPER_1(
+      "add_canonicalize_pointers",
+      gpu::intel::createTritonIntelGPUCanonicalizePointers, bool);
   ADD_PASS_WRAPPER_0("add_materialize_block_pointer",
                      gpu::intel::createTritonIntelGPUMaterializeBlockPointer);
   ADD_PASS_WRAPPER_0("add_optimize_reduction_locality",
@@ -165,6 +168,8 @@ void init_triton_intel_passes_ttgpuir(py::module &&m) {
                      gpu::intel::createTritonIntelGPULowerTo2DBlockLoad);
   ADD_PASS_WRAPPER_0("add_reduce_variable_liveness",
                      gpu::intel::createTritonIntelGPUReduceVariableLiveness);
+  ADD_PASS_WRAPPER_0("add_code_sinking",
+                     gpu::intel::createTritonIntelGPUCodeSinking);
   ADD_PASS_WRAPPER_0("add_annotate_cache_control",
                      gpu::intel::createTritonIntelGPUAnnotateCacheControl);
   ADD_PASS_WRAPPER_0("add_widen_load_store_encoding",
