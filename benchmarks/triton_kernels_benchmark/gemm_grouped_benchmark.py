@@ -12,6 +12,10 @@ template on XPU with TMA off; it does nothing once torch supports it natively.
 
 Env knobs: GROUPED_MM_PATCH_XPU, GROUPED_MM_TRITON_ONLY (TRITON-only autotune),
 GROUPED_MM_VARIANT (for __main__), TRITON_RELAX_PROFILING_CHECK=1.
+
+The "triton" provider times whatever torch.compile + max_autotune selects; under the
+default autotune ATen can win, so the selected backend is reported per shape (set
+GROUPED_MM_TRITON_ONLY=1 to force the Triton template).
 """
 from functools import lru_cache
 from typing import Optional
@@ -20,9 +24,32 @@ import os
 import torch
 import torch._inductor  # pylint: disable=protected-access
 import torch._inductor.config as inductor_config  # pylint: disable=protected-access
+from torch._inductor import select_algorithm  # pylint: disable=protected-access
 from torch._inductor.kernel import mm_grouped  # pylint: disable=protected-access
+# Raised when the Triton template fails to compile/autotune; caught to report NaN.
+from torch._inductor.exc import InductorError  # pylint: disable=protected-access
+from torch._dynamo.exc import BackendCompilerFailed  # pylint: disable=protected-access
+from torch._inductor.select_algorithm import NoValidChoicesError  # pylint: disable=protected-access
 
 import triton_kernels_benchmark as benchmark_suite
+
+_COMPILE_ERRORS = (InductorError, BackendCompilerFailed, NoValidChoicesError)
+
+# Backend autotune selected for the last grouped_mm compile (set by the feedback saver).
+_LAST_SELECTED_BACKEND = {}
+_SETUP_STATE = {}
+
+
+def _grouped_mm_feedback_saver(timings, name, *_args, **_kwargs):
+    """Inductor feedback-saver hook: record the fastest choice's backend.
+
+    Extra positional args vary across torch versions; only timings/name are used.
+    """
+    if name != "grouped_mm" or not timings:
+        return
+    best = min(timings, key=timings.get)
+    backend = "triton" if isinstance(best, select_algorithm.TritonTemplateCaller) else "aten"
+    _LAST_SELECTED_BACKEND["grouped_mm"] = (backend, type(best).__name__)
 
 
 def _enable_xpu_grouped_mm_template() -> None:
@@ -88,6 +115,14 @@ def _setup_inductor() -> None:
         # Time only the Triton template (no ATen fallback).
         inductor_config.max_autotune_gemm_backends = "TRITON"
         inductor_config.autotune_fallback_to_aten = False
+    # Report which backend autotune picks (register the saver once, process-global).
+    if not _SETUP_STATE.get("feedback_saver_registered"):
+        try:
+            select_algorithm.add_feedback_saver(_grouped_mm_feedback_saver)
+            _SETUP_STATE["feedback_saver_registered"] = True
+        except AttributeError as e:
+            print(f"gemm_grouped_benchmark: could not register autotune feedback saver ({e}); "
+                  "selected backend will not be reported.")
     # Each (G, M, N, K) recompiles under dynamic=False.
     torch._dynamo.config.recompile_limit = 100  # pylint: disable=protected-access
 
@@ -192,11 +227,28 @@ def get_benchmark(
 
         elif provider == "triton":
             _setup_inductor()
-            compiled = _compiled_grouped_mm(with_offs)
-            triton_fn = (lambda: compiled(a, b, offs)) if with_offs else (lambda: compiled(a, b))
-            benchmark_suite.assert_close(triton_fn, eager_fn, atol=1e-4, rtol=1e-2,
-                                         err_msg="inductor grouped_mm to eager")
-            _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
+            try:
+                compiled = _compiled_grouped_mm(with_offs)
+                triton_fn = (lambda: compiled(a, b, offs)) if with_offs else (lambda: compiled(a, b))
+                benchmark_suite.assert_close(triton_fn, eager_fn, atol=1e-4, rtol=1e-2,
+                                             err_msg="inductor grouped_mm to eager")
+                _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
+            except _COMPILE_ERRORS as e:
+                # Template failed to compile (no ATen fallback under TRITON_ONLY): report NaN.
+                _compiled_grouped_mm.cache_clear()
+                print(f"gemm_grouped_benchmark[{variant}] G={G} M={M} N={N} K={K}: "
+                      f"Triton template unavailable ({type(e).__name__}); reporting NaN.")
+                return (float("nan"), ) * 3, (float("nan"), ) * 3, float("nan")
+            # Report the measured backend (unknown on an autotune cache hit).
+            backend, caller = _LAST_SELECTED_BACKEND.get("grouped_mm", ("unknown", "n/a"))
+            if backend == "aten":
+                print(f"gemm_grouped_benchmark[{variant}] G={G} M={M} N={N} K={K}: "
+                      f"'triton' provider measured backend=aten ({caller}) - not the "
+                      "Triton template; set GROUPED_MM_TRITON_ONLY=1 to force it.")
+            elif backend == "unknown":
+                print(f"gemm_grouped_benchmark[{variant}] G={G} M={M} N={N} K={K}: "
+                      "selected backend unknown (autotune cache hit); run with a clean "
+                      "Inductor cache to report triton-vs-aten.")
 
         else:
             raise NotImplementedError(f"Unsupported provider {provider}")
