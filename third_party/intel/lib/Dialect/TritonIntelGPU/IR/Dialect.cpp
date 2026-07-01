@@ -29,6 +29,41 @@ using namespace mlir::triton::gpu::intel;
 // Utility functions
 //===----------------------------------------------------------------------===//
 
+// Helper for inferSplitOpEncoding and inferDefaultJoinOpEncoding.
+// Adapted from lib/Dialect/TritonGPU/IR/Dialect.cpp::tryJoinOnAxis.
+static LogicalResult tryJoinOnAxis(MLIRContext *ctx, const LinearLayout &inLl,
+                                   LinearLayout &outLl, bool fwdInference,
+                                   int axis, std::optional<Location> loc) {
+  auto kRegister = StringAttr::get(ctx, "register");
+  auto outDims = llvm::to_vector(inLl.getOutDimNames());
+  if (fwdInference) {
+    auto split = LinearLayout::identity1D(2, kRegister, outDims[axis]);
+    outLl = split * inLl;
+  } else {
+    // Assert that there is a dimension with size 2 in the axis
+    // that has contiguous elements
+    bool found = false;
+    LinearLayout::BasesT newBases;
+    for (const auto &basesDim : inLl.getBases()) {
+      std::vector<std::vector<int32_t>> newBasesDim;
+      for (auto base : basesDim.second) {
+        if (base[axis] == 1 && basesDim.first == kRegister) {
+          found = true;
+          continue;
+        }
+        base[axis] /= 2;
+        newBasesDim.push_back(std::move(base));
+      }
+      newBases.insert({basesDim.first, std::move(newBasesDim)});
+    }
+    if (!found)
+      return emitOptionalError(loc, "SplitOp requires at least 2 elements "
+                                    "per thread in the last dimension");
+    outLl = LinearLayout(std::move(newBases), std::move(outDims));
+  }
+  return success();
+}
+
 static LogicalResult parseIntAttrValue(AsmParser &parser, Attribute attr,
                                        unsigned &value, StringRef desc) {
   auto intAttr = dyn_cast<IntegerAttr>(attr);
@@ -1096,16 +1131,57 @@ struct TritonIntelGPUInferLayoutInterface
   inferDefaultJoinOpEncoding(Attribute srcEnc, Attribute &dstEnc,
                              ArrayRef<int64_t> shape,
                              std::optional<Location> loc) const override {
-    // TODO
-    return failure();
+    // JoinOp takes two tensors of shape AxBxC and generates a tensor of shape
+    // AxBxCx2. Use LinearLayout to infer the output encoding.
+    auto ctx = getContext();
+
+    // Append dim to shape
+    auto ll = toLinearLayout(shape, srcEnc);
+    SmallVector<int64_t> dstShape(shape.begin(), shape.end());
+    dstShape.push_back(1);
+    ll = ll.reshapeOuts(standardOutDimPairs(ctx, dstShape));
+
+    // Try join on last dim
+    auto axis = dstShape.size() - 1;
+    auto newLl = LinearLayout::empty();
+    auto result =
+        tryJoinOnAxis(ctx, ll, newLl, /*fwdInference=*/true, axis, loc);
+
+    if (!result.succeeded()) {
+      return failure();
+    }
+    dstEnc = inferEncodingFromLinearLayout(ctx, std::move(newLl), srcEnc);
+    return success();
   }
 
   LogicalResult
   inferSplitOpEncoding(Attribute srcEnc, Attribute &dstEnc,
                        ArrayRef<int64_t> shape,
                        std::optional<Location> loc) const override {
-    // TODO
-    return failure();
+    // SplitOp takes a tensor of shape AxBxCx2 and generates two tensors of
+    // shape AxBxC. The input must have 2 in the last dimension.
+    auto axis = shape.size() - 1;
+    if (shape[axis] != 2) {
+      return emitOptionalError(
+          loc, "SplitOp input shape should have 2 in the last dim");
+    }
+
+    auto ctx = getContext();
+
+    // Split on last dim using LinearLayout
+    auto ll = toLinearLayout(shape, srcEnc);
+    auto newLl = LinearLayout::empty();
+    auto result =
+        tryJoinOnAxis(ctx, ll, newLl, /*fwdInference=*/false, axis, loc);
+    if (!result.succeeded()) {
+      return failure();
+    }
+    // Remove last dim from newLl (which should be 1)
+    SmallVector<int64_t> dstShape(shape.begin(), shape.end());
+    dstShape.pop_back();
+    newLl = newLl.reshapeOuts(standardOutDimPairs(ctx, dstShape));
+    dstEnc = inferEncodingFromLinearLayout(ctx, std::move(newLl), srcEnc);
+    return success();
   }
 
   LogicalResult
