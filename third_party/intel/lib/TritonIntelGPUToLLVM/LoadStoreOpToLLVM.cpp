@@ -140,7 +140,7 @@ struct LoadStoreConversionBase {
       : targetInfo(targetInfo), axisAnalysisPass(axisAnalysisPass),
         strideAnalysis(strideAnalysis) {}
 
-  int getStride(Value ptr, unsigned dim) const {
+  int64_t getStride(Value ptr, unsigned dim) const {
     triton::intel::StrideInfo *strideInfo = strideAnalysis.getStrideInfo(ptr);
     if (strideInfo) {
       const auto &stride = strideInfo->getStride();
@@ -715,17 +715,20 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     Location loc = ptr.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    int stride = getStride(ptr, dim);
+    int64_t stride = getStride(ptr, dim);
     // If the stride is 0, we assume a minimum pitch of 64 bytes.
-    constexpr int MIN_PITCH = 64;
+    constexpr int64_t MIN_PITCH = 64;
     if (stride == 0)
       return b.i32_val(MIN_PITCH);
 
     if (stride > 0) {
-      unsigned pitch = (unsigned)stride * elemSizeInBits / 8;
+      int64_t pitch = stride * elemSizeInBits / 8;
       if (pitch < MIN_PITCH)
         return nullptr; // unsupported pitch
-      return b.i32_val(pitch);
+      // The HW pitch operand is i32; bail out rather than silently truncating.
+      if (pitch > std::numeric_limits<int32_t>::max())
+        return nullptr;
+      return b.i32_val(static_cast<int32_t>(pitch));
     }
     assert(stride == -1 && "invalid stride < 0");
     return nullptr;
@@ -1533,7 +1536,7 @@ struct PrefetchOpConversion
       return failure();
 
     // If the stride is 0, we want to load only the first row.
-    int stride = getStride(op.getPtr(), rank - 2);
+    int64_t stride = getStride(op.getPtr(), rank - 2);
     Value baseHeight = b.i32_val(stride == 0 ? 1 : tileHeightInElem);
     Value baseWidth = b.i32_val(
         std::max(64u, vBlocks * tileWidthInElem * (elemSizeInBits / 8)));
@@ -1773,7 +1776,7 @@ struct PrefetchOpConversion
       return failure();
 
     // Row stride in elements (i64) -- emit2DBlockPrefetchOps converts to bytes.
-    int stride = getStride(op.getPtr(), rank - 2);
+    int64_t stride = getStride(op.getPtr(), rank - 2);
     if (stride < 0)
       return failure();
     Value rowStride = b.i64_val(stride);
@@ -1815,10 +1818,11 @@ struct PrefetchOpConversion
     // slices would prefetch the same (x,y) surface), so bail out instead.
     SmallVector<Value> extraDimStrides, extraDimBaseOffsets;
     for (unsigned d = 0; d < rank - 2; ++d) {
-      int dimStride = getStride(op.getPtr(), d);
+      int64_t dimStride = getStride(op.getPtr(), d);
       if (dimStride <= 0)
         return failure();
-      extraDimStrides.push_back(b.i64_val(dimStride * elemSizeInBytes));
+      extraDimStrides.push_back(
+          b.i64_val(dimStride * static_cast<int64_t>(elemSizeInBytes)));
       extraDimBaseOffsets.push_back(b.i32_val(0));
     }
 
