@@ -42,14 +42,22 @@ def store_if(block_ptr, value, EVEN_M: tl.constexpr, EVEN_N: tl.constexpr):
 
 @triton.jit
 def mask_fn(q_attn_arg, k_attn_arg, q_offset, k_offset, TYPE: tl.constexpr):
-    tril_causal = q_offset[:, None] >= k_offset[None, :]
-    triu_causal = q_offset[:, None] <= k_offset[None, :]
-
+    # tril_causal = q_offset[:, None] >= k_offset[None, :]
+    # triu_causal = q_offset[:, None] <= k_offset[None, :]
+    #
+    # if TYPE == 1:
+    #     return ((triu_causal & ((q_attn_arg[:, None] == k_attn_arg[None, :]) | (k_attn_arg[None, :] == 0))) |
+    #             (q_offset[:, None] == k_offset[None, :]))
+    # return ((tril_causal & ((q_attn_arg[:, None] == k_attn_arg[None, :]) | (k_attn_arg[None, :] == 0))) |
+    #         (q_offset[:, None] == k_offset[None, :]))
+    same_arg = (q_attn_arg[:, None] == k_attn_arg[None, :]) | (k_attn_arg[None, :] == 0)
+    diag = q_offset[:, None] == k_offset[None, :]
     if TYPE == 1:
-        return ((triu_causal & ((q_attn_arg[:, None] == k_attn_arg[None, :]) | (k_attn_arg[None, :] == 0))) |
-                (q_offset[:, None] == k_offset[None, :]))
-    return ((tril_causal & ((q_attn_arg[:, None] == k_attn_arg[None, :]) | (k_attn_arg[None, :] == 0))) |
-            (q_offset[:, None] == k_offset[None, :]))
+        triu_causal = q_offset[:, None] <= k_offset[None, :]
+        return (triu_causal & same_arg) | diag
+    if TYPE == 2:
+        tril_causal = q_offset[:, None] >= k_offset[None, :]
+        return (tril_causal & same_arg) | diag
 
 
 def keep(config):
@@ -72,7 +80,7 @@ def fa_fwd_kernel(
     cu_seqlens_k,
     q_head,
     kv_head,
-    scale,
+    scale: tl.float64,
     QK_DIM: tl.constexpr,
     V_DIM: tl.constexpr,
     MASK_FN: tl.constexpr,
@@ -328,7 +336,8 @@ SEGMENT_CASES = build_cases()
 
 
 def build_segment_bitmap(boundaries: torch.Tensor, total_tokens: int, device: str) -> torch.Tensor:
-    bitmap = torch.zeros(total_tokens, device=device, dtype=torch.int64)
+    # bitmap = torch.zeros(total_tokens, device=device, dtype=torch.int64)
+    bitmap = torch.zeros(total_tokens, device=device, dtype=torch.int32)
     bitmap[boundaries[:-1]] = 1
     return bitmap
 
