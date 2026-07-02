@@ -1,3 +1,5 @@
+import importlib
+
 from triton_kernels_benchmark.benchmark_testing import BenchmarkCategory, BenchmarkConfig
 
 from triton_kernels_benchmark import (
@@ -17,6 +19,22 @@ from triton_kernels_benchmark import (
     flex_attention_benchmark_custom_masks,
     prefix_sums,
 )
+
+
+def _lazy_get_benchmark(module_name):
+    """Defer importing a benchmark module until its benchmark is actually built.
+
+    gemm_grouped_benchmark mutates global Inductor/Dynamo state and monkeypatches
+    torch._inductor on import, so it must not be imported merely by loading CONFIGS
+    (which happens for every triton-benchmarks command and test-case collection).
+    """
+
+    def get_benchmark(**run_opts):
+        module = importlib.import_module(f"triton_kernels_benchmark.{module_name}")
+        return module.get_benchmark(**run_opts)
+
+    return get_benchmark
+
 
 CONFIGS = [
     BenchmarkConfig(
@@ -112,6 +130,24 @@ CONFIGS = [
         run_opts={},
         categories={BenchmarkCategory.OPTIONAL, BenchmarkCategory.GEMM},
         description="Triton Fused GEMM SwiGLU kernel benchmark",
+    ),
+    BenchmarkConfig(
+        key="gemm-grouped",
+        get_benchmark=_lazy_get_benchmark("gemm_grouped_benchmark"),
+        run_opts={"variant": "2d3d"},
+        categories={BenchmarkCategory.EXPERIMENTAL, BenchmarkCategory.GEMM},
+        description="Torch Inductor grouped_mm Triton template benchmark (2D x 3D, MoE-style)",
+        report_name="gemm-grouped",
+        report_file_prefix="gemm-grouped-2d3d",
+    ),
+    BenchmarkConfig(
+        key="gemm-grouped-batched",
+        get_benchmark=_lazy_get_benchmark("gemm_grouped_benchmark"),
+        run_opts={"variant": "3d3d"},
+        categories={BenchmarkCategory.EXPERIMENTAL, BenchmarkCategory.GEMM},
+        description="Torch Inductor grouped_mm Triton template benchmark (3D x 3D, batched)",
+        report_name="gemm-grouped-batched",
+        report_file_prefix="gemm-grouped-batched",
     ),
     BenchmarkConfig(
         key="flash_attention",

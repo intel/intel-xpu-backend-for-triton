@@ -1019,7 +1019,8 @@ run_vllm_gdn_attn_tests() {
   # recompute_w_u_fwd_kernel
   TRITON_TEST_SUITE=vllm_gdn_attn \
     run_pytest_command -vvv \
-      tests/v1/attention/test_gdn_metadata_builder.py
+      tests/v1/attention/test_gdn_metadata_builder.py \
+      tests/kernels/test_fused_sigmoid_gating_delta_rule.py
 }
 
 
