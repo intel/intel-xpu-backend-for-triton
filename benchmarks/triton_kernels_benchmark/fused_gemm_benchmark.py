@@ -212,6 +212,8 @@ def benchmark(M, N, K, provider):
     if provider == 'triton':
         triton_fn = lambda: fused_gemm_swiglu(x, w_g, w_fc, b_g, b_fc, M, N, K)
         torch_fn = lambda: native_torch_fused_gemm(x, w_g, w_fc, b_g, b_fc)
+        # Skip accuracy verification on BMG (B580): the kernel produces results outside
+        # the bfloat16 tolerance on this hardware due to reduced precision accumulation.
         if not IS_BMG:
             benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-2, rtol=1e-2, err_msg='triton to torch')
         _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
