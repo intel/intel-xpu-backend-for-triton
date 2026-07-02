@@ -1000,7 +1000,8 @@ run_vllm_triton_attn_tests() {
       tests/kernels/attention/test_merge_attn_states.py \
       tests/kernels/attention/test_triton_decode_attention.py \
       tests/kernels/attention/test_triton_unified_attention.py \
-      tests/kernels/attention/test_triton_prefill_attention.py
+      tests/kernels/attention/test_triton_prefill_attention.py \
+      tests/kernels/attention/test_cascade_flash_attn.py
 }
 
 
