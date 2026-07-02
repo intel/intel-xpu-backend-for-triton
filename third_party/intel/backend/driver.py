@@ -295,6 +295,13 @@ class ExtensionUtils:
 def compile_module_from_src(src: str, name: str):
     hasher = hashlib.sha256(__CACHE_VERSION.encode("utf-8"))
     hasher.update((src + platform_key()).encode("utf-8"))
+    # Include libsycl_dir in the hash to prevent cache collisions across
+    # environments with different oneAPI versions (e.g. 2025.3 vs 2026.0).
+    # The compiled .so has libsycl_dir baked in as RPATH; without this,
+    # two envs with identical extension_utils.c but different oneAPI stacks
+    # share the same cache entry and load an incompatible .so.
+    if COMPILATION_HELPER.libsycl_dir:
+        hasher.update(str(COMPILATION_HELPER.libsycl_dir).encode("utf-8"))
     key = hasher.hexdigest()
     cache = get_cache_manager(key)
     suffix = sysconfig.get_config_var("EXT_SUFFIX")
