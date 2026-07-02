@@ -160,10 +160,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         super().__init__(target)
         self.properties = self.parse_target(target.arch)
 
-        # Sync inferred BDPAS capability back to target.arch for user visibility
-        if self.properties.get('has_subgroup_scaled_matrix_multiply_accumulate', False):
-            target.arch['has_subgroup_scaled_matrix_multiply_accumulate'] = True
-
     def get_target_name(self, options) -> str:
         return f"xpu:{self.device_arch}"
 
@@ -217,15 +213,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             extensions = query_device_extensions(device_id)
             dev_prop.update(extensions)
             dev_prop['__intel_already_queried_extensions__'] = True
-
-        # Xe2+ architectures support block-scale DPAS even if the driver
-        # doesn't yet advertise cl_intel_subgroup_scaled_matrix_multiply_accumulate.
-        # Hardware reference confirms DPASEngineTypeXe2 has scaled dot types.
-        XE2_PLUS_ARCHS = {'bmg', 'lnl', 'ptl_h', 'ptl_u', 'nvl_s', 'nvl_u', 'nvl_p'}
-        if (not dev_prop.get('has_subgroup_scaled_matrix_multiply_accumulate', False)
-                and dev_prop.get('has_subgroup_matrix_multiply_accumulate', False) and hasattr(self, 'device_arch')
-                and self.device_arch in XE2_PLUS_ARCHS):
-            dev_prop['has_subgroup_scaled_matrix_multiply_accumulate'] = True
 
         return dev_prop
 
@@ -316,10 +303,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.common.add_inliner(pm)
         intel.passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         passes.common.add_cse(pm)
-        # add_reassociate_dot_scale was added in c9f92c4eb (June 19, 2026)
-        # Make it conditional for backwards compatibility
-        if hasattr(intel.passes.ttir, 'add_reassociate_dot_scale'):
-            intel.passes.ttir.add_reassociate_dot_scale(pm, knobs.intel.fast_math)
+        intel.passes.ttir.add_reassociate_dot_scale(pm, knobs.intel.fast_math)
         passes.ttir.add_triton_licm(pm)
         intel.passes.ttir.add_remove_masks(pm)
         intel.passes.ttir.add_stride_versioning(pm)
@@ -373,18 +357,14 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # rewrites produce IR that crashes LowerTo2DBlockLoad's AxisInfoAnalysis.
         # The trailing canonicalizer folds the zero offsets / identity arithmetic
         # and removes the unrealized_conversion_casts the pass leaves behind.
-        # add_canonicalize_pointers added in 24b2ed41f - make conditional
-        if (hasattr(knobs.intel, 'disable_canonicalize_pointers') and not knobs.intel.disable_canonicalize_pointers
-                and hasattr(intel.passes.ttgpuir, 'add_canonicalize_pointers')):
+        if not knobs.intel.disable_canonicalize_pointers:
             intel.passes.ttgpuir.add_canonicalize_pointers(pm, True)
             passes.common.add_canonicalizer(pm)
 
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
         intel.passes.ttgpuir.add_materialize_block_pointer(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
-        # add_fold_fp_to_fp - make conditional for backwards compatibility
-        if hasattr(intel.passes.ttgpuir, 'add_fold_fp_to_fp'):
-            intel.passes.ttgpuir.add_fold_fp_to_fp(pm)
+        intel.passes.ttgpuir.add_fold_fp_to_fp(pm)
         intel.passes.ttgpuir.add_optimize_dot_operands(pm)
         intel.passes.ttgpuir.add_hoist_layout_conversions(pm, opt.grf_mode)
         if os.environ.get("TRITON_INTEL_ANNOTATE_LATENCIES", "0") == "1":

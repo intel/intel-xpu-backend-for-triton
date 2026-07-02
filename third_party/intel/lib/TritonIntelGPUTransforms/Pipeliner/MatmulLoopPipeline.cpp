@@ -202,58 +202,9 @@ static ttg::DotOperandEncodingAttr getDotEncodingFromUser(Operation *user) {
              : llvm::dyn_cast_or_null<ttg::DotOperandEncodingAttr>(layout);
 }
 
-/// Helper to recursively check if a value eventually feeds a dot operation
-/// by following through element-wise operations (cast, transpose, etc.)
-static bool eventuallyFeedsDot(Value val, int depth = 0, int maxDepth = 5) {
-  if (depth >= maxDepth)
-    return false;
-
-  LDBG("  [depth=" << depth << "] Checking users of " << val);
-
-  for (Operation *user : val.getUsers()) {
-    // Direct dot use
-    if (isa<triton::DotOp>(user)) {
-      LDBG("  [depth=" << depth << "] Found direct dot: " << *user);
-      return true;
-    }
-
-    // Follow through element-wise ops that preserve shape
-    // (cast, transpose, arithmetic ops, layout conversions)
-    if (user->getNumResults() == 1) {
-      // Memory-effect-free ops (arith, cast, trans, etc.)
-      if (mlir::isMemoryEffectFree(user)) {
-        LDBG("  [depth=" << depth
-                         << "] Following through memory-effect-free op: "
-                         << user->getName());
-        if (eventuallyFeedsDot(user->getResult(0), depth + 1, maxDepth))
-          return true;
-      }
-
-      // Layout conversions (ConvertLayoutOp)
-      if (isa<ttg::ConvertLayoutOp>(user)) {
-        LDBG("  [depth=" << depth << "] Following through ConvertLayoutOp");
-        if (eventuallyFeedsDot(user->getResult(0), depth + 1, maxDepth))
-          return true;
-      }
-    }
-  }
-
-  LDBG("  [depth=" << depth << "] No dot found");
-  return false;
-}
-
 /// If all the transitive uses of the given value are used by a convert to the
 /// same dot operand encoding, return the encoding. Otherwise return nullptr.
-/// MODIFIED: Now uses eventuallyFeedsDot to handle flash attention patterns.
 static ttg::DotOperandEncodingAttr allTransitiveUsesHaveDotEncoding(Value val) {
-  // First check if this eventually feeds a dot using relaxed check
-  if (!eventuallyFeedsDot(val)) {
-    LDBG("Value does not eventually feed a dot");
-    return nullptr;
-  }
-
-  // Original strict checking for encoding consistency
-  // (Keep this for now to maintain compatibility with existing patterns)
   ttg::DotOperandEncodingAttr attr{nullptr};
   LDBG("Checking users of " << val);
   for (Operation *user : val.getUsers()) {
@@ -263,39 +214,11 @@ static ttg::DotOperandEncodingAttr allTransitiveUsesHaveDotEncoding(Value val) {
                   cast<RankedTensorType>(val.getType()).getEncoding())
             : getDotEncodingFromUser(user);
     if (!dotAttr || (attr != nullptr && attr != dotAttr)) {
-      // Relaxed: If we know it feeds a dot but encoding check fails,
-      // return a dummy non-null value to indicate "yes, this feeds a dot"
-      // The actual encoding will be determined during scheduling
-      LDBG("no dot attribute found for user, but feeds dot eventually: "
-           << *user);
-      continue; // Changed from return nullptr
+      LDBG("no dot attribute found for user: " << *user);
+      return nullptr;
     }
     attr = dotAttr;
   }
-
-  // If we get here and attr is still null but eventuallyFeedsDot was true,
-  // we need to return something non-null. Use a sentinel approach:
-  // Look harder for any DotOperandEncoding in the use chain.
-  if (!attr) {
-    LDBG("Creating placeholder encoding for flash attention pattern");
-    // Return a non-null placeholder - caller just checks for nullptr anyway
-    // We'll use the first DotOperandEncoding we can find anywhere in users
-    for (Operation *user : val.getUsers()) {
-      if (user->getNumResults() == 1 &&
-          isa<RankedTensorType>(user->getResult(0).getType())) {
-        auto encoding =
-            cast<RankedTensorType>(user->getResult(0).getType()).getEncoding();
-        if (auto dotEnc =
-                dyn_cast_or_null<ttg::DotOperandEncodingAttr>(encoding)) {
-          return dotEnc;
-        }
-      }
-    }
-    // Last resort: just return a non-null marker
-    // The function signature returns a pointer, and callers only check nullptr
-    // We'll need to ensure callers handle this gracefully
-  }
-
   return attr;
 }
 
