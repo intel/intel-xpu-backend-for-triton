@@ -149,7 +149,6 @@ X_VALS = [
 
 DEVICE_NAME = torch.xpu.get_device_name()
 DEVICE_TOTAL_MEMORY = torch.xpu.get_device_properties().total_memory
-IS_BMG = 'B580' in DEVICE_NAME
 
 
 def is_enough_memory(x_val):
@@ -162,6 +161,22 @@ def is_enough_memory(x_val):
     if not enough_memory:
         print(f"'{x_val}' combination skipped for '{DEVICE_NAME}'; {required_memory=} but {DEVICE_TOTAL_MEMORY=}")
     return enough_memory
+
+
+def is_enough_memory_for_verification(M, N, K):
+    """Check if there is enough device memory to run accuracy verification.
+
+    assert_close requires computing the PyTorch reference, which allocates several
+    large (M, N) intermediate tensors (float32 + bfloat16). We conservatively
+    estimate 18 * M * N bytes of additional memory on top of the benchmark inputs.
+    """
+    # Existing benchmark tensors: x (M*K), w_g (K*N), w_fc (K*N), b_g (N), b_fc (N), y (M*N)
+    input_memory = (M * K + 2 * K * N + 2 * N + M * N) * 2  # bfloat16 bytes
+    # PyTorch reference intermediates: x@w_g (float32 MN), silu (float32 MN),
+    # x@w_fc (float32 MN), gate (bf16 MN), fc (bf16 MN), ref output (bf16 MN)
+    # ≈ 3*4*MN + 3*2*MN = 18*MN bytes (conservative with safety margin)
+    verify_memory = 18 * M * N
+    return (input_memory + verify_memory) < DEVICE_TOTAL_MEMORY
 
 
 def fused_gemm_swiglu(x, w_g, w_fc, b_g, b_fc, M, N, K):
@@ -212,10 +227,11 @@ def benchmark(M, N, K, provider):
     if provider == 'triton':
         triton_fn = lambda: fused_gemm_swiglu(x, w_g, w_fc, b_g, b_fc, M, N, K)
         torch_fn = lambda: native_torch_fused_gemm(x, w_g, w_fc, b_g, b_fc)
-        # Skip accuracy verification on BMG (B580): the kernel produces results outside
-        # the bfloat16 tolerance on this hardware due to reduced precision accumulation.
-        if not IS_BMG:
+        if is_enough_memory_for_verification(M, N, K):
             benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-2, rtol=1e-2, err_msg='triton to torch')
+        else:
+            print(f"Skipping accuracy verification for shape ({M}, {N}, {K}): "
+                  f"insufficient device memory to compute PyTorch reference")
         _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
