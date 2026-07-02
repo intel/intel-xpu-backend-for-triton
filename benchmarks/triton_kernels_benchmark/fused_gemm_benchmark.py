@@ -171,12 +171,15 @@ def is_enough_memory_for_verification(M, N, K):
     estimate 18 * M * N bytes of additional memory on top of the benchmark inputs.
     """
     # Existing benchmark tensors: x (M*K), w_g (K*N), w_fc (K*N), b_g (N), b_fc (N), y (M*N)
-    input_memory = (M * K + 2 * K * N + 2 * N + M * N) * 2  # bfloat16 bytes
+    # Each element is bfloat16 (2 bytes), so total = (M*K + 2*K*N + 2*N + M*N) * 2 bytes
+    input_memory = (M * K + 2 * K * N + 2 * N + M * N) * 2
     # PyTorch reference intermediates: x@w_g (float32 MN), silu (float32 MN),
     # x@w_fc (float32 MN), gate (bf16 MN), fc (bf16 MN), ref output (bf16 MN)
-    # ≈ 3*4*MN + 3*2*MN = 18*MN bytes (conservative with safety margin)
+    # ≈ 3*4*MN + 3*2*MN = 18*MN bytes (conservative estimate)
     verify_memory = 18 * M * N
-    return (input_memory + verify_memory) < DEVICE_TOTAL_MEMORY
+    # Use 90% of total memory as the threshold to account for driver/runtime overhead
+    # and other allocations already present when the benchmark runs.
+    return (input_memory + verify_memory) < 0.9 * DEVICE_TOTAL_MEMORY
 
 
 def fused_gemm_swiglu(x, w_g, w_fc, b_g, b_fc, M, N, K):
