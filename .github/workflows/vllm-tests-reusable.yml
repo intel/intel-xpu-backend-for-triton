@@ -142,6 +142,7 @@ jobs:
           - vllm-triton-attn
           - vllm-mamba
           - vllm-quant
+          - vllm-kda
           - vllm-rest
     runs-on:
       - linux
@@ -268,7 +269,12 @@ jobs:
         run: |
           ${{ env.TRITON_TEST_CMD }} --vllm-quant
 
-      # vllm-rest groups short suites: gdn-attn, linear-attn, deepgemm, kda
+      - name: Run kda tests
+        if: ${{ matrix.suite == 'vllm-kda' && steps.install-vllm.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --vllm-kda
+
+      # vllm-rest groups short suites: gdn-attn, linear-attn, deepgemm
       - name: Run gdn-attn tests
         if: ${{ matrix.suite == 'vllm-rest' && steps.install-vllm.outcome == 'success' && !cancelled() }}
         run: |
@@ -283,11 +289,6 @@ jobs:
         if: ${{ matrix.suite == 'vllm-rest' && steps.install-vllm.outcome == 'success' && !cancelled() }}
         run: |
           ${{ env.TRITON_TEST_CMD }} --vllm-deepgemm
-
-      - name: Run kda tests
-        if: ${{ matrix.suite == 'vllm-rest' && steps.install-vllm.outcome == 'success' && !cancelled() }}
-        run: |
-          ${{ env.TRITON_TEST_CMD }} --vllm-kda
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}
