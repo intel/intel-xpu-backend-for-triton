@@ -959,7 +959,8 @@ run_vllm_mrv2_tests() {
       tests/v1/worker/test_gpu_input_batch.py \
       tests/v1/worker/test_gpu_model_runner_v2_eplb.py \
       tests/v1/sample/test_sampler.py \
-      tests/v1/sample/test_logprobs.py
+      tests/v1/sample/test_logprobs.py \
+      tests/v1/worker/test_gpu_gumbel_sample.py
 }
 
 
@@ -1038,7 +1039,8 @@ run_vllm_mamba_tests() {
       tests/kernels/mamba/test_causal_conv1d.py \
       tests/kernels/mamba/test_mamba_ssm.py \
       tests/kernels/mamba/test_mamba_ssm_ssd.py \
-      tests/kernels/mamba/test_mamba_mixer2.py
+      tests/kernels/mamba/test_mamba_mixer2.py \
+      tests/kernels/mamba/test_ssu_dispatch.py
 }
 
 
@@ -1061,7 +1063,8 @@ run_vllm_quant_tests() {
       tests/kernels/quantization/test_block_int8.py \
       tests/kernels/quantization/test_fp8_quant.py \
       tests/kernels/quantization/test_fp8_quant_group.py \
-      tests/kernels/quantization/test_block_fp8.py
+      tests/kernels/quantization/test_block_fp8.py \
+      tests/kernels/moe/test_silu_mul_per_token_group_quant_fp8_colmajor.py
 }
 
 
