@@ -13,6 +13,7 @@
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/Support/Debug.h"
+#include <limits>
 #include <optional>
 
 #define DEBUG_TYPE "tritonintelgpu-lower-to-2d-block-load"
@@ -255,6 +256,31 @@ private:
           return;
         }
       }
+    }
+
+    // The 2Dblockload HW pitch/base_width operands are i32. Bail out if any
+    // compile-time-foldable byte value overflows the i32 range so we don't
+    // silently emit a garbage surface descriptor. Non-foldable (runtime)
+    // shapes/strides are trusted to fit — the HW verifier will complain if
+    // they don't.
+    //
+    // We chase the descriptor's defining MakeTensorDescOp(s) to reach the
+    // original SSA — `strides`/`shapes` above are ttig.extract_desc results
+    // whose defining ops the folder can't see through.
+    constexpr int64_t kInt32Max = std::numeric_limits<int32_t>::max();
+    int64_t elemBytesConst = elemSizeInBits / 8;
+    auto wouldOverflow = [&](unsigned operandIdx) {
+      return llvm::any_of(allDescs, [&](tt::MakeTensorDescOp d) {
+        auto folded =
+            tt::intel::getFoldedConstantValue(d->getOperand(operandIdx));
+        return folded && *folded * elemBytesConst > kInt32Max;
+      });
+    };
+    // MakeTensorDescOp operands: base, shape[rank], strides[rank].
+    if (wouldOverflow(/*inner shape*/ 1 + (descRank - 1)) ||
+        wouldOverflow(/*pitch stride*/ 1 + descRank + (descRank - 2))) {
+      LDBG("Pitch/base_width would overflow i32 for descriptor load: " << *op);
+      return;
     }
 
     // Surface width = inner dimension size * element bytes.

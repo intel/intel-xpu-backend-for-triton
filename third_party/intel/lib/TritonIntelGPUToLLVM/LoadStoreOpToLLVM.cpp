@@ -1250,6 +1250,51 @@ static TritonGEN::LoadCacheControl prefetchCacheControl(CacheModifier cm) {
   }
 }
 
+/// Truncate `v` to i32 for a 2D-block-IO baseHeight operand. Returns
+/// `Value()` when `v` can be compile-time folded and exceeds INT32_MAX, so
+/// the caller can bail rather than silently emit garbage. Non-foldable
+/// (runtime) values pass through unchecked — the HW verifier catches
+/// invalid sizes.
+static Value truncI64ToI32OrNull(ConversionPatternRewriter &rewriter,
+                                 Location loc, Value v) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  if (auto folded = triton::intel::getFoldedConstantValue(v)) {
+    if (*folded > std::numeric_limits<int32_t>::max() ||
+        *folded < std::numeric_limits<int32_t>::min())
+      return Value();
+  }
+  return b.trunc(i32_ty, v);
+}
+
+/// Materialize `stride * elemBytes` as an i32 for a 2D-block-IO
+/// pitch/base_width operand. Returns `Value()` when the stride can be
+/// compile-time folded and `stride * elemBytes` exceeds INT32_MAX, so the
+/// caller can bail rather than silently emit garbage. Callers should check
+/// the result and return `failure()` on null. A non-foldable (runtime)
+/// stride is passed through unchecked — the HW pitch operand is i32, so
+/// the caller is trusting the stride to fit at runtime; that matches
+/// getRuntimePitch()'s policy.
+static Value truncStrideProductToI32(ConversionPatternRewriter &rewriter,
+                                     Location loc, Value stride,
+                                     int64_t elemBytes) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  if (auto folded = triton::intel::getFoldedConstantValue(stride)) {
+    // elemBytes fits in a handful of bits (element sizes are ≤ 8 bytes),
+    // so the int64 product is safe from overflow.
+    int64_t product = *folded * elemBytes;
+    if (product > std::numeric_limits<int32_t>::max() ||
+        product < std::numeric_limits<int32_t>::min())
+      return Value();
+  }
+  Value i64Stride = stride;
+  if (auto intTy = dyn_cast<IntegerType>(stride.getType())) {
+    if (intTy.getWidth() < 64)
+      i64Stride = b.sext(i64_ty, stride);
+  }
+  Value product = b.mul(i64Stride, b.i64_val(elemBytes));
+  return b.trunc(i32_ty, product);
+}
+
 /// Emit 2D block prefetch operations for a tiled prefetch.
 ///
 /// Converts base dimensions to bytes, determines vBlocks from element size,
@@ -1271,15 +1316,23 @@ static LogicalResult emit2DBlockPrefetchOps(
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   MLIRContext *ctx = rewriter.getContext();
 
-  // Convert baseWidth and rowStride to bytes and truncate to i32.
-  baseWidth = b.mul(baseWidth, b.i64_val(eltTy.getIntOrFloatBitWidth() / 8));
-  baseWidth = b.trunc(i32_ty, baseWidth);
+  // Convert baseWidth and rowStride to bytes and truncate to i32, bailing out
+  // if a compile-time-foldable byte pitch/base_width would overflow the HW's
+  // i32 operand. baseHeight is a raw row count with no multiply, but the HW
+  // operand is also i32, so guard it too.
+  int64_t elemBytes = eltTy.getIntOrFloatBitWidth() / 8;
+  Value baseWidthI32 = truncStrideProductToI32(rewriter, loc, baseWidth,
+                                               /*elemBytes=*/elemBytes);
+  Value baseHeightI32 = truncI64ToI32OrNull(rewriter, loc, baseHeight);
+  if (!baseWidthI32 || !baseHeightI32)
+    return failure();
+  baseWidth = baseWidthI32;
+  baseHeight = baseHeightI32;
 
-  baseHeight = b.trunc(i32_ty, baseHeight);
-
-  Value rowStrideInBytes =
-      b.mul(rowStride, b.i64_val(eltTy.getIntOrFloatBitWidth() / 8));
-  rowStrideInBytes = b.trunc(i32_ty, rowStrideInBytes);
+  Value rowStrideInBytes = truncStrideProductToI32(rewriter, loc, rowStride,
+                                                   /*elemBytes=*/elemBytes);
+  if (!rowStrideInBytes)
+    return failure();
 
   unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
   unsigned vBlocks = 1;
@@ -2696,20 +2749,25 @@ struct DescriptorStoreOpToBlockIOConversion
 
     // --- Shapes (base width / height for 2D block IO payload) ---
     // TensorDesc carries shape as i64 values. The 2D block IO payload
-    // expects baseWidth in bytes and baseHeight in elements.
+    // expects baseWidth in bytes and baseHeight in elements. All three
+    // are truncated to i32, so a compile-time-foldable value exceeding
+    // INT32_MAX bails the pattern out rather than silently corrupting
+    // the surface descriptor.
     Value shapeRow = desc.shapes[descRowDim]; // i64
     Value shapeCol = desc.shapes[descColDim]; // i64
-    Value baseWidth =
-        b.trunc(i32_ty, b.mul(shapeCol, b.i64_val(elemSizeInBits / 8)));
-    Value baseHeight = b.trunc(i32_ty, shapeRow);
+    Value baseWidth = truncStrideProductToI32(rewriter, loc, shapeCol,
+                                              /*elemBytes=*/elemSizeInBits / 8);
+    Value baseHeight = truncI64ToI32OrNull(rewriter, loc, shapeRow);
 
     // --- Pitch (row stride in bytes) ---
     // TODO: DescriptorStoreOp does not expose a "memory order" attribute, so
     // we always use the row-major stride dimension. Once a memory order
     // attribute is added, this should be adjusted.
     Value strideForPitch = desc.strides[descRowDim]; // i64
-    Value pitch =
-        b.trunc(i32_ty, b.mul(strideForPitch, b.i64_val(elemSizeInBits / 8)));
+    Value pitch = truncStrideProductToI32(rewriter, loc, strideForPitch,
+                                          /*elemBytes=*/elemSizeInBits / 8);
+    if (!baseWidth || !baseHeight || !pitch)
+      return failure();
 
     // --- Offsets ---
     // Unlike block pointers which store offsets in the struct, tensor

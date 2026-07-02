@@ -4,22 +4,30 @@
 // lowering (see intel/intel-xpu-backend-for-triton#7334):
 //   1. getStride() truncated StrideInfo's int64 to int32, so a row stride of
 //      2^31 became negative and the cooperative prefetch bailed out via
-//      `if (stride < 0) return failure()`, emitting 0 prefetch ops.
+//      `if (stride < 0) return failure()`, emitting 0 prefetch ops. Widened
+//      to int64.
 //   2. In the rank>2 batch-stride loop, `dimStride * elemSizeInBytes` was an
 //      int32-times-unsigned product, so a batch stride whose byte value
 //      exceeded INT32_MAX truncated to 0 and every batch prefetched the
-//      same surface.
+//      same surface. Widened to int64.
 //   3. getPitch() computed `(unsigned)stride * elemSizeInBits / 8` in 32-bit
 //      unsigned arithmetic, so a stride whose byte pitch wrapped mod 2^32
 //      to a value >= MIN_PITCH silently returned an i32 constant with the
-//      truncated pitch. The new INT32_MAX guard returns null instead, so
-//      the DPAS regular-pointer path bails out and the cooperative fallback
-//      (which computes pitch via i64 mul + trunc) takes over.
+//      truncated pitch. Now returns null on INT32_MAX overflow.
+//   4. emit2DBlockPrefetchOps() computed pitch/baseWidth via i64 mul then
+//      unconditional `trunc i64 to i32`, so the cooperative-fallback and
+//      descriptor-prefetch paths silently emitted a garbage descriptor for
+//      any byte pitch > INT32_MAX. Now bails via truncStrideProductToI32().
 //
 // Cases 4 and 5 are in-range controls that exercise the ordinary path to
-// prove the widened arithmetic and INT32_MAX guard don't break it.
+// prove the widened arithmetic and INT32_MAX guards don't break it.
 
-// Case 1: row stride 2^31 (f16) — truncation bug on the cooperative path.
+// Case 1: row stride 2^31 (f16). Byte pitch = 2^32, so both the getStride()
+// int64 fix AND the emit2DBlockPrefetchOps() INT32_MAX guard are exercised.
+// Before either fix: `stride < 0` bailout in the cooperative path silently
+// emitted 0 prefetches. With just the getStride fix: 2 prefetches with a
+// bogus base_pitch = trunc(2^32) = 0. With both fixes: 0 prefetches, and
+// the pattern warns instead of lowering.
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_prefetch_256b"} {
   // CHECK-LABEL: llvm.func spir_kernelcc @prefetch_bigstride_f16
@@ -37,7 +45,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     %8 = arith.addi %6, %7 : tensor<128x64xi64, #blocked>
     %9 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x64x!tt.ptr<f16>, #blocked>
     %ptr = tt.addptr %9, %8 : tensor<128x64x!tt.ptr<f16>, #blocked>, tensor<128x64xi64, #blocked>
-    // CHECK-COUNT-2: triton_gen.2Dblockprefetch
+    // CHECK-NOT: triton_gen.2Dblockprefetch
     ttig.prefetch %ptr {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, ttig.block_io = "row_major"} : tensor<128x64x!tt.ptr<f16>, #blocked>
     tt.return
   }
@@ -98,13 +106,11 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
 // Case 3: DPAS regular-pointer prefetch with row stride 2^30 + 16 f32
 // elements (byte pitch = 4 * (2^30 + 16) = 2^32 + 64). Chosen so the
 // buggy 32-bit unsigned multiply in getPitch() wraps to exactly 64
-// (>= MIN_PITCH), which passes the "unsupported pitch" check and used
-// to return `i32_val(64)`. The DPAS path would then emit prefetches
-// with a bogus 64-byte pitch. With the INT32_MAX guard, getPitch()
-// returns null, the DPAS path fails, and the cooperative fallback
-// materializes pitch via i64 mul + trunc — so the pitch fed to the
-// prefetch op is an `llvm.trunc ... : i64 to i32` rather than a bare
-// i32 constant.
+// (>= MIN_PITCH), passes the "unsupported pitch" check, and used to return
+// `i32_val(64)` — the DPAS path then emitted 8 prefetches with a bogus
+// 64-byte pitch. With both the getPitch() and emit2DBlockPrefetchOps()
+// INT32_MAX guards, the DPAS path bails and the cooperative fallback also
+// bails, so nothing is lowered.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: llvm.func spir_kernelcc @prefetch_getpitch_overflow_f32
@@ -123,11 +129,12 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     %8 = arith.addi %6, %7 : tensor<64x32xi64, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
     %9 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<64x32x!tt.ptr<f32>, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
     %ptr = tt.addptr %9, %8 : tensor<64x32x!tt.ptr<f32>, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>, tensor<64x32xi64, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
-    // Fixed getPitch bails on INT32_MAX overflow, so the DPAS regular-pointer
-    // pattern fails and the cooperative fallback emits exactly one prefetch
-    // for this warp's tile. The buggy code emitted 8 prefetches (one per
-    // DPAS repetition) with a bogus base_pitch of 64 bytes.
-    // CHECK-COUNT-1: triton_gen.2Dblockprefetch
+    // Both getPitch() and emit2DBlockPrefetchOps() now bail on i32 pitch
+    // overflow, so no prefetch is emitted at all — the pattern warns and
+    // erases the op rather than lowering it with a garbage base_pitch. The
+    // buggy code emitted 8 DPAS-path prefetches with base_pitch = 64 bytes;
+    // an intermediate fix that only guarded getPitch() still emitted 1
+    // cooperative-fallback prefetch with base_pitch = trunc(mul) mod 2^32.
     // CHECK-NOT: triton_gen.2Dblockprefetch
     ttig.prefetch %ptr {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f32>, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
     tt.return
