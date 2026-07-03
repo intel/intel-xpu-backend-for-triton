@@ -238,8 +238,10 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32,
     %ptr = tt.addptr %3, %2 : tensor<16x32x!tt.ptr<f32>, #blocked>, tensor<16x32xi32, #blocked>
 
     // COM: base_height comes from the constant 1 (broadcast row); base_width
-    // COM: from the contiguous-dim pitch. Tie both captures into the op
-    // COM: operands so the check fails if either descriptor value regresses.
+    // COM: from the contiguous-dim surface extent (pitch is inflated separately
+    // COM: to satisfy the HW pitch >= base_width constraint after alignment
+    // COM: compensation). Tie both captures into the op operands so the check
+    // COM: fails if either descriptor value regresses.
     // CHECK: %[[BASE_H_I64:.*]] = llvm.mlir.constant(1 : i64) : i64
     // CHECK: %[[BASE_W:.*]] = llvm.trunc %{{.*}} : i64 to i32
     // CHECK: %[[BASE_H:.*]] = llvm.trunc %[[BASE_H_I64]] : i64 to i32

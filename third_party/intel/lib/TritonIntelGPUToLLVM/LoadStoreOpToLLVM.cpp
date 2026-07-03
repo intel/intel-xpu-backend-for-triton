@@ -1774,23 +1774,30 @@ struct PrefetchOpConversion
     Value rowStride = b.i64_val(stride);
 
     // Surface dimensions for the 2D block prefetch hardware.
-    // baseWidth must equal the row stride (surface width) because the HW
-    // computes addresses as base + y * pitch + x. Using the tile width would
-    // be wrong when pitch > tile width.
-    // baseHeight is the full logical tensor height (surface height), not the
-    // tile height, so the hardware's bounds checking spans the whole tensor.
-    Value baseWidth = b.i64_val(stride);
-    Value baseHeight = b.i64_val(tensorShape[rank - 2]);
+    Value baseWidth;
+    Value baseHeight;
     if (stride == 0) {
-      // Broadcast row (e.g. M == 1): use a single row and a valid pitch from
-      // the contiguous dimension instead of stride 0 (see #7267).
+      // Broadcast row (M == 1): single row, real surface width, inflated pitch
+      // (see #7267). baseWidth stays the true extent so HW x-bounds checking is
+      // preserved; pitch gets headroom so it stays >= baseWidth after alignment
+      // widens baseWidth by up to 63 bytes. With baseHeight == 1, pitch never
+      // affects the address, so inflating it is free.
       constexpr int64_t MIN_PITCH = 64;
+      constexpr int64_t ALIGNMENT_HEADROOM = 64;
+      int64_t surfaceWidthElems = tensorShape[rank - 1];
       int64_t surfaceWidthBytes =
-          tensorShape[rank - 1] * static_cast<int64_t>(elemSizeInBytes);
-      rowStride = b.i64_val(std::max<int64_t>(MIN_PITCH, surfaceWidthBytes) /
-                            elemSizeInBytes);
-      baseWidth = rowStride;
+          surfaceWidthElems * static_cast<int64_t>(elemSizeInBytes);
+      baseWidth = b.i64_val(surfaceWidthElems);
+      int64_t pitchBytes =
+          std::max<int64_t>(MIN_PITCH, surfaceWidthBytes + ALIGNMENT_HEADROOM);
+      pitchBytes = (pitchBytes + 15) & ~15;
+      rowStride = b.i64_val(pitchBytes / elemSizeInBytes);
       baseHeight = b.i64_val(1);
+    } else {
+      // baseWidth is the row stride (surface width); baseHeight is the full
+      // tensor height so HW bounds checking spans the whole surface.
+      baseWidth = b.i64_val(stride);
+      baseHeight = b.i64_val(tensorShape[rank - 2]);
     }
 
     // Offsets start at 0; per-warp offsets computed by emit2DBlockPrefetchOps.
