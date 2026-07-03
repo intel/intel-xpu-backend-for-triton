@@ -1,9 +1,20 @@
 # Other
+# .to("cuda") were not patched
 # tests/kernels/moe/test_count_expert_num_tokens.py::test_compute_expert_num_tokens
+
+# helper.to_device("cuda") was not patched
 # tests/kernels/moe/test_count_expert_num_tokens.py::test_compute_expert_num_tokens_from_numel
+
+# Still calls torch.cuda.mem_get_info(), maybe not a big deal.
 # tests/kernels/moe/test_moe.py::test_fused_moe_int64_overflow
+
+# Selects XPU Triton fallback/tolerance path by default.
 # tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py::test_silu_mul_fp8_quant_deep_gemm
+
+# Previously hit reference activation and CUDA stream-capture issues
 # tests/kernels/moe/test_batched_moe.py::test_fused_moe_batched_experts
+
+# XPU WNA16 supports only part of the parameter space and large-M shapes remain unstable.
 tests/kernels/moe/test_moe.py::test_fused_moe_wn16
 
 # rocm skips these

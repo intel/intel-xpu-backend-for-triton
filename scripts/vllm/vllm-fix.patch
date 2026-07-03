@@ -79,28 +79,6 @@ index db5905b92..83e5ae765 100644
              env[_SPAWN_CHILD_ENV] = "1"
  
              result = subprocess.run(
-diff --git a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
-index 21bda8e17..e7f11e934 100644
---- a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
-+++ b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
-@@ -618,7 +618,7 @@ class NaiveBatchedExperts(mk.FusedMoEExpertsModular):
-             # Indexing expert_num_tokens doesn't work w/cudagraphs or inductor
-             if (
-                 torch.compiler.is_compiling()
--                or torch.cuda.is_current_stream_capturing()
-+                or (torch.cuda.is_available() and torch.cuda.is_current_stream_capturing())
-             ):
-                 num = hidden_states.shape[1]
-             else:
-@@ -659,7 +659,7 @@ def batched_moe_kernel_quantize_input(
-     per_act_token_quant: bool,
-     block_shape: list[int] | None = None,
- ) -> tuple[torch.Tensor, torch.Tensor | None]:
--    if torch.compiler.is_compiling() or torch.cuda.is_current_stream_capturing():
-+    if torch.compiler.is_compiling() or (torch.cuda.is_available() and torch.cuda.is_current_stream_capturing()):
-         # Note: this does a bunch of extra work because expert_num_tokens is
-         # ignored but it does support torch.compile + cudagraphs.
-         hidden_dim = A.size(-1)
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
 index f39e44286..86ead168e 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
@@ -222,36 +200,7 @@ diff --git a/tests/kernels/moe/test_moe.py b/tests/kernels/moe/test_moe.py
 index 9a317d40f..781807622 100644
 --- a/tests/kernels/moe/test_moe.py
 +++ b/tests/kernels/moe/test_moe.py
-@@ -57,6 +57,19 @@ from vllm.utils.math_utils import next_power_of_2
- from vllm.utils.torch_utils import set_random_seed
- 
- 
-+def _get_free_mem_or_skip() -> int:
-+    if current_platform.is_cuda():
-+        return torch.cuda.mem_get_info()[0]
-+    if current_platform.device_type == "xpu":
-+        if not hasattr(torch, "xpu") or not hasattr(torch.xpu, "mem_get_info"):
-+            pytest.skip("XPU free-memory query is unavailable")
-+        try:
-+            return torch.xpu.mem_get_info()[0]
-+        except Exception as exc:
-+            pytest.skip(f"XPU free-memory query is unavailable: {exc}")
-+    pytest.skip(f"Unsupported platform: {current_platform.device_type}")
-+
-+
- def iterative_moe(
-     hidden_states: torch.Tensor,
-     w1: torch.Tensor,
-@@ -406,7 +419,7 @@ def test_fused_moe_int64_overflow(workspace_init):
-     Reproduces the scenario from PR #34279.
-     """
-     # ~12 GB GPU memory needed for intermediate caches
--    free_mem = torch.cuda.mem_get_info()[0]
-+    free_mem = _get_free_mem_or_skip()
-     if free_mem < 12 * 1024**3:
-         pytest.skip("Insufficient GPU memory for overflow test")
- 
-@@ -565,6 +578,13 @@ def test_fused_moe_wn16(
+@@ -565,6 +565,14 @@ def test_fused_moe_wn16(
      has_zp: bool,
      weight_bits: int,
  ):
@@ -266,7 +215,7 @@ index 9a317d40f..781807622 100644
      a = torch.randn((m, k), device="xpu", dtype=dtype) / 10
      w1 = torch.randn((e, 2 * n, k), device="xpu", dtype=dtype) / 10
      w2 = torch.randn((e, k, n), device="xpu", dtype=dtype) / 10
-@@ -673,7 +693,7 @@ def test_fused_moe_wn16(
+@@ -673,7 +681,7 @@ def test_fused_moe_wn16(
          )
          torch_output = torch_moe(a, w1_ref, w2_ref, score, topk, expert_map=e_map)
  
