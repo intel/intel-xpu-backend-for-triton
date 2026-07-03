@@ -233,8 +233,8 @@ def benchmark(M, N, K, provider):
         if is_enough_memory_for_verification(M, N, K):
             benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-2, rtol=1e-2, err_msg='triton to torch')
         else:
-            print(f"Skipping accuracy verification for shape ({M}, {N}, {K}): "
-                  f"insufficient device memory to compute PyTorch reference")
+            print(f'Skipping accuracy verification for shape ({M}, {N}, {K}): '
+                  f'insufficient device memory to compute PyTorch reference')
         _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
