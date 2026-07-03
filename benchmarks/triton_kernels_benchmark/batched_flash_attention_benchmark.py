@@ -307,6 +307,45 @@ def random_segments(
                        f"within tolerance={cv_tol} after {max_trials} trials")
 
 
+def equal_length_segments(
+    total: int,
+    num_segments: int,
+    device: str = "xpu",
+):
+    """
+    Generate segment boundaries with near-equal lengths.
+    The first `num_segments - 1` segments have `total // num_segments`,
+    and the last segment keeps the remaining length.
+    Returns:
+        boundaries: (num_segments + 1,)
+        lengths: (num_segments,)
+        max_len: int
+        cv: float
+    """
+    if total <= 0:
+        raise ValueError("total must be > 0")
+    if num_segments <= 0:
+        raise ValueError("num_segments must be > 0")
+    if total < num_segments:
+        raise ValueError("total must be >= num_segments to keep all segments non-empty")
+
+    base_len = total // num_segments
+    rem = total - base_len * num_segments
+
+    lengths = torch.full((num_segments, ), base_len, dtype=torch.long, device=device)
+    lengths[-1] += rem
+
+    boundaries = torch.cat([
+        torch.zeros(1, dtype=torch.long, device=device),
+        lengths.cumsum(0),
+    ])
+
+    max_len = int(lengths.max().item())
+    mean = float(total) / float(num_segments)
+    cv = float(lengths.float().std(unbiased=False).item()) / mean if mean > 0 else 0.0
+    return boundaries, lengths, max_len, cv
+
+
 def segment_stats(boundaries: torch.Tensor):
     lengths = boundaries[1:] - boundaries[:-1]
 
@@ -325,10 +364,21 @@ def segment_stats(boundaries: torch.Tensor):
 
 def build_cases() -> list[dict[str, float | int | tuple[int, ...]]]:
     H_Q, H_KV, D_HEAD_QK, D_HEAD_V = 8, 8, 64, 64
-    cases = [{
-        "total_tokens": 289239, "num_segments": 256, "segment_stddev_over_mean": stddev, "H_Q": H_Q, "H_KV": H_KV,
-        "D_HEAD_QK": D_HEAD_QK, "D_HEAD_V": D_HEAD_V
-    } for stddev in [0.5, 1.0, 2.0, 3.0, 5.0]]
+    cases = [
+        # New case: only first segment has all Q length
+        {
+            "total_tokens": 289239,
+            "num_segments": 1,
+            "segment_stddev_over_mean": 0.0,
+            "H_Q": H_Q,
+            "H_KV": H_KV,
+            "D_HEAD_QK": D_HEAD_QK,
+            "D_HEAD_V": D_HEAD_V,
+        }, *[{
+            "total_tokens": 289239, "num_segments": 256, "segment_stddev_over_mean": stddev, "H_Q": H_Q, "H_KV": H_KV,
+            "D_HEAD_QK": D_HEAD_QK, "D_HEAD_V": D_HEAD_V
+        } for stddev in [0.0, 0.5, 1.0, 2.0, 3.0, 5.0]]
+    ]
     return cases
 
 
@@ -379,7 +429,14 @@ def get_benchmark(providers_filter: Optional[List[str]] = None):
         ))
     def benchmark(TOTAL_TOKENS, NUM_SEGMENTS, SEGMENT_STDDEV_OVER_MEAN, H_Q, H_KV, D_HEAD_QK, D_HEAD_V, provider):
         do_bench = benchmark_suite.get_do_bench(n_warmup=400, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
-        segments, _, max_len, _ = random_segments(TOTAL_TOKENS, NUM_SEGMENTS, SEGMENT_STDDEV_OVER_MEAN, seed=42)
+        if NUM_SEGMENTS == 1:
+            # Single segment: [0, TOTAL_TOKENS]
+            segments = torch.tensor([0, TOTAL_TOKENS], dtype=torch.long, device="xpu")
+            max_len = TOTAL_TOKENS
+        elif SEGMENT_STDDEV_OVER_MEAN == 0.0:
+            segments, _, max_len, _ = equal_length_segments(TOTAL_TOKENS, NUM_SEGMENTS, device="xpu")
+        else:
+            segments, _, max_len, _ = random_segments(TOTAL_TOKENS, NUM_SEGMENTS, SEGMENT_STDDEV_OVER_MEAN, seed=42)
         bitmap = build_segment_bitmap(segments, TOTAL_TOKENS, "xpu")
         dtype = torch.float16
         q = torch.randn((TOTAL_TOKENS, H_Q, D_HEAD_QK), dtype=dtype, device="xpu")
