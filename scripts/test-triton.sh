@@ -995,8 +995,9 @@ run_vllm_triton_attn_tests() {
   # Triton attention kernels: merge_attn_states_kernel, _fwd_kernel_stage1,
   # _fwd_grouped_kernel_stage1, _fwd_kernel_stage2, kernel_unified_attention_2d,
   # kernel_unified_attention_3d, reduce_segments
-  TRITON_TEST_SUITE=vllm_triton_attn \
+  VLLM_USE_V2_MODEL_RUNNER=1 TRITON_TEST_SUITE=vllm_triton_attn \
     run_pytest_command -vvv \
+      tests/v1/attention/test_mla_backends.py
       tests/kernels/attention/test_merge_attn_states.py \
       tests/kernels/attention/test_triton_decode_attention.py \
       tests/kernels/attention/test_triton_unified_attention.py \
