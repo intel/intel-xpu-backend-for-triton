@@ -161,6 +161,8 @@ void init_triton_intel_passes_ttgpuir(py::module_ &&m) {
                      gpu::intel::createTritonIntelGPULowerTo2DBlockLoad);
   ADD_PASS_WRAPPER_0("add_reduce_variable_liveness",
                      gpu::intel::createTritonIntelGPUReduceVariableLiveness);
+  ADD_PASS_WRAPPER_0("add_loop_distribute",
+                     gpu::intel::createTritonIntelGPULoopDistribute);
   ADD_PASS_WRAPPER_0("add_code_sinking",
                      gpu::intel::createTritonIntelGPUCodeSinking);
   ADD_PASS_WRAPPER_0("add_annotate_cache_control",
