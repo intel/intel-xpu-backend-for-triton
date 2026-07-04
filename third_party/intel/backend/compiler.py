@@ -47,6 +47,7 @@ class XPUOptions:
     allow_fp8e4b15: bool = True
     grf_mode: str = 'default'
     loop_distribute: bool = False
+    code_sinking: bool = False
     use_barrier: bool = False
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
@@ -381,7 +382,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # Off by default: code sinking is perf-neutral on measured kernels (it
         # reliably reduces register spills, but the relieved traffic is not on
         # the critical path on current HW). Opt in via the env var for A/B work.
-        if knobs.intel.enable_code_sinking:
+        if opt.code_sinking or knobs.intel.enable_code_sinking:
             intel.passes.ttgpuir.add_code_sinking(pm)
 
         passes.ttir.add_loop_aware_cse(pm)
