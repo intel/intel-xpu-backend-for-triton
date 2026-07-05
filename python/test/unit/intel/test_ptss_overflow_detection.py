@@ -141,8 +141,9 @@ def test_ptss_overflow_raises_out_of_resources(generate_native_code, monkeypatch
     config will fail hard instead of skipping it.
     """
     monkeypatch.setenv("TRITON_XPU_GEN_NATIVE_CODE", "1" if generate_native_code else "0")
-    # The fresh_triton_cache fixture forces always_compile so the path under
-    # test actually runs without disturbing the on-disk cache.
+    # fresh_triton_cache isolates the on-disk cache to a temp dir, so the compile
+    # path under test runs cold without disturbing the real cache. A PTSS overflow
+    # fails compilation and is never cached, so the overflow path runs every time.
 
     with pytest.raises(OutOfResources) as excinfo:
         _launch_overflowing_kernel()
