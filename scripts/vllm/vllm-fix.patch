@@ -9,19 +9,19 @@ index 973e7885c..e474275f5 100644
 +from vllm.platforms import current_platform
  from vllm.utils.system_utils import update_environment_variables
  from vllm.utils.torch_utils import set_random_seed
- 
+
 @@ -86,7 +87,7 @@ def mixer2_gated_norm_tensor_parallel(
      )
- 
+
      # initialize distributed
 -    init_distributed_environment()
 +    init_distributed_environment(backend=current_platform.dist_backend)
      with ensure_current_vllm_config():
          initialize_model_parallel(tensor_model_parallel_size=world_size)
- 
+
 @@ -96,10 +97,11 @@ def mixer2_gated_norm_tensor_parallel(
      gate_states = torch.randn(batch_size, seq_len, hidden_size)
- 
+
      # create gated-norm with TP
 -    mixer = Mixer2RMSNormGated(
 -        full_hidden_size=hidden_size,
@@ -33,7 +33,7 @@ index 973e7885c..e474275f5 100644
 +            full_n_groups=n_groups,
 +        )
      mixer.weight.weight_loader(mixer.weight, weight)  # load
- 
+
      # create gated-norm without TP to compute reference
 @@ -115,6 +117,7 @@ def mixer2_gated_norm_tensor_parallel(
              "get_tensor_model_parallel_rank",
@@ -66,7 +66,7 @@ index db5905b92..83e5ae765 100644
 --- a/tests/utils.py
 +++ b/tests/utils.py
 @@ -1775,7 +1775,12 @@ def spawn_new_process_for_each_test(f: Callable[_P, None]) -> Callable[_P, None]
- 
+
              repo_root = str(VLLM_PATH.resolve())
              env = os.environ.copy()
 -            env["PYTHONPATH"] = repo_root + os.pathsep + env.get("PYTHONPATH", "")
@@ -77,8 +77,32 @@ index db5905b92..83e5ae765 100644
 +                if path
 +            )
              env[_SPAWN_CHILD_ENV] = "1"
- 
+
              result = subprocess.run(
+diff --git a/tests/conftest.py b/tests/conftest.py
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -284,8 +284,8 @@ def workspace_init():
+     """Initialize the workspace manager for tests that need it.
+
+-    This fixture initializes the workspace manager with a CUDA device
+-    if available, and resets it after the test completes. Tests that
++    This fixture initializes the workspace manager with an accelerator device
++    if available, and resets it after the test completes. Tests that
+     create a full vLLM engine should NOT use this fixture as the engine
+     will initialize the workspace manager itself.
+     """
+     from vllm.v1.worker.workspace import (
+@@ -297,6 +297,9 @@ def workspace_init():
+     if torch.cuda.is_available():
+         device = torch.device("cuda:0")
+         init_workspace_manager(device)
++    elif hasattr(torch, "xpu") and torch.xpu.is_available():
++        device = torch.device("xpu:0")
++        init_workspace_manager(device)
+     yield
+     reset_workspace_manager()
+
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
 index f39e44286..86ead168e 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
@@ -119,10 +143,10 @@ index f39e44286..86ead168e 100644
 +        KV_QUANT_MODE <= 3
 +    )
      USE_FP8_Q_DESCALE: tl.constexpr = KV_QUANT_MODE == 1 and Q_IS_FP8
- 
+
      if USE_TD:
 @@ -979,9 +989,9 @@ def unified_attention(
- 
+
      # The kernel signature is the same for 2D and 3D — only the launch
      # grid + a handful of constexpr toggles differ.  Per-token-head scale
 -    # caches and their strides are required arguments; non-per-token-head
@@ -158,7 +182,7 @@ index f39e44286..86ead168e 100644
 +    segm_max_ptr = softmax_segm_max if use_3d else None
 +    segm_expsum_ptr = softmax_segm_expsum if use_3d else None
      num_segments = num_par_softmax_segments if use_3d else 1
- 
+
      grid: tuple[Any, ...]
 diff --git a/vllm/model_executor/layers/fused_moe/experts/batched_deep_gemm_moe.py b/vllm/model_executor/layers/fused_moe/experts/batched_deep_gemm_moe.py
 index c8611217a..ec63dd73c 100644
@@ -167,7 +191,7 @@ index c8611217a..ec63dd73c 100644
 @@ -210,9 +210,13 @@ def persistent_masked_m_silu_mul_quant(
          DeepGemmQuantScaleFMT.UE8M0,
      ]
- 
+
 -    device_capability = current_platform.get_device_capability(device_id=y.device.index)
 -    assert device_capability is not None
 -    cuda_arch = device_capability.to_int()
@@ -178,7 +202,7 @@ index c8611217a..ec63dd73c 100644
 +        )
 +        assert device_capability is not None
 +        cuda_arch = device_capability.to_int()
- 
+
      if current_platform.is_cuda() and cuda_arch >= 80:
          torch.ops._C.persistent_masked_m_silu_mul_quant(
 diff --git a/tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py b/tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py
@@ -188,7 +212,7 @@ index 6a5fad826..829cc3cd7 100644
 @@ -288,8 +288,8 @@ def test_silu_mul_fp8_quant_deep_gemm(E: int, T: int, H: int, fp8_type: torch.dt
          for e in range(E):
              nt = tokens_per_expert[e].item()
- 
+
 -            if current_platform.is_rocm():
 -                # On ROCm the Triton fallback kernel uses f32 math
 +            if current_platform.is_rocm() or current_platform.is_xpu():
@@ -200,7 +224,7 @@ diff --git a/tests/kernels/moe/test_moe.py b/tests/kernels/moe/test_moe.py
 index 9a317d40f..781807622 100644
 --- a/tests/kernels/moe/test_moe.py
 +++ b/tests/kernels/moe/test_moe.py
-@@ -565,6 +565,14 @@ def test_fused_moe_wn16(
+@@ -565,6 +565,12 @@ def test_fused_moe_wn16(
      has_zp: bool,
      weight_bits: int,
  ):
@@ -209,31 +233,74 @@ index 9a317d40f..781807622 100644
 +    if current_platform.is_xpu():
 +        if has_zp or weight_bits != 4:
 +            pytest.skip("XPU WNA16 MoE backend supports symmetric int4 only")
-+        if m > 32:
-+            pytest.skip("XPU WNA16 MoE backend is unstable for large-M test shapes")
 +
      a = torch.randn((m, k), device="xpu", dtype=dtype) / 10
      w1 = torch.randn((e, 2 * n, k), device="xpu", dtype=dtype) / 10
      w2 = torch.randn((e, k, n), device="xpu", dtype=dtype) / 10
-@@ -673,7 +681,7 @@ def test_fused_moe_wn16(
+@@ -673,7 +679,7 @@ def test_fused_moe_wn16(
          )
          torch_output = torch_moe(a, w1_ref, w2_ref, score, topk, expert_map=e_map)
- 
+
 -    torch.testing.assert_close(triton_output, torch_output, atol=2e-2, rtol=0)
 +    torch.testing.assert_close(triton_output, torch_output, atol=6e-2, rtol=2e-2)
- 
- 
+
+
  MARLIN_MOE_SCENARIOS = [
+@@ -897,7 +903,9 @@ def marlin_moe_generate_valid_test_cases():
+     ),
+     marlin_moe_generate_valid_test_cases(),
+ )
+-@pytest.mark.skipif(current_platform.is_rocm(), reason="Skip for rocm")
++@pytest.mark.skipif(
++    current_platform.is_rocm() or current_platform.is_xpu(), reason="Skip for rocm/xpu"
++)
+ @pytest.mark.usefixtures("default_vllm_config")
+ def test_fused_marlin_moe(
+     a_type: ScalarType,
+@@ -1010,7 +1018,9 @@ def test_fused_marlin_moe(
+
+
+ @pytest.mark.flaky(reruns=2)
+-@pytest.mark.skipif(current_platform.is_rocm(), reason="Skip for rocm")
++@pytest.mark.skipif(
++    current_platform.is_rocm() or current_platform.is_xpu(), reason="Skip for rocm/xpu"
++)
+ @pytest.mark.usefixtures("default_vllm_config")
+ @pytest.mark.parametrize("m", [1, 256])
+ def test_fused_marlin_moe_with_bias(m):
+@@ -1083,7 +1093,9 @@ def test_fused_marlin_moe_with_bias(m):
+
+
+ @pytest.mark.flaky(reruns=2)
+-@pytest.mark.skipif(current_platform.is_rocm(), reason="Skip for rocm")
++@pytest.mark.skipif(
++    current_platform.is_rocm() or current_platform.is_xpu(), reason="Skip for rocm/xpu"
++)
+ @pytest.mark.usefixtures("default_vllm_config")
+ @pytest.mark.parametrize("m", [1, 64, 256])
+ @pytest.mark.parametrize("n,k", [(1024, 1024), (2048, 2048)])
+@@ -1382,7 +1394,9 @@ def _batched_fused_marlin_moe_cases() -> list[Any]:
+     ("m,n,k,e,topk,max_tokens_per_batch,dtype,quant_dtype,input_type,atol"),
+     _batched_fused_marlin_moe_cases(),
+ )
+-@pytest.mark.skipif(current_platform.is_rocm(), reason="Skip for rocm")
++@pytest.mark.skipif(
++    current_platform.is_rocm() or current_platform.is_xpu(), reason="Skip for rocm/xpu"
++)
+ def test_batched_fused_marlin_moe(
+     m: int,
+     n: int,
+
 diff --git a/tests/kernels/utils.py b/tests/kernels/utils.py
 index 12ff3830c..04da1ac74 100644
 --- a/tests/kernels/utils.py
 +++ b/tests/kernels/utils.py
 @@ -885,6 +885,7 @@ def torch_experts(
      f32 = torch.float32
- 
+
      act = op_registry[activation.custom_op_name]
 +    act_fn = act(compile_native=False)
- 
+
      for i in range(num_experts):
          mask = topk_ids == i
 @@ -893,7 +894,7 @@ def torch_experts(
