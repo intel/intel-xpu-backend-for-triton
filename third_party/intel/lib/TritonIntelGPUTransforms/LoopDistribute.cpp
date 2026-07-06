@@ -4,7 +4,6 @@
 
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 namespace mlir::triton::gpu::intel {
 #define GEN_PASS_DEF_TRITONINTELGPULOOPDISTRIBUTE
@@ -13,7 +12,6 @@ namespace mlir::triton::gpu::intel {
 
 using namespace mlir;
 namespace tt = mlir::triton;
-namespace ttg = mlir::triton::gpu;
 
 #define DEBUG_TYPE "tritonintelgpu-loop-distribute"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")

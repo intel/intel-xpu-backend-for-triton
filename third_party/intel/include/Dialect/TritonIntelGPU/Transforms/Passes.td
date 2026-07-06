@@ -463,8 +463,7 @@ def TritonIntelGPULoopDistribute
 
   let dependentDialects = [
     "mlir::triton::TritonDialect",
-    "mlir::scf::SCFDialect",
-    "mlir::triton::gpu::TritonGPUDialect"
+    "mlir::scf::SCFDialect"
   ];
 }
 
