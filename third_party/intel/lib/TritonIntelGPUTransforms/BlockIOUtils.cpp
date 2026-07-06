@@ -174,8 +174,9 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
       mlir::ceil<unsigned>(transpose ? MAX_BITS_TRANSPOSE : MAX_BITS_NORMAL,
                            elemSizeInBits));
 
-  // For the transpose case, we have to pack the elements to d32.
-  if (transpose && (numElemPerPackedVal * elemSizeInBits) != MAX_BITS_TRANSPOSE)
+  // For the transpose case, elements up to d32 must be packed to d32.
+  if (transpose && elemSizeInBits <= MAX_BITS_TRANSPOSE &&
+      (numElemPerPackedVal * elemSizeInBits) != MAX_BITS_TRANSPOSE)
     return BlockIOTileSizeInfo::unknown();
 
   // We already get the basic tile shape in packing values.
