@@ -1104,9 +1104,11 @@ run_vllm_kda_tests() {
   echo "******  Running vLLM KDA tests                   *******"
   echo "********************************************************"
 
-  # No dedicated kernel tests exist yet — KDA is model-level integration only.
-  # This is a placeholder for when kernel-level tests are added.
-  echo "WARNING: No dedicated KDA kernel tests available. Skipping."
+  enter_vllm_test_env
+  TRITON_TEST_SUITE=vllm_kda \
+    run_pytest_command -vvv \
+      tests/kernels/test_kda.py \
+      tests/kernels/core/test_fused_rms_norm_gated.py
 }
 
 
