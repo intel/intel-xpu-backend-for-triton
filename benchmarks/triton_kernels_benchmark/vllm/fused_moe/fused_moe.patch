@@ -1,12 +1,11 @@
 diff --git a/vllm/model_executor/layers/fused_moe/fused_moe.py b/vllm/model_executor/layers/fused_moe/fused_moe.py
-index 269b6e3da..c6f72567b 100644
+index 269b6e3da..fdd6a95e5 100644
 --- a/vllm/model_executor/layers/fused_moe/fused_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/fused_moe.py
-@@ -289,7 +289,21 @@ def fused_moe_kernel_gptq_awq(
-     c_mask = token_mask[:, None] & (offs_cn[None, :] < N)
+@@ -290,6 +290,21 @@ def fused_moe_kernel_gptq_awq(
      tl.store(c_ptrs, accumulator, mask=c_mask)
  
--
+ 
 +def get_fused_moe_configs():
 +    return [
 +        triton.Config({'BLOCK_SIZE_N': N, 'GROUP_SIZE_M': G, 'SPLIT_K': 1,
@@ -25,7 +24,7 @@ index 269b6e3da..c6f72567b 100644
  @triton.jit
  def fused_moe_kernel(
      # Pointers to matrices
-@@ -304,6 +318,7 @@ def fused_moe_kernel(
+@@ -304,6 +319,7 @@ def fused_moe_kernel(
      expert_ids_ptr,
      num_tokens_post_padded_ptr,
      # Matrix dimensions
@@ -33,7 +32,7 @@ index 269b6e3da..c6f72567b 100644
      N,
      K,
      EM,
-@@ -407,9 +422,6 @@ def fused_moe_kernel(
+@@ -407,9 +423,6 @@ def fused_moe_kernel(
              pid_m,  # first element = pid_m
              num_valid_tokens,  # remaining elements = constant
          )
@@ -43,7 +42,7 @@ index 269b6e3da..c6f72567b 100644
  
      token_mask = offs_token < num_valid_tokens
  
-@@ -433,25 +445,11 @@ def fused_moe_kernel(
+@@ -433,25 +446,11 @@ def fused_moe_kernel(
          return
  
      offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N).to(tl.int64)) % N
@@ -74,7 +73,7 @@ index 269b6e3da..c6f72567b 100644
  
      if use_int8_w8a16:
          b_scale_ptrs = (
-@@ -494,20 +492,8 @@ def fused_moe_kernel(
+@@ -494,20 +493,8 @@ def fused_moe_kernel(
      else:
          accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
      for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
@@ -97,7 +96,7 @@ index 269b6e3da..c6f72567b 100644
          # We accumulate along the K dimension.
          if use_int8_w8a16:
              accumulator = tl.dot(a, b.to(compute_type), acc=accumulator)
-@@ -531,12 +517,9 @@ def fused_moe_kernel(
+@@ -531,12 +518,9 @@ def fused_moe_kernel(
                      else:
                          accumulator = tl.dot(a, b, acc=accumulator)
                  else:
@@ -112,7 +111,7 @@ index 269b6e3da..c6f72567b 100644
  
      if SWAP_AB:
          accumulator = tl.trans(accumulator, (1, 0))
-@@ -814,6 +797,7 @@ def invoke_fused_moe_triton_kernel(
+@@ -814,6 +798,7 @@ def invoke_fused_moe_triton_kernel(
          sorted_token_ids,
          expert_ids,
          num_tokens_post_padded,
@@ -120,7 +119,7 @@ index 269b6e3da..c6f72567b 100644
          B.size(1),
          B.size(2),
          EM,
-@@ -845,7 +829,7 @@ def invoke_fused_moe_triton_kernel(
+@@ -845,7 +830,7 @@ def invoke_fused_moe_triton_kernel(
          HAS_BIAS=HAS_BIAS,
          BLOCK_SIZE_K=BLOCK_SIZE_K,
          SWAP_AB=SWAP_AB,
