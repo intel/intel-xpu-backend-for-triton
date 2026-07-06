@@ -401,7 +401,7 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
     regPackBases.insert(1 << regBaseIter);
   }
 
-  // VNNI packing is not like non-vnni packing elements to a packed value which
+  // VNNI packing doesn't impacts the tileWidth and tileHeight which
   // is transparent to HW.
   unsigned packedValueNumber = vnni ? 1 : numElemPerPackedVal;
 
