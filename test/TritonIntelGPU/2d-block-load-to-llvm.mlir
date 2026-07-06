@@ -16,6 +16,22 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 
 // -----
 
+// COM: Test subgroup-size=32 DotOp-A block load lowers with VNNI transform.
+// COM: This guards the VNNI propagation path added for PR #7350.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 32, warpsPerCTA = [2, 2], repCluster = [1, 1], A = [16, 16], B = [16, 16], C = [16, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @block_load_dot_a_subgroup32_vnni
+  tt.func public @block_load_dot_a_subgroup32_vnni(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32) {
+    // CHECK: triton_gen.2Dblockload {{.*}} vnni_transform = true
+    // CHECK: triton_gen.2Dblockload {{.*}} -> vector<{{[0-9]+}}xi32>
+    %0 = ttig.2d_block_load %arg0, %arg1, %arg2, %arg3[%arg4, %arg5] {row_major} : !tt.ptr<f16> -> tensor<128x32xf16, #dot0>
+    tt.return
+  }
+}
+
+// -----
+
 // COM: Test that ttig.2d_block_load with pad_nan generates block loads
 // COM: followed by NaN select for out-of-bounds elements.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
