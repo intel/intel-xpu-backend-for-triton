@@ -1,4 +1,13 @@
 """isort:skip_file"""
+import os
+import sys
+if sys.platform == 'win32':
+    _p = r'C:\Program Files (x86)\Intel\oneAPI\compiler\latest\bin'
+    if os.path.isdir(_p):
+        try:
+            os.add_dll_directory(_p)
+        except (OSError, AttributeError):
+            pass
 __version__ = '3.8.0'
 
 # ---------------------------------------
