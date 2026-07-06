@@ -993,7 +993,7 @@ def signbit(arg0, _semantic=None):
             arg0,
         ], {
             (core.dtype("fp32"), ): ("__imf_signbitf", core.dtype("int32")),
-            (core.dtype("fp64"), ): ("__imf_signbitd", core.dtype("int32")),
+            (core.dtype("fp64"), ): ("__imf_signbit", core.dtype("int32")),
         }, is_pure=True, _semantic=_semantic)
 
 

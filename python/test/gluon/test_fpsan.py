@@ -187,9 +187,9 @@ def _random_float_bits(rs: np.random.RandomState, shape, dtype: str) -> np.ndarr
     return bits.astype(np_unsigned_dtype).view(np_storage_dtype)
 
 
-def _as_float_bits_tensor(bits: np.ndarray, dtype: str):
+def _as_float_bits_tensor(bits: np.ndarray, dtype: str, device: str = "cuda"):
     _, _, _, torch_storage_dtype, torch_dtype, _ = _float_dtype_info(dtype)
-    storage = torch.tensor(bits, device="cuda", dtype=torch_storage_dtype)
+    storage = torch.tensor(bits, device=device, dtype=torch_storage_dtype)
     return storage, triton.TensorWrapper(storage, dtype=torch_dtype)
 
 
@@ -242,6 +242,14 @@ def _expected_max_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarray:
     x = _u32_to_i32(_mix_f32_bits_to_payload_u32(x_i32))
     y = _u32_to_i32(_mix_f32_bits_to_payload_u32(y_i32))
     return _unmix_payload_u32_to_f32_bits_i32(np.maximum(x, y).astype(np.int32).view(np.uint32))
+
+
+def _expected_clamp_i32(x_i32: np.ndarray, lo_i32: np.ndarray, hi_i32: np.ndarray) -> np.ndarray:
+    x = _u32_to_i32(_mix_f32_bits_to_payload_u32(x_i32))
+    lo = _u32_to_i32(_mix_f32_bits_to_payload_u32(lo_i32))
+    hi = _u32_to_i32(_mix_f32_bits_to_payload_u32(hi_i32))
+    clamped = np.minimum(np.maximum(x, lo), hi)
+    return _unmix_payload_u32_to_f32_bits_i32(clamped.astype(np.int32).view(np.uint32))
 
 
 def _expected_srem_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarray:
@@ -313,15 +321,24 @@ def _expected_div_payload_i32(x_i32: np.ndarray, y_i32: np.ndarray) -> np.ndarra
 
 
 def _expected_exp2_i32(x_i32: np.ndarray) -> np.ndarray:
-    c = np.uint64(0xa343836d)
     mask = np.uint64(0xFFFFFFFF)
     x = _mix_f32_bits_to_payload_u32(x_i32).astype(np.uint64)
-    y = np.ones_like(x, dtype=np.uint64)
-    for i in range(32):
-        y = (y * y) & mask
-        factor = np.where((x & np.uint64(1 << (31 - i))) == 0, np.uint64(1), c)
-        y = (y * factor) & mask
+    x_minus_one = (x + mask) & mask
+    choose2 = ((x * x_minus_one) & mask) >> np.uint64(1)
+    x_low = (x & np.uint64(0x1FF)).astype(np.int64)
+    choose3 = (x_low * (x_low - 1) * (x_low - 2) // 6).astype(np.uint64)
+    y = (np.uint64(1) + (x << np.uint64(8)) + (choose2 << np.uint64(16)) + (choose3 << np.uint64(24))) & mask
     return _unmix_payload_u32_to_f32_bits_i32(y.astype(np.uint32))
+
+
+def _expected_exp2_i64(x_i64: np.ndarray) -> np.ndarray:
+    x = _mix_float_bits(x_i64, "f64")
+    with np.errstate(over="ignore"):
+        choose2 = (x * (x - np.uint64(1))) >> np.uint64(1)
+        x_low = (x & np.uint64(0x1FFFF)).astype(np.int64)
+        choose3 = (x_low * (x_low - 1) * (x_low - 2) // 6).astype(np.uint64)
+        y = (np.uint64(1) + (x << np.uint64(16)) + (choose2 << np.uint64(32)) + (choose3 << np.uint64(48)))
+    return _unmix_payload_to_float_bits(y, "f64")
 
 
 def _expected_exp_i32(x_i32: np.ndarray) -> np.ndarray:
@@ -537,6 +554,20 @@ def _binop_kernel(x_ptr, y_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOCK: gl
     gl.store(out_ptr + offs, z, mask=mask)
 
 
+@triton.jit
+def _clamp_kernel(x_ptr, lo_ptr, hi_ptr, out_ptr, n_elements, PROPAGATE_NAN: tl.constexpr, BLOCK: tl.constexpr):
+    offs = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    mask = offs < n_elements
+    x = tl.load(x_ptr + offs, mask=mask, other=0.0)
+    lo = tl.load(lo_ptr + offs, mask=mask, other=0.0)
+    hi = tl.load(hi_ptr + offs, mask=mask, other=0.0)
+    if PROPAGATE_NAN:
+        out = tl.clamp(x, lo, hi, propagate_nan=tl.PropagateNan.ALL)
+    else:
+        out = tl.clamp(x, lo, hi, propagate_nan=tl.PropagateNan.NONE)
+    tl.store(out_ptr + offs, out, mask=mask)
+
+
 @gluon.jit
 def _constant_identity_kernel(x_ptr, out_ptr, n_elements, OP: gl.constexpr, BLOCK: gl.constexpr,
                               THREADS_PER_WARP: gl.constexpr):
@@ -692,6 +723,54 @@ def test_binops_payload_semantics(device, op, expected_fn, fresh_knobs):
 
     out_np = out.cpu().numpy().astype(np.int32, copy=False)
     exp_np = expected_fn(x.cpu().numpy().astype(np.int32, copy=False), y.cpu().numpy().astype(np.int32, copy=False))
+    _assert_payload_equal(out_np, exp_np)
+
+
+@pytest.mark.parametrize("propagate_nan", [False, True], ids=["none", "all"])
+def test_clamp_payload_semantics(device, propagate_nan, fresh_knobs):
+    _require_backend(device)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    n_elements = 1024
+    BLOCK = 256
+
+    g = torch.Generator(device=device)
+    g.manual_seed(17)
+    x = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device=device, generator=g)
+    a = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device=device, generator=g)
+    b = torch.randint(-(2**31), 2**31 - 1, (n_elements, ), dtype=torch.int32, device=device, generator=g)
+
+    # Exercise payload carriers whose raw float representation is a NaN.
+    nan_bits = np.array([0x7FC00000, 0x7F800001, 0xFFC12345, 0xFF800001], dtype=np.uint32).view(np.int32)
+    x[:len(nan_bits)] = torch.from_numpy(nan_bits.copy()).to(device=device)
+
+    x_np = x.cpu().numpy().astype(np.int32, copy=False)
+    a_np = a.cpu().numpy().astype(np.int32, copy=False)
+    b_np = b.cpu().numpy().astype(np.int32, copy=False)
+    a_payload = _u32_to_i32(_mix_f32_bits_to_payload_u32(a_np))
+    b_payload = _u32_to_i32(_mix_f32_bits_to_payload_u32(b_np))
+    a_is_lower = a_payload <= b_payload
+    lo_np = np.where(a_is_lower, a_np, b_np).astype(np.int32)
+    hi_np = np.where(a_is_lower, b_np, a_np).astype(np.int32)
+
+    lo = torch.from_numpy(lo_np).to(device=device)
+    hi = torch.from_numpy(hi_np).to(device=device)
+    out = torch.empty((n_elements, ), dtype=torch.int32, device=device)
+
+    grid = (triton.cdiv(n_elements, BLOCK), )
+    _clamp_kernel[grid](
+        triton.TensorWrapper(x, dtype=torch.float32),
+        triton.TensorWrapper(lo, dtype=torch.float32),
+        triton.TensorWrapper(hi, dtype=torch.float32),
+        triton.TensorWrapper(out, dtype=torch.float32),
+        n_elements,
+        PROPAGATE_NAN=propagate_nan,
+        BLOCK=BLOCK,
+    )
+
+    out_np = out.cpu().numpy().astype(np.int32, copy=False)
+    exp_np = _expected_clamp_i32(x_np, lo_np, hi_np)
     _assert_payload_equal(out_np, exp_np)
 
 
@@ -897,6 +976,30 @@ def test_unary_math_identity(device, op, fresh_knobs):
     _assert_payload_equal(out, exp_bits)
 
 
+def test_exp2_payload_f64(device, fresh_knobs):
+    _require_backend(device)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    n_elements = 256
+    block = 256
+    rs = np.random.RandomState(31)
+    x_bits = _random_float_bits(rs, (n_elements, ), "f64")
+    _, x = _as_float_bits_tensor(x_bits, "f64", device)
+    out = torch.empty((n_elements, ), dtype=torch.int64, device=device)
+
+    _unary_math_kernel[(1, )](
+        x,
+        triton.TensorWrapper(out, dtype=torch.float64),
+        n_elements,
+        OP="exp2",
+        BLOCK=block,
+        THREADS_PER_WARP=THREADS_PER_WARP,
+    )
+
+    _assert_payload_equal(out, _expected_exp2_i64(x_bits))
+
+
 def test_exp_add_mul_identity(device, fresh_knobs):
     _require_backend(device)
 
@@ -922,6 +1025,44 @@ def test_exp_add_mul_identity(device, fresh_knobs):
                                       THREADS_PER_WARP=THREADS_PER_WARP)
     _exp_binary_identity_kernel[grid](xw, yw, out_mul_w, n_elements, MODE="exp_mul", BLOCK=BLOCK,
                                       THREADS_PER_WARP=THREADS_PER_WARP)
+
+    _assert_payload_equal(out_add, out_mul)
+
+
+def test_exp_add_mul_identity_f64(device, fresh_knobs):
+    _require_backend(device)
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    n_elements = 256
+    block = 256
+    rs = np.random.RandomState(29)
+    x_bits = _random_float_bits(rs, (n_elements, ), "f64")
+    y_bits = _random_float_bits(rs, (n_elements, ), "f64")
+    _, x = _as_float_bits_tensor(x_bits, "f64", device)
+    _, y = _as_float_bits_tensor(y_bits, "f64", device)
+    out_add = torch.empty((n_elements, ), dtype=torch.int64, device=device)
+    out_mul = torch.empty_like(out_add)
+
+    grid = (1, )
+    _exp_binary_identity_kernel[grid](
+        x,
+        y,
+        triton.TensorWrapper(out_add, dtype=torch.float64),
+        n_elements,
+        MODE="exp_add",
+        BLOCK=block,
+        THREADS_PER_WARP=THREADS_PER_WARP,
+    )
+    _exp_binary_identity_kernel[grid](
+        x,
+        y,
+        triton.TensorWrapper(out_mul, dtype=torch.float64),
+        n_elements,
+        MODE="exp_mul",
+        BLOCK=block,
+        THREADS_PER_WARP=THREADS_PER_WARP,
+    )
 
     _assert_payload_equal(out_add, out_mul)
 
