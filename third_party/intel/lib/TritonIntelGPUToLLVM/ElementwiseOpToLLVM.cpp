@@ -11,7 +11,9 @@
 #include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
+#include <TritonIntelGPUToLLVM/XeAsmFormat.h>
 #include <cmath>
+#include <llvm/Support/FormatVariadic.h>
 
 using mlir::triton::gpu::ElementwiseOpConversionBase;
 using mlir::triton::gpu::MultipleOperandsRange;
@@ -1808,6 +1810,133 @@ struct ExternElementwiseOpConversion
   }
 };
 
+template <typename SourceOp, typename DestOp>
+struct ImplicitVectorizeMathElementwiseOpConversion
+    : ElementwiseOpConversionBase<
+          SourceOp,
+          ImplicitVectorizeMathElementwiseOpConversion<SourceOp, DestOp>> {
+  using Base = ElementwiseOpConversionBase<
+      SourceOp, ImplicitVectorizeMathElementwiseOpConversion<SourceOp, DestOp>>;
+  using Base::Base;
+  using OpAdaptor = typename Base::OpAdaptor;
+
+  // An interface to support variant DestOp builder.
+  SmallVector<DestOp> createDestOps(SourceOp op, OpAdaptor adaptor,
+                                    ConversionPatternRewriter &rewriter,
+                                    Type elemTy, MultipleOperandsRange operands,
+                                    Location loc) const {
+    return {DestOp::create(rewriter, loc, elemTy, operands[0],
+                           adaptor.getAttributes().getValue())};
+  }
+
+  LogicalResult
+  matchAndRewrite(SourceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto resultTy = op.getType();
+    auto tensorTy = dyn_cast<RankedTensorType>(resultTy);
+    if (!tensorTy)
+      return failure();
+
+    Attribute layoutAttr = tensorTy.getEncoding();
+    if (!layoutAttr)
+      return failure();
+
+    // Optional: if a specific Triton layout attribute is expected.
+    auto distributed =
+        dyn_cast<triton::gpu::DistributedEncodingTrait>(layoutAttr);
+    if (!distributed)
+      return failure();
+
+    // Get linear layout from distributed layout.
+    auto linearLayout = distributed.toLinearLayout(tensorTy.getShape());
+    auto ctx = op.getContext();
+    if (!linearLayout.sublayoutIsZero(str_attr("lane"),
+                                      to_vector(linearLayout.getOutDimNames())))
+      return failure();
+
+    unsigned threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(
+        op->template getParentOfType<ModuleOp>());
+
+    Location loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    // element type
+    auto resultElementTy = getElementTypeOrSelf(resultTy);
+    Type elemTy = this->getTypeConverter()->convertType(resultElementTy);
+    SmallVector<SmallVector<Value>> allOperands;
+    unsigned numOperandsGrouped;
+    for (auto operand : adaptor.getOperands()) {
+      auto subOperands = unpackLLElements(loc, operand, rewriter);
+      // change the uniform operands to the non-uniform operands to match the
+      // number of threads per warp
+      unsigned numOperands = subOperands.size();
+      unsigned numNonUniformOperands = mlir::ceil(numOperands, threadsPerWarp);
+      numOperandsGrouped = std::min(threadsPerWarp, numOperands);
+      SmallVector<Value> nonUniformOperands(numNonUniformOperands);
+      for (size_t i = 0; i < numNonUniformOperands; ++i) {
+        Value groupedOperand = b.undef(vec_ty(elemTy, numOperandsGrouped));
+        for (size_t j = 0; j < numOperandsGrouped; ++j) {
+          groupedOperand = b.insert_element(groupedOperand,
+                                            subOperands[i * threadsPerWarp + j],
+                                            b.i32_val(j));
+        }
+
+        constexpr StringLiteral asmCode = R"({
+  .decl OUT v_type=G type={0} num_elts={1} alias=<$0, 0>
+  .decl IN v_type=G type={0} num_elts={2} alias=<$1, 0>
+  mov (M1_NM, {2}) OUT(0,0)<1>  IN(0,0)<1;1,0>
+})";
+
+        std::string simdAsm = llvm::formatv(asmCode.data(), "f", threadsPerWarp,
+                                            numOperandsGrouped)
+                                  .str();
+        ;
+        XeBuilder xeBuilder;
+        XeInstr &transNonUniform = *xeBuilder.create<XeInstr>(simdAsm);
+        XeBuilder::Operand *res = xeBuilder.newOperand("=rw");
+        XeBuilder::Operand *input =
+            xeBuilder.newOperand(groupedOperand, "rw.u");
+        SmallVector<XeBuilder::Operand *> args{res, input};
+        transNonUniform(args, /*onlyAttachMLIRArgs=*/true);
+        nonUniformOperands[i] = xeBuilder.launch(rewriter, loc, elemTy, false);
+        ;
+      }
+      allOperands.resize(numNonUniformOperands);
+      for (auto v : llvm::enumerate(nonUniformOperands))
+        allOperands[v.index()].push_back(v.value());
+    }
+    if (allOperands.size() == 0)
+      allOperands.push_back({});
+
+    SmallVector<Value> resultVals;
+    for (auto it = allOperands.begin(), end = allOperands.end(); it != end;) {
+      auto curr = this->createDestOps(op, adaptor, rewriter, elemTy,
+                                      MultipleOperandsRange(it, end), loc);
+      if (curr.size() == 0)
+        return failure();
+      for (auto v : curr) {
+        if (!static_cast<bool>(v))
+          return failure();
+        resultVals.push_back(v);
+      }
+      it += curr.size();
+    }
+    SmallVector<Value> ungroupedResults;
+
+    for (auto v : resultVals) {
+      for (unsigned j = 0; j < numOperandsGrouped; ++j) {
+        ungroupedResults.push_back(
+            LLVM::intel::shuffleIdx(loc, rewriter, v, b.i32_val(j)));
+      }
+    }
+    ungroupedResults = Base::maybeDeduplicate(op, ungroupedResults);
+    Value view = packLLElements(loc, this->getTypeConverter(), ungroupedResults,
+                                rewriter, resultTy);
+    rewriter.replaceOp(op, view);
+
+    return success();
+  }
+};
+
 } // namespace
 
 namespace mlir::triton::intel {
@@ -1867,6 +1996,10 @@ void populateElementwiseOpToLLVMPatterns(
       /*hwNanPropagationSupported=*/false, benefitForPropNan);
   mlir::triton::populateClampFOpToLLVMPattern(
       typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
+
+  patterns.add<
+      ImplicitVectorizeMathElementwiseOpConversion<math::LogOp, math::LogOp>>(
+      typeConverter, axisInfoAnalysis, benefit.getBenefit() + 10);
 }
 
 } // namespace mlir::triton::intel
