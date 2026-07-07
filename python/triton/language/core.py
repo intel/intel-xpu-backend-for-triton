@@ -1910,8 +1910,8 @@ class _block_ptr:
             return False
         if not self._inner_stride_one.value:
             return False
-        # Descriptor needs >= 16 bytes in the last dim.
-        elem_size = self.base.type.element_ty.primitive_bitwidth // 8
+        elem_ty = self.base.type.element_ty
+        elem_size = 1 if elem_ty == int1 else elem_ty.primitive_bitwidth // 8
         if self._tile_shape()[-1] * elem_size < 16:
             return False
         rank = len(self._tile_shape())
@@ -1924,12 +1924,6 @@ class _block_ptr:
         if base.type.element_ty == int1:
             base = _semantic.cast(base, pointer_type(int8, base.type.address_space))
         elem_ty = base.type.element_ty
-        block_shape_ints = self._tile_shape()
-        elem_size = elem_ty.primitive_bitwidth // 8
-        contig_dim_size = block_shape_ints[-1]
-        if contig_dim_size * elem_size < 16:
-            raise ValueError(f"Descriptor block shape must have at least 16 bytes in the last dimension, but got "
-                             f"{contig_dim_size} * {elem_size} = {contig_dim_size * elem_size} bytes")
         is_signed = elem_ty.is_int_signed()
         padding = _semantic._str_to_padding_option(padding_option)
         if padding is None:
@@ -1938,6 +1932,7 @@ class _block_ptr:
             raise ValueError("Padding option `nan` is not supported for integer block pointers")
         shape_handles = [_semantic.cast(s, int32).handle for s in self.shape]
         stride_handles = [s.handle for s in self.strides]
+        block_shape_ints = self._tile_shape()
         handle = _semantic.builder.create_make_tensor_descriptor(base.handle, shape_handles, stride_handles,
                                                                  block_shape_ints, is_signed, padding)
         return tensor_descriptor_base(handle, block_type(elem_ty, block_shape_ints))
