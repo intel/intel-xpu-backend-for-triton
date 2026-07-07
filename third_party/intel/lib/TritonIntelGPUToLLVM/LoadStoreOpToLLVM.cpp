@@ -1026,7 +1026,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     cfg.unpackedType = dpasCfg.unpackedType;
     cfg.load2DGenXType = dpasCfg.load2DGenXType;
     cfg.packedType = dpasCfg.packedType;
-    cfg.useVNNIFormat = sizeInfo.vnni | dpasCfg.useVNNIFormat;
+    cfg.useVNNIFormat = sizeInfo.vnni || dpasCfg.useVNNIFormat;
     cfg.tileHeight = dpasCfg.tileHeight;
     cfg.tileWidth = dpasCfg.tileWidth;
     cfg.vBlocks = dpasCfg.vBlocks;
