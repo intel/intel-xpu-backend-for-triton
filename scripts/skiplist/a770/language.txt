@@ -102,3 +102,10 @@ python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_batc
 python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_batched_gemm_3d_tma
 # test_tensor_atomic_add_access_patterns
 python/test/unit/language/test_core.py::test_tensor_atomic_add_access_patterns[shape128-random_no_duplication-3-1-float32]
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/7390
+python/test/unit/language/test_core.py::test_atomic_poll[dtype0-16-cta-relaxed]
+python/test/unit/language/test_core.py::test_atomic_poll[dtype0-16-cta-acquire]
+python/test/unit/language/test_core.py::test_atomic_poll[dtype0-16-gpu-relaxed]
+python/test/unit/language/test_core.py::test_atomic_poll[dtype0-16-gpu-acquire]
+python/test/unit/language/test_core.py::test_atomic_poll[dtype0-16-sys-relaxed]
+python/test/unit/language/test_core.py::test_atomic_poll[dtype0-16-sys-acquire]
