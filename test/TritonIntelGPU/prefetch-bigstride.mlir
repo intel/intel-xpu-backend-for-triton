@@ -13,14 +13,20 @@
 //   3. getPitch() computed `(unsigned)stride * elemSizeInBits / 8` in 32-bit
 //      unsigned arithmetic, so a stride whose byte pitch wrapped mod 2^32
 //      to a value >= MIN_PITCH silently returned an i32 constant with the
-//      truncated pitch. Now returns null on INT32_MAX overflow.
+//      truncated pitch. Now returns null on 24-bit overflow.
 //   4. emit2DBlockPrefetchOps() computed pitch/baseWidth via i64 mul then
 //      unconditional `trunc i64 to i32`, so the cooperative-fallback and
 //      descriptor-prefetch paths silently emitted a garbage descriptor for
-//      any byte pitch > INT32_MAX. Now bails via truncStrideProductToI32().
+//      any byte pitch that didn't fit in the HW field. Now bails via
+//      narrowSurfaceBytesOrNull().
+//
+// The HW pitch/base_width/base_height fields are 24 bits (value-1 encoded),
+// so all guards reject byte values > 2^24. Case 6 exercises this tighter
+// bound with a stride that would have slipped through an INT32_MAX check
+// but is still too large for the HW.
 //
 // Cases 4 and 5 are in-range controls that exercise the ordinary path to
-// prove the widened arithmetic and INT32_MAX guards don't break it.
+// prove the widened arithmetic and 24-bit guards don't break it.
 
 // Case 1: row stride 2^31 (f16). Byte pitch = 2^32, so both the getStride()
 // int64 fix AND the emit2DBlockPrefetchOps() INT32_MAX guard are exercised.
@@ -192,6 +198,39 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     %ptr = tt.addptr %9, %8 : tensor<64x32x!tt.ptr<f32>, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>, tensor<64x32xi32, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
     // CHECK: llvm.mlir.constant(128 : i32) : i32
     // CHECK: triton_gen.2Dblockprefetch
+    ttig.prefetch %ptr {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f32>, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
+    tt.return
+  }
+}
+
+// -----
+
+// Case 6: DPAS regular-pointer prefetch with row stride 2^22 + 1 f32
+// elements (byte pitch = 4 * (2^22 + 1) = 2^24 + 4). Exercises the HW's
+// tighter 24-bit pitch limit — a stride that fits in the i32 operand but
+// exceeds the 24-bit HW field would silently drop the top bits and produce
+// a garbage descriptor. Both getPitch() and the cooperative fallback now
+// bail on byte pitch > 2^24, so nothing is lowered.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @prefetch_pitch_24bit_overflow_f32
+  tt.func public @prefetch_pitch_24bit_overflow_f32(%arg0: !tt.ptr<f32>) {
+    %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>}>>
+    %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>}>> -> tensor<64x1xi32, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
+    %e1 = arith.extsi %1 : tensor<64x1xi32, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>> to tensor<64x1xi64, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
+    // row stride = 2^22 + 1 elements; byte pitch = 4 * (2^22 + 1) = 2^24 + 4.
+    // Fits in i32 (well under INT32_MAX) but exceeds the HW 24-bit field.
+    %2 = arith.constant dense<4194305> : tensor<64x1xi64, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
+    %3 = arith.muli %e1, %2 : tensor<64x1xi64, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
+    %4 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>}>>
+    %5 = tt.expand_dims %4 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>}>> -> tensor<1x32xi32, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
+    %e5 = arith.extsi %5 : tensor<1x32xi32, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>> to tensor<1x32xi64, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
+    %6 = tt.broadcast %3 : tensor<64x1xi64, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>> -> tensor<64x32xi64, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
+    %7 = tt.broadcast %e5 : tensor<1x32xi64, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>> -> tensor<64x32xi64, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
+    %8 = arith.addi %6, %7 : tensor<64x32xi64, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
+    %9 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<64x32x!tt.ptr<f32>, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
+    %ptr = tt.addptr %9, %8 : tensor<64x32x!tt.ptr<f32>, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>, tensor<64x32xi64, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
+    // CHECK-NOT: triton_gen.2Dblockprefetch
     ttig.prefetch %ptr {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f32>, #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>>
     tt.return
   }

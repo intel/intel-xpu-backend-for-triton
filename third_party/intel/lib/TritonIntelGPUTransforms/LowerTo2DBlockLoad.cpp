@@ -258,28 +258,31 @@ private:
       }
     }
 
-    // The 2Dblockload HW pitch/base_width operands are i32. Bail out if any
-    // compile-time-foldable byte value overflows the i32 range so we don't
-    // silently emit a garbage surface descriptor. Non-foldable (runtime)
-    // shapes/strides are trusted to fit — the HW verifier will complain if
-    // they don't.
+    // The 2Dblockload HW encodes base_width / base_pitch in 24 bits (the
+    // TritonGEN→LLVM lowering subtracts 1 on emission, so the user-facing
+    // max is 2^24). Bail out if any compile-time-foldable byte value
+    // exceeds that range — otherwise the top bits would be silently
+    // dropped, producing a garbage surface descriptor. Non-foldable
+    // (runtime) shapes/strides are trusted to fit — the HW verifier will
+    // complain if they don't.
     //
     // We chase the descriptor's defining MakeTensorDescOp(s) to reach the
     // original SSA — `strides`/`shapes` above are ttig.extract_desc results
     // whose defining ops the folder can't see through.
-    constexpr int64_t kInt32Max = std::numeric_limits<int32_t>::max();
+    constexpr int64_t kMax2DBlockField = int64_t(1) << 24;
     int64_t elemBytesConst = elemSizeInBits / 8;
     auto wouldOverflow = [&](unsigned operandIdx) {
       return llvm::any_of(allDescs, [&](tt::MakeTensorDescOp d) {
         auto folded =
             tt::intel::getFoldedConstantValue(d->getOperand(operandIdx));
-        return folded && *folded * elemBytesConst > kInt32Max;
+        return folded && *folded * elemBytesConst > kMax2DBlockField;
       });
     };
     // MakeTensorDescOp operands: base, shape[rank], strides[rank].
     if (wouldOverflow(/*inner shape*/ 1 + (descRank - 1)) ||
         wouldOverflow(/*pitch stride*/ 1 + descRank + (descRank - 2))) {
-      LDBG("Pitch/base_width would overflow i32 for descriptor load: " << *op);
+      LDBG("Pitch/base_width exceeds HW 24-bit range for descriptor load: "
+           << *op);
       return;
     }
 

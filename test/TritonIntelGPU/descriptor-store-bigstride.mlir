@@ -6,13 +6,15 @@
 //
 // The descriptor-store lowering path computes baseWidth and pitch as
 // `mul(i64_stride, i64_val(elemBytes)) : i64` followed by `trunc i64 to i32`.
-// Without the truncStrideProductToI32() guard, a compile-time-foldable
-// pitch/shape whose byte value exceeds INT32_MAX silently produces a garbage
-// surface descriptor. With the guard, the pattern returns failure() and the
-// tt.descriptor_store is left in place (or lowered via another pattern).
+// Without the narrowSurfaceBytesOrNull() guard, a compile-time-foldable
+// pitch/shape whose byte value exceeds the HW's 24-bit field silently
+// produces a garbage surface descriptor. With the guard, the pattern
+// returns failure() and the tt.descriptor_store is left in place (or
+// lowered via another pattern).
 
-// Case 1: pitch stride = 2^30 f16 elements → byte pitch = 2^31, > INT32_MAX.
-// Expected: no triton_gen.2Dblockstore emitted (pattern bails cleanly).
+// Case 1: pitch stride = 2^30 f16 elements → byte pitch = 2^31, well over
+// the HW's 24-bit limit. Expected: no triton_gen.2Dblockstore emitted
+// (pattern bails cleanly).
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
   // CHECK-LABEL: llvm.func spir_kernelcc @store_pitch_overflow_f16
