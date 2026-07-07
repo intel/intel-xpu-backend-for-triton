@@ -319,6 +319,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.ttir.add_reorder_broadcast(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
+        if opt.loop_distribute or knobs.intel.enable_loop_distribution:
+            intel.passes.ttgpuir.add_loop_distribute(pm)
         passes.ttir.add_loop_unroll(pm)
         pm.run(mod, 'make_ttir')
 
@@ -349,8 +351,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.ttir.add_convert_to_ttgpuir(pm, "xpu", opt.num_warps, opt.warp_size, opt.num_ctas)
-        if opt.loop_distribute or knobs.intel.enable_loop_distribution:
-            intel.passes.ttgpuir.add_loop_distribute(pm)
         # optimize TTGIR
         passes.ttgpuir.add_coalesce(pm)
         if properties["has_256b_load_store"]:
