@@ -45,6 +45,24 @@ Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
   return reduced_val;
 }
 
+Value TargetInfo::getGlobalTimer(RewriterBase &rewriter, Location loc) const {
+  // No nanosecond wall-clock builtin is wired up for the SPIR-V target.
+  llvm::report_fatal_error(
+      "getGlobalTimer is not implemented for the Intel SPIR-V target");
+}
+
+StringRef TargetInfo::getAtomicSyncScope(MemSyncScope scope) const {
+  switch (scope) {
+  case MemSyncScope::CTA:
+    return "workgroup";
+  case MemSyncScope::GPU:
+    return "device";
+  case MemSyncScope::SYSTEM:
+    return {};
+  }
+  llvm_unreachable("unknown memory synchronization scope");
+}
+
 void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
                          triton::gpu::AddrSpace targets) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);

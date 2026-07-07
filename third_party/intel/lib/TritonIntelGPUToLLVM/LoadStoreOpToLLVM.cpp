@@ -1969,13 +1969,15 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       vec = std::min<size_t>(vec, getMaskAlignment(mask));
 
     // Get the LLVM values for pointers
-    SmallVector<Value> ptrElems = unpackLLElements(loc, llPtr, rewriter);
+    SmallVector<Value> ptrElems =
+        unpackTensorElements(loc, llPtr, rewriter, ptr.getType());
     assert(ptrElems.size() == numElems);
 
     // Get the LLVM values for mask
     SmallVector<Value> maskElems;
     if (llMask) {
-      maskElems = unpackLLElements(loc, llMask, rewriter);
+      maskElems =
+          unpackTensorElements(loc, llMask, rewriter, op.getMask().getType());
       assert(maskElems.size() == numElems);
     }
 
@@ -1993,7 +1995,8 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       splatVal = constAttr.getSplatValue<APInt>().getSExtValue();
     }
     if (other) {
-      otherElems = unpackLLElements(loc, llOther, rewriter);
+      otherElems =
+          unpackTensorElements(loc, llOther, rewriter, other.getType());
     }
 
     // vectorized iteration through all the pointer/mask/other elements
@@ -2116,9 +2119,8 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       }
     } // end vec
 
-    Type llvmResultStructTy = typeConverter->convertType(op.getType());
-    Value resultStruct = packLLElements(loc, typeConverter, loadedVals,
-                                        rewriter, llvmResultStructTy);
+    Value resultStruct = packTensorElements(loc, typeConverter, loadedVals,
+                                            rewriter, op.getType());
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
@@ -2381,9 +2383,8 @@ struct DescriptorLoadOpConversion
       }
     } // end vec
 
-    Type llvmResultStructTy = typeConverter->convertType(op.getType());
-    Value resultStruct = packLLElements(loc, typeConverter, loadedVals,
-                                        rewriter, llvmResultStructTy);
+    Value resultStruct = packTensorElements(loc, typeConverter, loadedVals,
+                                            rewriter, op.getType());
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
@@ -2456,7 +2457,7 @@ struct DescriptorStoreOpConversion
                                              perElementDims, blockLevelDims);
 
     // Unpack the value elements
-    auto valueElems = unpackLLElements(loc, llValue, rewriter);
+    auto valueElems = unpackTensorElements(loc, llValue, rewriter, valueTy);
     assert(ptrElems.size() == valueElems.size());
 
     // NOTE: DescriptorStoreOp does not have a mask operand.
@@ -3117,13 +3118,16 @@ struct StoreOpConversion
       vec = std::min<size_t>(vec, getMaskAlignment(op.getMask()));
 
     Value llPtr = adaptor.getPtr();
-    SmallVector<Value> ptrElems = unpackLLElements(loc, llPtr, rewriter);
+    SmallVector<Value> ptrElems =
+        unpackTensorElements(loc, llPtr, rewriter, ptr.getType());
     SmallVector<Value> maskElems;
     if (llMask)
-      maskElems = unpackLLElements(loc, llMask, rewriter);
+      maskElems =
+          unpackTensorElements(loc, llMask, rewriter, op.getMask().getType());
 
     Value llValue = adaptor.getValue();
-    auto valueElems = unpackLLElements(loc, llValue, rewriter);
+    auto valueElems =
+        unpackTensorElements(loc, llValue, rewriter, op.getValue().getType());
     assert(ptrElems.size() == valueElems.size());
     assert(!maskElems.size() ||
            valueElems.size() == maskElems.size() && "Mask size mismatch");
@@ -3259,9 +3263,12 @@ struct AtomicCASOpConversion
     Value llCmp = adaptor.getCmp();
     Value llVal = adaptor.getVal();
 
-    auto ptrElements = unpackLLElements(loc, llPtr, rewriter);
-    auto cmpElements = unpackLLElements(loc, llCmp, rewriter);
-    auto valElements = unpackLLElements(loc, llVal, rewriter);
+    auto ptrElements =
+        unpackTensorElements(loc, llPtr, rewriter, op.getPtr().getType());
+    auto cmpElements =
+        unpackTensorElements(loc, llCmp, rewriter, op.getCmp().getType());
+    auto valElements =
+        unpackTensorElements(loc, llVal, rewriter, op.getVal().getType());
 
     auto valueTy = op.getType();
     auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
@@ -3466,11 +3473,14 @@ struct AtomicRMWOpConversion
     Value llVal = adaptor.getVal();
     Value llMask = adaptor.getMask();
 
-    auto valElements = unpackLLElements(loc, llVal, rewriter);
-    auto ptrElements = unpackLLElements(loc, llPtr, rewriter);
+    auto valElements =
+        unpackTensorElements(loc, llVal, rewriter, op.getVal().getType());
+    auto ptrElements =
+        unpackTensorElements(loc, llPtr, rewriter, op.getPtr().getType());
     SmallVector<Value> maskElements;
     if (llMask)
-      maskElements = unpackLLElements(loc, llMask, rewriter);
+      maskElements =
+          unpackTensorElements(loc, llMask, rewriter, op.getMask().getType());
 
     auto valueTy = op.getType();
     auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
@@ -3854,10 +3864,9 @@ static LogicalResult lowerBlockLoad2D(
         ctx);
   }
 
-  Type llvmResultStructTy =
-      typeConverter->convertType(op->getResult(0).getType());
-  Value resultStruct = packLLElements(loc, typeConverter, unpackedLoadedVals,
-                                      rewriter, llvmResultStructTy);
+  Value resultStruct =
+      packTensorElements(loc, typeConverter, unpackedLoadedVals, rewriter,
+                         op->getResult(0).getType());
   rewriter.replaceOp(op, {resultStruct});
   return success();
 }
@@ -4204,25 +4213,21 @@ prepareLocalAtomicScatterRMW(triton::gpu::LocalAtomicScatterRMWOp op, Value dst,
   auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
   auto smemObj =
       LLVM::getSharedMemoryObjectFromStruct(loc, dst, llvmElemTy, rewriter);
-  SmallVector<Value> idxValues = unpackLLElements(loc, indices, rewriter);
-  SmallVector<Value> values = unpackLLElements(loc, inputValues, rewriter);
+  SmallVector<Value> idxValues =
+      unpackUniqueTensorElements(loc, indices, rewriter);
+  SmallVector<Value> values =
+      unpackUniqueTensorElements(loc, inputValues, rewriter);
   SmallVector<Value> maskValues;
   if (mask)
-    maskValues = unpackLLElements(loc, mask, rewriter);
+    maskValues = unpackUniqueTensorElements(loc, mask, rewriter);
 
   LinearLayout regLayout = toLinearLayout(valuesTy);
   auto freeVarMasks = regLayout.getFreeVariableMasks();
   auto removeBroadcast = actionRemoveBroadcastedRegs(regLayout);
   Value threadPred =
       emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
-  LinearLayout activeRegLayout = regLayout;
-  if (!removeBroadcast.isIdentity()) {
-    activeRegLayout = removeBroadcast.apply(regLayout);
-    values = removeBroadcast.apply(values);
-    idxValues = removeBroadcast.apply(idxValues);
-    if (!maskValues.empty())
-      maskValues = removeBroadcast.apply(maskValues);
-  }
+  LinearLayout activeRegLayout = regLayout.removeZeroBasesAlongDim(
+      StringAttr::get(rewriter.getContext(), "register"));
   auto offsetAndBlock =
       computeBlockLocalOffsets(loc, memDescTy, activeRegLayout, idxValues,
                                op.getAxis(), rewriter, targetInfo);
