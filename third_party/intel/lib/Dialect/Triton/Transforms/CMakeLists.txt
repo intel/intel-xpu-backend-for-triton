@@ -5,7 +5,6 @@ add_triton_library(TritonIntelTransforms
   PrepareIfCombining.cpp
   ReassociateDotScale.cpp
   RemoveMasks.cpp
-  RewriteDescriptorGatherScatter.cpp
   RewriteTensorDescriptorToPointer.cpp
   SimplifySignedArithmetic.cpp
   StrideVersioning.cpp

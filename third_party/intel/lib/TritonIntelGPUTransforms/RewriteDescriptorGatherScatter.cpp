@@ -1,14 +1,10 @@
 #include <Dialect/TritonIntelGPU/Transforms/Utility.h>
-#include <mlir/Transforms/DialectConversion.h>
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
-#include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Tools/Sys/GetEnv.h"
 
 #include "mlir/IR/Attributes.h"
-#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/PatternMatch.h"

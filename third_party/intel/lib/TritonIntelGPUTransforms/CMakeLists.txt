@@ -17,6 +17,7 @@ add_triton_library(TritonIntelGPUTransforms
   ReduceDataDuplication.cpp
   ReduceVariableLiveness.cpp
   RemoveLayoutConversions.cpp
+  RewriteDescriptorGatherScatter.cpp
   RewriteStackPtr.cpp
   Utility.cpp
   WidenLoadStoreEncoding.cpp
