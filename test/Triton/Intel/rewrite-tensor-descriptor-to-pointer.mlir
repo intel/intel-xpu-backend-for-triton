@@ -150,3 +150,55 @@ module {
 
 // COM: Store path: lowered to tt.store with pointer arithmetic.
 // CHECK: tt.store {{.*}}, %[[ARG3]], {{.*}} : tensor<1x128x!tt.ptr<f32>>
+
+// -----
+
+// COM: Host-side tensor descriptor: descriptor is a function argument with
+// COM: frontend shape/stride args following it. A synthetic MakeTensorDescOp
+// COM: should be inserted, preserving the descriptor_load on the fast path.
+module {
+  tt.func public @host_descriptor_load(%desc: !tt.tensordesc<128x64xf16>, %sh0: i32, %sh1: i32, %st0: i64, %st1: i64, %offset_y: i32, %offset_x: i32) -> tensor<128x64xf16> {
+    %0 = tt.descriptor_load %desc[%offset_y, %offset_x] : !tt.tensordesc<128x64xf16> -> tensor<128x64xf16>
+    tt.return %0 : tensor<128x64xf16>
+  }
+}
+
+// CHECK-LABEL: @host_descriptor_load
+// COM: The function signature should be expanded (no !tt.tensordesc in args).
+// CHECK-NOT: !tt.tensordesc
+// COM: A synthetic MakeTensorDescOp is inserted and descriptor_load preserved.
+// CHECK: [[DESC:%.*]] = tt.make_tensor_descriptor
+// CHECK: tt.descriptor_load [[DESC]]
+
+// -----
+
+// COM: Host-side descriptor store: same pattern as load.
+module {
+  tt.func public @host_descriptor_store(%desc: !tt.tensordesc<128x64xf16>, %sh0: i32, %sh1: i32, %st0: i64, %st1: i64, %offset_y: i32, %offset_x: i32, %data: tensor<128x64xf16>) {
+    tt.descriptor_store %desc[%offset_y, %offset_x], %data : !tt.tensordesc<128x64xf16>, tensor<128x64xf16>
+    tt.return
+  }
+}
+
+// CHECK-LABEL: @host_descriptor_store
+// CHECK-NOT: !tt.tensordesc
+// CHECK: [[DESC:%.*]] = tt.make_tensor_descriptor
+// CHECK: tt.descriptor_store [[DESC]]
+
+// -----
+
+// COM: Host-side descriptor that feeds a gather op should NOT be preserved
+// COM: (falls back to pointer path).
+module {
+  tt.func public @host_descriptor_gather(%desc: !tt.tensordesc<1x128xf32>, %sh0: i32, %sh1: i32, %st0: i64, %st1: i64, %offset: i32) -> tensor<32x128xf32> {
+    %cst = arith.constant dense<1> : tensor<32xi32>
+    %0 = tt.descriptor_gather %desc[%cst, %offset] : (!tt.tensordesc<1x128xf32>, tensor<32xi32>, i32) -> tensor<32x128xf32>
+    tt.return %0 : tensor<32x128xf32>
+  }
+}
+
+// CHECK-LABEL: @host_descriptor_gather
+// COM: Should be lowered to pointer path (tt.load), not preserved.
+// CHECK-NOT: tt.make_tensor_descriptor
+// CHECK-NOT: tt.descriptor_gather
+// CHECK: tt.load

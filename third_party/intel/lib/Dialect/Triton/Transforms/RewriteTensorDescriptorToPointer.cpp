@@ -1042,6 +1042,187 @@ struct RewriteReducePattern : OpConversionPattern<triton::DescriptorReduceOp> {
   }
 };
 
+/// Check if a descriptor-typed function argument only feeds DescriptorLoadOp
+/// or DescriptorStoreOp (directly or through loops/conditionals), and does NOT
+/// feed DescriptorGatherOp, DescriptorScatterOp, or DescriptorReduceOp.
+static bool descArgFeedsOnlyLoadStore(Value descArg) {
+  SmallVector<Value, 8> worklist;
+  SmallPtrSet<Value, 8> visited;
+  worklist.push_back(descArg);
+
+  bool hasLoadOrStore = false;
+  while (!worklist.empty()) {
+    Value cur = worklist.pop_back_val();
+    if (!visited.insert(cur).second)
+      continue;
+
+    for (OpOperand &use : cur.getUses()) {
+      Operation *user = use.getOwner();
+      if (isa<triton::DescriptorLoadOp, triton::DescriptorStoreOp>(user)) {
+        hasLoadOrStore = true;
+        continue;
+      }
+      if (isa<triton::DescriptorGatherOp, triton::DescriptorScatterOp,
+              triton::DescriptorReduceOp>(user))
+        return false;
+      // Trace through loops and conditionals.
+      if (auto forOp = dyn_cast<scf::ForOp>(user)) {
+        unsigned argIdx =
+            use.getOperandNumber() - forOp.getNumControlOperands();
+        worklist.push_back(forOp.getRegionIterArg(argIdx));
+        worklist.push_back(forOp.getResult(argIdx));
+        continue;
+      }
+      if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
+        if (auto forOp = dyn_cast<scf::ForOp>(yieldOp->getParentOp()))
+          worklist.push_back(forOp.getResult(use.getOperandNumber()));
+        continue;
+      }
+      // Unknown op — bail out conservatively.
+      return false;
+    }
+  }
+  return hasLoadOrStore;
+}
+
+/// Pre-pass: For public FuncOps with TensorDescType-typed arguments that feed
+/// only DescriptorLoad/Store, expand the function signature and insert a
+/// synthetic MakeTensorDescOp. This makes the descriptor traceable by
+/// findAllMakeTensorDescOps() and enables the 2D block I/O fast path for
+/// host-side tensor descriptors.
+static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
+  moduleOp->walk([](triton::FuncOp funcOp) {
+    if (!funcOp.isPublic())
+      return;
+
+    Block &entryBlock = funcOp.getBody().front();
+    auto funcType = funcOp.getFunctionType();
+    unsigned numArgs = funcType.getNumInputs();
+
+    // Collect descriptor arg indices (process in reverse to keep indices
+    // valid).
+    SmallVector<unsigned> descArgIndices;
+    for (unsigned i = 0; i < numArgs; ++i) {
+      if (isa<triton::TensorDescType>(funcType.getInput(i)))
+        descArgIndices.push_back(i);
+    }
+    if (descArgIndices.empty())
+      return;
+
+    for (unsigned idx : llvm::reverse(descArgIndices)) {
+      auto descType = cast<triton::TensorDescType>(funcType.getInput(idx));
+      auto blockType = descType.getSignlessBlockType();
+      unsigned rank = blockType.getRank();
+      Type elemType = blockType.getElementType();
+      Value descArg = entryBlock.getArgument(idx);
+
+      if (!descArgFeedsOnlyLoadStore(descArg))
+        continue;
+
+      // The frontend (tensor_descriptor_type._flatten_ir_types) places i32
+      // shape and i64 stride args immediately after the descriptor arg.
+      unsigned frontendShapeStart = idx + 1;
+      unsigned frontendStrideStart = idx + 1 + rank;
+      if (frontendStrideStart + rank > numArgs)
+        continue;
+
+      bool typesMatch = true;
+      for (unsigned d = 0; d < rank; ++d) {
+        if (!funcType.getInput(frontendShapeStart + d).isInteger(32) ||
+            !funcType.getInput(frontendStrideStart + d).isInteger(64)) {
+          typesMatch = false;
+          break;
+        }
+      }
+      if (!typesMatch)
+        continue;
+
+      // Capture frontend shape/stride block args before modifications.
+      SmallVector<Value> shapeArgs, strideArgs;
+      for (unsigned d = 0; d < rank; ++d)
+        shapeArgs.push_back(entryBlock.getArgument(frontendShapeStart + d));
+      for (unsigned d = 0; d < rank; ++d)
+        strideArgs.push_back(entryBlock.getArgument(frontendStrideStart + d));
+
+      // Expand: replace !tt.tensordesc<...> with (ptr, i64×2*rank, i1, i1).
+      MLIRContext *ctx = funcOp.getContext();
+      Location loc = descArg.getLoc();
+      Type ptrType = triton::PointerType::get(elemType, /*addressSpace=*/1);
+      Type i64Type = IntegerType::get(ctx, 64);
+      Type i1Type = IntegerType::get(ctx, 1);
+
+      SmallVector<Type> expandedTypes;
+      expandedTypes.push_back(ptrType);
+      expandedTypes.insert(expandedTypes.end(), 2 * rank, i64Type);
+      expandedTypes.push_back(i1Type);
+      expandedTypes.push_back(i1Type);
+
+      // Insert expanded args at the descriptor's position.
+      for (unsigned i = 0; i < expandedTypes.size(); ++i)
+        entryBlock.insertArgument(idx + i, expandedTypes[i], loc);
+
+      // The old descriptor arg shifted by expandedTypes.size().
+      unsigned oldDescIdx = idx + expandedTypes.size();
+      Value oldDescArg = entryBlock.getArgument(oldDescIdx);
+
+      // Insert synthetic MakeTensorDescOp at function entry.
+      OpBuilder builder(ctx);
+      builder.setInsertionPointToStart(&entryBlock);
+
+      Value basePtr = entryBlock.getArgument(idx);
+
+      // The last-dim stride must be a constant 1 (host TensorDescriptor
+      // enforces strides[-1] == 1). MaterializeBlockPointer asserts this.
+      Value c1 = arith::ConstantOp::create(builder, loc, builder.getI64Type(),
+                                           builder.getI64IntegerAttr(1));
+      strideArgs.back() = c1;
+
+      auto paddingAttr =
+          triton::PaddingOptionAttr::get(ctx, triton::PaddingOption::PAD_ZERO);
+
+      auto syntheticDesc = triton::MakeTensorDescOp::create(
+          builder, loc, descType, basePtr, ValueRange(shapeArgs),
+          ValueRange(strideArgs), paddingAttr);
+
+      // Replace all uses of the old descriptor arg and erase it.
+      oldDescArg.replaceAllUsesWith(syntheticDesc.getResult());
+      entryBlock.eraseArgument(oldDescIdx);
+
+      // Update the function type.
+      funcOp.setType(FunctionType::get(ctx, entryBlock.getArgumentTypes(),
+                                       funcType.getResults()));
+
+      // Set tt.divisibility = 16 on the base pointer arg.
+      funcOp.setArgAttr(idx, "tt.divisibility",
+                        IntegerAttr::get(IntegerType::get(ctx, 32), 16));
+
+      // Set tt.divisibility on stride args. Host TensorDescriptor guarantees
+      // stride * elem_bytes % 16 == 0, i.e. stride % (16/elem_bytes) == 0.
+      unsigned elemBytes = elemType.getIntOrFloatBitWidth() / 8;
+      unsigned strideDivisibility = 16 / std::max(1u, elemBytes);
+
+      // Expanded stride args: at idx + 1 + rank (after ptr and shape i64s).
+      for (unsigned d = 0; d < rank - 1; ++d) {
+        funcOp.setArgAttr(
+            idx + 1 + rank + d, "tt.divisibility",
+            IntegerAttr::get(IntegerType::get(ctx, 32), strideDivisibility));
+      }
+      // Frontend stride args used by the synthetic MakeTensorDescOp.
+      // They shifted by (expandedTypes.size() - 1) due to expansion.
+      unsigned shift = expandedTypes.size() - 1;
+      for (unsigned d = 0; d < rank - 1; ++d) {
+        funcOp.setArgAttr(
+            frontendStrideStart + shift + d, "tt.divisibility",
+            IntegerAttr::get(IntegerType::get(ctx, 32), strideDivisibility));
+      }
+
+      // Refresh for next iteration.
+      funcType = funcOp.getFunctionType();
+      numArgs = funcType.getNumInputs();
+    }
+  });
+}
+
 /**
  * @brief This implements the pass for converting triton tensor descriptor
  * loads/stores into indexed loads/stores.
@@ -1069,6 +1250,11 @@ class TritonRewriteTensorDescriptorToPointerPass
           TritonRewriteTensorDescriptorToPointerPass> {
   void runOnOperation() override {
     Operation *op = getOperation();
+
+    // Pre-pass: Synthesize MakeTensorDescOps for host-side tensor descriptor
+    // function arguments. This enables the 2D block I/O fast path by making
+    // descriptors traceable via findAllMakeTensorDescOps().
+    synthesizeDescriptorsFromFuncArgs(op);
 
     // Pre-pass: Rewrite contiguous DescriptorGatherOps/DescriptorScatterOps to
     // DescriptorLoadOps/DescriptorStoreOps. When x_offsets are provably
