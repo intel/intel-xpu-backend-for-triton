@@ -206,7 +206,7 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
           }
         }
       }
-      // Temply changed tileShape by packRegister is safe because the
+      // Temporarily changed tileShape by packRegister is safe because the
       // lane-density check below will reject it.
       if (tileShape[dim] != base[dim]) {
         // break if we can not increase the tile shape along this dim after
