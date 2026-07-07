@@ -1885,7 +1885,7 @@ public:
       sizeInfo = BlockIOTileSizeInfo(height, width, /*numElemPerPackedVal=*/1,
                                      /*vBlocks=*/1, /*rowDim=*/0,
                                      /*colDim=*/rank - 1, /*transpose=*/false,
-                                     std::move(regPackBases));
+                                     /*vnni=*/false, std::move(regPackBases));
     } else {
       sizeInfo = getBlockIOTileSize<true /*load*/>(
           llEncoding.value(), contiguousDim, elemSizeInBits, maskAxisInfo,
@@ -3145,8 +3145,9 @@ struct DescriptorStoreOpToBlockIOConversion
       return failure();
 
     auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
-          isTransposeRequired, regPackedBases] = std::move(sizeInfo);
-
+          isTransposeRequired, useVNNIFormat, regPackedBases] =
+        std::move(sizeInfo);
+    assert(!useVNNIFormat && "2D block store does not support VNNI");
     unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
     if (!check2DBlockAddressPayloadRestriction(packedElemSizeInBits, tileWidth))
       return failure();
@@ -3397,7 +3398,7 @@ struct StoreOpToBlockIOConversion
       sizeInfo = BlockIOTileSizeInfo(height, width, /*numElemPerPackedVal=*/1,
                                      /*vBlocks=*/1, /*rowDim=*/0,
                                      /*colDim=*/rank - 1, /*transpose=*/false,
-                                     std::move(regPackBases));
+                                     /*vnni=*/false, std::move(regPackBases));
     } else {
       sizeInfo = getBlockIOTileSize<false /*store*/>(
           llEncoding.value(), contiguousDim, elemSizeInBits, maskAxisInfo);
@@ -3407,8 +3408,9 @@ struct StoreOpToBlockIOConversion
       return failure();
 
     auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
-          isTransposeRequired, regPackedBases] = std::move(sizeInfo);
-
+          isTransposeRequired, useVNNIFormat, regPackedBases] =
+        std::move(sizeInfo);
+    assert(!useVNNIFormat && "2D block store does not support VNNI");
     unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
     if (!check2DBlockAddressPayloadRestriction(packedElemSizeInBits, tileWidth))
       return failure();
@@ -4531,7 +4533,7 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
       sizeInfo = BlockIOTileSizeInfo(height, width, /*numElemPerPackedVal=*/1,
                                      /*vBlocks=*/1, /*rowDim=*/0,
                                      /*colDim=*/rank - 1, /*transpose=*/false,
-                                     std::move(regPackBases));
+                                     /*vnni=*/false, std::move(regPackBases));
     } else {
       sizeInfo = getBlockIOTileSize<true>(
           *llEncoding, contiguousDim, elemSizeInBits, maskAxisInfo,
