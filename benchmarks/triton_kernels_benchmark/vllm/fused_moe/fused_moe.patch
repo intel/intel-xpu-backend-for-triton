@@ -1,5 +1,5 @@
 diff --git a/vllm/model_executor/layers/fused_moe/fused_moe.py b/vllm/model_executor/layers/fused_moe/fused_moe.py
-index 269b6e3da..cc7b83594 100644
+index 269b6e3da..fdd6a95e5 100644
 --- a/vllm/model_executor/layers/fused_moe/fused_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/fused_moe.py
 @@ -290,6 +290,21 @@ def fused_moe_kernel_gptq_awq(
@@ -73,18 +73,18 @@ index 269b6e3da..cc7b83594 100644
  
      if use_int8_w8a16:
          b_scale_ptrs = (
-@@ -494,20 +493,14 @@ def fused_moe_kernel(
+@@ -494,20 +493,8 @@ def fused_moe_kernel(
      else:
          accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
      for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
 -        # Load the next block of A and B, generate a mask by checking the
 -        # K dimension.
-         if SWAP_AB:
-             a_mask = (offs_k[:, None] < K - k * BLOCK_SIZE_K) & token_mask[None, :]
-             b_mask = offs_k[None, :] < K - k * BLOCK_SIZE_K
-         else:
-             a_mask = token_mask[:, None] & (offs_k[None, :] < K - k * BLOCK_SIZE_K)
-             b_mask = offs_k[:, None] < K - k * BLOCK_SIZE_K
+-        if SWAP_AB:
+-            a_mask = (offs_k[:, None] < K - k * BLOCK_SIZE_K) & token_mask[None, :]
+-            b_mask = offs_k[None, :] < K - k * BLOCK_SIZE_K
+-        else:
+-            a_mask = token_mask[:, None] & (offs_k[None, :] < K - k * BLOCK_SIZE_K)
+-            b_mask = offs_k[:, None] < K - k * BLOCK_SIZE_K
 -        a = tl.load(
 -            a_ptrs,
 -            mask=a_mask,
@@ -96,7 +96,7 @@ index 269b6e3da..cc7b83594 100644
          # We accumulate along the K dimension.
          if use_int8_w8a16:
              accumulator = tl.dot(a, b.to(compute_type), acc=accumulator)
-@@ -531,12 +524,9 @@ def fused_moe_kernel(
+@@ -531,12 +518,9 @@ def fused_moe_kernel(
                      else:
                          accumulator = tl.dot(a, b, acc=accumulator)
                  else:
@@ -111,7 +111,7 @@ index 269b6e3da..cc7b83594 100644
  
      if SWAP_AB:
          accumulator = tl.trans(accumulator, (1, 0))
-@@ -814,6 +804,7 @@ def invoke_fused_moe_triton_kernel(
+@@ -814,6 +798,7 @@ def invoke_fused_moe_triton_kernel(
          sorted_token_ids,
          expert_ids,
          num_tokens_post_padded,
@@ -119,7 +119,7 @@ index 269b6e3da..cc7b83594 100644
          B.size(1),
          B.size(2),
          EM,
-@@ -845,7 +836,7 @@ def invoke_fused_moe_triton_kernel(
+@@ -845,7 +830,7 @@ def invoke_fused_moe_triton_kernel(
          HAS_BIAS=HAS_BIAS,
          BLOCK_SIZE_K=BLOCK_SIZE_K,
          SWAP_AB=SWAP_AB,
