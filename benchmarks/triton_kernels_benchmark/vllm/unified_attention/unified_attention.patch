@@ -33,7 +33,7 @@ index ed9a38a..3999844 100644
      right = num_seqs
      while left < right:
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 86ead16..84f2cee 100644
+index 86ead16..e0c979e 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -7,8 +7,6 @@
@@ -206,7 +206,7 @@ index 86ead16..84f2cee 100644
      sliding_window_val = 1 + window_size[0] if window_size[0] >= 0 else 0
  
      # Compute chunked block size from sliding window if needed.
-@@ -913,17 +925,20 @@ def unified_attention(
+@@ -913,12 +925,16 @@ def unified_attention(
      elif sliding_window_val <= 0:
          chunk_lookback = -1
  
@@ -216,25 +216,20 @@ index 86ead16..84f2cee 100644
 -    TILE_SIZE_DECODE = _get_tile_size(
 -        head_size, sliding_window_val, q.element_size(), is_prefill=False
 -    )
--
 +    if q.element_size() == 1:
 +        # Currently triton fails with TILE_SIZE=16 for fp8 inputs
 +        TILE_SIZE_PREFILL = TILE_SIZE_DECODE = 32
 +    else:
 +        # Good config for simplicity
 +        TILE_SIZE_PREFILL = TILE_SIZE_DECODE = 16
-     # Wider KV tile for the tuned large-head path (see above). Only the 2D
-     # path (used when max_seqlen_q > 1) reads TILE_SIZE_PREFILL.
-     if tuned_large_head:
-         TILE_SIZE_PREFILL = 128
 +    assert TILE_SIZE_PREFILL <= block_size, "TILE_SIZE_PREFILL must be <= block_size"
 +    assert TILE_SIZE_DECODE <= block_size, "TILE_SIZE_DECODE must be <= block_size"
 +    assert block_size % TILE_SIZE_PREFILL == 0, "block_size must be multiple of TILE_SIZE_PREFILL"
 +    assert block_size % TILE_SIZE_DECODE == 0, "block_size must be multiple of TILE_SIZE_DECODE"
  
-     # USE_TD requires BLOCK_SIZE % TILE_SIZE == 0 (enforced by a
-     # ``tl.static_assert`` in the kernel).  The default prefill tile
-@@ -974,18 +989,11 @@ def unified_attention(
+     # Wider KV tile for the tuned large-head path (see above). Only the 2D
+     # path (used when max_seqlen_q > 1) reads TILE_SIZE_PREFILL.
+@@ -974,18 +990,11 @@ def unified_attention(
      # Launch the 2D kernel if
      # 1. No intermediate tiled softmax buffers for the 3D kernel have been allocated, or
      # 2. The batch includes at least one prefill request, or
@@ -258,7 +253,7 @@ index 86ead16..84f2cee 100644
  
      # The kernel signature is the same for 2D and 3D — only the launch
      # grid + a handful of constexpr toggles differ.  Per-token-head scale
-@@ -1006,17 +1014,57 @@ def unified_attention(
+@@ -1006,17 +1015,57 @@ def unified_attention(
          v_scale_ptr = None
      # 3D needs real segm tensors; 2D never touches them.  Pass ``None`` in
      # 2D mode so Triton can skip materialising these pointer arguments.
@@ -319,7 +314,7 @@ index 86ead16..84f2cee 100644
          tile_size = TILE_SIZE_DECODE
  
      launch_kwargs: dict[str, int] = {}
-@@ -1085,9 +1133,7 @@ def unified_attention(
+@@ -1085,9 +1134,7 @@ def unified_attention(
          stride_vs_slot=vs_slot,
          stride_vs_head=vs_head,
          query_start_len_ptr=cu_seqlens_q,
@@ -329,7 +324,7 @@ index 86ead16..84f2cee 100644
          NUM_SEGMENTS_PER_SEQ=num_segments,
          USE_FP8=output_scale is not None,
          IS_3D=use_3d,
-@@ -1117,7 +1163,6 @@ def unified_attention(
+@@ -1117,7 +1164,6 @@ def unified_attention(
              HEAD_SIZE=head_size,
              HEAD_SIZE_PADDED=head_size_padded,
              query_start_len_ptr=cu_seqlens_q,
