@@ -234,9 +234,9 @@ index 9a317d40f..781807622 100644
 +        if has_zp or weight_bits != 4:
 +            pytest.skip("XPU WNA16 MoE backend supports symmetric int4 only")
 +
-     a = torch.randn((m, k), device="xpu", dtype=dtype) / 10
-     w1 = torch.randn((e, 2 * n, k), device="xpu", dtype=dtype) / 10
-     w2 = torch.randn((e, k, n), device="xpu", dtype=dtype) / 10
+     a = torch.randn((m, k), device="cuda", dtype=dtype) / 10
+     w1 = torch.randn((e, 2 * n, k), device="cuda", dtype=dtype) / 10
+     w2 = torch.randn((e, k, n), device="cuda", dtype=dtype) / 10
 @@ -673,7 +679,7 @@ def test_fused_moe_wn16(
          )
          torch_output = torch_moe(a, w1_ref, w2_ref, score, topk, expert_map=e_map)
