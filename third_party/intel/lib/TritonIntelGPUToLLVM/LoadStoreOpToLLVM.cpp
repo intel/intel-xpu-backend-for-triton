@@ -4110,11 +4110,10 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
       SetVector<unsigned> regPackBases;
       for (unsigned i = 1; i < regDimSize; i <<= 1)
         regPackBases.insert(i);
-      sizeInfo =
-          BlockIOTileSizeInfo(height, width, /*numElemPerPackedVal=*/1,
-                              /*vBlocks=*/1, /*rowDim=*/0,
-                              /*colDim=*/rank - 1, /*vnni=*/false,
-                              /*transpose=*/false, std::move(regPackBases));
+      sizeInfo = BlockIOTileSizeInfo(height, width, /*numElemPerPackedVal=*/1,
+                                     /*vBlocks=*/1, /*rowDim=*/0,
+                                     /*colDim=*/rank - 1, /*transpose=*/false,
+                                     /*vnni=*/false, std::move(regPackBases));
     } else {
       sizeInfo =
           getBlockIOTileSize<true>(*llEncoding, contiguousDim, elemSizeInBits,
