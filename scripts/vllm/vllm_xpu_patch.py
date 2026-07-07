@@ -56,7 +56,7 @@ def _find_cuda_patterns(source: str) -> list[dict]:
                     "col": node.value.col_offset,
                 })
 
-        # torch.device("cuda") and torch.device(f"cuda:{index}") calls
+        # torch.device("cuda"), torch.device("cuda:0"), and torch.device(f"cuda:{index}") calls
         if isinstance(node, ast.Call):
             func = node.func
             is_torch_device = (isinstance(func, ast.Attribute) and func.attr == "device"
@@ -65,6 +65,13 @@ def _find_cuda_patterns(source: str) -> list[dict]:
                                                             ast.Constant) and node.args[0].value == "cuda":
                 patterns.append({
                     "type": "torch_device",
+                    "line": node.args[0].lineno,
+                    "col": node.args[0].col_offset,
+                })
+            if (is_torch_device and node.args and isinstance(node.args[0], ast.Constant)
+                    and isinstance(node.args[0].value, str) and node.args[0].value.startswith("cuda:")):
+                patterns.append({
+                    "type": "torch_device_indexed",
                     "line": node.args[0].lineno,
                     "col": node.args[0].col_offset,
                 })
@@ -183,6 +190,10 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
             # Replace "cuda" with "xpu" in device arguments
             lines[line_idx] = line.replace('"cuda"', '"xpu"', 1)
 
+        elif ptype == "torch_device_indexed":
+            # Replace "cuda:N" with "xpu:N" in torch.device call
+            lines[line_idx] = line.replace('"cuda:', '"xpu:', 1).replace("'cuda:", "'xpu:", 1)
+
         elif ptype == "torch_device_fstring":
             # Replace f"cuda:" with f"xpu:" in torch.device call
             lines[line_idx] = line.replace('f"cuda:', 'f"xpu:', 1).replace("f'cuda:", "f'xpu:", 1)
@@ -261,10 +272,7 @@ def main() -> None:
     # Patch test files and source files that need CUDA->XPU transformation
     patch_dirs = [
         # Test directories
-        vllm_root / "tests" / "kernels" / "attention",
-        vllm_root / "tests" / "kernels" / "mamba",
-        vllm_root / "tests" / "kernels" / "moe",
-        vllm_root / "tests" / "kernels" / "quantization",
+        vllm_root / "tests" / "kernels",
         vllm_root / "tests" / "v1" / "sample",
         vllm_root / "tests" / "v1" / "spec_decode",
         vllm_root / "tests" / "v1" / "worker",

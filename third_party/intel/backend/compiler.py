@@ -46,6 +46,7 @@ class XPUOptions:
     allow_fp8e4nv: bool = False
     allow_fp8e4b15: bool = True
     grf_mode: str = 'default'
+    loop_distribute: bool = False
     use_barrier: bool = False
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
@@ -307,6 +308,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.ttir.add_triton_licm(pm)
         intel.passes.ttir.add_remove_masks(pm)
         intel.passes.ttir.add_stride_versioning(pm)
+        intel.passes.ttir.add_descriptor_versioning(pm)
         intel.passes.ttir.add_fuse_reshape(pm)
         intel.passes.ttir.add_fold_true_cmpi(pm)
         intel.passes.ttir.add_prepare_if_combining(pm)
@@ -346,6 +348,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.ttir.add_convert_to_ttgpuir(pm, "xpu", opt.num_warps, opt.warp_size, opt.num_ctas)
+        if opt.loop_distribute or knobs.intel.enable_loop_distribution:
+            intel.passes.ttgpuir.add_loop_distribute(pm)
         # optimize TTGIR
         passes.ttgpuir.add_coalesce(pm)
         if properties["has_256b_load_store"]:
@@ -373,6 +377,12 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
         if (opt.reduce_variable_liveness):
             intel.passes.ttgpuir.add_reduce_variable_liveness(pm)
+
+        # Off by default: code sinking is perf-neutral on measured kernels (it
+        # reliably reduces register spills, but the relieved traffic is not on
+        # the critical path on current HW). Opt in via the env var for A/B work.
+        if knobs.intel.enable_code_sinking:
+            intel.passes.ttgpuir.add_code_sinking(pm)
 
         passes.ttir.add_loop_aware_cse(pm)
         passes.ttgpuir.add_fuse_nested_loops(pm)

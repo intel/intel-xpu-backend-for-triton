@@ -315,6 +315,33 @@ def TritonIntelGPUReduceVariableLiveness
                            "mlir::arith::ArithDialect"];
 }
 
+def TritonIntelGPUCodeSinking
+    : Pass<"tritonintelgpu-code-sinking", "mlir::ModuleOp"> {
+  let summary = "Sink pure ops past a region-bearing op to their first use after the region";
+
+  let description = [{
+    Moves a pure (read-only or effect-free, non-volatile) operation defined
+    before a region-bearing op (e.g. `scf.for`, `scf.while`, `scf.if`), whose
+    results are never used inside the region, down to just before its first use
+    after the region. This shortens the live range of a value that would
+    otherwise be live across the entire region, reducing register pressure that
+    competes with DPAS accumulators and A/B operand tiles. Loads (e.g. the
+    SwiGLU bias loads of #7250) are the motivating case, but the transform
+    applies to any pure op.
+
+    An op is sunk only when: it is defined in the same block as and before the
+    region-bearing op; it has no use inside the region (including uses that flow
+    through `scf.yield` or as operands to the barrier op itself); every
+    remaining use is strictly after the region; and there is no write side
+    effect (including writes inside the region) on the path between the op and
+    the sink point.
+  }];
+
+  let dependentDialects = ["mlir::triton::TritonDialect",
+                           "mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::scf::SCFDialect"];
+}
+
 def TritonIntelGPUAnnotateCacheControl
     : Pass<"tritonintelgpu-annotate-cache-control", "mlir::ModuleOp"> {
   let summary = "Annotate tt.load ops with .cg cache control unless the load's encoding indicates cross-subgroup L1 reuse";
@@ -419,6 +446,24 @@ def TritonIntelGPUCanonicalizePointers
     Option<"enableLargeTensorPtrCanon", "enable-large-tensor-ptr-canon",
            "bool", /*default=*/"false",
            "Enable canonicalization for pointers to tensors larger than 2GB">
+  ];
+}
+
+def TritonIntelGPULoopDistribute
+    : Pass<"tritonintelgpu-loop-distribute", "mlir::ModuleOp"> {
+  let summary = "Distribute dot operations in loops into separate loops";
+
+  let description = [{
+    Split an `scf.for` loop containing multiple `tt.dot` operations into
+    separate loops, each containing a single `tt.dot`. This reduces register
+    pressure (fewer live accumulators) and descriptor pressure (fewer active
+    2D block I/O descriptors per loop), at the cost of re-loading shared
+    operands.
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::TritonDialect",
+    "mlir::scf::SCFDialect"
   ];
 }
 
