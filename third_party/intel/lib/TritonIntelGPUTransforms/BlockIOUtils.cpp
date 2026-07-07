@@ -129,6 +129,7 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
   // transpose, we'd prefer smaller d32 type cause hardware could
   // transpose more to reduce the number of mov operation in register.
   constexpr unsigned MAX_BITS_TRANSPOSE = 32;
+  constexpr unsigned MAX_BITS_VNNI = 32;
   constexpr unsigned MAX_BITS_WIDTH_NORMAL = 64 * 8;       // 64 bytes.
   constexpr unsigned MAX_BITS_WIDTH_TRANSPOSE = 8 * 4 * 8; // 8xd32. (and 4xd64)
   constexpr unsigned TRANSPOSE_LOAD_D64_HEIGHT = 8;
@@ -145,42 +146,73 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
   unsigned MAX_BITS_WIDTH =
       transpose ? MAX_BITS_WIDTH_TRANSPOSE : MAX_BITS_WIDTH_NORMAL;
 
-  unsigned maxElemPackedVal = mlir::ceil<unsigned>(
-      transpose ? MAX_BITS_TRANSPOSE : MAX_BITS_NORMAL, elemSizeInBits);
   SetVector<unsigned> regPackBases;
-  for (unsigned regBaseIter = 0; regBaseIter < basesOfRegister.size();
-       ++regBaseIter) {
-    if (numElemPerPackedVal >= maxElemPackedVal) {
-      // Reached the maximum number of elements per packed value.
-      break;
+  auto packRegister = [&](unsigned dim, unsigned maxPackNum) {
+    for (unsigned regBaseIter = 0; regBaseIter < basesOfRegister.size();
+         ++regBaseIter) {
+      if (numElemPerPackedVal >= maxPackNum) {
+        // Reached the maximum number of elements per packed value.
+        break;
+      }
+      const std::vector<int> &base = basesOfRegister[regBaseIter];
+      if (!validateBase(base))
+        continue; // Skip as the register can not be trivial packed.
+      int baseDim = getFirstNonZeroDim(base);
+      if (dim == baseDim) {
+        if (tileShape[dim] != base[dim])
+          continue; // Skip the register not in dense tile.
+        // The value can be loaded as packed value.
+        tileShape[dim] <<= 1;
+        numElemPerPackedVal <<= 1;
+        regPackBases.insert(1 << regBaseIter);
+      }
     }
-    const std::vector<int> &base = basesOfRegister[regBaseIter];
-    if (!validateBase(base))
-      continue; // Skip as the register can not be trivial packed.
-    int dim = getFirstNonZeroDim(base);
-    if (memContiguousDim == dim) {
-      if (tileShape[dim] != base[dim])
-        continue; // Skip the register not in dense tile.
-      // The value can be loaded as packed value.
-      tileShape[dim] <<= 1;
-      numElemPerPackedVal <<= 1;
-      regPackBases.insert(1 << regBaseIter);
-    }
-  }
+  };
 
-  // For the transpose case, we have to pack the elements to d32.
-  if (transpose && numElemPerPackedVal != maxElemPackedVal)
+  packRegister(
+      memContiguousDim,
+      mlir::ceil<unsigned>(transpose ? MAX_BITS_TRANSPOSE : MAX_BITS_NORMAL,
+                           elemSizeInBits));
+
+  // For the transpose case, elements up to d32 must be packed to d32.
+  if (transpose && elemSizeInBits <= MAX_BITS_TRANSPOSE &&
+      (numElemPerPackedVal * elemSizeInBits) != MAX_BITS_TRANSPOSE)
     return BlockIOTileSizeInfo::unknown();
 
   // We already get the basic tile shape in packing values.
   // To increase the tile shape along each lane dimension.
+  bool vnni = false;
   for (const std::vector<int> &base : basesOfLane) {
     if (!validateBase(base))
       break; // break if the lane bases are not trivial.
     int dim = getFirstNonZeroDim(base);
     if (tileShape[dim] != base[dim]) {
-      // TODO: Check whether we can add an VNNI pack to make a larger tile.
-      break;
+      if (numElemPerPackedVal == 1) {
+        // There is no register packing yet.
+        if (dim != fastChangeDim) {
+          // Try to pack along the non-fast change dim with VNNI capability.
+          packRegister(dim,
+                       mlir::ceil<unsigned>(MAX_BITS_VNNI, elemSizeInBits));
+          if (numElemPerPackedVal != 1) {
+            // Check if packRegister partially packed the register along the
+            // non-fast change dim.
+            if ((numElemPerPackedVal * elemSizeInBits) == MAX_BITS_VNNI) {
+              vnni = true;
+            } else {
+              // break if the numElemPerPackedVal not matched to the VNNI
+              // packing bits number.
+              return BlockIOTileSizeInfo::unknown();
+            }
+          }
+        }
+      }
+      // Temporarily changed tileShape by packRegister is safe because the
+      // lane-density check below will reject it.
+      if (tileShape[dim] != base[dim]) {
+        // break if we can not increase the tile shape along this dim after
+        // VNNI packing.
+        break;
+      }
     }
     tileShape[dim] <<= 1;
   }
@@ -379,9 +411,14 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
     // insert the remaining register base.
     regPackBases.insert(1 << regBaseIter);
   }
+
+  // VNNI packing doesn't impact the tileWidth and tileHeight which
+  // is transparent to HW.
+  unsigned packedValueNumber = vnni ? 1 : numElemPerPackedVal;
+
   int tileHeight = tileShape[transpose ? fastChangeDim : rowDim];
   int tileWidth =
-      tileShape[transpose ? rowDim : fastChangeDim] / numElemPerPackedVal;
+      tileShape[transpose ? rowDim : fastChangeDim] / packedValueNumber;
 
   // Cap vBlocks for loads based on HW constraints.
   if constexpr (isLoad) {
@@ -399,8 +436,8 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
       vBlocks = 1;
   }
 
-  return BlockIOTileSizeInfo(tileHeight, tileWidth, numElemPerPackedVal,
-                             vBlocks, rowDim, fastChangeDim, transpose,
+  return BlockIOTileSizeInfo(tileHeight, tileWidth, packedValueNumber, vBlocks,
+                             rowDim, fastChangeDim, transpose, vnni,
                              std::move(regPackBases));
 }
 
@@ -612,6 +649,10 @@ bool validate2DBlockStoreTile(const LinearLayout &ll, unsigned memContiguousDim,
 
   // 2D block store does not support transpose.
   if (sizeInfo.transpose)
+    return false;
+
+  // 2D block store does not support vnni packing.
+  if (sizeInfo.vnni)
     return false;
 
   // The store always issues a single v-block per message.
