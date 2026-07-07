@@ -46,6 +46,7 @@ class XPUOptions:
     allow_fp8e4nv: bool = False
     allow_fp8e4b15: bool = True
     grf_mode: str = 'default'
+    loop_distribute: bool = False
     use_barrier: bool = False
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
@@ -347,6 +348,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.ttir.add_convert_to_ttgpuir(pm, "xpu", opt.num_warps, opt.warp_size, opt.num_ctas)
+        if opt.loop_distribute or knobs.intel.enable_loop_distribution:
+            intel.passes.ttgpuir.add_loop_distribute(pm)
         # optimize TTGIR
         passes.ttgpuir.add_coalesce(pm)
         if properties["has_256b_load_store"]:
