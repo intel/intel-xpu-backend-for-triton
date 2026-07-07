@@ -188,18 +188,29 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
     int dim = getFirstNonZeroDim(base);
     if (tileShape[dim] != base[dim]) {
       if (numElemPerPackedVal == 1) {
-        // There are no register packing. Try to pack here.
+        // There is no register packing yet.
         if (dim != fastChangeDim) {
-          // VNNI pack:
+          // Try to pack along the non-fast change dim with VNNI capability.
           packRegister(dim,
                        mlir::ceil<unsigned>(MAX_BITS_VNNI, elemSizeInBits));
-          if ((numElemPerPackedVal * elemSizeInBits) == MAX_BITS_VNNI)
-            vnni = true;
+          if (numElemPerPackedVal != 1) {
+            // Check if packRegister partially packed the register along the
+            // non-fast change dim.
+            if ((numElemPerPackedVal * elemSizeInBits) == MAX_BITS_VNNI) {
+              vnni = true;
+            } else {
+              // break if the numElemPerPackedVal not matched to the VNNI
+              // packing bits number.
+              return BlockIOTileSizeInfo::unknown();
+            }
+          }
         }
       }
+      // Temply changed tileShape by packRegister is safe because the
+      // lane-density check below will reject it.
       if (tileShape[dim] != base[dim]) {
         // break if we can not increase the tile shape along this dim after
-        // packing.
+        // VNNI packing.
         break;
       }
     }
