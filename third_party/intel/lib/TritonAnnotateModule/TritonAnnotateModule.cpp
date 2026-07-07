@@ -106,10 +106,8 @@ struct TritonAnnotateModule
 private:
   void setThreadsPerWarp(ModuleOp &mod) const {
     Builder builder(mod);
-    bool enableWarp32 =
-        tt::tools::getBoolEnv("TRITON_INTEL_ENABLE_DPAS_FOR_WARP_SIZE_32");
 
-    if (!enableWarp32) {
+    if (!sub32DPAS) {
       auto dpasAnalysis = ttgi::DPASAnalysisFactory::createDPASAnalysis(mod);
 
       mod.walk([&](FunctionOpInterface funcOp) {
