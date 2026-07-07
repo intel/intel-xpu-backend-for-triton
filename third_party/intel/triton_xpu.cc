@@ -143,7 +143,9 @@ void init_triton_intel_passes_ttgpuir(py::module_ &&m) {
               &gpu::intel::TritonAnnotateModuleOptions::targetArch)
       .def_rw("is_lts", &gpu::intel::TritonAnnotateModuleOptions::isLTS)
       .def_rw("is_fast_math",
-              &gpu::intel::TritonAnnotateModuleOptions::isFastMath);
+              &gpu::intel::TritonAnnotateModuleOptions::isFastMath)
+      .def_rw("sub_32_dpas",
+              &gpu::intel::TritonAnnotateModuleOptions::sub32DPAS);
   ADD_PASS_OPTION_WRAPPER_1("add_triton_annotate_module",
                             gpu::intel::createTritonAnnotateModule,
                             gpu::intel::TritonAnnotateModuleOptions);

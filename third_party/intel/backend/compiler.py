@@ -48,6 +48,7 @@ class XPUOptions:
     grf_mode: str = 'default'
     loop_distribute: bool = False
     code_sinking: bool = False
+    sub_32_dpas: bool = False
     use_barrier: bool = False
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
@@ -295,6 +296,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             "has_subgroup_matrix_multiply_accumulate_bfloat8"]
         module_opts.support_rounded_divide_sqrt = properties["has_rounded_divide_sqrt"]
         module_opts.threads_per_warp = opt.warp_size
+        module_opts.sub_32_dpas = knobs.intel.enable_sub_32_dpas or opt.sub_32_dpas
         module_opts.target_arch = cls.target_arch
 
     @classmethod
