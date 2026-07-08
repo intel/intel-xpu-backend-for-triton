@@ -449,4 +449,22 @@ def TritonIntelGPUCanonicalizePointers
   ];
 }
 
+def TritonIntelGPULoopDistribute
+    : Pass<"tritonintelgpu-loop-distribute", "mlir::ModuleOp"> {
+  let summary = "Distribute dot operations in loops into separate loops";
+
+  let description = [{
+    Split an `scf.for` loop containing multiple `tt.dot` operations into
+    separate loops, each containing a single `tt.dot`. This reduces register
+    pressure (fewer live accumulators) and descriptor pressure (fewer active
+    2D block I/O descriptors per loop), at the cost of re-loading shared
+    operands.
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::TritonDialect",
+    "mlir::scf::SCFDialect"
+  ];
+}
+
 #endif // TRITON_INTEL_GPU_PASSES

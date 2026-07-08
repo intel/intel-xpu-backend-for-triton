@@ -959,7 +959,8 @@ run_vllm_mrv2_tests() {
       tests/v1/worker/test_gpu_input_batch.py \
       tests/v1/worker/test_gpu_model_runner_v2_eplb.py \
       tests/v1/sample/test_sampler.py \
-      tests/v1/sample/test_logprobs.py
+      tests/v1/sample/test_logprobs.py \
+      tests/v1/worker/test_gpu_gumbel_sample.py
 }
 
 
@@ -982,7 +983,8 @@ run_vllm_moe_tests() {
       tests/kernels/moe/test_triton_moe_ptpc_fp8.py \
       tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py \
       tests/kernels/moe/test_batched_deepgemm.py \
-      tests/kernels/moe/test_gpt_oss_triton_kernels.py
+      tests/kernels/moe/test_gpt_oss_triton_kernels.py \
+      tests/kernels/moe/test_silu_mul_per_token_group_quant_fp8_colmajor.py
 }
 
 
@@ -1040,7 +1042,8 @@ run_vllm_mamba_tests() {
       tests/kernels/mamba/test_causal_conv1d.py \
       tests/kernels/mamba/test_mamba_ssm.py \
       tests/kernels/mamba/test_mamba_ssm_ssd.py \
-      tests/kernels/mamba/test_mamba_mixer2.py
+      tests/kernels/mamba/test_mamba_mixer2.py \
+      tests/kernels/mamba/test_ssu_dispatch.py
 }
 
 
@@ -1103,9 +1106,11 @@ run_vllm_kda_tests() {
   echo "******  Running vLLM KDA tests                   *******"
   echo "********************************************************"
 
-  # No dedicated kernel tests exist yet — KDA is model-level integration only.
-  # This is a placeholder for when kernel-level tests are added.
-  echo "WARNING: No dedicated KDA kernel tests available. Skipping."
+  enter_vllm_test_env
+  TRITON_TEST_SUITE=vllm_kda \
+    run_pytest_command -vvv \
+      tests/kernels/test_kda.py \
+      tests/kernels/core/test_fused_rms_norm_gated.py
 }
 
 
