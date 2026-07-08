@@ -256,6 +256,19 @@ std::pair<py::object, py::object> specialize_tensordesc(PyObject *arg,
   if (!type_str_result)
     return {};
 
+  // Include padding in the specialization key so different padding values
+  // produce different compiled kernels. "N" encodes NaN padding and triggers
+  // tt.padding attribute via parse_attr.
+  static PyObject *padding_attr_name = PyUnicode_InternFromString("padding");
+  auto padding_obj = from_new_ref(PyObject_GetAttr(arg, padding_attr_name));
+  if (padding_obj) {
+    const char *pad_cstr = PyUnicode_AsUTF8(padding_obj.ptr());
+    if (pad_cstr && std::string_view(pad_cstr) == "nan") {
+      static PyObject *N_str = PyUnicode_InternFromString("N");
+      return {std::move(type_str_result), from_borrowed_ref(N_str)};
+    }
+  }
+
   return {std::move(type_str_result), py::none()};
 }
 

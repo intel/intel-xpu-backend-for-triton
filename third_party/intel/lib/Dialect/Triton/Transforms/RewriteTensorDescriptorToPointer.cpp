@@ -1177,15 +1177,21 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
                                            builder.getI64IntegerAttr(1));
       strideArgs.back() = c1;
 
-      auto paddingAttr =
-          triton::PaddingOptionAttr::get(ctx, triton::PaddingOption::PAD_ZERO);
+      // Determine padding from the tt.padding attribute on the descriptor arg
+      // (set by the specialization system for NaN-padded host descriptors).
+      auto paddingOpt = triton::PaddingOption::PAD_ZERO;
+      if (auto padAttr =
+              funcOp.getArgAttrOfType<IntegerAttr>(idx, "tt.padding"))
+        if (padAttr.getValue().getZExtValue() != 0)
+          paddingOpt = triton::PaddingOption::PAD_NAN;
+      auto paddingAttr = triton::PaddingOptionAttr::get(ctx, paddingOpt);
 
       auto syntheticDesc = triton::MakeTensorDescOp::create(
           builder, loc, descType, basePtr, ValueRange(shapeArgs),
           ValueRange(strideArgs), paddingAttr);
 
       // Replace all uses of the old descriptor arg and erase it.
-      oldDescArg.replaceAllUsesWith(syntheticDesc.getResult());
+      oldDescArg.replaceAllUsesWith(syntheticDesc);
       entryBlock.eraseArgument(oldDescIdx);
 
       // Update the function type.
