@@ -143,7 +143,7 @@ export MAX_JOBS=8
 pip install -e python --no-build-isolation --use-pep517
 ```
 
-The first build downloads a prebuilt LLVM (hash `ac5dc54d`, ~1.5 GB) to `~/.triton/llvm/`.
+The first build downloads a prebuilt LLVM (hash `62b7cf96`, ~1.5 GB) to `~/.triton/llvm/`.
 If the network is unavailable, set `LLVM_SYSPATH` to an existing matching LLVM.
 
 If `libtriton.so` doesn't appear after the pip install (pip sometimes finishes the Python
@@ -290,8 +290,8 @@ Tool locations (note: `llvm-as`/`llvm-dis` come from Triton's downloaded LLVM, n
 BUNDLER=/opt/intel/oneapi/compiler/2025.3/bin/compiler/clang-offload-bundler
 LLVM_LINK=/opt/intel/oneapi/compiler/2025.3/bin/compiler/llvm-link
 NM=/opt/intel/oneapi/compiler/2025.3/bin/compiler/llvm-nm
-LLVM_DIS=/home/jovyan/.triton/llvm/llvm-ac5dc54d-ubuntu-x64/bin/llvm-dis
-LLVM_AS=/home/jovyan/.triton/llvm/llvm-ac5dc54d-ubuntu-x64/bin/llvm-as
+LLVM_DIS=/home/jovyan/.triton/llvm/llvm-62b7cf96-ubuntu-x64/bin/llvm-dis
+LLVM_AS=/home/jovyan/.triton/llvm/llvm-62b7cf96-ubuntu-x64/bin/llvm-as
 ```
 
 **Step 1 — unbundle device bitcode from the SYCL fat objects:**

@@ -794,24 +794,26 @@ void init_gluon_ir(py::module_ &m) {
                             .getInsertionBlock()
                             ->getParentOp()
                             ->getParentOfType<ModuleOp>();
+#if TRITON_ENABLE_AMD && __has_include("amd/include/Dialect/TritonAMDGPU/IR/Dialect.h.inc")
              auto arch = getAMDArch(mod);
-             if (!arch.has_value())
-               return ttg::bankConflictsMemDesc(regLayout, smemLayout,
-                                                bitwidth);
-             tt::AMD::TargetInfo targetInfo(arch->str());
-             int numBanks = targetInfo.getSharedMemoryBanks();
-             auto vecBitwidth = std::max<int32_t>(
-                 32, smemLayout.getInDimSize(StringAttr::get(
-                         smemLayout.getInDimNames().begin()->getContext(),
-                         "vector")) *
-                         bitwidth);
-             auto [dstTile, srcTile] =
-                 targetInfo.getSharedLdStTiles(vecBitwidth);
-             (void)srcTile;
-             assert(srcTile.laneAddr.empty() &&
-                    "srcTile.laneAddr should be empty");
-             return ttg::bankConflictsMemDesc(regLayout, smemLayout, bitwidth,
-                                              numBanks, dstTile);
+             if (arch.has_value()) {
+               tt::AMD::TargetInfo targetInfo(arch->str());
+               int numBanks = targetInfo.getSharedMemoryBanks();
+               auto vecBitwidth = std::max<int32_t>(
+                   32, smemLayout.getInDimSize(StringAttr::get(
+                           smemLayout.getInDimNames().begin()->getContext(),
+                           "vector")) *
+                           bitwidth);
+               auto [dstTile, srcTile] =
+                   targetInfo.getSharedLdStTiles(vecBitwidth);
+               (void)srcTile;
+               assert(srcTile.laneAddr.empty() &&
+                      "srcTile.laneAddr should be empty");
+               return ttg::bankConflictsMemDesc(regLayout, smemLayout, bitwidth,
+                                                numBanks, dstTile);
+             }
+#endif
+             return ttg::bankConflictsMemDesc(regLayout, smemLayout, bitwidth);
            })
       .def(
           "create_local_dealloc",
@@ -1378,12 +1380,16 @@ void init_gluon_ir(py::module_ &m) {
               isKContig ? SmallVector<unsigned, 2>{kDimIndex, 1u - kDimIndex}
                         : SmallVector<unsigned, 2>{1u - kDimIndex, kDimIndex};
 
+#if TRITON_ENABLE_AMD && __has_include("amd/include/Dialect/TritonAMDGPU/IR/Dialect.h.inc")
           auto attr = composePaddedLayoutForAsyncCopyCDNA4(
               dotOpEnc, cast<ttg::TensorOrMemDesc>(Type(srcTy)), sharedOrder,
               /*useAsyncCopy=*/true, /*warpSize=*/64);
           if (!attr)
             return py::none();
           return layoutToGluon(attr);
+#else
+          return py::none();
+#endif
         });
 
   m.def("get_amd_wmma_scale_layout",

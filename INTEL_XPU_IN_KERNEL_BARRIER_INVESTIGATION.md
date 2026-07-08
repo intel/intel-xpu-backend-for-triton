@@ -740,9 +740,9 @@ leader-guarded), matching how the NVIDIA kernels are written, instead of calling
 ### Build environment note: the LLVM cache had to be restored first
 
 Rebuilding `libtriton.so` (needed for any C++ backend change) was initially
-blocked: this Triton pins LLVM **`ac5dc54d`** (v23, in
+blocked: this Triton pins LLVM **`62b7cf96`** (v23, in
 `3rdparty/triton/cmake/llvm-hash.txt`), but the shared cache
-`~/.triton/llvm/llvm-ac5dc54d-ubuntu-x64` had been **emptied** (0 files) — only
+`~/.triton/llvm/llvm-62b7cf96-ubuntu-x64` had been **emptied** (0 files) — only
 an unrelated **`0729a74e`** (v22, pinned by a *different* checkout,
 `~/triton-flex-compare/...`) remained complete. `~/.triton/llvm` is shared across
 every Triton checkout on the host, keyed by hash; a neighbor project's setup plus
@@ -754,14 +754,14 @@ API absent in v22).
 
 ```bash
 curl -L -o /tmp/llvm.tar.gz \
-  https://oaitriton.blob.core.windows.net/public/llvm-builds/llvm-ac5dc54d-ubuntu-x64.tar.gz
-rm -rf ~/.triton/llvm/llvm-ac5dc54d-ubuntu-x64
+  https://oaitriton.blob.core.windows.net/public/llvm-builds/llvm-62b7cf96-ubuntu-x64.tar.gz
+rm -rf ~/.triton/llvm/llvm-62b7cf96-ubuntu-x64
 tar xzf /tmp/llvm.tar.gz -C ~/.triton/llvm/
 ```
 
 This restored a complete LLVM 23 (559 static libs, MLIR cmake + headers). The
 CMake cache also had stale `0729a74e` paths (from debugging) that had to be
-reset to `ac5dc54d` before `cmake -G Ninja … && ninja libtriton.so` succeeded.
+reset to `62b7cf96` before `cmake -G Ninja … && ninja libtriton.so` succeeded.
 The blob store is online and serves the exact pinned hash, so this is the
 canonical recovery whenever a rebuild reports `Unsupported LLVM version 22` or an
 `IntegerRangeAnalysis` undefined symbol.
