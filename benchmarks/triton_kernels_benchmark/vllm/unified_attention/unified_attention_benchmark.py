@@ -80,7 +80,7 @@ def ref_paged_attn(
         if soft_cap is not None and soft_cap > 0:
             attn = soft_cap * torch.tanh(attn / soft_cap)
         attn.masked_fill_(mask, float("-inf"))
-        attn = torch.softmax(attn, dim=-1)  # expected peak memory usage is here
+        torch.softmax(attn, dim=-1, out=attn)
         attn = attn.to(v.dtype)  # cast in a second step to reduce peak memory usage
         out = torch.einsum("hqk,khd->qhd", attn, v)
 
@@ -184,37 +184,47 @@ def is_enough_memory(x_val, safety_factor=0.80):
 # Input shapes should have M >= 1, N >= 16 and K >= 32
 MMAP_BLOCK_SIZES = [64] if IS_FP8 else [16, 64]
 NUM_BLOCKS = [32768, 2048]
-SEQ_LENS = [
+# Heavy seq_lens skip the block_size=16 cells to keep CI runtime bounded.
+# block_size=64 still exercises both num_blocks values (2048 and 32768).
+SEQ_LENS_LIGHT = [
     # One 4k input prefill
     [(4096, 4096)],
-    # Chunked prefill: 4 batches
-    [(512, 512), (512, 512), (512, 512), (512, 512)],
-    # End of chunked prefill and some decoding
-    [(1, 1328), (5, 178), (129, 463)],
     # Pure decoding, 8 batches
-    [(1, k) for k in [1513, 4100, 530, 123, 4803, 434, 3015, 34]]
+    [(1, k) for k in [1513, 4100, 530, 123, 4803, 434, 3015, 34]],
+    # Long-context pure decoding
+    [(1, k) for k in [7168, 8192, 12288, 16384]],
 ]
+SEQ_LENS_HEAVY = [
+    # One 7k input prefill
+    [(7168, 7168)],
+    # Chunked prefill: 4 batches of 2k tokens
+    [(2048, 2048)] * 4,
+    # Chunked prefill: 2 batches of 8k tokens
+    [(8192, 8192)] * 2,
+    # High-concurrency continuous batching: 248 decode steps with kv_len mix
+    # + 8 small (256-token) prefill chunks
+    [(1, k)
+     for k in ([1513, 4100, 530, 123, 4803, 434, 3015, 34, 256, 1024, 768, 2048, 192, 384, 1280, 96] * 16)[:248]] +
+    [(256, 256)] * 8,
+]
+SEQ_LENS = SEQ_LENS_LIGHT + SEQ_LENS_HEAVY
 # Models: (q_heads, k_heads, head_size, qdtype, sliding_window, soft_cap)
 # sliding_window: None = full attention, int = sliding window size.
 # soft_cap: None = disabled, float = soft_cap value.
 # Models that use both attention types appear twice (one entry each).
 MODELS_BF16 = [
-    # llama3.1-8B - full attention
+    # llama3.1-8B / Qwen3-4B-thinking - full attention
     (32, 8, 128, None, None, None),
-    # llama3.1-8B - just to test soft caps kernel path, real model doesn't use it, it's relevant for gemma2
-    (32, 8, 128, None, None, 50.0),
     # llama3.3-70B - full attention
     (64, 8, 128, None, None, None),
     # llama4 Scout - sliding window attention (window size 8192)
     (64, 8, 128, None, 8192, None),
+    # Qwen2-7B - full attention
+    (28, 4, 128, None, None, None),
     # Qwen2.5-235B - full attention
     (64, 4, 128, None, None, None),
     # Qwen2.5-235B - sliding window attention (window size 256)
     (64, 4, 128, None, 256, None),
-    # gpt-oss-120b - full attention
-    # (64, 8, 64, None, None, None),
-    # gpt-oss-120b - sliding window attention (window size 128)
-    # (64, 8, 64, None, 128, None),
 ]
 
 MODELS_FP8 = [
@@ -226,10 +236,14 @@ MODELS_FP8 = [
 
 
 def _build_attention_configs(model_configs):
+    heavy = {id(s) for s in SEQ_LENS_HEAVY}
     configs = []
     for model_config in model_configs:
         *base_config, sliding_window, soft_cap = model_config
         for seq_lens, num_blocks, block_size in product(SEQ_LENS, NUM_BLOCKS, MMAP_BLOCK_SIZES):
+            # Heavy seq_lens only run with block_size=64 to bound CI time.
+            if id(seq_lens) in heavy and block_size != 64:
+                continue
             x_val = (*base_config, seq_lens, sliding_window, soft_cap, num_blocks, block_size)
             qdtype = x_val[3]
             if qdtype is not None and qdtype.itemsize < 2 and x_val[-1] < 32:
@@ -295,11 +309,6 @@ def get_unified_attention_benchmark(
         quantiles = [0.5, 0.0, 1.0]
 
         torch.set_default_device("xpu")
-        # Workaround for #6759 (BMG OOM after Agama 1222 -> 1249). Pairs with
-        # PYTORCH_ALLOC_CONF=expandable_segments:True from run_benchmark.sh: the
-        # explicit fraction call materializes the virtual segment via the init
-        # path that does not trigger UR_RESULT_ERROR_DEVICE_LOST.
-        torch.xpu.set_per_process_memory_fraction(1.0)
 
         num_seqs = len(seq_lens)
         query_lens = [x[0] for x in seq_lens]

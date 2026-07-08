@@ -81,7 +81,7 @@ jobs:
           EOF
 
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Override vLLM pin
         if: ${{ inputs.vllm_pin }}

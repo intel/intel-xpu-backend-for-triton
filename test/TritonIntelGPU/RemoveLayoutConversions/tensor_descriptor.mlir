@@ -288,3 +288,71 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32}
     tt.return %4 : tensor<4x1024xf16, #blocked>
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 32], warpsPerCTA = [2, 4], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 8], order = [1, 0]}>
+
+// COM: ============================================================
+// COM: Test 9: Descriptor store PRESERVES a SAME-order, SAME-lane-fast-dim
+// COM: convert when its dst is the canonical coalesced layout and the chain
+// COM: root is not a dot. Coalesce inserts the convert to the coalesced
+// COM: layout (warpsPerCTA [1,8] along the contiguous dim); forward
+// COM: propagation from the producer's compute layout (warpsPerCTA [2,4])
+// COM: would otherwise fold it and demote global store coalescing. Both
+// COM: layouts share order [1,0] and lane-fast dim 1, so the #7093
+// COM: lane-transpose guard does not fire; the canonical-layout guard does.
+// COM: GitHub issue #7104.
+// COM: ============================================================
+
+// CHECK-LABEL: @descriptor_store_canonical_coalesced_preserved
+// CHECK: %[[CVT:.*]] = ttg.convert_layout {{.*}} -> tensor<2x1024xf32, #blocked1>
+// CHECK: tt.descriptor_store {{.*}}, %[[CVT]] : !tt.tensordesc<2x1024xf32>, tensor<2x1024xf32, #blocked1>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  tt.func @descriptor_store_canonical_coalesced_preserved(%desc: !tt.tensordesc<2x1024xf32>, %src: tensor<2x1024xf32, #blocked>) {
+    %c0 = arith.constant 0 : i32
+    %cvt = ttg.convert_layout %src : tensor<2x1024xf32, #blocked> -> tensor<2x1024xf32, #blocked1>
+    tt.descriptor_store %desc[%c0, %c0], %cvt : !tt.tensordesc<2x1024xf32>, tensor<2x1024xf32, #blocked1>
+    tt.return
+  }
+}
+
+// -----
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
+// Canonical coalesced layout tritongpu-coalesce assigns to a 64x64xf16
+// descriptor-store operand at num-warps=8, threads-per-warp=16.
+#coalesced = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+
+// COM: ============================================================
+// COM: Test 10: Descriptor store FOLDS a convert from a dot result even when
+// COM: the convert's dst IS the canonical coalesced layout. When the
+// COM: convert-chain root is a tt.dot, rootIsDot=true suppresses the
+// COM: canonical-coalesced anchor (issue #4866): a dot result re-tiled for the
+// COM: store SHOULD take the dot (DPAS) layout, so the convert must fold. This
+// COM: is the negative counterpart of Test 9 -- same dst-is-canonical
+// COM: condition, but a dot root flips the anchor decision from preserve to
+// COM: fold. GitHub issue #7104 / #4866.
+// COM: ============================================================
+
+// CHECK-DAG: #[[$DPAS:.+]] = #ttig.dpas<{{.*}}>
+// CHECK-LABEL: @descriptor_store_dot_root_convert_folded
+// CHECK-NOT: ttg.convert_layout
+// CHECK: tt.descriptor_store {{.*}} : !tt.tensordesc<64x64xf16>, tensor<64x64xf16, #[[$DPAS]]>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  tt.func @descriptor_store_dot_root_convert_folded(
+      %desc: !tt.tensordesc<64x64xf16>,
+      %a: tensor<64x64xf16, #dot0>,
+      %b: tensor<64x64xf16, #dot1>,
+      %acc: tensor<64x64xf16, #dpas>) {
+    %c0 = arith.constant 0 : i32
+    %dot = tt.dot %a, %b, %acc, inputPrecision = ieee :
+        tensor<64x64xf16, #dot0> * tensor<64x64xf16, #dot1> -> tensor<64x64xf16, #dpas>
+    %cvt = ttg.convert_layout %dot : tensor<64x64xf16, #dpas> -> tensor<64x64xf16, #coalesced>
+    tt.descriptor_store %desc[%c0, %c0], %cvt : !tt.tensordesc<64x64xf16>, tensor<64x64xf16, #coalesced>
+    tt.return
+  }
+}

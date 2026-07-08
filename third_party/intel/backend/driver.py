@@ -228,11 +228,18 @@ class SpirvUtils:
         # we will need to rewrite the line in the general part of the code:
         # driver.active.utils.load_binary(self.name, self.kernel, self.metadata.shared, self.metadata.build_flags, device) ->
         # driver.active.utils.load_binary((self.name, self.kernel, self.metadata.shared, self.metadata.build_flags, device))
+        # PTSS-overflow detection happens at the C level (driver.c
+        # tryRaisePTSSOutOfResources): when zeModuleCreate fails and the
+        # IGC build log carries a PTSS marker, OutOfResources is raised
+        # directly so triton.runtime.autotuner can skip the offending tile.
+        # No per-launch overhead on the success path.
         try:
             return self.shared_library.load_binary(args)
         except Exception as e:
+            from triton.runtime.errors import IntelGPUError, OutOfResources
+            if isinstance(e, OutOfResources):
+                raise
             if str(e).startswith("ZE_"):
-                from triton.runtime.errors import IntelGPUError
                 raise IntelGPUError("Error during Intel load_binary: " + str(e)) from e
             else:
                 raise e

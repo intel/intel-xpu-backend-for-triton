@@ -10,7 +10,7 @@ import pathlib
 from triton.runtime.driver import driver
 from triton._internal_testing import is_xpu_cri
 from triton.backends.intel import extension_utils
-from triton.runtime.errors import IntelGPUError
+from triton.runtime.errors import IntelGPUError, OutOfResources
 
 
 @pytest.mark.xfail(is_xpu_cri(), reason="unable to get spill_size")
@@ -171,7 +171,11 @@ def test_auto_grf_on_build_failure(device, monkeypatch, capfd, grf_mode, expect_
     try:
         _register_heavy_kernel[(1, )](out, x, q, size, BLOCK=BLOCK, grf_mode=grf_mode,
                                       generate_native_code=generate_native_code)
-    except IntelGPUError:
+    except (IntelGPUError, OutOfResources):
+        # OutOfResources is the new spill-related error class introduced by
+        # the PTSS-overflow handling in this PR; both error types are
+        # acceptable here since this test exercises a kernel intentionally
+        # too large for the chosen GRF mode.
         pass
 
     outs = capfd.readouterr().out

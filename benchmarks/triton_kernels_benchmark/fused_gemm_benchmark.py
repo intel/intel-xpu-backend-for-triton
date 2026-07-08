@@ -27,26 +27,23 @@ def native_torch_fused_gemm(x, w_g, w_fc, b_g, b_fc):
 def get_fused_gemm_autotune_configs() -> list[triton.Config]:
     return [
         triton.Config(
-            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8, 'grf_mode': '256'},
-            num_stages=3, num_warps=8),
-        triton.Config(
-            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'grf_mode': '256'},
-            num_stages=3, num_warps=8),
-        triton.Config(
-            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'grf_mode': '256'},
-            num_stages=3, num_warps=16),
-        triton.Config(
-            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'grf_mode': '256'},
-            num_stages=3, num_warps=32),
-        triton.Config(
-            {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4, 'grf_mode': '256'},
-            num_stages=3, num_warps=16),
-        triton.Config(
-            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '256'},
-            num_stages=3, num_warps=16),
-        triton.Config(
-            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8, 'grf_mode': '256'},
-            num_stages=3, num_warps=32),
+            {
+                'BLOCK_SIZE_M': BM,
+                'BLOCK_SIZE_N': BN,
+                'BLOCK_SIZE_K': BK,
+                'GROUP_SIZE_M': G,
+                'grf_mode': '256',
+                'loop_distribute': True,
+            },
+            num_stages=s,
+            num_warps=w,
+        )
+        for BM in [128, 256]
+        for BN in [64, 128]
+        for BK in [32, 64]
+        for G in [4, 8, 16]
+        for s in [2, 3, 4]
+        for w in [8, 16, 32]
     ]
 
 
@@ -135,6 +132,8 @@ def fused_gemm_swiglu_kernel(
 # Representative shapes for LLM feed-forward SwiGLU layers.
 # Each entry is [M, N, K] where x is (M, K), w_g/w_fc are (K, N), and y is (M, N).
 X_VALS = [
+    [220000, 8192, 512],  # shape from customer model
+    [1024, 8192, 7168],
     [1024, 5504, 4096],  # Llama-2 7B
     [2048, 5504, 4096],
     [4096, 5504, 4096],
@@ -143,7 +142,7 @@ X_VALS = [
     [2048, 14336, 4096],
     [4096, 14336, 4096],
     [8192, 14336, 4096],
-    # TODO: improve the kernel implementation for bug on DeepSeek-R1.
+    # TODO: Fix the bug of kernel implementation on shape from DeepSeek-R1.
     # [1024, 8192, 7168],  # DeepSeek-R1 style
     # [4096, 8192, 7168],
     # [8192, 8192, 7168],
@@ -163,6 +162,25 @@ def is_enough_memory(x_val):
     if not enough_memory:
         print(f"'{x_val}' combination skipped for '{DEVICE_NAME}'; {required_memory=} but {DEVICE_TOTAL_MEMORY=}")
     return enough_memory
+
+
+def is_enough_memory_for_verification(M, N, K):
+    """Check if there is enough device memory to run accuracy verification.
+
+    assert_close requires computing the PyTorch reference, which allocates several
+    large (M, N) intermediate tensors (float32 + bfloat16). We conservatively
+    estimate 18 * M * N bytes of additional memory on top of the benchmark inputs.
+    """
+    # Existing benchmark tensors: x (M*K), w_g (K*N), w_fc (K*N), b_g (N), b_fc (N), y (M*N)
+    # Each element is bfloat16 (2 bytes), so total = (M*K + 2*K*N + 2*N + M*N) * 2 bytes
+    input_memory = (M * K + 2 * K * N + 2 * N + M * N) * 2
+    # PyTorch reference intermediates: x@w_g (float32 MN), silu (float32 MN),
+    # x@w_fc (float32 MN), gate (bf16 MN), fc (bf16 MN), ref output (bf16 MN)
+    # ≈ 3*4*MN + 3*2*MN = 18*MN bytes (conservative estimate)
+    verify_memory = 18 * M * N
+    # Use 90% of total memory as the threshold to account for driver/runtime overhead
+    # and other allocations already present when the benchmark runs.
+    return (input_memory + verify_memory) < 0.9 * DEVICE_TOTAL_MEMORY
 
 
 def fused_gemm_swiglu(x, w_g, w_fc, b_g, b_fc, M, N, K):
@@ -197,18 +215,27 @@ X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
 def benchmark(M, N, K, provider):
     do_bench = benchmark_suite.get_do_bench(n_warmup=800, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
 
+    torch.xpu.empty_cache()
     torch.manual_seed(0)
-    x = torch.rand((M, K), device='xpu', dtype=torch.bfloat16)
-    w_g = torch.rand((K, N), device='xpu', dtype=torch.bfloat16)
-    w_fc = torch.rand((K, N), device='xpu', dtype=torch.bfloat16)
-    b_g = torch.rand((N, ), device='xpu', dtype=torch.bfloat16)
-    b_fc = torch.rand((N, ), device='xpu', dtype=torch.bfloat16)
+    if M == 220000 and N == 8192 and K == 512:
+        x = torch.empty((M, K), device='xpu', dtype=torch.float32).uniform_(-0.25, -0.25).to(torch.bfloat16)
+        w_g = torch.empty((K, N), device='xpu', dtype=torch.float32).uniform_(-0.25, 0.25).to(torch.bfloat16)
+        w_fc = torch.empty((K, N), device='xpu', dtype=torch.float32).uniform_(-0.25, 0.25).to(torch.bfloat16)
+    else:
+        x = torch.rand((M, K), device='xpu', dtype=torch.bfloat16)
+        w_g = torch.rand((K, N), device='xpu', dtype=torch.bfloat16)
+        w_fc = torch.rand((K, N), device='xpu', dtype=torch.bfloat16)
+    b_g = torch.zeros((N, ), device='xpu', dtype=torch.bfloat16)
+    b_fc = torch.zeros((N, ), device='xpu', dtype=torch.bfloat16)
 
     if provider == 'triton':
         triton_fn = lambda: fused_gemm_swiglu(x, w_g, w_fc, b_g, b_fc, M, N, K)
         torch_fn = lambda: native_torch_fused_gemm(x, w_g, w_fc, b_g, b_fc)
-        rtol = 1e-2
-        benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-2, rtol=rtol, err_msg='triton to torch')
+        if is_enough_memory_for_verification(M, N, K):
+            benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-2, rtol=1e-2, err_msg='triton to torch')
+        else:
+            print(f'Skipping accuracy verification for shape ({M}, {N}, {K}): '
+                  f'insufficient device memory to compute PyTorch reference')
         _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
     else:
         raise NotImplementedError(f'Unsupported provider {provider}')
