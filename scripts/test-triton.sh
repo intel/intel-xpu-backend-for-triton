@@ -960,7 +960,8 @@ run_vllm_mrv2_tests() {
       tests/v1/worker/test_gpu_model_runner_v2_eplb.py \
       tests/v1/sample/test_sampler.py \
       tests/v1/sample/test_logprobs.py \
-      tests/v1/worker/test_gpu_gumbel_sample.py
+      tests/v1/worker/test_gpu_gumbel_sample.py \
+      tests/v1/kv_connector/unit/test_nixl_connector.py
 }
 
 
