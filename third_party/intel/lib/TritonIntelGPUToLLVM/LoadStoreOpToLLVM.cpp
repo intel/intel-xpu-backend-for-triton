@@ -1004,9 +1004,14 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
         mlir::ceil(sizeInfo.tileHeight * sizeInfo.tileWidth *
                        static_cast<int>(cfg.numPackedVals) * sizeInfo.vBlocks,
                    static_cast<int>(threadsPerWarp));
-    cfg.numValuesPerLoad = mlir::ceil(static_cast<int>(cfg.numElemsPerLoad),
-                                      static_cast<int>(cfg.numPackedVals));
-    cfg.packedType = IntegerType::get(ctx, cfg.packedElemSizeInBits);
+    // For the VNNI hardware format, use the packed i32 type as the load result
+    // type. Note: the cfg.numPackedVals is still 1 for VNNI format which it is
+    // not same as non-vnni packing.
+    cfg.numValuesPerLoad =
+        mlir::ceil(static_cast<unsigned>(cfg.numElemsPerLoad),
+                   sizeInfo.vnni ? (32 / elemSizeInBits) : cfg.numPackedVals);
+    cfg.packedType =
+        IntegerType::get(ctx, sizeInfo.vnni ? 32 : cfg.packedElemSizeInBits);
     cfg.load2DGenXType =
         LLVM::getVectorType(cfg.packedType, cfg.numValuesPerLoad);
     cfg.unpackedType = LLVM::getVectorType(eltTy, cfg.numElemsPerLoad);
@@ -1021,7 +1026,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     cfg.unpackedType = dpasCfg.unpackedType;
     cfg.load2DGenXType = dpasCfg.load2DGenXType;
     cfg.packedType = dpasCfg.packedType;
-    cfg.useVNNIFormat = dpasCfg.useVNNIFormat;
+    cfg.useVNNIFormat = sizeInfo.vnni || dpasCfg.useVNNIFormat;
     cfg.tileHeight = dpasCfg.tileHeight;
     cfg.tileWidth = dpasCfg.tileWidth;
     cfg.vBlocks = dpasCfg.vBlocks;
@@ -1774,13 +1779,31 @@ struct PrefetchOpConversion
     Value rowStride = b.i64_val(stride);
 
     // Surface dimensions for the 2D block prefetch hardware.
-    // baseWidth must equal the row stride (surface width) because the HW
-    // computes addresses as base + y * pitch + x. Using the tile width would
-    // be wrong when pitch > tile width.
-    // baseHeight is the full logical tensor height (surface height), not the
-    // tile height, so the hardware's bounds checking spans the whole tensor.
-    Value baseWidth = b.i64_val(stride);
-    Value baseHeight = b.i64_val(tensorShape[rank - 2]);
+    Value baseWidth;
+    Value baseHeight;
+    if (stride == 0) {
+      // Broadcast row (M == 1): single row, real surface width, inflated pitch
+      // (see #7267). baseWidth stays the true extent so HW x-bounds checking is
+      // preserved; pitch gets headroom so it stays >= baseWidth after alignment
+      // widens baseWidth by up to 63 bytes. With baseHeight == 1, pitch never
+      // affects the address, so inflating it is free.
+      constexpr int64_t MIN_PITCH = 64;
+      constexpr int64_t ALIGNMENT_HEADROOM = 64;
+      int64_t surfaceWidthElems = tensorShape[rank - 1];
+      int64_t surfaceWidthBytes =
+          surfaceWidthElems * static_cast<int64_t>(elemSizeInBytes);
+      baseWidth = b.i64_val(surfaceWidthElems);
+      int64_t pitchBytes =
+          std::max<int64_t>(MIN_PITCH, surfaceWidthBytes + ALIGNMENT_HEADROOM);
+      pitchBytes = (pitchBytes + 15) & ~15;
+      rowStride = b.i64_val(pitchBytes / elemSizeInBytes);
+      baseHeight = b.i64_val(1);
+    } else {
+      // baseWidth is the row stride (surface width); baseHeight is the full
+      // tensor height so HW bounds checking spans the whole surface.
+      baseWidth = b.i64_val(stride);
+      baseHeight = b.i64_val(tensorShape[rank - 2]);
+    }
 
     // Offsets start at 0; per-warp offsets computed by emit2DBlockPrefetchOps.
     Value offsetBaseX = b.i32_val(0);
@@ -2630,7 +2653,9 @@ struct DescriptorStoreOpToBlockIOConversion
       return failure();
 
     auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
-          isTransposeRequired, regPackedBases] = std::move(sizeInfo);
+          isTransposeRequired, useVNNIFormat, regPackedBases] =
+        std::move(sizeInfo);
+    assert(!useVNNIFormat && "2D block store does not support VNNI");
     unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
 
     Location loc = op.getLoc();
@@ -2871,7 +2896,7 @@ struct StoreOpToBlockIOConversion
       sizeInfo = BlockIOTileSizeInfo(height, width, /*numElemPerPackedVal=*/1,
                                      /*vBlocks=*/1, /*rowDim=*/0,
                                      /*colDim=*/rank - 1, /*transpose=*/false,
-                                     std::move(regPackBases));
+                                     /*vnni=*/false, std::move(regPackBases));
       // The reshape path bypasses getBlockIOTileSize (and thus
       // validate2DBlockStoreTile), so apply the HW address payload restriction
       // here; vBlocks and transpose are already fixed (1 / false) above.
@@ -2892,7 +2917,9 @@ struct StoreOpToBlockIOConversion
     }
 
     auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
-          isTransposeRequired, regPackedBases] = std::move(sizeInfo);
+          isTransposeRequired, useVNNIFormat, regPackedBases] =
+        std::move(sizeInfo);
+    assert(!useVNNIFormat && "2D block store does not support VNNI");
     unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
 
     Location loc = op.getLoc();
@@ -4086,7 +4113,7 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
       sizeInfo = BlockIOTileSizeInfo(height, width, /*numElemPerPackedVal=*/1,
                                      /*vBlocks=*/1, /*rowDim=*/0,
                                      /*colDim=*/rank - 1, /*transpose=*/false,
-                                     std::move(regPackBases));
+                                     /*vnni=*/false, std::move(regPackBases));
     } else {
       sizeInfo =
           getBlockIOTileSize<true>(*llEncoding, contiguousDim, elemSizeInBits,
