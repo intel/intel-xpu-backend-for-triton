@@ -1,5 +1,5 @@
 diff --git a/vllm/v1/attention/ops/triton_attention_helpers.py b/vllm/v1/attention/ops/triton_attention_helpers.py
-index ed9a38a..3999844 100644
+index ed9a38ad6..39998440b 100644
 --- a/vllm/v1/attention/ops/triton_attention_helpers.py
 +++ b/vllm/v1/attention/ops/triton_attention_helpers.py
 @@ -64,7 +64,7 @@ def resolve_seq_and_query_len(
@@ -33,7 +33,7 @@ index ed9a38a..3999844 100644
      right = num_seqs
      while left < right:
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 86ead16..e0c979e 100644
+index 86ead168e..966da0d8b 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -7,8 +7,6 @@
@@ -53,7 +53,7 @@ index 86ead16..e0c979e 100644
      init_softmax_M,
      load_qq_bias_tile,
      resolve_seq_and_query_len,
-@@ -175,6 +173,75 @@ def _store_output_td(
+@@ -175,6 +172,75 @@ def _store_output_td(
      )
  
  
@@ -129,7 +129,7 @@ index 86ead16..e0c979e 100644
  @triton.jit
  def kernel_unified_attention(
      # Output destination for the 2D path.  In 3D mode per-segment partials
-@@ -232,6 +298,7 @@ def kernel_unified_attention(
+@@ -235,6 +301,7 @@ def kernel_unified_attention(
      BLOCK_M: tl.constexpr,
      NUM_SEGMENTS_PER_SEQ: tl.constexpr,
      USE_FP8: tl.constexpr,
@@ -137,7 +137,7 @@ index 86ead16..e0c979e 100644
      # Toggles 2D vs 3D layout.  The 2D path runs the full sequence in one
      # tile loop and writes to ``output_ptr``.  The 3D path scopes the loop
      # to ``[segm_idx, segm_idx+1) × tiles_per_segment`` and writes
-@@ -282,6 +323,9 @@ def kernel_unified_attention(
+@@ -282,6 +349,9 @@ def kernel_unified_attention(
      USE_TD_QO: tl.constexpr = False,
      Q_IS_FP8: tl.constexpr = False,
  ):
@@ -147,7 +147,7 @@ index 86ead16..e0c979e 100644
      # Per-(token, head) scale caches: used iff KV_QUANT_MODE in {2, 3}.
      USE_PER_TOKEN_HEAD_SCALES: tl.constexpr = (KV_QUANT_MODE >= 2) and (
          KV_QUANT_MODE <= 3
-@@ -308,9 +350,33 @@ def kernel_unified_attention(
+@@ -311,9 +381,33 @@ def kernel_unified_attention(
      if q_block_local_idx * BLOCK_Q >= cur_batch_query_len:
          return
  
@@ -181,7 +181,7 @@ index 86ead16..e0c979e 100644
              return
      else:
          tiles_per_segment = 0
-@@ -321,13 +387,8 @@ def kernel_unified_attention(
+@@ -324,13 +418,8 @@ def kernel_unified_attention(
          BLOCK_Q, cur_batch_query_len - q_block_local_idx * BLOCK_Q
      )
  
@@ -195,7 +195,7 @@ index 86ead16..e0c979e 100644
      query_offset = (
          query_offset_0[:, None] * query_stride_0
          + query_offset_1[:, None] * query_stride_1
-@@ -335,8 +396,6 @@ def kernel_unified_attention(
+@@ -338,8 +427,6 @@ def kernel_unified_attention(
      )
  
      dim_mask = tl.where(offs_d < HEAD_SIZE, 1, 0).to(tl.int1)
@@ -204,7 +204,7 @@ index 86ead16..e0c979e 100644
  
      # Q : (BLOCK_M, HEAD_SIZE_PADDED)
      if USE_TD_QO:
-@@ -522,12 +566,12 @@ def kernel_unified_attention(
+@@ -522,12 +609,12 @@ def kernel_unified_attention(
  
          # S : (BLOCK_M, TILE_SIZE)
          S = tl.zeros(shape=(BLOCK_M, TILE_SIZE), dtype=tl.float32)
@@ -221,7 +221,7 @@ index 86ead16..e0c979e 100644
  
          if USE_SOFTCAP:
              S = apply_softcap(S, softcap)
-@@ -549,27 +593,14 @@ def kernel_unified_attention(
+@@ -549,27 +636,14 @@ def kernel_unified_attention(
          M, L, P, alpha = softmax_step(S, M, L)
          acc = acc * alpha[:, None]
  
@@ -253,7 +253,7 @@ index 86ead16..e0c979e 100644
  
      # ---- Epilogue ---------------------------------------------------------
      if IS_3D:
-@@ -652,6 +734,11 @@ def kernel_unified_attention(
+@@ -669,6 +743,11 @@ def kernel_unified_attention(
              )
  
  
@@ -265,7 +265,7 @@ index 86ead16..e0c979e 100644
  @triton.jit
  def reduce_segments(
      output_ptr,  # [num_tokens, num_query_heads, head_size]
-@@ -666,11 +753,9 @@ def reduce_segments(
+@@ -683,11 +762,9 @@ def reduce_segments(
      output_stride_0: tl.int64,  # int
      output_stride_1: tl.int64,  # int, should be equal to head_size
      block_table_stride: tl.int64,  # int
@@ -277,7 +277,7 @@ index 86ead16..e0c979e 100644
      NUM_SEGMENTS_PER_SEQ: tl.constexpr,  # int
      USE_FP8: tl.constexpr,  # bool
      FP8_MIN: tl.constexpr = float8_info.min,
-@@ -679,31 +764,17 @@ def reduce_segments(
+@@ -696,31 +773,17 @@ def reduce_segments(
      query_token_idx = tl.program_id(0)
      query_head_idx = tl.program_id(1)
  
@@ -313,7 +313,7 @@ index 86ead16..e0c979e 100644
      overall_max = tl.max(segm_max)
  
      # load and rescale segment exp sums
-@@ -867,11 +897,6 @@ def unified_attention(
+@@ -867,11 +930,6 @@ def unified_attention(
      num_queries_per_kv = num_query_heads // num_kv_heads
      head_size = q.shape[2]
  
@@ -325,7 +325,7 @@ index 86ead16..e0c979e 100644
      # Tuned launch parameters; ``None`` lets Triton pick its defaults.
      launch_num_warps: int | None = None
      launch_num_stages: int | None = None
-@@ -887,22 +912,9 @@ def unified_attention(
+@@ -887,22 +945,9 @@ def unified_attention(
          and current_platform.is_device_capability_family(100)
      )
      if tuned_large_head:
@@ -348,7 +348,7 @@ index 86ead16..e0c979e 100644
      sliding_window_val = 1 + window_size[0] if window_size[0] >= 0 else 0
  
      # Compute chunked block size from sliding window if needed.
-@@ -913,22 +925,6 @@ def unified_attention(
+@@ -913,25 +958,8 @@ def unified_attention(
      elif sliding_window_val <= 0:
          chunk_lookback = -1
  
@@ -358,9 +358,7 @@ index 86ead16..e0c979e 100644
 -    TILE_SIZE_DECODE = _get_tile_size(
 -        head_size, sliding_window_val, q.element_size(), is_prefill=False
 -    )
-+    # Tile size is selected by Triton autotuning between 16 and 32.
-+    is_fp8_input = q.element_size() == 1
- 
+-
 -    # Wider KV tile for the tuned large-head path (see above). Only the 2D
 -    # path (used when max_seqlen_q > 1) reads TILE_SIZE_PREFILL.
 -    if tuned_large_head:
@@ -373,7 +371,12 @@ index 86ead16..e0c979e 100644
 -    if use_td:
 -        TILE_SIZE_PREFILL = min(TILE_SIZE_PREFILL, block_size)
 -        TILE_SIZE_DECODE = min(TILE_SIZE_DECODE, block_size)
-@@ -974,18 +990,11 @@ def unified_attention(
++    # Tile size is selected by Triton autotuning between 16 and 32.
++    is_fp8_input = q.element_size() == 1
+ 
+     # Tensor descriptors for Q load / output store require every element
+     # of ``block_shape`` to be a power of 2.  ``num_queries_per_kv`` is
+@@ -974,18 +1002,11 @@ def unified_attention(
      # Launch the 2D kernel if
      # 1. No intermediate tiled softmax buffers for the 3D kernel have been allocated, or
      # 2. The batch includes at least one prefill request, or
@@ -397,7 +400,7 @@ index 86ead16..e0c979e 100644
  
      # The kernel signature is the same for 2D and 3D — only the launch
      # grid + a handful of constexpr toggles differ.  Per-token-head scale
-@@ -1006,15 +1015,55 @@ def unified_attention(
+@@ -1006,18 +1027,56 @@ def unified_attention(
          v_scale_ptr = None
      # 3D needs real segm tensors; 2D never touches them.  Pass ``None`` in
      # 2D mode so Triton can skip materialising these pointer arguments.
@@ -443,12 +446,14 @@ index 86ead16..e0c979e 100644
 +    # BLOCK_Q is autotuned, so compute the grid from meta.
      if not use_3d:
 -        grid = (total_num_q_blocks, num_kv_heads)
+-        tile_size = TILE_SIZE_PREFILL
 +        grid = lambda meta: (
 +            q.shape[0] // meta["BLOCK_Q"] + num_seqs,
 +            num_kv_heads,
 +        )
      else:
 -        grid = (total_num_q_blocks, num_kv_heads, num_par_softmax_segments)
+-        tile_size = TILE_SIZE_DECODE
 +        grid = lambda meta: (
 +            q.shape[0] // meta["BLOCK_Q"] + num_seqs,
 +            num_kv_heads,
@@ -456,7 +461,8 @@ index 86ead16..e0c979e 100644
 +        )
  
      launch_kwargs: dict[str, int] = {}
-@@ -1003,7 +1078,6 @@ def unified_attention(
+     if launch_num_warps is not None:
+@@ -1055,7 +1114,6 @@ def unified_attention(
          output_stride_1=out.stride(1),
          qq_bias_stride_0=qq_bias.stride(0) if use_qq_bias else 0,
          BLOCK_SIZE=block_size,
@@ -464,7 +470,7 @@ index 86ead16..e0c979e 100644
          HEAD_SIZE=head_size,
          HEAD_SIZE_PADDED=head_size_padded,
          USE_ALIBI_SLOPES=use_alibi_slopes,
-@@ -1030,9 +1104,8 @@ def unified_attention(
+@@ -1085,11 +1143,10 @@ def unified_attention(
          stride_vs_slot=vs_slot,
          stride_vs_head=vs_head,
          query_start_len_ptr=cu_seqlens_q,
@@ -475,7 +481,9 @@ index 86ead16..e0c979e 100644
          USE_FP8=output_scale is not None,
 +        IS_FP8_INPUT=is_fp8_input,
          IS_3D=use_3d,
-@@ -1057,11 +1130,9 @@ def unified_attention(
+         KV_QUANT_MODE=kv_quant_mode,
+         Q_IS_FP8=(q.dtype == current_platform.fp8_dtype()),
+@@ -1113,11 +1170,9 @@ def unified_attention(
              output_stride_0=out.stride(0),
              output_stride_1=out.stride(1),
              block_table_stride=block_table.stride(0),
