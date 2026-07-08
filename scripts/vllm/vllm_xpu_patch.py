@@ -146,6 +146,17 @@ def _find_cuda_patterns(source: str) -> list[dict]:
                 "col": node.col_offset,
             })
 
+        # torch.cuda.mem_get_info() calls
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "mem_get_info" and isinstance(node.func.value, ast.Attribute)
+                and node.func.value.attr == "cuda" and isinstance(node.func.value.value, ast.Name)
+                and node.func.value.value.id == "torch"):
+            patterns.append({
+                "type": "cuda_mem_get_info",
+                "line": node.lineno,
+                "col": node.col_offset,
+            })
+
         # variable = "cuda" assignments
         if isinstance(node, ast.Assign) and len(node.targets) == 1:
             target = node.targets[0]
@@ -228,6 +239,10 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
         elif ptype == "cuda_get_device_capability":
             # Replace torch.cuda.get_device_capability() with torch.xpu.get_device_capability()
             lines[line_idx] = line.replace("torch.cuda.get_device_capability()", "torch.xpu.get_device_capability()")
+
+        elif ptype == "cuda_mem_get_info":
+            # Replace torch.cuda.mem_get_info() with torch.xpu.mem_get_info()
+            lines[line_idx] = line.replace("torch.cuda.mem_get_info()", "torch.xpu.mem_get_info()")
 
         elif ptype == "device_capability_compare":
             # Handle: if current_platform.get_device_capability() < (X, Y):
