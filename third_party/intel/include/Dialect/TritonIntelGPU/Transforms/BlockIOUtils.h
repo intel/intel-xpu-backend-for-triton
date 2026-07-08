@@ -23,13 +23,14 @@ struct BlockIOTileSizeInfo {
   BlockIOTileSizeInfo() = delete;
   BlockIOTileSizeInfo(int tileHeight, int tileWidth, int numElemPerPackedVal,
                       int vBlocks, int rowDim, int colDim, bool transpose,
+                      bool vnni,
                       std::optional<SetVector<unsigned>> regPackedBases)
       : tileHeight(tileHeight), tileWidth(tileWidth),
         numElemPerPackedVal(numElemPerPackedVal), vBlocks(vBlocks),
-        rowDim(rowDim), colDim(colDim), transpose(transpose),
+        rowDim(rowDim), colDim(colDim), transpose(transpose), vnni(vnni),
         regPackedBases(regPackedBases) {}
   static BlockIOTileSizeInfo unknown() {
-    return {-1, -1, -1, -1, -1, -1, false, std::nullopt};
+    return {-1, -1, -1, -1, -1, -1, false, false, std::nullopt};
   }
 
   int tileHeight;
@@ -39,6 +40,7 @@ struct BlockIOTileSizeInfo {
   int rowDim;
   int colDim;
   bool transpose;
+  bool vnni;
   std::optional<SetVector<unsigned>> regPackedBases;
 
   bool isValid() const {

@@ -2,5 +2,5 @@ setuptools>=70.2.0
 build
 cmake>=3.20,<4.0
 ninja<1.13.0
-pybind11>=2.13.1
+nanobind==2.10.2
 lit
