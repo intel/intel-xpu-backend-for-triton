@@ -79,19 +79,6 @@ index 2a3bdb91f..c74587d5f 100644
              env[_SPAWN_CHILD_ENV] = "1"
  
              result = subprocess.run(
-diff --git a/tests/v1/attention/test_mla_backends.py b/tests/v1/attention/test_mla_backends.py
-index 1ef4f9661..8f3399ce0 100644
---- a/tests/v1/attention/test_mla_backends.py
-+++ b/tests/v1/attention/test_mla_backends.py
-@@ -783,7 +783,7 @@ def test_backend_correctness(
-                 ),
-             ),
-         )
--    except ImportError:
-+    except (ImportError, AttributeError):
-         prefill_invalid_reasons = ["ImportError"]
-     if prefill_invalid_reasons:
-         pytest.skip(
 diff --git a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
 index 21bda8e17..e7f11e934 100644
 --- a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
