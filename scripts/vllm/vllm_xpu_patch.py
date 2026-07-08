@@ -147,10 +147,9 @@ def _find_cuda_patterns(source: str) -> list[dict]:
             })
 
         # torch.cuda.mem_get_info() calls
-        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                and node.func.attr == "mem_get_info" and isinstance(node.func.value, ast.Attribute)
-                and node.func.value.attr == "cuda" and isinstance(node.func.value.value, ast.Name)
-                and node.func.value.value.id == "torch"):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "mem_get_info"
+                and isinstance(node.func.value, ast.Attribute) and node.func.value.attr == "cuda"
+                and isinstance(node.func.value.value, ast.Name) and node.func.value.value.id == "torch"):
             patterns.append({
                 "type": "cuda_mem_get_info",
                 "line": node.lineno,
@@ -203,11 +202,11 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
         ptype = pattern["type"]
 
         if ptype in (
-            "device_kwarg",
-            "torch_device",
-            "torch_set_default_device",
-            "device_default_param",
-            "device_posarg",
+                "device_kwarg",
+                "torch_device",
+                "torch_set_default_device",
+                "device_default_param",
+                "device_posarg",
         ):
             # Replace "cuda" with "xpu" in device arguments
             lines[line_idx] = line.replace('"cuda"', '"xpu"', 1)

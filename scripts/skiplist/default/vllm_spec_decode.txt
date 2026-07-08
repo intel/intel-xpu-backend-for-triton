@@ -10,7 +10,7 @@ tests/v1/spec_decode/test_eagle.py::test_propose
 tests/v1/spec_decode/test_max_len.py::test_eagle_max_len
 
 # Skip tests that query the available free memory:
-# Model Runner V2 does not yet support: ngram/ngram_gpu speculative decoding 
+# Model Runner V2 does not yet support: ngram/ngram_gpu speculative decoding
 tests/v1/spec_decode/test_max_len.py::test_ngram_max_len
 #tests/v1/spec_decode/test_speculators_eagle3.py::test_eagle3_speculators_model
 
