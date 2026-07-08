@@ -1004,9 +1004,14 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
         mlir::ceil(sizeInfo.tileHeight * sizeInfo.tileWidth *
                        static_cast<int>(cfg.numPackedVals) * sizeInfo.vBlocks,
                    static_cast<int>(threadsPerWarp));
-    cfg.numValuesPerLoad = mlir::ceil(static_cast<int>(cfg.numElemsPerLoad),
-                                      static_cast<int>(cfg.numPackedVals));
-    cfg.packedType = IntegerType::get(ctx, cfg.packedElemSizeInBits);
+    // For the VNNI hardware format, use the packed i32 type as the load result
+    // type. Note: the cfg.numPackedVals is still 1 for VNNI format which it is
+    // not same as non-vnni packing.
+    cfg.numValuesPerLoad =
+        mlir::ceil(static_cast<unsigned>(cfg.numElemsPerLoad),
+                   sizeInfo.vnni ? (32 / elemSizeInBits) : cfg.numPackedVals);
+    cfg.packedType =
+        IntegerType::get(ctx, sizeInfo.vnni ? 32 : cfg.packedElemSizeInBits);
     cfg.load2DGenXType =
         LLVM::getVectorType(cfg.packedType, cfg.numValuesPerLoad);
     cfg.unpackedType = LLVM::getVectorType(eltTy, cfg.numElemsPerLoad);
@@ -1021,7 +1026,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     cfg.unpackedType = dpasCfg.unpackedType;
     cfg.load2DGenXType = dpasCfg.load2DGenXType;
     cfg.packedType = dpasCfg.packedType;
-    cfg.useVNNIFormat = dpasCfg.useVNNIFormat;
+    cfg.useVNNIFormat = sizeInfo.vnni || dpasCfg.useVNNIFormat;
     cfg.tileHeight = dpasCfg.tileHeight;
     cfg.tileWidth = dpasCfg.tileWidth;
     cfg.vBlocks = dpasCfg.vBlocks;
@@ -2648,7 +2653,9 @@ struct DescriptorStoreOpToBlockIOConversion
       return failure();
 
     auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
-          isTransposeRequired, regPackedBases] = std::move(sizeInfo);
+          isTransposeRequired, useVNNIFormat, regPackedBases] =
+        std::move(sizeInfo);
+    assert(!useVNNIFormat && "2D block store does not support VNNI");
     unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
 
     Location loc = op.getLoc();
@@ -2889,7 +2896,7 @@ struct StoreOpToBlockIOConversion
       sizeInfo = BlockIOTileSizeInfo(height, width, /*numElemPerPackedVal=*/1,
                                      /*vBlocks=*/1, /*rowDim=*/0,
                                      /*colDim=*/rank - 1, /*transpose=*/false,
-                                     std::move(regPackBases));
+                                     /*vnni=*/false, std::move(regPackBases));
       // The reshape path bypasses getBlockIOTileSize (and thus
       // validate2DBlockStoreTile), so apply the HW address payload restriction
       // here; vBlocks and transpose are already fixed (1 / false) above.
@@ -2910,7 +2917,9 @@ struct StoreOpToBlockIOConversion
     }
 
     auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
-          isTransposeRequired, regPackedBases] = std::move(sizeInfo);
+          isTransposeRequired, useVNNIFormat, regPackedBases] =
+        std::move(sizeInfo);
+    assert(!useVNNIFormat && "2D block store does not support VNNI");
     unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
 
     Location loc = op.getLoc();
@@ -4104,7 +4113,7 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
       sizeInfo = BlockIOTileSizeInfo(height, width, /*numElemPerPackedVal=*/1,
                                      /*vBlocks=*/1, /*rowDim=*/0,
                                      /*colDim=*/rank - 1, /*transpose=*/false,
-                                     std::move(regPackBases));
+                                     /*vnni=*/false, std::move(regPackBases));
     } else {
       sizeInfo =
           getBlockIOTileSize<true>(*llEncoding, contiguousDim, elemSizeInBits,
