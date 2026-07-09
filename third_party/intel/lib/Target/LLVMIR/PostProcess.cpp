@@ -243,7 +243,7 @@ void expandSubByteVectorBitcast(Module &module) {
   }
 }
 
-void postProcessLLVMIR(llvm::Module &mod) {
+void postProcessLLVMIR(llvm::Module &mod, bool isLTS) {
   // __devicelib_assert_fail must be a declaration so that
   // IGC can replace it with a runtime assert function.
   // If a 'fallback' implementation is defined in SYCL libarary, the
@@ -263,8 +263,10 @@ void postProcessLLVMIR(llvm::Module &mod) {
   expandSubByteBitReverse(mod);
   expandSubByteBitwiseAnd(mod);
 
-  // Remove sub-byte integer vector bitcasts that crash IGC on LTS2.
-  expandSubByteVectorBitcast(mod);
+  // Remove sub-byte integer vector bitcasts that crash IGC on LTS2. Gated on
+  // the LTS driver so it can be dropped once the driver ships the IGC fix.
+  if (isLTS)
+    expandSubByteVectorBitcast(mod);
 }
 
 } // namespace mlir::triton::intel
