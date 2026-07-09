@@ -44,7 +44,8 @@ void XpuptiConfigureData::initialize(pti_device_handle_t device) {
   this->device = device;
 
   // Note: PTI View must be initialized BEFORE calling ptiPcSamplingEnable.
-  std::cout << "MARK#2\n";
+  // This should be done once globally by the profiler initialization.
+
   // Create PC sampling handle
   xpupti::pcSamplingEnable<true>(&handle);
 
@@ -52,31 +53,8 @@ void XpuptiConfigureData::initialize(pti_device_handle_t device) {
   // Pass nullptr to profile all available devices
   xpupti::pcSamplingConfigure<true>(handle, nullptr, 0, samplingPeriodNs);
 
-  // Get stall reasons
-  size_t reasonCount = 0;
-  xpupti::pcSamplingGetStallReasons<true>(handle, nullptr, &reasonCount);
-
-  if (reasonCount > 0) {
-    numStallReasons = reasonCount;
-    stallReasonInfos =
-        new pti_pc_sampling_stall_reason_info_t[numStallReasons];
-
-    // Set struct size for each element
-    for (size_t i = 0; i < numStallReasons; i++) {
-      stallReasonInfos[i]._struct_size =
-          sizeof(pti_pc_sampling_stall_reason_info_t);
-    }
-
-    xpupti::pcSamplingGetStallReasons<true>(handle, stallReasonInfos,
-                                            &reasonCount);
-
-    // Match stall reasons to metric indices
-    matchStallReasonsToIndices(numStallReasons, stallReasonInfos,
-                               stallReasonIndexToMetricIndex);
-
-    // Allocate aggregated samples array
-    aggregatedSamples = new uint64_t[numStallReasons];
-  }
+  // Note: Stall reasons are queried AFTER stopping collection, not during init.
+  // See processPCSamplingData() for the actual query.
 }
 
 XpuptiConfigureData *
@@ -109,6 +87,34 @@ void XpuptiPCSampling::start(pti_device_handle_t device) {
 
 void XpuptiPCSampling::processPCSamplingData(
     XpuptiConfigureData *configureData, const DataToEntryMap &dataToEntry) {
+
+  // Get stall reasons (must be called after StopCollection, not during init)
+  size_t reasonCount = 0;
+  xpupti::pcSamplingGetStallReasons<true>(configureData->handle, nullptr,
+                                          &reasonCount);
+
+  if (reasonCount > 0) {
+    configureData->numStallReasons = reasonCount;
+    configureData->stallReasonInfos =
+        new pti_pc_sampling_stall_reason_info_t[reasonCount];
+
+    // Set struct size for each element
+    for (size_t i = 0; i < reasonCount; i++) {
+      configureData->stallReasonInfos[i]._struct_size =
+          sizeof(pti_pc_sampling_stall_reason_info_t);
+    }
+
+    xpupti::pcSamplingGetStallReasons<true>(configureData->handle,
+                                            configureData->stallReasonInfos,
+                                            &reasonCount);
+
+    // Match stall reasons to metric indices
+    matchStallReasonsToIndices(reasonCount, configureData->stallReasonInfos,
+                               configureData->stallReasonIndexToMetricIndex);
+
+    // Allocate aggregated samples array
+    configureData->aggregatedSamples = new uint64_t[reasonCount];
+  }
 
   // Get profiled devices
   size_t deviceCount = 0;
