@@ -609,6 +609,8 @@ class intel_knobs(base_knobs):
     # the actual device extensions.
     device_extensions: env_opt_str = env_opt_str("TRITON_INTEL_DEVICE_EXTENSIONS")
     device_arch: env_opt_str = env_opt_str("TRITON_INTEL_DEVICE_ARCH")
+    # SYCL compiler Triton needs to be compatible with when generating kernel launchers
+    sycl_compiler: env_opt_str = env_opt_str("TRITON_INTEL_SYCL_COMPILER")
 
 
 class amd_knobs(base_knobs):
