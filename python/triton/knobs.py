@@ -595,6 +595,7 @@ class intel_knobs(base_knobs):
     disable_annotate_cache_control: env_bool = env_bool("TRITON_INTEL_DISABLE_ANNOTATE_CACHE_CONTROL", False)
     enable_code_sinking: env_bool = env_bool("TRITON_INTEL_ENABLE_CODE_SINKING", False)
     disable_canonicalize_pointers: env_bool = env_bool("TRITON_INTEL_DISABLE_CANONICALIZE_POINTERS", False)
+    enable_loop_distribution: env_bool = env_bool("TRITON_INTEL_ENABLE_LOOP_DISTRIBUTION", False)
     fast_math: _env_fast_math = _env_fast_math()
 
     enable_dump_spirv_kernel_args: env_bool = env_bool("TRITON_XPU_ENABLE_DUMP_SPIRV_KERNEL_ARGS", False)
@@ -608,6 +609,8 @@ class intel_knobs(base_knobs):
     # the actual device extensions.
     device_extensions: env_opt_str = env_opt_str("TRITON_INTEL_DEVICE_EXTENSIONS")
     device_arch: env_opt_str = env_opt_str("TRITON_INTEL_DEVICE_ARCH")
+    # SYCL compiler Triton needs to be compatible with when generating kernel launchers
+    sycl_compiler: env_opt_str = env_opt_str("TRITON_INTEL_SYCL_COMPILER")
 
 
 class amd_knobs(base_knobs):
