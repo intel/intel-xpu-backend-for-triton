@@ -1,12 +1,13 @@
 diff --git a/tests/kernels/attention/test_cascade_flash_attn.py b/tests/kernels/attention/test_cascade_flash_attn.py
-index 80c5c853d..6f10efbdf 100755
+index 80c5c853d..e6ef4c183 100755
 --- a/tests/kernels/attention/test_cascade_flash_attn.py
 +++ b/tests/kernels/attention/test_cascade_flash_attn.py
-@@ -21,6 +21,7 @@ except ImportError:
+@@ -21,6 +21,8 @@ except ImportError:
              "vllm_flash_attn is not supported for vLLM on ROCm.",
              allow_module_level=True,
          )
 +    is_fa_version_supported = lambda _: False
++    fa_version_unsupported_reason = lambda _: "vllm_flash_attn is not installed"
  
  NUM_HEADS = [(4, 4), (8, 2), (16, 2)]
  HEAD_SIZES = [128, 192, 256]
@@ -74,10 +75,10 @@ index fb8a4b0a2..7ab490aaf 100644
          out += (x * D).to(out.dtype)
      out = (out if z is None else out * F.silu(z)).to(x.dtype)
 diff --git a/tests/utils.py b/tests/utils.py
-index db5905b92..83e5ae765 100644
+index 2a3bdb91f..c74587d5f 100644
 --- a/tests/utils.py
 +++ b/tests/utils.py
-@@ -1775,7 +1775,12 @@ def spawn_new_process_for_each_test(f: Callable[_P, None]) -> Callable[_P, None]
+@@ -1896,7 +1896,12 @@ def spawn_new_process_for_each_test(f: Callable[_P, None]) -> Callable[_P, None]
  
              repo_root = str(VLLM_PATH.resolve())
              env = os.environ.copy()
@@ -92,10 +93,10 @@ index db5905b92..83e5ae765 100644
  
              result = subprocess.run(
 diff --git a/tests/v1/attention/test_mla_backends.py b/tests/v1/attention/test_mla_backends.py
-index 1ef4f9661..8f3399ce0 100644
+index 315c77de3..9fda159d4 100644
 --- a/tests/v1/attention/test_mla_backends.py
 +++ b/tests/v1/attention/test_mla_backends.py
-@@ -783,7 +783,7 @@ def test_backend_correctness(
+@@ -998,7 +998,7 @@ def test_backend_correctness(
                  ),
              ),
          )
