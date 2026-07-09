@@ -41,3 +41,7 @@ tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[ngram-processed_logp
 
 # vLLM returns 6 logprob entries when 5 are expected: https://github.com/intel/intel-xpu-backend-for-triton/issues/7161
 tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[False-0.0-BatchLogprobsComposition.SAMPLE]
+
+# NIXL is not available: 
+tests/v1/kv_connector/unit/test_nixl_connector.py::test_kv_both_deprecation_warning
+tests/v1/kv_connector/unit/test_nixl_connector.py::test_explicit_kv_role_no_deprecation_warning
