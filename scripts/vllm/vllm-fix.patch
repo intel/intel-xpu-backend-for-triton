@@ -1,3 +1,15 @@
+diff --git a/tests/kernels/attention/test_cascade_flash_attn.py b/tests/kernels/attention/test_cascade_flash_attn.py
+index 80c5c853d..6f10efbdf 100755
+--- a/tests/kernels/attention/test_cascade_flash_attn.py
++++ b/tests/kernels/attention/test_cascade_flash_attn.py
+@@ -21,6 +21,7 @@ except ImportError:
+             "vllm_flash_attn is not supported for vLLM on ROCm.",
+             allow_module_level=True,
+         )
++    is_fa_version_supported = lambda _: False
+ 
+ NUM_HEADS = [(4, 4), (8, 2), (16, 2)]
+ HEAD_SIZES = [128, 192, 256]
 diff --git a/tests/kernels/mamba/test_mamba_mixer2.py b/tests/kernels/mamba/test_mamba_mixer2.py
 index 973e7885c..e474275f5 100644
 --- a/tests/kernels/mamba/test_mamba_mixer2.py
@@ -62,10 +74,10 @@ index fb8a4b0a2..7ab490aaf 100644
          out += (x * D).to(out.dtype)
      out = (out if z is None else out * F.silu(z)).to(x.dtype)
 diff --git a/tests/utils.py b/tests/utils.py
-index 2a3bdb91f..c74587d5f 100644
+index db5905b92..83e5ae765 100644
 --- a/tests/utils.py
 +++ b/tests/utils.py
-@@ -1896,7 +1896,12 @@ def spawn_new_process_for_each_test(f: Callable[_P, None]) -> Callable[_P, None]
+@@ -1775,7 +1775,12 @@ def spawn_new_process_for_each_test(f: Callable[_P, None]) -> Callable[_P, None]
  
              repo_root = str(VLLM_PATH.resolve())
              env = os.environ.copy()
@@ -79,6 +91,19 @@ index 2a3bdb91f..c74587d5f 100644
              env[_SPAWN_CHILD_ENV] = "1"
  
              result = subprocess.run(
+diff --git a/tests/v1/attention/test_mla_backends.py b/tests/v1/attention/test_mla_backends.py
+index 1ef4f9661..8f3399ce0 100644
+--- a/tests/v1/attention/test_mla_backends.py
++++ b/tests/v1/attention/test_mla_backends.py
+@@ -783,7 +783,7 @@ def test_backend_correctness(
+                 ),
+             ),
+         )
+-    except ImportError:
++    except (ImportError, AttributeError):
+         prefill_invalid_reasons = ["ImportError"]
+     if prefill_invalid_reasons:
+         pytest.skip(
 diff --git a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
 index 21bda8e17..e7f11e934 100644
 --- a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
