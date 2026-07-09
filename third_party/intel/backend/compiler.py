@@ -47,6 +47,7 @@ class XPUOptions:
     allow_fp8e4b15: bool = True
     grf_mode: str = 'default'
     loop_distribute: bool = False
+    code_sinking: bool = False
     use_barrier: bool = False
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
@@ -318,6 +319,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.ttir.add_reorder_broadcast(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
+        if opt.loop_distribute or knobs.intel.enable_loop_distribution:
+            intel.passes.ttgpuir.add_loop_distribute(pm)
         passes.ttir.add_loop_unroll(pm)
         pm.run(mod, 'make_ttir')
 
@@ -348,8 +351,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.ttir.add_convert_to_ttgpuir(pm, "xpu", opt.num_warps, opt.warp_size, opt.num_ctas)
-        if opt.loop_distribute or knobs.intel.enable_loop_distribution:
-            intel.passes.ttgpuir.add_loop_distribute(pm)
         # optimize TTGIR
         passes.ttgpuir.add_coalesce(pm)
         if properties["has_256b_load_store"]:
@@ -381,7 +382,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # Off by default: code sinking is perf-neutral on measured kernels (it
         # reliably reduces register spills, but the relieved traffic is not on
         # the critical path on current HW). Opt in via the env var for A/B work.
-        if knobs.intel.enable_code_sinking:
+        if opt.code_sinking or knobs.intel.enable_code_sinking:
             intel.passes.ttgpuir.add_code_sinking(pm)
 
         passes.ttir.add_loop_aware_cse(pm)
@@ -500,7 +501,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             llvm.link_extern_libs(llvm_mod, paths)
 
         cls.optimize_llvm_mod(llvm_mod, options)
-        intel.post_process_llir(llvm_mod)
+        is_lts = cls.is_lts(metadata["target"].arch.get("driver_version"))
+        intel.post_process_llir(llvm_mod, is_lts)
 
         # Get some metadata
         total_num_warps = src.get_int_attr("ttg.total-num-warps")
