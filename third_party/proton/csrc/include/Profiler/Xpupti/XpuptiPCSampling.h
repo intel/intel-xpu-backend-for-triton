@@ -28,8 +28,8 @@ struct XpuptiConfigureData {
 
   void initialize(pti_device_handle_t device);
 
-  // Default sampling period in nanoseconds = 100000 ns (100 microseconds)
-  static constexpr uint32_t DefaultSamplingPeriodNs = 100000;
+  // Default sampling period in nanoseconds = 100 ns (1 microsecond)
+  static constexpr uint32_t DefaultSamplingPeriodNs = 100;
 
   pti_device_handle_t device{};
   pti_pc_sampling_handle_t handle{};

@@ -18,17 +18,6 @@ UTILS_CACHE_PATH = None
 
 def _select_backend() -> str:
     backend = triton.runtime.driver.active.get_current_target().backend
-    if backend == "xpu":
-        global UTILS_CACHE_PATH
-        UTILS_CACHE_PATH = triton.runtime.driver.active.build_proton_help_lib()
-        try:
-            if (files := importlib.metadata.files('intel-pti')) is not None:
-                for f in files:
-                    if 'libpti_view.so' in f.name:
-                        os.environ["TRITON_XPUPTI_LIB_PATH"] = str(pathlib.Path(f.locate()).parent.resolve())
-                        break
-        except importlib.metadata.PackageNotFoundError:
-            pass
     return libproton.select_profiler_from_triton_backend(backend)
 
 
@@ -127,6 +116,18 @@ def start(
 
     name = DEFAULT_PROFILE_NAME if name is None else name
     backend = _select_backend() if backend is None else backend
+    if backend == "xpupti":
+        global UTILS_CACHE_PATH
+        UTILS_CACHE_PATH = triton.runtime.driver.active.build_proton_help_lib()
+        breakpoint()
+        try:
+            if (files := importlib.metadata.files('intel-pti')) is not None:
+                for f in files:
+                    if 'libpti_view.so' in f.name:
+                        os.environ["TRITON_XPUPTI_LIB_PATH"] = str(pathlib.Path(f.locate()).parent.resolve())
+                        break
+        except importlib.metadata.PackageNotFoundError:
+            pass
     # Convert mode to its string representation for libproton's runtime
     mode_str = _get_mode_str(backend, mode)
 
