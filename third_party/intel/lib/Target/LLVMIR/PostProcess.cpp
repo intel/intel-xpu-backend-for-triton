@@ -3,6 +3,7 @@
 
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Module.h"
 
@@ -148,7 +149,101 @@ void expandSubByteBitwiseAnd(Module &module) {
   }
 }
 
-void postProcessLLVMIR(llvm::Module &mod) {
+// W/A for IGC crash on LTS2 driver (IGC < 2.19.0).
+//
+// A sub-byte integer type (iN, N<8) lowers to an arbitrary-precision OpTypeInt
+// (SPV_INTEL_arbitrary_precision_integers); IGC segfaults compiling it, whether
+// scalar or as an OpTypeVector element. Such types appear when the LLVM
+// optimizer packs several i1 lanes (e.g. the results of a vector fcmp) into a
+// narrow integer via `bitcast <K x i1> to <M x iN>`, reads a lane back with
+// extractelement, and tests it against a constant with icmp -- the shape of an
+// "any/all over a comparison" reduction.
+//
+// Rewrite the whole `bitcast -> extractelement -> icmp eq/ne <const>` chain
+// onto the source i1 lanes so no sub-byte integer type is ever created. Lane j
+// of the <M x iN> value aliases source i1 lanes [j*N, j*N + N); on
+// little-endian (SPIR-V targets) bit i of the lane is source lane j*N + i.
+// `lane == C` is thus the AND over those bits of (bit == the corresponding bit
+// of C), built from i1 and/not; `ne` negates the result. Chains not matching
+// this shape are left untouched (correctness preserved; other shapes are not
+// observed in practice).
+void expandSubByteVectorBitcast(Module &module) {
+  SmallVector<BitCastInst *> bitcasts;
+
+  for (auto &func : module)
+    for (auto &block : func)
+      for (auto &inst : block)
+        if (auto *bc = dyn_cast<BitCastInst>(&inst))
+          if (auto *vecTy = dyn_cast<FixedVectorType>(bc->getType()))
+            if (auto *elemTy = dyn_cast<IntegerType>(vecTy->getElementType()))
+              if (elemTy->getBitWidth() < 8)
+                if (auto *srcTy =
+                        dyn_cast<FixedVectorType>(bc->getOperand(0)->getType()))
+                  if (srcTy->getElementType()->isIntegerTy(1))
+                    bitcasts.push_back(bc);
+
+  for (BitCastInst *bc : bitcasts) {
+    unsigned narrowBits =
+        cast<IntegerType>(
+            cast<FixedVectorType>(bc->getType())->getElementType())
+            ->getBitWidth();
+    Value *bits = bc->getOperand(0);
+
+    // Every user must be `extractelement <const>` feeding `icmp eq/ne <const>`.
+    struct Rewrite {
+      ICmpInst *cmp;
+      ExtractElementInst *extract;
+      uint64_t lane;
+    };
+    SmallVector<Rewrite> rewrites;
+    bool rewritable = true;
+    for (User *user : bc->users()) {
+      auto *extract = dyn_cast<ExtractElementInst>(user);
+      auto *idx =
+          extract ? dyn_cast<ConstantInt>(extract->getIndexOperand()) : nullptr;
+      if (!idx || !extract->hasOneUse()) {
+        rewritable = false;
+        break;
+      }
+      auto *cmp = dyn_cast<ICmpInst>(*extract->user_begin());
+      if (!cmp || !cmp->isEquality() || !isa<ConstantInt>(cmp->getOperand(1))) {
+        rewritable = false;
+        break;
+      }
+      rewrites.push_back({cmp, extract, idx->getZExtValue()});
+    }
+    if (!rewritable || rewrites.empty())
+      continue;
+
+    for (const Rewrite &r : rewrites) {
+      uint64_t cst = cast<ConstantInt>(r.cmp->getOperand(1))->getZExtValue();
+      IRBuilder<> b(r.cmp);
+      // AND over bits of the lane: bit set in C must be 1, bit clear must be 0.
+      Value *acc = nullptr;
+      for (unsigned i = 0; i < narrowBits; ++i) {
+        Value *bit = b.CreateExtractElement(bits, r.lane * narrowBits + i);
+        if (!((cst >> i) & 1))
+          bit = b.CreateNot(bit);
+        acc = acc ? b.CreateAnd(acc, bit) : bit;
+      }
+      // acc is true iff lane == C; adjust for eq vs ne.
+      if (r.cmp->getPredicate() == ICmpInst::ICMP_NE)
+        acc = b.CreateNot(acc);
+      r.cmp->replaceAllUsesWith(acc);
+    }
+
+    // Erase the replaced chain in dependency order: compare, then its
+    // single-use extractelement, then the bitcast once its last user is gone.
+    for (const Rewrite &r : rewrites) {
+      r.cmp->eraseFromParent();
+      r.extract->eraseFromParent();
+    }
+    if (bc->use_empty())
+      bc->eraseFromParent();
+  }
+}
+
+void postProcessLLVMIR(llvm::Module &mod, bool isLTS) {
   // __devicelib_assert_fail must be a declaration so that
   // IGC can replace it with a runtime assert function.
   // If a 'fallback' implementation is defined in SYCL libarary, the
@@ -167,6 +262,11 @@ void postProcessLLVMIR(llvm::Module &mod) {
   // Widen sub-byte bit ops forbidden by SPV_INTEL_int4.
   expandSubByteBitReverse(mod);
   expandSubByteBitwiseAnd(mod);
+
+  // Remove sub-byte integer vector bitcasts that crash IGC on LTS2. Gated on
+  // the LTS driver so it can be dropped once the driver ships the IGC fix.
+  if (isLTS)
+    expandSubByteVectorBitcast(mod);
 }
 
 } // namespace mlir::triton::intel
@@ -186,5 +286,11 @@ PreservedAnalyses ExpandSubByteBitReversePass::run(Module &M,
 PreservedAnalyses ExpandSubByteBitwiseAndPass::run(Module &M,
                                                    ModuleAnalysisManager &) {
   mlir::triton::intel::expandSubByteBitwiseAnd(M);
+  return PreservedAnalyses::none();
+}
+
+PreservedAnalyses ExpandSubByteVectorBitcastPass::run(Module &M,
+                                                      ModuleAnalysisManager &) {
+  mlir::triton::intel::expandSubByteVectorBitcast(M);
   return PreservedAnalyses::none();
 }
