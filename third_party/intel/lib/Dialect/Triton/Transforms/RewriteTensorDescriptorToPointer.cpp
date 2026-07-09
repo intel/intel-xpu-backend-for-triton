@@ -1119,6 +1119,10 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
       if (!descArgFeedsOnlyLoadStore(descArg))
         continue;
 
+      // FIXME: Remove this limitation.
+      if (rank != 2)
+        continue;
+
       // The frontend (tensor_descriptor_type._flatten_ir_types) places i32
       // shape and i64 stride args immediately after the descriptor arg.
       unsigned frontendShapeStart = idx + 1;
