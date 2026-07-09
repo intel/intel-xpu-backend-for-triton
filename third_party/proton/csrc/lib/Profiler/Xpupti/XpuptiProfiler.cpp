@@ -421,12 +421,21 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doStart() {
   xpupti::enableDomain<true>(subscriber,
                              PTI_CB_DOMAIN_DRIVER_GPU_OPERATION_APPENDED, 1, 1);
   // setDriverCallbacks(subscriber, /*enable=*/true);
-  std::cout << "MARK#1\n";
+
+  std::cout << "[Profiler] XpuptiProfiler::doStart() - PTI View initialized" << std::endl;
+  std::cout << "[Profiler]   PC sampling enabled: " << (profiler.pcSamplingEnabled ? "yes" : "no") << std::endl;
+  std::cout << "[Profiler]   PC sampling interval: " << profiler.pcSamplingInterval << std::endl;
+  std::cout << "[Profiler]   Current device: " << currentDevice << std::endl;
+
   // Start PC sampling if enabled
   if (profiler.pcSamplingEnabled) {
+    std::cout << "[Profiler]   Starting PC sampling..." << std::endl;
     // Use nullptr to profile all available devices
     XpuptiPCSampling::instance().start(currentDevice);
+    std::cout << "[Profiler]   ✓ PC sampling started" << std::endl;
   }
+
+  std::cout << "[Profiler] XpuptiProfiler::doStart() - DONE" << std::endl;
 }
 
 void XpuptiProfiler::XpuptiProfilerPimpl::doFlush() {
@@ -443,11 +452,17 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doFlush() {
 void XpuptiProfiler::XpuptiProfilerPimpl::doStop() {
   XpuptiProfiler &profiler = threadState.profiler;
 
+  std::cout << "[Profiler] XpuptiProfiler::doStop() - START" << std::endl;
+  std::cout << "[Profiler]   PC sampling enabled: " << (profiler.pcSamplingEnabled ? "yes" : "no") << std::endl;
+
   // Stop PC sampling if enabled
   if (profiler.pcSamplingEnabled) {
+    std::cout << "[Profiler]   Stopping PC sampling..." << std::endl;
     // Get dataToEntry from current thread state
     auto &dataToEntry = threadState.dataToEntry;
+    std::cout << "[Profiler]   threadState.dataToEntry size: " << dataToEntry.size() << std::endl;
     XpuptiPCSampling::instance().stop(currentDevice, dataToEntry);
+    std::cout << "[Profiler]   ✓ PC sampling stopped" << std::endl;
   }
 
   xpupti::viewDisable<true>(PTI_VIEW_DEVICE_GPU_KERNEL);

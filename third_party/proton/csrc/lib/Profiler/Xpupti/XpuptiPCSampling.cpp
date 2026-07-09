@@ -122,6 +122,19 @@ void XpuptiPCSampling::processPCSamplingData(
 
   std::cout << "[PC Sampling] processPCSamplingData() - START" << std::endl;
   std::cout << "[PC Sampling]   Handle: " << configureData->handle << std::endl;
+  std::cout << "[PC Sampling]   dataToEntry size: " << dataToEntry.size() << " entries" << std::endl;
+
+  if (dataToEntry.empty()) {
+    std::cout << "[PC Sampling]   WARNING: dataToEntry is empty! Metrics won't be added anywhere." << std::endl;
+  } else {
+    std::cout << "[PC Sampling]   Listing dataToEntry entries:" << std::endl;
+    size_t idx = 0;
+    for (const auto &[data, entry] : dataToEntry) {
+      std::cout << "[PC Sampling]     [" << idx << "] data=" << data
+                << ", phase=" << entry.phase << ", id=" << entry.id << std::endl;
+      idx++;
+    }
+  }
 
   // Get stall reasons (must be called after StopCollection, not during init)
   std::cout << "[PC Sampling]   Calling ptiPcSamplingGetStallReasons() to query count..." << std::endl;
@@ -260,6 +273,22 @@ void XpuptiPCSampling::processPCSamplingData(
         auto &instruction = instructions[instrIdx];
         size_t instrSampleCount = 0;
 
+        // Print instruction details
+        std::cout << "[PC Sampling]         Instruction [" << instrIdx << "]:" << std::endl;
+        std::cout << "[PC Sampling]           _instruction_offset: 0x" << std::hex
+                  << instruction._instruction_offset << std::dec << std::endl;
+        std::cout << "[PC Sampling]           _source_info: " << instruction._source_info << std::endl;
+
+        if (instruction._source_info) {
+          std::cout << "[PC Sampling]             _file_path: "
+                    << (instruction._source_info->_file_path ? instruction._source_info->_file_path : "<null>")
+                    << std::endl;
+          std::cout << "[PC Sampling]             _file_line: "
+                    << instruction._source_info->_file_line << std::endl;
+        } else {
+          std::cout << "[PC Sampling]             (no source info available)" << std::endl;
+        }
+
         // Build op name with source location if available
         std::string opName = std::string(kernelInfo._kernel_name);
         if (instruction._source_info &&
@@ -268,6 +297,22 @@ void XpuptiPCSampling::processPCSamplingData(
               std::string(instruction._source_info->_file_path),
               instruction._source_info->_file_line,
               std::string(kernelInfo._kernel_name));
+          std::cout << "[PC Sampling]           Formatted opName: " << opName << std::endl;
+        } else {
+          std::cout << "[PC Sampling]           Using kernel name as opName: " << opName << std::endl;
+        }
+
+        // Print sample counts for each stall reason for this instruction
+        std::cout << "[PC Sampling]           Sample counts per stall reason:" << std::endl;
+        for (size_t reasonIdx = 0; reasonIdx < kernelInfo._reason_count; reasonIdx++) {
+          uint64_t sampleCount =
+              samples[instrIdx * kernelInfo._reason_count + reasonIdx];
+          const char* reasonName = (reasonIdx < configureData->numStallReasons &&
+                                   configureData->stallReasonInfos[reasonIdx]._name)
+                                  ? configureData->stallReasonInfos[reasonIdx]._name
+                                  : "<unknown>";
+          std::cout << "[PC Sampling]             [" << reasonIdx << "] "
+                    << reasonName << ": " << sampleCount << " samples" << std::endl;
         }
 
         // Add metrics for each stall reason
@@ -290,11 +335,21 @@ void XpuptiPCSampling::processPCSamplingData(
           auto metricKind = static_cast<PCSamplingMetric::PCSamplingMetricKind>(
               configureData->stallReasonIndexToMetricIndex[reasonIdx]);
 
+          std::cout << "[PC Sampling]           Found samples for stall reason "
+                    << configureData->stallReasonInfos[reasonIdx]._name
+                    << ": " << sampleCount << " samples" << std::endl;
+
           // Add metric to all entries in dataToEntry
+          std::cout << "[PC Sampling]           Adding metric to " << dataToEntry.size()
+                    << " dataToEntry entries..." << std::endl;
+
+          size_t entriesUpdated = 0;
           for (const auto &[data, baseEntry] : dataToEntry) {
             auto entry = baseEntry;
             if (instruction._source_info &&
                 instruction._source_info->_file_path != nullptr) {
+              std::cout << "[PC Sampling]             Creating child op for source: "
+                        << opName << std::endl;
               entry = data->addOp(entry.phase, entry.id, {opName});
             }
 
@@ -305,14 +360,27 @@ void XpuptiPCSampling::processPCSamplingData(
                                  .find("active") != std::string::npos);
             uint64_t stalledSamples = isActive ? 0 : sampleCount;
 
+            std::cout << "[PC Sampling]             Upserting PCSamplingMetric: kind="
+                      << static_cast<int>(metricKind) << ", samples=" << sampleCount
+                      << ", stalled=" << stalledSamples << std::endl;
+
             entry.upsertMetric(std::make_unique<PCSamplingMetric>(
                 metricKind, sampleCount, stalledSamples));
+
+            entriesUpdated++;
           }
+
+          std::cout << "[PC Sampling]           ✓ Updated " << entriesUpdated
+                    << " entries with metric" << std::endl;
         }
 
         if (instrSampleCount > 0) {
           instructionsWithSamples++;
           totalSamplesProcessed += instrSampleCount;
+          std::cout << "[PC Sampling]           ✓ Instruction has " << instrSampleCount
+                    << " total samples" << std::endl;
+        } else {
+          std::cout << "[PC Sampling]           (no samples for this instruction)" << std::endl;
         }
       }
 
@@ -330,6 +398,7 @@ void XpuptiPCSampling::stop(pti_device_handle_t device,
   std::cout << "[PC Sampling] XpuptiPCSampling::stop() - START" << std::endl;
   std::cout << "[PC Sampling]   Device: " << device << std::endl;
   std::cout << "[PC Sampling]   Collection started: " << (pcSamplingStarted ? "yes" : "no") << std::endl;
+  std::cout << "[PC Sampling]   dataToEntry size: " << dataToEntry.size() << " entries" << std::endl;
 
   doubleCheckedLock(
       [&]() -> bool { return pcSamplingStarted; }, pcSamplingMutex, [&]() {
