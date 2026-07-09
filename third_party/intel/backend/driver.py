@@ -5,6 +5,7 @@ import sys
 import hashlib
 import shutil
 import ctypes
+import subprocess
 import sysconfig
 import tempfile
 from pathlib import Path
@@ -30,23 +31,8 @@ ARG_KERNEL = None
 ARG_TUPLE = None
 
 
-def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str]]:
-    """
-    Looks for the sycl library in known places.
-
-    Arguments:
-      include_dir: list of include directories to pass to compiler.
-
-    Returns:
-      enriched include_dir and libsycl.so location.
-
-    Raises:
-      AssertionError: if library was not found.
-    """
+def find_sycl_icpx(include_dir: list[str]) -> tuple[list[str], list[str]]:
     include_dir = include_dir.copy()
-    assertion_message = ("sycl headers not found, please install `icpx` compiler, "
-                         "or provide `ONEAPI_ROOT` environment "
-                         "or install `intel-sycl-rt>=2025.0.0` wheel")
     icpx_path = shutil.which("icpx")
     if icpx_path:
         # only `icpx` compiler knows where sycl runtime binaries and header files are
@@ -67,10 +53,10 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str]]:
     try:
         sycl_rt = importlib.metadata.metadata("intel-sycl-rt")
     except importlib.metadata.PackageNotFoundError:
-        raise AssertionError(assertion_message)
+        return include_dir, []
 
     if sycl_rt.get("version", "0.0.0").startswith("2024"):
-        raise AssertionError(assertion_message)
+        return include_dir, []
 
     sycl_dirs = []
     for f in importlib.metadata.files("intel-sycl-rt"):
@@ -87,7 +73,84 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str]]:
                 _ = os.add_dll_directory(str(dll_path))
             sycl_dirs.append(str(sycl_dir))
 
-    assert len(sycl_dirs) != 0
+    return include_dir, sycl_dirs
+
+
+def find_sycl_dpclang(include_dir: list[str]) -> tuple[list[str], list[str]]:
+    include_dir = include_dir.copy()
+
+    if not shutil.which("pkg-config"):
+        return include_dir, []
+
+    dpclang = shutil.which(knobs.intel.sycl_compiler if knobs.intel.sycl_compiler else "dpclang++")
+    cmd = [dpclang, "-E", "-dM", "-"]
+
+    major = None
+    try:
+        result = subprocess.run(cmd, input="", capture_output=True, text=True, check=True)
+        for line in result.stdout.splitlines():
+            if "__dpcpp_major__" in line:
+                # The line looks like: "#define __dpcpp_major__ 7"
+                parts = line.split()
+                if len(parts) >= 3:
+                    major = int(parts[-1])
+                    break
+    except (subprocess.CalledProcessError, FileNotFoundError, ValueError):
+        return include_dir, []
+
+    if major is None:
+        return include_dir, []
+
+    package_name = f"sycl-dpcpp-{major}"
+    sycl_dirs = []
+    try:
+        cflags_I_res = subprocess.run(
+            ["pkg-config", "--cflags-only-I", package_name],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip().split()
+        include_dir += [flag[2:] for flag in cflags_I_res if flag.startswith("-I") and len(flag) > 2]
+
+        libs_L_res = subprocess.run(
+            ["pkg-config", "--libs-only-L", package_name],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip().split()
+        sycl_dirs = [flag[2:] for flag in libs_L_res if flag.startswith("-L") and len(flag) > 2]
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+
+    return include_dir, sycl_dirs
+
+
+def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str]]:
+    """
+    Looks for the sycl library in known places.
+
+    Arguments:
+      include_dir: list of include directories to pass to compiler.
+
+    Returns:
+      enriched include_dir and libsycl.so location.
+
+    Raises:
+      AssertionError: if library was not found.
+    """
+
+    sycl_dirs = []
+    csycl = knobs.intel.sycl_compiler
+    if not csycl or csycl == "icpx":
+        include_dir, sycl_dirs = find_sycl_icpx(include_dir)
+    if len(sycl_dirs) == 0 and (not csycl or csycl.startswith("dpclang")):
+        include_dir, sycl_dirs = find_sycl_dpclang(include_dir)
+    if len(sycl_dirs) == 0:
+        raise AssertionError("sycl headers not found, please install `icpx` compiler, "
+                             "or provide `ONEAPI_ROOT` environment "
+                             "or install `intel-sycl-rt>=2025.0.0` wheel"
+                             "or instal `dpclang` compiler (experimental)")
+
     return include_dir, sycl_dirs
 
 
@@ -292,9 +355,22 @@ class ExtensionUtils:
                 ctypes.windll.kernel32.FreeLibrary(handle)
 
 
+@lru_cache
+def get_hasher_common():
+    hasher = hashlib.sha256((__CACHE_VERSION + platform_key()).encode("utf-8"))
+    # Include libsycl_dir in the hash to prevent cache collisions across
+    # environments with different oneAPI versions (e.g. 2025.3 vs 2026.0).
+    # The compiled .so has libsycl_dir baked in as RPATH; without this,
+    # two envs with identical extension_utils.c but different oneAPI stacks
+    # share the same cache entry and load an incompatible .so.
+    if COMPILATION_HELPER.libsycl_dir:
+        hasher.update(str(COMPILATION_HELPER.libsycl_dir).encode("utf-8"))
+    return hasher
+
+
 def compile_module_from_src(src: str, name: str):
-    hasher = hashlib.sha256(__CACHE_VERSION.encode("utf-8"))
-    hasher.update((src + platform_key()).encode("utf-8"))
+    hasher = get_hasher_common().copy()
+    hasher.update(src.encode("utf-8"))
     key = hasher.hexdigest()
     cache = get_cache_manager(key)
     suffix = sysconfig.get_config_var("EXT_SUFFIX")
