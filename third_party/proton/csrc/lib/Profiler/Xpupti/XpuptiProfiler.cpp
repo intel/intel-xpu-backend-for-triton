@@ -306,46 +306,68 @@ typedef void (*EnumDeviceUUIDsFunc)(void *);
 
 #if defined(_WIN32)
 int callEnumDeviceUUIDs(const std::string &utils_cache_path) {
-  HMODULE handle = LoadLibrary(xpu::PROTON_UTILS.data());
-  if (!handle) {
-    std::cerr << "Failed to load library: " << GetLastError() << std::endl;
-    return 1;
+  // Check if PROTON_UTILS path is set
+  if (xpu::PROTON_UTILS.empty()) {
+    std::cout << "[Profiler] PROTON_UTILS not set, skipping enumDeviceUUIDs" << std::endl;
+    return 0;  // Not an error, just not available
   }
 
-  GetLastError();
+  std::cout << "[Profiler] Attempting to load PROTON_UTILS library for enumDeviceUUIDs: " << xpu::PROTON_UTILS << std::endl;
+  HMODULE handle = LoadLibrary(xpu::PROTON_UTILS.data());
+  if (!handle) {
+    std::cout << "[Profiler] Warning: Failed to load PROTON_UTILS library, error code: " << GetLastError() << std::endl;
+    std::cout << "[Profiler] Continuing without enumDeviceUUIDs (non-fatal)" << std::endl;
+    return 0;  // Make this non-fatal
+  }
+
+  SetLastError(0);  // Clear any existing error
   EnumDeviceUUIDsFunc enumDeviceUUIDs =
       (EnumDeviceUUIDsFunc)GetProcAddress(handle, "enumDeviceUUIDs");
   long dlsym_error = GetLastError();
   if (dlsym_error) {
-    std::cerr << "Failed to load function: " << dlsym_error << std::endl;
+    std::cout << "[Profiler] Warning: Failed to load function 'enumDeviceUUIDs', error code: " << dlsym_error << std::endl;
+    std::cout << "[Profiler] Continuing without enumDeviceUUIDs (non-fatal)" << std::endl;
     FreeLibrary(handle);
-    return 1;
+    return 0;  // Make this non-fatal
   }
 
+  std::cout << "[Profiler] Successfully loaded enumDeviceUUIDs, calling it..." << std::endl;
   enumDeviceUUIDs(&deviceUUIDs_);
+  std::cout << "[Profiler] ✓ enumDeviceUUIDs completed, found " << deviceUUIDs_.size() << " devices" << std::endl;
 
   FreeLibrary(handle);
   return 0;
 }
 #else
 int callEnumDeviceUUIDs(const std::string &utils_cache_path) {
-  void *handle = dlopen(xpu::PROTON_UTILS.data(), RTLD_LAZY);
-  if (!handle) {
-    std::cerr << "Failed to load library: " << dlerror() << std::endl;
-    return 1;
+  // Check if PROTON_UTILS path is set
+  if (xpu::PROTON_UTILS.empty()) {
+    std::cout << "[Profiler] PROTON_UTILS not set, skipping enumDeviceUUIDs (optional)" << std::endl;
+    return 0;  // Only non-fatal when explicitly not configured
   }
 
-  dlerror();
+  std::cout << "[Profiler] Loading PROTON_UTILS library: " << xpu::PROTON_UTILS << std::endl;
+  void *handle = dlopen(xpu::PROTON_UTILS.data(), RTLD_LAZY);
+  if (!handle) {
+    std::cerr << "[Profiler] ERROR: Failed to load PROTON_UTILS library: " << dlerror() << std::endl;
+    std::cerr << "[Profiler] This is required for device UUID enumeration!" << std::endl;
+    return 1;  // Fatal error - library should exist
+  }
+
+  dlerror();  // Clear any existing error
   EnumDeviceUUIDsFunc enumDeviceUUIDs =
       (EnumDeviceUUIDsFunc)dlsym(handle, "enumDeviceUUIDs");
   const char *dlsym_error = dlerror();
   if (dlsym_error) {
-    std::cerr << "Failed to load function: " << dlsym_error << std::endl;
+    std::cerr << "[Profiler] ERROR: Failed to load function 'enumDeviceUUIDs': " << dlsym_error << std::endl;
+    std::cerr << "[Profiler] This function is required for device correlation!" << std::endl;
     dlclose(handle);
-    return 1;
+    return 1;  // Fatal error - symbol should exist
   }
 
+  std::cout << "[Profiler] Calling enumDeviceUUIDs..." << std::endl;
   enumDeviceUUIDs(&deviceUUIDs_);
+  std::cout << "[Profiler] ✓ Enumerated " << deviceUUIDs_.size() << " device(s)" << std::endl;
 
   dlclose(handle);
   return 0;
@@ -356,46 +378,68 @@ typedef void (*WaitOnSyclQueueFunc)(void *);
 
 #if defined(_WIN32)
 int callWaitOnSyclQueue(void *syclQueue) {
-  HMODULE handle = LoadLibrary(xpu::PROTON_UTILS.data());
-  if (!handle) {
-    std::cerr << "Failed to load library: " << GetLastError() << std::endl;
-    return 1;
+  // Check if PROTON_UTILS path is set
+  if (xpu::PROTON_UTILS.empty()) {
+    std::cout << "[Profiler] PROTON_UTILS not set, skipping waitOnSyclQueue" << std::endl;
+    return 0;  // Not an error, just not available
   }
 
-  GetLastError();
+  std::cout << "[Profiler] Attempting to load PROTON_UTILS library: " << xpu::PROTON_UTILS << std::endl;
+  HMODULE handle = LoadLibrary(xpu::PROTON_UTILS.data());
+  if (!handle) {
+    std::cout << "[Profiler] Warning: Failed to load PROTON_UTILS library, error code: " << GetLastError() << std::endl;
+    std::cout << "[Profiler] Continuing without waitOnSyclQueue (non-fatal)" << std::endl;
+    return 0;  // Make this non-fatal
+  }
+
+  SetLastError(0);  // Clear any existing error
   WaitOnSyclQueueFunc waitOnSyclQueue =
       (WaitOnSyclQueueFunc)GetProcAddress(handle, "waitOnSyclQueue");
   long dlsym_error = GetLastError();
   if (dlsym_error) {
-    std::cerr << "Failed to load function: " << dlsym_error << std::endl;
+    std::cout << "[Profiler] Warning: Failed to load function 'waitOnSyclQueue', error code: " << dlsym_error << std::endl;
+    std::cout << "[Profiler] Continuing without waitOnSyclQueue (non-fatal)" << std::endl;
     FreeLibrary(handle);
-    return 1;
+    return 0;  // Make this non-fatal
   }
 
+  std::cout << "[Profiler] Successfully loaded waitOnSyclQueue, calling it..." << std::endl;
   waitOnSyclQueue(syclQueue);
+  std::cout << "[Profiler] ✓ waitOnSyclQueue completed" << std::endl;
 
   FreeLibrary(handle);
   return 0;
 }
 #else
 int callWaitOnSyclQueue(void *syclQueue) {
-  void *handle = dlopen(xpu::PROTON_UTILS.data(), RTLD_LAZY);
-  if (!handle) {
-    std::cerr << "Failed to load library: " << dlerror() << std::endl;
-    return 1;
+  // Check if PROTON_UTILS path is set
+  if (xpu::PROTON_UTILS.empty()) {
+    std::cout << "[Profiler] PROTON_UTILS not set, skipping waitOnSyclQueue (optional)" << std::endl;
+    return 0;  // Only non-fatal when explicitly not configured
   }
 
-  dlerror();
+  std::cout << "[Profiler] Loading PROTON_UTILS library: " << xpu::PROTON_UTILS << std::endl;
+  void *handle = dlopen(xpu::PROTON_UTILS.data(), RTLD_LAZY);
+  if (!handle) {
+    std::cerr << "[Profiler] ERROR: Failed to load PROTON_UTILS library: " << dlerror() << std::endl;
+    std::cerr << "[Profiler] This is required for proper profiling operation!" << std::endl;
+    return 1;  // Fatal error - library should exist
+  }
+
+  dlerror();  // Clear any existing error
   WaitOnSyclQueueFunc waitOnSyclQueue =
       (WaitOnSyclQueueFunc)dlsym(handle, "waitOnSyclQueue");
   const char *dlsym_error = dlerror();
   if (dlsym_error) {
-    std::cerr << "Failed to load function: " << dlsym_error << std::endl;
+    std::cerr << "[Profiler] ERROR: Failed to load function 'waitOnSyclQueue': " << dlsym_error << std::endl;
+    std::cerr << "[Profiler] This function is required for queue synchronization!" << std::endl;
     dlclose(handle);
-    return 1;
+    return 1;  // Fatal error - symbol should exist
   }
 
+  std::cout << "[Profiler] Calling waitOnSyclQueue..." << std::endl;
   waitOnSyclQueue(syclQueue);
+  std::cout << "[Profiler] ✓ Queue synchronized" << std::endl;
 
   dlclose(handle);
   return 0;
