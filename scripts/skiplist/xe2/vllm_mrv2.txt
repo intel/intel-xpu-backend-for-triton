@@ -14,15 +14,3 @@ tests/v1/sample/test_logprobs.py::test_zero_logprobs[False]
 tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[True-2.0-BatchLogprobsComposition.SAMPLE_PROMPT]
 tests/v1/sample/test_logprobs.py::test_none_logprobs[True]
 tests/v1/sample/test_logprobs.py::test_zero_logprobs[True]
-
-# torch.dynamo registers current_stream twice due to vLLM xpu alias: https://github.com/intel/intel-xpu-backend-for-triton/issues/7160
-tests/v1/sample/test_logprobs.py::test_max_logprobs
-tests/v1/sample/test_logprobs.py::test_all_logprobs
-tests/v1/sample/test_logprobs.py::test_logprobs_mode[raw_logits]
-tests/v1/sample/test_logprobs.py::test_logprobs_mode[raw_logprobs]
-tests/v1/sample/test_logprobs.py::test_logprobs_mode[processed_logits]
-tests/v1/sample/test_logprobs.py::test_logprobs_mode[processed_logprobs]
-tests/v1/sample/test_logprobs.py::test_verify_tokens_integration
-tests/v1/sample/test_logprobs.py::test_utf8_edge_cases_with_real_model
-tests/v1/sample/test_logprobs.py::test_correct_decoded_token_preserves_valid_tokens
-tests/v1/sample/test_logprobs.py::test_prompt_logprobs_with_chunking_and_preemption
