@@ -62,10 +62,10 @@ index fb8a4b0a2..7ab490aaf 100644
          out += (x * D).to(out.dtype)
      out = (out if z is None else out * F.silu(z)).to(x.dtype)
 diff --git a/tests/utils.py b/tests/utils.py
-index db5905b92..83e5ae765 100644
+index 2a3bdb91f..c74587d5f 100644
 --- a/tests/utils.py
 +++ b/tests/utils.py
-@@ -1775,7 +1775,12 @@ def spawn_new_process_for_each_test(f: Callable[_P, None]) -> Callable[_P, None]
+@@ -1896,7 +1896,12 @@ def spawn_new_process_for_each_test(f: Callable[_P, None]) -> Callable[_P, None]
 
              repo_root = str(VLLM_PATH.resolve())
              env = os.environ.copy()
@@ -314,6 +314,8 @@ index 12ff3830c..04da1ac74 100644
                      out[mask] = out[mask] + b_bias2[i].view(1, -1).to(tmp1.dtype)
 diff --git a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
 index 1f5724ac3..c56bc8ee1 100644
+diff --git a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
+index 21bda8e17..e7f11e934 100644
 --- a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
 @@ -618,7 +618,7 @@ class NaiveBatchedExperts(mk.FusedMoEExpertsModular):
