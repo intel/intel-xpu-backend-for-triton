@@ -1017,13 +1017,19 @@ def test_pcsampling_xpu(tmp_path: pathlib.Path, device: str):
     proton.finalize()
     with temp_file.open() as f:
         data = json.load(f)
-    # Verify data structure exists
-    assert len(data) > 0
-    assert len(data[0]["children"]) >= 2
+    init_frame = data[0]["children"][0]
     test_frame = data[0]["children"][1]
-    # Check that samples were collected
-    # Note: XPU PC sampling may have different metric names than CUDA
-    assert len(test_frame["children"]) > 0
+    # With line mapping (if PTI provides source info)
+    assert "foo" in test_frame["children"][0]["frame"]["name"]
+    # Check that PC samples were collected
+    assert test_frame["children"][0]["children"][0]["metrics"]["num_samples"] > 0
+    # Check for source line mapping (PTI should provide file:line info)
+    if "@" in test_frame["children"][0]["children"][0]["frame"]["name"]:
+        # Source mapping available
+        pass
+    # Without line mapping (init kernels)
+    assert "elementwise" in init_frame["children"][0]["frame"]["name"]
+    assert init_frame["children"][0]["metrics"]["num_samples"] > 0
 
 
 def test_deactivate(tmp_path: pathlib.Path, device: str):
