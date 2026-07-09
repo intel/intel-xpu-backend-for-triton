@@ -44,6 +44,44 @@ DEFINE_DISPATCH(ExternLibXpupti, viewGetNextRecord, ptiViewGetNextRecord,
 DEFINE_DISPATCH(ExternLibXpupti, viewSetCallbacks, ptiViewSetCallbacks,
                 pti_fptr_buffer_requested, pti_fptr_buffer_completed)
 
+// PC Sampling API dispatches
+DEFINE_DISPATCH(ExternLibXpupti, pcSamplingEnable, ptiPcSamplingEnable,
+                pti_pc_sampling_handle_t *)
+
+DEFINE_DISPATCH(ExternLibXpupti, pcSamplingConfigure, ptiPcSamplingConfigure,
+                pti_pc_sampling_handle_t, const pti_device_handle_t *, size_t,
+                uint32_t)
+
+DEFINE_DISPATCH(ExternLibXpupti, pcSamplingStartCollection,
+                ptiPcSamplingStartCollection, pti_pc_sampling_handle_t)
+
+DEFINE_DISPATCH(ExternLibXpupti, pcSamplingStopCollection,
+                ptiPcSamplingStopCollection, pti_pc_sampling_handle_t)
+
+DEFINE_DISPATCH(ExternLibXpupti, pcSamplingGetStallReasons,
+                ptiPcSamplingGetStallReasons, pti_pc_sampling_handle_t,
+                pti_pc_sampling_stall_reason_info_t *, size_t *)
+
+DEFINE_DISPATCH(ExternLibXpupti, pcSamplingGetProfiledDevices,
+                ptiPcSamplingGetProfiledDevices, pti_pc_sampling_handle_t,
+                pti_device_handle_t *, size_t *)
+
+DEFINE_DISPATCH(ExternLibXpupti, pcSamplingGetObservedKernelHandles,
+                ptiPcSamplingGetObservedKernelHandles, pti_pc_sampling_handle_t,
+                pti_device_handle_t, uint64_t *, size_t *)
+
+DEFINE_DISPATCH(ExternLibXpupti, pcSamplingGetObservedKernelInfo,
+                ptiPcSamplingGetObservedKernelInfo, pti_pc_sampling_handle_t,
+                pti_device_handle_t, uint64_t, pti_pc_sampling_kernel_info_t *)
+
+DEFINE_DISPATCH(ExternLibXpupti, pcSamplingGetSamplesPerInstruction,
+                ptiPcSamplingGetSamplesPerInstruction, pti_pc_sampling_handle_t,
+                pti_device_handle_t, uint64_t, pti_pc_sampling_instruction_t *,
+                size_t, uint64_t *, size_t)
+
+DEFINE_DISPATCH(ExternLibXpupti, pcSamplingDisable, ptiPcSamplingDisable,
+                pti_pc_sampling_handle_t)
+
 } // namespace xpupti
 
 } // namespace proton

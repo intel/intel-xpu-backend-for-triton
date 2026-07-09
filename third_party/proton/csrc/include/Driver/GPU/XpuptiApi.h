@@ -3,6 +3,7 @@
 
 #include <pti/pti_callback.h>
 #include <pti/pti_view.h>
+#include <pti/pti_pc_sampling.h>
 
 namespace proton {
 
@@ -39,6 +40,57 @@ pti_result viewGetNextRecord(uint8_t *buffer, size_t valid_bytes,
 template <bool CheckSuccess>
 pti_result viewSetCallbacks(pti_fptr_buffer_requested fptr_bufferRequested,
                             pti_fptr_buffer_completed fptr_bufferCompleted);
+
+// PC Sampling API wrappers
+template <bool CheckSuccess>
+pti_result pcSamplingEnable(pti_pc_sampling_handle_t *handle);
+
+template <bool CheckSuccess>
+pti_result pcSamplingConfigure(pti_pc_sampling_handle_t handle,
+                               const pti_device_handle_t *devices,
+                               size_t device_count,
+                               uint32_t sampling_period_ns);
+
+template <bool CheckSuccess>
+pti_result pcSamplingStartCollection(pti_pc_sampling_handle_t handle);
+
+template <bool CheckSuccess>
+pti_result pcSamplingStopCollection(pti_pc_sampling_handle_t handle);
+
+template <bool CheckSuccess>
+pti_result pcSamplingGetStallReasons(pti_pc_sampling_handle_t handle,
+                                     pti_pc_sampling_stall_reason_info_t *reasons,
+                                     size_t *reason_count);
+
+template <bool CheckSuccess>
+pti_result pcSamplingGetProfiledDevices(pti_pc_sampling_handle_t handle,
+                                        pti_device_handle_t *devices,
+                                        size_t *device_count);
+
+template <bool CheckSuccess>
+pti_result
+pcSamplingGetObservedKernelHandles(pti_pc_sampling_handle_t handle,
+                                   pti_device_handle_t device,
+                                   uint64_t *kernel_handles,
+                                   size_t *kernel_count);
+
+template <bool CheckSuccess>
+pti_result pcSamplingGetObservedKernelInfo(
+    pti_pc_sampling_handle_t handle, pti_device_handle_t device,
+    uint64_t kernel_handle, pti_pc_sampling_kernel_info_t *kernel_info);
+
+template <bool CheckSuccess>
+pti_result
+pcSamplingGetSamplesPerInstruction(pti_pc_sampling_handle_t handle,
+                                   pti_device_handle_t device,
+                                   uint64_t kernel_handle,
+                                   pti_pc_sampling_instruction_t *instruction_buffer,
+                                   size_t instruction_buffer_count,
+                                   uint64_t *samples_buffer,
+                                   size_t samples_buffer_count);
+
+template <bool CheckSuccess>
+pti_result pcSamplingDisable(pti_pc_sampling_handle_t handle);
 
 } // namespace xpupti
 

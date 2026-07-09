@@ -134,7 +134,7 @@ def start(
     utils_cache_path = ""
     if hasattr(triton.runtime.driver.active.utils, "get_sycl_queue"):
         sycl_queue = triton.runtime.driver.active.utils.get_sycl_queue()
-        utils_cache_path = UTILS_CACHE_PATH
+        utils_cache_path = UTILS_CACHE_PATH if UTILS_CACHE_PATH is not None else ""
 
     _check_env(backend)
 

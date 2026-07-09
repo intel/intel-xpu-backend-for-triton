@@ -1,4 +1,5 @@
 #include "Profiler/Xpupti/XpuptiProfiler.h"
+#include "Profiler/Xpupti/XpuptiPCSampling.h"
 #include "Context/Context.h"
 #include "Data/Metric.h"
 #include "Device.h"
@@ -6,7 +7,9 @@
 #include "Driver/GPU/XpuptiApi.h"
 #include "Runtime/XpuRuntime.h"
 #include "Utility/Map.h"
+#include "Utility/String.h"
 #include <vector>
+#include <iostream>
 
 #include "pti/pti_view.h"
 #include <cassert>
@@ -153,6 +156,14 @@ struct XpuptiProfiler::XpuptiProfilerPimpl
     : public GPUProfiler<XpuptiProfiler>::GPUProfilerPimplInterface {
   XpuptiProfilerPimpl(XpuptiProfiler &profiler)
       : GPUProfiler<XpuptiProfiler>::GPUProfilerPimplInterface(profiler) {
+    // Set environment variable required for Level Zero metrics (PC sampling)
+    // This must be set before any PTI calls
+#ifdef _WIN32
+    _putenv_s("ZET_ENABLE_METRICS", "1");
+#else
+    setenv("ZET_ENABLE_METRICS", "1", 0);  // 0 = don't overwrite if already set
+#endif
+
     // FIXME: enable metrics
     auto runtime = &XpuRuntime::instance();
     profiler.metricBuffer =
@@ -181,10 +192,9 @@ struct XpuptiProfiler::XpuptiProfilerPimpl
   static constexpr size_t BufferSize = 64 * 1024 * 1024;
 
   pti_callback_subscriber_handle subscriber;
+  pti_device_handle_t currentDevice{nullptr};
 
   /*
-  CuptiPCSampling pcSampling;
-
   ThreadSafeMap<uint32_t, size_t, std::unordered_map<uint32_t, size_t>>
       graphIdToNumInstances;
   ThreadSafeMap<uint32_t, uint32_t, std::unordered_map<uint32_t, uint32_t>>
@@ -411,6 +421,12 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doStart() {
   xpupti::enableDomain<true>(subscriber,
                              PTI_CB_DOMAIN_DRIVER_GPU_OPERATION_APPENDED, 1, 1);
   // setDriverCallbacks(subscriber, /*enable=*/true);
+  std::cout << "MARK#1\n";
+  // Start PC sampling if enabled
+  if (profiler.pcSamplingEnabled) {
+    // Use nullptr to profile all available devices
+    XpuptiPCSampling::instance().start(currentDevice);
+  }
 }
 
 void XpuptiProfiler::XpuptiProfilerPimpl::doFlush() {
@@ -425,6 +441,15 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doFlush() {
 }
 
 void XpuptiProfiler::XpuptiProfilerPimpl::doStop() {
+  XpuptiProfiler &profiler = threadState.profiler;
+
+  // Stop PC sampling if enabled
+  if (profiler.pcSamplingEnabled) {
+    // Get dataToEntry from current thread state
+    auto &dataToEntry = threadState.dataToEntry;
+    XpuptiPCSampling::instance().stop(currentDevice, dataToEntry);
+  }
+
   xpupti::viewDisable<true>(PTI_VIEW_DEVICE_GPU_KERNEL);
   xpupti::viewDisable<true>(PTI_VIEW_DEVICE_GPU_MEM_FILL);
   xpupti::viewDisable<true>(PTI_VIEW_DEVICE_GPU_MEM_COPY);
@@ -437,6 +462,11 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doStop() {
                               PTI_CB_DOMAIN_DRIVER_GPU_OPERATION_APPENDED);
   xpupti::unsubscribe<true>(subscriber);
   // cupti::finalize<true>();
+
+  // Finalize PC sampling if enabled
+  if (profiler.pcSamplingEnabled) {
+    XpuptiPCSampling::instance().finalize(currentDevice);
+  }
 }
 
 XpuptiProfiler::XpuptiProfiler() {
@@ -446,8 +476,30 @@ XpuptiProfiler::XpuptiProfiler() {
 XpuptiProfiler::~XpuptiProfiler() = default;
 
 void XpuptiProfiler::doSetMode(const std::vector<std::string> &modeAndOptions) {
+  if (modeAndOptions.empty()) {
+    return;
+  }
+
   auto mode = modeAndOptions[0];
-  if (!mode.empty()) {
+  if (toLower(mode) == "pcsampling") {
+    pcSamplingEnabled = true;
+
+    // Parse interval option if present: "pcsampling:interval=2000"
+    if (modeAndOptions.size() > 1) {
+      for (size_t i = 1; i < modeAndOptions.size(); i++) {
+        auto &option = modeAndOptions[i];
+        if (option.find("interval=") == 0) {
+          try {
+            pcSamplingInterval = std::stoi(option.substr(9));
+          } catch (const std::exception &e) {
+            throw std::invalid_argument(
+                "[PROTON] XpuptiProfiler: invalid interval value in mode: " +
+                option);
+          }
+        }
+      }
+    }
+  } else if (!mode.empty()) {
     throw std::invalid_argument("[PROTON] XpuptiProfiler: unsupported mode: " +
                                 mode);
   }

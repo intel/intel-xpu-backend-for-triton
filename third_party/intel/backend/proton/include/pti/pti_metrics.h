@@ -6,6 +6,7 @@
 #ifndef INCLUDE_PTI_METRICS_H_
 #define INCLUDE_PTI_METRICS_H_
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 
@@ -57,6 +58,8 @@ typedef enum _pti_metric_value_type {
   PTI_METRIC_VALUE_TYPE_FORCE_UINT32 = 0x7fffffff
 } pti_metric_value_type;
 
+PTI_STATIC_ASSERT(sizeof(pti_metric_value_type) == sizeof(uint32_t), "pti_metric_value_type enum should be equal to size of uint32_t");
+
 /// @brief Metric types
 typedef enum _pti_metric_type {
   PTI_METRIC_TYPE_DURATION = 0,                  //!< duration
@@ -72,6 +75,8 @@ typedef enum _pti_metric_type {
   PTI_METRIC_TYPE_FORCE_UINT32 = 0x7fffffff
 
 } pti_metric_type;
+
+PTI_STATIC_ASSERT(sizeof(pti_metric_type) == sizeof(uint32_t), "pti_metric_type enum should be equal to size of uint32_t");
 
 typedef union _pti_value_t {
     uint32_t ui32;                               //!< 32-bit unsigned-integer
@@ -98,9 +103,9 @@ typedef struct _pti_metric_properties_t {
 typedef void* pti_metrics_group_handle_t; //!< Abstraction of a metric group handle within PTI
 
 typedef enum _pti_metrics_group_type {
-  PTI_METRIC_GROUP_TYPE_EVENT_BASED = 0b0001,    //!< Event based sampling (Query)
-  PTI_METRIC_GROUP_TYPE_TIME_BASED = 0b0010,     //!< Time based sampling (Stream)
-  PTI_METRIC_GROUP_TYPE_TRACE_BASED = 0b0100,    //!< Trace based sampling (Trace)
+  PTI_METRIC_GROUP_TYPE_EVENT_BASED = 0x01,    //!< Event based sampling (Query)
+  PTI_METRIC_GROUP_TYPE_TIME_BASED = 0x02,     //!< Time based sampling (Stream)
+  PTI_METRIC_GROUP_TYPE_TRACE_BASED = 0x04,    //!< Trace based sampling (Trace)
 
   PTI_METRIC_GROUP_TYPE_FORCE_UINT32 = 0x7fffffff
 } pti_metrics_group_type;
@@ -112,9 +117,9 @@ typedef struct _pti_metrics_group_properties_t {
   uint32_t _metric_count;                        //!< Number of metrics in the metric group
   pti_metric_properties_t* _metric_properties;   //!< Convenience pointer to buffer where metric properties in the metric group can be saved
                                                  // The pointer is initialized to null. User is responsible for allocating buffer of size _metric_count
-                                                 // and calling the ptiMetricsGetMetricsProperties function to get the metric properties polulated
-                                                 // This pointer does not need to be used, it is part of the pti_metrics_group_preperties_t for convinience
-                                                 // only. It is usefull when traversing the buffer of metric group properties and then metric properties in
+                                                 // and calling the ptiMetricsGetMetricsProperties function to get the metric properties populated
+                                                 // This pointer does not need to be used, it is part of the pti_metrics_group_properties_t for convenience
+                                                 // only. It is useful when traversing the buffer of metric group properties and then metric properties in
                                                  // each group without needing to keep additional maps. User may choose to use a different pointer for metric
                                                  // properties.
   const char* _name;                             //!< Name of the metric group
@@ -180,11 +185,11 @@ ptiMetricsGetMetricsProperties(pti_metrics_group_handle_t metrics_group_handle,
                                 pti_metric_properties_t* metrics);
 
 typedef struct _pti_metrics_group_collection_params_t {
-  size_t _struct_size;                            //!< [in] Size of the pti_metirc_config_collection_params struct used for backwards compatibility
+  size_t _struct_size;                            //!< [in] Size of the pti_metrics_group_collection_params_t struct used for backwards compatibility
   pti_metrics_group_handle_t _group_handle;       //!< [in] Metric group handle.
   uint32_t _sampling_interval;                    //!< [in] Set the sampling interval in nsec.
                                                   //!<      This field is applicable for PTI_METRIC_GROUP_TYPE_TIME_BASED metrics groups only.
-  uint32_t _time_aggr_window;                     //!< [in] Set the time aggregation window in nsec.
+  uint64_t _time_aggr_window;                     //!< [in] Set the time aggregation window in nsec.
                                                   //!<      This field is applicable for PTI_METRIC_GROUP_TYPE_TRACE_BASED metrics groups only.
 } pti_metrics_group_collection_params_t;
 
@@ -262,13 +267,13 @@ ptiMetricsStopCollection(pti_device_handle_t device_handle);
 /**
  * @brief process and dump collected data on specified device
  * Note: ptiMetricsStopCollection must be called first to process collected data
- * ptiMetricGetCalculatedData can only be called once after the collection is stopped and cannot be called between pause and resume
+ * ptiMetricsGetCalculatedData can only be called once after the collection is stopped and cannot be called between pause and resume
  *
- * usage: 1- Call ptiMetricGetCalculatedData(device_handle, metrics_group_handle, NULL, metrics_values_count) to discover the required buffer size for
+ * usage: 1- Call ptiMetricsGetCalculatedData(device_handle, metrics_group_handle, NULL, metrics_values_count) to discover the required buffer size for
  *           data collected for the specified metric group on on the specified device ;
  *           the required buffer size will be written to value_count in multiples of pti_value_t.
  *        2- Allocate metrics_values_buffer for holding  metrics_values_count values
- *        3- Call ptiMetricGetCalculatedData(device_handle, metrics_group_handle, metrics_values_buffer, metrics_values_count) to get the values written to buffer
+ *        3- Call ptiMetricsGetCalculatedData(device_handle, metrics_group_handle, metrics_values_buffer, metrics_values_count) to get the values written to buffer
  * A sample contains a 64bit value container for each metric in the metric group.
  * based on the metric's value type, the 64bit value container should be converted appropriately.
  *
@@ -281,7 +286,7 @@ ptiMetricsStopCollection(pti_device_handle_t device_handle);
  * @return pti_result
  */
 pti_result PTI_EXPORT
-ptiMetricGetCalculatedData(pti_device_handle_t device_handle,
+ptiMetricsGetCalculatedData(pti_device_handle_t device_handle,
                           pti_metrics_group_handle_t metrics_group_handle,
                           pti_value_t* metrics_values_buffer,
                           uint32_t* metrics_values_count);

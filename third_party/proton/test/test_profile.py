@@ -992,6 +992,40 @@ def test_pcsampling(tmp_path: pathlib.Path, device: str):
     assert init_frame["children"][0]["metrics"]["num_samples"] > 0
 
 
+def test_pcsampling_xpu(tmp_path: pathlib.Path, device: str):
+    if not is_xpu():
+        pytest.skip("Only XPU backend supports pc sampling for Intel GPUs")
+
+    import os
+
+    if os.environ.get("PROTON_SKIP_PC_SAMPLING_TEST", "0") == "1":
+        pytest.skip("PC sampling test is disabled")
+
+    @triton.jit
+    def foo(x, y, size: tl.constexpr):
+        offs = tl.arange(0, size)
+        for _ in range(1000):
+            tl.store(y + offs, tl.load(x + offs))
+
+    temp_file = tmp_path / "test_pcsampling_xpu.hatchet"
+    proton.start(str(temp_file.with_suffix("")), hook="triton", backend="xpupti", mode="pcsampling")
+    with proton.scope("init"):
+        x = torch.ones((1024, ), device=device, dtype=torch.float32)
+        y = torch.zeros_like(x)
+    with proton.scope("test"):
+        foo[(1, )](x, y, x.size()[0], num_warps=4)
+    proton.finalize()
+    with temp_file.open() as f:
+        data = json.load(f)
+    # Verify data structure exists
+    assert len(data) > 0
+    assert len(data[0]["children"]) >= 2
+    test_frame = data[0]["children"][1]
+    # Check that samples were collected
+    # Note: XPU PC sampling may have different metric names than CUDA
+    assert len(test_frame["children"]) > 0
+
+
 def test_deactivate(tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_deactivate.hatchet"
     session_id = proton.start(str(temp_file.with_suffix("")), hook="triton")
