@@ -99,30 +99,33 @@ uint32_t processActivityKernel(
                                isMissingName = state.isMissingName;
                                dataToEntry = state.dataToEntry;
                              });
+    // Track entries to save for PC sampling
+    DataToEntryMap kernelDataToEntry;
+
     if (!isMissingName) {
+      // Kernel has a name (e.g., from triton hook) - use existing entries
       for (auto &[data, entry] : dataToEntry) {
         if (auto kernelMetric = convertActivityToMetric(activity)) {
           entry.upsertMetric(std::move(kernelMetric));
         }
+        kernelDataToEntry.insert_or_assign(data, entry);
       }
     } else {
-      // Create child entries with kernel names
-      DataToEntryMap childDataToEntry;
+      // Kernel name is missing - create child entries with PTI kernel name
       for (auto &[data, entry] : dataToEntry) {
         if (auto kernelMetric = convertActivityToMetric(activity)) {
           auto childEntry =
               data->addOp(entry.phase, entry.id, {Context(kernel->_name)});
           childEntry.upsertMetric(std::move(kernelMetric));
-          // Save child entry for PC sampling
-          childDataToEntry.insert_or_assign(data, childEntry);
+          kernelDataToEntry.insert_or_assign(data, childEntry);
         }
       }
+    }
 
-      // If PC sampling is enabled, save the child entries for later use
-      if (profiler.pcSamplingEnabled) {
-        std::lock_guard<std::mutex> lock(profiler.pcSamplingEntriesMutex);
-        profiler.pcSamplingKernelEntries.push_back(childDataToEntry);
-      }
+    // If PC sampling is enabled, save the kernel entries for later use
+    if (profiler.pcSamplingEnabled && !kernelDataToEntry.empty()) {
+      std::lock_guard<std::mutex> lock(profiler.pcSamplingEntriesMutex);
+      profiler.pcSamplingKernelEntries.push_back(kernelDataToEntry);
     }
     externIdToState.erase(externId);
     corrIdToExternId.erase(correlationId);
