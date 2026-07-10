@@ -984,7 +984,10 @@ run_vllm_moe_tests() {
       tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py \
       tests/kernels/moe/test_batched_deepgemm.py \
       tests/kernels/moe/test_gpt_oss_triton_kernels.py \
-      tests/kernels/moe/test_silu_mul_per_token_group_quant_fp8_colmajor.py
+      tests/kernels/moe/test_silu_mul_per_token_group_quant_fp8_colmajor.py \
+      tests/kernels/moe/test_block_int8.py \
+      tests/kernels/moe/test_block_fp8.py \
+      tests/kernels/moe/test_moe_layer.py
 }
 
 
@@ -1064,7 +1067,8 @@ run_vllm_quant_tests() {
       tests/kernels/quantization/test_block_int8.py \
       tests/kernels/quantization/test_fp8_quant.py \
       tests/kernels/quantization/test_fp8_quant_group.py \
-      tests/kernels/quantization/test_block_fp8.py
+      tests/kernels/quantization/test_block_fp8.py \
+      tests/kernels/quantization/test_per_token_group_quant.py
 }
 
 
