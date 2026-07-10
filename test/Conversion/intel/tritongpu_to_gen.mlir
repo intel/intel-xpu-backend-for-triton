@@ -503,21 +503,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @basic_view_broadcast(%arg : tensor<256xf32,#blocked0>) {
     // CHECK:      [[ARG0_0:%.*]] = llvm.extractvalue %arg0[0]
     // CHECK-NEXT: [[ARG0_1:%.*]] = llvm.extractvalue %arg0[1]
-    // CHECK-NEXT: [[STRUCT:%.*]] = llvm.mlir.undef : !llvm.struct<(f32, f32)>
-    // CHECK-NEXT: [[STRUCT1:%.*]] = llvm.insertvalue [[ARG0_0]], [[STRUCT]][0]
-    // CHECK-NEXT: [[STRUCT2:%.*]] = llvm.insertvalue [[ARG0_1]], [[STRUCT1]][1]
-    // CHECK-NEXT: [[T0:%.*]] = llvm.extractvalue [[STRUCT2]][0]
-    // CHECK-NEXT: [[T1:%.*]] = llvm.extractvalue [[STRUCT2]][1]
     %0 = tt.reshape %arg allow_reorder : tensor<256xf32, #blocked0> -> tensor<256x1xf32,#blocked2>
     // CHECK:      [[RES:%.*]] = llvm.mlir.undef : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
-    // CHECK-NEXT: [[RES1:%.*]] = llvm.insertvalue [[T0]], [[RES]][0]
-    // CHECK-NEXT: [[RES2:%.*]] = llvm.insertvalue [[T1]], [[RES1]][1]
-    // CHECK-NEXT: [[RES3:%.*]] = llvm.insertvalue [[T0]], [[RES2]][2]
-    // CHECK-NEXT: [[RES4:%.*]] = llvm.insertvalue [[T1]], [[RES3]][3]
-    // CHECK-NEXT: [[RES5:%.*]] = llvm.insertvalue [[T0]], [[RES4]][4]
-    // CHECK-NEXT: [[RES6:%.*]] = llvm.insertvalue [[T1]], [[RES5]][5]
-    // CHECK-NEXT: [[RES7:%.*]] = llvm.insertvalue [[T0]], [[RES6]][6]
-    // CHECK-NEXT: [[RES8:%.*]] = llvm.insertvalue [[T1]], [[RES7]][7]
+    // CHECK-NEXT: [[RES1:%.*]] = llvm.insertvalue [[ARG0_0]], [[RES]][0]
+    // CHECK-NEXT: [[RES2:%.*]] = llvm.insertvalue [[ARG0_1]], [[RES1]][1]
+    // CHECK-NEXT: [[RES3:%.*]] = llvm.insertvalue [[ARG0_0]], [[RES2]][2]
+    // CHECK-NEXT: [[RES4:%.*]] = llvm.insertvalue [[ARG0_1]], [[RES3]][3]
+    // CHECK-NEXT: [[RES5:%.*]] = llvm.insertvalue [[ARG0_0]], [[RES4]][4]
+    // CHECK-NEXT: [[RES6:%.*]] = llvm.insertvalue [[ARG0_1]], [[RES5]][5]
+    // CHECK-NEXT: [[RES7:%.*]] = llvm.insertvalue [[ARG0_0]], [[RES6]][6]
+    // CHECK-NEXT: [[RES8:%.*]] = llvm.insertvalue [[ARG0_1]], [[RES7]][7]
     %1 = tt.broadcast %0 : tensor<256x1xf32,#blocked2> -> tensor<256x4xf32, #blocked2>
     tt.return
   }
