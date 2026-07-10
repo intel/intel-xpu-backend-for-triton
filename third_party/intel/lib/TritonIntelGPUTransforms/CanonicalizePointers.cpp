@@ -2004,6 +2004,7 @@ TritonIntelGPUCanonicalizePointersPass::runOnFunc(tt::FuncOp func) {
       ConvertFuncOpArgsUnrealizedCasts, ConvertBroadcastOp, ConvertSplatOp,
       ConvertConvertLayoutOp, ConvertAddPtrOp,
       MaterializeFatPointer<tt::AtomicCASOp>,
+      MaterializeFatPointer<tt::AtomicPollOp>,
       MaterializeFatPointer<tt::AtomicRMWOp>,
       MaterializeFatPointer<tt::BitcastOp>, MaterializeFatPointer<tt::LoadOp>,
       MaterializeFatPointer<triton::gpu::AsyncCopyGlobalToLocalOp>,
