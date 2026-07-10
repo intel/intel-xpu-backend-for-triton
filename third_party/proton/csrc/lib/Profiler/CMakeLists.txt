@@ -7,6 +7,7 @@ add_proton_library(ProtonProfiler
   RocTracer/RoctracerProfiler.cpp
   $<$<NOT:$<PLATFORM_ID:Windows>>:RocprofSDK/RocprofSDKProfiler.cpp>
   Xpupti/XpuptiProfiler.cpp
+  Xpupti/XpuptiPCSampling.cpp
   Instrumentation/InstrumentationProfiler.cpp
   Instrumentation/Metadata.cpp
 )

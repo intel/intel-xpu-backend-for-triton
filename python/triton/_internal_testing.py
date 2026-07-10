@@ -339,7 +339,8 @@ def run_in_process(client_fn, args=(), kwargs=None, env=None):
     if kwargs is None:
         kwargs = {}
 
-    ctx = multiprocessing.get_context("forkserver")
+    start_method = "forkserver" if "forkserver" in multiprocessing.get_all_start_methods() else "spawn"
+    ctx = multiprocessing.get_context(start_method)
     q = ctx.Queue()
     with tempfile.TemporaryDirectory() as tmpdir:
         stderr_file = os.path.join(tmpdir, "err.log")

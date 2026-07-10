@@ -1,0 +1,79 @@
+#ifndef PROTON_PROFILER_XPUPTI_PC_SAMPLING_H_
+#define PROTON_PROFILER_XPUPTI_PC_SAMPLING_H_
+
+#include "XpuptiProfiler.h"
+#include "Driver/GPU/XpuApi.h"
+#include "Driver/GPU/XpuptiApi.h"
+#include "Utility/Map.h"
+#include "Utility/Singleton.h"
+#include <atomic>
+#include <mutex>
+#include <vector>
+
+#include <pti/pti_pc_sampling.h>
+
+namespace proton {
+
+struct XpuptiConfigureData {
+  XpuptiConfigureData() = default;
+
+  ~XpuptiConfigureData() {
+    if (stallReasonInfos) {
+      delete[] stallReasonInfos;
+    }
+    if (aggregatedSamples) {
+      delete[] aggregatedSamples;
+    }
+  }
+
+  void initialize(pti_device_handle_t device);
+
+  // Default sampling period in nanoseconds = 100 ns (1 microsecond)
+  static constexpr uint32_t DefaultSamplingPeriodNs = 100;
+
+  pti_device_handle_t device{};
+  pti_pc_sampling_handle_t handle{};
+  uint32_t samplingPeriodNs{DefaultSamplingPeriodNs};
+  size_t numStallReasons{};
+  pti_pc_sampling_stall_reason_info_t *stallReasonInfos{};
+  std::map<size_t, size_t> stallReasonIndexToMetricIndex{};
+  uint64_t *aggregatedSamples{};
+};
+
+class XpuptiPCSampling : public Singleton<XpuptiPCSampling> {
+
+public:
+  XpuptiPCSampling() = default;
+  virtual ~XpuptiPCSampling() = default;
+
+  void initialize(pti_device_handle_t device);
+
+  void start(pti_device_handle_t device);
+
+  void stop(pti_device_handle_t device, const DataToEntryMap &dataToEntry);
+
+  // Stop collection without processing data (for use when processing multiple entries)
+  void stopCollection(pti_device_handle_t device);
+
+  // Process samples for a specific dataToEntry (can be called multiple times)
+  void processData(pti_device_handle_t device, const DataToEntryMap &dataToEntry);
+
+  void finalize(pti_device_handle_t device);
+
+private:
+  XpuptiConfigureData *getConfigureData(pti_device_handle_t device);
+
+  void processPCSamplingData(XpuptiConfigureData *configureData,
+                             const DataToEntryMap &dataToEntry);
+
+  ThreadSafeMap<pti_device_handle_t, XpuptiConfigureData>
+      deviceToConfigureData;
+
+  std::atomic<bool> pcSamplingStarted{false};
+  std::mutex pcSamplingMutex{};
+  std::mutex deviceMutex{};
+};
+
+} // namespace proton
+
+#endif // PROTON_PROFILER_XPUPTI_PC_SAMPLING_H_
