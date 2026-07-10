@@ -447,6 +447,35 @@ void XpuptiPCSampling::stop(pti_device_handle_t device,
   std::cout << "[PC Sampling] XpuptiPCSampling::stop() - DONE" << std::endl;
 }
 
+void XpuptiPCSampling::stopCollection(pti_device_handle_t device) {
+  std::cout << "[PC Sampling] XpuptiPCSampling::stopCollection() - START" << std::endl;
+  std::cout << "[PC Sampling]   Device: " << device << std::endl;
+
+  doubleCheckedLock(
+      [&]() -> bool { return pcSamplingStarted; }, pcSamplingMutex, [&]() {
+        auto *configureData = getConfigureData(device);
+        std::cout << "[PC Sampling]   Calling ptiPcSamplingStopCollection()..." << std::endl;
+        std::cout << "[PC Sampling]   Handle: " << configureData->handle << std::endl;
+        xpupti::pcSamplingStopCollection<true>(configureData->handle);
+        std::cout << "[PC Sampling]   ✓ ptiPcSamplingStopCollection() succeeded" << std::endl;
+        pcSamplingStarted = false;
+      });
+
+  std::cout << "[PC Sampling] XpuptiPCSampling::stopCollection() - DONE" << std::endl;
+}
+
+void XpuptiPCSampling::processData(pti_device_handle_t device,
+                                   const DataToEntryMap &dataToEntry) {
+  std::cout << "[PC Sampling] XpuptiPCSampling::processData() - START" << std::endl;
+  std::cout << "[PC Sampling]   Device: " << device << std::endl;
+  std::cout << "[PC Sampling]   dataToEntry size: " << dataToEntry.size() << " entries" << std::endl;
+
+  auto *configureData = getConfigureData(device);
+  processPCSamplingData(configureData, dataToEntry);
+
+  std::cout << "[PC Sampling] XpuptiPCSampling::processData() - DONE" << std::endl;
+}
+
 void XpuptiPCSampling::finalize(pti_device_handle_t device) {
   std::cout << "[PC Sampling] XpuptiPCSampling::finalize() - START" << std::endl;
   std::cout << "[PC Sampling]   Device: " << device << std::endl;

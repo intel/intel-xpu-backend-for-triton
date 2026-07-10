@@ -52,6 +52,12 @@ public:
 
   void stop(pti_device_handle_t device, const DataToEntryMap &dataToEntry);
 
+  // Stop collection without processing data (for use when processing multiple entries)
+  void stopCollection(pti_device_handle_t device);
+
+  // Process samples for a specific dataToEntry (can be called multiple times)
+  void processData(pti_device_handle_t device, const DataToEntryMap &dataToEntry);
+
   void finalize(pti_device_handle_t device);
 
 private:

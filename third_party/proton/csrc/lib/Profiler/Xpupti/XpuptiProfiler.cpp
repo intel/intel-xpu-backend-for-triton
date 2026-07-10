@@ -522,29 +522,26 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doStop() {
     std::cout << "[Profiler]   Saved " << profiler.pcSamplingCorrelationToEntry.size()
               << " correlation entries" << std::endl;
 
-    // Merge all saved dataToEntry maps
-    // Note: If multiple kernels have the same Data pointer, only the last one's entry
-    // will be kept. This is OK because we want to add samples to ALL entries that
-    // reference the same Data object, not just one.
-    DataToEntryMap mergedDataToEntry;
+    // Stop collection once
+    std::cout << "[Profiler]   Stopping PC sampling collection..." << std::endl;
+    XpuptiPCSampling::instance().stopCollection(currentDevice);
+
+    // Process samples for EACH saved correlation entry separately
+    // This ensures PC sampling metrics are added to ALL kernel entries,
+    // not just the last one saved (which would happen if we merged by Data pointer)
+    std::cout << "[Profiler]   Processing PC samples for each correlation entry:" << std::endl;
     for (const auto &[corrId, dataToEntry] : profiler.pcSamplingCorrelationToEntry) {
       std::cout << "[Profiler]   Correlation ID " << corrId << " has " << dataToEntry.size() << " entries:" << std::endl;
       for (const auto &[data, entry] : dataToEntry) {
         std::cout << "[Profiler]     data=" << data << ", phase=" << entry.phase << ", id=" << entry.id << std::endl;
-        // insert_or_assign will keep the LAST entry for each unique Data pointer
-        // This means if multiple kernels share the same Data, only one gets sampl samples
-        mergedDataToEntry.insert_or_assign(data, entry);
       }
+      // Process samples for this specific entry
+      // Note: All kernels' samples will be added to each entry, which is correct
+      // because PC sampling is session-wide and we can't distinguish which kernel
+      // generated which samples without correlation IDs (which PTI doesn't provide)
+      XpuptiPCSampling::instance().processData(currentDevice, dataToEntry);
     }
-    std::cout << "[Profiler]   Merged dataToEntry size: " << mergedDataToEntry.size() << std::endl;
-    std::cout << "[Profiler]   Final merged entries:" << std::endl;
-    for (const auto &[data, entry] : mergedDataToEntry) {
-      std::cout << "[Profiler]     data=" << data << ", phase=" << entry.phase << ", id=" << entry.id << std::endl;
-    }
-
-    // Stop collection and process samples
-    XpuptiPCSampling::instance().stop(currentDevice, mergedDataToEntry);
-    std::cout << "[Profiler]   ✓ PC sampling stopped" << std::endl;
+    std::cout << "[Profiler]   ✓ PC sampling processed for all entries" << std::endl;
 
     // Clean up saved entries
     profiler.pcSamplingCorrelationToEntry.clear();
