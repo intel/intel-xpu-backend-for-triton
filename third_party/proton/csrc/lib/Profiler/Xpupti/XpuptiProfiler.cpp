@@ -272,13 +272,21 @@ void XpuptiProfiler::XpuptiProfilerPimpl::callbackFn(
                                                scope.scopeId, 1, isMissingName,
                                                dataToEntry);
   } else if (callback_data->_phase == PTI_CB_PHASE_API_EXIT) {
-    // For PC sampling: Save correlation ID -> dataToEntry mapping BEFORE exitOp() clears it
+    // For PC sampling: Process samples for this kernel BEFORE exitOp() clears dataToEntry
     XpuptiProfiler &profiler = threadState.profiler;
     if (profiler.pcSamplingEnabled && !threadState.dataToEntry.empty()) {
+      // Unlike CUPTI which can start/stop sampling per kernel, PTI collects samples for
+      // all kernels during the entire session. We can't process samples per-kernel because
+      // PTI doesn't provide per-kernel sample retrieval. Instead, save the dataToEntry
+      // to process all samples together at the end.
       profiler.pcSamplingCorrelationToEntry.insert_or_assign(
           callback_data->_correlation_id, threadState.dataToEntry);
       std::cout << "[PC Sampling] Saved correlation ID " << callback_data->_correlation_id
-                << " with " << threadState.dataToEntry.size() << " entries" << std::endl;
+                << " with " << threadState.dataToEntry.size() << " entries"
+                << " (data=" << threadState.dataToEntry.begin()->first
+                << ", phase=" << threadState.dataToEntry.begin()->second.phase
+                << ", id=" << threadState.dataToEntry.begin()->second.id << ")"
+                << std::endl;
     }
 
     threadState.exitOp();
@@ -514,14 +522,25 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doStop() {
     std::cout << "[Profiler]   Saved " << profiler.pcSamplingCorrelationToEntry.size()
               << " correlation entries" << std::endl;
 
-    // Merge all saved dataToEntry maps into one
+    // Merge all saved dataToEntry maps
+    // Note: If multiple kernels have the same Data pointer, only the last one's entry
+    // will be kept. This is OK because we want to add samples to ALL entries that
+    // reference the same Data object, not just one.
     DataToEntryMap mergedDataToEntry;
     for (const auto &[corrId, dataToEntry] : profiler.pcSamplingCorrelationToEntry) {
+      std::cout << "[Profiler]   Correlation ID " << corrId << " has " << dataToEntry.size() << " entries:" << std::endl;
       for (const auto &[data, entry] : dataToEntry) {
+        std::cout << "[Profiler]     data=" << data << ", phase=" << entry.phase << ", id=" << entry.id << std::endl;
+        // insert_or_assign will keep the LAST entry for each unique Data pointer
+        // This means if multiple kernels share the same Data, only one gets sampl samples
         mergedDataToEntry.insert_or_assign(data, entry);
       }
     }
     std::cout << "[Profiler]   Merged dataToEntry size: " << mergedDataToEntry.size() << std::endl;
+    std::cout << "[Profiler]   Final merged entries:" << std::endl;
+    for (const auto &[data, entry] : mergedDataToEntry) {
+      std::cout << "[Profiler]     data=" << data << ", phase=" << entry.phase << ", id=" << entry.id << std::endl;
+    }
 
     // Stop collection and process samples
     XpuptiPCSampling::instance().stop(currentDevice, mergedDataToEntry);
