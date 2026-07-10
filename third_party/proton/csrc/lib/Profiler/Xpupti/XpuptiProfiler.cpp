@@ -80,7 +80,8 @@ uint32_t processActivityKernel(
     XpuptiProfiler::ExternIdToStateMap &externIdToState,
     std::map<uint64_t, std::reference_wrapper<XpuptiProfiler::ExternIdState>>
         &externIdToStateCache,
-    xpupti::Pti_Activity *activity) {
+    xpupti::Pti_Activity *activity,
+    XpuptiProfiler &profiler) {
   auto *kernel = reinterpret_cast<pti_view_record_kernel *>(activity);
   auto correlationId = kernel->_correlation_id;
   size_t externId = 0;
@@ -105,12 +106,22 @@ uint32_t processActivityKernel(
         }
       }
     } else {
+      // Create child entries with kernel names
+      DataToEntryMap childDataToEntry;
       for (auto &[data, entry] : dataToEntry) {
         if (auto kernelMetric = convertActivityToMetric(activity)) {
           auto childEntry =
               data->addOp(entry.phase, entry.id, {Context(kernel->_name)});
           childEntry.upsertMetric(std::move(kernelMetric));
+          // Save child entry for PC sampling
+          childDataToEntry.insert_or_assign(data, childEntry);
         }
+      }
+
+      // If PC sampling is enabled, save the child entries for later use
+      if (profiler.pcSamplingEnabled) {
+        std::lock_guard<std::mutex> lock(profiler.pcSamplingEntriesMutex);
+        profiler.pcSamplingKernelEntries.push_back(childDataToEntry);
       }
     }
     externIdToState.erase(externId);
@@ -136,12 +147,13 @@ uint32_t processActivity(
     XpuptiProfiler::ExternIdToStateMap &externIdToState,
     std::map<uint64_t, std::reference_wrapper<XpuptiProfiler::ExternIdState>>
         &externIdToStateCache,
-    xpupti::Pti_Activity *activity) {
+    xpupti::Pti_Activity *activity,
+    XpuptiProfiler &profiler) {
   auto correlationId = 0;
   switch (activity->_view_kind) {
   case PTI_VIEW_DEVICE_GPU_KERNEL: {
     correlationId = processActivityKernel(corrIdToExternId, externIdToState,
-                                          externIdToStateCache, activity);
+                                          externIdToStateCache, activity, profiler);
     break;
   }
   default:
@@ -230,7 +242,7 @@ void XpuptiProfiler::XpuptiProfilerPimpl::completeBuffer(uint8_t *buffer,
     if (status == pti_result::PTI_SUCCESS) {
       auto correlationId = processActivity(
           profiler.correlation.corrIdToExternId,
-          profiler.correlation.externIdToState, externIdToStateCache, activity);
+          profiler.correlation.externIdToState, externIdToStateCache, activity, profiler);
       // Log latest completed correlation id.  Used to ensure we have flushed
       // all data on stop
       maxCorrelationId = std::max<uint64_t>(maxCorrelationId, correlationId);
@@ -272,23 +284,8 @@ void XpuptiProfiler::XpuptiProfilerPimpl::callbackFn(
                                                scope.scopeId, 1, isMissingName,
                                                dataToEntry);
   } else if (callback_data->_phase == PTI_CB_PHASE_API_EXIT) {
-    // For PC sampling: Process samples for this kernel BEFORE exitOp() clears dataToEntry
-    XpuptiProfiler &profiler = threadState.profiler;
-    if (profiler.pcSamplingEnabled && !threadState.dataToEntry.empty()) {
-      // Unlike CUPTI which can start/stop sampling per kernel, PTI collects samples for
-      // all kernels during the entire session. We can't process samples per-kernel because
-      // PTI doesn't provide per-kernel sample retrieval. Instead, save the dataToEntry
-      // to process all samples together at the end.
-      profiler.pcSamplingCorrelationToEntry.insert_or_assign(
-          callback_data->_correlation_id, threadState.dataToEntry);
-      std::cout << "[PC Sampling] Saved correlation ID " << callback_data->_correlation_id
-                << " with " << threadState.dataToEntry.size() << " entries"
-                << " (data=" << threadState.dataToEntry.begin()->first
-                << ", phase=" << threadState.dataToEntry.begin()->second.phase
-                << ", id=" << threadState.dataToEntry.begin()->second.id << ")"
-                << std::endl;
-    }
-
+    // PC sampling: Kernel entries are saved during activity processing in processActivityKernel()
+    // when child entries are created with kernel names. We don't need to save anything here.
     threadState.exitOp();
     threadState.profiler.correlation.submit(callback_data->_correlation_id);
   } else {
@@ -519,41 +516,31 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doStop() {
   // Stop PC sampling and process all collected samples
   if (profiler.pcSamplingEnabled) {
     std::cout << "[Profiler]   Stopping PC sampling..." << std::endl;
-    std::cout << "[Profiler]   Saved " << profiler.pcSamplingCorrelationToEntry.size()
-              << " correlation entries" << std::endl;
 
     // Stop collection once
     std::cout << "[Profiler]   Stopping PC sampling collection..." << std::endl;
     XpuptiPCSampling::instance().stopCollection(currentDevice);
 
-    // Collect ALL unique entries from all correlations
-    // Use (Data*, phase, id) tuple as key to identify unique entries
-    std::map<std::tuple<Data*, size_t, size_t>, DataEntry> uniqueEntries;
-    std::cout << "[Profiler]   Collecting unique entries from correlations:" << std::endl;
-    for (const auto &[corrId, dataToEntry] : profiler.pcSamplingCorrelationToEntry) {
-      std::cout << "[Profiler]   Correlation ID " << corrId << " has " << dataToEntry.size() << " entries:" << std::endl;
+    // Use kernel entries created during activity processing
+    // These are the ACTUAL kernel entries (with names) that should receive PC samples
+    std::lock_guard<std::mutex> lock(profiler.pcSamplingEntriesMutex);
+    std::cout << "[Profiler]   Processing PC samples for " << profiler.pcSamplingKernelEntries.size()
+              << " kernel entries created during activity processing" << std::endl;
+
+    for (size_t i = 0; i < profiler.pcSamplingKernelEntries.size(); i++) {
+      const auto &dataToEntry = profiler.pcSamplingKernelEntries[i];
+      std::cout << "[Profiler]   Kernel entry " << (i + 1) << " has " << dataToEntry.size() << " data entries:" << std::endl;
       for (const auto &[data, entry] : dataToEntry) {
-        auto key = std::make_tuple(data, entry.phase, entry.id);
-        uniqueEntries.insert_or_assign(key, entry);
         std::cout << "[Profiler]     data=" << data << ", phase=" << entry.phase << ", id=" << entry.id << std::endl;
       }
+      // Process samples for this kernel entry
+      XpuptiPCSampling::instance().processData(currentDevice, dataToEntry);
     }
 
-    // Build final dataToEntry map with unique entries
-    DataToEntryMap finalDataToEntry;
-    std::cout << "[Profiler]   Final unique entries (" << uniqueEntries.size() << "):" << std::endl;
-    for (const auto &[key, entry] : uniqueEntries) {
-      auto [data, phase, id] = key;
-      finalDataToEntry.insert_or_assign(data, entry);
-      std::cout << "[Profiler]     data=" << data << ", phase=" << phase << ", id=" << id << std::endl;
-    }
+    std::cout << "[Profiler]   ✓ PC sampling processed for all kernel entries" << std::endl;
 
-    // Process samples ONCE for all unique entries
-    XpuptiPCSampling::instance().processData(currentDevice, finalDataToEntry);
-    std::cout << "[Profiler]   ✓ PC sampling processed" << std::endl;
-
-    // Clean up saved entries
-    profiler.pcSamplingCorrelationToEntry.clear();
+    // Clean up
+    profiler.pcSamplingKernelEntries.clear();
   }
 
   xpupti::viewDisable<true>(PTI_VIEW_DEVICE_GPU_KERNEL);
