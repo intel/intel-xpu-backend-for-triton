@@ -1109,6 +1109,22 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
     if (descArgIndices.empty())
       return;
 
+    // Save original non-descriptor arg attrs keyed by Value (auto-tracks
+    // position through expansions). After all expansions, we restore them.
+    SmallVector<std::pair<Value, DictionaryAttr>> savedArgAttrs;
+    if (ArrayAttr allAttrs = funcOp.getAllArgAttrs()) {
+      for (unsigned i = 0; i < numArgs; ++i) {
+        if (isa<triton::TensorDescType>(funcType.getInput(i)))
+          continue; // descriptor args will be replaced
+        if (auto dictAttr = dyn_cast_or_null<DictionaryAttr>(allAttrs[i]))
+          if (!dictAttr.empty())
+            savedArgAttrs.push_back({entryBlock.getArgument(i), dictAttr});
+      }
+    }
+
+    // Pending (Value, divisibility) pairs for descriptor stride/ptr attrs.
+    SmallVector<std::pair<Value, unsigned>> pendingAttrs;
+
     for (unsigned idx : llvm::reverse(descArgIndices)) {
       auto descType = cast<triton::TensorDescType>(funcType.getInput(idx));
       auto blockType = descType.getSignlessBlockType();
@@ -1119,9 +1135,12 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
       if (!descArgFeedsOnlyLoadStore(descArg))
         continue;
 
-      // FIXME: Remove this limitation.
-      if (rank != 2)
-        continue;
+      // Read tt.divisibility from the descriptor arg BEFORE expansion
+      // (set by specialization when all shapes/strides are % 16 == 0).
+      unsigned descDivisibility = 0;
+      if (auto divAttr =
+              funcOp.getArgAttrOfType<IntegerAttr>(idx, "tt.divisibility"))
+        descDivisibility = divAttr.getValue().getZExtValue();
 
       // The frontend (tensor_descriptor_type._flatten_ir_types) places i32
       // shape and i64 stride args immediately after the descriptor arg.
@@ -1202,33 +1221,52 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
       funcOp.setType(FunctionType::get(ctx, entryBlock.getArgumentTypes(),
                                        funcType.getResults()));
 
-      // Set tt.divisibility = 16 on the base pointer arg.
-      funcOp.setArgAttr(idx, "tt.divisibility",
-                        IntegerAttr::get(IntegerType::get(ctx, 32), 16));
-
-      // Set tt.divisibility on stride args. Host TensorDescriptor guarantees
-      // stride * elem_bytes % 16 == 0, i.e. stride % (16/elem_bytes) == 0.
+      // Set tt.divisibility based on host TensorDescriptor guarantees:
+      //   base: always 16-byte aligned
+      //   non-last strides: stride * elem_bytes % 16 == 0
+      //   shapes: no guarantee (only from specialization "D" key)
       unsigned elemBytes = elemType.getIntOrFloatBitWidth() / 8;
       unsigned strideDivisibility = 16 / std::max(1u, elemBytes);
 
-      // Expanded stride args: at idx + 1 + rank (after ptr and shape i64s).
-      for (unsigned d = 0; d < rank - 1; ++d) {
-        funcOp.setArgAttr(
-            idx + 1 + rank + d, "tt.divisibility",
-            IntegerAttr::get(IntegerType::get(ctx, 32), strideDivisibility));
-      }
-      // Frontend stride args used by the synthetic MakeTensorDescOp.
-      // They shifted by (expandedTypes.size() - 1) due to expansion.
-      unsigned shift = expandedTypes.size() - 1;
-      for (unsigned d = 0; d < rank - 1; ++d) {
-        funcOp.setArgAttr(
-            frontendStrideStart + shift + d, "tt.divisibility",
-            IntegerAttr::get(IntegerType::get(ctx, 32), strideDivisibility));
+      pendingAttrs.push_back({basePtr, 16});
+      // Frontend stride args used by MakeTensorDescOp (guaranteed by
+      // TensorDescriptor: stride * elem_bytes % 16 == 0).
+      for (unsigned d = 0; d < rank - 1; ++d)
+        pendingAttrs.push_back({strideArgs[d], strideDivisibility});
+
+      // Shape divisibility: only when specialization confirms it (the "D"
+      // key is set when all shapes/strides are % 16 == 0 at JIT time).
+      if (descDivisibility > 0) {
+        unsigned shapeDivisibility = descDivisibility / std::max(1u, elemBytes);
+        for (unsigned d = 0; d < rank; ++d)
+          pendingAttrs.push_back({shapeArgs[d], shapeDivisibility});
       }
 
       // Refresh for next iteration.
       funcType = funcOp.getFunctionType();
       numArgs = funcType.getNumInputs();
+    }
+
+    // Rebuild arg attrs from scratch: clear, restore saved non-descriptor
+    // attrs at their auto-tracked positions, then apply descriptor attrs.
+    if (!descArgIndices.empty()) {
+      unsigned finalNumArgs = funcOp.getFunctionType().getNumInputs();
+      funcOp.setAllArgAttrs(SmallVector<Attribute>(finalNumArgs));
+
+      // Restore original non-descriptor arg attrs at their new positions.
+      for (auto &[val, dictAttr] : savedArgAttrs) {
+        unsigned argNum = cast<BlockArgument>(val).getArgNumber();
+        funcOp.setArgAttrs(argNum, dictAttr);
+      }
+
+      // Apply descriptor-specific attrs.
+      for (auto &[val, divisibility] : pendingAttrs) {
+        unsigned argNum = cast<BlockArgument>(val).getArgNumber();
+        funcOp.setArgAttr(
+            argNum, "tt.divisibility",
+            IntegerAttr::get(IntegerType::get(funcOp.getContext(), 32),
+                             divisibility));
+      }
     }
   });
 }

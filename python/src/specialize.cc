@@ -256,20 +256,59 @@ std::pair<py::object, py::object> specialize_tensordesc(PyObject *arg,
   if (!type_str_result)
     return {};
 
-  // Include padding in the specialization key so different padding values
-  // produce different compiled kernels. "N" encodes NaN padding and triggers
-  // tt.padding attribute via parse_attr.
+  // Build a specialization key encoding padding and divisibility info.
+  // "D" = all shapes/strides are 16-byte aligned (enables tt.divisibility).
+  // "N" = NaN padding (enables tt.padding attribute).
   static PyObject *padding_attr_name = PyUnicode_InternFromString("padding");
+  static PyObject *shape_attr_local = PyUnicode_InternFromString("shape");
+  static PyObject *strides_attr_local = PyUnicode_InternFromString("strides");
+
+  bool is_nan_padding = false;
   auto padding_obj = from_new_ref(PyObject_GetAttr(arg, padding_attr_name));
   if (padding_obj) {
     const char *pad_cstr = PyUnicode_AsUTF8(padding_obj.ptr());
-    if (pad_cstr && std::string_view(pad_cstr) == "nan") {
-      static PyObject *N_str = PyUnicode_InternFromString("N");
-      return {std::move(type_str_result), from_borrowed_ref(N_str)};
+    if (pad_cstr && std::string_view(pad_cstr) == "nan")
+      is_nan_padding = true;
+  }
+
+  // Check if all shape values are divisible by 16.
+  bool all_aligned = true;
+  auto shape_seq = from_new_ref(PyObject_GetAttr(arg, shape_attr_local));
+  if (!shape_seq) {
+    all_aligned = false;
+  } else {
+    Py_ssize_t len = PySequence_Size(shape_seq.ptr());
+    for (Py_ssize_t i = 0; i < len; ++i) {
+      auto item = from_new_ref(PySequence_GetItem(shape_seq.ptr(), i));
+      if (!item) {
+        all_aligned = false;
+        break;
+      }
+      long long val = PyLong_AsLongLong(item.ptr());
+      if (val == -1 && PyErr_Occurred()) {
+        PyErr_Clear();
+        all_aligned = false;
+        break;
+      }
+      if (val % 16 != 0) {
+        all_aligned = false;
+        break;
+      }
     }
   }
 
-  return {std::move(type_str_result), py::none()};
+  // Build key string: "D" for aligned, "N" for nan padding, "DN" for both.
+  std::string key;
+  if (all_aligned)
+    key += "D";
+  if (is_nan_padding)
+    key += "N";
+
+  if (key.empty())
+    return {std::move(type_str_result), py::none()};
+
+  auto key_result = from_new_ref(PyUnicode_FromString(key.c_str()));
+  return {std::move(type_str_result), std::move(key_result)};
 }
 
 std::pair<py::object, py::object> handle_long_type(PyObject *backend,

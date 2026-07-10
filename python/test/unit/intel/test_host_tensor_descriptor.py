@@ -111,9 +111,11 @@ def test_host_descriptor_matmul_2d_block_io(M, N, K, dtype, device):
     torch.testing.assert_close(c_device, ref, rtol=1e-2, atol=1e-2)
     torch.testing.assert_close(c_host, ref, rtol=1e-2, atol=1e-2)
 
-    # Codegen: both paths should generate 2D block loads.
-    for label, kernel in [("device", kernel_device), ("host", kernel_host)]:
-        llir = kernel.asm["llir"]
-        load_count = (llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead'))
-        assert load_count > 0, \
-            f"{label}-side path: expected 2D block load in LLIR but found none"
+    # Codegen: both paths must generate the same number of 2D block loads.
+    device_llir = kernel_device.asm["llir"]
+    host_llir = kernel_host.asm["llir"]
+    device_loads = device_llir.count('spirv_Subgroup2DBlockLoad') + device_llir.count('GenISA.LSC2DBlockRead')
+    host_loads = host_llir.count('spirv_Subgroup2DBlockLoad') + host_llir.count('GenISA.LSC2DBlockRead')
+    assert device_loads > 0, "device-side path: no 2D block loads found"
+    assert host_loads == device_loads, \
+        f"host has {host_loads} 2D block loads, expected {device_loads} (same as device)"
