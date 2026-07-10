@@ -526,22 +526,31 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doStop() {
     std::cout << "[Profiler]   Stopping PC sampling collection..." << std::endl;
     XpuptiPCSampling::instance().stopCollection(currentDevice);
 
-    // Process samples for EACH saved correlation entry separately
-    // This ensures PC sampling metrics are added to ALL kernel entries,
-    // not just the last one saved (which would happen if we merged by Data pointer)
-    std::cout << "[Profiler]   Processing PC samples for each correlation entry:" << std::endl;
+    // Collect ALL unique entries from all correlations
+    // Use (Data*, phase, id) tuple as key to identify unique entries
+    std::map<std::tuple<Data*, size_t, size_t>, DataEntry> uniqueEntries;
+    std::cout << "[Profiler]   Collecting unique entries from correlations:" << std::endl;
     for (const auto &[corrId, dataToEntry] : profiler.pcSamplingCorrelationToEntry) {
       std::cout << "[Profiler]   Correlation ID " << corrId << " has " << dataToEntry.size() << " entries:" << std::endl;
       for (const auto &[data, entry] : dataToEntry) {
+        auto key = std::make_tuple(data, entry.phase, entry.id);
+        uniqueEntries.insert_or_assign(key, entry);
         std::cout << "[Profiler]     data=" << data << ", phase=" << entry.phase << ", id=" << entry.id << std::endl;
       }
-      // Process samples for this specific entry
-      // Note: All kernels' samples will be added to each entry, which is correct
-      // because PC sampling is session-wide and we can't distinguish which kernel
-      // generated which samples without correlation IDs (which PTI doesn't provide)
-      XpuptiPCSampling::instance().processData(currentDevice, dataToEntry);
     }
-    std::cout << "[Profiler]   ✓ PC sampling processed for all entries" << std::endl;
+
+    // Build final dataToEntry map with unique entries
+    DataToEntryMap finalDataToEntry;
+    std::cout << "[Profiler]   Final unique entries (" << uniqueEntries.size() << "):" << std::endl;
+    for (const auto &[key, entry] : uniqueEntries) {
+      auto [data, phase, id] = key;
+      finalDataToEntry.insert_or_assign(data, entry);
+      std::cout << "[Profiler]     data=" << data << ", phase=" << phase << ", id=" << id << std::endl;
+    }
+
+    // Process samples ONCE for all unique entries
+    XpuptiPCSampling::instance().processData(currentDevice, finalDataToEntry);
+    std::cout << "[Profiler]   ✓ PC sampling processed" << std::endl;
 
     // Clean up saved entries
     profiler.pcSamplingCorrelationToEntry.clear();
