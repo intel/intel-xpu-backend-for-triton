@@ -272,6 +272,15 @@ void XpuptiProfiler::XpuptiProfilerPimpl::callbackFn(
                                                scope.scopeId, 1, isMissingName,
                                                dataToEntry);
   } else if (callback_data->_phase == PTI_CB_PHASE_API_EXIT) {
+    // For PC sampling: Save correlation ID -> dataToEntry mapping BEFORE exitOp() clears it
+    XpuptiProfiler &profiler = threadState.profiler;
+    if (profiler.pcSamplingEnabled && !threadState.dataToEntry.empty()) {
+      profiler.pcSamplingCorrelationToEntry.insert_or_assign(
+          callback_data->_correlation_id, threadState.dataToEntry);
+      std::cout << "[PC Sampling] Saved correlation ID " << callback_data->_correlation_id
+                << " with " << threadState.dataToEntry.size() << " entries" << std::endl;
+    }
+
     threadState.exitOp();
     threadState.profiler.correlation.submit(callback_data->_correlation_id);
   } else {
@@ -499,14 +508,27 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doStop() {
   std::cout << "[Profiler] XpuptiProfiler::doStop() - START" << std::endl;
   std::cout << "[Profiler]   PC sampling enabled: " << (profiler.pcSamplingEnabled ? "yes" : "no") << std::endl;
 
-  // Stop PC sampling if enabled
+  // Stop PC sampling and process all collected samples
   if (profiler.pcSamplingEnabled) {
     std::cout << "[Profiler]   Stopping PC sampling..." << std::endl;
-    // Get dataToEntry from current thread state
-    auto &dataToEntry = threadState.dataToEntry;
-    std::cout << "[Profiler]   threadState.dataToEntry size: " << dataToEntry.size() << std::endl;
-    XpuptiPCSampling::instance().stop(currentDevice, dataToEntry);
+    std::cout << "[Profiler]   Saved " << profiler.pcSamplingCorrelationToEntry.size()
+              << " correlation entries" << std::endl;
+
+    // Merge all saved dataToEntry maps into one
+    DataToEntryMap mergedDataToEntry;
+    for (const auto &[corrId, dataToEntry] : profiler.pcSamplingCorrelationToEntry) {
+      for (const auto &[data, entry] : dataToEntry) {
+        mergedDataToEntry.insert_or_assign(data, entry);
+      }
+    }
+    std::cout << "[Profiler]   Merged dataToEntry size: " << mergedDataToEntry.size() << std::endl;
+
+    // Stop collection and process samples
+    XpuptiPCSampling::instance().stop(currentDevice, mergedDataToEntry);
     std::cout << "[Profiler]   ✓ PC sampling stopped" << std::endl;
+
+    // Clean up saved entries
+    profiler.pcSamplingCorrelationToEntry.clear();
   }
 
   xpupti::viewDisable<true>(PTI_VIEW_DEVICE_GPU_KERNEL);

@@ -19,20 +19,49 @@ size_t matchStallReasonsToIndices(
     size_t numStallReasons,
     pti_pc_sampling_stall_reason_info_t *stallReasonInfos,
     std::map<size_t, size_t> &stallReasonIndexToMetricIndex) {
-  // Match PTI stall reasons to PCSamplingMetric kinds
+  // Map Intel PTI stall reason names to PCSamplingMetric kinds
+  // PTI stall reason names from log: Active, PSDepStall, ControlStall, PipeStall,
+  // SendStall, DistStall, SbidStall, SyncStall, InstrFetchStall, OtherStall
+
   size_t numValidStalls = 0;
   for (size_t i = 0; i < numStallReasons; i++) {
     std::string ptiStallName = std::string(stallReasonInfos[i]._name);
-    for (size_t j = 0; j < PCSamplingMetric::PCSamplingMetricKind::Count; j++) {
-      auto metricName = std::string(PCSamplingMetric().getValueName(j));
-      // Map PTI stall reason names to metric kinds
-      // PTI uses different naming conventions, so we need fuzzy matching
-      if (ptiStallName.find(metricName) != std::string::npos ||
-          toLower(ptiStallName).find(toLower(metricName)) != std::string::npos) {
-        stallReasonIndexToMetricIndex[i] = j;
-        numValidStalls++;
-        break;
-      }
+    std::string lowerName = toLower(ptiStallName);
+
+    // Map PTI names to CUDA-style PCSamplingMetric kinds
+    // Note: This is an approximate mapping as Intel and NVIDIA stall categories differ
+    size_t metricKind = PCSamplingMetric::PCSamplingMetricKind::Count; // invalid
+
+    if (ptiStallName == "Active") {
+      // Active cycles - not stalled
+      metricKind = PCSamplingMetric::PCSamplingMetricKind::NumSamples;
+    } else if (ptiStallName == "ControlStall") {
+      metricKind = PCSamplingMetric::PCSamplingMetricKind::StalledBranchResolving;
+    } else if (ptiStallName == "InstrFetchStall") {
+      metricKind = PCSamplingMetric::PCSamplingMetricKind::StalledNoInstruction;
+    } else if (ptiStallName == "PSDepStall" || ptiStallName == "PipeStall") {
+      metricKind = PCSamplingMetric::PCSamplingMetricKind::StalledShortScoreboard;
+    } else if (ptiStallName == "SendStall") {
+      metricKind = PCSamplingMetric::PCSamplingMetricKind::StalledLongScoreboard;
+    } else if (ptiStallName == "SbidStall") {
+      metricKind = PCSamplingMetric::PCSamplingMetricKind::StalledWait;
+    } else if (ptiStallName == "SyncStall") {
+      metricKind = PCSamplingMetric::PCSamplingMetricKind::StalledBarrier;
+    } else if (ptiStallName == "DistStall") {
+      metricKind = PCSamplingMetric::PCSamplingMetricKind::StalledDispatchStall;
+    } else if (ptiStallName == "OtherStall") {
+      metricKind = PCSamplingMetric::PCSamplingMetricKind::StalledMisc;
+    }
+
+    if (metricKind != PCSamplingMetric::PCSamplingMetricKind::Count) {
+      stallReasonIndexToMetricIndex[i] = metricKind;
+      numValidStalls++;
+      std::cout << "[PC Sampling]     Mapped \"" << ptiStallName << "\" -> metric kind "
+                << metricKind << " (" << PCSamplingMetric().getValueName(metricKind) << ")"
+                << std::endl;
+    } else {
+      std::cout << "[PC Sampling]     Warning: No mapping for \"" << ptiStallName << "\""
+                << std::endl;
     }
   }
   return numValidStalls;

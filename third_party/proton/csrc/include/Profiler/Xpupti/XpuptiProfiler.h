@@ -3,6 +3,7 @@
 
 #include "Profiler/GPUProfiler.h"
 #include <memory>
+#include <map>
 
 namespace proton {
 
@@ -21,6 +22,9 @@ private:
 
   bool pcSamplingEnabled{false};
   uint32_t pcSamplingInterval{1000}; // Default interval in cycles
+
+  // Map correlation IDs to dataToEntry for PC sampling correlation
+  std::map<uint64_t, DataToEntryMap> pcSamplingCorrelationToEntry;
 };
 
 } // namespace proton
