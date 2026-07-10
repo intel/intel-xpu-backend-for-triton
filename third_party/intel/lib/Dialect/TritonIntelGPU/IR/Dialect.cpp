@@ -1033,14 +1033,21 @@ struct TritonIntelGPUInferLayoutInterface
   }
   LogicalResult
   verifyLayoutsAreEqual(ArrayRef<int64_t> shape, Attribute expected,
-                        Attribute got,
-                        std::optional<Location> loc) const override {
+                        Attribute got, std::optional<Location> loc,
+                        bool ignoreRegBroadcast) const override {
     if (expected == got) {
       return success();
     }
+    if (!expected || !got)
+      return failure();
     // Check whether the encodings are structurally the same.
-    const auto &expectedLL = triton::gpu::toLinearLayout(shape, expected);
-    const auto &gotLL = triton::gpu::toLinearLayout(shape, got);
+    auto expectedLL = triton::gpu::toLinearLayout(shape, expected);
+    auto gotLL = triton::gpu::toLinearLayout(shape, got);
+    if (ignoreRegBroadcast) {
+      auto kReg = StringAttr::get(getContext(), "register");
+      expectedLL = expectedLL.removeZeroBasesAlongDim(kReg);
+      gotLL = gotLL.removeZeroBasesAlongDim(kReg);
+    }
     if (expectedLL != gotLL) {
       return emitOptionalError(loc, "Expected result encoding ", expected,
                                " but was ", got);
