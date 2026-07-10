@@ -1024,7 +1024,7 @@ def test_pcsampling_xpu(tmp_path: pathlib.Path, device: str):
     # Check that PC samples were collected
     assert test_frame["children"][0]["metrics"]["num_samples"] > 0
     # Check for source line mapping (PTI should provide file:line info)
-    if "@" in test_frame["children"][0]["children"][0]["frame"]["name"]:
+    if "@" in test_frame["children"][0]["frame"]["name"]:
         # Source mapping available
         pass
     # Without line mapping (init kernels)
