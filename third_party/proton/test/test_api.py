@@ -4,6 +4,7 @@ No GPU kernel should be declared in this test.
 Profile correctness tests involving GPU kernels should be placed in `test_profile.py`.
 """
 
+import os
 import pytest
 import json
 import torch
@@ -101,15 +102,18 @@ def test_profile_mode(tmp_path: pathlib.Path):
             proton.finalize()
     elif is_xpu():
         try:
+            # To avoid: Condition status == ZE_RESULT_SUCCESS
+            # Failed on void utils::ze::FindMetricGroups(ze_device_handle_t, std::vector<zet_metric_group_handle_t> &)
+            # at ...scripts_cache/pti-gpu/sdk/src/utils/ze_utils.h:414 Fatal Python error: Aborted.
+            # Detail: STATUS: 1879179264
+            if os.environ.get("PROTON_SKIP_PC_SAMPLING_TEST", "0") == "1":
+                pytest.skip("PC sampling test is disabled")
             proton.start(str(temp_file0.with_suffix("")), mode="pcsampling")
         except Exception as e:
             assert "XpuptiProfiler: unsupported mode: pcsampling" in str(e)
         finally:
             proton.finalize()
     else:
-        import os
-        import pytest
-
         if os.environ.get("PROTON_SKIP_PC_SAMPLING_TEST", "0") == "1":
             pytest.skip("PC sampling test is disabled")
 

@@ -119,7 +119,6 @@ def start(
     if backend == "xpupti":
         global UTILS_CACHE_PATH
         UTILS_CACHE_PATH = triton.runtime.driver.active.build_proton_help_lib()
-        breakpoint()
         try:
             if (files := importlib.metadata.files('intel-pti')) is not None:
                 for f in files:
