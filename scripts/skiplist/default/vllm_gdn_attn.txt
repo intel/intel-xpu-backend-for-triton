@@ -6,3 +6,5 @@ tests/kernels/test_fused_recurrent_packed_decode.py::test_fused_recurrent_packed
 tests/kernels/test_fused_recurrent_packed_decode.py::test_fused_recurrent_packed_decode_matches_reference[False-dtype1]
 tests/kernels/test_fused_recurrent_packed_decode.py::test_fused_recurrent_packed_decode_matches_reference[True-dtype0]
 tests/kernels/test_fused_recurrent_packed_decode.py::test_fused_recurrent_packed_decode_matches_reference[True-dtype1]
+tests/kernels/test_fused_recurrent_packed_decode.py::test_fused_recurrent_packed_decode_matches_reference[False-dtype2]
+
