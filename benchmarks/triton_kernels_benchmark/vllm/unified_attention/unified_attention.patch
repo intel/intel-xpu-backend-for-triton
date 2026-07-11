@@ -33,7 +33,7 @@ index b2667935c..678d938b6 100644
      right = num_seqs
      while left < right:
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 93622957b..c215998d6 100644
+index 93622957b..8eb69a2ea 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -7,8 +7,6 @@
@@ -166,7 +166,7 @@ index 93622957b..c215998d6 100644
          if segm_idx * tiles_per_segment * TILE_SIZE >= seq_len:
 +            # This segment covers no keys for this sequence. Mark it inactive
 +            # so reduce_segments does not need to reconstruct activity from
-+            # the producer's autotuned TILE_SIZE.
++            # the attention kernel's autotuned TILE_SIZE.
 +            store_segm_reduce_scalars(
 +                segm_max_ptr,
 +                segm_expsum_ptr,
