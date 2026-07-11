@@ -136,13 +136,13 @@ jobs:
       fail-fast: false
       matrix:
         suite:
-          #- vllm-spec-decode
-          #- vllm-mrv2
-          #- vllm-moe
-          #- vllm-triton-attn
-          #- vllm-mamba
-          #- vllm-quant
-          #- vllm-kda
+          - vllm-spec-decode
+          - vllm-mrv2
+          - vllm-moe
+          - vllm-triton-attn
+          - vllm-mamba
+          - vllm-quant
+          - vllm-kda
           - vllm-rest
     runs-on:
       - linux
@@ -280,15 +280,15 @@ jobs:
         run: |
           ${{ env.TRITON_TEST_CMD }} --vllm-gdn-attn
 
-      #- name: Run linear-attn tests
-      #  if: ${{ matrix.suite == 'vllm-rest' && steps.install-vllm.outcome == 'success' && !cancelled() }}
-      #  run: |
-      #    ${{ env.TRITON_TEST_CMD }} --vllm-linear-attn
+      - name: Run linear-attn tests
+        if: ${{ matrix.suite == 'vllm-rest' && steps.install-vllm.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --vllm-linear-attn
 
-      #- name: Run deepgemm tests
-      #  if: ${{ matrix.suite == 'vllm-rest' && steps.install-vllm.outcome == 'success' && !cancelled() }}
-      #  run: |
-      #    ${{ env.TRITON_TEST_CMD }} --vllm-deepgemm
+      - name: Run deepgemm tests
+        if: ${{ matrix.suite == 'vllm-rest' && steps.install-vllm.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --vllm-deepgemm
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}
