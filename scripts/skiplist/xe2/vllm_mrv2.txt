@@ -27,7 +27,7 @@ tests/v1/sample/test_logprobs.py::test_utf8_edge_cases_with_real_model
 tests/v1/sample/test_logprobs.py::test_correct_decoded_token_preserves_valid_tokens
 tests/v1/sample/test_logprobs.py::test_prompt_logprobs_with_chunking_and_preemption
 
-# Segmentation fault on B580:
+# Pytest segmentation fault on B580: https://github.com/intel/intel-xpu-backend-for-triton/issues/7420
 tests/v1/kv_connector/unit/test_nixl_connector.py::test_abort_timeout_on_prefiller[None]
 
 # NIXL is not available: https://github.com/intel/intel-xpu-backend-for-triton/issues/7419
