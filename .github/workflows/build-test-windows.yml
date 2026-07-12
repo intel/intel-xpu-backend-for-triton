@@ -12,6 +12,10 @@ on:
         description: Skip list
         type: string
         default: a770
+      ignore_errors:
+        description: Ignore test errors
+        type: boolean
+        default: false
       run_name:
         description: Custom run name
         type: string
@@ -138,6 +142,7 @@ jobs:
 
       - name: Run unit tests
         if: ${{ !cancelled() }}
+        continue-on-error: ${{ inputs.ignore_errors }}
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
@@ -146,6 +151,7 @@ jobs:
 
       - name: Run core tests
         if: ${{ !cancelled() }}
+        continue-on-error: ${{ inputs.ignore_errors }}
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
@@ -154,6 +160,7 @@ jobs:
 
       - name: Run gluon tests
         if: ${{ !cancelled() }}
+        continue-on-error: ${{ inputs.ignore_errors }}
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
@@ -162,6 +169,7 @@ jobs:
 
       - name: Run triton kernels tests
         if: ${{ !cancelled() }}
+        continue-on-error: ${{ inputs.ignore_errors }}
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
@@ -170,6 +178,7 @@ jobs:
 
       - name: Run interpreter tests
         if: ${{ !cancelled() }}
+        continue-on-error: ${{ inputs.ignore_errors }}
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
@@ -178,6 +187,7 @@ jobs:
 
       - name: Run tutorials
         if: ${{ !cancelled() }}
+        continue-on-error: ${{ inputs.ignore_errors }}
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
@@ -188,6 +198,7 @@ jobs:
 
       - name: Run instrumentation tests
         if: ${{ !cancelled() }}
+        continue-on-error: ${{ inputs.ignore_errors }}
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
