@@ -149,8 +149,13 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
 
     assert return_mode in ["min", "max", "mean", "median"]
 
-    fn()
-    synchronize()
+    # warm up the profiler infrastructure to eliminate cold-start overhead.
+    # Without this, the first profiler context creation has significant overhead
+    # (e.g., 2.5ms vs 1.7ms, causing bimodal benchmark results - issue #5208).
+    with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.XPU]) as _warmup_prof:
+        with record_function("__warmup_profiler"):
+            fn()
+            synchronize()
 
     # We maintain a buffer of 256 MB that we clear
     # before each kernel call to make sure that the L2
