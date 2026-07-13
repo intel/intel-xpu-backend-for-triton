@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "triton"
+version = "3.7.2+xpu"
+description = "Temporary compatibility shim for Triton XPU"
+readme = "README.md"
+requires-python = ">=3.10"
+
+dependencies = [
+    "triton-xpu==3.7.2"
+]
+
+authors = [
+    { name = "Intel Triton Team" }
+]
+
+license = "MIT"
+
+classifiers = [
+    "Programming Language :: Python :: 3",
+]
+
+[tool.setuptools]
+packages = []

@@ -1,6 +1,7 @@
 #include "intel/include/Analysis/AxisInfoExt.h"
 #include "intel/include/Analysis/StrideInfo.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/BlockIOUtils.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "intel/include/Utils/Utility.h"
@@ -43,6 +44,26 @@ static bool isBlockIOForAllLayoutsExplicitlyDisabled() {
       tt::tools::getStrEnv("TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS"));
   return enableBlockIOForAllLayout.has_value() &&
          !enableBlockIOForAllLayout.value();
+}
+
+// Check a descriptor base pointer or pitch against an alignment requirement.
+// A constant must be provably divisible. For a runtime value, divisibility 1
+// means the alignment is unknown; we trust the 16-byte make_tensor_descriptor
+// contract rather than reject the 2D block IO path. This silently miscompiles
+// if a caller breaks that contract, so the LDBG traces when we rely on it.
+static bool isDescriptorAligned(tt::intel::ModuleAxisInfoAnalysis &axisInfo,
+                                Value v, unsigned divisor) {
+  if (matchPattern(v, m_Constant()))
+    return ttgi::isDivisible(v, divisor);
+  const tt::AxisInfo *info = axisInfo.getAxisInfo(v);
+  int64_t div = info ? info->getDivisibility(0) : 1;
+  if (div == 1) {
+    LDBG("Divisibility unknown; trusting the 16-byte make_tensor_descriptor "
+         "alignment contract for runtime value (divisor="
+         << divisor << "): " << v);
+    return true;
+  }
+  return div % divisor == 0;
 }
 
 struct TritonIntelGPUMaterializeBlockPointerPass
@@ -152,8 +173,8 @@ private:
     // multiple of OWord(128 bits). All candidates must satisfy this.
     unsigned pitchDivisor = llvm::divideCeil(128, elementWidth);
     if (!llvm::all_of(allDescs, [&](tt::MakeTensorDescOp d) {
-          Value pitch = d.getStrides()[rank - 2];
-          return ttgi::isDivisible(pitch, pitchDivisor);
+          return isDescriptorAligned(axisInfoAnalysis, d.getStrides()[rank - 2],
+                                     pitchDivisor);
         }))
       return;
 
@@ -253,20 +274,20 @@ private:
         return false;
       }
 
-      // Value -1 is used to represent the unknown stride.
+      // Runtime stride (-1) is OK if AxisInfo proves 16-byte alignment.
       int64_t otherDimStride =
           strideInfo ? strideInfo->getStride(otherDim) : -1;
-      if (otherDimStride < 0) {
-        LDBG("Found unknown stride: " << otherDimStride);
-        return false;
-      }
-
-      // Surface pitch is required to be 16 bytes aligned.
       Type elemTy =
           cast<tt::PointerType>(tensorTy.getElementType()).getPointeeType();
       unsigned elemSizeInBytes = elemTy.getIntOrFloatBitWidth() / 8;
-      if ((otherDimStride * elemSizeInBytes) % 16 != 0) {
-        LDBG("Found Non 16 bytes aligned stride: " << otherDimStride);
+      if (otherDimStride >= 0) {
+        if ((otherDimStride * elemSizeInBytes) % 16 != 0) {
+          LDBG("Non 16-byte aligned stride: " << otherDimStride);
+          return false;
+        }
+      } else if (axisInfo.getDivisibility(otherDim) % 16 != 0) {
+        LDBG("Runtime stride: divisibility "
+             << axisInfo.getDivisibility(otherDim) << " < 16 bytes");
         return false;
       }
 
@@ -527,22 +548,19 @@ private:
       return std::nullopt;
     }
 
+    // Surface pitch is encoded in 24 bits in the 2D block IO message
+    // descriptor.
+    constexpr int64_t maxPitchBytes = int64_t(1) << 24;
+    if (S * elemBytes > maxPitchBytes) {
+      LDBG("Pitch " << S * elemBytes
+                    << " bytes exceeds 24-bit HW limit, skip 1D reshape");
+      return std::nullopt;
+    }
+
     // Tile width must satisfy HW limits per element size.
-    auto isValidTileWidth = [](unsigned bits, int64_t w) -> bool {
-      switch (bits) {
-      case 8:
-        return w >= 4 && w <= 64;
-      case 16:
-        return w >= 2 && w <= 32;
-      case 32:
-        return w <= 16;
-      case 64:
-        return w <= 8;
-      default:
-        return false;
-      }
-    };
-    if (!isValidTileWidth(elemBits, W)) {
+    // The reshape always produces numElemPerPackedVal == 1, so
+    // packedElemSizeInBits == elemBits.
+    if (!ttgi::check2DBlockAddressPayloadRestriction(elemBits, W)) {
       LDBG("Tile width " << W << " invalid for " << elemBits
                          << "-bit elements, skip 1D reshape");
       return std::nullopt;
@@ -862,17 +880,17 @@ private:
     // Ensure the base ptr is 4-byte aligned.
     // Note: the HW requires the address to be 64-byte aligned, however we will
     // compensate by imposing restrictions on the offsetX and baseWidth.
-    const tt::AxisInfo *axisInfo = axisInfoAnalysis.getAxisInfo(desc);
-    if (axisInfo->getDivisibility(strideOneDimVal) % 4 != 0) {
-      LDBG("Found non 4 bytes aligned base: "
-           << axisInfo->getDivisibility(strideOneDimVal));
+    if (!llvm::all_of(allDescs, [&](tt::MakeTensorDescOp d) {
+          return isDescriptorAligned(axisInfoAnalysis, d.getBase(), 4);
+        })) {
+      LDBG("Found non 4 bytes aligned base");
       return false;
     }
 
     // Analyze the shape of the stride one dimension to ensure it satisfies HW
     // constraints.
     Value baseWidth = tt::intel::getFinalValue(shape[strideOneDimVal]);
-    unsigned divisor = llvm::divideCeil(32, elementWidth);
+    unsigned divisor = std::max(2u, llvm::divideCeil(32u, elementWidth));
     if (!ttgi::isDivisible(baseWidth, divisor)) {
       LLVM_DEBUG({
         llvm::dbgs() << "baseWidth does not satisfies HW constraint: ";

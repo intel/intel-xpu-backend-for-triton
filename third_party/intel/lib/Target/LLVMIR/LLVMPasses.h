@@ -30,4 +30,10 @@ struct ExpandSubByteBitwiseAndPass
   static StringRef name() { return "ExpandSubByteBitwiseAndPass"; }
 };
 
+struct ExpandSubByteVectorBitcastPass
+    : PassInfoMixin<ExpandSubByteVectorBitcastPass> {
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
+  static StringRef name() { return "ExpandSubByteVectorBitcastPass"; }
+};
+
 } // namespace llvm

@@ -56,6 +56,10 @@ static bool isSingleValue(Value value) {
 }
 
 bool isDivisible(Value value, unsigned divisor) {
+  // Every integer is divisible by 1, regardless of how `value` is defined.
+  if (divisor == 1)
+    return true;
+
   // Case 1: Value is defined by a constant operation
   if (auto constantOp = value.getDefiningOp<arith::ConstantOp>()) {
     auto integerAttr = dyn_cast<IntegerAttr>(constantOp.getValue());
@@ -71,6 +75,18 @@ bool isDivisible(Value value, unsigned divisor) {
           blockArg.getArgNumber(), "tt.divisibility");
       return divisibilityAttr &&
              divisibilityAttr.getValue().getZExtValue() % divisor == 0;
+    }
+    if (scf::ForOp forOp = dyn_cast<scf::ForOp>(parentOp)) {
+      // Nested loops aren't currently handled.
+      if (forOp->template getParentOfType<scf::ForOp>())
+        return false;
+      if (!forOp.getSingleInductionVar())
+        return false;
+      // Check only if the block arg is the loop-var.
+      if (blockArg != forOp.getInductionVar())
+        return false;
+      return isDivisible(forOp.getLowerBound(), divisor) &&
+             isDivisible(forOp.getStep(), divisor);
     }
   }
 
@@ -93,6 +109,14 @@ bool isDivisible(Value value, unsigned divisor) {
   return false;
 }
 
+static Attribute inferSrcEncoding(ttgi::DescriptorGatherOp op,
+                                  Attribute dstEnc) {
+  // only the offsets require the slice encoding, the base pointer is a scalar
+  // and does not require any encoding.
+  return SliceEncodingAttr::get(op->getContext(), 1,
+                                cast<DistributedEncodingTrait>(dstEnc));
+}
+
 Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
   if (auto dotEnc = dyn_cast<DotOperandEncodingAttr>(encoding)) {
     if (auto parentEnc = dyn_cast<DpasEncodingAttr>(dotEnc.getParent())) {
@@ -111,6 +135,9 @@ Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
       }
     }
   }
+
+  if (auto gatherOp = dyn_cast<ttgi::DescriptorGatherOp>(op))
+    return inferSrcEncoding(gatherOp, encoding);
 
   return mlir::inferSrcEncoding(op, encoding);
 }

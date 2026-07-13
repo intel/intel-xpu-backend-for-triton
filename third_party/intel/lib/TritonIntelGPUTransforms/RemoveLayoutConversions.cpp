@@ -397,8 +397,62 @@ bool isLayoutAnchor(Operation *op) {
         // Conservative fallback: if either lane base is not a clean single-dim
         // stride, the store can't be a 2D block write anyway -> nothing to
         // protect -> don't anchor (fold by default, as before).
-        if (rootLaneDim && dstLaneDim)
-          return *rootLaneDim != *dstLaneDim;
+        if (rootLaneDim && dstLaneDim) {
+          // Keep the lane-transpose guard (#7093): a convert that changes the
+          // lane-fast dim must be anchored or the row-major store demotes to a
+          // scatter.
+          if (*rootLaneDim != *dstLaneDim)
+            return true;
+          // The canonical-coalesced anchor below protects a 2D block write
+          // from demotion. A rank<2 store can never be a 2D block write, and a
+          // 1D store operand is frequently produced by a tt.reshape whose
+          // RLC-chosen (reshape-free) layout is NOT the coalesced canonical;
+          // forcing the canonical layout onto the reshape output corrupts the
+          // store (issue #7104 follow-up: test_trans_4d). Nothing to protect
+          // for rank<2 -> fold by default.
+          if (dstTy.getRank() < 2)
+            return false;
+          // Same lane-fast dim. Anchor iff dst is the canonical coalesced
+          // descriptor-store layout that tritongpu-coalesce assigns AND the
+          // chain root is not a dot result.
+          //
+          // Folding a canonical dst back to the producer's (compute) layout
+          // demotes global store coalescing (issue #7104), so anchor by
+          // default. The one exception is a dot result re-tiled for the store
+          // (issue #4866): there the store SHOULD take the dot-result layout
+          // and the convert must fold, so a dot-defined root suppresses the
+          // anchor. The root is the value the convert-chain walk stopped on;
+          // its defining op is the layout the store would actually fold to
+          // (elementwise/load producers read as non-dot and still anchor).
+          // Block args / iter_args / non-dot producers return false from both
+          // getDefiningOp<tt::DotOp>() and getDefiningOp<tt::DotScaledOp>(), so
+          // rootIsDot is false and the predicate anchors -- the safe default,
+          // since anchoring an already-canonical dst is
+          // performance-neutral-or-better and only #4866-style dot folding must
+          // be preserved.
+          // A descriptor-store operand is always a distributed (tensor)
+          // encoding; guard so a non-distributed encoding can't reach the
+          // unsafe shared-layout toLinearLayout path below.
+          if (!isa<ttg::DistributedEncodingTrait>(dstTy.getEncoding()))
+            return false;
+          bool rootIsDot = root.getDefiningOp<tt::DotOp>() ||
+                           root.getDefiningOp<tt::DotScaledOp>();
+          int numWarps = ttg::lookupNumWarps(op);
+          int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(
+              op->getParentOfType<ModuleOp>());
+          Attribute canonical = ttgi::canonicalCoalescedDescStoreLayout(
+              dstTy, numWarps, threadsPerWarp);
+          // dst and the canonical coalesced layout may be spelled differently
+          // (different sizePerThread / warp tiling) yet describe the same
+          // physical thread->element mapping. Compare via LinearLayout so any
+          // encoding physically identical to the coalesced layout matches
+          // (issue #7104).
+          bool dstIsCanonical = ttg::areLayoutsEquivalent(
+              dstTy.getShape(),
+              cast<ttg::LayoutEncodingTrait>(dstTy.getEncoding()),
+              cast<ttg::LayoutEncodingTrait>(canonical));
+          return dstIsCanonical && !rootIsDot;
+        }
       }
     }
   }
@@ -962,6 +1016,81 @@ bool canBeRemat(Operation *op) {
   return true;
 }
 
+// Returns true for shape-changing ops that carry no encoding constraint of
+// their own (ExpandDims, Trans, Broadcast). Ops such as ReshapeOp and GatherOp
+// are deliberately excluded: they may carry an efficient_layout attribute that
+// ties them to a specific encoding, so rematerializing a load into their input
+// encoding could violate that constraint.
+static bool isUnconstrainedShapeOp(Operation *op) {
+  return isa<tt::ExpandDimsOp, tt::TransOp, tt::BroadcastOp>(op);
+}
+
+// Return true if the op is an expensive load that is a candidate for
+// rematerialization in the specific safe pattern below. The load has exactly
+// one use (a ttg::ConvertLayoutOp), and that convert feeds a linear
+// single-use chain of unconstrained shape ops (see isUnconstrainedShapeOp)
+// before reaching the real compute consumer. Example:
+//
+//   %0 = tt.descriptor_load %desc[%c0] : ... -> tensor<1024xf16, #src>
+//   %1 = ttg.convert_layout %0 : tensor<1024xf16, #src>
+//                             -> tensor<1024xf16, #ttg.slice<{dim=1, ...}>>
+//   %2 = tt.expand_dims %1 {axis = 1} : ... -> tensor<1024x1xf16, #A>
+//   %3 = tt.trans %2 ...
+//   %4 = tt.broadcast %3 ...
+//
+// The convert is eliminated and the load is rematerialized directly into the
+// slice encoding. Multi-use loads and loads feeding dot-operands or other
+// expensive consumers are correctly rejected by the canBeRemat anchor, which
+// this helper should NOT bypass.
+bool isExpensiveLoadRematCandidate(Operation *op) {
+  // 1. Must be a Load or DescriptorLoad
+  if (!isa<tt::LoadOp, tt::DescriptorLoadOp>(op))
+    return false;
+
+  // 2. Must be expensive (only expensive loads need the bypass; cheap loads
+  //    already pass canBeRemat)
+  if (!ttgi::isExpensiveLoadOrStore(op))
+    return false;
+
+  // 3. Must have exactly one use
+  Value loadResult = op->getResult(0);
+  if (!loadResult.hasOneUse())
+    return false;
+
+  // 4. That single use must be a ConvertLayoutOp
+  Operation *user = *loadResult.getUsers().begin();
+  if (!isa<ttg::ConvertLayoutOp>(user))
+    return false;
+
+  // 5. The ConvertLayoutOp must feed a single-use linear chain of unconstrained
+  //    shape ops (see isUnconstrainedShapeOp), not a real-layout consumer such
+  //    as a dot or store. A fork in the chain would duplicate the load; reject.
+  Value current = user->getResult(0);
+  if (!current.hasOneUse() ||
+      !isUnconstrainedShapeOp(*current.getUsers().begin()))
+    return false;
+
+  while (current.hasOneUse() &&
+         isUnconstrainedShapeOp(*current.getUsers().begin()))
+    current = (*current.getUsers().begin())->getResult(0);
+
+  if (!current.hasOneUse() &&
+      llvm::any_of(current.getUsers(), isUnconstrainedShapeOp))
+    return false;
+
+  return true;
+}
+
+// Return true if \p op may be rematerialized as part of a backward slice:
+// either it is rematerializable by kind (canBeRemat), or it is the narrow
+// expensive-load exception that is provably a non-duplicating relabel
+// (isExpensiveLoadRematCandidate). canBeRemat anchors expensive loads; this
+// wrapper lets that one safe pattern through without weakening the anchor for
+// any other caller of canBeRemat.
+static bool isRematerializableInSlice(Operation *op) {
+  return canBeRemat(op) || isExpensiveLoadRematCandidate(op);
+}
+
 void LayoutRematerialization::updateRematMapping(
     SmallVector<std::tuple<Value, Value>> &values) {
   for (auto [old, newV] : values) {
@@ -1437,7 +1566,7 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
   // Check if all the operations in the slice can be rematerialized.
   for (Value v : slice) {
     if (Operation *op = v.getDefiningOp()) {
-      if (!canBeRemat(op))
+      if (!isRematerializableInSlice(op))
         return failure();
     }
   }
@@ -1612,7 +1741,8 @@ static bool isRematBeneficial(ttg::ConvertLayoutOp convertOp,
 
     if (isa<arith::ConstantOp>(op)) {
       continue;
-    } else if (isa<tt::LoadOp>(op) || isa<ttg::LocalLoadOp>(op)) {
+    } else if (isa<tt::LoadOp, tt::DescriptorLoadOp>(op) ||
+               isa<ttg::LocalLoadOp>(op)) {
       for (Value result : op->getResults())
         rematerialisationCost += 8 * getByteCount(result);
     } else if (isa<arith::ArithDialect, math::MathDialect>(dialect)) {
@@ -1693,6 +1823,34 @@ void LayoutRematerialization::backwardRematerialization(
     if (isa<ttg::BlockedEncodingAttr>(dotLayout.getParent()))
       return;
   Value oldV = convertOp.getSrc();
+  // When rematerializing an expensive load past the canBeRemat anchor, only do
+  // so if the convert's target layout is non-degenerate (sizePerThread not
+  // all-ones). Earlier RLC runs may still carry the initial placeholder layout
+  // from convert_to_ttgpuir; baking that onto the load freezes a bad layout
+  // that then forward-propagates onto the shared main tile. Example of the
+  // degenerate case to skip:
+  //
+  //   %0 = tt.descriptor_load ... -> tensor<1024xf16, #src>
+  //   %1 = ttg.convert_layout %0 -> tensor<1024xf16,
+  //          #ttg.slice<{dim=1, parent=#blocked<sizePerThread=[1,1],...>}>>
+  //
+  // Deferring until the target layout has been healed by later passes
+  // preserves the good fixpoint that the unrematerialized path reaches.
+  if (Operation *defOp = oldV.getDefiningOp();
+      defOp && isExpensiveLoadRematCandidate(defOp)) {
+    Attribute targetEnc = targetType.getEncoding();
+    Attribute parentEnc = targetEnc;
+    if (auto sliceEnc = dyn_cast<ttg::SliceEncodingAttr>(targetEnc))
+      parentEnc = sliceEnc.getParent();
+    if (auto blockedEnc = dyn_cast<ttg::BlockedEncodingAttr>(parentEnc)) {
+      bool degenerate = llvm::all_of(blockedEnc.getSizePerThread(),
+                                     [](unsigned v) { return v == 1; });
+      if (degenerate) {
+        LDBG("  skip expensive-load remat: degenerate target layout");
+        return;
+      }
+    }
+  }
   LDBG("check backward remat with source " << oldV << " encoding "
                                            << targetType.getEncoding());
   // Check to see if there are existing remat'ed values for the pair of oldValue
@@ -2117,12 +2275,14 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
   // Rematerialize failed hoists right before the condtional, and hoist those
   // that succeeded into the branch and then rewrite the slice.
   IRMapping mapping;
+  SmallVector<Operation *> newConverts;
   auto hoistRemat = [&](OpBuilder &b, Value v, Attribute encoding) {
     auto tensorType = cast<RankedTensorType>(v.getType());
     auto newType = tensorType.cloneWithEncoding(encoding);
     Value newCvt =
         ttg::ConvertLayoutOp::create(b, convertOp.getLoc(), newType, v);
 
+    newConverts.push_back(newCvt.getDefiningOp());
     mapping.map(v, newCvt);
     slice.remove(v);
   };
@@ -2140,8 +2300,23 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
   // that currently rides the 2D block I/O hardware path (issue #7080).
   if (rematDegradesLoad(slice, layout)) {
     LDBG("  skip remat: would degrade a load encoding");
+    for (auto it = newConverts.rbegin(); it != newConverts.rend(); ++it)
+      (*it)->erase();
     return;
   }
+
+  // Check that rematerializing the slice is actually beneficial before
+  // rewriting. This prevents cloning expensive loads into conditional branches
+  // when the duplication cost exceeds the convert cost. Use newCvtCost=0
+  // (matching backwardRematerialization pattern) since we're hoisting into
+  // branches where the convert would be eliminated.
+  if (!isRematBeneficial(convertOp, slice, /*newCvtCost=*/0)) {
+    // Clean up orphaned convert ops created by hoistRemat before returning.
+    for (auto it = newConverts.rbegin(); it != newConverts.rend(); ++it)
+      (*it)->erase();
+    return;
+  }
+
   rewriteSlice(slice, layout, convertOp, mapping);
 }
 

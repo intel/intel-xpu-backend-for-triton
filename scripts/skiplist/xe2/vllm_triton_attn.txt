@@ -1,11 +1,3 @@
-# Hangs on B580: https://github.com/intel/intel-xpu-backend-for-triton/issues/7121
-tests/kernels/attention/test_triton_unified_attention.py::test_triton_unified_attn_fp16_input_fp8_output[r".*-seq_lens2"]@regexp
-tests/kernels/attention/test_triton_unified_attention.py::test_triton_unified_attn_fp16_input_fp8_output[r"0-32768-None-(64|128|256)-16-256-num_heads1-seq_lens3"]@regexp
-tests/kernels/attention/test_triton_unified_attention.py::test_triton_unified_attn_fp16_input_fp8_output[r"0-32768-50.0-(None|64|128|256)-16-256-num_heads1-seq_lens3"]@regexp
-tests/kernels/attention/test_triton_unified_attention.py::test_triton_unified_attn_fp16_input_fp8_output[r"8-32768-None-(None|64|128|256)-16-256-num_heads1-seq_lens3"]@regexp
-tests/kernels/attention/test_triton_unified_attention.py::test_triton_unified_attn_fp16_input_fp8_output[r"8-32768-50.0-(None|64|128|256)-16-256-num_heads1-seq_lens3"]@regexp
-tests/kernels/attention/test_triton_unified_attention.py::test_triton_unified_attn_fp16_input_fp8_output[r"0-2048-50.0-(64|128|256)-16-256-num_heads2-seq_lens3"]@regexp
-
 # Out of memory on B580: https://github.com/intel/intel-xpu-backend-for-triton/issues/7122
 tests/kernels/attention/test_triton_unified_attention.py::test_triton_unified_attn_fp16_input_fp8_output[0-2048-50.0-256-16-256-num_heads1-seq_lens3]
 tests/kernels/attention/test_triton_unified_attention.py::test_triton_unified_attn_fp16_input_fp8_output[0-2048-50.0-256-16-256-num_heads2-seq_lens0]
@@ -309,3 +301,8 @@ tests/kernels/attention/test_triton_prefill_attention.py::test_context_attention
 tests/kernels/attention/test_triton_prefill_attention.py::test_context_attention_sliding_window[dtype1-sliding_window1-128-8-32-1024-4]
 tests/kernels/attention/test_triton_prefill_attention.py::test_context_attention_sliding_window[dtype1-sliding_window2-128-32-32-1024-4]
 tests/kernels/attention/test_triton_prefill_attention.py::test_context_attention_sliding_window[dtype1-sliding_window2-128-8-32-1024-4]
+
+# Nondeterministic tensor-likes are not close on B580: https://github.com/intel/intel-xpu-backend-for-triton/issues/7395
+tests/kernels/attention/test_triton_unified_attention.py::test_triton_unified_attn_fp16_input_fp8_output[0-2048-50.0-256-16-256-num_heads0-seq_lens3]
+tests/kernels/attention/test_triton_unified_attention.py::test_triton_unified_attn_fp16_input_fp8_output[0-32768-50.0-256-16-256-num_heads1-seq_lens3]
+tests/kernels/attention/test_triton_unified_attention.py::test_triton_unified_attn_fp16_input_fp8_output[0-2048-50.0-None-16-256-num_heads0-seq_lens3]

@@ -273,14 +273,14 @@ def _attn_bwd_dkdv(dk, dv,  #
         # Compute dV.
         ppT = pT
         ppT = ppT.to(tl.float16)
-        dv += tl.dot(ppT, do)
+        dv = tl.dot(ppT, do, dv)
         # D (= delta) is pre-divided by ds_scale.
         Di = tl.load(D + offs_m)
         # Compute dP and dS.
         dpT = tl.dot(v, tl.trans(do)).to(tl.float32)
         dsT = pT * (dpT - Di[None, :])
         dsT = dsT.to(tl.float16)
-        dk += tl.dot(dsT, tl.trans(qT))
+        dk = tl.dot(dsT, tl.trans(qT), dk)
         # Increment pointers.
         curr_m += step_m
     return dk, dv
@@ -328,7 +328,7 @@ def _attn_bwd_dq(dq, q, K, V,  #
         ds = ds.to(tl.float16)
         # Compute dQ.
         # NOTE: We need to de-scale dq in the end, because kT was pre-scaled.
-        dq += tl.dot(ds, tl.trans(kT))
+        dq = tl.dot(ds, tl.trans(kT), dq)
         # Increment pointers.
         curr_n += step_n
     return dq

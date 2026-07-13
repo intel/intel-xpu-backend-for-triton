@@ -278,6 +278,31 @@ class env_opt_bool(env_base):
         return getenv_bool(self.key, None)
 
 
+class _env_fast_math(env_base[bool, bool]):
+    """Resolves fast-math from TRITON_INTEL_FAST_MATH and TORCHINDUCTOR_USE_FAST_MATH.
+
+    Priority:
+    - TRITON_INTEL_FAST_MATH explicitly set → use that value (0 overrides inductor)
+    - Otherwise, fall back to TORCHINDUCTOR_USE_FAST_MATH
+    - Default: False
+
+    FIXME: Have Inductor pass fast-math as an explicit compiler option instead of
+    relying on env vars.
+    """
+
+    def __init__(self):
+        super().__init__("TRITON_INTEL_FAST_MATH")
+
+    def get(self) -> bool:
+        triton_val = os.environ.get("TRITON_INTEL_FAST_MATH")
+        if triton_val is not None:
+            return triton_val.lower() in ("1", "true", "on")
+        inductor_val = os.environ.get("TORCHINDUCTOR_USE_FAST_MATH")
+        if inductor_val is not None:
+            return inductor_val.lower() in ("1", "true", "on")
+        return False
+
+
 @dataclass(frozen=True)
 class CompileTimes:
     """
@@ -568,7 +593,11 @@ class intel_knobs(base_knobs):
     opt_reduction_locality: env_bool = env_bool("TRITON_INTEL_OPTIMIZE_REDUCTION_LOCALITY", False)
     disable_igc_opt: env_bool = env_bool("TRITON_INTEL_DISABLE_IGC_OPT", False)
     disable_annotate_cache_control: env_bool = env_bool("TRITON_INTEL_DISABLE_ANNOTATE_CACHE_CONTROL", False)
-    fast_math: env_bool = env_bool("TRITON_INTEL_FAST_MATH", False)
+    enable_code_sinking: env_bool = env_bool("TRITON_INTEL_ENABLE_CODE_SINKING", False)
+    disable_canonicalize_pointers: env_bool = env_bool("TRITON_INTEL_DISABLE_CANONICALIZE_POINTERS", False)
+    enable_loop_distribution: env_bool = env_bool("TRITON_INTEL_ENABLE_LOOP_DISTRIBUTION", False)
+    enable_sub_32_dpas: env_bool = env_bool("TRITON_INTEL_ENABLE_DPAS_FOR_WARP_SIZE_32", False)
+    fast_math: _env_fast_math = _env_fast_math()
 
     enable_dump_spirv_kernel_args: env_bool = env_bool("TRITON_XPU_ENABLE_DUMP_SPIRV_KERNEL_ARGS", False)
     dump_spirv_kernel_args_dir: env_opt_str = env_opt_str("TRITON_XPU_DUMP_SPIRV_KERNEL_ARGS_DIR")
@@ -581,6 +610,8 @@ class intel_knobs(base_knobs):
     # the actual device extensions.
     device_extensions: env_opt_str = env_opt_str("TRITON_INTEL_DEVICE_EXTENSIONS")
     device_arch: env_opt_str = env_opt_str("TRITON_INTEL_DEVICE_ARCH")
+    # SYCL compiler Triton needs to be compatible with when generating kernel launchers
+    sycl_compiler: env_opt_str = env_opt_str("TRITON_INTEL_SYCL_COMPILER")
 
 
 class amd_knobs(base_knobs):
@@ -596,6 +627,7 @@ class amd_knobs(base_knobs):
     use_block_pingpong: env_opt_bool = env_opt_bool("TRITON_HIP_USE_BLOCK_PINGPONG")
     use_in_thread_transpose: env_opt_bool = env_opt_bool("TRITON_HIP_USE_IN_THREAD_TRANSPOSE")
     use_async_copy: env_opt_bool = env_opt_bool("TRITON_HIP_USE_ASYNC_COPY")
+    use_expert_scheduling: env_opt_bool = env_opt_bool("TRITON_HIP_USE_EXPERT_SCHEDULING")
 
     scalarize_packed_fops: env_bool = env_bool("AMDGCN_SCALARIZE_PACKED_FOPS")
 

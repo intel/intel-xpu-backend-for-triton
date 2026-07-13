@@ -2,6 +2,7 @@
 #define TRITONINTELGPU_TRANSFORMS_BLOCKIOUTILS_H
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
+#include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Support/LogicalResult.h"
 #include "triton/Analysis/AxisInfo.h"
@@ -11,6 +12,10 @@
 #include "llvm/ADT/SetVector.h"
 #include <optional>
 
+namespace mlir::triton::intel {
+class ModuleStrideAnalysis;
+} // namespace mlir::triton::intel
+
 namespace mlir::triton::gpu::intel {
 
 /// Information about a 2D block I/O tile shape, computed from a LinearLayout.
@@ -18,13 +23,14 @@ struct BlockIOTileSizeInfo {
   BlockIOTileSizeInfo() = delete;
   BlockIOTileSizeInfo(int tileHeight, int tileWidth, int numElemPerPackedVal,
                       int vBlocks, int rowDim, int colDim, bool transpose,
+                      bool vnni,
                       std::optional<SetVector<unsigned>> regPackedBases)
       : tileHeight(tileHeight), tileWidth(tileWidth),
         numElemPerPackedVal(numElemPerPackedVal), vBlocks(vBlocks),
-        rowDim(rowDim), colDim(colDim), transpose(transpose),
+        rowDim(rowDim), colDim(colDim), transpose(transpose), vnni(vnni),
         regPackedBases(regPackedBases) {}
   static BlockIOTileSizeInfo unknown() {
-    return {-1, -1, -1, -1, -1, -1, false, std::nullopt};
+    return {-1, -1, -1, -1, -1, -1, false, false, std::nullopt};
   }
 
   int tileHeight;
@@ -34,6 +40,7 @@ struct BlockIOTileSizeInfo {
   int rowDim;
   int colDim;
   bool transpose;
+  bool vnni;
   std::optional<SetVector<unsigned>> regPackedBases;
 
   bool isValid() const {
@@ -138,6 +145,24 @@ bool isBlockIOEligible(OpTy loadOp, RankedTensorType tensorTy) {
 /// encoding. Higher values indicate more HW cost. Used for cost modeling in
 /// RemoveLayoutConversions. Returns a comparable scalar (not cycle-accurate).
 unsigned estimateLoadHWCost(RankedTensorType type, Operation *loadOp);
+
+/// Return the canonical memory-coalesced layout that tritongpu-coalesce assigns
+/// to a descriptor load/store operand of the given type — sizePerThread
+/// vectorized along the contiguous (last) dim, row-major order, warps/threads
+/// distributed by BlockedEncodingAttr::get. RemoveLayoutConversions uses this
+/// to recognize (and preserve) a Coalesce-inserted convert feeding a
+/// tt.descriptor_store: folding it back to the producer's compute layout
+/// demotes the store's global coalescing (issue #7104).
+Attribute canonicalCoalescedDescStoreLayout(RankedTensorType type, int numWarps,
+                                            int threadsPerWarp);
+
+/// Runtime stride value along `dim`; null if none.
+Value getRuntimeStrideValue(triton::intel::ModuleStrideAnalysis &strideAnalysis,
+                            Value ptr, unsigned dim);
+
+/// Build `stride * elemSizeInBytes` as an i32; null for non-integer stride.
+Value materializePitchBytes(OpBuilder &builder, Location loc, Value stride,
+                            unsigned elemSizeInBytes);
 
 } // namespace mlir::triton::gpu::intel
 

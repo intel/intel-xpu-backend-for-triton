@@ -27,6 +27,33 @@ def TritonIntelGPUAccelerateMatmul
   ];
 }
 
+def TritonIntelGPUFoldFpToFp
+    : Pass<"tritonintelgpu-fold-fp-to-fp", "mlir::ModuleOp"> {
+  let summary = "Fold redundant tt.fp_to_fp cast chains";
+
+  let description = [{
+    Fold an `A -> B -> C` chain of `tt.fp_to_fp` casts into a single `A -> C`
+    cast when the outer cast `B -> C` is lossless (`B` is a subset of `C`),
+    dropping the redundant narrow intermediate `B`. Losslessness is decided from
+    `llvm::APFloat` semantics (mantissa precision + exponent range), so type
+    width alone is never trusted.
+
+    Two regimes:
+      * Inner cast `A -> B` is itself lossless (a pure widen, e.g.
+        `f8E5M2 -> f16 -> f32`). Dropping `B` preserves the result exactly, so
+        the fold runs unconditionally (strict-FP legal).
+      * Inner cast `A -> B` is lossy (a real downcast, e.g. user-inserted
+        `f32 -> f8 -> f16`). Dropping `B` changes the numerical result, so the
+        fold runs only under fast-math.
+
+    Fast-math is read from the `ttig.fast_math` module attribute (set from the
+    `TRITON_INTEL_FAST_MATH` environment variable by the annotate-module pass),
+    not a pass option.
+  }];
+
+  let dependentDialects = ["mlir::triton::TritonDialect"];
+}
+
 def TritonIntelGPUOptimizeDotOperands
     : Pass<"tritonintelgpu-optimize-dot-operands", "mlir::ModuleOp"> {
   let summary = "Intel optimize dot operands";
@@ -288,6 +315,33 @@ def TritonIntelGPUReduceVariableLiveness
                            "mlir::arith::ArithDialect"];
 }
 
+def TritonIntelGPUCodeSinking
+    : Pass<"tritonintelgpu-code-sinking", "mlir::ModuleOp"> {
+  let summary = "Sink pure ops past a region-bearing op to their first use after the region";
+
+  let description = [{
+    Moves a pure (read-only or effect-free, non-volatile) operation defined
+    before a region-bearing op (e.g. `scf.for`, `scf.while`, `scf.if`), whose
+    results are never used inside the region, down to just before its first use
+    after the region. This shortens the live range of a value that would
+    otherwise be live across the entire region, reducing register pressure that
+    competes with DPAS accumulators and A/B operand tiles. Loads (e.g. the
+    SwiGLU bias loads of #7250) are the motivating case, but the transform
+    applies to any pure op.
+
+    An op is sunk only when: it is defined in the same block as and before the
+    region-bearing op; it has no use inside the region (including uses that flow
+    through `scf.yield` or as operands to the barrier op itself); every
+    remaining use is strictly after the region; and there is no write side
+    effect (including writes inside the region) on the path between the op and
+    the sink point.
+  }];
+
+  let dependentDialects = ["mlir::triton::TritonDialect",
+                           "mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::scf::SCFDialect"];
+}
+
 def TritonIntelGPUAnnotateCacheControl
     : Pass<"tritonintelgpu-annotate-cache-control", "mlir::ModuleOp"> {
   let summary = "Annotate tt.load ops with .cg cache control unless the load's encoding indicates cross-subgroup L1 reuse";
@@ -363,6 +417,53 @@ def TritonIntelGPULowerTo2DBlockLoad
     "mlir::arith::ArithDialect",
     "mlir::triton::TritonDialect",
     "mlir::triton::gpu::intel::TritonIntelGPUDialect"
+  ];
+}
+
+def TritonIntelGPUCanonicalizePointers
+    : Pass<"tritonintelgpu-canonicalize-pointers", "mlir::ModuleOp"> {
+  let summary = "Canonicalize pointers: decompose tensor-pointer arithmetic "
+                "into scalar-base + tensor-offset form";
+  let description = [{
+    Traces every tt.ptr-typed function argument through its transitive uses and
+    decomposes tensor pointer arithmetic into a FatPtr{scalar_base,
+    tensor_offset} pair. Uniform (scalar-extractable) parts of each offset are
+    hoisted onto the scalar base pointer; only the non-uniform residual remains
+    as the tensor offset. At load/store sites the pass materializes
+    splat(scalar_base) + tensor_offset.
+
+    This reduces register pressure for pointer-heavy kernels by replacing
+    loop-carried tensor<Nx!tt.ptr> iter_args with scalar !tt.ptr iter_args.
+  }];
+  let dependentDialects = [
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::arith::ArithDialect",
+    "mlir::scf::SCFDialect",
+    "mlir::cf::ControlFlowDialect"
+  ];
+  let options = [
+    Option<"enableLargeTensorPtrCanon", "enable-large-tensor-ptr-canon",
+           "bool", /*default=*/"false",
+           "Enable canonicalization for pointers to tensors larger than 2GB">
+  ];
+}
+
+def TritonIntelGPULoopDistribute
+    : Pass<"tritonintelgpu-loop-distribute", "mlir::ModuleOp"> {
+  let summary = "Distribute dot operations in loops into separate loops";
+
+  let description = [{
+    Split an `scf.for` loop containing multiple `tt.dot` operations into
+    separate loops, each containing a single `tt.dot`. This reduces register
+    pressure (fewer live accumulators) and descriptor pressure (fewer active
+    2D block I/O descriptors per loop), at the cost of re-loading shared
+    operands.
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::TritonDialect",
+    "mlir::scf::SCFDialect"
   ];
 }
 

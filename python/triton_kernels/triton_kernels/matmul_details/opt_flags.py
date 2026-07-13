@@ -277,6 +277,7 @@ def make_default_opt_flags_nvidia(
     x_transpose,
     has_y_acc_in,
     constraints,
+    intermediate_out_dtype,
     x_uses_tma_when_persistent=True,
     w_transpose=False,
     mx_block_size=None,
@@ -404,7 +405,7 @@ def make_default_opt_flags_nvidia(
         block_m,
         block_n,
         block_k,
-        torch_dtype_to_dtype(precision_config.intermediate_out_dtype) if split_k > 1 else out_dtype,
+        torch_dtype_to_dtype(intermediate_out_dtype) if split_k > 1 else out_dtype,
         lhs_dtype,
         rhs_dtype,
         x_transpose,
@@ -553,6 +554,7 @@ def make_opt_flags(
     x_transpose,
     has_y_acc_in,
     block_k,
+    intermediate_out_dtype,
     mx_block_size=None,
     x_uses_tma_when_persistent=True,
     w_transpose=False,
@@ -580,6 +582,12 @@ def make_opt_flags(
         opt_flags_constraints.setdefault("block_k", rhs_layout.block_k)
         opt_flags_constraints.setdefault("block_n", rhs_layout.block_n)
         opt_flags_constraints.setdefault("disable_mx4_block_swap", True)
+        if (
+            rhs_layout.block_n == 512
+            and not enforce_bitwise_invariance
+            and not opt_flags_nvidia.is_x_scale_swizzled(precision_config)
+        ):
+            opt_flags_constraints.setdefault("block_m", 64)
     if block_k is not None:
         opt_flags_constraints = opt_flags_constraints.copy()
         opt_flags_constraints.update(block_k=block_k, split_k=1)
@@ -595,6 +603,7 @@ def make_opt_flags(
     if backend == "cuda":
         return make_default_opt_flags_nvidia(
             *args,
+            intermediate_out_dtype,
             x_uses_tma_when_persistent=x_uses_tma_when_persistent,
             w_transpose=w_transpose,
             mx_block_size=mx_block_size,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import importlib.util
 from pathlib import Path
 from typing import List, Tuple
 
@@ -15,10 +16,16 @@ from triton_kernels_benchmark.benchmark_testing import (
 from triton_kernels_benchmark.benchmark_utils import BenchmarkConfigs
 from triton_kernels_benchmark.configs.benchmark_config_templates import CONFIGS
 
+_VLLM_AVAILABLE = importlib.util.find_spec("vllm") is not None
+
 
 def _collect_cases() -> List[Tuple[str, str, str]]:
     cases: List[Tuple[str, str, str]] = []
     for template in CONFIGS:
+        # describe_metadata_only templates (vLLM) resolve get_benchmark -> import vllm
+        # when probed; skip them unless vllm is installed.
+        if template.describe_metadata_only and not _VLLM_AVAILABLE:
+            continue
         probe = make_cfg(template)
         for shape in probe.supported_shapes:
             shape_str = str(shape)

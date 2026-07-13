@@ -51,7 +51,8 @@ index 8bbbab3e5..8daefc5bb 100644
              accumulator = tl.dot(a, b.to(compute_type), acc=accumulator)
 @@ -135,10 +132,6 @@ def moe_mmk(
          else:
-             accumulator += tl.dot(a, b)
+-            accumulator += tl.dot(a, b)
++            accumulator = tl.dot(a, b, accumulator)
  
 -        # Advance the ptrs to the next K block.
 -        a_ptrs += BLOCK_K * stride_ak

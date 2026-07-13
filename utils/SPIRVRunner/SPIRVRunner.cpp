@@ -263,8 +263,8 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
   [[maybe_unused]] uint32_t expected_num_params =
       kernel_ptr.get_info<sycl::info::kernel::num_args>();
 
-  size_t global_range_x =
-      triton_args.gridX * triton_args.threads_per_warp * triton_args.num_warps;
+  size_t global_range_x = static_cast<size_t>(triton_args.gridX) *
+                          triton_args.threads_per_warp * triton_args.num_warps;
   size_t global_range_y = triton_args.gridY;
   size_t global_range_z = triton_args.gridZ;
   size_t local_range_x = triton_args.num_warps * triton_args.threads_per_warp;

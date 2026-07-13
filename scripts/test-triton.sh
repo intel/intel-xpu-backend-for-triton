@@ -806,13 +806,14 @@ run_vllm_test_deps_install() {
 }
 
 enter_vllm_test_env() {
-  if [ ! -d "vllm" ]; then
-    echo "ERROR: $(pwd)/vllm not found. Run './scripts/test-triton.sh --install-vllm' or './scripts/vllm/install-vllm.sh' first." >&2
+  local vllm_dir="$TRITON_PROJ/vllm"
+  if [ ! -d "$vllm_dir" ]; then
+    echo "ERROR: $vllm_dir not found. Run './scripts/test-triton.sh --install-vllm' or './scripts/vllm/install-vllm.sh' first." >&2
     exit 1
   fi
 
   run_vllm_test_deps_install
-  cd vllm
+  cd "$vllm_dir"
 }
 
 run_sglang_install() {
@@ -914,12 +915,16 @@ run_vllm_tests() {
   echo "******    Running vLLM Triton tests       ******"
   echo "************************************************"
 
-  enter_vllm_test_env
-  # FIXME: Make batched_moe and triton_unified_attention proper test suites.
-  # run_vllm_tests should eventually run all vllm testsuites.
-  run_pytest_command -vvv \
-    tests/kernels/moe/test_batched_moe.py \
-    tests/kernels/attention/test_triton_unified_attention.py
+  run_vllm_spec_decode_tests
+  run_vllm_mrv2_tests
+  run_vllm_moe_tests
+  run_vllm_triton_attn_tests
+  run_vllm_gdn_attn_tests
+  run_vllm_mamba_tests
+  run_vllm_quant_tests
+  run_vllm_linear_attn_tests
+  run_vllm_deepgemm_tests
+  run_vllm_kda_tests
 }
 
 
@@ -954,13 +959,15 @@ run_vllm_mrv2_tests() {
       tests/v1/worker/test_gpu_input_batch.py \
       tests/v1/worker/test_gpu_model_runner_v2_eplb.py \
       tests/v1/sample/test_sampler.py \
-      tests/v1/sample/test_logprobs.py
+      tests/v1/sample/test_logprobs.py \
+      tests/v1/worker/test_gpu_gumbel_sample.py \
+      tests/v1/kv_connector/unit/test_nixl_connector.py
 }
 
 
 run_vllm_moe_tests() {
   echo "********************************************************"
-  echo "******  Running vLLM MOE Triton kernel tests     *******"
+  echo "******  Running vLLM MOE tests                   *******"
   echo "********************************************************"
 
   enter_vllm_test_env
@@ -977,7 +984,11 @@ run_vllm_moe_tests() {
       tests/kernels/moe/test_triton_moe_ptpc_fp8.py \
       tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py \
       tests/kernels/moe/test_batched_deepgemm.py \
-      tests/kernels/moe/test_gpt_oss_triton_kernels.py
+      tests/kernels/moe/test_gpt_oss_triton_kernels.py \
+      tests/kernels/moe/test_silu_mul_per_token_group_quant_fp8_colmajor.py \
+      tests/kernels/moe/test_block_int8.py \
+      tests/kernels/moe/test_block_fp8.py \
+      tests/kernels/moe/test_moe_layer.py
 }
 
 
@@ -1013,7 +1024,8 @@ run_vllm_gdn_attn_tests() {
   # recompute_w_u_fwd_kernel
   TRITON_TEST_SUITE=vllm_gdn_attn \
     run_pytest_command -vvv \
-      tests/v1/attention/test_gdn_metadata_builder.py
+      tests/v1/attention/test_gdn_metadata_builder.py \
+      tests/kernels/test_fused_sigmoid_gating_delta_rule.py
 }
 
 
@@ -1032,13 +1044,14 @@ run_vllm_mamba_tests() {
       tests/kernels/mamba/test_causal_conv1d.py \
       tests/kernels/mamba/test_mamba_ssm.py \
       tests/kernels/mamba/test_mamba_ssm_ssd.py \
-      tests/kernels/mamba/test_mamba_mixer2.py
+      tests/kernels/mamba/test_mamba_mixer2.py \
+      tests/kernels/mamba/test_ssu_dispatch.py
 }
 
 
 run_vllm_quant_tests() {
   echo "********************************************************"
-  echo "******  Running vLLM Quantization Triton tests   *******"
+  echo "******  Running vLLM Quantization tests          *******"
   echo "********************************************************"
 
   enter_vllm_test_env
@@ -1055,7 +1068,8 @@ run_vllm_quant_tests() {
       tests/kernels/quantization/test_block_int8.py \
       tests/kernels/quantization/test_fp8_quant.py \
       tests/kernels/quantization/test_fp8_quant_group.py \
-      tests/kernels/quantization/test_block_fp8.py
+      tests/kernels/quantization/test_block_fp8.py \
+      tests/kernels/quantization/test_per_token_group_quant.py
 }
 
 
@@ -1095,9 +1109,11 @@ run_vllm_kda_tests() {
   echo "******  Running vLLM KDA tests                   *******"
   echo "********************************************************"
 
-  # No dedicated kernel tests exist yet — KDA is model-level integration only.
-  # This is a placeholder for when kernel-level tests are added.
-  echo "WARNING: No dedicated KDA kernel tests available. Skipping."
+  enter_vllm_test_env
+  TRITON_TEST_SUITE=vllm_kda \
+    run_pytest_command -vvv \
+      tests/kernels/test_kda.py \
+      tests/kernels/core/test_fused_rms_norm_gated.py
 }
 
 

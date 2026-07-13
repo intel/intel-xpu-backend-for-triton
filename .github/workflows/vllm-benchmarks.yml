@@ -23,7 +23,9 @@ on:
         description: Use prebuilt vLLM XPU kernels wheel from the current branch (must have a successful nightly build)
         type: boolean
         default: false
-  # This workflow is also called from workflows vllm-benchmarks-*.yml.
+  # PR runs come through the vllm-benchmarks-pvc.yml wrapper (which builds the
+  # branch benchmarks wheel first), mirroring triton-benchmarks.yml; the bmg
+  # wrapper drives the BMG schedule. This workflow keeps its own PVC schedule.
   workflow_call:
     inputs:
       runner_label:
@@ -32,7 +34,9 @@ on:
       tag:
         description: Tag for benchmark results
         type: string
-        default: "test"
+        # Empty default so the TAG fallback below can resolve pr-<n>/ci from the
+        # caller's event. A non-empty default would short-circuit that expression.
+        default: ""
       vllm_pin:
         description: vLLM pin (commit hash), keep empty for default
         type: string
@@ -76,7 +80,7 @@ jobs:
           EOF
 
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Override vLLM pin
         if: ${{ inputs.vllm_pin }}
@@ -140,23 +144,7 @@ jobs:
           source ./scripts/capture-hw-details.sh
 
           cd benchmarks/triton_kernels_benchmark/vllm
-          bash run_benchmark.sh unified_attention --reports $REPORTS
-          # Transform baseline results
-          python ../../transform_results.py \
-            $REPORTS/unified-attention-performance.csv \
-            $REPORTS/unified-attention-report.csv \
-            --tag $TAG \
-            --bgroup "vllm" \
-            --benchmark "unified-attn-bf16" \
-            --param_cols "q_heads,k_heads,head_size,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
-          # Transform tensor descriptor patched results
-          python ../../transform_results.py \
-            $REPORTS/unified-attention-performance-td.csv \
-            $REPORTS/unified-attention-td-report.csv \
-            --tag $TAG \
-            --bgroup "vllm" \
-            --benchmark "unified-attn-bf16" \
-            --param_cols "q_heads,k_heads,head_size,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
+          bash run_benchmark.sh unified_attention --reports $REPORTS --tag $TAG
 
       - name: Run vllm unified attention fp8
         if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
@@ -164,23 +152,7 @@ jobs:
           source ./scripts/capture-hw-details.sh
 
           cd benchmarks/triton_kernels_benchmark/vllm
-          FP8="1" bash run_benchmark.sh unified_attention --reports $REPORTS
-          # Transform baseline results
-          python ../../transform_results.py \
-            $REPORTS/unified-attention-performance.csv \
-            $REPORTS/unified-attention-fp8-report.csv \
-            --tag $TAG \
-            --bgroup "vllm" \
-            --benchmark "unified-attn-fp8" \
-            --param_cols "q_heads,k_heads,head_size,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
-          # Transform tensor descriptor patched results
-          python ../../transform_results.py \
-            $REPORTS/unified-attention-performance-td.csv \
-            $REPORTS/unified-attention-fp8-td-report.csv \
-            --tag $TAG \
-            --bgroup "vllm" \
-            --benchmark "unified-attn-fp8" \
-            --param_cols "q_heads,k_heads,head_size,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size"
+          FP8="1" bash run_benchmark.sh unified_attention --reports $REPORTS --tag $TAG
 
       - name: Run vllm batched moe bf16
         if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
@@ -188,23 +160,7 @@ jobs:
           source ./scripts/capture-hw-details.sh
 
           cd benchmarks/triton_kernels_benchmark/vllm
-          bash run_benchmark.sh batched_moe --reports $REPORTS
-          # Transform baseline results
-          python ../../transform_results.py \
-            $REPORTS/moe-gemm-performance.csv \
-            $REPORTS/moe-gemm-report.csv \
-            --tag $TAG \
-            --bgroup vllm \
-            --benchmark moe-bf16-benchmark \
-            --param_cols="num_experts,max_tokens_per_expert,K,N"
-          # Transform tensor descriptor patched results
-          python ../../transform_results.py \
-            $REPORTS/moe-gemm-performance-td.csv \
-            $REPORTS/moe-gemm-td-report.csv \
-            --tag $TAG \
-            --bgroup vllm \
-            --benchmark moe-bf16-benchmark \
-            --param_cols="num_experts,max_tokens_per_expert,K,N"
+          bash run_benchmark.sh batched_moe --reports $REPORTS --tag $TAG
 
 
       - name: Run vllm batched moe fp8
@@ -213,47 +169,15 @@ jobs:
           source ./scripts/capture-hw-details.sh
 
           cd benchmarks/triton_kernels_benchmark/vllm
-          FP8="1" bash run_benchmark.sh batched_moe --reports $REPORTS
-          # Transform baseline results
-          python ../../transform_results.py \
-            $REPORTS/moe-gemm-performance.csv \
-            $REPORTS/moe-gemm-fp8-report.csv \
-            --tag $TAG \
-            --bgroup vllm \
-            --benchmark moe-fp8-benchmark \
-            --param_cols="num_experts,max_tokens_per_expert,K,N"
-          # Transform tensor descriptor patched results
-          python ../../transform_results.py \
-            $REPORTS/moe-gemm-performance-td.csv \
-            $REPORTS/moe-gemm-fp8-td-report.csv \
-            --tag $TAG \
-            --bgroup vllm \
-            --benchmark moe-fp8-benchmark \
-            --param_cols="num_experts,max_tokens_per_expert,K,N"
+          FP8="1" bash run_benchmark.sh batched_moe --reports $REPORTS --tag $TAG
 
-      - name: Run vllm fused moe
+      - name: Run vllm fused moe bf16
         if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
         run: |
           source ./scripts/capture-hw-details.sh
 
           cd benchmarks/triton_kernels_benchmark/vllm
-          bash run_benchmark.sh fused_moe --reports $REPORTS
-          # Transform baseline results
-          python ../../transform_results.py \
-            $REPORTS/fused-moe-gemm-performance.csv \
-            $REPORTS/fused-moe-gemm-report.csv \
-            --tag $TAG \
-            --bgroup vllm \
-            --benchmark fused-moe-benchmark \
-            --param_cols="num_tokens,output_hidden_size,hidden_size,num_experts,topk"
-          # Transform tensor descriptor patched results
-          python ../../transform_results.py \
-            $REPORTS/fused-moe-gemm-performance-td.csv \
-            $REPORTS/fused-moe-gemm-performance-td-report.csv \
-            --tag $TAG \
-            --bgroup vllm \
-            --benchmark fused-moe-benchmark \
-            --param_cols="num_tokens,output_hidden_size,hidden_size,num_experts,topk"
+          bash run_benchmark.sh fused_moe --reports $REPORTS --tag $TAG
 
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}

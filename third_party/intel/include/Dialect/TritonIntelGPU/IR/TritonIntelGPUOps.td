@@ -277,25 +277,74 @@ def TTIG_Subgroup2DBlockLoadFromPtrOp : TTIG_Op<"2d_block_load_from_ptr", [
     `ptr[i,j] = base + i*row_stride + j*elem_size` for a constant `base`
     and known `row_stride`. Creating this op from a ptr tensor that does not
     satisfy this precondition produces undefined behavior at lowering.
+
+    `base_pitch` (row stride in bytes) is a runtime `i32` operand, matching
+    `ttig.2d_block_load` and `triton_gen.2Dblockload`. A compile-time pitch is
+    just an `arith.constant`; a runtime one (e.g. grouped-GEMM `lda`) is the
+    computed SSA value.
   }];
 
   let arguments = (ins
     Arg<TT_PtrLike, "tensor of pointers to the memory surface",
         [MemRead<GlobalMemory>]>:$ptr,
+    I32:$base_pitch,
     Optional<TT_BoolLike>:$mask,
     Optional<TT_Type>:$other,
     I32Attr:$base_width,
     I32Attr:$base_height,
-    I32Attr:$base_pitch,
     TTIG_BlockIOMode:$memory_layout
   );
 
   let results = (outs TT_Tensor:$result);
   let assemblyFormat = [{
-    $ptr (`,` $mask^ `,` $other)?
+    $ptr `,` $base_pitch (`,` $mask^ `,` $other)?
     ` ` `{` $memory_layout `}`
     attr-dict `:` functional-type(operands, results)
   }];
+  let hasVerifier = 1;
+}
+
+def TTIG_DescriptorGatherOp : TTIG_Op<"descriptor_gather", [TT_DescriptorLoadLikeOpInterface]> {
+  let summary = "gather multiple rows from a descriptor into a single tensor";
+  let description = [{
+    The `ttig.descriptor_gather` op has the same semantics as `tt.descriptor_gather`.
+    Its verifier and layout inference are Intel-specific.
+  }];
+
+  let arguments = (ins
+    Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
+    RankedTensorOf<[I16, I32]>:$x_offsets,
+    I32:$y_offset
+  );
+  let results = (outs TT_Tensor:$result);
+
+  let assemblyFormat = [{
+    $desc `[` $x_offsets `,` $y_offset `]`
+    attr-dict `:` functional-type(operands, results)
+  }];
+
+  let hasVerifier = 1;
+}
+
+def TTIG_DescriptorScatterOp : TTIG_Op<"descriptor_scatter", [TT_DescriptorStoreLikeOpInterface]> {
+  let summary = "scatter multiple rows to a descriptor from a single tensor";
+  let description = [{
+    The `ttig.descriptor_scatter` op has the same semantics as `tt.descriptor_scatter`.
+    Its verifier and layout inference are Intel-specific.
+  }];
+
+  let arguments = (ins
+    Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$desc,
+    RankedTensorOf<[I16, I32]>:$x_offsets,
+    I32:$y_offset,
+    TT_Tensor:$src
+  );
+
+  let assemblyFormat = [{
+    $desc `[` $x_offsets `,` $y_offset `]` `,` $src
+    attr-dict `:` type(operands)
+  }];
+
   let hasVerifier = 1;
 }
 

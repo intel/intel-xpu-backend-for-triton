@@ -1,73 +1,48 @@
-diff --git a/CMakeLists.txt b/CMakeLists.txt
-index d956e29e3..96a701128 100644
---- a/CMakeLists.txt
-+++ b/CMakeLists.txt
-@@ -114,20 +114,23 @@ endif()
- # CPU builds define the target before the early return)
- # This extension requires SABI 3.11 since it relies on Py_buffer support. Loading
- # failure is handled gracefully on vLLM side for lower Python versions.
-+# Skip the target entirely on Python < 3.11 so the build doesn't break.
- #
--set(VLLM_SPINLOOP_EXT_SRC "csrc/spinloop.cpp")
--set(SPINLOOP_COMPILE_FLAGS "")
--if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64")
--  list(APPEND SPINLOOP_COMPILE_FLAGS "-mmwaitx")
-+if(Python_VERSION VERSION_GREATER_EQUAL "3.11")
-+  set(VLLM_SPINLOOP_EXT_SRC "csrc/spinloop.cpp")
-+  set(SPINLOOP_COMPILE_FLAGS "")
-+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64")
-+    list(APPEND SPINLOOP_COMPILE_FLAGS "-mmwaitx")
-+  endif()
-+  define_extension_target(
-+    spinloop
-+    DESTINATION vllm
-+    LANGUAGE CXX
-+    SOURCES ${VLLM_SPINLOOP_EXT_SRC}
-+    COMPILE_FLAGS ${SPINLOOP_COMPILE_FLAGS}
-+    USE_SABI 3.11
-+    WITH_SOABI)
- endif()
--define_extension_target(
--  spinloop
--  DESTINATION vllm
--  LANGUAGE CXX
--  SOURCES ${VLLM_SPINLOOP_EXT_SRC}
--  COMPILE_FLAGS ${SPINLOOP_COMPILE_FLAGS}
--  USE_SABI 3.11
--  WITH_SOABI)
+diff --git a/tests/kernels/mamba/test_mamba_mixer2.py b/tests/kernels/mamba/test_mamba_mixer2.py
+index 973e7885c..e474275f5 100644
+--- a/tests/kernels/mamba/test_mamba_mixer2.py
++++ b/tests/kernels/mamba/test_mamba_mixer2.py
+@@ -12,6 +12,7 @@ from vllm.distributed.parallel_state import (
+     initialize_model_parallel,
+ )
+ from vllm.model_executor.layers.mamba.mamba_mixer2 import Mixer2RMSNormGated
++from vllm.platforms import current_platform
+ from vllm.utils.system_utils import update_environment_variables
+ from vllm.utils.torch_utils import set_random_seed
  
- #
- # Forward the non-CUDA device extensions to external CMake scripts.
-diff --git a/setup.py b/setup.py
-index b674d55a1..545b638dc 100644
---- a/setup.py
-+++ b/setup.py
-@@ -1043,7 +1043,8 @@ if _is_cuda() or _is_hip():
-     # copying the relevant .py files from the source repository.
-     ext_modules.append(CMakeExtension(name="vllm.triton_kernels", optional=True))
+@@ -86,7 +87,7 @@ def mixer2_gated_norm_tensor_parallel(
+     )
  
--ext_modules.append(CMakeExtension(name="vllm.spinloop"))
-+if sys.version_info >= (3, 11):
-+    ext_modules.append(CMakeExtension(name="vllm.spinloop"))
+     # initialize distributed
+-    init_distributed_environment()
++    init_distributed_environment(backend=current_platform.dist_backend)
+     with ensure_current_vllm_config():
+         initialize_model_parallel(tensor_model_parallel_size=world_size)
  
- if _is_hip():
-     ext_modules.append(CMakeExtension(name="vllm._rocm_C"))
-diff --git a/tests/conftest.py b/tests/conftest.py
-index ebf9608b0..16fa7a7f6 100644
---- a/tests/conftest.py
-+++ b/tests/conftest.py
-@@ -293,6 +293,11 @@ def workspace_init():
+@@ -96,10 +97,11 @@ def mixer2_gated_norm_tensor_parallel(
+     gate_states = torch.randn(batch_size, seq_len, hidden_size)
  
-     if torch.cuda.is_available():
-         device = torch.device("cuda:0")
-+    elif torch.xpu.is_available():
-+        device = torch.device("xpu:0")
-+    else:
-+        device = None
-+    if device is not None:
-         init_workspace_manager(device)
-     yield
-     reset_workspace_manager()
+     # create gated-norm with TP
+-    mixer = Mixer2RMSNormGated(
+-        full_hidden_size=hidden_size,
+-        full_n_groups=n_groups,
+-    )
++    with ensure_current_vllm_config():
++        mixer = Mixer2RMSNormGated(
++            full_hidden_size=hidden_size,
++            full_n_groups=n_groups,
++        )
+     mixer.weight.weight_loader(mixer.weight, weight)  # load
+ 
+     # create gated-norm without TP to compute reference
+@@ -115,6 +117,7 @@ def mixer2_gated_norm_tensor_parallel(
+             "get_tensor_model_parallel_rank",
+             return_value=0,
+         ),
++        ensure_current_vllm_config(),
+     ):
+         mixer_single_gpu = Mixer2RMSNormGated(
+             full_hidden_size=hidden_size,
 diff --git a/tests/kernels/mamba/utils.py b/tests/kernels/mamba/utils.py
 index fb8a4b0a2..7ab490aaf 100644
 --- a/tests/kernels/mamba/utils.py
@@ -86,49 +61,26 @@ index fb8a4b0a2..7ab490aaf 100644
      if D is not None:
          out += (x * D).to(out.dtype)
      out = (out if z is None else out * F.silu(z)).to(x.dtype)
-diff --git a/tests/kernels/moe/test_batched_moe.py b/tests/kernels/moe/test_batched_moe.py
-index b9fe8ceaf..845a2db64 100644
---- a/tests/kernels/moe/test_batched_moe.py
-+++ b/tests/kernels/moe/test_batched_moe.py
-@@ -104,7 +104,7 @@ class BatchedMMTensors:
- @pytest.mark.parametrize("N", [128, 1024])
- @pytest.mark.parametrize("dtype", DTYPES)
- @pytest.mark.parametrize("block_shape", [None, [128, 128]])
--@pytest.mark.parametrize("per_act_token_quant", [False, True])
-+@pytest.mark.parametrize("per_act_token_quant", [False])
- def test_batched_mm(
-     num_experts: int,
-     max_tokens_per_expert: int,
-@@ -236,7 +236,7 @@ def test_batched_mm(
- @pytest.mark.parametrize("e", NUM_EXPERTS)
- @pytest.mark.parametrize("topk", TOP_KS)
- @pytest.mark.parametrize("dtype", DTYPES)
--@pytest.mark.parametrize("per_act_token_quant", [False, True])
-+@pytest.mark.parametrize("per_act_token_quant", [False])
- @pytest.mark.parametrize("block_shape", [None, [128, 128]])
- @pytest.mark.parametrize("input_scales", [False])
- def test_fused_moe_batched_experts(
-diff --git a/tests/kernels/moe/utils.py b/tests/kernels/moe/utils.py
-index 4899de44a..aee58d32c 100644
---- a/tests/kernels/moe/utils.py
-+++ b/tests/kernels/moe/utils.py
-@@ -317,7 +317,13 @@ def moe_quantize_weights(
-             w[idx], None, quant_dtype, per_token_quant, block_shape
-         )
+diff --git a/tests/utils.py b/tests/utils.py
+index 2a3bdb91f..c74587d5f 100644
+--- a/tests/utils.py
++++ b/tests/utils.py
+@@ -1896,7 +1896,12 @@ def spawn_new_process_for_each_test(f: Callable[_P, None]) -> Callable[_P, None]
  
--    w = torch.stack(w_l)
-+    new_shape = torch.Size((len(w_l), ) + w_l[0].shape)
-+    new_w = torch.zeros(new_shape,
-+                        dtype=w_l[0].dtype,
-+                        device=w_l[0].device)
-+    for (i, wt) in enumerate(w_l):
-+        new_w[i] = wt
-+    w = new_w
-     w_s = torch.stack(w_s_l)
-     w_gs = torch.stack(w_gs_l) if e > 0 and w_gs_l[0] is not None else None
+             repo_root = str(VLLM_PATH.resolve())
+             env = os.environ.copy()
+-            env["PYTHONPATH"] = repo_root + os.pathsep + env.get("PYTHONPATH", "")
++            test_module_dir = str(Path(f.__code__.co_filename).resolve().parent)
++            env["PYTHONPATH"] = os.pathsep.join(
++                path
++                for path in (repo_root, test_module_dir, env.get("PYTHONPATH", ""))
++                if path
++            )
+             env[_SPAWN_CHILD_ENV] = "1"
  
+             result = subprocess.run(
 diff --git a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
-index 1f5724ac3..8bbbab3e5 100644
+index 21bda8e17..e7f11e934 100644
 --- a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
 @@ -618,7 +618,7 @@ class NaiveBatchedExperts(mk.FusedMoEExpertsModular):
@@ -149,84 +101,3 @@ index 1f5724ac3..8bbbab3e5 100644
          # Note: this does a bunch of extra work because expert_num_tokens is
          # ignored but it does support torch.compile + cudagraphs.
          hidden_dim = A.size(-1)
-diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 56f1d1c1d..0ffe85054 100644
---- a/vllm/v1/attention/ops/triton_unified_attention.py
-+++ b/vllm/v1/attention/ops/triton_unified_attention.py
-@@ -248,12 +248,19 @@ def kernel_unified_attention(
-     # Per-(token, head) scale caches: used iff KV_QUANT_MODE in {2, 3}.
-     k_scale_cache_ptr=None,
-     v_scale_cache_ptr=None,
--    stride_ks_blk: tl.int64 = None,
--    stride_ks_slot: tl.int64 = None,
--    stride_ks_head: tl.int64 = None,
--    stride_vs_blk: tl.int64 = None,
--    stride_vs_slot: tl.int64 = None,
--    stride_vs_head: tl.int64 = None,
-+    # ``tl.int64`` cannot be combined with a ``None`` default — Triton's JIT
-+    # rejects ``Optional[tl.int64]`` / ``tl.int64 | None`` at trace time, and
-+    # plain ``tl.int64 = None`` raises ``TypeError: 'NoneType' object cannot
-+    # be interpreted as an integer`` when callers omit these arguments.
-+    # ``int | None`` is the only annotation that lets the wrapper pass
-+    # ``None`` here so Triton can skip materialising the strides when the
-+    # ``USE_PER_TOKEN_HEAD_SCALES`` branch is dead.
-+    stride_ks_blk: int | None = None,
-+    stride_ks_slot: int | None = None,
-+    stride_ks_head: int | None = None,
-+    stride_vs_blk: int | None = None,
-+    stride_vs_slot: int | None = None,
-+    stride_vs_head: int | None = None,
-     # KV cache quantization mode handled inside this kernel via constexpr
-     # branches: NONE (0), FP8_PER_TENSOR (1), INT8_PER_TOKEN_HEAD (2),
-     # FP8_PER_TOKEN_HEAD (3).
-@@ -272,7 +279,10 @@ def kernel_unified_attention(
-     USE_TD_QO: tl.constexpr = False,
-     Q_IS_FP8: tl.constexpr = False,
- ):
--    USE_PER_TOKEN_HEAD_SCALES: tl.constexpr = KV_QUANT_MODE >= 2
-+    # Per-(token, head) scale caches: used iff KV_QUANT_MODE in {2, 3}.
-+    USE_PER_TOKEN_HEAD_SCALES: tl.constexpr = (KV_QUANT_MODE >= 2) and (
-+        KV_QUANT_MODE <= 3
-+    )
-     USE_FP8_Q_DESCALE: tl.constexpr = KV_QUANT_MODE == 1 and Q_IS_FP8
- 
-     if USE_TD:
-@@ -933,9 +943,9 @@ def unified_attention(
- 
-     # The kernel signature is the same for 2D and 3D — only the launch
-     # grid + a handful of constexpr toggles differ.  Per-token-head scale
--    # caches and their strides are required arguments; non-per-token-head
--    # modes pass dummy zeros (the code path is dead-code eliminated by
--    # the ``USE_PER_TOKEN_HEAD_SCALES`` constexpr branch in the kernel).
-+    # caches and their strides are passed as ``None`` when the
-+    # ``USE_PER_TOKEN_HEAD_SCALES`` branch is dead so Triton can skip
-+    # materialising those arguments and the associated registers.
-     if use_per_token_head_scales:
-         ks_strides = k_scale_cache.stride()
-         vs_strides = v_scale_cache.stride()
-@@ -944,16 +954,15 @@ def unified_attention(
-         k_scale_ptr = k_scale_cache
-         v_scale_ptr = v_scale_cache
-     else:
--        ks_blk = ks_slot = ks_head = 0
--        vs_blk = vs_slot = vs_head = 0
--        # Pass the K cache as a stand-in pointer; never dereferenced.
--        k_scale_ptr = k
--        v_scale_ptr = v
--    # 3D needs real segm tensors; 2D never touches them but Triton wants
--    # a non-null pointer.  Reuse ``out`` as the placeholder.
--    segm_output_ptr = softmax_segm_output if use_3d else out
--    segm_max_ptr = softmax_segm_max if use_3d else out
--    segm_expsum_ptr = softmax_segm_expsum if use_3d else out
-+        ks_blk = ks_slot = ks_head = None
-+        vs_blk = vs_slot = vs_head = None
-+        k_scale_ptr = None
-+        v_scale_ptr = None
-+    # 3D needs real segm tensors; 2D never touches them.  Pass ``None`` in
-+    # 2D mode so Triton can skip materialising these pointer arguments.
-+    segm_output_ptr = softmax_segm_output if use_3d else None
-+    segm_max_ptr = softmax_segm_max if use_3d else None
-+    segm_expsum_ptr = softmax_segm_expsum if use_3d else None
-     num_segments = num_par_softmax_segments if use_3d else 1
- 
-     grid: tuple[Any, ...]

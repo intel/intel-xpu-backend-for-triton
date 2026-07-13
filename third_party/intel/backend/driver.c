@@ -41,6 +41,8 @@ static std::vector<std::pair<sycl::device, ze_device_handle_t>>
 
 // Cache for IntelGPUError exception class
 static PyObject *g_intel_gpu_error_class = nullptr;
+// Cache for OutOfResources exception class (autotune-friendly)
+static PyObject *g_out_of_resources_class = nullptr;
 
 static PyObject *getIntelGPUErrorClass() {
   if (g_intel_gpu_error_class != nullptr) {
@@ -63,6 +65,83 @@ static PyObject *getIntelGPUErrorClass() {
   }
 
   return g_intel_gpu_error_class;
+}
+
+static PyObject *getOutOfResourcesClass() {
+  if (g_out_of_resources_class != nullptr) {
+    return g_out_of_resources_class;
+  }
+  PyObject *module = PyImport_ImportModule("triton.runtime.errors");
+  if (module == nullptr) {
+    PyErr_SetString(PyExc_ImportError, "cannot import triton.runtime.errors");
+    return NULL;
+  }
+  g_out_of_resources_class = PyObject_GetAttrString(module, "OutOfResources");
+  Py_DECREF(module);
+  if (g_out_of_resources_class == nullptr) {
+    PyErr_SetString(PyExc_AttributeError,
+                    "cannot find OutOfResources in triton.runtime.errors");
+    return NULL;
+  }
+  return g_out_of_resources_class;
+}
+
+// Inspect the IGC build log captured by create_module() and, if it carries a
+// PTSS-overflow diagnostic, raise OutOfResources directly (autotune catches
+// it). Returns true if it raised; caller should bail out. Returns false if
+// the log doesn't match a PTSS pattern, in which case the caller falls
+// through to the regular IntelGPUError path.
+static bool tryRaisePTSSOutOfResources() {
+  const std::string &log = g_last_module_build_log;
+  if (log.empty()) {
+    return false;
+  }
+  // Match the same set of phrases as the Python regex in compiler.py so the
+  // AOT and JIT paths classify identically.
+  static const char *kMarkers[] = {
+      "total scratch space",
+      "scratch space exceeds",
+      "exceeding max permitted PTSS",
+      "per-thread scratch space",
+  };
+  bool match = false;
+  for (const char *m : kMarkers) {
+    if (log.find(m) != std::string::npos) {
+      match = true;
+      break;
+    }
+  }
+  if (!match) {
+    return false;
+  }
+
+  PyGILState_STATE gil_state = PyGILState_Ensure();
+  PyObject *cls = getOutOfResourcesClass();
+  if (cls == NULL) {
+    PyGILState_Release(gil_state);
+    return false; // fall back to IntelGPUError
+  }
+  // OutOfResources(required, limit, name): we don't always have parsed byte
+  // counts at this layer (the compiler.py path parses them when available);
+  // pass 0/0 with an informative name that includes the IGC log excerpt so
+  // the user still sees the real cause via str(e).
+  std::string name = "per-thread scratch space (PTSS). IGC build log: ";
+  name.append(log.substr(0, 1024)); // bound the message size
+  PyObject *args = Py_BuildValue("(iis)", 0, 0, name.c_str());
+  if (args == NULL) {
+    PyGILState_Release(gil_state);
+    return false;
+  }
+  PyObject *exc = PyObject_CallObject(cls, args);
+  Py_DECREF(args);
+  if (exc == NULL) {
+    PyGILState_Release(gil_state);
+    return false;
+  }
+  PyErr_SetObject(cls, exc);
+  Py_DECREF(exc);
+  PyGILState_Release(gil_state);
+  return true;
 }
 
 static void zeConstructError(const char *file, int line, const char *message,
@@ -162,6 +241,15 @@ checkZeCodeAndSetPyErr(const std::tuple<T, ze_result_t> syclTuple,
   const auto code = std::get<1>(syclTuple);
   if (code == ZE_RESULT_SUCCESS)
     return std::get<0>(syclTuple);
+
+  // Module build failures often carry a PTSS-overflow diagnostic in the IGC
+  // build log captured by create_module(). When the log matches the PTSS
+  // pattern, raise OutOfResources directly so triton.runtime.autotuner can
+  // skip the offending tile config. Falls through to IntelGPUError otherwise.
+  if (code == ZE_RESULT_ERROR_MODULE_BUILD_FAILURE &&
+      tryRaisePTSSOutOfResources()) {
+    return std::get<0>(syclTuple);
+  }
 
   TRITON_ZE_SET_INTEL_ERR(file, line, code);
   return std::get<0>(syclTuple);
@@ -301,10 +389,7 @@ struct BuildFlags {
     if (build_flags_str.find(SMALL_GRF_FLAG) != std::string::npos) {
       return 128;
     }
-    // TODO: arguably we could return 128 if we find no flag instead of 0. For
-    // now, stick with the conservative choice and alert the user only if a
-    // specific GRF mode is specified.
-    return 0;
+    return 128; // default GRF size if no flag is specified
   }
 
   const bool hasGRFSizeFlag() const {
@@ -1001,7 +1086,8 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
 
   uint32_t expected_num_params =
       kernel_ptr.get_info<sycl::info::kernel::num_args>();
-  size_t global_range_x = gridX * threads_per_warp * num_warps;
+  size_t global_range_x =
+      static_cast<size_t>(gridX) * threads_per_warp * num_warps;
   size_t global_range_y = gridY;
   size_t global_range_z = gridZ;
   size_t local_range_x = num_warps * threads_per_warp;
