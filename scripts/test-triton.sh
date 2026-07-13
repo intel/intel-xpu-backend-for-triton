@@ -1123,14 +1123,6 @@ run_vllm_kda_tests() {
 }
 
 
-# XPU Triton benefits from rewriting some vLLM kernels to use tensor
-# descriptors. The unified_attention rewrite is kept as a patch (the same one
-# the benchmark applies). This suite applies that patch to the editable vLLM
-# checkout, runs the unified attention correctness tests against the patched
-# kernel, then reverts the patch so the source tree is left clean.
-#
-# The tdesc patch is generated on top of the general vllm-fix.patch, so it
-# expects the tree to already be in the installed (patched) state.
 run_vllm_tdesc_tests() {
   echo "********************************************************"
   echo "******  Running vLLM tensor descriptor tests     *******"
@@ -1152,14 +1144,15 @@ run_vllm_tdesc_tests() {
   local EXIT_STATUS=0
   TRITON_TEST_SUITE=vllm_tdesc \
     run_pytest_command -vvv \
-      tests/kernels/attention/test_triton_unified_attention.py || EXIT_STATUS=$?
+      tests/kernels/attention/test_triton_unified_attention.py \
+      || EXIT_STATUS=$?
 
   echo "Reverting tdesc patch: $PATCH_FILE."
   if ! git -C "$VLLM_PROJ" apply -R "$PATCH_FILE"; then
     echo "WARNING: Failed to revert tdesc patch: $PATCH_FILE." >&2
   fi
 
-  return $status
+  return $EXIT_STATUS
 }
 
 
