@@ -61,12 +61,24 @@ function agama_version {
         powershell -Command '(Get-WmiObject Win32_VideoController | where {$_.VideoProcessor -like "*Intel*" }).DriverVersion'
         return
     fi
+    local pkg version upstream_version
     if dpkg-query --show libigc2 &> /dev/null; then
-        dpkg-query --show --showformat='${version}\n' libigc2 | sed 's/.*-\(.*\)~.*/\1/'
+        pkg=libigc2
     elif dpkg-query --show libigc1 &> /dev/null; then
-        dpkg-query --show --showformat='${version}\n' libigc1 | sed 's/.*-\(.*\)~.*/\1/'
+        pkg=libigc1
     else
         echo "Not Installed"
+        return
+    fi
+    version="$(dpkg-query --show --showformat='${version}\n' "$pkg")"
+    # Starting with libigc2 2.36, the Debian revision no longer carries the
+    # old-style agama build number (it's a plain package revision now), so
+    # there is nothing meaningful left to extract.
+    upstream_version="${version%%-*}"
+    if dpkg --compare-versions "$upstream_version" ge "2.36"; then
+        echo "Unknown"
+    else
+        echo "$version" | sed 's/.*-\(.*\)~.*/\1/'
     fi
 }
 
