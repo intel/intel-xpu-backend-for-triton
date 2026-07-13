@@ -38,17 +38,6 @@ class MockInt(int):
         return super().__new__(cls, value)
 
 
-def _tensordesc_spec_key(arg):
-    all_aligned = all(s % 16 == 0 for s in arg.shape)
-    is_nan_padding = getattr(arg, "padding", None) == "nan"
-    key = ""
-    if all_aligned:
-        key += "D"
-    if is_nan_padding:
-        key += "N"
-    return key if key else None
-
-
 def reference_specialize_impl(backend, arg, is_const, specialize_value, align):
     if arg is None:
         return ("constexpr", None)
@@ -84,8 +73,7 @@ def reference_specialize_impl(backend, arg, is_const, specialize_value, align):
     elif isinstance(arg, TensorDescriptor):
         assert hasattr(arg.base, "data_ptr")
         inner = canonicalize_dtype(arg.base.dtype)
-        key = _tensordesc_spec_key(arg)
-        return (f"tensordesc<{inner}{list(arg.block_shape)}>", key)
+        return (f"tensordesc<{inner}{list(arg.block_shape)}>", None)
     elif isinstance(arg, GluonTensorDescriptor):
         assert hasattr(arg.base, "data_ptr")
         inner = canonicalize_dtype(arg.base.dtype)
@@ -93,8 +81,7 @@ def reference_specialize_impl(backend, arg, is_const, specialize_value, align):
         type_name = "tensordesc_im2col" if is_im2col else "tensordesc"
         # For im2col mode, include the original tensor rank in the signature
         rank_suffix = f",input_rank={len(arg.shape)}" if is_im2col else ""
-        key = _tensordesc_spec_key(arg)
-        return (f"{type_name}<{inner}{list(arg.block_shape)}{rank_suffix},{arg.layout!r}>", key)
+        return (f"{type_name}<{inner}{list(arg.block_shape)}{rank_suffix},{arg.layout!r}>", None)
     else:
         raise TypeError("Unsupported type: %s" % type(arg))
 

@@ -68,6 +68,7 @@ static PyObject *shape_attr = nullptr;
 static PyObject *layout_attr = nullptr;
 static PyObject *has_native_tensor_spec_attr = nullptr;
 static PyObject *get_tensor_spec_attr = nullptr;
+static PyObject *get_tensordesc_spec_attr = nullptr;
 static PyObject *align_kwarg = nullptr;
 
 static DtypePtr2Str dtype_ptr2str;
@@ -116,6 +117,8 @@ void init_interned_strings() {
   has_native_tensor_spec_attr =
       intern_from_string("supports_native_tensor_specialization");
   get_tensor_spec_attr = intern_from_string("get_tensor_specialization");
+  get_tensordesc_spec_attr =
+      intern_from_string("get_tensordesc_specialization");
 
   align_kwarg = py::make_tuple("align").release().ptr();
 }
@@ -160,8 +163,8 @@ bool init_globals() noexcept try {
   return false;
 }
 
-std::pair<py::object, py::object> specialize_tensordesc(PyObject *arg,
-                                                        bool has_layout) {
+std::pair<py::object, py::object>
+specialize_tensordesc(PyObject *backend, PyObject *arg, bool has_layout) {
   auto base = from_new_ref(PyObject_GetAttr(arg, base_attr));
   if (!base)
     return {};
@@ -256,59 +259,18 @@ std::pair<py::object, py::object> specialize_tensordesc(PyObject *arg,
   if (!type_str_result)
     return {};
 
-  // Build a specialization key encoding padding and divisibility info.
-  // "D" = all shapes/strides are 16-byte aligned (enables tt.divisibility).
-  // "N" = NaN padding (enables tt.padding attribute).
-  static PyObject *padding_attr_name = PyUnicode_InternFromString("padding");
-  static PyObject *shape_attr_local = PyUnicode_InternFromString("shape");
-  static PyObject *strides_attr_local = PyUnicode_InternFromString("strides");
+  // Delegate specialization key computation to the backend.
+  PyObject *args[2] = {backend, arg};
+  auto key = from_new_ref(
+      PyObject_VectorcallMethod(get_tensordesc_spec_attr, args, 2, nullptr));
+  if (!key)
+    return {};
 
-  bool is_nan_padding = false;
-  auto padding_obj = from_new_ref(PyObject_GetAttr(arg, padding_attr_name));
-  if (padding_obj) {
-    const char *pad_cstr = PyUnicode_AsUTF8(padding_obj.ptr());
-    if (pad_cstr && std::string_view(pad_cstr) == "nan")
-      is_nan_padding = true;
-  }
-
-  // Check if all shape values are divisible by 16.
-  bool all_aligned = true;
-  auto shape_seq = from_new_ref(PyObject_GetAttr(arg, shape_attr_local));
-  if (!shape_seq) {
-    all_aligned = false;
-  } else {
-    Py_ssize_t len = PySequence_Size(shape_seq.ptr());
-    for (Py_ssize_t i = 0; i < len; ++i) {
-      auto item = from_new_ref(PySequence_GetItem(shape_seq.ptr(), i));
-      if (!item) {
-        all_aligned = false;
-        break;
-      }
-      long long val = PyLong_AsLongLong(item.ptr());
-      if (val == -1 && PyErr_Occurred()) {
-        PyErr_Clear();
-        all_aligned = false;
-        break;
-      }
-      if (val % 16 != 0) {
-        all_aligned = false;
-        break;
-      }
-    }
-  }
-
-  // Build key string: "D" for aligned, "N" for nan padding, "DN" for both.
-  std::string key;
-  if (all_aligned)
-    key += "D";
-  if (is_nan_padding)
-    key += "N";
-
-  if (key.empty())
+  // Empty string means no specialization needed.
+  if (PyUnicode_Check(key.ptr()) && PyUnicode_GetLength(key.ptr()) == 0)
     return {std::move(type_str_result), py::none()};
 
-  auto key_result = from_new_ref(PyUnicode_FromString(key.c_str()));
-  return {std::move(type_str_result), std::move(key_result)};
+  return {std::move(type_str_result), std::move(key)};
 }
 
 std::pair<py::object, py::object> handle_long_type(PyObject *backend,
@@ -440,13 +402,13 @@ handle_float_type(PyObject *backend, PyObject *arg, bool is_const,
 std::pair<py::object, py::object>
 handle_tensor_descriptor(PyObject *backend, PyObject *arg, bool is_const,
                          bool specialize_value, bool align) {
-  return specialize_tensordesc(arg, false);
+  return specialize_tensordesc(backend, arg, false);
 }
 
 std::pair<py::object, py::object>
 handle_gluon_tensor_descriptor(PyObject *backend, PyObject *arg, bool is_const,
                                bool specialize_value, bool align) {
-  return specialize_tensordesc(arg, true);
+  return specialize_tensordesc(backend, arg, true);
 }
 
 std::pair<py::object, py::object>

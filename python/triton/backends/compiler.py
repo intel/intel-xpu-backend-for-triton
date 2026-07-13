@@ -77,9 +77,11 @@ class BaseBackend(metaclass=ABCMeta):
         ret = []
         if "D" in desc:
             ret += [["tt.divisibility", 16]]
-        if "N" in desc:
-            ret += [["tt.padding", 1]]
         return ret
+
+    @staticmethod
+    def get_tensordesc_specialization(arg, **kwargs):
+        return ""
 
     @staticmethod
     def get_int_specialization(arg, **kwargs):

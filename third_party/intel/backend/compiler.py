@@ -226,6 +226,25 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             args["enable_fp_fusion"] = knobs.language.default_fp_fusion
         return XPUOptions(**args)
 
+    @staticmethod
+    def parse_attr(desc):
+        ret = BaseBackend.parse_attr(desc)
+        if "N" in desc:
+            ret += [["tt.padding", 1]]
+        return ret
+
+    @staticmethod
+    def get_tensordesc_specialization(arg, **kwargs):
+        # "D" = all shapes are 16-byte aligned (enables tt.divisibility).
+        # "N" = NaN padding (enables tt.padding attribute).
+        key = ""
+        all_aligned = all(s % 16 == 0 for s in arg.shape)
+        if all_aligned:
+            key += "D"
+        if getattr(arg, "padding", None) == "nan":
+            key += "N"
+        return key
+
     def pack_metadata(self, metadata):
         return metadata
 
