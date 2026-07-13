@@ -98,6 +98,18 @@ def _find_cuda_patterns(source: str) -> list[dict]:
                     "col": node.args[0].col_offset,
                 })
 
+        # Tensor/device helper positional moves: tensor.to("cuda"),
+        # helper.to_device("cuda").
+        if isinstance(node, ast.Call):
+            func = node.func
+            if (isinstance(func, ast.Attribute) and func.attr in ("to", "to_device") and node.args
+                    and isinstance(node.args[0], ast.Constant) and node.args[0].value == "cuda"):
+                patterns.append({
+                    "type": "device_posarg",
+                    "line": node.args[0].lineno,
+                    "col": node.args[0].col_offset,
+                })
+
         # torch.cuda.is_available() calls
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
             func = node.func
@@ -137,6 +149,16 @@ def _find_cuda_patterns(source: str) -> list[dict]:
                 and node.func.value.value.id == "torch"):
             patterns.append({
                 "type": "cuda_get_device_capability",
+                "line": node.lineno,
+                "col": node.col_offset,
+            })
+
+        # torch.cuda.mem_get_info() calls
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "mem_get_info"
+                and isinstance(node.func.value, ast.Attribute) and node.func.value.attr == "cuda"
+                and isinstance(node.func.value.value, ast.Name) and node.func.value.value.id == "torch"):
+            patterns.append({
+                "type": "cuda_mem_get_info",
                 "line": node.lineno,
                 "col": node.col_offset,
             })
@@ -186,7 +208,13 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
         line = lines[line_idx]
         ptype = pattern["type"]
 
-        if ptype in ("device_kwarg", "torch_device", "torch_set_default_device", "device_default_param"):
+        if ptype in (
+                "device_kwarg",
+                "torch_device",
+                "torch_set_default_device",
+                "device_default_param",
+                "device_posarg",
+        ):
             # Replace "cuda" with "xpu" in device arguments
             lines[line_idx] = line.replace('"cuda"', '"xpu"', 1)
 
@@ -221,6 +249,10 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
         elif ptype == "cuda_get_device_capability":
             # Replace torch.cuda.get_device_capability() with torch.xpu.get_device_capability()
             lines[line_idx] = line.replace("torch.cuda.get_device_capability()", "torch.xpu.get_device_capability()")
+
+        elif ptype == "cuda_mem_get_info":
+            # Replace torch.cuda.mem_get_info() with torch.xpu.mem_get_info()
+            lines[line_idx] = line.replace("torch.cuda.mem_get_info()", "torch.xpu.mem_get_info()")
 
         elif ptype == "device_capability_compare":
             # Handle: if current_platform.get_device_capability() < (X, Y):
