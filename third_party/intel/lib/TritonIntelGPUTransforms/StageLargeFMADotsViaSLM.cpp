@@ -38,7 +38,9 @@ constexpr unsigned kTargetBytesPerOp = 1024;
 constexpr unsigned kSlmCapBytes = 56u * 1024u;
 
 // Estimate per-thread live operand bytes if FMA unrolls K fully.
-static unsigned estimatePerThreadBytes(tt::DotOp dotOp) {
+// All arithmetic is done in 64-bit: shapes come from getShape() as int64_t,
+// and byte products of large tensors can exceed the 32-bit range.
+static uint64_t estimatePerThreadBytes(tt::DotOp dotOp) {
   auto aType = cast<RankedTensorType>(dotOp.getA().getType());
   auto resultType = dotOp.getType();
   auto enc = dyn_cast<ttg::BlockedEncodingAttr>(resultType.getEncoding());
@@ -49,35 +51,35 @@ static unsigned estimatePerThreadBytes(tt::DotOp dotOp) {
   int64_t M = resultType.getShape()[rank - 2];
   int64_t N = resultType.getShape()[rank - 1];
   int64_t K = aType.getShape()[rank - 1];
-  unsigned elemBytes = std::max(1u, aType.getElementTypeBitWidth() / 8);
-  unsigned accBytes = resultType.getElementTypeBitWidth() / 8;
+  int64_t elemBytes = std::max<int64_t>(1, aType.getElementTypeBitWidth() / 8);
+  int64_t accBytes = resultType.getElementTypeBitWidth() / 8;
 
   auto spt = enc.getSizePerThread();
   auto tpw = enc.getThreadsPerWarp();
   auto wpc = enc.getWarpsPerCTA();
-  unsigned mSpt = spt[rank - 2], nSpt = spt[rank - 1];
-  unsigned ctaTileM = mSpt * tpw[rank - 2] * wpc[rank - 2];
-  unsigned ctaTileN = nSpt * tpw[rank - 1] * wpc[rank - 1];
-  unsigned mReps = ctaTileM ? unsigned(M / ctaTileM) : 1;
-  unsigned nReps = ctaTileN ? unsigned(N / ctaTileN) : 1;
+  int64_t mSpt = spt[rank - 2], nSpt = spt[rank - 1];
+  int64_t ctaTileM = mSpt * tpw[rank - 2] * wpc[rank - 2];
+  int64_t ctaTileN = nSpt * tpw[rank - 1] * wpc[rank - 1];
+  int64_t mReps = ctaTileM ? M / ctaTileM : 1;
+  int64_t nReps = ctaTileN ? N / ctaTileN : 1;
 
-  unsigned aBytes = mReps * mSpt * unsigned(K) * elemBytes;
-  unsigned bBytes = unsigned(K) * nReps * nSpt * elemBytes;
-  unsigned cBytes = mReps * mSpt * nReps * nSpt * accBytes;
+  uint64_t aBytes = uint64_t(mReps) * mSpt * K * elemBytes;
+  uint64_t bBytes = uint64_t(K) * nReps * nSpt * elemBytes;
+  uint64_t cBytes = uint64_t(mReps) * mSpt * nReps * nSpt * accBytes;
   return aBytes + bBytes + cBytes;
 }
 
 // Total SLM bytes required to stage operands A and B in their full shape.
 // Uses the source-side (pre-fp_to_fp) element type if present, since that's
 // what we actually allocate. Falls back to the dot operand element type.
-static unsigned slmStagingBytes(Value aSrc, Value bSrc) {
-  auto bytes = [](Value v) {
+static uint64_t slmStagingBytes(Value aSrc, Value bSrc) {
+  auto bytes = [](Value v) -> uint64_t {
     auto t = cast<RankedTensorType>(v.getType());
-    unsigned eb = std::max(1u, t.getElementTypeBitWidth() / 8);
+    int64_t eb = std::max<int64_t>(1, t.getElementTypeBitWidth() / 8);
     int64_t n = 1;
     for (int64_t d : t.getShape())
       n *= d;
-    return unsigned(n) * eb;
+    return uint64_t(n) * eb;
   };
   return bytes(aSrc) + bytes(bSrc);
 }
@@ -91,29 +93,31 @@ static unsigned slmStagingBytes(Value aSrc, Value bSrc) {
 // new dot_op tensor whose layout is recomputed from the tile shape, and
 // downstream verification handles whether the partial-K dot_op tensor is
 // a valid input to tt.dot.
-static unsigned selectKTile(tt::DotOp dotOp) {
+static uint64_t selectKTile(tt::DotOp dotOp) {
   auto aType = cast<RankedTensorType>(dotOp.getA().getType());
   auto resultType = dotOp.getType();
   auto enc = cast<ttg::BlockedEncodingAttr>(resultType.getEncoding());
   unsigned rank = aType.getRank();
-  int64_t K = aType.getShape()[rank - 1];
+  int64_t K = aType.getShape()[rank - 1]; // shape dim, always >= 0
   int64_t M = resultType.getShape()[rank - 2];
-  unsigned elemBytes = std::max(1u, aType.getElementTypeBitWidth() / 8);
-  unsigned mSpt = enc.getSizePerThread()[rank - 2];
-  unsigned mReps = unsigned(M / (mSpt * enc.getThreadsPerWarp()[rank - 2] *
-                                 enc.getWarpsPerCTA()[rank - 2]));
+  int64_t elemBytes = std::max<int64_t>(1, aType.getElementTypeBitWidth() / 8);
+  int64_t mSpt = enc.getSizePerThread()[rank - 2];
+  int64_t denom =
+      mSpt * enc.getThreadsPerWarp()[rank - 2] * enc.getWarpsPerCTA()[rank - 2];
+  int64_t mReps = denom ? M / denom : 1;
   if (mReps == 0)
     mReps = 1;
 
-  unsigned perKByte = mReps * mSpt * elemBytes;
-  unsigned maxKTile = perKByte ? kTargetBytesPerOp / perKByte : 32;
+  uint64_t perKByte = uint64_t(mReps) * mSpt * elemBytes;
+  uint64_t maxKTile = perKByte ? kTargetBytesPerOp / perKByte : 32;
   if (maxKTile == 0)
     maxKTile = 16;
 
-  unsigned tile = llvm::bit_floor(maxKTile | 1u);
-  while (tile > 16 && (tile >= unsigned(K) || K % tile != 0))
+  uint64_t k = uint64_t(K);
+  uint64_t tile = llvm::bit_floor(maxKTile | 1u);
+  while (tile > 16 && (tile >= k || k % tile != 0))
     tile >>= 1;
-  if (tile < 16 || tile >= unsigned(K) || K % tile != 0)
+  if (tile < 16 || tile >= k || k % tile != 0)
     return 0;
   return tile;
 }
@@ -263,7 +267,7 @@ static ttg::MemDescType buildShared(MLIRContext *ctx, RankedTensorType srcTy,
 
 // Drop the K-dim of a memdesc to `kTile`, keeping all other dims.
 static ttg::MemDescType sliceK(ttg::MemDescType src, unsigned kDim,
-                               unsigned kTile) {
+                               int64_t kTile) {
   SmallVector<int64_t> newShape(src.getShape());
   newShape[kDim] = kTile;
   return ttg::MemDescType::get(newShape, src.getElementType(),
@@ -273,7 +277,7 @@ static ttg::MemDescType sliceK(ttg::MemDescType src, unsigned kDim,
 
 // Drop the K-dim of a tensor type to `kTile`, keeping its dot_op encoding.
 static RankedTensorType sliceTensorK(RankedTensorType src, unsigned kDim,
-                                     unsigned kTile) {
+                                     int64_t kTile) {
   SmallVector<int64_t> newShape(src.getShape());
   newShape[kDim] = kTile;
   return RankedTensorType::get(newShape, src.getElementType(),
@@ -290,12 +294,12 @@ static LogicalResult stageDot(tt::DotOp dotOp, const OperandChain &aChain,
   unsigned kDimA = rank - 1;
   unsigned kDimB = rank - 2;
   int64_t K = aType.getShape()[kDimA];
-  unsigned kTile = selectKTile(dotOp);
+  uint64_t kTile = selectKTile(dotOp);
   if (kTile == 0) {
     LDBG("no viable kTile for dot " << dotOp);
     return failure();
   }
-  unsigned numTiles = unsigned(K) / kTile;
+  uint64_t numTiles = uint64_t(K) / kTile;
   LDBG("staging dot K=" << K << " kTile=" << kTile << " numTiles=" << numTiles);
 
   auto aSrcTy = cast<RankedTensorType>(aChain.smemSource.getType());
@@ -329,11 +333,15 @@ static LogicalResult stageDot(tt::DotOp dotOp, const OperandChain &aChain,
   auto bLoadTy = RankedTensorType::get(bSubTy.getShape(),
                                        bSrcTy.getElementType(), bChain.loadEnc);
 
-  for (unsigned i = 0; i < numTiles; ++i) {
+  for (uint64_t i = 0; i < numTiles; ++i) {
+    // Offset into the memdesc along K. MemDescSubsliceOp takes a
+    // DenseI32ArrayAttr, so the offset is int32 by the op's ABI; it is
+    // bounded by K, which fits int32 for any realizable tensor.
+    int32_t kOffset = static_cast<int32_t>(i * kTile);
     SmallVector<int32_t> aOffset(rank, 0);
-    aOffset[kDimA] = int32_t(i * kTile);
+    aOffset[kDimA] = kOffset;
     SmallVector<int32_t> bOffset(rank, 0);
-    bOffset[kDimB] = int32_t(i * kTile);
+    bOffset[kDimB] = kOffset;
 
     Value aSub =
         ttg::MemDescSubsliceOp::create(builder, loc, aSubTy, aSmem, aOffset);
@@ -392,7 +400,7 @@ struct StageLargeFMADotsViaSLMPass
       auto resTy = dotOp.getType();
       if (!isa<ttg::BlockedEncodingAttr>(resTy.getEncoding()))
         return;
-      unsigned bytes = estimatePerThreadBytes(dotOp);
+      uint64_t bytes = estimatePerThreadBytes(dotOp);
       if (bytes <= kPressureThresholdBytes) {
         LDBG("dot under pressure threshold (" << bytes << " B), skipping");
         return;
@@ -403,7 +411,7 @@ struct StageLargeFMADotsViaSLMPass
         LDBG("dot operand chain not at SLM boundary, skipping");
         return;
       }
-      unsigned smem = slmStagingBytes(aChain->smemSource, bChain->smemSource);
+      uint64_t smem = slmStagingBytes(aChain->smemSource, bChain->smemSource);
       if (smem > kSlmCapBytes) {
         LDBG("dot SLM-staging cost " << smem << " B exceeds cap "
                                      << kSlmCapBytes << " B, skipping");
