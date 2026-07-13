@@ -6,10 +6,10 @@
 #include "Utility/Errors.h"
 #include "Utility/Map.h"
 #include "Utility/String.h"
+#include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <tuple>
-#include <iostream>
 
 namespace proton {
 
@@ -20,8 +20,9 @@ size_t matchStallReasonsToIndices(
     pti_pc_sampling_stall_reason_info_t *stallReasonInfos,
     std::map<size_t, size_t> &stallReasonIndexToMetricIndex) {
   // Map Intel PTI stall reason names to PCSamplingMetric kinds
-  // PTI stall reason names from log: Active, PSDepStall, ControlStall, PipeStall,
-  // SendStall, DistStall, SbidStall, SyncStall, InstrFetchStall, OtherStall
+  // PTI stall reason names from log: Active, PSDepStall, ControlStall,
+  // PipeStall, SendStall, DistStall, SbidStall, SyncStall, InstrFetchStall,
+  // OtherStall
 
   size_t numValidStalls = 0;
   for (size_t i = 0; i < numStallReasons; i++) {
@@ -29,20 +30,25 @@ size_t matchStallReasonsToIndices(
     std::string lowerName = toLower(ptiStallName);
 
     // Map PTI names to CUDA-style PCSamplingMetric kinds
-    // Note: This is an approximate mapping as Intel and NVIDIA stall categories differ
-    size_t metricKind = PCSamplingMetric::PCSamplingMetricKind::Count; // invalid
+    // Note: This is an approximate mapping as Intel and NVIDIA stall categories
+    // differ
+    size_t metricKind =
+        PCSamplingMetric::PCSamplingMetricKind::Count; // invalid
 
     if (ptiStallName == "Active") {
       // Active cycles - not stalled
       metricKind = PCSamplingMetric::PCSamplingMetricKind::NumSamples;
     } else if (ptiStallName == "ControlStall") {
-      metricKind = PCSamplingMetric::PCSamplingMetricKind::StalledBranchResolving;
+      metricKind =
+          PCSamplingMetric::PCSamplingMetricKind::StalledBranchResolving;
     } else if (ptiStallName == "InstrFetchStall") {
       metricKind = PCSamplingMetric::PCSamplingMetricKind::StalledNoInstruction;
     } else if (ptiStallName == "PSDepStall" || ptiStallName == "PipeStall") {
-      metricKind = PCSamplingMetric::PCSamplingMetricKind::StalledShortScoreboard;
+      metricKind =
+          PCSamplingMetric::PCSamplingMetricKind::StalledShortScoreboard;
     } else if (ptiStallName == "SendStall") {
-      metricKind = PCSamplingMetric::PCSamplingMetricKind::StalledLongScoreboard;
+      metricKind =
+          PCSamplingMetric::PCSamplingMetricKind::StalledLongScoreboard;
     } else if (ptiStallName == "SbidStall") {
       metricKind = PCSamplingMetric::PCSamplingMetricKind::StalledWait;
     } else if (ptiStallName == "SyncStall") {
@@ -56,12 +62,13 @@ size_t matchStallReasonsToIndices(
     if (metricKind != PCSamplingMetric::PCSamplingMetricKind::Count) {
       stallReasonIndexToMetricIndex[i] = metricKind;
       numValidStalls++;
-      std::cout << "[PC Sampling]     Mapped \"" << ptiStallName << "\" -> metric kind "
-                << metricKind << " (" << PCSamplingMetric().getValueName(metricKind) << ")"
+      std::cout << "[PC Sampling]     Mapped \"" << ptiStallName
+                << "\" -> metric kind " << metricKind << " ("
+                << PCSamplingMetric().getValueName(metricKind) << ")"
                 << std::endl;
     } else {
-      std::cout << "[PC Sampling]     Warning: No mapping for \"" << ptiStallName << "\""
-                << std::endl;
+      std::cout << "[PC Sampling]     Warning: No mapping for \""
+                << ptiStallName << "\"" << std::endl;
     }
   }
   return numValidStalls;
@@ -74,9 +81,11 @@ void XpuptiConfigureData::initialize(pti_device_handle_t device,
   this->device = device;
   this->samplingPeriodNs = samplingPeriodNs;
 
-  std::cout << "[PC Sampling] XpuptiConfigureData::initialize() - START" << std::endl;
+  std::cout << "[PC Sampling] XpuptiConfigureData::initialize() - START"
+            << std::endl;
   std::cout << "[PC Sampling]   Device handle: " << device << std::endl;
-  std::cout << "[PC Sampling]   Sampling period: " << samplingPeriodNs << " ns" << std::endl;
+  std::cout << "[PC Sampling]   Sampling period: " << samplingPeriodNs << " ns"
+            << std::endl;
 
   // Note: PTI View must be initialized BEFORE calling ptiPcSamplingEnable.
   // This should be done once globally by the profiler initialization.
@@ -84,23 +93,29 @@ void XpuptiConfigureData::initialize(pti_device_handle_t device,
   // Create PC sampling handle
   std::cout << "[PC Sampling]   Calling ptiPcSamplingEnable()..." << std::endl;
   xpupti::pcSamplingEnable<true>(&handle);
-  std::cout << "[PC Sampling]   ✓ ptiPcSamplingEnable() succeeded, handle: " << handle << std::endl;
+  std::cout << "[PC Sampling]   ✓ ptiPcSamplingEnable() succeeded, handle: "
+            << handle << std::endl;
 
-  // Configure for all available devices (device filtering not yet implemented in PTI)
-  // Pass nullptr to profile all available devices
-  std::cout << "[PC Sampling]   Calling ptiPcSamplingConfigure(nullptr, 0, " << samplingPeriodNs << ")..." << std::endl;
+  // Configure for all available devices (device filtering not yet implemented
+  // in PTI) Pass nullptr to profile all available devices
+  std::cout << "[PC Sampling]   Calling ptiPcSamplingConfigure(nullptr, 0, "
+            << samplingPeriodNs << ")..." << std::endl;
   xpupti::pcSamplingConfigure<true>(handle, nullptr, 0, samplingPeriodNs);
-  std::cout << "[PC Sampling]   ✓ ptiPcSamplingConfigure() succeeded" << std::endl;
+  std::cout << "[PC Sampling]   ✓ ptiPcSamplingConfigure() succeeded"
+            << std::endl;
 
   // Get stall reasons. Per pti_pc_sampling.h, ptiPcSamplingGetStallReasons()
   // "is independent of collection lifecycle and may be called immediately
   // after ptiPcSamplingEnable succeeds", so we query it once here rather
   // than on every call to processPCSamplingData() (which would leak the
   // previously allocated buffers).
-  std::cout << "[PC Sampling]   Calling ptiPcSamplingGetStallReasons() to query count..." << std::endl;
+  std::cout << "[PC Sampling]   Calling ptiPcSamplingGetStallReasons() to "
+               "query count..."
+            << std::endl;
   size_t reasonCount = 0;
   xpupti::pcSamplingGetStallReasons<true>(handle, nullptr, &reasonCount);
-  std::cout << "[PC Sampling]   ✓ Found " << reasonCount << " stall reasons" << std::endl;
+  std::cout << "[PC Sampling]   ✓ Found " << reasonCount << " stall reasons"
+            << std::endl;
 
   if (reasonCount > 0) {
     numStallReasons = reasonCount;
@@ -112,30 +127,38 @@ void XpuptiConfigureData::initialize(pti_device_handle_t device,
           sizeof(pti_pc_sampling_stall_reason_info_t);
     }
 
-    std::cout << "[PC Sampling]   Calling ptiPcSamplingGetStallReasons() to retrieve data..." << std::endl;
+    std::cout << "[PC Sampling]   Calling ptiPcSamplingGetStallReasons() to "
+                 "retrieve data..."
+              << std::endl;
     xpupti::pcSamplingGetStallReasons<true>(handle, stallReasonInfos,
                                             &reasonCount);
-    std::cout << "[PC Sampling]   ✓ Retrieved stall reason details" << std::endl;
+    std::cout << "[PC Sampling]   ✓ Retrieved stall reason details"
+              << std::endl;
 
     // Print stall reasons
     for (size_t i = 0; i < reasonCount; i++) {
       std::cout << "[PC Sampling]     [" << i << "] "
-                << (stallReasonInfos[i]._name ? stallReasonInfos[i]._name : "<null>")
+                << (stallReasonInfos[i]._name ? stallReasonInfos[i]._name
+                                              : "<null>")
                 << std::endl;
     }
 
     // Match stall reasons to metric indices
-    std::cout << "[PC Sampling]   Matching stall reasons to metric indices..." << std::endl;
-    size_t numMatched = matchStallReasonsToIndices(reasonCount, stallReasonInfos,
-                                                    stallReasonIndexToMetricIndex);
-    std::cout << "[PC Sampling]   ✓ Matched " << numMatched << "/" << reasonCount << " stall reasons" << std::endl;
+    std::cout << "[PC Sampling]   Matching stall reasons to metric indices..."
+              << std::endl;
+    size_t numMatched = matchStallReasonsToIndices(
+        reasonCount, stallReasonInfos, stallReasonIndexToMetricIndex);
+    std::cout << "[PC Sampling]   ✓ Matched " << numMatched << "/"
+              << reasonCount << " stall reasons" << std::endl;
 
     // Allocate aggregated samples array
     aggregatedSamples = new uint64_t[reasonCount];
-    std::cout << "[PC Sampling]   ✓ Allocated aggregated samples array" << std::endl;
+    std::cout << "[PC Sampling]   ✓ Allocated aggregated samples array"
+              << std::endl;
   }
 
-  std::cout << "[PC Sampling] XpuptiConfigureData::initialize() - DONE" << std::endl;
+  std::cout << "[PC Sampling] XpuptiConfigureData::initialize() - DONE"
+            << std::endl;
 }
 
 XpuptiConfigureData *
@@ -145,7 +168,8 @@ XpuptiPCSampling::getConfigureData(pti_device_handle_t device) {
 
 void XpuptiPCSampling::initialize(pti_device_handle_t device,
                                   uint32_t samplingPeriodNs) {
-  std::cout << "[PC Sampling] XpuptiPCSampling::initialize() - START" << std::endl;
+  std::cout << "[PC Sampling] XpuptiPCSampling::initialize() - START"
+            << std::endl;
   std::cout << "[PC Sampling]   Device: " << device << std::endl;
 
   std::lock_guard<std::mutex> lock(deviceMutex);
@@ -156,35 +180,46 @@ void XpuptiPCSampling::initialize(pti_device_handle_t device,
       device, [&](const XpuptiConfigureData &) { alreadyInitialized = true; });
 
   if (alreadyInitialized) {
-    std::cout << "[PC Sampling]   Already initialized for this device, skipping" << std::endl;
+    std::cout << "[PC Sampling]   Already initialized for this device, skipping"
+              << std::endl;
   } else {
-    std::cout << "[PC Sampling]   Not initialized yet, calling XpuptiConfigureData::initialize()" << std::endl;
+    std::cout << "[PC Sampling]   Not initialized yet, calling "
+                 "XpuptiConfigureData::initialize()"
+              << std::endl;
     getConfigureData(device)->initialize(device, samplingPeriodNs);
     std::cout << "[PC Sampling]   Configuration complete" << std::endl;
   }
 
-  std::cout << "[PC Sampling] XpuptiPCSampling::initialize() - DONE" << std::endl;
+  std::cout << "[PC Sampling] XpuptiPCSampling::initialize() - DONE"
+            << std::endl;
 }
 
 void XpuptiPCSampling::start(pti_device_handle_t device,
                              uint32_t samplingPeriodNs) {
   std::cout << "[PC Sampling] XpuptiPCSampling::start() - START" << std::endl;
   std::cout << "[PC Sampling]   Device: " << device << std::endl;
-  std::cout << "[PC Sampling]   Already started: " << (pcSamplingStarted ? "yes" : "no") << std::endl;
+  std::cout << "[PC Sampling]   Already started: "
+            << (pcSamplingStarted ? "yes" : "no") << std::endl;
 
   doubleCheckedLock(
-      [&]() -> bool { return !pcSamplingStarted; }, pcSamplingMutex, [&]() {
+      [&]() -> bool { return !pcSamplingStarted; }, pcSamplingMutex,
+      [&]() {
         std::cout << "[PC Sampling]   Calling initialize()..." << std::endl;
         initialize(device, samplingPeriodNs);
 
         auto *configureData = getConfigureData(device);
-        std::cout << "[PC Sampling]   Calling ptiPcSamplingStartCollection()..." << std::endl;
-        std::cout << "[PC Sampling]   Handle: " << configureData->handle << std::endl;
+        std::cout << "[PC Sampling]   Calling ptiPcSamplingStartCollection()..."
+                  << std::endl;
+        std::cout << "[PC Sampling]   Handle: " << configureData->handle
+                  << std::endl;
         xpupti::pcSamplingStartCollection<true>(configureData->handle);
-        std::cout << "[PC Sampling]   ✓ ptiPcSamplingStartCollection() succeeded" << std::endl;
+        std::cout
+            << "[PC Sampling]   ✓ ptiPcSamplingStartCollection() succeeded"
+            << std::endl;
 
         pcSamplingStarted = true;
-        std::cout << "[PC Sampling]   Collection started successfully" << std::endl;
+        std::cout << "[PC Sampling]   Collection started successfully"
+                  << std::endl;
       });
 
   std::cout << "[PC Sampling] XpuptiPCSampling::start() - DONE" << std::endl;
@@ -202,71 +237,95 @@ void XpuptiPCSampling::processPCSamplingData(
             << std::endl;
 
   if (kernelNameToEntries.empty()) {
-    std::cout << "[PC Sampling]   WARNING: kernelNameToEntries is empty! Metrics won't be added anywhere." << std::endl;
+    std::cout << "[PC Sampling]   WARNING: kernelNameToEntries is empty! "
+                 "Metrics won't be added anywhere."
+              << std::endl;
   }
 
   // Get profiled devices
-  std::cout << "[PC Sampling]   Calling ptiPcSamplingGetProfiledDevices() to query count..." << std::endl;
+  std::cout << "[PC Sampling]   Calling ptiPcSamplingGetProfiledDevices() to "
+               "query count..."
+            << std::endl;
   size_t deviceCount = 0;
   xpupti::pcSamplingGetProfiledDevices<true>(configureData->handle, nullptr,
                                              &deviceCount);
-  std::cout << "[PC Sampling]   ✓ Found " << deviceCount << " profiled devices" << std::endl;
+  std::cout << "[PC Sampling]   ✓ Found " << deviceCount << " profiled devices"
+            << std::endl;
 
   if (deviceCount == 0) {
-    std::cout << "[PC Sampling]   No devices with samples, returning early" << std::endl;
-    std::cout << "[PC Sampling] processPCSamplingData() - DONE (no samples)" << std::endl;
+    std::cout << "[PC Sampling]   No devices with samples, returning early"
+              << std::endl;
+    std::cout << "[PC Sampling] processPCSamplingData() - DONE (no samples)"
+              << std::endl;
     return; // No devices with samples
   }
 
-  std::cout << "[PC Sampling]   Calling ptiPcSamplingGetProfiledDevices() to retrieve device list..." << std::endl;
+  std::cout << "[PC Sampling]   Calling ptiPcSamplingGetProfiledDevices() to "
+               "retrieve device list..."
+            << std::endl;
   std::vector<pti_device_handle_t> devices(deviceCount);
   xpupti::pcSamplingGetProfiledDevices<true>(configureData->handle,
                                              devices.data(), &deviceCount);
-  std::cout << "[PC Sampling]   ✓ Retrieved " << deviceCount << " device handles" << std::endl;
+  std::cout << "[PC Sampling]   ✓ Retrieved " << deviceCount
+            << " device handles" << std::endl;
 
   // Process each device
   for (size_t devIdx = 0; devIdx < deviceCount; devIdx++) {
     pti_device_handle_t device = devices[devIdx];
-    std::cout << "[PC Sampling]   Processing device " << (devIdx + 1) << "/" << deviceCount
-              << " (handle: " << device << ")" << std::endl;
+    std::cout << "[PC Sampling]   Processing device " << (devIdx + 1) << "/"
+              << deviceCount << " (handle: " << device << ")" << std::endl;
 
     // Get observed kernel handles
-    std::cout << "[PC Sampling]     Calling ptiPcSamplingGetObservedKernelHandles() to query count..." << std::endl;
+    std::cout << "[PC Sampling]     Calling "
+                 "ptiPcSamplingGetObservedKernelHandles() to query count..."
+              << std::endl;
     size_t kernelCount = 0;
     xpupti::pcSamplingGetObservedKernelHandles<true>(
         configureData->handle, device, nullptr, &kernelCount);
-    std::cout << "[PC Sampling]     ✓ Found " << kernelCount << " kernels with samples" << std::endl;
+    std::cout << "[PC Sampling]     ✓ Found " << kernelCount
+              << " kernels with samples" << std::endl;
 
     if (kernelCount == 0) {
-      std::cout << "[PC Sampling]     No kernels with samples, skipping device" << std::endl;
+      std::cout << "[PC Sampling]     No kernels with samples, skipping device"
+                << std::endl;
       continue; // No kernels with samples
     }
 
-    std::cout << "[PC Sampling]     Calling ptiPcSamplingGetObservedKernelHandles() to retrieve kernel list..." << std::endl;
+    std::cout
+        << "[PC Sampling]     Calling ptiPcSamplingGetObservedKernelHandles() "
+           "to retrieve kernel list..."
+        << std::endl;
     std::vector<uint64_t> kernelHandles(kernelCount);
     xpupti::pcSamplingGetObservedKernelHandles<true>(
         configureData->handle, device, kernelHandles.data(), &kernelCount);
-    std::cout << "[PC Sampling]     ✓ Retrieved " << kernelCount << " kernel handles" << std::endl;
+    std::cout << "[PC Sampling]     ✓ Retrieved " << kernelCount
+              << " kernel handles" << std::endl;
 
     // Process each kernel
     for (size_t kernIdx = 0; kernIdx < kernelCount; kernIdx++) {
       uint64_t kernelHandle = kernelHandles[kernIdx];
-      std::cout << "[PC Sampling]     Processing kernel " << (kernIdx + 1) << "/" << kernelCount
-                << " (handle: 0x" << std::hex << kernelHandle << std::dec << ")" << std::endl;
+      std::cout << "[PC Sampling]     Processing kernel " << (kernIdx + 1)
+                << "/" << kernelCount << " (handle: 0x" << std::hex
+                << kernelHandle << std::dec << ")" << std::endl;
 
       // Get kernel info
       pti_pc_sampling_kernel_info_t kernelInfo;
       kernelInfo._struct_size = sizeof(pti_pc_sampling_kernel_info_t);
       kernelInfo._aggregated_samples = configureData->aggregatedSamples;
 
-      std::cout << "[PC Sampling]       Calling ptiPcSamplingGetObservedKernelInfo()..." << std::endl;
+      std::cout << "[PC Sampling]       Calling "
+                   "ptiPcSamplingGetObservedKernelInfo()..."
+                << std::endl;
       xpupti::pcSamplingGetObservedKernelInfo<true>(
           configureData->handle, device, kernelHandle, &kernelInfo);
       std::cout << "[PC Sampling]       ✓ Kernel name: "
-                << (kernelInfo._kernel_name ? kernelInfo._kernel_name : "<null>") << std::endl;
+                << (kernelInfo._kernel_name ? kernelInfo._kernel_name
+                                            : "<null>")
+                << std::endl;
       std::cout << "[PC Sampling]       ✓ Instructions with samples: "
                 << kernelInfo._instructions_with_samples_count << std::endl;
-      std::cout << "[PC Sampling]       ✓ Reason count: " << kernelInfo._reason_count << std::endl;
+      std::cout << "[PC Sampling]       ✓ Reason count: "
+                << kernelInfo._reason_count << std::endl;
 
       // PTI aggregates PC samples per kernel binary (base address), not per
       // launch instance (confirmed: pti_pc_sampling_aggregator.cc keys on
@@ -288,30 +347,40 @@ void XpuptiPCSampling::processPCSamplingData(
       const DataToEntryMap &dataToEntry = kernelEntriesIt->second.back();
 
       if (kernelInfo._instructions_with_samples_count == 0) {
-        std::cout << "[PC Sampling]       No instructions with samples, skipping kernel" << std::endl;
+        std::cout << "[PC Sampling]       No instructions with samples, "
+                     "skipping kernel"
+                  << std::endl;
         continue; // No instructions with samples
       }
 
       // Allocate buffers for instruction-level data
-      std::cout << "[PC Sampling]       Allocating buffers for instruction-level data..." << std::endl;
+      std::cout << "[PC Sampling]       Allocating buffers for "
+                   "instruction-level data..."
+                << std::endl;
       std::vector<pti_pc_sampling_instruction_t> instructions(
           kernelInfo._instructions_with_samples_count);
       std::vector<uint64_t> samples(
           kernelInfo._instructions_with_samples_count *
           kernelInfo._reason_count);
-      std::cout << "[PC Sampling]       ✓ Allocated " << instructions.size() << " instruction slots" << std::endl;
-      std::cout << "[PC Sampling]       ✓ Allocated " << samples.size() << " sample slots ("
-                << instructions.size() << " instr × " << kernelInfo._reason_count << " reasons)" << std::endl;
+      std::cout << "[PC Sampling]       ✓ Allocated " << instructions.size()
+                << " instruction slots" << std::endl;
+      std::cout << "[PC Sampling]       ✓ Allocated " << samples.size()
+                << " sample slots (" << instructions.size() << " instr × "
+                << kernelInfo._reason_count << " reasons)" << std::endl;
 
       // Get samples per instruction
-      std::cout << "[PC Sampling]       Calling ptiPcSamplingGetSamplesPerInstruction()..." << std::endl;
+      std::cout << "[PC Sampling]       Calling "
+                   "ptiPcSamplingGetSamplesPerInstruction()..."
+                << std::endl;
       xpupti::pcSamplingGetSamplesPerInstruction<true>(
           configureData->handle, device, kernelHandle, instructions.data(),
           instructions.size(), samples.data(), samples.size());
-      std::cout << "[PC Sampling]       ✓ Retrieved instruction-level samples" << std::endl;
+      std::cout << "[PC Sampling]       ✓ Retrieved instruction-level samples"
+                << std::endl;
 
       // Process instruction-level samples
-      std::cout << "[PC Sampling]       Processing " << instructions.size() << " instructions..." << std::endl;
+      std::cout << "[PC Sampling]       Processing " << instructions.size()
+                << " instructions..." << std::endl;
       size_t totalSamplesProcessed = 0;
       size_t instructionsWithSamples = 0;
 
@@ -320,19 +389,25 @@ void XpuptiPCSampling::processPCSamplingData(
         size_t instrSampleCount = 0;
 
         // Print instruction details
-        std::cout << "[PC Sampling]         Instruction [" << instrIdx << "]:" << std::endl;
-        std::cout << "[PC Sampling]           _instruction_offset: 0x" << std::hex
-                  << instruction._instruction_offset << std::dec << std::endl;
-        std::cout << "[PC Sampling]           _source_info: " << instruction._source_info << std::endl;
+        std::cout << "[PC Sampling]         Instruction [" << instrIdx
+                  << "]:" << std::endl;
+        std::cout << "[PC Sampling]           _instruction_offset: 0x"
+                  << std::hex << instruction._instruction_offset << std::dec
+                  << std::endl;
+        std::cout << "[PC Sampling]           _source_info: "
+                  << instruction._source_info << std::endl;
 
         if (instruction._source_info) {
           std::cout << "[PC Sampling]             _file_path: "
-                    << (instruction._source_info->_file_path ? instruction._source_info->_file_path : "<null>")
+                    << (instruction._source_info->_file_path
+                            ? instruction._source_info->_file_path
+                            : "<null>")
                     << std::endl;
           std::cout << "[PC Sampling]             _file_line: "
                     << instruction._source_info->_file_line << std::endl;
         } else {
-          std::cout << "[PC Sampling]             (no source info available)" << std::endl;
+          std::cout << "[PC Sampling]             (no source info available)"
+                    << std::endl;
         }
 
         // Build op name with source location if available
@@ -343,22 +418,28 @@ void XpuptiPCSampling::processPCSamplingData(
               std::string(instruction._source_info->_file_path),
               instruction._source_info->_file_line,
               std::string(kernelInfo._kernel_name));
-          std::cout << "[PC Sampling]           Formatted opName: " << opName << std::endl;
+          std::cout << "[PC Sampling]           Formatted opName: " << opName
+                    << std::endl;
         } else {
-          std::cout << "[PC Sampling]           Using kernel name as opName: " << opName << std::endl;
+          std::cout << "[PC Sampling]           Using kernel name as opName: "
+                    << opName << std::endl;
         }
 
         // Print sample counts for each stall reason for this instruction
-        std::cout << "[PC Sampling]           Sample counts per stall reason:" << std::endl;
-        for (size_t reasonIdx = 0; reasonIdx < kernelInfo._reason_count; reasonIdx++) {
+        std::cout << "[PC Sampling]           Sample counts per stall reason:"
+                  << std::endl;
+        for (size_t reasonIdx = 0; reasonIdx < kernelInfo._reason_count;
+             reasonIdx++) {
           uint64_t sampleCount =
               samples[instrIdx * kernelInfo._reason_count + reasonIdx];
-          const char* reasonName = (reasonIdx < configureData->numStallReasons &&
-                                   configureData->stallReasonInfos[reasonIdx]._name)
-                                  ? configureData->stallReasonInfos[reasonIdx]._name
-                                  : "<unknown>";
+          const char *reasonName =
+              (reasonIdx < configureData->numStallReasons &&
+               configureData->stallReasonInfos[reasonIdx]._name)
+                  ? configureData->stallReasonInfos[reasonIdx]._name
+                  : "<unknown>";
           std::cout << "[PC Sampling]             [" << reasonIdx << "] "
-                    << reasonName << ": " << sampleCount << " samples" << std::endl;
+                    << reasonName << ": " << sampleCount << " samples"
+                    << std::endl;
         }
 
         // Add metrics for each stall reason
@@ -382,33 +463,36 @@ void XpuptiPCSampling::processPCSamplingData(
               configureData->stallReasonIndexToMetricIndex[reasonIdx]);
 
           std::cout << "[PC Sampling]           Found samples for stall reason "
-                    << configureData->stallReasonInfos[reasonIdx]._name
-                    << ": " << sampleCount << " samples" << std::endl;
+                    << configureData->stallReasonInfos[reasonIdx]._name << ": "
+                    << sampleCount << " samples" << std::endl;
 
           // Add metric to all entries in dataToEntry
-          std::cout << "[PC Sampling]           Adding metric to " << dataToEntry.size()
-                    << " dataToEntry entries..." << std::endl;
+          std::cout << "[PC Sampling]           Adding metric to "
+                    << dataToEntry.size() << " dataToEntry entries..."
+                    << std::endl;
 
           size_t entriesUpdated = 0;
           for (const auto &[data, baseEntry] : dataToEntry) {
             auto entry = baseEntry;
             if (instruction._source_info &&
                 instruction._source_info->_file_path != nullptr) {
-              std::cout << "[PC Sampling]             Creating child op for source: "
-                        << opName << std::endl;
+              std::cout
+                  << "[PC Sampling]             Creating child op for source: "
+                  << opName << std::endl;
               entry = data->addOp(entry.phase, entry.id, {opName});
             }
 
             // For PTI, we consider all samples as "stalled" except for "active"
             // This is a simplification; PTI categorizes differently than CUPTI
-            bool isActive = (std::string(
-                                 configureData->stallReasonInfos[reasonIdx]._name)
-                                 .find("active") != std::string::npos);
+            bool isActive =
+                (std::string(configureData->stallReasonInfos[reasonIdx]._name)
+                     .find("active") != std::string::npos);
             uint64_t stalledSamples = isActive ? 0 : sampleCount;
 
-            std::cout << "[PC Sampling]             Upserting PCSamplingMetric: kind="
-                      << static_cast<int>(metricKind) << ", samples=" << sampleCount
-                      << ", stalled=" << stalledSamples << std::endl;
+            std::cout
+                << "[PC Sampling]             Upserting PCSamplingMetric: kind="
+                << static_cast<int>(metricKind) << ", samples=" << sampleCount
+                << ", stalled=" << stalledSamples << std::endl;
 
             entry.upsertMetric(std::make_unique<PCSamplingMetric>(
                 metricKind, sampleCount, stalledSamples));
@@ -423,16 +507,20 @@ void XpuptiPCSampling::processPCSamplingData(
         if (instrSampleCount > 0) {
           instructionsWithSamples++;
           totalSamplesProcessed += instrSampleCount;
-          std::cout << "[PC Sampling]           ✓ Instruction has " << instrSampleCount
-                    << " total samples" << std::endl;
+          std::cout << "[PC Sampling]           ✓ Instruction has "
+                    << instrSampleCount << " total samples" << std::endl;
         } else {
-          std::cout << "[PC Sampling]           (no samples for this instruction)" << std::endl;
+          std::cout
+              << "[PC Sampling]           (no samples for this instruction)"
+              << std::endl;
         }
       }
 
-      std::cout << "[PC Sampling]       ✓ Processed " << instructionsWithSamples << "/"
-                << instructions.size() << " instructions with samples" << std::endl;
-      std::cout << "[PC Sampling]       ✓ Total samples: " << totalSamplesProcessed << std::endl;
+      std::cout << "[PC Sampling]       ✓ Processed " << instructionsWithSamples
+                << "/" << instructions.size() << " instructions with samples"
+                << std::endl;
+      std::cout << "[PC Sampling]       ✓ Total samples: "
+                << totalSamplesProcessed << std::endl;
     }
   }
 
@@ -445,22 +533,28 @@ void XpuptiPCSampling::stop(
         &kernelNameToEntries) {
   std::cout << "[PC Sampling] XpuptiPCSampling::stop() - START" << std::endl;
   std::cout << "[PC Sampling]   Device: " << device << std::endl;
-  std::cout << "[PC Sampling]   Collection started: " << (pcSamplingStarted ? "yes" : "no") << std::endl;
+  std::cout << "[PC Sampling]   Collection started: "
+            << (pcSamplingStarted ? "yes" : "no") << std::endl;
   std::cout << "[PC Sampling]   kernelNameToEntries size: "
             << kernelNameToEntries.size() << " distinct kernel name(s)"
             << std::endl;
 
   doubleCheckedLock(
-      [&]() -> bool { return pcSamplingStarted; }, pcSamplingMutex, [&]() {
+      [&]() -> bool { return pcSamplingStarted; }, pcSamplingMutex,
+      [&]() {
         auto *configureData = getConfigureData(device);
-        std::cout << "[PC Sampling]   Calling ptiPcSamplingStopCollection()..." << std::endl;
-        std::cout << "[PC Sampling]   Handle: " << configureData->handle << std::endl;
+        std::cout << "[PC Sampling]   Calling ptiPcSamplingStopCollection()..."
+                  << std::endl;
+        std::cout << "[PC Sampling]   Handle: " << configureData->handle
+                  << std::endl;
         xpupti::pcSamplingStopCollection<true>(configureData->handle);
-        std::cout << "[PC Sampling]   ✓ ptiPcSamplingStopCollection() succeeded" << std::endl;
+        std::cout << "[PC Sampling]   ✓ ptiPcSamplingStopCollection() succeeded"
+                  << std::endl;
 
         pcSamplingStarted = false;
 
-        std::cout << "[PC Sampling]   Calling processPCSamplingData()..." << std::endl;
+        std::cout << "[PC Sampling]   Calling processPCSamplingData()..."
+                  << std::endl;
         processPCSamplingData(configureData, kernelNameToEntries);
         std::cout << "[PC Sampling]   ✓ Data processing complete" << std::endl;
       });
@@ -469,27 +563,34 @@ void XpuptiPCSampling::stop(
 }
 
 void XpuptiPCSampling::stopCollection(pti_device_handle_t device) {
-  std::cout << "[PC Sampling] XpuptiPCSampling::stopCollection() - START" << std::endl;
+  std::cout << "[PC Sampling] XpuptiPCSampling::stopCollection() - START"
+            << std::endl;
   std::cout << "[PC Sampling]   Device: " << device << std::endl;
 
   doubleCheckedLock(
-      [&]() -> bool { return pcSamplingStarted; }, pcSamplingMutex, [&]() {
+      [&]() -> bool { return pcSamplingStarted; }, pcSamplingMutex,
+      [&]() {
         auto *configureData = getConfigureData(device);
-        std::cout << "[PC Sampling]   Calling ptiPcSamplingStopCollection()..." << std::endl;
-        std::cout << "[PC Sampling]   Handle: " << configureData->handle << std::endl;
+        std::cout << "[PC Sampling]   Calling ptiPcSamplingStopCollection()..."
+                  << std::endl;
+        std::cout << "[PC Sampling]   Handle: " << configureData->handle
+                  << std::endl;
         xpupti::pcSamplingStopCollection<true>(configureData->handle);
-        std::cout << "[PC Sampling]   ✓ ptiPcSamplingStopCollection() succeeded" << std::endl;
+        std::cout << "[PC Sampling]   ✓ ptiPcSamplingStopCollection() succeeded"
+                  << std::endl;
         pcSamplingStarted = false;
       });
 
-  std::cout << "[PC Sampling] XpuptiPCSampling::stopCollection() - DONE" << std::endl;
+  std::cout << "[PC Sampling] XpuptiPCSampling::stopCollection() - DONE"
+            << std::endl;
 }
 
 void XpuptiPCSampling::processData(
     pti_device_handle_t device,
     const std::map<std::string, std::vector<DataToEntryMap>>
         &kernelNameToEntries) {
-  std::cout << "[PC Sampling] XpuptiPCSampling::processData() - START" << std::endl;
+  std::cout << "[PC Sampling] XpuptiPCSampling::processData() - START"
+            << std::endl;
   std::cout << "[PC Sampling]   Device: " << device << std::endl;
   std::cout << "[PC Sampling]   kernelNameToEntries size: "
             << kernelNameToEntries.size() << " distinct kernel name(s)"
@@ -498,11 +599,13 @@ void XpuptiPCSampling::processData(
   auto *configureData = getConfigureData(device);
   processPCSamplingData(configureData, kernelNameToEntries);
 
-  std::cout << "[PC Sampling] XpuptiPCSampling::processData() - DONE" << std::endl;
+  std::cout << "[PC Sampling] XpuptiPCSampling::processData() - DONE"
+            << std::endl;
 }
 
 void XpuptiPCSampling::finalize(pti_device_handle_t device) {
-  std::cout << "[PC Sampling] XpuptiPCSampling::finalize() - START" << std::endl;
+  std::cout << "[PC Sampling] XpuptiPCSampling::finalize() - START"
+            << std::endl;
   std::cout << "[PC Sampling]   Device: " << device << std::endl;
 
   std::lock_guard<std::mutex> lock(deviceMutex);
@@ -512,8 +615,10 @@ void XpuptiPCSampling::finalize(pti_device_handle_t device) {
       device, [&](const XpuptiConfigureData &) { exists = true; });
 
   if (!exists) {
-    std::cout << "[PC Sampling]   Device not configured, nothing to finalize" << std::endl;
-    std::cout << "[PC Sampling] XpuptiPCSampling::finalize() - DONE (no-op)" << std::endl;
+    std::cout << "[PC Sampling]   Device not configured, nothing to finalize"
+              << std::endl;
+    std::cout << "[PC Sampling] XpuptiPCSampling::finalize() - DONE (no-op)"
+              << std::endl;
     return;
   }
 
@@ -521,10 +626,12 @@ void XpuptiPCSampling::finalize(pti_device_handle_t device) {
   std::cout << "[PC Sampling]   Calling ptiPcSamplingDisable()..." << std::endl;
   std::cout << "[PC Sampling]   Handle: " << configureData->handle << std::endl;
   xpupti::pcSamplingDisable<true>(configureData->handle);
-  std::cout << "[PC Sampling]   ✓ ptiPcSamplingDisable() succeeded" << std::endl;
+  std::cout << "[PC Sampling]   ✓ ptiPcSamplingDisable() succeeded"
+            << std::endl;
 
   deviceToConfigureData.erase(device);
-  std::cout << "[PC Sampling]   ✓ Removed device from configuration map" << std::endl;
+  std::cout << "[PC Sampling]   ✓ Removed device from configuration map"
+            << std::endl;
 
   std::cout << "[PC Sampling] XpuptiPCSampling::finalize() - DONE" << std::endl;
 }

@@ -1,15 +1,15 @@
 #include "Profiler/Xpupti/XpuptiProfiler.h"
-#include "Profiler/Xpupti/XpuptiPCSampling.h"
 #include "Context/Context.h"
 #include "Data/Metric.h"
 #include "Device.h"
 #include "Driver/GPU/XpuApi.h"
 #include "Driver/GPU/XpuptiApi.h"
+#include "Profiler/Xpupti/XpuptiPCSampling.h"
 #include "Runtime/XpuRuntime.h"
 #include "Utility/Map.h"
 #include "Utility/String.h"
-#include <vector>
 #include <iostream>
+#include <vector>
 
 #include "pti/pti_view.h"
 #include <cassert>
@@ -80,8 +80,7 @@ uint32_t processActivityKernel(
     XpuptiProfiler::ExternIdToStateMap &externIdToState,
     std::map<uint64_t, std::reference_wrapper<XpuptiProfiler::ExternIdState>>
         &externIdToStateCache,
-    xpupti::Pti_Activity *activity,
-    XpuptiProfiler &profiler) {
+    xpupti::Pti_Activity *activity, XpuptiProfiler &profiler) {
   auto *kernel = reinterpret_cast<pti_view_record_kernel *>(activity);
   auto correlationId = kernel->_correlation_id;
   size_t externId = 0;
@@ -128,7 +127,8 @@ uint32_t processActivityKernel(
     // comment near XpuptiPCSampling::processPCSamplingData() for details.
     if (profiler.pcSamplingEnabled && !kernelDataToEntry.empty()) {
       std::lock_guard<std::mutex> lock(profiler.pcSamplingEntriesMutex);
-      std::string kernelName = kernel->_name ? std::string(kernel->_name) : std::string();
+      std::string kernelName =
+          kernel->_name ? std::string(kernel->_name) : std::string();
       profiler.pcSamplingKernelEntries[kernelName].push_back(kernelDataToEntry);
     }
     externIdToState.erase(externId);
@@ -154,13 +154,13 @@ uint32_t processActivity(
     XpuptiProfiler::ExternIdToStateMap &externIdToState,
     std::map<uint64_t, std::reference_wrapper<XpuptiProfiler::ExternIdState>>
         &externIdToStateCache,
-    xpupti::Pti_Activity *activity,
-    XpuptiProfiler &profiler) {
+    xpupti::Pti_Activity *activity, XpuptiProfiler &profiler) {
   auto correlationId = 0;
   switch (activity->_view_kind) {
   case PTI_VIEW_DEVICE_GPU_KERNEL: {
-    correlationId = processActivityKernel(corrIdToExternId, externIdToState,
-                                          externIdToStateCache, activity, profiler);
+    correlationId =
+        processActivityKernel(corrIdToExternId, externIdToState,
+                              externIdToStateCache, activity, profiler);
     break;
   }
   default:
@@ -180,7 +180,7 @@ struct XpuptiProfiler::XpuptiProfilerPimpl
 #ifdef _WIN32
     _putenv_s("ZET_ENABLE_METRICS", "1");
 #else
-    setenv("ZET_ENABLE_METRICS", "1", 0);  // 0 = don't overwrite if already set
+    setenv("ZET_ENABLE_METRICS", "1", 0); // 0 = don't overwrite if already set
 #endif
 
     // FIXME: enable metrics
@@ -246,9 +246,10 @@ void XpuptiProfiler::XpuptiProfilerPimpl::completeBuffer(uint8_t *buffer,
   do {
     status = xpupti::viewGetNextRecord<false>(buffer, validSize, &activity);
     if (status == pti_result::PTI_SUCCESS) {
-      auto correlationId = processActivity(
-          profiler.correlation.corrIdToExternId,
-          profiler.correlation.externIdToState, externIdToStateCache, activity, profiler);
+      auto correlationId =
+          processActivity(profiler.correlation.corrIdToExternId,
+                          profiler.correlation.externIdToState,
+                          externIdToStateCache, activity, profiler);
       // Log latest completed correlation id.  Used to ensure we have flushed
       // all data on stop
       maxCorrelationId = std::max<uint64_t>(maxCorrelationId, correlationId);
@@ -290,8 +291,9 @@ void XpuptiProfiler::XpuptiProfilerPimpl::callbackFn(
                                                scope.scopeId, 1, isMissingName,
                                                dataToEntry);
   } else if (callback_data->_phase == PTI_CB_PHASE_API_EXIT) {
-    // PC sampling: Kernel entries are saved during activity processing in processActivityKernel()
-    // when child entries are created with kernel names. We don't need to save anything here.
+    // PC sampling: Kernel entries are saved during activity processing in
+    // processActivityKernel() when child entries are created with kernel names.
+    // We don't need to save anything here.
     threadState.exitOp();
     threadState.profiler.correlation.submit(callback_data->_correlation_id);
   } else {
@@ -328,32 +330,43 @@ typedef void (*EnumDeviceUUIDsFunc)(void *);
 int callEnumDeviceUUIDs(const std::string &utils_cache_path) {
   // Check if PROTON_UTILS path is set
   if (xpu::PROTON_UTILS.empty()) {
-    std::cout << "[Profiler] PROTON_UTILS not set, skipping enumDeviceUUIDs" << std::endl;
-    return 0;  // Not an error, just not available
+    std::cout << "[Profiler] PROTON_UTILS not set, skipping enumDeviceUUIDs"
+              << std::endl;
+    return 0; // Not an error, just not available
   }
 
-  std::cout << "[Profiler] Attempting to load PROTON_UTILS library for enumDeviceUUIDs: " << xpu::PROTON_UTILS << std::endl;
+  std::cout << "[Profiler] Attempting to load PROTON_UTILS library for "
+               "enumDeviceUUIDs: "
+            << xpu::PROTON_UTILS << std::endl;
   HMODULE handle = LoadLibrary(xpu::PROTON_UTILS.data());
   if (!handle) {
-    std::cout << "[Profiler] Warning: Failed to load PROTON_UTILS library, error code: " << GetLastError() << std::endl;
-    std::cout << "[Profiler] Continuing without enumDeviceUUIDs (non-fatal)" << std::endl;
-    return 0;  // Make this non-fatal
+    std::cout << "[Profiler] Warning: Failed to load PROTON_UTILS library, "
+                 "error code: "
+              << GetLastError() << std::endl;
+    std::cout << "[Profiler] Continuing without enumDeviceUUIDs (non-fatal)"
+              << std::endl;
+    return 0; // Make this non-fatal
   }
 
-  SetLastError(0);  // Clear any existing error
+  SetLastError(0); // Clear any existing error
   EnumDeviceUUIDsFunc enumDeviceUUIDs =
       (EnumDeviceUUIDsFunc)GetProcAddress(handle, "enumDeviceUUIDs");
   long dlsym_error = GetLastError();
   if (dlsym_error) {
-    std::cout << "[Profiler] Warning: Failed to load function 'enumDeviceUUIDs', error code: " << dlsym_error << std::endl;
-    std::cout << "[Profiler] Continuing without enumDeviceUUIDs (non-fatal)" << std::endl;
+    std::cout << "[Profiler] Warning: Failed to load function "
+                 "'enumDeviceUUIDs', error code: "
+              << dlsym_error << std::endl;
+    std::cout << "[Profiler] Continuing without enumDeviceUUIDs (non-fatal)"
+              << std::endl;
     FreeLibrary(handle);
-    return 0;  // Make this non-fatal
+    return 0; // Make this non-fatal
   }
 
-  std::cout << "[Profiler] Successfully loaded enumDeviceUUIDs, calling it..." << std::endl;
+  std::cout << "[Profiler] Successfully loaded enumDeviceUUIDs, calling it..."
+            << std::endl;
   enumDeviceUUIDs(&deviceUUIDs_);
-  std::cout << "[Profiler] ✓ enumDeviceUUIDs completed, found " << deviceUUIDs_.size() << " devices" << std::endl;
+  std::cout << "[Profiler] ✓ enumDeviceUUIDs completed, found "
+            << deviceUUIDs_.size() << " devices" << std::endl;
 
   FreeLibrary(handle);
   return 0;
@@ -362,32 +375,40 @@ int callEnumDeviceUUIDs(const std::string &utils_cache_path) {
 int callEnumDeviceUUIDs(const std::string &utils_cache_path) {
   // Check if PROTON_UTILS path is set
   if (xpu::PROTON_UTILS.empty()) {
-    std::cout << "[Profiler] PROTON_UTILS not set, skipping enumDeviceUUIDs (optional)" << std::endl;
-    return 0;  // Only non-fatal when explicitly not configured
+    std::cout << "[Profiler] PROTON_UTILS not set, skipping enumDeviceUUIDs "
+                 "(optional)"
+              << std::endl;
+    return 0; // Only non-fatal when explicitly not configured
   }
 
-  std::cout << "[Profiler] Loading PROTON_UTILS library: " << xpu::PROTON_UTILS << std::endl;
+  std::cout << "[Profiler] Loading PROTON_UTILS library: " << xpu::PROTON_UTILS
+            << std::endl;
   void *handle = dlopen(xpu::PROTON_UTILS.data(), RTLD_LAZY);
   if (!handle) {
-    std::cerr << "[Profiler] ERROR: Failed to load PROTON_UTILS library: " << dlerror() << std::endl;
-    std::cerr << "[Profiler] This is required for device UUID enumeration!" << std::endl;
-    return 1;  // Fatal error - library should exist
+    std::cerr << "[Profiler] ERROR: Failed to load PROTON_UTILS library: "
+              << dlerror() << std::endl;
+    std::cerr << "[Profiler] This is required for device UUID enumeration!"
+              << std::endl;
+    return 1; // Fatal error - library should exist
   }
 
-  dlerror();  // Clear any existing error
+  dlerror(); // Clear any existing error
   EnumDeviceUUIDsFunc enumDeviceUUIDs =
       (EnumDeviceUUIDsFunc)dlsym(handle, "enumDeviceUUIDs");
   const char *dlsym_error = dlerror();
   if (dlsym_error) {
-    std::cerr << "[Profiler] ERROR: Failed to load function 'enumDeviceUUIDs': " << dlsym_error << std::endl;
-    std::cerr << "[Profiler] This function is required for device correlation!" << std::endl;
+    std::cerr << "[Profiler] ERROR: Failed to load function 'enumDeviceUUIDs': "
+              << dlsym_error << std::endl;
+    std::cerr << "[Profiler] This function is required for device correlation!"
+              << std::endl;
     dlclose(handle);
-    return 1;  // Fatal error - symbol should exist
+    return 1; // Fatal error - symbol should exist
   }
 
   std::cout << "[Profiler] Calling enumDeviceUUIDs..." << std::endl;
   enumDeviceUUIDs(&deviceUUIDs_);
-  std::cout << "[Profiler] ✓ Enumerated " << deviceUUIDs_.size() << " device(s)" << std::endl;
+  std::cout << "[Profiler] ✓ Enumerated " << deviceUUIDs_.size() << " device(s)"
+            << std::endl;
 
   dlclose(handle);
   return 0;
@@ -400,30 +421,39 @@ typedef void (*WaitOnSyclQueueFunc)(void *);
 int callWaitOnSyclQueue(void *syclQueue) {
   // Check if PROTON_UTILS path is set
   if (xpu::PROTON_UTILS.empty()) {
-    std::cout << "[Profiler] PROTON_UTILS not set, skipping waitOnSyclQueue" << std::endl;
-    return 0;  // Not an error, just not available
+    std::cout << "[Profiler] PROTON_UTILS not set, skipping waitOnSyclQueue"
+              << std::endl;
+    return 0; // Not an error, just not available
   }
 
-  std::cout << "[Profiler] Attempting to load PROTON_UTILS library: " << xpu::PROTON_UTILS << std::endl;
+  std::cout << "[Profiler] Attempting to load PROTON_UTILS library: "
+            << xpu::PROTON_UTILS << std::endl;
   HMODULE handle = LoadLibrary(xpu::PROTON_UTILS.data());
   if (!handle) {
-    std::cout << "[Profiler] Warning: Failed to load PROTON_UTILS library, error code: " << GetLastError() << std::endl;
-    std::cout << "[Profiler] Continuing without waitOnSyclQueue (non-fatal)" << std::endl;
-    return 0;  // Make this non-fatal
+    std::cout << "[Profiler] Warning: Failed to load PROTON_UTILS library, "
+                 "error code: "
+              << GetLastError() << std::endl;
+    std::cout << "[Profiler] Continuing without waitOnSyclQueue (non-fatal)"
+              << std::endl;
+    return 0; // Make this non-fatal
   }
 
-  SetLastError(0);  // Clear any existing error
+  SetLastError(0); // Clear any existing error
   WaitOnSyclQueueFunc waitOnSyclQueue =
       (WaitOnSyclQueueFunc)GetProcAddress(handle, "waitOnSyclQueue");
   long dlsym_error = GetLastError();
   if (dlsym_error) {
-    std::cout << "[Profiler] Warning: Failed to load function 'waitOnSyclQueue', error code: " << dlsym_error << std::endl;
-    std::cout << "[Profiler] Continuing without waitOnSyclQueue (non-fatal)" << std::endl;
+    std::cout << "[Profiler] Warning: Failed to load function "
+                 "'waitOnSyclQueue', error code: "
+              << dlsym_error << std::endl;
+    std::cout << "[Profiler] Continuing without waitOnSyclQueue (non-fatal)"
+              << std::endl;
     FreeLibrary(handle);
-    return 0;  // Make this non-fatal
+    return 0; // Make this non-fatal
   }
 
-  std::cout << "[Profiler] Successfully loaded waitOnSyclQueue, calling it..." << std::endl;
+  std::cout << "[Profiler] Successfully loaded waitOnSyclQueue, calling it..."
+            << std::endl;
   waitOnSyclQueue(syclQueue);
   std::cout << "[Profiler] ✓ waitOnSyclQueue completed" << std::endl;
 
@@ -434,27 +464,35 @@ int callWaitOnSyclQueue(void *syclQueue) {
 int callWaitOnSyclQueue(void *syclQueue) {
   // Check if PROTON_UTILS path is set
   if (xpu::PROTON_UTILS.empty()) {
-    std::cout << "[Profiler] PROTON_UTILS not set, skipping waitOnSyclQueue (optional)" << std::endl;
-    return 0;  // Only non-fatal when explicitly not configured
+    std::cout << "[Profiler] PROTON_UTILS not set, skipping waitOnSyclQueue "
+                 "(optional)"
+              << std::endl;
+    return 0; // Only non-fatal when explicitly not configured
   }
 
-  std::cout << "[Profiler] Loading PROTON_UTILS library: " << xpu::PROTON_UTILS << std::endl;
+  std::cout << "[Profiler] Loading PROTON_UTILS library: " << xpu::PROTON_UTILS
+            << std::endl;
   void *handle = dlopen(xpu::PROTON_UTILS.data(), RTLD_LAZY);
   if (!handle) {
-    std::cerr << "[Profiler] ERROR: Failed to load PROTON_UTILS library: " << dlerror() << std::endl;
-    std::cerr << "[Profiler] This is required for proper profiling operation!" << std::endl;
-    return 1;  // Fatal error - library should exist
+    std::cerr << "[Profiler] ERROR: Failed to load PROTON_UTILS library: "
+              << dlerror() << std::endl;
+    std::cerr << "[Profiler] This is required for proper profiling operation!"
+              << std::endl;
+    return 1; // Fatal error - library should exist
   }
 
-  dlerror();  // Clear any existing error
+  dlerror(); // Clear any existing error
   WaitOnSyclQueueFunc waitOnSyclQueue =
       (WaitOnSyclQueueFunc)dlsym(handle, "waitOnSyclQueue");
   const char *dlsym_error = dlerror();
   if (dlsym_error) {
-    std::cerr << "[Profiler] ERROR: Failed to load function 'waitOnSyclQueue': " << dlsym_error << std::endl;
-    std::cerr << "[Profiler] This function is required for queue synchronization!" << std::endl;
+    std::cerr << "[Profiler] ERROR: Failed to load function 'waitOnSyclQueue': "
+              << dlsym_error << std::endl;
+    std::cerr
+        << "[Profiler] This function is required for queue synchronization!"
+        << std::endl;
     dlclose(handle);
-    return 1;  // Fatal error - symbol should exist
+    return 1; // Fatal error - symbol should exist
   }
 
   std::cout << "[Profiler] Calling waitOnSyclQueue..." << std::endl;
@@ -486,9 +524,12 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doStart() {
                              PTI_CB_DOMAIN_DRIVER_GPU_OPERATION_APPENDED, 1, 1);
   // setDriverCallbacks(subscriber, /*enable=*/true);
 
-  std::cout << "[Profiler] XpuptiProfiler::doStart() - PTI View initialized" << std::endl;
-  std::cout << "[Profiler]   PC sampling enabled: " << (profiler.pcSamplingEnabled ? "yes" : "no") << std::endl;
-  std::cout << "[Profiler]   PC sampling interval: " << profiler.pcSamplingInterval << std::endl;
+  std::cout << "[Profiler] XpuptiProfiler::doStart() - PTI View initialized"
+            << std::endl;
+  std::cout << "[Profiler]   PC sampling enabled: "
+            << (profiler.pcSamplingEnabled ? "yes" : "no") << std::endl;
+  std::cout << "[Profiler]   PC sampling interval: "
+            << profiler.pcSamplingInterval << std::endl;
 
   // Start PC sampling if enabled
   if (profiler.pcSamplingEnabled) {
@@ -498,7 +539,8 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doStart() {
     // and pcSamplingConfigure's nullptr devices argument already means
     // "profile all available devices" - there is no real per-device
     // dispatch to wire up here today.
-    XpuptiPCSampling::instance().start(/*device=*/nullptr, profiler.pcSamplingInterval);
+    XpuptiPCSampling::instance().start(/*device=*/nullptr,
+                                       profiler.pcSamplingInterval);
     std::cout << "[Profiler]   ✓ PC sampling started" << std::endl;
   }
 
@@ -520,7 +562,8 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doStop() {
   XpuptiProfiler &profiler = threadState.profiler;
 
   std::cout << "[Profiler] XpuptiProfiler::doStop() - START" << std::endl;
-  std::cout << "[Profiler]   PC sampling enabled: " << (profiler.pcSamplingEnabled ? "yes" : "no") << std::endl;
+  std::cout << "[Profiler]   PC sampling enabled: "
+            << (profiler.pcSamplingEnabled ? "yes" : "no") << std::endl;
 
   // Stop PC sampling and process all collected samples
   if (profiler.pcSamplingEnabled) {
@@ -532,11 +575,11 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doStop() {
     XpuptiPCSampling::instance().stopCollection(/*device=*/nullptr);
 
     // Use kernel entries created during activity processing
-    // These are the ACTUAL kernel entries (with names) that should receive PC samples.
-    // Pass the entire map in a single call: processPCSamplingData() matches
-    // each PTI-observed kernel to its saved entries by kernel name, so there
-    // is no need (and it would be incorrect) to call processData() once per
-    // saved entry.
+    // These are the ACTUAL kernel entries (with names) that should receive PC
+    // samples. Pass the entire map in a single call: processPCSamplingData()
+    // matches each PTI-observed kernel to its saved entries by kernel name, so
+    // there is no need (and it would be incorrect) to call processData() once
+    // per saved entry.
     {
       std::lock_guard<std::mutex> lock(profiler.pcSamplingEntriesMutex);
       std::cout << "[Profiler]   Processing PC samples for "
@@ -545,10 +588,11 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doStop() {
                 << std::endl;
 
       // nullptr: see comment in doStart() above
-      XpuptiPCSampling::instance().processData(/*device=*/nullptr,
-                                               profiler.pcSamplingKernelEntries);
+      XpuptiPCSampling::instance().processData(
+          /*device=*/nullptr, profiler.pcSamplingKernelEntries);
 
-      std::cout << "[Profiler]   ✓ PC sampling processed for all kernel entries" << std::endl;
+      std::cout << "[Profiler]   ✓ PC sampling processed for all kernel entries"
+                << std::endl;
 
       // Clean up
       profiler.pcSamplingKernelEntries.clear();

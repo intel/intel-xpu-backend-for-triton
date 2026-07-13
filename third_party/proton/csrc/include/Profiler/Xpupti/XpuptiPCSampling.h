@@ -1,11 +1,11 @@
 #ifndef PROTON_PROFILER_XPUPTI_PC_SAMPLING_H_
 #define PROTON_PROFILER_XPUPTI_PC_SAMPLING_H_
 
-#include "XpuptiProfiler.h"
 #include "Driver/GPU/XpuApi.h"
 #include "Driver/GPU/XpuptiApi.h"
 #include "Utility/Map.h"
 #include "Utility/Singleton.h"
+#include "XpuptiProfiler.h"
 #include <atomic>
 #include <map>
 #include <mutex>
@@ -53,10 +53,11 @@ public:
   void start(pti_device_handle_t device, uint32_t samplingPeriodNs);
 
   void stop(pti_device_handle_t device,
-           const std::map<std::string, std::vector<DataToEntryMap>>
-               &kernelNameToEntries);
+            const std::map<std::string, std::vector<DataToEntryMap>>
+                &kernelNameToEntries);
 
-  // Stop collection without processing data (for use when processing multiple entries)
+  // Stop collection without processing data (for use when processing multiple
+  // entries)
   void stopCollection(pti_device_handle_t device);
 
   // Process samples for all saved kernel-name -> entries. Kernel names are
@@ -72,13 +73,12 @@ public:
 private:
   XpuptiConfigureData *getConfigureData(pti_device_handle_t device);
 
-  void processPCSamplingData(
-      XpuptiConfigureData *configureData,
-      const std::map<std::string, std::vector<DataToEntryMap>>
-          &kernelNameToEntries);
+  void
+  processPCSamplingData(XpuptiConfigureData *configureData,
+                        const std::map<std::string, std::vector<DataToEntryMap>>
+                            &kernelNameToEntries);
 
-  ThreadSafeMap<pti_device_handle_t, XpuptiConfigureData>
-      deviceToConfigureData;
+  ThreadSafeMap<pti_device_handle_t, XpuptiConfigureData> deviceToConfigureData;
 
   std::atomic<bool> pcSamplingStarted{false};
   std::mutex pcSamplingMutex{};
