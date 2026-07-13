@@ -1,0 +1,31 @@
+diff --git a/benchmarks/triton_kernels_benchmark/vllm/run_benchmark.sh b/benchmarks/triton_kernels_benchmark/vllm/run_benchmark.sh
+index b0403c1..c131b46 100755
+--- a/benchmarks/triton_kernels_benchmark/vllm/run_benchmark.sh
++++ b/benchmarks/triton_kernels_benchmark/vllm/run_benchmark.sh
+@@ -11,8 +11,11 @@
+ # Environment variables forwarded to the benchmark script:
+ #   FP8=1         - enable FP8 configurations
+ #   DEBUG_BENCH=1 - run only one configuration (faster for sanity checking)
++#   UA_BENCH_PATCHED_ONLY=1 - skip the unpatched baseline and only run after applying NAME.patch
+ set -e
+ 
++PATCHED_ONLY="${UA_BENCH_PATCHED_ONLY:-0}"
++
+ BENCHMARK_FOLDER="$1"
+ shift
+ 
+@@ -32,8 +35,12 @@ if git apply --reverse --check "$PATCH_FILE" 2>/dev/null; then
+     git apply -R "$PATCH_FILE"
+ fi
+ 
+-echo "=== Running benchmark WITHOUT patch ==="
+-TD_PATCHED=0 python "$BENCHMARK_SCRIPT" "$@"
++if [[ "$PATCHED_ONLY" == "1" ]]; then
++    echo "=== Skipping benchmark WITHOUT patch (UA_BENCH_PATCHED_ONLY=1) ==="
++else
++    echo "=== Running benchmark WITHOUT patch ==="
++    TD_PATCHED=0 python "$BENCHMARK_SCRIPT" "$@"
++fi
+ 
+ echo ""
+ echo "=== Applying patch ==="

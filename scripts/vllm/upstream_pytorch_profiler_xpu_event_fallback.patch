@@ -1,0 +1,80 @@
+diff --git a/benchmarks/triton_kernels_benchmark/benchmark_testing.py b/benchmarks/triton_kernels_benchmark/benchmark_testing.py
+index f30fc5d00..105844e4b 100644
+--- a/benchmarks/triton_kernels_benchmark/benchmark_testing.py
++++ b/benchmarks/triton_kernels_benchmark/benchmark_testing.py
+@@ -195,9 +195,8 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
+         # Record clocks
+         synchronize()
+ 
+-    profiling_func_filter = filter(
+-        lambda x: x.name.startswith("__profile_kernel_of_func" if benchmark_label is None else benchmark_label),
+-        prof.events())
++    profile_scope_name = "__profile_kernel_of_func" if benchmark_label is None else benchmark_label
++    profiling_func_filter = filter(lambda x: x.name.startswith(profile_scope_name), prof.events())
+     functions = list(profiling_func_filter)
+ 
+     def extract_kernels(funcs):
+@@ -213,6 +212,54 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
+     # for correct registration of kernels.
+     # For details: https://github.com/pytorch/pytorch/issues/144778
+     kernels = [kernel for kernel in kernels if kernel != []]
++
++    def event_device_time_us(event):
++        for attr in (
++            "self_xpu_time_total",
++            "xpu_time_total",
++            "self_cuda_time_total",
++            "cuda_time_total",
++            "self_device_time_total",
++            "device_time_total",
++        ):
++            value = getattr(event, attr, 0)
++            if value:
++                return float(value)
++        return 0.0
++
++    def kernel_duration_us(kernel):
++        if isinstance(kernel, (int, float)):
++            return float(kernel)
++        return float(getattr(kernel, "duration", 0.0))
++
++    def is_cache_clear_event(name):
++        return (
++            name.startswith("aten::zero_")
++            or name.startswith("aten::fill_")
++            or "VectorizedElementwiseKernel" in name
++        )
++
++    if not kernels:
++        # Some XPU profiler builds report kernels as top-level XPU events instead
++        # of attaching them to the record_function scope. Keep the upstream
++        # scoped extraction above as the primary path, but recover per-iteration
++        # kernel times from those top-level events when the scoped tree is empty.
++        device_events = [
++            event for event in prof.events()
++            if event_device_time_us(event) > 0 and not event.name.startswith(profile_scope_name)
++        ]
++        target_events = [event for event in device_events if not is_cache_clear_event(event.name)]
++        if len(target_events) >= n_repeat:
++            device_events = target_events
++        if len(device_events) == n_repeat:
++            kernels = [[event_device_time_us(event)] for event in device_events]
++        elif len(device_events) > n_repeat and len(device_events) % n_repeat == 0:
++            kernels_per_iter = len(device_events) // n_repeat
++            kernels = [
++                [event_device_time_us(event) for event in device_events[i:i + kernels_per_iter]]
++                for i in range(0, len(device_events), kernels_per_iter)
++            ]
++
+     relax_profiling_data_check = os.getenv("TRITON_RELAX_PROFILING_CHECK", "0") == "1"
+     if not (len(kernels) >= n_repeat - 1 if relax_profiling_data_check else len(kernels) == n_repeat):
+         raise AssertionError(
+@@ -221,7 +268,7 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
+             "You may try to relax profiling check by setting env variable TRITON_RELAX_PROFILING_CHECK=1",
+         )
+     # Make the time to the milliseconds.
+-    times = torch.tensor([sum((k.duration for k in ks)) * 1e-3 for ks in kernels], dtype=torch.float)
++    times = torch.tensor([sum((kernel_duration_us(k) for k in ks)) * 1e-3 for ks in kernels], dtype=torch.float)
+     return _summarize_statistics(times, quantiles, return_mode)
+ 
+ 
