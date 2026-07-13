@@ -208,13 +208,7 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
         line = lines[line_idx]
         ptype = pattern["type"]
 
-        if ptype in (
-                "device_kwarg",
-                "torch_device",
-                "torch_set_default_device",
-                "device_default_param",
-                "device_posarg",
-        ):
+        if ptype in ("device_kwarg", "torch_device", "torch_set_default_device", "device_default_param", "device_posarg"):
             # Replace "cuda" with "xpu" in device arguments
             lines[line_idx] = line.replace('"cuda"', '"xpu"', 1)
 
