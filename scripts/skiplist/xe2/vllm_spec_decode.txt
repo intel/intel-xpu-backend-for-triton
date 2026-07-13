@@ -22,4 +22,4 @@ tests/v1/spec_decode/test_eagle.py::test_propose_stores_probabilistic_draft_prob
 tests/v1/spec_decode/test_max_len.py::test_ngram_max_len
 
 # Runs out of memory on BMG
-tests/v1/spec_decode/test_speculators_eagle3.py::test_eagle3_speculators_model
+# tests/v1/spec_decode/test_speculators_eagle3.py::test_eagle3_speculators_model
