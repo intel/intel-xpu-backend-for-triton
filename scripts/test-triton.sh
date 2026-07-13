@@ -1146,7 +1146,7 @@ run_vllm_tdesc_tests() {
     git -C "$VLLM_PROJ" apply -R "$PATCH_FILE"
   fi
 
-  echo "Applying tdesc patch: $PATCH_FILE." 
+  echo "Applying tdesc patch: $PATCH_FILE."
   git -C "$VLLM_PROJ" apply "$PATCH_FILE"
 
   local EXIT_STATUS=0
