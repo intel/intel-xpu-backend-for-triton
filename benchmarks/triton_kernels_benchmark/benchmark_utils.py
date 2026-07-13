@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional, Set, Union
 from dataclasses import asdict, dataclass, fields
 
 import argparse
+import importlib.util
 import time
 import datetime
 
@@ -69,7 +70,17 @@ class BenchmarkConfigs(MarkArgs):
         start_t = time.perf_counter()
         run_results = []
         for config in self.configs:
-            _json_print(str(config))
+            if self.collect_only and config.describe_metadata_only:
+                # Fall back to metadata only when the optional dependency (e.g. vLLM) is
+                # absent; a resolution failure with vLLM installed is a real bug, so re-raise.
+                try:
+                    _json_print(str(config))
+                except ImportError:
+                    if importlib.util.find_spec("vllm") is not None:
+                        raise
+                    _json_print(config.metadata_only_description())
+            else:
+                _json_print(str(config))
             if self.collect_only:
                 continue
             _json_print(f"Running {config.key}")
