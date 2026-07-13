@@ -596,6 +596,7 @@ class intel_knobs(base_knobs):
     enable_code_sinking: env_bool = env_bool("TRITON_INTEL_ENABLE_CODE_SINKING", False)
     disable_canonicalize_pointers: env_bool = env_bool("TRITON_INTEL_DISABLE_CANONICALIZE_POINTERS", False)
     enable_loop_distribution: env_bool = env_bool("TRITON_INTEL_ENABLE_LOOP_DISTRIBUTION", False)
+    enable_sub_32_dpas: env_bool = env_bool("TRITON_INTEL_ENABLE_DPAS_FOR_WARP_SIZE_32", False)
     fast_math: _env_fast_math = _env_fast_math()
 
     enable_dump_spirv_kernel_args: env_bool = env_bool("TRITON_XPU_ENABLE_DUMP_SPIRV_KERNEL_ARGS", False)
