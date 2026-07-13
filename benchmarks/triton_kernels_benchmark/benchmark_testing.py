@@ -29,6 +29,7 @@ from torch.profiler import profile, ProfilerActivity, record_function
 
 from triton.testing import assert_close as triton_assert_close, Benchmark, do_bench as triton_do_bench
 
+import transform_results
 from triton_kernels_benchmark import build_report
 from triton_kernels_benchmark.benchmark_shapes_parser import ShapePatternParser
 
@@ -149,8 +150,13 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
 
     assert return_mode in ["min", "max", "mean", "median"]
 
-    fn()
-    synchronize()
+    # warm up the profiler infrastructure to eliminate cold-start overhead.
+    # Without this, the first profiler context creation has significant overhead
+    # (e.g., 2.5ms vs 1.7ms, causing bimodal benchmark results - issue #5208).
+    with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.XPU]) as _warmup_prof:
+        with record_function("__warmup_profiler"):
+            fn()
+            synchronize()
 
     # We maintain a buffer of 256 MB that we clear
     # before each kernel call to make sure that the L2
@@ -631,6 +637,7 @@ class BenchmarkCategory(Enum):
     CORE = "core"
     OPTIONAL = "optional"
     EXPERIMENTAL = "experimental"
+    VLLM = "vllm"
 
 
 DimValue = Union[int, str, bool]
@@ -807,6 +814,11 @@ class BenchmarkConfig:  # pylint: disable=too-many-instance-attributes
     run_opts: Dict[str, Union[str, bool, int, List[str]]] = field(default_factory=dict)
     report_name: Optional[str] = None
     report_file_prefix: Optional[str] = None
+    # Set to emit one long/db-format report (via transform_results) instead of per-provider wide reports.
+    long_report_group: Optional[str] = None
+    long_report_param_cols: Optional[str] = None
+    # Set so `describe` lists the config without resolving it (avoids importing optional deps like vLLM).
+    describe_metadata_only: bool = False
 
     @property
     def benchmark_report_name(self) -> str:
@@ -879,6 +891,19 @@ class BenchmarkConfigRunResult(BenchmarkRunResult, BenchmarkConfig):
         ]
         return "\n".join(str_repr)
 
+    def metadata_only_description(self) -> str:
+        return "\n".join([
+            f"Config: {self.key}",
+            f"Config categories: {[category.value for category in self.categories]}",
+            f"Description: {self.description}",
+            f"Run options: {self.run_opts}",
+            f"Shapes pattern: {str(self.shape_pattern) if str(self.shape_pattern) else 'Not set'}",
+            "Supported shapes: Not resolved (optional dependencies not loaded)",
+            "Selected shapes: Not resolved (optional dependencies not loaded)",
+            "Supported providers: Not resolved (optional dependencies not loaded)",
+            "Selected providers: Not resolved (optional dependencies not loaded)",
+        ])
+
     def run(self, args: MarkArgs) -> BenchmarkConfigRunResult:
         start_time = time.perf_counter()
         # FIXME: Eliminate mark_args argument
@@ -889,6 +914,16 @@ class BenchmarkConfigRunResult(BenchmarkRunResult, BenchmarkConfig):
         return self
 
     def build_report(self, reports_folder: str, tag: str = ""):
+        if self.long_report_group is not None and self.long_report_param_cols is not None:
+            long_df = transform_results.parse_csv(
+                f"{reports_folder}/{self.plot_name}.csv",
+                tag,
+                self.long_report_group,
+                self.benchmark_report_name,
+                self.long_report_param_cols.split(","),
+            )
+            long_df.to_csv(f"{reports_folder}/{self.plot_name}-report.csv", index=False)
+            return
         res_df = pd.concat(self.res_df_list, axis=0, ignore_index=True)
         shape_cols_for_report_builder = [
             column for column in res_df.select_dtypes(include=["number", "bool"]).columns
