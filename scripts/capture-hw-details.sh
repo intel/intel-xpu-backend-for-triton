@@ -73,10 +73,10 @@ function agama_version {
     version="$(dpkg-query --show --showformat='${version}\n' "$pkg")"
     # Starting with libigc2 2.36, the Debian revision no longer carries the
     # old-style agama build number (it's a plain package revision now), so
-    # there is nothing meaningful left to extract.
+    # fall back to the IGC version itself.
     upstream_version="${version%%-*}"
     if dpkg --compare-versions "$upstream_version" ge "2.36"; then
-        echo "Unknown"
+        libigc_version
     else
         echo "$version" | sed 's/.*-\(.*\)~.*/\1/'
     fi
