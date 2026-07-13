@@ -304,3 +304,5 @@ tests/kernels/attention/test_triton_prefill_attention.py::test_context_attention
 
 # Nondeterministic tensor-likes are not close on B580: https://github.com/intel/intel-xpu-backend-for-triton/issues/7395
 tests/kernels/attention/test_triton_unified_attention.py::test_triton_unified_attn_fp16_input_fp8_output[0-2048-50.0-256-16-256-num_heads0-seq_lens3]
+tests/kernels/attention/test_triton_unified_attention.py::test_triton_unified_attn_fp16_input_fp8_output[0-32768-50.0-256-16-256-num_heads1-seq_lens3]
+tests/kernels/attention/test_triton_unified_attention.py::test_triton_unified_attn_fp16_input_fp8_output[0-2048-50.0-None-16-256-num_heads0-seq_lens3]
