@@ -122,10 +122,14 @@ uint32_t processActivityKernel(
       }
     }
 
-    // If PC sampling is enabled, save the kernel entries for later use
+    // If PC sampling is enabled, save the kernel entries for later use.
+    // Entries are keyed by kernel name because PTI aggregates PC samples per
+    // kernel binary (base address), not per launch instance -- see the
+    // comment near XpuptiPCSampling::processPCSamplingData() for details.
     if (profiler.pcSamplingEnabled && !kernelDataToEntry.empty()) {
       std::lock_guard<std::mutex> lock(profiler.pcSamplingEntriesMutex);
-      profiler.pcSamplingKernelEntries.push_back(kernelDataToEntry);
+      std::string kernelName = kernel->_name ? std::string(kernel->_name) : std::string();
+      profiler.pcSamplingKernelEntries[kernelName].push_back(kernelDataToEntry);
     }
     externIdToState.erase(externId);
     corrIdToExternId.erase(correlationId);
@@ -207,7 +211,6 @@ struct XpuptiProfiler::XpuptiProfilerPimpl
   static constexpr size_t BufferSize = 64 * 1024 * 1024;
 
   pti_callback_subscriber_handle subscriber;
-  pti_device_handle_t currentDevice{nullptr};
 
   /*
   ThreadSafeMap<uint32_t, size_t, std::unordered_map<uint32_t, size_t>>
@@ -486,13 +489,16 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doStart() {
   std::cout << "[Profiler] XpuptiProfiler::doStart() - PTI View initialized" << std::endl;
   std::cout << "[Profiler]   PC sampling enabled: " << (profiler.pcSamplingEnabled ? "yes" : "no") << std::endl;
   std::cout << "[Profiler]   PC sampling interval: " << profiler.pcSamplingInterval << std::endl;
-  std::cout << "[Profiler]   Current device: " << currentDevice << std::endl;
 
   // Start PC sampling if enabled
   if (profiler.pcSamplingEnabled) {
     std::cout << "[Profiler]   Starting PC sampling..." << std::endl;
-    // Use nullptr to profile all available devices
-    XpuptiPCSampling::instance().start(currentDevice);
+    // PTI currently supports PC sampling on at most one device
+    // (kMaxConfiguredDevices == 1 in the PTI SDK's internal implementation),
+    // and pcSamplingConfigure's nullptr devices argument already means
+    // "profile all available devices" - there is no real per-device
+    // dispatch to wire up here today.
+    XpuptiPCSampling::instance().start(/*device=*/nullptr, profiler.pcSamplingInterval);
     std::cout << "[Profiler]   ✓ PC sampling started" << std::endl;
   }
 
@@ -522,28 +528,31 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doStop() {
 
     // Stop collection once
     std::cout << "[Profiler]   Stopping PC sampling collection..." << std::endl;
-    XpuptiPCSampling::instance().stopCollection(currentDevice);
+    // nullptr: see comment in doStart() above
+    XpuptiPCSampling::instance().stopCollection(/*device=*/nullptr);
 
     // Use kernel entries created during activity processing
-    // These are the ACTUAL kernel entries (with names) that should receive PC samples
-    std::lock_guard<std::mutex> lock(profiler.pcSamplingEntriesMutex);
-    std::cout << "[Profiler]   Processing PC samples for " << profiler.pcSamplingKernelEntries.size()
-              << " kernel entries created during activity processing" << std::endl;
+    // These are the ACTUAL kernel entries (with names) that should receive PC samples.
+    // Pass the entire map in a single call: processPCSamplingData() matches
+    // each PTI-observed kernel to its saved entries by kernel name, so there
+    // is no need (and it would be incorrect) to call processData() once per
+    // saved entry.
+    {
+      std::lock_guard<std::mutex> lock(profiler.pcSamplingEntriesMutex);
+      std::cout << "[Profiler]   Processing PC samples for "
+                << profiler.pcSamplingKernelEntries.size()
+                << " distinct kernel name(s) created during activity processing"
+                << std::endl;
 
-    for (size_t i = 0; i < profiler.pcSamplingKernelEntries.size(); i++) {
-      const auto &dataToEntry = profiler.pcSamplingKernelEntries[i];
-      std::cout << "[Profiler]   Kernel entry " << (i + 1) << " has " << dataToEntry.size() << " data entries:" << std::endl;
-      for (const auto &[data, entry] : dataToEntry) {
-        std::cout << "[Profiler]     data=" << data << ", phase=" << entry.phase << ", id=" << entry.id << std::endl;
-      }
-      // Process samples for this kernel entry
-      XpuptiPCSampling::instance().processData(currentDevice, dataToEntry);
+      // nullptr: see comment in doStart() above
+      XpuptiPCSampling::instance().processData(/*device=*/nullptr,
+                                               profiler.pcSamplingKernelEntries);
+
+      std::cout << "[Profiler]   ✓ PC sampling processed for all kernel entries" << std::endl;
+
+      // Clean up
+      profiler.pcSamplingKernelEntries.clear();
     }
-
-    std::cout << "[Profiler]   ✓ PC sampling processed for all kernel entries" << std::endl;
-
-    // Clean up
-    profiler.pcSamplingKernelEntries.clear();
   }
 
   xpupti::viewDisable<true>(PTI_VIEW_DEVICE_GPU_KERNEL);
@@ -561,7 +570,8 @@ void XpuptiProfiler::XpuptiProfilerPimpl::doStop() {
 
   // Finalize PC sampling if enabled
   if (profiler.pcSamplingEnabled) {
-    XpuptiPCSampling::instance().finalize(currentDevice);
+    // nullptr: see comment in doStart() above
+    XpuptiPCSampling::instance().finalize(/*device=*/nullptr);
   }
 }
 

@@ -382,10 +382,7 @@ struct BuildFlags {
     if (build_flags_str.find(SMALL_GRF_FLAG) != std::string::npos) {
       return 128;
     }
-    // TODO: arguably we could return 128 if we find no flag instead of 0. For
-    // now, stick with the conservative choice and alert the user only if a
-    // specific GRF mode is specified.
-    return 0;
+    return 128;
   }
 
   const bool hasGRFSizeFlag() const {
