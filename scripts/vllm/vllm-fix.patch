@@ -79,6 +79,27 @@ index 2a3bdb91f..c74587d5f 100644
              env[_SPAWN_CHILD_ENV] = "1"
  
              result = subprocess.run(
+diff --git a/tests/kernels/utils.py b/tests/kernels/utils.py
+index 12ff3830c..04da1ac74 100644
+--- a/tests/kernels/utils.py
++++ b/tests/kernels/utils.py
+@@ -885,6 +885,7 @@ def torch_experts(
+     f32 = torch.float32
+
+     act = op_registry[activation.custom_op_name]
++    act_fn = act(compile_native=False)
+
+     for i in range(num_experts):
+         mask = topk_ids == i
+@@ -893,7 +894,7 @@ def torch_experts(
+                 tmp1 = a[mask] @ w1[i].transpose(0, 1)
+                 if b_bias1 is not None:
+                     tmp1 = tmp1 + b_bias1[i].view(1, -1).to(tmp1.dtype)
+-                tmp2 = act()(tmp1)
++                tmp2 = act_fn(tmp1)
+                 out[mask] = tmp2 @ w2[i].transpose(0, 1)
+                 if b_bias2 is not None:
+                     out[mask] = out[mask] + b_bias2[i].view(1, -1).to(tmp1.dtype)
 diff --git a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
 index 21bda8e17..e7f11e934 100644
 --- a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
@@ -88,7 +109,7 @@ index 21bda8e17..e7f11e934 100644
              if (
                  torch.compiler.is_compiling()
 -                or torch.cuda.is_current_stream_capturing()
-+                or (torch.cuda.is_available() and torch.cuda.is_current_stream_capturing())
++                or (current_platform.is_cuda() and torch.cuda.is_current_stream_capturing())
              ):
                  num = hidden_states.shape[1]
              else:
@@ -97,7 +118,7 @@ index 21bda8e17..e7f11e934 100644
      block_shape: list[int] | None = None,
  ) -> tuple[torch.Tensor, torch.Tensor | None]:
 -    if torch.compiler.is_compiling() or torch.cuda.is_current_stream_capturing():
-+    if torch.compiler.is_compiling() or (torch.cuda.is_available() and torch.cuda.is_current_stream_capturing()):
++    if torch.compiler.is_compiling() or (current_platform.is_cuda() and torch.cuda.is_current_stream_capturing()):
          # Note: this does a bunch of extra work because expert_num_tokens is
          # ignored but it does support torch.compile + cudagraphs.
          hidden_dim = A.size(-1)
