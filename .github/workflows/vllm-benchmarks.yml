@@ -138,13 +138,34 @@ jobs:
         with:
           use-branch-wheel: ${{ inputs.use_branch_wheel }}
 
+      - name: Enable unified-attention artifact collector
+        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
+        run: |
+          benchmark_file="benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention_benchmark.py"
+
+          if grep -q "AUTOTUNE_CANDIDATES_FILE" "$benchmark_file"; then
+            echo "Current collector already present"
+          elif grep -q "AUTOTUNE_DECISIONS_FILE" "$benchmark_file"; then
+            echo "Upgrading v1 collector to v2"
+            git apply scripts/vllm/unified_attention_benchmark_autotune_artifacts_v1_to_v2.patch
+          else
+            echo "Installing v2 collector"
+            git apply scripts/vllm/unified_attention_benchmark_autotune_artifacts.patch
+          fi
+
       - name: Run vllm unified attention bf16
         if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
         run: |
           source ./scripts/capture-hw-details.sh
 
           cd benchmarks/triton_kernels_benchmark/vllm
-          bash run_benchmark.sh unified_attention --reports $REPORTS --tag $TAG
+          UA_AUTOTUNE_BRANCH="$GITHUB_REF_NAME" \
+          UA_AUTOTUNE_COMMIT="$GITHUB_SHA" \
+          UA_AUTOTUNE_COMPARISON_RUN_UUID="$TAG" \
+          UA_AUTOTUNE_CV_THRESHOLD="0.02" \
+          UA_AUTOTUNE_MAX_CV_RETRIES="2" \
+          TRITON_CACHE_DIR="$RUNNER_TEMP/triton-cache-$GITHUB_RUN_ID-bf16" \
+          bash run_benchmark.sh unified_attention --reports "$REPORTS" --tag "$TAG"
 
       - name: Run vllm unified attention fp8
         if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
@@ -152,7 +173,14 @@ jobs:
           source ./scripts/capture-hw-details.sh
 
           cd benchmarks/triton_kernels_benchmark/vllm
-          FP8="1" bash run_benchmark.sh unified_attention --reports $REPORTS --tag $TAG
+          UA_AUTOTUNE_BRANCH="$GITHUB_REF_NAME" \
+          UA_AUTOTUNE_COMMIT="$GITHUB_SHA" \
+          UA_AUTOTUNE_COMPARISON_RUN_UUID="$TAG" \
+          UA_AUTOTUNE_CV_THRESHOLD="0.02" \
+          UA_AUTOTUNE_MAX_CV_RETRIES="2" \
+          TRITON_CACHE_DIR="$RUNNER_TEMP/triton-cache-$GITHUB_RUN_ID-fp8" \
+          FP8="1" \
+          bash run_benchmark.sh unified_attention --reports "$REPORTS" --tag "$TAG"
 
       - name: Run vllm batched moe bf16
         if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}

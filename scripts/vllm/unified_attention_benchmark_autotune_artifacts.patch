@@ -1,0 +1,914 @@
+diff --git a/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention_benchmark.py b/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention_benchmark.py
+index 27b41d7..b430da7 100644
+--- a/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention_benchmark.py
++++ b/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention_benchmark.py
+@@ -11,6 +11,13 @@ Unified Attention benchmark
+ This benchmark is based on the test_triton_unified_attention.py tests
+ """
+ import os
++import atexit
++import csv
++import math
++import statistics
++import sys
++import uuid
++from datetime import datetime, timezone
+ from itertools import product
+ from typing import Optional
+ 
+@@ -30,11 +37,865 @@ except ImportError as e:
+ from vllm.platforms import current_platform
+ from vllm_xpu_kernels.flash_attn_interface import flash_attn_varlen_func as sycl_tla_attention
+ 
++_unified_attention_module = sys.modules[unified_attention.__module__]
++_original_unified_attention = unified_attention
++_LAST_UNIFIED_ATTENTION_LOCALS: dict[str, object] = {}
++_LAST_MEASUREMENT_ATTEMPTS: list[dict[str, float]] = []
++
++
++def _trace_unified_attention(frame, event, arg):
++    if event == 'return' and frame.f_code is _original_unified_attention.__code__:
++        _LAST_UNIFIED_ATTENTION_LOCALS.clear()
++        _LAST_UNIFIED_ATTENTION_LOCALS.update(frame.f_locals)
++    return _trace_unified_attention
++
++
++def _recording_unified_attention(*args, **kwargs):
++    previous_trace = sys.gettrace()
++    _LAST_UNIFIED_ATTENTION_LOCALS.clear()
++    sys.settrace(_trace_unified_attention)
++    try:
++        return _original_unified_attention(*args, **kwargs)
++    finally:
++        sys.settrace(previous_trace)
++
++
++unified_attention = _recording_unified_attention
++
+ float8_info = torch.finfo(current_platform.fp8_dtype())
+ 
+ TOTAL_MEMORY_BYTES = benchmark_suite.get_total_gpu_memory_bytes()
+ 
+ IS_FP8 = (os.getenv('FP8', '0') == '1')
++AUTOTUNE_DECISIONS_FILE = 'unified-attention-autotune-decisions.csv'
++AUTOTUNE_CANDIDATES_FILE = 'unified-attention-autotune-candidates.csv'
++AUTOTUNE_DECISION_ROWS: list[dict[str, object]] = []
++AUTOTUNE_CANDIDATE_ROWS: list[dict[str, object]] = []
++AUTOTUNE_CV_THRESHOLD = float(os.getenv('UA_AUTOTUNE_CV_THRESHOLD', '0.02'))
++AUTOTUNE_MAX_CV_RETRIES = int(os.getenv('UA_AUTOTUNE_MAX_CV_RETRIES', '2'))
++AUTOTUNE_RUN_METADATA = {
++    'branch': os.getenv('UA_AUTOTUNE_BRANCH', ''),
++    'commit': os.getenv('UA_AUTOTUNE_COMMIT', ''),
++    'comparison_run_uuid': os.getenv('UA_AUTOTUNE_COMPARISON_RUN_UUID', ''),
++    'run_uuid': os.getenv('UA_AUTOTUNE_RUN_UUID', uuid.uuid4().hex),
++    'timestamp_utc': os.getenv(
++        'UA_AUTOTUNE_TIMESTAMP_UTC',
++        datetime.now(timezone.utc).isoformat(timespec='seconds'),
++    ),
++}
++AUTOTUNE_KEY_COLUMNS = [
++    'BLOCK_SIZE',
++    'HEAD_SIZE',
++    'IS_FP8_INPUT',
++    'IS_3D',
++    'BLOCK_Q',
++    'num_queries_per_kv',
++    'TILE_SIZE',
++    'BLOCK_M',
++    'NUM_SEQS_BUCKET',
++    'MAX_SEQLEN_K_BUCKET',
++    'EFFECTIVE_MAX_SEQLEN_K_BUCKET',
++    'USE_LARGE_HEAD_TILE',
++    'USE_TD',
++]
++AUTOTUNE_DECISION_FIELDNAMES = [
++    'branch',
++    'commit',
++    'comparison_run_uuid',
++    'run_uuid',
++    'timestamp_utc',
++    'benchmark_name',
++    'td_patched',
++    'benchmark_dtype',
++    'provider',
++    'q_heads',
++    'k_heads',
++    'head_size',
++    'qdtype',
++    'seq_lens',
++    'sliding_window',
++    'soft_cap',
++    'num_blocks',
++    'block_size',
++    'is_prefill',
++    'workload_kind',
++    'num_seqs',
++    'max_seqlen_q',
++    'max_seqlen_k',
++    'effective_max_seqlen_k',
++    'sliding_window_state',
++    'autotune_key_names',
++    'autotune_key_values',
++    'key_BLOCK_SIZE',
++    'key_HEAD_SIZE',
++    'key_IS_FP8_INPUT',
++    'key_IS_3D',
++    'key_BLOCK_Q',
++    'key_num_queries_per_kv',
++    'key_TILE_SIZE',
++    'key_BLOCK_M',
++    'key_NUM_SEQS_BUCKET',
++    'key_MAX_SEQLEN_K_BUCKET',
++    'key_EFFECTIVE_MAX_SEQLEN_K_BUCKET',
++    'key_USE_LARGE_HEAD_TILE',
++    'key_USE_TD',
++    'selected_config',
++    'effective_config',
++    'selection_source',
++    'selected_TILE_SIZE',
++    'selected_BLOCK_Q',
++    'actual_TILE_SIZE',
++    'actual_BLOCK_Q',
++    'actual_num_warps',
++    'actual_num_stages',
++    'selected_NUM_SEGMENTS_PER_SEQ',
++    'selected_num_warps',
++    'selected_num_stages',
++    'configs_before_prune',
++    'configs_after_prune',
++    'configs_before_prune_count',
++    'configs_after_prune_count',
++    'pruning_error',
++    'autotune_cache_size',
++    'selected_runner_up_margin_pct',
++    'median_ms',
++    'mean_ms',
++    'cv',
++    'measurement_attempts',
++    'measurement_first_cv',
++    'measurement_retried',
++    'measurement_high_cv',
++    'cv_threshold',
++]
++AUTOTUNE_CANDIDATE_FIELDNAMES = [
++    'branch',
++    'commit',
++    'comparison_run_uuid',
++    'run_uuid',
++    'timestamp_utc',
++    'kernel_name',
++    'autotune_key_names',
++    'autotune_key_values',
++    *(f'key_{key}' for key in AUTOTUNE_KEY_COLUMNS),
++    'candidate_config',
++    'pruning_status',
++    'selected',
++    'candidate_rank',
++    'candidates_before_prune',
++    'candidates_after_prune',
++    'median_ms',
++    'p20_ms',
++    'p80_ms',
++    'mean_ms',
++    'stddev_ms',
++    'cv',
++    'timing_attempts',
++    'high_cv',
++    'selected_runner_up_margin_pct',
++    'cache_hit',
++    'tune_duration_s',
++    'benchmark_name',
++    'q_heads',
++    'k_heads',
++    'head_size',
++    'seq_lens',
++    'sliding_window',
++    'soft_cap',
++    'num_blocks',
++    'block_size',
++]
++
++_AUTOTUNE_CANDIDATE_TIMINGS: dict[int, dict[str, object]] = {}
++_LAST_PRUNE_EVENT: dict[str, object] = {}
++_CANDIDATE_EVENT_COUNTER = 0
++
++
++def _reports_dir_from_argv() -> str:
++    reports_dir = os.getenv('UA_AUTOTUNE_DECISION_REPORTS', '')
++    if reports_dir:
++        return reports_dir
++
++    argv = sys.argv[1:]
++    for idx, arg in enumerate(argv):
++        if arg == '--reports' and idx + 1 < len(argv):
++            reports_dir = argv[idx + 1]
++        elif arg.startswith('--reports='):
++            reports_dir = arg.split('=', 1)[1]
++    return reports_dir
++
++
++def _format_csv_value(value: object) -> str:
++    if value is None:
++        return ''
++    if isinstance(value, (list, tuple, dict)):
++        return repr(value)
++    return str(value)
++
++
++def _config_kwargs(config: object) -> dict[str, object]:
++    if config is None:
++        return {}
++    kwargs = dict(getattr(config, 'kwargs', {}) or {})
++    for attr in ('num_warps', 'num_stages', 'num_ctas'):
++        value = getattr(config, attr, None)
++        if value is not None:
++            kwargs[attr] = value
++    return kwargs
++
++
++def _format_config(config: object) -> str:
++    if isinstance(config, str):
++        return config
++    kwargs = _config_kwargs(config)
++    return ';'.join(f'{key}={_format_csv_value(kwargs[key])}' for key in sorted(kwargs))
++
++
++def _config_value(config: object, key: str) -> object:
++    return _config_kwargs(config).get(key, '')
++
++
++def _observed_value(*names: str) -> object:
++    for name in names:
++        if name in _LAST_UNIFIED_ATTENTION_LOCALS:
++            return _LAST_UNIFIED_ATTENTION_LOCALS[name]
++    return ''
++
++
++def _actual_tile_size(config: object) -> object:
++    config_value = _config_value(config, 'TILE_SIZE')
++    if config_value != '':
++        return config_value
++
++    observed_tile_size = _observed_value('tile_size', 'TILE_SIZE')
++    if observed_tile_size != '':
++        return observed_tile_size
++
++    use_3d = _LAST_UNIFIED_ATTENTION_LOCALS.get('use_3d')
++    if use_3d is True:
++        return _observed_value('TILE_SIZE_DECODE')
++    if use_3d is False:
++        return _observed_value('TILE_SIZE_PREFILL')
++    return ''
++
++
++def _int_value(value: object) -> int | None:
++    if value == '' or value is None:
++        return None
++    try:
++        return int(value)
++    except (TypeError, ValueError):
++        try:
++            return int(float(value))
++        except (TypeError, ValueError):
++            return None
++
++
++def _actual_block_q(config: object, q_heads: int, k_heads: int) -> object:
++    config_value = _config_value(config, 'BLOCK_Q')
++    if config_value != '':
++        return config_value
++
++    observed = _observed_value('BLOCK_Q')
++    if observed != '':
++        return observed
++
++    block_m = _int_value(_actual_block_m(config))
++    num_queries = _int_value(_num_queries_per_kv(q_heads, k_heads))
++    if block_m is not None and num_queries not in (None, 0):
++        return block_m // num_queries
++    return ''
++
++
++def _actual_config_value(config: object, key: str, default: object = '') -> object:
++    config_value = _config_value(config, key)
++    if config_value != '':
++        return config_value
++
++    observed = _observed_value(key)
++    if observed != '':
++        return observed
++    return default
++
++
++def _is_fp8_input(qdtype: torch.dtype | None) -> bool:
++    observed = _observed_value('is_fp8_input', 'IS_FP8_INPUT', 'Q_IS_FP8')
++    if observed != '':
++        return bool(observed)
++    return qdtype is not None and getattr(qdtype, 'itemsize', 0) == 1
++
++
++def _is_3d() -> object:
++    return _observed_value('use_3d', 'IS_3D')
++
++
++def _num_queries_per_kv(q_heads: int, k_heads: int) -> object:
++    observed = _observed_value('num_queries_per_kv')
++    if observed != '':
++        return observed
++    return q_heads // k_heads
++
++
++def _actual_block_m(config: object) -> object:
++    config_value = _config_value(config, 'BLOCK_M')
++    if config_value != '':
++        return config_value
++    return _observed_value('BLOCK_M')
++
++
++def _autotune_key_values(qdtype: torch.dtype | None, head_size: int, seq_lens: list[tuple[int, int]],
++                         block_size: int, config: object, q_heads: int, k_heads: int) -> dict[str, object]:
++    return {
++        'BLOCK_SIZE': block_size,
++        'HEAD_SIZE': head_size,
++        'IS_FP8_INPUT': _is_fp8_input(qdtype),
++        'IS_3D': _is_3d(),
++        'BLOCK_Q': _actual_block_q(config, q_heads, k_heads),
++        'num_queries_per_kv': _num_queries_per_kv(q_heads, k_heads),
++        'TILE_SIZE': _actual_tile_size(config),
++        'BLOCK_M': _actual_block_m(config),
++        'NUM_SEQS_BUCKET': _observed_value('NUM_SEQS_BUCKET', 'num_seqs_bucket'),
++        'MAX_SEQLEN_K_BUCKET': _observed_value('MAX_SEQLEN_K_BUCKET', 'max_seqlen_k_bucket'),
++        'EFFECTIVE_MAX_SEQLEN_K_BUCKET': _observed_value(
++            'EFFECTIVE_MAX_SEQLEN_K_BUCKET', 'effective_max_seqlen_k_bucket'
++        ),
++        'USE_LARGE_HEAD_TILE': _observed_value('USE_LARGE_HEAD_TILE', 'tuned_large_head'),
++        'USE_TD': _observed_value('USE_TD', 'use_td'),
++    }
++
++
++def _get_pruned_configs(kernel: object, key_names: list[str],
++                        key_values: dict[str, object]) -> tuple[list[object], str]:
++    if kernel is None or not hasattr(kernel, 'prune_configs'):
++        return [], ''
++
++    old_nargs = getattr(kernel, 'nargs', None)
++    prune_configs = getattr(kernel, '_ua_artifact_original_prune_configs', kernel.prune_configs)
++    meta = {key: key_values.get(key, '') for key in key_names}
++    try:
++        kernel.nargs = {}
++        return list(prune_configs(meta)), ''
++    except Exception as exc:  # pragma: no cover - diagnostic path only
++        return [], f'{type(exc).__name__}:{exc}'
++    finally:
++        try:
++            kernel.nargs = old_nargs
++        except Exception:
++            pass
++
++
++def _workload_kind(seq_lens: list[tuple[int, int]]) -> str:
++    has_prefill = any(query_len > 1 for query_len, _ in seq_lens)
++    has_decode = any(query_len == 1 for query_len, _ in seq_lens)
++    if has_prefill and has_decode:
++        return 'mixed'
++    return 'prefill' if has_prefill else 'decode'
++
++
++def _effective_max_seqlen_k(seq_lens: list[tuple[int, int]], sliding_window: int | None) -> int:
++    max_seqlen_k = max(kv_len for _, kv_len in seq_lens)
++    if sliding_window is None or sliding_window <= 0:
++        return max_seqlen_k
++    return min(max_seqlen_k, sliding_window)
++
++
++def _effective_config(config: object, q_heads: int, k_heads: int) -> str:
++    values = {
++        'BLOCK_M': _actual_block_m(config),
++        'BLOCK_Q': _actual_block_q(config, q_heads, k_heads),
++        'TILE_SIZE': _actual_tile_size(config),
++        'num_stages': _actual_config_value(config, 'num_stages', 2),
++        'num_warps': _actual_config_value(config, 'num_warps', 4),
++    }
++    return ';'.join(
++        f'{key}={_format_csv_value(value)}'
++        for key, value in sorted(values.items())
++        if value != ''
++    )
++
++
++def _float_value(value: object) -> float | None:
++    try:
++        result = float(value)
++    except (TypeError, ValueError):
++        return None
++    return result if math.isfinite(result) else None
++
++
++def _timing_value(timing: object, index: int) -> float | None:
++    if isinstance(timing, (list, tuple)):
++        if index >= len(timing):
++            return None
++        return _float_value(timing[index])
++    return _float_value(timing) if index == 0 else None
++
++
++def _summarize_candidate_times(times: list[float]) -> dict[str, float]:
++    timing_tensor = torch.tensor(times, dtype=torch.float)
++    trimmed = sorted(times)[1:-1] if len(times) > 2 else times
++    mean_ms = statistics.fmean(trimmed)
++    stddev_ms = statistics.stdev(trimmed) if len(trimmed) > 1 else 0.0
++    cv = stddev_ms / mean_ms if mean_ms else float('inf')
++    p20_ms, median_ms, p80_ms = torch.quantile(
++        timing_tensor,
++        torch.tensor([0.2, 0.5, 0.8], dtype=torch.float),
++    ).tolist()
++    return {
++        'median_ms': median_ms,
++        'p20_ms': p20_ms,
++        'p80_ms': p80_ms,
++        'mean_ms': mean_ms,
++        'stddev_ms': stddev_ms,
++        'cv': cv,
++    }
++
++
++def _do_bench_with_cv_retry(fn, *, n_warmup: int, n_repeat: int,
++                            quantiles: list[float]) -> tuple[object, ...]:
++    global _LAST_MEASUREMENT_ATTEMPTS
++    attempts: list[tuple[object, ...]] = []
++    for _ in range(AUTOTUNE_MAX_CV_RETRIES + 1):
++        result = tuple(benchmark_suite.do_bench(
++            fn,
++            n_warmup=n_warmup,
++            n_repeat=n_repeat,
++            quantiles=quantiles,
++        ))
++        attempts.append(result)
++        cv = _float_value(result[4])
++        if cv is not None and cv <= AUTOTUNE_CV_THRESHOLD:
++            break
++
++    best = min(
++        attempts,
++        key=lambda result: _float_value(result[4])
++        if _float_value(result[4]) is not None else float('inf'),
++    )
++    _LAST_MEASUREMENT_ATTEMPTS = [
++        {'mean_ms': float(result[3]), 'cv': float(result[4])}
++        for result in attempts
++    ]
++    return best
++
++
++_AUTOTUNE_MARGINS: dict[tuple[tuple[str, str], ...], float] = {}
++
++
++def _key_signature(key_names: list[str],
++                   key_values: dict[str, object]) -> tuple[tuple[str, str], ...]:
++    return tuple((key, _format_csv_value(key_values.get(key, ''))) for key in key_names)
++
++
++def _candidate_do_bench(kernel_call, quantiles):
++    import triton.testing as triton_testing
++
++    attempts: list[dict[str, object]] = []
++    for _ in range(AUTOTUNE_MAX_CV_RETRIES + 1):
++        times = [
++            float(value)
++            for value in triton_testing.do_bench(
++                kernel_call,
++                warmup=25,
++                rep=100,
++                return_mode='all',
++            )
++        ]
++        stats: dict[str, object] = _summarize_candidate_times(times)
++        stats['times'] = times
++        attempts.append(stats)
++        if float(stats['cv']) <= AUTOTUNE_CV_THRESHOLD:
++            break
++
++    best = min(attempts, key=lambda stats: float(stats['cv']))
++    best['timing_attempts'] = len(attempts)
++    best['high_cv'] = float(best['cv']) > AUTOTUNE_CV_THRESHOLD
++    global _CURRENT_CANDIDATE_TIMING
++    _CURRENT_CANDIDATE_TIMING = best
++    values = torch.quantile(
++        torch.tensor(best['times'], dtype=torch.float),
++        torch.tensor(quantiles, dtype=torch.float),
++    ).tolist()
++    return values[0] if len(values) == 1 else values
++
++
++_CURRENT_CANDIDATE_TIMING: dict[str, object] | None = None
++
++
++def _append_candidate_rows(
++    *,
++    kernel: object,
++    key_names: list[str],
++    key_values: dict[str, object],
++    configs_before_prune: list[object],
++    configs_after_prune: list[object],
++    configs_timings: dict[object, object],
++    selected_config: object,
++    cache_hit: bool,
++    tune_duration_s: object,
++) -> None:
++    finite_timings = [
++        (config, _timing_value(timing, 0))
++        for config, timing in configs_timings.items()
++        if _timing_value(timing, 0) is not None
++    ]
++    finite_timings.sort(key=lambda item: item[1])
++    ranks = {id(config): rank for rank, (config, _value) in enumerate(finite_timings, start=1)}
++    margin = ''
++    if len(finite_timings) > 1 and finite_timings[0][1]:
++        margin = (finite_timings[1][1] / finite_timings[0][1] - 1.0) * 100.0
++        _AUTOTUNE_MARGINS[_key_signature(key_names, key_values)] = margin
++
++    for config in configs_before_prune:
++        timing = configs_timings.get(config)
++        stats = _AUTOTUNE_CANDIDATE_TIMINGS.get(id(config), {})
++        row = {
++            **AUTOTUNE_RUN_METADATA,
++            'kernel_name': getattr(getattr(kernel, 'base_fn', None), '__name__', 'kernel_unified_attention'),
++            'autotune_key_names': ';'.join(key_names),
++            'autotune_key_values': _format_csv_value(
++                {key: key_values.get(key, '') for key in key_names}
++            ),
++            'candidate_config': _format_config(config),
++            'pruning_status': (
++                'benchmarked'
++                if config in configs_timings
++                else 'selected_without_benchmark'
++                if config in configs_after_prune and config is selected_config
++                else 'pruned'
++            ),
++            'selected': config is selected_config,
++            'candidate_rank': ranks.get(id(config), ''),
++            'candidates_before_prune': len(configs_before_prune),
++            'candidates_after_prune': len(configs_after_prune),
++            'median_ms': stats.get('median_ms', _timing_value(timing, 0) or ''),
++            'p20_ms': stats.get('p20_ms', _timing_value(timing, 1) or ''),
++            'p80_ms': stats.get('p80_ms', _timing_value(timing, 2) or ''),
++            'mean_ms': stats.get('mean_ms', ''),
++            'stddev_ms': stats.get('stddev_ms', ''),
++            'cv': stats.get('cv', ''),
++            'timing_attempts': stats.get('timing_attempts', ''),
++            'high_cv': stats.get('high_cv', ''),
++            'selected_runner_up_margin_pct': margin,
++            'cache_hit': cache_hit,
++            'tune_duration_s': _format_csv_value(tune_duration_s),
++        }
++        for key in AUTOTUNE_KEY_COLUMNS:
++            row[f'key_{key}'] = key_values.get(key, '')
++        AUTOTUNE_CANDIDATE_ROWS.append(row)
++
++
++def _install_autotune_instrumentation() -> None:
++    kernel = getattr(_unified_attention_module, 'kernel_unified_attention', None)
++    if kernel is None or not hasattr(kernel, 'prune_configs'):
++        return
++
++    original_prune_configs = kernel.prune_configs
++    original_bench = getattr(kernel, '_bench', None)
++    kernel._ua_artifact_original_prune_configs = original_prune_configs
++
++    def recording_prune_configs(kwargs):
++        global _CANDIDATE_EVENT_COUNTER
++        configs_before_prune = list(getattr(kernel, 'configs', []) or [])
++        configs_after_prune = list(original_prune_configs(kwargs))
++        _CANDIDATE_EVENT_COUNTER += 1
++        _LAST_PRUNE_EVENT.clear()
++        _LAST_PRUNE_EVENT.update({
++            'event_id': _CANDIDATE_EVENT_COUNTER,
++            'key_names': list(getattr(kernel, 'keys', []) or []),
++            'key_values': {
++                key: kwargs.get(key, '')
++                for key in list(getattr(kernel, 'keys', []) or [])
++            },
++            'configs_before_prune': configs_before_prune,
++            'configs_after_prune': configs_after_prune,
++            'logged': False,
++        })
++        return configs_after_prune
++
++    kernel.prune_configs = recording_prune_configs
++
++    if original_bench is not None and getattr(kernel, '_do_bench', None) is None:
++        def recording_bench(*args, config, **meta):
++            global _CURRENT_CANDIDATE_TIMING
++            _CURRENT_CANDIDATE_TIMING = None
++            result = original_bench(*args, config=config, **meta)
++            if _CURRENT_CANDIDATE_TIMING is not None:
++                _AUTOTUNE_CANDIDATE_TIMINGS[id(config)] = dict(_CURRENT_CANDIDATE_TIMING)
++            return result
++
++        kernel._bench = recording_bench
++        kernel._do_bench = _candidate_do_bench
++        kernel.__dict__.pop('do_bench', None)
++
++    try:
++        from triton import knobs as triton_knobs
++    except ImportError:  # pragma: no cover - older Triton compatibility
++        return
++
++    previous_listener = triton_knobs.autotuning.listener
++    kernel_name = getattr(getattr(kernel, 'base_fn', None), '__name__', '')
++
++    def recording_listener(*, fn, key, best_config, configs_timings, duration, cache_hit):
++        if getattr(fn, '__name__', '') == kernel_name:
++            key_names = list(_LAST_PRUNE_EVENT.get('key_names', getattr(kernel, 'keys', [])))
++            key_values = dict(_LAST_PRUNE_EVENT.get('key_values', {}))
++            for index, name in enumerate(key_names):
++                if index < len(key):
++                    key_values[name] = key[index]
++            _append_candidate_rows(
++                kernel=kernel,
++                key_names=key_names,
++                key_values=key_values,
++                configs_before_prune=list(_LAST_PRUNE_EVENT.get(
++                    'configs_before_prune', getattr(kernel, 'configs', [])
++                )),
++                configs_after_prune=list(_LAST_PRUNE_EVENT.get(
++                    'configs_after_prune', configs_timings
++                )),
++                configs_timings=dict(configs_timings),
++                selected_config=best_config,
++                cache_hit=cache_hit,
++                tune_duration_s=duration,
++            )
++            _LAST_PRUNE_EVENT['logged'] = True
++            _AUTOTUNE_CANDIDATE_TIMINGS.clear()
++        if previous_listener is not None:
++            previous_listener(
++                fn=fn,
++                key=key,
++                best_config=best_config,
++                configs_timings=configs_timings,
++                duration=duration,
++                cache_hit=cache_hit,
++            )
++
++    triton_knobs.autotuning.listener = recording_listener
++
++
++_install_autotune_instrumentation()
++
++
++def _autotune_cache(kernel: object, is_3d: object) -> object:
++    if is_3d is True:
++        cache = getattr(_unified_attention_module, 'UNIFIED_ATTENTION_3D_TILE_CACHE', None)
++        if cache is not None:
++            return cache
++    return getattr(kernel, 'cache', {}) or {}
++
++
++def _record_autotune_decision(
++    *,
++    benchmark_name: str,
++    provider: str,
++    q_heads: int,
++    k_heads: int,
++    head_size: int,
++    qdtype: torch.dtype | None,
++    seq_lens: list[tuple[int, int]],
++    sliding_window: int | None,
++    soft_cap: float | None,
++    num_blocks: int,
++    block_size: int,
++    median_ms: float,
++    mean_ms: float,
++    cv: float,
++) -> None:
++    kernel = getattr(_unified_attention_module, 'kernel_unified_attention', None)
++    is_3d = _is_3d()
++    selected_config = None
++    selection_source = 'fixed'
++    if is_3d is True:
++        selected_config = getattr(_unified_attention_module, 'LAST_UNIFIED_ATTENTION_3D_CONFIG', None)
++        if selected_config is not None:
++            selection_source = 'manual_cache'
++    if selected_config is None and kernel is not None:
++        selected_config = getattr(kernel, 'best_config', None)
++        if selected_config is not None:
++            selection_source = 'autotuner'
++    if selected_config is None:
++        selected_config = ''
++
++    key_names = list(getattr(kernel, 'keys', []) or []) if kernel is not None else []
++    key_values = _autotune_key_values(qdtype, head_size, seq_lens, block_size, selected_config, q_heads, k_heads)
++    configs_before_prune = list(getattr(kernel, 'configs', []) or []) if kernel is not None else []
++    pruned_configs, pruning_error = _get_pruned_configs(kernel, key_names, key_values)
++    autotune_cache = _autotune_cache(kernel, is_3d)
++    selected_num_segments = _config_value(selected_config, 'NUM_SEGMENTS_PER_SEQ')
++    if is_3d is True and selected_num_segments == '':
++        selected_num_segments = _observed_value('num_segments', 'num_par_softmax_segments')
++    effective_config = _effective_config(selected_config, q_heads, k_heads)
++    attempts = list(_LAST_MEASUREMENT_ATTEMPTS) or [{'mean_ms': mean_ms, 'cv': cv}]
++    first_cv = attempts[0]['cv']
++    margin = _AUTOTUNE_MARGINS.get(_key_signature(key_names, key_values), '')
++    max_query_len = max(query_len for query_len, _ in seq_lens)
++    max_kv_len = max(kv_len for _, kv_len in seq_lens)
++    context = {
++        'benchmark_name': benchmark_name,
++        'q_heads': q_heads,
++        'k_heads': k_heads,
++        'head_size': head_size,
++        'seq_lens': _format_csv_value(seq_lens),
++        'sliding_window': _format_csv_value(sliding_window),
++        'soft_cap': _format_csv_value(soft_cap),
++        'num_blocks': num_blocks,
++        'block_size': block_size,
++    }
++
++    if _LAST_PRUNE_EVENT and not _LAST_PRUNE_EVENT.get('logged') and selected_config != '':
++        _append_candidate_rows(
++            kernel=kernel,
++            key_names=list(_LAST_PRUNE_EVENT.get('key_names', key_names)),
++            key_values=dict(_LAST_PRUNE_EVENT.get('key_values', key_values)),
++            configs_before_prune=list(_LAST_PRUNE_EVENT.get('configs_before_prune', configs_before_prune)),
++            configs_after_prune=list(_LAST_PRUNE_EVENT.get('configs_after_prune', pruned_configs)),
++            configs_timings={},
++            selected_config=selected_config,
++            cache_hit=True,
++            tune_duration_s='',
++        )
++        _LAST_PRUNE_EVENT['logged'] = True
++
++    decision_signature = _key_signature(key_names, key_values)
++    for candidate_row in AUTOTUNE_CANDIDATE_ROWS:
++        candidate_names = str(candidate_row.get('autotune_key_names', '')).split(';')
++        candidate_values = {
++            key: candidate_row.get(f'key_{key}', '')
++            for key in candidate_names
++            if key
++        }
++        if (
++            not candidate_row.get('benchmark_name')
++            and _key_signature(candidate_names, candidate_values) == decision_signature
++        ):
++            candidate_row.update(context)
++
++    if selection_source == 'fixed':
++        fixed_row = {
++            **AUTOTUNE_RUN_METADATA,
++            **context,
++            'kernel_name': 'kernel_unified_attention',
++            'autotune_key_names': '',
++            'autotune_key_values': '{}',
++            'candidate_config': effective_config,
++            'pruning_status': 'fixed',
++            'selected': True,
++            'candidate_rank': 1,
++            'candidates_before_prune': 1,
++            'candidates_after_prune': 1,
++            'median_ms': median_ms,
++            'p20_ms': '',
++            'p80_ms': '',
++            'mean_ms': mean_ms,
++            'stddev_ms': '',
++            'cv': cv,
++            'timing_attempts': len(attempts),
++            'high_cv': cv > AUTOTUNE_CV_THRESHOLD,
++            'selected_runner_up_margin_pct': '',
++            'cache_hit': '',
++            'tune_duration_s': '',
++        }
++        for key in AUTOTUNE_KEY_COLUMNS:
++            fixed_row[f'key_{key}'] = key_values.get(key, '')
++        AUTOTUNE_CANDIDATE_ROWS.append(fixed_row)
++
++    row = {
++        **AUTOTUNE_RUN_METADATA,
++        'benchmark_name': benchmark_name,
++        'td_patched': os.getenv('TD_PATCHED', '0'),
++        'benchmark_dtype': 'fp8' if IS_FP8 else 'bf16',
++        'provider': provider,
++        'q_heads': q_heads,
++        'k_heads': k_heads,
++        'head_size': head_size,
++        'qdtype': _format_csv_value(qdtype),
++        'seq_lens': _format_csv_value(seq_lens),
++        'sliding_window': _format_csv_value(sliding_window),
++        'soft_cap': _format_csv_value(soft_cap),
++        'num_blocks': num_blocks,
++        'block_size': block_size,
++        'is_prefill': max_query_len > 1,
++        'workload_kind': _workload_kind(seq_lens),
++        'num_seqs': len(seq_lens),
++        'max_seqlen_q': max_query_len,
++        'max_seqlen_k': max_kv_len,
++        'effective_max_seqlen_k': _effective_max_seqlen_k(seq_lens, sliding_window),
++        'sliding_window_state': 'enabled' if sliding_window is not None and sliding_window > 0 else 'disabled',
++        'autotune_key_names': ';'.join(key_names),
++        'autotune_key_values': _format_csv_value({key: key_values.get(key, '') for key in key_names}),
++        'selected_config': _format_config(selected_config),
++        'effective_config': effective_config,
++        'selection_source': selection_source,
++        'selected_TILE_SIZE': _config_value(selected_config, 'TILE_SIZE'),
++        'selected_BLOCK_Q': _config_value(selected_config, 'BLOCK_Q'),
++        'actual_TILE_SIZE': _actual_tile_size(selected_config),
++        'actual_BLOCK_Q': _actual_block_q(selected_config, q_heads, k_heads),
++        'actual_num_warps': _actual_config_value(selected_config, 'num_warps', 4),
++        'actual_num_stages': _actual_config_value(selected_config, 'num_stages', 2),
++        'selected_NUM_SEGMENTS_PER_SEQ': selected_num_segments,
++        'selected_num_warps': _config_value(selected_config, 'num_warps'),
++        'selected_num_stages': _config_value(selected_config, 'num_stages'),
++        'configs_before_prune': '|'.join(_format_config(config) for config in configs_before_prune),
++        'configs_after_prune': '|'.join(_format_config(config) for config in pruned_configs),
++        'configs_before_prune_count': len(configs_before_prune),
++        'configs_after_prune_count': len(pruned_configs),
++        'pruning_error': pruning_error,
++        'autotune_cache_size': len(autotune_cache),
++        'selected_runner_up_margin_pct': margin,
++        'median_ms': median_ms,
++        'mean_ms': mean_ms,
++        'cv': cv,
++        'measurement_attempts': len(attempts),
++        'measurement_first_cv': first_cv,
++        'measurement_retried': len(attempts) > 1,
++        'measurement_high_cv': cv > AUTOTUNE_CV_THRESHOLD,
++        'cv_threshold': AUTOTUNE_CV_THRESHOLD,
++    }
++    for key in AUTOTUNE_KEY_COLUMNS:
++        row[f'key_{key}'] = key_values.get(key, '')
++    AUTOTUNE_DECISION_ROWS.append(row)
++
++
++def _write_csv_rows(report_path: str, fieldnames: list[str],
++                    rows: list[dict[str, object]]) -> None:
++    if not rows:
++        return
++
++    write_header = not os.path.exists(report_path) or os.path.getsize(report_path) == 0
++    if not write_header:
++        with open(report_path, newline='', encoding='utf-8') as report_file:
++            existing_header = next(csv.reader(report_file), [])
++        if existing_header != fieldnames:
++            raise RuntimeError(
++                f'Refusing to append incompatible autotune artifact schema to {report_path}'
++            )
++    with open(report_path, 'a', newline='', encoding='utf-8') as report_file:
++        writer = csv.DictWriter(report_file, fieldnames=fieldnames, extrasaction='ignore')
++        if write_header:
++            writer.writeheader()
++        writer.writerows(rows)
++    print(f'Wrote unified attention autotune artifacts to {report_path}')
++    rows.clear()
++
++
++def _write_autotune_artifacts() -> None:
++    reports_dir = _reports_dir_from_argv()
++    if not reports_dir:
++        return
++
++    os.makedirs(reports_dir, exist_ok=True)
++    _write_csv_rows(
++        os.path.join(reports_dir, AUTOTUNE_DECISIONS_FILE),
++        AUTOTUNE_DECISION_FIELDNAMES,
++        AUTOTUNE_DECISION_ROWS,
++    )
++    _write_csv_rows(
++        os.path.join(reports_dir, AUTOTUNE_CANDIDATES_FILE),
++        AUTOTUNE_CANDIDATE_FIELDNAMES,
++        AUTOTUNE_CANDIDATE_ROWS,
++    )
++    AUTOTUNE_DECISION_ROWS.clear()
++
++
++atexit.register(_write_autotune_artifacts)
+ 
+ 
+ def ref_paged_attn(
+@@ -400,12 +1261,28 @@ def get_unified_attention_benchmark(
+                                          err_msg='triton to torch')
+             del expected_output
+ 
+-            _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
++            median_ms, min_ms, max_ms, mean_ms, cv = _do_bench_with_cv_retry(
+                 triton_fn,
+                 n_warmup=n_warmup,
+                 n_repeat=10,
+                 quantiles=quantiles,
+             )
++            _record_autotune_decision(
++                benchmark_name='unified-attention-performance' + ('-td' if is_td_patched else ''),
++                provider=provider,
++                q_heads=q_heads,
++                k_heads=k_heads,
++                head_size=head_size,
++                qdtype=qdtype,
++                seq_lens=seq_lens,
++                sliding_window=sliding_window,
++                soft_cap=soft_cap,
++                num_blocks=num_blocks,
++                block_size=block_size,
++                median_ms=median_ms,
++                mean_ms=mean_ms,
++                cv=cv,
++            )
+         elif provider == 'sycl-tla':
+             expected_output = torch_fn() if BENCHMARKING_CONFIG["verify"] else None
+ 
