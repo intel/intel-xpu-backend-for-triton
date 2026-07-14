@@ -2608,6 +2608,13 @@ struct DescriptorStoreOpToBlockIOConversion
     if (!isDescriptorBlockIOCandidate(op))
       return failure();
 
+    // Get source tensor type and encoding.
+    auto tensorType = cast<RankedTensorType>(op.getSrc().getType());
+
+    // FIXME: Support rank > 2 by iterating over batch dimensions.
+    if (tensorType.getRank() != 2)
+      return failure();
+
     // Read memory layout from block_io attribute (set by
     // MaterializeBlockPointer).
     StringRef blockIOName = TritonIntelGPUDialect::getBlockIOAttrName();
@@ -2617,9 +2624,6 @@ struct DescriptorStoreOpToBlockIOConversion
         "block_io attribute required; checked by isDescriptorBlockIOCandidate");
     const bool memoryRowMajor = (blockIOAttr.getValue() == "row_major");
     assert(memoryRowMajor && "column_major descriptor store not yet supported");
-
-    // Get source tensor type and encoding.
-    auto tensorType = cast<RankedTensorType>(op.getSrc().getType());
     Attribute encoding = tensorType.getEncoding();
 
     // --- Linear layout and tile size ---
