@@ -45,6 +45,7 @@ cd "$VLLM_DIR"
 # PYTHONPATH so those imports resolve when benchmarks run from the installed CLI wheel.
 export PYTHONPATH="$VLLM_DIR${PYTHONPATH:+:$PYTHONPATH}"
 
+RUN_ARGS=("$@")
 RUN_BENCHMARK=(triton-benchmarks run "$KEY")
 if [ "$NAME" = "unified_attention" ]; then
     # The artifact collector patches the benchmark source in this checkout, so
@@ -61,6 +62,21 @@ text = path.read_text(encoding="utf-8")
 assert "AUTOTUNE_DECISIONS_FILE" in text, "artifact collector is not present in imported benchmark"
 PYVERIFYUA
     RUN_BENCHMARK=(python "$BENCHMARK_SCRIPT")
+    RUN_ARGS=()
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --tag)
+                shift 2
+                ;;
+            --tag=*)
+                shift
+                ;;
+            *)
+                RUN_ARGS+=("$1")
+                shift
+                ;;
+        esac
+    done
 fi
 
 if git apply --reverse --check "$PATCH_FILE" 2>/dev/null; then
@@ -69,7 +85,7 @@ if git apply --reverse --check "$PATCH_FILE" 2>/dev/null; then
 fi
 
 echo "=== Running benchmark WITHOUT patch ==="
-TD_PATCHED=0 "${RUN_BENCHMARK[@]}" "$@"
+TD_PATCHED=0 "${RUN_BENCHMARK[@]}" "${RUN_ARGS[@]}"
 
 echo ""
 echo "=== Applying patch ==="
@@ -77,7 +93,7 @@ git apply "$PATCH_FILE"
 
 echo ""
 echo "=== Running benchmark WITH tensor descriptor patch ==="
-TD_PATCHED=1 "${RUN_BENCHMARK[@]}" "$@"
+TD_PATCHED=1 "${RUN_BENCHMARK[@]}" "${RUN_ARGS[@]}"
 
 echo ""
 echo "=== Reverting patch ==="
