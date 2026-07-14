@@ -39,10 +39,23 @@ fi
 # Ensure patch is not already applied before baseline
 cd "$VLLM_DIR"
 
-# The moe benchmarks import vLLM's source-tree test helpers (`from tests.kernels...`),
-# which are not part of the installed vllm package. Put the vllm checkout on PYTHONPATH
-# so those imports resolve when the benchmark runs from the installed CLI wheel.
-export PYTHONPATH="$VLLM_DIR${PYTHONPATH:+:$PYTHONPATH}"
+# Make triton-benchmarks import this checkout's benchmark sources, not the
+# installed triton-kernels-benchmark wheel. This matters because artifact
+# collection patches files in the checkout. The vLLM checkout is still included
+# so MoE benchmarks can import vLLM source-tree test helpers.
+export PYTHONPATH="$REPO_ROOT/benchmarks:$VLLM_DIR${PYTHONPATH:+:$PYTHONPATH}"
+
+if [ "$NAME" = "unified_attention" ]; then
+    python - <<'PYVERIFYUA'
+from pathlib import Path
+import triton_kernels_benchmark.vllm.unified_attention.unified_attention_benchmark as benchmark
+
+path = Path(benchmark.__file__)
+print("Using unified_attention_benchmark.py:", path)
+text = path.read_text(encoding="utf-8")
+assert "AUTOTUNE_DECISIONS_FILE" in text, "artifact collector is not present in imported benchmark"
+PYVERIFYUA
+fi
 
 if git apply --reverse --check "$PATCH_FILE" 2>/dev/null; then
     echo "=== Reverting previously applied patch ==="
