@@ -226,6 +226,45 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             args["enable_fp_fusion"] = knobs.language.default_fp_fusion
         return XPUOptions(**args)
 
+    @staticmethod
+    def parse_attr(desc):
+        ret = BaseBackend.parse_attr(desc)
+        if "L" in desc:
+            ret += [["tt.last_dim_divisibility", 8]]
+        if "N" in desc:
+            ret += [["tt.padding", 1]]
+        # "S<val>,<val>,..." encodes non-last stride values for rank-3+
+        # descriptors (enables constexpr stride optimization for FuseReshape).
+        if "S" in desc:
+            idx = desc.index("S") + 1
+            stride_str = desc[idx:]
+            try:
+                strides = [int(x) for x in stride_str.split(",") if x]
+                for i, s in enumerate(strides):
+                    ret += [[f"tt.stride.{i}", s]]
+            except ValueError:
+                pass
+        return ret
+
+    @staticmethod
+    def get_tensordesc_specialization(arg, **kwargs):
+        # "L" = last-dim shape satisfies 2D block IO surface width alignment
+        #   (needed for satisfies2DBlockReadAlignment in MaterializeBlockPointer).
+        #   HW requires 4-byte (DW) alignment; combined with minimum 2 elements
+        #   for the stride-one dim this means shape[-1] * elem_bytes % 8 == 0.
+        # "N" = NaN padding (enables tt.padding attribute).
+        # "S<val>,..." = non-last stride values for rank-3+ (enables constexpr
+        #   stride optimization for FuseReshape).
+        key = ""
+        elem_bytes = arg.base.dtype.itemsize
+        if (arg.shape[-1] * elem_bytes) % 8 == 0:
+            key += "L"
+        if getattr(arg, "padding", None) == "nan":
+            key += "N"
+        if len(arg.strides) >= 3:
+            key += "S" + ",".join(str(s) for s in arg.strides[:-1])
+        return key
+
     def pack_metadata(self, metadata):
         return metadata
 
