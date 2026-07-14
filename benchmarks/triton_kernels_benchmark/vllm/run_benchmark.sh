@@ -23,6 +23,7 @@ VLLM_DIR="$REPO_ROOT/vllm"
 BENCHMARK_DIR="$(cd "$SCRIPT_DIR/$BENCHMARK_FOLDER" && pwd)"
 NAME="$(basename "$BENCHMARK_DIR")"
 PATCH_FILE="$BENCHMARK_DIR/$NAME.patch"
+BENCHMARK_SCRIPT="$BENCHMARK_DIR/${NAME}_benchmark.py"
 
 # triton-benchmarks CLI key: vllm-<folder with dashes>, plus -fp8 when FP8 configs are requested.
 KEY="vllm-${NAME//_/-}"
@@ -39,13 +40,17 @@ fi
 # Ensure patch is not already applied before baseline
 cd "$VLLM_DIR"
 
-# Make triton-benchmarks import this checkout's benchmark sources, not the
-# installed triton-kernels-benchmark wheel. This matters because artifact
-# collection patches files in the checkout. The vLLM checkout is still included
-# so MoE benchmarks can import vLLM source-tree test helpers.
-export PYTHONPATH="$REPO_ROOT/benchmarks:$VLLM_DIR${PYTHONPATH:+:$PYTHONPATH}"
+# The MoE benchmarks import vLLM's source-tree test helpers (`from tests.kernels...`),
+# which are not part of the installed vllm package. Put the vllm checkout on
+# PYTHONPATH so those imports resolve when benchmarks run from the installed CLI wheel.
+export PYTHONPATH="$VLLM_DIR${PYTHONPATH:+:$PYTHONPATH}"
 
+RUN_BENCHMARK=(triton-benchmarks run "$KEY")
 if [ "$NAME" = "unified_attention" ]; then
+    # The artifact collector patches the benchmark source in this checkout, so
+    # unified attention must execute the checkout script directly instead of the
+    # installed triton-kernels-benchmark wheel.
+    export PYTHONPATH="$REPO_ROOT/benchmarks:$PYTHONPATH"
     python - <<'PYVERIFYUA'
 from pathlib import Path
 import triton_kernels_benchmark.vllm.unified_attention.unified_attention_benchmark as benchmark
@@ -55,6 +60,7 @@ print("Using unified_attention_benchmark.py:", path)
 text = path.read_text(encoding="utf-8")
 assert "AUTOTUNE_DECISIONS_FILE" in text, "artifact collector is not present in imported benchmark"
 PYVERIFYUA
+    RUN_BENCHMARK=(python "$BENCHMARK_SCRIPT")
 fi
 
 if git apply --reverse --check "$PATCH_FILE" 2>/dev/null; then
@@ -63,7 +69,7 @@ if git apply --reverse --check "$PATCH_FILE" 2>/dev/null; then
 fi
 
 echo "=== Running benchmark WITHOUT patch ==="
-TD_PATCHED=0 triton-benchmarks run "$KEY" "$@"
+TD_PATCHED=0 "${RUN_BENCHMARK[@]}" "$@"
 
 echo ""
 echo "=== Applying patch ==="
@@ -71,7 +77,7 @@ git apply "$PATCH_FILE"
 
 echo ""
 echo "=== Running benchmark WITH tensor descriptor patch ==="
-TD_PATCHED=1 triton-benchmarks run "$KEY" "$@"
+TD_PATCHED=1 "${RUN_BENCHMARK[@]}" "$@"
 
 echo ""
 echo "=== Reverting patch ==="
