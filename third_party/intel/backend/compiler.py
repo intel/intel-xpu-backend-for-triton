@@ -230,18 +230,21 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     def parse_attr(desc):
         ret = BaseBackend.parse_attr(desc)
         if "L" in desc:
-            ret += [["tt.last_dim_divisibility", 16]]
+            ret += [["tt.last_dim_divisibility", 8]]
         if "N" in desc:
             ret += [["tt.padding", 1]]
         return ret
 
     @staticmethod
     def get_tensordesc_specialization(arg, **kwargs):
-        # "L" = last-dim shape is 16-byte aligned (needed for
-        #   satisfies2DBlockReadAlignment in MaterializeBlockPointer).
+        # "L" = last-dim shape satisfies 2D block IO surface width alignment
+        #   (needed for satisfies2DBlockReadAlignment in MaterializeBlockPointer).
+        #   HW requires 4-byte (DW) alignment; combined with minimum 2 elements
+        #   for the stride-one dim this means shape[-1] * elem_bytes % 8 == 0.
         # "N" = NaN padding (enables tt.padding attribute).
         key = ""
-        if arg.shape[-1] % 16 == 0:
+        elem_bytes = arg.base.dtype.itemsize
+        if (arg.shape[-1] * elem_bytes) % 8 == 0:
             key += "L"
         if getattr(arg, "padding", None) == "nan":
             key += "N"

@@ -1227,7 +1227,8 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
         pendingAttrs.push_back({strideArgs[d], strideDivisibility});
 
       // Last-dim shape divisibility (set by "L" specialization key when
-      // shape[-1] % 16 == 0). Required by satisfies2DBlockReadAlignment.
+      // shape[-1] * elem_bytes % 8 == 0). Required by
+      // satisfies2DBlockReadAlignment.
       if (auto lastDimAttr = funcOp.getArgAttrOfType<IntegerAttr>(
               idx, "tt.last_dim_divisibility")) {
         unsigned lastDimDiv =
