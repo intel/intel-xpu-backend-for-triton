@@ -354,6 +354,21 @@ createDecomposeOffsetFromMul(RewriterBase &rewriter, Location loc, Value expr,
       rewriter, loc, mulOp.getLhs(), bitness, scalarToSplatMap);
   auto [uniformOffsetR, nonUniformOffsetR] = createDecomposeOffsetFromExpr(
       rewriter, loc, mulOp.getRhs(), bitness, scalarToSplatMap);
+
+  // Distributing (U(A)+NU(A))*(U(B)+NU(B)) introduces cross terms (e.g.
+  // NU(A)*U(B)) whose magnitude can exceed anything the original,
+  // un-expanded multiplication produced for valid lanes: e.g. Inductor
+  // emits `(x1 + C) * K` where the shift C keeps the effective multiplicand
+  // small, but distributing yields a bare `x1 * K` term that overflows the
+  // original bitness even though `(x1 + C) * K` never did. Compute the
+  // cross terms at i64 so this redistribution cannot reintroduce overflow
+  // the original expression's shape had already avoided.
+  Type i64Ty = rewriter.getI64Type();
+  uniformOffsetL = createCastOffset(rewriter, loc, uniformOffsetL, i64Ty);
+  uniformOffsetR = createCastOffset(rewriter, loc, uniformOffsetR, i64Ty);
+  nonUniformOffsetL = createCastOffset(rewriter, loc, nonUniformOffsetL, i64Ty);
+  nonUniformOffsetR = createCastOffset(rewriter, loc, nonUniformOffsetR, i64Ty);
+
   Value uniformMul =
       arith::MulIOp::create(rewriter, loc, uniformOffsetL, uniformOffsetR);
 
@@ -402,8 +417,16 @@ createDecomposeOffsetFromExpr(RewriterBase &rewriter, Location loc, Value expr,
           .Case<tt::BroadcastOp>([&](auto broadcastOp) {
             auto [uniform, nonUniform] = createDecomposeOffsetFromExpr(
                 rewriter, loc, broadcastOp.getSrc(), bitness, scalarToSplatMap);
-            auto broadcastNonUniform = tt::BroadcastOp::create(
-                rewriter, loc, broadcastOp.getType(), nonUniform);
+            // nonUniform's element type may have been widened (e.g. by
+            // createDecomposeOffsetFromMul) beyond broadcastOp's original
+            // element type, so re-derive the result type instead of reusing
+            // broadcastOp.getType() verbatim.
+            auto origType = cast<RankedTensorType>(broadcastOp.getType());
+            auto newType = RankedTensorType::get(
+                origType.getShape(), getElementTypeOrSelf(nonUniform),
+                origType.getEncoding());
+            auto broadcastNonUniform =
+                tt::BroadcastOp::create(rewriter, loc, newType, nonUniform);
             return std::make_pair(uniform, broadcastNonUniform);
           })
           .Case<tt::ExpandDimsOp>([&](auto expandOp) {
@@ -1698,9 +1721,14 @@ struct InitFuncPtrArgs : OpRewritePattern<tt::FuncOp> {
           rewriter, arg.getLoc(), TypeRange{arg.getType()},
           ValueRange{arg, zeroOffset});
       rewriter.replaceAllUsesExcept(arg, dummyCast.getResult(0), dummyCast);
-      fatPtrs[{arg, zeroOffset}].canNarrow = true;
-      if (bitness != 64)
-        fatPtrs[{arg, zeroOffset}].isSmallTensor = true;
+      // canNarrow is only sound once we have proof (via "tt.pointer_range")
+      // that the pointer's underlying tensor fits in 32 bits; otherwise
+      // downstream i32-truncation of the tensor offset can silently drop
+      // bits of a genuinely 64-bit index (e.g. Inductor's int64 index
+      // intermediates), producing wrong addresses instead of a crash.
+      bool isSmallTensor = bitness != 64;
+      fatPtrs[{arg, zeroOffset}].canNarrow = isSmallTensor;
+      fatPtrs[{arg, zeroOffset}].isSmallTensor = isSmallTensor;
     }
 
     newOp->setDiscardableAttr(kInitFuncArgsRewritten, rewriter.getUnitAttr());
