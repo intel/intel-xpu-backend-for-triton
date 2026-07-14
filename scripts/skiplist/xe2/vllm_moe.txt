@@ -166,6 +166,8 @@ tests/kernels/moe/test_moe.py::test_naive_block_assignment_moe[False-dtype0-2-25
 tests/kernels/moe/test_moe.py::test_naive_block_assignment_moe[False-dtype0-2-256-2-2048-128]
 tests/kernels/moe/test_moe.py::test_naive_block_assignment_moe[False-dtype0-2-256-2-2048-511]
 
+# XPU _moe_C.moe_sum assumes contiguous input; transpose/slice layout
+# cases fail because the kernel is not stride-aware.
 tests/kernels/moe/test_moe.py::test_moe_sum[transpose-dtype0-128-2-1]
 tests/kernels/moe/test_moe.py::test_moe_sum[transpose-dtype0-128-2-33]
 tests/kernels/moe/test_moe.py::test_moe_sum[transpose-dtype0-128-2-222]
