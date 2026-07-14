@@ -1721,14 +1721,9 @@ struct InitFuncPtrArgs : OpRewritePattern<tt::FuncOp> {
           rewriter, arg.getLoc(), TypeRange{arg.getType()},
           ValueRange{arg, zeroOffset});
       rewriter.replaceAllUsesExcept(arg, dummyCast.getResult(0), dummyCast);
-      // canNarrow is only sound once we have proof (via "tt.pointer_range")
-      // that the pointer's underlying tensor fits in 32 bits; otherwise
-      // downstream i32-truncation of the tensor offset can silently drop
-      // bits of a genuinely 64-bit index (e.g. Inductor's int64 index
-      // intermediates), producing wrong addresses instead of a crash.
-      bool isSmallTensor = bitness != 64;
-      fatPtrs[{arg, zeroOffset}].canNarrow = isSmallTensor;
-      fatPtrs[{arg, zeroOffset}].isSmallTensor = isSmallTensor;
+      fatPtrs[{arg, zeroOffset}].canNarrow = true;
+      if (bitness != 64)
+        fatPtrs[{arg, zeroOffset}].isSmallTensor = true;
     }
 
     newOp->setDiscardableAttr(kInitFuncArgsRewritten, rewriter.getUnitAttr());

@@ -33,7 +33,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
         -> (tensor<1024x!tt.ptr<f32>>, tensor<1024x!tt.ptr<f32>>) : i32 {
       // COM: Inside loop: materialize via splat(scalar_base) + lane_range.
       // CHECK: tt.splat %[[ITER_A]] : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
-      // CHECK: tt.addptr {{.*}} : tensor<1024x!tt.ptr<f32>>, tensor<1024xi64>
+      // CHECK: tt.addptr {{.*}} : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
       %ld_a = tt.load %arg_a : tensor<1024x!tt.ptr<f32>>
       %ld_b = tt.load %arg_b : tensor<1024x!tt.ptr<f32>>
       %sum = arith.addf %ld_a, %ld_b : tensor<1024xf32>
@@ -55,12 +55,6 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // COM: The pass recognizes the splatted constant stride and promotes the loop
 // COM: pointer to a scalar base.  The iter_arg carries only !tt.ptr<f32>;
 // COM: the non-uniform lane range is re-materialized each iteration.
-// COM: Since Intel never proves (via "tt.pointer_range") that a pointer's
-// COM: underlying tensor fits in 32 bits, the tensor offset is kept at its
-// COM: original (here i32) width rather than being unsoundly narrowed after
-// COM: merging with the (i64) scalar fat-pointer offset -- see the
-// COM: int64_index_intermediate test below for why narrowing without proof
-// COM: is unsafe.
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: tt.func @loop_dense_stride(
@@ -84,7 +78,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK: scf.for {{.*}} iter_args(%[[BASE:.*]] = %{{.*}}) -> (!tt.ptr<f32>)
     scf.for %iv = %c0 to %n step %c1 iter_args(%arg_a = %ptr_a) -> (tensor<1024x!tt.ptr<f32>>) : i32 {
       // CHECK: tt.splat %[[BASE]] : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
-      // CHECK: tt.addptr {{.*}} : tensor<1024x!tt.ptr<f32>>, tensor<1024xi64>
+      // CHECK: tt.addptr {{.*}} : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
       // CHECK: tt.load
       %val = tt.load %arg_a : tensor<1024x!tt.ptr<f32>>
       tt.store %ptr_out, %val : tensor<1024x!tt.ptr<f32>>
@@ -123,9 +117,6 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // COM: Test 4 - Regression test for #7435: an i64-typed offset intermediate
 // COM: (e.g. as emitted by PyTorch Inductor to avoid i32 overflow, hence
 // COM: "int64_index_intermediate") must not be narrowed to i32 by the pass.
-// COM: Since Intel never sets "tt.pointer_range" (no JIT specialization
-// COM: proves the underlying tensor fits in 32 bits), canNarrow must stay
-// COM: false and the tensor offset must remain i64 end-to-end.
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: tt.func public @int64_index_intermediate(
