@@ -1,4 +1,4 @@
-// RUN: triton-opt %s --triton-intel-rewrite-tensor-descriptor-to-pointer --canonicalize --cse --split-input-file | FileCheck %s
+// RUN: env TRITON_INTEL_ENABLE_HOST_DESCRIPTOR_SYNTHESIS=1 triton-opt %s --triton-intel-rewrite-tensor-descriptor-to-pointer --canonicalize --cse --split-input-file | FileCheck %s
 
 module {
   tt.func public @load(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32) -> (tensor<128x128xf32>) {
