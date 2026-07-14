@@ -176,3 +176,36 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     tt.return
   }
 }
+
+// -----
+
+// COM: Test 6 - Regression test for #7435 (part 3): when the non-uniform
+// COM: part of a `tt.broadcast`'s source has been widened to i64 (e.g. by
+// COM: the Test 5 fix inside createDecomposeOffsetFromMul), the rebuilt
+// COM: tt.broadcast must widen its own result type to match -- reusing the
+// COM: original (narrower) broadcast type verbatim would produce a
+// COM: `tt.broadcast` whose operand and result element types disagree,
+// COM: which the verifier rejects (`'tt.broadcast' op requires the same
+// COM: element type for all operands and results`).
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: tt.func public @broadcast_after_mul_widen(
+  tt.func public @broadcast_after_mul_widen(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %x: tensor<8x1xi32>) {
+    %c-8_i32 = arith.constant dense<-8> : tensor<8x1xi32>
+    %c67108864_i32 = arith.constant dense<67108864> : tensor<8x1xi32>
+    %shifted = arith.addi %x, %c-8_i32 : tensor<8x1xi32>
+    // COM: The multiply's non-uniform cross term is widened to i64 (Test 5),
+    // COM: so the tt.broadcast consuming it must also widen to i64 -- not
+    // COM: stay at the original i32 broadcast type.
+    %mul = arith.muli %shifted, %c67108864_i32 : tensor<8x1xi32>
+    %offset = tt.broadcast %mul : tensor<8x1xi32> -> tensor<8x64xi32>
+    %base = tt.splat %arg0 : !tt.ptr<f32> -> tensor<8x64x!tt.ptr<f32>>
+    %ptr = tt.addptr %base, %offset : tensor<8x64x!tt.ptr<f32>>, tensor<8x64xi32>
+    // CHECK: tt.broadcast {{.*}} : tensor<8x1xi64> -> tensor<8x64xi64>
+    // CHECK: tt.addptr {{.*}} : tensor<8x64x!tt.ptr<f32>>, tensor<8x64xi64>
+    %val = tt.load %ptr : tensor<8x64x!tt.ptr<f32>>
+    %out_base = tt.splat %arg1 : !tt.ptr<f32> -> tensor<8x64x!tt.ptr<f32>>
+    tt.store %out_base, %val : tensor<8x64x!tt.ptr<f32>>
+    tt.return
+  }
+}
