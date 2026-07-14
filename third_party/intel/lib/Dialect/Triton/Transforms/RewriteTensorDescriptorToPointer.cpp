@@ -1193,6 +1193,21 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
                                            builder.getI64IntegerAttr(1));
       strideArgs.back() = c1;
 
+      // For rank-3+, replace non-last strides with constants from tt.stride.N
+      // attributes. This enables FuseReshape to prove stride divisibility for
+      // rank-reducing loads.
+      if (rank >= 3) {
+        for (unsigned d = 0; d < rank - 1; ++d) {
+          std::string attrName = "tt.stride." + std::to_string(d);
+          if (auto attr = funcOp.getArgAttrOfType<IntegerAttr>(
+                  idx, StringRef(attrName))) {
+            strideArgs[d] = arith::ConstantOp::create(
+                builder, loc, builder.getI64Type(),
+                builder.getI64IntegerAttr(attr.getValue().getSExtValue()));
+          }
+        }
+      }
+
       // Determine padding from the tt.padding attribute on the descriptor arg
       // (set by the specialization system for NaN-padded host descriptors).
       auto paddingOpt = triton::PaddingOption::PAD_ZERO;
@@ -1223,8 +1238,10 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
       pendingAttrs.push_back({basePtr, 16});
       // Frontend stride args used by MakeTensorDescOp (guaranteed by
       // TensorDescriptor: stride * elem_bytes % 16 == 0).
+      // Only need to add to BlockArgument strides (not constants).
       for (unsigned d = 0; d < rank - 1; ++d)
-        pendingAttrs.push_back({strideArgs[d], strideDivisibility});
+        if (isa<BlockArgument>(strideArgs[d]))
+          pendingAttrs.push_back({strideArgs[d], strideDivisibility});
 
       // Last-dim shape divisibility (set by "L" specialization key when
       // shape[-1] * elem_bytes % 8 == 0). Required by
