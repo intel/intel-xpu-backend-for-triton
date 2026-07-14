@@ -256,8 +256,7 @@ def get_batched_mm_benchmark(
             # TODO: use a native on-device SYCL-TLA prologue; for now we strip per-expert padding with a
             # torch compaction outside timing, so these numbers are optimistic vs Triton's in-kernel masking.
             def sycl_tla_fn():
-                sycl_tla_grouped_gemm(input_A_grouped, None, input_B_grouped, None, None, output_sycl, counts, N, K,
-                                      num_experts)
+                sycl_tla_grouped_gemm(input_A_grouped, input_B_grouped, None, output_sycl, counts, N, K, num_experts)
                 return output_sycl
 
             benchmark_suite.assert_close(sycl_tla_fn, lambda: ref_grouped, atol=atol, rtol=rtol,
