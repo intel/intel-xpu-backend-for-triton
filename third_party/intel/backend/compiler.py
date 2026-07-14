@@ -229,18 +229,20 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     @staticmethod
     def parse_attr(desc):
         ret = BaseBackend.parse_attr(desc)
+        if "L" in desc:
+            ret += [["tt.last_dim_divisibility", 16]]
         if "N" in desc:
             ret += [["tt.padding", 1]]
         return ret
 
     @staticmethod
     def get_tensordesc_specialization(arg, **kwargs):
-        # "D" = all shapes are 16-byte aligned (enables tt.divisibility).
+        # "L" = last-dim shape is 16-byte aligned (needed for
+        #   satisfies2DBlockReadAlignment in MaterializeBlockPointer).
         # "N" = NaN padding (enables tt.padding attribute).
         key = ""
-        all_aligned = all(s % 16 == 0 for s in arg.shape)
-        if all_aligned:
-            key += "D"
+        if arg.shape[-1] % 16 == 0:
+            key += "L"
         if getattr(arg, "padding", None) == "nan":
             key += "N"
         return key

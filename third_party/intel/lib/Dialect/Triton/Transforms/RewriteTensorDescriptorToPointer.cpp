@@ -1135,13 +1135,6 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
       if (!descArgFeedsOnlyLoadStore(descArg))
         continue;
 
-      // Read tt.divisibility from the descriptor arg BEFORE expansion
-      // (set by specialization when all shapes/strides are % 16 == 0).
-      unsigned descDivisibility = 0;
-      if (auto divAttr =
-              funcOp.getArgAttrOfType<IntegerAttr>(idx, "tt.divisibility"))
-        descDivisibility = divAttr.getValue().getZExtValue();
-
       // The frontend (tensor_descriptor_type._flatten_ir_types) places i32
       // shape and i64 stride args immediately after the descriptor arg.
       unsigned frontendShapeStart = idx + 1;
@@ -1224,7 +1217,6 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
       // Set tt.divisibility based on host TensorDescriptor guarantees:
       //   base: always 16-byte aligned
       //   non-last strides: stride * elem_bytes % 16 == 0
-      //   shapes: no guarantee (only from specialization "D" key)
       unsigned elemBytes = elemType.getIntOrFloatBitWidth() / 8;
       unsigned strideDivisibility = 16 / std::max(1u, elemBytes);
 
@@ -1234,12 +1226,13 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
       for (unsigned d = 0; d < rank - 1; ++d)
         pendingAttrs.push_back({strideArgs[d], strideDivisibility});
 
-      // Shape divisibility: only when specialization confirms it (the "D"
-      // key is set when all shapes/strides are % 16 == 0 at JIT time).
-      if (descDivisibility > 0) {
-        unsigned shapeDivisibility = descDivisibility / std::max(1u, elemBytes);
-        for (unsigned d = 0; d < rank; ++d)
-          pendingAttrs.push_back({shapeArgs[d], shapeDivisibility});
+      // Last-dim shape divisibility (set by "L" specialization key when
+      // shape[-1] % 16 == 0). Required by satisfies2DBlockReadAlignment.
+      if (auto lastDimAttr = funcOp.getArgAttrOfType<IntegerAttr>(
+              idx, "tt.last_dim_divisibility")) {
+        unsigned lastDimDiv =
+            lastDimAttr.getValue().getZExtValue() / std::max(1u, elemBytes);
+        pendingAttrs.push_back({shapeArgs.back(), lastDimDiv});
       }
 
       // Refresh for next iteration.
