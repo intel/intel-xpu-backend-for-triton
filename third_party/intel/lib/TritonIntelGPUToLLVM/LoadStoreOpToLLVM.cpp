@@ -3383,6 +3383,7 @@ struct AtomicCASOpConversion
     auto freeVarMasks = getFreeVariableMasks(valueTy);
     Value mask =
         emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
+    uint32_t regMask = freeVarMasks[str_attr("register")];
     SmallVector<Value> resultVals(elemsPerThread);
 
     MemSemantic memSem = op.getSem();
@@ -3395,6 +3396,12 @@ struct AtomicCASOpConversion
         TritonIntelGPUDialect::getSupport16BitAtomicsAttrName());
 
     for (size_t i = 0; i < elemsPerThread; ++i) {
+      if (auto canonicalStart = getCanonicalIndex(i, regMask);
+          canonicalStart != i) {
+        resultVals[i] = resultVals[canonicalStart];
+        continue;
+      }
+
       Value casPtr = ptrElements[i];
       Value casCmp = cmpElements[i];
       Value casVal = valElements[i];
@@ -3607,6 +3614,7 @@ struct AtomicRMWOpConversion
     auto freeVarMasks = getFreeVariableMasks(valueTy);
     Value threadPred =
         emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
+    uint32_t regMask = freeVarMasks[str_attr("register")];
 
     bool support16BitAtomics = moduleOp->hasAttr(
         TritonIntelGPUDialect::getSupport16BitAtomicsAttrName());
@@ -3620,6 +3628,13 @@ struct AtomicRMWOpConversion
     auto vecTy = vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
     for (size_t i = 0; i < elemsPerThread; i += vec) {
+      if (auto canonicalStart = getCanonicalIndex(i, regMask);
+          canonicalStart != i) {
+        for (unsigned ii = 0; ii < vec; ++ii)
+          resultVals[i + ii] = resultVals[canonicalStart + ii];
+        continue;
+      }
+
       Value rmwVal = b.undef(vecTy);
       for (int ii = 0; ii < vec; ++ii) {
         Value iiVal = createIndexAttrConstant(
