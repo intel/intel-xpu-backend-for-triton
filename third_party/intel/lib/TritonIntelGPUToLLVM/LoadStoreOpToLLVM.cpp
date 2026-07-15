@@ -942,11 +942,11 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
 
   static FailureOr<LinearLayout> computeTransposeShuffleMapping(
       RankedTensorType tensorType, const LinearLayout &regMapping,
-      int64_t numElemsPerLoad, unsigned numPackedVals, unsigned tileHeight,
+      int64_t numElemsPerLoad, const BlockIOTileSizeInfo &sizeInfo,
       unsigned threadsPerWarp, bool hasDPASOperandType, MLIRContext *ctx) {
     return triton::gpu::intel::computeTransposeShuffleMapping(
-        tensorType, regMapping, numElemsPerLoad, numPackedVals, tileHeight,
-        threadsPerWarp, hasDPASOperandType, ctx);
+        tensorType, regMapping, numElemsPerLoad, sizeInfo, threadsPerWarp,
+        hasDPASOperandType, ctx);
   }
 
   /// Build a Block2DLoadConfig from a validated BlockIOTileSizeInfo.
@@ -1021,8 +1021,8 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
         LinearLayout::identity1D(cfg.numElemsPerLoad, kRegister, kRegister);
     if (cfg.isTransposeRequired) {
       auto maybeShuffleMapping = computeTransposeShuffleMapping(
-          tensorType, cfg.regMapping, cfg.numElemsPerLoad, cfg.numPackedVals,
-          cfg.tileHeight, threadsPerWarp, !!cfg.packedDPASOperandType, ctx);
+          tensorType, cfg.regMapping, cfg.numElemsPerLoad, sizeInfo,
+          threadsPerWarp, !!cfg.packedDPASOperandType, ctx);
       assert(succeeded(maybeShuffleMapping) &&
              "validate2DBlockLoadTile should have rejected this configuration");
       cfg.shuffleMapping = *maybeShuffleMapping;

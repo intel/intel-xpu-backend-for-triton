@@ -496,43 +496,14 @@ DpasEncodingAttr getDpasLayout(RankedTensorType tensorTy) {
 
 FailureOr<LinearLayout> computeTransposeShuffleMapping(
     RankedTensorType tensorType, const LinearLayout &regMapping,
-    int64_t numElemsPerLoad, unsigned numPackedVals, unsigned tileHeight,
+    int64_t numElemsPerLoad, const BlockIOTileSizeInfo &sizeInfo,
     unsigned threadsPerWarp, bool hasDPASOperandType, MLIRContext *ctx) {
   StringAttr kRegister = StringAttr::get(ctx, "register");
+  StringAttr kLane = StringAttr::get(ctx, "lane");
   LinearLayout shuffleMapping =
       LinearLayout::identity1D(numElemsPerLoad, kRegister, kRegister);
 
-  // Improve this. The current 2D block load only transposes the matrix at
-  // i32 granularity. We still need to perform an additional in-register
-  // transpose from i32 -> (N × ElemSizeInBits) tiles, using the tile width.
-  // At the moment, we can only achieve this using a bitcast operation,
-  // which implicitly uses the sub-group size as the transpose width. To
-  // optimize further, we should implement this with inline VISA
-  // instructions.
-
-  // tileHeight becomes width after transposing.
-  unsigned widthToTranspose = tileHeight;
   if (hasDPASOperandType) {
-    // For the DPAS related layout, we will do the shuffle at first in the
-    // unpacking of the elements at the DPAS operands granularity.
-    // And then we will do the transposing. So the transposing width is DPAS
-    // op shapes.
-    DpasEncodingAttr::OpIdx opIdx = getOpIdx(tensorType);
-    DpasEncodingAttr dpasLayout = getDpasLayout(tensorType);
-    switch (opIdx) {
-    case DpasEncodingAttr::OpIdx::OperandA: {
-      widthToTranspose = dpasLayout.getDPASInstShapeA()[1];
-      break;
-    }
-    case DpasEncodingAttr::OpIdx::OperandB: {
-      widthToTranspose = dpasLayout.getDPASInstShapeB()[1];
-      break;
-    }
-    case DpasEncodingAttr::OpIdx::OperandC: {
-      widthToTranspose = dpasLayout.getDPASInstShapeC()[1];
-      break;
-    }
-    }
     // For shuffle the transposed Dot operands matrix, we can shuffle the
     // loaded matrix in an reverse order.
     auto invertMapping = regMapping.invert();
@@ -555,8 +526,65 @@ FailureOr<LinearLayout> computeTransposeShuffleMapping(
       return failure();
   }
 
-  if (numPackedVals > 1 && (widthToTranspose) != threadsPerWarp)
-    return failure();
+  Attribute encoding = tensorType.getEncoding();
+  std::optional<LinearLayout> llEncoding =
+      cast<DistributedEncodingTrait>(encoding).toLinearLayout(
+          tensorType.getShape());
+  assert(llEncoding.has_value() && "expected valid linear layout");
+  if (sizeInfo.transpose) {
+    auto dims = llvm::to_vector(llEncoding->getOutDimNames());
+    SmallVector<StringAttr> loadDimName = {dims[sizeInfo.rowDim],
+                                           dims[sizeInfo.colDim]};
+    LinearLayout blockLoadLayoutWithInSubgroup =
+        llEncoding->sublayout({kRegister, kLane}, loadDimName);
+    LinearLayout expectedLoadUnpackLayout =
+        blockLoadLayoutWithInSubgroup
+            .resizeOutDim(dims[sizeInfo.rowDim],
+                          sizeInfo.tileWidth * sizeInfo.numElemPerPackedVal)
+            .resizeOutDim(dims[sizeInfo.colDim], sizeInfo.tileHeight)
+            .resizeInDim(kRegister, numElemsPerLoad);
+    // Compose the load return value layout of the transposed packed type.
+    std::vector<std::vector<int32_t>> regBases;
+    int32_t colBase = 1, rowBase = 1;
+    for (int32_t i = 1; i < sizeInfo.numElemPerPackedVal; i *= 2) {
+      regBases.push_back({rowBase, 0});
+      rowBase <<= 1;
+    }
+    std::vector<std::vector<int32_t>> laneBases;
+    for (int32_t i = 1; i < threadsPerWarp; i *= 2) {
+      if (i < sizeInfo.tileHeight) {
+        laneBases.push_back({0, colBase});
+        colBase <<= 1;
+      } else {
+        laneBases.push_back({rowBase, 0});
+        rowBase <<= 1;
+      }
+    }
+    for (int32_t i = 1; i < numElemsPerLoad / sizeInfo.numElemPerPackedVal;
+         i *= 2) {
+      if (i < mlir::ceil(sizeInfo.tileHeight, (int32_t)threadsPerWarp)) {
+        regBases.push_back({0, colBase});
+        colBase <<= 1;
+      } else {
+        regBases.push_back({rowBase, 0});
+        rowBase <<= 1;
+      }
+    }
+    LinearLayout transPackedLayout = LinearLayout(
+        {{kRegister, regBases}, {kLane, laneBases}}, ArrayRef(loadDimName));
+    if (transPackedLayout != expectedLoadUnpackLayout) {
+      // Improve this. The current 2D block load only transposes the matrix at
+      // i32 granularity. We still need to perform an additional in-register
+      // transpose from i32 -> (N × ElemSizeInBits) tiles, using the tile width.
+      // At the moment, we can only achieve this using a bitcast operation,
+      // which implicitly uses the sub-group size as the transpose width. To
+      // optimize further, we should implement this with inline VISA
+      // instructions.
+      // E.G: A case that to load fp8 B matrix with DPAS opsChan=2 layout under
+      // sub-group-size=32.
+      return failure();
+    }
+  }
 
   return shuffleMapping;
 }
@@ -618,8 +646,7 @@ bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
     }
 
     if (failed(computeTransposeShuffleMapping(
-            tensorType, regMapping, numElemsPerLoad,
-            sizeInfo.numElemPerPackedVal, sizeInfo.tileHeight, threadsPerWarp,
+            tensorType, regMapping, numElemsPerLoad, sizeInfo, threadsPerWarp,
             hasDPASOperandType, ctx)))
       return false;
   }
