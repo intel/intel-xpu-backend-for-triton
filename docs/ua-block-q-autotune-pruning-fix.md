@@ -151,9 +151,6 @@ def prune_attention_configs(configs, named_args, **kwargs):
             config.kwargs["BLOCK_M"], num_queries_per_kv
         )
 
-        # Every path needs a positive query block size. Only the Q/output
-        # tensor descriptors use BLOCK_Q in their block_shape, so pointer
-        # Q/O paths may retain non-power-of-two BLOCK_Q configurations.
         if block_q <= 0:
             continue
         if use_td_qo and not _is_power_of_2(block_q):
@@ -229,9 +226,6 @@ optimal configurations.
          )
 -    ]
 +
-+        # Every path needs a positive query block size. Only the Q/output
-+        # tensor descriptors use BLOCK_Q in their block_shape, so pointer
-+        # Q/O paths may retain non-power-of-two BLOCK_Q configurations.
 +        if block_q <= 0:
 +            continue
 +        if use_td_qo and not _is_power_of_2(block_q):
@@ -270,26 +264,26 @@ descriptors when `use_td` remains true.
 
 ## Nested patch metadata changes
 
-Expanding the first inserted vLLM hunk by 16 lines required updating its
+Expanding the first inserted vLLM hunk by 13 lines required updating its
 target count and every subsequent target-side hunk location in the same
 embedded patch. These are patch bookkeeping changes; they do not change the
 code contained in those later hunks.
 
 | Original hunk header | Updated hunk header |
 |---|---|
-| `@@ -175,6 +173,49 @@` | `@@ -175,6 +173,65 @@` |
-| `@@ -290,6 +331,9 @@` | `@@ -290,6 +347,9 @@` |
-| `@@ -534,12 +578,12 @@` | `@@ -534,12 +594,12 @@` |
-| `@@ -561,27 +605,14 @@` | `@@ -561,27 +621,14 @@` |
-| `@@ -699,7 +730,6 @@` | `@@ -699,7 +746,6 @@` |
-| `@@ -709,7 +739,7 @@` | `@@ -709,7 +755,7 @@` |
-| `@@ -929,11 +959,6 @@` | `@@ -929,11 +975,6 @@` |
-| `@@ -949,22 +974,9 @@` | `@@ -949,22 +990,9 @@` |
-| `@@ -975,12 +987,16 @@` | `@@ -975,12 +1003,16 @@` |
-| `@@ -1036,18 +1052,11 @@` | `@@ -1036,18 +1068,11 @@` |
-| `@@ -1068,17 +1077,57 @@` | `@@ -1068,17 +1093,57 @@` |
-| `@@ -1150,9 +1199,7 @@` | `@@ -1150,9 +1215,7 @@` |
-| `@@ -1183,7 +1230,6 @@` | `@@ -1183,7 +1246,6 @@` |
+| `@@ -175,6 +173,49 @@` | `@@ -175,6 +173,62 @@` |
+| `@@ -290,6 +331,9 @@` | `@@ -290,6 +344,9 @@` |
+| `@@ -534,12 +578,12 @@` | `@@ -534,12 +591,12 @@` |
+| `@@ -561,27 +605,14 @@` | `@@ -561,27 +618,14 @@` |
+| `@@ -699,7 +730,6 @@` | `@@ -699,7 +743,6 @@` |
+| `@@ -709,7 +739,7 @@` | `@@ -709,7 +752,7 @@` |
+| `@@ -929,11 +959,6 @@` | `@@ -929,11 +972,6 @@` |
+| `@@ -949,22 +974,9 @@` | `@@ -949,22 +987,9 @@` |
+| `@@ -975,12 +987,16 @@` | `@@ -975,12 +1000,16 @@` |
+| `@@ -1036,18 +1052,11 @@` | `@@ -1036,18 +1065,11 @@` |
+| `@@ -1068,17 +1077,57 @@` | `@@ -1068,17 +1090,57 @@` |
+| `@@ -1150,9 +1199,7 @@` | `@@ -1150,9 +1212,7 @@` |
+| `@@ -1183,7 +1230,6 @@` | `@@ -1183,7 +1243,6 @@` |
 
 No source-side hunk positions changed.
 
