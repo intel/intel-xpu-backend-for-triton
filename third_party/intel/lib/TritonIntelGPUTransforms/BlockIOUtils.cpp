@@ -10,7 +10,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/MathExtras.h"
 #include <numeric>
-
+#define PRINT_DEBUG 1
 namespace mlir::triton::gpu::intel {
 
 Value getRuntimeStrideValue(triton::intel::ModuleStrideAnalysis &strideAnalysis,
@@ -607,8 +607,8 @@ FailureOr<LinearLayout> computeTransposeShuffleMapping(
       return failure();
   }
 
-  if (numPackedVals > 1 && (widthToTranspose) != threadsPerWarp)
-    return failure();
+  // if (numPackedVals > 1 && (widthToTranspose) != threadsPerWarp)
+  //   return failure();
 
   return shuffleMapping;
 }
