@@ -1049,6 +1049,12 @@ Extractor getExtractor(uint8_t index) {
   return extraction_map[index];
 }
 
+// Rounds `value` up to the next multiple of `alignment` (which must be a
+// power of 2).
+static inline uintptr_t alignUp(uintptr_t value, size_t alignment) {
+  return (value + alignment - 1) & ~(uintptr_t)(alignment - 1);
+}
+
 static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
                                int num_warps, int threads_per_warp,
                                int shared_memory, sycl::queue &stream,
@@ -1349,6 +1355,7 @@ extern "C" EXPORT_FUNC PyObject *launch(PyObject *args) {
   // scattered across num_args separate stack regions.
   size_t *param_offset = (size_t *)alloca(num_args * sizeof(size_t));
   size_t total_size = 0;
+  size_t max_alignment = 1;
   for (Py_ssize_t i = 0; i < num_args; ++i) {
     Extractor extractor = getExtractor(extractor_data[i]);
     if (extractor.extract == NULL) {
@@ -1356,11 +1363,19 @@ extern "C" EXPORT_FUNC PyObject *launch(PyObject *args) {
       return NULL;
     }
     size_t alignment = extractor.alignment ? extractor.alignment : 1;
-    total_size = (total_size + alignment - 1) & ~(alignment - 1);
+    total_size = alignUp(total_size, alignment);
     param_offset[i] = total_size;
     total_size += extractor.size;
+    if (alignment > max_alignment) {
+      max_alignment = alignment;
+    }
   }
-  char *param_storage = (char *)alloca(total_size);
+  // Offsets above are only aligned relative to offset 0, so the base
+  // pointer itself must be rounded up to max_alignment for those relative
+  // offsets to translate into absolutely-aligned addresses.
+  char *param_storage_raw = (char *)alloca(total_size + max_alignment - 1);
+  char *param_storage =
+      (char *)alignUp((uintptr_t)param_storage_raw, max_alignment);
 
   // This loop has to stay in the same function that owns params, since we are
   // using alloca to allocate pointers to it on the stack of the function.
