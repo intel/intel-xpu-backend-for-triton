@@ -9,6 +9,7 @@
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/MathExtras.h"
 
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
@@ -3047,15 +3048,20 @@ struct StoreOpToBlockIOConversion
         // It must be a store height=1 tile. We can set the pitch to an
         // arbitrary value since the row offset is always 0, as long as we can
         // satisfy the HW address payload restriction for the given tile width
-        // and element size. To keep it simple, we can just set the pitch to
-        // surface width * element size to avoid issue pitch < base_width caused
-        // by the compensation of the base address alignment.
+        // and element size. Account for the downstream 64-byte alignment
+        // compensation (up to 63 bytes added to base_width) and the umax(64)
+        // floor so that pitch >= adjusted base_width is always satisfied.
         if (tileHeight != 1)
           return failure();
         constexpr int64_t MIN_PITCH = 64;
-        int64_t surfaceWidth = tensorType.getDimSize(colDim);
-        pitch =
-            b.i32_val(std::max(MIN_PITCH, surfaceWidth * elemSizeInBits / 8));
+        constexpr int64_t MAX_ALIGN_OVERHEAD = 63;
+        int64_t surfaceWidthBytes =
+            tensorType.getDimSize(colDim) * elemSizeInBits / 8;
+        int64_t maxAdjustedWidth =
+            std::max(MIN_PITCH, surfaceWidthBytes) + MAX_ALIGN_OVERHEAD;
+        // Pitch must be a multiple of 16 bytes.
+        pitch = b.i32_val(
+            llvm::alignTo(std::max(MIN_PITCH, maxAdjustedWidth), int64_t(16)));
       } else {
         pitch = getPitch(rewriter, ptr, elemSizeInBits, rowDim);
       }
