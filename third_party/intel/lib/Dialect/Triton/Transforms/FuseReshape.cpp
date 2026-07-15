@@ -282,6 +282,19 @@ private:
     if (!isProvablyDivisible(strides[0], strides[1]))
       return false;
 
+    // After fusion the per-dimension bounds check on the collapsed (middle)
+    // dimension is replaced by a single bounds check on the merged
+    // dimension. That is only sound if a block load can never straddle the
+    // boundary between two "rows" of the outermost dimension, i.e. the real
+    // extent of the collapsed dimension must be an exact multiple of its
+    // block extent. Reject cases where this cannot be proven (e.g. the
+    // block extent is larger than the real extent, as with a ragged/padded
+    // last block).
+    OperandRange shapes = makeTensorDescOp->getShape();
+    int64_t blockExtent = tensorTy.getDimSize(1);
+    if (!mlir::triton::gpu::intel::isDivisible(shapes[1], blockExtent))
+      return false;
+
     return true;
   }
 
