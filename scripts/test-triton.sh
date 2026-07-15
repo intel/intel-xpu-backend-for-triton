@@ -1134,13 +1134,16 @@ run_vllm_tdesc_tests() {
   local VLLM_PROJ="$TRITON_PROJ/vllm"
   local PATCH_FILE="$TRITON_PROJ/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention.patch"
 
-  if git -C "$VLLM_PROJ" apply --reverse --check "$PATCH_FILE" 2>/dev/null; then
-    echo "Reverting tdesc patch: $PATCH_FILE."
-    git -C "$VLLM_PROJ" apply -R "$PATCH_FILE"
+  if git -C "$VLLM_PROJ" apply --check "$PATCH_FILE" 2>/dev/null; then
+    echo "Applying tdesc patch: $PATCH_FILE."
+    git -C "$VLLM_PROJ" apply "$PATCH_FILE"
+  elif git -C "$VLLM_PROJ" apply --reverse --check "$PATCH_FILE" 2>/dev/null; then
+    echo "Patch already applied, skipping."
+  else
+    echo "ERROR: Failed to apply tdesc patch: $PATCH_FILE" >&2
+    echo "The vLLM tree may have an outdated patch or conflicting changes." >&2
+    return 1
   fi
-
-  echo "Applying tdesc patch: $PATCH_FILE."
-  git -C "$VLLM_PROJ" apply "$PATCH_FILE"
 
   local EXIT_STATUS=0
   TRITON_TEST_SUITE=vllm_tdesc \
