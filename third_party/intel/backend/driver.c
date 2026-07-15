@@ -1086,8 +1086,10 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
 
   static bool launchDebug = getBoolEnv("TRITON_INTEL_LAUNCH_DEBUG");
   if (launchDebug) {
+#if !defined(TRITON_INTEL_INJECT_PYTORCH)
     std::string kernel_name =
         kernel_ptr.get_info<sycl::info::kernel::function_name>();
+#endif
     std::cout << "kernel info name:" << kernel_name << " @" << &kernel_ptr
               << std::endl;
     std::cout << "kernel info attributes:"
