@@ -1,5 +1,5 @@
 diff --git a/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention_benchmark.py b/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention_benchmark.py
-index 99620e47a..18b22a36d 100644
+index b1eed56eb..704763e16 100644
 --- a/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention_benchmark.py
 +++ b/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention_benchmark.py
 @@ -13,7 +13,11 @@ This benchmark is based on the test_triton_unified_attention.py tests
@@ -44,14 +44,13 @@ index 99620e47a..18b22a36d 100644
  AUTOTUNE_KEY_COLUMNS = [
      'BLOCK_SIZE',
      'HEAD_SIZE',
-@@ -76,10 +95,17 @@ AUTOTUNE_KEY_COLUMNS = [
+@@ -76,9 +95,16 @@ AUTOTUNE_KEY_COLUMNS = [
      'NUM_SEQS_BUCKET',
      'MAX_SEQLEN_K_BUCKET',
      'EFFECTIVE_MAX_SEQLEN_K_BUCKET',
 +    'USE_LARGE_HEAD_TILE',
 +    'USE_TD',
      'Q_LEN_BUCKET',
-     'KV_LEN_BUCKET',
  ]
  AUTOTUNE_DECISION_FIELDNAMES = [
 +    'branch',
@@ -62,7 +61,7 @@ index 99620e47a..18b22a36d 100644
      'benchmark_name',
      'td_patched',
      'benchmark_dtype',
-@@ -94,6 +120,12 @@ AUTOTUNE_DECISION_FIELDNAMES = [
+@@ -93,6 +119,12 @@ AUTOTUNE_DECISION_FIELDNAMES = [
      'num_blocks',
      'block_size',
      'is_prefill',
@@ -75,21 +74,20 @@ index 99620e47a..18b22a36d 100644
      'autotune_key_names',
      'autotune_key_values',
      'key_BLOCK_SIZE',
-@@ -107,9 +139,13 @@ AUTOTUNE_DECISION_FIELDNAMES = [
+@@ -106,8 +138,12 @@ AUTOTUNE_DECISION_FIELDNAMES = [
      'key_NUM_SEQS_BUCKET',
      'key_MAX_SEQLEN_K_BUCKET',
      'key_EFFECTIVE_MAX_SEQLEN_K_BUCKET',
 +    'key_USE_LARGE_HEAD_TILE',
 +    'key_USE_TD',
      'key_Q_LEN_BUCKET',
-     'key_KV_LEN_BUCKET',
      'selected_config',
 +    'effective_config',
 +    'selection_source',
      'selected_TILE_SIZE',
      'selected_BLOCK_Q',
      'actual_TILE_SIZE',
-@@ -119,11 +155,63 @@ AUTOTUNE_DECISION_FIELDNAMES = [
+@@ -117,11 +153,63 @@ AUTOTUNE_DECISION_FIELDNAMES = [
      'selected_NUM_SEGMENTS_PER_SEQ',
      'selected_num_warps',
      'selected_num_stages',
@@ -153,14 +151,13 @@ index 99620e47a..18b22a36d 100644
 
  
  def _reports_dir_from_argv() -> str:
-@@ -294,21 +382,26 @@ def _autotune_key_values(qdtype: torch.dtype | None, head_size: int, seq_lens: l
+@@ -282,20 +370,25 @@ def _autotune_key_values(qdtype: torch.dtype | None, head_size: int, seq_lens: l
          'EFFECTIVE_MAX_SEQLEN_K_BUCKET': _observed_value(
              'EFFECTIVE_MAX_SEQLEN_K_BUCKET', 'effective_max_seqlen_k_bucket'
          ),
 +        'USE_LARGE_HEAD_TILE': _observed_value('USE_LARGE_HEAD_TILE', 'tuned_large_head'),
 +        'USE_TD': _observed_value('USE_TD', 'use_td'),
          'Q_LEN_BUCKET': _q_len_bucket(max(query_len for query_len, _ in seq_lens)),
-         'KV_LEN_BUCKET': _kv_len_bucket(max(kv_len for _, kv_len in seq_lens)),
      }
  
  
@@ -184,7 +181,7 @@ index 99620e47a..18b22a36d 100644
      finally:
          try:
              kernel.nargs = old_nargs
-@@ -316,6 +409,297 @@ def _get_pruned_configs(kernel: object, meta: dict[str, object]) -> list[object]
+@@ -303,6 +396,297 @@ def _get_pruned_configs(kernel: object, meta: dict[str, object]) -> list[object]
              pass
  
  
@@ -482,7 +479,7 @@ index 99620e47a..18b22a36d 100644
  def _autotune_cache(kernel: object, is_3d: object) -> object:
      if is_3d is True:
          cache = getattr(_unified_attention_module, 'UNIFIED_ATTENTION_3D_TILE_CACHE', None)
-@@ -337,28 +721,110 @@ def _record_autotune_decision(
+@@ -324,28 +708,110 @@ def _record_autotune_decision(
      soft_cap: float | None,
      num_blocks: int,
      block_size: int,
@@ -594,7 +591,7 @@ index 99620e47a..18b22a36d 100644
          'benchmark_name': benchmark_name,
          'td_patched': os.getenv('TD_PATCHED', '0'),
          'benchmark_dtype': 'fp8' if IS_FP8 else 'bf16',
-@@ -372,10 +838,18 @@ def _record_autotune_decision(
+@@ -359,10 +825,18 @@ def _record_autotune_decision(
          'soft_cap': _format_csv_value(soft_cap),
          'num_blocks': num_blocks,
          'block_size': block_size,
@@ -614,7 +611,7 @@ index 99620e47a..18b22a36d 100644
          'selected_TILE_SIZE': _config_value(selected_config, 'TILE_SIZE'),
          'selected_BLOCK_Q': _config_value(selected_config, 'BLOCK_Q'),
          'actual_TILE_SIZE': _actual_tile_size(selected_config),
-@@ -385,37 +859,69 @@ def _record_autotune_decision(
+@@ -372,37 +846,69 @@ def _record_autotune_decision(
          'selected_NUM_SEGMENTS_PER_SEQ': selected_num_segments,
          'selected_num_warps': _config_value(selected_config, 'num_warps'),
          'selected_num_stages': _config_value(selected_config, 'num_stages'),
@@ -695,7 +692,7 @@ index 99620e47a..18b22a36d 100644
  
  
  def ref_paged_attn(
-@@ -781,7 +1287,7 @@ def get_unified_attention_benchmark(
+@@ -768,7 +1274,7 @@ def get_unified_attention_benchmark(
                                           err_msg='triton to torch')
              del expected_output
  
@@ -704,7 +701,7 @@ index 99620e47a..18b22a36d 100644
                  triton_fn,
                  n_warmup=n_warmup,
                  n_repeat=10,
-@@ -799,6 +1305,7 @@ def get_unified_attention_benchmark(
+@@ -786,6 +1292,7 @@ def get_unified_attention_benchmark(
                  soft_cap=soft_cap,
                  num_blocks=num_blocks,
                  block_size=block_size,

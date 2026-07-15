@@ -1,5 +1,5 @@
 diff --git a/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention_benchmark.py b/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention_benchmark.py
-index 27b41d7a1..d2aadbb56 100644
+index 27b41d7a1..52ac56be6 100644
 --- a/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention_benchmark.py
 +++ b/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention_benchmark.py
 @@ -11,6 +11,13 @@ Unified Attention benchmark
@@ -16,7 +16,7 @@ index 27b41d7a1..d2aadbb56 100644
  from itertools import product
  from typing import Optional
  
-@@ -30,11 +37,891 @@ except ImportError as e:
+@@ -30,11 +37,878 @@ except ImportError as e:
  from vllm.platforms import current_platform
  from vllm_xpu_kernels.flash_attn_interface import flash_attn_varlen_func as sycl_tla_attention
  
@@ -81,7 +81,6 @@ index 27b41d7a1..d2aadbb56 100644
 +    'USE_LARGE_HEAD_TILE',
 +    'USE_TD',
 +    'Q_LEN_BUCKET',
-+    'KV_LEN_BUCKET',
 +]
 +AUTOTUNE_DECISION_FIELDNAMES = [
 +    'branch',
@@ -125,7 +124,6 @@ index 27b41d7a1..d2aadbb56 100644
 +    'key_USE_LARGE_HEAD_TILE',
 +    'key_USE_TD',
 +    'key_Q_LEN_BUCKET',
-+    'key_KV_LEN_BUCKET',
 +    'selected_config',
 +    'effective_config',
 +    'selection_source',
@@ -339,16 +337,6 @@ index 27b41d7a1..d2aadbb56 100644
 +    return 3
 +
 +
-+def _kv_len_bucket(max_seqlen_k: int) -> int:
-+    if max_seqlen_k <= 256:
-+        return 0
-+    if max_seqlen_k <= 1024:
-+        return 1
-+    if max_seqlen_k <= 4096:
-+        return 2
-+    return 3
-+
-+
 +def _autotune_key_values(qdtype: torch.dtype | None, head_size: int, seq_lens: list[tuple[int, int]],
 +                         block_size: int, config: object, q_heads: int, k_heads: int) -> dict[str, object]:
 +    return {
@@ -368,7 +356,6 @@ index 27b41d7a1..d2aadbb56 100644
 +        'USE_LARGE_HEAD_TILE': _observed_value('USE_LARGE_HEAD_TILE', 'tuned_large_head'),
 +        'USE_TD': _observed_value('USE_TD', 'use_td'),
 +        'Q_LEN_BUCKET': _q_len_bucket(max(query_len for query_len, _ in seq_lens)),
-+        'KV_LEN_BUCKET': _kv_len_bucket(max(kv_len for _, kv_len in seq_lens)),
 +    }
 +
 +
@@ -908,7 +895,7 @@ index 27b41d7a1..d2aadbb56 100644
  
  
  def ref_paged_attn(
-@@ -400,12 +1287,28 @@ def get_unified_attention_benchmark(
+@@ -400,12 +1274,28 @@ def get_unified_attention_benchmark(
                                           err_msg='triton to torch')
              del expected_output
  

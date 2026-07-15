@@ -77,7 +77,6 @@ AUTOTUNE_KEY_COLUMNS = [
     'MAX_SEQLEN_K_BUCKET',
     'EFFECTIVE_MAX_SEQLEN_K_BUCKET',
     'Q_LEN_BUCKET',
-    'KV_LEN_BUCKET',
 ]
 AUTOTUNE_DECISION_FIELDNAMES = [
     'benchmark_name',
@@ -108,7 +107,6 @@ AUTOTUNE_DECISION_FIELDNAMES = [
     'key_MAX_SEQLEN_K_BUCKET',
     'key_EFFECTIVE_MAX_SEQLEN_K_BUCKET',
     'key_Q_LEN_BUCKET',
-    'key_KV_LEN_BUCKET',
     'selected_config',
     'selected_TILE_SIZE',
     'selected_BLOCK_Q',
@@ -268,16 +266,6 @@ def _q_len_bucket(max_seqlen_q: int) -> int:
     return 3
 
 
-def _kv_len_bucket(max_seqlen_k: int) -> int:
-    if max_seqlen_k <= 256:
-        return 0
-    if max_seqlen_k <= 1024:
-        return 1
-    if max_seqlen_k <= 4096:
-        return 2
-    return 3
-
-
 def _autotune_key_values(qdtype: torch.dtype | None, head_size: int, seq_lens: list[tuple[int, int]],
                          block_size: int, config: object, q_heads: int, k_heads: int) -> dict[str, object]:
     return {
@@ -295,7 +283,6 @@ def _autotune_key_values(qdtype: torch.dtype | None, head_size: int, seq_lens: l
             'EFFECTIVE_MAX_SEQLEN_K_BUCKET', 'effective_max_seqlen_k_bucket'
         ),
         'Q_LEN_BUCKET': _q_len_bucket(max(query_len for query_len, _ in seq_lens)),
-        'KV_LEN_BUCKET': _kv_len_bucket(max(kv_len for _, kv_len in seq_lens)),
     }
 
 
