@@ -140,7 +140,7 @@ struct LoadStoreConversionBase {
       : targetInfo(targetInfo), axisAnalysisPass(axisAnalysisPass),
         strideAnalysis(strideAnalysis) {}
 
-  int getStride(Value ptr, unsigned dim) const {
+  int64_t getStride(Value ptr, unsigned dim) const {
     triton::intel::StrideInfo *strideInfo = strideAnalysis.getStrideInfo(ptr);
     if (strideInfo) {
       const auto &stride = strideInfo->getStride();
@@ -581,6 +581,14 @@ protected:
   const triton::intel::TargetInfo &targetInfo;
 };
 
+/// The 2D-block-IO HW encodes base_width / base_height / base_pitch in
+/// **24 bits** on the wire (the TritonGEN→LLVM lowering subtracts 1 before
+/// passing the field, so the user-facing max is 2^24; anything larger
+/// wraps mod 2^24 and produces a garbage surface). See
+/// verify2DBlockAddressPayloadRestriction() in TritonGEN which enforces
+/// the same 24-bit bound on already-emitted ops.
+static constexpr int64_t kMax2DBlockField = int64_t(1) << 24;
+
 struct BlockIOConversionBase : public LoadStoreConversionBase {
   explicit BlockIOConversionBase(
       const triton::intel::TargetInfo &targetInfo,
@@ -629,8 +637,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
   /// Return the pitch (in bytes) for an op annotated by the 1D→2D reshape.
   /// The stride attribute is in elements; this converts to bytes.
   /// Returns std::nullopt if the attribute is absent, non-positive, or if
-  /// the resulting byte pitch does not fit in a signed 32-bit integer (the
-  /// HW pitch operand is i32).
+  /// the resulting byte pitch exceeds the HW 24-bit pitch field.
   template <typename OpTy>
   static std::optional<int64_t>
   getAnnotated1DReshapePitch(OpTy op, unsigned elemSizeInBits) {
@@ -642,7 +649,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     if (strideElems <= 0)
       return std::nullopt;
     int64_t pitchBytes = strideElems * elemSizeInBits / 8;
-    if (pitchBytes > std::numeric_limits<int32_t>::max())
+    if (pitchBytes > kMax2DBlockField)
       return std::nullopt;
     return pitchBytes;
   }
@@ -715,17 +722,21 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     Location loc = ptr.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    int stride = getStride(ptr, dim);
+    int64_t stride = getStride(ptr, dim);
     // If the stride is 0, we assume a minimum pitch of 64 bytes.
-    constexpr int MIN_PITCH = 64;
+    constexpr int64_t MIN_PITCH = 64;
     if (stride == 0)
       return b.i32_val(MIN_PITCH);
 
     if (stride > 0) {
-      unsigned pitch = (unsigned)stride * elemSizeInBits / 8;
+      int64_t pitch = stride * elemSizeInBits / 8;
       if (pitch < MIN_PITCH)
         return nullptr; // unsupported pitch
-      return b.i32_val(pitch);
+      // The HW pitch field is 24 bits (value encoded as value-1); bail
+      // rather than silently truncating.
+      if (pitch > kMax2DBlockField)
+        return nullptr;
+      return b.i32_val(static_cast<int32_t>(pitch));
     }
     assert(stride == -1 && "invalid stride < 0");
     return nullptr;
@@ -1242,6 +1253,55 @@ static TritonGEN::LoadCacheControl prefetchCacheControl(CacheModifier cm) {
   }
 }
 
+/// Narrow `v` to the i32 slot of a 2D-block-IO surface field measured in
+/// rows (base_height). Returns `Value()` when `v` folds to a value
+/// exceeding the HW's 24-bit field (see kMax2DBlockField). Callers should
+/// bail with `failure()` on null. Non-foldable (runtime) values pass
+/// through unchecked — the HW verifier catches invalid sizes for
+/// already-constant ops, but a runtime overflow is the caller's
+/// responsibility. Lower-bound (positivity / MIN_*) policy is left to
+/// callers. For byte-valued fields (pitch, base_width) use
+/// narrowSurfaceBytesOrNull instead.
+static Value narrowSurfaceRowsOrNull(ConversionPatternRewriter &rewriter,
+                                     Location loc, Value v) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  if (auto folded = triton::intel::getFoldedConstantValue(v)) {
+    if (*folded > kMax2DBlockField)
+      return Value();
+  }
+  return b.trunc(i32_ty, v);
+}
+
+/// Materialize `stride * elemBytes` as the i32 slot of a 2D-block-IO
+/// surface field measured in bytes (pitch or base_width). Returns
+/// `Value()` when the byte product folds to a value exceeding the HW's
+/// 24-bit field (see kMax2DBlockField). Callers should bail with
+/// `failure()` on null. Non-foldable (runtime) strides pass through
+/// unchecked — the HW pitch operand is i32 but only 24 bits are honored,
+/// so the caller is trusting the stride to fit at runtime; that matches
+/// getRuntimePitch()'s policy. Lower-bound (positivity / MIN_PITCH) policy
+/// is left to callers. For row-valued fields (base_height) use
+/// narrowSurfaceRowsOrNull instead.
+static Value narrowSurfaceBytesOrNull(ConversionPatternRewriter &rewriter,
+                                      Location loc, Value stride,
+                                      int64_t elemBytes) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  if (auto folded = triton::intel::getFoldedConstantValue(stride)) {
+    // elemBytes fits in a handful of bits (element sizes are ≤ 8 bytes),
+    // so the int64 product is safe from overflow.
+    int64_t product = *folded * elemBytes;
+    if (product > kMax2DBlockField)
+      return Value();
+  }
+  Value i64Stride = stride;
+  if (auto intTy = dyn_cast<IntegerType>(stride.getType())) {
+    if (intTy.getWidth() < 64)
+      i64Stride = b.sext(i64_ty, stride);
+  }
+  Value product = b.mul(i64Stride, b.i64_val(elemBytes));
+  return b.trunc(i32_ty, product);
+}
+
 /// Emit 2D block prefetch operations for a tiled prefetch.
 ///
 /// Converts base dimensions to bytes, determines vBlocks from element size,
@@ -1263,15 +1323,23 @@ static LogicalResult emit2DBlockPrefetchOps(
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   MLIRContext *ctx = rewriter.getContext();
 
-  // Convert baseWidth and rowStride to bytes and truncate to i32.
-  baseWidth = b.mul(baseWidth, b.i64_val(eltTy.getIntOrFloatBitWidth() / 8));
-  baseWidth = b.trunc(i32_ty, baseWidth);
+  // Convert baseWidth and rowStride to bytes and narrow to the HW's 24-bit
+  // surface field (see kMax2DBlockField), bailing out if a compile-time
+  // foldable byte pitch/base_width would exceed it. baseHeight is a raw row
+  // count with no multiply, but goes through the same 24-bit guard.
+  int64_t elemBytes = eltTy.getIntOrFloatBitWidth() / 8;
+  Value baseWidthI32 = narrowSurfaceBytesOrNull(rewriter, loc, baseWidth,
+                                                /*elemBytes=*/elemBytes);
+  Value baseHeightI32 = narrowSurfaceRowsOrNull(rewriter, loc, baseHeight);
+  if (!baseWidthI32 || !baseHeightI32)
+    return failure();
+  baseWidth = baseWidthI32;
+  baseHeight = baseHeightI32;
 
-  baseHeight = b.trunc(i32_ty, baseHeight);
-
-  Value rowStrideInBytes =
-      b.mul(rowStride, b.i64_val(eltTy.getIntOrFloatBitWidth() / 8));
-  rowStrideInBytes = b.trunc(i32_ty, rowStrideInBytes);
+  Value rowStrideInBytes = narrowSurfaceBytesOrNull(rewriter, loc, rowStride,
+                                                    /*elemBytes=*/elemBytes);
+  if (!rowStrideInBytes)
+    return failure();
 
   unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
   unsigned vBlocks = 1;
@@ -1528,7 +1596,7 @@ struct PrefetchOpConversion
       return failure();
 
     // If the stride is 0, we want to load only the first row.
-    int stride = getStride(op.getPtr(), rank - 2);
+    int64_t stride = getStride(op.getPtr(), rank - 2);
     Value baseHeight = b.i32_val(stride == 0 ? 1 : tileHeightInElem);
     Value baseWidth = b.i32_val(
         std::max(64u, vBlocks * tileWidthInElem * (elemSizeInBits / 8)));
@@ -1768,7 +1836,7 @@ struct PrefetchOpConversion
       return failure();
 
     // Row stride in elements (i64) -- emit2DBlockPrefetchOps converts to bytes.
-    int stride = getStride(op.getPtr(), rank - 2);
+    int64_t stride = getStride(op.getPtr(), rank - 2);
     if (stride < 0)
       return failure();
     Value rowStride = b.i64_val(stride);
@@ -1810,10 +1878,11 @@ struct PrefetchOpConversion
     // slices would prefetch the same (x,y) surface), so bail out instead.
     SmallVector<Value> extraDimStrides, extraDimBaseOffsets;
     for (unsigned d = 0; d < rank - 2; ++d) {
-      int dimStride = getStride(op.getPtr(), d);
+      int64_t dimStride = getStride(op.getPtr(), d);
       if (dimStride <= 0)
         return failure();
-      extraDimStrides.push_back(b.i64_val(dimStride * elemSizeInBytes));
+      extraDimStrides.push_back(
+          b.i64_val(dimStride * static_cast<int64_t>(elemSizeInBytes)));
       extraDimBaseOffsets.push_back(b.i32_val(0));
     }
 
@@ -2685,20 +2754,26 @@ struct DescriptorStoreOpToBlockIOConversion
 
     // --- Shapes (base width / height for 2D block IO payload) ---
     // TensorDesc carries shape as i64 values. The 2D block IO payload
-    // expects baseWidth in bytes and baseHeight in elements.
+    // expects baseWidth in bytes and baseHeight in elements. Both are
+    // narrowed to the HW's 24-bit surface field (see kMax2DBlockField),
+    // so a compile-time-foldable value exceeding that limit bails the
+    // pattern out rather than silently corrupting the surface descriptor.
     Value shapeRow = desc.shapes[descRowDim]; // i64
     Value shapeCol = desc.shapes[descColDim]; // i64
     Value baseWidth =
-        b.trunc(i32_ty, b.mul(shapeCol, b.i64_val(elemSizeInBits / 8)));
-    Value baseHeight = b.trunc(i32_ty, shapeRow);
+        narrowSurfaceBytesOrNull(rewriter, loc, shapeCol,
+                                 /*elemBytes=*/elemSizeInBits / 8);
+    Value baseHeight = narrowSurfaceRowsOrNull(rewriter, loc, shapeRow);
 
     // --- Pitch (row stride in bytes) ---
     // TODO: DescriptorStoreOp does not expose a "memory order" attribute, so
     // we always use the row-major stride dimension. Once a memory order
     // attribute is added, this should be adjusted.
     Value strideForPitch = desc.strides[descRowDim]; // i64
-    Value pitch =
-        b.trunc(i32_ty, b.mul(strideForPitch, b.i64_val(elemSizeInBits / 8)));
+    Value pitch = narrowSurfaceBytesOrNull(rewriter, loc, strideForPitch,
+                                           /*elemBytes=*/elemSizeInBits / 8);
+    if (!baseWidth || !baseHeight || !pitch)
+      return failure();
 
     // --- Offsets ---
     // Unlike block pointers which store offsets in the struct, tensor
