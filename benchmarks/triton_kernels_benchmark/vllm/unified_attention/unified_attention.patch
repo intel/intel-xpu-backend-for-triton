@@ -33,7 +33,7 @@ index b2667935c..678d938b6 100644
      right = num_seqs
      while left < right:
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 93622957b..7de0b6f21 100644
+index 93622957b..0250f986d 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -7,8 +7,6 @@
@@ -105,23 +105,6 @@ index 93622957b..7de0b6f21 100644
      # Per-(token, head) scale caches: used iff KV_QUANT_MODE in {2, 3}.
      USE_PER_TOKEN_HEAD_SCALES: tl.constexpr = (KV_QUANT_MODE >= 2) and (
          KV_QUANT_MODE <= 3
-@@ -534,12 +578,12 @@ def kernel_unified_attention(
- 
-         # S : (BLOCK_M, TILE_SIZE)
-         S = tl.zeros(shape=(BLOCK_M, TILE_SIZE), dtype=tl.float32)
-+        Q_scaled = (Q * score_scale).to(Q.dtype)
-         if USE_PER_TOKEN_HEAD_SCALES:
--            # Per-token-head quant: fuse softmax_scale with per-head k_scale
--            # to avoid a separate BLOCK_M × TILE_SIZE multiply on S.
--            S += tl.dot(Q, K) * (score_scale * k_token_head_scales[None, :])
-+            # Per-token-head quant: per-head k_scale still multiplies S.
-+            S += tl.dot(Q_scaled, K) * k_token_head_scales[None, :]
-         else:
--            S += score_scale * tl.dot(Q, K)
-+            S += tl.dot(Q_scaled, K)
- 
-         if USE_SOFTCAP:
-             S = apply_softcap(S, softcap)
 @@ -561,27 +605,14 @@ def kernel_unified_attention(
          M, L, P, alpha = softmax_step(S, M, L)
          acc = acc * alpha[:, None]
