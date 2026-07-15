@@ -13,6 +13,8 @@
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/MathExtras.h"
+#include <limits>
 #include <optional>
 
 #define DEBUG_TYPE "tritonintelgpu-lower-to-2d-block-load"
@@ -257,6 +259,34 @@ private:
       }
     }
 
+    // The 2Dblockload HW encodes base_width / base_pitch in 24 bits (the
+    // TritonGEN→LLVM lowering subtracts 1 on emission, so the user-facing
+    // max is 2^24). Bail out if any compile-time-foldable byte value
+    // exceeds that range — otherwise the top bits would be silently
+    // dropped, producing a garbage surface descriptor. Non-foldable
+    // (runtime) shapes/strides are trusted to fit — the HW verifier will
+    // complain if they don't.
+    //
+    // We chase the descriptor's defining MakeTensorDescOp(s) to reach the
+    // original SSA — `strides`/`shapes` above are ttig.extract_desc results
+    // whose defining ops the folder can't see through.
+    constexpr int64_t kMax2DBlockField = int64_t(1) << 24;
+    int64_t elemBytesConst = elemSizeInBits / 8;
+    auto wouldOverflow = [&](unsigned operandIdx) {
+      return llvm::any_of(allDescs, [&](tt::MakeTensorDescOp d) {
+        auto folded =
+            tt::intel::getFoldedConstantValue(d->getOperand(operandIdx));
+        return folded && *folded * elemBytesConst > kMax2DBlockField;
+      });
+    };
+    // MakeTensorDescOp operands: base, shape[rank], strides[rank].
+    if (wouldOverflow(/*inner shape*/ 1 + (descRank - 1)) ||
+        wouldOverflow(/*pitch stride*/ 1 + descRank + (descRank - 2))) {
+      LDBG("Pitch/base_width exceeds HW 24-bit range for descriptor load: "
+           << *op);
+      return;
+    }
+
     // Surface width = inner dimension size * element bytes.
     // Surface height = second-to-last dimension size.
     // Pitch = stride of the second-to-last dimension * element bytes.
@@ -400,12 +430,18 @@ private:
 
     if (!has1DReshapeStride) {
       if (isBroadcast) {
-        // Use the full surface row width (in bytes) as the baseline pitch.
-        // Lowering may widen base_width (e.g. due to alignment), so ensure the
-        // dummy pitch doesn't end up smaller than base_width.
+        // For broadcast (height=1) loads, pitch is a dummy value (no row
+        // advancement), but the HW still enforces pitch >= base_width.
+        // Downstream lowering widens base_width by up to 63 bytes for 64-byte
+        // pointer alignment compensation. Account for that here so the
+        // constraint is never violated at runtime.
         int64_t fullRowBytes =
             tensorTy.getDimSize(surfaceWidthDim) * elemSizeInBits / 8;
-        pitch = std::max(MIN_PITCH, fullRowBytes);
+        constexpr int64_t MAX_ALIGN_OVERHEAD = 63;
+        int64_t maxAdjustedWidth = fullRowBytes + MAX_ALIGN_OVERHEAD;
+        // Pitch must be a multiple of 16 bytes.
+        pitch =
+            llvm::alignTo(std::max(MIN_PITCH, maxAdjustedWidth), int64_t(16));
       } else {
         int64_t pitchStride = getStride(strideAnalysis, op.getPtr(), pitchDim);
         if (pitchStride < 0) {
