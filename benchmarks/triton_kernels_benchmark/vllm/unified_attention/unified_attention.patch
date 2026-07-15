@@ -33,7 +33,7 @@ index b2667935c..678d938b6 100644
      right = num_seqs
      while left < right:
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 93622957b..431b24945 100644
+index 93622957b..7de0b6f21 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -7,8 +7,6 @@
@@ -118,7 +118,7 @@ index 93622957b..431b24945 100644
 +            S += tl.dot(Q_scaled, K) * k_token_head_scales[None, :]
          else:
 -            S += score_scale * tl.dot(Q, K)
-+            S = tl.dot(Q_scaled, K, S)
++            S += tl.dot(Q_scaled, K)
  
          if USE_SOFTCAP:
              S = apply_softcap(S, softcap)
