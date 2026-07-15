@@ -1,5 +1,5 @@
 diff --git a/vllm/v1/attention/ops/triton_attention_helpers.py b/vllm/v1/attention/ops/triton_attention_helpers.py
-index b2667935c..678d938b6 100644
+index b2667935c..8ac3f1420 100644
 --- a/vllm/v1/attention/ops/triton_attention_helpers.py
 +++ b/vllm/v1/attention/ops/triton_attention_helpers.py
 @@ -64,7 +64,7 @@ def resolve_seq_and_query_len(
@@ -32,8 +32,33 @@ index b2667935c..678d938b6 100644
      left: tl.int32 = 0
      right = num_seqs
      while left < right:
+@@ -176,10 +180,14 @@ def compute_tile_loop_bounds(
+     """
+     # compute the length of the longest sequence prefix spanned by any
+     # query token in the current q_block (q_block_local_idx)
++    # The largest in-block query-position offset is BLOCK_Q - 1. Compute it from
++    # BLOCK_Q directly rather than (BLOCK_M - 1) // num_queries_per_kv, which
++    # overshoots when BLOCK_M is padded for non-pow2 GQA (BLOCK_M = BLOCK_Q *
++    # next_pow2(nq)). For pow2 GQA the two are identical.
+     max_seq_prefix_len = (
+         context_len
+         + q_block_local_idx * BLOCK_Q
+-        + (BLOCK_M - 1) // num_queries_per_kv
++        + (BLOCK_Q - 1)
+         + 1
+     )
+     if USE_MM_PREFIX or USE_PER_SEQ_CAUSAL or (not USE_CAUSAL):
+@@ -203,7 +211,7 @@ def compute_tile_loop_bounds(
+         # Query rows covered by this Q-block
+         qpos_lo = q_block_local_idx * BLOCK_Q
+         qpos_hi = tl.minimum(
+-            qpos_lo + (BLOCK_M - 1) // num_queries_per_kv,
++            qpos_lo + (BLOCK_Q - 1),
+             cur_batch_query_len - 1,
+         )
+         # For sliding window, each query position q can only attend to
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 93622957b..431b24945 100644
+index 93622957b..88327a750 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -7,8 +7,6 @@
@@ -45,7 +70,27 @@ index 93622957b..431b24945 100644
  import torch
  
  import vllm.envs as envs
-@@ -175,6 +173,49 @@ def _store_output_td(
+@@ -98,11 +96,18 @@ def _load_q_td(
+         + (cur_batch_in_all_start_index + q_block_local_idx * BLOCK_Q) * query_stride_0
+         + (kv_head_idx * num_queries_per_kv) * query_stride_1
+     )
++    # ``BLOCK_M == BLOCK_Q * NQ_PADDED`` where ``NQ_PADDED`` is
++    # ``next_power_of_2(num_queries_per_kv)``. The TD validator requires the
++    # flattened inner extent to be a power of 2, so read ``NQ_PADDED`` heads
++    # worth of columns; the descriptor zero-pads the read past the real
++    # ``num_queries_per_kv * HEAD_SIZE`` extent (same as HEAD_SIZE_PADDED), and
++    # the padded head rows are masked out downstream via ``query_mask_1``.
++    NQ_PADDED: tl.constexpr = BLOCK_M // BLOCK_Q
+     q_desc = tl.make_tensor_descriptor(
+         base=q_base,
+         shape=(q_block_local_len, num_queries_per_kv * HEAD_SIZE),
+         strides=(query_stride_0, 1),
+-        block_shape=(BLOCK_Q, num_queries_per_kv * HEAD_SIZE_PADDED),
++        block_shape=(BLOCK_Q, NQ_PADDED * HEAD_SIZE_PADDED),
+     )
+     return q_desc.load([0, 0]).reshape(BLOCK_M, HEAD_SIZE_PADDED)
+ 
+@@ -175,6 +180,55 @@ def _store_output_td(
      )
  
  
@@ -63,7 +108,13 @@ index 93622957b..431b24945 100644
 +
 +
 +def derive_block_q(block_m, num_queries_per_kv):
-+    return block_m // num_queries_per_kv
++    # Pack BLOCK_M rows as BLOCK_Q query positions x NQ_PADDED head slots,
++    # where NQ_PADDED = next_power_of_2(num_queries_per_kv). Dividing by
++    # NQ_PADDED (rather than the raw num_queries_per_kv) is a no-op for pow2
++    # GQA and lets non-pow2 GQA (e.g. Qwen2-7B nq=7) keep a power-of-2 inner
++    # extent for the tensor-descriptor Q load; the padding head slots are
++    # masked out in the kernel.
++    return block_m // triton.next_power_of_2(num_queries_per_kv)
 +
 +
 +def _is_power_of_2(value):
@@ -95,7 +146,7 @@ index 93622957b..431b24945 100644
  @triton.jit
  def kernel_unified_attention(
      # Output destination for the 2D path.  In 3D mode per-segment partials
-@@ -290,6 +331,9 @@ def kernel_unified_attention(
+@@ -290,12 +344,22 @@ def kernel_unified_attention(
      # original (causal AND SW) OR mm_prefix behavior for all other models.
      MM_PREFIX_CLAMP_SW: tl.constexpr = False,
  ):
@@ -105,7 +156,55 @@ index 93622957b..431b24945 100644
      # Per-(token, head) scale caches: used iff KV_QUANT_MODE in {2, 3}.
      USE_PER_TOKEN_HEAD_SCALES: tl.constexpr = (KV_QUANT_MODE >= 2) and (
          KV_QUANT_MODE <= 3
-@@ -534,12 +578,12 @@ def kernel_unified_attention(
+     )
+     USE_FP8_Q_DESCALE: tl.constexpr = KV_QUANT_MODE == 1 and Q_IS_FP8
+ 
++    # The TD *store* writes the real ``num_queries_per_kv`` heads and cannot pad
++    # (padded heads would corrupt the adjacent KV group's output). It is only
++    # valid when NQ_PADDED == num_queries_per_kv, i.e. pow2 GQA. The TD *load*
++    # can pad (zero-padded read), so non-pow2 GQA still benefits from a TD Q
++    # load while falling back to the masked pointer store.
++    USE_TD_STORE: tl.constexpr = USE_TD_QO and (BLOCK_M // BLOCK_Q == num_queries_per_kv)
++
+     if USE_TD:
+         tl.static_assert(
+             BLOCK_SIZE % TILE_SIZE == 0,
+@@ -335,10 +399,17 @@ def kernel_unified_attention(
+     offs_m = tl.arange(0, BLOCK_M)
+     offs_d = tl.arange(0, HEAD_SIZE_PADDED)
+     offs_t = tl.arange(0, TILE_SIZE)
+-    query_pos = q_block_local_idx * BLOCK_Q + offs_m // num_queries_per_kv
++    # Rows are packed as BLOCK_Q query positions x NQ_PADDED head slots, where
++    # NQ_PADDED = next_power_of_2(num_queries_per_kv) = BLOCK_M // BLOCK_Q.
++    # For pow2 GQA NQ_PADDED == num_queries_per_kv and this is unchanged; for
++    # non-pow2 GQA (e.g. Qwen2-7B nq=7) there are NQ_PADDED - nq padding slots
++    # per group that must be masked off so they don't alias the next KV group.
++    NQ_PADDED: tl.constexpr = BLOCK_M // BLOCK_Q
++    head_in_group = offs_m % NQ_PADDED
++    query_pos = q_block_local_idx * BLOCK_Q + offs_m // NQ_PADDED
+ 
+     query_offset_0 = cur_batch_in_all_start_index + query_pos
+-    query_offset_1 = kv_head_idx * num_queries_per_kv + offs_m % num_queries_per_kv
++    query_offset_1 = kv_head_idx * num_queries_per_kv + head_in_group
+     query_offset = (
+         query_offset_0[:, None] * query_stride_0
+         + query_offset_1[:, None] * query_stride_1
+@@ -347,7 +418,13 @@ def kernel_unified_attention(
+ 
+     dim_mask = tl.where(offs_d < HEAD_SIZE, 1, 0).to(tl.int1)
+     query_mask_0 = tl.where(query_pos < cur_batch_query_len, 1, 0).to(tl.int1)
+-    query_mask_1 = tl.where(query_offset_1 < num_query_heads, 1, 0).to(tl.int1)
++    # Mask both out-of-range query heads AND padding head slots
++    # (head_in_group >= num_queries_per_kv) introduced by NQ_PADDED packing.
++    query_mask_1 = tl.where(
++        (query_offset_1 < num_query_heads) & (head_in_group < num_queries_per_kv),
++        1,
++        0,
++    ).to(tl.int1)
+ 
+     # Q : (BLOCK_M, HEAD_SIZE_PADDED)
+     if USE_TD_QO:
+@@ -534,12 +611,12 @@ def kernel_unified_attention(
  
          # S : (BLOCK_M, TILE_SIZE)
          S = tl.zeros(shape=(BLOCK_M, TILE_SIZE), dtype=tl.float32)
@@ -122,7 +221,7 @@ index 93622957b..431b24945 100644
  
          if USE_SOFTCAP:
              S = apply_softcap(S, softcap)
-@@ -561,27 +605,14 @@ def kernel_unified_attention(
+@@ -561,34 +638,21 @@ def kernel_unified_attention(
          M, L, P, alpha = softmax_step(S, M, L)
          acc = acc * alpha[:, None]
  
@@ -154,7 +253,24 @@ index 93622957b..431b24945 100644
  
      # ---- Epilogue ---------------------------------------------------------
      if IS_3D:
-@@ -699,7 +730,6 @@ def reduce_segments(
+         if USE_FP8_Q_DESCALE:
+             acc *= value_scale
+         # Store per-segment partials; finalized by ``reduce_segments``.
+-        if USE_TD_QO:
++        if USE_TD_STORE:
+             # 3D target: segm_output[token, head, segm_idx, :].  Advance
+             # the base to the correct (token-start, head-start, segm)
+             # slice; strides step between tokens / heads of the flattened
+@@ -647,7 +711,7 @@ def kernel_unified_attention(
+         if USE_FP8:
+             acc = acc * tl.load(out_scale)
+             acc = tl.clamp(acc, FP8_MIN, FP8_MAX)
+-        if USE_TD_QO:
++        if USE_TD_STORE:
+             # 2D target: flat output[token, head, :].  Strides come
+             # straight from the caller (``output_stride_0`` per token,
+             # ``output_stride_1`` per head).
+@@ -699,7 +763,6 @@ def reduce_segments(
      HEAD_SIZE: tl.constexpr,  # int, must be power of 2
      HEAD_SIZE_PADDED: tl.constexpr,  # int, must be power of 2
      query_start_len_ptr,  # [num_seqs+1]
@@ -162,7 +278,7 @@ index 93622957b..431b24945 100644
      NUM_SEGMENTS_PER_SEQ: tl.constexpr,  # int
      USE_FP8: tl.constexpr,  # bool
      FP8_MIN: tl.constexpr = float8_info.min,
-@@ -709,7 +739,7 @@ def reduce_segments(
+@@ -709,7 +772,7 @@ def reduce_segments(
      query_head_idx = tl.program_id(1)
  
      seq_idx = find_seq_idx(
@@ -171,7 +287,7 @@ index 93622957b..431b24945 100644
      )
  
      # sequence len for this particular sequence
-@@ -929,11 +959,6 @@ def unified_attention(
+@@ -929,11 +992,6 @@ def unified_attention(
      num_queries_per_kv = num_query_heads // num_kv_heads
      head_size = q.shape[2]
  
@@ -183,7 +299,7 @@ index 93622957b..431b24945 100644
      # Tuned launch parameters; ``None`` lets Triton pick its defaults.
      launch_num_warps: int | None = None
      launch_num_stages: int | None = None
-@@ -949,22 +974,9 @@ def unified_attention(
+@@ -949,22 +1007,9 @@ def unified_attention(
          and current_platform.is_device_capability_family(100)
      )
      if tuned_large_head:
@@ -206,7 +322,7 @@ index 93622957b..431b24945 100644
      sliding_window_val = 1 + window_size[0] if window_size[0] >= 0 else 0
  
      # Compute chunked block size from sliding window if needed.
-@@ -975,12 +987,16 @@ def unified_attention(
+@@ -975,12 +1020,16 @@ def unified_attention(
      elif sliding_window_val <= 0:
          chunk_lookback = -1
  
@@ -229,7 +345,22 @@ index 93622957b..431b24945 100644
  
      # Wider KV tile for the tuned large-head path (see above). Only the 2D
      # path (used when max_seqlen_q > 1) reads TILE_SIZE_PREFILL.
-@@ -1036,18 +1052,11 @@ def unified_attention(
+@@ -1010,9 +1059,12 @@ def unified_attention(
+     # for Q/O in that case — KV tile loads are unaffected because their
+     # ``shape`` already matches ``block_shape`` on the inner axis.
+     head_size_padded = triton.next_power_of_2(head_size)
+-    _is_pow2_nq = (num_queries_per_kv & (num_queries_per_kv - 1)) == 0
+     _is_pow2_hs = head_size == head_size_padded
+-    use_td_qo = use_td and _is_pow2_nq and _is_pow2_hs
++    # Non-pow2 num_queries_per_kv is now supported by the TD Q load (it pads the
++    # head dimension to next_power_of_2 and the kernel masks the padding). The
++    # TD store still requires pow2 nq and is gated separately in-kernel
++    # (USE_TD_STORE); non-pow2 nq uses the masked pointer store.
++    use_td_qo = use_td and _is_pow2_hs
+ 
+     # ``_load_q_td`` / ``_store_output_td`` flatten ``(num_queries_per_kv,
+     # HEAD_SIZE)`` into a single contiguous inner axis.  That's only
+@@ -1036,18 +1088,11 @@ def unified_attention(
      # Launch the 2D kernel if
      # 1. No intermediate tiled softmax buffers for the 3D kernel have been allocated, or
      # 2. The batch includes at least one prefill request, or
@@ -253,7 +384,7 @@ index 93622957b..431b24945 100644
  
      # The kernel signature is the same for 2D and 3D — only the launch
      # grid + a handful of constexpr toggles differ.  Per-token-head scale
-@@ -1068,17 +1077,57 @@ def unified_attention(
+@@ -1068,17 +1113,57 @@ def unified_attention(
          v_scale_ptr = None
      # 3D needs real segm tensors; 2D never touches them.  Pass ``None`` in
      # 2D mode so Triton can skip materialising these pointer arguments.
@@ -314,7 +445,7 @@ index 93622957b..431b24945 100644
          tile_size = TILE_SIZE_DECODE
  
      launch_kwargs: dict[str, int] = {}
-@@ -1150,9 +1199,7 @@ def unified_attention(
+@@ -1150,9 +1235,7 @@ def unified_attention(
          stride_vs_slot=vs_slot,
          stride_vs_head=vs_head,
          query_start_len_ptr=cu_seqlens_q,
@@ -324,7 +455,7 @@ index 93622957b..431b24945 100644
          NUM_SEGMENTS_PER_SEQ=num_segments,
          USE_FP8=output_scale is not None,
          IS_3D=use_3d,
-@@ -1183,7 +1230,6 @@ def unified_attention(
+@@ -1183,7 +1266,6 @@ def unified_attention(
              HEAD_SIZE=head_size,
              HEAD_SIZE_PADDED=head_size_padded,
              query_start_len_ptr=cu_seqlens_q,
