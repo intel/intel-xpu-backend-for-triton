@@ -5,8 +5,6 @@ as kernel arguments) reach the efficient 2D block I/O hardware path, producing
 the same results and codegen as device-side tl.make_tensor_descriptor.
 """
 
-import os
-
 import pytest
 import torch
 
@@ -15,7 +13,10 @@ import triton.language as tl
 from triton._internal_testing import is_xpu
 from triton.tools.tensor_descriptor import TensorDescriptor
 
-os.environ["TRITON_INTEL_ENABLE_HOST_DESCRIPTOR_SYNTHESIS"] = "1"
+
+@pytest.fixture(autouse=True)
+def enable_host_descriptor_synthesis(monkeypatch):
+    monkeypatch.setenv("TRITON_INTEL_ENABLE_HOST_DESCRIPTOR_SYNTHESIS", "1")
 
 
 def _has_2d_block_io():
