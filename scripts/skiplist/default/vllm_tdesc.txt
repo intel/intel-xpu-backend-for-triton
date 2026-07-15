@@ -497,7 +497,7 @@ tests/kernels/attention/test_triton_unified_attention.py::test_triton_unified_at
 tests/kernels/attention/test_triton_unified_attention.py::test_triton_unified_attn_use_td[8-2048-50.0-128-16-96-num_heads2-seq_lens1]
 tests/kernels/attention/test_triton_unified_attention.py::test_triton_unified_attn_use_td_tile_clamp[num_heads1]
 
-# TILE_SIZE_PREFILL must be <= block_size:
+# TILE_SIZE_PREFILL must be <= block_size: https://github.com/intel/intel-xpu-backend-for-triton/issues/6951
 tests/kernels/attention/test_triton_unified_attention.py::test_triton_unified_attn[0-q_dtype1-32768-None-dtype0-None-16-128-num_heads0-seq_lens0]
 tests/kernels/attention/test_triton_unified_attention.py::test_triton_unified_attn[0-q_dtype1-32768-None-dtype0-None-16-128-num_heads0-seq_lens1]
 tests/kernels/attention/test_triton_unified_attention.py::test_triton_unified_attn[0-q_dtype1-32768-None-dtype0-None-16-128-num_heads1-seq_lens0]
