@@ -178,15 +178,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %c64_i32 = arith.constant 64 : i32
     %c119_i32 = arith.constant 119 : i32
 
-    // CHECK: tt.make_tensor_descriptor
-    // CHECK-NEXT: tt.descriptor_load
-    // CHECK-NOT: ttig.block_io = "row_major"
+    // CHECK: tt.descriptor_load {{.*}} {ttig.block_io = "row_major"{{.*}}}
     %0 = tt.make_tensor_descriptor %base, [%c64_i32, %c119_i32], [%pitch, %c1_i64] : !tt.ptr<f32>, !tt.tensordesc<8x16xf32, #dot_a>
     %1 = tt.descriptor_load %0[%c0_i32, %c0_i32] : !tt.tensordesc<8x16xf32, #dot_a> -> tensor<8x16xf32, #dot_a>
 
-    // CHECK: tt.make_tensor_descriptor
-    // CHECK-NEXT: tt.descriptor_load
-    // CHECK-NOT: ttig.block_io = "row_major"
+    // CHECK: tt.descriptor_load {{.*}} {ttig.block_io = "row_major"{{.*}}}
     %2 = tt.make_tensor_descriptor %base, [%c64_i32, %k], [%pitch, %c1_i64] : !tt.ptr<f32>, !tt.tensordesc<8x16xf32, #dot_a>
     %3 = tt.descriptor_load %2[%c0_i32, %c0_i32] : !tt.tensordesc<8x16xf32, #dot_a> -> tensor<8x16xf32, #dot_a>
 

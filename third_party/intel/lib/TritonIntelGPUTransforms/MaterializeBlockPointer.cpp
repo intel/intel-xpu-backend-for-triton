@@ -890,7 +890,7 @@ private:
     // Analyze the shape of the stride one dimension to ensure it satisfies HW
     // constraints.
     Value baseWidth = tt::intel::getFinalValue(shape[strideOneDimVal]);
-    unsigned divisor = std::max(2u, llvm::divideCeil(32u, elementWidth));
+    unsigned divisor = llvm::divideCeil(32u, elementWidth);
     if (!ttgi::isDivisible(baseWidth, divisor)) {
       LLVM_DEBUG({
         llvm::dbgs() << "baseWidth does not satisfies HW constraint: ";
