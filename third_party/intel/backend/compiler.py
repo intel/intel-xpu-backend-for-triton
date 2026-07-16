@@ -46,8 +46,9 @@ class XPUOptions:
     allow_fp8e4nv: bool = False
     allow_fp8e4b15: bool = True
     grf_mode: str = 'default'
-    loop_distribute: bool = False
-    code_sinking: bool = False
+    loop_distribute: bool = knobs.intel.enable_loop_distribution
+    code_sinking: bool = knobs.intel.enable_code_sinking
+    sub_32_dpas: bool = knobs.intel.enable_sub_32_dpas
     use_barrier: bool = False
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
@@ -225,6 +226,45 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             args["enable_fp_fusion"] = knobs.language.default_fp_fusion
         return XPUOptions(**args)
 
+    @staticmethod
+    def parse_attr(desc):
+        ret = BaseBackend.parse_attr(desc)
+        if "L" in desc:
+            ret += [["tt.last_dim_divisibility", 8]]
+        if "N" in desc:
+            ret += [["tt.padding", 1]]
+        # "S<val>,<val>,..." encodes non-last stride values for rank-3+
+        # descriptors (enables constexpr stride optimization for FuseReshape).
+        if "S" in desc:
+            idx = desc.index("S") + 1
+            stride_str = desc[idx:]
+            try:
+                strides = [int(x) for x in stride_str.split(",") if x]
+                for i, s in enumerate(strides):
+                    ret += [[f"tt.stride.{i}", s]]
+            except ValueError:
+                pass
+        return ret
+
+    @staticmethod
+    def get_tensordesc_specialization(arg, **kwargs):
+        # "L" = last-dim shape satisfies 2D block IO surface width alignment
+        #   (needed for satisfies2DBlockReadAlignment in MaterializeBlockPointer).
+        #   HW requires 4-byte (DW) alignment; combined with minimum 2 elements
+        #   for the stride-one dim this means shape[-1] * elem_bytes % 8 == 0.
+        # "N" = NaN padding (enables tt.padding attribute).
+        # "S<val>,..." = non-last stride values for rank-3+ (enables constexpr
+        #   stride optimization for FuseReshape).
+        key = ""
+        elem_bytes = arg.base.dtype.itemsize
+        if (arg.shape[-1] * elem_bytes) % 8 == 0:
+            key += "L"
+        if getattr(arg, "padding", None) == "nan":
+            key += "N"
+        if len(arg.strides) >= 3:
+            key += "S" + ",".join(str(s) for s in arg.strides[:-1])
+        return key
+
     def pack_metadata(self, metadata):
         return metadata
 
@@ -295,6 +335,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             "has_subgroup_matrix_multiply_accumulate_bfloat8"]
         module_opts.support_rounded_divide_sqrt = properties["has_rounded_divide_sqrt"]
         module_opts.threads_per_warp = opt.warp_size
+        module_opts.sub_32_dpas = opt.sub_32_dpas
         module_opts.target_arch = cls.target_arch
 
     @classmethod
@@ -319,7 +360,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.ttir.add_reorder_broadcast(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
-        if opt.loop_distribute or knobs.intel.enable_loop_distribution:
+        if opt.loop_distribute:
             intel.passes.ttgpuir.add_loop_distribute(pm)
         passes.ttir.add_loop_unroll(pm)
         pm.run(mod, 'make_ttir')
@@ -382,7 +423,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # Off by default: code sinking is perf-neutral on measured kernels (it
         # reliably reduces register spills, but the relieved traffic is not on
         # the critical path on current HW). Opt in via the env var for A/B work.
-        if opt.code_sinking or knobs.intel.enable_code_sinking:
+        if opt.code_sinking:
             intel.passes.ttgpuir.add_code_sinking(pm)
 
         passes.ttir.add_loop_aware_cse(pm)
@@ -501,7 +542,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             llvm.link_extern_libs(llvm_mod, paths)
 
         cls.optimize_llvm_mod(llvm_mod, options)
-        intel.post_process_llir(llvm_mod)
+        is_lts = cls.is_lts(metadata["target"].arch.get("driver_version"))
+        intel.post_process_llir(llvm_mod, is_lts)
 
         # Get some metadata
         total_num_warps = src.get_int_attr("ttg.total-num-warps")

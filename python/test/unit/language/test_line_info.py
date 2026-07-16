@@ -1,4 +1,5 @@
 import inspect
+import re
 import subprocess
 import tempfile
 
@@ -157,7 +158,13 @@ def check_file_lines(file_lines, file_name, lineno, should_contain=True):
         lineno: line number, -1 means do not check line number
         should_contain: whether the file name and line number should be in the file_lines
     """
+    # On Windows, disassemblers print path separators as backslashes, and
+    # escape each backslash again in the string literal (e.g. "/path\\test.py"
+    # for source path "/path/test.py"), so normalize both sides before
+    # comparing.
+    file_name = re.sub(r"\\+", "/", file_name)
     for file, line in file_lines:
+        file = re.sub(r"\\+", "/", file)
         if lineno == -1 and file_name in file:
             return True
         if file_name in file and str(lineno) in line:

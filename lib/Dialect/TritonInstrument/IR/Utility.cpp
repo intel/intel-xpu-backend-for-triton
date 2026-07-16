@@ -533,9 +533,13 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
     ModuleOp module, FunctionBuilder &fb, const ConSanTargetHooks *hooks) {
   SmallVector<SmallVector<BufferRegion>, numMemTypes> bufRegions(numMemTypes);
   SmallVector<BufferRegion> barrierRegions;
-  getBuffersAndBarriers(module, bufRegions, barrierRegions);
+  if (failed(getBuffersAndBarriers(module, bufRegions, barrierRegions)))
+    return failure();
   int numCTAs = lookupNumCTAs(module);
   threadLayout = getThreadLayout(module, hooks);
+  hasAsyncProxyFenceTracking = hooks &&
+                               hooks->needsAsyncProxyFenceTracking(module) &&
+                               !bufRegions[(int)MemType::SHARED_MEM].empty();
   int captureCounter = 0;
   int64_t captureBytes = 0;
 
@@ -601,6 +605,17 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
             64, fb));
     passValueToWarpSpecialize(readVisibility[iMemType].at(entryRegion),
                               readVisibility[iMemType]);
+
+    if (memType == MemType::SHARED_MEM && hasAsyncProxyFenceTracking) {
+      proxyAccessVisibility.insert(
+          entryRegion,
+          createZeroInitStateTensor(b,
+                                    {numCTAs, numBufs, numCTAs,
+                                     threadLayout.numBaseThreadSlots, numCTAs},
+                                    64, fb));
+      passValueToWarpSpecialize(proxyAccessVisibility.at(entryRegion),
+                                proxyAccessVisibility);
+    }
   }
 
   if (!barrierRegions.empty()) {
@@ -647,6 +662,16 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
         passValueToWarpSpecialize(readTracking[iMemType].at(entryRegion),
                                   readTracking[iMemType]);
       }
+    }
+    if (hasAsyncProxyFenceTracking &&
+        !bufRegions[(int)MemType::SHARED_MEM].empty()) {
+      int numBufs = bufRegions[(int)MemType::SHARED_MEM].size();
+      proxyAccessTracking.insert(
+          entryRegion,
+          createZeroInitStateTensor(
+              b, {numCTAs, numBufs, numCTAs, numBarriers, numCTAs}, 64, fb));
+      passValueToWarpSpecialize(proxyAccessTracking.at(entryRegion),
+                                proxyAccessTracking);
     }
   }
 
@@ -701,8 +726,9 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
     int numCommitKinds = 0;
     for (int i = 0; i < CommitKind::NumCommitKinds; ++i)
       numCommitKinds += !commits[i].empty();
-    int expected = estimateConSanCaptureCount(
-        numActiveMemTypes, !barrierRegions.empty(), numCommitKinds);
+    int expected =
+        estimateConSanCaptureCount(numActiveMemTypes, !barrierRegions.empty(),
+                                   numCommitKinds, hasAsyncProxyFenceTracking);
     assert(captureCounter == expected &&
            "capture count changed -- update estimateConSanCaptureCount if this "
            "is expected!");
@@ -713,7 +739,7 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
   return success();
 }
 
-void AuxDataMap::getBuffersAndBarriers(
+LogicalResult AuxDataMap::getBuffersAndBarriers(
     ModuleOp module, SmallVector<SmallVector<BufferRegion>, 2> &bufRegions,
     SmallVector<BufferRegion> &barrierRegions) {
   // Collect shared memory buffers allocated in the module
@@ -721,7 +747,7 @@ void AuxDataMap::getBuffersAndBarriers(
   triton::BufferRegionAnalysis *analysis =
       solver->load<triton::BufferRegionAnalysis>();
   if (failed(solver->initializeAndRun(module)))
-    return;
+    return failure();
 
   analysis->calculateUsedBufferRegions(module);
   bufRegions[(int)MemType::SHARED_MEM] = analysis->getAllUsedBufferRegions(
@@ -745,6 +771,7 @@ void AuxDataMap::getBuffersAndBarriers(
         llvm::NextPowerOf2(bufRegions[iMemType].size() - 1),
         BufferRegion{0, 0});
   }
+  return success();
 }
 
 void AuxDataMap::passToWarpSpecialize(FuncOp func, ValueType valueType,

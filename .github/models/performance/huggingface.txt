@@ -1,10 +1,8 @@
 BlenderbotSmallForCausalLM
-CamemBert
 DistilBertForMaskedLM
 ElectraForCausalLM
 GPT2ForSequenceClassification
 MobileBertForMaskedLM
 MobileBertForQuestionAnswering
-Speech2Text2ForCausalLM
 T5ForConditionalGeneration
 XLNetLMHeadModel

@@ -382,10 +382,7 @@ struct BuildFlags {
     if (build_flags_str.find(SMALL_GRF_FLAG) != std::string::npos) {
       return 128;
     }
-    // TODO: arguably we could return 128 if we find no flag instead of 0. For
-    // now, stick with the conservative choice and alert the user only if a
-    // specific GRF mode is specified.
-    return 0;
+    return 128; // default GRF size if no flag is specified
   }
 
   const bool hasGRFSizeFlag() const {
@@ -809,50 +806,35 @@ ExtractorTypeIndex &operator++(ExtractorTypeIndex &idx) {
   return idx;
 }
 
+typedef void (*SetArgFunc)(sycl::handler &, int, const void *);
+
+// Static table indexed by ExtractorTypeIndex, called from the per-argument
+// hot path inside the kernel submit lambda. A small, cache-resident table of
+// function pointers turns what would otherwise be a per-argument switch
+// (branch mispredicts under cache pressure) into a simple indirect call.
+// Positional initialization matches enum order to avoid designated
+// initializers, which require /std:c++20 on MSVC (see extraction_map above).
+static const SetArgFunc set_arg_table[EXTRACTOR_TYPE_COUNT] = {
+    /* EXTRACTOR_UNKOWN_INDEX   */ nullptr,
+    /* EXTRACTOR_POINTER_INDEX  */ set_scalar_arg<void *>,
+    /* EXTRACTOR_INT8_INDEX     */ set_scalar_arg<int8_t>,
+    /* EXTRACTOR_INT16_INDEX    */ set_scalar_arg<int16_t>,
+    /* EXTRACTOR_INT32_INDEX    */ set_scalar_arg<int32_t>,
+    /* EXTRACTOR_INT64_INDEX    */ set_scalar_arg<int64_t>,
+    /* EXTRACTOR_UINT8_INDEX    */ set_scalar_arg<uint8_t>,
+    /* EXTRACTOR_UINT16_INDEX   */ set_scalar_arg<uint16_t>,
+    /* EXTRACTOR_UINT32_INDEX   */ set_scalar_arg<uint32_t>,
+    /* EXTRACTOR_UINT64_INDEX   */ set_scalar_arg<uint64_t>,
+    /* EXTRACTOR_FP16_INDEX     */ set_scalar_arg<uint16_t>,
+    /* EXTRACTOR_BF16_INDEX     */ set_scalar_arg<uint16_t>,
+    /* EXTRACTOR_FP32_INDEX     */ set_scalar_arg<uint32_t>,
+    /* EXTRACTOR_FP64_INDEX     */ set_scalar_arg<uint64_t>,
+};
+
 static inline void setScalarArgByType(sycl::handler &cgh, int index,
                                       const void *value, uint8_t type_idx) {
-  switch ((ExtractorTypeIndex)type_idx) {
-  case EXTRACTOR_POINTER_INDEX:
-    set_scalar_arg<void *>(cgh, index, value);
-    break;
-  case EXTRACTOR_INT8_INDEX:
-    set_scalar_arg<int8_t>(cgh, index, value);
-    break;
-  case EXTRACTOR_INT16_INDEX:
-    set_scalar_arg<int16_t>(cgh, index, value);
-    break;
-  case EXTRACTOR_INT32_INDEX:
-    set_scalar_arg<int32_t>(cgh, index, value);
-    break;
-  case EXTRACTOR_INT64_INDEX:
-    set_scalar_arg<int64_t>(cgh, index, value);
-    break;
-  case EXTRACTOR_UINT8_INDEX:
-    set_scalar_arg<uint8_t>(cgh, index, value);
-    break;
-  case EXTRACTOR_UINT16_INDEX:
-    set_scalar_arg<uint16_t>(cgh, index, value);
-    break;
-  case EXTRACTOR_UINT32_INDEX:
-    set_scalar_arg<uint32_t>(cgh, index, value);
-    break;
-  case EXTRACTOR_UINT64_INDEX:
-    set_scalar_arg<uint64_t>(cgh, index, value);
-    break;
-  case EXTRACTOR_FP16_INDEX:
-    set_scalar_arg<uint16_t>(cgh, index, value);
-    break;
-  case EXTRACTOR_BF16_INDEX:
-    set_scalar_arg<uint16_t>(cgh, index, value);
-    break;
-  case EXTRACTOR_FP32_INDEX:
-    set_scalar_arg<uint32_t>(cgh, index, value);
-    break;
-  case EXTRACTOR_FP64_INDEX:
-    set_scalar_arg<uint64_t>(cgh, index, value);
-    break;
-  default:
-    break;
+  if (type_idx < EXTRACTOR_TYPE_COUNT && set_arg_table[type_idx] != nullptr) {
+    set_arg_table[type_idx](cgh, index, value);
   }
 }
 
@@ -1067,6 +1049,12 @@ Extractor getExtractor(uint8_t index) {
   return extraction_map[index];
 }
 
+// Rounds `value` up to the next multiple of `alignment` (which must be a
+// power of 2).
+static inline uintptr_t alignUp(uintptr_t value, size_t alignment) {
+  return (value + alignment - 1) & ~(uintptr_t)(alignment - 1);
+}
+
 static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
                                int num_warps, int threads_per_warp,
                                int shared_memory, sycl::queue &stream,
@@ -1074,9 +1062,9 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
                                void *profile_scratch, uint32_t num_params,
                                void **params, uint8_t *extractor_data) {
 
+#if defined(TRITON_INTEL_INJECT_PYTORCH)
   std::string kernel_name =
       kernel_ptr.get_info<sycl::info::kernel::function_name>();
-#if defined(TRITON_INTEL_INJECT_PYTORCH)
   RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {});
 #endif
 
@@ -1098,6 +1086,10 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
 
   static bool launchDebug = getBoolEnv("TRITON_INTEL_LAUNCH_DEBUG");
   if (launchDebug) {
+#if !defined(TRITON_INTEL_INJECT_PYTORCH)
+    std::string kernel_name =
+        kernel_ptr.get_info<sycl::info::kernel::function_name>();
+#endif
     std::cout << "kernel info name:" << kernel_name << " @" << &kernel_ptr
               << std::endl;
     std::cout << "kernel info attributes:"
@@ -1358,35 +1350,41 @@ extern "C" EXPORT_FUNC PyObject *launch(PyObject *args) {
   void **params = (void **)alloca(num_params * sizeof(void *));
   int params_idx = 0;
   PointerCheckScope pointerCheckScope(stream);
-  // This loop has to stay in the same function that owns params, since we are
-  // using alloca to allocate pointers to it on the stack of the function.
+
+  // Precompute a tightly-packed layout for all parameter storage, then do a
+  // single alloca for the whole buffer instead of one alloca per parameter.
+  // This keeps all parameter data contiguous on the stack rather than
+  // scattered across num_args separate stack regions.
+  size_t *param_offset = (size_t *)alloca(num_args * sizeof(size_t));
+  size_t total_size = 0;
+  size_t max_alignment = 1;
   for (Py_ssize_t i = 0; i < num_args; ++i) {
-    g_pointer_check_arg_idx = static_cast<int>(i);
-    // Get extractor that will send back a struct with
-    // * size for allocation
-    // * function to call to put the parameter in params buffer
     Extractor extractor = getExtractor(extractor_data[i]);
     if (extractor.extract == NULL) {
       PyBuffer_Release(&signature);
       return NULL;
     }
-
-    size_t alignment = extractor.alignment;
-    if (alignment != 0) {
-      // Allocate enough space on the stack to guarantee an aligned block.
-      size_t size_with_alignment = extractor.size + alignment - 1;
-      void *storage_ptr = alloca(size_with_alignment);
-      void *aligned_ptr = (void *)((((uintptr_t)storage_ptr) + alignment - 1) &
-                                   ~(alignment - 1));
-      if (aligned_ptr == NULL) {
-        PyErr_SetString(PyExc_MemoryError, "Failed to align parameter storage");
-        PyBuffer_Release(&signature);
-        return NULL;
-      }
-      params[params_idx] = aligned_ptr;
-    } else {
-      params[params_idx] = alloca(extractor.size);
+    size_t alignment = extractor.alignment ? extractor.alignment : 1;
+    total_size = alignUp(total_size, alignment);
+    param_offset[i] = total_size;
+    total_size += extractor.size;
+    if (alignment > max_alignment) {
+      max_alignment = alignment;
     }
+  }
+  // Offsets above are only aligned relative to offset 0, so the base
+  // pointer itself must be rounded up to max_alignment for those relative
+  // offsets to translate into absolutely-aligned addresses.
+  char *param_storage_raw = (char *)alloca(total_size + max_alignment - 1);
+  char *param_storage =
+      (char *)alignUp((uintptr_t)param_storage_raw, max_alignment);
+
+  // This loop has to stay in the same function that owns params, since we are
+  // using alloca to allocate pointers to it on the stack of the function.
+  for (Py_ssize_t i = 0; i < num_args; ++i) {
+    g_pointer_check_arg_idx = static_cast<int>(i);
+    Extractor extractor = getExtractor(extractor_data[i]);
+    params[params_idx] = param_storage + param_offset[i];
 
     PyObject *current_arg = args_data[i];
     if (!extractor.extract(params[params_idx++], current_arg)) {
