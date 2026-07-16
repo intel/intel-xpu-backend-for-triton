@@ -161,16 +161,24 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: tt.func public @mul_distribute_no_overflow(
+  // CHECK-SAME: %[[X:[^:]*]]: tensor<64xi32>
   tt.func public @mul_distribute_no_overflow(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %x: tensor<64xi32>) {
     // CHECK: %[[C:.*]] = arith.constant dense<-8> : tensor<64xi32>
     %c-8_i32 = arith.constant dense<-8> : tensor<64xi32>
     // CHECK: %[[K:.*]] = arith.constant dense<67108864> : tensor<64xi32>
     %c67108864_i32 = arith.constant dense<67108864> : tensor<64xi32>
     // COM: The original fused `(x + C) * K` must survive unchanged -- not
-    // COM: distributed into a standalone `x * K` cross term.
-    // CHECK: %[[SHIFTED:.*]] = arith.addi %{{.*}}, %[[C]] : tensor<64xi32>
+    // COM: distributed into a standalone `x * K` cross term. Assert this
+    // COM: directly: no arith.muli may take %[[X]] as an operand, since the
+    // COM: only sound multiply of %x is the fused `(x + C) * K` below, never
+    // COM: a bare `x * K`.
+    // CHECK-NOT: arith.muli %[[X]]
+    // CHECK-NOT: arith.muli {{.*}}, %[[X]]
+    // CHECK: %[[SHIFTED:.*]] = arith.addi %[[X]], %[[C]] : tensor<64xi32>
     %shifted = arith.addi %x, %c-8_i32 : tensor<64xi32>
     // CHECK: %[[OFFSET:.*]] = arith.muli %[[SHIFTED]], %[[K]] : tensor<64xi32>
+    // CHECK-NOT: arith.muli %[[X]]
+    // CHECK-NOT: arith.muli {{.*}}, %[[X]]
     %offset = arith.muli %shifted, %c67108864_i32 : tensor<64xi32>
     %base = tt.splat %arg0 : !tt.ptr<f32> -> tensor<64x!tt.ptr<f32>>
     %ptr = tt.addptr %base, %offset : tensor<64x!tt.ptr<f32>>, tensor<64xi32>
