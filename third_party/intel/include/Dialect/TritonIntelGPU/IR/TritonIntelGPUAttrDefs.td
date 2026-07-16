@@ -44,7 +44,7 @@ The encoding is characterized by parameters:
         - `warpsPerCTA` indicates the distribution of the warps in the block. The order is [1, 0] for rank 2.
         - `repCluster` indicates the cluster size of the repetitions of the DPAS tile.
         - `threadsPerWarp__` AKA threadsPerWarp, use the name threadsPerWarp__ to avoid conflicting
-                            with the `getThreadsPerWarp` in interface DistributedLayout. Currently only 16 is supported.
+                            with the `getThreadsPerWarp` in interface DistributedLayout.
         - `fp4KPack` How many fp4 values are packed into an i8 type along the k dimension. Valid only when opsPerChannel=4.
 
 The values of the matrix is distributed across the threads in the subgroup as row-major order.
