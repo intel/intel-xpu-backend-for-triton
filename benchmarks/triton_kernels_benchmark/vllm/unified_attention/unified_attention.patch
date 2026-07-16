@@ -33,7 +33,7 @@ index b2667935c..678d938b6 100644
      right = num_seqs
      while left < right:
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 93622957b..7de0b6f21 100644
+index 93622957b..9151e6613 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -7,8 +7,6 @@
@@ -105,24 +105,35 @@ index 93622957b..7de0b6f21 100644
      # Per-(token, head) scale caches: used iff KV_QUANT_MODE in {2, 3}.
      USE_PER_TOKEN_HEAD_SCALES: tl.constexpr = (KV_QUANT_MODE >= 2) and (
          KV_QUANT_MODE <= 3
-@@ -534,12 +578,12 @@ def kernel_unified_attention(
+@@ -534,12 +578,22 @@ def kernel_unified_attention(
  
          # S : (BLOCK_M, TILE_SIZE)
          S = tl.zeros(shape=(BLOCK_M, TILE_SIZE), dtype=tl.float32)
-+        Q_scaled = (Q * score_scale).to(Q.dtype)
-         if USE_PER_TOKEN_HEAD_SCALES:
+-        if USE_PER_TOKEN_HEAD_SCALES:
 -            # Per-token-head quant: fuse softmax_scale with per-head k_scale
 -            # to avoid a separate BLOCK_M × TILE_SIZE multiply on S.
 -            S += tl.dot(Q, K) * (score_scale * k_token_head_scales[None, :])
-+            # Per-token-head quant: per-head k_scale still multiplies S.
-+            S += tl.dot(Q_scaled, K) * k_token_head_scales[None, :]
-         else:
--            S += score_scale * tl.dot(Q, K)
-+            S += tl.dot(Q_scaled, K)
+-        else:
++        if USE_FP8_Q_DESCALE:
++            # fp8 query: score_scale = scale * q_scale * k_scale (~1e-2).
++            # Folding it into Q and casting back to Q.dtype (fp8) would
++            # requantize the product and destroy precision, so keep the
++            # scale on S here.
+             S += score_scale * tl.dot(Q, K)
++        else:
++            # Reassociate so ``score_scale * Q`` is loop-invariant: the
++            # compiler hoists the multiply out of the tile loop instead of
++            # scaling the BLOCK_M × TILE_SIZE S matrix on every iteration.
++            Q_scaled = (Q * score_scale).to(Q.dtype)
++            if USE_PER_TOKEN_HEAD_SCALES:
++                # Per-token-head quant: per-head k_scale still multiplies S.
++                S += tl.dot(Q_scaled, K) * k_token_head_scales[None, :]
++            else:
++                S += tl.dot(Q_scaled, K)
  
          if USE_SOFTCAP:
              S = apply_softcap(S, softcap)
-@@ -561,27 +605,14 @@ def kernel_unified_attention(
+@@ -561,27 +615,14 @@ def kernel_unified_attention(
          M, L, P, alpha = softmax_step(S, M, L)
          acc = acc * alpha[:, None]
  
@@ -154,7 +165,7 @@ index 93622957b..7de0b6f21 100644
  
      # ---- Epilogue ---------------------------------------------------------
      if IS_3D:
-@@ -699,7 +730,6 @@ def reduce_segments(
+@@ -699,7 +740,6 @@ def reduce_segments(
      HEAD_SIZE: tl.constexpr,  # int, must be power of 2
      HEAD_SIZE_PADDED: tl.constexpr,  # int, must be power of 2
      query_start_len_ptr,  # [num_seqs+1]
@@ -162,7 +173,7 @@ index 93622957b..7de0b6f21 100644
      NUM_SEGMENTS_PER_SEQ: tl.constexpr,  # int
      USE_FP8: tl.constexpr,  # bool
      FP8_MIN: tl.constexpr = float8_info.min,
-@@ -709,7 +739,7 @@ def reduce_segments(
+@@ -709,7 +749,7 @@ def reduce_segments(
      query_head_idx = tl.program_id(1)
  
      seq_idx = find_seq_idx(
@@ -171,7 +182,7 @@ index 93622957b..7de0b6f21 100644
      )
  
      # sequence len for this particular sequence
-@@ -929,11 +959,6 @@ def unified_attention(
+@@ -929,11 +969,6 @@ def unified_attention(
      num_queries_per_kv = num_query_heads // num_kv_heads
      head_size = q.shape[2]
  
@@ -183,7 +194,7 @@ index 93622957b..7de0b6f21 100644
      # Tuned launch parameters; ``None`` lets Triton pick its defaults.
      launch_num_warps: int | None = None
      launch_num_stages: int | None = None
-@@ -949,22 +974,9 @@ def unified_attention(
+@@ -949,22 +984,9 @@ def unified_attention(
          and current_platform.is_device_capability_family(100)
      )
      if tuned_large_head:
@@ -206,7 +217,7 @@ index 93622957b..7de0b6f21 100644
      sliding_window_val = 1 + window_size[0] if window_size[0] >= 0 else 0
  
      # Compute chunked block size from sliding window if needed.
-@@ -975,12 +987,16 @@ def unified_attention(
+@@ -975,12 +997,16 @@ def unified_attention(
      elif sliding_window_val <= 0:
          chunk_lookback = -1
  
@@ -229,7 +240,7 @@ index 93622957b..7de0b6f21 100644
  
      # Wider KV tile for the tuned large-head path (see above). Only the 2D
      # path (used when max_seqlen_q > 1) reads TILE_SIZE_PREFILL.
-@@ -1036,18 +1052,11 @@ def unified_attention(
+@@ -1036,18 +1062,11 @@ def unified_attention(
      # Launch the 2D kernel if
      # 1. No intermediate tiled softmax buffers for the 3D kernel have been allocated, or
      # 2. The batch includes at least one prefill request, or
@@ -253,7 +264,7 @@ index 93622957b..7de0b6f21 100644
  
      # The kernel signature is the same for 2D and 3D — only the launch
      # grid + a handful of constexpr toggles differ.  Per-token-head scale
-@@ -1068,17 +1077,57 @@ def unified_attention(
+@@ -1068,17 +1087,57 @@ def unified_attention(
          v_scale_ptr = None
      # 3D needs real segm tensors; 2D never touches them.  Pass ``None`` in
      # 2D mode so Triton can skip materialising these pointer arguments.
@@ -314,7 +325,7 @@ index 93622957b..7de0b6f21 100644
          tile_size = TILE_SIZE_DECODE
  
      launch_kwargs: dict[str, int] = {}
-@@ -1150,9 +1199,7 @@ def unified_attention(
+@@ -1150,9 +1209,7 @@ def unified_attention(
          stride_vs_slot=vs_slot,
          stride_vs_head=vs_head,
          query_start_len_ptr=cu_seqlens_q,
@@ -324,7 +335,7 @@ index 93622957b..7de0b6f21 100644
          NUM_SEGMENTS_PER_SEQ=num_segments,
          USE_FP8=output_scale is not None,
          IS_3D=use_3d,
-@@ -1183,7 +1230,6 @@ def unified_attention(
+@@ -1183,7 +1240,6 @@ def unified_attention(
              HEAD_SIZE=head_size,
              HEAD_SIZE_PADDED=head_size_padded,
              query_start_len_ptr=cu_seqlens_q,
