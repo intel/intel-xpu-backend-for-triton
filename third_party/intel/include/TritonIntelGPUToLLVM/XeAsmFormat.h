@@ -315,6 +315,11 @@ struct XeInstrExecution {
   bool onlyAttachMLIRArgs{};
 };
 
+struct XeVISAInstr : public XeInstrBase<XeVISAInstr> {
+  using XeInstrBase<XeVISAInstr>::XeInstrBase;
+
+  static std::optional<std::string> getTypeName(Type scalarTy);
+};
 } // namespace triton
 } // namespace mlir
 

@@ -250,6 +250,42 @@ llvm.func @matrix_2Dblockload(%ptr : !llvm.ptr, %base_height : i32, %base_pitch 
 
 // -----
 
+llvm.func @triton_gen.sub_group_gather_load_invalid_addrs(%addrs: vector<16xi64>, %preds: vector<32xi1>) {
+  // expected-error @+1 {{'triton_gen.sub_group_gather_load' op expects addrs to be vector<32xi64>}}
+  %0 = triton_gen.sub_group_gather_load %addrs, %preds : (vector<16xi64>, vector<32xi1>) -> vector<4xi64>
+  llvm.return
+}
+
+// -----
+
+llvm.func @triton_gen.sub_group_gather_load_invalid_preds(%addrs: vector<32xi64>, %preds: vector<16xi1>) {
+  // expected-error @+1 {{'triton_gen.sub_group_gather_load' op expects preds to be vector<32xi1>}}
+  %0 = triton_gen.sub_group_gather_load %addrs, %preds : (vector<32xi64>, vector<16xi1>) -> vector<4xi64>
+  llvm.return
+}
+
+// -----
+
+module attributes {"ttg.threads-per-warp" = 16 : i32} {
+llvm.func @triton_gen.sub_group_gather_load_invalid_payload_divisibility(%addrs: vector<32xi64>, %preds: vector<32xi1>) {
+  // expected-error @+1 {{'triton_gen.sub_group_gather_load' op expects result_bits * subgroup_size to be divisible by 256}}
+  %0 = triton_gen.sub_group_gather_load %addrs, %preds : (vector<32xi64>, vector<32xi1>) -> vector<3xi16>
+  llvm.return
+}
+}
+
+// -----
+
+module attributes {"ttg.threads-per-warp" = 16 : i32} {
+llvm.func @triton_gen.sub_group_gather_load_invalid_payload_bytes_per_address(%addrs: vector<32xi64>, %preds: vector<32xi1>) {
+  // expected-error @+1 {{'triton_gen.sub_group_gather_load' op expects each gather address to load at most 8 bytes}}
+  %0 = triton_gen.sub_group_gather_load %addrs, %preds : (vector<32xi64>, vector<32xi1>) -> vector<16xi16>
+  llvm.return
+}
+}
+
+// -----
+
 llvm.func @matrix_2Dblockload(%ptr : !llvm.ptr, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   %base_width = llvm.mlir.constant(0 : i32) : i32
   // expected-error @+1 {{'triton_gen.2Dblockload' op 2nd operand (base width) should be >= 64}}

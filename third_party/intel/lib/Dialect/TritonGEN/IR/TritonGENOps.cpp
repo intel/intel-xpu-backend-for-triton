@@ -501,3 +501,48 @@ LogicalResult tt::TritonGEN::Matrix2DBlockPrefetchOp::verify() {
 
   return success();
 }
+
+//===----------------------------------------------------------------------===//
+// triton_gen.sub_group_gather_load
+//===----------------------------------------------------------------------===//
+
+LogicalResult tt::TritonGEN::SubGroupGatherLoadOp::verify() {
+  auto addrsTy = dyn_cast<VectorType>(getAddrs().getType());
+  if (!addrsTy || addrsTy.getNumElements() != 32 ||
+      !addrsTy.getElementType().isInteger(64)) {
+    return emitOpError("expects addrs to be vector<32xi64>");
+  }
+
+  auto predsTy = dyn_cast<VectorType>(getPreds().getType());
+  if (!predsTy || predsTy.getNumElements() != 32 ||
+      !predsTy.getElementType().isInteger(1)) {
+    return emitOpError("expects preds to be vector<32xi1>");
+  }
+
+  auto resTy = dyn_cast<VectorType>(getRes().getType());
+  if (!resTy)
+    return emitOpError("expects result to be a vector type");
+
+  auto module = getOperation()->getParentOfType<ModuleOp>();
+  unsigned subgroupSize =
+      triton::gpu::TritonGPUDialect::getThreadsPerWarp(module);
+
+  uint64_t resultBits = static_cast<uint64_t>(resTy.getNumElements()) *
+                        resTy.getElementType().getIntOrFloatBitWidth();
+  uint64_t totalBits = resultBits * subgroupSize;
+
+  constexpr uint64_t kGatherSlots = 32;
+  constexpr uint64_t kMaxBytesPerAddress = 8;
+  constexpr uint64_t kBitsPerByte = 8;
+
+  // Address payload is split across 32 uniform gather slots.
+  if (totalBits % (kGatherSlots * kBitsPerByte) != 0)
+    return emitOpError(
+        "expects result_bits * subgroup_size to be divisible by 256");
+
+  uint64_t bytesPerAddress = totalBits / (kGatherSlots * kBitsPerByte);
+  if (bytesPerAddress > kMaxBytesPerAddress)
+    return emitOpError("expects each gather address to load at most 8 bytes");
+
+  return success();
+}
