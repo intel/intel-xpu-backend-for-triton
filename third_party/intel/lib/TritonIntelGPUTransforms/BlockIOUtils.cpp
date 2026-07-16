@@ -580,7 +580,7 @@ FailureOr<LinearLayout> computeTransposeShuffleMapping(
       // which implicitly uses the sub-group size as the transpose width. To
       // optimize further, we should implement this with inline VISA
       // instructions.
-      // E.G: A case that to load fp8 B matrix with DPAS opsChan=2 layout under
+      // E.g. a case that loads fp8 B matrix with DPAS opsChan=2 layout under
       // sub-group-size=32.
       return failure();
     }
