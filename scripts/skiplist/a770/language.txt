@@ -72,7 +72,6 @@ python/test/unit/language/test_core.py::test_dot[1-32-128-64-4-False-False-none-
 python/test/unit/language/test_core.py::test_dot[1-32-128-64-4-False-False-none-tf32-int8-int8-1-None1]
 # test_dot_max_num_imprecise_acc
 python/test/unit/language/test_core.py::test_dot_max_num_imprecise_acc[r".*-128-128-256-256"]@regexp
-python/test/unit/language/test_core.py::test_math_extern[float64]
 # https://github.com/intel/intel-xpu-backend-for-triton/issues/2005
 python/test/unit/language/test_core.py::test_abs_fp8[r"in_dtype[0-2]"]@regexp
 python/test/unit/language/test_core.py::test_precise_math[1-tl.math.sqrt_rn(x)-tl.math.sqrt(x.to(tl.float64)).to(tl.float32)]
@@ -84,7 +83,8 @@ python/test/unit/language/test_pipeliner.py::test_pipeline_matmul[True]
 # https://github.com/intel/intel-xpu-backend-for-triton/issues/3388
 # test_indirect_matmul
 python/test/unit/language/test_pipeliner.py::test_indirect_matmul
-python/test/unit/language/test_core.py::test_atomic_cas[1-acquire]
+python/test/unit/language/test_core.py::test_atomic_cas[int32-1-acquire]
+python/test/unit/language/test_core.py::test_atomic_cas[int64-1-acquire]
 python/test/unit/language/test_core.py::test_indirect_load[float64]
 python/test/unit/language/test_core.py::test_indirect_store[float64]
 python/test/unit/language/test_core.py::test_strided_load[float64]
