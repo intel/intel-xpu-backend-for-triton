@@ -1,10 +1,10 @@
-/// Tests for validate2DBlockLoadTile in BlockIOUtils.
-///
-/// PR #7487 changed computeTransposeShuffleMapping from a simple width
-/// comparison to a linear-layout comparison, enabling column-major B matrix
-/// loads with sub-group-size=32.  These tests verify:
-///   1. tpw=32, f16/opsPerChan=2, column-major B is now accepted.
-///   2. tpw=16, f16/opsPerChan=2, column-major B is still accepted (regression).
+// Tests for validate2DBlockLoadTile in BlockIOUtils.
+//
+// PR #7487 changed computeTransposeShuffleMapping from a simple width
+// comparison to a linear-layout comparison, enabling column-major B matrix
+// loads with sub-group-size=32.  These tests verify:
+//   1. tpw=32, f16/opsPerChan=2, column-major B is now accepted.
+//   2. tpw=16, f16/opsPerChan=2, column-major B is still accepted (regression).
 
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/BlockIOUtils.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
