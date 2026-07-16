@@ -152,6 +152,8 @@ void init_triton_intel_passes_ttgpuir(py::module_ &&m) {
 
   ADD_PASS_WRAPPER_0("add_reduce_data_duplication",
                      gpu::intel::createTritonIntelGPUReduceDataDuplication);
+  ADD_PASS_WRAPPER_0("add_insert_global_barrier",
+                     gpu::intel::createTritonIntelGPUInsertGlobalBarrier);
   ADD_PASS_OPTION_WRAPPER_1(
       "add_canonicalize_pointers",
       gpu::intel::createTritonIntelGPUCanonicalizePointers, bool);

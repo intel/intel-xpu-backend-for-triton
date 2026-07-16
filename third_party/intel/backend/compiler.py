@@ -409,6 +409,9 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.common.add_symbol_dce(pm)
         passes.common.add_sccp(pm)
         passes.common.add_canonicalizer(pm)
+        # Add a barrier when a global store is read back with a different
+        # layout. Runs after reordering so the op order is final by now.
+        intel.passes.ttgpuir.add_insert_global_barrier(pm)
         if knobs.intel.opt_reduction_locality:
             intel.passes.ttgpuir.add_optimize_reduction_locality(pm)
         intel.passes.arith.add_arith_emulate_unsupported_floats(pm, ["bf16"], "f32")

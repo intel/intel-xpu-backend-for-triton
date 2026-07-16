@@ -8,6 +8,7 @@ add_triton_library(TritonIntelGPUTransforms
   LoopDistribute.cpp
   FoldFpToFp.cpp
   HoistLayoutConversions.cpp
+  InsertGlobalBarrier.cpp
   LowerTo2DBlockLoad.cpp
   MaterializeBlockPointer.cpp
   OptimizeDotOperands.cpp

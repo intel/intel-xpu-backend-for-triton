@@ -467,4 +467,23 @@ def TritonIntelGPULoopDistribute
   ];
 }
 
+def TritonIntelGPUInsertGlobalBarrier
+    : Pass<"tritonintelgpu-insert-global-barrier", "mlir::ModuleOp"> {
+  let summary = "Insert a barrier around cross-thread global memory exchanges";
+
+  let description = [{
+    Sometimes a kernel writes a global buffer and then reads it back with a
+    different layout, so one thread reads what another thread wrote. Membar
+    only checks shared memory and misses this. When a load reads a kernel
+    argument that an earlier store in the same block wrote with a different
+    layout, put a `ttg.barrier` before the load. Loads with the same layout,
+    or with no earlier store, are left alone.
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::TritonGPUDialect"
+  ];
+}
+
 #endif // TRITON_INTEL_GPU_PASSES
