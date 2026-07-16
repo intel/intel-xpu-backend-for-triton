@@ -28,7 +28,7 @@ public:
   }
 
   DpasEncodingAttr makeDpas(ArrayRef<unsigned> warpsPerCTA,
-                             unsigned threadsPerWarp, unsigned opsPerChan) {
+                            unsigned threadsPerWarp, unsigned opsPerChan) {
     return DpasEncodingAttr::get(&ctx, /*repeatCount=*/8, /*systolicDepth=*/8,
                                  /*executionSize=*/16, opsPerChan, warpsPerCTA,
                                  /*repCluster=*/{1, 1}, threadsPerWarp,
@@ -52,7 +52,7 @@ TEST_F(BlockIOUtilsTest, ColumnMajorB_Tpw32_F16_Accepted) {
   auto f16 = Float16Type::get(&ctx);
   SmallVector<int64_t> shape = {32, 64}; // K=32, N=64
   auto tensorType = RankedTensorType::get(shape, f16, dot);
-  LinearLayout ll = cast<DistributedEncodingTrait>(dot).toLinearLayout(shape);
+  auto ll = cast<DistributedEncodingTrait>(dot).toLinearLayout(shape);
   // column_major: memContiguousDim = rank-2 = 0 (K direction)
   EXPECT_TRUE(validate2DBlockLoadTile(ll, /*memContiguousDim=*/0,
                                       /*elemSizeInBits=*/16, tensorType));
@@ -67,7 +67,7 @@ TEST_F(BlockIOUtilsTest, ColumnMajorB_Tpw16_F16_Accepted) {
   auto f16 = Float16Type::get(&ctx);
   SmallVector<int64_t> shape = {32, 64}; // K=32, N=64
   auto tensorType = RankedTensorType::get(shape, f16, dot);
-  LinearLayout ll = cast<DistributedEncodingTrait>(dot).toLinearLayout(shape);
+  auto ll = cast<DistributedEncodingTrait>(dot).toLinearLayout(shape);
   // column_major: memContiguousDim = rank-2 = 0 (K direction)
   EXPECT_TRUE(validate2DBlockLoadTile(ll, /*memContiguousDim=*/0,
                                       /*elemSizeInBits=*/16, tensorType));
