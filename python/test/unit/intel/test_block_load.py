@@ -340,11 +340,11 @@ def test_block_tdesc_column_major_load(device, tmp_path: pathlib.Path):
          and triton.runtime.driver.active.get_current_target().arch['has_subgroup_matrix_multiply_accumulate']),
     reason="Block loads and/or DPAS not supported on this architecture", run=False)
 def test_block_tdesc_column_major_load_subgroup32(device, tmp_path: pathlib.Path):
-    """Verify column_major descriptor load with threadsPerWarp=32, f16/opsPerChan=2.
+    """Verify column_major descriptor load with ``threadsPerWarp = 32``, f16/opsPerChan=2.
 
     This exercises the fix in ``computeTransposeShuffleMapping`` that unblocks
-    B-matrix column-major 2D block loads when ``threadsPerWarp=32``.  Before the
-    fix, the old width-comparison guard rejected this configuration because
+    B-matrix column-major 2D block loads when ``threadsPerWarp = 32``.  Before
+    the fix, the old width-comparison guard rejected this configuration because
     ``dpasInstShapeB()[1] = 16 != threadsPerWarp = 32``, causing a silent
     fallback to gather instead of a hardware transpose load.
 
