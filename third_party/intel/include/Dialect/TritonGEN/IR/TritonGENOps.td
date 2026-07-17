@@ -470,16 +470,17 @@ def TritonGEN_SubGroupGatherLoadOp
       - $addrs: `vector<32xi64>` x32 uniform addresses
       - $preds: `vector<32xi1>` x32 uniform predicates
 
-    The size of value loaded is determined by the bits number of the result times the sub-group-size.
+    The total loaded size is determined by the number of bits in the result type multiplied by the sub-group size.
+
 
      Example when sub-group-size=16:
      ```mlir
      %0 = triton_gen.sub_group_gather_load %addrs, %preds : (vector<32xi64>, vector<32xi1>) -> vector<8xi16>
      ```
-     The total size of load is 8 x 16 (i16) x 16 (tpw=16) = 2048 bits = 256 bytes. Each address will load 256 bytes / 32 = 8 bytes.
-     The return value is shard as non-uniform 8xi16 type across sub group lanes.
+     The total size of the load is 8 x 16 (i16) x 16 (tpw=16) = 2048 bits = 256 bytes. Each address will load 256 bytes / 32 = 8 bytes.
+     The return value is sharded as a non-uniform 8xi16 type across sub-group lanes.
 
-     Note: each address at most load 8 bytes.
+     Note: each address loads at most 8 bytes.
   }];
 
   let arguments = (ins
