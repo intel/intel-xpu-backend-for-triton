@@ -487,17 +487,16 @@ private:
       }
     }
 
-    // For broadcast loads, the LLVM lowering's row replication
-    // requires tileWidth >= threadsPerWarp or tileWidth * 2 == threadsPerWarp.
-    // Reject unsupported configurations.
+    // For broadcast loads, the LLVM lowering's row replication uses
+    // shuffleIdx(threadId % tileWidth), which requires tileWidth to evenly
+    // divide threadsPerWarp. Reject unsupported configurations.
     if (isBroadcast && tileHeight > 1 && tileWidth > 0) {
       unsigned threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(
           op->getParentOfType<ModuleOp>());
-      if (tileWidth < (int)threadsPerWarp &&
-          (unsigned)tileWidth * 2 != threadsPerWarp) {
+      if ((int)threadsPerWarp > tileWidth &&
+          threadsPerWarp % (unsigned)tileWidth != 0) {
         LDBG("Broadcast load tile width " << tileWidth
-                                          << " incompatible with "
-                                             "threadsPerWarp "
+                                          << " does not divide threadsPerWarp "
                                           << threadsPerWarp << " for: " << *op);
         return;
       }

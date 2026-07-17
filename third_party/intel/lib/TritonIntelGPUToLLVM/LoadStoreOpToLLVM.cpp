@@ -3966,8 +3966,9 @@ static LogicalResult lowerBlockLoad2D(
           Value oldVal = b.extract_element(ret, b.i32_val(valueIndex));
           Value newVal = oldVal;
           if (cfg.tileWidth < cfg.threadsPerWarp) {
-            assert(cfg.tileWidth * 2 == cfg.threadsPerWarp &&
-                   "Expecting tileWidth to be 2x threadsPerWarp");
+            assert(cfg.threadsPerWarp % cfg.tileWidth == 0 &&
+                   "tileWidth must evenly divide threadsPerWarp for broadcast "
+                   "row replication");
             Value threadId = getThreadId(rewriter, loc);
             newVal = targetInfo.shuffleIdx(
                 rewriter, loc, oldVal,
