@@ -112,3 +112,11 @@ python/test/unit/language/test_core.py::test_atomic_poll[dtype0-16-sys-acquire]
 # https://github.com/intel/intel-xpu-backend-for-triton/issues/7391
 python/test/unit/language/test_core.py::test_atomic_poll_timeout[1-True]
 python/test/unit/language/test_core.py::test_atomic_poll_timeout[0-False]
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/7504
+# Windows: no NVIDIA/AMD toolchain (ptxas-blackwell, hipcc) on Intel-only CI.
+python/test/unit/language/test_compile_only.py::test_compile_only_sm100
+python/test/unit/language/test_compile_only.py::test_compile_only_expect_zero
+python/test/unit/language/test_compile_only.py::test_compile_only_dot
+python/test/unit/language/test_compile_only.py::test_compile_only_k_loop
+python/test/unit/language/test_compile_only.py::test_compile_only_dot_mxfp
+python/test/unit/language/test_compile_only.py::test_fp8_compiles_for_multiple_architectures_hip
