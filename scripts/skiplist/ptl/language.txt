@@ -1,0 +1,7 @@
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/7390
+python/test/unit/language/test_core.py::test_atomic_poll[dtype0-16-cta-relaxed]
+python/test/unit/language/test_core.py::test_atomic_poll[dtype0-16-cta-acquire]
+python/test/unit/language/test_core.py::test_atomic_poll[dtype0-16-gpu-relaxed]
+python/test/unit/language/test_core.py::test_atomic_poll[dtype0-16-gpu-acquire]
+python/test/unit/language/test_core.py::test_atomic_poll[dtype0-16-sys-relaxed]
+python/test/unit/language/test_core.py::test_atomic_poll[dtype0-16-sys-acquire]
