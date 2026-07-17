@@ -71,12 +71,15 @@ class BenchmarkConfigs(MarkArgs):
         run_results = []
         for config in self.configs:
             if self.collect_only and config.describe_metadata_only:
-                # Fall back to metadata only when the optional dependency (e.g. vLLM) is
-                # absent; a resolution failure with vLLM installed is a real bug, so re-raise.
+                # Fall back to metadata only when the optional dependency (e.g. vLLM,
+                # SGLang) is absent; a resolution failure with the dependency installed
+                # is a real bug, so re-raise. The dependency package is identified by the
+                # config's long_report_group ("vllm", "sglang", ...).
                 try:
                     _json_print(str(config))
                 except ImportError:
-                    if importlib.util.find_spec("vllm") is not None:
+                    dep = config.long_report_group
+                    if dep and importlib.util.find_spec(dep) is not None:
                         raise
                     _json_print(config.metadata_only_description())
             else:

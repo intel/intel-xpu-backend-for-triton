@@ -1,7 +1,12 @@
+from typing import Optional
+
 import torch
+
+import triton_kernels_benchmark as benchmark_suite
+from triton_kernels_benchmark.sglang.attention_utils import repeat_kv_heads
+
 from sglang.srt.layers.attention.triton_ops.extend_attention import (
     extend_attention_fwd, )
-import triton_kernels_benchmark as benchmark_suit
 
 VALIDATION_ATOL = 3e-2
 VALIDATION_RTOL = 3e-2
@@ -10,7 +15,6 @@ VALIDATION_MAX_EXTEND_LEN = 32
 VALIDATION_MAX_PREFIX_LEN = 128
 
 
-# pylint: disable=unused-argument
 def gen_args(B, EXTEND_LEN, PREFIX_LEN, H_Q, H_KV, D, dtype, device):
 
     b_seq_len_prefix = torch.full((B, ), PREFIX_LEN, dtype=torch.int32, device=device)
@@ -61,12 +65,6 @@ def gen_args(B, EXTEND_LEN, PREFIX_LEN, H_Q, H_KV, D, dtype, device):
     return params
 
 
-def _repeat_kv_heads(x, num_q_heads):
-    if x.shape[1] == num_q_heads:
-        return x
-    return torch.repeat_interleave(x, num_q_heads // x.shape[1], dim=1)
-
-
 def _extended_attention_torch_ref(q_extend, k_extend, v_extend, k_buffer, v_buffer, qo_indptr, kv_indptr, kv_indices):
     output = torch.empty_like(q_extend)
     num_batches = qo_indptr.numel() - 1
@@ -84,8 +82,8 @@ def _extended_attention_torch_ref(q_extend, k_extend, v_extend, k_buffer, v_buff
         q = q_extend[q_start:q_end].float()
         k = torch.cat([k_buffer[prefix_indices], k_extend[q_start:q_end]], dim=0)
         v = torch.cat([v_buffer[prefix_indices], v_extend[q_start:q_end]], dim=0)
-        k = _repeat_kv_heads(k, q.shape[1]).float()
-        v = _repeat_kv_heads(v, q.shape[1]).float()
+        k = repeat_kv_heads(k, q.shape[1]).float()
+        v = repeat_kv_heads(v, q.shape[1]).float()
 
         attn = torch.einsum('thd,shd->hts', q, k) * (q.shape[-1]**-0.5)
         q_idx = torch.arange(q_len, device=q.device).unsqueeze(1)
@@ -117,72 +115,83 @@ X_VALS = [[bs, *sizes, mode, dtype]
           for dtype in ['bfloat16']]
 
 
-# pylint: disable=unused-argument
-@benchmark_suit.perf_report(
-    benchmark_suit.Benchmark(
-        # argument names to use as an x-axis for the plot
-        x_names=['B', 'EXTEND_LEN', 'PREFIX_LEN', 'H_Q', 'H_KV', 'D', 'MODE', 'DTYPE'],
-        x_vals=X_VALS,
-        line_arg='provider',
-        # argument name whose value corresponds to a different line in the plot
-        # possible values for `line_arg``
-        line_vals=[
-            'triton',
-        ],
-        # label name for the lines
-        line_names=[
-            'Triton',
-        ],
-        # line styles
-        styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
-        ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
-        plot_name='sglang-extended-attn-performance',
-        # name for the plot. Used also as a file name for saving the plot.
-        args={},
-    ))
-def benchmark(B, EXTEND_LEN, PREFIX_LEN, H_Q, H_KV, D, MODE, DTYPE, provider):
-    torch.manual_seed(0)
-    dtype = get_dtype(DTYPE)
+def get_benchmark(providers_filter: Optional[list[str]] = None):
+    """Returns a Mark object with the SGLang extended (append) attention benchmark."""
+    supported_providers = {
+        'triton': 'Triton',
+    }
+    providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
-    params = gen_args(B, EXTEND_LEN, PREFIX_LEN, H_Q, H_KV, D, dtype, 'xpu')
-    q_extend, k_extend, v_extend, o_extend = params[0]
-    k_buffer, v_buffer = params[1]
-    qo_indptr, kv_indptr, kv_indices, max_len_extend = params[2]
-    custom_mask = None
-    mask_indptr = None
+    # pylint: disable=unused-argument
+    @benchmark_suite.perf_report(
+        benchmark_suite.Benchmark(
+            # argument names to use as an x-axis for the plot
+            x_names=['B', 'EXTEND_LEN', 'PREFIX_LEN', 'H_Q', 'H_KV', 'D', 'MODE', 'DTYPE'],
+            x_vals=X_VALS,
+            line_arg='provider',
+            line_vals=list(providers.keys()),
+            line_names=list(providers.values()),
+            # line styles
+            styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
+            ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
+            plot_name='sglang-extended-attn-performance',
+            # name for the plot. Used also as a file name for saving the plot.
+            args={},
+        ))
+    def benchmark(B, EXTEND_LEN, PREFIX_LEN, H_Q, H_KV, D, MODE, DTYPE, provider):
+        torch.manual_seed(0)
+        dtype = get_dtype(DTYPE)
 
-    quantiles = [0.5, 0.0, 1.0]
-    if provider == 'triton' and MODE == 'fwd':
-        triton_fn = lambda: extend_attention_fwd(q_extend, k_extend, v_extend, o_extend, k_buffer, v_buffer, qo_indptr,
-                                                 kv_indptr, kv_indices, custom_mask, True, mask_indptr, max_len_extend)
-        B_val = min(B, VALIDATION_MAX_B)
-        EXTEND_LEN_val = min(EXTEND_LEN, VALIDATION_MAX_EXTEND_LEN)
-        PREFIX_LEN_val = min(PREFIX_LEN, VALIDATION_MAX_PREFIX_LEN)
-        params_ref = gen_args(B_val, EXTEND_LEN_val, PREFIX_LEN_val, H_Q, H_KV, D, dtype, 'xpu')
-        q_extend_ref, k_extend_ref, v_extend_ref, o_extend_ref = params_ref[0]
-        k_buffer_ref, v_buffer_ref = params_ref[1]
-        qo_indptr_ref, kv_indptr_ref, kv_indices_ref, max_len_extend_ref = params_ref[2]
-        triton_ref_fn = lambda: extend_attention_fwd(q_extend_ref, k_extend_ref, v_extend_ref, o_extend_ref,
-                                                     k_buffer_ref, v_buffer_ref, qo_indptr_ref, kv_indptr_ref,
-                                                     kv_indices_ref, custom_mask, True, mask_indptr, max_len_extend_ref)
-        torch_ref_fn = lambda: _extended_attention_torch_ref(q_extend_ref, k_extend_ref, v_extend_ref, k_buffer_ref,
-                                                             v_buffer_ref, qo_indptr_ref, kv_indptr_ref, kv_indices_ref)
-        benchmark_suit.assert_close(triton_ref_fn, torch_ref_fn, atol=VALIDATION_ATOL, rtol=VALIDATION_RTOL,
-                                    err_msg='extended_attention')
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
+        params = gen_args(B, EXTEND_LEN, PREFIX_LEN, H_Q, H_KV, D, dtype, 'xpu')
+        q_extend, k_extend, v_extend, o_extend = params[0]
+        k_buffer, v_buffer = params[1]
+        qo_indptr, kv_indptr, kv_indices, max_len_extend = params[2]
+        custom_mask = None
+        mask_indptr = None
 
-    else:
-        raise NotImplementedError(f'Unsupported provider {provider} and mode {MODE}')
+        quantiles = [0.5, 0.0, 1.0]
+        if provider == 'triton' and MODE == 'fwd':
+            triton_fn = lambda: extend_attention_fwd(q_extend, k_extend, v_extend, o_extend, k_buffer, v_buffer,
+                                                     qo_indptr, kv_indptr, kv_indices, custom_mask, True, mask_indptr,
+                                                     max_len_extend)
+            B_val = min(B, VALIDATION_MAX_B)
+            EXTEND_LEN_val = min(EXTEND_LEN, VALIDATION_MAX_EXTEND_LEN)
+            PREFIX_LEN_val = min(PREFIX_LEN, VALIDATION_MAX_PREFIX_LEN)
+            params_ref = gen_args(B_val, EXTEND_LEN_val, PREFIX_LEN_val, H_Q, H_KV, D, dtype, 'xpu')
+            q_extend_ref, k_extend_ref, v_extend_ref, o_extend_ref = params_ref[0]
+            k_buffer_ref, v_buffer_ref = params_ref[1]
+            qo_indptr_ref, kv_indptr_ref, kv_indices_ref, max_len_extend_ref = params_ref[2]
 
-    N_CTX_TOTAL = PREFIX_LEN + EXTEND_LEN
-    N_CTX_EXTEND = EXTEND_LEN
+            def triton_ref_fn():
+                # The kernel writes into o_extend_ref in place and returns None; return the output for comparison.
+                extend_attention_fwd(q_extend_ref, k_extend_ref, v_extend_ref, o_extend_ref, k_buffer_ref, v_buffer_ref,
+                                     qo_indptr_ref, kv_indptr_ref, kv_indices_ref, custom_mask, True, mask_indptr,
+                                     max_len_extend_ref)
+                return o_extend_ref
 
-    tflops = lambda ms: B * (N_CTX_EXTEND + N_CTX_TOTAL) * H_Q * D * H_KV * 2 * 2 * (1e-12) / (ms * 1e-3)
-    gbps = lambda ms: B * ((H_Q * N_CTX_EXTEND) + H_KV *
-                           (N_CTX_EXTEND + N_CTX_TOTAL) * 2) * D * 2 * (1e-9) / (ms * 1e-3)
+            torch_ref_fn = lambda: _extended_attention_torch_ref(q_extend_ref, k_extend_ref, v_extend_ref, k_buffer_ref,
+                                                                 v_buffer_ref, qo_indptr_ref, kv_indptr_ref,
+                                                                 kv_indices_ref)
+            benchmark_suite.assert_close(triton_ref_fn, torch_ref_fn, atol=VALIDATION_ATOL, rtol=VALIDATION_RTOL,
+                                         err_msg='extended_attention')
+            _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(triton_fn, n_warmup=10, n_repeat=10,
+                                                                   quantiles=quantiles)
 
-    return (gbps(mean), gbps(max_ms), gbps(min_ms)), (tflops(mean), tflops(max_ms), tflops(min_ms)), cv
+        else:
+            raise NotImplementedError(f'Unsupported provider {provider} and mode {MODE}')
+
+        N_CTX_TOTAL = PREFIX_LEN + EXTEND_LEN
+        N_CTX_EXTEND = EXTEND_LEN
+
+        # Extend attends EXTEND_LEN query tokens over (PREFIX_LEN + EXTEND_LEN) keys: Q@K^T + Attn@V.
+        tflops = lambda ms: 2 * 2 * B * H_Q * N_CTX_EXTEND * N_CTX_TOTAL * D * (1e-12) / (ms * 1e-3)
+        gbps = lambda ms: B * ((H_Q * N_CTX_EXTEND) + H_KV *
+                               (N_CTX_EXTEND + N_CTX_TOTAL) * 2) * D * 2 * (1e-9) / (ms * 1e-3)
+
+        return (gbps(mean), gbps(max_ms), gbps(min_ms)), (tflops(mean), tflops(max_ms), tflops(min_ms)), cv
+
+    return benchmark
 
 
 if __name__ == '__main__':
-    benchmark.run(show_plots=False, print_data=True)
+    get_benchmark().run(show_plots=False, print_data=True)

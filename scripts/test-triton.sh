@@ -817,39 +817,7 @@ enter_vllm_test_env() {
 }
 
 run_sglang_install() {
-  echo "************************************************"
-  echo "******    Installing SGLang                 ****"
-  echo "************************************************"
-
-  if pip show sglang >/dev/null 2>&1; then
-    echo "WARNING: sglang is already installed, skipping installation."
-    echo "To get clean installation, run:"
-    echo "  rm -rf ./sglang && pip uninstall -y sglang"
-    return
-  fi
-
-  if [ -d "./sglang" ]; then
-    echo "WARNING: ./sglang directory already exists, installing from it."
-    echo "To get clean installation, run:"
-    echo "  rm -rf ./sglang && pip uninstall -y sglang"
-  else
-    git clone https://github.com/sgl-project/sglang.git
-    cd sglang
-    git checkout "$(<../benchmarks/third_party/sglang/sglang-pin.txt)"
-    git apply ../benchmarks/third_party/sglang/sglang-test-fix.patch
-    git apply ../benchmarks/third_party/sglang/sglang-bench-fix.patch
-
-    # That's how sglang assumes we'll pick out platform for now
-    cp python/pyproject_xpu.toml python/pyproject.toml
-    # We should remove all torch libraries from requirements to avoid reinstalling triton & torch
-    # We remove sgl kernel due to a bug in the current environment probably due to using newer torch, we don't currently use it anyway
-    # We remove timm because it depends on torchvision, which depends on torch==2.9
-    sed -i '/pytorch\|torch\|sgl-kernel\|timm/d' python/pyproject.toml
-    cat python/pyproject.toml
-    cd ..
-  fi
-
-  pip install -e "./sglang/python"
+  "$SCRIPTS_DIR/sglang/install-sglang.sh"
 }
 
 run_sglang_tests() {

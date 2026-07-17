@@ -638,6 +638,7 @@ class BenchmarkCategory(Enum):
     OPTIONAL = "optional"
     EXPERIMENTAL = "experimental"
     VLLM = "vllm"
+    SGLANG = "sglang"
 
 
 DimValue = Union[int, str, bool]

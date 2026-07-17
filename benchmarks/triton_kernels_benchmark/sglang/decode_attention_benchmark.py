@@ -1,8 +1,11 @@
+from typing import Optional
+
 import torch
 
-from sglang.srt.layers.attention.triton_ops.decode_attention import decode_attention_fwd
+import triton_kernels_benchmark as benchmark_suite
+from triton_kernels_benchmark.sglang.attention_utils import repeat_kv_heads
 
-import triton_kernels_benchmark as benchmark_suit
+from sglang.srt.layers.attention.triton_ops.decode_attention import decode_attention_fwd
 
 VALIDATION_ATOL = 3e-2
 VALIDATION_RTOL = 3e-2
@@ -48,19 +51,13 @@ def gen_args(B, N_CTX, H_Q, H_KV, D, dtype, device):
             sm_scale)
 
 
-def _repeat_kv_heads(x, num_q_heads):
-    if x.shape[1] == num_q_heads:
-        return x
-    return torch.repeat_interleave(x, num_q_heads // x.shape[1], dim=1)
-
-
 def _decode_attention_torch_ref(q, k_buffer, v_buffer, kv_indptr, sm_scale):
     output = torch.empty_like(q)
     for b in range(q.shape[0]):
         kv_start = int(kv_indptr[b].item())
         kv_end = int(kv_indptr[b + 1].item())
-        k = _repeat_kv_heads(k_buffer[kv_start:kv_end], q.shape[1]).float()
-        v = _repeat_kv_heads(v_buffer[kv_start:kv_end], q.shape[1]).float()
+        k = repeat_kv_heads(k_buffer[kv_start:kv_end], q.shape[1]).float()
+        v = repeat_kv_heads(v_buffer[kv_start:kv_end], q.shape[1]).float()
         q_row = q[b].float()
         attn = torch.einsum('hd,shd->hs', q_row, k) * sm_scale
         attn = torch.softmax(attn, dim=-1)
@@ -85,61 +82,70 @@ X_VALS = [[bs, *sizes, mode, dtype]
           for dtype in ['bfloat16']]
 
 
-# pylint: disable=unused-argument
-@benchmark_suit.perf_report(
-    benchmark_suit.Benchmark(
-        # argument names to use as an x-axis for the plot
-        x_names=['B', 'SEQ_LENS', 'H_Q', 'H_KV', 'D', 'MODE', 'DTYPE'],
-        x_vals=X_VALS,
-        line_arg='provider',
-        # argument name whose value corresponds to a different line in the plot
-        # possible values for `line_arg``
-        line_vals=[
-            'triton',
-        ],
-        # label name for the lines
-        line_names=[
-            'Triton',
-        ],
-        # line styles
-        styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
-        ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
-        plot_name='sglang-decode-attn-performance',
-        # name for the plot. Used also as a file name for saving the plot.
-        args={},
-    ))
-def benchmark(B, SEQ_LENS, H_Q, H_KV, D, MODE, DTYPE, provider):
-    torch.manual_seed(0)
-    dtype = get_dtype(DTYPE)
+def get_benchmark(providers_filter: Optional[list[str]] = None):
+    """Returns a Mark object with the SGLang decode attention benchmark."""
+    supported_providers = {
+        'triton': 'Triton',
+    }
+    providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
-    N_CTX = SEQ_LENS
-    q, k_buffer, v_buffer, o, kv_indptr, kv_indices, attn_logits, attn_lse, num_kv_splits, max_kv_splits, sm_scale = gen_args(
-        B, N_CTX, H_Q, H_KV, D, dtype, 'xpu')
+    # pylint: disable=unused-argument
+    @benchmark_suite.perf_report(
+        benchmark_suite.Benchmark(
+            # argument names to use as an x-axis for the plot
+            x_names=['B', 'SEQ_LENS', 'H_Q', 'H_KV', 'D', 'MODE', 'DTYPE'],
+            x_vals=X_VALS,
+            line_arg='provider',
+            line_vals=list(providers.keys()),
+            line_names=list(providers.values()),
+            # line styles
+            styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
+            ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
+            plot_name='sglang-decode-attn-performance',
+            # name for the plot. Used also as a file name for saving the plot.
+            args={},
+        ))
+    def benchmark(B, SEQ_LENS, H_Q, H_KV, D, MODE, DTYPE, provider):
+        torch.manual_seed(0)
+        dtype = get_dtype(DTYPE)
 
-    quantiles = [0.5, 0.0, 1.0]
-    if provider == 'triton' and MODE == 'fwd':
-        triton_fn = lambda: decode_attention_fwd(q, k_buffer, v_buffer, o, kv_indptr, kv_indices, attn_logits, attn_lse,
-                                                 num_kv_splits, max_kv_splits, sm_scale)
-        B_val = min(B, VALIDATION_MAX_B)
-        N_CTX_val = min(N_CTX, VALIDATION_MAX_N_CTX)
-        q_ref, k_ref, v_ref, o_ref, kv_indptr_ref, kv_indices_ref, attn_logits_ref, attn_lse_ref, num_kv_splits_ref, max_kv_splits_ref, sm_scale_ref = gen_args(
-            B_val, N_CTX_val, H_Q, H_KV, D, dtype, 'xpu')
-        triton_ref_fn = lambda: decode_attention_fwd(q_ref, k_ref, v_ref, o_ref, kv_indptr_ref, kv_indices_ref,
-                                                     attn_logits_ref, attn_lse_ref, num_kv_splits_ref,
-                                                     max_kv_splits_ref, sm_scale_ref)
-        torch_ref_fn = lambda: _decode_attention_torch_ref(q_ref, k_ref, v_ref, kv_indptr_ref, sm_scale_ref)
-        benchmark_suit.assert_close(triton_ref_fn, torch_ref_fn, atol=VALIDATION_ATOL, rtol=VALIDATION_RTOL,
-                                    err_msg='decode_attention')
-        _, min_ms, max_ms, mean, cv = benchmark_suit.do_bench(triton_fn, n_warmup=10, n_repeat=10, quantiles=quantiles)
+        N_CTX = SEQ_LENS
+        (q, k_buffer, v_buffer, o, kv_indptr, kv_indices, attn_logits, attn_lse, num_kv_splits, max_kv_splits,
+         sm_scale) = gen_args(B, N_CTX, H_Q, H_KV, D, dtype, 'xpu')
 
-    else:
-        raise NotImplementedError(f'Unsupported provider {provider} and mode {MODE}')
+        quantiles = [0.5, 0.0, 1.0]
+        if provider == 'triton' and MODE == 'fwd':
+            triton_fn = lambda: decode_attention_fwd(q, k_buffer, v_buffer, o, kv_indptr, kv_indices, attn_logits,
+                                                     attn_lse, num_kv_splits, max_kv_splits, sm_scale)
+            B_val = min(B, VALIDATION_MAX_B)
+            N_CTX_val = min(N_CTX, VALIDATION_MAX_N_CTX)
+            (q_ref, k_ref, v_ref, o_ref, kv_indptr_ref, kv_indices_ref, attn_logits_ref, attn_lse_ref,
+             num_kv_splits_ref, max_kv_splits_ref, sm_scale_ref) = gen_args(B_val, N_CTX_val, H_Q, H_KV, D, dtype,
+                                                                            'xpu')
 
-    tflops = lambda ms: B * N_CTX * H_Q * D * H_KV * 2 * 2 * (1e-12) / (ms * 1e-3)
-    gbps = lambda ms: B * (H_Q + 2 * N_CTX * H_KV) * D * 2 * (1e-9) / (ms * 1e-3)
+            def triton_ref_fn():
+                # The kernel writes into o_ref in place and returns None; return the output for comparison.
+                decode_attention_fwd(q_ref, k_ref, v_ref, o_ref, kv_indptr_ref, kv_indices_ref, attn_logits_ref,
+                                     attn_lse_ref, num_kv_splits_ref, max_kv_splits_ref, sm_scale_ref)
+                return o_ref
 
-    return (gbps(mean), gbps(max_ms), gbps(min_ms)), (tflops(mean), tflops(max_ms), tflops(min_ms)), cv
+            torch_ref_fn = lambda: _decode_attention_torch_ref(q_ref, k_ref, v_ref, kv_indptr_ref, sm_scale_ref)
+            benchmark_suite.assert_close(triton_ref_fn, torch_ref_fn, atol=VALIDATION_ATOL, rtol=VALIDATION_RTOL,
+                                         err_msg='decode_attention')
+            _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(triton_fn, n_warmup=10, n_repeat=10,
+                                                                   quantiles=quantiles)
+
+        else:
+            raise NotImplementedError(f'Unsupported provider {provider} and mode {MODE}')
+
+        # Decode attends a single query token over N_CTX keys: Q@K^T + Attn@V.
+        tflops = lambda ms: 2 * 2 * B * H_Q * N_CTX * D * (1e-12) / (ms * 1e-3)
+        gbps = lambda ms: B * (H_Q + 2 * N_CTX * H_KV) * D * 2 * (1e-9) / (ms * 1e-3)
+
+        return (gbps(mean), gbps(max_ms), gbps(min_ms)), (tflops(mean), tflops(max_ms), tflops(min_ms)), cv
+
+    return benchmark
 
 
 if __name__ == '__main__':
-    benchmark.run(show_plots=False, print_data=True)
+    get_benchmark().run(show_plots=False, print_data=True)
