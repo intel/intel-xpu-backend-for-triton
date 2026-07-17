@@ -1283,9 +1283,15 @@ struct TritonSubGroupGatherLoadLowering
 
     auto resultType = dyn_cast<VectorType>(op.getResult().getType());
     assert(resultType && "Unexpected result type");
-    Type elemType = resultType.getElementType();
-    unsigned bitsWidth = elemType.getIntOrFloatBitWidth();
-    auto typeSyntax = XeVISAInstr::getTypeName(elemType);
+    auto module = op->getParentOfType<ModuleOp>();
+    unsigned subgroupSize =
+        triton::gpu::TritonGPUDialect::getThreadsPerWarp(module);
+    uint64_t resultBits = static_cast<uint64_t>(resultType.getNumElements()) *
+                          resultType.getElementType().getIntOrFloatBitWidth();
+    uint64_t totalBits = resultBits * subgroupSize;
+    uint64_t loadBits = totalBits / 32;
+    Type opaqueResultType = IntegerType::get(ctx, loadBits);
+    auto typeSyntax = XeVISAInstr::getTypeName(opaqueResultType);
     if (!typeSyntax)
       llvm_unreachable("Unsupported scalar type");
 
@@ -1297,7 +1303,7 @@ struct TritonSubGroupGatherLoadLowering
   (PRED) lsc_load.ugm (M1_NM, 32)  RET:d{1}  flat[ADDR]:a64
 })";
     std::string asmText =
-        llvm::formatv(asmFormat.data(), *typeSyntax, bitsWidth).str();
+        llvm::formatv(asmFormat.data(), *typeSyntax, loadBits).str();
 
     LLVM::InlineAsmOp inlineAsm = LLVM::InlineAsmOp::create(
         rewriter, loc, op.getRes().getType(),
