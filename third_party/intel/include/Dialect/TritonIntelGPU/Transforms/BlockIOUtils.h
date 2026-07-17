@@ -52,7 +52,7 @@ struct BlockIOTileSizeInfo {
 /// Compute the 2D block I/O tile shape from a LinearLayout.
 /// Returns BlockIOTileSizeInfo::unknown() if the layout does not support
 /// 2D block I/O.
-template <bool isLoad>
+template <bool isLoad, unsigned MAX_TILE_HEIGHT = 64>
 BlockIOTileSizeInfo
 getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
                    unsigned elemSizeInBits, AxisInfo *maskAxisInfo,
@@ -65,6 +65,9 @@ getBlockIOTileSize<true>(const LinearLayout &, unsigned, unsigned, AxisInfo *,
 extern template BlockIOTileSizeInfo
 getBlockIOTileSize<false>(const LinearLayout &, unsigned, unsigned, AxisInfo *,
                           bool);
+extern template BlockIOTileSizeInfo
+getBlockIOTileSize<true, 8>(const LinearLayout &, unsigned, unsigned,
+                            AxisInfo *, bool);
 
 /// Return the tensor dimension along which consecutive lanes (the fastest-
 /// varying lane bit) advance in `ll` -- the dimension the hardware vectorizes
