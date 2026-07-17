@@ -542,8 +542,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             llvm.link_extern_libs(llvm_mod, paths)
 
         cls.optimize_llvm_mod(llvm_mod, options)
-        is_lts = cls.is_lts(metadata["target"].arch.get("driver_version"))
-        intel.post_process_llir(llvm_mod, is_lts)
+        intel.post_process_llir(llvm_mod)
 
         # Get some metadata
         total_num_warps = src.get_int_attr("ttg.total-num-warps")
