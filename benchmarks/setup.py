@@ -119,18 +119,14 @@ setup(
         "matplotlib",
     ],
     package_dir={"triton_kernels_benchmark": "triton_kernels_benchmark"},
-    package_data={
-        "triton_kernels_benchmark": [
-            "xetla_kernel.cpython-*.so",
-            "sycl_tla_kernel.cpython-*.so",
-            "onednn_kernel.cpython-*.so",
-        ]
-    },
+    package_data={"triton_kernels_benchmark": [
+        "sycl_tla_kernel.cpython-*.so",
+        "onednn_kernel.cpython-*.so",
+    ]},
     cmdclass={
         "build_ext": build_ext,
     },
     ext_modules=[
-        CMakeExtension("triton_kernels_benchmark.xetla_kernel"),
         CMakeExtension("triton_kernels_benchmark.sycl_tla_kernel"),
         CMakeExtension("triton_kernels_benchmark.onednn_kernel"),
     ],
@@ -140,5 +136,5 @@ setup(
             "triton-benchmarks-validate = triton_benchmarks_validate:main",
         ],
     },
-    py_modules=["triton_benchmarks_validate"],
+    py_modules=["triton_benchmarks_validate", "transform_results"],
 )

@@ -1,6 +1,7 @@
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -26,6 +27,46 @@ namespace mlir {
 #include "TritonAMDGPUTransforms/Passes.h.inc"
 
 namespace {
+
+using SchedGroupMask = ROCDL::SchedGroupMask;
+
+static LLVM::FenceOp createLocalMMRAFence(OpBuilder &builder, Location loc,
+                                          LLVM::AtomicOrdering ordering) {
+  Attribute mmra =
+      builder.getAttr<LLVM::MMRATagAttr>("amdgpu-synchronize-as", "local");
+  auto fence =
+      LLVM::FenceOp::create(builder, loc, ordering, /*syncscope=*/"workgroup");
+  fence->setDiscardableAttr(LLVM::LLVMDialect::getMmraAttrName(), mmra);
+  return fence;
+}
+
+// Returns true if `val` is not loop-invariant with respect to `forOp`.
+// Traversal stops at values defined outside the loop, which are invariant
+// roots.
+static bool isLoopVariant(Value val, scf::ForOp forOp) {
+  SmallVector<Value> worklist{val};
+  llvm::DenseSet<Value> visited;
+  while (!worklist.empty()) {
+    Value v = worklist.pop_back_val();
+    if (!visited.insert(v).second)
+      continue;
+    if (auto blockArg = dyn_cast<BlockArgument>(v)) {
+      // The induction variable, iter_args, and any nested-region argument
+      // inside the loop are loop-variant. Block arguments owned outside the
+      // loop are invariant roots.
+      if (forOp->isAncestor(blockArg.getOwner()->getParentOp()))
+        return true;
+      continue;
+    }
+    Operation *def = v.getDefiningOp();
+    // Values defined outside the loop are loop-invariant; stop traversing.
+    if (!forOp->isAncestor(def))
+      continue;
+    for (Value operand : def->getOperands())
+      worklist.push_back(operand);
+  }
+  return false;
+}
 
 // This pass transforms a for-loop calculating a GEMM. Main purpose of the
 // transform is improve the efficiency of the GPU dot instruction (mfma)
@@ -177,7 +218,8 @@ SmallVector<Operation *> Pingponger::genClusterBarrier(OpBuilder &builder,
   //  MembarAnalysis can recognize gpu::BarrierOp and skip inserting additional
   auto barrierOp = triton::gpu::BarrierOp::create(
       builder, loc, triton::gpu::AddrSpace::Local);
-  auto schedBarrierOp = ROCDL::SchedBarrier::create(builder, loc, 0);
+  auto schedBarrierOp =
+      ROCDL::SchedBarrier::create(builder, loc, SchedGroupMask::none);
   return {barrierOp, schedBarrierOp};
 }
 void Pingponger::appendClusterBarrier(OpBuilder &builder, Location loc) {
@@ -388,7 +430,8 @@ void Pingponger::transformOnePPClusters(OpBuilder &builder, Location loc) {
   auto dotLoc = dotOps[0]->getPrevNode();
   // sched barrier to prevent memory ops from cross but leave other ops to be
   // scheduled across the barrier.
-  auto preDotBar = ROCDL::SchedBarrier::create(builder, loc, 1);
+  auto preDotBar = ROCDL::SchedBarrier::create(
+      builder, loc, SchedGroupMask::non_mem_non_sideeffect);
   updateOpInsertion(dotLoc);
   appendOp(preDotBar);
 
@@ -396,7 +439,7 @@ void Pingponger::transformOnePPClusters(OpBuilder &builder, Location loc) {
   updateOpInsertion(lLoadOps[0]);
   appendOp(ROCDL::SetPrioOp::create(builder, loc, highPriority));
   moveOpAndPredecessorsUpSameBlock(gLoadOps[0]);
-  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, SchedGroupMask::none));
   moveOpAndPredecessorsUpSameBlock(lLoadOps[1]);
   appendOp(ROCDL::SetPrioOp::create(builder, loc, lowPriority));
   moveOpAndPredecessorsUpSameBlock(gLoadOps[1]);
@@ -599,18 +642,18 @@ LogicalResult Pingponger::transformTwoPPClusters(OpBuilder &builder,
   // cycles, sched.barrier prevents backend from canceling the interleaved order
   updateOpInsertion(gLoadOps[1]);
   appendSlicedLoadAB(/*slice=*/0);
-  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, SchedGroupMask::none));
   appendOp(gLoadOps[0]);
-  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, SchedGroupMask::none));
   appendSlicedLoadAB(/*slice=*/1);
-  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, SchedGroupMask::none));
   appendOp(gLoadOps[1]);
   // The first cluster just fits into the two cluster pingpong and cannot
   // include wait of the local_load inserted by the ttg.barrier, using s.barrier
   // instead. backend will schedule the local memory fences later in the dot0
   // cluster.
   appendOp(ROCDL::SBarrierOp::create(builder, loc));
-  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, SchedGroupMask::none));
 
   // dot0 (1/2)
   appendOpWithPrio(builder, dotSliceOps[0], loc);
@@ -657,9 +700,9 @@ LogicalResult Pingponger::transformTwoClusterWithAsyncAndAll(OpBuilder &builder,
   for (auto glop : gLoadOps)
     moveOpAndPredecessorsUpSameBlock(glop);
 
-  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, SchedGroupMask::none));
   appendOp(ROCDL::SBarrierOp::create(builder, loc));
-  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, SchedGroupMask::none));
 
   // all other ops are placed in the second cluster
   // set unit attr, so it can trigger the second step in the ttg to llvm
@@ -721,28 +764,30 @@ LogicalResult Pingponger::transformTwoClusterWithAsyncAndAll(OpBuilder &builder,
 // Typical `s_xxx` instructions include:
 //   - Control flow: `s_cbranch`
 //   - Priority control: `s_setprio`
-//   - Synchronization and dependency: `s_waitcnt`
+//   - Synchronization and dependency: MMRA-tagged local fences, lowered by LLVM
+//     to target-specific wait instructions.
 //
 // These are usually inserted near `s_barrier` boundaries, and the current
 // implementation carefully places them to ensure they belong to the memory
 // cluster, improving overall overlap and utilization.
 //
 //
-// 3. Placement of `s_waitcnt lgkmcnt(0)`
-// --------------------------------------
-// We place `s_waitcnt lgkmcnt(0)` at the *end* of the memory cluster to ensure
-// that all shared-memory load (`ds_read`) instructions have completed before
-// entering the compute cluster.
+// 3. Placement of local MMRA fences
+// ---------------------------------
+// We place local MMRA release fences at the *end* of the memory cluster to
+// ensure that all shared-memory load (`ds_read`) instructions have completed
+// before entering the compute cluster. LLVM lowers these fences to the
+// appropriate target-specific wait instructions.
 //
 // This placement prevents the LLVM backend from inserting additional
-// `s_waitcnt lgkmcnt()` instructions inside the compute cluster based on
+// wait instructions inside the compute cluster based on
 // inferred dependencies between `mfma` and `ds_read` operations.
 //
 // This approach is consistent with the previous design goal: to eliminate all
 // `s_xxx` instructions from the compute cluster so it can run uninterrupted
-// MFMA and VALU operations. Keeping `s_waitcnt lgkmcnt(0)` at the cluster
-// boundary enforces data dependency correctness while preserving the clean
-// separation between memory and compute phases.
+// MFMA and VALU operations. Keeping the local fence at the cluster boundary
+// enforces data dependency correctness while preserving the clean separation
+// between memory and compute phases.
 LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
                                                       Location loc) {
   assert(dotOps.size() == 2);
@@ -769,14 +814,16 @@ LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
   // ComputeCluster 1
   updateOpInsertion(dotOps[0]);
   prependOp(ROCDL::SBarrierOp::create(builder, loc), false);
-  prependOp(ROCDL::SchedBarrier::create(builder, loc, 0), false);
+  prependOp(ROCDL::SchedBarrier::create(builder, loc, SchedGroupMask::none),
+            false);
 
   // MemoryCluster 1
   updateOpInsertion(memoryClusterStartOps[0]);
-  prependOp(ROCDL::SchedBarrier::create(builder, loc, 0), false);
+  prependOp(ROCDL::SchedBarrier::create(builder, loc, SchedGroupMask::none),
+            false);
   if (llvm::isa<ttg::AsyncWaitOp>(memoryClusterStartOps[0])) {
     // Only append a sched barrier because membar adds a barrier after asyncwait
-    appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
+    appendOp(ROCDL::SchedBarrier::create(builder, loc, SchedGroupMask::none));
   } else {
     prependOp(triton::gpu::BarrierOp::create(builder, loc,
                                              triton::gpu::AddrSpace::Local),
@@ -785,10 +832,10 @@ LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
   // Ideally we want the memory cluster to start with
   //
   // s_barrier
-  // s_waitcnt vmcnt(x) lgkmcnt(0)
+  // local wait
   // s_setprio 1
   //
-  // However, the membar pass will put s_waitcnt before s_barrier.
+  // However, the membar path will put the local MMRA fence before s_barrier.
   // But we can at least put s_setprio in the memory cluster.
   prependOp(ROCDL::SetPrioOp::create(builder, loc, highPriority), false);
 
@@ -796,27 +843,29 @@ LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
   // We want the 2nd compute cluster to start with
   //
   // s_setprio 0
-  // s_waitcnt lgkmcnt(0)
+  // local MMRA release fence
   // s_barrier
   //
   // Check note 2 and 3 for details.
   updateOpInsertion(dotOps[1]);
-  prependOp(ROCDL::SchedBarrier::create(builder, loc, 0), false);
+  prependOp(ROCDL::SchedBarrier::create(builder, loc, SchedGroupMask::none),
+            false);
   prependOp(ROCDL::SetPrioOp::create(builder, loc, lowPriority), false);
-  auto dsAttr = builder.getI32IntegerAttr(0);
-  prependOp(tt::amdgpu::MemoryCounterWaitOp::create(
-                builder, loc, /* load= */ nullptr, /* store= */ nullptr,
-                /* ds= */ dsAttr),
+  prependOp(createLocalMMRAFence(builder, loc, LLVM::AtomicOrdering::release),
             false);
   prependOp(ROCDL::SBarrierOp::create(builder, loc), false);
-  prependOp(ROCDL::SchedBarrier::create(builder, loc, 0), false);
+  prependOp(createLocalMMRAFence(builder, loc, LLVM::AtomicOrdering::acquire),
+            false);
+  prependOp(ROCDL::SchedBarrier::create(builder, loc, SchedGroupMask::none),
+            false);
 
   // MemoryCluster2
   updateOpInsertion(memoryClusterStartOps[1]);
-  prependOp(ROCDL::SchedBarrier::create(builder, loc, 0), false);
+  prependOp(ROCDL::SchedBarrier::create(builder, loc, SchedGroupMask::none),
+            false);
   if (llvm::isa<ttg::AsyncWaitOp>(memoryClusterStartOps[1])) {
     // Only append a sched barrier because membar adds a barrier after asyncwait
-    appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
+    appendOp(ROCDL::SchedBarrier::create(builder, loc, SchedGroupMask::none));
   } else {
     prependOp(triton::gpu::BarrierOp::create(builder, loc,
                                              triton::gpu::AddrSpace::Local),
@@ -828,7 +877,7 @@ LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
   // stays in the memory cluster.
   //
   // s_setprio 0
-  // s_waitcnt lgkmcnt(0)
+  // local MMRA release fence
   // s_cbranch
   // s_barrier
   //
@@ -838,11 +887,10 @@ LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
   // them into the compute cluster. Instead, we insert s_barrier
   // at the beginning of the loop.
   updateOpInsertion(lastInsertedOp->getBlock()->getTerminator());
-  prependOp(ROCDL::SchedBarrier::create(builder, loc, 0), false);
+  prependOp(ROCDL::SchedBarrier::create(builder, loc, SchedGroupMask::none),
+            false);
   prependOp(ROCDL::SetPrioOp::create(builder, loc, lowPriority), false);
-  prependOp(tt::amdgpu::MemoryCounterWaitOp::create(
-                builder, loc, /* load= */ nullptr, /* store= */ nullptr,
-                /* ds= */ dsAttr),
+  prependOp(createLocalMMRAFence(builder, loc, LLVM::AtomicOrdering::release),
             false);
 
   return success();
@@ -884,7 +932,7 @@ Pingponger::transformTwoClusterWithLocalLoadAndAll(OpBuilder &builder,
 
   moveOpAndPredecessorsUpSameBlock(lLoadOps[0]);
   moveOpAndPredecessorsUpSameBlock(lLoadOps[1]);
-  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, SchedGroupMask::none));
 
   appendOp(asyncCopyOps[0]);
   appendOp(asyncCommitOps[0]);
@@ -892,25 +940,30 @@ Pingponger::transformTwoClusterWithLocalLoadAndAll(OpBuilder &builder,
   // The last point we need to guarantee async_copy has been completed.
   // w0 : local_load 0 - Dot 0                 - local_load 1
   // w1 :              - local_load 0 (*wait 1)- Dot 0
-  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, SchedGroupMask::none));
   appendOp(newAsyncWaitOp);
-  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, SchedGroupMask::none));
 
   // Give hint to backend so it can interleave instructions better.
   // This tries to interleave 3 SALU instructions per each MFMA
-  appendOp(ROCDL::SchedGroupBarrier::create(builder, loc, 8, 1, 0));
-  appendOp(ROCDL::SchedGroupBarrier::create(builder, loc, 4, 3, 0));
-  appendOp(ROCDL::SchedGroupBarrier::create(builder, loc, 8, 1, 0));
-  appendOp(ROCDL::SchedGroupBarrier::create(builder, loc, 4, 3, 0));
-  appendOp(ROCDL::SchedGroupBarrier::create(builder, loc, 8, 1, 0));
+  appendOp(ROCDL::SchedGroupBarrier::create(builder, loc,
+                                            SchedGroupMask::mfma_wmma, 1u, 0u));
+  appendOp(ROCDL::SchedGroupBarrier::create(builder, loc, SchedGroupMask::salu,
+                                            3u, 0u));
+  appendOp(ROCDL::SchedGroupBarrier::create(builder, loc,
+                                            SchedGroupMask::mfma_wmma, 1u, 0u));
+  appendOp(ROCDL::SchedGroupBarrier::create(builder, loc, SchedGroupMask::salu,
+                                            3u, 0u));
+  appendOp(ROCDL::SchedGroupBarrier::create(builder, loc,
+                                            SchedGroupMask::mfma_wmma, 1u, 0u));
 
   appendOp(asyncCopyOps[1]);
   appendOp(asyncCommitOps[1]);
   moveOpAndPredecessorsUpSameBlock(dotOps[0]);
 
-  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, SchedGroupMask::none));
   appendOp(ROCDL::SBarrierOp::create(builder, loc));
-  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, SchedGroupMask::none));
 
   return success();
 }
@@ -1160,6 +1213,21 @@ void Pingponger::getDotPingponged() {
             << lLoadOps.size() << " local loads in dot computation";
     LDBG(message.str());
     return;
+  }
+
+  // A global load whose mask depends on the loop induction variable (e.g. the
+  // K-bound or im2col spatial-padding predicate of a convolution) is
+  // non-uniform along K, so the reordered schedule corrupts the boundary tiles.
+  // Output-only boundary masks (M/N bounds) are loop-invariant and remain on
+  // the fast path.
+  for (auto load : gLoadOps) {
+    Value mask = load.getMask();
+    if (mask && isLoopVariant(mask, forOp)) {
+      LDBG("Unable to apply ping pong scheduling. Details: a global load has "
+           "a loop-variant mask: "
+           << load);
+      return;
+    }
   }
 
   // Pingpong scheduling tries to form two different types of the instruction

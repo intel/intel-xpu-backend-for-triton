@@ -1,10 +1,11 @@
 diff --git a/vllm/model_executor/layers/fused_moe/fused_moe.py b/vllm/model_executor/layers/fused_moe/fused_moe.py
+index 269b6e3da..fdd6a95e5 100644
 --- a/vllm/model_executor/layers/fused_moe/fused_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/fused_moe.py
-@@ -309,6 +309,21 @@
+@@ -290,6 +290,21 @@ def fused_moe_kernel_gptq_awq(
      tl.store(c_ptrs, accumulator, mask=c_mask)
-
-
+ 
+ 
 +def get_fused_moe_configs():
 +    return [
 +        triton.Config({'BLOCK_SIZE_N': N, 'GROUP_SIZE_M': G, 'SPLIT_K': 1,
@@ -23,7 +24,7 @@ diff --git a/vllm/model_executor/layers/fused_moe/fused_moe.py b/vllm/model_exec
  @triton.jit
  def fused_moe_kernel(
      # Pointers to matrices
-@@ -323,6 +338,7 @@
+@@ -304,6 +319,7 @@ def fused_moe_kernel(
      expert_ids_ptr,
      num_tokens_post_padded_ptr,
      # Matrix dimensions
@@ -31,66 +32,86 @@ diff --git a/vllm/model_executor/layers/fused_moe/fused_moe.py b/vllm/model_exec
      N,
      K,
      EM,
-@@ -425,9 +441,6 @@
+@@ -407,9 +423,6 @@ def fused_moe_kernel(
              pid_m,  # first element = pid_m
              num_valid_tokens,  # remaining elements = constant
          )
 -    # Cast to int64 to prevent overflow in stride*offset products
 -    # (e.g. stride_cm * offs_token can exceed int32 for large token counts)
 -    offs_token = offs_token.to(tl.int64)
-
+ 
      token_mask = offs_token < num_valid_tokens
-
-@@ -451,16 +464,12 @@
+ 
+@@ -433,25 +446,11 @@ def fused_moe_kernel(
          return
-
+ 
      offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N).to(tl.int64)) % N
 -    offs_k = tl.arange(0, BLOCK_SIZE_K)
--    a_ptrs = a_ptr + (
--        offs_token[:, None] // top_k * stride_am + offs_k[None, :] * stride_ak
--    )
-
--    b_ptrs = (
--        b_ptr
--        + off_experts * stride_be
--        + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
--    )
+-    if SWAP_AB:
+-        a_ptrs = a_ptr + (
+-            offs_k[:, None] * stride_ak + offs_token[None, :] // top_k * stride_am
+-        )
+-        b_ptrs = (
+-            b_ptr
+-            + off_experts * stride_be
+-            + (offs_bn[:, None] * stride_bn + offs_k[None, :] * stride_bk)
+-        )
+-    else:
+-        a_ptrs = a_ptr + (
+-            offs_token[:, None] // top_k * stride_am + offs_k[None, :] * stride_ak
+-        )
+-        b_ptrs = (
+-            b_ptr
+-            + off_experts * stride_be
+-            + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
+-        )
 +    a_desc = tl.make_tensor_descriptor(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
 +                                       block_shape=(1, BLOCK_SIZE_K))
 +
 +    b_desc = tl.make_tensor_descriptor(base=b_ptr + off_experts * stride_be, shape=(N, K),
 +                                       strides=(stride_bn, stride_bk), block_shape=(BLOCK_SIZE_N, BLOCK_SIZE_K))
+ 
      if use_int8_w8a16:
          b_scale_ptrs = (
-             b_scale_ptr + off_experts * stride_bse + offs_bn[None, :] * stride_bsn
-@@ -499,14 +508,8 @@
-     # `accumulator` will be converted back to fp16 after the loop.
-     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+@@ -494,20 +493,8 @@ def fused_moe_kernel(
+     else:
+         accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
      for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
 -        # Load the next block of A and B, generate a mask by checking the
 -        # K dimension.
+-        if SWAP_AB:
+-            a_mask = (offs_k[:, None] < K - k * BLOCK_SIZE_K) & token_mask[None, :]
+-            b_mask = offs_k[None, :] < K - k * BLOCK_SIZE_K
+-        else:
+-            a_mask = token_mask[:, None] & (offs_k[None, :] < K - k * BLOCK_SIZE_K)
+-            b_mask = offs_k[:, None] < K - k * BLOCK_SIZE_K
 -        a = tl.load(
 -            a_ptrs,
--            mask=token_mask[:, None] & (offs_k[None, :] < K - k * BLOCK_SIZE_K),
+-            mask=a_mask,
 -            other=0.0,
 -        )
--        b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
+-        b = tl.load(b_ptrs, mask=b_mask, other=0.0)
 +        a = a_desc.gather(offs_token // top_k, k * BLOCK_SIZE_K)
 +        b = b_desc.load([pid_n * BLOCK_SIZE_N, k * BLOCK_SIZE_K]).T
          # We accumulate along the K dimension.
          if use_int8_w8a16:
              accumulator = tl.dot(a, b.to(compute_type), acc=accumulator)
-@@ -528,9 +531,6 @@
-                     accumulator += tl.dot(a, b)
+@@ -531,12 +518,9 @@ def fused_moe_kernel(
+                     else:
+                         accumulator = tl.dot(a, b, acc=accumulator)
+                 else:
+-                    accumulator += tl.dot(a, b)
++                    accumulator = tl.dot(a, b, accumulator)
          else:
-             accumulator += tl.dot(a, b)
+-            accumulator += tl.dot(a, b)
 -        # Advance the ptrs to the next K block.
 -        a_ptrs += BLOCK_SIZE_K * stride_ak
 -        b_ptrs += BLOCK_SIZE_K * stride_bk
-
-     # Dequantization for supported quantization schemes:
-     #   - int8_w8a16
-@@ -800,6 +800,7 @@
++            accumulator = tl.dot(a, b, accumulator)
+ 
+     if SWAP_AB:
+         accumulator = tl.trans(accumulator, (1, 0))
+@@ -814,6 +798,7 @@ def invoke_fused_moe_triton_kernel(
          sorted_token_ids,
          expert_ids,
          num_tokens_post_padded,
@@ -98,13 +119,12 @@ diff --git a/vllm/model_executor/layers/fused_moe/fused_moe.py b/vllm/model_exec
          B.size(1),
          B.size(2),
          EM,
-@@ -830,7 +831,8 @@
-         naive_block_assignment=(sorted_token_ids is None),
+@@ -845,7 +830,7 @@ def invoke_fused_moe_triton_kernel(
          HAS_BIAS=HAS_BIAS,
          BLOCK_SIZE_K=BLOCK_SIZE_K,
+         SWAP_AB=SWAP_AB,
 -        **config,
 +        BLOCK_SIZE_M=config["BLOCK_SIZE_M"]
-+        # **config,
      )
-
-
+ 
+ 

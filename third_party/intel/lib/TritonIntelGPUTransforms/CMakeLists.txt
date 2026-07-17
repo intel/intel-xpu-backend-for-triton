@@ -2,7 +2,11 @@ add_triton_library(TritonIntelGPUTransforms
   AccelerateMatmul.cpp
   AnnotateCacheControl.cpp
   BlockIOUtils.cpp
+  CanonicalizePointers.cpp
+  CodeSinking.cpp
   DecomposeScaledBlocked.cpp
+  LoopDistribute.cpp
+  FoldFpToFp.cpp
   HoistLayoutConversions.cpp
   LowerTo2DBlockLoad.cpp
   MaterializeBlockPointer.cpp
@@ -30,6 +34,7 @@ add_triton_library(TritonIntelGPUTransforms
   TritonIR
   TritonGENIR
   TritonGPUIR
+  TritonGPUTransforms
   TritonIntelGPUIR
   TritonIntelUtils
 )

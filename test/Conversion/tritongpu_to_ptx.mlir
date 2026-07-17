@@ -11,8 +11,8 @@
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @add_bf16(%ptr: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg0: tensor<256xbf16, #blocked>, %arg1: tensor<256xbf16, #blocked>) {
     // CHECK-LABEL: add_bf16
-    // SM80-COUNT-4: fma.rn.bf16x2
-    // SM90-COUNT-4: add.rn.bf16x2
+    // SM80-COUNT-8: fma.rn.bf16
+    // SM90-COUNT-8: add.rn.bf16
     %0 = arith.addf %arg0, %arg1 : tensor<256xbf16, #blocked>
     %1 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked>
     %2 = tt.splat %ptr : !tt.ptr<bf16> -> tensor<256x!tt.ptr<bf16>, #blocked>
@@ -23,8 +23,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
 
   tt.func public @sub_bf16(%ptr: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg0: tensor<256xbf16, #blocked>, %arg1: tensor<256xbf16, #blocked>) {
     // CHECK-LABEL: sub_bf16
-    // SM80-COUNT-4: fma.rn.bf16x2
-    // SM90-COUNT-4: sub.rn.bf16x2
+    // SM80-COUNT-8: fma.rn.bf16
+    // SM90-COUNT-8: sub.rn.bf16
     %0 = arith.subf %arg0, %arg1 : tensor<256xbf16, #blocked>
     %1 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked>
     %2 = tt.splat %ptr : !tt.ptr<bf16> -> tensor<256x!tt.ptr<bf16>, #blocked>
@@ -35,8 +35,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
 
   tt.func public @mul_bf16(%ptr: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg0: tensor<256xbf16, #blocked>, %arg1: tensor<256xbf16, #blocked>) {
     // CHECK-LABEL: mul_bf16
-    // SM80-COUNT-4: fma.rn.bf16x2
-    // SM90-COUNT-4: mul.rn.bf16x2
+    // SM80-COUNT-8: fma.rn.bf16
+    // SM90-COUNT-8: mul.rn.bf16
     %0 = arith.mulf %arg0, %arg1 : tensor<256xbf16, #blocked>
     %1 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked>
     %2 = tt.splat %ptr : !tt.ptr<bf16> -> tensor<256x!tt.ptr<bf16>, #blocked>
@@ -86,6 +86,52 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
     %2 = tt.splat %ptr : !tt.ptr<f16> -> tensor<256x!tt.ptr<f16>, #blocked>
     %3 = tt.addptr %2, %1 : tensor<256x!tt.ptr<f16>, #blocked>, tensor<256xi32, #blocked>
     tt.store %3, %0 : tensor<256x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+
+  // CHECK-LABEL: atomic_poll_relaxed_gpu
+  // CHECK: ld.relaxed.gpu.global.b32
+  // CHECK-NOT: fence.acquire
+  tt.func public @atomic_poll_relaxed_gpu(%ptr: !tt.ptr<i32>, %expected: i32, %out: !tt.ptr<i32>) {
+    %matched = tt.atomic_poll relaxed, gpu, %ptr, %expected {allocation.offset = 0 : i32} : !tt.ptr<i32>, i32 -> i1
+    %result = arith.extui %matched : i1 to i32
+    tt.store %out, %result : !tt.ptr<i32>
+    tt.return
+  }
+
+  // CHECK-LABEL: atomic_poll_acquire_cta
+  // CHECK: ld.relaxed.cta.global.b32
+  // SM80: fence.acq_rel.cta
+  // SM90: fence.acq_rel.cta
+  // SM100: fence.acquire.cta
+  tt.func public @atomic_poll_acquire_cta(%ptr: !tt.ptr<i32>, %expected: i32, %out: !tt.ptr<i32>) {
+    %matched = tt.atomic_poll acquire, cta, %ptr, %expected {allocation.offset = 0 : i32} : !tt.ptr<i32>, i32 -> i1
+    %result = arith.extui %matched : i1 to i32
+    tt.store %out, %result : !tt.ptr<i32>
+    tt.return
+  }
+
+  // CHECK-LABEL: atomic_poll_acquire_gpu
+  // CHECK: ld.relaxed.gpu.global.b32
+  // SM80: fence.acq_rel.gpu
+  // SM90: fence.acq_rel.gpu
+  // SM100: fence.acquire.gpu
+  tt.func public @atomic_poll_acquire_gpu(%ptr: !tt.ptr<i32>, %expected: i32, %out: !tt.ptr<i32>) {
+    %matched = tt.atomic_poll acquire, gpu, %ptr, %expected {allocation.offset = 0 : i32} : !tt.ptr<i32>, i32 -> i1
+    %result = arith.extui %matched : i1 to i32
+    tt.store %out, %result : !tt.ptr<i32>
+    tt.return
+  }
+
+  // CHECK-LABEL: atomic_poll_acquire_sys
+  // CHECK: ld.relaxed.sys.global.b32
+  // SM80: fence.acq_rel.sys
+  // SM90: fence.acq_rel.sys
+  // SM100: fence.acquire.sys
+  tt.func public @atomic_poll_acquire_sys(%ptr: !tt.ptr<i32>, %expected: i32, %out: !tt.ptr<i32>) {
+    %matched = tt.atomic_poll acquire, sys, %ptr, %expected {allocation.offset = 0 : i32} : !tt.ptr<i32>, i32 -> i1
+    %result = arith.extui %matched : i1 to i32
+    tt.store %out, %result : !tt.ptr<i32>
     tt.return
   }
 

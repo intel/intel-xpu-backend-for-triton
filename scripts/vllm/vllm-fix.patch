@@ -1,298 +1,53 @@
-diff --git a/tests/conftest.py b/tests/conftest.py
-index 779bd475f..808ab3650 100644
---- a/tests/conftest.py
-+++ b/tests/conftest.py
-@@ -284,6 +284,11 @@ def workspace_init():
+diff --git a/tests/kernels/mamba/test_mamba_mixer2.py b/tests/kernels/mamba/test_mamba_mixer2.py
+index 973e7885c..e474275f5 100644
+--- a/tests/kernels/mamba/test_mamba_mixer2.py
++++ b/tests/kernels/mamba/test_mamba_mixer2.py
+@@ -12,6 +12,7 @@ from vllm.distributed.parallel_state import (
+     initialize_model_parallel,
+ )
+ from vllm.model_executor.layers.mamba.mamba_mixer2 import Mixer2RMSNormGated
++from vllm.platforms import current_platform
+ from vllm.utils.system_utils import update_environment_variables
+ from vllm.utils.torch_utils import set_random_seed
  
-     if torch.cuda.is_available():
-         device = torch.device("cuda:0")
-+    elif torch.xpu.is_available():
-+        device = torch.device("xpu:0")
-+    else:
-+        device = None
-+    if device is not None:
-         init_workspace_manager(device)
-     yield
-     reset_workspace_manager()
-diff --git a/tests/kernels/moe/test_batched_moe.py b/tests/kernels/moe/test_batched_moe.py
-index d78e1947f..e7ffb39e3 100644
---- a/tests/kernels/moe/test_batched_moe.py
-+++ b/tests/kernels/moe/test_batched_moe.py
-@@ -104,7 +104,7 @@ class BatchedMMTensors:
- @pytest.mark.parametrize("N", [128, 1024])
- @pytest.mark.parametrize("dtype", DTYPES)
- @pytest.mark.parametrize("block_shape", [None, [128, 128]])
--@pytest.mark.parametrize("per_act_token_quant", [False, True])
-+@pytest.mark.parametrize("per_act_token_quant", [False])
- def test_batched_mm(
-     num_experts: int,
-     max_tokens_per_expert: int,
-@@ -236,7 +236,7 @@ def test_batched_mm(
- @pytest.mark.parametrize("e", NUM_EXPERTS)
- @pytest.mark.parametrize("topk", TOP_KS)
- @pytest.mark.parametrize("dtype", DTYPES)
--@pytest.mark.parametrize("per_act_token_quant", [False, True])
-+@pytest.mark.parametrize("per_act_token_quant", [False])
- @pytest.mark.parametrize("block_shape", [None, [128, 128]])
- @pytest.mark.parametrize("input_scales", [False])
- def test_fused_moe_batched_experts(
-diff --git a/tests/kernels/moe/utils.py b/tests/kernels/moe/utils.py
-index a1594634f..959dd8c1d 100644
---- a/tests/kernels/moe/utils.py
-+++ b/tests/kernels/moe/utils.py
-@@ -313,7 +313,13 @@ def moe_quantize_weights(
-             w[idx], None, quant_dtype, per_token_quant, block_shape
-         )
- 
--    w = torch.stack(w_l)
-+    new_shape = torch.Size((len(w_l), ) + w_l[0].shape)
-+    new_w = torch.zeros(new_shape,
-+                        dtype=w_l[0].dtype,
-+                        device=w_l[0].device)
-+    for (i, wt) in enumerate(w_l):
-+        new_w[i] = wt
-+    w = new_w
-     w_s = torch.stack(w_s_l)
-     w_gs = torch.stack(w_gs_l) if e > 0 and w_gs_l[0] is not None else None
- 
-diff --git a/vllm/_custom_ops.py b/vllm/_custom_ops.py
-index 564276ada..a3094d26a 100644
---- a/vllm/_custom_ops.py
-+++ b/vllm/_custom_ops.py
-@@ -2057,14 +2057,30 @@ def scaled_fp8_quant(
-     if scale is None:
-         if use_per_token_if_dynamic:
-             scale = torch.empty((shape[0], 1), device=input.device, dtype=torch.float32)
--            torch.ops._C.dynamic_per_token_scaled_fp8_quant(
--                output, input, scale, scale_ub
--            )
-+            if hasattr(torch.ops._C, 'dynamic_per_token_scaled_fp8_quant'):
-+                torch.ops._C.dynamic_per_token_scaled_fp8_quant(
-+                    output, input, scale, scale_ub
-+                )
-+            else:
-+                fp8_max = torch.finfo(out_dtype).max
-+                amax = input.abs().amax(dim=-1, keepdim=True).clamp(min=1e-12)
-+                scale.copy_(amax / fp8_max)
-+                output.copy_((input / scale).clamp(-fp8_max, fp8_max).to(out_dtype))
-         else:
-             scale = torch.empty(1, device=input.device, dtype=torch.float32)
--            torch.ops._C.dynamic_scaled_fp8_quant(output, input, scale)
-+            if hasattr(torch.ops._C, 'dynamic_scaled_fp8_quant'):
-+                torch.ops._C.dynamic_scaled_fp8_quant(output, input, scale)
-+            else:
-+                fp8_max = torch.finfo(out_dtype).max
-+                amax = input.abs().max().clamp(min=1e-12)
-+                scale[0] = amax / fp8_max
-+                output.copy_((input / scale).clamp(-fp8_max, fp8_max).to(out_dtype))
-     else:
--        torch.ops._C.static_scaled_fp8_quant(output, input, scale, group_shape)
-+        if hasattr(torch.ops._C, 'static_scaled_fp8_quant'):
-+            torch.ops._C.static_scaled_fp8_quant(output, input, scale, group_shape)
-+        else:
-+            fp8_max = torch.finfo(out_dtype).max
-+            output.copy_((input / scale).clamp(-fp8_max, fp8_max).to(out_dtype))
- 
-     return output, scale
- 
-diff --git a/vllm/model_executor/layers/fused_moe/fused_batched_moe.py b/vllm/model_executor/layers/fused_moe/fused_batched_moe.py
-index 8638a1146..730617d8e 100644
---- a/vllm/model_executor/layers/fused_moe/fused_batched_moe.py
-+++ b/vllm/model_executor/layers/fused_moe/fused_batched_moe.py
-@@ -620,7 +620,7 @@ class NaiveBatchedExperts(mk.FusedMoEExpertsModular):
-             # Indexing expert_num_tokens doesn't work w/cudagraphs or inductor
-             if (
-                 torch.compiler.is_compiling()
--                or torch.cuda.is_current_stream_capturing()
-+                or (torch.cuda.is_available() and torch.cuda.is_current_stream_capturing())
-             ):
-                 num = hidden_states.shape[1]
-             else:
-@@ -661,7 +661,7 @@ def batched_moe_kernel_quantize_input(
-     per_act_token_quant: bool,
-     block_shape: list[int] | None = None,
- ) -> tuple[torch.Tensor, torch.Tensor | None]:
--    if torch.compiler.is_compiling() or torch.cuda.is_current_stream_capturing():
-+    if torch.compiler.is_compiling() or (torch.cuda.is_available() and torch.cuda.is_current_stream_capturing()):
-         # Note: this does a bunch of extra work because expert_num_tokens is
-         # ignored but it does support torch.compile + cudagraphs.
-         hidden_dim = A.size(-1)
-diff --git a/vllm/platforms/xpu.py b/vllm/platforms/xpu.py
-index bd9006f3f..161a559c1 100644
---- a/vllm/platforms/xpu.py
-+++ b/vllm/platforms/xpu.py
-@@ -8,9 +8,14 @@ from typing import TYPE_CHECKING
- import torch
- 
- # import custom ops, trigger op registration
--import vllm_xpu_kernels._C  # noqa
--import vllm_xpu_kernels._moe_C  # noqa
--import vllm_xpu_kernels._xpu_C  # noqa
-+try:
-+    import vllm_xpu_kernels._C  # noqa
-+    import vllm_xpu_kernels._moe_C  # noqa
-+    import vllm_xpu_kernels._xpu_C  # noqa
-+except (ImportError, OSError) as e:
-+    import logging
-+    logging.getLogger(__name__).warning(
-+        "Failed to import vllm_xpu_kernels: %s", e)
- 
- import vllm.envs as envs
- from vllm.logger import init_logger
-diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 1774f1b30..257481768 100644
---- a/vllm/v1/attention/ops/triton_unified_attention.py
-+++ b/vllm/v1/attention/ops/triton_unified_attention.py
-@@ -61,9 +61,6 @@ def kernel_unified_attention(
-     # three ``segm_*`` tensors and ``output_ptr`` is unused (callers may
-     # pass any non-null pointer).
-     output_ptr,
--    segm_output_ptr,
--    segm_max_ptr,
--    segm_expsum_ptr,
-     # Inputs
-     query_ptr,
-     key_cache_ptr,
-@@ -73,10 +70,6 @@ def kernel_unified_attention(
-     seq_lens_ptr,
-     alibi_slopes_ptr,
-     qq_bias_ptr,
--    # Per-(token, head) scale caches (used iff KV_QUANT_MODE in {2, 3}).
--    # For other modes callers may pass any non-null pointer.
--    k_scale_cache_ptr,
--    v_scale_cache_ptr,
-     # Scalars
-     scale,
-     k_scale,
-@@ -112,12 +105,6 @@ def kernel_unified_attention(
-     stride_v_cache_1: tl.int64,  # int
-     stride_v_cache_2: tl.int64,  # int
-     stride_v_cache_3: tl.constexpr,  # int
--    stride_ks_blk: tl.int64,
--    stride_ks_slot: tl.int64,
--    stride_ks_head: tl.int64,
--    stride_vs_blk: tl.int64,
--    stride_vs_slot: tl.int64,
--    stride_vs_head: tl.int64,
-     query_start_len_ptr,
-     BLOCK_Q: tl.constexpr,
-     num_seqs: tl.int32,
-@@ -135,13 +122,31 @@ def kernel_unified_attention(
-     KV_QUANT_MODE: tl.constexpr = 0,
-     FP8_MIN: tl.constexpr = float8_info.min,
-     FP8_MAX: tl.constexpr = float8_info.max,
-+    # ========================================
-+    # These parameters are not dereferenced in some static paths. Set their
-+    # default values to `None` so Triton can discard the extraneous parameters
-+    # and reduce register pressure when applicable.
-+    # ----------------------------------------
-+    k_scale_cache_ptr=None,
-+    v_scale_cache_ptr=None,
-+    stride_ks_blk=None,
-+    stride_ks_slot=None,
-+    stride_ks_head=None,
-+    stride_vs_blk=None,
-+    stride_vs_slot=None,
-+    stride_vs_head=None,
-+    segm_output_ptr=None,
-+    segm_max_ptr=None,
-+    segm_expsum_ptr=None,
-+    # ========================================
-     # Chunked / block-local attention.  ``CHUNK_LOOKBACK >= 0`` enables
-     # chunked masking (used by Gemma3 block-local layers); takes precedence
-     # over ``SLIDING_WINDOW`` inside the helpers.  ``-1`` disables.
-     CHUNK_LOOKBACK: tl.constexpr = -1,
-     CHUNK_SIZE: tl.constexpr = -1,
- ):
--    USE_PER_TOKEN_HEAD_SCALES: tl.constexpr = KV_QUANT_MODE >= 2
-+    # Per-(token, head) scale caches (used iff KV_QUANT_MODE in {2, 3}).
-+    USE_PER_TOKEN_HEAD_SCALES: tl.constexpr = (KV_QUANT_MODE >= 2) and (KV_QUANT_MODE <= 3)
- 
-     q_block_global_idx = tl.program_id(0)
-     kv_head_idx = tl.program_id(1)
-@@ -637,17 +642,16 @@ def unified_attention(
-         k_scale_ptr = k_scale_cache
-         v_scale_ptr = v_scale_cache
-     else:
--        ks_blk = ks_slot = ks_head = 0
--        vs_blk = vs_slot = vs_head = 0
--        # Pass the K cache as a stand-in pointer; never dereferenced.
--        k_scale_ptr = k
--        v_scale_ptr = v
--
--    # 3D needs real segm tensors; 2D never touches them but Triton wants
--    # a non-null pointer.  Reuse ``out`` as the placeholder.
--    segm_output_ptr = softmax_segm_output if use_3d else out
--    segm_max_ptr = softmax_segm_max if use_3d else out
--    segm_expsum_ptr = softmax_segm_expsum if use_3d else out
-+        # Never dereferenced.
-+        ks_blk = ks_slot = ks_head = None
-+        vs_blk = vs_slot = vs_head = None
-+        k_scale_ptr = None
-+        v_scale_ptr = None
-+
-+    # 3D needs real segm tensors; 2D never touches them.
-+    segm_output_ptr = softmax_segm_output if use_3d else None
-+    segm_max_ptr = softmax_segm_max if use_3d else None
-+    segm_expsum_ptr = softmax_segm_expsum if use_3d else None
-     num_segments = num_par_softmax_segments if use_3d else 1
- 
-     grid: tuple[Any, ...]
-@@ -660,9 +664,6 @@ def unified_attention(
- 
-     kernel_unified_attention[grid](
-         output_ptr=out,
--        segm_output_ptr=segm_output_ptr,
--        segm_max_ptr=segm_max_ptr,
--        segm_expsum_ptr=segm_expsum_ptr,
-         query_ptr=q,
-         key_cache_ptr=k,
-         value_cache_ptr=v,
-@@ -671,8 +672,6 @@ def unified_attention(
-         seq_lens_ptr=seqused_k,
-         alibi_slopes_ptr=alibi_slopes,
-         qq_bias_ptr=qq_bias,
--        k_scale_cache_ptr=k_scale_ptr,
--        v_scale_cache_ptr=v_scale_ptr,
-         scale=softmax_scale,
-         k_scale=k_descale,
-         v_scale=v_descale,
-@@ -707,12 +706,6 @@ def unified_attention(
-         stride_v_cache_1=v.stride(1),
-         stride_v_cache_2=v.stride(2),
-         stride_v_cache_3=v.stride(3),
--        stride_ks_blk=ks_blk,
--        stride_ks_slot=ks_slot,
--        stride_ks_head=ks_head,
--        stride_vs_blk=vs_blk,
--        stride_vs_slot=vs_slot,
--        stride_vs_head=vs_head,
-         query_start_len_ptr=cu_seqlens_q,
-         BLOCK_Q=BLOCK_Q,
-         num_seqs=num_seqs,
-@@ -721,6 +714,17 @@ def unified_attention(
-         USE_FP8=output_scale is not None,
-         IS_3D=use_3d,
-         KV_QUANT_MODE=kv_quant_mode,
-+        k_scale_cache_ptr=k_scale_ptr,
-+        v_scale_cache_ptr=v_scale_ptr,
-+        stride_ks_blk=ks_blk,
-+        stride_ks_slot=ks_slot,
-+        stride_ks_head=ks_head,
-+        stride_vs_blk=vs_blk,
-+        stride_vs_slot=vs_slot,
-+        stride_vs_head=vs_head,
-+        segm_output_ptr=segm_output_ptr,
-+        segm_max_ptr=segm_max_ptr,
-+        segm_expsum_ptr=segm_expsum_ptr,
-         CHUNK_LOOKBACK=chunk_lookback,
-         CHUNK_SIZE=chunk_size,
+@@ -86,7 +87,7 @@ def mixer2_gated_norm_tensor_parallel(
      )
-diff --git a/tests/kernels/mamba/test_mamba_ssm.py b/tests/kernels/mamba/test_mamba_ssm.py
-index 81715be98..b6a067330 100644
---- a/tests/kernels/mamba/test_mamba_ssm.py
-+++ b/tests/kernels/mamba/test_mamba_ssm.py
-@@ -77,10 +77,9 @@ def selective_state_update_ref(
+ 
+     # initialize distributed
+-    init_distributed_environment()
++    init_distributed_environment(backend=current_platform.dist_backend)
+     with ensure_current_vllm_config():
+         initialize_model_parallel(tensor_model_parallel_size=world_size)
+ 
+@@ -96,10 +97,11 @@ def mixer2_gated_norm_tensor_parallel(
+     gate_states = torch.randn(batch_size, seq_len, hidden_size)
+ 
+     # create gated-norm with TP
+-    mixer = Mixer2RMSNormGated(
+-        full_hidden_size=hidden_size,
+-        full_n_groups=n_groups,
+-    )
++    with ensure_current_vllm_config():
++        mixer = Mixer2RMSNormGated(
++            full_hidden_size=hidden_size,
++            full_n_groups=n_groups,
++        )
+     mixer.weight.weight_loader(mixer.weight, weight)  # load
+ 
+     # create gated-norm without TP to compute reference
+@@ -115,6 +117,7 @@ def mixer2_gated_norm_tensor_parallel(
+             "get_tensor_model_parallel_rank",
+             return_value=0,
+         ),
++        ensure_current_vllm_config(),
+     ):
+         mixer_single_gpu = Mixer2RMSNormGated(
+             full_hidden_size=hidden_size,
+diff --git a/tests/kernels/mamba/utils.py b/tests/kernels/mamba/utils.py
+index fb8a4b0a2..7ab490aaf 100644
+--- a/tests/kernels/mamba/utils.py
++++ b/tests/kernels/mamba/utils.py
+@@ -66,10 +66,9 @@ def selective_state_update_ref(
      dB = rearrange(dt, "b h d -> b h d 1") * rearrange(
          B, "b h n -> b h 1 n"
      )  # (batch, nheads, dim, dstate)
@@ -306,3 +61,43 @@ index 81715be98..b6a067330 100644
      if D is not None:
          out += (x * D).to(out.dtype)
      out = (out if z is None else out * F.silu(z)).to(x.dtype)
+diff --git a/tests/utils.py b/tests/utils.py
+index 2a3bdb91f..c74587d5f 100644
+--- a/tests/utils.py
++++ b/tests/utils.py
+@@ -1896,7 +1896,12 @@ def spawn_new_process_for_each_test(f: Callable[_P, None]) -> Callable[_P, None]
+ 
+             repo_root = str(VLLM_PATH.resolve())
+             env = os.environ.copy()
+-            env["PYTHONPATH"] = repo_root + os.pathsep + env.get("PYTHONPATH", "")
++            test_module_dir = str(Path(f.__code__.co_filename).resolve().parent)
++            env["PYTHONPATH"] = os.pathsep.join(
++                path
++                for path in (repo_root, test_module_dir, env.get("PYTHONPATH", ""))
++                if path
++            )
+             env[_SPAWN_CHILD_ENV] = "1"
+ 
+             result = subprocess.run(
+diff --git a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
+index 21bda8e17..e7f11e934 100644
+--- a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
++++ b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
+@@ -618,7 +618,7 @@ class NaiveBatchedExperts(mk.FusedMoEExpertsModular):
+             # Indexing expert_num_tokens doesn't work w/cudagraphs or inductor
+             if (
+                 torch.compiler.is_compiling()
+-                or torch.cuda.is_current_stream_capturing()
++                or (torch.cuda.is_available() and torch.cuda.is_current_stream_capturing())
+             ):
+                 num = hidden_states.shape[1]
+             else:
+@@ -659,7 +659,7 @@ def batched_moe_kernel_quantize_input(
+     per_act_token_quant: bool,
+     block_shape: list[int] | None = None,
+ ) -> tuple[torch.Tensor, torch.Tensor | None]:
+-    if torch.compiler.is_compiling() or torch.cuda.is_current_stream_capturing():
++    if torch.compiler.is_compiling() or (torch.cuda.is_available() and torch.cuda.is_current_stream_capturing()):
+         # Note: this does a bunch of extra work because expert_num_tokens is
+         # ignored but it does support torch.compile + cudagraphs.
+         hidden_dim = A.size(-1)

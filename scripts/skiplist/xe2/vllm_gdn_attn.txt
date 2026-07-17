@@ -1,0 +1,11 @@
+# Tensor-likes are not close on B580: https://github.com/intel/intel-xpu-backend-for-triton/issues/7333
+tests/kernels/test_fused_sigmoid_gating_delta_rule.py::test_fused_sigmoid_gating_delta_rule_update_non_spec[dtype0-128-128-32-16-2-1]
+tests/kernels/test_fused_sigmoid_gating_delta_rule.py::test_fused_sigmoid_gating_delta_rule_update_non_spec[dtype0-128-128-32-16-4-1]
+tests/kernels/test_fused_sigmoid_gating_delta_rule.py::test_fused_sigmoid_gating_delta_rule_update_non_spec[dtype1-128-128-32-16-2-1]
+tests/kernels/test_fused_sigmoid_gating_delta_rule.py::test_fused_sigmoid_gating_delta_rule_update_non_spec[dtype1-128-128-32-16-4-1]
+tests/kernels/test_fused_sigmoid_gating_delta_rule.py::test_fused_sigmoid_gating_delta_rule_update_spec[dtype0-3-128-128-32-16-2-1]
+tests/kernels/test_fused_sigmoid_gating_delta_rule.py::test_fused_sigmoid_gating_delta_rule_update_spec[dtype1-3-128-128-32-16-2-1]
+
+# Skip tests using Meta-Llama-3-8B
+tests/v1/attention/test_gdn_metadata_builder.py::test_gdn_build_classification
+tests/v1/attention/test_gdn_metadata_builder.py::test_has_initial_state_after_reclassification

@@ -45,13 +45,32 @@ Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
   return reduced_val;
 }
 
+Value TargetInfo::getGlobalTimer(RewriterBase &rewriter, Location loc) const {
+  // No nanosecond wall-clock builtin is wired up for the SPIR-V target.
+  llvm::report_fatal_error(
+      "getGlobalTimer is not implemented for the Intel SPIR-V target");
+}
+
+StringRef TargetInfo::getAtomicSyncScope(MemSyncScope scope) const {
+  switch (scope) {
+  case MemSyncScope::CTA:
+    return "workgroup";
+  case MemSyncScope::GPU:
+    return "device";
+  case MemSyncScope::SYSTEM:
+    return {};
+  }
+  llvm_unreachable("unknown memory synchronization scope");
+}
+
 void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
                          triton::gpu::AddrSpace targets) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   b.barrier(targets);
 }
 
-void TargetInfo::clusterBarrier(Location loc, RewriterBase &rewriter) const {
+void TargetInfo::clusterBarrier(Location loc, RewriterBase &rewriter,
+                                Operation * /*sourceOp*/) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   b.barrier(triton::gpu::AddrSpace::Local);
 }
@@ -68,8 +87,7 @@ Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
 }
 
 void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
-                              std::optional<Value> ctaId, Value val,
-                              Value pred) const {
+                              Value ctaId, Value val, Value pred) const {
   LLVM::intel::createPredicatedBlock(rewriter, loc, pred, [&] {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     b.store(val, ptr);
@@ -78,8 +96,8 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
 }
 
 Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
-                              std::optional<Value> ctaId, Type elemTy,
-                              Value pred, Operation *localLoadOp) const {
+                              Value ctaId, Type elemTy, Value pred,
+                              Operation *localLoadOp) const {
   assert(cast<mlir::LLVM::LLVMPointerType>(ptr.getType()).getAddressSpace() ==
              3 &&
          "Invalid addr space for loadShared");

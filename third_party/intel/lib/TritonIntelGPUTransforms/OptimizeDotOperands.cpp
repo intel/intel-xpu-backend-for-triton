@@ -80,9 +80,6 @@ private:
             ttgi::TritonIntelGPUDialect::getSupport2DBlockIOAttrName()))
       return false;
 
-    if (transOp->getParentOfType<scf::WhileOp>())
-      return false;
-
     if (!transOp->hasOneUse())
       return false;
 
@@ -103,7 +100,8 @@ private:
     if (!descLoadOp || !descLoadOp->hasOneUse())
       return false;
 
-    if (cast<RankedTensorType>(descLoadOp.getType()).getRank() < 2)
+    auto resultRank = cast<RankedTensorType>(descLoadOp.getType()).getRank();
+    if (resultRank < 2)
       return false;
 
     // Validate that the transpose only swaps the innermost 2 dimensions
@@ -148,9 +146,10 @@ private:
 
     // Keep the original descriptor — do NOT reverse it.
     // The descriptor is always row-major (stride-1 on last dim).
-    auto descType = cast<tt::TensorDescType>(descLoadOp.getDesc().getType());
-    RankedTensorType blockType = descType.getBlockType();
-    ArrayRef<int64_t> origShape = blockType.getShape();
+    // Use the result type shape (not the descriptor block type shape) to handle
+    // rank-reducing descriptor loads where block type rank > result rank.
+    auto resultType = cast<RankedTensorType>(descLoadOp.getType());
+    ArrayRef<int64_t> origShape = resultType.getShape();
     ArrayRef<int> perm = transOp.getOrder();
     SmallVector<int64_t> transposedShape(origShape.size());
     for (unsigned i = 0; i < origShape.size(); ++i)

@@ -13,7 +13,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1x32x!tt.ptr<f16>, #dot0>
     %3 = tt.addptr %2, %1 : tensor<1x32x!tt.ptr<f16>, #dot0>, tensor<1x32xi32, #dot0>
     %4 = tt.broadcast %3 : tensor<1x32x!tt.ptr<f16>, #dot0> -> tensor<64x32x!tt.ptr<f16>, #dot0>
-    // CHECK: ttig.2d_block_load_from_ptr %4 {row_major} {base_height = 1 : i32, base_pitch = 64 : i32, base_width = 64 : i32}
+    // CHECK: %[[P:.*]] = arith.constant 128 : i32
+    // CHECK: ttig.2d_block_load_from_ptr %4, %[[P]] {row_major} {base_height = 1 : i32, base_width = 32 : i32}
     %5 = tt.load %4 {ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #dot0>
     tt.return %5 : tensor<64x32xf16, #dot0>
   }
@@ -33,7 +34,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1x64x!tt.ptr<f16>, #dot1>
     %3 = tt.addptr %2, %1 : tensor<1x64x!tt.ptr<f16>, #dot1>, tensor<1x64xi32, #dot1>
     %4 = tt.broadcast %3 : tensor<1x64x!tt.ptr<f16>, #dot1> -> tensor<32x64x!tt.ptr<f16>, #dot1>
-    // CHECK: ttig.2d_block_load_from_ptr %4 {column_major} {base_height = 1 : i32, base_pitch = 64 : i32, base_width = 64 : i32}
+    // CHECK: %[[P:.*]] = arith.constant 128 : i32
+    // CHECK: ttig.2d_block_load_from_ptr %4, %[[P]] {column_major} {base_height = 1 : i32, base_width = 32 : i32}
     %5 = tt.load %4 {ttig.block_io = "column_major"} : tensor<32x64x!tt.ptr<f16>, #dot1>
     tt.return %5 : tensor<32x64xf16, #dot1>
   }
@@ -102,7 +104,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1x32x!tt.ptr<f16>, #dot0>
     %3 = tt.addptr %2, %1 : tensor<1x32x!tt.ptr<f16>, #dot0>, tensor<1x32xi32, #dot0>
     %4 = tt.broadcast %3 : tensor<1x32x!tt.ptr<f16>, #dot0> -> tensor<64x32x!tt.ptr<f16>, #dot0>
-    // CHECK: ttig.2d_block_load_from_ptr %4 {row_major} {base_height = 64 : i32, base_pitch = 512 : i32, base_width = 64 : i32, ttig.block_io_stride = 256 : i64}
+    // CHECK: %[[P:.*]] = arith.constant 512 : i32
+    // CHECK: ttig.2d_block_load_from_ptr %4, %[[P]] {row_major} {base_height = 64 : i32, base_width = 64 : i32, ttig.block_io_stride = 256 : i64}
     %5 = tt.load %4 {ttig.block_io = "row_major", ttig.block_io_stride = 256 : i64} : tensor<64x32x!tt.ptr<f16>, #dot0>
     tt.return %5 : tensor<64x32xf16, #dot0>
   }
@@ -168,10 +171,77 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %7 = arith.addi %5, %6 : tensor<32x64xi32, #dot1>
     %8 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<32x64x!tt.ptr<f16>, #dot1>
     %9 = tt.addptr %8, %7 : tensor<32x64x!tt.ptr<f16>, #dot1>, tensor<32x64xi32, #dot1>
-    // CHECK: ttig.2d_block_load_from_ptr %9 {column_major}
-    // CHECK-SAME: base_pitch = 256
+    // CHECK: %[[P:.*]] = arith.constant 256 : i32
+    // CHECK: ttig.2d_block_load_from_ptr %9, %[[P]] {column_major}
     %10 = tt.load %9 {ttig.block_io = "column_major"} : tensor<32x64x!tt.ptr<f16>, #dot1>
     tt.return %10 : tensor<32x64xf16, #dot1>
+  }
+}
+
+// -----
+
+// COM: Row-major pointer load whose row stride (`lda`) is a runtime scalar,
+// COM: as in grouped GEMM. StrideAnalysis cannot fold it to a constant, but it
+// COM: recovers the SSA value, so the pass feeds `lda * elemSize` as the pitch
+// COM: operand (rather than a materialized arith.constant).
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @runtime_row_stride
+  tt.func @runtime_row_stride(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %lda: i32 {tt.divisibility = 16 : i32}) -> tensor<64x32xf16, #dot0> {
+    // Build ptr[i, j] = arg0 + i * lda + j  (row-major, runtime row stride lda).
+    %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>> -> tensor<64x1xi32, #dot0>
+    %lda_splat = tt.splat %lda : i32 -> tensor<64x1xi32, #dot0>
+    %row = arith.muli %1, %lda_splat : tensor<64x1xi32, #dot0>
+    %2 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>>
+    %3 = tt.expand_dims %2 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>> -> tensor<1x32xi32, #dot0>
+    %rowb = tt.broadcast %row : tensor<64x1xi32, #dot0> -> tensor<64x32xi32, #dot0>
+    %colb = tt.broadcast %3 : tensor<1x32xi32, #dot0> -> tensor<64x32xi32, #dot0>
+    %off = arith.addi %rowb, %colb : tensor<64x32xi32, #dot0>
+    %base = tt.splat %arg0 : !tt.ptr<f16> -> tensor<64x32x!tt.ptr<f16>, #dot0>
+    %ptr = tt.addptr %base, %off : tensor<64x32x!tt.ptr<f16>, #dot0>, tensor<64x32xi32, #dot0>
+    // CHECK: %[[C2:.*]] = arith.constant 2 : i32
+    // CHECK: %[[PITCH:.*]] = arith.muli %{{.*}}, %[[C2]] : i32
+    // CHECK: ttig.2d_block_load_from_ptr %{{.*}}, %[[PITCH]] {row_major} {base_height = 8 : i32, base_width = 32 : i32}
+    %5 = tt.load %ptr {ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #dot0>
+    tt.return %5 : tensor<64x32xf16, #dot0>
+  }
+}
+
+// -----
+
+// COM: Grouped GEMM advances the pointer inside the K-loop, so the load sees a
+// COM: loop-carried iter-arg. The runtime stride (`lda`) is loop-invariant, so
+// COM: the dataflow fixpoint still recovers it and the in-loop load lowers to a
+// COM: block load with the runtime pitch operand.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @loop_carried_runtime_stride
+  tt.func @loop_carried_runtime_stride(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %lda: i32 {tt.divisibility = 16 : i32}, %lb: index, %ub: index, %step: index) -> tensor<64x32xf16, #dot0> {
+    %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>> -> tensor<64x1xi32, #dot0>
+    %lda_splat = tt.splat %lda : i32 -> tensor<64x1xi32, #dot0>
+    %row = arith.muli %1, %lda_splat : tensor<64x1xi32, #dot0>
+    %2 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>>
+    %3 = tt.expand_dims %2 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>> -> tensor<1x32xi32, #dot0>
+    %rowb = tt.broadcast %row : tensor<64x1xi32, #dot0> -> tensor<64x32xi32, #dot0>
+    %colb = tt.broadcast %3 : tensor<1x32xi32, #dot0> -> tensor<64x32xi32, #dot0>
+    %off = arith.addi %rowb, %colb : tensor<64x32xi32, #dot0>
+    %base = tt.splat %arg0 : !tt.ptr<f16> -> tensor<64x32x!tt.ptr<f16>, #dot0>
+    %ptr0 = tt.addptr %base, %off : tensor<64x32x!tt.ptr<f16>, #dot0>, tensor<64x32xi32, #dot0>
+    %cst32 = arith.constant dense<32> : tensor<64x32xi32, #dot0>
+    // CHECK: scf.for
+    // CHECK: %[[PITCH:.*]] = arith.muli %{{.*}}, %{{.*}} : i32
+    // CHECK: ttig.2d_block_load_from_ptr %{{.*}}, %[[PITCH]] {row_major}
+    %res = scf.for %i = %lb to %ub step %step iter_args(%p = %ptr0) -> (tensor<64x32x!tt.ptr<f16>, #dot0>) {
+      %ld = tt.load %p {ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #dot0>
+      %pn = tt.addptr %p, %cst32 : tensor<64x32x!tt.ptr<f16>, #dot0>, tensor<64x32xi32, #dot0>
+      scf.yield %pn : tensor<64x32x!tt.ptr<f16>, #dot0>
+    }
+    %final = tt.load %res {ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #dot0>
+    tt.return %final : tensor<64x32xf16, #dot0>
   }
 }
 

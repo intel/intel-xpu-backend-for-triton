@@ -34,6 +34,8 @@ static std::vector<std::pair<sycl::device, ze_device_handle_t>>
 
 // Cache for IntelGPUError exception class
 static PyObject *g_intel_gpu_error_class = nullptr;
+// Cache for OutOfResources exception class (autotune-friendly)
+static PyObject *g_out_of_resources_class = nullptr;
 
 static PyObject *getIntelGPUErrorClass() {
   if (g_intel_gpu_error_class != nullptr) {
@@ -56,6 +58,83 @@ static PyObject *getIntelGPUErrorClass() {
   }
 
   return g_intel_gpu_error_class;
+}
+
+static PyObject *getOutOfResourcesClass() {
+  if (g_out_of_resources_class != nullptr) {
+    return g_out_of_resources_class;
+  }
+  PyObject *module = PyImport_ImportModule("triton.runtime.errors");
+  if (module == nullptr) {
+    PyErr_SetString(PyExc_ImportError, "cannot import triton.runtime.errors");
+    return NULL;
+  }
+  g_out_of_resources_class = PyObject_GetAttrString(module, "OutOfResources");
+  Py_DECREF(module);
+  if (g_out_of_resources_class == nullptr) {
+    PyErr_SetString(PyExc_AttributeError,
+                    "cannot find OutOfResources in triton.runtime.errors");
+    return NULL;
+  }
+  return g_out_of_resources_class;
+}
+
+// Inspect the IGC build log captured by create_module() and, if it carries a
+// PTSS-overflow diagnostic, raise OutOfResources directly (autotune catches
+// it). Returns true if it raised; caller should bail out. Returns false if
+// the log doesn't match a PTSS pattern, in which case the caller falls
+// through to the regular IntelGPUError path.
+static bool tryRaisePTSSOutOfResources() {
+  const std::string &log = g_last_module_build_log;
+  if (log.empty()) {
+    return false;
+  }
+  // Match the same set of phrases as the Python regex in compiler.py so the
+  // AOT and JIT paths classify identically.
+  static const char *kMarkers[] = {
+      "total scratch space",
+      "scratch space exceeds",
+      "exceeding max permitted PTSS",
+      "per-thread scratch space",
+  };
+  bool match = false;
+  for (const char *m : kMarkers) {
+    if (log.find(m) != std::string::npos) {
+      match = true;
+      break;
+    }
+  }
+  if (!match) {
+    return false;
+  }
+
+  PyGILState_STATE gil_state = PyGILState_Ensure();
+  PyObject *cls = getOutOfResourcesClass();
+  if (cls == NULL) {
+    PyGILState_Release(gil_state);
+    return false; // fall back to IntelGPUError
+  }
+  // OutOfResources(required, limit, name): we don't always have parsed byte
+  // counts at this layer (the compiler.py path parses them when available);
+  // pass 0/0 with an informative name that includes the IGC log excerpt so
+  // the user still sees the real cause via str(e).
+  std::string name = "per-thread scratch space (PTSS). IGC build log: ";
+  name.append(log.substr(0, 1024)); // bound the message size
+  PyObject *args = Py_BuildValue("(iis)", 0, 0, name.c_str());
+  if (args == NULL) {
+    PyGILState_Release(gil_state);
+    return false;
+  }
+  PyObject *exc = PyObject_CallObject(cls, args);
+  Py_DECREF(args);
+  if (exc == NULL) {
+    PyGILState_Release(gil_state);
+    return false;
+  }
+  PyErr_SetObject(cls, exc);
+  Py_DECREF(exc);
+  PyGILState_Release(gil_state);
+  return true;
 }
 
 static void zeConstructError(const char *file, int line, const char *message,
@@ -155,6 +234,15 @@ checkZeCodeAndSetPyErr(const std::tuple<T, ze_result_t> syclTuple,
   const auto code = std::get<1>(syclTuple);
   if (code == ZE_RESULT_SUCCESS)
     return std::get<0>(syclTuple);
+
+  // Module build failures often carry a PTSS-overflow diagnostic in the IGC
+  // build log captured by create_module(). When the log matches the PTSS
+  // pattern, raise OutOfResources directly so triton.runtime.autotuner can
+  // skip the offending tile config. Falls through to IntelGPUError otherwise.
+  if (code == ZE_RESULT_ERROR_MODULE_BUILD_FAILURE &&
+      tryRaisePTSSOutOfResources()) {
+    return std::get<0>(syclTuple);
+  }
 
   TRITON_ZE_SET_INTEL_ERR(file, line, code);
   return std::get<0>(syclTuple);
@@ -294,10 +382,7 @@ struct BuildFlags {
     if (build_flags_str.find(SMALL_GRF_FLAG) != std::string::npos) {
       return 128;
     }
-    // TODO: arguably we could return 128 if we find no flag instead of 0. For
-    // now, stick with the conservative choice and alert the user only if a
-    // specific GRF mode is specified.
-    return 0;
+    return 128; // default GRF size if no flag is specified
   }
 
   const bool hasGRFSizeFlag() const {
@@ -721,50 +806,35 @@ ExtractorTypeIndex &operator++(ExtractorTypeIndex &idx) {
   return idx;
 }
 
+typedef void (*SetArgFunc)(sycl::handler &, int, const void *);
+
+// Static table indexed by ExtractorTypeIndex, called from the per-argument
+// hot path inside the kernel submit lambda. A small, cache-resident table of
+// function pointers turns what would otherwise be a per-argument switch
+// (branch mispredicts under cache pressure) into a simple indirect call.
+// Positional initialization matches enum order to avoid designated
+// initializers, which require /std:c++20 on MSVC (see extraction_map above).
+static const SetArgFunc set_arg_table[EXTRACTOR_TYPE_COUNT] = {
+    /* EXTRACTOR_UNKOWN_INDEX   */ nullptr,
+    /* EXTRACTOR_POINTER_INDEX  */ set_scalar_arg<void *>,
+    /* EXTRACTOR_INT8_INDEX     */ set_scalar_arg<int8_t>,
+    /* EXTRACTOR_INT16_INDEX    */ set_scalar_arg<int16_t>,
+    /* EXTRACTOR_INT32_INDEX    */ set_scalar_arg<int32_t>,
+    /* EXTRACTOR_INT64_INDEX    */ set_scalar_arg<int64_t>,
+    /* EXTRACTOR_UINT8_INDEX    */ set_scalar_arg<uint8_t>,
+    /* EXTRACTOR_UINT16_INDEX   */ set_scalar_arg<uint16_t>,
+    /* EXTRACTOR_UINT32_INDEX   */ set_scalar_arg<uint32_t>,
+    /* EXTRACTOR_UINT64_INDEX   */ set_scalar_arg<uint64_t>,
+    /* EXTRACTOR_FP16_INDEX     */ set_scalar_arg<uint16_t>,
+    /* EXTRACTOR_BF16_INDEX     */ set_scalar_arg<uint16_t>,
+    /* EXTRACTOR_FP32_INDEX     */ set_scalar_arg<uint32_t>,
+    /* EXTRACTOR_FP64_INDEX     */ set_scalar_arg<uint64_t>,
+};
+
 static inline void setScalarArgByType(sycl::handler &cgh, int index,
                                       const void *value, uint8_t type_idx) {
-  switch ((ExtractorTypeIndex)type_idx) {
-  case EXTRACTOR_POINTER_INDEX:
-    set_scalar_arg<void *>(cgh, index, value);
-    break;
-  case EXTRACTOR_INT8_INDEX:
-    set_scalar_arg<int8_t>(cgh, index, value);
-    break;
-  case EXTRACTOR_INT16_INDEX:
-    set_scalar_arg<int16_t>(cgh, index, value);
-    break;
-  case EXTRACTOR_INT32_INDEX:
-    set_scalar_arg<int32_t>(cgh, index, value);
-    break;
-  case EXTRACTOR_INT64_INDEX:
-    set_scalar_arg<int64_t>(cgh, index, value);
-    break;
-  case EXTRACTOR_UINT8_INDEX:
-    set_scalar_arg<uint8_t>(cgh, index, value);
-    break;
-  case EXTRACTOR_UINT16_INDEX:
-    set_scalar_arg<uint16_t>(cgh, index, value);
-    break;
-  case EXTRACTOR_UINT32_INDEX:
-    set_scalar_arg<uint32_t>(cgh, index, value);
-    break;
-  case EXTRACTOR_UINT64_INDEX:
-    set_scalar_arg<uint64_t>(cgh, index, value);
-    break;
-  case EXTRACTOR_FP16_INDEX:
-    set_scalar_arg<uint16_t>(cgh, index, value);
-    break;
-  case EXTRACTOR_BF16_INDEX:
-    set_scalar_arg<uint16_t>(cgh, index, value);
-    break;
-  case EXTRACTOR_FP32_INDEX:
-    set_scalar_arg<uint32_t>(cgh, index, value);
-    break;
-  case EXTRACTOR_FP64_INDEX:
-    set_scalar_arg<uint64_t>(cgh, index, value);
-    break;
-  default:
-    break;
+  if (type_idx < EXTRACTOR_TYPE_COUNT && set_arg_table[type_idx] != nullptr) {
+    set_arg_table[type_idx](cgh, index, value);
   }
 }
 
@@ -979,6 +1049,12 @@ Extractor getExtractor(uint8_t index) {
   return extraction_map[index];
 }
 
+// Rounds `value` up to the next multiple of `alignment` (which must be a
+// power of 2).
+static inline uintptr_t alignUp(uintptr_t value, size_t alignment) {
+  return (value + alignment - 1) & ~(uintptr_t)(alignment - 1);
+}
+
 static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
                                int num_warps, int threads_per_warp,
                                int shared_memory, sycl::queue &stream,
@@ -986,15 +1062,16 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
                                void *profile_scratch, uint32_t num_params,
                                void **params, uint8_t *extractor_data) {
 
+#if defined(TRITON_INTEL_INJECT_PYTORCH)
   std::string kernel_name =
       kernel_ptr.get_info<sycl::info::kernel::function_name>();
-#if defined(TRITON_INTEL_INJECT_PYTORCH)
   RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {});
 #endif
 
   uint32_t expected_num_params =
       kernel_ptr.get_info<sycl::info::kernel::num_args>();
-  size_t global_range_x = gridX * threads_per_warp * num_warps;
+  size_t global_range_x =
+      static_cast<size_t>(gridX) * threads_per_warp * num_warps;
   size_t global_range_y = gridY;
   size_t global_range_z = gridZ;
   size_t local_range_x = num_warps * threads_per_warp;
@@ -1009,6 +1086,10 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
 
   static bool launchDebug = getBoolEnv("TRITON_INTEL_LAUNCH_DEBUG");
   if (launchDebug) {
+#if !defined(TRITON_INTEL_INJECT_PYTORCH)
+    std::string kernel_name =
+        kernel_ptr.get_info<sycl::info::kernel::function_name>();
+#endif
     std::cout << "kernel info name:" << kernel_name << " @" << &kernel_ptr
               << std::endl;
     std::cout << "kernel info attributes:"
@@ -1269,35 +1350,42 @@ extern "C" EXPORT_FUNC PyObject *launch(PyObject *args) {
   void **params = (void **)alloca(num_params * sizeof(void *));
   int params_idx = 0;
   PointerCheckScope pointerCheckScope(stream);
+
+  // Precompute a tightly-packed layout for all parameter storage, then do a
+  // single alloca for the whole buffer instead of one alloca per parameter.
+  // This keeps all parameter data contiguous on the stack rather than
+  // scattered across num_args separate stack regions.
+  Extractor *extractors = (Extractor *)alloca(num_args * sizeof(Extractor));
+  size_t *param_offset = (size_t *)alloca(num_args * sizeof(size_t));
+  size_t total_size = 0;
+  size_t max_alignment = 1;
+  for (Py_ssize_t i = 0; i < num_args; ++i) {
+    extractors[i] = getExtractor(extractor_data[i]);
+    if (extractors[i].extract == NULL) {
+      PyBuffer_Release(&signature);
+      return NULL;
+    }
+    size_t alignment = extractors[i].alignment ? extractors[i].alignment : 1;
+    total_size = alignUp(total_size, alignment);
+    param_offset[i] = total_size;
+    total_size += extractors[i].size;
+    if (alignment > max_alignment) {
+      max_alignment = alignment;
+    }
+  }
+  // Offsets above are only aligned relative to offset 0, so the base
+  // pointer itself must be rounded up to max_alignment for those relative
+  // offsets to translate into absolutely-aligned addresses.
+  char *param_storage_raw = (char *)alloca(total_size + max_alignment - 1);
+  char *param_storage =
+      (char *)alignUp((uintptr_t)param_storage_raw, max_alignment);
+
   // This loop has to stay in the same function that owns params, since we are
   // using alloca to allocate pointers to it on the stack of the function.
   for (Py_ssize_t i = 0; i < num_args; ++i) {
     g_pointer_check_arg_idx = static_cast<int>(i);
-    // Get extractor that will send back a struct with
-    // * size for allocation
-    // * function to call to put the parameter in params buffer
-    Extractor extractor = getExtractor(extractor_data[i]);
-    if (extractor.extract == NULL) {
-      PyBuffer_Release(&signature);
-      return NULL;
-    }
-
-    size_t alignment = extractor.alignment;
-    if (alignment != 0) {
-      // Allocate enough space on the stack to guarantee an aligned block.
-      size_t size_with_alignment = extractor.size + alignment - 1;
-      void *storage_ptr = alloca(size_with_alignment);
-      void *aligned_ptr = (void *)((((uintptr_t)storage_ptr) + alignment - 1) &
-                                   ~(alignment - 1));
-      if (aligned_ptr == NULL) {
-        PyErr_SetString(PyExc_MemoryError, "Failed to align parameter storage");
-        PyBuffer_Release(&signature);
-        return NULL;
-      }
-      params[params_idx] = aligned_ptr;
-    } else {
-      params[params_idx] = alloca(extractor.size);
-    }
+    Extractor extractor = extractors[i];
+    params[params_idx] = param_storage + param_offset[i];
 
     PyObject *current_arg = args_data[i];
     if (!extractor.extract(params[params_idx++], current_arg)) {

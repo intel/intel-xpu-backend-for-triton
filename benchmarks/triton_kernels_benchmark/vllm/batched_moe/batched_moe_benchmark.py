@@ -18,11 +18,13 @@ import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
 
-from vllm.model_executor.layers.fused_moe.fused_batched_moe import invoke_moe_batched_triton_kernel
+from vllm.model_executor.layers.fused_moe.experts.fused_batched_moe import invoke_moe_batched_triton_kernel
 
 # Import utility functions from vLLM tests
 from tests.kernels.moe.utils import make_quantized_test_activations, make_test_weight
 from tests.kernels.quant_utils import native_batched_masked_quant_matmul
+
+from vllm_xpu_kernels.fused_moe_interface import cutlass_grouped_gemm as sycl_tla_grouped_gemm
 
 # Benchmark shapes for batched MoE
 # (E: num_experts, M: max_tokens_per_expert, K: hidden_dim, N: intermediate_dim, fp8, block_quant)
@@ -126,6 +128,9 @@ def get_batched_mm_benchmark(
         # pytorch is very slow with fp8 case, for (8, 64, 1024, 2048) case it has ~0.15 TFlops vs 1.5 for triton
         del supported_providers['pytorch']
 
+    if not is_fp8:
+        supported_providers['sycl-tla'] = 'sycl-tla'
+
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
     configs = MM_CONFIGS_FP8 if is_fp8 else MM_CONFIGS_BF16
 
@@ -138,7 +143,7 @@ def get_batched_mm_benchmark(
             line_names=list(providers.values()),
             styles=[('green', '-'), ('blue', '--'), ('red', ':')],
             ylabel=['GB/s', 'TFlops'],
-            plot_name='moe-gemm-performance' + ('-td' if is_td_patched else ''),
+            plot_name='moe-gemm-performance' + ('-fp8' if is_fp8 else '') + ('-td' if is_td_patched else ''),
             args={},
         ))
     def benchmark(num_experts, max_tokens_per_expert, K, N, fp8, block_quant, provider):
@@ -234,6 +239,36 @@ def get_batched_mm_benchmark(
                 quantiles=quantiles,
             )
 
+        elif provider == 'sycl-tla':
+            counts = num_expert_tokens.tolist()
+
+            # Free batched-format tensors unused by the grouped path, then empty_cache():
+            # del alone keeps them reserved, so input_B_grouped stacks on top and OOMs BMG.
+            del B, B_q, B_scale, C, ref
+            torch.xpu.empty_cache()
+
+            input_B_grouped = torch.empty((num_experts, K, N), device='xpu', dtype=dtype)
+            input_B_grouped.normal_().div_(15)
+            total_tokens = sum(counts)
+            ref_grouped = torch.cat([A_q[e, :counts[e], :] @ input_B_grouped[e] for e in range(num_experts)], dim=0)
+            output_sycl = torch.empty((total_tokens, N), device='xpu', dtype=dtype)
+
+            # Drop per-expert padding inside the timed region so this compaction is
+            # measured with the GEMM, matching Triton's in-kernel masking.
+            def sycl_tla_fn():
+                input_A_grouped = torch.cat([A_q[e, :counts[e], :] for e in range(num_experts)], dim=0).contiguous()
+                sycl_tla_grouped_gemm(input_A_grouped, input_B_grouped, None, output_sycl, counts, N, K, num_experts)
+                return output_sycl
+
+            benchmark_suite.assert_close(sycl_tla_fn, lambda: ref_grouped, atol=atol, rtol=rtol,
+                                         err_msg='sycl-tla to torch')
+            _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
+                sycl_tla_fn,
+                n_warmup=n_warmup,
+                n_repeat=10,
+                quantiles=quantiles,
+            )
+
         else:
             raise NotImplementedError(f'Unsupported provider {provider}')
 
@@ -263,6 +298,16 @@ def get_batched_mm_benchmark(
         return (gbps(mean_ms), gbps(max_ms), gbps(min_ms)), (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
 
     return benchmark
+
+
+def get_benchmark(providers_filter: Optional[list[str]] = None, is_fp8=False, is_td_patched=None):
+    if is_td_patched is None:
+        is_td_patched = os.getenv('TD_PATCHED', '0') == '1'
+    return get_batched_mm_benchmark(
+        providers_filter=providers_filter,
+        is_fp8=is_fp8,
+        is_td_patched=is_td_patched,
+    )
 
 
 if __name__ == '__main__':

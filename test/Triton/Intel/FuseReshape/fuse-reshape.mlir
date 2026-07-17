@@ -61,3 +61,46 @@ tt.func public @fuseLoadWithReshape2(%arg0: tensor<32x256xbf16>, %arg1: !tt.ptr<
 // CHECK:   [[ADD2:%.*]] = arith.addi [[MUL2]], %c32_i32 : i32
 // CHECK:   [[LOAD_A:%.*]] = tt.descriptor_load [[DESC]][[[ADD2]], %c0_i32] : !tt.tensordesc<256x32xbf16> -> tensor<256x32xbf16>
 // CHECK:   tt.dot [[LOAD_A]], {{.*}}, {{.*}}, inputPrecision = tf32 : tensor<256x32xbf16> * tensor<32x256xbf16> -> tensor<256x256xf32>
+
+// -----
+
+// Do not fuse when strides[0] is not provably divisible by strides[1]
+// (e.g., padded strides as in github.com/intel/intel-xpu-backend-for-triton/issues/7030).
+tt.func public @noFusePaddedStrides(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<f32>, %G: i32, %K: i32, %M: i32, %stride0: i64, %stride1: i64) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32>
+  %0 = tt.make_tensor_descriptor %arg1, [%G, %K, %M], [%stride0, %stride1, %c1_i64] : <f32>, <1x16x16xf32>
+  %1 = tt.descriptor_load %0[%c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<1x16x16xf32> -> tensor<1x16x16xf32>
+  %2 = tt.reshape %1 : tensor<1x16x16xf32> -> tensor<16x16xf32>
+  %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<16x16xf32> * tensor<16x16xf32> -> tensor<16x16xf32>
+  tt.return
+}
+// CHECK-LABEL: noFusePaddedStrides
+// CHECK: tt.descriptor_load
+// CHECK: tt.reshape
+
+// -----
+
+// Do not fuse when the collapsed dimension's real extent is not provably a
+// multiple of its block extent, even when strides[0] is provably divisible
+// by strides[1]. Otherwise the per-dimension bounds check lost by fusion
+// would let an over-sized block load spill into the next "row" of the
+// outermost dimension (github.com/intel/intel-xpu-backend-for-triton/issues/7464).
+tt.func public @noFuseNonDivisibleBlockExtent(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<f32>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c8_i64 = arith.constant 8 : i64
+  %c13_i32 = arith.constant 13 : i32
+  %c5_i32 = arith.constant 5 : i32
+  %c104_i64 = arith.constant 104 : i64
+  %cst = arith.constant dense<0.000000e+00> : tensor<64x16xf32>
+  %0 = tt.make_tensor_descriptor %arg1, [%c5_i32, %c13_i32, %c13_i32], [%c104_i64, %c8_i64, %c1_i64] : <f32>, <1x64x16xf32>
+  %1 = tt.descriptor_load %0[%c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<1x64x16xf32> -> tensor<1x64x16xf32>
+  %2 = tt.reshape %1 : tensor<1x64x16xf32> -> tensor<64x16xf32>
+  %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<64x16xf32> * tensor<16x16xf32> -> tensor<64x16xf32>
+  tt.return
+}
+// CHECK-LABEL: noFuseNonDivisibleBlockExtent
+// CHECK: tt.descriptor_load
+// CHECK: tt.reshape

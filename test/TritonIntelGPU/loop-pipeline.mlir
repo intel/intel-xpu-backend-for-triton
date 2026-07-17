@@ -1,4 +1,10 @@
 // RUN: triton-opt %s -split-input-file -tritonintelgpu-pipeline="num-stages=3" | FileCheck %s
+// COM: Behavior-preservation cross-check: when upstream `tritongpu-assign-latencies` and
+// COM: `tritongpu-schedule-loops` annotate the IR before Intel's pipeline pass and the
+// COM: opt-in env var is on, every CHECK line in this file must still match. This proves
+// COM: that the annotation-validated path does not regress prefetch insertion (count,
+// COM: kind, ordering) on real GEMM and FlashAttention-shaped loops.
+// RUN: env TRITON_INTEL_ANNOTATE_LATENCIES=1 triton-opt %s -split-input-file -tritongpu-assign-latencies=num-stages=3 -tritongpu-schedule-loops -tritonintelgpu-pipeline="num-stages=3" | FileCheck %s
 
 // CHECK: #[[$BLOCK_0:.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [1, 0]}>
 // CHECK: #[[$BLOCK_1:.+]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 4], order = [1, 0]}>

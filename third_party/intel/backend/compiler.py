@@ -4,7 +4,7 @@ from triton.backends.intel.driver import compile_module_from_src
 from triton.backends.intel.track import track
 from triton.backends.intel.extension_utils import query_device_extensions
 from triton import knobs
-from triton.runtime.errors import IntelGPUError
+from triton.runtime.errors import IntelGPUError, OutOfResources
 
 from dataclasses import dataclass
 import functools
@@ -46,6 +46,9 @@ class XPUOptions:
     allow_fp8e4nv: bool = False
     allow_fp8e4b15: bool = True
     grf_mode: str = 'default'
+    loop_distribute: bool = knobs.intel.enable_loop_distribution
+    code_sinking: bool = knobs.intel.enable_code_sinking
+    sub_32_dpas: bool = knobs.intel.enable_sub_32_dpas
     use_barrier: bool = False
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
@@ -74,7 +77,16 @@ class XPUOptions:
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
+# Aligned with max_reg_spill in third_party/intel/backend/driver.c
+MAX_REG_SPILL = 1000
+
 SPILL_SIZE_RE = re.compile(r'spill_size\s*[:=]\s*(\d+)')
+PTSS_OVERFLOW_RE = re.compile(
+    r'total scratch space.*?(\d+)\s*bytes.*?max permitted PTSS\s*(\d+)\s*bytes'
+    r'|scratch space exceeds.*?limit'
+    r'|per.thread scratch space.*?exceed',
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def extract_spill_size_from_zebin(file):
@@ -195,6 +207,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # Same Xe3P+ gate as 256B prefetch pending separate driver prop.
         dev_prop['has_256b_load_store'] = tgt_prop.get('has_256b_prefetch', False)
         dev_prop['has_rounded_divide_sqrt'] = tgt_prop.get('has_rounded_divide_sqrt', not is_lts)
+        dev_prop['has_sigmoid'] = tgt_prop.get('has_sigmoid', False)
 
         if '__intel_already_queried_extensions__' not in tgt_prop:
             # All GPUs with the same device_id have the same extensions, so we just
@@ -212,6 +225,45 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if "enable_fp_fusion" not in args:
             args["enable_fp_fusion"] = knobs.language.default_fp_fusion
         return XPUOptions(**args)
+
+    @staticmethod
+    def parse_attr(desc):
+        ret = BaseBackend.parse_attr(desc)
+        if "L" in desc:
+            ret += [["tt.last_dim_divisibility", 8]]
+        if "N" in desc:
+            ret += [["tt.padding", 1]]
+        # "S<val>,<val>,..." encodes non-last stride values for rank-3+
+        # descriptors (enables constexpr stride optimization for FuseReshape).
+        if "S" in desc:
+            idx = desc.index("S") + 1
+            stride_str = desc[idx:]
+            try:
+                strides = [int(x) for x in stride_str.split(",") if x]
+                for i, s in enumerate(strides):
+                    ret += [[f"tt.stride.{i}", s]]
+            except ValueError:
+                pass
+        return ret
+
+    @staticmethod
+    def get_tensordesc_specialization(arg, **kwargs):
+        # "L" = last-dim shape satisfies 2D block IO surface width alignment
+        #   (needed for satisfies2DBlockReadAlignment in MaterializeBlockPointer).
+        #   HW requires 4-byte (DW) alignment; combined with minimum 2 elements
+        #   for the stride-one dim this means shape[-1] * elem_bytes % 8 == 0.
+        # "N" = NaN padding (enables tt.padding attribute).
+        # "S<val>,..." = non-last stride values for rank-3+ (enables constexpr
+        #   stride optimization for FuseReshape).
+        key = ""
+        elem_bytes = arg.base.dtype.itemsize
+        if (arg.shape[-1] * elem_bytes) % 8 == 0:
+            key += "L"
+        if getattr(arg, "padding", None) == "nan":
+            key += "N"
+        if len(arg.strides) >= 3:
+            key += "S" + ",".join(str(s) for s in arg.strides[:-1])
+        return key
 
     def pack_metadata(self, metadata):
         return metadata
@@ -267,6 +319,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # Annotate module with information required by subsequent transformations.
         module_opts.min_sg_size = min(properties["sub_group_sizes"])
         module_opts.support_16bit_atomics = properties["has_16bit_atomics"]
+        module_opts.support_sigmoid = properties["has_sigmoid"]
         module_opts.support_2d_block_io = properties["has_2d_block_io"]
         module_opts.support_bfloat16_arithmetic = properties["has_bfloat16_arithmetic"]
         module_opts.support_bfloat16_conversion = properties["has_bfloat16_conversion"]
@@ -282,6 +335,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             "has_subgroup_matrix_multiply_accumulate_bfloat8"]
         module_opts.support_rounded_divide_sqrt = properties["has_rounded_divide_sqrt"]
         module_opts.threads_per_warp = opt.warp_size
+        module_opts.sub_32_dpas = opt.sub_32_dpas
         module_opts.target_arch = cls.target_arch
 
     @classmethod
@@ -292,9 +346,11 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.common.add_inliner(pm)
         intel.passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
         passes.common.add_cse(pm)
+        intel.passes.ttir.add_reassociate_dot_scale(pm, knobs.intel.fast_math)
         passes.ttir.add_triton_licm(pm)
         intel.passes.ttir.add_remove_masks(pm)
         intel.passes.ttir.add_stride_versioning(pm)
+        intel.passes.ttir.add_descriptor_versioning(pm)
         intel.passes.ttir.add_fuse_reshape(pm)
         intel.passes.ttir.add_fold_true_cmpi(pm)
         intel.passes.ttir.add_prepare_if_combining(pm)
@@ -304,6 +360,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.ttir.add_reorder_broadcast(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
+        if opt.loop_distribute:
+            intel.passes.ttgpuir.add_loop_distribute(pm)
         passes.ttir.add_loop_unroll(pm)
         pm.run(mod, 'make_ttir')
 
@@ -323,6 +381,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         cls.annotate_module(module_opts, properties, opt)
         module_opts.is_lts = cls.is_lts(metadata["target"].arch.get("driver_version"))
         module_opts.use_cl_rounded_divide_sqrt = (module_opts.is_lts and intel.has_precise_divide_sqrt(mod))
+        module_opts.is_fast_math = knobs.intel.fast_math
         intel.passes.ttgpuir.add_triton_annotate_module(pm, module_opts)
         pm.run(mod, 'annotate_module')
 
@@ -338,16 +397,34 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if properties["has_256b_load_store"]:
             intel.passes.ttgpuir.add_widen_load_store_encoding(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
+        # CanonicalizePointers must run BEFORE accelerate_matmul: once DPAS
+        # (dot_op) encodings are applied to the pointer tensors, the pass's
+        # rewrites produce IR that crashes LowerTo2DBlockLoad's AxisInfoAnalysis.
+        # The trailing canonicalizer folds the zero offsets / identity arithmetic
+        # and removes the unrealized_conversion_casts the pass leaves behind.
+        if not knobs.intel.disable_canonicalize_pointers:
+            intel.passes.ttgpuir.add_canonicalize_pointers(pm, True)
+            passes.common.add_canonicalizer(pm)
 
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
         intel.passes.ttgpuir.add_materialize_block_pointer(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
+        intel.passes.ttgpuir.add_fold_fp_to_fp(pm)
         intel.passes.ttgpuir.add_optimize_dot_operands(pm)
         intel.passes.ttgpuir.add_hoist_layout_conversions(pm, opt.grf_mode)
+        if os.environ.get("TRITON_INTEL_ANNOTATE_LATENCIES", "0") == "1":
+            passes.ttgpuir.add_assign_latencies(pm, opt.num_stages)
+            passes.ttgpuir.add_schedule_loops(pm)
         intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier)
 
         if (opt.reduce_variable_liveness):
             intel.passes.ttgpuir.add_reduce_variable_liveness(pm)
+
+        # Off by default: code sinking is perf-neutral on measured kernels (it
+        # reliably reduces register spills, but the relieved traffic is not on
+        # the critical path on current HW). Opt in via the env var for A/B work.
+        if opt.code_sinking:
+            intel.passes.ttgpuir.add_code_sinking(pm)
 
         passes.ttir.add_loop_aware_cse(pm)
         passes.ttgpuir.add_fuse_nested_loops(pm)
@@ -459,13 +536,14 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         llvm.init_targets()
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
-        intel.set_fast_math(llvm_mod, metadata['enable_fp_fusion'])
+        intel.set_fast_math(llvm_mod, metadata['enable_fp_fusion'], knobs.intel.fast_math)
         if options.extern_libs:
             paths = [path for (name, path) in options.extern_libs]
             llvm.link_extern_libs(llvm_mod, paths)
 
         cls.optimize_llvm_mod(llvm_mod, options)
-        intel.post_process_llir(llvm_mod)
+        is_lts = cls.is_lts(metadata["target"].arch.get("driver_version"))
+        intel.post_process_llir(llvm_mod, is_lts)
 
         # Get some metadata
         total_num_warps = src.get_int_attr("ttg.total-num-warps")
@@ -536,9 +614,9 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                 subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
                 if options.grf_mode == 'default':
                     spill_size = extract_spill_size_from_zebin(fbin)
-                    # The threshold of 1000 for spill_size is chosen based on empirical observations
+                    # The threshold for spill_size is chosen based on empirical observations
                     # and aligned with triton/backends/intel/driver.c
-                    if spill_size > 1000:
+                    if spill_size > MAX_REG_SPILL:
                         metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
                         # re-run with double GRF mode
                         ocloc_cmd[-1] = metadata["build_flags"] + shader_dump_opt
@@ -559,10 +637,22 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                         subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
                         retry_succeeded = True
                     except subprocess.CalledProcessError:
-                        # Retry also failed — raise the original error below.
+                        # Retry also failed — fall through to the original error
+                        # handling below, which will classify based on `e.output`
+                        # (the original failure's stderr) and raise either
+                        # OutOfResources or re-raise the original error.
                         pass
 
                 if not retry_succeeded:
+                    # Only reclassify as OutOfResources when ocloc's stderr explicitly
+                    # reports a PTSS overflow. Other IntelGPUErrors (e.g. degenerate
+                    # zebin from extract_spill_size_from_zebin, ocloc SIGSEGV) keep
+                    # their original error class so the user sees the real cause.
+                    output = getattr(e, 'output', '') or ''
+                    if ptss_match := PTSS_OVERFLOW_RE.search(output):
+                        required = int(ptss_match.group(1)) if ptss_match.group(1) else 0
+                        limit = int(ptss_match.group(2)) if ptss_match.group(2) else 0
+                        raise OutOfResources(required, limit, "per-thread scratch space (PTSS)") from e
                     if isinstance(e, IntelGPUError):
                         raise
                     if e.returncode == 255:

@@ -37,6 +37,20 @@ public:
     StringRef attrName = attribute.getName().getValue();
     if (!attrName.starts_with("triton_gen"))
       return success();
+
+    if (instructions.size() != 1)
+      return op->emitOpError("Expecting a single instruction");
+
+    if (attrName ==
+        triton::TritonGEN::TritonGENDialect::getFPRoundingModeAttrName()) {
+      auto roundingModeAttr = dyn_cast<IntegerAttr>(attribute.getValue());
+      if (!roundingModeAttr)
+        return op->emitOpError(
+            "Expecting integer attribute for FPRoundingMode");
+      return handleFPRoundingMode(instructions.front(),
+                                  roundingModeAttr.getInt());
+    }
+
     assert(
         attrName ==
             triton::TritonGEN::TritonGENDialect::getCacheControlsAttrName() &&
@@ -47,8 +61,6 @@ public:
     if (!decorationAttr)
       return op->emitOpError(
           "Expecting triton_gen.decoration_cache_control attribute");
-    if (instructions.size() != 1)
-      return op->emitOpError("Expecting a single instruction");
     return handleDecorationCacheControl(op, instructions.front(),
                                         decorationAttr);
   }
@@ -57,6 +69,20 @@ private:
   template <typename IntTy>
   static llvm::Metadata *getConstantIntMD(llvm::Type *type, IntTy val) {
     return llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(type, val));
+  }
+
+  static LogicalResult handleFPRoundingMode(llvm::Instruction *inst,
+                                            int64_t roundingMode) {
+    llvm::LLVMContext &ctx = inst->getContext();
+    llvm::Type *i32Ty = llvm::IntegerType::getInt32Ty(ctx);
+    // SPIR-V DecorationFPRoundingMode = 39
+    constexpr uint32_t decorationFPRoundingMode = 39;
+    llvm::Metadata *innerMD[] = {
+        getConstantIntMD(i32Ty, decorationFPRoundingMode),
+        getConstantIntMD(i32Ty, static_cast<uint32_t>(roundingMode))};
+    llvm::Metadata *outerMD[] = {llvm::MDNode::get(ctx, innerMD)};
+    inst->setMetadata("spirv.Decorations", llvm::MDNode::get(ctx, outerMD));
+    return success();
   }
 
   static LogicalResult handleDecorationCacheControl(

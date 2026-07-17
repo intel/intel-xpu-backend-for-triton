@@ -18,9 +18,10 @@ Note that during VLLM installation we never want to install triton or pytorch, w
 The new pin no longer has an IPEX dependency. We never install IPEX in our environments.
 
 Key files for the installation procedure:
-1. [`vllm-pin.txt`](vllm-pin.txt) - vllm pin that we currently use for benchmarking and testing. CI also uses this pin.
-2. [`vllm-fix.patch`](vllm-fix.patch) - patch that is applied to the pin above to make tests and benchmarks run.
-3. [`scripts/test-triton.sh`](../../scripts/test-triton.sh) - script that CI and developers use to install vllm and run tests
+1. [`vllm-pin.txt`](../../scripts/vllm/vllm-pin.txt) - vllm pin that we currently use for benchmarking and testing. CI also uses this pin.
+2. [`vllm-xpu-kernels-pin.txt`](../../scripts/vllm/vllm-xpu-kernels-pin.txt) - vllm-xpu-kernels pin. Kernels are built from source to ensure compatibility with local triton/torch.
+3. [`vllm-fix.patch`](../../scripts/vllm/vllm-fix.patch) - patch that is applied to the vllm pin above to make tests and benchmarks run.
+4. [`scripts/test-triton.sh`](../../scripts/test-triton.sh) - script that CI and developers use to install vllm and run tests.
 
 # Environment
 
@@ -41,14 +42,21 @@ You can activate that env with: `source .venv/bin/activate`
 Currently there are the following benchmarks:
 1. [`batched_moe`](batched_moe/) - benchmark with Batched Mixture of Experts GEMM operation.
 2. [`unified_attention`](unified_attention/) - benchmark with unified attention.
+3. [`fused_moe`](fused_moe/) - benchmark with fused Mixture of Experts GEMM operation.
+
+Each benchmark is registered as a `triton-benchmarks` CLI subcommand (see
+[`configs/benchmark_config_templates.py`](../configs/benchmark_config_templates.py)):
+- `vllm-unified-attention`, `vllm-unified-attention-fp8`
+- `vllm-batched-moe`, `vllm-batched-moe-fp8`
+- `vllm-fused-moe`
 
 Since XPU Triton requires usage of tensor descriptors, we run benchmarks two times. The first time we run the unmodified vllm version, then we patch the kernel code with tensor descriptor usage and get new performance numbers.
 
 Both benchmarks follow the same structure. For each benchmark folder (e.g. [`batched_moe/`](batched_moe/), [`unified_attention/`](unified_attention/)):
-1. `<name>_benchmark.py` - Python script that runs the benchmark using code from vllm. As it imports the relevant kernel from vllm, it will just use whatever is available.
+1. `<name>_benchmark.py` - Python script that runs the benchmark using code from vllm. As it imports the relevant kernel from vllm, it will just use whatever is available. It exposes a `get_benchmark(...)` factory consumed by the CLI.
 2. `<name>.patch` - patch that we'll apply to the cloned vllm repo to add necessary changes to improve performance. Note that this patch should be generated after the general patch is applied so it should not duplicate changes from the general patch.
 
-The shared [`run_benchmark.sh`](run_benchmark.sh) script orchestrates both steps. It takes the benchmark folder name as the first argument and derives the patch file and benchmark script from the `NAME` convention above. It applies the pattern: run without patch (`TD_PATCHED=0`), apply patch, run again (`TD_PATCHED=1`), revert patch. Any extra arguments (e.g. `--reports`) are forwarded to the benchmark script.
+The shared [`run_benchmark.sh`](run_benchmark.sh) script orchestrates both steps. It takes the benchmark folder name as the first argument, maps it to the CLI key (`vllm-<folder>`, plus `-fp8` when `FP8=1`), and applies the pattern: run without patch (`TD_PATCHED=0`), apply patch, run again (`TD_PATCHED=1`), revert patch. Each run is `triton-benchmarks run <key> ...`; any extra arguments (e.g. `--reports`, `--tag`) are forwarded to the CLI.
 
 You can run a benchmark with environment variable `DEBUG_BENCH=1` to speed up if the benchmark runs at all. For example:
 ```
@@ -64,7 +72,9 @@ There is CI for running both tests and benchmarks located in these files:
 2. [`.github/workflows/vllm-benchmarks.yml`](../../.github/workflows/vllm-benchmarks.yml) - CI that runs benchmarks
 3. [`.github/workflows/vllm-benchmarks-bmg.yml`](../../.github/workflows/vllm-benchmarks-bmg.yml) - CI that runs benchmarks on BMG
 
-Note that during the benchmarking CI there is report generation. Reports need to end with `-report.csv` and follow the format to be uploaded to the DB.
+Note that during the benchmarking CI there is report generation. The `triton-benchmarks` CLI emits the
+DB report directly (long format, via `transform_results`), producing a `<plot_name>-report.csv` per run;
+no separate `transform_results.py` invocation is needed in the workflow.
 
 # How to update vllm pin
 
@@ -80,7 +90,7 @@ During a pin update you need to:
 5. Ensure that the benchmarks for `batched_moe` and `unified_attention` folders work as expected. That includes checking that appropriate patch can be applied wihout any issues. Try to keep the patch minimal, for example, by keeping the same line breaks as in the upstream. You can use `DEBUG_BENCH=1` env variable to test if benchmark runs.
 6. Update this instruction if something changed.
 
-To install vllm you need to first remove it with `rm -rf vllm` and uninstall with `pip uninstall vllm`.
+To install vllm you need to first remove it with `rm -rf vllm vllm-xpu-kernels` and uninstall with `python -m pip uninstall -y vllm vllm-xpu-kernels`.
 
 # How to update patch
 

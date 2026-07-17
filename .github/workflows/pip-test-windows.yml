@@ -46,7 +46,7 @@ jobs:
       - ${{ inputs.runner_label || 'a770' }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -91,7 +91,7 @@ jobs:
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           cd ${{ env.NEW_WORKSPACE }}
           pip install -r python\requirements.txt
-          pip install -U intel-sycl-rt==2025.3.2
+          pip install -U intel-sycl-rt==2026.1.0
           # `build` can't determine that Ninja is already installed.
           # similar issue: https://github.com/pypa/build/issues/506
           python -m build --wheel --no-isolation --skip-dependency-check

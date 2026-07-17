@@ -66,6 +66,10 @@ struct TritonAnnotateModule
           ttgi::TritonIntelGPUDialect::getSupport16BitAtomicsAttrName(),
           builder.getUnitAttr());
 
+    if (supportSigmoid)
+      mod->setAttr(ttgi::TritonIntelGPUDialect::getSupportSigmoidAttrName(),
+                   builder.getUnitAttr());
+
     if (supportPrefetch256Bytes)
       mod->setAttr(
           ttgi::TritonIntelGPUDialect::getSupportPrefetch256BAttrName(),
@@ -100,16 +104,18 @@ struct TritonAnnotateModule
       mod->setAttr(ttgi::TritonIntelGPUDialect::getIsLTSAttrName(),
                    builder.getUnitAttr());
 
+    if (isFastMath)
+      mod->setAttr(ttgi::TritonIntelGPUDialect::getFastMathAttrName(),
+                   builder.getUnitAttr());
+
     setThreadsPerWarp(mod);
   }
 
 private:
   void setThreadsPerWarp(ModuleOp &mod) const {
     Builder builder(mod);
-    bool enableWarp32 =
-        tt::tools::getBoolEnv("TRITON_INTEL_ENABLE_DPAS_FOR_WARP_SIZE_32");
 
-    if (!enableWarp32) {
+    if (!sub32DPAS) {
       auto dpasAnalysis = ttgi::DPASAnalysisFactory::createDPASAnalysis(mod);
 
       mod.walk([&](FunctionOpInterface funcOp) {
