@@ -523,6 +523,15 @@ LogicalResult tt::TritonGEN::SubGroupGatherLoadOp::verify() {
   if (!resTy)
     return emitOpError("expects result to be a vector type");
 
+  Type elemType = resTy.getElementType();
+  bool isSupportedElemType =
+      elemType.isF16() || elemType.isF32() ||
+      (elemType.isInteger(8) || elemType.isInteger(16) ||
+       elemType.isInteger(32) || elemType.isInteger(64));
+  if (!isSupportedElemType)
+    return emitOpError("expects result element type to be f16, f32, i8, i16, "
+                       "i32, or i64");
+
   auto module = getOperation()->getParentOfType<ModuleOp>();
   unsigned subgroupSize =
       triton::gpu::TritonGPUDialect::getThreadsPerWarp(module);

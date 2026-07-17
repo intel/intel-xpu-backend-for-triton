@@ -42,7 +42,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
 
-#include <TritonIntelGPUToLLVM/XeAsmFormat.h>
+#include "intel/include/TritonIntelGPUToLLVM/XeAsmFormat.h"
 #include <llvm/Support/FormatVariadic.h>
 
 #include "intel/include/TritonGENToSPIRV/TritonGENToSPIRVPass.h"
@@ -1283,9 +1283,9 @@ struct TritonSubGroupGatherLoadLowering
 
     auto resultType = dyn_cast<VectorType>(op.getResult().getType());
     assert(resultType && "Unexpected result type");
-    unsigned bitsWidth = resultType.getElementType().getIntOrFloatBitWidth();
-    Type opaqueResultType = IntegerType::get(ctx, bitsWidth);
-    auto typeSyntax = XeVISAInstr::getTypeName(opaqueResultType);
+    Type elemType = resultType.getElementType();
+    unsigned bitsWidth = elemType.getIntOrFloatBitWidth();
+    auto typeSyntax = XeVISAInstr::getTypeName(elemType);
     if (!typeSyntax)
       llvm_unreachable("Unsupported scalar type");
 

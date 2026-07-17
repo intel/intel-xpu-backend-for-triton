@@ -286,6 +286,22 @@ llvm.func @triton_gen.sub_group_gather_load_invalid_payload_bytes_per_address(%a
 
 // -----
 
+llvm.func @triton_gen.sub_group_gather_load_non_vector_result(%addrs: vector<32xi64>, %preds: vector<32xi1>) {
+  // expected-error @+1 {{'triton_gen.sub_group_gather_load' op expects result to be a vector type}}
+  %0 = triton_gen.sub_group_gather_load %addrs, %preds : (vector<32xi64>, vector<32xi1>) -> i32
+  llvm.return
+}
+
+// -----
+
+llvm.func @triton_gen.sub_group_gather_load_unsupported_elem_type(%addrs: vector<32xi64>, %preds: vector<32xi1>) {
+  // expected-error @+1 {{'triton_gen.sub_group_gather_load' op expects result element type to be f16, f32, i8, i16, i32, or i64}}
+  %0 = triton_gen.sub_group_gather_load %addrs, %preds : (vector<32xi64>, vector<32xi1>) -> vector<4xi1>
+  llvm.return
+}
+
+// -----
+
 llvm.func @matrix_2Dblockload(%ptr : !llvm.ptr, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   %base_width = llvm.mlir.constant(0 : i32) : i32
   // expected-error @+1 {{'triton_gen.2Dblockload' op 2nd operand (base width) should be >= 64}}
