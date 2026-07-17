@@ -251,7 +251,7 @@ llvm.func @matrix_2Dblockload(%ptr : !llvm.ptr, %base_height : i32, %base_pitch 
 // -----
 
 llvm.func @triton_gen.sub_group_gather_load_invalid_addrs(%addrs: vector<16xi64>, %preds: vector<32xi1>) {
-  // expected-error @+1 {{'triton_gen.sub_group_gather_load' op expects addrs to be vector<32xi64>}}
+  // expected-error @+1 {{'triton_gen.sub_group_gather_load' op operand #0 must be fixed-length vector of 64-bit signless integer values of length 32}}
   %0 = triton_gen.sub_group_gather_load %addrs, %preds : (vector<16xi64>, vector<32xi1>) -> vector<4xi64>
   llvm.return
 }
@@ -259,7 +259,7 @@ llvm.func @triton_gen.sub_group_gather_load_invalid_addrs(%addrs: vector<16xi64>
 // -----
 
 llvm.func @triton_gen.sub_group_gather_load_invalid_preds(%addrs: vector<32xi64>, %preds: vector<16xi1>) {
-  // expected-error @+1 {{'triton_gen.sub_group_gather_load' op expects preds to be vector<32xi1>}}
+  // expected-error @+1 {{'triton_gen.sub_group_gather_load' op operand #1 must be fixed-length vector of 1-bit signless integer values of length 32}}
   %0 = triton_gen.sub_group_gather_load %addrs, %preds : (vector<32xi64>, vector<16xi1>) -> vector<4xi64>
   llvm.return
 }
@@ -269,7 +269,7 @@ llvm.func @triton_gen.sub_group_gather_load_invalid_preds(%addrs: vector<32xi64>
 module attributes {"ttg.threads-per-warp" = 16 : i32} {
 llvm.func @triton_gen.sub_group_gather_load_invalid_payload_divisibility(%addrs: vector<32xi64>, %preds: vector<32xi1>) {
   // expected-error @+1 {{'triton_gen.sub_group_gather_load' op expects result_bits * subgroup_size to be divisible by 256}}
-  %0 = triton_gen.sub_group_gather_load %addrs, %preds : (vector<32xi64>, vector<32xi1>) -> vector<3xi16>
+  %0 = triton_gen.sub_group_gather_load %addrs, %preds : (vector<32xi64>, vector<32xi1>) -> vector<1xi8>
   llvm.return
 }
 }
@@ -287,15 +287,15 @@ llvm.func @triton_gen.sub_group_gather_load_invalid_payload_bytes_per_address(%a
 // -----
 
 llvm.func @triton_gen.sub_group_gather_load_non_vector_result(%addrs: vector<32xi64>, %preds: vector<32xi1>) {
-  // expected-error @+1 {{'triton_gen.sub_group_gather_load' op expects result to be a vector type}}
+  // expected-error @+1 {{'triton_gen.sub_group_gather_load' op result #0 must be fixed-length vector of integer or floating-point values}}
   %0 = triton_gen.sub_group_gather_load %addrs, %preds : (vector<32xi64>, vector<32xi1>) -> i32
   llvm.return
 }
 
 // -----
 
-llvm.func @triton_gen.sub_group_gather_load_unsupported_elem_type(%addrs: vector<32xi64>, %preds: vector<32xi1>) {
-  // expected-error @+1 {{'triton_gen.sub_group_gather_load' op expects result element type to be f16, f32, i8, i16, i32, or i64}}
+llvm.func @triton_gen.sub_group_gather_load_unsupported_elem_bit_width(%addrs: vector<32xi64>, %preds: vector<32xi1>) {
+  // expected-error @+1 {{'triton_gen.sub_group_gather_load' op expects result element bit width to be 8, 16, 32, or 64}}
   %0 = triton_gen.sub_group_gather_load %addrs, %preds : (vector<32xi64>, vector<32xi1>) -> vector<4xi1>
   llvm.return
 }

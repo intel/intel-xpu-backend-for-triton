@@ -524,13 +524,12 @@ LogicalResult tt::TritonGEN::SubGroupGatherLoadOp::verify() {
     return emitOpError("expects result to be a vector type");
 
   Type elemType = resTy.getElementType();
-  bool isSupportedElemType =
-      elemType.isF16() || elemType.isF32() ||
-      (elemType.isInteger(8) || elemType.isInteger(16) ||
-       elemType.isInteger(32) || elemType.isInteger(64));
-  if (!isSupportedElemType)
-    return emitOpError("expects result element type to be f16, f32, i8, i16, "
-                       "i32, or i64");
+  unsigned elemBitWidth = elemType.getIntOrFloatBitWidth();
+  bool isSupportedElemBitWidth = elemBitWidth == 8 || elemBitWidth == 16 ||
+                                 elemBitWidth == 32 || elemBitWidth == 64;
+  if (!isSupportedElemBitWidth)
+    return emitOpError(
+        "expects result element bit width to be 8, 16, 32, or 64");
 
   auto module = getOperation()->getParentOfType<ModuleOp>();
   unsigned subgroupSize =
