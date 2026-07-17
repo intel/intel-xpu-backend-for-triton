@@ -493,7 +493,7 @@ private:
     if (isBroadcast && tileHeight > 1 && tileWidth > 0) {
       unsigned threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(
           op->getParentOfType<ModuleOp>());
-      if ((int)threadsPerWarp > tileWidth &&
+      if ((unsigned)tileWidth < threadsPerWarp &&
           threadsPerWarp % (unsigned)tileWidth != 0) {
         LDBG("Broadcast load tile width " << tileWidth
                                           << " does not divide threadsPerWarp "
