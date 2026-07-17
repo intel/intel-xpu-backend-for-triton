@@ -1,88 +1,159 @@
+diff --git a/tests/kernels/moe/test_moe.py b/tests/kernels/moe/test_moe.py
+index 69c50cbb1..2cc569e79 100644
+--- a/tests/kernels/moe/test_moe.py
++++ b/tests/kernels/moe/test_moe.py
+@@ -36,6 +36,9 @@ from vllm.model_executor.layers.fused_moe.experts.marlin_moe import (
+     batched_fused_marlin_moe,
+     fused_marlin_moe,
+ )
++from vllm.model_executor.layers.fused_moe.utils import (
++    moe_use_td_hw_supported,
++)
+ from vllm.model_executor.layers.quantization.utils.marlin_utils import (
+     marlin_permute_bias,
+ )
+@@ -53,9 +56,12 @@ from vllm.model_executor.layers.quantization.utils.marlin_utils_test import (
+ from vllm.model_executor.layers.quantization.utils.quant_utils import quantize_weights
+ from vllm.platforms import current_platform
+ from vllm.scalar_type import ScalarType, scalar_types
++from vllm.triton_utils import tl
+ from vllm.utils.math_utils import next_power_of_2
+ from vllm.utils.torch_utils import set_random_seed
+ 
++DEVICE_TYPE = current_platform.device_type
++
+ 
+ def iterative_moe(
+     hidden_states: torch.Tensor,
+@@ -289,6 +295,7 @@ def run_moe_test(
+ @pytest.mark.parametrize("ep_size", EP_SIZE)
+ @pytest.mark.parametrize("dtype", [torch.bfloat16])
+ @pytest.mark.parametrize("padding", [True, False])
++@pytest.mark.parametrize("use_td", [False, True])
+ def test_fused_moe(
+     m: int,
+     n: int,
+@@ -298,9 +305,19 @@ def test_fused_moe(
+     ep_size: int,
+     dtype: torch.dtype,
+     padding: bool,
++    use_td: bool,
+     monkeypatch,
+     workspace_init,
+ ):
++    if use_td and not hasattr(tl, "make_tensor_descriptor"):
++        pytest.skip("Triton < 3.6 lacks tl.make_tensor_descriptor")
++    if use_td and not moe_use_td_hw_supported():
++        pytest.skip(
++            "tensor_descriptor.gather requires XPU or NVIDIA Blackwell "
++            "(sm100+); lowers to tile::gather4 (tcgen05/TMEM), which ptxas "
++            "rejects on Hopper (sm90) and earlier"
++        )
++    monkeypatch.setenv("VLLM_TRITON_USE_TD", "1" if use_td else "0")
+     set_random_seed(7)
+ 
+     #
+@@ -311,17 +328,17 @@ def test_fused_moe(
+     # Setup test data
+     #
+ 
+-    a = torch.randn((m, k), device="cuda", dtype=dtype) / 10
+-    w1 = torch.randn((e, 2 * n, k), device="cuda", dtype=dtype) / 10
+-    w2 = torch.randn((e, k, n), device="cuda", dtype=dtype) / 10
++    a = torch.randn((m, k), device=DEVICE_TYPE, dtype=dtype) / 10
++    w1 = torch.randn((e, 2 * n, k), device=DEVICE_TYPE, dtype=dtype) / 10
++    w2 = torch.randn((e, k, n), device=DEVICE_TYPE, dtype=dtype) / 10
+ 
+-    score = torch.randn((m, e), device="cuda", dtype=dtype)
++    score = torch.randn((m, e), device=DEVICE_TYPE, dtype=dtype)
+ 
+     if ep_size > 1:
+         local_e = e // ep_size
+-        e_ids = torch.randint(0, e, (local_e,), device="cuda", dtype=torch.int32)
+-        e_map = torch.full((e,), -1, device="cuda", dtype=torch.int32)
+-        e_map[e_ids] = torch.arange(local_e, device="cuda", dtype=torch.int32)
++        e_ids = torch.randint(0, e, (local_e,), device=DEVICE_TYPE, dtype=torch.int32)
++        e_map = torch.full((e,), -1, device=DEVICE_TYPE, dtype=torch.int32)
++        e_map[e_ids] = torch.arange(local_e, device=DEVICE_TYPE, dtype=torch.int32)
+         w1 = w1[e_ids]
+         w2 = w2[e_ids]
+     else:
 diff --git a/vllm/model_executor/layers/fused_moe/fused_moe.py b/vllm/model_executor/layers/fused_moe/fused_moe.py
-index 269b6e3da..fdd6a95e5 100644
+index 269b6e3da..da415746f 100644
 --- a/vllm/model_executor/layers/fused_moe/fused_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/fused_moe.py
-@@ -290,6 +290,21 @@ def fused_moe_kernel_gptq_awq(
-     tl.store(c_ptrs, accumulator, mask=c_mask)
+@@ -28,9 +28,13 @@ from vllm.model_executor.layers.fused_moe.moe_align_block_size import (
+ from vllm.model_executor.layers.fused_moe.utils import (
+     enable_swap_ab,
+     moe_kernel_quantize_input,
++    resolve_moe_use_td,
++    warn_if_moe_use_td_ineffective,
+ )
+ from vllm.platforms import current_platform
+ from vllm.triton_utils import tl, triton
++from vllm.triton_utils.allocation import set_triton_allocator
++from vllm.utils.platform_utils import get_device_name_as_file_name
+ from vllm.utils.torch_utils import direct_register_custom_op
  
- 
-+def get_fused_moe_configs():
-+    return [
-+        triton.Config({'BLOCK_SIZE_N': N, 'GROUP_SIZE_M': G, 'SPLIT_K': 1,
-+                       'grf_mode': '256'}, num_stages=s, num_warps=w)
-+        for N in [32, 64, 128]
-+        for G in [1, 8, 16]
-+        for s in [3, 4]
-+        for w in [4, 8, 16, 32]
-+    ]
-+
-+
-+@triton.autotune(
-+    configs=get_fused_moe_configs(),
-+    key=['M', 'top_k', 'K', 'N'],
-+)
- @triton.jit
- def fused_moe_kernel(
-     # Pointers to matrices
-@@ -304,6 +319,7 @@ def fused_moe_kernel(
-     expert_ids_ptr,
-     num_tokens_post_padded_ptr,
-     # Matrix dimensions
-+    M,
-     N,
-     K,
-     EM,
-@@ -407,9 +423,6 @@ def fused_moe_kernel(
-             pid_m,  # first element = pid_m
-             num_valid_tokens,  # remaining elements = constant
-         )
--    # Cast to int64 to prevent overflow in stride*offset products
--    # (e.g. stride_cm * offs_token can exceed int32 for large token counts)
--    offs_token = offs_token.to(tl.int64)
- 
-     token_mask = offs_token < num_valid_tokens
- 
-@@ -433,25 +446,11 @@ def fused_moe_kernel(
-         return
+ logger = init_logger(__name__)
+@@ -345,6 +349,8 @@ def fused_moe_kernel(
+     per_channel_quant: tl.constexpr,
+     HAS_BIAS: tl.constexpr,
+     SWAP_AB: tl.constexpr,
++    # Tensor-descriptor path for the A gather and B load in the K-loop.
++    USE_TD: tl.constexpr = False,
+ ):
+     """
+     Implements the fused computation for a Mixture of Experts (MOE) using
+@@ -434,7 +440,25 @@ def fused_moe_kernel(
  
      offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N).to(tl.int64)) % N
--    offs_k = tl.arange(0, BLOCK_SIZE_K)
+     offs_k = tl.arange(0, BLOCK_SIZE_K)
 -    if SWAP_AB:
--        a_ptrs = a_ptr + (
--            offs_k[:, None] * stride_ak + offs_token[None, :] // top_k * stride_am
--        )
--        b_ptrs = (
--            b_ptr
--            + off_experts * stride_be
--            + (offs_bn[:, None] * stride_bn + offs_k[None, :] * stride_bk)
--        )
--    else:
--        a_ptrs = a_ptr + (
--            offs_token[:, None] // top_k * stride_am + offs_k[None, :] * stride_ak
--        )
--        b_ptrs = (
--            b_ptr
--            + off_experts * stride_be
--            + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
--        )
-+    a_desc = tl.make_tensor_descriptor(base=a_ptr, shape=(M, K), strides=(stride_am, stride_ak),
-+                                       block_shape=(1, BLOCK_SIZE_K))
-+
-+    b_desc = tl.make_tensor_descriptor(base=b_ptr + off_experts * stride_be, shape=(N, K),
-+                                       strides=(stride_bn, stride_bk), block_shape=(BLOCK_SIZE_N, BLOCK_SIZE_K))
- 
++    # TD gather and the SWAP_AB accumulator layout are mutually exclusive.
++    tl.static_assert(not (USE_TD and SWAP_AB))
++    if USE_TD:
++        # ``tt.descriptor_gather`` requires block_shape[0] == 1 and i32 idx.
++        m_td = num_valid_tokens // top_k
++        a_desc = tl.make_tensor_descriptor(
++            base=a_ptr,
++            shape=(m_td, K),
++            strides=(stride_am, stride_ak),
++            block_shape=(1, BLOCK_SIZE_K),
++        )
++        b_desc = tl.make_tensor_descriptor(
++            base=b_ptr + off_experts * stride_be,
++            shape=(N, K),
++            strides=(stride_bn, stride_bk),
++            block_shape=(BLOCK_SIZE_N, BLOCK_SIZE_K),
++        )
++        gather_idx = (offs_token // top_k).to(tl.int32)
++    elif SWAP_AB:
+         a_ptrs = a_ptr + (
+             offs_k[:, None] * stride_ak + offs_token[None, :] // top_k * stride_am
+         )
+@@ -452,7 +476,6 @@ def fused_moe_kernel(
+             + off_experts * stride_be
+             + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
+         )
+-
      if use_int8_w8a16:
          b_scale_ptrs = (
-@@ -494,20 +493,8 @@ def fused_moe_kernel(
-     else:
-         accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+             b_scale_ptr + off_experts * stride_bse + offs_bn[None, :] * stride_bsn
+@@ -496,18 +519,21 @@ def fused_moe_kernel(
      for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
--        # Load the next block of A and B, generate a mask by checking the
--        # K dimension.
+         # Load the next block of A and B, generate a mask by checking the
+         # K dimension.
 -        if SWAP_AB:
--            a_mask = (offs_k[:, None] < K - k * BLOCK_SIZE_K) & token_mask[None, :]
--            b_mask = offs_k[None, :] < K - k * BLOCK_SIZE_K
--        else:
++        if USE_TD:
++            a = a_desc.gather(gather_idx, k * BLOCK_SIZE_K)
++            b = b_desc.load([pid_n * BLOCK_SIZE_N, k * BLOCK_SIZE_K]).T
++        elif SWAP_AB:
+             a_mask = (offs_k[:, None] < K - k * BLOCK_SIZE_K) & token_mask[None, :]
+             b_mask = offs_k[None, :] < K - k * BLOCK_SIZE_K
++            a = tl.load(a_ptrs, mask=a_mask, other=0.0)
++            b = tl.load(b_ptrs, mask=b_mask, other=0.0)
+         else:
 -            a_mask = token_mask[:, None] & (offs_k[None, :] < K - k * BLOCK_SIZE_K)
 -            b_mask = offs_k[:, None] < K - k * BLOCK_SIZE_K
 -        a = tl.load(
@@ -91,40 +162,197 @@ index 269b6e3da..fdd6a95e5 100644
 -            other=0.0,
 -        )
 -        b = tl.load(b_ptrs, mask=b_mask, other=0.0)
-+        a = a_desc.gather(offs_token // top_k, k * BLOCK_SIZE_K)
-+        b = b_desc.load([pid_n * BLOCK_SIZE_N, k * BLOCK_SIZE_K]).T
++            a = tl.load(
++                a_ptrs,
++                mask=token_mask[:, None] & (offs_k[None, :] < K - k * BLOCK_SIZE_K),
++                other=0.0,
++            )
++            b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
          # We accumulate along the K dimension.
          if use_int8_w8a16:
              accumulator = tl.dot(a, b.to(compute_type), acc=accumulator)
-@@ -531,12 +518,9 @@ def fused_moe_kernel(
-                     else:
-                         accumulator = tl.dot(a, b, acc=accumulator)
-                 else:
--                    accumulator += tl.dot(a, b)
-+                    accumulator = tl.dot(a, b, accumulator)
+@@ -534,9 +560,10 @@ def fused_moe_kernel(
+                     accumulator += tl.dot(a, b)
          else:
--            accumulator += tl.dot(a, b)
+             accumulator += tl.dot(a, b)
 -        # Advance the ptrs to the next K block.
 -        a_ptrs += BLOCK_SIZE_K * stride_ak
 -        b_ptrs += BLOCK_SIZE_K * stride_bk
-+            accumulator = tl.dot(a, b, accumulator)
++        if not USE_TD:
++            # Advance the ptrs to the next K block.
++            a_ptrs += BLOCK_SIZE_K * stride_ak
++            b_ptrs += BLOCK_SIZE_K * stride_bk
  
      if SWAP_AB:
          accumulator = tl.trans(accumulator, (1, 0))
-@@ -814,6 +798,7 @@ def invoke_fused_moe_triton_kernel(
-         sorted_token_ids,
-         expert_ids,
-         num_tokens_post_padded,
-+        A.size(0),
-         B.size(1),
-         B.size(2),
-         EM,
-@@ -845,7 +830,7 @@ def invoke_fused_moe_triton_kernel(
+@@ -763,6 +790,17 @@ def invoke_fused_moe_triton_kernel(
+     else:
+         SWAP_AB = False
+ 
++    is_quantized = use_fp8_w8a8 or use_int8_w8a8 or use_int8_w8a16 or use_int4_w4a16
++    warn_if_moe_use_td_ineffective("TRITON", is_quantized=is_quantized)
++
++    # TD path is unvalidated under quantization; fall back to the pointer path.
++    use_td = resolve_moe_use_td() and not is_quantized
++    if use_td:
++        # The TD path builds a tensor descriptor inside the kernel, which
++        # requires a PyTorch-backed scratch allocator to be registered
++        # (Triton raises "no allocator was set" otherwise on CUDA).
++        set_triton_allocator(A.device)
++
+     if use_fp8_w8a8 or use_int8_w8a8:
+         assert B_scale is not None
+         assert block_shape is None or triton.cdiv(
+@@ -803,6 +841,19 @@ def invoke_fused_moe_triton_kernel(
+     BLOCK_SIZE_K = config.pop("BLOCK_SIZE_K")
+     if block_shape is not None:
+         BLOCK_SIZE_K = min(BLOCK_SIZE_K, min(block_shape[0], block_shape[1]))
++    if use_td and A.size(1) % BLOCK_SIZE_K != 0:
++        # TD gather/load feeding tl.dot with a non-block-aligned K
++        # miscompiles (~74% of output elements wrong) on real HW;
++        # this is a compiler-codegen issue, not a Python-maskable
++        # boundary gap. Fall back to the pointer-arith path.
++        logger.warning_once(
++            "Disabling VLLM_TRITON_USE_TD for this MoE launch: K=%d is not "
++            "a multiple of BLOCK_SIZE_K=%d, which triggers a known "
++            "Triton tensor-descriptor + tl.dot miscompilation.",
++            A.size(1),
++            BLOCK_SIZE_K,
++        )
++        use_td = False
+     fused_moe_kernel[grid](
+         A,
+         B,
+@@ -845,6 +896,7 @@ def invoke_fused_moe_triton_kernel(
          HAS_BIAS=HAS_BIAS,
          BLOCK_SIZE_K=BLOCK_SIZE_K,
          SWAP_AB=SWAP_AB,
--        **config,
-+        BLOCK_SIZE_M=config["BLOCK_SIZE_M"]
++        USE_TD=use_td,
+         **config,
      )
  
+diff --git a/vllm/model_executor/layers/fused_moe/oracle/unquantized.py b/vllm/model_executor/layers/fused_moe/oracle/unquantized.py
+index cda0eaf73..52fb9b46b 100644
+--- a/vllm/model_executor/layers/fused_moe/oracle/unquantized.py
++++ b/vllm/model_executor/layers/fused_moe/oracle/unquantized.py
+@@ -318,6 +318,13 @@ def make_unquantized_moe_kernel(
+     experts_cls: type[mk.FusedMoEExperts],
+     routing_tables: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = None,
+ ) -> mk.FusedMoEKernel:
++    from vllm.model_executor.layers.fused_moe.utils import (
++        warn_if_moe_use_td_ineffective,
++    )
++
++    # Warn against the selected backend, not each probed candidate.
++    warn_if_moe_use_td_ineffective(backend.value, is_quantized=False)
++
+     # Create Prepare/Finalize
+     is_monolithic = issubclass(experts_cls, mk.FusedMoEExpertsMonolithic)
+     prepare_finalize = maybe_make_prepare_finalize(
+diff --git a/vllm/model_executor/layers/fused_moe/utils.py b/vllm/model_executor/layers/fused_moe/utils.py
+index fce74346d..3e6ca3c8e 100644
+--- a/vllm/model_executor/layers/fused_moe/utils.py
++++ b/vllm/model_executor/layers/fused_moe/utils.py
+@@ -6,7 +6,9 @@ from math import prod
+ import torch
+ import torch.nn.functional as F
  
++import vllm.envs as envs
+ from vllm import _custom_ops as ops
++from vllm.logger import init_logger
+ from vllm.model_executor.layers.quantization.utils.fp8_utils import (
+     per_token_group_quant_fp8,
+ )
+@@ -33,6 +35,11 @@ from vllm.platforms import current_platform
+ from vllm.triton_utils import tl, triton
+ from vllm.utils.math_utils import cdiv
+ 
++if TYPE_CHECKING:
++    from vllm.model_executor.layers.fused_moe.config import FusedMoEConfig
++
++logger = init_logger(__name__)
++
+ 
+ @triton.jit
+ def _count_expert_num_tokens(
+@@ -456,3 +463,80 @@ def enable_swap_ab(BLOCK_SIZE_M: int, BLOCK_SIZE_N: int) -> bool:
+         and BLOCK_SIZE_M < 64
+         and BLOCK_SIZE_N >= 64
+     )
++
++
++def moe_use_td_hw_supported() -> bool:
++    """Whether the current device can run the TD (gather) path of
++    ``fused_moe_kernel`` (ignores the ``VLLM_TRITON_USE_TD`` override).
++
++    The A-load uses ``tensor_descriptor.gather``, which lowers to the PTX
++    ``tile::gather4`` instruction. That instruction is part of the
++    ``tcgen05``/Tensor Memory (TMEM) family introduced with Blackwell and has
++    no Hopper (sm90) equivalent -- ptxas rejects it there ("Feature
++    '.tile::gather4 ...' requires .target sm_100 or higher"). Unlike
++    ``scatter4``, ``gather4`` is supported across the whole sm100+ range
++    including consumer Blackwell (sm120/sm121): see triton-lang/triton#8498,
++    which enables ``gather4`` on sm120/sm121 while leaving ``scatter4``
++    unsupported there. So this gates on a blanket ``has_device_capability(100)``
++    rather than the sm100 *family* check used for the scatter store path.
++    """
++    if current_platform.is_xpu():
++        return True
++    if current_platform.is_cuda():
++        return current_platform.has_device_capability(100)
++    return False
++
++
++def resolve_moe_use_td() -> bool:
++    """Tri-state resolver for ``VLLM_TRITON_USE_TD``.
++
++    Unset auto-selects the TD path on XPU only, mirroring the attention
++    dispatcher in ``triton_attn.py``. ``1``/``0`` force it on/off regardless
++    of hardware; forcing ``1`` where it cannot compile (see
++    ``moe_use_td_hw_supported``) fails at ptxas. Blackwell CUDA (sm100+) can
++    compile it but is opt-in only, pending validation.
++    """
++    override = envs.VLLM_TRITON_USE_TD
++    if override is None:
++        return current_platform.is_xpu()
++    return override
++
++
++_warned_moe_use_td_ineffective = False
++
++
++def warn_if_moe_use_td_ineffective(
++    active_backend: str, is_quantized: bool = False
++) -> None:
++    """One-shot warning when ``VLLM_TRITON_USE_TD`` is set but ignored.
++
++    Fires when the user set the env explicitly and either (a) the active
++    MoE backend is not the fused Triton kernel, or (b) the model is
++    quantized (the TD path falls back to the pointer path under any
++    quantization).
++    """
++    global _warned_moe_use_td_ineffective
++    if _warned_moe_use_td_ineffective:
++        return
++    if envs.VLLM_TRITON_USE_TD is None:
++        return
++    is_triton = active_backend.upper() == "TRITON"
++    if is_triton and not is_quantized:
++        return
++    if not is_triton:
++        reason = (
++            f"the active MoE backend is {active_backend!r}; pass "
++            "`--moe-backend triton` to enable the tensor-descriptor path"
++        )
++    else:
++        reason = (
++            "the model uses quantized MoE weights; the TD path is "
++            "currently restricted to non-quantized weights and falls "
++            "back to the pointer path"
++        )
++    logger.warning(
++        "VLLM_TRITON_USE_TD is set to %s but %s.",
++        envs.VLLM_TRITON_USE_TD,
++        reason,
++    )
++    _warned_moe_use_td_ineffective = True
