@@ -1355,19 +1355,20 @@ extern "C" EXPORT_FUNC PyObject *launch(PyObject *args) {
   // single alloca for the whole buffer instead of one alloca per parameter.
   // This keeps all parameter data contiguous on the stack rather than
   // scattered across num_args separate stack regions.
+  Extractor *extractors = (Extractor *)alloca(num_args * sizeof(Extractor));
   size_t *param_offset = (size_t *)alloca(num_args * sizeof(size_t));
   size_t total_size = 0;
   size_t max_alignment = 1;
   for (Py_ssize_t i = 0; i < num_args; ++i) {
-    Extractor extractor = getExtractor(extractor_data[i]);
-    if (extractor.extract == NULL) {
+    extractors[i] = getExtractor(extractor_data[i]);
+    if (extractors[i].extract == NULL) {
       PyBuffer_Release(&signature);
       return NULL;
     }
-    size_t alignment = extractor.alignment ? extractor.alignment : 1;
+    size_t alignment = extractors[i].alignment ? extractors[i].alignment : 1;
     total_size = alignUp(total_size, alignment);
     param_offset[i] = total_size;
-    total_size += extractor.size;
+    total_size += extractors[i].size;
     if (alignment > max_alignment) {
       max_alignment = alignment;
     }
@@ -1383,7 +1384,7 @@ extern "C" EXPORT_FUNC PyObject *launch(PyObject *args) {
   // using alloca to allocate pointers to it on the stack of the function.
   for (Py_ssize_t i = 0; i < num_args; ++i) {
     g_pointer_check_arg_idx = static_cast<int>(i);
-    Extractor extractor = getExtractor(extractor_data[i]);
+    Extractor extractor = extractors[i];
     params[params_idx] = param_storage + param_offset[i];
 
     PyObject *current_arg = args_data[i];
