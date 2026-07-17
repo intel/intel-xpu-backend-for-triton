@@ -14,6 +14,11 @@ from triton._internal_testing import is_xpu
 from triton.tools.tensor_descriptor import TensorDescriptor
 
 
+@pytest.fixture(autouse=True)
+def enable_host_descriptor_synthesis(monkeypatch):
+    monkeypatch.setenv("TRITON_INTEL_ENABLE_HOST_DESCRIPTOR_SYNTHESIS", "1")
+
+
 def _has_2d_block_io():
     """Check if current device supports 2D block I/O."""
     return triton.runtime.driver.active.get_current_target().arch.get('has_2d_block_io', False)
