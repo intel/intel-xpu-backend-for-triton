@@ -396,9 +396,8 @@ void init_triton_intel(py::module &&m) {
     mod->setDataLayout(layout);
   });
 
-  m.def("post_process_llir", [](llvm::Module *mod, bool isLTS) {
-    intel::postProcessLLVMIR(*mod, isLTS);
-  });
+  m.def("post_process_llir",
+        [](llvm::Module *mod) { intel::postProcessLLVMIR(*mod); });
 
   m.def(
       "translate_to_spirv",
