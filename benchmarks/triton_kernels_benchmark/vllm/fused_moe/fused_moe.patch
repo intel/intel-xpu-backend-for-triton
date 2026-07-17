@@ -79,10 +79,10 @@ index 69c50cbb1..2cc569e79 100644
          w2 = w2[e_ids]
      else:
 diff --git a/vllm/model_executor/layers/fused_moe/fused_moe.py b/vllm/model_executor/layers/fused_moe/fused_moe.py
-index 269b6e3da..da415746f 100644
+index 269b6e3da..8c8a41eee 100644
 --- a/vllm/model_executor/layers/fused_moe/fused_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/fused_moe.py
-@@ -28,9 +28,13 @@ from vllm.model_executor.layers.fused_moe.moe_align_block_size import (
+@@ -28,9 +28,12 @@ from vllm.model_executor.layers.fused_moe.moe_align_block_size import (
  from vllm.model_executor.layers.fused_moe.utils import (
      enable_swap_ab,
      moe_kernel_quantize_input,
@@ -92,11 +92,32 @@ index 269b6e3da..da415746f 100644
  from vllm.platforms import current_platform
  from vllm.triton_utils import tl, triton
 +from vllm.triton_utils.allocation import set_triton_allocator
-+from vllm.utils.platform_utils import get_device_name_as_file_name
  from vllm.utils.torch_utils import direct_register_custom_op
  
  logger = init_logger(__name__)
-@@ -345,6 +349,8 @@ def fused_moe_kernel(
+@@ -290,6 +293,21 @@ def fused_moe_kernel_gptq_awq(
+     tl.store(c_ptrs, accumulator, mask=c_mask)
+ 
+ 
++def get_fused_moe_configs():
++    return [
++        triton.Config({'BLOCK_SIZE_N': N, 'GROUP_SIZE_M': G, 'SPLIT_K': 1,
++                       'grf_mode': '256'}, num_stages=s, num_warps=w)
++        for N in [32, 64, 128]
++        for G in [1, 8, 16]
++        for s in [3, 4]
++        for w in [4, 8, 16, 32]
++    ]
++
++
++@triton.autotune(
++    configs=get_fused_moe_configs(),
++    key=['num_valid_tokens', 'top_k', 'K', 'N'],
++)
+ @triton.jit
+ def fused_moe_kernel(
+     # Pointers to matrices
+@@ -345,6 +363,8 @@ def fused_moe_kernel(
      per_channel_quant: tl.constexpr,
      HAS_BIAS: tl.constexpr,
      SWAP_AB: tl.constexpr,
@@ -105,7 +126,7 @@ index 269b6e3da..da415746f 100644
  ):
      """
      Implements the fused computation for a Mixture of Experts (MOE) using
-@@ -434,7 +440,25 @@ def fused_moe_kernel(
+@@ -434,7 +454,25 @@ def fused_moe_kernel(
  
      offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N).to(tl.int64)) % N
      offs_k = tl.arange(0, BLOCK_SIZE_K)
@@ -132,7 +153,7 @@ index 269b6e3da..da415746f 100644
          a_ptrs = a_ptr + (
              offs_k[:, None] * stride_ak + offs_token[None, :] // top_k * stride_am
          )
-@@ -452,7 +476,6 @@ def fused_moe_kernel(
+@@ -452,7 +490,6 @@ def fused_moe_kernel(
              + off_experts * stride_be
              + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
          )
@@ -140,7 +161,7 @@ index 269b6e3da..da415746f 100644
      if use_int8_w8a16:
          b_scale_ptrs = (
              b_scale_ptr + off_experts * stride_bse + offs_bn[None, :] * stride_bsn
-@@ -496,18 +519,21 @@ def fused_moe_kernel(
+@@ -496,18 +533,21 @@ def fused_moe_kernel(
      for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
          # Load the next block of A and B, generate a mask by checking the
          # K dimension.
@@ -171,13 +192,18 @@ index 269b6e3da..da415746f 100644
          # We accumulate along the K dimension.
          if use_int8_w8a16:
              accumulator = tl.dot(a, b.to(compute_type), acc=accumulator)
-@@ -534,9 +560,10 @@ def fused_moe_kernel(
-                     accumulator += tl.dot(a, b)
+@@ -531,12 +571,13 @@ def fused_moe_kernel(
+                     else:
+                         accumulator = tl.dot(a, b, acc=accumulator)
+                 else:
+-                    accumulator += tl.dot(a, b)
++                    accumulator = tl.dot(a, b, accumulator)
          else:
-             accumulator += tl.dot(a, b)
+-            accumulator += tl.dot(a, b)
 -        # Advance the ptrs to the next K block.
 -        a_ptrs += BLOCK_SIZE_K * stride_ak
 -        b_ptrs += BLOCK_SIZE_K * stride_bk
++            accumulator = tl.dot(a, b, accumulator)
 +        if not USE_TD:
 +            # Advance the ptrs to the next K block.
 +            a_ptrs += BLOCK_SIZE_K * stride_ak
@@ -185,7 +211,7 @@ index 269b6e3da..da415746f 100644
  
      if SWAP_AB:
          accumulator = tl.trans(accumulator, (1, 0))
-@@ -763,6 +790,17 @@ def invoke_fused_moe_triton_kernel(
+@@ -763,6 +804,17 @@ def invoke_fused_moe_triton_kernel(
      else:
          SWAP_AB = False
  
@@ -203,7 +229,7 @@ index 269b6e3da..da415746f 100644
      if use_fp8_w8a8 or use_int8_w8a8:
          assert B_scale is not None
          assert block_shape is None or triton.cdiv(
-@@ -803,6 +841,19 @@ def invoke_fused_moe_triton_kernel(
+@@ -803,6 +855,19 @@ def invoke_fused_moe_triton_kernel(
      BLOCK_SIZE_K = config.pop("BLOCK_SIZE_K")
      if block_shape is not None:
          BLOCK_SIZE_K = min(BLOCK_SIZE_K, min(block_shape[0], block_shape[1]))
@@ -223,13 +249,15 @@ index 269b6e3da..da415746f 100644
      fused_moe_kernel[grid](
          A,
          B,
-@@ -845,6 +896,7 @@ def invoke_fused_moe_triton_kernel(
+@@ -845,7 +910,8 @@ def invoke_fused_moe_triton_kernel(
          HAS_BIAS=HAS_BIAS,
          BLOCK_SIZE_K=BLOCK_SIZE_K,
          SWAP_AB=SWAP_AB,
+-        **config,
 +        USE_TD=use_td,
-         **config,
++        BLOCK_SIZE_M=config["BLOCK_SIZE_M"],
      )
+ 
  
 diff --git a/vllm/model_executor/layers/fused_moe/oracle/unquantized.py b/vllm/model_executor/layers/fused_moe/oracle/unquantized.py
 index cda0eaf73..52fb9b46b 100644
