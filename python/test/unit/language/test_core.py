@@ -7379,13 +7379,16 @@ def test_dot_multidim(rank, trans_a, trans_b, device):
 
 @pytest.mark.parametrize("dtype_str", ["float32", "float64"])
 def test_libdevice_rint(dtype_str, device):
+    if device in ['xpu']:
+        if dtype_str in ["float64"] and not xpu_has_fp64():
+            pytest.xfail("float64 not supported on current xpu hardware")
     iinfo32 = np.iinfo(np.int32)
     iinfo64 = np.iinfo(np.int64)
     size = 1000
     x0_np = np.random.uniform(iinfo32.min, iinfo32.max + 1, size)
     x1_np = np.random.uniform(iinfo64.min, iinfo64.max + 1, size)
     x2_np = np.array([-2.5, -1.5, -0.5, -0., 0., 0.5, 1.5, 2.5, float("inf"), -float("inf"), float("nan")])
-    x_np = np.concatenate((x0_np, x1_np, x2_np))
+    x_np = np.concatenate((x0_np, x1_np, x2_np)).astype(dtype_str)
     x_tri = to_triton(x_np, device=device, dst_type=dtype_str)
 
     @triton.jit
