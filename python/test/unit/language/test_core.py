@@ -7379,6 +7379,9 @@ def test_dot_multidim(rank, trans_a, trans_b, device):
 
 @pytest.mark.parametrize("dtype_str", ["float32", "float64"])
 def test_libdevice_rint(dtype_str, device):
+    if device in ['xpu']:
+        if dtype_str in ["float64"] and not xpu_has_fp64():
+            pytest.xfail("float64 not supported on current xpu hardware")
     iinfo32 = np.iinfo(np.int32)
     iinfo64 = np.iinfo(np.int64)
     size = 1000
