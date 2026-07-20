@@ -322,11 +322,12 @@ if [[ "$build_vllm" == false ]]; then
     fi
 
     echo "*** Nightly wheel commit ($wheel_commit) does not match pinned commit ($vllm_xpu_kernels_pinned_commit); building kernels from source. ***"
-    rm -rf "$temp_dir"
   else
     echo "*** No vllm-xpu-kernels wheel found in nightly build; building kernels from source. ***"
-    build_vllm=true
   fi
+
+  rm -rf "$temp_dir"
+  build_vllm=true
 fi
 
 echo "*** Base directory: $ROOT. ***"
