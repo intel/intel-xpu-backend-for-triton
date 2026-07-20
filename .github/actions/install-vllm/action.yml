@@ -14,15 +14,29 @@ runs:
       shell: bash --noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
       run: |
         install_args=()
+
+        # On pull_request events github.ref_name is "<PR#>/merge", not the source
+        # branch; head_ref carries the actual branch that nightly wheels are keyed to.
+        branch="${{ github.head_ref || github.ref_name }}"
+
         if [[ "${{ inputs.use-branch-wheel }}" == "true" ]]; then
-          install_args+=(--triton-repo-branch "${{ github.ref_name }}")
-        else
-          if gh api "repos/${{ github.repository }}/compare/main...${{ github.sha }}" \
-              --jq '.files[].filename' | grep -qxF \
-              -e .github/workflows/nightly-wheels.yml \
-              -e scripts/vllm/install-vllm.sh \
-              -e scripts/vllm/vllm-xpu-kernels-pin.txt; then
-            install_args+=(--source)
-          fi
+          # Explicit opt-in: trust this branch's prebuilt wheel (install-vllm.sh
+          # fails loudly if the branch has no successful nightly build).
+          install_args+=(--triton-repo-branch "$branch")
+        elif gh api "repos/${{ github.repository }}/compare/main...${{ github.sha }}" \
+            --jq '.files[].filename' | grep -qxF \
+            -e .github/workflows/nightly-wheels.yml \
+            -e scripts/vllm/install-vllm.sh \
+            -e scripts/vllm/vllm-xpu-kernels-pin.txt; then
+          # The PR changes the kernels build inputs, so no prebuilt wheel matches:
+          # build from source.
+          install_args+=(--source)
+        elif [[ "$branch" != "main" ]] && [[ -n "$(gh run list \
+            --workflow nightly-wheels.yml --branch "$branch" -R "${{ github.repository }}" \
+            --json databaseId,conclusion \
+            --jq '[.[] | select(.conclusion=="success")][0].databaseId // empty')" ]]; then
+          # Seamlessly prefer this branch's own nightly wheel when one exists;
+          # otherwise fall through and let install-vllm.sh use main's nightly wheel.
+          install_args+=(--triton-repo-branch "$branch")
         fi
         ./scripts/vllm/install-vllm.sh "${install_args[@]}"
