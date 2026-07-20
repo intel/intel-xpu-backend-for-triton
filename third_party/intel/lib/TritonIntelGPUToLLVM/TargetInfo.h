@@ -91,7 +91,7 @@ private:
                                  StringRef name, StringRef value,
                                  unsigned addressSpace) const;
 
-  const mlir::triton::gpu::intel::LibCallEmitter emitter;
+  const mlir::triton::gpu::intel::LibCallEmitter emitter{};
 };
 
 std::unique_ptr<TargetInfo> createTargetInfo(ModuleOp mod);
