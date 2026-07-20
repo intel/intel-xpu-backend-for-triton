@@ -572,6 +572,11 @@ FailureOr<LinearLayout> computeTransposeShuffleMapping(
     }
     LinearLayout transPackedLayout = LinearLayout(
         {{kRegister, regBases}, {kLane, laneBases}}, ArrayRef(loadDimName));
+    if (sizeInfo.rowDim > sizeInfo.colDim) {
+      // to align the output dims order to the input linear layout.
+      std::swap(loadDimName[0], loadDimName[1]);
+      transPackedLayout = transPackedLayout.transposeOuts(loadDimName);
+    }
     if (transPackedLayout != expectedLoadUnpackLayout) {
       // Improve this. The current 2D block load only transposes the matrix at
       // i32 granularity. We still need to perform an additional in-register
