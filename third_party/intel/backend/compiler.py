@@ -226,6 +226,47 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             args["enable_fp_fusion"] = knobs.language.default_fp_fusion
         return XPUOptions(**args)
 
+    @staticmethod
+    def parse_attr(desc):
+        ret = BaseBackend.parse_attr(desc)
+        if "N" in desc:
+            ret += [["tt.padding", 1]]
+        # "S" section: encodes shape and stride values as constexpr.
+        # Format: "S<shape0>,<shape1>,...;<stride0>,<stride1>,..."
+        # Enables isDivisible checks to pass trivially on constants.
+        if "S" in desc:
+            idx = desc.index("S") + 1
+            s_str = desc[idx:]
+            try:
+                parts = s_str.split(";")
+                shapes = [int(x) for x in parts[0].split(",") if x]
+                for i, s in enumerate(shapes):
+                    ret += [[f"tt.shape.{i}", s]]
+                if len(parts) > 1:
+                    strides = [int(x) for x in parts[1].split(",") if x]
+                    for i, s in enumerate(strides):
+                        ret += [[f"tt.stride.{i}", s]]
+            except (ValueError, IndexError):
+                pass
+        return ret
+
+    @staticmethod
+    def get_tensordesc_specialization(arg, **kwargs):
+        # "N" = NaN padding (enables tt.padding attribute).
+        # "S<shapes>;<strides>" = shape and stride values as constexpr.
+        #   Shapes: enables satisfies2DBlockReadAlignment and FuseReshape checks.
+        #   Strides (rank-3+ only): enables FuseReshape stride divisibility.
+        key = ""
+        if getattr(arg, "padding", None) == "nan":
+            key += "N"
+        # Encode all shapes and non-last strides (rank-3+ only) as constants.
+        shapes_str = ",".join(str(s) for s in arg.shape)
+        strides_str = ",".join(str(s) for s in arg.strides[:-1]) if len(arg.strides) >= 3 else ""
+        key += "S" + shapes_str
+        if strides_str:
+            key += ";" + strides_str
+        return key
+
     def pack_metadata(self, metadata):
         return metadata
 
@@ -368,6 +409,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             passes.common.add_canonicalizer(pm)
 
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
+        intel.passes.ttgpuir.add_stage_large_fma_dots_via_slm(pm)
         intel.passes.ttgpuir.add_materialize_block_pointer(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_fold_fp_to_fp(pm)
@@ -503,8 +545,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             llvm.link_extern_libs(llvm_mod, paths)
 
         cls.optimize_llvm_mod(llvm_mod, options)
-        is_lts = cls.is_lts(metadata["target"].arch.get("driver_version"))
-        intel.post_process_llir(llvm_mod, is_lts)
+        intel.post_process_llir(llvm_mod)
 
         # Get some metadata
         total_num_warps = src.get_int_attr("ttg.total-num-warps")

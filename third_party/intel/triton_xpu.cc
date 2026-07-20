@@ -86,6 +86,8 @@ void init_triton_intel_passes_ttgpuir(py::module_ &&m) {
                      gpu::intel::createTritonIntelGPUAccelerateMatmul);
   ADD_PASS_WRAPPER_0("add_fold_fp_to_fp",
                      gpu::intel::createTritonIntelGPUFoldFpToFp);
+  ADD_PASS_WRAPPER_0("add_stage_large_fma_dots_via_slm",
+                     gpu::intel::createTritonIntelGPUStageLargeFMADotsViaSLM);
   ADD_PASS_WRAPPER_0("add_rewrite_stack_ptr",
                      gpu::intel::createTritonIntelGPURewriteStackPtr);
   ADD_PASS_OPTION_WRAPPER_2(
@@ -391,9 +393,8 @@ void init_triton_intel(py::module_ &m) {
     mod->setDataLayout(layout);
   });
 
-  m.def("post_process_llir", [](llvm::Module *mod, bool isLTS) {
-    intel::postProcessLLVMIR(*mod, isLTS);
-  });
+  m.def("post_process_llir",
+        [](llvm::Module *mod) { intel::postProcessLLVMIR(*mod); });
 
   m.def(
       "translate_to_spirv",
