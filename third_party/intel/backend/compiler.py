@@ -229,40 +229,42 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     @staticmethod
     def parse_attr(desc):
         ret = BaseBackend.parse_attr(desc)
-        if "L" in desc:
-            ret += [["tt.last_dim_divisibility", 8]]
         if "N" in desc:
             ret += [["tt.padding", 1]]
-        # "S<val>,<val>,..." encodes non-last stride values for rank-3+
-        # descriptors (enables constexpr stride optimization for FuseReshape).
+        # "S" section: encodes shape and stride values as constexpr.
+        # Format: "S<shape0>,<shape1>,...;<stride0>,<stride1>,..."
+        # Enables isDivisible checks to pass trivially on constants.
         if "S" in desc:
             idx = desc.index("S") + 1
-            stride_str = desc[idx:]
+            s_str = desc[idx:]
             try:
-                strides = [int(x) for x in stride_str.split(",") if x]
-                for i, s in enumerate(strides):
-                    ret += [[f"tt.stride.{i}", s]]
-            except ValueError:
+                parts = s_str.split(";")
+                shapes = [int(x) for x in parts[0].split(",") if x]
+                for i, s in enumerate(shapes):
+                    ret += [[f"tt.shape.{i}", s]]
+                if len(parts) > 1:
+                    strides = [int(x) for x in parts[1].split(",") if x]
+                    for i, s in enumerate(strides):
+                        ret += [[f"tt.stride.{i}", s]]
+            except (ValueError, IndexError):
                 pass
         return ret
 
     @staticmethod
     def get_tensordesc_specialization(arg, **kwargs):
-        # "L" = last-dim shape satisfies 2D block IO surface width alignment
-        #   (needed for satisfies2DBlockReadAlignment in MaterializeBlockPointer).
-        #   HW requires 4-byte (DW) alignment; combined with minimum 2 elements
-        #   for the stride-one dim this means shape[-1] * elem_bytes % 8 == 0.
         # "N" = NaN padding (enables tt.padding attribute).
-        # "S<val>,..." = non-last stride values for rank-3+ (enables constexpr
-        #   stride optimization for FuseReshape).
+        # "S<shapes>;<strides>" = shape and stride values as constexpr.
+        #   Shapes: enables satisfies2DBlockReadAlignment and FuseReshape checks.
+        #   Strides (rank-3+ only): enables FuseReshape stride divisibility.
         key = ""
-        elem_bytes = arg.base.dtype.itemsize
-        if (arg.shape[-1] * elem_bytes) % 8 == 0:
-            key += "L"
         if getattr(arg, "padding", None) == "nan":
             key += "N"
-        if len(arg.strides) >= 3:
-            key += "S" + ",".join(str(s) for s in arg.strides[:-1])
+        # Encode all shapes and non-last strides (rank-3+ only) as constants.
+        shapes_str = ",".join(str(s) for s in arg.shape)
+        strides_str = ",".join(str(s) for s in arg.strides[:-1]) if len(arg.strides) >= 3 else ""
+        key += "S" + shapes_str
+        if strides_str:
+            key += ";" + strides_str
         return key
 
     def pack_metadata(self, metadata):
@@ -407,6 +409,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             passes.common.add_canonicalizer(pm)
 
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
+        intel.passes.ttgpuir.add_stage_large_fma_dots_via_slm(pm)
         intel.passes.ttgpuir.add_materialize_block_pointer(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_fold_fp_to_fp(pm)
