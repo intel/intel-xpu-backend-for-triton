@@ -127,19 +127,47 @@ jobs:
         run: |
           ./scripts/test-triton.sh --install-sglang --skip-pip-install --skip-pytorch-install
 
-      - name: Run sglang benchmarks
+      - name: Run sglang prefill attention benchmark
         if: ${{ steps.install-sglang.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'sglang')) }}
         run: |
           source ./scripts/capture-hw-details.sh
 
-          triton-benchmarks run ALL \
-            --config sglang-prefill-attn \
-            --config sglang-decode-attn \
-            --config sglang-extended-attn \
-            --config sglang-block-fp8-gemm \
-            --config sglang-scaled-mm-int8 \
-            --config sglang-scaled-mm-fp8 \
-            --reports $REPORTS --tag $TAG
+          triton-benchmarks run sglang-prefill-attn --reports $REPORTS --tag $TAG
+
+      - name: Run sglang decode attention benchmark
+        if: ${{ steps.install-sglang.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'sglang')) }}
+        run: |
+          source ./scripts/capture-hw-details.sh
+
+          triton-benchmarks run sglang-decode-attn --reports $REPORTS --tag $TAG
+
+      - name: Run sglang extended attention benchmark
+        if: ${{ steps.install-sglang.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'sglang')) }}
+        run: |
+          source ./scripts/capture-hw-details.sh
+
+          triton-benchmarks run sglang-extended-attn --reports $REPORTS --tag $TAG
+
+      - name: Run sglang block fp8 gemm benchmark
+        if: ${{ steps.install-sglang.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'sglang')) }}
+        run: |
+          source ./scripts/capture-hw-details.sh
+
+          triton-benchmarks run sglang-block-fp8-gemm --reports $REPORTS --tag $TAG
+
+      - name: Run sglang scaled_mm int8 benchmark
+        if: ${{ steps.install-sglang.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'sglang')) }}
+        run: |
+          source ./scripts/capture-hw-details.sh
+
+          triton-benchmarks run sglang-scaled-mm-int8 --reports $REPORTS --tag $TAG
+
+      - name: Run sglang scaled_mm fp8 benchmark
+        if: ${{ steps.install-sglang.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'sglang')) }}
+        run: |
+          source ./scripts/capture-hw-details.sh
+
+          triton-benchmarks run sglang-scaled-mm-fp8 --reports $REPORTS --tag $TAG
 
       - name: Run Liger-Kernel benchmarks
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'liger')) }}
