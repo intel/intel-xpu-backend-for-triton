@@ -519,9 +519,7 @@ LogicalResult tt::TritonGEN::SubGroupGatherLoadOp::verify() {
     return emitOpError("expects preds to be vector<32xi1>");
   }
 
-  auto resTy = dyn_cast<VectorType>(getRes().getType());
-  if (!resTy)
-    return emitOpError("expects result to be a vector type");
+  auto resTy = cast<VectorType>(getRes().getType());
 
   Type elemType = resTy.getElementType();
   unsigned elemBitWidth = elemType.getIntOrFloatBitWidth();
