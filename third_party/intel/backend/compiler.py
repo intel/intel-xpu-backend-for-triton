@@ -407,6 +407,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             passes.common.add_canonicalizer(pm)
 
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
+        intel.passes.ttgpuir.add_stage_large_fma_dots_via_slm(pm)
         intel.passes.ttgpuir.add_materialize_block_pointer(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_fold_fp_to_fp(pm)
@@ -542,8 +543,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             llvm.link_extern_libs(llvm_mod, paths)
 
         cls.optimize_llvm_mod(llvm_mod, options)
-        is_lts = cls.is_lts(metadata["target"].arch.get("driver_version"))
-        intel.post_process_llir(llvm_mod, is_lts)
+        intel.post_process_llir(llvm_mod)
 
         # Get some metadata
         total_num_warps = src.get_int_attr("ttg.total-num-warps")

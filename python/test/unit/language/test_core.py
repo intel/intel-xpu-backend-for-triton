@@ -28,6 +28,7 @@ from triton._internal_testing import (
     is_cuda,
     is_interpreter,
     is_hopper,
+    is_sm12x,
     is_hip,
     is_hip_cdna,
     is_hip_cdna2,
@@ -1882,6 +1883,7 @@ def test_atomic_cas(sem, num_ctas, dtype_str, device):
 
 @pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9,
                    reason="num_ctas > 1 requires NVIDIA SM90+ (Hopper)", run=False)
+@pytest.mark.skipif(is_sm12x(), reason="scalar multi-CTA atomic_cas is not supported on sm120 (consumer Blackwell)")
 def test_scalar_atomic_cas_multicta_result(device):
 
     @triton.jit
@@ -7053,6 +7055,7 @@ def gather_test_kernel_1d(src_ptr, idx_ptr, out_ptr, axis: tl.constexpr, src_dim
 @pytest.mark.parametrize("src_shape, indices_shape, axis", [
     ([32], [64], 0),
     ([4, 4], [8, 4], 0),
+    ([4, 4], [4096, 4], 0),
     ([128, 64], [256, 64], 0),
     ([128, 64], [128, 128], 1),
 ])
@@ -7379,6 +7382,9 @@ def test_dot_multidim(rank, trans_a, trans_b, device):
 
 @pytest.mark.parametrize("dtype_str", ["float32", "float64"])
 def test_libdevice_rint(dtype_str, device):
+    if device in ['xpu']:
+        if dtype_str in ["float64"] and not xpu_has_fp64():
+            pytest.xfail("float64 not supported on current xpu hardware")
     iinfo32 = np.iinfo(np.int32)
     iinfo64 = np.iinfo(np.int64)
     size = 1000

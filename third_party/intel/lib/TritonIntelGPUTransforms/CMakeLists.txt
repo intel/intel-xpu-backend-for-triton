@@ -18,6 +18,7 @@ add_triton_library(TritonIntelGPUTransforms
   ReduceVariableLiveness.cpp
   RemoveLayoutConversions.cpp
   RewriteStackPtr.cpp
+  StageLargeFMADotsViaSLM.cpp
   Utility.cpp
   WidenLoadStoreEncoding.cpp
 
