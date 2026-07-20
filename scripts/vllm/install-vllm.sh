@@ -304,39 +304,29 @@ if [[ "$build_vllm" == false ]]; then
     --pattern "$wheel_pattern" \
     --dir "$temp_dir"
 
-  # Verify the downloaded wheel was built from the pinned commit. The commit is
-  # embedded in the filename as "...+g<sha>.d<date>..." (parsed as in
-  # check_installed_package). A mismatch means the nightly run is stale relative
-  # to the pin (e.g. the pin moved but the branch's nightly rebuild has not
-  # finished), so fall back to a source build instead of installing wrong kernels.
   downloaded_wheel="$(find "$temp_dir" -name 'vllm_xpu_kernels-*.whl' -print -quit)"
-  wheel_commit=""
   if [[ -n "$downloaded_wheel" ]]; then
     wheel_commit="$(basename "$downloaded_wheel")"
     wheel_commit="${wheel_commit#*+g}"
     wheel_commit="${wheel_commit%%.*}"
-  fi
 
-  if [[ -n "$downloaded_wheel" && "$vllm_xpu_kernels_pinned_commit" == "$wheel_commit"* ]]; then
-    echo "*** Installing vLLM XPU kernels from nightly builds (commit $wheel_commit matches pin). ***"
-    python -m pip install "$downloaded_wheel"
-    rm -rf "$temp_dir"
-    echo "*** Installing vLLM from source. ***"
-    install_vllm
-    show_installs
+    if [[ "$vllm_xpu_kernels_pinned_commit" == "$wheel_commit"* ]]; then
+      echo "*** Installing vLLM XPU kernels from nightly builds (commit $wheel_commit matches pin). ***"
+      python -m pip install "$downloaded_wheel"
+      rm -rf "$temp_dir"
+      echo "*** Installing vLLM from source. ***"
+      install_vllm
+      show_installs
 
-    exit 0
-  fi
+      exit 0
+    fi
 
-  if [[ -n "$downloaded_wheel" ]]; then
     echo "*** Nightly wheel commit ($wheel_commit) does not match pinned commit ($vllm_xpu_kernels_pinned_commit); building kernels from source. ***"
+    rm -rf "$temp_dir"
   else
     echo "*** No vllm-xpu-kernels wheel found in nightly build; building kernels from source. ***"
+    build_vllm=true
   fi
-  rm -rf "$temp_dir"
-
-  # Fall through to the source-build path below.
-  build_vllm=true
 fi
 
 echo "*** Base directory: $ROOT. ***"
