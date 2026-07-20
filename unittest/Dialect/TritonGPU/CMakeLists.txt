@@ -7,8 +7,6 @@ add_triton_ut(
     TritonNvidiaGPUIR
     TritonGPUTransforms
     TritonNvidiaGPUTransforms
-    TritonIntelAnalysis
-    TritonIntelGPUTransforms
     TritonTools
     LLVMSupport
     MLIRSupport
@@ -20,8 +18,6 @@ add_triton_ut(
     MLIRParser
     TritonGPUIR
     TritonGPUTransforms
-    TritonIntelAnalysis
-    TritonIntelGPUTransforms
     TritonNvidiaGPUTransforms
 )
 add_triton_ut(
@@ -30,8 +26,6 @@ add_triton_ut(
   LIBS
     TritonGPUIR
     TritonGPUTransforms
-    TritonIntelAnalysis
-    TritonIntelGPUTransforms
     TritonNvidiaGPUTransforms
 )
 
@@ -41,8 +35,6 @@ add_triton_ut(
   LIBS
     TritonGPUIR
     TritonGPUTransforms
-    TritonIntelAnalysis
-    TritonIntelGPUTransforms
     TritonNvidiaGPUTransforms
 )
 
@@ -55,7 +47,6 @@ add_triton_ut(
     TritonNvidiaGPUIR
     TritonGPUTransforms
     TritonNvidiaGPUTransforms
-    TritonIntelGPUTransforms
     TritonTools
     LLVMSupport
     MLIRSupport
