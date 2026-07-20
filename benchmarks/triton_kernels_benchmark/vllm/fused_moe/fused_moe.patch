@@ -1,5 +1,5 @@
 diff --git a/tests/kernels/moe/test_moe.py b/tests/kernels/moe/test_moe.py
-index 69c50cbb1..2cc569e79 100644
+index 788929bdf..22cd71e90 100644
 --- a/tests/kernels/moe/test_moe.py
 +++ b/tests/kernels/moe/test_moe.py
 @@ -36,6 +36,9 @@ from vllm.model_executor.layers.fused_moe.experts.marlin_moe import (
@@ -57,21 +57,21 @@ index 69c50cbb1..2cc569e79 100644
      # Setup test data
      #
  
--    a = torch.randn((m, k), device="cuda", dtype=dtype) / 10
--    w1 = torch.randn((e, 2 * n, k), device="cuda", dtype=dtype) / 10
--    w2 = torch.randn((e, k, n), device="cuda", dtype=dtype) / 10
+-    a = torch.randn((m, k), device="xpu", dtype=dtype) / 10
+-    w1 = torch.randn((e, 2 * n, k), device="xpu", dtype=dtype) / 10
+-    w2 = torch.randn((e, k, n), device="xpu", dtype=dtype) / 10
 +    a = torch.randn((m, k), device=DEVICE_TYPE, dtype=dtype) / 10
 +    w1 = torch.randn((e, 2 * n, k), device=DEVICE_TYPE, dtype=dtype) / 10
 +    w2 = torch.randn((e, k, n), device=DEVICE_TYPE, dtype=dtype) / 10
  
--    score = torch.randn((m, e), device="cuda", dtype=dtype)
+-    score = torch.randn((m, e), device="xpu", dtype=dtype)
 +    score = torch.randn((m, e), device=DEVICE_TYPE, dtype=dtype)
  
      if ep_size > 1:
          local_e = e // ep_size
--        e_ids = torch.randint(0, e, (local_e,), device="cuda", dtype=torch.int32)
--        e_map = torch.full((e,), -1, device="cuda", dtype=torch.int32)
--        e_map[e_ids] = torch.arange(local_e, device="cuda", dtype=torch.int32)
+-        e_ids = torch.randint(0, e, (local_e,), device="xpu", dtype=torch.int32)
+-        e_map = torch.full((e,), -1, device="xpu", dtype=torch.int32)
+-        e_map[e_ids] = torch.arange(local_e, device="xpu", dtype=torch.int32)
 +        e_ids = torch.randint(0, e, (local_e,), device=DEVICE_TYPE, dtype=torch.int32)
 +        e_map = torch.full((e,), -1, device=DEVICE_TYPE, dtype=torch.int32)
 +        e_map[e_ids] = torch.arange(local_e, device=DEVICE_TYPE, dtype=torch.int32)
