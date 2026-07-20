@@ -447,7 +447,7 @@ struct LoadStoreConversionBase {
       typename OpType,
       typename = std::enable_if_t<llvm::is_one_of<
           OpType, LoadOp, StoreOp, DescriptorLoadOp, DescriptorStoreOp>::value>>
-  bool canUsePredicatedInstructions(OpType op, Type loadTy = {}) const {
+  bool canUsePredicatedInstructions(OpType op) const {
     if (!mlir::LLVM::intel::hasModuleAttr(
             op, TritonIntelGPUDialect::getSupportPredicatedIOAttrName()))
       return false;
@@ -466,16 +466,8 @@ struct LoadStoreConversionBase {
 
     // SPIRV predicated load/store does not support volatile qualifier.
     if constexpr (std::is_same_v<OpType, LoadOp>) {
-      if (op.getIsVolatile())
-        return false;
-      // FIXME: Scalar PredicatedLoadINTEL has a known issue producing
-      // incorrect results for non-contiguous accesses (#7235). Disable by
-      // default for scalar types unless explicitly requested via env var.
-      // Remove this workaround once the driver issue is resolved.
-      if (loadTy && !isa<VectorType>(loadTy)) {
-        return usePredicatedLoad.has_value() && usePredicatedLoad.value();
-      }
-      return !usePredicatedLoad.has_value() || usePredicatedLoad.value();
+      return (!usePredicatedLoad.has_value() || usePredicatedLoad.value()) &&
+             !op.getIsVolatile();
     } else if constexpr (std::is_same_v<OpType, StoreOp>) {
       return !usePredicatedStore.has_value() || usePredicatedStore.value();
     } else if constexpr (std::is_same_v<OpType, DescriptorLoadOp>) {
@@ -2155,7 +2147,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       Value ret;
       if (!pred)
         ret = createLoadWithAttrs()[0];
-      else if (canUsePredicatedInstructions(op, retTy)) {
+      else if (canUsePredicatedInstructions(op)) {
         auto cacheModifier = tritonToIntelCacheModifier(op);
         ret = TritonGEN::PredicatedLoadOp::create(
             rewriter, loc, retTy, addrElem, pred, other_, cacheModifier);
