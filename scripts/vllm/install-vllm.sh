@@ -299,18 +299,48 @@ if [[ "$build_vllm" == false ]]; then
   run_id="$(gh run list --workflow nightly-wheels.yml --branch "$triton_repo_branch" -R "$triton_repo" --json databaseId,conclusion | jq -r '[.[] | select(.conclusion=="success")][0].databaseId')"
   temp_dir="$(mktemp -d)"
   wheel_pattern="wheels-vllm-py$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")-*"
-  gh run download "$run_id" \
+
+  wheel=""
+  if [[ -z "$run_id" || "$run_id" == "null" ]]; then
+    echo "*** No successful nightly-wheels.yml run found on '$triton_repo_branch'. ***"
+  elif ! gh run download "$run_id" \
     --repo "$triton_repo" \
     --pattern "$wheel_pattern" \
-    --dir "$temp_dir"
-  echo "*** Installing vLLM XPU kernels from nightly builds. ***"
-  python -m pip install "$temp_dir"/$wheel_pattern/vllm_xpu_kernels-*.whl
-  rm -rf "$temp_dir"
-  echo "*** Installing vLLM from source. ***"
-  install_vllm
-  show_installs
+    --dir "$temp_dir"; then
+    echo "*** Failed to download vllm-xpu-kernels wheel from run $run_id. ***"
+  else
+    wheel="$(ls "$temp_dir"/$wheel_pattern/vllm_xpu_kernels-*.whl 2>/dev/null | head -n 1)"
+  fi
 
-  exit 0
+  # Verify the downloaded wheel's built commit matches the pinned commit before using
+  # it. The wheel filename encodes the commit as <version>+g<sha7>.d<date>, matching the
+  # version parsing in check_installed_package. Otherwise fall back to building from
+  # source so a moved pin is always honored -- e.g. during the window after a pin bump
+  # merges to main but before the post-merge main rebuild has succeeded, where
+  # `gh run list` still returns the pre-merge (stale) wheel.
+  wheel_commit=""
+  if [[ -n "$wheel" ]]; then
+    wheel_commit="$(basename "$wheel")"
+    wheel_commit="${wheel_commit#*+g}"
+    wheel_commit="${wheel_commit%%.*}"
+  fi
+
+  if [[ -n "$wheel_commit" && "$vllm_xpu_kernels_pinned_commit" == "$wheel_commit"* ]]; then
+    echo "*** Downloaded vllm-xpu-kernels wheel commit ($wheel_commit) matches the pinned commit. ***"
+    echo "*** Installing vLLM XPU kernels from nightly builds. ***"
+    python -m pip install "$wheel"
+    rm -rf "$temp_dir"
+    echo "*** Installing vLLM from source. ***"
+    install_vllm
+    show_installs
+
+    exit 0
+  fi
+
+  echo "*** Downloaded vllm-xpu-kernels wheel commit (${wheel_commit:-unknown}) does not match the pinned commit ($vllm_xpu_kernels_pinned_commit). ***"
+  echo "*** Falling back to building vLLM XPU kernels from source. ***"
+  rm -rf "$temp_dir"
+  build_vllm=true
 fi
 
 echo "*** Base directory: $ROOT. ***"
