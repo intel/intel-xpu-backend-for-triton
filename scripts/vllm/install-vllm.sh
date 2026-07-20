@@ -298,6 +298,7 @@ if [[ "$build_vllm" == false ]]; then
   echo "*** Downloading nightly builds. ***"
   run_id="$(gh run list --workflow nightly-wheels.yml --branch "$triton_repo_branch" -R "$triton_repo" --json databaseId,conclusion | jq -r '[.[] | select(.conclusion=="success")][0].databaseId')"
   temp_dir="$(mktemp -d)"
+  trap 'rm -rf "$temp_dir"' EXIT
   wheel_pattern="wheels-vllm-py$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")-*"
   gh run download "$run_id" \
     --repo "$triton_repo" \
@@ -311,9 +312,8 @@ if [[ "$build_vllm" == false ]]; then
     wheel_commit="${wheel_commit%%.*}"
 
     if [[ "$vllm_xpu_kernels_pinned_commit" == "$wheel_commit"* ]]; then
-      echo "*** Installing vLLM XPU kernels from nightly builds (commit $wheel_commit matches pin). ***"
+      echo "*** Installing vLLM XPU kernels from nightly builds. ***"
       python -m pip install "$downloaded_wheel"
-      rm -rf "$temp_dir"
       echo "*** Installing vLLM from source. ***"
       install_vllm
       show_installs
@@ -321,12 +321,12 @@ if [[ "$build_vllm" == false ]]; then
       exit 0
     fi
 
-    echo "*** Nightly wheel commit ($wheel_commit) does not match pinned commit ($vllm_xpu_kernels_pinned_commit); building kernels from source. ***"
+    echo "*** vLLM XPU kernels nightly wheel commit ($wheel_commit) does not match pinned commit ($vllm_xpu_kernels_pinned_commit). ***"
   else
-    echo "*** No vllm-xpu-kernels wheel found in nightly build; building kernels from source. ***"
+    echo "*** No vllm-xpu-kernels wheel nightly build found. ***"
   fi
 
-  rm -rf "$temp_dir"
+  echo "*** Building vLLM XPU kernels from source. ***"
   build_vllm=true
 fi
 
