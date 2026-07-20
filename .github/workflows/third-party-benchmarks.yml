@@ -114,14 +114,6 @@ jobs:
         run: |
           pip install transformers 'pandas<3.0' pytest
 
-          cd benchmarks
-          pip install .
-          pip install intel-pti==0.12.2
-          PTI_LIBS_DIR=$(python -c "import sysconfig; print(sysconfig.get_paths()['stdlib']+'/..')")
-          # the output should contain: `libpti.so`, `libpti_metrics.so.0.12.2` and `libpti_view.so.0.12.2`
-          ls $PTI_LIBS_DIR
-          echo "PTI_LIBS_DIR=$PTI_LIBS_DIR" >> $GITHUB_ENV
-
       - name: Install benchmarks
         id: install-benchmarks
         uses: ./.github/actions/install-benchmarks
