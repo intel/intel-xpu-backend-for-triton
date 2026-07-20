@@ -138,7 +138,6 @@ jobs:
       - name: Run sglang benchmarks
         if: ${{ steps.install-sglang.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'sglang')) }}
         run: |
-          export LD_LIBRARY_PATH=$PTI_LIBS_DIR:$LD_LIBRARY_PATH
           source ./scripts/capture-hw-details.sh
 
           triton-benchmarks run ALL \
