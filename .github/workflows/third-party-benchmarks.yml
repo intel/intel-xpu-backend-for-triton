@@ -15,10 +15,6 @@ on:
         description: JSON list of benchmarks to run. Leave empty to run all benchmarks.
         type: string
         default: ""
-      sglang_pin:
-        description: SGLang pin (commit hash), keep empty for default
-        type: string
-        default: ""
       liger_pin:
         description: Liger-Kernel pin (commit hash), keep empty for default
         type: string
@@ -31,10 +27,6 @@ on:
         type: string
       benchmarks:
         description: JSON list of benchmarks to run. Leave empty to run all benchmarks.
-        type: string
-        default: ""
-      sglang_pin:
-        description: SGLang pin (commit hash), keep empty for default
         type: string
         default: ""
       liger_pin:
@@ -71,12 +63,6 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@v7
-
-      - name: Override SGLang pin
-        if: ${{ inputs.sglang_pin }}
-        run: |
-          echo "${{ inputs.sglang_pin }}" > scripts/sglang/sglang-pin.txt
-          echo "Overriding SGLang pin to: ${{ inputs.sglang_pin }}"
 
       - name: Override Liger-Kernel pin
         if: ${{ inputs.liger_pin }}
@@ -120,54 +106,6 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           github-token: ${{ github.token }}
-
-      - name: Install SGLang
-        id: install-sglang
-        if: ${{ steps.install-benchmarks.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'sglang')) }}
-        run: |
-          ./scripts/test-triton.sh --install-sglang --skip-pip-install --skip-pytorch-install
-
-      - name: Run sglang prefill attention benchmark
-        if: ${{ steps.install-sglang.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'sglang')) }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-
-          triton-benchmarks run sglang-prefill-attn --reports $REPORTS --tag $TAG
-
-      - name: Run sglang decode attention benchmark
-        if: ${{ steps.install-sglang.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'sglang')) }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-
-          triton-benchmarks run sglang-decode-attn --reports $REPORTS --tag $TAG
-
-      - name: Run sglang extended attention benchmark
-        if: ${{ steps.install-sglang.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'sglang')) }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-
-          triton-benchmarks run sglang-extended-attn --reports $REPORTS --tag $TAG
-
-      - name: Run sglang block fp8 gemm benchmark
-        if: ${{ steps.install-sglang.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'sglang')) }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-
-          triton-benchmarks run sglang-block-fp8-gemm --reports $REPORTS --tag $TAG
-
-      - name: Run sglang scaled_mm int8 benchmark
-        if: ${{ steps.install-sglang.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'sglang')) }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-
-          triton-benchmarks run sglang-scaled-mm-int8 --reports $REPORTS --tag $TAG
-
-      - name: Run sglang scaled_mm fp8 benchmark
-        if: ${{ steps.install-sglang.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'sglang')) }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-
-          triton-benchmarks run sglang-scaled-mm-fp8 --reports $REPORTS --tag $TAG
 
       - name: Run Liger-Kernel benchmarks
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'liger')) }}

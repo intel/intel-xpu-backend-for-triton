@@ -1,0 +1,162 @@
+name: SGLang benchmarks
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner_label:
+        description: Runner label, keep empty for default
+        type: string
+        default: ""
+      tag:
+        description: Tag for benchmark results
+        type: string
+        default: "test"
+      sglang_pin:
+        description: SGLang pin (commit hash), keep empty for default
+        type: string
+        default: ""
+  # The BMG schedule runs through the sglang-benchmarks-bmg.yml wrapper (which
+  # builds the branch benchmarks wheel first). This workflow keeps its own PVC schedule.
+  workflow_call:
+    inputs:
+      runner_label:
+        description: Runner label
+        type: string
+      tag:
+        description: Tag for benchmark results
+        # Empty default so the TAG fallback below can resolve pr-<n>/ci from the
+        # caller's event. A non-empty default would short-circuit that expression.
+        type: string
+        default: ""
+      sglang_pin:
+        description: SGLang pin (commit hash), keep empty for default
+        type: string
+        default: ""
+
+  schedule:
+    - cron: "0 9 * * *"
+
+permissions: read-all
+
+env:
+  PYTHON_VERSION: "3.12"
+  TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number)) || (github.event_name == 'schedule' && 'ci') || 'test' }}
+  HF_TOKEN: ${{ secrets.HF_TOKEN || '' }}
+
+jobs:
+  build:
+    name: SGLang benchmarks
+    runs-on:
+      - linux
+      - ${{ inputs.runner_label || 'max1550' }}
+    timeout-minutes: 720
+    defaults:
+      run:
+        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+    steps:
+      - name: Print inputs
+        run: |
+          cat <<EOF
+          ${{ toJSON(inputs) }}
+          EOF
+
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Override SGLang pin
+        if: ${{ inputs.sglang_pin }}
+        run: |
+          echo "${{ inputs.sglang_pin }}" > scripts/sglang/sglang-pin.txt
+          echo "Overriding SGLang pin to: ${{ inputs.sglang_pin }}"
+
+      - name: Install Python (from pyenv) ${{ inputs.python_version }}
+        uses: ./.github/actions/setup-pyenv-python
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Identify Python version
+        run: |
+          PYTHON_VERSION="$(python -c 'import sys; print(f"{sys.version_info[0]}.{ sys.version_info[1]}")')"
+          echo "PYTHON_VERSION=$PYTHON_VERSION" | tee -a $GITHUB_ENV
+
+      - name: Install Python build dependencies
+        run: |
+          pip install cmake
+
+      - name: Setup PyTorch
+        uses: ./.github/actions/setup-pytorch
+
+      - name: Setup Triton
+        uses: ./.github/actions/setup-triton
+
+      - name: Create reports dir
+        run: |
+          mkdir reports
+          echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
+
+      - name: Install benchmark dependencies
+        id: install
+        run: |
+          pip install transformers 'pandas<3.0' pytest
+
+      - name: Install benchmarks
+        id: install-benchmarks
+        uses: ./.github/actions/install-benchmarks
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          github-token: ${{ github.token }}
+
+      - name: Install SGLang
+        id: install-sglang
+        if: ${{ steps.install-benchmarks.outcome == 'success' && !cancelled() }}
+        run: |
+          ./scripts/test-triton.sh --install-sglang --skip-pip-install --skip-pytorch-install
+
+      - name: Run sglang prefill attention benchmark
+        if: ${{ steps.install-sglang.outcome == 'success' && !cancelled() }}
+        run: |
+          source ./scripts/capture-hw-details.sh
+
+          triton-benchmarks run sglang-prefill-attn --reports $REPORTS --tag $TAG
+
+      - name: Run sglang decode attention benchmark
+        if: ${{ steps.install-sglang.outcome == 'success' && !cancelled() }}
+        run: |
+          source ./scripts/capture-hw-details.sh
+
+          triton-benchmarks run sglang-decode-attn --reports $REPORTS --tag $TAG
+
+      - name: Run sglang extended attention benchmark
+        if: ${{ steps.install-sglang.outcome == 'success' && !cancelled() }}
+        run: |
+          source ./scripts/capture-hw-details.sh
+
+          triton-benchmarks run sglang-extended-attn --reports $REPORTS --tag $TAG
+
+      - name: Run sglang block fp8 gemm benchmark
+        if: ${{ steps.install-sglang.outcome == 'success' && !cancelled() }}
+        run: |
+          source ./scripts/capture-hw-details.sh
+
+          triton-benchmarks run sglang-block-fp8-gemm --reports $REPORTS --tag $TAG
+
+      - name: Run sglang scaled_mm int8 benchmark
+        if: ${{ steps.install-sglang.outcome == 'success' && !cancelled() }}
+        run: |
+          source ./scripts/capture-hw-details.sh
+
+          triton-benchmarks run sglang-scaled-mm-int8 --reports $REPORTS --tag $TAG
+
+      - name: Run sglang scaled_mm fp8 benchmark
+        if: ${{ steps.install-sglang.outcome == 'success' && !cancelled() }}
+        run: |
+          source ./scripts/capture-hw-details.sh
+
+          triton-benchmarks run sglang-scaled-mm-fp8 --reports $REPORTS --tag $TAG
+
+      - name: Upload benchmark reports
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: benchmark-reports
+          path: reports
