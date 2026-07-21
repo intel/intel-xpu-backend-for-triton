@@ -999,16 +999,21 @@ class TritonSemantic(Generic[TensorTy]):
                 raise ValueError(f"Memory semantic {scope_option} not supported")
         return scope
 
-    def load(self, ptr: TensorTy, mask: Optional[TensorTy], other: Optional[TensorTy], cache_modifier: str,
-             eviction_policy: str, is_volatile: bool) -> TensorTy:
+    def load(self, ptr: TensorTy, mask: Optional[TensorTy], other: Optional[TensorTy], boundary_check: Tuple,
+             padding_option: str, cache_modifier: str, eviction_policy: str, is_volatile: bool) -> TensorTy:
         cache = self._str_to_load_cache_modifier(cache_modifier)
         eviction = self._str_to_eviction_policy(eviction_policy)
+        padding = self._str_to_padding_option(padding_option)
         if not ptr.type.scalar.is_ptr():
             raise ValueError(f"Unsupported ptr type {ptr.type.__repr__()} in `tl.load`")
 
-        # Check `mask` and `other` arguments
+        # Check `mask`, `other`, `boundary_check`, and `padding` arguments
         if mask is None and other is not None:
             raise ValueError("`other` cannot be provided without `mask`")
+        if padding or boundary_check:
+            raise ValueError("`padding_option` or `boundary_check` argument is not supported for loading a tensor of"
+                             "pointers or loading a scalar. Because the compiler does not know the boundary; please "
+                             "use block pointers (defined by `make_block_ptr`) instead")
 
         # For a pointer of scalar, check the type of `mask` and `other`
         if not ptr.type.is_block():
@@ -1197,7 +1202,7 @@ class TritonSemantic(Generic[TensorTy]):
             raise ValueError(f"Expected pointer argument to have shape {ptr.shape} but got {ptr_shape}")
         return ptr, val, mask
 
-    def store(self, ptr: TensorTy, val: TensorTy, mask: Optional[TensorTy], cache_modifier: str,
+    def store(self, ptr: TensorTy, val: TensorTy, mask: Optional[TensorTy], boundary_check, cache_modifier: str,
               eviction_policy: str) -> TensorTy:
         cache = self._str_to_store_cache_modifier(cache_modifier)
         eviction = self._str_to_eviction_policy(eviction_policy)
@@ -1208,6 +1213,12 @@ class TritonSemantic(Generic[TensorTy]):
         # Store by a tensor of pointers or a pointer of scalar: `block_type<pointer_type<>>` or `pointer_type<>`
         if not ptr.type.scalar.is_ptr():
             raise ValueError(f"Unsupported ptr type {ptr.type.__repr__()} in `tl.store`")
+
+        # Check `boundary_check` argument
+        if boundary_check:
+            raise ValueError("`boundary_check` argument is not supported for storing a tensor of pointers or storing a "
+                             "scalar. Because the compiler does not know the boundary; please use block pointers "
+                             "(defined by `make_block_ptr`) instead")
 
         # For a pointer of scalar, check the type of `val` and `mask`
         if not ptr.type.is_block():
