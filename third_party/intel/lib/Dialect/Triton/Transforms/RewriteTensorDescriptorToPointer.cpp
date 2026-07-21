@@ -1193,9 +1193,22 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
                                            builder.getI64IntegerAttr(1));
       strideArgs.back() = c1;
 
+      // Replace shapes with constants from tt.shape.N attributes (set by
+      // specialization). This enables satisfies2DBlockReadAlignment and
+      // FuseReshape's shape divisibility checks to pass.
+      for (unsigned d = 0; d < rank; ++d) {
+        std::string attrName = "tt.shape." + std::to_string(d);
+        if (auto attr = funcOp.getArgAttrOfType<IntegerAttr>(
+                idx, StringRef(attrName))) {
+          shapeArgs[d] = arith::ConstantOp::create(
+              builder, loc, builder.getI32Type(),
+              builder.getI32IntegerAttr(
+                  static_cast<int32_t>(attr.getValue().getSExtValue())));
+        }
+      }
+
       // For rank-3+, replace non-last strides with constants from tt.stride.N
-      // attributes. This enables FuseReshape to prove stride divisibility for
-      // rank-reducing loads.
+      // attributes. This enables FuseReshape to prove stride divisibility.
       if (rank >= 3) {
         for (unsigned d = 0; d < rank - 1; ++d) {
           std::string attrName = "tt.stride." + std::to_string(d);
@@ -1236,22 +1249,10 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
       unsigned strideDivisibility = 16 / std::max(1u, elemBytes);
 
       pendingAttrs.push_back({basePtr, 16});
-      // Frontend stride args used by MakeTensorDescOp (guaranteed by
-      // TensorDescriptor: stride * elem_bytes % 16 == 0).
-      // Only need to add to BlockArgument strides (not constants).
+      // Frontend stride args: only add BlockArgument strides (not constants).
       for (unsigned d = 0; d < rank - 1; ++d)
         if (isa<BlockArgument>(strideArgs[d]))
           pendingAttrs.push_back({strideArgs[d], strideDivisibility});
-
-      // Last-dim shape divisibility (set by "L" specialization key when
-      // shape[-1] * elem_bytes % 8 == 0). Required by
-      // satisfies2DBlockReadAlignment.
-      if (auto lastDimAttr = funcOp.getArgAttrOfType<IntegerAttr>(
-              idx, "tt.last_dim_divisibility")) {
-        unsigned lastDimDiv =
-            lastDimAttr.getValue().getZExtValue() / std::max(1u, elemBytes);
-        pendingAttrs.push_back({shapeArgs.back(), lastDimDiv});
-      }
 
       // Refresh for next iteration.
       funcType = funcOp.getFunctionType();
