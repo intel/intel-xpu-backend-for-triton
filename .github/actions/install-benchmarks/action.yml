@@ -12,6 +12,27 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Detect benchmark source changes
+      id: detect-source
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        # Determine whether the current branch modifies benchmark sources relative to
+        # main. If it does, the prebuilt main wheel would be stale, so we build from
+        # source instead of downloading it (unless a same-run branch wheel is present,
+        # which is preferred). Mirrors the auto-detect in .github/actions/install-vllm.
+        build_from_source=false
+        # Capture first, then grep the string: avoids a SIGPIPE race where grep -q
+        # exits on the first match and pipefail surfaces the killed gh process as a
+        # failure (which would read as "no match").
+        changed_files="$(gh api --paginate "repos/${{ github.repository }}/compare/main...${{ github.sha }}" \
+          --jq '.files[].filename')"
+        if grep -qE '^benchmarks/' <<< "$changed_files"; then
+          build_from_source=true
+        fi
+        echo "build-from-source=$build_from_source" | tee -a "$GITHUB_OUTPUT"
+
     - name: Download benchmarks wheel (same run)
       id: same-run-download
       uses: actions/download-artifact@v7
@@ -41,14 +62,43 @@ runs:
       run: triton-benchmarks describe ALL
       continue-on-error: true
 
+    - name: Build benchmarks from source (branch changes)
+      id: branch-source
+      if: steps.same-run-validate.outcome != 'success' && steps.detect-source.outputs.build-from-source == 'true'
+      continue-on-error: true
+      shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+      run: |
+        # The branch modified benchmark sources, so the main wheel would be stale.
+        # Build from the checked-out source instead of downloading it.
+        pip uninstall -y triton-kernels-benchmark 2>/dev/null || true
+        (cd "$GITHUB_WORKSPACE/benchmarks" && pip install --no-build-isolation .)
+
+    - name: Validate benchmarks (branch source)
+      id: branch-source-validate
+      if: steps.branch-source.outcome == 'success'
+      shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+      run: triton-benchmarks describe ALL
+      continue-on-error: true
+
+    - name: Fail if branch source build failed
+      # The branch changed benchmark sources, so the main wheel is known-stale and is
+      # not an acceptable fallback here. If neither the same-run wheel nor the branch
+      # source build produced a working install, fail loudly rather than silently
+      # running stale benchmarks.
+      if: steps.same-run-validate.outcome != 'success' && steps.branch-source-validate.outcome != 'success' && steps.detect-source.outputs.build-from-source == 'true'
+      shell: bash
+      run: |
+        echo "::error::Branch modified benchmark sources but the branch source build failed; refusing to fall back to the stale main wheel"
+        exit 1
+
     - name: Install triton-utils
-      if: steps.same-run-validate.outcome != 'success'
+      if: steps.same-run-validate.outcome != 'success' && steps.branch-source-validate.outcome != 'success' && steps.detect-source.outputs.build-from-source != 'true'
       shell: bash
       run: pip install "$GITHUB_WORKSPACE/scripts/triton_utils"
 
     - name: Download and install benchmarks wheel (main)
       id: main-wheel
-      if: steps.same-run-validate.outcome != 'success'
+      if: steps.same-run-validate.outcome != 'success' && steps.branch-source-validate.outcome != 'success' && steps.detect-source.outputs.build-from-source != 'true'
       continue-on-error: true
       shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
       env:
@@ -74,18 +124,24 @@ runs:
       run: triton-benchmarks describe ALL
       continue-on-error: true
 
-    - name: Report wheel installation success
-      if: steps.same-run-validate.outcome == 'success' || steps.main-validate.outcome == 'success'
+    - name: Report installation success
+      if: steps.same-run-validate.outcome == 'success' || steps.branch-source-validate.outcome == 'success' || steps.main-validate.outcome == 'success'
       shell: bash
       run: |
         if [[ "${{ steps.same-run-validate.outcome }}" == "success" ]]; then
           echo "::notice::Installed benchmarks from same-run wheel artifact"
+        elif [[ "${{ steps.branch-source-validate.outcome }}" == "success" ]]; then
+          echo "::notice::Installed benchmarks built from branch source"
         else
           echo "::notice::Installed benchmarks from main branch wheel artifact"
         fi
 
     - name: Fallback to source build
-      if: steps.same-run-validate.outcome != 'success' && steps.main-validate.outcome != 'success'
+      # Non-diverged path only: the same-run and main wheels were both unavailable, so
+      # build from source. (The diverged path never reaches here — it either installs
+      # the branch source build above or fails loudly in "Fail if branch source build
+      # failed".)
+      if: steps.same-run-validate.outcome != 'success' && steps.main-validate.outcome != 'success' && steps.detect-source.outputs.build-from-source != 'true'
       shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
       run: |
         echo "::warning::Pre-built wheel unavailable, falling back to source build"
