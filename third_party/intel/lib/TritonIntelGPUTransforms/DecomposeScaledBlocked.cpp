@@ -114,47 +114,65 @@ private:
     return cast<TypedValue<RankedTensorType>>(scaleFP);
   }
 
+  // Broadcast `scale` along `dim` by `scaleFactor` and produce a tensor with
+  // encoding `dstEncoding`.  Uses inferReshapeOpEncoding to place the layout
+  // conversion on the small pre-broadcast tensor, avoiding a full-size
+  // ConvertLayoutOp on the post-broadcast tensor.  Ported from upstream
+  // `lib/Dialect/TritonGPU/Transforms/DecomposeScaledBlocked.cpp`.
   TypedValue<RankedTensorType>
   broadcastScale(PatternRewriter &rewriter, DotScaledOp scaledDotOp,
-                 ModuleOp mod, TypedValue<RankedTensorType> scale,
-                 int dim) const {
-    auto *ctx = rewriter.getContext();
+                 TypedValue<RankedTensorType> scale, int dim,
+                 Attribute dstEncoding) const {
     auto loc = scale.getLoc();
     auto scaleTy = scale.getType();
-    auto rank = scaleTy.getRank();
-    // 2.1) Expand dims along the last dimension
-    {
-      // 2.1.1) Find default encoding for ExpandDims
-      auto shape = to_vector(scaleTy.getShape());
-      shape.insert(shape.end(), 1);
-      auto nWarps = lookupNumWarps(scaledDotOp);
-      auto threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(mod);
-      auto numCTAs = TritonGPUDialect::getNumCTAs(mod);
-      auto blockedEnc = getDefaultBlockedEncoding(ctx, shape, nWarps,
-                                                  threadsPerWarp, numCTAs);
-      // 2.1.2) Cast scale16 to SliceEncoding
-      auto sliceEnc = SliceEncodingAttr::get(ctx, rank, blockedEnc);
-      RankedTensorType sliceType = scaleTy.cloneWithEncoding(sliceEnc);
-      scale = ConvertLayoutOp::create(rewriter, loc, sliceType, scale);
-    }
-    auto expandScale = ExpandDimsOp::create(rewriter, loc, scale, rank);
     int32_t scaleFactor = scaledDotOp.deduceScaleFactor();
-    // 2.2) Broadcast the dimension to the microscaling factor.
-    auto scaleShape = to_vector(scaleTy.getShape());
-    scaleShape.push_back(scaleFactor);
-    auto broadcastScale = BroadcastOp::create(
-        rewriter, loc, expandScale.getType().clone(scaleShape), expandScale);
-    // 2.3) Transpose the dimension to the scaled dimension
-    auto transposeOrder = llvm::to_vector(llvm::seq<int32_t>(rank));
-    transposeOrder.insert(transposeOrder.begin() + dim + 1, rank);
-    auto transposedScale =
-        TransOp::create(rewriter, loc, broadcastScale, transposeOrder);
-    // 2.4) Reshape to the shape of v
-    scaleShape.pop_back();
-    scaleShape[dim] *= scaleFactor;
-    auto reshapeScale =
-        ReshapeOp::create(rewriter, loc, scaleShape, transposedScale);
-    return reshapeScale;
+
+    // Shapes at each step: insert a size-1 dim after `dim`, broadcast to
+    // scaleFactor along that dim, then reshape to fold the broadcast into
+    // `dim`.
+    auto expandedShape = to_vector(scaleTy.getShape());
+    expandedShape.insert(expandedShape.begin() + dim + 1, 1);
+    auto broadcastShape = expandedShape;
+    broadcastShape[dim + 1] = scaleFactor;
+    auto resultShape = to_vector(scaleTy.getShape());
+    resultShape[dim] *= scaleFactor;
+
+    // Infer the pre-broadcast encoding that will yield dstEncoding after the
+    // reshape + broadcast chain.
+    auto interface =
+        cast<DialectInferLayoutInterface>(&dstEncoding.getDialect());
+    Attribute broadcastEncoding;
+    auto result = interface->inferReshapeOpEncoding(
+        resultShape, dstEncoding, broadcastShape, broadcastEncoding,
+        /*allowReorder=*/false, loc);
+    assert(succeeded(result));
+    Attribute srcEncoding;
+    result = interface->inferReshapeOpEncoding(expandedShape, broadcastEncoding,
+                                               scaleTy.getShape(), srcEncoding,
+                                               /*allowReorder=*/false, loc);
+    assert(succeeded(result));
+
+    // Convert on the small pre-broadcast tensor.
+    auto srcType = scaleTy.cloneWithEncoding(srcEncoding);
+    scale = ConvertLayoutOp::create(rewriter, loc, srcType, scale);
+
+    // Expand the extra dim (via reshape) — mark as efficient so forward layout
+    // propagation doesn't try to sink another convert layout in.
+    auto expandType = RankedTensorType::get(
+        expandedShape, scaleTy.getElementType(), broadcastEncoding);
+    auto expandScale =
+        ReshapeOp::create(rewriter, loc, expandType, scale,
+                          /*allow_reorder=*/nullptr,
+                          /*efficient_layout=*/rewriter.getUnitAttr());
+    // Broadcast to microscaling factor.
+    auto broadcastType = RankedTensorType::get(
+        broadcastShape, scaleTy.getElementType(), broadcastEncoding);
+    auto broadcastScale =
+        BroadcastOp::create(rewriter, loc, broadcastType, expandScale);
+    // Reshape to fold the broadcast into `dim`.
+    auto resultType = RankedTensorType::get(
+        resultShape, scaleTy.getElementType(), dstEncoding);
+    return ReshapeOp::create(rewriter, loc, resultType, broadcastScale);
   }
 
   TypedValue<RankedTensorType>
@@ -163,7 +181,6 @@ private:
                           FloatType computeType, RankedTensorType dstType,
                           int opIdx) const {
     auto loc = scale.getLoc();
-    auto mod = scaledDotOp->getParentOfType<ModuleOp>();
     auto v = opIdx == 0 ? scaledDotOp.getA() : scaledDotOp.getB();
     auto rank = v.getType().getRank();
     auto kDim = opIdx == 0 ? rank - 1 : rank - 2;
@@ -177,10 +194,10 @@ private:
     // 1) Cast scale to compute type (fp16/bf16)
     auto scale16 = scaleTo16(rewriter, scale, computeType);
 
-    // 2) Broadcast scale to the same shape as v and convert the layout
-    auto reshapeScale =
-        broadcastScale(rewriter, scaledDotOp, mod, scale16, kDim);
-    return ConvertLayoutOp::create(rewriter, loc, dstType, reshapeScale);
+    // 2) Broadcast scale to the same shape as v — the ConvertLayoutOp lands
+    // on the small pre-broadcast tensor inside broadcastScale.
+    return broadcastScale(rewriter, scaledDotOp, scale16, kDim,
+                          dstType.getEncoding());
   }
 
   TypedValue<RankedTensorType> maskNan(PatternRewriter &rewriter,
@@ -194,7 +211,6 @@ private:
 
     // Implement tl.where(scale == 0xFF, float("nan"), mxfp)
     auto loc = scale.getLoc();
-    auto mod = scaledDotOp->getParentOfType<ModuleOp>();
 
     // Scale is NaN
     auto scaleTy = scale.getType();
@@ -216,11 +232,10 @@ private:
                                 constFF)
               .getResult());
     }
-    auto cond = broadcastScale(rewriter, scaledDotOp, mod, scaleIsNan, dim);
-    // Make scale is NaN compatible with mxfp
-    auto condTy = cond.getType();
-    condTy = condTy.cloneWithEncoding(mxfp.getType().getEncoding());
-    cond = ConvertLayoutOp::create(rewriter, loc, condTy, cond);
+    // Broadcast the i1 NaN mask directly into mxfp's encoding — the layout
+    // conversion happens on the small pre-broadcast tensor.
+    auto cond = broadcastScale(rewriter, scaledDotOp, scaleIsNan, dim,
+                               mxfp.getType().getEncoding());
 
     // Create NaN
     auto mxfpTy = mxfp.getType();
@@ -231,6 +246,63 @@ private:
 
     auto result = arith::SelectOp::create(rewriter, loc, cond, constNan, mxfp);
     return cast<TypedValue<RankedTensorType>>(result.getResult());
+  }
+
+  // Apply an E8M0 scale to a bf16 operand as an exponent-add on the bf16 raw
+  // bits.  The E8M0 byte value equals the bf16 biased exponent that represents
+  // 2^(byte-127); adding (byte << 7) - 0x3F80 to the operand's i16 bit pattern
+  // is bit-exact `operand * 2^(byte-127)` when neither the input nor the
+  // result exponent overflows the 8-bit field.  Skips the bf16 -> f32 -> bf16
+  // widening that `arith::MulFOp` would incur under
+  // `arith_emulate_unsupported_floats` (BMG has no native bf16 arithmetic).
+  TypedValue<RankedTensorType> applyE8M0ScaleViaExponentAdd(
+      PatternRewriter &rewriter, DotScaledOp scaledDotOp,
+      TypedValue<RankedTensorType> v, TypedValue<RankedTensorType> &scale,
+      int opIdx) const {
+    auto loc = v.getLoc();
+    auto vType = v.getType();
+    auto rank = vType.getRank();
+    auto kDim = opIdx == 0 ? rank - 1 : rank - 2;
+    auto i16Type = rewriter.getIntegerType(16);
+    auto i16OperandType = vType.clone(i16Type);
+
+    // Transpose scale for RHS operand (mirrors `extendAndBroadcastScale`).
+    if (opIdx == 1) {
+      auto order = getTransposeOrder(rank);
+      scale = TransOp::create(rewriter, loc, scale, order);
+    }
+
+    // 1) Widen scale i8 -> i16 and shift into the bf16 exponent slot.
+    auto scaleTy = scale.getType();
+    auto zexted =
+        arith::ExtUIOp::create(rewriter, loc, scaleTy.clone(i16Type), scale);
+    auto shiftConst = arith::ConstantIntOp::create(rewriter, loc, 7, 16);
+    auto shiftSplat =
+        SplatOp::create(rewriter, loc, scaleTy.clone(i16Type), shiftConst);
+    auto shifted = cast<TypedValue<RankedTensorType>>(
+        arith::ShLIOp::create(rewriter, loc, zexted, shiftSplat).getResult());
+
+    // 2) Broadcast shifted scale to operand shape directly in i16 operand
+    // layout — the layout convert lands on the small pre-broadcast tensor.
+    auto broadcastShifted = broadcastScale(rewriter, scaledDotOp, shifted, kDim,
+                                           i16OperandType.getEncoding());
+
+    // 3) Bitcast operand bf16 -> i16.
+    auto vI16 = BitcastOp::create(rewriter, loc, i16OperandType, v);
+
+    // 4) result_i16 = operand_i16 + (scale_byte << 7) - 0x3F80
+    //    (0x3F80 is bf16 biased exp 127 << 7, i.e. bf16 1.0)
+    auto sum = arith::AddIOp::create(rewriter, loc, vI16, broadcastShifted);
+    auto biasConst = arith::ConstantIntOp::create(rewriter, loc, 0x3F80, 16);
+    auto biasSplat = SplatOp::create(rewriter, loc, i16OperandType, biasConst);
+    auto biased = arith::SubIOp::create(rewriter, loc, sum, biasSplat);
+
+    // 5) Bitcast result i16 -> bf16.
+    auto rescaled = cast<TypedValue<RankedTensorType>>(
+        BitcastOp::create(rewriter, loc, vType, biased).getResult());
+
+    // 6) NaN mask (byte == 0xFF).
+    return maskNan(rewriter, scaledDotOp, rescaled, scale, kDim);
   }
 
   TypedValue<RankedTensorType> scaleArg(PatternRewriter &rewriter,
@@ -264,6 +336,16 @@ private:
     }
     if (!scale)
       return v;
+
+    // Fast path: E8M0 (i8) scale on a bf16 operand.  Apply the scale as an
+    // integer exponent-add on the bf16 raw bits, avoiding the bf16 mulf that
+    // `arith_emulate_unsupported_floats` widens into an f32 intermediate.
+    auto scaleElemType = scale.getType().getElementType();
+    if (!isa<FloatType>(scaleElemType) &&
+        computeType == rewriter.getBF16Type()) {
+      return applyE8M0ScaleViaExponentAdd(rewriter, scaledDotOp, v, scale,
+                                          opIdx);
+    }
 
     // 1) Cast scale to fp16/bf16, broadcast it and convert its layout
     auto reshapeScale = extendAndBroadcastScale(
