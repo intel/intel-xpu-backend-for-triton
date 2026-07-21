@@ -43,6 +43,7 @@ TEST:
     --vllm-linear-attn
     --vllm-deepgemm
     --vllm-kda
+    --vllm-tdesc
     --install-vllm
     --sglang
     --install-sglang
@@ -113,6 +114,7 @@ TEST_VLLM_QUANT=false
 TEST_VLLM_LINEAR_ATTN=false
 TEST_VLLM_DEEPGEMM=false
 TEST_VLLM_KDA=false
+TEST_VLLM_TDESC=false
 INSTALL_VLLM=false
 TEST_TRITON_KERNELS=false
 VENV=false
@@ -340,6 +342,11 @@ while (( $# != 0 )); do
       ;;
     --vllm-kda)
       TEST_VLLM_KDA=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --vllm-tdesc)
+      TEST_VLLM_TDESC=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -960,7 +967,8 @@ run_vllm_mrv2_tests() {
       tests/v1/worker/test_gpu_model_runner_v2_eplb.py \
       tests/v1/sample/test_sampler.py \
       tests/v1/sample/test_logprobs.py \
-      tests/v1/worker/test_gpu_gumbel_sample.py
+      tests/v1/worker/test_gpu_gumbel_sample.py \
+      tests/v1/kv_connector/unit/test_nixl_connector.py
 }
 
 
@@ -1116,6 +1124,42 @@ run_vllm_kda_tests() {
 }
 
 
+run_vllm_tdesc_tests() {
+  echo "********************************************************"
+  echo "******  Running vLLM tensor descriptor tests     *******"
+  echo "********************************************************"
+
+  enter_vllm_test_env
+
+  local VLLM_PROJ="$TRITON_PROJ/vllm"
+  local PATCH_FILE="$TRITON_PROJ/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention.patch"
+
+  if git -C "$VLLM_PROJ" apply --check "$PATCH_FILE" 2>/dev/null; then
+    echo "Applying tdesc patch: $PATCH_FILE."
+    git -C "$VLLM_PROJ" apply "$PATCH_FILE"
+  elif git -C "$VLLM_PROJ" apply --reverse --check "$PATCH_FILE" 2>/dev/null; then
+    echo "Patch already applied, skipping."
+  else
+    echo "ERROR: Failed to apply tdesc patch: $PATCH_FILE" >&2
+    echo "The vLLM tree may have an outdated patch or conflicting changes." >&2
+    return 1
+  fi
+
+  local EXIT_STATUS=0
+  TRITON_TEST_SUITE=vllm_tdesc \
+    run_pytest_command -vvv \
+      tests/kernels/attention/test_triton_unified_attention.py \
+      || EXIT_STATUS=$?
+
+  echo "Reverting tdesc patch: $PATCH_FILE."
+  if ! git -C "$VLLM_PROJ" apply -R "$PATCH_FILE"; then
+    echo "WARNING: Failed to revert tdesc patch: $PATCH_FILE." >&2
+  fi
+
+  return $EXIT_STATUS
+}
+
+
 run_triton_kernels_tests() {
   echo "***************************************************"
   echo "******    Running Triton Kernels tests      *******"
@@ -1259,6 +1303,9 @@ test_triton() {
   fi
   if [ "$TEST_VLLM_KDA" == true ]; then
     run_vllm_kda_tests
+  fi
+  if [ "$TEST_VLLM_TDESC" == true ]; then
+    run_vllm_tdesc_tests
   fi
   if [ "$TEST_TRITON_KERNELS" == true ]; then
     run_triton_kernels_tests
