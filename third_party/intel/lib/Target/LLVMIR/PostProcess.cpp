@@ -149,15 +149,14 @@ void expandSubByteBitwiseAnd(Module &module) {
   }
 }
 
-// W/A for IGC crash on LTS2 driver (IGC < 2.19.0).
+// Eliminate sub-byte integer types (iN, N<8, N!=4) before SPIR-V translation.
 //
-// A sub-byte integer type (iN, N<8) lowers to an arbitrary-precision OpTypeInt
-// (SPV_INTEL_arbitrary_precision_integers); IGC segfaults compiling it, whether
-// scalar or as an OpTypeVector element. Such types appear when the LLVM
-// optimizer packs several i1 lanes (e.g. the results of a vector fcmp) into a
-// narrow integer via `bitcast <K x i1> to <M x iN>`, reads a lane back with
-// extractelement, and tests it against a constant with icmp -- the shape of an
-// "any/all over a comparison" reduction.
+// Such types would require SPV_INTEL_arbitrary_precision_integers to be
+// represented as OpTypeInt in SPIR-V, but IGC does not support that extension.
+// They appear when the LLVM optimizer packs several i1 lanes (e.g. the results
+// of a vector fcmp) into a narrow integer via `bitcast <K x i1> to <M x iN>`,
+// reads a lane back with extractelement, and tests it against a constant with
+// icmp -- the shape of an "any/all over a comparison" reduction.
 //
 // Rewrite the whole `bitcast -> extractelement -> icmp eq/ne <const>` chain
 // onto the source i1 lanes so no sub-byte integer type is ever created. Lane j

@@ -9,3 +9,10 @@ tests/kernels/test_fused_sigmoid_gating_delta_rule.py::test_fused_sigmoid_gating
 # Skip tests using Meta-Llama-3-8B
 tests/v1/attention/test_gdn_metadata_builder.py::test_gdn_build_classification
 tests/v1/attention/test_gdn_metadata_builder.py::test_has_initial_state_after_reclassification
+
+tests/kernels/test_fused_recurrent_packed_decode.py::test_fused_recurrent_packed_decode_matches_reference[False-dtype0]
+tests/kernels/test_fused_recurrent_packed_decode.py::test_fused_recurrent_packed_decode_matches_reference[False-dtype1]
+tests/kernels/test_fused_recurrent_packed_decode.py::test_fused_recurrent_packed_decode_matches_reference[True-dtype0]
+tests/kernels/test_fused_recurrent_packed_decode.py::test_fused_recurrent_packed_decode_matches_reference[True-dtype1]
+tests/kernels/test_fused_recurrent_packed_decode.py::test_fused_recurrent_packed_decode_matches_reference[False-dtype2]
+tests/kernels/test_fused_recurrent_packed_decode.py::test_fused_recurrent_packed_decode_matches_reference[True-dtype2]
