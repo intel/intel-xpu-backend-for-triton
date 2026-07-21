@@ -143,6 +143,7 @@ jobs:
           - vllm-mamba
           - vllm-quant
           - vllm-kda
+          - vllm-tdesc
           - vllm-rest
     runs-on:
       - linux
@@ -289,6 +290,11 @@ jobs:
         if: ${{ matrix.suite == 'vllm-rest' && steps.install-vllm.outcome == 'success' && !cancelled() }}
         run: |
           ${{ env.TRITON_TEST_CMD }} --vllm-deepgemm
+
+      - name: Run tdesc tests
+        if: ${{ matrix.suite == 'vllm-tdesc' && steps.install-vllm.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --vllm-tdesc
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}
