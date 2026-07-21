@@ -248,63 +248,6 @@ private:
     return cast<TypedValue<RankedTensorType>>(result.getResult());
   }
 
-  // Apply an E8M0 scale to a bf16 operand as an exponent-add on the bf16 raw
-  // bits.  The E8M0 byte value equals the bf16 biased exponent that represents
-  // 2^(byte-127); adding (byte << 7) - 0x3F80 to the operand's i16 bit pattern
-  // is bit-exact `operand * 2^(byte-127)` when neither the input nor the
-  // result exponent overflows the 8-bit field.  Skips the bf16 -> f32 -> bf16
-  // widening that `arith::MulFOp` would incur under
-  // `arith_emulate_unsupported_floats` (BMG has no native bf16 arithmetic).
-  TypedValue<RankedTensorType> applyE8M0ScaleViaExponentAdd(
-      PatternRewriter &rewriter, DotScaledOp scaledDotOp,
-      TypedValue<RankedTensorType> v, TypedValue<RankedTensorType> &scale,
-      int opIdx) const {
-    auto loc = v.getLoc();
-    auto vType = v.getType();
-    auto rank = vType.getRank();
-    auto kDim = opIdx == 0 ? rank - 1 : rank - 2;
-    auto i16Type = rewriter.getIntegerType(16);
-    auto i16OperandType = vType.clone(i16Type);
-
-    // Transpose scale for RHS operand (mirrors `extendAndBroadcastScale`).
-    if (opIdx == 1) {
-      auto order = getTransposeOrder(rank);
-      scale = TransOp::create(rewriter, loc, scale, order);
-    }
-
-    // 1) Widen scale i8 -> i16 and shift into the bf16 exponent slot.
-    auto scaleTy = scale.getType();
-    auto zexted =
-        arith::ExtUIOp::create(rewriter, loc, scaleTy.clone(i16Type), scale);
-    auto shiftConst = arith::ConstantIntOp::create(rewriter, loc, 7, 16);
-    auto shiftSplat =
-        SplatOp::create(rewriter, loc, scaleTy.clone(i16Type), shiftConst);
-    auto shifted = cast<TypedValue<RankedTensorType>>(
-        arith::ShLIOp::create(rewriter, loc, zexted, shiftSplat).getResult());
-
-    // 2) Broadcast shifted scale to operand shape directly in i16 operand
-    // layout — the layout convert lands on the small pre-broadcast tensor.
-    auto broadcastShifted = broadcastScale(rewriter, scaledDotOp, shifted, kDim,
-                                           i16OperandType.getEncoding());
-
-    // 3) Bitcast operand bf16 -> i16.
-    auto vI16 = BitcastOp::create(rewriter, loc, i16OperandType, v);
-
-    // 4) result_i16 = operand_i16 + (scale_byte << 7) - 0x3F80
-    //    (0x3F80 is bf16 biased exp 127 << 7, i.e. bf16 1.0)
-    auto sum = arith::AddIOp::create(rewriter, loc, vI16, broadcastShifted);
-    auto biasConst = arith::ConstantIntOp::create(rewriter, loc, 0x3F80, 16);
-    auto biasSplat = SplatOp::create(rewriter, loc, i16OperandType, biasConst);
-    auto biased = arith::SubIOp::create(rewriter, loc, sum, biasSplat);
-
-    // 5) Bitcast result i16 -> bf16.
-    auto rescaled = cast<TypedValue<RankedTensorType>>(
-        BitcastOp::create(rewriter, loc, vType, biased).getResult());
-
-    // 6) NaN mask (byte == 0xFF).
-    return maskNan(rewriter, scaledDotOp, rescaled, scale, kDim);
-  }
-
   TypedValue<RankedTensorType> scaleArg(PatternRewriter &rewriter,
                                         DotScaledOp scaledDotOp, int opIdx,
                                         FloatType computeType) const {
@@ -336,16 +279,6 @@ private:
     }
     if (!scale)
       return v;
-
-    // Fast path: E8M0 (i8) scale on a bf16 operand.  Apply the scale as an
-    // integer exponent-add on the bf16 raw bits, avoiding the bf16 mulf that
-    // `arith_emulate_unsupported_floats` widens into an f32 intermediate.
-    auto scaleElemType = scale.getType().getElementType();
-    if (!isa<FloatType>(scaleElemType) &&
-        computeType == rewriter.getBF16Type()) {
-      return applyE8M0ScaleViaExponentAdd(rewriter, scaledDotOp, v, scale,
-                                          opIdx);
-    }
 
     // 1) Cast scale to fp16/bf16, broadcast it and convert its layout
     auto reshapeScale = extendAndBroadcastScale(
