@@ -7,7 +7,11 @@
 #include <level_zero/ze_api.h>
 #include <sycl/sycl.hpp>
 
-#if __SYCL_COMPILER_VERSION >= 20260204
+// Eventless kernel submission requires a rolling (non-LTS) driver. Baked in
+// by compile.py based on the compile-time target's driver version.
+{eventless_submit_define}
+
+#if __SYCL_COMPILER_VERSION >= 20260204 && defined(ENABLE_EXPERIMENTAL_EVENTLESS_SUBMIT)
 #include <sycl/ext/oneapi/experimental/enqueue_functions.hpp>
 #endif
 
@@ -182,7 +186,7 @@ int32_t {kernel_name}(sycl::queue &stream, {signature}) {{
         cgh.parallel_for(parallel_work_size, sycl_kernel);
     }}
   }};
-#if __SYCL_COMPILER_VERSION >= 20260204
+#if __SYCL_COMPILER_VERSION >= 20260204 && defined(ENABLE_EXPERIMENTAL_EVENTLESS_SUBMIT)
   // Use eventless kernel submission. queue::submit() creates SYCL event which
   // is redundant for our use case.
   sycl::ext::oneapi::experimental::submit(stream, cgf);
