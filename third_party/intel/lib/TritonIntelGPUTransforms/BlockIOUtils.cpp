@@ -577,7 +577,15 @@ FailureOr<LinearLayout> computeTransposeShuffleMapping(
                           sizeInfo.tileWidth * sizeInfo.numElemPerPackedVal)
             .resizeOutDim(dims[sizeInfo.colDim], sizeInfo.tileHeight)
             .resizeInDim(kRegister, numElemsPerLoad);
-    // Compose the load return value layout of the transposed packed type.
+
+    // Construct the layout of a transposed 2D block load result:
+    // - Register bases (first group): pack sub-elements within a lane along row
+    // dim because it is transposed.
+    // - Lane bases: lanes < tileHeight map to the col dimension (original rows
+    // become
+    //   columns after transpose); remaining lanes map to the row dimension
+    // - Register bases (second group): cover rows/cols when numElemsPerLoad >
+    // numElemPerPackedVal
     std::vector<std::vector<int32_t>> regBases;
     int32_t colBase = 1, rowBase = 1;
     for (int32_t i = 1; i < sizeInfo.numElemPerPackedVal; i *= 2) {
