@@ -321,13 +321,12 @@ if [[ "$build_vllm" == false ]]; then
       exit 0
     fi
 
-    echo "*** vLLM XPU kernels nightly wheel commit ($wheel_commit) does not match pinned commit ($vllm_xpu_kernels_pinned_commit). ***"
+    echo "ERROR: vLLM XPU kernels nightly wheel commit ($wheel_commit) does not match pinned commit ($vllm_xpu_kernels_pinned_commit) and --source is not specified." >&2
   else
-    echo "*** No vllm-xpu-kernels wheel nightly build found. ***"
+    echo "ERROR: No nightly build vllm-xpu-kernels wheel found and --source is not specified." >&2
   fi
 
-  echo "*** Building vLLM XPU kernels from source. ***"
-  build_vllm=true
+  exit 1
 fi
 
 echo "*** Base directory: $ROOT. ***"
