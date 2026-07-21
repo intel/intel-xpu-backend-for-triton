@@ -72,9 +72,6 @@ function agama_version {
     fi
     version="$(dpkg-query --show --showformat='${version}\n' "$pkg")"
 
-    # The agama build number used to be embedded in the libigc Debian revision
-    # (old scheme). Newer drivers instead expose it via the intel-ocloc package
-    # version, e.g. "26.22.38646.6-1~26.04" where 38646 is the build number.
     if dpkg-query --show intel-ocloc &> /dev/null; then
         ocloc_version="$(dpkg-query --show --showformat='${version}\n' intel-ocloc)"
         ocloc_build="$(echo "${ocloc_version%%-*}" | cut -d. -f3)"
