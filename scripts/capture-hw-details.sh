@@ -61,7 +61,7 @@ function agama_version {
         powershell -Command '(Get-WmiObject Win32_VideoController | where {$_.VideoProcessor -like "*Intel*" }).DriverVersion'
         return
     fi
-    local pkg version upstream_version
+    local pkg version igc_upstream ocloc_version ocloc_build
     if dpkg-query --show libigc2 &> /dev/null; then
         pkg=libigc2
     elif dpkg-query --show libigc1 &> /dev/null; then
@@ -71,13 +71,23 @@ function agama_version {
         return
     fi
     version="$(dpkg-query --show --showformat='${version}\n' "$pkg")"
-    # Starting with libigc2 2.36, the Debian revision no longer carries the
-    # old-style agama build number (it's a plain package revision now), so
-    # fall back to the IGC version itself.
-    upstream_version="${version%%-*}"
-    if dpkg --compare-versions "$upstream_version" ge "2.36"; then
-        libigc_version
+
+    # The agama build number used to be embedded in the libigc Debian revision
+    # (old scheme). Newer drivers instead expose it via the intel-ocloc package
+    # version, e.g. "26.22.38646.6-1~26.04" where 38646 is the build number.
+    if dpkg-query --show intel-ocloc &> /dev/null; then
+        ocloc_version="$(dpkg-query --show --showformat='${version}\n' intel-ocloc)"
+        ocloc_build="$(echo "${ocloc_version%%-*}" | cut -d. -f3)"
+    fi
+
+    if [[ ${ocloc_build:-} =~ ^[0-9]+$ ]] && ((ocloc_build > 38308)); then
+        # New scheme: "<ocloc build number>_<libigc upstream version>",
+        # e.g. "38646_2.36.3".
+        igc_upstream="${version%%-*}"
+        echo "${ocloc_build}_${igc_upstream}"
     else
+        # Old scheme: build number embedded in the libigc Debian revision,
+        # e.g. "1.0.17537.24-1032~22.04" -> "1032".
         echo "$version" | sed 's/.*-\(.*\)~.*/\1/'
     fi
 }
