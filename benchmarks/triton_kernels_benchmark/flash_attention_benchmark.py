@@ -598,18 +598,6 @@ def get_benchmark(
     # pylint: disable=too-many-branches
     def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
         modes = ['fwd', 'bwd']
-        if H == 48 and N_CTX == 1024 and D_HEAD == 64:
-            # Clear cache to rerun autotuning and skip problem configs using `early_config_prune` option.
-            # Note: The cache key uses only N_CTX and D_HEAD, so different Z values with the same N_CTX and D_HEAD
-            # will hit the same cache entry. For example:
-            #   Z=16, H=32, N_CTX=1024, D_HEAD=64 -> creates cache entry
-            #   Z=4, H=48, N_CTX=1024, D_HEAD=64 -> cache hit (same key, kernel doesn't depend on Z)
-            # We don't add Z or H to the cache key because the kernel doesn't depend on them, and doing so would
-            # result in more kernel compilations.
-            key = (1024, 64, 'torch.float16', 'torch.float16', 'torch.float16', 'torch.float16', 'torch.float16',
-                   'torch.float16', 'torch.float16', 'torch.float32', 'torch.float32')
-            if key in _attention.tune_attn_bwd.cache:
-                del _attention.tune_attn_bwd.cache[key]
         # This warmup logic improves performance on BMG significantly
         # For FWD mode in triton & sycl-tla: Some configs increase performance with warmup as a step function, but some slowly decrease with saturation
         # Performance is best at 250-400ms range, but we want stable, not just best at ~600ms (triton/sycl-tla providers)
