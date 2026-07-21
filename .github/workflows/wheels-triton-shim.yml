@@ -1,5 +1,15 @@
 name: Triton shim wheels
 
+# Wheels are signed with keyless Sigstore (OIDC). Each *.whl is accompanied by a
+# *.whl.sigstore.json bundle in the triton-shim-dist artifact.
+#
+# Verify a downloaded shim wheel + bundle:
+#   cosign verify-blob triton-3.7.2+xpu-*.whl \
+#     --bundle triton-3.7.2+xpu-*.whl.sigstore.json \
+#     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+#     --certificate-identity-regexp \
+#       'https://github.com/intel/intel-xpu-backend-for-triton/.github/workflows/wheels-triton-shim.yml@.*'
+
 on:
   workflow_dispatch:
 
@@ -8,6 +18,9 @@ permissions: read-all
 jobs:
   build-triton-shim:
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # required for keyless Sigstore/OIDC signing
+      contents: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -24,8 +37,16 @@ jobs:
         working-directory: scripts/triton-shim
         run: python -m build
 
+      - name: Sign wheels with Sigstore (keyless)
+        # SHA-pinned for supply-chain safety; comment tracks the human-readable version.
+        uses: sigstore/gh-action-sigstore-python@a5caf349bc536fbef3668a10ed7f5cd309a4b53d # v3.2.0
+        with:
+          inputs: scripts/triton-shim/dist/*.whl
+
       - name: Upload triton shim artifacts
         uses: actions/upload-artifact@v7
         with:
           name: triton-shim-dist
-          path: scripts/triton-shim/dist/*.whl
+          path: |
+            scripts/triton-shim/dist/*.whl
+            scripts/triton-shim/dist/*.whl.sigstore.json
