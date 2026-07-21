@@ -532,6 +532,40 @@ FailureOr<LinearLayout> computeTransposeShuffleMapping(
           tensorType.getShape());
   assert(llEncoding.has_value() && "expected valid linear layout");
   if (sizeInfo.transpose) {
+    // As for the transpose case, the value from the 2D block IO load is in the
+    // packed i32 transposed order. We need to do extra transpose within
+    // register if the matrix is not fully transposed by DataPort when load
+    // back. (Extra shuffle and transpose happened in unpackBlockLoadResult.)
+    // Let's take the example for extra transpose of DPAS layout OpsChan=2 of
+    // fp8 type. (which is from case to do fp8 DPAS on BMG) The 2D block IO tile
+    // size is of height = 16, width = 4, numElemPerPackedVal = 4, transpose =
+    // True. The value in register will be filled by DataPort as the layout
+    // clang-format off
+    // which is only transposed at i32 granularity:
+    //              i32
+    // r0 (0),  (1),  (2),  (3)   | .....     x16
+    // r1 (64), (65), (66), (67)  | .....     x16
+    // r2 (128),(129),(130),(131) | .....     x16
+    // r3 (192),(193),(194),(195) | .....     x16
+    // The extra transpose to i16 granularity is required to make the value
+    // layout as:
+    //       i16           i16
+    // r0 (0),  (1),  | (4),  (5), | .....   x8  (2),  (3),  | (6),  (7), | .....   x8
+    // r1 (64), (65), | (68), (69),| .....   x8  (66), (67), | (70), (71),| .....   x8
+    // r2 (128),(129),|(132),(133),| .....   x8  (130),(131),|(134),(135),| .....   x8
+    // r3 (192),(193),|(196),(197),| .....   x8  (194),(195),|(198),(199),| .....   x8
+    // A transpose is required on each GRF like:
+    // r0: (0), (1), (2), (3), (4), (5), (6), (7), ... (32), (33), (34), (35), (36), (37), (38), (39), (40), ...
+    // r0: (0), (1), (4), (5), (8), (9), (12), (13), ... (2), (3), (6), (7), (10), (11), (14), (15), ...
+    // clang-format on
+    // It could be expressed by the ops `bitcast i32 -> 2xi16` when
+    // sub-group-size=16. But the semantic is not same when sub-group-size=32.
+    // We need an extra interface to express within register
+    // transposing/transforming to do this.
+
+    // Right now we only support naive case which the returned value layout is
+    // same to the expected layout. More information of PoC of inline VISA:
+    // https://github.com/intel/intel-xpu-backend-for-triton/issues/3572#issuecomment-3550809750
     auto dims = llvm::to_vector(llEncoding->getOutDimNames());
     SmallVector<StringAttr> loadDimName = {dims[sizeInfo.rowDim],
                                            dims[sizeInfo.colDim]};
