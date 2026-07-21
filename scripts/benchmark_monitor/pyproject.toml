@@ -1,0 +1,15 @@
+[project]
+name = "benchmark_monitor"
+version = "0.2.0"
+requires-python = ">=3.10"
+dependencies = ["pandas", "pyyaml", "pyarrow"]
+
+[project.scripts]
+benchmark-monitor = "benchmark_monitor.entry_point:main"
+
+[tool.setuptools]
+packages = ["benchmark_monitor"]
+
+[build-system]
+requires = ["setuptools>=75.0", "wheel"]
+build-backend = "setuptools.build_meta"
