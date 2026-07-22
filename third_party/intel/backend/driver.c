@@ -434,6 +434,7 @@ struct BuildFlags {
   std::string build_flags_str;
 
   const char *LARGE_GRF_FLAG{"-cl-intel-256-GRF-per-thread"};
+  const char *XLARGE_GRF_FLAG{"-cl-intel-512-GRF-per-thread"};
   const char *SMALL_GRF_FLAG{"-cl-intel-128-GRF-per-thread"};
   const char *AUTO_GRF_FLAG{"-cl-intel-enable-auto-large-GRF-mode"};
 
@@ -442,6 +443,9 @@ struct BuildFlags {
   const std::string &operator()() const { return build_flags_str; }
 
   int32_t n_regs() const {
+    if (build_flags_str.find(XLARGE_GRF_FLAG) != std::string::npos) {
+      return 512;
+    }
     if (build_flags_str.find(LARGE_GRF_FLAG) != std::string::npos) {
       return 256;
     }
@@ -453,6 +457,7 @@ struct BuildFlags {
 
   const bool hasGRFSizeFlag() const {
     if (build_flags_str.find(LARGE_GRF_FLAG) != std::string::npos ||
+        build_flags_str.find(XLARGE_GRF_FLAG) != std::string::npos ||
         build_flags_str.find(SMALL_GRF_FLAG) != std::string::npos ||
         build_flags_str.find(AUTO_GRF_FLAG) != std::string::npos) {
       return true;
@@ -463,6 +468,10 @@ struct BuildFlags {
 
   void addLargeGRFSizeFlag() {
     build_flags_str = build_flags_str.append(" ").append(LARGE_GRF_FLAG);
+  }
+
+  void addXLargeGRFSizeFlag() {
+    build_flags_str = build_flags_str.append(" ").append(XLARGE_GRF_FLAG);
   }
 };
 
@@ -550,105 +559,83 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   auto [l0_module, l0_kernel, n_spills] =
       compileLevelZeroObjects(binary_ptr, binary_size, kernel_name, l0_device,
                               l0_context, build_flags(), is_spv);
+  bool buildFailed = PyErr_Occurred();
+  if (buildFailed && !is_spv) {
+    return NULL;
+  }
 
   const bool debugEnabled = getBoolEnv("TRITON_DEBUG");
+  constexpr int32_t max_reg_spill = 1000;
 
-  // If the initial compilation failed entirely (e.g., scratch space exceeds
-  // HW limit), and GRF mode was not explicitly set, retry with large GRF mode.
-  // This handles cases where the default GRF mode doesn't provide enough
-  // registers, causing the backend compiler to fail.
-  if (PyErr_Occurred() && is_spv && !build_flags.hasGRFSizeFlag()) {
-    // Save the original error before clearing it for the retry attempt.
+  if (is_spv && ((buildFailed || n_spills > max_reg_spill) &&
+                 !build_flags.hasGRFSizeFlag())) {
     PyObject *orig_type, *orig_value, *orig_tb;
-    PyErr_Fetch(&orig_type, &orig_value, &orig_tb);
+    // Save the original error before clearing it for the retry attempt.
+    if (buildFailed)
+      PyErr_Fetch(&orig_type, &orig_value, &orig_tb);
 
     if (debugEnabled)
-      std::cout << "(I): Build failed for \"" << kernel_name
-                << "\", retrying with large GRF mode" << std::endl;
+      std::cout << (buildFailed ? "(I): Build failed for \""
+                                : "(I): Detected spills for \"")
+                << kernel_name << "\", retrying with 256/512 large GRF modes"
+                << std::endl;
 
-    build_flags.addLargeGRFSizeFlag();
+    if (std::strcmp(getParsedDeviceArch(sycl_device), "cri") == 0) {
+      build_flags.addXLargeGRFSizeFlag();
+    } else {
+      build_flags.addLargeGRFSizeFlag();
+    }
 
     auto [l0_module_retry, l0_kernel_retry, n_spills_retry] =
         compileLevelZeroObjects(binary_ptr, binary_size, kernel_name, l0_device,
                                 l0_context, build_flags(), is_spv);
     if (PyErr_Occurred()) {
-      // Retry also failed — propagate the original error.
-      PyErr_Restore(orig_type, orig_value, orig_tb);
-      return NULL;
-    }
-
-    // Retry succeeded — discard the saved original error.
-    Py_XDECREF(orig_type);
-    Py_XDECREF(orig_value);
-    Py_XDECREF(orig_tb);
-
-    l0_module = l0_module_retry;
-    l0_kernel = l0_kernel_retry;
-    n_spills = n_spills_retry;
-
-    // Always print recovery message to stderr to follow up on the
-    // "L0 build module failed" error that was already printed.
-    std::cerr << "(I): Build failure recovered by retrying with large GRF "
-                 "mode for \""
-              << kernel_name << "\"" << std::endl;
-
-    if (debugEnabled)
-      std::cout << "(I): Retry with large GRF succeeded, kernel has "
-                << n_spills << " spills" << std::endl;
-  } else if (PyErr_Occurred()) {
-    return NULL;
-  }
-
-  if (is_spv) {
-    constexpr int32_t max_reg_spill = 1000;
-    const bool is_GRF_mode_specified = build_flags.hasGRFSizeFlag();
-
-    // If the register mode isn't set, and the number of spills is greater
-    // than the threshold, recompile the kernel using large GRF mode.
-    if (!is_GRF_mode_specified && n_spills > max_reg_spill) {
-      if (debugEnabled)
-        std::cout << "(I): Detected " << n_spills
-                  << " spills, recompiling the kernel using large GRF mode"
-                  << std::endl;
-
-      build_flags.addLargeGRFSizeFlag();
-
-      try {
-        auto [l0_module_dgrf, l0_kernel_dgrf, n_spills_dgrf] =
-            compileLevelZeroObjects(binary_ptr, binary_size, kernel_name,
-                                    l0_device, l0_context, build_flags(),
-                                    is_spv);
-
+      if (buildFailed) {
+        // Retry also failed — propagate the original error.
+        PyErr_Restore(orig_type, orig_value, orig_tb);
+        return NULL;
+      } else {
+        // retry failed but got good kernel at first time.
+        // Just clear the build error log.
+        PyErr_Clear();
         if (debugEnabled)
-          std::cout << "(I): Kernel has now " << n_spills_dgrf << " spills"
+          std::cout << "(I): Rebuild failed. Just use previous kernel"
                     << std::endl;
+      }
+    } else {
+      if (buildFailed) {
+        // Retry succeeded — discard the saved original error.
+        Py_XDECREF(orig_type);
+        Py_XDECREF(orig_value);
+        Py_XDECREF(orig_tb);
 
-        std::swap(l0_module, l0_module_dgrf);
-        std::swap(l0_kernel, l0_kernel_dgrf);
-        std::swap(n_spills, n_spills_dgrf);
-
+        // Always print recovery message to stderr to follow up on the
+        // "L0 build module failed" error that was already printed.
+        std::cerr << "(I): Build failure recovered by retrying with large GRF "
+                     "mode for \""
+                  << kernel_name << "\"" << std::endl;
+      } else {
         // clean up the unused module and kernel.
-        auto error_no = zeKernelDestroy(l0_kernel_dgrf);
+        auto error_no = zeKernelDestroy(l0_kernel);
         if (error_no != ZE_RESULT_SUCCESS) {
           PyErr_WarnEx(
               PyExc_RuntimeWarning,
               "[Ignoring] Intel - Error during destroy unused L0 kernel", 1);
         }
-        error_no = zeModuleDestroy(l0_module_dgrf);
+        error_no = zeModuleDestroy(l0_module);
         if (error_no != ZE_RESULT_SUCCESS) {
           PyErr_WarnEx(
               PyExc_RuntimeWarning,
               "[Ignoring] Intel - Error during destroy unused L0 module", 1);
         }
-      } catch (const std::exception &e) {
-        char buf[1024] = {0};
-        strcat(buf, "[Ignoring] Intel - Error during Intel loadBinary with "
-                    "large registers: ");
-        strcat(buf, e.what());
-        PyErr_WarnEx(PyExc_RuntimeWarning, buf, 1);
-        // construct previous working version
-        build_flags = BuildFlags(build_flags_ptr);
+        l0_module = l0_module_retry;
+        l0_kernel = l0_kernel_retry;
+        n_spills = n_spills_retry;
       }
+
+      if (debugEnabled)
+        std::cout << "(I): Retry with large GRF succeeded, kernel has "
+                  << n_spills << " spills" << std::endl;
     }
   }
 
