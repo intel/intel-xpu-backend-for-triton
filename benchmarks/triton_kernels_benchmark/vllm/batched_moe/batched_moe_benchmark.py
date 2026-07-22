@@ -24,7 +24,7 @@ from vllm.model_executor.layers.fused_moe.experts.fused_batched_moe import invok
 from tests.kernels.moe.utils import make_quantized_test_activations, make_test_weight
 from tests.kernels.quant_utils import native_batched_masked_quant_matmul
 
-from vllm_xpu_kernels.fused_moe_interface import cutlass_grouped_gemm as sycl_tla_grouped_gemm
+from vllm_xpu_kernels.fused_moe_interface import cutlass_grouped_gemm_xe as sycl_tla_grouped_gemm
 
 # Benchmark shapes for batched MoE
 # (E: num_experts, M: max_tokens_per_expert, K: hidden_dim, N: intermediate_dim, fp8, block_quant)
