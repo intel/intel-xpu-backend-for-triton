@@ -1356,6 +1356,10 @@ void LayoutRematerialization::setEncoding(DenseMap<Value, Attribute> &values,
     } else {
       dstEncoding = inferDstEncoding(op, layout);
     }
+    // Don't propagate a failed (null) layout inference; it later crashes
+    // layout inference for the sort+cumsum tt.scan kernel (#7336).
+    if (!dstEncoding)
+      continue;
     if (!values.contains(value)) {
       values[value] = dstEncoding;
       changed.push_back(value);

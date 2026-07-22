@@ -1,3 +1,16 @@
+diff --git a/tests/kernels/attention/test_cascade_flash_attn.py b/tests/kernels/attention/test_cascade_flash_attn.py
+index 80c5c853d..e6ef4c183 100755
+--- a/tests/kernels/attention/test_cascade_flash_attn.py
++++ b/tests/kernels/attention/test_cascade_flash_attn.py
+@@ -21,6 +21,8 @@ except ImportError:
+             "vllm_flash_attn is not supported for vLLM on ROCm.",
+             allow_module_level=True,
+         )
++    is_fa_version_supported = lambda _: False
++    fa_version_unsupported_reason = lambda _: "vllm_flash_attn is not installed"
+ 
+ NUM_HEADS = [(4, 4), (8, 2), (16, 2)]
+ HEAD_SIZES = [128, 192, 256]
 diff --git a/tests/kernels/mamba/test_mamba_mixer2.py b/tests/kernels/mamba/test_mamba_mixer2.py
 index 973e7885c..e474275f5 100644
 --- a/tests/kernels/mamba/test_mamba_mixer2.py
@@ -100,6 +113,19 @@ index 12ff3830c..04da1ac74 100644
                  out[mask] = tmp2 @ w2[i].transpose(0, 1)
                  if b_bias2 is not None:
                      out[mask] = out[mask] + b_bias2[i].view(1, -1).to(tmp1.dtype)
+diff --git a/tests/v1/attention/test_mla_backends.py b/tests/v1/attention/test_mla_backends.py
+index 315c77de3..9fda159d4 100644
+--- a/tests/v1/attention/test_mla_backends.py
++++ b/tests/v1/attention/test_mla_backends.py
+@@ -998,7 +998,7 @@ def test_backend_correctness(
+                 ),
+             ),
+         )
+-    except ImportError:
++    except (ImportError, AttributeError):
+         prefill_invalid_reasons = ["ImportError"]
+     if prefill_invalid_reasons:
+         pytest.skip(
 diff --git a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
 index 21bda8e17..e7f11e934 100644
 --- a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py

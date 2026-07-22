@@ -1,0 +1,41 @@
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/7480
+# A770 Windows: TRITON_DEBUG multiprocessing worker crashes before returning a
+# result, so run_in_process() sees an empty queue instead of the child's exc.
+python/test/unit/test_debug.py::test_expect_zero_device_assert
+
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/7481
+# A770 Windows: device-side assert aborts the child process with Windows
+# exit code 3221226505 (0xc0000409, STATUS_STACK_BUFFER_OVERRUN) instead of
+# the expected SIGABRT (-6) used to detect the assert on Linux/XPU.
+python/test/unit/test_debug.py::test_device_assert[False-False-True-None-False]
+python/test/unit/test_debug.py::test_device_assert[False-False-True-True-False]
+python/test/unit/test_debug.py::test_device_assert[False-True-False-None-False]
+python/test/unit/test_debug.py::test_device_assert[False-True-False-True-False]
+python/test/unit/test_debug.py::test_device_assert[False-True-None-None-False]
+python/test/unit/test_debug.py::test_device_assert[False-True-None-True-False]
+python/test/unit/test_debug.py::test_device_assert[False-True-True-None-False]
+python/test/unit/test_debug.py::test_device_assert[False-True-True-True-False]
+python/test/unit/test_debug.py::test_device_assert[True-False-None-None-False]
+python/test/unit/test_debug.py::test_device_assert[True-False-None-True-False]
+python/test/unit/test_debug.py::test_device_assert[True-False-True-None-False]
+python/test/unit/test_debug.py::test_device_assert[True-False-True-True-False]
+python/test/unit/test_debug.py::test_device_assert[True-True-False-None-False]
+python/test/unit/test_debug.py::test_device_assert[True-True-False-True-False]
+python/test/unit/test_debug.py::test_device_assert[True-True-None-None-False]
+python/test/unit/test_debug.py::test_device_assert[True-True-None-True-False]
+python/test/unit/test_debug.py::test_device_assert[True-True-True-None-False]
+python/test/unit/test_debug.py::test_device_assert[True-True-True-True-False]
+
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/7481
+# A770 Windows: same SIGABRT-vs-exit-code mismatch as test_device_assert above,
+# hit via the debug=True/should_overflow=True subprocess path.
+python/test/unit/test_debug.py::test_sanitize_int_add_overflow[-2147483648--1-int32-int32-True-True]
+python/test/unit/test_debug.py::test_sanitize_int_add_overflow[2147483647-1-int32-int32-True-True]
+python/test/unit/test_debug.py::test_sanitize_int_add_overflow[2147483647-100-int32-int32-True-True]
+python/test/unit/test_debug.py::test_sanitize_int_add_overflow[-32768--1-int16-int16-True-True]
+python/test/unit/test_debug.py::test_sanitize_int_add_overflow[32767-1-int16-int16-True-True]
+python/test/unit/test_debug.py::test_sanitize_int_mul_overflow[1073741824-4-int32-int32-True-True]
+python/test/unit/test_debug.py::test_sanitize_int_mul_overflow[1073741824-2-int32-int32-True-True]
+python/test/unit/test_debug.py::test_sanitize_int_mul_overflow[-1073741824--4-int32-int32-True-True]
+python/test/unit/test_debug.py::test_sanitize_int_sub_overflow[-2147483648-1-int32-int32-True-True]
+python/test/unit/test_debug.py::test_sanitize_int_sub_overflow[2147483647--1-int32-int32-True-True]

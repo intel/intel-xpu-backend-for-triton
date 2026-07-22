@@ -28,11 +28,17 @@ enum class OperandClass {
              // step).  Conservatively treated as reuse by `classify`.
 };
 
-// Extract the element-shape of a load's result tensor.  Returns {1}
-// for scalar results so the per-axis rule degenerates correctly
-// (|adv| < 1 iff adv == 0, which is Held only for held scalar ops).
+// Extract the tile shape for the reuse analysis. For descriptor loads, use
+// the descriptor's block shape (which matches the number of index operands)
+// rather than the result shape (which may have fewer dimensions due to rank
+// reduction). For other loads, use the result tensor shape. Returns {1} for
+// scalar results so the per-axis rule degenerates correctly.
 static SmallVector<int64_t> getTileShape(Operation *op) {
   assert(op->getNumResults() == 1 && "expected single-result load");
+  if (auto descLoad = dyn_cast<tt::DescriptorLoadOp>(op)) {
+    auto descType = descLoad.getDesc().getType();
+    return llvm::to_vector(descType.getBlockType().getShape());
+  }
   Type ty = op->getResult(0).getType();
   if (auto tensorTy = dyn_cast<RankedTensorType>(ty))
     return llvm::to_vector(tensorTy.getShape());
