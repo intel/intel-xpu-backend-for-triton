@@ -73,8 +73,12 @@ def is_cuda():
     return triton.runtime.driver.active.get_current_target().backend == "cuda"
 
 
+def is_xpu():
+    return triton.runtime.driver.active.get_current_target().backend == "intel"
+
+
 def supports_host_descriptor():
-    return is_cuda() and torch.cuda.get_device_capability()[0] >= 9
+    return (is_cuda() and torch.cuda.get_device_capability()[0] >= 9) or is_xpu()
 
 
 def is_blackwell():

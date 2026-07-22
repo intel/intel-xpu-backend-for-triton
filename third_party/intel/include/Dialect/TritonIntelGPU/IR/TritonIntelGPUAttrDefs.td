@@ -44,7 +44,7 @@ The encoding is characterized by parameters:
         - `warpsPerCTA` indicates the distribution of the warps in the block. The order is [1, 0] for rank 2.
         - `repCluster` indicates the cluster size of the repetitions of the DPAS tile.
         - `threadsPerWarp__` AKA threadsPerWarp, use the name threadsPerWarp__ to avoid conflicting
-                            with the `getThreadsPerWarp` in interface DistributedLayout. Currently only 16 is supported.
+                            with the `getThreadsPerWarp` in interface DistributedLayout.
         - `fp4KPack` How many fp4 values are packed into an i8 type along the k dimension. Valid only when opsPerChannel=4.
 
 The values of the matrix is distributed across the threads in the subgroup as row-major order.
@@ -138,6 +138,56 @@ t0 t0   t1 t1   t2 t2   t3 t3   t4 t4   t5 t5   t6 t6   t7 t7   t8 t8   t9 t9   
 
 The layouts for B operand is like the one of opsPerChan=2 but the K size is 32.
 The layouts for C and D operands are same as the one of opsPerChan=2.
+
+Example 4, the column size of the matrix is 16 and the number of threads in the subgroup is 32. (It is same to example 1 but the subgroup is 32 instead of 16.)
+The DPAS encoding of repeatCount=8, systolicDepth=8, executionSize=16, opsPerChannel=2 and threadsPerWarp=32.
+
+The layout for A operand:
+                       K = 16 (K = systolic depth * opsPerChan)
+<---------------------------------------------------------------------------->
+
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15   ^
+t16  t17  t18  t19  t20  t21  t22  t23  t24  t25  t26  t27  t28  t29  t30  t31   |
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15   |
+t16  t17  t18  t19  t20  t21  t22  t23  t24  t25  t26  t27  t28  t29  t30  t31   |
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15   | M = 8 (M = repeat count)
+t16  t17  t18  t19  t20  t21  t22  t23  t24  t25  t26  t27  t28  t29  t30  t31   |
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15   |
+t16  t17  t18  t19  t20  t21  t22  t23  t24  t25  t26  t27  t28  t29  t30  t31   v
+
+The layout for B operand:
+                        N = 16 (N = execution size)
+<---------------------------------------------------------------------------->
+
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15    ^  the first 16 lane of a0
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15    |  the first 16 lane of a1
+t16  t17  t18  t19  t20  t21  t22  t23  t24  t25  t26  t27  t28  t29  t30  t31    |  the remain 16 lane of a0
+t16  t17  t18  t19  t20  t21  t22  t23  t24  t25  t26  t27  t28  t29  t30  t31    |  the remain 16 lane of a1
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15    |
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15    |
+t16  t17  t18  t19  t20  t21  t22  t23  t24  t25  t26  t27  t28  t29  t30  t31    |
+t16  t17  t18  t19  t20  t21  t22  t23  t24  t25  t26  t27  t28  t29  t30  t31    |  K = 16 (K = systolic depth * opsPerChan)
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15    |
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15    |
+t16  t17  t18  t19  t20  t21  t22  t23  t24  t25  t26  t27  t28  t29  t30  t31    |
+t16  t17  t18  t19  t20  t21  t22  t23  t24  t25  t26  t27  t28  t29  t30  t31    |
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15    |
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15    |
+t16  t17  t18  t19  t20  t21  t22  t23  t24  t25  t26  t27  t28  t29  t30  t31    |
+t16  t17  t18  t19  t20  t21  t22  t23  t24  t25  t26  t27  t28  t29  t30  t31    v
+
+The layout for C operand and result D:
+                    N = 16 (N = execution size)
+<---------------------------------------------------------------------------->
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15   ^
+t16  t17  t18  t19  t20  t21  t22  t23  t24  t25  t26  t27  t28  t29  t30  t31   |
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15   |
+t16  t17  t18  t19  t20  t21  t22  t23  t24  t25  t26  t27  t28  t29  t30  t31   |
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15   | M = 8 (M = repeat count)
+t16  t17  t18  t19  t20  t21  t22  t23  t24  t25  t26  t27  t28  t29  t30  t31   |
+t0   t1   t2   t3   t4   t5   t6   t7   t8   t9   t10  t11  t12  t13  t14  t15   |
+t16  t17  t18  t19  t20  t21  t22  t23  t24  t25  t26  t27  t28  t29  t30  t31   v
+
 
 The patterns (illustrated above) repeats every warpsPerTile[0] (resp. warpsPerTile[1]) blocks
 along the row (resp. col) dimension. And the repetitions are clustered of the size of repCluster to optimize the memory accessing.
