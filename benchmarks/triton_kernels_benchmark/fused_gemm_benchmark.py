@@ -132,16 +132,13 @@ def fused_gemm_swiglu_kernel(
 # Representative shapes for LLM feed-forward SwiGLU layers.
 # Each entry is [M, N, K] where x is (M, K), w_g/w_fc are (K, N), and y is (M, N).
 X_VALS = [
-    [220000, 8192, 512],  # shape from customer model
-    [1024, 8192, 7168],
-    [1024, 5504, 4096],  # Llama-2 7B
-    [2048, 5504, 4096],
-    [4096, 5504, 4096],
-    [8192, 5504, 4096],
-    [1024, 14336, 4096],  # Llama-3 8B
-    [2048, 14336, 4096],
-    [4096, 14336, 4096],
-    [8192, 14336, 4096],
+    [220000, 8192, 512],
+    [289239, 1024, 512],
+    [256, 512, 512],
+    [256, 1024, 512],
+    [11793, 512, 512],
+    [33699, 1024, 512],
+    [512, 1024, 512],
     # TODO: Fix the bug of kernel implementation on shape from DeepSeek-R1.
     # [1024, 8192, 7168],  # DeepSeek-R1 style
     # [4096, 8192, 7168],
@@ -217,14 +214,9 @@ def benchmark(M, N, K, provider):
 
     torch.xpu.empty_cache()
     torch.manual_seed(0)
-    if M == 220000 and N == 8192 and K == 512:
-        x = torch.empty((M, K), device='xpu', dtype=torch.float32).uniform_(-0.25, -0.25).to(torch.bfloat16)
-        w_g = torch.empty((K, N), device='xpu', dtype=torch.float32).uniform_(-0.25, 0.25).to(torch.bfloat16)
-        w_fc = torch.empty((K, N), device='xpu', dtype=torch.float32).uniform_(-0.25, 0.25).to(torch.bfloat16)
-    else:
-        x = torch.rand((M, K), device='xpu', dtype=torch.bfloat16)
-        w_g = torch.rand((K, N), device='xpu', dtype=torch.bfloat16)
-        w_fc = torch.rand((K, N), device='xpu', dtype=torch.bfloat16)
+    x = torch.empty((M, K), device='xpu', dtype=torch.float32).uniform_(-0.25, -0.25).to(torch.bfloat16)
+    w_g = torch.empty((K, N), device='xpu', dtype=torch.float32).uniform_(-0.25, 0.25).to(torch.bfloat16)
+    w_fc = torch.empty((K, N), device='xpu', dtype=torch.float32).uniform_(-0.25, 0.25).to(torch.bfloat16)
     b_g = torch.zeros((N, ), device='xpu', dtype=torch.bfloat16)
     b_fc = torch.zeros((N, ), device='xpu', dtype=torch.bfloat16)
 
