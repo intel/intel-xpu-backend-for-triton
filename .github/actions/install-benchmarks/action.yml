@@ -102,7 +102,7 @@ runs:
       shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
       run: |
         if [[ "${{ steps.detect-source-changes.outputs.source-build }}" == "true" ]]; then
-          echo "::notice::Branch modified benchmark sources; building from branch source"
+          echo "::notice::Branch modified benchmarks source, build from source"
         else
           echo "::warning::Pre-built wheel unavailable, falling back to source build"
         fi
