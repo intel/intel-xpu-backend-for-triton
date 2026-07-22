@@ -602,6 +602,8 @@ FailureOr<LinearLayout> computeTransposeShuffleMapping(
         rowBase <<= 1;
       }
     }
+    assert(numElemsPerLoad % sizeInfo.numElemPerPackedVal == 0 &&
+           "numElemsPerLoad must be a multiple of numElemPerPackedVal");
     for (int32_t i = 1; i < numElemsPerLoad / sizeInfo.numElemPerPackedVal;
          i *= 2) {
       if (i < mlir::ceil(sizeInfo.tileHeight, (int32_t)threadsPerWarp)) {
