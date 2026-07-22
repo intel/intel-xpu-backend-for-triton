@@ -221,41 +221,6 @@ class CompilationHelper:
 COMPILATION_HELPER = CompilationHelper()
 
 
-class ArchParser:
-
-    def __init__(self, cache_path: str):
-        self.shared_library = ctypes.CDLL(cache_path)
-        self.shared_library.parse_device_arch.restype = ctypes.c_char_p
-        self.shared_library.parse_device_arch.argtypes = (ctypes.c_uint64, )
-
-    def __getattribute__(self, name):
-        if name == "parse_device_arch":
-            shared_library = super().__getattribute__("shared_library")
-            attr = getattr(shared_library, name)
-
-            def wrapper(*args, **kwargs):
-                return attr(*args, **kwargs).decode("utf-8")
-
-            return wrapper
-
-        return super().__getattribute__(name)
-
-    if os.name != 'nt':
-
-        def __del__(self):
-            if hasattr(self, "shared_library"):
-                handle = self.shared_library._handle
-                self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
-                self.shared_library.dlclose(handle)
-    else:
-
-        def __del__(self):
-            if hasattr(self, "shared_library"):
-                handle = self.shared_library._handle
-                ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
-                ctypes.windll.kernel32.FreeLibrary(handle)
-
-
 class SpirvUtils:
 
     def __init__(self, cache_path: str):
@@ -268,6 +233,8 @@ class SpirvUtils:
         self.shared_library.get_device_properties.restype = ctypes.py_object
         self.shared_library.get_device_properties.argtypes = (ctypes.c_int, )
         self.shared_library.get_last_selected_build_flags.restype = ctypes.py_object
+        self.shared_library.parse_device_arch.restype = ctypes.c_char_p
+        self.shared_library.parse_device_arch.argtypes = (ctypes.c_uint64, )
 
         self.shared_library.build_signature_metadata.restype = ctypes.py_object
         self.shared_library.build_signature_metadata.argtypes = (ctypes.py_object, )
@@ -307,6 +274,10 @@ class SpirvUtils:
                 raise IntelGPUError("Error during Intel load_binary: " + str(e)) from e
             else:
                 raise e
+
+    def parse_device_arch(self, arch_id: int) -> str:
+        arch = self.shared_library.parse_device_arch(arch_id)
+        return arch.decode("utf-8") if arch else "unknown"
 
     if os.name != 'nt':
 
@@ -419,8 +390,6 @@ def compile_module_from_src(src: str, name: str, is_lts: bool = False):
             with open(so, "rb") as f:
                 cache_path = cache.put(f.read(), f"{name}{suffix}", binary=True)
 
-    if name == 'arch_utils':
-        return ArchParser(cache_path)
     if name == 'spirv_utils':
         return SpirvUtils(cache_path)
     if name == 'extension_utils_impl':
@@ -429,6 +398,19 @@ def compile_module_from_src(src: str, name: str, is_lts: bool = False):
         return cache_path
 
     return _load_module_from_path(name, cache_path)
+
+
+@lru_cache
+def get_spirv_utils_module():
+    dirname = os.path.dirname(os.path.realpath(__file__))
+    # Use class-level capability probe; this helper can be called outside any XPUUtils instance.
+    is_lts_driver = XPUUtils._is_lts()
+    mod = compile_module_from_src(
+        src=Path(os.path.join(dirname, "driver.c")).read_text(),
+        name="spirv_utils",
+        is_lts=is_lts_driver,
+    )
+    return mod
 
 
 # ------------------------
@@ -456,12 +438,9 @@ class XPUUtils(object):
     def __init__(self):
         if self._initialized:
             return
-        dirname = os.path.dirname(os.path.realpath(__file__))
         # we save `spirv_utils` module so that the destructor is not called prematurely, which will unload the dll
         # and can cause `Fatal Python error: Segmentation fault`
-        is_lts = self._is_lts()
-        mod = compile_module_from_src(src=Path(os.path.join(dirname, "driver.c")).read_text(), name="spirv_utils",
-                                      is_lts=is_lts)
+        mod = get_spirv_utils_module()
         global PyKernelArg
         global ARG_CONSTEXPR
         global ARG_KERNEL
@@ -482,6 +461,7 @@ class XPUUtils(object):
         self.unload_module = lambda module: None
         self.launch = mod.launch
         self.build_signature_metadata = mod.build_signature_metadata
+        self.parse_device_arch = mod.parse_device_arch
         self._initialized = True
 
     @classmethod
@@ -775,10 +755,7 @@ class XPUDriver(DriverBase):
 
         def update_device_arch(dev_property):
             if not (arch := knobs.intel.device_arch):
-                dirname = os.path.dirname(os.path.realpath(__file__))
-                parser = compile_module_from_src(src=Path(os.path.join(dirname, "arch_parser.c")).read_text(),
-                                                 name="arch_utils")
-                arch = parser.parse_device_arch(dev_property["architecture"])
+                arch = self.utils.parse_device_arch(dev_property["architecture"])
             dev_property["arch"] = arch
 
         # All GPUs with the same device_id have the same extensions, so we just
