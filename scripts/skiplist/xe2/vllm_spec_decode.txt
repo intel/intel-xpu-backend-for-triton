@@ -1,20 +1,25 @@
-# Model Runner V2 does not support draft_model speculative method: https://github.com/intel/intel-xpu-backend-for-triton/issues/7166
-tests/v1/spec_decode/test_eagle.py::test_propose_stores_probabilistic_draft_probs
-
-# Skip tests using Llama-3.1-8B-Instruct
+# These tests uses Llama-3.1-8B-Instruct: https://github.com/intel/intel-xpu-backend-for-triton/issues/7347
 tests/v1/spec_decode/test_eagle.py::test_prepare_next_token_ids
 tests/v1/spec_decode/test_eagle.py::test_prepare_inputs
 tests/v1/spec_decode/test_eagle.py::test_prepare_inputs_padded
 tests/v1/spec_decode/test_eagle.py::test_set_inputs_first_pass_default_eagle
-tests/v1/spec_decode/test_eagle.py::test_set_inputs_first_pass_draft_model
-tests/v1/spec_decode/test_eagle.py::test_set_inputs_first_pass_parallel_drafting
 tests/v1/spec_decode/test_eagle.py::test_load_model
 tests/v1/spec_decode/test_eagle.py::test_propose
+
+# This test uses meta-llama/Meta-Llama-3-8B-Instruct: https://github.com/intel/intel-xpu-backend-for-triton/issues/7347
 tests/v1/spec_decode/test_max_len.py::test_eagle_max_len
 
-# Skip tests that query the available free memory
-tests/v1/spec_decode/test_max_len.py::test_ngram_max_len
-tests/v1/spec_decode/test_speculators_eagle3.py::test_eagle3_speculators_model
+# This test uses Llama-3.1-8B-Instruct, AND Model Runner V2 does not support parallel drafting for EAGLE: https://github.com/intel/intel-xpu-backend-for-triton/issues/7347, https://github.com/intel/intel-xpu-backend-for-triton/issues/7166
+tests/v1/spec_decode/test_eagle.py::test_set_inputs_first_pass_parallel_drafting
 
-# mrv2 limitation
-tests/v1/spec_decode/test_eagle.py::test_set_inputs_first_pass_dflash
+# This test uses Llama-3.1-8B-Instruct, AND Model Runner V2 does not support draft_model speculative method: https://github.com/intel/intel-xpu-backend-for-triton/issues/7347,  https://github.com/intel/intel-xpu-backend-for-triton/issues/7166
+tests/v1/spec_decode/test_eagle.py::test_set_inputs_first_pass_draft_model
+
+# Model Runner V2 does not support draft_model speculative method:  https://github.com/intel/intel-xpu-backend-for-triton/issues/7166
+tests/v1/spec_decode/test_eagle.py::test_propose_stores_probabilistic_draft_probs
+
+# Model Runner V2 does not yet support: ngram/ngram_gpu speculative decoding:  https://github.com/intel/intel-xpu-backend-for-triton/issues/7166
+tests/v1/spec_decode/test_max_len.py::test_ngram_max_len
+
+# Runs out of memory on BMG: https://github.com/intel/intel-xpu-backend-for-triton/issues/7437
+tests/v1/spec_decode/test_speculators_eagle3.py::test_eagle3_speculators_model
