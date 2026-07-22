@@ -44,9 +44,9 @@ add_executable(${TARGET_NAME} ${TARGET_NAME}.cpp $<TARGET_OBJECTS:llvm_parser>)
 target_include_directories(${TARGET_NAME} PRIVATE
 	"${ONEAPI_ROOT}/compiler/latest/include" ${SYCL_FUNCTIONS_INCLUDE_DIR} ${JSON_INCLUDE_DIR})
 
-# Eventless kernel submission requires a rolling (non-LTS) driver. There is
-# no portable way to query the driver at CMake configure time, so default to
-# enabled and let users on an LTS driver opt out via the environment.
+# Eventless kernel submission requires a rolling (non-LTS) driver. It's not
+# worth complicating this build with driver detection, so default to enabled
+# and let users on an LTS driver opt out via the environment.
 set(SPIRVRUNNER_ENABLE_EVENTLESS_SUBMIT "1")
 if(DEFINED ENV{SPIRVRUNNER_ENABLE_EVENTLESS_SUBMIT})
   set(SPIRVRUNNER_ENABLE_EVENTLESS_SUBMIT "$ENV{SPIRVRUNNER_ENABLE_EVENTLESS_SUBMIT}")
