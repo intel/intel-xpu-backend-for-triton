@@ -18,12 +18,12 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.github-token }}
       run: |
-        build_from_source=false
+        source_build=false
         if gh api --paginate "repos/${{ github.repository }}/compare/main...${{ github.sha }}" --jq '.files[].filename' \
             | grep -qE '^benchmarks/'; then
-          build_from_source=true
+          source_build=true
         fi
-        echo "build-from-source=$build_from_source" | tee -a "$GITHUB_OUTPUT"
+        echo "build-from-source=$source_build" | tee -a "$GITHUB_OUTPUT"
 
     - name: Download benchmarks wheel (same run)
       id: same-run-download
@@ -102,7 +102,7 @@ runs:
       shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
       run: |
         if [[ "${{ steps.detect-source-changes.outputs.build-from-source }}" == "true" ]]; then
-          echo "::notice::Branch modified benchmark sources; building from source"
+          echo "::notice::Branch modified benchmark sources, triggering source build"
         else
           echo "::warning::Pre-built wheel unavailable, falling back to source build"
         fi
