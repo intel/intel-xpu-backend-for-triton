@@ -1135,7 +1135,7 @@ def test_silu_sigmoid_optimization(device, monkeypatch):
             return cap
 
         triton.backends.backends['intel'].driver._construct_target.cache_clear()
-        with mock.patch('torch.xpu.get_device_capability', new=mock_func):
+        with mock.patch('triton.runtime.driver.active.utils._get_device_capability', new=mock_func):
             meta = silu_kernel[(2, )](x_gpu, y_gpu, n, BLOCK=512)
             llir = meta.asm.get('llir')
             assert "__spirv_FSigmoidINTEL" in llir, f"Expected __spirv_FSigmoidINTEL in llir output, got:\n{llir}"
