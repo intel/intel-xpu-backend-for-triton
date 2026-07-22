@@ -23,7 +23,7 @@ runs:
             | grep -qE '^benchmarks/'; then
           source_build=true
         fi
-        echo "build-from-source=$source_build" | tee -a "$GITHUB_OUTPUT"
+        echo "source-build=$source_build" | tee -a "$GITHUB_OUTPUT"
 
     - name: Download benchmarks wheel (same run)
       id: same-run-download
@@ -55,13 +55,13 @@ runs:
       continue-on-error: true
 
     - name: Install triton-utils
-      if: steps.same-run-validate.outcome != 'success' && steps.detect-source-changes.outputs.build-from-source != 'true'
+      if: steps.same-run-validate.outcome != 'success' && steps.detect-source-changes.outputs.source-build != 'true'
       shell: bash
       run: pip install "$GITHUB_WORKSPACE/scripts/triton_utils"
 
     - name: Download and install benchmarks wheel (main)
       id: main-wheel
-      if: steps.same-run-validate.outcome != 'success' && steps.detect-source-changes.outputs.build-from-source != 'true'
+      if: steps.same-run-validate.outcome != 'success' && steps.detect-source-changes.outputs.source-build != 'true'
       continue-on-error: true
       shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
       env:
@@ -101,7 +101,7 @@ runs:
       if: steps.same-run-validate.outcome != 'success' && steps.main-validate.outcome != 'success'
       shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
       run: |
-        if [[ "${{ steps.detect-source-changes.outputs.build-from-source }}" == "true" ]]; then
+        if [[ "${{ steps.detect-source-changes.outputs.source-build }}" == "true" ]]; then
           echo "::notice::Branch modified benchmark sources, triggering source build"
         else
           echo "::warning::Pre-built wheel unavailable, falling back to source build"
