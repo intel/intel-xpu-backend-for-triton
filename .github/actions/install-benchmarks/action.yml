@@ -19,9 +19,6 @@ runs:
         GH_TOKEN: ${{ inputs.github-token }}
       run: |
         source_build=false
-        # Capture first, then grep the string: piping gh directly into grep -q lets
-        # grep exit on the first match and close the pipe, killing gh with SIGPIPE,
-        # which pipefail would surface as a failure (read as "no match").
         changed_files="$(gh api --paginate "repos/${{ github.repository }}/compare/main...${{ github.sha }}" --jq '.files[].filename')"
         if grep -q '^benchmarks/' <<< "$changed_files"; then
           source_build=true
@@ -105,7 +102,7 @@ runs:
       shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
       run: |
         if [[ "${{ steps.detect-source-changes.outputs.source-build }}" == "true" ]]; then
-          echo "::notice::Branch modified benchmark sources; building from source"
+          echo "::notice::Branch modified benchmarks source; building from source"
         else
           echo "::warning::Pre-built wheel unavailable, falling back to source build"
         fi
