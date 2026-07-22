@@ -96,15 +96,15 @@ public:
     std::tie(dTy, cTy, aTy, bTy) = getDPASOperandsType<DPASEngineType>(
         dpasType, op.getContext(), dpasEncoding);
     ValueTable ha = getValuesFromDotOperandLayoutStruct(
-        loadedA, repBatch, repM, repK,
+        loadedA, ATensorTy, repBatch, repM, repK,
         typeConverter->convertType(ATensorTy.getElementType()),
         DpasEncodingAttr::OpIdx::OperandA);
     ValueTable hb = getValuesFromDotOperandLayoutStruct(
-        loadedB, repBatch, repN, repK,
+        loadedB, BTensorTy, repBatch, repN, repK,
         typeConverter->convertType(BTensorTy.getElementType()),
         DpasEncodingAttr::OpIdx::OperandB);
     ValueTable fc = getValuesFromDotOperandLayoutStruct(
-        loadedC, repBatch, repM, repN,
+        loadedC, CTensorTy, repBatch, repM, repN,
         typeConverter->convertType(CTensorTy.getElementType()),
         DpasEncodingAttr::OpIdx::OperandC);
 
@@ -228,8 +228,8 @@ public:
           innerLoop(b, k, outer, repNumM, repNumN, repInner, reverseLoop);
         }
 
-    Value res = composeValuesToDotOperandLayoutStruct(fc, repBatch, repM, repN,
-                                                      resElemTy);
+    Value res = composeValuesToDotOperandLayoutStruct(fc, DTensorTy, repBatch,
+                                                      repM, repN, resElemTy);
 
     rewriter.replaceOp(op, res);
 
@@ -406,6 +406,7 @@ private:
   }
 
   Value composeValuesToDotOperandLayoutStruct(const ValueTable &vals,
+                                              RankedTensorType tensorTy,
                                               int64_t dimBatch, int64_t dimRow,
                                               int64_t dimCol,
                                               Type elemTy) const {
@@ -435,16 +436,16 @@ private:
     assert(!elems.empty() &&
            "unexpected empty result in composing the DPAS result.");
 
-    Type structTy = LLVM::LLVMStructType::getLiteral(
-        ctx, SmallVector<Type>(elems.size(), elemTy));
-    return packLLElements(loc, typeConverter, elems, rewriter, structTy);
+    SmallVector<Value> resultVals(elems.begin(), elems.end());
+    return packTensorElements(loc, typeConverter, resultVals, rewriter,
+                              tensorTy);
   }
 
-  ValueTable
-  getValuesFromDotOperandLayoutStruct(Value val, int64_t batch, int64_t outer,
-                                      int64_t inner, Type elemTy,
-                                      DpasEncodingAttr::OpIdx opIdx) const {
-    SmallVector<Value> elems = unpackLLElements(loc, val, rewriter);
+  ValueTable getValuesFromDotOperandLayoutStruct(
+      Value val, RankedTensorType tensorTy, int64_t batch, int64_t outer,
+      int64_t inner, Type elemTy, DpasEncodingAttr::OpIdx opIdx) const {
+    SmallVector<Value> elems =
+        unpackTensorElements(loc, val, rewriter, tensorTy);
     ArrayRef<unsigned> repCluster = dpasLayout.getRepCluster();
     size_t rank = repCluster.size();
     unsigned repClusterOuter = 0u;
