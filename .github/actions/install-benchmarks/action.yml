@@ -20,7 +20,7 @@ runs:
       run: |
         source_build=false
         changed_files="$(gh api --paginate "repos/${{ github.repository }}/compare/main...${{ github.sha }}" --jq '.files[].filename')"
-        if grep -q '^benchmarks/' <<< "$changed_files"; then
+        if grep -q "^benchmarks/" <<< "$changed_files"; then
           source_build=true
         fi
         echo "source-build=$source_build" | tee -a "$GITHUB_OUTPUT"
