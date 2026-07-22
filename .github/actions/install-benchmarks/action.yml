@@ -18,16 +18,9 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.github-token }}
       run: |
-        # If the branch modified benchmark sources relative to main, the prebuilt main
-        # wheel would be stale, so we build from source instead of downloading it
-        # (a same-run branch wheel, when present, is still preferred). Mirrors the
-        # auto-detect in .github/actions/install-vllm.
         build_from_source=false
-        # Capture first, then grep the string: avoids a SIGPIPE race where grep -q
-        # exits on the first match and pipefail surfaces the killed gh process as a
-        # failure (which would read as "no match").
-        changed_files="$(gh api --paginate "repos/${{ github.repository }}/compare/main...${{ github.sha }}" --jq '.files[].filename')"
-        if grep -qE '^benchmarks/' <<< "$changed_files"; then
+        if gh api --paginate "repos/${{ github.repository }}/compare/main...${{ github.sha }}" --jq '.files[].filename' \
+            | grep -qE '^benchmarks/'; then
           build_from_source=true
         fi
         echo "build-from-source=$build_from_source" | tee -a "$GITHUB_OUTPUT"
@@ -62,8 +55,6 @@ runs:
       continue-on-error: true
 
     - name: Install triton-utils
-      # Skip the main wheel entirely when the branch changed benchmark sources: it would
-      # be stale, so we go straight to the source build below.
       if: steps.same-run-validate.outcome != 'success' && steps.detect-source-changes.outputs.build-from-source != 'true'
       shell: bash
       run: pip install "$GITHUB_WORKSPACE/scripts/triton_utils"
@@ -107,12 +98,6 @@ runs:
         fi
 
     - name: Build benchmarks from source
-      # Runs when no usable wheel was installed. Two ways to get here:
-      #   - the branch changed benchmark sources (build-from-source == true), so the
-      #     main wheel was skipped above — this is the expected path, not a fallback;
-      #   - the branch didn't change benchmarks but neither wheel was available.
-      # No continue-on-error: a failed build fails the job loudly rather than silently
-      # running stale/absent benchmarks.
       if: steps.same-run-validate.outcome != 'success' && steps.main-validate.outcome != 'success'
       shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
       run: |
@@ -121,5 +106,4 @@ runs:
         else
           echo "::warning::Pre-built wheel unavailable, falling back to source build"
         fi
-        pip uninstall -y triton-kernels-benchmark 2>/dev/null || true
         (cd "$GITHUB_WORKSPACE/benchmarks" && pip install --no-build-isolation .)
