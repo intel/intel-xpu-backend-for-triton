@@ -39,6 +39,65 @@
 static std::vector<std::pair<sycl::device, ze_device_handle_t>>
     g_sycl_l0_device_list;
 
+extern "C" EXPORT_FUNC const char *parse_device_arch(uint64_t dev_arch) {
+  sycl::ext::oneapi::experimental::architecture syclArch =
+      static_cast<sycl::ext::oneapi::experimental::architecture>(dev_arch);
+  const char *arch = "";
+  switch (syclArch) {
+  case sycl::ext::oneapi::experimental::architecture::intel_gpu_arl_h:
+    arch = "arl_h";
+    break;
+  case sycl::ext::oneapi::experimental::architecture::intel_gpu_arl_s:
+    arch = "arl_s";
+    break;
+#if __SYCL_COMPILER_VERSION >= 20251010
+  case sycl::ext::oneapi::experimental::architecture::intel_gpu_bmg_g31:
+#endif
+  case sycl::ext::oneapi::experimental::architecture::intel_gpu_bmg_g21:
+    arch = "bmg";
+    break;
+  case sycl::ext::oneapi::experimental::architecture::intel_gpu_dg2_g10:
+    arch = "dg2";
+    break;
+  case sycl::ext::oneapi::experimental::architecture::intel_gpu_lnl_m:
+    arch = "lnl";
+    break;
+  case sycl::ext::oneapi::experimental::architecture::intel_gpu_mtl_h:
+    arch = "mtl";
+    break;
+  case sycl::ext::oneapi::experimental::architecture::intel_gpu_pvc:
+    arch = "pvc";
+    break;
+#if __SYCL_COMPILER_VERSION >= 20250000
+  case sycl::ext::oneapi::experimental::architecture::intel_gpu_ptl_h:
+    arch = "ptl_h";
+    break;
+  case sycl::ext::oneapi::experimental::architecture::intel_gpu_ptl_u:
+    arch = "ptl_u";
+    break;
+#endif
+#if __SYCL_COMPILER_VERSION >= 20260331
+  case sycl::ext::oneapi::experimental::architecture::intel_gpu_nvl_s:
+    arch = "nvl_s";
+    break;
+  case sycl::ext::oneapi::experimental::architecture::intel_gpu_nvl_u:
+    arch = "nvl_u";
+    break;
+  case sycl::ext::oneapi::experimental::architecture::intel_gpu_nvl_p:
+    arch = "nvl_p";
+    break;
+#endif
+  case sycl::ext::oneapi::experimental::architecture::unknown:
+    arch = "unknown";
+    break;
+  default:
+    std::cerr << "device architecture not recognized: "
+              << static_cast<uint64_t>(syclArch) << std::endl;
+    break;
+  }
+  return arch;
+}
+
 // Cache for IntelGPUError exception class
 static PyObject *g_intel_gpu_error_class = nullptr;
 // Cache for OutOfResources exception class (autotune-friendly)
@@ -436,6 +495,14 @@ sycl::context get_default_context(const sycl::device &sycl_device) {
 }
 
 static BuildFlags last_build_flag("");
+
+static const char *getParsedDeviceArch(const sycl::device &device) {
+  uint64_t archId = static_cast<uint64_t>(
+      device.get_info<
+          sycl::ext::oneapi::experimental::info::device::architecture>());
+  const char *arch = parse_device_arch(archId);
+  return (arch != nullptr && arch[0] != '\0') ? arch : "unknown";
+}
 
 extern "C" EXPORT_FUNC PyObject *get_last_selected_build_flags() {
   return Py_BuildValue("s", last_build_flag().data());

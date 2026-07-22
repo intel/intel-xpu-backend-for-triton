@@ -1,6 +1,6 @@
 from triton.backends.compiler import BaseBackend, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm, intel
-from triton.backends.intel.driver import compile_module_from_src, is_lts
+from triton.backends.intel.driver import get_spirv_utils_module, is_lts
 from triton.backends.intel.track import track
 from triton.backends.intel.extension_utils import query_device_extensions
 from triton import knobs
@@ -144,10 +144,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if (impl := cls.arch_to_impl.get(arch, None)) is None:
             # Try to find an arch-specific implementation in the .arch.<name> submodule.
             if not (dev_arch := knobs.intel.device_arch):
-                dirname = os.path.dirname(os.path.realpath(__file__))
-                parser = compile_module_from_src(src=Path(os.path.join(dirname, "arch_parser.c")).read_text(),
-                                                 name="arch_utils")
-                dev_arch = parser.parse_device_arch(target.arch.get('architecture', 0))
+                dev_arch = get_spirv_utils_module().parse_device_arch(target.arch.get('architecture', 0))
             mod_name = f"{__package__}.arch.{dev_arch}"
             try:
                 impl = __import__(mod_name, fromlist=["XPUBackendImpl"]).XPUBackendImpl
