@@ -2,6 +2,7 @@ import importlib.metadata
 import os
 import json
 import sys
+import re
 import hashlib
 import shutil
 import ctypes
@@ -355,8 +356,20 @@ class ExtensionUtils:
                 ctypes.windll.kernel32.FreeLibrary(handle)
 
 
+_VERSION_PATTERN = re.compile(r'(\d+)\.(\d+)\.(\d+)(?:\+(\d+))?')
+
+
+def is_lts(ver) -> bool:
+    if not ver:
+        return True
+    m = _VERSION_PATTERN.match(ver)
+    if not m:
+        return True
+    return tuple(int(x) if x is not None else 0 for x in m.groups()) < (1, 6, 35096, 9)
+
+
 @lru_cache
-def get_hasher_common():
+def get_hasher_common(is_lts: bool = False):
     hasher = hashlib.sha256((__CACHE_VERSION + platform_key()).encode("utf-8"))
     # Include libsycl_dir in the hash to prevent cache collisions across
     # environments with different oneAPI versions (e.g. 2025.3 vs 2026.0).
@@ -365,11 +378,13 @@ def get_hasher_common():
     # share the same cache entry and load an incompatible .so.
     if COMPILATION_HELPER.libsycl_dir:
         hasher.update(str(COMPILATION_HELPER.libsycl_dir).encode("utf-8"))
+    if is_lts:
+        hasher.update("is_lts=True".encode("utf-8"))
     return hasher
 
 
-def compile_module_from_src(src: str, name: str):
-    hasher = get_hasher_common().copy()
+def compile_module_from_src(src: str, name: str, is_lts: bool = False):
+    hasher = get_hasher_common(is_lts).copy()
     hasher.update(src.encode("utf-8"))
     key = hasher.hexdigest()
     cache = get_cache_manager(key)
@@ -392,6 +407,12 @@ def compile_module_from_src(src: str, name: str):
                     extra_compiler_args += ["/DTRITON_INTEL_INJECT_PYTORCH=1"]
                 else:
                     extra_compiler_args += ["-DTRITON_INTEL_INJECT_PYTORCH=1"]
+
+            if name == "spirv_utils" and not is_lts:
+                if os.name == "nt":
+                    extra_compiler_args += ["/DENABLE_EXPERIMENTAL_EVENTLESS_SUBMIT"]
+                else:
+                    extra_compiler_args += ["-DENABLE_EXPERIMENTAL_EVENTLESS_SUBMIT"]
 
             so = _build(name, src_path, tmpdir, COMPILATION_HELPER.library_dir, COMPILATION_HELPER.include_dir,
                         COMPILATION_HELPER.libraries, ccflags=extra_compiler_args)
@@ -438,7 +459,9 @@ class XPUUtils(object):
         dirname = os.path.dirname(os.path.realpath(__file__))
         # we save `spirv_utils` module so that the destructor is not called prematurely, which will unload the dll
         # and can cause `Fatal Python error: Segmentation fault`
-        mod = compile_module_from_src(src=Path(os.path.join(dirname, "driver.c")).read_text(), name="spirv_utils")
+        is_lts = self._is_lts()
+        mod = compile_module_from_src(src=Path(os.path.join(dirname, "driver.c")).read_text(), name="spirv_utils",
+                                      is_lts=is_lts)
         global PyKernelArg
         global ARG_CONSTEXPR
         global ARG_KERNEL
@@ -461,7 +484,8 @@ class XPUUtils(object):
         self.build_signature_metadata = mod.build_signature_metadata
         self._initialized = True
 
-    def get_current_device(self):
+    @classmethod
+    def get_current_device(cls):
         try:
             from torch._C import _xpu_getDevice
             return _xpu_getDevice()
@@ -472,6 +496,19 @@ class XPUUtils(object):
     def get_sycl_queue(self):
         import torch
         return torch.xpu.current_stream().sycl_queue
+
+    @classmethod
+    @lru_cache
+    def _get_device_capability(cls, device):
+        import torch
+        return torch.xpu.get_device_capability(device)
+
+    @classmethod
+    @lru_cache
+    def _is_lts(cls):
+        device = cls.get_current_device()
+        properties = cls._get_device_capability(device)
+        return is_lts(properties.get('driver_version'))
 
     def wait(self):
         self.wait_on_sycl_queue(self.get_sycl_queue())
@@ -732,10 +769,9 @@ class XPUDriver(DriverBase):
 
     @lru_cache
     def _construct_target(self, device):
-        import torch
         from triton.backends.intel.extension_utils import query_device_extensions
 
-        dev_property = torch.xpu.get_device_capability(device)
+        dev_property = self.utils._get_device_capability(device)
 
         def update_device_arch(dev_property):
             if not (arch := knobs.intel.device_arch):
