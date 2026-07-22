@@ -1151,7 +1151,8 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
       cgh.parallel_for(parallel_work_size, kernel_ptr);
     }
   };
-#if __SYCL_COMPILER_VERSION >= 20260204
+#if __SYCL_COMPILER_VERSION >= 20260204 &&                                     \
+    defined(ENABLE_EXPERIMENTAL_EVENTLESS_SUBMIT)
   // Event-less kernel submission.
   // Eventless submission fails with agama 1146 but passes with
   // agama 1222 L0 driver and later.
