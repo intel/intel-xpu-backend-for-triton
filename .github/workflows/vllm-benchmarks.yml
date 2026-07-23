@@ -23,9 +23,6 @@ on:
         description: Use prebuilt vLLM XPU kernels wheel from the current branch (must have a successful nightly build)
         type: boolean
         default: false
-  # PR runs come through the vllm-benchmarks-pvc.yml wrapper (which builds the
-  # branch benchmarks wheel first), mirroring triton-benchmarks.yml; the bmg
-  # wrapper drives the BMG schedule. This workflow keeps its own PVC schedule.
   workflow_call:
     inputs:
       runner_label:
