@@ -221,6 +221,42 @@ class CompilationHelper:
 COMPILATION_HELPER = CompilationHelper()
 
 
+class ArchParser:
+
+    def __init__(self, cache_path: str):
+        self.cache_path = cache_path
+        self.shared_library = ctypes.CDLL(cache_path)
+        self.shared_library.parse_device_arch.restype = ctypes.c_char_p
+        self.shared_library.parse_device_arch.argtypes = (ctypes.c_uint64, )
+
+    def __getattribute__(self, name):
+        if name == "parse_device_arch":
+            shared_library = super().__getattribute__("shared_library")
+            attr = getattr(shared_library, name)
+
+            def wrapper(*args, **kwargs):
+                return attr(*args, **kwargs).decode("utf-8")
+
+            return wrapper
+
+        return super().__getattribute__(name)
+
+    if os.name != 'nt':
+
+        def __del__(self):
+            if hasattr(self, "shared_library"):
+                handle = self.shared_library._handle
+                self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
+                self.shared_library.dlclose(handle)
+    else:
+
+        def __del__(self):
+            if hasattr(self, "shared_library"):
+                handle = self.shared_library._handle
+                ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
+                ctypes.windll.kernel32.FreeLibrary(handle)
+
+
 class SpirvUtils:
 
     def __init__(self, cache_path: str):
@@ -233,8 +269,6 @@ class SpirvUtils:
         self.shared_library.get_device_properties.restype = ctypes.py_object
         self.shared_library.get_device_properties.argtypes = (ctypes.c_int, )
         self.shared_library.get_last_selected_build_flags.restype = ctypes.py_object
-        self.shared_library.parse_device_arch.restype = ctypes.c_char_p
-        self.shared_library.parse_device_arch.argtypes = (ctypes.c_uint64, )
 
         self.shared_library.build_signature_metadata.restype = ctypes.py_object
         self.shared_library.build_signature_metadata.argtypes = (ctypes.py_object, )
@@ -274,10 +308,6 @@ class SpirvUtils:
                 raise IntelGPUError("Error during Intel load_binary: " + str(e)) from e
             else:
                 raise e
-
-    def parse_device_arch(self, arch_id: int) -> str:
-        arch = self.shared_library.parse_device_arch(arch_id)
-        return arch.decode("utf-8") if arch else "unknown"
 
     if os.name != 'nt':
 
@@ -367,6 +397,8 @@ def compile_module_from_src(src: str, name: str, is_lts: bool = False):
             with open(src_path, "w") as f:
                 f.write(src)
             extra_compiler_args = []
+            libraries = list(COMPILATION_HELPER.libraries)
+            library_dir = list(COMPILATION_HELPER.library_dir)
             if COMPILATION_HELPER.libsycl_dir:
                 if os.name == "nt":
                     extra_compiler_args += ["/LIBPATH:" + dir for dir in COMPILATION_HELPER.libsycl_dir]
@@ -379,17 +411,31 @@ def compile_module_from_src(src: str, name: str, is_lts: bool = False):
                 else:
                     extra_compiler_args += ["-DTRITON_INTEL_INJECT_PYTORCH=1"]
 
+            if name == "spirv_utils":
+                # Build and load arch_utils first, then link spirv_utils against it.
+                arch_utils = get_arch_utils_module()
+                arch_utils_dir = os.path.dirname(arch_utils.cache_path)
+                arch_utils_lib = os.path.basename(arch_utils.cache_path)
+                libraries += [arch_utils_lib]
+                library_dir += [arch_utils_dir]
+                if os.name == "nt":
+                    extra_compiler_args += [f"/LIBPATH:{arch_utils_dir}"]
+                else:
+                    extra_compiler_args += [f"-Wl,-rpath,{arch_utils_dir}"]
+
             if name == "spirv_utils" and not is_lts:
                 if os.name == "nt":
                     extra_compiler_args += ["/DENABLE_EXPERIMENTAL_EVENTLESS_SUBMIT"]
                 else:
                     extra_compiler_args += ["-DENABLE_EXPERIMENTAL_EVENTLESS_SUBMIT"]
 
-            so = _build(name, src_path, tmpdir, COMPILATION_HELPER.library_dir, COMPILATION_HELPER.include_dir,
-                        COMPILATION_HELPER.libraries, ccflags=extra_compiler_args)
+            so = _build(name, src_path, tmpdir, library_dir, COMPILATION_HELPER.include_dir, libraries,
+                        ccflags=extra_compiler_args)
             with open(so, "rb") as f:
                 cache_path = cache.put(f.read(), f"{name}{suffix}", binary=True)
 
+    if name == 'arch_utils':
+        return ArchParser(cache_path)
     if name == 'spirv_utils':
         return SpirvUtils(cache_path)
     if name == 'extension_utils_impl':
@@ -398,6 +444,13 @@ def compile_module_from_src(src: str, name: str, is_lts: bool = False):
         return cache_path
 
     return _load_module_from_path(name, cache_path)
+
+
+@lru_cache
+def get_arch_utils_module():
+    dirname = os.path.dirname(os.path.realpath(__file__))
+    src = Path(os.path.join(dirname, "arch_parser.c")).read_text()
+    return compile_module_from_src(src=src, name="arch_utils", is_lts=False)
 
 
 @lru_cache
@@ -461,7 +514,6 @@ class XPUUtils(object):
         self.unload_module = lambda module: None
         self.launch = mod.launch
         self.build_signature_metadata = mod.build_signature_metadata
-        self.parse_device_arch = mod.parse_device_arch
         self._initialized = True
 
     @classmethod
@@ -755,7 +807,7 @@ class XPUDriver(DriverBase):
 
         def update_device_arch(dev_property):
             if not (arch := knobs.intel.device_arch):
-                arch = self.utils.parse_device_arch(dev_property["architecture"])
+                arch = get_arch_utils_module().parse_device_arch(dev_property["architecture"])
             dev_property["arch"] = arch
 
         # All GPUs with the same device_id have the same extensions, so we just
