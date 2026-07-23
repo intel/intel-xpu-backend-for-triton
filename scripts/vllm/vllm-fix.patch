@@ -150,3 +150,90 @@ diff --git a/tests/conftest.py b/tests/conftest.py
 +        init_workspace_manager(device)
      yield
      reset_workspace_manager()
+
+diff --git a/tests/kernels/moe/test_moe.py b/tests/kernels/moe/test_moe.py
+index 69c50cbb1..6cd527547 100644
+--- a/tests/kernels/moe/test_moe.py
++++ b/tests/kernels/moe/test_moe.py
+@@ -25,6 +25,7 @@ from tests.kernels.utils import opcheck, stack_and_dev, torch_experts, torch_moe
+ from vllm.config import VllmConfig, set_current_vllm_config
+ from vllm.model_executor.layers.fused_moe import (
+     MoEActivation,
++    fused_experts,
+     fused_topk,
+ )
+ from vllm.model_executor.layers.fused_moe.config import (
+@@ -327,6 +328,10 @@ def test_fused_moe(
+     else:
+         e_map = None
+
++    # Route once so tied scores cannot select different experts in the
++    # reference and fused implementations.
++    topk_weights, topk_ids, _ = fused_topk(a, score.float(), topk, False)
++
+     #
+     # Setup test functions
+     #
+@@ -338,12 +343,11 @@ def test_fused_moe(
+         a: torch.Tensor,
+         w1: torch.Tensor,
+         w2: torch.Tensor,
+-        score: torch.Tensor,
+-        topk: int,
++        _score: torch.Tensor,
++        _topk: int,
+         global_num_experts: int = -1,
+         expert_map: torch.Tensor | None = None,
+     ) -> torch.Tensor:
+-        topk_weights, topk_ids, _ = fused_topk(a, score, topk, False)
+         return m_fused_moe_fn.apply(
+             a,
+             w1,
+@@ -356,7 +360,25 @@ def test_fused_moe(
+             apply_router_weight_on_input=False,
+         )
+
+-    fused_moe_fn = functools.partial(fused_moe, renormalize=False)
++    def shared_routing_fused_moe(
++        a: torch.Tensor,
++        w1: torch.Tensor,
++        w2: torch.Tensor,
++        _score: torch.Tensor,
++        _topk: int,
++        global_num_experts: int = -1,
++        expert_map: torch.Tensor | None = None,
++    ) -> torch.Tensor:
++        return fused_experts(
++            a,
++            w1,
++            w2,
++            topk_weights,
++            topk_ids,
++            global_num_experts=global_num_experts,
++            expert_map=expert_map,
++            quant_config=quant_config,
++        )
+
+     #
+     # Run tests
+@@ -381,10 +403,18 @@ def test_fused_moe(
+     use_cudagraph = n >= 1024 and k >= 1024 and current_platform.is_cuda_alike()
+
+     with set_current_vllm_config(vllm_config):
+-        baseline_output = runner(torch_moe, iterative_moe)
++        baseline_output = torch_experts(
++            a,
++            w1,
++            w2,
++            topk_weights,
++            topk_ids,
++            global_num_experts=e,
++            expert_map=e_map,
++        )
+         runner(
+             baseline_output,
+-            fused_moe_fn,
++            shared_routing_fused_moe,
+             use_compile=use_compile,
+             use_cudagraph=use_cudagraph,
+         )
