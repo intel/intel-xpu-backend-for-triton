@@ -329,3 +329,92 @@ def test_block_tdesc_column_major_load(device, tmp_path: pathlib.Path):
     # C should equal A x B_stored.T  (since B was loaded via column_major).
     expected = torch.mm(A.to(torch.float32), B_stored.to(torch.float32).T)
     torch.testing.assert_close(C, expected, atol=1e-1, rtol=1e-2)
+
+
+# ---------------------------------------------------------------------------
+# Column-major descriptor load — threadsPerWarp=32
+# ---------------------------------------------------------------------------
+@pytest.mark.skipif(not is_xpu(), reason="Block descriptor tests are specific to the XPU backend")
+@pytest.mark.xfail(
+    not (triton.runtime.driver.active.get_current_target().arch['has_subgroup_2d_block_io']
+         and triton.runtime.driver.active.get_current_target().arch['has_subgroup_matrix_multiply_accumulate']),
+    reason="Block loads and/or DPAS not supported on this architecture", run=False)
+def test_block_tdesc_column_major_load_subgroup32(device, tmp_path: pathlib.Path):
+    """Verify column_major descriptor load with ``threadsPerWarp = 32``, f16/opsPerChan=2.
+
+    This exercises the fix in ``computeTransposeShuffleMapping`` that unblocks
+    B-matrix column-major 2D block loads when ``threadsPerWarp = 32``.  Before
+    the fix, the old width-comparison guard rejected this configuration because
+    ``dpasInstShapeB()[1] = 16 != threadsPerWarp = 32``, causing a silent
+    fallback to gather instead of a hardware transpose load.
+
+    The kernel is identical in structure to ``test_block_tdesc_column_major_load``
+    (same M/K/N tile sizes) but uses ``threadsPerWarp = 32`` with a matching
+    DPAS config (``warpsPerCTA = [4, 2]``).  The DPAS per-warp tile shapes
+    remain ``A = [8, 16], B = [16, 16], C = [8, 16]`` and the full tile fits
+    in two repetitions along each dimension (numRep_M = numRep_K = numRep_N = 2).
+    """
+    M, K, N = 64, 32, 64
+
+    ir = f"""
+    #dpas = #ttig.dpas<{{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 32, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}}>
+    #dot0 = #ttg.dot_op<{{opIdx = 0, parent = #dpas, kWidth=1}}>
+    #dot1 = #ttg.dot_op<{{opIdx = 1, parent = #dpas, kWidth=2}}>
+    module attributes {{ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_2d_block_io, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32}} {{
+        tt.func public @column_major_load_subgroup32(%a_ptr: !tt.ptr<f16> {{tt.divisibility = 16 : i32}},
+                                                      %b_ptr: !tt.ptr<f16> {{tt.divisibility = 16 : i32}},
+                                                      %c_ptr: !tt.ptr<f32> {{tt.divisibility = 16 : i32}}) attributes {{noinline = false}} {{
+            %c0_i32 = arith.constant 0 : i32
+            %c1_i64 = arith.constant 1 : i64
+            %cM_i32 = arith.constant {M} : i32
+            %cK_i32 = arith.constant {K} : i32
+            %cN_i32 = arith.constant {N} : i32
+            %cK_i64 = arith.constant {K} : i64
+            %cN_i64 = arith.constant {N} : i64
+
+            // A: [{M}, {K}] row-major.
+            %desc_a = tt.make_tensor_descriptor %a_ptr, [%cM_i32, %cK_i32], [%cK_i64, %c1_i64]
+                      : !tt.ptr<f16>, !tt.tensordesc<{M}x{K}xf16>
+            %a = tt.descriptor_load %desc_a [%c0_i32, %c0_i32] {{ttig.block_io = "row_major"}}
+                 : !tt.tensordesc<{M}x{K}xf16> -> tensor<{M}x{K}xf16, #dot0>
+
+            // B stored as [{N}, {K}] row-major in memory (N rows, K contiguous cols).
+            // column_major load: the permuteDescDim logic swaps the last two descriptor
+            // dimensions before extracting surface parameters, so the result is
+            // tensor<{K}x{N}xf16, #dot1> (the transposed view of the [{N},{K}] storage).
+            %desc_b = tt.make_tensor_descriptor %b_ptr, [%cN_i32, %cK_i32], [%cK_i64, %c1_i64]
+                      : !tt.ptr<f16>, !tt.tensordesc<{N}x{K}xf16>
+            %b = tt.descriptor_load %desc_b [%c0_i32, %c0_i32] {{ttig.block_io = "column_major"}}
+                 : !tt.tensordesc<{N}x{K}xf16> -> tensor<{K}x{N}xf16, #dot1>
+
+            // C = A x B  (dimensions: [{M},{K}] x [{K},{N}] -> [{M},{N}])
+            %C_init = arith.constant dense<0.000000e+00> : tensor<{M}x{N}xf32, #dpas>
+            %C = tt.dot %a, %b, %C_init, inputPrecision = tf32
+                 : tensor<{M}x{K}xf16, #dot0> * tensor<{K}x{N}xf16, #dot1> -> tensor<{M}x{N}xf32, #dpas>
+
+            // Store C: the dpas encoding supports 2D block stores via a descriptor.
+            %desc_c = tt.make_tensor_descriptor %c_ptr, [%cM_i32, %cN_i32], [%cN_i64, %c1_i64]
+                      : !tt.ptr<f32>, !tt.tensordesc<{M}x{N}xf32, #dpas>
+            tt.descriptor_store %desc_c [%c0_i32, %c0_i32], %C {{ttig.block_io = "row_major"}}
+                                : !tt.tensordesc<{M}x{N}xf32, #dpas>, tensor<{M}x{N}xf32, #dpas>
+
+            tt.return
+        }}
+    }}
+    """
+
+    torch.manual_seed(42)
+    A = torch.randn((M, K), dtype=torch.float16, device=device)
+    # B is stored as [N, K] in memory (the transposed representation of a [K, N] B matrix).
+    B_stored = torch.randn((N, K), dtype=torch.float16, device=device)
+    C = torch.empty((M, N), dtype=torch.float32, device=device)
+
+    temp_file = tmp_path / "test_block_tdesc_column_major_load_subgroup32.ttgir"
+    temp_file.write_text(ir)
+    kernel = triton.compile(str(temp_file))
+
+    kernel[(1, 1, 1)](A, B_stored, C)
+
+    # C should equal A x B_stored.T  (since B was loaded via column_major).
+    expected = torch.mm(A.to(torch.float32), B_stored.to(torch.float32).T)
+    torch.testing.assert_close(C, expected, atol=1e-1, rtol=1e-2)

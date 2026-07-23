@@ -247,6 +247,28 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
+// COM: Column-major pointer load with sub-group-size=32 and f16/opsPerChan=2.
+// COM: The old width-comparison check rejected this because dpasInstShapeB()[1]=16
+// COM: != threadsPerWarp=32. The new linear-layout check correctly accepts it.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 32, warpsPerCTA = [2, 2], repCluster = [1, 1], A = [16, 16], B = [16, 16], C = [16, 16]}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @pointer_load_column_major_subgroup32
+  tt.func @pointer_load_column_major_subgroup32(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> tensor<32x64xf16, #dot1> {
+    %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #dot1}>>
+    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #dot1}>> -> tensor<1x64xi32, #dot1>
+    %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1x64x!tt.ptr<f16>, #dot1>
+    %3 = tt.addptr %2, %1 : tensor<1x64x!tt.ptr<f16>, #dot1>, tensor<1x64xi32, #dot1>
+    %4 = tt.broadcast %3 : tensor<1x64x!tt.ptr<f16>, #dot1> -> tensor<32x64x!tt.ptr<f16>, #dot1>
+    // CHECK: %[[P:.*]] = arith.constant 128 : i32
+    // CHECK: ttig.2d_block_load_from_ptr %4, %[[P]] {column_major} {base_height = 1 : i32, base_width = 32 : i32}
+    %5 = tt.load %4 {ttig.block_io = "column_major"} : tensor<32x64x!tt.ptr<f16>, #dot1>
+    tt.return %5 : tensor<32x64xf16, #dot1>
+  }
+}
+
+// -----
+
 // COM: Env var TRITON_INTEL_ONE_MATRIX_PER_LOAD_BT=1 forces the attribute on
 // COM: all loads, even those without it originally.
 // RUN: env TRITON_INTEL_ONE_MATRIX_PER_LOAD_BT=1 triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load | FileCheck %s --check-prefix=ENV-CHECK
