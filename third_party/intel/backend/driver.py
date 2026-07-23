@@ -412,16 +412,15 @@ def compile_module_from_src(src: str, name: str, is_lts: bool = False):
                     extra_compiler_args += ["-DTRITON_INTEL_INJECT_PYTORCH=1"]
 
             if name == "spirv_utils":
-                # Build and load arch_utils first, then link spirv_utils against it.
-                arch_utils = get_arch_utils_module()
-                arch_utils_dir = os.path.dirname(arch_utils.cache_path)
-                arch_utils_lib = os.path.basename(arch_utils.cache_path)
-                libraries += [arch_utils_lib]
-                library_dir += [arch_utils_dir]
-                if os.name == "nt":
-                    extra_compiler_args += [f"/LIBPATH:{arch_utils_dir}"]
-                else:
-                    extra_compiler_args += [f"-Wl,-rpath,{arch_utils_dir}"]
+                # Compile arch_parser.c directly into spirv_utils to resolve
+                # parse_device_arch without linking against the arch_utils shared
+                # library. Linking against a pre-built .pyd on Windows requires an
+                # import library (main.lib) that is not persisted in the cache, so
+                # embedding the source avoids that platform-specific issue entirely.
+                _driver_dir = os.path.dirname(os.path.realpath(__file__))
+                arch_parser_src = Path(os.path.join(_driver_dir, "arch_parser.c")).read_text()
+                with open(src_path, "w") as f:
+                    f.write(src + "\n" + arch_parser_src)
 
             if name == "spirv_utils" and not is_lts:
                 if os.name == "nt":

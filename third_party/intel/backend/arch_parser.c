@@ -10,10 +10,12 @@
 
 #include <sycl/sycl.hpp>
 
+#ifndef EXPORT_FUNC
 #if defined(_WIN32)
 #define EXPORT_FUNC __declspec(dllexport)
 #else
 #define EXPORT_FUNC __attribute__((visibility("default")))
+#endif
 #endif
 
 extern "C" EXPORT_FUNC const char *parse_device_arch(uint64_t dev_arch) {
