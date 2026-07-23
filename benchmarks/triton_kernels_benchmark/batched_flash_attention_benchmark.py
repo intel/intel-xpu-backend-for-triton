@@ -4,7 +4,16 @@ import torch
 import triton
 import triton.language as tl
 
+from torch.nn.attention.flex_attention import flex_attention
+
 import triton_kernels_benchmark as benchmark_suite
+
+compiled_flex_attention = torch.compile(flex_attention, dynamic=False)
+
+
+def _assert_same_output(triton_out: torch.Tensor, flex_out: torch.Tensor):
+    # fp16 attention can accumulate small numerical drift across implementations.
+    torch.testing.assert_close(triton_out, flex_out, rtol=3e-2, atol=3e-2)
 
 
 def fwd_autotune_config() -> list[triton.Config]:
@@ -233,6 +242,55 @@ def batched_attention(q, k, v, q_attn_arg, k_attn_arg, cu_seqlens_q, cu_seqlens_
     return o
 
 
+def _pack_to_padded(x: torch.Tensor, segments: torch.Tensor, max_len: int):
+    # x: [total_tokens, heads, dim] -> [batch, heads, max_len, dim]
+    batch = segments.numel() - 1
+    _, heads, dim = x.shape
+    out = x.new_zeros((batch, heads, max_len, dim))
+    lengths = segments[1:] - segments[:-1]
+    for b in range(batch):
+        start = int(segments[b].item())
+        end = int(segments[b + 1].item())
+        seg = x[start:end].permute(1, 0, 2)
+        out[b, :, :end - start, :] = seg
+    return out, lengths
+
+
+def batched_attention_flex(q, k, v, q_attn_arg, k_attn_arg, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, scale, mask_opt,
+                           sparse_opt):
+    del cu_seqlens_k, sparse_opt
+    if compiled_flex_attention is None:
+        raise RuntimeError("FlexAttention is not available in this PyTorch build")
+    if mask_opt != 1:
+        raise NotImplementedError("FlexAttention path currently implements MASK_FN=1 only")
+
+    q_pad, q_lengths = _pack_to_padded(q, cu_seqlens_q, max_seqlen_q)
+    k_pad, _ = _pack_to_padded(k, cu_seqlens_q, max_seqlen_q)
+    v_pad, _ = _pack_to_padded(v, cu_seqlens_q, max_seqlen_q)
+    q_attn_pad, _ = _pack_to_padded(q_attn_arg[:, None, None], cu_seqlens_q, max_seqlen_q)
+    k_attn_pad, _ = _pack_to_padded(k_attn_arg[:, None, None], cu_seqlens_q, max_seqlen_q)
+    q_attn_pad = q_attn_pad[:, 0, :, 0].to(torch.int32)
+    k_attn_pad = k_attn_pad[:, 0, :, 0].to(torch.int32)
+
+    def score_mod(score, b, _h, q_idx, kv_idx):
+        q_len = q_lengths[b]
+        in_bound = (q_idx < q_len) & (kv_idx < q_len)
+        same_arg = (q_attn_pad[b, q_idx] == k_attn_pad[b, kv_idx]) | (k_attn_pad[b, kv_idx] == 0)
+        keep = in_bound & (((q_idx <= kv_idx) & same_arg) | (q_idx == kv_idx))
+        return torch.where(keep, score, torch.full_like(score, float("-inf")))
+
+    enable_gqa = q_pad.shape[1] != k_pad.shape[1]
+    o_pad = compiled_flex_attention(q_pad, k_pad, v_pad, score_mod=score_mod, scale=scale, enable_gqa=enable_gqa)
+
+    out = q.new_empty((q.shape[0], q.shape[1], v.shape[2]))
+    batch = cu_seqlens_q.numel() - 1
+    for b in range(batch):
+        start = int(cu_seqlens_q[b].item())
+        end = int(cu_seqlens_q[b + 1].item())
+        out[start:end] = o_pad[b, :, :end - start, :].permute(1, 0, 2)
+    return out
+
+
 def random_segments(
     total: int,
     num_segments: int,
@@ -395,6 +453,7 @@ def build_segment_bitmap(boundaries: torch.Tensor, total_tokens: int, device: st
 def get_benchmark(providers_filter: Optional[List[str]] = None):
     supported_providers = {
         "triton": "Triton",
+        "flex": "FlexAttention",
     }
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
     x_vals = [[
@@ -447,6 +506,14 @@ def get_benchmark(providers_filter: Optional[List[str]] = None):
         if provider == "triton":
             triton_fn = lambda: batched_attention(q, k, v, bitmap, bitmap, segments, segments, max_len, scale, 1, False)
             _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
+        elif provider == "flex":
+            triton_ref = batched_attention(q, k, v, bitmap, bitmap, segments, segments, max_len, scale, 1, False)
+            flex_ref = batched_attention_flex(q, k, v, bitmap, bitmap, segments, segments, max_len, scale, 1, False)
+            _assert_same_output(triton_ref, flex_ref)
+
+            flex_fn = lambda: batched_attention_flex(q, k, v, bitmap, bitmap, segments, segments, max_len, scale, 1,
+                                                     False)
+            _, min_ms, max_ms, mean_ms, cv = do_bench(flex_fn)
         else:
             raise NotImplementedError(f"Unsupported provider {provider}")
 
