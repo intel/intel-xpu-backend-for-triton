@@ -33,7 +33,7 @@ def test_auto_grf(device, monkeypatch, capfd):
     outs = [line for line in capfd.readouterr().out.splitlines() if line]
 
     # The output should contain the recompiling information for large GRF mode.
-    assert re.search(r"recompiling the kernel using large GRF mode", outs[0])
+    assert re.search(r"recompiling the kernel using large GRF mode|retrying with 256/512 large GRF modes", outs[0])
     # The spill size of returned kernel should be same kernel as the one compiled with large GRF mode.
     assert re.findall(r"\d+\.?\d*", outs[1])[0] == re.findall(r"\d+\.?\d*", outs[2])[0]
 
@@ -181,7 +181,8 @@ def test_auto_grf_on_build_failure(device, monkeypatch, capfd, grf_mode, expect_
     outs = capfd.readouterr().out
     if expect_retry and not generate_native_code:
         # load_binary path prints a retry message to stdout.
-        assert "retrying with large GRF mode" in outs or "recompiling the kernel using large GRF mode" in outs
+        assert ("retrying with large GRF mode" in outs or "recompiling the kernel using large GRF mode" in outs
+                or "retrying with 256/512 large GRF modes" in outs)
     elif expect_retry and generate_native_code:
         # make_zebin path retries silently via ocloc — no stdout message.
         # Success without exception is sufficient verification.
