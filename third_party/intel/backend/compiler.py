@@ -1,6 +1,6 @@
 from triton.backends.compiler import BaseBackend, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm, intel
-from triton.backends.intel.driver import compile_module_from_src
+from triton.backends.intel.driver import compile_module_from_src, is_lts
 from triton.backends.intel.track import track
 from triton.backends.intel.extension_utils import query_device_extensions
 from triton import knobs
@@ -24,8 +24,6 @@ try:  # XPUBackend allows metaclasses injection
     from .meta import XPUBackendMeta
 except ImportError:
     XPUBackendMeta = type(BaseBackend)
-
-_VERSION_PATTERN = re.compile(r'(\d+)\.(\d+)\.(\d+)(?:\+(\d+))?')
 
 
 @dataclass
@@ -166,14 +164,9 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     def get_target_name(self, options) -> str:
         return f"xpu:{self.device_arch}"
 
-    @classmethod
-    def is_lts(cls, ver) -> bool:
-        if not ver:
-            return True
-        m = _VERSION_PATTERN.match(ver)
-        if not m:
-            return True
-        return tuple(int(x) if x is not None else 0 for x in m.groups()) < (1, 6, 35096, 9)
+    @staticmethod
+    def is_lts(ver) -> bool:
+        return is_lts(ver)
 
     def parse_target(self, tgt_prop) -> dict:
         dev_prop = {}

@@ -1008,12 +1008,14 @@ run_vllm_triton_attn_tests() {
   # Triton attention kernels: merge_attn_states_kernel, _fwd_kernel_stage1,
   # _fwd_grouped_kernel_stage1, _fwd_kernel_stage2, kernel_unified_attention_2d,
   # kernel_unified_attention_3d, reduce_segments
-  TRITON_TEST_SUITE=vllm_triton_attn \
+  VLLM_USE_V2_MODEL_RUNNER=1 TRITON_TEST_SUITE=vllm_triton_attn \
     run_pytest_command -vvv \
+      tests/v1/attention/test_mla_backends.py \
       tests/kernels/attention/test_merge_attn_states.py \
       tests/kernels/attention/test_triton_decode_attention.py \
       tests/kernels/attention/test_triton_unified_attention.py \
-      tests/kernels/attention/test_triton_prefill_attention.py
+      tests/kernels/attention/test_triton_prefill_attention.py \
+      tests/kernels/attention/test_cascade_flash_attn.py
 }
 
 
@@ -1032,7 +1034,9 @@ run_vllm_gdn_attn_tests() {
   TRITON_TEST_SUITE=vllm_gdn_attn \
     run_pytest_command -vvv \
       tests/v1/attention/test_gdn_metadata_builder.py \
-      tests/kernels/test_fused_sigmoid_gating_delta_rule.py
+      tests/kernels/test_fused_sigmoid_gating_delta_rule.py \
+      tests/kernels/test_fused_recurrent_packed_decode.py \
+      tests/kernels/test_fla_layernorm_guard.py
 }
 
 
