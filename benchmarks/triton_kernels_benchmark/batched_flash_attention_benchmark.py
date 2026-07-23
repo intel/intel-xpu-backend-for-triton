@@ -15,32 +15,6 @@ def fwd_autotune_config() -> list[triton.Config]:
 
 
 @triton.jit
-def load_if(block_ptr, EVEN_M: tl.constexpr, EVEN_N: tl.constexpr):
-    if EVEN_M & EVEN_N:
-        return tl.load(block_ptr)
-    if EVEN_M:
-        return tl.load(block_ptr, boundary_check=(1, ), padding_option="zero")
-    if EVEN_N:
-        return tl.load(block_ptr, boundary_check=(0, ), padding_option="zero")
-
-    return tl.load(block_ptr, boundary_check=(0, 1), padding_option="zero")
-
-
-@triton.jit
-def store_if(block_ptr, value, EVEN_M: tl.constexpr, EVEN_N: tl.constexpr):
-    if EVEN_M & EVEN_N:
-        tl.store(block_ptr, value)
-        return
-    if EVEN_M:
-        tl.store(block_ptr, value, boundary_check=(1, ))
-        return
-    if EVEN_N:
-        tl.store(block_ptr, value, boundary_check=(0, ))
-    else:
-        tl.store(block_ptr, value, boundary_check=(0, 1))
-
-
-@triton.jit
 def mask_fn(q_attn_arg, k_attn_arg, q_offset, k_offset, TYPE: tl.constexpr):
     tril_causal = q_offset[:, None] >= k_offset[None, :]
     triu_causal = q_offset[:, None] <= k_offset[None, :]
@@ -148,8 +122,7 @@ def fa_fwd_kernel(
         strides=[q_head * V_DIM, 1],
         block_shape=[BLOCK_M, V_DIM],
     )
-    l_block_ptr = tl.make_block_ptr(base=l_ptr + q_start * q_head + start_qh, shape=(q_len, ), strides=(q_head, ),
-                                    offsets=(start_m * BLOCK_M, ), block_shape=(BLOCK_M, ), order=(0, ))
+    l_base = l_ptr + q_start * q_head + start_qh
     desc_q_attn_arg = tl.make_tensor_descriptor(
         q_attn_arg_ptr + q_start,
         shape=[q_len],
@@ -193,7 +166,8 @@ def fa_fwd_kernel(
     acc = acc / l[:, None]
     l = m * scale + tl.log(l)
     desc_o.store([start_m * BLOCK_M, 0], acc.to(dtype))
-    store_if(l_block_ptr, l, False, True)
+    l_offs = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    tl.store(l_base + l_offs.to(tl.int64) * q_head, l, mask=l_offs < q_len)
 
 
 def batched_attention(q, k, v, q_attn_arg, k_attn_arg, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, scale, mask_opt,
