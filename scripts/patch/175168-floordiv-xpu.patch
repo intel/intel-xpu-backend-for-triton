@@ -1,0 +1,19 @@
+diff --git a/torch/_inductor/codegen/triton.py b/torch/_inductor/codegen/triton.py
+index fe7b1c7d865..e09bbe79af1 100644
+--- a/torch/_inductor/codegen/triton.py
++++ b/torch/_inductor/codegen/triton.py
+@@ -2319,6 +2319,14 @@ class TritonOverrides(OpOverrides):
+         # See the comment in lowering.div_mode. a and b are integer type.
+         # Notice that // in triton behaves as truncdiv instead of floordiv.
+         #
++        # The XPU backend fixes the Triton AxisInfo bug for signed division
++        # and converts provably non-negative divsi to divui early, so use
++        # the simple floordiv lowering without the bitwise workaround.
++        if V.graph.get_current_device_or_throw().type == "xpu":
++            quot = f"{a} // {b}"
++            rem = f"{a} % {b}"
++            return f"tl.where(({a} < 0) != ({b} < 0), tl.where({rem} != 0, {quot} - 1, {quot}), {quot})"
++        #
+         # We avoid feeding negative values into Triton's // operator because
+         # Triton's AxisInfo analysis incorrectly deduplicates signed division
+         # results for contiguous inputs (triton-lang/triton#XXXX). Instead we
