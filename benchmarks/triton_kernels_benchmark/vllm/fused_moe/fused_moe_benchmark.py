@@ -24,7 +24,7 @@ import triton_kernels_benchmark as benchmark_suite
 
 from tests.kernels.moe.utils import make_quantized_test_activations, make_test_weight
 from vllm.model_executor.layers.fused_moe.fused_moe import invoke_fused_moe_triton_kernel, get_default_config
-from vllm_xpu_kernels.fused_moe_interface import cutlass_grouped_gemm_xe as sycl_tla_grouped_gemm
+from vllm_xpu_kernels.fused_moe_interface import cutlass_grouped_gemm_xe2 as sycl_tla_grouped_gemm
 
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
