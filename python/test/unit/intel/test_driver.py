@@ -12,7 +12,8 @@ from triton._internal_testing import is_xpu_cri
 from triton.backends.intel import extension_utils
 from triton.runtime.errors import IntelGPUError, OutOfResources
 
-LARGE_GRF_RETRY_MSG_RE = r"recompiling the kernel using large GRF mode|retrying with 256/512 large GRF modes"
+LARGE_GRF_RETRY_MSG_RE = (r"retrying with large GRF mode|recompiling the kernel using large GRF mode|"
+                          r"retrying with 256/512 large GRF modes")
 LARGE_GRF_RETRY_MSGS = ("retrying with large GRF mode", "recompiling the kernel using large GRF mode",
                         "retrying with 256/512 large GRF modes")
 
