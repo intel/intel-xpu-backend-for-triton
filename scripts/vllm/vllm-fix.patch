@@ -141,7 +141,7 @@ diff --git a/tests/conftest.py b/tests/conftest.py
      will initialize the workspace manager itself.
      """
      from vllm.v1.worker.workspace import (
-@@ -297,6 +297,9 @@ def workspace_init():
+@@ -297,5 +297,8 @@ def workspace_init():
      if torch.cuda.is_available():
          device = torch.device("cuda:0")
          init_workspace_manager(device)
@@ -150,4 +150,3 @@ diff --git a/tests/conftest.py b/tests/conftest.py
 +        init_workspace_manager(device)
      yield
      reset_workspace_manager()
-
