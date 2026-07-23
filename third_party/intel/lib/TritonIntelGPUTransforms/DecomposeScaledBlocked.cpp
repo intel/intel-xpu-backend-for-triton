@@ -116,15 +116,15 @@ private:
 
   TypedValue<RankedTensorType>
   broadcastScale(PatternRewriter &rewriter, DotScaledOp scaledDotOp,
-                 ModuleOp mod, TypedValue<RankedTensorType> scale,
-                 int dim) const {
+                 TypedValue<RankedTensorType> scale, int dim,
+                 Attribute dstEncoding) const {
     auto *ctx = rewriter.getContext();
     auto loc = scale.getLoc();
     auto scaleTy = scale.getType();
     auto rank = scaleTy.getRank();
-    // 2.1) Expand dims along the last dimension
+    auto mod = scaledDotOp->getParentOfType<ModuleOp>();
+    // 1) Expand dims along the last dimension
     {
-      // 2.1.1) Find default encoding for ExpandDims
       auto shape = to_vector(scaleTy.getShape());
       shape.insert(shape.end(), 1);
       auto nWarps = lookupNumWarps(scaledDotOp);
@@ -132,29 +132,30 @@ private:
       auto numCTAs = TritonGPUDialect::getNumCTAs(mod);
       auto blockedEnc = getDefaultBlockedEncoding(ctx, shape, nWarps,
                                                   threadsPerWarp, numCTAs);
-      // 2.1.2) Cast scale16 to SliceEncoding
       auto sliceEnc = SliceEncodingAttr::get(ctx, rank, blockedEnc);
       RankedTensorType sliceType = scaleTy.cloneWithEncoding(sliceEnc);
       scale = ConvertLayoutOp::create(rewriter, loc, sliceType, scale);
     }
     auto expandScale = ExpandDimsOp::create(rewriter, loc, scale, rank);
     int32_t scaleFactor = scaledDotOp.deduceScaleFactor();
-    // 2.2) Broadcast the dimension to the microscaling factor.
+    // 2) Broadcast the dimension to the microscaling factor.
     auto scaleShape = to_vector(scaleTy.getShape());
     scaleShape.push_back(scaleFactor);
     auto broadcastScale = BroadcastOp::create(
         rewriter, loc, expandScale.getType().clone(scaleShape), expandScale);
-    // 2.3) Transpose the dimension to the scaled dimension
+    // 3) Transpose the dimension to the scaled dimension
     auto transposeOrder = llvm::to_vector(llvm::seq<int32_t>(rank));
     transposeOrder.insert(transposeOrder.begin() + dim + 1, rank);
     auto transposedScale =
         TransOp::create(rewriter, loc, broadcastScale, transposeOrder);
-    // 2.4) Reshape to the shape of v
+    // 4) Reshape to the result shape
     scaleShape.pop_back();
     scaleShape[dim] *= scaleFactor;
     auto reshapeScale =
         ReshapeOp::create(rewriter, loc, scaleShape, transposedScale);
-    return reshapeScale;
+    auto resultType = RankedTensorType::get(
+        scaleShape, scaleTy.getElementType(), dstEncoding);
+    return ConvertLayoutOp::create(rewriter, loc, resultType, reshapeScale);
   }
 
   TypedValue<RankedTensorType>
@@ -163,7 +164,6 @@ private:
                           FloatType computeType, RankedTensorType dstType,
                           int opIdx) const {
     auto loc = scale.getLoc();
-    auto mod = scaledDotOp->getParentOfType<ModuleOp>();
     auto v = opIdx == 0 ? scaledDotOp.getA() : scaledDotOp.getB();
     auto rank = v.getType().getRank();
     auto kDim = opIdx == 0 ? rank - 1 : rank - 2;
@@ -178,9 +178,8 @@ private:
     auto scale16 = scaleTo16(rewriter, scale, computeType);
 
     // 2) Broadcast scale to the same shape as v and convert the layout
-    auto reshapeScale =
-        broadcastScale(rewriter, scaledDotOp, mod, scale16, kDim);
-    return ConvertLayoutOp::create(rewriter, loc, dstType, reshapeScale);
+    return broadcastScale(rewriter, scaledDotOp, scale16, kDim,
+                          dstType.getEncoding());
   }
 
   TypedValue<RankedTensorType> maskNan(PatternRewriter &rewriter,
@@ -194,7 +193,6 @@ private:
 
     // Implement tl.where(scale == 0xFF, float("nan"), mxfp)
     auto loc = scale.getLoc();
-    auto mod = scaledDotOp->getParentOfType<ModuleOp>();
 
     // Scale is NaN
     auto scaleTy = scale.getType();
@@ -216,11 +214,8 @@ private:
                                 constFF)
               .getResult());
     }
-    auto cond = broadcastScale(rewriter, scaledDotOp, mod, scaleIsNan, dim);
-    // Make scale is NaN compatible with mxfp
-    auto condTy = cond.getType();
-    condTy = condTy.cloneWithEncoding(mxfp.getType().getEncoding());
-    cond = ConvertLayoutOp::create(rewriter, loc, condTy, cond);
+    auto cond = broadcastScale(rewriter, scaledDotOp, scaleIsNan, dim,
+                               mxfp.getType().getEncoding());
 
     // Create NaN
     auto mxfpTy = mxfp.getType();
