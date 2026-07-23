@@ -27,7 +27,10 @@ jobs:
 
   build-wheel:
     needs: check-paths
-    if: needs.check-paths.outputs.benchmarks == 'true' || github.event.label.name == 'run-benchmarks'
+    if: >-
+      github.event_name == 'schedule' ||
+      needs.check-paths.outputs.benchmarks == 'true' ||
+      github.event.label.name == 'run-benchmarks'
     uses: ./.github/workflows/build-benchmarks-wheel.yml
     with:
       python-version: "3.12"
@@ -36,7 +39,9 @@ jobs:
     needs: [check-paths, build-wheel]
     if: >-
       always() && !cancelled() &&
-      (needs.check-paths.outputs.benchmarks == 'true' || github.event.label.name == 'run-benchmarks')
+      (github.event_name == 'schedule' ||
+       needs.check-paths.outputs.benchmarks == 'true' ||
+       github.event.label.name == 'run-benchmarks')
     uses: ./.github/workflows/vllm-benchmarks.yml
     with:
       runner_label: b580
