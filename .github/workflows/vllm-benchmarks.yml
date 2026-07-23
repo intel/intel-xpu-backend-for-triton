@@ -50,9 +50,6 @@ on:
         type: boolean
         default: false
 
-  schedule:
-    - cron: "0 8 * * *"
-
 permissions: read-all
 
 # VLLM installation from upstream uses vllm-xpu-kernels wheel which is built just for python==3.12
