@@ -372,8 +372,14 @@ CUresult ensureContext(int device) {
   CUresult res = cuCtxGetCurrent(&ctx);
   if (res != CUDA_SUCCESS)
     return res;
-  if (ctx)
-    return res;
+  if (ctx) {
+    CUdevice currentDevice = 0;
+    res = cuCtxGetDevice(&currentDevice);
+    if (res != CUDA_SUCCESS)
+      return res;
+    if (currentDevice == device)
+      return CUDA_SUCCESS;
+  }
 
   res = cuDevicePrimaryCtxRetain(&ctx, device);
   if (res != CUDA_SUCCESS)
