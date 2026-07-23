@@ -916,9 +916,10 @@ void init_gluon_ir(py::module_ &m) {
              self.create<ttng::TMEMCopyOp>(src, dst);
            })
       .def("create_tmem_subslice",
-           [](GluonOpBuilder &self, Type resultTy, Value memDesc,
-              int N) -> Value {
-             return self.create<ttng::TMEMSubSliceOp>(resultTy, memDesc, N);
+           [](GluonOpBuilder &self, Type resultTy, Value memDesc, int offset,
+              int dim) -> Value {
+             return self.create<ttng::TMEMSubSliceOp>(resultTy, memDesc, offset,
+                                                      dim);
            })
       .def("create_mbarrier_init",
            [](GluonOpBuilder &self, Value memDesc, int count) {
@@ -1152,6 +1153,19 @@ void init_gluon_ir(py::module_ &m) {
           py::arg("descPtr"), py::arg("result"), py::arg("barrier"),
           py::arg("cacheModifier"),
           (py::arg("warpUsedHint").none() = py::none()))
+      .def(
+          "create_async_tdm_fused_copy_global_to_local",
+          [](GluonOpBuilder &self, std::vector<Value> &descs,
+             std::vector<Value> &dests, std::vector<int32_t> &warpUsedHints,
+             tt::CacheModifier cacheModifier) {
+            auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
+            auto hintAttr =
+                self.getBuilder().getDenseI32ArrayAttr(warpUsedHints);
+            self.create<ttag::AsyncTDMFusedCopyGlobalToLocalOp>(
+                tokType, descs, dests, hintAttr, cacheModifier);
+          },
+          py::arg("descs"), py::arg("dests"), py::arg("warpUsedHints"),
+          py::arg("cacheModifier") = tt::CacheModifier::NONE)
       .def("create_async_tdm_copy_local_to_global",
            [](GluonOpBuilder &self, Value descPtr, Value src, Value barrier,
               tt::CacheModifier cacheModifier) {
@@ -1388,7 +1402,12 @@ void init_gluon_ir(py::module_ &m) {
           auto ll = ttg::chooseScaledWmmaScaleLayout(
               &ctx, opIdx, shape, wmmaMDim, wmmaNDim, isTransposed, scaleFactor,
               ctaLayout, cgaLayout);
-          auto attr = ttg::LinearEncodingAttr::get(&ctx, ll);
+          // A swizzled (partition-aware) WMMA produces a non-permutation scale
+          // layout, which only GenericLinearEncodingAttr can represent.
+          Attribute attr =
+              ttg::isPermutationMatrixLayout(ll)
+                  ? Attribute(ttg::LinearEncodingAttr::get(&ctx, ll))
+                  : Attribute(ttg::GenericLinearEncodingAttr::get(&ctx, ll));
           return layoutToGluon(attr);
         });
 

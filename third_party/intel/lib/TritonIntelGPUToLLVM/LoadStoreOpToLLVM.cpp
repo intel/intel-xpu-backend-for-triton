@@ -480,16 +480,6 @@ struct LoadStoreConversionBase {
   }
 
   // Convert Triton cache modifier to Intel GEN load cache control enum.
-  //
-  // Explicit cache modifiers (cg/cv/ca) always win. When no cache modifier is
-  // set, fall back to the frontend-provided eviction policy hint (e.g.
-  // inductor's `eviction_policy='evict_last'`) and route it to the closest
-  // LSC cache mode:
-  //   EVICT_FIRST -> L1IAR_L3C  (invalidate-after-read: data is used once;
-  //                              free the L1 line immediately after delivery)
-  //   EVICT_LAST  -> L1C_L3C    (cache at all levels: keep the line warm for
-  //                              anticipated reuse)
-  //   NORMAL      -> DEFAULT    (let the hardware decide)
   template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
                                  OpType, LoadOp, DescriptorLoadOp>::value>>
   TritonGEN::LoadCacheControl tritonToIntelCacheModifier(OpType &op) const {
@@ -503,14 +493,6 @@ struct LoadStoreConversionBase {
      **/
     switch (cacheModifier) {
     case CacheModifier::NONE:
-      switch (op.getEvict()) {
-      case EvictionPolicy::EVICT_FIRST:
-        return TritonGEN::LoadCacheControl::L1IAR_L3C;
-      case EvictionPolicy::EVICT_LAST:
-        return TritonGEN::LoadCacheControl::L1C_L3C;
-      case EvictionPolicy::NORMAL:
-        break;
-      }
       return TritonGEN::LoadCacheControl::DEFAULT;
     case CacheModifier::CG:
       return TritonGEN::LoadCacheControl::L1UC_L3C;
@@ -551,9 +533,8 @@ struct LoadStoreConversionBase {
     }
   }
 
-  template <typename OpType,
-            typename = std::enable_if_t<llvm::is_one_of<
-                OpType, LoadOp, StoreOp, DescriptorLoadOp>::value>>
+  template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
+                                 OpType, LoadOp, StoreOp>::value>>
   bool getNonTemporalFlag(OpType op) const {
     switch (op.getCache()) {
     case triton::CacheModifier::CG:
@@ -561,16 +542,6 @@ struct LoadStoreConversionBase {
     case triton::CacheModifier::CV:
       return true;
     case triton::CacheModifier::CA:
-      return false;
-    case triton::CacheModifier::NONE:
-      // No explicit cache modifier: derive from eviction policy hint.
-      // EVICT_FIRST implies single-use; map to nontemporal so IGC bypasses L1.
-      // EVICT_LAST implies reuse; keep the default (temporal) behavior.
-      // Only load ops carry eviction policy; stores always return false here.
-      if constexpr (std::is_same_v<OpType, LoadOp> ||
-                    std::is_same_v<OpType, DescriptorLoadOp>)
-        return op.getEvict() == triton::EvictionPolicy::EVICT_FIRST;
-      return false;
     default:
       return false;
     }
@@ -2405,7 +2376,7 @@ struct DescriptorLoadOpConversion
       auto createLoadWithAttrs = [&]() {
         return SmallVector<Value>{b.load(retTy, addrElem, alignment,
                                          /*isVolatile=*/false,
-                                         getNonTemporalFlag(op))};
+                                         /*isNonTemporal=*/false)};
       };
 
       Value ret;
@@ -2798,7 +2769,7 @@ struct DescriptorStoreOpToBlockIOConversion
 
     // --- Get the LLVM values for store values ---
     SmallVector<Value> valElems =
-        unpackLLElements(loc, adaptor.getSrc(), rewriter);
+        unpackTensorElements(loc, adaptor.getSrc(), rewriter, tensorType);
     assert(valElems.size() == numElems &&
            "the number of store values does not match the number of elements");
 
@@ -3015,7 +2986,8 @@ struct StoreOpToBlockIOConversion
     unsigned numElems = getTotalElemsPerThread(tensorType);
 
     // Get the LLVM values for pointers
-    SmallVector<Value> ptrElems = unpackLLElements(loc, llPtr, rewriter);
+    SmallVector<Value> ptrElems =
+        unpackTensorElements(loc, llPtr, rewriter, op.getPtr().getType());
     assert(ptrElems.size() == numElems &&
            "the number of pointer values is not matched with the number of "
            "elements");
@@ -3024,7 +2996,8 @@ struct StoreOpToBlockIOConversion
     Value llMask = adaptor.getMask();
     // Get the LLVM values for mask
     if (llMask) {
-      maskElems = unpackLLElements(loc, llMask, rewriter);
+      maskElems =
+          unpackTensorElements(loc, llMask, rewriter, op.getMask().getType());
       assert(maskElems.size() == numElems &&
              "the number of mask values is not matched with the number of "
              "elements");
@@ -3072,8 +3045,8 @@ struct StoreOpToBlockIOConversion
     Value offsetBaseY = b.i32_val(0);
 
     // Get the LLVM values for store values
-    SmallVector<Value> valElems =
-        unpackLLElements(loc, adaptor.getValue(), rewriter);
+    SmallVector<Value> valElems = unpackTensorElements(
+        loc, adaptor.getValue(), rewriter, op.getValue().getType());
     assert(valElems.size() == numElems &&
            "the number of store values does not match the number of elements");
 
@@ -4238,14 +4211,15 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
         tensorType, eltTy, sizeInfo, *llEncoding, threadsPerWarp, ctx);
 
     // Unpack pointer elements.
-    SmallVector<Value> ptrElems =
-        unpackLLElements(loc, adaptor.getPtr(), rewriter);
+    SmallVector<Value> ptrElems = unpackTensorElements(
+        loc, adaptor.getPtr(), rewriter, op.getPtr().getType());
 
     // Unpack mask/other elements.
     SmallVector<Value> maskElems;
     Value llMask = adaptor.getMask();
     if (llMask)
-      maskElems = unpackLLElements(loc, llMask, rewriter);
+      maskElems =
+          unpackTensorElements(loc, llMask, rewriter, op.getMask().getType());
 
     SmallVector<Value> otherElems;
     Value llOther = adaptor.getOther();
@@ -4269,7 +4243,8 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
               handleSplatValue(constAttr.getSplatValue<APInt>());
             });
       } else {
-        otherElems = unpackLLElements(loc, llOther, rewriter);
+        otherElems = unpackTensorElements(loc, llOther, rewriter,
+                                          op.getOther().getType());
       }
     }
 

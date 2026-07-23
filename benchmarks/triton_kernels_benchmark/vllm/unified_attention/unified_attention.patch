@@ -1,3 +1,31 @@
+diff --git a/tests/kernels/attention/test_triton_unified_attention.py b/tests/kernels/attention/test_triton_unified_attention.py
+index d3435ea66..359fd108a 100644
+--- a/tests/kernels/attention/test_triton_unified_attention.py
++++ b/tests/kernels/attention/test_triton_unified_attention.py
+@@ -203,6 +203,7 @@ def test_triton_unified_attn(
+         softmax_segm_max=softmax_segm_max,
+         softmax_segm_expsum=softmax_segm_expsum,
+         kv_quant_mode=kv_quant_mode,
++        use_td=True,
+     )
+ 
+     ref_output = ref_paged_attn(
+@@ -323,6 +324,7 @@ def test_triton_unified_attn_bf16_query_fp8_kv(
+         softmax_segm_max=softmax_segm_max,
+         softmax_segm_expsum=softmax_segm_expsum,
+         kv_quant_mode=KVQuantMode.FP8_PER_TENSOR,
++        use_td=True,
+     )
+ 
+     ref_output = ref_paged_attn(
+@@ -442,6 +444,7 @@ def test_triton_unified_attn_fp16_input_fp8_output(
+         softmax_segm_output=softmax_segm_output,
+         softmax_segm_max=softmax_segm_max,
+         softmax_segm_expsum=softmax_segm_expsum,
++        use_td=True,
+     )
+ 
+     ref_output = ref_paged_attn(
 diff --git a/vllm/v1/attention/ops/triton_attention_helpers.py b/vllm/v1/attention/ops/triton_attention_helpers.py
 index b2667935c..678d938b6 100644
 --- a/vllm/v1/attention/ops/triton_attention_helpers.py

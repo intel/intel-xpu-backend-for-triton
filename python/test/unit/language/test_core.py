@@ -28,6 +28,7 @@ from triton._internal_testing import (
     is_cuda,
     is_interpreter,
     is_hopper,
+    is_sm12x,
     is_hip,
     is_hip_cdna,
     is_hip_cdna2,
@@ -1882,6 +1883,7 @@ def test_atomic_cas(sem, num_ctas, dtype_str, device):
 
 @pytest.mark.xfail(not is_cuda() or torch.cuda.get_device_capability()[0] < 9,
                    reason="num_ctas > 1 requires NVIDIA SM90+ (Hopper)", run=False)
+@pytest.mark.skipif(is_sm12x(), reason="scalar multi-CTA atomic_cas is not supported on sm120 (consumer Blackwell)")
 def test_scalar_atomic_cas_multicta_result(device):
 
     @triton.jit
@@ -5343,39 +5345,6 @@ def test_tma_store_block_shape_err(device):
     assert "Descriptor block shape must have at least 16 bytes" in str(e.value.__cause__)
 
 
-def test_trans_reshape(device, with_allocator):
-
-    @triton.jit
-    def kernel(in_base_ptr, out_base_ptr, IN_SHAPE0: tl.constexpr, IN_SHAPE1: tl.constexpr):
-
-        in_block_ptr = tl.make_block_ptr(
-            base=in_base_ptr,
-            shape=(IN_SHAPE0, IN_SHAPE1),
-            strides=(IN_SHAPE1, 1),
-            offsets=(0, 0),
-            block_shape=(IN_SHAPE0, IN_SHAPE1),
-            order=(1, 0),
-        )
-        x = tl.load(in_block_ptr)
-        x = tl.reshape(x, (32, 4, 4, 2))
-        x = tl.permute(x, (1, 2, 3, 0))
-        x = tl.reshape(x, (IN_SHAPE0 * IN_SHAPE1, ))
-        tl.store(out_base_ptr + tl.arange(0, IN_SHAPE0 * IN_SHAPE1), x)
-
-    shape = (32, 32)
-    input = torch.arange(math.prod(shape), dtype=torch.int32, device=device).reshape(shape)
-    expected = torch.permute(input, (1, 0))
-    # Don't do zeros_like -- that copies the layout, which we don't want.
-    actual = torch.zeros(expected.shape, dtype=torch.int32, device=device)
-
-    k = kernel[(1, )](input, actual, shape[0], shape[1])
-    if not is_xpu():
-        assert k.asm['ttgir'].count(
-            'ttg.convert_layout') == 1, "Expected exactly one convert_layout op in the TTGIR after optimization"
-
-    np.testing.assert_equal(to_numpy(expected), to_numpy(actual))
-
-
 # -------------
 # test call
 # -------------
@@ -7053,6 +7022,7 @@ def gather_test_kernel_1d(src_ptr, idx_ptr, out_ptr, axis: tl.constexpr, src_dim
 @pytest.mark.parametrize("src_shape, indices_shape, axis", [
     ([32], [64], 0),
     ([4, 4], [8, 4], 0),
+    ([4, 4], [4096, 4], 0),
     ([128, 64], [256, 64], 0),
     ([128, 64], [128, 128], 1),
 ])
@@ -7379,13 +7349,16 @@ def test_dot_multidim(rank, trans_a, trans_b, device):
 
 @pytest.mark.parametrize("dtype_str", ["float32", "float64"])
 def test_libdevice_rint(dtype_str, device):
+    if device in ['xpu']:
+        if dtype_str in ["float64"] and not xpu_has_fp64():
+            pytest.xfail("float64 not supported on current xpu hardware")
     iinfo32 = np.iinfo(np.int32)
     iinfo64 = np.iinfo(np.int64)
     size = 1000
     x0_np = np.random.uniform(iinfo32.min, iinfo32.max + 1, size)
     x1_np = np.random.uniform(iinfo64.min, iinfo64.max + 1, size)
     x2_np = np.array([-2.5, -1.5, -0.5, -0., 0., 0.5, 1.5, 2.5, float("inf"), -float("inf"), float("nan")])
-    x_np = np.concatenate((x0_np, x1_np, x2_np))
+    x_np = np.concatenate((x0_np, x1_np, x2_np)).astype(dtype_str)
     x_tri = to_triton(x_np, device=device, dst_type=dtype_str)
 
     @triton.jit

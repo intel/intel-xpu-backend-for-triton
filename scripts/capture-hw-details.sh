@@ -61,12 +61,30 @@ function agama_version {
         powershell -Command '(Get-WmiObject Win32_VideoController | where {$_.VideoProcessor -like "*Intel*" }).DriverVersion'
         return
     fi
+    local pkg version ocloc_version ocloc_upstream ocloc_build
     if dpkg-query --show libigc2 &> /dev/null; then
-        dpkg-query --show --showformat='${version}\n' libigc2 | sed 's/.*-\(.*\)~.*/\1/'
+        pkg=libigc2
     elif dpkg-query --show libigc1 &> /dev/null; then
-        dpkg-query --show --showformat='${version}\n' libigc1 | sed 's/.*-\(.*\)~.*/\1/'
+        pkg=libigc1
     else
         echo "Not Installed"
+        return
+    fi
+    version="$(dpkg-query --show --showformat='${version}\n' "$pkg")"
+
+    if dpkg-query --show intel-ocloc &> /dev/null; then
+        ocloc_version="$(dpkg-query --show --showformat='${version}\n' intel-ocloc)"
+        ocloc_upstream="${ocloc_version%%-*}"
+        ocloc_build="$(echo "$ocloc_upstream" | cut -d. -f3)"
+    fi
+
+    if [[ ${ocloc_build:-} =~ ^[0-9]+$ ]] && ((ocloc_build > 38308)); then
+        # New scheme: the ocloc "<build>.<revision>", e.g. "38646.6".
+        echo "$ocloc_upstream" | cut -d. -f3-
+    else
+        # Old scheme: build number embedded in the libigc Debian revision,
+        # e.g. "1.0.17537.24-1032~22.04" -> "1032".
+        echo "$version" | sed 's/.*-\(.*\)~.*/\1/'
     fi
 }
 
