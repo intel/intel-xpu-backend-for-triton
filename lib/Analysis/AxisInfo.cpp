@@ -445,22 +445,15 @@ private:
     // Since gcd(d_lhs, d_rhs) maybe > len(lhs),
     // we need to use another gcd to get the actual constancy.
     //
-    // NOTE: This only holds when the division rounds consistently in one
-    // direction. For signed division (DivSIOp), truncation toward zero means
-    // the constancy pattern breaks at the zero crossing:
-    //   sdiv([-2, -1, 0, 1], 2) = [-1, 0, 0, 0]  (not pairwise constant)
-    // For signed division, we can still apply this optimization when the
-    // contiguous window is guaranteed not to cross zero. This is the case
-    // when divisibility >= contiguity: the window starts at k*div and has
-    // length cont <= div, so it stays within [k*div, (k+1)*div - 1] which
-    // never spans zero.
-    if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
-        AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
-      if constexpr (!std::is_same_v<OpTy, arith::DivSIOp>) {
-        constancy = std::max(constancy, gcd(lhs.getContiguity(dim),
-                                            lhs.getDivisibility(dim),
-                                            rhs.getDivisibility(dim)));
-      } else if (lhs.getDivisibility(dim) >= lhs.getContiguity(dim)) {
+    // NOTE: This optimization is only valid for unsigned division (DivUIOp).
+    // For signed division (DivSIOp), truncation toward zero breaks the
+    // constancy pattern for negative inputs. Without range analysis we
+    // cannot prove inputs are non-negative, so we conservatively skip.
+    // Use SimplifySignedArithmetic to convert provably non-negative divsi
+    // to divui before this analysis runs.
+    if constexpr (!std::is_same_v<OpTy, arith::DivSIOp>) {
+      if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
+          AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
         constancy = std::max(constancy, gcd(lhs.getContiguity(dim),
                                             lhs.getDivisibility(dim),
                                             rhs.getDivisibility(dim)));
@@ -523,18 +516,16 @@ private:
     // Since gcd(d_lhs, d_rhs) maybe > len(lhs),
     // we need to use another gcd to get the actual contiguity.
     //
-    // NOTE: For signed remainder (RemSIOp), the contiguity pattern breaks
-    // at the zero crossing because srem produces negative results for
-    // negative dividends: srem([-2, -1, 0, 1], 2) = [0, -1, 0, 1]
-    // For signed remainder, we can still apply this optimization when the
-    // contiguous window is guaranteed not to cross zero (divisibility >=
-    // contiguity ensures the window stays within one sign region).
-    if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
-        AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
-      if constexpr (!std::is_same_v<OpTy, arith::RemSIOp>) {
-        contiguity = gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
-                         rhs.getDivisibility(dim));
-      } else if (lhs.getDivisibility(dim) >= lhs.getContiguity(dim)) {
+    // NOTE: This optimization is only valid for unsigned remainder (RemUIOp).
+    // For signed remainder (RemSIOp), the contiguity pattern breaks for
+    // negative inputs because srem produces negative results for negative
+    // dividends. Without range analysis we cannot prove inputs are
+    // non-negative, so we conservatively skip. Use
+    // SimplifySignedArithmetic to convert provably non-negative remsi to
+    // remui before this analysis runs.
+    if constexpr (!std::is_same_v<OpTy, arith::RemSIOp>) {
+      if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
+          AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
         contiguity = gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
                          rhs.getDivisibility(dim));
       }
@@ -544,6 +535,14 @@ private:
 
   int64_t getDivisibility(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                           int dim) override {
+    // NOTE: The divisibility claim gcd(d_lhs, d_rhs) only holds for the
+    // first element of each contiguity group. For RemSIOp we disable the
+    // contiguity optimization (see getContiguity), so contiguity is 1 and
+    // divisibility must hold for ALL elements — which it doesn't in
+    // general. Conservatively return 1 for RemSIOp.
+    if constexpr (std::is_same_v<OpTy, arith::RemSIOp>) {
+      return 1;
+    }
     if (rhs.getConstancy(dim) > 1) {
       // lhs: d_lhs * k = gcd(d_lhs, d_rhs) * k' * k = gcd(d_lhs, d_rhs) * k''
       // rhs: d_rhs * p = gcd(d_lhs, d_rhs) * p' * p = gcd(d_lhs, d_rhs) * p''
