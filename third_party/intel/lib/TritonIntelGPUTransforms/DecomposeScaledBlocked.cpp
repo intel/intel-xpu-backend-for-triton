@@ -118,62 +118,44 @@ private:
   broadcastScale(PatternRewriter &rewriter, DotScaledOp scaledDotOp,
                  TypedValue<RankedTensorType> scale, int dim,
                  Attribute dstEncoding) const {
+    auto *ctx = rewriter.getContext();
     auto loc = scale.getLoc();
     auto scaleTy = scale.getType();
+    auto rank = scaleTy.getRank();
+    auto mod = scaledDotOp->getParentOfType<ModuleOp>();
+    // 1) Expand dims along the last dimension
+    {
+      auto shape = to_vector(scaleTy.getShape());
+      shape.insert(shape.end(), 1);
+      auto nWarps = lookupNumWarps(scaledDotOp);
+      auto threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(mod);
+      auto numCTAs = TritonGPUDialect::getNumCTAs(mod);
+      auto blockedEnc = getDefaultBlockedEncoding(ctx, shape, nWarps,
+                                                  threadsPerWarp, numCTAs);
+      auto sliceEnc = SliceEncodingAttr::get(ctx, rank, blockedEnc);
+      RankedTensorType sliceType = scaleTy.cloneWithEncoding(sliceEnc);
+      scale = ConvertLayoutOp::create(rewriter, loc, sliceType, scale);
+    }
+    auto expandScale = ExpandDimsOp::create(rewriter, loc, scale, rank);
     int32_t scaleFactor = scaledDotOp.deduceScaleFactor();
-
-    // We want to broadcast the scales along dim. To do this:
-    //   1. Introduce a size 1 dimension right after dim
-    //   2. Broadcast the new dim to the scale factor
-    //   3. Reshape it to get the result shape.
-
-    // Compute the shape after each step.
-    auto expandedShape = to_vector(scaleTy.getShape());
-    expandedShape.insert(expandedShape.begin() + dim + 1, 1);
-    auto broadcastShape = expandedShape;
-    broadcastShape[dim + 1] = scaleFactor;
-    auto resultShape = to_vector(scaleTy.getShape());
-    resultShape[dim] *= scaleFactor;
-
-    // It is more efficient to perform a layout conversion before broadcasting,
-    // since there are fewer elements. Infer the source encoding that will
-    // produce dstEncoding after the broadcast and reshape.
-    auto interface =
-        cast<DialectInferLayoutInterface>(&dstEncoding.getDialect());
-    Attribute broadcastEncoding;
-    auto result = interface->inferReshapeOpEncoding(
-        resultShape, dstEncoding, broadcastShape, broadcastEncoding,
-        /*allowReorder=*/false, loc);
-    assert(succeeded(result));
-    Attribute srcEncoding;
-    result = interface->inferReshapeOpEncoding(expandedShape, broadcastEncoding,
-                                               scaleTy.getShape(), srcEncoding,
-                                               /*allowReorder=*/false, loc);
-    assert(succeeded(result));
-
-    auto srcType = scaleTy.cloneWithEncoding(srcEncoding);
-
-    // Convert the scales to the desired type.
-    scale = ConvertLayoutOp::create(rewriter, loc, srcType, scale);
-
-    // Introduce the new dimension.
-    auto expandType = RankedTensorType::get(
-        expandedShape, scaleTy.getElementType(), broadcastEncoding);
-    // We know this layout avoids having any layout conversions after we expand
-    // the scales, so mark the layout as efficient. Otherwise, forward layout
-    // propagation may try to sink the convert layout.
-    auto expandScale = ReshapeOp::create(
-        rewriter, loc, expandType, scale,
-        /*allow_reorder=*/nullptr, /*efficient_layout=*/rewriter.getUnitAttr());
-    // Broadcast the dimension to the microscaling factor.
-    auto broadcastType = RankedTensorType::get(
-        broadcastShape, scaleTy.getElementType(), broadcastEncoding);
-    auto broadcastScale =
-        BroadcastOp::create(rewriter, loc, broadcastType, expandScale);
+    // 2) Broadcast the dimension to the microscaling factor.
+    auto scaleShape = to_vector(scaleTy.getShape());
+    scaleShape.push_back(scaleFactor);
+    auto broadcastScale = BroadcastOp::create(
+        rewriter, loc, expandScale.getType().clone(scaleShape), expandScale);
+    // 3) Transpose the dimension to the scaled dimension
+    auto transposeOrder = llvm::to_vector(llvm::seq<int32_t>(rank));
+    transposeOrder.insert(transposeOrder.begin() + dim + 1, rank);
+    auto transposedScale =
+        TransOp::create(rewriter, loc, broadcastScale, transposeOrder);
+    // 4) Reshape to the result shape
+    scaleShape.pop_back();
+    scaleShape[dim] *= scaleFactor;
+    auto reshapeScale =
+        ReshapeOp::create(rewriter, loc, scaleShape, transposedScale);
     auto resultType = RankedTensorType::get(
-        resultShape, scaleTy.getElementType(), dstEncoding);
-    // Reshape to fold in the broadcasted dimension and get the final result.
-    return ReshapeOp::create(rewriter, loc, resultType, broadcastScale);
+        scaleShape, scaleTy.getElementType(), dstEncoding);
+    return ConvertLayoutOp::create(rewriter, loc, resultType, reshapeScale);
   }
 
   TypedValue<RankedTensorType>
