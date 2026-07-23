@@ -400,18 +400,33 @@ compileLevelZeroObjects(uint8_t *binary_ptr, const size_t binary_size,
                         const std::string &kernel_name, L0_DEVICE l0_device,
                         L0_CONTEXT l0_context, const std::string &build_flags,
                         const bool is_spv) {
-  auto l0_module = checkZeCodeAndSetPyErr(
-      create_module(l0_context, l0_device, binary_ptr, binary_size,
-                    build_flags.data(), is_spv),
-      __FILE__, __LINE__);
+  ze_module_handle_t l0_module = nullptr;
+  ze_kernel_handle_t l0_kernel = nullptr;
+  auto cleanupPartialObjects = [&]() {
+    if (l0_kernel) {
+      zeKernelDestroy(l0_kernel);
+      l0_kernel = nullptr;
+    }
+    if (l0_module) {
+      zeModuleDestroy(l0_module);
+      l0_module = nullptr;
+    }
+  };
+
+  l0_module = checkZeCodeAndSetPyErr(create_module(l0_context, l0_device,
+                                                   binary_ptr, binary_size,
+                                                   build_flags.data(), is_spv),
+                                     __FILE__, __LINE__);
   if (PyErr_Occurred()) {
+    cleanupPartialObjects();
     return std::make_tuple(nullptr, nullptr, -1);
   }
 
   // Retrieve the kernel properties (e.g. register spills).
-  auto l0_kernel = checkZeCodeAndSetPyErr(
-      create_function(l0_module, kernel_name), __FILE__, __LINE__);
+  l0_kernel = checkZeCodeAndSetPyErr(create_function(l0_module, kernel_name),
+                                     __FILE__, __LINE__);
   if (PyErr_Occurred()) {
+    cleanupPartialObjects();
     return std::make_tuple(nullptr, nullptr, -1);
   }
 
@@ -423,6 +438,7 @@ compileLevelZeroObjects(uint8_t *binary_ptr, const size_t binary_size,
       std::make_tuple(NULL, zeKernelGetProperties(l0_kernel, &props)), __FILE__,
       __LINE__);
   if (PyErr_Occurred()) {
+    cleanupPartialObjects();
     return std::make_tuple(nullptr, nullptr, -1);
   }
 
