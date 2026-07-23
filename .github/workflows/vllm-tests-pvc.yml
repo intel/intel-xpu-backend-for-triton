@@ -3,6 +3,10 @@ name: vLLM tests, PVC
 permissions: read-all
 
 on:
+  pull_request:
+    branches:
+      - main
+    types: [labeled]
   schedule:
     # Thursday/Sunday 2:05AM PST (UTC-8) or 3:05AM PDT (UTC-7)
     - cron: "5 10 * * THU"
@@ -15,6 +19,9 @@ concurrency:
 
 jobs:
   tests:
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event.label.name == 'run-vllm-tests'
     uses: ./.github/workflows/vllm-tests-reusable.yml
     with:
       runner_label: max1550
