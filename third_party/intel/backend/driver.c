@@ -38,6 +38,7 @@
 
 static std::vector<std::pair<sycl::device, ze_device_handle_t>>
     g_sycl_l0_device_list;
+static std::vector<std::string> g_sycl_device_arch_list;
 
 extern "C" EXPORT_FUNC const char *parse_device_arch(uint64_t dev_arch) {
   sycl::ext::oneapi::experimental::architecture syclArch =
@@ -559,83 +560,98 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   auto [l0_module, l0_kernel, n_spills] =
       compileLevelZeroObjects(binary_ptr, binary_size, kernel_name, l0_device,
                               l0_context, build_flags(), is_spv);
-  bool buildFailed = PyErr_Occurred();
-  if (buildFailed && !is_spv) {
+  bool firstBuildFailed = PyErr_Occurred();
+  if (firstBuildFailed && !is_spv) {
     return NULL;
   }
 
   const bool debugEnabled = getBoolEnv("TRITON_DEBUG");
   constexpr int32_t max_reg_spill = 1000;
 
-  if (is_spv && ((buildFailed || n_spills > max_reg_spill) &&
+  if (is_spv && ((firstBuildFailed || n_spills > max_reg_spill) &&
                  !build_flags.hasGRFSizeFlag())) {
-    PyObject *orig_type, *orig_value, *orig_tb;
+    PyObject *orig_type = nullptr, *orig_value = nullptr, *orig_tb = nullptr;
     // Save the original error before clearing it for the retry attempt.
-    if (buildFailed)
+    if (firstBuildFailed)
       PyErr_Fetch(&orig_type, &orig_value, &orig_tb);
 
     if (debugEnabled)
-      std::cout << (buildFailed ? "(I): Build failed for \""
-                                : "(I): Detected spills for \"")
+      std::cout << (firstBuildFailed ? "(I): Build failed for \""
+                                     : "(I): Detected spills for \"")
                 << kernel_name << "\", retrying with 256/512 large GRF modes"
                 << std::endl;
 
-    if (std::strcmp(getParsedDeviceArch(sycl_device), "cri") == 0) {
+    const char *deviceArch = g_sycl_device_arch_list[devId].c_str();
+    if (std::strcmp(deviceArch, "cri") == 0) {
       build_flags.addXLargeGRFSizeFlag();
     } else {
       build_flags.addLargeGRFSizeFlag();
     }
 
-    auto [l0_module_retry, l0_kernel_retry, n_spills_retry] =
-        compileLevelZeroObjects(binary_ptr, binary_size, kernel_name, l0_device,
-                                l0_context, build_flags(), is_spv);
-    if (PyErr_Occurred()) {
-      if (buildFailed) {
-        // Retry also failed — propagate the original error.
-        PyErr_Restore(orig_type, orig_value, orig_tb);
-        return NULL;
-      } else {
-        // retry failed but got good kernel at first time.
-        // Just clear the build error log.
-        PyErr_Clear();
-        if (debugEnabled)
-          std::cout << "(I): Rebuild failed. Just use previous kernel"
-                    << std::endl;
-      }
-    } else {
-      if (buildFailed) {
-        // Retry succeeded — discard the saved original error.
-        Py_XDECREF(orig_type);
-        Py_XDECREF(orig_value);
-        Py_XDECREF(orig_tb);
+    try {
+      auto [l0_module_retry, l0_kernel_retry, n_spills_retry] =
+          compileLevelZeroObjects(binary_ptr, binary_size, kernel_name,
+                                  l0_device, l0_context, build_flags(), is_spv);
 
-        // Always print recovery message to stderr to follow up on the
-        // "L0 build module failed" error that was already printed.
-        std::cerr << "(I): Build failure recovered by retrying with large GRF "
-                     "mode for \""
-                  << kernel_name << "\"" << std::endl;
-      } else {
-        // clean up the unused module and kernel.
-        auto error_no = zeKernelDestroy(l0_kernel);
-        if (error_no != ZE_RESULT_SUCCESS) {
-          PyErr_WarnEx(
-              PyExc_RuntimeWarning,
-              "[Ignoring] Intel - Error during destroy unused L0 kernel", 1);
+      if (PyErr_Occurred()) {
+        if (firstBuildFailed) {
+          // Retry also failed — propagate the original error.
+          PyErr_Restore(orig_type, orig_value, orig_tb);
+          return NULL;
+        } else {
+          // retry failed but got good kernel at first time.
+          // Just clear the build error log.
+          PyErr_Clear();
+          if (debugEnabled)
+            std::cout << "(I): Rebuild failed. Just use previous kernel"
+                      << std::endl;
+          // construct previous working version
+          build_flags = BuildFlags(build_flags_ptr);
         }
-        error_no = zeModuleDestroy(l0_module);
-        if (error_no != ZE_RESULT_SUCCESS) {
-          PyErr_WarnEx(
-              PyExc_RuntimeWarning,
-              "[Ignoring] Intel - Error during destroy unused L0 module", 1);
+      } else {
+        if (firstBuildFailed) {
+          // Retry succeeded — discard the saved original error.
+          Py_XDECREF(orig_type);
+          Py_XDECREF(orig_value);
+          Py_XDECREF(orig_tb);
+
+          // Always print recovery message to stderr to follow up on the
+          // "L0 build module failed" error that was already printed.
+          std::cerr
+              << "(I): Build failure recovered by retrying with large GRF "
+                 "mode for \""
+              << kernel_name << "\"" << std::endl;
+        } else {
+          // clean up the unused module and kernel.
+          auto error_no = zeKernelDestroy(l0_kernel);
+          if (error_no != ZE_RESULT_SUCCESS) {
+            PyErr_WarnEx(
+                PyExc_RuntimeWarning,
+                "[Ignoring] Intel - Error during destroy unused L0 kernel", 1);
+          }
+          error_no = zeModuleDestroy(l0_module);
+          if (error_no != ZE_RESULT_SUCCESS) {
+            PyErr_WarnEx(
+                PyExc_RuntimeWarning,
+                "[Ignoring] Intel - Error during destroy unused L0 module", 1);
+          }
         }
         l0_module = l0_module_retry;
         l0_kernel = l0_kernel_retry;
         n_spills = n_spills_retry;
-      }
 
-      if (debugEnabled)
-        std::cout << "(I): Retry with large GRF succeeded, kernel has "
-                  << n_spills << " spills" << std::endl;
+        if (debugEnabled)
+          std::cout << "(I): Retry with large GRF succeeded, kernel has "
+                    << n_spills << " spills" << std::endl;
+      }
+    } catch (const std::exception &e) {
+      char buf[1024] = {0};
+      strcat(buf, "[Ignoring] Intel - Error during Intel loadBinary with "
+                  "large registers: ");
+      strcat(buf, e.what());
+      PyErr_WarnEx(PyExc_RuntimeWarning, buf, 1);
+      // construct previous working version
+      build_flags = BuildFlags(build_flags_ptr);
     }
   }
 
@@ -678,9 +694,11 @@ extern "C" EXPORT_FUNC PyObject *init_devices(PyObject *cap) {
   const std::vector<sycl::device> &sycl_devices = sycl_context.get_devices();
 
   g_sycl_l0_device_list.clear();
+  g_sycl_device_arch_list.clear();
 
   const uint32_t deviceCount = sycl_devices.size();
   g_sycl_l0_device_list.reserve(deviceCount);
+  g_sycl_device_arch_list.reserve(deviceCount);
   size_t usableDeviceCount = 0;
   for (uint32_t i = 0; i < deviceCount; ++i) {
     ze_device_handle_t zeDev =
@@ -690,6 +708,7 @@ extern "C" EXPORT_FUNC PyObject *init_devices(PyObject *cap) {
     // Keep indices stable: callers pass torch.xpu device ordinals (dense),
     // so we must not compact this list based on availability of native handles.
     g_sycl_l0_device_list.push_back(std::make_pair(sycl_devices[i], zeDev));
+    g_sycl_device_arch_list.emplace_back(getParsedDeviceArch(sycl_devices[i]));
   }
 
   TRITON_ZE_FAIL_IF(usableDeviceCount == 0,

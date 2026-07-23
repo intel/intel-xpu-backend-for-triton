@@ -603,8 +603,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             ]
 
             if options.grf_mode == 'default':
-                """Try rebuilding with larger GRF modes in increasing order."""
-                retry_grf_mode_list = [" "]  # default grf mode by omitting.
+                """Try rebuilding with larger GRF modes."""
+                retry_grf_mode_list = [""]  # default grf mode by omitting.
                 if metadata["target"].arch["arch"] == 'cri':
                     retry_grf_mode_list += ["-cl-intel-512-GRF-per-thread"]
                 else:
@@ -618,9 +618,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                 ocloc_cmd[-1] = metadata["build_flags"] + shader_dump_opt
                 try:
                     subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
-                    spill_size = extract_spill_size_from_zebin(fbin)
-                    if spill_size <= MAX_REG_SPILL:
-                        break
+                    if options.grf_mode == "default":
+                        spill_size = extract_spill_size_from_zebin(fbin)
+                        if spill_size <= MAX_REG_SPILL:
+                            break
                 except (subprocess.CalledProcessError, IntelGPUError) as e:
                     # If GRF mode was not last yet, retry with different GRF mode
                     # before giving up. This handles cases where the default GRF mode
