@@ -150,3 +150,39 @@ diff --git a/tests/conftest.py b/tests/conftest.py
 +        init_workspace_manager(device)
      yield
      reset_workspace_manager()
+
+diff --git a/tests/kernels/moe/test_moe.py b/tests/kernels/moe/test_moe.py
+--- a/tests/kernels/moe/test_moe.py
++++ b/tests/kernels/moe/test_moe.py
+@@ -315,7 +315,31 @@ def test_fused_moe(
+     w1 = torch.randn((e, 2 * n, k), device="cuda", dtype=dtype) / 10
+     w2 = torch.randn((e, k, n), device="cuda", dtype=dtype) / 10
+
+     score = torch.randn((m, e), device="cuda", dtype=dtype)
++
++    # Random BF16 scores can tie at the top-k boundary. Tied experts are
++    # equally valid, but top-k implementations need not choose the same IDs.
++    # Reroll only boundary-tied logits so this test compares a unique expert
++    # set while preserving its independent routing implementations.
++    for _ in range(10):
++        routing_scores = torch.softmax(score, dim=-1, dtype=torch.float32)
++        topk_plus_one = torch.topk(routing_scores, topk + 1, dim=-1).values
++        boundary_ties = topk_plus_one[:, topk - 1] == topk_plus_one[:, topk]
++        if not torch.any(boundary_ties):
++            break
++
++        row_ids = torch.nonzero(boundary_ties, as_tuple=True)[0]
++        boundary_values = topk_plus_one[row_ids, topk - 1]
++        tied_values = routing_scores[row_ids] == boundary_values[:, None]
++        rerolled_scores = score[row_ids].clone()
++        rerolled_scores[tied_values] = torch.randn(
++            (int(tied_values.sum().item()),),
++            device=score.device,
++            dtype=score.dtype,
++        )
++        score[row_ids] = rerolled_scores
++    else:
++        raise AssertionError("Failed to generate scores without top-k boundary ties")
+
+     if ep_size > 1:
+         local_e = e // ep_size
