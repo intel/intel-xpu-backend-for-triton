@@ -520,7 +520,8 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
       compileLevelZeroObjects(binary_ptr, binary_size, kernel_name, l0_device,
                               l0_context, build_flags(), is_spv);
   bool firstBuildFailed = PyErr_Occurred();
-  if (firstBuildFailed && (!is_spv || build_flags.hasGRFSizeFlag())) {
+  const bool shouldAbortWithoutRetry = !is_spv || build_flags.hasGRFSizeFlag();
+  if (firstBuildFailed && shouldAbortWithoutRetry) {
     return NULL;
   }
 
