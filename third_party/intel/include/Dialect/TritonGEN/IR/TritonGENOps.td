@@ -458,6 +458,44 @@ def TritonGEN_PredicatedStoreOp
   }];
 }
 
+def TritonGEN_SubGroupGatherLoadOp
+    : TritonGEN_Op<"sub_group_gather_load"> {
+  let summary = "Sub-group gather load";
+  let description = [{
+    The `triton_gen.sub_group_gather_load` operation performs a predicated
+    gather load with vector of uniform addresses.
+    The key difference to `triton_gen.predicated_load` is the number of addresses and predicates is no related to the sub-group size.
+
+    The operands are:
+      - $addrs: `vector<32xi64>` x32 uniform addresses
+      - $preds: `vector<32xi1>` x32 uniform predicates
+
+    The total loaded size is determined by the number of bits in the result type multiplied by the sub-group size.
+
+
+     Example when sub-group-size=16:
+     ```mlir
+     %0 = triton_gen.sub_group_gather_load %addrs, %preds : (vector<32xi64>, vector<32xi1>) -> vector<8xi16>
+     ```
+     The total size of the load is 8 x 16 (i16) x 16 (tpw=16) = 2048 bits = 256 bytes. Each address will load 256 bytes / 32 = 8 bytes.
+     The return value is sharded as a non-uniform 8xi16 type across sub-group lanes.
+
+     Note: each address loads at most 8 bytes.
+  }];
+
+  let arguments = (ins
+      FixedVectorOfLengthAndType<[32], [I64]>:$addrs,
+      FixedVectorOfLengthAndType<[32], [I1]>:$preds);
+
+  let results = (outs FixedVectorOfNonZeroRankOf<[AnyInteger, AnyFloat]>:$res);
+
+  let assemblyFormat = [{
+    $addrs `,` $preds attr-dict `:` functional-type(operands, results)
+  }];
+
+  let hasVerifier = 1;
+}
+
 def TritonGEN_SubGroupBitcastShuffleOp
     : TritonGEN_Op<"sub_group_bitcast_shuffle"> {
   let summary = "Sub-group bitcast shuffle";

@@ -90,7 +90,7 @@ DpasEncodingAttr getDpasLayout(RankedTensorType tensorTy);
 /// and the LLVM lowering (to produce the actual mapping).
 FailureOr<LinearLayout> computeTransposeShuffleMapping(
     RankedTensorType tensorType, const LinearLayout &regMapping,
-    int64_t numElemsPerLoad, unsigned numPackedVals, unsigned tileHeight,
+    int64_t numElemsPerLoad, const BlockIOTileSizeInfo &sizeInfo,
     unsigned threadsPerWarp, bool hasDPASOperandType, MLIRContext *ctx);
 
 /// Check whether the packed element size and tile width satisfy the

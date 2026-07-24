@@ -37,7 +37,7 @@ You can check if triton is currently available by running one of the [tutorials]
 
 Basic rules:
 
-1. **Use Tensor Descriptors:** For inputs and outputs of matmul operations (`tl.dot`), use Tensor Descriptors. This utilizes hardware-optimized DPAS operations and 2D block IO HW operations. You can often expect more than 2x performance improvement compared to the basic tensor of pointers approach. Use device side Tensor Descriptors (defined inside a kernel), not host side (defined in CPU code and passed to the kernel).
+1. **Use Tensor Descriptors:** For inputs and outputs of matmul operations (`tl.dot`), use Tensor Descriptors. This utilizes hardware-optimized DPAS operations and 2D block IO HW operations. You can often expect more than 2x performance improvement compared to the basic tensor of pointers approach. Both device side Tensor Descriptors (defined inside a kernel) and host side Tensor Descriptors (defined in CPU code and passed to the kernel) are supported.
 2. **Use explicit accumulator in `tl.dot`:** Always write `accumulator = tl.dot(a, b, accumulator)` instead of `accumulator += tl.dot(a, b)`. The explicit form maps directly to a single DPAS instruction. The `+=` form relies on the compiler's `CombineOps` pass to fold the separate add back into the dot, which can fail (e.g., when the dot result has multiple uses or flows through control flow).
 3. **Type Annotations:** Use proper type annotations for your kernels. Good type annotations allow for better optimization, but be careful to avoid excessive recompilation.
 4. **Benchmark:** Experiment with the performance of your kernel. You can use `triton.testing.do_bench` for basic benchmarking, as demonstrated in the [tutorials](../python/tutorials/02-fused-softmax.py).
@@ -294,15 +294,15 @@ Combining all these requirements and recommendations, the best practice is to se
 for performance and compatibility reasons. If you want the transpose version of the same 2D block, use transposition (`a.T`).
 
 ---
-**Use kernel side Tensor Descriptors, not host side**
+**Both device side and host side Tensor Descriptors are supported**
 
-Tensor Descriptors can be defined inside of a kernel (called **device side Tensor Descriptors** (like in all the examples above) or outside of a triton kernel, in the launching utility (called **host side Tensor Descriptors**), like it is done in the upstream Triton ([example](https://triton-lang.org/main/getting-started/tutorials/09-persistent-matmul.html)).
-You should only use device side Tensor Descriptors on XPU for now.
+Tensor Descriptors can be defined inside of a kernel (called **device side Tensor Descriptors**, like in all the examples above) or outside of a triton kernel, in the launching utility (called **host side Tensor Descriptors**), like it is done in the upstream Triton ([example](https://triton-lang.org/main/getting-started/tutorials/09-persistent-matmul.html)).
+Both approaches are supported on XPU. Device side Tensor Descriptors offer more flexibility, while host side Tensor Descriptors can be convenient when porting kernels from upstream Triton.
 
 ---
 **Summary:**
 1. **Use Tensor Descriptors to load memory required for `tl.dot` and to save results.**
-2. **Use kernel side Tensor Descriptors, not host side.**
+2. **Both device side and host side Tensor Descriptors are supported.**
 3. **Strive to only use 2D Tensor Descriptors with last stride set to 1.**
 4. **Ideally, annotate strides with `tl.constexpr`.** Basic preference is `tl.constexpr` > no annotation > `tl.int64`/ `tl.int32` (for non-last strides) >> `tl.int64` / `tl.int32` for the last stride. Avoid annotating the last strides with `tl.int64` or `tl.int32`!
 

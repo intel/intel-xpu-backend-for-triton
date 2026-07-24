@@ -942,11 +942,11 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
 
   static FailureOr<LinearLayout> computeTransposeShuffleMapping(
       RankedTensorType tensorType, const LinearLayout &regMapping,
-      int64_t numElemsPerLoad, unsigned numPackedVals, unsigned tileHeight,
+      int64_t numElemsPerLoad, const BlockIOTileSizeInfo &sizeInfo,
       unsigned threadsPerWarp, bool hasDPASOperandType, MLIRContext *ctx) {
     return triton::gpu::intel::computeTransposeShuffleMapping(
-        tensorType, regMapping, numElemsPerLoad, numPackedVals, tileHeight,
-        threadsPerWarp, hasDPASOperandType, ctx);
+        tensorType, regMapping, numElemsPerLoad, sizeInfo, threadsPerWarp,
+        hasDPASOperandType, ctx);
   }
 
   /// Build a Block2DLoadConfig from a validated BlockIOTileSizeInfo.
@@ -1021,8 +1021,8 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
         LinearLayout::identity1D(cfg.numElemsPerLoad, kRegister, kRegister);
     if (cfg.isTransposeRequired) {
       auto maybeShuffleMapping = computeTransposeShuffleMapping(
-          tensorType, cfg.regMapping, cfg.numElemsPerLoad, cfg.numPackedVals,
-          cfg.tileHeight, threadsPerWarp, !!cfg.packedDPASOperandType, ctx);
+          tensorType, cfg.regMapping, cfg.numElemsPerLoad, sizeInfo,
+          threadsPerWarp, !!cfg.packedDPASOperandType, ctx);
       assert(succeeded(maybeShuffleMapping) &&
              "validate2DBlockLoadTile should have rejected this configuration");
       cfg.shuffleMapping = *maybeShuffleMapping;
@@ -2769,7 +2769,7 @@ struct DescriptorStoreOpToBlockIOConversion
 
     // --- Get the LLVM values for store values ---
     SmallVector<Value> valElems =
-        unpackLLElements(loc, adaptor.getSrc(), rewriter);
+        unpackTensorElements(loc, adaptor.getSrc(), rewriter, tensorType);
     assert(valElems.size() == numElems &&
            "the number of store values does not match the number of elements");
 
@@ -2986,7 +2986,8 @@ struct StoreOpToBlockIOConversion
     unsigned numElems = getTotalElemsPerThread(tensorType);
 
     // Get the LLVM values for pointers
-    SmallVector<Value> ptrElems = unpackLLElements(loc, llPtr, rewriter);
+    SmallVector<Value> ptrElems =
+        unpackTensorElements(loc, llPtr, rewriter, op.getPtr().getType());
     assert(ptrElems.size() == numElems &&
            "the number of pointer values is not matched with the number of "
            "elements");
@@ -2995,7 +2996,8 @@ struct StoreOpToBlockIOConversion
     Value llMask = adaptor.getMask();
     // Get the LLVM values for mask
     if (llMask) {
-      maskElems = unpackLLElements(loc, llMask, rewriter);
+      maskElems =
+          unpackTensorElements(loc, llMask, rewriter, op.getMask().getType());
       assert(maskElems.size() == numElems &&
              "the number of mask values is not matched with the number of "
              "elements");
@@ -3043,8 +3045,8 @@ struct StoreOpToBlockIOConversion
     Value offsetBaseY = b.i32_val(0);
 
     // Get the LLVM values for store values
-    SmallVector<Value> valElems =
-        unpackLLElements(loc, adaptor.getValue(), rewriter);
+    SmallVector<Value> valElems = unpackTensorElements(
+        loc, adaptor.getValue(), rewriter, op.getValue().getType());
     assert(valElems.size() == numElems &&
            "the number of store values does not match the number of elements");
 
@@ -4209,14 +4211,15 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
         tensorType, eltTy, sizeInfo, *llEncoding, threadsPerWarp, ctx);
 
     // Unpack pointer elements.
-    SmallVector<Value> ptrElems =
-        unpackLLElements(loc, adaptor.getPtr(), rewriter);
+    SmallVector<Value> ptrElems = unpackTensorElements(
+        loc, adaptor.getPtr(), rewriter, op.getPtr().getType());
 
     // Unpack mask/other elements.
     SmallVector<Value> maskElems;
     Value llMask = adaptor.getMask();
     if (llMask)
-      maskElems = unpackLLElements(loc, llMask, rewriter);
+      maskElems =
+          unpackTensorElements(loc, llMask, rewriter, op.getMask().getType());
 
     SmallVector<Value> otherElems;
     Value llOther = adaptor.getOther();
@@ -4240,7 +4243,8 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
               handleSplatValue(constAttr.getSplatValue<APInt>());
             });
       } else {
-        otherElems = unpackLLElements(loc, llOther, rewriter);
+        otherElems = unpackTensorElements(loc, llOther, rewriter,
+                                          op.getOther().getType());
       }
     }
 

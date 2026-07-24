@@ -41,6 +41,10 @@
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
+
+#include "intel/include/TritonIntelGPUToLLVM/XeAsmFormat.h"
+#include <llvm/Support/FormatVariadic.h>
+
 #include "intel/include/TritonGENToSPIRV/TritonGENToSPIRVPass.h"
 
 namespace mlir::triton {
@@ -135,6 +139,11 @@ static bool isSPVBuiltinAvailableImpl(TritonGEN::Matrix2DBlockLoadOp op) {
 
   // intel_sub_group_2d_block_read_64b_4r4x1c
   if (op.getElemSizeInBits() == 64 && op.getTileHeight() == 4 &&
+      op.getTileWidth() == 4 && op.getVBlocks() == 1)
+    return false;
+
+  // intel_sub_group_2d_block_read_32b_4r4x1c
+  if (op.getElemSizeInBits() == 32 && op.getTileHeight() == 4 &&
       op.getTileWidth() == 4 && op.getVBlocks() == 1)
     return false;
 
@@ -1266,6 +1275,55 @@ struct TritonPredicatedLoadOpLowering
   }
 };
 
+struct TritonSubGroupGatherLoadLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::SubGroupGatherLoadOp> {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::SubGroupGatherLoadOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::SubGroupGatherLoadOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    MLIRContext *ctx = rewriter.getContext();
+    Location loc = op->getLoc();
+
+    auto resultType = dyn_cast<VectorType>(op.getResult().getType());
+    assert(resultType && "Unexpected result type");
+    auto module = op->getParentOfType<ModuleOp>();
+    unsigned subgroupSize =
+        triton::gpu::TritonGPUDialect::getThreadsPerWarp(module);
+    uint64_t resultBits = static_cast<uint64_t>(resultType.getNumElements()) *
+                          resultType.getElementType().getIntOrFloatBitWidth();
+    uint64_t totalBits = resultBits * subgroupSize;
+    uint64_t loadBits = totalBits / 32;
+    Type opaqueResultType = IntegerType::get(ctx, loadBits);
+    auto typeSyntax = XeVISAInstr::getTypeName(opaqueResultType);
+    if (!typeSyntax)
+      llvm_unreachable("Unsupported scalar type");
+
+    constexpr StringLiteral asmFormat = R"({
+  .decl RET v_type=G type={0} num_elts=32 align=wordx32 alias=<$0, 0>
+  .decl ADDR v_type=G type=uq num_elts=32 align=wordx32 alias=<$1, 0>
+  .decl PRED v_type=P num_elts=32
+  cmp.eq (M1_NM, 32) PRED 0x1:b $2(0, 0)<1;1,0>
+  (PRED) lsc_load.ugm (M1_NM, 32)  RET:d{1}  flat[ADDR]:a64
+})";
+    std::string asmText =
+        llvm::formatv(asmFormat.data(), *typeSyntax, loadBits).str();
+
+    LLVM::InlineAsmOp inlineAsm = LLVM::InlineAsmOp::create(
+        rewriter, loc, op.getRes().getType(),
+        ValueRange{adaptor.getAddrs(), adaptor.getPreds()}, asmText,
+        "=rw,rw.u,rw.u",
+        /*has_side_effects=*/false,
+        /*is_align_stack=*/false, LLVM::TailCallKind::None,
+        LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
+        ArrayAttr::get(ctx, {}));
+
+    rewriter.replaceOp(op, inlineAsm.getRes());
+    return success();
+  }
+};
+
 struct TritonPredicatedStoreOpLowering
     : public ConvertOpToLLVMPattern<TritonGEN::PredicatedStoreOp> {
   using ConvertOpToLLVMPattern<
@@ -1401,6 +1459,6 @@ void mlir::triton::populateTritonGENToLLVMConversionPatterns(
            TritonMatrixDPASLowering, TritonMatrixBlockScaleDPASLowering,
            TritonSubGroupBlockReadLowering, TritonSubGroupBlockWriteLowering,
            TritonPredicatedLoadOpLowering, TritonPredicatedStoreOpLowering,
-           TritonFToTf32OpLowering, TritonSubGroupBitcastShuffleLowering>(
-          converter);
+           TritonSubGroupGatherLoadLowering, TritonFToTf32OpLowering,
+           TritonSubGroupBitcastShuffleLowering>(converter);
 }
