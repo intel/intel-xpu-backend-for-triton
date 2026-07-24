@@ -242,53 +242,39 @@ def batched_attention(q, k, v, q_attn_arg, k_attn_arg, cu_seqlens_q, cu_seqlens_
     return o
 
 
-def _pack_to_padded(x: torch.Tensor, segments: torch.Tensor, max_len: int):
-    # x: [total_tokens, heads, dim] -> [batch, heads, max_len, dim]
-    batch = segments.numel() - 1
-    _, heads, dim = x.shape
-    out = x.new_zeros((batch, heads, max_len, dim))
-    lengths = segments[1:] - segments[:-1]
-    for b in range(batch):
-        start = int(segments[b].item())
-        end = int(segments[b + 1].item())
-        seg = x[start:end].permute(1, 0, 2)
-        out[b, :, :end - start, :] = seg
-    return out, lengths
-
-
 def batched_attention_flex(q, k, v, q_attn_arg, k_attn_arg, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, scale, mask_opt,
                            sparse_opt):
-    del cu_seqlens_k, sparse_opt
+    del cu_seqlens_k, max_seqlen_q, sparse_opt
     if compiled_flex_attention is None:
         raise RuntimeError("FlexAttention is not available in this PyTorch build")
     if mask_opt != 1:
         raise NotImplementedError("FlexAttention path currently implements MASK_FN=1 only")
 
-    q_pad, q_lengths = _pack_to_padded(q, cu_seqlens_q, max_seqlen_q)
-    k_pad, _ = _pack_to_padded(k, cu_seqlens_q, max_seqlen_q)
-    v_pad, _ = _pack_to_padded(v, cu_seqlens_q, max_seqlen_q)
-    q_attn_pad, _ = _pack_to_padded(q_attn_arg[:, None, None], cu_seqlens_q, max_seqlen_q)
-    k_attn_pad, _ = _pack_to_padded(k_attn_arg[:, None, None], cu_seqlens_q, max_seqlen_q)
-    q_attn_pad = q_attn_pad[:, 0, :, 0].to(torch.int32)
-    k_attn_pad = k_attn_pad[:, 0, :, 0].to(torch.int32)
+    # Keep tensors flattened (no explicit repacking) and enforce segment-local
+    # masking semantics directly via score_mod.
+    q_attn_arg = q_attn_arg.to(torch.int32)
+    k_attn_arg = k_attn_arg.to(torch.int32)
+    total_tokens = q.shape[0]
+    token_idx = torch.arange(total_tokens, device=q.device, dtype=torch.long)
+    seg_end = cu_seqlens_q[1:]
+    seg_id = torch.bucketize(token_idx, seg_end, right=False)
+    local_idx = token_idx - cu_seqlens_q[seg_id]
 
     def score_mod(score, b, _h, q_idx, kv_idx):
-        q_len = q_lengths[b]
-        in_bound = (q_idx < q_len) & (kv_idx < q_len)
-        same_arg = (q_attn_pad[b, q_idx] == k_attn_pad[b, kv_idx]) | (k_attn_pad[b, kv_idx] == 0)
-        keep = in_bound & (((q_idx <= kv_idx) & same_arg) | (q_idx == kv_idx))
+        del b
+        same_seg = seg_id[q_idx] == seg_id[kv_idx]
+        q_local = local_idx[q_idx]
+        k_local = local_idx[kv_idx]
+        same_arg = (q_attn_arg[q_idx] == k_attn_arg[kv_idx]) | (k_attn_arg[kv_idx] == 0)
+        keep = same_seg & (((q_local <= k_local) & same_arg) | (q_local == k_local))
         return torch.where(keep, score, torch.full_like(score, float("-inf")))
 
-    enable_gqa = q_pad.shape[1] != k_pad.shape[1]
-    o_pad = compiled_flex_attention(q_pad, k_pad, v_pad, score_mod=score_mod, scale=scale, enable_gqa=enable_gqa)
-
-    out = q.new_empty((q.shape[0], q.shape[1], v.shape[2]))
-    batch = cu_seqlens_q.numel() - 1
-    for b in range(batch):
-        start = int(cu_seqlens_q[b].item())
-        end = int(cu_seqlens_q[b + 1].item())
-        out[start:end] = o_pad[b, :, :end - start, :].permute(1, 0, 2)
-    return out
+    q_4d = q.permute(1, 0, 2).unsqueeze(0)
+    k_4d = k.permute(1, 0, 2).unsqueeze(0)
+    v_4d = v.permute(1, 0, 2).unsqueeze(0)
+    enable_gqa = q_4d.shape[1] != k_4d.shape[1]
+    out_4d = compiled_flex_attention(q_4d, k_4d, v_4d, score_mod=score_mod, scale=scale, enable_gqa=enable_gqa)
+    return out_4d[0].permute(1, 0, 2)
 
 
 def random_segments(
