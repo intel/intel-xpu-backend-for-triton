@@ -7,6 +7,13 @@ on:
     branches:
       - main
     types: [opened, synchronize, reopened, labeled]
+  schedule:
+    - cron: "0 8 * * *"
+
+# Cancel in-progress runs for the same PR or schedule.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || 'ci' }}
+  cancel-in-progress: true
 
 jobs:
   check-paths:
@@ -25,7 +32,10 @@ jobs:
 
   build-wheel:
     needs: check-paths
-    if: needs.check-paths.outputs.benchmarks == 'true' || github.event.label.name == 'run-benchmarks'
+    if: >-
+      github.event_name == 'schedule' ||
+      needs.check-paths.outputs.benchmarks == 'true' ||
+      github.event.label.name == 'run-benchmarks'
     uses: ./.github/workflows/build-benchmarks-wheel.yml
     with:
       python-version: "3.12"
@@ -34,7 +44,9 @@ jobs:
     needs: [check-paths, build-wheel]
     if: >-
       always() && !cancelled() &&
-      (needs.check-paths.outputs.benchmarks == 'true' || github.event.label.name == 'run-benchmarks')
+      (github.event_name == 'schedule' ||
+       needs.check-paths.outputs.benchmarks == 'true' ||
+       github.event.label.name == 'run-benchmarks')
     uses: ./.github/workflows/vllm-benchmarks.yml
     with:
       runner_label: max1550

@@ -3,18 +3,50 @@ name: vLLM benchmarks, BMG
 permissions: read-all
 
 on:
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened, labeled]
   schedule:
     - cron: "0 8 * * *"
 
+# Cancel in-progress runs for the same PR or schedule.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || 'ci' }}
+  cancel-in-progress: true
+
 jobs:
+  check-paths:
+    runs-on: ubuntu-latest
+    outputs:
+      benchmarks: ${{ steps.check.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Check for vLLM benchmark changes
+        id: check
+        uses: ./.github/actions/check-path-changes
+        with:
+          patterns: '^(\.github/workflows/(vllm-benchmarks|build-benchmarks-wheel).*\.yml|\.github/actions/(install-benchmarks|install-vllm)/|benchmarks/|scripts/vllm/|\.github/pins/pytorch\.txt)'
+
   build-wheel:
+    needs: check-paths
+    if: >-
+      github.event_name == 'schedule' ||
+      needs.check-paths.outputs.benchmarks == 'true' ||
+      github.event.label.name == 'run-benchmarks'
     uses: ./.github/workflows/build-benchmarks-wheel.yml
     with:
       python-version: "3.12"
 
   benchmarks:
-    needs: build-wheel
-    if: always() && !cancelled()
+    needs: [check-paths, build-wheel]
+    if: >-
+      always() && !cancelled() &&
+      (github.event_name == 'schedule' ||
+       needs.check-paths.outputs.benchmarks == 'true' ||
+       github.event.label.name == 'run-benchmarks')
     uses: ./.github/workflows/vllm-benchmarks.yml
     with:
       runner_label: b580
