@@ -24,7 +24,7 @@ import triton_kernels_benchmark as benchmark_suite
 
 from tests.kernels.moe.utils import make_quantized_test_activations, make_test_weight
 from vllm.model_executor.layers.fused_moe.fused_moe import invoke_fused_moe_triton_kernel, get_default_config
-from vllm_xpu_kernels.fused_moe_interface import cutlass_grouped_gemm as sycl_tla_grouped_gemm
+from vllm_xpu_kernels.fused_moe_interface import cutlass_grouped_gemm_xe2 as sycl_tla_grouped_gemm
 
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
@@ -430,13 +430,13 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_fp8
             # gather; the permutation depends only on routing, so compute it once.
             flat_expert_indices = topk_ids.view(-1)
             gather_idx = flat_expert_indices.argsort(stable=True) // topk
-            rows_per_expert = flat_expert_indices.bincount(minlength=num_experts).to(torch.int32).tolist()
+            rows_per_expert = flat_expert_indices.bincount(minlength=num_experts).to(torch.int32)
             input_B_grouped = input_B.transpose(1, 2).contiguous()
             output_sycl = torch.empty((gather_idx.shape[0], n), dtype=input_A.dtype, device=DEVICE)
 
             def sycl_tla_fn():
                 input_A_grouped = input_A.index_select(0, gather_idx)
-                sycl_tla_grouped_gemm(input_A_grouped, input_B_grouped, None, output_sycl, rows_per_expert, n, k,
+                sycl_tla_grouped_gemm(input_A_grouped, input_B_grouped, None, None, output_sycl, rows_per_expert, n, k,
                                       num_experts)
                 return output_sycl
 

@@ -24,7 +24,7 @@ from vllm.model_executor.layers.fused_moe.experts.fused_batched_moe import invok
 from tests.kernels.moe.utils import make_quantized_test_activations, make_test_weight
 from tests.kernels.quant_utils import native_batched_masked_quant_matmul
 
-from vllm_xpu_kernels.fused_moe_interface import cutlass_grouped_gemm as sycl_tla_grouped_gemm
+from vllm_xpu_kernels.fused_moe_interface import cutlass_grouped_gemm_xe2 as sycl_tla_grouped_gemm
 
 # Benchmark shapes for batched MoE
 # (E: num_experts, M: max_tokens_per_expert, K: hidden_dim, N: intermediate_dim, fp8, block_quant)
@@ -257,7 +257,8 @@ def get_batched_mm_benchmark(
             # measured with the GEMM, matching Triton's in-kernel masking.
             def sycl_tla_fn():
                 input_A_grouped = torch.cat([A_q[e, :counts[e], :] for e in range(num_experts)], dim=0).contiguous()
-                sycl_tla_grouped_gemm(input_A_grouped, input_B_grouped, None, output_sycl, counts, N, K, num_experts)
+                sycl_tla_grouped_gemm(input_A_grouped, input_B_grouped, None, None, output_sycl, num_expert_tokens, N,
+                                      K, num_experts)
                 return output_sycl
 
             benchmark_suite.assert_close(sycl_tla_fn, lambda: ref_grouped, atol=atol, rtol=rtol,
