@@ -12,19 +12,6 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Detect benchmark source changes
-      id: detect-source-changes
-      shell: bash
-      env:
-        GH_TOKEN: ${{ inputs.github-token }}
-      run: |
-        source_build=false
-        changed_files="$(gh api --paginate "repos/${{ github.repository }}/compare/main...${{ github.sha }}" --jq '.files[].filename')"
-        if grep -q "^benchmarks/" <<< "$changed_files"; then
-          source_build=true
-        fi
-        echo "source-build=$source_build" | tee -a "$GITHUB_OUTPUT"
-
     - name: Download benchmarks wheel (same run)
       id: same-run-download
       uses: actions/download-artifact@v7
@@ -54,14 +41,21 @@ runs:
       run: triton-benchmarks describe ALL
       continue-on-error: true
 
+    - name: Detect benchmark source changes
+      id: detect-source-changes
+      if: steps.same-run-validate.outcome != 'success'
+      uses: ./.github/actions/check-path-changes
+      with:
+        patterns: '^benchmarks/'
+
     - name: Install triton-utils
-      if: steps.same-run-validate.outcome != 'success' && steps.detect-source-changes.outputs.source-build != 'true'
+      if: steps.same-run-validate.outcome != 'success' && steps.detect-source-changes.outputs.changed != 'true'
       shell: bash
       run: pip install "$GITHUB_WORKSPACE/scripts/triton_utils"
 
     - name: Download and install benchmarks wheel (main)
       id: main-wheel
-      if: steps.same-run-validate.outcome != 'success' && steps.detect-source-changes.outputs.source-build != 'true'
+      if: steps.same-run-validate.outcome != 'success' && steps.detect-source-changes.outputs.changed != 'true'
       continue-on-error: true
       shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
       env:
@@ -101,7 +95,7 @@ runs:
       if: steps.same-run-validate.outcome != 'success' && steps.main-validate.outcome != 'success'
       shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
       run: |
-        if [[ "${{ steps.detect-source-changes.outputs.source-build }}" == "true" ]]; then
+        if [[ "${{ steps.detect-source-changes.outputs.changed }}" == "true" ]]; then
           echo "::notice::Branch modified benchmarks source; building from source"
         else
           echo "::warning::Pre-built wheel unavailable, falling back to source build"
