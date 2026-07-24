@@ -22,7 +22,10 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "intel/include/Utils/Utility.h"
 #include "triton/Tools/LinearLayout.h"
+#include <TritonIntelGPUToLLVM/XeAsmFormat.h>
 #include <limits>
+#include <llvm/IR/InlineAsm.h>
+#include <llvm/Support/FormatVariadic.h>
 #include <optional>
 #include <triton/Tools/Sys/GetEnv.h>
 
@@ -2185,6 +2188,376 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
 
     Value resultStruct = packTensorElements(loc, typeConverter, loadedVals,
                                             rewriter, op.getType());
+    rewriter.replaceOp(op, {resultStruct});
+    return success();
+  }
+};
+
+struct DescriptorGatherConversionBase : public BlockIOConversionBase {
+  DescriptorGatherConversionBase(
+      const triton::intel::TargetInfo &targetInfo,
+      const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
+      triton::intel::ModuleStrideAnalysis &strideAnalysis)
+      : BlockIOConversionBase(targetInfo, axisAnalysisPass, strideAnalysis) {}
+
+  static LinearLayout buildRegisterMapping(const SetVector<unsigned> &regBases,
+                                           const LinearLayout &llEncoding,
+                                           MLIRContext *ctx) {
+    StringAttr kRegister = StringAttr::get(ctx, "register");
+    std::vector<std::vector<int>> bases(regBases.size());
+    llvm::transform(regBases, bases.begin(),
+                    [](int base) { return std::vector<int>{base}; });
+    return LinearLayout({{kRegister, bases}},
+                        {{kRegister, llEncoding.getInDimSize(kRegister)}},
+                        /*requireSurjective=*/true);
+  }
+
+  static const std::vector<std::vector<int>> &
+  getInputDimBasesOrCrash(const LinearLayout &ll, StringRef inDim) {
+    const LinearLayout::BasesT &bases = ll.getBases();
+    auto it = llvm::find_if(bases, [&](const auto &base) {
+      return base.first.getValue() == inDim;
+    });
+    if (it != bases.end())
+      return it->second;
+    std::string msg = (Twine("Could not find input dim '") + inDim +
+                       "' in layout: " + ll.toString())
+                          .str();
+    llvm_unreachable(msg.c_str());
+  }
+
+  static FailureOr<LinearLayout> buildDescriptorGatherOffsetMapping(
+      RankedTensorType resultType, RankedTensorType offsetsXType,
+      unsigned numPtrsPerLoad, unsigned ptrsPerRow, unsigned bytesPerPtr,
+      unsigned elemSizeInBits) {
+    std::optional<LinearLayout> llEncoding =
+        cast<DistributedEncodingTrait>(resultType.getEncoding())
+            .toLinearLayout(resultType.getShape());
+    std::optional<LinearLayout> offsetsXLLEncoding =
+        cast<DistributedEncodingTrait>(offsetsXType.getEncoding())
+            .toLinearLayout(offsetsXType.getShape());
+    if (!llEncoding || !offsetsXLLEncoding)
+      return failure();
+
+    MLIRContext *ctx = resultType.getContext();
+    StringAttr kRegister = StringAttr::get(ctx, "register");
+    StringAttr kLane = StringAttr::get(ctx, "lane");
+    StringAttr kWarp = StringAttr::get(ctx, "warp");
+    StringAttr kBlock = StringAttr::get(ctx, "block");
+    StringAttr dim0Attr = StringAttr::get(ctx, "dim0");
+    StringAttr dim1Attr = StringAttr::get(ctx, "dim1");
+    StringAttr offxIdxAttr = StringAttr::get(ctx, "offx_idx");
+
+    auto subLayout = llEncoding->sublayout(
+        llvm::to_vector(llEncoding->getInDimNames()), {dim0Attr});
+    auto regMLayout = subLayout.invertAndCompose(*offsetsXLLEncoding);
+
+    std::optional<LinearLayout> conversion = regMLayout.quotient(kBlock);
+    if (!conversion)
+      return failure();
+    conversion = conversion->quotient(kWarp);
+    if (!conversion)
+      return failure();
+    conversion = conversion->quotient(kLane);
+    if (!conversion)
+      return failure();
+
+    auto offsetYLayout = llEncoding->sublayout(kRegister, {dim1Attr});
+    if (!llvm::isPowerOf2_32(numPtrsPerLoad) ||
+        !llvm::isPowerOf2_32(ptrsPerRow))
+      return failure();
+
+    std::vector<std::vector<int>> ptrBases;
+    for (unsigned i = 0; i < llvm::Log2_32(numPtrsPerLoad); ++i) {
+      if (i < llvm::Log2_32(ptrsPerRow)) {
+        ptrBases.push_back({0, (int)(bytesPerPtr / (elemSizeInBits / 8)) << i});
+      } else {
+        ptrBases.push_back({1 << (i - llvm::Log2_32(ptrsPerRow)), 0});
+      }
+    }
+
+    auto offsetXIndexBases = getInputDimBasesOrCrash(*conversion, "register");
+    auto offsetYBases = getInputDimBasesOrCrash(offsetYLayout, "register");
+    std::vector<std::vector<int>> offsetMapBases;
+    for (auto const &[offsetXBase, offsetYBase] :
+         llvm::zip(offsetXIndexBases, offsetYBases)) {
+      offsetMapBases.push_back({offsetXBase[0], offsetYBase[0]});
+    }
+
+    auto inDimSize = offsetsXLLEncoding->getInDimSize(kRegister);
+    return LinearLayout(
+        {{kRegister, offsetMapBases}, {StringAttr::get(ctx, "ptrs"), ptrBases}},
+        {{offxIdxAttr, inDimSize},
+         {dim1Attr, llEncoding->getOutDimSize(dim1Attr)}},
+        /*requireSurjective=*/false);
+  }
+};
+
+struct DescriptorGatherOpConversion
+    : public ConvertOpToLLVMPattern<
+          mlir::triton::gpu::intel::DescriptorGatherOp>,
+      public DescriptorGatherConversionBase {
+  using ConvertOpToLLVMPattern<
+      mlir::triton::gpu::intel::DescriptorGatherOp>::ConvertOpToLLVMPattern;
+
+  DescriptorGatherOpConversion(
+      LLVMTypeConverter &converter, const triton::intel::TargetInfo &targetInfo,
+      const triton::intel::ModuleAxisInfoAnalysis &axisAnalysisPass,
+      triton::intel::ModuleStrideAnalysis &strideAnalysis,
+      PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<mlir::triton::gpu::intel::DescriptorGatherOp>(
+            converter, benefit),
+        DescriptorGatherConversionBase(targetInfo, axisAnalysisPass,
+                                       strideAnalysis) {}
+
+  LogicalResult
+  matchAndRewrite(mlir::triton::gpu::intel::DescriptorGatherOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (succeeded(lowerSubGroupGatherFastPath(op, adaptor, rewriter)))
+      return success();
+    return lowerDefaultGatherFallback(op, adaptor, rewriter);
+  }
+
+private:
+  LogicalResult
+  lowerSubGroupGatherFastPath(mlir::triton::gpu::intel::DescriptorGatherOp op,
+                              OpAdaptor adaptor,
+                              ConversionPatternRewriter &rewriter) const {
+    return failure();
+    Location loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto typeConverter = getTypeConverter();
+    MLIRContext *ctx = rewriter.getContext();
+    // Get the descriptor and indices
+    Value llDesc = adaptor.getDesc();
+    SmallVector<Value> offsetsX =
+        unpackLLElements(loc, adaptor.getXOffsets(), rewriter);
+    RankedTensorType offXTy = op.getXOffsets().getType();
+
+    Value offsetY = adaptor.getYOffset();
+    // Get result type information
+    auto resultType = cast<RankedTensorType>(op.getType());
+    std::optional<LinearLayout> llEncoding =
+        cast<DistributedEncodingTrait>(resultType.getEncoding())
+            .toLinearLayout(resultType.getShape());
+    assert(llEncoding.has_value() &&
+           "unexpected failure when getting linear layout");
+
+    StringAttr kRegister = S("register");
+    StringAttr kLane = S("lane");
+
+    size_t resultRank = resultType.getRank();
+    Type valueElemTy = typeConverter->convertType(resultType.getElementType());
+    unsigned numElems = getTotalElemsPerThread(resultType);
+
+    auto descType = cast<triton::TensorDescType>(op.getDesc().getType());
+    RankedTensorType descTensorType = descType.getBlockType();
+    size_t descRank = descTensorType.getRank();
+
+    unsigned elemSizeInBits = std::max(8u, valueElemTy.getIntOrFloatBitWidth());
+    BlockIOTileSizeInfo sizeInfo = getBlockIOTileSize<true>(
+        llEncoding.value(), resultRank - 1, elemSizeInBits, nullptr, false);
+
+    if (!sizeInfo.isValid())
+      return failure();
+    int tileHeight = sizeInfo.tileHeight;
+    int tileWidth = sizeInfo.tileWidth;
+    int numPackedVals = sizeInfo.numElemPerPackedVal;
+    int vBlocks = sizeInfo.vBlocks;
+    int rowDim = sizeInfo.rowDim;
+    int colDim = sizeInfo.colDim;
+    bool isTransposeRequired = sizeInfo.transpose;
+    bool useVNNIFormat = sizeInfo.vnni;
+    if (isTransposeRequired)
+      return failure();
+    assert(rowDim == 0 && "only support rowDim=0 for 1D block I/O");
+    assert(colDim == 1 && "only support colDim=1 for 1D block I/O");
+    std::optional<SetVector<unsigned>> regPackedBases =
+        std::move(sizeInfo.regPackedBases);
+
+    constexpr unsigned totalBytesPerGatherLoadNonTrans = 256;
+    constexpr unsigned totalBytesPerGatherLoadTrans = 512;
+    unsigned bytesPerRow = numPackedVals * tileWidth * elemSizeInBits / 8;
+    tileHeight = std::min(tileHeight,
+                          (int)(totalBytesPerGatherLoadNonTrans / bytesPerRow));
+    unsigned numElemsPerTile = tileHeight * tileWidth * numPackedVals;
+    unsigned totalBytesPerTile = numElemsPerTile * (elemSizeInBits / 8);
+    constexpr unsigned numPtrsPerLoad = 32u;
+    unsigned bytesPerPtr = mlir::ceil(totalBytesPerTile, numPtrsPerLoad);
+    unsigned ptrsPerRow = ceil(bytesPerRow, bytesPerPtr);
+    unsigned threadsPerWarp =
+        TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());
+    unsigned numElemsPerLoad =
+        (tileHeight * tileWidth * numPackedVals) / threadsPerWarp;
+
+    FailureOr<LinearLayout> offMapping = buildDescriptorGatherOffsetMapping(
+        resultType, offXTy, numPtrsPerLoad, ptrsPerRow, bytesPerPtr,
+        elemSizeInBits);
+    if (failed(offMapping))
+      return failure();
+
+    DescriptorFields desc = unpackDescriptor(llDesc, descRank, loc, rewriter);
+    assert(regPackedBases.has_value() &&
+           "invalid register bases for packing elems.");
+    LinearLayout regMapping =
+        buildRegisterMapping(*regPackedBases, *llEncoding, ctx);
+    LinearLayout shuffleMapping =
+        LinearLayout::identity1D(numElemsPerLoad, kRegister, kRegister);
+
+    Type unpackedType = LLVM::getVectorType(valueElemTy, numElemsPerLoad);
+
+    SmallVector<Value> loadedVals(numElems);
+
+    for (size_t elemIdx = 0; elemIdx < numElems; elemIdx += numElemsPerLoad) {
+      unsigned registerIdx = regMapping.apply({{kRegister, elemIdx}})[0].second;
+
+      // update offset Y.
+      Value addrElem = b.gep(ptr_ty(ctx, 1), valueElemTy, desc.base, offsetY);
+
+      SmallVector<Value> addrs, predicts;
+      for (size_t i = 0; i < numPtrsPerLoad; ++i) {
+        auto offsetsForLoad = offMapping->apply(
+            {{kRegister, registerIdx}, {str_attr("ptrs"), i}});
+        auto linearOffsetY = offsetsForLoad[1];
+        assert(linearOffsetY.first == str_attr("dim1"));
+        Value subOffsetY = b.i32_val(linearOffsetY.second);
+
+        auto offsetXIdx = offsetsForLoad[0];
+        assert(offsetXIdx.first == str_attr("offx_idx"));
+        // Note: here assume the offsetX is uniform value which is deduced from
+        // slice layout of the result layout.
+        // TODO: need to improve this.
+        Value offsetXUniform = targetInfo.shuffleIdx(
+            rewriter, loc, offsetsX[offsetXIdx.second], 0);
+        Value offsetX = b.zext(int_ty(64), offsetXUniform);
+        Value pred = b.icmp_ult(offsetX, desc.shapes[0]);
+        Value offset64 = b.mul(offsetX, desc.strides[rowDim]);
+
+        predicts.push_back(b.and_(
+            pred, b.icmp_ult(b.zext(int_ty(64), b.add(subOffsetY, offsetY)),
+                             desc.shapes[1])));
+
+        Value addr = b.gep(ptr_ty(ctx, 1), valueElemTy, addrElem,
+                           b.i32_val(linearOffsetY.second));
+        addr = b.gep(ptr_ty(ctx, 1), valueElemTy, addr, offset64);
+
+        addrs.push_back(b.ptrtoint(i64_ty, addr));
+      }
+      Value ptrVec = b.undef(vec_ty(i64_ty, addrs.size()));
+      Value predVec = b.undef(vec_ty(i1_ty, addrs.size()));
+      for (size_t i = 0; i < addrs.size(); ++i) {
+        Value sVal = createIndexAttrConstant(rewriter, loc,
+                                             typeConverter->getIndexType(), i);
+        ptrVec = b.insert_element(ptrVec, addrs[i], sVal);
+        predVec = b.insert_element(predVec, predicts[i], sVal);
+      }
+
+      Value ret = TritonGEN::SubGroupGatherLoadOp::create(
+          rewriter, loc, unpackedType, ptrVec, predVec);
+
+      unpackBlockLoadResult(ret, loadedVals, elemIdx, regMapping,
+                            shuffleMapping, {}, unpackedType, numElemsPerLoad,
+                            numPackedVals, {}, {},
+                            /*nanMaskElems=*/{}, loc, rewriter, ctx);
+    }
+    Type llvmResultStructTy = typeConverter->convertType(op.getType());
+    Value resultStruct = packLLElements(loc, typeConverter, loadedVals,
+                                        rewriter, llvmResultStructTy);
+    rewriter.replaceOp(op, {resultStruct});
+    return success();
+  }
+
+  LogicalResult
+  lowerDefaultGatherFallback(mlir::triton::gpu::intel::DescriptorGatherOp op,
+                             OpAdaptor adaptor,
+                             ConversionPatternRewriter &rewriter) const {
+    Location loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto typeConverter = getTypeConverter();
+    MLIRContext *ctx = rewriter.getContext();
+
+    Value llDesc = adaptor.getDesc();
+    SmallVector<Value> offsetsX =
+        unpackLLElements(loc, adaptor.getXOffsets(), rewriter);
+    Value offsetY = adaptor.getYOffset();
+
+    auto resultType = cast<RankedTensorType>(op.getType());
+    std::optional<LinearLayout> llEncoding =
+        cast<DistributedEncodingTrait>(resultType.getEncoding())
+            .toLinearLayout(resultType.getShape());
+    assert(llEncoding.has_value() &&
+           "unexpected failure when getting linear layout");
+
+    Type valueElemTy = typeConverter->convertType(resultType.getElementType());
+    unsigned numElems = getTotalElemsPerThread(resultType);
+
+    auto descType = cast<triton::TensorDescType>(op.getDesc().getType());
+    RankedTensorType descTensorType = descType.getBlockType();
+    size_t descRank = descTensorType.getRank();
+    DescriptorFields desc = unpackDescriptor(llDesc, descRank, loc, rewriter);
+
+    StringAttr kBlock = S("block");
+    StringAttr kWarp = S("warp");
+    StringAttr kLane = S("lane");
+    StringAttr kRegister = S("register");
+    StringAttr kDim0 = S("dim0");
+    StringAttr kDim1 = S("dim1");
+
+    Value fallbackDefault = b.undef(valueElemTy);
+    SmallVector<Value> loadedVals;
+    loadedVals.reserve(numElems);
+    auto subLayout = llEncoding->sublayout(
+        llvm::to_vector(llEncoding->getInDimNames()), {kDim0});
+    auto offsetsXType = cast<RankedTensorType>(op.getXOffsets().getType());
+    std::optional<LinearLayout> offsetsXLLEncoding =
+        cast<DistributedEncodingTrait>(offsetsXType.getEncoding())
+            .toLinearLayout(offsetsXType.getShape());
+    auto regMLayout = subLayout.invertAndCompose(*offsetsXLLEncoding);
+
+    for (unsigned elemIdx = 0; elemIdx < numElems; ++elemIdx) {
+      // Get the offset X index from register index first.
+      auto offsetXCoordS = llEncoding->apply(
+          {{kRegister, elemIdx}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+      // Get the offset Y from the warp id, lane id and register id.
+      // offsetMapping->apply
+      int64_t xOffsetIdx = -1, ySubOffset = -1;
+      for (auto [name, value] : offsetXCoordS) {
+        if (name == kDim0) {
+          xOffsetIdx = value;
+          break;
+        }
+      }
+
+      Value offsetX = offsetsX[xOffsetIdx];
+      Value offsetX64 = b.zext(i64_ty, offsetX);
+      Value predX = b.icmp_ult(offsetX64, desc.shapes[0]);
+
+      Value yOffset = b.add(offsetY, b.i32_val(ySubOffset));
+      Value yOffset64 = b.zext(i64_ty, yOffset);
+      Value predY = b.icmp_ult(yOffset64, desc.shapes[1]);
+      Value pred = b.and_(predX, predY);
+
+      Value xLinearOffset = b.mul(offsetX64, desc.strides[0]);
+      Value yLinearOffset = b.mul(yOffset64, desc.strides[1]);
+      Value linearOffset = b.add(xLinearOffset, yLinearOffset);
+      Value addr = b.gep(ptr_ty(ctx, 1), valueElemTy, desc.base, linearOffset);
+
+      auto createLoad = [&]() {
+        return SmallVector<Value>{b.load(valueElemTy, addr, /*align=*/1,
+                                         /*isVolatile=*/false,
+                                         /*isNonTemporal=*/false)};
+      };
+      Block &endBlock = LLVM::intel::createPredicatedBlock(
+          rewriter, loc, pred, SmallVector<Value, 1>{fallbackDefault},
+          createLoad);
+      Value loaded = *endBlock.args_begin();
+      loadedVals.push_back(loaded);
+    }
+
+    Type llvmResultStructTy = typeConverter->convertType(op.getType());
+    Value resultStruct = packLLElements(loc, typeConverter, loadedVals,
+                                        rewriter, llvmResultStructTy);
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
@@ -4485,10 +4858,10 @@ void mlir::triton::intel::populateLoadStoreOpToLLVMPatterns(
   patterns.add<LocalAtomicScatterRMWOpConversion>(typeConverter, targetInfo,
                                                   benefit);
   // Block IO store patterns (loads are handled via ttig.2d_block_load path).
-  patterns
-      .add<StoreOpToBlockIOConversion, DescriptorStoreOpToBlockIOConversion>(
-          typeConverter, targetInfo, axisInfoAnalysis, strideAnalysis,
-          benefit.getBenefit() + 2);
+  patterns.add<StoreOpToBlockIOConversion, DescriptorStoreOpToBlockIOConversion,
+               DescriptorGatherOpConversion>(typeConverter, targetInfo,
+                                             axisInfoAnalysis, strideAnalysis,
+                                             benefit.getBenefit() + 2);
   // TTIG ops from LowerTo2DBlockLoad TTGIR pass.
   patterns.add<ExtractDescOpConversion>(typeConverter, benefit);
   patterns.add<Subgroup2DBlockLoadOpConversion,
