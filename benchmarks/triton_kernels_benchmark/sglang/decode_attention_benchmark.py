@@ -1,0 +1,151 @@
+from typing import Optional
+
+import torch
+
+import triton_kernels_benchmark as benchmark_suite
+from triton_kernels_benchmark.sglang.attention_utils import repeat_kv_heads
+
+from sglang.srt.layers.attention.triton_ops.decode_attention import decode_attention_fwd
+
+VALIDATION_ATOL = 3e-2
+VALIDATION_RTOL = 3e-2
+VALIDATION_MAX_B = 4
+VALIDATION_MAX_N_CTX = 128
+
+
+def gen_args(B, N_CTX, H_Q, H_KV, D, dtype, device):
+
+    total_tokens = B * N_CTX
+    sm_scale = 1.0 / (D**0.5)
+    max_kv_splits = 8
+    num_kv_splits = torch.full((B, ), 4, dtype=torch.int32, device=device)
+
+    # q represents the new token being generated, one per B
+    q = torch.randn(B, H_Q, D, dtype=dtype, device=device)
+
+    # k_buffer and v_buffer represent all previous tokens
+    k_buffer = torch.randn(total_tokens, H_KV, D, dtype=dtype, device=device)
+    v_buffer = torch.randn(total_tokens, H_KV, D, dtype=dtype, device=device)
+
+    # o will have the same shape as q
+    o = torch.zeros(B, H_Q, D, dtype=dtype, device=device)
+
+    b_seq_len = torch.full((B, ), N_CTX, dtype=torch.int32, device=device)
+
+    kv_indptr = torch.zeros((B + 1, ), dtype=torch.int32, device=device)
+    kv_indptr[1:B + 1] = torch.cumsum(b_seq_len[:B], dim=0)
+    kv_indices = torch.arange(total_tokens, device=device)
+
+    attn_logits = torch.empty(
+        (B, H_Q, max_kv_splits, D),
+        dtype=torch.float32,
+        device=device,
+    )
+    attn_lse = torch.empty(
+        (B, H_Q, max_kv_splits),
+        dtype=torch.float32,
+        device=device,
+    )
+
+    return (q, k_buffer, v_buffer, o, kv_indptr, kv_indices, attn_logits, attn_lse, num_kv_splits, max_kv_splits,
+            sm_scale)
+
+
+def _decode_attention_torch_ref(q, k_buffer, v_buffer, kv_indptr, sm_scale):
+    output = torch.empty_like(q)
+    for b in range(q.shape[0]):
+        kv_start = int(kv_indptr[b].item())
+        kv_end = int(kv_indptr[b + 1].item())
+        k = repeat_kv_heads(k_buffer[kv_start:kv_end], q.shape[1]).float()
+        v = repeat_kv_heads(v_buffer[kv_start:kv_end], q.shape[1]).float()
+        q_row = q[b].float()
+        attn = torch.einsum('hd,shd->hs', q_row, k) * sm_scale
+        attn = torch.softmax(attn, dim=-1)
+        output[b] = torch.einsum('hs,shd->hd', attn, v).to(output.dtype)
+    return output
+
+
+def get_dtype(dtype_str: str):
+    if dtype_str == 'bfloat16':
+        return torch.bfloat16
+    if dtype_str == 'float16':
+        return torch.float16
+    if dtype_str == 'float32':
+        return torch.float32
+    raise ValueError(f'Unsupported dtype: {dtype_str}')
+
+
+X_VALS = [[bs, *sizes, mode, dtype]
+          for sizes in [(1024 + 64, 32, 8, 128), (1024 + 64, 32, 32, 96), (1024 + 64, 28, 4, 128)]
+          for bs in [1, 16, 32, 64, 128]
+          for mode in ['fwd']
+          for dtype in ['bfloat16']]
+
+
+def get_benchmark(providers_filter: Optional[list[str]] = None):
+    """Returns a Mark object with the SGLang decode attention benchmark."""
+    supported_providers = {
+        'triton': 'Triton',
+    }
+    providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
+
+    # pylint: disable=unused-argument
+    @benchmark_suite.perf_report(
+        benchmark_suite.Benchmark(
+            # argument names to use as an x-axis for the plot
+            x_names=['B', 'SEQ_LENS', 'H_Q', 'H_KV', 'D', 'MODE', 'DTYPE'],
+            x_vals=X_VALS,
+            line_arg='provider',
+            line_vals=list(providers.keys()),
+            line_names=list(providers.values()),
+            # line styles
+            styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
+            ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
+            plot_name='sglang-decode-attn-performance',
+            # name for the plot. Used also as a file name for saving the plot.
+            args={},
+        ))
+    def benchmark(B, SEQ_LENS, H_Q, H_KV, D, MODE, DTYPE, provider):
+        torch.manual_seed(0)
+        dtype = get_dtype(DTYPE)
+
+        N_CTX = SEQ_LENS
+        (q, k_buffer, v_buffer, o, kv_indptr, kv_indices, attn_logits, attn_lse, num_kv_splits, max_kv_splits,
+         sm_scale) = gen_args(B, N_CTX, H_Q, H_KV, D, dtype, 'xpu')
+
+        quantiles = [0.5, 0.0, 1.0]
+        if provider == 'triton' and MODE == 'fwd':
+            triton_fn = lambda: decode_attention_fwd(q, k_buffer, v_buffer, o, kv_indptr, kv_indices, attn_logits,
+                                                     attn_lse, num_kv_splits, max_kv_splits, sm_scale)
+            B_val = min(B, VALIDATION_MAX_B)
+            N_CTX_val = min(N_CTX, VALIDATION_MAX_N_CTX)
+            (q_ref, k_ref, v_ref, o_ref, kv_indptr_ref, kv_indices_ref, attn_logits_ref, attn_lse_ref,
+             num_kv_splits_ref, max_kv_splits_ref, sm_scale_ref) = gen_args(B_val, N_CTX_val, H_Q, H_KV, D, dtype,
+                                                                            'xpu')
+
+            def triton_ref_fn():
+                # The kernel writes into o_ref in place and returns None; return the output for comparison.
+                decode_attention_fwd(q_ref, k_ref, v_ref, o_ref, kv_indptr_ref, kv_indices_ref, attn_logits_ref,
+                                     attn_lse_ref, num_kv_splits_ref, max_kv_splits_ref, sm_scale_ref)
+                return o_ref
+
+            torch_ref_fn = lambda: _decode_attention_torch_ref(q_ref, k_ref, v_ref, kv_indptr_ref, sm_scale_ref)
+            benchmark_suite.assert_close(triton_ref_fn, torch_ref_fn, atol=VALIDATION_ATOL, rtol=VALIDATION_RTOL,
+                                         err_msg='decode_attention')
+            _, min_ms, max_ms, mean, cv = benchmark_suite.do_bench(triton_fn, n_warmup=10, n_repeat=10,
+                                                                   quantiles=quantiles)
+
+        else:
+            raise NotImplementedError(f'Unsupported provider {provider} and mode {MODE}')
+
+        # Decode attends a single query token over N_CTX keys: Q@K^T + Attn@V.
+        tflops = lambda ms: 2 * 2 * B * H_Q * N_CTX * D * (1e-12) / (ms * 1e-3)
+        gbps = lambda ms: B * (H_Q + 2 * N_CTX * H_KV) * D * 2 * (1e-9) / (ms * 1e-3)
+
+        return (gbps(mean), gbps(max_ms), gbps(min_ms)), (tflops(mean), tflops(max_ms), tflops(min_ms)), cv
+
+    return benchmark
+
+
+if __name__ == '__main__':
+    get_benchmark().run(show_plots=False, print_data=True)

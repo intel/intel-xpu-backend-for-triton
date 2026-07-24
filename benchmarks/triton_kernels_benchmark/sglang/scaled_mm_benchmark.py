@@ -386,6 +386,12 @@ def get_scaled_mm_benchmark(
     return benchmark
 
 
+def get_benchmark(providers_filter: Optional[list[str]] = None, is_fp8=False):
+    """CLI entry point: returns a Mark for the SGLang scaled_mm (int8/fp8) benchmark."""
+    plot_name = 'sglang-scaled-mm-' + ('fp8' if is_fp8 else 'int8') + '-performance'
+    return get_scaled_mm_benchmark(providers_filter=providers_filter, fp8=is_fp8, plot_name=plot_name)
+
+
 if __name__ == '__main__':
     _benchmark_mm = get_scaled_mm_benchmark(fp8=(os.getenv('FP8', '0') == '1'), )
     _benchmark_mm.run(show_plots=False, print_data=True)
