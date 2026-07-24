@@ -37,28 +37,18 @@ on:
         type: boolean
         default: false
 
-  schedule:
-    # Thursday/Sunday 2:05AM PST (UTC-8) or 3:05AM PDT (UTC-7)
-    - cron: "5 10 * * THU"
-    - cron: "5 10 * * SUN"
-
-# Cancel in-progress scheduled runs. Manual runs are never cancelled.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'ci' }}
-  cancel-in-progress: true
-
 permissions: read-all
 
 jobs:
   vllm-tests:
     uses: ./.github/workflows/vllm-tests-reusable.yml
     with:
-      runner_label: ${{ inputs.runner_label || '' }}
-      vllm_pin: ${{ inputs.vllm_pin || '' }}
-      vllm_xpu_kernels_pin: ${{ inputs.vllm_xpu_kernels_pin || '' }}
+      runner_label: ${{ inputs.runner_label }}
+      vllm_pin: ${{ inputs.vllm_pin }}
+      vllm_xpu_kernels_pin: ${{ inputs.vllm_xpu_kernels_pin }}
       python_version: "3.12"
-      skip_list: ${{ inputs.skip_list || '' }}
-      ignore_errors: ${{ inputs.ignore_errors || false }}
-      use_pyenv_python: ${{ inputs.use_pyenv_python || true }}
-      use_branch_wheel: ${{ inputs.use_branch_wheel || false }}
+      skip_list: ${{ inputs.skip_list }}
+      ignore_errors: ${{ inputs.ignore_errors }}
+      use_pyenv_python: ${{ inputs.use_pyenv_python }}
+      use_branch_wheel: ${{ inputs.use_branch_wheel }}
     secrets: inherit
