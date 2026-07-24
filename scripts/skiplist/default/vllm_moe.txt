@@ -1,7 +1,8 @@
 # Other
 # Large-token fused MoE accuracy failure on XPU after the memory-query patch.
 tests/kernels/moe/test_moe.py::test_fused_moe_int64_overflow
-tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py::test_silu_mul_fp8_quant_deep_gemm
+# DeepGEMM SiLU FP8 XPU fallback/tolerance patch.
+# tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py::test_silu_mul_fp8_quant_deep_gemm
 tests/kernels/moe/test_batched_moe.py::test_fused_moe_batched_experts
 tests/kernels/moe/test_moe.py::test_fused_moe_wn16
 
