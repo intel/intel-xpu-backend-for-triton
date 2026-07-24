@@ -10,6 +10,7 @@
 #include <set>
 #include <sstream>
 #include <unordered_map>
+#include <utility>
 
 namespace proton {
 
@@ -24,6 +25,12 @@ uint64_t getCurrentCpuTimestampNs() {
   return std::chrono::duration_cast<std::chrono::nanoseconds>(
              Clock::now().time_since_epoch())
       .count();
+}
+
+uint64_t applyTimestampOffset(uint64_t timestamp, int64_t offset) {
+  if (offset >= 0)
+    return timestamp + static_cast<uint64_t>(offset);
+  return timestamp - static_cast<uint64_t>(-offset);
 }
 
 } // namespace
@@ -283,6 +290,9 @@ std::vector<uint8_t> TraceData::toMsgPack(size_t phase) const {
 }
 
 void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
+  const auto timestampOffsetNs =
+      timestampOffsetProvider ? timestampOffsetProvider() : 0;
+
   std::set<size_t> targetEntryIds;
   // First, check whether any target entries are linked.
   // If so, resolve their contexts with a single lock on the virtual phase.
@@ -337,54 +347,59 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
     }
     bool hasKernelMetrics = false, hasCycleMetrics = false;
 
-    auto processMetricMaps =
-        [&](size_t eventId, const DataEntry::MetricMap &metrics,
-            const DataEntry::FlexibleMetricMap *flexibleMetrics,
-            const std::vector<Context> &contexts, bool isGraphLinked) {
-          if (auto kernelIt = metrics.find(MetricKind::Kernel);
-              kernelIt != metrics.end()) {
-            auto *kernelMetric =
-                static_cast<KernelMetric *>(kernelIt->second.get());
-            auto streamId = static_cast<size_t>(std::get<uint64_t>(
-                kernelMetric->getValue(KernelMetric::StreamId)));
-            auto startTimeNs = std::get<uint64_t>(
-                kernelMetric->getValue(KernelMetric::StartTime));
-            auto launchEventId = events.at(eventId).parentEventId;
-            if (isGraphLinked) {
-              // For graph-linked kernels, the parent maybe the <captured_at>
-              // tag. So we need to go one level up to find the actual launch
-              // event
-              launchEventId = events.at(launchEventId).parentEventId;
-            }
-            // FIXME #6645: Walk up to the nearest ancestor that has a
-            // CPU time range. On XPU/PTI kernel names are unavailable at
-            // callback time, so processActivityKernel creates an
-            // intermediate child event (via addOp) that lacks CPU
-            // timestamps.
-            while (launchEventId != Trace::Event::DummyId) {
-              auto it = events.find(launchEventId);
-              if (it == events.end()) {
-                launchEventId = Trace::Event::DummyId;
-                break;
-              }
-              if (it->second.hasCpuTimeRange())
-                break;
-              launchEventId = it->second.parentEventId;
-            }
-            kernelEvents[streamId].emplace_back(kernelMetric, flexibleMetrics,
-                                                contexts, launchEventId,
-                                                isGraphLinked);
-            minTimeStamp = std::min(minTimeStamp, startTimeNs);
-            hasKernelMetrics = true;
+    auto processMetricMaps = [&](size_t eventId,
+                                 const DataEntry::MetricMap &metrics,
+                                 const DataEntry::FlexibleMetricMap
+                                     *flexibleMetrics,
+                                 const std::vector<Context> &contexts,
+                                 bool isGraphLinked) {
+      if (auto kernelIt = metrics.find(MetricKind::Kernel);
+          kernelIt != metrics.end()) {
+        auto *kernelMetric =
+            static_cast<KernelMetric *>(kernelIt->second.get());
+        auto streamId = static_cast<size_t>(
+            std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StreamId)));
+        auto startTimeNs = applyTimestampOffset(
+            std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StartTime)),
+            timestampOffsetNs);
+        auto endTimeNs = applyTimestampOffset(
+            std::get<uint64_t>(kernelMetric->getValue(KernelMetric::EndTime)),
+            timestampOffsetNs);
+        auto launchEventId = events.at(eventId).parentEventId;
+        if (isGraphLinked) {
+          // For graph-linked kernels, the parent maybe the <captured_at>
+          // tag. So we need to go one level up to find the actual launch
+          // event
+          launchEventId = events.at(launchEventId).parentEventId;
+        }
+        // FIXME #6645: Walk up to the nearest ancestor that has a
+        // CPU time range. On XPU/PTI kernel names are unavailable at
+        // callback time, so processActivityKernel creates an
+        // intermediate child event (via addOp) that lacks CPU
+        // timestamps.
+        while (launchEventId != Trace::Event::DummyId) {
+          auto it = events.find(launchEventId);
+          if (it == events.end()) {
+            launchEventId = Trace::Event::DummyId;
+            break;
           }
-          if (auto cycleIt = metrics.find(MetricKind::Cycle);
-              cycleIt != metrics.end()) {
-            auto *cycleMetric =
-                static_cast<CycleMetric *>(cycleIt->second.get());
-            cycleEvents.emplace_back(cycleMetric, contexts);
-            hasCycleMetrics = true;
-          }
-        };
+          if (it->second.hasCpuTimeRange())
+            break;
+          launchEventId = it->second.parentEventId;
+        }
+        kernelEvents[streamId].emplace_back(kernelMetric, flexibleMetrics,
+                                            contexts, startTimeNs, endTimeNs,
+                                            launchEventId, isGraphLinked);
+        minTimeStamp = std::min(minTimeStamp, startTimeNs);
+        hasKernelMetrics = true;
+      }
+      if (auto cycleIt = metrics.find(MetricKind::Cycle);
+          cycleIt != metrics.end()) {
+        auto *cycleMetric = static_cast<CycleMetric *>(cycleIt->second.get());
+        cycleEvents.emplace_back(cycleMetric, contexts);
+        hasCycleMetrics = true;
+      }
+    };
 
     for (const auto &[_, event] : events) {
       if (event.hasCpuTimeRange()) { // CPU scope event
@@ -447,11 +462,7 @@ void TraceData::dumpChromeTrace(std::ostream &os, size_t phase) const {
         std::sort(events.begin(), events.end(),
                   [](const trace_data_dump::KernelEvent &a,
                      const trace_data_dump::KernelEvent &b) {
-                    auto aStartTime = std::get<uint64_t>(
-                        a.kernelMetric->getValue(KernelMetric::StartTime));
-                    auto bStartTime = std::get<uint64_t>(
-                        b.kernelMetric->getValue(KernelMetric::StartTime));
-                    return aStartTime < bStartTime;
+                    return a.startTimeNs < b.startTimeNs;
                   });
       }
       // Graph scopes are constructed in order
@@ -476,8 +487,10 @@ void TraceData::doDump(std::ostream &os, OutputFormat outputFormat,
   }
 }
 
-TraceData::TraceData(const std::string &path, ContextSource *contextSource)
-    : Data(path, contextSource), tracePhases(new PhaseStore<Trace>()) {
+TraceData::TraceData(const std::string &path, ContextSource *contextSource,
+                     TimestampOffsetProvider timestampOffsetProvider)
+    : Data(path, contextSource), tracePhases(new PhaseStore<Trace>()),
+      timestampOffsetProvider(std::move(timestampOffsetProvider)) {
   initPhaseStore(*tracePhases);
 }
 
