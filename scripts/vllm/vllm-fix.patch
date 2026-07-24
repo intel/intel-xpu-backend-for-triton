@@ -150,3 +150,27 @@ diff --git a/tests/conftest.py b/tests/conftest.py
 +        init_workspace_manager(device)
      yield
      reset_workspace_manager()
+diff --git a/vllm/model_executor/layers/fused_moe/oracle/fp8.py b/vllm/model_executor/layers/fused_moe/oracle/fp8.py
+index 862f29200..08f91465b 100644
+--- a/vllm/model_executor/layers/fused_moe/oracle/fp8.py
++++ b/vllm/model_executor/layers/fused_moe/oracle/fp8.py
+@@ -121,6 +121,15 @@ def _get_priority_backends(
+     if current_platform.is_xpu():
+-        # XPU platform supports TritonExperts and XPUExpertsFp8,
+-        # move XPU backend to the front.
+-        _move_to_front(_AVAILABLE_BACKENDS, Fp8MoeBackend.XPU)
++        if (
++            activation_key == kFp8Dynamic128Sym
++            and weight_key == kFp8Static128BlockSym
++        ):
++            # This is an explicit exception for the only quantization scheme
++            # currently supported by XPUExpertsBlockFp8. Update this condition
++            # if support for additional block-FP8 schemes is added.
++            # Native XPU grouped GEMM does not accept blockwise FP8 scales.
++            _move_to_front(_AVAILABLE_BACKENDS, Fp8MoeBackend.TRITON)
++        else:
++            # Prefer the native XPU backend for supported FP8 schemes.
++            _move_to_front(_AVAILABLE_BACKENDS, Fp8MoeBackend.XPU)
+-
++
+     if current_platform.is_cpu():
