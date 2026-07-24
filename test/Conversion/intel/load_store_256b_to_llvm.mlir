@@ -106,11 +106,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttig.sup
 
 // -----
 
-// COM: Sanity-check the gate: a masked store with a runtime-derived mask has
-// COM: getMaskAlignment() == 1, which clamps the vectorization factor to 1
-// COM: regardless of whether ttig.support_256b_load_store is present. The
-// COM: emitted store must therefore be scalar-width (i32), NOT vector<8xi32>.
-// COM: This protects against an over-eager widening that ignores mask alignment.
+// COM: Sanity-check the mask-alignment gate: a masked store with a runtime-derived
+// COM: (non-statically-uniform) mask has getMaskAlignment() == 1. Pointer contiguity
+// COM: alone (bounded by tt.divisibility = 16 bytes = 4 f32 elements here) picks
+// COM: vec=4 per group, so each of the 2 groups (8 elements/thread total) gets a
+// COM: two-armed dynamic guard: a fast arm with a single wide vector<4xi32> store
+// COM: (taken when the group's 4 mask elements are all true at runtime), and a slow
+// COM: arm that falls back to the exact per-element scalar stores, preserving
+// COM: correctness at the boundary while still avoiding narrow partial-dword writes
+// COM: in the common, fully-valid-group case.
 
 #blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttig.support_256b_load_store} {
@@ -126,10 +130,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttig.sup
     %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<256x!tt.ptr<f32>, #blocked0>
     %6 = tt.addptr %5, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
     tt.store %6, %cst, %arg1 : tensor<256x!tt.ptr<f32>, #blocked0>
-    // COM: mask alignment is 1 -> per-element scalar stores (8 scalar stores per thread).
-    // CHECK-NOT:   vector<8xi32>
-    // CHECK-NOT:   vector<4xi32>
-    // CHECK:       llvm.store {{.*}} i32, !llvm.ptr<1>
+    // COM: Group 1: fast arm is a single wide vector<4xi32> store gated on the
+    // COM: dynamic AND of the group's 4 mask elements; slow arm is the exact
+    // COM: per-element scalar fallback (4 individually-predicated scalar stores).
+    // CHECK-COUNT-2: llvm.and {{.*}} : i1
+    // CHECK: %[[GROUPMASK0:.*]] = llvm.and {{.*}} : i1
+    // CHECK-NEXT: llvm.cond_br %[[GROUPMASK0]], ^[[BB_FAST0:bb[0-9]+]], ^[[BB_SLOW0:bb[0-9]+]]
+    // CHECK: ^[[BB_FAST0]]:
+    // CHECK:   llvm.store {{.*}} {alignment = 16 : i64} : vector<4xi32>, !llvm.ptr<1>
+    // CHECK: ^[[BB_SLOW0]]:
+    // CHECK-COUNT-4: llvm.store {{.*}} {alignment = 4 : i64} : f32, !llvm.ptr<1>
+    // COM: Group 2: same structure, second vec=4 group.
+    // CHECK-COUNT-2: llvm.and {{.*}} : i1
+    // CHECK: %[[GROUPMASK1:.*]] = llvm.and {{.*}} : i1
+    // CHECK-NEXT: llvm.cond_br %[[GROUPMASK1]], ^[[BB_FAST1:bb[0-9]+]], ^[[BB_SLOW1:bb[0-9]+]]
+    // CHECK: ^[[BB_FAST1]]:
+    // CHECK:   llvm.store {{.*}} {alignment = 16 : i64} : vector<4xi32>, !llvm.ptr<1>
+    // CHECK: ^[[BB_SLOW1]]:
+    // CHECK-COUNT-4: llvm.store {{.*}} {alignment = 4 : i64} : f32, !llvm.ptr<1>
     tt.return
   }
 }

@@ -3199,8 +3199,13 @@ struct StoreOpConversion
     Type valueElemTy =
         typeConverter->convertType(getElementTypeOrSelf(valueTy));
     unsigned vec = getVectorSize(hasSupport256bLoadStore(op), ptr);
-    if (llMask)
-      vec = std::min<size_t>(vec, getMaskAlignment(op.getMask()));
+    // Statically-provable alignment of the mask (i.e. the mask is proven
+    // constant over blocks of this many elements). Unlike vec, this is no
+    // longer used to shrink the vectorization width: even when the mask
+    // isn't statically uniform across a vec-group, we still try a single
+    // wide store gated on a dynamic AND of the group's mask elements,
+    // falling back to the exact per-element behavior otherwise (see below).
+    unsigned maskAlignment = llMask ? getMaskAlignment(op.getMask()) : vec;
 
     Value llPtr = adaptor.getPtr();
     SmallVector<Value> ptrElems =
@@ -3225,6 +3230,30 @@ struct StoreOpConversion
     const size_t dtsize =
         std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);
     const size_t valueElemNBits = dtsize * 8;
+
+    // Widens an i1 element to i8 (stores don't support sub-byte types) and
+    // bitcasts it to the store's element type.
+    auto toElemTy = [&](Value elem) {
+      if (elem.getType().isInteger(1))
+        elem = b.sext(i8_ty, elem);
+      return b.bitcast(elem, valueElemTy);
+    };
+
+    // Dispatches a (possibly predicated) store of `value` to `addr`: an
+    // unconditional store if `pred` is null, a `TritonGEN::PredicatedStoreOp`
+    // if predicated instructions are available for `op`, or a branch-guarded
+    // plain store (via `storeFn`) otherwise.
+    auto emitPredicatedStore = [&](Value pred, Value addr, Value value,
+                                   auto storeFn) {
+      if (!pred)
+        (void)storeFn();
+      else if (canUsePredicatedInstructions(op)) {
+        auto cacheModifier = tritonToIntelCacheModifier(op);
+        TritonGEN::PredicatedStoreOp::create(rewriter, loc, addr, value, pred,
+                                             cacheModifier);
+      } else
+        LLVM::intel::createPredicatedBlock(rewriter, loc, pred, storeFn);
+    };
 
     unsigned elemsPerThread = getTotalElemsPerThread(valueTy);
     const int numVecs = elemsPerThread / vec;
@@ -3257,10 +3286,7 @@ struct StoreOpConversion
         for (size_t elemIdx = 0; elemIdx < wordNElems; ++elemIdx) {
           const size_t elemOffset = vecStart + wordIdx * wordNElems + elemIdx;
           assert(elemOffset < valueElems.size());
-          Value elem = valueElems[elemOffset];
-          if (elem.getType().isInteger(1))
-            elem = b.sext(i8_ty, elem);
-          elem = b.bitcast(elem, valueElemTy);
+          Value elem = toElemTy(valueElems[elemOffset]);
 
           llWord = b.insert_element(wordTy, llWord, elem, b.i32_val(elemIdx));
         }
@@ -3268,12 +3294,6 @@ struct StoreOpConversion
         std::string constraint =
             (width == 64) ? "l" : ((width == 32) ? "r" : "c");
         asmArgs.emplace_back(llWord, constraint);
-      }
-
-      Value maskVal = threadPred;
-      if (maskElems.size() > 0) {
-        auto mask = maskElems[vecStart];
-        maskVal = maybeAnd(rewriter, loc, threadPred, mask);
       }
 
       auto vecTy = vec_ty(valArgTy, nWords);
@@ -3295,15 +3315,55 @@ struct StoreOpConversion
         return ArrayRef<Value>();
       };
 
-      if (!maskVal)
-        auto _ = createStoreWithAttrs();
-      else if (canUsePredicatedInstructions(op)) {
-        auto cacheModifier = tritonToIntelCacheModifier(op);
-        TritonGEN::PredicatedStoreOp::create(rewriter, loc, addrElem, vecWord,
-                                             maskVal, cacheModifier);
-      } else
-        LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal,
-                                           createStoreWithAttrs);
+      // Emits the exact single-element fallback that today's code emits when
+      // vec == 1, applied to a single lane `i` of the current group. Used
+      // both for the statically-uniform-mask case (vec == 1 always falls
+      // here) and as the "slow" per-element arm when the mask isn't
+      // statically uniform across the whole group.
+      auto storeSingleElem = [&](size_t i) {
+        Value elem = toElemTy(valueElems[vecStart + i]);
+
+        Value addrElemI =
+            b.bitcast(ptrElems[vecStart + i], ptr_ty(ctx, 1 /*global*/));
+        uint32_t alignmentI = dtsize;
+        auto createSingleStoreWithAttrs = [&]() {
+          bool isVolatile = false;
+          b.store(elem, addrElemI, alignmentI, isVolatile,
+                  getNonTemporalFlag(op));
+          return ArrayRef<Value>();
+        };
+
+        Value predI = threadPred;
+        if (maskElems.size() > 0)
+          predI = maybeAnd(rewriter, loc, threadPred, maskElems[vecStart + i]);
+
+        emitPredicatedStore(predI, addrElemI, elem, createSingleStoreWithAttrs);
+      };
+
+      if (maskElems.empty() || maskAlignment >= vec) {
+        // Either unmasked, or the mask is statically provably uniform across
+        // this whole group: behavior identical to before this change.
+        Value maskVal = threadPred;
+        if (maskElems.size() > 0)
+          maskVal = maybeAnd(rewriter, loc, threadPred, maskElems[vecStart]);
+
+        emitPredicatedStore(maskVal, addrElem, vecWord, createStoreWithAttrs);
+      } else {
+        // The mask isn't statically uniform across the group. Try a single
+        // wide store gated on a dynamic AND of the group's mask elements
+        // (the common case away from boundaries); otherwise fall back to
+        // the exact per-element behavior, preserving correctness.
+        Value groupMask = maskElems[vecStart];
+        for (size_t i = 1; i < vec; ++i)
+          groupMask = b.and_(groupMask, maskElems[vecStart + i]);
+        Value fastMaskVal = maybeAnd(rewriter, loc, threadPred, groupMask);
+
+        LLVM::intel::createTwoArmedPredicatedBlock(
+            rewriter, loc, fastMaskVal, createStoreWithAttrs, [&]() {
+              for (size_t i = 0; i < vec; ++i)
+                storeSingleElem(i);
+            });
+      }
     }
 
     rewriter.eraseOp(op);
