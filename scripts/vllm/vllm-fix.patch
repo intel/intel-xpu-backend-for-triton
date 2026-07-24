@@ -127,3 +127,26 @@ index 21bda8e17..e7f11e934 100644
          # Note: this does a bunch of extra work because expert_num_tokens is
          # ignored but it does support torch.compile + cudagraphs.
          hidden_dim = A.size(-1)
+diff --git a/tests/conftest.py b/tests/conftest.py
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -284,8 +284,8 @@ def workspace_init():
+     """Initialize the workspace manager for tests that need it.
+
+-    This fixture initializes the workspace manager with a CUDA device
+-    if available, and resets it after the test completes. Tests that
++    This fixture initializes the workspace manager with an accelerator device
++    if available, and resets it after the test completes. Tests that
+     create a full vLLM engine should NOT use this fixture as the engine
+     will initialize the workspace manager itself.
+     """
+     from vllm.v1.worker.workspace import (
+@@ -297,5 +297,8 @@ def workspace_init():
+     if torch.cuda.is_available():
+         device = torch.device("cuda:0")
+         init_workspace_manager(device)
++    elif torch.xpu.is_available():
++        device = torch.device("xpu:0")
++        init_workspace_manager(device)
+     yield
+     reset_workspace_manager()
