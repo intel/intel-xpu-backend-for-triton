@@ -14,7 +14,7 @@ on:
 
 # Cancel in-progress runs for the same PR or schedule.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || "ci" }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || 'ci' }}
   cancel-in-progress: true
 
 jobs:
