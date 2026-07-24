@@ -224,6 +224,7 @@ COMPILATION_HELPER = CompilationHelper()
 class ArchParser:
 
     def __init__(self, cache_path: str):
+        self.cache_path = cache_path
         self.shared_library = ctypes.CDLL(cache_path)
         self.shared_library.parse_device_arch.restype = ctypes.c_char_p
         self.shared_library.parse_device_arch.argtypes = (ctypes.c_uint64, )
@@ -396,6 +397,8 @@ def compile_module_from_src(src: str, name: str, is_lts: bool = False):
             with open(src_path, "w") as f:
                 f.write(src)
             extra_compiler_args = []
+            libraries = list(COMPILATION_HELPER.libraries)
+            library_dir = list(COMPILATION_HELPER.library_dir)
             if COMPILATION_HELPER.libsycl_dir:
                 if os.name == "nt":
                     extra_compiler_args += ["/LIBPATH:" + dir for dir in COMPILATION_HELPER.libsycl_dir]
@@ -408,14 +411,25 @@ def compile_module_from_src(src: str, name: str, is_lts: bool = False):
                 else:
                     extra_compiler_args += ["-DTRITON_INTEL_INJECT_PYTORCH=1"]
 
+            if name == "spirv_utils":
+                # Compile arch_parser.c directly into spirv_utils to resolve
+                # parse_device_arch without linking against the arch_utils shared
+                # library. Linking against a pre-built .pyd on Windows requires an
+                # import library (main.lib) that is not persisted in the cache, so
+                # embedding the source avoids that platform-specific issue entirely.
+                _driver_dir = os.path.dirname(os.path.realpath(__file__))
+                arch_parser_src = Path(os.path.join(_driver_dir, "arch_parser.c")).read_text()
+                with open(src_path, "w") as f:
+                    f.write(src + "\n" + arch_parser_src)
+
             if name == "spirv_utils" and not is_lts:
                 if os.name == "nt":
                     extra_compiler_args += ["/DENABLE_EXPERIMENTAL_EVENTLESS_SUBMIT"]
                 else:
                     extra_compiler_args += ["-DENABLE_EXPERIMENTAL_EVENTLESS_SUBMIT"]
 
-            so = _build(name, src_path, tmpdir, COMPILATION_HELPER.library_dir, COMPILATION_HELPER.include_dir,
-                        COMPILATION_HELPER.libraries, ccflags=extra_compiler_args)
+            so = _build(name, src_path, tmpdir, library_dir, COMPILATION_HELPER.include_dir, libraries,
+                        ccflags=extra_compiler_args)
             with open(so, "rb") as f:
                 cache_path = cache.put(f.read(), f"{name}{suffix}", binary=True)
 
@@ -429,6 +443,26 @@ def compile_module_from_src(src: str, name: str, is_lts: bool = False):
         return cache_path
 
     return _load_module_from_path(name, cache_path)
+
+
+@lru_cache
+def get_arch_utils_module():
+    dirname = os.path.dirname(os.path.realpath(__file__))
+    src = Path(os.path.join(dirname, "arch_parser.c")).read_text()
+    return compile_module_from_src(src=src, name="arch_utils", is_lts=False)
+
+
+@lru_cache
+def get_spirv_utils_module():
+    dirname = os.path.dirname(os.path.realpath(__file__))
+    # Use class-level capability probe; this helper can be called outside any XPUUtils instance.
+    is_lts_driver = XPUUtils._is_lts()
+    mod = compile_module_from_src(
+        src=Path(os.path.join(dirname, "driver.c")).read_text(),
+        name="spirv_utils",
+        is_lts=is_lts_driver,
+    )
+    return mod
 
 
 # ------------------------
@@ -456,12 +490,9 @@ class XPUUtils(object):
     def __init__(self):
         if self._initialized:
             return
-        dirname = os.path.dirname(os.path.realpath(__file__))
         # we save `spirv_utils` module so that the destructor is not called prematurely, which will unload the dll
         # and can cause `Fatal Python error: Segmentation fault`
-        is_lts = self._is_lts()
-        mod = compile_module_from_src(src=Path(os.path.join(dirname, "driver.c")).read_text(), name="spirv_utils",
-                                      is_lts=is_lts)
+        mod = get_spirv_utils_module()
         global PyKernelArg
         global ARG_CONSTEXPR
         global ARG_KERNEL
@@ -775,10 +806,7 @@ class XPUDriver(DriverBase):
 
         def update_device_arch(dev_property):
             if not (arch := knobs.intel.device_arch):
-                dirname = os.path.dirname(os.path.realpath(__file__))
-                parser = compile_module_from_src(src=Path(os.path.join(dirname, "arch_parser.c")).read_text(),
-                                                 name="arch_utils")
-                arch = parser.parse_device_arch(dev_property["architecture"])
+                arch = get_arch_utils_module().parse_device_arch(dev_property["architecture"])
             dev_property["arch"] = arch
 
         # All GPUs with the same device_id have the same extensions, so we just
