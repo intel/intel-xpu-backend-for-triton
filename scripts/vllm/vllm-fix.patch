@@ -154,7 +154,7 @@ diff --git a/tests/conftest.py b/tests/conftest.py
 diff --git a/tests/kernels/moe/test_moe.py b/tests/kernels/moe/test_moe.py
 --- a/tests/kernels/moe/test_moe.py
 +++ b/tests/kernels/moe/test_moe.py
-@@ -315,7 +315,25 @@ def test_fused_moe(
+@@ -315,7 +315,21 @@ def test_fused_moe(
      w1 = torch.randn((e, 2 * n, k), device="cuda", dtype=dtype) / 10
      w2 = torch.randn((e, k, n), device="cuda", dtype=dtype) / 10
 
@@ -170,11 +170,7 @@ diff --git a/tests/kernels/moe/test_moe.py b/tests/kernels/moe/test_moe.py
 +        if not torch.any(boundary_ties):
 +            break
 +
-+        score[boundary_ties] = torch.randn(
-+            (int(boundary_ties.sum().item()), e),
-+            device=score.device,
-+            dtype=score.dtype,
-+        )
++        score[boundary_ties] = torch.randn_like(score[boundary_ties])
 +    else:
 +        raise AssertionError("Failed to generate scores without top-k boundary ties")
 
