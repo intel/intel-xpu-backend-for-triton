@@ -252,7 +252,8 @@ def test_block_tdesc_dot_product(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP
     not (triton.runtime.driver.active.get_current_target().arch['has_subgroup_2d_block_io']
          and triton.runtime.driver.active.get_current_target().arch['has_subgroup_matrix_multiply_accumulate']),
     reason="Block loads and/or DPAS not supported on this architecture", run=False)
-def test_block_tdesc_column_major_load(device, tmp_path: pathlib.Path):
+@pytest.mark.parametrize("threads_per_warp", [16, 32])
+def test_block_tdesc_column_major_load(threads_per_warp, device, tmp_path: pathlib.Path):
     """Verify that a column_major descriptor load correctly loads a transposed matrix.
 
     B is stored in physical memory as [N, K] row-major (N rows, K contiguous
@@ -268,13 +269,13 @@ def test_block_tdesc_column_major_load(device, tmp_path: pathlib.Path):
     M, K, N = 64, 32, 64
 
     ir = f"""
-    #dpas = #ttig.dpas<{{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}}>
+    #dpas = #ttig.dpas<{{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = {threads_per_warp}, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}}>
     #dot0 = #ttg.dot_op<{{opIdx = 0, parent = #dpas, kWidth=1}}>
     #dot1 = #ttg.dot_op<{{opIdx = 1, parent = #dpas, kWidth=2}}>
-    module attributes {{ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_2d_block_io, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32}} {{
-        tt.func public @column_major_load(%a_ptr: !tt.ptr<f16> {{tt.divisibility = 16 : i32}},
-                                          %b_ptr: !tt.ptr<f16> {{tt.divisibility = 16 : i32}},
-                                          %c_ptr: !tt.ptr<f32> {{tt.divisibility = 16 : i32}}) attributes {{noinline = false}} {{
+    module attributes {{ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_2d_block_io, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = {threads_per_warp} : i32}} {{
+        tt.func public @column_major_load_tpw{threads_per_warp}(%a_ptr: !tt.ptr<f16> {{tt.divisibility = 16 : i32}},
+                                                                %b_ptr: !tt.ptr<f16> {{tt.divisibility = 16 : i32}},
+                                                                %c_ptr: !tt.ptr<f32> {{tt.divisibility = 16 : i32}}) attributes {{noinline = false}} {{
             %c0_i32 = arith.constant 0 : i32
             %c1_i64 = arith.constant 1 : i64
             %cM_i32 = arith.constant {M} : i32
@@ -320,12 +321,16 @@ def test_block_tdesc_column_major_load(device, tmp_path: pathlib.Path):
     B_stored = torch.randn((N, K), dtype=torch.float16, device=device)
     C = torch.empty((M, N), dtype=torch.float32, device=device)
 
-    temp_file = tmp_path / "test_block_tdesc_column_major_load.ttgir"
+    temp_file = tmp_path / f"test_block_tdesc_column_major_load_tpw{threads_per_warp}.ttgir"
     temp_file.write_text(ir)
     kernel = triton.compile(str(temp_file))
+    llir = kernel.asm["llir"]
 
     kernel[(1, 1, 1)](A, B_stored, C)
 
     # C should equal A x B_stored.T  (since B was loaded via column_major).
     expected = torch.mm(A.to(torch.float32), B_stored.to(torch.float32).T)
     torch.testing.assert_close(C, expected, atol=1e-1, rtol=1e-2)
+    assert 'spirv_Subgroup2DBlockStoreINTEL' in llir or 'GenISA.LSC2DBlockWrite' in llir
+    load_count = llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead')
+    assert load_count >= 2

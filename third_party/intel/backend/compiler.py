@@ -54,7 +54,7 @@ class XPUOptions:
     backend_name: str = 'intel'
     sanitize_overflow: bool = True
     generate_native_code: bool = False
-    arch: str = None
+    arch: str = ""
     instrumentation_mode: str = ""
 
     def __post_init__(self):
