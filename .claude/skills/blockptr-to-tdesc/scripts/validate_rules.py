@@ -51,8 +51,7 @@ import triton.language as tl
 
 # --------------------------------------------------------------------------- #
 # Rule 1/2/3/4/6/7/10: simple 2D GEMM — the canonical before/after pair.
-#   BEFORE: benchmarks/.../gemm_block_ptr_benchmark.py:47-66
-#   AFTER : benchmarks/.../gemm_benchmark.py:82-99
+#   REFERENCE: benchmarks/.../gemm_benchmark.py:82-99
 # Exercises: make_block_ptr->make_tensor_descriptor (R1), advance->off_k (R2),
 #            load boundary_check drop (R3), store boundary_check drop (R4),
 #            static offsets passed directly (R7).
