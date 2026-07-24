@@ -3231,6 +3231,30 @@ struct StoreOpConversion
         std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);
     const size_t valueElemNBits = dtsize * 8;
 
+    // Widens an i1 element to i8 (stores don't support sub-byte types) and
+    // bitcasts it to the store's element type.
+    auto toElemTy = [&](Value elem) {
+      if (elem.getType().isInteger(1))
+        elem = b.sext(i8_ty, elem);
+      return b.bitcast(elem, valueElemTy);
+    };
+
+    // Dispatches a (possibly predicated) store of `value` to `addr`: an
+    // unconditional store if `pred` is null, a `TritonGEN::PredicatedStoreOp`
+    // if predicated instructions are available for `op`, or a branch-guarded
+    // plain store (via `storeFn`) otherwise.
+    auto emitPredicatedStore = [&](Value pred, Value addr, Value value,
+                                   auto storeFn) {
+      if (!pred)
+        (void)storeFn();
+      else if (canUsePredicatedInstructions(op)) {
+        auto cacheModifier = tritonToIntelCacheModifier(op);
+        TritonGEN::PredicatedStoreOp::create(rewriter, loc, addr, value, pred,
+                                             cacheModifier);
+      } else
+        LLVM::intel::createPredicatedBlock(rewriter, loc, pred, storeFn);
+    };
+
     unsigned elemsPerThread = getTotalElemsPerThread(valueTy);
     const int numVecs = elemsPerThread / vec;
     for (size_t vecStart = 0; vecStart < elemsPerThread; vecStart += vec) {
@@ -3262,10 +3286,7 @@ struct StoreOpConversion
         for (size_t elemIdx = 0; elemIdx < wordNElems; ++elemIdx) {
           const size_t elemOffset = vecStart + wordIdx * wordNElems + elemIdx;
           assert(elemOffset < valueElems.size());
-          Value elem = valueElems[elemOffset];
-          if (elem.getType().isInteger(1))
-            elem = b.sext(i8_ty, elem);
-          elem = b.bitcast(elem, valueElemTy);
+          Value elem = toElemTy(valueElems[elemOffset]);
 
           llWord = b.insert_element(wordTy, llWord, elem, b.i32_val(elemIdx));
         }
@@ -3300,10 +3321,7 @@ struct StoreOpConversion
       // here) and as the "slow" per-element arm when the mask isn't
       // statically uniform across the whole group.
       auto storeSingleElem = [&](size_t i) {
-        Value elem = valueElems[vecStart + i];
-        if (elem.getType().isInteger(1))
-          elem = b.sext(i8_ty, elem);
-        elem = b.bitcast(elem, valueElemTy);
+        Value elem = toElemTy(valueElems[vecStart + i]);
 
         Value addrElemI =
             b.bitcast(ptrElems[vecStart + i], ptr_ty(ctx, 1 /*global*/));
@@ -3319,15 +3337,7 @@ struct StoreOpConversion
         if (maskElems.size() > 0)
           predI = maybeAnd(rewriter, loc, threadPred, maskElems[vecStart + i]);
 
-        if (!predI)
-          auto _ = createSingleStoreWithAttrs();
-        else if (canUsePredicatedInstructions(op)) {
-          auto cacheModifier = tritonToIntelCacheModifier(op);
-          TritonGEN::PredicatedStoreOp::create(rewriter, loc, addrElemI, elem,
-                                               predI, cacheModifier);
-        } else
-          LLVM::intel::createPredicatedBlock(rewriter, loc, predI,
-                                             createSingleStoreWithAttrs);
+        emitPredicatedStore(predI, addrElemI, elem, createSingleStoreWithAttrs);
       };
 
       if (maskElems.empty() || maskAlignment >= vec) {
@@ -3337,15 +3347,7 @@ struct StoreOpConversion
         if (maskElems.size() > 0)
           maskVal = maybeAnd(rewriter, loc, threadPred, maskElems[vecStart]);
 
-        if (!maskVal)
-          auto _ = createStoreWithAttrs();
-        else if (canUsePredicatedInstructions(op)) {
-          auto cacheModifier = tritonToIntelCacheModifier(op);
-          TritonGEN::PredicatedStoreOp::create(rewriter, loc, addrElem, vecWord,
-                                               maskVal, cacheModifier);
-        } else
-          LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal,
-                                             createStoreWithAttrs);
+        emitPredicatedStore(maskVal, addrElem, vecWord, createStoreWithAttrs);
       } else {
         // The mask isn't statically uniform across the group. Try a single
         // wide store gated on a dynamic AND of the group's mask elements

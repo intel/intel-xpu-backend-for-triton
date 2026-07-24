@@ -100,11 +100,11 @@ void createTwoArmedPredicatedBlock(RewriterBase &rewriter, Location loc,
   cf::CondBranchOp::create(rewriter, loc, cond, fastBlock, slowBlock);
 
   rewriter.setInsertionPointToStart(fastBlock);
-  (void)std::forward<FastFn>(fastFn)();
+  (void)fastFn();
   cf::BranchOp::create(rewriter, loc, endBlock);
 
   rewriter.setInsertionPointToStart(slowBlock);
-  (void)std::forward<SlowFn>(slowFn)();
+  (void)slowFn();
   cf::BranchOp::create(rewriter, loc, endBlock);
 
   rewriter.setInsertionPointToStart(endBlock);
