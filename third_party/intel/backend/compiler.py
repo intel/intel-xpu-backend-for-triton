@@ -605,7 +605,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             if options.grf_mode == 'default':
                 # Try rebuilding with larger GRF modes (default first, then larger).
                 retry_grf_mode_list = [""]  # default GRF mode by omitting the flag
-                if metadata["target"].arch["arch"] == 'cri':
+                if metadata["target"].arch.get("arch") == 'cri':
                     retry_grf_mode_list.append("-cl-intel-512-GRF-per-thread")
                 else:
                     retry_grf_mode_list.append("-cl-intel-256-GRF-per-thread")
