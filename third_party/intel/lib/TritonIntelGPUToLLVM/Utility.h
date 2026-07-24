@@ -76,6 +76,40 @@ Block &createPredicatedBlock(RewriterBase &rewriter, Location loc, Value cond,
   return createPredicatedBlock(rewriter, loc, cond, {}, thenOpsFn);
 }
 
+/// Create a two-armed predicated block, using \p cond to select between two
+/// side-effecting, result-less bodies:
+///   cf.cond_br %cond, ^fast, ^slow
+///   ^fast:
+///     `fastFn()`
+///     cf.br ^end
+///   ^slow:
+///     `slowFn()`
+///     cf.br ^end
+///   ^end:
+template <typename FastFn, typename SlowFn>
+void createTwoArmedPredicatedBlock(RewriterBase &rewriter, Location loc,
+                                   Value cond, FastFn &&fastFn,
+                                   SlowFn &&slowFn) {
+  Block *insertionBlock = rewriter.getInsertionBlock();
+  Block *fastBlock =
+      rewriter.splitBlock(insertionBlock, rewriter.getInsertionPoint());
+  Block *slowBlock = rewriter.splitBlock(fastBlock, fastBlock->begin());
+  Block *endBlock = rewriter.splitBlock(slowBlock, slowBlock->begin());
+
+  rewriter.setInsertionPointToEnd(insertionBlock);
+  cf::CondBranchOp::create(rewriter, loc, cond, fastBlock, slowBlock);
+
+  rewriter.setInsertionPointToStart(fastBlock);
+  (void)std::forward<FastFn>(fastFn)();
+  cf::BranchOp::create(rewriter, loc, endBlock);
+
+  rewriter.setInsertionPointToStart(slowBlock);
+  (void)std::forward<SlowFn>(slowFn)();
+  cf::BranchOp::create(rewriter, loc, endBlock);
+
+  rewriter.setInsertionPointToStart(endBlock);
+}
+
 LLVM::RoundingMode
 convertTritonRoundingModeToLLVM(const triton::RoundingMode rounding);
 
