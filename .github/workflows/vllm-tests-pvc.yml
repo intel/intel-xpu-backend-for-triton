@@ -1,4 +1,4 @@
-name: vLLM tests, BMG
+name: vLLM tests, PVC
 
 permissions: read-all
 
@@ -24,6 +24,5 @@ jobs:
       github.event.label.name == 'run-vllm-tests'
     uses: ./.github/workflows/vllm-tests-reusable.yml
     with:
-      runner_label: b580
-      skip_list: xe2
+      runner_label: max1550
     secrets: inherit
