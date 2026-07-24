@@ -8,9 +8,9 @@ on:
     - cron: "5 10 * * THU"
     - cron: "5 10 * * SUN"
 
-# Cancel in-progress scheduled runs.
+# Cancel in-progress runs for the same PR or schedule.
 concurrency:
-  group: ${{ github.workflow }}-ci
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || 'ci' }}
   cancel-in-progress: true
 
 jobs:
