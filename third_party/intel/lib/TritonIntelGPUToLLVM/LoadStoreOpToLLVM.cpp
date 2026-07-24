@@ -2416,6 +2416,94 @@ private:
       Value addrElem = b.gep(ptr_ty(ctx, 1), valueElemTy, desc.base, offsetY);
 
       SmallVector<Value> addrs, predicts;
+#if 0
+      // Make a nonuniform pointer of vector.
+      {
+        constexpr StringLiteral nonUniformPtrDefine = R"({
+  .decl ADDR v_type=G type=uq num_elts=16 align=wordx32 alias=<$0, 0>
+  mov (M1_NM, 1) $ADDR(0, 0)<1> $1(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(0, 1)<1> $2(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(0, 2)<1> $3(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(0, 3)<1> $4(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(0, 4)<1> $5(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(0, 5)<1> $6(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(0, 6)<1> $7(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(0, 7)<1> $8(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(1, 0)<1> $9(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(1, 1)<1> $10(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(1, 2)<1> $11(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(1, 3)<1> $12(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(1, 4)<1> $13(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(1, 5)<1> $14(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(1, 6)<1> $15(0, 0)<0;1,0>
+  mov (M1_NM, 1) $ADDR(1, 7)<1> $16(0, 0)<0;1,0>
+})";
+        XeBuilder xeBuilder;
+        XeInstr &packPtr =
+            *xeBuilder.create<XeInstr>(nonUniformPtrDefine.str());
+        XeBuilder::Operand *res = xeBuilder.newOperand("=rw");
+        SmallVector<XeBuilder::Operand *> args{res};
+        for (size_t i = 0; i < tileHeight; ++i) {
+          unsigned offsetIdx =
+              regMapping.apply({{kRegister, elemIdx + i}})[0].second;
+          auto offsets = offMapping.apply(
+              {{kRegister, offsetIdx}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+
+          for (auto [dim, offsetIdx] : offsets) {
+            // Update offset X
+            Value offsetX = b.zext(int_ty(64), offsetsX[offsetIdx]);
+            Value offset64 = b.mul(offsetX, desc.strides[rowDim]);
+            Value addr0 =
+                b.gep(ptr_ty(ctx, 1), valueElemTy, addrElem, offset64);
+            Value addr1 = b.gep(ptr_ty(ctx, 1), valueElemTy, addr0,
+                                b.i32_val(bytesPerLane * 8 / elemSizeInBits));
+            // Update offset Y
+            args.push_back(xeBuilder.newOperand(b.ptrtoint(i64_ty, addr0), "rw"));
+            args.push_back(xeBuilder.newOperand(b.ptrtoint(i64_ty, addr1), "rw"));
+            break;
+          }
+        }
+
+        packPtr(args, /*onlyAttachMLIRArgs=*/true);
+
+        addrElem = xeBuilder.launch(rewriter, loc, i64_ty, false);
+      }
+
+      // Load with the nonuniform pointer
+      Value ret;
+      {
+        constexpr StringLiteral gatherLoad = R"({
+  .decl ADDR v_type=G type=uq num_elts=16 align=wordx32 alias=<$1, 0>
+  lsc_load.ugm (M1, 16)  $0:d32x4  flat[ADDR]:a64
+})";
+
+        XeBuilder xeBuilder;
+        XeInstr &loadGather = *xeBuilder.create<XeInstr>(gatherLoad.str());
+        XeBuilder::Operand *res = xeBuilder.newOperand("=rw");
+        XeBuilder::Operand *addr = xeBuilder.newOperand(addrElem, "rw");
+        SmallVector<XeBuilder::Operand *> args{res, addr};
+        loadGather(args, /*onlyAttachMLIRArgs=*/true);
+        ret = xeBuilder.launch(rewriter, loc, load1DGenXType, false);
+      }
+
+      constexpr StringLiteral transposeVal = R"({
+        .decl DPAS_TRANS v_type=G type=ud num_elts=64 align=wordx32 alias=<$1, 0>
+        .decl DPAS v_type=G type=ud num_elts=64 align=wordx32 alias=<$0, 0>
+         mov (M1_NM, 16) DPAS(0,0)<4>  DPAS_TRANS(0,0)<1;1,0>
+         mov (M1_NM, 16) DPAS(0,1)<4>  DPAS_TRANS(1,0)<1;1,0>
+         mov (M1_NM, 16) DPAS(0,2)<4>  DPAS_TRANS(2,0)<1;1,0>
+         mov (M1_NM, 16) DPAS(0,3)<4>  DPAS_TRANS(3,0)<1;1,0>
+      })";
+
+      XeBuilder xeBuilder;
+      XeInstr &transOp = *xeBuilder.create<XeInstr>(transposeVal.str());
+      XeBuilder::Operand *res = xeBuilder.newOperand("=rw");
+      XeBuilder::Operand *re = xeBuilder.newOperand(ret, "rw");
+      SmallVector<XeBuilder::Operand *> args{res, re};
+      transOp(args, /*onlyAttachMLIRArgs=*/true);
+      ret = xeBuilder.launch(rewriter, loc, unpackedType, false);
+#endif
+
       for (size_t i = 0; i < numPtrsPerLoad; ++i) {
         auto offsetsForLoad = offMapping->apply(
             {{kRegister, registerIdx}, {str_attr("ptrs"), i}});
