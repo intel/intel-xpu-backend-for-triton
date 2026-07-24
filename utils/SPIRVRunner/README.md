@@ -37,6 +37,12 @@ CMAKE_PREFIX_PATH=/abs/path/to/TorchConfig.cmake/directory LLVM_DIR=/abs/path/to
 make -j
 ```
 
+Eventless kernel submission is enabled by default, but it requires a rolling (non-LTS) driver. If you are running on an LTS driver, disable it at configure time:
+
+```
+SPIRVRUNNER_ENABLE_EVENTLESS_SUBMIT=0 cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo ..
+```
+
 ## Configuration
 
 ### Generate Data
