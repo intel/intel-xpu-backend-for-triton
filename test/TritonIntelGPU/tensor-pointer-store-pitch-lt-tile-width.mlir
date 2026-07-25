@@ -27,6 +27,8 @@ module attributes {"ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 16 : i32,
   // CHECK-NOT: llvm.umax
   // The 2D block store must be emitted — block IO conversion must succeed.
   // CHECK: triton_gen.2Dblockstore
+  // No umax anywhere in the function (not just before the store).
+  // CHECK-NOT: llvm.umax
   tt.func public @store_no_umax_on_base_width(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
     %cst = arith.constant dense<0.000000e+00> : tensor<8x32xf16, #dpas>
     // Row indices 0..7, stride = 32 → pitch = 32 * 2 = 64 bytes (constant).
