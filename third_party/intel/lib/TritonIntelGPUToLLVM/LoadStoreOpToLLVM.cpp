@@ -3117,7 +3117,6 @@ struct StoreOpToBlockIOConversion
       // by element bytes size.
       adjustedBaseWidth =
           b.add(baseWidth, b.mul(offsetX, b.i32_val(elemSizeInBits / 8)));
-      adjustedBaseWidth = b.umax(adjustedBaseWidth, b.i32_val(64));
 
       // Use the top-left address and mask of the block to store the data.
       // (The first value refer by the registerIdx.)
