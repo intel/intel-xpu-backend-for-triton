@@ -3022,8 +3022,8 @@ struct StoreOpToBlockIOConversion
         // arbitrary value since the row offset is always 0, as long as we can
         // satisfy the HW address payload restriction for the given tile width
         // and element size. Account for the downstream 64-byte alignment
-        // compensation (up to 63 bytes added to base_width) and the umax(64)
-        // floor so that pitch >= adjusted base_width is always satisfied.
+        // compensation (up to 63 bytes added to base_width) so that
+        // pitch >= adjusted base_width is always satisfied.
         if (tileHeight != 1)
           return failure();
         constexpr int64_t MIN_PITCH = 64;
@@ -3117,7 +3117,6 @@ struct StoreOpToBlockIOConversion
       // by element bytes size.
       adjustedBaseWidth =
           b.add(baseWidth, b.mul(offsetX, b.i32_val(elemSizeInBits / 8)));
-      adjustedBaseWidth = b.umax(adjustedBaseWidth, b.i32_val(64));
 
       // Use the top-left address and mask of the block to store the data.
       // (The first value refer by the registerIdx.)
