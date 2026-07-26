@@ -620,7 +620,13 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                 '-options', metadata['build_flags'] + shader_dump_opt
             ]
 
-            if options.grf_mode == 'default':
+            # A larger GRF mode doubles the registers per hardware thread and thereby
+            # halves the maximum work-group size, so `num_warps > 32` becomes
+            # unlaunchable. The explicit `grf_mode='256'`/`'512'` paths already refuse
+            # that combination in `make_spv`; skip the *automatic* upgrade for the same
+            # reason and keep the working (if slower, spilling) default-GRF binary
+            # rather than producing a kernel that fails at launch.
+            if options.grf_mode == 'default' and options.num_warps <= 32:
                 # Try rebuilding with larger GRF modes (default first, then larger).
                 retry_grf_mode_list = [""]  # default GRF mode by omitting the flag
                 if metadata["target"].arch.get("arch") == 'cri':
