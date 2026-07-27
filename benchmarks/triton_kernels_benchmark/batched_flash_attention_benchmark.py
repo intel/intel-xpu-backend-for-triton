@@ -123,8 +123,8 @@ def fa_fwd_kernel(
         block_shape=[BLOCK_M, V_DIM],
     )
     desc_l = tl.make_tensor_descriptor(
-        l_ptr + q_start * q_head,
-        shape=[q_len, q_head],
+        l_ptr + q_start * q_head + start_qh,
+        shape=[q_len, 1],
         strides=[q_head, 1],
         block_shape=[BLOCK_M, 1],
     )
@@ -171,7 +171,7 @@ def fa_fwd_kernel(
     acc = acc / l[:, None]
     l = m * scale + tl.log(l)
     desc_o.store([start_m * BLOCK_M, 0], acc.to(dtype))
-    desc_l.store([start_m * BLOCK_M, start_qh], l[:, None])
+    desc_l.store([start_m * BLOCK_M, 0], l[:, None])
 
 
 def batched_attention(q, k, v, q_attn_arg, k_attn_arg, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, scale, mask_opt,
