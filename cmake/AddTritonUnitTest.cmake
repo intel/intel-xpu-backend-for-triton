@@ -9,6 +9,12 @@ function(add_triton_ut)
   set(multiValueArgs SRCS LIBS DEFS)
   cmake_parse_arguments(_ "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
+  if(TARGET TritonIntelGPUTransforms)
+    if("TritonGPUIR" IN_LIST __LIBS OR "TritonAnalysis" IN_LIST __LIBS)
+      list(APPEND __LIBS TritonIntelGPUTransforms)
+    endif()
+  endif()
+
   add_test(NAME ${__NAME}
           COMMAND ${__NAME})
   add_executable(
