@@ -19,6 +19,7 @@ add_triton_library(TritonIntelGPUToLLVM
     Fp4ToFpOpToLLVM.cpp
     HistogramOpToLLVM.cpp
     LoadStoreOpToLLVM.cpp
+    MemoryOpToLLVM.cpp
     PrintOpToLLVM.cpp
     ReduceOpToLLVM.cpp
     SPMDOpToLLVM.cpp

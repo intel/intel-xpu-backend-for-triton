@@ -361,6 +361,15 @@ void init_triton_intel(py::module_ &m) {
     return result.wasInterrupted();
   });
 
+  m.def("set_is_lts", [](mlir::ModuleOp &mod) {
+    using namespace mlir::triton::gpu::intel;
+    if (!mod->hasAttr(TritonIntelGPUDialect::getIsLTSAttrName())) {
+      mlir::Builder builder(mod.getContext());
+      mod->setAttr(TritonIntelGPUDialect::getIsLTSAttrName(),
+                   builder.getUnitAttr());
+    }
+  });
+
   // Set fast-math flags on floating-point instructions.
   // The fastMath parameter is resolved by the Python layer from
   // TRITON_INTEL_FAST_MATH and TORCHINDUCTOR_USE_FAST_MATH env vars.
