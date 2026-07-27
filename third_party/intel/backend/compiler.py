@@ -54,7 +54,7 @@ class XPUOptions:
     backend_name: str = 'intel'
     sanitize_overflow: bool = True
     generate_native_code: bool = False
-    arch: str = None
+    arch: str = ""
     instrumentation_mode: str = ""
 
     def __post_init__(self):
@@ -480,6 +480,13 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     @track
     def make_llir(cls, src, metadata, options):
         mod = src
+
+        # Ensure ttig.is_lts is set on the module when the driver is LTS.
+        # This is needed for hand-written TTGIR that bypasses annotate_module.
+        driver_version = metadata["target"].arch.get("driver_version")
+        if cls.is_lts(driver_version):
+            intel.set_is_lts(mod)
+
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
