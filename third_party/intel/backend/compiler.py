@@ -56,6 +56,7 @@ class XPUOptions:
     generate_native_code: bool = False
     arch: str = ""
     instrumentation_mode: str = ""
+    fpsan_homomorphic_casts: bool = False
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -448,7 +449,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             intel.passes.ttgpuir.add_optimize_reduction_locality(pm)
         intel.passes.arith.add_arith_emulate_unsupported_floats(pm, ["bf16"], "f32")
         if opt.instrumentation_mode == "fpsan":
-            passes.ttgpuir.add_fp_sanitizer(pm)
+            passes.ttgpuir.add_fp_sanitizer(pm, opt.fpsan_homomorphic_casts)
         pm.run(mod, 'make_ttgir')
         return mod
 
@@ -464,7 +465,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.gluon.add_canonicalizer(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
         if options.instrumentation_mode == "fpsan":
-            passes.ttgpuir.add_fp_sanitizer(pm)
+            passes.ttgpuir.add_fp_sanitizer(pm, options.fpsan_homomorphic_casts)
 
         pm.run(mod, 'gluon_to_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
