@@ -505,7 +505,7 @@ def download_and_copy_dependencies(helper_args: BuildHelperArgs):
     download_and_copy(
         name="nvcc-blackwell",
         src_func=lambda system, arch, version: f"cuda_nvcc-{system}-{arch}-{version}-archive/bin/ptxas{exe_extension}",
-        dst_path="bin/ptxas-blackwell",
+        dst_path=f"bin/ptxas-blackwell{exe_extension}",
         override_path=helper_args.ptxas_blackwell_path,
         version=nvidia_toolchain_version["ptxas-blackwell"],
         url_func=lambda system, arch, version:
