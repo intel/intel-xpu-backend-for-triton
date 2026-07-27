@@ -65,13 +65,6 @@ python/test/unit/language/test_core.py::test_dot[1-64-128-128-4-False-False-none
 python/test/unit/language/test_core.py::test_dot[1-64-128-128-4-False-False-none-tf32-float32-float32-1-None1]
 python/test/unit/language/test_core.py::test_dot[1-128-128-64-4-False-False-chain-dot-ieee-float8e5-float32-1-None]
 python/test/unit/language/test_core.py::test_dot[1-128-128-64-4-False-False-chain-dot-ieee-float8e4nv-float32-1-None]
-# https://github.com/intel/intel-xpu-backend-for-triton/issues/7390
-python/test/unit/language/test_core.py::test_atomic_poll[dtype0-16-cta-relaxed]
-python/test/unit/language/test_core.py::test_atomic_poll[dtype0-16-cta-acquire]
-python/test/unit/language/test_core.py::test_atomic_poll[dtype0-16-gpu-relaxed]
-python/test/unit/language/test_core.py::test_atomic_poll[dtype0-16-gpu-acquire]
-python/test/unit/language/test_core.py::test_atomic_poll[dtype0-16-sys-relaxed]
-python/test/unit/language/test_core.py::test_atomic_poll[dtype0-16-sys-acquire]
 # https://github.com/intel/intel-xpu-backend-for-triton/issues/7391
 python/test/unit/language/test_core.py::test_atomic_poll_timeout[1-True]
 python/test/unit/language/test_core.py::test_atomic_poll_timeout[0-False]

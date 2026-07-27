@@ -59,7 +59,7 @@ using namespace mlir::triton::gpu;
 // Helper Functions
 //===----------------------------------------------------------------------===//
 
-[[maybe_unused]] static std::string getGenISATypeMangling(Type ty) {
+static std::string getGenISATypeMangling(Type ty) {
   if (auto vecTy = dyn_cast<VectorType>(ty))
     return "v" + std::to_string(vecTy.getNumElements()) +
            getGenISATypeMangling(vecTy.getElementType());
@@ -67,7 +67,7 @@ using namespace mlir::triton::gpu;
          std::to_string(ty.getIntOrFloatBitWidth());
 }
 
-[[maybe_unused]] static std::string getGenISATypeMangling(ArrayRef<Type> tys) {
+static std::string getGenISATypeMangling(ArrayRef<Type> tys) {
   std::string name;
   for (int i = 0; i < tys.size(); i++) {
     name += getGenISATypeMangling(tys[i]);
@@ -460,6 +460,78 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
                                          intel::noUnwindWillReturnAttrs);
 }
 
+[[maybe_unused]] static Value
+createGenISADPAS(TritonGEN::MatrixDPASOp op,
+                 ConversionPatternRewriter &rewriter) {
+  Location loc = op->getLoc();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  constexpr int sysDepth = 8;
+
+  IntegerType int32Ty = rewriter.getIntegerType(32);
+  IntegerType int1Ty = rewriter.getIntegerType(1);
+
+  FloatType fp32Ty = rewriter.getF32Type();
+  IntegerType int16Ty = rewriter.getIntegerType(16);
+  TritonGEN::PrecisionType precisionA = op.getPa();
+  Type packedAType = (precisionA == TritonGEN::PrecisionType::TF32)
+                         ? cast<Type>(fp32Ty)
+                         : cast<Type>(int16Ty);
+  Type packedBType = (precisionA == TritonGEN::PrecisionType::TF32)
+                         ? cast<Type>(fp32Ty)
+                         : cast<Type>(int32Ty);
+
+  Value a = op.getA();
+  VectorType aOrigTy = cast<VectorType>(a.getType());
+  unsigned bitWidth = aOrigTy.getNumElements() *
+                      aOrigTy.getElementType().getIntOrFloatBitWidth();
+  VectorType aTy = VectorType::get(
+      bitWidth / packedAType.getIntOrFloatBitWidth(), packedAType);
+  if (aOrigTy != aTy)
+    a = LLVM::BitcastOp::create(rewriter, loc, aTy, a);
+
+  Value bVal = op.getB();
+  VectorType bOrigTy = cast<VectorType>(bVal.getType());
+  bitWidth = bOrigTy.getNumElements() *
+             bOrigTy.getElementType().getIntOrFloatBitWidth();
+  VectorType bTy = VectorType::get(
+      bitWidth / packedBType.getIntOrFloatBitWidth(), packedBType);
+  if (bOrigTy != bTy)
+    bVal = LLVM::BitcastOp::create(rewriter, loc, bTy, bVal);
+
+  Value c = op.getC();
+  VectorType cOrigTy = cast<VectorType>(c.getType());
+  VectorType cTy = cOrigTy.getElementType().isBF16()
+                       ? VectorType::get(cOrigTy.getShape(), int16Ty)
+                       : cOrigTy;
+  if (cOrigTy != cTy)
+    c = LLVM::BitcastOp::create(rewriter, loc, cTy, c);
+
+  SmallVector<Type> funcTypes{cTy, cTy, aTy, bTy};
+  std::string funcName =
+      "llvm.genx.GenISA.sub.group.dpas." + getGenISATypeMangling(funcTypes);
+
+  SmallVector<Type> argTypes{cTy,     aTy,     bTy,     int32Ty,
+                             int32Ty, int32Ty, int32Ty, int1Ty};
+
+  SmallVector<Value> args{c,
+                          a,
+                          bVal,
+                          b.i32_val(static_cast<unsigned>(op.getPa())),
+                          b.i32_val(static_cast<unsigned>(op.getPb())),
+                          b.i32_val(sysDepth),
+                          b.i32_val(op.getRc()),
+                          b.i1_val(false)};
+
+  LLVM::CallOp call = intel::createDeviceFunctionCall(
+      rewriter, funcName, cTy, argTypes, args, {},
+      intel::convergentNoUnwindWillReturnAttrs);
+
+  Value result = call.getResult();
+  if (cOrigTy != cTy)
+    result = LLVM::BitcastOp::create(rewriter, loc, cOrigTy, result);
+  return result;
+}
+
 static void
 createAssertNot(ConversionPatternRewriter &rewriter,
                 const mlir::triton::gpu::intel::LibCallEmitter &emitter,
@@ -660,6 +732,13 @@ struct TritonMatrixDPASLowering
   LogicalResult
   matchAndRewrite(TritonGEN::MatrixDPASOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    // Use GenISA for LTS driver.
+    auto mod = op->getParentOfType<mlir::ModuleOp>();
+    if (mod->hasAttr(intel::TritonIntelGPUDialect::getIsLTSAttrName())) {
+      rewriter.replaceOp(op, createGenISADPAS(op, rewriter));
+      return success();
+    }
+
     Location loc = op->getLoc();
 
     FloatType fp32Ty = f32_ty;
