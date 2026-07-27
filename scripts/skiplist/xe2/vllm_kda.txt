@@ -1,4 +1,4 @@
-# Block pointers have been removed:
+# Block pointers have been removed: https://github.com/intel/intel-xpu-backend-for-triton/issues/7595
 tests/kernels/test_kda.py::test_chunk_kda[H32-D128-cu[0, 64]-torch.float16]
 tests/kernels/test_kda.py::test_chunk_kda[H32-D128-cu[0, 1024]-torch.float16]
 tests/kernels/test_kda.py::test_chunk_kda[H32-D128-cu[0, 15]-torch.float16]
