@@ -55,13 +55,6 @@ python/test/unit/language/test_standard.py::test_sort[int32-False-1-8-64]
 python/test/unit/language/test_standard.py::test_sort[int32-True-1-256-16]
 python/test/unit/language/test_standard.py::test_sort[int32-True-1-512-8]
 python/test/unit/language/test_standard.py::test_sort[int32-True-1-8-64]
-# https://github.com/intel/intel-xpu-backend-for-triton/issues/7390
-python/test/unit/language/test_core.py::test_atomic_poll[dtype0-16-cta-relaxed]
-python/test/unit/language/test_core.py::test_atomic_poll[dtype0-16-cta-acquire]
-python/test/unit/language/test_core.py::test_atomic_poll[dtype0-16-gpu-relaxed]
-python/test/unit/language/test_core.py::test_atomic_poll[dtype0-16-gpu-acquire]
-python/test/unit/language/test_core.py::test_atomic_poll[dtype0-16-sys-relaxed]
-python/test/unit/language/test_core.py::test_atomic_poll[dtype0-16-sys-acquire]
 # https://github.com/intel/intel-xpu-backend-for-triton/issues/7391
 python/test/unit/language/test_core.py::test_atomic_poll_timeout[1-True]
 python/test/unit/language/test_core.py::test_atomic_poll_timeout[0-False]
