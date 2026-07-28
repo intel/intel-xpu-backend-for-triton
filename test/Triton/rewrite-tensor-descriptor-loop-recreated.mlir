@@ -169,3 +169,102 @@ module {
     tt.return %tileA, %r : tensor<16x128xbf16>, tensor<16x128xbf16>
   }
 }
+
+// -----
+// Case 5: MIXED PROVENANCE through one value. An scf.if inside the loop merges a
+// hoistable (loop-invariant) make and a loop-recreated make into a single
+// !tt.tensordesc that feeds descriptor_load. Only the else-make is loop-recreated,
+// so seeding alone marks just that one illegal — but the merged consumer traces to
+// BOTH, so per-make legality and the all_of consumer check would disagree and
+// produce type-inconsistent IR.
+//
+// The merge closure resolves this all-or-nothing: both makes land in one class;
+// the class has a candidate and does not escape to a kept-legal boundary
+// (func return/call), so the OPTIMISTIC policy demotes the whole class. Result:
+// neither make nor the load survives — one masked tt.load remains.
+
+// CHECK-LABEL: @mixed_provenance_merged_demoted
+module {
+  tt.func public @mixed_provenance_merged_demoted(
+      %kv: !tt.ptr<bf16>, %base_inv: !tt.ptr<bf16>,
+      %s0: i32, %s1: i32, %st0: i64, %st1: i64, %cond: i1)
+      -> tensor<16x128xbf16> {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c16 = arith.constant 16 : i32
+    %c128 = arith.constant 128 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c32 = arith.constant 32 : i32
+    %cst = arith.constant dense<0.0> : tensor<16x128xbf16>
+    // CHECK: scf.for
+    // CHECK-NOT: tt.make_tensor_descriptor
+    // CHECK-NOT: tt.descriptor_load
+    // CHECK: tt.load
+    %r = scf.for %j = %c0 to %c32 step %c1 iter_args(%acc = %cst) -> (tensor<16x128xbf16>) : i32 {
+      %desc = scf.if %cond -> (!tt.tensordesc<16x128xbf16>) {
+        %d_inv = tt.make_tensor_descriptor %base_inv, [%s0, %s1], [%st0, %st1] {order = array<i32: 1, 0>} : <bf16>, <16x128xbf16>
+        scf.yield %d_inv : !tt.tensordesc<16x128xbf16>
+      } else {
+        %base_var = tt.addptr %kv, %j : !tt.ptr<bf16>, i32
+        %d_var = tt.make_tensor_descriptor %base_var, [%c16, %c128], [%st1, %c1_i64] {order = array<i32: 1, 0>} : <bf16>, <16x128xbf16>
+        scf.yield %d_var : !tt.tensordesc<16x128xbf16>
+      }
+      %tile = tt.descriptor_load %desc[%c0, %c0] : !tt.tensordesc<16x128xbf16> -> tensor<16x128xbf16>
+      scf.yield %tile : tensor<16x128xbf16>
+    }
+    tt.return %r : tensor<16x128xbf16>
+  }
+}
+
+// -----
+// Case 6: MERGE WITH AN UNTRACEABLE DESCRIPTOR. Same shape as Case 5, but the
+// scf.if's then-branch yields a descriptor FUNCTION ARGUMENT instead of a make.
+// Provenance is therefore only partially nameable: the trace finds the
+// loop-recreated make but also runs into a block argument of the func, which no
+// `MakeTensorDescOp` backs.
+//
+// This is the case a closure built on all-or-nothing traces cannot see: a trace
+// that discards partial results reports "untraceable" (empty), so the merge
+// records NO union and NO escape, the seed stays demoted on its own, and the
+// consumer — whose operand does not trace wholly to candidates — stays legal.
+// That splits the type of a single !tt.tensordesc value.
+//
+// Collecting partials and treating an incomplete trace as an escape resolves it:
+// the make is pinned to TD, because demoting it would require rewriting the func
+// signature, which stays legal in this mode. Nothing is rewritten — the loop
+// keeps both the descriptor and its load, and NO masked tt.load appears.
+
+// CHECK-LABEL: @merge_with_untraceable_kept
+module {
+  tt.func public @merge_with_untraceable_kept(
+      %kv: !tt.ptr<bf16>, %argdesc: !tt.tensordesc<16x128xbf16>,
+      %st1: i64, %cond: i1)
+      -> tensor<16x128xbf16> {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c16 = arith.constant 16 : i32
+    %c128 = arith.constant 128 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c32 = arith.constant 32 : i32
+    %cst = arith.constant dense<0.0> : tensor<16x128xbf16>
+    // CHECK: scf.for
+    // Nothing is demoted: the descriptor and its load survive, and no masked
+    // pointer load is generated in the loop.
+    // CHECK: tt.make_tensor_descriptor
+    // CHECK: tt.descriptor_load
+    // CHECK-NOT: tt.load
+    %r = scf.for %j = %c0 to %c32 step %c1 iter_args(%acc = %cst) -> (tensor<16x128xbf16>) : i32 {
+      %desc = scf.if %cond -> (!tt.tensordesc<16x128xbf16>) {
+        // untraceable: a descriptor func arg, backed by no make
+        scf.yield %argdesc : !tt.tensordesc<16x128xbf16>
+      } else {
+        %base_var = tt.addptr %kv, %j : !tt.ptr<bf16>, i32
+        %d_var = tt.make_tensor_descriptor %base_var, [%c16, %c128], [%st1, %c1_i64] {order = array<i32: 1, 0>} : <bf16>, <16x128xbf16>
+        scf.yield %d_var : !tt.tensordesc<16x128xbf16>
+      }
+      %tile = tt.descriptor_load %desc[%c0, %c0] : !tt.tensordesc<16x128xbf16> -> tensor<16x128xbf16>
+      scf.yield %tile : tensor<16x128xbf16>
+    }
+    tt.return %r : tensor<16x128xbf16>
+  }
+}
