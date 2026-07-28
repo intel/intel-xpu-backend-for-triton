@@ -3,14 +3,17 @@ Reproducibility tests for Proton.
 Each test should invoke one or more GPU kernels and check the validity of their profiling results.
 """
 
-import torch
+import os
+import pathlib
+
 import triton
 import triton.profiler as proton
+import torch
 import json
 import pytest
 from typing import NamedTuple
-import pathlib
 import threading
+import time
 
 import triton.language as tl
 import triton.profiler.hooks.launch as proton_launch
@@ -94,6 +97,10 @@ def test_triton(tmp_path: pathlib.Path, device: str):
 @pytest.mark.xfail(not is_cuda(), reason="HIP backend does not reliably attribute cudagraph replay launches to scopes",
                    run=False)
 def test_cudagraph(tmp_path: pathlib.Path, device: str):
+    # TODO(Keren): Uncomment when rocprofiler-sdk has been updated
+    if os.environ.get("PROTON_SKIP_CUDAGRAPH_TEST", "0") == "1":
+        pytest.skip("CUDagraph test is disabled")
+
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
 
@@ -158,24 +165,18 @@ def test_cudagraph(tmp_path: pathlib.Path, device: str):
     assert test0_frame is not None
     assert test1_frame is not None
     assert test2_frame is not None
-    # {torch.ones, add, foo}
-    if is_hip():
-        assert len(test0_frame["children"]) >= 2
-        assert test0_frame["children"][0]["metrics"]["time (ns)"] > 0
-    else:
-        # cuda backend supports "<captured_at>" annotation
-        for test_frame in [test0_frame, test1_frame, test2_frame]:
-            child = _find_frame_by_name(test_frame, "<captured_at>")
-            assert child is not None
-            # check all iterations
-            total_iters = 0
-            for child in child["children"]:
-                iter_frame = "iter" if test_frame != test2_frame else "new_iter"
-                if iter_frame in child["frame"]["name"]:  # TODO(Keren): remove empty frames
-                    if "time (ns)" in child["children"][0]["metrics"]:
-                        total_iters += 1
-            # 0...9 iterations
-            assert total_iters == 10
+    for test_frame in [test0_frame, test1_frame, test2_frame]:
+        child = _find_frame_by_name(test_frame, "<captured_at>")
+        assert child is not None
+        # check all iterations
+        total_iters = 0
+        for child in child["children"]:
+            iter_frame = "iter" if test_frame != test2_frame else "new_iter"
+            if iter_frame in child["frame"]["name"]:
+                if "time (ns)" in child["children"][0]["metrics"]:
+                    total_iters += 1
+        # 0...9 iterations
+        assert total_iters == 10
 
 
 @pytest.mark.xfail(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs", run=False)
@@ -960,8 +961,6 @@ def test_pcsampling(tmp_path: pathlib.Path, device: str):
     if not is_cuda():
         pytest.skip("Only CUDA backend supports pc sampling")
 
-    import os
-
     if os.environ.get("PROTON_SKIP_PC_SAMPLING_TEST", "0") == "1":
         pytest.skip("PC sampling test is disabled")
 
@@ -1158,14 +1157,24 @@ def test_trace(tmp_path: pathlib.Path, device: str):
 
     with proton.scope("test"):
         foo[(1, )](x, y, x.size()[0], num_warps=4)
+        # Wait for the kernel to finish so that the kernel event is captured before the `test` scope ends.
+        getattr(torch, device).synchronize()
 
     proton.finalize()
 
     with temp_file.open() as f:
         data = json.load(f)
         trace_events = data["traceEvents"]
-        assert trace_events[-1]["name"] == "foo"
-        assert trace_events[-1]["args"]["call_stack"] == ["ROOT", "test", "foo"]
+        kernel_event = next(event for event in trace_events if event.get("cat") == "kernel" and event["name"] == "foo")
+        scope_event = next(event for event in trace_events if event.get("cat") == "scope" and event["name"] == "test")
+        assert kernel_event["args"]["call_stack"] == ["ROOT", "test", "foo"]
+        assert scope_event["ts"] <= kernel_event["ts"]
+        assert kernel_event["ts"] + kernel_event["dur"] <= scope_event["ts"] + scope_event["dur"]
+        # ts=0 anchor for aligning with traces from other profilers
+        # (same contract as torch>=2.4 chrome traces).
+        base_time_ns = data["baseTimeNanoseconds"]
+        one_day_ns = 24 * 60 * 60 * 1_000_000_000
+        assert abs(time.time_ns() - base_time_ns) < one_day_ns
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Only CUDA backend supports metrics profiling in cudagraphs")
