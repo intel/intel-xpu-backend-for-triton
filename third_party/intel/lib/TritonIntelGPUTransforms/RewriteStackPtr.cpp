@@ -33,9 +33,25 @@ public:
     if (!globalSmem) {
       return;
     }
-    CallGraph<Allocation> allocation(mod);
+
+    // The allocation strategy is encoded in `global_smem` (see
+    // `initSharedMemory` in the TritonIntelGPU to LLVM conversion): with
+    // internal linkage the shared memory is allocated statically in the module,
+    // so `addressof @global_smem` is already a valid base and kernels need no
+    // extra argument. With external linkage the base is allocated by the
+    // runtime and passed in as a trailing argument, appended here.
+    const bool dynamicSharedMemory =
+        globalSmem.getLinkage() == LLVM::Linkage::External;
+
+    // Kernels not using shared memory keep an unused zero sized `global_smem`,
+    // which cannot be materialized in SPIR-V: poison its uses instead.
     bool usePoison =
         (mod->getAttrOfType<IntegerAttr>("ttg.shared").getInt() == 0);
+
+    if (!dynamicSharedMemory && !usePoison)
+      return;
+
+    CallGraph<Allocation> allocation(mod);
 
     // 1: Process function arguments for root functions
     if (!usePoison) {

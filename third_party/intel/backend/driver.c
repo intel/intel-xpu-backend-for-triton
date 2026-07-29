@@ -1075,7 +1075,7 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
   RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {});
 #endif
 
-  uint32_t expected_num_params =
+  uint32_t kernel_num_args =
       kernel_ptr.get_info<sycl::info::kernel::num_args>();
   size_t global_range_x =
       static_cast<size_t>(gridX) * threads_per_warp * num_warps;
@@ -1087,9 +1087,14 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
   sycl::range<3> global_range(global_range_z, global_range_y, global_range_x);
   sycl::range<3> local_range(local_range_z, local_range_y, local_range_x);
   sycl::nd_range<3> parallel_work_size(global_range, local_range);
-  if (shared_memory) {
-    expected_num_params -= 1;
-  }
+
+  // Shared memory is allocated statically in the kernel module, so it is not a
+  // kernel argument. Kernels compiled with TRITON_INTEL_DYNAMIC_SHARED_MEMORY=1
+  // do take a trailing shared memory argument, which is not part of `params`;
+  // detect that from the kernel so both flavors can be launched.
+  const bool bind_shared_memory =
+      shared_memory && (kernel_num_args == num_params + 1);
+  uint32_t expected_num_params = kernel_num_args - (bind_shared_memory ? 1 : 0);
 
   static bool launchDebug = getBoolEnv("TRITON_INTEL_LAUNCH_DEBUG");
   if (launchDebug) {
@@ -1142,7 +1147,7 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
     // Set scratch memory arguments
     set_scalar_arg<void *>(cgh, num_params - 2, params[num_params - 2]);
     set_scalar_arg<void *>(cgh, num_params - 1, params[num_params - 1]);
-    if (shared_memory) {
+    if (bind_shared_memory) {
       using share_mem_t = sycl::local_accessor<int8_t, 1>;
       share_mem_t local_buffer = share_mem_t(shared_memory, cgh);
       cgh.set_arg(num_params, local_buffer);

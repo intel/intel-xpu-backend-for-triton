@@ -260,7 +260,7 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
   std::string kernel_name =
       kernel_ptr.get_info<sycl::info::kernel::function_name>();
 
-  [[maybe_unused]] uint32_t expected_num_params =
+  uint32_t kernel_num_args =
       kernel_ptr.get_info<sycl::info::kernel::num_args>();
 
   size_t global_range_x = static_cast<size_t>(triton_args.gridX) *
@@ -275,9 +275,17 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
   sycl::range<3> local_range(local_range_z, local_range_y, local_range_x);
   sycl::nd_range<3> parallel_work_size(global_range, local_range);
 
-  if (triton_args.shared_memory) {
-    expected_num_params -= 1;
-  }
+  // Kernel arguments are: the ones described by the JSON argument list,
+  // [global scratch], [profile scratch] and - only for kernels compiled with
+  // TRITON_INTEL_DYNAMIC_SHARED_MEMORY=1 - a trailing shared memory pointer.
+  // Shared memory is otherwise allocated statically in the kernel module, so
+  // bind it only if the kernel has an argument left over after the JSON
+  // arguments and the (at most two) scratch pointers.
+  const uint32_t num_json_args = triton_args.jsonData["argument_list"].size();
+  const bool bind_shared_memory =
+      triton_args.shared_memory != 0 && kernel_num_args > num_json_args + 2;
+  [[maybe_unused]] uint32_t expected_num_params =
+      kernel_num_args - (bind_shared_memory ? 1 : 0);
   int tensorIdx = 0;
   uint32_t narg = 0;
   // Submit the imported kernel.
@@ -304,7 +312,7 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
       // profile scratch
       cgh.set_arg(narg++, nullptr);
     }
-    if (triton_args.shared_memory) {
+    if (bind_shared_memory) {
       using share_mem_t = sycl::local_accessor<int8_t, 1>;
       share_mem_t local_buffer = share_mem_t(triton_args.shared_memory, cgh);
       cgh.set_arg(narg, local_buffer);

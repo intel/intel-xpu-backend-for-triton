@@ -320,8 +320,17 @@ def TritonIntelGPURewriteStackPtr
   let summary = "rewrite the getStackPointer for Intel by addressofOp replacement";
 
   let description = [{
-    This pass searches for the global_smem symbol and replaces the addressOfOp with a newly inserted
-    SLM parameter or a PoisonOp to rewrite the getStackPointer for Intel.
+    This pass rewrites the addressOfOps referring to the `global_smem` symbol,
+    depending on how shared memory was allocated by the TritonIntelGPU to LLVM
+    conversion:
+
+    - statically (internal linkage): nothing to do, the address of `global_smem`
+      is a valid shared memory base.
+    - dynamically (external linkage): a shared memory pointer argument is
+      appended to every kernel and the addressOfOps are replaced by it.
+
+    In both cases, kernels not using shared memory (`ttg.shared` is 0) get a
+    PoisonOp instead, as a zero sized array cannot be materialized in SPIR-V.
   }];
 
   let dependentDialects = [
