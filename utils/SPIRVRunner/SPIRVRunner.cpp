@@ -275,15 +275,18 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
   sycl::range<3> local_range(local_range_z, local_range_y, local_range_x);
   sycl::nd_range<3> parallel_work_size(global_range, local_range);
 
-  // Kernel arguments are: the ones described by the JSON argument list,
-  // [global scratch], [profile scratch] and - only for kernels compiled with
-  // TRITON_INTEL_DYNAMIC_SHARED_MEMORY=1 - a trailing shared memory pointer.
-  // Shared memory is otherwise allocated statically in the kernel module, so
-  // bind it only if the kernel has an argument left over after the JSON
-  // arguments and the (at most two) scratch pointers.
-  const uint32_t num_json_args = triton_args.jsonData["argument_list"].size();
+  // A kernel allocating its shared memory statically in the module makes the
+  // driver report that size, and takes no shared memory argument. A kernel
+  // compiled with TRITON_INTEL_DYNAMIC_SHARED_MEMORY=1 (or by an older Triton)
+  // reports 0 and takes a trailing shared memory pointer instead, which the
+  // JSON argument list does not describe.
+  ze_kernel_properties_t kernel_props{};
+  kernel_props.stype = ZE_STRUCTURE_TYPE_KERNEL_PROPERTIES;
+  gpuAssert(zeKernelGetProperties(
+      sycl::get_native<sycl::backend::ext_oneapi_level_zero>(kernel_ptr),
+      &kernel_props));
   const bool bind_shared_memory =
-      triton_args.shared_memory != 0 && kernel_num_args > num_json_args + 2;
+      triton_args.shared_memory != 0 && kernel_props.localMemSize == 0;
   [[maybe_unused]] uint32_t expected_num_params =
       kernel_num_args - (bind_shared_memory ? 1 : 0);
   int tensorIdx = 0;
