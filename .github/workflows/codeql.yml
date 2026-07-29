@@ -91,6 +91,7 @@ jobs:
       with:
         template: report
         token: ${{ secrets.SECURITY_TOKEN }}
+        sarifReportDir: results
     - name: GitHub Upload Release Artifacts
       uses: actions/upload-artifact@v7   # v2 is retired on github.com — must be v4+
       with:
