@@ -843,8 +843,8 @@ run_sglang_install() {
     git clone https://github.com/sgl-project/sglang.git
     cd sglang
     git checkout "$(<../benchmarks/third_party/sglang/sglang-pin.txt)"
+    echo "SGLang commit: '$(git rev-parse HEAD)'"
     git apply ../benchmarks/third_party/sglang/sglang-test-fix.patch
-    git apply ../benchmarks/third_party/sglang/sglang-bench-fix.patch
 
     # That's how sglang assumes we'll pick out platform for now
     cp python/pyproject_xpu.toml python/pyproject.toml
@@ -857,6 +857,10 @@ run_sglang_install() {
   fi
 
   pip install -e "./sglang/python"
+  # sglang imports xgrammar unconditionally, but pyproject_xpu.toml leaves it out because
+  # it pulls in CUDA torch. Install without deps so our XPU torch and triton survive.
+  # Versions match sglang's own pyproject.toml, so an upstream release cannot break us.
+  pip install --no-deps xgrammar==0.2.1 apache-tvm-ffi==0.1.11
 }
 
 run_sglang_tests() {
@@ -867,7 +871,8 @@ run_sglang_tests() {
   run_sglang_install
   run_test_deps_install
   cd sglang
-  run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-4} test/srt/test_triton_attention_kernels.py
+  TRITON_TEST_SUITE=sglang \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-4} test/registered/attention/test_triton_attention_kernels.py
 }
 
 run_liger_install() {
@@ -899,7 +904,8 @@ run_liger_tests() {
 
   run_liger_install
   run_test_deps_install
-  run_pytest_command -vvv Liger-Kernel/test/
+  TRITON_TEST_SUITE=liger \
+    run_pytest_command -vvv Liger-Kernel/test/
 }
 
 run_vllm_install() {

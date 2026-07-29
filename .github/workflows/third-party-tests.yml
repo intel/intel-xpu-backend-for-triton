@@ -81,13 +81,13 @@ jobs:
       - name: Run SGLANG tests
         if: ${{ steps.install.outcome == 'success' && !cancelled() && (!inputs.tests || contains(inputs.tests, 'sglang')) }}
         run: |
-          ./scripts/test-triton.sh --sglang --skip-pip-install --skip-pytorch-install
+          ./scripts/test-triton.sh --sglang --skip-pip-install --skip-pytorch-install --reports-dir $REPORTS
 
       - name: Upload test report
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
-          name: test-main-reports
+          name: test-reports-sglang
           path: reports
   # We run all tests for Liger, so it's slow and we test it separately
   liger:
@@ -138,7 +138,7 @@ jobs:
 
       - name: Run Liger-Kernel tests
         run: |
-          ./scripts/test-triton.sh --liger --skip-pip-install --skip-pytorch-install
+          ./scripts/test-triton.sh --liger --skip-pip-install --skip-pytorch-install --reports-dir $REPORTS
 
       - name: Upload test report
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
