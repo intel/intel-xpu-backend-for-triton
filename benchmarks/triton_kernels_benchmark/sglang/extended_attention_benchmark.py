@@ -118,7 +118,7 @@ X_VALS = [[bs, *sizes, mode, dtype]
 def get_benchmark(providers_filter: Optional[list[str]] = None):
     """Returns a Mark object with the SGLang extended (append) attention benchmark."""
     supported_providers = {
-        'triton': 'Triton',
+        'triton': 'triton',
     }
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 

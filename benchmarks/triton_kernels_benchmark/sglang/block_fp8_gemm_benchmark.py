@@ -140,7 +140,7 @@ def _gen_inputs(M, N, K, block_size, factor_for_scale, fp8_min, fp8_max):
 def get_benchmark(providers_filter: Optional[List[str]] = None):
     """Returns a Mark object with the SGLang block FP8 GEMM benchmark."""
     supported_providers = {
-        'triton': 'Triton',
+        'triton': 'triton',
     }
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 

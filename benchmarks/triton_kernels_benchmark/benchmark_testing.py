@@ -923,6 +923,11 @@ class BenchmarkConfigRunResult(BenchmarkRunResult, BenchmarkConfig):
                 self.benchmark_report_name,
                 self.long_report_param_cols.split(","),
             )
+            if long_df.empty:
+                warnings.warn(
+                    f"Empty long report for '{self.benchmark_report_name}': no '<compiler>-<metric>' columns "
+                    f"were matched in {reports_folder}/{self.plot_name}.csv. Provider labels (line_names) must "
+                    "match the DB compiler names handled by transform_results (e.g. 'triton', not 'Triton').")
             long_df.to_csv(f"{reports_folder}/{self.plot_name}-report.csv", index=False)
             return
         res_df = pd.concat(self.res_df_list, axis=0, ignore_index=True)
