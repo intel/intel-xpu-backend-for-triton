@@ -37,6 +37,12 @@ def _find_frame_by_name(frame, name):
     return None
 
 
+_skip_cudagraph_test = pytest.mark.skipif(
+    os.environ.get("PROTON_SKIP_CUDAGRAPH_TEST", "0") == "1",
+    reason="CUDAGraph test skipped due to environment constraints",
+)
+
+
 @pytest.mark.parametrize("context", ["shadow", "python"])
 def test_torch(context, tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_torch.hatchet"
@@ -97,10 +103,6 @@ def test_triton(tmp_path: pathlib.Path, device: str):
 @pytest.mark.xfail(not is_cuda(), reason="HIP backend does not reliably attribute cudagraph replay launches to scopes",
                    run=False)
 def test_cudagraph(tmp_path: pathlib.Path, device: str):
-    # TODO(Keren): Uncomment when rocprofiler-sdk has been updated
-    if os.environ.get("PROTON_SKIP_CUDAGRAPH_TEST", "0") == "1":
-        pytest.skip("CUDagraph test is disabled")
-
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
 
@@ -1496,6 +1498,7 @@ def test_nvtx_range_push_pop(enable_nvtx, fresh_knobs, tmp_path: pathlib.Path, d
     assert kernel["metrics"]["count"] == 1
 
 
+@_skip_cudagraph_test
 def test_tensor_metrics_scope(tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_tensor_metrics_scope.hatchet"
     proton.start(str(temp_file.with_suffix("")))
@@ -1525,6 +1528,7 @@ def test_tensor_metrics_scope(tmp_path: pathlib.Path, device: str):
     assert test_frame["metrics"]["x_std"] == 0.0
 
 
+@_skip_cudagraph_test
 def test_tensor_metrics_hook(tmp_path: pathlib.Path, device: str):
     temp_file = tmp_path / "test_tensor_metrics_hook.hatchet"
 
