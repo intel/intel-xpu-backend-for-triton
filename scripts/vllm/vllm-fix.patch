@@ -1,3 +1,26 @@
+diff --git a/tests/conftest.py b/tests/conftest.py
+index 6cb8e260c..ae8c49bb5 100644
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -283,7 +283,7 @@ def cleanup_fixture(should_do_global_cleanup_after_test: bool):
+ def workspace_init():
+     """Initialize the workspace manager for tests that need it.
+ 
+-    This fixture initializes the workspace manager with a CUDA device
++    This fixture initializes the workspace manager with an accelerator device
+     if available, and resets it after the test completes. Tests that
+     create a full vLLM engine should NOT use this fixture as the engine
+     will initialize the workspace manager itself.
+@@ -296,6 +296,9 @@ def workspace_init():
+     if torch.cuda.is_available():
+         device = torch.device("cuda:0")
+         init_workspace_manager(device)
++    elif torch.xpu.is_available():
++        device = torch.device("xpu:0")
++        init_workspace_manager(device)
+     yield
+     reset_workspace_manager()
+ 
 diff --git a/tests/kernels/attention/test_cascade_flash_attn.py b/tests/kernels/attention/test_cascade_flash_attn.py
 index 80c5c853d..e6ef4c183 100755
 --- a/tests/kernels/attention/test_cascade_flash_attn.py
@@ -57,7 +80,7 @@ index 973e7885c..e474275f5 100644
          mixer_single_gpu = Mixer2RMSNormGated(
              full_hidden_size=hidden_size,
 diff --git a/tests/kernels/mamba/utils.py b/tests/kernels/mamba/utils.py
-index fb8a4b0a2..7ab490aaf 100644
+index b82c4d82c..483672927 100644
 --- a/tests/kernels/mamba/utils.py
 +++ b/tests/kernels/mamba/utils.py
 @@ -66,10 +66,9 @@ def selective_state_update_ref(
@@ -74,92 +97,14 @@ index fb8a4b0a2..7ab490aaf 100644
      if D is not None:
          out += (x * D).to(out.dtype)
      out = (out if z is None else out * F.silu(z)).to(x.dtype)
-diff --git a/tests/utils.py b/tests/utils.py
-index 2a3bdb91f..c74587d5f 100644
---- a/tests/utils.py
-+++ b/tests/utils.py
-@@ -1896,7 +1896,12 @@ def spawn_new_process_for_each_test(f: Callable[_P, None]) -> Callable[_P, None]
- 
-             repo_root = str(VLLM_PATH.resolve())
-             env = os.environ.copy()
--            env["PYTHONPATH"] = repo_root + os.pathsep + env.get("PYTHONPATH", "")
-+            test_module_dir = str(Path(f.__code__.co_filename).resolve().parent)
-+            env["PYTHONPATH"] = os.pathsep.join(
-+                path
-+                for path in (repo_root, test_module_dir, env.get("PYTHONPATH", ""))
-+                if path
-+            )
-             env[_SPAWN_CHILD_ENV] = "1"
- 
-             result = subprocess.run(
-diff --git a/tests/v1/attention/test_mla_backends.py b/tests/v1/attention/test_mla_backends.py
-index 315c77de3..9fda159d4 100644
---- a/tests/v1/attention/test_mla_backends.py
-+++ b/tests/v1/attention/test_mla_backends.py
-@@ -998,7 +998,7 @@ def test_backend_correctness(
-                 ),
-             ),
-         )
--    except ImportError:
-+    except (ImportError, AttributeError):
-         prefill_invalid_reasons = ["ImportError"]
-     if prefill_invalid_reasons:
-         pytest.skip(
-diff --git a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
-index 21bda8e17..e7f11e934 100644
---- a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
-+++ b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
-@@ -618,7 +618,7 @@ class NaiveBatchedExperts(mk.FusedMoEExpertsModular):
-             # Indexing expert_num_tokens doesn't work w/cudagraphs or inductor
-             if (
-                 torch.compiler.is_compiling()
--                or torch.cuda.is_current_stream_capturing()
-+                or (torch.cuda.is_available() and torch.cuda.is_current_stream_capturing())
-             ):
-                 num = hidden_states.shape[1]
-             else:
-@@ -659,7 +659,7 @@ def batched_moe_kernel_quantize_input(
-     per_act_token_quant: bool,
-     block_shape: list[int] | None = None,
- ) -> tuple[torch.Tensor, torch.Tensor | None]:
--    if torch.compiler.is_compiling() or torch.cuda.is_current_stream_capturing():
-+    if torch.compiler.is_compiling() or (torch.cuda.is_available() and torch.cuda.is_current_stream_capturing()):
-         # Note: this does a bunch of extra work because expert_num_tokens is
-         # ignored but it does support torch.compile + cudagraphs.
-         hidden_dim = A.size(-1)
-diff --git a/tests/conftest.py b/tests/conftest.py
---- a/tests/conftest.py
-+++ b/tests/conftest.py
-@@ -284,8 +284,8 @@ def workspace_init():
-     """Initialize the workspace manager for tests that need it.
-
--    This fixture initializes the workspace manager with a CUDA device
--    if available, and resets it after the test completes. Tests that
-+    This fixture initializes the workspace manager with an accelerator device
-+    if available, and resets it after the test completes. Tests that
-     create a full vLLM engine should NOT use this fixture as the engine
-     will initialize the workspace manager itself.
-     """
-     from vllm.v1.worker.workspace import (
-@@ -297,5 +297,8 @@ def workspace_init():
-     if torch.cuda.is_available():
-         device = torch.device("cuda:0")
-         init_workspace_manager(device)
-+    elif torch.xpu.is_available():
-+        device = torch.device("xpu:0")
-+        init_workspace_manager(device)
-     yield
-     reset_workspace_manager()
-
 diff --git a/tests/kernels/moe/test_moe.py b/tests/kernels/moe/test_moe.py
+index a519980de..21d32d4ca 100644
 --- a/tests/kernels/moe/test_moe.py
 +++ b/tests/kernels/moe/test_moe.py
-@@ -315,7 +315,21 @@ def test_fused_moe(
-     w1 = torch.randn((e, 2 * n, k), device="cuda", dtype=dtype) / 10
-     w2 = torch.randn((e, k, n), device="cuda", dtype=dtype) / 10
-
-     score = torch.randn((m, e), device="cuda", dtype=dtype)
-+
+@@ -334,6 +334,20 @@ def test_fused_moe(
+ 
+     score = torch.randn((m, e), device=DEVICE_TYPE, dtype=dtype)
+ 
 +    # Random BF16 scores can tie at the top-k boundary. Tied experts are
 +    # equally valid, but top-k implementations may select different IDs,
 +    # causing false test failures. Reroll only rows with boundary ties.
@@ -173,9 +118,28 @@ diff --git a/tests/kernels/moe/test_moe.py b/tests/kernels/moe/test_moe.py
 +        score[boundary_ties] = torch.randn_like(score[boundary_ties])
 +    else:
 +        raise AssertionError("Failed to generate scores without top-k boundary ties")
-
++
      if ep_size > 1:
          local_e = e // ep_size
+         e_ids = torch.randint(0, e, (local_e,), device=DEVICE_TYPE, dtype=torch.int32)
+diff --git a/tests/utils.py b/tests/utils.py
+index 90f12d444..1be15bd7f 100644
+--- a/tests/utils.py
++++ b/tests/utils.py
+@@ -1909,7 +1909,12 @@ def spawn_new_process_for_each_test(f: Callable[_P, None]) -> Callable[_P, None]
+ 
+             repo_root = str(VLLM_PATH.resolve())
+             env = os.environ.copy()
+-            env["PYTHONPATH"] = repo_root + os.pathsep + env.get("PYTHONPATH", "")
++            test_module_dir = str(Path(f.__code__.co_filename).resolve().parent)
++            env["PYTHONPATH"] = os.pathsep.join(
++                path
++                for path in (repo_root, test_module_dir, env.get("PYTHONPATH", ""))
++                if path
++            )
+             env[_SPAWN_CHILD_ENV] = "1"
+ 
+             result = subprocess.run(
 diff --git a/vllm/model_executor/warmup/minimax_m3_msa_warmup.py b/vllm/model_executor/warmup/minimax_m3_msa_warmup.py
 index 18bf14249..c47cbf80f 100644
 --- a/vllm/model_executor/warmup/minimax_m3_msa_warmup.py
