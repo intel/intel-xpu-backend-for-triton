@@ -63,13 +63,13 @@ jobs:
       uses: github/codeql-action/analyze@v4
       with:
         category: "/language:${{matrix.language}}"
-        output: ../results
+        output: results
 
     - name: Upload SARIF results
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: sarif-results-${{ matrix.language }}
-        path: ../results
+        path: results
 
   report:
     name: Generate SDL Security Report
@@ -80,10 +80,10 @@ jobs:
       contents: read
     steps:
     - name: Download SARIF results
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v7
       with:
         pattern: sarif-results-*
-        path: ../results
+        path: results
         merge-multiple: true
 
     - name: Generate Security Report
@@ -92,7 +92,7 @@ jobs:
         template: report
         token: ${{ secrets.SECURITY_TOKEN }}
     - name: GitHub Upload Release Artifacts
-      uses: actions/upload-artifact@v4   # v2 is retired on github.com — must be v4
+      uses: actions/upload-artifact@v7   # v2 is retired on github.com — must be v4+
       with:
         name: report
         path: |
