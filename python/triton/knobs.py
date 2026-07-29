@@ -613,7 +613,8 @@ class intel_knobs(base_knobs):
     # SYCL compiler Triton needs to be compatible with when generating kernel launchers
     sycl_compiler: env_opt_str = env_opt_str("TRITON_INTEL_SYCL_COMPILER")
     # Allocate shared (work-group) memory dynamically, as an extra kernel argument bound
-    # with a `sycl::local_accessor`, instead of statically in the module. Legacy behavior.
+    # with a `sycl::local_accessor`, instead of statically in the module. Legacy behavior,
+    # kept as an escape hatch for driver issues with module scope work-group memory.
     dynamic_shared_memory: env_bool = env_bool("TRITON_INTEL_DYNAMIC_SHARED_MEMORY", False)
 
 

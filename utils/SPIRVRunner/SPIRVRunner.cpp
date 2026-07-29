@@ -276,10 +276,11 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
   sycl::nd_range<3> parallel_work_size(global_range, local_range);
 
   // A kernel allocating its shared memory statically in the module makes the
-  // driver report that size, and takes no shared memory argument. A kernel
-  // compiled with TRITON_INTEL_DYNAMIC_SHARED_MEMORY=1 (or by an older Triton)
-  // reports 0 and takes a trailing shared memory pointer instead, which the
-  // JSON argument list does not describe.
+  // driver report that size, and takes no shared memory argument. A kernel with
+  // a dynamic allocation (compiled with TRITON_INTEL_DYNAMIC_SHARED_MEMORY=1 or
+  // by an older Triton, or using a partitioned shared layout) reports 0 and
+  // takes a trailing shared memory pointer instead, which the JSON argument
+  // list does not describe.
   ze_kernel_properties_t kernel_props{};
   kernel_props.stype = ZE_STRUCTURE_TYPE_KERNEL_PROPERTIES;
   gpuAssert(zeKernelGetProperties(

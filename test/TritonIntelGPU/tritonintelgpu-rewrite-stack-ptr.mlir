@@ -82,3 +82,34 @@ module attributes {"ttg.num-warps" = 1 : i32, ttg.shared = 1280 : i32, "ttg.thre
     tt.return
   }
 }
+
+// -----
+
+// `ttg.shared` is missing, so the shared memory size is unknown and the
+// conversion keeps the dynamic allocation in both modes: the base is appended as
+// a kernel argument. Only reachable when the passes are run standalone, i.e. in
+// tests: `intel-allocate-shared-memory` always sets `ttg.shared` in the
+// compilation pipeline.
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK: llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
+  // CHECK: llvm.func spir_kernelcc @kernel_no_shared_attr(%arg0: !llvm.ptr<1> {tt.pointee_type = f32}, %arg1: !llvm.ptr<1>, %arg2: !llvm.ptr<1>, [[SHARED_MEM_PTR:%.*]]: !llvm.ptr<3>)
+  // DYNAMIC: llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
+  // DYNAMIC: llvm.func spir_kernelcc @kernel_no_shared_attr(%arg0: !llvm.ptr<1> {tt.pointee_type = f32}, %arg1: !llvm.ptr<1>, %arg2: !llvm.ptr<1>, [[DYN_SHARED_MEM_PTR:%.*]]: !llvm.ptr<3>)
+  tt.func public @kernel_no_shared_attr(%arg0: !tt.ptr<f32>) {
+    %0 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #blocked>
+    %1 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<16x!tt.ptr<f32>, #blocked>
+    %2 = tt.addptr %1, %0 : tensor<16x!tt.ptr<f32>, #blocked>, tensor<16xi32, #blocked>
+    %3 = tt.load %2 : tensor<16x!tt.ptr<f32>, #blocked>
+    // CHECK-NOT: llvm.mlir.addressof @global_smem
+    // CHECK: llvm.getelementptr [[SHARED_MEM_PTR]]
+    // DYNAMIC-NOT: llvm.mlir.addressof @global_smem
+    // DYNAMIC: llvm.getelementptr [[DYN_SHARED_MEM_PTR]]
+    %4 = ttg.local_alloc %3 {allocation.offset = 0 : i32} : (tensor<16xf32, #blocked>) -> !ttg.memdesc<16xf32, #shared, #smem>
+    %5 = ttg.local_load %4 : !ttg.memdesc<16xf32, #shared, #smem> -> tensor<16xf32, #blocked>
+    tt.store %2, %5 : tensor<16x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}

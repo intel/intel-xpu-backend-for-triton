@@ -154,9 +154,10 @@ int32_t {kernel_name}(sycl::queue &stream, {signature}) {{
   sycl::nd_range<3> parallel_work_size(global_range, local_range);
 
   // Shared memory is allocated statically in the kernel module (mirrors the JIT
-  // launcher in driver.c): bind a shared memory argument only for kernels
-  // compiled with TRITON_INTEL_DYNAMIC_SHARED_MEMORY=1, which have one extra
-  // argument.
+  // launcher in driver.c): bind a shared memory argument only for kernels that
+  // need a dynamic allocation (compiled with
+  // TRITON_INTEL_DYNAMIC_SHARED_MEMORY=1, or using a partitioned shared
+  // layout), which have one extra argument.
   const bool bind_shared_memory =
       static_cast<bool>({shared}) && (kernel_num_args == num_params + 1);
   uint32_t expected_num_params = kernel_num_args - (bind_shared_memory ? 1 : 0);

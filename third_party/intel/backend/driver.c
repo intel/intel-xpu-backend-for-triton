@@ -1089,7 +1089,8 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
   sycl::nd_range<3> parallel_work_size(global_range, local_range);
 
   // Shared memory is allocated statically in the kernel module, so it is not a
-  // kernel argument. Kernels compiled with TRITON_INTEL_DYNAMIC_SHARED_MEMORY=1
+  // kernel argument. Kernels that need a dynamic allocation (compiled with
+  // TRITON_INTEL_DYNAMIC_SHARED_MEMORY=1, or using a partitioned shared layout)
   // do take a trailing shared memory argument, which is not part of `params`;
   // detect that from the kernel so both flavors can be launched.
   const bool bind_shared_memory =

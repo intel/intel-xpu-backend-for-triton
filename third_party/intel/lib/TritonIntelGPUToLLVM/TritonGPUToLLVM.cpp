@@ -178,7 +178,9 @@ private:
     // Fall back to a dynamic allocation (size 0, external linkage, base passed
     // in as a kernel argument by `tritonintelgpu-rewrite-stack-ptr`) when:
     //  - requested explicitly via `dynamic-shared-memory`,
-    //  - `ttg.shared` is missing, so the size is unknown,
+    //  - `ttg.shared` is missing, so the size is unknown - in the compilation
+    //    pipeline `intel-allocate-shared-memory` always sets it, so this only
+    //    happens when this pass is run standalone (e.g. in lit tests),
     //  - the module uses partitioned shared memory: its per-partition bases
     //    would become constants, which LLVM folds into an `extractelement` from
     //    a constant vector of pointers - not expressible in SPIR-V without the

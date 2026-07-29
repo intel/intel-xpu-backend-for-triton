@@ -44,9 +44,12 @@ public:
         globalSmem.getLinkage() == LLVM::Linkage::External;
 
     // Kernels not using shared memory keep an unused zero sized `global_smem`,
-    // which cannot be materialized in SPIR-V: poison its uses instead.
-    bool usePoison =
-        (mod->getAttrOfType<IntegerAttr>("ttg.shared").getInt() == 0);
+    // which cannot be materialized in SPIR-V: poison its uses instead. A module
+    // without `ttg.shared` (the conversion pass run standalone, without
+    // `intel-allocate-shared-memory`) has an unknown shared memory size, which
+    // the conversion lowers as a dynamic allocation: append the argument.
+    auto sharedAttr = mod->getAttrOfType<IntegerAttr>("ttg.shared");
+    bool usePoison = sharedAttr && sharedAttr.getInt() == 0;
 
     if (!dynamicSharedMemory && !usePoison)
       return;
