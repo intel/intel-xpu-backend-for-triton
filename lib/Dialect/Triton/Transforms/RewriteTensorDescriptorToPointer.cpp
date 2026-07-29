@@ -7,7 +7,6 @@
 
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SCF/Transforms/Patterns.h"
-#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Operation.h"
@@ -17,11 +16,8 @@
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/DenseSet.h"
-#include "llvm/ADT/EquivalenceClasses.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
-#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SmallVectorExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -53,115 +49,194 @@ using namespace mlir;
 
 using MakeDescSet = llvm::SmallSetVector<triton::MakeTensorDescOp, 4>;
 
-/// Collect into `results` every `MakeTensorDescOp` reachable from `val`,
-/// threading through scf iter-args/results, select, and casts. Returns false if
-/// the walk hit a value it cannot see through (function arg, call, induction
-/// var, unknown op) — i.e. `results` is only a *partial* answer, because some
-/// descriptor we cannot name also flows into `val`. The walk always runs to
-/// completion so `results` holds everything we did manage to see; callers that
-/// only care about a fully-classified value use `findAllMakeTensorDescOps`.
-static bool collectMakeTensorDescOps(Value val, MakeDescSet &results) {
-  SmallPtrSet<Value, 8> visited;
-  SmallVector<Value, 8> worklist{val};
-  bool complete = true;
+/// Provenance of one descriptor-typed value: which `MakeTensorDescOp`s can
+/// reach it, and whether that list is the whole story.
+struct DescProvenance {
+  MakeDescSet makes;
+  /// True once a descriptor we cannot name reaches this value (a function
+  /// argument, a call result, an op we do not model). Top of the lattice: no
+  /// set of makes describes the value, so it can never be safely rewritten.
+  bool unknown = false;
 
-  while (!worklist.empty()) {
-    Value cur = worklist.pop_back_val();
-    if (!visited.insert(cur).second)
-      continue;
-
-    if (auto arg = dyn_cast<BlockArgument>(cur)) {
-      Operation *parentOp = arg.getParentBlock()->getParentOp();
-      if (!parentOp || isa<FunctionOpInterface>(parentOp)) {
-        complete = false;
-        continue;
-      }
-      if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
-        if (arg == forOp.getInductionVar()) {
-          complete = false;
-          continue;
-        }
-        unsigned idx = arg.getArgNumber() - 1;
-        worklist.push_back(forOp.getInitArgs()[idx]);
-        auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
-        worklist.push_back(yieldOp->getOperand(idx));
-        continue;
-      }
-      if (auto whileOp = dyn_cast<scf::WhileOp>(parentOp)) {
-        unsigned idx = arg.getArgNumber();
-        Block *beforeBlock = &whileOp.getBefore().front();
-        Block *afterBlock = &whileOp.getAfter().front();
-        auto condOp = cast<scf::ConditionOp>(beforeBlock->getTerminator());
-        auto afterYieldOp = cast<scf::YieldOp>(afterBlock->getTerminator());
-        if (arg.getParentBlock() == beforeBlock) {
-          worklist.push_back(whileOp.getInits()[idx]);
-          worklist.push_back(afterYieldOp->getOperand(idx));
-        } else {
-          worklist.push_back(condOp.getArgs()[idx]);
-        }
-        continue;
-      }
-      complete = false; // unknown parent op
-      continue;
+  /// Merge `other` in. Returns true if this grew, i.e. users must be revisited.
+  bool join(const DescProvenance &other) {
+    bool changed = false;
+    if (other.unknown && !unknown) {
+      unknown = true;
+      changed = true;
     }
-
-    // Poison placeholder (e.g. pipelined-loop init): skip, don't invalidate.
-    if (cur.getDefiningOp<ub::PoisonOp>())
-      continue;
-    if (cur.getDefiningOp<triton::CallOp>()) {
-      complete = false;
-      continue;
-    }
-    if (auto makeDescOp = cur.getDefiningOp<triton::MakeTensorDescOp>()) {
-      results.insert(makeDescOp);
-      continue;
-    }
-    if (auto opRes = dyn_cast<OpResult>(cur)) {
-      Operation *defOp = opRes.getOwner();
-      if (auto loopOp = dyn_cast<LoopLikeOpInterface>(defOp)) {
-        worklist.push_back(loopOp.getYieldedValues()[opRes.getResultNumber()]);
-        continue;
-      }
-      if (auto ifOp = dyn_cast<scf::IfOp>(defOp)) {
-        for (Region *rgn : {&ifOp.getThenRegion(), &ifOp.getElseRegion()}) {
-          if (rgn->empty())
-            continue;
-          auto y = cast<scf::YieldOp>(rgn->front().getTerminator());
-          worklist.push_back(y->getOperand(opRes.getResultNumber()));
-        }
-        continue;
-      }
-      if (auto selectOp = dyn_cast<arith::SelectOp>(defOp)) {
-        worklist.push_back(selectOp.getTrueValue());
-        worklist.push_back(selectOp.getFalseValue());
-        continue;
-      }
-      if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(defOp)) {
-        if (castOp.getInputs().size() != 1) {
-          complete = false;
-          continue;
-        }
-        worklist.push_back(castOp.getInputs()[0]);
-        continue;
-      }
-      complete = false; // unknown defining op
-      continue;
-    }
-    complete = false;
+    for (triton::MakeTensorDescOp make : other.makes)
+      changed |= makes.insert(make);
+    return changed;
   }
-  return complete;
+};
+
+/// Collect into `tied` the values that a structured control-flow op ties to its
+/// `idx`th result: region args, the result, and the yielded/init values.
+/// Mirrors `mlir::triton::gpu::getTiedArgs` — TritonTransforms cannot link
+/// against TritonGPUTransforms, so the SCF plumbing is repeated here.
+///
+/// Returns false when `op` is not one we model, or when its arity does not fit
+/// this single-index shape (an `scf.while` whose before- and after-regions
+/// carry different numbers of values). Callers must treat that as "we cannot
+/// say where the value resurfaces" rather than "it resurfaces nowhere".
+static bool getTiedDescValues(Operation *op, unsigned idx,
+                              SmallVectorImpl<Value> &tied) {
+  if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+    if (idx >= forOp.getInitArgs().size())
+      return false;
+    tied.append({forOp.getRegionIterArg(idx), forOp.getResult(idx),
+                 forOp.getBody()->getTerminator()->getOperand(idx),
+                 forOp.getInitArgs()[idx]});
+    return true;
+  }
+  if (auto whileOp = dyn_cast<scf::WhileOp>(op)) {
+    // One index only names a tied group when inits/before-args and
+    // results/after-args have the same arity, which scf.while does not require.
+    ValueRange condArgs = whileOp.getConditionOp().getArgs();
+    if (whileOp.getBeforeArguments().size() != condArgs.size() ||
+        idx >= condArgs.size())
+      return false;
+    tied.append({whileOp.getBeforeArguments()[idx],
+                 whileOp.getAfterArguments()[idx], whileOp.getResult(idx),
+                 condArgs[idx], whileOp.getOperand(idx)});
+    return true;
+  }
+  if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+    if (idx >= ifOp.getNumResults())
+      return false;
+    tied.push_back(ifOp.getResult(idx));
+    for (Region *rgn : {&ifOp.getThenRegion(), &ifOp.getElseRegion()})
+      for (Block &block : *rgn)
+        if (isa<scf::YieldOp>(block.getTerminator()))
+          tied.push_back(block.getTerminator()->getOperand(idx));
+    return true;
+  }
+  return false;
 }
 
-/// Trace a tensor-descriptor Value back to its defining `MakeTensorDescOp`(s).
-/// Returns empty ("cannot classify", handled conservatively by callers) for a
-/// value we can't fully see through. Kept in sync with
-/// third_party/intel/lib/Utils/Utility.cpp (upstream can't depend on it).
-static SmallVector<triton::MakeTensorDescOp>
-findAllMakeTensorDescOps(Value val) {
-  MakeDescSet results;
-  if (!collectMakeTensorDescOps(val, results))
-    return {};
-  return results.takeVector();
+/// Number of leading operands of a loop op that are not tied to its results
+/// (`scf.for` takes lower/upper/step first; `scf.while` takes only inits).
+static unsigned getLoopOperandOffset(Operation *op) {
+  return isa<scf::ForOp>(op) ? 3 : 0;
+}
+
+/// Forward-propagate descriptor provenance from every `MakeTensorDescOp` in
+/// `root` to every descriptor-typed value it can reach, to a fixed point.
+///
+/// Direction matters for more than cost. A backward "which makes does this
+/// value come from" query, run per consumer, has to answer two questions at
+/// once — the set of makes *and* whether the set is complete — and callers that
+/// disagree about how to treat an incomplete answer silently disagree about
+/// legality. Propagating forward computes both once per value: merges are set
+/// unions at the join points, and an unnameable source is just `unknown`
+/// riding along the same edges.
+///
+/// Descriptor values reachable from no make at all come back `unknown`, so
+/// callers never have to distinguish "absent" from "unnameable".
+static llvm::DenseMap<Value, DescProvenance>
+computeDescProvenance(Operation *root) {
+  llvm::DenseMap<Value, DescProvenance> provenance;
+  llvm::SetVector<Value> worklist;
+
+  // Update `val`'s provenance and re-queue it if it grew.
+  auto update = [&](Value val, const DescProvenance &info) {
+    if (!isa<triton::TensorDescType>(val.getType()))
+      return;
+    if (provenance[val].join(info))
+      worklist.insert(val);
+  };
+
+  // Poison every descriptor `op` introduces. Results and region arguments are
+  // all the SSA values an operation can define, so this is a complete cut: a
+  // descriptor flowing into `op` cannot reappear anywhere we have not marked.
+  auto markUnknown = [&](Operation *op) {
+    DescProvenance top;
+    top.unknown = true;
+    for (Value result : op->getResults())
+      update(result, top);
+    for (Region &region : op->getRegions())
+      for (Block &block : region)
+        for (Value arg : block.getArguments())
+          update(arg, top);
+  };
+
+  // Whether the propagation below is the thing that defines `val`'s provenance.
+  // Everything else is poisoned up front, so a descriptor never *looks* fully
+  // named just because the op that produced it is one we do not model — else a
+  // merge of a make with, say, a `ub.poison` descriptor would report clean
+  // provenance and get rewritten out from under the poison operand.
+  auto isPropagated = [](Value val) {
+    if (auto arg = dyn_cast<BlockArgument>(val)) {
+      // Only a loop's entry block carries descriptors we thread; a func entry
+      // block, or a block introduced by unstructured control flow, does not.
+      return arg.getOwner()->isEntryBlock() &&
+             isa<scf::ForOp, scf::WhileOp>(arg.getOwner()->getParentOp());
+    }
+    return isa<scf::ForOp, scf::WhileOp, scf::IfOp, arith::SelectOp,
+               UnrealizedConversionCastOp>(cast<OpResult>(val).getOwner());
+  };
+
+  // Seed: every make names itself; every descriptor we cannot name is unknown.
+  root->walk([&](Operation *op) {
+    if (auto make = dyn_cast<triton::MakeTensorDescOp>(op)) {
+      DescProvenance self;
+      self.makes.insert(make);
+      update(make.getResult(), self);
+      return;
+    }
+    DescProvenance top;
+    top.unknown = true;
+    for (Value result : op->getResults())
+      if (!isPropagated(result))
+        update(result, top);
+    for (Region &region : op->getRegions())
+      for (Block &block : region)
+        for (Value arg : block.getArguments())
+          if (!isPropagated(arg))
+            update(arg, top);
+  });
+
+  while (!worklist.empty()) {
+    Value val = worklist.pop_back_val();
+    DescProvenance info = provenance[val];
+
+    for (OpOperand &use : val.getUses()) {
+      Operation *owner = use.getOwner();
+      Operation *parent = nullptr;
+      unsigned idx = 0;
+      if (isa<scf::ForOp, scf::WhileOp>(owner)) {
+        // Into a loop: an init operand feeds the region arg, result, and yield.
+        parent = owner;
+        idx = use.getOperandNumber() - getLoopOperandOffset(owner);
+      } else if (isa<scf::YieldOp>(owner)) {
+        // Out of a region: a yielded value feeds the parent's result and, for
+        // loops, the next iteration's region arg.
+        parent = owner->getParentOp();
+        idx = use.getOperandNumber();
+      } else if (isa<scf::ConditionOp>(owner)) {
+        parent = owner->getParentOp();
+        idx = use.getOperandNumber() - 1; // operand 0 is the condition itself
+      } else if (isa<arith::SelectOp, UnrealizedConversionCastOp>(owner)) {
+        // A select/cast forwards its descriptor arms to its result.
+        for (Value result : owner->getResults())
+          update(result, info);
+        continue;
+      } else {
+        // A terminal consumer (descriptor_load/store, return, call, a ttng op)
+        // forwards nothing; any descriptor it does define was poisoned above.
+        continue;
+      }
+
+      SmallVector<Value> tied;
+      if (getTiedDescValues(parent, idx, tied))
+        for (Value v : tied)
+          update(v, info);
+      else
+        markUnknown(parent);
+    }
+  }
+  return provenance;
 }
 
 /// True if `value` would be loop-invariant *after* LICM, replicating
@@ -197,85 +272,119 @@ static bool isLoopRecreatedDescriptor(triton::MakeTensorDescOp desc) {
   });
 }
 
-/// Grow `candidates` (the loop-recreated seeds) to a set the conversion can
-/// rewrite consistently, or shrink it to nothing.
-///
-/// Demotion is all-or-nothing per *merge group*. The legality rules below judge
-/// a `MakeTensorDescOp` by set membership but a consumer by "do all makes its
-/// descriptor operand traces to belong to the set". When one descriptor value
-/// merges several makes (scf.if / select / iter-arg), those two rules disagree
-/// unless the makes are decided together: rewriting only the seed would leave
-/// its consumer expecting a `!tt.tensordesc` that no longer exists, and the
-/// type converter runs with `buildMaterializations = false`, so nothing bridges
-/// the gap.
-///
-/// So: union every make that co-occurs in some descriptor value's provenance,
-/// then decide each class as a whole.
-///   - The class must stay on TD if it reaches a consumer this mode cannot
-///     rewrite: a `tt.return`/`tt.call` operand (`FuncOp` signatures stay legal
-///     here), an op outside the dialects in the conversion target (ttng/AMD
-///     descriptor ops are implicitly legal under partial conversion), or a
-///     value whose provenance we cannot fully name (function argument, call
-///     result, unknown op). Each would leave a consumer expecting a descriptor
-///     we deleted.
-///   - Otherwise, if any member is loop-recreated, demote the whole class: the
-///     merge is consumed in the loop, so it pays the per-iteration create.
-static void growCandidatesToMergeClosure(Operation *root,
-                                         MakeDescSet &candidates) {
-  llvm::EquivalenceClasses<Operation *> classes;
-  llvm::DenseSet<Operation *> escaping;
-  for (triton::MakeTensorDescOp desc : candidates)
-    classes.insert(desc);
+/// Whether a group of entangled makes wants to be rewritten, and whether it is
+/// allowed to be. Monotone: both bits only ever turn on.
+struct DescDecision {
+  bool demote = false; // some member is loop-recreated, so worth rewriting
+  bool pin = false;    // some member has to stay a `!tt.tensordesc`
 
-  root->walk([&](Operation *op) {
-    // Mirror of the conversion target below: only these dialects are subject to
-    // rewriting, and `tt.return`/`tt.call` reach a signature we keep legal. An
-    // unregistered op (null dialect) is likewise something we cannot rewrite.
-    Dialect *dialect = op->getDialect();
-    bool isBoundary =
-        isa<triton::ReturnOp, triton::CallOp>(op) || !dialect ||
-        !isa<mlir::arith::ArithDialect, mlir::scf::SCFDialect,
-             mlir::triton::TritonDialect>(dialect);
-    for (Value operand : op->getOperands()) {
-      if (!isa<triton::TensorDescType>(operand.getType()))
-        continue;
-      // Partial provenance still tells us which makes are entangled, so union
-      // it — but an incomplete trace means an unnameable descriptor merges in
-      // here too, which pins the whole group to TD.
-      MakeDescSet makes;
-      bool complete = collectMakeTensorDescOps(operand, makes);
-      Operation *leader = nullptr;
-      for (triton::MakeTensorDescOp make : makes) {
-        classes.insert(make);
-        if (leader)
-          classes.unionSets(leader, make);
-        else
-          leader = make;
-        if (isBoundary || !complete)
-          escaping.insert(make);
-      }
-    }
+  /// Merge `other` in. Returns true if this changed.
+  bool join(const DescDecision &other) {
+    bool changed = (other.demote && !demote) || (other.pin && !pin);
+    demote |= other.demote;
+    pin |= other.pin;
+    return changed;
+  }
+};
+
+/// True if the conversion below can actually rewrite `op` when a descriptor it
+/// touches is demoted: either a pattern matches it, or it is structural and the
+/// type converter expands its signature.
+///
+/// An allowlist on purpose. The complement — `tt.return`/`tt.call` (`FuncOp`
+/// signatures stay legal in this mode), ops outside the conversion target's
+/// dialects (ttng/AMD descriptor ops, implicitly legal under partial
+/// conversion), unregistered ops — is open-ended, and a new descriptor consumer
+/// added to TritonDialect should default to pinning rather than to silently
+/// keeping an operand we deleted.
+static bool canRewriteWithDemotedDesc(Operation *op) {
+  return isa<triton::MakeTensorDescOp, triton::DescriptorLoadOp,
+             triton::DescriptorStoreOp, triton::DescriptorGatherOp,
+             triton::DescriptorScatterOp, triton::DescriptorReduceOp,
+             scf::ForOp, scf::WhileOp, scf::IfOp, scf::YieldOp,
+             scf::ConditionOp, arith::SelectOp, UnrealizedConversionCastOp>(op);
+}
+
+/// Pick the `MakeTensorDescOp`s that loop-recreated-only mode rewrites.
+///
+/// Demotion is all-or-nothing per *entangled group*, because the unit of
+/// rewriting is an operation, not a value. Two descriptors are entangled when
+/// some op touches both: the type converter expands every `TensorDescType` in a
+/// signature, so a loop carrying one demoted and one kept descriptor cannot be
+/// half-converted. Merges (scf.if / select / iter-arg) are the same rule seen
+/// from the other side — the merged value appears on an op, so its whole
+/// provenance is entangled. Getting this wrong leaves a consumer expecting a
+/// `!tt.tensordesc` that no longer exists, and the type converter runs with
+/// `buildMaterializations = false`, so nothing bridges the gap.
+///
+/// So group by op, then propagate two facts over the groups to a fixed point:
+///   - `demote`, seeded at the loop-recreated makes.
+///   - `pin`, seeded wherever the group cannot be rewritten: an op that is not
+///     `canRewriteWithDemotedDesc`, or a descriptor whose provenance we cannot
+///     fully name (function argument, call result, an op we do not model).
+/// A make is rewritten iff it comes out `demote` and not `pin`. Iterating to a
+/// fixed point is what makes grouping transitive: groups can overlap without
+/// being equal, so `{A,B}` and `{B,C}` decide together.
+static MakeDescSet
+computeDemotions(Operation *root,
+                 const llvm::DenseMap<Value, DescProvenance> &provenance) {
+  llvm::DenseMap<Operation *, DescDecision> decisions;
+  SmallVector<MakeDescSet> groups;
+
+  // The descriptors worth rewriting: rebuilt every iteration of some loop.
+  root->walk([&](triton::MakeTensorDescOp make) {
+    if (isLoopRecreatedDescriptor(make))
+      decisions[make].demote = true;
   });
 
-  llvm::DenseSet<Operation *> seeded(candidates.begin(), candidates.end());
-  MakeDescSet closed;
-  for (auto it = classes.begin(), e = classes.end(); it != e; ++it) {
-    if (!(*it)->isLeader())
-      continue;
-    bool hasCandidate = false, escapes = false;
-    SmallVector<triton::MakeTensorDescOp> members;
-    for (auto mi = classes.member_begin(**it); mi != classes.member_end();
-         ++mi) {
-      members.push_back(cast<triton::MakeTensorDescOp>(*mi));
-      hasCandidate |= seeded.contains(*mi);
-      escapes |= escaping.contains(*mi);
+  root->walk([&](Operation *op) {
+    // Every descriptor this op touches decides with the others.
+    MakeDescSet group;
+    bool pin = !canRewriteWithDemotedDesc(op);
+    auto add = [&](Value val) {
+      if (!isa<triton::TensorDescType>(val.getType()))
+        return;
+      auto it = provenance.find(val);
+      // Unnameable provenance pins whatever of it we *could* name.
+      if (it == provenance.end() || it->second.unknown)
+        pin = true;
+      if (it != provenance.end())
+        group.insert(it->second.makes.begin(), it->second.makes.end());
+    };
+    for (Value operand : op->getOperands())
+      add(operand);
+    for (Value result : op->getResults())
+      add(result);
+    if (group.empty())
+      return;
+    if (pin)
+      for (triton::MakeTensorDescOp make : group)
+        decisions[make].pin = true;
+    if (group.size() > 1)
+      groups.push_back(std::move(group)); // a lone make constrains only itself
+  });
+
+  // Unify both bits within each group. Sweeps are bounded by the longest chain
+  // of overlapping groups, which is 1 for the shapes that occur in practice.
+  for (bool changed = true; changed;) {
+    changed = false;
+    for (const MakeDescSet &group : groups) {
+      DescDecision merged;
+      for (triton::MakeTensorDescOp make : group)
+        merged.join(decisions[make]);
+      for (triton::MakeTensorDescOp make : group)
+        changed |= decisions[make].join(merged);
     }
-    if (!hasCandidate || escapes)
-      continue; // nothing to demote, or must stay on TD
-    for (triton::MakeTensorDescOp make : members)
-      closed.insert(make);
   }
-  candidates = std::move(closed);
+
+  // Walk again rather than iterating `decisions`, whose order is not stable.
+  MakeDescSet demotions;
+  root->walk([&](triton::MakeTensorDescOp make) {
+    auto it = decisions.find(make);
+    if (it != decisions.end() && it->second.demote && !it->second.pin)
+      demotions.insert(make);
+  });
+  return demotions;
 }
 
 /**
@@ -786,38 +895,34 @@ public:
   void runOnOperation() override {
     auto op = getOperation();
 
-    // loop-recreated-only mode: only these descriptors (and ops tracing to
-    // them) are illegal; everything else keeps the TMA path.
-    llvm::SmallSetVector<triton::MakeTensorDescOp, 4> candidates;
+    // loop-recreated-only mode: only these descriptors (and the ops handling
+    // them) are illegal; everything else keeps the TMA path. One forward
+    // provenance walk decides them all, so legality below is a lookup.
+    MakeDescSet demotions;
+    llvm::DenseMap<Value, DescProvenance> provenance;
     if (loopRecreatedOnly) {
-      op->walk([&](triton::MakeTensorDescOp desc) {
-        if (isLoopRecreatedDescriptor(desc))
-          candidates.insert(desc);
-      });
-      // No loop-recreated descriptor: leave the module untouched (all TMA).
-      if (candidates.empty())
-        return;
-
-      // Widen the seeds so merged descriptors are demoted as a unit, or dropped
-      // entirely when the merge group must stay on TD.
-      growCandidatesToMergeClosure(op, candidates);
-      if (candidates.empty())
+      provenance = computeDescProvenance(op);
+      demotions = computeDemotions(op, provenance);
+      // Nothing to demote: leave the module untouched (all TMA).
+      if (demotions.empty())
         return;
     }
 
-    // True if op's descriptor operands all trace (only) to candidates.
-    auto usesCandidateDesc = [&](mlir::Operation *o) {
-      for (Value operand : o->getOperands()) {
-        if (!isa<triton::TensorDescType>(operand.getType()))
-          continue;
-        auto descs = findAllMakeTensorDescOps(operand);
-        if (descs.empty())
-          return false; // untraceable -> not a candidate we own
-        if (!llvm::all_of(descs,
-                          [&](auto d) { return candidates.contains(d); }))
-          return false;
-      }
-      return true;
+    // True if every descriptor `o` touches is one we are rewriting. Grouping
+    // above guarantees this is all-or-nothing per op, so any descriptor of `o`
+    // being demoted implies all of them are.
+    auto handlesDemotedDesc = [&](mlir::Operation *o) {
+      auto isDemoted = [&](Value v) {
+        if (!isa<triton::TensorDescType>(v.getType()))
+          return true;
+        auto it = provenance.find(v);
+        if (it == provenance.end() || it->second.unknown)
+          return false; // unnameable -> never ours
+        return llvm::all_of(it->second.makes,
+                            [&](auto d) { return demotions.contains(d); });
+      };
+      return llvm::all_of(o->getOperands(), isDemoted) &&
+             llvm::all_of(o->getResults(), isDemoted);
     };
 
     mlir::ConversionTarget target(getContext());
@@ -830,15 +935,15 @@ public:
       if (!loopRecreatedOnly)
         return false; // static mode: every descriptor op is illegal (rewrite
                       // all)
-      // Dynamic mode: illegal only if it derives from a candidate.
+      // Dynamic mode: illegal only if it handles a descriptor we demote.
       return TypeSwitch<mlir::Operation *, bool>(op)
           .Case<triton::MakeTensorDescOp>(
-              [&](auto d) { return !candidates.contains(d); })
-          .Default([&](mlir::Operation *o) { return !usesCandidateDesc(o); });
+              [&](auto d) { return !demotions.contains(d); })
+          .Default([&](mlir::Operation *o) { return !handlesDemotedDesc(o); });
     });
     target.addDynamicallyLegalOp<triton::FuncOp>([&](triton::FuncOp funcOp) {
-      // Candidates are loop-local, so signatures stay legal in dynamic mode;
-      // static mode rewrites any descriptor-typed signature.
+      // Signatures stay legal in dynamic mode — that is what pins any group
+      // reaching one — while static mode rewrites descriptor-typed signatures.
       if (loopRecreatedOnly)
         return true;
       return !hasATensorDescriptorType(funcOp.getFunctionType().getInputs()) &&

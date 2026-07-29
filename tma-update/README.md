@@ -227,9 +227,17 @@ is what keeps the paged-KV kernel demoted (its base traces to a per-iteration
 `tt.load`, which is impure, so it stays loop-varying) while a descriptor built
 from an in-loop temporary of invariant operands is correctly kept.
 
-Selectivity is per-descriptor: dynamic conversion legality marks only the
-loop-recreated `MakeTensorDescOp`s (and the ops tracing to them, via
-`findAllMakeTensorDescOps`) illegal. Covered by
+Selectivity is per-descriptor, driven by one forward provenance analysis
+(`computeDescProvenance` → `computeDemotions`) that propagates from every
+`MakeTensorDescOp` to the descriptor values it reaches. Dynamic conversion
+legality is then a lookup: an op is illegal iff every descriptor it touches is
+one we demote. Because the unit of rewriting is an *operation* (the type
+converter expands every `!tt.tensordesc` in a signature at once), descriptors
+that co-occur on an op decide together — all demoted, or all kept. A group is
+kept whenever any member reaches something this mode cannot rewrite: a
+`tt.return`/`tt.call` operand, an op outside the conversion target, or a
+descriptor whose provenance is unnameable (function argument, call result,
+`ub.poison`). Covered by
 `test/Triton/rewrite-tensor-descriptor-loop-recreated.mlir`.
 
 > Empirically on Blackwell the pointer fallback was ~2.5x faster than
