@@ -92,9 +92,15 @@ jobs:
         template: report
         token: ${{ secrets.SECURITY_TOKEN }}
         sarifReportDir: results
+
+    # The report action swallows PDF-generation errors and exits 0, so check explicitly.
+    - name: Verify report was generated
+      run: test -s ./report.pdf
+
     - name: GitHub Upload Release Artifacts
       uses: actions/upload-artifact@v7   # v2 is retired on github.com — must be v4+
       with:
         name: report
         path: |
           ./report.pdf
+        if-no-files-found: error
