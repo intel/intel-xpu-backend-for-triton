@@ -13,6 +13,9 @@
 #                                          optimization apply, and is it
 #                                          selective?" without timing anything.
 #   run_unified_attention.sh --smoke-test  Launch once, verify vs torch. GPU.
+#                                          Runs on ANY NVIDIA GPU: on sm<90 it is
+#                                          a harness check (all cases share the
+#                                          demoted pointer kernel), not the A/B.
 #   run_unified_attention.sh --bench       Time the cases into one table. GPU.
 #
 #   --case base|tofp|opt|all   single case, or all three (default all)
@@ -44,7 +47,10 @@
 #     scripts/vllm/install-vllm.sh hardcodes VLLM_TARGET_DEVICE=xpu and will NOT
 #     work here; see RUN.md ('NVIDIA vLLM install') for the recipe.
 #   * TMA requires compute capability >= 9.0. On sm<90 every descriptor is
-#     demoted in make_ttir, so all three cases collapse to the same code.
+#     demoted in make_ttir, so all three cases collapse to the same code — the
+#     A/B (--ir / --bench) is meaningless and stays blocked. --smoke-test is
+#     still allowed there as a harness correctness check (the demoted pointer
+#     kernel is what sm<90 runs anyway); it just cannot exercise the pass.
 #   * Needs the loop-recreated-only pass built into libtriton — the change this
 #     benchmark exists to validate.
 
@@ -104,8 +110,10 @@ echo "[run_unified_attention] python=${PYTHON_BIN} mode=${MODE} td-mode=${TD_MOD
 # --probe is deliberately exempt: diagnosing a broken env is its whole job, so
 # gating it behind the same checks would hide the report we want to read.
 if [[ "${MODE}" != "probe" ]]; then
-  "${PYTHON_BIN}" - <<'PY' || die "preflight failed — see above"
+  TMA_PREFLIGHT_MODE="${MODE}" "${PYTHON_BIN}" - <<'PY' || die "preflight failed — see above"
 import os, sys
+
+mode = os.environ.get("TMA_PREFLIGHT_MODE", "")
 
 def fail(msg):
     print(f"[preflight] FAIL: {msg}", file=sys.stderr)
@@ -137,9 +145,20 @@ print(f"[preflight] OK: triton {triton.__version__} @ "
 print(f"[preflight] OK: torch {torch.__version__}, GPU sm_{cc[0]}{cc[1]} "
       f"({torch.cuda.get_device_name(0)})", file=sys.stderr)
 if cc[0] < 9:
-    fail(f"sm_{cc[0]}{cc[1]} has no TMA. Below sm_90 the pipeline demotes every "
-         "descriptor in make_ttir, so base/opt/tofp compile to the same code "
-         "and the comparison is meaningless. Needs Hopper or Blackwell.")
+    # The A/B is meaningless below sm_90 (every descriptor demotes in make_ttir,
+    # so base/opt/tofp are the same code) — block --ir/--bench. But --smoke-test
+    # exercises the harness (import, allocator, launch, torch-reference compare)
+    # against that same demoted kernel, which is worth running anywhere.
+    if mode == "smoke":
+        print(f"[preflight] WARN: sm_{cc[0]}{cc[1]} has no TMA — every descriptor "
+              "demotes in make_ttir, so this is a harness/correctness check, NOT "
+              "the optimization A/B. base/opt/tofp all compile to the same "
+              "pointer kernel here.", file=sys.stderr)
+    else:
+        fail(f"sm_{cc[0]}{cc[1]} has no TMA. Below sm_90 the pipeline demotes "
+             "every descriptor in make_ttir, so base/opt/tofp compile to the "
+             "same code and the comparison is meaningless. Needs Hopper or "
+             "Blackwell. (--smoke-test is still allowed as a harness check.)")
 PY
 fi
 
