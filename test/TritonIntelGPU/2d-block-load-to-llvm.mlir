@@ -195,3 +195,20 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32,
     tt.return
   }
 }
+
+// -----
+
+// COM: Test subgroup-size=32 DotOp-B column-major (transposed) block load with
+// COM: f16/opsPerChan=2. The old width-comparison check rejected this because
+// COM: dpasInstShapeB()[1]=16 != threadsPerWarp=32. The new linear-layout check
+// COM: correctly accepts it.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 32, warpsPerCTA = [2, 2], repCluster = [1, 1], A = [16, 16], B = [16, 16], C = [16, 16]}>
+#dot = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @block_load_dot_b_subgroup32_transpose
+  tt.func public @block_load_dot_b_subgroup32_transpose(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32) {
+    // CHECK: triton_gen.2Dblockload {{.*}} transpose = true
+    %0 = ttig.2d_block_load %arg0, %arg1, %arg2, %arg3[%arg4, %arg5] {column_major} : !tt.ptr<f16> -> tensor<32x32xf16, #dot>
+    tt.return
+  }
+}
