@@ -58,6 +58,7 @@ class XPUOptions:
     generate_native_code: bool = False
     arch: str = ""
     instrumentation_mode: str = ""
+    fpsan_homomorphic_casts: bool = False
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -455,7 +456,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             intel.passes.ttgpuir.add_optimize_reduction_locality(pm)
         intel.passes.arith.add_arith_emulate_unsupported_floats(pm, ["bf16"], "f32")
         if opt.instrumentation_mode == "fpsan":
-            passes.ttgpuir.add_fp_sanitizer(pm)
+            passes.ttgpuir.add_fp_sanitizer(pm, opt.fpsan_homomorphic_casts)
         pm.run(mod, 'make_ttgir')
         return mod
 
@@ -471,7 +472,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.gluon.add_canonicalizer(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
         if options.instrumentation_mode == "fpsan":
-            passes.ttgpuir.add_fp_sanitizer(pm)
+            passes.ttgpuir.add_fp_sanitizer(pm, options.fpsan_homomorphic_casts)
 
         pm.run(mod, 'gluon_to_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
@@ -619,61 +620,56 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                 '-options', metadata['build_flags'] + shader_dump_opt
             ]
 
-            try:
-                subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
-                if options.grf_mode == 'default':
-                    spill_size = extract_spill_size_from_zebin(fbin)
-                    # The threshold for spill_size is chosen based on empirical observations
-                    # and aligned with triton/backends/intel/driver.c
-                    if spill_size > MAX_REG_SPILL:
-                        metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
-                        # re-run with double GRF mode
-                        ocloc_cmd[-1] = metadata["build_flags"] + shader_dump_opt
-                        subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
-            except (subprocess.CalledProcessError, IntelGPUError) as e:
-                # If GRF mode was not explicitly set, retry with large GRF mode
-                # before giving up. This handles cases where the default GRF mode
-                # doesn't provide enough registers (e.g., scratch space exceeds
-                # HW PTSS limit). Also covers degenerate zebin (no .text/.symtab)
-                # detected by extract_spill_size_from_zebin (LTS2 IGC silent
-                # PTSS overflow).
-                retry_succeeded = False
-                if options.grf_mode == 'default' and \
-                        "-cl-intel-256-GRF-per-thread" not in metadata.get("build_flags", ""):
-                    metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
-                    ocloc_cmd[-1] = metadata["build_flags"] + shader_dump_opt
-                    try:
-                        subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
-                        retry_succeeded = True
-                    except subprocess.CalledProcessError:
-                        # Retry also failed — fall through to the original error
-                        # handling below, which will classify based on `e.output`
-                        # (the original failure's stderr) and raise either
-                        # OutOfResources or re-raise the original error.
-                        pass
+            if options.grf_mode == 'default':
+                # Try rebuilding with larger GRF modes (default first, then larger).
+                retry_grf_mode_list = [""]  # default GRF mode by omitting the flag
+                if metadata["target"].arch.get("arch") == 'cri':
+                    retry_grf_mode_list.append("-cl-intel-512-GRF-per-thread")
+                else:
+                    retry_grf_mode_list.append("-cl-intel-256-GRF-per-thread")
+            else:
+                # Non-default GRF mode is already encoded in metadata["build_flags"] (including "auto").
+                retry_grf_mode_list = [""]
 
-                if not retry_succeeded:
-                    # Only reclassify as OutOfResources when ocloc's stderr explicitly
-                    # reports a PTSS overflow. Other IntelGPUErrors (e.g. degenerate
-                    # zebin from extract_spill_size_from_zebin, ocloc SIGSEGV) keep
-                    # their original error class so the user sees the real cause.
-                    output = getattr(e, 'output', '') or ''
-                    if ptss_match := PTSS_OVERFLOW_RE.search(output):
-                        required = int(ptss_match.group(1)) if ptss_match.group(1) else 0
-                        limit = int(ptss_match.group(2)) if ptss_match.group(2) else 0
-                        raise OutOfResources(required, limit, "per-thread scratch space (PTSS)") from e
-                    if isinstance(e, IntelGPUError):
-                        raise
-                    if e.returncode == 255:
-                        error = 'Internal Triton ZEBIN codegen error'
-                    elif e.returncode == 128 + signal.SIGSEGV:
-                        error = '`ocloc` raised SIGSEGV'
-                    else:
-                        error = f'`ocloc` failed with error code {e.returncode}'
+            base_build_flags = metadata["build_flags"]
+            for grf_flag in retry_grf_mode_list:
+                metadata["build_flags"] = f"{base_build_flags} {grf_flag}".strip()
+                ocloc_cmd[-1] = metadata["build_flags"] + shader_dump_opt
+                try:
+                    subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
+                    if options.grf_mode == "default":
+                        spill_size = extract_spill_size_from_zebin(fbin)
+                        if spill_size <= MAX_REG_SPILL:
+                            break
+                except (subprocess.CalledProcessError, IntelGPUError) as e:
+                    # If GRF mode was not last yet, retry with different GRF mode
+                    # before giving up. This handles cases where the default GRF mode
+                    # doesn't provide enough registers (e.g., scratch space exceeds
+                    # HW PTSS limit). Also covers degenerate zebin (no .text/.symtab)
+                    # detected by extract_spill_size_from_zebin (LTS2 IGC silent
+                    # PTSS overflow).
+                    if grf_flag == retry_grf_mode_list[-1]:
+                        # Only reclassify as OutOfResources when ocloc's stderr explicitly
+                        # reports a PTSS overflow. Other IntelGPUErrors (e.g. degenerate
+                        # zebin from extract_spill_size_from_zebin, ocloc SIGSEGV) keep
+                        # their original error class so the user sees the real cause.
+                        output = getattr(e, 'output', '') or ''
+                        if ptss_match := PTSS_OVERFLOW_RE.search(output):
+                            required = int(ptss_match.group(1)) if ptss_match.group(1) else 0
+                            limit = int(ptss_match.group(2)) if ptss_match.group(2) else 0
+                            raise OutOfResources(required, limit, "per-thread scratch space (PTSS)") from e
+                        if isinstance(e, IntelGPUError):
+                            raise
+                        if e.returncode == 255:
+                            error = 'Internal Triton ZEBIN codegen error'
+                        elif e.returncode == 128 + signal.SIGSEGV:
+                            error = '`ocloc` raised SIGSEGV'
+                        else:
+                            error = f'`ocloc` failed with error code {e.returncode}'
 
-                    raise IntelGPUError(f'{error}\n'
-                                        f'`ocloc` stderr:\n{e.output}\n'
-                                        f'Repro command: {ocloc_cmd}\n') from e
+                        raise IntelGPUError(f'{error}\n'
+                                            f'`ocloc` stderr:\n{e.output}\n'
+                                            f'Repro command: {ocloc_cmd}\n') from e
 
             with open(fbin, 'rb') as f:
                 zebin = f.read()
