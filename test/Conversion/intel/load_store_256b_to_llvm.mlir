@@ -151,3 +151,49 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttig.sup
     tt.return
   }
 }
+
+// -----
+
+// COM: Load-side analogue of masked_store_fallback above: same dynamic
+// COM: two-armed guard, but the fast/slow arms must additionally merge their
+// COM: result into a common vector<4xi32> value via a block argument (phi),
+// COM: since (unlike stores) a load produces a value consumed by later code.
+
+#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttig.support_256b_load_store} {
+  // CHECK-LABEL: masked_load_fallback
+  tt.func @masked_load_fallback(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: tensor<256xi1, #blocked0>) -> tensor<256xf32, #blocked0> {
+    %c256_i32 = arith.constant 256 : i32
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c256_i32 : i32
+    %2 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked0>
+    %3 = tt.splat %1 : i32 -> tensor<256xi32, #blocked0>
+    %4 = arith.addi %3, %2 : tensor<256xi32, #blocked0>
+    %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<256x!tt.ptr<f32>, #blocked0>
+    %6 = tt.addptr %5, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
+    %9 = tt.load %6, %arg1 : tensor<256x!tt.ptr<f32>, #blocked0>
+    // COM: Group 1: fast arm is a single wide vector<4xi32> load gated on the
+    // COM: dynamic AND of the group's 4 mask elements; slow arm is the exact
+    // COM: per-element predicated-load-with-default fallback, merging its
+    // COM: repacked result into the same vector<4xi32> type via the phi on
+    // COM: the merge block.
+    // CHECK-COUNT-2: llvm.and {{.*}} : i1
+    // CHECK: %[[GROUPMASK0:.*]] = llvm.and {{.*}} : i1
+    // CHECK-NEXT: llvm.cond_br %[[GROUPMASK0]], ^[[BB_FAST0:bb[0-9]+]], ^[[BB_SLOW0:bb[0-9]+]]
+    // CHECK: ^[[BB_FAST0]]:
+    // CHECK:   llvm.load {{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<4xi32>
+    // CHECK: ^[[BB_SLOW0]]:
+    // CHECK-COUNT-4: llvm.load {{.*}} {alignment = 4 : i64} : !llvm.ptr<1> -> f32
+    // CHECK: ^[[BB_MERGE0:bb[0-9]+]]({{.*}}: vector<4xi32>):
+    // COM: Group 2: same structure, second vec=4 group.
+    // CHECK-COUNT-2: llvm.and {{.*}} : i1
+    // CHECK: %[[GROUPMASK1:.*]] = llvm.and {{.*}} : i1
+    // CHECK-NEXT: llvm.cond_br %[[GROUPMASK1]], ^[[BB_FAST1:bb[0-9]+]], ^[[BB_SLOW1:bb[0-9]+]]
+    // CHECK: ^[[BB_FAST1]]:
+    // CHECK:   llvm.load {{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<4xi32>
+    // CHECK: ^[[BB_SLOW1]]:
+    // CHECK-COUNT-4: llvm.load {{.*}} {alignment = 4 : i64} : !llvm.ptr<1> -> f32
+    // CHECK: ^[[BB_MERGE1:bb[0-9]+]]({{.*}}: vector<4xi32>):
+    tt.return %9 : tensor<256xf32, #blocked0>
+  }
+}
