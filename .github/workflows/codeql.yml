@@ -86,6 +86,23 @@ jobs:
         path: results
         merge-multiple: true
 
+    # The report action renders the PDF with puppeteer-core using channel: 'chrome',
+    # which requires a system Chrome at the hardcoded /opt/google/chrome/chrome.
+    - name: Install Chrome for PDF generation
+      run: |
+        if [[ -x /opt/google/chrome/chrome ]]; then
+          echo "Chrome already present: $(/opt/google/chrome/chrome --version)"
+          exit 0
+        fi
+        tmp="$(mktemp -d)"
+        trap 'rm -rf "$tmp"' EXIT
+        curl -fsSL -o "$tmp/chrome.deb" \
+          https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+        sudo apt-get update
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+          "$tmp/chrome.deb"
+        /opt/google/chrome/chrome --version
+
     - name: Generate Security Report
       uses: rsdmike/github-security-report-action@v3.0.4
       with:
