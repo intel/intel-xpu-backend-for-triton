@@ -36,3 +36,4 @@ echo "Applying PyTorch patches in $REPO_ROOT"
 
 # put your patch applies here
 apply_patch patch/skip-test-topk-xpu.patch
+apply_patch patch/175168-floordiv-xpu.patch
