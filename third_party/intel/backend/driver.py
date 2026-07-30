@@ -289,8 +289,12 @@ class SpirvUtils:
     def load_binary(self, *args):
         # if we don't use parameter passing in this way,
         # we will need to rewrite the line in the general part of the code:
-        # driver.active.utils.load_binary(self.name, self.kernel, self.metadata.shared, self.metadata.build_flags, device) ->
-        # driver.active.utils.load_binary((self.name, self.kernel, self.metadata.shared, self.metadata.build_flags, device))
+        # driver.active.utils.load_binary(
+        #     self.name, self.kernel, self.metadata.shared,
+        #     self.metadata.build_flags, is_spv, device, deviceArch) ->
+        # driver.active.utils.load_binary(
+        #     (self.name, self.kernel, self.metadata.shared,
+        #      self.metadata.build_flags, is_spv, device, deviceArch))
         # PTSS-overflow detection happens at the C level (driver.c
         # tryRaisePTSSOutOfResources): when zeModuleCreate fails and the
         # IGC build log carries a PTSS marker, OutOfResources is raised

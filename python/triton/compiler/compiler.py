@@ -494,9 +494,12 @@ class CompiledKernel:
         # `build_flags`/`generate_native_code` are Intel/XPU-specific metadata fields.
         # Backends that don't define them (e.g. NVIDIA/CUDA) use the plain load_binary signature.
         if hasattr(self.metadata, "build_flags"):
+            device_arch = "unknown"
+            if isinstance(self.metadata.target.arch, dict):
+                device_arch = self.metadata.target.arch.get("arch", "unknown")
             self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
                 self.name, self.kernel, self.metadata.shared, self.metadata.build_flags,
-                not self.metadata.generate_native_code, device)
+                not self.metadata.generate_native_code, device, device_arch)
             # PyTorch could use the updated build flags in load binary.
             if hasattr(driver.active.utils, "get_last_selected_build_flags"):
                 new_build_flags = driver.active.utils.get_last_selected_build_flags()
