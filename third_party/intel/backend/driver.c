@@ -384,6 +384,7 @@ struct BuildFlags {
   std::string build_flags_str;
 
   const char *LARGE_GRF_FLAG{"-cl-intel-256-GRF-per-thread"};
+  const char *XLARGE_GRF_FLAG{"-cl-intel-512-GRF-per-thread"};
   const char *SMALL_GRF_FLAG{"-cl-intel-128-GRF-per-thread"};
   const char *AUTO_GRF_FLAG{"-cl-intel-enable-auto-large-GRF-mode"};
 
@@ -392,6 +393,9 @@ struct BuildFlags {
   const std::string &operator()() const { return build_flags_str; }
 
   int32_t n_regs() const {
+    if (build_flags_str.find(XLARGE_GRF_FLAG) != std::string::npos) {
+      return 512;
+    }
     if (build_flags_str.find(LARGE_GRF_FLAG) != std::string::npos) {
       return 256;
     }
@@ -403,6 +407,7 @@ struct BuildFlags {
 
   const bool hasGRFSizeFlag() const {
     if (build_flags_str.find(LARGE_GRF_FLAG) != std::string::npos ||
+        build_flags_str.find(XLARGE_GRF_FLAG) != std::string::npos ||
         build_flags_str.find(SMALL_GRF_FLAG) != std::string::npos ||
         build_flags_str.find(AUTO_GRF_FLAG) != std::string::npos) {
       return true;
@@ -413,6 +418,10 @@ struct BuildFlags {
 
   void addLargeGRFSizeFlag() {
     build_flags_str = build_flags_str.append(" ").append(LARGE_GRF_FLAG);
+  }
+
+  void addXLargeGRFSizeFlag() {
+    build_flags_str = build_flags_str.append(" ").append(XLARGE_GRF_FLAG);
   }
 };
 
@@ -451,17 +460,20 @@ extern "C" EXPORT_FUNC PyObject *get_last_selected_build_flags() {
 }
 
 extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
-  const char *name, *build_flags_ptr;
+  const char *name, *build_flags_ptr, *deviceArch = nullptr;
   int shared;
   PyObject *py_bytes;
   int is_spv;
   int devId;
 
-  if (!PyArg_ParseTuple(args, "sSispi", &name, &py_bytes, &shared,
-                        &build_flags_ptr, &is_spv, &devId)) {
+  if (!PyArg_ParseTuple(args, "sSispi|z", &name, &py_bytes, &shared,
+                        &build_flags_ptr, &is_spv, &devId, &deviceArch)) {
     // PyArg_ParseTuple will set a PyErr
     return NULL;
   }
+
+  const char *resolvedDeviceArch =
+      (deviceArch != nullptr && deviceArch[0] != '\0') ? deviceArch : "unknown";
 
   TRITON_ZE_FAIL_IF(devId >= g_sycl_l0_device_list.size(),
                     "Device is not found");
@@ -513,7 +525,11 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
                 << kernel_name << "\", retrying with large GRF mode"
                 << std::endl;
 
-    build_flags.addLargeGRFSizeFlag();
+    if (std::strcmp(resolvedDeviceArch, "cri") == 0) {
+      build_flags.addXLargeGRFSizeFlag();
+    } else {
+      build_flags.addLargeGRFSizeFlag();
+    }
 
     try {
       auto [l0_module_retry, l0_kernel_retry, n_spills_retry] =
