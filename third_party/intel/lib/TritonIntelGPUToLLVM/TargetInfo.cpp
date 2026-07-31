@@ -10,7 +10,11 @@
 #include "Dialect/TritonIntelGPU/IR/Utils.h"
 #include "SPIRVTargetInfo.h"
 #include "Utility.h"
+#include "Utils/LLVMIntr.h"
+#include "Utils/Mangling.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENMemorySpace.h"
+
+#include <numeric>
 
 #if defined(_MSC_VER) && !defined(__clang__)
 // from https://gist.github.com/pps83/3210a2f980fd02bb2ba2e5a1fc4a2ef0
@@ -46,9 +50,36 @@ Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
 }
 
 Value TargetInfo::getGlobalTimer(RewriterBase &rewriter, Location loc) const {
-  // No nanosecond wall-clock builtin is wired up for the SPIR-V target.
-  llvm::report_fatal_error(
-      "getGlobalTimer is not implemented for the Intel SPIR-V target");
+  // There is no real time counter, so count core clock cycles instead.
+  auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  auto clockRateAttr = mod->getAttrOfType<IntegerAttr>(
+      triton::gpu::intel::TritonIntelGPUDialect::getCoreClockRateAttrName());
+  if (!clockRateAttr || clockRateAttr.getInt() <= 0)
+    llvm::report_fatal_error(
+        Twine("getGlobalTimer needs a positive ") +
+        triton::gpu::intel::TritonIntelGPUDialect::getCoreClockRateAttrName() +
+        " to report nanoseconds");
+
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value scope = b.i32_val(/*Device=*/1);
+  std::string funcName =
+      mlir::triton::gpu::intel::mangle("__spirv_ReadClockKHR_Rulong", {i32_ty});
+  Value ticks = mlir::triton::gpu::intel::createDeviceFunctionCall(
+                    rewriter, funcName, /*retType=*/i64_ty,
+                    /*argTypes=*/{i32_ty},
+                    /*args=*/{scope}, /*paramAttrs=*/{},
+                    gpu::intel::noUnwindWillReturnAttrs)
+                    .getResult();
+
+  // kHz is cycles per millisecond. The rate is nominal and the core clock
+  // scales with DVFS, so a downclocked GPU makes a timeout fire late, never
+  // early. Reduce by the GCD so the multiplication does not overflow after a
+  // few hours of GPU uptime.
+  int64_t coreClockRate = clockRateAttr.getInt();
+  int64_t nsPerMs = 1000000;
+  int64_t g = std::gcd(nsPerMs, coreClockRate);
+  return b.udiv(b.mul(ticks, b.i64_val(nsPerMs / g)),
+                b.i64_val(coreClockRate / g));
 }
 
 StringRef TargetInfo::getAtomicSyncScope(MemSyncScope scope) const {
