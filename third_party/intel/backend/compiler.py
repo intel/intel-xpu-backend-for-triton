@@ -59,6 +59,7 @@ class XPUOptions:
     arch: str = ""
     instrumentation_mode: str = ""
     fpsan_homomorphic_casts: bool = False
+    maxnreg: int | None = None
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -80,6 +81,7 @@ class XPUOptions:
 
 # Aligned with max_reg_spill in third_party/intel/backend/driver.c
 MAX_REG_SPILL = 1000
+VALID_MAXNREG = frozenset((128, 256, 512))
 
 SPILL_SIZE_RE = re.compile(r'spill_size\s*[:=]\s*(\d+)')
 PTSS_OVERFLOW_RE = re.compile(
@@ -111,6 +113,31 @@ def extract_spill_size_from_zebin(file):
                 stacklevel=2,
             )
             return 0
+
+
+def normalize_maxnreg(maxnreg):
+            if maxnreg is None:
+                return None
+            if maxnreg not in VALID_MAXNREG:
+                raise RuntimeError(f"maxnreg must be one of {sorted(VALID_MAXNREG)}")
+            return maxnreg
+
+
+def grf_flag_from_maxnreg(maxnreg):
+            if maxnreg == 128:
+                return ""
+            if maxnreg == 256:
+                return "-cl-intel-256-GRF-per-thread"
+            if maxnreg == 512:
+                return "-cl-intel-512-GRF-per-thread"
+            raise RuntimeError(f"Unsupported maxnreg value: {maxnreg}")
+
+
+def get_auto_grf_retry_flag(maxnreg, arch):
+            maxnreg = normalize_maxnreg(maxnreg)
+            if maxnreg is None:
+                maxnreg = 512 if arch == "cri" else 256
+            return grf_flag_from_maxnreg(maxnreg)
         text = zeinfo.data().decode('utf-8')
         match = SPILL_SIZE_RE.search(text)
         if match is not None:
@@ -225,6 +252,14 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         args["allow_fp8e4nv"] = True
         if "enable_fp_fusion" not in args:
             args["enable_fp_fusion"] = knobs.language.default_fp_fusion
+        maxnreg = normalize_maxnreg(args.get("maxnreg"))
+        grf_mode = args.get("grf_mode", "default")
+        if maxnreg is not None and grf_mode != "default":
+            expected_grf_mode = str(maxnreg)
+            if grf_mode != expected_grf_mode:
+                raise RuntimeError("maxnreg can only be combined with grf_mode='default' "
+                                   "or the matching explicit GRF mode")
+        args["maxnreg"] = maxnreg
         return XPUOptions(**args)
 
     @staticmethod
@@ -577,6 +612,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         os.environ["INTEL_XPU_BACKEND_IS_LTS"] = "1" if cls.is_lts(driver_version) else "0"
         spirv, name = intel.translate_to_spirv(src)
         metadata["name"] = name
+        metadata["maxnreg"] = options.maxnreg or 0
         metadata.setdefault("build_flags", "")
         if options.grf_mode == '128':
             metadata["build_flags"] += " -cl-intel-128-GRF-per-thread"
@@ -623,10 +659,9 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             if options.grf_mode == 'default':
                 # Try rebuilding with larger GRF modes (default first, then larger).
                 retry_grf_mode_list = [""]  # default GRF mode by omitting the flag
-                if metadata["target"].arch.get("arch") == 'cri':
-                    retry_grf_mode_list.append("-cl-intel-512-GRF-per-thread")
-                else:
-                    retry_grf_mode_list.append("-cl-intel-256-GRF-per-thread")
+                retry_grf_flag = get_auto_grf_retry_flag(options.maxnreg, metadata["target"].arch.get("arch"))
+                if retry_grf_flag:
+                    retry_grf_mode_list.append(retry_grf_flag)
             else:
                 # Non-default GRF mode is already encoded in metadata["build_flags"] (including "auto").
                 retry_grf_mode_list = [""]

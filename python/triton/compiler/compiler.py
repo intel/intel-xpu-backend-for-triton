@@ -499,7 +499,7 @@ class CompiledKernel:
                 device_arch = self.metadata.target.arch.get("arch", "unknown")
             self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
                 self.name, self.kernel, self.metadata.shared, self.metadata.build_flags,
-                not self.metadata.generate_native_code, device, device_arch)
+                not self.metadata.generate_native_code, device, device_arch, getattr(self.metadata, "maxnreg", 0))
             # PyTorch could use the updated build flags in load binary.
             if hasattr(driver.active.utils, "get_last_selected_build_flags"):
                 new_build_flags = driver.active.utils.get_last_selected_build_flags()
