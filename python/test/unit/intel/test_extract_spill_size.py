@@ -14,7 +14,7 @@ import pytest
 
 from triton.backends.compiler import GPUTarget
 from triton.backends.intel.compiler import (XPUBackend, extract_spill_size_from_zebin, get_auto_grf_retry_flag,
-                                            normalize_maxnreg)
+                                            get_max_reg_spill_threshold, normalize_maxnreg)
 from triton.runtime.errors import IntelGPUError
 
 
@@ -127,6 +127,11 @@ def test_normalize_maxnreg_accepts_supported_values(value):
 def test_normalize_maxnreg_rejects_invalid_value():
     with pytest.raises(RuntimeError, match="maxnreg must be one of"):
         normalize_maxnreg(42)
+
+
+@pytest.mark.parametrize(("value", "expected"), [(None, 1000), (128, 128), (256, 256), (512, 512)])
+def test_get_max_reg_spill_threshold(value, expected):
+    assert get_max_reg_spill_threshold(value) == expected
 
 
 @pytest.mark.parametrize(("maxnreg", "arch", "expected"), [(None, "pvc", "-cl-intel-256-GRF-per-thread"),

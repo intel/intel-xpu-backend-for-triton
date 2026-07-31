@@ -113,36 +113,41 @@ def extract_spill_size_from_zebin(file):
                 stacklevel=2,
             )
             return 0
-
-
-def normalize_maxnreg(maxnreg):
-            if maxnreg is None:
-                return None
-            if maxnreg not in VALID_MAXNREG:
-                raise RuntimeError(f"maxnreg must be one of {sorted(VALID_MAXNREG)}")
-            return maxnreg
-
-
-def grf_flag_from_maxnreg(maxnreg):
-            if maxnreg == 128:
-                return ""
-            if maxnreg == 256:
-                return "-cl-intel-256-GRF-per-thread"
-            if maxnreg == 512:
-                return "-cl-intel-512-GRF-per-thread"
-            raise RuntimeError(f"Unsupported maxnreg value: {maxnreg}")
-
-
-def get_auto_grf_retry_flag(maxnreg, arch):
-            maxnreg = normalize_maxnreg(maxnreg)
-            if maxnreg is None:
-                maxnreg = 512 if arch == "cri" else 256
-            return grf_flag_from_maxnreg(maxnreg)
         text = zeinfo.data().decode('utf-8')
         match = SPILL_SIZE_RE.search(text)
         if match is not None:
             return int(match.group(1))
     return 0
+
+
+def normalize_maxnreg(maxnreg):
+    if maxnreg is None:
+        return None
+    if maxnreg not in VALID_MAXNREG:
+        raise RuntimeError(f"maxnreg must be one of {sorted(VALID_MAXNREG)}")
+    return maxnreg
+
+
+def get_max_reg_spill_threshold(maxnreg):
+    maxnreg = normalize_maxnreg(maxnreg)
+    return MAX_REG_SPILL if maxnreg is None else maxnreg
+
+
+def grf_flag_from_maxnreg(maxnreg):
+    if maxnreg == 128:
+        return ""
+    if maxnreg == 256:
+        return "-cl-intel-256-GRF-per-thread"
+    if maxnreg == 512:
+        return "-cl-intel-512-GRF-per-thread"
+    raise RuntimeError(f"Unsupported maxnreg value: {maxnreg}")
+
+
+def get_auto_grf_retry_flag(maxnreg, arch):
+    maxnreg = normalize_maxnreg(maxnreg)
+    if maxnreg is None:
+        maxnreg = 512 if arch == "cri" else 256
+    return grf_flag_from_maxnreg(maxnreg)
 
 
 def min_dot_size(device_props: Union[Dict, GPUTarget]):
@@ -674,7 +679,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                     subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
                     if options.grf_mode == "default":
                         spill_size = extract_spill_size_from_zebin(fbin)
-                        if spill_size <= MAX_REG_SPILL:
+                        if spill_size <= get_max_reg_spill_threshold(options.maxnreg):
                             break
                 except (subprocess.CalledProcessError, IntelGPUError) as e:
                     # If GRF mode was not last yet, retry with different GRF mode
