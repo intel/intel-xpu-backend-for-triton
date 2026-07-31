@@ -9,6 +9,7 @@
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/MathExtras.h"
 
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
@@ -479,16 +480,6 @@ struct LoadStoreConversionBase {
   }
 
   // Convert Triton cache modifier to Intel GEN load cache control enum.
-  //
-  // Explicit cache modifiers (cg/cv/ca) always win. When no cache modifier is
-  // set, fall back to the frontend-provided eviction policy hint (e.g.
-  // inductor's `eviction_policy='evict_last'`) and route it to the closest
-  // LSC cache mode:
-  //   EVICT_FIRST -> L1IAR_L3C  (invalidate-after-read: data is used once;
-  //                              free the L1 line immediately after delivery)
-  //   EVICT_LAST  -> L1C_L3C    (cache at all levels: keep the line warm for
-  //                              anticipated reuse)
-  //   NORMAL      -> DEFAULT    (let the hardware decide)
   template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
                                  OpType, LoadOp, DescriptorLoadOp>::value>>
   TritonGEN::LoadCacheControl tritonToIntelCacheModifier(OpType &op) const {
@@ -502,14 +493,6 @@ struct LoadStoreConversionBase {
      **/
     switch (cacheModifier) {
     case CacheModifier::NONE:
-      switch (op.getEvict()) {
-      case EvictionPolicy::EVICT_FIRST:
-        return TritonGEN::LoadCacheControl::L1IAR_L3C;
-      case EvictionPolicy::EVICT_LAST:
-        return TritonGEN::LoadCacheControl::L1C_L3C;
-      case EvictionPolicy::NORMAL:
-        break;
-      }
       return TritonGEN::LoadCacheControl::DEFAULT;
     case CacheModifier::CG:
       return TritonGEN::LoadCacheControl::L1UC_L3C;
@@ -550,9 +533,8 @@ struct LoadStoreConversionBase {
     }
   }
 
-  template <typename OpType,
-            typename = std::enable_if_t<llvm::is_one_of<
-                OpType, LoadOp, StoreOp, DescriptorLoadOp>::value>>
+  template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
+                                 OpType, LoadOp, StoreOp>::value>>
   bool getNonTemporalFlag(OpType op) const {
     switch (op.getCache()) {
     case triton::CacheModifier::CG:
@@ -560,16 +542,6 @@ struct LoadStoreConversionBase {
     case triton::CacheModifier::CV:
       return true;
     case triton::CacheModifier::CA:
-      return false;
-    case triton::CacheModifier::NONE:
-      // No explicit cache modifier: derive from eviction policy hint.
-      // EVICT_FIRST implies single-use; map to nontemporal so IGC bypasses L1.
-      // EVICT_LAST implies reuse; keep the default (temporal) behavior.
-      // Only load ops carry eviction policy; stores always return false here.
-      if constexpr (std::is_same_v<OpType, LoadOp> ||
-                    std::is_same_v<OpType, DescriptorLoadOp>)
-        return op.getEvict() == triton::EvictionPolicy::EVICT_FIRST;
-      return false;
     default:
       return false;
     }
@@ -970,11 +942,11 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
 
   static FailureOr<LinearLayout> computeTransposeShuffleMapping(
       RankedTensorType tensorType, const LinearLayout &regMapping,
-      int64_t numElemsPerLoad, unsigned numPackedVals, unsigned tileHeight,
+      int64_t numElemsPerLoad, const BlockIOTileSizeInfo &sizeInfo,
       unsigned threadsPerWarp, bool hasDPASOperandType, MLIRContext *ctx) {
     return triton::gpu::intel::computeTransposeShuffleMapping(
-        tensorType, regMapping, numElemsPerLoad, numPackedVals, tileHeight,
-        threadsPerWarp, hasDPASOperandType, ctx);
+        tensorType, regMapping, numElemsPerLoad, sizeInfo, threadsPerWarp,
+        hasDPASOperandType, ctx);
   }
 
   /// Build a Block2DLoadConfig from a validated BlockIOTileSizeInfo.
@@ -1049,8 +1021,8 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
         LinearLayout::identity1D(cfg.numElemsPerLoad, kRegister, kRegister);
     if (cfg.isTransposeRequired) {
       auto maybeShuffleMapping = computeTransposeShuffleMapping(
-          tensorType, cfg.regMapping, cfg.numElemsPerLoad, cfg.numPackedVals,
-          cfg.tileHeight, threadsPerWarp, !!cfg.packedDPASOperandType, ctx);
+          tensorType, cfg.regMapping, cfg.numElemsPerLoad, sizeInfo,
+          threadsPerWarp, !!cfg.packedDPASOperandType, ctx);
       assert(succeeded(maybeShuffleMapping) &&
              "validate2DBlockLoadTile should have rejected this configuration");
       cfg.shuffleMapping = *maybeShuffleMapping;
@@ -2404,7 +2376,7 @@ struct DescriptorLoadOpConversion
       auto createLoadWithAttrs = [&]() {
         return SmallVector<Value>{b.load(retTy, addrElem, alignment,
                                          /*isVolatile=*/false,
-                                         getNonTemporalFlag(op))};
+                                         /*isNonTemporal=*/false)};
       };
 
       Value ret;
@@ -2683,6 +2655,13 @@ struct DescriptorStoreOpToBlockIOConversion
     if (!isDescriptorBlockIOCandidate(op))
       return failure();
 
+    // Get source tensor type and encoding.
+    auto tensorType = cast<RankedTensorType>(op.getSrc().getType());
+
+    // FIXME: Support rank > 2 by iterating over batch dimensions.
+    if (tensorType.getRank() != 2)
+      return failure();
+
     // Read memory layout from block_io attribute (set by
     // MaterializeBlockPointer).
     StringRef blockIOName = TritonIntelGPUDialect::getBlockIOAttrName();
@@ -2692,9 +2671,6 @@ struct DescriptorStoreOpToBlockIOConversion
         "block_io attribute required; checked by isDescriptorBlockIOCandidate");
     const bool memoryRowMajor = (blockIOAttr.getValue() == "row_major");
     assert(memoryRowMajor && "column_major descriptor store not yet supported");
-
-    // Get source tensor type and encoding.
-    auto tensorType = cast<RankedTensorType>(op.getSrc().getType());
     Attribute encoding = tensorType.getEncoding();
 
     // --- Linear layout and tile size ---
@@ -2793,7 +2769,7 @@ struct DescriptorStoreOpToBlockIOConversion
 
     // --- Get the LLVM values for store values ---
     SmallVector<Value> valElems =
-        unpackLLElements(loc, adaptor.getSrc(), rewriter);
+        unpackTensorElements(loc, adaptor.getSrc(), rewriter, tensorType);
     assert(valElems.size() == numElems &&
            "the number of store values does not match the number of elements");
 
@@ -3010,7 +2986,8 @@ struct StoreOpToBlockIOConversion
     unsigned numElems = getTotalElemsPerThread(tensorType);
 
     // Get the LLVM values for pointers
-    SmallVector<Value> ptrElems = unpackLLElements(loc, llPtr, rewriter);
+    SmallVector<Value> ptrElems =
+        unpackTensorElements(loc, llPtr, rewriter, op.getPtr().getType());
     assert(ptrElems.size() == numElems &&
            "the number of pointer values is not matched with the number of "
            "elements");
@@ -3019,7 +2996,8 @@ struct StoreOpToBlockIOConversion
     Value llMask = adaptor.getMask();
     // Get the LLVM values for mask
     if (llMask) {
-      maskElems = unpackLLElements(loc, llMask, rewriter);
+      maskElems =
+          unpackTensorElements(loc, llMask, rewriter, op.getMask().getType());
       assert(maskElems.size() == numElems &&
              "the number of mask values is not matched with the number of "
              "elements");
@@ -3043,15 +3021,20 @@ struct StoreOpToBlockIOConversion
         // It must be a store height=1 tile. We can set the pitch to an
         // arbitrary value since the row offset is always 0, as long as we can
         // satisfy the HW address payload restriction for the given tile width
-        // and element size. To keep it simple, we can just set the pitch to
-        // surface width * element size to avoid issue pitch < base_width caused
-        // by the compensation of the base address alignment.
+        // and element size. Account for the downstream 64-byte alignment
+        // compensation (up to 63 bytes added to base_width) and the umax(64)
+        // floor so that pitch >= adjusted base_width is always satisfied.
         if (tileHeight != 1)
           return failure();
         constexpr int64_t MIN_PITCH = 64;
-        int64_t surfaceWidth = tensorType.getDimSize(colDim);
-        pitch =
-            b.i32_val(std::max(MIN_PITCH, surfaceWidth * elemSizeInBits / 8));
+        constexpr int64_t MAX_ALIGN_OVERHEAD = 63;
+        int64_t surfaceWidthBytes =
+            tensorType.getDimSize(colDim) * elemSizeInBits / 8;
+        int64_t maxAdjustedWidth =
+            std::max(MIN_PITCH, surfaceWidthBytes) + MAX_ALIGN_OVERHEAD;
+        // Pitch must be a multiple of 16 bytes.
+        pitch = b.i32_val(
+            llvm::alignTo(std::max(MIN_PITCH, maxAdjustedWidth), int64_t(16)));
       } else {
         pitch = getPitch(rewriter, ptr, elemSizeInBits, rowDim);
       }
@@ -3062,8 +3045,8 @@ struct StoreOpToBlockIOConversion
     Value offsetBaseY = b.i32_val(0);
 
     // Get the LLVM values for store values
-    SmallVector<Value> valElems =
-        unpackLLElements(loc, adaptor.getValue(), rewriter);
+    SmallVector<Value> valElems = unpackTensorElements(
+        loc, adaptor.getValue(), rewriter, op.getValue().getType());
     assert(valElems.size() == numElems &&
            "the number of store values does not match the number of elements");
 
@@ -3216,8 +3199,13 @@ struct StoreOpConversion
     Type valueElemTy =
         typeConverter->convertType(getElementTypeOrSelf(valueTy));
     unsigned vec = getVectorSize(hasSupport256bLoadStore(op), ptr);
-    if (llMask)
-      vec = std::min<size_t>(vec, getMaskAlignment(op.getMask()));
+    // Statically-provable alignment of the mask (i.e. the mask is proven
+    // constant over blocks of this many elements). Unlike vec, this is no
+    // longer used to shrink the vectorization width: even when the mask
+    // isn't statically uniform across a vec-group, we still try a single
+    // wide store gated on a dynamic AND of the group's mask elements,
+    // falling back to the exact per-element behavior otherwise (see below).
+    unsigned maskAlignment = llMask ? getMaskAlignment(op.getMask()) : vec;
 
     Value llPtr = adaptor.getPtr();
     SmallVector<Value> ptrElems =
@@ -3242,6 +3230,30 @@ struct StoreOpConversion
     const size_t dtsize =
         std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);
     const size_t valueElemNBits = dtsize * 8;
+
+    // Widens an i1 element to i8 (stores don't support sub-byte types) and
+    // bitcasts it to the store's element type.
+    auto toElemTy = [&](Value elem) {
+      if (elem.getType().isInteger(1))
+        elem = b.sext(i8_ty, elem);
+      return b.bitcast(elem, valueElemTy);
+    };
+
+    // Dispatches a (possibly predicated) store of `value` to `addr`: an
+    // unconditional store if `pred` is null, a `TritonGEN::PredicatedStoreOp`
+    // if predicated instructions are available for `op`, or a branch-guarded
+    // plain store (via `storeFn`) otherwise.
+    auto emitPredicatedStore = [&](Value pred, Value addr, Value value,
+                                   auto storeFn) {
+      if (!pred)
+        (void)storeFn();
+      else if (canUsePredicatedInstructions(op)) {
+        auto cacheModifier = tritonToIntelCacheModifier(op);
+        TritonGEN::PredicatedStoreOp::create(rewriter, loc, addr, value, pred,
+                                             cacheModifier);
+      } else
+        LLVM::intel::createPredicatedBlock(rewriter, loc, pred, storeFn);
+    };
 
     unsigned elemsPerThread = getTotalElemsPerThread(valueTy);
     const int numVecs = elemsPerThread / vec;
@@ -3274,10 +3286,7 @@ struct StoreOpConversion
         for (size_t elemIdx = 0; elemIdx < wordNElems; ++elemIdx) {
           const size_t elemOffset = vecStart + wordIdx * wordNElems + elemIdx;
           assert(elemOffset < valueElems.size());
-          Value elem = valueElems[elemOffset];
-          if (elem.getType().isInteger(1))
-            elem = b.sext(i8_ty, elem);
-          elem = b.bitcast(elem, valueElemTy);
+          Value elem = toElemTy(valueElems[elemOffset]);
 
           llWord = b.insert_element(wordTy, llWord, elem, b.i32_val(elemIdx));
         }
@@ -3285,12 +3294,6 @@ struct StoreOpConversion
         std::string constraint =
             (width == 64) ? "l" : ((width == 32) ? "r" : "c");
         asmArgs.emplace_back(llWord, constraint);
-      }
-
-      Value maskVal = threadPred;
-      if (maskElems.size() > 0) {
-        auto mask = maskElems[vecStart];
-        maskVal = maybeAnd(rewriter, loc, threadPred, mask);
       }
 
       auto vecTy = vec_ty(valArgTy, nWords);
@@ -3312,15 +3315,55 @@ struct StoreOpConversion
         return ArrayRef<Value>();
       };
 
-      if (!maskVal)
-        auto _ = createStoreWithAttrs();
-      else if (canUsePredicatedInstructions(op)) {
-        auto cacheModifier = tritonToIntelCacheModifier(op);
-        TritonGEN::PredicatedStoreOp::create(rewriter, loc, addrElem, vecWord,
-                                             maskVal, cacheModifier);
-      } else
-        LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal,
-                                           createStoreWithAttrs);
+      // Emits the exact single-element fallback that today's code emits when
+      // vec == 1, applied to a single lane `i` of the current group. Used
+      // both for the statically-uniform-mask case (vec == 1 always falls
+      // here) and as the "slow" per-element arm when the mask isn't
+      // statically uniform across the whole group.
+      auto storeSingleElem = [&](size_t i) {
+        Value elem = toElemTy(valueElems[vecStart + i]);
+
+        Value addrElemI =
+            b.bitcast(ptrElems[vecStart + i], ptr_ty(ctx, 1 /*global*/));
+        uint32_t alignmentI = dtsize;
+        auto createSingleStoreWithAttrs = [&]() {
+          bool isVolatile = false;
+          b.store(elem, addrElemI, alignmentI, isVolatile,
+                  getNonTemporalFlag(op));
+          return ArrayRef<Value>();
+        };
+
+        Value predI = threadPred;
+        if (maskElems.size() > 0)
+          predI = maybeAnd(rewriter, loc, threadPred, maskElems[vecStart + i]);
+
+        emitPredicatedStore(predI, addrElemI, elem, createSingleStoreWithAttrs);
+      };
+
+      if (maskElems.empty() || maskAlignment >= vec) {
+        // Either unmasked, or the mask is statically provably uniform across
+        // this whole group: behavior identical to before this change.
+        Value maskVal = threadPred;
+        if (maskElems.size() > 0)
+          maskVal = maybeAnd(rewriter, loc, threadPred, maskElems[vecStart]);
+
+        emitPredicatedStore(maskVal, addrElem, vecWord, createStoreWithAttrs);
+      } else {
+        // The mask isn't statically uniform across the group. Try a single
+        // wide store gated on a dynamic AND of the group's mask elements
+        // (the common case away from boundaries); otherwise fall back to
+        // the exact per-element behavior, preserving correctness.
+        Value groupMask = maskElems[vecStart];
+        for (size_t i = 1; i < vec; ++i)
+          groupMask = b.and_(groupMask, maskElems[vecStart + i]);
+        Value fastMaskVal = maybeAnd(rewriter, loc, threadPred, groupMask);
+
+        LLVM::intel::createTwoArmedPredicatedBlock(
+            rewriter, loc, fastMaskVal, createStoreWithAttrs, [&]() {
+              for (size_t i = 0; i < vec; ++i)
+                storeSingleElem(i);
+            });
+      }
     }
 
     rewriter.eraseOp(op);
@@ -3383,6 +3426,7 @@ struct AtomicCASOpConversion
     auto freeVarMasks = getFreeVariableMasks(valueTy);
     Value mask =
         emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
+    uint32_t regMask = freeVarMasks[str_attr("register")];
     SmallVector<Value> resultVals(elemsPerThread);
 
     MemSemantic memSem = op.getSem();
@@ -3395,6 +3439,12 @@ struct AtomicCASOpConversion
         TritonIntelGPUDialect::getSupport16BitAtomicsAttrName());
 
     for (size_t i = 0; i < elemsPerThread; ++i) {
+      if (auto canonicalStart = getCanonicalIndex(i, regMask);
+          canonicalStart != i) {
+        resultVals[i] = resultVals[canonicalStart];
+        continue;
+      }
+
       Value casPtr = ptrElements[i];
       Value casCmp = cmpElements[i];
       Value casVal = valElements[i];
@@ -3607,6 +3657,7 @@ struct AtomicRMWOpConversion
     auto freeVarMasks = getFreeVariableMasks(valueTy);
     Value threadPred =
         emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
+    uint32_t regMask = freeVarMasks[str_attr("register")];
 
     bool support16BitAtomics = moduleOp->hasAttr(
         TritonIntelGPUDialect::getSupport16BitAtomicsAttrName());
@@ -3620,6 +3671,13 @@ struct AtomicRMWOpConversion
     auto vecTy = vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
     for (size_t i = 0; i < elemsPerThread; i += vec) {
+      if (auto canonicalStart = getCanonicalIndex(i, regMask);
+          canonicalStart != i) {
+        for (unsigned ii = 0; ii < vec; ++ii)
+          resultVals[i + ii] = resultVals[canonicalStart + ii];
+        continue;
+      }
+
       Value rmwVal = b.undef(vecTy);
       for (int ii = 0; ii < vec; ++ii) {
         Value iiVal = createIndexAttrConstant(
@@ -4213,14 +4271,15 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
         tensorType, eltTy, sizeInfo, *llEncoding, threadsPerWarp, ctx);
 
     // Unpack pointer elements.
-    SmallVector<Value> ptrElems =
-        unpackLLElements(loc, adaptor.getPtr(), rewriter);
+    SmallVector<Value> ptrElems = unpackTensorElements(
+        loc, adaptor.getPtr(), rewriter, op.getPtr().getType());
 
     // Unpack mask/other elements.
     SmallVector<Value> maskElems;
     Value llMask = adaptor.getMask();
     if (llMask)
-      maskElems = unpackLLElements(loc, llMask, rewriter);
+      maskElems =
+          unpackTensorElements(loc, llMask, rewriter, op.getMask().getType());
 
     SmallVector<Value> otherElems;
     Value llOther = adaptor.getOther();
@@ -4244,7 +4303,8 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
               handleSplatValue(constAttr.getSplatValue<APInt>());
             });
       } else {
-        otherElems = unpackLLElements(loc, llOther, rewriter);
+        otherElems = unpackTensorElements(loc, llOther, rewriter,
+                                          op.getOther().getType());
       }
     }
 

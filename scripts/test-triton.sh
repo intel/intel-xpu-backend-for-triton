@@ -43,6 +43,7 @@ TEST:
     --vllm-linear-attn
     --vllm-deepgemm
     --vllm-kda
+    --vllm-tdesc
     --install-vllm
     --sglang
     --install-sglang
@@ -113,6 +114,7 @@ TEST_VLLM_QUANT=false
 TEST_VLLM_LINEAR_ATTN=false
 TEST_VLLM_DEEPGEMM=false
 TEST_VLLM_KDA=false
+TEST_VLLM_TDESC=false
 INSTALL_VLLM=false
 TEST_TRITON_KERNELS=false
 VENV=false
@@ -340,6 +342,11 @@ while (( $# != 0 )); do
       ;;
     --vllm-kda)
       TEST_VLLM_KDA=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --vllm-tdesc)
+      TEST_VLLM_TDESC=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -1001,12 +1008,14 @@ run_vllm_triton_attn_tests() {
   # Triton attention kernels: merge_attn_states_kernel, _fwd_kernel_stage1,
   # _fwd_grouped_kernel_stage1, _fwd_kernel_stage2, kernel_unified_attention_2d,
   # kernel_unified_attention_3d, reduce_segments
-  TRITON_TEST_SUITE=vllm_triton_attn \
+  VLLM_USE_V2_MODEL_RUNNER=1 TRITON_TEST_SUITE=vllm_triton_attn \
     run_pytest_command -vvv \
+      tests/v1/attention/test_mla_backends.py \
       tests/kernels/attention/test_merge_attn_states.py \
       tests/kernels/attention/test_triton_decode_attention.py \
       tests/kernels/attention/test_triton_unified_attention.py \
-      tests/kernels/attention/test_triton_prefill_attention.py
+      tests/kernels/attention/test_triton_prefill_attention.py \
+      tests/kernels/attention/test_cascade_flash_attn.py
 }
 
 
@@ -1025,7 +1034,9 @@ run_vllm_gdn_attn_tests() {
   TRITON_TEST_SUITE=vllm_gdn_attn \
     run_pytest_command -vvv \
       tests/v1/attention/test_gdn_metadata_builder.py \
-      tests/kernels/test_fused_sigmoid_gating_delta_rule.py
+      tests/kernels/test_fused_sigmoid_gating_delta_rule.py \
+      tests/kernels/test_fused_recurrent_packed_decode.py \
+      tests/kernels/test_fla_layernorm_guard.py
 }
 
 
@@ -1114,6 +1125,42 @@ run_vllm_kda_tests() {
     run_pytest_command -vvv \
       tests/kernels/test_kda.py \
       tests/kernels/core/test_fused_rms_norm_gated.py
+}
+
+
+run_vllm_tdesc_tests() {
+  echo "********************************************************"
+  echo "******  Running vLLM tensor descriptor tests     *******"
+  echo "********************************************************"
+
+  enter_vllm_test_env
+
+  local VLLM_PROJ="$TRITON_PROJ/vllm"
+  local PATCH_FILE="$TRITON_PROJ/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention.patch"
+
+  if git -C "$VLLM_PROJ" apply --check "$PATCH_FILE" 2>/dev/null; then
+    echo "Applying tdesc patch: $PATCH_FILE."
+    git -C "$VLLM_PROJ" apply "$PATCH_FILE"
+  elif git -C "$VLLM_PROJ" apply --reverse --check "$PATCH_FILE" 2>/dev/null; then
+    echo "Patch already applied, skipping."
+  else
+    echo "ERROR: Failed to apply tdesc patch: $PATCH_FILE" >&2
+    echo "The vLLM tree may have an outdated patch or conflicting changes." >&2
+    return 1
+  fi
+
+  local EXIT_STATUS=0
+  TRITON_TEST_SUITE=vllm_tdesc \
+    run_pytest_command -vvv \
+      tests/kernels/attention/test_triton_unified_attention.py \
+      || EXIT_STATUS=$?
+
+  echo "Reverting tdesc patch: $PATCH_FILE."
+  if ! git -C "$VLLM_PROJ" apply -R "$PATCH_FILE"; then
+    echo "WARNING: Failed to revert tdesc patch: $PATCH_FILE." >&2
+  fi
+
+  return $EXIT_STATUS
 }
 
 
@@ -1260,6 +1307,9 @@ test_triton() {
   fi
   if [ "$TEST_VLLM_KDA" == true ]; then
     run_vllm_kda_tests
+  fi
+  if [ "$TEST_VLLM_TDESC" == true ]; then
+    run_vllm_tdesc_tests
   fi
   if [ "$TEST_TRITON_KERNELS" == true ]; then
     run_triton_kernels_tests

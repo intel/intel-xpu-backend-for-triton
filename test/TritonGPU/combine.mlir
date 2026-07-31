@@ -175,17 +175,6 @@ tt.func @hoist_above_broadcast(%arg0: tensor<1024x1xf32, #layout2>, %arg1: f32) 
   tt.return %3 : tensor<1024x128xf32, #layout3>
 }
 
-// CHECK-LABEL: hoist_above_expand_dims_reshape
-tt.func @hoist_above_expand_dims_reshape(%arg0: tensor<1024xf32, #expand_layout0_slice>) -> tensor<1024x1xf32, #expand_layout1> {
-// CHECK: %[[CVT:.+]] = ttg.convert_layout %arg0 : tensor<1024xf32, #{{.*}}> -> tensor<1024xf32, #[[DST_LAYOUT:.*]]>
-// CHECK: tt.reshape %[[CVT]] : tensor<1024xf32, #[[DST_LAYOUT]]> -> tensor<1024x1xf32, #{{.*}}>
-// CHECK-NOT: ttg.convert_layout
-// CHECK: tt.return
-  %0 = tt.reshape %arg0 : tensor<1024xf32, #expand_layout0_slice> -> tensor<1024x1xf32, #expand_layout0>
-  %1 = ttg.convert_layout %0 : tensor<1024x1xf32, #expand_layout0> -> tensor<1024x1xf32, #expand_layout1>
-  tt.return %1 : tensor<1024x1xf32, #expand_layout1>
-}
-
 // CHECK-LABEL: if
 tt.func @if(%arg0: i32, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
   // CHECK-NOT: ttg.convert_layout
@@ -2797,9 +2786,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-DAG: [[LINEAR:#.*]] = #ttg.linear
   // CHECK-DAG: [[BLOCKED:#.*]] = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
-  // CHECK: tt.split {{.*}} : tensor<32x2xf32, [[LINEAR]]> -> tensor<32xf32, #ttg.slice<{dim = 1, parent = [[BLOCKED]]}>>
+  // CHECK: tt.split {{.*}} : tensor<32x2xf32, [[BLOCKED]]> -> tensor<32xf32, #ttg.slice<{dim = 1, parent = [[BLOCKED]]}>>
   tt.func public @split_slice_backward_propagation() -> tensor<32xf32, #ttg.slice<{dim=1, parent=#blocked2}>> {
     %cst = arith.constant dense<0.0> : tensor<32x2xf32, #blocked1>
     %outLHS, %outRHS = tt.split %cst : tensor<32x2xf32, #blocked1> -> tensor<32xf32, #blocked>
@@ -4547,5 +4535,36 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     %1 = ttg.convert_layout %0 : tensor<32xf32, #blocked1> -> tensor<32xf32, #blocked2>
     %2 = ttg.convert_layout %0 : tensor<32xf32, #blocked1> -> tensor<32xf32, #blocked3>
     tt.return %1, %2 : tensor<32xf32, #blocked2>, tensor<32xf32, #blocked3>
+  }
+}
+
+// -----
+
+// CHECK-LABEL: @remat_for_iter_arg_stale_mapping
+// CHECK-NOT: ttg.convert_layout
+// CHECK: scf.for
+// CHECK: tt.store
+// CHECK: tt.store
+// CHECK-NOT: ttg.convert_layout
+// CHECK: tt.return
+#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [2, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @remat_for_iter_arg_stale_mapping(%ptr: !tt.ptr<f32>, %upper: i32) {
+    %zero = arith.constant 0 : i32
+    %one = arith.constant 1 : i32
+    %init = arith.constant dense<1.0> : tensor<8x8xf32, #blocked>
+    %ptrs = tt.splat %ptr : !tt.ptr<f32> -> tensor<8x8x!tt.ptr<f32>, #blocked1>
+    %source = tt.load %ptrs : tensor<8x8x!tt.ptr<f32>, #blocked1>
+    %prior_ptrs = tt.splat %ptr : !tt.ptr<f32> -> tensor<8x8x!tt.ptr<f32>, #blocked>
+    %loop = scf.for %iv = %zero to %upper step %one iter_args(%iter = %init) -> (tensor<8x8xf32, #blocked>) : i32 {
+      %early = ttg.convert_layout %iter : tensor<8x8xf32, #blocked> -> tensor<8x8xf32, #blocked1>
+      tt.store %ptrs, %early : tensor<8x8x!tt.ptr<f32>, #blocked1>
+      %prior = ttg.convert_layout %source : tensor<8x8xf32, #blocked1> -> tensor<8x8xf32, #blocked>
+      tt.store %prior_ptrs, %prior : tensor<8x8x!tt.ptr<f32>, #blocked>
+      %late = ttg.convert_layout %source : tensor<8x8xf32, #blocked1> -> tensor<8x8xf32, #blocked>
+      scf.yield %late : tensor<8x8xf32, #blocked>
+    }
+    tt.return
   }
 }

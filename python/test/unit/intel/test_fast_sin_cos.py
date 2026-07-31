@@ -40,8 +40,10 @@ def test_fast_sin(N, device):
     grid = lambda meta: ((N + meta["BLOCK_SIZE"] - 1) // meta["BLOCK_SIZE"], )
     fast_sin_kernel[grid](x, out, N, BLOCK_SIZE)
 
-    # Reference (via float64 for better precision)
-    ref = torch.sin(x.to(torch.float64)).to(torch.float32)
+    # Reference (via float64 for better precision). Cast on CPU: XPU devices without
+    # fp64 hardware support (e.g. A770) would otherwise raise "Required aspect fp64
+    # is not supported on the device".
+    ref = torch.sin(x.cpu().to(torch.float64)).to(torch.float32).to(device)
 
     # Graphics-grade tolerance: max abs error <= 1e-3
     max_err = torch.max(torch.abs(out - ref)).item()
@@ -61,8 +63,10 @@ def test_fast_cos(N, device):
     grid = lambda meta: ((N + meta["BLOCK_SIZE"] - 1) // meta["BLOCK_SIZE"], )
     fast_cos_kernel[grid](x, out, N, BLOCK_SIZE)
 
-    # Reference (via float64 for better precision)
-    ref = torch.cos(x.to(torch.float64)).to(torch.float32)
+    # Reference (via float64 for better precision). Cast on CPU: XPU devices without
+    # fp64 hardware support (e.g. A770) would otherwise raise "Required aspect fp64
+    # is not supported on the device".
+    ref = torch.cos(x.cpu().to(torch.float64)).to(torch.float32).to(device)
 
     # Graphics-grade tolerance: max abs error <= 1e-3
     max_err = torch.max(torch.abs(out - ref)).item()

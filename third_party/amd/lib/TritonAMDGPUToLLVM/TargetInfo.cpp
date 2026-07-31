@@ -167,9 +167,24 @@ Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
 
 Value TargetInfo::getGlobalTimer(RewriterBase &rewriter, Location loc) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value timer = LLVM::createLLVMIntrinsicCallOp(
-                    rewriter, loc, "llvm.amdgcn.s.memrealtime", i64_ty, {})
-                    .getResult(0);
+  Value timer;
+  switch (getISAFamily()) {
+  case ISAFamily::RDNA3:
+  case ISAFamily::RDNA4m:
+  case ISAFamily::RDNA4:
+  case ISAFamily::GFX1250: {
+    Value msg = b.i32_val(/*MSG_RTN_GET_REALTIME=*/131);
+    timer = LLVM::createLLVMIntrinsicCallOp(
+                rewriter, loc, "llvm.amdgcn.s.sendmsg.rtn.i64", i64_ty, {msg})
+                .getResult(0);
+    break;
+  }
+  default:
+    timer = LLVM::createLLVMIntrinsicCallOp(
+                rewriter, loc, "llvm.amdgcn.s.memrealtime", i64_ty, {})
+                .getResult(0);
+    break;
+  }
   // The clock generator runs at 100 MHz, so each tick is 10 ns.
   return b.mul(timer, b.i64_val(10));
 }
@@ -733,6 +748,10 @@ bool TargetInfo::supportsMultiCTALaunch() const {
   return targetFeatures.supportsMultiCTALaunch();
 }
 
+unsigned TargetInfo::getMaxMulticastMaskPopcount() const {
+  return targetFeatures.getMaxMulticastMaskPopcount();
+}
+
 bool TargetInfo::supportsTDM() const { return targetFeatures.supportsTDM(); }
 
 bool TargetInfo::supportsClusterLoadBitWidth(int biwWidth) const {
@@ -796,6 +815,7 @@ TargetInfo::getSharedLdStTiles(int32_t vecBitwidth) const {
   case ISAFamily::RDNA1:
   case ISAFamily::RDNA2:
   case ISAFamily::RDNA3:
+  case ISAFamily::RDNA4m:
     if (vecBitwidth == 128)
       return {/*load tile*/ {{}, {0, 1, 4}}, /*store tile*/ {}};
     break;

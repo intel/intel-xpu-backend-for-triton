@@ -54,6 +54,36 @@ def TritonIntelGPUFoldFpToFp
   let dependentDialects = ["mlir::triton::TritonDialect"];
 }
 
+def TritonIntelGPUStageLargeFMADotsViaSLM
+    : Pass<"tritonintelgpu-stage-large-fma-dots-via-slm", "mlir::ModuleOp"> {
+  let summary =
+      "Stage large blocked-encoding dot operands via SLM and tile K";
+
+  let description = [{
+    On non-DPAS Intel GPUs, large `tt.dot` operations with `BlockedEncoding`
+    cause per-thread scratch space (PTSS) overflow because the FMA lowering
+    fully unrolls the K dimension. This pass operates at the
+    `ttg.convert_layout` boundary (or reuses an existing `ttg.local_load`
+    from the software pipeliner): full-shape operands are staged into SLM
+    via `ttg.local_alloc`, then the dot is unrolled into N concrete
+    `ttg.memdesc_subslice` + `ttg.local_load` + `tt.dot` chunks, each with
+    the K-dim narrowed to `K_TILE`.
+
+    Operating at `ttg.convert_layout` (rather than rewriting at the load)
+    preserves global-memory coalescing and composes with software
+    pipelining (which already stages SLM).
+
+    Pass is a no-op on DPAS-capable hardware (PVC, BMG, ARL-H Xe2).
+  }];
+
+  let dependentDialects = [
+    "mlir::arith::ArithDialect",
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::gpu::intel::TritonIntelGPUDialect"
+  ];
+}
+
 def TritonIntelGPUOptimizeDotOperands
     : Pass<"tritonintelgpu-optimize-dot-operands", "mlir::ModuleOp"> {
   let summary = "Intel optimize dot operands";

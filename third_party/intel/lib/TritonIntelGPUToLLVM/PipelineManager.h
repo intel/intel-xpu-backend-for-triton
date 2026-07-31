@@ -237,6 +237,8 @@ public:
                                         benefit);
     mlir::ub::populateUBToLLVMConversionPatterns(typeConverter, patterns);
     populateAssertOpToLLVMPattern(typeConverter, patterns, targetInfo, benefit);
+    intel::populateMemoryOpToLLVMPattern(typeConverter, targetInfo, patterns,
+                                         benefit);
     mlir::triton::populateMemoryOpToLLVMPatterns(typeConverter, targetInfo,
                                                  patterns, benefit);
     intel::populateControlFlowOpToLLVMPattern(typeConverter, patterns,

@@ -13,6 +13,7 @@
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/MathExtras.h"
 #include <limits>
 #include <optional>
 
@@ -429,12 +430,18 @@ private:
 
     if (!has1DReshapeStride) {
       if (isBroadcast) {
-        // Use the full surface row width (in bytes) as the baseline pitch.
-        // Lowering may widen base_width (e.g. due to alignment), so ensure the
-        // dummy pitch doesn't end up smaller than base_width.
+        // For broadcast (height=1) loads, pitch is a dummy value (no row
+        // advancement), but the HW still enforces pitch >= base_width.
+        // Downstream lowering widens base_width by up to 63 bytes for 64-byte
+        // pointer alignment compensation. Account for that here so the
+        // constraint is never violated at runtime.
         int64_t fullRowBytes =
             tensorTy.getDimSize(surfaceWidthDim) * elemSizeInBits / 8;
-        pitch = std::max(MIN_PITCH, fullRowBytes);
+        constexpr int64_t MAX_ALIGN_OVERHEAD = 63;
+        int64_t maxAdjustedWidth = fullRowBytes + MAX_ALIGN_OVERHEAD;
+        // Pitch must be a multiple of 16 bytes.
+        pitch =
+            llvm::alignTo(std::max(MIN_PITCH, maxAdjustedWidth), int64_t(16));
       } else {
         int64_t pitchStride = getStride(strideAnalysis, op.getPtr(), pitchDim);
         if (pitchStride < 0) {

@@ -96,10 +96,10 @@ bool isDivisible(Value value, unsigned divisor) {
            isDivisible(mulIOp->getOperand(1), divisor);
   }
 
-  // Case 4: Value is defined by arith::ExtSIOp, tt::AddPtrOp or
-  // arith::AddIOp operation.
+  // Case 4: Value is defined by arith::ExtSIOp, arith::TruncIOp,
+  // tt::AddPtrOp or arith::AddIOp operation.
   if (auto *op = value.getDefiningOp()) {
-    if (isa<arith::ExtSIOp, tt::AddPtrOp, arith::AddIOp>(op)) {
+    if (isa<arith::ExtSIOp, arith::TruncIOp, tt::AddPtrOp, arith::AddIOp>(op)) {
       return llvm::all_of(op->getOperands(), [&](Value operand) {
         return isDivisible(operand, divisor);
       });

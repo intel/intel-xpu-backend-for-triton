@@ -56,8 +56,9 @@ class XPUOptions:
     backend_name: str = 'intel'
     sanitize_overflow: bool = True
     generate_native_code: bool = False
-    arch: str = None
+    arch: str = ""
     instrumentation_mode: str = ""
+    fpsan_homomorphic_casts: bool = False
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -226,6 +227,47 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             args["enable_fp_fusion"] = knobs.language.default_fp_fusion
         return XPUOptions(**args)
 
+    @staticmethod
+    def parse_attr(desc):
+        ret = BaseBackend.parse_attr(desc)
+        if "N" in desc:
+            ret += [["tt.padding", 1]]
+        # "S" section: encodes shape and stride values as constexpr.
+        # Format: "S<shape0>,<shape1>,...;<stride0>,<stride1>,..."
+        # Enables isDivisible checks to pass trivially on constants.
+        if "S" in desc:
+            idx = desc.index("S") + 1
+            s_str = desc[idx:]
+            try:
+                parts = s_str.split(";")
+                shapes = [int(x) for x in parts[0].split(",") if x]
+                for i, s in enumerate(shapes):
+                    ret += [[f"tt.shape.{i}", s]]
+                if len(parts) > 1:
+                    strides = [int(x) for x in parts[1].split(",") if x]
+                    for i, s in enumerate(strides):
+                        ret += [[f"tt.stride.{i}", s]]
+            except (ValueError, IndexError):
+                pass
+        return ret
+
+    @staticmethod
+    def get_tensordesc_specialization(arg, **kwargs):
+        # "N" = NaN padding (enables tt.padding attribute).
+        # "S<shapes>;<strides>" = shape and stride values as constexpr.
+        #   Shapes: enables satisfies2DBlockReadAlignment and FuseReshape checks.
+        #   Strides (rank-3+ only): enables FuseReshape stride divisibility.
+        key = ""
+        if getattr(arg, "padding", None) == "nan":
+            key += "N"
+        # Encode all shapes and non-last strides (rank-3+ only) as constants.
+        shapes_str = ",".join(str(s) for s in arg.shape)
+        strides_str = ",".join(str(s) for s in arg.strides[:-1]) if len(arg.strides) >= 3 else ""
+        key += "S" + shapes_str
+        if strides_str:
+            key += ";" + strides_str
+        return key
+
     def pack_metadata(self, metadata):
         return metadata
 
@@ -368,6 +410,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             passes.common.add_canonicalizer(pm)
 
         intel.passes.ttgpuir.add_accelerate_matmul(pm)
+        intel.passes.ttgpuir.add_stage_large_fma_dots_via_slm(pm)
         intel.passes.ttgpuir.add_materialize_block_pointer(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
         intel.passes.ttgpuir.add_fold_fp_to_fp(pm)
@@ -413,7 +456,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             intel.passes.ttgpuir.add_optimize_reduction_locality(pm)
         intel.passes.arith.add_arith_emulate_unsupported_floats(pm, ["bf16"], "f32")
         if opt.instrumentation_mode == "fpsan":
-            passes.ttgpuir.add_fp_sanitizer(pm)
+            passes.ttgpuir.add_fp_sanitizer(pm, opt.fpsan_homomorphic_casts)
         pm.run(mod, 'make_ttgir')
         return mod
 
@@ -429,7 +472,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.gluon.add_canonicalizer(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
         if options.instrumentation_mode == "fpsan":
-            passes.ttgpuir.add_fp_sanitizer(pm)
+            passes.ttgpuir.add_fp_sanitizer(pm, options.fpsan_homomorphic_casts)
 
         pm.run(mod, 'gluon_to_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
@@ -445,6 +488,13 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     @track
     def make_llir(cls, src, metadata, options):
         mod = src
+
+        # Ensure ttig.is_lts is set on the module when the driver is LTS.
+        # This is needed for hand-written TTGIR that bypasses annotate_module.
+        driver_version = metadata["target"].arch.get("driver_version")
+        if cls.is_lts(driver_version):
+            intel.set_is_lts(mod)
+
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
@@ -503,8 +553,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             llvm.link_extern_libs(llvm_mod, paths)
 
         cls.optimize_llvm_mod(llvm_mod, options)
-        is_lts = cls.is_lts(metadata["target"].arch.get("driver_version"))
-        intel.post_process_llir(llvm_mod, is_lts)
+        intel.post_process_llir(llvm_mod)
 
         # Get some metadata
         total_num_warps = src.get_int_attr("ttg.total-num-warps")
@@ -571,61 +620,56 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                 '-options', metadata['build_flags'] + shader_dump_opt
             ]
 
-            try:
-                subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
-                if options.grf_mode == 'default':
-                    spill_size = extract_spill_size_from_zebin(fbin)
-                    # The threshold for spill_size is chosen based on empirical observations
-                    # and aligned with triton/backends/intel/driver.c
-                    if spill_size > MAX_REG_SPILL:
-                        metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
-                        # re-run with double GRF mode
-                        ocloc_cmd[-1] = metadata["build_flags"] + shader_dump_opt
-                        subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
-            except (subprocess.CalledProcessError, IntelGPUError) as e:
-                # If GRF mode was not explicitly set, retry with large GRF mode
-                # before giving up. This handles cases where the default GRF mode
-                # doesn't provide enough registers (e.g., scratch space exceeds
-                # HW PTSS limit). Also covers degenerate zebin (no .text/.symtab)
-                # detected by extract_spill_size_from_zebin (LTS2 IGC silent
-                # PTSS overflow).
-                retry_succeeded = False
-                if options.grf_mode == 'default' and \
-                        "-cl-intel-256-GRF-per-thread" not in metadata.get("build_flags", ""):
-                    metadata["build_flags"] += " -cl-intel-256-GRF-per-thread"
-                    ocloc_cmd[-1] = metadata["build_flags"] + shader_dump_opt
-                    try:
-                        subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
-                        retry_succeeded = True
-                    except subprocess.CalledProcessError:
-                        # Retry also failed — fall through to the original error
-                        # handling below, which will classify based on `e.output`
-                        # (the original failure's stderr) and raise either
-                        # OutOfResources or re-raise the original error.
-                        pass
+            if options.grf_mode == 'default':
+                # Try rebuilding with larger GRF modes (default first, then larger).
+                retry_grf_mode_list = [""]  # default GRF mode by omitting the flag
+                if metadata["target"].arch.get("arch") == 'cri':
+                    retry_grf_mode_list.append("-cl-intel-512-GRF-per-thread")
+                else:
+                    retry_grf_mode_list.append("-cl-intel-256-GRF-per-thread")
+            else:
+                # Non-default GRF mode is already encoded in metadata["build_flags"] (including "auto").
+                retry_grf_mode_list = [""]
 
-                if not retry_succeeded:
-                    # Only reclassify as OutOfResources when ocloc's stderr explicitly
-                    # reports a PTSS overflow. Other IntelGPUErrors (e.g. degenerate
-                    # zebin from extract_spill_size_from_zebin, ocloc SIGSEGV) keep
-                    # their original error class so the user sees the real cause.
-                    output = getattr(e, 'output', '') or ''
-                    if ptss_match := PTSS_OVERFLOW_RE.search(output):
-                        required = int(ptss_match.group(1)) if ptss_match.group(1) else 0
-                        limit = int(ptss_match.group(2)) if ptss_match.group(2) else 0
-                        raise OutOfResources(required, limit, "per-thread scratch space (PTSS)") from e
-                    if isinstance(e, IntelGPUError):
-                        raise
-                    if e.returncode == 255:
-                        error = 'Internal Triton ZEBIN codegen error'
-                    elif e.returncode == 128 + signal.SIGSEGV:
-                        error = '`ocloc` raised SIGSEGV'
-                    else:
-                        error = f'`ocloc` failed with error code {e.returncode}'
+            base_build_flags = metadata["build_flags"]
+            for grf_flag in retry_grf_mode_list:
+                metadata["build_flags"] = f"{base_build_flags} {grf_flag}".strip()
+                ocloc_cmd[-1] = metadata["build_flags"] + shader_dump_opt
+                try:
+                    subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
+                    if options.grf_mode == "default":
+                        spill_size = extract_spill_size_from_zebin(fbin)
+                        if spill_size <= MAX_REG_SPILL:
+                            break
+                except (subprocess.CalledProcessError, IntelGPUError) as e:
+                    # If GRF mode was not last yet, retry with different GRF mode
+                    # before giving up. This handles cases where the default GRF mode
+                    # doesn't provide enough registers (e.g., scratch space exceeds
+                    # HW PTSS limit). Also covers degenerate zebin (no .text/.symtab)
+                    # detected by extract_spill_size_from_zebin (LTS2 IGC silent
+                    # PTSS overflow).
+                    if grf_flag == retry_grf_mode_list[-1]:
+                        # Only reclassify as OutOfResources when ocloc's stderr explicitly
+                        # reports a PTSS overflow. Other IntelGPUErrors (e.g. degenerate
+                        # zebin from extract_spill_size_from_zebin, ocloc SIGSEGV) keep
+                        # their original error class so the user sees the real cause.
+                        output = getattr(e, 'output', '') or ''
+                        if ptss_match := PTSS_OVERFLOW_RE.search(output):
+                            required = int(ptss_match.group(1)) if ptss_match.group(1) else 0
+                            limit = int(ptss_match.group(2)) if ptss_match.group(2) else 0
+                            raise OutOfResources(required, limit, "per-thread scratch space (PTSS)") from e
+                        if isinstance(e, IntelGPUError):
+                            raise
+                        if e.returncode == 255:
+                            error = 'Internal Triton ZEBIN codegen error'
+                        elif e.returncode == 128 + signal.SIGSEGV:
+                            error = '`ocloc` raised SIGSEGV'
+                        else:
+                            error = f'`ocloc` failed with error code {e.returncode}'
 
-                    raise IntelGPUError(f'{error}\n'
-                                        f'`ocloc` stderr:\n{e.output}\n'
-                                        f'Repro command: {ocloc_cmd}\n') from e
+                        raise IntelGPUError(f'{error}\n'
+                                            f'`ocloc` stderr:\n{e.output}\n'
+                                            f'Repro command: {ocloc_cmd}\n') from e
 
             with open(fbin, 'rb') as f:
                 zebin = f.read()
