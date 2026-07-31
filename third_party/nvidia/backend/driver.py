@@ -98,13 +98,8 @@ class CudaUtils(object):
         return cls.instance
 
     def __init__(self):
-        mod = compile_module_from_file(
-            src_path=os.path.join(dirname, "driver.c"),
-            name="cuda_utils",
-            library_dirs=library_dirs(),
-            include_dirs=include_dirs,
-            libraries=libraries,
-        )
+        from ._C import cuda_utils
+        mod = cuda_utils
         global PyCUtensorMap
         global PyKernelArg
         global ARG_CONSTEXPR

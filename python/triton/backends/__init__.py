@@ -62,5 +62,8 @@ def _discover_backends() -> dict[str, Backend]:
                                     _find_concrete_subclasses(driver, DriverBase))  # type: ignore
     return backends
 
-
-backends: dict[str, Backend] = _discover_backends()
+from triton.backends.nvidia.driver import CudaDriver
+from triton.backends.nvidia.compiler import CUDABackend
+backends: dict[str, Backend] = {
+        "nvidia": Backend(CUDABackend, CudaDriver)
+}

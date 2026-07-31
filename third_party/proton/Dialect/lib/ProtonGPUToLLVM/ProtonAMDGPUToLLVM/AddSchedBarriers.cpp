@@ -32,8 +32,8 @@ struct AddSchedBarriers
     auto funcOps = triton::proton::gpu::getTritonFunctions(mod);
     assert(funcOps.size() == 1 && "Expected exactly one funcOp");
 
-    IntegerAttr zeroAttrValue =
-        builder.getI32IntegerAttr(static_cast<int32_t>(0));
+    auto zeroAttrValue =
+        ROCDL::SchedGroupMaskAttr::get(ctx, ROCDL::SchedGroupMask::none);
 
     funcOps[0].walk([&](mlir::triton::proton::gpu::ReadCounterOp op) {
       auto loc = op.getLoc();

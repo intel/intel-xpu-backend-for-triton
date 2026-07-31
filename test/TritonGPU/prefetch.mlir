@@ -541,3 +541,23 @@ tt.func @matmul_loop_mixed_amd(%lb : index, %ub : index, %step : index, %A : !tt
   tt.return %loop#4 : tensor<128x128xf32, #C>
 }
 }  // end module
+
+ // -----
+
+// CHECK: tt.func @matmul_loop_on_blocked_layout
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @matmul_loop_on_blocked_layout(%arg_lhs: !ttg.memdesc<16x512xf32, #shared, #smem, mutable>, %arg_rhs: !ttg.memdesc<512x32xf32, #shared, #smem, mutable>, %arg_init: tensor<16x32xf32, #blocked>, %itr_val : i32) -> (tensor<16x32xf32, #blocked>) {
+    %loop:3 = scf.for %itr = %itr_val to %itr_val step %itr_val iter_args(%init = %arg_init, %lhs = %arg_lhs, %rhs = %arg_rhs) -> (tensor<16x32xf32, #blocked>, !ttg.memdesc<16x512xf32, #shared, #smem, mutable>, !ttg.memdesc<512x32xf32, #shared, #smem, mutable>) : i32 {
+      %lhs_ll = ttg.local_load %lhs : !ttg.memdesc<16x512xf32, #shared, #smem, mutable> -> tensor<16x512xf32, #blocked>
+      %lhs_ll_cvt = ttg.convert_layout %lhs_ll : tensor<16x512xf32, #blocked> -> tensor<16x512xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+      %rhs_ll = ttg.local_load %rhs : !ttg.memdesc<512x32xf32, #shared, #smem, mutable> -> tensor<512x32xf32, #blocked>
+      %rhs_ll_cvt = ttg.convert_layout %rhs_ll : tensor<512x32xf32, #blocked> -> tensor<512x32xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+      %res = tt.dot %lhs_ll_cvt, %rhs_ll_cvt, %init : tensor<16x512xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<512x32xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<16x32xf32, #blocked>
+      scf.yield %res, %lhs, %rhs : tensor<16x32xf32, #blocked>, !ttg.memdesc<16x512xf32, #shared, #smem, mutable>, !ttg.memdesc<512x32xf32, #shared, #smem, mutable>
+    }
+    tt.return %loop#0 : tensor<16x32xf32, #blocked>
+  }
+} // end module

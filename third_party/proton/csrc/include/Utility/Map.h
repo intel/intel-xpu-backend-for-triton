@@ -1,6 +1,7 @@
 #ifndef PROTON_UTILITY_MAP_H_
 #define PROTON_UTILITY_MAP_H_
 
+#include <functional>
 #include <map>
 #include <mutex>
 #include <shared_mutex>

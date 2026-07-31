@@ -89,7 +89,15 @@ struct DotOpMFMAConversionHelper {
     loweredOp.addOperands({valA, valB, valC});
     loweredOp.addAttribute("cbsz", rewriter.getI32IntegerAttr(cbsz));
     loweredOp.addAttribute("abid", rewriter.getI32IntegerAttr(abid));
-    loweredOp.addAttribute("blgp", rewriter.getI32IntegerAttr(blgp));
+    if (intrinsicName.contains("mfma.f64")) {
+      loweredOp.addAttribute(
+          "blgp", ROCDL::MFMANegModifierAttr::get(
+                      ctx, static_cast<ROCDL::MFMANegModifier>(blgp)));
+    } else {
+      loweredOp.addAttribute(
+          "blgp",
+          ROCDL::MFMAPermBAttr::get(ctx, static_cast<ROCDL::MFMAPermB>(blgp)));
+    }
     return rewriter.create(loweredOp)->getResult(0);
   }
 
@@ -545,8 +553,12 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     // instructions instead of V_MFMA_SCALE_*_F8F6F4 to reduce memory access.
     Value zeroScale = b.i32_val(0);
     loweredOp.addOperands({valA, valB, valC, zeroScale, zeroScale});
-    loweredOp.addAttribute("cbsz", rewriter.getI32IntegerAttr(cbsz));
-    loweredOp.addAttribute("blgp", rewriter.getI32IntegerAttr(blgp));
+    loweredOp.addAttribute("cbsz",
+                           ROCDL::MatrixFormatAttr::get(
+                               ctx, static_cast<ROCDL::MatrixFormat>(cbsz)));
+    loweredOp.addAttribute("blgp",
+                           ROCDL::MatrixFormatAttr::get(
+                               ctx, static_cast<ROCDL::MatrixFormat>(blgp)));
     loweredOp.addAttribute("opselA", rewriter.getI32IntegerAttr(0));
     loweredOp.addAttribute("opselB", rewriter.getI32IntegerAttr(0));
     return rewriter.create(loweredOp)->getResult(0);
@@ -564,8 +576,12 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     assert((cbsz != -1) && (blgp != -1));
     loweredOp.addTypes(resType);
     loweredOp.addOperands({valA, valB, valC, valScaleA, valScaleB});
-    loweredOp.addAttribute("cbsz", rewriter.getI32IntegerAttr(cbsz));
-    loweredOp.addAttribute("blgp", rewriter.getI32IntegerAttr(blgp));
+    loweredOp.addAttribute("cbsz",
+                           ROCDL::MatrixFormatAttr::get(
+                               ctx, static_cast<ROCDL::MatrixFormat>(cbsz)));
+    loweredOp.addAttribute("blgp",
+                           ROCDL::MatrixFormatAttr::get(
+                               ctx, static_cast<ROCDL::MatrixFormat>(blgp)));
     loweredOp.addAttribute("opselA", rewriter.getI32IntegerAttr(opSelA));
     loweredOp.addAttribute("opselB", rewriter.getI32IntegerAttr(opSelB));
     return rewriter.create(loweredOp)->getResult(0);
@@ -751,9 +767,11 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
           for (int n = 0; n < numRepN; ++n) {
             // Insert pingpong cluster barrier when needed.
             if (is2Step && currIter++ == halfPoint) {
-              ROCDL::SchedBarrier::create(rewriter, loc, 0);
+              ROCDL::SchedBarrier::create(rewriter, loc,
+                                          mlir::ROCDL::SchedGroupMask::none);
               ROCDL::SBarrierOp::create(rewriter, loc);
-              ROCDL::SchedBarrier::create(rewriter, loc, 0);
+              ROCDL::SchedBarrier::create(rewriter, loc,
+                                          mlir::ROCDL::SchedGroupMask::none);
             }
             Value acc = tb.undef(vecTy);
             for (unsigned v = 0; v < elemsPerVec; ++v) {

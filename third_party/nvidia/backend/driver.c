@@ -957,6 +957,37 @@ cleanup:
   return NULL;
 }
 
+// Enable peer access if dev_ptr is allocated on a different device than the
+// device on which we will execute the kernel.
+PyObject* enablePeerAccessIfNecessary(CUdeviceptr dev_ptr) {
+  CUmemorytype mem_type = CU_MEMORYTYPE_HOST;
+  CUresult status = cuPointerGetAttribute(
+      &mem_type, CU_POINTER_ATTRIBUTE_MEMORY_TYPE, dev_ptr);
+  if (status != CUDA_SUCCESS || mem_type != CU_MEMORYTYPE_DEVICE) {
+    // Not peer memory
+    Py_RETURN_NONE;
+  }
+  int mem_device_ordinal = 0;
+  CUDA_CHECK_AND_RETURN_NULL(cuPointerGetAttribute(
+      &mem_device_ordinal, CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL, dev_ptr));
+  CUdevice mem_device = 0;
+  CUDA_CHECK_AND_RETURN_NULL(cuDeviceGet(&mem_device, mem_device_ordinal));
+  CUdevice compute_device = 0;
+  CUDA_CHECK_AND_RETURN_NULL(cuCtxGetDevice(&compute_device));
+  if (mem_device != compute_device) {
+    CUcontext mem_ctx = NULL;
+    CUDA_CHECK_AND_RETURN_NULL(cuDevicePrimaryCtxRetain(&mem_ctx, mem_device));
+    CUresult status = cuCtxEnablePeerAccess(mem_ctx, /*flags=*/0);
+    if (status == CUDA_ERROR_PEER_ACCESS_ALREADY_ENABLED) {
+      status = CUDA_SUCCESS;
+    }
+    CUDA_CHECK_AND_RETURN_NULL(status);
+  }
+  Py_RETURN_NONE;
+cleanup:
+  return NULL;
+}
+
 static void _launch(int gridX, int gridY, int gridZ, int num_warps,
                     int num_ctas, int launch_cooperative_grid, int launch_pdl,
                     int shared_memory, CUstream stream, CUfunction function,
@@ -1055,6 +1086,9 @@ bool extractPointer(void *ptr, PyObject *obj) {
   Py_DECREF(ret);
   if (*dev_ptr == 0) {
     return true; // valid nullptr
+  }
+  if (enablePeerAccessIfNecessary(*dev_ptr) == NULL) {
+    return false;
   }
   CUresult status = cuPointerGetAttribute(
       dev_ptr, CU_POINTER_ATTRIBUTE_DEVICE_POINTER, *dev_ptr);

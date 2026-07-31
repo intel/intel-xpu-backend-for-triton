@@ -342,6 +342,15 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
     if (auto reshapeOp = dyn_cast<ReshapeOp>(user);
         reshapeOp && reshapeOp.getEfficientLayout())
       continue;
+    // Heuristic: don't propagate slice layouts across broadcasts.
+    // This can cause massive register pressure. It's better to convert to
+    // blocked before the broadcast.
+    if (isa<BroadcastOp>(user) &&
+        llvm::any_of(info.encodings, [](Attribute encoding) {
+          return llvm::isa_and_nonnull<SliceEncodingAttr>(encoding);
+        })) {
+      continue;
+    }
     if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
         user->hasTrait<OpTrait::Elementwise>() ||
         isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,

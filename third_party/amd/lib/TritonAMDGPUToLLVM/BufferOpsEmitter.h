@@ -92,24 +92,24 @@ struct BufferEmitter {
 
 private:
   // Fill common buffer operation arguments.
-  void fillCommonArgs(Type type, Value rsrcDesc, Value vOffsetElems, Value pred,
-                      CacheModifier cm, bool isBufferLoad,
-                      SmallVector<Value> &args);
+ int32_t fillCommonArgs(Type type, Value rsrcDesc, Value vOffsetElems,
+                        Value pred, CacheModifier cm, bool isBufferLoad,
+                        SmallVector<Value>& args);
 
-  // Fill buffer atomics arguments
-  void fillCommonArgsAtomics(Type type, Value rsrcDesc, Value vOffsetElems,
-                             Value pred, bool hasUsers,
-                             SmallVector<Value> &args);
+ // Fill buffer atomics arguments
+ int32_t fillCommonArgsAtomics(Type type, Value rsrcDesc, Value vOffsetElems,
+                               Value pred, bool hasUsers,
+                               SmallVector<Value>& args);
 
-  // Given a type, the buffer type can be either the same type
-  // or a packed version. E.g., a vector of 8xfp16 can be bitcasted to
-  // a vector of 4xi32. This usually makes the life of the backend easier
-  Type getBufferOpType(Type type, bool atomicsOp);
+ // Given a type, the buffer type can be either the same type
+ // or a packed version. E.g., a vector of 8xfp16 can be bitcasted to
+ // a vector of 4xi32. This usually makes the life of the backend easier
+ Type getBufferOpType(Type type, bool atomicsOp);
 
-  // Rewriter utilities
-  RewriterBase &rewriter;
-  Location loc;
-  mlir::triton::AMD::TargetInfo targetInfo;
+ // Rewriter utilities
+ RewriterBase& rewriter;
+ Location loc;
+ mlir::triton::AMD::TargetInfo targetInfo;
 };
 
 } // namespace mlir::LLVM::AMD

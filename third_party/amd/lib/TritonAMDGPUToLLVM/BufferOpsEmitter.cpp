@@ -113,10 +113,14 @@ Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
                               triton::CacheModifier cm) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value, 6> args;
-  fillCommonArgs(type, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/true, args);
+  int32_t aux = fillCommonArgs(type, rsrcDesc, offset, pred, cm,
+                               /*isBufferLoad=*/true, args);
   Type bufferType = getBufferOpType(type, false);
+  SmallVector<NamedAttribute> attrs;
+  attrs.push_back(
+      rewriter.getNamedAttr("aux", rewriter.getI32IntegerAttr(aux)));
   Value data = ROCDL::RawPtrBufferLoadOp::create(
-      rewriter, loc, bufferType, args, ArrayRef<NamedAttribute>());
+      rewriter, loc, bufferType, args, attrs);
   data = b.bitcast(data, type);
   if (!isZero(falseVal))
     data = b.select(pred, data, falseVal);
@@ -129,23 +133,26 @@ BufferEmitter::emitLoadToLds(Type type, Value byteWidth, Value rsrcDesc,
                              triton::CacheModifier cm) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value, 6> commonArgs;
-  fillCommonArgs(type, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/true,
-                 commonArgs);
+  int32_t aux = fillCommonArgs(type, rsrcDesc, offset, pred, cm,
+                               /*isBufferLoad=*/true, commonArgs);
 
   // buffer_load_to_lds is only supported on gfx942/gfx950 which always use
   // asyncmark. Emit the async intrinsic so LLVM's SIInsertWaitcnts tracks
   // these operations via asyncmark/wait_asyncmark.
+  SmallVector<NamedAttribute> attrs;
+  attrs.push_back(
+      rewriter.getNamedAttr("aux", rewriter.getI32IntegerAttr(aux)));
   return ROCDL::RawPtrBufferLoadAsyncLdsOp::create(
       rewriter, loc, TypeRange{},
       ValueRange{
-          commonArgs[0], // Buffer descriptor
-          dst,           // LDS base ptr
-          byteWidth,     // Instr size
-          commonArgs[1], // Buffer offset
-          b.i32_val(0),  // LDS offset
-          commonArgs[2], // Instruction offset
-          commonArgs[3], // AUX
-      });
+          commonArgs[0],  // Buffer descriptor
+          dst,            // LDS base ptr
+          byteWidth,      // Instr size
+          commonArgs[1],  // Buffer offset
+          b.i32_val(0),   // LDS offset
+          commonArgs[2],  // Instruction offset
+      },
+      attrs);
 }
 
 Value BufferEmitter::emitAtomicCAS(Type type, Value rsrcDesc, Value offset,
@@ -164,10 +171,14 @@ Value BufferEmitter::emitAtomicCAS(Type type, Value rsrcDesc, Value offset,
   // the opposite of the order in tl.atomic_cmpxchg
   // and amdg.buffer_atomic_cas
   SmallVector<Value, 6> args{casStoreVal, casCmpVal};
-  fillCommonArgsAtomics(type, rsrcDesc, offset, pred, hasUsers, args);
+  int32_t aux =
+      fillCommonArgsAtomics(type, rsrcDesc, offset, pred, hasUsers, args);
 
+  SmallVector<NamedAttribute> attrs;
+  attrs.push_back(
+      rewriter.getNamedAttr("aux", rewriter.getI32IntegerAttr(aux)));
   Value data = ROCDL::RawPtrBufferAtomicCmpSwap::create(
-      rewriter, loc, bufferType, args, ArrayRef<NamedAttribute>());
+      rewriter, loc, bufferType, args, attrs);
   data = b.bitcast(data, type);
   return data;
 }
@@ -182,7 +193,10 @@ Value BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc,
     data = b.bitcast(data, bufferType);
 
   SmallVector<Value, 6> args{data};
-  fillCommonArgsAtomics(type, rsrcDesc, offset, pred, hasUsers, args);
+  int32_t aux =
+      fillCommonArgsAtomics(type, rsrcDesc, offset, pred, hasUsers, args);
+  Value cacheModifiers = b.int_val(32, aux);
+  args.push_back(cacheModifiers);
 
   // TODO:
   //   The ops in ROCDL (e.g., RawPtrBufferAtomicFaddOp) have no return value,
@@ -213,10 +227,12 @@ void BufferEmitter::emitStore(Value rsrcDesc, Value offset, Value data,
   if (vecTy != bufferType)
     data = b.bitcast(data, bufferType);
   SmallVector<Value, 6> args{data};
-  fillCommonArgs(vecTy, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/false,
-                 args);
-  ROCDL::RawPtrBufferStoreOp::create(rewriter, loc, TypeRange{}, args,
-                                     ArrayRef<NamedAttribute>());
+  int32_t aux = fillCommonArgs(vecTy, rsrcDesc, offset, pred, cm,
+                               /*isBufferLoad=*/false, args);
+  SmallVector<NamedAttribute> attrs;
+  attrs.push_back(
+      rewriter.getNamedAttr("aux", rewriter.getI32IntegerAttr(aux)));
+  ROCDL::RawPtrBufferStoreOp::create(rewriter, loc, TypeRange{}, args, attrs);
 }
 
 Type BufferEmitter::getBufferOpType(Type type, bool atomicsOp) {
@@ -265,10 +281,11 @@ Type BufferEmitter::getBufferOpType(Type type, bool atomicsOp) {
   return bufferType;
 }
 
-void BufferEmitter::fillCommonArgs(Type type, Value rsrcDesc,
-                                   Value vOffsetElems, Value pred,
-                                   triton::CacheModifier cm, bool isBufferLoad,
-                                   SmallVector<Value> &args) {
+int32_t BufferEmitter::fillCommonArgs(Type type, Value rsrcDesc,
+                                      Value vOffsetElems, Value pred,
+                                      triton::CacheModifier cm,
+                                      bool isBufferLoad,
+                                      SmallVector<Value>& args) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   // 1. Create the (masked) offset
   Type elementType = getElementTypeOrSelf(type);
@@ -288,19 +305,18 @@ void BufferEmitter::fillCommonArgs(Type type, Value rsrcDesc,
   // 3. Create the cache modifiers word
   int32_t aux =
       getCtrlBitsForCacheModifierOnTarget(cm, isBufferLoad, targetInfo);
-  Value cacheModifiers = b.int_val(32, aux);
 
   // 4. Add the arguments
   args.push_back(rsrcDesc);
   args.push_back(maskedOffsetBytes);
   args.push_back(sgprOffset);
-  args.push_back(cacheModifiers);
+  return aux;
 }
 
-void BufferEmitter::fillCommonArgsAtomics(Type type, Value rsrcDesc,
-                                          Value vOffsetElems, Value pred,
-                                          bool hasUsers,
-                                          SmallVector<Value> &args) {
+int32_t BufferEmitter::fillCommonArgsAtomics(Type type, Value rsrcDesc,
+                                             Value vOffsetElems, Value pred,
+                                             bool hasUsers,
+                                             SmallVector<Value> &args) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   // 1. Create the (masked) offset
   Type elementType = getElementTypeOrSelf(type);
@@ -319,13 +335,12 @@ void BufferEmitter::fillCommonArgsAtomics(Type type, Value rsrcDesc,
 
   // 3. Create the cache modifiers word
   int32_t aux = targetInfo.getBufferAtomicCachePolicy(hasUsers);
-  Value cacheModifiers = b.int_val(32, aux);
 
   // 4. Add the arguments
   args.push_back(rsrcDesc);
   args.push_back(maskedOffsetBytes);
   args.push_back(sgprOffset);
-  args.push_back(cacheModifiers);
+  return aux;
 }
 
 } // namespace mlir::LLVM::AMD

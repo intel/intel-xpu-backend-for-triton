@@ -665,6 +665,10 @@ static void insertAsyncWarpGroupDotWaitInLoop(
     }
   }
 
+  // TODO(b/477287509): wait of (#dots - 1) causes race conditions.
+  // As a temporary solution we insert a single wait for all dots after the last
+  // dot. That basically kills pipelining for the dots on registers.
+  bool waitAllDots = false;
   for (auto asyncDot : llvm::make_first_range(properlyAsyncDots)) {
     // If the dot takes the LHS on registers i, we add a wait for the number
     // of properly async dots in the loop minus one.
@@ -672,7 +676,8 @@ static void insertAsyncWarpGroupDotWaitInLoop(
     // iteration has completed, as to avoid rewriting the registers.
     if (!rsDotNeedsWait(asyncDot, forOp))
       continue;
-
+    waitAllDots = true;
+    break;
     OpBuilder builder(asyncDot);
     builder.setInsertionPointAfter(asyncDot);
     auto newWait = ttng::WarpGroupDotWaitOp::create(
@@ -694,13 +699,10 @@ static void insertAsyncWarpGroupDotWaitInLoop(
   auto lastAsyncDot = properlyAsyncDots.back().first;
   // If the last dot is an RS dot, we don't need to insert a wait
   // as we have already inserted a wait(properlyAsyncDots.size() - 1)
-  if (rsDotNeedsWait(lastAsyncDot, forOp)) {
-    return;
-  }
   builder.setInsertionPointAfter(lastAsyncDot);
-  auto wait = ttng::WarpGroupDotWaitOp::create(builder, lastAsyncDot->getLoc(),
-                                               /*inputs=*/ArrayRef<Value>{},
-                                               properlyAsyncDots.size());
+  auto wait = ttng::WarpGroupDotWaitOp::create(
+      builder, lastAsyncDot->getLoc(),
+      /*inputs=*/ArrayRef<Value>{}, waitAllDots ? 0 : properlyAsyncDots.size());
 
   // Thread the results of the async dots through the wait.
   SmallVector<Value> addlWaitOperands;

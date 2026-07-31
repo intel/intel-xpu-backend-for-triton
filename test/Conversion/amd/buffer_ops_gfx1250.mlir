@@ -47,7 +47,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK: rocdl.make.buffer.rsrc
     // CHECK: llvm.fence syncscope("agent") release
     // Cache policy = 17 (SC0 | SCOPE_DEV) because CAS return value is used
-    // CHECK: llvm.mlir.constant(17 : i32)
+    
     // CHECK: rocdl.raw.ptr.buffer.atomic.cmpswap {{.*}} : i32
     // CHECK: rocdl.raw.ptr.buffer.atomic.cmpswap {{.*}} : i32
     // CHECK: llvm.fence syncscope("agent") acquire

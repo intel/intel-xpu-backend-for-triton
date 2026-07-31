@@ -198,6 +198,19 @@ struct JoinOpConversion : public ConvertOpToLLVMPattern<JoinOp> {
     assert(lhsVals.size() == rhsVals.size());
     SmallVector<Value> joinedVals;
     joinedVals.resize(lhsVals.size() * 2);
+
+    // Specifically for packed upcasting from 4b to 16b dtypes
+    // numContiguousValues cannot be too large, since the two outputs of
+    // inline_asm contain interleaved values OTOH, if numContiguousValues * 16b
+    // < 32b, then we'll need to rearrange 16b values in 32b registers. Hence we
+    // set numContiguousValues to 2
+    auto inlineOp =
+        dyn_cast_or_null<ElementwiseInlineAsmOp>(op.getLhs().getDefiningOp());
+    if (inlineOp && inlineOp.getPackedElement() == 4 &&
+        dstTy.getElementTypeBitWidth() == 16 && joinedVals.size() > 2) {
+      numContiguousValues = 2;
+    }
+
     for (int i = 0; i < lhsVals.size(); i += numContiguousValues) {
       for (int j = 0; j < numContiguousValues; j++) {
         joinedVals[2 * i + j] = lhsVals[i + j];

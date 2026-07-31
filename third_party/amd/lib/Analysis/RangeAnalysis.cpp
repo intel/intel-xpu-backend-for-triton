@@ -720,14 +720,14 @@ void TritonIntegerRangeAnalysis::visitRegionSuccessors(
       if (!point->isBlockStart()) {
         if (!inputs.empty())
           firstIndex = cast<OpResult>(inputs.front()).getResultNumber();
-        SmallVector<Value> nonSuccessorInputs =
-            branch.getNonSuccessorInputs(RegionSuccessor::parent());
+        SmallVector<Value> nonSuccessorInputs = branch.getNonSuccessorInputs(
+            RegionSuccessor(branch.getOperation()));
         SmallVector<dataflow::IntegerValueRangeLattice *>
             nonSuccessorInputLattices =
                 llvm::map_to_vector(nonSuccessorInputs, valueToLattices);
-        visitNonControlFlowArguments(branch, RegionSuccessor::parent(),
-                                     nonSuccessorInputs,
-                                     nonSuccessorInputLattices);
+        visitNonControlFlowArguments(
+            branch, RegionSuccessor(branch.getOperation()), nonSuccessorInputs,
+            nonSuccessorInputLattices);
       } else {
         if (!inputs.empty())
           firstIndex = cast<BlockArgument>(inputs.front()).getArgNumber();

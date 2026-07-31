@@ -242,6 +242,8 @@ def test_signature_ordering():
     triton.compile(src=src, target=target)
 
 
+import pytest
+@pytest.mark.skip("we don't build triton's native amd backend")
 def test_fp8_compiles_for_multiple_architectures_hip():
     """
     Validate FP8 compilation succeeds for architectures with different
