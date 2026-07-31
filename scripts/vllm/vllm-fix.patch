@@ -74,6 +74,87 @@ index fb8a4b0a2..7ab490aaf 100644
      if D is not None:
          out += (x * D).to(out.dtype)
      out = (out if z is None else out * F.silu(z)).to(x.dtype)
+diff --git a/tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py b/tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py
+index 6a5fad826..b18944916 100644
+--- a/tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py
++++ b/tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py
+@@ -58,6 +58,41 @@ def as_uint8(x) -> torch.Tensor:
+     )
+ 
+ 
++def fp8_to_ordered_int(x: torch.Tensor) -> torch.Tensor:
++    """Map finite E4M3 values to consecutive integers in numerical order."""
++    bits = as_uint8(x).to(torch.int16)
++    sign = (bits & 0x80) != 0
++
++    if x.dtype == torch.float8_e4m3fn:
++        magnitude = bits & 0x7F
++        assert not torch.any(magnitude == 0x7F), "FP8 comparison does not allow NaN"
++        # E4M3FN has signed zero and two NaN encodings. Collapse +/-0 to
++        # one rank and exclude the NaN encodings from the finite sequence.
++        return torch.where(
++            magnitude == 0,
++            126,
++            torch.where(sign, 254 - bits, 126 + bits),
++        )
++
++    if x.dtype == torch.float8_e4m3fnuz:
++        assert not torch.any(bits == 0x80), "FP8 comparison does not allow NaN"
++        # E4M3FNUZ uses the negative-zero encoding for its only NaN.
++        return torch.where(sign, 255 - bits, 127 + bits)
++
++    raise ValueError(f"Unsupported FP8 dtype: {x.dtype}")
++
++
++def assert_fp8_adjacent(actual: torch.Tensor, expected: torch.Tensor) -> None:
++    assert actual.shape == expected.shape
++    assert actual.dtype == expected.dtype
++    torch.testing.assert_close(
++        fp8_to_ordered_int(actual),
++        fp8_to_ordered_int(expected),
++        atol=1,
++        rtol=0,
++    )
++
++
+ def silu(x: torch.Tensor) -> torch.Tensor:
+     x_f32 = x.to(torch.float32)
+     act_f32 = x_f32 / (1.0 + torch.exp(-x_f32))
+@@ -234,8 +269,8 @@ def test_silu_mul_fp8_quant_deep_gemm(E: int, T: int, H: int, fp8_type: torch.dt
+         DeepGemmQuantScaleFMT.FLOAT32,
+         DeepGemmQuantScaleFMT.FLOAT32_CEIL_UE8M0,
+     ]
+-    # UE8M0 (int32 packed) scales require the C++ kernel which is
+-    # not available on ROCm (#ifndef USE_ROCM).
++    # UE8M0 (int32 packed) scales require the CUDA C++ kernel. The Triton
++    # fallback used on ROCm and XPU supports only float32 scales.
+     # https://github.com/ROCm/aiter/issues/2420
+     if current_platform.is_cuda():
+         scale_fmts.append(DeepGemmQuantScaleFMT.UE8M0)
+@@ -288,17 +323,15 @@ def test_silu_mul_fp8_quant_deep_gemm(E: int, T: int, H: int, fp8_type: torch.dt
+         for e in range(E):
+             nt = tokens_per_expert[e].item()
+ 
+-            if current_platform.is_rocm():
+-                # On ROCm the Triton fallback kernel uses f32 math
++            if current_platform.is_rocm() or current_platform.is_xpu():
++                # On ROCm/XPU the Triton fallback kernel uses f32 math
+                 # intrinsics (tl.exp) that may differ from PyTorch's
+                 # torch.exp by 1 ULP.  At FP8 quantization
+                 # boundaries this can flip one representable value.
+-                # Allow 1 FP8 quantum of tolerance.
+-                torch.testing.assert_close(
+-                    y_q[e, :nt].to(torch.float32),
+-                    ref_y_q[e, :nt].to(torch.float32),
+-                    atol=32.0,
+-                    rtol=0.2,
++                # Compare in FP8 value space to allow exactly one step.
++                assert_fp8_adjacent(
++                    y_q[e, :nt],
++                    ref_y_q[e, :nt],
+                 )
+             else:
+                 torch.testing.assert_close(
 diff --git a/tests/utils.py b/tests/utils.py
 index 2a3bdb91f..c74587d5f 100644
 --- a/tests/utils.py
@@ -105,6 +186,38 @@ index 315c77de3..9fda159d4 100644
          prefill_invalid_reasons = ["ImportError"]
      if prefill_invalid_reasons:
          pytest.skip(
+diff --git a/vllm/model_executor/layers/fused_moe/experts/batched_deep_gemm_moe.py b/vllm/model_executor/layers/fused_moe/experts/batched_deep_gemm_moe.py
+index 275f80c68..97c006f57 100644
+--- a/vllm/model_executor/layers/fused_moe/experts/batched_deep_gemm_moe.py
++++ b/vllm/model_executor/layers/fused_moe/experts/batched_deep_gemm_moe.py
+@@ -210,17 +210,21 @@ def persistent_masked_m_silu_mul_quant(
+         DeepGemmQuantScaleFMT.UE8M0,
+     ]
+ 
+-    device_capability = current_platform.get_device_capability(device_id=y.device.index)
+-    assert device_capability is not None
+-    cuda_arch = device_capability.to_int()
++    use_cuda_kernel = False
++    if current_platform.is_cuda():
++        device_capability = current_platform.get_device_capability(
++            device_id=y.device.index
++        )
++        assert device_capability is not None
++        use_cuda_kernel = device_capability.to_int() >= 80
+ 
+-    if current_platform.is_cuda() and cuda_arch >= 80:
++    if use_cuda_kernel:
+         torch.ops._C.persistent_masked_m_silu_mul_quant(
+             y, tokens_per_expert, y_q, y_s, ceil_ue8m0
+         )
+     else:
+-        # Triton fallback for ROCm -- the C++ kernel is guarded by
+-        # #ifndef USE_ROCM in activation_kernels.cu.
++        # Triton fallback when the CUDA C++ kernel is unavailable, including
++        # ROCm and XPU.
+         # https://github.com/ROCm/aiter/issues/2420
+         stride_cnt_e = tokens_per_expert.stride()[0]
+ 
 diff --git a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
 index 21bda8e17..e7f11e934 100644
 --- a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
@@ -127,39 +240,3 @@ index 21bda8e17..e7f11e934 100644
          # Note: this does a bunch of extra work because expert_num_tokens is
          # ignored but it does support torch.compile + cudagraphs.
          hidden_dim = A.size(-1)
-diff --git a/vllm/model_executor/layers/fused_moe/experts/batched_deep_gemm_moe.py b/vllm/model_executor/layers/fused_moe/experts/batched_deep_gemm_moe.py
-index c8611217a..ec63dd73c 100644
---- a/vllm/model_executor/layers/fused_moe/experts/batched_deep_gemm_moe.py
-+++ b/vllm/model_executor/layers/fused_moe/experts/batched_deep_gemm_moe.py
-@@ -210,9 +210,13 @@ def persistent_masked_m_silu_mul_quant(
-         DeepGemmQuantScaleFMT.UE8M0,
-     ]
- 
--    device_capability = current_platform.get_device_capability(device_id=y.device.index)
--    assert device_capability is not None
--    cuda_arch = device_capability.to_int()
-+    cuda_arch = 0
-+    if current_platform.is_cuda():
-+        device_capability = current_platform.get_device_capability(
-+            device_id=y.device.index
-+        )
-+        assert device_capability is not None
-+        cuda_arch = device_capability.to_int()
- 
-     if current_platform.is_cuda() and cuda_arch >= 80:
-         torch.ops._C.persistent_masked_m_silu_mul_quant(
-diff --git a/tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py b/tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py
-index 6a5fad826..829cc3cd7 100644
---- a/tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py
-+++ b/tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py
-@@ -288,8 +288,8 @@ def test_silu_mul_fp8_quant_deep_gemm(E: int, T: int, H: int, fp8_type: torch.dt
-         for e in range(E):
-             nt = tokens_per_expert[e].item()
- 
--            if current_platform.is_rocm():
--                # On ROCm the Triton fallback kernel uses f32 math
-+            if current_platform.is_rocm() or current_platform.is_xpu():
-+                # On ROCm/XPU the Triton fallback kernel uses f32 math
-                 # intrinsics (tl.exp) that may differ from PyTorch's
-                 # torch.exp by 1 ULP.  At FP8 quantization
-                 # boundaries this can flip one representable value.
