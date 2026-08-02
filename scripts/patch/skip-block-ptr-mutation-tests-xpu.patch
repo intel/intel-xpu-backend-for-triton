@@ -1,0 +1,25 @@
+diff --git a/test/inductor/test_triton_kernels.py b/test/inductor/test_triton_kernels.py
+--- a/test/inductor/test_triton_kernels.py
++++ b/test/inductor/test_triton_kernels.py
+@@ -4288,6 +4288,10 @@
+             ["O_ptr"],
+         )
+ 
++    @skipIfXpu(
++        msg="`tl.make_block_ptr` has been removed in favor of the tensor descriptor "
++        "API, so TTIR-based mutation analysis cannot trace this kernel"
++    )
+     @make_mutation_test
+     def test_for_loop_arg_2():
+         @triton.jit
+@@ -4348,6 +4352,10 @@
+             ["o_ptr"],
+         )
+ 
++    @skipIfXpu(
++        msg="`tl.make_block_ptr` has been removed in favor of the tensor descriptor "
++        "API, so TTIR-based mutation analysis cannot trace this kernel"
++    )
+     @make_mutation_test
+     def test_while_loop():
+         @triton.jit
