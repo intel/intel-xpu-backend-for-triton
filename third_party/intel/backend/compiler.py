@@ -49,6 +49,7 @@ class XPUOptions:
     loop_distribute: bool = knobs.intel.enable_loop_distribution
     code_sinking: bool = knobs.intel.enable_code_sinking
     sub_32_dpas: bool = knobs.intel.enable_sub_32_dpas
+    dynamic_shared_memory: bool = knobs.intel.dynamic_shared_memory
     use_barrier: bool = False
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
@@ -508,7 +509,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
         if cls.instrumentation:
             cls.instrumentation.patch("ttgpuir_to_llvmir", pm, mod.context)
-        intel.passes.ttgpuir.add_to_llvmir(pm)
+        intel.passes.ttgpuir.add_to_llvmir(pm, options.dynamic_shared_memory)
         intel.passes.ttgpuir.add_gen_to_llvm(pm)
         passes.common.add_canonicalizer(pm)
         intel.passes.ttgpuir.add_rewrite_stack_ptr(pm)
