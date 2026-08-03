@@ -307,7 +307,7 @@ def get_scaled_mm_benchmark(
     supported_providers = {
         'triton': 'triton',
         'triton-td': 'triton-td',
-        'pytorch': 'pytorch-deqmm',
+        'pytorch': 'pytorch',
     }
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
