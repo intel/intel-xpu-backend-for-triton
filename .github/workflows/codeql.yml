@@ -38,7 +38,7 @@ jobs:
 
     # Initialize FIRST so the build tracer is installed before the C/C++ compile.
     - name: Initialize CodeQL
-      uses: github/codeql-action/init@v4
+      uses: github/codeql-action/init@v4.37.4
       with:
         languages: ${{ matrix.language }}
         build-mode: ${{ matrix.build-mode }}
@@ -60,7 +60,7 @@ jobs:
         command: pip install -e .
 
     - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@v4
+      uses: github/codeql-action/analyze@v4.37.4
       with:
         category: "/language:${{matrix.language}}"
 
