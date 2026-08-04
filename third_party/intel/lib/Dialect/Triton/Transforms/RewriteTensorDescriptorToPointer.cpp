@@ -1314,12 +1314,7 @@ class TritonRewriteTensorDescriptorToPointerPass
     // Pre-pass: Synthesize MakeTensorDescOps for host-side tensor descriptor
     // function arguments. This enables the 2D block I/O fast path by making
     // descriptors traceable via findAllMakeTensorDescOps().
-    // Override with TRITON_INTEL_ENABLE_HOST_DESCRIPTOR_SYNTHESIS=0/1.
-    constexpr bool defaultEnabled = true;
-    auto env = tools::isEnvValueBool(
-        tools::getStrEnv("TRITON_INTEL_ENABLE_HOST_DESCRIPTOR_SYNTHESIS"));
-    if (env.value_or(defaultEnabled))
-      synthesizeDescriptorsFromFuncArgs(op);
+    synthesizeDescriptorsFromFuncArgs(op);
 
     // Pre-pass: Rewrite contiguous DescriptorGatherOps/DescriptorScatterOps to
     // DescriptorLoadOps/DescriptorStoreOps. When x_offsets are provably
