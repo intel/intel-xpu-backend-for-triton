@@ -6,7 +6,7 @@ on:
   pull_request:
     branches:
       - main
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, labeled]
   schedule:
     - cron: "0 8 * * *"
 
