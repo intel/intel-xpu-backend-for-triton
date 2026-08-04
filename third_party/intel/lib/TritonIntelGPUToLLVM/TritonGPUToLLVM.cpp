@@ -102,7 +102,7 @@ struct ConvertTritonGPUToLLVM
     // Allocate shared memory and set barrier
     ModuleAllocation allocation(
         mod, ::mlir::triton::intel::allocationAnalysisScratchSizeFn);
-    ModuleMembarAnalysis membarPass(&allocation, ::mlir::intel::membarFilter);
+    ModuleMembarAnalysis membarPass(allocation, ::mlir::intel::membarFilter);
     membarPass.run();
 
     // Lower functions
