@@ -1,6 +1,6 @@
 # From
-# https://github.com/sgl-project/sglang/blob/6d0364681c8b1abc132cc88f1bb0b7a8a352628f/test/srt/quant/test_triton_scaled_mm.py
-# https://github.com/sgl-project/sglang/blob/6d0364681c8b1abc132cc88f1bb0b7a8a352628f/python/sglang/srt/layers/quantization/fp8_kernel.py
+# https://github.com/sgl-project/sglang/blob/fdebc938f7f4d16fe6b9f55dcd9a767cf0899ea1/test/registered/quant/test_triton_scaled_mm.py
+# https://github.com/sgl-project/sglang/blob/fdebc938f7f4d16fe6b9f55dcd9a767cf0899ea1/python/sglang/kernels/ops/quantization/fp8_kernel.py
 import os
 from typing import Optional, List
 
@@ -10,7 +10,7 @@ import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
 
-from sglang.srt.layers.quantization.fp8_kernel import triton_scaled_mm
+from sglang.kernels.ops.quantization.fp8_kernel import triton_scaled_mm
 
 
 def is_weak_contiguous(x: torch.Tensor):
@@ -340,7 +340,7 @@ def get_scaled_mm_benchmark(
         bias = (0.01 * torch.randn((M, N), dtype=out_dtype, device=device) if with_bias else None)
 
         def torch_fn():
-            return torch_scaled_mm(x, weight, scale_a, scale_b, bias)
+            return torch_scaled_mm(x, weight, scale_a=scale_a, scale_b=scale_b, out_dtype=out_dtype, bias=bias)
 
         # Use relaxed tolerances
         rtol = 0.15 if in_dtype == torch.int8 else 0.25

@@ -8,13 +8,6 @@ python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_redu
 # Below tests require AGAMA 1208 or above
 python/test/unit/language/test_core.py::test_side_effectful_reduction
 python/test/unit/language/test_core.py::test_side_effectful_reduction_2d
-# https://github.com/intel/intel-xpu-backend-for-triton/issues/7390
-python/test/unit/language/test_core.py::test_atomic_poll[dtype0-16-cta-relaxed]
-python/test/unit/language/test_core.py::test_atomic_poll[dtype0-16-cta-acquire]
-python/test/unit/language/test_core.py::test_atomic_poll[dtype0-16-gpu-relaxed]
-python/test/unit/language/test_core.py::test_atomic_poll[dtype0-16-gpu-acquire]
-python/test/unit/language/test_core.py::test_atomic_poll[dtype0-16-sys-relaxed]
-python/test/unit/language/test_core.py::test_atomic_poll[dtype0-16-sys-acquire]
 # https://github.com/intel/intel-xpu-backend-for-triton/issues/7391
 python/test/unit/language/test_core.py::test_atomic_poll_timeout[1-True]
 python/test/unit/language/test_core.py::test_atomic_poll_timeout[0-False]

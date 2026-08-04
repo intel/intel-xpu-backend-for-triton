@@ -79,8 +79,8 @@ void init_triton_intel_passes_ttir(py::module_ &&m) {
 }
 
 void init_triton_intel_passes_ttgpuir(py::module_ &&m) {
-  ADD_PASS_WRAPPER_0("add_to_llvmir",
-                     gpu::intel::createConvertTritonIntelGPUToLLVM);
+  ADD_PASS_OPTION_WRAPPER_1(
+      "add_to_llvmir", gpu::intel::createConvertTritonIntelGPUToLLVM, bool);
   ADD_PASS_WRAPPER_0("add_gen_to_llvm", createConvertTritonGENToLLVM);
   ADD_PASS_WRAPPER_0("add_accelerate_matmul",
                      gpu::intel::createTritonIntelGPUAccelerateMatmul);
@@ -359,6 +359,15 @@ void init_triton_intel(py::module_ &m) {
       return WalkResult::advance();
     });
     return result.wasInterrupted();
+  });
+
+  m.def("set_is_lts", [](mlir::ModuleOp &mod) {
+    using namespace mlir::triton::gpu::intel;
+    if (!mod->hasAttr(TritonIntelGPUDialect::getIsLTSAttrName())) {
+      mlir::Builder builder(mod.getContext());
+      mod->setAttr(TritonIntelGPUDialect::getIsLTSAttrName(),
+                   builder.getUnitAttr());
+    }
   });
 
   // Set fast-math flags on floating-point instructions.

@@ -441,6 +441,7 @@ class compilation_knobs(base_knobs):
     # Instrumentation mode is checked on every run, which is expensive.
     # We cache the value here to avoid the expensive check on every run.
     instrumentation_mode: str = env_str("TRITON_INSTRUMENTATION_MODE", "").get()
+    fpsan_homomorphic_casts: env_bool = env_bool("TRITON_FPSAN_HOMOMORPHIC_CASTS")
     listener: Union[CompilationListener, None] = None
 
 
@@ -592,7 +593,7 @@ class intel_knobs(base_knobs):
     gen_native_code: env_bool = env_bool("TRITON_XPU_GEN_NATIVE_CODE", False)
     opt_reduction_locality: env_bool = env_bool("TRITON_INTEL_OPTIMIZE_REDUCTION_LOCALITY", False)
     disable_igc_opt: env_bool = env_bool("TRITON_INTEL_DISABLE_IGC_OPT", False)
-    disable_annotate_cache_control: env_bool = env_bool("TRITON_INTEL_DISABLE_ANNOTATE_CACHE_CONTROL", False)
+    disable_annotate_cache_control: env_bool = env_bool("TRITON_INTEL_DISABLE_ANNOTATE_CACHE_CONTROL", True)
     enable_code_sinking: env_bool = env_bool("TRITON_INTEL_ENABLE_CODE_SINKING", False)
     disable_canonicalize_pointers: env_bool = env_bool("TRITON_INTEL_DISABLE_CANONICALIZE_POINTERS", True)
     enable_loop_distribution: env_bool = env_bool("TRITON_INTEL_ENABLE_LOOP_DISTRIBUTION", False)
@@ -612,6 +613,10 @@ class intel_knobs(base_knobs):
     device_arch: env_opt_str = env_opt_str("TRITON_INTEL_DEVICE_ARCH")
     # SYCL compiler Triton needs to be compatible with when generating kernel launchers
     sycl_compiler: env_opt_str = env_opt_str("TRITON_INTEL_SYCL_COMPILER")
+    # Allocate shared (work-group) memory dynamically, as an extra kernel argument bound
+    # with a `sycl::local_accessor`, instead of statically in the module. Legacy behavior,
+    # kept as an escape hatch for driver issues with module scope work-group memory.
+    dynamic_shared_memory: env_bool = env_bool("TRITON_INTEL_DYNAMIC_SHARED_MEMORY", False)
 
 
 class amd_knobs(base_knobs):

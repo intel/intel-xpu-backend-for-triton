@@ -3,7 +3,7 @@
 # Install SGLang for XPU benchmarking/testing.
 #
 # Clones SGLang, checks out the pinned commit (sglang-pin.txt), applies the local
-# XPU patches (sglang-test-fix.patch, sglang-bench-fix.patch) and installs it in
+# XPU patches (sglang-test-fix.patch) and installs it in
 # editable mode. Torch/Triton dependencies are stripped from SGLang's
 # requirements so the repository's own (latest) torch and triton are kept.
 
@@ -90,8 +90,8 @@ if [ ! -d "./sglang" ]; then
   git clone https://github.com/sgl-project/sglang.git
   cd sglang
   git checkout "$SGLANG_PIN"
+  echo "SGLang commit: '$(git rev-parse HEAD)'"
   git apply "$SGLANG_SCRIPTS_DIR/sglang-test-fix.patch"
-  git apply "$SGLANG_SCRIPTS_DIR/sglang-bench-fix.patch"
 
   # That's how sglang assumes we'll pick out platform for now.
   cp python/pyproject_xpu.toml python/pyproject.toml
@@ -113,6 +113,10 @@ if [ "$SKIP_INSTALL" = true ]; then
 fi
 
 pip install -e "./sglang/python"
+# sglang imports xgrammar unconditionally, but pyproject_xpu.toml leaves it out because
+# it pulls in CUDA torch. Install without deps so our XPU torch and triton survive.
+# Versions match sglang's own pyproject.toml, so an upstream release cannot break us.
+pip install --no-deps xgrammar==0.2.1 apache-tvm-ffi==0.1.11
 
 echo "**** SGLang installed successfully ****"
 

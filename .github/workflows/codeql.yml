@@ -1,0 +1,85 @@
+name: "CodeQL Advanced"
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '5 2 * * *'
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: code-scanning
+    permissions:
+      # required for all workflows
+      security-events: write
+
+      # required to fetch internal or private CodeQL packs
+      packages: read
+
+      # only required for workflows in private repositories
+      actions: read
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - language: actions
+          build-mode: none
+        - language: c-cpp
+          build-mode: manual
+        - language: python
+          build-mode: none
+        # CodeQL supports the following values keywords for 'language': 'actions', 'c-cpp', 'csharp', 'go', 'java-kotlin', 'javascript-typescript', 'python', 'ruby', 'rust', 'swift'
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v7
+
+    # Initialize FIRST so the build tracer is installed before the C/C++ compile.
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v4
+      with:
+        languages: ${{ matrix.language }}
+        build-mode: ${{ matrix.build-mode }}
+        # If you wish to specify custom queries, you can do so here or in a config file.
+        # queries: security-extended,security-and-quality
+
+    # Traced build: runs AFTER init, BEFORE analyze, only on the manual (c-cpp) leg.
+    - name: Setup Python
+      if: matrix.build-mode == 'manual'
+      uses: ./.github/actions/setup-python
+      with:
+        python_version: "3.10"
+        use_pyenv: true
+
+    - name: Build Triton (traced)
+      if: matrix.build-mode == 'manual'
+      uses: ./.github/actions/setup-triton
+      with:
+        command: pip install -e .
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v4
+      with:
+        category: "/language:${{matrix.language}}"
+
+  report:
+    name: Generate SDL Security Report
+    needs: analyze
+    runs-on: code-scanning
+    permissions:
+      security-events: read
+      contents: read
+    steps:
+    - name: Generate Security Report
+      uses: rsdmike/github-security-report-action@v3.0.4
+      with:
+        template: report
+        token: ${{ secrets.SECURITY_TOKEN }}
+    - name: GitHub Upload Release Artifacts
+      uses: actions/upload-artifact@v4   # v2 is retired on github.com — must be v4
+      with:
+        name: report
+        path: |
+          ./report.pdf

@@ -1,0 +1,21 @@
+name: vLLM tests, PVC
+
+permissions: read-all
+
+on:
+  schedule:
+    # Thursday/Sunday 2:05AM PST (UTC-8) or 3:05AM PDT (UTC-7)
+    - cron: "5 10 * * THU"
+    - cron: "5 10 * * SUN"
+
+# Cancel in-progress runs for the same PR or schedule.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || 'ci' }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    uses: ./.github/workflows/vllm-tests-reusable.yml
+    with:
+      runner_label: max1550
+    secrets: inherit

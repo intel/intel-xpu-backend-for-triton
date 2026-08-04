@@ -12,6 +12,10 @@ on:
         description: Skip list
         type: string
         default: a770
+      ignore_errors:
+        description: Ignore test errors
+        type: boolean
+        default: false
       run_name:
         description: Custom run name
         type: string
@@ -24,7 +28,7 @@ env:
   PYTHON_VERSION: "3.10"
   NEW_WORKSPACE: C:\gh${{ github.run_id }}
   SKIPLIST: --skip-list scripts/skiplist/${{ inputs.skip_list }}
-  TRITON_TEST_CMD: bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/${{ inputs.skip_list }} --reports-dir reports --run-all
+  TRITON_TEST_CMD: bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/${{ inputs.skip_list }} --reports-dir reports --run-all ${{ inputs.ignore_errors && '--ignore-errors' || '' }}
 
 jobs:
   build:
