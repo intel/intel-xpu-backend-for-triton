@@ -104,9 +104,6 @@ jobs:
         id: setup-pytorch
         uses: ./.github/actions/setup-pytorch
 
-      - name: Setup Triton
-        uses: ./.github/actions/setup-triton
-
       - name: Identify torchvision pin
         if: ${{ inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'sglang') }}
         run: |
@@ -120,6 +117,9 @@ jobs:
           repository: pytorch/vision
           ref: ${{ env.TORCHVISION_COMMIT_ID }}
           extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
+
+      - name: Setup Triton
+        uses: ./.github/actions/setup-triton
 
       - name: Create reports dir
         run: |
