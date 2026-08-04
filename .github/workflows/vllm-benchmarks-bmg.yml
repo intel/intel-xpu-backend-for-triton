@@ -6,7 +6,7 @@ on:
   pull_request:
     branches:
       - main
-    types: [opened, synchronize, reopened, labeled]
+    types: [opened, synchronize, reopened]
   schedule:
     - cron: "0 8 * * *"
 
@@ -28,14 +28,13 @@ jobs:
         id: check
         uses: ./.github/actions/check-path-changes
         with:
-          patterns: '^(\.github/workflows/(vllm-benchmarks|build-benchmarks-wheel).*\.yml|\.github/actions/(install-benchmarks|install-vllm)/|benchmarks/|scripts/vllm/|\.github/pins/pytorch\.txt)'
+          patterns: '^(\.github/workflows/(vllm-benchmarks|build-benchmarks-wheel).*\.yml|\.github/actions/(install-benchmarks|install-vllm)/|benchmarks/triton_kernels_benchmark/vllm/|scripts/vllm/|\.github/pins/pytorch\.txt)'
 
   build-wheel:
     needs: check-paths
     if: >-
       github.event_name == 'schedule' ||
-      needs.check-paths.outputs.benchmarks == 'true' ||
-      github.event.label.name == 'run-benchmarks'
+      needs.check-paths.outputs.benchmarks == 'true'
     uses: ./.github/workflows/build-benchmarks-wheel.yml
     with:
       python-version: "3.12"
@@ -45,8 +44,7 @@ jobs:
     if: >-
       always() && !cancelled() &&
       (github.event_name == 'schedule' ||
-       needs.check-paths.outputs.benchmarks == 'true' ||
-       github.event.label.name == 'run-benchmarks')
+       needs.check-paths.outputs.benchmarks == 'true')
     uses: ./.github/workflows/vllm-benchmarks.yml
     with:
       runner_label: b580
