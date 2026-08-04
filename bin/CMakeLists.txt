@@ -92,13 +92,3 @@ target_link_libraries(triton-tensor-layout PRIVATE
   MLIRRegisterAllPasses
   MLIRTransforms
 )
-
-install(TARGETS
-  triton-opt
-  triton-reduce
-  triton-lsp
-  triton-llvm-opt
-  triton-tensor-layout
-  COMPONENT binaries
-  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-)
