@@ -5,7 +5,7 @@ import torch
 import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark.sglang.attention_utils import repeat_kv_heads
 
-from sglang.srt.layers.attention.triton_ops.decode_attention import decode_attention_fwd
+from sglang.kernels.ops.attention.decode_attention import decode_attention_fwd
 
 VALIDATION_ATOL = 3e-2
 VALIDATION_RTOL = 3e-2
@@ -116,7 +116,8 @@ def get_benchmark(providers_filter: Optional[list[str]] = None):
         quantiles = [0.5, 0.0, 1.0]
         if provider == 'triton' and MODE == 'fwd':
             triton_fn = lambda: decode_attention_fwd(q, k_buffer, v_buffer, o, kv_indptr, kv_indices, attn_logits,
-                                                     attn_lse, num_kv_splits, max_kv_splits, sm_scale)
+                                                     attn_lse, num_kv_splits, max_kv_splits, sm_scale, k_scale=1.0,
+                                                     v_scale=1.0)
             B_val = min(B, VALIDATION_MAX_B)
             N_CTX_val = min(N_CTX, VALIDATION_MAX_N_CTX)
             (q_ref, k_ref, v_ref, o_ref, kv_indptr_ref, kv_indices_ref, attn_logits_ref, attn_lse_ref,
@@ -126,7 +127,8 @@ def get_benchmark(providers_filter: Optional[list[str]] = None):
             def triton_ref_fn():
                 # The kernel writes into o_ref in place and returns None; return the output for comparison.
                 decode_attention_fwd(q_ref, k_ref, v_ref, o_ref, kv_indptr_ref, kv_indices_ref, attn_logits_ref,
-                                     attn_lse_ref, num_kv_splits_ref, max_kv_splits_ref, sm_scale_ref)
+                                     attn_lse_ref, num_kv_splits_ref, max_kv_splits_ref, sm_scale_ref, k_scale=1.0,
+                                     v_scale=1.0)
                 return o_ref
 
             torch_ref_fn = lambda: _decode_attention_torch_ref(q_ref, k_ref, v_ref, kv_indptr_ref, sm_scale_ref)

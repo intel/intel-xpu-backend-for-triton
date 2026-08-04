@@ -5,7 +5,7 @@ import torch
 import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark.sglang.attention_utils import repeat_kv_heads
 
-from sglang.srt.layers.attention.triton_ops.prefill_attention import context_attention_fwd
+from sglang.kernels.ops.attention.prefill_attention import context_attention_fwd
 
 VALIDATION_ATOL = 3e-2
 VALIDATION_RTOL = 3e-2

@@ -5,7 +5,7 @@ import torch
 import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark.sglang.attention_utils import repeat_kv_heads
 
-from sglang.srt.layers.attention.triton_ops.extend_attention import (
+from sglang.kernels.ops.attention.extend_attention import (
     extend_attention_fwd, )
 
 VALIDATION_ATOL = 3e-2
@@ -153,7 +153,7 @@ def get_benchmark(providers_filter: Optional[list[str]] = None):
         if provider == 'triton' and MODE == 'fwd':
             triton_fn = lambda: extend_attention_fwd(q_extend, k_extend, v_extend, o_extend, k_buffer, v_buffer,
                                                      qo_indptr, kv_indptr, kv_indices, custom_mask, True, mask_indptr,
-                                                     max_len_extend)
+                                                     max_len_extend, k_scale=1.0, v_scale=1.0)
             B_val = min(B, VALIDATION_MAX_B)
             EXTEND_LEN_val = min(EXTEND_LEN, VALIDATION_MAX_EXTEND_LEN)
             PREFIX_LEN_val = min(PREFIX_LEN, VALIDATION_MAX_PREFIX_LEN)
@@ -166,7 +166,7 @@ def get_benchmark(providers_filter: Optional[list[str]] = None):
                 # The kernel writes into o_extend_ref in place and returns None; return the output for comparison.
                 extend_attention_fwd(q_extend_ref, k_extend_ref, v_extend_ref, o_extend_ref, k_buffer_ref, v_buffer_ref,
                                      qo_indptr_ref, kv_indptr_ref, kv_indices_ref, custom_mask, True, mask_indptr,
-                                     max_len_extend_ref)
+                                     max_len_extend_ref, k_scale=1.0, v_scale=1.0)
                 return o_extend_ref
 
             torch_ref_fn = lambda: _extended_attention_torch_ref(q_extend_ref, k_extend_ref, v_extend_ref, k_buffer_ref,
