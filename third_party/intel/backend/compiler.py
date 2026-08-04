@@ -49,6 +49,7 @@ class XPUOptions:
     loop_distribute: bool = knobs.intel.enable_loop_distribution
     code_sinking: bool = knobs.intel.enable_code_sinking
     sub_32_dpas: bool = knobs.intel.enable_sub_32_dpas
+    dynamic_shared_memory: bool = knobs.intel.dynamic_shared_memory
     use_barrier: bool = False
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
@@ -508,7 +509,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
         if cls.instrumentation:
             cls.instrumentation.patch("ttgpuir_to_llvmir", pm, mod.context)
-        intel.passes.ttgpuir.add_to_llvmir(pm)
+        intel.passes.ttgpuir.add_to_llvmir(pm, options.dynamic_shared_memory)
         intel.passes.ttgpuir.add_gen_to_llvm(pm)
         passes.common.add_canonicalizer(pm)
         intel.passes.ttgpuir.add_rewrite_stack_ptr(pm)
@@ -565,6 +566,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment")
         metadata["profile_scratch_size"] = src.get_int_attr("ttg.profile_scratch_memory_size") or 0
         metadata["profile_scratch_align"] = src.get_int_attr("ttg.profile_scratch_memory_alignment") or 1
+
+        # Add Triton and LLVM versions to the dumped IR.
+        if knobs.compilation.dump_ir:
+            llvm.add_version_info(llvm_mod)
         ret = str(llvm_mod)
         del llvm_mod
         del context
@@ -620,7 +625,13 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                 '-options', metadata['build_flags'] + shader_dump_opt
             ]
 
-            if options.grf_mode == 'default':
+            # A larger GRF mode doubles the registers per hardware thread and thereby
+            # halves the maximum work-group size, so `num_warps > 32` becomes
+            # unlaunchable. The explicit `grf_mode='256'`/`'512'` paths already refuse
+            # that combination in `make_spv`; skip the *automatic* upgrade for the same
+            # reason and keep the working (if slower, spilling) default-GRF binary
+            # rather than producing a kernel that fails at launch.
+            if options.grf_mode == 'default' and options.num_warps <= 32:
                 # Try rebuilding with larger GRF modes (default first, then larger).
                 retry_grf_mode_list = [""]  # default GRF mode by omitting the flag
                 if metadata["target"].arch.get("arch") == 'cri':
