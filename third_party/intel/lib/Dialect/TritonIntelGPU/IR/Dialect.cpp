@@ -699,8 +699,34 @@ struct TritonIntelGPUInferLayoutInterface
                        ArrayRef<int32_t> order, // trans order
                        Attribute &resultEncoding,
                        std::optional<Location> loc) const override {
-    // Not support TransOp on DPAS layout.
-    return failure();
+    auto *ctx = getDialect()->getContext();
+
+    if (shape.size() != order.size()) {
+      return emitOptionalError(loc, "shape and order rank do not match: ",
+                               shape.size(), " vs ", order.size());
+    }
+    auto checkRank = [&](unsigned rank) {
+      if (rank != order.size()) {
+        return emitOptionalError(loc, "rank of encoding does not match order: ",
+                                 rank, " vs ", order.size());
+      }
+      return success();
+    };
+
+    auto ll = toLinearLayout(shape, operandEncoding);
+    if (failed(checkRank(ll.getNumOutDims())))
+      return failure();
+    auto transposedLl = transposeLinearLayout(ll, order);
+    if (isa<DistributedEncodingTrait>(operandEncoding)) {
+      resultEncoding = inferEncodingFromLinearLayout(
+          ctx, std::move(transposedLl), operandEncoding);
+    } else {
+      return emitOptionalError(
+          loc,
+          "unsupported transpose encoding type of TritonIntelGPU dialect: ",
+          operandEncoding);
+    }
+    return success();
   }
 
   LogicalResult
