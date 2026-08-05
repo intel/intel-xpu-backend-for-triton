@@ -173,6 +173,9 @@ void init_triton_intel_passes_ttgpuir(py::module_ &&m) {
                      gpu::intel::createTritonIntelGPUAnnotateCacheControl);
   ADD_PASS_WRAPPER_0("add_widen_load_store_encoding",
                      gpu::intel::createTritonIntelGPUWidenLoadStoreEncoding);
+  ADD_PASS_WRAPPER_0(
+      "add_rewrite_tensor_descriptor_gather_scatter",
+      gpu::intel::createTritonIntelGPURewriteDescriptorGatherScatter);
 }
 
 void init_triton_intel_passes_arith(py::module_ &&m) {
