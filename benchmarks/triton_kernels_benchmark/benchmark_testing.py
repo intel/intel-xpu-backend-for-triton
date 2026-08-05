@@ -776,8 +776,12 @@ class BenchmarkRunResult(_BenchmarkSummary, ABC):
         providers = self.selected_providers.values()
         metric_cols = [column for column in res_df.columns if _keep_column(column)]
         column_tuples = []
+        # Match the longest provider prefix first so that a provider whose name is a
+        # prefix of another (e.g. "triton" vs "triton-td") does not swallow the longer
+        # one's columns (which would drop "triton-td-<metric>" and break the summary).
+        providers_by_len = sorted(providers, key=len, reverse=True)
         for col in metric_cols:
-            for provider in providers:
+            for provider in providers_by_len:
                 if col.startswith(provider + "-"):
                     column_tuples.append((provider, col[len(provider) + 1:]))
                     break
