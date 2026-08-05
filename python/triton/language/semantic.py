@@ -1863,6 +1863,9 @@ class TritonSemantic(Generic[TensorTy]):
         import os
         if not os.environ.get("TRITON_CHECK_SIGNED_DIV"):
             return
+        # If the fix is enabled, the optimization is disabled — no need to assert
+        if os.environ.get("TRITON_FIX_SIGNED_DIV"):
+            return
         # The bug only manifests for tensor dividend with constant divisor.
         # Skip if dividend is scalar, or if divisor is also a tensor (AxisInfo
         # only applies the optimization when RHS has full constancy).
@@ -1872,12 +1875,10 @@ class TritonSemantic(Generic[TensorTy]):
             return
         zero = self._splat_int_const(0, input)
         input_non_neg = self.tensor(self.builder.create_icmpSGE(input.handle, zero.handle), self._bool_like(input))
-        op_sym = "//" if op_name == "floordiv" else "%"
         self.builder.create_assert(
             input_non_neg.handle, f"{op_name}: tensor dividend is negative - AxisInfo may misoptimize. "
-            f"If dividend should be non-negative, ensure it is (e.g., use max(..., 0)). "
-            f"If negative is intentional, use XOR workaround: "
-            f"sign = tl.where(a < 0, -1, 0); result = (a ^ sign) {op_sym} (b ^ sign).")
+            f"Fix: ensure dividend is non-negative in source code, "
+            f"or set TRITON_FIX_SIGNED_DIV=1 to disable the unsound optimization.")
 
     def _splat_int_const(self, val: int, like: TensorTy) -> TensorTy:
         """Create an integer constant tensor with the same type/shape as `like`."""
