@@ -1,5 +1,5 @@
 diff --git a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
-index 609b28a95..74ebd5fd0 100644
+index 609b28a95..4d9756bf6 100644
 --- a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
 @@ -169,7 +169,7 @@ def moe_mmk(
@@ -148,22 +148,11 @@ index 609b28a95..74ebd5fd0 100644
      )
  
      A_scale = normalize_batched_scales_shape(A_scale, expert_num_tokens.shape[0])
-@@ -494,10 +531,8 @@ def invoke_moe_batched_triton_kernel(
-         use_tensor_descriptor()
-         and A.stride(2) == 1
-         and B.stride(2) == 1
-+        and C.stride(2) == 1
-         and (K * A.element_size()) % 16 == 0
--        and (BLOCK_M & (BLOCK_M - 1)) == 0
--        and (BLOCK_N & (BLOCK_N - 1)) == 0
--        and (BLOCK_K & (BLOCK_K - 1)) == 0
-     )
-     if use_td:
-         set_triton_allocator(A.device)
-@@ -540,9 +575,6 @@ def invoke_moe_batched_triton_kernel(
+@@ -539,10 +576,6 @@ def invoke_moe_batched_triton_kernel(
+         use_fp8_w8a8,
          use_int8_w8a16,
          per_act_token_quant,
-         # Kernel config
+-        # Kernel config
 -        BLOCK_M=BLOCK_M,
 -        BLOCK_N=BLOCK_N,
 -        BLOCK_K=BLOCK_K,
