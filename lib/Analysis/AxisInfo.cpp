@@ -5,6 +5,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/ADT/bit.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -444,6 +445,15 @@ private:
     // the minimal constancy is gcd(d_lhs, d_rhs).
     // Since gcd(d_lhs, d_rhs) maybe > len(lhs),
     // we need to use another gcd to get the actual constancy.
+    //
+    // NOTE: For signed division (DivSIOp), truncation toward zero breaks
+    // constancy for negative inputs. When TRITON_FIX_SIGNED_DIV is set,
+    // conservatively skip this optimization for DivSIOp.
+    if constexpr (std::is_same_v<OpTy, arith::DivSIOp>) {
+      static bool fix = triton::tools::getBoolEnv("TRITON_FIX_SIGNED_DIV");
+      if (fix)
+        return constancy;
+    }
     if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
         AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
       constancy = std::max(constancy,
@@ -506,6 +516,15 @@ private:
     // The minimal contiguity is gcd(d_lhs, d_rhs).
     // Since gcd(d_lhs, d_rhs) maybe > len(lhs),
     // we need to use another gcd to get the actual contiguity.
+    //
+    // NOTE: For signed remainder (RemSIOp), truncation toward zero breaks
+    // contiguity for negative inputs. When TRITON_FIX_SIGNED_DIV is set,
+    // conservatively skip this optimization for RemSIOp.
+    if constexpr (std::is_same_v<OpTy, arith::RemSIOp>) {
+      static bool fix = triton::tools::getBoolEnv("TRITON_FIX_SIGNED_DIV");
+      if (fix)
+        return contiguity;
+    }
     if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
         AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
       contiguity = gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
