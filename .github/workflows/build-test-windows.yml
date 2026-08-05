@@ -29,10 +29,100 @@ env:
   NEW_WORKSPACE: C:\gh${{ github.run_id }}
   SKIPLIST: --skip-list scripts/skiplist/${{ inputs.skip_list }}
   TRITON_TEST_CMD: bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/${{ inputs.skip_list }} --reports-dir reports --run-all ${{ inputs.ignore_errors && '--ignore-errors' || '' }}
+  # Unit tests run ctest and lit, which emit no junit XML, so `--reports-dir` is not needed. Passing it
+  # would trigger `capture_runtime_env`, which requires PyTorch, not installed in the build job.
+  TRITON_TEST_CMD_BUILD: bash -x scripts/test-triton.sh --skip-pytorch-install --skip-pip-install --skip-list scripts/skiplist/${{ inputs.skip_list }} --run-all ${{ inputs.ignore_errors && '--ignore-errors' || '' }}
 
 jobs:
   build:
-    name: Build and test
+    name: Build
+    # Building Triton requires neither a GPU nor PyTorch, so this job runs on any Windows runner.
+    runs-on:
+      - windows
+    timeout-minutes: 240
+    outputs:
+      wheel: ${{ steps.build-wheel.outputs.status }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.10'
+
+      - name: Clean up old workspaces
+        shell: bash
+        run: |
+          rm -rf /c/gh*
+
+      # Copy workspace to a temporary location with a shorter name.
+      - name: Copy workspace
+        run: |
+          Copy-Item -Path ${{ github.workspace }} -Destination ${{ env.NEW_WORKSPACE }} -Recurse
+
+      - name: Create venv
+        run:
+          python -m venv .venv
+
+      # We need ninja >= 1.12.0 to support long names on Windows. At the moment there is no required
+      # version in pypi, so instead of installing ninja with pip we use a preinstalled 1.12.1 on the
+      # runner.
+      - name: Build Triton wheel
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cd ${{ env.NEW_WORKSPACE }}
+          pip install -r python\requirements.txt
+          # `build` can't determine that Ninja is already installed.
+          # similar issue: https://github.com/pypa/build/issues/506
+          python -m build --wheel --no-isolation --skip-dependency-check
+
+      # A separate step, so that the output is set only if the wheel was built successfully.
+      - name: Mark Triton wheel as built
+        id: build-wheel
+        run: |
+          echo "status=success" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      # Uploaded before the unit tests so that the test job can run even if unit tests fail.
+      - name: Upload Triton wheels
+        uses: actions/upload-artifact@v7
+        with:
+          name: triton-${{ env.PYTHON_VERSION }}-${{ inputs.runner_label }}
+          path: ${{ env.NEW_WORKSPACE }}\dist\*.whl
+
+      # Instrumentation tests require this library, which is not a part of the Triton wheel.
+      - name: Upload instrumentation library
+        uses: actions/upload-artifact@v7
+        with:
+          name: instrumentation-${{ env.PYTHON_VERSION }}-${{ inputs.runner_label }}
+          path: ${{ env.NEW_WORKSPACE }}\build\lib*\triton\instrumentation\*GPUInstrumentationTestLib*.dll
+
+      # Unit tests require `build` directory.
+      - name: Run unit tests
+        if: ${{ !cancelled() }}
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cd ${{ env.NEW_WORKSPACE }}
+          ${{ env.TRITON_TEST_CMD_BUILD }} --unit
+
+      - name: Clean up workspace
+        if: ${{ always() }}
+        run: |
+          Remove-Item -LiteralPath ${{ env.NEW_WORKSPACE }} -Force -Recurse -ErrorAction Ignore
+
+      - name: Clean up temporary files
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          rm -rf rm -rf /tmp/triton-* /tmp/tmp*
+
+  tests:
+    name: Tests
+    needs: build
+    # Run tests even if unit tests in the build job failed, as long as the wheel was built.
+    if: ${{ !cancelled() && needs.build.outputs.wheel == 'success' }}
     runs-on:
       - windows
       - ${{ inputs.runner_label }}
@@ -117,21 +207,26 @@ jobs:
         run: |
           rm -rf ~/.triton/cache
 
-      # We need ninja >= 1.12.0 to support long names on Windows. At the moment there is no required
-      # version in pypi, so instead of installing ninja with pip we use a preinstalled 1.12.1 on the
-      # runner.
-      - name: Setup Triton
-        run: |
-          .venv\Scripts\activate.ps1
-          Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
-          cd ${{ env.NEW_WORKSPACE }}
-          pip install -U pybind11 cmake
-          pip install -v '.[build,tests,tutorials]'
+      # `capture_runtime_env` in scripts/pytest-utils.sh reads the Triton commit id from `dist/*.whl`.
+      - name: Download Triton wheels
+        uses: actions/download-artifact@v8
+        with:
+          name: triton-${{ env.PYTHON_VERSION }}-${{ inputs.runner_label }}
+          path: ${{ env.NEW_WORKSPACE }}\dist
 
-      - name: Triton version
+      # Instrumentation tests look for this library in `build/*lib*/triton/instrumentation`.
+      - name: Download instrumentation library
+        uses: actions/download-artifact@v8
+        with:
+          name: instrumentation-${{ env.PYTHON_VERSION }}-${{ inputs.runner_label }}
+          path: ${{ env.NEW_WORKSPACE }}\build\lib\triton\instrumentation
+
+      - name: Install Triton
         run: |
           .venv\Scripts\activate.ps1
           Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          cd ${{ env.NEW_WORKSPACE }}
+          pip install (Get-Item ${{ env.NEW_WORKSPACE }}\dist\*.whl)
           python -c 'import triton; print(triton.__version__)'
 
       - name: Install test dependencies
@@ -139,14 +234,6 @@ jobs:
           .venv\Scripts\activate.ps1
           pip install -r scripts\requirements-test.txt
           pip uninstall pytest_forked -y
-
-      - name: Run unit tests
-        if: ${{ !cancelled() }}
-        run: |
-          .venv\Scripts\activate.ps1
-          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
-          cd ${{ env.NEW_WORKSPACE }}
-          ${{ env.TRITON_TEST_CMD }} --unit
 
       - name: Run core tests
         if: ${{ !cancelled() }}
