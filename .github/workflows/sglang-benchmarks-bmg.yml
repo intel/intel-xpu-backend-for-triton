@@ -1,10 +1,10 @@
-name: Third party benchmarks, BMG
+name: SGLang benchmarks, BMG
 
 permissions: read-all
 
 on:
   schedule:
-    - cron: "0 9 * * *"
+    - cron: "0 11 * * *"
 
 jobs:
   build-wheel:
@@ -15,8 +15,7 @@ jobs:
   benchmarks:
     needs: build-wheel
     if: always() && !cancelled()
-    uses: ./.github/workflows/third-party-benchmarks.yml
+    uses: ./.github/workflows/sglang-benchmarks.yml
     with:
       runner_label: b580
-      benchmarks: '["sglang"]'
     secrets: inherit

@@ -638,6 +638,7 @@ class BenchmarkCategory(Enum):
     OPTIONAL = "optional"
     EXPERIMENTAL = "experimental"
     VLLM = "vllm"
+    SGLANG = "sglang"
 
 
 DimValue = Union[int, str, bool]
@@ -775,8 +776,12 @@ class BenchmarkRunResult(_BenchmarkSummary, ABC):
         providers = self.selected_providers.values()
         metric_cols = [column for column in res_df.columns if _keep_column(column)]
         column_tuples = []
+        # Match the longest provider prefix first so that a provider whose name is a
+        # prefix of another (e.g. "triton" vs "triton-td") does not swallow the longer
+        # one's columns (which would drop "triton-td-<metric>" and break the summary).
+        providers_by_len = sorted(providers, key=len, reverse=True)
         for col in metric_cols:
-            for provider in providers:
+            for provider in providers_by_len:
                 if col.startswith(provider + "-"):
                     column_tuples.append((provider, col[len(provider) + 1:]))
                     break
@@ -922,6 +927,11 @@ class BenchmarkConfigRunResult(BenchmarkRunResult, BenchmarkConfig):
                 self.benchmark_report_name,
                 self.long_report_param_cols.split(","),
             )
+            if long_df.empty:
+                warnings.warn(
+                    f"Empty long report for '{self.benchmark_report_name}': no '<compiler>-<metric>' columns "
+                    f"were matched in {reports_folder}/{self.plot_name}.csv. Provider labels (line_names) must "
+                    "match the DB compiler names handled by transform_results (e.g. 'triton', not 'Triton').")
             long_df.to_csv(f"{reports_folder}/{self.plot_name}-report.csv", index=False)
             return
         res_df = pd.concat(self.res_df_list, axis=0, ignore_index=True)
