@@ -35,6 +35,7 @@ concurrency:
 permissions: read-all
 
 env:
+  TRITON_CHECK_SIGNED_DIV: 1
   PYTHON_VERSION: "3.12"
   TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number)) || (github.event_name == 'schedule' && 'ci') || 'test' }}
 
