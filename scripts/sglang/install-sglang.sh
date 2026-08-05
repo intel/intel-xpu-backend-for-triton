@@ -7,9 +7,9 @@
 # editable mode. Torch/Triton dependencies are stripped from SGLang's
 # requirements so the repository's own (latest) torch and triton are kept.
 #
-# The source tree is always brought back to a pristine checkout of the pinned
-# commit before patching, so a run that failed half-way - or a bumped pin - cannot
-# leave behind a tree that is then silently reused in a wrong state.
+# Whenever the source tree is prepared it is first brought back to a pristine
+# checkout of the pinned commit, so a run that failed half-way - or a bumped pin -
+# cannot leave behind a tree that is then silently reused in a wrong state.
 
 set -euo pipefail
 
@@ -102,23 +102,32 @@ patch_sglang() {
 # or leftover $SGLANG_DIR/.git makes git walk up and resolve to *this* repository,
 # so a reset/clean could operate on the Triton checkout instead of on SGLang.
 is_sglang_repo() {
-  [ -d "$SGLANG_DIR/.git" ] || return 1
-  local top
+  # A regular checkout has a .git directory, while a git worktree has a .git file.
+  [ -e "$SGLANG_DIR/.git" ] || return 1
+  local top dir
   top="$(git -C "$SGLANG_DIR" rev-parse --show-toplevel 2>/dev/null)" || return 1
-  [ "$top" = "$SGLANG_DIR" ]
+  dir="$(cd "$SGLANG_DIR" && pwd -P)" || return 1
+  [ "$top" = "$dir" ]
 }
 
 # Bring ./sglang to a pristine checkout of the pinned commit and patch it.
 # Re-clones when an existing tree cannot be reset, e.g. when a previous run failed
 # after cloning but before the checkout/patching finished.
 prepare_source() {
-  if is_sglang_repo; then
-    if [ "$REUSE_SOURCE" = true ]; then
-      echo "**** --no-clean: reusing existing $SGLANG_DIR as-is. ****"
-      echo "SGLang commit: '$(git -C "$SGLANG_DIR" rev-parse HEAD)'"
-      return
+  # --no-clean must never remove an existing path. Fail closed when it is not a
+  # valid standalone repository instead of falling through to clone_sglang's rm.
+  if [ "$REUSE_SOURCE" = true ] && { [ -e "$SGLANG_DIR" ] || [ -L "$SGLANG_DIR" ]; }; then
+    if ! is_sglang_repo; then
+      echo "ERROR: --no-clean requested, but $SGLANG_DIR is not a valid SGLang repository." >&2
+      echo "ERROR: Refusing to remove or modify the existing path." >&2
+      return 1
     fi
+    echo "**** --no-clean: reusing existing $SGLANG_DIR as-is. ****"
+    echo "SGLang commit: '$(git -C "$SGLANG_DIR" rev-parse HEAD)'"
+    return
+  fi
 
+  if is_sglang_repo; then
     # Only fetch when the pinned commit is not available locally yet, so that
     # re-preparing an up-to-date checkout does not need the network.
     if ! git -C "$SGLANG_DIR" rev-parse --verify --quiet "${SGLANG_PIN}^{commit}" >/dev/null; then
@@ -159,20 +168,31 @@ installed_at_pin() {
   local want head
   want="$(resolve_pin)" || return 1
   [ -n "$want" ] || return 1
-  head="$(git -C "$SGLANG_DIR" rev-parse HEAD)"
+  head="$(git -C "$SGLANG_DIR" rev-parse HEAD)" || return 1
   [ "$head" = "$want" ] || return 1
 
   # The patch has to be applied already, i.e. reverse-applying it must be possible.
   git -C "$SGLANG_DIR" apply --reverse --check "$SGLANG_PATCH" 2>/dev/null || return 1
 }
 
+# Dependencies SGLang needs at runtime but that pyproject_xpu.toml deliberately
+# leaves out. Installed before SGLang itself (as install-vllm.sh does), so a failure
+# here cannot leave an installed SGLang behind that makes the next run skip ahead.
+install_runtime_dependencies() {
+  # sglang imports xgrammar unconditionally, but pyproject_xpu.toml leaves it out because
+  # it pulls in CUDA torch. Install without deps so our XPU torch and triton survive.
+  # Versions match sglang's own pyproject.toml, so an upstream release cannot break us.
+  pip install --no-deps xgrammar==0.2.1 apache-tvm-ffi==0.1.11
+}
+
+# As in scripts/vllm/install-vllm.sh, --force-reinstall only drops the installed
+# package; the state of the source tree is left to prepare_source. That way it
+# composes with --no-clean instead of contradicting it.
 if [ "$FORCE_REINSTALL" = true ]; then
   if pip show sglang >/dev/null 2>&1; then
     echo "**** --force-reinstall: uninstalling existing SGLang. ****"
     pip uninstall -y sglang
   fi
-  echo "**** --force-reinstall: removing $SGLANG_DIR. ****"
-  rm -rf "$SGLANG_DIR"
 elif [ "$REUSE_SOURCE" = true ]; then
   echo "**** --no-clean: not checking the installed commit against the pin. ****"
 elif installed_at_pin; then
@@ -202,11 +222,8 @@ if [ "$SKIP_INSTALL" = true ]; then
   exit 0
 fi
 
+install_runtime_dependencies
 pip install -e "$SGLANG_DIR/python"
-# sglang imports xgrammar unconditionally, but pyproject_xpu.toml leaves it out because
-# it pulls in CUDA torch. Install without deps so our XPU torch and triton survive.
-# Versions match sglang's own pyproject.toml, so an upstream release cannot break us.
-pip install --no-deps xgrammar==0.2.1 apache-tvm-ffi==0.1.11
 
 echo "**** SGLang installed successfully ****"
 
