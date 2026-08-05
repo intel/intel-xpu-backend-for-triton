@@ -12,9 +12,9 @@ on:
     - cron: "5 10 * * THU"
     - cron: "5 10 * * SUN"
 
-# Cancel in-progress runs for the same PR or schedule.
+# Give unrelated-label skip runs a separate lane so they cannot cancel a real run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || 'ci' }}-${{ github.event.label.name || github.event_name }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || 'ci' }}-${{ github.event.action == 'labeled' && github.event.label.name != 'run-vllm-tests' && 'skip' || 'run' }}
   cancel-in-progress: true
 
 jobs:
