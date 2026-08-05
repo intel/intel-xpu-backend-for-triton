@@ -498,7 +498,7 @@ bool transposeWithBitcast(MLIRContext *ctx, const LinearLayout &srcLayout,
                           const LinearLayout &dstLayout) {
   StringAttr kRegister = StringAttr::get(ctx, "register");
   StringAttr kLane = StringAttr::get(ctx, "lane");
-  // Conservatively check the bit cast layout changes limitation.
+  // Conservatively check the bitcast layout changes limitation.
   // 1st: No lane to reg mapping or vise versa.
   // 2nd: lane to lane mapping has to be identical.
   // 3rc: reg to reg mapping has to be identical.
