@@ -74,6 +74,53 @@ index fb8a4b0a2..7ab490aaf 100644
      if D is not None:
          out += (x * D).to(out.dtype)
      out = (out if z is None else out * F.silu(z)).to(x.dtype)
+diff --git a/tests/kernels/utils.py b/tests/kernels/utils.py
+index cc1d1bbf8..7fc766d8a 100644
+--- a/tests/kernels/utils.py
++++ b/tests/kernels/utils.py
+@@ -914,6 +914,8 @@ def torch_experts(
+     f32 = torch.float32
+ 
+     act = op_registry[activation.custom_op_name]
++    silu_act_fn = SiluAndMul(compile_native=False)
++    act_fn = silu_act_fn if act is SiluAndMul else act()
+ 
+     for i in range(num_experts):
+         mask = topk_ids == i
+@@ -922,13 +924,13 @@ def torch_experts(
+                 tmp1 = a[mask] @ w1[i].transpose(0, 1)
+                 if b_bias1 is not None:
+                     tmp1 = tmp1 + b_bias1[i].view(1, -1).to(tmp1.dtype)
+-                tmp2 = act()(tmp1)
++                tmp2 = act_fn(tmp1)
+                 out[mask] = tmp2 @ w2[i].transpose(0, 1)
+                 if b_bias2 is not None:
+                     out[mask] = out[mask] + b_bias2[i].view(1, -1).to(tmp1.dtype)
+             elif quant_input_only:
+                 tmp1 = a[mask] @ w1[i].transpose(0, 1)
+-                tmp2 = SiluAndMul()(tmp1)
++                tmp2 = silu_act_fn(tmp1)
+                 tmp2, tmp2_scale = moe_kernel_quantize_input(
+                     tmp2, None, quant_dtype, per_act_token_quant
+                 )
+@@ -946,7 +948,7 @@ def torch_experts(
+                 )
+                 if b_bias1 is not None:
+                     tmp1 = tmp1 + b_bias1[i].view(1, -1).to(tmp1.dtype)
+-                tmp2 = SiluAndMul()(tmp1)
++                tmp2 = silu_act_fn(tmp1)
+                 tmp2, b_scale = moe_kernel_quantize_input(
+                     tmp2, a2_scale, quant_dtype, per_act_token_quant, block_shape
+                 )
+@@ -970,7 +972,7 @@ def torch_experts(
+                 if b_bias1 is not None:
+                     tmp1 = tmp1 + b_bias1[i].view(1, -1).to(out.dtype)
+ 
+-                tmp2 = act()(tmp1).to(out.dtype)
++                tmp2 = act_fn(tmp1).to(out.dtype)
+ 
+                 tmp2, b_scale = moe_kernel_quantize_input(
+                     tmp2, a2_scale, quant_dtype, per_act_token_quant, block_shape
 diff --git a/tests/utils.py b/tests/utils.py
 index 2a3bdb91f..c74587d5f 100644
 --- a/tests/utils.py
@@ -106,24 +153,42 @@ index 315c77de3..9fda159d4 100644
      if prefill_invalid_reasons:
          pytest.skip(
 diff --git a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
-index 21bda8e17..e7f11e934 100644
+index 21bda8e17..4b91597c1 100644
 --- a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
-@@ -618,7 +618,7 @@ class NaiveBatchedExperts(mk.FusedMoEExpertsModular):
+@@ -613,13 +613,16 @@ class NaiveBatchedExperts(mk.FusedMoEExpertsModular):
+         assert num_local_experts == w1.size(0), f"{num_local_experts} == {w1.size(0)}"
+ 
+         N = w1.size(1) // 2
++        is_compiling = torch.compiler.is_compiling()
++        capture_active = (
++            not is_compiling
++            and current_platform.is_cuda_alike()
++            and torch.cuda.is_current_stream_capturing()
++        )
+ 
+         for expert in range(num_local_experts):
              # Indexing expert_num_tokens doesn't work w/cudagraphs or inductor
-             if (
-                 torch.compiler.is_compiling()
+-            if (
+-                torch.compiler.is_compiling()
 -                or torch.cuda.is_current_stream_capturing()
-+                or (torch.cuda.is_available() and torch.cuda.is_current_stream_capturing())
-             ):
+-            ):
++            if is_compiling or capture_active:
                  num = hidden_states.shape[1]
              else:
-@@ -659,7 +659,7 @@ def batched_moe_kernel_quantize_input(
+                 num = int(expert_num_tokens[expert].item())
+@@ -659,7 +662,13 @@ def batched_moe_kernel_quantize_input(
      per_act_token_quant: bool,
      block_shape: list[int] | None = None,
  ) -> tuple[torch.Tensor, torch.Tensor | None]:
 -    if torch.compiler.is_compiling() or torch.cuda.is_current_stream_capturing():
-+    if torch.compiler.is_compiling() or (torch.cuda.is_available() and torch.cuda.is_current_stream_capturing()):
++    is_compiling = torch.compiler.is_compiling()
++    capture_active = (
++        not is_compiling
++        and current_platform.is_cuda_alike()
++        and torch.cuda.is_current_stream_capturing()
++    )
++    if is_compiling or capture_active:
          # Note: this does a bunch of extra work because expert_num_tokens is
          # ignored but it does support torch.compile + cudagraphs.
          hidden_dim = A.size(-1)
