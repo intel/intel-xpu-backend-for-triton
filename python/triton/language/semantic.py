@@ -318,6 +318,7 @@ class TritonSemantic(Generic[TensorTy]):
             input = self.cast(input, ret_ty)
             other = self.cast(other, ret_ty)
             if ret_ty.is_int_signed():
+                self._check_signed_div_operands(input, other, "floordiv")
                 return self.tensor(self.builder.create_sdiv(input.handle, other.handle), input.type)
             else:
                 return self.tensor(self.builder.create_udiv(input.handle, other.handle), input.type)
@@ -349,6 +350,7 @@ class TritonSemantic(Generic[TensorTy]):
                                 "because they have different signedness;"
                                 "this is unlikely to result in a useful answer. Cast them to the same signedness.")
             if scalar_ty.is_int_signed():
+                self._check_signed_div_operands(input, other, "mod")
                 return self.tensor(self.builder.create_srem(input.handle, other.handle), input.type)
             else:
                 return self.tensor(self.builder.create_urem(input.handle, other.handle), input.type)
@@ -1846,6 +1848,44 @@ class TritonSemantic(Generic[TensorTy]):
 
     def assume(self, cond) -> TensorTy:
         return self.tensor(self.builder.create_assume(cond.handle), tl.void)
+
+    def _check_signed_div_operands(self, input: TensorTy, other: TensorTy, op_name: str):
+        """Insert runtime assertion checking that the tensor dividend is non-negative.
+
+        Enabled by default. Set TRITON_CHECK_SIGNED_DIV=0 to disable.
+        Detects cases where negative values flow into signed division/remainder,
+        which can cause incorrect AxisInfo/StrideInfo analysis results.
+
+        Only checks when the dividend is a tensor (scalar ops don't trigger
+        the AxisInfo optimization path). The sign of the divisor is irrelevant
+        to the bug — only negative dividends break contiguity/stride.
+        """
+        import os
+        if os.environ.get("TRITON_CHECK_SIGNED_DIV", "1") == "0":
+            return
+        # The bug only manifests for tensor dividend with constant divisor.
+        # Skip if dividend is scalar, or if divisor is also a tensor (AxisInfo
+        # only applies the optimization when RHS has full constancy).
+        if not input.type.is_block():
+            return
+        if other.type.is_block():
+            return
+        zero = self._splat_int_const(0, input)
+        input_non_neg = self.tensor(self.builder.create_icmpSGE(input.handle, zero.handle), self._bool_like(input))
+        op_sym = "//" if op_name == "floordiv" else "%"
+        self.builder.create_assert(
+            input_non_neg.handle, f"{op_name}: tensor dividend is negative - AxisInfo may misoptimize. "
+            f"If dividend should be non-negative, ensure it is (e.g., use max(..., 0)). "
+            f"If negative is intentional, use XOR workaround: "
+            f"sign = tl.where(a < 0, -1, 0); result = (a ^ sign) {op_sym} (b ^ sign).")
+
+    def _splat_int_const(self, val: int, like: TensorTy) -> TensorTy:
+        """Create an integer constant tensor with the same type/shape as `like`."""
+        bitwidth = like.type.scalar.primitive_bitwidth
+        get_int = {
+            8: self.builder.get_int8, 16: self.builder.get_int16, 32: self.builder.get_int32, 64: self.builder.get_int64
+        }[bitwidth]
+        return self.tensor(self.builder.create_splat(like.type.to_ir(self.builder), get_int(val)), like.type)
 
     def _convert_elem_to_ir_value(self, elem, require_i64):
         if isinstance(elem, int):
