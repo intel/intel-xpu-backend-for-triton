@@ -97,7 +97,7 @@ tests/kernels/moe/test_moe.py::test_moe_sum[slice-dtype1-1024-2-1]
 tests/kernels/moe/test_moe.py::test_moe_sum[slice-dtype1-1024-2-33]
 tests/kernels/moe/test_moe.py::test_moe_sum[slice-dtype1-1024-2-222]
 
-Block-fp8 configuration is passed to native xe2 grouped GEMM despite incompatible scale layout #7574 https://github.com/intel/intel-xpu-backend-for-triton/issues/7574
+# Block-fp8 configuration is passed to native xe2 grouped GEMM despite incompatible scale layout #7574 https://github.com/intel/intel-xpu-backend-for-triton/issues/7574
 tests/kernels/moe/test_moe_layer.py::test_moe_layer_no_parallel[False-False-False-fp8_blocked-2-8-1-128-256]
 tests/kernels/moe/test_moe_layer.py::test_moe_layer_no_parallel[False-False-False-fp8_blocked-2-8-32-512-512]
 tests/kernels/moe/test_moe_layer.py::test_moe_layer_no_parallel[False-False-False-fp8_blocked-2-8-222-1024-2048]
