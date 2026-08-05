@@ -295,6 +295,135 @@ tt.func public @multiple_chained_divsi() -> i32 {
 // CHECK: tt.return %[[SUM]]
 }
 
+// Test 16: remsi with non-negative dividend produces non-negative result
+// even when divisor is negative (truncation toward zero preserves sign of
+// dividend). The downstream remsi should be converted.
+module {
+tt.func public @remsi_nonneg_dividend_neg_divisor() -> i32 {
+  %pid = tt.get_program_id x : i32
+  %cn7 = arith.constant -7 : i32
+  %rem = arith.remsi %pid, %cn7 : i32
+  %c64 = arith.constant 64 : i32
+  %rem2 = arith.remsi %rem, %c64 : i32
+  tt.return %rem2 : i32
+}
+// CHECK-LABEL: @remsi_nonneg_dividend_neg_divisor
+// CHECK: %[[PID:.*]] = tt.get_program_id x
+// CHECK: %[[CN7:.*]] = arith.constant -7
+// CHECK: %[[REM:.*]] = arith.remsi %[[PID]], %[[CN7]]
+// CHECK: %[[C64:.*]] = arith.constant 64
+// CHECK: %[[REM2:.*]] = arith.remui %[[REM]], %[[C64]]
+// CHECK: tt.return %[[REM2]]
+}
+
+// -----
+
+// Test 17: remsi with non-negative dividend and non-constant divisor
+// produces non-negative result. Downstream divsi should be converted.
+module {
+tt.func public @remsi_nonneg_dividend_nonconst_divisor(%arg0: i32) -> i32 {
+  %pid = tt.get_program_id x : i32
+  %rem = arith.remsi %pid, %arg0 : i32
+  %c32 = arith.constant 32 : i32
+  %div = arith.divsi %rem, %c32 : i32
+  tt.return %div : i32
+}
+// CHECK-LABEL: @remsi_nonneg_dividend_nonconst_divisor
+// CHECK: %[[PID:.*]] = tt.get_program_id x
+// CHECK: %[[REM:.*]] = arith.remsi %[[PID]], %arg0
+// CHECK: %[[C32:.*]] = arith.constant 32
+// CHECK: %[[DIV:.*]] = arith.divui %[[REM]], %[[C32]]
+// CHECK: tt.return %[[DIV]]
+}
+
+// -----
+
+// Test 18: divsi with non-negative dividend and non-negative (non-constant)
+// divisor produces non-negative result. Downstream remsi should be converted.
+module {
+tt.func public @divsi_nonneg_both_operands() -> i32 {
+  %pid = tt.get_program_id x : i32
+  %np = tt.get_num_programs x : i32
+  %div = arith.divsi %pid, %np : i32
+  %c16 = arith.constant 16 : i32
+  %rem = arith.remsi %div, %c16 : i32
+  tt.return %rem : i32
+}
+// CHECK-LABEL: @divsi_nonneg_both_operands
+// CHECK: %[[PID:.*]] = tt.get_program_id x
+// CHECK: %[[NP:.*]] = tt.get_num_programs x
+// CHECK: %[[DIV:.*]] = arith.divsi %[[PID]], %[[NP]]
+// CHECK: %[[C16:.*]] = arith.constant 16
+// CHECK: %[[REM:.*]] = arith.remui %[[DIV]], %[[C16]]
+// CHECK: tt.return %[[REM]]
+}
+
+// -----
+
+// Test 19: maxsi with non-negative LHS produces non-negative result.
+// Downstream divsi should be converted.
+module {
+tt.func public @maxsi_nonneg_lhs(%arg0: i32) -> i32 {
+  %pid = tt.get_program_id x : i32
+  %max = arith.maxsi %pid, %arg0 : i32
+  %c128 = arith.constant 128 : i32
+  %div = arith.divsi %max, %c128 : i32
+  tt.return %div : i32
+}
+// CHECK-LABEL: @maxsi_nonneg_lhs
+// CHECK: %[[PID:.*]] = tt.get_program_id x
+// CHECK: %[[MAX:.*]] = arith.maxsi %[[PID]], %arg0
+// CHECK: %[[C128:.*]] = arith.constant 128
+// CHECK: %[[DIV:.*]] = arith.divui %[[MAX]], %[[C128]]
+// CHECK: tt.return %[[DIV]]
+}
+
+// -----
+
+// Test 20: maxsi with non-negative RHS produces non-negative result.
+// Downstream remsi should be converted.
+module {
+tt.func public @maxsi_nonneg_rhs(%arg0: i32) -> i32 {
+  %c0 = arith.constant 0 : i32
+  %max = arith.maxsi %arg0, %c0 : i32
+  %c64 = arith.constant 64 : i32
+  %rem = arith.remsi %max, %c64 : i32
+  tt.return %rem : i32
+}
+// CHECK-LABEL: @maxsi_nonneg_rhs
+// CHECK: %[[C0:.*]] = arith.constant 0
+// CHECK: %[[MAX:.*]] = arith.maxsi %arg0, %[[C0]]
+// CHECK: %[[C64:.*]] = arith.constant 64
+// CHECK: %[[REM:.*]] = arith.remui %[[MAX]], %[[C64]]
+// CHECK: tt.return %[[REM]]
+}
+
+// -----
+
+// Test 21: maxsi result used in chained computation.
+// maxsi(arg, 0) is non-negative, addi with pid is non-negative, divsi converts.
+module {
+tt.func public @maxsi_in_chain(%arg0: i32) -> i32 {
+  %c0 = arith.constant 0 : i32
+  %max = arith.maxsi %arg0, %c0 : i32
+  %pid = tt.get_program_id x : i32
+  %sum = arith.addi %max, %pid : i32
+  %c256 = arith.constant 256 : i32
+  %div = arith.divsi %sum, %c256 : i32
+  tt.return %div : i32
+}
+// CHECK-LABEL: @maxsi_in_chain
+// CHECK: %[[C0:.*]] = arith.constant 0
+// CHECK: %[[MAX:.*]] = arith.maxsi %arg0, %[[C0]]
+// CHECK: %[[PID:.*]] = tt.get_program_id x
+// CHECK: %[[SUM:.*]] = arith.addi %[[MAX]], %[[PID]]
+// CHECK: %[[C256:.*]] = arith.constant 256
+// CHECK: %[[DIV:.*]] = arith.divui %[[SUM]], %[[C256]]
+// CHECK: tt.return %[[DIV]]
+}
+
+// -----
+
 //===----------------------------------------------------------------------===//
 // Negative Tests - Should NOT convert
 //===----------------------------------------------------------------------===//
@@ -426,6 +555,58 @@ tt.func public @no_convert_divsi_non_constant_divisor(%arg0: i32) -> i32 {
   tt.return %div : i32
 }
 // CHECK-LABEL: @no_convert_divsi_non_constant_divisor
+// CHECK: arith.divsi
+// CHECK-NOT: arith.divui
+}
+
+// -----
+
+// Negative Test 10: remsi with negative dividend -> result NOT non-negative
+// Downstream divsi should NOT be converted.
+module {
+tt.func public @no_convert_remsi_neg_dividend(%arg0: i32) -> i32 {
+  %rem = arith.remsi %arg0, %arg0 : i32
+  %c32 = arith.constant 32 : i32
+  %div = arith.divsi %rem, %c32 : i32
+  tt.return %div : i32
+}
+// CHECK-LABEL: @no_convert_remsi_neg_dividend
+// CHECK: arith.remsi
+// CHECK: arith.divsi
+// CHECK-NOT: arith.divui
+}
+
+// -----
+
+// Negative Test 11: divsi with non-negative dividend but unknown divisor
+// -> result NOT non-negative. Downstream remsi should NOT be converted.
+module {
+tt.func public @no_convert_divsi_unknown_divisor_chain(%arg0: i32) -> i32 {
+  %pid = tt.get_program_id x : i32
+  %div = arith.divsi %pid, %arg0 : i32
+  %c64 = arith.constant 64 : i32
+  %rem = arith.remsi %div, %c64 : i32
+  tt.return %rem : i32
+}
+// CHECK-LABEL: @no_convert_divsi_unknown_divisor_chain
+// CHECK: arith.divsi
+// CHECK: arith.remsi
+// CHECK-NOT: arith.remui
+}
+
+// -----
+
+// Negative Test 12: maxsi with both operands unknown -> NOT non-negative.
+// Downstream divsi should NOT be converted.
+module {
+tt.func public @no_convert_maxsi_both_unknown(%arg0: i32, %arg1: i32) -> i32 {
+  %max = arith.maxsi %arg0, %arg1 : i32
+  %c128 = arith.constant 128 : i32
+  %div = arith.divsi %max, %c128 : i32
+  tt.return %div : i32
+}
+// CHECK-LABEL: @no_convert_maxsi_both_unknown
+// CHECK: arith.maxsi
 // CHECK: arith.divsi
 // CHECK-NOT: arith.divui
 }

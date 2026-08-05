@@ -120,13 +120,21 @@ private:
     if (isa<arith::RemUIOp, arith::DivUIOp>(defOp))
       return true;
 
-    // arith.divsi/remsi with non-negative dividend and positive divisor
+    // arith.divsi with non-negative dividend and non-negative divisor.
+    // For well-defined programs the divisor is non-zero, so non-negative
+    // implies positive, and divsi(non-neg, positive) >= 0.
     if (auto divOp = dyn_cast<arith::DivSIOp>(defOp))
-      return isNonNegative(divOp.getLhs()) &&
-             isPositiveConstant(divOp.getRhs());
+      return isNonNegative(divOp.getLhs()) && isNonNegative(divOp.getRhs());
+
+    // arith.remsi: result has the same sign as the dividend (truncation toward
+    // zero), so a non-negative dividend guarantees a non-negative result
+    // regardless of the divisor's sign.
     if (auto remOp = dyn_cast<arith::RemSIOp>(defOp))
-      return isNonNegative(remOp.getLhs()) &&
-             isPositiveConstant(remOp.getRhs());
+      return isNonNegative(remOp.getLhs());
+
+    // arith.maxsi: non-negative if either operand is non-negative.
+    if (auto maxOp = dyn_cast<arith::MaxSIOp>(defOp))
+      return isNonNegative(maxOp.getLhs()) || isNonNegative(maxOp.getRhs());
 
     // arith.andi with non-negative constant mask
     if (auto andOp = dyn_cast<arith::AndIOp>(defOp)) {
