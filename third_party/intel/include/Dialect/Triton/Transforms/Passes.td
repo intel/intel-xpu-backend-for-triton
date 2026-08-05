@@ -110,6 +110,35 @@ def TritonIntelStrideVersioning
   ];
 }
 
+def TritonIntelDescriptorVersioning
+    : Pass<"triton-intel-descriptor-versioning", "mlir::ModuleOp"> {
+  let summary = "Version persistent tensor-descriptor loops on a runtime row length so the 2D-block fast path can fire";
+
+  let description = [{
+    Versions a persistent `scf.while` tile loop on the runtime row length of a
+    tensor descriptor that `MaterializeBlockPointer` must prove divisible by the
+    surface-width granularity (2 for fp16) at compile time to enable the
+    2D-block fast path.
+
+    In grouped GEMM the row length is a runtime `gk = tl.load(...)`, so the gate
+    cannot prove it divisible. Clone the persistent loop under `if (gk % d == 0)`
+    and rewrite the then-branch row length to `(gk / d) * d` (== gk under the
+    predicate, and structurally divisible so the gate fires); the else-branch
+    keeps the runtime `gk` for the correct gather path:
+
+       %a  = tt.make_tensor_descriptor %base, [%gm, %gk], [%lda, 1]
+       %a' = tt.make_tensor_descriptor %base, [%gm, (%gk / 2) * 2], [%lda, 1]
+       if (%gk % 2 == 0) scf.while ... { scf.for ... { ...%a'... } }
+       else              scf.while ... { scf.for ... { ...%a...  } }
+  }];
+
+  let dependentDialects = [
+    "mlir::arith::ArithDialect",
+    "mlir::scf::SCFDialect",
+    "mlir::triton::TritonDialect"
+  ];
+}
+
 def TritonIntelSimplifySignedArithmetic
     : Pass<"triton-intel-simplify-signed-arithmetic", "mlir::ModuleOp"> {
   let summary = "Simplify signed arithmetic ops by converting to unsigned when operands are non-negative";

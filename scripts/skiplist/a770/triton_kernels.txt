@@ -1,3 +1,9 @@
 python/triton_kernels/tests/test_matmul.py::test_op
-python/triton_kernels/tests/test_matmul.py::test_fused_act
-python/triton_kernels/tests/test_matmul.py::test_zero_reduction_dim
+
+# XPU out of memory, cannot allocate 4 GB
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/7477
+python/triton_kernels/tests/test_distributed.py::test_convert_large_strides[src-dp_to_ep]
+python/triton_kernels/tests/test_distributed.py::test_convert_large_strides[src-ep_to_dp]
+python/triton_kernels/tests/test_distributed.py::test_convert_large_strides[dst-dp_to_ep]
+python/triton_kernels/tests/test_distributed.py::test_convert_large_strides[dst-ep_to_dp]
+python/triton_kernels/tests/test_roofline.py::test_get_memset_tbps

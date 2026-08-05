@@ -12,7 +12,6 @@ different implementations using vLLM kernels.
 """
 import os
 import random
-import sys
 from math import prod
 from typing import Optional
 
@@ -22,9 +21,6 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
-
-# Make vLLM's `tests/` package importable from its source checkout at <repo>/vllm/.
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "vllm")))
 
 from tests.kernels.moe.utils import make_quantized_test_activations, make_test_weight
 from vllm.model_executor.layers.fused_moe.fused_moe import invoke_fused_moe_triton_kernel, get_default_config
@@ -294,7 +290,7 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_fp8
             line_names=list(providers.values()),
             styles=[('green', '-'), ('blue', '--'), ('red', ':')],
             ylabel=['GB/s', 'TFlops'],
-            plot_name='fused-moe-gemm-performance' + ('-td' if is_td_patched else ''),
+            plot_name='fused-moe-gemm-performance' + ('-fp8' if is_fp8 else '') + ('-td' if is_td_patched else ''),
             args={},
         ))
     def benchmark(num_tokens, output_hidden_size, hidden_size, num_experts, topk, dtype, has_bias, provider):
@@ -430,14 +426,16 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_fp8
             )
 
         elif provider == 'sycl-tla':
-            # TODO: time SYCL-TLA's grouping/gather alongside the GEMM (via a native prologue) to match Triton's in-kernel gather and make the comparison fair.
+            # Gather tokens by expert inside the timed region to match Triton's in-kernel
+            # gather; the permutation depends only on routing, so compute it once.
             flat_expert_indices = topk_ids.view(-1)
-            _, input_A_grouped, _ = ref_prologue(input_A, None, flat_expert_indices, topk, num_experts, "bf16")
+            gather_idx = flat_expert_indices.argsort(stable=True) // topk
             rows_per_expert = flat_expert_indices.bincount(minlength=num_experts).to(torch.int32).tolist()
             input_B_grouped = input_B.transpose(1, 2).contiguous()
-            output_sycl = torch.empty((input_A_grouped.shape[0], n), dtype=input_A.dtype, device=DEVICE)
+            output_sycl = torch.empty((gather_idx.shape[0], n), dtype=input_A.dtype, device=DEVICE)
 
             def sycl_tla_fn():
+                input_A_grouped = input_A.index_select(0, gather_idx)
                 sycl_tla_grouped_gemm(input_A_grouped, input_B_grouped, None, output_sycl, rows_per_expert, n, k,
                                       num_experts)
                 return output_sycl
@@ -475,6 +473,16 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_fp8
         return (gbps(mean_ms), gbps(max_ms), gbps(min_ms)), (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
 
     return benchmark
+
+
+def get_benchmark(providers_filter: Optional[list[str]] = None, is_fp8=False, is_td_patched=None):
+    if is_td_patched is None:
+        is_td_patched = os.getenv('TD_PATCHED', '0') == '1'
+    return get_fused_moe_benchmark(
+        providers_filter=providers_filter,
+        is_fp8=is_fp8,
+        is_td_patched=is_td_patched,
+    )
 
 
 if __name__ == '__main__':

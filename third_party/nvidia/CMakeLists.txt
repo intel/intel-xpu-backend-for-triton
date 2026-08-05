@@ -50,7 +50,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
   endif()
 
   add_triton_plugin(TritonNVIDIA ${CMAKE_CURRENT_SOURCE_DIR}/triton_nvidia.cc LINK_LIBS TritonNVIDIAGPUToLLVM NVGPUToLLVM)
-  target_link_libraries(TritonNVIDIA PRIVATE Python3::Module pybind11::headers)
+  target_link_libraries(TritonNVIDIA PRIVATE Python3::Module nanobind-static)
   if(NOT WIN32)
     add_dependencies(TritonNVIDIA TritonNVIDIAGSanRuntime)
   endif()

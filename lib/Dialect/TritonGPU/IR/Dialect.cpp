@@ -451,35 +451,38 @@ SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape) {
   return getShapePerCTA(getCTASplitNum(layout), shape);
 }
 
-SmallVector<int64_t> getAllocationShapePerCTA(Attribute layout,
-                                              ArrayRef<int64_t> shapeLogical) {
-  SmallVector<int64_t> shape(shapeLogical);
-  std::optional<int64_t> packedAxis;
-  if (auto sharedMMALayout = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
-    if (sharedMMALayout.getFp4Padded())
-      packedAxis = getOrder(sharedMMALayout, shapeLogical)[0];
-  } else if (auto tmemLayout =
-                 dyn_cast<nvidia_gpu::TensorMemoryEncodingAttr>(layout)) {
-    // An fp4Padded TMEM descriptor keeps the packed Mx(K/2)xi8 shape. Allocate
-    // two physical columns per packed K coordinate so each logical FP4 element
-    // occupies one byte in TMEM.
-    if (tmemLayout.getFp4Padded())
-      packedAxis = 1;
-  }
-  if (packedAxis)
-    shape[*packedAxis] *= 2;
-  return getShapePerCTA(layout, shape);
-}
-
 SmallVector<int64_t> getShapePerCTA(Type type) {
   auto tensorType = cast<TensorOrMemDesc>(type);
   return getShapePerCTA(tensorType.getEncoding(), tensorType.getShape());
 }
 
-SmallVector<int64_t> getAllocationShapePerCTA(Type type) {
-  auto tensorType = cast<TensorOrMemDesc>(type);
-  return getAllocationShapePerCTA(tensorType.getEncoding(),
-                                  tensorType.getShape());
+int64_t getAllocationElems(Attribute encoding, ArrayRef<int64_t> shape,
+                           ArrayRef<int64_t> allocShape) {
+  assert(isa<SharedEncodingTrait>(encoding) &&
+         "expected a shared-memory encoding");
+  if (allocShape.empty())
+    allocShape = shape;
+  auto layoutShape = dropPipeliningDim(shape, encoding);
+  auto allocationShape = dropPipeliningDim(allocShape, encoding);
+  auto layout = toLinearLayoutIgnoringPadding(allocationShape, encoding);
+  auto offsetDim = StringAttr::get(encoding.getContext(), "offset");
+  int64_t stages = product<int64_t>(shape.drop_back(layoutShape.size()));
+  int64_t elems = stages * layout.getInDimSize(offsetDim);
+  if (layoutShape != allocationShape) {
+    auto logicalDims = llvm::to_vector(layout.getOutDimNames());
+    LinearLayout identity = LinearLayout::empty();
+    for (auto [dim, size] : llvm::zip_equal(logicalDims, layoutShape))
+      identity *= LinearLayout::identity1D(size, dim, dim);
+    auto view = identity.invertAndCompose(layout);
+    uint64_t zeroMask = (layout.getInDimSize(offsetDim) - 1) &
+                        ~getInputBasisMask(layout, offsetDim, logicalDims);
+    int64_t viewElems =
+        (getOutputBasisMask(view, logicalDims, offsetDim) | zeroMask) + 1;
+    elems = (stages - 1) * layout.getInDimSize(offsetDim) + viewElems;
+  }
+  if (auto partitioned = dyn_cast<PartitionedSharedEncodingAttr>(encoding))
+    elems *= partitioned.getNumPartitions();
+  return elems;
 }
 
 SmallVector<unsigned> getMmaV2WarpsPerCTA(ArrayRef<int64_t> shape,
@@ -2858,18 +2861,11 @@ SmallVector<unsigned> DotOperandEncodingAttr::getRepOrder() const {
 
 CGAEncodingAttr DotOperandEncodingAttr::getCGALayout() const {
   const auto &layout = ::getCGALayout(getParent()).getLinearLayout();
-  auto bases = layout.getBases();
-  auto kBlock = StringAttr::get(getContext(), "block");
-  auto &blockBases = bases[kBlock];
   auto rank = layout.getNumOutDims();
   auto kDim = getOpIdx() == 0 ? rank - 1 : rank - 2;
-  for (auto &basis : blockBases) {
-    basis[kDim] = 0;
-  }
   auto dims = layout.getOutDims();
-  dims[kDim].second = 1;
   return CGAEncodingAttr::get(getContext(),
-                              LinearLayout(std::move(bases), dims, true));
+                              layout.resizeOutDim(dims[kDim].first, 1));
 }
 LogicalResult DotOperandEncodingAttr::verify(
     function_ref<::mlir::InFlightDiagnostic()> emitError, unsigned opIdx,
@@ -3553,22 +3549,27 @@ struct TritonGPUInferLayoutInterface
     return success();
   }
 
-  LogicalResult
-  verifyLayoutsAreEqual(ArrayRef<int64_t> shape, Attribute expected,
-                        Attribute got,
-                        std::optional<Location> loc) const override {
+  LogicalResult verifyLayoutsAreEqual(ArrayRef<int64_t> shape,
+                                      Attribute expected, Attribute got,
+                                      std::optional<Location> loc,
+                                      bool ignoreRegBroadcast) const override {
     if (expected == got) {
       return success();
     }
     if (!expected || !got)
       return failure();
 
-    // Check whether the encodings are structurally the same.
-    if (!areLayoutsEquivalent(shape, cast<LayoutEncodingTrait>(expected),
-                              cast<LayoutEncodingTrait>(got))) {
+    auto expectedLL =
+        toLinearLayout(shape, cast<LayoutEncodingTrait>(expected));
+    auto gotLL = toLinearLayout(shape, cast<LayoutEncodingTrait>(got));
+    if (ignoreRegBroadcast) {
+      auto kReg = StringAttr::get(getContext(), "register");
+      expectedLL = expectedLL.removeZeroBasesAlongDim(kReg);
+      gotLL = gotLL.removeZeroBasesAlongDim(kReg);
+    }
+    if (expectedLL != gotLL)
       return emitOptionalError(loc, "Expected result encoding ", expected,
                                " but was ", got);
-    }
     return success();
   }
 
@@ -3621,13 +3622,12 @@ struct TritonGPUInferLayoutInterface
       SmallVector<int64_t> joinedShape(shape);
       joinedShape.push_back(2);
       auto parent = enc.getParent();
-      auto parentLL = toLinearLayout(joinedShape, parent);
 
       Attribute splitEnc;
       auto result = inferSplitOpEncoding(parent, splitEnc, joinedShape, loc);
       if (succeeded(result) &&
-          areLayoutsEquivalent(shape, cast<LayoutEncodingTrait>(splitEnc),
-                               cast<LayoutEncodingTrait>(srcEnc))) {
+          succeeded(verifyLayoutsAreEqual(shape, splitEnc, srcEnc, {},
+                                          /*ignoreRegBroadcast=*/true))) {
         dstEnc = parent;
         return success();
       }
@@ -3646,16 +3646,16 @@ struct TritonGPUInferLayoutInterface
         ret.insert(ret.begin(), ret.size());
         return ret;
       };
-      auto ctall = enc.getCGALayout().getLinearLayout();
+      auto cgaLl = enc.getCGALayout().getLinearLayout();
       auto kBlock = StringAttr::get(enc.getContext(), "block");
       auto newDim = standardOutDimNames(
-          enc.getContext(), ctall.getNumOutDims() + 1)[ctall.getNumOutDims()];
-      ctall *= LinearLayout::identity1D(1, kBlock, newDim);
+          enc.getContext(), cgaLl.getNumOutDims() + 1)[cgaLl.getNumOutDims()];
+      cgaLl *= LinearLayout::identity1D(1, kBlock, newDim);
       dstEnc = BlockedEncodingAttr::get(
           enc.getContext(), append(enc.getSizePerThread(), 2),
           append(enc.getThreadsPerWarp(), 1), append(enc.getWarpsPerCTA(), 1),
           appendMajorDim(enc.getOrder()),
-          CGAEncodingAttr::get(enc.getContext(), std::move(ctall)));
+          CGAEncodingAttr::get(enc.getContext(), std::move(cgaLl)));
       return success();
     }
 
@@ -3691,19 +3691,19 @@ struct TritonGPUInferLayoutInterface
                           (enc.getCGALayout().getCTAsPerCGA().back() == 1));
     if (isSimpleSplit) {
       SmallVector<unsigned> newOrder(enc.getOrder());
-      auto ctall = enc.getCGALayout().getLinearLayout();
+      auto cgaLl = enc.getCGALayout().getLinearLayout();
       int splitDim = newOrder.size() - 1;
       // Remove splitDim from order.
       newOrder.erase(std::remove(newOrder.begin(), newOrder.end(), splitDim),
                      newOrder.end());
-      // Remove last dimension from ctall.
-      ctall = ctall.squeezeOuts(to_vector(ctall.getOutDimNames()).back());
+      // Remove the last dimension from the CGA layout.
+      cgaLl = cgaLl.squeezeOuts(to_vector(cgaLl.getOutDimNames()).back());
       dstEnc = BlockedEncodingAttr::get(
           enc.getContext(), //
           ArrayRef(enc.getSizePerThread()).drop_back(1),
           ArrayRef(enc.getThreadsPerWarp()).drop_back(1),
           ArrayRef(enc.getWarpsPerCTA()).drop_back(1), ArrayRef(newOrder),
-          CGAEncodingAttr::get(enc.getContext(), std::move(ctall)));
+          CGAEncodingAttr::get(enc.getContext(), std::move(cgaLl)));
       return success();
     }
 
@@ -3786,10 +3786,18 @@ struct TritonGPUInferLayoutInterface
     }
 
     auto ll = toLinearLayout(shape, inEnc);
-    auto newLl = LinearLayout::empty();
-    auto result = tryJoinOnAxis(ctx, ll, newLl, fwdInference, axis, loc);
-    if (!result.succeeded())
-      return result;
+    auto kRegister = StringAttr::get(ctx, "register");
+    auto outDims = llvm::to_vector(ll.getOutDimNames());
+    auto split = LinearLayout::identity1D(2, kRegister, outDims[axis]);
+    LinearLayout newLl;
+    if (fwdInference) {
+      newLl = split * ll;
+    } else if (auto bwdLl = divideLeft(ll, split)) {
+      newLl = *bwdLl;
+    } else {
+      return emitOptionalError(loc, "invalid result layout for Fp4ToFpOp");
+    }
+
     outEnc = inferEncodingFromLinearLayout(ctx, std::move(newLl), inEnc);
     return success();
   }
@@ -3862,9 +3870,9 @@ struct TritonGPUVerifyTensorLayoutInterface
     return isa<triton::MakeRangeOp, triton::SplatOp, triton::BroadcastOp,
                triton::LoadOp, triton::StoreOp, triton::JoinOp, triton::SplitOp,
                triton::DotOp, triton::DotScaledOp, triton::CallOp,
-               triton::ReturnOp, triton::FuncOp, triton::gpu::ConvertLayoutOp,
-               triton::gpu::Fp4ToFpOp, triton::gpu::LocalLoadOp,
-               triton::gpu::LocalStoreOp>(op);
+               triton::ReturnOp, triton::FuncOp, triton::AssertOp,
+               triton::gpu::ConvertLayoutOp, triton::gpu::Fp4ToFpOp,
+               triton::gpu::LocalLoadOp, triton::gpu::LocalStoreOp>(op);
   }
 
   LogicalResult verifyTensorLayout(
@@ -3939,8 +3947,7 @@ struct TritonGPUVerifyTensorLayoutInterface
       return failure();
 
     if (auto sharedLinearEnc = dyn_cast<SharedLinearEncodingAttr>(layout)) {
-      auto rank = cast<LayoutEncodingTrait>(layout).getRank();
-      auto shape = memDescTy.getAllocShape().take_back(rank);
+      auto shape = dropPipeliningDim(memDescTy.getAllocShape(), layout);
       auto layoutShape = sharedLinearEnc.getLinearLayout().getOutDimSizes();
       if (!llvm::equal(shape, layoutShape)) {
         return makeErr() << layout << ".\nLayout has shape " << layoutShape

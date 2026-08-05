@@ -1,0 +1,21 @@
+name: SGLang benchmarks, BMG
+
+permissions: read-all
+
+on:
+  schedule:
+    - cron: "0 11 * * *"
+
+jobs:
+  build-wheel:
+    uses: ./.github/workflows/build-benchmarks-wheel.yml
+    with:
+      python-version: "3.12"
+
+  benchmarks:
+    needs: build-wheel
+    if: always() && !cancelled()
+    uses: ./.github/workflows/sglang-benchmarks.yml
+    with:
+      runner_label: b580
+    secrets: inherit

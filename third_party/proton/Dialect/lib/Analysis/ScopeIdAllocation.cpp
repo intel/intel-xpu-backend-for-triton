@@ -1,6 +1,8 @@
 #include "Analysis/ScopeIdAllocation.h"
 #include "mlir/Analysis/TopologicalSortUtils.h"
 
+#include <deque>
+
 namespace mlir {
 namespace triton::proton {
 
@@ -297,7 +299,7 @@ void ScopeIdAllocation::visitTerminator(Operation *op,
     SmallVector<RegionSuccessor> regions;
     br.getSuccessorRegions(RegionBranchPoint::parent(), regions);
     for (RegionSuccessor &region : regions) {
-      if (region.isParent()) {
+      if (region.isOperation()) {
         successors.emplace_back(br->getBlock(), br->getIterator());
       } else {
         Block &block = region.getSuccessor()->front();
@@ -317,7 +319,7 @@ void ScopeIdAllocation::visitTerminator(Operation *op,
     SmallVector<RegionSuccessor> regions;
     br.getSuccessorRegions(operands, regions);
     for (RegionSuccessor &region : regions) {
-      if (region.isParent()) {
+      if (region.isOperation()) {
         Operation *parent = br->getParentOp();
         successors.emplace_back(parent->getBlock(), parent->getIterator());
       } else {

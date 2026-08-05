@@ -10,7 +10,7 @@ import pathlib
 from triton.runtime.driver import driver
 from triton._internal_testing import is_xpu_cri
 from triton.backends.intel import extension_utils
-from triton.runtime.errors import IntelGPUError
+from triton.runtime.errors import IntelGPUError, OutOfResources
 
 
 @pytest.mark.xfail(is_xpu_cri(), reason="unable to get spill_size")
@@ -33,7 +33,7 @@ def test_auto_grf(device, monkeypatch, capfd):
     outs = [line for line in capfd.readouterr().out.splitlines() if line]
 
     # The output should contain the recompiling information for large GRF mode.
-    assert re.search(r"recompiling the kernel using large GRF mode", outs[0])
+    assert "retrying with large GRF mode" in outs[0]
     # The spill size of returned kernel should be same kernel as the one compiled with large GRF mode.
     assert re.findall(r"\d+\.?\d*", outs[1])[0] == re.findall(r"\d+\.?\d*", outs[2])[0]
 
@@ -171,13 +171,17 @@ def test_auto_grf_on_build_failure(device, monkeypatch, capfd, grf_mode, expect_
     try:
         _register_heavy_kernel[(1, )](out, x, q, size, BLOCK=BLOCK, grf_mode=grf_mode,
                                       generate_native_code=generate_native_code)
-    except IntelGPUError:
+    except (IntelGPUError, OutOfResources):
+        # OutOfResources is the new spill-related error class introduced by
+        # the PTSS-overflow handling in this PR; both error types are
+        # acceptable here since this test exercises a kernel intentionally
+        # too large for the chosen GRF mode.
         pass
 
     outs = capfd.readouterr().out
     if expect_retry and not generate_native_code:
         # load_binary path prints a retry message to stdout.
-        assert "retrying with large GRF mode" in outs or "recompiling the kernel using large GRF mode" in outs
+        assert "retrying with large GRF mode" in outs
     elif expect_retry and generate_native_code:
         # make_zebin path retries silently via ocloc — no stdout message.
         # Success without exception is sufficient verification.

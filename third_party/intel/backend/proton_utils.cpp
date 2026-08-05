@@ -6,19 +6,27 @@
 #include <string>
 #include <sycl/sycl.hpp>
 
-extern "C" void waitOnSyclQueue(void *syclQueue) {
+#ifdef _WIN32
+#define PROTON_UTILS_EXPORT __declspec(dllexport)
+#else
+#define PROTON_UTILS_EXPORT
+#endif
+
+extern "C" PROTON_UTILS_EXPORT void waitOnSyclQueue(void *syclQueue) {
   sycl::queue *queue = static_cast<sycl::queue *>(syclQueue);
   queue->wait();
 }
 
-extern "C" void copyDeviceToHostAsync(void *syclQueue, void *dst,
-                                      const void *src, size_t size) {
+extern "C" PROTON_UTILS_EXPORT void copyDeviceToHostAsync(void *syclQueue,
+                                                          void *dst,
+                                                          const void *src,
+                                                          size_t size) {
   sycl::queue *queue = static_cast<sycl::queue *>(syclQueue);
   queue->memcpy(dst, src, size);
 }
 
-extern "C" void allocateHostBuffer(void *syclQueue, uint8_t **buffer,
-                                   size_t size) {
+extern "C" PROTON_UTILS_EXPORT void
+allocateHostBuffer(void *syclQueue, uint8_t **buffer, size_t size) {
   sycl::queue *queue = static_cast<sycl::queue *>(syclQueue);
   *buffer = static_cast<uint8_t *>(sycl::malloc_host(size, *queue));
   if (*buffer == nullptr) {
@@ -27,13 +35,14 @@ extern "C" void allocateHostBuffer(void *syclQueue, uint8_t **buffer,
   }
 }
 
-extern "C" void freeHostBuffer(void *syclQueue, uint8_t *buffer) {
+extern "C" PROTON_UTILS_EXPORT void freeHostBuffer(void *syclQueue,
+                                                   uint8_t *buffer) {
   sycl::queue *queue = static_cast<sycl::queue *>(syclQueue);
   sycl::free(buffer, *queue);
 }
 
-extern "C" void allocateDeviceBuffer(void *syclQueue, uint8_t **buffer,
-                                     size_t size) {
+extern "C" PROTON_UTILS_EXPORT void
+allocateDeviceBuffer(void *syclQueue, uint8_t **buffer, size_t size) {
   sycl::queue *queue = static_cast<sycl::queue *>(syclQueue);
   *buffer = static_cast<uint8_t *>(sycl::malloc_device(size, *queue));
   if (*buffer == nullptr) {
@@ -42,25 +51,26 @@ extern "C" void allocateDeviceBuffer(void *syclQueue, uint8_t **buffer,
   }
 }
 
-extern "C" void freeDeviceBuffer(void *syclQueue, uint8_t *buffer) {
+extern "C" PROTON_UTILS_EXPORT void freeDeviceBuffer(void *syclQueue,
+                                                     uint8_t *buffer) {
   sycl::queue *queue = static_cast<sycl::queue *>(syclQueue);
   sycl::free(buffer, *queue);
 }
 
-extern "C" void memsetAsync(void *syclQueue, void *devicePtr, int32_t value,
-                            size_t size) {
+extern "C" PROTON_UTILS_EXPORT void
+memsetAsync(void *syclQueue, void *devicePtr, int32_t value, size_t size) {
   sycl::queue *queue = static_cast<sycl::queue *>(syclQueue);
   queue->memset(devicePtr, static_cast<unsigned char>(value), size);
 }
 
-extern "C" void synchronizeDevice(void *syclQueue) {
+extern "C" PROTON_UTILS_EXPORT void synchronizeDevice(void *syclQueue) {
   sycl::queue *queue = static_cast<sycl::queue *>(syclQueue);
   queue->wait_and_throw();
 }
 
 // Returns the Level-Zero native device handle as a stable map key for
 // MetricBuffer's per-device buffer cache.
-extern "C" void *getDeviceKey(void *syclQueue) {
+extern "C" PROTON_UTILS_EXPORT void *getDeviceKey(void *syclQueue) {
   sycl::queue *queue = static_cast<sycl::queue *>(syclQueue);
   auto native = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
       queue->get_device());
@@ -69,7 +79,7 @@ extern "C" void *getDeviceKey(void *syclQueue) {
 
 // FIXME: Should it be in DeviceInfo class?
 // Inspired by Kineto: `XpuptiActivityProfiler.cpp`
-extern "C" void enumDeviceUUIDs(void *deviceUUIDsPtr) {
+extern "C" PROTON_UTILS_EXPORT void enumDeviceUUIDs(void *deviceUUIDsPtr) {
   auto *deviceUUIDs_ =
       reinterpret_cast<std::vector<std::array<uint8_t, 16>> *>(deviceUUIDsPtr);
   if (!deviceUUIDs_->empty()) {
@@ -117,10 +127,10 @@ void check(ze_result_t ret, const char *functionName) {
 // FIXME: rewrite with
 // sycl::device.get_info<sycl::ext::intel::info::device::architecture>; cache
 // the result
-extern "C" void getDeviceProperties(uint64_t index, uint32_t *clockRate,
-                                    uint32_t *memoryClockRate,
-                                    uint32_t *busWidth, uint32_t *numSms,
-                                    char arch[256]) {
+extern "C" PROTON_UTILS_EXPORT void
+getDeviceProperties(uint64_t index, uint32_t *clockRate,
+                    uint32_t *memoryClockRate, uint32_t *busWidth,
+                    uint32_t *numSms, char arch[256]) {
   // ref: getDeviceProperties
 
   // FIXME: double check that initialization is needed

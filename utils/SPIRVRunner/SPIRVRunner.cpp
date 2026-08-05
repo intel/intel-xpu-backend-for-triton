@@ -257,7 +257,7 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
   std::string kernel_name =
       kernel_ptr.get_info<sycl::info::kernel::function_name>();
 
-  [[maybe_unused]] uint32_t expected_num_params =
+  uint32_t kernel_num_args =
       kernel_ptr.get_info<sycl::info::kernel::num_args>();
 
   size_t global_range_x = static_cast<size_t>(triton_args.gridX) *
@@ -272,9 +272,21 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
   sycl::range<3> local_range(local_range_z, local_range_y, local_range_x);
   sycl::nd_range<3> parallel_work_size(global_range, local_range);
 
-  if (triton_args.shared_memory) {
-    expected_num_params -= 1;
-  }
+  // A kernel allocating its shared memory statically in the module makes the
+  // driver report that size, and takes no shared memory argument. A kernel with
+  // a dynamic allocation (compiled with TRITON_INTEL_DYNAMIC_SHARED_MEMORY=1 or
+  // by an older Triton, or using a partitioned shared layout) reports 0 and
+  // takes a trailing shared memory pointer instead, which the JSON argument
+  // list does not describe.
+  ze_kernel_properties_t kernel_props{};
+  kernel_props.stype = ZE_STRUCTURE_TYPE_KERNEL_PROPERTIES;
+  gpuAssert(zeKernelGetProperties(
+      sycl::get_native<sycl::backend::ext_oneapi_level_zero>(kernel_ptr),
+      &kernel_props));
+  const bool bind_shared_memory =
+      triton_args.shared_memory != 0 && kernel_props.localMemSize == 0;
+  [[maybe_unused]] uint32_t expected_num_params =
+      kernel_num_args - (bind_shared_memory ? 1 : 0);
   int tensorIdx = 0;
   uint32_t narg = 0;
   // Submit the imported kernel.
@@ -301,7 +313,7 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
       // profile scratch
       cgh.set_arg(narg++, nullptr);
     }
-    if (triton_args.shared_memory) {
+    if (bind_shared_memory) {
       using share_mem_t = sycl::local_accessor<int8_t, 1>;
       share_mem_t local_buffer = share_mem_t(triton_args.shared_memory, cgh);
       cgh.set_arg(narg, local_buffer);

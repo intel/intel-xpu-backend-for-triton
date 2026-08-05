@@ -428,8 +428,8 @@ TEST_F(SpatialReuseAnalysisTest, DescriptorGatherOpOverload) {
   BlockArgument xOffsets = block->getArgument(1);
   BlockArgument yOffset = block->getArgument(2);
 
-  auto gatherOp = DescriptorGatherOp::create(*builder, builder->getUnknownLoc(),
-                                             resultTy, desc, xOffsets, yOffset);
+  auto gatherOp = mlir::triton::DescriptorGatherOp::create(
+      *builder, builder->getUnknownLoc(), resultTy, desc, xOffsets, yOffset);
 
   SpatialReuseAnalysis analysis(module);
   SmallVector<unsigned> opAxes = analysis.getWarpInvariantOutDims(gatherOp);

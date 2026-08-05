@@ -6,7 +6,6 @@ python/test/unit/language/test_core.py::test_dot3d[r".*-32-32-float16-float16"]@
 
 # https://github.com/intel/intel-xpu-backend-for-triton/issues/983
 python/test/unit/language/test_core.py::test_dot_max_num_imprecise_acc[r".*-128-128-256-256"]@regexp
-python/test/unit/language/test_block_pointer.py::test_block_ptr_matmul_no_scf
 python/test/unit/language/test_pipeliner.py::test_pipeline_matmul[True]
 
 # test_cast
@@ -66,3 +65,6 @@ python/test/unit/language/test_core.py::test_dot[1-64-128-128-4-False-False-none
 python/test/unit/language/test_core.py::test_dot[1-64-128-128-4-False-False-none-tf32-float32-float32-1-None1]
 python/test/unit/language/test_core.py::test_dot[1-128-128-64-4-False-False-chain-dot-ieee-float8e5-float32-1-None]
 python/test/unit/language/test_core.py::test_dot[1-128-128-64-4-False-False-chain-dot-ieee-float8e4nv-float32-1-None]
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/7391
+python/test/unit/language/test_core.py::test_atomic_poll_timeout[1-True]
+python/test/unit/language/test_core.py::test_atomic_poll_timeout[0-False]

@@ -647,7 +647,7 @@ void IntegerRangeAnalysis::visitRegionSuccessors(
                                        nonSuccessorLattices);
       };
 
-      if (successor.isParent()) {
+      if (successor.isOperation()) {
         if (!inputs.empty())
           firstIndex = cast<OpResult>(inputs.front()).getResultNumber();
         appendNonSuccessorInputs(branch->getResults());

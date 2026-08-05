@@ -5,7 +5,6 @@
 PYTHON ?= python3
 ROOT_DIR := $(realpath $(dir $(lastword $(MAKEFILE_LIST))))
 BUILD_DIR := $(shell PYTHONPATH="$(ROOT_DIR)/python" $(PYTHON) -c 'from build_helpers import get_cmake_dir; print(get_cmake_dir())')
-INSTALL_DIR ?= $(dir $(BUILD_DIR))install
 TRITON_OPT := $(BUILD_DIR)/bin/triton-opt
 PYTEST := $(PYTHON) -m pytest
 LLVM_BUILD_PATH ?= "$(ROOT_DIR)/.llvm-project/build"
@@ -43,12 +42,7 @@ test-unit: all
 
 .PHONY: test-plugins
 test-plugins: all
-	TRITON_PLUGIN_PATHS=python/triton/plugins/libTritonPluginsTestLib.so \
-		$(PYTEST) -vvv python/test/unit/plugins/test_plugin.py
-	TRITON_PLUGIN_PATHS=python/triton/plugins/libMLIRDialectPlugin.so \
-		$(PYTEST) -vvv python/test/unit/plugins/test_dialect_plugin.py
-	TRITON_PLUGIN_PATHS=python/triton/plugins/libMLIRDialectPlugin.so \
-		$(PYTEST) -s -vvv python/test/unit/plugins/custom_ops.py
+	$(PYTEST) -vvv python/test/unit/plugins
 
 .PHONY: test-gluon
 test-gluon: all
@@ -70,7 +64,7 @@ test-microbenchmark: all
 .PHONY: test-interpret
 test-interpret: all
 	cd python/test/unit && TRITON_INTERPRET=1 $(PYTEST) -n 16 -m interpreter cuda language/test_core.py language/test_standard.py \
-		language/test_random.py language/test_block_pointer.py language/test_subprocess.py language/test_line_info.py \
+		language/test_random.py language/test_subprocess.py language/test_line_info.py \
 		language/test_tuple.py runtime/test_launch.py runtime/test_autotuner.py::test_kwargs[False] \
 		../../tutorials/06-fused-attention.py::test_op --device=cpu
 
@@ -118,17 +112,10 @@ dev-install: dev-install-requires dev-install-triton
 .NOPARALLEL: dev-install-llvm
 dev-install-llvm:
 	LLVM_BUILD_PATH=$(LLVM_BUILD_PATH) scripts/build-llvm-project.sh
-	TRITON_BUILD_WITH_CLANG_LLD=1 TRITON_BUILD_WITH_CCACHE=0 \
-		LLVM_INCLUDE_DIRS=$(LLVM_BUILD_PATH)/include \
+	LLVM_INCLUDE_DIRS=$(LLVM_BUILD_PATH)/include \
 		LLVM_LIBRARY_DIR=$(LLVM_BUILD_PATH)/lib \
 		LLVM_SYSPATH=$(LLVM_BUILD_PATH) \
 	$(MAKE) dev-install
-
-# Package C++ artifacts
-
-.PHONY: install
-install:
-	cmake --install $(BUILD_DIR) --prefix $(INSTALL_DIR)
 
 # Updating lit tests
 

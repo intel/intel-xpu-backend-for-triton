@@ -68,6 +68,12 @@ static cl::opt<bool> ExpandSubByteBitwiseAnd(
     "expand-subbyte-bitwise-and",
     llvm::cl::desc("widen sub-byte `and iN` through i32"), cl::init(false));
 
+static cl::opt<bool> ExpandSubByteVectorBitcast(
+    "expand-subbyte-vector-bitcast",
+    llvm::cl::desc("rewrite `bitcast <K x i1> to <M x iN>` fed to "
+                   "extractelement + icmp onto the source i1 lanes"),
+    cl::init(false));
+
 namespace {
 static std::function<Error(Module *)> makeOptimizingPipeline() {
   return [](Module *m) -> Error {
@@ -91,6 +97,8 @@ static std::function<Error(Module *)> makeOptimizingPipeline() {
       mpm.addPass(ExpandSubByteBitReversePass());
     if (ExpandSubByteBitwiseAnd)
       mpm.addPass(ExpandSubByteBitwiseAndPass());
+    if (ExpandSubByteVectorBitcast)
+      mpm.addPass(ExpandSubByteVectorBitcastPass());
     llvm::FunctionPassManager fpm;
     if (BreakStructPhiNodes)
       fpm.addPass(BreakStructPhiNodesPass());

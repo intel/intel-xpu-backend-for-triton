@@ -9,6 +9,7 @@
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/MathExtras.h"
 
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
@@ -140,7 +141,7 @@ struct LoadStoreConversionBase {
       : targetInfo(targetInfo), axisAnalysisPass(axisAnalysisPass),
         strideAnalysis(strideAnalysis) {}
 
-  int getStride(Value ptr, unsigned dim) const {
+  int64_t getStride(Value ptr, unsigned dim) const {
     triton::intel::StrideInfo *strideInfo = strideAnalysis.getStrideInfo(ptr);
     if (strideInfo) {
       const auto &stride = strideInfo->getStride();
@@ -479,16 +480,6 @@ struct LoadStoreConversionBase {
   }
 
   // Convert Triton cache modifier to Intel GEN load cache control enum.
-  //
-  // Explicit cache modifiers (cg/cv/ca) always win. When no cache modifier is
-  // set, fall back to the frontend-provided eviction policy hint (e.g.
-  // inductor's `eviction_policy='evict_last'`) and route it to the closest
-  // LSC cache mode:
-  //   EVICT_FIRST -> L1IAR_L3C  (invalidate-after-read: data is used once;
-  //                              free the L1 line immediately after delivery)
-  //   EVICT_LAST  -> L1C_L3C    (cache at all levels: keep the line warm for
-  //                              anticipated reuse)
-  //   NORMAL      -> DEFAULT    (let the hardware decide)
   template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
                                  OpType, LoadOp, DescriptorLoadOp>::value>>
   TritonGEN::LoadCacheControl tritonToIntelCacheModifier(OpType &op) const {
@@ -502,14 +493,6 @@ struct LoadStoreConversionBase {
      **/
     switch (cacheModifier) {
     case CacheModifier::NONE:
-      switch (op.getEvict()) {
-      case EvictionPolicy::EVICT_FIRST:
-        return TritonGEN::LoadCacheControl::L1IAR_L3C;
-      case EvictionPolicy::EVICT_LAST:
-        return TritonGEN::LoadCacheControl::L1C_L3C;
-      case EvictionPolicy::NORMAL:
-        break;
-      }
       return TritonGEN::LoadCacheControl::DEFAULT;
     case CacheModifier::CG:
       return TritonGEN::LoadCacheControl::L1UC_L3C;
@@ -550,9 +533,8 @@ struct LoadStoreConversionBase {
     }
   }
 
-  template <typename OpType,
-            typename = std::enable_if_t<llvm::is_one_of<
-                OpType, LoadOp, StoreOp, DescriptorLoadOp>::value>>
+  template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
+                                 OpType, LoadOp, StoreOp>::value>>
   bool getNonTemporalFlag(OpType op) const {
     switch (op.getCache()) {
     case triton::CacheModifier::CG:
@@ -560,16 +542,6 @@ struct LoadStoreConversionBase {
     case triton::CacheModifier::CV:
       return true;
     case triton::CacheModifier::CA:
-      return false;
-    case triton::CacheModifier::NONE:
-      // No explicit cache modifier: derive from eviction policy hint.
-      // EVICT_FIRST implies single-use; map to nontemporal so IGC bypasses L1.
-      // EVICT_LAST implies reuse; keep the default (temporal) behavior.
-      // Only load ops carry eviction policy; stores always return false here.
-      if constexpr (std::is_same_v<OpType, LoadOp> ||
-                    std::is_same_v<OpType, DescriptorLoadOp>)
-        return op.getEvict() == triton::EvictionPolicy::EVICT_FIRST;
-      return false;
     default:
       return false;
     }
@@ -580,6 +552,14 @@ protected:
   triton::intel::ModuleStrideAnalysis &strideAnalysis;
   const triton::intel::TargetInfo &targetInfo;
 };
+
+/// The 2D-block-IO HW encodes base_width / base_height / base_pitch in
+/// **24 bits** on the wire (the TritonGEN→LLVM lowering subtracts 1 before
+/// passing the field, so the user-facing max is 2^24; anything larger
+/// wraps mod 2^24 and produces a garbage surface). See
+/// verify2DBlockAddressPayloadRestriction() in TritonGEN which enforces
+/// the same 24-bit bound on already-emitted ops.
+static constexpr int64_t kMax2DBlockField = int64_t(1) << 24;
 
 struct BlockIOConversionBase : public LoadStoreConversionBase {
   explicit BlockIOConversionBase(
@@ -629,8 +609,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
   /// Return the pitch (in bytes) for an op annotated by the 1D→2D reshape.
   /// The stride attribute is in elements; this converts to bytes.
   /// Returns std::nullopt if the attribute is absent, non-positive, or if
-  /// the resulting byte pitch does not fit in a signed 32-bit integer (the
-  /// HW pitch operand is i32).
+  /// the resulting byte pitch exceeds the HW 24-bit pitch field.
   template <typename OpTy>
   static std::optional<int64_t>
   getAnnotated1DReshapePitch(OpTy op, unsigned elemSizeInBits) {
@@ -642,7 +621,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     if (strideElems <= 0)
       return std::nullopt;
     int64_t pitchBytes = strideElems * elemSizeInBits / 8;
-    if (pitchBytes > std::numeric_limits<int32_t>::max())
+    if (pitchBytes > kMax2DBlockField)
       return std::nullopt;
     return pitchBytes;
   }
@@ -715,17 +694,21 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     Location loc = ptr.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    int stride = getStride(ptr, dim);
+    int64_t stride = getStride(ptr, dim);
     // If the stride is 0, we assume a minimum pitch of 64 bytes.
-    constexpr int MIN_PITCH = 64;
+    constexpr int64_t MIN_PITCH = 64;
     if (stride == 0)
       return b.i32_val(MIN_PITCH);
 
     if (stride > 0) {
-      unsigned pitch = (unsigned)stride * elemSizeInBits / 8;
+      int64_t pitch = stride * elemSizeInBits / 8;
       if (pitch < MIN_PITCH)
         return nullptr; // unsupported pitch
-      return b.i32_val(pitch);
+      // The HW pitch field is 24 bits (value encoded as value-1); bail
+      // rather than silently truncating.
+      if (pitch > kMax2DBlockField)
+        return nullptr;
+      return b.i32_val(static_cast<int32_t>(pitch));
     }
     assert(stride == -1 && "invalid stride < 0");
     return nullptr;
@@ -959,11 +942,11 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
 
   static FailureOr<LinearLayout> computeTransposeShuffleMapping(
       RankedTensorType tensorType, const LinearLayout &regMapping,
-      int64_t numElemsPerLoad, unsigned numPackedVals, unsigned tileHeight,
+      int64_t numElemsPerLoad, const BlockIOTileSizeInfo &sizeInfo,
       unsigned threadsPerWarp, bool hasDPASOperandType, MLIRContext *ctx) {
     return triton::gpu::intel::computeTransposeShuffleMapping(
-        tensorType, regMapping, numElemsPerLoad, numPackedVals, tileHeight,
-        threadsPerWarp, hasDPASOperandType, ctx);
+        tensorType, regMapping, numElemsPerLoad, sizeInfo, threadsPerWarp,
+        hasDPASOperandType, ctx);
   }
 
   /// Build a Block2DLoadConfig from a validated BlockIOTileSizeInfo.
@@ -1004,9 +987,14 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
         mlir::ceil(sizeInfo.tileHeight * sizeInfo.tileWidth *
                        static_cast<int>(cfg.numPackedVals) * sizeInfo.vBlocks,
                    static_cast<int>(threadsPerWarp));
-    cfg.numValuesPerLoad = mlir::ceil(static_cast<int>(cfg.numElemsPerLoad),
-                                      static_cast<int>(cfg.numPackedVals));
-    cfg.packedType = IntegerType::get(ctx, cfg.packedElemSizeInBits);
+    // For the VNNI hardware format, use the packed i32 type as the load result
+    // type. Note: the cfg.numPackedVals is still 1 for VNNI format which it is
+    // not same as non-vnni packing.
+    cfg.numValuesPerLoad =
+        mlir::ceil(static_cast<unsigned>(cfg.numElemsPerLoad),
+                   sizeInfo.vnni ? (32 / elemSizeInBits) : cfg.numPackedVals);
+    cfg.packedType =
+        IntegerType::get(ctx, sizeInfo.vnni ? 32 : cfg.packedElemSizeInBits);
     cfg.load2DGenXType =
         LLVM::getVectorType(cfg.packedType, cfg.numValuesPerLoad);
     cfg.unpackedType = LLVM::getVectorType(eltTy, cfg.numElemsPerLoad);
@@ -1021,7 +1009,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     cfg.unpackedType = dpasCfg.unpackedType;
     cfg.load2DGenXType = dpasCfg.load2DGenXType;
     cfg.packedType = dpasCfg.packedType;
-    cfg.useVNNIFormat = dpasCfg.useVNNIFormat;
+    cfg.useVNNIFormat = sizeInfo.vnni || dpasCfg.useVNNIFormat;
     cfg.tileHeight = dpasCfg.tileHeight;
     cfg.tileWidth = dpasCfg.tileWidth;
     cfg.vBlocks = dpasCfg.vBlocks;
@@ -1033,8 +1021,8 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
         LinearLayout::identity1D(cfg.numElemsPerLoad, kRegister, kRegister);
     if (cfg.isTransposeRequired) {
       auto maybeShuffleMapping = computeTransposeShuffleMapping(
-          tensorType, cfg.regMapping, cfg.numElemsPerLoad, cfg.numPackedVals,
-          cfg.tileHeight, threadsPerWarp, !!cfg.packedDPASOperandType, ctx);
+          tensorType, cfg.regMapping, cfg.numElemsPerLoad, sizeInfo,
+          threadsPerWarp, !!cfg.packedDPASOperandType, ctx);
       assert(succeeded(maybeShuffleMapping) &&
              "validate2DBlockLoadTile should have rejected this configuration");
       cfg.shuffleMapping = *maybeShuffleMapping;
@@ -1242,6 +1230,55 @@ static TritonGEN::LoadCacheControl prefetchCacheControl(CacheModifier cm) {
   }
 }
 
+/// Narrow `v` to the i32 slot of a 2D-block-IO surface field measured in
+/// rows (base_height). Returns `Value()` when `v` folds to a value
+/// exceeding the HW's 24-bit field (see kMax2DBlockField). Callers should
+/// bail with `failure()` on null. Non-foldable (runtime) values pass
+/// through unchecked — the HW verifier catches invalid sizes for
+/// already-constant ops, but a runtime overflow is the caller's
+/// responsibility. Lower-bound (positivity / MIN_*) policy is left to
+/// callers. For byte-valued fields (pitch, base_width) use
+/// narrowSurfaceBytesOrNull instead.
+static Value narrowSurfaceRowsOrNull(ConversionPatternRewriter &rewriter,
+                                     Location loc, Value v) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  if (auto folded = triton::intel::getFoldedConstantValue(v)) {
+    if (*folded > kMax2DBlockField)
+      return Value();
+  }
+  return b.trunc(i32_ty, v);
+}
+
+/// Materialize `stride * elemBytes` as the i32 slot of a 2D-block-IO
+/// surface field measured in bytes (pitch or base_width). Returns
+/// `Value()` when the byte product folds to a value exceeding the HW's
+/// 24-bit field (see kMax2DBlockField). Callers should bail with
+/// `failure()` on null. Non-foldable (runtime) strides pass through
+/// unchecked — the HW pitch operand is i32 but only 24 bits are honored,
+/// so the caller is trusting the stride to fit at runtime; that matches
+/// getRuntimePitch()'s policy. Lower-bound (positivity / MIN_PITCH) policy
+/// is left to callers. For row-valued fields (base_height) use
+/// narrowSurfaceRowsOrNull instead.
+static Value narrowSurfaceBytesOrNull(ConversionPatternRewriter &rewriter,
+                                      Location loc, Value stride,
+                                      int64_t elemBytes) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  if (auto folded = triton::intel::getFoldedConstantValue(stride)) {
+    // elemBytes fits in a handful of bits (element sizes are ≤ 8 bytes),
+    // so the int64 product is safe from overflow.
+    int64_t product = *folded * elemBytes;
+    if (product > kMax2DBlockField)
+      return Value();
+  }
+  Value i64Stride = stride;
+  if (auto intTy = dyn_cast<IntegerType>(stride.getType())) {
+    if (intTy.getWidth() < 64)
+      i64Stride = b.sext(i64_ty, stride);
+  }
+  Value product = b.mul(i64Stride, b.i64_val(elemBytes));
+  return b.trunc(i32_ty, product);
+}
+
 /// Emit 2D block prefetch operations for a tiled prefetch.
 ///
 /// Converts base dimensions to bytes, determines vBlocks from element size,
@@ -1263,15 +1300,23 @@ static LogicalResult emit2DBlockPrefetchOps(
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   MLIRContext *ctx = rewriter.getContext();
 
-  // Convert baseWidth and rowStride to bytes and truncate to i32.
-  baseWidth = b.mul(baseWidth, b.i64_val(eltTy.getIntOrFloatBitWidth() / 8));
-  baseWidth = b.trunc(i32_ty, baseWidth);
+  // Convert baseWidth and rowStride to bytes and narrow to the HW's 24-bit
+  // surface field (see kMax2DBlockField), bailing out if a compile-time
+  // foldable byte pitch/base_width would exceed it. baseHeight is a raw row
+  // count with no multiply, but goes through the same 24-bit guard.
+  int64_t elemBytes = eltTy.getIntOrFloatBitWidth() / 8;
+  Value baseWidthI32 = narrowSurfaceBytesOrNull(rewriter, loc, baseWidth,
+                                                /*elemBytes=*/elemBytes);
+  Value baseHeightI32 = narrowSurfaceRowsOrNull(rewriter, loc, baseHeight);
+  if (!baseWidthI32 || !baseHeightI32)
+    return failure();
+  baseWidth = baseWidthI32;
+  baseHeight = baseHeightI32;
 
-  baseHeight = b.trunc(i32_ty, baseHeight);
-
-  Value rowStrideInBytes =
-      b.mul(rowStride, b.i64_val(eltTy.getIntOrFloatBitWidth() / 8));
-  rowStrideInBytes = b.trunc(i32_ty, rowStrideInBytes);
+  Value rowStrideInBytes = narrowSurfaceBytesOrNull(rewriter, loc, rowStride,
+                                                    /*elemBytes=*/elemBytes);
+  if (!rowStrideInBytes)
+    return failure();
 
   unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
   unsigned vBlocks = 1;
@@ -1528,7 +1573,7 @@ struct PrefetchOpConversion
       return failure();
 
     // If the stride is 0, we want to load only the first row.
-    int stride = getStride(op.getPtr(), rank - 2);
+    int64_t stride = getStride(op.getPtr(), rank - 2);
     Value baseHeight = b.i32_val(stride == 0 ? 1 : tileHeightInElem);
     Value baseWidth = b.i32_val(
         std::max(64u, vBlocks * tileWidthInElem * (elemSizeInBits / 8)));
@@ -1768,19 +1813,37 @@ struct PrefetchOpConversion
       return failure();
 
     // Row stride in elements (i64) -- emit2DBlockPrefetchOps converts to bytes.
-    int stride = getStride(op.getPtr(), rank - 2);
+    int64_t stride = getStride(op.getPtr(), rank - 2);
     if (stride < 0)
       return failure();
     Value rowStride = b.i64_val(stride);
 
     // Surface dimensions for the 2D block prefetch hardware.
-    // baseWidth must equal the row stride (surface width) because the HW
-    // computes addresses as base + y * pitch + x. Using the tile width would
-    // be wrong when pitch > tile width.
-    // baseHeight is the full logical tensor height (surface height), not the
-    // tile height, so the hardware's bounds checking spans the whole tensor.
-    Value baseWidth = b.i64_val(stride);
-    Value baseHeight = b.i64_val(tensorShape[rank - 2]);
+    Value baseWidth;
+    Value baseHeight;
+    if (stride == 0) {
+      // Broadcast row (M == 1): single row, real surface width, inflated pitch
+      // (see #7267). baseWidth stays the true extent so HW x-bounds checking is
+      // preserved; pitch gets headroom so it stays >= baseWidth after alignment
+      // widens baseWidth by up to 63 bytes. With baseHeight == 1, pitch never
+      // affects the address, so inflating it is free.
+      constexpr int64_t MIN_PITCH = 64;
+      constexpr int64_t ALIGNMENT_HEADROOM = 64;
+      int64_t surfaceWidthElems = tensorShape[rank - 1];
+      int64_t surfaceWidthBytes =
+          surfaceWidthElems * static_cast<int64_t>(elemSizeInBytes);
+      baseWidth = b.i64_val(surfaceWidthElems);
+      int64_t pitchBytes =
+          std::max<int64_t>(MIN_PITCH, surfaceWidthBytes + ALIGNMENT_HEADROOM);
+      pitchBytes = (pitchBytes + 15) & ~15;
+      rowStride = b.i64_val(pitchBytes / elemSizeInBytes);
+      baseHeight = b.i64_val(1);
+    } else {
+      // baseWidth is the row stride (surface width); baseHeight is the full
+      // tensor height so HW bounds checking spans the whole surface.
+      baseWidth = b.i64_val(stride);
+      baseHeight = b.i64_val(tensorShape[rank - 2]);
+    }
 
     // Offsets start at 0; per-warp offsets computed by emit2DBlockPrefetchOps.
     Value offsetBaseX = b.i32_val(0);
@@ -1792,10 +1855,11 @@ struct PrefetchOpConversion
     // slices would prefetch the same (x,y) surface), so bail out instead.
     SmallVector<Value> extraDimStrides, extraDimBaseOffsets;
     for (unsigned d = 0; d < rank - 2; ++d) {
-      int dimStride = getStride(op.getPtr(), d);
+      int64_t dimStride = getStride(op.getPtr(), d);
       if (dimStride <= 0)
         return failure();
-      extraDimStrides.push_back(b.i64_val(dimStride * elemSizeInBytes));
+      extraDimStrides.push_back(
+          b.i64_val(dimStride * static_cast<int64_t>(elemSizeInBytes)));
       extraDimBaseOffsets.push_back(b.i32_val(0));
     }
 
@@ -1969,13 +2033,15 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       vec = std::min<size_t>(vec, getMaskAlignment(mask));
 
     // Get the LLVM values for pointers
-    SmallVector<Value> ptrElems = unpackLLElements(loc, llPtr, rewriter);
+    SmallVector<Value> ptrElems =
+        unpackTensorElements(loc, llPtr, rewriter, ptr.getType());
     assert(ptrElems.size() == numElems);
 
     // Get the LLVM values for mask
     SmallVector<Value> maskElems;
     if (llMask) {
-      maskElems = unpackLLElements(loc, llMask, rewriter);
+      maskElems =
+          unpackTensorElements(loc, llMask, rewriter, op.getMask().getType());
       assert(maskElems.size() == numElems);
     }
 
@@ -1993,7 +2059,8 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       splatVal = constAttr.getSplatValue<APInt>().getSExtValue();
     }
     if (other) {
-      otherElems = unpackLLElements(loc, llOther, rewriter);
+      otherElems =
+          unpackTensorElements(loc, llOther, rewriter, other.getType());
     }
 
     // vectorized iteration through all the pointer/mask/other elements
@@ -2116,9 +2183,8 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       }
     } // end vec
 
-    Type llvmResultStructTy = typeConverter->convertType(op.getType());
-    Value resultStruct = packLLElements(loc, typeConverter, loadedVals,
-                                        rewriter, llvmResultStructTy);
+    Value resultStruct = packTensorElements(loc, typeConverter, loadedVals,
+                                            rewriter, op.getType());
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
@@ -2310,7 +2376,7 @@ struct DescriptorLoadOpConversion
       auto createLoadWithAttrs = [&]() {
         return SmallVector<Value>{b.load(retTy, addrElem, alignment,
                                          /*isVolatile=*/false,
-                                         getNonTemporalFlag(op))};
+                                         /*isNonTemporal=*/false)};
       };
 
       Value ret;
@@ -2381,9 +2447,8 @@ struct DescriptorLoadOpConversion
       }
     } // end vec
 
-    Type llvmResultStructTy = typeConverter->convertType(op.getType());
-    Value resultStruct = packLLElements(loc, typeConverter, loadedVals,
-                                        rewriter, llvmResultStructTy);
+    Value resultStruct = packTensorElements(loc, typeConverter, loadedVals,
+                                            rewriter, op.getType());
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
@@ -2456,7 +2521,7 @@ struct DescriptorStoreOpConversion
                                              perElementDims, blockLevelDims);
 
     // Unpack the value elements
-    auto valueElems = unpackLLElements(loc, llValue, rewriter);
+    auto valueElems = unpackTensorElements(loc, llValue, rewriter, valueTy);
     assert(ptrElems.size() == valueElems.size());
 
     // NOTE: DescriptorStoreOp does not have a mask operand.
@@ -2590,6 +2655,13 @@ struct DescriptorStoreOpToBlockIOConversion
     if (!isDescriptorBlockIOCandidate(op))
       return failure();
 
+    // Get source tensor type and encoding.
+    auto tensorType = cast<RankedTensorType>(op.getSrc().getType());
+
+    // FIXME: Support rank > 2 by iterating over batch dimensions.
+    if (tensorType.getRank() != 2)
+      return failure();
+
     // Read memory layout from block_io attribute (set by
     // MaterializeBlockPointer).
     StringRef blockIOName = TritonIntelGPUDialect::getBlockIOAttrName();
@@ -2599,9 +2671,6 @@ struct DescriptorStoreOpToBlockIOConversion
         "block_io attribute required; checked by isDescriptorBlockIOCandidate");
     const bool memoryRowMajor = (blockIOAttr.getValue() == "row_major");
     assert(memoryRowMajor && "column_major descriptor store not yet supported");
-
-    // Get source tensor type and encoding.
-    auto tensorType = cast<RankedTensorType>(op.getSrc().getType());
     Attribute encoding = tensorType.getEncoding();
 
     // --- Linear layout and tile size ---
@@ -2630,7 +2699,9 @@ struct DescriptorStoreOpToBlockIOConversion
       return failure();
 
     auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
-          isTransposeRequired, regPackedBases] = std::move(sizeInfo);
+          isTransposeRequired, useVNNIFormat, regPackedBases] =
+        std::move(sizeInfo);
+    assert(!useVNNIFormat && "2D block store does not support VNNI");
     unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
 
     Location loc = op.getLoc();
@@ -2667,20 +2738,26 @@ struct DescriptorStoreOpToBlockIOConversion
 
     // --- Shapes (base width / height for 2D block IO payload) ---
     // TensorDesc carries shape as i64 values. The 2D block IO payload
-    // expects baseWidth in bytes and baseHeight in elements.
+    // expects baseWidth in bytes and baseHeight in elements. Both are
+    // narrowed to the HW's 24-bit surface field (see kMax2DBlockField),
+    // so a compile-time-foldable value exceeding that limit bails the
+    // pattern out rather than silently corrupting the surface descriptor.
     Value shapeRow = desc.shapes[descRowDim]; // i64
     Value shapeCol = desc.shapes[descColDim]; // i64
     Value baseWidth =
-        b.trunc(i32_ty, b.mul(shapeCol, b.i64_val(elemSizeInBits / 8)));
-    Value baseHeight = b.trunc(i32_ty, shapeRow);
+        narrowSurfaceBytesOrNull(rewriter, loc, shapeCol,
+                                 /*elemBytes=*/elemSizeInBits / 8);
+    Value baseHeight = narrowSurfaceRowsOrNull(rewriter, loc, shapeRow);
 
     // --- Pitch (row stride in bytes) ---
     // TODO: DescriptorStoreOp does not expose a "memory order" attribute, so
     // we always use the row-major stride dimension. Once a memory order
     // attribute is added, this should be adjusted.
     Value strideForPitch = desc.strides[descRowDim]; // i64
-    Value pitch =
-        b.trunc(i32_ty, b.mul(strideForPitch, b.i64_val(elemSizeInBits / 8)));
+    Value pitch = narrowSurfaceBytesOrNull(rewriter, loc, strideForPitch,
+                                           /*elemBytes=*/elemSizeInBits / 8);
+    if (!baseWidth || !baseHeight || !pitch)
+      return failure();
 
     // --- Offsets ---
     // Unlike block pointers which store offsets in the struct, tensor
@@ -2692,7 +2769,7 @@ struct DescriptorStoreOpToBlockIOConversion
 
     // --- Get the LLVM values for store values ---
     SmallVector<Value> valElems =
-        unpackLLElements(loc, adaptor.getSrc(), rewriter);
+        unpackTensorElements(loc, adaptor.getSrc(), rewriter, tensorType);
     assert(valElems.size() == numElems &&
            "the number of store values does not match the number of elements");
 
@@ -2871,7 +2948,7 @@ struct StoreOpToBlockIOConversion
       sizeInfo = BlockIOTileSizeInfo(height, width, /*numElemPerPackedVal=*/1,
                                      /*vBlocks=*/1, /*rowDim=*/0,
                                      /*colDim=*/rank - 1, /*transpose=*/false,
-                                     std::move(regPackBases));
+                                     /*vnni=*/false, std::move(regPackBases));
       // The reshape path bypasses getBlockIOTileSize (and thus
       // validate2DBlockStoreTile), so apply the HW address payload restriction
       // here; vBlocks and transpose are already fixed (1 / false) above.
@@ -2892,7 +2969,9 @@ struct StoreOpToBlockIOConversion
     }
 
     auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
-          isTransposeRequired, regPackedBases] = std::move(sizeInfo);
+          isTransposeRequired, useVNNIFormat, regPackedBases] =
+        std::move(sizeInfo);
+    assert(!useVNNIFormat && "2D block store does not support VNNI");
     unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
 
     Location loc = op.getLoc();
@@ -2907,7 +2986,8 @@ struct StoreOpToBlockIOConversion
     unsigned numElems = getTotalElemsPerThread(tensorType);
 
     // Get the LLVM values for pointers
-    SmallVector<Value> ptrElems = unpackLLElements(loc, llPtr, rewriter);
+    SmallVector<Value> ptrElems =
+        unpackTensorElements(loc, llPtr, rewriter, op.getPtr().getType());
     assert(ptrElems.size() == numElems &&
            "the number of pointer values is not matched with the number of "
            "elements");
@@ -2916,7 +2996,8 @@ struct StoreOpToBlockIOConversion
     Value llMask = adaptor.getMask();
     // Get the LLVM values for mask
     if (llMask) {
-      maskElems = unpackLLElements(loc, llMask, rewriter);
+      maskElems =
+          unpackTensorElements(loc, llMask, rewriter, op.getMask().getType());
       assert(maskElems.size() == numElems &&
              "the number of mask values is not matched with the number of "
              "elements");
@@ -2940,15 +3021,20 @@ struct StoreOpToBlockIOConversion
         // It must be a store height=1 tile. We can set the pitch to an
         // arbitrary value since the row offset is always 0, as long as we can
         // satisfy the HW address payload restriction for the given tile width
-        // and element size. To keep it simple, we can just set the pitch to
-        // surface width * element size to avoid issue pitch < base_width caused
-        // by the compensation of the base address alignment.
+        // and element size. Account for the downstream 64-byte alignment
+        // compensation (up to 63 bytes added to base_width) and the umax(64)
+        // floor so that pitch >= adjusted base_width is always satisfied.
         if (tileHeight != 1)
           return failure();
         constexpr int64_t MIN_PITCH = 64;
-        int64_t surfaceWidth = tensorType.getDimSize(colDim);
-        pitch =
-            b.i32_val(std::max(MIN_PITCH, surfaceWidth * elemSizeInBits / 8));
+        constexpr int64_t MAX_ALIGN_OVERHEAD = 63;
+        int64_t surfaceWidthBytes =
+            tensorType.getDimSize(colDim) * elemSizeInBits / 8;
+        int64_t maxAdjustedWidth =
+            std::max(MIN_PITCH, surfaceWidthBytes) + MAX_ALIGN_OVERHEAD;
+        // Pitch must be a multiple of 16 bytes.
+        pitch = b.i32_val(
+            llvm::alignTo(std::max(MIN_PITCH, maxAdjustedWidth), int64_t(16)));
       } else {
         pitch = getPitch(rewriter, ptr, elemSizeInBits, rowDim);
       }
@@ -2959,8 +3045,8 @@ struct StoreOpToBlockIOConversion
     Value offsetBaseY = b.i32_val(0);
 
     // Get the LLVM values for store values
-    SmallVector<Value> valElems =
-        unpackLLElements(loc, adaptor.getValue(), rewriter);
+    SmallVector<Value> valElems = unpackTensorElements(
+        loc, adaptor.getValue(), rewriter, op.getValue().getType());
     assert(valElems.size() == numElems &&
            "the number of store values does not match the number of elements");
 
@@ -3113,17 +3199,25 @@ struct StoreOpConversion
     Type valueElemTy =
         typeConverter->convertType(getElementTypeOrSelf(valueTy));
     unsigned vec = getVectorSize(hasSupport256bLoadStore(op), ptr);
-    if (llMask)
-      vec = std::min<size_t>(vec, getMaskAlignment(op.getMask()));
+    // Statically-provable alignment of the mask (i.e. the mask is proven
+    // constant over blocks of this many elements). Unlike vec, this is no
+    // longer used to shrink the vectorization width: even when the mask
+    // isn't statically uniform across a vec-group, we still try a single
+    // wide store gated on a dynamic AND of the group's mask elements,
+    // falling back to the exact per-element behavior otherwise (see below).
+    unsigned maskAlignment = llMask ? getMaskAlignment(op.getMask()) : vec;
 
     Value llPtr = adaptor.getPtr();
-    SmallVector<Value> ptrElems = unpackLLElements(loc, llPtr, rewriter);
+    SmallVector<Value> ptrElems =
+        unpackTensorElements(loc, llPtr, rewriter, ptr.getType());
     SmallVector<Value> maskElems;
     if (llMask)
-      maskElems = unpackLLElements(loc, llMask, rewriter);
+      maskElems =
+          unpackTensorElements(loc, llMask, rewriter, op.getMask().getType());
 
     Value llValue = adaptor.getValue();
-    auto valueElems = unpackLLElements(loc, llValue, rewriter);
+    auto valueElems =
+        unpackTensorElements(loc, llValue, rewriter, op.getValue().getType());
     assert(ptrElems.size() == valueElems.size());
     assert(!maskElems.size() ||
            valueElems.size() == maskElems.size() && "Mask size mismatch");
@@ -3136,6 +3230,30 @@ struct StoreOpConversion
     const size_t dtsize =
         std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);
     const size_t valueElemNBits = dtsize * 8;
+
+    // Widens an i1 element to i8 (stores don't support sub-byte types) and
+    // bitcasts it to the store's element type.
+    auto toElemTy = [&](Value elem) {
+      if (elem.getType().isInteger(1))
+        elem = b.sext(i8_ty, elem);
+      return b.bitcast(elem, valueElemTy);
+    };
+
+    // Dispatches a (possibly predicated) store of `value` to `addr`: an
+    // unconditional store if `pred` is null, a `TritonGEN::PredicatedStoreOp`
+    // if predicated instructions are available for `op`, or a branch-guarded
+    // plain store (via `storeFn`) otherwise.
+    auto emitPredicatedStore = [&](Value pred, Value addr, Value value,
+                                   auto storeFn) {
+      if (!pred)
+        (void)storeFn();
+      else if (canUsePredicatedInstructions(op)) {
+        auto cacheModifier = tritonToIntelCacheModifier(op);
+        TritonGEN::PredicatedStoreOp::create(rewriter, loc, addr, value, pred,
+                                             cacheModifier);
+      } else
+        LLVM::intel::createPredicatedBlock(rewriter, loc, pred, storeFn);
+    };
 
     unsigned elemsPerThread = getTotalElemsPerThread(valueTy);
     const int numVecs = elemsPerThread / vec;
@@ -3168,10 +3286,7 @@ struct StoreOpConversion
         for (size_t elemIdx = 0; elemIdx < wordNElems; ++elemIdx) {
           const size_t elemOffset = vecStart + wordIdx * wordNElems + elemIdx;
           assert(elemOffset < valueElems.size());
-          Value elem = valueElems[elemOffset];
-          if (elem.getType().isInteger(1))
-            elem = b.sext(i8_ty, elem);
-          elem = b.bitcast(elem, valueElemTy);
+          Value elem = toElemTy(valueElems[elemOffset]);
 
           llWord = b.insert_element(wordTy, llWord, elem, b.i32_val(elemIdx));
         }
@@ -3179,12 +3294,6 @@ struct StoreOpConversion
         std::string constraint =
             (width == 64) ? "l" : ((width == 32) ? "r" : "c");
         asmArgs.emplace_back(llWord, constraint);
-      }
-
-      Value maskVal = threadPred;
-      if (maskElems.size() > 0) {
-        auto mask = maskElems[vecStart];
-        maskVal = maybeAnd(rewriter, loc, threadPred, mask);
       }
 
       auto vecTy = vec_ty(valArgTy, nWords);
@@ -3206,15 +3315,55 @@ struct StoreOpConversion
         return ArrayRef<Value>();
       };
 
-      if (!maskVal)
-        auto _ = createStoreWithAttrs();
-      else if (canUsePredicatedInstructions(op)) {
-        auto cacheModifier = tritonToIntelCacheModifier(op);
-        TritonGEN::PredicatedStoreOp::create(rewriter, loc, addrElem, vecWord,
-                                             maskVal, cacheModifier);
-      } else
-        LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal,
-                                           createStoreWithAttrs);
+      // Emits the exact single-element fallback that today's code emits when
+      // vec == 1, applied to a single lane `i` of the current group. Used
+      // both for the statically-uniform-mask case (vec == 1 always falls
+      // here) and as the "slow" per-element arm when the mask isn't
+      // statically uniform across the whole group.
+      auto storeSingleElem = [&](size_t i) {
+        Value elem = toElemTy(valueElems[vecStart + i]);
+
+        Value addrElemI =
+            b.bitcast(ptrElems[vecStart + i], ptr_ty(ctx, 1 /*global*/));
+        uint32_t alignmentI = dtsize;
+        auto createSingleStoreWithAttrs = [&]() {
+          bool isVolatile = false;
+          b.store(elem, addrElemI, alignmentI, isVolatile,
+                  getNonTemporalFlag(op));
+          return ArrayRef<Value>();
+        };
+
+        Value predI = threadPred;
+        if (maskElems.size() > 0)
+          predI = maybeAnd(rewriter, loc, threadPred, maskElems[vecStart + i]);
+
+        emitPredicatedStore(predI, addrElemI, elem, createSingleStoreWithAttrs);
+      };
+
+      if (maskElems.empty() || maskAlignment >= vec) {
+        // Either unmasked, or the mask is statically provably uniform across
+        // this whole group: behavior identical to before this change.
+        Value maskVal = threadPred;
+        if (maskElems.size() > 0)
+          maskVal = maybeAnd(rewriter, loc, threadPred, maskElems[vecStart]);
+
+        emitPredicatedStore(maskVal, addrElem, vecWord, createStoreWithAttrs);
+      } else {
+        // The mask isn't statically uniform across the group. Try a single
+        // wide store gated on a dynamic AND of the group's mask elements
+        // (the common case away from boundaries); otherwise fall back to
+        // the exact per-element behavior, preserving correctness.
+        Value groupMask = maskElems[vecStart];
+        for (size_t i = 1; i < vec; ++i)
+          groupMask = b.and_(groupMask, maskElems[vecStart + i]);
+        Value fastMaskVal = maybeAnd(rewriter, loc, threadPred, groupMask);
+
+        LLVM::intel::createTwoArmedPredicatedBlock(
+            rewriter, loc, fastMaskVal, createStoreWithAttrs, [&]() {
+              for (size_t i = 0; i < vec; ++i)
+                storeSingleElem(i);
+            });
+      }
     }
 
     rewriter.eraseOp(op);
@@ -3259,9 +3408,12 @@ struct AtomicCASOpConversion
     Value llCmp = adaptor.getCmp();
     Value llVal = adaptor.getVal();
 
-    auto ptrElements = unpackLLElements(loc, llPtr, rewriter);
-    auto cmpElements = unpackLLElements(loc, llCmp, rewriter);
-    auto valElements = unpackLLElements(loc, llVal, rewriter);
+    auto ptrElements =
+        unpackTensorElements(loc, llPtr, rewriter, op.getPtr().getType());
+    auto cmpElements =
+        unpackTensorElements(loc, llCmp, rewriter, op.getCmp().getType());
+    auto valElements =
+        unpackTensorElements(loc, llVal, rewriter, op.getVal().getType());
 
     auto valueTy = op.getType();
     auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
@@ -3274,6 +3426,7 @@ struct AtomicCASOpConversion
     auto freeVarMasks = getFreeVariableMasks(valueTy);
     Value mask =
         emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
+    uint32_t regMask = freeVarMasks[str_attr("register")];
     SmallVector<Value> resultVals(elemsPerThread);
 
     MemSemantic memSem = op.getSem();
@@ -3286,6 +3439,12 @@ struct AtomicCASOpConversion
         TritonIntelGPUDialect::getSupport16BitAtomicsAttrName());
 
     for (size_t i = 0; i < elemsPerThread; ++i) {
+      if (auto canonicalStart = getCanonicalIndex(i, regMask);
+          canonicalStart != i) {
+        resultVals[i] = resultVals[canonicalStart];
+        continue;
+      }
+
       Value casPtr = ptrElements[i];
       Value casCmp = cmpElements[i];
       Value casVal = valElements[i];
@@ -3466,11 +3625,14 @@ struct AtomicRMWOpConversion
     Value llVal = adaptor.getVal();
     Value llMask = adaptor.getMask();
 
-    auto valElements = unpackLLElements(loc, llVal, rewriter);
-    auto ptrElements = unpackLLElements(loc, llPtr, rewriter);
+    auto valElements =
+        unpackTensorElements(loc, llVal, rewriter, op.getVal().getType());
+    auto ptrElements =
+        unpackTensorElements(loc, llPtr, rewriter, op.getPtr().getType());
     SmallVector<Value> maskElements;
     if (llMask)
-      maskElements = unpackLLElements(loc, llMask, rewriter);
+      maskElements =
+          unpackTensorElements(loc, llMask, rewriter, op.getMask().getType());
 
     auto valueTy = op.getType();
     auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
@@ -3495,6 +3657,7 @@ struct AtomicRMWOpConversion
     auto freeVarMasks = getFreeVariableMasks(valueTy);
     Value threadPred =
         emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
+    uint32_t regMask = freeVarMasks[str_attr("register")];
 
     bool support16BitAtomics = moduleOp->hasAttr(
         TritonIntelGPUDialect::getSupport16BitAtomicsAttrName());
@@ -3508,6 +3671,13 @@ struct AtomicRMWOpConversion
     auto vecTy = vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
     for (size_t i = 0; i < elemsPerThread; i += vec) {
+      if (auto canonicalStart = getCanonicalIndex(i, regMask);
+          canonicalStart != i) {
+        for (unsigned ii = 0; ii < vec; ++ii)
+          resultVals[i + ii] = resultVals[canonicalStart + ii];
+        continue;
+      }
+
       Value rmwVal = b.undef(vecTy);
       for (int ii = 0; ii < vec; ++ii) {
         Value iiVal = createIndexAttrConstant(
@@ -3854,10 +4024,9 @@ static LogicalResult lowerBlockLoad2D(
         ctx);
   }
 
-  Type llvmResultStructTy =
-      typeConverter->convertType(op->getResult(0).getType());
-  Value resultStruct = packLLElements(loc, typeConverter, unpackedLoadedVals,
-                                      rewriter, llvmResultStructTy);
+  Value resultStruct =
+      packTensorElements(loc, typeConverter, unpackedLoadedVals, rewriter,
+                         op->getResult(0).getType());
   rewriter.replaceOp(op, {resultStruct});
   return success();
 }
@@ -4086,7 +4255,7 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
       sizeInfo = BlockIOTileSizeInfo(height, width, /*numElemPerPackedVal=*/1,
                                      /*vBlocks=*/1, /*rowDim=*/0,
                                      /*colDim=*/rank - 1, /*transpose=*/false,
-                                     std::move(regPackBases));
+                                     /*vnni=*/false, std::move(regPackBases));
     } else {
       sizeInfo =
           getBlockIOTileSize<true>(*llEncoding, contiguousDim, elemSizeInBits,
@@ -4102,14 +4271,15 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
         tensorType, eltTy, sizeInfo, *llEncoding, threadsPerWarp, ctx);
 
     // Unpack pointer elements.
-    SmallVector<Value> ptrElems =
-        unpackLLElements(loc, adaptor.getPtr(), rewriter);
+    SmallVector<Value> ptrElems = unpackTensorElements(
+        loc, adaptor.getPtr(), rewriter, op.getPtr().getType());
 
     // Unpack mask/other elements.
     SmallVector<Value> maskElems;
     Value llMask = adaptor.getMask();
     if (llMask)
-      maskElems = unpackLLElements(loc, llMask, rewriter);
+      maskElems =
+          unpackTensorElements(loc, llMask, rewriter, op.getMask().getType());
 
     SmallVector<Value> otherElems;
     Value llOther = adaptor.getOther();
@@ -4133,7 +4303,8 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
               handleSplatValue(constAttr.getSplatValue<APInt>());
             });
       } else {
-        otherElems = unpackLLElements(loc, llOther, rewriter);
+        otherElems = unpackTensorElements(loc, llOther, rewriter,
+                                          op.getOther().getType());
       }
     }
 
@@ -4204,32 +4375,27 @@ prepareLocalAtomicScatterRMW(triton::gpu::LocalAtomicScatterRMWOp op, Value dst,
   auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
   auto smemObj =
       LLVM::getSharedMemoryObjectFromStruct(loc, dst, llvmElemTy, rewriter);
-  SmallVector<Value> idxValues = unpackLLElements(loc, indices, rewriter);
-  SmallVector<Value> values = unpackLLElements(loc, inputValues, rewriter);
+  SmallVector<Value> idxValues =
+      unpackUniqueTensorElements(loc, indices, rewriter);
+  SmallVector<Value> values =
+      unpackUniqueTensorElements(loc, inputValues, rewriter);
   SmallVector<Value> maskValues;
   if (mask)
-    maskValues = unpackLLElements(loc, mask, rewriter);
+    maskValues = unpackUniqueTensorElements(loc, mask, rewriter);
 
   LinearLayout regLayout = toLinearLayout(valuesTy);
   auto freeVarMasks = regLayout.getFreeVariableMasks();
   auto removeBroadcast = actionRemoveBroadcastedRegs(regLayout);
   Value threadPred =
       emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
-  LinearLayout activeRegLayout = regLayout;
-  if (!removeBroadcast.isIdentity()) {
-    activeRegLayout = removeBroadcast.apply(regLayout);
-    values = removeBroadcast.apply(values);
-    idxValues = removeBroadcast.apply(idxValues);
-    if (!maskValues.empty())
-      maskValues = removeBroadcast.apply(maskValues);
-  }
-  SmallVector<SmallVector<Value>> srcIndices =
-      emitIndices(loc, rewriter, targetInfo, activeRegLayout, valuesTy,
-                  /*withCTAOffset=*/true);
-
+  LinearLayout activeRegLayout = regLayout.removeZeroBasesAlongDim(
+      StringAttr::get(rewriter.getContext(), "register"));
+  auto offsetAndBlock =
+      computeBlockLocalOffsets(loc, memDescTy, activeRegLayout, idxValues,
+                               op.getAxis(), rewriter, targetInfo);
   SmallVector<Value> ptrs = llvm::map_to_vector(
-      computeLocalAddrs(loc, memDescTy, smemObj, llvmElemTy, idxValues,
-                        srcIndices, op.getAxis(), rewriter),
+      materializeLocalAddrs(loc, memDescTy, smemObj, llvmElemTy, offsetAndBlock,
+                            rewriter),
       [](const LocalSharedMemoryAddress &addr) { return addr.ptr; });
 
   return LocalAtomicScatterRMWInfo{valuesTy,        llvmElemTy, regLayout,
