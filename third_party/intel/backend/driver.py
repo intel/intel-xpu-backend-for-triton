@@ -741,6 +741,14 @@ class XPUDriver(DriverBase):
 
         dev_property = torch.xpu.get_device_capability(device)
 
+        # With an event-less launcher, PTI's default (Local) collection mode infers kernel
+        # completion from the application releasing the event, so it reads timestamps too
+        # early and reports near-zero GPU durations. Only the Level Zero v1 adapter is
+        # affected (the default on PVC and older); v2 (BMG and newer) is fine.
+        # setdefault, so an explicit choice by the user still wins.
+        if "Level-Zero V2" not in (dev_property.get("platform_name") or ""):
+            os.environ.setdefault("PTI_COLLECTION_MODE", "0")
+
         def update_device_arch(dev_property):
             if not (arch := knobs.intel.device_arch):
                 dirname = os.path.dirname(os.path.realpath(__file__))

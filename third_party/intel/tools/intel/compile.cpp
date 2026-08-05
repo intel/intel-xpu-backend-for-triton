@@ -7,6 +7,8 @@
 #include <level_zero/ze_api.h>
 #include <sycl/sycl.hpp>
 
+namespace syclex = sycl::ext::oneapi::experimental;
+
 // helpers to check for ze errors
 #define ZE_CHECK(ans) {{\
     gpuAssert((ans), __FILE__, __LINE__);\
@@ -178,12 +180,11 @@ int32_t {kernel_name}(sycl::queue &stream, {signature}) {{
         using share_mem_t = sycl::local_accessor<int8_t, 1>;
         share_mem_t local_buffer = share_mem_t({shared}, cgh);
         cgh.set_arg(num_params, local_buffer);
-        cgh.parallel_for(parallel_work_size, sycl_kernel);
-    }} else {{
-        cgh.parallel_for(parallel_work_size, sycl_kernel);
     }}
+    syclex::nd_launch(cgh, parallel_work_size, sycl_kernel);
   }};
-  stream.submit(cgf);
+  // Event-less submit: nothing here consumes the event.
+  syclex::submit(stream, cgf);
   stream.wait_and_throw();
   return 0;
 }}
