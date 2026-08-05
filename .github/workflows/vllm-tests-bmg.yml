@@ -8,6 +8,11 @@ on:
     - cron: "5 10 * * THU"
     - cron: "5 10 * * SUN"
 
+# Cancel in-progress runs for the same PR or schedule.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || 'ci' }}
+  cancel-in-progress: true
+
 jobs:
   tests:
     uses: ./.github/workflows/vllm-tests-reusable.yml

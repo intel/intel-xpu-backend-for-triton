@@ -733,7 +733,7 @@ class InterpreterBuilder:
         # This is fix for interpreter cases where for example int32 tensor is being passed
         # But unexpectedly int64 values are being returned causing
         # tl.store to write 8 bytes instead of 4 bytes which lead to silent data corruption
-        dummy_weights = np.ones_like(data.data, dtype=data.data.dtype)
+        dummy_weights = np.ones_like(data.data, dtype=np.int32)
 
         # force all masked elements to zero
         data = np.where(mask.data, data.data, np.zeros_like(data.data))
@@ -820,7 +820,14 @@ class InterpreterBuilder:
         if prefix:
             msg += f" {prefix}"
         if hex:
-            np.set_printoptions(formatter={'all': lambda x: f"0x{x:02x}"})
+
+            def _to_hex(x):
+                if isinstance(x, np.floating):
+                    return float(x).hex()
+                width = x.dtype.itemsize * 2
+                return f"0x{int(x):0{width}x}"
+
+            np.set_printoptions(formatter={'all': _to_hex})
         for value in values:
             print(msg + f" {value.data}")
         if hex:

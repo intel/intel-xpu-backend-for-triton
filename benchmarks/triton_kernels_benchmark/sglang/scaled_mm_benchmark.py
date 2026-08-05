@@ -1,6 +1,6 @@
 # From
-# https://github.com/sgl-project/sglang/blob/6d0364681c8b1abc132cc88f1bb0b7a8a352628f/test/srt/quant/test_triton_scaled_mm.py
-# https://github.com/sgl-project/sglang/blob/6d0364681c8b1abc132cc88f1bb0b7a8a352628f/python/sglang/srt/layers/quantization/fp8_kernel.py
+# https://github.com/sgl-project/sglang/blob/fdebc938f7f4d16fe6b9f55dcd9a767cf0899ea1/test/registered/quant/test_triton_scaled_mm.py
+# https://github.com/sgl-project/sglang/blob/fdebc938f7f4d16fe6b9f55dcd9a767cf0899ea1/python/sglang/kernels/ops/quantization/fp8_kernel.py
 import os
 from typing import Optional, List
 
@@ -10,7 +10,7 @@ import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
 
-from sglang.srt.layers.quantization.fp8_kernel import triton_scaled_mm
+from sglang.kernels.ops.quantization.fp8_kernel import triton_scaled_mm
 
 
 def is_weak_contiguous(x: torch.Tensor):
@@ -307,7 +307,7 @@ def get_scaled_mm_benchmark(
     supported_providers = {
         'triton': 'triton',
         'triton-td': 'triton-td',
-        'pytorch': 'pytorch-deqmm',
+        'pytorch': 'pytorch',
     }
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
@@ -340,7 +340,7 @@ def get_scaled_mm_benchmark(
         bias = (0.01 * torch.randn((M, N), dtype=out_dtype, device=device) if with_bias else None)
 
         def torch_fn():
-            return torch_scaled_mm(x, weight, scale_a, scale_b, bias)
+            return torch_scaled_mm(x, weight, scale_a=scale_a, scale_b=scale_b, out_dtype=out_dtype, bias=bias)
 
         # Use relaxed tolerances
         rtol = 0.15 if in_dtype == torch.int8 else 0.25
@@ -384,6 +384,12 @@ def get_scaled_mm_benchmark(
         return (gbps(mean_ms), gbps(max_ms), gbps(min_ms)), (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
 
     return benchmark
+
+
+def get_benchmark(providers_filter: Optional[list[str]] = None, is_fp8=False):
+    """CLI entry point: returns a Mark for the SGLang scaled_mm (int8/fp8) benchmark."""
+    plot_name = 'sglang-scaled-mm-' + ('fp8' if is_fp8 else 'int8') + '-performance'
+    return get_scaled_mm_benchmark(providers_filter=providers_filter, fp8=is_fp8, plot_name=plot_name)
 
 
 if __name__ == '__main__':

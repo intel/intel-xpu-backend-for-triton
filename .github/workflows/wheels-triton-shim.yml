@@ -39,7 +39,7 @@ jobs:
 
       - name: Sign wheels with Sigstore (keyless)
         # SHA-pinned for supply-chain safety; comment tracks the human-readable version.
-        uses: sigstore/gh-action-sigstore-python@a5caf349bc536fbef3668a10ed7f5cd309a4b53d # v3.2.0
+        uses: sigstore/gh-action-sigstore-python@790bc6befb9d733738f18d8f895854b453640ec9 # v3.5.0
         with:
           inputs: scripts/triton-shim/dist/*.whl
 

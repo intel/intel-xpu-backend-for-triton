@@ -34,7 +34,7 @@ public:
           dyn_cast<triton::gpu::DotOperandEncodingAttr>(dstType.getEncoding());
       if (!dstDotOp)
         return;
-      if (!cvtNeedsSharedMemory(srcType, dstType))
+      if (!cvtNeedsSharedMemory(cvtOp))
         return;
       auto srcOrder = triton::gpu::getOrder(srcType);
       auto rank = srcOrder.size(); // TODO: maybe we can use upstream code.
