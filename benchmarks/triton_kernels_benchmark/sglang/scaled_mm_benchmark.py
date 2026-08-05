@@ -307,7 +307,7 @@ def get_scaled_mm_benchmark(
     supported_providers = {
         'triton': 'triton',
         'triton-td': 'triton-td',
-        'pytorch': 'pytorch-deqmm',
+        'pytorch': 'pytorch',
     }
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
@@ -384,6 +384,12 @@ def get_scaled_mm_benchmark(
         return (gbps(mean_ms), gbps(max_ms), gbps(min_ms)), (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
 
     return benchmark
+
+
+def get_benchmark(providers_filter: Optional[list[str]] = None, is_fp8=False):
+    """CLI entry point: returns a Mark for the SGLang scaled_mm (int8/fp8) benchmark."""
+    plot_name = 'sglang-scaled-mm-' + ('fp8' if is_fp8 else 'int8') + '-performance'
+    return get_scaled_mm_benchmark(providers_filter=providers_filter, fp8=is_fp8, plot_name=plot_name)
 
 
 if __name__ == '__main__':
