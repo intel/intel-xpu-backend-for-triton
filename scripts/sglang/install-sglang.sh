@@ -227,4 +227,10 @@ pip install -e "$SGLANG_DIR/python"
 
 echo "**** SGLang installed successfully ****"
 
+if ! python -c 'import torchvision' 2>/dev/null; then
+  echo "**** WARNING: torchvision is not installed, any 'import sglang' will fail. ****" >&2
+  echo "**** WARNING: it ships with the PyTorch wheel set (scripts/install-pytorch.sh); ****" >&2
+  echo "**** WARNING: CI builds it from pytorch/.github/ci_commit_pins/vision.txt.     ****" >&2
+fi
+
 cd "$OLD_DIR"
