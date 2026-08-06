@@ -15,8 +15,6 @@ on:
         description: SGLang pin (commit hash), keep empty for default
         type: string
         default: ""
-  # Both schedules run through the sglang-benchmarks-{pvc,bmg}.yml wrappers, which
-  # build the benchmarks wheel from the run's commit first.
   workflow_call:
     inputs:
       runner_label:
@@ -24,8 +22,8 @@ on:
         type: string
       tag:
         description: Tag for benchmark results
-        # Empty default so the TAG fallback below can resolve pr-<n>/ci from the
-        # caller's event. A non-empty default would short-circuit that expression.
+        # Empty default, so the TAG expression below can still resolve pr-<n>/ci
+        # from the caller's event.
         type: string
         default: ""
       sglang_pin:
@@ -86,10 +84,8 @@ jobs:
         id: setup-pytorch
         uses: ./.github/actions/setup-pytorch
 
-      # Every benchmark here imports sglang, and sglang/srt/utils/common.py imports
-      # torchvision.io at module level. install-sglang.sh strips torch* from
-      # pyproject.toml, so torchvision has to be installed here - built from the
-      # PyTorch pin, because a PyPI wheel would pull in its own torch build.
+      # sglang imports torchvision.io at module level and install-sglang.sh strips
+      # torch* from its pyproject, so it has to be installed here, from the PyTorch pin.
       - name: Identify torchvision pin
         run: |
           echo "TORCHVISION_COMMIT_ID=$(<pytorch/.github/ci_commit_pins/vision.txt)" | tee -a "$GITHUB_ENV"

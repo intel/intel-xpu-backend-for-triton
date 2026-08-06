@@ -3,8 +3,6 @@ name: SGLang benchmarks, BMG
 permissions: read-all
 
 on:
-  # Explicit opt-in only: adding the label to a PR starts a run. There is no path
-  # based triggering, SGLang benchmarks are too expensive to run on every PR.
   pull_request:
     branches:
       - main
@@ -12,8 +10,8 @@ on:
   schedule:
     - cron: "0 11 * * *"
 
-# Adding any other label also starts a run whose jobs are all skipped. Give those a
-# separate lane so they cannot cancel a real run.
+# Runs from an unrelated label skip all jobs; keep them in a separate lane so they
+# cannot cancel a real run.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || 'ci' }}-${{ github.event.action == 'labeled' && github.event.label.name != 'run-sglang-benchmarks' && 'skip' || 'run' }}
   cancel-in-progress: true
