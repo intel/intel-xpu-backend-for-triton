@@ -34,7 +34,7 @@ jobs:
     needs: check-paths
     if: >-
       github.event_name == 'schedule' ||
-      needs.check-paths.outputs.benchmarks == 'true' ||
+      (github.event.action != 'labeled' && needs.check-paths.outputs.benchmarks == 'true') ||
       github.event.label.name == 'run-vllm-benchmarks'
     uses: ./.github/workflows/build-benchmarks-wheel.yml
     with:
@@ -45,7 +45,7 @@ jobs:
     if: >-
       always() && !cancelled() &&
       (github.event_name == 'schedule' ||
-       needs.check-paths.outputs.benchmarks == 'true' ||
+       (github.event.action != 'labeled' && needs.check-paths.outputs.benchmarks == 'true') ||
        github.event.label.name == 'run-vllm-benchmarks')
     uses: ./.github/workflows/vllm-benchmarks.yml
     with:
