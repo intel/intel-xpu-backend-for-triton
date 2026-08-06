@@ -3,49 +3,35 @@ name: SGLang benchmarks, PVC
 permissions: read-all
 
 on:
+  # Explicit opt-in only: adding the label to a PR starts a run. There is no path
+  # based triggering, SGLang benchmarks are too expensive to run on every PR.
   pull_request:
     branches:
       - main
-    types: [opened, synchronize, reopened, labeled]
+    types: [labeled]
   schedule:
     - cron: "0 11 * * *"
 
-# Give unrelated-label skip runs a separate lane so they cannot cancel a real run.
+# Adding any other label also starts a run whose jobs are all skipped. Give those a
+# separate lane so they cannot cancel a real run.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || 'ci' }}-${{ github.event.action == 'labeled' && github.event.label.name != 'run-sglang-benchmarks' && 'skip' || 'run' }}
   cancel-in-progress: true
 
 jobs:
-  check-paths:
-    runs-on: ubuntu-latest
-    outputs:
-      benchmarks: ${{ steps.check.outputs.changed }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - name: Check for SGLang benchmark changes
-        id: check
-        uses: ./.github/actions/check-path-changes
-        with:
-          patterns: '^(\.github/workflows/(sglang-benchmarks|build-benchmarks-wheel).*\.yml|\.github/actions/install-benchmarks/|benchmarks/triton_kernels_benchmark/sglang/|scripts/sglang/|\.github/pins/pytorch\.txt)'
-
   build-wheel:
-    needs: check-paths
     if: >-
       github.event_name == 'schedule' ||
-      (github.event.action != 'labeled' && needs.check-paths.outputs.benchmarks == 'true') ||
       github.event.label.name == 'run-sglang-benchmarks'
     uses: ./.github/workflows/build-benchmarks-wheel.yml
     with:
       python-version: "3.12"
 
   benchmarks:
-    needs: [check-paths, build-wheel]
+    needs: build-wheel
     if: >-
       always() && !cancelled() &&
       (github.event_name == 'schedule' ||
-       (github.event.action != 'labeled' && needs.check-paths.outputs.benchmarks == 'true') ||
        github.event.label.name == 'run-sglang-benchmarks')
     uses: ./.github/workflows/sglang-benchmarks.yml
     with:
