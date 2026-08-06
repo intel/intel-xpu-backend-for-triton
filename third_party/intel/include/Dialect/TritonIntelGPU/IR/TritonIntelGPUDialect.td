@@ -117,6 +117,12 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.is_lts";
     }
 
+    /// Get the name of the attribute holding the core clock rate in kHz, used
+    /// to convert cycles to nanoseconds.
+    static constexpr llvm::StringRef getCoreClockRateAttrName() {
+      return "ttig.core_clock_rate_khz";
+    }
+
     /// Get the name of the attribute used to indicate whether prefetching 256
     /// bytes is supported.
     static constexpr llvm::StringRef getSupportPrefetch256BAttrName() {
