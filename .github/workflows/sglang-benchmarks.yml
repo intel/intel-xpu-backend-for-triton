@@ -15,8 +15,8 @@ on:
         description: SGLang pin (commit hash), keep empty for default
         type: string
         default: ""
-  # The BMG schedule runs through the sglang-benchmarks-bmg.yml wrapper (which
-  # builds the branch benchmarks wheel first). This workflow keeps its own PVC schedule.
+  # Both schedules run through the sglang-benchmarks-{pvc,bmg}.yml wrappers, which
+  # build the benchmarks wheel from the run's commit first.
   workflow_call:
     inputs:
       runner_label:
@@ -32,9 +32,6 @@ on:
         description: SGLang pin (commit hash), keep empty for default
         type: string
         default: ""
-
-  schedule:
-    - cron: "0 11 * * *"
 
 permissions: read-all
 

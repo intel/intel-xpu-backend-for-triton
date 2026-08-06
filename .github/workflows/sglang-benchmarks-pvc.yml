@@ -1,4 +1,4 @@
-name: SGLang benchmarks, BMG
+name: SGLang benchmarks, PVC
 
 permissions: read-all
 
@@ -49,5 +49,5 @@ jobs:
        github.event.label.name == 'run-sglang-benchmarks')
     uses: ./.github/workflows/sglang-benchmarks.yml
     with:
-      runner_label: b580
+      runner_label: max1550
     secrets: inherit
