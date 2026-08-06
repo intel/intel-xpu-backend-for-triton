@@ -72,6 +72,31 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 
 // -----
 
+// CHECK: #[[$DPAS_B:.+]] = #ttig.dpas<{{.*}}warpsPerCTA = [1, 8]{{.*}}>
+#blocked = #ttg.blocked<{sizePerThread = [8, 4], threadsPerWarp = [8, 2], warpsPerCTA = [1, 8], order = [0, 1]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [8, 4], threadsPerWarp = [16, 1], warpsPerCTA = [1, 8], order = [0, 1]}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.min_sg_size" = 16 : i32, "ttig.support_subgroup_matrix_multiply_accumulate"} {
+  // CHECK-LABEL: chained_dot_operand_b
+  tt.func public @chained_dot_operand_b(
+    %arg0: tensor<64x128xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>,
+    %arg1: tensor<128x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>,
+    %arg2: tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked1}>>) -> tensor<128x64xf32, #blocked1> {
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #blocked>
+    %cst_1 = arith.constant dense<0.000000e+00> : tensor<128x64xf32, #blocked1>
+    // CHECK: tt.dot {{.*}} -> tensor<64x64xf32, #[[$DPAS_B]]>
+    %d = tt.dot %arg0, %arg1, %cst_0 {inputPrecision = 0 : i32, maxNumImpreciseAcc = 0 : i32} :
+      tensor<64x128xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<128x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<64x64xf32, #blocked>
+    %t = arith.truncf %d : tensor<64x64xf32, #blocked> to tensor<64x64xf16, #blocked>
+    %c = ttg.convert_layout %t : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked1}>>
+    // CHECK: tt.dot {{.*}} -> tensor<128x64xf32, #[[$DPAS_B]]>
+    %r = tt.dot %arg2, %c, %cst_1 {inputPrecision = 0 : i32, maxNumImpreciseAcc = 0 : i32} :
+      tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked1}>> * tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked1}>> -> tensor<128x64xf32, #blocked1>
+    tt.return %r : tensor<128x64xf32, #blocked1>
+  }
+}
+
+// -----
+
 // CHECK-NOT: ttig.dpas
 #blocked = #ttg.blocked<{sizePerThread = [8, 8], threadsPerWarp = [4, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [8, 8], threadsPerWarp = [1, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
