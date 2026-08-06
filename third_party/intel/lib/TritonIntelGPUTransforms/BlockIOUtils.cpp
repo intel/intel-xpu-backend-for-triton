@@ -494,6 +494,23 @@ DpasEncodingAttr getDpasLayout(RankedTensorType tensorTy) {
           : cast<triton::gpu::DotOperandEncodingAttr>(encoding).getParent());
 }
 
+bool transposeWithBitcast(MLIRContext *ctx, const LinearLayout &srcLayout,
+                          const LinearLayout &dstLayout) {
+  StringAttr kRegister = StringAttr::get(ctx, "register");
+  StringAttr kLane = StringAttr::get(ctx, "lane");
+  // Conservatively check the bitcast layout changes limitation.
+  // 1st: No lane to reg mapping or vise versa.
+  // 2nd: lane to lane mapping has to be identical.
+  // 3rc: reg to reg mapping has to be identical.
+  LinearLayout comp = srcLayout.invertAndCompose(dstLayout);
+  if (!comp.sublayout({kLane}, {kLane}).isIdentityOnOutDim(kLane) ||
+      !comp.sublayout({kRegister}, {kRegister}).isIdentityOnOutDim(kRegister) ||
+      !comp.sublayoutIsZero({kLane}, {kRegister}) ||
+      !comp.sublayoutIsZero({kRegister}, {kLane}))
+    return false;
+  return true;
+}
+
 FailureOr<LinearLayout> computeTransposeShuffleMapping(
     RankedTensorType tensorType, const LinearLayout &regMapping,
     int64_t numElemsPerLoad, const BlockIOTileSizeInfo &sizeInfo,
@@ -571,6 +588,11 @@ FailureOr<LinearLayout> computeTransposeShuffleMapping(
                                            dims[sizeInfo.colDim]};
     LinearLayout blockLoadLayoutWithInSubgroup =
         llEncoding->sublayout({kRegister, kLane}, loadDimName);
+
+    auto comp =
+        regMapping * LinearLayout::identity1D(threadsPerWarp, kLane, kLane);
+    blockLoadLayoutWithInSubgroup = comp.compose(blockLoadLayoutWithInSubgroup);
+
     LinearLayout expectedLoadUnpackLayout =
         blockLoadLayoutWithInSubgroup
             .resizeOutDim(dims[sizeInfo.rowDim],
@@ -621,7 +643,8 @@ FailureOr<LinearLayout> computeTransposeShuffleMapping(
       std::swap(loadDimName[0], loadDimName[1]);
       transPackedLayout = transPackedLayout.transposeOuts(loadDimName);
     }
-    if (transPackedLayout != expectedLoadUnpackLayout) {
+    if (!transposeWithBitcast(ctx, transPackedLayout,
+                              expectedLoadUnpackLayout)) {
       // Improve this. The current 2D block load only transposes the matrix at
       // i32 granularity. We still need to perform an additional in-register
       // transpose from i32 -> (N × ElemSizeInBits) tiles, using the tile width.
