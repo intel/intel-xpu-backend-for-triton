@@ -928,7 +928,10 @@ bool extractPointer(void *ptr, PyObject *obj) {
                               *g_pointer_check_queue);
   }
 
-  PyObject *data_ptr = PyObject_GetAttrString(obj, "data_ptr");
+  if (data_ptr_str == NULL) {
+    data_ptr_str = PyUnicode_InternFromString("data_ptr");
+  }
+  PyObject *data_ptr = PyObject_GetAttr(obj, data_ptr_str);
 
   if (data_ptr) {
     PyObject *ret = PyObject_CallNoArgs(data_ptr);
