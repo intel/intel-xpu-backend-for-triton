@@ -49,25 +49,6 @@ struct BlockIOTileSizeInfo {
   }
 };
 
-/// Compute the 2D block I/O tile shape from a LinearLayout.
-/// Returns BlockIOTileSizeInfo::unknown() if the layout does not support
-/// 2D block I/O.
-// template <bool isLoad>
-// BlockIOTileSizeInfo
-// getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
-//                    unsigned elemSizeInBits, AxisInfo *maskAxisInfo,
-//                    bool oneMatrixPerLoadForBT);
-//
-// // Explicit instantiation declarations.
-// extern template BlockIOTileSizeInfo
-// getBlockIOTileSize<true>(const LinearLayout &, unsigned, unsigned, AxisInfo
-// *,
-//                          bool);
-// extern template BlockIOTileSizeInfo
-// getBlockIOTileSize<false>(const LinearLayout &, unsigned, unsigned, AxisInfo
-// *,
-//                           bool);
-
 BlockIOTileSizeInfo getBlockIOLoadTileSize(const LinearLayout &, unsigned,
                                            unsigned, AxisInfo *, bool);
 BlockIOTileSizeInfo getBlockIOPrefetchTileSize(const LinearLayout &, unsigned,

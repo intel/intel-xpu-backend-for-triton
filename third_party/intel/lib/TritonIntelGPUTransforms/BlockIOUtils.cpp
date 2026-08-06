@@ -50,7 +50,7 @@ std::optional<unsigned> getLaneFastChangeDim(const LinearLayout &ll,
   if (!ll.hasInDim(kLane))
     return std::nullopt;
   // First lane basis vector (fastest-varying lane bit). Mirrors the gate in
-  // getBlockIOTileSize<false>: the lane base must move along exactly one tensor
+  // getBlockIOTileSize: the lane base must move along exactly one tensor
   // dimension, else the layout is not a clean 2D block-I/O tile.
   ArrayRef<int32_t> laneBase0 = ll.getBasis(kLane, /*pos=*/0);
   if (llvm::count_if(laneBase0, [](int32_t x) { return x > 0; }) != 1)
@@ -122,9 +122,9 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
   const BaseType &basesOfRegister = getBase("register");
   int numElemPerPackedVal = 1;
   constexpr unsigned MAX_BITS_NORMAL = 64;
-  // // Hardware supports the d64 for transposing. But for packing
-  // // transpose, we'd prefer smaller d32 type cause hardware could
-  // // transpose more to reduce the number of mov operation in register.
+  // Hardware supports the d64 for transposing. But for packing
+  // transpose, we'd prefer smaller d32 type cause hardware could
+  // transpose more to reduce the number of mov operation in register.
   constexpr unsigned MAX_BITS_TRANSPOSE = 32;
   constexpr unsigned MAX_BITS_VNNI = 32;
   constexpr unsigned MAX_BITS_WIDTH_NORMAL = 64 * 8; // 64 bytes.
@@ -496,7 +496,7 @@ BlockIOTileSizeInfo getBlockIOPrefetchTileSize(const LinearLayout &ll,
   sizeInfo.tileWidth *= vBlocks;
   sizeInfo.vBlocks = 1;
 
-  // Workaround fo OCL interface supports 8b_?r32x2c for 64 bytes per row of 8
+  // Workaround for OCL interface supports 8b_?r32x2c for 64 bytes per row of 8
   // bits element.
   switch (packedElemSizeInBits) {
   case 8:
@@ -744,7 +744,7 @@ bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
     return false;
 
   // For transposed loads, verify computeTransposeShuffleMapping will succeed.
-  // sizeInfo.vBlocks is already capped by getBlockIOTileSize<true>.
+  // sizeInfo.vBlocks is already capped by getBlockIOTileSize.
   if (sizeInfo.transpose && sizeInfo.regPackedBases.has_value()) {
     MLIRContext *ctx = ll.getBases().begin()->first.getContext();
     StringAttr kRegister = StringAttr::get(ctx, "register");

@@ -1607,7 +1607,7 @@ struct PrefetchOpConversion
           /*tile_width*/ tileWidth,
           /*tile_height*/ tileHeight,
           /*v_blocks*/ vBlocks,
-          /*cache_opt*/ TritonGEN::LoadCacheControl::L1C_L3C);
+          /*cache_opt*/ prefetchCacheControl(op.getCache()));
       if (failed(newOp.verify())) {
         // delete the op so that the verifier will not abort the pass
         // pipeline later, as we can fail this path and try a different
