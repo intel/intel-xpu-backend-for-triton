@@ -171,3 +171,31 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     tt.return %0 : tensor<32x64xf16, #dot1>
   }
 }
+
+// -----
+
+// COM: Test case for regression where column_major of tt.descriptor_load with dot_op A encoding was not
+// COM: generating the correct triton_gen.2Dblockload instruction.
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [2, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @descriptor_load_column_major_dota
+  tt.func @descriptor_load_column_major_dota(%k: !tt.ptr<bf16>, %T_3: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c2_i32 = arith.constant 2 : i32
+    %c0 = arith.constant 0 : index
+    %c2 = arith.constant 2 : index
+    %c1 = arith.constant 1 : index
+    %c64_i32 = arith.constant 64 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c128_i32 = arith.constant 128 : i32
+    %c4096_i64 = arith.constant 4096 : i64
+
+    %k_desc = tt.make_tensor_descriptor %k, [%T_3, %c128_i32], [%c4096_i64, %c1_i64] : <bf16>, <64x64xbf16>
+    // CHECK: ttig.2d_block_load
+    // CHECK-SAME: {column_major}
+    %b_k = tt.descriptor_load %k_desc[%c0_i32, %c0_i32] {ttig.block_io = "column_major", ttig.desc_padding = 1 : i32} : !tt.tensordesc<64x64xbf16> -> tensor<64x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+
+    tt.return
+  }
+}

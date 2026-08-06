@@ -2,7 +2,7 @@
 # https://github.com/sgl-project/sglang/blob/fdebc938f7f4d16fe6b9f55dcd9a767cf0899ea1/test/registered/quant/test_triton_scaled_mm.py
 # https://github.com/sgl-project/sglang/blob/fdebc938f7f4d16fe6b9f55dcd9a767cf0899ea1/python/sglang/kernels/ops/quantization/fp8_kernel.py
 import os
-from typing import Optional, List
+from typing import Optional
 
 import torch
 import triton
@@ -19,27 +19,6 @@ def is_weak_contiguous(x: torch.Tensor):
     is_not_transpose = strides[0] == 1 and (strides[1] >= max(1, sizes[0]))
     is_transpose = strides[1] == 1 and (strides[0] >= max(1, sizes[1]))
     return is_transpose or is_not_transpose
-
-
-def get_matmul_batched_autotune_configs() -> List[triton.Config]:
-    configs = [
-        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 256, 'BLOCK_K': 32, 'grf_mode': '256'}, num_stages=s, num_warps=32)
-        for s in [2, 3]
-    ] + [
-        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 128, 'BLOCK_K': 32, 'grf_mode': m}, num_stages=s, num_warps=w)
-        for s in [2]
-        for (m, w) in ([('256', 32), ('128', 64)])
-    ] + [
-        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 32, 'grf_mode': '256'}, num_stages=s, num_warps=32)
-        for s in [2]
-    ] + [
-        triton.Config({'BLOCK_M': 8, 'BLOCK_N': 512, 'BLOCK_K': 64, 'grf_mode': '256'}, num_stages=s, num_warps=32)
-        for s in [2]
-    ] + [
-        triton.Config({'BLOCK_M': 8, 'BLOCK_N': 128, 'BLOCK_K': 64, 'grf_mode': '256'}, num_stages=s, num_warps=4)
-        for s in [2]
-    ]
-    return configs
 
 
 @triton.jit
@@ -76,20 +55,9 @@ def scaled_mm_kernel_td(
     accumulator_dtype = ACCUMULATOR_DTYPE
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=accumulator_dtype)
 
-    # NOTE: Some tensor inputs are so large, they will cause int32 overflow
-    # so it is necessary to use tl.int64 for all the offsets, else SEGV will
-    # eventually occur.
-
-    # Offsets and masks.
-    # offsets_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M).to(tl.int64)
-    # masks_am = offsets_am < M
-
+    # NOTE: Some tensor inputs are so large that they would cause int32 overflow,
+    # so stride_am is tl.int64 and the N offsets below are computed in int64.
     offsets_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N).to(tl.int64)
-    # masks_bn = offsets_bn < N
-
-    # offsets_k = tl.arange(0, BLOCK_SIZE_K).to(tl.int64)
-    # offsets_a = stride_am * offsets_am[:, None] + stride_ak * offsets_k[None, :]
-    # offsets_b = stride_bk * offsets_k[:, None] + stride_bn * offsets_bn[None, :]
 
     # NOTE: BLOCK_SIZE_SCALE_A could be 1 or BLOCK_SIZE_M, so need to create
     # appropriate offsets and masks for each case. Same goes for
@@ -105,32 +73,17 @@ def scaled_mm_kernel_td(
     b_desc = tl.make_tensor_descriptor(base=b_ptr, shape=(K, N), strides=(stride_bk, stride_bn),
                                        block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N))
 
-    # a_ptrs = a_ptr + offsets_a
-    # b_ptrs = b_ptr + offsets_b
-
     scale_a_ptrs = scale_a_ptr + offsets_scale_am
     scale_b_ptrs = scale_b_ptr + offsets_scale_bn
 
     off_k = 0
     for _ in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
-        # masks_k = offsets_k < K
-        # masks_a = masks_am[:, None] & masks_k[None, :]
-        # a = tl.load(a_ptrs, mask=masks_a)
-
-        # masks_b = masks_k[:, None] & masks_bn[None, :]
-        # b = tl.load(b_ptrs, mask=masks_b)
-
         a = a_desc.load([pid_m * BLOCK_SIZE_M, off_k])
         b = b_desc.load([off_k, pid_n * BLOCK_SIZE_N])
-        # accumulator += tl.dot(a, b)
 
         # Accumulate results.
         accumulator = tl.dot(a, b, accumulator, out_dtype=accumulator_dtype)
         off_k += BLOCK_SIZE_K
-
-        # offsets_k += BLOCK_SIZE_K
-        # a_ptrs += BLOCK_SIZE_K * stride_ak
-        # b_ptrs += BLOCK_SIZE_K * stride_bk
 
     # Apply scale at end.
     masks_scale_a = masks_scale_am[:, None] & (tl.arange(0, 1) < 1)[:, None]
@@ -158,14 +111,6 @@ def scaled_mm_kernel_td(
         c += bias
 
     # Save output
-    offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M).to(tl.int64)
-    offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N).to(tl.int64)
-    offs_cm = offs_cm.to(tl.int64)
-    offs_cn = offs_cn.to(tl.int64)
-    # c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
-    # c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-
-    # tl.store(c_ptrs, c, mask=c_mask)
     c_desc = tl.make_tensor_descriptor(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
                                        block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N))
     c_desc.store([pid_m * BLOCK_SIZE_M, pid_n * BLOCK_SIZE_N], c)
@@ -181,10 +126,6 @@ def triton_scaled_mm_td(
     scale_b: torch.Tensor,
     out_dtype: type[torch.dtype],
     bias: Optional[torch.Tensor] = None,
-    block_size_m: int = 32,
-    block_size_n: int = 32,
-    block_size_k: int = 32,
-    use_heuristic=True,
 ) -> torch.Tensor:
     M, K = input.shape
     N = weight.shape[1]
@@ -210,19 +151,16 @@ def triton_scaled_mm_td(
 
     has_scalar = lambda x: x.shape[0] == 1 and x.shape[1] == 1
 
-    if use_heuristic:
-        is_small_N = N < 8192
-        next_power_of_2_M = max(32, triton.next_power_of_2(M))
-        if next_power_of_2_M <= 32:
-            tile_shape = (64, 64, 256) if is_small_N else (64, 128, 256)
-        elif next_power_of_2_M <= 64:
-            tile_shape = (64, 64, 256)
-        elif next_power_of_2_M <= 128:
-            tile_shape = (64, 128, 128)
-        else:
-            tile_shape = (128, 128, 128)
+    is_small_N = N < 8192
+    next_power_of_2_M = max(32, triton.next_power_of_2(M))
+    if next_power_of_2_M <= 32:
+        tile_shape = (64, 64, 256) if is_small_N else (64, 128, 256)
+    elif next_power_of_2_M <= 64:
+        tile_shape = (64, 64, 256)
+    elif next_power_of_2_M <= 128:
+        tile_shape = (64, 128, 128)
     else:
-        raise NotImplementedError('Only heuristic-based tile size selection is supported currently.')
+        tile_shape = (128, 128, 128)
 
     block_size_m, block_size_n, block_size_k = tile_shape
 
