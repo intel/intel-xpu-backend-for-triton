@@ -412,7 +412,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
-// CHECK: #[[$DPAS:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1, 1], repCluster = [1, 4, 2], A = [1, 32, 16], B = [1, 16, 32], C = [1, 32, 32]}>
+// CHECK: #[[$DPAS:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4, 1], repCluster = [1, 2, 2], A = [1, 16, 16], B = [1, 16, 32], C = [1, 16, 32]}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 4, 4], threadsPerWarp = [1, 1, 16], warpsPerCTA = [1, 4, 1], order = [2, 1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.min_sg_size" = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate} {
   tt.func public @_helion_repro_baddbmm_kernel(%A: tensor<1x64x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>, %B: tensor<1x64x64xbf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>, %C: tensor<1x64x64x!tt.ptr<bf16>, #blocked>) {
