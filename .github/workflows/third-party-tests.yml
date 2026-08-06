@@ -1,6 +1,13 @@
 name: Third party tests [liger-kernels, sglang]
 
 on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/third-party-tests.yml
+      - scripts/sglang/sglang-pin.txt
+      - benchmarks/third_party/liger/liger-pin.txt
   workflow_dispatch:
     inputs:
       runner_label:
