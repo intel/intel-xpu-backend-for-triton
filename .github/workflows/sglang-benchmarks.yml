@@ -15,6 +15,13 @@ on:
         description: SGLang pin (commit hash), keep empty for default
         type: string
         default: ""
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/sglang-benchmarks.yml
+      - .github/workflows/sglang-benchmarks-bmg.yml
+      - scripts/sglang/sglang-pin.txt
   # The BMG schedule runs through the sglang-benchmarks-bmg.yml wrapper (which
   # builds the branch benchmarks wheel first). This workflow keeps its own PVC schedule.
   workflow_call:
