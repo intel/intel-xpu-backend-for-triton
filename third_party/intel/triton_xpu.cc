@@ -370,6 +370,16 @@ void init_triton_intel(py::module_ &m) {
     }
   });
 
+  m.def("set_core_clock_rate", [](mlir::ModuleOp &mod, unsigned clockRate) {
+    using namespace mlir::triton::gpu::intel;
+    if (clockRate &&
+        !mod->hasAttr(TritonIntelGPUDialect::getCoreClockRateAttrName())) {
+      mlir::Builder builder(mod.getContext());
+      mod->setAttr(TritonIntelGPUDialect::getCoreClockRateAttrName(),
+                   builder.getI32IntegerAttr(clockRate));
+    }
+  });
+
   // Set fast-math flags on floating-point instructions.
   // The fastMath parameter is resolved by the Python layer from
   // TRITON_INTEL_FAST_MATH and TORCHINDUCTOR_USE_FAST_MATH env vars.
