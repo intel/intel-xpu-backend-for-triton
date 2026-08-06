@@ -10,9 +10,9 @@ on:
   schedule:
     - cron: "0 8 * * *"
 
-# Cancel in-progress runs for the same PR or schedule.
+# Give unrelated-label skip runs a separate lane so they cannot cancel a real run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || 'ci' }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || 'ci' }}-${{ github.event.action == 'labeled' && github.event.label.name != 'run-benchmarks' && github.event.label.name != 'run-vllm-benchmarks' && 'skip' || 'run' }}
   cancel-in-progress: true
 
 jobs:
@@ -34,8 +34,9 @@ jobs:
     needs: check-paths
     if: >-
       github.event_name == 'schedule' ||
-      needs.check-paths.outputs.benchmarks == 'true' ||
-      github.event.label.name == 'run-benchmarks'
+      (github.event.action != 'labeled' && needs.check-paths.outputs.benchmarks == 'true') ||
+      github.event.label.name == 'run-benchmarks' ||
+      github.event.label.name == 'run-vllm-benchmarks'
     uses: ./.github/workflows/build-benchmarks-wheel.yml
     with:
       python-version: "3.12"
@@ -45,8 +46,9 @@ jobs:
     if: >-
       always() && !cancelled() &&
       (github.event_name == 'schedule' ||
-       needs.check-paths.outputs.benchmarks == 'true' ||
-       github.event.label.name == 'run-benchmarks')
+       (github.event.action != 'labeled' && needs.check-paths.outputs.benchmarks == 'true') ||
+       github.event.label.name == 'run-benchmarks' ||
+       github.event.label.name == 'run-vllm-benchmarks')
     uses: ./.github/workflows/vllm-benchmarks.yml
     with:
       runner_label: max1550
