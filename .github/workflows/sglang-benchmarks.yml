@@ -86,7 +86,24 @@ jobs:
           pip install cmake
 
       - name: Setup PyTorch
+        id: setup-pytorch
         uses: ./.github/actions/setup-pytorch
+
+      # Every benchmark here imports sglang, and sglang/srt/utils/common.py imports
+      # torchvision.io at module level. install-sglang.sh strips torch* from
+      # pyproject.toml, so torchvision has to be installed here - built from the
+      # PyTorch pin, because a PyPI wheel would pull in its own torch build.
+      - name: Identify torchvision pin
+        run: |
+          echo "TORCHVISION_COMMIT_ID=$(<pytorch/.github/ci_commit_pins/vision.txt)" | tee -a "$GITHUB_ENV"
+
+      - name: Install torchvision package
+        uses: ./.github/actions/install-dependency
+        with:
+          package: torchvision
+          repository: pytorch/vision
+          ref: ${{ env.TORCHVISION_COMMIT_ID }}
+          extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
 
       - name: Setup Triton
         uses: ./.github/actions/setup-triton
