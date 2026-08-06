@@ -41,6 +41,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
 }
 
+// -----
+
+// COM: The LTS driver has no SPIR-V shader clock, so read the cycle counter.
+
+// CHECK: llvm.func spir_funccc @__builtin_IB_read_cycle_counter() -> i64
+// CHECK-LABEL: llvm.func spir_kernelcc @poll_timeout_lts
+// CHECK: llvm.call spir_funccc @__builtin_IB_read_cycle_counter()
+// CHECK-NOT: __spirv_ReadClockKHR
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, "ttig.core_clock_rate_khz" = 1600000 : i32, ttig.is_lts} {
+  tt.func public @poll_timeout_lts(%arg0: !tt.ptr<i32>, %arg1: !tt.ptr<i1>, %timeout: i64) {
+    %expected = arith.constant 1 : i32
+    %matched = tt.atomic_poll relaxed, gpu, %arg0, %expected timeout %timeout : !tt.ptr<i32>, i32 -> i1
+    tt.store %arg1, %matched : !tt.ptr<i1>
+    tt.return
+  }
+}
+
 //--- no-rate.mlir
 
 // COM: A timeout without ttig.core_clock_rate_khz cannot be expressed in ns.

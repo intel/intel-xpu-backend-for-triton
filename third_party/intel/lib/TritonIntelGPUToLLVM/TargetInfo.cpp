@@ -61,14 +61,21 @@ Value TargetInfo::getGlobalTimer(RewriterBase &rewriter, Location loc) const {
         " to report nanoseconds");
 
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value scope = b.i32_val(/*Device=*/1);
-  std::string funcName =
-      mlir::triton::gpu::intel::mangle("__spirv_ReadClockKHR_Rulong", {i32_ty});
+  // The LTS driver does not implement the SPIR-V shader clock builtin.
+  bool isLTS = mod->hasAttr(
+      triton::gpu::intel::TritonIntelGPUDialect::getIsLTSAttrName());
+  std::string funcName = isLTS ? "__builtin_IB_read_cycle_counter"
+                               : mlir::triton::gpu::intel::mangle(
+                                     "__spirv_ReadClockKHR_Rulong", {i32_ty});
+  SmallVector<Type> argTypes;
+  SmallVector<Value> args;
+  if (!isLTS) {
+    argTypes.push_back(i32_ty);
+    args.push_back(b.i32_val(/*Device=*/1));
+  }
   Value ticks = mlir::triton::gpu::intel::createDeviceFunctionCall(
-                    rewriter, funcName, /*retType=*/i64_ty,
-                    /*argTypes=*/{i32_ty},
-                    /*args=*/{scope}, /*paramAttrs=*/{},
-                    gpu::intel::noUnwindWillReturnAttrs)
+                    rewriter, funcName, /*retType=*/i64_ty, argTypes, args,
+                    /*paramAttrs=*/{}, gpu::intel::noUnwindWillReturnAttrs)
                     .getResult();
 
   // kHz is cycles per millisecond. The rate is nominal and the core clock
