@@ -425,6 +425,177 @@ tt.func public @maxsi_in_chain(%arg0: i32) -> i32 {
 
 // -----
 
+// Test 22: andi with non-negative first operand and non-constant second -> convert
+module {
+tt.func public @andi_nonneg_nonconstant_operand(%arg0: i32) -> i32 {
+  %pid = tt.get_program_id x : i32
+  %m = arith.andi %pid, %arg0 : i32
+  %c128 = arith.constant 128 : i32
+  %rem = arith.remsi %m, %c128 : i32
+  tt.return %rem : i32
+}
+// CHECK-LABEL: @andi_nonneg_nonconstant_operand
+// CHECK: %[[PID:.*]] = tt.get_program_id x
+// CHECK: %[[M:.*]] = arith.andi %[[PID]], %arg0
+// CHECK: %[[C128:.*]] = arith.constant 128
+// CHECK: %[[REM:.*]] = arith.remui %[[M]], %[[C128]]
+// CHECK: tt.return %[[REM]]
+}
+
+// -----
+
+// Test 23: extui always produces non-negative result -> convert
+module {
+tt.func public @extui_always_nonneg(%arg0: i16) -> i32 {
+  %e = arith.extui %arg0 : i16 to i32
+  %c128 = arith.constant 128 : i32
+  %div = arith.divsi %e, %c128 : i32
+  tt.return %div : i32
+}
+// CHECK-LABEL: @extui_always_nonneg
+// CHECK: %[[E:.*]] = arith.extui %arg0
+// CHECK: %[[C128:.*]] = arith.constant 128
+// CHECK: %[[DIV:.*]] = arith.divui %[[E]], %[[C128]]
+// CHECK: tt.return %[[DIV]]
+}
+
+// -----
+
+// Test 24: extsi with non-negative input -> convert
+module {
+tt.func public @extsi_nonneg_input() -> i32 {
+  %c5 = arith.constant 5 : i16
+  %e = arith.extsi %c5 : i16 to i32
+  %c8 = arith.constant 8 : i32
+  %div = arith.divsi %e, %c8 : i32
+  tt.return %div : i32
+}
+// CHECK-LABEL: @extsi_nonneg_input
+// CHECK: %[[C5:.*]] = arith.constant 5
+// CHECK: %[[E:.*]] = arith.extsi %[[C5]]
+// CHECK: %[[C8:.*]] = arith.constant 8
+// CHECK: %[[DIV:.*]] = arith.divui %[[E]], %[[C8]]
+// CHECK: tt.return %[[DIV]]
+}
+
+// -----
+
+// Test 25: shrsi with non-negative LHS -> convert
+module {
+tt.func public @shrsi_nonneg_lhs() -> i32 {
+  %pid = tt.get_program_id x : i32
+  %c2 = arith.constant 2 : i32
+  %s = arith.shrsi %pid, %c2 : i32
+  %c64 = arith.constant 64 : i32
+  %rem = arith.remsi %s, %c64 : i32
+  tt.return %rem : i32
+}
+// CHECK-LABEL: @shrsi_nonneg_lhs
+// CHECK: %[[PID:.*]] = tt.get_program_id x
+// CHECK: %[[C2:.*]] = arith.constant 2
+// CHECK: %[[S:.*]] = arith.shrsi %[[PID]], %[[C2]]
+// CHECK: %[[C64:.*]] = arith.constant 64
+// CHECK: %[[REM:.*]] = arith.remui %[[S]], %[[C64]]
+// CHECK: tt.return %[[REM]]
+}
+
+// -----
+
+// Test 26: minsi with both operands non-negative -> convert
+module {
+tt.func public @minsi_both_nonneg() -> i32 {
+  %pid = tt.get_program_id x : i32
+  %c5 = arith.constant 5 : i32
+  %m = arith.minsi %pid, %c5 : i32
+  %c128 = arith.constant 128 : i32
+  %div = arith.divsi %m, %c128 : i32
+  tt.return %div : i32
+}
+// CHECK-LABEL: @minsi_both_nonneg
+// CHECK: %[[PID:.*]] = tt.get_program_id x
+// CHECK: %[[C5:.*]] = arith.constant 5
+// CHECK: %[[M:.*]] = arith.minsi %[[PID]], %[[C5]]
+// CHECK: %[[C128:.*]] = arith.constant 128
+// CHECK: %[[DIV:.*]] = arith.divui %[[M]], %[[C128]]
+// CHECK: tt.return %[[DIV]]
+}
+
+// -----
+
+// Test 27: select with both operands non-negative -> convert
+module {
+tt.func public @select_both_nonneg(%cond: i1) -> i32 {
+  %pid = tt.get_program_id x : i32
+  %c5 = arith.constant 5 : i32
+  %s = arith.select %cond, %pid, %c5 : i32
+  %c64 = arith.constant 64 : i32
+  %rem = arith.remsi %s, %c64 : i32
+  tt.return %rem : i32
+}
+// CHECK-LABEL: @select_both_nonneg
+// CHECK: %[[PID:.*]] = tt.get_program_id x
+// CHECK: %[[C5:.*]] = arith.constant 5
+// CHECK: %[[S:.*]] = arith.select %arg0, %[[PID]], %[[C5]]
+// CHECK: %[[C64:.*]] = arith.constant 64
+// CHECK: %[[REM:.*]] = arith.remui %[[S]], %[[C64]]
+// CHECK: tt.return %[[REM]]
+}
+
+// -----
+
+// Test 28: divsi by get_num_programs (strictly positive) -> convert
+module {
+tt.func public @divsi_by_num_programs() -> i32 {
+  %pid = tt.get_program_id x : i32
+  %np = tt.get_num_programs x : i32
+  %div = arith.divsi %pid, %np : i32
+  tt.return %div : i32
+}
+// CHECK-LABEL: @divsi_by_num_programs
+// CHECK: %[[PID:.*]] = tt.get_program_id x
+// CHECK: %[[NP:.*]] = tt.get_num_programs x
+// CHECK: %[[DIV:.*]] = arith.divui %[[PID]], %[[NP]]
+// CHECK: tt.return %[[DIV]]
+}
+
+// -----
+
+// Test 29: divsi by maxsi with positive constant (strictly positive) -> convert
+module {
+tt.func public @divsi_by_maxsi_positive_const(%arg0: i32) -> i32 {
+  %pid = tt.get_program_id x : i32
+  %c1 = arith.constant 1 : i32
+  %mx = arith.maxsi %arg0, %c1 : i32
+  %div = arith.divsi %pid, %mx : i32
+  tt.return %div : i32
+}
+// CHECK-LABEL: @divsi_by_maxsi_positive_const
+// CHECK: %[[PID:.*]] = tt.get_program_id x
+// CHECK: %[[C1:.*]] = arith.constant 1
+// CHECK: %[[MX:.*]] = arith.maxsi %arg0, %[[C1]]
+// CHECK: %[[DIV:.*]] = arith.divui %[[PID]], %[[MX]]
+// CHECK: tt.return %[[DIV]]
+}
+
+// -----
+
+// Test 30: ceildivsi with non-negative dividend and positive divisor -> convert to ceildivui
+module {
+tt.func public @ceildivsi_from_program_id() -> i32 {
+  %pid = tt.get_program_id x : i32
+  %c128 = arith.constant 128 : i32
+  %cdiv = arith.ceildivsi %pid, %c128 : i32
+  tt.return %cdiv : i32
+}
+// CHECK-LABEL: @ceildivsi_from_program_id
+// CHECK: %[[PID:.*]] = tt.get_program_id x
+// CHECK: %[[C128:.*]] = arith.constant 128
+// CHECK: %[[CDIV:.*]] = arith.ceildivui %[[PID]], %[[C128]]
+// CHECK: tt.return %[[CDIV]]
+}
+
+// -----
+
 //===----------------------------------------------------------------------===//
 // Negative Tests - Should NOT convert
 //===----------------------------------------------------------------------===//
@@ -614,29 +785,6 @@ tt.func public @no_convert_maxsi_both_unknown(%arg0: i32, %arg1: i32) -> i32 {
 
 // -----
 
-//===----------------------------------------------------------------------===//
-// andi widening tests
-//===----------------------------------------------------------------------===//
-
-// Test 22: andi with non-negative first operand and non-constant second -> convert
-module {
-tt.func public @andi_nonneg_nonconstant_operand(%arg0: i32) -> i32 {
-  %pid = tt.get_program_id x : i32
-  %m = arith.andi %pid, %arg0 : i32
-  %c128 = arith.constant 128 : i32
-  %rem = arith.remsi %m, %c128 : i32
-  tt.return %rem : i32
-}
-// CHECK-LABEL: @andi_nonneg_nonconstant_operand
-// CHECK: %[[PID:.*]] = tt.get_program_id x
-// CHECK: %[[M:.*]] = arith.andi %[[PID]], %arg0
-// CHECK: %[[C128:.*]] = arith.constant 128
-// CHECK: %[[REM:.*]] = arith.remui %[[M]], %[[C128]]
-// CHECK: tt.return %[[REM]]
-}
-
-// -----
-
 // Negative Test 13: andi with both operands unknown -> do NOT convert
 module {
 tt.func public @no_convert_andi_both_unknown(%arg0: i32, %arg1: i32) -> i32 {
@@ -649,46 +797,6 @@ tt.func public @no_convert_andi_both_unknown(%arg0: i32, %arg1: i32) -> i32 {
 // CHECK: arith.andi
 // CHECK: arith.remsi
 // CHECK-NOT: arith.remui
-}
-
-// -----
-
-//===----------------------------------------------------------------------===//
-// extui / extsi tests
-//===----------------------------------------------------------------------===//
-
-// Test 23: extui always produces non-negative result -> convert
-module {
-tt.func public @extui_always_nonneg(%arg0: i16) -> i32 {
-  %e = arith.extui %arg0 : i16 to i32
-  %c128 = arith.constant 128 : i32
-  %div = arith.divsi %e, %c128 : i32
-  tt.return %div : i32
-}
-// CHECK-LABEL: @extui_always_nonneg
-// CHECK: %[[E:.*]] = arith.extui %arg0
-// CHECK: %[[C128:.*]] = arith.constant 128
-// CHECK: %[[DIV:.*]] = arith.divui %[[E]], %[[C128]]
-// CHECK: tt.return %[[DIV]]
-}
-
-// -----
-
-// Test 24: extsi with non-negative input -> convert
-module {
-tt.func public @extsi_nonneg_input() -> i32 {
-  %c5 = arith.constant 5 : i16
-  %e = arith.extsi %c5 : i16 to i32
-  %c8 = arith.constant 8 : i32
-  %div = arith.divsi %e, %c8 : i32
-  tt.return %div : i32
-}
-// CHECK-LABEL: @extsi_nonneg_input
-// CHECK: %[[C5:.*]] = arith.constant 5
-// CHECK: %[[E:.*]] = arith.extsi %[[C5]]
-// CHECK: %[[C8:.*]] = arith.constant 8
-// CHECK: %[[DIV:.*]] = arith.divui %[[E]], %[[C8]]
-// CHECK: tt.return %[[DIV]]
 }
 
 // -----
@@ -709,10 +817,6 @@ tt.func public @no_convert_extsi_unknown_input(%arg0: i16) -> i32 {
 
 // -----
 
-//===----------------------------------------------------------------------===//
-// shrui / shrsi tests
-//===----------------------------------------------------------------------===//
-
 // Negative Test 15: shrui does not guarantee non-negativity -> do NOT convert
 module {
 tt.func public @no_convert_shrui_shift_zero(%arg0: i32) -> i32 {
@@ -726,27 +830,6 @@ tt.func public @no_convert_shrui_shift_zero(%arg0: i32) -> i32 {
 // CHECK: arith.shrui
 // CHECK: arith.divsi
 // CHECK-NOT: arith.divui
-}
-
-// -----
-
-// Test 25: shrsi with non-negative LHS -> convert
-module {
-tt.func public @shrsi_nonneg_lhs() -> i32 {
-  %pid = tt.get_program_id x : i32
-  %c2 = arith.constant 2 : i32
-  %s = arith.shrsi %pid, %c2 : i32
-  %c64 = arith.constant 64 : i32
-  %rem = arith.remsi %s, %c64 : i32
-  tt.return %rem : i32
-}
-// CHECK-LABEL: @shrsi_nonneg_lhs
-// CHECK: %[[PID:.*]] = tt.get_program_id x
-// CHECK: %[[C2:.*]] = arith.constant 2
-// CHECK: %[[S:.*]] = arith.shrsi %[[PID]], %[[C2]]
-// CHECK: %[[C64:.*]] = arith.constant 64
-// CHECK: %[[REM:.*]] = arith.remui %[[S]], %[[C64]]
-// CHECK: tt.return %[[REM]]
 }
 
 // -----
@@ -768,10 +851,6 @@ tt.func public @no_convert_shrsi_unknown_lhs(%arg0: i32) -> i32 {
 
 // -----
 
-//===----------------------------------------------------------------------===//
-// trunci test
-//===----------------------------------------------------------------------===//
-
 // Negative Test 17: trunci is unsafe (can truncate sign bit) -> do NOT convert
 module {
 tt.func public @no_convert_trunci() -> i16 {
@@ -788,10 +867,6 @@ tt.func public @no_convert_trunci() -> i16 {
 }
 
 // -----
-
-//===----------------------------------------------------------------------===//
-// minui / maxui tests
-//===----------------------------------------------------------------------===//
 
 // Negative Test 18: minui does not guarantee non-negativity -> do NOT convert
 module {
@@ -825,31 +900,6 @@ tt.func public @no_convert_maxui(%arg0: i32, %arg1: i32) -> i32 {
 
 // -----
 
-//===----------------------------------------------------------------------===//
-// minsi tests
-//===----------------------------------------------------------------------===//
-
-// Test 26: minsi with both operands non-negative -> convert
-module {
-tt.func public @minsi_both_nonneg() -> i32 {
-  %pid = tt.get_program_id x : i32
-  %c5 = arith.constant 5 : i32
-  %m = arith.minsi %pid, %c5 : i32
-  %c128 = arith.constant 128 : i32
-  %div = arith.divsi %m, %c128 : i32
-  tt.return %div : i32
-}
-// CHECK-LABEL: @minsi_both_nonneg
-// CHECK: %[[PID:.*]] = tt.get_program_id x
-// CHECK: %[[C5:.*]] = arith.constant 5
-// CHECK: %[[M:.*]] = arith.minsi %[[PID]], %[[C5]]
-// CHECK: %[[C128:.*]] = arith.constant 128
-// CHECK: %[[DIV:.*]] = arith.divui %[[M]], %[[C128]]
-// CHECK: tt.return %[[DIV]]
-}
-
-// -----
-
 // Negative Test 20: minsi with one unknown operand -> do NOT convert
 module {
 tt.func public @no_convert_minsi_one_unknown(%arg0: i32) -> i32 {
@@ -863,31 +913,6 @@ tt.func public @no_convert_minsi_one_unknown(%arg0: i32) -> i32 {
 // CHECK: arith.minsi
 // CHECK: arith.divsi
 // CHECK-NOT: arith.divui
-}
-
-// -----
-
-//===----------------------------------------------------------------------===//
-// select tests
-//===----------------------------------------------------------------------===//
-
-// Test 27: select with both operands non-negative -> convert
-module {
-tt.func public @select_both_nonneg(%cond: i1) -> i32 {
-  %pid = tt.get_program_id x : i32
-  %c5 = arith.constant 5 : i32
-  %s = arith.select %cond, %pid, %c5 : i32
-  %c64 = arith.constant 64 : i32
-  %rem = arith.remsi %s, %c64 : i32
-  tt.return %rem : i32
-}
-// CHECK-LABEL: @select_both_nonneg
-// CHECK: %[[PID:.*]] = tt.get_program_id x
-// CHECK: %[[C5:.*]] = arith.constant 5
-// CHECK: %[[S:.*]] = arith.select %arg0, %[[PID]], %[[C5]]
-// CHECK: %[[C64:.*]] = arith.constant 64
-// CHECK: %[[REM:.*]] = arith.remui %[[S]], %[[C64]]
-// CHECK: tt.return %[[REM]]
 }
 
 // -----
@@ -909,27 +934,6 @@ tt.func public @no_convert_select_false_unknown(%cond: i1, %arg0: i32) -> i32 {
 
 // -----
 
-//===----------------------------------------------------------------------===//
-// isStrictlyPositive divisor gate tests
-//===----------------------------------------------------------------------===//
-
-// Test 28: divsi by get_num_programs (strictly positive) -> convert
-module {
-tt.func public @divsi_by_num_programs() -> i32 {
-  %pid = tt.get_program_id x : i32
-  %np = tt.get_num_programs x : i32
-  %div = arith.divsi %pid, %np : i32
-  tt.return %div : i32
-}
-// CHECK-LABEL: @divsi_by_num_programs
-// CHECK: %[[PID:.*]] = tt.get_program_id x
-// CHECK: %[[NP:.*]] = tt.get_num_programs x
-// CHECK: %[[DIV:.*]] = arith.divui %[[PID]], %[[NP]]
-// CHECK: tt.return %[[DIV]]
-}
-
-// -----
-
 // Negative Test 22: divsi by program_id (can be 0) -> do NOT convert
 module {
 tt.func public @no_convert_divsi_by_program_id() -> i32 {
@@ -941,25 +945,6 @@ tt.func public @no_convert_divsi_by_program_id() -> i32 {
 // CHECK-LABEL: @no_convert_divsi_by_program_id
 // CHECK: arith.divsi
 // CHECK-NOT: arith.divui
-}
-
-// -----
-
-// Test 29: divsi by maxsi with positive constant (strictly positive) -> convert
-module {
-tt.func public @divsi_by_maxsi_positive_const(%arg0: i32) -> i32 {
-  %pid = tt.get_program_id x : i32
-  %c1 = arith.constant 1 : i32
-  %mx = arith.maxsi %arg0, %c1 : i32
-  %div = arith.divsi %pid, %mx : i32
-  tt.return %div : i32
-}
-// CHECK-LABEL: @divsi_by_maxsi_positive_const
-// CHECK: %[[PID:.*]] = tt.get_program_id x
-// CHECK: %[[C1:.*]] = arith.constant 1
-// CHECK: %[[MX:.*]] = arith.maxsi %arg0, %[[C1]]
-// CHECK: %[[DIV:.*]] = arith.divui %[[PID]], %[[MX]]
-// CHECK: tt.return %[[DIV]]
 }
 
 // -----
@@ -977,27 +962,6 @@ tt.func public @no_convert_divsi_by_maxsi_zero_const(%arg0: i32) -> i32 {
 // CHECK: arith.maxsi
 // CHECK: arith.divsi
 // CHECK-NOT: arith.divui
-}
-
-// -----
-
-//===----------------------------------------------------------------------===//
-// ceildivsi tests
-//===----------------------------------------------------------------------===//
-
-// Test 30: ceildivsi with non-negative dividend and positive divisor -> convert to ceildivui
-module {
-tt.func public @ceildivsi_from_program_id() -> i32 {
-  %pid = tt.get_program_id x : i32
-  %c128 = arith.constant 128 : i32
-  %cdiv = arith.ceildivsi %pid, %c128 : i32
-  tt.return %cdiv : i32
-}
-// CHECK-LABEL: @ceildivsi_from_program_id
-// CHECK: %[[PID:.*]] = tt.get_program_id x
-// CHECK: %[[C128:.*]] = arith.constant 128
-// CHECK: %[[CDIV:.*]] = arith.ceildivui %[[PID]], %[[C128]]
-// CHECK: tt.return %[[CDIV]]
 }
 
 // -----
