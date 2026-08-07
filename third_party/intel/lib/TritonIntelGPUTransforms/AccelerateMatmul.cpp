@@ -18,6 +18,7 @@
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Casting.h"
 #include <optional>
+#include <utility>
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -61,6 +62,57 @@ unsigned getOpsPerChannel(Type elemType, ModuleOp m) {
          dpasElemBitWidths;
 }
 
+SetVector<Operation *> getChainedDotOps(Value operand) {
+  auto filter = [&operand](Operation *op) {
+    return op->getParentRegion() == operand.getParentRegion();
+  };
+  SetVector<Operation *> slice;
+  if (getBackwardSlice(operand, &slice, {filter}).succeeded()) {
+    SetVector<Operation *> dotOps;
+    for (Operation *op : slice) {
+      if (isa<tt::DotOp, tt::DotScaledOp>(op)) {
+        dotOps.insert(op);
+      }
+    }
+    return dotOps;
+  }
+  return {};
+}
+
+std::pair<Value, Value> getDotOperands(Operation *dotOp) {
+  return llvm::TypeSwitch<Operation *, std::pair<Value, Value>>(dotOp)
+      .Case<tt::DotOp, tt::DotScaledOp>(
+          [](auto op) { return std::make_pair(op.getA(), op.getB()); })
+      .Default([](Operation *) { return std::pair<Value, Value>{}; });
+}
+
+// Improve the tiling pattern for chained `tt.dot`/`tt.scaled_dot` operations.
+//
+// Consider the following chained dot operations on operands A and B:
+//
+// clang-format off
+//                dot      dot
+//                  \      /
+//                   \    /
+//            C = dot(A, B)  <- The dot operation to be tiled.
+//           /\
+//          /  \-------\
+//         /            \
+//    dot(A, B)   dot(A, B)
+// clang-format on
+//
+// First, check whether there is a dot operation in the backward slice of A or
+// B. If the dot operations are chained only along A or only along B,
+// aggressively assign parallelism to the M dimension or the N dimension,
+// respectively, to reduce the cost of the C -> A or C -> B layout conversion.
+//
+// Next, check whether the current dot operation is part of a forward chain
+// (that is, its result is used as operand A or B of another dot operation). If
+// so, similarly assign parallelism to the corresponding M or N dimension.
+//
+// If the dot operation is chained along both A and B, fall back to the default
+// tiling pattern.
+
 SmallVector<unsigned>
 getWarpsPerTile(Operation *dotOp,
                 const ttgi::DpasEncodingAttr::DPASCapability &dpasCap,
@@ -80,10 +132,62 @@ getWarpsPerTile(Operation *dotOp,
         setAttrOnBOperand(dotOp, attrName, UnitAttr::get(ctx));
         setAttrOnBOperand(op, attrName, UnitAttr::get(ctx));
       }
-      SmallVector<unsigned> ret(shape.size(), 1);
-      ret[0] = numWarps;
-      return ret;
     }
+  }
+
+  auto [A, B] = getDotOperands(dotOp);
+
+  auto dotOpsA = getChainedDotOps(A);
+  bool chainedDotA = !dotOpsA.empty();
+  auto dotOpsB = getChainedDotOps(B);
+  bool chainedDotB = !dotOpsB.empty();
+  if (!(chainedDotA && chainedDotB)) {
+    SetVector<Operation *> forwardSlice;
+    getForwardSlice(dotOp, &forwardSlice, {filter});
+    for (Operation *op : forwardSlice) {
+      if (isa<tt::DotOp, tt::DotScaledOp>(op)) {
+        auto [A, B] = getDotOperands(op);
+        auto dotOpsA = getChainedDotOps(A);
+        chainedDotA |= dotOpsA.contains(dotOp);
+        auto dotOpsB = getChainedDotOps(B);
+        chainedDotB |= dotOpsB.contains(dotOp);
+      }
+    }
+  }
+
+  if (chainedDotA ^ chainedDotB) {
+    unsigned rank = shape.size();
+    SmallVector<unsigned> ret(rank, 1);
+    unsigned maxNumWarpsAlongM =
+        mlir::ceil<unsigned>(shape[rank - 2], dpasCap.repeatCount);
+    unsigned maxNumWarpsAlongN =
+        mlir::ceil<unsigned>(shape[rank - 1], dpasCap.executionSize);
+    if (chainedDotA) {
+      ret[rank - 2] = std::min(maxNumWarpsAlongM, numWarps);
+      ret[rank - 1] = std::min(maxNumWarpsAlongN,
+                               mlir::ceil<unsigned>(numWarps, ret[rank - 2]));
+    } else {
+      ret[rank - 1] = std::min(maxNumWarpsAlongN, numWarps);
+      ret[rank - 2] = std::min(maxNumWarpsAlongM,
+                               mlir::ceil<unsigned>(numWarps, ret[rank - 1]));
+    }
+
+    unsigned numWarpsUsed = ret[rank - 1] * ret[rank - 2];
+    if (numWarpsUsed < numWarps) {
+      unsigned remainingWarps = numWarps / numWarpsUsed;
+      if (rank > 2) {
+        ret[0] = remainingWarps;
+      } else {
+        // Put the remaining parallelism on the other dim to reduce the costs.
+        if (chainedDotA) {
+          ret[rank - 1] *= remainingWarps;
+        } else {
+          ret[rank - 2] *= remainingWarps;
+        }
+      }
+    }
+
+    return ret;
   }
 
   return ttgi::calculateWarpsPerTile(dpasCap.repeatCount, dpasCap.executionSize,
