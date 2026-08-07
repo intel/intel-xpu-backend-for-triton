@@ -12,7 +12,9 @@ import warnings
 
 import pytest
 
-from triton.backends.intel.compiler import extract_spill_size_from_zebin
+from triton.backends.compiler import GPUTarget
+from triton.backends.intel.compiler import (XPUBackend, extract_spill_size_from_zebin, get_auto_grf_retry_flag,
+                                            get_max_reg_spill_threshold, normalize_maxnreg)
 from triton.runtime.errors import IntelGPUError
 
 
@@ -115,3 +117,39 @@ def test_ze_info_with_spill_size_returns_value(tmp_path):
 def test_ze_info_without_spill_size_returns_zero(tmp_path):
     zebin = _write_elf(tmp_path, [(".ze_info", b"kernels:\n  - name: foo\n")])
     assert extract_spill_size_from_zebin(zebin) == 0
+
+
+@pytest.mark.parametrize("value", [None, 128, 256, 512])
+def test_normalize_maxnreg_accepts_supported_values(value):
+    assert normalize_maxnreg(value) == value
+
+
+def test_normalize_maxnreg_rejects_invalid_value():
+    with pytest.raises(RuntimeError, match="maxnreg must be one of"):
+        normalize_maxnreg(42)
+
+
+def test_get_max_reg_spill_threshold():
+    assert get_max_reg_spill_threshold() == 1000
+
+
+@pytest.mark.parametrize(("maxnreg", "arch", "expected"), [(None, "pvc", "-cl-intel-256-GRF-per-thread"),
+                                                            (None, "cri", "-cl-intel-512-GRF-per-thread"),
+                                                            (128, "pvc", ""),
+                                                            (256, "cri", "-cl-intel-256-GRF-per-thread"),
+                                                            (512, "pvc", "-cl-intel-512-GRF-per-thread")])
+def test_get_auto_grf_retry_flag(maxnreg, arch, expected):
+    assert get_auto_grf_retry_flag(maxnreg, arch) == expected
+
+
+@pytest.mark.parametrize("grf_mode", ["default", "auto", "256", "512"])
+def test_xpu_backend_parse_options_accepts_maxnreg(grf_mode):
+    backend = XPUBackend(GPUTarget("xpu", {"architecture": "pvc"}, 32))
+    options = backend.parse_options({"maxnreg": 256, "grf_mode": grf_mode})
+    assert options.maxnreg == 256
+
+
+def test_xpu_backend_parse_options_rejects_mismatched_grf_mode():
+    backend = XPUBackend(GPUTarget("xpu", {"architecture": "pvc"}, 32))
+    with pytest.raises(RuntimeError, match="greater than or equal to maxnreg"):
+        backend.parse_options({"maxnreg": 256, "grf_mode": "128"})

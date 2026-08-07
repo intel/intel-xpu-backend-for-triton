@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstring>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -425,6 +426,34 @@ struct BuildFlags {
   }
 };
 
+static constexpr int32_t defaultMaxRegSpill = 1000;
+
+static int32_t normalizeMaxNReg(int32_t maxnreg) {
+  if (maxnreg == 0 || maxnreg == 128 || maxnreg == 256 || maxnreg == 512)
+    return maxnreg;
+  throw std::invalid_argument("maxnreg must be one of 128, 256, or 512");
+}
+
+static int32_t getMaxRegSpillThreshold() {
+  return defaultMaxRegSpill;
+}
+
+static void addAutoGRFSizeFlag(BuildFlags &buildFlags, int32_t maxnreg,
+                               const char *resolvedDeviceArch) {
+  maxnreg = normalizeMaxNReg(maxnreg);
+  if (maxnreg == 128)
+    return;
+  if (maxnreg == 256) {
+    buildFlags.addLargeGRFSizeFlag();
+    return;
+  }
+  if (maxnreg == 512 || std::strcmp(resolvedDeviceArch, "cri") == 0) {
+    buildFlags.addXLargeGRFSizeFlag();
+    return;
+  }
+  buildFlags.addLargeGRFSizeFlag();
+}
+
 sycl::context get_default_context(const sycl::device &sycl_device) {
   const auto &platform = sycl_device.get_platform();
 #if defined(_WIN32)
@@ -465,15 +494,23 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   PyObject *py_bytes;
   int is_spv;
   int devId;
+  int32_t maxnreg = 0;
 
-  if (!PyArg_ParseTuple(args, "sSispi|z", &name, &py_bytes, &shared,
-                        &build_flags_ptr, &is_spv, &devId, &deviceArch)) {
+  if (!PyArg_ParseTuple(args, "sSispi|zi", &name, &py_bytes, &shared,
+                        &build_flags_ptr, &is_spv, &devId, &deviceArch,
+                        &maxnreg)) {
     // PyArg_ParseTuple will set a PyErr
     return NULL;
   }
 
   const char *resolvedDeviceArch =
       (deviceArch != nullptr && deviceArch[0] != '\0') ? deviceArch : "unknown";
+  try {
+    maxnreg = normalizeMaxNReg(maxnreg);
+  } catch (const std::invalid_argument &e) {
+    PyErr_SetString(PyExc_RuntimeError, e.what());
+    return NULL;
+  }
 
   TRITON_ZE_FAIL_IF(devId >= g_sycl_l0_device_list.size(),
                     "Device is not found");
@@ -511,9 +548,13 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   }
 
   const bool debugEnabled = getBoolEnv("TRITON_DEBUG");
-  constexpr int32_t max_reg_spill = 1000;
+  const int32_t maxRegSpill = getMaxRegSpillThreshold();
+  BuildFlags retry_build_flags = build_flags;
+  addAutoGRFSizeFlag(retry_build_flags, maxnreg, resolvedDeviceArch);
+  const bool hasRetryBuildFlags = retry_build_flags() != build_flags();
 
-  if (canRetryWithLargeGRF && (firstBuildFailed || n_spills > max_reg_spill)) {
+  if (canRetryWithLargeGRF && hasRetryBuildFlags &&
+      (firstBuildFailed || n_spills > maxRegSpill)) {
     PyObject *orig_type = nullptr, *orig_value = nullptr, *orig_tb = nullptr;
     // Save the original error before clearing it for the retry attempt.
     if (firstBuildFailed)
@@ -525,11 +566,7 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
                 << kernel_name << "\", retrying with large GRF mode"
                 << std::endl;
 
-    if (std::strcmp(resolvedDeviceArch, "cri") == 0) {
-      build_flags.addXLargeGRFSizeFlag();
-    } else {
-      build_flags.addLargeGRFSizeFlag();
-    }
+    build_flags = retry_build_flags;
 
     try {
       auto [l0_module_retry, l0_kernel_retry, n_spills_retry] =
