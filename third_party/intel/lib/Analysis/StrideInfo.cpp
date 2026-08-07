@@ -6,6 +6,7 @@
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
@@ -613,9 +614,16 @@ protected:
     stride.reserve(lhs.size());
     for (unsigned d = 0, rank = lhs.size(); d < rank; ++d) {
       if (lhs[d] > 0 && rhsConst.has_value() && rhsConst.value() > 0 &&
-          lhs[d] % rhsConst.value() == 0)
-        stride.push_back(lhs[d] / rhsConst.value());
-      else if (lhs[d] == 0 && rhsConst.has_value() && rhsConst.value() != 0)
+          lhs[d] % rhsConst.value() == 0) {
+        // For DivSIOp, truncation toward zero breaks stride for negative
+        // inputs. When TRITON_FIX_SIGNED_DIV is set, conservatively skip.
+        static bool fix = []() {
+          if constexpr (std::is_same_v<OpTy, arith::DivSIOp>)
+            return mlir::triton::tools::getBoolEnv("TRITON_FIX_SIGNED_DIV");
+          return false;
+        }();
+        stride.push_back(fix ? -1 : lhs[d] / rhsConst.value());
+      } else if (lhs[d] == 0 && rhsConst.has_value() && rhsConst.value() != 0)
         stride.push_back(0);
       else
         stride.push_back(-1);
@@ -644,6 +652,18 @@ protected:
         // Stride preserved when range span doesn't cross a modulus boundary.
         // Effective period is gcd(divisibility, modulus) when AxisInfo is
         // available; falls back to modulus otherwise.
+        //
+        // NOTE: For RemSIOp, truncation toward zero breaks stride for
+        // negative inputs. When TRITON_FIX_SIGNED_DIV is set, conservatively
+        // report unknown stride.
+        if constexpr (std::is_same_v<OpTy, arith::RemSIOp>) {
+          static bool fix =
+              mlir::triton::tools::getBoolEnv("TRITON_FIX_SIGNED_DIV");
+          if (fix) {
+            stride.push_back(-1);
+            continue;
+          }
+        }
         auto resTy = dyn_cast<RankedTensorType>(op.getType());
         if (resTy) {
           int64_t dimSize = resTy.getDimSize(d);
