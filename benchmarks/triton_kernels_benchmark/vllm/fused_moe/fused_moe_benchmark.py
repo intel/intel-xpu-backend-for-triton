@@ -436,8 +436,8 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_fp8
 
             def sycl_tla_fn():
                 input_A_grouped = input_A.index_select(0, gather_idx)
-                sycl_tla_grouped_gemm(input_A_grouped, input_B_grouped, None, None, output_sycl, rows_per_expert, n, k,
-                                      num_experts)
+                sycl_tla_grouped_gemm(input_A_grouped, input_B_grouped, scales=None, bias=None, output=output_sycl,
+                                      num_rows_per_expert=rows_per_expert, n=n, k=k, num_experts=num_experts)
                 return output_sycl
 
             sycl_tla_fn()
