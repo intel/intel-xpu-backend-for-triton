@@ -27,7 +27,7 @@ FP32_HEX_CANONICAL = (
     "-inf",
     "0x1.8p+2",
 )
-HEX_FLOAT_RE = re.compile(r"-?0x[0-9a-f]+(?:\.[0-9a-f]*)?p[+-]?\d+|-?inf|-?nan", re.IGNORECASE)
+HEX_FLOAT_RE = re.compile(r"-?0x[0-9a-f]+(?:\.[0-9a-f]*)?p[+-]?\d+|-?\b(?:inf|nan)\b", re.IGNORECASE)
 
 
 def _hex_float_values(output: bytes) -> Counter:

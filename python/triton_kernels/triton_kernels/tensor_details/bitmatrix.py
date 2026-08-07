@@ -160,7 +160,10 @@ def make_bitmatrix_metadata_torch(nonzero_indx, bitmatrix):
     pad = lambda x, total_size: torch.cat((x, torch.full((total_size - x.shape[0], ), -1, device=x.device)))
     col_sorted_indx = pad(torch.argsort(nonzero_indx[nonzero_indx != -1], stable=True), nonzero_indx.numel())
     row_sorted_indx = pad(torch.argsort(col_sorted_indx[col_sorted_indx != -1], stable=True), nonzero_indx.numel())
-    col_sum = torch.histc(nonzero_indx, bins=n_batches, max=n_batches - 1).int()
+    # PyTorch doesn't implement histc for integer types on CPU, so cast to
+    # float64 to keep this reference implementation usable on CPU as well.
+    nonzero_indx_fp64 = nonzero_indx.to(torch.float64)
+    col_sum = torch.histc(nonzero_indx_fp64, bins=n_batches, max=n_batches - 1).int()
     return BitmatrixMetadata(
         col_sum=col_sum,
         col_sorted_indx=col_sorted_indx,
