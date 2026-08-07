@@ -129,9 +129,8 @@ def test_normalize_maxnreg_rejects_invalid_value():
         normalize_maxnreg(42)
 
 
-@pytest.mark.parametrize(("value", "expected"), [(None, 1000), (128, 1000), (256, 1000), (512, 1000)])
-def test_get_max_reg_spill_threshold(value, expected):
-    assert get_max_reg_spill_threshold(value) == expected
+def test_get_max_reg_spill_threshold():
+    assert get_max_reg_spill_threshold() == 1000
 
 
 @pytest.mark.parametrize(("maxnreg", "arch", "expected"), [(None, "pvc", "-cl-intel-256-GRF-per-thread"),

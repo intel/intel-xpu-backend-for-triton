@@ -434,7 +434,7 @@ static int32_t normalizeMaxNReg(int32_t maxnreg) {
   throw std::invalid_argument("maxnreg must be one of 128, 256, or 512");
 }
 
-static int32_t getMaxRegSpillThreshold(int32_t /*maxnreg*/) {
+static int32_t getMaxRegSpillThreshold() {
   return defaultMaxRegSpill;
 }
 
@@ -548,7 +548,7 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   }
 
   const bool debugEnabled = getBoolEnv("TRITON_DEBUG");
-  const int32_t maxRegSpill = getMaxRegSpillThreshold(maxnreg);
+  const int32_t maxRegSpill = getMaxRegSpillThreshold();
   BuildFlags retry_build_flags = build_flags;
   addAutoGRFSizeFlag(retry_build_flags, maxnreg, resolvedDeviceArch);
   const bool hasRetryBuildFlags = retry_build_flags() != build_flags();

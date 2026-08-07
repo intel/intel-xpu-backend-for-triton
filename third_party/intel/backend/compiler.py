@@ -128,7 +128,7 @@ def normalize_maxnreg(maxnreg):
     return maxnreg
 
 
-def get_max_reg_spill_threshold(_maxnreg):
+def get_max_reg_spill_threshold():
     return MAX_REG_SPILL
 
 
@@ -675,7 +675,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                     subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
                     if options.grf_mode == "default":
                         spill_size = extract_spill_size_from_zebin(fbin)
-                        if spill_size <= get_max_reg_spill_threshold(options.maxnreg):
+                        if spill_size <= get_max_reg_spill_threshold():
                             break
                 except (subprocess.CalledProcessError, IntelGPUError) as e:
                     # If GRF mode was not last yet, retry with different GRF mode
