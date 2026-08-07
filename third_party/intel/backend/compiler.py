@@ -128,8 +128,7 @@ def normalize_maxnreg(maxnreg):
     return maxnreg
 
 
-def get_max_reg_spill_threshold(maxnreg):
-    normalize_maxnreg(maxnreg)
+def get_max_reg_spill_threshold(_maxnreg):
     return MAX_REG_SPILL
 
 

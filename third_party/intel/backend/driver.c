@@ -434,8 +434,7 @@ static int32_t normalizeMaxNReg(int32_t maxnreg) {
   throw std::invalid_argument("maxnreg must be one of 128, 256, or 512");
 }
 
-static int32_t getMaxRegSpillThreshold(int32_t maxnreg) {
-  normalizeMaxNReg(maxnreg);
+static int32_t getMaxRegSpillThreshold(int32_t /*maxnreg*/) {
   return defaultMaxRegSpill;
 }
 
