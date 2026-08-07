@@ -129,8 +129,8 @@ def normalize_maxnreg(maxnreg):
 
 
 def get_max_reg_spill_threshold(maxnreg):
-    maxnreg = normalize_maxnreg(maxnreg)
-    return MAX_REG_SPILL if maxnreg is None else maxnreg
+    normalize_maxnreg(maxnreg)
+    return MAX_REG_SPILL
 
 
 def grf_flag_from_maxnreg(maxnreg):
@@ -259,11 +259,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             args["enable_fp_fusion"] = knobs.language.default_fp_fusion
         maxnreg = normalize_maxnreg(args.get("maxnreg"))
         grf_mode = args.get("grf_mode", "default")
-        if maxnreg is not None and grf_mode != "default":
-            expected_grf_mode = str(maxnreg)
-            if grf_mode != expected_grf_mode:
-                raise RuntimeError("maxnreg can only be combined with grf_mode='default' "
-                                   "or the matching explicit GRF mode")
+        if maxnreg is not None and grf_mode in {"128", "256", "512"} and int(grf_mode) < maxnreg:
+            raise RuntimeError("grf_mode must define a GRF size greater than or equal to maxnreg")
         args["maxnreg"] = maxnreg
         return XPUOptions(**args)
 

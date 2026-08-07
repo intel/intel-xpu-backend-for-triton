@@ -435,8 +435,8 @@ static int32_t normalizeMaxNReg(int32_t maxnreg) {
 }
 
 static int32_t getMaxRegSpillThreshold(int32_t maxnreg) {
-  maxnreg = normalizeMaxNReg(maxnreg);
-  return maxnreg == 0 ? defaultMaxRegSpill : maxnreg;
+  normalizeMaxNReg(maxnreg);
+  return defaultMaxRegSpill;
 }
 
 static void addAutoGRFSizeFlag(BuildFlags &buildFlags, int32_t maxnreg,
