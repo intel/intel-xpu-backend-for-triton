@@ -1173,7 +1173,18 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
     syclex::nd_launch(cgh, parallel_work_size, kernel_ptr);
   };
   // Event-less submit: nothing in the launch path consumes the event.
+  //
+  // Kept off the LTS driver line: up to and including Agama 1146 the driver
+  // harvests the device-side assert and printf buffers only when the host waits
+  // on the kernel's *event*, so submitting without one makes `device_assert`
+  // and `tl.device_print` silently do nothing -- test_debug.py then fails 29
+  // tests with "Expected SIGABRT but got exit code 0" and no output at all.
+#if __SYCL_COMPILER_VERSION >= 20260204 &&                                     \
+    defined(ENABLE_EXPERIMENTAL_EVENTLESS_SUBMIT)
   syclex::submit(stream, cgf);
+#else
+  stream.submit(cgf);
+#endif
 }
 // end sycl
 

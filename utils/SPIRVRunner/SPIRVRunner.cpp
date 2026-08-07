@@ -332,8 +332,13 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
     double duration = static_cast<double>(end - start) / 1000000;
     std::cout << "Kernel execution time: " << duration << " ms" << std::endl;
   } else {
+#if __SYCL_COMPILER_VERSION >= 20260204 &&                                     \
+    defined(ENABLE_EXPERIMENTAL_EVENTLESS_SUBMIT)
     // Event-less submit: nothing consumes the event on this path.
     syclex::submit(stream, cgf);
+#else
+    stream.submit(cgf);
+#endif
   }
   stream.wait_and_throw();
 }

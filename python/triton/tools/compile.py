@@ -218,12 +218,18 @@ def compile_kernel(args: CompileArgs):
             format_name = "native"
         else:
             format_name = "spirv"
+        # Eventless kernel submission requires a rolling (non-LTS) driver; the AOT
+        # stub is generated for this specific target, so bake the decision in now
+        # rather than deferring to a runtime check in the generated C++.
+        driver_version = target.arch.get("driver_version") if isinstance(target.arch, dict) else None
+        is_lts = backend.is_lts(driver_version)
         params |= {
             "arg_types": ", ".join(ty_to_cpp(arg) for arg in arg_types_not_1),
             "grf_mode": args.grf_mode,
             "build_flags": ccinfo.metadata.build_flags,
             "threads_per_warp": args.threads_per_warp,
             "format_name": format_name,
+            "eventless_submit_define": "" if is_lts else "#define ENABLE_EXPERIMENTAL_EVENTLESS_SUBMIT",
         }
     output_files = []
     template_dir = Path(__file__).parent / "extra" / backend_name
