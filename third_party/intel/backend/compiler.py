@@ -177,6 +177,17 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             return True
         return tuple(int(x) if x is not None else 0 for x in m.groups()) < (1, 6, 35096, 9)
 
+    @staticmethod
+    def core_clock_rate(tgt_prop) -> int:
+        if (rate := tgt_prop.get('core_clock_rate')) is None:
+            from triton.runtime import driver
+            # Not `driver.active.utils`: creating it initializes the device, which raises
+            # when compiling in a forked process.
+            if (utils := driver.active.__dict__.get('utils')) is None:
+                return 0
+            rate = utils.get_device_properties(driver.active.get_current_device()).get('sm_clock_rate', 0)
+        return rate or 0
+
     def parse_target(self, tgt_prop) -> dict:
         dev_prop = {}
         dev_prop['name'] = tgt_prop.get('name', 'xpu')
@@ -210,6 +221,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         dev_prop['has_256b_load_store'] = tgt_prop.get('has_256b_prefetch', False)
         dev_prop['has_rounded_divide_sqrt'] = tgt_prop.get('has_rounded_divide_sqrt', not is_lts)
         dev_prop['has_sigmoid'] = tgt_prop.get('has_sigmoid', False)
+        dev_prop['core_clock_rate'] = self.core_clock_rate(tgt_prop)
 
         if '__intel_already_queried_extensions__' not in tgt_prop:
             # All GPUs with the same device_id have the same extensions, so we just
@@ -495,6 +507,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         driver_version = metadata["target"].arch.get("driver_version")
         if cls.is_lts(driver_version):
             intel.set_is_lts(mod)
+
+        # `getGlobalTimer` counts core clock cycles and needs the rate to report
+        # nanoseconds.
+        intel.set_core_clock_rate(mod, cls.core_clock_rate(metadata["target"].arch))
 
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)

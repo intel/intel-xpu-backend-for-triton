@@ -107,7 +107,7 @@ public:
 
 static SPIRV::TranslatorOpts getSPIRVOpts() {
   SPIRV::TranslatorOpts SPIRVOpts{SPIRV::VersionNumber::SPIRV_1_4};
-  static constexpr std::array<SPIRV::ExtensionID, 30> AllowedExtensions{
+  static constexpr std::array<SPIRV::ExtensionID, 31> AllowedExtensions{
       SPIRV::ExtensionID::SPV_EXT_shader_atomic_float_add,
       SPIRV::ExtensionID::SPV_EXT_shader_atomic_float16_add,
       SPIRV::ExtensionID::SPV_EXT_float8,
@@ -137,7 +137,8 @@ static SPIRV::TranslatorOpts getSPIRVOpts() {
       SPIRV::ExtensionID::SPV_INTEL_vector_compute,
       SPIRV::ExtensionID::SPV_KHR_bfloat16,
       SPIRV::ExtensionID::SPV_KHR_bit_instructions,
-      SPIRV::ExtensionID::SPV_KHR_non_semantic_info};
+      SPIRV::ExtensionID::SPV_KHR_non_semantic_info,
+      SPIRV::ExtensionID::SPV_KHR_shader_clock};
 
   SPIRVOpts.setMemToRegEnabled(true);
   SPIRVOpts.setPreserveOCLKernelArgTypeMetadataThroughString(true);
