@@ -234,6 +234,11 @@ template <
 static std::tuple<Value, Value, Value>
 computeAlignedBasePtrWidthAndOffset(OpTy op,
                                     ConversionPatternRewriter &rewriter) {
+  // Skip compensation when the base address already satisfies the HW alignment
+  // requirement.
+  if (!intel::needs2DBlockIOAlignmentCompensation(op))
+    return {op.getPtr(), op.getBaseWidth(), op.getX()};
+
   Location loc = op->getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value baseAddr = b.ptrtoint(int_ty(64), op.getPtr());
