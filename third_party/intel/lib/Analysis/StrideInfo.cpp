@@ -613,9 +613,17 @@ protected:
     stride.reserve(lhs.size());
     for (unsigned d = 0, rank = lhs.size(); d < rank; ++d) {
       if (lhs[d] > 0 && rhsConst.has_value() && rhsConst.value() > 0 &&
-          lhs[d] % rhsConst.value() == 0)
-        stride.push_back(lhs[d] / rhsConst.value());
-      else if (lhs[d] == 0 && rhsConst.has_value() && rhsConst.value() != 0)
+          lhs[d] % rhsConst.value() == 0) {
+        // For signed division (DivSIOp), truncation toward zero means
+        // the stride pattern breaks when the input window crosses zero:
+        //   divsi([-2,-1,0,1], 2) = [-1,0,0,0] (not evenly strided)
+        // Without range analysis we cannot prove inputs are non-negative
+        // for DivSIOp, so conservatively report unknown stride.
+        if constexpr (std::is_same_v<OpTy, arith::DivSIOp>)
+          stride.push_back(-1);
+        else
+          stride.push_back(lhs[d] / rhsConst.value());
+      } else if (lhs[d] == 0 && rhsConst.has_value() && rhsConst.value() != 0)
         stride.push_back(0);
       else
         stride.push_back(-1);
@@ -644,22 +652,33 @@ protected:
         // Stride preserved when range span doesn't cross a modulus boundary.
         // Effective period is gcd(divisibility, modulus) when AxisInfo is
         // available; falls back to modulus otherwise.
-        auto resTy = dyn_cast<RankedTensorType>(op.getType());
-        if (resTy) {
-          int64_t dimSize = resTy.getDimSize(d);
-          int64_t maxVal = lhs[d] * (dimSize - 1);
-          int64_t modulus = rhsConst.value();
-          int64_t g = modulus; // fallback when no AxisInfo
-          if (auto *ai = this->axisInfoLookup(op.getLhs())) {
-            int64_t divisibility = ai->getDivisibility(d);
-            g = std::gcd(divisibility, modulus);
-          }
-          if (maxVal < g)
-            stride.push_back(lhs[d]);
-          else
-            stride.push_back(-1);
-        } else {
+        //
+        // NOTE: For signed remainder (RemSIOp), this only holds when the
+        // input window starts at a non-negative value. For negative starts
+        // at multiples of M, truncation-toward-zero creates a discontinuity
+        // between x=kM and x=kM+1 (k<0), breaking stride. Without range
+        // analysis we cannot prove inputs are non-negative for RemSIOp, so
+        // conservatively report unknown stride.
+        if constexpr (std::is_same_v<OpTy, arith::RemSIOp>) {
           stride.push_back(-1);
+        } else {
+          auto resTy = dyn_cast<RankedTensorType>(op.getType());
+          if (resTy) {
+            int64_t dimSize = resTy.getDimSize(d);
+            int64_t maxVal = lhs[d] * (dimSize - 1);
+            int64_t modulus = rhsConst.value();
+            int64_t g = modulus; // fallback when no AxisInfo
+            if (auto *ai = this->axisInfoLookup(op.getLhs())) {
+              int64_t divisibility = ai->getDivisibility(d);
+              g = std::gcd(divisibility, modulus);
+            }
+            if (maxVal < g)
+              stride.push_back(lhs[d]);
+            else
+              stride.push_back(-1);
+          } else {
+            stride.push_back(-1);
+          }
         }
       } else {
         stride.push_back(-1);

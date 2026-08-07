@@ -444,11 +444,18 @@ private:
     // the minimal constancy is gcd(d_lhs, d_rhs).
     // Since gcd(d_lhs, d_rhs) maybe > len(lhs),
     // we need to use another gcd to get the actual constancy.
-    if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
-        AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
-      constancy = std::max(constancy,
-                           gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
-                               rhs.getDivisibility(dim)));
+    //
+    // NOTE: This optimization is only valid for unsigned division (DivUIOp).
+    // For signed division (DivSIOp), truncation toward zero breaks the
+    // constancy pattern for negative inputs. Without range analysis we
+    // cannot prove inputs are non-negative, so we conservatively skip.
+    if constexpr (!std::is_same_v<OpTy, arith::DivSIOp>) {
+      if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
+          AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
+        constancy = std::max(constancy, gcd(lhs.getContiguity(dim),
+                                            lhs.getDivisibility(dim),
+                                            rhs.getDivisibility(dim)));
+      }
     }
     return constancy;
   }
@@ -506,16 +513,32 @@ private:
     // The minimal contiguity is gcd(d_lhs, d_rhs).
     // Since gcd(d_lhs, d_rhs) maybe > len(lhs),
     // we need to use another gcd to get the actual contiguity.
-    if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
-        AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
-      contiguity = gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
-                       rhs.getDivisibility(dim));
+    //
+    // NOTE: This optimization is only valid for unsigned remainder (RemUIOp).
+    // For signed remainder (RemSIOp), the contiguity pattern breaks for
+    // negative inputs because srem produces negative results for negative
+    // dividends. Without range analysis we cannot prove inputs are
+    // non-negative, so we conservatively skip.
+    if constexpr (!std::is_same_v<OpTy, arith::RemSIOp>) {
+      if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
+          AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
+        contiguity = gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
+                         rhs.getDivisibility(dim));
+      }
     }
     return contiguity;
   }
 
   int64_t getDivisibility(OpTy op, const AxisInfo &lhs, const AxisInfo &rhs,
                           int dim) override {
+    // NOTE: The divisibility claim gcd(d_lhs, d_rhs) only holds for the
+    // first element of each contiguity group. For RemSIOp we disable the
+    // contiguity optimization (see getContiguity), so contiguity is 1 and
+    // divisibility must hold for ALL elements — which it doesn't in
+    // general. Conservatively return 1 for RemSIOp.
+    if constexpr (std::is_same_v<OpTy, arith::RemSIOp>) {
+      return 1;
+    }
     if (rhs.getConstancy(dim) > 1) {
       // lhs: d_lhs * k = gcd(d_lhs, d_rhs) * k' * k = gcd(d_lhs, d_rhs) * k''
       // rhs: d_rhs * p = gcd(d_lhs, d_rhs) * p' * p = gcd(d_lhs, d_rhs) * p''
