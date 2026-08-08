@@ -30,18 +30,18 @@ jobs:
       runner_label: max1550
     secrets: inherit
 
-  # ---- vLLM benchmarks ----
+  # ---- Build wheel ----
 
-  build-wheel-vllm:
-    if: >-
-      github.event.label.name == 'run-vllm-benchmarks' ||
-      github.event.label.name == 'run-benchmarks'
+  build-wheel:
+    if: github.event.label.name != 'run-vllm-tests'
     uses: ./.github/workflows/build-benchmarks-wheel.yml
     with:
       python-version: "3.12"
 
+  # ---- vLLM benchmarks ----
+
   vllm-benchmarks-bmg:
-    needs: build-wheel-vllm
+    needs: build-wheel
     if: github.event.label.name == 'run-vllm-benchmarks'
     uses: ./.github/workflows/vllm-benchmarks.yml
     with:
@@ -49,7 +49,7 @@ jobs:
     secrets: inherit
 
   vllm-benchmarks-pvc:
-    needs: build-wheel-vllm
+    needs: build-wheel
     if: >-
       github.event.label.name == 'run-vllm-benchmarks' ||
       github.event.label.name == 'run-benchmarks'
@@ -60,14 +60,8 @@ jobs:
 
   # ---- Triton benchmarks ----
 
-  build-wheel-triton:
-    if: github.event.label.name == 'run-benchmarks'
-    uses: ./.github/workflows/build-benchmarks-wheel.yml
-    with:
-      python-version: "3.10"
-
   triton-benchmarks-bmg:
-    needs: build-wheel-triton
+    needs: build-wheel
     if: github.event.label.name == 'run-benchmarks'
     uses: ./.github/workflows/triton-benchmarks.yml
     with:
@@ -75,7 +69,7 @@ jobs:
       skip_benchmarks: '["flex-attention-causal-batch16"]'
 
   triton-benchmarks-pvc:
-    needs: build-wheel-triton
+    needs: build-wheel
     if: github.event.label.name == 'run-benchmarks'
     uses: ./.github/workflows/triton-benchmarks.yml
     with:
@@ -84,14 +78,8 @@ jobs:
 
   # ---- SGLang benchmarks ----
 
-  build-wheel-sglang:
-    if: github.event.label.name == 'run-sglang-benchmarks'
-    uses: ./.github/workflows/build-benchmarks-wheel.yml
-    with:
-      python-version: "3.12"
-
   sglang-benchmarks-bmg:
-    needs: build-wheel-sglang
+    needs: build-wheel
     if: github.event.label.name == 'run-sglang-benchmarks'
     uses: ./.github/workflows/sglang-benchmarks.yml
     with:
@@ -99,7 +87,7 @@ jobs:
     secrets: inherit
 
   sglang-benchmarks-pvc:
-    needs: build-wheel-sglang
+    needs: build-wheel
     if: github.event.label.name == 'run-sglang-benchmarks'
     uses: ./.github/workflows/sglang-benchmarks.yml
     with:

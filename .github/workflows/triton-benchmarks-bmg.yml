@@ -28,7 +28,7 @@ jobs:
     if: needs.check-paths.outputs.benchmarks == 'true'
     uses: ./.github/workflows/build-benchmarks-wheel.yml
     with:
-      python-version: "3.10"
+      python-version: "3.12"
 
   benchmarks:
     needs: [check-paths, build-wheel]
