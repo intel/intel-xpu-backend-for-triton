@@ -1,0 +1,95 @@
+name: On label
+
+permissions: read-all
+
+on:
+  pull_request:
+    branches:
+      - main
+    types: [labeled]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}-${{ github.event.label.name }}
+  cancel-in-progress: true
+
+jobs:
+  # ---- vLLM tests ----
+
+  vllm-tests-bmg:
+    if: github.event.label.name == 'run-vllm-tests'
+    uses: ./.github/workflows/vllm-tests-reusable.yml
+    with:
+      runner_label: b580
+      skip_list: xe2
+    secrets: inherit
+
+  vllm-tests-pvc:
+    if: github.event.label.name == 'run-vllm-tests'
+    uses: ./.github/workflows/vllm-tests-reusable.yml
+    with:
+      runner_label: max1550
+    secrets: inherit
+
+  # ---- Build wheel ----
+
+  build-wheel:
+    if: github.event.label.name != 'run-vllm-tests'
+    uses: ./.github/workflows/build-benchmarks-wheel.yml
+    with:
+      python-version: "3.12"
+
+  # ---- vLLM benchmarks ----
+
+  vllm-benchmarks-bmg:
+    needs: build-wheel
+    if: github.event.label.name == 'run-vllm-benchmarks'
+    uses: ./.github/workflows/vllm-benchmarks.yml
+    with:
+      runner_label: b580
+    secrets: inherit
+
+  vllm-benchmarks-pvc:
+    needs: build-wheel
+    if: >-
+      github.event.label.name == 'run-vllm-benchmarks' ||
+      github.event.label.name == 'run-benchmarks'
+    uses: ./.github/workflows/vllm-benchmarks.yml
+    with:
+      runner_label: max1550
+    secrets: inherit
+
+  # ---- Triton benchmarks ----
+
+  triton-benchmarks-bmg:
+    needs: build-wheel
+    if: github.event.label.name == 'run-benchmarks'
+    uses: ./.github/workflows/triton-benchmarks.yml
+    with:
+      runner_label: b580
+      skip_benchmarks: '["flex-attention-causal-batch16"]'
+
+  triton-benchmarks-pvc:
+    needs: build-wheel
+    if: github.event.label.name == 'run-benchmarks'
+    uses: ./.github/workflows/triton-benchmarks.yml
+    with:
+      runner_label: max1550
+      skip_benchmarks: "[]"
+
+  # ---- SGLang benchmarks ----
+
+  sglang-benchmarks-bmg:
+    needs: build-wheel
+    if: github.event.label.name == 'run-sglang-benchmarks'
+    uses: ./.github/workflows/sglang-benchmarks.yml
+    with:
+      runner_label: b580
+    secrets: inherit
+
+  sglang-benchmarks-pvc:
+    needs: build-wheel
+    if: github.event.label.name == 'run-sglang-benchmarks'
+    uses: ./.github/workflows/sglang-benchmarks.yml
+    with:
+      runner_label: max1550
+    secrets: inherit
