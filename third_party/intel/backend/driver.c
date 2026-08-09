@@ -315,7 +315,6 @@ extern "C" EXPORT_FUNC PyObject *get_device_properties(int device_id) {
                        "sub_group_sizes", subgroup_sizes);
 }
 
-// Fix A: cache get_info<num_args> per kernel specialization
 enum class BindSharedMemoryState : int8_t {
   Uninitialized = -1,
   Disabled = 0,
@@ -634,7 +633,6 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
       new sycl::kernel(sycl::make_kernel<sycl::backend::ext_oneapi_level_zero>(
           {*mod, l0_kernel, sycl::ext::oneapi::level_zero::ownership::transfer},
           ctx));
-  // Fix A: wrap kernel + shared-memory binding cache in KernelInfo
   KernelInfo *kernel_info =
       new KernelInfo{fun, 0u, BindSharedMemoryState::Uninitialized};
   auto kernel_py = PyCapsule_New(reinterpret_cast<void *>(kernel_info),
@@ -1128,11 +1126,12 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
             : BindSharedMemoryState::Disabled;
   }
 
-  const bool bind_shared_memory =
+  const bool is_bind_shared_memory =
       kernel_info->bind_shared_memory_state == BindSharedMemoryState::Enabled;
 
-  assert(num_params ==
-             kernel_info->kernel_num_args - (bind_shared_memory ? 1 : 0) &&
+  assert(num_params == // Actual number of params
+             kernel_info->kernel_num_args -
+                 (is_bind_shared_memory ? 1 : 0) && // Expected number of params
          "number of kernel param not matched");
 
   size_t global_range_x =
@@ -1193,7 +1192,7 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
     // Set scratch memory arguments
     set_scalar_arg<void *>(cgh, num_params - 2, params[num_params - 2]);
     set_scalar_arg<void *>(cgh, num_params - 1, params[num_params - 1]);
-    if (bind_shared_memory) {
+    if (is_bind_shared_memory) {
       using share_mem_t = sycl::local_accessor<int8_t, 1>;
       share_mem_t local_buffer = share_mem_t(shared_memory, cgh);
       cgh.set_arg(num_params, local_buffer);
