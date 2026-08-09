@@ -33,7 +33,10 @@ jobs:
   # ---- Build wheel ----
 
   build-wheel:
-    if: github.event.label.name != 'run-vllm-tests'
+    if: >-
+      github.event.label.name == 'run-benchmarks' ||
+      github.event.label.name == 'run-vllm-benchmarks' ||
+      github.event.label.name == 'run-sglang-benchmarks'
     uses: ./.github/workflows/build-benchmarks-wheel.yml
     with:
       python-version: "3.12"
