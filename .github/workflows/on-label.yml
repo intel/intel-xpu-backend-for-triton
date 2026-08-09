@@ -53,9 +53,7 @@ jobs:
 
   vllm-benchmarks-pvc:
     needs: build-wheel
-    if: >-
-      github.event.label.name == 'run-vllm-benchmarks' ||
-      github.event.label.name == 'run-benchmarks'
+    if: github.event.label.name == 'run-vllm-benchmarks'
     uses: ./.github/workflows/vllm-benchmarks.yml
     with:
       runner_label: max1550
