@@ -699,6 +699,12 @@ struct TritonIntelGPUInferLayoutInterface
                        ArrayRef<int32_t> order, // trans order
                        Attribute &resultEncoding,
                        std::optional<Location> loc) const override {
+    // transpose(x, order=[0, 1, ...]) preserves the operand encoding.
+    if (isIota(order)) {
+      resultEncoding = operandEncoding;
+      return success();
+    }
+
     auto *ctx = getDialect()->getContext();
 
     if (shape.size() != order.size()) {
