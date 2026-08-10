@@ -4286,6 +4286,8 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
       addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, negativeOffsetX);
       Value adjustedBaseWidth =
           b.add(baseWidth, b.mul(offsetX, b.i32_val(elemSizeInBits / 8)));
+      // The HW requires a base width of at least 64 bytes.
+      adjustedBaseWidth = b.umax(adjustedBaseWidth, b.i32_val(64));
 
       Value pred;
       if (maskElems.size())
