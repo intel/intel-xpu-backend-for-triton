@@ -418,7 +418,9 @@ struct TMEMAref {
     buffer = {};
   }
   void release(OpBuilder &b, Location loc) {
-    assert(asyncOp[partitionId]);
+    auto asyncOpIt = asyncOp.find(partitionId);
+    assert(asyncOpIt != asyncOp.end() && asyncOpIt->second);
+    AsyncOp currentAsyncOp = *asyncOpIt->second;
     StageCluster stageCluster;
     if (partitionId)
       stageCluster = stageClusters[*partitionId];
@@ -426,13 +428,13 @@ struct TMEMAref {
       createInto<ArefPutExitOp>(
           b, loc, {partitionId, stageCluster}, aref, token,
           b.getArrayAttr(SmallVector<Attribute>{
-              AsyncOpAttr::get(b.getContext(), *asyncOp[partitionId])}));
+              AsyncOpAttr::get(b.getContext(), currentAsyncOp)}));
       kind = GET;
     } else {
       createInto<ArefGetExitOp>(
           b, loc, {partitionId, stageCluster}, aref, token,
           b.getArrayAttr(SmallVector<Attribute>{
-              AsyncOpAttr::get(b.getContext(), *asyncOp[partitionId])}));
+              AsyncOpAttr::get(b.getContext(), currentAsyncOp)}));
       kind = PUT;
     }
   }
@@ -576,21 +578,6 @@ insertTmemArefImpl(TmemAccessDag::Node *node,
   return node;
 }
 
-bool canDoubleBufferAcc(MMAv5OpInterface mmaOp, int numTmemBlocks) {
-  auto tmemDesc = mmaOp.getAccumulator().getType();
-  auto blockM = tmemDesc.getShape()[0];
-  auto blockN = tmemDesc.getShape()[1];
-  constexpr int numTMEMColumns = 512;
-  constexpr int numTMEMRows = 128;
-  if (numTmemBlocks + (blockM * blockN * 2) > numTMEMRows * numTMEMColumns) {
-    return false;
-  }
-  if (isa<TCGen5MMAScaledOp>(mmaOp) && blockN == 256) {
-    return false;
-  }
-  return true;
-};
-
 bool hasProducerConsumerPartitioning(TmemAccessDag &accessDag) {
   // TMEM partitioning follows a producer-consumer pattern if it has this
   // structure:
@@ -676,8 +663,7 @@ int insertTmemAref(TmemAccessDag &accessDag, int numTmemBlocks) {
               // multibuffering.
               isAccMultibufferingPossible(mmaOp, loop) &&
               // The user didn't disable it with a flag.
-              !getDisallowAccMultiBuffer(wsLoop) &&
-              canDoubleBufferAcc(mmaOp, numTmemBlocks);
+              !getDisallowAccMultiBuffer(wsLoop);
           isMultiStaged = isMultiStaged && accIsMultiBuffered;
         }
       }
@@ -894,6 +880,20 @@ LogicalResult runOnFunction(triton::FuncOp funcOp) {
   if (!walkResult.wasInterrupted())
     return success();
 
+  walkResult = funcOp.walk([&](Operation *op) {
+    for (Value operand : op->getOperands()) {
+      auto type = dyn_cast<MemDescType>(operand.getType());
+      if (type && isa<TensorMemoryEncodingAttr>(type.getEncoding()) &&
+          type.getShape().take_back(2) != type.getAllocShape().take_back(2)) {
+        op->emitError("TMEM subviews NYI in the pipeliner");
+        return WalkResult::interrupt();
+      }
+    }
+    return WalkResult::advance();
+  });
+  if (walkResult.wasInterrupted())
+    return failure();
+
   SmallVector<TmemAccessDag> tmemDags;
   funcOp.walk([&](TMEMAllocOp allocOp) {
     tmemDags.push_back(TmemAccessDag::build(allocOp));
@@ -921,11 +921,13 @@ class NVWSTmemArefInsertion
     : public triton::impl::NVWSInsertTmemArefBase<NVWSTmemArefInsertion> {
 public:
   void runOnOperation() override {
-    getOperation().walk([&](triton::FuncOp funcOp) {
+    auto walkResult = getOperation().walk([&](triton::FuncOp funcOp) {
       if (failed(runOnFunction(funcOp)))
         return WalkResult::interrupt();
       return WalkResult::advance();
     });
+    if (walkResult.wasInterrupted())
+      signalPassFailure();
   }
 };
 

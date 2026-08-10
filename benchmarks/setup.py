@@ -136,5 +136,5 @@ setup(
             "triton-benchmarks-validate = triton_benchmarks_validate:main",
         ],
     },
-    py_modules=["triton_benchmarks_validate"],
+    py_modules=["triton_benchmarks_validate", "transform_results"],
 )

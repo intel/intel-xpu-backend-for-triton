@@ -44,6 +44,7 @@ TEST:
     --vllm-deepgemm
     --vllm-kda
     --vllm-inductor
+    --vllm-tdesc
     --install-vllm
     --sglang
     --install-sglang
@@ -115,6 +116,7 @@ TEST_VLLM_LINEAR_ATTN=false
 TEST_VLLM_DEEPGEMM=false
 TEST_VLLM_KDA=false
 TEST_VLLM_INDUCTOR=false
+TEST_VLLM_TDESC=false
 INSTALL_VLLM=false
 TEST_TRITON_KERNELS=false
 VENV=false
@@ -347,6 +349,11 @@ while (( $# != 0 )); do
       ;;
     --vllm-inductor)
       TEST_VLLM_INDUCTOR=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --vllm-tdesc)
+      TEST_VLLM_TDESC=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -824,39 +831,7 @@ enter_vllm_test_env() {
 }
 
 run_sglang_install() {
-  echo "************************************************"
-  echo "******    Installing SGLang                 ****"
-  echo "************************************************"
-
-  if pip show sglang >/dev/null 2>&1; then
-    echo "WARNING: sglang is already installed, skipping installation."
-    echo "To get clean installation, run:"
-    echo "  rm -rf ./sglang && pip uninstall -y sglang"
-    return
-  fi
-
-  if [ -d "./sglang" ]; then
-    echo "WARNING: ./sglang directory already exists, installing from it."
-    echo "To get clean installation, run:"
-    echo "  rm -rf ./sglang && pip uninstall -y sglang"
-  else
-    git clone https://github.com/sgl-project/sglang.git
-    cd sglang
-    git checkout "$(<../benchmarks/third_party/sglang/sglang-pin.txt)"
-    git apply ../benchmarks/third_party/sglang/sglang-test-fix.patch
-    git apply ../benchmarks/third_party/sglang/sglang-bench-fix.patch
-
-    # That's how sglang assumes we'll pick out platform for now
-    cp python/pyproject_xpu.toml python/pyproject.toml
-    # We should remove all torch libraries from requirements to avoid reinstalling triton & torch
-    # We remove sgl kernel due to a bug in the current environment probably due to using newer torch, we don't currently use it anyway
-    # We remove timm because it depends on torchvision, which depends on torch==2.9
-    sed -i '/pytorch\|torch\|sgl-kernel\|timm/d' python/pyproject.toml
-    cat python/pyproject.toml
-    cd ..
-  fi
-
-  pip install -e "./sglang/python"
+  "$SCRIPTS_DIR/sglang/install-sglang.sh"
 }
 
 run_sglang_tests() {
@@ -867,7 +842,8 @@ run_sglang_tests() {
   run_sglang_install
   run_test_deps_install
   cd sglang
-  run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-4} test/srt/test_triton_attention_kernels.py
+  TRITON_TEST_SUITE=sglang \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-4} test/registered/attention/test_triton_attention_kernels.py
 }
 
 run_liger_install() {
@@ -899,7 +875,8 @@ run_liger_tests() {
 
   run_liger_install
   run_test_deps_install
-  run_pytest_command -vvv Liger-Kernel/test/
+  TRITON_TEST_SUITE=liger \
+    run_pytest_command -vvv Liger-Kernel/test/
 }
 
 run_vllm_install() {
@@ -968,7 +945,8 @@ run_vllm_mrv2_tests() {
       tests/v1/worker/test_gpu_model_runner_v2_eplb.py \
       tests/v1/sample/test_sampler.py \
       tests/v1/sample/test_logprobs.py \
-      tests/v1/worker/test_gpu_gumbel_sample.py
+      tests/v1/worker/test_gpu_gumbel_sample.py \
+      tests/v1/kv_connector/unit/test_nixl_connector.py
 }
 
 
@@ -992,7 +970,10 @@ run_vllm_moe_tests() {
       tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py \
       tests/kernels/moe/test_batched_deepgemm.py \
       tests/kernels/moe/test_gpt_oss_triton_kernels.py \
-      tests/kernels/moe/test_silu_mul_per_token_group_quant_fp8_colmajor.py
+      tests/kernels/moe/test_silu_mul_per_token_group_quant_fp8_colmajor.py \
+      tests/kernels/moe/test_block_int8.py \
+      tests/kernels/moe/test_block_fp8.py \
+      tests/kernels/moe/test_moe_layer.py
 }
 
 
@@ -1005,12 +986,14 @@ run_vllm_triton_attn_tests() {
   # Triton attention kernels: merge_attn_states_kernel, _fwd_kernel_stage1,
   # _fwd_grouped_kernel_stage1, _fwd_kernel_stage2, kernel_unified_attention_2d,
   # kernel_unified_attention_3d, reduce_segments
-  TRITON_TEST_SUITE=vllm_triton_attn \
+  VLLM_USE_V2_MODEL_RUNNER=1 TRITON_TEST_SUITE=vllm_triton_attn \
     run_pytest_command -vvv \
+      tests/v1/attention/test_mla_backends.py \
       tests/kernels/attention/test_merge_attn_states.py \
       tests/kernels/attention/test_triton_decode_attention.py \
       tests/kernels/attention/test_triton_unified_attention.py \
-      tests/kernels/attention/test_triton_prefill_attention.py
+      tests/kernels/attention/test_triton_prefill_attention.py \
+      tests/kernels/attention/test_cascade_flash_attn.py
 }
 
 
@@ -1029,7 +1012,9 @@ run_vllm_gdn_attn_tests() {
   TRITON_TEST_SUITE=vllm_gdn_attn \
     run_pytest_command -vvv \
       tests/v1/attention/test_gdn_metadata_builder.py \
-      tests/kernels/test_fused_sigmoid_gating_delta_rule.py
+      tests/kernels/test_fused_sigmoid_gating_delta_rule.py \
+      tests/kernels/test_fused_recurrent_packed_decode.py \
+      tests/kernels/test_fla_layernorm_guard.py
 }
 
 
@@ -1072,7 +1057,8 @@ run_vllm_quant_tests() {
       tests/kernels/quantization/test_block_int8.py \
       tests/kernels/quantization/test_fp8_quant.py \
       tests/kernels/quantization/test_fp8_quant_group.py \
-      tests/kernels/quantization/test_block_fp8.py
+      tests/kernels/quantization/test_block_fp8.py \
+      tests/kernels/quantization/test_per_token_group_quant.py
 }
 
 
@@ -1125,10 +1111,46 @@ run_vllm_inductor_tests() {
   echo "******  Running vLLM Inductor tests              *******"
   echo "********************************************************"
 
-  cd "$TRITON_PROJ/benchmarks/triton_kernels_benchmark/vllm"
+  enter_vllm_test_env
   TRITON_TEST_SUITE=vllm_inductor \
     run_pytest_command -vvv \
       test/test_wan22_torch_compile.py
+}
+
+
+run_vllm_tdesc_tests() {
+  echo "********************************************************"
+  echo "******  Running vLLM tensor descriptor tests     *******"
+  echo "********************************************************"
+
+  enter_vllm_test_env
+
+  local VLLM_PROJ="$TRITON_PROJ/vllm"
+  local PATCH_FILE="$TRITON_PROJ/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention.patch"
+
+  if git -C "$VLLM_PROJ" apply --check "$PATCH_FILE" 2>/dev/null; then
+    echo "Applying tdesc patch: $PATCH_FILE."
+    git -C "$VLLM_PROJ" apply "$PATCH_FILE"
+  elif git -C "$VLLM_PROJ" apply --reverse --check "$PATCH_FILE" 2>/dev/null; then
+    echo "Patch already applied, skipping."
+  else
+    echo "ERROR: Failed to apply tdesc patch: $PATCH_FILE" >&2
+    echo "The vLLM tree may have an outdated patch or conflicting changes." >&2
+    return 1
+  fi
+
+  local EXIT_STATUS=0
+  TRITON_TEST_SUITE=vllm_tdesc \
+    run_pytest_command -vvv \
+      tests/kernels/attention/test_triton_unified_attention.py \
+      || EXIT_STATUS=$?
+
+  echo "Reverting tdesc patch: $PATCH_FILE."
+  if ! git -C "$VLLM_PROJ" apply -R "$PATCH_FILE"; then
+    echo "WARNING: Failed to revert tdesc patch: $PATCH_FILE." >&2
+  fi
+
+  return $EXIT_STATUS
 }
 
 
@@ -1278,6 +1300,9 @@ test_triton() {
   fi
   if [ "$TEST_VLLM_INDUCTOR" == true ]; then
     run_vllm_inductor_tests
+  fi
+  if [ "$TEST_VLLM_TDESC" == true ]; then
+    run_vllm_tdesc_tests
   fi
   if [ "$TEST_TRITON_KERNELS" == true ]; then
     run_triton_kernels_tests

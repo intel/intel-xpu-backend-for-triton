@@ -10,7 +10,11 @@
 #include "Dialect/TritonIntelGPU/IR/Utils.h"
 #include "SPIRVTargetInfo.h"
 #include "Utility.h"
+#include "Utils/LLVMIntr.h"
+#include "Utils/Mangling.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENMemorySpace.h"
+
+#include <numeric>
 
 #if defined(_MSC_VER) && !defined(__clang__)
 // from https://gist.github.com/pps83/3210a2f980fd02bb2ba2e5a1fc4a2ef0
@@ -43,6 +47,58 @@ Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
     reduced_val = b.or_(reduced_val, other_val);
   }
   return reduced_val;
+}
+
+Value TargetInfo::getGlobalTimer(RewriterBase &rewriter, Location loc) const {
+  // There is no real time counter, so count core clock cycles instead.
+  auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  auto clockRateAttr = mod->getAttrOfType<IntegerAttr>(
+      triton::gpu::intel::TritonIntelGPUDialect::getCoreClockRateAttrName());
+  if (!clockRateAttr || clockRateAttr.getInt() <= 0)
+    llvm::report_fatal_error(
+        Twine("getGlobalTimer needs a positive ") +
+        triton::gpu::intel::TritonIntelGPUDialect::getCoreClockRateAttrName() +
+        " to report nanoseconds");
+
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  // The LTS driver does not implement the SPIR-V shader clock builtin.
+  bool isLTS = mod->hasAttr(
+      triton::gpu::intel::TritonIntelGPUDialect::getIsLTSAttrName());
+  std::string funcName = isLTS ? "__builtin_IB_read_cycle_counter"
+                               : mlir::triton::gpu::intel::mangle(
+                                     "__spirv_ReadClockKHR_Rulong", {i32_ty});
+  SmallVector<Type> argTypes;
+  SmallVector<Value> args;
+  if (!isLTS) {
+    argTypes.push_back(i32_ty);
+    args.push_back(b.i32_val(/*Device=*/1));
+  }
+  Value ticks = mlir::triton::gpu::intel::createDeviceFunctionCall(
+                    rewriter, funcName, /*retType=*/i64_ty, argTypes, args,
+                    /*paramAttrs=*/{}, gpu::intel::noUnwindWillReturnAttrs)
+                    .getResult();
+
+  // kHz is cycles per millisecond. The rate is nominal and the core clock
+  // scales with DVFS, so a downclocked GPU makes a timeout fire late, never
+  // early. Reduce by the GCD so the multiplication does not overflow after a
+  // few hours of GPU uptime.
+  int64_t coreClockRate = clockRateAttr.getInt();
+  int64_t nsPerMs = 1000000;
+  int64_t g = std::gcd(nsPerMs, coreClockRate);
+  return b.udiv(b.mul(ticks, b.i64_val(nsPerMs / g)),
+                b.i64_val(coreClockRate / g));
+}
+
+StringRef TargetInfo::getAtomicSyncScope(MemSyncScope scope) const {
+  switch (scope) {
+  case MemSyncScope::CTA:
+    return "workgroup";
+  case MemSyncScope::GPU:
+    return "device";
+  case MemSyncScope::SYSTEM:
+    return {};
+  }
+  llvm_unreachable("unknown memory synchronization scope");
 }
 
 void TargetInfo::barrier(Location loc, RewriterBase &rewriter,

@@ -79,13 +79,15 @@ void init_triton_intel_passes_ttir(py::module_ &&m) {
 }
 
 void init_triton_intel_passes_ttgpuir(py::module_ &&m) {
-  ADD_PASS_WRAPPER_0("add_to_llvmir",
-                     gpu::intel::createConvertTritonIntelGPUToLLVM);
+  ADD_PASS_OPTION_WRAPPER_1(
+      "add_to_llvmir", gpu::intel::createConvertTritonIntelGPUToLLVM, bool);
   ADD_PASS_WRAPPER_0("add_gen_to_llvm", createConvertTritonGENToLLVM);
   ADD_PASS_WRAPPER_0("add_accelerate_matmul",
                      gpu::intel::createTritonIntelGPUAccelerateMatmul);
   ADD_PASS_WRAPPER_0("add_fold_fp_to_fp",
                      gpu::intel::createTritonIntelGPUFoldFpToFp);
+  ADD_PASS_WRAPPER_0("add_stage_large_fma_dots_via_slm",
+                     gpu::intel::createTritonIntelGPUStageLargeFMADotsViaSLM);
   ADD_PASS_WRAPPER_0("add_rewrite_stack_ptr",
                      gpu::intel::createTritonIntelGPURewriteStackPtr);
   ADD_PASS_OPTION_WRAPPER_2(
@@ -143,7 +145,11 @@ void init_triton_intel_passes_ttgpuir(py::module_ &&m) {
               &gpu::intel::TritonAnnotateModuleOptions::targetArch)
       .def_rw("is_lts", &gpu::intel::TritonAnnotateModuleOptions::isLTS)
       .def_rw("is_fast_math",
-              &gpu::intel::TritonAnnotateModuleOptions::isFastMath);
+              &gpu::intel::TritonAnnotateModuleOptions::isFastMath)
+      .def_rw("sub_32_dpas",
+              &gpu::intel::TritonAnnotateModuleOptions::sub32DPAS)
+      .def_rw("block_io_base_alignment",
+              &gpu::intel::TritonAnnotateModuleOptions::blockIOBaseAlignment);
   ADD_PASS_OPTION_WRAPPER_1("add_triton_annotate_module",
                             gpu::intel::createTritonAnnotateModule,
                             gpu::intel::TritonAnnotateModuleOptions);
@@ -357,6 +363,25 @@ void init_triton_intel(py::module_ &m) {
     return result.wasInterrupted();
   });
 
+  m.def("set_is_lts", [](mlir::ModuleOp &mod) {
+    using namespace mlir::triton::gpu::intel;
+    if (!mod->hasAttr(TritonIntelGPUDialect::getIsLTSAttrName())) {
+      mlir::Builder builder(mod.getContext());
+      mod->setAttr(TritonIntelGPUDialect::getIsLTSAttrName(),
+                   builder.getUnitAttr());
+    }
+  });
+
+  m.def("set_core_clock_rate", [](mlir::ModuleOp &mod, unsigned clockRate) {
+    using namespace mlir::triton::gpu::intel;
+    if (clockRate &&
+        !mod->hasAttr(TritonIntelGPUDialect::getCoreClockRateAttrName())) {
+      mlir::Builder builder(mod.getContext());
+      mod->setAttr(TritonIntelGPUDialect::getCoreClockRateAttrName(),
+                   builder.getI32IntegerAttr(clockRate));
+    }
+  });
+
   // Set fast-math flags on floating-point instructions.
   // The fastMath parameter is resolved by the Python layer from
   // TRITON_INTEL_FAST_MATH and TORCHINDUCTOR_USE_FAST_MATH env vars.
@@ -389,9 +414,8 @@ void init_triton_intel(py::module_ &m) {
     mod->setDataLayout(layout);
   });
 
-  m.def("post_process_llir", [](llvm::Module *mod, bool isLTS) {
-    intel::postProcessLLVMIR(*mod, isLTS);
-  });
+  m.def("post_process_llir",
+        [](llvm::Module *mod) { intel::postProcessLLVMIR(*mod); });
 
   m.def(
       "translate_to_spirv",

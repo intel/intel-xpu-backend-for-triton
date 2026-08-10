@@ -93,6 +93,9 @@ def test_popc(device):
 
 @pytest.mark.parametrize("dtype_str", ["float32", "float64"])
 def test_isinf(device, dtype_str):
+    if device in ['xpu']:
+        if dtype_str in ["float64"] and not triton.runtime.driver.active.get_current_target().arch['has_fp64']:
+            pytest.xfail("float64 not supported on current xpu hardware")
 
     @triton.jit
     def triton_isinf(in_ptr, out_ptr, numel, BLOCK_SIZE: tl.constexpr):

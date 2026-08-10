@@ -117,6 +117,12 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.is_lts";
     }
 
+    /// Get the name of the attribute holding the core clock rate in kHz, used
+    /// to convert cycles to nanoseconds.
+    static constexpr llvm::StringRef getCoreClockRateAttrName() {
+      return "ttig.core_clock_rate_khz";
+    }
+
     /// Get the name of the attribute used to indicate whether prefetching 256
     /// bytes is supported.
     static constexpr llvm::StringRef getSupportPrefetch256BAttrName() {
@@ -160,6 +166,16 @@ def TritonIntelGPU_Dialect : Dialect {
     /// from MakeTensorDescOp to descriptor load/store operations.
     static constexpr llvm::StringRef getDescPaddingAttrName() {
       return "ttig.desc_padding";
+    }
+
+    /// Get the name of the attribute conveying the HW base-address alignment
+    /// requirement (in bytes) for 2D block IO operations. MaterializeBlockPointer
+    /// guarantees a 4-byte aligned base, so when this value is <= 4 the base
+    /// address is already known to satisfy the HW requirement and the downstream
+    /// alignment compensation is skipped; otherwise (e.g. the 64-byte requirement
+    /// on BMG) the base address is compensated.
+    static constexpr llvm::StringRef get2DBlockIOBaseAlignmentAttrName() {
+      return "ttig.2d_block_io_base_alignment";
     }
   }];
 

@@ -371,9 +371,6 @@ LLVM::LLVMFuncOp appendOrGetExternFuncOp(RewriterBase &rewriter, Operation *op,
 // Multiply a square layout with 1 input and output dimension with a vector
 Value matrixVectorProd(TritonLLVMOpBuilder &b, const LinearLayout &A, Value x);
 
-// Whether the convert layout should be forced to use warp shuffles.
-bool cvtAlwaysUseWarpShuffle(triton::gpu::ConvertLayoutOp cvt);
-
 // Return a predicate that is true only if the current thread holds unique data,
 // according to freeVarsMask. The predicate may be null to indicate no
 // predication is required.
@@ -446,15 +443,21 @@ public:
   // The offsets are considered to be in the type of the memdesc.
   // For padded layouts, we return the offsets without padding.
   static uint64_t getMaskSpanOffsets(triton::gpu::MemDescType srcTy);
+  static std::pair<uint64_t, uint64_t>
+  getMaskSpanOffsetsAndBlocks(triton::gpu::MemDescType srcTy);
 
   // Returns whether the shared memory access had a memdesc_subslice
   // that is rank-preserving (soon to be called memdesc_slice)
   static bool isAffineSharedMemoryAccess(triton::gpu::MemDescType srcTy) {
-    return getMaskSpanOffsets(srcTy) != 0;
+    auto [offsetMask, blockMask] = getMaskSpanOffsetsAndBlocks(srcTy);
+    return offsetMask != 0 || blockMask != 0;
   }
 
   Value getShmemOffset(Location loc, RewriterBase &rewriter,
                        triton::gpu::MemDescType srcTy) const;
+  std::pair<Value, Value>
+  getShmemOffsetAndBlock(Location loc, RewriterBase &rewriter,
+                         triton::gpu::MemDescType srcTy) const;
   Value getShmemAffineBase(Location loc, RewriterBase &rewriter,
                            triton::gpu::MemDescType srcTy) const;
 
@@ -660,7 +663,7 @@ struct LocalAtomicScatterRMWInfo {
   Value threadPred;
   SmallVector<Value> values;
   SmallVector<Value> maskValues;
-  SmallVector<Value> ptrs;
+  SmallVector<LocalSharedMemoryAddress> addrs;
 };
 
 FailureOr<LocalAtomicScatterRMWInfo> prepareLocalAtomicScatterRMW(
@@ -692,6 +695,7 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                 Type llvmElemTy, ArrayRef<Value> smemBases,
                 ArrayRef<std::pair<unsigned, unsigned>> paddingShifts,
                 Value affineOffset, uint64_t maskSpanAffineOffset,
+                Value affineBlockOffset, uint64_t maskSpanAffineBlock,
                 RewriterBase &rewriter, const TargetInfoBase &targetInfo,
                 std::optional<int> maybeMaxVecElems = {},
                 Operation *localLoadOp = nullptr);
@@ -708,7 +712,8 @@ SmallVector<Value> lowerLdSt(
     ArrayRef<Value> valsArray, // Input for store, output for load
     Type llvmElemTy, ArrayRef<Value> smemBases,
     ArrayRef<std::pair<unsigned, unsigned>> paddingShifts, Value affineOffset,
-    uint64_t maskSpanAffineOffset, Value laneId, Value warpId,
+    uint64_t maskSpanAffineOffset, Value affineBlockOffset,
+    uint64_t maskSpanAffineBlock, Value laneId, Value warpId,
     RewriterBase &rewriter, const TargetInfoBase &targetInfo,
     std::optional<int> maybeMaxVecElems,
     std::function<SmallVector<Value>(RewriterBase &, Location, ArrayRef<Value>,
@@ -728,8 +733,28 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
 SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
                                     RewriterBase &rewriter);
 
+SmallVector<Value> unpackUniqueTensorElements(Location loc, Value llvmStruct,
+                                              RewriterBase &rewriter);
+
+/// Unpack the values in \p llvmStruct into a vector using the layout from
+/// \p originalType.
+SmallVector<Value> unpackTensorElements(Location loc, Value llvmStruct,
+                                        RewriterBase &rewriter,
+                                        Type originalType);
+
 Value packLLElements(Location loc, const LLVMTypeConverter *typeConverter,
                      ValueRange resultVals, RewriterBase &rewriter, Type type);
+
+Value packUniqueTensorElements(Location loc,
+                               const LLVMTypeConverter *typeConverter,
+                               ValueRange resultVals, RewriterBase &rewriter,
+                               Type type);
+
+/// Pack the values in \p resultVals into an llvm struct using the layout from
+/// \p type.
+Value packTensorElements(Location loc, const LLVMTypeConverter *typeConverter,
+                         ValueRange resultVals, RewriterBase &rewriter,
+                         Type type);
 
 SmallVector<Value> unpackLLVector(Location loc, Value llvmVec,
                                   RewriterBase &rewriter);
@@ -739,6 +764,19 @@ Value packLLVector(Location loc, ValueRange vals, RewriterBase &rewriter);
 std::optional<LLVM::AtomicBinOp> matchAtomicOp(RMWOp atomicOp);
 
 std::optional<LLVM::AtomicOrdering> getMemoryOrdering(MemSemantic memOrdering);
+
+/// Insert CTA or cluster barriers around an atomic operation according to its
+/// acquire/release semantics. `emitBarrierAfter` may be false when result
+/// staging already emits the required barrier after the atomic instruction.
+void insertAtomicOrderingBarriers(Operation *op, MemSemantic memOrdering,
+                                  bool emitBarrierAfter, RewriterBase &rewriter,
+                                  const TargetInfoBase &targetInfo);
+
+Value broadcastScalarAtomicResult(Operation *op, Type valueElemTy,
+                                  Value resultVal,
+                                  ConversionPatternRewriter &rewriter,
+                                  TritonLLVMOpBuilder &b, Value threadPred,
+                                  const TargetInfoBase &targetInfo);
 
 llvm::MapVector<StringAttr, int32_t> getAllFreeVarMasks(MLIRContext *ctx);
 

@@ -31,12 +31,14 @@ struct MemEffectsOpInfo {
   };
   struct Effects {
     enum RW { Read, Write } rw;
+    enum class Proxy { Generic, Async } proxy;
     Value buf;
     std::string operandName = "";
     uint32_t length = 0;
 
-    Effects(RW rw, Value buf, std::string operandName = "")
-        : rw(rw), buf(buf), operandName(operandName),
+    Effects(RW rw, Value buf, std::string operandName = "",
+            Proxy proxy = Proxy::Generic)
+        : rw(rw), proxy(proxy), buf(buf), operandName(operandName),
           length(getMemDescLength(buf)) {}
   };
   struct BarrierInfo {
@@ -83,6 +85,10 @@ struct WaitOpInfo {
   bool transferReads;
 };
 
+struct AsyncProxyFenceInfo {
+  bool cluster;
+};
+
 struct CommitKindDesc {
   CommitKind::Kind kind;
   std::string operationDesc;
@@ -105,7 +111,17 @@ public:
   virtual std::optional<BarrierInvalidateInfo>
   getBarrierInvalidateInfo(Operation *op) const = 0;
 
-  virtual std::optional<WaitOpInfo> getWaitOpInfo(Operation *op) const = 0;
+  virtual std::optional<WaitOpInfo>
+  getWaitOpInfo(Operation *op, const AuxDataMap &auxData) const = 0;
+
+  virtual std::optional<AsyncProxyFenceInfo>
+  getAsyncProxyFenceInfo(Operation *op) const {
+    return std::nullopt;
+  }
+
+  virtual bool needsAsyncProxyFenceTracking(ModuleOp module) const {
+    return false;
+  }
 
   virtual Value getIssuerCTAPred(ImplicitLocOpBuilder &b,
                                  Operation *op) const = 0;
@@ -113,34 +129,29 @@ public:
   virtual std::optional<MemEffectsOpInfo>
   getMemEffectsOpInfo(Operation *op) const {
     namespace ttg = triton::gpu;
-    std::optional<MemEffectsOpInfo> info;
     if (auto copyOp = dyn_cast<ttg::AsyncCopyGlobalToLocalOp>(op)) {
-      info.emplace();
-      info->trackingKind = MemEffectsOpInfo::TrackingKind::CommitCount;
-      info->commitKind = CommitKind::AsyncCp;
-      info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
-                                        copyOp.getResult());
+      MemEffectsOpInfo info;
+      info.trackingKind = MemEffectsOpInfo::TrackingKind::CommitCount;
+      info.commitKind = CommitKind::AsyncCp;
+      info.operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
+                                       copyOp.getResult());
+      return info;
     }
-    if (auto loadOp = dyn_cast<ttg::LocalLoadOp>(op)) {
-      info.emplace();
-      info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
-      info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Read,
-                                        loadOp.getSrc());
+
+    MemEffectsOpInfo info;
+    info.trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
+    auto barrierOp = dyn_cast<ttg::MBarrierOpInterface>(op);
+    for (const auto &access : BufferRegionAnalysis::getMemoryAccesses(op)) {
+      if (barrierOp &&
+          llvm::is_contained(barrierOp.getBarriers(), access.value))
+        continue;
+      info.operandEffects.emplace_back(access.isWrite
+                                           ? MemEffectsOpInfo::Effects::Write
+                                           : MemEffectsOpInfo::Effects::Read,
+                                       access.value);
     }
-    if (auto storeOp = dyn_cast<ttg::LocalStoreOp>(op)) {
-      info.emplace();
-      info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
-      info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
-                                        storeOp.getDst());
-    }
-    if (auto allocOp = dyn_cast<ttg::LocalAllocOp>(op)) {
-      if (allocOp.getSrc()) {
-        info.emplace();
-        info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
-        info->operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
-                                          allocOp.getResult());
-      }
-    }
+    if (info.operandEffects.empty())
+      return std::nullopt;
     return info;
   }
 
@@ -152,7 +163,8 @@ public:
 
   // Returns commit kinds used by addReadChecks to detect outstanding
   // read accesses to shared memory.
-  virtual SmallVector<CommitKindDesc> getOutstandingReadCommitKinds() const {
+  virtual SmallVector<CommitKindDesc>
+  getOutstandingReadCommitKinds(const AuxDataMap &auxData) const {
     return {};
   }
 
@@ -172,7 +184,7 @@ public:
 };
 
 LogicalResult runConcurrencySanitizer(ModuleOp module,
-                                      const ConSanTargetHooks *hooks);
+                                      const ConSanTargetHooks &hooks);
 
 using ConSanHooksFactory = std::function<std::unique_ptr<ConSanTargetHooks>()>;
 void registerConSanHooks(llvm::StringRef key, ConSanHooksFactory factory);

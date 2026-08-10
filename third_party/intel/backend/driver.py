@@ -289,8 +289,12 @@ class SpirvUtils:
     def load_binary(self, *args):
         # if we don't use parameter passing in this way,
         # we will need to rewrite the line in the general part of the code:
-        # driver.active.utils.load_binary(self.name, self.kernel, self.metadata.shared, self.metadata.build_flags, device) ->
-        # driver.active.utils.load_binary((self.name, self.kernel, self.metadata.shared, self.metadata.build_flags, device))
+        # driver.active.utils.load_binary(
+        #     self.name, self.kernel, self.metadata.shared,
+        #     self.metadata.build_flags, is_spv, device, deviceArch) ->
+        # driver.active.utils.load_binary(
+        #     (self.name, self.kernel, self.metadata.shared,
+        #      self.metadata.build_flags, is_spv, device, deviceArch))
         # PTSS-overflow detection happens at the C level (driver.c
         # tryRaisePTSSOutOfResources): when zeModuleCreate fails and the
         # IGC build log carries a PTSS marker, OutOfResources is raised
@@ -751,6 +755,7 @@ class XPUDriver(DriverBase):
         extensions = query_device_extensions(device_id)
         dev_property.update(extensions)
         dev_property["__intel_already_queried_extensions__"] = True
+        dev_property["core_clock_rate"] = self.utils.get_device_properties(device).get("sm_clock_rate", 0)
         update_device_arch(dev_property)
 
         return GPUTarget("xpu", dev_property, warp_size=32)

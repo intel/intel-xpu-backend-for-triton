@@ -83,6 +83,32 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 
 // -----
 
+// COM: Test ttig.2d_block_load_from_ptr with a sub-64-byte base_width. The
+// COM: per-warp base_width (16 cols * 2 bytes = 32) is below the HW minimum,
+// COM: so the lowering must floor the adjusted base_width to 64 bytes via
+// COM: umax before emitting triton_gen.2Dblockload (see verifier constraint
+// COM: "base width should be >= 64").
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @block_load_from_ptr_small_base_width
+  tt.func public @block_load_from_ptr_small_base_width(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+    %0 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #dot0}>>
+    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #dot0}>> -> tensor<1x16xi32, #dot0>
+    %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1x16x!tt.ptr<f16>, #dot0>
+    %3 = tt.addptr %2, %1 : tensor<1x16x!tt.ptr<f16>, #dot0>, tensor<1x16xi32, #dot0>
+    %4 = tt.broadcast %3 : tensor<1x16x!tt.ptr<f16>, #dot0> -> tensor<64x16x!tt.ptr<f16>, #dot0>
+    %pitch = arith.constant 128 : i32
+    // CHECK: %[[C64:.*]] = llvm.mlir.constant(64 : i32) : i32
+    // CHECK: llvm.intr.umax(%{{.*}}, %[[C64]]) : (i32, i32) -> i32
+    // CHECK: triton_gen.2Dblockload
+    %5 = ttig.2d_block_load_from_ptr %4, %pitch {row_major} {base_height = 1 : i32, base_width = 32 : i32} : (tensor<64x16x!tt.ptr<f16>, #dot0>, i32) -> tensor<64x16xf16, #dot0>
+    tt.return
+  }
+}
+
+// -----
+
 // COM: Test ttig.2d_block_load_from_ptr with mask generates block loads
 // COM: with predicated out-of-bounds handling (select with other).
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
@@ -192,6 +218,23 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32,
   tt.func public @block_load_dot_b_subgroup32_vnni_bf8(%arg0: !tt.ptr<f8E5M2>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32) {
     // CHECK: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 8, tile_width = 16, tile_height = 32, v_blocks = 1, transpose = false, vnni_transform = true, cache_control = Default}
     %0 = ttig.2d_block_load %arg0, %arg1, %arg2, %arg3[%arg4, %arg5] {row_major} : !tt.ptr<f8E5M2> -> tensor<128x32xf8E5M2, #dot>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Test subgroup-size=32 DotOp-B column-major (transposed) block load with
+// COM: f16/opsPerChan=2. The old width-comparison check rejected this because
+// COM: dpasInstShapeB()[1]=16 != threadsPerWarp=32. The new linear-layout check
+// COM: correctly accepts it.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 32, warpsPerCTA = [2, 2], repCluster = [1, 1], A = [16, 16], B = [16, 16], C = [16, 16]}>
+#dot = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @block_load_dot_b_subgroup32_transpose
+  tt.func public @block_load_dot_b_subgroup32_transpose(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32) {
+    // CHECK: triton_gen.2Dblockload {{.*}} transpose = true
+    %0 = ttig.2d_block_load %arg0, %arg1, %arg2, %arg3[%arg4, %arg5] {column_major} : !tt.ptr<f16> -> tensor<32x32xf16, #dot>
     tt.return
   }
 }

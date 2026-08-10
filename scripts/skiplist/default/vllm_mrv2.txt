@@ -41,3 +41,37 @@ tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[ngram-processed_logp
 
 # vLLM returns 6 logprob entries when 5 are expected: https://github.com/intel/intel-xpu-backend-for-triton/issues/7161
 tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[False-0.0-BatchLogprobsComposition.SAMPLE]
+
+# oneCCL fails to start worker thread: https://github.com/intel/intel-xpu-backend-for-triton/issues/7686
+tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[False-0.0-BatchLogprobsComposition.NONE]
+tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[True-0.0-BatchLogprobsComposition.NONE]
+tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[True-0.0-BatchLogprobsComposition.SAMPLE]
+tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[True-0.0-BatchLogprobsComposition.PROMPT]
+tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[True-0.0-BatchLogprobsComposition.SAMPLE_PROMPT]
+tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[True-2.0-BatchLogprobsComposition.NONE]
+tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[True-2.0-BatchLogprobsComposition.SAMPLE]
+tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[True-2.0-BatchLogprobsComposition.PROMPT]
+tests/v1/kv_connector/unit/test_nixl_connector.py::test_abort_timeout_on_prefiller
+tests/v1/sample/test_logprobs.py::test_prompt_logprobs_mode
+
+# NIXL is not available: https://github.com/intel/intel-xpu-backend-for-triton/issues/7419
+tests/v1/kv_connector/unit/test_nixl_connector.py::test_kv_both_deprecation_warning
+tests/v1/kv_connector/unit/test_nixl_connector.py::test_explicit_kv_role_no_deprecation_warning
+
+# GPU mode runner tried to instantiate dummy base class Event: https://github.com/intel/intel-xpu-backend-for-triton/issues/7684
+tests/v1/worker/test_gpu_model_runner.py::test_reasoning_config_without_custom_logitsprocs_does_not_need_output_token_ids
+tests/v1/worker/test_gpu_model_runner.py::test_init_kv_cache_without_kv_sharing
+tests/v1/worker/test_gpu_model_runner.py::test_init_kv_cache_with_kv_sharing_valid
+tests/v1/worker/test_gpu_model_runner.py::test_hybrid_cache_integration
+tests/v1/worker/test_gpu_model_runner.py::test_update_states_new_request
+tests/v1/worker/test_gpu_model_runner.py::test_update_states_request_finished
+tests/v1/worker/test_gpu_model_runner.py::test_update_states_request_resumed
+tests/v1/worker/test_gpu_model_runner.py::test_get_nans_in_logits
+tests/v1/worker/test_gpu_model_runner.py::test_update_states_no_changes
+tests/v1/worker/test_gpu_model_runner.py::test_update_states_request_unscheduled
+tests/v1/worker/test_gpu_model_runner.py::test_update_states_pp_non_async_multi_request_keeps_token_buffers_consistent
+tests/v1/worker/test_gpu_model_runner.py::test_update_states_pp_async_multi_request_keeps_rank_state_consistent
+tests/v1/worker/test_gpu_model_runner.py::test_kv_cache_stride_order
+tests/v1/worker/test_gpu_model_runner.py::test_update_config
+tests/v1/worker/test_gpu_model_runner.py::test_load_model_weights_inplace
+tests/v1/worker/test_gpu_model_runner.py::test_reload_weights_before_load_model

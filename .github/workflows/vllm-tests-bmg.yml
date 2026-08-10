@@ -8,6 +8,10 @@ on:
     - cron: "5 10 * * THU"
     - cron: "5 10 * * SUN"
 
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
 jobs:
   tests:
     uses: ./.github/workflows/vllm-tests-reusable.yml
