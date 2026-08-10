@@ -60,6 +60,8 @@ class XPUOptions:
     arch: str = ""
     instrumentation_mode: str = ""
     fpsan_homomorphic_casts: bool = False
+    core_clock_rate: int = 0  # kHz, scales the in-kernel cycle counter
+    is_lts: bool = True
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -226,6 +228,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # this so the downstream 64-byte alignment compensation is skipped.
         dev_prop['block_io_base_alignment'] = tgt_prop.get('block_io_base_alignment', 64)
         dev_prop['core_clock_rate'] = self.core_clock_rate(tgt_prop)
+        dev_prop['is_lts'] = is_lts
 
         if '__intel_already_queried_extensions__' not in tgt_prop:
             # All GPUs with the same device_id have the same extensions, so we just
@@ -240,6 +243,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     def parse_options(self, opts) -> Any:
         args = {k: v for k, v in opts.items() if k in XPUOptions.__dataclass_fields__}
         args["allow_fp8e4nv"] = True
+        args["core_clock_rate"] = self.properties['core_clock_rate']
+        args["is_lts"] = self.properties['is_lts']
         if "enable_fp_fusion" not in args:
             args["enable_fp_fusion"] = knobs.language.default_fp_fusion
         return XPUOptions(**args)
