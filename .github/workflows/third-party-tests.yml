@@ -1,6 +1,13 @@
 name: Third party tests [liger-kernels, sglang]
 
 on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/third-party-tests.yml
+      - scripts/sglang/sglang-pin.txt
+      - benchmarks/third_party/liger/liger-pin.txt
   workflow_dispatch:
     inputs:
       runner_label:
@@ -37,7 +44,7 @@ jobs:
     if: ${{ !inputs.tests || contains(inputs.tests, 'sglang') }}
     runs-on:
       - linux
-      - ${{ inputs.runner_label || 'max1550' }}
+      - ${{ inputs.runner_label || 'max1100' }}
     timeout-minutes: 120
     defaults:
       run:
@@ -95,7 +102,7 @@ jobs:
     if: ${{ !inputs.tests || contains(inputs.tests, 'liger') }}
     runs-on:
       - linux
-      - ${{ inputs.runner_label || 'max1550' }}
+      - ${{ inputs.runner_label || 'max1100' }}
     timeout-minutes: 120
     defaults:
       run:

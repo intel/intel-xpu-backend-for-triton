@@ -1,4 +1,4 @@
-name: vLLM benchmarks, PVC
+name: SGLang benchmarks, PVC
 
 permissions: read-all
 
@@ -8,7 +8,7 @@ on:
       - main
     types: [opened, synchronize, reopened]
   schedule:
-    - cron: "0 8 * * *"
+    - cron: "0 11 * * *"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || 'ci' }}
@@ -23,11 +23,11 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: Check for vLLM benchmark changes
+      - name: Check for SGLang benchmark changes
         id: check
         uses: ./.github/actions/check-path-changes
         with:
-          patterns: '^(\.github/workflows/(vllm-benchmarks|build-benchmarks-wheel).*\.yml|\.github/actions/(install-benchmarks|install-vllm)/|benchmarks/triton_kernels_benchmark/vllm/|scripts/vllm/|\.github/pins/pytorch\.txt)'
+          patterns: '^(\.github/workflows/sglang-benchmarks(-pvc|-bmg)?\.yml|scripts/sglang/sglang-pin\.txt)'
 
   build-wheel:
     needs: check-paths
@@ -44,7 +44,7 @@ jobs:
       always() && !cancelled() &&
       (github.event_name == 'schedule' ||
        needs.check-paths.outputs.benchmarks == 'true')
-    uses: ./.github/workflows/vllm-benchmarks.yml
+    uses: ./.github/workflows/sglang-benchmarks.yml
     with:
       runner_label: max1550
     secrets: inherit

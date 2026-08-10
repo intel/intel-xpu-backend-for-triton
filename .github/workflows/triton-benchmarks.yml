@@ -68,7 +68,7 @@ concurrency:
 permissions: read-all
 
 env:
-  PYTHON_VERSION: "3.10"
+  PYTHON_VERSION: "3.12"
   BENCHMARKING_METHOD: ${{ inputs.benchmarking_method || 'UPSTREAM_PYTORCH_PROFILER' }}
   # FIXME: When https://github.com/pytorch/pytorch/issues/189144 will be addressed
   TORCHINDUCTOR_USE_EXPERIMENTAL_BENCHMARKER: '0'

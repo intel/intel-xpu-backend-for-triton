@@ -60,6 +60,8 @@ class XPUOptions:
     arch: str = ""
     instrumentation_mode: str = ""
     fpsan_homomorphic_casts: bool = False
+    core_clock_rate: int = 0  # kHz, scales the in-kernel cycle counter
+    is_lts: bool = True
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -177,6 +179,17 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             return True
         return tuple(int(x) if x is not None else 0 for x in m.groups()) < (1, 6, 35096, 9)
 
+    @staticmethod
+    def core_clock_rate(tgt_prop) -> int:
+        if (rate := tgt_prop.get('core_clock_rate')) is None:
+            from triton.runtime import driver
+            # Not `driver.active.utils`: creating it initializes the device, which raises
+            # when compiling in a forked process.
+            if (utils := driver.active.__dict__.get('utils')) is None:
+                return 0
+            rate = utils.get_device_properties(driver.active.get_current_device()).get('sm_clock_rate', 0)
+        return rate or 0
+
     def parse_target(self, tgt_prop) -> dict:
         dev_prop = {}
         dev_prop['name'] = tgt_prop.get('name', 'xpu')
@@ -210,6 +223,12 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         dev_prop['has_256b_load_store'] = tgt_prop.get('has_256b_prefetch', False)
         dev_prop['has_rounded_divide_sqrt'] = tgt_prop.get('has_rounded_divide_sqrt', not is_lts)
         dev_prop['has_sigmoid'] = tgt_prop.get('has_sigmoid', False)
+        # HW base-address alignment requirement (in bytes) for 2D block IO.
+        # Defaults to 64; targets with a relaxed requirement (e.g. CRI) override
+        # this so the downstream 64-byte alignment compensation is skipped.
+        dev_prop['block_io_base_alignment'] = tgt_prop.get('block_io_base_alignment', 64)
+        dev_prop['core_clock_rate'] = self.core_clock_rate(tgt_prop)
+        dev_prop['is_lts'] = is_lts
 
         if '__intel_already_queried_extensions__' not in tgt_prop:
             # All GPUs with the same device_id have the same extensions, so we just
@@ -224,6 +243,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     def parse_options(self, opts) -> Any:
         args = {k: v for k, v in opts.items() if k in XPUOptions.__dataclass_fields__}
         args["allow_fp8e4nv"] = True
+        args["core_clock_rate"] = self.properties['core_clock_rate']
+        args["is_lts"] = self.properties['is_lts']
         if "enable_fp_fusion" not in args:
             args["enable_fp_fusion"] = knobs.language.default_fp_fusion
         return XPUOptions(**args)
@@ -341,6 +362,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         module_opts.threads_per_warp = opt.warp_size
         module_opts.sub_32_dpas = opt.sub_32_dpas
         module_opts.target_arch = cls.target_arch
+        module_opts.block_io_base_alignment = properties["block_io_base_alignment"]
 
     @classmethod
     @track
@@ -495,6 +517,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         driver_version = metadata["target"].arch.get("driver_version")
         if cls.is_lts(driver_version):
             intel.set_is_lts(mod)
+
+        # `getGlobalTimer` counts core clock cycles and needs the rate to report
+        # nanoseconds.
+        intel.set_core_clock_rate(mod, cls.core_clock_rate(metadata["target"].arch))
 
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
