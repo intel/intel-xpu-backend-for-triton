@@ -2449,6 +2449,8 @@ private:
     assert(llEncoding.has_value() &&
            "unexpected failure when getting linear layout");
 
+    llvm::outs() << "johnlu result layout: " << *llEncoding << "\n";
+
     Type valueElemTy = typeConverter->convertType(resultType.getElementType());
     unsigned numElems = getTotalElemsPerThread(resultType);
 
@@ -2469,31 +2471,46 @@ private:
     loadedVals.reserve(numElems);
     auto subLayout = llEncoding->sublayout(
         llvm::to_vector(llEncoding->getInDimNames()), {kDim0});
+    llvm::outs() << "johnlu subLayout layout: " << subLayout << "\n";
     auto offsetsXType = cast<RankedTensorType>(op.getXOffsets().getType());
     std::optional<LinearLayout> offsetsXLLEncoding =
         cast<DistributedEncodingTrait>(offsetsXType.getEncoding())
             .toLinearLayout(offsetsXType.getShape());
     auto regMLayout = subLayout.invertAndCompose(*offsetsXLLEncoding);
 
+    llvm::outs() << "johnlu offsetsXLLEncoding layout: " << *offsetsXLLEncoding
+                 << "\n";
+    llvm::outs() << "johnlu regMLayout layout: " << regMLayout << "\n";
+    auto registerMap = regMLayout.sublayout({kRegister}, {kRegister});
+    llvm::outs() << "johnlu regMLayout only register: " << registerMap << "\n";
+
+    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
     for (unsigned elemIdx = 0; elemIdx < numElems; ++elemIdx) {
+      auto offsetIdx = registerMap.apply({{kRegister, elemIdx}})[0].second;
+      llvm::outs() << "elemIdx: " << elemIdx << " uses offsetIdx:" << offsetIdx
+                   << "\n";
+
       // Get the offset X index from register index first.
-      auto offsetXCoordS = llEncoding->apply(
-          {{kRegister, elemIdx}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
+      auto offsets = applyLinearLayout(loc, rewriter, *llEncoding,
+                                       {{kRegister, b.i32_val(elemIdx)},
+                                        {kLane, laneId},
+                                        {kWarp, warpId},
+                                        {kBlock, b.i32_val(0)}});
       // Get the offset Y from the warp id, lane id and register id.
       // offsetMapping->apply
-      int64_t xOffsetIdx = -1, ySubOffset = -1;
-      for (auto [name, value] : offsetXCoordS) {
-        if (name == kDim0) {
-          xOffsetIdx = value;
+      Value ySubOffset;
+      for (auto [name, value] : offsets) {
+        if (name == kDim1) {
+          ySubOffset = value;
           break;
         }
       }
 
-      Value offsetX = offsetsX[xOffsetIdx];
+      Value offsetX = offsetsX[offsetIdx];
       Value offsetX64 = b.zext(i64_ty, offsetX);
       Value predX = b.icmp_ult(offsetX64, desc.shapes[0]);
 
-      Value yOffset = b.add(offsetY, b.i32_val(ySubOffset));
+      Value yOffset = b.add(offsetY, ySubOffset);
       Value yOffset64 = b.zext(i64_ty, yOffset);
       Value predY = b.icmp_ult(yOffset64, desc.shapes[1]);
       Value pred = b.and_(predX, predY);
@@ -2512,6 +2529,12 @@ private:
           rewriter, loc, pred, SmallVector<Value, 1>{fallbackDefault},
           createLoad);
       Value loaded = *endBlock.args_begin();
+
+      targetInfo.printf(rewriter,
+                        "johnlu load: warp id: %d, lane id: %d base %p addr %p "
+                        "offsetX %d offsetY %d pred %d, ret %f",
+                        {warpId, laneId, desc.base, addr, offsetX, yOffset,
+                         b.zext(i32_ty, pred), loaded});
       loadedVals.push_back(loaded);
     }
 
