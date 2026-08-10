@@ -459,6 +459,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 
 // COM: For the chained dot(dot(dot(X, Y), Z), W)... cases, we only aggressively to assigned the warps when the chained dot on the same operands.
 // CHECK: #[[$DPAS_A:.+]] = #ttig.dpas<{{.*}}warpsPerCTA = [8, 1]{{.*}}>
+// CHECK-NOT: #ttig.dpas
 #blocked = #ttg.blocked<{sizePerThread = [8, 4], threadsPerWarp = [8, 2], warpsPerCTA = [1, 8], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [8, 4], threadsPerWarp = [16, 1], warpsPerCTA = [1, 8], order = [0, 1]}>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.min_sg_size" = 16 : i32, "ttig.support_subgroup_matrix_multiply_accumulate"} {
@@ -492,7 +493,6 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 // COM: For the mixed chained dot like dot(W, dot(dot(X, Y), Z))... cases, falling back to normal tiling pattern.
 // CHECK: #[[$DPAS_0:.+]] = #ttig.dpas<{{.*}}warpsPerCTA = [4, 2]{{.*}}>
 // CHECK: #[[$DPAS_1:.+]] = #ttig.dpas<{{.*}}warpsPerCTA = [2, 4]{{.*}}>
-// CHECK: #[[$DPAS_2:.+]] = #ttig.dpas<{{.*}}warpsPerCTA = [1, 8]{{.*}}>
 #blocked = #ttg.blocked<{sizePerThread = [8, 4], threadsPerWarp = [8, 2], warpsPerCTA = [1, 8], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [8, 4], threadsPerWarp = [16, 1], warpsPerCTA = [1, 8], order = [0, 1]}>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.min_sg_size" = 16 : i32, "ttig.support_subgroup_matrix_multiply_accumulate"} {
@@ -515,9 +515,69 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
       tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked1}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked1}>> -> tensor<64x128xf32, #blocked1>
     %u = arith.truncf %r : tensor<64x128xf32, #blocked1> to tensor<64x128xf16, #blocked1>
     %b = ttg.convert_layout %u : tensor<64x128xf16, #blocked1> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
-    // CHECK: tt.dot {{.*}} -> tensor<64x128xf32, #[[$DPAS_2]]>
+    // CHECK: tt.dot {{.*}} -> tensor<64x128xf32, #[[$DPAS_1]]>
     %s = tt.dot %arg3, %b, %cst_2 {inputPrecision = 0 : i32, maxNumImpreciseAcc = 0 : i32} :
       tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<64x128xf32, #blocked>
     tt.return %s : tensor<64x128xf32, #blocked>
+  }
+}
+
+// -----
+
+// COM: For the chained dot(dot(dot(X, Y), Z), W)... cases, if the num-warps is larger than needed, we will assigned the extra num-warps on the N dimenssion to reduce register space sizes.
+// CHECK: #[[$DPAS_A_0:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [1, 1]
+// CHECK: #[[$DPAS_A_1:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [1, 2]
+#blocked = #ttg.blocked<{sizePerThread = [8, 4], threadsPerWarp = [8, 2], warpsPerCTA = [4, 8], order = [0, 1]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [8, 4], threadsPerWarp = [16, 1], warpsPerCTA = [4, 8], order = [0, 1]}>
+module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.min_sg_size" = 16 : i32, "ttig.support_subgroup_matrix_multiply_accumulate"} {
+  // CHECK-LABEL: chained_dot_three_level
+  tt.func public @chained_dot_three_level(
+    %arg0: tensor<64x128xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>,
+    %arg1: tensor<128x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>,
+    %arg2: tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked1}>>,
+    %arg3: tensor<128x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<64x64xf32, #blocked> {
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #blocked>
+    %cst_1 = arith.constant dense<0.000000e+00> : tensor<64x128xf32, #blocked1>
+    // CHECK: tt.dot {{.*}} -> tensor<64x64xf32, #[[$DPAS_A]]>
+    %d = tt.dot %arg0, %arg1, %cst_0 {inputPrecision = 0 : i32, maxNumImpreciseAcc = 0 : i32} :
+      tensor<64x128xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<128x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<64x64xf32, #blocked>
+    %t = arith.truncf %d : tensor<64x64xf32, #blocked> to tensor<64x64xf16, #blocked>
+    %c = ttg.convert_layout %t : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked1}>>
+    // CHECK: tt.dot {{.*}} -> tensor<64x128xf32, #[[$DPAS_A_1]]>
+    %r = tt.dot %c, %arg2, %cst_1 {inputPrecision = 0 : i32, maxNumImpreciseAcc = 0 : i32} :
+      tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked1}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked1}>> -> tensor<64x128xf32, #blocked1>
+    %u = arith.truncf %r : tensor<64x128xf32, #blocked1> to tensor<64x128xf16, #blocked1>
+    %e = ttg.convert_layout %u : tensor<64x128xf16, #blocked1> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    // CHECK: tt.dot {{.*}} -> tensor<64x64xf32, #[[$DPAS_A_0]]>
+    %s = tt.dot %e, %arg3, %cst_0 {inputPrecision = 0 : i32, maxNumImpreciseAcc = 0 : i32} :
+      tensor<64x128xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<128x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<64x64xf32, #blocked>
+    tt.return %s : tensor<64x64xf32, #blocked>
+  }
+}
+
+// -----
+
+// COM: For the chained dot(X, dot(Y, Z)) case, if the num-warps is larger than needed, we will assigned the extra num-warps on the N dimenssion to reduce register space sizes.
+// CHECK: #[[$DPAS_B_0:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 8], repCluster = [2, 1]
+// CHECK: #[[$DPAS_B_1:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 8], repCluster = [4, 1]
+#blocked = #ttg.blocked<{sizePerThread = [8, 4], threadsPerWarp = [8, 2], warpsPerCTA = [4, 8], order = [0, 1]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [8, 4], threadsPerWarp = [16, 1], warpsPerCTA = [4, 8], order = [0, 1]}>
+module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.min_sg_size" = 16 : i32, "ttig.support_subgroup_matrix_multiply_accumulate"} {
+  // CHECK-LABEL: chained_dot_operand_b
+  tt.func public @chained_dot_operand_b(
+    %arg0: tensor<64x128xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>,
+    %arg1: tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>,
+    %arg2: tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked1}>>) -> tensor<128x128xf32, #blocked1> {
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<64x128xf32, #blocked>
+    %cst_1 = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked1>
+    // CHECK: tt.dot {{.*}} -> tensor<64x128xf32, #[[$DPAS_B_0]]>
+    %d = tt.dot %arg0, %arg1, %cst_0 {inputPrecision = 0 : i32, maxNumImpreciseAcc = 0 : i32} :
+      tensor<64x128xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<64x128xf32, #blocked>
+    %t = arith.truncf %d : tensor<64x128xf32, #blocked> to tensor<64x128xf16, #blocked>
+    %c = ttg.convert_layout %t : tensor<64x128xf16, #blocked> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked1}>>
+    // CHECK: tt.dot {{.*}} -> tensor<128x128xf32, #[[$DPAS_B_1]]>
+    %r = tt.dot %arg2, %c, %cst_1 {inputPrecision = 0 : i32, maxNumImpreciseAcc = 0 : i32} :
+      tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked1}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked1}>> -> tensor<128x128xf32, #blocked1>
+    tt.return %r : tensor<128x128xf32, #blocked1>
   }
 }

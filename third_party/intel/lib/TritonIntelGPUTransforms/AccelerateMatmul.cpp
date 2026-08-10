@@ -15,6 +15,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Casting.h"
 #include <optional>
@@ -86,112 +87,106 @@ std::pair<Value, Value> getDotOperands(Operation *dotOp) {
       .Default([](Operation *) { return std::pair<Value, Value>{}; });
 }
 
-// Improve the tiling pattern for chained `tt.dot`/`tt.scaled_dot` operations.
-//
-// Consider the following chained dot operations on operands A and B:
-//
-// clang-format off
-//                dot      dot
-//                  \      /
-//                   \    /
-//            C = dot(A, B)  <- The dot operation to be tiled.
-//           /\
-//          /  \-------\
-//         /            \
-//    dot(A, B)   dot(A, B)
-// clang-format on
-//
-// First, check whether there is a dot operation in the backward slice of A or
-// B. If the dot operations are chained only along A or only along B,
-// aggressively assign parallelism to the M dimension or the N dimension,
-// respectively, to reduce the cost of the C -> A or C -> B layout conversion.
-//
-// Next, check whether the current dot operation is part of a forward chain
-// (that is, its result is used as operand A or B of another dot operation). If
-// so, similarly assign parallelism to the corresponding M or N dimension.
-//
-// If the dot operation is chained along both A and B, fall back to the default
-// tiling pattern.
+enum class ChainedDotKind {
+  NoChained,
+  ChainedAlongA,
+  ChainedAlongB,
+  ChainedMixedAB,
+};
 
-SmallVector<unsigned>
-getWarpsPerTile(Operation *dotOp,
-                const ttgi::DpasEncodingAttr::DPASCapability &dpasCap,
-                const ArrayRef<int64_t> shape, unsigned numWarps) {
+bool mergeChainedDotFlags(ChainedDotKind chainedDotKind, bool &chainedDotA,
+                          bool &chainedDotB) {
+  switch (chainedDotKind) {
+  case ChainedDotKind::ChainedMixedAB:
+    return true;
+  case ChainedDotKind::ChainedAlongA:
+    chainedDotA = true;
+    break;
+  case ChainedDotKind::ChainedAlongB:
+    chainedDotB = true;
+    break;
+  case ChainedDotKind::NoChained:
+    break;
+  }
+  return false;
+}
+
+using ChainedDotKindMap = llvm::DenseMap<Operation *, ChainedDotKind>;
+
+ChainedDotKind updateChainedDotFlagsFromForwardSlice(Operation *dotOp,
+                                                     ChainedDotKindMap &cache);
+
+ChainedDotKind getChainedDotKind(Operation *dotOp, ChainedDotKindMap &cache) {
+  if (cache.count(dotOp)) {
+    return cache[dotOp];
+  }
+  ChainedDotKind dotChainedType =
+      updateChainedDotFlagsFromForwardSlice(dotOp, cache);
+  cache.try_emplace(dotOp, dotChainedType);
+  return dotChainedType;
+}
+
+ChainedDotKind updateChainedDotFlagsFromForwardSlice(Operation *dotOp,
+                                                     ChainedDotKindMap &cache) {
   auto filter = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();
   };
 
-  SetVector<Operation *> slices = getSlice(dotOp, {filter});
-  for (Operation *op : slices) {
-    if (isa<tt::DotOp, tt::DotScaledOp>(op) && (op != dotOp)) {
-      if (auto forOp = op->getParentOfType<scf::ForOp>()) {
-        // FIXME: Remove once IGC can split large 2D block loads.
-        MLIRContext *ctx = forOp->getContext();
-        StringRef attrName =
-            ttgi::TritonIntelGPUDialect::getOneMatrixPerLoadAttrName();
-        setAttrOnBOperand(dotOp, attrName, UnitAttr::get(ctx));
-        setAttrOnBOperand(op, attrName, UnitAttr::get(ctx));
-      }
-    }
-  }
+  auto [operandA, operandB] = getDotOperands(dotOp);
 
-  auto [A, B] = getDotOperands(dotOp);
-
-  auto dotOpsA = getChainedDotOps(A);
-  bool chainedDotA = !dotOpsA.empty();
-  auto dotOpsB = getChainedDotOps(B);
-  bool chainedDotB = !dotOpsB.empty();
+  auto chainedDotOpsA = getChainedDotOps(operandA);
+  bool chainedDotA = !chainedDotOpsA.empty();
+  auto chainedDotOpsB = getChainedDotOps(operandB);
+  bool chainedDotB = !chainedDotOpsB.empty();
   if (!(chainedDotA && chainedDotB)) {
+    // Not mixed yet: merge chained kinds from backward-slice DotOps.
+    // Recursion is bounded because it only walks backward slices.
+    auto updateChainedDotFlags = [&](auto &chainedDotOps) {
+      for (Operation *op : chainedDotOps) {
+        if (mergeChainedDotFlags(getChainedDotKind(op, cache), chainedDotA,
+                                 chainedDotB))
+          return true;
+      }
+      return false;
+    };
+
+    if (updateChainedDotFlags(chainedDotOpsA) ||
+        updateChainedDotFlags(chainedDotOpsB))
+      return ChainedDotKind::ChainedMixedAB;
+
     SetVector<Operation *> forwardSlice;
     getForwardSlice(dotOp, &forwardSlice, {filter});
-    for (Operation *op : forwardSlice) {
-      if (isa<tt::DotOp, tt::DotScaledOp>(op)) {
-        auto [A, B] = getDotOperands(op);
-        auto dotOpsA = getChainedDotOps(A);
-        chainedDotA |= dotOpsA.contains(dotOp);
-        auto dotOpsB = getChainedDotOps(B);
-        chainedDotB |= dotOpsB.contains(dotOp);
-      }
+    for (Operation *forwardOp : forwardSlice) {
+      if (!isa<tt::DotOp, tt::DotScaledOp>(forwardOp))
+        continue;
+
+      auto [forwardOperandA, forwardOperandB] = getDotOperands(forwardOp);
+      auto forwardChainedDotOpsA = getChainedDotOps(forwardOperandA);
+      chainedDotA |= forwardChainedDotOpsA.contains(dotOp);
+      auto forwardChainedDotOpsB = getChainedDotOps(forwardOperandB);
+      chainedDotB |= forwardChainedDotOpsB.contains(dotOp);
+      if (chainedDotA && chainedDotB)
+        break;
     }
   }
 
-  if (chainedDotA ^ chainedDotB) {
-    unsigned rank = shape.size();
-    SmallVector<unsigned> ret(rank, 1);
-    unsigned maxNumWarpsAlongM =
-        mlir::ceil<unsigned>(shape[rank - 2], dpasCap.repeatCount);
-    unsigned maxNumWarpsAlongN =
-        mlir::ceil<unsigned>(shape[rank - 1], dpasCap.executionSize);
-    if (chainedDotA) {
-      ret[rank - 2] = std::min(maxNumWarpsAlongM, numWarps);
-      ret[rank - 1] = std::min(maxNumWarpsAlongN,
-                               mlir::ceil<unsigned>(numWarps, ret[rank - 2]));
-    } else {
-      ret[rank - 1] = std::min(maxNumWarpsAlongN, numWarps);
-      ret[rank - 2] = std::min(maxNumWarpsAlongM,
-                               mlir::ceil<unsigned>(numWarps, ret[rank - 1]));
-    }
+  if (chainedDotA && chainedDotB)
+    return ChainedDotKind::ChainedMixedAB;
+  if (chainedDotA)
+    return ChainedDotKind::ChainedAlongA;
+  if (chainedDotB)
+    return ChainedDotKind::ChainedAlongB;
+  return ChainedDotKind::NoChained;
+}
 
-    unsigned numWarpsUsed = ret[rank - 1] * ret[rank - 2];
-    if (numWarpsUsed < numWarps) {
-      unsigned remainingWarps = numWarps / numWarpsUsed;
-      if (rank > 2) {
-        ret[0] = remainingWarps;
-      } else {
-        // Put the remaining parallelism on the other dim to reduce the costs.
-        if (chainedDotA) {
-          ret[rank - 1] *= remainingWarps;
-        } else {
-          ret[rank - 2] *= remainingWarps;
-        }
-      }
-    }
-
-    return ret;
-  }
-
-  return ttgi::calculateWarpsPerTile(dpasCap.repeatCount, dpasCap.executionSize,
-                                     shape, numWarps);
+ChainedDotKindMap buildChainedDotKindMap(ModuleOp mod) {
+  ChainedDotKindMap chainedDotKinds;
+  mod.walk([&](Operation *op) {
+    if (!isa<tt::DotOp, tt::DotScaledOp>(op))
+      return;
+    getChainedDotKind(op, chainedDotKinds);
+  });
+  return chainedDotKinds;
 }
 
 template <typename OpTy, typename = std::enable_if_t<llvm::is_one_of<
@@ -200,8 +195,10 @@ class BlockedToDPAS : public OpRewritePattern<OpTy> {
   using TensorValue = TypedValue<RankedTensorType>;
 
 public:
-  BlockedToDPAS(MLIRContext *context, int benefit)
-      : OpRewritePattern<OpTy>(context, benefit) {}
+  BlockedToDPAS(MLIRContext *context, int benefit,
+                ChainedDotKindMap *chainedDotKinds)
+      : OpRewritePattern<OpTy>(context, benefit),
+        chainedDotKinds(chainedDotKinds) {}
 
   LogicalResult matchAndRewrite(OpTy op,
                                 PatternRewriter &rewriter) const override {
@@ -214,12 +211,12 @@ public:
     ModuleOp mod = funcOp->template getParentOfType<ModuleOp>();
     auto dpasAnalysis = ttgi::DPASAnalysisFactory::createDPASAnalysis(mod);
 
-    // Ensure function wide DPAS applicability.
+    // Ensure function-wide DPAS applicability.
     if (ttgi::DPASAnalysisFactory::canUseDPAS(funcOp, dpasAnalysis) !=
         ttgi::DPASAnalysisResult::True)
       return failure();
 
-    // Ensure operation DPAS applicability.
+    // Ensure operation-level DPAS applicability.
     if (ttgi::DPASAnalysisFactory::canUseDPAS(op, dpasAnalysis) !=
         ttgi::DPASAnalysisResult::True)
       return failure();
@@ -230,7 +227,7 @@ public:
     if (!dpasCap.has_value())
       return failure();
 
-    // Create DPAS encoding for the given number of warps
+    // Create a DPAS encoding for the requested number of warps.
     ArrayRef<int64_t> retShape = oldRetType.getShape();
     unsigned numWarps = ttg::lookupNumWarps(funcOp);
 
@@ -276,11 +273,12 @@ public:
 
     RankedTensorType newRetType = oldRetType.cloneWithEncoding(dpasEnc);
 
-    // convert accumulator
+    // Convert accumulator.
     TensorValue oldAcc = op.getC();
     auto newAcc = ttg::ConvertLayoutOp::create(rewriter, oldAcc.getLoc(),
                                                newRetType, oldAcc);
-    // opA are packed to i16 for scalar type < 16 bits. opB are packed to i32.
+    // Operand A is packed to i16 for scalar types < 16 bits.
+    // Operand B is packed to i32.
     auto newAEncoding = ttg::DotOperandEncodingAttr::get(
         oldAType.getContext(), 0, newRetType.getEncoding(),
         opsPerChan == 1 ? opsPerChan : opsPerChan / 2);
@@ -330,6 +328,73 @@ public:
 
     return success();
   }
+
+private:
+  SmallVector<unsigned>
+  getWarpsPerTile(Operation *dotOp,
+                  const ttgi::DpasEncodingAttr::DPASCapability &dpasCap,
+                  const ArrayRef<int64_t> shape, unsigned numWarps) const {
+    auto filter = [&dotOp](Operation *op) {
+      return op->getParentRegion() == dotOp->getParentRegion();
+    };
+
+    SetVector<Operation *> slices = getSlice(dotOp, {filter});
+    for (Operation *op : slices) {
+      if (isa<tt::DotOp, tt::DotScaledOp>(op) && (op != dotOp)) {
+        if (auto forOp = op->getParentOfType<scf::ForOp>()) {
+          // FIXME: Remove once IGC can split large 2D block loads.
+          MLIRContext *ctx = forOp->getContext();
+          StringRef attrName =
+              ttgi::TritonIntelGPUDialect::getOneMatrixPerLoadAttrName();
+          setAttrOnBOperand(dotOp, attrName, UnitAttr::get(ctx));
+          setAttrOnBOperand(op, attrName, UnitAttr::get(ctx));
+        }
+      }
+    }
+
+    ChainedDotKind chainedDotKind = getChainedDotKind(dotOp, *chainedDotKinds);
+    if (chainedDotKind == ChainedDotKind::ChainedAlongA ||
+        chainedDotKind == ChainedDotKind::ChainedAlongB) {
+      unsigned rank = shape.size();
+      SmallVector<unsigned> ret(rank, 1);
+      unsigned maxNumWarpsAlongM =
+          mlir::ceil<unsigned>(shape[rank - 2], dpasCap.repeatCount);
+      unsigned maxNumWarpsAlongN =
+          mlir::ceil<unsigned>(shape[rank - 1], dpasCap.executionSize);
+      if (chainedDotKind == ChainedDotKind::ChainedAlongA) {
+        ret[rank - 2] = std::min(maxNumWarpsAlongM, numWarps);
+        ret[rank - 1] = std::min(maxNumWarpsAlongN,
+                                 mlir::ceil<unsigned>(numWarps, ret[rank - 2]));
+      } else {
+        ret[rank - 1] = std::min(maxNumWarpsAlongN, numWarps);
+        ret[rank - 2] = std::min(maxNumWarpsAlongM,
+                                 mlir::ceil<unsigned>(numWarps, ret[rank - 1]));
+      }
+
+      unsigned numWarpsUsed = ret[rank - 1] * ret[rank - 2];
+      if (numWarpsUsed < numWarps) {
+        unsigned remainingWarps = numWarps / numWarpsUsed;
+        if (rank > 2) {
+          ret[0] = remainingWarps;
+        } else {
+          // Put remaining parallelism on the other dimension to reduce cost.
+          if (chainedDotKind == ChainedDotKind::ChainedAlongA) {
+            ret[rank - 1] *= remainingWarps;
+          } else {
+            ret[rank - 2] *= remainingWarps;
+          }
+        }
+      }
+
+      return ret;
+    }
+
+    SmallVector<unsigned> ret = ttgi::calculateWarpsPerTile(
+        dpasCap.repeatCount, dpasCap.executionSize, shape, numWarps);
+    return ret;
+  }
+
+  ChainedDotKindMap *chainedDotKinds;
 };
 
 class UpcastScaledBlocked : public OpRewritePattern<tt::DotScaledOp> {
@@ -402,7 +467,7 @@ private:
   std::optional<std::tuple<tt::ScaleDotElemType, tt::ScaleDotElemType>>
   getComputeType(tt::ScaleDotElemType aType, tt::ScaleDotElemType bType,
                  PatternRewriter &rewriter) const {
-    if (aType == bType) // Skip the dot_scaled which is not mixed precision.
+    if (aType == bType) // Skip dot_scaled when it is not mixed precision.
       return std::nullopt;
     std::optional<unsigned> aBitWidth = getScaleDotElemTypeBitWidth(aType);
     std::optional<unsigned> bBitWidth = getScaleDotElemTypeBitWidth(bType);
@@ -541,8 +606,8 @@ static void decomposeMixedModeDotOp(ModuleOp mod) {
 
     Type promoteType;
     if (dpasLayout) {
-      // fp8 is not always natively supported by the the DPAS instruction,
-      // promote it to fp16 when necessary.
+      // FP8 is not always natively supported by the DPAS instruction.
+      // Promote to FP16 when needed.
       bool isNativeFP8 = isa<Float8E5M2Type, Float8E4M3FNType>(AElType);
       auto mod = dotOp->getParentOfType<ModuleOp>();
       bool supportsFP8 = mod->hasAttr(
@@ -725,12 +790,16 @@ public:
     if (!supportBlockScaleDPAS)
       transposeDotScaledOp(mod);
 
+    ChainedDotKindMap chainedDotKinds = buildChainedDotKindMap(mod);
+
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
     constexpr int benefitDefault = 1;
-    patterns.add<BlockedToDPAS<tt::DotOp>>(context, benefitDefault + 1);
+    patterns.add<BlockedToDPAS<tt::DotOp>>(context, benefitDefault + 1,
+                                           &chainedDotKinds);
     if (supportBlockScaleDPAS) {
-      patterns.add<BlockedToDPAS<tt::DotScaledOp>>(context, benefitDefault + 1);
+      patterns.add<BlockedToDPAS<tt::DotScaledOp>>(context, benefitDefault + 1,
+                                                   &chainedDotKinds);
       patterns.add<UpcastScaledBlocked>(context, benefitDefault + 1);
     }
     ttgi::populateDecomposeScaledBlockedPatterns(patterns, benefitDefault);
