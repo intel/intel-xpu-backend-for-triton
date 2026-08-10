@@ -5,12 +5,6 @@ tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py::test_silu_mul_fp8_quant_
 tests/kernels/moe/test_batched_moe.py::test_fused_moe_batched_experts
 tests/kernels/moe/test_moe.py::test_fused_moe_wn16
 
-# rocm skips these
-test_fused_marlin_moe
-test_fused_marlin_moe_with_bias
-test_fused_marlin_moe_non_gated
-test_batched_fused_marlin_moe
-
 # Block FP8 modular MoE tests require FP32-SiLU reference https://github.com/intel/intel-xpu-backend-for-triton/issues/7614
 tests/kernels/moe/test_block_fp8.py::test_w8a8_block_fp8_fused_moe[0-dtype0-block_size0-1-2-83-4608-7168]
 tests/kernels/moe/test_block_fp8.py::test_w8a8_block_fp8_fused_moe[0-dtype0-block_size0-1-2-128-4608-7168]
