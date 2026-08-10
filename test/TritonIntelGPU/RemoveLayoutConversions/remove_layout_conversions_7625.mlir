@@ -24,13 +24,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %c1_i64 = arith.constant 1 : i64
     %c0_i32 = arith.constant 0 : i32
     %c64_i32 = arith.constant 64 : i32
-    // CHECK:  scf.for %[[VAL_0:.*]] = {{.*}} to {{.*}} step {{.*}} iter_args(%[[VAL_1:.*]] = {{.*}}) -> (tensor<16x64xf32, {{.*}}>)  : i32 {
+    // CHECK-COUNT-1:  scf.for %[[VAL_0:.*]] = {{.*}} to {{.*}} step {{.*}} iter_args(%[[VAL_1:.*]] = {{.*}}) -> (tensor<16x64xf32, {{.*}}>)  : i32 {
+    // CHECK-NOT: scf.for
     %0 = scf.for %arg5 = %c0_i32 to %c32_i32 step %c1_i32 iter_args(%arg6 = %cst) -> (tensor<16x64xf32, #blocked>)  : i32 {
       %2 = tt.make_tensor_descriptor %arg0, [%c128_i32, %c128_i32], [%c128_i64, %c1_i64] : <bf16>, <16x64xbf16>
       %3 = arith.truncf %arg6 : tensor<16x64xf32, #blocked> to tensor<16x64xbf16, #blocked>
+      // CHECK: tt.descriptor_store {{.*}} : !tt.tensordesc<16x64xbf16>, tensor<16x64xbf16, #[[$ATTR_0]]>
       tt.descriptor_store %2[%c0_i32, %c0_i32], %3 {ttig.block_io = "row_major", ttig.desc_padding = 1 : i32} : !tt.tensordesc<16x64xbf16>, tensor<16x64xbf16, #blocked>
       %4 = arith.muli %arg5, %c64_i32 : i32
-      // CHECK: tt.descriptor_store {{.*}} : !tt.tensordesc<16x64xbf16>, tensor<16x64xbf16, #[[$ATTR_0]]>
+      // CHECK-COUNT-1: tt.descriptor_load
+      // CHECK-COUNT-1: tt.dot
       %5 = tt.descriptor_load %arg2[%4, %c0_i32] {ttig.block_io = "row_major", ttig.desc_padding = 1 : i32} : !tt.tensordesc<64x64xbf16> -> tensor<64x64xbf16, #blocked1>
       %6 = tt.trans %arg6 {order = array<i32: 1, 0>} : tensor<16x64xf32, #blocked> -> tensor<64x16xf32, #blocked2>
       %7 = arith.truncf %6 : tensor<64x16xf32, #blocked2> to tensor<64x16xbf16, #blocked2>
@@ -39,6 +42,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
       %10 = tt.dot %8, %9, %cst_0, inputPrecision = tf32 : tensor<64x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<64x16xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<64x16xf32, #mma>
       %11 = ttg.convert_layout %10 : tensor<64x16xf32, #mma> -> tensor<64x16xf32, #blocked3>
       %12 = arith.truncf %11 : tensor<64x16xf32, #blocked3> to tensor<64x16xbf16, #blocked3>
+      // CHECK-COUNT-1: tt.descriptor_load
+      // CHECK-COUNT-1: tt.dot
+      // CHECK-NOT: tt.descriptor_load
+      // CHECK-NOT: tt.dot
       %13 = tt.descriptor_load %arg4[%4, %c0_i32] {ttig.block_io = "row_major", ttig.desc_padding = 1 : i32} : !tt.tensordesc<64x64xbf16> -> tensor<64x64xbf16, #blocked1>
       %14 = tt.trans %13 {order = array<i32: 1, 0>} : tensor<64x64xbf16, #blocked1> -> tensor<64x64xbf16, #blocked4>
       %15 = ttg.convert_layout %14 : tensor<64x64xbf16, #blocked4> -> tensor<64x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
@@ -46,6 +53,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
       %17 = tt.dot %15, %16, %cst_0, inputPrecision = tf32 : tensor<64x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<64x16xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<64x16xf32, #mma>
       %18 = ttg.convert_layout %17 : tensor<64x16xf32, #mma> -> tensor<64x16xf32, #blocked2>
       %19 = tt.trans %18 {order = array<i32: 1, 0>} : tensor<64x16xf32, #blocked2> -> tensor<16x64xf32, #blocked>
+      // CHECK: scf.yield {{.*}} : tensor<16x64xf32, #[[$ATTR_0]]>
       scf.yield %19 : tensor<16x64xf32, #blocked>
     }
     %1 = tt.make_tensor_descriptor %arg1, [%c128_i32, %c128_i32], [%c128_i64, %c1_i64] : <f32>, <16x64xf32>
