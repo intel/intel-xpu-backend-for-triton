@@ -6,13 +6,12 @@ on:
   pull_request:
     branches:
       - main
-    types: [opened, synchronize, reopened, labeled]
+    types: [opened, synchronize, reopened]
   schedule:
     - cron: "0 11 * * *"
 
-# Give unrelated-label skip runs a separate lane so they cannot cancel a real run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || 'ci' }}-${{ github.event.action == 'labeled' && github.event.label.name != 'run-sglang-benchmarks' && 'skip' || 'run' }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || 'ci' }}
   cancel-in-progress: true
 
 jobs:
@@ -34,8 +33,7 @@ jobs:
     needs: check-paths
     if: >-
       github.event_name == 'schedule' ||
-      (github.event.action != 'labeled' && needs.check-paths.outputs.benchmarks == 'true') ||
-      github.event.label.name == 'run-sglang-benchmarks'
+      needs.check-paths.outputs.benchmarks == 'true'
     uses: ./.github/workflows/build-benchmarks-wheel.yml
     with:
       python-version: "3.12"
@@ -45,8 +43,7 @@ jobs:
     if: >-
       always() && !cancelled() &&
       (github.event_name == 'schedule' ||
-       (github.event.action != 'labeled' && needs.check-paths.outputs.benchmarks == 'true') ||
-       github.event.label.name == 'run-sglang-benchmarks')
+       needs.check-paths.outputs.benchmarks == 'true')
     uses: ./.github/workflows/sglang-benchmarks.yml
     with:
       runner_label: max1550
