@@ -1,4 +1,12 @@
+import os
+import sys
+
 import pytest
+
+# pytest prepends this dir to sys.path, where our unbuilt triton shadows the installed one; move it last.
+module_directory = os.path.dirname(os.path.abspath(__file__))
+if module_directory in sys.path:
+    sys.path[:] = [path_entry for path_entry in sys.path if path_entry != module_directory] + [module_directory]
 
 
 def pytest_addoption(parser):
