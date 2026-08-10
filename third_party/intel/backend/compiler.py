@@ -221,6 +221,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         dev_prop['has_256b_load_store'] = tgt_prop.get('has_256b_prefetch', False)
         dev_prop['has_rounded_divide_sqrt'] = tgt_prop.get('has_rounded_divide_sqrt', not is_lts)
         dev_prop['has_sigmoid'] = tgt_prop.get('has_sigmoid', False)
+        # HW base-address alignment requirement (in bytes) for 2D block IO.
+        # Defaults to 64; targets with a relaxed requirement (e.g. CRI) override
+        # this so the downstream 64-byte alignment compensation is skipped.
+        dev_prop['block_io_base_alignment'] = tgt_prop.get('block_io_base_alignment', 64)
         dev_prop['core_clock_rate'] = self.core_clock_rate(tgt_prop)
 
         if '__intel_already_queried_extensions__' not in tgt_prop:
@@ -353,6 +357,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         module_opts.threads_per_warp = opt.warp_size
         module_opts.sub_32_dpas = opt.sub_32_dpas
         module_opts.target_arch = cls.target_arch
+        module_opts.block_io_base_alignment = properties["block_io_base_alignment"]
 
     @classmethod
     @track
