@@ -214,12 +214,16 @@ jobs:
           name: triton-${{ env.PYTHON_VERSION }}-${{ inputs.runner_label }}
           path: ${{ env.NEW_WORKSPACE }}\dist
 
-      # Instrumentation tests look for this library in `build/*lib*/triton/instrumentation`.
+      # The uploaded artifact is rooted at `build` (upload-artifact roots at the last non-glob
+      # ancestor of the upload path, i.e. `build`, since `lib*` is itself a glob segment), so it
+      # unpacks as `build\lib.win-amd64-cpython-310\triton\instrumentation\...`. Downloading it
+      # into `build` preserves that layout, matching the `build/*lib*/triton/instrumentation` glob
+      # instrumentation tests look for.
       - name: Download instrumentation library
         uses: actions/download-artifact@v8
         with:
           name: instrumentation-${{ env.PYTHON_VERSION }}-${{ inputs.runner_label }}
-          path: ${{ env.NEW_WORKSPACE }}\build\lib\triton\instrumentation
+          path: ${{ env.NEW_WORKSPACE }}\build
 
       - name: Install Triton
         run: |
