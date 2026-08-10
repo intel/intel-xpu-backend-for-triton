@@ -61,6 +61,10 @@ struct TritonAnnotateModule
     mod->setAttr(ttgi::TritonIntelGPUDialect::getTargetArchAttrName(),
                  builder.getStringAttr(targetArch));
 
+    mod->setAttr(
+        ttgi::TritonIntelGPUDialect::get2DBlockIOBaseAlignmentAttrName(),
+        builder.getI32IntegerAttr(blockIOBaseAlignment));
+
     if (support16BitAtomics)
       mod->setAttr(
           ttgi::TritonIntelGPUDialect::getSupport16BitAtomicsAttrName(),

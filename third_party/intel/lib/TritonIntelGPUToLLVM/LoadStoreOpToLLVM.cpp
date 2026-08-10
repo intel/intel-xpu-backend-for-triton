@@ -4067,9 +4067,14 @@ struct Subgroup2DBlockLoadOpConversion
     // this, LLVM's CSE factors out (descIndex + delta) as a common
     // subexpression shared across different operand loads, producing a
     // suboptimal instruction schedule.
+    //
+    // The compensation is skipped entirely on targets whose base-address
+    // alignment requirement is already met by the 4-byte alignment that
+    // MaterializeBlockPointer guarantees.
     std::optional<int64_t> colConst =
         triton::intel::getFoldedConstantValue(baseOffsetX);
-    if (!colConst || *colConst != 0) {
+    if (needs2DBlockIOAlignmentCompensation(op) &&
+        (!colConst || *colConst != 0)) {
       constexpr int64_t ALIGNMENT_MASK = 0x3f;
       Value baseAddr = b.ptrtoint(int_ty(64), basePtr);
       Value alignedBaseAddr = b.and_(baseAddr, b.i64_val(~ALIGNMENT_MASK));
@@ -4286,6 +4291,8 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
       addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, negativeOffsetX);
       Value adjustedBaseWidth =
           b.add(baseWidth, b.mul(offsetX, b.i32_val(elemSizeInBits / 8)));
+      // The HW requires a base width of at least 64 bytes.
+      adjustedBaseWidth = b.umax(adjustedBaseWidth, b.i32_val(64));
 
       Value pred;
       if (maskElems.size())
