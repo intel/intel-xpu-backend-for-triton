@@ -8,8 +8,11 @@ on:
       - main
     paths:
       - .github/workflows/sglang-benchmarks*.yml
+      - .github/workflows/build-benchmarks-wheel*.yml
+      - .github/actions/install-benchmarks/**
       - scripts/sglang/**
       - benchmarks/triton_kernels_benchmark/sglang/**
+      - .github/pins/pytorch.txt
   schedule:
     - cron: "0 11 * * *"
 
