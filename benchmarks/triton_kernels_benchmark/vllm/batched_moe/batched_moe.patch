@@ -1,5 +1,5 @@
 diff --git a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
-index 609b28a95..4d9756bf6 100644
+index 609b28a95..6ceb8d9ff 100644
 --- a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
 @@ -169,7 +169,7 @@ def moe_mmk(
@@ -135,11 +135,8 @@ index 609b28a95..4d9756bf6 100644
      num_pid_n = tl.cdiv(N, BLOCK_N)
      pid_m = pid_mn // num_pid_n
      pid_n = pid_mn % num_pid_n
-@@ -446,11 +484,10 @@ def invoke_moe_batched_triton_kernel(
- 
-     BLOCK_M = config["BLOCK_SIZE_M"]
-     BLOCK_N = config["BLOCK_SIZE_N"]
--    BLOCK_K = config["BLOCK_SIZE_K"]
+@@ -449,8 +487,8 @@ def invoke_moe_batched_triton_kernel(
+     BLOCK_K = config["BLOCK_SIZE_K"]
  
      grid = (
 -        expert_num_tokens.size(0),
@@ -148,7 +145,7 @@ index 609b28a95..4d9756bf6 100644
      )
  
      A_scale = normalize_batched_scales_shape(A_scale, expert_num_tokens.shape[0])
-@@ -539,10 +576,6 @@ def invoke_moe_batched_triton_kernel(
+@@ -539,10 +577,6 @@ def invoke_moe_batched_triton_kernel(
          use_fp8_w8a8,
          use_int8_w8a16,
          per_act_token_quant,
