@@ -1,7 +1,6 @@
 python/triton_kernels/tests/test_matmul.py::test_op
 
-# XPU out of memory, cannot allocate 4 GB
-# https://github.com/intel/intel-xpu-backend-for-triton/issues/7477
+# A770 can't do a single allocation >4GB; not applicable on this HW.
 python/triton_kernels/tests/test_distributed.py::test_convert_large_strides[src-dp_to_ep]
 python/triton_kernels/tests/test_distributed.py::test_convert_large_strides[src-ep_to_dp]
 python/triton_kernels/tests/test_distributed.py::test_convert_large_strides[dst-dp_to_ep]
