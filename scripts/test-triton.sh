@@ -46,6 +46,13 @@ TEST:
     --vllm-tdesc
     --install-vllm
     --sglang
+    --sglang-attention
+    --sglang-quant
+    --sglang-moe
+    --sglang-mamba
+    --sglang-gdn
+    --sglang-kda
+    --sglang-spec
     --install-sglang
     --liger
     --install-liger
@@ -100,6 +107,13 @@ TEST_BENCHMARK_FLEX_ATTENTION=false
 TEST_INSTRUMENTATION=false
 TEST_INDUCTOR=false
 TEST_SGLANG=false
+TEST_SGLANG_ATTENTION=false
+TEST_SGLANG_QUANT=false
+TEST_SGLANG_MOE=false
+TEST_SGLANG_MAMBA=false
+TEST_SGLANG_GDN=false
+TEST_SGLANG_KDA=false
+TEST_SGLANG_SPEC=false
 INSTALL_SGLANG=false
 TEST_LIGER=false
 INSTALL_LIGER=false
@@ -267,6 +281,41 @@ while (( $# != 0 )); do
       ;;
     --sglang)
       TEST_SGLANG=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --sglang-attention)
+      TEST_SGLANG_ATTENTION=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --sglang-quant)
+      TEST_SGLANG_QUANT=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --sglang-moe)
+      TEST_SGLANG_MOE=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --sglang-mamba)
+      TEST_SGLANG_MAMBA=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --sglang-gdn)
+      TEST_SGLANG_GDN=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --sglang-kda)
+      TEST_SGLANG_KDA=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --sglang-spec)
+      TEST_SGLANG_SPEC=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -824,19 +873,127 @@ enter_vllm_test_env() {
 }
 
 run_sglang_install() {
+  echo "************************************************"
+  echo "******    Installing SGLang               ******"
+  echo "************************************************"
+
   "$SCRIPTS_DIR/sglang/install-sglang.sh"
 }
+
+enter_sglang_test_env() {
+  run_sglang_install
+  run_test_deps_install
+  cd "$TRITON_PROJ/sglang"
+}
+
+# Kernel/test mapping: scripts/sglang/README.md, issue #7655.
+# No -n: with -n 4 the attention tests crash an xdist worker with a GPU page fault
+# on a single-GPU runner.
 
 run_sglang_tests() {
   echo "***************************************************"
   echo "******    Running SGLang Triton tests        ******"
   echo "***************************************************"
 
-  run_sglang_install
-  run_test_deps_install
-  cd sglang
-  TRITON_TEST_SUITE=sglang \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-4} test/registered/attention/test_triton_attention_kernels.py
+  run_sglang_attention_tests
+  run_sglang_quant_tests
+  run_sglang_moe_tests
+  run_sglang_mamba_tests
+  run_sglang_gdn_tests
+  run_sglang_kda_tests
+  run_sglang_spec_tests
+}
+
+run_sglang_attention_tests() {
+  echo "********************************************************"
+  echo "******  Running SGLang attention tests           *******"
+  echo "********************************************************"
+
+  enter_sglang_test_env
+  # KV index build, decode/extend/prefill attention.
+  # test_fp4_indexer.py is left out: it imports sgl_kernel, which is not installed.
+  TRITON_TEST_SUITE=sglang_attention \
+    run_pytest_command -vvv \
+      test/registered/attention/test_create_kvindices.py \
+      test/registered/attention/test_triton_attention_kernels.py
+}
+
+run_sglang_quant_tests() {
+  echo "********************************************************"
+  echo "******  Running SGLang quantization tests        *******"
+  echo "********************************************************"
+
+  enter_sglang_test_env
+  # FP8 quant + block GEMM.
+  # test_int8_kernel.py and test_block_int8.py are left out: they import
+  # srt.layers.activation, which needs sgl_kernel on XPU.
+  TRITON_TEST_SUITE=sglang_quant \
+    run_pytest_command -vvv \
+      test/registered/quant/test_fp8_kernel.py
+}
+
+run_sglang_moe_tests() {
+  echo "********************************************************"
+  echo "******  Running SGLang MoE tests                 *******"
+  echo "********************************************************"
+
+  enter_sglang_test_env
+  # Fused MoE + LoRA.
+  # test_fused_moe.py and test/manual/test_triton_moe_wna16.py are left out: same
+  # sgl_kernel import as the INT8 tests.
+  TRITON_TEST_SUITE=sglang_moe \
+    run_pytest_command -vvv \
+      test/registered/lora/test_fused_moe_lora_kernel.py
+}
+
+run_sglang_mamba_tests() {
+  echo "********************************************************"
+  echo "******  Running SGLang Mamba tests               *******"
+  echo "********************************************************"
+
+  enter_sglang_test_env
+  # causal_conv1d (shared with GDN/KDA), Mamba2 SSM and SSD scans.
+  TRITON_TEST_SUITE=sglang_mamba \
+    run_pytest_command -vvv \
+      test/registered/layers/mamba/test_causal_conv1d.py \
+      test/registered/layers/mamba/test_mamba_ssm.py \
+      test/registered/layers/mamba/test_mamba_ssm_ssd.py
+}
+
+run_sglang_gdn_tests() {
+  echo "********************************************************"
+  echo "******  Running SGLang GDN tests                 *******"
+  echo "********************************************************"
+
+  enter_sglang_test_env
+  # Gated delta rule (fla kernels, with XPU overrides upstream).
+  TRITON_TEST_SUITE=sglang_gdn \
+    run_pytest_command -vvv \
+      test/registered/attention/test_chunk_gated_delta_rule.py
+}
+
+run_sglang_kda_tests() {
+  echo "********************************************************"
+  echo "******  Running SGLang KDA tests                 *******"
+  echo "********************************************************"
+
+  enter_sglang_test_env
+  # Kimi delta attention.
+  TRITON_TEST_SUITE=sglang_kda \
+    run_pytest_command -vvv \
+      test/registered/attention/test_kda_kernels.py
+}
+
+run_sglang_spec_tests() {
+  echo "********************************************************"
+  echo "******  Running SGLang speculative decoding tests ******"
+  echo "********************************************************"
+
+  enter_sglang_test_env
+  # DSpark Triton vs torch parity.
+  TRITON_TEST_SUITE=sglang_spec \
+    run_pytest_command -vvv \
+      test/registered/spec/dspark/test_dspark_kernel_parity.py
 }
 
 run_liger_install() {
@@ -1236,6 +1393,27 @@ test_triton() {
   fi
   if [ "$TEST_SGLANG" == true ]; then
     run_sglang_tests
+  fi
+  if [ "$TEST_SGLANG_ATTENTION" == true ]; then
+    run_sglang_attention_tests
+  fi
+  if [ "$TEST_SGLANG_QUANT" == true ]; then
+    run_sglang_quant_tests
+  fi
+  if [ "$TEST_SGLANG_MOE" == true ]; then
+    run_sglang_moe_tests
+  fi
+  if [ "$TEST_SGLANG_MAMBA" == true ]; then
+    run_sglang_mamba_tests
+  fi
+  if [ "$TEST_SGLANG_GDN" == true ]; then
+    run_sglang_gdn_tests
+  fi
+  if [ "$TEST_SGLANG_KDA" == true ]; then
+    run_sglang_kda_tests
+  fi
+  if [ "$TEST_SGLANG_SPEC" == true ]; then
+    run_sglang_spec_tests
   fi
   if [ "$INSTALL_LIGER" == true ]; then
     run_liger_install

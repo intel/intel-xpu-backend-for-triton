@@ -1,9 +1,0 @@
-# BMG (Xe2 / B580) skip list for the SGLang test suite.
-#
-# Applied when sglang-tests-bmg.yml runs the reusable workflow with skip_list: xe2
-# (the file name matches TRITON_TEST_SUITE=sglang set in run_sglang_tests).
-#
-# BMG has no SGLang coverage yet, so this starts empty: every test runs. Add the
-# node ids of tests that are known to fail on BMG here as they are triaged, one per
-# line (see the vllm_*.txt files in this directory for the format), each with a
-# tracking issue link.

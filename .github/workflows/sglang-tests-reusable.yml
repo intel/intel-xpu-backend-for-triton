@@ -129,6 +129,10 @@ jobs:
       matrix:
         suite:
           - sglang-attention
+          - sglang-quant
+          - sglang-moe
+          - sglang-mamba
+          - sglang-rest
     runs-on:
       - linux
       - ${{ inputs.runner_label || 'max1100' }}
@@ -213,7 +217,38 @@ jobs:
       - name: Run attention tests
         if: ${{ matrix.suite == 'sglang-attention' && steps.install.outcome == 'success' && !cancelled() }}
         run: |
-          ${{ env.TRITON_TEST_CMD }} --sglang
+          ${{ env.TRITON_TEST_CMD }} --sglang-attention
+
+      - name: Run quant tests
+        if: ${{ matrix.suite == 'sglang-quant' && steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --sglang-quant
+
+      - name: Run moe tests
+        if: ${{ matrix.suite == 'sglang-moe' && steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --sglang-moe
+
+      - name: Run mamba tests
+        if: ${{ matrix.suite == 'sglang-mamba' && steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --sglang-mamba
+
+      # sglang-rest groups short suites: gdn, kda, spec
+      - name: Run gdn tests
+        if: ${{ matrix.suite == 'sglang-rest' && steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --sglang-gdn
+
+      - name: Run kda tests
+        if: ${{ matrix.suite == 'sglang-rest' && steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --sglang-kda
+
+      - name: Run spec tests
+        if: ${{ matrix.suite == 'sglang-rest' && steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --sglang-spec
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}
