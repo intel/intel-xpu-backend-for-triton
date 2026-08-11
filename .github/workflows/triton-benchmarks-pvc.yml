@@ -6,35 +6,24 @@ on:
   pull_request:
     branches:
       - main
-    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/triton-benchmarks*.yml
+      - .github/workflows/build-benchmarks-wheel*.yml
+      - .github/actions/install-benchmarks/**
+      - benchmarks/**
+      - '!benchmarks/triton_kernels_benchmark/vllm/**'
+      - '!benchmarks/triton_kernels_benchmark/sglang/**'
+      - .github/pins/pytorch.txt
 
 jobs:
-  check-paths:
-    runs-on: ubuntu-latest
-    outputs:
-      benchmarks: ${{ steps.check.outputs.changed }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - name: Check for benchmark changes
-        id: check
-        uses: ./.github/actions/check-path-changes
-        with:
-          patterns: '^(\.github/workflows/(triton-benchmarks|build-benchmarks-wheel).*\.yml|\.github/actions/install-benchmarks/|benchmarks/|\.github/pins/pytorch\.txt)'
-
   build-wheel:
-    needs: check-paths
-    if: needs.check-paths.outputs.benchmarks == 'true'
     uses: ./.github/workflows/build-benchmarks-wheel.yml
     with:
       python-version: "3.12"
 
   benchmarks:
-    needs: [check-paths, build-wheel]
-    if: >-
-      always() && !cancelled() &&
-      needs.check-paths.outputs.benchmarks == 'true'
+    needs: build-wheel
+    if: always() && !cancelled()
     uses: ./.github/workflows/triton-benchmarks.yml
     with:
       runner_label: max1550
