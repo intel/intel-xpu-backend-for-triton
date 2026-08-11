@@ -10,7 +10,7 @@ on:
 
 jobs:
   check-paths:
-    runs-on: ubuntu-latest
+    runs-on: linux
     outputs:
       benchmarks: ${{ steps.check.outputs.changed }}
     steps:
