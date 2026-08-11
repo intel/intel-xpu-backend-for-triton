@@ -1860,11 +1860,11 @@ class TritonSemantic(Generic[TensorTy]):
         the AxisInfo optimization path). The sign of the divisor is irrelevant
         to the bug — only negative dividends break contiguity/stride.
         """
-        import os
-        if os.environ.get("TRITON_CHECK_SIGNED_DIV", "1") == "0":
+        from triton._C.libtriton import getenv_bool
+        if not getenv_bool("TRITON_CHECK_SIGNED_DIV", True):
             return
-        # If the fix is enabled, the optimization is disabled — no need to assert
-        if os.environ.get("TRITON_FIX_SIGNED_DIV"):
+        # If the fix is enabled, the optimization is disabled — no need to assert.
+        if getenv_bool("TRITON_FIX_SIGNED_DIV", False):
             return
         # The bug only manifests for tensor dividend with constant divisor.
         # Skip if dividend is scalar, or if divisor is also a tensor (AxisInfo
