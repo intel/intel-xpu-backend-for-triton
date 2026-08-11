@@ -300,10 +300,10 @@ def main() -> None:
     patch_dirs = [
         # Test directories
         vllm_root / "tests" / "kernels",
+        vllm_root / "tests" / "models" / "kimi_k3",
         vllm_root / "tests" / "v1" / "sample",
         vllm_root / "tests" / "v1" / "spec_decode",
         vllm_root / "tests" / "v1" / "worker",
-        vllm_root / "tests" / "kernels" / "attention",
         # Source directories
         vllm_root / "vllm" / "v1" / "worker",
         vllm_root / "vllm" / "model_executor" / "layers",
