@@ -465,14 +465,6 @@ class XPUUtils(object):
         self.build_signature_metadata = mod.build_signature_metadata
         self._initialized = True
 
-    def get_current_device(self):
-        try:
-            from torch._C import _xpu_getDevice
-            return _xpu_getDevice()
-        except ImportError:
-            import torch
-            return torch.xpu.current_device()
-
     def get_sycl_queue(self):
         import torch
         return torch.xpu.current_stream().sycl_queue
