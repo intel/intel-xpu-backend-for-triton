@@ -1,5 +1,4 @@
 // RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s
-// RUN: env TRITON_INTEL_ENABLE_BLOCK_IO_ALL_LAYOUTS=1 triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefix=FAST
 
 // Test that ttig.descriptor_gather is lowered to LLVM correctly.
 // Two lowering paths are covered:
@@ -8,13 +7,11 @@
 //   2. Fast path: generates triton_gen.sub_group_gather_load for DPAS dot_op A
 //      layouts that satisfy block-IO tile constraints.
 
-// ---------------------------------------------------------------------------
 // Test 1: Default fallback path
 //
 // A blocked encoding that does not satisfy block-IO tile constraints falls
 // through to the default path which emits one predicated llvm.load per result
 // element.
-// ---------------------------------------------------------------------------
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked_x = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [8], order = [0]}>
@@ -59,12 +56,10 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// ---------------------------------------------------------------------------
 // Test 2: Fast path (SubGroupGatherLoad)
 //
 // When the result tensor uses a dot_op A DPAS encoding the fast-path emits
 // triton_gen.sub_group_gather_load instead of scalar predicated loads.
-// ---------------------------------------------------------------------------
 
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
@@ -85,7 +80,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     %desc = tt.make_tensor_descriptor %arg0, [%c256_i32, %c256_i32], [%c32_i64, %c1_i64] : <f16>, <1x32xf16>
 
     // Fast path emits SubGroupGatherLoadOp.
-    // FAST: triton_gen.sub_group_gather_load
+    // CHECK: triton_gen.sub_group_gather_load
 
     %result = ttig.descriptor_gather %desc[%arg1, %arg2]
         : (!tt.tensordesc<1x32xf16>, tensor<64xi32, #slice_x>, i32) -> tensor<64x32xf16, #dot0>
