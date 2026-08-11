@@ -6,7 +6,13 @@ on:
   pull_request:
     branches:
       - main
-    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/sglang-benchmarks*.yml
+      - .github/workflows/build-benchmarks-wheel*.yml
+      - .github/actions/install-benchmarks/**
+      - scripts/sglang/**
+      - benchmarks/triton_kernels_benchmark/sglang/**
+      - .github/pins/pytorch.txt
   schedule:
     - cron: "0 11 * * *"
 
@@ -15,35 +21,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check-paths:
-    runs-on: linux
-    outputs:
-      benchmarks: ${{ steps.check.outputs.changed }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - name: Check for SGLang benchmark changes
-        id: check
-        uses: ./.github/actions/check-path-changes
-        with:
-          patterns: '^(\.github/workflows/sglang-benchmarks(-pvc|-bmg)?\.yml|scripts/sglang/sglang-pin\.txt)'
-
   build-wheel:
-    needs: check-paths
-    if: >-
-      github.event_name == 'schedule' ||
-      needs.check-paths.outputs.benchmarks == 'true'
     uses: ./.github/workflows/build-benchmarks-wheel.yml
     with:
       python-version: "3.12"
 
   benchmarks:
-    needs: [check-paths, build-wheel]
-    if: >-
-      always() && !cancelled() &&
-      (github.event_name == 'schedule' ||
-       needs.check-paths.outputs.benchmarks == 'true')
+    needs: build-wheel
+    if: always() && !cancelled()
     uses: ./.github/workflows/sglang-benchmarks.yml
     with:
       runner_label: max1550
