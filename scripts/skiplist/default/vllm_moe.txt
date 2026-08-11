@@ -1,15 +1,12 @@
 # Other
 # Large-token fused MoE accuracy failure on XPU after the memory-query patch.
 tests/kernels/moe/test_moe.py::test_fused_moe_int64_overflow
+
+Waiting for upstream fix https://github.com/intel/intel-xpu-backend-for-triton/issues/7705
 tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py::test_silu_mul_fp8_quant_deep_gemm
+
 tests/kernels/moe/test_batched_moe.py::test_fused_moe_batched_experts
 tests/kernels/moe/test_moe.py::test_fused_moe_wn16
-
-# rocm skips these
-test_fused_marlin_moe
-test_fused_marlin_moe_with_bias
-test_fused_marlin_moe_non_gated
-test_batched_fused_marlin_moe
 
 # Accuracy error on PVC: https://github.com/intel/intel-xpu-backend-for-triton/issues/7131
 tests/kernels/moe/test_moe.py::test_fused_moe_int64_overflow
@@ -812,3 +809,31 @@ tests/kernels/moe/test_moe_layer.py::test_moe_layer_no_parallel[True-False-True-
 tests/kernels/moe/test_moe_layer.py::test_moe_layer_no_parallel[True-False-True-modelopt_fp8-6-8-32-512-512]
 tests/kernels/moe/test_moe_layer.py::test_moe_layer_no_parallel[True-False-True-modelopt_fp8-6-64-1-128-256]
 tests/kernels/moe/test_moe_layer.py::test_moe_layer_no_parallel[True-False-True-modelopt_fp8-6-64-32-512-512]
+tests/kernels/moe/test_moe.py::test_fused_moe[True-dtype0-1-2-64-32768-2048-511]
+tests/kernels/moe/test_moe.py::test_fused_moe[True-dtype0-1-2-64-40000-1024-1024]
+tests/kernels/moe/test_moe.py::test_fused_moe[True-dtype0-1-2-192-32768-2048-511]
+tests/kernels/moe/test_moe.py::test_fused_moe[True-dtype0-1-2-192-40000-1024-1024]
+tests/kernels/moe/test_moe.py::test_fused_moe[True-dtype0-1-6-64-32768-2048-511]
+tests/kernels/moe/test_moe.py::test_fused_moe[True-dtype0-1-6-64-40000-1024-1024]
+tests/kernels/moe/test_moe.py::test_fused_moe[True-dtype0-1-6-192-40000-1024-1024]
+tests/kernels/moe/test_moe.py::test_fused_moe[True-dtype0-4-2-64-32768-2048-511]
+tests/kernels/moe/test_moe.py::test_fused_moe[True-dtype0-4-2-64-40000-1024-1024]
+tests/kernels/moe/test_moe.py::test_fused_moe[True-dtype0-4-2-192-32768-2048-511]
+tests/kernels/moe/test_moe.py::test_fused_moe[True-dtype0-4-2-192-40000-1024-1024]
+tests/kernels/moe/test_moe.py::test_fused_moe[True-dtype0-4-6-64-32768-2048-511]
+tests/kernels/moe/test_moe.py::test_fused_moe[True-dtype0-4-6-64-40000-1024-1024]
+tests/kernels/moe/test_moe.py::test_fused_moe[True-dtype0-4-6-192-40000-1024-1024]
+tests/kernels/moe/test_moe.py::test_fused_moe[False-dtype0-1-2-64-32768-2048-511]
+tests/kernels/moe/test_moe.py::test_fused_moe[False-dtype0-1-2-64-40000-1024-1024]
+tests/kernels/moe/test_moe.py::test_fused_moe[False-dtype0-1-2-192-32768-2048-511]
+tests/kernels/moe/test_moe.py::test_fused_moe[False-dtype0-1-2-192-40000-1024-1024]
+tests/kernels/moe/test_moe.py::test_fused_moe[False-dtype0-1-6-64-32768-2048-511]
+tests/kernels/moe/test_moe.py::test_fused_moe[False-dtype0-1-6-64-40000-1024-1024]
+tests/kernels/moe/test_moe.py::test_fused_moe[False-dtype0-1-6-192-40000-1024-1024]
+tests/kernels/moe/test_moe.py::test_fused_moe[False-dtype0-4-2-64-32768-2048-511]
+tests/kernels/moe/test_moe.py::test_fused_moe[False-dtype0-4-2-64-40000-1024-1024]
+tests/kernels/moe/test_moe.py::test_fused_moe[False-dtype0-4-2-192-32768-2048-511]
+tests/kernels/moe/test_moe.py::test_fused_moe[False-dtype0-4-2-192-40000-1024-1024]
+tests/kernels/moe/test_moe.py::test_fused_moe[False-dtype0-4-6-64-32768-2048-511]
+tests/kernels/moe/test_moe.py::test_fused_moe[False-dtype0-4-6-64-40000-1024-1024]
+tests/kernels/moe/test_moe.py::test_fused_moe[False-dtype0-4-6-192-40000-1024-1024]
