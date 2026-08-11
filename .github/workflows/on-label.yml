@@ -30,6 +30,23 @@ jobs:
       runner_label: max1100
     secrets: inherit
 
+  # ---- SGLang tests ----
+
+  sglang-tests-bmg:
+    if: github.event.label.name == 'run-sglang-tests'
+    uses: ./.github/workflows/sglang-tests-reusable.yml
+    with:
+      runner_label: b580
+      skip_list: xe2
+    secrets: inherit
+
+  sglang-tests-pvc:
+    if: github.event.label.name == 'run-sglang-tests'
+    uses: ./.github/workflows/sglang-tests-reusable.yml
+    with:
+      runner_label: max1100
+    secrets: inherit
+
   # ---- Build wheel ----
 
   build-wheel:
