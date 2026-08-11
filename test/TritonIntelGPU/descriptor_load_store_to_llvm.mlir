@@ -10,6 +10,8 @@
 
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: llvm.func spir_kernelcc @load
+  // Regression guard: offsets %arg1, %arg2 are bare i32 function args — NOT provably
+  // non-negative — so B1 RETAINS the icmp "sge" sign checks unchanged.
   tt.func public @load(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32) -> (tensor<4x4xf32, #blocked>) {
     %c1_i64 = arith.constant 1 : i64
     %c4_i64 = arith.constant 4 : i64
@@ -362,11 +364,14 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // COM: (The decisive base-offset-vs-base+index distinction is pinned precisely in
     // COM: the rank_reducing_load test, where offsets are function arguments.)
 
-    // Verify icmp operations use shape0 and shape1 truncated from descriptor
+    // Verify icmp operations use shape0 and shape1 truncated from descriptor.
+    // B1: constant-0 offset is provably non-negative, so sge is ELIDED.
     // CHECK: %[[SHAPE0_I32:.*]] = llvm.trunc %[[SHAPE0]] : i64 to i32
     // CHECK: llvm.icmp "slt" %{{.*}}, %[[SHAPE0_I32]] : i32
     // CHECK: %[[SHAPE1_I32:.*]] = llvm.trunc %[[SHAPE1]] : i64 to i32
     // CHECK: llvm.icmp "slt" %{{.*}}, %[[SHAPE1_I32]] : i32
+    // Edit 3: constant-0 B1 coverage — no sign checks emitted for either dim.
+    // CHECK-NOT: llvm.icmp "sge"
 
     // Verify predicated load: conditional branch (NOT unconditional)
     // CHECK: llvm.cond_br %{{.*}}, ^[[BB_LOAD:bb[0-9]+]], ^[[BB_MERGE:bb[0-9]+]](%{{.*}} : i32)
@@ -401,12 +406,15 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK-DAG: %[[SHAPE0:.*]] = llvm.extractvalue %[[DESC]][0] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
     // CHECK-DAG: %[[SHAPE1:.*]] = llvm.extractvalue %[[DESC]][1] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
 
-    // COM: Verify block-level boundary checks against shapes for both dimensions
+    // COM: Verify block-level boundary checks against shapes for both dimensions.
+    // COM: B1: constant-0 offset is provably non-negative, so sge is ELIDED.
     // Verify icmp operations use shape0 and shape1 truncated from descriptor
     // CHECK: %[[SHAPE0_I32:.*]] = llvm.trunc %[[SHAPE0]] : i64 to i32
     // CHECK: llvm.icmp "slt" %{{.*}}, %[[SHAPE0_I32]] : i32
     // CHECK: %[[SHAPE1_I32:.*]] = llvm.trunc %[[SHAPE1]] : i64 to i32
     // CHECK: llvm.icmp "slt" %{{.*}}, %[[SHAPE1_I32]] : i32
+    // Edit 3: constant-0 B1 coverage — no sign checks emitted for either dim.
+    // CHECK-NOT: llvm.icmp "sge"
 
     // Verify predicated load intrinsic with block-level predicate
     // CHECK: triton_gen.predicated_load %{{.*}}, %{{.*}}, %{{.*}} {cache_control = Default} : (!llvm.ptr<1>, i1, i32) -> i32
@@ -579,9 +587,9 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
 // both dimensions, distinct from the existing zero-offset tests above.
 // This verifies that isDivisible correctly handles non-zero constant offsets.
 
-// COM: The BLOCK-LEVEL check produces: icmp("sge", const_4, 0) and
-// COM:                                 icmp("slt", const_4, trunc(shape))
-// COM: where const_4 is the OFFSET itself, not (per_thread + offset).
+// COM: B1 (isNonNegative elision): because const_4 is provably non-negative,
+// COM: the block-level >= 0 sign check (icmp "sge") is ELIDED. Only the upper
+// COM: bound check icmp("slt", const_4, trunc(shape)) is emitted per dim.
 // COM: This is distinct from PER-ELEMENT checks which compute
 // COM: add(per_thread_index, const_4) and then compare that sum.
 
@@ -610,14 +618,15 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK: %[[SHP0:.*]] = llvm.extractvalue %[[DESC]][0] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
     // CHECK: %[[SHP1:.*]] = llvm.extractvalue %[[DESC]][1] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
 
-    // Verify block-level checks for both dims: constant offset 4 used directly
-    // CHECK: llvm.icmp "sge" %[[OFF4]], %{{.*}} : i32
+    // Verify block-level upper-bound checks for both dims: constant offset 4 used
+    // directly. B1 elides the >= 0 sign check because const_4 is provably non-negative.
     // CHECK: %[[SHP0_I32:.*]] = llvm.trunc %[[SHP0]] : i64 to i32
     // CHECK: llvm.icmp "slt" %[[OFF4]], %[[SHP0_I32]] : i32
-    // CHECK: llvm.icmp "sge" %[[OFF4]], %{{.*}} : i32
     // CHECK: %[[SHP1_I32:.*]] = llvm.trunc %[[SHP1]] : i64 to i32
     // CHECK: llvm.icmp "slt" %[[OFF4]], %[[SHP1_I32]] : i32
 
+    // Verify no >= 0 sign check is emitted (elided by B1 for provably non-negative offset).
+    // CHECK-NOT: llvm.icmp "sge"
     // CHECK: triton_gen.predicated_load %{{.*}}, %{{.*}}, %{{.*}} {cache_control = Default} : (!llvm.ptr<1>, i1, i32) -> i32
 
     %3 = tt.descriptor_load %0[%c4_i32, %c4_i32] : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
@@ -751,6 +760,164 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK: triton_gen.predicated_load %{{.*}}, %{{.*}}, %{{.*}} {cache_control = Default} : (!llvm.ptr<1>, i1, i32) -> i32
 
     %3 = tt.descriptor_load %desc[%c0_i32, %c8_i32] {ttig.block_io = "column_major"} : !tt.tensordesc<16x8xf32> -> tensor<8x16xf32, #blocked>
+    tt.return %3 : tensor<8x16xf32, #blocked>
+  }
+}
+
+// -----
+
+// Test per-element boundary check with provably non-negative program_id offsets:
+// shape=[5,5] is not divisible by block_shape=[4,4], so PER-ELEMENT boundary
+// checks are generated for both dims (index = laneIndex + programId).
+// The offsets are tt.get_program_id results, which isNonNegative() recognises as
+// provably non-negative. With B1, the >= 0 sign check (icmp "sge") is therefore
+// ELIDED for both dims; only the upper-bound check (icmp "slt" index, shape)
+// is kept. This is the RC2 hot path: per-element predication with non-negative
+// program-id offsets.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @load_nonneg_pid_offset
+  tt.func public @load_nonneg_pid_offset(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) -> (tensor<4x4xf32, #blocked>) {
+    %c1_i64 = arith.constant 1 : i64
+    %c4_i64 = arith.constant 4 : i64
+    %c5_i32 = arith.constant 5 : i32
+    // shape=[5,5] is not divisible by block_shape=[4,4], so per-element checks
+    // are generated. Offsets are program ids: provably non-negative per B1.
+    %pid0 = tt.get_program_id x : i32
+    %pid1 = tt.get_program_id y : i32
+    %0 = tt.make_tensor_descriptor %arg0, [%c5_i32, %c5_i32], [%c1_i64, %c4_i64] {order = array<i32: 0>} : <f32>, <4x4xf32>
+
+    // COM: Per-element boundary checks: index = (laneIndex + programId) is compared
+    // COM: against the shape. Because tt.get_program_id is provably non-negative,
+    // COM: B1 elides the lower-bound sign check (icmp "sge") for both dims.
+    // COM: The upper-bound check (icmp "slt") is always kept.
+
+    // COM: get_program_id x/y lower to get_group_id(0)/(1) truncated to i32.
+    // COM: Capture both pids; they feed the per-element index adds for dim0/dim1.
+    // CHECK: %[[DESC:.*]] = llvm.insertvalue %{{.*}}, %{{.*}}[4] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
+    // CHECK-DAG: %[[SHAPE0:.*]] = llvm.extractvalue %[[DESC]][0] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
+    // CHECK-DAG: %[[SHAPE1:.*]] = llvm.extractvalue %[[DESC]][1] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
+
+    // Edit 1: capture the two per-element indices for element 0 and pin the
+    // slt checks to those SSA values + the shape truncations.
+    // Both pid0 (get_group_id(0)) and pid1 (get_group_id(1)) are provably
+    // non-negative, so no sge is emitted for either dim.
+    // CHECK: %[[IDX0:.*]] = llvm.add %{{.*}}, %{{.*}} : i32
+    // CHECK: %[[IDX1:.*]] = llvm.add %{{.*}}, %{{.*}} : i32
+
+    // Edit 2 (element-0 coverage): no sge between the index adds and the first slt.
+    // This catches a partial-elision regression where sge is retained for element 0
+    // but elided for later elements (the prior trailing CHECK-NOT only covered
+    // elements after the second slt, leaving element 0's region unguarded).
+    // The scan range here is: after IDX1 add up to SHP0_I32 trunc.
+    // CHECK-NOT: llvm.icmp "sge"
+
+    // CHECK: %[[SHP0_I32:.*]] = llvm.trunc %[[SHAPE0]] : i64 to i32
+    // CHECK: llvm.icmp "slt" %[[IDX0]], %[[SHP0_I32]] : i32
+    // CHECK: %[[SHP1_I32:.*]] = llvm.trunc %[[SHAPE1]] : i64 to i32
+    // CHECK: llvm.icmp "slt" %[[IDX1]], %[[SHP1_I32]] : i32
+    // CHECK-NOT: llvm.icmp "sge"
+    // CHECK: llvm.cond_br
+
+    %3 = tt.descriptor_load %0[%pid0, %pid1] : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
+    tt.return %3 : tensor<4x4xf32, #blocked>
+  }
+}
+
+// -----
+
+// Test column_major descriptor load: permDimIdx remapping of the nonNegDims set.
+//
+// Background: for column_major loads the lowering swaps the inner two descriptor
+// dimensions via a permDimIdx mapping.  The "nonNegDims" set (which dims may skip
+// the lower-bound sign check) is also remapped through that mapping.  If the remap
+// were incorrect the sign check would be elided on the WRONG dimension.
+//
+// Why this test differs from @colmaj_mixed_inner_div:
+//   @colmaj_mixed_inner_div uses constant offsets (0 and 8): both are provably
+//   non-negative, so BOTH sign checks are elided regardless of how the mapping
+//   permutes them.  A swapped permDimIdx would still produce the same output,
+//   making the test insensitive to the bug.
+//
+// This test uses MIXED-non-negativity offsets:
+//   descriptor dim0 offset = %arg1 (bare i32 function argument)
+//     → isNonNegative() returns FALSE → lower-bound sge RETAINED
+//   descriptor dim1 offset = tt.get_program_id x
+//     → isNonNegative() returns TRUE  → lower-bound sge ELIDED
+//
+// Descriptor shape=[17, 15], block_shape=[16, 8]:
+//   dim0: 17 % 16 != 0 → per-element
+//   dim1: 15 %  8 != 0 → per-element
+// Both dims are per-element (neither qualifies for the block-level path), so the
+// full boundary predicate is generated for each.
+//
+// column_major swaps the inner dims, making the result tensor shape [8, 16].
+// After the swap the correct dim classification is:
+//   result dim0 (= desc dim1, shape=15, offset=pid) → non-negative, sge ELIDED
+//   result dim1 (= desc dim0, shape=17, offset=%arg1) → NOT non-negative, sge KEPT
+//
+// A mis-mapped nonNegDims would put the surviving sge on dim0 (the pid-derived
+// index) and elide it on dim1 (%arg1-derived), which is wrong.
+//
+// CHECK contract (proves the mapping):
+//   1. The per-element index for result dim0 is computed as (lane_fragment + pid),
+//      i.e. `llvm.add %{{.*}}, %[[PID]]`.  The lowering emits ONLY an slt for this
+//      index — no sge (sge is elided because pid is non-negative).
+//   2. The per-element index for result dim1 is computed as (lane_fragment + %arg1),
+//      i.e. `llvm.add %{{.*}}, %[[ARG1]]`.  The lowering emits BOTH an sge AND an
+//      slt for this index (sge is retained because %arg1 is not provably non-negative).
+//   3. A swapped mapping would flip these two behaviours.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 2], warpsPerCTA = [1, 1], order = [1, 0]}>
+
+// Note: ttig.support_2d_block_io is intentionally absent so this op is
+// lowered via the predicated scatter/gather path, not 2D block I/O.
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_predicated_io"} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @colmaj_nonneg_mapping
+  tt.func public @colmaj_nonneg_mapping(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32) -> (tensor<8x16xf32, #blocked>) {
+    %c1_i64 = arith.constant 1 : i64
+    %c16_i64 = arith.constant 16 : i64
+    %c17_i32 = arith.constant 17 : i32
+    %c15_i32 = arith.constant 15 : i32
+    %pid = tt.get_program_id x : i32
+    // desc shape=[17, 15]: dim0 NOT divisible by 16, dim1 NOT divisible by 8.
+    // Both dims are per-element; offset0=%arg1 (not provably non-negative),
+    // offset1=%pid (provably non-negative via isNonNegative).
+    %desc = tt.make_tensor_descriptor %arg0, [%c17_i32, %c15_i32], [%c16_i64, %c1_i64] : <f32>, <16x8xf32>
+
+    // COM: get_program_id x lowers to get_group_id(0) truncated to i32.
+    // COM: Capture it once; it is reused as the dim0 (pid-derived) offset.
+    // CHECK: %[[PID:.*]] = llvm.trunc {{.*}} : i64 to i32
+
+    // COM: For each of the 8 output elements the lowering emits:
+    // COM:   llvm.add %[[LANE_FRAG:.*]], %[[PID]]   → result dim0 (pid-derived)
+    // COM:   llvm.add %[[LANE_FRAG2:.*]], %arg1     → result dim1 (arg1-derived)
+    // COM:   icmp "slt"  dim0_idx, shape1_trunc     → upper-bound check (always)
+    // COM:   (NO sge for dim0 — pid is provably non-negative)
+    // COM:   icmp "sge"  dim1_idx, 0                → lower-bound check (retained)
+    // COM:   icmp "slt"  dim1_idx, shape0_trunc     → upper-bound check (always)
+
+    // For the first element, capture the two per-element indices and verify that:
+    //  • the slt for the pid-derived index (dim0) has NO preceding sge on that index
+    //  • the sge IS present on the arg1-derived index (dim1), before its slt
+
+    // CHECK: %[[DIM0_IDX:.*]] = llvm.add %{{.*}}, %[[PID]] : i32
+    // CHECK: %[[DIM1_IDX:.*]] = llvm.add %{{.*}}, %arg1 : i32
+    // CHECK: llvm.icmp "slt" %[[DIM0_IDX]], %{{.*}} : i32
+    // CHECK-NOT: llvm.icmp "sge" %[[DIM0_IDX]]
+    // CHECK: llvm.icmp "sge" %[[DIM1_IDX]], %{{.*}} : i32
+    // CHECK: llvm.icmp "slt" %[[DIM1_IDX]], %{{.*}} : i32
+
+    // COM: The same pattern repeats for all 8 elements.  We do not recheck each
+    // COM: repetition — the first element already proves the mapping is correct.
+    // COM: A swapped permDimIdx would put the sge on DIM0_IDX and omit it for
+    // COM: DIM1_IDX, which would cause the CHECK-NOT above to fail.
+
+    // CHECK: triton_gen.predicated_load %{{.*}}, %{{.*}}, %{{.*}} {cache_control = Default} : (!llvm.ptr<1>, i1, i32) -> i32
+
+    %3 = tt.descriptor_load %desc[%arg1, %pid] {ttig.block_io = "column_major"} : !tt.tensordesc<16x8xf32> -> tensor<8x16xf32, #blocked>
     tt.return %3 : tensor<8x16xf32, #blocked>
   }
 }

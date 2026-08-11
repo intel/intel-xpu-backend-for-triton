@@ -7,6 +7,7 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/MathExtras.h"
@@ -253,7 +254,8 @@ struct LoadStoreConversionBase {
       ArrayRef<Value> strides, RankedTensorType tensorType, Type valueElemTy,
       ConversionPatternRewriter &rewriter, ArrayRef<int32_t> boundaryCheck = {},
       ArrayRef<int32_t> blockLevelCheck = {},
-      std::optional<PaddingOption> padding = std::nullopt) const {
+      std::optional<PaddingOption> padding = std::nullopt,
+      const llvm::SmallDenseSet<unsigned> &nonNegDims = {}) const {
 
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     assert(offsets.size() == shapes.size() &&
@@ -317,22 +319,40 @@ struct LoadStoreConversionBase {
             [&](const Value &index, const Value &shape, const Value &mask) {
               Value result = mask;
               if (boundaryProtect.contains(dim)) {
-                // Per-element check: mask = mask && (index < shape) && idx >= 0
-                auto is_pos_idx = b.icmp_sge(index, b.i32_val(0));
-                result =
-                    b.and_(b.and_(b.icmp_slt(index, b.trunc(i32_ty, shape)),
-                                  result),
-                           is_pos_idx)
-                        .getResult();
+                // Per-element check: mask = mask && (index < shape) && idx >=
+                // 0. The idx >= 0 sign check is elided when the offset for this
+                // dim is provably non-negative: the lane index from
+                // emitIndices is always >= 0, so index >= 0 iff offset >= 0.
+                if (nonNegDims.contains(dim)) {
+                  result =
+                      b.and_(b.icmp_slt(index, b.trunc(i32_ty, shape)), result)
+                          .getResult();
+                } else {
+                  auto is_pos_idx = b.icmp_sge(index, b.i32_val(0));
+                  result =
+                      b.and_(b.and_(b.icmp_slt(index, b.trunc(i32_ty, shape)),
+                                    result),
+                             is_pos_idx)
+                          .getResult();
+                }
               } else if (blockLevelProtect.contains(dim)) {
-                // Block-level check: use base offset only (no per-thread index)
+                // Block-level check: use base offset only (no per-thread
+                // index). The >= 0 sign check is elided when the offset is
+                // provably non-negative.
                 Value baseOffset = offsets[dim];
-                auto is_pos_offset = b.icmp_sge(baseOffset, b.i32_val(0));
-                result = b.and_(b.and_(b.icmp_slt(baseOffset,
-                                                  b.trunc(i32_ty, shape)),
-                                       result),
-                                is_pos_offset)
-                             .getResult();
+                if (nonNegDims.contains(dim)) {
+                  result =
+                      b.and_(b.icmp_slt(baseOffset, b.trunc(i32_ty, shape)),
+                             result)
+                          .getResult();
+                } else {
+                  auto is_pos_offset = b.icmp_sge(baseOffset, b.i32_val(0));
+                  result = b.and_(b.and_(b.icmp_slt(baseOffset,
+                                                    b.trunc(i32_ty, shape)),
+                                         result),
+                                  is_pos_offset)
+                               .getResult();
+                }
               }
               dim++;
               return result;
@@ -380,7 +400,8 @@ struct LoadStoreConversionBase {
       RankedTensorType tensorType, unsigned descriptorRank, Type valueElemTy,
       ConversionPatternRewriter &rewriter, ArrayRef<int32_t> boundaryCheck = {},
       ArrayRef<int32_t> blockLevelCheck = {},
-      std::optional<PaddingOption> padding = std::nullopt) const {
+      std::optional<PaddingOption> padding = std::nullopt,
+      const llvm::SmallDenseSet<unsigned> &nonNegDims = {}) const {
 
     DescriptorFields desc =
         unpackDescriptor(descriptorStruct, descriptorRank, loc, rewriter);
@@ -399,9 +420,10 @@ struct LoadStoreConversionBase {
       mappedStrides[i] = desc.strides[i];
     }
 
-    return computeGatherScatterOperands(
-        loc, desc.base, offsets, mappedShapes, mappedStrides, tensorType,
-        valueElemTy, rewriter, boundaryCheck, blockLevelCheck, padding);
+    return computeGatherScatterOperands(loc, desc.base, offsets, mappedShapes,
+                                        mappedStrides, tensorType, valueElemTy,
+                                        rewriter, boundaryCheck,
+                                        blockLevelCheck, padding, nonNegDims);
   }
 
   /// Build per-element NaN masks for out-of-bounds elements.
@@ -433,6 +455,8 @@ struct LoadStoreConversionBase {
       for (unsigned j = 0; j < rank; ++j) {
         Value idxInTensor = b.add(index[j], offsets[j]);
         Value inBounds = b.icmp_slt(idxInTensor, b.trunc(i32_ty, shapes[j]));
+        // TODO(#7090 B1): elide redundant sign check when offset provably
+        // non-negative (offsets[] sourced from op.getIndices(), same as load).
         Value isPos = b.icmp_sge(idxInTensor, b.i32_val(0));
         mask = b.and_(b.and_(inBounds, mask), isPos).getResult();
       }
@@ -2217,6 +2241,9 @@ struct DescriptorLoadOpConversion
     SmallVector<MakeTensorDescOp> allDescs =
         mlir::triton::intel::findAllMakeTensorDescOps(op.getDesc());
     SmallVector<int32_t> perElementDims, blockLevelDims;
+    // Dims whose indices (offset + lane) are provably non-negative: elide the
+    // redundant >= 0 sign check from the boundary predicate for these dims.
+    llvm::SmallDenseSet<unsigned> nonNegDims;
     for (size_t i = 0; i < descRank; ++i) {
       int64_t bs = blockShape[i];
       if (!allDescs.empty() &&
@@ -2229,6 +2256,10 @@ struct DescriptorLoadOpConversion
       } else {
         perElementDims.push_back(i);
       }
+      // The per-thread lane index from emitIndices is always >= 0. Therefore
+      // index = laneIndex + offset >= 0 iff offset >= 0.
+      if (isNonNegative(op.getIndices()[i]))
+        nonNegDims.insert(static_cast<unsigned>(i));
     }
 
     // Reuse the shared gather/scatter operand computation.
@@ -2281,15 +2312,20 @@ struct DescriptorLoadOpConversion
         permPerElementDims.push_back(permDimIdx(d));
       for (int32_t d : blockLevelDims)
         permBlockLevelDims.push_back(permDimIdx(d));
+      // Apply the same inner-2-dim swap to nonNegDims.
+      llvm::SmallDenseSet<unsigned> permNonNegDims;
+      for (unsigned d : nonNegDims)
+        permNonNegDims.insert(
+            static_cast<unsigned>(permDimIdx(static_cast<int32_t>(d))));
       std::tie(ptrElems, maskElems, otherElems) = computeGatherScatterOperands(
           loc, desc.base, mappedOffsets, mappedShapes, mappedStrides,
           resultType, valueElemTy, rewriter, permPerElementDims,
-          permBlockLevelDims, padding);
+          permBlockLevelDims, padding, permNonNegDims);
     } else {
       std::tie(ptrElems, maskElems, otherElems) =
           convertTensorDescriptorToTensorOfPtr(
               loc, llDesc, indices, resultType, descRank, valueElemTy, rewriter,
-              perElementDims, blockLevelDims, padding);
+              perElementDims, blockLevelDims, padding, nonNegDims);
     }
 
     // Determine vectorization by querying the descriptor's address-level

@@ -110,6 +110,85 @@ bool isDivisible(Value value, unsigned divisor) {
   return false;
 }
 
+bool isNonNegative(Value value) {
+  Operation *defOp = value.getDefiningOp();
+  if (!defOp)
+    return false;
+
+  // tt.get_program_id always returns [0, 2^31-1].
+  if (isa<tt::GetProgramIdOp>(defOp))
+    return true;
+
+  // tt.get_num_programs returns [1, 2^31-1].
+  if (isa<tt::GetNumProgramsOp>(defOp))
+    return true;
+
+  // tt.make_range with non-negative start.
+  if (auto makeRange = dyn_cast<tt::MakeRangeOp>(defOp))
+    return makeRange.getStartAttr().getInt() >= 0;
+
+  // Non-negative constant (scalar or tensor).
+  if (auto constOp = dyn_cast<arith::ConstantOp>(defOp)) {
+    if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue()))
+      return intAttr.getValue().isNonNegative();
+    if (auto denseAttr = dyn_cast<DenseElementsAttr>(constOp.getValue())) {
+      if (denseAttr.getElementType().isSignlessInteger()) {
+        return llvm::all_of(denseAttr.getValues<APInt>(),
+                            [](const APInt &v) { return v.isNonNegative(); });
+      }
+    }
+  }
+
+  // arith.addi / arith.muli of two non-negative values. This assumes no signed
+  // overflow, which holds for the descriptor offsets this helper is applied to:
+  // they are `programId * blockSize (+ ...)` expressions bounded by the tensor
+  // shape, well within the i32 positive range. (Even a false positive here is
+  // memory-safe: the `< shape` bounds check is always retained; only the
+  // redundant `>= 0` sign check is elided.)
+  if (auto addOp = dyn_cast<arith::AddIOp>(defOp))
+    return isNonNegative(addOp.getLhs()) && isNonNegative(addOp.getRhs());
+  if (auto mulOp = dyn_cast<arith::MulIOp>(defOp))
+    return isNonNegative(mulOp.getLhs()) && isNonNegative(mulOp.getRhs());
+
+  // arith.remui / arith.divui / arith.extui always produce non-negative
+  // results (unsigned ops and zero-extension keep the MSB clear).
+  if (isa<arith::RemUIOp, arith::DivUIOp, arith::ExtUIOp>(defOp))
+    return true;
+
+  // arith.divsi: non-negative iff both dividend and divisor are non-negative.
+  if (auto divOp = dyn_cast<arith::DivSIOp>(defOp))
+    return isNonNegative(divOp.getLhs()) && isNonNegative(divOp.getRhs());
+
+  // arith.remsi: result has the same sign as the dividend (truncation toward
+  // zero), so a non-negative dividend guarantees a non-negative remainder.
+  if (auto remOp = dyn_cast<arith::RemSIOp>(defOp))
+    return isNonNegative(remOp.getLhs());
+
+  // arith.extsi preserves the signed value; non-negative iff source is.
+  // (arith.trunci is intentionally NOT handled: truncating a non-negative
+  // value can set the sign bit of the narrower type, e.g. i32 128 -> i8 -128.)
+  if (auto extOp = dyn_cast<arith::ExtSIOp>(defOp))
+    return isNonNegative(extOp.getIn());
+
+  // arith.maxsi: non-negative if either operand is non-negative.
+  if (auto maxOp = dyn_cast<arith::MaxSIOp>(defOp))
+    return isNonNegative(maxOp.getLhs()) || isNonNegative(maxOp.getRhs());
+
+  // arith.minsi: non-negative iff both operands are non-negative.
+  if (auto minOp = dyn_cast<arith::MinSIOp>(defOp))
+    return isNonNegative(minOp.getLhs()) && isNonNegative(minOp.getRhs());
+
+  // tt.splat / tt.expand_dims / tt.broadcast: propagate from source.
+  if (auto splatOp = dyn_cast<tt::SplatOp>(defOp))
+    return isNonNegative(splatOp.getSrc());
+  if (auto expandOp = dyn_cast<tt::ExpandDimsOp>(defOp))
+    return isNonNegative(expandOp.getSrc());
+  if (auto broadcastOp = dyn_cast<tt::BroadcastOp>(defOp))
+    return isNonNegative(broadcastOp.getSrc());
+
+  return false;
+}
+
 static Attribute inferSrcEncoding(ttgi::DescriptorGatherOp op,
                                   Attribute dstEnc) {
   // only the offsets require the slice encoding, the base pointer is a scalar
