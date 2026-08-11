@@ -177,3 +177,50 @@ index 18bf14249..c47cbf80f 100644
  
      logger.info("Warming up MiniMax M3 MSA kernels.")
  
+diff --git a/tests/kernels/moe/test_moe.py b/tests/kernels/moe/test_moe.py
+--- a/tests/kernels/moe/test_moe.py
++++ b/tests/kernels/moe/test_moe.py
+@@ -897,7 +897,10 @@
+     ),
+     marlin_moe_generate_valid_test_cases(),
+ )
+-@pytest.mark.skipif(current_platform.is_rocm(), reason="Skip for rocm")
++@pytest.mark.skipif(
++    current_platform.is_rocm() or current_platform.is_xpu(),
++    reason="Skip for ROCm and XPU",
++)
+ @pytest.mark.usefixtures("default_vllm_config")
+ def test_fused_marlin_moe(
+     a_type: ScalarType,
+@@ -1012,5 +1015,8 @@
+ @pytest.mark.flaky(reruns=2)
+-@pytest.mark.skipif(current_platform.is_rocm(), reason="Skip for rocm")
++@pytest.mark.skipif(
++    current_platform.is_rocm() or current_platform.is_xpu(),
++    reason="Skip for ROCm and XPU",
++)
+ @pytest.mark.usefixtures("default_vllm_config")
+ @pytest.mark.parametrize("m", [1, 256])
+ def test_fused_marlin_moe_with_bias(m):
+@@ -1085,5 +1091,8 @@
+ @pytest.mark.flaky(reruns=2)
+-@pytest.mark.skipif(current_platform.is_rocm(), reason="Skip for rocm")
++@pytest.mark.skipif(
++    current_platform.is_rocm() or current_platform.is_xpu(),
++    reason="Skip for ROCm and XPU",
++)
+ @pytest.mark.usefixtures("default_vllm_config")
+ @pytest.mark.parametrize("m", [1, 64, 256])
+ @pytest.mark.parametrize("n,k", [(1024, 1024), (2048, 2048)])
+@@ -1393,7 +1402,10 @@
+ @pytest.mark.parametrize(
+     ("m,n,k,e,topk,max_tokens_per_batch,dtype,quant_dtype,input_type,atol"),
+     _batched_fused_marlin_moe_cases(),
+ )
+-@pytest.mark.skipif(current_platform.is_rocm(), reason="Skip for rocm")
++@pytest.mark.skipif(
++    current_platform.is_rocm() or current_platform.is_xpu(),
++    reason="Skip for ROCm and XPU",
++)
+ def test_batched_fused_marlin_moe(
+     m: int,
