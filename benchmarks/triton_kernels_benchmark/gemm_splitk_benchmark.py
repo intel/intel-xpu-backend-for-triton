@@ -147,7 +147,7 @@ matmul = _matmul.apply
         args={},
     ))
 def benchmark(M, N, K, provider):
-    # Maximum across onednn=10, triton=100, xetla=300
+    # Maximum across onednn=10, triton=100, sycl-tla=300
     do_bench = benchmark_suite.get_do_bench(n_warmup=300, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
     torch.manual_seed(0)
     a = torch.rand((M, K), device='xpu', dtype=torch.bfloat16)

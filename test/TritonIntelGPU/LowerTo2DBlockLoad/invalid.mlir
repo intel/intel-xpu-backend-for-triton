@@ -143,6 +143,27 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
+// COM: Column-major B pointer load with fp8 + opsPerChan=2 + threadsPerWarp=32.
+// COM: This combination is intentionally rejected by validate2DBlockLoadTile for
+// COM: transpose handling; it must remain a plain tt.load.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 32, warpsPerCTA = [2, 2], repCluster = [1, 1], A = [16, 16], B = [16, 16], C = [16, 16]}>
+#dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @column_major_b_tpw32_fp8_rejected
+  tt.func @column_major_b_tpw32_fp8_rejected(%arg0: !tt.ptr<f8E4M3FN> {tt.divisibility = 16 : i32}) -> tensor<32x64xf8E4M3FN, #dot1> {
+    %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #dot1}>>
+    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #dot1}>> -> tensor<1x64xi32, #dot1>
+    %2 = tt.splat %arg0 : !tt.ptr<f8E4M3FN> -> tensor<1x64x!tt.ptr<f8E4M3FN>, #dot1>
+    %3 = tt.addptr %2, %1 : tensor<1x64x!tt.ptr<f8E4M3FN>, #dot1>, tensor<1x64xi32, #dot1>
+    %4 = tt.broadcast %3 : tensor<1x64x!tt.ptr<f8E4M3FN>, #dot1> -> tensor<32x64x!tt.ptr<f8E4M3FN>, #dot1>
+    // CHECK: tt.load
+    %5 = tt.load %4 {ttig.block_io = "column_major"} : tensor<32x64x!tt.ptr<f8E4M3FN>, #dot1>
+    tt.return %5 : tensor<32x64xf8E4M3FN, #dot1>
+  }
+}
+
+// -----
+
 // COM: Regression test for issue #7022 (T5 training warmup failure).
 // COM: Inductor's hf_T5 / hf_T5_base softmax-backward kernel produces a
 // COM: column-major tensor-of-pointers load whose column stride is

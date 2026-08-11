@@ -110,18 +110,22 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
     include_dirs = include_dirs + [srcdir, py_include_dir, *custom_backend_dirs]
 
     if is_xpu():
-        icpx = shutil.which("icpx")
+        csycl = shutil.which(knobs.intel.sycl_compiler) if knobs.intel.sycl_compiler else None
+        if csycl is None:
+            icpx = shutil.which("icpx")
+            dpclang = shutil.which("dpclang++")
+            csycl = icpx or dpclang
         cxx = shutil.which(os.environ.get("CXX", "shutil-dummy-value"))
         if cxx is None:
             clangpp = shutil.which("clang++")
             gxx = shutil.which("g++")
             cl = shutil.which("cl")
-            cxx = icpx or cl if os.name == "nt" else icpx or clangpp or gxx
+            cxx = csycl or cl if os.name == "nt" else csycl or clangpp or gxx
             if cxx is None:
                 raise RuntimeError("Failed to find C++ compiler. Please specify via CXX environment variable.")
         cc = cxx
 
-        if cxx is icpx:
+        if cxx is csycl:
             ccflags += ["-fsycl", "-fno-sycl-id-queries-fit-in-int"]
         else:
             if os.name != "nt":

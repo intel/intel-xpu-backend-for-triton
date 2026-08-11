@@ -428,10 +428,17 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
        }
 
        if (node_isa<tt::DescriptorLoadLikeOpInterface>(edge.getFromNode())) {
-         // require layouts to match for TMA load + alloc
          auto load = edge.getFromNode()->getOp();
          auto alloc = cast<ttg::LocalAllocOp>(edge.getToNode()->getOp());
-         return getSharedEncoding(load) == alloc.getType().getEncoding();
+         auto loadEnc = getSharedEncoding(load);
+         auto allocEnc = alloc.getType().getEncoding();
+         if (loadEnc == allocEnc)
+           return true;
+
+         auto loadLayoutEnc = cast<ttg::LayoutEncodingTrait>(loadEnc);
+         auto allocLayoutEnc = cast<ttg::LayoutEncodingTrait>(allocEnc);
+         return ttg::areLayoutsEquivalent(alloc.getType().getShape(),
+                                          loadLayoutEnc, allocLayoutEnc);
        }
 
        if (node_isa<tt::LoadOp>(edge.getFromNode())) {
@@ -1585,7 +1592,13 @@ private:
       // rewrite results
       for (auto newOp : newOps) {
         auto oldOp = mapping[newOp];
-        for (auto &use : oldOp->getUses()) {
+        // use.set() below unlinks the use from oldOp's use-chain while we
+        // are iterating that same chain, so without early-increment
+        // iteration only the first matching use is visited. The remaining
+        // same-partition users would keep pointing at the old
+        // multi-partition op, which insert-aref cannot handle (see the
+        // FIXME at the top of this function).
+        for (auto &use : llvm::make_early_inc_range(oldOp->getUses())) {
           auto user = use.getOwner();
           assert(user);
           auto userPartitions = getPartitionIds(user);

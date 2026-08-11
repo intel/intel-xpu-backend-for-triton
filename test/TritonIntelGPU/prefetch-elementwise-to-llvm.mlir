@@ -220,3 +220,34 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
     tt.return
   }
 }
+
+// -----
+
+// COM: Broadcast row (M == 1, row stride 0): the descriptor must use
+// COM: base_height = 1 and a non-zero base_width/pitch (see #7267).
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @prefetch_broadcast_row_f32
+  tt.func public @prefetch_broadcast_row_f32(%arg0: !tt.ptr<f32>) {
+    // COM: 16x32 tensor-of-pointers with a broadcast row (stride 0).
+    %0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x32xi32, #blocked>
+    %2 = tt.broadcast %1 : tensor<1x32xi32, #blocked> -> tensor<16x32xi32, #blocked>
+    %3 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<16x32x!tt.ptr<f32>, #blocked>
+    %ptr = tt.addptr %3, %2 : tensor<16x32x!tt.ptr<f32>, #blocked>, tensor<16x32xi32, #blocked>
+
+    // COM: base_height comes from the constant 1 (broadcast row); base_width
+    // COM: from the contiguous-dim surface extent (pitch is inflated separately
+    // COM: to satisfy the HW pitch >= base_width constraint after alignment
+    // COM: compensation). Tie both captures into the op operands so the check
+    // COM: fails if either descriptor value regresses.
+    // CHECK: %[[BASE_H_I64:.*]] = llvm.mlir.constant(1 : i64) : i64
+    // CHECK: %[[BASE_W:.*]] = llvm.trunc %{{.*}} : i64 to i32
+    // CHECK: %[[BASE_H:.*]] = llvm.trunc %[[BASE_H_I64]] : i64 to i32
+    // CHECK: triton_gen.2Dblockprefetch %{{.*}}, %[[BASE_W]], %[[BASE_H]], %{{.*}} {elem_size_in_bits = 32, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = L1C_L3C}
+    ttig.prefetch %ptr {boundaryCheck = array<i32>, cache = 1 : i32, evict = 1 : i32, isVolatile = false, operandSegmentSizes = array<i32: 1, 0, 0>, ttig.block_io = "row_major"} : tensor<16x32x!tt.ptr<f32>, #blocked>
+
+    tt.return
+  }
+}

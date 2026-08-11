@@ -50,7 +50,7 @@ jobs:
     name: Setup
     runs-on:
       - linux
-      - ${{ inputs.runner_label || 'max1550' }}
+      - ${{ inputs.runner_label || 'max1100' }}
     timeout-minutes: 180
     defaults:
       run:
@@ -142,10 +142,12 @@ jobs:
           - vllm-triton-attn
           - vllm-mamba
           - vllm-quant
+          - vllm-kda
+          - vllm-tdesc
           - vllm-rest
     runs-on:
       - linux
-      - ${{ inputs.runner_label || 'max1550' }}
+      - ${{ inputs.runner_label || 'max1100' }}
     timeout-minutes: 180
     defaults:
       run:
@@ -195,7 +197,22 @@ jobs:
           pip install cmake
 
       - name: Setup PyTorch
+        id: setup-pytorch
         uses: ./.github/actions/setup-pytorch
+
+      - name: Identify torchvision pin
+        if: ${{ matrix.suite == 'vllm-mrv2' || matrix.suite == 'vllm-rest' }}
+        run: |
+          echo "TORCHVISION_COMMIT_ID=$(<pytorch/.github/ci_commit_pins/vision.txt)" | tee -a "$GITHUB_ENV"
+
+      - name: Install torchvision package
+        if: ${{ matrix.suite == 'vllm-mrv2' || matrix.suite == 'vllm-rest' }}
+        uses: ./.github/actions/install-dependency
+        with:
+          package: torchvision
+          repository: pytorch/vision
+          ref: ${{ env.TORCHVISION_COMMIT_ID }}
+          extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
 
       - name: Install Triton from wheel
         id: install
@@ -253,6 +270,11 @@ jobs:
         run: |
           ${{ env.TRITON_TEST_CMD }} --vllm-quant
 
+      - name: Run kda tests
+        if: ${{ matrix.suite == 'vllm-kda' && steps.install-vllm.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --vllm-kda
+
       # vllm-rest groups short suites: gdn-attn, linear-attn, deepgemm
       - name: Run gdn-attn tests
         if: ${{ matrix.suite == 'vllm-rest' && steps.install-vllm.outcome == 'success' && !cancelled() }}
@@ -268,6 +290,11 @@ jobs:
         if: ${{ matrix.suite == 'vllm-rest' && steps.install-vllm.outcome == 'success' && !cancelled() }}
         run: |
           ${{ env.TRITON_TEST_CMD }} --vllm-deepgemm
+
+      - name: Run tdesc tests
+        if: ${{ matrix.suite == 'vllm-tdesc' && steps.install-vllm.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --vllm-tdesc
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}

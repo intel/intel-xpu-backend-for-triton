@@ -35,10 +35,11 @@ def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
                                   Pure]> {
   let summary = "convert layout";
 
-  let arguments = (ins TT_Tensor:$src);
+  let arguments = (ins TT_Tensor:$src, UnitAttr:$force_warp_shuffle);
 
   let results = (outs TT_Tensor:$result);
 
+  let hasVerifier = 1;
   let hasCanonicalizer = 1;
 
   let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
@@ -51,7 +52,7 @@ def TTG_AsyncWaitOp : TTG_Op<"async_wait", [MemWaitOpTrait]> {
     It takes zero or more `asyncToken` plus an integer `num` that specifies how many async copy groups can remain
     outstanding after the `async_wait` op is completed. `num = 0` waits until all groups of async copies are complete.
 
-    This operation does not provide any syncronisation in the CTA, if syncronisation is needed use `ttg.local_barrier`
+    This operation does not provide any synchronization in the CTA, if synchronization is needed use `ttg.local_barrier`
     in addition to this operation.
   }];
 
@@ -338,11 +339,9 @@ def TTG_MemDescReinterpretOp : TTG_Op<"memdesc_reinterpret", [Pure, MemDescViewT
 
   let description = [{
     The `ttg.memdesc_reinterpret` operation reinterprets a memory descriptor
-    as one with a different shape and element type. Because memory descriptors
-    lack strides, this operation is only valid if the original memory descriptor
-    is contiguous. Reinterpretation of subviews is not allowed; reinterpret the
-    parent descriptor and then take a subview of the reinterpreted descriptor
-    instead.
+    as one with a different shape and element type. Every physical byte,
+    tensor-memory row, and pipeline stage accessed by the result must belong to
+    the source view. The result must not itself be a layout subview.
   }];
 
   let arguments = (ins TTG_MemDescType:$src);
@@ -495,6 +494,10 @@ def TTG_LocalAtomicScatterRMWOp : TTG_Op<"local_atomic_scatter_rmw", [
     I32Attr:$axis
   );
   let results = (outs TT_Tensor:$result);
+
+  let extraClassDeclaration = [{
+    bool isCommutative();
+  }];
 
   let assemblyFormat = [{
     $atomic_rmw_op `,` $dst `[` $indices `]` `,` $values (`,` $mask^)? attr-dict `:`
@@ -737,17 +740,17 @@ def TTG_BarrierOp : TTG_Op<"barrier"> {
     The `barrier` op synchronises the execution and all operations between the selected address spaces for all
     threads in the CTA. It is used to coordinate communication between threads in the CTA.
 
-    This operation waits until all threads in the CTA have reached a `barrier` (for syncronisation) and operations
+    This operation waits until all threads in the CTA have reached a `barrier` (for synchronization) and operations
     between the selected address spaces made by these threads prior to the op are visible to all threads in the CTA.
 
     Data hazards between threads accessing the same memory can be avoided by synchronising the
     specified scope in-between these accesses with a `barrier`.
 
-    A `barrier` operation only provides syncronisation and memory guarantees on the selected address spaces in the CTA.
+    A `barrier` operation only provides synchronization and memory guarantees on the selected address spaces in the CTA.
 
     The mandatory `addrspace` attribute is a bitmask describing which address spaces will be visible when the `barrier` completes:
 
-    * `none`         control-only syncronisation (no memory ordering).
+    * `none`         control-only synchronization (no memory ordering).
     * `local`        shared-memory operations are complete and visible CTA-wide.
     * `global_read`  global memory reads are complete and visible CTA-wide.
     * `global_write` global memory writes are complete and visible CTA-wide.

@@ -15,6 +15,8 @@ from triton_kernels.tensor_details.layout_details.base import Layout
 from triton_kernels.tensor_details.layout_details.blackwell_value_shuffled import BlackwellMX4ValueShuffledLayout
 from .opt_flags_details import opt_flags_amd, opt_flags_nvidia, opt_flags_intel
 
+_MIN_NVFP4_RAGGED_TRAIN_ROWS = 65_536
+
 @dataclass
 class OptFlags:
     block_m: int
@@ -218,20 +220,37 @@ def make_default_opt_flags_amd(
     if get_cdna_version() == 3 and rhs_dtype.bitwidth == 8 and precision_config.b_mx_scale is not None:
         num_stages = 1
 
-    # specific configs for F16 x MXFP4 on CDNA4
-    if is_cdna4 and lhs_dtype.bitwidth == 16 and rhs_dtype.bitwidth == 4 and precision_config.b_mx_scale is not None:
-        split_k = 1
-        if m <= 1024:
-            target_kernel_kwargs["waves_per_eu"] = 3
-            block_n = 128
-            block_k = 128
-            num_warps = 4
-        else:
+    if lhs_dtype.bitwidth == 16 and rhs_dtype.bitwidth == 4 and precision_config.b_mx_scale is not None:
+        # specific configs for F16 x MXFP4 on CDNA4
+        if is_cdna4:
+            split_k = 1
+            if m <= 1024:
+                target_kernel_kwargs["waves_per_eu"] = 3
+                block_n = 128
+                block_k = 128
+                num_warps = 4
+            else:
+                target_kernel_kwargs["waves_per_eu"] = 0
+                block_m = 64
+                block_n = 512
+                block_k = 256
+                num_warps = 8
+
+        # Specific configs for F16 x MXFP4 on RDNA.
+        if get_rdna_version() in (3, 4):
+            split_k = 1
             target_kernel_kwargs["waves_per_eu"] = 0
-            block_m = 64
-            block_n = 512
-            block_k = 256
-            num_warps = 8
+            num_stages = 1
+            if m <= 512:
+                block_m = 16
+                block_n = 64
+                block_k = 512
+                num_warps = 4
+            else:
+                block_m = 64
+                block_n = 128
+                block_k = 128
+                num_warps = 4
 
     def replace_with_valid_constraint(k: str, v):
         if constraints.get(k, None) is not None:
@@ -286,6 +305,15 @@ def make_default_opt_flags_nvidia(
     constraints_supported = {"block_m", "block_n", "block_k", "split_k", "is_persistent", "epilogue_subtile", "num_stages", "idle_sms", "max_allowable_mn", "num_warps", "disable_mx4_block_swap"}
     unsupported = set(constraints.keys()) - constraints_supported
     assert not unsupported, f"Given unsupported constraint: {unsupported}"
+    is_large_ragged_nvfp4 = (
+        routing_data is not None
+        and m >= _MIN_NVFP4_RAGGED_TRAIN_ROWS
+        and lhs_dtype == FP4
+        and rhs_dtype == FP4
+        and precision_config.a_mx_tensor_scale is not None
+        and precision_config.b_mx_tensor_scale is not None
+        and cuda_capability_geq(10, 3)
+    )
     # tokens per expert
     if routing_data is None or batch_size > 1:
         slice_size = m
@@ -301,6 +329,8 @@ def make_default_opt_flags_nvidia(
     # block_m
     if constraints.get("block_m", None):
         block_m = constraints["block_m"]
+    elif is_large_ragged_nvfp4:
+        block_m = 128
     elif enforce_bitwise_invariance:
         block_m = 128
     else:
@@ -327,6 +357,8 @@ def make_default_opt_flags_nvidia(
         # regular and persistent/TMA paths.
         block_n = constraints["block_n"]
         block_n_tma = constraints["block_n"]
+    elif is_large_ragged_nvfp4:
+        block_n, block_n_tma = 256, 256
     else:
         block_n, block_n_tma = opt_flags_nvidia.compute_block_n(n, arch, precision_config)
     # is_persistent
@@ -380,6 +412,8 @@ def make_default_opt_flags_nvidia(
     # block k
     if constraints.get("block_k", None) is not None:
         block_k = constraints["block_k"]
+    elif is_large_ragged_nvfp4:
+        block_k = 256
     else:
         block_k = opt_flags_nvidia.compute_block_k(m, k, is_persistent, lhs_dtype, rhs_dtype, precision_config, has_y_acc_in)
     if block_n == 256 and block_k == 128 and block_m <= 64 and is_persistent and rhs_dtype == FP4 and k >= 4096 and slice_size > 1 and lhs_dtype != torch.bfloat16 and not constraints.get("disable_mx4_block_swap", False):
@@ -416,6 +450,9 @@ def make_default_opt_flags_nvidia(
     )
 
     num_warps = opt_flags_nvidia.compute_num_warps(block_m, block_n, is_persistent, precision_config, constraints)
+    if is_large_ragged_nvfp4 and constraints.get("num_warps", None) is None:
+        # Eight warps overrun GB300 TMEM for the large ragged NVFP4 tile.
+        num_warps = 4
     if (constraints.get("num_warps", None) is None
             and is_persistent
             and block_n <= 128
@@ -444,6 +481,8 @@ def make_default_opt_flags_nvidia(
 
     if constraints.get("epilogue_subtile", None) is not None:
         subtiles_to_check = [constraints["epilogue_subtile"]]
+    elif is_large_ragged_nvfp4:
+        subtiles_to_check = [2]
     else:
         subtiles_to_check = [1] if out_dtype == FP4 else [1, 2, 4]
     num_stages = -1
@@ -456,6 +495,20 @@ def make_default_opt_flags_nvidia(
 
     if constraints.get("num_stages", None):
         num_stages = constraints["num_stages"]
+    elif is_large_ragged_nvfp4 and not any(
+        key in constraints
+        for key in (
+            "block_m",
+            "block_n",
+            "block_k",
+            "num_warps",
+            "is_persistent",
+            "split_k",
+            "max_allowable_mn",
+            "epilogue_subtile",
+        )
+    ):
+        num_stages = 3 if epilogue_reduction_n == 1 else 2
     assert num_stages >= 1
     ret = OptFlags(
         block_m=block_m,
@@ -582,6 +635,12 @@ def make_opt_flags(
         opt_flags_constraints.setdefault("block_k", rhs_layout.block_k)
         opt_flags_constraints.setdefault("block_n", rhs_layout.block_n)
         opt_flags_constraints.setdefault("disable_mx4_block_swap", True)
+        if (
+            rhs_layout.block_n == 512
+            and not enforce_bitwise_invariance
+            and not opt_flags_nvidia.is_x_scale_swizzled(precision_config)
+        ):
+            opt_flags_constraints.setdefault("block_m", 64)
     if block_k is not None:
         opt_flags_constraints = opt_flags_constraints.copy()
         opt_flags_constraints.update(block_k=block_k, split_k=1)

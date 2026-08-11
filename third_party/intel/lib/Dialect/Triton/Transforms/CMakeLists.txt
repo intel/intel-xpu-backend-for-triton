@@ -1,4 +1,5 @@
 add_triton_library(TritonIntelTransforms
+  DescriptorVersioning.cpp
   FoldTrueCmpIOp.cpp
   FuseReshape.cpp
   PrepareIfCombining.cpp

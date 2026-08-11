@@ -1,76 +1,61 @@
-diff --git a/CMakeLists.txt b/CMakeLists.txt
-index d956e29e3..96a701128 100644
---- a/CMakeLists.txt
-+++ b/CMakeLists.txt
-@@ -114,20 +114,23 @@ endif()
- # CPU builds define the target before the early return)
- # This extension requires SABI 3.11 since it relies on Py_buffer support. Loading
- # failure is handled gracefully on vLLM side for lower Python versions.
-+# Skip the target entirely on Python < 3.11 so the build doesn't break.
- #
--set(VLLM_SPINLOOP_EXT_SRC "csrc/spinloop.cpp")
--set(SPINLOOP_COMPILE_FLAGS "")
--if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64")
--  list(APPEND SPINLOOP_COMPILE_FLAGS "-mmwaitx")
-+if(Python_VERSION VERSION_GREATER_EQUAL "3.11")
-+  set(VLLM_SPINLOOP_EXT_SRC "csrc/spinloop.cpp")
-+  set(SPINLOOP_COMPILE_FLAGS "")
-+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64")
-+    list(APPEND SPINLOOP_COMPILE_FLAGS "-mmwaitx")
-+  endif()
-+  define_extension_target(
-+    spinloop
-+    DESTINATION vllm
-+    LANGUAGE CXX
-+    SOURCES ${VLLM_SPINLOOP_EXT_SRC}
-+    COMPILE_FLAGS ${SPINLOOP_COMPILE_FLAGS}
-+    USE_SABI 3.11
-+    WITH_SOABI)
- endif()
--define_extension_target(
--  spinloop
--  DESTINATION vllm
--  LANGUAGE CXX
--  SOURCES ${VLLM_SPINLOOP_EXT_SRC}
--  COMPILE_FLAGS ${SPINLOOP_COMPILE_FLAGS}
--  USE_SABI 3.11
--  WITH_SOABI)
+diff --git a/tests/kernels/attention/test_cascade_flash_attn.py b/tests/kernels/attention/test_cascade_flash_attn.py
+index 80c5c853d..e6ef4c183 100755
+--- a/tests/kernels/attention/test_cascade_flash_attn.py
++++ b/tests/kernels/attention/test_cascade_flash_attn.py
+@@ -21,6 +21,8 @@ except ImportError:
+             "vllm_flash_attn is not supported for vLLM on ROCm.",
+             allow_module_level=True,
+         )
++    is_fa_version_supported = lambda _: False
++    fa_version_unsupported_reason = lambda _: "vllm_flash_attn is not installed"
  
- #
- # Forward the non-CUDA device extensions to external CMake scripts.
-diff --git a/setup.py b/setup.py
-index b674d55a1..545b638dc 100644
---- a/setup.py
-+++ b/setup.py
-@@ -1043,7 +1043,8 @@ if _is_cuda() or _is_hip():
-     # copying the relevant .py files from the source repository.
-     ext_modules.append(CMakeExtension(name="vllm.triton_kernels", optional=True))
+ NUM_HEADS = [(4, 4), (8, 2), (16, 2)]
+ HEAD_SIZES = [128, 192, 256]
+diff --git a/tests/kernels/mamba/test_mamba_mixer2.py b/tests/kernels/mamba/test_mamba_mixer2.py
+index 973e7885c..e474275f5 100644
+--- a/tests/kernels/mamba/test_mamba_mixer2.py
++++ b/tests/kernels/mamba/test_mamba_mixer2.py
+@@ -12,6 +12,7 @@ from vllm.distributed.parallel_state import (
+     initialize_model_parallel,
+ )
+ from vllm.model_executor.layers.mamba.mamba_mixer2 import Mixer2RMSNormGated
++from vllm.platforms import current_platform
+ from vllm.utils.system_utils import update_environment_variables
+ from vllm.utils.torch_utils import set_random_seed
  
--ext_modules.append(CMakeExtension(name="vllm.spinloop"))
-+if sys.version_info >= (3, 11):
-+    ext_modules.append(CMakeExtension(name="vllm.spinloop"))
+@@ -86,7 +87,7 @@ def mixer2_gated_norm_tensor_parallel(
+     )
  
- if _is_hip():
-     ext_modules.append(CMakeExtension(name="vllm._rocm_C"))
-diff --git a/tests/utils.py b/tests/utils.py
-index 8989a1c3a..16f0620d1 100644
---- a/tests/utils.py
-+++ b/tests/utils.py
-@@ -1731,8 +1731,13 @@ def spawn_new_process_for_each_test(f: Callable[_P, None]) -> Callable[_P, None]:
+     # initialize distributed
+-    init_distributed_environment()
++    init_distributed_environment(backend=current_platform.dist_backend)
+     with ensure_current_vllm_config():
+         initialize_model_parallel(tensor_model_parallel_size=world_size)
  
-             repo_root = str(VLLM_PATH.resolve())
-             env = os.environ.copy()
--            env["PYTHONPATH"] = repo_root + os.pathsep + env.get("PYTHONPATH", "")
-+            test_module_dir = str(Path(f.__code__.co_filename).resolve().parent)
-+            env["PYTHONPATH"] = os.pathsep.join(
-+                path
-+                for path in (repo_root, test_module_dir, env.get("PYTHONPATH", ""))
-+                if path
-+            )
-             env[_SPAWN_CHILD_ENV] = "1"
+@@ -96,10 +97,11 @@ def mixer2_gated_norm_tensor_parallel(
+     gate_states = torch.randn(batch_size, seq_len, hidden_size)
  
-             result = subprocess.run(
-                 [sys.executable, "-c", child_script],
+     # create gated-norm with TP
+-    mixer = Mixer2RMSNormGated(
+-        full_hidden_size=hidden_size,
+-        full_n_groups=n_groups,
+-    )
++    with ensure_current_vllm_config():
++        mixer = Mixer2RMSNormGated(
++            full_hidden_size=hidden_size,
++            full_n_groups=n_groups,
++        )
+     mixer.weight.weight_loader(mixer.weight, weight)  # load
+ 
+     # create gated-norm without TP to compute reference
+@@ -115,6 +117,7 @@ def mixer2_gated_norm_tensor_parallel(
+             "get_tensor_model_parallel_rank",
+             return_value=0,
+         ),
++        ensure_current_vllm_config(),
+     ):
+         mixer_single_gpu = Mixer2RMSNormGated(
+             full_hidden_size=hidden_size,
 diff --git a/tests/kernels/mamba/utils.py b/tests/kernels/mamba/utils.py
 index fb8a4b0a2..7ab490aaf 100644
 --- a/tests/kernels/mamba/utils.py
@@ -89,8 +74,39 @@ index fb8a4b0a2..7ab490aaf 100644
      if D is not None:
          out += (x * D).to(out.dtype)
      out = (out if z is None else out * F.silu(z)).to(x.dtype)
+diff --git a/tests/utils.py b/tests/utils.py
+index 2a3bdb91f..c74587d5f 100644
+--- a/tests/utils.py
++++ b/tests/utils.py
+@@ -1896,7 +1896,12 @@ def spawn_new_process_for_each_test(f: Callable[_P, None]) -> Callable[_P, None]
+ 
+             repo_root = str(VLLM_PATH.resolve())
+             env = os.environ.copy()
+-            env["PYTHONPATH"] = repo_root + os.pathsep + env.get("PYTHONPATH", "")
++            test_module_dir = str(Path(f.__code__.co_filename).resolve().parent)
++            env["PYTHONPATH"] = os.pathsep.join(
++                path
++                for path in (repo_root, test_module_dir, env.get("PYTHONPATH", ""))
++                if path
++            )
+             env[_SPAWN_CHILD_ENV] = "1"
+ 
+             result = subprocess.run(
+diff --git a/tests/v1/attention/test_mla_backends.py b/tests/v1/attention/test_mla_backends.py
+index 315c77de3..9fda159d4 100644
+--- a/tests/v1/attention/test_mla_backends.py
++++ b/tests/v1/attention/test_mla_backends.py
+@@ -998,7 +998,7 @@ def test_backend_correctness(
+                 ),
+             ),
+         )
+-    except ImportError:
++    except (ImportError, AttributeError):
+         prefill_invalid_reasons = ["ImportError"]
+     if prefill_invalid_reasons:
+         pytest.skip(
 diff --git a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
-index 1f5724ac3..8bbbab3e5 100644
+index 21bda8e17..e7f11e934 100644
 --- a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
 @@ -618,7 +618,7 @@ class NaiveBatchedExperts(mk.FusedMoEExpertsModular):
@@ -111,113 +127,136 @@ index 1f5724ac3..8bbbab3e5 100644
          # Note: this does a bunch of extra work because expert_num_tokens is
          # ignored but it does support torch.compile + cudagraphs.
          hidden_dim = A.size(-1)
-diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index 56f1d1c1d..0ffe85054 100644
---- a/vllm/v1/attention/ops/triton_unified_attention.py
-+++ b/vllm/v1/attention/ops/triton_unified_attention.py
-@@ -248,12 +248,19 @@ def kernel_unified_attention(
-     # Per-(token, head) scale caches: used iff KV_QUANT_MODE in {2, 3}.
-     k_scale_cache_ptr=None,
-     v_scale_cache_ptr=None,
--    stride_ks_blk: tl.int64 = None,
--    stride_ks_slot: tl.int64 = None,
--    stride_ks_head: tl.int64 = None,
--    stride_vs_blk: tl.int64 = None,
--    stride_vs_slot: tl.int64 = None,
--    stride_vs_head: tl.int64 = None,
-+    # ``tl.int64`` cannot be combined with a ``None`` default — Triton's JIT
-+    # rejects ``Optional[tl.int64]`` / ``tl.int64 | None`` at trace time, and
-+    # plain ``tl.int64 = None`` raises ``TypeError: 'NoneType' object cannot
-+    # be interpreted as an integer`` when callers omit these arguments.
-+    # ``int | None`` is the only annotation that lets the wrapper pass
-+    # ``None`` here so Triton can skip materialising the strides when the
-+    # ``USE_PER_TOKEN_HEAD_SCALES`` branch is dead.
-+    stride_ks_blk: int | None = None,
-+    stride_ks_slot: int | None = None,
-+    stride_ks_head: int | None = None,
-+    stride_vs_blk: int | None = None,
-+    stride_vs_slot: int | None = None,
-+    stride_vs_head: int | None = None,
-     # KV cache quantization mode handled inside this kernel via constexpr
-     # branches: NONE (0), FP8_PER_TENSOR (1), INT8_PER_TOKEN_HEAD (2),
-     # FP8_PER_TOKEN_HEAD (3).
-@@ -272,7 +279,10 @@ def kernel_unified_attention(
-     USE_TD_QO: tl.constexpr = False,
-     Q_IS_FP8: tl.constexpr = False,
- ):
--    USE_PER_TOKEN_HEAD_SCALES: tl.constexpr = KV_QUANT_MODE >= 2
-+    # Per-(token, head) scale caches: used iff KV_QUANT_MODE in {2, 3}.
-+    USE_PER_TOKEN_HEAD_SCALES: tl.constexpr = (KV_QUANT_MODE >= 2) and (
-+        KV_QUANT_MODE <= 3
-+    )
-     USE_FP8_Q_DESCALE: tl.constexpr = KV_QUANT_MODE == 1 and Q_IS_FP8
+diff --git a/tests/conftest.py b/tests/conftest.py
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -284,8 +284,8 @@ def workspace_init():
+     """Initialize the workspace manager for tests that need it.
+
+-    This fixture initializes the workspace manager with a CUDA device
+-    if available, and resets it after the test completes. Tests that
++    This fixture initializes the workspace manager with an accelerator device
++    if available, and resets it after the test completes. Tests that
+     create a full vLLM engine should NOT use this fixture as the engine
+     will initialize the workspace manager itself.
+     """
+     from vllm.v1.worker.workspace import (
+@@ -297,5 +297,8 @@ def workspace_init():
+     if torch.cuda.is_available():
+         device = torch.device("cuda:0")
+         init_workspace_manager(device)
++    elif torch.xpu.is_available():
++        device = torch.device("xpu:0")
++        init_workspace_manager(device)
+     yield
+     reset_workspace_manager()
+
+diff --git a/tests/kernels/moe/test_moe.py b/tests/kernels/moe/test_moe.py
+--- a/tests/kernels/moe/test_moe.py
++++ b/tests/kernels/moe/test_moe.py
+@@ -315,7 +315,21 @@ def test_fused_moe(
+     w1 = torch.randn((e, 2 * n, k), device="cuda", dtype=dtype) / 10
+     w2 = torch.randn((e, k, n), device="cuda", dtype=dtype) / 10
+
+     score = torch.randn((m, e), device="cuda", dtype=dtype)
++
++    # Random BF16 scores can tie at the top-k boundary. Tied experts are
++    # equally valid, but top-k implementations may select different IDs,
++    # causing false test failures. Reroll only rows with boundary ties.
++    for _ in range(10):
++        routing_scores = torch.softmax(score, dim=-1, dtype=torch.float32)
++        topk_plus_one = torch.topk(routing_scores, topk + 1, dim=-1).values
++        boundary_ties = topk_plus_one[:, topk - 1] == topk_plus_one[:, topk]
++        if not torch.any(boundary_ties):
++            break
++
++        score[boundary_ties] = torch.randn_like(score[boundary_ties])
++    else:
++        raise AssertionError("Failed to generate scores without top-k boundary ties")
+
+     if ep_size > 1:
+         local_e = e // ep_size
+diff --git a/vllm/model_executor/warmup/minimax_m3_msa_warmup.py b/vllm/model_executor/warmup/minimax_m3_msa_warmup.py
+index 18bf14249..c47cbf80f 100644
+--- a/vllm/model_executor/warmup/minimax_m3_msa_warmup.py
++++ b/vllm/model_executor/warmup/minimax_m3_msa_warmup.py
+@@ -4,7 +4,6 @@
+ from typing import TYPE_CHECKING
  
-     if USE_TD:
-@@ -933,9 +943,9 @@ def unified_attention(
+ from vllm.logger import init_logger
+-from vllm.models.minimax_m3.nvidia.model import MiniMaxM3SparseAttention
+ from vllm.platforms import current_platform
+ from vllm.tracing import instrument
  
-     # The kernel signature is the same for 2D and 3D — only the launch
-     # grid + a handful of constexpr toggles differ.  Per-token-head scale
--    # caches and their strides are required arguments; non-per-token-head
--    # modes pass dummy zeros (the code path is dead-code eliminated by
--    # the ``USE_PER_TOKEN_HEAD_SCALES`` constexpr branch in the kernel).
-+    # caches and their strides are passed as ``None`` when the
-+    # ``USE_PER_TOKEN_HEAD_SCALES`` branch is dead so Triton can skip
-+    # materialising those arguments and the associated registers.
-     if use_per_token_head_scales:
-         ks_strides = k_scale_cache.stride()
-         vs_strides = v_scale_cache.stride()
-@@ -944,16 +954,15 @@ def unified_attention(
-         k_scale_ptr = k_scale_cache
-         v_scale_ptr = v_scale_cache
-     else:
--        ks_blk = ks_slot = ks_head = 0
--        vs_blk = vs_slot = vs_head = 0
--        # Pass the K cache as a stand-in pointer; never dereferenced.
--        k_scale_ptr = k
--        v_scale_ptr = v
--    # 3D needs real segm tensors; 2D never touches them but Triton wants
--    # a non-null pointer.  Reuse ``out`` as the placeholder.
--    segm_output_ptr = softmax_segm_output if use_3d else out
--    segm_max_ptr = softmax_segm_max if use_3d else out
--    segm_expsum_ptr = softmax_segm_expsum if use_3d else out
-+        ks_blk = ks_slot = ks_head = None
-+        vs_blk = vs_slot = vs_head = None
-+        k_scale_ptr = None
-+        v_scale_ptr = None
-+    # 3D needs real segm tensors; 2D never touches them.  Pass ``None`` in
-+    # 2D mode so Triton can skip materialising these pointer arguments.
-+    segm_output_ptr = softmax_segm_output if use_3d else None
-+    segm_max_ptr = softmax_segm_max if use_3d else None
-+    segm_expsum_ptr = softmax_segm_expsum if use_3d else None
-     num_segments = num_par_softmax_segments if use_3d else 1
+@@ -16,6 +15,13 @@ logger = init_logger(__name__)
  
-     grid: tuple[Any, ...]
-diff --git a/tests/kernels/mamba/test_mamba_mixer2.py b/tests/kernels/mamba/test_mamba_mixer2.py
-index 973e788..e474275 100644
---- a/tests/kernels/mamba/test_mamba_mixer2.py
-+++ b/tests/kernels/mamba/test_mamba_mixer2.py
-@@ -14,2 +14,3 @@ from vllm.distributed.parallel_state import (
- from vllm.model_executor.layers.mamba.mamba_mixer2 import Mixer2RMSNormGated
-+from vllm.platforms import current_platform
- from vllm.utils.system_utils import update_environment_variables
-@@ -88,3 +89,3 @@ def mixer2_gated_norm_tensor_parallel(
-     # initialize distributed
--    init_distributed_environment()
-+    init_distributed_environment(backend=current_platform.dist_backend)
-     with ensure_current_vllm_config():
-@@ -98,6 +99,7 @@ def mixer2_gated_norm_tensor_parallel(
-     # create gated-norm with TP
--    mixer = Mixer2RMSNormGated(
--        full_hidden_size=hidden_size,
--        full_n_groups=n_groups,
--    )
-+    with ensure_current_vllm_config():
-+        mixer = Mixer2RMSNormGated(
-+            full_hidden_size=hidden_size,
-+            full_n_groups=n_groups,
-+        )
-     mixer.weight.weight_loader(mixer.weight, weight)  # load
-@@ -117,2 +119,3 @@ def mixer2_gated_norm_tensor_parallel(
-         ),
-+        ensure_current_vllm_config(),
-     ):
+ @instrument(span_name="MiniMax M3 MSA warmup")
+ def minimax_m3_msa_warmup(worker: "Worker") -> None:
++    if not (
++        current_platform.is_cuda() and current_platform.is_device_capability_family(100)
++    ):
++        return
++
++    from vllm.models.minimax_m3.nvidia.model import MiniMaxM3SparseAttention
++
+     sparse_module = next(
+         (
+             module
+@@ -26,10 +32,6 @@ def minimax_m3_msa_warmup(worker: "Worker") -> None:
+     )
+     if sparse_module is None:
+         return
+-    if not (
+-        current_platform.is_cuda() and current_platform.is_device_capability_family(100)
+-    ):
+-        return
+ 
+     logger.info("Warming up MiniMax M3 MSA kernels.")
+ 
+diff --git a/tests/kernels/moe/test_moe.py b/tests/kernels/moe/test_moe.py
+--- a/tests/kernels/moe/test_moe.py
++++ b/tests/kernels/moe/test_moe.py
+@@ -897,7 +897,10 @@
+     ),
+     marlin_moe_generate_valid_test_cases(),
+ )
+-@pytest.mark.skipif(current_platform.is_rocm(), reason="Skip for rocm")
++@pytest.mark.skipif(
++    current_platform.is_rocm() or current_platform.is_xpu(),
++    reason="Skip for ROCm and XPU",
++)
+ @pytest.mark.usefixtures("default_vllm_config")
+ def test_fused_marlin_moe(
+     a_type: ScalarType,
+@@ -1012,5 +1015,8 @@
+ @pytest.mark.flaky(reruns=2)
+-@pytest.mark.skipif(current_platform.is_rocm(), reason="Skip for rocm")
++@pytest.mark.skipif(
++    current_platform.is_rocm() or current_platform.is_xpu(),
++    reason="Skip for ROCm and XPU",
++)
+ @pytest.mark.usefixtures("default_vllm_config")
+ @pytest.mark.parametrize("m", [1, 256])
+ def test_fused_marlin_moe_with_bias(m):
+@@ -1085,5 +1091,8 @@
+ @pytest.mark.flaky(reruns=2)
+-@pytest.mark.skipif(current_platform.is_rocm(), reason="Skip for rocm")
++@pytest.mark.skipif(
++    current_platform.is_rocm() or current_platform.is_xpu(),
++    reason="Skip for ROCm and XPU",
++)
+ @pytest.mark.usefixtures("default_vllm_config")
+ @pytest.mark.parametrize("m", [1, 64, 256])
+ @pytest.mark.parametrize("n,k", [(1024, 1024), (2048, 2048)])
+@@ -1393,7 +1402,10 @@
+ @pytest.mark.parametrize(
+     ("m,n,k,e,topk,max_tokens_per_batch,dtype,quant_dtype,input_type,atol"),
+     _batched_fused_marlin_moe_cases(),
+ )
+-@pytest.mark.skipif(current_platform.is_rocm(), reason="Skip for rocm")
++@pytest.mark.skipif(
++    current_platform.is_rocm() or current_platform.is_xpu(),
++    reason="Skip for ROCm and XPU",
++)
+ def test_batched_fused_marlin_moe(
+     m: int,

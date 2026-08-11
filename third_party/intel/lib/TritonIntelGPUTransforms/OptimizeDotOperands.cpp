@@ -80,9 +80,6 @@ private:
             ttgi::TritonIntelGPUDialect::getSupport2DBlockIOAttrName()))
       return false;
 
-    if (transOp->getParentOfType<scf::WhileOp>())
-      return false;
-
     if (!transOp->hasOneUse())
       return false;
 

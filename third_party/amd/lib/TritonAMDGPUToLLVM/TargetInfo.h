@@ -37,6 +37,10 @@ public:
   Value ballot(RewriterBase &rewriter, Location loc, Type type,
                Value cmp) const override;
 
+  Value getGlobalTimer(RewriterBase &rewriter, Location loc) const override;
+
+  StringRef getAtomicSyncScope(MemSyncScope scope) const override;
+
   void barrier(Location loc, RewriterBase &rewriter,
                triton::gpu::AddrSpace targets) const override;
   void clusterBarrier(Location loc, RewriterBase &rewriter,
@@ -51,7 +55,6 @@ public:
                     Operation *localLoadOp = nullptr) const override;
 
   // Describes the parameters of ds_read_tr for a particular data type.
-  using TileKind = amdgpu::TargetFeatures::TileKind;
   using LDSTransLoadParams = amdgpu::TargetFeatures::LDSTransLoadParams;
   // Get the ds_read_tr parameters for the instruction that operates on the
   // element granularity specified by bitWidth. Returns candidates ordered from
@@ -120,6 +123,7 @@ public:
   bool useAsyncMarks() const;
 
   bool supportsMultiCTALaunch() const;
+  unsigned getMaxMulticastMaskPopcount() const;
   bool supportsTDM() const;
   bool supportsClusterLoadBitWidth(int biwWidth) const;
 

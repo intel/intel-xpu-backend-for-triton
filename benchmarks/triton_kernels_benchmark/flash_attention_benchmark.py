@@ -186,34 +186,21 @@ bwd_configs = [
 
 
 def filter_func(_dict):
-    # These combinations result in the following error:
-    # Segmentation fault from GPU at 0xff00ffffffe00000, ctx_id: 1 (CCS) type: 0 \
-    #   (NotPresent), level: 1 (PDE), access: 0 (Read), banned: 1, aborting.
-    skip_dicts = [
-        {'BLOCK_M1': 32, 'BLOCK_N1': 64, 'BLOCK_M2': 64, 'BLOCK_N2': 32, 'grf_mode': '256'},
-        {'BLOCK_M1': 32, 'BLOCK_N1': 64, 'BLOCK_M2': 128, 'BLOCK_N2': 32, 'grf_mode': '256'},
-        {'BLOCK_M1': 32, 'BLOCK_N1': 64, 'BLOCK_M2': 128, 'BLOCK_N2': 64, 'grf_mode': '256'},
-        {'BLOCK_M1': 64, 'BLOCK_N1': 64, 'BLOCK_M2': 128, 'BLOCK_N2': 32, 'grf_mode': '256'},
-        {'BLOCK_M1': 64, 'BLOCK_N1': 64, 'BLOCK_M2': 128, 'BLOCK_N2': 64, 'grf_mode': '256'},
-    ]
-    if _dict.kwargs in skip_dicts:
-        return False
-    return True
+    # The fused backward kernel reuses program_id(0) for both the dK/dV tile
+    # (start_n = pid * BLOCK_N1) and the dQ tile (start_m = pid * BLOCK_M2),
+    # while the launch grid is sized as N_CTX // BLOCK_N1.  The dQ path is
+    # therefore only correct when BLOCK_N1 == BLOCK_M2; otherwise the dQ grid
+    # is mis-sized and dQ/dK are computed over the wrong token ranges.
+    # Historically this manifested as a GPU segfault for a subset of the
+    # mismatched configs; post the modulo-axisinfo fix (#6227) it instead
+    # produces silently wrong gradients.  Restrict autotuning to the configs
+    # the kernel actually supports.
+    return _dict.kwargs['BLOCK_N1'] == _dict.kwargs['BLOCK_M2']
 
 
 bwd_configs = list(filter(filter_func, bwd_configs))
 
-
-def early_prune(prune_configs, named_args, **kwargs):
-    if named_args['H'] == 48 and named_args['N_CTX'] == 1024 and kwargs['HEAD_DIM'] == 64:
-        # FIXME: benchmark_suite.assert_close fails for this configuration
-        bad_case = {'BLOCK_M1': 64, 'BLOCK_N1': 128, 'BLOCK_M2': 64, 'BLOCK_N2': 64, 'grf_mode': '256'}
-        prune_configs = list(filter(lambda cfg: cfg.kwargs != bad_case, prune_configs))
-    return prune_configs
-
-
-bwd_tuner = triton.autotune(bwd_configs, key=['N_CTX', 'HEAD_DIM'],
-                            prune_configs_by={'early_config_prune': early_prune})
+bwd_tuner = triton.autotune(bwd_configs, key=['N_CTX', 'HEAD_DIM'])
 
 
 @triton.jit
@@ -611,18 +598,6 @@ def get_benchmark(
     # pylint: disable=too-many-branches
     def benchmark(Z, H, N_CTX, D_HEAD, CAUSAL, MODE, provider):
         modes = ['fwd', 'bwd']
-        if H == 48 and N_CTX == 1024 and D_HEAD == 64:
-            # Clear cache to rerun autotuning and skip problem configs using `early_config_prune` option.
-            # Note: The cache key uses only N_CTX and D_HEAD, so different Z values with the same N_CTX and D_HEAD
-            # will hit the same cache entry. For example:
-            #   Z=16, H=32, N_CTX=1024, D_HEAD=64 -> creates cache entry
-            #   Z=4, H=48, N_CTX=1024, D_HEAD=64 -> cache hit (same key, kernel doesn't depend on Z)
-            # We don't add Z or H to the cache key because the kernel doesn't depend on them, and doing so would
-            # result in more kernel compilations.
-            key = (1024, 64, 'torch.float16', 'torch.float16', 'torch.float16', 'torch.float16', 'torch.float16',
-                   'torch.float16', 'torch.float16', 'torch.float32', 'torch.float32')
-            if key in _attention.tune_attn_bwd.cache:
-                del _attention.tune_attn_bwd.cache[key]
         # This warmup logic improves performance on BMG significantly
         # For FWD mode in triton & sycl-tla: Some configs increase performance with warmup as a step function, but some slowly decrease with saturation
         # Performance is best at 250-400ms range, but we want stable, not just best at ~600ms (triton/sycl-tla providers)

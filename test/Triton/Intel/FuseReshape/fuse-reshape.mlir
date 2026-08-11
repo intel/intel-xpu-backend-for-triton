@@ -79,3 +79,28 @@ tt.func public @noFusePaddedStrides(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<f32
 // CHECK-LABEL: noFusePaddedStrides
 // CHECK: tt.descriptor_load
 // CHECK: tt.reshape
+
+// -----
+
+// Do not fuse when the collapsed dimension's real extent is not provably a
+// multiple of its block extent, even when strides[0] is provably divisible
+// by strides[1]. Otherwise the per-dimension bounds check lost by fusion
+// would let an over-sized block load spill into the next "row" of the
+// outermost dimension (github.com/intel/intel-xpu-backend-for-triton/issues/7464).
+tt.func public @noFuseNonDivisibleBlockExtent(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<f32>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c8_i64 = arith.constant 8 : i64
+  %c13_i32 = arith.constant 13 : i32
+  %c5_i32 = arith.constant 5 : i32
+  %c104_i64 = arith.constant 104 : i64
+  %cst = arith.constant dense<0.000000e+00> : tensor<64x16xf32>
+  %0 = tt.make_tensor_descriptor %arg1, [%c5_i32, %c13_i32, %c13_i32], [%c104_i64, %c8_i64, %c1_i64] : <f32>, <1x64x16xf32>
+  %1 = tt.descriptor_load %0[%c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<1x64x16xf32> -> tensor<1x64x16xf32>
+  %2 = tt.reshape %1 : tensor<1x64x16xf32> -> tensor<64x16xf32>
+  %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<64x16xf32> * tensor<16x16xf32> -> tensor<64x16xf32>
+  tt.return
+}
+// CHECK-LABEL: noFuseNonDivisibleBlockExtent
+// CHECK: tt.descriptor_load
+// CHECK: tt.reshape
