@@ -33,3 +33,11 @@ tests/kernels/core/test_fused_rms_norm_gated.py::test_compiled_vs_eager_multidim
 tests/kernels/core/test_fused_rms_norm_gated.py::test_compiled_vs_eager_multidim[0-dtype0-False-swish-shape1]
 tests/kernels/core/test_fused_rms_norm_gated.py::test_compiled_vs_eager_multidim[0-dtype0-False-sigmoid-shape0]
 tests/kernels/core/test_fused_rms_norm_gated.py::test_compiled_vs_eager_multidim[0-dtype0-False-sigmoid-shape1]
+
+# Tensor-likes are not close on Max1100: https://github.com/intel/intel-xpu-backend-for-triton/issues/7712
+tests/kernels/test_fused_sigmoid_gating_delta_rule.py::test_fused_sigmoid_gating_delta_rule_update_non_spec[dtype0-128-128-32-16-2-1]
+tests/kernels/test_fused_sigmoid_gating_delta_rule.py::test_fused_sigmoid_gating_delta_rule_update_non_spec[dtype0-128-128-32-16-4-1]
+tests/kernels/test_fused_sigmoid_gating_delta_rule.py::test_fused_sigmoid_gating_delta_rule_update_non_spec[dtype1-128-128-32-16-2-1]
+tests/kernels/test_fused_sigmoid_gating_delta_rule.py::test_fused_sigmoid_gating_delta_rule_update_non_spec[dtype1-128-128-32-16-4-1]
+tests/kernels/test_fused_sigmoid_gating_delta_rule.py::test_fused_sigmoid_gating_delta_rule_update_spec[dtype0-1-128-128-32-16-2-1]
+tests/kernels/test_fused_sigmoid_gating_delta_rule.py::test_fused_sigmoid_gating_delta_rule_update_spec[dtype1-1-128-128-32-16-2-1]
