@@ -12,6 +12,7 @@
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/BlockIOUtils.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -165,8 +166,18 @@ bool isExpensiveLoadOrStore(Operation *op) {
   Attribute blockIOAttr =
       op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
   if (blockIOAttr &&
-      !op->getAttr(TritonIntelGPUDialect::getBlockIOStrideAttrName()))
+      !op->getAttr(TritonIntelGPUDialect::getBlockIOStrideAttrName())) {
+    // A block_io load is only cheap if it genuinely validates as a 2D block
+    // load. If it would fall back to a per-element gather, treat it as
+    // expensive so it anchors its layout (and is not rematerialized into a
+    // de-coalesced gather).
+    if (isa<tt::DescriptorLoadOp, tt::LoadOp>(op)) {
+      auto loadTy = dyn_cast<RankedTensorType>(op->getResult(0).getType());
+      if (loadTy && !ttgi::blockIOLoadValidatesAs2DBlock(op, loadTy))
+        return true;
+    }
     return false;
+  }
 
   // Loads or stores that use more threads than elements can be presumed to have
   // a high hit-rate that makes them cheap.

@@ -129,6 +129,11 @@ bool isBlockIOEligible(OpTy loadOp, RankedTensorType tensorTy) {
   return isBlockIOEligible(loadOp.getOperation(), tensorTy);
 }
 
+/// Return true if a block-IO-eligible load actually validates as a genuine 2D
+/// block load (i.e. passes validate2DBlockLoadTile). A false result means the
+/// load would fall back to a per-element gather.
+bool blockIOLoadValidatesAs2DBlock(Operation *loadOp, RankedTensorType type);
+
 /// Estimate the hardware message count for a load with the given type and
 /// encoding. Higher values indicate more HW cost. Used for cost modeling in
 /// RemoveLayoutConversions. Returns a comparable scalar (not cycle-accurate).
