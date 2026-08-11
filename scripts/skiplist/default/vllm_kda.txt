@@ -23,4 +23,3 @@ tests/kernels/core/test_fused_rms_norm_gated.py::test_compiled_vs_eager_multidim
 tests/kernels/core/test_fused_rms_norm_gated.py::test_compiled_vs_eager_multidim[0-dtype0-False-swish-shape1]
 tests/kernels/core/test_fused_rms_norm_gated.py::test_compiled_vs_eager_multidim[0-dtype0-False-sigmoid-shape0]
 tests/kernels/core/test_fused_rms_norm_gated.py::test_compiled_vs_eager_multidim[0-dtype0-False-sigmoid-shape1]
-
