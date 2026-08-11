@@ -192,7 +192,7 @@ def _find_cuda_patterns(source: str) -> list[dict]:
             if isinstance(func, ast.Attribute) and func.attr == "cuda":
                 patterns.append({
                     "type": "tensor_cuda_method",
-                    "line": node.lineno,
+                    "line": func.end_lineno,
                     "col": node.col_offset,
                 })
 
