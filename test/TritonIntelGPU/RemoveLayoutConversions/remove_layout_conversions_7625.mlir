@@ -3,7 +3,7 @@
 // COM: https://github.com/intel/intel-xpu-backend-for-triton/issues/7625
 // COM: There is an inefficient issue in the RemoveLayout optimization for the loop.
 // COM: The structured loop return values and loop iteration arguments are duplicated during backward rematerialization,
-// COM: which causes the loop body to be duplicated in the final result.a
+// COM: which causes the loop body to be duplicated in the final result.
 
 // CHECK: #[[$ATTR_0:.+]] = #ttg.linear<{register = {{\[\[0, 1\], \[0, 2\], \[0, 4\], \[0, 8\]\],}} lane = {{\[\[1, 0\], \[2, 0\], \[4, 0\], \[8, 0\]\],}} warp = {{\[\[0, 16\], \[0, 32\]\],}}
 #blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [4, 4], warpsPerCTA = [1, 4], order = [0, 1]}>

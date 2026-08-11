@@ -1500,8 +1500,12 @@ void LayoutRematerialization::forwardPropagateRemat(
       }
 
       if (needRewrite) {
-        // Create the op with the new layout.
-        rewriteOp(&op, valuesToPropagate[op.getResult(0)]);
+        // The scf::ForOp and scf::IfOp are handled separately in
+        // rewriteSlice. Just skip those two ops here.
+        if (!isa<scf::ForOp, scf::IfOp>(op)) {
+          // Create the op with the new layout.
+          rewriteOp(&op, valuesToPropagate[op.getResult(0)]);
+        }
       } else if (auto assertOp = dyn_cast<tt::AssertOp>(&op)) {
         // Only need to deal with the first operand which is the condition
         // tensor.
@@ -1516,6 +1520,7 @@ void LayoutRematerialization::forwardPropagateRemat(
         if (!valuesToPropagate.contains(operand))
           continue;
         Value newOperand = getRematValue(operand, valuesToPropagate[operand]);
+        assert(newOperand && "the value of the new layout couldn't be null");
         descStore.getSrcMutable().assign(newOperand);
       }
 
@@ -1930,7 +1935,7 @@ void LayoutRematerialization::backwardRematerialization(
 
         BlockArgument blockArg = cast<BlockArgument>(v);
         Operation *parentOp = blockArg.getOwner()->getParentOp();
-        if (auto loopOp = dyn_cast<LoopLikeOpInterface>(parentOp)) {
+        if (auto loopOp = dyn_cast<scf::ForOp>(parentOp)) {
           OpOperand *operand = loopOp.getTiedLoopYieldedValue(blockArg);
           if (!operand)
             continue;
