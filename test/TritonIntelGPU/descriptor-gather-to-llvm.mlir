@@ -59,6 +59,8 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     //   6. Predicated load: branch on the combined predicate.
     // CHECK:     llvm.cond_br {{.*}}
     // CHECK:     llvm.load {{.*}} : !llvm.ptr<1> -> f16
+    // Verify the fast path is NOT taken for the blocked encoding.
+    // CHECK-NOT: triton_gen.sub_group_gather_load
 
     %result = ttig.descriptor_gather %desc[%arg1, %arg2]
         : (!tt.tensordesc<1x16xf16>, tensor<8xi32, #blocked_x>, i32) -> tensor<8x16xf16, #blocked>
