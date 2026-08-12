@@ -924,12 +924,14 @@ run_sglang_quant_tests() {
   echo "********************************************************"
 
   enter_sglang_test_env
-  # FP8 quant + block GEMM.
+  # FP8 quant + block GEMM, scaled GEMM, AWQ dequant + GEMM.
   # test_int8_kernel.py and test_block_int8.py are left out: they import
   # srt.layers.activation, which needs sgl_kernel on XPU.
   TRITON_TEST_SUITE=sglang_quant \
     run_pytest_command -vvv \
-      test/registered/quant/test_fp8_kernel.py
+      test/registered/quant/test_fp8_kernel.py \
+      test/registered/quant/test_triton_scaled_mm.py \
+      test/registered/quant/test_awq_dequant.py
 }
 
 run_sglang_moe_tests() {

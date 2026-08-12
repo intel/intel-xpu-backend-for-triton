@@ -22,7 +22,7 @@ One flag per kernel family, each with its own `TRITON_TEST_SUITE` and skip list
 | Flag | Test files, relative to `sglang/test/` |
 |---|---|
 | `--sglang-attention` | `registered/attention/test_create_kvindices.py`, `registered/attention/test_triton_attention_kernels.py` |
-| `--sglang-quant` | `registered/quant/test_fp8_kernel.py` |
+| `--sglang-quant` | `registered/quant/test_fp8_kernel.py`, `test_triton_scaled_mm.py`, `test_awq_dequant.py` |
 | `--sglang-moe` | `registered/lora/test_fused_moe_lora_kernel.py` |
 | `--sglang-mamba` | `registered/layers/mamba/test_causal_conv1d.py`, `test_mamba_ssm.py`, `test_mamba_ssm_ssd.py` |
 | `--sglang-gdn` | `registered/attention/test_chunk_gated_delta_rule.py` |
@@ -55,7 +55,8 @@ kernels to `kernels/ops/` (RFC #29630), so recheck them after a pin bump.
 
 | Kernels | Source |
 |---|---|
-| `per_token_group_quant_fp8`, `w8a8_block_fp8_matmul` | `kernels/ops/quantization/fp8_kernel.py` |
+| `per_token_group_quant_fp8`, `w8a8_block_fp8_matmul`, `triton_scaled_mm` | `kernels/ops/quantization/fp8_kernel.py` |
+| `awq_dequantize`, `awq_gemm` | `kernels/ops/quantization/awq_triton.py` |
 
 `--sglang-moe`:
 
@@ -117,7 +118,7 @@ Local run at the current pin, one suite at a time. The skip lists come from it.
 | Suite | Result | Time |
 |---|---|---|
 | `--sglang-attention` | 8 passed, 2 skipped (1 upstream, 1 skip-listed) | 26s |
-| `--sglang-quant` | 2 passed | 7s |
+| `--sglang-quant` | 5 passed | 43s |
 | `--sglang-moe` | 108 skipped, all skip-listed | 4s |
 | `--sglang-mamba` | 932 passed, 16 skipped upstream | 15s |
 | `--sglang-gdn` | 29 skipped, all skip-listed | 4s |
@@ -146,7 +147,8 @@ Nothing failed because of Triton codegen.
   fine, but its torch reference needs more than 48 GB. Unskip when it is chunked.
 - **BMG.** `scripts/skiplist/xe2/` is a copy of `default/`; nothing measured on
   B580 yet. `--skip-list` replaces the directory instead of merging, so the
-  entries have to be duplicated.
+  entries have to be duplicated. The B580 callers pass `max_jobs: "8"` because
+  the default `-j(2 * cores)` OOM-kills cc1plus on that runner.
 - `install-sglang.sh` pins `xgrammar==0.2.1` (SGLang's CUDA manifest); every
   upstream XPU path pins `0.1.33`.
 

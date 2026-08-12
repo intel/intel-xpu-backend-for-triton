@@ -18,4 +18,5 @@ jobs:
     with:
       runner_label: b580
       skip_list: xe2
+      max_jobs: "8"
     secrets: inherit

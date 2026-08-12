@@ -15,6 +15,10 @@ on:
         description: Skip list directory override
         type: string
         default: ""
+      max_jobs:
+        description: Build parallelism, keep empty for 2 * number of cores
+        type: string
+        default: ""
       python_version:
         description: Python version
         type: string
@@ -87,6 +91,10 @@ jobs:
 
       - name: Build Triton wheel
         run: |
+          # Default is -j(2 * cores), which OOM-kills cc1plus on b580.
+          if [[ -n "${{ inputs.max_jobs }}" ]]; then
+            export MAX_JOBS="${{ inputs.max_jobs }}"
+          fi
           python -m build --wheel --no-isolation
           ls -lh dist/*.whl
 
