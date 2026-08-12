@@ -1520,7 +1520,16 @@ void LayoutRematerialization::forwardPropagateRemat(
         if (!valuesToPropagate.contains(operand))
           continue;
         Value newOperand = getRematValue(operand, valuesToPropagate[operand]);
-        assert(newOperand && "the value of the new layout couldn't be null");
+        if (!newOperand) {
+          LLVM_DEBUG({
+            DBGS()
+                << "forwardPropagateRemat no remet src value for desc store:\n";
+            DBGS().indent(2) << "origin src: " << operand << "\n";
+            DBGS().indent(2)
+                << "to layout:" << valuesToPropagate[operand] << "\n";
+          });
+          continue;
+        }
         descStore.getSrcMutable().assign(newOperand);
       }
 
@@ -1910,10 +1919,6 @@ void LayoutRematerialization::backwardRematerialization(
 
   // Compute external-use analysis before rewriteSlice mutates slice.
   auto nonSliceOnlyValues = getNonSliceOnlyValues(slice, convertOp);
-  SetVector<Operation *> sliceOps;
-  for (Value v : slice)
-    if (Operation *op = v.getDefiningOp())
-      sliceOps.insert(op);
 
   // 4. Rewrite the slice.
   rewriteSlice(slice, layout, convertOp);
