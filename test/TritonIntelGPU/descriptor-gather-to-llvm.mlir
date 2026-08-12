@@ -129,4 +129,3 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     tt.return %result : tensor<64x32xf16, #dot0>
   }
 }
-
