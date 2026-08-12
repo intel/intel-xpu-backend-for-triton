@@ -60,6 +60,7 @@ public:
     auto newDot =
         DotOp::create(rewriter, scaledDotOp.getLoc(), scaledA, scaledB,
                       scaledDotOp.getC(), InputPrecision::TF32, 0);
+    newDot->setAttrs(scaledDotOp->getAttrs());
 
     rewriter.replaceOpWithNewOp<ConvertLayoutOp>(scaledDotOp,
                                                  scaledDotOp.getType(), newDot);
