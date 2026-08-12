@@ -1402,6 +1402,9 @@ void LayoutRematerialization::propagateLayout(
              << ", which has layout:\n";
       DBGS() << "  " << layout << "\n";
       DBGS() << "changed: " << changed.size() << "\n";
+      for (auto &v : changed) {
+        DBGS().indent(2) << "value: " << v << "\n";
+      }
     });
 
     queue.insert(queue.end(), changed.begin(), changed.end());
@@ -1478,10 +1481,6 @@ void LayoutRematerialization::forwardPropagateRemat(
     Region *currentRegion = regQueue.front();
     regQueue.pop_front();
     for (Operation &op : currentRegion->getOps()) {
-      // The scf::ForOp and scf::IfOp are handled separately in
-      // rewriteSlice. Just skip those two ops here.
-      if (isa<scf::ForOp, scf::IfOp>(op))
-        continue;
 
       bool needRewrite = false;
       for (Value result : op.getResults()) {
@@ -1501,8 +1500,12 @@ void LayoutRematerialization::forwardPropagateRemat(
       }
 
       if (needRewrite) {
-        // Create the op with the new layout.
-        rewriteOp(&op, valuesToPropagate[op.getResult(0)]);
+        // The scf::ForOp and scf::IfOp are handled separately in
+        // rewriteSlice. Just skip those two ops here.
+        if (!isa<scf::ForOp, scf::IfOp>(op)) {
+          // Create the op with the new layout.
+          rewriteOp(&op, valuesToPropagate[op.getResult(0)]);
+        }
       } else if (auto assertOp = dyn_cast<tt::AssertOp>(&op)) {
         // Only need to deal with the first operand which is the condition
         // tensor.
@@ -1511,6 +1514,23 @@ void LayoutRematerialization::forwardPropagateRemat(
           continue;
         Value newOperand = getRematValue(operand, valuesToPropagate[operand]);
         assertOp->setOperand(0, newOperand);
+      } else if (auto descStore = dyn_cast<tt::DescriptorStoreOp>(&op)) {
+        // Only need to deal with the store value
+        Value operand = descStore.getSrc();
+        if (!valuesToPropagate.contains(operand))
+          continue;
+        Value newOperand = getRematValue(operand, valuesToPropagate[operand]);
+        if (!newOperand) {
+          LLVM_DEBUG({
+            DBGS()
+                << "forwardPropagateRemat no remet src value for desc store:\n";
+            DBGS().indent(2) << "origin src: " << operand << "\n";
+            DBGS().indent(2)
+                << "to layout:" << valuesToPropagate[operand] << "\n";
+          });
+          continue;
+        }
+        descStore.getSrcMutable().assign(newOperand);
       }
 
       for (Region &R : op.getRegions())
@@ -1899,33 +1919,69 @@ void LayoutRematerialization::backwardRematerialization(
 
   // Compute external-use analysis before rewriteSlice mutates slice.
   auto nonSliceOnlyValues = getNonSliceOnlyValues(slice, convertOp);
-  SetVector<Operation *> sliceOps;
-  for (Value v : slice)
-    if (Operation *op = v.getDefiningOp())
-      sliceOps.insert(op);
 
   // 4. Rewrite the slice.
   rewriteSlice(slice, layout, convertOp);
 
   // Build forward propagation candidates using pre-rewrite analysis.
   DenseMap<Value, Attribute> forwardPropagateCandidates;
-  for (Operation *op : sliceOps) {
-    bool isOpUsedOutsideSlice = llvm::any_of(op->getResults(), [&](Value v) {
-      return nonSliceOnlyValues.contains(v);
-    });
-    if (!isOpUsedOutsideSlice)
-      continue;
-    for (Value result : op->getResults()) {
-      for (Operation *user : result.getUsers()) {
-        if (user == convertOp)
-          continue;
-        Attribute encoding = layout[result];
-        if (encoding)
-          forwardPropagateCandidates[result] = encoding;
-        break;
+  for (Value v : slice) {
+    Operation *op = v.getDefiningOp();
+    if (!op) {
+      if (isa<BlockArgument>(v)) {
+        for (Operation *user : v.getUsers()) {
+          if (user == convertOp)
+            continue;
+          Attribute encoding = layout[v];
+          if (encoding)
+            forwardPropagateCandidates[v] = encoding;
+          break;
+        }
+
+        BlockArgument blockArg = cast<BlockArgument>(v);
+        Operation *parentOp = blockArg.getOwner()->getParentOp();
+        if (auto loopOp = dyn_cast<scf::ForOp>(parentOp)) {
+          OpOperand *operand = loopOp.getTiedLoopYieldedValue(blockArg);
+          if (!operand)
+            continue;
+          unsigned iterOpIdx = operand->getOperandNumber();
+          Value loopResult = loopOp->getResult(iterOpIdx);
+          for (Operation *user : loopResult.getUsers()) {
+            if (user == convertOp)
+              continue;
+            // Use the layout same as the block arg.
+            Attribute encoding = layout[v];
+            if (encoding)
+              forwardPropagateCandidates[loopResult] = encoding;
+            break;
+          }
+        }
+      }
+    } else {
+      bool isOpUsedOutsideSlice = llvm::any_of(op->getResults(), [&](Value v) {
+        return nonSliceOnlyValues.contains(v);
+      });
+      if (!isOpUsedOutsideSlice)
+        continue;
+      for (Value result : op->getResults()) {
+        for (Operation *user : result.getUsers()) {
+          if (user == convertOp)
+            continue;
+          Attribute encoding = layout[result];
+          if (encoding)
+            forwardPropagateCandidates[result] = encoding;
+          break;
+        }
       }
     }
   }
+
+  LLVM_DEBUG({
+    DBGS() << "  forwardPropagateCandidates: "
+           << forwardPropagateCandidates.size() << "\n";
+    for (const auto &[candidate, encoding] : forwardPropagateCandidates)
+      DBGS() << "    " << candidate << " -> " << encoding << "\n";
+  });
 
   // 5. Forward propagate remat values created during backward propagation.
   forwardPropagateRemat(forwardPropagateCandidates);

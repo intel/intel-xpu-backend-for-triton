@@ -82,7 +82,7 @@ class XPUOptions:
 
 
 # Aligned with max_reg_spill in third_party/intel/backend/driver.c
-MAX_REG_SPILL = 1000
+MAX_REG_SPILL = 0
 
 SPILL_SIZE_RE = re.compile(r'spill_size\s*[:=]\s*(\d+)')
 PTSS_OVERFLOW_RE = re.compile(
