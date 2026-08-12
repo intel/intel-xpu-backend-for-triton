@@ -274,8 +274,8 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
             lines[line_idx] = line.replace(".cuda()", ".xpu()")
 
         elif ptype == "tensor_is_cuda_property":
-            # Replace .is_cuda property access with .is_xpu
-            lines[line_idx] = line.replace(".is_cuda", ".is_xpu")
+            # Replace the .is_cuda property with .is_xpu, but not a .is_cuda() method call (a platform guard)
+            lines[line_idx] = re.sub(r"\.is_cuda(?!\s*\()", ".is_xpu", line)
 
     return "\n".join(lines)
 
