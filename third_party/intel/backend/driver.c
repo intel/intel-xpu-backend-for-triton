@@ -434,9 +434,7 @@ static int32_t normalizeMaxNReg(int32_t maxnreg) {
   throw std::invalid_argument("maxnreg must be one of 128, 256, or 512");
 }
 
-static int32_t getMaxRegSpillThreshold() {
-  return defaultMaxRegSpill;
-}
+static int32_t getMaxRegSpillThreshold() { return defaultMaxRegSpill; }
 
 static void addAutoGRFSizeFlag(BuildFlags &buildFlags, int32_t maxnreg,
                                const char *resolvedDeviceArch) {

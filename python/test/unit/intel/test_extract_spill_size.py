@@ -144,12 +144,12 @@ def test_get_auto_grf_retry_flag(maxnreg, arch, expected):
 
 @pytest.mark.parametrize("grf_mode", ["default", "auto", "256", "512"])
 def test_xpu_backend_parse_options_accepts_maxnreg(grf_mode):
-    backend = XPUBackend(GPUTarget("xpu", {"architecture": "pvc"}, 32))
+    backend = object.__new__(XPUBackend)
     options = backend.parse_options({"maxnreg": 256, "grf_mode": grf_mode})
     assert options.maxnreg == 256
 
 
 def test_xpu_backend_parse_options_rejects_mismatched_grf_mode():
-    backend = XPUBackend(GPUTarget("xpu", {"architecture": "pvc"}, 32))
+    backend = object.__new__(XPUBackend)
     with pytest.raises(RuntimeError, match="greater than or equal to maxnreg"):
         backend.parse_options({"maxnreg": 256, "grf_mode": "128"})
