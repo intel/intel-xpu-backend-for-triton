@@ -196,6 +196,14 @@ def _find_cuda_patterns(source: str) -> list[dict]:
                     "col": node.col_offset,
                 })
 
+        # .is_cuda property access on tensors (e.g., tensor.is_cuda)
+        if isinstance(node, ast.Attribute) and node.attr == "is_cuda":
+            patterns.append({
+                "type": "tensor_is_cuda_property",
+                "line": node.end_lineno,
+                "col": node.col_offset,
+            })
+
     return patterns
 
 
@@ -264,6 +272,10 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
         elif ptype == "tensor_cuda_method":
             # Replace .cuda() with .xpu()
             lines[line_idx] = line.replace(".cuda()", ".xpu()")
+
+        elif ptype == "tensor_is_cuda_property":
+            # Replace .is_cuda property access with .is_xpu
+            lines[line_idx] = line.replace(".is_cuda", ".is_xpu")
 
     return "\n".join(lines)
 
