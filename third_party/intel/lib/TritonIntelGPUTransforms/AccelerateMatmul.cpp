@@ -164,6 +164,9 @@ ChainedDotKind computeChainedDotKind(Operation *dotOp,
     return it->second;
 
   ChainedDotKind dotChainedType = computeChainedDotKindFromSlices(dotOp, cache);
+  // Recursion computeChainedDotKind -> computeChainedDotKindFromSlices ->
+  // computeChainedDotKind is bounded by the backward-slice. No re-entering of
+  // DotOp. DotOp output cannot be used by same DotOp.
   cache.try_emplace(dotOp, dotChainedType);
   return dotChainedType;
 }
