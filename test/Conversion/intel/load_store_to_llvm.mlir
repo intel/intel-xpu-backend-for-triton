@@ -165,3 +165,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.sup
     tt.return
   }
 }
+
+// -----
+
+// COM: descriptor_load with an explicit `cg` cache modifier sets the
+// COM: `nontemporal` flag on the underlying llvm.load, matching regular tt.load
+// COM: (see global_load_with_attributes). `cg` means "cache at global level, not
+// COM: L1", so bypassing L1 via nontemporal is the faithful lowering. This is the
+// COM: explicit-cache-modifier path and is independent of the eviction-policy
+// COM: handling above (an explicit modifier is always honored, unlike the soft
+// COM: evict_first hint on the CacheModifier::NONE path).
+
+#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: descriptor_load_cg_scalar
+  tt.func @descriptor_load_cg_scalar(%desc: !tt.tensordesc<256xf32>) {
+    %c0_i32 = arith.constant 0 : i32
+    %val = tt.descriptor_load %desc[%c0_i32] cacheModifier = cg : !tt.tensordesc<256xf32> -> tensor<256xf32, #blocked0>
+    // CHECK-COUNT-8: llvm.load {{.*}} {alignment = 4 : i64, nontemporal} : !llvm.ptr<1> -> i32
+    tt.return
+  }
+}

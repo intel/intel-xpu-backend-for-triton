@@ -567,7 +567,6 @@ struct LoadStoreConversionBase {
     case triton::CacheModifier::CV:
       return true;
     case triton::CacheModifier::CA:
-      return false;
     case triton::CacheModifier::NONE:
       // Do NOT derive the nontemporal (L1-bypass) flag from the eviction
       // policy. An `evict_first` hint means the loaded *value* is single-use
@@ -579,7 +578,6 @@ struct LoadStoreConversionBase {
       // eviction hint is still honored via the LSC cache-control decoration
       // (EVICT_FIRST -> L1IAR_L3C) set in tritonToIntelCacheModifier(), which
       // reads the coalesced line once and then does not retain it.
-      return false;
     default:
       return false;
     }
