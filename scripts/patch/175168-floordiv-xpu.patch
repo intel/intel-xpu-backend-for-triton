@@ -1,0 +1,65 @@
+diff --git a/torch/_inductor/codegen/triton.py b/torch/_inductor/codegen/triton.py
+--- a/torch/_inductor/codegen/triton.py
++++ b/torch/_inductor/codegen/triton.py
+@@ -2325,6 +2325,30 @@ class TritonOverrides(OpOverrides):
+         # use bitwise complement (~) to make the dividend non-negative:
+         #   floor_div(a, b) = ~(~a // b) when a < 0, a // b when a >= 0
+         # For negative b we negate both operands first.
++        #
++        # The mis-deduction needs a dividend that varies from lane to lane and
++        # can be negative: for a contiguous dividend and a lane-uniform
++        # divisor Triton deduces a constancy (for //) and a contiguity (for %)
++        # of gcd(contiguity(a), divisibility(a), divisibility(b)), which
++        # truncation towards zero only satisfies for a >= 0. A dividend that is
++        # known non-negative therefore keeps the plain lowering below, which is
++        # the same expression as c10::div_floor_integer.
++        try:
++            dividend_nonneg = isinstance(a, CSEVariable) and bool(a.bounds.lower >= 0)
++        except TypeError:
++            dividend_nonneg = False
++        if dividend_nonneg:
++            zero = ops.constant(0, torch.int32)
++            b_zero = ops.eq(b, zero)
++            b = ops.where(b_zero, ops.constant(1, torch.int32), b)
++            quot = f"{a} // {b}"
++            rem = f"{a} % {b}"
++            floored = (
++                f"tl.where(({a} < 0) != ({b} < 0), "
++                f"tl.where({rem} != 0, {quot} - 1, {quot}), {quot})"
++            )
++            return f"tl.where({b_zero}, {zero}, {floored})"
++
+         zero = ops.constant(0, torch.int32)
+         one = ops.constant(1, torch.int32)
+         # Guard against integer division by zero before the division to
+diff --git a/torch/_inductor/select_algorithm.py b/torch/_inductor/select_algorithm.py
+--- a/torch/_inductor/select_algorithm.py
++++ b/torch/_inductor/select_algorithm.py
+@@ -42,6 +42,8 @@ from torch._inductor.await_utils import await_sync
+ from torch._inductor.utils import clear_on_fresh_cache
+ from torch.utils._filelock import FileLock
+ from torch.utils._ordered_set import OrderedSet
++from torch.utils._sympy.numbers import int_oo
++from torch.utils._sympy.value_ranges import ValueRanges
+ 
+ from ..utils._sympy.functions import CeilDiv, Max, Min
+ from . import config, ir
+@@ -442,9 +444,18 @@ class ModificationWrapper(V.WrapperHandler):  # type: ignore[name-defined]
+             return out
+ 
+         shape = self.input_shapes.get(name, ())
++        # Index placeholders (batch/head/token indices) are never negative.
++        # Recording that lets codegen skip the workarounds it otherwise needs
++        # for possibly-negative inputs, e.g. in ops.floordiv.
++        bounds = (
++            ValueRanges(0, int_oo)
++            if self.input_dtypes.get(name) == "index"
++            else ValueRanges.unknown()
++        )
+         return self.kernel.cse.generate(
+             self.kernel.compute,
+             f"({self.fixed_inputs[name]})",
++            bounds=bounds,
+             dtype=self._fixed_input_dtype(name),
+             shape=shape,
+         )
