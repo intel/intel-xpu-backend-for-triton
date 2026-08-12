@@ -31,9 +31,9 @@ namespace mlir {
 ///
 /// will be transformed into a call to a vendor specific math library.
 template <typename SourceOp>
-struct OpToFuncCallLowering : public ConvertOpToLLVMPattern<SourceOp> {
+struct OpToSPIRVFuncCallLowering : public ConvertOpToLLVMPattern<SourceOp> {
 public:
-  explicit OpToFuncCallLowering(LLVMTypeConverter &lowering, StringRef f32Func,
+  explicit OpToSPIRVFuncCallLowering(LLVMTypeConverter &lowering, StringRef f32Func,
                                 StringRef f64Func)
       : ConvertOpToLLVMPattern<SourceOp>(lowering), f32Func(f32Func),
         f64Func(f64Func) {}
