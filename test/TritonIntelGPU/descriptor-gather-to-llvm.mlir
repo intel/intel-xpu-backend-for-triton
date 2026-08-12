@@ -99,7 +99,22 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     %desc = tt.make_tensor_descriptor %arg0, [%c256_i32, %c256_i32], [%c32_i64, %c1_i64] : <f16>, <1x32xf16>
 
     // x_offsets tensor argument is unpacked first (before descriptor fields):
-    // CHECK:     %[[OFFX_I32F:.*]] = llvm.extractvalue {{.*}} : !llvm.struct<(i32)>
+    // CHECK:     %[[OFFX_0_I32F:.*]] = llvm.extractvalue %arg1[0] : !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32)>
+    // CHECK:     %[[OFFX_1_I32F:.*]] = llvm.extractvalue %arg1[1] : !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32)>
+    // CHECK:     %[[OFFX_2_I32F:.*]] = llvm.extractvalue %arg1[2] : !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32)>
+    // CHECK:     %[[OFFX_3_I32F:.*]] = llvm.extractvalue %arg1[3] : !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32)>
+    // CHECK:     %[[OFFX_4_I32F:.*]] = llvm.extractvalue %arg1[4] : !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32)>
+    // CHECK:     %[[OFFX_5_I32F:.*]] = llvm.extractvalue %arg1[5] : !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32)>
+    // CHECK:     %[[OFFX_6_I32F:.*]] = llvm.extractvalue %arg1[6] : !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32)>
+    // CHECK:     %[[OFFX_7_I32F:.*]] = llvm.extractvalue %arg1[7] : !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32)>
+    // CHECK:     %[[OFFX_8_I32F:.*]] = llvm.extractvalue %arg1[8] : !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32)>
+    // CHECK:     %[[OFFX_9_I32F:.*]] = llvm.extractvalue %arg1[9] : !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32)>
+    // CHECK:     %[[OFFX_10_I32F:.*]] = llvm.extractvalue %arg1[10] : !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32)>
+    // CHECK:     %[[OFFX_11_I32F:.*]] = llvm.extractvalue %arg1[11] : !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32)>
+    // CHECK:     %[[OFFX_12_I32F:.*]] = llvm.extractvalue %arg1[12] : !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32)>
+    // CHECK:     %[[OFFX_13_I32F:.*]] = llvm.extractvalue %arg1[13] : !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32)>
+    // CHECK:     %[[OFFX_14_I32F:.*]] = llvm.extractvalue %arg1[14] : !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32)>
+    // CHECK:     %[[OFFX_15_I32F:.*]] = llvm.extractvalue %arg1[15] : !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32)>
 
     // Descriptor fields are extracted after the x_offsets unpack:
     // CHECK-DAG: %[[SHAPE0F:.*]] = llvm.extractvalue {{.*}}[0] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
@@ -108,7 +123,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 
     // Offset X data flow (fast path) inside the per-load inner loop:
     //   1. Broadcast lane 0's row index to all threads in the sub-group.
-    // CHECK:     %[[OFFX_UNIF:.*]] = triton_gen.sub_group_shuffle {{.*}} %[[OFFX_I32F]], {{.*}} : i32
+    // CHECK:     %[[OFFX_UNIF:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleij(%[[OFFX_0_I32F]], {{.*}}) {convergent, no_unwind, will_return} : (i32, i32) -> i32
     //   2. Widen to i64 for 64-bit pointer arithmetic.
     // CHECK:     %[[OFFX64F:.*]] = llvm.zext %[[OFFX_UNIF]] : i32 to i64
     //   3. Bounds check: offsetX < shape0 (predX).
@@ -122,7 +137,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:     %[[INNER_PTR:.*]] = llvm.getelementptr {{.*}}[{{.*}}] {{.*}} -> !llvm.ptr<1>, f16
     // CHECK:     llvm.getelementptr %[[INNER_PTR]][%[[X_OFF64F]]] {{.*}} -> !llvm.ptr<1>, f16
     //   7. Gather all 32 pointers and predicates into vectors for the gather load.
-    // CHECK:     triton_gen.sub_group_gather_load {{.*}} : vector<{{.*}}>
+    // CHECK:     triton_gen.sub_group_gather_load {{.*}} :  (vector<32xi64>, vector<32xi1>) -> vector<8xf16>
 
     %result = ttig.descriptor_gather %desc[%arg1, %arg2]
         : (!tt.tensordesc<1x32xf16>, tensor<64xi32, #slice_x>, i32) -> tensor<64x32xf16, #dot0>
