@@ -2368,11 +2368,11 @@ private:
 
     SmallVector<Value> loadedVals(numElems);
 
+    // update offset Y.
+    Value addrElem = b.gep(ptr_ty(ctx, 1), valueElemTy, desc.base, offsetY);
+
     for (size_t elemIdx = 0; elemIdx < numElems; elemIdx += numElemsPerLoad) {
       unsigned registerIdx = regMapping.apply({{kRegister, elemIdx}})[0].second;
-
-      // update offset Y.
-      Value addrElem = b.gep(ptr_ty(ctx, 1), valueElemTy, desc.base, offsetY);
 
       SmallVector<Value> addrs, predicts;
       for (size_t i = 0; i < numPtrsPerLoad; ++i) {

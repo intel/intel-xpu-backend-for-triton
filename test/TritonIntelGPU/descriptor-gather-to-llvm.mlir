@@ -117,9 +117,11 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:     %[[OFFX_15_I32F:.*]] = llvm.extractvalue %arg1[15] : !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32)>
 
     // Descriptor fields are extracted after the x_offsets unpack:
-    // CHECK-DAG: %[[SHAPE0F:.*]] = llvm.extractvalue {{.*}}[0] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
-    // CHECK-DAG: %[[STRIDE0F:.*]] = llvm.extractvalue {{.*}}[2] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
-    // CHECK-DAG: %[[BASEF:.*]] = llvm.extractvalue {{.*}}[4] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
+    // CHECK:     %[[SHAPE0F:.*]] = llvm.extractvalue {{.*}}[0] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
+    // CHECK:     %[[STRIDE0F:.*]] = llvm.extractvalue {{.*}}[2] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
+    // CHECK:     %[[BASEF:.*]] = llvm.extractvalue {{.*}}[4] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
+    // CHECK:     %[[BASE_WITH_OFF_Y:.*]] = llvm.getelementptr %[[BASEF]]{{\[}}%arg2{{\]}} : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>, f16
+
 
     // Offset X data flow (fast path) inside the per-load inner loop:
     //   1. Broadcast lane 0's row index to all threads in the sub-group.
@@ -134,10 +136,210 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK:     llvm.and %[[PRED_XF]], {{.*}} : i1
     //   6. First GEP advances by the constant y sub-offset; second GEP folds in
     //      the row offset (X_OFF64F) derived from offsetX.
-    // CHECK:     %[[INNER_PTR:.*]] = llvm.getelementptr {{.*}}[{{.*}}] {{.*}} -> !llvm.ptr<1>, f16
-    // CHECK:     llvm.getelementptr %[[INNER_PTR]][%[[X_OFF64F]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[SUB_OFF_Y_0:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:     %[[INNER_PTR:.*]] = llvm.getelementptr %[[BASE_WITH_OFF_Y]]{{\[}}%[[SUB_OFF_Y_0]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_0:.*]] = llvm.getelementptr %[[INNER_PTR]][%[[X_OFF64F]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_0_I64:.*]] = llvm.ptrtoint %[[PTR_0]] : !llvm.ptr<1> to i64
+
+    // CHECK:     %[[OFFX_UNIF:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleij(%[[OFFX_1_I32F]], {{.*}}) {convergent, no_unwind, will_return} : (i32, i32) -> i32
+    // CHECK:     %[[OFFX64F:.*]] = llvm.zext %[[OFFX_UNIF]] : i32 to i64
+    // CHECK:     %[[X_OFF64F:.*]] = llvm.mul %[[OFFX64F]], %[[STRIDE0F]] : i64
+    // CHECK:     %[[SUB_OFF_Y_1:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:     %[[INNER_PTR:.*]] = llvm.getelementptr %[[BASE_WITH_OFF_Y]]{{\[}}%[[SUB_OFF_Y_1]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_4:.*]] = llvm.getelementptr %[[INNER_PTR]][%[[X_OFF64F]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_4_I64:.*]] = llvm.ptrtoint %[[PTR_4]] : !llvm.ptr<1> to i64
+
+    // CHECK:     %[[OFFX_UNIF:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleij(%[[OFFX_2_I32F]], {{.*}}) {convergent, no_unwind, will_return} : (i32, i32) -> i32
+    // CHECK:     %[[OFFX64F:.*]] = llvm.zext %[[OFFX_UNIF]] : i32 to i64
+    // CHECK:     %[[X_OFF64F:.*]] = llvm.mul %[[OFFX64F]], %[[STRIDE0F]] : i64
+    // CHECK:     %[[SUB_OFF_Y_1:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:     %[[INNER_PTR:.*]] = llvm.getelementptr %[[BASE_WITH_OFF_Y]]{{\[}}%[[SUB_OFF_Y_1]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_8:.*]] = llvm.getelementptr %[[INNER_PTR]][%[[X_OFF64F]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_8_I64:.*]] = llvm.ptrtoint %[[PTR_8]] : !llvm.ptr<1> to i64
+
+    // CHECK:     %[[OFFX_UNIF:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleij(%[[OFFX_3_I32F]], {{.*}}) {convergent, no_unwind, will_return} : (i32, i32) -> i32
+    // CHECK:     %[[OFFX64F:.*]] = llvm.zext %[[OFFX_UNIF]] : i32 to i64
+    // CHECK:     %[[X_OFF64F:.*]] = llvm.mul %[[OFFX64F]], %[[STRIDE0F]] : i64
+    // CHECK:     %[[SUB_OFF_Y_1:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:     %[[INNER_PTR:.*]] = llvm.getelementptr %[[BASE_WITH_OFF_Y]]{{\[}}%[[SUB_OFF_Y_1]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_12:.*]] = llvm.getelementptr %[[INNER_PTR]][%[[X_OFF64F]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_12_I64:.*]] = llvm.ptrtoint %[[PTR_12]] : !llvm.ptr<1> to i64
+
+    // CHECK:     %[[OFFX_UNIF:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleij(%[[OFFX_4_I32F]], {{.*}}) {convergent, no_unwind, will_return} : (i32, i32) -> i32
+    // CHECK:     %[[OFFX64F:.*]] = llvm.zext %[[OFFX_UNIF]] : i32 to i64
+    // CHECK:     %[[X_OFF64F:.*]] = llvm.mul %[[OFFX64F]], %[[STRIDE0F]] : i64
+    // CHECK:     %[[SUB_OFF_Y_1:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:     %[[INNER_PTR:.*]] = llvm.getelementptr %[[BASE_WITH_OFF_Y]]{{\[}}%[[SUB_OFF_Y_1]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_16:.*]] = llvm.getelementptr %[[INNER_PTR]][%[[X_OFF64F]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_16_I64:.*]] = llvm.ptrtoint %[[PTR_16]] : !llvm.ptr<1> to i64
+
+    // CHECK:     %[[OFFX_UNIF:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleij(%[[OFFX_5_I32F]], {{.*}}) {convergent, no_unwind, will_return} : (i32, i32) -> i32
+    // CHECK:     %[[OFFX64F:.*]] = llvm.zext %[[OFFX_UNIF]] : i32 to i64
+    // CHECK:     %[[X_OFF64F:.*]] = llvm.mul %[[OFFX64F]], %[[STRIDE0F]] : i64
+    // CHECK:     %[[SUB_OFF_Y_1:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:     %[[INNER_PTR:.*]] = llvm.getelementptr %[[BASE_WITH_OFF_Y]]{{\[}}%[[SUB_OFF_Y_1]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_20:.*]] = llvm.getelementptr %[[INNER_PTR]][%[[X_OFF64F]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_20_I64:.*]] = llvm.ptrtoint %[[PTR_20]] : !llvm.ptr<1> to i64
+
+    // CHECK:     %[[OFFX_UNIF:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleij(%[[OFFX_6_I32F]], {{.*}}) {convergent, no_unwind, will_return} : (i32, i32) -> i32
+    // CHECK:     %[[OFFX64F:.*]] = llvm.zext %[[OFFX_UNIF]] : i32 to i64
+    // CHECK:     %[[X_OFF64F:.*]] = llvm.mul %[[OFFX64F]], %[[STRIDE0F]] : i64
+    // CHECK:     %[[SUB_OFF_Y_1:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:     %[[INNER_PTR:.*]] = llvm.getelementptr %[[BASE_WITH_OFF_Y]]{{\[}}%[[SUB_OFF_Y_1]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_24:.*]] = llvm.getelementptr %[[INNER_PTR]][%[[X_OFF64F]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_24_I64:.*]] = llvm.ptrtoint %[[PTR_24]] : !llvm.ptr<1> to i64
+
+    // CHECK:     %[[OFFX_UNIF:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleij(%[[OFFX_7_I32F]], {{.*}}) {convergent, no_unwind, will_return} : (i32, i32) -> i32
+    // CHECK:     %[[OFFX64F:.*]] = llvm.zext %[[OFFX_UNIF]] : i32 to i64
+    // CHECK:     %[[X_OFF64F:.*]] = llvm.mul %[[OFFX64F]], %[[STRIDE0F]] : i64
+    // CHECK:     %[[SUB_OFF_Y_1:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:     %[[INNER_PTR:.*]] = llvm.getelementptr %[[BASE_WITH_OFF_Y]]{{\[}}%[[SUB_OFF_Y_1]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_28:.*]] = llvm.getelementptr %[[INNER_PTR]][%[[X_OFF64F]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_28_I64:.*]] = llvm.ptrtoint %[[PTR_28]] : !llvm.ptr<1> to i64
+
+    // CHECK:     %[[OFFX_UNIF:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleij(%[[OFFX_7_I32F]], {{.*}}) {convergent, no_unwind, will_return} : (i32, i32) -> i32
+    // CHECK:     %[[OFFX64F:.*]] = llvm.zext %[[OFFX_UNIF]] : i32 to i64
+    // CHECK:     %[[X_OFF64F:.*]] = llvm.mul %[[OFFX64F]], %[[STRIDE0F]] : i64
+    // CHECK:     %[[SUB_OFF_Y_1:.*]] = llvm.mlir.constant(4 : i32) : i32
+    // CHECK:     %[[INNER_PTR:.*]] = llvm.getelementptr %[[BASE_WITH_OFF_Y]]{{\[}}%[[SUB_OFF_Y_1]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_29:.*]] = llvm.getelementptr %[[INNER_PTR]][%[[X_OFF64F]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_29_I64:.*]] = llvm.ptrtoint %[[PTR_29]] : !llvm.ptr<1> to i64
+
+    // CHECK:     %[[OFFX_UNIF:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleij(%[[OFFX_7_I32F]], {{.*}}) {convergent, no_unwind, will_return} : (i32, i32) -> i32
+    // CHECK:     %[[OFFX64F:.*]] = llvm.zext %[[OFFX_UNIF]] : i32 to i64
+    // CHECK:     %[[X_OFF64F:.*]] = llvm.mul %[[OFFX64F]], %[[STRIDE0F]] : i64
+    // CHECK:     %[[SUB_OFF_Y_1:.*]] = llvm.mlir.constant(8 : i32) : i32
+    // CHECK:     %[[INNER_PTR:.*]] = llvm.getelementptr %[[BASE_WITH_OFF_Y]]{{\[}}%[[SUB_OFF_Y_1]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_30:.*]] = llvm.getelementptr %[[INNER_PTR]][%[[X_OFF64F]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_30_I64:.*]] = llvm.ptrtoint %[[PTR_30]] : !llvm.ptr<1> to i64
+
+    // CHECK:     %[[OFFX_UNIF:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleij(%[[OFFX_7_I32F]], {{.*}}) {convergent, no_unwind, will_return} : (i32, i32) -> i32
+    // CHECK:     %[[OFFX64F:.*]] = llvm.zext %[[OFFX_UNIF]] : i32 to i64
+    // CHECK:     %[[X_OFF64F:.*]] = llvm.mul %[[OFFX64F]], %[[STRIDE0F]] : i64
+    // CHECK:     %[[SUB_OFF_Y_1:.*]] = llvm.mlir.constant(12 : i32) : i32
+    // CHECK:     %[[INNER_PTR:.*]] = llvm.getelementptr %[[BASE_WITH_OFF_Y]]{{\[}}%[[SUB_OFF_Y_1]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_31:.*]] = llvm.getelementptr %[[INNER_PTR]][%[[X_OFF64F]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_31_I64:.*]] = llvm.ptrtoint %[[PTR_31]] : !llvm.ptr<1> to i64
+
+    // CHECK:      llvm.insertelement %[[PTR_0_I64]], {{.*}} : vector<32xi64>
+    // CHECK:      llvm.insertelement %[[PTR_4_I64]], {{.*}} : vector<32xi64>
+    // CHECK:      llvm.insertelement %[[PTR_8_I64]], {{.*}} : vector<32xi64>
+    // CHECK:      llvm.insertelement %[[PTR_16_I64]], {{.*}} : vector<32xi64>
+    // CHECK:      llvm.insertelement %[[PTR_20_I64]], {{.*}} : vector<32xi64>
+    // CHECK:      llvm.insertelement %[[PTR_24_I64]], {{.*}} : vector<32xi64>
+    // CHECK:      llvm.insertelement %[[PTR_28_I64]], {{.*}} : vector<32xi64>
+    // CHECK:      llvm.insertelement %[[PTR_29_I64]], {{.*}} : vector<32xi64>
+    // CHECK:      llvm.insertelement %[[PTR_30_I64]], {{.*}} : vector<32xi64>
+    // CHECK:      %[[VECTOR_OF_PTR:.*]] = llvm.insertelement %[[PTR_31_I64]], {{.*}} : vector<32xi64>
     //   7. Gather all 32 pointers and predicates into vectors for the gather load.
-    // CHECK:     triton_gen.sub_group_gather_load {{.*}} :  (vector<32xi64>, vector<32xi1>) -> vector<8xf16>
+    // CHECK:     triton_gen.sub_group_gather_load %[[VECTOR_OF_PTR]], {{.*}} :  (vector<32xi64>, vector<32xi1>) -> vector<8xf16>
+
+    // COM: load for sub-offset Y from 16 to 28.
+    // CHECK:     triton_gen.sub_group_gather_load {{.*}}, {{.*}} :  (vector<32xi64>, vector<32xi1>) -> vector<8xf16>
+
+    // COM: load for offset X index from 8 to 15, sub-offset Y from 0 to 12.
+    // CHECK:     triton_gen.sub_group_gather_load {{.*}}, {{.*}} :  (vector<32xi64>, vector<32xi1>) -> vector<8xf16>
+
+    // COM: load for offset X index from 8 to 15, sub-offset Y from 16 to 28.
+    // CHECK:     %[[OFFX_UNIF:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleij(%[[OFFX_8_I32F]], {{.*}}) {convergent, no_unwind, will_return} : (i32, i32) -> i32
+    // CHECK:     %[[OFFX64F:.*]] = llvm.zext %[[OFFX_UNIF]] : i32 to i64
+    // CHECK:     %[[X_OFF64F:.*]] = llvm.mul %[[OFFX64F]], %[[STRIDE0F]] : i64
+    // CHECK:     %[[SUB_OFF_Y_1:.*]] = llvm.mlir.constant(16 : i32) : i32
+    // CHECK:     %[[INNER_PTR:.*]] = llvm.getelementptr %[[BASE_WITH_OFF_Y]]{{\[}}%[[SUB_OFF_Y_1]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_0:.*]] = llvm.getelementptr %[[INNER_PTR]][%[[X_OFF64F]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_0_I64:.*]] = llvm.ptrtoint %[[PTR_0]] : !llvm.ptr<1> to i64
+
+    // CHECK:     %[[OFFX_UNIF:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleij(%[[OFFX_9_I32F]], {{.*}}) {convergent, no_unwind, will_return} : (i32, i32) -> i32
+    // CHECK:     %[[OFFX64F:.*]] = llvm.zext %[[OFFX_UNIF]] : i32 to i64
+    // CHECK:     %[[X_OFF64F:.*]] = llvm.mul %[[OFFX64F]], %[[STRIDE0F]] : i64
+    // CHECK:     %[[SUB_OFF_Y_1:.*]] = llvm.mlir.constant(16 : i32) : i32
+    // CHECK:     %[[INNER_PTR:.*]] = llvm.getelementptr %[[BASE_WITH_OFF_Y]]{{\[}}%[[SUB_OFF_Y_1]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_4:.*]] = llvm.getelementptr %[[INNER_PTR]][%[[X_OFF64F]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_4_I64:.*]] = llvm.ptrtoint %[[PTR_4]] : !llvm.ptr<1> to i64
+
+    // CHECK:     %[[OFFX_UNIF:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleij(%[[OFFX_10_I32F]], {{.*}}) {convergent, no_unwind, will_return} : (i32, i32) -> i32
+    // CHECK:     %[[OFFX64F:.*]] = llvm.zext %[[OFFX_UNIF]] : i32 to i64
+    // CHECK:     %[[X_OFF64F:.*]] = llvm.mul %[[OFFX64F]], %[[STRIDE0F]] : i64
+    // CHECK:     %[[SUB_OFF_Y_1:.*]] = llvm.mlir.constant(16 : i32) : i32
+    // CHECK:     %[[INNER_PTR:.*]] = llvm.getelementptr %[[BASE_WITH_OFF_Y]]{{\[}}%[[SUB_OFF_Y_1]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_8:.*]] = llvm.getelementptr %[[INNER_PTR]][%[[X_OFF64F]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_8_I64:.*]] = llvm.ptrtoint %[[PTR_8]] : !llvm.ptr<1> to i64
+
+    // CHECK:     %[[OFFX_UNIF:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleij(%[[OFFX_11_I32F]], {{.*}}) {convergent, no_unwind, will_return} : (i32, i32) -> i32
+    // CHECK:     %[[OFFX64F:.*]] = llvm.zext %[[OFFX_UNIF]] : i32 to i64
+    // CHECK:     %[[X_OFF64F:.*]] = llvm.mul %[[OFFX64F]], %[[STRIDE0F]] : i64
+    // CHECK:     %[[SUB_OFF_Y_1:.*]] = llvm.mlir.constant(16 : i32) : i32
+    // CHECK:     %[[INNER_PTR:.*]] = llvm.getelementptr %[[BASE_WITH_OFF_Y]]{{\[}}%[[SUB_OFF_Y_1]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_12:.*]] = llvm.getelementptr %[[INNER_PTR]][%[[X_OFF64F]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_12_I64:.*]] = llvm.ptrtoint %[[PTR_12]] : !llvm.ptr<1> to i64
+
+    // CHECK:     %[[OFFX_UNIF:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleij(%[[OFFX_12_I32F]], {{.*}}) {convergent, no_unwind, will_return} : (i32, i32) -> i32
+    // CHECK:     %[[OFFX64F:.*]] = llvm.zext %[[OFFX_UNIF]] : i32 to i64
+    // CHECK:     %[[X_OFF64F:.*]] = llvm.mul %[[OFFX64F]], %[[STRIDE0F]] : i64
+    // CHECK:     %[[SUB_OFF_Y_1:.*]] = llvm.mlir.constant(16 : i32) : i32
+    // CHECK:     %[[INNER_PTR:.*]] = llvm.getelementptr %[[BASE_WITH_OFF_Y]]{{\[}}%[[SUB_OFF_Y_1]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_16:.*]] = llvm.getelementptr %[[INNER_PTR]][%[[X_OFF64F]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_16_I64:.*]] = llvm.ptrtoint %[[PTR_16]] : !llvm.ptr<1> to i64
+
+    // CHECK:     %[[OFFX_UNIF:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleij(%[[OFFX_13_I32F]], {{.*}}) {convergent, no_unwind, will_return} : (i32, i32) -> i32
+    // CHECK:     %[[OFFX64F:.*]] = llvm.zext %[[OFFX_UNIF]] : i32 to i64
+    // CHECK:     %[[X_OFF64F:.*]] = llvm.mul %[[OFFX64F]], %[[STRIDE0F]] : i64
+    // CHECK:     %[[SUB_OFF_Y_1:.*]] = llvm.mlir.constant(16 : i32) : i32
+    // CHECK:     %[[INNER_PTR:.*]] = llvm.getelementptr %[[BASE_WITH_OFF_Y]]{{\[}}%[[SUB_OFF_Y_1]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_20:.*]] = llvm.getelementptr %[[INNER_PTR]][%[[X_OFF64F]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_20_I64:.*]] = llvm.ptrtoint %[[PTR_20]] : !llvm.ptr<1> to i64
+
+    // CHECK:     %[[OFFX_UNIF:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleij(%[[OFFX_14_I32F]], {{.*}}) {convergent, no_unwind, will_return} : (i32, i32) -> i32
+    // CHECK:     %[[OFFX64F:.*]] = llvm.zext %[[OFFX_UNIF]] : i32 to i64
+    // CHECK:     %[[X_OFF64F:.*]] = llvm.mul %[[OFFX64F]], %[[STRIDE0F]] : i64
+    // CHECK:     %[[SUB_OFF_Y_1:.*]] = llvm.mlir.constant(16 : i32) : i32
+    // CHECK:     %[[INNER_PTR:.*]] = llvm.getelementptr %[[BASE_WITH_OFF_Y]]{{\[}}%[[SUB_OFF_Y_1]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_24:.*]] = llvm.getelementptr %[[INNER_PTR]][%[[X_OFF64F]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_24_I64:.*]] = llvm.ptrtoint %[[PTR_24]] : !llvm.ptr<1> to i64
+
+    // CHECK:     %[[OFFX_UNIF:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleij(%[[OFFX_15_I32F]], {{.*}}) {convergent, no_unwind, will_return} : (i32, i32) -> i32
+    // CHECK:     %[[OFFX64F:.*]] = llvm.zext %[[OFFX_UNIF]] : i32 to i64
+    // CHECK:     %[[X_OFF64F:.*]] = llvm.mul %[[OFFX64F]], %[[STRIDE0F]] : i64
+    // CHECK:     %[[SUB_OFF_Y_1:.*]] = llvm.mlir.constant(16 : i32) : i32
+    // CHECK:     %[[INNER_PTR:.*]] = llvm.getelementptr %[[BASE_WITH_OFF_Y]]{{\[}}%[[SUB_OFF_Y_1]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_28:.*]] = llvm.getelementptr %[[INNER_PTR]][%[[X_OFF64F]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_28_I64:.*]] = llvm.ptrtoint %[[PTR_28]] : !llvm.ptr<1> to i64
+
+    // CHECK:     %[[OFFX_UNIF:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleij(%[[OFFX_15_I32F]], {{.*}}) {convergent, no_unwind, will_return} : (i32, i32) -> i32
+    // CHECK:     %[[OFFX64F:.*]] = llvm.zext %[[OFFX_UNIF]] : i32 to i64
+    // CHECK:     %[[X_OFF64F:.*]] = llvm.mul %[[OFFX64F]], %[[STRIDE0F]] : i64
+    // CHECK:     %[[SUB_OFF_Y_1:.*]] = llvm.mlir.constant(20 : i32) : i32
+    // CHECK:     %[[INNER_PTR:.*]] = llvm.getelementptr %[[BASE_WITH_OFF_Y]]{{\[}}%[[SUB_OFF_Y_1]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_29:.*]] = llvm.getelementptr %[[INNER_PTR]][%[[X_OFF64F]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_29_I64:.*]] = llvm.ptrtoint %[[PTR_29]] : !llvm.ptr<1> to i64
+
+    // CHECK:     %[[OFFX_UNIF:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleij(%[[OFFX_15_I32F]], {{.*}}) {convergent, no_unwind, will_return} : (i32, i32) -> i32
+    // CHECK:     %[[OFFX64F:.*]] = llvm.zext %[[OFFX_UNIF]] : i32 to i64
+    // CHECK:     %[[X_OFF64F:.*]] = llvm.mul %[[OFFX64F]], %[[STRIDE0F]] : i64
+    // CHECK:     %[[SUB_OFF_Y_1:.*]] = llvm.mlir.constant(24 : i32) : i32
+    // CHECK:     %[[INNER_PTR:.*]] = llvm.getelementptr %[[BASE_WITH_OFF_Y]]{{\[}}%[[SUB_OFF_Y_1]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_30:.*]] = llvm.getelementptr %[[INNER_PTR]][%[[X_OFF64F]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_30_I64:.*]] = llvm.ptrtoint %[[PTR_30]] : !llvm.ptr<1> to i64
+
+    // CHECK:     %[[OFFX_UNIF:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleij(%[[OFFX_15_I32F]], {{.*}}) {convergent, no_unwind, will_return} : (i32, i32) -> i32
+    // CHECK:     %[[OFFX64F:.*]] = llvm.zext %[[OFFX_UNIF]] : i32 to i64
+    // CHECK:     %[[X_OFF64F:.*]] = llvm.mul %[[OFFX64F]], %[[STRIDE0F]] : i64
+    // CHECK:     %[[SUB_OFF_Y_1:.*]] = llvm.mlir.constant(28 : i32) : i32
+    // CHECK:     %[[INNER_PTR:.*]] = llvm.getelementptr %[[BASE_WITH_OFF_Y]]{{\[}}%[[SUB_OFF_Y_1]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_31:.*]] = llvm.getelementptr %[[INNER_PTR]][%[[X_OFF64F]]] {{.*}} -> !llvm.ptr<1>, f16
+    // CHECK:     %[[PTR_31_I64:.*]] = llvm.ptrtoint %[[PTR_31]] : !llvm.ptr<1> to i64
+
+    // CHECK:      llvm.insertelement %[[PTR_0_I64]], {{.*}} : vector<32xi64>
+    // CHECK:      llvm.insertelement %[[PTR_4_I64]], {{.*}} : vector<32xi64>
+    // CHECK:      llvm.insertelement %[[PTR_8_I64]], {{.*}} : vector<32xi64>
+    // CHECK:      llvm.insertelement %[[PTR_16_I64]], {{.*}} : vector<32xi64>
+    // CHECK:      llvm.insertelement %[[PTR_20_I64]], {{.*}} : vector<32xi64>
+    // CHECK:      llvm.insertelement %[[PTR_24_I64]], {{.*}} : vector<32xi64>
+    // CHECK:      llvm.insertelement %[[PTR_28_I64]], {{.*}} : vector<32xi64>
+    // CHECK:      llvm.insertelement %[[PTR_29_I64]], {{.*}} : vector<32xi64>
+    // CHECK:      llvm.insertelement %[[PTR_30_I64]], {{.*}} : vector<32xi64>
+    // CHECK:      %[[VECTOR_OF_PTR:.*]] = llvm.insertelement %[[PTR_31_I64]], {{.*}} : vector<32xi64>
+    // CHECK:     triton_gen.sub_group_gather_load %[[VECTOR_OF_PTR]], {{.*}} :  (vector<32xi64>, vector<32xi1>) -> vector<8xf16>
 
     %result = ttig.descriptor_gather %desc[%arg1, %arg2]
         : (!tt.tensordesc<1x32xf16>, tensor<64xi32, #slice_x>, i32) -> tensor<64x32xf16, #dot0>
