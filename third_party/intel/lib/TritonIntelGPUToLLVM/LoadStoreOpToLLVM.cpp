@@ -2319,12 +2319,9 @@ private:
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto typeConverter = getTypeConverter();
     MLIRContext *ctx = rewriter.getContext();
-    // Get the descriptor and indices
+    // Get the descriptor and indices (no IR generated yet).
     Value llDesc = adaptor.getDesc();
-    SmallVector<Value> offsetsX =
-        unpackLLElements(loc, adaptor.getXOffsets(), rewriter);
     RankedTensorType offXTy = op.getXOffsets().getType();
-
     Value offsetY = adaptor.getYOffset();
     // Get result type information
     auto resultType = cast<RankedTensorType>(op.getType());
@@ -2387,6 +2384,9 @@ private:
     if (failed(offMapping))
       return failure();
 
+    // All validity checks passed; now generate IR.
+    SmallVector<Value> offsetsX =
+        unpackLLElements(loc, adaptor.getXOffsets(), rewriter);
     DescriptorFields desc = unpackDescriptor(llDesc, descRank, loc, rewriter);
     assert(regPackedBases.has_value() &&
            "invalid register bases for packing elems.");
