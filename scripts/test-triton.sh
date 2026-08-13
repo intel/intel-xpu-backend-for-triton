@@ -1114,6 +1114,7 @@ run_vllm_tdesc_tests() {
 
   local applied_patches=()
   local exit_status=0
+
   local patch_file
   for patch_file in "${PATCH_FILES[@]}"; do
     if git -C "$VLLM_PROJ" apply --check "$patch_file" 2>/dev/null; then
