@@ -1112,10 +1112,10 @@ run_vllm_tdesc_tests() {
     "$TRITON_PROJ/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention.patch"
   )
 
+  local patch_file
   local applied_patches=()
   local exit_status=0
 
-  local patch_file
   for patch_file in "${PATCH_FILES[@]}"; do
     if git -C "$VLLM_PROJ" apply --check "$patch_file" 2>/dev/null; then
       echo "Applying tdesc patch: $patch_file."
@@ -1139,11 +1139,10 @@ run_vllm_tdesc_tests() {
         || exit_status=$?
   fi
 
-  local revert_patch
-  for revert_patch in "${applied_patches[@]}"; do
-    echo "Reverting tdesc patch: $revert_patch."
-    if ! git -C "$VLLM_PROJ" apply -R "$revert_patch"; then
-      echo "WARNING: Failed to revert tdesc patch: $revert_patch." >&2
+  for patch_file in "${applied_patches[@]}"; do
+    echo "Reverting tdesc patch: $patch_file."
+    if ! git -C "$VLLM_PROJ" apply -R "$patch_file"; then
+      echo "WARNING: Failed to revert tdesc patch: $patch_file." >&2
     fi
   done
 
