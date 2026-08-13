@@ -1130,7 +1130,6 @@ run_vllm_tdesc_tests() {
     fi
   done
 
-  # Only run the tests if every patch applied cleanly.
   if [ "$exit_status" -eq 0 ]; then
       VLLM_TRITON_USE_TD=1 TRITON_TEST_SUITE=vllm_tdesc \
       run_pytest_command -vvv \
@@ -1139,7 +1138,6 @@ run_vllm_tdesc_tests() {
         || exit_status=$?
   fi
 
-  # Revert any patches this run applied, on both the success and error paths.
   local revert_patch
   for revert_patch in "${applied_patches[@]}"; do
     echo "Reverting tdesc patch: $revert_patch."
