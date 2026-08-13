@@ -130,7 +130,6 @@ static unsigned clampToPowerOfTwo(unsigned value) {
 }
 
 using ChainedDotKindMap = llvm::DenseMap<Operation *, ChainedDotKind>;
-constexpr StringLiteral kChainedDotKindAttrName = "ttig.chained_dot_kind";
 
 ChainedDotKind computeChainedDotKindFromSlices(Operation *dotOp,
                                                ChainedDotKindMap &cache);
@@ -139,14 +138,14 @@ ChainedDotKind computeChainedDotKind(Operation *dotOp,
                                      ChainedDotKindMap &cache);
 
 void setChainedDotKindAttr(Operation *op, ChainedDotKind kind) {
-  op->setAttr(kChainedDotKindAttrName,
+  op->setAttr(ttgi::TritonIntelGPUDialect::getChainedDotKindAttrName(),
               IntegerAttr::get(IntegerType::get(op->getContext(), 32),
                                static_cast<int32_t>(kind)));
 }
 
 std::optional<ChainedDotKind> getChainedDotKindAttr(Operation *op) {
-  auto kindAttr =
-      dyn_cast_or_null<IntegerAttr>(op->getAttr(kChainedDotKindAttrName));
+  auto kindAttr = dyn_cast_or_null<IntegerAttr>(
+      op->getAttr(ttgi::TritonIntelGPUDialect::getChainedDotKindAttrName()));
   if (!kindAttr)
     return std::nullopt;
   int64_t raw = kindAttr.getInt();
@@ -488,7 +487,8 @@ public:
         scaledDotOp.getC(), scaledDotOp.getAScale(), scaledDotOp.getBScale(),
         precA, precB, scaledDotOp.getFastMath(), scaledDotOp.getLhsKPack(),
         scaledDotOp.getRhsKPack());
-    newDot->setAttrs(scaledDotOp->getAttrs());
+    if (auto chainedDotKind = getChainedDotKindAttr(scaledDotOp))
+      setChainedDotKindAttr(newDot, *chainedDotKind);
 
     rewriter.replaceOp(scaledDotOp, newDot);
     return success();
