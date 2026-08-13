@@ -29,12 +29,6 @@ RankedTensorType getRankedTensorType(Type type);
 // Check if given value is divisible by the divisor.
 bool isDivisible(Value value, unsigned divisor);
 
-// Returns true if the given value is provably non-negative (>= 0).
-// This is a conservative, standalone structural walk: it returns true only
-// when non-negativity can be established without any analysis pass, and
-// returns false for any unknown or potentially-negative case.
-bool isNonNegative(Value value);
-
 // Infers the encoding of the source of op given the result encoding.
 Attribute inferSrcEncoding(Operation *op, Attribute encoding);
 

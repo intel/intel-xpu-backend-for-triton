@@ -1,7 +1,11 @@
 #include "intel/include/Analysis/Utility.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/TypeSwitch.h"
+
+namespace tt = mlir::triton;
 
 namespace mlir::triton::gpu::intel {
 namespace {
@@ -146,6 +150,102 @@ buildSubGroupTransposeLaneBases(int32_t laneSize) {
 }
 
 } // namespace
+
+bool isNonNegative(Value value) {
+  Operation *defOp = value.getDefiningOp();
+  if (!defOp)
+    return false;
+
+  // tt.get_program_id always returns [0, 2^31-1].
+  if (isa<tt::GetProgramIdOp>(defOp))
+    return true;
+
+  // tt.get_num_programs returns [1, 2^31-1].
+  if (isa<tt::GetNumProgramsOp>(defOp))
+    return true;
+
+  // tt.make_range with non-negative start.
+  if (auto makeRange = dyn_cast<tt::MakeRangeOp>(defOp))
+    return makeRange.getStartAttr().getInt() >= 0;
+
+  // Non-negative constant (scalar or tensor).
+  if (auto constOp = dyn_cast<arith::ConstantOp>(defOp)) {
+    if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue()))
+      return intAttr.getValue().isNonNegative();
+    if (auto denseAttr = dyn_cast<DenseElementsAttr>(constOp.getValue())) {
+      if (denseAttr.getElementType().isSignlessInteger()) {
+        return llvm::all_of(denseAttr.getValues<APInt>(),
+                            [](const APInt &v) { return v.isNonNegative(); });
+      }
+    }
+  }
+
+  // arith.addi / arith.muli of two non-negative values. Assumes no signed
+  // overflow, which holds for the bounded index expressions this helper is
+  // applied to (`programId * blockSize (+ ...)`, well within the i32 positive
+  // range).
+  if (auto addOp = dyn_cast<arith::AddIOp>(defOp))
+    return isNonNegative(addOp.getLhs()) && isNonNegative(addOp.getRhs());
+  if (auto mulOp = dyn_cast<arith::MulIOp>(defOp))
+    return isNonNegative(mulOp.getLhs()) && isNonNegative(mulOp.getRhs());
+
+  // arith.extui zero-extends into a wider type, so the result MSB is always
+  // clear. (arith.remui / arith.divui are intentionally NOT treated as
+  // unconditionally non-negative: their unsigned results can have the sign bit
+  // set -- e.g. divui(x, 1) == x -- which is negative under the signed
+  // comparisons callers use.)
+  if (isa<arith::ExtUIOp>(defOp))
+    return true;
+
+  // arith.divsi: non-negative iff both dividend and divisor are non-negative.
+  if (auto divOp = dyn_cast<arith::DivSIOp>(defOp))
+    return isNonNegative(divOp.getLhs()) && isNonNegative(divOp.getRhs());
+
+  // arith.remsi: result has the same sign as the dividend (truncation toward
+  // zero), so a non-negative dividend guarantees a non-negative result.
+  if (auto remOp = dyn_cast<arith::RemSIOp>(defOp))
+    return isNonNegative(remOp.getLhs());
+
+  // arith.extsi preserves the signed value; non-negative iff source is.
+  // (arith.trunci is intentionally NOT handled: truncating a non-negative
+  // value can set the sign bit of the narrower type, e.g. i32 128 -> i8 -128.)
+  if (auto extOp = dyn_cast<arith::ExtSIOp>(defOp))
+    return isNonNegative(extOp.getIn());
+
+  // arith.shrsi (arithmetic right shift) replicates the sign bit; non-negative
+  // iff the shifted value is non-negative.
+  if (auto shrOp = dyn_cast<arith::ShRSIOp>(defOp))
+    return isNonNegative(shrOp.getLhs());
+
+  // arith.maxsi: non-negative if either operand is non-negative.
+  if (auto maxOp = dyn_cast<arith::MaxSIOp>(defOp))
+    return isNonNegative(maxOp.getLhs()) || isNonNegative(maxOp.getRhs());
+
+  // arith.minsi: non-negative iff both operands are non-negative.
+  if (auto minOp = dyn_cast<arith::MinSIOp>(defOp))
+    return isNonNegative(minOp.getLhs()) && isNonNegative(minOp.getRhs());
+
+  // arith.select yields one of its two value operands; non-negative iff both
+  // candidate values are non-negative.
+  if (auto selOp = dyn_cast<arith::SelectOp>(defOp))
+    return isNonNegative(selOp.getTrueValue()) &&
+           isNonNegative(selOp.getFalseValue());
+
+  // arith.andi is non-negative if either operand is non-negative, since
+  // MSB(a & b) = MSB(a) & MSB(b).
+  if (auto andOp = dyn_cast<arith::AndIOp>(defOp))
+    return isNonNegative(andOp.getLhs()) || isNonNegative(andOp.getRhs());
+
+  // tt.splat / tt.expand_dims / tt.broadcast: propagate from source.
+  if (auto splatOp = dyn_cast<tt::SplatOp>(defOp))
+    return isNonNegative(splatOp.getSrc());
+  if (auto expandOp = dyn_cast<tt::ExpandDimsOp>(defOp))
+    return isNonNegative(expandOp.getSrc());
+  if (auto broadcastOp = dyn_cast<tt::BroadcastOp>(defOp))
+    return isNonNegative(broadcastOp.getSrc());
+
+  return false;
+}
 
 bool isDpasToDotShortcut(RankedTensorType dpasTy, RankedTensorType dotTy) {
   auto dpasLayout = dyn_cast<DpasEncodingAttr>(dpasTy.getEncoding());

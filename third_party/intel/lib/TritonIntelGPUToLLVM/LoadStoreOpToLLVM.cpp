@@ -18,6 +18,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 #include "intel/include/Analysis/StrideInfo.h"
+#include "intel/include/Analysis/Utility.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/BlockIOUtils.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"

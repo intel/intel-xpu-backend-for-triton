@@ -7,6 +7,12 @@ namespace mlir::triton::gpu::intel {
 
 bool isDpasToDotShortcut(RankedTensorType dpasTy, RankedTensorType dotTy);
 
+/// Returns true if the given value is provably non-negative (>= 0).
+/// This is a conservative, standalone structural walk: it returns true only
+/// when non-negativity can be established without any analysis pass, and
+/// returns false for any unknown or potentially-negative case.
+bool isNonNegative(Value value);
+
 /// Return whether the layout conversion from `srcTy` to `dstTy` can be
 /// performed as a sub-group shuffle.
 bool cvtIsSubGroupShuffle(RankedTensorType srcTy, RankedTensorType dstTy);
