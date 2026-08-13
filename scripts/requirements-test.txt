@@ -1,9 +1,11 @@
 # Keep in sync with extra_require.tests from setup.py
 lit
 autopep8
+cloudpickle
 isort
 numpy
 pytest
+pytest-instafail
 pytest-xdist
 scipy>=1.7.1
 llnl-hatchet
