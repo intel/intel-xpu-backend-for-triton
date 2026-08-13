@@ -1421,6 +1421,25 @@ struct ExtFOpConversion
   }
 };
 
+// Element-wise arith.bitcast lowering for tensor types.
+// The upstream arith→LLVM pattern emits a single llvm.bitcast on the whole
+// LLVM struct, which is invalid (structs are aggregate types). This override
+// has higher benefit and does a scalar llvm.bitcast per tensor element instead.
+struct ArithBitcastOpConversion
+    : ElementwiseOpConversionBase<arith::BitcastOp, ArithBitcastOpConversion> {
+  using Base =
+      ElementwiseOpConversionBase<arith::BitcastOp, ArithBitcastOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(arith::BitcastOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    return {LLVM::BitcastOp::create(rewriter, loc, elemTy, operands[0][0])};
+  }
+};
+
 struct TruncFOpConversion
     : ElementwiseOpConversionBase<arith::TruncFOp, TruncFOpConversion> {
   using Base = ElementwiseOpConversionBase<arith::TruncFOp, TruncFOpConversion>;
@@ -1842,6 +1861,8 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<ElementwiseOpConversion<arith::SubFOp, LLVM::FSubOp>>(
       typeConverter, axisInfoAnalysis, benefit);
 
+  patterns.add<ArithBitcastOpConversion>(typeConverter, axisInfoAnalysis,
+                                         benefit);
   patterns.add<ExtFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<TruncFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FPToSIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
