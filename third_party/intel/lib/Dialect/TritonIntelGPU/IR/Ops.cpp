@@ -245,11 +245,9 @@ Attribute deriveScaleEncoding(Attribute srcEnc, ArrayRef<int64_t> srcShape,
   // compose never turns a zero basis into a non-zero one.)
   LinearLayout compact =
       scaleLL->removeZeroBasesAlongDim(StringAttr::get(ctx, "register"));
-  // `LinearEncodingAttr` additionally requires a permutation-matrix layout;
-  // bail rather than build an invalid attribute.
-  if (!gpu::isGenericLinearEncoding(srcEnc) &&
-      !gpu::isPermutationMatrixLayout(compact))
-    return {};
+  // inferEncodingFromLinearLayout returns LinearEncodingAttr for non-generic
+  // layouts (e.g. DotOperandEncodingAttr wrapping DpasEncodingAttr), which is
+  // a valid encoding for the compact scale tensor.
   return gpu::inferEncodingFromLinearLayout(ctx, std::move(compact), srcEnc);
 }
 

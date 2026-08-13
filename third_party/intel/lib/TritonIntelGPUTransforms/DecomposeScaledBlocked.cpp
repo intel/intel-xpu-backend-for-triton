@@ -14,6 +14,8 @@ using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 
+namespace ttgi = mlir::triton::gpu::intel;
+
 namespace {
 
 SmallVector<int, 2> getTransposeOrder(int rank) {
@@ -376,12 +378,34 @@ private:
     if (!scale)
       return v;
 
-    // Fast path: E8M0 (integer) scale on bf16 — use exponent-add to avoid
-    // the f32 intermediate that arith_emulate_unsupported_floats creates.
+    // Fast path: E8M0 (integer) scale on bf16 — emit UpcastScaledOp which
+    // lowers to per-element LLVM f32 multiply, avoiding the MLIR-level
+    // arith.mulf : bf16 that arith_emulate_unsupported_floats widens to f32.
     if (computeType == rewriter.getBF16Type() &&
-        !isa<FloatType>(scale.getType().getElementType()))
+        !isa<FloatType>(scale.getType().getElementType())) {
+      int32_t sf = scaledDotOp.deduceScaleFactor();
+      Attribute scaleEnc = ttgi::deriveScaleEncoding(
+          v.getType().getEncoding(), v.getType().getShape(), kDim, sf);
+      if (scaleEnc) {
+        if (opIdx == 1)
+          scale =
+              TransOp::create(rewriter, loc, scale, getTransposeOrder(rank));
+        scale = cast<TypedValue<RankedTensorType>>(
+            ConvertLayoutOp::create(rewriter, loc,
+                                    scale.getType().cloneWithEncoding(scaleEnc),
+                                    scale)
+                .getResult());
+        auto result = cast<TypedValue<RankedTensorType>>(
+            intel::UpcastScaledOp::create(rewriter, loc, v, scale,
+                                          static_cast<int32_t>(kDim), sf,
+                                          scaledDotOp.getFastMath())
+                .getResult());
+        return maskNan(rewriter, scaledDotOp, result, scale, kDim);
+      }
+      // Fallback: deriveScaleEncoding failed (unsupported layout).
       return applyE8M0ScaleViaExponentAdd(rewriter, scaledDotOp, v, scale,
                                           opIdx);
+    }
 
     // 1) Cast scale to fp16/bf16, broadcast it and convert its layout
     auto reshapeScale = extendAndBroadcastScale(

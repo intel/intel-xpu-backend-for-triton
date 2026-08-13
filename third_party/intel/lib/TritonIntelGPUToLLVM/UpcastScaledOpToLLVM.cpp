@@ -1,30 +1,18 @@
 // Per-element LLVM IR lowering for ttig.upcast_scaled.
 //
-// This lowering operates on individual scalar elements (unpacked from the LLVM
-// struct representation of the tensor), emitting a tight sequence of i16
-// instructions for each element.  By working at the scalar level, the
-// intermediate values (sign, magnitude, biasedMag) have micro-instruction-scale
-// live ranges that LLVM's register allocator handles without the
-// 4-GRF-tensor-chunk pressure that caused register spill in the MLIR-level
-// exponent-add attempts.
+// Uses the AMD software fallback pattern (ScaledUpcastToLLVM.cpp, Path C):
+// process each bf16 element and its E8M0 scale byte individually in f32,
+// allowing IGC's register allocator to reuse registers across elements.
 //
-// Algorithm (per element, given bf16 operand and E8M0 scale byte):
-//   i16 = bitcast(bf16)
-//   sign     = i16 & 0x8000
-//   mag      = i16 & 0x7FFF
-//   scaleI16 = zext(scaleByte, i16)
-//   shifted  = scaleI16 << 7
-//   sum      = mag + shifted
-//   biased   = sum - 0x3F80
-//   satInf   = ugt(biased, 0x7F80) ? 0x7F80 : biased   // clamp overflow → ±Inf
-//   satZero  = uge(biased, 0xC080) ? 0 : satInf          // flush underflow →
-//   ±0 result   = sign | satZero (if !fast_math): result = eq(scaleByte, 0xFF)
-//   ? NaN : result return bitcast(result, bf16)
+// Algorithm (per element):
+//   vF32    = bitcast(shl(zext(bitcast(src_bf16, i16), i32), 16), f32)
+//   scaleF32 = bitcast(shl(zext(scale_i8, i32), 23), f32)
+//   mulF32  = fmul(vF32, scaleF32)   // f32 handles ±Inf/±0 naturally
+//   result  = bitcast(trunc(i16, lshr(bitcast(mulF32, i32), 16)), bf16)
 //
-// Reference: AMD ScaledUpcastToLLVM.cpp for the unpack/pack idiom.
-// Reference: ~/bdpas-sim-optimization/opportunity1-attempt1.md for the
-// register-
-//            pressure analysis that motivated this approach.
+// NaN (scale=0xFF) is handled by the maskNan call in DecomposeScaledBlocked.
+//
+// Reference: AMD ScaledUpcastToLLVM.cpp Path C for the algorithm.
 
 #include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
@@ -46,22 +34,6 @@ using namespace mlir::triton::gpu::intel;
 
 namespace {
 
-// Helper: create a scalar i16 constant.
-static Value mkI16(ConversionPatternRewriter &rewriter, Location loc,
-                   uint16_t val) {
-  auto i16Ty = rewriter.getIntegerType(16);
-  return LLVM::ConstantOp::create(rewriter, loc, i16Ty,
-                                  rewriter.getIntegerAttr(i16Ty, val));
-}
-
-// Helper: create a scalar i8 constant.
-static Value mkI8(ConversionPatternRewriter &rewriter, Location loc,
-                  uint8_t val) {
-  auto i8Ty = rewriter.getIntegerType(8);
-  return LLVM::ConstantOp::create(rewriter, loc, i8Ty,
-                                  rewriter.getIntegerAttr(i8Ty, val));
-}
-
 class UpcastScaledOpPattern : public ConvertOpToLLVMPattern<UpcastScaledOp> {
 public:
   UpcastScaledOpPattern(LLVMTypeConverter &typeConverter,
@@ -74,7 +46,6 @@ public:
     Location loc = op.getLoc();
     MLIRContext *ctx = op.getContext();
     int32_t scaleFactor = op.getScaleFactor();
-    bool fastMath = op.getFastMath().has_value();
 
     RankedTensorType srcTy = op.getSrc().getType();
     RankedTensorType scaleTy = op.getScale().getType();
@@ -124,101 +95,70 @@ public:
           return rewriter.notifyMatchFailure(
               op, "scale layout is not the compact layout derived from src");
 
-    // Check if mapping is simple (consecutive groups of scaleFactor elements).
-    // Simple = scale register index is just floor(src_register / scaleFactor).
-    bool isSimpleMapping = true;
-    for (int32_t i = 0, n = std::min(static_cast<int32_t>(srcElems.size()),
-                                     scaleFactor * 4);
-         i < n && isSimpleMapping; ++i) {
+    // Build compile-time scale register index for each src register.
+    // Always use LinearLayout — no isSimpleMapping heuristic that may miss
+    // elements or misclassify DPAS layouts.
+    SmallVector<int32_t> scaleRegForSrcReg;
+    scaleRegForSrcReg.reserve(srcElems.size());
+    for (int32_t i = 0, n = srcElems.size(); i < n; ++i) {
       auto coord = srcRegToScaleReg.apply(
           {{kReg, i}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
       auto it = llvm::find_if(coord,
                               [&](const auto &kv) { return kv.first == kReg; });
       assert(it != coord.end());
-      if (it->second != i / scaleFactor)
-        isSimpleMapping = false;
-    }
-
-    // For simple mappings, use runtime division (zero constants).
-    // For complex mappings, precompute minimal table (group leaders only).
-    SmallVector<int32_t> scaleRegForSrcReg;
-    if (!isSimpleMapping) {
-      scaleRegForSrcReg.reserve(srcElems.size());
-      for (int32_t i = 0, n = srcElems.size(); i < n; ++i) {
-        auto coord = srcRegToScaleReg.apply(
-            {{kReg, i}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
-        auto it = llvm::find_if(
-            coord, [&](const auto &kv) { return kv.first == kReg; });
-        scaleRegForSrcReg.push_back(it->second);
-      }
+      scaleRegForSrcReg.push_back(it->second);
     }
 
     auto i16Ty = rewriter.getIntegerType(16);
-    auto i8Ty = rewriter.getIntegerType(8);
+    auto i32Ty = rewriter.getIntegerType(32);
     auto bf16Ty = rewriter.getBF16Type();
+    auto f32Ty = rewriter.getF32Type();
 
-    // Pre-built constants (created once, reused for each element).
-    Value cst_7 = mkI16(rewriter, loc, 7);
-    Value cst_7FFF = mkI16(rewriter, loc, 0x7FFF);
-    Value cst_8000 = mkI16(rewriter, loc, 0x8000u);
-    Value cst_3F80 = mkI16(rewriter, loc, 0x3F80);
-    Value cst_7F80 = mkI16(rewriter, loc, 0x7F80);
-    Value cst_C080 = mkI16(rewriter, loc, 0xC080u);
-    Value cst_0 = mkI16(rewriter, loc, 0);
-    // bf16 canonical quiet NaN (0x7FC0) as i16 for the 0xFF-scale NaN mask.
-    Value cst_NaN = mkI16(rewriter, loc, 0x7FC0);
-    Value cst_ff = mkI8(rewriter, loc, 0xFFu);
+    // Per-element AMD-style f32 multiply (Path C from AMD ScaledUpcastToLLVM).
+    // vF32    = bitcast(shl(zext(bitcast(src_bf16, i16), i32), 16), f32)
+    // scaleF32 = bitcast(shl(zext(scale_i8, i32), 23), f32)
+    // mulF32  = fmul(vF32, scaleF32)
+    // result  = bitcast(trunc(i16, lshr(bitcast(mulF32, i32), 16)), bf16)
+    //
+    // All three temporaries (vF32, scaleF32, mulF32) die before the next
+    // iteration — IGC can reuse the same physical registers across elements,
+    // avoiding the large simultaneous f32 tensor liveness that causes spill.
+    // NaN (scale=0xFF) is handled by maskNan at the MLIR level.
+    auto cst16 = [&](uint32_t v) -> Value {
+      return LLVM::ConstantOp::create(rewriter, loc, i32Ty,
+                                      rewriter.getI32IntegerAttr(v));
+    };
+    Value shift16 = cst16(16);
+    Value shift23 = cst16(23);
 
     SmallVector<Value> results;
     results.reserve(srcElems.size());
 
     for (int i = 0, n = srcElems.size(); i < n; ++i) {
-      Value elemBf16 = srcElems[i];
-      int32_t scaleIdx =
-          isSimpleMapping ? (i / scaleFactor) : scaleRegForSrcReg[i];
-      Value scaleByte = scaleElems[scaleIdx];
+      Value scaleByte = scaleElems[scaleRegForSrcReg[i]];
 
-      // Bitcast bf16 → i16.
-      Value elemI16 = LLVM::BitcastOp::create(rewriter, loc, i16Ty, elemBf16);
+      // bf16 → f32 via upper-bits: shl(zext(bitcast(bf16, i16), i32), 16)
+      Value vI16 = LLVM::BitcastOp::create(rewriter, loc, i16Ty, srcElems[i]);
+      Value vI32 = LLVM::ZExtOp::create(rewriter, loc, i32Ty, vI16);
+      Value vF32 = LLVM::BitcastOp::create(
+          rewriter, loc, f32Ty,
+          LLVM::ShlOp::create(rewriter, loc, vI32, shift16));
 
-      // Extract sign and magnitude.
-      Value sign = LLVM::AndOp::create(rewriter, loc, elemI16, cst_8000);
-      Value mag = LLVM::AndOp::create(rewriter, loc, elemI16, cst_7FFF);
+      // E8M0 i8 → f32: shl(zext(scale_i8, i32), 23) puts scale into exponent
+      Value scI32 = LLVM::ZExtOp::create(rewriter, loc, i32Ty, scaleByte);
+      Value scF32 = LLVM::BitcastOp::create(
+          rewriter, loc, f32Ty,
+          LLVM::ShlOp::create(rewriter, loc, scI32, shift23));
 
-      // Decode E8M0 scale: zext i8 → i16, shift left 7.
-      Value scaleI16 = LLVM::ZExtOp::create(rewriter, loc, i16Ty, scaleByte);
-      Value shifted = LLVM::ShlOp::create(rewriter, loc, scaleI16, cst_7);
+      // f32 multiply — ±Inf, ±0, subnormal all handled naturally by IEEE f32
+      Value mulF32 = LLVM::FMulOp::create(rewriter, loc, vF32, scF32);
 
-      // biasedMag = magnitude + scaleShifted - 0x3F80.
-      Value sum = LLVM::AddOp::create(rewriter, loc, mag, shifted);
-      Value biased = LLVM::SubOp::create(rewriter, loc, sum, cst_3F80);
-
-      // Overflow saturation: if biased > 0x7F80 (unsigned), clamp to 0x7F80.
-      Value gt_inf = LLVM::ICmpOp::create(
-          rewriter, loc, LLVM::ICmpPredicate::ugt, biased, cst_7F80);
-      Value satInf =
-          LLVM::SelectOp::create(rewriter, loc, gt_inf, cst_7F80, biased);
-
-      // Underflow saturation: if biased >= 0xC080 (unsigned), flush to 0.
-      Value uge_under = LLVM::ICmpOp::create(
-          rewriter, loc, LLVM::ICmpPredicate::uge, biased, cst_C080);
-      Value satZero =
-          LLVM::SelectOp::create(rewriter, loc, uge_under, cst_0, satInf);
-
-      // Restore sign bit.
-      Value resultI16 = LLVM::OrOp::create(rewriter, loc, sign, satZero);
-
-      // NaN propagation: scale byte 0xFF → output NaN (MXFP spec requirement).
-      // Skipped when fast_math is set (caller guarantees 0xFF never occurs).
-      if (!fastMath) {
-        Value isNaN = LLVM::ICmpOp::create(
-            rewriter, loc, LLVM::ICmpPredicate::eq, scaleByte, cst_ff);
-        resultI16 =
-            LLVM::SelectOp::create(rewriter, loc, isNaN, cst_NaN, resultI16);
-      }
-
-      results.push_back(
-          LLVM::BitcastOp::create(rewriter, loc, bf16Ty, resultI16));
+      // f32 → bf16 via upper bits: trunc(i16, lshr(bitcast(mulF32, i32), 16))
+      Value mulI32 = LLVM::BitcastOp::create(rewriter, loc, i32Ty, mulF32);
+      Value mulI16 = LLVM::TruncOp::create(
+          rewriter, loc, i16Ty,
+          LLVM::LShrOp::create(rewriter, loc, mulI32, shift16));
+      results.push_back(LLVM::BitcastOp::create(rewriter, loc, bf16Ty, mulI16));
     }
 
     rewriter.replaceOp(op, packUniqueTensorElements(loc, getTypeConverter(),
