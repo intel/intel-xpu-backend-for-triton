@@ -129,6 +129,24 @@ RegisterPressureAnalysis::peakPressure(LoopLikeOpInterface loop) const {
   return peak;
 }
 
+unsigned RegisterPressureAnalysis::liveInPressure(Block *block) const {
+  const LivenessBlockInfo *blockInfo = liveness.getLiveness(block);
+  if (!blockInfo)
+    return 0;
+  unsigned pressure = 0;
+  for (Value liveVal : blockInfo->in()) {
+    if (options.excludeRematerializable && isRematerializable(liveVal))
+      continue;
+    pressure += getPerThreadSizeInBytes(liveVal.getType());
+  }
+  return pressure;
+}
+
+bool RegisterPressureAnalysis::isLiveIn(Block *block, Value value) const {
+  const LivenessBlockInfo *blockInfo = liveness.getLiveness(block);
+  return blockInfo && blockInfo->isLiveIn(value);
+}
+
 void RegisterPressureAnalysis::print(raw_ostream &os) const {
   Operation *rootOp = liveness.getOperation();
   if (!rootOp)
@@ -144,7 +162,7 @@ void RegisterPressureAnalysis::print(raw_ostream &os) const {
     os << "  Block ";
     block->printAsOperand(os);
     os << " in " << block->getParentOp()->getName() << ": peak = " << peak
-       << " bytes\n";
+       << " bytes, live-in = " << liveInPressure(block) << " bytes\n";
   });
 }
 

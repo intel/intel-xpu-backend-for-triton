@@ -52,6 +52,16 @@ public:
   /// loop, considering all blocks in the loop body region.
   unsigned peakPressure(LoopLikeOpInterface loop) const;
 
+  /// Returns the per-thread register pressure in bytes from the values live-in
+  /// to the given block (i.e. defined outside and used inside). Honors
+  /// excludeRematerializable. Returns 0 for a block with no liveness info
+  /// (e.g. unreachable).
+  unsigned liveInPressure(Block *block) const;
+
+  /// Returns true if `value` is live-in to `block`. Convenience accessor so
+  /// consumers need not build their own liveness analysis.
+  bool isLiveIn(Block *block, Value value) const;
+
   /// Returns the per-thread GRF budget in bytes for the given GRF mode.
   ///
   /// Explicit sizes ("128", "256", "512") map to the exact per-thread budget.
