@@ -1866,12 +1866,9 @@ class TritonSemantic(Generic[TensorTy]):
         # If the fix is enabled, the optimization is disabled — no need to assert.
         if getenv_bool("TRITON_FIX_SIGNED_DIV", False):
             return
-        # The bug only manifests for tensor dividend with constant divisor.
-        # Skip if dividend is scalar, or if divisor is also a tensor (AxisInfo
-        # only applies the optimization when RHS has full constancy).
+        # A scalar dividend cannot trigger the deduction: the AxisInfo visitors
+        # only run on ranked tensors.
         if not input.type.is_block():
-            return
-        if other.type.is_block():
             return
         zero = self._splat_int_const(0, input)
         input_non_neg = self.tensor(self.builder.create_icmpSGE(input.handle, zero.handle), self._bool_like(input))
