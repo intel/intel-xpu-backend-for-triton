@@ -209,6 +209,7 @@ def get_batched_mm_benchmark(
             )
 
         elif provider.startswith('triton'):
+            os.environ['VLLM_TRITON_USE_TD'] = '1' if is_td_patched else '0'
 
             def triton_fn():
                 invoke_moe_batched_triton_kernel(
