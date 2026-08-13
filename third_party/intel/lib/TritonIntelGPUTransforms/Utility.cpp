@@ -541,6 +541,25 @@ calculateRepCluster(const DpasEncodingAttr::DPASCapability &dpasCap,
 
     unsigned repClusterDimN =
         std::min(maxRepClusterN, static_cast<unsigned>(repB[2]));
+
+    // GRF budget cap: ensure B tile data per thread does not exceed
+    // MaxBTileGRFBytes. Empirically: 128×256×128 with repCluster[N]=2 causes
+    // the f32 accumulator to be evicted from registers every K-loop iteration
+    // (10,560 B spill). This cap limits repCluster[N] for shapes where
+    // bTilePerRepN > MaxBTileGRFBytes. NOTE: This cap has MINIMAL EFFECT in
+    // practice because the true bottleneck is the simultaneous liveness of
+    // B_bf16+scale_B+mxfp_B+accumulator = 4×64 GRF = 256 GRF at the mulf peak —
+    // independent of repCluster. See OPP12-REP-CLUSTER-GRF-CAP.md.
+    constexpr unsigned MaxBTileGRFBytes = 256; // 8 GRF × 32 bytes/GRF
+    unsigned kDim = static_cast<unsigned>(b_shape[rank - 2]);
+    unsigned bTilePerRepN =
+        kDim * dpasCap.executionSize * (dpasElemBitWidths / 8) / threadsPerWarp;
+    if (bTilePerRepN > 0) {
+      unsigned maxRepClusterN_grf = MaxBTileGRFBytes / bTilePerRepN;
+      repClusterDimN =
+          std::max(1u, std::min(repClusterDimN, maxRepClusterN_grf));
+    }
+
     repCluster[rank - 2] = repClusterDimM;
     repCluster[rank - 1] = repClusterDimN;
   }
