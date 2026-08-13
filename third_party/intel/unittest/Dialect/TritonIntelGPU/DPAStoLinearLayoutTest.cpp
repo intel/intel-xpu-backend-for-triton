@@ -1,6 +1,8 @@
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/LinearLayoutConversions.h"
 #include "mlir/IR/MLIRContext.h"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/Support/Signals.h"
 #include <gmock/gmock.h>
@@ -21,7 +23,10 @@ namespace {
 
 class DPAStoLinearLayoutTest : public ::testing::Test {
 public:
-  void SetUp() { ctx.getOrLoadDialect<TritonIntelGPUDialect>(); }
+  void SetUp() {
+    ctx.getOrLoadDialect<TritonIntelGPUDialect>();
+    ctx.getOrLoadDialect<mlir::triton::gpu::TritonGPUDialect>();
+  }
 
   DpasEncodingAttr dpas(ArrayRef<unsigned> warps, unsigned repeatCount,
                         unsigned systolicDepth, unsigned executionSize,
@@ -201,6 +206,24 @@ TEST_F(DPAStoLinearLayoutTest, DPAS_withWarpOperandA) {
               {S("block"), {}},
           },
           {S("dim0"), S("dim1")}));
+}
+
+TEST_F(DPAStoLinearLayoutTest, DPAS_withWarpOperandB_128x256x128) {
+  // Confirms: for 128×256×128 MXFP4 on BMG, DPAStoLinearLayout for B operand
+  // correctly produces {1,0} at register position 0 — the nibble-selector
+  // basis. This means the register-spill problem does NOT originate here. The
+  // {32,0} at position 0 in the actual #linear1 from TTGIR comes from
+  // cvtDotOperand in DecomposeScaledBlocked using a blocked-encoding parent,
+  // which produces a different layout than the DPAS-encoding parent.
+  //
+  // #mma = dpas{RC=8,SD=8,ES=16,opc=2,tPW=16,warps=[4,8],repCluster=[4,2]}
+  EXPECT_EQ(
+      DPAStoLinearLayout({128, 256}, dpas({4, 8}, 8, 8, 16, 2, {4, 2}, 16), 1)
+          .getBases()
+          .at(S("register"))[0],
+      (std::vector<int32_t>{1, 0}))
+      << "K-stride-1 should be at register position 0 for fp4_to_fp backward "
+         "inference compatibility";
 }
 
 TEST_F(DPAStoLinearLayoutTest, DPAS_withWarpOperandB) {
