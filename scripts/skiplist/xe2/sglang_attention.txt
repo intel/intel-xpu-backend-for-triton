@@ -1,2 +1,4 @@
 # Torch reference OOMs on 48 GB: B=19, N_CTX=12331, H_Q=64, D=128
 registered/attention/test_triton_attention_kernels.py::TestTritonAttention::test_extend_attention_sliding_window
+# Out of memory on B580: allocates ~12.38 GiB but the card has only 11.93 GiB (passes on PVC's 48 GB).
+registered/attention/test_triton_attention_kernels.py::TestTritonAttention::test_decode_attention_large_batch_int64_offset
