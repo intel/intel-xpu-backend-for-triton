@@ -55,6 +55,24 @@ public:
   Fp4ToFpOpPattern(LLVMTypeConverter &typeConverter, PatternBenefit benefit)
       : ConvertOpToLLVMPattern<Fp4ToFpOp>(typeConverter, benefit) {}
 
+  // Permute a flat results vector from k=0 nibble order to k-indexed order.
+  // With k=0: lo nibble of input i → output[2i], hi → output[2i+1].
+  // With k>0: lo nibble of input i → output[loIdx(i,k)], hi →
+  // output[hiIdx(i,k)]. where loIdx(i,k) = (i & ((1<<k)-1)) | ((i>>k)<<(k+1))
+  //       hiIdx(i,k) = loIdx(i,k) | (1<<k)
+  static SmallVector<Value> permuteNibbles(SmallVector<Value> values, int k) {
+    assert(k > 0 && "use k=0 path directly");
+    int numOut = values.size();
+    SmallVector<Value> permuted(numOut);
+    for (int i = 0, numIn = numOut / 2; i < numIn; ++i) {
+      int loIdx = (i & ((1 << k) - 1)) | ((i >> k) << (k + 1));
+      int hiIdx = loIdx | (1 << k);
+      permuted[loIdx] = values[2 * i];
+      permuted[hiIdx] = values[2 * i + 1];
+    }
+    return permuted;
+  }
+
   LogicalResult
   matchAndRewrite(Fp4ToFpOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -63,6 +81,25 @@ public:
 
     Location loc = op.getLoc();
     Value src = adaptor.getSrc();
+
+    // Determine k: which register bit position is the nibble selector.
+    // k=0 for traditional encodings (BlockedEncoding etc.); k>0 for
+    // LinearEncodings where the scale-group bit precedes the split bit.
+    int k = 0;
+    {
+      auto outType = op.getType();
+      auto outLL = triton::gpu::toLinearLayout(outType.getShape(),
+                                               outType.getEncoding());
+      auto kRegStr = StringAttr::get(op.getContext(), "register");
+      auto outDimNames = llvm::to_vector(outLL.getOutDimNames());
+      StringAttr axisOutDim = outDimNames[op.getAxis()];
+      for (int i = 0, n = outLL.getInDimSizeLog2(kRegStr); i < n; ++i) {
+        if (outLL.getBasis(kRegStr, i, axisOutDim) == 1) {
+          k = i;
+          break;
+        }
+      }
+    }
     auto i8Ty = rewriter.getI8Type();
 
     if (hasModuleAttr(
@@ -84,6 +121,8 @@ public:
       auto res = vectorize(convertFn, loc, rewriter,
                            unpackLLElements(loc, src, rewriter), 8);
       if (!res.empty()) {
+        if (k != 0)
+          res = permuteNibbles(std::move(res), k);
         rewriter.replaceOp(op, packLLElements(loc, getTypeConverter(), res,
                                               rewriter, op.getType()));
         return success();
@@ -140,6 +179,8 @@ public:
       }
     }
 
+    if (k != 0)
+      results = permuteNibbles(std::move(results), k);
     rewriter.replaceOp(op, packLLElements(loc, getTypeConverter(), results,
                                           rewriter, op.getType()));
     return success();

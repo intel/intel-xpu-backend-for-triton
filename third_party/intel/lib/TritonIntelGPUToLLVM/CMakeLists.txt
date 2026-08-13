@@ -17,6 +17,7 @@ add_triton_library(TritonIntelGPUToLLVM
     DotOpToLLVM.cpp
     ElementwiseOpToLLVM.cpp
     Fp4ToFpOpToLLVM.cpp
+    UpcastScaledOpToLLVM.cpp
     HistogramOpToLLVM.cpp
     LoadStoreOpToLLVM.cpp
     MemoryOpToLLVM.cpp

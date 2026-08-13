@@ -246,6 +246,7 @@ public:
     mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
                                                    patterns, benefit);
     intel::populateFp4ToFpToLLVMPatterns(typeConverter, patterns, benefit);
+    intel::populateUpcastScaledToLLVMPatterns(typeConverter, patterns, benefit);
 
     intel::populateSPMDOpToLLVMPattern(typeConverter, patterns, targetInfo,
                                        benefit);

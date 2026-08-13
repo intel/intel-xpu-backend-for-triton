@@ -3795,7 +3795,51 @@ struct TritonGPUInferLayoutInterface
     } else if (auto bwdLl = divideLeft(ll, split)) {
       newLl = *bwdLl;
     } else {
-      return emitOptionalError(loc, "invalid result layout for Fp4ToFpOp");
+      // divideLeft requires the split axis bit at register position 0, but
+      // for opsPerChannel=8 layouts the scale-group stride occupies position 0
+      // instead. Find the split bit at any position and swap it to 0, then
+      // retry. This correctly handles #ttg.linear encodings where the nibble-
+      // selector basis is not the leading register basis.
+      int nRegs = ll.getInDimSizeLog2(kRegister);
+      int splitPos = -1;
+      for (int i = 1; i < nRegs; ++i) {
+        if (ll.getBasis(kRegister, i, outDims[axis]) == 1) {
+          splitPos = i;
+          break;
+        }
+      }
+      if (splitPos < 0)
+        return emitOptionalError(loc, "invalid result layout for Fp4ToFpOp");
+
+      // Build llPerm with register bases 0 and splitPos swapped.
+      LinearLayout::BasesT permBases;
+      for (StringAttr inDim : ll.getInDimNames()) {
+        int n = ll.getInDimSizeLog2(inDim);
+        std::vector<std::vector<int32_t>> dimBases;
+        for (int i = 0; i < n; ++i) {
+          int src = i;
+          if (inDim == kRegister) {
+            if (i == 0)
+              src = splitPos;
+            else if (i == splitPos)
+              src = 0;
+          }
+          std::vector<int32_t> row;
+          for (StringAttr outDim : ll.getOutDimNames())
+            row.push_back(ll.getBasis(inDim, src, outDim));
+          dimBases.push_back(row);
+        }
+        permBases[inDim] = dimBases;
+      }
+      SmallVector<std::pair<StringAttr, int32_t>> outDimSizes;
+      for (StringAttr outDim : ll.getOutDimNames())
+        outDimSizes.push_back({outDim, ll.getOutDimSize(outDim)});
+      LinearLayout llPerm(std::move(permBases), outDimSizes, ll.isSurjective());
+
+      auto bwdPerm = divideLeft(llPerm, split);
+      if (!bwdPerm)
+        return emitOptionalError(loc, "invalid result layout for Fp4ToFpOp");
+      newLl = *bwdPerm;
     }
 
     outEnc = inferEncodingFromLinearLayout(ctx, std::move(newLl), inEnc);

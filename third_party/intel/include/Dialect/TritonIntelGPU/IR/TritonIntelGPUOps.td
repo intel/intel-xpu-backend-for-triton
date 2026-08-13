@@ -348,4 +348,63 @@ def TTIG_DescriptorScatterOp : TTIG_Op<"descriptor_scatter", [TT_DescriptorStore
   let hasVerifier = 1;
 }
 
+// Apply an E8M0 microscaling factor to a bf16 tensor via integer exponent-add,
+// eliminating the bf16 mulf that arith_emulate_unsupported_floats widens to f32.
+//
+// This op combines the E8M0 scale decode (extui + shli), broadcast to operand
+// shape, biased-magnitude add with overflow/underflow saturation, sign restore,
+// and (when fast_math is absent) the MXFP 0xFF NaN-propagation mask.
+//
+// Modelled after AMD's ScaledUpcastFp8Op; follows the same UpcastFpOpInterface
+// contract already wired into Intel's layout-propagation passes.
+def TTIG_UpcastScaledOp : TTIG_Op<"upcast_scaled",
+                           [Pure, DeclareOpInterfaceMethods<UpcastFpOpInterface>]> {
+  let summary = "Apply E8M0 scale to a bf16 tensor via integer exponent-add";
+  let description = [{
+    Multiplies a bf16 operand by a power-of-2 E8M0 microscaling factor without
+    emitting arith.mulf on bf16, which arith_emulate_unsupported_floats would widen
+    to f32 — eliminating the 128 KB f32 intermediate that causes register spill on
+    large MXFP tiles on BMG.
+
+    The scale operand is the compact (un-broadcast) E8M0 byte tensor of shape
+    [M, K/scale_factor] or [K/scale_factor, N].  The axis attribute identifies the
+    K-dimension along which scale groups are defined.  scale_factor gives the number
+    of operand elements per scale byte (32 for MXFP4/E8M0, 16 for NVFP4).
+
+    When fast_math is absent the scale value 0xFF propagates NaN to the output
+    element (MXFP spec requirement).  Set the unit attribute fast_math to skip this
+    check in performance-critical kernels where 0xFF scales cannot occur.
+  }];
+
+  let arguments = (ins
+    TT_FloatTensor:$src,
+    RankedTensorOf<[I8]>:$scale,
+    I32Attr:$axis,
+    I32Attr:$scale_factor,
+    OptionalAttr<UnitAttr>:$fast_math
+  );
+  let results = (outs TT_FloatTensor:$result);
+
+  let builders = [
+    OpBuilder<(ins "Value":$src, "Value":$scale,
+                   "int32_t":$axis, "int32_t":$scaleFactor, "bool":$fastMath)>
+  ];
+
+  let assemblyFormat = [{
+    $src `scale` $scale attr-dict `:` type($src) `,` type($scale) `->` type($result)
+  }];
+
+  let extraClassDeclaration = [{
+    /// Derive the layout of the scale tensor from the src/result layout: the
+    /// scale for an element at axis coordinate k is scale[..., k/scaleFactor,
+    /// ...], i.e. the coordinate with its low log2(scaleFactor) bits dropped.
+    /// Returns the map (register, lane, warp, block) -> scale coordinates.
+    static std::optional<mlir::triton::LinearLayout>
+    computeScaleLayout(const mlir::triton::LinearLayout &srcLayout,
+                       int64_t axis, int64_t scaleFactor);
+  }];
+
+  let hasVerifier = 1;
+}
+
 #endif

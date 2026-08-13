@@ -246,6 +246,104 @@ private:
     return cast<TypedValue<RankedTensorType>>(result.getResult());
   }
 
+  // Apply an E8M0 scale to a bf16 operand via integer exponent-add on the raw
+  // bf16 bits. result_i16 = magnitude(operand_i16) + (scale_byte << 7) -
+  // 0x3F80, then restore sign and saturate to ±Inf / ±0 at the exponent
+  // boundaries. This avoids the arith.mulf that
+  // arith_emulate_unsupported_floats widens to a full-size f32 intermediate
+  // (BMG has no native bf16 arithmetic).
+  //
+  // Register pressure: scale broadcast runs BEFORE operand bits are extracted,
+  // so sign and magnitude tensors are never live during the broadcast.
+  TypedValue<RankedTensorType> applyE8M0ScaleViaExponentAdd(
+      PatternRewriter &rewriter, DotScaledOp scaledDotOp,
+      TypedValue<RankedTensorType> v, TypedValue<RankedTensorType> &scale,
+      int opIdx) const {
+    auto loc = v.getLoc();
+    auto vType = v.getType();
+    auto rank = vType.getRank();
+    auto kDim = opIdx == 0 ? rank - 1 : rank - 2;
+    auto i16Type = rewriter.getIntegerType(16);
+    auto i16TensorType = vType.clone(i16Type);
+
+    // Transpose scale for RHS (mirrors extendAndBroadcastScale).
+    if (opIdx == 1)
+      scale = TransOp::create(rewriter, loc, scale, getTransposeOrder(rank));
+
+    // 1) Widen scale i8 -> i16 and shift into the bf16 exponent slot.
+    //    shifted = scale_byte << 7
+    auto scaleTy = scale.getType();
+    auto scaleI16Ty = scaleTy.clone(i16Type);
+    auto zexted = arith::ExtUIOp::create(rewriter, loc, scaleI16Ty, scale);
+    auto sevenConst = arith::ConstantIntOp::create(rewriter, loc, 7, 16);
+    auto sevenSplat = SplatOp::create(rewriter, loc, scaleI16Ty, sevenConst);
+    auto shifted = cast<TypedValue<RankedTensorType>>(
+        arith::ShLIOp::create(rewriter, loc, zexted, sevenSplat).getResult());
+
+    // 2) Broadcast the shifted scale to operand shape — layout convert lands
+    //    on the small pre-broadcast tensor. Done BEFORE touching the operand
+    //    so sign/magnitude tensors are not live during this step.
+    auto broadcastShifted = broadcastScale(rewriter, scaledDotOp, shifted, kDim,
+                                           i16TensorType.getEncoding());
+
+    // 3) Bitcast operand bf16 -> i16, then extract sign and magnitude.
+    //    Both are born AFTER the expensive broadcast above.
+    auto vI16 = BitcastOp::create(rewriter, loc, i16TensorType, v);
+    auto signMask = arith::ConstantIntOp::create(rewriter, loc, 0x8000, 16);
+    auto magnMask = arith::ConstantIntOp::create(rewriter, loc, 0x7FFF, 16);
+    auto signSplat = SplatOp::create(rewriter, loc, i16TensorType, signMask);
+    auto magnSplat = SplatOp::create(rewriter, loc, i16TensorType, magnMask);
+    auto sign = cast<TypedValue<RankedTensorType>>(
+        arith::AndIOp::create(rewriter, loc, vI16, signSplat).getResult());
+    auto magnitude = cast<TypedValue<RankedTensorType>>(
+        arith::AndIOp::create(rewriter, loc, vI16, magnSplat).getResult());
+
+    // 4) biasedMag = magnitude + (scale_byte << 7) - 0x3F80
+    //    (0x3F80 = bf16 bias 127 << 7; removing it re-centres the exponent)
+    auto sum =
+        arith::AddIOp::create(rewriter, loc, magnitude, broadcastShifted);
+    auto biasConst = arith::ConstantIntOp::create(rewriter, loc, 0x3F80, 16);
+    auto biasSplat = SplatOp::create(rewriter, loc, i16TensorType, biasConst);
+    auto biasedMag = arith::SubIOp::create(rewriter, loc, sum, biasSplat);
+
+    // 5) Saturate: two unsigned thresholds cover all three outcome ranges.
+    //    biasedMag in [0x7F80, 0xBF7F] → exponent overflow  → clamp to ±Inf
+    //    biasedMag in [0xC080, 0xFFFF] → exponent underflow  → clamp to ±0
+    //    (Gap [0xBF80, 0xC07F] is not achievable; conditions don't overlap.)
+    auto infThresh = arith::ConstantIntOp::create(rewriter, loc, 0x7F80, 16);
+    auto zeroThresh = arith::ConstantIntOp::create(rewriter, loc, 0xC080, 16);
+    auto infSplatVal = arith::ConstantIntOp::create(rewriter, loc, 0x7F80, 16);
+    auto zeroSplatVal = arith::ConstantIntOp::create(rewriter, loc, 0x0000, 16);
+    auto infThreshSplat =
+        SplatOp::create(rewriter, loc, i16TensorType, infThresh);
+    auto zeroThreshSplat =
+        SplatOp::create(rewriter, loc, i16TensorType, zeroThresh);
+    auto infMagSplat =
+        SplatOp::create(rewriter, loc, i16TensorType, infSplatVal);
+    auto zeroMagSplat =
+        SplatOp::create(rewriter, loc, i16TensorType, zeroSplatVal);
+    auto satInfCond = arith::CmpIOp::create(
+        rewriter, loc, arith::CmpIPredicate::uge, biasedMag, infThreshSplat);
+    auto satZeroCond = arith::CmpIOp::create(
+        rewriter, loc, arith::CmpIPredicate::uge, biasedMag, zeroThreshSplat);
+    auto resultMag = cast<TypedValue<RankedTensorType>>(
+        arith::SelectOp::create(rewriter, loc, satInfCond, infMagSplat,
+                                biasedMag)
+            .getResult());
+    resultMag = cast<TypedValue<RankedTensorType>>(
+        arith::SelectOp::create(rewriter, loc, satZeroCond, zeroMagSplat,
+                                resultMag)
+            .getResult());
+
+    // 6) Restore sign bit and bitcast back to bf16.
+    auto resultI16 = arith::OrIOp::create(rewriter, loc, sign, resultMag);
+    auto rescaled = cast<TypedValue<RankedTensorType>>(
+        BitcastOp::create(rewriter, loc, vType, resultI16).getResult());
+
+    // 7) Apply the 0xFF NaN mask (MXFP spec: scale 0xFF → NaN output).
+    return maskNan(rewriter, scaledDotOp, rescaled, scale, kDim);
+  }
+
   TypedValue<RankedTensorType> scaleArg(PatternRewriter &rewriter,
                                         DotScaledOp scaledDotOp, int opIdx,
                                         FloatType computeType) const {
@@ -277,6 +375,13 @@ private:
     }
     if (!scale)
       return v;
+
+    // Fast path: E8M0 (integer) scale on bf16 — use exponent-add to avoid
+    // the f32 intermediate that arith_emulate_unsupported_floats creates.
+    if (computeType == rewriter.getBF16Type() &&
+        !isa<FloatType>(scale.getType().getElementType()))
+      return applyE8M0ScaleViaExponentAdd(rewriter, scaledDotOp, v, scale,
+                                          opIdx);
 
     // 1) Cast scale to fp16/bf16, broadcast it and convert its layout
     auto reshapeScale = extendAndBroadcastScale(

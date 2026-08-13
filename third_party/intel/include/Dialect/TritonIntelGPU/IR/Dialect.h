@@ -38,6 +38,11 @@ inline bool needs2DBlockIOAlignmentCompensation(Operation *op) {
       TritonIntelGPUDialect::get2DBlockIOBaseAlignmentAttrName());
   return !alignment || alignment.getInt() > 4;
 }
+
+/// Derive the compact scale encoding from the src encoding, or {} on failure.
+/// Used by DecomposeScaledBlocked to constrain the scale operand's layout.
+Attribute deriveScaleEncoding(Attribute srcEnc, ArrayRef<int64_t> srcShape,
+                              int64_t axis, int64_t scaleFactor);
 } // namespace mlir::triton::gpu::intel
 
 #endif // TRITON_DIALECT_TRITON_INTEL_GPU_IR_DIALECT_H
