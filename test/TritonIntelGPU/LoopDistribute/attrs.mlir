@@ -1,27 +1,30 @@
 // RUN: triton-opt %s -split-input-file -tritonintelgpu-loop-distribute | FileCheck %s
 
-// Test: loop with two dots sharing operand A is distributed into two loops.
-// Each loop loads the shared A from %arg0 and only its own B operand. The
-// two scf.for results are wired back to the original op's results: result 0
-// comes from the first (dot0) loop, result 1 from the second (dot1) loop.
-// CHECK-LABEL: @dual_dot_distribute
-// CHECK: %[[LOOP1:.*]]:2 = scf.for
+// Test: discardable loop attributes (tt.num_stages, tt.loop_unroll_factor) on
+// the original loop must be copied onto BOTH distributed loops, not dropped.
+// CHECK-DAG directives are used since MLIR does not guarantee a fixed
+// printing order for a dictionary attribute.
+// CHECK-LABEL: @dual_dot_distribute_attrs
+// CHECK: scf.for
 // CHECK:   %[[X1:.*]] = tt.descriptor_load %arg0
 // CHECK:   %[[WG:.*]] = tt.descriptor_load %arg1
 // CHECK-NOT: tt.descriptor_load %arg2
 // CHECK:   tt.dot %[[X1]], %[[WG]]
 // CHECK-NOT: tt.dot
 // CHECK:   scf.yield
-// CHECK: %[[LOOP2:.*]]:2 = scf.for
+// CHECK-DAG: tt.num_stages = 3 : i32
+// CHECK-DAG: tt.loop_unroll_factor = 2 : i32
+// CHECK: scf.for
 // CHECK:   %[[X2:.*]] = tt.descriptor_load %arg0
 // CHECK-NOT: tt.descriptor_load %arg1
 // CHECK:   %[[WFC:.*]] = tt.descriptor_load %arg2
 // CHECK:   tt.dot %[[X2]], %[[WFC]]
 // CHECK-NOT: tt.dot
 // CHECK:   scf.yield
-// CHECK: tt.return %[[LOOP1]]#0, %[[LOOP2]]#1
+// CHECK-DAG: tt.num_stages = 3 : i32
+// CHECK-DAG: tt.loop_unroll_factor = 2 : i32
 module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  tt.func @dual_dot_distribute(%arg0: !tt.tensordesc<128x64xbf16>, %arg1: !tt.tensordesc<64x128xbf16>, %arg2: !tt.tensordesc<64x128xbf16>) -> (tensor<128x128xf32>, tensor<128x128xf32>) {
+  tt.func @dual_dot_distribute_attrs(%arg0: !tt.tensordesc<128x64xbf16>, %arg1: !tt.tensordesc<64x128xbf16>, %arg2: !tt.tensordesc<64x128xbf16>) -> (tensor<128x128xf32>, tensor<128x128xf32>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
     %c0_i32 = arith.constant 0 : i32
     %c64_i32 = arith.constant 64 : i32
@@ -33,7 +36,7 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
       %d0 = tt.dot %x, %wg, %acc_g, inputPrecision = tf32 : tensor<128x64xbf16> * tensor<64x128xbf16> -> tensor<128x128xf32>
       %d1 = tt.dot %x, %wfc, %acc_fc, inputPrecision = tf32 : tensor<128x64xbf16> * tensor<64x128xbf16> -> tensor<128x128xf32>
       scf.yield %d0, %d1 : tensor<128x128xf32>, tensor<128x128xf32>
-    }
+    } {tt.num_stages = 3 : i32, tt.loop_unroll_factor = 2 : i32}
     tt.return %0#0, %0#1 : tensor<128x128xf32>, tensor<128x128xf32>
   }
 }
