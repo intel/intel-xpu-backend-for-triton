@@ -16,7 +16,6 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/ADT/bit.h"
 #include "llvm/Support/Casting.h"
@@ -184,8 +183,7 @@ ChainedDotKind computeChainedDotKindFromSlices(Operation *dotOp,
   bool chainedDotB = !chainedDotOpsB.empty();
   if (!(chainedDotA && chainedDotB)) {
     // Not mixed yet: merge chained kinds from backward-slice DotOps.
-    // Recursion is bounded by the in-progress sentinel in
-    // computeChainedDotKind.
+    // Termination relies on backward-slice acyclicity.
     auto updateChainedDotFlags = [&](auto &chainedDotOps) {
       for (Operation *op : chainedDotOps) {
         if (mergeChainedDotFlags(computeChainedDotKind(op, cache), chainedDotA,
@@ -230,6 +228,15 @@ void annotateChainedDotKinds(ModuleOp mod) {
     if (!isa<tt::DotOp, tt::DotScaledOp>(op))
       return;
     setChainedDotKindAttr(op, computeChainedDotKind(op, chainedDotKinds));
+  });
+}
+
+void clearChainedDotKindAttrs(ModuleOp mod) {
+  StringRef attrName = ttgi::TritonIntelGPUDialect::getChainedDotKindAttrName();
+  mod.walk([&](Operation *op) {
+    if (!isa<tt::DotOp, tt::DotScaledOp>(op))
+      return;
+    op->removeAttr(attrName);
   });
 }
 
@@ -853,6 +860,9 @@ public:
     ttgi::populateDecomposeScaledBlockedPatterns(patterns, benefitDefault);
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
+
+    // Chained-dot kind is temporary analysis metadata and should not leak.
+    clearChainedDotKindAttrs(mod);
 
     decomposeMixedModeDotOp(mod);
   }

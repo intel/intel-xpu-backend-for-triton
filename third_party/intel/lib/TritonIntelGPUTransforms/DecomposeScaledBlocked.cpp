@@ -61,10 +61,8 @@ public:
         DotOp::create(rewriter, scaledDotOp.getLoc(), scaledA, scaledB,
                       scaledDotOp.getC(), InputPrecision::TF32, 0);
     if (auto chainedDotKind = scaledDotOp->getAttr(
-            mlir::triton::gpu::intel::TritonIntelGPUDialect::
-                getChainedDotKindAttrName()))
-      newDot->setAttr(mlir::triton::gpu::intel::TritonIntelGPUDialect::
-                          getChainedDotKindAttrName(),
+            intel::TritonIntelGPUDialect::getChainedDotKindAttrName()))
+      newDot->setAttr(intel::TritonIntelGPUDialect::getChainedDotKindAttrName(),
                       chainedDotKind);
 
     rewriter.replaceOpWithNewOp<ConvertLayoutOp>(scaledDotOp,
