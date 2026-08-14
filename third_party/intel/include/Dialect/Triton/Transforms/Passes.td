@@ -167,6 +167,46 @@ def TritonIntelSimplifySignedArithmetic
   ];
 }
 
+def TritonIntelSpeculateSignedDivRem
+    : Pass<"triton-intel-speculate-signed-div-rem", "mlir::ModuleOp"> {
+  let summary = "Convert signed div/rem to unsigned under a runtime assertion";
+
+  let description = [{
+    The AxisInfo constancy and contiguity deductions for division and remainder
+    rely on a floor-division argument that only holds for a non-negative
+    dividend, so they are disabled for arith.divsi/arith.remsi. Disabling them
+    costs performance in kernels whose dividend is non-negative in practice but
+    not provably so.
+
+    This pass finds the signed operations the deduction *would* have fired on
+    (see signedDivRemDeductionApplies, which mirrors the two disabled
+    deduction sites), converts them to arith.divui/arith.remui - where the
+    same deduction, under the same match conditions, is enabled, because an
+    unsigned dividend is non-negative by definition - and emits a tt.assert
+    that the dividend is non-negative. A negative dividend therefore aborts
+    with a diagnostic instead of silently producing a wrong answer.
+
+    The divisor must be a positive constant: divui/remui reinterpret a negative
+    divisor as a large positive one, so the result would be wrong even for a
+    non-negative dividend. Operations that do not meet that requirement are
+    left signed, keeping the sound but weaker lattice.
+
+    A dividend that integer range analysis proves negative in every element is
+    also left signed. Speculating there would change the result and emit an
+    assertion that fails on every launch, so a kernel that computes correctly
+    today would start aborting.
+
+    Runs after TritonIntelSimplifySignedArithmetic, which converts the
+    operations whose dividend can be proven non-negative without a runtime
+    check.
+  }];
+
+  let dependentDialects = [
+    "mlir::arith::ArithDialect",
+    "mlir::triton::TritonDialect"
+  ];
+}
+
 def TritonIntelGPUFoldTrueCmpI
     : Pass<"triton-intel-fold-true-cmpi", "mlir::ModuleOp"> {
   let summary = "Fold provably true/false arith.cmpi to constants";
