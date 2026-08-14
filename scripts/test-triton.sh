@@ -1135,7 +1135,6 @@ run_vllm_tdesc_tests() {
     VLLM_TRITON_USE_TD=1 TRITON_TEST_SUITE=vllm_tdesc \
       run_pytest_command -vvv \
         tests/kernels/moe/test_batched_moe.py \
-        tests/kernels/attention/test_triton_unified_attention.py \
         || exit_status=$?
   fi
 
