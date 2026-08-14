@@ -64,6 +64,7 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
 // CHECK-LABEL: @region_capture
 // CHECK: scf.for
 // CHECK:   tt.dot
+// CHECK-NOT: scf.for
 // CHECK:   tt.dot
 // CHECK:   scf.yield
 // CHECK-NOT: scf.for
@@ -109,6 +110,7 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
 // CHECK-LABEL: @carried_captures_accumulator_no_distribute
 // CHECK: scf.for
 // CHECK:   tt.dot
+// CHECK-NOT: scf.for
 // CHECK:   tt.dot
 // CHECK:   scf.yield
 // CHECK-NOT: scf.for

@@ -64,6 +64,22 @@ bool isReplicable(Operation *op) {
   return false;
 }
 
+/// Returns true if any op in `slice` -- including inside nested regions --
+/// has `val` among its operands.
+bool sliceUsesValue(const DenseSet<Operation *> &slice, Value val) {
+  return llvm::any_of(slice, [&](Operation *op) {
+    bool found = false;
+    op->walk([&](Operation *nested) {
+      if (llvm::is_contained(nested->getOperands(), val)) {
+        found = true;
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    });
+    return found;
+  });
+}
+
 /// Try to distribute a for loop with exactly two dot operations into two
 /// separate loops. Returns true if the transformation was applied.
 bool tryDistributeLoop(scf::ForOp forOp) {
@@ -144,15 +160,35 @@ bool tryDistributeLoop(scf::ForOp forOp) {
     return false;
   }
 
+  BlockArgument accArg0 = forOp.getRegionIterArgs()[*idx0];
+  BlockArgument accArg1 = forOp.getRegionIterArgs()[*idx1];
+
+  // A dot's operand slice is rooted *at* its A/B operands, so the dot itself
+  // is never a member of that slice -- check its operands directly too. Its C
+  // operand is its own accumulator, never the foreign one, so scanning all
+  // three operands cannot over-reject.
+  auto dependsOnForeignAcc = [](tt::DotOp dot,
+                                const DenseSet<Operation *> &slice,
+                                BlockArgument foreignAcc) {
+    return llvm::is_contained(dot->getOperands(), foreignAcc) ||
+           sliceUsesValue(slice, foreignAcc);
+  };
+
+  if (dependsOnForeignAcc(dot0, slice0, accArg1)) {
+    LDBG("Skipping loop: dot0 depends on dot1's accumulator block argument");
+    return false;
+  }
+  if (dependsOnForeignAcc(dot1, slice1, accArg0)) {
+    LDBG("Skipping loop: dot1 depends on dot0's accumulator block argument");
+    return false;
+  }
+
   // Every other (non-accumulator) iter_arg is either a true pass-through
   // (yielded unchanged) or a chain that must be safely replicable into both
   // new loops. Chains that depend on either dot's result, or that read a
   // dot's accumulator block argument directly, cannot be replicated
   // correctly (each new loop only computes one accumulator), so reject the
   // whole loop in that case.
-  BlockArgument accArg0 = forOp.getRegionIterArgs()[*idx0];
-  BlockArgument accArg1 = forOp.getRegionIterArgs()[*idx1];
-
   DenseSet<Operation *> carriedUnion;
   for (unsigned i = 0, e = forOp.getNumRegionIterArgs(); i < e; ++i) {
     if (i == *idx0 || i == *idx1)
@@ -183,19 +219,8 @@ bool tryDistributeLoop(scf::ForOp forOp) {
     // Walk into nested regions too: a region-holding op (e.g. `scf.if`) may
     // read the accumulator as a captured value inside its region without
     // passing it as one of the op's own top-level operands.
-    bool usesAcc = llvm::any_of(carriedSlice, [&](Operation *op) {
-      bool found = false;
-      op->walk([&](Operation *nested) {
-        if (llvm::is_contained(nested->getOperands(), accArg0) ||
-            llvm::is_contained(nested->getOperands(), accArg1)) {
-          found = true;
-          return WalkResult::interrupt();
-        }
-        return WalkResult::advance();
-      });
-      return found;
-    });
-    if (usesAcc) {
+    if (sliceUsesValue(carriedSlice, accArg0) ||
+        sliceUsesValue(carriedSlice, accArg1)) {
       LDBG("Skipping loop: carried iter_arg "
            << i << " depends on a dot accumulator block argument");
       return false;
