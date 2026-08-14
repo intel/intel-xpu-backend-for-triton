@@ -3,11 +3,35 @@
 #include "mlir/IR/Matchers.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/ADT/StringSwitch.h"
 
 using namespace mlir;
 using namespace mlir::triton;
 
 namespace mlir::triton::gpu::intel {
+
+/// TTGIR-level `tt.ptr` values are addresses in the global address space, which
+/// are 64-bit on all supported targets. Shared local memory is modeled as
+/// `ttg.memdesc` rather than `tt.ptr`, so no address-space-specific sizing is
+/// needed here.
+constexpr unsigned PointerSizeInBytes = 8;
+
+/// Returns the size in bytes of a single element of \p type, or 0 if the type
+/// has no register footprint.
+static unsigned getElementSizeInBytes(Type type) {
+  // Round up to whole bytes so sub-byte types (fp8/fp4/i1) are not counted as
+  // zero pressure, which would systematically under-count FP8 kernels.
+  if (type.isIntOrFloat())
+    return (type.getIntOrFloatBitWidth() + 7) / 8;
+
+  // A pointer occupies a full address per element: a tensor of pointers is one
+  // of the larger register consumers in kernels using pointer arithmetic rather
+  // than tensor descriptors.
+  if (isa<triton::PointerType>(type))
+    return PointerSizeInBytes;
+
+  return 0;
+}
 
 RegisterPressureAnalysis::RegisterPressureAnalysis(Operation *op,
                                                    RegisterPressureOptions opts)
@@ -16,22 +40,20 @@ RegisterPressureAnalysis::RegisterPressureAnalysis(Operation *op,
 unsigned RegisterPressureAnalysis::getPerThreadSizeInBytes(Type type) {
   // Handle RankedTensorType with distributed encoding
   if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
-    Type elType = tensorType.getElementType();
-    if (!elType.isIntOrFloat())
+    // getTotalElemsPerThread() unconditionally casts the encoding to
+    // DistributedEncodingTrait; guard so that a tensor without one (e.g. TTIR
+    // before layout assignment) reports zero pressure rather than asserting.
+    if (!isa_and_nonnull<gpu::DistributedEncodingTrait>(
+            tensorType.getEncoding()))
       return 0;
-    unsigned elemsPerThread = gpu::getTotalElemsPerThread(tensorType);
-    // Round up to whole bytes so sub-byte types (fp8/fp4/i1) are not counted
-    // as zero pressure, which would systematically under-count FP8 kernels.
-    unsigned bytesPerElem = (elType.getIntOrFloatBitWidth() + 7) / 8;
-    return elemsPerThread * bytesPerElem;
+    unsigned bytesPerElem = getElementSizeInBytes(tensorType.getElementType());
+    if (bytesPerElem == 0)
+      return 0;
+    return gpu::getTotalElemsPerThread(tensorType) * bytesPerElem;
   }
 
-  // Handle scalar int/float types
-  if (type.isIntOrFloat())
-    return (type.getIntOrFloatBitWidth() + 7) / 8;
-
-  // All other types contribute zero pressure
-  return 0;
+  // Handle scalar types; all other types contribute zero pressure.
+  return getElementSizeInBytes(type);
 }
 
 unsigned RegisterPressureAnalysis::getGRFBytesPerThread(StringRef grfMode) {

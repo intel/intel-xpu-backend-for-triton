@@ -17,12 +17,6 @@ struct RegisterPressureOptions {
   /// ops) from pressure computation. These can be regenerated cheaply rather
   /// than held in registers.
   bool excludeRematerializable = true;
-
-  /// If true, ensure loop-carried values (iter args in scf.for) are counted
-  /// across the entire loop body. The base liveness analysis already handles
-  /// this via block live-in, so this option is reserved for potential future
-  /// refinements but currently has no effect.
-  bool countLoopCarried = true;
 };
 
 /// Analysis that computes per-thread GRF register pressure in bytes.
@@ -30,10 +24,15 @@ struct RegisterPressureOptions {
 /// This analysis builds on LivenessAnalysis and weights each live value by its
 /// per-thread size in bytes. For distributed tensors, the size is computed
 /// using the encoding's element distribution. For scalars, the size is the
-/// element bitwidth in bytes.
+/// element size in bytes.
 ///
 /// The canonical unit is **per-thread bytes**, matching how GRF budget is
 /// expressed (e.g., 4096 bytes for 128-GRF mode).
+///
+/// Pointers are modeled as 64-bit addresses: TTGIR-level `tt.ptr` values live
+/// in the global address space, and shared local memory is modeled as
+/// `ttg.memdesc` rather than `tt.ptr`, so no address-space-specific pointer
+/// sizing is needed.
 class RegisterPressureAnalysis {
 public:
   /// Construct the analysis for the given root operation.
@@ -73,9 +72,16 @@ public:
 
   /// Returns the per-thread size in bytes for the given type.
   ///
-  /// For RankedTensorType: computes getTotalElemsPerThread * (bitwidth/8).
-  /// For scalar int/float types: returns bitwidth/8.
-  /// For other types: returns 0.
+  /// For RankedTensorType: computes getTotalElemsPerThread times the element
+  /// size in bytes.
+  /// For scalar types: returns the element size in bytes.
+  /// For any other type (e.g. `tt.tensordesc`, `ttg.memdesc`), and for a tensor
+  /// whose encoding is not a DistributedEncodingTrait (e.g. TTIR before layout
+  /// assignment) or whose element type has no register footprint: returns 0.
+  ///
+  /// The element size in bytes is `ceil(bitwidth/8)` for int and float types,
+  /// so that sub-byte types (i1, fp8, fp4) are not counted as free, and 8 for
+  /// pointer types.
   static unsigned getPerThreadSizeInBytes(Type type);
 
   /// Print the peak pressure per block to the given stream.

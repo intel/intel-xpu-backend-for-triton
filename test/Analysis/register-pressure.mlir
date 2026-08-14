@@ -41,18 +41,80 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // CHECK-NEXT: Block {{.*}} in tt.func: peak = 0 bytes, live-in = 0 bytes
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  tt.func @block_with_excluded_ops(%arg0: !tt.ptr<f32>) {
-    // COM: This test checks that rematerializable values (constants, splat, make_range)
-    // COM: are excluded from register pressure.
-    // COM: Every value here is rematerializable and excluded: the constant
-    // COM: tensor (arith.constant), the make_range, and the splat (whose source
-    // COM: %arg0 is a block argument — but the splat result itself is excluded
-    // COM: because it is a splat of a value with no live cost here). The i32
-    // COM: constant is also a constant. Peak = 0 bytes.
+  tt.func @block_with_excluded_ops() {
+    // COM: This test checks that rematerializable values (constants, make_range,
+    // COM: splat of a rematerializable scalar) are excluded from register
+    // COM: pressure. Every value here would otherwise be counted:
+    // COM: %cst = 16 elems per thread * 4B = 64 bytes, %0 (make_range) = 16 *
+    // COM: 4B = 64 bytes, %1 (splat) = 16 * 4B = 64 bytes. All three are
+    // COM: excluded: %cst and %c1024_i32 are constants, %0 is a make_range, and
+    // COM: %1 is a splat whose source %c1024_i32 is itself rematerializable.
+    // COM: Peak = 0 bytes.
     %c1024_i32 = arith.constant 1024 : i32
     %cst = arith.constant dense<0.000000e+00> : tensor<8x256xf32, #blocked>
     %0 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
-    %1 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<8x256x!tt.ptr<f32>, #blocked>
+    %1 = tt.splat %c1024_i32 : i32 -> tensor<8x256xi32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: The negative half of the splat rule: a splat of a scalar that is NOT
+// COM: rematerializable must be counted.
+
+// CHECK-LABEL: splat_of_variant_scalar
+// CHECK-NEXT: Register Pressure Analysis (per-thread bytes):
+// CHECK-NEXT: Block {{.*}} in tt.func: peak = 68 bytes, live-in = 0 bytes
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @splat_of_variant_scalar(%arg0: i32) {
+    // COM: %arg0 is a block argument, so it is not rematerializable and neither
+    // COM: is the splat of it: rematerializing the splat would require %arg0 to
+    // COM: be live anyway. Peak occurs at the splat, where both are live:
+    // COM: %arg0 = 4 bytes + %0 = 16 elems per thread * 4B = 64 bytes = 68 bytes.
+    %0 = tt.splat %arg0 : i32 -> tensor<8x256xi32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Pointers hold a 64-bit address per element and must be counted.
+
+// CHECK-LABEL: pointer_pressure
+// CHECK-NEXT: Register Pressure Analysis (per-thread bytes):
+// CHECK-NEXT: Block {{.*}} in tt.func: peak = 136 bytes, live-in = 0 bytes
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @pointer_pressure(%arg0: !tt.ptr<f32>) {
+    // COM: Peak occurs at the splat: the scalar pointer %arg0 = 8 bytes + the
+    // COM: tensor of pointers %0 = 16 elems per thread * 8B = 128 bytes = 136
+    // COM: bytes. The splat is not rematerializable because %arg0 is a block
+    // COM: argument.
+    %0 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<8x256x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Sub-byte element types round up to one byte per element rather than
+// COM: being counted as free.
+
+// CHECK-LABEL: sub_byte_rounds_up
+// CHECK-NEXT: Register Pressure Analysis (per-thread bytes):
+// CHECK-NEXT: Block {{.*}} in tt.func: peak = 144 bytes, live-in = 0 bytes
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @sub_byte_rounds_up(%arg0: i32, %arg1: i32) {
+    // COM: Peak occurs at the arith.cmpi, where the two i32 splats (16 elems per
+    // COM: thread * 4B = 64 bytes each) and the i1 result are live. The i1
+    // COM: tensor rounds up to 1 byte per element: 16 * 1B = 16 bytes, giving
+    // COM: 64 + 64 + 16 = 144 bytes. Counting i1 as 0 bytes would report 128.
+    %0 = tt.splat %arg0 : i32 -> tensor<8x256xi32, #blocked>
+    %1 = tt.splat %arg1 : i32 -> tensor<8x256xi32, #blocked>
+    %2 = arith.cmpi slt, %0, %1 : tensor<8x256xi32, #blocked>
     tt.return
   }
 }
