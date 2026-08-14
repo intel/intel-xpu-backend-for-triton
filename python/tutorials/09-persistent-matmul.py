@@ -14,11 +14,8 @@ Users can pass command-line arguments to specify matrix dimensions and iteration
     # FP8
     python 09-persistent-matmul.py --prec fp8 --K_range 128 1024 --K_step 128
 
-    # FP16
+    # FP16 (includes CLC variants on supported devices)
     python 09-persistent-matmul.py --prec fp16 --K_range 128 1024 --K_step 128
-
-    # FP16 with Cluster Launch Control
-    python 09-persistent-matmul.py --prec fp16 --clc
 
 Note that currently this tutorial will fail on devices with a small shared memory size, such as RTX-4090.
 """
@@ -506,7 +503,7 @@ def matmul_kernel_tma_persistent(a_desc, b_desc, c_desc,  #
 # CLC scheduling loop.
 @triton.autotune(
     configs=matmul_tma_persistent_get_configs(pre_hook=matmul_tma_set_block_size_hook),
-    key=["M", "N", "K"],
+    key=["M", "N", "K", "WARP_SPECIALIZE"],
 )
 @triton.jit(launch_metadata=_matmul_launch_metadata)
 def matmul_kernel_tma_clc(a_desc, b_desc, c_desc,  #
@@ -517,6 +514,7 @@ def matmul_kernel_tma_clc(a_desc, b_desc, c_desc,  #
                           GROUP_SIZE_M: tl.constexpr,  #
                           FP8_OUTPUT: tl.constexpr,  #
                           EPILOGUE_SUBTILE: tl.constexpr,  #
+                          WARP_SPECIALIZE: tl.constexpr,  #
                           ):
     dtype = tl.float8e4nv if FP8_OUTPUT else tl.float16
 
@@ -536,7 +534,7 @@ def matmul_kernel_tma_clc(a_desc, b_desc, c_desc,  #
     offs_bn = pid_n * BLOCK_SIZE_N
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
-    for ki in tl.range(k_tiles):
+    for ki in tl.range(k_tiles, warp_specialize=WARP_SPECIALIZE):
         offs_k = ki * BLOCK_SIZE_K
         a = a_desc.load([offs_am, offs_k])
         b = b_desc.load([offs_bn, offs_k])
@@ -559,7 +557,7 @@ def matmul_kernel_tma_clc(a_desc, b_desc, c_desc,  #
         c_desc.store([offs_am, offs_bn], accumulator)
 
 
-def matmul_tma_clc(a, b):
+def matmul_tma_clc(a, b, warp_specialize: bool):
     assert HAS_TMA_CLC, "CLC TMA requires an NVIDIA SM100+ GPU with tensor descriptor support"
     assert a.shape[1] == b.shape[1], "Incompatible dimensions"  # b is transposed
     assert a.dtype == b.dtype, "Incompatible dtypes"
@@ -581,6 +579,7 @@ def matmul_tma_clc(a, b):
         a_desc, b_desc, c_desc,  #
         M, N, K,  #
         FP8_OUTPUT=dtype == torch.float8_e4m3fn,  #
+        WARP_SPECIALIZE=warp_specialize,  #
         clc=True,  #
     )
     return c
@@ -796,7 +795,7 @@ def bench_fn(label, reps, warmup_reps, fn, *args):
     print(f"\rBenchmarking {label}: done")
 
 
-def bench(K, dtype, reps=100, warmup_reps=100, clc=False):
+def bench(K, dtype, reps=100, warmup_reps=100):
     M = 256 if is_xpu_cri() else 8192
     N = 256 if is_xpu_cri() else 8192
     if not is_enough_memory(M, N, K, dtype):
@@ -814,13 +813,13 @@ def bench(K, dtype, reps=100, warmup_reps=100, clc=False):
         bench_fn("torch", reps, warmup_reps, torch_matmul, a, b)
     bench_fn("naive", reps, warmup_reps, matmul, a, b.T)
     bench_fn("persistent", reps, warmup_reps, matmul_persistent, a, b.T)
-    if clc:
-        bench_fn("clc_tma", reps, warmup_reps, matmul_tma_clc, a, b)
     warp_specialize = [False, True] if HAS_WARP_SPECIALIZE else [False]
     for ws in warp_specialize:
         ws_str = "_ws" if ws else ""
         # disable on-host warpspec on Hopper
         if HAS_HOST_TENSOR_DESC and not (is_hopper() and ws):
+            if HAS_TMA_CLC:
+                bench_fn(f"clc_tma{ws_str}", reps, warmup_reps, lambda a, b: matmul_tma_clc(a, b, ws), a, b)
             bench_fn(f"tma_persistent{ws_str}", reps, warmup_reps, lambda a, b: matmul_tma_persistent(a, b, ws), a, b)
             bench_fn(f"tma{ws_str}", reps, warmup_reps, lambda a, b: matmul_tma(a, b, ws), a, b)
         if HAS_TENSOR_DESC:
@@ -839,7 +838,7 @@ def run_test(expect, fn, a, b, label, enabled=True):
     print(f"\r  {label}: {icon}  ")
 
 
-def validate(M, N, K, dtype, clc=False):
+def validate(M, N, K, dtype):
     if not is_enough_memory(M, N, K, dtype):
         return
 
@@ -852,10 +851,9 @@ def validate(M, N, K, dtype, clc=False):
     run_test(naive_result, torch_matmul, a, b, "Torch", enabled=dtype == torch.float16)
     run_test(naive_result, device_blas_matmul, a, b, device_blas_name(), enabled=device_blas is not None)
     run_test(naive_result, matmul_persistent, a, b.T, "Persistent")
-    run_test(naive_result, matmul_tma_clc, a, b, "CLC TMA", enabled=clc)
-
     kernels = [
         (matmul_tma, "TMA", HAS_HOST_TENSOR_DESC),
+        (matmul_tma_clc, "CLC TMA", HAS_TMA_CLC),
         (matmul_tma_persistent, "TMA Persistent", HAS_HOST_TENSOR_DESC),
         (matmul_descriptor_persistent, "Tensor Descriptor Persistent", HAS_TENSOR_DESC),
     ]
@@ -890,11 +888,7 @@ if __name__ == "__main__":
     parser.add_argument("--K_range", type=int, nargs=2)
     parser.add_argument("--K_step", type=int, default=default_K_step)
     parser.add_argument("--prec", type=str, choices=["fp8", "fp16"], default="fp16")
-    parser.add_argument("--clc", action="store_true", help="Enable CLC scheduling on NVIDIA SM100+")
     args = parser.parse_args()
-
-    if args.clc and not HAS_TMA_CLC:
-        parser.error("--clc requires an NVIDIA SM100+ GPU with tensor descriptor support")
 
     if args.prec == 'fp8' and (not hasattr(torch, "float8_e4m3fn") or not is_cuda()):
         print("This example requires CUDA/HIP with fp8 support.")
@@ -907,14 +901,14 @@ if __name__ == "__main__":
 
         torch.manual_seed(0)
 
-        validate(32, 32, 32, dtype, clc=args.clc)
+        validate(32, 32, 32, dtype)
         validation_size = 256 if is_xpu_cri() else 8192
-        validate(validation_size, validation_size, args.K_range[0], dtype, clc=args.clc)
+        validate(validation_size, validation_size, args.K_range[0], dtype)
         if os.name != "nt" and not is_xpu_cri():
             proton.start("matmul", hook="triton")
             proton.deactivate()
         for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
-            bench(K, dtype, clc=args.clc)
+            bench(K, dtype)
         if os.name != "nt" and not is_xpu_cri():
             proton.finalize()
             show_profile(args.prec, "matmul")
