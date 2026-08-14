@@ -34,6 +34,7 @@ import triton
 import triton.language as tl
 
 import triton.backends.intel.compiler as intel_compiler
+from triton._internal_testing import is_xpu_cri
 from triton.runtime.errors import IntelGPUError
 
 pytestmark = pytest.mark.skipif(
@@ -157,7 +158,7 @@ def _spy_on_ocloc(monkeypatch):
 
     Returns the list that accumulates them. Used to tell whether a large-GRF
     retry was attempted: a retry shows up as an extra invocation whose
-    `-options` argument carries the 256-GRF flag.
+    `-options` argument carries the large-GRF flag.
     """
     calls = []
     real_check_output = subprocess.check_output
@@ -171,8 +172,14 @@ def _spy_on_ocloc(monkeypatch):
     return calls
 
 
-def _grf256_retries(calls) -> int:
-    return sum(1 for c in calls if any("-cl-intel-256-GRF-per-thread" in str(a) for a in c))
+# `make_zebin` picks the large-GRF retry flag per target: CRI upgrades straight to
+# 512-GRF, everything else to 256-GRF. Match whichever this device would use, so
+# the assertions below track the guard and not the flag choice.
+LARGE_GRF_FLAG = "-cl-intel-512-GRF-per-thread" if is_xpu_cri() else "-cl-intel-256-GRF-per-thread"
+
+
+def _large_grf_retries(calls) -> int:
+    return sum(1 for c in calls if any(LARGE_GRF_FLAG in str(a) for a in c))
 
 
 def _stub_degenerate_first_build(monkeypatch):
@@ -202,22 +209,22 @@ def test_exception_retry_not_attempted_for_num_warps_64(monkeypatch, fresh_trito
 
     Simulates the documented LTS2 degenerate-zebin case (the spill probe raising
     `IntelGPUError`) to reach `make_zebin`'s `except` block. Without the guard,
-    the retry list still holds the 256-GRF flag, so `ocloc` is re-run with it and
-    produces exactly the unlaunchable config the explicit `grf_mode='256'` path
-    forbids. With the guard, no 256-GRF retry is issued and the original error
-    surfaces instead.
+    the retry list still holds the large-GRF flag, so `ocloc` is re-run with it
+    and produces exactly the unlaunchable config the explicit
+    `grf_mode='256'`/`'512'` paths forbid. With the guard, no large-GRF retry is
+    issued and the original error surfaces instead.
     """
     monkeypatch.setenv("TRITON_XPU_GEN_NATIVE_CODE", "1")
     _stub_degenerate_first_build(monkeypatch)
     calls = _spy_on_ocloc(monkeypatch)
 
     # The degenerate-zebin error is not recoverable for num_warps > 32, so
-    # compilation fails — but it must fail *without* attempting a 256-GRF retry.
+    # compilation fails — but it must fail *without* a large-GRF retry.
     with pytest.raises(IntelGPUError):
         _launch(num_warps=64)
 
-    assert _grf256_retries(calls) == 0, ("no 256-GRF retry should be attempted for num_warps > 32; "
-                                         f"got ocloc calls: {calls}")
+    assert _large_grf_retries(calls) == 0, (f"no {LARGE_GRF_FLAG} retry should be attempted for num_warps > 32; "
+                                            f"got ocloc calls: {calls}")
 
 
 @_requires_warps(32)
@@ -233,7 +240,8 @@ def test_exception_retry_still_attempted_for_num_warps_32(monkeypatch, fresh_tri
     # first spill probe was stubbed to raise), so the launch succeeds.
     x, y = _launch(num_warps=32)
     assert torch.allclose(y, x + 1.0)
-    assert _grf256_retries(calls) == 1, (f"expected exactly one 256-GRF retry for num_warps <= 32; got: {calls}")
+    assert _large_grf_retries(calls) == 1, (f"expected exactly one {LARGE_GRF_FLAG} retry for num_warps <= 32; "
+                                            f"got: {calls}")
 
 
 @_requires_warps(64)
