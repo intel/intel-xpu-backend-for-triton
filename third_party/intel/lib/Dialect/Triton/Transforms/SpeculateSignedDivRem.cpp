@@ -109,6 +109,19 @@ bool isProvablyNegative(Value value, const DataFlowSolver &solver) {
   return range.has_value() && range->smax().isNegative();
 }
 
+/// Returns true if the `dividend >= 0` check guarding `op` can be asserted
+/// outside every enclosing loop.
+bool isCheckHoistableOutOfLoops(Operation *op) {
+  // emitAssert() folds the check into a loop-carried flag for each enclosing
+  // `scf.for` and stops at any other region-holding parent, so the assertion
+  // ends up in the region of the first such parent.
+  Operation *parent = op->getParentOp();
+  while (isa_and_nonnull<scf::ForOp>(parent))
+    parent = parent->getParentOp();
+
+  return parent && !parent->getParentOfType<LoopLikeOpInterface>();
+}
+
 /// Folds `cond` into a loop-carried flag on `forOp` and returns the loop result
 /// holding its conjunction over every executed iteration. `cond` must be
 /// defined inside `forOp`'s body. Returns a null value if `forOp` cannot carry
@@ -215,6 +228,15 @@ private:
     if (!tt::intel::signedDivRemDeductionApplies(op, *lhsInfo, *rhsInfo))
       return false;
 
+    // An assertion in a loop body costs several times the kernel runtime - far
+    // more than the deduction it recovers is worth - so an operation whose
+    // check cannot be kept out of every loop is left signed instead. See
+    // emitAssert().
+    if (!isCheckHoistableOutOfLoops(op)) {
+      LDBG("skipped, assertion would land inside a loop: " << *op);
+      return false;
+    }
+
     LDBG("candidate: " << *op);
     return true;
   }
@@ -268,9 +290,11 @@ private:
     IRRewriter rewriter(cond.getContext());
     Operation *defOp = cond.getDefiningOp();
 
-    // Any other region-holding parent - `scf.if`, `scf.while`, ... - ends the
-    // walk and leaves the assertion nested inside it: still correct, just not
-    // hoisted.
+    // isCheckHoistableOutOfLoops() kept only candidates whose loop ancestors
+    // are all `scf.for`s, so this walk reaches a point outside every loop. It
+    // can still stop early if a loop refuses an extra iteration argument,
+    // leaving the assertion in the body: slow, but sound, and soundness is the
+    // one thing that cannot be traded away here.
     while (auto forOp = dyn_cast<scf::ForOp>(defOp->getParentOp())) {
       Value accumulated = accumulateIntoLoop(rewriter, forOp, cond);
       if (!accumulated)

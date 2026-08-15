@@ -119,9 +119,42 @@ tt.func public @nested_loops(%ub: i32, %ptr: !tt.ptr<i32>) -> tensor<1x64xi32> {
 
 // -----
 
-// COM: The dividend is guarded by an scf.if, which cannot carry an accumulator
-// COM: the way an scf.for can. The walk stops there and the assertion stays
-// COM: inside the conditional: correct, just not hoisted.
+// COM: The remainder is nested in an scf.if, which cannot carry an accumulator
+// COM: the way an scf.for can, but no loop encloses it, so the assertion stays
+// COM: inside the conditional at no cost. Pins that the bail-out condition is
+// COM: "the assertion would land inside a loop", not "inside a region".
+module {
+tt.func public @conditional_outside_loop(%c: i1) -> tensor<1x64xi32> {
+  %cst = arith.constant dense<128> : tensor<1x64xi32>
+  %range = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32>
+  %init = tt.expand_dims %range {axis = 0 : i32} : tensor<64xi32> -> tensor<1x64xi32>
+  %res = scf.if %c -> (tensor<1x64xi32>) {
+    %rem = arith.remsi %init, %cst : tensor<1x64xi32>
+    scf.yield %rem : tensor<1x64xi32>
+  } else {
+    scf.yield %init : tensor<1x64xi32>
+  }
+  tt.return %res : tensor<1x64xi32>
+}
+// CHECK-LABEL: @conditional_outside_loop
+// CHECK:         %[[IDX:.*]] = tt.expand_dims
+// CHECK:         scf.if
+// CHECK:           %[[COND:.*]] = arith.cmpi sge, %[[IDX]], %{{.*}} : tensor<1x64xi32>
+// CHECK:           tt.assert %[[COND]]
+// CHECK:           arith.remui %[[IDX]], %{{.*}} : tensor<1x64xi32>
+}
+
+//===----------------------------------------------------------------------===//
+// Negative tests - no deduction to recover, converting would be unsound, or the
+// assertion cannot be kept out of a loop body.
+//===----------------------------------------------------------------------===//
+
+// -----
+
+// COM: Same shape as @loop_carried_dividend, except the remainder is nested in
+// COM: an scf.if. An scf.if cannot carry the accumulator, so the assertion would
+// COM: have to stay in the loop body - which costs several times the kernel
+// COM: runtime, more than the deduction recovers. Leave the operation signed.
 module {
 tt.func public @dividend_in_conditional(%c: i1, %ub: i32, %ptr: !tt.ptr<i32>) -> tensor<1x64xi32> {
   %c0_i32 = arith.constant 0 : i32
@@ -150,16 +183,9 @@ tt.func public @dividend_in_conditional(%c: i1, %ub: i32, %ptr: !tt.ptr<i32>) ->
   tt.return %res#1 : tensor<1x64xi32>
 }
 // CHECK-LABEL: @dividend_in_conditional
-// CHECK:         scf.for {{.*}} iter_args(%[[IDX:.*]] = %{{.*}}, %{{.*}} = %{{.*}}) -> (tensor<1x64xi32>, tensor<1x64xi32>)
-// CHECK:           scf.if
-// CHECK:             %[[COND:.*]] = arith.cmpi sge, %[[IDX]], %{{.*}} : tensor<1x64xi32>
-// CHECK:             tt.assert %[[COND]]
-// CHECK:             arith.remui %[[IDX]], %{{.*}} : tensor<1x64xi32>
+// CHECK-NOT:     tt.assert
+// CHECK:         arith.remsi
 }
-
-//===----------------------------------------------------------------------===//
-// Negative tests - no deduction to recover, or converting would be unsound.
-//===----------------------------------------------------------------------===//
 
 // -----
 

@@ -202,6 +202,11 @@ def TritonIntelSpeculateSignedDivRem
     with one arith.andi per iteration and asserted once after the outermost
     enclosing scf.for, which flags the same launches at negligible cost.
 
+    An operation whose check cannot be kept out of every loop that way - one
+    nested in an scf.if inside a loop, say, since an scf.if cannot carry an
+    accumulator - is left signed. An assertion in a loop body costs more than the
+    deduction it recovers is worth, so not speculating is the faster of the two.
+
     Runs after TritonIntelSimplifySignedArithmetic, which converts the
     operations whose dividend can be proven non-negative without a runtime
     check.
