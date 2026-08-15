@@ -2,8 +2,11 @@
 #include "intel/include/Analysis/Range.h"
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Dominance.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Verifier.h"
+#include "mlir/Interfaces/LoopLikeInterface.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
@@ -106,6 +109,45 @@ bool isProvablyNegative(Value value, const DataFlowSolver &solver) {
   return range.has_value() && range->smax().isNegative();
 }
 
+/// Folds `cond` into a loop-carried flag on `forOp` and returns the loop result
+/// holding its conjunction over every executed iteration. `cond` must be
+/// defined inside `forOp`'s body. Returns a null value if `forOp` cannot carry
+/// an additional iteration argument.
+Value accumulateIntoLoop(RewriterBase &rewriter, scf::ForOp forOp, Value cond) {
+  Location loc = cond.getLoc();
+
+  // The flag starts out true and is only ever cleared, so a loop that does not
+  // execute yields "no violation" - which is what a division that never runs
+  // means.
+  rewriter.setInsertionPoint(forOp);
+  Value init = arith::ConstantOp::create(rewriter, loc,
+                                         rewriter.getOneAttr(cond.getType()));
+
+  // Add the flag as a pass-through iteration argument first and redirect its
+  // yielded value afterwards. Computing the conjunction in the
+  // `NewYieldValuesFn` callback instead would have it reference `cond`, which
+  // lives in the body being moved to the new loop while the callback runs.
+  FailureOr<LoopLikeOpInterface> newLoop =
+      cast<LoopLikeOpInterface>(forOp.getOperation())
+          .replaceWithAdditionalIterOperands(
+              rewriter, init, /*replaceInitOperandUsesInLoop=*/false);
+  if (failed(newLoop)) {
+    rewriter.eraseOp(init.getDefiningOp());
+    return {};
+  }
+
+  auto newForOp = cast<scf::ForOp>(newLoop->getOperation());
+  BlockArgument flag = newForOp.getRegionIterArgs().back();
+  Operation *yieldOp = newForOp.getBody()->getTerminator();
+  rewriter.setInsertionPoint(yieldOp);
+  Value conjunction = arith::AndIOp::create(rewriter, loc, flag, cond);
+  rewriter.modifyOpInPlace(yieldOp, [&]() {
+    yieldOp->setOperand(yieldOp->getNumOperands() - 1, conjunction);
+  });
+
+  return newForOp.getResults().back();
+}
+
 class SignedDivRemSpeculator {
 public:
   void run(ModuleOp moduleOp) {
@@ -139,8 +181,12 @@ public:
       return true;
     });
 
-    for (Operation *op : candidates)
-      convertWithAssert(op);
+    // Convert every candidate and materialize its check before asserting any of
+    // them: emitting an assertion can rebuild an enclosing loop, which
+    // invalidates every handle to that loop's iteration arguments - and a
+    // dividend is often one of them.
+    for (Value cond : convertWithChecks(candidates))
+      emitAssert(cond);
   }
 
 private:
@@ -173,46 +219,75 @@ private:
     return true;
   }
 
-  void convertWithAssert(Operation *op) {
-    Value lhs = op->getOperand(0), rhs = op->getOperand(1);
-    OpBuilder builder(op);
-    Location loc = op->getLoc();
+  /// Rewrites every candidate to its unsigned counterpart and materializes the
+  /// `dividend >= 0` check it now relies on, returning one check per distinct
+  /// (dividend, block) pair. Keying on the block keeps a check dominating the
+  /// divisions it guards without a dominance query, and collapses the common
+  /// case of one dividend feeding both a division and a remainder.
+  SmallVector<Value> convertWithChecks(ArrayRef<Operation *> candidates) {
+    SmallVector<Value> conditions;
+    DenseSet<std::pair<Value, Block *>> checked;
 
-    Value replacement =
-        isa<arith::DivSIOp>(op)
-            ? arith::DivUIOp::create(builder, loc, lhs, rhs).getResult()
-            : arith::RemUIOp::create(builder, loc, lhs, rhs).getResult();
-    op->getResult(0).replaceAllUsesWith(replacement);
-    op->erase();
+    for (Operation *op : candidates) {
+      Value lhs = op->getOperand(0), rhs = op->getOperand(1);
+      OpBuilder builder(op);
+      Location loc = op->getLoc();
 
-    assertNonNegative(lhs, replacement.getDefiningOp());
+      Value replacement =
+          isa<arith::DivSIOp>(op)
+              ? arith::DivUIOp::create(builder, loc, lhs, rhs).getResult()
+              : arith::RemUIOp::create(builder, loc, lhs, rhs).getResult();
+      op->getResult(0).replaceAllUsesWith(replacement);
+
+      if (checked.insert({lhs, op->getBlock()}).second) {
+        builder.setInsertionPoint(replacement.getDefiningOp());
+        Value zero = arith::ConstantOp::create(
+            builder, loc, builder.getZeroAttr(lhs.getType()));
+        conditions.push_back(arith::CmpIOp::create(
+            builder, loc, arith::CmpIPredicate::sge, lhs, zero));
+        LDBG("checked dividend: " << lhs);
+      }
+      op->erase();
+    }
+
+    return conditions;
   }
 
-  /// Emits `tt.assert(value >= 0)` before `insertionPoint`, at most once per
-  /// (value, block) pair. Keying on the block keeps the assertion dominating
-  /// its users without a dominance query, and collapses the common case of one
-  /// dividend feeding both a division and a remainder into a single assertion.
-  void assertNonNegative(Value value, Operation *insertionPoint) {
-    if (!asserted.insert({value, insertionPoint->getBlock()}).second)
-      return;
+  /// Emits the single `tt.assert` backing a check built by convertWithChecks().
+  ///
+  /// A check inside a loop body is not asserted there: it is folded into a
+  /// loop-carried flag and asserted once after the outermost enclosing
+  /// `scf.for` instead. A `tt.assert` lowers to an opaque call that keeps IGC
+  /// from optimizing any loop containing it, which costs several times the
+  /// kernel runtime, whereas the same assertion outside the loop is free. The
+  /// conjunction flags exactly the same launches, it just no longer points at
+  /// the iteration that caused the violation. Note also that an out-of-range
+  /// unsigned quotient may fault on a subsequent access before the assertion is
+  /// reached; the diagnostic is a best effort either way.
+  void emitAssert(Value cond) {
+    IRRewriter rewriter(cond.getContext());
+    Operation *defOp = cond.getDefiningOp();
 
-    OpBuilder builder(insertionPoint);
-    Location loc = insertionPoint->getLoc();
-    Value zero = arith::ConstantOp::create(
-        builder, loc, builder.getZeroAttr(value.getType()));
-    Value cond = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::sge,
-                                       value, zero);
+    // Any other region-holding parent - `scf.if`, `scf.while`, ... - ends the
+    // walk and leaves the assertion nested inside it: still correct, just not
+    // hoisted.
+    while (auto forOp = dyn_cast<scf::ForOp>(defOp->getParentOp())) {
+      Value accumulated = accumulateIntoLoop(rewriter, forOp, cond);
+      if (!accumulated)
+        break;
+      cond = accumulated;
+      defOp = cond.getDefiningOp();
+    }
+
+    rewriter.setInsertionPointAfter(defOp);
     tt::AssertOp::create(
-        builder, loc, cond,
+        rewriter, cond.getLoc(), cond,
         "signed division or remainder with a negative dividend: the compiler "
         "assumed the dividend was non-negative in order to optimize the memory "
         "access pattern. Restructure the kernel so the dividend is "
         "non-negative, or set TRITON_SPECULATE_SIGNED_DIV_REM=0 to compile "
         "without this assumption (slower).");
-    LDBG("asserted dividend: " << value);
   }
-
-  DenseSet<std::pair<Value, Block *>> asserted;
 };
 
 struct TritonIntelSpeculateSignedDivRem

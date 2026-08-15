@@ -196,6 +196,12 @@ def TritonIntelSpeculateSignedDivRem
     assertion that fails on every launch, so a kernel that computes correctly
     today would start aborting.
 
+    A tt.assert lowers to an opaque call that keeps IGC from optimizing any loop
+    containing it, at a cost of several times the kernel runtime. So when the
+    dividend lives inside a loop, the check is folded into a loop-carried flag
+    with one arith.andi per iteration and asserted once after the outermost
+    enclosing scf.for, which flags the same launches at negligible cost.
+
     Runs after TritonIntelSimplifySignedArithmetic, which converts the
     operations whose dividend can be proven non-negative without a runtime
     check.
@@ -203,6 +209,7 @@ def TritonIntelSpeculateSignedDivRem
 
   let dependentDialects = [
     "mlir::arith::ArithDialect",
+    "mlir::scf::SCFDialect",
     "mlir::triton::TritonDialect"
   ];
 }

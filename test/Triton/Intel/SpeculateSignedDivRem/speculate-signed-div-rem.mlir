@@ -34,6 +34,11 @@ tt.func public @div_and_rem_share_one_assert() -> (tensor<1x64xi32>, tensor<1x64
 // COM: `(load(next) - load(cur)) * 128 - 64`, so it stays non-negative only if
 // COM: the loaded block indices are in increasing order. That is a property of
 // COM: the data in the buffer, not of the IR, so no prover can show it.
+// COM:
+// COM: The check therefore has to happen at runtime, but a tt.assert in the body
+// COM: would stop IGC from optimizing the loop. So the check is folded into a
+// COM: loop-carried flag - one arith.andi per iteration - and asserted once
+// COM: after the loop.
 module {
 tt.func public @loop_carried_dividend(%ub: i32, %ptr: !tt.ptr<i32>) -> tensor<1x64xi32> {
   %c0_i32 = arith.constant 0 : i32
@@ -57,10 +62,99 @@ tt.func public @loop_carried_dividend(%ub: i32, %ptr: !tt.ptr<i32>) -> tensor<1x
   tt.return %res#1 : tensor<1x64xi32>
 }
 // CHECK-LABEL: @loop_carried_dividend
-// CHECK:         scf.for {{.*}} iter_args(%[[IDX:.*]] = %{{.*}}, %{{.*}} = %{{.*}})
+// CHECK:         %[[TRUE:.*]] = arith.constant dense<true> : tensor<1x64xi1>
+// CHECK:         %[[RES:.*]]:3 = scf.for {{.*}} iter_args(%[[IDX:.*]] = %{{.*}}, %{{.*}} = %{{.*}}, %[[FLAG:.*]] = %[[TRUE]])
+// CHECK-SAME:        -> (tensor<1x64xi32>, tensor<1x64xi32>, tensor<1x64xi1>)
 // CHECK:           %[[COND:.*]] = arith.cmpi sge, %[[IDX]], %{{.*}} : tensor<1x64xi32>
-// CHECK:           tt.assert %[[COND]]
 // CHECK:           arith.remui %[[IDX]], %{{.*}} : tensor<1x64xi32>
+// CHECK-NOT:       tt.assert
+// CHECK:           %[[AND:.*]] = arith.andi %[[FLAG]], %[[COND]] : tensor<1x64xi1>
+// CHECK:           scf.yield %{{.*}}, %{{.*}}, %[[AND]]
+// CHECK:         }
+// CHECK:         tt.assert %[[RES]]#2, "{{.*}}TRITON_SPECULATE_SIGNED_DIV_REM=0{{.*}}"
+}
+
+// -----
+
+// COM: The flag is accumulated once per loop level, so the assertion ends up
+// COM: after the outermost loop and no loop body contains a tt.assert.
+module {
+tt.func public @nested_loops(%ub: i32, %ptr: !tt.ptr<i32>) -> tensor<1x64xi32> {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c64_i32 = arith.constant 64 : i32
+  %c128_i32 = arith.constant 128 : i32
+  %cst = arith.constant dense<128> : tensor<1x64xi32>
+  %range = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32>
+  %init = tt.expand_dims %range {axis = 0 : i32} : tensor<64xi32> -> tensor<1x64xi32>
+  %outer = scf.for %j = %c0_i32 to %ub step %c1_i32 iter_args(%o = %init) -> (tensor<1x64xi32>) : i32 {
+    %inner:2 = scf.for %i = %c0_i32 to %ub step %c1_i32 iter_args(%idx = %init, %acc = %o)
+        -> (tensor<1x64xi32>, tensor<1x64xi32>) : i32 {
+      %rem = arith.remsi %idx, %cst : tensor<1x64xi32>
+      %sum = arith.addi %acc, %rem : tensor<1x64xi32>
+      %l = tt.load %ptr : !tt.ptr<i32>
+      %scaled = arith.muli %l, %c128_i32 : i32
+      %advance = arith.subi %scaled, %c64_i32 : i32
+      %splat = tt.splat %advance : i32 -> tensor<1x64xi32>
+      %next = arith.addi %idx, %splat : tensor<1x64xi32>
+      scf.yield %next, %sum : tensor<1x64xi32>, tensor<1x64xi32>
+    }
+    scf.yield %inner#1 : tensor<1x64xi32>
+  }
+  tt.return %outer : tensor<1x64xi32>
+}
+// CHECK-LABEL: @nested_loops
+// CHECK:         %[[OUTER:.*]]:2 = scf.for {{.*}} iter_args(%{{.*}} = %{{.*}}, %[[OFLAG:.*]] = %{{.*}})
+// CHECK:           %[[INNER:.*]]:3 = scf.for {{.*}} iter_args(%[[IDX:.*]] = %{{.*}}, %{{.*}} = %{{.*}}, %[[IFLAG:.*]] = %{{.*}})
+// CHECK:             %[[COND:.*]] = arith.cmpi sge, %[[IDX]], %{{.*}} : tensor<1x64xi32>
+// CHECK:             arith.remui %[[IDX]], %{{.*}} : tensor<1x64xi32>
+// CHECK:             %[[IAND:.*]] = arith.andi %[[IFLAG]], %[[COND]] : tensor<1x64xi1>
+// CHECK:             scf.yield %{{.*}}, %{{.*}}, %[[IAND]]
+// CHECK:           }
+// CHECK:           %[[OAND:.*]] = arith.andi %[[OFLAG]], %[[INNER]]#2 : tensor<1x64xi1>
+// CHECK:           scf.yield %[[INNER]]#1, %[[OAND]]
+// CHECK:         }
+// CHECK:         tt.assert %[[OUTER]]#1
+}
+
+// -----
+
+// COM: The dividend is guarded by an scf.if, which cannot carry an accumulator
+// COM: the way an scf.for can. The walk stops there and the assertion stays
+// COM: inside the conditional: correct, just not hoisted.
+module {
+tt.func public @dividend_in_conditional(%c: i1, %ub: i32, %ptr: !tt.ptr<i32>) -> tensor<1x64xi32> {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c64_i32 = arith.constant 64 : i32
+  %c128_i32 = arith.constant 128 : i32
+  %cst = arith.constant dense<128> : tensor<1x64xi32>
+  %range = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32>
+  %init = tt.expand_dims %range {axis = 0 : i32} : tensor<64xi32> -> tensor<1x64xi32>
+  %res:2 = scf.for %i = %c0_i32 to %ub step %c1_i32 iter_args(%idx = %init, %acc = %init)
+      -> (tensor<1x64xi32>, tensor<1x64xi32>) : i32 {
+    %sum = scf.if %c -> (tensor<1x64xi32>) {
+      %rem = arith.remsi %idx, %cst : tensor<1x64xi32>
+      %s = arith.addi %acc, %rem : tensor<1x64xi32>
+      scf.yield %s : tensor<1x64xi32>
+    } else {
+      scf.yield %acc : tensor<1x64xi32>
+    }
+    %l = tt.load %ptr : !tt.ptr<i32>
+    %scaled = arith.muli %l, %c128_i32 : i32
+    %advance = arith.subi %scaled, %c64_i32 : i32
+    %splat = tt.splat %advance : i32 -> tensor<1x64xi32>
+    %next = arith.addi %idx, %splat : tensor<1x64xi32>
+    scf.yield %next, %sum : tensor<1x64xi32>, tensor<1x64xi32>
+  }
+  tt.return %res#1 : tensor<1x64xi32>
+}
+// CHECK-LABEL: @dividend_in_conditional
+// CHECK:         scf.for {{.*}} iter_args(%[[IDX:.*]] = %{{.*}}, %{{.*}} = %{{.*}}) -> (tensor<1x64xi32>, tensor<1x64xi32>)
+// CHECK:           scf.if
+// CHECK:             %[[COND:.*]] = arith.cmpi sge, %[[IDX]], %{{.*}} : tensor<1x64xi32>
+// CHECK:             tt.assert %[[COND]]
+// CHECK:             arith.remui %[[IDX]], %{{.*}} : tensor<1x64xi32>
 }
 
 //===----------------------------------------------------------------------===//
