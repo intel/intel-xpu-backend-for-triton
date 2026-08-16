@@ -1344,9 +1344,13 @@ struct ElementwiseOpConversion
                                     ConversionPatternRewriter &rewriter,
                                     Type elemTy, MultipleOperandsRange operands,
                                     Location loc) const {
-    assert((!getElementType(operands[0][0]).isBF16() &&
-            !getElementType(operands[0][1]).isBF16()) &&
-           "unsupported conversion");
+    // bf16 is a valid LLVM IR type.  When ttig.support_bfloat16_arithmetic is
+    // present, arith_emulate_unsupported_floats is skipped (compiler.py) and
+    // bf16 operands are expected here.  SPV_INTEL_bfloat16_arithmetic
+    // (registered in SPIRVTranslation.cpp) lets IGC compile the resulting
+    // SPIR-V bf16 FMul. NOTE: Tested 2026-08-16; produces 0 B spill but 4×
+    // throughput regression. See
+    // bdpas-sim-optimization/OPP-OPTB-BF16-TO-IGC.md.
     return {
         DestOp::create(rewriter, loc, elemTy, operands[0][0], operands[0][1])};
   }

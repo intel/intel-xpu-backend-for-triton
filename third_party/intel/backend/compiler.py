@@ -477,7 +477,15 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.common.add_canonicalizer(pm)
         if knobs.intel.opt_reduction_locality:
             intel.passes.ttgpuir.add_optimize_reduction_locality(pm)
-        intel.passes.arith.add_arith_emulate_unsupported_floats(pm, ["bf16"], "f32")
+        # When SPV_INTEL_bfloat16_arithmetic is available (non-LTS drivers),
+        # let bf16 mulf flow through to IGC as LLVM IR bfloat fmul.  IGC handles
+        # the f32 emulation at scalar register granularity, eliminating MLIR-level
+        # f32 tensor pressure.  On LTS drivers, widen unconditionally as before.
+        # NOTE: This was tested on Arc B65 (2026-08-16) and resulted in 0 B spill
+        # but 4× throughput regression — IGC's bf16 codegen path is less optimised
+        # than standard f32.  Tracked in bdpas-sim-optimization/OPP-OPTB-BF16-TO-IGC.md.
+        if not properties.get("has_bfloat16_arithmetic", False):
+            intel.passes.arith.add_arith_emulate_unsupported_floats(pm, ["bf16"], "f32")
         if opt.instrumentation_mode == "fpsan":
             passes.ttgpuir.add_fp_sanitizer(pm, opt.fpsan_homomorphic_casts)
         pm.run(mod, 'make_ttgir')
