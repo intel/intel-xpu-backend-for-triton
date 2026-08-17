@@ -8,17 +8,21 @@
 // COM: remainder by the same constant. Both are converted, and the assertion is
 // COM: emitted only once for the shared dividend.
 module {
-tt.func public @div_and_rem_share_one_assert() -> (tensor<1x64xi32>, tensor<1x64xi32>) {
+tt.func public @div_and_rem_share_one_assert(%arg0: i32) -> (tensor<1x64xi32>, tensor<1x64xi32>) {
   %cst = arith.constant dense<128> : tensor<1x64xi32>
+  %c64_i32 = arith.constant 64 : i32
+  %scaled = arith.muli %arg0, %c64_i32 : i32
+  %off = tt.splat %scaled : i32 -> tensor<1x64xi32>
   %range = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32>
-  %idx = tt.expand_dims %range {axis = 0 : i32} : tensor<64xi32> -> tensor<1x64xi32>
+  %exp = tt.expand_dims %range {axis = 0 : i32} : tensor<64xi32> -> tensor<1x64xi32>
+  %idx = arith.addi %exp, %off : tensor<1x64xi32>
   %rem = arith.remsi %idx, %cst : tensor<1x64xi32>
   %div = arith.divsi %idx, %cst : tensor<1x64xi32>
   tt.return %rem, %div : tensor<1x64xi32>, tensor<1x64xi32>
 }
 // CHECK-LABEL: @div_and_rem_share_one_assert
 // CHECK:         %[[CST:.*]] = arith.constant dense<128> : tensor<1x64xi32>
-// CHECK:         %[[IDX:.*]] = tt.expand_dims
+// CHECK:         %[[IDX:.*]] = arith.addi
 // CHECK:         %[[ZERO:.*]] = arith.constant dense<0> : tensor<1x64xi32>
 // CHECK:         %[[COND:.*]] = arith.cmpi sge, %[[IDX]], %[[ZERO]] : tensor<1x64xi32>
 // CHECK:         tt.assert %[[COND]], "{{.*}}TRITON_SPECULATE_SIGNED_DIV_REM=0{{.*}}"
@@ -26,6 +30,58 @@ tt.func public @div_and_rem_share_one_assert() -> (tensor<1x64xi32>, tensor<1x64
 // CHECK:         %[[REM:.*]] = arith.remui %[[IDX]], %[[CST]] : tensor<1x64xi32>
 // CHECK:         %[[DIV:.*]] = arith.divui %[[IDX]], %[[CST]] : tensor<1x64xi32>
 // CHECK:         tt.return %[[REM]], %[[DIV]]
+}
+
+// -----
+
+// COM: The dividend is a bare range, so it is provably non-negative and there is
+// COM: nothing left for a runtime check to establish. It converts outright, with
+// COM: no assertion - checking a tautology would cost the whole benefit.
+module {
+tt.func public @provably_non_negative_dividend() -> tensor<1x64xi32> {
+  %cst = arith.constant dense<128> : tensor<1x64xi32>
+  %range = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32>
+  %idx = tt.expand_dims %range {axis = 0 : i32} : tensor<64xi32> -> tensor<1x64xi32>
+  %rem = arith.remsi %idx, %cst : tensor<1x64xi32>
+  tt.return %rem : tensor<1x64xi32>
+}
+// CHECK-LABEL: @provably_non_negative_dividend
+// CHECK-NOT:     arith.cmpi
+// CHECK-NOT:     tt.assert
+// CHECK:         arith.remui
+}
+
+// -----
+
+// COM: Same provable dividend, but used inside an scf.if nested in an scf.for -
+// COM: the one place an assertion cannot be hoisted to, so a speculated operation
+// COM: here would be left signed (see @dividend_in_conditional). This one still
+// COM: converts, because a proven dividend emits no assertion for a loop to
+// COM: contain. Pins that the hoistability bail-out gates the checks, not the
+// COM: conversion.
+module {
+tt.func public @provable_dividend_in_loop(%c: i1, %ub: i32) -> tensor<1x64xi32> {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %cst = arith.constant dense<128> : tensor<1x64xi32>
+  %range = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32>
+  %init = tt.expand_dims %range {axis = 0 : i32} : tensor<64xi32> -> tensor<1x64xi32>
+  %res = scf.for %i = %c0_i32 to %ub step %c1_i32 iter_args(%acc = %init) -> (tensor<1x64xi32>) : i32 {
+    %sum = scf.if %c -> (tensor<1x64xi32>) {
+      %rem = arith.remsi %init, %cst : tensor<1x64xi32>
+      %s = arith.addi %acc, %rem : tensor<1x64xi32>
+      scf.yield %s : tensor<1x64xi32>
+    } else {
+      scf.yield %acc : tensor<1x64xi32>
+    }
+    scf.yield %sum : tensor<1x64xi32>
+  }
+  tt.return %res : tensor<1x64xi32>
+}
+// CHECK-LABEL: @provable_dividend_in_loop
+// CHECK-NOT:     arith.cmpi
+// CHECK-NOT:     tt.assert
+// CHECK:         arith.remui
 }
 
 // -----
@@ -124,10 +180,14 @@ tt.func public @nested_loops(%ub: i32, %ptr: !tt.ptr<i32>) -> tensor<1x64xi32> {
 // COM: inside the conditional at no cost. Pins that the bail-out condition is
 // COM: "the assertion would land inside a loop", not "inside a region".
 module {
-tt.func public @conditional_outside_loop(%c: i1) -> tensor<1x64xi32> {
+tt.func public @conditional_outside_loop(%c: i1, %arg0: i32) -> tensor<1x64xi32> {
   %cst = arith.constant dense<128> : tensor<1x64xi32>
+  %c64_i32 = arith.constant 64 : i32
+  %scaled = arith.muli %arg0, %c64_i32 : i32
+  %off = tt.splat %scaled : i32 -> tensor<1x64xi32>
   %range = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32>
-  %init = tt.expand_dims %range {axis = 0 : i32} : tensor<64xi32> -> tensor<1x64xi32>
+  %exp = tt.expand_dims %range {axis = 0 : i32} : tensor<64xi32> -> tensor<1x64xi32>
+  %init = arith.addi %exp, %off : tensor<1x64xi32>
   %res = scf.if %c -> (tensor<1x64xi32>) {
     %rem = arith.remsi %init, %cst : tensor<1x64xi32>
     scf.yield %rem : tensor<1x64xi32>
@@ -137,7 +197,7 @@ tt.func public @conditional_outside_loop(%c: i1) -> tensor<1x64xi32> {
   tt.return %res : tensor<1x64xi32>
 }
 // CHECK-LABEL: @conditional_outside_loop
-// CHECK:         %[[IDX:.*]] = tt.expand_dims
+// CHECK:         %[[IDX:.*]] = arith.addi
 // CHECK:         scf.if
 // CHECK:           %[[COND:.*]] = arith.cmpi sge, %[[IDX]], %{{.*}} : tensor<1x64xi32>
 // CHECK:           tt.assert %[[COND]]
@@ -310,6 +370,31 @@ tt.func public @provably_negative_computed_dividend() -> tensor<128xi32> {
 // CHECK-LABEL: @provably_negative_computed_dividend
 // CHECK-NOT:     tt.assert
 // CHECK:         arith.divsi
+}
+
+// -----
+
+// COM: Two independent runtime offsets, so the dividend is non-negative only if
+// COM: both kernel arguments are. A conjunction cannot be partially satisfied, so
+// COM: a dividend needing more than one fact is left signed rather than guarded
+// COM: by a pile of checks.
+module {
+tt.func public @dividend_needs_two_facts(%arg0: i32, %arg1: i32) -> tensor<128xi32> {
+  %cst = arith.constant dense<128> : tensor<128xi32>
+  %c64_i32 = arith.constant 64 : i32
+  %s0 = arith.muli %arg0, %c64_i32 : i32
+  %s1 = arith.muli %arg1, %c64_i32 : i32
+  %o0 = tt.splat %s0 : i32 -> tensor<128xi32>
+  %o1 = tt.splat %s1 : i32 -> tensor<128xi32>
+  %range = tt.make_range {start = 0 : i32, end = 128 : i32} : tensor<128xi32>
+  %t = arith.addi %range, %o0 : tensor<128xi32>
+  %idx = arith.addi %t, %o1 : tensor<128xi32>
+  %rem = arith.remsi %idx, %cst : tensor<128xi32>
+  tt.return %rem : tensor<128xi32>
+}
+// CHECK-LABEL: @dividend_needs_two_facts
+// CHECK-NOT:     tt.assert
+// CHECK:         arith.remsi
 }
 
 // -----

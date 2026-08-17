@@ -1,5 +1,6 @@
 #include "intel/include/Analysis/AxisInfoExt.h"
 #include "intel/include/Analysis/Range.h"
+#include "intel/include/Analysis/SignednessProver.h"
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -9,6 +10,7 @@
 #include "mlir/Interfaces/LoopLikeInterface.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 
 #include <numeric>
@@ -93,20 +95,16 @@ bool signedDivRemDeductionApplies(Operation *op, const AxisInfo &lhs,
 
 namespace {
 
+using tt::intel::Goal;
+using tt::intel::Proof;
+using RequiredCondition = tt::intel::RequiredCondition;
+
 /// Returns true if a `sge 0` check on `value` is meaningful. Excludes `i1`,
 /// whose signed values are 0 and -1, so that the check would be wrong rather
 /// than merely conservative.
 bool isAssertableIntegerType(Value value) {
   Type elemTy = getElementTypeOrSelf(value.getType());
   return elemTy.isSignlessInteger() && elemTy.getIntOrFloatBitWidth() > 1;
-}
-
-/// Returns true if `value` is negative in every element on every launch, so
-/// that asserting it non-negative would abort unconditionally.
-bool isProvablyNegative(Value value, const DataFlowSolver &solver) {
-  std::optional<ConstantIntRanges> range =
-      tt::intel::collectRange(solver, value);
-  return range.has_value() && range->smax().isNegative();
 }
 
 /// Returns true if the `dividend >= 0` check guarding `op` can be asserted
@@ -174,11 +172,9 @@ public:
     if (candidates.empty())
       return;
 
-    // A provably negative dividend must be left alone: converting it changes
-    // the result *and* emits an assertion that fails on every launch, turning a
-    // kernel that computes correctly today into one that aborts. The range
-    // analysis needed to detect that is built lazily, because it costs far more
-    // than the AxisInfo query above and most modules have no candidate at all.
+    // Deciding which dividends are worth speculating on needs the range
+    // analysis. It is built lazily, because it costs far more than the AxisInfo
+    // query above and most modules have no candidate at all.
     DominanceInfo domInfo(moduleOp);
     std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
     solver->load<tt::intel::IntegerRangeAnalysis>(moduleOp, domInfo);
@@ -187,18 +183,61 @@ public:
       return;
     }
 
-    llvm::erase_if(candidates, [&](Operation *op) {
-      if (!isProvablyNegative(op->getOperand(0), *solver))
-        return false;
-      LDBG("skipped, dividend is provably negative: " << *op);
-      return true;
-    });
+    // Split the candidates by what the prover says about the dividend: those it
+    // proves outright convert for free, those it reduces to exactly one missing
+    // fact convert under a runtime check, and the rest are left signed.
+    SmallVector<Operation *> proven, speculative;
+    for (Operation *op : candidates) {
+      tt::intel::Proof proof =
+          tt::intel::proveSign(op->getOperand(0), Goal::NonNegative, *solver);
 
-    // Convert every candidate and materialize its check before asserting any of
-    // them: emitting an assertion can rebuild an enclosing loop, which
-    // invalidates every handle to that loop's iteration arguments - and a
-    // dividend is often one of them.
-    for (Value cond : convertWithChecks(candidates))
+      // The dividend is negative on every launch, or depends on a value that
+      // is. Converting changes the result *and* asserts something that fails
+      // unconditionally, so a kernel that computes correctly today would start
+      // aborting.
+      if (proof.verdict == Proof::Refuted) {
+        LDBG("skipped, dividend cannot be non-negative: " << *op);
+        continue;
+      }
+
+      if (proof.verdict == Proof::Satisfied) {
+        proven.push_back(op);
+        continue;
+      }
+
+      // A conjunction cannot be partially satisfied, so every member would have
+      // to be checked for the conversion to be sound. One check is the expected
+      // shape; more than that means the recursion wandered.
+      if (proof.requiredConditions.size() != 1) {
+        LDBG("skipped, dividend needs " << proof.requiredConditions.size()
+                                        << " facts: " << *op);
+        continue;
+      }
+
+      // An assertion in a loop body costs several times the kernel runtime -
+      // far more than the deduction it recovers is worth - so an operation
+      // whose check cannot be kept out of every loop is left signed instead.
+      // This gates only the checked conversions; the proven ones emit no check,
+      // so where a check would have landed does not concern them. See
+      // emitAssert().
+      if (!isCheckHoistableOutOfLoops(op)) {
+        LDBG("skipped, assertion would land inside a loop: " << *op);
+        continue;
+      }
+
+      speculative.push_back(op);
+    }
+
+    for (Operation *op : proven) {
+      LDBG("converted unchecked, dividend is provably non-negative: " << *op);
+      convertToUnsigned(op);
+    }
+
+    // Convert every remaining candidate and materialize its check before
+    // asserting any of them: emitting an assertion can rebuild an enclosing
+    // loop, which invalidates every handle to that loop's iteration arguments -
+    // and a dividend is often one of them.
+    for (Value cond : convertWithChecks(speculative))
       emitAssert(cond);
   }
 
@@ -228,17 +267,26 @@ private:
     if (!tt::intel::signedDivRemDeductionApplies(op, *lhsInfo, *rhsInfo))
       return false;
 
-    // An assertion in a loop body costs several times the kernel runtime - far
-    // more than the deduction it recovers is worth - so an operation whose
-    // check cannot be kept out of every loop is left signed instead. See
-    // emitAssert().
-    if (!isCheckHoistableOutOfLoops(op)) {
-      LDBG("skipped, assertion would land inside a loop: " << *op);
-      return false;
-    }
-
     LDBG("candidate: " << *op);
     return true;
+  }
+
+  /// Replaces `op` with its unsigned counterpart, erasing it, and returns the
+  /// replacement. Sound only where the dividend is non-negative, which the
+  /// caller must have established or arranged to check.
+  Value convertToUnsigned(Operation *op) {
+    Value lhs = op->getOperand(0), rhs = op->getOperand(1);
+    OpBuilder builder(op);
+    Location loc = op->getLoc();
+
+    Value replacement =
+        isa<arith::DivSIOp>(op)
+            ? arith::DivUIOp::create(builder, loc, lhs, rhs).getResult()
+            : arith::RemUIOp::create(builder, loc, lhs, rhs).getResult();
+    op->getResult(0).replaceAllUsesWith(replacement);
+    op->erase();
+
+    return replacement;
   }
 
   /// Rewrites every candidate to its unsigned counterpart and materializes the
@@ -251,25 +299,20 @@ private:
     DenseSet<std::pair<Value, Block *>> checked;
 
     for (Operation *op : candidates) {
-      Value lhs = op->getOperand(0), rhs = op->getOperand(1);
-      OpBuilder builder(op);
+      Value lhs = op->getOperand(0);
       Location loc = op->getLoc();
+      Block *block = op->getBlock();
 
-      Value replacement =
-          isa<arith::DivSIOp>(op)
-              ? arith::DivUIOp::create(builder, loc, lhs, rhs).getResult()
-              : arith::RemUIOp::create(builder, loc, lhs, rhs).getResult();
-      op->getResult(0).replaceAllUsesWith(replacement);
+      Value replacement = convertToUnsigned(op);
 
-      if (checked.insert({lhs, op->getBlock()}).second) {
-        builder.setInsertionPoint(replacement.getDefiningOp());
+      if (checked.insert({lhs, block}).second) {
+        OpBuilder builder(replacement.getDefiningOp());
         Value zero = arith::ConstantOp::create(
             builder, loc, builder.getZeroAttr(lhs.getType()));
         conditions.push_back(arith::CmpIOp::create(
             builder, loc, arith::CmpIPredicate::sge, lhs, zero));
         LDBG("checked dividend: " << lhs);
       }
-      op->erase();
     }
 
     return conditions;

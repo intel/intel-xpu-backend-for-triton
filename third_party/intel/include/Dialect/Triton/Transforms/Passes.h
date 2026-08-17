@@ -9,7 +9,13 @@
 #ifndef TRITON_DIALECT_TRITON_INTEL_TRANSFORMS_PASSES_H
 #define TRITON_DIALECT_TRITON_INTEL_TRANSFORMS_PASSES_H
 
+#include "mlir/IR/Value.h"
 #include "mlir/Pass/Pass.h"
+#include "llvm/ADT/SmallVector.h"
+
+namespace mlir {
+class DataFlowSolver;
+} // namespace mlir
 
 namespace mlir::triton {
 class AxisInfo;
