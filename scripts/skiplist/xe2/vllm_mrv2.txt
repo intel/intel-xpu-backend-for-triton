@@ -54,3 +54,6 @@ tests/v1/kv_connector/unit/test_nixl_connector.py::test_abort_timeout_on_prefill
 # NIXL is not available: https://github.com/intel/intel-xpu-backend-for-triton/issues/7419
 tests/v1/kv_connector/unit/test_nixl_connector.py::test_kv_both_deprecation_warning
 tests/v1/kv_connector/unit/test_nixl_connector.py::test_explicit_kv_role_no_deprecation_warning
+
+# Insufficient space runtime error on particular B580 runner: https://github.com/intel/intel-xpu-backend-for-triton/issues/7763
+tests/v1/kv_connector/unit/test_nixl_connector.py::test_abort_timeout_on_prefiller[ray]
