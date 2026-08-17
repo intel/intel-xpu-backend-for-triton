@@ -78,18 +78,13 @@ jobs:
           # similar issue: https://github.com/pypa/build/issues/506
           python -m build --wheel --no-isolation --skip-dependency-check
 
-      # A separate step, so that the output is set only if the wheel was built successfully.
-      - name: Mark Triton wheel as built
-        id: build-wheel
-        run: |
-          echo "status=success" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-
       # Uploaded before the unit tests so that the test job can run even if unit tests fail.
       - name: Upload Triton wheels
         uses: actions/upload-artifact@v7
         with:
           name: triton-${{ env.PYTHON_VERSION }}-${{ inputs.runner_label }}
           path: ${{ env.NEW_WORKSPACE }}\dist\*.whl
+          if-no-files-found: error
 
       # Instrumentation tests require this library, which is not a part of the Triton wheel.
       - name: Upload instrumentation library
@@ -97,6 +92,13 @@ jobs:
         with:
           name: instrumentation-${{ env.PYTHON_VERSION }}-${{ inputs.runner_label }}
           path: ${{ env.NEW_WORKSPACE }}\build\lib*\triton\instrumentation\*GPUInstrumentationTestLib*.dll
+          if-no-files-found: error
+
+      # A separate step, so that the output is set only after both artifacts were uploaded successfully.
+      - name: Mark build artifacts as ready
+        id: build-wheel
+        run: |
+          echo "status=success" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       # Unit tests require `build` directory.
       - name: Run unit tests
@@ -121,7 +123,7 @@ jobs:
   tests:
     name: Tests
     needs: build
-    # Run tests even if unit tests in the build job failed, as long as the wheel was built.
+    # Run tests even if unit tests in the build job failed, as long as the build artifacts are ready.
     if: ${{ !cancelled() && needs.build.outputs.wheel == 'success' }}
     runs-on:
       - windows
