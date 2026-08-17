@@ -162,6 +162,12 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.one_matrix_per_load";
     }
 
+    /// Get the name of the attribute used to record chained dot
+    /// classification for warp-tiling decisions.
+    static constexpr llvm::StringRef getChainedDotKindAttrName() {
+      return "ttig.chained_dot_kind";
+    }
+
     /// Get the name of the attribute used to propagate the padding option
     /// from MakeTensorDescOp to descriptor load/store operations.
     static constexpr llvm::StringRef getDescPaddingAttrName() {

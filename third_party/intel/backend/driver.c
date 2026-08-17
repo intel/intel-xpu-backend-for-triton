@@ -511,7 +511,7 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   }
 
   const bool debugEnabled = getBoolEnv("TRITON_DEBUG");
-  constexpr int32_t max_reg_spill = 1000;
+  constexpr int32_t max_reg_spill = 0;
 
   if (canRetryWithLargeGRF && (firstBuildFailed || n_spills > max_reg_spill)) {
     PyObject *orig_type = nullptr, *orig_value = nullptr, *orig_tb = nullptr;
