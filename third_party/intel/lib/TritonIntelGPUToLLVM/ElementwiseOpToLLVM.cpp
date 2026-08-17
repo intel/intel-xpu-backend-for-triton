@@ -147,6 +147,26 @@ Fp8E5M2_to_Bf16Table(Location loc, ConversionPatternRewriter &rewriter,
   Value res2 = b.select(cmp2, normalized2, d2);
   Value res3 = b.select(cmp3, normalized3, d3);
 
+  // FP8E5M2 reserves exponent all-ones for Inf (mantissa 0) and NaN (mantissa
+  // != 0). In each `cN` lane the bf16-shaped value sits in bits [31:16], with
+  // the fp8 5-bit exponent at bits [27:23] (mask 0x0F800000, same field the
+  // subnormal test above uses) and the 2-bit mantissa at bits [22:21] (mask
+  // 0x00600000). The rebias `dN` above would otherwise decode these to finite
+  // values, so substitute the IEEE special bf16 patterns (+-Inf 0x7F800000,
+  // canonical quiet NaN 0x7FC00000); the sign OR below preserves the sign.
+  auto fixupReserved = [&](Value c, Value res) {
+    Value isRsvd =
+        b.icmp_eq(b.and_(c, b.i32_val(0x0F800000)), b.i32_val(0x0F800000));
+    Value isNan = b.icmp_ne(b.and_(c, b.i32_val(0x00600000)), b.i32_val(0));
+    Value special =
+        b.select(isNan, b.i32_val(0x7FC00000), b.i32_val(0x7F800000));
+    return b.select(isRsvd, special, res);
+  };
+  res0 = fixupReserved(c0, res0);
+  res1 = fixupReserved(c1, res1);
+  res2 = fixupReserved(c2, res2);
+  res3 = fixupReserved(c3, res3);
+
   Value f0 = b.or_(i32_ty, res0, b.lshr(i32_ty, res1, b.i32_val(16)));
   Value f1 = b.or_(i32_ty, res2, b.lshr(i32_ty, res3, b.i32_val(16)));
 
@@ -202,8 +222,9 @@ static SmallVector<Value> Fp8E5M2_to_Bf16(Location loc,
   //
   // The i32-domain shape (no trunc/mask immediately upstream of the bf16
   // multiply) avoids the IGC FTZ bug that motivated the i16-domain shape in
-  // the sibling Fp8E4M3Nv_to_Bf16 path. NumPy validation matches the
-  // existing E5M2 converter for all 256 fp8 byte values.
+  // the sibling Fp8E4M3Nv_to_Bf16 path. The rebias handles the 248 finite
+  // byte values; the 8 reserved Inf/NaN encodings are fixed up after the fmul
+  // below.
   auto rescalePack = [&](Value pack) {
     Value nosign = b.and_(i32_ty, pack, b.i32_val(0x7fff7fff));
     Value shifted = b.lshr(i32_ty, nosign, b.i32_val(3));
@@ -224,10 +245,37 @@ static SmallVector<Value> Fp8E5M2_to_Bf16(Location loc,
   Value bf16x2Vec0 = rescalePack(a0);
   Value bf16x2Vec1 = rescalePack(a1);
 
-  return {b.extract_element(bf16_ty, bf16x2Vec0, b.i32_val(0)),
-          b.extract_element(bf16_ty, bf16x2Vec0, b.i32_val(1)),
-          b.extract_element(bf16_ty, bf16x2Vec1, b.i32_val(0)),
-          b.extract_element(bf16_ty, bf16x2Vec1, b.i32_val(1))};
+  SmallVector<Value> out = {
+      b.extract_element(bf16_ty, bf16x2Vec0, b.i32_val(0)),
+      b.extract_element(bf16_ty, bf16x2Vec0, b.i32_val(1)),
+      b.extract_element(bf16_ty, bf16x2Vec1, b.i32_val(0)),
+      b.extract_element(bf16_ty, bf16x2Vec1, b.i32_val(1))};
+
+  // FP8E5M2 reserves exponent all-ones for Inf (mantissa 0) and NaN (mantissa
+  // != 0): bytes 0x7C/0xFC decode to +-Inf and 0x7D-0x7F / 0xFD-0xFF to NaN.
+  // The rebias fmul above turns these into finite bf16 values, so substitute
+  // the IEEE special bf16 patterns (+-Inf 0x7F80, canonical quiet NaN 0x7FC0),
+  // sign-preserved. Detection reads the raw fp8 byte and the substitution is
+  // applied to the extracted scalar lanes -- strictly downstream of the fmul --
+  // so the i32-domain fmul shape that dodges the IGC FTZ bug is untouched.
+  Value posInf = b.bitcast(b.i16_val(0x7F80), bf16_ty);
+  Value quietNan = LLVM::createNaNConstant(loc, rewriter, bf16_ty); // 0x7FC0
+  for (int i = 0; i < 4; ++i) {
+    Value byte = v[i];
+    Value isRsvd =
+        b.icmp_eq(b.and_(i8_ty, byte, b.int_val(8, 0x7C)), b.int_val(8, 0x7C));
+    Value isNan =
+        b.icmp_ne(b.and_(i8_ty, byte, b.int_val(8, 0x03)), b.int_val(8, 0));
+    // Re-attach the fp8 sign bit (bit 7) as the bf16 sign bit (bit 15).
+    Value sign16 =
+        b.shl(i16_ty, b.zext(i16_ty, b.and_(i8_ty, byte, b.int_val(8, 0x80))),
+              b.i16_val(8));
+    Value special = b.select(isNan, quietNan, posInf);
+    special =
+        b.bitcast(b.or_(i16_ty, b.bitcast(special, i16_ty), sign16), bf16_ty);
+    out[i] = b.select(isRsvd, special, out[i]);
+  }
+  return out;
 }
 
 static SmallVector<Value> Bf16_to_Fp8E5M2(Location loc,
