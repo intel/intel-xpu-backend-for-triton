@@ -15,7 +15,7 @@ on:
       - scripts/vllm/**
       - .github/pins/pytorch.txt
   schedule:
-    - cron: "0 8 * * *"
+    - cron: "0 8 * * 0-6"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || 'ci' }}
