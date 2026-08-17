@@ -1501,10 +1501,6 @@ struct ExtFOpConversion
   }
 };
 
-// Element-wise arith.bitcast lowering for tensor types.
-// The upstream arith→LLVM pattern emits a single llvm.bitcast on the whole
-// LLVM struct, which is invalid (structs are aggregate types). This override
-// has higher benefit and does a scalar llvm.bitcast per tensor element instead.
 struct ArithBitcastOpConversion
     : ElementwiseOpConversionBase<arith::BitcastOp, ArithBitcastOpConversion> {
   using Base =
