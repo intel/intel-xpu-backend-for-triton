@@ -685,10 +685,29 @@ Fp8E4M3Nv_to_Bf16Table(Location loc, ConversionPatternRewriter &rewriter,
   Value d2 = b.add(i32_ty, c2, b.i32_val(0x3c000000));
   Value d3 = b.add(i32_ty, c3, b.i32_val(0x3c000000));
 
+  // Reserved fp8 bytes 0x7F/0xFF (exponent and mantissa both all-ones) must
+  // decode to the canonical bf16 quiet NaN (0x7FC0), not to the +-480.0
+  // that `d0`..`d3` above would otherwise produce (e.g. for byte 0x7F,
+  // d = c + 0x3c000000 == 0x43F00000, i.e. bf16 0x43F0 == 480.0). `cN` holds
+  // `(byte & 0x7F) << 20`, so the exponent (bits 23-26) and top 3 mantissa
+  // bits (bits 20-22) together equal 0x07F00000 only for the reserved byte.
+  Value isNan0 =
+      b.icmp_eq(b.and_(c0, b.i32_val(0x07F00000)), b.i32_val(0x07F00000));
+  Value isNan1 =
+      b.icmp_eq(b.and_(c1, b.i32_val(0x07F00000)), b.i32_val(0x07F00000));
+  Value isNan2 =
+      b.icmp_eq(b.and_(c2, b.i32_val(0x07F00000)), b.i32_val(0x07F00000));
+  Value isNan3 =
+      b.icmp_eq(b.and_(c3, b.i32_val(0x07F00000)), b.i32_val(0x07F00000));
+
   Value res0 = b.select(cmp0, normalized0, d0);
   Value res1 = b.select(cmp1, normalized1, d1);
   Value res2 = b.select(cmp2, normalized2, d2);
   Value res3 = b.select(cmp3, normalized3, d3);
+  res0 = b.select(isNan0, b.i32_val(0x7FC00000), res0);
+  res1 = b.select(isNan1, b.i32_val(0x7FC00000), res1);
+  res2 = b.select(isNan2, b.i32_val(0x7FC00000), res2);
+  res3 = b.select(isNan3, b.i32_val(0x7FC00000), res3);
 
   Value f0 = b.or_(i32_ty, res0, b.lshr(i32_ty, res1, b.i32_val(16)));
   Value f1 = b.or_(i32_ty, res2, b.lshr(i32_ty, res3, b.i32_val(16)));
@@ -696,6 +715,10 @@ Fp8E4M3Nv_to_Bf16Table(Location loc, ConversionPatternRewriter &rewriter,
   Value sign0 = b.and_(i32_ty, a0, b.i32_val(0x80008000));
   Value sign1 = b.and_(i32_ty, a1, b.i32_val(0x80008000));
 
+  // The sign OR below applies to the substituted NaN too, so the NaN sign is
+  // preserved. A rebias multiply cannot be made to detect the reserved bytes
+  // by overflowing to Inf the way it can for fp16, because bf16 shares fp32's
+  // 8-bit exponent range -- hence the explicit select above.
   auto bf16x2VecTy = vec_ty(bf16_ty, 2);
   Value bf16x2Vec0 = b.or_(i32_ty, sign0, f0);
   Value bf16x2Vec1 = b.or_(i32_ty, sign1, f1);
@@ -749,6 +772,14 @@ static SmallVector<Value> Fp8E4M3Nv_to_Bf16(Location loc,
   // by two `trunc i32 to i16` feeding bf16 fmul silently zeroes the low bf16
   // lane on that path.
   Value bf16Mul = b.bf16_val(std::ldexp(1.0f, 120));
+  // Canonical bf16 quiet NaN (0x7FC0), substituted for the reserved fp8
+  // bytes 0x7F/0xFF that the single-fmul rescale below would otherwise
+  // decode to +-480.0. The sign OR at the end of this lambda applies to it
+  // too, so the NaN sign is preserved. The rebias fmul cannot be made to
+  // detect the reserved bytes by overflowing to Inf the way it can for fp16,
+  // because bf16 shares fp32's 8-bit exponent range -- hence the explicit
+  // isNanLo/isNanHi selects.
+  Value bf16Nan = LLVM::createNaNConstant(loc, rewriter, bf16_ty);
   auto bf16x2VecTy = vec_ty(bf16_ty, 2);
 
   auto rescaleLane = [&](Value pack) {
@@ -756,8 +787,12 @@ static SmallVector<Value> Fp8E4M3Nv_to_Bf16(Location loc,
     auto lo16 = b.trunc(i16_ty, pack);
     auto loSh = b.lshr(i16_ty, lo16, b.i16_val(4));
     auto loM = b.and_(i16_ty, loSh, b.i16_val(0x07F0));
+    // loM == 0x07F0 iff the source byte is the reserved NaN encoding
+    // (0x7F/0xFF): exponent and mantissa are both all-ones.
+    Value isNanLo = b.icmp_eq(loM, b.i16_val(0x07F0));
     auto loBf = b.bitcast(loM, bf16_ty);
-    auto loX = b.fmul(bf16_ty, loBf, bf16Mul);
+    Value loX = b.fmul(bf16_ty, loBf, bf16Mul);
+    loX = b.select(isNanLo, bf16Nan, loX);
     auto loO = b.bitcast(loX, i16_ty);
 
     // Hi lane: upper 16 bits of `pack`.
@@ -765,8 +800,10 @@ static SmallVector<Value> Fp8E4M3Nv_to_Bf16(Location loc,
     auto hi16 = b.trunc(i16_ty, hi32);
     auto hiSh = b.lshr(i16_ty, hi16, b.i16_val(4));
     auto hiM = b.and_(i16_ty, hiSh, b.i16_val(0x07F0));
+    Value isNanHi = b.icmp_eq(hiM, b.i16_val(0x07F0));
     auto hiBf = b.bitcast(hiM, bf16_ty);
-    auto hiX = b.fmul(bf16_ty, hiBf, bf16Mul);
+    Value hiX = b.fmul(bf16_ty, hiBf, bf16Mul);
+    hiX = b.select(isNanHi, bf16Nan, hiX);
     auto hiO = b.bitcast(hiX, i16_ty);
 
     // Repack two i16 -> i32 and OR in the preserved sign bits of `pack`.
