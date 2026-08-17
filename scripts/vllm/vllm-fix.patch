@@ -158,6 +158,20 @@ index a519980dea..a51a91de5c 100644
  @pytest.mark.usefixtures("default_vllm_config")
  @pytest.mark.parametrize("m", [1, 64, 256])
  @pytest.mark.parametrize("n,k", [(1024, 1024), (2048, 2048)])
+@@ -1377,11 +1400,11 @@ def test_moe_sum(m: int, topk: int, k: int, dtype: torch.dtype, layout: str):
+
+     # Reduction accumulates in fp32.
+     expected = input.float().sum(dim=1).to(dtype)
+-    torch.ops._moe_C.moe_sum(input, actual)
++    torch.ops._moe_C.moe_sum(input, actual, None, None)
+
+     torch.testing.assert_close(actual, expected, atol=2e-2, rtol=0)
+
+-    opcheck(torch.ops._moe_C.moe_sum, (input, actual))
++    opcheck(torch.ops._moe_C.moe_sum, (input, actual, None, None))
+
+
+ @pytest.mark.parametrize("topk", [2, 8])
 @@ -1533,7 +1556,10 @@ def _batched_fused_marlin_moe_cases() -> list[Any]:
      ("m,n,k,e,topk,max_tokens_per_batch,dtype,quant_dtype,input_type,atol"),
      _batched_fused_marlin_moe_cases(),
