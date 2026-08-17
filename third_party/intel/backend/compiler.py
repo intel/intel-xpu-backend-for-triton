@@ -415,6 +415,15 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         opt.warp_size = intel.get_threads_per_warp(mod)
         cls.validate_options(opt, properties)
 
+        # Split fp4 DotScaledOps with GRF-overflowing N at TTIR level, before
+        # layout assignment.  Must run after annotate_module (which sets
+        # ttig.support_block_scale_dpas and ttg.num-threads-per-warp) and
+        # before convert_to_ttgpuir (which assigns blocked encodings).
+        pm = ir.pass_manager(mod.context)
+        pm.enable_debug()
+        intel.passes.ttgpuir.add_split_large_n_dot_scaled(pm, opt.num_warps)
+        pm.run(mod, 'split_large_n_dot_scaled')
+
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.ttir.add_convert_to_ttgpuir(pm, "xpu", opt.num_warps, opt.warp_size, opt.num_ctas)
