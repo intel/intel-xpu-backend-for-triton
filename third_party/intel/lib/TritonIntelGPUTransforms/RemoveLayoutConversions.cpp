@@ -1694,9 +1694,20 @@ static int64_t getByteCount(Value result, int64_t minElementCount = 0,
   return (elementCount * dtypeBitWidth) >> 3;
 }
 
-/// Compute the cost of a ConvertLayoutOp with source \p convertSrc.
-static int64_t getConvertCost(Value convertSrc) {
-  auto convertLayoutBytes = getByteCount(convertSrc, 32, 32);
+/// Compute the cost of a ConvertLayoutOp with source \p convertSrc producing a
+/// tensor with encoding \p resultEncoding.
+static int64_t getConvertCost(Value convertSrc, Attribute resultEncoding) {
+  auto srcType = cast<RankedTensorType>(convertSrc.getType());
+  auto resultType = srcType.cloneWithEncoding(resultEncoding);
+  // The minimum element count models the SLM round-trip granularity (one
+  // element per bank). A convert that only reorders registers within a thread
+  // performs no SLM round-trip, so that floor does not apply to it: it inflated
+  // the cost of tiny converts (e.g. a single-element reduction result) by
+  // orders of magnitude, which made rematerialization duplicate a global load
+  // and a reduction in order to remove an almost-free convert (#7540). The
+  // minimum bit width still applies, as sub-word values occupy a full register.
+  int64_t minElementCount = cvtReordersRegisters(srcType, resultType) ? 0 : 32;
+  int64_t convertLayoutBytes = getByteCount(convertSrc, minElementCount, 32);
   // Intel GPU tuning: 3x factor accounts for higher SLM synchronization cost.
   // FIXME: measure cost of smem load/store and synchronisation on Intel GPUs,
   // and refine this model further. (#5476)
@@ -1749,7 +1760,8 @@ static bool isRematBeneficial(ttg::ConvertLayoutOp convertOp,
     if (Operation *op = v.getDefiningOp())
       sliceOps.insert(op);
 
-  int64_t convertLayoutCost = getConvertCost(convertOp.getSrc());
+  int64_t convertLayoutCost =
+      getConvertCost(convertOp.getSrc(), convertOp.getType().getEncoding());
   int64_t rematerialisationCost = newCvtCost;
 
   for (Operation *op : sliceOps) {
@@ -2215,7 +2227,8 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     LDBG("  skip remat: would degrade a load encoding");
     return;
   }
-  int64_t newCvtCost = getConvertCost(extOrBroadcastOp->getOperand(0));
+  int64_t newCvtCost =
+      getConvertCost(extOrBroadcastOp->getOperand(0), srcEncoding);
   if (!isRematBeneficial(convertOp, slice, newCvtCost))
     return;
 

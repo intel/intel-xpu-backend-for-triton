@@ -480,6 +480,16 @@ struct LoadStoreConversionBase {
   }
 
   // Convert Triton cache modifier to Intel GEN load cache control enum.
+  //
+  // Explicit cache modifiers (cg/cv/ca) always win. When no cache modifier is
+  // set, fall back to the frontend-provided eviction policy hint (e.g.
+  // inductor's `eviction_policy='evict_last'`) and route it to the closest
+  // LSC cache mode:
+  //   EVICT_FIRST -> L1IAR_L3C  (invalidate-after-read: data is used once;
+  //                              free the L1 line immediately after delivery)
+  //   EVICT_LAST  -> L1C_L3C    (cache at all levels: keep the line warm for
+  //                              anticipated reuse)
+  //   NORMAL      -> DEFAULT    (let the hardware decide)
   template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
                                  OpType, LoadOp, DescriptorLoadOp>::value>>
   TritonGEN::LoadCacheControl tritonToIntelCacheModifier(OpType &op) const {
@@ -493,6 +503,20 @@ struct LoadStoreConversionBase {
      **/
     switch (cacheModifier) {
     case CacheModifier::NONE:
+      // No explicit cache modifier: honor the eviction policy hint via the LSC
+      // cache-control decoration. EVICT_FIRST reads the line without retaining
+      // it in L1 (invalidate-after-read); EVICT_LAST keeps the line cached for
+      // anticipated reuse. This decoration does NOT bypass L1 for the load, so
+      // spatially-coalesced subgroup reads still share the line (see
+      // getNonTemporalFlag() for why EVICT_FIRST must not set nontemporal).
+      switch (op.getEvict()) {
+      case EvictionPolicy::EVICT_FIRST:
+        return TritonGEN::LoadCacheControl::L1IAR_L3C;
+      case EvictionPolicy::EVICT_LAST:
+        return TritonGEN::LoadCacheControl::L1C_L3C;
+      case EvictionPolicy::NORMAL:
+        break;
+      }
       return TritonGEN::LoadCacheControl::DEFAULT;
     case CacheModifier::CG:
       return TritonGEN::LoadCacheControl::L1UC_L3C;
@@ -533,8 +557,9 @@ struct LoadStoreConversionBase {
     }
   }
 
-  template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
-                                 OpType, LoadOp, StoreOp>::value>>
+  template <typename OpType,
+            typename = std::enable_if_t<llvm::is_one_of<
+                OpType, LoadOp, StoreOp, DescriptorLoadOp>::value>>
   bool getNonTemporalFlag(OpType op) const {
     switch (op.getCache()) {
     case triton::CacheModifier::CG:
@@ -542,6 +567,17 @@ struct LoadStoreConversionBase {
     case triton::CacheModifier::CV:
       return true;
     case triton::CacheModifier::CA:
+    case triton::CacheModifier::NONE:
+      // Do NOT derive the nontemporal (L1-bypass) flag from the eviction
+      // policy. An `evict_first` hint means the loaded *value* is single-use
+      // within this kernel; it does NOT mean the underlying cache line lacks
+      // spatial reuse. These loads are typically coalesced across the subgroup
+      // (adjacent lanes read adjacent elements of the same L1 line), so marking
+      // them nontemporal bypasses L1 and defeats that intra-line sharing,
+      // roughly doubling memory traffic (regression #7520, mobilevit_s). The
+      // eviction hint is still honored via the LSC cache-control decoration
+      // (EVICT_FIRST -> L1IAR_L3C) set in tritonToIntelCacheModifier(), which
+      // reads the coalesced line once and then does not retain it.
     default:
       return false;
     }
@@ -2336,7 +2372,7 @@ struct DescriptorLoadOpConversion
       auto createLoadWithAttrs = [&]() {
         return SmallVector<Value>{b.load(retTy, addrElem, alignment,
                                          /*isVolatile=*/false,
-                                         /*isNonTemporal=*/false)};
+                                         getNonTemporalFlag(op))};
       };
 
       Value ret;

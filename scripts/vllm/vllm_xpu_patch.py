@@ -192,9 +192,17 @@ def _find_cuda_patterns(source: str) -> list[dict]:
             if isinstance(func, ast.Attribute) and func.attr == "cuda":
                 patterns.append({
                     "type": "tensor_cuda_method",
-                    "line": node.lineno,
+                    "line": func.end_lineno,
                     "col": node.col_offset,
                 })
+
+        # .is_cuda property access on tensors (e.g., tensor.is_cuda)
+        if isinstance(node, ast.Attribute) and node.attr == "is_cuda":
+            patterns.append({
+                "type": "tensor_is_cuda_property",
+                "line": node.end_lineno,
+                "col": node.col_offset,
+            })
 
     return patterns
 
@@ -265,6 +273,10 @@ def _apply_patches(source: str, patterns: list[dict]) -> str:
             # Replace .cuda() with .xpu()
             lines[line_idx] = line.replace(".cuda()", ".xpu()")
 
+        elif ptype == "tensor_is_cuda_property":
+            # Replace the .is_cuda property with .is_xpu, but not a .is_cuda() method call (a platform guard)
+            lines[line_idx] = re.sub(r"\.is_cuda(?!\s*\()", ".is_xpu", line)
+
     return "\n".join(lines)
 
 
@@ -300,6 +312,7 @@ def main() -> None:
     patch_dirs = [
         # Test directories
         vllm_root / "tests" / "kernels",
+        vllm_root / "tests" / "models" / "kimi_k3",
         vllm_root / "tests" / "v1" / "sample",
         vllm_root / "tests" / "v1" / "spec_decode",
         vllm_root / "tests" / "v1" / "worker",
