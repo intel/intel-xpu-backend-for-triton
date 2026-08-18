@@ -377,6 +377,7 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_fp8
         n_warmup = 600
 
         if provider.startswith('triton'):
+            os.environ['VLLM_TRITON_USE_TD'] = '1' if is_td_patched else '0'
 
             def triton_fn():
                 invoke_fused_moe_triton_kernel(

@@ -882,3 +882,10 @@ tests/kernels/attention/test_triton_unified_attention.py::test_triton_unified_at
 tests/kernels/attention/test_triton_unified_attention.py::test_triton_unified_attn[8-q_dtype1-2048-50.0-dtype0-256-16-256-num_heads1-seq_lens1]
 tests/kernels/attention/test_triton_unified_attention.py::test_triton_unified_attn[8-q_dtype1-2048-50.0-dtype0-256-16-256-num_heads2-seq_lens0]
 tests/kernels/attention/test_triton_unified_attention.py::test_triton_unified_attn[8-q_dtype1-2048-50.0-dtype0-256-16-256-num_heads2-seq_lens1]
+
+# Tensor-likes are not close: https://github.com/intel/intel-xpu-backend-for-triton/issues/7753
+tests/kernels/moe/test_batched_moe.py::test_fused_moe_batched_experts[False-None-False-dtype0-2-8-222-128-2048]
+tests/kernels/moe/test_batched_moe.py::test_fused_moe_batched_experts[False-None-False-dtype0-6-8-45-1024-128]
+tests/kernels/moe/test_batched_moe.py::test_fused_moe_batched_experts[False-None-False-dtype0-6-8-64-512-512]
+tests/kernels/moe/test_batched_moe.py::test_fused_moe_batched_experts[False-None-False-dtype0-6-8-64-1024-2048]
+tests/kernels/moe/test_batched_moe.py::test_fused_moe_batched_experts[False-None-False-dtype0-6-8-222-128-2048]
