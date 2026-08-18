@@ -64,7 +64,7 @@ index 609b28a95..6ceb8d9ff 100644
 +
 +@triton.autotune(
 +    configs=get_batched_moe_configs(),
-+    key=['max_num_tokens', 'K', 'N', 'USE_TD'],
++    key=['max_num_tokens', 'K', 'N'],
 +)
  @triton.jit
  def batched_triton_kernel(
