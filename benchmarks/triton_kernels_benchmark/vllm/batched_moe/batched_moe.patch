@@ -135,12 +135,15 @@ index 609b28a95..6ceb8d9ff 100644
      num_pid_n = tl.cdiv(N, BLOCK_N)
      pid_m = pid_mn // num_pid_n
      pid_n = pid_mn % num_pid_n
-@@ -449,8 +487,8 @@ def invoke_moe_batched_triton_kernel(
+@@ -449,8 +487,9 @@ def invoke_moe_batched_triton_kernel(
      BLOCK_K = config["BLOCK_SIZE_K"]
  
-     grid = (
+-    grid = (
 -        expert_num_tokens.size(0),
-         triton.cdiv(max_num_tokens, BLOCK_M) * triton.cdiv(B.size(1), BLOCK_N),
+-        triton.cdiv(max_num_tokens, BLOCK_M) * triton.cdiv(B.size(1), BLOCK_N),
++    grid = lambda meta: (
++        triton.cdiv(max_num_tokens, meta["BLOCK_M"])
++        * triton.cdiv(B.size(1), meta["BLOCK_N"]),
 +        expert_num_tokens.size(0),
      )
  
