@@ -465,14 +465,6 @@ class XPUUtils(object):
         self.build_signature_metadata = mod.build_signature_metadata
         self._initialized = True
 
-    def get_current_device(self):
-        try:
-            from torch._C import _xpu_getDevice
-            return _xpu_getDevice()
-        except ImportError:
-            import torch
-            return torch.xpu.current_device()
-
     def get_sycl_queue(self):
         import torch
         return torch.xpu.current_stream().sycl_queue
@@ -712,6 +704,14 @@ class XPUDriver(DriverBase):
 
     def __init__(self):
         self.launcher_cls = XPULauncher
+        try:
+            from torch._C import _xpu_getCurrentRawStream, _xpu_getDevice
+            self.get_current_device = _xpu_getDevice
+            self.get_current_stream = _xpu_getCurrentRawStream
+        except ImportError:
+            import torch
+            self.get_current_device = torch.xpu.current_device
+            self.get_current_stream = lambda idx: torch.xpu.current_stream(idx).sycl_queue
         super().__init__()
 
     def __getattr__(self, name):
@@ -722,17 +722,6 @@ class XPUDriver(DriverBase):
             return self.utils
         else:
             raise AttributeError
-
-    def get_current_device(self):
-        return self.utils.get_current_device()
-
-    def get_current_stream(self, device):
-        try:
-            from torch._C import _xpu_getCurrentRawStream
-            return _xpu_getCurrentRawStream(device)
-        except ImportError:
-            import torch
-            return torch.xpu.current_stream().sycl_queue
 
     @lru_cache
     def _construct_target(self, device):
@@ -755,6 +744,7 @@ class XPUDriver(DriverBase):
         extensions = query_device_extensions(device_id)
         dev_property.update(extensions)
         dev_property["__intel_already_queried_extensions__"] = True
+        dev_property["core_clock_rate"] = self.utils.get_device_properties(device).get("sm_clock_rate", 0)
         update_device_arch(dev_property)
 
         return GPUTarget("xpu", dev_property, warp_size=32)

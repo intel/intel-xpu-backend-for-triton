@@ -1,0 +1,35 @@
+name: SGLang benchmarks, PVC
+
+permissions: read-all
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/sglang-benchmarks*.yml
+      - .github/workflows/build-benchmarks-wheel*.yml
+      - .github/actions/install-benchmarks/**
+      - scripts/sglang/**
+      - benchmarks/triton_kernels_benchmark/sglang/**
+      - .github/pins/pytorch.txt
+  schedule:
+    - cron: "0 11 * * *"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || 'ci' }}
+  cancel-in-progress: true
+
+jobs:
+  build-wheel:
+    uses: ./.github/workflows/build-benchmarks-wheel.yml
+    with:
+      python-version: "3.12"
+
+  benchmarks:
+    needs: build-wheel
+    if: always() && !cancelled()
+    uses: ./.github/workflows/sglang-benchmarks.yml
+    with:
+      runner_label: max1550
+    secrets: inherit

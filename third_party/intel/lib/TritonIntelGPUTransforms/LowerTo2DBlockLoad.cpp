@@ -182,7 +182,7 @@ private:
     // For descriptor loads, the 2D block I/O tile must use only the inner 2
     // dims. Reject if rowDim or colDim falls in a batch dimension.
     if (rank > 2) {
-      auto sizeInfo = ttgi::getBlockIOTileSize<true>(
+      auto sizeInfo = ttgi::getBlockIOLoadTileSize(
           llEncoding, contiguousDim, elemSizeInBits,
           /*maskAxisInfo=*/nullptr, oneMatrixPerLoadForBT);
       int innerDimStart = static_cast<int>(rank - 2);
@@ -375,9 +375,9 @@ private:
         LDBG("Tile validation failed for load: " << *op);
         return;
       }
-      auto sizeInfo = ttgi::getBlockIOTileSize<true>(
-          llEncoding, contiguousDim, elemSizeInBits, maskAxisInfo,
-          oneMatrixPerLoadForBT);
+      auto sizeInfo = ttgi::getBlockIOLoadTileSize(llEncoding, contiguousDim,
+                                                   elemSizeInBits, maskAxisInfo,
+                                                   oneMatrixPerLoadForBT);
       rowDim = sizeInfo.rowDim;
       colDim = sizeInfo.colDim;
       tileWidth = sizeInfo.tileWidth;

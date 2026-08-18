@@ -347,11 +347,11 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
 
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK-COUNT-2: llvm.mlir.constant(1 : i32) : i32
-  // CHECK:         [[ElemSize:%.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK:         [[ElemSize:%.*]] = llvm.mlir.constant(8 : i32) : i32
   // CHECK-NEXT:    [[TileWidth:%.*]] = llvm.mlir.constant(16 : i32) : i32
   // CHECK-NEXT:    [[TileHeight:%.*]] = llvm.mlir.constant(32 : i32) : i32
   // CHECK-NEXT:    [[VBlocks:%.*]] = llvm.mlir.constant(1 : i32) : i32
-  // CHECK-NEXT:    llvm.call spir_funccc @_Z36__spirv_Subgroup2DBlockPrefetchINTELiiiiPU3AS1viiiDv2_i([[ElemSize]], [[TileWidth]], [[TileHeight]], [[VBlocks]], {{.*}}, %arg2, %arg3, {{.*}}) {{.*}} : (i32, i32, i32, i32, !llvm.ptr<1>{{.*}}, i32, i32, i32, vector<2xi32>) -> ()
+  // CHECK:    llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid({{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %arg5, [[ElemSize]], [[TileWidth]], [[TileHeight]], [[VBlocks]], {{.*}}) {{.*}} : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> ()
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=16, tile_height=32, v_blocks=1, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
 }
@@ -451,4 +451,30 @@ llvm.func @triton_gen.2Dblockprefetch_d16_genisa_fallback(%ptr : !llvm.ptr<1>, %
   // CHECK:     llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid({{.*}}) {{.*}} : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> ()
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=16, tile_width=32, tile_height=8, v_blocks=1, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
+}
+
+// -----
+
+// COM: The ttig.2d_block_io_base_alignment attribute advertises a relaxed HW
+// COM: base-address alignment requirement (4 bytes, e.g. on CRI). Since
+// COM: MaterializeBlockPointer already guarantees a 4-byte aligned base, the
+// COM: 64-byte alignment compensation is skipped: the raw ptr, base_width and x
+// COM: are passed to the builtin unchanged.
+
+module attributes {ttig.2d_block_io_base_alignment = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
+  // CHECK:     llvm.func @triton_gen.2Dblockprefetch(%arg0: !llvm.ptr<1>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32) {
+  // CHECK-NOT:   llvm.ptrtoint
+  // CHECK-NOT:   llvm.mlir.constant(-64 : i64)
+  // CHECK-NOT:   llvm.mlir.constant(63 : i64)
+  // CHECK-NOT:   llvm.udiv
+  // CHECK-DAG:   [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK-DAG:   [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK-DAG:   [[UNDEF:%.*]] = llvm.mlir.undef : vector<2xi32>
+  // CHECK-DAG:   [[COORD0:%.*]] = llvm.insertelement %arg4, [[UNDEF]][[[ZERO]] : i32] : vector<2xi32>
+  // CHECK-DAG:   [[COORD1:%.*]] = llvm.insertelement %arg5, [[COORD0]][[[ONE]] : i32] : vector<2xi32>
+  // CHECK:       llvm.call spir_funccc @_Z36__spirv_Subgroup2DBlockPrefetchINTELiiiiPU3AS1viiiDv2_i({{.*}}, %arg0, %arg1, %arg2, %arg3, [[COORD1]])
+  triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=1, cache_control=L1UC_L3UC} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
+  llvm.return
+}
 }

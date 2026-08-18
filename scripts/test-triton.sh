@@ -824,39 +824,7 @@ enter_vllm_test_env() {
 }
 
 run_sglang_install() {
-  echo "************************************************"
-  echo "******    Installing SGLang                 ****"
-  echo "************************************************"
-
-  if pip show sglang >/dev/null 2>&1; then
-    echo "WARNING: sglang is already installed, skipping installation."
-    echo "To get clean installation, run:"
-    echo "  rm -rf ./sglang && pip uninstall -y sglang"
-    return
-  fi
-
-  if [ -d "./sglang" ]; then
-    echo "WARNING: ./sglang directory already exists, installing from it."
-    echo "To get clean installation, run:"
-    echo "  rm -rf ./sglang && pip uninstall -y sglang"
-  else
-    git clone https://github.com/sgl-project/sglang.git
-    cd sglang
-    git checkout "$(<../benchmarks/third_party/sglang/sglang-pin.txt)"
-    git apply ../benchmarks/third_party/sglang/sglang-test-fix.patch
-    git apply ../benchmarks/third_party/sglang/sglang-bench-fix.patch
-
-    # That's how sglang assumes we'll pick out platform for now
-    cp python/pyproject_xpu.toml python/pyproject.toml
-    # We should remove all torch libraries from requirements to avoid reinstalling triton & torch
-    # We remove sgl kernel due to a bug in the current environment probably due to using newer torch, we don't currently use it anyway
-    # We remove timm because it depends on torchvision, which depends on torch==2.9
-    sed -i '/pytorch\|torch\|sgl-kernel\|timm/d' python/pyproject.toml
-    cat python/pyproject.toml
-    cd ..
-  fi
-
-  pip install -e "./sglang/python"
+  "$SCRIPTS_DIR/sglang/install-sglang.sh"
 }
 
 run_sglang_tests() {
@@ -867,7 +835,8 @@ run_sglang_tests() {
   run_sglang_install
   run_test_deps_install
   cd sglang
-  run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-4} test/srt/test_triton_attention_kernels.py
+  TRITON_TEST_SUITE=sglang \
+    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-4} test/registered/attention/test_triton_attention_kernels.py
 }
 
 run_liger_install() {
@@ -899,7 +868,8 @@ run_liger_tests() {
 
   run_liger_install
   run_test_deps_install
-  run_pytest_command -vvv Liger-Kernel/test/
+  TRITON_TEST_SUITE=liger \
+    run_pytest_command -vvv Liger-Kernel/test/
 }
 
 run_vllm_install() {
@@ -932,6 +902,7 @@ run_vllm_tests() {
   run_vllm_linear_attn_tests
   run_vllm_deepgemm_tests
   run_vllm_kda_tests
+  run_vllm_tdesc_tests
 }
 
 
@@ -1123,7 +1094,7 @@ run_vllm_kda_tests() {
   enter_vllm_test_env
   TRITON_TEST_SUITE=vllm_kda \
     run_pytest_command -vvv \
-      tests/kernels/test_kda.py \
+      tests/models/kimi_k3/test_kda.py \
       tests/kernels/core/test_fused_rms_norm_gated.py
 }
 
@@ -1136,31 +1107,46 @@ run_vllm_tdesc_tests() {
   enter_vllm_test_env
 
   local VLLM_PROJ="$TRITON_PROJ/vllm"
-  local PATCH_FILE="$TRITON_PROJ/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention.patch"
+  local PATCH_FILES=(
+    "$TRITON_PROJ/benchmarks/triton_kernels_benchmark/vllm/batched_moe/batched_moe.patch"
+    "$TRITON_PROJ/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention.patch"
+  )
 
-  if git -C "$VLLM_PROJ" apply --check "$PATCH_FILE" 2>/dev/null; then
-    echo "Applying tdesc patch: $PATCH_FILE."
-    git -C "$VLLM_PROJ" apply "$PATCH_FILE"
-  elif git -C "$VLLM_PROJ" apply --reverse --check "$PATCH_FILE" 2>/dev/null; then
-    echo "Patch already applied, skipping."
-  else
-    echo "ERROR: Failed to apply tdesc patch: $PATCH_FILE" >&2
-    echo "The vLLM tree may have an outdated patch or conflicting changes." >&2
-    return 1
+  local patch_file
+  local applied_patches=()
+  local exit_status=0
+
+  for patch_file in "${PATCH_FILES[@]}"; do
+    if git -C "$VLLM_PROJ" apply --check "$patch_file" 2>/dev/null; then
+      echo "Applying tdesc patch: $patch_file."
+      git -C "$VLLM_PROJ" apply "$patch_file"
+      applied_patches+=("$patch_file")
+    elif git -C "$VLLM_PROJ" apply --reverse --check "$patch_file" 2>/dev/null; then
+      echo "Patch already applied, skipping: $patch_file."
+    else
+      echo "ERROR: Failed to apply tdesc patch: $patch_file" >&2
+      echo "The vLLM tree may have an outdated patch or conflicting changes." >&2
+      exit_status=1
+      break
+    fi
+  done
+
+  if [ "$exit_status" -eq 0 ]; then
+    VLLM_TRITON_USE_TD=1 TRITON_TEST_SUITE=vllm_tdesc \
+      run_pytest_command -vvv \
+        tests/kernels/moe/test_batched_moe.py \
+        tests/kernels/attention/test_triton_unified_attention.py \
+        || exit_status=$?
   fi
 
-  local EXIT_STATUS=0
-  TRITON_TEST_SUITE=vllm_tdesc \
-    run_pytest_command -vvv \
-      tests/kernels/attention/test_triton_unified_attention.py \
-      || EXIT_STATUS=$?
+  for patch_file in "${applied_patches[@]}"; do
+    echo "Reverting tdesc patch: $patch_file."
+    if ! git -C "$VLLM_PROJ" apply -R "$patch_file"; then
+      echo "WARNING: Failed to revert tdesc patch: $patch_file." >&2
+    fi
+  done
 
-  echo "Reverting tdesc patch: $PATCH_FILE."
-  if ! git -C "$VLLM_PROJ" apply -R "$PATCH_FILE"; then
-    echo "WARNING: Failed to revert tdesc patch: $PATCH_FILE." >&2
-  fi
-
-  return $EXIT_STATUS
+  return $exit_status
 }
 
 

@@ -147,7 +147,9 @@ void init_triton_intel_passes_ttgpuir(py::module_ &&m) {
       .def_rw("is_fast_math",
               &gpu::intel::TritonAnnotateModuleOptions::isFastMath)
       .def_rw("sub_32_dpas",
-              &gpu::intel::TritonAnnotateModuleOptions::sub32DPAS);
+              &gpu::intel::TritonAnnotateModuleOptions::sub32DPAS)
+      .def_rw("block_io_base_alignment",
+              &gpu::intel::TritonAnnotateModuleOptions::blockIOBaseAlignment);
   ADD_PASS_OPTION_WRAPPER_1("add_triton_annotate_module",
                             gpu::intel::createTritonAnnotateModule,
                             gpu::intel::TritonAnnotateModuleOptions);
@@ -367,6 +369,16 @@ void init_triton_intel(py::module_ &m) {
       mlir::Builder builder(mod.getContext());
       mod->setAttr(TritonIntelGPUDialect::getIsLTSAttrName(),
                    builder.getUnitAttr());
+    }
+  });
+
+  m.def("set_core_clock_rate", [](mlir::ModuleOp &mod, unsigned clockRate) {
+    using namespace mlir::triton::gpu::intel;
+    if (clockRate &&
+        !mod->hasAttr(TritonIntelGPUDialect::getCoreClockRateAttrName())) {
+      mlir::Builder builder(mod.getContext());
+      mod->setAttr(TritonIntelGPUDialect::getCoreClockRateAttrName(),
+                   builder.getI32IntegerAttr(clockRate));
     }
   });
 

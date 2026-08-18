@@ -3,8 +3,23 @@ name: vLLM benchmarks, BMG
 permissions: read-all
 
 on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/vllm-benchmarks*.yml
+      - .github/workflows/build-benchmarks-wheel*.yml
+      - .github/actions/install-benchmarks/**
+      - .github/actions/install-vllm/**
+      - benchmarks/triton_kernels_benchmark/vllm/**
+      - scripts/vllm/**
+      - .github/pins/pytorch.txt
   schedule:
     - cron: "0 8 * * *"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || 'ci' }}
+  cancel-in-progress: true
 
 jobs:
   build-wheel:
