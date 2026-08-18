@@ -9,7 +9,11 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
-from triton_kernels_benchmark import sycl_tla_kernel
+try:
+    from triton_kernels_benchmark import sycl_tla_kernel
+except (ImportError, OSError):
+    sycl_tla_kernel = None
+from triton_kernels_benchmark.benchmark_testing import DEVICE
 
 
 @triton.autotune(
@@ -150,20 +154,20 @@ def benchmark(M, N, K, provider):
     # Maximum across onednn=10, triton=100, sycl-tla=300
     do_bench = benchmark_suite.get_do_bench(n_warmup=300, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
     torch.manual_seed(0)
-    a = torch.rand((M, K), device='xpu', dtype=torch.bfloat16)
-    b = torch.rand((K, N), device='xpu', dtype=torch.bfloat16)
+    a = torch.rand((M, K), device=DEVICE, dtype=torch.bfloat16)
+    b = torch.rand((K, N), device=DEVICE, dtype=torch.bfloat16)
 
     if provider == 'onednn':
         _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: torch.matmul(a, b))
     elif provider == 'triton':
-        c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
+        c = torch.zeros((M, N), device=DEVICE, dtype=torch.float32)
         triton_fn = lambda: matmul(a, b, c)
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)
         rtol = 1e-2 if a.dtype == torch.bfloat16 else 1e-3
         benchmark_suite.assert_close(triton_fn, torch_fn, atol=1e-4, rtol=rtol, err_msg='triton to torch')
         _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
     elif provider == 'sycl-tla':
-        c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
+        c = torch.zeros((M, N), device=DEVICE, dtype=torch.float32)
         k_ratio = K // max(M, 1)
         split_k = 8 if k_ratio >= 16 else 4 if k_ratio >= 4 else 2
 

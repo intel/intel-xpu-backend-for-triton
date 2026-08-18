@@ -32,6 +32,7 @@ from torch._dynamo.exc import BackendCompilerFailed  # pylint: disable=protected
 from torch._inductor.select_algorithm import NoValidChoicesError  # pylint: disable=protected-access
 
 import triton_kernels_benchmark as benchmark_suite
+from triton_kernels_benchmark.benchmark_testing import DEVICE, DEVICE_NAME, DEVICE_TOTAL_MEMORY
 
 _COMPILE_ERRORS = (InductorError, BackendCompilerFailed, NoValidChoicesError)
 
@@ -145,13 +146,13 @@ def _compiled_grouped_mm(with_offs: bool):
 def make_inputs(G, M, N, K, variant):
     """Build (a, b, offs) for the requested grouped-mm layout (bf16, equal groups)."""
     if variant == "2d3d":
-        a = torch.rand((G * M, K), device="xpu", dtype=torch.bfloat16)
-        b = torch.rand((G, K, N), device="xpu", dtype=torch.bfloat16)
-        offs = torch.arange(1, G + 1, device="xpu", dtype=torch.int32) * M
+        a = torch.rand((G * M, K), device=DEVICE, dtype=torch.bfloat16)
+        b = torch.rand((G, K, N), device=DEVICE, dtype=torch.bfloat16)
+        offs = torch.arange(1, G + 1, device=DEVICE, dtype=torch.int32) * M
         return a, b, offs
     if variant == "3d3d":
-        a = torch.rand((G, M, K), device="xpu", dtype=torch.bfloat16)
-        b = torch.rand((G, K, N), device="xpu", dtype=torch.bfloat16)
+        a = torch.rand((G, M, K), device=DEVICE, dtype=torch.bfloat16)
+        b = torch.rand((G, K, N), device=DEVICE, dtype=torch.bfloat16)
         return a, b, None
     raise ValueError(f"Unsupported variant {variant!r}; expected '2d3d' or '3d3d'")
 
@@ -166,9 +167,6 @@ X_VALS = [  #
     [64, 128, 2048, 2048],
     [128, 64, 1024, 1024],
 ]
-
-DEVICE_NAME = torch.xpu.get_device_name()
-DEVICE_TOTAL_MEMORY = torch.xpu.get_device_properties().total_memory
 
 
 def is_enough_memory(x_val):

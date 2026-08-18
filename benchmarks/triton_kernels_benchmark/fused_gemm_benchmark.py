@@ -16,6 +16,7 @@ import triton.language as tl
 from triton.language.extra import libdevice
 
 import triton_kernels_benchmark as benchmark_suite
+from triton_kernels_benchmark.benchmark_testing import DEVICE, DEVICE_NAME, DEVICE_TOTAL_MEMORY
 
 
 def native_torch_fused_gemm(x, w_g, w_fc, b_g, b_fc):
@@ -145,9 +146,6 @@ X_VALS = [
     # [8192, 8192, 7168],
 ]
 
-DEVICE_NAME = torch.xpu.get_device_name()
-DEVICE_TOTAL_MEMORY = torch.xpu.get_device_properties().total_memory
-
 
 def is_enough_memory(x_val):
     # x_val: (M, N, K)
@@ -181,7 +179,7 @@ def is_enough_memory_for_verification(M, N, K):
 
 
 def fused_gemm_swiglu(x, w_g, w_fc, b_g, b_fc, M, N, K):
-    y = torch.empty((M, N), device='xpu', dtype=torch.bfloat16)
+    y = torch.empty((M, N), device=DEVICE, dtype=torch.bfloat16)
     grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
     fused_gemm_swiglu_kernel[grid](x, w_g, w_fc, b_g, b_fc, y, M, N, K)
     return y
@@ -211,14 +209,13 @@ X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
     ))
 def benchmark(M, N, K, provider):
     do_bench = benchmark_suite.get_do_bench(n_warmup=800, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
-
-    torch.xpu.empty_cache()
+    torch.xpu.empty_cache() if DEVICE == 'xpu' else torch.cuda.empty_cache()  # pylint: disable=W0106
     torch.manual_seed(0)
-    x = torch.empty((M, K), device='xpu', dtype=torch.float32).uniform_(-0.25, -0.25).to(torch.bfloat16)
-    w_g = torch.empty((K, N), device='xpu', dtype=torch.float32).uniform_(-0.25, 0.25).to(torch.bfloat16)
-    w_fc = torch.empty((K, N), device='xpu', dtype=torch.float32).uniform_(-0.25, 0.25).to(torch.bfloat16)
-    b_g = torch.zeros((N, ), device='xpu', dtype=torch.bfloat16)
-    b_fc = torch.zeros((N, ), device='xpu', dtype=torch.bfloat16)
+    x = torch.empty((M, K), device=DEVICE, dtype=torch.float32).uniform_(-0.25, -0.25).to(torch.bfloat16)
+    w_g = torch.empty((K, N), device=DEVICE, dtype=torch.float32).uniform_(-0.25, 0.25).to(torch.bfloat16)
+    w_fc = torch.empty((K, N), device=DEVICE, dtype=torch.float32).uniform_(-0.25, 0.25).to(torch.bfloat16)
+    b_g = torch.zeros((N, ), device=DEVICE, dtype=torch.bfloat16)
+    b_fc = torch.zeros((N, ), device=DEVICE, dtype=torch.bfloat16)
 
     if provider == 'triton':
         triton_fn = lambda: fused_gemm_swiglu(x, w_g, w_fc, b_g, b_fc, M, N, K)
