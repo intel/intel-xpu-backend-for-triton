@@ -458,107 +458,102 @@ Fp16_to_Fp8E4M3B15(Location loc, ConversionPatternRewriter &rewriter,
 // Note: when handled by software, this format
 // has more than a single NaN values.
 
-// Fp8E4M3 -> Fp16 (packed)
+// Fp8E4M3 -> Fp16 (packed), oneDNN-derived. 6 arithmetic ops per 2 elements,
+// down from ~20 in the implementation this replaces, which spent 14 of them
+// on an integer NaN fixup. Runs entirely in the <2 x i16> / <2 x half>
+// domain:
 //
-// 11-op single-fmul converter: replaces the prior 22-op table-lookup +
-// select-on-subnormal implementation. A single multiplication by 256.0
-// (= 2^8) re-biases BOTH the normal and the subnormal paths in one shot,
-// eliminating the predicate, the 8-entry lookup table, and the select.
+//   ashr <2 x i16>, 1       reposition exp+mantissa; arithmetic, so it also
+//                           smears the sign into bit 15, placing it in the
+//                           fp16 sign position for free
+//   and  <2 x i16>, 0xBFFF  clear bit 14, which the shift duplicated
+//   fmul 36864.0            rebias, part 1
+//   fmul 0.0069427490234375 rebias, part 2
+//   fadd(h, fmul(h, 0.0))   Inf -> NaN; oneDNN's `mad y, y, y, 0:hf`
 //
-// Math justification:
-//   After stripping the sign and computing `(byte & 0x7F) << 7`, the fp8
-//   byte's exponent (4 bits) lands at fp16 bit positions 10-13 (still
-//   bias-7), and the fp8 mantissa (3 bits) lands at fp16 bit positions
-//   7-9 (top 3 bits of the fp16 mantissa, low 7 bits zero).
+// Do NOT collapse the two rebias multiplies into a single x256: the overflow
+// in the first one IS the NaN detector. Byte 0x7E (largest finite) gives
+// 1.75 * 36864 = 64512, still under the 65504 fp16 max, while the reserved
+// byte 0x7F gives 1.875 * 36864 = 69120 -> Inf. The trailing `h + h*0.0`
+// turns that into NaN via IEEE `Inf * 0 = NaN`, and is an exact identity for
+// every finite input.
 //
-//   * Normal path (fp8 exp != 0): the bit pattern is a normal fp16 with
-//     exponent = fp8 exp (bias-7) and mantissa = mmm * 128. Its value is
-//     (1 + mmm/8) * 2^(e-15). Multiplying by 256 = 2^8 increments the
-//     biased exponent by 8 -> (1 + mmm/8) * 2^(e-7), which is exactly the
-//     fp8-defined value.
-//   * Subnormal path (fp8 exp == 0): the bit pattern is an fp16 subnormal
-//     with significand mmm * 128. Its value is mmm * 2^(-17). Multiplying
-//     by 256 yields mmm * 2^(-9), which is exactly the fp8 subnormal
-//     value.
+// Rounding: 36 of the 256 bytes depend on round-to-nearest-EVEN, where the
+// old implementation was exact by construction. The exact product of the
+// second multiply is T * (1 - 2^-12) for the wanted result T = y * 256; when
+// T is a power of two that is precisely the midpoint below T, and only RNE's
+// even-significand tie-break recovers it. Affects 0x01/0x02/0x04 and
+// 0x08,0x10,...,0x78, both signs. This is why the exhaustive 256-byte
+// hardware tests are a correctness gate rather than a nicety.
 //
-// Both paths use the same multiplier 256.0, so the cast collapses to one
-// fmul. Validated bit-equal across all 256 fp8 byte values, and bit-exact
-// on real GPU outputs across 33.6M bf16 attention outputs (decode_8 and
-// prefill_4k shapes).
+// Invariant: `ninf` must never reach the second rebias multiply. With it,
+// LLVM may assume the value is finite, fold `h*0.0` to 0.0 and `h + 0.0` to
+// `h`, silently deleting the Inf -> NaN step. set_fast_math() in
+// third_party/intel/triton_xpu.cc sets only `contract` outside fast-math
+// mode, which is what keeps this safe; test/Conversion/intel/
+// fp8e4m3_to_fp16.mlir pins the fadd so its loss is caught.
 //
-// NaN propagation: fp8 NaN bytes (abs == 0x7F, i.e. 0x7F and 0xFF) produce
-// fp16 NaN (0x7E00) with the sign bit preserved. This matches the behavior of
-// the AMD and NVIDIA software converters.
+// NaN behavior change (deliberate): reserved bytes 0x7F/0xFF now decode to
+// the hardware default quiet NaN with the sign DISCARDED (0xFE00 on BMG),
+// where before they were sign-preserved 0x7E00/0xFE00. Under
+// TRITON_INTEL_FAST_MATH=1, `reassoc` folds the two multiplies (to exactly
+// x256, so finite values stay bit-exact) and drops the fixup, so those bytes
+// decode to finite +-480.0 instead of NaN -- accepted; fast math waives NaN
+// semantics.
+//
+// This file has a history of IGC flush-to-zero bugs that are sensitive to the
+// integer domain (see Fp8E5M2_to_Bf16, which needs i32, and
+// Fp8E4M3Nv_to_Bf16, which needs i16). If the <2 x i16> ashr ever trips one,
+// the fallback is the i32 domain: `lshr i32, 1` + `and 0x3FFF3FFF` +
+// `and 0x80008000` + `or`. That is 8 ops instead of 6 and was verified
+// bit-identical on all 256 bytes.
 static SmallVector<Value> Fp8E4M3Nv_to_Fp16(Location loc,
                                             ConversionPatternRewriter &rewriter,
                                             const SmallVector<Value> &v) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  // Pack two i8 inputs into byte positions 1 and 3 of an i32 (the same
-  // packing the previous implementation used). Bytes 0 and 2 are zero.
+  // Pack into byte positions 1 and 3, putting each fp8 byte in the high half
+  // of its 16-bit lane. Positions 0 and 2 MUST stay zero: `ashr` moves their
+  // bits 1-7 into fp16 mantissa bits 0-6 of the same lane and `and 0xBFFF`
+  // does not clear them.
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
   Value pack4 = b.undef(fp8x4VecTy);
   pack4 = b.insert_element(fp8x4VecTy, pack4, b.int_val(8, 0), b.i32_val(0));
   pack4 = b.insert_element(fp8x4VecTy, pack4, v[0], b.i32_val(1));
   pack4 = b.insert_element(fp8x4VecTy, pack4, b.int_val(8, 0), b.i32_val(2));
   pack4 = b.insert_element(fp8x4VecTy, pack4, v[1], b.i32_val(3));
-  Value packi32 = b.bitcast(pack4, i32_ty);
 
-  // Move bytes from positions 1,3 to positions 0,2 (so each fp8 byte sits
-  // at the bottom of its 16-bit lane).
-  Value shifted = b.lshr(i32_ty, packi32, b.i32_val(8));
-
-  // Strip both signs in parallel.
-  Value stripped = b.and_(i32_ty, shifted, b.i32_val(0x007F007F));
-
-  // Align fp8 exp+mantissa into fp16 layout: exp at fp16 bits 10-13 (still
-  // bias-7), mantissa at fp16 bits 7-9.
-  Value aligned = b.shl(i32_ty, stripped, b.i32_val(7));
-
-  // Reinterpret as <2 x half> and re-bias by multiplying by 256.0. The
-  // same multiplier handles both normal and subnormal paths (see comment
-  // block at the top of this function).
+  auto i16x2VecTy = vec_ty(i16_ty, 2);
   auto fp16x2VecTy = vec_ty(f16_ty, 2);
-  Value hIn = b.bitcast(aligned, fp16x2VecTy);
-  Value mul256 = b.undef(fp16x2VecTy);
-  Value c256 = b.f16_val(256.0f);
-  mul256 = b.insert_element(fp16x2VecTy, mul256, c256, b.i32_val(0));
-  mul256 = b.insert_element(fp16x2VecTy, mul256, c256, b.i32_val(1));
-  Value hOut = b.fmul(hIn, mul256);
 
-  // OR sign bits back in (sign bits are at i32 positions 15 and 31, which
-  // is exactly where fp16 sign bits go).
-  Value iOut = b.bitcast(hOut, i32_ty);
-  Value signs = b.and_(i32_ty, packi32, b.i32_val(0x80008000));
-  Value iSigned = b.or_(i32_ty, iOut, signs);
+  // undef + 2 inserts is how the sibling converters build vector constants;
+  // LLVM folds it to a splat.
+  auto splatI16 = [&](int64_t val) {
+    Value c = b.i16_val(val);
+    Value vec = b.undef(i16x2VecTy);
+    vec = b.insert_element(i16x2VecTy, vec, c, b.i32_val(0));
+    vec = b.insert_element(i16x2VecTy, vec, c, b.i32_val(1));
+    return vec;
+  };
+  auto splatF16 = [&](float val) {
+    Value c = b.f16_val(val);
+    Value vec = b.undef(fp16x2VecTy);
+    vec = b.insert_element(fp16x2VecTy, vec, c, b.i32_val(0));
+    vec = b.insert_element(fp16x2VecTy, vec, c, b.i32_val(1));
+    return vec;
+  };
 
-  // NaN fixup: fp8 NaN byte (abs == 0x7F) must produce fp16 NaN (0x7E00)
-  // with the sign preserved, not ±480.0.  Check both 16-bit lanes in the
-  // packed i32 domain.  `stripped` has abs(byte0) in bits [6:0] and
-  // abs(byte1) in bits [22:16].
-  Value isNan0 = b.icmp_eq(b.and_(i32_ty, stripped, b.i32_val(0x0000007F)),
-                           b.i32_val(0x0000007F));
-  Value isNan1 = b.icmp_eq(b.and_(i32_ty, stripped, b.i32_val(0x007F0000)),
-                           b.i32_val(0x007F0000));
-  // fp16 0x7E00 with the lane's sign bit OR-ed in.
-  Value nan0 = b.or_(i32_ty, b.i32_val(0x00007E00),
-                     b.and_(i32_ty, signs, b.i32_val(0x00008000)));
-  Value nan1 = b.or_(i32_ty, b.i32_val(0x7E000000),
-                     b.and_(i32_ty, signs, b.i32_val(0x80000000)));
-  // Splice nan0 into the low 16-bit lane of iSigned when lane 0 is NaN.
-  iSigned = b.select(
-      isNan0,
-      b.or_(i32_ty, b.and_(i32_ty, iSigned, b.i32_val(0xFFFF0000)), nan0),
-      iSigned);
-  // Splice nan1 into the high 16-bit lane of iSigned when lane 1 is NaN.
-  iSigned = b.select(
-      isNan1,
-      b.or_(i32_ty, b.and_(i32_ty, iSigned, b.i32_val(0x0000FFFF)), nan1),
-      iSigned);
+  Value lanes = b.bitcast(pack4, i16x2VecTy);
+  Value shifted = b.ashr(i16x2VecTy, lanes, splatI16(1));
+  Value aligned = b.and_(i16x2VecTy, shifted, splatI16(0xBFFF));
 
-  Value result = b.bitcast(iSigned, fp16x2VecTy);
-  return {b.extract_element(f16_ty, result, b.i32_val(0)),
-          b.extract_element(f16_ty, result, b.i32_val(1))};
+  Value h = b.bitcast(aligned, fp16x2VecTy);
+  h = b.fmul(h, splatF16(36864.0f));
+  h = b.fmul(h, splatF16(0.0069427490234375f));
+  h = b.fadd(h, b.fmul(h, splatF16(0.0f)));
+
+  return {b.extract_element(f16_ty, h, b.i32_val(0)),
+          b.extract_element(f16_ty, h, b.i32_val(1))};
 }
 
 // Fp16 -> Fp8E4M3 (packed)
