@@ -521,7 +521,26 @@ private:
       // rhs: d_rhs * p = gcd(d_lhs, d_rhs) * p' * p = gcd(d_lhs, d_rhs) * p''
       // lhs = gcd(d_lhs, d_rhs) * k'' = gcd(d_lhs, d_rhs) * d + r
       // r must be divisible by gcd(d_lhs, d_rhs)
-      return gcd(lhs.getDivisibility(dim), rhs.getDivisibility(dim));
+      int64_t divisibility =
+          gcd(lhs.getDivisibility(dim), rhs.getDivisibility(dim));
+      // The argument above holds for a dividend element that d_lhs divides,
+      // i.e. for the first element of a dividend contiguity group. Divisibility
+      // is a claim about the first element of a *result* group, so when an
+      // operand has contiguity larger than the result contiguity, a result
+      // group can start inside an operand group, on d_lhs * k + t, which
+      // gcd(d_lhs, d_rhs) need not divide. Clamp to the result contiguity, as
+      // the add/sub visitor above does.
+      // For example, a dividend of [0, 1, 2, 3, 8, 9, 10, 11] modulo 4 has
+      // result contiguity 1, so every element is a group start - including the
+      // 1, which only 1 divides.
+      // Operands that are no coarser than the result need no clamping: every
+      // result group start is then also an operand group start, where d_lhs and
+      // d_rhs both apply.
+      int64_t contiguity = getContiguity(op, lhs, rhs, dim);
+      if (lhs.getContiguity(dim) > contiguity ||
+          rhs.getContiguity(dim) > contiguity)
+        return gcd(divisibility, contiguity);
+      return divisibility;
     }
     // Otherwise we shouldn't assume any divisibility.
     // For example:

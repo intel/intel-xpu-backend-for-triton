@@ -633,6 +633,7 @@ class XPULauncher(object):
         self.print_dump_spirv_kernel_args_info = knobs.intel.print_dump_spirv_kernel_args_info
         self.constants = constants
         self.signature = signature
+        self.dump_launch_params = os.environ.get("TRITON_DUMP_LAUNCH_PARAMS") == "1"
 
     def _resolve_dump_dir(self, cache_dir):
         dump_dir_root = knobs.intel.dump_spirv_kernel_args_dir
@@ -690,7 +691,7 @@ class XPULauncher(object):
             serialize_args((gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
                             launch_exit_hook, *args), self.constants, self.signature, self.dump_dir)
 
-        if os.environ.get("TRITON_DUMP_LAUNCH_PARAMS") == "1":
+        if self.dump_launch_params:
             # This function does not cover all cases, for example when the arguments are tuple,
             # but it is sufficient for llama 3.1 kernels
             self._dump_launch_params((gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata,
