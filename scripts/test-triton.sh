@@ -1109,9 +1109,9 @@ run_vllm_tdesc_tests() {
   local VLLM_PROJ="$TRITON_PROJ/vllm"
   local PATCH_FILES=(
     "$TRITON_PROJ/benchmarks/triton_kernels_benchmark/vllm/batched_moe/batched_moe.patch"
-    "$TRITON_PROJ/benchmarks/triton_kernels_benchmark/vllm/fused_moe/fused_moe.patch"
     "$TRITON_PROJ/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention.patch"
   )
+  # "$TRITON_PROJ/benchmarks/triton_kernels_benchmark/vllm/fused_moe/fused_moe.patch"
 
   local patch_file
   local applied_patches=()
