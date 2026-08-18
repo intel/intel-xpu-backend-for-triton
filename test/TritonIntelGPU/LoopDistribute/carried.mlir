@@ -4,15 +4,20 @@
 // offset advanced every iteration via arith.addi) must be replicated into
 // BOTH distributed loops, with its own cloned arith.addi and the incremented
 // value yielded -- not the stale %off passed through unchanged.
+// Both loops must also start from the ORIGINAL init values: neither is chained
+// onto the other's carried result, so the offset advances exactly once per
+// iteration in each loop.
 // CHECK-LABEL: @carried_offset
-// CHECK: scf.for
+// CHECK-DAG: %[[ACC_INIT:.*]] = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
+// CHECK-DAG: %[[OFF_INIT:.*]] = arith.constant 0 : i32
+// CHECK: scf.for {{.*}}iter_args(%{{[^ ]+}} = %[[ACC_INIT]], %{{[^ ]+}} = %[[ACC_INIT]], %{{[^ ]+}} = %[[OFF_INIT]])
 // CHECK:   %[[X1:.*]] = tt.descriptor_load %arg0
 // CHECK:   %[[WG:.*]] = tt.descriptor_load %arg1
 // CHECK:   %[[D0:.*]] = tt.dot %[[X1]], %[[WG]]
 // CHECK-NOT: tt.dot
 // CHECK:   %[[OFFNEXT1:.*]] = arith.addi
 // CHECK:   scf.yield %[[D0]], %{{.*}}, %[[OFFNEXT1]]
-// CHECK: scf.for
+// CHECK: scf.for {{.*}}iter_args(%{{[^ ]+}} = %[[ACC_INIT]], %{{[^ ]+}} = %[[ACC_INIT]], %{{[^ ]+}} = %[[OFF_INIT]])
 // CHECK:   %[[X2:.*]] = tt.descriptor_load %arg0
 // CHECK:   %[[WFC:.*]] = tt.descriptor_load %arg2
 // CHECK:   %[[D1:.*]] = tt.dot %[[X2]], %[[WFC]]
@@ -47,8 +52,14 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
 // @carried_offset above, it must be replicated (cloned) into BOTH
 // distributed loops rather than frozen or rejected. Each new loop gets its
 // own copy of the inner scf.for and yields that copy's result at index 2.
+// Because the carried value (%s, a running sum) is also a function result, the
+// wiring is checked too: BOTH loops must start the sum from the original init
+// (neither is chained onto the other's result) and the returned sum must come
+// from the first loop -- i.e. the sum is accumulated once, not double counted.
 // CHECK-LABEL: @nested_pure_loop
-// CHECK: scf.for
+// CHECK-DAG: %[[ACC_INIT:.*]] = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
+// CHECK-DAG: %[[S_INIT:.*]] = arith.constant 0.000000e+00 : f32
+// CHECK: %[[LOOP1:.*]]:3 = scf.for {{.*}}iter_args(%{{[^ ]+}} = %[[ACC_INIT]], %{{[^ ]+}} = %[[ACC_INIT]], %{{[^ ]+}} = %[[S_INIT]])
 // CHECK:   %[[X1:.*]] = tt.descriptor_load %arg0
 // CHECK:   %[[WG:.*]] = tt.descriptor_load %arg1
 // CHECK:   %[[D0:.*]] = tt.dot %[[X1]], %[[WG]]
@@ -57,7 +68,7 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
 // CHECK:     arith.addf
 // CHECK:     scf.yield
 // CHECK:   scf.yield %[[D0]], %{{.*}}, %[[INNER1]]
-// CHECK: scf.for
+// CHECK: %[[LOOP2:.*]]:3 = scf.for {{.*}}iter_args(%{{[^ ]+}} = %[[ACC_INIT]], %{{[^ ]+}} = %[[ACC_INIT]], %{{[^ ]+}} = %[[S_INIT]])
 // CHECK:   %[[X2:.*]] = tt.descriptor_load %arg0
 // CHECK:   %[[WFC:.*]] = tt.descriptor_load %arg2
 // CHECK:   %[[D1:.*]] = tt.dot %[[X2]], %[[WFC]]
@@ -66,6 +77,7 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
 // CHECK:     arith.addf
 // CHECK:     scf.yield
 // CHECK:   scf.yield %{{.*}}, %[[D1]], %[[INNER2]]
+// CHECK: tt.return %[[LOOP1]]#0, %[[LOOP2]]#1, %[[LOOP1]]#2
 module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32} {
   tt.func @nested_pure_loop(%arg0: !tt.tensordesc<128x64xbf16>, %arg1: !tt.tensordesc<64x128xbf16>, %arg2: !tt.tensordesc<64x128xbf16>) -> (tensor<128x128xf32>, tensor<128x128xf32>, f32) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
@@ -100,15 +112,19 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
 // loop-carried tt.addptr (never re-derived from the induction variable, and
 // only consumed by the yield). Both distributed loops must contain their own
 // cloned tt.addptr and yield the advanced pointer, not the stale one.
+// Both loops must also start from the ORIGINAL base pointer tensor, so each
+// advances it exactly once per iteration.
 // CHECK-LABEL: @carried_ptr_gemm
-// CHECK: scf.for
+// CHECK-DAG: %[[ACC_INIT:.*]] = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
+// CHECK-DAG: %[[PTR_INIT:.*]] = tt.splat %arg0
+// CHECK: scf.for {{.*}}iter_args(%{{[^ ]+}} = %[[ACC_INIT]], %{{[^ ]+}} = %[[ACC_INIT]], %{{[^ ]+}} = %[[PTR_INIT]])
 // CHECK:   %[[X1:.*]] = tt.load %{{.*}} : tensor<128x64x!tt.ptr<bf16>>
 // CHECK:   %[[WG:.*]] = tt.descriptor_load %arg1
 // CHECK:   %[[D0:.*]] = tt.dot %[[X1]], %[[WG]]
 // CHECK-NOT: tt.dot
 // CHECK:   %[[ANEXT1:.*]] = tt.addptr %{{.*}}, %{{.*}} : tensor<128x64x!tt.ptr<bf16>>
 // CHECK:   scf.yield %[[D0]], %{{.*}}, %[[ANEXT1]]
-// CHECK: scf.for
+// CHECK: scf.for {{.*}}iter_args(%{{[^ ]+}} = %[[ACC_INIT]], %{{[^ ]+}} = %[[ACC_INIT]], %{{[^ ]+}} = %[[PTR_INIT]])
 // CHECK:   %[[X2:.*]] = tt.load %{{.*}} : tensor<128x64x!tt.ptr<bf16>>
 // CHECK:   %[[WFC:.*]] = tt.descriptor_load %arg2
 // CHECK:   %[[D1:.*]] = tt.dot %[[X2]], %[[WFC]]

@@ -180,9 +180,9 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
 
 // Test: a side-effecting op (tt.atomic_rmw) sits inside what would otherwise
 // be dot0's backward slice (its result feeds into computing dot0's B
-// operand), rather than floating free outside both slices. This must still
-// be rejected -- slice members must be side-effect free to be safely
-// replicated into both new loops.
+// operand), rather than floating free outside both slices. This must still be
+// rejected -- a slice member's memory effects must all be reads to be safely
+// replicated and reordered, and the atomic writes.
 // CHECK-LABEL: @side_effecting_op_in_slice_no_distribute
 // CHECK: scf.for
 // CHECK:   tt.dot

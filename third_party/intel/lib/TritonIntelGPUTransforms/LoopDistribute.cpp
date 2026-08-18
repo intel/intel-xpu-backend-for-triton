@@ -1,6 +1,7 @@
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/IRMapping.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Support/Debug.h"
 
@@ -54,14 +55,24 @@ void collectBackwardSlice(Value root, Block *loopBody,
 
 /// Returns true if `op` may be executed more than once without changing
 /// program behavior (i.e., it is safe to clone into both distributed loops).
+/// An op whose only memory effects are reads qualifies -- repeating a read is
+/// observationally equivalent -- and this is checked recursively, so a region
+/// op (e.g. an `scf.if`) that merely loads is replicable even though it is not
+/// pure. Writes, allocations and unknown effects are not replicable. Note that
+/// a volatile `tt.load` declares a Write effect (see `LoadOp::getEffects`)
+/// precisely so that it is neither duplicated nor reordered, so it is rejected
+/// here.
 bool isReplicable(Operation *op) {
   if (isPure(op))
     return true;
-  if (auto load = dyn_cast<tt::LoadOp>(op))
-    return !load.getIsVolatile();
-  if (isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op))
-    return true;
-  return false;
+  std::optional<SmallVector<MemoryEffects::EffectInstance>> effects =
+      getEffectsRecursively(op);
+  if (!effects)
+    return false;
+  return llvm::all_of(*effects,
+                      [](const MemoryEffects::EffectInstance &effect) {
+                        return isa<MemoryEffects::Read>(effect.getEffect());
+                      });
 }
 
 /// Returns true if any op in `slice` -- including inside nested regions --

@@ -45,14 +45,15 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
 // accumulator (which would read a frozen/dead pass-through slot in the
 // split loop), %acc_g evolves normally within the same new loop that
 // computes dot0, so the value read is identical to the original fused loop.
-// The loop must still be fully distributed. The accumulator iter_arg name is
-// captured from the loop header instead of hard-coded, since MLIR restarts
-// block-argument numbering per region: the SAME name (e.g. %arg3) prints as
-// the live accumulator in loop1, the frozen one in loop2, and also in the
-// un-distributed printing of this function, so a literal match would not
-// distinguish them.
+// The loop must still be fully distributed. The accumulator iter_arg and its
+// init value are matched through FileCheck variables captured from the IR
+// instead of literal SSA names: MLIR restarts block-argument numbering per
+// region, so the live accumulator in loop1, the frozen pass-through slot in
+// loop2 and the accumulator of the un-distributed loop all print under the
+// same name, and a literal match could not distinguish them.
 // CHECK-LABEL: @own_accumulator_dependency_distribute
-// CHECK: %[[LOOP1:.*]]:2 = scf.for {{.*}}iter_args(%[[ACC1:[^ ]+]] = %cst
+// CHECK: %[[CST:.*]] = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
+// CHECK: %[[LOOP1:.*]]:2 = scf.for {{.*}}iter_args(%[[ACC1:[^ ]+]] = %[[CST]], %{{[^ ]+}} = %[[CST]])
 // CHECK:   %[[X1:.*]] = tt.descriptor_load %arg0
 // CHECK:   %[[WRAW1:.*]] = tt.descriptor_load %arg1
 // CHECK:   %[[WG:.*]] = arith.addf %[[WRAW1]], %[[ACC1]]
