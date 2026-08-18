@@ -137,7 +137,7 @@ Nothing failed because of Triton codegen.
   sgl-kernel-xpu is installable in CI.
 - **Block pointers.** All 29 GDN tests and most of KDA fail to compile: SGLang's
   fla kernels still call `tl.make_block_ptr`, removed from this Triton
-  ([#7595](https://github.com/intel/intel-xpu-backend-for-triton/issues/7595)).
+  ([#7781](https://github.com/intel/intel-xpu-backend-for-triton/issues/7781)).
   The XPU overrides use it too, so the fix has to come from SGLang. XPU signal
   on the one test upstream registers for XPU is zero until then.
 - **CUDA-only tests.** `test_fused_moe_lora_kernel.py` is parametrized with

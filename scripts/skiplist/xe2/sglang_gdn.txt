@@ -1,4 +1,4 @@
-# Block pointers have been removed: https://github.com/intel/intel-xpu-backend-for-triton/issues/7595
+# Block pointers have been removed: https://github.com/intel/intel-xpu-backend-for-triton/issues/7781
 registered/attention/test_chunk_gated_delta_rule.py::TestChunkGatedDeltaRule::test_batch_1
 registered/attention/test_chunk_gated_delta_rule.py::TestChunkGatedDeltaRule::test_batch_16
 registered/attention/test_chunk_gated_delta_rule.py::TestChunkGatedDeltaRule::test_batch_2
