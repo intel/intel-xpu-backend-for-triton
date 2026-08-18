@@ -1106,31 +1106,46 @@ run_vllm_tdesc_tests() {
   enter_vllm_test_env
 
   local VLLM_PROJ="$TRITON_PROJ/vllm"
-  local PATCH_FILE="$TRITON_PROJ/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention.patch"
+  local PATCH_FILES=(
+    "$TRITON_PROJ/benchmarks/triton_kernels_benchmark/vllm/batched_moe/batched_moe.patch"
+    "$TRITON_PROJ/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention.patch"
+  )
 
-  if git -C "$VLLM_PROJ" apply --check "$PATCH_FILE" 2>/dev/null; then
-    echo "Applying tdesc patch: $PATCH_FILE."
-    git -C "$VLLM_PROJ" apply "$PATCH_FILE"
-  elif git -C "$VLLM_PROJ" apply --reverse --check "$PATCH_FILE" 2>/dev/null; then
-    echo "Patch already applied, skipping."
-  else
-    echo "ERROR: Failed to apply tdesc patch: $PATCH_FILE" >&2
-    echo "The vLLM tree may have an outdated patch or conflicting changes." >&2
-    return 1
+  local patch_file
+  local applied_patches=()
+  local exit_status=0
+
+  for patch_file in "${PATCH_FILES[@]}"; do
+    if git -C "$VLLM_PROJ" apply --check "$patch_file" 2>/dev/null; then
+      echo "Applying tdesc patch: $patch_file."
+      git -C "$VLLM_PROJ" apply "$patch_file"
+      applied_patches+=("$patch_file")
+    elif git -C "$VLLM_PROJ" apply --reverse --check "$patch_file" 2>/dev/null; then
+      echo "Patch already applied, skipping: $patch_file."
+    else
+      echo "ERROR: Failed to apply tdesc patch: $patch_file" >&2
+      echo "The vLLM tree may have an outdated patch or conflicting changes." >&2
+      exit_status=1
+      break
+    fi
+  done
+
+  if [ "$exit_status" -eq 0 ]; then
+    VLLM_TRITON_USE_TD=1 TRITON_TEST_SUITE=vllm_tdesc \
+      run_pytest_command -vvv \
+        tests/kernels/moe/test_batched_moe.py \
+        tests/kernels/attention/test_triton_unified_attention.py \
+        || exit_status=$?
   fi
 
-  local EXIT_STATUS=0
-  TRITON_TEST_SUITE=vllm_tdesc \
-    run_pytest_command -vvv \
-      tests/kernels/attention/test_triton_unified_attention.py \
-      || EXIT_STATUS=$?
+  for patch_file in "${applied_patches[@]}"; do
+    echo "Reverting tdesc patch: $patch_file."
+    if ! git -C "$VLLM_PROJ" apply -R "$patch_file"; then
+      echo "WARNING: Failed to revert tdesc patch: $patch_file." >&2
+    fi
+  done
 
-  echo "Reverting tdesc patch: $PATCH_FILE."
-  if ! git -C "$VLLM_PROJ" apply -R "$PATCH_FILE"; then
-    echo "WARNING: Failed to revert tdesc patch: $PATCH_FILE." >&2
-  fi
-
-  return $EXIT_STATUS
+  return $exit_status
 }
 
 
