@@ -172,44 +172,20 @@ def TritonIntelSpeculateSignedDivRem
   let summary = "Convert signed div/rem to unsigned under a runtime assertion";
 
   let description = [{
-    The AxisInfo constancy and contiguity deductions for division and remainder
-    rely on a floor-division argument that only holds for a non-negative
-    dividend, so they are disabled for arith.divsi/arith.remsi. Disabling them
-    costs performance in kernels whose dividend is non-negative in practice but
-    not provably so.
+    Converts arith.divsi/arith.remsi to arith.divui/arith.remui under a
+    tt.assert that the dividend is non-negative. This recovers the AxisInfo
+    constancy and contiguity deductions, which are disabled for the signed
+    operations because their floor-division argument only holds for a
+    non-negative dividend. A negative dividend then aborts with a diagnostic
+    instead of silently producing a wrong answer.
 
-    This pass finds the signed operations the deduction *would* have fired on
-    (see signedDivRemDeductionApplies, which mirrors the two disabled
-    deduction sites), converts them to arith.divui/arith.remui - where the
-    same deduction, under the same match conditions, is enabled, because an
-    unsigned dividend is non-negative by definition - and emits a tt.assert
-    that the dividend is non-negative. A negative dividend therefore aborts
-    with a diagnostic instead of silently producing a wrong answer.
+    An operation is converted only when the deduction would have fired on it and
+    the check it needs is worth its cost; anything else is left signed, keeping
+    the sound but weaker lattice. SpeculateSignedDivRem.cpp documents each of
+    those conditions at the site that applies it.
 
-    The divisor must be a positive constant: divui/remui reinterpret a negative
-    divisor as a large positive one, so the result would be wrong even for a
-    non-negative dividend. Operations that do not meet that requirement are
-    left signed, keeping the sound but weaker lattice.
-
-    A dividend that integer range analysis proves negative in every element is
-    also left signed. Speculating there would change the result and emit an
-    assertion that fails on every launch, so a kernel that computes correctly
-    today would start aborting.
-
-    A tt.assert lowers to an opaque call that keeps IGC from optimizing any loop
-    containing it, at a cost of several times the kernel runtime. So when the
-    dividend lives inside a loop, the check is folded into a loop-carried flag
-    with one arith.andi per iteration and asserted once after the outermost
-    enclosing scf.for, which flags the same launches at negligible cost.
-
-    An operation whose check cannot be kept out of every loop that way - one
-    nested in an scf.if inside a loop, say, since an scf.if cannot carry an
-    accumulator - is left signed. An assertion in a loop body costs more than the
-    deduction it recovers is worth, so not speculating is the faster of the two.
-
-    Runs after TritonIntelSimplifySignedArithmetic, which converts the
-    operations whose dividend can be proven non-negative without a runtime
-    check.
+    Runs after TritonIntelSimplifySignedArithmetic, whose simpler prover has
+    already converted the operations that need no runtime check to be sound.
   }];
 
   let dependentDialects = [

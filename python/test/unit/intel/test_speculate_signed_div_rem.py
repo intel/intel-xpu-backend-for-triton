@@ -3,7 +3,7 @@
 The AxisInfo constancy/contiguity/divisibility deductions for `//` and `%` are
 only sound for a non-negative dividend. The pass converts the signed operations
 those deductions would have fired on to their unsigned form, guarded by a
-`tt.assert` on the dividend. See `TRITON_SPECULATE_SIGNED_DIV_REM`.
+`tt.assert` on the dividend. See `TRITON_INTEL_SPECULATE_SIGNED_DIV_REM`.
 """
 import os
 import subprocess
@@ -97,12 +97,12 @@ def test_no_assert_for_provably_negative_dividend():
 
 
 def test_knob_disables_the_pass(monkeypatch):
-    monkeypatch.setenv("TRITON_SPECULATE_SIGNED_DIV_REM", "0")
+    monkeypatch.setenv("TRITON_INTEL_SPECULATE_SIGNED_DIV_REM", "0")
     triton.knobs.refresh_knobs()
     try:
         ttir = compile_ttir(div_and_rem_kernel)
     finally:
-        monkeypatch.delenv("TRITON_SPECULATE_SIGNED_DIV_REM")
+        monkeypatch.delenv("TRITON_INTEL_SPECULATE_SIGNED_DIV_REM")
         triton.knobs.refresh_knobs()
     assert "tt.assert" not in ttir, ttir
     assert "arith.divsi" in ttir and "arith.remsi" in ttir, ttir
@@ -150,4 +150,4 @@ def test_negative_dividend_aborts():
     output = result.stdout + result.stderr
     assert result.returncode != 0, output
     # The message must name the escape hatch that is actually correct.
-    assert "TRITON_SPECULATE_SIGNED_DIV_REM=0" in output, output
+    assert "TRITON_INTEL_SPECULATE_SIGNED_DIV_REM=0" in output, output

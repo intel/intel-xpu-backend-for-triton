@@ -25,7 +25,7 @@ tt.func public @div_and_rem_share_one_assert(%arg0: i32) -> (tensor<1x64xi32>, t
 // CHECK:         %[[IDX:.*]] = arith.addi
 // CHECK:         %[[ZERO:.*]] = arith.constant dense<0> : tensor<1x64xi32>
 // CHECK:         %[[COND:.*]] = arith.cmpi sge, %[[IDX]], %[[ZERO]] : tensor<1x64xi32>
-// CHECK:         tt.assert %[[COND]], "{{.*}}TRITON_SPECULATE_SIGNED_DIV_REM=0{{.*}}"
+// CHECK:         tt.assert %[[COND]], "{{.*}}TRITON_INTEL_SPECULATE_SIGNED_DIV_REM=0{{.*}}"
 // CHECK-NOT:     tt.assert
 // CHECK:         %[[REM:.*]] = arith.remui %[[IDX]], %[[CST]] : tensor<1x64xi32>
 // CHECK:         %[[DIV:.*]] = arith.divui %[[IDX]], %[[CST]] : tensor<1x64xi32>
@@ -127,7 +127,7 @@ tt.func public @loop_carried_dividend(%ub: i32, %ptr: !tt.ptr<i32>) -> tensor<1x
 // CHECK:           %[[AND:.*]] = arith.andi %[[FLAG]], %[[COND]] : tensor<1x64xi1>
 // CHECK:           scf.yield %{{.*}}, %{{.*}}, %[[AND]]
 // CHECK:         }
-// CHECK:         tt.assert %[[RES]]#2, "{{.*}}TRITON_SPECULATE_SIGNED_DIV_REM=0{{.*}}"
+// CHECK:         tt.assert %[[RES]]#2, "{{.*}}TRITON_INTEL_SPECULATE_SIGNED_DIV_REM=0{{.*}}"
 }
 
 // -----
@@ -268,21 +268,6 @@ tt.func public @loaded_dividend(%arg0: tensor<128x!tt.ptr<i32>>) -> (tensor<128x
 
 // -----
 
-// COM: A loaded divisor has no constant value on the lattice.
-module {
-tt.func public @loaded_divisor(%arg0: tensor<128x!tt.ptr<i32>>) -> tensor<128xi32> {
-  %range = tt.make_range {start = 0 : i32, end = 128 : i32} : tensor<128xi32>
-  %d = tt.load %arg0 : tensor<128x!tt.ptr<i32>>
-  %rem = arith.remsi %range, %d : tensor<128xi32>
-  tt.return %rem : tensor<128xi32>
-}
-// CHECK-LABEL: @loaded_divisor
-// CHECK-NOT:     tt.assert
-// CHECK:         arith.remsi
-}
-
-// -----
-
 // COM: A runtime scalar divisor is constant along the dimension but has no
 // COM: constant value, so it cannot be checked for positivity. Deliberately
 // COM: left signed: correct, just not optimized.
@@ -339,25 +324,9 @@ tt.func public @gcd_is_one(%arg0: i32) -> tensor<128xi32> {
 // COM: The match conditions hold, but every element of the dividend is negative,
 // COM: so the assertion would fail on every launch and the unsigned result would
 // COM: differ from the signed one. A kernel that computes correctly today must
-// COM: not start aborting, so leave it signed. The range comes straight off the
-// COM: tt.make_range here; the next case needs the analysis to propagate.
-module {
-tt.func public @provably_negative_dividend() -> tensor<128xi32> {
-  %cst = arith.constant dense<16> : tensor<128xi32>
-  %range = tt.make_range {start = -128 : i32, end = 0 : i32} : tensor<128xi32>
-  %rem = arith.remsi %range, %cst : tensor<128xi32>
-  tt.return %rem : tensor<128xi32>
-}
-// CHECK-LABEL: @provably_negative_dividend
-// CHECK-NOT:     tt.assert
-// CHECK:         arith.remsi
-}
-
-// -----
-
-// COM: The dividend is negative but not a constant: its range is [-256, -129],
-// COM: which only the integer range analysis can establish. Pins that the guard
-// COM: is a range query, not a constant check.
+// COM: not start aborting, so leave it signed. The range is [-256, -129], which
+// COM: only the integer range analysis can establish: the guard is a range
+// COM: query, not a constant check.
 module {
 tt.func public @provably_negative_computed_dividend() -> tensor<128xi32> {
   %cst = arith.constant dense<-256> : tensor<128xi32>
