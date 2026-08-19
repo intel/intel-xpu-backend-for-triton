@@ -500,7 +500,7 @@ class XPUUtils(object):
 
     def _is_lts(self):
         import torch
-        properties = torch.xpu.get_device_capability(self.get_current_device())
+        properties = torch.xpu.get_device_capability(torch.xpu.current_device())
         return is_lts(properties.get('driver_version'))
 
     def wait(self):
