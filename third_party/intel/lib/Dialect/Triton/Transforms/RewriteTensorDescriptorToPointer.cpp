@@ -1258,14 +1258,19 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
         if (isa<BlockArgument>(strideArgs[d]))
           pendingAttrs.push_back({strideArgs[d], strideDivisibility});
 
-      // Last-dim shape divisibility (set by "L" specialization key when
-      // shape[-1] * elem_bytes % 8 == 0). Required by
-      // satisfies2DBlockReadAlignment.
-      if (auto lastDimAttr = funcOp.getArgAttrOfType<IntegerAttr>(
-              idx, "tt.last_dim_divisibility")) {
-        unsigned lastDimDiv =
-            lastDimAttr.getValue().getZExtValue() / std::max(1u, elemBytes);
-        pendingAttrs.push_back({shapeArgs.back(), lastDimDiv});
+      // Shape divisibility from specialization attributes (set by
+      // get_tensordesc_specialization for non-constant shape dimensions).
+      // Enables FuseReshape and other passes to prove divisibility properties.
+      for (unsigned d = 0; d < rank; ++d) {
+        if (isa<BlockArgument>(shapeArgs[d])) {
+          std::string attrName =
+              "tt.shape." + std::to_string(d) + ".divisibility";
+          if (auto attr = funcOp.getArgAttrOfType<IntegerAttr>(
+                  idx, StringRef(attrName))) {
+            unsigned shapeDivisibility = attr.getValue().getZExtValue();
+            pendingAttrs.push_back({shapeArgs[d], shapeDivisibility});
+          }
+        }
       }
 
       // Refresh for next iteration.

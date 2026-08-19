@@ -245,40 +245,67 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     @staticmethod
     def parse_attr(desc):
         ret = BaseBackend.parse_attr(desc)
-        if "L" in desc:
-            ret += [["tt.last_dim_divisibility", 8]]
+
+        # Parse padding
         if "N" in desc:
             ret += [["tt.padding", 1]]
-        # "S<val>,<val>,..." encodes non-last stride values for rank-3+
-        # descriptors (enables constexpr stride optimization for FuseReshape).
-        if "S" in desc:
-            idx = desc.index("S") + 1
-            stride_str = desc[idx:]
-            try:
-                strides = [int(x) for x in stride_str.split(",") if x]
-                for i, s in enumerate(strides):
-                    ret += [[f"tt.stride.{i}", s]]
-            except ValueError:
-                pass
+
+        # Parse shape divisibility: S<dim>D<divisor>
+        # Format: S0D128 means shape[0] is divisible by 128
+        import re
+        for match in re.finditer(r'S(\d+)D(\d+)', desc):
+            dim = int(match.group(1))
+            divisor = int(match.group(2))
+            ret += [[f"tt.shape.{dim}.divisibility", divisor]]
+
+        # Parse stride divisibility: T<dim>D<divisor>
+        # Format: T0D64 means stride[0] is divisible by 64
+        for match in re.finditer(r'T(\d+)D(\d+)', desc):
+            dim = int(match.group(1))
+            divisor = int(match.group(2))
+            ret += [[f"tt.stride.{dim}.divisibility", divisor]]
+
         return ret
 
     @staticmethod
+    def _get_max_divisibility(value):
+        """Get the highest power-of-2 divisor of value.
+        """
+        if value == 0:
+            return 1
+        div = 1
+        while value % (div * 2) == 0:
+            div *= 2
+        return div
+
+    @staticmethod
     def get_tensordesc_specialization(arg, **kwargs):
-        # "L" = last-dim shape satisfies 2D block IO surface width alignment
-        #   (needed for satisfies2DBlockReadAlignment in MaterializeBlockPointer).
-        #   HW requires 4-byte (DW) alignment; combined with minimum 2 elements
-        #   for the stride-one dim this means shape[-1] * elem_bytes % 8 == 0.
-        # "N" = NaN padding (enables tt.padding attribute).
-        # "S<val>,..." = non-last stride values for rank-3+ (enables constexpr
-        #   stride optimization for FuseReshape).
+        """Encode max power-of-2 divisibility for specialization.
+
+        Format:
+          N = NaN padding
+          S<dim>D<divisor> = shape[dim] is divisible by <divisor> (max power of 2)
+          T<dim>D<divisor> = stride[dim] is divisible by <divisor> (max power of 2)
+
+        Example: "NS0D128S1D16" = NaN padding, shape[0] divisible by 128, shape[1] divisible by 16
+        """
         key = ""
-        elem_bytes = arg.base.dtype.itemsize
-        if (arg.shape[-1] * elem_bytes) % 8 == 0:
-            key += "L"
+
+        # Padding (bounded: 2 values)
         if getattr(arg, "padding", None) == "nan":
             key += "N"
+
+        # Shape maximum divisibility (naturally bounded by power-of-2 structure)
+        for i, shape_val in enumerate(arg.shape):
+            div = XPUBackend._get_max_divisibility(shape_val)
+            key += f"S{i}D{div}"
+
+        # Stride maximum divisibility for rank-3+ (naturally bounded)
         if len(arg.strides) >= 3:
-            key += "S" + ",".join(str(s) for s in arg.strides[:-1])
+            for i, stride_val in enumerate(arg.strides[:-1]):
+                div = XPUBackend._get_max_divisibility(stride_val)
+                key += f"T{i}D{div}"
+
         return key
 
     def pack_metadata(self, metadata):
