@@ -46,9 +46,12 @@ module attributes {"ttg.num-warps" = 1 : i32, ttg.shared = 1280 : i32, "ttg.thre
     %1 = tt.load %arg1 : !tt.ptr<f32>
     // CHECK: [[LOAD0:%.*]] = llvm.bitcast {{.*}} : i32 to f32
     // CHECK: [[LOAD1:%.*]] = llvm.bitcast {{.*}} : i32 to f32
+    // The callee receives the base offset by its allocator-provided offset.
     // CHECK: [[SMEM:%.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
-    // CHECK: llvm.call spir_funccc @noinline_shared_fn([[LOAD0]], [[LOAD1]], %arg2, [[SMEM]], [[GLOBAL_PTR]], [[PROFILE_PTR]])
-    // DYNAMIC: llvm.call spir_funccc @noinline_shared_fn({{.*}}, {{.*}}, %arg2, [[SHARED_MEM_PTR]], [[DYN_GLOBAL_PTR]], [[DYN_PROFILE_PTR]])
+    // CHECK: [[CALLEE_SMEM:%.*]] = llvm.getelementptr [[SMEM]][{{.*}}] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK: llvm.call spir_funccc @noinline_shared_fn([[LOAD0]], [[LOAD1]], %arg2, [[CALLEE_SMEM]], [[GLOBAL_PTR]], [[PROFILE_PTR]])
+    // DYNAMIC: [[DYN_CALLEE_SMEM:%.*]] = llvm.getelementptr [[SHARED_MEM_PTR]][{{.*}}] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // DYNAMIC: llvm.call spir_funccc @noinline_shared_fn({{.*}}, {{.*}}, %arg2, [[DYN_CALLEE_SMEM]], [[DYN_GLOBAL_PTR]], [[DYN_PROFILE_PTR]])
     tt.call @noinline_shared_fn(%0, %1, %arg2) {allocation.offset = 0 : i32} : (f32, f32, !tt.ptr<f32>) -> ()
     tt.return
   }
