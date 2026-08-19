@@ -559,7 +559,7 @@ validateMultiRangeSetup(Value xOffsets, RankedTensorType tensorTy, Value desc) {
   if (ranges.size() > kMaxSubRanges)
     return std::nullopt;
 
-  // 4. All sub-ranges must have equal count (tt.cat requires
+  // 4. All sub-ranges must have equal count (tt.join requires
   // SameTypeOperands).
   int64_t rangeCount = ranges[0].count;
   for (const auto &range : ranges) {
@@ -650,7 +650,7 @@ private:
 
 /// Rewrite DescriptorGatherOps with compile-time-constant x_offsets that form
 /// multiple contiguous sub-ranges into one descriptor_load per sub-range,
-/// concatenated with tt.cat.
+/// concatenated along the row dimension.
 ///
 /// Example — constant offsets [0,1,2,3, 8,9,10,11] on tensor<1x64xbf16>:
 ///   %x = arith.constant dense<[0, 1, 2, 3, 8, 9, 10, 11]> : tensor<8xi32>
@@ -662,9 +662,12 @@ private:
 ///   %v0 = tt.descriptor_load %d0[%c0, %y] : ... -> tensor<4x64xbf16>
 ///   %d1 = tt.make_tensor_desc ... : !tt.tensordesc<4x64xbf16>
 ///   %v1 = tt.descriptor_load %d1[%c8, %y] : ... -> tensor<4x64xbf16>
-///   %v  = tt.cat %v0, %v1 : tensor<4x64xbf16> -> tensor<8x64xbf16>
+///   %j  = tt.join %v0, %v1 : tensor<4x64xbf16> -> tensor<4x64x2xbf16>
+///   %t  = tt.trans %j {order = array<i32: 2, 0, 1>}
+///          : tensor<4x64x2xbf16> -> tensor<2x4x64xbf16>
+///   %v  = tt.reshape %t : tensor<2x4x64xbf16> -> tensor<8x64xbf16>
 ///
-/// Constraint: all sub-ranges must have equal size (tt.cat requires
+/// Constraint: all sub-ranges must have equal size (tt.join requires
 /// SameTypeOperands). Falls back if sub-ranges differ in count.
 struct RewriteMultiRangeGather
     : public OpRewritePattern<triton::DescriptorGatherOp> {
@@ -694,14 +697,19 @@ struct RewriteMultiRangeGather
       loads.push_back(load.getResult());
     }
 
-    // Concatenate with tt.cat using a balanced reduction tree.
-    // tt.cat requires SameTypeOperands, so we can only cat tensors of
+    // Concatenate along the row dimension using a balanced reduction tree.
+    // tt.join requires SameTypeOperands, so we can only combine tensors of
     // equal shape. A balanced tree ensures each pair has the same type.
     // Requires the number of ranges to be a power of 2.
     if (loads.size() & (loads.size() - 1))
       return rewriter.notifyMatchFailure(
           gatherOp, "number of sub-ranges is not a power of 2");
 
+    // Row-wise concatenation of two [R, W] tensors is expressed as
+    // join -> trans -> reshape: the join yields [R, W, 2], transposing with
+    // order [2, 0, 1] yields [2, R, W] so the operands end up in row order,
+    // and the reshape flattens the leading dimensions into [2 * R, W].
+    SmallVector<int32_t, 3> transOrder{2, 0, 1};
     SmallVector<Value> current = std::move(loads);
     int64_t currentRows = setup->rangeCount;
     while (current.size() > 1) {
@@ -709,9 +717,16 @@ struct RewriteMultiRangeGather
       int64_t nextRows = currentRows * 2;
       auto catTy =
           RankedTensorType::get({nextRows, setup->rowWidth}, setup->elemTy);
-      for (size_t i = 0; i < current.size(); i += 2)
-        next.push_back(triton::CatOp::create(rewriter, loc, catTy, current[i],
-                                             current[i + 1]));
+      for (size_t i = 0; i < current.size(); i += 2) {
+        Value joined =
+            triton::JoinOp::create(rewriter, loc, current[i], current[i + 1]);
+        Value transposed =
+            triton::TransOp::create(rewriter, loc, joined, transOrder);
+        next.push_back(triton::ReshapeOp::create(rewriter, loc, catTy,
+                                                 transposed,
+                                                 /*allowReorder=*/false,
+                                                 /*efficientLayout=*/false));
+      }
       current = std::move(next);
       currentRows = nextRows;
     }
@@ -1320,8 +1335,8 @@ class TritonRewriteTensorDescriptorToPointerPass
     // DescriptorLoadOps/DescriptorStoreOps. When x_offsets are provably
     // contiguous, replace the gather/scatter with a single 2D block load/store.
     // For constant offsets with multiple contiguous sub-ranges, emit one
-    // load/store per sub-range (concatenating loads with tt.cat, extracting
-    // store slices with tt.gather).
+    // load/store per sub-range (concatenating loads along the row dimension,
+    // extracting store slices with tt.gather).
     // Enabled by default. Set
     // TRITON_INTEL_DISABLE_DESCRIPTOR_GATHER_SCATTER_REWRITE=1 to disable.
     if (!tools::getBoolEnv(
