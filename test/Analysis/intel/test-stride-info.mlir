@@ -119,7 +119,8 @@ tt.func @div() {
   // stride(range) * 4 = 4, then 4 / 4 = 1
   // CHECK: arith.muli {{.*}} => stride = [4]
   %1 = arith.muli %0, %cst4 : tensor<128xi32>
-  // stride(4) / const(4) — cannot prove non-negative for DivSIOp
+  // stride(4) / const(4) = 1, but stride preservation is disabled for DivSIOp:
+  // unsound for a negative dividend.
   // CHECK: arith.divsi {{.*}} => stride = [-1]
   %2 = arith.divsi %1, %cst4 : tensor<128xi32>
   // CHECK: arith.divui {{.*}} => stride = [1]
@@ -159,7 +160,8 @@ tt.func @rem() {
   %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
   // CHECK: arith.constant {{.*}} => stride = [0]
   %cst_mod = arith.constant dense<512> : tensor<128xi32>
-  // Cannot prove non-negative for RemSIOp — conservatively unknown.
+  // Range span (127) < modulus (512): no wrap-around, but stride preservation
+  // is disabled for RemSIOp: unsound for a negative dividend.
   // CHECK: arith.remsi {{.*}} => stride = [-1]
   %1 = arith.remsi %0, %cst_mod : tensor<128xi32>
   // CHECK: arith.remui {{.*}} => stride = [1]
@@ -189,7 +191,8 @@ tt.func @rem_stride_wrap(%arg0: i32) {
   // CHECK: arith.remsi {{.*}} => stride = [-1]
   %rem_wrap = arith.remsi %range, %c8 : tensor<32xi32>
 
-  // Cannot prove non-negative for RemSIOp — conservatively unknown.
+  // Range span (31) < modulus (64): no wrap-around, but stride preservation is
+  // disabled for RemSIOp: unsound for a negative dividend.
   // CHECK: arith.remsi {{.*}} => stride = [-1]
   %rem_nowrap = arith.remsi %range, %c64 : tensor<32xi32>
 
@@ -382,7 +385,8 @@ tt.func @ptr_offset_pattern(%arg0: i32, %arg1: tensor<128x1xi32>) {
   // [0] + [1] = [1]
   // CHECK: arith.addi {{.*}} => stride = [1]
   %3 = arith.addi %1, %2 : tensor<128xi32>
-  // Cannot prove non-negative for RemSIOp — conservatively unknown.
+  // rem with a constant modulus would preserve stride, but that is disabled for
+  // RemSIOp: unsound for a negative dividend.
   // CHECK: arith.remsi {{.*}} => stride = [-1]
   %4 = arith.remsi %3, %cst_1 : tensor<128xi32>
   // expand_dims at axis=1: [-1] -> [-1, 0]
@@ -545,7 +549,8 @@ tt.func @rem_stride_divisibility() {
   // CHECK: tt.make_range {{.*}} => stride = [1]
   %range_16_20 = tt.make_range {end = 20 : i32, start = 16 : i32} : tensor<4xi32>
 
-  // Cannot prove non-negative for RemSIOp — conservatively unknown.
+  // gcd(16, 4) = 4, maxVal=3 < 4 => no wrap, but stride preservation is disabled
+  // for RemSIOp: unsound for a negative dividend.
   // CHECK: arith.remsi {{.*}} => stride = [-1]
   %rem3 = arith.remsi %range_16_20, %c4 : tensor<4xi32>
 

@@ -54,7 +54,6 @@ add_triton_ut(
     TritonIntelAnalysis
     TritonIntelGPUIR
     TritonIntelGPUTransforms
-    TritonIntelTransforms
     TritonNvidiaGPUIR
     TritonNvidiaGPUTransforms
     MLIRArithDialect
@@ -148,7 +147,6 @@ add_triton_ut(
     TritonIntelAnalysis
     TritonIntelGPUIR
     TritonIntelGPUTransforms
-    TritonIntelTransforms
     TritonNvidiaGPUIR
     TritonNvidiaGPUTransforms
     MLIRArithDialect

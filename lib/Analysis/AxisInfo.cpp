@@ -478,13 +478,12 @@ private:
     // For signed division (DivSIOp), truncation toward zero breaks the
     // constancy pattern for negative inputs. Without range analysis we
     // cannot prove inputs are non-negative, so we conservatively skip.
-    if constexpr (!std::is_same_v<OpTy, arith::DivSIOp>) {
-      if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
-          AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
-        constancy = std::max(constancy, gcd(lhs.getContiguity(dim),
-                                            lhs.getDivisibility(dim),
-                                            rhs.getDivisibility(dim)));
-      }
+    if (!std::is_same_v<OpTy, arith::DivSIOp> &&
+        AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
+        AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
+      constancy = std::max(constancy,
+                           gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
+                               rhs.getDivisibility(dim)));
     }
     return constancy;
   }
@@ -548,12 +547,11 @@ private:
     // negative inputs because srem produces negative results for negative
     // dividends. Without range analysis we cannot prove inputs are
     // non-negative, so we conservatively skip.
-    if constexpr (!std::is_same_v<OpTy, arith::RemSIOp>) {
-      if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
-          AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
-        contiguity = gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
-                         rhs.getDivisibility(dim));
-      }
+    if (!std::is_same_v<OpTy, arith::RemSIOp> &&
+        AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
+        AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
+      contiguity = gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
+                       rhs.getDivisibility(dim));
     }
     return contiguity;
   }
