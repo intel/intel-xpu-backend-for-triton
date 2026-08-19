@@ -646,10 +646,10 @@ private:
     if (!info)
       return;
 
-    // TODO: 2D block store does not support hardware transpose. With H > 1,
-    // the encoding inference puts registers in columns while the store
-    // hardware expects registers in rows. Fixing this requires inserting a
-    // ConvertLayoutOp before the store.
+    // With H > 1, tt.reshape infers a blocked encoding that does not match the
+    // 2D block store's hardware delivery pattern: the hardware places each
+    // lane's values at intervals of threadsPerWarp in the packed-flat tile, but
+    // the inferred encoding places them in adjacent positions.
     if (info->H != 1) {
       LDBG("H=" << info->H
                 << " > 1 not yet supported for store, skip 1D reshape");
