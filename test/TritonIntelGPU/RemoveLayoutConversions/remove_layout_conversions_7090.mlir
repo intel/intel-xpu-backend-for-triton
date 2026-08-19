@@ -94,3 +94,54 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// COM: Reproduces crash from issue #7735: rank-3 descriptor_load -> tt.reshape -> convert_layout to rank-2 dot_op encoding.
+// COM: Before the fix, RemoveLayoutConversions' loadHoistsToBlock2DDotOperand walks through the reshape (a view op) and tries
+// COM: to clone the rank-2 DPAS dot_op encoding onto the rank-3 load via loadTy.cloneWithEncoding(enc), creating a malformed
+// COM: type that triggers assertion failure in DPAStoLinearLayout: "rank == dpas.getWarpsPerCTA().size()".
+// COM: The fix adds a rank check to loadHoistsToBlock2DDotOperand, making it return false for rank-changing reshapes.
+// COM: This causes the load to anchor its rank-3 coalesced #ttg.blocked layout. The pass inserts a convert_layout to
+// COM: rank-3 #ttg.linear, and the reshape output gets the rank-2 dot_op encoding. The load is never relabeled to dot_op.
+
+#blocked3d = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [2, 8, 1], warpsPerCTA = [2, 2, 1], order = [2, 1, 0]}>
+#linear2d = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [16, 0]], lane = [[1, 0], [2, 0], [4, 0], [32, 0]], warp = [[8, 0], [0, 0]], block = []}>
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
+#dot_op_a = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>
+#dot_op_b = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, ttig.support_subgroup_matrix_multiply_accumulate, ttig.target_arch = "pvc"} {
+  // COM: The encoding aliases are printed above the function, so these must be
+  // COM: matched before the CHECK-LABEL rather than after it.
+  // CHECK-DAG: #[[$BLOCKED3D:.+]] = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [2, 8, 1], warpsPerCTA = [2, 2, 1], order = [2, 1, 0]}>
+  // CHECK-DAG: #[[$LINEAR3D:.+]] = #ttg.linear<{register = [{{\[}}0, 1, 0], [0, 2, 0], [0, 4, 0], [0, 8, 0], [0, 16, 0], [0, 0, 16], [0, 0, 32]], lane = [{{\[}}0, 0, 1], [0, 0, 2], [0, 0, 4], [0, 0, 8]], warp = [{{\[}}0, 0, 0], [1, 0, 0]], block = []}>
+  // CHECK-DAG: #[[$MMA:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 2], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
+  // CHECK-LABEL: @rank3_reshape_to_dot_no_crash
+  // COM: The load anchors its rank-3 blocked layout and is NOT relabeled to a dot-operand encoding.
+  // CHECK: %[[LOAD:.*]] = tt.descriptor_load %{{.*}}[{{.*}}] {ttig.block_io = "row_major"} : !tt.tensordesc<2x32x64xf16> -> tensor<2x32x64xf16, #[[$BLOCKED3D]]>
+  // COM: The pass inserts a convert_layout from rank-3 blocked to rank-3 linear.
+  // CHECK: %[[CVT:.*]] = ttg.convert_layout %[[LOAD]] : tensor<2x32x64xf16, #[[$BLOCKED3D]]> -> tensor<2x32x64xf16, #[[$LINEAR3D]]>
+  // COM: The reshape consumes the converted rank-3 linear and produces rank-2 with the dot_op encoding.
+  // CHECK: %[[RESHAPE:.*]] = tt.reshape %[[CVT]] : tensor<2x32x64xf16, #[[$LINEAR3D]]> -> tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$MMA]], kWidth = 1}>>
+  // CHECK: tt.dot %[[RESHAPE]], %{{.*}}, %{{.*}} {{.*}} : tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$MMA]], kWidth = 1}>> * tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$MMA]], kWidth = 2}>> -> tensor<64x64xf32, #[[$MMA]]>
+  tt.func @rank3_reshape_to_dot_no_crash(%arg0: !tt.tensordesc<2x32x64xf16>, %arg1: tensor<64x64xf16, #dot_op_b>, %arg2: !tt.ptr<f32>) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
+    %c0 = arith.constant 0 : i32
+
+    // Rank-3 descriptor_load with ttig.block_io
+    %load = tt.descriptor_load %arg0[%c0, %c0, %c0] {ttig.block_io = "row_major"} : !tt.tensordesc<2x32x64xf16> -> tensor<2x32x64xf16, #blocked3d>
+
+    // Reshape rank-3 to rank-2 - this is a view op that loadHoistsToBlock2DDotOperand walks through
+    %reshape = tt.reshape %load : tensor<2x32x64xf16, #blocked3d> -> tensor<64x64xf16, #linear2d>
+
+    // Convert to dot_op encoding - before the fix, this triggers the crash
+    %cvt = ttg.convert_layout %reshape : tensor<64x64xf16, #linear2d> -> tensor<64x64xf16, #dot_op_a>
+
+    // Dot and store to prevent DCE
+    %dot = tt.dot %cvt, %arg1, %cst, inputPrecision = tf32 : tensor<64x64xf16, #dot_op_a> * tensor<64x64xf16, #dot_op_b> -> tensor<64x64xf32, #mma>
+    %splat = tt.splat %arg2 : !tt.ptr<f32> -> tensor<64x64x!tt.ptr<f32>, #mma>
+    tt.store %splat, %dot : tensor<64x64x!tt.ptr<f32>, #mma>
+
+    tt.return
+  }
+}

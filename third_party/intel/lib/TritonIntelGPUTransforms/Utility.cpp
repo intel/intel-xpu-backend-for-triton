@@ -172,7 +172,17 @@ static bool loadHoistsToBlock2DDotOperand(Operation *loadOp,
   // its own shape and element type)?
   auto validatesAsDotOperand = [&](Attribute enc) {
     auto dotEnc = dyn_cast_or_null<ttg::DotOperandEncodingAttr>(enc);
-    if (!dotEnc || !isa<ttgi::DpasEncodingAttr>(dotEnc.getParent()))
+    if (!dotEnc)
+      return false;
+    auto dpas = dyn_cast<ttgi::DpasEncodingAttr>(dotEnc.getParent());
+    if (!dpas)
+      return false;
+    // The forward walk crosses `isView` ops, some of which change rank (e.g.
+    // reshape, expand_dims), so it can reach a dot-operand encoding of a
+    // different rank than this load. Such an encoding cannot be applied to the
+    // load's shape: it would violate DPAStoLinearLayout's rank precondition and
+    // does not correspond to relabeling THIS load.
+    if (static_cast<int64_t>(dpas.getWarpsPerCTA().size()) != loadTy.getRank())
       return false;
     return blockIOLoadValidatesAs2DBlock(loadOp, loadTy.cloneWithEncoding(enc));
   };
