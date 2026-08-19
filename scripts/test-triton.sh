@@ -1109,9 +1109,9 @@ run_vllm_tdesc_tests() {
   local VLLM_PROJ="$TRITON_PROJ/vllm"
   local PATCH_FILES=(
     "$TRITON_PROJ/benchmarks/triton_kernels_benchmark/vllm/batched_moe/batched_moe.patch"
+    "$TRITON_PROJ/benchmarks/triton_kernels_benchmark/vllm/fused_moe/fused_moe.patch"
     "$TRITON_PROJ/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention.patch"
   )
-  # "$TRITON_PROJ/benchmarks/triton_kernels_benchmark/vllm/fused_moe/fused_moe.patch"
 
   local patch_file
   local applied_patches=()
@@ -1133,7 +1133,7 @@ run_vllm_tdesc_tests() {
   done
 
   if [ "$exit_status" -eq 0 ]; then
-    VLLM_TRITON_USE_TD=0 TRITON_TEST_SUITE=vllm_tdesc \
+    VLLM_TRITON_USE_TD=1 TRITON_TEST_SUITE=vllm_tdesc \
       run_pytest_command -vvv \
         tests/kernels/moe/test_block_fp8.py \
         tests/kernels/moe/test_block_int8.py \
@@ -1143,6 +1143,8 @@ run_vllm_tdesc_tests() {
         tests/kernels/quantization/test_int8_kernel.py \
         || exit_status=$?
   fi
+        # tests/kernels/moe/test_batched_moe.py \
+        # tests/kernels/attention/test_triton_unified_attention.py \
 
   for patch_file in "${applied_patches[@]}"; do
     echo "Reverting tdesc patch: $patch_file."
