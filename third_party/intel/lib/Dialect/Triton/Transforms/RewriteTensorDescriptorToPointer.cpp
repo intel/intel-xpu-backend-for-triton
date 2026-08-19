@@ -1225,20 +1225,6 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
         }
       }
 
-      // For rank-3+, replace non-last strides with constants from tt.stride.N
-      // attributes. This enables FuseReshape to prove stride divisibility.
-      if (rank >= 3 && descArgAttrs) {
-        for (unsigned d = 0; d < rank - 1; ++d) {
-          std::string attrName = "tt.stride." + std::to_string(d);
-          if (auto attr =
-                  dyn_cast_or_null<IntegerAttr>(descArgAttrs.get(attrName))) {
-            strideArgs[d] = arith::ConstantOp::create(
-                builder, loc, builder.getI64Type(),
-                builder.getI64IntegerAttr(attr.getValue().getSExtValue()));
-          }
-        }
-      }
-
       // Determine padding from the tt.padding attribute on the descriptor arg
       // (set by the specialization system for NaN-padded host descriptors).
       auto paddingOpt = triton::PaddingOption::PAD_ZERO;

@@ -253,21 +253,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             dim = int(match.group(1))
             divisor = int(match.group(2))
             ret += [[f"tt.shape.{dim}.divisibility", divisor]]
-        # Stride values: T<stride0>,<stride1>,... (e.g., T256,16)
-        if "T" in desc:
-            idx = desc.index("T") + 1
-            t_str = desc[idx:]
-            try:
-                stride_end = len(t_str)
-                for i, c in enumerate(t_str):
-                    if c.isalpha():
-                        stride_end = i
-                        break
-                strides = [int(x) for x in t_str[:stride_end].split(",") if x]
-                for i, s in enumerate(strides):
-                    ret += [[f"tt.stride.{i}", s]]
-            except (ValueError, IndexError):
-                pass
         return ret
 
     @staticmethod
@@ -283,16 +268,13 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
     @staticmethod
     def get_tensordesc_specialization(arg, **kwargs):
-        # Format: "N" (padding) + "S<dim>D<divisor>" (shape divisibility) + "T<strides>" (exact values)
+        # Format: "N" (padding) + "S<dim>D<divisor>" (shape divisibility)
         key = ""
         if getattr(arg, "padding", None) == "nan":
             key += "N"
         for i, shape_val in enumerate(arg.shape):
             div = XPUBackend._get_max_divisibility(shape_val)
             key += f"S{i}D{div}"
-        if len(arg.strides) >= 3:
-            strides_str = ",".join(str(s) for s in arg.strides[:-1])
-            key += "T" + strides_str
         return key
 
     def pack_metadata(self, metadata):
