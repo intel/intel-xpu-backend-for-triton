@@ -2330,7 +2330,7 @@ def test_warpgroup_mma(device, use_acc, is_async, type_a, type_b, acc_type, m, n
     _assert_payload_equal(out, exp_bits)
 
 
-@pytest.mark.xfail(not (is_hip_cdna4() or is_hip_gfx1250()), reason="Requires DotScaledOp support (CDNA4, or GFX1250)",
+@pytest.mark.xfail(not (is_hip_cdna4() or is_hip_gfx1250()), reason="Requires DotScaledOp support (CDNA4, or CDNA5)",
                    run=False)
 @pytest.mark.parametrize("type_a", ["e2m1", "e4m3", "e5m2", "bf16", "fp16"])
 @pytest.mark.parametrize("type_b", ["e2m1", "e4m3", "e5m2", "bf16", "fp16"])
@@ -3364,7 +3364,7 @@ def test_mfma_dot(device, type_a, type_b, acc_type, m, n, k, instr_m, instr_n, i
     _assert_payload_equal(out, exp_bits)
 
 
-@pytest.mark.xfail(not is_hip_gfx1250(), reason="Requires gfx1250", run=False)
+@pytest.mark.xfail(not is_hip_gfx1250(), reason="Requires CDNA5", run=False)
 @pytest.mark.parametrize(("type_a", "type_b", "acc_type", "m", "n", "k", "instr_k", "k_width"), _WMMA_DOT_CASES)
 def test_wmma_dot(device, type_a, type_b, acc_type, m, n, k, instr_k, k_width, fresh_knobs):
     _require_backend(device)
@@ -3389,7 +3389,7 @@ def test_wmma_dot(device, type_a, type_b, acc_type, m, n, k, instr_k, k_width, f
 
         a = gl.convert_layout(a, gl.DotOperandLayout(0, wmma, K_WIDTH))
         b = gl.convert_layout(b, gl.DotOperandLayout(1, wmma, K_WIDTH))
-        acc = gl.amd.gfx1250.wmma(a, b, c)
+        acc = gl.amd.cdna5.wmma(a, b, c)
 
         out_layout: gl.constexpr = gl.SliceLayout(1, wmma)
         offs_cm = gl.arange(0, BLOCK_M, layout=out_layout)[:, None]
