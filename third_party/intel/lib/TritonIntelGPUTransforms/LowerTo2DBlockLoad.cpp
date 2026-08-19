@@ -347,8 +347,9 @@ private:
     if (op.getMask())
       maskAxisInfo = axisInfoAnalysis.getAxisInfo(op.getMask());
 
-    // For 1D->2D reshape loads, skip tile validation and use the stride
-    // attribute directly for pitch.
+    // Whether this load was annotated by the 1D→2D reshape in
+    // MaterializeBlockPointer. Used for pitch and base-height computation
+    // below; tile geometry always comes from the shared helper.
     bool has1DReshapeStride =
         op->hasAttr(ttgi::TritonIntelGPUDialect::getBlockIOStrideAttrName());
 
@@ -360,11 +361,7 @@ private:
     int tileHeight = -1;
     int numPackedVals = -1;
     bool isTranspose = false;
-    if (has1DReshapeStride) {
-      // 1D reshape: conventional dims, no tile validation needed.
-      rowDim = memoryRowMajor ? rank - 2 : rank - 1;
-      colDim = memoryRowMajor ? rank - 1 : rank - 2;
-    } else {
+    {
       Attribute encoding = tensorTy.getEncoding();
       LinearLayout llEncoding =
           cast<ttg::DistributedEncodingTrait>(encoding).toLinearLayout(
