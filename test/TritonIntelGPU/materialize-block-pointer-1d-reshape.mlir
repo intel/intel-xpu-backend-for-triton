@@ -30,13 +30,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // COM: Test 2: Multi-row tile (H > 1).
 // COM: numElements=1024, W=32, S=96, fp16, numWarps=4, H = 1024/32 = 32.
-// COM: FIXME: The 2D block store lowering does not correctly handle H > 1
-// COM: because offsetY is hardcoded to 0. Once the lowering is fixed, this
-// COM: test should expect tt.reshape and ttig.block_io attributes.
+// COM: The store encoding is built explicitly to match hardware delivery
+// COM: (sizePerThread=[H/numWarps, W/tpw]=[8,1], threadsPerWarp=[1,32]: lane k
+// COM: owns column k, registers stack rows) and the value is converted into it
+// COM: from the natural 2D reshape of the 1D encoding ([1,8]/[8,4]).  Handing
+// COM: the inferred encoding straight to the store instead is what silently
+// COM: corrupted data in #6531/#6634.
+
+// CHECK-DAG: [[STOREENC:#[a-z0-9_]+]] = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+// CHECK-DAG: [[CONSENC:#[a-z0-9_]+]] = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
 
 #blocked1d = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
-  // CHECK-LABEL: tt.func @test_multi_row_h32
+  // COM: Plain CHECK (not CHECK-LABEL) so the [[STOREENC]]/[[CONSENC]] captures
+  // COM: above stay in scope — FileCheck matches CHECK-LABEL blocks independently.
+  // CHECK: tt.func @test_multi_row_h32
   tt.func @test_multi_row_h32(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: tensor<1024xf16, #blocked1d>) {
     %idx = tt.make_range {start = 0 : i32, end = 1024 : i32} : tensor<1024xi32, #blocked1d>
     %cst32 = arith.constant dense<32> : tensor<1024xi32, #blocked1d>
@@ -47,8 +55,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %off = arith.addi %rem, %mul : tensor<1024xi32, #blocked1d>
     %base = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1024x!tt.ptr<f16>, #blocked1d>
     %ptrs = tt.addptr %base, %off : tensor<1024x!tt.ptr<f16>, #blocked1d>, tensor<1024xi32, #blocked1d>
-    // CHECK-NOT: tt.reshape
-    // CHECK: tt.store %{{.*}}, %{{.*}} : tensor<1024x!tt.ptr<f16>
+    // CHECK: [[PTR2D:%[0-9]+]] = tt.reshape %{{.*}} allow_reorder efficient_layout : tensor<1024x!tt.ptr<f16>, {{.*}}> -> tensor<32x32x!tt.ptr<f16>, [[STOREENC]]>
+    // CHECK: [[VAL2D:%[0-9]+]] = tt.reshape %{{.*}} efficient_layout : tensor<1024xf16, {{.*}}> -> tensor<32x32xf16, [[CONSENC]]>
+    // CHECK: [[CVT:%[0-9]+]] = ttg.convert_layout [[VAL2D]] : tensor<32x32xf16, [[CONSENC]]> -> tensor<32x32xf16, [[STOREENC]]>
+    // CHECK: tt.store [[PTR2D]], [[CVT]] {ttig.block_io = "row_major", ttig.block_io_stride = 96 : i64} : tensor<32x32x!tt.ptr<f16>, [[STOREENC]]>
     tt.store %ptrs, %arg1 : tensor<1024x!tt.ptr<f16>, #blocked1d>
     tt.return
   }
@@ -226,5 +236,33 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %mask = arith.constant dense<true> : tensor<128xi1, #blocked1d>
     %result = tt.load %ptrs, %mask : tensor<128x!tt.ptr<f16>, #blocked1d>
     tt.return %result : tensor<128xf16, #blocked1d>
+  }
+}
+
+// -----
+
+// COM: Test 9: 1D strided store with W < threadsPerWarp (W=16, tpw=32), H=32.
+// COM: The store path carries the same bail-out as the load (issue #6738): a
+// COM: [1,tpw] encoding on a dimension of size W < tpw is replicated and the
+// COM: reshape cannot be legalized.  Must fall back to the scatter store.
+
+#blocked1d = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @test_1d_strided_store_narrow_width
+  // CHECK-NOT: tt.reshape
+  // CHECK-NOT: ttig.block_io
+  // CHECK: tt.store %{{.*}}, %{{.*}} : tensor<128x!tt.ptr<f16>
+  tt.func @test_1d_strided_store_narrow_width(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: tensor<128xf16, #blocked1d>) {
+    %idx = tt.make_range {start = 0 : i32, end = 128 : i32} : tensor<128xi32, #blocked1d>
+    %c16 = arith.constant dense<16> : tensor<128xi32, #blocked1d>
+    %c96 = arith.constant dense<96> : tensor<128xi32, #blocked1d>
+    %rem = arith.remui %idx, %c16 : tensor<128xi32, #blocked1d>
+    %div = arith.divui %idx, %c16 : tensor<128xi32, #blocked1d>
+    %mul = arith.muli %div, %c96 : tensor<128xi32, #blocked1d>
+    %off = arith.addi %rem, %mul : tensor<128xi32, #blocked1d>
+    %base = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x!tt.ptr<f16>, #blocked1d>
+    %ptrs = tt.addptr %base, %off : tensor<128x!tt.ptr<f16>, #blocked1d>, tensor<128xi32, #blocked1d>
+    tt.store %ptrs, %arg1 : tensor<128x!tt.ptr<f16>, #blocked1d>
+    tt.return
   }
 }
