@@ -733,6 +733,14 @@ private:
   /// [12] to [3, 4], and annotates it so that StoreOpToBlockIOConversion
   /// emits a single LSC2DBlockWrite(base, width=4, height=3, pitch=6).
   ///
+  /// Mirror image of reshape1DStridedLoad. The 2D block store consumes data in
+  /// a fixed layout (lane k = column k, registers stack rows), so we construct
+  /// an explicit "store encoding" matching that hardware delivery and insert a
+  /// ConvertLayoutOp from the natural "consumer encoding" into it. Handing
+  /// tt.reshape's *inferred* encoding to the store instead is what silently
+  /// corrupted data for H > 1 in #6531/#6634: the inferred encoding places each
+  /// lane's values in adjacent columns of one row, while the hardware places
+  /// them one per row at intervals of threadsPerWarp.
   void reshape1DStridedStore(tt::StoreOp op, RankedTensorType ptrTensorTy,
                              MLIRContext *ctx) const {
     LDBG("Attempting 1D strided store reshape for: " << *op);
@@ -757,36 +765,80 @@ private:
     if (!info)
       return;
 
-    // With H > 1, tt.reshape infers a blocked encoding that does not match the
-    // 2D block store's hardware delivery pattern: the hardware places each
-    // lane's values at intervals of threadsPerWarp in the packed-flat tile, but
-    // the inferred encoding places them in adjacent positions.
-    if (info->H != 1) {
-      LDBG("H=" << info->H
-                << " > 1 not yet supported for store, skip 1D reshape");
-      return;
-    }
-
     // Create reshaped tensors: [N] -> [H, W].
     Location loc = op.getLoc();
     OpBuilder builder(op);
     SmallVector<int64_t> newShape = {info->H, info->W};
 
-    // Use the ReshapeOp builder that infers the 2D encoding automatically.
-    auto ptrReshape = tt::ReshapeOp::create(builder, loc, newShape, info->ptr,
-                                            /*allowReorder=*/false);
-    Value val = op.getValue();
-    auto valReshape = tt::ReshapeOp::create(builder, loc, newShape, val,
-                                            /*allowReorder=*/false);
+    unsigned threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(
+        op->getParentOfType<ModuleOp>());
+    unsigned numWarps = info->numWarps;
+    unsigned perWarpH = static_cast<unsigned>(info->H / numWarps);
+    unsigned W = static_cast<unsigned>(info->W);
+
+    // Same restriction as the load path (issue #6738): a BlockedEncoding with
+    // threadsPerWarp=[1,tpw] on a dimension of size W < tpw is replicated, and
+    // the reshape lowering rejects it as an "expensive view" (make_llir
+    // failure).  W not a multiple of tpw would make the encoding cover fewer
+    // than W columns per register, which is not the hardware delivery order.
+    if (W < threadsPerWarp || W % threadsPerWarp != 0) {
+      LDBG("W=" << W << " is not a positive multiple of threadsPerWarp="
+                << threadsPerWarp << ", skip 1D store reshape");
+      return;
+    }
+
+    // Construct "store encoding" matching HW delivery:
+    // lane k = column k, registers stack rows.
+    auto storeEnc =
+        buildHWDelivery2DEncoding(ctx, perWarpH, W, threadsPerWarp, numWarps);
+
+    // Construct "consumer encoding" — the natural 2D reshape of the value's
+    // original 1D encoding.  Derived from the value, not the pointer: the
+    // ConvertLayoutOp we insert operates on the value.
+    auto valTensorTy = cast<RankedTensorType>(op.getValue().getType());
+    std::optional<ttg::BlockedEncodingAttr> consumerEnc =
+        derive2DConsumerEncoding(ctx, valTensorTy, info->W);
+    if (!consumerEnc)
+      return;
+
+    // Reshape pointer to [H, W] with store encoding.
+    // Mark efficient_layout so RemoveLayoutConversions does not
+    // rematerialize these reshapes with a different encoding.
+    auto storePtrTy =
+        RankedTensorType::get(newShape, ptrTensorTy.getElementType(), storeEnc);
+    auto ptrReshape = tt::ReshapeOp::create(builder, loc, storePtrTy, info->ptr,
+                                            /*allowReorder=*/true,
+                                            /*efficientLayout=*/true);
+
+    // Reshape the value to [H, W] in the consumer encoding, then convert it
+    // into the hardware delivery layout.  This is the exact inverse of the
+    // load's ConvertLayoutOp + reshape-back pair.
+    Type valElemTy = valTensorTy.getElementType();
+    auto consumerValTy =
+        RankedTensorType::get(newShape, valElemTy, *consumerEnc);
+    auto valReshape =
+        tt::ReshapeOp::create(builder, loc, consumerValTy, op.getValue(),
+                              /*allowReorder=*/false,
+                              /*efficientLayout=*/true);
+
+    // ConvertLayoutOp: consumer encoding -> store encoding.  The two coincide
+    // whenever each lane already owns one column per row (e.g. H == 1), in
+    // which case there is nothing to convert.
+    Value storeVal = valReshape.getResult();
+    if (*consumerEnc != storeEnc) {
+      auto storeValTy = RankedTensorType::get(newShape, valElemTy, storeEnc);
+      storeVal =
+          ttg::ConvertLayoutOp::create(builder, loc, storeValTy, valReshape);
+    }
 
     // Create the new 2D store.
-    auto newStore = tt::StoreOp::create(builder, loc, ptrReshape, valReshape,
+    auto newStore = tt::StoreOp::create(builder, loc, ptrReshape, storeVal,
                                         op.getCache(), op.getEvict());
 
     setBlockIOAttrs(newStore, ctx, info->S);
     copyNonBlockIOAttrs(op, newStore);
 
-    LDBG("Created 2D block store: " << *newStore);
+    LDBG("Created 2D block store with layout conversion: " << *newStore);
 
     op.erase();
   }
