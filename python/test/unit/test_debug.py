@@ -6,30 +6,9 @@ import triton
 import sys
 import subprocess
 import os
-from triton._internal_testing import ReplenishingProcessPool, is_hopper_or_newer, run_in_process as _run_in_process
+from triton._internal_testing import run_in_process
 
-_process_pool = None
-
-
-@pytest.fixture(scope="module", autouse=True)
-def debug_process_pool():
-    if not is_hopper_or_newer():
-        yield
-        return
-    global _process_pool
-    _process_pool = ReplenishingProcessPool(__name__)
-    _process_pool.start()
-    try:
-        yield
-    finally:
-        _process_pool.close()
-        _process_pool = None
-
-
-def run_in_process(client_fn, args=(), kwargs=None, env=None):
-    if _process_pool is None:
-        return _run_in_process(client_fn, args, kwargs, env)
-    return _process_pool.run(client_fn, args, kwargs, env)
+pytestmark = pytest.mark.usefixtures("process_pool")
 
 
 def _run_expect_zero_device_assert(device):
