@@ -132,7 +132,6 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::registerTritonGENToLLVMPasses();
   mlir::triton::registerTritonGENToSPIRVPasses();
   mlir::LLVM::registerInlinerInterface(registry);
-  mlir::NVVM::registerInlinerInterface(registry);
   mlir::registerLLVMDILocalVariable();
 
   // TritonAMDGPUToLLVM passes
