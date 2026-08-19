@@ -311,20 +311,19 @@ class SpirvUtils:
             else:
                 raise e
 
-    if os.name != 'nt':
-
-        def __del__(self):
-            if hasattr(self, "shared_library"):
-                handle = self.shared_library._handle
-                self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
-                self.shared_library.dlclose(handle)
-    else:
-
-        def __del__(self):
-            if hasattr(self, "shared_library"):
-                handle = self.shared_library._handle
-                ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
-                ctypes.windll.kernel32.FreeLibrary(handle)
+    # Deliberately no `__del__`: `spirv_utils` must never be unloaded.
+    #
+    # `driver.c` defines the statically allocated `PyKernelArgType`, and instances of it
+    # are cached for the lifetime of every compiled kernel (`XPULauncher.arg_annotations`).
+    # Unloading the module frees the storage of that type object while those instances are
+    # still reachable, so the next cyclic-GC pass dereferences a dangling `ob_type` and the
+    # interpreter dies with `Fatal Python error: Segmentation fault`
+    # (`tupletraverse` -> `visit_decref` -> `_PyObject_IS_GC` -> `Py_TYPE`).
+    # See https://github.com/intel/intel-xpu-backend-for-triton/issues/7682 and
+    # https://github.com/python/cpython/issues/114538.
+    #
+    # `ArchParser` and `ExtensionUtils` keep their unload: their modules export no Python
+    # type, so unloading them is safe and still lets Windows delete the cached files (#3090).
 
 
 class ExtensionUtils:
