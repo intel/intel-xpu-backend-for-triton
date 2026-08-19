@@ -245,26 +245,29 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     @staticmethod
     def parse_attr(desc):
         ret = BaseBackend.parse_attr(desc)
-
-        # Parse padding
         if "N" in desc:
             ret += [["tt.padding", 1]]
-
-        # Parse shape divisibility: S<dim>D<divisor>
-        # Format: S0D128 means shape[0] is divisible by 128
+        # Shape divisibility: S<dim>D<divisor> (e.g., S0D128)
         import re
         for match in re.finditer(r'S(\d+)D(\d+)', desc):
             dim = int(match.group(1))
             divisor = int(match.group(2))
             ret += [[f"tt.shape.{dim}.divisibility", divisor]]
-
-        # Parse stride divisibility: T<dim>D<divisor>
-        # Format: T0D64 means stride[0] is divisible by 64
-        for match in re.finditer(r'T(\d+)D(\d+)', desc):
-            dim = int(match.group(1))
-            divisor = int(match.group(2))
-            ret += [[f"tt.stride.{dim}.divisibility", divisor]]
-
+        # Stride values: T<stride0>,<stride1>,... (e.g., T256,16)
+        if "T" in desc:
+            idx = desc.index("T") + 1
+            t_str = desc[idx:]
+            try:
+                stride_end = len(t_str)
+                for i, c in enumerate(t_str):
+                    if c.isalpha():
+                        stride_end = i
+                        break
+                strides = [int(x) for x in t_str[:stride_end].split(",") if x]
+                for i, s in enumerate(strides):
+                    ret += [[f"tt.stride.{i}", s]]
+            except (ValueError, IndexError):
+                pass
         return ret
 
     @staticmethod
@@ -280,32 +283,16 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
     @staticmethod
     def get_tensordesc_specialization(arg, **kwargs):
-        """Encode max power-of-2 divisibility for specialization.
-
-        Format:
-          N = NaN padding
-          S<dim>D<divisor> = shape[dim] is divisible by <divisor> (max power of 2)
-          T<dim>D<divisor> = stride[dim] is divisible by <divisor> (max power of 2)
-
-        Example: "NS0D128S1D16" = NaN padding, shape[0] divisible by 128, shape[1] divisible by 16
-        """
+        # Format: "N" (padding) + "S<dim>D<divisor>" (shape divisibility) + "T<strides>" (exact values)
         key = ""
-
-        # Padding (bounded: 2 values)
         if getattr(arg, "padding", None) == "nan":
             key += "N"
-
-        # Shape maximum divisibility (naturally bounded by power-of-2 structure)
         for i, shape_val in enumerate(arg.shape):
             div = XPUBackend._get_max_divisibility(shape_val)
             key += f"S{i}D{div}"
-
-        # Stride maximum divisibility for rank-3+ (naturally bounded)
         if len(arg.strides) >= 3:
-            for i, stride_val in enumerate(arg.strides[:-1]):
-                div = XPUBackend._get_max_divisibility(stride_val)
-                key += f"T{i}D{div}"
-
+            strides_str = ",".join(str(s) for s in arg.strides[:-1])
+            key += "T" + strides_str
         return key
 
     def pack_metadata(self, metadata):

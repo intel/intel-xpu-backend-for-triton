@@ -1208,14 +1208,30 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
                                            builder.getI64IntegerAttr(1));
       strideArgs.back() = c1;
 
+      // Read attributes from descriptor arg at original position (idx), before
+      // arg_attrs array is updated by expansion.
+      DictionaryAttr descArgAttrs = funcOp.getArgAttrDict(idx);
+
+      // Collect shape divisibility from specialization.
+      SmallVector<std::pair<unsigned, unsigned>> shapeDivAttrs;
+      if (descArgAttrs) {
+        for (unsigned d = 0; d < rank; ++d) {
+          std::string attrName =
+              "tt.shape." + std::to_string(d) + ".divisibility";
+          if (auto attr =
+                  dyn_cast_or_null<IntegerAttr>(descArgAttrs.get(attrName))) {
+            shapeDivAttrs.push_back({d, attr.getValue().getZExtValue()});
+          }
+        }
+      }
+
       // For rank-3+, replace non-last strides with constants from tt.stride.N
-      // attributes. This enables FuseReshape to prove stride divisibility for
-      // rank-reducing loads.
-      if (rank >= 3) {
+      // attributes. This enables FuseReshape to prove stride divisibility.
+      if (rank >= 3 && descArgAttrs) {
         for (unsigned d = 0; d < rank - 1; ++d) {
           std::string attrName = "tt.stride." + std::to_string(d);
-          if (auto attr = funcOp.getArgAttrOfType<IntegerAttr>(
-                  idx, StringRef(attrName))) {
+          if (auto attr =
+                  dyn_cast_or_null<IntegerAttr>(descArgAttrs.get(attrName))) {
             strideArgs[d] = arith::ConstantOp::create(
                 builder, loc, builder.getI64Type(),
                 builder.getI64IntegerAttr(attr.getValue().getSExtValue()));
@@ -1226,10 +1242,12 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
       // Determine padding from the tt.padding attribute on the descriptor arg
       // (set by the specialization system for NaN-padded host descriptors).
       auto paddingOpt = triton::PaddingOption::PAD_ZERO;
-      if (auto padAttr =
-              funcOp.getArgAttrOfType<IntegerAttr>(idx, "tt.padding"))
-        if (padAttr.getValue().getZExtValue() != 0)
-          paddingOpt = triton::PaddingOption::PAD_NAN;
+      if (descArgAttrs) {
+        if (auto padAttr =
+                dyn_cast_or_null<IntegerAttr>(descArgAttrs.get("tt.padding")))
+          if (padAttr.getValue().getZExtValue() != 0)
+            paddingOpt = triton::PaddingOption::PAD_NAN;
+      }
       auto paddingAttr = triton::PaddingOptionAttr::get(ctx, paddingOpt);
 
       auto syntheticDesc = triton::MakeTensorDescOp::create(
@@ -1251,26 +1269,15 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
       unsigned strideDivisibility = 16 / std::max(1u, elemBytes);
 
       pendingAttrs.push_back({basePtr, 16});
-      // Frontend stride args used by MakeTensorDescOp (guaranteed by
-      // TensorDescriptor: stride * elem_bytes % 16 == 0).
-      // Only need to add to BlockArgument strides (not constants).
+      // Frontend stride args: only add BlockArgument strides (not constants).
       for (unsigned d = 0; d < rank - 1; ++d)
         if (isa<BlockArgument>(strideArgs[d]))
           pendingAttrs.push_back({strideArgs[d], strideDivisibility});
 
-      // Shape divisibility from specialization attributes (set by
-      // get_tensordesc_specialization for non-constant shape dimensions).
-      // Enables FuseReshape and other passes to prove divisibility properties.
-      for (unsigned d = 0; d < rank; ++d) {
-        if (isa<BlockArgument>(shapeArgs[d])) {
-          std::string attrName =
-              "tt.shape." + std::to_string(d) + ".divisibility";
-          if (auto attr = funcOp.getArgAttrOfType<IntegerAttr>(
-                  idx, StringRef(attrName))) {
-            unsigned shapeDivisibility = attr.getValue().getZExtValue();
-            pendingAttrs.push_back({shapeArgs[d], shapeDivisibility});
-          }
-        }
+      // Shape divisibility from specialization.
+      for (auto &[d, div] : shapeDivAttrs) {
+        if (isa<BlockArgument>(shapeArgs[d]))
+          pendingAttrs.push_back({shapeArgs[d], div});
       }
 
       // Refresh for next iteration.
