@@ -3,13 +3,21 @@ name: vLLM tests, BMG
 permissions: read-all
 
 on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/vllm-tests*.yml
+      - .github/actions/install-vllm/**
+      - scripts/vllm/**
+      - .github/pins/pytorch.txt
   schedule:
     # Thursday/Sunday 2:05AM PST (UTC-8) or 3:05AM PDT (UTC-7)
     - cron: "5 10 * * THU"
     - cron: "5 10 * * SUN"
 
 concurrency:
-  group: ${{ github.workflow }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || 'ci' }}
   cancel-in-progress: true
 
 jobs:
