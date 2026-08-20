@@ -549,8 +549,6 @@ private:
     }
 
     // Tile width must satisfy HW limits per element size.
-    // The reshape always produces numElemPerPackedVal == 1, so
-    // packedElemSizeInBits == elemBits.
     if (!ttgi::check2DBlockAddressPayloadRestriction(elemBits, W)) {
       LDBG("Tile width " << W << " invalid for " << elemBits
                          << "-bit elements, skip 1D reshape");

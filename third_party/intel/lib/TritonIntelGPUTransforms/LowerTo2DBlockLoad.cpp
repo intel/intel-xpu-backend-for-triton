@@ -417,11 +417,7 @@ private:
       isBroadcast = (rowStride == 0);
     }
 
-    int64_t perWarpWidth;
-    if (has1DReshapeStride)
-      perWarpWidth = tensorTy.getDimSize(surfaceWidthDim);
-    else
-      perWarpWidth = tileWidth * numPackedVals;
+    int64_t perWarpWidth = tileWidth * numPackedVals;
     int64_t baseWidthBytes = perWarpWidth * elemSizeInBits / 8;
 
     if (!has1DReshapeStride) {
