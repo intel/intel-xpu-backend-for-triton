@@ -73,11 +73,11 @@ tt.func public @load_only_no_results(%arg0: !tt.ptr<f16> {tt.divisibility = 16 :
 // CHECK:         }
 // COM: A stray explicit 'scf.yield' would be printed here, after the loop and
 // COM: before the end of the 'scf.if' region.
-// CHECK-NOT:      scf.yield
+// CHECK-NOT:     scf.yield
 // CHECK:       } else {
 // CHECK:         scf.for
 // CHECK:           [[LOAD2:%[0-9]+]] = tt.load {{%[0-9]+}}, {{%[0-9]+}}, %cst : tensor<32x!tt.ptr<f16>>
 // CHECK:           tt.store {{%[0-9]+}}, [[LOAD2]] : tensor<32x!tt.ptr<f16>>
 // CHECK:         }
-// CHECK-NOT:      scf.yield
+// CHECK-NOT:     scf.yield
 // CHECK:       }
