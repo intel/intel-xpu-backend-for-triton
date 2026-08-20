@@ -18,6 +18,20 @@ def device(request):
     return request.config.getoption("--device")
 
 
+@pytest.fixture(scope="module")
+def process_pool(request):
+    from triton._internal_testing import is_hopper_or_newer, use_process_pool
+
+    if request.config.getoption("--warmup-only", default=False) or os.environ.get("DISABLE_SUBPROCESS"):
+        yield
+        return
+    if not is_hopper_or_newer():
+        yield
+        return
+    with use_process_pool(request.module.__name__) as pool:
+        yield pool
+
+
 @pytest.fixture
 def fresh_triton_cache(tmp_path):
     # Use pytest's tmp_path, not tempfile.TemporaryDirectory: on Windows Triton loads
