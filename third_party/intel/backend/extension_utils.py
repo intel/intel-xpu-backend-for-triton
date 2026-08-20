@@ -87,6 +87,13 @@ def query_device_extensions(device_id: int):
     return {extension: supported for extension, supported in extensions.items() if supported is not None}
 
 
+@functools.lru_cache
+def get_core_clock_rate(device_id: int) -> int:
+    if device_id is None:
+        return 0
+    return _get_extension_checker().get_core_clock_rate(device_id) or 0
+
+
 def get_device_id(device_idx: int) -> int:
     """
     Get the Intel device ID for a device at the given index.
