@@ -593,7 +593,9 @@ class intel_knobs(base_knobs):
     gen_native_code: env_bool = env_bool("TRITON_XPU_GEN_NATIVE_CODE", False)
     opt_reduction_locality: env_bool = env_bool("TRITON_INTEL_OPTIMIZE_REDUCTION_LOCALITY", False)
     disable_igc_opt: env_bool = env_bool("TRITON_INTEL_DISABLE_IGC_OPT", False)
-    disable_annotate_cache_control: env_bool = env_bool("TRITON_INTEL_DISABLE_ANNOTATE_CACHE_CONTROL", True)
+    # Enable the AnnotateCacheControl pass by default everywhere except Windows,
+    # where it triggers E2E performance regressions (see issue #7495).
+    disable_annotate_cache_control: env_bool = env_bool("TRITON_INTEL_DISABLE_ANNOTATE_CACHE_CONTROL", os.name == "nt")
     enable_code_sinking: env_bool = env_bool("TRITON_INTEL_ENABLE_CODE_SINKING", False)
     disable_canonicalize_pointers: env_bool = env_bool("TRITON_INTEL_DISABLE_CANONICALIZE_POINTERS", True)
     enable_loop_distribution: env_bool = env_bool("TRITON_INTEL_ENABLE_LOOP_DISTRIBUTION", False)

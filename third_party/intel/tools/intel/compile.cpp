@@ -7,6 +7,12 @@
 #include <level_zero/ze_api.h>
 #include <sycl/sycl.hpp>
 
+namespace syclex = sycl::ext::oneapi::experimental;
+
+// Eventless kernel submission requires a rolling (non-LTS) driver. Baked in
+// by compile.py based on the compile-time target's driver version.
+{eventless_submit_define}
+
 // helpers to check for ze errors
 #define ZE_CHECK(ans) {{\
     gpuAssert((ans), __FILE__, __LINE__);\
@@ -178,12 +184,17 @@ int32_t {kernel_name}(sycl::queue &stream, {signature}) {{
         using share_mem_t = sycl::local_accessor<int8_t, 1>;
         share_mem_t local_buffer = share_mem_t({shared}, cgh);
         cgh.set_arg(num_params, local_buffer);
-        cgh.parallel_for(parallel_work_size, sycl_kernel);
-    }} else {{
-        cgh.parallel_for(parallel_work_size, sycl_kernel);
     }}
+    syclex::nd_launch(cgh, parallel_work_size, sycl_kernel);
   }};
+#if __SYCL_COMPILER_VERSION >= 20260204 && defined(ENABLE_EXPERIMENTAL_EVENTLESS_SUBMIT)
+  // Event-less submit: nothing here consumes the event. Kept off the LTS driver
+  // line, where the driver harvests the device-side assert and printf buffers
+  // only when the host waits on the kernel's event.
+  syclex::submit(stream, cgf);
+#else
   stream.submit(cgf);
+#endif
   stream.wait_and_throw();
   return 0;
 }}
