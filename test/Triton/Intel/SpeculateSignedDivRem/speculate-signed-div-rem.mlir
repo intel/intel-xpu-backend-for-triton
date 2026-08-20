@@ -7,6 +7,10 @@
 // COM: One contiguous dividend feeding both a division and a
 // COM: remainder by the same constant. Both are converted, and the assertion is
 // COM: emitted only once for the shared dividend.
+// COM:
+// COM: The dividend is non-negative as soon as the scalar offset is, so that is
+// COM: the fact the prover is left with and the fact that gets checked - one
+// COM: scalar comparison instead of a comparison over the whole index tensor.
 module {
 tt.func public @div_and_rem_share_one_assert(%arg0: i32) -> (tensor<1x64xi32>, tensor<1x64xi32>) {
   %cst = arith.constant dense<128> : tensor<1x64xi32>
@@ -21,10 +25,11 @@ tt.func public @div_and_rem_share_one_assert(%arg0: i32) -> (tensor<1x64xi32>, t
   tt.return %rem, %div : tensor<1x64xi32>, tensor<1x64xi32>
 }
 // CHECK-LABEL: @div_and_rem_share_one_assert
+// CHECK-SAME:    (%[[ARG0:.*]]: i32)
 // CHECK:         %[[CST:.*]] = arith.constant dense<128> : tensor<1x64xi32>
 // CHECK:         %[[IDX:.*]] = arith.addi
-// CHECK:         %[[ZERO:.*]] = arith.constant dense<0> : tensor<1x64xi32>
-// CHECK:         %[[COND:.*]] = arith.cmpi sge, %[[IDX]], %[[ZERO]] : tensor<1x64xi32>
+// CHECK:         %[[ZERO:.*]] = arith.constant 0 : i32
+// CHECK:         %[[COND:.*]] = arith.cmpi sge, %[[ARG0]], %[[ZERO]] : i32
 // CHECK:         tt.assert %[[COND]], "{{.*}}TRITON_INTEL_SPECULATE_SIGNED_DIV_REM=0{{.*}}"
 // CHECK-NOT:     tt.assert
 // CHECK:         %[[REM:.*]] = arith.remui %[[IDX]], %[[CST]] : tensor<1x64xi32>
@@ -179,6 +184,10 @@ tt.func public @nested_loops(%ub: i32, %ptr: !tt.ptr<i32>) -> tensor<1x64xi32> {
 // COM: the way an scf.for can, but no loop encloses it, so the assertion stays
 // COM: inside the conditional at no cost. Pins that the bail-out condition is
 // COM: "the assertion would land inside a loop", not "inside a region".
+// COM:
+// COM: The checked fact is defined outside the conditional, but the check is
+// COM: emitted at the division, so a launch that takes the other branch is not
+// COM: aborted for a fact no division depended on.
 module {
 tt.func public @conditional_outside_loop(%c: i1, %arg0: i32) -> tensor<1x64xi32> {
   %cst = arith.constant dense<128> : tensor<1x64xi32>
@@ -197,11 +206,40 @@ tt.func public @conditional_outside_loop(%c: i1, %arg0: i32) -> tensor<1x64xi32>
   tt.return %res : tensor<1x64xi32>
 }
 // CHECK-LABEL: @conditional_outside_loop
+// CHECK-SAME:    (%{{.*}}: i1, %[[ARG1:.*]]: i32)
 // CHECK:         %[[IDX:.*]] = arith.addi
 // CHECK:         scf.if
-// CHECK:           %[[COND:.*]] = arith.cmpi sge, %[[IDX]], %{{.*}} : tensor<1x64xi32>
+// CHECK:           %[[COND:.*]] = arith.cmpi sge, %[[ARG1]], %{{.*}} : i32
 // CHECK:           tt.assert %[[COND]]
 // CHECK:           arith.remui %[[IDX]], %{{.*}} : tensor<1x64xi32>
+}
+
+// -----
+
+// COM: The fact the dividend reduces to is an i1, reached through the
+// COM: arith.extsi rule. The check is built in the fact's own type, and a signed
+// COM: comparison there is exact: `%c` sign-extends to -128 when set, so
+// COM: `sge 0` on one bit holds exactly when the dividend is non-negative.
+module {
+tt.func public @narrow_fact(%arg0: i32) -> tensor<128xi32> {
+  %cst = arith.constant dense<128> : tensor<128xi32>
+  %c0_i32 = arith.constant 0 : i32
+  %c128_i32 = arith.constant 128 : i32
+  %c = arith.cmpi sgt, %arg0, %c0_i32 : i32
+  %ext = arith.extsi %c : i1 to i32
+  %scaled = arith.muli %ext, %c128_i32 : i32
+  %off = tt.splat %scaled : i32 -> tensor<128xi32>
+  %range = tt.make_range {start = 0 : i32, end = 128 : i32} : tensor<128xi32>
+  %idx = arith.addi %range, %off : tensor<128xi32>
+  %rem = arith.remsi %idx, %cst : tensor<128xi32>
+  tt.return %rem : tensor<128xi32>
+}
+// CHECK-LABEL: @narrow_fact
+// CHECK:         %[[C:.*]] = arith.cmpi sgt
+// CHECK:         %[[FALSE:.*]] = arith.constant false
+// CHECK:         %[[COND:.*]] = arith.cmpi sge, %[[C]], %[[FALSE]] : i1
+// CHECK:         tt.assert %[[COND]]
+// CHECK:         arith.remui
 }
 
 //===----------------------------------------------------------------------===//

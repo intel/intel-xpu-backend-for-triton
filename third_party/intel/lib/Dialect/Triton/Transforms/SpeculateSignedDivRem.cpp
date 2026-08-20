@@ -28,18 +28,18 @@ namespace {
 
 using tt::intel::Goal;
 using tt::intel::Proof;
-using RequiredCondition = tt::intel::RequiredCondition;
+using tt::intel::RequiredCondition;
 
-/// Returns true if a `sge 0` check on `value` is meaningful. Excludes `i1`,
-/// whose signed values are 0 and -1, so that the check would be wrong rather
-/// than merely conservative.
+/// Returns true if a signed division of `value` is one worth speculating on: a
+/// signless integer wider than `i1`. A 1-bit dividend holds 0 and -1, which no
+/// deduction this pass recovers applies to.
 bool isAssertableIntegerType(Value value) {
   Type elemTy = getElementTypeOrSelf(value.getType());
   return elemTy.isSignlessInteger() && elemTy.getIntOrFloatBitWidth() > 1;
 }
 
-/// Returns true if the `dividend >= 0` check guarding `op` can be asserted
-/// outside every enclosing loop.
+/// Returns true if the check guarding `op` can be asserted outside every
+/// enclosing loop.
 bool isCheckHoistableOutOfLoops(Operation *op) {
   // emitAssert() folds the check into a loop-carried flag for each enclosing
   // `scf.for` and stops at any other region-holding parent, so the assertion
@@ -48,7 +48,8 @@ bool isCheckHoistableOutOfLoops(Operation *op) {
   while (isa_and_nonnull<scf::ForOp>(parent))
     parent = parent->getParentOp();
 
-  return parent && !parent->getParentOfType<LoopLikeOpInterface>();
+  return parent && !isa<LoopLikeOpInterface>(parent) &&
+         !parent->getParentOfType<LoopLikeOpInterface>();
 }
 
 /// Folds `cond` into a loop-carried flag on `forOp` and returns the loop result
@@ -117,7 +118,8 @@ public:
     // Split the candidates by what the prover says about the dividend: those it
     // proves outright convert for free, those it reduces to exactly one missing
     // fact convert under a runtime check, and the rest are left signed.
-    SmallVector<Operation *> proven, speculative;
+    SmallVector<Operation *> proven;
+    SmallVector<std::pair<Operation *, RequiredCondition>> speculative;
     for (Operation *op : candidates) {
       tt::intel::Proof proof =
           tt::intel::proveSign(op->getOperand(0), Goal::NonNegative, *solver);
@@ -156,7 +158,7 @@ public:
         continue;
       }
 
-      speculative.push_back(op);
+      speculative.push_back({op, proof.requiredConditions.front()});
     }
 
     for (Operation *op : proven) {
@@ -168,8 +170,8 @@ public:
     // asserting any of them: emitting an assertion can rebuild an enclosing
     // loop, which invalidates every handle to that loop's iteration arguments -
     // and a dividend is often one of them.
-    for (Value cond : convertWithChecks(speculative))
-      emitAssert(cond);
+    for (auto [cond, goal] : convertWithChecks(speculative))
+      emitAssert(cond, goal);
   }
 
 private:
@@ -221,29 +223,56 @@ private:
   }
 
   /// Rewrites every candidate to its unsigned counterpart and materializes the
-  /// `dividend >= 0` check it now relies on, returning one check per distinct
-  /// (dividend, block) pair. Keying on the block keeps a check dominating the
-  /// divisions it guards without a dominance query, and collapses the common
-  /// case of one dividend feeding both a division and a remainder.
-  SmallVector<Value> convertWithChecks(ArrayRef<Operation *> candidates) {
-    SmallVector<Value> conditions;
-    DenseSet<std::pair<Value, Block *>> checked;
+  /// check of the one fact its dividend's non-negativity was reduced to,
+  /// returning each check alongside the goal it establishes.
+  ///
+  /// The fact is checked rather than the dividend because it is what the
+  /// deduction actually rests on, and it is usually the cheaper of the two: a
+  /// scalar kernel argument in place of a tensor of indices. The check is
+  /// stronger than `dividend >= 0` where the proof rules are sufficient but not
+  /// necessary - `a + b >= 0` does not need both terms to be non-negative - so
+  /// a kernel can in principle be aborted for a dividend that would have been
+  /// fine. That needs the offset to cancel the negative term exactly, which the
+  /// divisibility the deduction requires of the dividend makes hard to arrange.
+  ///
+  /// One check is emitted per distinct (fact, goal, block) triple. Keying on
+  /// the block keeps a check dominating the divisions it guards without a
+  /// dominance query, and collapses the common case of one dividend feeding
+  /// both a division and a remainder. The check is placed at the division
+  /// rather than at the fact's definition, so that a division under a
+  /// conditional is only asserted on the paths that reach it.
+  SmallVector<std::pair<Value, Goal>>
+  convertWithChecks(ArrayRef<std::pair<Operation *, RequiredCondition>> candidates) {
+    SmallVector<std::pair<Value, Goal>> conditions;
+    DenseSet<std::tuple<Value, unsigned, Block *>> checked;
 
-    for (Operation *op : candidates) {
-      Value lhs = op->getOperand(0);
+    for (auto [op, obligation] : candidates) {
+      auto [fact, goal] = obligation;
       Location loc = op->getLoc();
       Block *block = op->getBlock();
 
       Value replacement = convertToUnsigned(op);
 
-      if (checked.insert({lhs, block}).second) {
-        OpBuilder builder(replacement.getDefiningOp());
-        Value zero = arith::ConstantOp::create(
-            builder, loc, builder.getZeroAttr(lhs.getType()));
-        conditions.push_back(arith::CmpIOp::create(
-            builder, loc, arith::CmpIPredicate::sge, lhs, zero));
-        LDBG("checked dividend: " << lhs);
-      }
+      if (!checked.insert({fact, static_cast<unsigned>(goal), block}).second)
+        continue;
+
+      OpBuilder builder(replacement.getDefiningOp());
+      Value zero = arith::ConstantOp::create(
+          builder, loc, builder.getZeroAttr(fact.getType()));
+      // The comparison is built in the fact's own type, which is exact at every
+      // width: the rules that reach a narrower fact preserve its sign. A fact
+      // reached through an `arith.extsi` can even be an `i1`, where `sge 0`
+      // holds exactly when the bit is clear - the one value that sign-extends
+      // to something non-negative.
+      //
+      // A fact is usually `>= 0`, but the rule for a division inside the
+      // dividend demands a strictly positive divisor.
+      arith::CmpIPredicate predicate = goal == Goal::NonNegative
+                                           ? arith::CmpIPredicate::sge
+                                           : arith::CmpIPredicate::sgt;
+      Value cond = arith::CmpIOp::create(builder, loc, predicate, fact, zero);
+      conditions.push_back({cond, goal});
+      LDBG("checked fact: " << fact);
     }
 
     return conditions;
@@ -260,15 +289,14 @@ private:
   /// the iteration that caused the violation. Note also that an out-of-range
   /// unsigned quotient may fault on a subsequent access before the assertion is
   /// reached; the diagnostic is a best effort either way.
-  void emitAssert(Value cond) {
+  void emitAssert(Value cond, Goal goal) {
     IRRewriter rewriter(cond.getContext());
     Operation *defOp = cond.getDefiningOp();
 
     // isCheckHoistableOutOfLoops() kept only candidates whose loop ancestors
-    // are all `scf.for`s, so this walk reaches a point outside every loop. It
-    // can still stop early if a loop refuses an extra iteration argument,
-    // leaving the assertion in the body: slow, but sound, and soundness is the
-    // one thing that cannot be traded away here.
+    // are all `scf.for`s, so this walk reaches a point outside every loop.
+    // Stopping early is not expected for an `scf.for`, which supports
+    // iter_args unconditionally.
     while (auto forOp = dyn_cast<scf::ForOp>(defOp->getParentOp())) {
       Value accumulated = accumulateIntoLoop(rewriter, forOp, cond);
       if (!accumulated)
@@ -277,14 +305,19 @@ private:
       defOp = cond.getDefiningOp();
     }
 
+    StringRef assumption =
+        goal == Goal::NonNegative ? "non-negative" : "positive";
     rewriter.setInsertionPointAfter(defOp);
     tt::AssertOp::create(
         rewriter, cond.getLoc(), cond,
-        "signed division or remainder with a negative dividend: the compiler "
-        "assumed the dividend was non-negative in order to optimize the memory "
-        "access pattern. Restructure the kernel so the dividend is "
-        "non-negative, or set TRITON_SPECULATE_SIGNED_DIV_REM=0 to compile "
-        "without this assumption (slower).");
+        ("signed division or remainder with a negative dividend: the compiler "
+         "assumed this value was " +
+         assumption +
+         " to prove the dividend non-negative, in order to optimize the memory "
+         "access pattern. Restructure the kernel so the dividend is "
+         "non-negative, or set TRITON_INTEL_SPECULATE_SIGNED_DIV_REM=0 to "
+         "compile without this assumption (slower).")
+            .str());
   }
 };
 
