@@ -12,6 +12,8 @@
 #include <level_zero/ze_api.h>
 #include <sycl/sycl.hpp>
 
+namespace syclex = sycl::ext::oneapi::experimental;
+
 // Create an exception handler for asynchronous SYCL exceptions
 auto exception_handler = [](sycl::exception_list e_list) {
   for (std::exception_ptr const &e : e_list) {
