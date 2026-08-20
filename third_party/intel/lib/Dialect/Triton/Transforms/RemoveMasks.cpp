@@ -15,6 +15,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include <optional>
+#include <type_traits>
 
 #define DEBUG_TYPE "triton-intel-remove-masks"
 
@@ -897,7 +898,12 @@ public:
     };
 
     collectMaskedOps(forOp.getOps<tt::LoadOp>(), maskedOps);
-    collectMaskedOps(forOp.getOps<arith::SelectOp>(), maskedOps);
+    // `LoopVersioner::version` (the consumer of `CanonicalMaskValidator` and
+    // `InvariantMaskValidator`) only knows how to drop masks from `tt.load`;
+    // only `RemovableMaskValidator` (consumed via `dropMask`, which handles
+    // both op kinds) also needs `arith.select` collected.
+    if constexpr (std::is_same_v<MaskValidator, RemovableMaskValidator>)
+      collectMaskedOps(forOp.getOps<arith::SelectOp>(), maskedOps);
     return maskedOps.size();
   }
 
