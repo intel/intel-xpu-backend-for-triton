@@ -448,17 +448,21 @@ class CompiledKernel:
         # because it involves doing runtime things
         # (e.g., checking amount of shared memory on current device)
         self.module = None
+        self._module_pid = None
         self.function = None
         self._run = None
 
     def __del__(self):
 
-        if self.module is not None:
+        # Forked children inherit module handles that are still owned by the
+        # parent's GPU runtime and must not unload them.
+        if self.module is not None and self._module_pid == os.getpid():
             if knobs.runtime.kernel_unload_hook is not None:
                 knobs.runtime.kernel_unload_hook(self.module, self.function, self.name, self.metadata_group, self.hash)
 
             driver.active.utils.unload_module(self.module)
             self.module = None
+            self._module_pid = None
 
     def _init_handles(self):
         if self.module is not None:
@@ -508,6 +512,7 @@ class CompiledKernel:
         else:
             self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
                 self.name, self.kernel, self.metadata.shared, device)
+        self._module_pid = os.getpid()
 
         if hasattr(self.metadata, "threads_per_warp"):
             warp_size = self.metadata.threads_per_warp
