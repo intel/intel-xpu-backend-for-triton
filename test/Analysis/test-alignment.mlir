@@ -15,6 +15,27 @@ tt.func @cast() {
 
 // -----
 
+tt.func @bitcast_pointer_element_width(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i1> {tt.divisibility = 16 : i32}) {
+  %range = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
+  %base = tt.splat %arg0 : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>>
+  // expected-remark @below {{contiguity = [128], divisibility = [16], constancy = [1], constant_value = <none>}}
+  %ptrs = tt.addptr %base, %range : tensor<128x!tt.ptr<f32>>, tensor<128xi32>
+  // expected-remark @below {{contiguity = [128], divisibility = [16], constancy = [1], constant_value = <none>}}
+  %same_width = tt.bitcast %ptrs : tensor<128x!tt.ptr<f32>> -> tensor<128x!tt.ptr<i32>>
+  // expected-remark @below {{contiguity = [1], divisibility = [4], constancy = [1], constant_value = <none>}}
+  %cast = tt.bitcast %ptrs : tensor<128x!tt.ptr<f32>> -> tensor<128x!tt.ptr<f16>>
+  // expected-remark @below {{contiguity = [1], divisibility = [4], constancy = [1], constant_value = <none>}}
+  %cast_fp8 = tt.bitcast %cast : tensor<128x!tt.ptr<f16>> -> tensor<128x!tt.ptr<f8E4M3FN>>
+  %byte_base = tt.splat %arg1 : !tt.ptr<i1> -> tensor<128x!tt.ptr<i1>>
+  %byte_ptrs = tt.addptr %byte_base, %range : tensor<128x!tt.ptr<i1>>, tensor<128xi32>
+  // Sub-byte and i8 pointers both use an effective one-byte element size.
+  // expected-remark @below {{contiguity = [128], divisibility = [16], constancy = [1], constant_value = <none>}}
+  %same_storage_width = tt.bitcast %byte_ptrs : tensor<128x!tt.ptr<i1>> -> tensor<128x!tt.ptr<i8>>
+  tt.return
+}
+
+// -----
+
 tt.func @add(%arg0: tensor<128xi32> {tt.contiguity = 1 : i32, tt.divisibility = 4 : i32, tt.constancy = 2: i32}, %arg1: tensor<128xi32> {tt.contiguity = 4 : i32, tt.divisibility = 4 : i32, tt.constancy = 1: i32}) {
   // expected-remark @below {{contiguity = [128], divisibility = [1073741824], constancy = [1], constant_value = <none>}}
   %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
@@ -266,10 +287,39 @@ tt.func @rem() {
   %13 = arith.remsi %0, %12 : tensor<128xi32>
   // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
   %14 = arith.remsi %12, %0 : tensor<128xi32>
-  // expected-remark @below {{contiguity = [1], divisibility = [32], constancy = [1], constant_value = <none>}}
+  // expected-remark @below {{contiguity = [32], divisibility = [32], constancy = [1], constant_value = <none>}}
   %15 = arith.remsi %12, %4 : tensor<128xi32>
   // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
   %16 = arith.remsi %4, %12 : tensor<128xi32>
+  // COM: %5 is 0, 1, ..., 63, 0, 1, ..., 63, so only every 64th element is
+  // COM: divisible by 64 - which is exactly what contiguity 64 records. Feeding
+  // COM: it back into a remainder loses that contiguity, because the dividend is
+  // COM: no longer contiguous over the whole dimension, so every element becomes
+  // COM: the start of its own group and the divisibility claim would have to hold
+  // COM: for the 1 at index 1 as well. gcd(d_lhs, d_rhs) = 64 is only valid at
+  // COM: the group starts of the dividend; clamping to the result contiguity is
+  // COM: what brings it back to 1.
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %17 = arith.remui %5, %4 : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %18 = arith.remsi %5, %4 : tensor<128xi32>
+  // COM: A dividend with contiguity 1 is divisible by its divisibility in every
+  // COM: element, so no result group can start inside a dividend group and the
+  // COM: deduction needs no clamping.
+  // expected-remark @below {{contiguity = [1], divisibility = [64], constancy = [1], constant_value = <none>}}
+  %19 = arith.muli %0, %4 : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [64], constancy = [1], constant_value = <none>}}
+  %20 = arith.remui %19, %4 : tensor<128xi32>
+  // COM: 256, 257, ..., 383 modulo 512 is unchanged, one group of 128 starting at
+  // COM: 256. The dividend is no coarser than the result, so its group starts and
+  // COM: the result group starts coincide and gcd(d_lhs, d_rhs) = 256 needs no
+  // COM: clamping - clamping to the result contiguity would report 128.
+  // expected-remark @below {{contiguity = [128], divisibility = [256], constancy = [1], constant_value = <none>}}
+  %21 = tt.make_range {end = 384 : i32, start = 256 : i32} : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [512], constancy = [128], constant_value = 512}}
+  %22 = arith.constant dense<512> : tensor<128xi32>
+  // expected-remark @below {{contiguity = [128], divisibility = [256], constancy = [1], constant_value = <none>}}
+  %23 = arith.remui %21, %22 : tensor<128xi32>
   tt.return
 }
 

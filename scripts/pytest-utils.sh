@@ -153,6 +153,17 @@ PREDICATED_IO_PROBE="\
 00000009 0004003b 00000005 0000000a 00000007 00061872 00000004 0000000b 0000000a \
 00000006 00000007 00041873 0000000a 0000000b 00000006 000100fd 00010038"
 
+# spirv-dis is named spirv-dis.exe on Windows (msys/cygwin bash). Python resolves
+# the tool via shutil.which("spirv-dis.exe"), so the probe/search/build must use
+# the same platform-specific basename or the capable binary won't win PATH order.
+spirv_dis_binary_name() {
+    if [[ $OSTYPE = msys* || $OSTYPE = cygwin* ]]; then
+        echo "spirv-dis.exe"
+    else
+        echo "spirv-dis"
+    fi
+}
+
 spirv_dis_supports_predicated_io() {
     local spirv_dis="$1"
     [[ -x "$spirv_dis" ]] || command -v -- "$spirv_dis" >/dev/null 2>&1 || return 1
@@ -161,11 +172,13 @@ spirv_dis_supports_predicated_io() {
 
 find_spirv_dis_with_predicated_io() {
     local path_dir candidate_dir candidate
+    local binary
+    binary="$(spirv_dis_binary_name)"
     local IFS=:
     for path_dir in $PATH; do
         [[ -n "$path_dir" ]] || path_dir=.
         candidate_dir="$(cd -- "$path_dir" 2>/dev/null && pwd -P)" || continue
-        candidate="$candidate_dir/spirv-dis"
+        candidate="$candidate_dir/$binary"
         if spirv_dis_supports_predicated_io "$candidate"; then
             printf '%s\n' "$candidate"
             return 0
@@ -174,18 +187,18 @@ find_spirv_dis_with_predicated_io() {
     return 1
 }
 
-ensure_spirv_dis() {
-    # Does not work on Windows
-    if [[ $OSTYPE = msys || $OSTYPE = cygwin ]]; then
-        return
-    fi
+# Number of parallel build jobs. nproc is unavailable under Git-for-Windows bash.
+spirv_dis_build_jobs() {
+    nproc 2>/dev/null || python -c 'import os; print(os.cpu_count() or 1)' 2>/dev/null || echo 4
+}
 
+ensure_spirv_dis() {
     export PATH="$HOME/.local/bin:$PATH"
 
     # Make a capable spirv-dis the first one on PATH: triton.knobs.intel.spirv_dis
-    # resolves via shutil.which("spirv-dis") and does not check the extension, so
-    # the probed binary must win PATH order. A user may point at one explicitly
-    # via TRITON_SPIRV_DIS_PATH.
+    # resolves via shutil.which (spirv-dis, or spirv-dis.exe on Windows) and does
+    # not check the extension, so the probed binary must win PATH order. A user may
+    # point at one explicitly via TRITON_SPIRV_DIS_PATH.
     if [[ -n "${TRITON_SPIRV_DIS_PATH:-}" ]]; then
         if spirv_dis_supports_predicated_io "$TRITON_SPIRV_DIS_PATH"; then
             export PATH="$(cd -- "$(dirname -- "$TRITON_SPIRV_DIS_PATH")" && pwd -P):$PATH"
@@ -207,6 +220,8 @@ ensure_spirv_dis() {
     # The commit is pinned because SPV_INTEL_predicated_io support is not in any
     # tagged SPIRV-Tools release yet (post-v2026.2, KhronosGroup/SPIRV-Tools#6665).
     # FIXME: Switch back to Vulkan SDK tarball once a released SDK includes it.
+    local binary
+    binary="$(spirv_dis_binary_name)"
     echo "Building spirv-dis from source to $HOME/.local/bin"
     mkdir -p "$HOME/.local/bin"
     (
@@ -215,13 +230,23 @@ ensure_spirv_dis() {
         trap 'rm -rf "$build_dir"' EXIT
         git clone https://github.com/KhronosGroup/SPIRV-Tools.git "$build_dir/SPIRV-Tools"
         git -C "$build_dir/SPIRV-Tools" checkout 4c2ec2a09b7fbeff1dc64cb9f857d77403a3c25f
-        python3 "$build_dir/SPIRV-Tools/utils/git-sync-deps"
+        python "$build_dir/SPIRV-Tools/utils/git-sync-deps"
         cmake -B "$build_dir/build" -S "$build_dir/SPIRV-Tools" -DCMAKE_BUILD_TYPE=Release -DSPIRV_SKIP_TESTS=ON
-        cmake --build "$build_dir/build" -j"$(nproc)" --target spirv-dis
-        cp "$build_dir/build/tools/spirv-dis" "$HOME/.local/bin/"
+        cmake --build "$build_dir/build" --config Release --parallel "$(spirv_dis_build_jobs)" --target spirv-dis
+        # Multi-config generators (MSVC) emit tools/Release/spirv-dis.exe; single-config
+        # generators emit tools/spirv-dis. Take the first built binary that exists.
+        built=""
+        for candidate in \
+            "$build_dir/build/tools/Release/$binary" \
+            "$build_dir/build/tools/$binary"; do
+            [[ -f "$candidate" ]] && { built="$candidate"; break; }
+        done
+        [[ -n "$built" ]] || built="$(find "$build_dir/build" -type f -name "$binary" -print -quit)"
+        [[ -n "$built" ]] || { echo "spirv-dis build produced no $binary" >&2; exit 1; }
+        cp "$built" "$HOME/.local/bin/$binary"
     ) || return 1
 
-    local built_spirv_dis="$HOME/.local/bin/spirv-dis"
+    local built_spirv_dis="$HOME/.local/bin/$binary"
     if ! spirv_dis_supports_predicated_io "$built_spirv_dis"; then
         echo "Built spirv-dis does not support SPV_INTEL_predicated_io: $built_spirv_dis" >&2
         return 1

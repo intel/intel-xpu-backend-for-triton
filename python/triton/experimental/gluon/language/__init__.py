@@ -45,6 +45,7 @@ from ._core import (
     atomic_max,
     atomic_min,
     atomic_or,
+    atomic_poll,
     atomic_xchg,
     atomic_xor,
     bank_conflicts,
@@ -139,3 +140,4 @@ from . import nvidia
 from . import amd
 from . import intel
 from . import extra
+from . import fpsan

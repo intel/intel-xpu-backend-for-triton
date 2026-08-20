@@ -146,6 +146,35 @@ public:
   }
 };
 
+class BitcastOpAxisInfoVisitor final
+    : public AxisInfoVisitorImpl<triton::BitcastOp> {
+public:
+  using AxisInfoVisitorImpl<triton::BitcastOp>::AxisInfoVisitorImpl;
+
+  AxisInfo
+  getAxisInfo(triton::BitcastOp op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    AxisInfo info = operands[0]->getValue();
+    if (!isa<PointerType>(getElementTypeOrSelf(op.getSrc().getType())))
+      return info;
+
+    int64_t srcBytes =
+        std::max<int64_t>(1, getPointeeBitWidth(op.getSrc().getType()) / 8);
+    int64_t dstBytes =
+        std::max<int64_t>(1, getPointeeBitWidth(op.getType()) / 8);
+    if (srcBytes == dstBytes)
+      return info;
+
+    AxisInfo::DimVectorT divisibility = info.getDivisibility();
+    // Every former element becomes a group base after the bitcast.
+    for (unsigned dim = 0; dim < divisibility.size(); ++dim)
+      if (info.getContiguity(dim) > 1)
+        divisibility[dim] = gcd(divisibility[dim], srcBytes);
+    return AxisInfo(AxisInfo::DimVectorT(info.getRank(), 1), divisibility,
+                    info.getConstancy(), info.getConstantValue());
+  }
+};
+
 class UnrealizedConversionCastOpAxisInfoVisitor final
     : public AxisInfoVisitorImpl<mlir::UnrealizedConversionCastOp> {
 public:
@@ -444,27 +473,11 @@ private:
     // the minimal constancy is gcd(d_lhs, d_rhs).
     // Since gcd(d_lhs, d_rhs) maybe > len(lhs),
     // we need to use another gcd to get the actual constancy.
-    //
-    // NOTE: This only holds when the division rounds consistently in one
-    // direction. For signed division (DivSIOp), truncation toward zero means
-    // the constancy pattern breaks at the zero crossing:
-    //   sdiv([-2, -1, 0, 1], 2) = [-1, 0, 0, 0]  (not pairwise constant)
-    // For signed division, we can still apply this optimization when the
-    // contiguous window is guaranteed not to cross zero. This is the case
-    // when divisibility >= contiguity: the window starts at k*div and has
-    // length cont <= div, so it stays within [k*div, (k+1)*div - 1] which
-    // never spans zero.
     if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
         AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
-      if constexpr (!std::is_same_v<OpTy, arith::DivSIOp>) {
-        constancy = std::max(constancy, gcd(lhs.getContiguity(dim),
-                                            lhs.getDivisibility(dim),
-                                            rhs.getDivisibility(dim)));
-      } else if (lhs.getDivisibility(dim) >= lhs.getContiguity(dim)) {
-        constancy = std::max(constancy, gcd(lhs.getContiguity(dim),
-                                            lhs.getDivisibility(dim),
-                                            rhs.getDivisibility(dim)));
-      }
+      constancy = std::max(constancy,
+                           gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
+                               rhs.getDivisibility(dim)));
     }
     return constancy;
   }
@@ -522,22 +535,10 @@ private:
     // The minimal contiguity is gcd(d_lhs, d_rhs).
     // Since gcd(d_lhs, d_rhs) maybe > len(lhs),
     // we need to use another gcd to get the actual contiguity.
-    //
-    // NOTE: For signed remainder (RemSIOp), the contiguity pattern breaks
-    // at the zero crossing because srem produces negative results for
-    // negative dividends: srem([-2, -1, 0, 1], 2) = [0, -1, 0, 1]
-    // For signed remainder, we can still apply this optimization when the
-    // contiguous window is guaranteed not to cross zero (divisibility >=
-    // contiguity ensures the window stays within one sign region).
     if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
         AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
-      if constexpr (!std::is_same_v<OpTy, arith::RemSIOp>) {
-        contiguity = gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
-                         rhs.getDivisibility(dim));
-      } else if (lhs.getDivisibility(dim) >= lhs.getContiguity(dim)) {
-        contiguity = gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
-                         rhs.getDivisibility(dim));
-      }
+      contiguity = gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
+                       rhs.getDivisibility(dim));
     }
     return contiguity;
   }
@@ -549,7 +550,26 @@ private:
       // rhs: d_rhs * p = gcd(d_lhs, d_rhs) * p' * p = gcd(d_lhs, d_rhs) * p''
       // lhs = gcd(d_lhs, d_rhs) * k'' = gcd(d_lhs, d_rhs) * d + r
       // r must be divisible by gcd(d_lhs, d_rhs)
-      return gcd(lhs.getDivisibility(dim), rhs.getDivisibility(dim));
+      int64_t divisibility =
+          gcd(lhs.getDivisibility(dim), rhs.getDivisibility(dim));
+      // The argument above holds for a dividend element that d_lhs divides,
+      // i.e. for the first element of a dividend contiguity group. Divisibility
+      // is a claim about the first element of a *result* group, so when an
+      // operand has contiguity larger than the result contiguity, a result
+      // group can start inside an operand group, on d_lhs * k + t, which
+      // gcd(d_lhs, d_rhs) need not divide. Clamp to the result contiguity, as
+      // the add/sub visitor above does.
+      // For example, a dividend of [0, 1, 2, 3, 8, 9, 10, 11] modulo 4 has
+      // result contiguity 1, so every element is a group start - including the
+      // 1, which only 1 divides.
+      // Operands that are no coarser than the result need no clamping: every
+      // result group start is then also an operand group start, where d_lhs and
+      // d_rhs both apply.
+      int64_t contiguity = getContiguity(op, lhs, rhs, dim);
+      if (lhs.getContiguity(dim) > contiguity ||
+          rhs.getContiguity(dim) > contiguity)
+        return gcd(divisibility, contiguity);
+      return divisibility;
     }
     // Otherwise we shouldn't assume any divisibility.
     // For example:
@@ -1215,7 +1235,7 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
                   CastOpAxisInfoVisitor<arith::ExtUIOp>,
                   CastOpAxisInfoVisitor<arith::TruncIOp>,
                   CastOpAxisInfoVisitor<triton::gpu::ConvertLayoutOp>,
-                  CastOpAxisInfoVisitor<triton::BitcastOp>,
+                  BitcastOpAxisInfoVisitor,
                   CastOpAxisInfoVisitor<triton::gluon::SetAutoLayoutOp>>();
   visitors.append<MakeRangeOpAxisInfoVisitor>();
   visitors.append<PoisonOpAxisInfoVisitor>();

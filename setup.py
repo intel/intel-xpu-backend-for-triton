@@ -22,7 +22,7 @@ from setuptools.command.sdist import sdist
 
 from dataclasses import dataclass
 
-import pybind11
+import nanobind
 
 try:
     from setuptools.command.bdist_wheel import bdist_wheel
@@ -246,16 +246,11 @@ class CMakeBuild(build_ext):
         for ext in self.extensions:
             self.build_extension(ext)
 
-    def get_pybind11_cmake_args(self):
-        pybind11_sys_path = get_env_with_keys(["PYBIND11_SYSPATH"])
-        if pybind11_sys_path:
-            pybind11_include_dir = os.path.join(pybind11_sys_path, "include")
-        else:
-            pybind11_include_dir = pybind11.get_include()
-        return [f"-Dpybind11_INCLUDE_DIR='{pybind11_include_dir}'", f"-Dpybind11_DIR='{pybind11.get_cmake_dir()}'"]
+    def get_nanobind_cmake_args(self):
+        return [f"-Dnanobind_ROOT='{nanobind.cmake_dir()}'"]
 
     def get_proton_cmake_args(self):
-        cmake_args = self.get_pybind11_cmake_args()
+        cmake_args = self.get_nanobind_cmake_args()
         cupti_include_dir = get_env_with_keys(["TRITON_CUPTI_INCLUDE_PATH"])
         if cupti_include_dir == "":
             cupti_include_dir = os.path.join(get_base_dir(), "third_party", "nvidia", "backend", "include")
@@ -281,7 +276,7 @@ class CMakeBuild(build_ext):
         lit_dir = shutil.which('lit')
         ninja_dir = shutil.which('ninja')
         assert ninja_dir is not None, "ninja not found!"
-        thirdparty_cmake_args = self.get_pybind11_cmake_args()
+        thirdparty_cmake_args = self.get_nanobind_cmake_args()
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
         wheeldir = os.path.dirname(extdir)
 
@@ -318,7 +313,9 @@ class CMakeBuild(build_ext):
         cmake_args += [f"-DCMAKE_BUILD_TYPE={cfg}"]
         if platform.system() == "Windows":
             cmake_args += [f"-DTRITON_PYD_PATH={extdir}"]
-        else:
+        # This tests for "--jobserver-auth=fifo:" rather than "--jobserver-auth" because ninja
+        # only supports a jobserver in fifo mode. In other cases, use a default job count.
+        elif "--jobserver-auth=fifo:" not in os.environ.get("MAKEFLAGS", ""):
             max_jobs = os.getenv("MAX_JOBS", str(2 * os.cpu_count()))
             build_args += ['-j' + max_jobs]
 
@@ -358,6 +355,7 @@ class CMakeBuild(build_ext):
             "TRITON_PARALLEL_LINK_JOBS",
             "TRITON_OFFLINE_BUILD",
             "TRITON_LLVM_SYSTEM_SUFFIX",
+            "TRITON_STABLE_ABI",
             "LLVM_SYSPATH",
             "JSON_SYSPATH",
             "TRITON_CUDACRT_PATH",
@@ -391,6 +389,13 @@ class CMakeBuild(build_ext):
         update_symlink(Path(self.base_dir) / "compile_commands.json", cmake_dir / "compile_commands.json")
         subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=cmake_dir)
         subprocess.check_call(["cmake", "--build", ".", "--target", "mlir-doc"], cwd=cmake_dir)
+        if check_env_flag("TRITON_EXT_ENABLED"):
+            # Install Triton headers and TableGen definitions (*.h, *.h.inc, *.td)
+            # into the wheel staging directory so they are bundled in the wheel.
+            # This must run after the full build so that all TableGen-generated
+            # *.h.inc files exist in the CMake binary directory.
+            subprocess.check_call(["cmake", "--install", ".", "--component", "wheel_headers", "--prefix", wheeldir],
+                                  cwd=cmake_dir)
 
 
 class InstallLib(install_lib):
@@ -497,6 +502,11 @@ def add_links(external_only):
 
 
 class plugin_bdist_wheel(bdist_wheel):
+
+    def get_tag(self):
+        if check_env_flag("TRITON_STABLE_ABI"):
+            return "cp312", "abi3", super().get_tag()[2]
+        return super().get_tag()
 
     def run(self):
         add_links(external_only=True)
@@ -625,6 +635,16 @@ setup(
         "__pycache__/*",
         "*.py[cod]",
     ]},
+    package_data={
+        # Headers and TableGen definitions copied into the wheel staging dir by
+        # the wheel_headers CMake install component.  Paths are relative to the
+        # triton package root (<build_lib>/triton/).
+        "triton": [
+            "include/**/*.h",
+            "include/**/*.h.inc",
+            "include/**/*.td",
+        ],
+    },
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
     cmdclass={
         "bdist_wheel": plugin_bdist_wheel,

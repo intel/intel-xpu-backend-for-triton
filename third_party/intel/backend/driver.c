@@ -333,18 +333,33 @@ compileLevelZeroObjects(uint8_t *binary_ptr, const size_t binary_size,
                         const std::string &kernel_name, L0_DEVICE l0_device,
                         L0_CONTEXT l0_context, const std::string &build_flags,
                         const bool is_spv) {
-  auto l0_module = checkZeCodeAndSetPyErr(
-      create_module(l0_context, l0_device, binary_ptr, binary_size,
-                    build_flags.data(), is_spv),
-      __FILE__, __LINE__);
+  ze_module_handle_t l0_module = nullptr;
+  ze_kernel_handle_t l0_kernel = nullptr;
+  auto cleanupPartialObjects = [&]() {
+    if (l0_kernel) {
+      zeKernelDestroy(l0_kernel);
+      l0_kernel = nullptr;
+    }
+    if (l0_module) {
+      zeModuleDestroy(l0_module);
+      l0_module = nullptr;
+    }
+  };
+
+  l0_module = checkZeCodeAndSetPyErr(create_module(l0_context, l0_device,
+                                                   binary_ptr, binary_size,
+                                                   build_flags.data(), is_spv),
+                                     __FILE__, __LINE__);
   if (PyErr_Occurred()) {
+    cleanupPartialObjects();
     return std::make_tuple(nullptr, nullptr, -1);
   }
 
   // Retrieve the kernel properties (e.g. register spills).
-  auto l0_kernel = checkZeCodeAndSetPyErr(
-      create_function(l0_module, kernel_name), __FILE__, __LINE__);
+  l0_kernel = checkZeCodeAndSetPyErr(create_function(l0_module, kernel_name),
+                                     __FILE__, __LINE__);
   if (PyErr_Occurred()) {
+    cleanupPartialObjects();
     return std::make_tuple(nullptr, nullptr, -1);
   }
 
@@ -356,6 +371,7 @@ compileLevelZeroObjects(uint8_t *binary_ptr, const size_t binary_size,
       std::make_tuple(NULL, zeKernelGetProperties(l0_kernel, &props)), __FILE__,
       __LINE__);
   if (PyErr_Occurred()) {
+    cleanupPartialObjects();
     return std::make_tuple(nullptr, nullptr, -1);
   }
 
@@ -368,6 +384,7 @@ struct BuildFlags {
   std::string build_flags_str;
 
   const char *LARGE_GRF_FLAG{"-cl-intel-256-GRF-per-thread"};
+  const char *XLARGE_GRF_FLAG{"-cl-intel-512-GRF-per-thread"};
   const char *SMALL_GRF_FLAG{"-cl-intel-128-GRF-per-thread"};
   const char *AUTO_GRF_FLAG{"-cl-intel-enable-auto-large-GRF-mode"};
 
@@ -376,20 +393,21 @@ struct BuildFlags {
   const std::string &operator()() const { return build_flags_str; }
 
   int32_t n_regs() const {
+    if (build_flags_str.find(XLARGE_GRF_FLAG) != std::string::npos) {
+      return 512;
+    }
     if (build_flags_str.find(LARGE_GRF_FLAG) != std::string::npos) {
       return 256;
     }
     if (build_flags_str.find(SMALL_GRF_FLAG) != std::string::npos) {
       return 128;
     }
-    // TODO: arguably we could return 128 if we find no flag instead of 0. For
-    // now, stick with the conservative choice and alert the user only if a
-    // specific GRF mode is specified.
-    return 0;
+    return 128; // default GRF size if no flag is specified
   }
 
   const bool hasGRFSizeFlag() const {
     if (build_flags_str.find(LARGE_GRF_FLAG) != std::string::npos ||
+        build_flags_str.find(XLARGE_GRF_FLAG) != std::string::npos ||
         build_flags_str.find(SMALL_GRF_FLAG) != std::string::npos ||
         build_flags_str.find(AUTO_GRF_FLAG) != std::string::npos) {
       return true;
@@ -400,6 +418,10 @@ struct BuildFlags {
 
   void addLargeGRFSizeFlag() {
     build_flags_str = build_flags_str.append(" ").append(LARGE_GRF_FLAG);
+  }
+
+  void addXLargeGRFSizeFlag() {
+    build_flags_str = build_flags_str.append(" ").append(XLARGE_GRF_FLAG);
   }
 };
 
@@ -438,17 +460,20 @@ extern "C" EXPORT_FUNC PyObject *get_last_selected_build_flags() {
 }
 
 extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
-  const char *name, *build_flags_ptr;
+  const char *name, *build_flags_ptr, *deviceArch = nullptr;
   int shared;
   PyObject *py_bytes;
   int is_spv;
   int devId;
 
-  if (!PyArg_ParseTuple(args, "sSispi", &name, &py_bytes, &shared,
-                        &build_flags_ptr, &is_spv, &devId)) {
+  if (!PyArg_ParseTuple(args, "sSispi|z", &name, &py_bytes, &shared,
+                        &build_flags_ptr, &is_spv, &devId, &deviceArch)) {
     // PyArg_ParseTuple will set a PyErr
     return NULL;
   }
+
+  const char *resolvedDeviceArch =
+      (deviceArch != nullptr && deviceArch[0] != '\0') ? deviceArch : "unknown";
 
   TRITON_ZE_FAIL_IF(devId >= g_sycl_l0_device_list.size(),
                     "Device is not found");
@@ -479,105 +504,101 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   auto [l0_module, l0_kernel, n_spills] =
       compileLevelZeroObjects(binary_ptr, binary_size, kernel_name, l0_device,
                               l0_context, build_flags(), is_spv);
-
-  const bool debugEnabled = getBoolEnv("TRITON_DEBUG");
-
-  // If the initial compilation failed entirely (e.g., scratch space exceeds
-  // HW limit), and GRF mode was not explicitly set, retry with large GRF mode.
-  // This handles cases where the default GRF mode doesn't provide enough
-  // registers, causing the backend compiler to fail.
-  if (PyErr_Occurred() && is_spv && !build_flags.hasGRFSizeFlag()) {
-    // Save the original error before clearing it for the retry attempt.
-    PyObject *orig_type, *orig_value, *orig_tb;
-    PyErr_Fetch(&orig_type, &orig_value, &orig_tb);
-
-    if (debugEnabled)
-      std::cout << "(I): Build failed for \"" << kernel_name
-                << "\", retrying with large GRF mode" << std::endl;
-
-    build_flags.addLargeGRFSizeFlag();
-
-    auto [l0_module_retry, l0_kernel_retry, n_spills_retry] =
-        compileLevelZeroObjects(binary_ptr, binary_size, kernel_name, l0_device,
-                                l0_context, build_flags(), is_spv);
-    if (PyErr_Occurred()) {
-      // Retry also failed — propagate the original error.
-      PyErr_Restore(orig_type, orig_value, orig_tb);
-      return NULL;
-    }
-
-    // Retry succeeded — discard the saved original error.
-    Py_XDECREF(orig_type);
-    Py_XDECREF(orig_value);
-    Py_XDECREF(orig_tb);
-
-    l0_module = l0_module_retry;
-    l0_kernel = l0_kernel_retry;
-    n_spills = n_spills_retry;
-
-    // Always print recovery message to stderr to follow up on the
-    // "L0 build module failed" error that was already printed.
-    std::cerr << "(I): Build failure recovered by retrying with large GRF "
-                 "mode for \""
-              << kernel_name << "\"" << std::endl;
-
-    if (debugEnabled)
-      std::cout << "(I): Retry with large GRF succeeded, kernel has "
-                << n_spills << " spills" << std::endl;
-  } else if (PyErr_Occurred()) {
+  bool firstBuildFailed = PyErr_Occurred();
+  const bool canRetryWithLargeGRF = is_spv && !build_flags.hasGRFSizeFlag();
+  if (firstBuildFailed && !canRetryWithLargeGRF) {
     return NULL;
   }
 
-  if (is_spv) {
-    constexpr int32_t max_reg_spill = 1000;
-    const bool is_GRF_mode_specified = build_flags.hasGRFSizeFlag();
+  const bool debugEnabled = getBoolEnv("TRITON_DEBUG");
+  constexpr int32_t max_reg_spill = 0;
 
-    // If the register mode isn't set, and the number of spills is greater
-    // than the threshold, recompile the kernel using large GRF mode.
-    if (!is_GRF_mode_specified && n_spills > max_reg_spill) {
-      if (debugEnabled)
-        std::cout << "(I): Detected " << n_spills
-                  << " spills, recompiling the kernel using large GRF mode"
-                  << std::endl;
+  if (canRetryWithLargeGRF && (firstBuildFailed || n_spills > max_reg_spill)) {
+    PyObject *orig_type = nullptr, *orig_value = nullptr, *orig_tb = nullptr;
+    // Save the original error before clearing it for the retry attempt.
+    if (firstBuildFailed)
+      PyErr_Fetch(&orig_type, &orig_value, &orig_tb);
 
+    if (debugEnabled)
+      std::cout << (firstBuildFailed ? "(I): Build failed for \""
+                                     : "(I): Detected spills for \"")
+                << kernel_name << "\", retrying with large GRF mode"
+                << std::endl;
+
+    if (std::strcmp(resolvedDeviceArch, "cri") == 0) {
+      build_flags.addXLargeGRFSizeFlag();
+    } else {
       build_flags.addLargeGRFSizeFlag();
+    }
 
-      try {
-        auto [l0_module_dgrf, l0_kernel_dgrf, n_spills_dgrf] =
-            compileLevelZeroObjects(binary_ptr, binary_size, kernel_name,
-                                    l0_device, l0_context, build_flags(),
-                                    is_spv);
+    try {
+      auto [l0_module_retry, l0_kernel_retry, n_spills_retry] =
+          compileLevelZeroObjects(binary_ptr, binary_size, kernel_name,
+                                  l0_device, l0_context, build_flags(), is_spv);
+
+      if (PyErr_Occurred()) {
+        if (firstBuildFailed) {
+          // Retry also failed — propagate the original error.
+          PyErr_Restore(orig_type, orig_value, orig_tb);
+          return NULL;
+        } else {
+          // retry failed but got good kernel at first time.
+          // Just clear the build error log.
+          PyErr_Clear();
+          if (debugEnabled)
+            std::cout << "(I): Rebuild failed. Just use previous kernel"
+                      << std::endl;
+          // construct previous working version
+          build_flags = BuildFlags(build_flags_ptr);
+        }
+      } else {
+        if (firstBuildFailed) {
+          // Retry succeeded — discard the saved original error.
+          Py_XDECREF(orig_type);
+          Py_XDECREF(orig_value);
+          Py_XDECREF(orig_tb);
+
+          // Always print recovery message to stderr to follow up on the
+          // "L0 build module failed" error that was already printed.
+          std::cerr
+              << "(I): Build failure recovered by retrying with large GRF "
+                 "mode for \""
+              << kernel_name << "\"" << std::endl;
+        } else {
+          // clean up the unused module and kernel.
+          auto error_no = zeKernelDestroy(l0_kernel);
+          if (error_no != ZE_RESULT_SUCCESS) {
+            PyErr_WarnEx(
+                PyExc_RuntimeWarning,
+                "[Ignoring] Intel - Error during destroy unused L0 kernel", 1);
+          }
+          error_no = zeModuleDestroy(l0_module);
+          if (error_no != ZE_RESULT_SUCCESS) {
+            PyErr_WarnEx(
+                PyExc_RuntimeWarning,
+                "[Ignoring] Intel - Error during destroy unused L0 module", 1);
+          }
+        }
+        l0_module = l0_module_retry;
+        l0_kernel = l0_kernel_retry;
+        n_spills = n_spills_retry;
 
         if (debugEnabled)
-          std::cout << "(I): Kernel has now " << n_spills_dgrf << " spills"
-                    << std::endl;
-
-        std::swap(l0_module, l0_module_dgrf);
-        std::swap(l0_kernel, l0_kernel_dgrf);
-        std::swap(n_spills, n_spills_dgrf);
-
-        // clean up the unused module and kernel.
-        auto error_no = zeKernelDestroy(l0_kernel_dgrf);
-        if (error_no != ZE_RESULT_SUCCESS) {
-          PyErr_WarnEx(
-              PyExc_RuntimeWarning,
-              "[Ignoring] Intel - Error during destroy unused L0 kernel", 1);
-        }
-        error_no = zeModuleDestroy(l0_module_dgrf);
-        if (error_no != ZE_RESULT_SUCCESS) {
-          PyErr_WarnEx(
-              PyExc_RuntimeWarning,
-              "[Ignoring] Intel - Error during destroy unused L0 module", 1);
-        }
-      } catch (const std::exception &e) {
-        char buf[1024] = {0};
-        strcat(buf, "[Ignoring] Intel - Error during Intel loadBinary with "
-                    "large registers: ");
-        strcat(buf, e.what());
-        PyErr_WarnEx(PyExc_RuntimeWarning, buf, 1);
-        // construct previous working version
-        build_flags = BuildFlags(build_flags_ptr);
+          std::cout << "(I): Retry with large GRF succeeded, kernel has "
+                    << n_spills << " spills" << std::endl;
       }
+    } catch (const std::exception &e) {
+      if (firstBuildFailed) {
+        // Retry also failed — propagate the original error.
+        PyErr_Restore(orig_type, orig_value, orig_tb);
+        return NULL;
+      }
+      PyErr_WarnFormat(PyExc_RuntimeWarning, 1,
+                       "[Ignoring] Intel - Error during Intel loadBinary with "
+                       "large registers: %s",
+                       e.what());
+      // construct previous working version
+      build_flags = BuildFlags(build_flags_ptr);
     }
   }
 
@@ -809,50 +830,35 @@ ExtractorTypeIndex &operator++(ExtractorTypeIndex &idx) {
   return idx;
 }
 
+typedef void (*SetArgFunc)(sycl::handler &, int, const void *);
+
+// Static table indexed by ExtractorTypeIndex, called from the per-argument
+// hot path inside the kernel submit lambda. A small, cache-resident table of
+// function pointers turns what would otherwise be a per-argument switch
+// (branch mispredicts under cache pressure) into a simple indirect call.
+// Positional initialization matches enum order to avoid designated
+// initializers, which require /std:c++20 on MSVC (see extraction_map above).
+static const SetArgFunc set_arg_table[EXTRACTOR_TYPE_COUNT] = {
+    /* EXTRACTOR_UNKOWN_INDEX   */ nullptr,
+    /* EXTRACTOR_POINTER_INDEX  */ set_scalar_arg<void *>,
+    /* EXTRACTOR_INT8_INDEX     */ set_scalar_arg<int8_t>,
+    /* EXTRACTOR_INT16_INDEX    */ set_scalar_arg<int16_t>,
+    /* EXTRACTOR_INT32_INDEX    */ set_scalar_arg<int32_t>,
+    /* EXTRACTOR_INT64_INDEX    */ set_scalar_arg<int64_t>,
+    /* EXTRACTOR_UINT8_INDEX    */ set_scalar_arg<uint8_t>,
+    /* EXTRACTOR_UINT16_INDEX   */ set_scalar_arg<uint16_t>,
+    /* EXTRACTOR_UINT32_INDEX   */ set_scalar_arg<uint32_t>,
+    /* EXTRACTOR_UINT64_INDEX   */ set_scalar_arg<uint64_t>,
+    /* EXTRACTOR_FP16_INDEX     */ set_scalar_arg<uint16_t>,
+    /* EXTRACTOR_BF16_INDEX     */ set_scalar_arg<uint16_t>,
+    /* EXTRACTOR_FP32_INDEX     */ set_scalar_arg<uint32_t>,
+    /* EXTRACTOR_FP64_INDEX     */ set_scalar_arg<uint64_t>,
+};
+
 static inline void setScalarArgByType(sycl::handler &cgh, int index,
                                       const void *value, uint8_t type_idx) {
-  switch ((ExtractorTypeIndex)type_idx) {
-  case EXTRACTOR_POINTER_INDEX:
-    set_scalar_arg<void *>(cgh, index, value);
-    break;
-  case EXTRACTOR_INT8_INDEX:
-    set_scalar_arg<int8_t>(cgh, index, value);
-    break;
-  case EXTRACTOR_INT16_INDEX:
-    set_scalar_arg<int16_t>(cgh, index, value);
-    break;
-  case EXTRACTOR_INT32_INDEX:
-    set_scalar_arg<int32_t>(cgh, index, value);
-    break;
-  case EXTRACTOR_INT64_INDEX:
-    set_scalar_arg<int64_t>(cgh, index, value);
-    break;
-  case EXTRACTOR_UINT8_INDEX:
-    set_scalar_arg<uint8_t>(cgh, index, value);
-    break;
-  case EXTRACTOR_UINT16_INDEX:
-    set_scalar_arg<uint16_t>(cgh, index, value);
-    break;
-  case EXTRACTOR_UINT32_INDEX:
-    set_scalar_arg<uint32_t>(cgh, index, value);
-    break;
-  case EXTRACTOR_UINT64_INDEX:
-    set_scalar_arg<uint64_t>(cgh, index, value);
-    break;
-  case EXTRACTOR_FP16_INDEX:
-    set_scalar_arg<uint16_t>(cgh, index, value);
-    break;
-  case EXTRACTOR_BF16_INDEX:
-    set_scalar_arg<uint16_t>(cgh, index, value);
-    break;
-  case EXTRACTOR_FP32_INDEX:
-    set_scalar_arg<uint32_t>(cgh, index, value);
-    break;
-  case EXTRACTOR_FP64_INDEX:
-    set_scalar_arg<uint64_t>(cgh, index, value);
-    break;
-  default:
-    break;
+  if (type_idx < EXTRACTOR_TYPE_COUNT && set_arg_table[type_idx] != nullptr) {
+    set_arg_table[type_idx](cgh, index, value);
   }
 }
 
@@ -1067,6 +1073,12 @@ Extractor getExtractor(uint8_t index) {
   return extraction_map[index];
 }
 
+// Rounds `value` up to the next multiple of `alignment` (which must be a
+// power of 2).
+static inline uintptr_t alignUp(uintptr_t value, size_t alignment) {
+  return (value + alignment - 1) & ~(uintptr_t)(alignment - 1);
+}
+
 static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
                                int num_warps, int threads_per_warp,
                                int shared_memory, sycl::queue &stream,
@@ -1074,13 +1086,13 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
                                void *profile_scratch, uint32_t num_params,
                                void **params, uint8_t *extractor_data) {
 
+#if defined(TRITON_INTEL_INJECT_PYTORCH)
   std::string kernel_name =
       kernel_ptr.get_info<sycl::info::kernel::function_name>();
-#if defined(TRITON_INTEL_INJECT_PYTORCH)
   RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {});
 #endif
 
-  uint32_t expected_num_params =
+  uint32_t kernel_num_args =
       kernel_ptr.get_info<sycl::info::kernel::num_args>();
   size_t global_range_x =
       static_cast<size_t>(gridX) * threads_per_warp * num_warps;
@@ -1092,12 +1104,22 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
   sycl::range<3> global_range(global_range_z, global_range_y, global_range_x);
   sycl::range<3> local_range(local_range_z, local_range_y, local_range_x);
   sycl::nd_range<3> parallel_work_size(global_range, local_range);
-  if (shared_memory) {
-    expected_num_params -= 1;
-  }
+
+  // Shared memory is allocated statically in the kernel module, so it is not a
+  // kernel argument. Kernels that need a dynamic allocation (compiled with
+  // TRITON_INTEL_DYNAMIC_SHARED_MEMORY=1, or using a partitioned shared layout)
+  // do take a trailing shared memory argument, which is not part of `params`;
+  // detect that from the kernel so both flavors can be launched.
+  const bool bind_shared_memory =
+      shared_memory && (kernel_num_args == num_params + 1);
+  uint32_t expected_num_params = kernel_num_args - (bind_shared_memory ? 1 : 0);
 
   static bool launchDebug = getBoolEnv("TRITON_INTEL_LAUNCH_DEBUG");
   if (launchDebug) {
+#if !defined(TRITON_INTEL_INJECT_PYTORCH)
+    std::string kernel_name =
+        kernel_ptr.get_info<sycl::info::kernel::function_name>();
+#endif
     std::cout << "kernel info name:" << kernel_name << " @" << &kernel_ptr
               << std::endl;
     std::cout << "kernel info attributes:"
@@ -1143,16 +1165,26 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
     // Set scratch memory arguments
     set_scalar_arg<void *>(cgh, num_params - 2, params[num_params - 2]);
     set_scalar_arg<void *>(cgh, num_params - 1, params[num_params - 1]);
-    if (shared_memory) {
+    if (bind_shared_memory) {
       using share_mem_t = sycl::local_accessor<int8_t, 1>;
       share_mem_t local_buffer = share_mem_t(shared_memory, cgh);
       cgh.set_arg(num_params, local_buffer);
-      cgh.parallel_for(parallel_work_size, kernel_ptr);
-    } else {
-      cgh.parallel_for(parallel_work_size, kernel_ptr);
     }
+    syclex::nd_launch(cgh, parallel_work_size, kernel_ptr);
   };
-  auto event = stream.submit(cgf);
+  // Event-less submit: nothing in the launch path consumes the event.
+  //
+  // Kept off the LTS driver line: up to and including Agama 1146 the driver
+  // harvests the device-side assert and printf buffers only when the host waits
+  // on the kernel's *event*, so submitting without one makes `device_assert`
+  // and `tl.device_print` silently do nothing -- test_debug.py then fails 29
+  // tests with "Expected SIGABRT but got exit code 0" and no output at all.
+#if __SYCL_COMPILER_VERSION >= 20260204 &&                                     \
+    defined(ENABLE_EXPERIMENTAL_EVENTLESS_SUBMIT)
+  syclex::submit(stream, cgf);
+#else
+  stream.submit(cgf);
+#endif
 }
 // end sycl
 
@@ -1358,35 +1390,42 @@ extern "C" EXPORT_FUNC PyObject *launch(PyObject *args) {
   void **params = (void **)alloca(num_params * sizeof(void *));
   int params_idx = 0;
   PointerCheckScope pointerCheckScope(stream);
+
+  // Precompute a tightly-packed layout for all parameter storage, then do a
+  // single alloca for the whole buffer instead of one alloca per parameter.
+  // This keeps all parameter data contiguous on the stack rather than
+  // scattered across num_args separate stack regions.
+  Extractor *extractors = (Extractor *)alloca(num_args * sizeof(Extractor));
+  size_t *param_offset = (size_t *)alloca(num_args * sizeof(size_t));
+  size_t total_size = 0;
+  size_t max_alignment = 1;
+  for (Py_ssize_t i = 0; i < num_args; ++i) {
+    extractors[i] = getExtractor(extractor_data[i]);
+    if (extractors[i].extract == NULL) {
+      PyBuffer_Release(&signature);
+      return NULL;
+    }
+    size_t alignment = extractors[i].alignment ? extractors[i].alignment : 1;
+    total_size = alignUp(total_size, alignment);
+    param_offset[i] = total_size;
+    total_size += extractors[i].size;
+    if (alignment > max_alignment) {
+      max_alignment = alignment;
+    }
+  }
+  // Offsets above are only aligned relative to offset 0, so the base
+  // pointer itself must be rounded up to max_alignment for those relative
+  // offsets to translate into absolutely-aligned addresses.
+  char *param_storage_raw = (char *)alloca(total_size + max_alignment - 1);
+  char *param_storage =
+      (char *)alignUp((uintptr_t)param_storage_raw, max_alignment);
+
   // This loop has to stay in the same function that owns params, since we are
   // using alloca to allocate pointers to it on the stack of the function.
   for (Py_ssize_t i = 0; i < num_args; ++i) {
     g_pointer_check_arg_idx = static_cast<int>(i);
-    // Get extractor that will send back a struct with
-    // * size for allocation
-    // * function to call to put the parameter in params buffer
-    Extractor extractor = getExtractor(extractor_data[i]);
-    if (extractor.extract == NULL) {
-      PyBuffer_Release(&signature);
-      return NULL;
-    }
-
-    size_t alignment = extractor.alignment;
-    if (alignment != 0) {
-      // Allocate enough space on the stack to guarantee an aligned block.
-      size_t size_with_alignment = extractor.size + alignment - 1;
-      void *storage_ptr = alloca(size_with_alignment);
-      void *aligned_ptr = (void *)((((uintptr_t)storage_ptr) + alignment - 1) &
-                                   ~(alignment - 1));
-      if (aligned_ptr == NULL) {
-        PyErr_SetString(PyExc_MemoryError, "Failed to align parameter storage");
-        PyBuffer_Release(&signature);
-        return NULL;
-      }
-      params[params_idx] = aligned_ptr;
-    } else {
-      params[params_idx] = alloca(extractor.size);
-    }
+    Extractor extractor = extractors[i];
+    params[params_idx] = param_storage + param_offset[i];
 
     PyObject *current_arg = args_data[i];
     if (!extractor.extract(params[params_idx++], current_arg)) {

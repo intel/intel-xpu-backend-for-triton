@@ -36,8 +36,8 @@ def get_benchmark(providers_filter: Optional[List[str]] = None):
                     for a in [0, 1]  #  #
                     ],
             line_arg="provider",
-            line_vals=providers.keys(),
-            line_names=providers.values(),
+            line_vals=list(providers.keys()),
+            line_names=list(providers.values()),
             styles=[("blue", "-"), ("green", "-"), ("orange", "-")],
             ylabel=["GB/s", "TFlops"],
             plot_name="prefix-sums",

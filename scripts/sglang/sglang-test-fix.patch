@@ -1,0 +1,81 @@
+diff --git a/python/sglang/jit_kernel/dsv4/compress.py b/python/sglang/jit_kernel/dsv4/compress.py
+index bf82bff04..c8c9f0fcf 100644
+--- a/python/sglang/jit_kernel/dsv4/compress.py
++++ b/python/sglang/jit_kernel/dsv4/compress.py
+@@ -15,23 +15,27 @@ from sglang.srt.utils import is_hip, is_xpu
+ from .utils import make_name
+ 
+ _is_xpu = is_xpu()
+-if _is_xpu:
+-    from sgl_kernel import compress_norm_rope_store as compress_norm_rope_store_xpu
+-    from sgl_kernel import (
+-        flash_compress4_decode,
+-        flash_compress4_prefill,
+-        flash_compress128_decode,
+-        flash_compress128_prefill,
+-        plan_compress_decode,
+-        plan_compress_decode_legacy,
+-        plan_compress_prefill,
+-        plan_compress_prefill_legacy,
+-    )
++try:
++    if _is_xpu:
++        from sgl_kernel import compress_norm_rope_store as compress_norm_rope_store_xpu
++        from sgl_kernel import (
++            flash_compress4_decode,
++            flash_compress4_prefill,
++            flash_compress128_decode,
++            flash_compress128_prefill,
++            plan_compress_decode,
++            plan_compress_decode_legacy,
++            plan_compress_prefill,
++            plan_compress_prefill_legacy,
++        )
+ 
+-    _XPU_COMPRESS_FNS = {
+-        4: (flash_compress4_decode, flash_compress4_prefill),
+-        128: (flash_compress128_decode, flash_compress128_prefill),
+-    }
++        _XPU_COMPRESS_FNS = {
++            4: (flash_compress4_decode, flash_compress4_prefill),
++            128: (flash_compress128_decode, flash_compress128_prefill),
++        }
++except ImportError:
++    # sgl-kernel-xpu is optional, so just run without the DSv4 compress kernels.
++    _is_xpu = False
+ 
+ 
+ if TYPE_CHECKING:
+diff --git a/test/registered/attention/test_triton_attention_kernels.py b/test/registered/attention/test_triton_attention_kernels.py
+index 10d2e9717..a312eb087 100644
+--- a/test/registered/attention/test_triton_attention_kernels.py
++++ b/test/registered/attention/test_triton_attention_kernels.py
+@@ -815,15 +815,22 @@ class TestTritonAttention(CustomTestCase):
+             v_scale=1.0,
+         )
+ 
+-        # Build unified KV indices
+-        extend_kv_indices = torch.arange(
+-            total_token_num - extend_token_num,
+-            total_token_num,
+-            dtype=torch.int64,
+-            device=device,
++        # Build unified KV indices. Prefix and extend tokens are interleaved per
++        # request in k_buffer/v_buffer, so the extend positions are not one
++        # contiguous range at the end of the buffer.
++        extend_kv_indices = torch.empty(
++            (extend_token_num,), dtype=torch.int64, device=device
+         )
+         extend_start_loc = torch.zeros((B,), dtype=torch.int32, device=device)
+         extend_start_loc[1:] = torch.cumsum(b_seq_len_extend[:-1], 0)
++        for i in range(B):
++            extend_kv_indices[
++                extend_start_loc[i] : extend_start_loc[i] + b_seq_len_extend[i]
++            ] = torch.arange(
++                b_start_loc[i] + b_seq_len_prefix[i],
++                b_start_loc[i] + b_seq_len[i],
++                device=device,
++            )
+ 
+         unified_kv_indptr, unified_kv_indices, prefix_lens = build_unified_kv_indices(
+             kv_indptr,

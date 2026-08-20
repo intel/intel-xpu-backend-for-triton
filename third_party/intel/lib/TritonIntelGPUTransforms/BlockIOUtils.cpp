@@ -50,7 +50,7 @@ std::optional<unsigned> getLaneFastChangeDim(const LinearLayout &ll,
   if (!ll.hasInDim(kLane))
     return std::nullopt;
   // First lane basis vector (fastest-varying lane bit). Mirrors the gate in
-  // getBlockIOTileSize<false>: the lane base must move along exactly one tensor
+  // getBlockIOTileSize: the lane base must move along exactly one tensor
   // dimension, else the layout is not a clean 2D block-I/O tile.
   ArrayRef<int32_t> laneBase0 = ll.getBasis(kLane, /*pos=*/0);
   if (llvm::count_if(laneBase0, [](int32_t x) { return x > 0; }) != 1)
@@ -61,14 +61,11 @@ std::optional<unsigned> getLaneFastChangeDim(const LinearLayout &ll,
 
 // Return the tileHeight, tileWidth, numElemPerPackedVal, vBlocks, row Dim and
 // column Dim.
-template <bool isLoad>
+template <unsigned MAX_TILE_HEIGHT, unsigned MAX_BITS_WIDTH_TRANSPOSE>
 BlockIOTileSizeInfo
 getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
                    unsigned elemSizeInBits, AxisInfo *maskAxisInfo,
                    bool oneMatrixPerLoadForBT) {
-  assert((isLoad || !oneMatrixPerLoadForBT) &&
-         "oneMatrixPerLoadForBT must be false for stores");
-
   if (elemSizeInBits > 64)
     return BlockIOTileSizeInfo::unknown();
 
@@ -129,58 +126,81 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
   // transpose, we'd prefer smaller d32 type cause hardware could
   // transpose more to reduce the number of mov operation in register.
   constexpr unsigned MAX_BITS_TRANSPOSE = 32;
-  constexpr unsigned MAX_BITS_WIDTH_NORMAL = 64 * 8;       // 64 bytes.
-  constexpr unsigned MAX_BITS_WIDTH_TRANSPOSE = 8 * 4 * 8; // 8xd32. (and 4xd64)
+  constexpr unsigned MAX_BITS_VNNI = 32;
+  constexpr unsigned MAX_BITS_WIDTH_NORMAL = 64 * 8; // 64 bytes.
   constexpr unsigned TRANSPOSE_LOAD_D64_HEIGHT = 8;
-  constexpr unsigned MAX_TILE_HEIGHT_STORE = 8;
-  constexpr unsigned MAX_TILE_HEIGHT_LOAD = 32;
-  unsigned MAX_TILE_HEIGHT;
-  if constexpr (isLoad) {
-    MAX_TILE_HEIGHT = (transpose && elemSizeInBits == 64)
-                          ? TRANSPOSE_LOAD_D64_HEIGHT
-                          : MAX_TILE_HEIGHT_LOAD;
-  } else {
-    MAX_TILE_HEIGHT = MAX_TILE_HEIGHT_STORE;
-  }
+  unsigned maxTileHeight = (transpose && elemSizeInBits == 64)
+                               ? TRANSPOSE_LOAD_D64_HEIGHT
+                               : MAX_TILE_HEIGHT;
+  unsigned MAX_BITS = transpose ? MAX_BITS_TRANSPOSE : MAX_BITS_NORMAL;
   unsigned MAX_BITS_WIDTH =
       transpose ? MAX_BITS_WIDTH_TRANSPOSE : MAX_BITS_WIDTH_NORMAL;
 
-  unsigned maxElemPackedVal = mlir::ceil<unsigned>(
-      transpose ? MAX_BITS_TRANSPOSE : MAX_BITS_NORMAL, elemSizeInBits);
   SetVector<unsigned> regPackBases;
-  for (unsigned regBaseIter = 0; regBaseIter < basesOfRegister.size();
-       ++regBaseIter) {
-    if (numElemPerPackedVal >= maxElemPackedVal) {
-      // Reached the maximum number of elements per packed value.
-      break;
+  auto packRegister = [&](unsigned dim, unsigned maxPackNum) {
+    for (unsigned regBaseIter = 0; regBaseIter < basesOfRegister.size();
+         ++regBaseIter) {
+      if (numElemPerPackedVal >= maxPackNum) {
+        // Reached the maximum number of elements per packed value.
+        break;
+      }
+      const std::vector<int> &base = basesOfRegister[regBaseIter];
+      if (!validateBase(base))
+        continue; // Skip as the register can not be trivial packed.
+      int baseDim = getFirstNonZeroDim(base);
+      if (dim == baseDim) {
+        if (tileShape[dim] != base[dim])
+          continue; // Skip the register not in dense tile.
+        // The value can be loaded as packed value.
+        tileShape[dim] <<= 1;
+        numElemPerPackedVal <<= 1;
+        regPackBases.insert(1 << regBaseIter);
+      }
     }
-    const std::vector<int> &base = basesOfRegister[regBaseIter];
-    if (!validateBase(base))
-      continue; // Skip as the register can not be trivial packed.
-    int dim = getFirstNonZeroDim(base);
-    if (memContiguousDim == dim) {
-      if (tileShape[dim] != base[dim])
-        continue; // Skip the register not in dense tile.
-      // The value can be loaded as packed value.
-      tileShape[dim] <<= 1;
-      numElemPerPackedVal <<= 1;
-      regPackBases.insert(1 << regBaseIter);
-    }
-  }
+  };
 
-  // For the transpose case, we have to pack the elements to d32.
-  if (transpose && numElemPerPackedVal != maxElemPackedVal)
+  packRegister(memContiguousDim,
+               mlir::ceil<unsigned>(MAX_BITS, elemSizeInBits));
+
+  // For the transpose case, elements up to d32 must be packed to d32.
+  if (transpose && elemSizeInBits <= MAX_BITS &&
+      (numElemPerPackedVal * elemSizeInBits) != MAX_BITS)
     return BlockIOTileSizeInfo::unknown();
 
   // We already get the basic tile shape in packing values.
   // To increase the tile shape along each lane dimension.
+  bool vnni = false;
   for (const std::vector<int> &base : basesOfLane) {
     if (!validateBase(base))
       break; // break if the lane bases are not trivial.
     int dim = getFirstNonZeroDim(base);
     if (tileShape[dim] != base[dim]) {
-      // TODO: Check whether we can add an VNNI pack to make a larger tile.
-      break;
+      if (numElemPerPackedVal == 1) {
+        // There is no register packing yet.
+        if (dim != fastChangeDim) {
+          // Try to pack along the non-fast change dim with VNNI capability.
+          packRegister(dim,
+                       mlir::ceil<unsigned>(MAX_BITS_VNNI, elemSizeInBits));
+          if (numElemPerPackedVal != 1) {
+            // Check if packRegister partially packed the register along the
+            // non-fast change dim.
+            if ((numElemPerPackedVal * elemSizeInBits) == MAX_BITS_VNNI) {
+              vnni = true;
+            } else {
+              // break if the numElemPerPackedVal not matched to the VNNI
+              // packing bits number.
+              return BlockIOTileSizeInfo::unknown();
+            }
+          }
+        }
+      }
+      // Temporarily changed tileShape by packRegister is safe because the
+      // lane-density check below will reject it.
+      if (tileShape[dim] != base[dim]) {
+        // break if we can not increase the tile shape along this dim after
+        // VNNI packing.
+        break;
+      }
     }
     tileShape[dim] <<= 1;
   }
@@ -214,9 +234,9 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
 
   // The tile shape sizes should not exceed the hardware limit.
   unsigned fastChangeDimLimit =
-      !transpose ? MAX_BITS_WIDTH / elemSizeInBits : MAX_TILE_HEIGHT;
+      !transpose ? MAX_BITS_WIDTH / elemSizeInBits : maxTileHeight;
   unsigned rowDimLimit =
-      !transpose ? MAX_TILE_HEIGHT : MAX_BITS_WIDTH / elemSizeInBits;
+      !transpose ? maxTileHeight : MAX_BITS_WIDTH / elemSizeInBits;
 
   // The tile shape sizes should not exceed the mask constancy limit.
   fastChangeDimLimit =
@@ -254,7 +274,7 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
       if (dim != fastChangeDim ||
           tileShape[fastChangeDim] != base[fastChangeDim])
         continue; // Skip the register not mapped to the row dim.
-      if ((tileShape[fastChangeDim] << 1) > MAX_TILE_HEIGHT)
+      if ((tileShape[fastChangeDim] << 1) > maxTileHeight)
         break; // The col dim is the height.
       if ((tileShape[fastChangeDim] << 1) > maskConstancyFastChangeDimLimit)
         break; // Should not exceed the mask constancy limit.
@@ -319,7 +339,7 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
     if (dim != rowDim || tileShape[rowDim] != base[rowDim])
       continue; // Skip the register not mapped to the row dim.
     if (!transpose) {
-      if ((tileShape[rowDim] << 1) > MAX_TILE_HEIGHT)
+      if ((tileShape[rowDim] << 1) > maxTileHeight)
         break; // If the tile height is limited, we stop here.
     } else {
       if (((tileShape[rowDim] << 1) * elemSizeInBits) > MAX_BITS_WIDTH)
@@ -352,25 +372,26 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
   }
 
   unsigned vBlocks = 1;
-  if (!transpose) {
-    // Increase the tile shape along the column dimension. (Increase the
-    // vBlocks.)
-    for (unsigned regBaseIter = 0; regBaseIter < basesOfRegister.size();
-         ++regBaseIter) {
-      if (regPackBases.contains(1 << regBaseIter))
-        continue; // Skip the register already packed.
-      const std::vector<int> &base = basesOfRegister[regBaseIter];
-      if (!validateBase(base))
-        continue; // Skip as the bases are not trivial.
-      int dim = getFirstNonZeroDim(base);
-      if (dim != fastChangeDim || (tileShape[dim] * vBlocks) != base[dim])
-        continue;
-      if ((tileShape[fastChangeDim] * (vBlocks << 1)) >
-          maskConstancyFastChangeDimLimit)
-        break; // Should not exceed the mask constancy limit.
-      vBlocks <<= 1;
-      regPackBases.insert(1 << regBaseIter);
-    }
+  // Increase the tile shape along the tile width dimension. (Increase the
+  // vBlocks.)
+  // For the transpose case, increase the vBlocks along row dim to increase the
+  // size of the tile width for prefetch.
+  unsigned vBlocksDim = transpose ? rowDim : fastChangeDim;
+  for (unsigned regBaseIter = 0; regBaseIter < basesOfRegister.size();
+       ++regBaseIter) {
+    if (regPackBases.contains(1 << regBaseIter))
+      continue; // Skip the register already packed.
+    const std::vector<int> &base = basesOfRegister[regBaseIter];
+    if (!validateBase(base))
+      continue; // Skip as the bases are not trivial.
+    int dim = getFirstNonZeroDim(base);
+    if (dim != vBlocksDim || (tileShape[dim] * vBlocks) != base[dim])
+      continue;
+    if ((tileShape[vBlocksDim] * (vBlocks << 1)) >
+        maskConstancyFastChangeDimLimit)
+      break; // Should not exceed the mask constancy limit.
+    vBlocks <<= 1;
+    regPackBases.insert(1 << regBaseIter);
   }
   for (unsigned regBaseIter = 0; regBaseIter < basesOfRegister.size();
        ++regBaseIter) {
@@ -379,15 +400,42 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
     // insert the remaining register base.
     regPackBases.insert(1 << regBaseIter);
   }
+
+  // VNNI packing doesn't impact the tileWidth and tileHeight which
+  // is transparent to HW.
+  unsigned packedValueNumber = vnni ? 1 : numElemPerPackedVal;
+
   int tileHeight = tileShape[transpose ? fastChangeDim : rowDim];
   int tileWidth =
-      tileShape[transpose ? rowDim : fastChangeDim] / numElemPerPackedVal;
+      tileShape[transpose ? rowDim : fastChangeDim] / packedValueNumber;
+
+  return BlockIOTileSizeInfo(tileHeight, tileWidth, packedValueNumber, vBlocks,
+                             rowDim, fastChangeDim, transpose, vnni,
+                             std::move(regPackBases));
+}
+
+BlockIOTileSizeInfo getBlockIOLoadTileSize(const LinearLayout &ll,
+                                           unsigned memContiguousDim,
+                                           unsigned elemSizeInBits,
+                                           AxisInfo *maskAxisInfo,
+                                           bool oneMatrixPerLoadForBT) {
+  constexpr unsigned MAX_TILE_HEIGHT_LOAD = 32;
+  constexpr unsigned MAX_BITS_WIDTH_TRANSPOSE = 8 * 4 * 8; // 8xd32. (and 4xd64)
+  auto sizeInfo =
+      getBlockIOTileSize<MAX_TILE_HEIGHT_LOAD, MAX_BITS_WIDTH_TRANSPOSE>(
+          ll, memContiguousDim, elemSizeInBits, maskAxisInfo,
+          oneMatrixPerLoadForBT);
 
   // Cap vBlocks for loads based on HW constraints.
-  if constexpr (isLoad) {
+  unsigned vBlocks = sizeInfo.vBlocks;
+  if (sizeInfo.transpose) {
+    vBlocks = 1;
+  } else {
     constexpr int MAX_WIDTH_BYTES = 64;
-    unsigned packedElemSizeInBits = elemSizeInBits * numElemPerPackedVal;
-    unsigned totalBytesPerRowPerMatrix = tileWidth * packedElemSizeInBits / 8;
+    unsigned packedElemSizeInBits =
+        elemSizeInBits * sizeInfo.numElemPerPackedVal;
+    unsigned totalBytesPerRowPerMatrix =
+        sizeInfo.tileWidth * packedElemSizeInBits / 8;
     if (totalBytesPerRowPerMatrix > 0) {
       vBlocks =
           std::min(vBlocks, static_cast<unsigned>(MAX_WIDTH_BYTES /
@@ -395,22 +443,72 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
     }
     vBlocks = std::min(vBlocks, 4u);
     constexpr unsigned GRF_SIZE = 64;
-    if (tileHeight * tileWidth * packedElemSizeInBits / 8 < GRF_SIZE)
+    if (sizeInfo.tileHeight * sizeInfo.tileWidth * packedElemSizeInBits / 8 <
+        GRF_SIZE)
       vBlocks = 1;
   }
-
-  return BlockIOTileSizeInfo(tileHeight, tileWidth, numElemPerPackedVal,
-                             vBlocks, rowDim, fastChangeDim, transpose,
-                             std::move(regPackBases));
+  sizeInfo.vBlocks = vBlocks;
+  return sizeInfo;
 }
 
-// Explicit instantiations.
-template BlockIOTileSizeInfo getBlockIOTileSize<true>(const LinearLayout &,
-                                                      unsigned, unsigned,
-                                                      AxisInfo *, bool);
-template BlockIOTileSizeInfo getBlockIOTileSize<false>(const LinearLayout &,
-                                                       unsigned, unsigned,
-                                                       AxisInfo *, bool);
+BlockIOTileSizeInfo getBlockIOStoreTileSize(const LinearLayout &ll,
+                                            unsigned memContiguousDim,
+                                            unsigned elemSizeInBits,
+                                            AxisInfo *maskAxisInfo) {
+  constexpr unsigned MAX_TILE_HEIGHT_STORE = 8;
+  constexpr unsigned MAX_BITS_WIDTH_TRANSPOSE =
+      8 * 4 * 8; // the transpose store is not supported. This is a dummy input
+  return getBlockIOTileSize<MAX_TILE_HEIGHT_STORE, MAX_BITS_WIDTH_TRANSPOSE>(
+      ll, memContiguousDim, elemSizeInBits, maskAxisInfo, false);
+}
+
+BlockIOTileSizeInfo getBlockIOPrefetchTileSize(const LinearLayout &ll,
+                                               unsigned memContiguousDim,
+                                               unsigned elemSizeInBits,
+                                               AxisInfo *maskAxisInfo,
+                                               bool allow256Bytes) {
+  constexpr unsigned MAX_TILE_HEIGHT_LOAD = 32;
+  constexpr unsigned MAX_BITS_WIDTH_TRANSPOSE =
+      64 * 8; // for prefetching, still 64 bytes for transpose case.
+  auto sizeInfo =
+      getBlockIOTileSize<MAX_TILE_HEIGHT_LOAD, MAX_BITS_WIDTH_TRANSPOSE>(
+          ll, memContiguousDim, elemSizeInBits, maskAxisInfo, false);
+
+  // Cap vBlocks for prefetches based on HW constraints.
+  unsigned vBlocks = sizeInfo.vBlocks;
+  constexpr int MAX_WIDTH_BYTES = 64;
+  constexpr int MAX_WIDTH_256_BYTES = 256;
+  unsigned packedElemSizeInBits = elemSizeInBits * sizeInfo.numElemPerPackedVal;
+  unsigned totalBytesPerRowPerMatrix =
+      mlir::ceil<unsigned>(sizeInfo.tileWidth * packedElemSizeInBits, 8);
+  if (allow256Bytes &&
+      totalBytesPerRowPerMatrix * vBlocks >= MAX_WIDTH_256_BYTES) {
+    // Change it to 256 bytes.
+    vBlocks =
+        mlir::ceil<unsigned>(MAX_WIDTH_256_BYTES, totalBytesPerRowPerMatrix);
+  } else {
+    // Change it to <=64 bytes.
+    vBlocks =
+        std::min(vBlocks, static_cast<unsigned>(MAX_WIDTH_BYTES /
+                                                totalBytesPerRowPerMatrix));
+  }
+  // Adjust for tileHeight, tileWidth for prefetching.
+  sizeInfo.tileWidth *= vBlocks;
+  sizeInfo.vBlocks = 1;
+
+  // Workaround for OCL interface supports 8b_?r32x2c for 64 bytes per row of 8
+  // bits element.
+  switch (packedElemSizeInBits) {
+  case 8:
+    if (sizeInfo.tileWidth == 64) {
+      sizeInfo.vBlocks = 2;
+      sizeInfo.tileWidth = 32;
+    }
+    break;
+  }
+
+  return sizeInfo;
+}
 
 bool check2DBlockAddressPayloadRestriction(unsigned packedElemSizeInBits,
                                            unsigned tileWidth) {
@@ -457,45 +555,33 @@ DpasEncodingAttr getDpasLayout(RankedTensorType tensorTy) {
           : cast<triton::gpu::DotOperandEncodingAttr>(encoding).getParent());
 }
 
+bool transposeWithBitcast(MLIRContext *ctx, const LinearLayout &srcLayout,
+                          const LinearLayout &dstLayout) {
+  StringAttr kRegister = StringAttr::get(ctx, "register");
+  StringAttr kLane = StringAttr::get(ctx, "lane");
+  // Conservatively check the bitcast layout changes limitation.
+  // 1st: No lane to reg mapping or vise versa.
+  // 2nd: lane to lane mapping has to be identical.
+  // 3rc: reg to reg mapping has to be identical.
+  LinearLayout comp = srcLayout.invertAndCompose(dstLayout);
+  if (!comp.sublayout({kLane}, {kLane}).isIdentityOnOutDim(kLane) ||
+      !comp.sublayout({kRegister}, {kRegister}).isIdentityOnOutDim(kRegister) ||
+      !comp.sublayoutIsZero({kLane}, {kRegister}) ||
+      !comp.sublayoutIsZero({kRegister}, {kLane}))
+    return false;
+  return true;
+}
+
 FailureOr<LinearLayout> computeTransposeShuffleMapping(
     RankedTensorType tensorType, const LinearLayout &regMapping,
-    int64_t numElemsPerLoad, unsigned numPackedVals, unsigned tileHeight,
+    int64_t numElemsPerLoad, const BlockIOTileSizeInfo &sizeInfo,
     unsigned threadsPerWarp, bool hasDPASOperandType, MLIRContext *ctx) {
   StringAttr kRegister = StringAttr::get(ctx, "register");
+  StringAttr kLane = StringAttr::get(ctx, "lane");
   LinearLayout shuffleMapping =
       LinearLayout::identity1D(numElemsPerLoad, kRegister, kRegister);
 
-  // Improve this. The current 2D block load only transposes the matrix at
-  // i32 granularity. We still need to perform an additional in-register
-  // transpose from i32 -> (N × ElemSizeInBits) tiles, using the tile width.
-  // At the moment, we can only achieve this using a bitcast operation,
-  // which implicitly uses the sub-group size as the transpose width. To
-  // optimize further, we should implement this with inline VISA
-  // instructions.
-
-  // tileHeight becomes width after transposing.
-  unsigned widthToTranspose = tileHeight;
   if (hasDPASOperandType) {
-    // For the DPAS related layout, we will do the shuffle at first in the
-    // unpacking of the elements at the DPAS operands granularity.
-    // And then we will do the transposing. So the transposing width is DPAS
-    // op shapes.
-    DpasEncodingAttr::OpIdx opIdx = getOpIdx(tensorType);
-    DpasEncodingAttr dpasLayout = getDpasLayout(tensorType);
-    switch (opIdx) {
-    case DpasEncodingAttr::OpIdx::OperandA: {
-      widthToTranspose = dpasLayout.getDPASInstShapeA()[1];
-      break;
-    }
-    case DpasEncodingAttr::OpIdx::OperandB: {
-      widthToTranspose = dpasLayout.getDPASInstShapeB()[1];
-      break;
-    }
-    case DpasEncodingAttr::OpIdx::OperandC: {
-      widthToTranspose = dpasLayout.getDPASInstShapeC()[1];
-      break;
-    }
-    }
     // For shuffle the transposed Dot operands matrix, we can shuffle the
     // loaded matrix in an reverse order.
     auto invertMapping = regMapping.invert();
@@ -518,8 +604,120 @@ FailureOr<LinearLayout> computeTransposeShuffleMapping(
       return failure();
   }
 
-  if (numPackedVals > 1 && (widthToTranspose) != threadsPerWarp)
-    return failure();
+  Attribute encoding = tensorType.getEncoding();
+  std::optional<LinearLayout> llEncoding =
+      cast<DistributedEncodingTrait>(encoding).toLinearLayout(
+          tensorType.getShape());
+  assert(llEncoding.has_value() && "expected valid linear layout");
+  if (sizeInfo.transpose) {
+    // As for the transpose case, the value from the 2D block IO load is in the
+    // packed i32 transposed order. We need to do extra transpose within
+    // register if the matrix is not fully transposed by DataPort when load
+    // back. (Extra shuffle and transpose happened in unpackBlockLoadResult.)
+    // Let's take the example for extra transpose of DPAS layout OpsChan=2 of
+    // fp8 type. (which is from case to do fp8 DPAS on BMG) The 2D block IO tile
+    // size is of height = 16, width = 4, numElemPerPackedVal = 4, transpose =
+    // True. The value in register will be filled by DataPort as the layout
+    // clang-format off
+    // which is only transposed at i32 granularity:
+    //              i32
+    // r0 (0),  (1),  (2),  (3)   | .....     x16
+    // r1 (64), (65), (66), (67)  | .....     x16
+    // r2 (128),(129),(130),(131) | .....     x16
+    // r3 (192),(193),(194),(195) | .....     x16
+    // The extra transpose to i16 granularity is required to make the value
+    // layout as:
+    //       i16           i16
+    // r0 (0),  (1),  | (4),  (5), | .....   x8  (2),  (3),  | (6),  (7), | .....   x8
+    // r1 (64), (65), | (68), (69),| .....   x8  (66), (67), | (70), (71),| .....   x8
+    // r2 (128),(129),|(132),(133),| .....   x8  (130),(131),|(134),(135),| .....   x8
+    // r3 (192),(193),|(196),(197),| .....   x8  (194),(195),|(198),(199),| .....   x8
+    // A transpose is required on each GRF like:
+    // r0: (0), (1), (2), (3), (4), (5), (6), (7), ... (32), (33), (34), (35), (36), (37), (38), (39), (40), ...
+    // r0: (0), (1), (4), (5), (8), (9), (12), (13), ... (2), (3), (6), (7), (10), (11), (14), (15), ...
+    // clang-format on
+    // It could be expressed by the ops `bitcast i32 -> 2xi16` when
+    // sub-group-size=16. But the semantic is not same when sub-group-size=32.
+    // We need an extra interface to express within register
+    // transposing/transforming to do this.
+
+    // Right now we only support naive case which the returned value layout is
+    // same to the expected layout. More information of PoC of inline VISA:
+    // https://github.com/intel/intel-xpu-backend-for-triton/issues/3572#issuecomment-3550809750
+    auto dims = llvm::to_vector(llEncoding->getOutDimNames());
+    SmallVector<StringAttr> loadDimName = {dims[sizeInfo.rowDim],
+                                           dims[sizeInfo.colDim]};
+    LinearLayout blockLoadLayoutWithInSubgroup =
+        llEncoding->sublayout({kRegister, kLane}, loadDimName);
+
+    auto comp =
+        regMapping * LinearLayout::identity1D(threadsPerWarp, kLane, kLane);
+    blockLoadLayoutWithInSubgroup = comp.compose(blockLoadLayoutWithInSubgroup);
+
+    LinearLayout expectedLoadUnpackLayout =
+        blockLoadLayoutWithInSubgroup
+            .resizeOutDim(dims[sizeInfo.rowDim],
+                          sizeInfo.tileWidth * sizeInfo.numElemPerPackedVal)
+            .resizeOutDim(dims[sizeInfo.colDim], sizeInfo.tileHeight)
+            .resizeInDim(kRegister, numElemsPerLoad);
+
+    // Construct the layout of a transposed 2D block load result:
+    // - Register bases (first group): pack sub-elements within a lane along row
+    // dim because it is transposed.
+    // - Lane bases: lanes < tileHeight map to the col dimension (original rows
+    // become
+    //   columns after transpose); remaining lanes map to the row dimension
+    // - Register bases (second group): cover rows/cols when numElemsPerLoad >
+    // numElemPerPackedVal
+    std::vector<std::vector<int32_t>> regBases;
+    int32_t colBase = 1, rowBase = 1;
+    for (int32_t i = 1; i < sizeInfo.numElemPerPackedVal; i *= 2) {
+      regBases.push_back({rowBase, 0});
+      rowBase <<= 1;
+    }
+    std::vector<std::vector<int32_t>> laneBases;
+    for (int32_t i = 1; i < threadsPerWarp; i *= 2) {
+      if (i < sizeInfo.tileHeight) {
+        laneBases.push_back({0, colBase});
+        colBase <<= 1;
+      } else {
+        laneBases.push_back({rowBase, 0});
+        rowBase <<= 1;
+      }
+    }
+    assert(numElemsPerLoad % sizeInfo.numElemPerPackedVal == 0 &&
+           "numElemsPerLoad must be a multiple of numElemPerPackedVal");
+    for (int32_t i = 1; i < numElemsPerLoad / sizeInfo.numElemPerPackedVal;
+         i *= 2) {
+      if (i < mlir::ceil(sizeInfo.tileHeight, (int32_t)threadsPerWarp)) {
+        regBases.push_back({0, colBase});
+        colBase <<= 1;
+      } else {
+        regBases.push_back({rowBase, 0});
+        rowBase <<= 1;
+      }
+    }
+    LinearLayout transPackedLayout = LinearLayout(
+        {{kRegister, regBases}, {kLane, laneBases}}, ArrayRef(loadDimName));
+    if (sizeInfo.rowDim > sizeInfo.colDim) {
+      // to align the output dims order to the input linear layout.
+      std::swap(loadDimName[0], loadDimName[1]);
+      transPackedLayout = transPackedLayout.transposeOuts(loadDimName);
+    }
+    if (!transposeWithBitcast(ctx, transPackedLayout,
+                              expectedLoadUnpackLayout)) {
+      // Improve this. The current 2D block load only transposes the matrix at
+      // i32 granularity. We still need to perform an additional in-register
+      // transpose from i32 -> (N × ElemSizeInBits) tiles, using the tile width.
+      // At the moment, we can only achieve this using a bitcast operation,
+      // which implicitly uses the sub-group size as the transpose width. To
+      // optimize further, we should implement this with inline VISA
+      // instructions.
+      // E.g. a case that loads fp8 B matrix with DPAS opsChan=2 layout under
+      // sub-group-size=32.
+      return failure();
+    }
+  }
 
   return shuffleMapping;
 }
@@ -529,8 +727,8 @@ bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
                              RankedTensorType tensorType,
                              bool oneMatrixPerLoadForBT,
                              AxisInfo *maskAxisInfo) {
-  auto sizeInfo = getBlockIOTileSize<true>(ll, memContiguousDim, elemSizeInBits,
-                                           maskAxisInfo, oneMatrixPerLoadForBT);
+  auto sizeInfo = getBlockIOLoadTileSize(ll, memContiguousDim, elemSizeInBits,
+                                         maskAxisInfo, oneMatrixPerLoadForBT);
   if (!sizeInfo.isValid())
     return false;
 
@@ -546,7 +744,7 @@ bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
     return false;
 
   // For transposed loads, verify computeTransposeShuffleMapping will succeed.
-  // sizeInfo.vBlocks is already capped by getBlockIOTileSize<true>.
+  // sizeInfo.vBlocks is already capped by getBlockIOTileSize.
   if (sizeInfo.transpose && sizeInfo.regPackedBases.has_value()) {
     MLIRContext *ctx = ll.getBases().begin()->first.getContext();
     StringAttr kRegister = StringAttr::get(ctx, "register");
@@ -581,8 +779,7 @@ bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
     }
 
     if (failed(computeTransposeShuffleMapping(
-            tensorType, regMapping, numElemsPerLoad,
-            sizeInfo.numElemPerPackedVal, sizeInfo.tileHeight, threadsPerWarp,
+            tensorType, regMapping, numElemsPerLoad, sizeInfo, threadsPerWarp,
             hasDPASOperandType, ctx)))
       return false;
   }
@@ -599,9 +796,8 @@ bool validate2DBlockStoreTile(const LinearLayout &ll, unsigned memContiguousDim,
   // store cannot express. This mirrors the checks the store lowering applies;
   // keeping them here (rather than duplicated inline in each store lowering
   // pattern) makes this the single source of truth for store eligibility.
-  BlockIOTileSizeInfo sizeInfo = getBlockIOTileSize</*isLoad=*/false>(
-      ll, memContiguousDim, elemSizeInBits, maskAxisInfo,
-      /*oneMatrixPerLoadForBT=*/false);
+  BlockIOTileSizeInfo sizeInfo = getBlockIOStoreTileSize(
+      ll, memContiguousDim, elemSizeInBits, maskAxisInfo);
   if (!sizeInfo.isValid())
     return false;
 
@@ -612,6 +808,10 @@ bool validate2DBlockStoreTile(const LinearLayout &ll, unsigned memContiguousDim,
 
   // 2D block store does not support transpose.
   if (sizeInfo.transpose)
+    return false;
+
+  // 2D block store does not support vnni packing.
+  if (sizeInfo.vnni)
     return false;
 
   // The store always issues a single v-block per message.
@@ -687,8 +887,8 @@ unsigned estimateLoadHWCost(RankedTensorType type, Operation *loadOp) {
     return estimateGatherCost(type);
 
   BlockIOTileSizeInfo info =
-      getBlockIOTileSize<true>(ll, contiguousDim, elemSizeInBits,
-                               /*maskAxisInfo=*/nullptr, oneMatrixPerLoadForBT);
+      getBlockIOLoadTileSize(ll, contiguousDim, elemSizeInBits,
+                             /*maskAxisInfo=*/nullptr, oneMatrixPerLoadForBT);
   if (!info.isValid())
     return estimateGatherCost(type);
 

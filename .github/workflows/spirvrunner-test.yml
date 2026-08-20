@@ -21,13 +21,13 @@ jobs:
     runs-on:
       - rolling
       - runner-0.0.22
-    timeout-minutes: 75 # equal to max + 3*std over the last 600 successful runs
+    timeout-minutes: 160
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
 
       - name: Install Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 

@@ -573,7 +573,7 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperationHelper(
 
   // Ops with actually changing/variable input/output ranges.
   if (llvm::isa<TransOp, SplitOp, BroadcastOp, ReshapeOp, gpu::ConvertLayoutOp,
-                SplatOp, ExpandDimsOp, JoinOp, CatOp, GatherOp>(op)) {
+                SplatOp, ExpandDimsOp, JoinOp, GatherOp>(op)) {
     SmallVector<ConstantIntRanges> argConstIntRanges;
     for (const auto &r : argIntValueRanges) {
       if (r.isUninitialized()) {
@@ -588,7 +588,7 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperationHelper(
           return inferResultRangesUnaryOpForwardArgRange(op, argConstIntRanges,
                                                          joinCallback);
         })
-        .Case<JoinOp, CatOp>([&](auto joinOp) {
+        .Case<JoinOp>([&](auto joinOp) {
           return inferResultRangesBinaryOpUnionArgRanges(
               joinOp, argConstIntRanges, joinCallback);
         })
@@ -720,12 +720,13 @@ void TritonIntegerRangeAnalysis::visitRegionSuccessors(
       if (!point->isBlockStart()) {
         if (!inputs.empty())
           firstIndex = cast<OpResult>(inputs.front()).getResultNumber();
+        RegionSuccessor parentSuccessor(branch.getOperation());
         SmallVector<Value> nonSuccessorInputs =
-            branch.getNonSuccessorInputs(RegionSuccessor::parent());
+            branch.getNonSuccessorInputs(parentSuccessor);
         SmallVector<dataflow::IntegerValueRangeLattice *>
             nonSuccessorInputLattices =
                 llvm::map_to_vector(nonSuccessorInputs, valueToLattices);
-        visitNonControlFlowArguments(branch, RegionSuccessor::parent(),
+        visitNonControlFlowArguments(branch, parentSuccessor,
                                      nonSuccessorInputs,
                                      nonSuccessorInputLattices);
       } else {

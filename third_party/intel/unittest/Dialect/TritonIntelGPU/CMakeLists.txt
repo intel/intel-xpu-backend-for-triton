@@ -18,3 +18,14 @@ add_triton_ut(
 		TritonIntelGPUTransforms
 		TritonNvidiaGPUTransforms
 )
+add_triton_ut(
+  NAME BlockIOUtils
+  SRCS BlockIOUtilsTest.cpp
+  LIBS
+    TritonIntelGPUIR
+    TritonGPUIR
+    TritonGPUTransforms
+    TritonIntelAnalysis
+    TritonIntelGPUTransforms
+    TritonNvidiaGPUTransforms
+)

@@ -8,3 +8,9 @@
 - Run lit from the build dir:  `cd BUILD_DIR; ninja triton-opt; lit -v test/<path>.mlir` (example: `lit -v test/TritonNvidiaGPU/tmem_layouts.mlir`).
 - Lit tests can be run locally (no GPU required).
 - Compiler crashes sometimes print an MLIR reproducer (external_resources / mlir_reproducer). Save the full MLIR + {-# ... #-} metadata to `/tmp/<file>.mlir`, then run `triton-opt /tmp/<file>.mlir --run-reproducer` to reproduce locally.
+
+## C++ Guidelines
+- In C++, never put side-effecting code in `assert`. Assertions may be compiled out, so perform mutations and other required computation before the assertion and assert only the resulting condition. This guideline does not apply to Python `assert` statements.
+
+## Lowering Guidelines
+- Lowerings must inspect only the operation they lower. Do not inspect other operations or follow loop-carried values; perform cross-operation reasoning in a separate analysis or transformation pass.

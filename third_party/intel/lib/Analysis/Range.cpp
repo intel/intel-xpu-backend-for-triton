@@ -63,14 +63,14 @@ static void inferResultRange(tt::GatherOp op,
   setResultRange(op.getResult(), argRanges[0]);
 }
 
-template <typename OpType,
-          typename = std::enable_if_t<llvm::is_one_of<
-              OpType, tt::TransOp, tt::SplitOp, tt::BroadcastOp,
-              tt::ExpandDimsOp, tt::SplatOp, tt::ReshapeOp,
-              ttg::ConvertLayoutOp, tt::JoinOp, tt::CatOp>::value>>
+template <
+    typename OpType,
+    typename = std::enable_if_t<llvm::is_one_of<
+        OpType, tt::TransOp, tt::SplitOp, tt::BroadcastOp, tt::ExpandDimsOp,
+        tt::SplatOp, tt::ReshapeOp, ttg::ConvertLayoutOp, tt::JoinOp>::value>>
 static void inferResultRange(OpType op, ArrayRef<ConstantIntRanges> argRanges,
                              SetIntRangeFn setResultRange) {
-  if constexpr (llvm::is_one_of<OpType, tt::JoinOp, tt::CatOp>::value) {
+  if constexpr (llvm::is_one_of<OpType, tt::JoinOp>::value) {
     assert(op.getNumOperands() == 2 && argRanges.size() == 2 &&
            "expecting two operands");
     for (Value result : op->getResults())
@@ -483,7 +483,7 @@ LogicalResult IntegerRangeAnalysis::visitOperationHelper(
   // Ops with input/output ranges.
   if (isa<tt::TransOp, tt::SplitOp, tt::BroadcastOp, tt::ExpandDimsOp,
           tt::SplatOp, tt::ReshapeOp, ttg::ConvertLayoutOp, tt::JoinOp,
-          tt::CatOp, tt::GatherOp>(op)) {
+          tt::GatherOp>(op)) {
     SmallVector<ConstantIntRanges> argConstIntRanges;
     for (const auto &r : argIntValueRanges) {
       if (r.isUninitialized()) {
@@ -495,10 +495,10 @@ LogicalResult IntegerRangeAnalysis::visitOperationHelper(
 
     llvm::TypeSwitch<Operation *>(op)
         .Case<tt::TransOp, tt::SplitOp, tt::BroadcastOp, tt::ExpandDimsOp,
-              tt::SplatOp, tt::ReshapeOp, ttg::ConvertLayoutOp, tt::JoinOp,
-              tt::CatOp>([&](auto op) {
-          inferResultRange(op, argConstIntRanges, joinCallback);
-        })
+              tt::SplatOp, tt::ReshapeOp, ttg::ConvertLayoutOp, tt::JoinOp>(
+            [&](auto op) {
+              inferResultRange(op, argConstIntRanges, joinCallback);
+            })
         .Case<tt::GatherOp>([&](auto op) {
           inferResultRange(op, argConstIntRanges, joinCallback);
         })
@@ -647,7 +647,7 @@ void IntegerRangeAnalysis::visitRegionSuccessors(
                                        nonSuccessorLattices);
       };
 
-      if (successor.isParent()) {
+      if (successor.isOperation()) {
         if (!inputs.empty())
           firstIndex = cast<OpResult>(inputs.front()).getResultNumber();
         appendNonSuccessorInputs(branch->getResults());

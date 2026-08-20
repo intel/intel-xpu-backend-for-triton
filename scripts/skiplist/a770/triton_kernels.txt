@@ -1,3 +1,8 @@
 python/triton_kernels/tests/test_matmul.py::test_op
-python/triton_kernels/tests/test_matmul.py::test_fused_act
-python/triton_kernels/tests/test_matmul.py::test_zero_reduction_dim
+
+# A770 can't do a single allocation >4GB; not applicable on this HW.
+python/triton_kernels/tests/test_distributed.py::test_convert_large_strides[src-dp_to_ep]
+python/triton_kernels/tests/test_distributed.py::test_convert_large_strides[src-ep_to_dp]
+python/triton_kernels/tests/test_distributed.py::test_convert_large_strides[dst-dp_to_ep]
+python/triton_kernels/tests/test_distributed.py::test_convert_large_strides[dst-ep_to_dp]
+python/triton_kernels/tests/test_roofline.py::test_get_memset_tbps

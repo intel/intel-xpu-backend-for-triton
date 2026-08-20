@@ -1,9 +1,11 @@
+import importlib
+
 from triton_kernels_benchmark.benchmark_testing import BenchmarkCategory, BenchmarkConfig
 
 from triton_kernels_benchmark import (
+    batched_flash_attention_benchmark,
     fused_softmax,
     gemm_benchmark,
-    gemm_block_ptr_benchmark,
     gemm_tensor_of_ptr_benchmark,
     gemm_streamk_benchmark,
     gemm_splitk_benchmark,
@@ -16,6 +18,23 @@ from triton_kernels_benchmark import (
     flex_attention_benchmark_custom_masks,
     prefix_sums,
 )
+
+
+def _lazy_get_benchmark(module_name):
+    """Defer importing a benchmark module until its benchmark is actually built.
+
+    gemm_grouped_benchmark mutates global Inductor/Dynamo state and monkeypatches
+    torch._inductor on import, and the vLLM modules import vllm on import; those
+    imports must not run merely by loading CONFIGS (which happens for every
+    triton-benchmarks command and test-case collection).
+    """
+
+    def get_benchmark(**run_opts):
+        module = importlib.import_module(f"triton_kernels_benchmark.{module_name}")
+        return module.get_benchmark(**run_opts)
+
+    return get_benchmark
+
 
 CONFIGS = [
     BenchmarkConfig(
@@ -38,13 +57,6 @@ CONFIGS = [
         run_opts={},
         categories={BenchmarkCategory.EXPERIMENTAL, BenchmarkCategory.GEMM},
         description="GEMM kernel benchmark - with tensor of pointer",
-    ),
-    BenchmarkConfig(
-        key="gemm-block-ptr",
-        get_benchmark=gemm_block_ptr_benchmark.get_benchmark,
-        run_opts={},
-        categories={BenchmarkCategory.EXPERIMENTAL, BenchmarkCategory.GEMM},
-        description="GEMM kernel benchmark - with legacy block pointer",
     ),
     BenchmarkConfig(
         key="gemm_bt",
@@ -113,6 +125,24 @@ CONFIGS = [
         description="Triton Fused GEMM SwiGLU kernel benchmark",
     ),
     BenchmarkConfig(
+        key="gemm-grouped",
+        get_benchmark=_lazy_get_benchmark("gemm_grouped_benchmark"),
+        run_opts={"variant": "2d3d"},
+        categories={BenchmarkCategory.EXPERIMENTAL, BenchmarkCategory.GEMM},
+        description="Torch Inductor grouped_mm Triton template benchmark (2D x 3D, MoE-style)",
+        report_name="gemm-grouped",
+        report_file_prefix="gemm-grouped-2d3d",
+    ),
+    BenchmarkConfig(
+        key="gemm-grouped-batched",
+        get_benchmark=_lazy_get_benchmark("gemm_grouped_benchmark"),
+        run_opts={"variant": "3d3d"},
+        categories={BenchmarkCategory.EXPERIMENTAL, BenchmarkCategory.GEMM},
+        description="Torch Inductor grouped_mm Triton template benchmark (3D x 3D, batched)",
+        report_name="gemm-grouped-batched",
+        report_file_prefix="gemm-grouped-batched",
+    ),
+    BenchmarkConfig(
         key="flash_attention",
         get_benchmark=flash_attention_benchmark.get_benchmark,
         run_opts={"fa_kernel_mode": "fwd"},
@@ -138,6 +168,15 @@ CONFIGS = [
         description="FlashAttention backward kernel benchmark",
         report_name="flash-attn-bwd",
         report_file_prefix="attn-bwd",
+    ),
+    BenchmarkConfig(
+        key="batched-flash-attention",
+        get_benchmark=batched_flash_attention_benchmark.get_benchmark,
+        run_opts={},
+        categories={BenchmarkCategory.OPTIONAL, BenchmarkCategory.FLASH_ATTENTION},
+        description="Batched variable-length FlashAttention forward kernel benchmark",
+        report_name="batched-flash-attn",
+        report_file_prefix="batched-flash-attn",
     ),
     BenchmarkConfig(
         key="flex-attention-causal",
@@ -191,5 +230,128 @@ CONFIGS = [
         categories={BenchmarkCategory.OPTIONAL, BenchmarkCategory.PREFIX_SUMS},
         description="Prefix Sums kernel benchmark",
         report_name="prefix_sums",
+    ),
+    BenchmarkConfig(
+        key="vllm-unified-attention",
+        get_benchmark=_lazy_get_benchmark("vllm.unified_attention.unified_attention_benchmark"),
+        run_opts={},
+        categories={BenchmarkCategory.VLLM, BenchmarkCategory.FLASH_ATTENTION},
+        description="vLLM unified attention kernel benchmark (bf16)",
+        report_name="unified-attn-bf16",
+        long_report_group="vllm",
+        long_report_param_cols="q_heads,k_heads,head_size,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size",
+        describe_metadata_only=True,
+    ),
+    BenchmarkConfig(
+        key="vllm-unified-attention-fp8",
+        get_benchmark=_lazy_get_benchmark("vllm.unified_attention.unified_attention_benchmark"),
+        run_opts={"is_fp8": True},
+        categories={BenchmarkCategory.VLLM, BenchmarkCategory.FLASH_ATTENTION},
+        description="vLLM unified attention kernel benchmark (fp8)",
+        report_name="unified-attn-fp8",
+        long_report_group="vllm",
+        long_report_param_cols="q_heads,k_heads,head_size,qdtype,seq_lens,sliding_window,soft_cap,num_blocks,block_size",
+        describe_metadata_only=True,
+    ),
+    BenchmarkConfig(
+        key="vllm-batched-moe",
+        get_benchmark=_lazy_get_benchmark("vllm.batched_moe.batched_moe_benchmark"),
+        run_opts={},
+        categories={BenchmarkCategory.VLLM, BenchmarkCategory.GEMM},
+        description="vLLM batched MoE GEMM kernel benchmark (bf16)",
+        report_name="moe-bf16-benchmark",
+        long_report_group="vllm",
+        long_report_param_cols="num_experts,max_tokens_per_expert,K,N",
+        describe_metadata_only=True,
+    ),
+    BenchmarkConfig(
+        key="vllm-batched-moe-fp8",
+        get_benchmark=_lazy_get_benchmark("vllm.batched_moe.batched_moe_benchmark"),
+        run_opts={"is_fp8": True},
+        categories={BenchmarkCategory.VLLM, BenchmarkCategory.GEMM},
+        description="vLLM batched MoE GEMM kernel benchmark (fp8)",
+        report_name="moe-fp8-benchmark",
+        long_report_group="vllm",
+        long_report_param_cols="num_experts,max_tokens_per_expert,K,N",
+        describe_metadata_only=True,
+    ),
+    BenchmarkConfig(
+        key="vllm-fused-moe",
+        get_benchmark=_lazy_get_benchmark("vllm.fused_moe.fused_moe_benchmark"),
+        run_opts={},
+        categories={BenchmarkCategory.VLLM, BenchmarkCategory.GEMM},
+        description="vLLM fused MoE GEMM kernel benchmark (bf16)",
+        report_name="fused-moe-benchmark",
+        long_report_group="vllm",
+        long_report_param_cols="num_tokens,output_hidden_size,hidden_size,num_experts,topk",
+        describe_metadata_only=True,
+    ),
+    BenchmarkConfig(
+        key="sglang-prefill-attn",
+        get_benchmark=_lazy_get_benchmark("sglang.prefill_attention_benchmark"),
+        run_opts={},
+        categories={BenchmarkCategory.SGLANG, BenchmarkCategory.FLASH_ATTENTION},
+        description="SGLang prefill (context) attention kernel benchmark",
+        report_name="sglang-prefill-attn",
+        long_report_group="sglang",
+        long_report_param_cols="B,SEQ_LENS,H_Q,H_KV,D,CAUSAL",
+        describe_metadata_only=True,
+    ),
+    BenchmarkConfig(
+        key="sglang-decode-attn",
+        get_benchmark=_lazy_get_benchmark("sglang.decode_attention_benchmark"),
+        run_opts={},
+        categories={BenchmarkCategory.SGLANG, BenchmarkCategory.FLASH_ATTENTION},
+        description="SGLang decode attention kernel benchmark",
+        report_name="sglang-decode-attn",
+        long_report_group="sglang",
+        long_report_param_cols="B,SEQ_LENS,H_Q,H_KV,D",
+        describe_metadata_only=True,
+    ),
+    BenchmarkConfig(
+        key="sglang-extended-attn",
+        get_benchmark=_lazy_get_benchmark("sglang.extended_attention_benchmark"),
+        run_opts={},
+        categories={BenchmarkCategory.SGLANG, BenchmarkCategory.FLASH_ATTENTION},
+        description="SGLang extended (append) attention kernel benchmark",
+        report_name="sglang-extended-attn",
+        long_report_group="sglang",
+        long_report_param_cols="B,EXTEND_LEN,PREFIX_LEN,H_Q,H_KV,D",
+        describe_metadata_only=True,
+    ),
+    BenchmarkConfig(
+        key="sglang-block-fp8-gemm",
+        get_benchmark=_lazy_get_benchmark("sglang.block_fp8_gemm_benchmark"),
+        run_opts={},
+        categories={BenchmarkCategory.SGLANG, BenchmarkCategory.GEMM},
+        description="SGLang block-wise FP8 GEMM kernel benchmark",
+        report_name="sglang-block-fp8-gemm",
+        long_report_group="sglang",
+        long_report_param_cols="M,N,K",
+        describe_metadata_only=True,
+    ),
+    BenchmarkConfig(
+        key="sglang-scaled-mm-int8",
+        get_benchmark=_lazy_get_benchmark("sglang.scaled_mm_benchmark"),
+        run_opts={},
+        categories={BenchmarkCategory.SGLANG, BenchmarkCategory.GEMM},
+        description="SGLang scaled_mm int8 GEMM kernel benchmark",
+        # report_name kept without the "sglang-" prefix for continuity with the
+        # pre-existing DB benchmark id (bgroup=sglang, benchmark=scaled-mm-int8).
+        report_name="scaled-mm-int8",
+        long_report_group="sglang",
+        long_report_param_cols="M,N,K",
+        describe_metadata_only=True,
+    ),
+    BenchmarkConfig(
+        key="sglang-scaled-mm-fp8",
+        get_benchmark=_lazy_get_benchmark("sglang.scaled_mm_benchmark"),
+        run_opts={"is_fp8": True},
+        categories={BenchmarkCategory.SGLANG, BenchmarkCategory.GEMM},
+        description="SGLang scaled_mm fp8 GEMM kernel benchmark",
+        report_name="scaled-mm-fp8",
+        long_report_group="sglang",
+        long_report_param_cols="M,N,K",
+        describe_metadata_only=True,
     ),
 ]

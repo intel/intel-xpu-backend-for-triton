@@ -81,7 +81,7 @@ __all__ = [
     "num_ctas",
 ]
 
-T = TypeVar("T")
+T = TypeVar("T", bound=Callable)
 
 # TODO: split these
 GLUON_BUILTIN = "__triton_builtin__"
@@ -89,7 +89,6 @@ GLUON_BUILTIN = "__triton_builtin__"
 
 def builtin(fn: T) -> T:
     """Mark a function as a builtin."""
-    assert callable(fn)
 
     @wraps(fn)
     def wrapper(*args, **kwargs):
@@ -114,6 +113,7 @@ atomic_cas = builtin(tl_core.atomic_cas)
 atomic_max = builtin(tl_core.atomic_max)
 atomic_min = builtin(tl_core.atomic_min)
 atomic_or = builtin(tl_core.atomic_or)
+atomic_poll = builtin(tl_core.atomic_poll)
 atomic_xchg = builtin(tl_core.atomic_xchg)
 atomic_xor = builtin(tl_core.atomic_xor)
 broadcast = builtin(tl_core.broadcast)
@@ -504,8 +504,8 @@ class shared_memory_descriptor(base_value):
         return _semantic.memdesc_reshape(self, shape)
 
     @builtin
-    def _reinterpret(self, dtype=None, shape=None, layout=None,
-                     _semantic: GluonSemantic = None) -> shared_memory_descriptor:
+    def reinterpret(self, dtype=None, shape=None, layout=None,
+                    _semantic: GluonSemantic = None) -> shared_memory_descriptor:
         """
         Reinterpret the shared memory descriptor as a different dtype, shape, or layout.
 

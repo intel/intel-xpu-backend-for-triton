@@ -1,0 +1,36 @@
+name: vLLM benchmarks, PVC
+
+permissions: read-all
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/vllm-benchmarks*.yml
+      - .github/workflows/build-benchmarks-wheel*.yml
+      - .github/actions/install-benchmarks/**
+      - .github/actions/install-vllm/**
+      - benchmarks/triton_kernels_benchmark/vllm/**
+      - scripts/vllm/**
+      - .github/pins/pytorch.txt
+  schedule:
+    - cron: "0 8 * * *"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || 'ci' }}
+  cancel-in-progress: true
+
+jobs:
+  build-wheel:
+    uses: ./.github/workflows/build-benchmarks-wheel.yml
+    with:
+      python-version: "3.12"
+
+  benchmarks:
+    needs: build-wheel
+    if: always() && !cancelled()
+    uses: ./.github/workflows/vllm-benchmarks.yml
+    with:
+      runner_label: max1550
+    secrets: inherit

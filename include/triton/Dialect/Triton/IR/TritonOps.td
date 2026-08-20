@@ -316,7 +316,53 @@ def TT_StoreOp : TT_Op<"store", [
 //
 // Atomic Ops
 //
+def TT_GridDependencyWaitOp
+    : TT_Op<"grid_dependency_wait", [MemoryEffects<[MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>]> {
+    let summary = "wait for prerequisite grids and acquire their memory writes";
+    let arguments = (ins);
+    let assemblyFormat = "attr-dict";
+}
+
+def TT_GridDependencyLaunchDependentsOp
+    : TT_Op<"grid_dependency_launch_dependents", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+    let summary = "allow dependent grids to begin execution";
+    let arguments = (ins);
+    let assemblyFormat = "attr-dict";
+}
+
+def TT_AtomicPollOp : TT_Op<"atomic_poll", [
+  TypesMatchWith<"ptr type matches expected type", "expected", "ptr",
+                 "getPointerTypeSameShape($_self)">
+]> {
+    let summary = "poll an atomic value";
+
+    let description = [{
+        Repeatedly load from $ptr with relaxed semantics on a single thread
+        until the loaded value equals $expected. For acquire semantics, issue
+        an acquire fence only after a successful poll. Other threads wait for
+        the polling thread to finish.
+    }];
+
+    let arguments = (ins
+      Arg<TT_Ptr, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
+      TT_Int:$expected,
+      Optional<I64>:$timeout,
+      TT_MemSemanticAttr:$sem,
+      TT_MemSyncScopeAttr:$scope
+    );
+
+    let results = (outs I1:$result);
+
+    let assemblyFormat = [{
+      $sem `,` $scope `,` $ptr `,` $expected (`timeout` $timeout^)?
+      attr-dict `:` qualified(type($ptr)) `,` type($expected) `->` type($result)
+    }];
+
+    let hasVerifier = 1;
+}
+
 def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [
+  AtomicOpInterface,
   SameOperandsAndResultShape,
   SameOperandsAndResultEncoding,
   DeclareOpInterfaceMethods<PredicatedOpInterface>,
@@ -355,6 +401,7 @@ def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [
 }
 
 def TT_AtomicCASOp : TT_Op<"atomic_cas", [
+  AtomicOpInterface,
   SameOperandsAndResultShape,
   SameOperandsAndResultEncoding,
   TypesMatchWith<"ptr type matches cmp type", "cmp", "ptr",
@@ -457,6 +504,9 @@ def TT_ReshapeOp : TT_Op<"reshape", [Pure,
     let hasCanonicalizeMethod = 1;
     let hasFolder = 1;
     let hasVerifier = 1;
+    let extraClassDeclaration = [{
+      std::optional<unsigned> getExpandDimsAxis();
+    }];
 }
 
 def TT_BroadcastOp : TT_Op<"broadcast", [Pure,
@@ -478,21 +528,6 @@ def TT_BroadcastOp : TT_Op<"broadcast", [Pure,
 
     let hasCanonicalizer = 1;
     let hasFolder = 1;
-    let hasVerifier = 1;
-}
-
-// Cat is not pure because it may reorder elements.
-def TT_CatOp : TT_Op<"cat", [NoMemoryEffect,
-                             SameTypeOperands,
-                             SameOperandsAndResultElementType]> {
-    let summary = "concatenate 2 tensors";
-
-    let arguments = (ins TT_Tensor:$lhs, TT_Tensor:$rhs);
-
-    let results = (outs TT_Tensor:$result);
-
-    let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs) `->` type($result)";
-
     let hasVerifier = 1;
 }
 
@@ -518,7 +553,7 @@ def TT_JoinOp : TT_Op<"join", [
 
 def TT_SplitOp : TT_Op<"split", [
   Pure,
-  InferTensorTypeOpWithLayoutEquivalence,
+  InferTypeOpAdaptorWithIsCompatible,
   TypesMatchWith<"outLHS and outRHS types match",
                   "outLHS", "outRHS", "$_self">,
 ]> {

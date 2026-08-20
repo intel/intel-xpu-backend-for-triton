@@ -29,16 +29,22 @@ public:
 
     auto srcTy = cast<RankedTensorType>(op.getSrc().getType());
     auto dstTy = cast<RankedTensorType>(op.getType());
-    if (!cvtNeedsWarpShuffle(srcTy, dstTy))
-      return failure();
-
-    MLIRContext *ctx = op.getContext();
+    auto *ctx = op.getContext();
     StringAttr kReg = str_attr("register");
     StringAttr kLane = str_attr("lane");
+    auto srcLayout =
+        triton::gpu::toLinearLayout(srcTy).removeZeroBasesAlongDim(kReg);
+    auto dstLayout =
+        triton::gpu::toLinearLayout(dstTy).removeZeroBasesAlongDim(kReg);
+    auto conversion = minimalCvtLayout(srcLayout, dstLayout);
+    if (llvm::to_vector(conversion.getOutDimNames()) !=
+        SmallVector<StringAttr, 2>{kReg, kLane})
+      return failure();
 
     auto elemTy = getTypeConverter()->convertType(srcTy.getElementType());
     int bitwidth = elemTy.isIntOrFloat() ? elemTy.getIntOrFloatBitWidth() : 64;
-    auto factors = getWarpLayoutConvertDecomposition(srcTy, dstTy, bitwidth);
+    auto factors =
+        getWarpLayoutConvertDecomposition(srcLayout, dstLayout, bitwidth);
     auto &[pReg, pLane, mixedTranspositions, nPack] = factors;
 
     if (mixedTranspositions.size() != 1)
@@ -104,12 +110,7 @@ public:
       return ret;
     };
 
-    auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-
-    // Handle broadcasting in registers.
-    auto srcLL = triton::gpu::toLinearLayout(srcTy);
-    auto rmSrc = actionRemoveBroadcastedRegs(srcLL);
-    inVals = rmSrc.apply(inVals);
+    auto inVals = unpackUniqueTensorElements(loc, adaptor.getSrc(), rewriter);
     // The input values may require broadcasting so that the conversion can be
     // described as a permutation. This does not cost anything for simple cases.
     int regDim = inVals.size();
@@ -244,20 +245,11 @@ public:
       });
     }
 
-    // Handle broadcasting in registers.
-    // The `factors` produce output values which may contain broadcasting.
-    // This needs to be removed before using `broadcastAs` to get the correct
-    // broadcasting as expected by the original destination layout.
-    auto dstLL = triton::gpu::toLinearLayout(dstTy);
-    auto rmDst = actionRemoveBroadcastedRegs(dstLL);
-    auto strippedDst = rmDst.apply(dstLL);
-    outVals.resize(strippedDst.getInDimSize(kReg));
+    // Drop registers introduced only to pad the permutation.
+    outVals.resize(dstLayout.getInDimSize(kReg));
 
-    if (!rmDst.isIdentity())
-      outVals = broadcastAs(outVals, dstLL);
-
-    Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
-                                  op.getType());
+    Value result = packUniqueTensorElements(loc, getTypeConverter(), outVals,
+                                            rewriter, dstTy);
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -363,7 +355,7 @@ public:
   static std::vector<Value>
   repackInputToRegisters(Location loc, OpAdaptor adaptor,
                          ConversionPatternRewriter &rewriter) {
-    auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+    auto inVals = unpackUniqueTensorElements(loc, adaptor.getSrc(), rewriter);
     auto numRegs = inVals.size() / regBytes;
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     std::vector<Value> srcRegs(numRegs);
@@ -675,8 +667,8 @@ public:
         outVals[regIdx * regBytes + elem] = unpacked[elem];
       }
     }
-    return packLLElements(loc, getTypeConverter(), outVals, rewriter,
-                          op.getType());
+    return packUniqueTensorElements(loc, getTypeConverter(), outVals, rewriter,
+                                    op.getType());
   }
 
   void transferWithVPerm(ConvertLayoutOp op, const LinearLayout &conversion,
@@ -721,10 +713,13 @@ public:
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
 
-    LinearLayout conversion = minimalCvtLayout(srcTy, dstTy);
-
     auto ctx = op.getContext();
     StringAttr kRegister = mlir::StringAttr::get(ctx, "register");
+    auto srcLayout =
+        triton::gpu::toLinearLayout(srcTy).removeZeroBasesAlongDim(kRegister);
+    auto dstLayout =
+        triton::gpu::toLinearLayout(dstTy).removeZeroBasesAlongDim(kRegister);
+    LinearLayout conversion = minimalCvtLayout(srcLayout, dstLayout);
 
     assert(to_vector(conversion.getInDimNames()) ==
            to_vector(conversion.getOutDimNames()));

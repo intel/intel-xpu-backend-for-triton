@@ -8,6 +8,8 @@ import subprocess
 import os
 from triton._internal_testing import run_in_process
 
+pytestmark = pytest.mark.usefixtures("process_pool")
+
 
 def _run_expect_zero_device_assert(device):
     triton.knobs.refresh_knobs()

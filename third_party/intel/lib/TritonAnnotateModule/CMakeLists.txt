@@ -3,6 +3,7 @@ add_triton_library(TritonAnnotateModule
 
     DEPENDS
     TritonAnnotateModulePassIncGen
+    TritonTableGen
 
     LINK_LIBS PUBLIC
     MLIRIR

@@ -80,8 +80,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.sup
 
 // -----
 
-// COM: evict_first without an explicit cache modifier routes to L1IAR_L3C and
-// COM: triggers the `nontemporal` flag on the non-predicated scalar load path.
+// COM: evict_first without an explicit cache modifier routes to L1IAR_L3C on
+// COM: the predicated load path.
 
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.support_predicated_io} {
@@ -124,8 +124,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.sup
 
 // -----
 
-// COM: evict_first on the non-predicated scalar load path adds the nontemporal
-// COM: flag to the underlying llvm.load, without an explicit cache modifier.
+// COM: evict_first on the non-predicated scalar load path deliberately does NOT
+// COM: set the `nontemporal` flag on the underlying llvm.load. These loads are
+// COM: spatially coalesced across the subgroup; bypassing L1 defeats intra-line
+// COM: reuse and roughly doubles memory traffic (regression #7520). The eviction
+// COM: hint is honored via the LSC cache-control decoration on the predicated
+// COM: path (see load_evict_first_predicated), not via nontemporal. Do not
+// COM: re-add nontemporal here.
 
 #blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
@@ -140,7 +145,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<256x!tt.ptr<f32>, #blocked0>
     %6 = tt.addptr %5, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
     %7 = tt.load %6 evictionPolicy = evict_first : tensor<256x!tt.ptr<f32>, #blocked0>
-    // CHECK-COUNT-2: llvm.load {{.*}} {alignment = 16 : i64, nontemporal} : !llvm.ptr<1> -> vector<4xi32>
+    // CHECK-COUNT-2: llvm.load {{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<4xi32>
+    // CHECK-NOT: nontemporal
     tt.return
   }
 }
@@ -156,6 +162,27 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.sup
     %c0_i32 = arith.constant 0 : i32
     // CHECK: triton_gen.predicated_load {{.*}} {cache_control = L1IAR_L3C} : (!llvm.ptr<1>, i1, i32) -> i32
     %val = tt.descriptor_load %desc[%c0_i32] evictionPolicy = evict_first : !tt.tensordesc<128xf32> -> tensor<128xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: descriptor_load with an explicit `cg` cache modifier sets the
+// COM: `nontemporal` flag on the underlying llvm.load, matching regular tt.load
+// COM: (see global_load_with_attributes). `cg` means "cache at global level, not
+// COM: L1", so bypassing L1 via nontemporal is the faithful lowering. This is the
+// COM: explicit-cache-modifier path and is independent of the eviction-policy
+// COM: handling above (an explicit modifier is always honored, unlike the soft
+// COM: evict_first hint on the CacheModifier::NONE path).
+
+#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: descriptor_load_cg_scalar
+  tt.func @descriptor_load_cg_scalar(%desc: !tt.tensordesc<256xf32>) {
+    %c0_i32 = arith.constant 0 : i32
+    %val = tt.descriptor_load %desc[%c0_i32] cacheModifier = cg : !tt.tensordesc<256xf32> -> tensor<256xf32, #blocked0>
+    // CHECK-COUNT-8: llvm.load {{.*}} {alignment = 4 : i64, nontemporal} : !llvm.ptr<1> -> i32
     tt.return
   }
 }

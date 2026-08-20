@@ -48,9 +48,7 @@ env:
 jobs:
   setup:
     name: Setup
-    runs-on:
-      - linux
-      - ${{ inputs.runner_label || 'max1550' }}
+    runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1100') || format('["linux", "{0}"]', inputs.runner_label)) }}
     timeout-minutes: 180
     defaults:
       run:
@@ -142,10 +140,10 @@ jobs:
           - vllm-triton-attn
           - vllm-mamba
           - vllm-quant
+          - vllm-kda
+          - vllm-tdesc
           - vllm-rest
-    runs-on:
-      - linux
-      - ${{ inputs.runner_label || 'max1550' }}
+    runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1100') || format('["linux", "{0}"]', inputs.runner_label)) }}
     timeout-minutes: 180
     defaults:
       run:
@@ -268,6 +266,11 @@ jobs:
         run: |
           ${{ env.TRITON_TEST_CMD }} --vllm-quant
 
+      - name: Run kda tests
+        if: ${{ matrix.suite == 'vllm-kda' && steps.install-vllm.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --vllm-kda
+
       # vllm-rest groups short suites: gdn-attn, linear-attn, deepgemm
       - name: Run gdn-attn tests
         if: ${{ matrix.suite == 'vllm-rest' && steps.install-vllm.outcome == 'success' && !cancelled() }}
@@ -283,6 +286,11 @@ jobs:
         if: ${{ matrix.suite == 'vllm-rest' && steps.install-vllm.outcome == 'success' && !cancelled() }}
         run: |
           ${{ env.TRITON_TEST_CMD }} --vllm-deepgemm
+
+      - name: Run tdesc tests
+        if: ${{ matrix.suite == 'vllm-tdesc' && steps.install-vllm.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --vllm-tdesc
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}

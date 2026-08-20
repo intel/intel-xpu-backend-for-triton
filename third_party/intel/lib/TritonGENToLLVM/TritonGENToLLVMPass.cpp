@@ -41,6 +41,10 @@
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/TritonGENToLLVM/TritonGENToLLVMPass.h"
+
+#include "intel/include/TritonIntelGPUToLLVM/XeAsmFormat.h"
+#include <llvm/Support/FormatVariadic.h>
+
 #include "intel/include/TritonGENToSPIRV/TritonGENToSPIRVPass.h"
 
 namespace mlir::triton {
@@ -55,7 +59,7 @@ using namespace mlir::triton::gpu;
 // Helper Functions
 //===----------------------------------------------------------------------===//
 
-[[maybe_unused]] static std::string getGenISATypeMangling(Type ty) {
+static std::string getGenISATypeMangling(Type ty) {
   if (auto vecTy = dyn_cast<VectorType>(ty))
     return "v" + std::to_string(vecTy.getNumElements()) +
            getGenISATypeMangling(vecTy.getElementType());
@@ -63,7 +67,7 @@ using namespace mlir::triton::gpu;
          std::to_string(ty.getIntOrFloatBitWidth());
 }
 
-[[maybe_unused]] static std::string getGenISATypeMangling(ArrayRef<Type> tys) {
+static std::string getGenISATypeMangling(ArrayRef<Type> tys) {
   std::string name;
   for (int i = 0; i < tys.size(); i++) {
     name += getGenISATypeMangling(tys[i]);
@@ -138,6 +142,11 @@ static bool isSPVBuiltinAvailableImpl(TritonGEN::Matrix2DBlockLoadOp op) {
       op.getTileWidth() == 4 && op.getVBlocks() == 1)
     return false;
 
+  // intel_sub_group_2d_block_read_32b_4r4x1c
+  if (op.getElemSizeInBits() == 32 && op.getTileHeight() == 4 &&
+      op.getTileWidth() == 4 && op.getVBlocks() == 1)
+    return false;
+
   // FIXME: The SPV block load only support subgroup size 16.
   int subGroupSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(
       op->getParentOfType<mlir::ModuleOp>());
@@ -197,6 +206,11 @@ static bool isSPVBuiltinAvailableImpl(TritonGEN::Matrix2DBlockPrefetchOp op) {
       op.getVBlocks() == 1)
     return false;
 
+  // intel_sub_group_2d_block_prefetch_8b_?r16x1c
+  if (op.getElemSizeInBits() == 8 && op.getTileWidth() == 16 &&
+      op.getVBlocks() == 1)
+    return false;
+
   return true;
 }
 
@@ -225,6 +239,11 @@ template <
 static std::tuple<Value, Value, Value>
 computeAlignedBasePtrWidthAndOffset(OpTy op,
                                     ConversionPatternRewriter &rewriter) {
+  // Skip compensation when the base address already satisfies the HW alignment
+  // requirement.
+  if (!intel::needs2DBlockIOAlignmentCompensation(op))
+    return {op.getPtr(), op.getBaseWidth(), op.getX()};
+
   Location loc = op->getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value baseAddr = b.ptrtoint(int_ty(64), op.getPtr());
@@ -451,6 +470,78 @@ createGenISA2DBlockPrefetch(TritonGEN::Matrix2DBlockPrefetchOp op,
                                          intel::noUnwindWillReturnAttrs);
 }
 
+[[maybe_unused]] static Value
+createGenISADPAS(TritonGEN::MatrixDPASOp op,
+                 ConversionPatternRewriter &rewriter) {
+  Location loc = op->getLoc();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  constexpr int sysDepth = 8;
+
+  IntegerType int32Ty = rewriter.getIntegerType(32);
+  IntegerType int1Ty = rewriter.getIntegerType(1);
+
+  FloatType fp32Ty = rewriter.getF32Type();
+  IntegerType int16Ty = rewriter.getIntegerType(16);
+  TritonGEN::PrecisionType precisionA = op.getPa();
+  Type packedAType = (precisionA == TritonGEN::PrecisionType::TF32)
+                         ? cast<Type>(fp32Ty)
+                         : cast<Type>(int16Ty);
+  Type packedBType = (precisionA == TritonGEN::PrecisionType::TF32)
+                         ? cast<Type>(fp32Ty)
+                         : cast<Type>(int32Ty);
+
+  Value a = op.getA();
+  VectorType aOrigTy = cast<VectorType>(a.getType());
+  unsigned bitWidth = aOrigTy.getNumElements() *
+                      aOrigTy.getElementType().getIntOrFloatBitWidth();
+  VectorType aTy = VectorType::get(
+      bitWidth / packedAType.getIntOrFloatBitWidth(), packedAType);
+  if (aOrigTy != aTy)
+    a = LLVM::BitcastOp::create(rewriter, loc, aTy, a);
+
+  Value bVal = op.getB();
+  VectorType bOrigTy = cast<VectorType>(bVal.getType());
+  bitWidth = bOrigTy.getNumElements() *
+             bOrigTy.getElementType().getIntOrFloatBitWidth();
+  VectorType bTy = VectorType::get(
+      bitWidth / packedBType.getIntOrFloatBitWidth(), packedBType);
+  if (bOrigTy != bTy)
+    bVal = LLVM::BitcastOp::create(rewriter, loc, bTy, bVal);
+
+  Value c = op.getC();
+  VectorType cOrigTy = cast<VectorType>(c.getType());
+  VectorType cTy = cOrigTy.getElementType().isBF16()
+                       ? VectorType::get(cOrigTy.getShape(), int16Ty)
+                       : cOrigTy;
+  if (cOrigTy != cTy)
+    c = LLVM::BitcastOp::create(rewriter, loc, cTy, c);
+
+  SmallVector<Type> funcTypes{cTy, cTy, aTy, bTy};
+  std::string funcName =
+      "llvm.genx.GenISA.sub.group.dpas." + getGenISATypeMangling(funcTypes);
+
+  SmallVector<Type> argTypes{cTy,     aTy,     bTy,     int32Ty,
+                             int32Ty, int32Ty, int32Ty, int1Ty};
+
+  SmallVector<Value> args{c,
+                          a,
+                          bVal,
+                          b.i32_val(static_cast<unsigned>(op.getPa())),
+                          b.i32_val(static_cast<unsigned>(op.getPb())),
+                          b.i32_val(sysDepth),
+                          b.i32_val(op.getRc()),
+                          b.i1_val(false)};
+
+  LLVM::CallOp call = intel::createDeviceFunctionCall(
+      rewriter, funcName, cTy, argTypes, args, {},
+      intel::convergentNoUnwindWillReturnAttrs);
+
+  Value result = call.getResult();
+  if (cOrigTy != cTy)
+    result = LLVM::BitcastOp::create(rewriter, loc, cOrigTy, result);
+  return result;
+}
+
 static void
 createAssertNot(ConversionPatternRewriter &rewriter,
                 const mlir::triton::gpu::intel::LibCallEmitter &emitter,
@@ -651,6 +742,13 @@ struct TritonMatrixDPASLowering
   LogicalResult
   matchAndRewrite(TritonGEN::MatrixDPASOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    // Use GenISA for LTS driver.
+    auto mod = op->getParentOfType<mlir::ModuleOp>();
+    if (mod->hasAttr(intel::TritonIntelGPUDialect::getIsLTSAttrName())) {
+      rewriter.replaceOp(op, createGenISADPAS(op, rewriter));
+      return success();
+    }
+
     Location loc = op->getLoc();
 
     FloatType fp32Ty = f32_ty;
@@ -1266,6 +1364,55 @@ struct TritonPredicatedLoadOpLowering
   }
 };
 
+struct TritonSubGroupGatherLoadLowering
+    : public ConvertOpToLLVMPattern<TritonGEN::SubGroupGatherLoadOp> {
+  using ConvertOpToLLVMPattern<
+      TritonGEN::SubGroupGatherLoadOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(TritonGEN::SubGroupGatherLoadOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    MLIRContext *ctx = rewriter.getContext();
+    Location loc = op->getLoc();
+
+    auto resultType = dyn_cast<VectorType>(op.getResult().getType());
+    assert(resultType && "Unexpected result type");
+    auto module = op->getParentOfType<ModuleOp>();
+    unsigned subgroupSize =
+        triton::gpu::TritonGPUDialect::getThreadsPerWarp(module);
+    uint64_t resultBits = static_cast<uint64_t>(resultType.getNumElements()) *
+                          resultType.getElementType().getIntOrFloatBitWidth();
+    uint64_t totalBits = resultBits * subgroupSize;
+    uint64_t loadBits = totalBits / 32;
+    Type opaqueResultType = IntegerType::get(ctx, loadBits);
+    auto typeSyntax = XeVISAInstr::getTypeName(opaqueResultType);
+    if (!typeSyntax)
+      llvm_unreachable("Unsupported scalar type");
+
+    constexpr StringLiteral asmFormat = R"({
+  .decl RET v_type=G type={0} num_elts=32 align=wordx32 alias=<$0, 0>
+  .decl ADDR v_type=G type=uq num_elts=32 align=wordx32 alias=<$1, 0>
+  .decl PRED v_type=P num_elts=32
+  cmp.eq (M1_NM, 32) PRED 0x1:b $2(0, 0)<1;1,0>
+  (PRED) lsc_load.ugm (M1_NM, 32)  RET:d{1}  flat[ADDR]:a64
+})";
+    std::string asmText =
+        llvm::formatv(asmFormat.data(), *typeSyntax, loadBits).str();
+
+    LLVM::InlineAsmOp inlineAsm = LLVM::InlineAsmOp::create(
+        rewriter, loc, op.getRes().getType(),
+        ValueRange{adaptor.getAddrs(), adaptor.getPreds()}, asmText,
+        "=rw,rw.u,rw.u",
+        /*has_side_effects=*/false,
+        /*is_align_stack=*/false, LLVM::TailCallKind::None,
+        LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
+        ArrayAttr::get(ctx, {}));
+
+    rewriter.replaceOp(op, inlineAsm.getRes());
+    return success();
+  }
+};
+
 struct TritonPredicatedStoreOpLowering
     : public ConvertOpToLLVMPattern<TritonGEN::PredicatedStoreOp> {
   using ConvertOpToLLVMPattern<
@@ -1401,6 +1548,6 @@ void mlir::triton::populateTritonGENToLLVMConversionPatterns(
            TritonMatrixDPASLowering, TritonMatrixBlockScaleDPASLowering,
            TritonSubGroupBlockReadLowering, TritonSubGroupBlockWriteLowering,
            TritonPredicatedLoadOpLowering, TritonPredicatedStoreOpLowering,
-           TritonFToTf32OpLowering, TritonSubGroupBitcastShuffleLowering>(
-          converter);
+           TritonSubGroupGatherLoadLowering, TritonFToTf32OpLowering,
+           TritonSubGroupBitcastShuffleLowering>(converter);
 }

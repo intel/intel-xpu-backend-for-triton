@@ -82,16 +82,9 @@ Descriptor unpackDescriptor(TensorDescType type, ValueRange pack) {
 
 Value expandOffsets(OpBuilder &builder, Location loc,
                     ArrayRef<int64_t> blockShape, Value offsets, unsigned dim) {
-  Value expandedResult = offsets;
-  for (size_t j = 0; j < blockShape.size(); ++j) {
-    if (j == dim) {
-      continue;
-    }
-    expandedResult =
-        triton::ExpandDimsOp::create(builder, loc, expandedResult, j);
-  }
-
-  return expandedResult;
+  SmallVector<int64_t> shape(blockShape.size(), 1);
+  shape[dim] = blockShape[dim];
+  return triton::ReshapeOp::create(builder, loc, shape, offsets);
 }
 
 Value getExpandedOffsetWithRange(OpBuilder &builder, const Location &loc,
@@ -371,11 +364,15 @@ struct RewriteStorePattern : OpConversionPattern<triton::DescriptorStoreOp> {
     auto desc = unpackDescriptor(descTy, adaptor.getDesc());
     auto offsets = castToI64(rewriter, op.getIndices());
 
+    // Save attrs before replaceOpWithNewOp, which may erase op immediately
+    // when allowPatternRollback is false.
+    auto attrs = filterSegmentSizes(op->getAttrs());
+
     auto newStore = rewriter.replaceOpWithNewOp<triton::StoreOp>(
         op, generatePtr(rewriter, loc, blockShape, desc, offsets), op.getSrc(),
         generateMask(rewriter, loc, blockShape, desc, offsets),
         triton::CacheModifier::NONE, triton::EvictionPolicy::NORMAL);
-    newStore->setAttrs(filterSegmentSizes(op->getAttrs()));
+    newStore->setAttrs(attrs);
 
     return llvm::success();
   }
@@ -447,10 +444,15 @@ struct RewriteScatterPattern
     auto desc = unpackDescriptor(descTy, adaptor.getDesc());
     auto [ptr, mask] = generateGatherScatterPtrMask(
         rewriter, loc, blockShape, desc, op.getXOffsets(), op.getYOffset());
+
+    // Save attrs before replaceOpWithNewOp, which may erase op immediately
+    // when allowPatternRollback is false.
+    auto attrs = filterSegmentSizes(op->getAttrs());
+
     auto newStore = rewriter.replaceOpWithNewOp<triton::StoreOp>(
         op, ptr, op.getSrc(), mask, triton::CacheModifier::NONE,
         triton::EvictionPolicy::NORMAL);
-    newStore->setAttrs(filterSegmentSizes(op->getAttrs()));
+    newStore->setAttrs(attrs);
 
     return llvm::success();
   }
@@ -612,6 +614,7 @@ class TritonRewriteTensorDescriptorToPointerPass
 
     ConversionConfig config;
     config.buildMaterializations = false;
+    config.allowPatternRollback = false;
 
     if (mlir::failed(mlir::applyPartialConversion(
             op, target, std::move(patterns), config))) {

@@ -221,3 +221,29 @@ llvm.func @triton_gen.2Dblockstore(%ptr : !llvm.ptr<1>, %base_width : i32, %base
   llvm.return
 }
 }
+
+// -----
+
+// COM: The ttig.2d_block_io_base_alignment attribute advertises a relaxed HW
+// COM: base-address alignment requirement (4 bytes, e.g. on CRI). Since
+// COM: MaterializeBlockPointer already guarantees a 4-byte aligned base, the
+// COM: 64-byte alignment compensation is skipped: the raw ptr, base_width and x
+// COM: are passed to the builtin unchanged.
+
+module attributes {ttig.2d_block_io_base_alignment = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+llvm.func @triton_gen.2Dblockstore(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32, %stored_val : vector<8xi16>) {
+  // CHECK:     llvm.func @triton_gen.2Dblockstore(%arg0: !llvm.ptr<1>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: vector<8xi16>) {
+  // CHECK-NOT:   llvm.ptrtoint
+  // CHECK-NOT:   llvm.mlir.constant(-64 : i64)
+  // CHECK-NOT:   llvm.mlir.constant(63 : i64)
+  // CHECK-NOT:   llvm.udiv
+  // CHECK-DAG:   [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK-DAG:   [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK-DAG:   [[UNDEF:%.*]] = llvm.mlir.undef : vector<2xi32>
+  // CHECK-DAG:   [[COORD0:%.*]] = llvm.insertelement %arg4, [[UNDEF]][[[ZERO]] : i32] : vector<2xi32>
+  // CHECK-DAG:   [[COORD1:%.*]] = llvm.insertelement %arg5, [[COORD0]][[[ONE]] : i32] : vector<2xi32>
+  // CHECK:       llvm.call spir_funccc @_Z33__spirv_Subgroup2DBlockStoreINTELiiiiPvPU3AS1viiiDv2_i({{.*}}, {{.*}}, %arg0, %arg1, %arg2, %arg3, [[COORD1]])
+  triton_gen.2Dblockstore %ptr, %base_width, %base_height, %base_pitch, %x, %y, %stored_val {elem_size_in_bits=8, tile_width=8, tile_height=8, v_blocks=1, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32, vector<8xi16>)
+  llvm.return
+}
+}

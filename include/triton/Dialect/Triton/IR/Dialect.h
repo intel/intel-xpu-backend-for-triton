@@ -70,10 +70,11 @@ public:
                          std::optional<Location> loc) const = 0;
 
   // Check if two layouts are structurally the same, even if their names are
-  // different
+  // different, optionally ignoring register broadcasting.
   virtual LogicalResult
   verifyLayoutsAreEqual(ArrayRef<int64_t> shape, Attribute expected,
-                        Attribute got, std::optional<Location> loc) const = 0;
+                        Attribute got, std::optional<Location> loc,
+                        bool ignoreRegBroadcast = false) const = 0;
 
   virtual LogicalResult
   inferDefaultJoinOpEncoding(Attribute srcEnc, Attribute &dstEnc,
@@ -90,11 +91,6 @@ public:
   virtual LogicalResult
   verifyDotOpEncodingCompatibility(Operation *op, Attribute operandEncodingA,
                                    Attribute operandEncodingB) const = 0;
-
-  // Verify that the encodings are compatible to be used together in a cat
-  // operation.
-  virtual LogicalResult
-  verifyCatOpEncodingCompatibility(Operation *op) const = 0;
 
   virtual LogicalResult
   inferFp4ToFpOpEncoding(ArrayRef<int64_t> shape, int axis, Attribute inEnc,
