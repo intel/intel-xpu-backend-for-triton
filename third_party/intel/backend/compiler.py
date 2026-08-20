@@ -247,40 +247,34 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         ret = BaseBackend.parse_attr(desc)
         if "N" in desc:
             ret += [["tt.padding", 1]]
-        # "S" section: encodes shape and stride values as constexpr.
-        # Format: "S<shape0>,<shape1>,...;<stride0>,<stride1>,..."
-        # Enables isDivisible checks to pass trivially on constants.
-        if "S" in desc:
-            idx = desc.index("S") + 1
-            s_str = desc[idx:]
-            try:
-                parts = s_str.split(";")
-                shapes = [int(x) for x in parts[0].split(",") if x]
-                for i, s in enumerate(shapes):
-                    ret += [[f"tt.shape.{i}", s]]
-                if len(parts) > 1:
-                    strides = [int(x) for x in parts[1].split(",") if x]
-                    for i, s in enumerate(strides):
-                        ret += [[f"tt.stride.{i}", s]]
-            except (ValueError, IndexError):
-                pass
+        # Shape divisibility: S<dim>D<divisor> (e.g., S0D128)
+        import re
+        for match in re.finditer(r'S(\d+)D(\d+)', desc):
+            dim = int(match.group(1))
+            divisor = int(match.group(2))
+            ret += [[f"tt.shape.{dim}.divisibility", divisor]]
         return ret
 
     @staticmethod
+    def _get_max_divisibility(value):
+        """Get the highest power-of-2 divisor of value.
+        """
+        if value == 0:
+            return 1
+        div = 1
+        while value % (div * 2) == 0:
+            div *= 2
+        return div
+
+    @staticmethod
     def get_tensordesc_specialization(arg, **kwargs):
-        # "N" = NaN padding (enables tt.padding attribute).
-        # "S<shapes>;<strides>" = shape and stride values as constexpr.
-        #   Shapes: enables satisfies2DBlockReadAlignment and FuseReshape checks.
-        #   Strides (rank-3+ only): enables FuseReshape stride divisibility.
+        # Format: "N" (padding) + "S<dim>D<divisor>" (shape divisibility)
         key = ""
         if getattr(arg, "padding", None) == "nan":
             key += "N"
-        # Encode all shapes and non-last strides (rank-3+ only) as constants.
-        shapes_str = ",".join(str(s) for s in arg.shape)
-        strides_str = ",".join(str(s) for s in arg.strides[:-1]) if len(arg.strides) >= 3 else ""
-        key += "S" + shapes_str
-        if strides_str:
-            key += ";" + strides_str
+        for i, shape_val in enumerate(arg.shape):
+            div = XPUBackend._get_max_divisibility(shape_val)
+            key += f"S{i}D{div}"
         return key
 
     def pack_metadata(self, metadata):
