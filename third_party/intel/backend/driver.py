@@ -343,12 +343,17 @@ class ExtensionUtils:
         self.shared_library.check_extension.argtypes = (ctypes.c_int, ctypes.c_char_p)
         self.shared_library.get_device_id.restype = ctypes.py_object
         self.shared_library.get_device_id.argtypes = (ctypes.c_int, )
+        self.shared_library.get_core_clock_rate.restype = ctypes.py_object
+        self.shared_library.get_core_clock_rate.argtypes = (ctypes.c_int, )
 
     def check_extension(self, device_id: int, extension: bytes) -> bool:
         return self.shared_library.check_extension(device_id, extension)
 
     def get_device_id(self, device_idx: int) -> int:
         return self.shared_library.get_device_id(device_idx)
+
+    def get_core_clock_rate(self, device_id: int) -> int | None:
+        return self.shared_library.get_core_clock_rate(device_id)
 
     if os.name != 'nt':
 
@@ -414,9 +419,9 @@ def compile_module_from_src(src: str, name: str, is_lts: bool = False):
 
             if COMPILATION_HELPER.inject_pytorch_dep and name == "spirv_utils":
                 if os.name == "nt":
-                    extra_compiler_args += ["/DTRITON_INTEL_INJECT_PYTORCH=1"]
+                    extra_compiler_args += ["/DTRITON_INTEL_INJECT_PYTORCH=1", "/std:c++20"]
                 else:
-                    extra_compiler_args += ["-DTRITON_INTEL_INJECT_PYTORCH=1"]
+                    extra_compiler_args += ["-DTRITON_INTEL_INJECT_PYTORCH=1", "-std=c++20"]
 
             if name == "spirv_utils" and not is_lts:
                 if os.name == "nt":
@@ -763,7 +768,7 @@ class XPUDriver(DriverBase):
         import torch
         from triton.backends.intel.extension_utils import query_device_extensions
 
-        dev_property = torch.xpu.get_device_capability(device)
+        dev_property = dict(torch.xpu.get_device_capability(device))
 
         def update_device_arch(dev_property):
             if not (arch := knobs.intel.device_arch):
@@ -779,7 +784,6 @@ class XPUDriver(DriverBase):
         extensions = query_device_extensions(device_id)
         dev_property.update(extensions)
         dev_property["__intel_already_queried_extensions__"] = True
-        dev_property["core_clock_rate"] = self.utils.get_device_properties(device).get("sm_clock_rate", 0)
         update_device_arch(dev_property)
 
         return GPUTarget("xpu", dev_property, warp_size=32)

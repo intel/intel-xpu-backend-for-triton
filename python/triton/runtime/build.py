@@ -128,7 +128,9 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
         if cxx is csycl:
             ccflags += ["-fsycl", "-fno-sycl-id-queries-fit-in-int"]
         else:
-            if os.name != "nt":
+            # Do not override a standard requested by the caller: the last `-std=` wins, so
+            # appending the default here would silently downgrade it.
+            if os.name != "nt" and not any(flag.startswith(("-std=", "--std=")) for flag in ccflags):
                 ccflags += ["--std=c++17"]
             if os.environ.get("TRITON_SUPPRESS_GCC_HOST_CODE_DEPRECATION_WARNINGS", "1") == "1":
                 ccflags += ["-Wno-deprecated-declarations"]

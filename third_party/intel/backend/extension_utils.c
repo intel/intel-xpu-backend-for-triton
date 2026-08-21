@@ -161,6 +161,28 @@ extern "C" EXPORT_FUNC PyObject *check_extension(int device_id,
   }
 }
 
+extern "C" EXPORT_FUNC PyObject *get_core_clock_rate(int device_id) {
+  try {
+    initializeDevicesIfNeeded();
+
+    const auto &devices = has_opencl ? g_opencl_devices : g_levelzero_devices;
+    const auto &device_ids =
+        has_opencl ? g_opencl_device_ids : g_levelzero_device_ids;
+
+    for (size_t i = 0; i < devices.size(); ++i) {
+      if (device_ids[i] == device_id) {
+        return PyLong_FromUnsignedLong(
+            devices[i].get_info<sycl::info::device::max_clock_frequency>() *
+            1000ul);
+      }
+    }
+    Py_RETURN_NONE;
+
+  } catch (const std::exception &e) {
+    Py_RETURN_NONE;
+  }
+}
+
 extern "C" EXPORT_FUNC PyObject *get_device_id(int device_idx) {
   try {
     initializeDevicesIfNeeded();

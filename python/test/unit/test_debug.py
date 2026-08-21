@@ -24,7 +24,12 @@ def _run_expect_zero_device_assert(device):
         tl.store(out_ptr + offsets, y)
 
     _kernel[(1, )](x, out, BLOCK_SIZE=16)
-    getattr(torch, device).synchronize()
+    if device == 'xpu':
+        # Wait on the stream: since pytorch/pytorch#191900 `torch.xpu.synchronize()` is a
+        # device-wide `ext_oneapi_wait_and_throw()`, which does not report the assert.
+        torch.xpu.current_stream().synchronize()
+    else:
+        getattr(torch, device).synchronize()
 
 
 def test_expect_zero_device_assert(device):
