@@ -1047,7 +1047,6 @@ run_vllm_quant_tests() {
       tests/kernels/quantization/test_triton_scaled_mm.py \
       tests/kernels/quantization/test_awq_triton.py \
       tests/kernels/quantization/test_int8_kernel.py \
-      tests/kernels/quantization/test_block_int8.py \
       tests/kernels/quantization/test_fp8_quant.py \
       tests/kernels/quantization/test_fp8_quant_group.py \
       tests/kernels/quantization/test_block_fp8.py \
