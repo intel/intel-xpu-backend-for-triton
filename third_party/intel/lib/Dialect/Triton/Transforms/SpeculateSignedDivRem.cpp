@@ -1,5 +1,6 @@
 #include "intel/include/Analysis/AxisInfoExt.h"
 #include "intel/include/Analysis/Range.h"
+#include "intel/include/Analysis/SignedDivRemDeduction.h"
 #include "intel/include/Analysis/SignednessProver.h"
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
