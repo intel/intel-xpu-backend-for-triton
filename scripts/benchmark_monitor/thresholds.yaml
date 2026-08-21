@@ -1,0 +1,42 @@
+# Benchmark regression detection thresholds.
+#
+# defaults: applied to all benchmarks unless overridden.
+# overrides: per-benchmark overrides keyed by the --benchmark name
+#            used in build_report.py (first segment of the metric key).
+#
+# Benchmark names (from triton-benchmarks.yml):
+#   softmax, gemm, gemm-tensor-of-ptr, gemm-block-ptr, gemm-bt, gemm-at,
+#   gemm-streamk, gemm-splitk, gemm-preop-exp, gemm-postop-gelu,
+#   gemm-postop-addmatrix, gemm-postop-addmatrix-int8,
+#   flash-attn, flash-attn-bwd,
+#   flex-attn-causal, flex-attn-causal-batch4, flex-attn-causal-batch16,
+#   flex-attn-causal-bwd, flex-attn-masks, prefix_sums
+
+defaults:
+  min_history: 8       # Minimum "ci" runs before detection activates
+  rolling_window: 20   # Number of recent "ci" runs for baseline computation (~20 days)
+  z_threshold: 3.0     # Modified Z-score threshold (~99.7% confidence)
+  min_drop_pct: 5.0    # Minimum relative performance drop (%) to flag
+  improvement_lock_pct: 8.0   # Lock baseline at recent level if improvement exceeds this %
+  max_cv: 0.15            # Skip metrics with coefficient of variation > 15%
+
+overrides:
+  # Softmax is very stable, use tighter threshold
+  softmax:
+    min_drop_pct: 3.0
+  # Flash attention benchmarks tend to be noisier
+  flash-attn:
+    min_drop_pct: 8.0
+  flash-attn-bwd:
+    min_drop_pct: 8.0
+  # FlexAttention can be noisy due to mask complexity and autotuning
+  flex-attn-causal:
+    min_drop_pct: 8.0
+  flex-attn-causal-batch4:
+    min_drop_pct: 8.0
+  flex-attn-causal-batch16:
+    min_drop_pct: 8.0
+  flex-attn-causal-bwd:
+    min_drop_pct: 8.0
+  flex-attn-masks:
+    min_drop_pct: 8.0
