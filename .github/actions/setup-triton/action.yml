@@ -118,6 +118,7 @@ runs:
       env:
         TRITON_EXT_ENABLED: ON
       run: |
+        export MAX_JOBS="${MAX_JOBS:-$(nproc)}"
         pip install -r python/requirements.txt
         ${{ inputs.command }}
 
