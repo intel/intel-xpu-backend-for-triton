@@ -1,11 +1,11 @@
-#include "intel/include/Analysis/NonNegativeProver.h"
+#include "intel/include/Analysis/SignednessProver.h"
 #include "intel/include/Analysis/Range.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 
-#define DEBUG_TYPE "triton-intel-non-negative-prover"
+#define DEBUG_TYPE "triton-intel-signedness-prover"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
@@ -15,8 +15,8 @@ namespace tt = mlir::triton;
 namespace {
 
 using tt::intel::Goal;
-using tt::intel::Obligation;
 using tt::intel::Proof;
+using tt::intel::RequiredCondition;
 
 /// Goal-directed prover for the sign of a value, backing
 /// tt::intel::proveSign().
@@ -25,9 +25,9 @@ using tt::intel::Proof;
 /// answers "what would make this value non-negative", which is the question
 /// speculation needs. It is not a second range analysis: every step consults
 /// the one it is given, and only decomposes where that analysis has no answer.
-class NonNegativeProver {
+class SignednessProver {
 public:
-  explicit NonNegativeProver(const DataFlowSolver &solver) : solver(solver) {}
+  explicit SignednessProver(const DataFlowSolver &solver) : solver(solver) {}
 
   Proof prove(Value v, Goal goal, unsigned depth = 0);
 
@@ -35,7 +35,7 @@ private:
   /// Chains deeper than this are abandoned rather than recursed into. A
   /// backstop against pathological IR, not a tuning knob: the chains this fires
   /// on in practice are under ten operations deep.
-  static constexpr unsigned kMaxDepth = 32;
+  static constexpr unsigned kMaxDepth = 16;
 
   /// Step 1: what the range analysis already knows. Returns std::nullopt when
   /// it can neither confirm nor refute the goal.
@@ -46,7 +46,7 @@ private:
   std::optional<Proof> decompose(Value v, Goal goal, unsigned depth);
 
   /// Proves every sub-goal and conjoins the results.
-  Proof proveAll(ArrayRef<Obligation> subGoals, unsigned depth);
+  Proof proveAll(ArrayRef<RequiredCondition> subGoals, unsigned depth);
 
   const DataFlowSolver &solver;
 
@@ -61,8 +61,8 @@ private:
   DenseMap<std::pair<Value, unsigned>, Proof> memo;
 };
 
-std::optional<Proof> NonNegativeProver::askRangeAnalysis(Value v,
-                                                         Goal goal) const {
+std::optional<Proof> SignednessProver::askRangeAnalysis(Value v,
+                                                        Goal goal) const {
   std::optional<ConstantIntRanges> range = tt::intel::collectRange(solver, v);
   if (!range)
     return std::nullopt;
@@ -74,7 +74,7 @@ std::optional<Proof> NonNegativeProver::askRangeAnalysis(Value v,
     if (range->smax().isNegative())
       return Proof{Proof::Refuted, {}};
     break;
-  case Goal::Positive:
+  case Goal::StrictlyPositive:
     if (range->smin().isStrictlyPositive())
       return Proof{Proof::Satisfied, {}};
     if (!range->smax().isStrictlyPositive())
@@ -85,8 +85,8 @@ std::optional<Proof> NonNegativeProver::askRangeAnalysis(Value v,
   return std::nullopt;
 }
 
-Proof NonNegativeProver::proveAll(ArrayRef<Obligation> subGoals,
-                                  unsigned depth) {
+Proof SignednessProver::proveAll(ArrayRef<RequiredCondition> subGoals,
+                                 unsigned depth) {
   Proof result{Proof::Satisfied, {}};
 
   for (auto [value, goal] : subGoals) {
@@ -98,19 +98,19 @@ Proof NonNegativeProver::proveAll(ArrayRef<Obligation> subGoals,
       return Proof{Proof::Refuted, {}};
 
     // Otherwise the conjunction is the union of what the parts still need.
-    for (const Obligation &obligation : sub.obligations)
-      if (!llvm::is_contained(result.obligations, obligation))
-        result.obligations.push_back(obligation);
+    for (const RequiredCondition &condition : sub.requiredConditions)
+      if (!llvm::is_contained(result.requiredConditions, condition))
+        result.requiredConditions.push_back(condition);
   }
 
-  if (!result.obligations.empty())
-    result.verdict = Proof::Obligated;
+  if (!result.requiredConditions.empty())
+    result.verdict = Proof::ConditionallySatisfied;
 
   return result;
 }
 
-std::optional<Proof> NonNegativeProver::decompose(Value v, Goal goal,
-                                                  unsigned depth) {
+std::optional<Proof> SignednessProver::decompose(Value v, Goal goal,
+                                                 unsigned depth) {
   Operation *defOp = v.getDefiningOp();
   if (!defOp)
     return std::nullopt;
@@ -159,7 +159,7 @@ std::optional<Proof> NonNegativeProver::decompose(Value v, Goal goal,
             if (goal != Goal::NonNegative)
               return std::nullopt;
             return proveAll({{op.getLhs(), Goal::NonNegative},
-                             {op.getRhs(), Goal::Positive}},
+                             {op.getRhs(), Goal::StrictlyPositive}},
                             depth);
           })
       // A signed remainder takes the sign of its dividend, so the divisor is
@@ -192,7 +192,7 @@ std::optional<Proof> NonNegativeProver::decompose(Value v, Goal goal,
       .Default([](Operation *) { return std::nullopt; });
 }
 
-Proof NonNegativeProver::prove(Value v, Goal goal, unsigned depth) {
+Proof SignednessProver::prove(Value v, Goal goal, unsigned depth) {
   // Abandoning has to mean Refuted rather than an obligation on `v`: planting
   // here would claim the goal holds iff `v` does, of a proof that stopped
   // halfway. Refuted propagates out through the conjunction, so no caller can
@@ -214,7 +214,7 @@ Proof NonNegativeProver::prove(Value v, Goal goal, unsigned depth) {
       return *known;
     if (std::optional<Proof> decomposed = decompose(v, goal, depth))
       return *decomposed;
-    return Proof{Proof::Obligated, {Obligation{v, goal}}};
+    return Proof{Proof::ConditionallySatisfied, {RequiredCondition{v, goal}}};
   }();
 
   memo.insert({key, result});
@@ -226,7 +226,7 @@ Proof NonNegativeProver::prove(Value v, Goal goal, unsigned depth) {
 namespace mlir::triton::intel {
 
 Proof proveSign(Value v, Goal goal, const DataFlowSolver &solver) {
-  NonNegativeProver prover(solver);
+  SignednessProver prover(solver);
   return prover.prove(v, goal);
 }
 

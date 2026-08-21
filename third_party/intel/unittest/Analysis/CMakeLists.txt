@@ -120,25 +120,6 @@ add_triton_ut(
 )
 
 add_triton_ut(
-  NAME NonNegativeProver
-  SRCS NonNegativeProverTest.cpp
-  LIBS
-    TritonAnalysis
-    TritonGPUIR
-    TritonGPUTransforms
-    TritonIR
-    TritonIntelAnalysis
-    TritonIntelGPUIR
-    TritonIntelGPUTransforms
-    TritonNvidiaGPUIR
-    TritonNvidiaGPUTransforms
-    MLIRArithDialect
-    MLIRFuncDialect
-    MLIRParser
-    MLIRSCFDialect
-)
-
-add_triton_ut(
   NAME SignedDivRemDeduction
   SRCS SignedDivRemDeductionTest.cpp
   LIBS
@@ -153,4 +134,23 @@ add_triton_ut(
     TritonNvidiaGPUTransforms
     MLIRArithDialect
     MLIRFuncDialect
+)
+
+add_triton_ut(
+  NAME SignednessProver
+  SRCS SignednessProverTest.cpp
+  LIBS
+    TritonAnalysis
+    TritonGPUIR
+    TritonGPUTransforms
+    TritonIR
+    TritonIntelAnalysis
+    TritonIntelGPUIR
+    TritonIntelGPUTransforms
+    TritonNvidiaGPUIR
+    TritonNvidiaGPUTransforms
+    MLIRArithDialect
+    MLIRFuncDialect
+    MLIRParser
+    MLIRSCFDialect
 )
