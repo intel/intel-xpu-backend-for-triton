@@ -9,14 +9,14 @@ on:
     types: [labeled]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}-${{ github.event.label.name }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
   # ---- vLLM tests ----
 
   vllm-tests-bmg:
-    if: github.event.label.name == 'run-vllm-tests'
+    if: contains(github.event.pull_request.labels.*.name, 'run-vllm-tests')
     uses: ./.github/workflows/vllm-tests-reusable.yml
     with:
       runner_label: b580
@@ -24,7 +24,7 @@ jobs:
     secrets: inherit
 
   vllm-tests-pvc:
-    if: github.event.label.name == 'run-vllm-tests'
+    if: contains(github.event.pull_request.labels.*.name, 'run-vllm-tests')
     uses: ./.github/workflows/vllm-tests-reusable.yml
     with:
       runner_label: max1100
@@ -34,9 +34,9 @@ jobs:
 
   build-wheel:
     if: >-
-      github.event.label.name == 'run-benchmarks' ||
-      github.event.label.name == 'run-vllm-benchmarks' ||
-      github.event.label.name == 'run-sglang-benchmarks'
+      contains(github.event.pull_request.labels.*.name, 'run-benchmarks') ||
+      contains(github.event.pull_request.labels.*.name, 'run-vllm-benchmarks') ||
+      contains(github.event.pull_request.labels.*.name, 'run-sglang-benchmarks')
     uses: ./.github/workflows/build-benchmarks-wheel.yml
     with:
       python-version: "3.12"
@@ -45,7 +45,7 @@ jobs:
 
   vllm-benchmarks-bmg:
     needs: build-wheel
-    if: github.event.label.name == 'run-vllm-benchmarks'
+    if: contains(github.event.pull_request.labels.*.name, 'run-vllm-benchmarks')
     uses: ./.github/workflows/vllm-benchmarks.yml
     with:
       runner_label: b580
@@ -53,7 +53,7 @@ jobs:
 
   vllm-benchmarks-pvc:
     needs: build-wheel
-    if: github.event.label.name == 'run-vllm-benchmarks'
+    if: contains(github.event.pull_request.labels.*.name, 'run-vllm-benchmarks')
     uses: ./.github/workflows/vllm-benchmarks.yml
     with:
       runner_label: max1550
@@ -63,7 +63,7 @@ jobs:
 
   triton-benchmarks-bmg:
     needs: build-wheel
-    if: github.event.label.name == 'run-benchmarks'
+    if: contains(github.event.pull_request.labels.*.name, 'run-benchmarks')
     uses: ./.github/workflows/triton-benchmarks.yml
     with:
       runner_label: b580
@@ -71,7 +71,7 @@ jobs:
 
   triton-benchmarks-pvc:
     needs: build-wheel
-    if: github.event.label.name == 'run-benchmarks'
+    if: contains(github.event.pull_request.labels.*.name, 'run-benchmarks')
     uses: ./.github/workflows/triton-benchmarks.yml
     with:
       runner_label: max1550
@@ -81,7 +81,7 @@ jobs:
 
   sglang-benchmarks-bmg:
     needs: build-wheel
-    if: github.event.label.name == 'run-sglang-benchmarks'
+    if: contains(github.event.pull_request.labels.*.name, 'run-sglang-benchmarks')
     uses: ./.github/workflows/sglang-benchmarks.yml
     with:
       runner_label: b580
@@ -89,7 +89,7 @@ jobs:
 
   sglang-benchmarks-pvc:
     needs: build-wheel
-    if: github.event.label.name == 'run-sglang-benchmarks'
+    if: contains(github.event.pull_request.labels.*.name, 'run-sglang-benchmarks')
     uses: ./.github/workflows/sglang-benchmarks.yml
     with:
       runner_label: max1550
