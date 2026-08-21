@@ -892,7 +892,7 @@ tests/kernels/moe/test_batched_moe.py::test_fused_moe_batched_experts[False-None
 tests/kernels/moe/test_batched_moe.py::test_fused_moe_batched_experts[False-None-False-dtype0-6-8-64-512-512]
 tests/kernels/moe/test_batched_moe.py::test_fused_moe_batched_experts[False-None-False-dtype0-6-8-222-128-2048]
 
-# Reference moe_sum kernel interface mismatch:
+# Reference moe_sum kernel interface mismatch: https://github.com/intel/intel-xpu-backend-for-triton/issues/7811
 tests/kernels/moe/test_moe.py::test_moe_sum[contig-dtype0-128-2-1]
 tests/kernels/moe/test_moe.py::test_moe_sum[contig-dtype0-128-2-33]
 tests/kernels/moe/test_moe.py::test_moe_sum[contig-dtype0-128-2-222]
@@ -1056,7 +1056,7 @@ tests/kernels/moe/test_moe.py::test_moe_sum[slice-dtype1-1024-8-1]
 tests/kernels/moe/test_moe.py::test_moe_sum[slice-dtype1-1024-8-33]
 tests/kernels/moe/test_moe.py::test_moe_sum[slice-dtype1-1024-8-222]
 
-# Skip some fused_moe kernel tests due to excessive autotune overhead
+# Skip some fused_moe tests due to excessive autotune overhead: https://github.com/intel/intel-xpu-backend-for-triton/issues/7812
 tests/kernels/moe/test_block_fp8.py
 tests/kernels/moe/test_block_int8.py
 tests/kernels/quantization/test_int8_kernel.py
