@@ -1,0 +1,191 @@
+#include "intel/include/Analysis/RegisterPressure.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/IR/Matchers.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/ADT/StringSwitch.h"
+
+using namespace mlir;
+using namespace mlir::triton;
+
+namespace mlir::triton::gpu::intel {
+
+/// TTGIR-level `tt.ptr` values are addresses in the global address space, which
+/// are 64-bit on all supported targets. Shared local memory is modeled as
+/// `ttg.memdesc` rather than `tt.ptr`, so no address-space-specific sizing is
+/// needed here.
+constexpr unsigned PointerSizeInBytes = 8;
+
+/// Returns the size in bytes of a single element of \p type, or 0 if the type
+/// has no register footprint.
+static unsigned getElementSizeInBytes(Type type) {
+  // Round up to whole bytes so sub-byte types (fp8/fp4/i1) are not counted as
+  // zero pressure, which would systematically under-count FP8 kernels.
+  if (type.isIntOrFloat())
+    return (type.getIntOrFloatBitWidth() + 7) / 8;
+
+  // A pointer occupies a full address per element: a tensor of pointers is one
+  // of the larger register consumers in kernels using pointer arithmetic rather
+  // than tensor descriptors.
+  if (isa<triton::PointerType>(type))
+    return PointerSizeInBytes;
+
+  return 0;
+}
+
+RegisterPressureAnalysis::RegisterPressureAnalysis(Operation *op,
+                                                   RegisterPressureOptions opts)
+    : liveness(op), options(opts) {}
+
+unsigned RegisterPressureAnalysis::getPerThreadSizeInBytes(Type type) {
+  // Handle RankedTensorType with distributed encoding
+  if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
+    // getTotalElemsPerThread() unconditionally casts the encoding to
+    // DistributedEncodingTrait; guard so that a tensor without one (e.g. TTIR
+    // before layout assignment) reports zero pressure rather than asserting.
+    if (!isa_and_nonnull<gpu::DistributedEncodingTrait>(
+            tensorType.getEncoding()))
+      return 0;
+    unsigned bytesPerElem = getElementSizeInBytes(tensorType.getElementType());
+    if (bytesPerElem == 0)
+      return 0;
+    return gpu::getTotalElemsPerThread(tensorType) * bytesPerElem;
+  }
+
+  // Handle scalar types; all other types contribute zero pressure.
+  return getElementSizeInBytes(type);
+}
+
+unsigned RegisterPressureAnalysis::getGRFBytesPerThread(StringRef grfMode) {
+  // Explicit GRF modes map to exact per-thread budgets.
+  // For "default" and "auto", conservatively assume 128-register mode (4096
+  // bytes) to avoid exceeding hardware limits when the compiler ultimately
+  // chooses a smaller configuration.
+  return llvm::StringSwitch<unsigned>(grfMode)
+      .Case("128", 4096)
+      .Case("256", 8192)
+      .Case("512", 16384)
+      .Default(4096);
+}
+
+bool RegisterPressureAnalysis::isRematerializable(Value value) const {
+  Operation *defOp = value.getDefiningOp();
+  if (!defOp)
+    return false; // Block arguments are not rematerializable
+
+  // Check for constant-like operations that are cheap to regenerate.
+  if (isa<arith::ConstantOp>(defOp))
+    return true;
+
+  // make_range is always cheap to regenerate (no inputs).
+  if (isa<triton::MakeRangeOp>(defOp))
+    return true;
+
+  // A splat is only free to rematerialize if its scalar source is itself
+  // rematerializable. A splat of a loop-variant scalar is NOT free: it would
+  // require the scalar to be live (or recomputed) at the point of use.
+  if (auto splatOp = dyn_cast<triton::SplatOp>(defOp))
+    return isRematerializable(splatOp.getSrc());
+
+  // Check for constant splat patterns using MLIR pattern matchers.
+  Attribute constVal;
+  if (matchPattern(defOp, m_Constant(&constVal)))
+    return true;
+
+  return false;
+}
+
+unsigned RegisterPressureAnalysis::pressureAt(Operation *op) const {
+  unsigned pressure = 0;
+
+  // Query the base mlir::Liveness block info directly (rather than the Intel
+  // LivenessAnalysis wrapper, which asserts the op is a direct child of the
+  // analysis root). This works for ops nested in any region, e.g. an scf.for
+  // body. currentlyLiveValues() takes an expansive view: a value defined by or
+  // consumed by `op` is counted, so a value is counted at its defining op and
+  // loop-carried iter args (block live-in) are included.
+  const LivenessBlockInfo *blockInfo = liveness.getLiveness(op->getBlock());
+  if (!blockInfo)
+    return 0;
+  Liveness::ValueSetT liveValues = blockInfo->currentlyLiveValues(op);
+
+  for (Value liveVal : liveValues) {
+    // Skip rematerializable values if the option is enabled
+    if (options.excludeRematerializable && isRematerializable(liveVal))
+      continue;
+
+    // Accumulate the per-thread size in bytes
+    pressure += getPerThreadSizeInBytes(liveVal.getType());
+  }
+
+  return pressure;
+}
+
+unsigned RegisterPressureAnalysis::peakPressure(Block *block) const {
+  unsigned peak = 0;
+
+  // Iterate over all operations in the block and track the maximum pressure
+  for (Operation &op : block->getOperations()) {
+    unsigned pressure = pressureAt(&op);
+    peak = std::max(peak, pressure);
+  }
+
+  return peak;
+}
+
+unsigned
+RegisterPressureAnalysis::peakPressure(LoopLikeOpInterface loop) const {
+  unsigned peak = 0;
+
+  // A loop may expose multiple body regions, each with multiple blocks; check
+  // all blocks across all loop regions.
+  for (Region *region : loop.getLoopRegions()) {
+    if (!region)
+      continue;
+    for (Block &block : *region) {
+      unsigned blockPeak = peakPressure(&block);
+      peak = std::max(peak, blockPeak);
+    }
+  }
+
+  return peak;
+}
+
+unsigned RegisterPressureAnalysis::liveInPressure(Block *block) const {
+  const LivenessBlockInfo *blockInfo = liveness.getLiveness(block);
+  if (!blockInfo)
+    return 0;
+  unsigned pressure = 0;
+  for (Value liveVal : blockInfo->in()) {
+    if (options.excludeRematerializable && isRematerializable(liveVal))
+      continue;
+    pressure += getPerThreadSizeInBytes(liveVal.getType());
+  }
+  return pressure;
+}
+
+bool RegisterPressureAnalysis::isLiveIn(Block *block, Value value) const {
+  const LivenessBlockInfo *blockInfo = liveness.getLiveness(block);
+  return blockInfo && blockInfo->isLiveIn(value);
+}
+
+void RegisterPressureAnalysis::print(raw_ostream &os) const {
+  Operation *rootOp = liveness.getOperation();
+  if (!rootOp)
+    return;
+
+  os << "Register Pressure Analysis (per-thread bytes):\n";
+
+  // Walk all regions and blocks to report peak pressure. Qualify each block by
+  // its parent op name so blocks in different regions (all named ^bb0) are
+  // distinguishable in the output.
+  rootOp->walk([&](Block *block) {
+    unsigned peak = peakPressure(block);
+    os << "  Block ";
+    block->printAsOperand(os);
+    os << " in " << block->getParentOp()->getName() << ": peak = " << peak
+       << " bytes, live-in = " << liveInPressure(block) << " bytes\n";
+  });
+}
+
+} // namespace mlir::triton::gpu::intel
