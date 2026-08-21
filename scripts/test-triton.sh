@@ -43,6 +43,7 @@ TEST:
     --vllm-linear-attn
     --vllm-deepgemm
     --vllm-kda
+    --vllm-inductor
     --vllm-tdesc
     --install-vllm
     --sglang
@@ -114,6 +115,7 @@ TEST_VLLM_QUANT=false
 TEST_VLLM_LINEAR_ATTN=false
 TEST_VLLM_DEEPGEMM=false
 TEST_VLLM_KDA=false
+TEST_VLLM_INDUCTOR=false
 TEST_VLLM_TDESC=false
 INSTALL_VLLM=false
 TEST_TRITON_KERNELS=false
@@ -342,6 +344,11 @@ while (( $# != 0 )); do
       ;;
     --vllm-kda)
       TEST_VLLM_KDA=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --vllm-inductor)
+      TEST_VLLM_INDUCTOR=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -902,6 +909,7 @@ run_vllm_tests() {
   run_vllm_linear_attn_tests
   run_vllm_deepgemm_tests
   run_vllm_kda_tests
+  run_vllm_inductor_tests
   run_vllm_tdesc_tests
 }
 
@@ -1095,6 +1103,18 @@ run_vllm_kda_tests() {
     run_pytest_command -vvv \
       tests/models/kimi_k3/test_kda.py \
       tests/kernels/core/test_fused_rms_norm_gated.py
+}
+
+
+run_vllm_inductor_tests() {
+  echo "********************************************************"
+  echo "******  Running vLLM Inductor tests              *******"
+  echo "********************************************************"
+
+  cd "$TRITON_PROJ/benchmarks/triton_kernels_benchmark/vllm"
+  TRITON_TEST_SUITE=vllm_inductor \
+    run_pytest_command -vvv \
+      test/test_wan22_torch_compile.py
 }
 
 
@@ -1292,6 +1312,9 @@ test_triton() {
   fi
   if [ "$TEST_VLLM_KDA" == true ]; then
     run_vllm_kda_tests
+  fi
+  if [ "$TEST_VLLM_INDUCTOR" == true ]; then
+    run_vllm_inductor_tests
   fi
   if [ "$TEST_VLLM_TDESC" == true ]; then
     run_vllm_tdesc_tests
