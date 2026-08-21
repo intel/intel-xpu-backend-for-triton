@@ -123,7 +123,7 @@ public:
 
   // Helper to add a pointer argument to a function
   BlockArgument addPtrArg(func::FuncOp funcOp, Type elemTy,
-                          unsigned addressSpace = 1) {
+                          PtrAddrSpace addressSpace = PtrAddrSpace::Global) {
     Block *block = &funcOp.getBody().front();
     auto ptrTy = PointerType::get(elemTy, addressSpace);
     FunctionType newFuncType = builder->getFunctionType(
@@ -145,9 +145,9 @@ public:
   }
 
   // Helper to build a tensor of pointers type
-  RankedTensorType makePtrTensorType(ArrayRef<int64_t> shape, Type elemTy,
-                                     Attribute encoding,
-                                     unsigned addressSpace = 1) {
+  RankedTensorType
+  makePtrTensorType(ArrayRef<int64_t> shape, Type elemTy, Attribute encoding,
+                    PtrAddrSpace addressSpace = PtrAddrSpace::Global) {
     auto ptrTy = PointerType::get(elemTy, addressSpace);
     return RankedTensorType::get(shape, ptrTy, encoding);
   }
