@@ -1081,14 +1081,48 @@ bool isExpensiveLoadRematCandidate(Operation *op) {
   return true;
 }
 
-// Return true if \p op may be rematerialized as part of a backward slice:
-// either it is rematerializable by kind (canBeRemat), or it is the narrow
-// expensive-load exception that is provably a non-duplicating relabel
-// (isExpensiveLoadRematCandidate). canBeRemat anchors expensive loads; this
-// wrapper lets that one safe pattern through without weakening the anchor for
-// any other caller of canBeRemat.
-static bool isRematerializableInSlice(Operation *op) {
-  return canBeRemat(op) || isExpensiveLoadRematCandidate(op);
+// Return true if relabeling \p op -- an expensive block_io load, i.e. one whose
+// current layout does not validate as a 2D block load -- to \p targetEnc turns
+// it INTO a valid 2D block load.
+//
+// isExpensiveLoadOrStore anchors such a load because relabeling it normally
+// means de-coalescing it into an even worse gather (issue #7090). That
+// reasoning does not hold when the target layout is itself a valid 2D block
+// load: the relabel then upgrades the load and additionally removes the convert
+// (an SLM round trip with barriers). The GEMM epilogue post-op is exactly this
+// shape -- an addend loaded in its coalesced layout, added to a DPAS
+// accumulator, where the accumulator layout is a valid 2D block load and the
+// coalesced one is not.
+//
+// \p targetEnc is the encoding the rematerialization would actually assign to
+// this load, so -- unlike a forward reachability walk over candidate layouts --
+// this needs no assumption about which of several convert targets gets picked.
+static bool rematUpgradesExpensiveLoad(Operation *op, Attribute targetEnc) {
+  if (!targetEnc || !isa<tt::LoadOp, tt::DescriptorLoadOp>(op))
+    return false;
+  auto curTy = dyn_cast<RankedTensorType>(op->getResult(0).getType());
+  if (!curTy || !isa<ttg::DistributedEncodingTrait>(targetEnc))
+    return false;
+  // Only bypass the anchor for a load that is not already on the 2D block path.
+  // If the current layout does validate, the anchor is protecting a real block
+  // load and the existing cost model (rematDegradesLoad) governs the relabel.
+  if (ttgi::blockIOLoadValidatesAs2DBlock(op, curTy))
+    return false;
+  return ttgi::blockIOLoadValidatesAs2DBlock(
+      op, curTy.cloneWithEncoding(targetEnc));
+}
+
+// Return true if \p op may be rematerialized as part of a backward slice that
+// relabels it to \p targetEnc: either it is rematerializable by kind
+// (canBeRemat), it is the narrow expensive-load exception that is provably a
+// non-duplicating relabel (isExpensiveLoadRematCandidate), or the relabel
+// upgrades an anchored gather into a 2D block load
+// (rematUpgradesExpensiveLoad). canBeRemat anchors expensive loads; this
+// wrapper lets those safe patterns through without weakening the anchor for any
+// other caller of canBeRemat.
+static bool isRematerializableInSlice(Operation *op, Attribute targetEnc) {
+  return canBeRemat(op) || isExpensiveLoadRematCandidate(op) ||
+         rematUpgradesExpensiveLoad(op, targetEnc);
 }
 
 void LayoutRematerialization::updateRematMapping(
@@ -1590,7 +1624,7 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
   // Check if all the operations in the slice can be rematerialized.
   for (Value v : slice) {
     if (Operation *op = v.getDefiningOp()) {
-      if (!isRematerializableInSlice(op))
+      if (!isRematerializableInSlice(op, layout.lookup(v)))
         return failure();
     }
   }

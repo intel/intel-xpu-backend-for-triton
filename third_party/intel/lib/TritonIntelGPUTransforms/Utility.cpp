@@ -8,10 +8,12 @@
 
 #include "triton/Analysis/Utility.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Transforms/DialectConversion.h"
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/Transforms/BlockIOUtils.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -142,6 +144,91 @@ Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
   return mlir::inferSrcEncoding(op, encoding);
 }
 
+// A block_io load that does not validate as a 2D block load in its current
+// (coalesced) layout is treated as expensive so it anchors that layout (see
+// isExpensiveLoadOrStore). That is correct when the only alternative is a
+// worse layout -- e.g. a store back-propagating across tt.trans, de-coalescing
+// the load into a vec1 gather (issue #7090). It is wrong, however, when the
+// load value flows into a DPAS dot operand: hoistConvertDotOperand would
+// relabel the load to that dot-operand layout, and for narrow (e.g. f8)
+// operands that dot-operand layout is a genuine 2D block load even though the
+// coalesced layout is not. Anchoring would block that strictly-better hoist.
+//
+// Return true when a forward walk from the load result reaches a DPAS
+// dot-operand encoding under which the load validates as a 2D block load,
+// traversing only the layout- and width-preserving ops the hoist itself
+// crosses (elementwise same-width, broadcast, views, convert_layout). A
+// width-changing op (e.g. tt.fp_to_fp) is a barrier: past it the dot operand
+// is a different element type and hoistConvertDotOperand would not relabel
+// this load (its leaf-load bitwidth guard, issue #6737).
+static bool loadHoistsToBlock2DDotOperand(Operation *loadOp,
+                                          RankedTensorType loadTy) {
+  Type loadElemTy = loadTy.getElementType();
+  if (!loadElemTy.isIntOrFloat())
+    return false;
+  unsigned loadBitWidth = loadElemTy.getIntOrFloatBitWidth();
+
+  // Does the load validate as a 2D block load once relabeled to `enc` (keeping
+  // its own shape and element type)?
+  auto validatesAsDotOperand = [&](Attribute enc) {
+    auto dotEnc = dyn_cast_or_null<ttg::DotOperandEncodingAttr>(enc);
+    if (!dotEnc)
+      return false;
+    auto dpas = dyn_cast<ttgi::DpasEncodingAttr>(dotEnc.getParent());
+    if (!dpas)
+      return false;
+    // The forward walk crosses `isView` ops, some of which change rank (e.g.
+    // reshape, expand_dims), so it can reach a dot-operand encoding of a
+    // different rank than this load. Such an encoding cannot be applied to the
+    // load's shape: it would violate DPAStoLinearLayout's rank precondition and
+    // does not correspond to relabeling THIS load.
+    if (static_cast<int64_t>(dpas.getWarpsPerCTA().size()) != loadTy.getRank())
+      return false;
+    return blockIOLoadValidatesAs2DBlock(loadOp, loadTy.cloneWithEncoding(enc));
+  };
+
+  // Only cross ops that move no data between threads and preserve element
+  // width. A width-changing op or one whose result is not an int/float tensor
+  // (e.g. a loaded index feeding tt.addptr, which yields a pointer tensor) is a
+  // barrier: the dot-operand value chain never runs through it.
+  auto isWidthPreservingElementwise = [&](Operation *op) {
+    if (!(op->hasTrait<OpTrait::Elementwise>() && isMemoryEffectFree(op)))
+      return false;
+    for (Value res : op->getResults()) {
+      auto rt = dyn_cast<RankedTensorType>(res.getType());
+      if (!rt)
+        continue;
+      Type et = rt.getElementType();
+      if (!et.isIntOrFloat() || et.getIntOrFloatBitWidth() != loadBitWidth)
+        return false;
+    }
+    return true;
+  };
+
+  SmallVector<Value> worklist{loadOp->getResult(0)};
+  SmallPtrSet<Value, 16> visited;
+  while (!worklist.empty()) {
+    Value v = worklist.pop_back_val();
+    if (!visited.insert(v).second)
+      continue;
+    for (Operation *user : v.getUsers()) {
+      // A convert to a DPAS dot operand is the layout hoistConvertDotOperand
+      // would push onto the load; check whether the load validates there.
+      if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(user)) {
+        if (validatesAsDotOperand(cvt.getType().getEncoding()))
+          return true;
+        worklist.push_back(cvt.getResult());
+        continue;
+      }
+      if (isWidthPreservingElementwise(user) || isView(user) ||
+          isa<tt::BroadcastOp>(user))
+        llvm::append_range(worklist, user->getResults());
+      // Anything else (dot, store, width-changing op, ...) is a barrier.
+    }
+  }
+  return false;
+}
+
 bool isExpensiveLoadOrStore(Operation *op) {
   assert((isa<tt::LoadOp, tt::StoreOp, tt::DescriptorLoadOp,
               tt::DescriptorStoreOp>(op)) &&
@@ -165,8 +252,22 @@ bool isExpensiveLoadOrStore(Operation *op) {
   Attribute blockIOAttr =
       op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
   if (blockIOAttr &&
-      !op->getAttr(TritonIntelGPUDialect::getBlockIOStrideAttrName()))
+      !op->getAttr(TritonIntelGPUDialect::getBlockIOStrideAttrName())) {
+    // A block_io load is only cheap if it genuinely validates as a 2D block
+    // load. If it would fall back to a per-element gather, treat it as
+    // expensive so it anchors its layout (and is not rematerialized into a
+    // de-coalesced gather). Exception: if the load feeds a DPAS dot operand
+    // whose layout *is* a valid 2D block load, keep it cheap so
+    // hoistConvertDotOperand can relabel it to that strictly-better layout
+    // instead of anchoring the coalesced gather (issue #7090 fp8 chains).
+    if (isa<tt::DescriptorLoadOp, tt::LoadOp>(op)) {
+      auto loadTy = dyn_cast<RankedTensorType>(op->getResult(0).getType());
+      if (loadTy && !ttgi::blockIOLoadValidatesAs2DBlock(op, loadTy) &&
+          !loadHoistsToBlock2DDotOperand(op, loadTy))
+        return true;
+    }
     return false;
+  }
 
   // Loads or stores that use more threads than elements can be presumed to have
   // a high hit-rate that makes them cheap.

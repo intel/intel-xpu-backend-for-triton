@@ -42,6 +42,7 @@ add_triton_library(TritonIntelGPUToLLVM
     TritonGENToLLVM
     TritonGENToSPIRV
     TritonInstrumentToLLVM
+    TritonIntelAnalysis
     TritonIntelGPUIR
     TritonIntelUtils
     TritonIntelXeAsm
