@@ -865,6 +865,15 @@ bool blockIOLoadValidatesAs2DBlock(Operation *loadOp, RankedTensorType type) {
   if (!isBlockIOEligible(loadOp, type))
     return false;
 
+  // Callers ask this predicate about hypothetical relabelings of a load, so
+  // `type` may pair an encoding with a shape it cannot be applied to. A DPAS
+  // encoding whose warpsPerCTA rank does not match the shape violates
+  // DPASToLinearLayout's rank precondition and would assert below; answer "does
+  // not validate" instead.
+  if (hasDpasEncoding(type) || hasDotDpasEncoding(type))
+    if (getDpasLayout(type).getWarpsPerCTA().size() != type.getRank())
+      return false;
+
   unsigned elemSizeInBits = type.getElementTypeBitWidth();
   if (elemSizeInBits > 64)
     return false;
