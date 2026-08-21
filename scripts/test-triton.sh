@@ -1146,7 +1146,6 @@ run_vllm_tdesc_tests() {
         || exit_status=$?
   fi
 
-
   for patch_file in "${applied_patches[@]}"; do
     echo "Reverting tdesc patch: $patch_file."
     if ! git -C "$VLLM_PROJ" apply -R "$patch_file"; then
