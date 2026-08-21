@@ -15,7 +15,11 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
-from triton_kernels_benchmark import sycl_tla_kernel
+try:
+    from triton_kernels_benchmark import sycl_tla_kernel
+except (ImportError, OSError):
+    sycl_tla_kernel = None
+from triton_kernels_benchmark.benchmark_testing import DEVICE, DEVICE_NAME, DEVICE_TOTAL_MEMORY
 
 
 def get_matmul_autotune_configs() -> List[triton.Config]:
@@ -303,9 +307,6 @@ X_VALS = [  #
     [4096, 8, 16384, 128],
 ]
 
-DEVICE_NAME = torch.xpu.get_device_name()
-DEVICE_TOTAL_MEMORY = torch.xpu.get_device_properties().total_memory
-
 
 def is_enough_memory(x_val):
     # x_val: (B, M, N, K)
@@ -342,7 +343,7 @@ def get_benchmark(
     }
     # use_sycl-tla
     if not (transpose_a or transpose_b):
-        if torch.xpu.get_device_name() != 'Intel(R) Arc(TM) Graphics':
+        if DEVICE_NAME != 'Intel(R) Arc(TM) Graphics':
             # SYCL-TLA only targets PVC/BMG; LNL (Arc iGPU) is not in its target list
             supported_providers['sycl-tla'] = 'SYCL-TLA'
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
@@ -374,8 +375,8 @@ def get_benchmark(
         a_shape, b_shape = get_shapes(B, M, N, K, transpose_a=transpose_a, transpose_b=transpose_b)
 
         torch.manual_seed(0)
-        a = torch.rand(a_shape, device='xpu', dtype=torch.bfloat16)
-        b = torch.rand(b_shape, device='xpu', dtype=torch.bfloat16)
+        a = torch.rand(a_shape, device=DEVICE, dtype=torch.bfloat16)
+        b = torch.rand(b_shape, device=DEVICE, dtype=torch.bfloat16)
 
         torch_a = a
         if transpose_a:
@@ -392,9 +393,9 @@ def get_benchmark(
             if len(a.shape) != len(b.shape):
                 raise AssertionError(f'Incompatible sizes {len(a.shape)} and {len(b.shape)}', )
             if len(a.shape) == 3:
-                c = torch.zeros((B, M, N), device='xpu', dtype=torch.float32)
+                c = torch.zeros((B, M, N), device=DEVICE, dtype=torch.float32)
             elif len(a.shape) == 2:
-                c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
+                c = torch.zeros((M, N), device=DEVICE, dtype=torch.float32)
             else:
                 raise AssertionError(f'Unexpected shape of length {len(a.shape)}')
             triton_fn = lambda: matmul(
@@ -417,9 +418,9 @@ def get_benchmark(
 
             def sycl_tla_invoker():
                 if B == 1:
-                    c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
+                    c = torch.zeros((M, N), device=DEVICE, dtype=torch.float32)
                 else:
-                    c = torch.zeros((B, M, N), device='xpu', dtype=torch.float32)
+                    c = torch.zeros((B, M, N), device=DEVICE, dtype=torch.float32)
                 func(a, b, c, M, N, K, B)
                 return c
 

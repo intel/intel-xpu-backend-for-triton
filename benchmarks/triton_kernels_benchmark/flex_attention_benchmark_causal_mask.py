@@ -14,12 +14,13 @@ from torch.nn.attention.bias import causal_lower_right
 import torch._inductor  # pylint: disable=protected-access
 import torch._inductor.choices  # pylint: disable=protected-access
 from torch._inductor.choices import InductorChoices
-from torch._inductor.template_heuristics.triton import FlexBwDConfig, FlexConfig, FlexDecodeConfig
+try:
+    from torch._inductor.template_heuristics.triton import FlexBwDConfig, FlexConfig, FlexDecodeConfig
+except (ImportError, ModuleNotFoundError):
+    FlexBwDConfig = FlexConfig = FlexDecodeConfig = None
 
+from triton_kernels_benchmark.benchmark_testing import DEVICE, DEVICE_NAME
 import triton_kernels_benchmark as benchmark_suite
-import triton
-
-DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
 # Use TORCHINDUCTOR_MAX_AUTOTUNE_GEMM=1 or uncomment the following line to print the auto-tune results.
 # torch._inductor.config.max_autotune_gemm = True
@@ -62,7 +63,10 @@ InductorChoices.get_flex_attention_fwd_configs = get_flex_attn_fwd_configs
 InductorChoices.get_flex_attention_bwd_configs = get_flex_attn_bwd_configs
 InductorChoices.get_flex_decode_configs = get_flex_decode_configs
 
-torch._dynamo.config.recompile_limit = 100  # pylint: disable=protected-access
+try:
+    torch._dynamo.config.recompile_limit = 100  # pylint: disable=protected-access
+except AttributeError:
+    pass
 
 # Compile the flex_attention function
 compiled_flex_attention = torch.compile(flex_attention, dynamic=False)
@@ -137,7 +141,7 @@ batch_size = int(os.getenv('BATCH_SIZE', '1'))
 batch_sizes = [16, 32, 64] if throughput_test else [batch_size]
 fa_kernel_mode = os.getenv('FA_KERNEL_MODE', 'fwd')
 
-if 'B580' in torch.xpu.get_device_name():
+if 'B580' in DEVICE_NAME:
     old_count = len(batch_sizes)
     batch_sizes = [size for size in batch_sizes if size < 16]
     if len(batch_sizes) != old_count:
@@ -194,7 +198,7 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
     print(
         f'Running case: {Z=}, {H_q=}, {H_kv=}, {N_CTX_q=}, {N_CTX_kv=}, {D_HEAD_qk=}, {D_HEAD_v=}, {MODE=}, {provider=}'
     )
-    torch.xpu.empty_cache()
+    torch.xpu.empty_cache() if DEVICE == 'xpu' else torch.cuda.empty_cache()  # pylint: disable=W0106
     torch.manual_seed(42)
 
     # Maximum across torch=200, triton=600
@@ -335,7 +339,7 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
 
 def get_benchmark(providers_filter=None, fa_kernel_mode='fwd', batch_size=1):  # pylint: disable=W0613,W0621
     local_batch_sizes = [16, 32, 64] if os.getenv('THROUGHPUT_TEST', '0') == '1' else [batch_size]
-    if 'B580' in torch.xpu.get_device_name():
+    if 'B580' in DEVICE_NAME:
         local_batch_sizes = [size for size in local_batch_sizes if size < 16]
     base = benchmark.benchmarks
     base_shapes = [x[1:-1] for x in base.x_vals]

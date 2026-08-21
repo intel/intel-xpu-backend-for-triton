@@ -5,6 +5,7 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
+from triton_kernels_benchmark.benchmark_testing import DEVICE
 
 
 def fwd_autotune_config() -> list[triton.Config]:
@@ -206,7 +207,7 @@ def random_segments(
     cv_tol: float = 1.0,
     max_length: int | None = None,
     max_trials: int = 1000,
-    device: str = "xpu",
+    device: str = DEVICE,
     seed: int | None = None,
 ):
     """
@@ -345,11 +346,11 @@ def get_benchmark(providers_filter: Optional[List[str]] = None):
     def benchmark(TOTAL_TOKENS, NUM_SEGMENTS, SEGMENT_STDDEV_OVER_MEAN, H_Q, H_KV, D_HEAD_QK, D_HEAD_V, provider):
         do_bench = benchmark_suite.get_do_bench(n_warmup=400, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
         segments, _, max_len, _ = random_segments(TOTAL_TOKENS, NUM_SEGMENTS, SEGMENT_STDDEV_OVER_MEAN, seed=42)
-        bitmap = build_segment_bitmap(segments, TOTAL_TOKENS, "xpu")
+        bitmap = build_segment_bitmap(segments, TOTAL_TOKENS, DEVICE)
         dtype = torch.float16
-        q = torch.randn((TOTAL_TOKENS, H_Q, D_HEAD_QK), dtype=dtype, device="xpu")
-        k = torch.randn((TOTAL_TOKENS, H_KV, D_HEAD_QK), dtype=dtype, device="xpu")
-        v = torch.randn((TOTAL_TOKENS, H_KV, D_HEAD_V), dtype=dtype, device="xpu")
+        q = torch.randn((TOTAL_TOKENS, H_Q, D_HEAD_QK), dtype=dtype, device=DEVICE)
+        k = torch.randn((TOTAL_TOKENS, H_KV, D_HEAD_QK), dtype=dtype, device=DEVICE)
+        v = torch.randn((TOTAL_TOKENS, H_KV, D_HEAD_V), dtype=dtype, device=DEVICE)
         scale = 0.125
 
         if provider == "triton":

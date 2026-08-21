@@ -29,9 +29,44 @@ from torch.profiler import profile, ProfilerActivity, record_function
 
 from triton.testing import assert_close as triton_assert_close, Benchmark, do_bench as triton_do_bench
 
-import transform_results
+try:
+    import transform_results
+except ImportError:
+    transform_results = None
 from triton_kernels_benchmark import build_report
 from triton_kernels_benchmark.benchmark_shapes_parser import ShapePatternParser
+
+# Device selector: XPU if available, else CUDA
+if hasattr(torch, "xpu") and torch.xpu.is_available():
+    DEVICE = "xpu"
+elif torch.cuda.is_available():
+    DEVICE = "cuda"
+else:
+    raise RuntimeError("No supported GPU device found.")
+
+# On CUDA: strip XPU-only kernel config keys (grf_mode, xpu_arch) that CUDA triton rejects
+if DEVICE == "cuda":
+    import triton as _triton_mod  # pylint: disable=C0412
+    _XPU_ONLY_CONFIG_KEYS = {"grf_mode", "xpu_arch"}
+    _OrigConfig = _triton_mod.Config
+
+    class _CudaSafeConfig(_OrigConfig):
+
+        def __init__(self, kwargs, **kw):
+            for k in _XPU_ONLY_CONFIG_KEYS:
+                kwargs.pop(k, None)
+            super().__init__(kwargs, **kw)
+
+    _triton_mod.Config = _CudaSafeConfig
+    import triton.runtime.autotuner as _autotuner  # pylint: disable=C0412
+    _autotuner.Config = _CudaSafeConfig
+
+# Shared device name and memory — importable by all benchmark files
+DEVICE_NAME = (torch.xpu.get_device_name() if DEVICE == "xpu" else
+               (torch.cuda.get_device_name() if torch.cuda.is_available() else "unknown"))
+DEVICE_TOTAL_MEMORY = (
+    torch.xpu.get_device_properties(torch.xpu.current_device()).total_memory if DEVICE == "xpu" else
+    (torch.cuda.get_device_properties(torch.cuda.current_device()).total_memory if torch.cuda.is_available() else 0))
 
 BENCHMARKING_METHOD = os.getenv("BENCHMARKING_METHOD", "UPSTREAM_PYTORCH_PROFILER")
 BENCHMARKING_CONFIG = {
@@ -77,7 +112,7 @@ def _summarize_statistics(times, quantiles, return_mode):
 
 
 def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=None, return_mode="mean",
-                          device="xpu", time_warmup=False, benchmark_label=None,  # pylint: disable=W0613
+                          device=DEVICE, time_warmup=False, benchmark_label=None,  # pylint: disable=W0613
                           ):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
@@ -130,7 +165,7 @@ def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quan
 
 
 def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=None,
-                                       return_mode="mean", device="xpu", sync_submitting=True, time_warmup=True,
+                                       return_mode="mean", device=DEVICE, sync_submitting=True, time_warmup=True,
                                        benchmark_label=None, max_iters=1500):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
@@ -223,6 +258,7 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
     if not (len(kernels) >= n_repeat - 1 if relax_profiling_data_check else len(kernels) == n_repeat):
         raise AssertionError(
             f"the profiling number not match; {n_repeat=}, {kernels=}, "
+            # pylint: disable=W1405
             f"top functions by xpu_time:\n {prof.key_averages(group_by_stack_n=5).table(sort_by='xpu_time')}",
             "You may try to relax profiling check by setting env variable TRITON_RELAX_PROFILING_CHECK=1",
         )
@@ -231,7 +267,7 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
     return _summarize_statistics(times, quantiles, return_mode)
 
 
-def do_bench_proton(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=None, return_mode="mean", device="xpu",
+def do_bench_proton(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=None, return_mode="mean", device=DEVICE,
                     sync_submitting=True, time_warmup=True, benchmark_label=None, max_iters=1500):
     """
     Benchmark the runtime of the provided function. By default, return the median runtime of :code:`fn` along with
@@ -336,7 +372,7 @@ def get_do_bench(n_warmup: int, n_repeat: int, quantiles: list):
 
 try:
     # The easiest way to overwrite that eliminates merge conflicts
-    from triton_kernels_benchmark.benchmark_testing_rewrite import get_do_bench  # noqa: F401
+    from triton_kernels_benchmark.benchmark_testing_rewrite import get_do_bench  # noqa: F401  # pylint: disable=C0412
 except ImportError:
     pass
 
@@ -361,8 +397,13 @@ def filter_providers(
 
 
 def get_gpu_info():
-    device_name = torch.xpu.is_available() and torch.xpu.get_device_name()
-    if device_name is None:
+    if DEVICE == "xpu":
+        device_name = torch.xpu.is_available() and torch.xpu.get_device_name()
+    elif DEVICE == "cuda" and torch.cuda.is_available():
+        device_name = torch.cuda.get_device_name()
+    else:
+        device_name = None
+    if not device_name:
         print("Couldn't read device name.")
         return None, None
 
@@ -798,7 +839,7 @@ class BenchmarkRunResult(_BenchmarkSummary, ABC):
         ref_provider = self.reference_provider if self.reference_provider else ""
         metric = self.primary_metric
         ref_provider_name = next((provider for provider in providers if provider.lower() == ref_provider.lower()), None)
-        if ref_provider and primary_metric_only:
+        if ref_provider and primary_metric_only and ref_provider_name is not None:
             non_ref_providers = [provider for provider in providers if provider.lower() != ref_provider.lower()]
             for non_ref_provider in non_ref_providers:
                 summary_df[(non_ref_provider, "%diff")] = (
@@ -888,6 +929,7 @@ class BenchmarkConfigRunResult(BenchmarkRunResult, BenchmarkConfig):
             f"Config categories: {[category.value for category in self.categories]}",
             f"Run options: {self.run_opts}",
             f"Shape dimensions: {self.shape_dimensions}",
+            # pylint: disable=W1405
             f"Shapes pattern: {str(self.shape_pattern) if str(self.shape_pattern) else 'Not set'}",
             f"Supported shapes: {_shapes_repr(self.supported_shapes)}",
             f"Selected shapes: {_shapes_repr(self.supported_shapes)}",
@@ -902,6 +944,7 @@ class BenchmarkConfigRunResult(BenchmarkRunResult, BenchmarkConfig):
             f"Config categories: {[category.value for category in self.categories]}",
             f"Description: {self.description}",
             f"Run options: {self.run_opts}",
+            # pylint: disable=W1405
             f"Shapes pattern: {str(self.shape_pattern) if str(self.shape_pattern) else 'Not set'}",
             "Supported shapes: Not resolved (optional dependencies not loaded)",
             "Selected shapes: Not resolved (optional dependencies not loaded)",
