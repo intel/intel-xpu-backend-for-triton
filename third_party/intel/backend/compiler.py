@@ -380,6 +380,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if opt.loop_distribute:
             intel.passes.ttgpuir.add_loop_distribute(pm)
         passes.ttir.add_loop_unroll(pm)
+        if knobs.intel.speculate_signed_div_rem:
+            intel.passes.ttir.add_speculate_signed_div_rem(pm)
         pm.run(mod, 'make_ttir')
 
         driver_version = metadata["target"].arch.get("driver_version")
