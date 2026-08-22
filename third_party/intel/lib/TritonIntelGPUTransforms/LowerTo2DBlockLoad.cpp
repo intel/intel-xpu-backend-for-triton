@@ -204,7 +204,7 @@ private:
     // per iteration. Struct layout: { shapes[rank], strides[rank], base_ptr }.
     Type i64Ty = builder.getI64Type();
     Type ptrType =
-        tt::PointerType::get(descType.getBlockType().getElementType(), 1);
+        tt::PointerType::get(descType.getBlockType().getElementType());
     SmallVector<Value> shapes(descRank);
     SmallVector<Value> strides(descRank);
     for (unsigned d = 0; d < descRank; ++d) {
