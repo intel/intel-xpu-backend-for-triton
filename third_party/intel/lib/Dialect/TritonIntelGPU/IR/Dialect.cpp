@@ -343,6 +343,13 @@ LinearLayout DpasEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   return DPAStoLinearLayout(shape, *this);
 }
 
+LinearLayout
+DpasEncodingAttr::dotOperandToLinearLayout(Attribute dotOp,
+                                           ArrayRef<int64_t> shape) const {
+  return dotOperandDpasToLinearLayout(cast<DotOperandEncodingAttr>(dotOp),
+                                      shape);
+}
+
 //===----------------------------------------------------------------------===//
 // WarpEncodingAttr
 //===----------------------------------------------------------------------===//
