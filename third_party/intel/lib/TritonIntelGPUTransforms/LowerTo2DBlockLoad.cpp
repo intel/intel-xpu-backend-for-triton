@@ -311,13 +311,155 @@ private:
     for (unsigned d = 0; d + 2 < rank; ++d)
       batchStrides.push_back(strides[d + (descRank - rank)]);
 
-    // Determine padding mode from the descriptor.
+    // Determine padding mode from the descriptor. PAD_ZERO is the default for
+    // `tt.make_tensor_descriptor`, so it covers the vast majority of loads.
     bool padNan = padding == tt::PaddingOption::PAD_NAN;
+    bool padZero = padding == tt::PaddingOption::PAD_ZERO;
     UnitAttr padNanAttr = padNan ? builder.getUnitAttr() : UnitAttr();
+    // `pad_zero` is only set when the boundary fixup below is actually needed
+    // (see `colNeedsRounding`). Hardware already zero-fills out-of-bounds
+    // elements, so for an aligned base_width the attribute would only add
+    // redundant rounding arithmetic and selects at LLVM lowering.
+    bool colNeedsRounding = false;
+
+    // PVC Max 1100 applies OOB boundary checks at i32 (4-byte) granularity for
+    // 2D block loads, even for fp16 (elem_size_in_bits=16).  When base_width is
+    // not a multiple of 4 bytes, the last partial i32 word is considered OOB
+    // and hardware zeroes it — including any in-bounds fp16 element it
+    // contains. The 2Dblockload verifier enforces: base_width % max(4,
+    // elemSize) == 0.
+    //
+    // Fix strategy for the column direction (base_width):
+    //   1. If base_width is not 4-byte aligned, check pitch from the
+    //   descriptor.
+    //      Let rounded = ceil(base_width/4)*4.
+    //   2. If pitch >= rounded: emit the 2D block load. base_width is NOT
+    //      rounded here — it flows through at its original value. The rounding
+    //      is applied in LoadStoreOpToLLVM.cpp (after the NaN/zero mask is
+    //      built using the original value, so the mask boundary stays correct).
+    //   3. If pitch < rounded (contiguous tensor with no padding row): a valid
+    //      2D block load cannot be emitted; fall back to scalar loads.
+    //
+    // For the K-row direction in VNNI loads (base_height), we currently always
+    // fall back when the row count is odd, as there is no pitch equivalent in
+    // the height direction.
+    if (padNan || padZero) {
+      const unsigned elemSizeInBytes = elemSizeInBits / 8;
+      // kAlignBytes must match the alignment used in LoadStoreOpToLLVM.cpp:
+      // std::max(4u, elemSizeInBits/8u). For all currently supported element
+      // types (<=4 bytes), 4 dominates. If a >4-byte type is added, both
+      // constants must be updated consistently.
+      constexpr unsigned kAlignBytes = 4; // i32 word = hardware OOB granularity
+
+      // Extra pitch headroom required beyond roundedBytes to account for
+      // 64-byte alignment compensation in LoadStoreOpToLLVM.cpp:
+      //   offsetInBytes = ptr & 0x3F  (at most 63 bytes)
+      //   hwBaseWidth   = roundUp(colBytes + offsetInBytes, kAlignBytes)
+      //                 ≤ colBytes + 63 + (kAlignBytes - 1)
+      //                 = colBytes + 66
+      //   roundedBytes  = colBytes + r,  r ∈ [1, kAlignBytes-1]  (≥ 1 since
+      //                   we only enter here when colBytes % kAlignBytes != 0)
+      // => hwBaseWidth - roundedBytes ≤ 66 - r ≤ 66 - 1 = 65
+      // pitch must satisfy pitch ≥ roundedBytes + kAlignCompBound to guarantee
+      // hwBaseWidth ≤ pitch for all element types.
+      // kAlignCompBound = ALIGNMENT_MASK + (kAlignBytes-1) - min(r) = 63+3-1 =
+      // 65
+      constexpr int64_t kAlignCompBound = 63 + (kAlignBytes - 1) - 1; // = 65
+
+      // Column direction: align base_width to kAlignBytes.
+      // MakeTensorDescOp operand layout: base(0), shapes[rank](1..rank),
+      //   strides[rank](rank+1..2*rank).  Column count = operand(descRank),
+      //   pitch stride = operand(2*descRank-1).
+      for (auto d : allDescs) {
+        const auto descColCount =
+            tt::intel::getFoldedConstantValue(d->getOperand(descRank));
+        if (!descColCount) {
+          // Non-constant shape: cannot determine alignment statically.
+          // Proceed with 2D block load — the alignment may be fine at runtime,
+          // and we cannot do better without a runtime check.
+          // TODO: if the runtime width is misaligned and pitch is tight,
+          // hwBaseWidth rounding in LoadStoreOpToLLVM may produce
+          // hwBaseWidth > pitch, violating the hardware surface constraint.
+          continue;
+        }
+        int64_t colBytes = *descColCount * elemSizeInBytes;
+        if (colBytes % kAlignBytes != 0) {
+          colNeedsRounding = true;
+          int64_t roundedBytes =
+              ((colBytes + kAlignBytes - 1) / kAlignBytes) * kAlignBytes;
+          auto pitchSt = tt::intel::getFoldedConstantValue(
+              d->getOperand(2 * descRank - 1));
+          int64_t pitchBytes = pitchSt ? (*pitchSt * elemSizeInBytes) : 0;
+
+          // Alignment compensation in LoadStoreOpToLLVM adds offsetInBytes
+          // (ptr & 0x3F) to baseWidth before rounding. This only fires when
+          // the column descriptor index is non-zero, so we only need the extra
+          // headroom in that case.
+          auto colIdxConst =
+              tt::intel::getFoldedConstantValue(op.getIndices()[descRank - 1]);
+          const bool colMayBeNonZero = !colIdxConst || *colIdxConst != 0;
+          const int64_t minPitch =
+              roundedBytes + (colMayBeNonZero ? kAlignCompBound : 0);
+
+          if (!pitchSt || pitchBytes < minPitch) {
+            // pitch too small or unknown: cannot safely widen base_width.
+            LDBG("Padded load: base_width="
+                 << colBytes << " not 4-aligned, pitch=" << pitchBytes
+                 << " < minPitch=" << minPitch
+                 << " — 2D block load skipped for: " << *op);
+            return;
+          }
+          // pitch >= rounded: safe to emit the 2D block load. base_width
+          // stays at the original (unrounded) value; LoadStoreOpToLLVM.cpp
+          // rounds it for the hardware instruction after building the NaN mask.
+          LDBG("Padded load: base_width="
+               << colBytes << " will be rounded to " << roundedBytes
+               << " at LLVM lowering (pitch=" << pitchBytes << "): " << *op);
+        }
+      }
+
+      // Row direction: i32 granularity OOB check applies only to VNNI (B
+      // operand) loads where multiple K-rows are packed into each i32 word:
+      //   fp16/bf16 (2 bytes): 2 rows per i32 word
+      //   int8/fp8  (1 byte):  4 rows per i32 word
+      // Row-major A loads have no row packing — odd row counts are fine.
+      // Unlike the column direction there is no pitch equivalent for
+      // base_height, so we cannot round up — fall back to scalar when needed.
+      auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(encoding);
+      const bool isVNNILoad = dotOpEnc && dotOpEnc.getOpIdx() == 1;
+      if (isVNNILoad) {
+        // Granularity = rows packed per i32 word = kAlignBytes /
+        // elemSizeInBytes
+        const unsigned vnniGranularity = kAlignBytes / elemSizeInBytes;
+        // TODO: non-constant row count returns !sh=true (conservatively
+        // passes), but a runtime odd row count still causes the i32-pairing
+        // problem at runtime. A proper fix requires either a runtime check or
+        // restricting this path to constant-only row counts.
+        bool outerShapeAligned =
+            llvm::all_of(allDescs, [&](tt::MakeTensorDescOp d) {
+              const auto shape = tt::intel::getFoldedConstantValue(
+                  d->getOperand(1 + (descRank - 2)));
+              return !shape || (*shape % vnniGranularity == 0);
+            });
+        if (!outerShapeAligned) {
+          LDBG("Padded load: odd VNNI K-row count — 2D block load skipped "
+               "for: "
+               << *op);
+          return;
+        }
+      }
+    }
+
+    // PAD_NAN always needs the mask (hardware fills zero, not NaN). PAD_ZERO
+    // only needs it when base_width is rounded up at LLVM lowering: rounding
+    // makes the hardware treat the padding bytes as in-bounds, so the mask has
+    // to restore the zero fill the hardware would have done otherwise.
+    UnitAttr padZeroAttr =
+        (padZero && colNeedsRounding) ? builder.getUnitAttr() : UnitAttr();
 
     auto blockLoadOp = ttgi::Subgroup2DBlockLoadOp::create(
         builder, loc, op.getType(), basePtr, baseWidth, baseHeight, basePitch,
-        offsetX, offsetY, batchStrides, padNanAttr,
+        offsetX, offsetY, batchStrides, padNanAttr, padZeroAttr,
         ttgi::BlockIOModeAttr::get(builder.getContext(), memLayout));
 
     // Propagate one_matrix_per_load attribute if present.

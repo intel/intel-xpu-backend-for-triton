@@ -237,6 +237,13 @@ def TTIG_Subgroup2DBlockLoadOp : TTIG_Op<"2d_block_load"> {
     When `pad_nan` is set, the LLVM lowering builds boundary masks from
     the surface dimensions and fills out-of-bounds elements with NaN.
     Otherwise, the hardware zero-fills out-of-bounds elements.
+
+    `pad_zero` requests the same explicit boundary masking but with a zero
+    fill value. It is only set when the lowering rounds `base_width` up to
+    the hardware alignment granularity: the rounding makes the hardware treat
+    the padding bytes as in-bounds, so the mask has to restore the zero fill
+    the hardware would otherwise have applied. For an already-aligned
+    `base_width`, hardware zero-filling is exact and the attribute is omitted.
   }];
 
   let arguments = (ins
@@ -249,6 +256,7 @@ def TTIG_Subgroup2DBlockLoadOp : TTIG_Op<"2d_block_load"> {
     I32:$offset_y,
     Variadic<I64>:$batch_strides,
     OptionalAttr<UnitAttr>:$pad_nan,
+    OptionalAttr<UnitAttr>:$pad_zero,
     TTIG_BlockIOMode:$memory_layout
   );
 
@@ -257,7 +265,8 @@ def TTIG_Subgroup2DBlockLoadOp : TTIG_Op<"2d_block_load"> {
     $base_ptr `,` $base_width `,` $base_height `,` $base_pitch
     `[` $offset_x `,` $offset_y `]`
     (`batch_strides` `[` $batch_strides^ `]`)?
-    `{` $memory_layout (`,` `pad_nan` $pad_nan^)? `}`
+    `{` $memory_layout (`,` `pad_nan` $pad_nan^)?
+                       (`,` `pad_zero` $pad_zero^)? `}`
     attr-dict `:` type($base_ptr) `->` type($result)
   }];
   let hasVerifier = 1;

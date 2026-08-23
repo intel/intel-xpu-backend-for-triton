@@ -1114,7 +1114,8 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
       Type packedDPASOperandType, Type unpackedType, unsigned numValuesPerLoad,
       unsigned numPackedVals, Value pred, ArrayRef<Value> otherElems,
       ArrayRef<Value> nanMaskElems, Location loc,
-      ConversionPatternRewriter &rewriter, MLIRContext *ctx) {
+      ConversionPatternRewriter &rewriter, MLIRContext *ctx,
+      bool useZeroFill = false) {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     StringAttr kRegister = S("register");
 
@@ -1172,9 +1173,10 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
 
         SmallVector<Attribute> constOtherElems;
         for (auto i = 0; i < numElemsPerUnpackedType; ++i) {
-          constOtherElems.push_back(
-              FloatAttr::get(unpackedElemType,
-                             APFloat::getNaN(floatType.getFloatSemantics())));
+          APFloat fillVal =
+              useZeroFill ? APFloat::getZero(floatType.getFloatSemantics())
+                          : APFloat::getNaN(floatType.getFloatSemantics());
+          constOtherElems.push_back(FloatAttr::get(unpackedElemType, fillVal));
         }
 
         Value other = b.const_val(
@@ -3924,7 +3926,7 @@ static LogicalResult lowerBlockLoad2D(
     std::optional<int> staticBaseHeight,
     const triton::intel::TargetInfo &targetInfo,
     const LLVMTypeConverter *typeConverter, Location loc,
-    ConversionPatternRewriter &rewriter) {
+    ConversionPatternRewriter &rewriter, bool useZeroFill = false) {
 
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   MLIRContext *ctx = rewriter.getContext();
@@ -4012,7 +4014,7 @@ static LogicalResult lowerBlockLoad2D(
         ret, unpackedLoadedVals, elemIdx, cfg.regMapping, cfg.shuffleMapping,
         cfg.packedDPASOperandType, cfg.unpackedType, cfg.numValuesPerLoad,
         cfg.numPackedVals, addr.pred, otherElems, nanMaskElems, loc, rewriter,
-        ctx);
+        ctx, useZeroFill);
   }
 
   Value resultStruct =
@@ -4119,8 +4121,11 @@ struct Subgroup2DBlockLoadOpConversion
     }
 
     // Build NaN masks if pad_nan is set.
+    // Build OOB masks for pad_nan and pad_zero paths. Both use the same mask
+    // (in-bounds predicate per register), differing only in the fill value.
     SmallVector<Value> nanMaskElems;
-    if (op.getPadNan()) {
+    SmallVector<Value> zeroMaskElems;
+    if (op.getPadNan() || op.getPadZero()) {
       SmallVector<Value> resultOffsets(rank, b.i32_val(0));
       SmallVector<Value> resultShapes(rank);
       for (unsigned i = 0; i < rank; ++i) {
@@ -4136,8 +4141,12 @@ struct Subgroup2DBlockLoadOpConversion
           (contiguousDim == rank - 1) ? rank - 2 : rank - 1;
       resultOffsets[surfaceColDim] = baseOffsetX;
       resultOffsets[surfaceRowDim] = baseOffsetY;
-      nanMaskElems =
+      auto maskElems =
           buildNaNMasks(loc, resultOffsets, resultShapes, tensorType, rewriter);
+      if (op.getPadNan())
+        nanMaskElems = maskElems;
+      else
+        zeroMaskElems = maskElems;
     }
 
     unsigned blockRowIdx = cfg.isTransposeRequired ? cfg.colDim : cfg.rowDim;
@@ -4155,6 +4164,29 @@ struct Subgroup2DBlockLoadOpConversion
         std::min(blockRowIdx, blockColIdx) != rank - 2 ||
         std::max(blockRowIdx, blockColIdx) != rank - 1)
       return failure();
+
+    // Round base_width up to the hardware alignment requirement for padded
+    // loads. This is done AFTER the mask is built so the mask boundary uses
+    // baseWidth as it stands at this point. Note: if alignment compensation ran
+    // above, baseWidth = original + (ptr & 0x3f), but ptr & 0x3f is always 0 at
+    // runtime (hardware requires 64-byte aligned base pointers), so baseWidth
+    // effectively equals the declared surface width here.
+    // For already-aligned constants the arithmetic folds to a no-op; for
+    // runtime values it emits the rounding as IR executed on the GPU.
+    Value hwBaseWidth = baseWidth;
+    if (op.getPadNan() || op.getPadZero()) {
+      unsigned alignBytes = std::max(4u, elemSizeInBits / 8u);
+      Value align = b.i32_val(alignBytes);
+      // roundUp(x, a) = ((x + a - 1) / a) * a
+      Value rounded = b.mul(
+          b.udiv(b.add(baseWidth, b.i32_val(alignBytes - 1)), align), align);
+      // Clamp to pitch: hardware requires base_width <= pitch. When the static
+      // pitch check in LowerTo2DBlockLoad was bypassed (e.g., runtime column
+      // count → !descColCount → continue), rounded may exceed pitch. Taking
+      // min(rounded, pitch) satisfies the constraint for all cases. For
+      // constants where pitch >= rounded the min folds to rounded (no-op).
+      hwBaseWidth = b.select(b.icmp_ule(rounded, pitch), rounded, pitch);
+    }
 
     // Per-sub-tile: combine base offsets with linear layout offsets.
     auto computeAddress =
@@ -4186,14 +4218,19 @@ struct Subgroup2DBlockLoadOpConversion
           addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, batchOffset);
         }
       }
-      return {addrElem,        offsetX, offsetY, baseWidth, baseHeight,
+      return {addrElem,        offsetX, offsetY, hwBaseWidth, baseHeight,
               /*pred=*/Value()};
     };
 
+    // PAD_NAN: hardware loads, NaN mask replaces OOB elements with NaN.
+    // PAD_ZERO: hardware loads (base_width rounded, OOB appears in-bounds),
+    //           zero mask replaces them with 0.0 via the same mechanism.
+    const bool useZeroFill = op.getPadZero().has_value();
     return lowerBlockLoad2D(op, cfg, *llEncoding, pitch, computeAddress,
-                            /*otherElems=*/{}, nanMaskElems,
+                            /*otherElems=*/{},
+                            useZeroFill ? zeroMaskElems : nanMaskElems,
                             /*staticBaseHeight=*/std::nullopt, targetInfo,
-                            getTypeConverter(), loc, rewriter);
+                            getTypeConverter(), loc, rewriter, useZeroFill);
   }
 };
 
