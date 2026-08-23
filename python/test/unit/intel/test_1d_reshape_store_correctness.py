@@ -95,6 +95,11 @@ def test_1d_reshape_strided_store(W, S, XBLOCK, num_warps, expect_block_store, d
     whether the optimization fired — without it a silently-skipped reshape would
     still pass the numeric checks below.
     """
+    # On devices without 2D block IO the optimization is not emitted; override
+    # the parametrized expectation so the numeric checks still run.
+    if not triton.runtime.driver.active.get_current_target().arch.get('has_2d_block_io', False):
+        expect_block_store = False
+
     num_rows = 1024
     xnumel = W * num_rows  # total elements
 

@@ -691,6 +691,14 @@ private:
            << tpw << ") not divisible by tpw1=" << tpw1 << ", skip 1D reshape");
       return std::nullopt;
     }
+    // Guard against integer-truncation under-coverage: spt1 * tpw1 must equal W
+    // exactly, otherwise the 2D encoding would cover fewer columns than W.
+    if (spt1 * tpw1 != static_cast<unsigned>(W)) {
+      LDBG("spt1=" << spt1 << " * tpw1=" << tpw1 << " = " << spt1 * tpw1
+                   << " != W=" << W
+                   << ", would under-cover the W dimension, skip 1D reshape");
+      return std::nullopt;
+    }
     unsigned tpw0 = tpw / tpw1;
     return ttg::BlockedEncodingAttr::get(
         ctx, {spt0, spt1}, {tpw0, tpw1}, {wpc, 1}, {1, 0},
@@ -885,11 +893,13 @@ private:
     // remaining lanes' delivery pattern does not match a plain row/col
     // layout, and constructing a BlockedEncoding with threadsPerWarp=[1,tpw]
     // would create a replicated layout that the reshape lowering rejects
-    // as an "expensive view" (make_llir failure).  Bail out for now; this
-    // case can be re-enabled once the lowering handles sub-subgroup tiles.
-    if (W < threadsPerWarp) {
-      LDBG("W=" << W << " < threadsPerWarp=" << threadsPerWarp
-                << " not supported for 1D load reshape");
+    // as an "expensive view" (make_llir failure).  Likewise, when W is not
+    // a multiple of tpw the HW delivery encoding covers fewer than W columns
+    // per register, which would mismatch the consumer encoding derived from
+    // the 1D layout.  Bail out in both cases.
+    if (W < threadsPerWarp || W % threadsPerWarp != 0) {
+      LDBG("W=" << W << " is not a positive multiple of threadsPerWarp="
+                << threadsPerWarp << ", not supported for 1D load reshape");
       return;
     }
 
