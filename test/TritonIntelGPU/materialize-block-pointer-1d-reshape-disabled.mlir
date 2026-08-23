@@ -70,11 +70,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
-// COM: Test 3: 1D strided STORE with H > 1 — the case unblocked by lifting the
-// COM: H != 1 guard.  When enabled it reshapes [1024] -> [32, 32], converts the
-// COM: value into the HW delivery encoding and annotates the store.  When
-// COM: disabled the original tt.store must survive unchanged, because the
-// COM: gather store cannot handle the [H,W] registers-stride-rows encoding.
+// COM: Test 3: 1D strided STORE with H > 1 When enabled it reshapes
+// COM: [1024] -> [32, 32], converts the value into the HW delivery encoding
+// COM: and annotates the store. When disabled the original tt.store must survive unchanged.
 
 #blocked1d_large = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {

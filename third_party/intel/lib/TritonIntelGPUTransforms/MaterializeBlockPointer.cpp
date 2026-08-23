@@ -740,15 +740,6 @@ private:
   /// recovers W, H, and S from the arithmetic, reshapes the store from
   /// [12] to [3, 4], and annotates it so that StoreOpToBlockIOConversion
   /// emits a single LSC2DBlockWrite(base, width=4, height=3, pitch=6).
-  ///
-  /// Mirror image of reshape1DStridedLoad. The 2D block store consumes data in
-  /// a fixed layout (lane k = column k, registers stack rows), so we construct
-  /// an explicit "store encoding" matching that hardware delivery and insert a
-  /// ConvertLayoutOp from the natural "consumer encoding" into it. Handing
-  /// tt.reshape's *inferred* encoding to the store instead is what silently
-  /// corrupted data for H > 1 in #6531/#6634: the inferred encoding places each
-  /// lane's values in adjacent columns of one row, while the hardware places
-  /// them one per row at intervals of threadsPerWarp.
   void reshape1DStridedStore(tt::StoreOp op, RankedTensorType ptrTensorTy,
                              MLIRContext *ctx) const {
     LDBG("Attempting 1D strided store reshape for: " << *op);
@@ -784,11 +775,11 @@ private:
     unsigned perWarpH = static_cast<unsigned>(info->H / numWarps);
     unsigned W = static_cast<unsigned>(info->W);
 
-    // Same restriction as the load path (issue #6738): a BlockedEncoding with
     // threadsPerWarp=[1,tpw] on a dimension of size W < tpw is replicated, and
     // the reshape lowering rejects it as an "expensive view" (make_llir
     // failure).  W not a multiple of tpw would make the encoding cover fewer
-    // than W columns per register, which is not the hardware delivery order.
+    // than W columns in the lane mapping, which is not the hardware delivery
+    // order.
     if (W < threadsPerWarp || W % threadsPerWarp != 0) {
       LDBG("W=" << W << " is not a positive multiple of threadsPerWarp="
                 << threadsPerWarp << ", skip 1D store reshape");
@@ -796,13 +787,13 @@ private:
     }
 
     // Construct "store encoding" matching HW delivery:
-    // lane k = column k, registers stack rows.
+    // lanes map to contiguous column blocks, and each lane stores consecutive
+    // rows for its block in its local fragment
     auto storeEnc =
         buildHWDelivery2DEncoding(ctx, perWarpH, W, threadsPerWarp, numWarps);
 
     // Construct "consumer encoding" — the natural 2D reshape of the value's
-    // original 1D encoding.  Derived from the value, not the pointer: the
-    // ConvertLayoutOp we insert operates on the value.
+    // original 1D encoding.
     auto valTensorTy = cast<RankedTensorType>(op.getValue().getType());
     std::optional<ttg::BlockedEncodingAttr> consumerEnc =
         derive2DConsumerEncoding(ctx, valTensorTy, info->W);
@@ -819,8 +810,7 @@ private:
                                             /*efficientLayout=*/true);
 
     // Reshape the value to [H, W] in the consumer encoding, then convert it
-    // into the hardware delivery layout.  This is the exact inverse of the
-    // load's ConvertLayoutOp + reshape-back pair.
+    // into the hardware delivery layout.
     Type valElemTy = valTensorTy.getElementType();
     auto consumerValTy =
         RankedTensorType::get(newShape, valElemTy, *consumerEnc);
@@ -829,9 +819,7 @@ private:
                               /*allowReorder=*/false,
                               /*efficientLayout=*/true);
 
-    // ConvertLayoutOp: consumer encoding -> store encoding.  The two coincide
-    // whenever each lane already owns one column per row (e.g. H == 1), in
-    // which case there is nothing to convert.
+    // ConvertLayoutOp: consumer encoding -> store encoding.
     Value storeVal = valReshape.getResult();
     if (*consumerEnc != storeEnc) {
       auto storeValTy = RankedTensorType::get(newShape, valElemTy, storeEnc);
@@ -895,8 +883,8 @@ private:
     // would create a replicated layout that the reshape lowering rejects
     // as an "expensive view" (make_llir failure).  Likewise, when W is not
     // a multiple of tpw the HW delivery encoding covers fewer than W columns
-    // per register, which would mismatch the consumer encoding derived from
-    // the 1D layout.  Bail out in both cases.
+    // in the lane mapping, which would mismatch the consumer encoding derived
+    // from the 1D layout.  Bail out in both cases.
     if (W < threadsPerWarp || W % threadsPerWarp != 0) {
       LDBG("W=" << W << " is not a positive multiple of threadsPerWarp="
                 << threadsPerWarp << ", not supported for 1D load reshape");
