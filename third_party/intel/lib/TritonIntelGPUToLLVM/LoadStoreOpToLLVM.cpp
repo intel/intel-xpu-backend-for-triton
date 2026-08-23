@@ -4125,7 +4125,35 @@ struct Subgroup2DBlockLoadOpConversion
           addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, batchOffset);
         }
       }
-      return {addrElem,        offsetX, offsetY, baseWidth, baseHeight,
+      // When NaN-padding is requested for packed-type loads (numPackedVals > 1,
+      // e.g. fp16 with opsPerChan=2), the hardware 2D block load OOB check
+      // fires at packed-word (i32) granularity rather than individual-element
+      // (fp16) granularity.  A sub-tile whose column start is offsetX may have
+      // its last in-bounds element share a packed word with the first OOB
+      // element.  On hardware with coarse-grained boundary protection (e.g. PVC
+      // Max 1100) the entire packed word is zeroed, giving 0.0 instead of the
+      // correct in-bounds value even though the NaN mask is correct.
+      //
+      // Apply the same pointer-shift + surface-widening used by
+      // Subgroup2DBlockLoadFromPtrOpConversion: shift addrElem back by
+      // offsetX elements and widen base_width by the same byte count.  This
+      // ensures that every packed word in the sub-tile falls well within the
+      // hardware's in-bounds region, while the software NaN mask (nanMaskElems)
+      // remains responsible for correctly marking actual OOB elements as NaN.
+      //
+      // Safety: the hardware never accesses the pre-shifted address directly.
+      // It computes load addresses as ptr + y*pitch + x_pack*packedBytes, and
+      // x_pack = offsetX/numPackedVals, so the effective address equals
+      // original_ptr when offsetX is packed-word aligned (which DPAS layouts
+      // guarantee).
+      Value hwBaseWidth = baseWidth;
+      if (!nanMaskElems.empty() && cfg.numPackedVals > 1 && offsetX) {
+        Value offsetXBytes = b.mul(offsetX, b.i32_val(elemSizeInBits / 8));
+        addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem,
+                         b.sub(b.i32_val(0), offsetXBytes));
+        hwBaseWidth = b.add(baseWidth, offsetXBytes);
+      }
+      return {addrElem,        offsetX, offsetY, hwBaseWidth, baseHeight,
               /*pred=*/Value()};
     };
 
