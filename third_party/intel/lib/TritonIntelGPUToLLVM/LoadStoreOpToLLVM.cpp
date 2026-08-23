@@ -4149,8 +4149,8 @@ struct Subgroup2DBlockLoadOpConversion
       Value hwBaseWidth = baseWidth;
       if (!nanMaskElems.empty() && cfg.numPackedVals > 1 && offsetX) {
         Value offsetXBytes = b.mul(offsetX, b.i32_val(elemSizeInBits / 8));
-        addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem,
-                         b.sub(b.i32_val(0), offsetXBytes));
+        Value negOffsetXBytes = b.sub(b.i32_val(0), offsetXBytes);
+        addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, negOffsetXBytes);
         hwBaseWidth = b.add(baseWidth, offsetXBytes);
       }
       return {addrElem,        offsetX, offsetY, hwBaseWidth, baseHeight,
