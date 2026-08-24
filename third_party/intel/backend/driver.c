@@ -1197,7 +1197,7 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
       share_mem_t local_buffer = share_mem_t(shared_memory, cgh);
       cgh.set_arg(num_params, local_buffer);
     }
-    syclex::nd_launch(cgh, parallel_work_size, kernel_ptr);
+    syclex::nd_launch(cgh, parallel_work_size, kernel);
   };
   // Event-less submit: nothing in the launch path consumes the event.
   //
