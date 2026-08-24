@@ -4158,12 +4158,18 @@ struct Subgroup2DBlockLoadOpConversion
         Value i32B = b.i32_val(kI32Bytes);
         hwBaseWidth = b.mul(
             b.udiv(b.add(hwBaseWidth, b.i32_val(kI32Bytes - 1)), i32B), i32B);
-        // Round base_height up to nearest 2 rows (fp16 VNNI K-row pairing).
-        // For non-VNNI loads or float32 this is a no-op (already even).
-        constexpr unsigned kRowPair = 2;
-        Value rowP = b.i32_val(kRowPair);
-        hwBaseHeight = b.mul(
-            b.udiv(b.add(hwBaseHeight, b.i32_val(kRowPair - 1)), rowP), rowP);
+        // For VNNI format (B operand), the hardware also pairs K rows into i32
+        // words and applies the same coarse-grained OOB check in the row
+        // direction.  Round base_height up to the nearest 2 rows to prevent
+        // coarse-grained zeroing of the last valid K row when K is odd.
+        // Do NOT apply this to non-VNNI loads (A operand) — doing so with
+        // specific shapes can corrupt arbitrary in-bounds elements on Max 1100.
+        if (cfg.useVNNIFormat) {
+          constexpr unsigned kRowPair = 2;
+          Value rowP = b.i32_val(kRowPair);
+          hwBaseHeight = b.mul(
+              b.udiv(b.add(hwBaseHeight, b.i32_val(kRowPair - 1)), rowP), rowP);
+        }
       }
       return {addrElem,        offsetX, offsetY, hwBaseWidth, hwBaseHeight,
               /*pred=*/Value()};
