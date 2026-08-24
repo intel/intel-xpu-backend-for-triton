@@ -2,6 +2,7 @@
 # Large-token fused MoE accuracy failure on XPU after the memory-query patch.
 tests/kernels/moe/test_moe.py::test_fused_moe_int64_overflow
 
+tests/kernels/moe/test_batched_moe.py::test_fused_moe_batched_experts
 tests/kernels/moe/test_moe.py::test_fused_moe_wn16
 
 # Accuracy error on PVC: https://github.com/intel/intel-xpu-backend-for-triton/issues/7131
