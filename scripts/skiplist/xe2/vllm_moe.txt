@@ -3,7 +3,6 @@
 tests/kernels/moe/test_moe.py::test_fused_moe_int64_overflow
 
 tests/kernels/moe/test_batched_moe.py::test_fused_moe_batched_experts
-tests/kernels/moe/test_moe.py::test_fused_moe_wn16
 
 # Block FP8 modular MoE tests require FP32-SiLU reference https://github.com/intel/intel-xpu-backend-for-triton/issues/7614
 tests/kernels/moe/test_block_fp8.py::test_w8a8_block_fp8_fused_moe[0-dtype0-block_size0-1-2-83-4608-7168]
