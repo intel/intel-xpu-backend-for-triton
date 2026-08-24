@@ -195,15 +195,6 @@ private:
     if (!tensorTy)
       return;
 
-    if constexpr (std::is_same_v<OpType, tt::LoadOp>) {
-      if (Value mask = op.getMask()) {
-        if (!matchPattern(mask, m_One())) {
-          LDBG("Load op has non-trivial mask, skip block IO attribute");
-          return;
-        }
-      }
-    }
-
     unsigned rank = tensorTy.getRank();
 
     // For 1D ops, try to detect strided access patterns and reshape
@@ -558,8 +549,6 @@ private:
     }
 
     // Tile width must satisfy HW limits per element size.
-    // The reshape always produces numElemPerPackedVal == 1, so
-    // packedElemSizeInBits == elemBits.
     if (!ttgi::check2DBlockAddressPayloadRestriction(elemBits, W)) {
       LDBG("Tile width " << W << " invalid for " << elemBits
                          << "-bit elements, skip 1D reshape");
@@ -655,10 +644,10 @@ private:
     if (!info)
       return;
 
-    // TODO: 2D block store does not support hardware transpose. With H > 1,
-    // the encoding inference puts registers in columns while the store
-    // hardware expects registers in rows. Fixing this requires inserting a
-    // ConvertLayoutOp before the store.
+    // With H > 1, tt.reshape infers a blocked encoding that does not match the
+    // 2D block store's hardware delivery pattern: the hardware places each
+    // lane's values at intervals of threadsPerWarp in the packed-flat tile, but
+    // the inferred encoding places them in adjacent positions.
     if (info->H != 1) {
       LDBG("H=" << info->H
                 << " > 1 not yet supported for store, skip 1D reshape");

@@ -1,11 +1,9 @@
 import itertools
-import os
 import re
-import subprocess
-import sys
 from collections import Counter
 
 import numpy as np
+import print_helper
 
 import triton
 from triton._internal_testing import is_interpreter
@@ -14,8 +12,6 @@ import pytest
 
 import triton.runtime as tr
 
-dir_path = os.path.dirname(os.path.realpath(__file__))
-print_path = os.path.join(dir_path, "print_helper.py")
 torch_types = ["int8", "uint8", "int16", "int32", "long", "float16", "float32", "float64"]
 FP32_HEX_CANONICAL = (
     "0x1p+0",
@@ -61,37 +57,35 @@ def _hex_float_values(output: bytes) -> Counter:
                                                       ("device_print_2d_tensor", "int32"),
                                                       ("device_print", "bool"),
                                                   ])
-def test_print(func_type: str, data_type: str, device: str):
+def test_print(func_type: str, data_type: str, device: str, capfd):
     if device == "xpu" and data_type == "float64" and not tr.driver.active.get_current_target().arch['has_fp64']:
         pytest.xfail("float64 not supported on current xpu hardware")
-    proc = subprocess.run(
-        [sys.executable, print_path, "test_print", func_type, data_type, device],
-        capture_output=True,
-    )
-    assert proc.returncode == 0
+    print_helper.test_print(func_type, data_type, device)
+    output = capfd.readouterr()
+    stdout = output.out.encode("utf-8")
 
     # The total number of elements in the 1-D tensor to print.
     N = 128
 
     if is_interpreter():
-        assert proc.stderr == b''
+        assert output.err == ""
 
     if func_type == "device_print_hex" and data_type.startswith("float"):
         float_type = getattr(np, data_type)
         expected = Counter(float(float_type(i)).hex() for i in range(N))
-        assert _hex_float_values(proc.stdout) == expected
+        assert _hex_float_values(stdout) == expected
         return
     if func_type == "device_print_hex_fp32_canonical":
         expected = Counter(float.fromhex(value).hex() for value in FP32_HEX_CANONICAL)
         expected = Counter({value: count * (N // len(FP32_HEX_CANONICAL)) for value, count in expected.items()})
-        assert _hex_float_values(proc.stdout) == expected
+        assert _hex_float_values(stdout) == expected
         return
 
     if is_interpreter():
         # Interpreter uses a different format for device_print.
         return
 
-    outs = [line for line in proc.stdout.decode("UTF-8").splitlines() if line]
+    outs = [line for line in output.out.splitlines() if line]
 
     # Constant for testing the printing of scalar values
     SCALAR_VAL = 42
