@@ -19,6 +19,10 @@ on:
         description: Skip list directory override
         type: string
         default: ""
+      max_jobs:
+        description: Build parallelism, keep empty for 2 * number of cores
+        type: string
+        default: ""
       python_version:
         description: Python version
         type: string
@@ -93,6 +97,13 @@ jobs:
 
       - name: Build Triton wheel
         run: |
+          max_jobs="${{ inputs.max_jobs }}"
+          if [[ -z "$max_jobs" && "${{ inputs.runner_label }}" == "b580" ]]; then
+            max_jobs=8
+          fi
+          if [[ -n "$max_jobs" ]]; then
+            export MAX_JOBS="$max_jobs"
+          fi
           python -m build --wheel --no-isolation
           ls -lh dist/*.whl
 
