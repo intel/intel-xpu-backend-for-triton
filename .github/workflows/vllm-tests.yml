@@ -44,6 +44,8 @@ jobs:
     uses: ./.github/workflows/vllm-tests-reusable.yml
     with:
       runner_label: ${{ inputs.runner_label }}
+      # Default -j(2*cores) OOM-kills cc1plus building the wheel on b580.
+      max_jobs: ${{ inputs.runner_label == 'b580' && '8' || '' }}
       vllm_pin: ${{ inputs.vllm_pin }}
       vllm_xpu_kernels_pin: ${{ inputs.vllm_xpu_kernels_pin }}
       skip_list: ${{ inputs.skip_list }}

@@ -45,6 +45,8 @@ jobs:
     with:
       runner_label: b580
       skip_list: xe2
+      # Default -j(2*cores) OOM-kills cc1plus building the wheel on b580.
+      max_jobs: "8"
     secrets: inherit
 
   vllm-tests-pvc:
