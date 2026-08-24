@@ -257,12 +257,16 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
     @staticmethod
     def _get_max_divisibility(value):
-        """Get the highest power-of-2 divisor of value.
+        """Get the highest power-of-2 divisor of value, capped at 4.
+
+        Cap rationale: MaterializeBlockPointer's alignment check requires
+        divisibility by at most 4 (for fp8 with 8-bit elements). Higher
+        divisibilities provide no additional benefit for 2D block I/O.
         """
         if value == 0:
             return 1
         div = 1
-        while value % (div * 2) == 0:
+        while div < 4 and value % (div * 2) == 0:
             div *= 2
         return div
 
