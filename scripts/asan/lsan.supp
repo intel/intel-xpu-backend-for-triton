@@ -1,0 +1,26 @@
+# LeakSanitizer suppressions for host-side Triton tools (triton-opt, C++ unittests).
+#
+# These are known one-time / process-lifetime allocations in LLVM and MLIR that
+# are never freed by design (managed statics, command-line option registries,
+# one-time target/pass/dialect registration). They are not real leaks; keeping
+# them suppressed lets genuine leaks in the Intel backend stand out.
+#
+# This list is seeded conservatively and refined empirically from real
+# LeakSanitizer output -- add an entry only for allocations confirmed to be
+# benign LLVM/MLIR globals, never for anything under third_party/intel.
+#
+# See https://github.com/intel/intel-xpu-backend-for-triton/issues/5029
+#
+# Entries are matched as substrings against the (demangled) frames of each
+# leak's allocation stack. Format: `leak:<substring>`.
+
+# LLVM command-line option machinery: cl::opt / cl::list objects are registered
+# as globals and intentionally live for the whole process.
+leak:llvm::cl::
+
+# LLVM ManagedStatic-backed singletons (registries, thread pools, etc.).
+leak:llvm::ManagedStaticBase::RegisterManagedStatic
+
+# One-time target / pass registration kept alive for the process lifetime.
+leak:llvm::PassRegistry
+leak:llvm::TargetRegistry

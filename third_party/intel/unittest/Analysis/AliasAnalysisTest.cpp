@@ -29,7 +29,9 @@ public:
 
   ModuleOp createModule() {
     auto loc = builder->getUnknownLoc();
-    return ModuleOp::create(loc);
+    auto module = ModuleOp::create(loc);
+    modules.emplace_back(module);
+    return module;
   }
 
   triton::FuncOp createFunction(ModuleOp module, StringRef name,
@@ -77,6 +79,11 @@ public:
 protected:
   MLIRContext ctx;
   std::unique_ptr<OpBuilder> builder;
+  // Own every module built by the fixture helpers. MLIR ops created via
+  // ModuleOp::create() are owned by nothing, so without this they leak (caught
+  // by LeakSanitizer). Declared after `ctx` so the modules are erased before
+  // the context is destroyed.
+  SmallVector<OwningOpRef<ModuleOp>> modules;
 };
 
 // ===----------------------------------------------------------------------===//

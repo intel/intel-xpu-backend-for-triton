@@ -33,6 +33,7 @@ public:
     auto module = ModuleOp::create(loc);
     module->setAttr(AttrNumWarpsName, builder->getI32IntegerAttr(4));
     module->setAttr(AttrNumThreadsPerWarp, builder->getI32IntegerAttr(16));
+    modules.emplace_back(module);
     return module;
   }
 
@@ -82,6 +83,11 @@ public:
 protected:
   MLIRContext ctx;
   std::unique_ptr<OpBuilder> builder;
+  // Own every module built by the fixture helpers. MLIR ops created via
+  // ModuleOp::create() are owned by nothing, so without this they leak (caught
+  // by LeakSanitizer). Declared after `ctx` so the modules are erased before
+  // the context is destroyed.
+  SmallVector<OwningOpRef<ModuleOp>> modules;
 };
 
 // Test 1: Constant scalar has IV stride 0 for any loop
