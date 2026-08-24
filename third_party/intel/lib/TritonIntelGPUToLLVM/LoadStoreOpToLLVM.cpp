@@ -4125,53 +4125,12 @@ struct Subgroup2DBlockLoadOpConversion
           addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, batchOffset);
         }
       }
-      // PVC Max 1100 applies OOB boundary checks at i32 (4-byte) granularity
-      // for 2D block loads, even when elem_size_in_bits=16 (fp16).  When
-      // base_width or base_height is not aligned to this granularity, the last
-      // partial i32 unit is treated as OOB and the hardware zeroes it —
-      // including any in-bounds fp16/int8 element within the unit.  The
-      // software NaN mask is correct but receives 0.0 from hardware.
-      //
-      // Column direction (base_width in bytes): each i32 holds 2 fp16.
-      //   base_width=30 bytes (15 fp16) → last i32 word covers cols 14-15.
-      //   floor(30/4)=7, 7<7=False → OOB → both cols zeroed on Max 1100.
-      //
-      // Row direction (base_height in rows, VNNI format): VNNI pairs K rows
-      // into i32 words.  base_height=15 K rows → last K pair covers rows 14-15.
-      //   floor(15/2)=7, 7<7=False → OOB → both rows zeroed on Max 1100.
-      //
-      // Fix: when NaN-padding is active, round base_width up to the nearest
-      // 4-byte boundary AND round base_height up to the nearest 2 rows (for
-      // fp16 VNNI) so that every i32 unit in the tile is in-bounds.  The NaN
-      // mask then correctly marks the actual OOB elements as NaN after load.
-      //
-      // For float32 or perfectly-aligned shapes both roundings are no-ops.
-      //
-      // Safety: reading at most 1-3 extra bytes (or 1 extra row) beyond the
-      // declared shape is safe because PyTorch allocates storage in
-      // page-aligned blocks.  The NaN mask overrides those values.
-      Value hwBaseWidth = baseWidth;
-      Value hwBaseHeight = baseHeight;
-      if (!nanMaskElems.empty()) {
-        // Round base_width up to nearest 4-byte (i32) boundary.
-        constexpr unsigned kI32Bytes = 4;
-        Value i32B = b.i32_val(kI32Bytes);
-        hwBaseWidth = b.mul(
-            b.udiv(b.add(hwBaseWidth, b.i32_val(kI32Bytes - 1)), i32B), i32B);
-        // For VNNI format (B operand), the hardware also pairs K rows into i32
-        // words and applies the same coarse-grained OOB check in the row
-        // direction.  Round base_height up to the nearest 2 rows to prevent
-        // coarse-grained zeroing of the last valid K row when K is odd.
-        // Do NOT apply this to non-VNNI loads (A operand) — doing so with
-        // specific shapes can corrupt arbitrary in-bounds elements on Max 1100.
-        if (cfg.useVNNIFormat) {
-          constexpr unsigned kRowPair = 2;
-          Value rowP = b.i32_val(kRowPair);
-          hwBaseHeight = b.mul(
-              b.udiv(b.add(hwBaseHeight, b.i32_val(kRowPair - 1)), rowP), rowP);
-        }
-      }
-      return {addrElem,        offsetX, offsetY, hwBaseWidth, hwBaseHeight,
+      // The 2D block load NaN-padding boundary fix is handled upstream in
+      // LowerTo2DBlockLoad.cpp (see convertDescriptorLoadOp).  When the
+      // boundary is not i32-aligned, the descriptor load is not lowered to
+      // ttig.2d_block_load and falls through to scalar loads instead.
+      // No base_width/height adjustment needed here.
+      return {addrElem,        offsetX, offsetY, baseWidth, baseHeight,
               /*pred=*/Value()};
     };
 

@@ -307,6 +307,43 @@ private:
     bool padNan = padding == tt::PaddingOption::PAD_NAN;
     UnitAttr padNanAttr = padNan ? builder.getUnitAttr() : UnitAttr();
 
+    // PVC Max 1100 applies OOB boundary checks at i32 (4-byte) granularity for
+    // 2D block loads, even for fp16 (elem_size_in_bits=16).  When base_width or
+    // base_height is not a multiple of 4 bytes / 2 rows respectively, the last
+    // partial i32 word is considered OOB and hardware zeroes it — including any
+    // in-bounds fp16 element it contains.  This silently corrupts in-bounds
+    // data under NaN padding.
+    //
+    // Rounding base_width up in the lowering is unsafe when pitch == base_width
+    // (base_width > pitch violates HW requirements and corrupts addresses).
+    //
+    // Safe fix: when NaN-padding is requested and the inner shape is not i32-
+    // aligned, skip 2D block IO and fall through to scalar (gather) loads via
+    // DescriptorLoadOpConversion, which is always correct.
+    if (padNan) {
+      unsigned elemBytes = elemSizeInBits / 8;
+      // Column direction: base_width must be a multiple of 4 bytes.
+      bool innerShapeAligned =
+          llvm::all_of(allDescs, [&](tt::MakeTensorDescOp d) {
+            auto sh = tt::intel::getFoldedConstantValue(
+                d->getOperand(1 + (descRank - 1)));
+            return !sh || ((*sh * elemBytes) % 4 == 0);
+          });
+      // Row direction (VNNI): base_height must be even.
+      bool outerShapeAligned =
+          llvm::all_of(allDescs, [&](tt::MakeTensorDescOp d) {
+            auto sh = tt::intel::getFoldedConstantValue(
+                d->getOperand(1 + (descRank - 2)));
+            return !sh || (*sh % 2 == 0);
+          });
+      if (!innerShapeAligned || !outerShapeAligned) {
+        LDBG("Skipping 2D block load for NaN-padded load with non-i32-aligned "
+             "boundary (will use scalar loads): "
+             << *op);
+        return;
+      }
+    }
+
     auto blockLoadOp = ttgi::Subgroup2DBlockLoadOp::create(
         builder, loc, op.getType(), basePtr, baseWidth, baseHeight, basePitch,
         offsetX, offsetY, padNanAttr,
