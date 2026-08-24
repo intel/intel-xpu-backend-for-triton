@@ -4125,34 +4125,35 @@ struct Subgroup2DBlockLoadOpConversion
           addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, batchOffset);
         }
       }
-      // When NaN-padding is requested for packed-type loads (numPackedVals > 1,
-      // e.g. fp16 with opsPerChan=2), the hardware 2D block load OOB check
-      // fires at packed-word (i32) granularity rather than per-fp16
-      // granularity.  If base_width is not a multiple of the packed element
-      // size, the last partial packed word is treated as OOB.  On hardware with
-      // coarse-grained boundary protection (e.g. PVC Max 1100) the entire
-      // packed word is zeroed, including any in-bounds fp16 element it
-      // contains.
+      // PVC Max 1100 applies OOB boundary checks at i32 (4-byte) granularity
+      // for 2D block loads, even when elem_size_in_bits=16 (fp16).  When
+      // base_width is not a multiple of 4 bytes, the last partial i32 word is
+      // treated as OOB and the hardware zeroes it — including any in-bounds
+      // fp16/int8 element it contains.  The software NaN mask is correct (the
+      // in-bounds element is marked valid) but receives 0.0 from hardware.
       //
-      // Fix: round base_width up to the nearest packed-element boundary so that
-      // every packed word within the tile is considered in-bounds by hardware.
-      // Example: base_width=30 bytes (15 fp16) -> rounds up to 32 bytes (16
-      // fp16 / 8 i32 words).  Hardware now loads packed word 7 (fp16 cols
-      // 14-15) as in-bounds.  The software NaN mask (nanMaskElems) then
-      // correctly sets col 15 to NaN.
+      // Fix: when NaN-padding is active, round base_width up to the nearest
+      // 4-byte boundary.  This ensures every i32 word in the tile is in-bounds
+      // from the hardware's perspective; the NaN mask then correctly sets the
+      // actual OOB elements to NaN after the load.
       //
-      // Safety: reading at most one extra fp16 beyond the declared shape is
-      // safe in practice because PyTorch allocates tensor storage in
-      // page-aligned blocks; the adjacent memory is always readable.  The NaN
-      // mask overrides the value for any element beyond the declared shape.
+      // Example: base_width=30 bytes (15 fp16) -> 32 bytes.  Hardware loads
+      // the last i32 word (fp16 cols 14-15) as in-bounds; the NaN mask sets
+      // col 15 to NaN.
+      //
+      // For float32 (base_width already a multiple of 4) or perfectly-aligned
+      // fp16 shapes the rounding is a no-op.
+      //
+      // Safety: reading 1-3 extra bytes beyond the declared shape is safe
+      // because PyTorch allocates tensor storage in page-aligned blocks.  The
+      // NaN mask overrides any value read beyond the declared shape.
       Value hwBaseWidth = baseWidth;
-      if (!nanMaskElems.empty() && cfg.numPackedVals > 1) {
-        unsigned packedElemBytes = cfg.packedElemSizeInBits / 8;
-        Value peb = b.i32_val(packedElemBytes);
-        // ceil(base_width / packedElemBytes) * packedElemBytes
+      if (!nanMaskElems.empty()) {
+        // Round up to nearest 4-byte (i32) boundary.
+        constexpr unsigned kI32Bytes = 4;
+        Value i32B = b.i32_val(kI32Bytes);
         hwBaseWidth = b.mul(
-            b.udiv(b.add(hwBaseWidth, b.i32_val(packedElemBytes - 1)), peb),
-            peb);
+            b.udiv(b.add(hwBaseWidth, b.i32_val(kI32Bytes - 1)), i32B), i32B);
       }
       return {addrElem,        offsetX, offsetY, hwBaseWidth, baseHeight,
               /*pred=*/Value()};
