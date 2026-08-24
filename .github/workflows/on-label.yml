@@ -33,7 +33,7 @@ jobs:
   # ---- SGLang tests ----
 
   sglang-tests-bmg:
-    if: github.event.label.name == 'run-sglang-tests'
+    if: contains(github.event.pull_request.labels.*.name, 'run-sglang-tests')
     uses: ./.github/workflows/sglang-tests-reusable.yml
     with:
       runner_label: b580
@@ -42,7 +42,7 @@ jobs:
     secrets: inherit
 
   sglang-tests-pvc:
-    if: github.event.label.name == 'run-sglang-tests'
+    if: contains(github.event.pull_request.labels.*.name, 'run-sglang-tests')
     uses: ./.github/workflows/sglang-tests-reusable.yml
     with:
       runner_label: max1100
