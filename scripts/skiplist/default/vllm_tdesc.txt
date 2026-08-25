@@ -1103,6 +1103,7 @@ tests/kernels/moe/test_moe.py::test_fused_moe_wn16[8-True-128-dtype0-4-6-192-1-1
 tests/kernels/moe/test_moe.py::test_fused_moe_wn16[8-False-64-dtype0-4-2-64-1-1024-1024]
 tests/kernels/moe/test_moe.py::test_fused_moe_wn16[8-False-128-dtype0-1-2-192-1-1024-1024]
 tests/kernels/moe/test_moe.py::test_fused_moe_wn16[8-False-128-dtype0-4-6-8-1-1024-1024]
+tests/kernels/moe/test_moe.py::test_fused_moe_wn16[4-False-128-dtype0-1-2-192-1-1024-1024]
 
 # Reference moe_sum kernel interface mismatch: https://github.com/intel/intel-xpu-backend-for-triton/issues/7811
 tests/kernels/moe/test_moe.py::test_moe_sum[contig-dtype0-128-2-1]
