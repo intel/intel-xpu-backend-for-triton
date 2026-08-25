@@ -308,37 +308,83 @@ private:
     UnitAttr padNanAttr = padNan ? builder.getUnitAttr() : UnitAttr();
 
     // PVC Max 1100 applies OOB boundary checks at i32 (4-byte) granularity for
-    // 2D block loads, even for fp16 (elem_size_in_bits=16).  When base_width or
-    // base_height is not a multiple of 4 bytes / 2 rows respectively, the last
-    // partial i32 word is considered OOB and hardware zeroes it — including any
-    // in-bounds fp16 element it contains.  This silently corrupts in-bounds
-    // data under NaN padding.
+    // 2D block loads, even for fp16 (elem_size_in_bits=16).  When base_width is
+    // not a multiple of 4 bytes, the last partial i32 word is considered OOB
+    // and hardware zeroes it — including any in-bounds fp16 element it
+    // contains. The 2Dblockload verifier enforces: base_width % max(4,
+    // elemSize) == 0.
     //
-    // Rounding base_width up in the lowering is unsafe when pitch == base_width
-    // (base_width > pitch violates HW requirements and corrupts addresses).
+    // Fix strategy for the column direction (base_width):
+    //   1. If base_width is not 4-byte aligned, round it up: rounded =
+    //   ceil(w/4)*4
+    //   2. The HW also requires pitch >= base_width.  Check pitch from the
+    //      descriptor: if pitch >= rounded, override base_width with the
+    //      rounded value — the instruction is now spec-compliant and correct on
+    //      all HW.
+    //   3. If pitch < rounded (contiguous tensor with no padding row), a valid
+    //      2D block load cannot be emitted; fall back to scalar loads.
     //
-    // Safe fix: when NaN-padding is requested and the inner shape is not i32-
-    // aligned, skip 2D block IO and fall through to scalar (gather) loads via
-    // DescriptorLoadOpConversion, which is always correct.
+    // For the K-row direction in VNNI loads (base_height), we currently always
+    // fall back when the row count is odd, as there is no pitch equivalent in
+    // the height direction.
     if (padNan) {
-      unsigned elemBytes = elemSizeInBits / 8;
-      // Column direction: base_width must be a multiple of 4 bytes.
-      bool innerShapeAligned =
-          llvm::all_of(allDescs, [&](tt::MakeTensorDescOp d) {
-            auto sh = tt::intel::getFoldedConstantValue(
-                d->getOperand(1 + (descRank - 1)));
-            return !sh || ((*sh * elemBytes) % 4 == 0);
-          });
-      // Row direction (VNNI): base_height must be even.
+      unsigned eBytesConst = elemSizeInBits / 8;
+      constexpr unsigned kAlignBytes = 4; // i32 word = hardware OOB granularity
+
+      // Column direction: align base_width to kAlignBytes.
+      // MakeTensorDescOp operand layout: base(0), shapes[rank](1..rank),
+      //   strides[rank](rank+1..2*rank).  Inner shape = operand(descRank),
+      //   pitch stride = operand(2*descRank-1).
+      unsigned innerShapeOpIdx = 1 + (descRank - 1); // = descRank
+      unsigned pitchStrideOpIdx =
+          1 + descRank + (descRank - 2); // = 2*descRank-1
+
+      for (auto *d : allDescs) {
+        auto innerSh =
+            tt::intel::getFoldedConstantValue(d->getOperand(innerShapeOpIdx));
+        if (!innerSh) {
+          // Non-constant shape: conservatively fall back to scalar.
+          LDBG(
+              "Non-constant inner shape for NaN-padded load (scalar): " << *op);
+          return;
+        }
+        int64_t innerBytes = *innerSh * eBytesConst;
+        if (innerBytes % kAlignBytes != 0) {
+          int64_t roundedBytes =
+              ((innerBytes + kAlignBytes - 1) / kAlignBytes) * kAlignBytes;
+          auto pitchSt = tt::intel::getFoldedConstantValue(
+              d->getOperand(pitchStrideOpIdx));
+          int64_t pitchBytes = pitchSt ? (*pitchSt * eBytesConst) : 0;
+          if (!pitchSt || pitchBytes < roundedBytes) {
+            // pitch too small or unknown: cannot safely widen base_width.
+            LDBG("NaN-padded load: base_width="
+                 << innerBytes << " not 4-aligned, pitch=" << pitchBytes
+                 << " < rounded=" << roundedBytes
+                 << " (scalar fallback): " << *op);
+            return;
+          }
+          // pitch >= rounded: safe to use the rounded base_width.
+          // Override baseWidth with the rounded constant so the HW constraint
+          // base_width % 4 == 0 (and pitch >= base_width) are both satisfied.
+          baseWidth =
+              arith::ConstantIntOp::create(builder, loc, roundedBytes, 32);
+          LDBG("NaN-padded load: rounded base_width "
+               << innerBytes << " -> " << roundedBytes
+               << " (pitch=" << pitchBytes << "): " << *op);
+        }
+      }
+
+      // Row direction (VNNI): no pitch equivalent for base_height; fall back
+      // when K is odd because the hardware may pair the last two K rows into
+      // one i32 word and zero both if the last row is OOB.
       bool outerShapeAligned =
           llvm::all_of(allDescs, [&](tt::MakeTensorDescOp d) {
             auto sh = tt::intel::getFoldedConstantValue(
                 d->getOperand(1 + (descRank - 2)));
             return !sh || (*sh % 2 == 0);
           });
-      if (!innerShapeAligned || !outerShapeAligned) {
-        LDBG("Skipping 2D block load for NaN-padded load with non-i32-aligned "
-             "boundary (will use scalar loads): "
+      if (!outerShapeAligned) {
+        LDBG("NaN-padded load: odd outer shape (K-row), scalar fallback: "
              << *op);
         return;
       }
