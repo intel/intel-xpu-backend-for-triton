@@ -307,8 +307,8 @@ public:
       unsigned nativeK = dpasCap->systolicDepth * opsPerChan;
       bool kInstructionSupported = k >= nativeK && k % nativeK == 0;
 
-      constexpr int64_t minimumAcceleratedN = 16;
-      bool nSupported = n >= minimumAcceleratedN;
+      unsigned minimumAcceleratedN = dpasCap->executionSize;
+      bool nSupported = n >= static_cast<int64_t>(minimumAcceleratedN);
 
       if (!resultShapeSupported || !kLayoutSupported ||
           !kInstructionSupported || !nSupported) {
