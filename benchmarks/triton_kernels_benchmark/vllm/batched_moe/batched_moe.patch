@@ -1,3 +1,33 @@
+diff --git a/tests/kernels/moe/test_batched_moe.py b/tests/kernels/moe/test_batched_moe.py
+index 3c605ced6..be50a84a3 100644
+--- a/tests/kernels/moe/test_batched_moe.py
++++ b/tests/kernels/moe/test_batched_moe.py
+@@ -392,8 +392,13 @@ def _run_td(A, B, num_expert_tokens, use_td: bool):
+     max_tokens = A.shape[1]
+     K = A.shape[2]
+     N = B.shape[1]
+-    BM = BN = BK = 64
+-    grid = (E, triton.cdiv(max_tokens, BM) * triton.cdiv(N, BN))
++
++    def grid(meta):
++        return (
++            triton.cdiv(max_tokens, meta["BLOCK_M"]) * triton.cdiv(N, meta["BLOCK_N"]),
++            E,
++        )
++
+     batched_triton_kernel[grid](
+         A,
+         B,
+@@ -426,9 +431,6 @@ def _run_td(A, B, num_expert_tokens, use_td: bool):
+         False,
+         False,
+         False,
+-        BLOCK_M=BM,
+-        BLOCK_N=BN,
+-        BLOCK_K=BK,
+         USE_TD=use_td,
+     )
+     return out
 diff --git a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
 index 609b28a95..6ceb8d9ff 100644
 --- a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
@@ -135,12 +165,15 @@ index 609b28a95..6ceb8d9ff 100644
      num_pid_n = tl.cdiv(N, BLOCK_N)
      pid_m = pid_mn // num_pid_n
      pid_n = pid_mn % num_pid_n
-@@ -449,8 +487,8 @@ def invoke_moe_batched_triton_kernel(
+@@ -449,8 +487,9 @@ def invoke_moe_batched_triton_kernel(
      BLOCK_K = config["BLOCK_SIZE_K"]
  
-     grid = (
+-    grid = (
 -        expert_num_tokens.size(0),
-         triton.cdiv(max_num_tokens, BLOCK_M) * triton.cdiv(B.size(1), BLOCK_N),
+-        triton.cdiv(max_num_tokens, BLOCK_M) * triton.cdiv(B.size(1), BLOCK_N),
++    grid = lambda meta: (
++        triton.cdiv(max_num_tokens, meta["BLOCK_M"])
++        * triton.cdiv(B.size(1), meta["BLOCK_N"]),
 +        expert_num_tokens.size(0),
      )
  

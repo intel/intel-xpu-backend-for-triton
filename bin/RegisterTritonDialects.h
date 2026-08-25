@@ -125,6 +125,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::registerConvertTritonGPUToLLVMPass();
   mlir::triton::registerConvertNVGPUToLLVMPass();
   mlir::triton::registerAllocateSharedMemoryNvPass();
+  mlir::triton::registerSetMinimumSharedMemoryPass();
   mlir::registerLLVMDIScope();
   mlir::triton::gpu::intel::registerTritonAnnotateModulePass();
   mlir::triton::gpu::intel::registerTritonIntelGPUPasses();
@@ -134,7 +135,6 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::registerTritonGENToLLVMPasses();
   mlir::triton::registerTritonGENToSPIRVPasses();
   mlir::LLVM::registerInlinerInterface(registry);
-  mlir::NVVM::registerInlinerInterface(registry);
   mlir::registerLLVMDILocalVariable();
 
   // TritonAMDGPUToLLVM passes

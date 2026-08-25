@@ -4,6 +4,8 @@ add_triton_library(TritonIntelAnalysis
     AxisInfoExt.cpp
     Liveness.cpp
     RegisterPressure.cpp
+    SignedDivRemDeduction.cpp
+    SignednessProver.cpp
     SpatialReuseAnalysis.cpp
     StrideInfo.cpp
     TemporalReuseAnalysis.cpp

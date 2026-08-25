@@ -206,8 +206,15 @@ getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
   }
 
   const unsigned numLanes = 1 << basesOfLane.size();
-  // The slice of a name is not distributed densely across the lane. It is not
-  // supported by block io.
+  // Density check: every lane must own exactly one packed value.  This
+  // enforces the hardware's fixed delivery rule (lane = packedFlatIndex %
+  // threadsPerWarp, register = packedFlatIndex / threadsPerWarp).  A register
+  // basis that sits below full lane coverage — e.g. at packed-flat stride 1
+  // when threadsPerWarp = 32 — means one lane's values are interleaved with
+  // another's and cannot be expressed as a valid 2D block tile.  The
+  // packing loop must absorb all per-lane register bases before the lane
+  // walk reaches them; if it cannot (due to the MAX_BITS cap), the layout
+  // is unsupported and this check rejects it.
   if ((product<unsigned>(tileShape) / numElemPerPackedVal) != numLanes)
     return BlockIOTileSizeInfo::unknown();
 

@@ -801,15 +801,6 @@ struct TritonIntelGPUInferLayoutInterface
     return success();
   }
 
-  LogicalResult verifyCatOpEncodingCompatibility(Operation *op) const override {
-    auto cat = cast<CatOp>(op);
-    if (!isLegalCatEncoding(cat, cat.getType().getEncoding()))
-      return op->emitError(
-          "tt.cat result encoding requires matching non-broadcast register "
-          "count");
-    return success();
-  }
-
   // Given a src shape + encoding and a dst shape, our goal is to compute a dst
   // encoding that makes the reshape a "nop".  That is, if GPU thread [x,y,z]
   // contains elements [a,b,c,d] before the reshape, it contains those same
