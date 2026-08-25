@@ -3833,11 +3833,19 @@ def get_test_dot_small_k_wmma_cases():
 def get_test_small_dots_cases():
     if not (is_cuda() or is_xpu()):
         return []
-    return [(2, 4, 32, 1, False, False, 'None', 'ieee', 'float16', 'float32', 1, None),
-            (1, 2, 32, 1, False, False, 'None', 'ieee', 'float8e5', 'float32', 1, None),
-            # N=8: TF32 K=8 (wgmma.m64n8k8, sm90+) and FP16 K=16 (wgmma.m64n8k16)
-            (64, 8, 8, 4, False, False, 'None', 'tf32', 'float32', 'float32', 1, None),
-            (64, 8, 16, 4, False, False, 'None', 'ieee', 'float16', 'float32', 1, None)]
+    cases = [(2, 4, 32, 1, False, False, 'None', 'ieee', 'float16', 'float32', 1, None),
+             (1, 2, 32, 1, False, False, 'None', 'ieee', 'float8e5', 'float32', 1, None),
+             # N=8: TF32 K=8 (wgmma.m64n8k8, sm90+) and FP16 K=16 (wgmma.m64n8k16)
+             (64, 8, 8, 4, False, False, 'None', 'tf32', 'float32', 'float32', 1, None),
+             (64, 8, 16, 4, False, False, 'None', 'ieee', 'float16', 'float32', 1, None)]
+    if is_xpu():
+        cases.extend([
+            (16, 8, 16, 4, False, False, 'None', 'ieee', 'bfloat16', 'float32', 1, None),
+            (16, 8, 8, 4, False, False, 'None', 'ieee', 'float16', 'float32', 1, None),
+            (16, 8, 8, 4, False, False, 'None', 'ieee', 'bfloat16', 'float32', 1, None),
+            (16, 4, 16, 4, False, False, 'None', 'ieee', 'bfloat16', 'float32', 1, None),
+        ])
+    return cases
 
 
 @pytest.mark.interpreter
@@ -3869,10 +3877,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         if input_precision == "bf16x3" or input_precision == "bf16x6":
             pytest.xfail(f"input_precision {input_precision} is not supported in the interpreter")
     else:
-        if is_xpu():
-            if (M < 8 or N < 16 or (K < 16 and in_dtype == 'float16') or (K < 8 and in_dtype == 'float32')):
-                pytest.xfail("XPU: small dots are not supported")
-        elif not is_hip() and K < 16:
+        if not is_xpu() and not is_hip() and K < 16:
             tf32_n8 = (in_dtype == 'float32' and N == 8 and K == 8 and input_precision == 'tf32')
             if in_dtype != 'float64' and not tf32_n8:
                 pytest.skip("small dots are supported only on HIP at the moment")

@@ -16,10 +16,12 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/ADT/bit.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <optional>
@@ -287,6 +289,34 @@ public:
 
     Type elemType = oldAType.getElementType();
     unsigned opsPerChan = getOpsPerChannel(elemType, mod);
+
+    // Verify shape for DPAS dot. (N >= minimumAcceleratedN),
+    // (K >= nativeK and K is divisible by nativeK)
+    // and (dimension > 0 && isPowerOf2). Does not apply
+    // to tt::DotScaledOp.
+    if constexpr (std::is_same_v<OpTy, tt::DotOp>) {
+      size_t rank = retShape.size();
+      int64_t n = retShape[rank - 1];
+      int64_t k = oldAType.getShape().back();
+
+      bool resultShapeSupported = llvm::all_of(retShape, [](int64_t dimension) {
+        return dimension > 0 && llvm::isPowerOf2_64(dimension);
+      });
+      bool kLayoutSupported = k > 0 && llvm::isPowerOf2_64(k);
+
+      unsigned nativeK = dpasCap->systolicDepth * opsPerChan;
+      bool kInstructionSupported = k >= nativeK && k % nativeK == 0;
+
+      constexpr int64_t minimumAcceleratedN = 16;
+      bool nSupported = n >= minimumAcceleratedN;
+
+      if (!resultShapeSupported || !kLayoutSupported ||
+          !kInstructionSupported || !nSupported) {
+        return rewriter.notifyMatchFailure(
+            op, "dot shape is not supported by DPAS; use FMA");
+      }
+    }
+
     SmallVector<unsigned> warpsPerTile =
         getWarpsPerTile(op, *dpasCap, retShape, numWarps);
     unsigned threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
