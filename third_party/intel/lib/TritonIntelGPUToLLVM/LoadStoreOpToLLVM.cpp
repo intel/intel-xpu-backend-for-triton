@@ -4155,85 +4155,97 @@ struct Subgroup2DBlockLoadOpConversion
     // Split-load path: 2D block load covers [0, fixupColStart), scalar loads
     // fix up the remaining columns [fixupColStart, innerShape).
     //
-    // The 2D block load uses floor_aligned base_width (set in LowerTo2DBlockLoad)
-    // which is spec-compliant (base_width % 4 == 0 and base_width <= pitch).
-    // Hardware zero-pads columns >= floor_aligned (including the boundary cols).
-    // We then scalar-load those boundary in-bounds columns to recover correct
-    // values, and apply NaN for the truly OOB columns (col >= innerShape).
+    // The 2D block load uses floor_aligned base_width which is spec-compliant.
+    // Hardware zero-pads columns >= floor_aligned. We scalar-load the boundary
+    // in-bounds columns and NaN the truly OOB columns (col >= innerShape).
+    //
+    // We rebuild a corrected NaN mask using the actual innerShape so that:
+    //  - non-fixup columns (col < fixupColStart) get correct OOB/row-NaN treatment
+    //  - fixup columns (col >= fixupColStart) get correct scalar-or-NaN selection
     int32_t fixupColStart = *op.getNanFixupColStart();
+    int32_t innerShape = *op.getNanFixupInnerShape();
 
-    // 1. Emit the 2D block load and get the unpacked per-register values.
+    // 1. Build corrected NaN masks using actual innerShape (not floor_aligned).
+    SmallVector<Value> correctedNanMask;
+    {
+      SmallVector<Value> corrShapes(rank);
+      for (unsigned i = 0; i < rank; ++i) {
+        if (static_cast<int>(i) == cfg.rowDim)
+          corrShapes[i] = baseHeight;
+        else if (static_cast<int>(i) == cfg.colDim)
+          corrShapes[i] = b.i32_val(innerShape);
+        else
+          corrShapes[i] = b.i32_val(tensorType.getDimSize(i));
+      }
+      unsigned surfaceColDimLocal = contiguousDim;
+      unsigned surfaceRowDimLocal =
+          (contiguousDim == rank - 1) ? rank - 2 : rank - 1;
+      SmallVector<Value> corrOffsets(rank, b.i32_val(0));
+      corrOffsets[surfaceColDimLocal] = baseOffsetX;
+      corrOffsets[surfaceRowDimLocal] = baseOffsetY;
+      correctedNanMask =
+          buildNaNMasks(loc, corrOffsets, corrShapes, tensorType, rewriter);
+    }
+
+    // 2. Emit the 2D block load and get the unpacked per-register values.
+    // Use the corrected NaN mask so non-fixup col and row OOB are handled.
     SmallVector<Value> unpackedVals;
     if (failed(buildBlock2DLoadValues(op, cfg, *llEncoding, pitch,
                                       computeAddress, /*otherElems=*/{},
-                                      nanMaskElems,
+                                      correctedNanMask,
                                       /*staticBaseHeight=*/std::nullopt,
                                       targetInfo, loc, rewriter, unpackedVals)))
       return failure();
 
-    // 2. Scalar-fixup boundary registers.
-    // emitIndices gives per-register (row, col) logical coordinates.
-    // For registers whose column falls in [fixupColStart, innerShape):
-    //   - scalar-load the actual value from memory
-    //   - if col >= innerShape (truly OOB): NaN (already handled by nanMaskElems
-    //     passed to unpackBlockLoadResult above, but we overwrite anyway for safety)
-    //   - if col < innerShape (in-bounds, hardware-zeroed by floor-aligned load):
-    //     use the scalar-loaded value
+    // 3. Scalar-fixup registers in [fixupColStart, innerShape).
+    // unpackedVals for col in [fixupColStart, innerShape) is NaN (because the
+    // corrected mask still marks floor_aligned-col cols as OOB — wait, no:
+    // correctedNanMask uses innerShape for the col bound, so col < innerShape is
+    // in-bounds. But the 2D block load hardware zero-fills col >= floor_aligned.
+    // unpackBlockLoadResult applies the NaN mask only to the *loaded* value:
+    // if nanMask=true → keep loaded value (zero); if nanMask=false → NaN.
+    // For col in [fixupColStart, innerShape): correctedNanMask=true → value
+    //   is the hardware-zero (not NaN). We need to replace with scalar load.
+    unsigned numElems = getTotalElemsPerThread(tensorType);
     auto indices = emitIndices(loc, rewriter, targetInfo,
                                tensorType.getEncoding(), tensorType, true);
-    unsigned numElems = getTotalElemsPerThread(tensorType);
 
-    // innerShape derived from baseWidth (floor_aligned bytes) + fixupColStart.
-    // innerShape = fixupColStart + (number of boundary columns). We recover it
-    // from nanMaskElems: those are built with the original innerShape.
-    // Instead, derive innerShape from the base_width operand before rounding:
-    // innerShape * elemBytes = floor_aligned + (innerShape % 4) * elemBytes
-    // Since we can't easily recover it here, use nanMaskElems as the NaN oracle:
-    // nanMaskElems[i] = true means in-bounds (keep value), false means NaN.
-    // For boundary registers (col >= fixupColStart): scalar-load if in-bounds,
-    // otherwise the nanMaskElems[i]=false already caused unpackBlockLoadResult
-    // to store NaN — so we only need to fix the in-bounds ones.
+    // surfaceColDim: tensor dimension for the column (X) direction.
+    unsigned surfaceColDim = contiguousDim;
+    unsigned surfaceRowDim = (contiguousDim == rank - 1) ? rank - 2 : rank - 1;
 
-    // surfaceColDim: the tensor dimension corresponding to the column (X) direction.
-    unsigned surfaceColDim = memoryRowMajor ? rank - 1 : rank - 2;
-    // surfaceRowDim: the tensor dimension for the row (Y) direction.
-    unsigned surfaceRowDim = (surfaceColDim == rank - 1) ? rank - 2 : rank - 1;
-
-    // pitch in elements = pitch (bytes) / elemBytes
     Value pitchElems = b.udiv(pitch, elemBytes);
+    Value fixupColStartVal = b.i32_val(fixupColStart);
+    Value innerShapeVal = b.i32_val(innerShape);
 
     for (unsigned i = 0; i < numElems; ++i) {
-      // Per-register column (tile-local, before adding base offset).
       Value localCol = indices[i][surfaceColDim];
-      // Absolute column = localCol + baseOffsetX (may include alignment shift).
       Value absCol = b.add(localCol, baseOffsetX);
 
-      // Check if this register is in the boundary range that needs fixup.
-      // We use compile-time comparison since fixupColStart is a constant and
-      // linear layout indices for DPAS are also constant.
-      auto colConst = getConstantIntValue(absCol);
-      if (!colConst || *colConst < fixupColStart)
-        continue; // Not a boundary register — 2D block load value is correct.
+      // Runtime predicate: does this register need scalar fixup?
+      // col in [fixupColStart, innerShape): hardware-zeroed but should be actual value.
+      Value colNeedsFixup = b.icmp_sge(absCol, fixupColStartVal);
+      Value colInBounds = b.icmp_slt(absCol, innerShapeVal);
+      Value needsScalar = b.and_(colNeedsFixup, colInBounds);
 
-      // This register's column is in [fixupColStart, ...).
-      // nanMaskElems[i] tells us if the element is in-bounds (true) or OOB (false).
-      if (!nanMaskElems.empty() && !nanMaskElems[i]) {
-        // Truly OOB (col >= innerShape): unpackBlockLoadResult already set NaN.
-        continue;
-      }
-
-      // In-bounds boundary column: scalar-load the correct value.
+      // Scalar load for this element's position.
       Value localRow = indices[i][surfaceRowDim];
       Value absRow = b.add(localRow, baseOffsetY);
-      // scalarOffset = absRow * pitchElems + absCol
       Value scalarOff =
           b.add(b.mul(b.zext(int_ty(64), absRow),
                       b.zext(int_ty(64), pitchElems)),
                 b.zext(int_ty(64), absCol));
-      Value scalarPtr =
-          b.gep(ptr_ty(ctx, 1), eltTy, basePtr, scalarOff);
+      Value scalarPtr = b.gep(ptr_ty(ctx, 1), eltTy, basePtr, scalarOff);
       Value loaded = b.load(eltTy, scalarPtr);
-      unpackedVals[i] = loaded;
+      // Apply row NaN mask: correctedNanMask[i] is true if (row AND col) in-bounds.
+      // For fixup registers that are col-in-bounds but potentially row-OOB, we need
+      // the row-only check. correctedNanMask[i] = true means in-bounds on all dims.
+      // Since we know col is in-bounds (colInBounds=true here), correctedNanMask[i]
+      // tells us whether the row is also in-bounds.
+      Value scalarResult = b.select(correctedNanMask[i], loaded, unpackedVals[i]);
+
+      // Replace only the fixup registers (col in [fixupColStart, innerShape)).
+      unpackedVals[i] = b.select(needsScalar, scalarResult, unpackedVals[i]);
     }
 
     // 3. Pack and replace.

@@ -331,6 +331,7 @@ private:
 
     // Track the split-load fixup start column (absent = no fixup needed).
     IntegerAttr nanFixupAttr;
+    IntegerAttr nanFixupInnerShapeAttr;
 
     if (padNan) {
       unsigned eBytesConst = elemSizeInBits / 8;
@@ -374,9 +375,11 @@ private:
               return;
             }
             int32_t fixupCol = (int32_t)(floorAligned / eBytesConst);
+            int32_t innerShape = (int32_t)(innerBytes / eBytesConst);
             baseWidth =
                 arith::ConstantIntOp::create(builder, loc, floorAligned, 32);
             nanFixupAttr = builder.getI32IntegerAttr(fixupCol);
+            nanFixupInnerShapeAttr = builder.getI32IntegerAttr(innerShape);
             LDBG("NaN-padded load: split-load prefix=" << floorAligned
                  << " fixup_col_start=" << fixupCol << ": " << *op);
           } else {
@@ -410,7 +413,7 @@ private:
         builder, loc, op.getType(), basePtr, baseWidth, baseHeight, basePitch,
         offsetX, offsetY, padNanAttr,
         ttgi::BlockIOModeAttr::get(builder.getContext(), memLayout),
-        nanFixupAttr);
+        nanFixupAttr, nanFixupInnerShapeAttr);
 
     // Propagate one_matrix_per_load attribute if present.
     if (oneMatrixPerLoadForBT)
