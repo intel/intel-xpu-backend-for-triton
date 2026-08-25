@@ -237,14 +237,16 @@ def TTIG_Subgroup2DBlockLoadOp : TTIG_Op<"2d_block_load"> {
     I32:$offset_x,
     I32:$offset_y,
     OptionalAttr<UnitAttr>:$pad_nan,
-    TTIG_BlockIOMode:$memory_layout
+    TTIG_BlockIOMode:$memory_layout,
+    OptionalAttr<I32Attr>:$nan_fixup_col_start
   );
 
   let results = (outs TT_Tensor:$result);
   let assemblyFormat = [{
     $base_ptr `,` $base_width `,` $base_height `,` $base_pitch
     `[` $offset_x `,` $offset_y `]`
-    `{` $memory_layout (`,` `pad_nan` $pad_nan^)? `}`
+    `{` $memory_layout (`,` `pad_nan` $pad_nan^)?
+        (`,` `nan_fixup_col_start` `=` $nan_fixup_col_start^)? `}`
     attr-dict `:` type($base_ptr) `->` type($result)
   }];
   let hasVerifier = 1;

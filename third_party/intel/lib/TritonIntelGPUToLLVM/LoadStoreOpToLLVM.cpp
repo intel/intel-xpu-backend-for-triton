@@ -3859,16 +3859,10 @@ struct SubTileAddress {
   Value pred;               // mask predicate, or null
 };
 
-/// Common lowering body for ttig.2d_block_load and ttig.2d_block_load_from_ptr.
-///
-/// Computes tile parameters, runs the sub-tile splitting loop, emits
-/// triton_gen.2Dblockload for each sub-tile, and replaces the op with the
-/// packed result.
-///
-/// The only thing that differs between descriptor and pointer loads is how
-/// each sub-tile's address is computed — provided via `computeAddress`.
-/// `staticBaseHeight` enables row-broadcast for stride=0 pointer loads.
-static LogicalResult lowerBlockLoad2D(
+/// Inner kernel for ttig.2d_block_load lowering: emits the hardware 2D block
+/// load instructions for each sub-tile and populates `unpackedLoadedVals`.
+/// Does NOT pack the result or replace the op — callers do that.
+static LogicalResult buildBlock2DLoadValues(
     Operation *op, const BlockIOConversionBase::Block2DLoadConfig &cfg,
     const LinearLayout &llEncoding, Value pitch,
     function_ref<SubTileAddress(unsigned registerIdx,
@@ -3876,9 +3870,9 @@ static LogicalResult lowerBlockLoad2D(
         computeAddress,
     ArrayRef<Value> otherElems, ArrayRef<Value> nanMaskElems,
     std::optional<int> staticBaseHeight,
-    const triton::intel::TargetInfo &targetInfo,
-    const LLVMTypeConverter *typeConverter, Location loc,
-    ConversionPatternRewriter &rewriter) {
+    const triton::intel::TargetInfo &targetInfo, Location loc,
+    ConversionPatternRewriter &rewriter,
+    SmallVector<Value> &unpackedLoadedVals) {
 
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   MLIRContext *ctx = rewriter.getContext();
@@ -3893,7 +3887,7 @@ static LogicalResult lowerBlockLoad2D(
       mlir::gpu::SubgroupIdOp::create(rewriter, loc,
                                       /*upperBound=*/nullptr));
 
-  SmallVector<Value> unpackedLoadedVals(cfg.numElems);
+  unpackedLoadedVals.resize(cfg.numElems);
   for (size_t elemIdx = 0; elemIdx < cfg.numElems;
        elemIdx += cfg.numElemsPerLoad) {
     unsigned registerIdx =
@@ -3969,6 +3963,28 @@ static LogicalResult lowerBlockLoad2D(
         ctx);
   }
 
+  return success();
+}
+
+/// Common lowering body for ttig.2d_block_load and ttig.2d_block_load_from_ptr.
+/// Wrapper around buildBlock2DLoadValues that also packs and replaces the op.
+static LogicalResult lowerBlockLoad2D(
+    Operation *op, const BlockIOConversionBase::Block2DLoadConfig &cfg,
+    const LinearLayout &llEncoding, Value pitch,
+    function_ref<SubTileAddress(unsigned registerIdx,
+                                ArrayRef<std::pair<StringAttr, Value>> offsets)>
+        computeAddress,
+    ArrayRef<Value> otherElems, ArrayRef<Value> nanMaskElems,
+    std::optional<int> staticBaseHeight,
+    const triton::intel::TargetInfo &targetInfo,
+    const LLVMTypeConverter *typeConverter, Location loc,
+    ConversionPatternRewriter &rewriter) {
+  SmallVector<Value> unpackedLoadedVals(cfg.numElems);
+  if (failed(buildBlock2DLoadValues(op, cfg, llEncoding, pitch, computeAddress,
+                                    otherElems, nanMaskElems, staticBaseHeight,
+                                    targetInfo, loc, rewriter,
+                                    unpackedLoadedVals)))
+    return failure();
   Value resultStruct =
       packTensorElements(loc, typeConverter, unpackedLoadedVals, rewriter,
                          op->getResult(0).getType());
@@ -4125,19 +4141,107 @@ struct Subgroup2DBlockLoadOpConversion
           addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, batchOffset);
         }
       }
-      // The 2D block load NaN-padding boundary fix is handled upstream in
-      // LowerTo2DBlockLoad.cpp (see convertDescriptorLoadOp).  When the
-      // boundary is not i32-aligned, the descriptor load is not lowered to
-      // ttig.2d_block_load and falls through to scalar loads instead.
-      // No base_width/height adjustment needed here.
       return {addrElem,        offsetX, offsetY, baseWidth, baseHeight,
               /*pred=*/Value()};
     };
 
-    return lowerBlockLoad2D(op, cfg, *llEncoding, pitch, computeAddress,
-                            /*otherElems=*/{}, nanMaskElems,
-                            /*staticBaseHeight=*/std::nullopt, targetInfo,
-                            getTypeConverter(), loc, rewriter);
+    // Fast path: no split-load fixup needed.
+    if (!op.getNanFixupColStart())
+      return lowerBlockLoad2D(op, cfg, *llEncoding, pitch, computeAddress,
+                              /*otherElems=*/{}, nanMaskElems,
+                              /*staticBaseHeight=*/std::nullopt, targetInfo,
+                              getTypeConverter(), loc, rewriter);
+
+    // Split-load path: 2D block load covers [0, fixupColStart), scalar loads
+    // fix up the remaining columns [fixupColStart, innerShape).
+    //
+    // The 2D block load uses floor_aligned base_width (set in LowerTo2DBlockLoad)
+    // which is spec-compliant (base_width % 4 == 0 and base_width <= pitch).
+    // Hardware zero-pads columns >= floor_aligned (including the boundary cols).
+    // We then scalar-load those boundary in-bounds columns to recover correct
+    // values, and apply NaN for the truly OOB columns (col >= innerShape).
+    int32_t fixupColStart = *op.getNanFixupColStart();
+
+    // 1. Emit the 2D block load and get the unpacked per-register values.
+    SmallVector<Value> unpackedVals;
+    if (failed(buildBlock2DLoadValues(op, cfg, *llEncoding, pitch,
+                                      computeAddress, /*otherElems=*/{},
+                                      nanMaskElems,
+                                      /*staticBaseHeight=*/std::nullopt,
+                                      targetInfo, loc, rewriter, unpackedVals)))
+      return failure();
+
+    // 2. Scalar-fixup boundary registers.
+    // emitIndices gives per-register (row, col) logical coordinates.
+    // For registers whose column falls in [fixupColStart, innerShape):
+    //   - scalar-load the actual value from memory
+    //   - if col >= innerShape (truly OOB): NaN (already handled by nanMaskElems
+    //     passed to unpackBlockLoadResult above, but we overwrite anyway for safety)
+    //   - if col < innerShape (in-bounds, hardware-zeroed by floor-aligned load):
+    //     use the scalar-loaded value
+    auto indices = emitIndices(loc, rewriter, targetInfo,
+                               tensorType.getEncoding(), tensorType, true);
+    unsigned numElems = getTotalElemsPerThread(tensorType);
+
+    // innerShape derived from baseWidth (floor_aligned bytes) + fixupColStart.
+    // innerShape = fixupColStart + (number of boundary columns). We recover it
+    // from nanMaskElems: those are built with the original innerShape.
+    // Instead, derive innerShape from the base_width operand before rounding:
+    // innerShape * elemBytes = floor_aligned + (innerShape % 4) * elemBytes
+    // Since we can't easily recover it here, use nanMaskElems as the NaN oracle:
+    // nanMaskElems[i] = true means in-bounds (keep value), false means NaN.
+    // For boundary registers (col >= fixupColStart): scalar-load if in-bounds,
+    // otherwise the nanMaskElems[i]=false already caused unpackBlockLoadResult
+    // to store NaN — so we only need to fix the in-bounds ones.
+
+    // surfaceColDim: the tensor dimension corresponding to the column (X) direction.
+    unsigned surfaceColDim = memoryRowMajor ? rank - 1 : rank - 2;
+    // surfaceRowDim: the tensor dimension for the row (Y) direction.
+    unsigned surfaceRowDim = (surfaceColDim == rank - 1) ? rank - 2 : rank - 1;
+
+    // pitch in elements = pitch (bytes) / elemBytes
+    Value pitchElems = b.udiv(pitch, elemBytes);
+
+    for (unsigned i = 0; i < numElems; ++i) {
+      // Per-register column (tile-local, before adding base offset).
+      Value localCol = indices[i][surfaceColDim];
+      // Absolute column = localCol + baseOffsetX (may include alignment shift).
+      Value absCol = b.add(localCol, baseOffsetX);
+
+      // Check if this register is in the boundary range that needs fixup.
+      // We use compile-time comparison since fixupColStart is a constant and
+      // linear layout indices for DPAS are also constant.
+      auto colConst = getConstantIntValue(absCol);
+      if (!colConst || *colConst < fixupColStart)
+        continue; // Not a boundary register — 2D block load value is correct.
+
+      // This register's column is in [fixupColStart, ...).
+      // nanMaskElems[i] tells us if the element is in-bounds (true) or OOB (false).
+      if (!nanMaskElems.empty() && !nanMaskElems[i]) {
+        // Truly OOB (col >= innerShape): unpackBlockLoadResult already set NaN.
+        continue;
+      }
+
+      // In-bounds boundary column: scalar-load the correct value.
+      Value localRow = indices[i][surfaceRowDim];
+      Value absRow = b.add(localRow, baseOffsetY);
+      // scalarOffset = absRow * pitchElems + absCol
+      Value scalarOff =
+          b.add(b.mul(b.zext(int_ty(64), absRow),
+                      b.zext(int_ty(64), pitchElems)),
+                b.zext(int_ty(64), absCol));
+      Value scalarPtr =
+          b.gep(ptr_ty(ctx, 1), eltTy, basePtr, scalarOff);
+      Value loaded = b.load(eltTy, scalarPtr);
+      unpackedVals[i] = loaded;
+    }
+
+    // 3. Pack and replace.
+    Value resultStruct =
+        packTensorElements(loc, getTypeConverter(), unpackedVals, rewriter,
+                           op->getResult(0).getType());
+    rewriter.replaceOp(op, {resultStruct});
+    return success();
   }
 };
 

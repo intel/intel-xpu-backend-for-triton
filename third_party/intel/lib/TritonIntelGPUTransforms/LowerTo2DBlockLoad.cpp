@@ -315,21 +315,29 @@ private:
     // elemSize) == 0.
     //
     // Fix strategy for the column direction (base_width):
-    //   1. If base_width is not 4-byte aligned, round it up: rounded =
-    //   ceil(w/4)*4
-    //   2. The HW also requires pitch >= base_width.  Check pitch from the
-    //      descriptor: if pitch >= rounded, override base_width with the
-    //      rounded value — the instruction is now spec-compliant and correct on
-    //      all HW.
-    //   3. If pitch < rounded (contiguous tensor with no padding row), a valid
-    //      2D block load cannot be emitted; fall back to scalar loads.
+    //   1. If base_width IS 4-byte aligned: use it directly.
+    //   2. If pitch >= rounded (ceil(base_width/4)*4): round up base_width —
+    //      spec-compliant and correct on all HW.
+    //   3. If pitch < rounded: use split-load —
+    //        a. floor_aligned = floor(base_width/4)*4 as base_width (always
+    //           <= pitch, so spec-compliant).
+    //        b. Record nan_fixup_col_start so LLVM lowering scalar-fixes the
+    //           columns in [floor_aligned/elemBytes, innerShape).
+    //      If floor_aligned < 64 bytes (HW minimum), fall back to scalar.
     //
     // For the K-row direction in VNNI loads (base_height), we currently always
     // fall back when the row count is odd, as there is no pitch equivalent in
     // the height direction.
+
+    // Track the split-load fixup start column (absent = no fixup needed).
+    IntegerAttr nanFixupAttr;
+
     if (padNan) {
       unsigned eBytesConst = elemSizeInBits / 8;
       constexpr unsigned kAlignBytes = 4; // i32 word = hardware OOB granularity
+      // HW requires base_width >= 64 and base_width % 16 == 0.
+      constexpr int64_t kHwMinWidth = 64;
+      constexpr int64_t kHwWidthAlign = 16;
 
       // Column direction: align base_width to kAlignBytes.
       // MakeTensorDescOp operand layout: base(0), shapes[rank](1..rank),
@@ -344,8 +352,7 @@ private:
             tt::intel::getFoldedConstantValue(d->getOperand(innerShapeOpIdx));
         if (!innerSh) {
           // Non-constant shape: cannot determine alignment statically.
-          // Proceed with 2D block load — the alignment may be fine at runtime,
-          // and we cannot do better without a runtime check.
+          // Proceed with 2D block load — the alignment may be fine at runtime.
           continue;
         }
         int64_t innerBytes = *innerSh * eBytesConst;
@@ -356,21 +363,30 @@ private:
               d->getOperand(pitchStrideOpIdx));
           int64_t pitchBytes = pitchSt ? (*pitchSt * eBytesConst) : 0;
           if (!pitchSt || pitchBytes < roundedBytes) {
-            // pitch too small or unknown: cannot safely widen base_width.
-            LDBG("NaN-padded load: base_width="
-                 << innerBytes << " not 4-aligned, pitch=" << pitchBytes
-                 << " < rounded=" << roundedBytes
-                 << " (scalar fallback): " << *op);
-            return;
+            // pitch < rounded: try split-load with floor_aligned prefix.
+            // floor_aligned is always <= pitch (since floor <= innerBytes =
+            // pitch for contiguous tensors), so the 2D block load is valid.
+            int64_t floorAligned = (innerBytes / kAlignBytes) * kAlignBytes;
+            if (floorAligned < kHwMinWidth || floorAligned % kHwWidthAlign != 0) {
+              // floor_aligned too small for a valid 2D block load instruction.
+              LDBG("NaN-padded load: floor_aligned=" << floorAligned
+                   << " below HW minimum, scalar fallback: " << *op);
+              return;
+            }
+            int32_t fixupCol = (int32_t)(floorAligned / eBytesConst);
+            baseWidth =
+                arith::ConstantIntOp::create(builder, loc, floorAligned, 32);
+            nanFixupAttr = builder.getI32IntegerAttr(fixupCol);
+            LDBG("NaN-padded load: split-load prefix=" << floorAligned
+                 << " fixup_col_start=" << fixupCol << ": " << *op);
+          } else {
+            // pitch >= rounded: safe to round up base_width.
+            baseWidth =
+                arith::ConstantIntOp::create(builder, loc, roundedBytes, 32);
+            LDBG("NaN-padded load: rounded base_width "
+                 << innerBytes << " -> " << roundedBytes
+                 << " (pitch=" << pitchBytes << "): " << *op);
           }
-          // pitch >= rounded: safe to use the rounded base_width.
-          // Override baseWidth with the rounded constant so the HW constraint
-          // base_width % 4 == 0 (and pitch >= base_width) are both satisfied.
-          baseWidth =
-              arith::ConstantIntOp::create(builder, loc, roundedBytes, 32);
-          LDBG("NaN-padded load: rounded base_width "
-               << innerBytes << " -> " << roundedBytes
-               << " (pitch=" << pitchBytes << "): " << *op);
         }
       }
 
@@ -393,7 +409,8 @@ private:
     auto blockLoadOp = ttgi::Subgroup2DBlockLoadOp::create(
         builder, loc, op.getType(), basePtr, baseWidth, baseHeight, basePitch,
         offsetX, offsetY, padNanAttr,
-        ttgi::BlockIOModeAttr::get(builder.getContext(), memLayout));
+        ttgi::BlockIOModeAttr::get(builder.getContext(), memLayout),
+        nanFixupAttr);
 
     // Propagate one_matrix_per_load attribute if present.
     if (oneMatrixPerLoadForBT)
