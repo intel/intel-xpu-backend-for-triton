@@ -343,10 +343,10 @@ private:
         auto innerSh =
             tt::intel::getFoldedConstantValue(d->getOperand(innerShapeOpIdx));
         if (!innerSh) {
-          // Non-constant shape: conservatively fall back to scalar.
-          LDBG(
-              "Non-constant inner shape for NaN-padded load (scalar): " << *op);
-          return;
+          // Non-constant shape: cannot determine alignment statically.
+          // Proceed with 2D block load — the alignment may be fine at runtime,
+          // and we cannot do better without a runtime check.
+          continue;
         }
         int64_t innerBytes = *innerSh * eBytesConst;
         if (innerBytes % kAlignBytes != 0) {
