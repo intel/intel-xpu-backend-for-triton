@@ -169,10 +169,12 @@ tt.func public @nested_loops(%ub: i32, %ptr: !tt.ptr<i32>) -> tensor<1x64xi32> {
 // CHECK:           %[[INNER:.*]]:3 = scf.for {{.*}} iter_args(%[[IDX:.*]] = %{{.*}}, %{{.*}} = %{{.*}}, %[[IFLAG:.*]] = %{{.*}})
 // CHECK:             %[[COND:.*]] = arith.cmpi sge, %[[IDX]], %{{.*}} : tensor<1x64xi32>
 // CHECK:             arith.remui %[[IDX]], %{{.*}} : tensor<1x64xi32>
+// CHECK-NOT:         tt.assert
 // CHECK:             %[[IAND:.*]] = arith.andi %[[IFLAG]], %[[COND]] : tensor<1x64xi1>
 // CHECK:             scf.yield %{{.*}}, %{{.*}}, %[[IAND]]
 // CHECK:           }
 // CHECK:           %[[OAND:.*]] = arith.andi %[[OFLAG]], %[[INNER]]#2 : tensor<1x64xi1>
+// CHECK-NOT:       tt.assert
 // CHECK:           scf.yield %[[INNER]]#1, %[[OAND]]
 // CHECK:         }
 // CHECK:         tt.assert %[[OUTER]]#1
