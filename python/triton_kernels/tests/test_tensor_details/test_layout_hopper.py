@@ -135,7 +135,7 @@ def _upcast_mxfp4_to_bf16(Y, X, XScale, x_stride_m, x_stride_n, x_scale_stride_m
 
 
 @pytest.mark.xfail(not is_cuda(), reason="Only supported on cuda", run=False)
-@pytest.mark.skipif(not cuda_capability_geq(9), reason="Only supported for capability >= 9")
+@pytest.mark.xfail(not cuda_capability_geq(9), reason="Only supported for capability >= 9", run=False)
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("mx_axis", [0, 1])
 def test_upcast_mxfp4_to_bf16(num_warps, mx_axis):

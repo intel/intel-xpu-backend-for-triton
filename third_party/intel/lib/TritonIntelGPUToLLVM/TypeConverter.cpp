@@ -8,6 +8,21 @@
 
 #include "intel/include/TritonIntelGPUToLLVM/TypeConverter.h"
 
+/// Map a `!tt.ptr` address space to the SPIR-V/OpenCL storage class Intel
+/// lowers to: global memory is 1, everything else is generic (0).
+static unsigned getSPIRVAddressSpace(triton::PtrAddrSpace space) {
+  switch (space) {
+  case triton::PtrAddrSpace::Global:
+  // Read-only global memory is not a separate storage class here; `tl.const`
+  // is carried through decorations instead.
+  case triton::PtrAddrSpace::Constant:
+    return 1;
+  case triton::PtrAddrSpace::Descriptor:
+    return 0;
+  }
+  llvm_unreachable("unknown PtrAddrSpace");
+}
+
 static Type convertTritonPointerType(triton::PointerType type) {
   MLIRContext *ctx = type.getContext();
   Type pointeeType = type.getPointeeType();
@@ -26,12 +41,14 @@ static Type convertTritonPointerType(triton::PointerType type) {
     for (size_t i = 0; i < 2 * shape.size(); ++i)
       types.push_back(IntegerType::get(ctx, 64));
 
-    types.push_back(LLVM::LLVMPointerType::get(ctx, type.getAddressSpace()));
+    types.push_back(LLVM::LLVMPointerType::get(
+        ctx, getSPIRVAddressSpace(type.getAddressSpace())));
 
     return LLVM::LLVMStructType::getLiteral(ctx, types);
   }
 
-  return LLVM::LLVMPointerType::get(ctx, type.getAddressSpace());
+  return LLVM::LLVMPointerType::get(
+      ctx, getSPIRVAddressSpace(type.getAddressSpace()));
 }
 
 static Type convertTritonDescType(triton::TensorDescType type) {
