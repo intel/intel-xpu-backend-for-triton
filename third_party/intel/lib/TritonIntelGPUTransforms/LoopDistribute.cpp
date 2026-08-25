@@ -3,6 +3,7 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/Debug.h"
 
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
@@ -23,6 +24,76 @@ namespace tt = mlir::triton;
 STATISTIC(NumLoopsDistributed, "Number of loops distributed");
 
 namespace {
+
+/// Return the GRF budget in bytes per hardware thread for \p grfMode.
+///
+/// Explicit sizes ("128", "256", "512") map to the exact per-thread budget.
+/// For "default" and "auto" the JIT picks the size, and a 128-GRF kernel that
+/// spills at all is automatically rebuilt with 256 GRF (`MAX_REG_SPILL` is 0 in
+/// `third_party/intel/backend/compiler.py`, `max_reg_spill` is 0 in
+/// `third_party/intel/backend/driver.c`), so the effective budget of an
+/// unpinned kernel that survives compilation is the 256-GRF one. Assuming the
+/// larger budget there is also the conservative direction for this pass: it
+/// makes distribution fire less often, and distributing a loop whose
+/// accumulators already fit is a net loss.
+///
+/// Note: `HoistLayoutConversions.cpp` has a same-named helper that defaults to
+/// the *smaller* budget instead, because for that pass a smaller budget is the
+/// conservative choice (it hoists less). The two are intentionally separate.
+///
+/// \param grfMode  The GRF mode string ("default", "128", "256", "512", or
+///                 "auto").
+/// \return         The GRF budget in bytes per hardware thread.
+unsigned getGRFBytesPerThread(StringRef grfMode) {
+  return llvm::StringSwitch<unsigned>(grfMode)
+      .Case("128", 4096)
+      .Case("256", 8192)
+      .Case("512", 16384)
+      .Default(8192);
+}
+
+/// Returns true if distributing a loop containing \p dots is expected to pay
+/// off, i.e. if the accumulators the fused loop must keep live do not fit in
+/// the register budget.
+///
+/// A dot's accumulator is distributed over all `numWarps` warps, so the fused
+/// loop holds `sum(accumulator bytes) / numWarps` bytes per hardware thread.
+/// That is compared against the GRF budget; `threadsPerWarp` cancels out of
+/// the comparison (dividing both sides by it compares bytes per lane instead),
+/// so it is not needed here.
+///
+/// The per-warp share is a slight underestimate for a tile too small to fill
+/// `warpsPerCTA`: such a layout replicates the accumulator across warps rather
+/// than splitting it. That errs towards not distributing, which is the safe
+/// direction.
+///
+/// All arithmetic is done in 64-bit: byte products of large accumulators can
+/// exceed the 32-bit range.
+///
+/// \param dots      The dot operations found in the loop body.
+/// \param numWarps  Number of warps the kernel is compiled for.
+/// \param grfBudget The GRF budget in bytes per hardware thread.
+/// \return          True if the loop should be distributed.
+bool isProfitableToDistribute(ArrayRef<tt::DotOp> dots, unsigned numWarps,
+                              unsigned grfBudget) {
+  if (numWarps == 0)
+    return false;
+
+  // A dot's result type is constrained to a ranked tensor of int or float, so
+  // the element size is always available.
+  uint64_t accBytes = 0;
+  for (tt::DotOp dot : dots) {
+    RankedTensorType accType = dot.getType();
+    accBytes += static_cast<uint64_t>(accType.getNumElements()) *
+                (accType.getElementTypeBitWidth() / 8);
+  }
+
+  uint64_t accBytesPerThread = accBytes / numWarps;
+  LDBG("Cost model: accumulators use "
+       << accBytesPerThread << " bytes/thread, budget is " << grfBudget
+       << " bytes/thread");
+  return accBytesPerThread > grfBudget;
+}
 
 /// Computes the backward slice of `root` -- i.e. the ops it transitively
 /// depends on, including its own defining op -- following values captured
@@ -116,7 +187,13 @@ enum class Owner { Both, Dot0, Dot1 };
 
 /// Try to distribute a for loop with exactly two dot operations into two
 /// separate loops. Returns true if the transformation was applied.
-bool tryDistributeLoop(scf::ForOp forOp) {
+///
+/// \param useCostModel When true, only distribute loops the profitability cost
+///                     model accepts; when false, distribute every legal loop.
+/// \param numWarps     Number of warps the kernel is compiled for.
+/// \param grfBudget    The GRF budget in bytes per hardware thread.
+bool tryDistributeLoop(scf::ForOp forOp, bool useCostModel, unsigned numWarps,
+                       unsigned grfBudget) {
   Block *body = forOp.getBody();
 
   // Collect all dot operations in the loop body (top-level only).
@@ -130,6 +207,13 @@ bool tryDistributeLoop(scf::ForOp forOp) {
   if (dots.size() != 2) {
     LDBG("Skipping loop: does not have exactly 2 dots (has " << dots.size()
                                                              << ")");
+    return false;
+  }
+
+  // Consult the cost model as soon as the accumulators are known, before the
+  // (more expensive) legality analysis below.
+  if (useCostModel && !isProfitableToDistribute(dots, numWarps, grfBudget)) {
+    LDBG("Skipping loop: cost model rejected it");
     return false;
   }
 
@@ -477,6 +561,7 @@ public:
 
   void runOnOperation() override {
     ModuleOp mod = getOperation();
+    unsigned grfBudget = getGRFBytesPerThread(grfMode);
 
     // Collect loops first to avoid modifying while walking. Post-order
     // (the default, made explicit here) visits inner loops before outer
@@ -488,7 +573,7 @@ public:
         [&](scf::ForOp forOp) { loops.push_back(forOp); });
 
     for (scf::ForOp forOp : loops) {
-      tryDistributeLoop(forOp);
+      tryDistributeLoop(forOp, useCostModel, numWarps, grfBudget);
     }
   }
 };
