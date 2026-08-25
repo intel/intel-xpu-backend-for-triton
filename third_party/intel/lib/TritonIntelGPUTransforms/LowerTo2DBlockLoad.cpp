@@ -339,7 +339,7 @@ private:
       unsigned pitchStrideOpIdx =
           1 + descRank + (descRank - 2); // = 2*descRank-1
 
-      for (auto *d : allDescs) {
+      for (auto d : allDescs) {
         auto innerSh =
             tt::intel::getFoldedConstantValue(d->getOperand(innerShapeOpIdx));
         if (!innerSh) {
