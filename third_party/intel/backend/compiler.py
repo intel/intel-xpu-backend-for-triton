@@ -45,6 +45,7 @@ class XPUOptions:
     allow_fp8e4b15: bool = True
     grf_mode: str = 'default'
     loop_distribute: bool = knobs.intel.enable_loop_distribution
+    loop_distribute_cost_model: bool = knobs.intel.enable_loop_distribution_cost_model
     code_sinking: bool = knobs.intel.enable_code_sinking
     sub_32_dpas: bool = knobs.intel.enable_sub_32_dpas
     dynamic_shared_memory: bool = knobs.intel.dynamic_shared_memory
@@ -377,8 +378,17 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.ttir.add_reorder_broadcast(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
+        # `num_warps` and `grf_mode` have to be passed as pass options: this runs
+        # before `add_triton_annotate_module`, so neither is available as a
+        # module attribute yet.
         if opt.loop_distribute:
-            intel.passes.ttgpuir.add_loop_distribute(pm)
+            # Forced: distribute every legal loop, with no profitability gate,
+            # which keeps the autotunable option a pure A/B switch.
+            intel.passes.ttgpuir.add_loop_distribute(pm, False, opt.num_warps, opt.grf_mode)
+        elif opt.loop_distribute_cost_model:
+            # Gated: distribute only the loops whose fused accumulators exceed
+            # the register budget.
+            intel.passes.ttgpuir.add_loop_distribute(pm, True, opt.num_warps, opt.grf_mode)
         passes.ttir.add_loop_unroll(pm)
         pm.run(mod, 'make_ttir')
 

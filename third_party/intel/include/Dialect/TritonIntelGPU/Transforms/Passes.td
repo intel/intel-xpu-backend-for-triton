@@ -494,15 +494,70 @@ def TritonIntelGPULoopDistribute
 
   let description = [{
     Split an `scf.for` loop containing multiple `tt.dot` operations into
-    separate loops, each containing a single `tt.dot`. This reduces register
-    pressure (fewer live accumulators) and descriptor pressure (fewer active
-    2D block I/O descriptors per loop), at the cost of re-loading shared
-    operands.
+    separate loops, each containing a single `tt.dot`. Each resulting loop
+    updates one accumulator instead of all of them, and holds fewer live
+    2D block I/O descriptors, at the cost of re-loading the operands the
+    dots shared and of running the loop body more than once.
+
+    This is a *conditional* win, not an unconditional one: it pays off only
+    when the accumulators of the fused loop do not fit in the register
+    budget. When they already fit, the duplicated operand loads and the
+    extra loop make this pass a net loss, so it is off by default
+    (`TRITON_INTEL_ENABLE_LOOP_DISTRIBUTION`) and is exposed as an
+    autotunable option instead.
+
+    `use-cost-model` makes the pass distribute only the loops a
+    profitability model accepts:
+
+    ```
+    distribute iff  sum(accumulator bytes of the loop's dots) / num_warps
+                    >  grf_bytes_per_thread
+    ```
+
+    The threshold is the register-file size rather than a fitted constant:
+    measurements on BMG show the spill onset moving by exactly 2x when the
+    GRF budget doubles. `threads_per_warp` cancels out of the comparison, so
+    the model needs only the dots' result types, `num-warps` and `grf-mode`
+    -- no liveness analysis, and nothing that is unavailable this early in
+    the pipeline.
+
+    The model is deliberately *one-sided*: it only rejects loops whose
+    accumulators already fit. It does not reject loops that exceed the
+    budget by a large factor, even though distribution can lose there,
+    because no upper bound is derivable -- at 8x the budget `grf_mode=256`
+    still wins where `grf_mode=128` loses. It also misses wins at high
+    `num_warps` where nothing spills; those depend on the runtime problem
+    shape (which a compile-time pass cannot see: the same binary wins on one
+    shape and loses on another), so they belong to autotuning instead.
+    Empirically the model never rejects the best pass-off configuration of a
+    kernel, i.e. gating never regresses autotuned code.
+
+    Note that distribution does not remove the spill. Measurements on BMG
+    show the spill size unchanged or even larger after distribution, while
+    the loop still runs several times faster. The benefit comes from
+    shrinking the *per-iteration* working set -- each loop hot-loops over a
+    single accumulator -- rather than from lowering peak register pressure:
+    an accumulator produced by an earlier loop stays live across the later
+    ones.
+
+    Distributing a spilling loop also does not necessarily make it
+    competitive; it mainly recovers a badly-chosen tiling. Reducing the tile
+    size or raising `num_warps` so the fused loop fits is generally the
+    better fix when those knobs are available.
   }];
 
   let dependentDialects = [
     "mlir::triton::TritonDialect",
     "mlir::scf::SCFDialect"
+  ];
+
+  let options = [
+    Option<"useCostModel", "use-cost-model", "bool", /*default*/"false",
+           "Distribute only loops the profitability cost model accepts">,
+    Option<"numWarps", "num-warps", "unsigned", /*default*/"4",
+           "Number of warps the kernel is compiled for (cost model input)">,
+    Option<"grfMode", "grf-mode", "std::string", /*default*/"\"default\"",
+           "GRF mode: default, 128, 256, or auto (cost model input)">,
   ];
 }
 
