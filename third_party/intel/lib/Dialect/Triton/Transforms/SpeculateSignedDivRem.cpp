@@ -194,8 +194,8 @@ private:
     // negative divisor as a large positive one, so the result would be wrong
     // even for a non-negative dividend, and asserting the divisor is positive
     // would emit a check that fails on every launch for e.g. `x // -4`.
-    std::optional<int64_t> divisor = rhsInfo->getConstantValue();
-    if (!divisor.has_value() || *divisor <= 0)
+    const std::optional<APInt> &divisor = rhsInfo->getConstantValue();
+    if (!divisor.has_value() || !divisor->isStrictlyPositive())
       return false;
 
     if (!tt::intel::signedDivRemDeductionApplies(op, *lhsInfo, *rhsInfo))
