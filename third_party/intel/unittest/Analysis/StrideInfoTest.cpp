@@ -70,7 +70,7 @@ public:
   }
 
   BlockArgument addPtrArg(func::FuncOp funcOp, Type elemTy,
-                          unsigned addressSpace = 1) {
+                          PtrAddrSpace addressSpace = PtrAddrSpace::Global) {
     Block *block = &funcOp.getBody().front();
     auto ptrTy = PointerType::get(elemTy, addressSpace);
     FunctionType newFuncType = builder->getFunctionType(
@@ -257,7 +257,7 @@ TEST_F(StrideInfoTest, OneDimStreamingAddPtr) {
 
   // Create tensor<128x!tt.ptr<f16>> type
   auto encoding = makeBlocked({1}, {16}, {4}, {0});
-  auto ptrTy = PointerType::get(f16Ty, 1);
+  auto ptrTy = PointerType::get(f16Ty);
   auto tensorPtrTy = RankedTensorType::get({128}, ptrTy, encoding);
 
   // splat(base_ptr)
