@@ -675,29 +675,21 @@ private:
       LDBG("Expected 1D blocked encoding with order=[0], skip 1D reshape");
       return std::nullopt;
     }
-    unsigned spt = origEnc.getSizePerThread()[0];
-    unsigned tpw = origEnc.getThreadsPerWarp()[0];
-    unsigned wpc = origEnc.getWarpsPerCTA()[0];
-    unsigned spt1 = std::min(spt, static_cast<unsigned>(W));
-    if (spt1 == 0 || spt % spt1 != 0) {
-      LDBG("Original sizePerThread ("
-           << spt << ") not divisible by spt1=" << spt1 << ", skip 1D reshape");
+    int64_t blockSize = oneDTy.getShape()[0];
+    SmallVector<int64_t> srcShape = {blockSize};
+    SmallVector<int64_t> dstShape = {blockSize / W, W};
+    auto *interface =
+        cast<tt::DialectInferLayoutInterface>(&origEnc.getDialect());
+    Attribute dstEnc;
+    if (failed(interface->inferReshapeOpEncoding(srcShape, origEnc, dstShape,
+                                                 dstEnc, /*allowReorder=*/false,
+                                                 /*loc=*/std::nullopt)))
       return std::nullopt;
-    }
-    unsigned spt0 = spt / spt1;
-    unsigned tpw1 = std::min(tpw, static_cast<unsigned>(W) / spt1);
-    if (tpw1 == 0 || tpw % tpw1 != 0) {
-      LDBG("Original threadsPerWarp ("
-           << tpw << ") not divisible by tpw1=" << tpw1 << ", skip 1D reshape");
-      return std::nullopt;
-    }
-    unsigned tpw0 = tpw / tpw1;
-    return ttg::BlockedEncodingAttr::get(
-        ctx, {spt0, spt1}, {tpw0, tpw1}, {wpc, 1}, {1, 0},
-        ttg::CGAEncodingAttr::fromSplitParams(
-            ctx, /*CTAsPerCGA=*/SmallVector<unsigned>(2, 1),
-            /*CTASplitNum=*/SmallVector<unsigned>(2, 1),
-            /*CTAOrder=*/{0, 1}));
+    auto enc = dyn_cast<ttg::BlockedEncodingAttr>(dstEnc);
+    if (!enc)
+      LDBG("inferReshapeOpEncoding returned non-blocked encoding, "
+           "skip 1D reshape");
+    return enc ? std::optional(enc) : std::nullopt;
   }
 
   /// Detect 1D tensor-of-pointers StoreOp with strided access pattern
