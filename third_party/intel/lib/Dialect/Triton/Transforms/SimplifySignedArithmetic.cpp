@@ -1,5 +1,8 @@
+#include "intel/include/Analysis/Range.h"
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
+#include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/Verifier.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
@@ -18,6 +21,9 @@ namespace {
 
 class SignedArithmeticSimplifier {
 public:
+  SignedArithmeticSimplifier(const DataFlowSolver *solver = nullptr)
+      : solver(solver) {}
+
   void run(ModuleOp moduleOp) {
     SmallVector<arith::RemSIOp> remOpsToConvert;
     SmallVector<arith::DivSIOp> divOpsToConvert;
@@ -103,6 +109,14 @@ private:
 
   /// Returns true if value is provably non-negative (>= 0).
   bool isNonNegative(Value value) const {
+    // Check range analysis first
+    if (solver) {
+      if (auto range = tt::intel::collectRange(*solver, value)) {
+        if (range->smin().isNonNegative())
+          return true;
+      }
+    }
+
     Operation *defOp = value.getDefiningOp();
     if (!defOp)
       return false;
@@ -231,6 +245,14 @@ private:
     if (isPositiveConstant(value))
       return true;
 
+    // Check range analysis first
+    if (solver) {
+      if (auto range = tt::intel::collectRange(*solver, value)) {
+        if (range->smin().isStrictlyPositive())
+          return true;
+      }
+    }
+
     Operation *defOp = value.getDefiningOp();
     if (!defOp)
       return false;
@@ -250,6 +272,8 @@ private:
 
     return false;
   }
+
+  const DataFlowSolver *solver;
 };
 
 struct TritonIntelSimplifySignedArithmetic
@@ -258,8 +282,23 @@ struct TritonIntelSimplifySignedArithmetic
 public:
   void runOnOperation() final {
     ModuleOp moduleOp = getOperation();
-    SignedArithmeticSimplifier simplifier;
-    simplifier.run(moduleOp);
+
+    // Set up range analysis
+    DataFlowSolver solver;
+    DominanceInfo domInfo(moduleOp);
+    solver.load<tt::intel::IntegerRangeAnalysis>(moduleOp, domInfo);
+
+    if (failed(solver.initializeAndRun(moduleOp))) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "Range analysis failed, proceeding without it\n");
+      // Continue without range analysis - fall back to pattern matching only
+      SignedArithmeticSimplifier simplifier(nullptr);
+      simplifier.run(moduleOp);
+    } else {
+      SignedArithmeticSimplifier simplifier(&solver);
+      simplifier.run(moduleOp);
+    }
+
     assert(succeeded(verify(moduleOp)) && "Module verification failed");
   }
 };
