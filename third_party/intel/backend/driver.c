@@ -725,10 +725,17 @@ static int PyKernelArg_init(PyKernelArgObject *self, PyObject *args,
 
 static void PyKernelArg_free(void *ptr) { free(ptr); }
 
-// Zero-initialize with only the required head macro; remaining fields are set
-// in init_PyKernelArgType() to avoid designated initializers (C7555/C7556 on
-// MSVC).
-static PyTypeObject PyKernelArgType = {PyVarObject_HEAD_INIT(NULL, 0)};
+static PyTypeObject PyKernelArgType = {
+    PyVarObject_HEAD_INIT(NULL, 0).tp_name =
+        "triton.backends.intel.PyKernelArg",
+    .tp_basicsize = sizeof(PyKernelArgObject),
+    .tp_itemsize = 0,
+    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_doc = "Kernel Argument Metadata",
+    .tp_new = PyType_GenericNew,
+    .tp_init = (initproc)PyKernelArg_init,
+    .tp_dealloc = (destructor)PyKernelArg_dealloc,
+};
 
 static inline void gpuAssert(ze_result_t code, const char *file, int line) {
   if (code != ZE_RESULT_SUCCESS) {
@@ -1481,15 +1488,6 @@ extern "C" EXPORT_FUNC PyObject *launch(PyObject *args) {
 }
 
 extern "C" EXPORT_FUNC PyTypeObject *init_PyKernelArgType() {
-  PyKernelArgType.tp_name = "triton.backends.intel.PyKernelArg";
-  PyKernelArgType.tp_basicsize = sizeof(PyKernelArgObject);
-  PyKernelArgType.tp_itemsize = 0;
-  PyKernelArgType.tp_dealloc = (destructor)PyKernelArg_dealloc;
-  PyKernelArgType.tp_flags = Py_TPFLAGS_DEFAULT;
-  PyKernelArgType.tp_doc = "Kernel Argument Metadata";
-  PyKernelArgType.tp_init = (initproc)PyKernelArg_init;
-  PyKernelArgType.tp_new = PyType_GenericNew;
-
   if (PyType_Ready(&PyKernelArgType) < 0)
     return NULL;
 
