@@ -665,8 +665,8 @@ private:
   /// *to* it, the store converts *from* it *to* HW delivery.
   ///
   /// Returns std::nullopt if \p oneDTy does not carry a 1D blocked encoding
-  /// with order=[0], or if the 1D factors do not split evenly across [H, W].
-  static std::optional<ttg::BlockedEncodingAttr>
+  /// with order=[0], or if encoding inference fails for the [H, W] shape.
+  static std::optional<Attribute>
   derive2DConsumerEncoding(MLIRContext *ctx, RankedTensorType oneDTy,
                            int64_t W) {
     auto origEnc = dyn_cast<ttg::BlockedEncodingAttr>(oneDTy.getEncoding());
@@ -685,11 +685,7 @@ private:
                                                  dstEnc, /*allowReorder=*/false,
                                                  /*loc=*/std::nullopt)))
       return std::nullopt;
-    auto enc = dyn_cast<ttg::BlockedEncodingAttr>(dstEnc);
-    if (!enc)
-      LDBG("inferReshapeOpEncoding returned non-blocked encoding, "
-           "skip 1D reshape");
-    return enc ? std::optional(enc) : std::nullopt;
+    return dstEnc;
   }
 
   /// Detect 1D tensor-of-pointers StoreOp with strided access pattern
@@ -788,7 +784,7 @@ private:
     // Construct "consumer encoding" — the natural 2D reshape of the value's
     // original 1D encoding.
     auto valTensorTy = cast<RankedTensorType>(op.getValue().getType());
-    std::optional<ttg::BlockedEncodingAttr> consumerEnc =
+    std::optional<Attribute> consumerEnc =
         derive2DConsumerEncoding(ctx, valTensorTy, info->W);
     if (!consumerEnc)
       return;
@@ -900,7 +896,7 @@ private:
 
     // Construct "consumer encoding" — the natural 2D reshape of the original
     // 1D encoding, i.e. what the rest of the pipeline expects.
-    std::optional<ttg::BlockedEncodingAttr> consumerEnc =
+    std::optional<Attribute> consumerEnc =
         derive2DConsumerEncoding(ctx, ptrTensorTy, info->W);
     if (!consumerEnc)
       return;
