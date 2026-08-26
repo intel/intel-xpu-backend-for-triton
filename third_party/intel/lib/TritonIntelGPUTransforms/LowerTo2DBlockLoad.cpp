@@ -204,7 +204,7 @@ private:
     // per iteration. Struct layout: { shapes[rank], strides[rank], base_ptr }.
     Type i64Ty = builder.getI64Type();
     Type ptrType =
-        tt::PointerType::get(descType.getBlockType().getElementType(), 1);
+        tt::PointerType::get(descType.getBlockType().getElementType());
     SmallVector<Value> shapes(descRank);
     SmallVector<Value> strides(descRank);
     for (unsigned d = 0; d < descRank; ++d) {
@@ -347,8 +347,9 @@ private:
     if (op.getMask())
       maskAxisInfo = axisInfoAnalysis.getAxisInfo(op.getMask());
 
-    // For 1D->2D reshape loads, skip tile validation and use the stride
-    // attribute directly for pitch.
+    // Whether this load was annotated by the 1D→2D reshape in
+    // MaterializeBlockPointer. Used for pitch and base-height computation
+    // below.
     bool has1DReshapeStride =
         op->hasAttr(ttgi::TritonIntelGPUDialect::getBlockIOStrideAttrName());
 
@@ -360,31 +361,26 @@ private:
     int tileHeight = -1;
     int numPackedVals = -1;
     bool isTranspose = false;
-    if (has1DReshapeStride) {
-      // 1D reshape: conventional dims, no tile validation needed.
-      rowDim = memoryRowMajor ? rank - 2 : rank - 1;
-      colDim = memoryRowMajor ? rank - 1 : rank - 2;
-    } else {
-      Attribute encoding = tensorTy.getEncoding();
-      LinearLayout llEncoding =
-          cast<ttg::DistributedEncodingTrait>(encoding).toLinearLayout(
-              tensorTy.getShape());
-      if (!ttgi::validate2DBlockLoadTile(llEncoding, contiguousDim,
-                                         elemSizeInBits, tensorTy,
-                                         oneMatrixPerLoadForBT, maskAxisInfo)) {
-        LDBG("Tile validation failed for load: " << *op);
-        return;
-      }
-      auto sizeInfo = ttgi::getBlockIOLoadTileSize(llEncoding, contiguousDim,
-                                                   elemSizeInBits, maskAxisInfo,
-                                                   oneMatrixPerLoadForBT);
-      rowDim = sizeInfo.rowDim;
-      colDim = sizeInfo.colDim;
-      tileWidth = sizeInfo.tileWidth;
-      tileHeight = sizeInfo.tileHeight;
-      isTranspose = sizeInfo.transpose;
-      numPackedVals = sizeInfo.numElemPerPackedVal;
+
+    Attribute encoding = tensorTy.getEncoding();
+    LinearLayout llEncoding =
+        cast<ttg::DistributedEncodingTrait>(encoding).toLinearLayout(
+            tensorTy.getShape());
+    if (!ttgi::validate2DBlockLoadTile(llEncoding, contiguousDim,
+                                       elemSizeInBits, tensorTy,
+                                       oneMatrixPerLoadForBT, maskAxisInfo)) {
+      LDBG("Tile validation failed for load: " << *op);
+      return;
     }
+    auto sizeInfo =
+        ttgi::getBlockIOLoadTileSize(llEncoding, contiguousDim, elemSizeInBits,
+                                     maskAxisInfo, oneMatrixPerLoadForBT);
+    rowDim = sizeInfo.rowDim;
+    colDim = sizeInfo.colDim;
+    tileWidth = sizeInfo.tileWidth;
+    tileHeight = sizeInfo.tileHeight;
+    isTranspose = sizeInfo.transpose;
+    numPackedVals = sizeInfo.numElemPerPackedVal;
 
     // For the 2D block load surface, the pitch dimension is always the
     // non-contiguous memory direction. For transposed loads, rowDim is the

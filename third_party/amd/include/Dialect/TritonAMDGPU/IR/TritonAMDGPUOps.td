@@ -34,6 +34,7 @@ include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUOpInterfaces.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUMemoryEffects.td"
 
 include "mlir/IR/EnumAttr.td"
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
@@ -44,14 +45,13 @@ include "TritonAMDGPUAttrDefs.td"
 include "TritonAMDGPUOpInterfaces.td"
 
 
-class TT_AMDGPU_Op<string mnemonic, list<Trait> traits = []> :
-    Op<TritonAMDGPU_Dialect, mnemonic, !listconcat(traits, [])>;
+class TT_AMDGPU_Op<string mnemonic, list<Trait> traits = []>
+    : Op<TritonAMDGPU_Dialect, mnemonic, !listconcat(traits, [])>;
 
 //
 // Interfaces
 //
 def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
-def SharedMemory : Resource<"::mlir::triton::gpu::SharedMemory">;
 def L2Cache : Resource<"::mlir::triton::amd::L2Cache">;
 
 //===----------------------------------------------------------------------===//
@@ -265,7 +265,7 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
   AttrSizedOperandSegments,
   BufferOpInterface,
   DeclareOpInterfaceMethods<PredicatedOpInterface>,
-  TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "getPointerTypeToElement($_self)">,
+  TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "$_self", "::mlir::triton::elementTypeMatchesPointee">,
   TypesMatchWith<"result and offsets have the same shape", "result", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"result and mask have the same shape", "result", "mask", "getI1SameShape($_self)",
                  "(cast<BufferLoadOp>($_op).getMask() == nullptr) || std::equal_to<>()">,
@@ -304,7 +304,7 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
       $ptr `[` $offsets `]` (`,` $mask^)? (`,` $other^)?
       oilist(`cacheModifier` `=` $cache)
       (`stride` `=` $stride^)?
-      attr-dict `:` type($result)
+      attr-dict `:` qualified(type($ptr)) `->` type($result)
     }];
 }
 
@@ -316,7 +316,7 @@ def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
   AttrSizedOperandSegments,
   BufferOpInterface,
   DeclareOpInterfaceMethods<PredicatedOpInterface>,
-  TypesMatchWith<"dest element type matches pointee type of ptr", "dest", "ptr", "getPointerTypeToElement($_self)">,
+  TypesMatchWith<"dest element type matches pointee type of ptr", "dest", "ptr", "$_self", "::mlir::triton::elementTypeMatchesPointee">,
   TypesMatchWith<"infer mask shape from offsets",
                  "offsets", "mask", "getI1SameShape($_self)",
                  "(cast<BufferLoadToLocalOp>($_op).getMask() == nullptr) || std::equal_to<>()">,
@@ -331,7 +331,7 @@ def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
       This allows to use buffer_load_to_local even if the alignment cannot be proven based on IR.
     }];
     let arguments = (ins
-      Arg<TTG_MemDescType, "Shared memory slice to write to", [MemWrite<SharedMemory>]>:$dest,
+      Arg<TTG_MemDescType, "Shared memory slice to write to", GenericSharedWrite>:$dest,
       Arg<TT_Ptr, "Global memory scalar base pointer to load from", [MemRead<GlobalMemory>]>:$ptr,
       I32Tensor:$offsets,
       Optional<TT_BoolTensor>:$mask,
@@ -347,7 +347,7 @@ def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
     let assemblyFormat = [{
       $ptr `[` $offsets `]` (`mask` `=` $mask^)? (`other` `=` $other^)? (`stride` `=` $stride^)?
       oilist(`cacheModifier` `=` $cache) `into` $dest
-      attr-dict `:` type($ptr) `[` type($offsets) `]` type($other) `->` type($dest)
+      attr-dict `:` qualified(type($ptr)) `[` type($offsets) `]` type($other) `->` type($dest)
     }];
 }
 
@@ -361,11 +361,11 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
   BufferOpInterface,
   DeclareOpInterfaceMethods<PredicatedOpInterface>,
   TypesMatchWith<"result element type matches the value type", "result", "value", "$_self">,
-  TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "getPointerTypeToElement($_self)">,
+  TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "$_self", "::mlir::triton::elementTypeMatchesPointee">,
   TypesMatchWith<"result and offsets have the same shape", "result", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"result and mask have the same shape", "result", "mask", "getI1SameShape($_self)",
                  "(cast<BufferAtomicRMWOp>($_op).getMask() == nullptr) || std::equal_to<>()">,
-  TypesMatchWith<"value element type matches the pointed type of ptr", "value", "ptr", "getPointerTypeToElement($_self)">,
+  TypesMatchWith<"value element type matches the pointed type of ptr", "value", "ptr", "$_self", "::mlir::triton::elementTypeMatchesPointee">,
   TypesMatchWith<"value and offsets have the same shape", "value", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"value and mask have the same shape", "value", "mask", "getI1SameShape($_self)",
                  "(cast<BufferAtomicRMWOp>($_op).getMask() == nullptr) || std::equal_to<>()">,
@@ -394,10 +394,12 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
     );
     let results = (outs TT_Tensor:$result);
 
+    let hasVerifier = 1;
+
     let assemblyFormat = [{
         $atomic_rmw_op `,` $sem `,` $scope `,` $value `,` $ptr `[` $offsets `]` (`,` $mask^)?
         (`stride` `=` $stride^)?
-        attr-dict `:` type($result)
+        attr-dict `:` qualified(type($ptr)) `->` type($result)
     }];
 }
 
@@ -409,7 +411,7 @@ def BufferAtomicCASOp : TT_AMDGPU_Op<"buffer_atomic_cas", [
   BufferOpInterface,
   TypesMatchWith<"result element type matches the val type", "result", "val", "$_self">,
   TypesMatchWith<"result element type matches the cmp type", "result", "cmp", "$_self">,
-  TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "getPointerTypeToElement($_self)">,
+  TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "$_self", "::mlir::triton::elementTypeMatchesPointee">,
   TypesMatchWith<"result and offsets have the same shape", "result", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"val and offsets have the same shape", "val", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"val and cmp have the same shape", "val", "cmp", "$_self">,
@@ -435,10 +437,12 @@ def BufferAtomicCASOp : TT_AMDGPU_Op<"buffer_atomic_cas", [
     );
     let results = (outs TT_Tensor:$result);
 
+    let hasVerifier = 1;
+
     let assemblyFormat = [{
         $sem `,` $scope `,` $cmp `,` $val `,` $ptr `[` $offsets `]`
         (`stride` `=` $stride^)?
-        attr-dict `:` type($result)
+        attr-dict `:` qualified(type($ptr)) `->` type($result)
     }];
 }
 
@@ -451,7 +455,7 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
   SameLoadStoreOperandsEncoding,
   BufferOpInterface,
   DeclareOpInterfaceMethods<PredicatedOpInterface>,
-  TypesMatchWith<"value element type matches the pointed type of ptr", "value", "ptr", "getPointerTypeToElement($_self)">,
+  TypesMatchWith<"value element type matches the pointed type of ptr", "value", "ptr", "$_self", "::mlir::triton::elementTypeMatchesPointee">,
   TypesMatchWith<"value and offsets have the same shape", "value", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"value and mask have the same shape", "value", "mask", "getI1SameShape($_self)",
                  "(cast<BufferStoreOp>($_op).getMask() == nullptr) || std::equal_to<>()">,
@@ -483,11 +487,13 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
       DefaultValuedAttr<I32Attr, "1">:$contiguity
     );
 
+    let hasVerifier = 1;
+
     let assemblyFormat = [{
       $value `,` $ptr `[` $offsets `]` (`,` $mask^)?
       oilist(`cacheModifier` `=` $cache)
       (`stride` `=` $stride^)?
-      attr-dict `:` type($value)
+      attr-dict `:` qualified(type($ptr)) `->` type($value)
     }];
 }
 
@@ -507,6 +513,7 @@ def MaskedLoadOp : TT_AMDGPU_Op<"masked_load", []> {
     LLVM_Type:$falseVal,
     Optional<I32>:$multicastMask,
     DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
+    DefaultValuedAttr<BoolAttr, "false">:$isVolatile,
     DefaultValuedAttr<BoolAttr, "false">:$forceNoAlias
   );
 
@@ -515,6 +522,7 @@ def MaskedLoadOp : TT_AMDGPU_Op<"masked_load", []> {
   let assemblyFormat = [{
     $ptr `,` $mask `,` $falseVal (`,` $multicastMask^)?
     oilist(`cacheModifier` `=` $cache)
+    (`volatile` $isVolatile^)?
     (`forceNoAlias` $forceNoAlias^)?
     attr-dict `:` functional-type(operands, results)
   }];
@@ -671,7 +679,7 @@ def LocalLoadPackedTransposedOp : TT_AMDGPU_Op<"local_load_packed_transposed", [
       For example if A is 16x64 in shared memory, the result of this operation will be 32x32.
     }];
   let arguments = (ins
-    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
+    Arg<TTG_MemDescType, "", GenericSharedRead>:$src,
     Optional<TTG_AsyncToken>:$token
   );
   let results = (outs TT_Tensor:$result);
@@ -709,7 +717,7 @@ def AsyncCopyLocalToGlobalOp : TT_AMDGPU_Op<"async_copy_local_to_global", [
   }];
 
   let arguments = (ins
-    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
+    Arg<TTG_MemDescType, "", GenericSharedRead>:$src,
     Arg<TT_PtrTensor, "", [MemWrite<GlobalMemory>]>:$dst,
     Optional<I1Tensor>:$mask,
     DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
@@ -779,8 +787,8 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
 
   let arguments = (ins
     Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
-    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
-    Arg<Optional<TTG_MemDescType>, "", [MemWrite<SharedMemory>]>:$barrier,
+    Arg<TTG_MemDescType, "", GenericSharedWrite>:$result,
+    Arg<Optional<TTG_MemDescType>, "", BarrierSharedWrite>:$barrier,
     DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
     OptionalAttr<I32Attr>:$warp_used_hint
   );
@@ -823,7 +831,7 @@ def AsyncTDMFusedCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_fused_copy_global
 
   let arguments = (ins
     Arg<Variadic<TT_TensorDescType>, "", [MemRead<GlobalMemory>]>:$descs,
-    Arg<Variadic<TTG_MemDescType>, "", [MemWrite<SharedMemory>]>:$dests,
+    Arg<Variadic<TTG_MemDescType>, "", GenericSharedWrite>:$dests,
     DenseI32ArrayAttr:$warp_used_hints,
     DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache
   );
@@ -861,8 +869,8 @@ def AsyncTDMCopyLocalToGlobalOp : TT_AMDGPU_Op<"async_tdm_copy_local_to_global",
 
   let arguments = (ins
     Arg<TT_TensorDescType, "", [MemWrite<GlobalMemory>]>:$desc,
-    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
-    Arg<Optional<TTG_MemDescType>, "", [MemWrite<SharedMemory>]>:$barrier,
+    Arg<TTG_MemDescType, "", GenericSharedRead>:$src,
+    Arg<Optional<TTG_MemDescType>, "", BarrierSharedWrite>:$barrier,
     DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache
   );
 
@@ -905,8 +913,8 @@ def AsyncTDMScatterOp : TT_AMDGPU_Op<"async_tdm_scatter", [
   let arguments = (ins
     Arg<TT_TensorDescType, "", [MemWrite<GlobalMemory>]>:$desc,
     TensorOf<[I16, I32]>:$dst_row_indices,
-    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
-    Arg<Optional<TTG_MemDescType>, "", [MemWrite<SharedMemory>]>:$barrier
+    Arg<TTG_MemDescType, "", GenericSharedRead>:$src,
+    Arg<Optional<TTG_MemDescType>, "", BarrierSharedWrite>:$barrier
   );
   let results = (outs TTG_AsyncToken:$retToken);
 
@@ -948,8 +956,8 @@ def AsyncTDMGatherOp : TT_AMDGPU_Op<"async_tdm_gather", [
   let arguments = (ins
     Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
     TensorOf<[I16, I32]>:$src_row_indices,
-    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$dst,
-    Arg<Optional<TTG_MemDescType>, "", [MemWrite<SharedMemory>]>:$barrier
+    Arg<TTG_MemDescType, "", GenericSharedWrite>:$dst,
+    Arg<Optional<TTG_MemDescType>, "", BarrierSharedWrite>:$barrier
   );
   let results = (outs TTG_AsyncToken:$token);
 
@@ -1181,7 +1189,7 @@ def InitBarrierOp : TT_AMDGPU_Op<"init_barrier", [
   }];
 
   let arguments = (ins
-    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$alloc,
+    Arg<TTG_MemDescType, "", GenericSharedWrite>:$alloc,
     I32Attr:$count
   );
   let assemblyFormat = "$alloc `,` $count attr-dict `:` qualified(type($alloc))";
@@ -1202,7 +1210,7 @@ def WaitBarrierOp : TT_AMDGPU_Op<"wait_barrier", [
   }];
 
   let arguments = (ins
-    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>, MemWrite<SharedMemory>]>:$alloc,
+    Arg<TTG_MemDescType, "", BarrierSharedReadWrite>:$alloc,
     I32:$phase
   );
 
@@ -1232,7 +1240,7 @@ def ArriveBarrierOp : TT_AMDGPU_Op<"arrive_barrier", [
   }];
 
   let arguments = (ins
-    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>, MemWrite<SharedMemory>]>:$alloc,
+    Arg<TTG_MemDescType, "", BarrierSharedReadWrite>:$alloc,
     I32Attr:$count
   );
 
@@ -1258,7 +1266,7 @@ def AsyncCopyMbarrierArriveOp : TT_AMDGPU_Op<"async_copy_mbarrier_arrive", [
     If the pending count becomes zero, the phase changes (is decremented in a wraparound manner) and the pending count is reloaded with the init count value.
   }];
   let arguments = (ins
-    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>, MemWrite<SharedMemory>]>:$barrier
+    Arg<TTG_MemDescType, "", BarrierSharedReadWrite>:$barrier
   );
   let assemblyFormat = "$barrier attr-dict `:` qualified(type($barrier))";
   let hasVerifier = 1;

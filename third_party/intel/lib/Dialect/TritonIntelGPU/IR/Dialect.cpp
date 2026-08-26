@@ -699,8 +699,40 @@ struct TritonIntelGPUInferLayoutInterface
                        ArrayRef<int32_t> order, // trans order
                        Attribute &resultEncoding,
                        std::optional<Location> loc) const override {
-    // Not support TransOp on DPAS layout.
-    return failure();
+    // transpose(x, order=[0, 1, ...]) preserves the operand encoding.
+    if (isIota(order)) {
+      resultEncoding = operandEncoding;
+      return success();
+    }
+
+    auto *ctx = getDialect()->getContext();
+
+    if (shape.size() != order.size()) {
+      return emitOptionalError(loc, "shape and order rank do not match: ",
+                               shape.size(), " vs ", order.size());
+    }
+    auto checkRank = [&](unsigned rank) {
+      if (rank != order.size()) {
+        return emitOptionalError(loc, "rank of encoding does not match order: ",
+                                 rank, " vs ", order.size());
+      }
+      return success();
+    };
+
+    auto ll = toLinearLayout(shape, operandEncoding);
+    if (failed(checkRank(ll.getNumOutDims())))
+      return failure();
+    auto transposedLl = transposeLinearLayout(ll, order);
+    if (isa<DistributedEncodingTrait>(operandEncoding)) {
+      resultEncoding = inferEncodingFromLinearLayout(
+          ctx, std::move(transposedLl), operandEncoding);
+    } else {
+      return emitOptionalError(
+          loc,
+          "unsupported transpose encoding type of TritonIntelGPU dialect: ",
+          operandEncoding);
+    }
+    return success();
   }
 
   LogicalResult
@@ -766,15 +798,6 @@ struct TritonIntelGPUInferLayoutInterface
         return op->emitError("mismatching kWidth of B operands");
     }
 
-    return success();
-  }
-
-  LogicalResult verifyCatOpEncodingCompatibility(Operation *op) const override {
-    auto cat = cast<CatOp>(op);
-    if (!isLegalCatEncoding(cat, cat.getType().getEncoding()))
-      return op->emitError(
-          "tt.cat result encoding requires matching non-broadcast register "
-          "count");
     return success();
   }
 

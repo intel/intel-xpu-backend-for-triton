@@ -319,9 +319,10 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
       cgh.set_arg(narg, local_buffer);
     }
     assert(narg == expected_num_params);
-    cgh.parallel_for(parallel_work_size, kernel_ptr);
+    syclex::nd_launch(cgh, parallel_work_size, kernel_ptr);
   };
   if (get_kernel_time) {
+    // The event is consumed here for the profiling timestamps.
     sycl::event event = stream.submit(cgf);
     event.wait();
     uint64_t start =
@@ -331,7 +332,13 @@ static void sycl_kernel_launch(sycl::queue &stream, sycl::kernel &kernel_ptr,
     double duration = static_cast<double>(end - start) / 1000000;
     std::cout << "Kernel execution time: " << duration << " ms" << std::endl;
   } else {
+#if __SYCL_COMPILER_VERSION >= 20260204 &&                                     \
+    defined(ENABLE_EXPERIMENTAL_EVENTLESS_SUBMIT)
+    // Event-less submit: nothing consumes the event on this path.
+    syclex::submit(stream, cgf);
+#else
     stream.submit(cgf);
+#endif
   }
   stream.wait_and_throw();
 }
