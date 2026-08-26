@@ -292,7 +292,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             lhs_type = lhs_type.scalar
             rhs_type = rhs_type.scalar
 
-            # FMA path currently has accuracy errors for small INT8 dots.
+            # FMA path currently has accuracy errors for INT8 dots.
             if lhs_type.is_int8() and rhs_type.is_int8():
                 return (1, execution_size, 32)
 
