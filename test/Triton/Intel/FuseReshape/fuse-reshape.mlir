@@ -104,3 +104,37 @@ tt.func public @noFuseNonDivisibleBlockExtent(%arg0: tensor<16x16xf32>, %arg1: !
 // CHECK-LABEL: noFuseNonDivisibleBlockExtent
 // CHECK: tt.descriptor_load
 // CHECK: tt.reshape
+
+// -----
+
+// COM: Collapse a unit-extent middle dimension into the innermost one. The
+// COM: merged extent is bounded exactly: (32-1)*128 + 128 == 4096.
+tt.func public @fuseLoadWithReshapeMiddleDim(%arg0: tensor<128x256xbf16>, %arg1: !tt.ptr<bf16>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c2_i32 = arith.constant 2 : i32
+  %c3_i32 = arith.constant 3 : i32
+  %c32_i32 = arith.constant 32 : i32
+  %c128_i32 = arith.constant 128 : i32
+  %c1024_i32 = arith.constant 1024 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c128_i64 = arith.constant 128 : i64
+  %c4096_i64 = arith.constant 4096 : i64
+  %cst = arith.constant dense<0.000000e+00> : tensor<64x256xf32>
+  %0 = tt.make_tensor_descriptor %arg1, [%c1024_i32, %c32_i32, %c128_i32], [%c4096_i64, %c128_i64, %c1_i64] : <bf16>, <64x1x128xbf16>
+  %1 = tt.descriptor_load %0[%c2_i32, %c3_i32, %c0_i32] : !tt.tensordesc<64x1x128xbf16> -> tensor<64x1x128xbf16>
+  %2 = tt.reshape %1 : tensor<64x1x128xbf16> -> tensor<64x128xbf16>
+  %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<64x128xbf16> * tensor<128x256xbf16> -> tensor<64x256xf32>
+  tt.return
+}
+// CHECK-LABEL: fuseLoadWithReshapeMiddleDim
+// CHECK-NOT: tt.reshape
+// CHECK: [[DIV:%.*]] = arith.divui %c128_i64, %c1_i64 : i64
+// CHECK: [[TRUNC:%.*]] = arith.trunci [[DIV]] : i64 to i32
+// CHECK: [[SUB:%.*]] = arith.subi %c32_i32, %{{.*}} : i32
+// CHECK: [[MUL1:%.*]] = arith.muli [[SUB]], [[TRUNC]] : i32
+// CHECK: [[ADD1:%.*]] = arith.addi [[MUL1]], %c128_i32 : i32
+// CHECK: [[DESC:%.*]] = tt.make_tensor_descriptor %arg1, [%c1024_i32, [[ADD1]]], [%c4096_i64, %c1_i64] : <bf16>, <64x128xbf16>
+// CHECK: [[MUL2:%.*]] = arith.muli %c3_i32, [[TRUNC]] : i32
+// CHECK: [[ADD2:%.*]] = arith.addi [[MUL2]], %c0_i32 : i32
+// CHECK: [[LOAD:%.*]] = tt.descriptor_load [[DESC]][%c2_i32, [[ADD2]]] : !tt.tensordesc<64x128xbf16> -> tensor<64x128xbf16>
+// CHECK: tt.dot [[LOAD]], {{.*}}, {{.*}}, inputPrecision = tf32 : tensor<64x128xbf16> * tensor<128x256xbf16> -> tensor<64x256xf32>
