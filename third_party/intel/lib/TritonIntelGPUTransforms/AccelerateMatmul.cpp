@@ -304,16 +304,18 @@ public:
       });
       bool kLayoutSupported = k > 0 && llvm::isPowerOf2_64(k);
 
-      unsigned nativeK = dpasCap->systolicDepth * opsPerChan;
+      const int64_t nativeK = static_cast<int64_t>(dpasCap->systolicDepth) *
+                              static_cast<int64_t>(opsPerChan);
       bool kInstructionSupported = k >= nativeK && k % nativeK == 0;
 
-      unsigned minimumAcceleratedN = dpasCap->executionSize;
-      bool nSupported = n >= static_cast<int64_t>(minimumAcceleratedN);
+      const int64_t minimumAcceleratedN =
+          static_cast<int64_t>(dpasCap->executionSize);
+      bool nSupported = n >= minimumAcceleratedN;
 
       if (!resultShapeSupported || !kLayoutSupported ||
           !kInstructionSupported || !nSupported) {
         return rewriter.notifyMatchFailure(
-            op, "dot shape is not supported by DPAS; use FMA");
+            op, "dot shape is not eligible for DPAS");
       }
     }
 

@@ -411,8 +411,9 @@ def test_min_dot_size(dtype):
         # hip supports arbitrary sizes
         error_msg = None
     elif is_xpu():
-        # xpu falls back to FMA for shapes that cannot use DPAS.
-        error_msg = None
+        # invalid DPAS INT8 dots are rejected, other dots
+        # fallback to FMA.
+        error_msg = "Input shapes should have " if dtype.is_int8() else None
     else:
         pytest.skip("Test only supported on CUDA, HIP and XPU")
 

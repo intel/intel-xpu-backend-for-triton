@@ -286,8 +286,20 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
     @staticmethod
     def min_dot_size(device_props: dict):
-        # Dots that do not fit DPAS remain blocked and lower through FMA.
-        return lambda lhs_type, rhs_type: (1, 1, 1)
+        execution_size = min(device_props["sub_group_sizes"])
+
+        def get_min_dot_size(lhs_type, rhs_type):
+            lhs_type = lhs_type.scalar
+            rhs_type = rhs_type.scalar
+
+            # FMA path currently has accuracy errors for small INT8 dots.
+            if lhs_type.is_int8() and rhs_type.is_int8():
+                return (1, execution_size, 32)
+
+            # Fallback to use FMA if size configurations not supported/performant for DPAS.
+            return (1, 1, 1)
+
+        return get_min_dot_size
 
     def get_codegen_implementation(self, options):
         from triton.language.extra.intel import convert_custom_float8
