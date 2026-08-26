@@ -167,6 +167,34 @@ def TritonIntelSimplifySignedArithmetic
   ];
 }
 
+def TritonIntelSpeculateSignedDivRem
+    : Pass<"triton-intel-speculate-signed-div-rem", "mlir::ModuleOp"> {
+  let summary = "Convert signed div/rem to unsigned under a runtime assertion";
+
+  let description = [{
+    Converts arith.divsi/arith.remsi to arith.divui/arith.remui under a
+    tt.assert that the dividend is non-negative. This recovers the AxisInfo
+    constancy and contiguity deductions, which are disabled for the signed
+    operations because their floor-division argument only holds for a
+    non-negative dividend. A negative dividend then aborts with a diagnostic
+    instead of silently producing a wrong answer.
+
+    An operation is converted only when the deduction would have fired on it and
+    the check it needs is worth its cost; anything else is left signed, keeping
+    the sound but weaker lattice. SpeculateSignedDivRem.cpp documents each of
+    those conditions at the site that applies it.
+
+    Runs after TritonIntelSimplifySignedArithmetic, whose simpler prover has
+    already converted the operations that need no runtime check to be sound.
+  }];
+
+  let dependentDialects = [
+    "mlir::arith::ArithDialect",
+    "mlir::scf::SCFDialect",
+    "mlir::triton::TritonDialect"
+  ];
+}
+
 def TritonIntelGPUFoldTrueCmpI
     : Pass<"triton-intel-fold-true-cmpi", "mlir::ModuleOp"> {
   let summary = "Fold provably true/false arith.cmpi to constants";
