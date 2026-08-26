@@ -1498,17 +1498,8 @@ struct PrefetchOpConversion
         isPrefetch256BSupported);
     if (!sizeInfo.isValid())
       return failure();
-    // Extract members to regular variables for C++17 compatibility
-    // (capturing structured bindings in lambdas requires C++20)
-    int tileHeight = sizeInfo.tileHeight;
-    int tileWidth = sizeInfo.tileWidth;
-    int numPackedVals = sizeInfo.numElemPerPackedVal;
-    int vBlocks = sizeInfo.vBlocks;
-    int rowDim = sizeInfo.rowDim;
-    int colDim = sizeInfo.colDim;
-    bool isTransposeRequired = sizeInfo.transpose;
-    std::optional<SetVector<unsigned>> regPackedBases =
-        std::move(sizeInfo.regPackedBases);
+    auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
+          isTransposeRequired, _, regPackedBases] = std::move(sizeInfo);
     unsigned packedElemSizeInBits = elemSizeInBits * numPackedVals;
 
     Location loc = op.getLoc();
