@@ -1178,7 +1178,7 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
       // Expand: replace !tt.tensordesc<...> with (ptr, i64×2*rank, i1, i1).
       MLIRContext *ctx = funcOp.getContext();
       Location loc = descArg.getLoc();
-      Type ptrType = triton::PointerType::get(elemType, /*addressSpace=*/1);
+      Type ptrType = triton::PointerType::get(elemType);
       Type i64Type = IntegerType::get(ctx, 64);
       Type i1Type = IntegerType::get(ctx, 1);
 

@@ -886,12 +886,6 @@ tests/kernels/attention/test_triton_unified_attention.py::test_triton_unified_at
 # Nondeterministic tensor-likes are not close on B580: https://github.com/intel/intel-xpu-backend-for-triton/issues/7395
 tests/kernels/attention/test_triton_unified_attention.py::test_triton_unified_attn_fp16_input_fp8_output[8-32768-50.0-None-16-128-num_heads1-seq_lens3]
 
-# Tensor-likes are not close: https://github.com/intel/intel-xpu-backend-for-triton/issues/7753
-tests/kernels/moe/test_batched_moe.py::test_fused_moe_batched_experts[False-None-False-dtype0-2-8-222-128-2048]
-tests/kernels/moe/test_batched_moe.py::test_fused_moe_batched_experts[False-None-False-dtype0-6-8-45-1024-128]
-tests/kernels/moe/test_batched_moe.py::test_fused_moe_batched_experts[False-None-False-dtype0-6-8-64-512-512]
-tests/kernels/moe/test_batched_moe.py::test_fused_moe_batched_experts[False-None-False-dtype0-6-8-222-128-2048]
-
 # Skip some fused_moe tests due to excessive autotune overhead: https://github.com/intel/intel-xpu-backend-for-triton/issues/7812
 tests/kernels/moe/test_block_fp8.py::test_w8a8_block_fp8_fused_moe
 tests/kernels/moe/test_block_fp8.py::test_w8a8_block_fp8_deep_gemm_fused_moe
