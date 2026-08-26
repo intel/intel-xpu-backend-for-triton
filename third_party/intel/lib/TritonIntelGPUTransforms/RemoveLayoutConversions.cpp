@@ -2120,7 +2120,7 @@ void LayoutRematerialization::hoistConvertDotOperand(
   auto noDataMovement = [](Operation *op) {
     return (op->hasTrait<OpTrait::Elementwise>() && isMemoryEffectFree(op)) ||
            isa<tt::BroadcastOp, ttg::Fp4ToFpOp, ttg::ConvertLayoutOp,
-               ttg::UpcastFpOpInterface>(op) ||
+               ttg::CastFpOpInterface>(op) ||
            isView(op);
   };
   // Stop the slice as soon as we find an operation that cannot be done without
