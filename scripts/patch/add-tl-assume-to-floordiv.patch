@@ -1,0 +1,25 @@
+diff --git a/torch/_inductor/codegen/triton.py b/torch/_inductor/codegen/triton.py
+index fe7b1c7d865..743f3f1ad86 100644
+--- a/torch/_inductor/codegen/triton.py
++++ b/torch/_inductor/codegen/triton.py
+@@ -2333,11 +2333,20 @@ class TritonOverrides(OpOverrides):
+         # so the division is safe, then select 0 as the final result.
+         b_zero = ops.eq(b, zero)
+         b = ops.where(b_zero, one, b)
++        # After guard, b is guaranteed non-zero - emit assume if in kernel context
++        if hasattr(V.kernel, 'compute'):
++            V.kernel.compute.writeline(f"tl.assume({b} != 0)")
+         b_neg = ops.lt(b, zero)
+         a = ops.where(b_neg, ops.sub(zero, a), a)
+         b = ops.where(b_neg, ops.sub(zero, b), b)
++        # After this transformation, b is guaranteed positive
++        if hasattr(V.kernel, 'compute'):
++            V.kernel.compute.writeline(f"tl.assume({b} > 0)")
+         a_neg = ops.lt(a, zero)
+         a = ops.where(a_neg, ops.bitwise_not(a), a)
++        # After this transformation, a is guaranteed non-negative
++        if hasattr(V.kernel, 'compute'):
++            V.kernel.compute.writeline(f"tl.assume({a} >= 0)")
+         quot = ops.truncdiv(a, b)
+         quot = ops.where(a_neg, ops.bitwise_not(quot), quot)
+         return ops.where(b_zero, zero, quot)
