@@ -194,8 +194,8 @@ private:
     // negative divisor as a large positive one, so the result would be wrong
     // even for a non-negative dividend, and asserting the divisor is positive
     // would emit a check that fails on every launch for e.g. `x // -4`.
-    std::optional<int64_t> divisor = rhsInfo->getConstantValue();
-    if (!divisor.has_value() || *divisor <= 0)
+    const std::optional<APInt> &divisor = rhsInfo->getConstantValue();
+    if (!divisor.has_value() || !divisor->isStrictlyPositive())
       return false;
 
     if (!tt::intel::signedDivRemDeductionApplies(op, *lhsInfo, *rhsInfo))
@@ -242,8 +242,8 @@ private:
   /// both a division and a remainder. The check is placed at the division
   /// rather than at the fact's definition, so that a division under a
   /// conditional is only asserted on the paths that reach it.
-  SmallVector<std::pair<Value, Goal>>
-  convertWithChecks(ArrayRef<std::pair<Operation *, RequiredCondition>> candidates) {
+  SmallVector<std::pair<Value, Goal>> convertWithChecks(
+      ArrayRef<std::pair<Operation *, RequiredCondition>> candidates) {
     SmallVector<std::pair<Value, Goal>> conditions;
     DenseSet<std::tuple<Value, unsigned, Block *>> checked;
 
