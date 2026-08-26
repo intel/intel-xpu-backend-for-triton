@@ -174,14 +174,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
     @staticmethod
     def core_clock_rate(tgt_prop) -> int:
-        if (rate := tgt_prop.get('core_clock_rate')) is None:
-            from triton.runtime import driver
-            # Not `driver.active.utils`: creating it initializes the device, which raises
-            # when compiling in a forked process.
-            if (utils := driver.active.__dict__.get('utils')) is None:
-                return 0
-            rate = utils.get_device_properties(driver.active.get_current_device()).get('sm_clock_rate', 0)
-        return rate or 0
+        return tgt_prop.get('core_clock_rate') or 0
 
     def parse_target(self, tgt_prop) -> dict:
         dev_prop = {}
