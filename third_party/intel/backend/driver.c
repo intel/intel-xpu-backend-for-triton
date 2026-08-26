@@ -836,23 +836,21 @@ typedef void (*SetArgFunc)(sycl::handler &, int, const void *);
 // hot path inside the kernel submit lambda. A small, cache-resident table of
 // function pointers turns what would otherwise be a per-argument switch
 // (branch mispredicts under cache pressure) into a simple indirect call.
-// Positional initialization matches enum order to avoid designated
-// initializers, which require /std:c++20 on MSVC (see extraction_map above).
 static const SetArgFunc set_arg_table[EXTRACTOR_TYPE_COUNT] = {
-    /* EXTRACTOR_UNKOWN_INDEX   */ nullptr,
-    /* EXTRACTOR_POINTER_INDEX  */ set_scalar_arg<void *>,
-    /* EXTRACTOR_INT8_INDEX     */ set_scalar_arg<int8_t>,
-    /* EXTRACTOR_INT16_INDEX    */ set_scalar_arg<int16_t>,
-    /* EXTRACTOR_INT32_INDEX    */ set_scalar_arg<int32_t>,
-    /* EXTRACTOR_INT64_INDEX    */ set_scalar_arg<int64_t>,
-    /* EXTRACTOR_UINT8_INDEX    */ set_scalar_arg<uint8_t>,
-    /* EXTRACTOR_UINT16_INDEX   */ set_scalar_arg<uint16_t>,
-    /* EXTRACTOR_UINT32_INDEX   */ set_scalar_arg<uint32_t>,
-    /* EXTRACTOR_UINT64_INDEX   */ set_scalar_arg<uint64_t>,
-    /* EXTRACTOR_FP16_INDEX     */ set_scalar_arg<uint16_t>,
-    /* EXTRACTOR_BF16_INDEX     */ set_scalar_arg<uint16_t>,
-    /* EXTRACTOR_FP32_INDEX     */ set_scalar_arg<uint32_t>,
-    /* EXTRACTOR_FP64_INDEX     */ set_scalar_arg<uint64_t>,
+    [EXTRACTOR_UNKOWN_INDEX] = nullptr,
+    [EXTRACTOR_POINTER_INDEX] = set_scalar_arg<void *>,
+    [EXTRACTOR_INT8_INDEX] = set_scalar_arg<int8_t>,
+    [EXTRACTOR_INT16_INDEX] = set_scalar_arg<int16_t>,
+    [EXTRACTOR_INT32_INDEX] = set_scalar_arg<int32_t>,
+    [EXTRACTOR_INT64_INDEX] = set_scalar_arg<int64_t>,
+    [EXTRACTOR_UINT8_INDEX] = set_scalar_arg<uint8_t>,
+    [EXTRACTOR_UINT16_INDEX] = set_scalar_arg<uint16_t>,
+    [EXTRACTOR_UINT32_INDEX] = set_scalar_arg<uint32_t>,
+    [EXTRACTOR_UINT64_INDEX] = set_scalar_arg<uint64_t>,
+    [EXTRACTOR_FP16_INDEX] = set_scalar_arg<uint16_t>,
+    [EXTRACTOR_BF16_INDEX] = set_scalar_arg<uint16_t>,
+    [EXTRACTOR_FP32_INDEX] = set_scalar_arg<uint32_t>,
+    [EXTRACTOR_FP64_INDEX] = set_scalar_arg<uint64_t>,
 };
 
 static inline void setScalarArgByType(sycl::handler &cgh, int index,
@@ -1042,28 +1040,48 @@ typedef struct {
   const char *name[MAX_NAMES_PER_EXTRACTOR];
 } Extractor;
 
-// extraction_map is indexed by ExtractorTypeIndex (sequential enum 0..N-1).
-// Positional initialization is used to avoid C99 designated initializers
-// (array [idx]= and struct .field= forms) which require /std:c++20 on MSVC.
-// Field order: {extract, size, alignment, name[2]}.
 Extractor extraction_map[EXTRACTOR_TYPE_COUNT] = {
-    /* EXTRACTOR_UNKOWN_INDEX   */ {NULL, 0, 0, {NULL}},
-    /* EXTRACTOR_POINTER_INDEX  */ {extractPointer, sizeof(void *), 0, {NULL}},
-    /* EXTRACTOR_INT8_INDEX     */ {extractI8, sizeof(int8_t), 0, {"i8"}},
-    /* EXTRACTOR_INT16_INDEX    */ {extractI16, sizeof(int16_t), 0, {"i16"}},
-    /* EXTRACTOR_INT32_INDEX    */
-    {extractI32, sizeof(int32_t), 0, {"i1", "i32"}},
-    /* EXTRACTOR_INT64_INDEX    */ {extractI64, sizeof(int64_t), 0, {"i64"}},
-    /* EXTRACTOR_UINT8_INDEX    */ {extractU8, sizeof(uint8_t), 0, {"u8"}},
-    /* EXTRACTOR_UINT16_INDEX   */ {extractU16, sizeof(uint16_t), 0, {"u16"}},
-    /* EXTRACTOR_UINT32_INDEX   */
-    {extractU32, sizeof(uint32_t), 0, {"u1", "u32"}},
-    /* EXTRACTOR_UINT64_INDEX   */ {extractU64, sizeof(uint64_t), 0, {"u64"}},
-    /* EXTRACTOR_FP16_INDEX     */ {extractFP16, sizeof(uint16_t), 0, {"fp16"}},
-    /* EXTRACTOR_BF16_INDEX     */ {extractBF16, sizeof(uint16_t), 0, {"bf16"}},
-    /* EXTRACTOR_FP32_INDEX     */
-    {extractFP32, sizeof(uint32_t), 0, {"fp32", "f32"}},
-    /* EXTRACTOR_FP64_INDEX     */ {extractFP64, sizeof(uint64_t), 0, {"fp64"}},
+    [EXTRACTOR_UNKOWN_INDEX] =
+        (Extractor){.extract = NULL, .size = 0, .name = NULL},
+    [EXTRACTOR_POINTER_INDEX] = (Extractor){.extract = extractPointer,
+                                            .size = sizeof(void *),
+                                            .name = NULL},
+    [EXTRACTOR_INT8_INDEX] = (Extractor){.extract = extractI8,
+                                         .size = sizeof(int8_t),
+                                         .name = {"i8"}},
+    [EXTRACTOR_INT16_INDEX] = (Extractor){.extract = extractI16,
+                                          .size = sizeof(int16_t),
+                                          .name = {"i16"}},
+    [EXTRACTOR_INT32_INDEX] = (Extractor){.extract = extractI32,
+                                          .size = sizeof(int32_t),
+                                          .name = {"i1", "i32"}},
+    [EXTRACTOR_INT64_INDEX] = (Extractor){.extract = extractI64,
+                                          .size = sizeof(int64_t),
+                                          .name = {"i64"}},
+    [EXTRACTOR_UINT8_INDEX] = (Extractor){.extract = extractU8,
+                                          .size = sizeof(uint8_t),
+                                          .name = {"u8"}},
+    [EXTRACTOR_UINT16_INDEX] = (Extractor){.extract = extractU16,
+                                           .size = sizeof(uint16_t),
+                                           .name = {"u16"}},
+    [EXTRACTOR_UINT32_INDEX] = (Extractor){.extract = extractU32,
+                                           .size = sizeof(uint32_t),
+                                           .name = {"u1", "u32"}},
+    [EXTRACTOR_UINT64_INDEX] = (Extractor){.extract = extractU64,
+                                           .size = sizeof(uint64_t),
+                                           .name = {"u64"}},
+    [EXTRACTOR_FP16_INDEX] = (Extractor){.extract = extractFP16,
+                                         .size = sizeof(uint16_t),
+                                         .name = {"fp16"}},
+    [EXTRACTOR_BF16_INDEX] = (Extractor){.extract = extractBF16,
+                                         .size = sizeof(uint16_t),
+                                         .name = {"bf16"}},
+    [EXTRACTOR_FP32_INDEX] = (Extractor){.extract = extractFP32,
+                                         .size = sizeof(uint32_t),
+                                         .name = {"fp32", "f32"}},
+    [EXTRACTOR_FP64_INDEX] = (Extractor){.extract = extractFP64,
+                                         .size = sizeof(uint64_t),
+                                         .name = {"fp64"}},
 };
 
 Extractor getExtractor(uint8_t index) {
