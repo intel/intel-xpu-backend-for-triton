@@ -266,3 +266,59 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// COM: Test 10: 1D strided store with H < numWarps (perWarpH = 0).
+// COM: i8, BLOCK=64, W=64, S=128, numWarps=2, tpw=32.
+// COM: H = 64/64 = 1. perWarpH = 1/2 = 0 → HW delivery encoding cannot be
+// COM: constructed; reshape must bail out and leave a scatter store.
+
+#blocked_h_lt_nw_store = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [2], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @test_1d_strided_store_h_lt_numwarps
+  // CHECK-NOT: tt.reshape
+  // CHECK-NOT: ttig.block_io
+  // CHECK: tt.store %{{.*}}, %{{.*}} : tensor<64x!tt.ptr<i8>
+  tt.func @test_1d_strided_store_h_lt_numwarps(%arg0: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg1: tensor<64xi8, #blocked_h_lt_nw_store>) {
+    %idx  = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32, #blocked_h_lt_nw_store>
+    %cW   = arith.constant dense<64>  : tensor<64xi32, #blocked_h_lt_nw_store>
+    %cS   = arith.constant dense<128> : tensor<64xi32, #blocked_h_lt_nw_store>
+    %rem  = arith.remui %idx, %cW : tensor<64xi32, #blocked_h_lt_nw_store>
+    %div  = arith.divui %idx, %cW : tensor<64xi32, #blocked_h_lt_nw_store>
+    %mul  = arith.muli  %div, %cS : tensor<64xi32, #blocked_h_lt_nw_store>
+    %off  = arith.addi  %rem, %mul : tensor<64xi32, #blocked_h_lt_nw_store>
+    %base = tt.splat %arg0 : !tt.ptr<i8> -> tensor<64x!tt.ptr<i8>, #blocked_h_lt_nw_store>
+    %ptrs = tt.addptr %base, %off : tensor<64x!tt.ptr<i8>, #blocked_h_lt_nw_store>, tensor<64xi32, #blocked_h_lt_nw_store>
+    tt.store %ptrs, %arg1 : tensor<64x!tt.ptr<i8>, #blocked_h_lt_nw_store>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Test 11: 1D strided load with H < numWarps (perWarpH = 0).
+// COM: i8, BLOCK=64, W=64, S=128, numWarps=2, tpw=32.
+// COM: H = 64/64 = 1. perWarpH = 1/2 = 0 → HW delivery encoding cannot be
+// COM: constructed; reshape must bail out and leave a gather load.
+
+#blocked_h_lt_nw_load = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [2], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @test_1d_strided_load_h_lt_numwarps
+  // CHECK-NOT: tt.reshape
+  // CHECK-NOT: ttig.block_io
+  // CHECK: tt.load %{{.*}} : tensor<64x!tt.ptr<i8>
+  tt.func @test_1d_strided_load_h_lt_numwarps(%arg0: !tt.ptr<i8> {tt.divisibility = 16 : i32}) -> tensor<64xi8, #blocked_h_lt_nw_load> {
+    %idx  = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32, #blocked_h_lt_nw_load>
+    %cW   = arith.constant dense<64>  : tensor<64xi32, #blocked_h_lt_nw_load>
+    %cS   = arith.constant dense<128> : tensor<64xi32, #blocked_h_lt_nw_load>
+    %rem  = arith.remui %idx, %cW : tensor<64xi32, #blocked_h_lt_nw_load>
+    %div  = arith.divui %idx, %cW : tensor<64xi32, #blocked_h_lt_nw_load>
+    %mul  = arith.muli  %div, %cS : tensor<64xi32, #blocked_h_lt_nw_load>
+    %off  = arith.addi  %rem, %mul : tensor<64xi32, #blocked_h_lt_nw_load>
+    %base = tt.splat %arg0 : !tt.ptr<i8> -> tensor<64x!tt.ptr<i8>, #blocked_h_lt_nw_load>
+    %ptrs = tt.addptr %base, %off : tensor<64x!tt.ptr<i8>, #blocked_h_lt_nw_load>, tensor<64xi32, #blocked_h_lt_nw_load>
+    %res  = tt.load %ptrs : tensor<64x!tt.ptr<i8>, #blocked_h_lt_nw_load>
+    tt.return %res : tensor<64xi8, #blocked_h_lt_nw_load>
+  }
+}

@@ -691,14 +691,6 @@ private:
            << tpw << ") not divisible by tpw1=" << tpw1 << ", skip 1D reshape");
       return std::nullopt;
     }
-    // Guard against integer-truncation under-coverage: spt1 * tpw1 must equal W
-    // exactly, otherwise the 2D encoding would cover fewer columns than W.
-    if (spt1 * tpw1 != static_cast<unsigned>(W)) {
-      LDBG("spt1=" << spt1 << " * tpw1=" << tpw1 << " = " << spt1 * tpw1
-                   << " != W=" << W
-                   << ", would under-cover the W dimension, skip 1D reshape");
-      return std::nullopt;
-    }
     unsigned tpw0 = tpw / tpw1;
     return ttg::BlockedEncodingAttr::get(
         ctx, {spt0, spt1}, {tpw0, tpw1}, {wpc, 1}, {1, 0},
@@ -783,6 +775,15 @@ private:
     if (W < threadsPerWarp || W % threadsPerWarp != 0) {
       LDBG("W=" << W << " is not a positive multiple of threadsPerWarp="
                 << threadsPerWarp << ", skip 1D store reshape");
+      return;
+    }
+
+    // Each warp must own at least one row; with fewer rows than warps the HW
+    // delivery encoding cannot be constructed (sizePerThread[0] would be 0).
+    if (perWarpH == 0) {
+      LDBG("H=" << info->H << " < numWarps=" << numWarps
+                << " (perWarpH=0), cannot construct HW delivery encoding, "
+                << "skip 1D store reshape");
       return;
     }
 
@@ -888,6 +889,15 @@ private:
     if (W < threadsPerWarp || W % threadsPerWarp != 0) {
       LDBG("W=" << W << " is not a positive multiple of threadsPerWarp="
                 << threadsPerWarp << ", not supported for 1D load reshape");
+      return;
+    }
+
+    // Each warp must own at least one row; with fewer rows than warps the HW
+    // delivery encoding cannot be constructed (sizePerThread[0] would be 0).
+    if (perWarpH == 0) {
+      LDBG("H=" << info->H << " < numWarps=" << numWarps
+                << " (perWarpH=0), cannot construct HW delivery encoding, "
+                << "skip 1D load reshape");
       return;
     }
 
