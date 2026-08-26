@@ -147,8 +147,7 @@ Nothing failed because of Triton codegen.
   fine, but its torch reference needs more than 48 GB. Unskip when it is chunked.
 - **BMG.** `scripts/skiplist/xe2/` is a copy of `default/`; nothing measured on
   B580 yet. `--skip-list` replaces the directory instead of merging, so the
-  entries have to be duplicated. The B580 callers pass `max_jobs: "8"` because
-  the default `-j(2 * cores)` OOM-kills cc1plus on that runner.
+  entries have to be duplicated.
 - `install-sglang.sh` pins `xgrammar==0.2.1` (SGLang's CUDA manifest); every
   upstream XPU path pins `0.1.33`.
 
