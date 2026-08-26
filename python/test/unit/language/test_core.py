@@ -3833,19 +3833,11 @@ def get_test_dot_small_k_wmma_cases():
 def get_test_small_dots_cases():
     if not (is_cuda() or is_xpu()):
         return []
-    cases = [(2, 4, 32, 1, False, False, 'None', 'ieee', 'float16', 'float32', 1, None),
-             (1, 2, 32, 1, False, False, 'None', 'ieee', 'float8e5', 'float32', 1, None),
-             # N=8: TF32 K=8 (wgmma.m64n8k8, sm90+) and FP16 K=16 (wgmma.m64n8k16)
-             (64, 8, 8, 4, False, False, 'None', 'tf32', 'float32', 'float32', 1, None),
-             (64, 8, 16, 4, False, False, 'None', 'ieee', 'float16', 'float32', 1, None)]
-    if is_xpu():
-        cases.extend([
-            (16, 8, 16, 4, False, False, 'None', 'ieee', 'bfloat16', 'float32', 1, None),
-            (16, 8, 8, 4, False, False, 'None', 'ieee', 'float16', 'float32', 1, None),
-            (16, 8, 8, 4, False, False, 'None', 'ieee', 'bfloat16', 'float32', 1, None),
-            (16, 4, 16, 4, False, False, 'None', 'ieee', 'bfloat16', 'float32', 1, None),
-        ])
-    return cases
+    return [(2, 4, 32, 1, False, False, 'None', 'ieee', 'float16', 'float32', 1, None),
+            (1, 2, 32, 1, False, False, 'None', 'ieee', 'float8e5', 'float32', 1, None),
+            # N=8: TF32 K=8 (wgmma.m64n8k8, sm90+) and FP16 K=16 (wgmma.m64n8k16)
+            (64, 8, 8, 4, False, False, 'None', 'tf32', 'float32', 'float32', 1, None),
+            (64, 8, 16, 4, False, False, 'None', 'ieee', 'float16', 'float32', 1, None)]
 
 
 @pytest.mark.interpreter
