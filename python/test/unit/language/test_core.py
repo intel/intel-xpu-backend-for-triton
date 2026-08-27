@@ -3913,13 +3913,10 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         if input_precision == "bf16x3" or input_precision == "bf16x6":
             pytest.xfail(f"input_precision {input_precision} is not supported in the interpreter")
     else:
-        if is_xpu():
-            if (M < 8 or N < 16 or (K < 16 and in_dtype == 'float16') or (K < 8 and in_dtype == 'float32')):
-                pytest.xfail("XPU: small dots are not supported")
-        elif not is_hip() and K < 16:
+        if not is_xpu() and not is_hip() and K < 16:
             tf32_n8 = (in_dtype == 'float32' and N == 8 and K == 8 and input_precision == 'tf32')
             if in_dtype != 'float64' and not tf32_n8:
-                pytest.skip("small dots are supported only on HIP at the moment")
+                pytest.skip("K < 16 dots are not supported on this backend at the moment for this dtype")
         if is_cuda():
             capability = torch.cuda.get_device_capability()
 

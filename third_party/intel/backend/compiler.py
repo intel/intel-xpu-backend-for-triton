@@ -279,21 +279,20 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
     @staticmethod
     def min_dot_size(device_props: dict):
-        # (M, N, K)
-        # M: repeatCount. 1,2,4,8
-        # N: executionSize. 16 for PVC, 8 for ATS
-        # K: systolicDepth x opsPerChan. systolicDepth must be 8
-        repeat_count = 1
-        sdepth = 8
-        exec_size = min(device_props["sub_group_sizes"])
+        execution_size = min(device_props["sub_group_sizes"])
 
-        def get_ops_per_channel(lhs_type, rhs_type):
-            l_bitwidth = lhs_type.scalar.primitive_bitwidth
-            r_bitwidth = rhs_type.scalar.primitive_bitwidth
-            max_ops_per_chan = 32 / max(l_bitwidth, r_bitwidth)
-            return min(8, max_ops_per_chan)
+        def get_min_dot_size(lhs_type, rhs_type):
+            lhs_type = lhs_type.scalar
+            rhs_type = rhs_type.scalar
 
-        return lambda lhs_type, rhs_type: (repeat_count, exec_size, sdepth * get_ops_per_channel(lhs_type, rhs_type))
+            # FMA path currently has accuracy errors for INT8 dots.
+            if lhs_type.is_int8() and rhs_type.is_int8():
+                return (1, execution_size, 32)
+
+            # Fallback to use FMA if size configurations not supported/performant for DPAS.
+            return (1, 1, 1)
+
+        return get_min_dot_size
 
     def get_codegen_implementation(self, options):
         from triton.language.extra.intel import convert_custom_float8
