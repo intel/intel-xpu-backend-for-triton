@@ -60,6 +60,9 @@ done
 SGLANG_SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SGLANG_SCRIPTS_DIR/../.." && pwd)"
 
+# Provides the `pip` wrapper (pip or `uv pip`).
+source "$ROOT/scripts/pip-utils.sh"
+
 # Clone/install into the project root (matches scripts/vllm/install-vllm.sh and
 # test-triton.sh's run_sglang_tests, which expect ./sglang there).
 cd "$ROOT"
