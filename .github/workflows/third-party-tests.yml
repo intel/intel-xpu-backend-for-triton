@@ -1,4 +1,4 @@
-name: Third party tests [liger-kernels, sglang]
+name: Third party tests [liger-kernels]
 
 on:
   pull_request:
@@ -6,7 +6,6 @@ on:
       - main
     paths:
       - .github/workflows/third-party-tests.yml
-      - scripts/sglang/sglang-pin.txt
       - benchmarks/third_party/liger/liger-pin.txt
   workflow_dispatch:
     inputs:
@@ -19,7 +18,7 @@ on:
         type: boolean
         default: false
       tests:
-        description: JSON list of tests to run, e.g. ["liger", "sglang"]. Leave empty to run all.
+        description: JSON list of tests to run, e.g. ["liger"]. Leave empty to run all.
         type: string
         default: ""
   schedule:
@@ -39,63 +38,6 @@ env:
   TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number)) || (github.event_name == 'schedule' && 'ci') || 'test' }}
 
 jobs:
-  small-tests:
-    name: Third party tests [sglang]
-    if: ${{ !inputs.tests || contains(inputs.tests, 'sglang') }}
-    runs-on:
-      - linux
-      - ${{ inputs.runner_label || 'max1100' }}
-    timeout-minutes: 120
-    defaults:
-      run:
-        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
-    steps:
-      - name: Print inputs
-        run: |
-          cat <<EOF
-          ${{ toJSON(inputs) }}
-          EOF
-
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Install Python (from pyenv) ${{ inputs.python_version }}
-        uses: ./.github/actions/setup-pyenv-python
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Identify Python version
-        run: |
-          PYTHON_VERSION="$(python -c 'import sys; print(f"{sys.version_info[0]}.{ sys.version_info[1]}")')"
-          echo "PYTHON_VERSION=$PYTHON_VERSION" | tee -a $GITHUB_ENV
-
-      - name: Install Python build dependencies
-        run: |
-          pip install cmake
-
-      - name: Setup PyTorch
-        uses: ./.github/actions/setup-pytorch
-
-      - name: Setup Triton
-        id: install
-        uses: ./.github/actions/setup-triton
-
-      - name: Create reports dir
-        run: |
-          mkdir reports
-          echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
-
-      - name: Run SGLANG tests
-        if: ${{ steps.install.outcome == 'success' && !cancelled() && (!inputs.tests || contains(inputs.tests, 'sglang')) }}
-        run: |
-          ./scripts/test-triton.sh --sglang --skip-pip-install --skip-pytorch-install --reports-dir $REPORTS
-
-      - name: Upload test report
-        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: test-reports-sglang
-          path: reports
   # We run all tests for Liger, so it's slow and we test it separately
   liger:
     name: Liger testing

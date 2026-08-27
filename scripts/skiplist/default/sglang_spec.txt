@@ -1,0 +1,2 @@
+# Torch not compiled with CUDA enabled
+registered/spec/dspark/test_dspark_kernel_parity.py::TestDsparkKernelParity::test_all_kernels_triton_matches_torch
