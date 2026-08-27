@@ -59,7 +59,9 @@ jobs:
   # ---- SGLang tests ----
 
   sglang-tests-bmg:
-    if: contains(github.event.pull_request.labels.*.name, 'run-sglang-tests')
+    if: >-
+      contains(github.event.pull_request.labels.*.name, 'run-sglang-tests') &&
+      !contains(github.event.pull_request.labels.*.name, 'pvc-only')
     uses: ./.github/workflows/sglang-tests-reusable.yml
     with:
       runner_label: b580
@@ -67,7 +69,9 @@ jobs:
     secrets: inherit
 
   sglang-tests-pvc:
-    if: contains(github.event.pull_request.labels.*.name, 'run-sglang-tests')
+    if: >-
+      contains(github.event.pull_request.labels.*.name, 'run-sglang-tests') &&
+      !contains(github.event.pull_request.labels.*.name, 'bmg-only')
     uses: ./.github/workflows/sglang-tests-reusable.yml
     with:
       runner_label: max1100
