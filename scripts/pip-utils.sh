@@ -21,8 +21,12 @@ PIP_CMD=()
 # The initial value is not a valid path, so the first `pip` call always resolves.
 PIP_CMD_VIRTUAL_ENV="<unresolved>"
 
+# `python` is preferred over `python3`, because the scripts run `python`
+# themselves, so packages have to be installed for that interpreter, and because
+# `python3` does not necessarily exist on Windows. `python3` is used when
+# `python` is missing or is Python 2.
 pip_python_cmd() {
-  if command -v python &>/dev/null; then
+  if [ "$(python -c 'import sys; print(sys.version_info[0])' 2>/dev/null)" = 3 ]; then
     echo python
   else
     echo python3
