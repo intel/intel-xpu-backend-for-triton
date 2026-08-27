@@ -77,6 +77,58 @@ Block &createPredicatedBlock(RewriterBase &rewriter, Location loc, Value cond,
 }
 
 /// Create a two-armed predicated block, using \p cond to select between two
+/// bodies, each producing values matching \p ops for the merge block:
+///   cf.cond_br %cond, ^fast, ^slow
+///   ^fast:
+///     %fastOps = `fastFn()`
+///     cf.br ^end(%fastOps)
+///   ^slow:
+///     %slowOps = `slowFn()`
+///     cf.br ^end(%slowOps)
+///   ^end(%block_ops):
+template <typename FastFn, typename SlowFn>
+Block &createTwoArmedPredicatedBlock(RewriterBase &rewriter, Location loc,
+                                     Value cond, ArrayRef<Value> ops,
+                                     FastFn &&fastFn, SlowFn &&slowFn) {
+  Block *insertionBlock = rewriter.getInsertionBlock();
+  Block *fastBlock =
+      rewriter.splitBlock(insertionBlock, rewriter.getInsertionPoint());
+  Block *slowBlock = rewriter.splitBlock(fastBlock, fastBlock->begin());
+  Block *endBlock = rewriter.splitBlock(slowBlock, slowBlock->begin());
+
+  rewriter.setInsertionPointToEnd(insertionBlock);
+  cf::CondBranchOp::create(rewriter, loc, cond, fastBlock, slowBlock);
+
+  auto branchToEnd = [&](ArrayRef<Value> armOps) {
+    assert(armOps.size() == ops.size() && "Inconsistent size");
+    assert(llvm::all_of(llvm::enumerate(ops, armOps),
+                        [](const auto &enumerator) {
+                          auto [index, op, armOp] = enumerator;
+                          return op.getType() == armOp.getType();
+                        }) &&
+           "type mismatch found");
+    if (armOps.empty())
+      cf::BranchOp::create(rewriter, loc, endBlock);
+    else
+      cf::BranchOp::create(rewriter, loc, endBlock, armOps);
+  };
+
+  rewriter.setInsertionPointToStart(fastBlock);
+  auto fastOps = fastFn();
+  branchToEnd(fastOps);
+
+  rewriter.setInsertionPointToStart(slowBlock);
+  auto slowOps = slowFn();
+  branchToEnd(slowOps);
+
+  for (Value op : ops)
+    endBlock->addArgument(op.getType(), op.getLoc());
+
+  rewriter.setInsertionPointToStart(endBlock);
+  return *endBlock;
+}
+
+/// Create a two-armed predicated block, using \p cond to select between two
 /// side-effecting, result-less bodies:
 ///   cf.cond_br %cond, ^fast, ^slow
 ///   ^fast:

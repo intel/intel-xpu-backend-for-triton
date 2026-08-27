@@ -2016,8 +2016,10 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
         typeConverter->convertType(getElementTypeOrSelf(op.getType()));
     unsigned numElems = getTotalElemsPerThread(op.getType());
     unsigned vec = getVectorSize(hasSupport256bLoadStore(op), ptr);
-    if (llMask)
-      vec = std::min<size_t>(vec, getMaskAlignment(mask));
+    // See the analogous comment in StoreOpConversion: this is no longer used
+    // to shrink vec, only to decide whether the mask is statically uniform
+    // across a vec-group (see the dispatch at the end of the loop below).
+    unsigned maskAlignment = llMask ? getMaskAlignment(mask) : vec;
 
     // Get the LLVM values for pointers
     SmallVector<Value> ptrElems =
@@ -2080,8 +2082,6 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       const size_t movWidth = width < 16 ? 16 : width;
       assert(wordNElems * nWords * numVecs == numElems);
 
-      Value pred = maskElems.size() ? maskElems[vecStart] : Value{};
-
       SmallVector<Type> retTys(nWords, IntegerType::get(ctx, width));
       Type retTy = retTys.size() > 1
                        ? vec_ty(IntegerType::get(ctx, width), nWords)
@@ -2131,17 +2131,87 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                                          getNonTemporalFlag(op))};
       };
 
-      Value ret;
-      if (!pred)
-        ret = createLoadWithAttrs()[0];
-      else if (canUsePredicatedInstructions(op)) {
-        auto cacheModifier = tritonToIntelCacheModifier(op);
-        ret = TritonGEN::PredicatedLoadOp::create(
-            rewriter, loc, retTy, addrElem, pred, other_, cacheModifier);
-      } else {
+      // Dispatches a (possibly predicated) load of `ty` from `addr`: an
+      // unconditional load if `pred` is null, a `TritonGEN::PredicatedLoadOp`
+      // if predicated instructions are available for `op`, or a
+      // branch-guarded plain load (via `loadFn`) otherwise. Returns the
+      // loaded (or default) value of type `ty`.
+      auto emitPredicatedLoad = [&](Type ty, Value pred, Value addr,
+                                    Value defaultVal, auto loadFn) -> Value {
+        if (!pred)
+          return loadFn()[0];
+        if (canUsePredicatedInstructions(op)) {
+          auto cacheModifier = tritonToIntelCacheModifier(op);
+          return TritonGEN::PredicatedLoadOp::create(
+              rewriter, loc, ty, addr, pred, defaultVal, cacheModifier);
+        }
         Block &endBlock = LLVM::intel::createPredicatedBlock(
-            rewriter, loc, pred, SmallVector<Value, 1>{other_},
-            createLoadWithAttrs);
+            rewriter, loc, pred, SmallVector<Value, 1>{defaultVal}, loadFn);
+        return *endBlock.args_begin();
+      };
+
+      // Loads a single raw element (type `valueElemTy`) at lane `i` of the
+      // current group, mirroring the vec == 1 path (same alignment/default
+      // handling). Used as the "slow" per-element arm when the mask isn't
+      // statically uniform across the whole group.
+      auto loadSingleElem = [&](size_t i) -> Value {
+        Value addrElemI =
+            b.bitcast(ptrElems[vecStart + i], ptr_ty(ctx, 1 /*global*/));
+        Value defaultI =
+            otherElems.empty()
+                ? LLVM::ConstantOp::create(rewriter, loc, valueElemTy,
+                                           rewriter.getZeroAttr(valueElemTy))
+                : otherElems[vecStart + i];
+        auto createSingleLoadWithAttrs = [&]() {
+          return SmallVector<Value>{
+              b.load(valueElemTy, addrElemI, valueElemNBits / 8,
+                     op.getIsVolatile(), getNonTemporalFlag(op))};
+        };
+
+        Value predI = maskElems.size() ? maskElems[vecStart + i] : Value{};
+        return emitPredicatedLoad(valueElemTy, predI, addrElemI, defaultI,
+                                  createSingleLoadWithAttrs);
+      };
+
+      Value ret;
+      if (maskElems.empty() || maskAlignment >= vec) {
+        // Either unmasked, or the mask is statically provably uniform across
+        // this whole group: behavior identical to before this change.
+        Value pred = maskElems.size() ? maskElems[vecStart] : Value{};
+        ret = emitPredicatedLoad(retTy, pred, addrElem, other_,
+                                 createLoadWithAttrs);
+      } else {
+        // The mask isn't statically uniform across the group. Try a single
+        // wide load gated on a dynamic AND of the group's mask elements (the
+        // common case away from boundaries); otherwise fall back to the
+        // exact per-element behavior, preserving correctness. The slow arm
+        // repacks `vec` individually-loaded elements into the same `retTy`
+        // word layout the fast arm produces, using the same packing scheme
+        // as `other_` above, so the post-branch extraction logic (below)
+        // is agnostic to which arm was taken.
+        Value groupMask = maskElems[vecStart];
+        for (size_t i = 1; i < vec; ++i)
+          groupMask = b.and_(groupMask, maskElems[vecStart + i]);
+
+        Block &endBlock = LLVM::intel::createTwoArmedPredicatedBlock(
+            rewriter, loc, groupMask, SmallVector<Value, 1>{other_},
+            createLoadWithAttrs, [&]() -> SmallVector<Value> {
+              Value slowRet = b.undef(retTy);
+              for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
+                VectorType vecTy = vec_ty(valueElemTy, wordNElems);
+                Value v = b.undef(vecTy);
+                for (size_t elemIdx = 0; elemIdx < wordNElems; ++elemIdx) {
+                  Value elem = loadSingleElem(wordIdx * wordNElems + elemIdx);
+                  v = b.insert_element(vecTy, v, elem, b.i32_val(elemIdx));
+                }
+                Value wordInt = b.bitcast(v, IntegerType::get(ctx, width));
+                slowRet = (nWords > 1)
+                              ? b.insert_element(retTy, slowRet, wordInt,
+                                                 b.i32_val(wordIdx))
+                              : wordInt;
+              }
+              return {slowRet};
+            });
         ret = *endBlock.args_begin();
       }
       assert(ret && "Expecting a valid value");
@@ -2366,22 +2436,18 @@ struct DescriptorLoadOpConversion
                                          getNonTemporalFlag(op))};
       };
 
-      Value ret;
-      if (maskElems.empty()) {
-        // No boundary checks needed (neither per-element nor block-level): emit
-        // an unconditional load.
-        ret = createLoadWithAttrs()[0];
-      } else {
-        Value pred = maskElems[vecStart];
-
-        // Build the "other" value for out-of-bounds elements.
+      // Build the "other" (padding) value for out-of-bounds elements,
+      // packing `size` per-lane values (starting at `base`) into one word
+      // of type `retTy`. Used both for the group-wide fast/uniform case and,
+      // via loadSingleElem below, rebuilt per-element for the slow arm.
+      auto buildOther = [&](size_t base) {
         Value other_ = b.undef(retTy);
         for (size_t ii = 0; ii < nWords; ++ii) {
           size_t size = width / valueElemNBits;
           VectorType vecTy = vec_ty(valueElemTy, size);
           Value v = b.undef(vecTy);
           for (size_t s = 0; s < size; ++s) {
-            Value falseVal = otherElems[vecStart + ii * size + s];
+            Value falseVal = otherElems[base + ii * size + s];
             Value sVal = createIndexAttrConstant(
                 rewriter, loc, typeConverter->getIndexType(), s);
             v = b.insert_element(vecTy, v, falseVal, sVal);
@@ -2396,17 +2462,94 @@ struct DescriptorLoadOpConversion
                   : v;
         }
         assert(other_ && "Expecting a valid value");
+        return other_;
+      };
 
+      // Dispatches a (possibly predicated) load of `ty` from `addr`: a
+      // `TritonGEN::PredicatedLoadOp` if predicated instructions are
+      // available for `op`, or a branch-guarded plain load (via `loadFn`)
+      // otherwise. Returns the loaded (or default) value of type `ty`.
+      auto emitPredicatedLoad = [&](Type ty, Value pred, Value addr,
+                                    Value defaultVal, auto loadFn) -> Value {
         if (canUsePredicatedInstructions(op)) {
           auto cacheModifier = tritonToIntelCacheModifier(op);
-          ret = TritonGEN::PredicatedLoadOp::create(
-              rewriter, loc, retTy, addrElem, pred, other_, cacheModifier);
-        } else {
-          Block &endBlock = LLVM::intel::createPredicatedBlock(
-              rewriter, loc, pred, SmallVector<Value, 1>{other_},
-              createLoadWithAttrs);
-          ret = *endBlock.args_begin();
+          return TritonGEN::PredicatedLoadOp::create(
+              rewriter, loc, ty, addr, pred, defaultVal, cacheModifier);
         }
+        Block &endBlock = LLVM::intel::createPredicatedBlock(
+            rewriter, loc, pred, SmallVector<Value, 1>{defaultVal}, loadFn);
+        return *endBlock.args_begin();
+      };
+
+      // Loads a single raw element (type `valueElemTy`) at lane `i` of the
+      // current group, mirroring the vec == 1 path. Used as the "slow"
+      // per-element arm when the group's boundary mask isn't uniform.
+      auto loadSingleElem = [&](size_t i) -> Value {
+        Value addrElemI =
+            b.bitcast(ptrElems[vecStart + i], ptr_ty(ctx, 1 /*global*/));
+        Value defaultI = otherElems[vecStart + i];
+        auto createSingleLoadWithAttrs = [&]() {
+          return SmallVector<Value>{b.load(valueElemTy, addrElemI,
+                                           valueElemNBits / 8,
+                                           /*isVolatile=*/false,
+                                           /*isNonTemporal=*/false)};
+        };
+        return emitPredicatedLoad(valueElemTy, maskElems[vecStart + i],
+                                  addrElemI, defaultI,
+                                  createSingleLoadWithAttrs);
+      };
+
+      Value ret;
+      if (maskElems.empty()) {
+        // No boundary checks needed (neither per-element nor block-level): emit
+        // an unconditional load.
+        ret = createLoadWithAttrs()[0];
+      } else if (vec == 1 || perElementDims.empty()) {
+        // Either a single-element group (no AND-reduction needed), or every
+        // dimension only has a block-level check (uniform across the whole
+        // op, not just within a group, since it depends on the base offset
+        // only, not the per-lane index): behavior identical to before this
+        // change.
+        ret = emitPredicatedLoad(retTy, maskElems[vecStart], addrElem,
+                                 buildOther(vecStart), createLoadWithAttrs);
+      } else {
+        // The descriptor's boundary mask is a genuine per-lane check (see
+        // perElementDims): unlike LoadOp/StoreOp, `vec` here is chosen from
+        // address-level contiguity alone and is NOT clamped by any
+        // static-uniformity analysis, so `maskElems` can legitimately differ
+        // across this group when a shape/offset boundary falls inside it.
+        // Using only maskElems[vecStart] to gate the whole group (as before
+        // this fix) is a correctness bug: it can read out-of-bounds memory
+        // or apply the wrong padding to individually valid/invalid lanes.
+        // Try a single wide load gated on a dynamic AND of the group's mask
+        // elements (the common case away from boundaries); otherwise fall
+        // back to the exact per-element behavior, preserving correctness.
+        Value groupMask = maskElems[vecStart];
+        for (size_t i = 1; i < vec; ++i)
+          groupMask = b.and_(groupMask, maskElems[vecStart + i]);
+
+        Value other_ = buildOther(vecStart);
+        Block &endBlock = LLVM::intel::createTwoArmedPredicatedBlock(
+            rewriter, loc, groupMask, SmallVector<Value, 1>{other_},
+            createLoadWithAttrs, [&]() -> SmallVector<Value> {
+              Value slowRet = b.undef(retTy);
+              for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
+                size_t size = width / valueElemNBits;
+                VectorType vecTy = vec_ty(valueElemTy, size);
+                Value v = b.undef(vecTy);
+                for (size_t elemIdx = 0; elemIdx < size; ++elemIdx) {
+                  Value elem = loadSingleElem(wordIdx * size + elemIdx);
+                  v = b.insert_element(vecTy, v, elem, b.i32_val(elemIdx));
+                }
+                Value wordInt = b.bitcast(v, IntegerType::get(ctx, width));
+                slowRet = (nWords > 1)
+                              ? b.insert_element(retTy, slowRet, wordInt,
+                                                 b.i32_val(wordIdx))
+                              : wordInt;
+              }
+              return {slowRet};
+            });
+        ret = *endBlock.args_begin();
       }
       assert(ret && "Expecting a valid value");
 
@@ -2570,12 +2713,33 @@ struct DescriptorStoreOpConversion
         asmArgs.emplace_back(llWord, constraint);
       }
 
-      // Combine the thread redundancy predicate with the per-element boundary
-      // mask (always present for DescriptorStoreOp since we check all dims).
+      // Combine the thread redundancy predicate with the boundary mask. For
+      // vec == 1, no boundary checks, or a mask that's uniform across the
+      // whole op (only block-level checks present, see perElementDims),
+      // this is a single combined predicate, identical to before this
+      // change. Otherwise (see below) it is instead a dynamic AND-reduction
+      // of the whole group's per-lane mask elements.
       Value maskVal = threadPred;
-      if (maskElems.size() > 0) {
-        auto mask = maskElems[vecStart];
-        maskVal = maybeAnd(rewriter, loc, threadPred, mask);
+      bool needsDynamicGroupMask =
+          maskElems.size() > 0 && vec > 1 && !perElementDims.empty();
+      if (maskElems.size() > 0 && !needsDynamicGroupMask)
+        maskVal = maybeAnd(rewriter, loc, threadPred, maskElems[vecStart]);
+      else if (needsDynamicGroupMask) {
+        // The descriptor's boundary mask is a genuine per-lane check (see
+        // perElementDims): unlike LoadOp/StoreOp, `vec` here is chosen from
+        // address-level contiguity alone and is NOT clamped by any
+        // static-uniformity analysis, so `maskElems` can legitimately differ
+        // across this group when a shape/offset boundary falls inside it.
+        // Using only maskElems[vecStart] to gate the whole group (as before
+        // this fix) is a correctness bug: it can write out-of-bounds memory
+        // or silently drop valid stores. Try a single wide store gated on a
+        // dynamic AND of the group's mask elements (the common case away
+        // from boundaries); otherwise fall back to the exact per-element
+        // behavior, preserving correctness.
+        Value groupMask = maskElems[vecStart];
+        for (size_t i = 1; i < vec; ++i)
+          groupMask = b.and_(groupMask, maskElems[vecStart + i]);
+        maskVal = maybeAnd(rewriter, loc, threadPred, groupMask);
       }
 
       auto vecTy = vec_ty(valArgTy, nWords);
@@ -2602,17 +2766,57 @@ struct DescriptorStoreOpConversion
         return ArrayRef<Value>();
       };
 
-      if (!maskVal) {
-        (void)createStoreWithAttrs();
-      } else if (canUsePredicatedInstructions(op)) {
-        // DescriptorStoreOp does not have a cache attribute, so use DEFAULT.
-        auto cacheModifier = TritonGEN::StoreCacheControl::DEFAULT;
-        TritonGEN::PredicatedStoreOp::create(rewriter, loc, addrElem, vecWord,
-                                             maskVal, cacheModifier);
-      } else {
-        LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal,
-                                           createStoreWithAttrs);
+      if (!needsDynamicGroupMask) {
+        if (!maskVal) {
+          (void)createStoreWithAttrs();
+        } else if (canUsePredicatedInstructions(op)) {
+          // DescriptorStoreOp does not have a cache attribute, so use DEFAULT.
+          auto cacheModifier = TritonGEN::StoreCacheControl::DEFAULT;
+          TritonGEN::PredicatedStoreOp::create(rewriter, loc, addrElem, vecWord,
+                                               maskVal, cacheModifier);
+        } else {
+          LLVM::intel::createPredicatedBlock(rewriter, loc, maskVal,
+                                             createStoreWithAttrs);
+        }
+        continue;
       }
+
+      // Emits the exact single-element fallback that today's code emits when
+      // vec == 1, applied to a single lane `i` of the current group. Used as
+      // the "slow" per-element arm when the group's boundary mask isn't
+      // uniform.
+      auto storeSingleElem = [&](size_t i) {
+        Value elem = valueElems[vecStart + i];
+        if (elem.getType().isInteger(1))
+          elem = b.sext(i8_ty, elem);
+        elem = b.bitcast(elem, valueElemTy);
+
+        Value addrElemI =
+            b.bitcast(ptrElems[vecStart + i], ptr_ty(ctx, 1 /*global*/));
+        Value predI =
+            maybeAnd(rewriter, loc, threadPred, maskElems[vecStart + i]);
+
+        if (!predI) {
+          b.store(elem, addrElemI, dtsize, /*isVolatile=*/false,
+                  /*isNonTemporal=*/false);
+        } else if (canUsePredicatedInstructions(op)) {
+          auto cacheModifier = TritonGEN::StoreCacheControl::DEFAULT;
+          TritonGEN::PredicatedStoreOp::create(rewriter, loc, addrElemI, elem,
+                                               predI, cacheModifier);
+        } else {
+          LLVM::intel::createPredicatedBlock(rewriter, loc, predI, [&]() {
+            b.store(elem, addrElemI, dtsize, /*isVolatile=*/false,
+                    /*isNonTemporal=*/false);
+            return ArrayRef<Value>();
+          });
+        }
+      };
+
+      LLVM::intel::createTwoArmedPredicatedBlock(
+          rewriter, loc, maskVal, createStoreWithAttrs, [&]() {
+            for (size_t i = 0; i < vec; ++i)
+              storeSingleElem(i);
+          });
     }
 
     rewriter.eraseOp(op);
