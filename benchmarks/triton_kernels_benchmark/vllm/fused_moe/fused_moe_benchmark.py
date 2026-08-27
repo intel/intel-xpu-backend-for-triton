@@ -12,6 +12,7 @@ different implementations using vLLM kernels.
 """
 import os
 import random
+import sys
 from math import prod
 from typing import Optional
 
@@ -27,6 +28,11 @@ from vllm.model_executor.layers.fused_moe.fused_moe import invoke_fused_moe_trit
 from vllm_xpu_kernels.fused_moe_interface import cutlass_grouped_gemm_xe2 as sycl_tla_grouped_gemm
 
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
+
+
+# The standalone unified FusedMoE kernel lives beside this benchmark.
+sys.path.insert(0, os.path.dirname(__file__))
+from FusedMoE_v2_manual_unified_triton import Model as XeForgeModel  # noqa: E402
 
 DEVICE_TOTAL_MEMORY_BYTES = benchmark_suite.get_total_gpu_memory_bytes()
 
@@ -276,6 +282,7 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_fp8
     supported_providers = {
         'triton' + ('-td' if is_td_patched else ''): 'triton' + ('-td' if is_td_patched else ''),
         'sycl-tla': 'sycl-tla',
+        'xeforge': 'xeforge',
     }
 
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
@@ -446,6 +453,37 @@ def get_fused_moe_benchmark(providers_filter: Optional[list[str]] = None, is_fp8
 
             _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
                 sycl_tla_fn,
+                n_warmup=n_warmup,
+                n_repeat=10,
+                quantiles=quantiles,
+            )
+
+        elif provider == 'xeforge':
+            # Standalone unified FusedMoE kernel. It handles routing/permutation
+            # internally and writes the (M, topk, N) workspace indexed by raw
+            # token id, so the same expert-grouped gather used by the triton
+            # provider recovers output_ref order.
+            model = XeForgeModel(M, N, K, num_experts, topk, QUANT=0)
+
+            def xeforge_fn():
+                return model(input_A, input_B, topk_ids)
+
+            output = xeforge_fn().clone().view(-1, n)
+            num_output_tokens = m * topk
+            valid_sorted_token_ids = sorted_token_ids[sorted_token_ids < num_output_tokens].to(torch.long)
+            assert valid_sorted_token_ids.numel() == num_output_tokens
+            output_xeforge_grouped = output[valid_sorted_token_ids]
+
+            # Correctness check
+            torch.testing.assert_close(
+                output_xeforge_grouped,
+                output_ref,
+                rtol=2e-2,
+                atol=1e-2,
+            )
+
+            _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
+                xeforge_fn,
                 n_warmup=n_warmup,
                 n_repeat=10,
                 quantiles=quantiles,
