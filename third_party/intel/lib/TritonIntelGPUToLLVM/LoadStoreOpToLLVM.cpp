@@ -2016,8 +2016,10 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
         typeConverter->convertType(getElementTypeOrSelf(op.getType()));
     unsigned numElems = getTotalElemsPerThread(op.getType());
     unsigned vec = getVectorSize(hasSupport256bLoadStore(op), ptr);
-    if (llMask)
-      vec = std::min<size_t>(vec, getMaskAlignment(mask));
+    // See the analogous comment in StoreOpConversion: this is no longer used
+    // to shrink vec, only to decide whether the mask is statically uniform
+    // across a vec-group (see the dispatch at the end of the loop below).
+    unsigned maskAlignment = llMask ? getMaskAlignment(mask) : vec;
 
     // Get the LLVM values for pointers
     SmallVector<Value> ptrElems =
@@ -2080,8 +2082,6 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       const size_t movWidth = width < 16 ? 16 : width;
       assert(wordNElems * nWords * numVecs == numElems);
 
-      Value pred = maskElems.size() ? maskElems[vecStart] : Value{};
-
       SmallVector<Type> retTys(nWords, IntegerType::get(ctx, width));
       Type retTy = retTys.size() > 1
                        ? vec_ty(IntegerType::get(ctx, width), nWords)
@@ -2131,17 +2131,87 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                                          getNonTemporalFlag(op))};
       };
 
-      Value ret;
-      if (!pred)
-        ret = createLoadWithAttrs()[0];
-      else if (canUsePredicatedInstructions(op)) {
-        auto cacheModifier = tritonToIntelCacheModifier(op);
-        ret = TritonGEN::PredicatedLoadOp::create(
-            rewriter, loc, retTy, addrElem, pred, other_, cacheModifier);
-      } else {
+      // Dispatches a (possibly predicated) load of `ty` from `addr`: an
+      // unconditional load if `pred` is null, a `TritonGEN::PredicatedLoadOp`
+      // if predicated instructions are available for `op`, or a
+      // branch-guarded plain load (via `loadFn`) otherwise. Returns the
+      // loaded (or default) value of type `ty`.
+      auto emitPredicatedLoad = [&](Type ty, Value pred, Value addr,
+                                    Value defaultVal, auto loadFn) -> Value {
+        if (!pred)
+          return loadFn()[0];
+        if (canUsePredicatedInstructions(op)) {
+          auto cacheModifier = tritonToIntelCacheModifier(op);
+          return TritonGEN::PredicatedLoadOp::create(
+              rewriter, loc, ty, addr, pred, defaultVal, cacheModifier);
+        }
         Block &endBlock = LLVM::intel::createPredicatedBlock(
-            rewriter, loc, pred, SmallVector<Value, 1>{other_},
-            createLoadWithAttrs);
+            rewriter, loc, pred, SmallVector<Value, 1>{defaultVal}, loadFn);
+        return *endBlock.args_begin();
+      };
+
+      // Loads a single raw element (type `valueElemTy`) at lane `i` of the
+      // current group, mirroring the vec == 1 path (same alignment/default
+      // handling). Used as the "slow" per-element arm when the mask isn't
+      // statically uniform across the whole group.
+      auto loadSingleElem = [&](size_t i) -> Value {
+        Value addrElemI =
+            b.bitcast(ptrElems[vecStart + i], ptr_ty(ctx, 1 /*global*/));
+        Value defaultI =
+            otherElems.empty()
+                ? LLVM::ConstantOp::create(rewriter, loc, valueElemTy,
+                                           rewriter.getZeroAttr(valueElemTy))
+                : otherElems[vecStart + i];
+        auto createSingleLoadWithAttrs = [&]() {
+          return SmallVector<Value>{
+              b.load(valueElemTy, addrElemI, valueElemNBits / 8,
+                     op.getIsVolatile(), getNonTemporalFlag(op))};
+        };
+
+        Value predI = maskElems.size() ? maskElems[vecStart + i] : Value{};
+        return emitPredicatedLoad(valueElemTy, predI, addrElemI, defaultI,
+                                  createSingleLoadWithAttrs);
+      };
+
+      Value ret;
+      if (maskElems.empty() || maskAlignment >= vec) {
+        // Either unmasked, or the mask is statically provably uniform across
+        // this whole group: behavior identical to before this change.
+        Value pred = maskElems.size() ? maskElems[vecStart] : Value{};
+        ret = emitPredicatedLoad(retTy, pred, addrElem, other_,
+                                 createLoadWithAttrs);
+      } else {
+        // The mask isn't statically uniform across the group. Try a single
+        // wide load gated on a dynamic AND of the group's mask elements (the
+        // common case away from boundaries); otherwise fall back to the
+        // exact per-element behavior, preserving correctness. The slow arm
+        // repacks `vec` individually-loaded elements into the same `retTy`
+        // word layout the fast arm produces, using the same packing scheme
+        // as `other_` above, so the post-branch extraction logic (below)
+        // is agnostic to which arm was taken.
+        Value groupMask = maskElems[vecStart];
+        for (size_t i = 1; i < vec; ++i)
+          groupMask = b.and_(groupMask, maskElems[vecStart + i]);
+
+        Block &endBlock = LLVM::intel::createTwoArmedPredicatedBlock(
+            rewriter, loc, groupMask, SmallVector<Value, 1>{other_},
+            createLoadWithAttrs, [&]() -> SmallVector<Value> {
+              Value slowRet = b.undef(retTy);
+              for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
+                VectorType vecTy = vec_ty(valueElemTy, wordNElems);
+                Value v = b.undef(vecTy);
+                for (size_t elemIdx = 0; elemIdx < wordNElems; ++elemIdx) {
+                  Value elem = loadSingleElem(wordIdx * wordNElems + elemIdx);
+                  v = b.insert_element(vecTy, v, elem, b.i32_val(elemIdx));
+                }
+                Value wordInt = b.bitcast(v, IntegerType::get(ctx, width));
+                slowRet = (nWords > 1)
+                              ? b.insert_element(retTy, slowRet, wordInt,
+                                                 b.i32_val(wordIdx))
+                              : wordInt;
+              }
+              return {slowRet};
+            });
         ret = *endBlock.args_begin();
       }
       assert(ret && "Expecting a valid value");
