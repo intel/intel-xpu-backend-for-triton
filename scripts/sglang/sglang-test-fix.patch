@@ -79,3 +79,18 @@ index 10d2e9717..a312eb087 100644
  
          unified_kv_indptr, unified_kv_indices, prefix_lens = build_unified_kv_indices(
              kv_indptr,
+diff --git a/test/registered/quant/test_awq_dequant.py b/test/registered/quant/test_awq_dequant.py
+--- a/test/registered/quant/test_awq_dequant.py
++++ b/test/registered/quant/test_awq_dequant.py
+@@ -113,7 +113,10 @@
+
+         # sanity
+         self.assertFalse(torch.any(torch.isinf(tri)) or torch.any(torch.isnan(tri)))
+-        torch.testing.assert_close(ref, tri)
++        # Compare on the host: on-device assert_close upcasts and materialises
++        # several full-size temporaries, pushing the largest reference shape over
++        # the 12 GB budget on B580 (issue #7779). test_gemm already uses .cpu().
++        torch.testing.assert_close(ref.cpu(), tri.cpu())
+
+     # GEMM
+     def test_gemm(self):
