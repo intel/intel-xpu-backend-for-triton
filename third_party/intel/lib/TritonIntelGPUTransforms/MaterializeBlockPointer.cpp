@@ -775,49 +775,28 @@ private:
       return;
     }
 
-    // Construct "store encoding" matching HW delivery:
-    // lanes map to contiguous column blocks, and each lane stores consecutive
-    // rows for its block in its local fragment
+    // Reshape pointer and value to [H, W] with their natural 2D encodings
+    auto ptrReshape = tt::ReshapeOp::create(builder, loc, newShape, info->ptr,
+                                            /*allowReorder=*/false);
+    auto valReshape =
+        tt::ReshapeOp::create(builder, loc, newShape, op.getValue(),
+                              /*allowReorder=*/false);
+
+    // Build HW delivery encoding and convert both ptr and val into it.
     auto storeEnc =
         buildHWDelivery2DEncoding(ctx, perWarpH, W, threadsPerWarp, numWarps);
-
-    // Construct "consumer encoding" — the natural 2D reshape of the value's
-    // original 1D encoding.
-    auto valTensorTy = cast<RankedTensorType>(op.getValue().getType());
-    std::optional<Attribute> consumerEnc =
-        derive2DConsumerEncoding(ctx, valTensorTy, info->W);
-    if (!consumerEnc)
-      return;
-
-    // Reshape pointer to [H, W] with store encoding.
-    // Mark efficient_layout so RemoveLayoutConversions does not
-    // rematerialize these reshapes with a different encoding.
     auto storePtrTy =
         RankedTensorType::get(newShape, ptrTensorTy.getElementType(), storeEnc);
-    auto ptrReshape = tt::ReshapeOp::create(builder, loc, storePtrTy, info->ptr,
-                                            /*allowReorder=*/true,
-                                            /*efficientLayout=*/true);
-
-    // Reshape the value to [H, W] in the consumer encoding, then convert it
-    // into the hardware delivery layout.
-    Type valElemTy = valTensorTy.getElementType();
-    auto consumerValTy =
-        RankedTensorType::get(newShape, valElemTy, *consumerEnc);
-    auto valReshape =
-        tt::ReshapeOp::create(builder, loc, consumerValTy, op.getValue(),
-                              /*allowReorder=*/false,
-                              /*efficientLayout=*/true);
-
-    // ConvertLayoutOp: consumer encoding -> store encoding.
-    Value storeVal = valReshape.getResult();
-    if (*consumerEnc != storeEnc) {
-      auto storeValTy = RankedTensorType::get(newShape, valElemTy, storeEnc);
-      storeVal =
-          ttg::ConvertLayoutOp::create(builder, loc, storeValTy, valReshape);
-    }
+    Value storePtr =
+        ttg::ConvertLayoutOp::create(builder, loc, storePtrTy, ptrReshape);
+    auto valTy = cast<RankedTensorType>(op.getValue().getType());
+    auto storeValTy =
+        RankedTensorType::get(newShape, valTy.getElementType(), storeEnc);
+    Value storeVal =
+        ttg::ConvertLayoutOp::create(builder, loc, storeValTy, valReshape);
 
     // Create the new 2D store.
-    auto newStore = tt::StoreOp::create(builder, loc, ptrReshape, storeVal,
+    auto newStore = tt::StoreOp::create(builder, loc, storePtr, storeVal,
                                         op.getCache(), op.getEvict());
 
     setBlockIOAttrs(newStore, ctx, info->S);

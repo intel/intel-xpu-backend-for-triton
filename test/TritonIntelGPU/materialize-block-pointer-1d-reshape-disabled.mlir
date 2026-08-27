@@ -90,8 +90,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // DISABLED-NOT: tt.reshape
     // DISABLED: tt.store %{{.*}}, %{{.*}} : tensor<1024x!tt.ptr<f16>
     // DISABLED-NOT: ttig.block_io
-    // ENABLED: tt.reshape %{{.*}} allow_reorder efficient_layout
-    // ENABLED: tt.reshape %{{.*}} efficient_layout
+    // ENABLED: tt.reshape %{{.*}} : tensor<1024x!tt.ptr<f16>,
+    // ENABLED: tt.reshape %{{.*}} : tensor<1024xf16,
+    // ENABLED: ttg.convert_layout
     // ENABLED: ttg.convert_layout
     // ENABLED: tt.store %{{.*}}, %{{.*}} {ttig.block_io = "row_major", ttig.block_io_stride = 96 : i64} : tensor<32x32x!tt.ptr<f16>
     tt.store %ptrs, %arg1 : tensor<1024x!tt.ptr<f16>, #blocked1d_large>
