@@ -2252,6 +2252,8 @@ struct DescriptorGatherConversionBase : public BlockIOConversionBase {
     constexpr unsigned totalBytesPerGatherLoadNonTrans = 256;
     unsigned bytesPerRow =
         sizeInfo.numElemPerPackedVal * sizeInfo.tileWidth * elemSizeInBits / 8;
+    if (bytesPerRow == 0 || bytesPerRow > totalBytesPerGatherLoadNonTrans)
+      return failure();
     sizeInfo.tileHeight = std::min(
         sizeInfo.tileHeight,
         static_cast<int>(totalBytesPerGatherLoadNonTrans / bytesPerRow));
