@@ -481,6 +481,8 @@ fi
 TRITON_PROJ="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && cd .. && pwd )"
 SCRIPTS_DIR="$TRITON_PROJ/scripts"
 source "$SCRIPTS_DIR/pytest-utils.sh"
+# Provides the `pip` wrapper (pip or `uv pip`).
+source "$SCRIPTS_DIR/pip-utils.sh"
 
 if [ "$TRITON_TEST_REPORTS" == true ]; then
     capture_runtime_env
@@ -491,10 +493,10 @@ install_deps() {
     echo "**** Skipping installation of pip dependencies ****"
   else
     echo "**** Installing pip dependencies ****"
-    python -m pip install -r "$SCRIPTS_DIR/requirements-test.txt"
+    pip install -r "$SCRIPTS_DIR/requirements-test.txt"
 
     if [ "$TRITON_TEST_WARNING_REPORTS" == true ]; then
-      python -m pip install git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.2.0
+      pip install git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.2.0
     fi
   fi
 
@@ -710,7 +712,7 @@ run_tutorial_tests() {
   echo "***************************************************"
   echo "**** Running Triton Tutorial tests           ******"
   echo "***************************************************"
-  python -m pip install matplotlib 'pandas<3.0' tabulate -q
+  pip install matplotlib 'pandas<3.0' tabulate -q
 
   cd $TRITON_PROJ/python/test/tutorials
 
@@ -851,7 +853,7 @@ run_test_deps_install() {
 
 run_vllm_test_deps_install() {
   run_test_deps_install
-  python -m pip install \
+  pip install \
     accelerate \
     blake3 \
     cachetools \

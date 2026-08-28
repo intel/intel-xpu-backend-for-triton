@@ -248,6 +248,9 @@ private:
       return;
     }
 
+    if (!maskPermitsBlockTile(op, axisInfoAnalysis, rank))
+      return;
+
     // Determine if LoadOp is row-major or column-major.
     tt::intel::StrideInfo *strideInfo = strideAnalysis.getStrideInfo(ptr);
     auto isMajor = [rank, &strideInfo](RankedTensorType tensorTy,
@@ -309,6 +312,52 @@ private:
                   StringAttr::get(op.getContext(),
                                   ttgi::stringifyBlockIOMode(
                                       ttgi::BlockIOMode::ColumnMajor)));
+  }
+
+  /// A 2D block message carries a single predicate for the whole tile, so
+  /// `getBlockIOTileSize` clamps the tile to the mask's constancy along each
+  /// tensor dimension. Return false when the mask of \p op cannot support a
+  /// tile spanning more than one element in one of the two innermost dims: the
+  /// clamp then degenerates the tile to a single row (or rejects it outright in
+  /// the lowering), and the load is served better by the predicated-load path
+  /// in its coalesced layout.
+  ///
+  /// Marking such an op block-I/O capable is not merely useless but harmful:
+  /// RemoveLayoutConversions de-anchors the load into a dot-operand layout on
+  /// the promise of a wide block tile that the clamp then withholds, so the
+  /// operand is reassembled from one hardware message per row plus a shuffle
+  /// per element.
+  ///
+  /// A mask whose bound is an opaque runtime scalar — e.g. the per-group token
+  /// count in a grouped GEMM, `offs_am < tl.load(offsets_ptr + g)` — has
+  /// constancy 1 along the M dim, because the compare visitor can only derive
+  /// constancy from the divisibility of both sides.
+  template <typename OpType>
+  bool maskPermitsBlockTile(OpType op,
+                            tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                            unsigned rank) const {
+    Value mask = op.getMask();
+    if (!mask || matchPattern(mask, m_One()))
+      return true;
+
+    const tt::AxisInfo *maskAxisInfo = axisInfoAnalysis.getAxisInfo(mask);
+    if (!maskAxisInfo) {
+      LDBG("No axis info for mask, skip block IO attribute");
+      return false;
+    }
+
+    // Mirrors getBlockIOTileSize, which rejects a non-power-of-2 constancy
+    // outright and clamps each tile dimension to the constancy along it.
+    for (unsigned dim : {rank - 2, rank - 1}) {
+      int64_t constancy = maskAxisInfo->getConstancy(dim);
+      if (constancy < 2 || !llvm::isPowerOf2_64(constancy)) {
+        LDBG("Mask constancy along dim " << dim << " is " << constancy
+                                         << ", which degenerates the 2D block "
+                                            "tile; skip block IO attribute");
+        return false;
+      }
+    }
+    return true;
   }
 
   /// Look through cast wrappers (index_cast, extui, extsi, trunci, etc.)

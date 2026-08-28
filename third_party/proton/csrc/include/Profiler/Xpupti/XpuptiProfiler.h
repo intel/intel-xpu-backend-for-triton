@@ -10,8 +10,6 @@ public:
   XpuptiProfiler();
   virtual ~XpuptiProfiler();
 
-  int64_t getTimestampOffsetNs() const override { return 0; }
-
 private:
   struct XpuptiProfilerPimpl;
 

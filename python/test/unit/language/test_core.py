@@ -1069,8 +1069,9 @@ def test_where_broadcast(num_ctas, device):
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_x, expr",
-                         [(dtype_x, ' -x') for dtype_x in dtypes_with_bfloat16] + [(dtype_x, ' ~x')
-                                                                                   for dtype_x in int_dtypes])
+                         [(dtype_x, ' -x')
+                          for dtype_x in dtypes_with_bfloat16] + [(dtype_x, ' ~x')
+                                                                  for dtype_x in int_dtypes + uint_dtypes])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_unary_op(dtype_x, expr, num_ctas, device):
     _test_unary(dtype_x, expr, device=device, num_ctas=num_ctas)
@@ -2363,6 +2364,26 @@ def test_cat_nd(shape, dim, device):
     torch.testing.assert_close(z, z_ref, atol=0, rtol=0)
 
 
+@pytest.mark.parametrize("m1, m2", [
+    pytest.param(16, 8, id="non_broadcastable"),
+    pytest.param(1, 8, id="broadcastable"),
+])
+def test_cat_shape_mismatch(m1, m2, device):
+
+    @triton.jit
+    def kernel(X, Y, M1: tl.constexpr, M2: tl.constexpr):
+        x = tl.load(X + tl.arange(0, M1))
+        y = tl.load(Y + tl.arange(0, M2))
+        z = tl.cat(x, y, dim=0)
+        tl.store(X + tl.arange(0, 1), tl.sum(z))
+
+    x = torch.zeros(m1, device=device, dtype=torch.float32)
+    y = torch.zeros(m2, device=device, dtype=torch.float32)
+    with pytest.raises(triton.CompilationError) as exc_info:
+        kernel[(1, )](x, y, M1=m1, M2=m2)
+    assert "tl.cat requires tensors of the same shape" in str(exc_info.value)
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", list(torch_dtypes))
 @pytest.mark.parametrize("constant_field", ["value", "mask"])
@@ -2413,7 +2434,7 @@ def test_load_store_same_ptr(device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("dtype_str", ['int32'])
+@pytest.mark.parametrize("dtype_str", ['int32', 'uint32', 'int64', 'uint64'])
 def test_umulhi(dtype_str, device):
 
     @triton.jit
@@ -2424,29 +2445,31 @@ def test_umulhi(dtype_str, device):
         z = tl.umulhi(x, y)
         tl.store(Z + tl.arange(0, N), z)
 
-    def umulhi32(a, b):
-        # Convert to 64-bit unsigned integers to prevent overflow
-        a_64 = a.astype(np.int64)
-        b_64 = b.astype(np.int64)
+    def umulhi_ref(a, b):
+        # umulhi multiplies the unsigned bit patterns; Python ints keep the
+        # 2N-bit product exact where numpy would overflow.
+        bits = a.dtype.itemsize * 8
+        unsigned = np.dtype(f'uint{bits}')
+        product = a.view(unsigned).astype(object) * b.view(unsigned).astype(object)
+        return np.array((product >> bits).tolist(), dtype=unsigned).view(a.dtype)
 
-        # Perform the multiplication in 64-bit
-        product_64 = a_64 * b_64
-
-        # Shift right by 32 bits to get the high part of the product
-        result_high_32 = product_64 >> 32
-        return result_high_32
-
+    np_dtype = np.dtype(dtype_str)
+    unsigned = np.dtype(f'uint{np_dtype.itemsize * 8}')
+    iinfo = np.iinfo(np_dtype)
+    # Boundary values matter most here: operands whose top bit is set.
+    edges = np.array([0, 1, 2, 3, 7, 255, iinfo.max, iinfo.min], dtype=np_dtype)
     rs = RandomState(17)
-    N = 128
-    x = numpy_random((N, ), dtype_str=dtype_str, rs=rs, low=0)
-    x_tri = to_triton(x, device=device)
-    y = numpy_random((N, ), dtype_str=dtype_str, rs=rs, low=0)
-    y_tri = to_triton(y, device=device)
-    z_tri = torch.zeros_like(x_tri)
+    N = 32
+    random = np.frombuffer(rs.bytes((N - len(edges)) * np_dtype.itemsize), dtype=unsigned).view(np_dtype)
+    x = np.concatenate((edges, random))
+    y = np.roll(x, 1)
+
+    x_tri = to_triton(x, device=device, dst_type=dtype_str)
+    y_tri = to_triton(y, device=device, dst_type=dtype_str)
+    z_tri = to_triton(np.zeros_like(x), device=device, dst_type=dtype_str)
     kernel[(1, )](x_tri, y_tri, z_tri, N=N)
 
-    z_ref = umulhi32(x, y)
-    np.testing.assert_equal(z_ref, to_numpy(z_tri))
+    np.testing.assert_equal(umulhi_ref(x, y), to_numpy(z_tri))
 
 
 @pytest.mark.interpreter
@@ -3890,13 +3913,10 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         if input_precision == "bf16x3" or input_precision == "bf16x6":
             pytest.xfail(f"input_precision {input_precision} is not supported in the interpreter")
     else:
-        if is_xpu():
-            if (M < 8 or N < 16 or (K < 16 and in_dtype == 'float16') or (K < 8 and in_dtype == 'float32')):
-                pytest.xfail("XPU: small dots are not supported")
-        elif not is_hip() and K < 16:
+        if not is_xpu() and not is_hip() and K < 16:
             tf32_n8 = (in_dtype == 'float32' and N == 8 and K == 8 and input_precision == 'tf32')
             if in_dtype != 'float64' and not tf32_n8:
-                pytest.skip("small dots are supported only on HIP at the moment")
+                pytest.skip("K < 16 dots are not supported on this backend at the moment for this dtype")
         if is_cuda():
             capability = torch.cuda.get_device_capability()
 
@@ -5334,6 +5354,16 @@ def _impl(value=10):
     return value
 
 
+@triton.jit
+def _keyword_only_impl(value=3, *, required, optional=5, REQUIRED: tl.constexpr, OPTIONAL: tl.constexpr = 2):
+    return value + required + optional + REQUIRED * OPTIONAL
+
+
+@triton.jit
+def _keyword_only_varargs(value, *values, scale: tl.constexpr = 2):
+    return value + values[0] + values[1] * scale
+
+
 @pytest.mark.interpreter
 def test_default(device):
     value = 5
@@ -5352,6 +5382,36 @@ def test_default(device):
     _kernel[(1, )](ret0, ret1)
     assert ret0.item() == 10
     assert ret1.item() == 3
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("args, kwargs, expected", [((), {}, [37, 37, 20]),
+                                                    ((13, ), {"optional": 17, "OPTIONAL": 19}, [37, 246, 343])])
+def test_keyword_only_arguments(device, args, kwargs, expected):
+
+    @triton.jit
+    def kernel(value=3, *, output, required, optional=5, REQUIRED: tl.constexpr, OPTIONAL: tl.constexpr = 2):
+        tl.store(output, _keyword_only_impl(required=required, REQUIRED=REQUIRED))
+        tl.store(output + 1,
+                 _keyword_only_impl(value, required=required, optional=optional, REQUIRED=REQUIRED, OPTIONAL=OPTIONAL))
+        tl.store(output + 2, _keyword_only_varargs(value, required, optional, scale=OPTIONAL))
+
+    output = torch.empty(3, dtype=torch.int32, device=device)
+    kernel[(1, )](*args, output=output, required=7, REQUIRED=11, **kwargs)
+    assert output.tolist() == expected
+
+
+@pytest.mark.interpreter
+def test_keyword_only_launch_errors():
+
+    @triton.jit
+    def kernel(*, MODE: tl.constexpr):
+        pass
+
+    with pytest.raises(TypeError, match="positional argument"):
+        kernel[(1, )](0)
+    with pytest.raises(TypeError, match="MODE"):
+        kernel[(1, )]()
 
 
 # ---------------
@@ -6231,6 +6291,23 @@ def test_while(device):
     assert out_init_i[0] == init_i[0]
     assert out_i[0] == init_i[0] + 1
     assert out_j[0] == bound[0]
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("n", [0, 3])
+def test_while_condition(n, device):
+
+    @triton.jit
+    def kernel(Out, n):
+        i = 0
+        while tl.condition(i < n):
+            i += 1
+        tl.store(Out, i)
+
+    out = torch.full((1, ), -1, dtype=torch.int32, device=device)
+    kernel[(1, )](out, n)
+    assert out.item() == n
+    assert "__bool__" not in tl.condition.__dict__
 
 
 @pytest.mark.interpreter
