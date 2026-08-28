@@ -452,16 +452,16 @@ struct LoadStoreConversionBase {
             op, TritonIntelGPUDialect::getSupportPredicatedIOAttrName()))
       return false;
 
-    // Note that the DescriptorLoadOp fallback *always* emits a boundary-check
-    // mask, even for provably in-bounds tiles: every dimension is classified as
-    // either block-level or per-element, so the unconditional-load path is
-    // unreachable for that op and the choice made here applies to all of its
-    // masked loads.
+    // Predicated load and store are enabled by default for all four op types
+    // (LoadOp, StoreOp, DescriptorLoadOp, DescriptorStoreOp). Either env var
+    // (TRITON_INTEL_PREDICATED_LOAD, TRITON_INTEL_PREDICATED_STORE) overrides
+    // in both directions.
     //
-    // Predicated load and store are both enabled by default for all four op
-    // types; either env var still overrides in both directions. Defaulting
-    // DescriptorLoadOp on gives up IGC's folding of uniformly-true predicates
-    // in the control-flow form; that trade measured favorable on Xe2, see
+    // Note that DescriptorLoadOp always emits a boundary-check mask, even for
+    // provably in-bounds tiles, so this choice applies to all of its masked
+    // fallback loads (2D block loads bypass this path entirely). Predicating
+    // them costs IGC's folding of the uniformly-true predicates that the
+    // control-flow form exposes; that trade measured favorable on Xe2, see
     // issue #7090.
     static const std::optional<bool> usePredicatedLoad =
         tools::isEnvValueBool(tools::getStrEnv("TRITON_INTEL_PREDICATED_LOAD"));

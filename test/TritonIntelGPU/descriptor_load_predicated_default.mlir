@@ -1,14 +1,13 @@
 // RUN: triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefixes=CHECK,PREDICATED
 // RUN: env TRITON_INTEL_PREDICATED_LOAD=0 triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefixes=CHECK,NO-PREDICATED
-// RUN: env TRITON_INTEL_PREDICATED_LOAD=yes triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefixes=CHECK,PREDICATED
+// RUN: env TRITON_INTEL_PREDICATED_LOAD=1 triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s --check-prefixes=CHECK,PREDICATED
 
 // Pin the *default* lowering of tt.descriptor_load on the non-2D-block path.
 //
 // RUN 1 deliberately leaves TRITON_INTEL_PREDICATED_LOAD unset: it is the only
 // line here that pins the default, and the only one whose expected output
-// changes if the default is flipped back. RUN 2 pins the explicit `=0`
-// override. RUN 3 passes an unparseable value, which isEnvValueBool rejects to
-// nullopt and therefore must fall back to the default path.
+// changes if the default is flipped back. RUN 2 and RUN 3 pin the explicit
+// `=0` and `=1` overrides.
 //
 // The pass order mirrors production (compiler.py: lower_to_2d_block_load ->
 // allocate_shared_memory -> to_llvmir). No chunk here puts a descriptor load
