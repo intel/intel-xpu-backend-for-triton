@@ -247,11 +247,11 @@ void init_triton_intel(py::module_ &m) {
         } else if (pyCb) {
           instrCbPtr = &passInstrCb;
           passInstrCb.registerBeforeNonSkippedPassCallback(
-              [&passStartTimes](llvm::StringRef id, llvm::Any) {
+              [&passStartTimes](llvm::StringRef id, llvm::IRUnitRef) {
                 passStartTimes[id] = std::chrono::high_resolution_clock::now();
               });
           passInstrCb.registerAfterPassCallback(
-              [&passStartTimes, &pyCb](llvm::StringRef id, llvm::Any,
+              [&passStartTimes, &pyCb](llvm::StringRef id, llvm::IRUnitRef,
                                        const llvm::PreservedAnalyses &) {
                 auto start = passStartTimes.find(id);
                 if (start != passStartTimes.end()) {

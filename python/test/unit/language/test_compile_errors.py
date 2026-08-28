@@ -399,7 +399,7 @@ def test_fp8_support(fresh_triton_cache, dtype):
             raise assertion_err from e.value
 
 
-@pytest.mark.parametrize("dtype", [tl.float8e5, tl.int8, tl.float16])
+@pytest.mark.parametrize("dtype", [tl.float8e5, tl.int8, tl.float16, tl.bfloat16])
 def test_min_dot_size(dtype):
     error_msg = "Input shapes should have "
     if is_cuda():
@@ -411,10 +411,11 @@ def test_min_dot_size(dtype):
         # hip supports arbitrary sizes
         error_msg = None
     elif is_xpu():
-        # XPU supports all sizes
-        pass
+        # invalid DPAS INT8 dots are rejected, other dots
+        # fallback to FMA.
+        error_msg = "Input shapes should have " if dtype.is_int8() else None
     else:
-        pytest.skip("Test only supported on CUDA and HIP")
+        pytest.skip("Test only supported on CUDA, HIP and XPU")
 
     @triton.jit
     def dot_kernel(dtype: tl.constexpr):
