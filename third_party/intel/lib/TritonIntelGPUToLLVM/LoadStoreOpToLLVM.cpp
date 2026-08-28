@@ -2367,9 +2367,8 @@ struct DescriptorGatherOpConversion
     if (succeeded(lowerSubGroupGatherFastPath(op, adaptor, rewriter)))
       return success();
 
-    llvm_unreachable(
-        "DescriptorGatherOpConversion: failed to lower DescriptorGatherOp");
-    return failure();
+    return rewriter.notifyMatchFailure(op,
+                                      "failed to lower ttig.descriptor_gather");
   }
 
 private:
