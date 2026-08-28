@@ -11,6 +11,7 @@ batched MoE implementations using vLLM kernels.
 
 """
 import os
+import sys
 from typing import Optional
 
 import torch
@@ -25,6 +26,10 @@ from tests.kernels.moe.utils import make_quantized_test_activations, make_test_w
 from tests.kernels.quant_utils import native_batched_masked_quant_matmul
 
 from vllm_xpu_kernels.fused_moe_interface import cutlass_grouped_gemm_xe2 as sycl_tla_grouped_gemm
+
+# The standalone unified BatchedMoE kernel lives beside this benchmark.
+sys.path.insert(0, os.path.dirname(__file__))
+from BatchedMoE_v2_manual_unified_triton import Model as XeForgeModel  # noqa: E402
 
 # Benchmark shapes for batched MoE
 # (E: num_experts, M: max_tokens_per_expert, K: hidden_dim, N: intermediate_dim, fp8, block_quant)
@@ -130,6 +135,12 @@ def get_batched_mm_benchmark(
 
     if not is_fp8:
         supported_providers['sycl-tla'] = 'sycl-tla'
+        # The hand-merged unified BatchedMoE kernel (Model in
+        # BatchedMoE_v2_manual_unified_triton.py). Register for the bf16 sweep
+        # only: its fp8 path absorbs quant host-side with unit scales and would
+        # not match this benchmark's scaled fp8 reference (batched_moe DOES run
+        # fp8 in CI, unlike fused_moe).
+        supported_providers['xeforge'] = 'xeforge'
 
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
     configs = MM_CONFIGS_FP8 if is_fp8 else MM_CONFIGS_BF16
@@ -141,7 +152,7 @@ def get_batched_mm_benchmark(
             line_arg='provider',
             line_vals=list(providers.keys()),
             line_names=list(providers.values()),
-            styles=[('green', '-'), ('blue', '--'), ('red', ':')],
+            styles=[('green', '-'), ('blue', '--'), ('red', ':'), ('orange', '-.')],
             ylabel=['GB/s', 'TFlops'],
             plot_name='moe-gemm-performance' + ('-fp8' if is_fp8 else '') + ('-td' if is_td_patched else ''),
             args={},
@@ -266,6 +277,23 @@ def get_batched_mm_benchmark(
                                          err_msg='sycl-tla to torch')
             _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
                 sycl_tla_fn,
+                n_warmup=n_warmup,
+                n_repeat=10,
+                quantiles=quantiles,
+            )
+
+        elif provider == 'xeforge':
+            # Standalone unified BatchedMoE kernel. Its Model runs the same
+            # batched (E, M, N) grouped GEMM as the triton provider (bf16,
+            # QUANT=0), so it compares directly against the torch reference.
+            model = XeForgeModel(num_experts, max_tokens_per_expert, K, N, QUANT=0)
+
+            def xeforge_fn():
+                return model(A_q, B_q, num_expert_tokens)
+
+            benchmark_suite.assert_close(xeforge_fn, torch_fn, atol=atol, rtol=rtol, err_msg='xeforge to torch')
+            _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
+                xeforge_fn,
                 n_warmup=n_warmup,
                 n_repeat=10,
                 quantiles=quantiles,
