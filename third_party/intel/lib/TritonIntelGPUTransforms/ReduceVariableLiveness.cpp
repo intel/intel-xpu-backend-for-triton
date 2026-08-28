@@ -34,18 +34,18 @@ using TensorValue = TypedValue<RankedTensorType>;
 
 namespace {
 
-// Per-thread live-in register-pressure floor (in bytes) below which shortening
-// a load's live range is not worthwhile: the loop body is not under enough
-// pressure to benefit. This supersedes the former full-tensor threshold (32768
-// bytes summed across all lanes); the analysis now reports per-thread bytes,
-// matching the unit used by HoistLayoutConversions.
-// Calibrated against test/TritonIntelGPU/reduce-variable-liveness.mlir: the
-// attention loop bodies that benefit from the transform carry >= 836
-// bytes/thread of live-in, so 512 leaves margin below that while still
-// filtering trivially small loop bodies. Kernels that must stay untouched in
-// that test are gated out earlier (small-tensor shape gate, missing
-// ttig.block_io, or use-before-loop) independently of this floor.
-constexpr uint32_t LIVE_IN_PRESSURE_THRESHOLD_IN_BYTES = 512;
+// Live-in register-pressure floor (in bytes, summed across all lanes of the
+// workgroup) below which shortening a load's live range is not worthwhile: the
+// loop body is not under enough pressure to benefit.
+//
+// `RegisterPressureAnalysis` reports *per-thread* bytes, so the gate scales the
+// reported value back up by the workgroup's thread count before comparing. That
+// keeps this threshold in the same unit it has always had, and therefore keeps
+// the gate firing on exactly the same loops at every warp count. Expressing the
+// floor per-thread instead is not equivalent: a fixed per-thread number is a
+// different full-tensor bound at every thread count, and the attention kernels
+// that this transform exists to help sit right at the boundary.
+constexpr uint32_t TOTAL_BLOCK_SIZE_THRESHOLD_IN_BYTES = 32768;
 constexpr uint32_t LARGE_TENSOR_MINOR_SHAPE_THRESHOLD = 128;
 constexpr uint32_t LARGE_TENSOR_MAJOR_SHAPE_THRESHOLD = 128;
 constexpr uint32_t LARGE_TENSOR_SIZE_THRESHOLD_IN_BYTES =
@@ -80,13 +80,18 @@ bool isLongLifeSpanVariable(
 
   auto tensorType = cast<RankedTensorType>(tensorV.getType());
   auto tensorOrder = ttg::getOrder(tensorType);
-  unsigned liveInSizeInBytes = analysis.liveInPressure(dotBlock);
+  // Scale the per-thread pressure reported by the analysis back to bytes summed
+  // across the workgroup, the unit TOTAL_BLOCK_SIZE_THRESHOLD_IN_BYTES is in.
+  auto mod = dotBlock->getParentOp()->getParentOfType<ModuleOp>();
+  unsigned numThreads = ttg::lookupNumWarps(dotBlock->getParentOp()) *
+                        ttg::TritonGPUDialect::getThreadsPerWarp(mod);
+  unsigned liveInSizeInBytes = analysis.liveInPressure(dotBlock) * numThreads;
   return (
       (tensorOrder.size() == 2) &&
       (getSizeInBytes(tensorType) >= LARGE_TENSOR_SIZE_THRESHOLD_IN_BYTES) &&
       (tensorType.getShape()[tensorOrder[1]] >=
        LARGE_TENSOR_MINOR_SHAPE_THRESHOLD) &&
-      (liveInSizeInBytes >= LIVE_IN_PRESSURE_THRESHOLD_IN_BYTES) &&
+      (liveInSizeInBytes > TOTAL_BLOCK_SIZE_THRESHOLD_IN_BYTES) &&
       analysis.isLiveIn(dotBlock, v));
 }
 
