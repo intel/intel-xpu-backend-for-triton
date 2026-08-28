@@ -2423,8 +2423,9 @@ private:
     std::optional<LinearLayout> llEncoding =
         cast<DistributedEncodingTrait>(resultType.getEncoding())
             .toLinearLayout(resultType.getShape());
-    assert(llEncoding.has_value() &&
-           "unexpected failure when getting linear layout");
+    if (!llEncoding)
+      return rewriter.notifyMatchFailure(
+          op, "result encoding not convertible to LinearLayout");
 
     StringAttr kRegister = S("register");
     StringAttr kLane = S("lane");
