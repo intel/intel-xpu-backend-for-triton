@@ -414,9 +414,9 @@ def compile_module_from_src(src: str, name: str, is_lts: bool = False):
 
             if COMPILATION_HELPER.inject_pytorch_dep and name == "spirv_utils":
                 if os.name == "nt":
-                    extra_compiler_args += ["/DTRITON_INTEL_INJECT_PYTORCH=1", "/std:c++20"]
+                    extra_compiler_args += ["/DTRITON_INTEL_INJECT_PYTORCH=1"]
                 else:
-                    extra_compiler_args += ["-DTRITON_INTEL_INJECT_PYTORCH=1", "-std=c++20"]
+                    extra_compiler_args += ["-DTRITON_INTEL_INJECT_PYTORCH=1"]
 
             if name == "spirv_utils" and not is_lts:
                 if os.name == "nt":
