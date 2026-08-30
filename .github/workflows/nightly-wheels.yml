@@ -83,6 +83,7 @@ jobs:
           cd pytorch
           echo "TORCHVISION_COMMIT_ID=$(<.github/ci_commit_pins/vision.txt)" | tee -a $GITHUB_ENV
           echo "TORCHAUDIO_COMMIT_ID=$(<.github/ci_commit_pins/audio.txt)" | tee -a $GITHUB_ENV
+          echo "TORCHAO_COMMIT_ID=$(<.github/ci_commit_pins/torchao.txt)" | tee -a $GITHUB_ENV
           echo "TIMM_COMMIT_ID=$(<.ci/docker/ci_commit_pins/timm.txt)" | tee -a $GITHUB_ENV
           cd ..
           echo "VLLM_PIN=$(<scripts/vllm/vllm-pin.txt)" | tee -a $GITHUB_ENV
@@ -117,6 +118,15 @@ jobs:
           ref: ${{ env.TORCHAUDIO_COMMIT_ID }}
           extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
 
+      - name: Install torchao package
+        if: "!startsWith(matrix.python, '3.15')"
+        uses: ./.github/actions/install-dependency
+        with:
+          package: torchao
+          repository: pytorch/ao
+          ref: ${{ env.TORCHAO_COMMIT_ID }}
+          extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
+
       - name: Install timm package
         if: "!startsWith(matrix.python, '3.15')"
         uses: ./.github/actions/install-dependency
@@ -144,6 +154,7 @@ jobs:
           cp -L dist/*.whl wheels/
           cp -L torchvision*/dist/*.whl wheels/ 2>/dev/null || true
           cp -L torchaudio*/dist/*.whl wheels/ 2>/dev/null || true
+          cp -L torchao*/dist/*.whl wheels/ 2>/dev/null || true
           cp -L timm*/dist/*.whl wheels/ 2>/dev/null || true
           ls -lh wheels/
 
