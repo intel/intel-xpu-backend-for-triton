@@ -405,7 +405,7 @@ class GHAWheelDownloader:  # pylint: disable=R0902
     """Downloads wheel artifacts from GitHub Actions CI runs."""
 
     WHEEL_SETS: ClassVar[dict[str, list[str]]] = {
-        "torch": ["torch-*.whl", "torchvision-*.whl", "torchaudio-*.whl", "timm-*.whl"],
+        "torch": ["torch-*.whl", "torchvision-*.whl", "torchaudio-*.whl", "torchao-*.whl", "timm-*.whl"],
         "triton": ["triton-*.whl"],
         "bench": ["triton_kernels_benchmark-*.whl"],
         "pti": ["intel_pti-*.whl"],
