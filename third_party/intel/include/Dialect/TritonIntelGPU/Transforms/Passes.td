@@ -347,11 +347,20 @@ def TritonIntelGPUReduceVariableLiveness
   let description = [{
     This pass attempts to reduce the variable liveness
     by reducing the distance between loads and usage.
+
+    A load is only sunk when the loop it would otherwise stay live across is
+    measured (via RegisterPressureAnalysis) to be under at least 200% of the
+    per-lane GRF budget for the given GRF mode.
   }];
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::scf::SCFDialect",
                            "mlir::arith::ArithDialect"];
+
+  let options = [
+    Option<"grfMode", "grf-mode", "std::string", /*default*/"\"default\"",
+           "GRF mode ('default', 'auto', '128', '256' or '512')">,
+  ];
 }
 
 def TritonIntelGPUCodeSinking
