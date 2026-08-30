@@ -15,11 +15,9 @@ import triton.language as tl
 from triton.runtime import driver
 
 import triton_kernels_benchmark as benchmark_suite
-try:
-    from triton_kernels_benchmark import onednn_kernel
-except (ImportError, OSError):
-    onednn_kernel = None
-from triton_kernels_benchmark.benchmark_testing import DEVICE
+from triton_kernels_benchmark.benchmark_testing import DEVICE, DEVICE_MODULE, get_xpu_extension
+
+onednn_kernel = get_xpu_extension("onednn_kernel")
 
 
 @torch.jit.script
@@ -86,9 +84,10 @@ def softmax_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride, n
     tl.store(output_ptrs, softmax_output, mask=mask)
 
 
-device = (torch.xpu.current_device() if DEVICE == "xpu" else torch.cuda.current_device())
+device = DEVICE_MODULE.current_device()
 properties = driver.active.utils.get_device_properties(device)
-MAX_WORK_GROUP_SIZE = properties.get("max_work_group_size", 1024)
+# The CUDA driver does not report `max_work_group_size`; 1024 is the maximum block size on all supported archs.
+MAX_WORK_GROUP_SIZE = 1024 if DEVICE == "cuda" else properties["max_work_group_size"]
 
 
 def softmax(x, y):
@@ -115,8 +114,9 @@ def get_benchmark(providers_filter: Optional[list[str]] = None):
         "triton": "Triton",
         # "torch-native": "Torch (native)",
         # "torch-jit": # "Torch (jit)",
-        "onednn": "oneDNN",
     }
+    if onednn_kernel is not None:
+        supported_providers["onednn"] = "oneDNN"
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
     @benchmark_suite.perf_report(

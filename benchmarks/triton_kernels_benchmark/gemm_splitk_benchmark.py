@@ -4,23 +4,36 @@ Split-K GEMM with Tensor Descriptors
 Split-K is a approach that parallelizes the reduction dimension K to improve GPU utilization.
 This script implements a Split-K GEMM with tensor descriptors.
 """
+from typing import List
+
 import torch
 import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
-try:
-    from triton_kernels_benchmark import sycl_tla_kernel
-except (ImportError, OSError):
-    sycl_tla_kernel = None
-from triton_kernels_benchmark.benchmark_testing import DEVICE
+from triton_kernels_benchmark.benchmark_testing import DEVICE, get_xpu_extension
+
+sycl_tla_kernel = get_xpu_extension('sycl_tla_kernel')
+
+
+def get_autotune_configs() -> List[triton.Config]:
+    if DEVICE == 'cuda':
+        return [
+            triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_M': 4, 'SPLIT_K': 4}, num_stages=3,
+                          num_warps=8),
+            triton.Config({'BLOCK_M': 128, 'BLOCK_N': 256, 'BLOCK_K': 32, 'GROUP_M': 4, 'SPLIT_K': 4}, num_stages=3,
+                          num_warps=8),
+            triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_M': 4, 'SPLIT_K': 8}, num_stages=4,
+                          num_warps=4),
+        ]
+    return [
+        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 256, 'BLOCK_K': 32, 'GROUP_M': 4, 'SPLIT_K': 4, 'grf_mode': '256'},
+                      num_stages=4, num_warps=32),
+    ]
 
 
 @triton.autotune(
-    configs=[
-        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 256, 'BLOCK_K': 32, 'GROUP_M': 4, 'SPLIT_K': 4, 'grf_mode': '256'},
-                      num_stages=4, num_warps=32),
-    ],
+    configs=get_autotune_configs(),
     key=['M', 'N', 'K'],
     restore_value=['C'],
 )
@@ -140,9 +153,9 @@ matmul = _matmul.apply
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
-        line_vals=['triton', 'onednn', 'sycl-tla'],
+        line_vals=['triton', 'onednn'] + (['sycl-tla'] if sycl_tla_kernel is not None else []),
         # label name for the lines
-        line_names=['Triton', 'OneDNN', 'SYCL-TLA'],
+        line_names=['Triton', 'OneDNN'] + (['SYCL-TLA'] if sycl_tla_kernel is not None else []),
         # line styles
         styles=[('green', '-'), ('green', '--'), ('blue', '-')],
         ylabel=['GB/s', 'TFlops'],  # label name for the y-axis

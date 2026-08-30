@@ -13,12 +13,9 @@ import torch
 import torch.nn.functional as F
 
 import triton_kernels_benchmark as benchmark_suite
-from triton_kernels_benchmark.benchmark_testing import DEVICE, DEVICE_NAME
+from triton_kernels_benchmark.benchmark_testing import DEVICE, DEVICE_NAME, DEVICE_MODULE
 
-try:
-    torch._dynamo.config.recompile_limit = 200  # pylint: disable=protected-access
-except AttributeError:
-    pass
+torch._dynamo.config.recompile_limit = 200  # pylint: disable=protected-access
 
 # Compile the flex_attention function
 flex_attention = torch.compile(flex_attention, dynamic=False)
@@ -152,7 +149,7 @@ fa_kernel_mode = os.getenv('FA_KERNEL_MODE', 'fwd')
     ))
 def benchmark(Z, H, N_CTX, D_HEAD, MASK, MODE, provider):
     print(f'Running case: {Z=}, {H=}, {N_CTX=}, {D_HEAD=}, {MASK=}, {MODE=}, {provider=}')
-    torch.xpu.empty_cache() if DEVICE == 'xpu' else torch.cuda.empty_cache()  # pylint: disable=W0106
+    DEVICE_MODULE.empty_cache()
 
     # There is still performance variance for triton, probably caused by random choice of autotune config
     do_bench = benchmark_suite.get_do_bench(n_warmup=200, n_repeat=10, quantiles=[0.5, 0.0, 1.0])

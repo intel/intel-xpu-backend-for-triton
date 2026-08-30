@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 import gc
+import importlib
 import re
 from typing import Callable, ClassVar, Dict, Optional, List, Tuple, Union, Set
 from collections.abc import Iterable
@@ -29,44 +30,47 @@ from torch.profiler import profile, ProfilerActivity, record_function
 
 from triton.testing import assert_close as triton_assert_close, Benchmark, do_bench as triton_do_bench
 
-try:
-    import transform_results
-except ImportError:
-    transform_results = None
+import transform_results
 from triton_kernels_benchmark import build_report
 from triton_kernels_benchmark.benchmark_shapes_parser import ShapePatternParser
 
 # Device selector: XPU if available, else CUDA
-if hasattr(torch, "xpu") and torch.xpu.is_available():
+if torch.xpu.is_available():
     DEVICE = "xpu"
 elif torch.cuda.is_available():
     DEVICE = "cuda"
 else:
     raise RuntimeError("No supported GPU device found.")
 
-# On CUDA: strip XPU-only kernel config keys (grf_mode, xpu_arch) that CUDA triton rejects
+# Shared device runtime module (`torch.xpu` or `torch.cuda`), name and memory — importable by all benchmark files
+DEVICE_MODULE = getattr(torch, DEVICE)
+DEVICE_NAME = DEVICE_MODULE.get_device_name()
+DEVICE_TOTAL_MEMORY = DEVICE_MODULE.get_device_properties().total_memory
+DEVICE_PROFILER_ACTIVITY = getattr(ProfilerActivity, DEVICE.upper())
+DEVICE_PROFILER_TIME_KEY = f"{DEVICE}_time"
+
+
+def get_xpu_extension(name: str):
+    """Import an XPU-only extension module of `triton_kernels_benchmark`, or return None on CUDA."""
+    return importlib.import_module(f"triton_kernels_benchmark.{name}") if DEVICE == "xpu" else None
+
+
+# On CUDA: strip the XPU-only kernel config keys that the CUDA backend rejects, so that the XPU-tuned
+# autotune config lists can be reused as-is.
 if DEVICE == "cuda":
     import triton as _triton_mod  # pylint: disable=C0412
-    _XPU_ONLY_CONFIG_KEYS = {"grf_mode", "xpu_arch"}
+    _XPU_ONLY_CONFIG_KEYS = frozenset({"grf_mode", "xpu_arch", "warp_size", "loop_distribute"})
     _OrigConfig = _triton_mod.Config
 
     class _CudaSafeConfig(_OrigConfig):
 
-        def __init__(self, kwargs, **kw):
-            for k in _XPU_ONLY_CONFIG_KEYS:
-                kwargs.pop(k, None)
-            super().__init__(kwargs, **kw)
+        def __init__(self, kwargs, *args, **kw):
+            kwargs = {key: value for key, value in kwargs.items() if key not in _XPU_ONLY_CONFIG_KEYS}
+            super().__init__(kwargs, *args, **kw)
 
     _triton_mod.Config = _CudaSafeConfig
     import triton.runtime.autotuner as _autotuner  # pylint: disable=C0412
     _autotuner.Config = _CudaSafeConfig
-
-# Shared device name and memory — importable by all benchmark files
-DEVICE_NAME = (torch.xpu.get_device_name() if DEVICE == "xpu" else
-               (torch.cuda.get_device_name() if torch.cuda.is_available() else "unknown"))
-DEVICE_TOTAL_MEMORY = (
-    torch.xpu.get_device_properties(torch.xpu.current_device()).total_memory if DEVICE == "xpu" else
-    (torch.cuda.get_device_properties(torch.cuda.current_device()).total_memory if torch.cuda.is_available() else 0))
 
 BENCHMARKING_METHOD = os.getenv("BENCHMARKING_METHOD", "UPSTREAM_PYTORCH_PROFILER")
 BENCHMARKING_CONFIG = {
@@ -138,8 +142,8 @@ def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quan
     cache = torch.empty(int(cache_size // 4), dtype=torch.int, device=device)
 
     # Estimate the runtime of the function
-    start_event = torch.xpu.Event(enable_timing=True)
-    end_event = torch.xpu.Event(enable_timing=True)
+    start_event = DEVICE_MODULE.Event(enable_timing=True)
+    end_event = DEVICE_MODULE.Event(enable_timing=True)
     start_event.record()
     for _ in range(5):
         cache.zero_()
@@ -188,7 +192,7 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
     # warm up the profiler infrastructure to eliminate cold-start overhead.
     # Without this, the first profiler context creation has significant overhead
     # (e.g., 2.5ms vs 1.7ms, causing bimodal benchmark results - issue #5208).
-    with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.XPU]) as _warmup_prof:
+    with profile(activities=[ProfilerActivity.CPU, DEVICE_PROFILER_ACTIVITY]) as _warmup_prof:
         with record_function("__warmup_profiler"):
             fn()
             synchronize()
@@ -218,7 +222,7 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
                 synchronize()
 
     # Benchmark
-    with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.XPU]) as prof:
+    with profile(activities=[ProfilerActivity.CPU, DEVICE_PROFILER_ACTIVITY]) as prof:
         for _ in range(n_repeat):
             # we don't want `fn` to accumulate gradient values
             # if it contains a backward pass. So we clear the
@@ -256,10 +260,10 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
     kernels = [kernel for kernel in kernels if kernel != []]
     relax_profiling_data_check = os.getenv("TRITON_RELAX_PROFILING_CHECK", "0") == "1"
     if not (len(kernels) >= n_repeat - 1 if relax_profiling_data_check else len(kernels) == n_repeat):
+        top_functions = prof.key_averages(group_by_stack_n=5).table(sort_by=DEVICE_PROFILER_TIME_KEY)
         raise AssertionError(
             f"the profiling number not match; {n_repeat=}, {kernels=}, "
-            # pylint: disable=W1405
-            f"top functions by xpu_time:\n {prof.key_averages(group_by_stack_n=5).table(sort_by='xpu_time')}",
+            f"top functions by {DEVICE_PROFILER_TIME_KEY}:\n {top_functions}",
             "You may try to relax profiling check by setting env variable TRITON_RELAX_PROFILING_CHECK=1",
         )
     # Make the time to the milliseconds.
@@ -397,12 +401,7 @@ def filter_providers(
 
 
 def get_gpu_info():
-    if DEVICE == "xpu":
-        device_name = torch.xpu.is_available() and torch.xpu.get_device_name()
-    elif DEVICE == "cuda" and torch.cuda.is_available():
-        device_name = torch.cuda.get_device_name()
-    else:
-        device_name = None
+    device_name = DEVICE_NAME
     if not device_name:
         print("Couldn't read device name.")
         return None, None
@@ -924,13 +923,13 @@ class BenchmarkConfigRunResult(BenchmarkRunResult, BenchmarkConfig):
         def _shapes_repr(shapes: List[ShapeValue]):
             return ", ".join([self.key + str(shape) for shape in shapes])
 
+        shape_pattern_repr = str(self.shape_pattern) or "Not set"
         str_repr = [
             f"Config: {self.key}",
             f"Config categories: {[category.value for category in self.categories]}",
             f"Run options: {self.run_opts}",
             f"Shape dimensions: {self.shape_dimensions}",
-            # pylint: disable=W1405
-            f"Shapes pattern: {str(self.shape_pattern) if str(self.shape_pattern) else 'Not set'}",
+            f"Shapes pattern: {shape_pattern_repr}",
             f"Supported shapes: {_shapes_repr(self.supported_shapes)}",
             f"Selected shapes: {_shapes_repr(self.supported_shapes)}",
             f"Supported providers: {self.supported_providers}",
@@ -939,13 +938,13 @@ class BenchmarkConfigRunResult(BenchmarkRunResult, BenchmarkConfig):
         return "\n".join(str_repr)
 
     def metadata_only_description(self) -> str:
+        shape_pattern_repr = str(self.shape_pattern) or "Not set"
         return "\n".join([
             f"Config: {self.key}",
             f"Config categories: {[category.value for category in self.categories]}",
             f"Description: {self.description}",
             f"Run options: {self.run_opts}",
-            # pylint: disable=W1405
-            f"Shapes pattern: {str(self.shape_pattern) if str(self.shape_pattern) else 'Not set'}",
+            f"Shapes pattern: {shape_pattern_repr}",
             "Supported shapes: Not resolved (optional dependencies not loaded)",
             "Selected shapes: Not resolved (optional dependencies not loaded)",
             "Supported providers: Not resolved (optional dependencies not loaded)",

@@ -15,14 +15,27 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
-try:
-    from triton_kernels_benchmark import sycl_tla_kernel
-except (ImportError, OSError):
-    sycl_tla_kernel = None
-from triton_kernels_benchmark.benchmark_testing import DEVICE, DEVICE_NAME, DEVICE_TOTAL_MEMORY
+from triton_kernels_benchmark.benchmark_testing import (DEVICE, DEVICE_NAME, DEVICE_TOTAL_MEMORY, get_xpu_extension)
+
+sycl_tla_kernel = get_xpu_extension('sycl_tla_kernel')
+
+
+def get_cuda_matmul_autotune_configs() -> List[triton.Config]:
+    return [
+        triton.Config({'BLOCK_SIZE_M': m, 'BLOCK_SIZE_N': n, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=s,
+                      num_warps=w)  #
+        for (m, n) in [(128, 256), (256, 128), (128, 128), (64, 128)]  #
+        for s in [3, 4]  #
+        for w in [8, 16]
+    ] + [
+        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_stages=s,
+                      num_warps=4) for s in [3, 4]
+    ]
 
 
 def get_matmul_autotune_configs() -> List[triton.Config]:
+    if DEVICE == 'cuda':
+        return get_cuda_matmul_autotune_configs()
     configs = [
         triton.Config(
             {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '256'},
@@ -103,6 +116,8 @@ def matmul_kernel_with_tensor_descriptors(
 
 
 def get_matmul_batched_autotune_configs() -> List[triton.Config]:
+    if DEVICE == 'cuda':
+        return get_cuda_matmul_autotune_configs()
     configs = [
         triton.Config(
             {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '256'},
@@ -342,7 +357,7 @@ def get_benchmark(
         'onednn': 'OneDNN',
     }
     # use_sycl-tla
-    if not (transpose_a or transpose_b):
+    if sycl_tla_kernel is not None and not (transpose_a or transpose_b):
         if DEVICE_NAME != 'Intel(R) Arc(TM) Graphics':
             # SYCL-TLA only targets PVC/BMG; LNL (Arc iGPU) is not in its target list
             supported_providers['sycl-tla'] = 'SYCL-TLA'

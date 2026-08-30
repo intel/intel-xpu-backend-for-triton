@@ -16,7 +16,7 @@ import triton.language as tl
 from triton.language.extra import libdevice
 
 import triton_kernels_benchmark as benchmark_suite
-from triton_kernels_benchmark.benchmark_testing import DEVICE, DEVICE_NAME, DEVICE_TOTAL_MEMORY
+from triton_kernels_benchmark.benchmark_testing import DEVICE, DEVICE_NAME, DEVICE_TOTAL_MEMORY, DEVICE_MODULE
 
 
 def native_torch_fused_gemm(x, w_g, w_fc, b_g, b_fc):
@@ -209,7 +209,7 @@ X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
     ))
 def benchmark(M, N, K, provider):
     do_bench = benchmark_suite.get_do_bench(n_warmup=800, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
-    torch.xpu.empty_cache() if DEVICE == 'xpu' else torch.cuda.empty_cache()  # pylint: disable=W0106
+    DEVICE_MODULE.empty_cache()
     torch.manual_seed(0)
     x = torch.empty((M, K), device=DEVICE, dtype=torch.float32).uniform_(-0.25, -0.25).to(torch.bfloat16)
     w_g = torch.empty((K, N), device=DEVICE, dtype=torch.float32).uniform_(-0.25, 0.25).to(torch.bfloat16)

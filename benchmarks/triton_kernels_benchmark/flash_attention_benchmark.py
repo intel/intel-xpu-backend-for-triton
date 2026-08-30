@@ -9,11 +9,9 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
-try:
-    from triton_kernels_benchmark import sycl_tla_kernel
-except (ImportError, OSError):
-    sycl_tla_kernel = None
-from triton_kernels_benchmark.benchmark_testing import DEVICE
+from triton_kernels_benchmark.benchmark_testing import DEVICE, DEVICE_MODULE, get_xpu_extension
+
+sycl_tla_kernel = get_xpu_extension('sycl_tla_kernel')
 
 
 # pylint: disable=unused-argument
@@ -567,7 +565,7 @@ def get_benchmark(
     supported_providers = {
         'triton': 'Triton',
     }
-    if not use_fp8:
+    if sycl_tla_kernel is not None and not use_fp8:
         supported_providers['sycl-tla'] = 'SYCL-TLA'
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
@@ -613,7 +611,7 @@ def get_benchmark(
         if MODE not in modes:
             raise AssertionError(f'Unknown {MODE}, supported modes are {modes}')
         dtype = torch.float16
-        torch.xpu.empty_cache() if DEVICE == 'xpu' else torch.cuda.empty_cache()  # pylint: disable=W0106
+        DEVICE_MODULE.empty_cache()
         torch.manual_seed(20)
         q = (torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
         k = (torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())

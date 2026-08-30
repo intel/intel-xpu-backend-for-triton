@@ -12,7 +12,7 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
-from triton_kernels_benchmark.benchmark_testing import DEVICE, DEVICE_NAME, DEVICE_TOTAL_MEMORY
+from triton_kernels_benchmark.benchmark_testing import DEVICE, DEVICE_NAME, DEVICE_TOTAL_MEMORY, DEVICE_MODULE
 import psutil
 
 INT8_ONLY_OPTION = os.getenv('INT8_ONLY', '0') == '1'
@@ -312,7 +312,7 @@ X_VALS = [x_val for x_val in X_VALS if is_enough_memory(x_val)]
         args={},
     ))
 def benchmark(B, M, N, K, dtype, provider):
-    torch.xpu.empty_cache() if DEVICE == 'xpu' else torch.cuda.empty_cache()  # pylint: disable=W0106
+    DEVICE_MODULE.empty_cache()
     # Maximum across onednn=600, triton=1000
     # For onednn and triton: Some configs increase performance with warmup as a step function, but some
     # slowly decrease with saturation. Performance is best at 150-200ms range, but we want stable, not just best

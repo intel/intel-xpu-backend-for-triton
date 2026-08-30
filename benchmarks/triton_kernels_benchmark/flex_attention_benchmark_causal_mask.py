@@ -14,12 +14,9 @@ from torch.nn.attention.bias import causal_lower_right
 import torch._inductor  # pylint: disable=protected-access
 import torch._inductor.choices  # pylint: disable=protected-access
 from torch._inductor.choices import InductorChoices
-try:
-    from torch._inductor.template_heuristics.triton import FlexBwDConfig, FlexConfig, FlexDecodeConfig
-except (ImportError, ModuleNotFoundError):
-    FlexBwDConfig = FlexConfig = FlexDecodeConfig = None
+from torch._inductor.template_heuristics.triton import FlexBwDConfig, FlexConfig, FlexDecodeConfig
 
-from triton_kernels_benchmark.benchmark_testing import DEVICE, DEVICE_NAME
+from triton_kernels_benchmark.benchmark_testing import DEVICE, DEVICE_NAME, DEVICE_MODULE
 import triton_kernels_benchmark as benchmark_suite
 
 # Use TORCHINDUCTOR_MAX_AUTOTUNE_GEMM=1 or uncomment the following line to print the auto-tune results.
@@ -63,10 +60,7 @@ InductorChoices.get_flex_attention_fwd_configs = get_flex_attn_fwd_configs
 InductorChoices.get_flex_attention_bwd_configs = get_flex_attn_bwd_configs
 InductorChoices.get_flex_decode_configs = get_flex_decode_configs
 
-try:
-    torch._dynamo.config.recompile_limit = 100  # pylint: disable=protected-access
-except AttributeError:
-    pass
+torch._dynamo.config.recompile_limit = 100  # pylint: disable=protected-access
 
 # Compile the flex_attention function
 compiled_flex_attention = torch.compile(flex_attention, dynamic=False)
@@ -186,8 +180,8 @@ if 'B580' in DEVICE_NAME:
             for seq_len in [4096, 8192]  #
         ] if fa_kernel_mode == 'bwd' else [])],
         line_arg='provider',
-        line_vals=['triton', 'sycl-tla', 'onednn'],
-        line_names=['Triton', 'SYCL-TLA', 'OneDNN'],
+        line_vals=['triton', 'sycl-tla'] + ([] if DEVICE == 'cuda' else ['onednn']),
+        line_names=['Triton', 'SYCL-TLA'] + ([] if DEVICE == 'cuda' else ['OneDNN']),
         styles=[('green', '-'), ('green', '--'), ('blue', '-'), ('blue', '--')],
         ylabel=['GB/s', 'TFlops'],
         plot_name='flexAttnCausal-performance',
@@ -198,7 +192,7 @@ def benchmark(Z, H_q, H_kv, N_CTX_q, N_CTX_kv, D_HEAD_qk, D_HEAD_v, MODE, provid
     print(
         f'Running case: {Z=}, {H_q=}, {H_kv=}, {N_CTX_q=}, {N_CTX_kv=}, {D_HEAD_qk=}, {D_HEAD_v=}, {MODE=}, {provider=}'
     )
-    torch.xpu.empty_cache() if DEVICE == 'xpu' else torch.cuda.empty_cache()  # pylint: disable=W0106
+    DEVICE_MODULE.empty_cache()
     torch.manual_seed(42)
 
     # Maximum across torch=200, triton=600
