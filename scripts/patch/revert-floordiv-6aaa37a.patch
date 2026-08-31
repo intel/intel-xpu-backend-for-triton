@@ -1,0 +1,40 @@
+diff --git a/torch/_inductor/codegen/triton.py b/torch/_inductor/codegen/triton.py
+index d7e879a7ab9..77289ee4877 100644
+--- a/torch/_inductor/codegen/triton.py
++++ b/torch/_inductor/codegen/triton.py
+@@ -2340,14 +2340,8 @@ class TritonOverrides(OpOverrides):
+     @staticmethod
+     def floordiv(a, b):
+         # See the comment in lowering.div_mode. a and b are integer type.
++        # Similar to div_floor_kernel_cuda in pytorch core.
+         # Notice that // in triton behaves as truncdiv instead of floordiv.
+-        #
+-        # We avoid feeding negative values into Triton's // operator because
+-        # Triton's AxisInfo analysis incorrectly deduplicates signed division
+-        # results for contiguous inputs (triton-lang/triton#XXXX). Instead we
+-        # use bitwise complement (~) to make the dividend non-negative:
+-        #   floor_div(a, b) = ~(~a // b) when a < 0, a // b when a >= 0
+-        # For negative b we negate both operands first.
+         zero = ops.constant(0, torch.int32)
+         one = ops.constant(1, torch.int32)
+         # Guard against integer division by zero before the division to
+@@ -2356,13 +2350,13 @@ class TritonOverrides(OpOverrides):
+         # so the division is safe, then select 0 as the final result.
+         b_zero = ops.eq(b, zero)
+         b = ops.where(b_zero, one, b)
+-        b_neg = ops.lt(b, zero)
+-        a = ops.where(b_neg, ops.sub(zero, a), a)
+-        b = ops.where(b_neg, ops.sub(zero, b), b)
+-        a_neg = ops.lt(a, zero)
+-        a = ops.where(a_neg, ops.bitwise_not(a), a)
++        # Standard floor division: adjust truncdiv result when signs differ
++        # and there's a remainder.
+         quot = ops.truncdiv(a, b)
+-        quot = ops.where(a_neg, ops.bitwise_not(quot), quot)
++        rem = ops.mod(a, b)
++        signs_differ = ops.ne(ops.lt(a, zero), ops.lt(b, zero))
++        needs_adjustment = ops.and_(signs_differ, ops.ne(rem, zero))
++        quot = ops.where(needs_adjustment, ops.sub(quot, one), quot)
+         return ops.where(b_zero, zero, quot)
+
+     @staticmethod
