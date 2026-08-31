@@ -196,6 +196,45 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 
 // -----
 
+// COM: Test a rank-3 (batched) block load. The 2D surface params describe one
+// COM: tile plane, so the step between batch slices must come from the
+// COM: batch_strides operand. Re-deriving it as base_height * (base_pitch /
+// COM: elem_bytes) reads the wrong slice for any non-densely-packed
+// COM: descriptor (issue #7882).
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4, 2], repCluster = [1, 1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @block_load_batch_rank3
+  tt.func public @block_load_batch_rank3(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i64) {
+    // CHECK: %[[BOFF:.*]] = llvm.mul %{{.*}}, %arg6 : i64
+    // CHECK: %[[BPTR:.*]] = llvm.getelementptr %{{.*}}{{\[}}%[[BOFF]]{{\]}} : (!llvm.ptr<1>, i64) -> !llvm.ptr<1>, f16
+    // CHECK: triton_gen.2Dblockload %[[BPTR]]
+    %0 = ttig.2d_block_load %arg0, %arg1, %arg2, %arg3[%arg4, %arg5] batch_strides[%arg6] {row_major} : !tt.ptr<f16> -> tensor<2x64x32xf16, #dot0>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Test a rank-4 block load: each leading dim gets its own stride, applied
+// COM: outermost-first as a chain of GEPs. A single shared stride (the #7882
+// COM: behaviour) would make the outer batch dim off by the inner dim's extent.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1, 8, 1], threadsPerWarp = [1, 1, 1, 16], warpsPerCTA = [2, 2, 2, 1], order = [3, 2, 1, 0]}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @block_load_batch_rank4
+  tt.func public @block_load_batch_rank4(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i64, %arg7: i64) {
+    // CHECK: %[[B0:.*]] = llvm.mul %{{.*}}, %arg6 : i64
+    // CHECK: %[[P0:.*]] = llvm.getelementptr %{{.*}}{{\[}}%[[B0]]{{\]}} : (!llvm.ptr<1>, i64) -> !llvm.ptr<1>, f16
+    // CHECK: %[[B1:.*]] = llvm.mul %{{.*}}, %arg7 : i64
+    // CHECK: %[[P1:.*]] = llvm.getelementptr %[[P0]]{{\[}}%[[B1]]{{\]}} : (!llvm.ptr<1>, i64) -> !llvm.ptr<1>, f16
+    // CHECK: triton_gen.2Dblockload %[[P1]]
+    %0 = ttig.2d_block_load %arg0, %arg1, %arg2, %arg3[%arg4, %arg5] batch_strides[%arg6, %arg7] {row_major} : !tt.ptr<f16> -> tensor<2x2x16x16xf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
 // COM: Test subgroup-size=32 DotOp-B block load lowers with VNNI transform.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 32, warpsPerCTA = [2, 2], repCluster = [1, 1], A = [16, 16], B = [16, 16], C = [16, 16]}>
 #dot = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
