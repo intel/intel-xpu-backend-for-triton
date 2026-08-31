@@ -1,6 +1,46 @@
 import pathlib
 
+import pytest
 import triton
+from triton.runtime.errors import OutOfResources
+
+
+def test_regression_7875(device, tmp_path: pathlib.Path):
+    """Shared memory is allocated statically (`global_smem` sized after
+    `ttg.shared`, see #7606), so a kernel whose local_alloc exceeds the
+    device's shared memory capacity must be rejected as `OutOfResources`
+    at compile time by `triton.compile`, so the autotuner can skip the
+    offending config instead of crashing later at kernel launch/module
+    build time with an opaque
+    `torch._C._StaticXpuLauncher._load_kernel: L0 runtime error: 70000004`
+    (`ZE_RESULT_ERROR_MODULE_BUILD_FAILURE`), as happened in
+    https://github.com/intel/intel-xpu-backend-for-triton/issues/7875 (a
+    regression from #7606 surfaced via PyTorch Inductor's
+    `test_large_block_sizes_dynamic_shapes_xpu`, which deliberately
+    autotunes into an oversized-shared-memory config expecting it to be
+    skipped rather than crash).
+    """
+    ir = """
+    #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+    #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+    #smem = #ttg.shared_memory
+    module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
+      tt.func public @kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
+        %cst = arith.constant dense<0.000000e+00> : tensor<1024x1024xf32, #blocked>
+        %0 = ttg.local_alloc %cst : (tensor<1024x1024xf32, #blocked>) -> !ttg.memdesc<1024x1024xf32, #shared, #smem>
+        %1 = ttg.local_load %0 : !ttg.memdesc<1024x1024xf32, #shared, #smem> -> tensor<1024x1024xf32, #blocked>
+        %2 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x1024x!tt.ptr<f32>, #blocked>
+        tt.store %2, %1 : tensor<1024x1024x!tt.ptr<f32>, #blocked>
+        tt.return
+      }
+    }
+    """
+
+    temp_file = tmp_path / "test_regression_7875.ttgir"
+    temp_file.write_text(ir)
+
+    with pytest.raises(OutOfResources, match="shared memory"):
+        triton.compile(str(temp_file))
 
 
 def test_regression_4441(device, tmp_path: pathlib.Path):

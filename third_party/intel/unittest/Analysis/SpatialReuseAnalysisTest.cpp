@@ -167,7 +167,7 @@ TEST_F(SpatialReuseAnalysisTest, ScalarPointerLoad) {
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
   Type i32Ty = builder->getI32Type();
-  auto ptrTy = PointerType::get(i32Ty, /*addressSpace=*/1);
+  auto ptrTy = PointerType::get(i32Ty);
 
   funcOp.setType(builder->getFunctionType({ptrTy}, {}));
   Block *block = &funcOp.getBody().front();

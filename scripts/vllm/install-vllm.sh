@@ -8,6 +8,9 @@ readonly SCRIPTS_DIR="$ROOT/scripts"
 readonly VLLM_PROJ="$ROOT/vllm"
 readonly VLLM_XPU_KERNELS_PROJ="$ROOT/vllm-xpu-kernels"
 
+# Provides the `pip` wrapper (pip or `uv pip`).
+source "$SCRIPTS_DIR/pip-utils.sh"
+
 # Check if the specified package is installed and matches the pinned commit.
 # Returns 0 if the installed package is correct, 1 if it needs to be installed/reinstalled.
 check_installed_package() {
@@ -16,18 +19,18 @@ check_installed_package() {
   local force="$3"
   local latest="$4"
 
-  if ! python -m pip show "$package" &>/dev/null; then
+  if ! pip show "$package" &>/dev/null; then
     return 1
   fi
 
   if [[ "$latest" == true ]]; then
     echo "*** --latest specified: ignoring installed $package. ***"
-    python -m pip uninstall -y "$package"
+    pip uninstall -y "$package"
 
     return 1
   fi
 
-  local current_commit="$(python -m pip show "$package" | awk '/^Version:/ {print $2}')"
+  local current_commit="$(pip show "$package" | awk '/^Version:/ {print $2}')"
   current_commit="${current_commit#*+g}"
   current_commit="${current_commit%%.*}"
   echo "*** $package is installed at commit: $current_commit. ***"
@@ -48,15 +51,15 @@ check_installed_package() {
     exit 1
   fi
 
-  python -m pip uninstall -y "$package"
+  pip uninstall -y "$package"
 
   return 1
 }
 
 show_installs() {
   echo "*** Installed versions: ***"
-  echo "vllm: $(python -m pip show vllm | awk '/^Version:/ {print $2}')."
-  echo "vllm-xpu-kernels: $(python -m pip show vllm-xpu-kernels | awk '/^Version:/ {print $2}')."
+  echo "vllm: $(pip show vllm | awk '/^Version:/ {print $2}')."
+  echo "vllm-xpu-kernels: $(pip show vllm-xpu-kernels | awk '/^Version:/ {print $2}')."
 }
 
 update_submodules_and_clean() {
@@ -132,9 +135,9 @@ install_vllm() {
     -e '/^xgrammar/d' \
     -e '/^--extra-index-url.*https:\/\/download\.pytorch\.org\/whl/d' \
     "$VLLM_PROJ/requirements/xpu.txt"
-  python -m pip install -r "$VLLM_PROJ/requirements/xpu.txt"
+  pip install -r "$VLLM_PROJ/requirements/xpu.txt"
 
-  VLLM_TARGET_DEVICE=xpu python -m pip install --no-deps --no-build-isolation -e "$VLLM_PROJ"
+  VLLM_TARGET_DEVICE=xpu pip install --no-deps --no-build-isolation -e "$VLLM_PROJ"
 }
 
 cd "$ROOT"
@@ -313,7 +316,7 @@ if [[ "$build_vllm" == false ]]; then
 
     if [[ "$vllm_xpu_kernels_pinned_commit" == "$wheel_commit"* ]]; then
       echo "*** Installing vLLM XPU kernels from nightly builds. ***"
-      python -m pip install "$downloaded_wheel"
+      pip install "$downloaded_wheel"
       echo "*** Installing vLLM from source. ***"
       install_vllm
       show_installs
@@ -373,11 +376,11 @@ if [[ "$check_wheel" == false ]] || [[ "$vllm_xpu_kernels_wheel_exists" == false
     -e '/^triton/d' \
     -e '/^--extra-index-url.*https:\/\/download\.pytorch\.org\/whl/d' \
     "$VLLM_XPU_KERNELS_PROJ/requirements.txt"
-  python -m pip install -r "$VLLM_XPU_KERNELS_PROJ/requirements.txt"
+  pip install -r "$VLLM_XPU_KERNELS_PROJ/requirements.txt"
   VLLM_TARGET_DEVICE=xpu python -m build --wheel --no-isolation "$VLLM_XPU_KERNELS_PROJ"
 fi
 
 install_vllm
-python -m pip install "$VLLM_XPU_KERNELS_PROJ"/dist/*.whl
+pip install "$VLLM_XPU_KERNELS_PROJ"/dist/*.whl
 
 show_installs

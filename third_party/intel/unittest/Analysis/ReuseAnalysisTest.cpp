@@ -74,7 +74,7 @@ public:
     return funcOp;
   }
 
-  Type getPtrType(Type elemType) { return tt::PointerType::get(elemType, 1); }
+  Type getPtrType(Type elemType) { return tt::PointerType::get(elemType); }
 
   /// Builds a BlockedEncodingAttr with a 1-CTA layout.
   ttg::BlockedEncodingAttr makeBlocked(ArrayRef<unsigned> sizePerThread,

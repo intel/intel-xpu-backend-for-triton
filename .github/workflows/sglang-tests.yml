@@ -1,0 +1,43 @@
+name: SGLang tests
+run-name: ${{ inputs.run_name }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner_label:
+        description: Runner label, keep empty for default
+        type: string
+        default: ""
+      sglang_pin:
+        description: SGLang pin (commit hash), keep empty for default
+        type: string
+        default: ""
+      skip_list:
+        description: Skip list
+        type: string
+        default: ""
+      run_name:
+        description: Custom run name
+        type: string
+        default: "SGLang tests"
+      ignore_errors:
+        description: Ignore test errors
+        type: boolean
+        default: false
+      use_pyenv_python:
+        description: Use Python built with pyenv
+        type: boolean
+        default: true
+
+permissions: read-all
+
+jobs:
+  sglang-tests:
+    uses: ./.github/workflows/sglang-tests-reusable.yml
+    with:
+      runner_label: ${{ inputs.runner_label }}
+      sglang_pin: ${{ inputs.sglang_pin }}
+      skip_list: ${{ inputs.skip_list }}
+      ignore_errors: ${{ inputs.ignore_errors }}
+      use_pyenv_python: ${{ inputs.use_pyenv_python }}
+    secrets: inherit

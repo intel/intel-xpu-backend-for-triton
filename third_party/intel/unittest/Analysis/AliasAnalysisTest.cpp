@@ -72,9 +72,7 @@ public:
         triton::EvictionPolicy::NORMAL, /*isVolatile=*/false);
   }
 
-  Type getPtrType(Type elemType) {
-    return triton::PointerType::get(elemType, 1);
-  }
+  Type getPtrType(Type elemType) { return triton::PointerType::get(elemType); }
 
 protected:
   MLIRContext ctx;
