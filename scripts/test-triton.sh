@@ -942,11 +942,13 @@ run_sglang_moe_tests() {
   echo "********************************************************"
 
   enter_sglang_test_env
-  # Fused MoE + LoRA.
-  # test_fused_moe.py and test/manual/test_triton_moe_wna16.py are left out: same
-  # sgl_kernel import as the INT8 tests.
+  # Fused MoE + LoRA. sglang-test-fix.patch guards the optional sgl_kernel
+  # imports on the Triton MoE path and adds native fallbacks, which is what
+  # lets test_fused_moe.py import and run here.
+  # test/manual/test_triton_moe_wna16.py is still left out.
   TRITON_TEST_SUITE=sglang_moe \
     run_pytest_command -vvv \
+      test/registered/moe/test_fused_moe.py \
       test/registered/lora/test_fused_moe_lora_kernel.py
 }
 
