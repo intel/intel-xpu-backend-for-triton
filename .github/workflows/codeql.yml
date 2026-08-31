@@ -36,6 +36,13 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v7
 
+    # rss-ubuntu-2404 has no C compiler preinstalled; pyenv needs one to build Python from source.
+    - name: Install build toolchain
+      if: matrix.build-mode == 'manual'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends build-essential
+
     # Initialize FIRST so the build tracer is installed before the C/C++ compile.
     - name: Initialize CodeQL
       uses: github/codeql-action/init@v4
