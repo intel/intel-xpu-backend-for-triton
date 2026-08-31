@@ -19,9 +19,10 @@ Note the instances are deliberately *not* GC-tracked, and that does not help: th
 is the `Py_TYPE()` load that `visit_decref` performs before it can know whether the
 object is tracked.
 
-`ArchParser` and `ExtensionUtils` keep their unload on purpose. Their modules export no
-Python type, so unloading is safe there and still lets Windows delete the cached files
-(issue #3090, the reason the unload was introduced in #3230/#3251/#3455).
+`ArchParser` and `ExtensionUtils` keep their unload because they are out of scope here, not
+because they are proven safe: `ArchParser.__getattribute__` hands out a closure over the raw
+ctypes function that does not keep its owner alive, so a caller outliving the parser would
+call into an unloaded library.
 """
 import os
 import subprocess
@@ -29,14 +30,19 @@ import sys
 import textwrap
 
 import pytest
-import torch
 
 from triton.backends.intel import driver as intel_driver
 
-pytestmark = pytest.mark.skipif(
-    not (hasattr(torch, "xpu") and torch.xpu.is_available()),
-    reason="Intel XPU device not available",
-)
+
+def _xpu_available() -> bool:
+    # Imported lazily and defensively rather than at module scope: only the subprocess
+    # test needs a device, and the canary below must stay runnable wherever pytest runs
+    # -- including environments where `import torch` itself fails.
+    try:
+        import torch
+    except Exception:
+        return False
+    return hasattr(torch, "xpu") and torch.xpu.is_available()
 
 
 def test_spirv_utils_defines_no_destructor():
@@ -61,9 +67,38 @@ _CHILD = textwrap.dedent("""
 
     SO = "spirv_utils"
 
-    def mapped():
-        with open("/proc/self/maps") as fh:
-            return SO in fh.read()
+    if os.name == "nt":
+        # Windows counterpart of scanning /proc/self/maps: enumerate the modules mapped
+        # into this process and look for the same substring.
+        import ctypes
+        from ctypes import wintypes as w
+
+        _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        _psapi = ctypes.WinDLL("psapi", use_last_error=True)
+        _k32.GetCurrentProcess.restype = w.HANDLE
+        _psapi.EnumProcessModules.argtypes = [w.HANDLE, ctypes.POINTER(w.HMODULE), w.DWORD,
+                                              ctypes.POINTER(w.DWORD)]
+        _psapi.GetModuleFileNameExW.argtypes = [w.HANDLE, w.HMODULE, w.LPWSTR, w.DWORD]
+        _psapi.GetModuleFileNameExW.restype = w.DWORD
+
+        def mapped():
+            handle = _k32.GetCurrentProcess()
+            mods = (w.HMODULE * 8192)()
+            needed = w.DWORD()
+            if not _psapi.EnumProcessModules(handle, mods, ctypes.sizeof(mods),
+                                             ctypes.byref(needed)):
+                raise OSError("EnumProcessModules failed")
+            name = ctypes.create_unicode_buffer(32768)
+            count = min(needed.value // ctypes.sizeof(w.HMODULE), len(mods))
+            for i in range(count):
+                if _psapi.GetModuleFileNameExW(handle, mods[i], name, 32768) and SO in name.value:
+                    return True
+            return False
+    else:
+
+        def mapped():
+            with open("/proc/self/maps") as fh:
+                return SO in fh.read()
 
     @triton.jit
     def _add(x_ptr, y_ptr, o_ptr, n, BLOCK: tl.constexpr):
@@ -82,7 +117,8 @@ _CHILD = textwrap.dedent("""
     # Compile and launch on a thread that then exits. spirv_utils owns a non-POD
     # thread_local, so glibc pins the module against the thread that first touched it and
     # defers any unload until that thread is gone -- doing this on the main thread would
-    # mask a reintroduced unload and make this test silently green.
+    # mask a reintroduced unload and make this test silently green. Windows has no such
+    # deferral and unmaps immediately, so there the thread is merely harmless.
     worker = threading.Thread(target=workload)
     worker.start()
     worker.join()
@@ -116,12 +152,13 @@ _CHILD = textwrap.dedent("""
     """)
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="reads /proc/self/maps")
+@pytest.mark.skipif(not _xpu_available(), reason="Intel XPU device not available")
 def test_spirv_utils_survives_gc_after_teardown(tmp_path):
     """A GC pass after driver teardown must not fault: the module stays mapped.
 
-    Reintroducing `SpirvUtils.__del__` makes this child die with SIGSEGV (returncode
-    -11) instead of exiting cleanly -- verified on PVC against both revisions.
+    Reintroducing `SpirvUtils.__del__` makes this child die on a dangling `ob_type`
+    instead of exiting cleanly: SIGSEGV (returncode -11) on Linux, and an
+    `EXCEPTION_ACCESS_VIOLATION` (`0xC0000005`) on Windows -- verified on both.
     """
     script = tmp_path / "child.py"
     script.write_text(_CHILD)
@@ -130,6 +167,7 @@ def test_spirv_utils_survives_gc_after_teardown(tmp_path):
                             env={**os.environ, "PYTHONFAULTHANDLER": "1"})
 
     assert result.returncode == 0, (f"child exited with {result.returncode} "
-                                    f"(negative means a fatal signal; -11 is the #7682 SIGSEGV)\n"
+                                    f"(-11 is the #7682 SIGSEGV on Linux; "
+                                    f"{0xC0000005} / -1073741819 is the same fault on Windows)\n"
                                     f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}")
     assert "OK" in result.stdout, f"child did not reach the end:\n{result.stdout}\n{result.stderr}"
