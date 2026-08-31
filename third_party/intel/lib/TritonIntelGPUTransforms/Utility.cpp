@@ -277,6 +277,12 @@ LogicalResult getConvertBackwardSlice(
     auto currentValueType = cast<RankedTensorType>(currentValue.getType());
     if (currentValueType.getEncoding() == encoding)
       continue;
+    // Backward propagation through while / warp-specialize regions is
+    // unsupported: rewriteSlice has no case for them and would retype the
+    // results without updating the regions (see WarpYieldOp::verify).
+    if (isa_and_nonnull<scf::WhileOp, ttg::WarpSpecializeOp>(
+            currentValue.getDefiningOp()))
+      return failure();
     slice.insert(currentValue);
 
     Value existing;
