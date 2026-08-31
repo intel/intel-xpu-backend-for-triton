@@ -183,9 +183,9 @@ module attributes {"ttg.num-warps" = 1 : i32, ttg.shared = 1280 : i32, "ttg.thre
 
 #blocked = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [2, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
-#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 1], instrShape = [16, 8]}>
-#mma1 = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 1, 1], instrShape = [1, 16, 8]}>
-#dot = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>
+#mma =  #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 32, warpsPerCTA = [1, 1], repCluster = [1, 1]}>
+#mma1 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 32, warpsPerCTA = [1, 1, 1], repCluster = [1, 1, 1]}>
+#dot = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>
 #slice = #ttg.slice<{dim = 1, parent = #ttg.dot_op<{opIdx = 1, parent = #mma1, kWidth = 2}>}>
 module attributes {"ttg.num-warps" = 1 : i32, ttg.shared = 1280 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL:   llvm.func spir_kernelcc @test_reinterpret(
