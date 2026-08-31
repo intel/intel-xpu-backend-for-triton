@@ -22,10 +22,7 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "intel/include/Utils/Utility.h"
 #include "triton/Tools/LinearLayout.h"
-#include <TritonIntelGPUToLLVM/XeAsmFormat.h>
 #include <limits>
-#include <llvm/IR/InlineAsm.h>
-#include <llvm/Support/FormatVariadic.h>
 #include <optional>
 #include <triton/Tools/Sys/GetEnv.h>
 
