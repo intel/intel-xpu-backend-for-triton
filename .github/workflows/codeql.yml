@@ -47,6 +47,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends build-essential libffi-dev
         fi
+        echo "MAX_JOBS=${MAX_JOBS:-8}" >> "$GITHUB_ENV"
 
     # Initialize FIRST so the build tracer is installed before the C/C++ compile.
     - name: Initialize CodeQL
