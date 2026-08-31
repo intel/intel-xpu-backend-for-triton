@@ -135,12 +135,8 @@ def get_batched_mm_benchmark(
 
     if not is_fp8:
         supported_providers['sycl-tla'] = 'sycl-tla'
-        # The hand-merged unified BatchedMoE kernel (Model in
-        # BatchedMoE_v2_manual_unified_triton.py). Register for the bf16 sweep
-        # only: its fp8 path absorbs quant host-side with unit scales and would
-        # not match this benchmark's scaled fp8 reference (batched_moe DOES run
-        # fp8 in CI, unlike fused_moe).
-        supported_providers['xeforge'] = 'xeforge'
+
+    supported_providers['xeforge'] = 'xeforge'
 
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
     configs = MM_CONFIGS_FP8 if is_fp8 else MM_CONFIGS_BF16
