@@ -162,6 +162,29 @@ bool sliceUsesValue(const DenseSet<Operation *> &slice, Value val) {
   });
 }
 
+/// Returns true if the chain feeding a loop-carried `iter_arg` reads `arg`:
+/// either the yielded value *is* `arg`, or some op in the chain's backward
+/// `slice` -- including inside nested regions -- has `arg` as an operand.
+///
+/// The first disjunct is load bearing twice over. A slot that yields a block
+/// argument directly has no defining op in the loop body, so
+/// `collectBackwardSlice` returns nothing for it: the value-rooted
+/// `getBackwardSlice` re-roots at the block argument's parent op (i.e. the
+/// `scf.for` itself) and every op it reaches is then dropped as being outside
+/// the loop body. A slice-only test would see such a chain as dependency free.
+/// It is also what catches a slot that aliases another carried slot by yielding
+/// its block argument unchanged.
+bool chainReadsArg(Value carriedVal, const DenseSet<Operation *> &slice,
+                   BlockArgument arg) {
+  return carriedVal == arg || sliceUsesValue(slice, arg);
+}
+
+/// Which distributed loop may compute a loop-carried `iter_arg`. `Both` means
+/// the slot is computed identically in the two new loops; `Dot0`/`Dot1` mean
+/// only the loop computing that dot can compute it, because the chain feeding
+/// the slot reads that dot's accumulator -- which is live in that loop alone.
+enum class Owner { Both, Dot0, Dot1 };
+
 /// Try to distribute a for loop with exactly two dot operations into two
 /// separate loops. Returns true if the transformation was applied.
 ///
@@ -260,48 +283,58 @@ bool tryDistributeLoop(scf::ForOp forOp, bool useCostModel, unsigned numWarps,
 
   // A dot's operand slice is rooted *at* its A/B operands, so the dot itself
   // is never a member of that slice -- check its operands directly too. Its C
-  // operand is its own accumulator, never the foreign one, so scanning all
-  // three operands cannot over-reject.
-  auto dependsOnForeignAcc = [](tt::DotOp dot,
-                                const DenseSet<Operation *> &slice,
-                                BlockArgument foreignAcc) {
-    return llvm::is_contained(dot->getOperands(), foreignAcc) ||
-           sliceUsesValue(slice, foreignAcc);
+  // operand is its own accumulator, which is never frozen in its own loop, so
+  // scanning all three operands cannot over-reject.
+  auto dotReadsArg = [](tt::DotOp dot, const DenseSet<Operation *> &slice,
+                        BlockArgument arg) {
+    return llvm::is_contained(dot->getOperands(), arg) ||
+           sliceUsesValue(slice, arg);
   };
 
-  if (dependsOnForeignAcc(dot0, slice0, accArg1)) {
-    LDBG("Skipping loop: dot0 depends on dot1's accumulator block argument");
-    return false;
-  }
-  if (dependsOnForeignAcc(dot1, slice1, accArg0)) {
-    LDBG("Skipping loop: dot1 depends on dot0's accumulator block argument");
-    return false;
-  }
+  // Classify each iter_arg by which new loop may compute it. Each accumulator
+  // is owned by its own dot's loop by construction.
+  SmallVector<Owner> owners(forOp.getNumRegionIterArgs(), Owner::Both);
+  owners[*idx0] = Owner::Dot0;
+  owners[*idx1] = Owner::Dot1;
 
-  // Every other (non-accumulator) iter_arg is either a true pass-through
-  // (yielded unchanged) or a chain that must be safely replicable into both
-  // new loops. Chains that depend on either dot's result, or that read a
-  // dot's accumulator block argument directly, cannot be replicated
-  // correctly (each new loop only computes one accumulator), so reject the
-  // whole loop in that case.
-  DenseSet<Operation *> carriedUnion;
-  for (unsigned i = 0, e = forOp.getNumRegionIterArgs(); i < e; ++i) {
+  // Every other (non-accumulator) iter_arg is a true pass-through (yielded
+  // unchanged), a chain safe to replicate into both new loops, or a chain that
+  // reads exactly one dot's accumulator and therefore belongs to that dot's
+  // loop only. A chain that depends on a dot's *result*, or that reads *both*
+  // accumulators, fits in neither loop, so reject the whole loop.
+  //
+  // Ownership is seeded from the two accumulators and deliberately *not*
+  // propagated transitively through other iter_args: this is one-hop ownership
+  // plus the frozen-slot rejection below, not a general ownership analysis.
+  // A fixpoint would distribute strictly more loops, but it would also
+  // invalidate the overlap invariant below -- an op in a `Both` slice would no
+  // longer be provably accumulator free, so an op shared between a `Dot0`- and
+  // a `Dot1`-owned chain would become a new hazard needing a new check. That is
+  // a soundness rewrite, not a refactor. `owners` is structured so a worklist
+  // could later produce it without disturbing anything downstream.
+  //
+  // Overlap between chains is benign. Backward slices are transitively closed
+  // within the body, so if any op in a chain's slice transitively reads an
+  // accumulator, the op that reads it directly is *also* in that slice -- as
+  // itself, or as the top-level anchor (e.g. the `scf.if`) that
+  // `sliceUsesValue` descends into. Hence every op reached through a `Both`
+  // chain is provably accumulator free, and two chains sharing an op agree on
+  // ownership unless the accumulator read comes from a non-shared op -- in
+  // which case the shared op is safe in both loops.
+  //
+  // The slices are kept per index rather than merged: the frozen-slot check
+  // below is per chain, so a union would not be enough.
+  SmallVector<DenseSet<Operation *>> carriedSlices(
+      forOp.getNumRegionIterArgs());
+  for (unsigned i = 0, e = forOp.getNumRegionIterArgs(); i != e; ++i) {
     if (i == *idx0 || i == *idx1)
       continue;
 
     Value carriedVal = yieldOp.getOperand(i);
-    if (carriedVal == forOp.getRegionIterArgs()[i]) {
-      // True pass-through: nothing to clone, no slice needed.
-      continue;
-    }
+    if (carriedVal == forOp.getRegionIterArgs()[i])
+      continue; // True pass-through: nothing to clone, no slice needed.
 
-    if (carriedVal == accArg0 || carriedVal == accArg1) {
-      LDBG("Skipping loop: carried iter_arg "
-           << i << " is itself a dot accumulator block argument");
-      return false;
-    }
-
-    DenseSet<Operation *> carriedSlice;
+    DenseSet<Operation *> &carriedSlice = carriedSlices[i];
     collectBackwardSlice(carriedVal, body, carriedSlice);
 
     if (carriedSlice.contains(dot0.getOperation()) ||
@@ -311,27 +344,85 @@ bool tryDistributeLoop(scf::ForOp forOp, bool useCostModel, unsigned numWarps,
       return false;
     }
 
-    // Walk into nested regions too: a region-holding op (e.g. `scf.if`) may
-    // read the accumulator as a captured value inside its region without
-    // passing it as one of the op's own top-level operands.
-    if (sliceUsesValue(carriedSlice, accArg0) ||
-        sliceUsesValue(carriedSlice, accArg1)) {
+    bool readsAcc0 = chainReadsArg(carriedVal, carriedSlice, accArg0);
+    bool readsAcc1 = chainReadsArg(carriedVal, carriedSlice, accArg1);
+    if (readsAcc0 && readsAcc1) {
       LDBG("Skipping loop: carried iter_arg "
-           << i << " depends on a dot accumulator block argument");
+           << i
+           << " depends on both dot accumulators, so neither new loop "
+              "can compute it");
       return false;
     }
+    // A slot that *is* an accumulator block argument is owned too, not
+    // rejected: the original semantics are `iter_arg(k+1) = acc(k)`, a
+    // one-iteration lag that the owner loop reproduces bit for bit, since the
+    // accumulator evolves there through exactly the original sequence.
+    if (readsAcc0)
+      owners[i] = Owner::Dot0;
+    else if (readsAcc1)
+      owners[i] = Owner::Dot1;
+  }
 
-    carriedUnion.insert(carriedSlice.begin(), carriedSlice.end());
+  // A slot is frozen in a new loop exactly when the *other* loop owns it: this
+  // loop yields it unchanged, so it holds the loop-invariant init value here.
+  auto isFrozenIn = [&owners](unsigned i, Owner loopOwner) {
+    return owners[i] != Owner::Both && owners[i] != loopOwner;
+  };
+
+  // Nothing placed in a new loop may read a slot that is frozen there: it would
+  // see the init value instead of the value the original fused loop computed.
+  // This covers the dot itself, its operand slice, and every carried chain
+  // cloned into that loop -- including a chain that merely yields the frozen
+  // block argument unchanged, which has an empty slice and so is invisible to
+  // any scan of op operands. It subsumes the old foreign-accumulator check,
+  // since each accumulator is frozen in the other dot's loop.
+  for (unsigned j = 0, e = forOp.getNumRegionIterArgs(); j != e; ++j) {
+    if (owners[j] == Owner::Both)
+      continue;
+    bool readerIsDot0 = owners[j] == Owner::Dot1;
+    Owner reader = readerIsDot0 ? Owner::Dot0 : Owner::Dot1;
+    BlockArgument arg = forOp.getRegionIterArgs()[j];
+
+    if (dotReadsArg(readerIsDot0 ? dot0 : dot1, readerIsDot0 ? slice0 : slice1,
+                    arg)) {
+      LDBG("Skipping loop: dot " << (readerIsDot0 ? 0 : 1)
+                                 << " depends on iter_arg " << j
+                                 << ", which is frozen in its loop");
+      return false;
+    }
+    for (unsigned i = 0; i != e; ++i) {
+      if (isFrozenIn(i, reader))
+        continue;
+      if (chainReadsArg(yieldOp.getOperand(i), carriedSlices[i], arg)) {
+        LDBG("Skipping loop: carried iter_arg "
+             << i << " depends on iter_arg " << j
+             << ", which is frozen in a loop that must compute it");
+        return false;
+      }
+    }
+  }
+
+  // An owned chain is cloned only into its owner's loop; a `Both` chain is
+  // replicated into both.
+  DenseSet<Operation *> carriedForDot0, carriedForDot1;
+  for (unsigned i = 0, e = forOp.getNumRegionIterArgs(); i != e; ++i) {
+    if (owners[i] != Owner::Dot1)
+      carriedForDot0.insert(carriedSlices[i].begin(), carriedSlices[i].end());
+    if (owners[i] != Owner::Dot0)
+      carriedForDot1.insert(carriedSlices[i].begin(), carriedSlices[i].end());
   }
 
   // Every top-level op must be classified: it is either one of the two
   // dots, a member of a dot-operand slice, or a member of a carried chain.
   // The canonicalizer already ran, so no dead ops should exist here -- an
   // unclassified op means we cannot prove it is safe to drop, so reject.
+  // Every carried chain lands in at least one of the two clone sets, so their
+  // union has the same contents as a single merged set over all chains.
   DenseSet<Operation *> allSlices;
   allSlices.insert(slice0.begin(), slice0.end());
   allSlices.insert(slice1.begin(), slice1.end());
-  allSlices.insert(carriedUnion.begin(), carriedUnion.end());
+  allSlices.insert(carriedForDot0.begin(), carriedForDot0.end());
+  allSlices.insert(carriedForDot1.begin(), carriedForDot1.end());
 
   for (Operation &op : *body) {
     if (&op == body->getTerminator() || &op == dot0.getOperation() ||
@@ -345,7 +436,13 @@ bool tryDistributeLoop(scf::ForOp forOp, bool useCostModel, unsigned numWarps,
     }
   }
 
-  // Every slice member must be safe to clone into both new loops.
+  // Every slice member must be safe to clone into both new loops. This applies
+  // to an owned chain as well, even though it is cloned into one loop only:
+  // duplication was never the sole hazard, because distribution also *reorders*
+  // the op against every memory operation of the other loop and this pass has
+  // no alias analysis. That is why a volatile `tt.load` -- which declares a
+  // Write effect precisely to prevent reordering -- must be rejected regardless
+  // of how many loops it lands in.
   for (Operation *op : allSlices) {
     if (!isReplicable(op)) {
       LDBG("Skipping loop: slice member is not safely replicable: " << *op);
@@ -355,15 +452,16 @@ bool tryDistributeLoop(scf::ForOp forOp, bool useCostModel, unsigned numWarps,
 
   OpBuilder builder(forOp);
 
-  // Each distributed loop keeps all original iter_args but only computes
-  // its target dot, yielding the iter_arg unchanged for the other position.
-  // Carried (non-accumulator) chains are replicated identically into both
-  // loops.
+  // Each distributed loop keeps all original iter_args but only computes its
+  // target dot and the slots it owns, yielding every slot owned by the other
+  // loop unchanged. Carried (non-accumulator) chains owned by neither loop are
+  // replicated identically into both.
 
   auto buildDistributedLoop = [&](tt::DotOp targetDot, unsigned targetIdx,
-                                  unsigned otherIdx,
                                   const DenseSet<Operation *> &targetSlice,
+                                  const DenseSet<Operation *> &carriedSet,
                                   ValueRange initArgs) {
+    Owner loopOwner = owners[targetIdx];
     // Use the ForOp builder callback to construct the body inline.
     // This avoids issues with empty blocks and missing terminators.
     scf::ForOp newForOp;
@@ -381,28 +479,34 @@ bool tryDistributeLoop(scf::ForOp forOp, bool useCostModel, unsigned numWarps,
           }
 
           // Clone ops in original order: this loop's own dot-operand slice
-          // plus every carried-chain op (carried chains are replicated
-          // identically into both distributed loops), plus the target dot.
+          // plus the carried-chain ops it must compute (chains owned by
+          // neither loop are replicated identically into both), plus the
+          // target dot.
           for (Operation &op : *body) {
             if (&op == body->getTerminator())
               continue;
-            if (targetSlice.contains(&op) || carriedUnion.contains(&op) ||
+            if (targetSlice.contains(&op) || carriedSet.contains(&op) ||
                 &op == targetDot.getOperation()) {
               b.clone(op, mapping);
             }
           }
 
-          // Build yield: for the target iter_arg, yield the dot result; for
-          // the other dot's accumulator, pass it through unchanged (its
-          // real value comes from the other distributed loop, this loop's
-          // copy is dead); for a true pass-through carried iter_arg, yield
-          // it unchanged; otherwise resolve the carried chain's cloned
-          // result through the mapping.
+          // Build yield: for the target iter_arg, yield the dot result; for a
+          // slot frozen here because the other loop owns it, pass it through
+          // unchanged (its real value comes from that loop, this loop's copy
+          // is dead); for a true pass-through carried iter_arg, yield it
+          // unchanged; otherwise resolve the carried chain's cloned result
+          // through the mapping.
           SmallVector<Value> yieldOperands;
           for (unsigned i = 0; i < forOp.getNumRegionIterArgs(); ++i) {
             if (i == targetIdx) {
               yieldOperands.push_back(mapping.lookup(targetDot.getResult()));
-            } else if (i == otherIdx) {
+            } else if (isFrozenIn(i, loopOwner)) {
+              // Must be tested *before* the mapping fallback below: an owned
+              // chain is not cloned into the loop that does not own it, so
+              // `mapping` has no entry for its yielded value and
+              // `lookupOrDefault` would hand back the original value, defined
+              // inside the loop we are about to erase.
               yieldOperands.push_back(iterArgs[i]);
             } else if (yieldOp.getOperand(i) == forOp.getRegionIterArgs()[i]) {
               yieldOperands.push_back(iterArgs[i]);
@@ -424,24 +528,20 @@ bool tryDistributeLoop(scf::ForOp forOp, bool useCostModel, unsigned numWarps,
   };
 
   // Build loop 1 (for dot0).
-  scf::ForOp loop1 =
-      buildDistributedLoop(dot0, *idx0, *idx1, slice0, forOp.getInitArgs());
+  scf::ForOp loop1 = buildDistributedLoop(dot0, *idx0, slice0, carriedForDot0,
+                                          forOp.getInitArgs());
 
   // Build loop 2 (for dot1).
-  scf::ForOp loop2 =
-      buildDistributedLoop(dot1, *idx1, *idx0, slice1, forOp.getInitArgs());
+  scf::ForOp loop2 = buildDistributedLoop(dot1, *idx1, slice1, carriedForDot1,
+                                          forOp.getInitArgs());
 
-  // Replace the original loop's results: idx0 from loop1, idx1 from loop2,
-  // others from either (they're pass-through in both).
+  // Each original result comes from the loop that owns its slot. A `Both` slot
+  // is computed identically in the two loops, so take it from the first. Note
+  // `loop1` computes dot0 and `loop2` computes dot1 -- the names are off by one
+  // from the `Owner` values.
   for (unsigned i = 0; i < forOp.getNumResults(); ++i) {
-    Value replacement;
-    if (i == *idx0)
-      replacement = loop1.getResult(i);
-    else if (i == *idx1)
-      replacement = loop2.getResult(i);
-    else
-      replacement = loop1.getResult(i); // pass-through, same in both
-    forOp.getResult(i).replaceAllUsesWith(replacement);
+    scf::ForOp ownerLoop = owners[i] == Owner::Dot1 ? loop2 : loop1;
+    forOp.getResult(i).replaceAllUsesWith(ownerLoop.getResult(i));
   }
 
   // Erase the original loop.

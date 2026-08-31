@@ -452,13 +452,17 @@ struct LoadStoreConversionBase {
             op, TritonIntelGPUDialect::getSupportPredicatedIOAttrName()))
       return false;
 
-    // Predicated load is enabled by default for LoadOp but disabled by default
-    // for DescriptorLoadOp. DescriptorLoadOp always generates boundary-check
-    // predicates (even when all elements are in-bounds), and the predicated
-    // load intrinsic prevents IGC from optimizing these uniformly-true
-    // predicates as effectively as the control-flow-based approach. Both can be
-    // overridden by env vars. Predicated store is enabled by default for both
-    // op types.
+    // Predicated load and store are enabled by default for all four op types
+    // (LoadOp, StoreOp, DescriptorLoadOp, DescriptorStoreOp). Either env var
+    // (TRITON_INTEL_PREDICATED_LOAD, TRITON_INTEL_PREDICATED_STORE) overrides
+    // in both directions.
+    //
+    // Note that DescriptorLoadOp always emits a boundary-check mask, even for
+    // provably in-bounds tiles, so this choice applies to all of its masked
+    // fallback loads (2D block loads bypass this path entirely). Predicating
+    // them costs IGC's folding of the uniformly-true predicates that the
+    // control-flow form exposes; that trade measured favorable on Xe2, see
+    // issue #7090.
     static const std::optional<bool> usePredicatedLoad =
         tools::isEnvValueBool(tools::getStrEnv("TRITON_INTEL_PREDICATED_LOAD"));
     static const std::optional<bool> usePredicatedStore = tools::isEnvValueBool(
@@ -471,7 +475,7 @@ struct LoadStoreConversionBase {
     } else if constexpr (std::is_same_v<OpType, StoreOp>) {
       return !usePredicatedStore.has_value() || usePredicatedStore.value();
     } else if constexpr (std::is_same_v<OpType, DescriptorLoadOp>) {
-      return usePredicatedLoad.has_value() && usePredicatedLoad.value();
+      return !usePredicatedLoad.has_value() || usePredicatedLoad.value();
     } else if constexpr (std::is_same_v<OpType, DescriptorStoreOp>) {
       return !usePredicatedStore.has_value() || usePredicatedStore.value();
     }
@@ -631,15 +635,6 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
     bool hasDpas = hasDpasEncoding(tensorTy) || hasDotDpasEncoding(tensorTy);
     return !enableBlockIOForAllLayout.has_value() ||
            enableBlockIOForAllLayout.value() || hasDpas;
-  }
-
-  /// Check whether an op was annotated by the 1D→2D reshape in
-  /// MaterializeBlockPointer.
-  template <typename OpTy> static bool hasAnnotated1DReshapeStride(OpTy op) {
-    if constexpr (std::is_same_v<OpTy, triton::StoreOp> ||
-                  std::is_same_v<OpTy, triton::LoadOp>)
-      return op->hasAttr(TritonIntelGPUDialect::getBlockIOStrideAttrName());
-    return false;
   }
 
   /// Return the pitch (in bytes) for an op annotated by the 1D→2D reshape.
@@ -2917,52 +2912,10 @@ struct StoreOpToBlockIOConversion
     BlockIOTileSizeInfo sizeInfo = BlockIOTileSizeInfo::unknown();
     MLIRContext *ctx = rewriter.getContext();
 
-    if (hasAnnotated1DReshapeStride(op)) {
-      // For stores annotated by the 1D→2D reshape, the encoding was inferred
-      // by tt.reshape and may not satisfy getBlockIOTileSize constraints.
-      // Specifically, the reshape produces a blocked encoding with
-      // sizePerThread > maxElemPackedVal (e.g., sizePerThread[1]=8 vs
-      // maxElemPackedVal=4 for f16). This creates a gap between the
-      // register-packed extent and the first lane base that
-      // getBlockIOTileSize cannot bridge.
-      // TODO: extend getBlockIOTileSize to handle register bases in the
-      // contiguous dimension beyond the packing limit, so this special case
-      // can be removed.
-      auto blockedEnc = dyn_cast<BlockedEncodingAttr>(encoding);
-      assert(blockedEnc && "1D reshape store must have BlockedEncodingAttr");
-      assert(rank == 2 && "1D reshape always produces rank-2 tensors");
-      unsigned numWarpsRow = blockedEnc.getWarpsPerCTA()[0];
-      int height = tensorType.getDimSize(0) / numWarpsRow;
-      int width = tensorType.getDimSize(rank - 1);
-      // Build register bases as identity mapping — every register holds one
-      // element (numPackedVals=1), so all bases are included.
-      StringAttr kRegister = str_attr("register");
-      unsigned regDimSize = llEncoding->getInDimSize(kRegister);
-      SetVector<unsigned> regPackBases;
-      for (unsigned i = 1; i < regDimSize; i <<= 1)
-        regPackBases.insert(i);
-      sizeInfo = BlockIOTileSizeInfo(height, width, /*numElemPerPackedVal=*/1,
-                                     /*vBlocks=*/1, /*rowDim=*/0,
-                                     /*colDim=*/rank - 1, /*transpose=*/false,
-                                     /*vnni=*/false, std::move(regPackBases));
-      // The reshape path bypasses getBlockIOTileSize (and thus
-      // validate2DBlockStoreTile), so apply the HW address payload restriction
-      // here; vBlocks and transpose are already fixed (1 / false) above.
-      if (!sizeInfo.isValid())
-        return failure();
-      if (!check2DBlockAddressPayloadRestriction(
-              elemSizeInBits * sizeInfo.numElemPerPackedVal,
-              sizeInfo.tileWidth))
-        return failure();
-    } else {
-      // Validate through the shared helper (the single source of truth for 2D
-      // block store eligibility): tile geometry, HW address payload
-      // restriction, no transpose, vBlocks forced to 1.
-      if (!validate2DBlockStoreTile(llEncoding.value(), contiguousDim,
-                                    elemSizeInBits, tensorType, maskAxisInfo,
-                                    sizeInfo))
-        return failure();
-    }
+    if (!validate2DBlockStoreTile(llEncoding.value(), contiguousDim,
+                                  elemSizeInBits, tensorType, maskAxisInfo,
+                                  sizeInfo))
+      return failure();
 
     auto [tileHeight, tileWidth, numPackedVals, vBlocks, rowDim, colDim,
           isTransposeRequired, useVNNIFormat, regPackedBases] =
@@ -4240,28 +4193,9 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
           const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
               .getAxisInfo(op.getMask());
 
-    BlockIOTileSizeInfo sizeInfo = BlockIOTileSizeInfo::unknown();
-    bool has1DReshapeStride =
-        op->hasAttr(TritonIntelGPUDialect::getBlockIOStrideAttrName());
-    auto blockedEnc = dyn_cast<BlockedEncodingAttr>(encoding);
-    if (has1DReshapeStride && blockedEnc && rank == 2) {
-      unsigned numWarpsRow = blockedEnc.getWarpsPerCTA()[0];
-      int height = tensorType.getDimSize(0) / numWarpsRow;
-      int width = tensorType.getDimSize(rank - 1);
-      StringAttr kReg = S("register");
-      unsigned regDimSize = llEncoding->getInDimSize(kReg);
-      SetVector<unsigned> regPackBases;
-      for (unsigned i = 1; i < regDimSize; i <<= 1)
-        regPackBases.insert(i);
-      sizeInfo = BlockIOTileSizeInfo(height, width, /*numElemPerPackedVal=*/1,
-                                     /*vBlocks=*/1, /*rowDim=*/0,
-                                     /*colDim=*/rank - 1, /*transpose=*/false,
-                                     /*vnni=*/false, std::move(regPackBases));
-    } else {
-      sizeInfo =
-          getBlockIOLoadTileSize(*llEncoding, contiguousDim, elemSizeInBits,
-                                 maskAxisInfo, oneMatrixPerLoadForBT);
-    }
+    BlockIOTileSizeInfo sizeInfo =
+        getBlockIOLoadTileSize(*llEncoding, contiguousDim, elemSizeInBits,
+                               maskAxisInfo, oneMatrixPerLoadForBT);
     if (!sizeInfo.isValid())
       return failure();
 

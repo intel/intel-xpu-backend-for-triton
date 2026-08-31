@@ -66,7 +66,7 @@ public:
           resTy ? to_vector(resTy.getShape()) : AxisInfo::DimVectorT(rank, 1);
       AxisInfo::DimVectorT contiguity(rank, 1);
       AxisInfo::DimVectorT divisibility(
-          rank, highestPowOf2Divisor<int64_t>(constantValue.value()));
+          rank, highestPowOf2Divisor<int64_t>(constantValue->getSExtValue()));
       return AxisInfo(contiguity, divisibility, constancy, constantValue);
     }
     AxisInfo::DimVectorT contiguity;
@@ -96,8 +96,8 @@ protected:
     return std::gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
   }
 
-  virtual std::optional<int64_t> getConstantValue(OpTy op, const AxisInfo &lhs,
-                                                  const AxisInfo &rhs) {
+  virtual std::optional<APInt> getConstantValue(OpTy op, const AxisInfo &lhs,
+                                                const AxisInfo &rhs) {
     return {};
   }
 };
@@ -155,9 +155,9 @@ makeTensorDescAxisInfo(Type elemTy, ArrayRef<int64_t> blkShape, unsigned rank,
     // clang-format on
     // The contiguity of the two dim should be 1.
     int64_t contiguous = shapeInfo[dim].getDivisibility(0);
-    contiguity.push_back(strideInfo[dim].getConstantValue() == 1
-                             ? std::min(contiguous, blkShape[dim])
-                             : 1);
+    const std::optional<APInt> &stride = strideInfo[dim].getConstantValue();
+    contiguity.push_back(
+        stride && stride->isOne() ? std::min(contiguous, blkShape[dim]) : 1);
 
     // The divisibility of dim d is bounded by the stride of
     // the *other* dimension;
@@ -272,15 +272,13 @@ public:
     auto intAttr = dyn_cast<IntegerAttr>(op.getValue());
     auto boolAttr = dyn_cast<BoolAttr>(op.getValue());
     if (intAttr || boolAttr) {
-      int64_t value{};
-      if (intAttr)
-        value = intAttr.getValue().getSExtValue();
-      else
-        value = boolAttr.getValue() ? 1 : 0;
-      return AxisInfo(/*contiguity=*/{1},
-                      /*divisibility=*/{highestPowOf2Divisor(value)},
-                      /*constancy=*/{1},
-                      /*knownConstantValue=*/{value});
+      APInt value =
+          intAttr ? intAttr.getValue() : APInt(1, boolAttr.getValue());
+      return AxisInfo(
+          /*contiguity=*/{1},
+          /*divisibility=*/{highestPowOf2Divisor(value.getSExtValue())},
+          /*constancy=*/{1},
+          /*knownConstantValue=*/value);
     }
     // TODO: generalize to dense attr
     auto splatAttr = dyn_cast<SplatElementsAttr>(op.getValue());
@@ -298,7 +296,7 @@ public:
           AxisInfo::DimVectorT(ty.getRank(), highestPowOf2Divisor(value)),
           /*constancy=*/
           AxisInfo::DimVectorT(ty.getShape().begin(), ty.getShape().end()),
-          /*knownConstantValue=*/{value});
+          /*knownConstantValue=*/apValue);
     }
     return AxisInfo();
   }
@@ -341,12 +339,13 @@ private:
     return std::gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
   }
 
-  std::optional<int64_t> getConstantValue(OpTy op, const AxisInfo &lhs,
-                                          const AxisInfo &rhs) override {
-    if (lhs.getConstantValue().has_value() &&
-        rhs.getConstantValue().has_value()) {
-      return {lhs.getConstantValue().value() + rhs.getConstantValue().value()};
-    }
+  std::optional<APInt> getConstantValue(OpTy op, const AxisInfo &lhs,
+                                        const AxisInfo &rhs) override {
+    const std::optional<APInt> &lhsValue = lhs.getConstantValue();
+    const std::optional<APInt> &rhsValue = rhs.getConstantValue();
+    if (lhsValue && rhsValue &&
+        lhsValue->getBitWidth() == rhsValue->getBitWidth())
+      return *lhsValue + *rhsValue;
     return {};
   }
 };

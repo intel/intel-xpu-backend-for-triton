@@ -201,13 +201,32 @@ bool optimizeDotOperands(scf::ForOp forOp, SmallVector<Value> &prefetchedValue,
     for (Operation *user : usesInSameLoop)
       user->replaceUsesOfWith(loadOp->getResult(0), newLoad->getResult(0));
 
-    // Multiple users:
-    // Note that if other users come before the loop, the loadOp is not a
-    // candidate for being moved.
+    // Multiple users: rematerialize the load after the loop for the users that
+    // such a copy would dominate, so that the original load dies before the
+    // loop instead of staying live across it.
+    //
+    // Only users the copy dominates may be rewired. A user nested in a region
+    // that precedes the loop -- e.g. the body of an earlier sibling loop, as in
+    // causal attention where one Q load feeds a dot in each of two loops -- is
+    // not dominated by a definition placed after this loop, and must keep using
+    // the original load. `isLoadCandidate` only rejects users sitting directly
+    // in the loop's own block before the loop, so nested users reach here.
     if (!loadOp->use_empty()) {
-      b.setInsertionPointAfter(dotOp->getParentOp());
-      auto *copyLoad = b.clone(*loadOp);
-      loadOp->replaceAllUsesWith(copyLoad);
+      Operation *loopOp = dotOp->getParentOp();
+      Block *loopBlock = loopOp->getBlock();
+      // A use is dominated by the copy iff its ancestor in the loop's block
+      // comes after the loop. Uses with no ancestor there live in an unrelated
+      // region and conservatively keep the original load.
+      auto dominatedByCopy = [&](OpOperand &use) {
+        Operation *ancestor = loopBlock->findAncestorOpInBlock(*use.getOwner());
+        return ancestor && loopOp->isBeforeInBlock(ancestor);
+      };
+      if (any_of(loadOp->getResult(0).getUses(), dominatedByCopy)) {
+        b.setInsertionPointAfter(loopOp);
+        auto *copyLoad = b.clone(*loadOp);
+        loadOp->getResult(0).replaceUsesWithIf(copyLoad->getResult(0),
+                                               dominatedByCopy);
+      }
     }
     opMoved = true;
   };

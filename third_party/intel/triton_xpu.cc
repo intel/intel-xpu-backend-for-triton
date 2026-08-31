@@ -70,6 +70,8 @@ void init_triton_intel_passes_ttir(py::module_ &&m) {
   ADD_PASS_WRAPPER_0("add_fuse_reshape", intel::createTritonIntelFuseReshape);
   ADD_PASS_WRAPPER_0("add_simplify_signed_arithmetic",
                      intel::createTritonIntelSimplifySignedArithmetic);
+  ADD_PASS_WRAPPER_0("add_speculate_signed_div_rem",
+                     intel::createTritonIntelSpeculateSignedDivRem);
   ADD_PASS_WRAPPER_0("add_fold_true_cmpi",
                      intel::createTritonIntelGPUFoldTrueCmpI);
   ADD_FUNC_PASS_WRAPPER_0("add_prepare_if_combining",
@@ -246,11 +248,11 @@ void init_triton_intel(py::module_ &m) {
         } else if (pyCb) {
           instrCbPtr = &passInstrCb;
           passInstrCb.registerBeforeNonSkippedPassCallback(
-              [&passStartTimes](llvm::StringRef id, llvm::Any) {
+              [&passStartTimes](llvm::StringRef id, llvm::IRUnitRef) {
                 passStartTimes[id] = std::chrono::high_resolution_clock::now();
               });
           passInstrCb.registerAfterPassCallback(
-              [&passStartTimes, &pyCb](llvm::StringRef id, llvm::Any,
+              [&passStartTimes, &pyCb](llvm::StringRef id, llvm::IRUnitRef,
                                        const llvm::PreservedAnalyses &) {
                 auto start = passStartTimes.find(id);
                 if (start != passStartTimes.end()) {
