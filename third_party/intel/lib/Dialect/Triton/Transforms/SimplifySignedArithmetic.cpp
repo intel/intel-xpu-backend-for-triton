@@ -1,5 +1,9 @@
+#include "intel/include/Analysis/Range.h"
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
+#include "intel/include/Utils/Utility.h"
+#include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/Verifier.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
@@ -18,6 +22,9 @@ namespace {
 
 class SignedArithmeticSimplifier {
 public:
+  SignedArithmeticSimplifier(const DataFlowSolver *solver = nullptr)
+      : solver(solver) {}
+
   void run(ModuleOp moduleOp) {
     SmallVector<arith::RemSIOp> remOpsToConvert;
     SmallVector<arith::DivSIOp> divOpsToConvert;
@@ -101,8 +108,78 @@ private:
     return isNonNegative(op.getLhs()) && isStrictlyPositive(op.getRhs());
   }
 
+  /// Helper: Check if select matches pattern: select(x < 0, xor(x, -1), x)
+  /// This is the bitwise NOT pattern used by PyTorch floordiv.
+  static bool matchesBitwiseNotPattern(arith::SelectOp selOp) {
+    auto cmpOp = selOp.getCondition().getDefiningOp<arith::CmpIOp>();
+    if (!cmpOp || cmpOp.getPredicate() != arith::CmpIPredicate::slt)
+      return false;
+
+    Value cmpLhs = cmpOp.getLhs();
+    if (!tt::intel::isConstant(cmpOp.getRhs(), 0))
+      return false;
+
+    auto xorOp = selOp.getTrueValue().getDefiningOp<arith::XOrIOp>();
+    if (!xorOp || selOp.getFalseValue() != cmpLhs)
+      return false;
+
+    // Check xor(x, -1) in either operand order
+    return (xorOp.getLhs() == cmpLhs &&
+            tt::intel::isConstant(xorOp.getRhs(), -1)) ||
+           (xorOp.getRhs() == cmpLhs &&
+            tt::intel::isConstant(xorOp.getLhs(), -1));
+  }
+
+  /// Helper: Check if value is guaranteed non-zero via pattern: select(x == 0,
+  /// positive_const, x)
+  bool isGuaranteedNonZero(Value value) const {
+    auto selOp = value.getDefiningOp<arith::SelectOp>();
+    if (!selOp)
+      return false;
+
+    auto cmpOp = selOp.getCondition().getDefiningOp<arith::CmpIOp>();
+    if (!cmpOp || cmpOp.getPredicate() != arith::CmpIPredicate::eq)
+      return false;
+
+    // Pattern: select(x == 0, positive_const, x)
+    // Check: comparison is against zero, true branch is positive, false branch
+    // is x
+    return tt::intel::isConstant(cmpOp.getRhs(), 0) &&
+           isPositiveConstant(selOp.getTrueValue()) &&
+           selOp.getFalseValue() == cmpOp.getLhs();
+  }
+
+  /// Helper: Check if select matches pattern: select(x < 0, sub(0, x), x) =
+  /// abs(x)
+  static bool matchesAbsPattern(arith::SelectOp selOp, Value &absOperand) {
+    auto cmpOp = selOp.getCondition().getDefiningOp<arith::CmpIOp>();
+    if (!cmpOp || cmpOp.getPredicate() != arith::CmpIPredicate::slt)
+      return false;
+
+    Value cmpLhs = cmpOp.getLhs();
+    if (!tt::intel::isConstant(cmpOp.getRhs(), 0) ||
+        selOp.getFalseValue() != cmpLhs)
+      return false;
+
+    auto subOp = selOp.getTrueValue().getDefiningOp<arith::SubIOp>();
+    if (!subOp || !tt::intel::isConstant(subOp.getLhs(), 0) ||
+        subOp.getRhs() != cmpLhs)
+      return false;
+
+    absOperand = cmpLhs;
+    return true;
+  }
+
   /// Returns true if value is provably non-negative (>= 0).
   bool isNonNegative(Value value) const {
+    // Check range analysis first
+    if (solver) {
+      if (auto range = tt::intel::collectRange(*solver, value)) {
+        if (range->smin().isNonNegative())
+          return true;
+      }
+    }
+
     Operation *defOp = value.getDefiningOp();
     if (!defOp)
       return false;
@@ -174,11 +251,23 @@ private:
     if (auto minOp = dyn_cast<arith::MinSIOp>(defOp))
       return isNonNegative(minOp.getLhs()) && isNonNegative(minOp.getRhs());
 
-    // arith.select yields one of its two value operands; non-negative iff both
-    // candidate values are non-negative.
-    if (auto selOp = dyn_cast<arith::SelectOp>(defOp))
+    // arith.select: check for special patterns first, then general case
+    if (auto selOp = dyn_cast<arith::SelectOp>(defOp)) {
+      // Special pattern: select(x < 0, xor(x, -1), x)
+      // This is the floordiv pattern for ensuring non-negative dividend.
+      // When x < 0: ~x = -(x+1) >= 0 (since x <= -1)
+      // When x >= 0: x >= 0
+      if (matchesBitwiseNotPattern(selOp)) {
+        LLVM_DEBUG(
+            llvm::dbgs()
+            << "Recognized pattern: select(x < 0, ~x, x) is non-negative\n");
+        return true;
+      }
+
+      // General case: non-negative iff both branches are non-negative
       return isNonNegative(selOp.getTrueValue()) &&
              isNonNegative(selOp.getFalseValue());
+    }
 
     // arith.andi is non-negative if EITHER operand is non-negative, since
     // MSB(a & b) = MSB(a) & MSB(b). Subsumes the constant-mask case.
@@ -231,6 +320,14 @@ private:
     if (isPositiveConstant(value))
       return true;
 
+    // Check range analysis first
+    if (solver) {
+      if (auto range = tt::intel::collectRange(*solver, value)) {
+        if (range->smin().isStrictlyPositive())
+          return true;
+      }
+    }
+
     Operation *defOp = value.getDefiningOp();
     if (!defOp)
       return false;
@@ -244,12 +341,27 @@ private:
       return isStrictlyPositive(maxOp.getLhs()) ||
              isStrictlyPositive(maxOp.getRhs());
 
+    // Pattern: abs(x) where x is guaranteed non-zero
+    // select(x < 0, sub(0, x), x) = abs(x) is strictly positive if x != 0
+    if (auto selOp = dyn_cast<arith::SelectOp>(defOp)) {
+      Value absOperand;
+      if (matchesAbsPattern(selOp, absOperand) &&
+          isGuaranteedNonZero(absOperand)) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "Recognized pattern: abs(select(x==0, 1, x)) "
+                      "is strictly positive\n");
+        return true;
+      }
+    }
+
     // tt.splat preserves strict positivity (tensor divisors).
     if (auto splatOp = dyn_cast<tt::SplatOp>(defOp))
       return isStrictlyPositive(splatOp.getSrc());
 
     return false;
   }
+
+  const DataFlowSolver *solver;
 };
 
 struct TritonIntelSimplifySignedArithmetic
@@ -258,8 +370,23 @@ struct TritonIntelSimplifySignedArithmetic
 public:
   void runOnOperation() final {
     ModuleOp moduleOp = getOperation();
-    SignedArithmeticSimplifier simplifier;
-    simplifier.run(moduleOp);
+
+    // Set up range analysis
+    DataFlowSolver solver;
+    DominanceInfo domInfo(moduleOp);
+    solver.load<tt::intel::IntegerRangeAnalysis>(moduleOp, domInfo);
+
+    if (failed(solver.initializeAndRun(moduleOp))) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "Range analysis failed, proceeding without it\n");
+      // Continue without range analysis - fall back to pattern matching only
+      SignedArithmeticSimplifier simplifier(nullptr);
+      simplifier.run(moduleOp);
+    } else {
+      SignedArithmeticSimplifier simplifier(&solver);
+      simplifier.run(moduleOp);
+    }
+
     assert(succeeded(verify(moduleOp)) && "Module verification failed");
   }
 };

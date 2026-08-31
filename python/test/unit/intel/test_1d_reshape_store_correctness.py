@@ -50,42 +50,56 @@ def strided_store_kernel(
     tl.store(out_ptr + out_offset, val, mask=mask)
 
 
+def _has_block_store(llir):
+    """True if the kernel emitted a 2D block store message."""
+    return 'spirv_Subgroup2DBlockStoreINTEL' in llir or 'GenISA.LSC2DBlockWrite' in llir
+
+
 @pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
 @pytest.mark.parametrize(
-    "W, S, XBLOCK, num_warps, dtype_str",
+    "W, S, XBLOCK, num_warps, expect_block_store, dtype_str",
     [
-        # H = XBLOCK / W = 1: this IS the case that exercises
-        # `reshape1DStridedStore` (it requires H == 1 per the TODO in
-        # MaterializeBlockPointer.cpp).  num_warps must be 1 so that
-        # H / num_warps >= 1.
-        (32, 96, 32, 1, "float16"),
-        (32, 128, 32, 1, "float16"),
-        (32, 192, 32, 1, "float16"),
-        # H > 1: baseline functional correctness only — the store reshape
-        # optimization is currently disabled for H != 1, so these cases do
-        # not exercise the optimized path but verify the fallback gather
-        # store remains correct.
-        (32, 96, 1024, 4, "float16"),
-        (32, 128, 1024, 4, "float16"),
-        (32, 192, 1024, 4, "float16"),
+        # H = XBLOCK / W = 1: a single contiguous row.  num_warps must be 1 so
+        # that H / num_warps >= 1.
+        (32, 96, 32, 1, True, "float16"),
+        (32, 128, 32, 1, True, "float16"),
+        (32, 192, 32, 1, True, "float16"),
+        # H > 1: the multi-row case.  Per-warp height is H/num_warps = 8, the
+        # store hardware maximum, so one 2D block store replaces 32 rows of
+        # scatter.  This is the case the `H != 1` guard used to block.
+        (32, 96, 1024, 4, True, "float16"),
+        (32, 128, 1024, 4, True, "float16"),
+        (32, 192, 1024, 4, True, "float16"),
+        # W < threadsPerWarp (16 < 32): must fall back.  A [1, tpw] encoding on
+        # a dimension of size W < tpw is replicated and cannot be legalized
+        # (same reason as the load-side bail-out for issue #6738).
+        (16, 96, 512, 4, False, "float16"),
     ],
     ids=[
         "H1_W32_S96_f16",
         "H1_W32_S128_f16",
         "H1_W32_S192_f16",
-        "H32_W32_S96_f16_fallback",
-        "H32_W32_S128_f16_fallback",
-        "H32_W32_S192_f16_fallback",
+        "H32_W32_S96_f16",
+        "H32_W32_S128_f16",
+        "H32_W32_S192_f16",
+        "H32_W16_S96_f16_narrow_fallback",
     ],
 )
-def test_1d_reshape_strided_store(W, S, XBLOCK, num_warps, dtype_str, device):
+def test_1d_reshape_strided_store(W, S, XBLOCK, num_warps, expect_block_store, dtype_str, device):
     """Test 1D-to-2D block store reshape and fallback produce correct results.
 
-    With H = XBLOCK / W == 1, the Inductor-style strided store is lowered
-    via `reshape1DStridedStore` to a 2D block store.  With H > 1, the
-    current implementation rejects the reshape (TODO: hardware transpose
-    unsupported) and this case exercises the gather-store fallback.
+    The Inductor-style strided store is lowered via `reshape1DStridedStore` to a
+    2D block store, for H == 1 and for H > 1 alike: the value is reshaped to the
+    natural 2D encoding and then converted into the hardware delivery encoding
+    (lane k owns column k, registers stack rows).  `expect_block_store` pins
+    whether the optimization fired — without it a silently-skipped reshape would
+    still pass the numeric checks below.
     """
+    # On devices without 2D block IO the optimization is not emitted; override
+    # the parametrized expectation so the numeric checks still run.
+    if not triton.runtime.driver.active.get_current_target().arch.get('has_2d_block_io', False):
+        expect_block_store = False
+
     num_rows = 1024
     xnumel = W * num_rows  # total elements
 
@@ -106,7 +120,7 @@ def test_1d_reshape_strided_store(W, S, XBLOCK, num_warps, dtype_str, device):
 
     # Launch kernel
     grid = (xnumel + XBLOCK - 1) // XBLOCK
-    strided_store_kernel[(grid, )](
+    kernel = strided_store_kernel[(grid, )](
         x_tri,
         out_tri,
         xnumel,
@@ -115,6 +129,14 @@ def test_1d_reshape_strided_store(W, S, XBLOCK, num_warps, dtype_str, device):
         XBLOCK=XBLOCK,
         num_warps=num_warps,
     )
+
+    # Pin whether the 1D->2D reshape actually fired.  The numeric assertions
+    # below pass either way, so without this a regression that silently skips
+    # the optimization would go unnoticed.
+    llir = kernel.asm["llir"]
+    assert _has_block_store(llir) == expect_block_store, (
+        f"expected block store: {expect_block_store}, got {not expect_block_store} "
+        f"for W={W}, S={S}, XBLOCK={XBLOCK}, num_warps={num_warps}")
 
     # Compare: reshape output to [num_rows, S] and check the first W columns
     # of each row (the rest should remain zero)
@@ -282,15 +304,26 @@ def _wgt_load_kernel(
 @pytest.mark.parametrize(
     "W, S, H, dtype_str",
     [
-        # i8 / W=64 > tpw=32 / H=1 (store is gated at H=1 anyway).
+        # i8 / W=64 > tpw=32 / H=1.
         # BLOCK=W*H=64. Single instance, pure arange — matchStridedPattern fires.
         # Before the fix: tile_width=64, elem_size=8 → lane l stores to
         #   dst[l] and dst[l+32] but holds cols 2l and 2l+1 → wrong columns.
         # After the fix:  tile_width=32, elem_size=16 → packed correctly.
         (64, 128, 1, "int8"),
         (64, 192, 1, "int8"),
+        # Same, with H = 8 = maxPerWarpHeight for stores.  This combines the
+        # W > tpw packing with the multi-row geometry unblocked by lifting the
+        # `H != 1` guard: sizePerThread = [8, 2], so each lane holds 2 adjacent
+        # columns of all 8 rows and the packed tile is 32 wide by 8 high.
+        (64, 128, 8, "int8"),
+        (64, 192, 8, "int8"),
     ],
-    ids=["H1_W64_S128_i8_wgt_tpw", "H1_W64_S192_i8_wgt_tpw"],
+    ids=[
+        "H1_W64_S128_i8_wgt_tpw",
+        "H1_W64_S192_i8_wgt_tpw",
+        "H8_W64_S128_i8_wgt_tpw",
+        "H8_W64_S192_i8_wgt_tpw",
+    ],
 )
 def test_1d_reshape_strided_store_w_gt_tpw(W, S, H, dtype_str, device):
     """Regression test: 1D strided store with W > threadsPerWarp must produce correct data."""
@@ -306,7 +339,10 @@ def test_1d_reshape_strided_store_w_gt_tpw(W, S, H, dtype_str, device):
     x_tri = to_triton(x_np, device=device)
     out_tri = torch.zeros(out_size, dtype=x_tri.dtype, device=device)
 
-    _wgt_store_kernel[(1, )](x_tri, out_tri, W=W, S=S, BLOCK=BLOCK, num_warps=1)
+    kernel = _wgt_store_kernel[(1, )](x_tri, out_tri, W=W, S=S, BLOCK=BLOCK, num_warps=1)
+
+    assert _has_block_store(kernel.asm["llir"]), \
+        f"1D->2D store reshape did not fire for W={W} S={S} H={H}"
 
     np.testing.assert_array_equal(
         to_numpy(out_tri),

@@ -18,6 +18,7 @@
 #include "llvm/Support/SystemUtils.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/TargetParser/Triple.h"
+#include "llvm/Transforms/Scalar/InstSimplifyPass.h"
 #include <optional>
 
 using namespace llvm;
@@ -74,6 +75,11 @@ static cl::opt<bool> ExpandSubByteVectorBitcast(
                    "extractelement + icmp onto the source i1 lanes"),
     cl::init(false));
 
+static cl::opt<bool> ScalarizePackedFOps(
+    "scalarize-packed-fops",
+    cl::desc("scalarize FP32 arithmetic pairs with only one used lane"),
+    cl::init(false));
+
 namespace {
 static std::function<Error(Module *)> makeOptimizingPipeline() {
   return [](Module *m) -> Error {
@@ -106,6 +112,10 @@ static std::function<Error(Module *)> makeOptimizingPipeline() {
       fpm.addPass(GuardMaskedDivRemPass());
     if (ScalarizePtrVectors)
       fpm.addPass(ScalarizePtrVectorsPass());
+    if (ScalarizePackedFOps) {
+      fpm.addPass(ScalarizePackedFOpsPass());
+      fpm.addPass(InstSimplifyPass());
+    }
     mpm.addPass(createModuleToFunctionPassAdaptor(std::move(fpm)));
     mpm.run(*m, mam);
     return Error::success();

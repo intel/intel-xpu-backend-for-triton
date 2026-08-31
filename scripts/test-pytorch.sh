@@ -2,6 +2,9 @@
 
 set -euo pipefail
 
+# Provides the `pip` wrapper (pip or `uv pip`).
+source "$(dirname "$0")/pip-utils.sh"
+
 cd pytorch
 pip install -r .ci/docker/requirements-ci.txt
 
