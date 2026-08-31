@@ -298,7 +298,7 @@ try_install_wheel_from_run() {
   if ! gh run download "$run_id" \
       --repo "$triton_repo" \
       --pattern "$wheel_pattern" \
-      --dir "$temp_dir" 2>/dev/null; then
+      --dir "$temp_dir"; then
     return 2
   fi
 
@@ -340,10 +340,9 @@ if [[ "$build_vllm" == false ]]; then
   temp_dir="$(mktemp -d)"
   trap 'rm -rf "$temp_dir"' EXIT
 
-  # Try latest run first (any conclusion)
-  latest_run="$(gh run list --workflow nightly-wheels.yml --branch "$triton_repo_branch" -R "$triton_repo" --json databaseId --limit 1 | jq -r '.[0].databaseId')"
-  try_install_wheel_from_run "$latest_run" "$wheel_pattern" "$temp_dir"
-  status=$?
+  # Try latest completed run first (any conclusion)
+  latest_run="$(gh run list --workflow nightly-wheels.yml --branch "$triton_repo_branch" -R "$triton_repo" --status completed --json databaseId --limit 1 | jq -r '.[0].databaseId')"
+  try_install_wheel_from_run "$latest_run" "$wheel_pattern" "$temp_dir" && status=0 || status=$?
 
   if [[ $status -eq 0 ]]; then
     exit 0
@@ -355,9 +354,9 @@ if [[ "$build_vllm" == false ]]; then
   echo "*** Latest run has no wheel for this Python version, trying latest successful run... ***"
   latest_success_run="$(gh run list --workflow nightly-wheels.yml --branch "$triton_repo_branch" -R "$triton_repo" --json databaseId,conclusion --limit 20 | jq -r '[.[] | select(.conclusion=="success")][0].databaseId')"
 
-  if [[ "$latest_success_run" != "$latest_run" ]]; then
-    try_install_wheel_from_run "$latest_success_run" "$wheel_pattern" "$temp_dir"
-    status=$?
+  if [[ "$latest_success_run" != "null" && "$latest_success_run" != "$latest_run" ]]; then
+    rm -rf "$temp_dir"/*
+    try_install_wheel_from_run "$latest_success_run" "$wheel_pattern" "$temp_dir" && status=0 || status=$?
 
     if [[ $status -eq 0 ]]; then
       exit 0
