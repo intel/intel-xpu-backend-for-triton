@@ -314,6 +314,11 @@ The semantic of this `tt.dot` includes GEMM tiling configuration as:
     };
 
     static std::optional<DPASCapability> getDPASCapability(mlir::ModuleOp);
+
+    SwizzledSharedEncodingAttr composeSharedLayoutForOperand(
+        CGAEncodingAttr cgaLayout, int operandIdx, ArrayRef<int64_t> operandShape,
+        ArrayRef<unsigned> sharedOrder, unsigned vectorSize,
+        unsigned elemBitWidth, bool needTrans) const;
   }];
 
   let hasCustomAssemblyFormat = 1;

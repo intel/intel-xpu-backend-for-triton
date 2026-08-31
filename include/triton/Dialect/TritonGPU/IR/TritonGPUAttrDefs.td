@@ -133,6 +133,12 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
               typeWidthInBit, needTrans);
         }
 
+        // ---- begin DPAS (Intel) ----
+        if (auto dpasEnc = mlir::dyn_cast<mlir::triton::gpu::intel::DpasEncodingAttr>(dotOpEnc.getParent())) {
+          return dpasEnc.composeSharedLayoutForOperand(
+              CGALayout, dotOpEnc.getOpIdx(), shape, order, dotOpEnc.getKWidth(),
+              typeWidthInBit, needTrans);
+        }
 
         auto mmaEnc = mlir::dyn_cast<NvidiaMmaEncodingAttr>(dotOpEnc.getParent());
 

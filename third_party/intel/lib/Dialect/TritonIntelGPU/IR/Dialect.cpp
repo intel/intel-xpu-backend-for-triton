@@ -343,6 +343,44 @@ LinearLayout DpasEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   return DPAStoLinearLayout(shape, *this);
 }
 
+SwizzledSharedEncodingAttr DpasEncodingAttr::composeSharedLayoutForOperand(
+    CGAEncodingAttr cgaLayout, int operandIdx, ArrayRef<int64_t> operandShape,
+    ArrayRef<unsigned> sharedOrder, unsigned vectorSize, unsigned elemBitWidth,
+    bool needTrans) const {
+  // Determine K dimension based on operand index
+  int kDimIndex = operandIdx == 0 ? 1 : 0;
+
+  if (needTrans)
+    kDimIndex = 1 - kDimIndex;
+
+  bool isKContig = sharedOrder[0] == kDimIndex;
+
+  // If K dimension is not contiguous, no swizzling needed as accesses
+  // will naturally go to different banks
+  if (!isKContig) {
+    return SwizzledSharedEncodingAttr::get(getContext(), 1, 1, 1, sharedOrder,
+                                           cgaLayout);
+  }
+
+  // Intel XPU shared memory (SLM) configuration
+  const unsigned numBanks = 32;
+  const unsigned bankBitWidth = 32;
+  const unsigned threadsPerWarp = getThreadsPerWarp();
+
+  // Number of elements in the inner dimension
+  int innerDimLength = operandShape[sharedOrder[0]];
+  int elemsPerOneBanksRow = (numBanks * bankBitWidth) / elemBitWidth;
+
+  int perPhase = std::max(1, elemsPerOneBanksRow / innerDimLength);
+  int maxPhase =
+      std::max(std::min(static_cast<int>(threadsPerWarp) / perPhase,
+                        innerDimLength / static_cast<int>(vectorSize)),
+               1);
+
+  return SwizzledSharedEncodingAttr::get(getContext(), vectorSize, perPhase,
+                                         maxPhase, sharedOrder, cgaLayout);
+}
+
 //===----------------------------------------------------------------------===//
 // WarpEncodingAttr
 //===----------------------------------------------------------------------===//
