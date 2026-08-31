@@ -324,6 +324,21 @@ try_install_wheel_from_run() {
   return 0
 }
 
+# Try a run id.
+# Exits the script on install (0) or commit-mismatch (1).
+# Returns to caller when the run_id is null or the run has no wheel.
+try_run() {
+  [[ "$1" == "null" ]] && return 0
+
+  local status
+  rm -rf "$temp_dir"/*
+  try_install_wheel_from_run "$1" "$wheel_pattern" "$temp_dir" && exit 0 || status=$?
+
+  [[ $status -eq 1 ]] && exit 1
+
+  return 0
+}
+
 if [[ "$build_vllm" == false ]]; then
   if ! command -v gh &>/dev/null; then
     echo "ERROR: gh is not installed." >&2
@@ -342,28 +357,12 @@ if [[ "$build_vllm" == false ]]; then
 
   # Try latest completed run first (any conclusion)
   latest_run="$(gh run list --workflow nightly-wheels.yml --branch "$triton_repo_branch" -R "$triton_repo" --status completed --json databaseId --limit 1 | jq -r '.[0].databaseId')"
-  try_install_wheel_from_run "$latest_run" "$wheel_pattern" "$temp_dir" && status=0 || status=$?
-
-  if [[ $status -eq 0 ]]; then
-    exit 0
-  elif [[ $status -eq 1 ]]; then
-    exit 1
-  fi
+  try_run "$latest_run"
 
   # Latest run didn't have a wheel for this Python version, try latest successful run
   echo "*** Latest run has no wheel for this Python version, trying latest successful run... ***"
   latest_success_run="$(gh run list --workflow nightly-wheels.yml --branch "$triton_repo_branch" -R "$triton_repo" --json databaseId,conclusion --limit 20 | jq -r '[.[] | select(.conclusion=="success")][0].databaseId')"
-
-  if [[ "$latest_success_run" != "null" && "$latest_success_run" != "$latest_run" ]]; then
-    rm -rf "$temp_dir"/*
-    try_install_wheel_from_run "$latest_success_run" "$wheel_pattern" "$temp_dir" && status=0 || status=$?
-
-    if [[ $status -eq 0 ]]; then
-      exit 0
-    elif [[ $status -eq 1 ]]; then
-      exit 1
-    fi
-  fi
+  [[ "$latest_success_run" != "$latest_run" ]] && try_run "$latest_success_run"
 
   echo "ERROR: No nightly build vllm-xpu-kernels wheel found. Use --source to build from source." >&2
   exit 1
