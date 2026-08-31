@@ -141,7 +141,7 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK: ttg.convert_layout {{.*}} : tensor<16x16xf16
     %1 = ttg.convert_layout %arg1 : tensor<16x16xf16, #mma> -> tensor<16x16xf16, #blocked>
     // The reinterpret bitcast cannot be used. The share local memory is allocated for this convert layout op.
-    // CHECK: ttg.convert_layout {{.*}} {allocation.offset = 0 : i32} : tensor<16x16xf32
+    // CHECK: ttg.convert_layout {{.*}} {allocation.offset = 0 : i32, allocation.size = 1024 : i32} : tensor<16x16xf32
     %0 = ttg.convert_layout %arg0 : tensor<16x16xf32, #mma> -> tensor<16x16xf32, #blocked>
     tt.return %0, %1 : tensor<16x16xf32, #blocked>, tensor<16x16xf16, #blocked>
   }
