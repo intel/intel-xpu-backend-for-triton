@@ -2366,11 +2366,11 @@ struct DescriptorGatherOpConversion
   matchAndRewrite(mlir::triton::gpu::intel::DescriptorGatherOp op,
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (succeeded(lowerSubGroupGatherFastPath(op, adaptor, rewriter)))
+    if (succeeded(lowerDescriptorGather(op, adaptor, rewriter)))
       return success();
 
-    return rewriter.notifyMatchFailure(op,
-                                      "failed to lower ttig.descriptor_gather");
+    return rewriter.notifyMatchFailure(
+        op, "failed to lower ttig.descriptor_gather");
   }
 
 private:
@@ -2407,9 +2407,9 @@ private:
   }
 
   LogicalResult
-  lowerSubGroupGatherFastPath(mlir::triton::gpu::intel::DescriptorGatherOp op,
-                              OpAdaptor adaptor,
-                              ConversionPatternRewriter &rewriter) const {
+  lowerDescriptorGather(mlir::triton::gpu::intel::DescriptorGatherOp op,
+                        OpAdaptor adaptor,
+                        ConversionPatternRewriter &rewriter) const {
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto typeConverter = getTypeConverter();
