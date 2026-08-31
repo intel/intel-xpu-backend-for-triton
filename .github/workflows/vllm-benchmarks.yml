@@ -152,22 +152,6 @@ jobs:
           EOF
           ./scripts/capture-hw-details.sh | tee -a "$REPORTS/.env"
 
-      - name: Run vllm unified attention bf16
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-
-          cd benchmarks/triton_kernels_benchmark/vllm
-          bash run_benchmark.sh unified_attention --reports $REPORTS --tag $TAG
-
-      - name: Run vllm unified attention fp8
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-
-          cd benchmarks/triton_kernels_benchmark/vllm
-          FP8="1" bash run_benchmark.sh unified_attention --reports $REPORTS --tag $TAG
-
       - name: Run vllm batched moe bf16
         if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
         run: |
@@ -184,14 +168,6 @@ jobs:
 
           cd benchmarks/triton_kernels_benchmark/vllm
           FP8="1" bash run_benchmark.sh batched_moe --reports $REPORTS --tag $TAG
-
-      - name: Run vllm fused moe bf16
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-
-          cd benchmarks/triton_kernels_benchmark/vllm
-          bash run_benchmark.sh fused_moe --reports $REPORTS --tag $TAG
 
       - name: Upload benchmark reports
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
