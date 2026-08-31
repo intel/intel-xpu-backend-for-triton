@@ -38,15 +38,13 @@ namespace {
 //   dot %A, ... : tensor<512x64xf16> x tensor<64x32xf16> -> tensor<512x32xf16>
 // into:
 //   %d = %a / %b
-//   %desc = tt.make_tensor_descriptor %base, [%s0*%d+%s1,%s2], [%b,%c]
+//   %desc = tt.make_tensor_descriptor %base, [(%s0-1)*%d+%s1,%s2], [%b,%c]
 //                       : !tt.tensordesc<512x64xf16>
 //   %A = tt.descriptor_load %desc[%x*%d+%y,%z] -> tensor<512x64xf16>
 //   dot %A, ... : tensor<512x64xf16> x tensor<64x32xf16> -> tensor<512x32xf16>
-// The unit-extent dimension may also be the middle one (e.g. a one-head tile of
-// a contiguous (TOKENS, HEADS, HEAD_DIM) tensor), collapsed the same way with
-// %d = %b / %c:
+// A unit-extent middle dimension (e.g. a one-head tile of a contiguous
+// (TOKENS, HEADS, HEAD_DIM) tensor) is collapsed the same way, with %d = %b/%c:
 //   %desc = tt.make_tensor_descriptor %base, [%s0,(%s1-1)*%d+%s2], [%a,%c]
-//                       : !tt.tensordesc<64x128xf16>
 //   %A = tt.descriptor_load %desc[%x,%y*%d+%z] -> tensor<64x128xf16>
 class FuseReshapeWithLoad : public tt::intel::Fuser {
 public:
@@ -104,23 +102,24 @@ public:
   }
 
 private:
-  /// The unit-extent dimension collapsed away by the fusion, always merged into
-  /// the dimension immediately following it: 1xNxM or Nx1xM -> NxM.
-  enum class CollapseKind { Outermost, Middle };
-
-  /// `Outermost` takes precedence, so a `1x1xM` shape keeps its prior behavior.
-  static std::optional<CollapseKind> getCollapseKind(ArrayRef<int64_t> shape) {
+  /// Return the unit-extent dimension collapsed into the one following it:
+  /// 1xNxM or Nx1xM -> NxM. Dimension 0 wins, so `1x1xM` keeps its behavior.
+  static std::optional<unsigned> getCollapsedDim(ArrayRef<int64_t> shape) {
     if (shape.size() != 3)
       return std::nullopt;
     if (shape[0] == 1)
-      return CollapseKind::Outermost;
+      return 0;
     if (shape[1] == 1)
-      return CollapseKind::Middle;
+      return 1;
     return std::nullopt;
   }
 
-  static unsigned getCollapsedDim(CollapseKind kind) {
-    return kind == CollapseKind::Outermost ? 0 : 1;
+  /// Return \p values without the element at index \p dim.
+  template <typename RangeT>
+  static auto dropDim(RangeT &&values, unsigned dim) {
+    auto res = llvm::to_vector(values);
+    res.erase(res.begin() + dim);
+    return res;
   }
 
   void fuse(const DefUseChain &chain) final {
@@ -152,13 +151,12 @@ private:
                             << descLoadOp << "\n");
 
     // Create a MakeTensorDescOp yielding a 2-dim tensor descriptor.
-    auto descType = cast<tt::TensorDescType>(makeTensorDescOp.getType());
-    ArrayRef<int64_t> resShape =
-        cast<RankedTensorType>(descType.getBlockType()).getShape();
-    std::optional<CollapseKind> kind = getCollapseKind(resShape);
-    assert(kind && "Result shape should have extent equal to 1 in either the "
-                   "outermost or the middle dimension");
-    const unsigned collapsedDim = getCollapsedDim(*kind);
+    std::optional<unsigned> dim =
+        getCollapsedDim(makeTensorDescOp.getType().getBlockType().getShape());
+    assert(dim && "Result shape should have extent equal to 1 in either the "
+                  "outermost or the middle dimension");
+    const unsigned collapsedDim = *dim;
+    const unsigned mergedDim = collapsedDim + 1;
 
     auto tensorType = cast<RankedTensorType>(reshapeOp.getType());
     auto newDescType = tt::TensorDescType::get(
@@ -169,55 +167,43 @@ private:
     OperandRange shapes = makeTensorDescOp.getShape();
     OperandRange strides = makeTensorDescOp.getStrides();
 
-    // Merge `collapsedDim` into the next dimension. Erasing it from a 3-element
-    // list leaves the merged entry at index `collapsedDim`. Given shape
-    // [s0,s1,s2] / stride [a,b,c], produce for Outermost:
-    //   shape [s0 * a/b + s1, s2]        stride [b, c]
-    // and for Middle:
-    //   shape [s0, (s1-1) * b/c + s2]    stride [a, c]
-    SmallVector<Value> newShape(shapes);
-    SmallVector<Value> newStrides(strides);
-    newShape.erase(newShape.begin() + collapsedDim);
-    newStrides.erase(newStrides.begin() + collapsedDim);
-
+    // An index pair (i,j) in `collapsedDim`/`mergedDim` addresses the same
+    // element as the single index i * d + j, with d = the stride ratio. Erasing
+    // `collapsedDim` leaves the merged entry at index `collapsedDim`, so shape
+    // [s0,s1,s2] / stride [a,b,c] yields [(s0-1)*a/b+s1, s2] / [b,c] or
+    // [s0, (s1-1)*b/c+s2] / [a,c].
     auto div = arith::DivUIOp::create(builder, loc, strides[collapsedDim],
-                                      strides[collapsedDim + 1]);
-    auto trunc = builder.createOrFold<arith::TruncIOp>(
+                                      strides[mergedDim]);
+    Value ratio = builder.createOrFold<arith::TruncIOp>(
         loc, shapes[collapsedDim].getType(), div);
+    auto merge = [&](Value hi, Value lo) -> Value {
+      return arith::AddIOp::create(
+          builder, loc, arith::MulIOp::create(builder, loc, hi, ratio), lo);
+    };
 
-    // For Middle the merged dimension becomes the 2D block surface width, which
-    // must not exceed the pitch, so bound it exactly. Outermost merges into the
-    // surface height instead, which the pitch does not constrain.
-    Value scaled;
-    if (*kind == CollapseKind::Middle) {
-      Value one = arith::ConstantOp::create(
-          builder, loc,
-          builder.getIntegerAttr(shapes[collapsedDim].getType(), 1));
-      Value extentMinusOne =
-          arith::SubIOp::create(builder, loc, shapes[collapsedDim], one);
-      scaled = arith::MulIOp::create(builder, loc, extentMinusOne, trunc);
-    } else {
-      scaled = arith::MulIOp::create(builder, loc, shapes[collapsedDim], trunc);
-    }
-
+    // The extent merges the largest *index* of the collapsed dimension, hence
+    // s-1: over-declaring it would loosen the descriptor's bounds check and,
+    // for an innermost `mergedDim`, push the block surface width past the
+    // pitch.
+    SmallVector<Value> newShape = dropDim(shapes, collapsedDim);
+    SmallVector<Value> newStrides = dropDim(strides, collapsedDim);
+    Value one = arith::ConstantIntOp::create(builder, loc,
+                                             shapes[collapsedDim].getType(), 1);
     newShape[collapsedDim] =
-        arith::AddIOp::create(builder, loc, scaled, newShape[collapsedDim]);
+        merge(arith::SubIOp::create(builder, loc, shapes[collapsedDim], one),
+              newShape[collapsedDim]);
 
     Value newDesc = tt::MakeTensorDescOp::create(
         builder, loc, newDescType, makeTensorDescOp.getBase(), newShape,
         newStrides, makeTensorDescOp.getPadding());
     LLVM_DEBUG(llvm::dbgs() << "new MakeTensorDescOp:\n  " << newDesc << "\n");
 
-    // Adjust the load indices the same way: offsets [x,y,z] become
-    // [x * a/b + y, z] for Outermost and [x, y * b/c + z] for Middle.
+    // Merge the load indices the same way, without the s-1: they are indices.
     builder.setInsertionPoint(descLoadOp);
     OperandRange offsets = descLoadOp.getIndices();
-    SmallVector<Value> newOffsets(offsets);
-    newOffsets.erase(newOffsets.begin() + collapsedDim);
-    newOffsets[collapsedDim] = arith::AddIOp::create(
-        builder, loc,
-        arith::MulIOp::create(builder, loc, offsets[collapsedDim], trunc),
-        newOffsets[collapsedDim]);
+    SmallVector<Value> newOffsets = dropDim(offsets, collapsedDim);
+    newOffsets[collapsedDim] =
+        merge(offsets[collapsedDim], newOffsets[collapsedDim]);
 
     auto resType = cast<tt::TensorDescType>(newDesc.getType()).getBlockType();
     auto newDescLoadOp = tt::DescriptorLoadOp::create(
@@ -245,8 +231,8 @@ private:
   //  - the reshape result is used by a dot operation
   //  - the reshape operation uses the result of a 3-dim load operation on a
   //    tensor descriptor (transitively) defined by a `make_tensor_descriptor`
-  //  - the tensor descriptor refers to a tensor that has extent
-  //    equal to 1 on the dropped dimension
+  //  - the descriptor's block shape equals the loaded shape (the *tensor*
+  //    extent on the dropped dimension is arbitrary)
   //  - the load operation doesn't have boundary checks on either of the
   //    dimensions collapsed
   bool isCandidate(tt::ReshapeOp reshapeOp) const {
@@ -254,18 +240,13 @@ private:
 
     ArrayRef<int64_t> reshapeOperandShape =
         reshapeOp.getSrc().getType().getShape();
-    std::optional<CollapseKind> kind = getCollapseKind(reshapeOperandShape);
-    if (!kind)
-      return false;
-
-    ArrayRef<int64_t> reshapeResultShape = reshapeOp.getType().getShape();
-    if (reshapeResultShape.size() != reshapeOperandShape.size() - 1)
+    std::optional<unsigned> collapsedDim = getCollapsedDim(reshapeOperandShape);
+    if (!collapsedDim)
       return false;
 
     // The reshape must drop exactly the unit-extent dimension.
-    SmallVector<int64_t> expectedShape(reshapeOperandShape);
-    expectedShape.erase(expectedShape.begin() + getCollapsedDim(*kind));
-    if (!llvm::equal(expectedShape, reshapeResultShape))
+    if (!llvm::equal(dropDim(reshapeOperandShape, *collapsedDim),
+                     reshapeOp.getType().getShape()))
       return false;
 
     // Check whether \p reshapeOp is used by a `dotOp`.
@@ -308,9 +289,17 @@ private:
 
     tt::TensorDescType descTy = makeTensorDescOp->getResult().getType();
     auto tensorTy = cast<RankedTensorType>(descTy.getBlockType());
-    std::optional<CollapseKind> kind = getCollapseKind(tensorTy.getShape());
-    assert(kind && "Unexpected tensor type");
-    const unsigned collapsedDim = getCollapsedDim(*kind);
+    // `tt.descriptor_load` only requires a matching element type and count, so
+    // the block shape may differ from the loaded shape (e.g. a rank-reducing
+    // load). The collapsed dimension is found in the loaded shape while the
+    // fusion indexes the descriptor's shape/strides, so the two must agree.
+    if (!llvm::equal(tensorTy.getShape(), descLoadOp.getType().getShape()))
+      return false;
+
+    std::optional<unsigned> dim = getCollapsedDim(tensorTy.getShape());
+    if (!dim)
+      return false;
+    const unsigned collapsedDim = *dim;
     const unsigned mergedDim = collapsedDim + 1;
 
     // The fusion divides strides[collapsedDim] by strides[mergedDim], so it is
@@ -319,10 +308,10 @@ private:
     if (!isProvablyDivisible(strides[collapsedDim], strides[mergedDim]))
       return false;
 
-    // Fusion replaces the per-dimension bounds check on the collapsed dimension
-    // with a single check on the merged one, which is only sound if a block
-    // load can never straddle a boundary between two "rows" of the collapsed
-    // dimension.
+    // Fusion replaces the per-dimension bounds check with a single check on the
+    // merged dimension, which is only sound if a block load can never straddle
+    // a boundary between two "rows" of the collapsed dimension, e.g. a
+    // ragged/padded last block (issues/7464).
     OperandRange shapes = makeTensorDescOp->getShape();
     int64_t blockExtent = tensorTy.getDimSize(mergedDim);
     if (!mlir::triton::gpu::intel::isDivisible(shapes[mergedDim], blockExtent))
