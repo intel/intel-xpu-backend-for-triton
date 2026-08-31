@@ -34,12 +34,13 @@ public:
     builder = std::make_unique<OpBuilder>(&ctx);
   }
 
-  ModuleOp createModule() {
+  // Returns an owning handle so the caller controls the module's lifetime.
+  OwningOpRef<ModuleOp> createModule() {
     auto loc = builder->getUnknownLoc();
-    auto module = ModuleOp::create(loc);
-    module->setAttr(ttg::AttrNumWarpsName, builder->getI32IntegerAttr(4));
-    module->setAttr(ttg::AttrNumThreadsPerWarp, builder->getI32IntegerAttr(16));
-    modules.emplace_back(module);
+    OwningOpRef<ModuleOp> module = ModuleOp::create(loc);
+    (*module)->setAttr(ttg::AttrNumWarpsName, builder->getI32IntegerAttr(4));
+    (*module)->setAttr(ttg::AttrNumThreadsPerWarp,
+                       builder->getI32IntegerAttr(16));
     return module;
   }
 
@@ -107,11 +108,6 @@ public:
 protected:
   MLIRContext ctx;
   std::unique_ptr<OpBuilder> builder;
-  // Own every module built by the fixture helpers. MLIR ops created via
-  // ModuleOp::create() are owned by nothing, so without this they leak (caught
-  // by LeakSanitizer). Declared after `ctx` so the modules are erased before
-  // the context is destroyed.
-  SmallVector<OwningOpRef<ModuleOp>> modules;
 };
 
 // ===----------------------------------------------------------------------===//
@@ -121,7 +117,8 @@ protected:
 // Spatial analysis reports reuse (warp-invariant dim) while temporal reports
 // none (load outside any loop). Union: anyReuse == true.
 TEST_F(ReuseAnalysisTest, UnionTrueFromSpatial) {
-  auto module = createModule();
+  OwningOpRef<ModuleOp> moduleRef = createModule();
+  ModuleOp module = *moduleRef;
   auto f16Ty = builder->getF16Type();
   auto ptrType = getPtrType(f16Ty);
   auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
@@ -154,7 +151,8 @@ TEST_F(ReuseAnalysisTest, UnionTrueFromSpatial) {
 // axis) while temporal reports reuse (loop-invariant pointer).
 // Union: anyReuse == true.
 TEST_F(ReuseAnalysisTest, UnionTrueFromTemporal) {
-  auto module = createModule();
+  OwningOpRef<ModuleOp> moduleRef = createModule();
+  ModuleOp module = *moduleRef;
   auto f16Ty = builder->getF16Type();
   auto ptrType = getPtrType(f16Ty);
   auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
@@ -198,7 +196,8 @@ TEST_F(ReuseAnalysisTest, UnionTrueFromTemporal) {
 // Neither analysis reports reuse: 1-D streaming load outside any loop with
 // warps tiling the only axis. Union: anyReuse == false.
 TEST_F(ReuseAnalysisTest, UnionFalse) {
-  auto module = createModule();
+  OwningOpRef<ModuleOp> moduleRef = createModule();
+  ModuleOp module = *moduleRef;
   auto f16Ty = builder->getF16Type();
   auto ptrType = getPtrType(f16Ty);
   auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
@@ -226,7 +225,8 @@ TEST_F(ReuseAnalysisTest, Known_TrueFromSpatial) {
   // Mirror UnionTrueFromSpatial (line 116): DPAS dot-operand A with warp-
   // invariant K (dim 1), load outside any loop. Spatial known reuse fires,
   // temporal does not. Expected: knownReuse == true.
-  auto module = createModule();
+  OwningOpRef<ModuleOp> moduleRef = createModule();
+  ModuleOp module = *moduleRef;
   auto f16Ty = builder->getF16Type();
   auto ptrType = getPtrType(f16Ty);
   auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
@@ -258,7 +258,8 @@ TEST_F(ReuseAnalysisTest, Known_TrueFromTemporal) {
   // Mirror UnionTrueFromTemporal (line 149): 1-D blocked encoding with warps
   // tiling the only axis (no spatial reuse), but pointer is loop-invariant
   // inside scf.for (temporal proven reuse). Expected: knownReuse == true.
-  auto module = createModule();
+  OwningOpRef<ModuleOp> moduleRef = createModule();
+  ModuleOp module = *moduleRef;
   auto f16Ty = builder->getF16Type();
   auto ptrType = getPtrType(f16Ty);
   auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
@@ -304,7 +305,8 @@ TEST_F(ReuseAnalysisTest, Known_FalseFromConservativeFallback_NonPow2) {
   //   - getSpatial().knownCrossSubgroupReuse(ty) == false
   //   - knownReuse(loadOp) == false
   //   - anyReuse(loadOp) == true (conservative positive preserved)
-  auto module = createModule();
+  OwningOpRef<ModuleOp> moduleRef = createModule();
+  ModuleOp module = *moduleRef;
   auto f32Ty = builder->getF32Type();
   auto ptrType = getPtrType(f32Ty);
   auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});

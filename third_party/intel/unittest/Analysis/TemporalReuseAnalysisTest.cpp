@@ -29,12 +29,14 @@ public:
     builder = std::make_unique<OpBuilder>(&ctx);
   }
 
-  ModuleOp buildModule() {
+  // Returns an owning handle so the caller controls the module's lifetime.
+  // MLIR ops created via ModuleOp::create() are owned by nothing, so returning
+  // a raw ModuleOp would leak (caught by LeakSanitizer).
+  OwningOpRef<ModuleOp> buildModule() {
     Location loc = builder->getUnknownLoc();
-    auto module = ModuleOp::create(loc);
-    module->setAttr(AttrNumWarpsName, builder->getI32IntegerAttr(4));
-    module->setAttr(AttrNumThreadsPerWarp, builder->getI32IntegerAttr(16));
-    modules.emplace_back(module);
+    OwningOpRef<ModuleOp> module = ModuleOp::create(loc);
+    (*module)->setAttr(AttrNumWarpsName, builder->getI32IntegerAttr(4));
+    (*module)->setAttr(AttrNumThreadsPerWarp, builder->getI32IntegerAttr(16));
     return module;
   }
 
@@ -156,17 +158,13 @@ public:
 protected:
   MLIRContext ctx;
   std::unique_ptr<OpBuilder> builder;
-  // Own every module built by the fixture helpers. MLIR ops created via
-  // ModuleOp::create() are owned by nothing, so without this they leak (caught
-  // by LeakSanitizer). Declared after `ctx` so the modules are erased before
-  // the context is destroyed.
-  SmallVector<OwningOpRef<ModuleOp>> modules;
 };
 
 // Test case 1: Load with loop-invariant pointer inside scf.for
 // Expected: hasTemporalReuse == true (Case A)
 TEST_F(TemporalReuseAnalysisTest, LoopInvariantPointer) {
-  ModuleOp module = buildModule();
+  OwningOpRef<ModuleOp> moduleRef = buildModule();
+  ModuleOp module = *moduleRef;
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
@@ -215,7 +213,8 @@ TEST_F(TemporalReuseAnalysisTest, LoopInvariantPointer) {
 // along the sole tensor axis. Every axis has positive IV-stride (Case C),
 // so the load has no temporal reuse.  Expected: hasTemporalReuse == false.
 TEST_F(TemporalReuseAnalysisTest, StreamingPointerOneDim) {
-  ModuleOp module = buildModule();
+  OwningOpRef<ModuleOp> moduleRef = buildModule();
+  ModuleOp module = *moduleRef;
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
@@ -279,7 +278,8 @@ TEST_F(TemporalReuseAnalysisTest, StreamingPointerOneDim) {
 // axis 1 → no reuse under axis-disjoint rule. (Note: old 'Case B' rule
 // incorrectly reported reuse on this pattern.)
 TEST_F(TemporalReuseAnalysisTest, KAxisDisjointAdvance) {
-  ModuleOp module = buildModule();
+  OwningOpRef<ModuleOp> moduleRef = buildModule();
+  ModuleOp module = *moduleRef;
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
@@ -352,7 +352,8 @@ TEST_F(TemporalReuseAnalysisTest, KAxisDisjointAdvance) {
 // Test case 4: Load outside any loop
 // Expected: hasTemporalReuse == false; getReuseByLoopDepth == {}
 TEST_F(TemporalReuseAnalysisTest, LoadOutsideLoop) {
-  ModuleOp module = buildModule();
+  OwningOpRef<ModuleOp> moduleRef = buildModule();
+  ModuleOp module = *moduleRef;
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
@@ -389,7 +390,8 @@ TEST_F(TemporalReuseAnalysisTest, LoadOutsideLoop) {
 // Test case 5: Nested scf.for: inner streaming, outer loop-invariant
 // Expected: hasTemporalReuse == true (outer Case A wins)
 TEST_F(TemporalReuseAnalysisTest, NestedLoopOuterInvariant) {
-  ModuleOp module = buildModule();
+  OwningOpRef<ModuleOp> moduleRef = buildModule();
+  ModuleOp module = *moduleRef;
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
@@ -460,7 +462,8 @@ TEST_F(TemporalReuseAnalysisTest, NestedLoopOuterInvariant) {
 // without being tracked by the dataflow solver.
 // Expected: hasTemporalReuse == true (conservative default)
 TEST_F(TemporalReuseAnalysisTest, LoopCarriedUntrackedPointer) {
-  ModuleOp module = buildModule();
+  OwningOpRef<ModuleOp> moduleRef = buildModule();
+  ModuleOp module = *moduleRef;
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
@@ -517,7 +520,8 @@ TEST_F(TemporalReuseAnalysisTest, LoopCarriedUntrackedPointer) {
 // reuse.  Expected: hasTemporalReuse == true (conservative fallback, not
 // Case A).
 TEST_F(TemporalReuseAnalysisTest, WhileLoopInvariant) {
-  ModuleOp module = buildModule();
+  OwningOpRef<ModuleOp> moduleRef = buildModule();
+  ModuleOp module = *moduleRef;
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
@@ -569,7 +573,8 @@ TEST_F(TemporalReuseAnalysisTest, WhileLoopInvariant) {
 // descriptor (Case A, since the descriptor is a function argument).
 // Expected: hasTemporalReuse == true (validates DescriptorLoadOp overload).
 TEST_F(TemporalReuseAnalysisTest, DescriptorLoadInvariant) {
-  ModuleOp module = buildModule();
+  OwningOpRef<ModuleOp> moduleRef = buildModule();
+  ModuleOp module = *moduleRef;
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
@@ -608,7 +613,8 @@ TEST_F(TemporalReuseAnalysisTest, DescriptorLoadInvariant) {
 // pointer. Expected: hasTemporalReuse == true (validates DescriptorGatherOp
 // overload)
 TEST_F(TemporalReuseAnalysisTest, DescriptorGatherInvariant) {
-  ModuleOp module = buildModule();
+  OwningOpRef<ModuleOp> moduleRef = buildModule();
+  ModuleOp module = *moduleRef;
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
@@ -670,7 +676,8 @@ TEST_F(TemporalReuseAnalysisTest, DescriptorGatherInvariant) {
 // incorrectly classified as no-reuse — exactly the kind of misclassification
 // that drove the #6809 regression.
 TEST_F(TemporalReuseAnalysisTest, DescriptorLoadSmallYIndexAdvance) {
-  ModuleOp module = buildModule();
+  OwningOpRef<ModuleOp> moduleRef = buildModule();
+  ModuleOp module = *moduleRef;
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
@@ -715,7 +722,8 @@ TEST_F(TemporalReuseAnalysisTest, DescriptorLoadSmallYIndexAdvance) {
 // iteration on axis 1 (1 < 32) → reuse. Same correctness improvement as
 // DescriptorLoadSmallYIndexAdvance — old rule false-negated.
 TEST_F(TemporalReuseAnalysisTest, DescriptorGatherSmallYOffsetAdvance) {
-  ModuleOp module = buildModule();
+  OwningOpRef<ModuleOp> moduleRef = buildModule();
+  ModuleOp module = *moduleRef;
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
@@ -767,7 +775,8 @@ TEST_F(TemporalReuseAnalysisTest, DescriptorGatherSmallYOffsetAdvance) {
 // Expected: getReuseByLoopDepth == {true, true} (innermost first, outermost
 // last) and hasTemporalReuse == true. Exercises the structural query.
 TEST_F(TemporalReuseAnalysisTest, TwoDeepNestStructuralQuery) {
-  ModuleOp module = buildModule();
+  OwningOpRef<ModuleOp> moduleRef = buildModule();
+  ModuleOp module = *moduleRef;
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
@@ -839,7 +848,8 @@ TEST_F(TemporalReuseAnalysisTest, TwoDeepNestStructuralQuery) {
 // no within-workgroup temporal reuse for this single load. (The reuse exploited
 // by GEMM lives in warp-level spatial sharing, not temporal.)
 TEST_F(TemporalReuseAnalysisTest, GEMMASingleLoadDisjointK) {
-  ModuleOp module = buildModule();
+  OwningOpRef<ModuleOp> moduleRef = buildModule();
+  ModuleOp module = *moduleRef;
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
@@ -917,7 +927,8 @@ TEST_F(TemporalReuseAnalysisTest, GEMMASingleLoadDisjointK) {
 // triggered .cg bypass losing 5.8x performance. New rule correctly reports
 // reuse (1 < 32 on every axis).
 TEST_F(TemporalReuseAnalysisTest, AllAxesSmallAdvance) {
-  ModuleOp module = buildModule();
+  OwningOpRef<ModuleOp> moduleRef = buildModule();
+  ModuleOp module = *moduleRef;
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
@@ -974,7 +985,8 @@ TEST_F(TemporalReuseAnalysisTest, AllAxesSmallAdvance) {
 // [0, 16]. Axis 0: 0 < 16 ✓. Axis 1: 16 < 32 ✓. Held → reuse. Sanity check
 // for partial-overlap reuse.
 TEST_F(TemporalReuseAnalysisTest, PartialOverlapHalfTile) {
-  ModuleOp module = buildModule();
+  OwningOpRef<ModuleOp> moduleRef = buildModule();
+  ModuleOp module = *moduleRef;
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
@@ -1049,7 +1061,8 @@ TEST_F(TemporalReuseAnalysisTest, PartialOverlapHalfTile) {
 // multiplier — negative multipliers hit MulIOpStrideVisitor's
 // product-clamp-to-(-1) and become Unknown.
 TEST_F(TemporalReuseAnalysisTest, NegativeAdvanceDescendingLoop) {
-  ModuleOp module = buildModule();
+  OwningOpRef<ModuleOp> moduleRef = buildModule();
+  ModuleOp module = *moduleRef;
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
@@ -1115,7 +1128,8 @@ TEST_F(TemporalReuseAnalysisTest, NegativeAdvanceDescendingLoop) {
 // advance equals extent (1 >= 1) → disjoint → no reuse. Covers the corner
 // where a single element advances off the tile.
 TEST_F(TemporalReuseAnalysisTest, SizeOneAxisAnyAdvance) {
-  ModuleOp module = buildModule();
+  OwningOpRef<ModuleOp> moduleRef = buildModule();
+  ModuleOp module = *moduleRef;
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
@@ -1185,7 +1199,8 @@ TEST_F(TemporalReuseAnalysisTest, SizeOneAxisAnyAdvance) {
 TEST_F(TemporalReuseAnalysisTest, Proven_LoopInvariantPointer_True) {
   // Mirror LoopInvariantPointer (line 162): loop-invariant pointer inside
   // scf.for. Expected: provenTemporalReuse == true (every operand Invariant).
-  ModuleOp module = buildModule();
+  OwningOpRef<ModuleOp> moduleRef = buildModule();
+  ModuleOp module = *moduleRef;
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
@@ -1220,7 +1235,8 @@ TEST_F(TemporalReuseAnalysisTest, Proven_LoopInvariantPointer_True) {
 TEST_F(TemporalReuseAnalysisTest, Proven_StreamingPointerOneDim_False) {
   // Mirror StreamingPointerOneDim (line 211): pointer advances every iteration.
   // Expected: provenTemporalReuse == false (Streaming defeats proof).
-  ModuleOp module = buildModule();
+  OwningOpRef<ModuleOp> moduleRef = buildModule();
+  ModuleOp module = *moduleRef;
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
@@ -1270,7 +1286,8 @@ TEST_F(TemporalReuseAnalysisTest, Proven_StreamingPointerOneDim_False) {
 TEST_F(TemporalReuseAnalysisTest, Proven_AllAxesSmallAdvance_True) {
   // Mirror AllAxesSmallAdvance (line 913): advance [1,1] < tile [32,32].
   // Expected: provenTemporalReuse == true (Held on every axis).
-  ModuleOp module = buildModule();
+  OwningOpRef<ModuleOp> moduleRef = buildModule();
+  ModuleOp module = *moduleRef;
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
@@ -1318,7 +1335,8 @@ TEST_F(TemporalReuseAnalysisTest,
   // loop streaming. Existing hasTemporalReuse returns true (outer wins).
   // New provenTemporalReuse must return false (Streaming on inner defeats
   // proof).
-  ModuleOp module = buildModule();
+  OwningOpRef<ModuleOp> moduleRef = buildModule();
+  ModuleOp module = *moduleRef;
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
@@ -1374,7 +1392,8 @@ TEST_F(TemporalReuseAnalysisTest,
 TEST_F(TemporalReuseAnalysisTest, Proven_LoadOutsideLoop_False) {
   // Mirror LoadOutsideLoop (line 348): load not inside any loop.
   // Expected: provenTemporalReuse == false (no loop -> no proof of reuse).
-  ModuleOp module = buildModule();
+  OwningOpRef<ModuleOp> moduleRef = buildModule();
+  ModuleOp module = *moduleRef;
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 

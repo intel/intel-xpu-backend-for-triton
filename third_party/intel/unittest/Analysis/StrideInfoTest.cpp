@@ -28,12 +28,14 @@ public:
     builder = std::make_unique<OpBuilder>(&ctx);
   }
 
-  ModuleOp buildModule() {
+  // Returns an owning handle so the caller controls the module's lifetime.
+  // MLIR ops created via ModuleOp::create() are owned by nothing, so returning
+  // a raw ModuleOp would leak (caught by LeakSanitizer).
+  OwningOpRef<ModuleOp> buildModule() {
     Location loc = builder->getUnknownLoc();
-    auto module = ModuleOp::create(loc);
-    module->setAttr(AttrNumWarpsName, builder->getI32IntegerAttr(4));
-    module->setAttr(AttrNumThreadsPerWarp, builder->getI32IntegerAttr(16));
-    modules.emplace_back(module);
+    OwningOpRef<ModuleOp> module = ModuleOp::create(loc);
+    (*module)->setAttr(AttrNumWarpsName, builder->getI32IntegerAttr(4));
+    (*module)->setAttr(AttrNumThreadsPerWarp, builder->getI32IntegerAttr(16));
     return module;
   }
 
@@ -83,16 +85,12 @@ public:
 protected:
   MLIRContext ctx;
   std::unique_ptr<OpBuilder> builder;
-  // Own every module built by the fixture helpers. MLIR ops created via
-  // ModuleOp::create() are owned by nothing, so without this they leak (caught
-  // by LeakSanitizer). Declared after `ctx` so the modules are erased before
-  // the context is destroyed.
-  SmallVector<OwningOpRef<ModuleOp>> modules;
 };
 
 // Test 1: Constant scalar has IV stride 0 for any loop
 TEST_F(StrideInfoTest, ConstantScalarIVStrideZero) {
-  ModuleOp module = buildModule();
+  OwningOpRef<ModuleOp> moduleRef = buildModule();
+  ModuleOp module = *moduleRef;
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
@@ -120,7 +118,8 @@ TEST_F(StrideInfoTest, ConstantScalarIVStrideZero) {
 
 // Test 2: Loop IV has stride 1 w.r.t. its own loop, 0 w.r.t. other loop
 TEST_F(StrideInfoTest, LoopIVOwnLoop) {
-  ModuleOp module = buildModule();
+  OwningOpRef<ModuleOp> moduleRef = buildModule();
+  ModuleOp module = *moduleRef;
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
@@ -152,7 +151,8 @@ TEST_F(StrideInfoTest, LoopIVOwnLoop) {
 
 // Test 3: arith.muli(iv, 128) → IV stride 128
 TEST_F(StrideInfoTest, MulIVByConstant) {
-  ModuleOp module = buildModule();
+  OwningOpRef<ModuleOp> moduleRef = buildModule();
+  ModuleOp module = *moduleRef;
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
@@ -179,7 +179,8 @@ TEST_F(StrideInfoTest, MulIVByConstant) {
 
 // Test 4: arith.addi(iv, const) → IV stride 1
 TEST_F(StrideInfoTest, AddIVConstant) {
-  ModuleOp module = buildModule();
+  OwningOpRef<ModuleOp> moduleRef = buildModule();
+  ModuleOp module = *moduleRef;
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
@@ -206,7 +207,8 @@ TEST_F(StrideInfoTest, AddIVConstant) {
 
 // Test 5: tt.splat(muli(iv, 128)) → IV stride [128]
 TEST_F(StrideInfoTest, SplatMulIV) {
-  ModuleOp module = buildModule();
+  OwningOpRef<ModuleOp> moduleRef = buildModule();
+  ModuleOp module = *moduleRef;
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
@@ -242,7 +244,8 @@ TEST_F(StrideInfoTest, SplatMulIV) {
 
 // Test 6: 1-D streaming case: addptr(splat(base), splat(muli(iv, 128)))
 TEST_F(StrideInfoTest, OneDimStreamingAddPtr) {
-  ModuleOp module = buildModule();
+  OwningOpRef<ModuleOp> moduleRef = buildModule();
+  ModuleOp module = *moduleRef;
   func::FuncOp funcOp = buildFunc(module);
 
   // Add a pointer argument
@@ -297,7 +300,8 @@ TEST_F(StrideInfoTest, OneDimStreamingAddPtr) {
 // Test 7: step > 1 — IV-unit stride is independent of loop step; per-iteration
 // stride folds in the step via getPerIterationIVStride().
 TEST_F(StrideInfoTest, StepGreaterThanOne) {
-  ModuleOp module = buildModule();
+  OwningOpRef<ModuleOp> moduleRef = buildModule();
+  ModuleOp module = *moduleRef;
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
@@ -328,7 +332,8 @@ TEST_F(StrideInfoTest, StepGreaterThanOne) {
 
 // Test 8: Nested loops — inner IV queried for outer-only-dependent value
 TEST_F(StrideInfoTest, NestedLoopsInnerIVOuterValue) {
-  ModuleOp module = buildModule();
+  OwningOpRef<ModuleOp> moduleRef = buildModule();
+  ModuleOp module = *moduleRef;
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
@@ -375,7 +380,8 @@ TEST_F(StrideInfoTest, NestedLoopsInnerIVOuterValue) {
 
 // Test 9: Spatial stride regression — tt.make_range
 TEST_F(StrideInfoTest, SpatialRangeStrideOne) {
-  ModuleOp module = buildModule();
+  OwningOpRef<ModuleOp> moduleRef = buildModule();
+  ModuleOp module = *moduleRef;
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
@@ -407,7 +413,8 @@ TEST_F(StrideInfoTest, SpatialRangeStrideOne) {
 
 // Test 10: Spatial stride regression — tt.splat(const)
 TEST_F(StrideInfoTest, SpatialSplatConstant) {
-  ModuleOp module = buildModule();
+  OwningOpRef<ModuleOp> moduleRef = buildModule();
+  ModuleOp module = *moduleRef;
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
@@ -445,7 +452,8 @@ TEST_F(StrideInfoTest, SpatialSplatConstant) {
 // as the runtime stride source along the varying axis, while a constant
 // multiplier yields no symbolic source.
 TEST_F(StrideInfoTest, SymbolicStrideValueFromRuntimeScalar) {
-  ModuleOp module = buildModule();
+  OwningOpRef<ModuleOp> moduleRef = buildModule();
+  ModuleOp module = *moduleRef;
   func::FuncOp funcOp = buildFunc(module);
 
   // Add a runtime i32 `lda` argument.
@@ -484,7 +492,8 @@ TEST_F(StrideInfoTest, SymbolicStrideValueFromRuntimeScalar) {
 // Test 12: A constant multiplier produces a known stride and NO symbolic
 // source (the constant path is preferred and getStrideValue stays null).
 TEST_F(StrideInfoTest, ConstantStrideHasNoSymbolicValue) {
-  ModuleOp module = buildModule();
+  OwningOpRef<ModuleOp> moduleRef = buildModule();
+  ModuleOp module = *moduleRef;
   func::FuncOp funcOp = buildFunc(module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
