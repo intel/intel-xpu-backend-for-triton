@@ -104,7 +104,7 @@ jobs:
         /opt/google/chrome/chrome --version
 
     - name: Generate Security Report
-      uses: rsdmike/github-security-report-action@v4.0.1
+      uses: rsdmike/github-security-report-action@1df22b1e0a7e15b32f728ccf7bab259e46c80589 # v4.0.1
       with:
         template: report
         token: ${{ secrets.SECURITY_TOKEN }}
