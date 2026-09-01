@@ -637,6 +637,57 @@ private:
                 IntegerAttr::get(IntegerType::get(ctx, 64), stride));
   }
 
+  /// Build the 2D blocked encoding that matches 2D block I/O hardware
+  /// delivery: lane k owns column k, registers stack rows.  When W > tpw each
+  /// thread owns W/tpw consecutive columns.  Shared by the load and store 1D
+  /// reshape paths — both need the tensor laid out exactly the way the hardware
+  /// message reads/writes it.
+  static ttg::BlockedEncodingAttr
+  buildHWDelivery2DEncoding(MLIRContext *ctx, unsigned perWarpH, unsigned W,
+                            unsigned threadsPerWarp, unsigned numWarps) {
+    return ttg::BlockedEncodingAttr::get(
+        ctx,
+        /*sizePerThread=*/{perWarpH, W / threadsPerWarp},
+        /*threadsPerWarp=*/{1, threadsPerWarp},
+        /*warpsPerCTA=*/{numWarps, 1},
+        /*order=*/{1, 0},
+        ttg::CGAEncodingAttr::fromSplitParams(
+            ctx, /*CTAsPerCGA=*/SmallVector<unsigned>(2, 1),
+            /*CTASplitNum=*/SmallVector<unsigned>(2, 1),
+            /*CTAOrder=*/{0, 1}));
+  }
+
+  /// Build the "consumer encoding" — the natural 2D reshape of a 1D blocked
+  /// encoding. For sizePerThread=[spt], threadsPerWarp=[tpw],
+  /// warpsPerCTA=[wpc], order=[0], the natural reshape to [H, W] with
+  /// order=[1,0] distributes elements column-first.  This is the layout on the
+  /// pipeline side of the ConvertLayoutOp: the load converts *from* HW delivery
+  /// *to* it, the store converts *from* it *to* HW delivery.
+  ///
+  /// Returns std::nullopt if \p oneDTy does not carry a 1D blocked encoding
+  /// with order=[0], or if encoding inference fails for the [H, W] shape.
+  static std::optional<Attribute>
+  derive2DConsumerEncoding(MLIRContext *ctx, RankedTensorType oneDTy,
+                           int64_t W) {
+    auto origEnc = dyn_cast<ttg::BlockedEncodingAttr>(oneDTy.getEncoding());
+    if (!origEnc || origEnc.getSizePerThread().size() != 1 ||
+        origEnc.getOrder().size() != 1 || origEnc.getOrder()[0] != 0) {
+      LDBG("Expected 1D blocked encoding with order=[0], skip 1D reshape");
+      return std::nullopt;
+    }
+    int64_t blockSize = oneDTy.getShape()[0];
+    SmallVector<int64_t> srcShape = {blockSize};
+    SmallVector<int64_t> dstShape = {blockSize / W, W};
+    auto *interface =
+        cast<tt::DialectInferLayoutInterface>(&origEnc.getDialect());
+    Attribute dstEnc;
+    if (failed(interface->inferReshapeOpEncoding(srcShape, origEnc, dstShape,
+                                                 dstEnc, /*allowReorder=*/false,
+                                                 /*loc=*/std::nullopt)))
+      return std::nullopt;
+    return dstEnc;
+  }
+
   /// Detect 1D tensor-of-pointers StoreOp with strided access pattern
   /// and reshape to 2D store with block IO attributes.
   ///
@@ -693,36 +744,65 @@ private:
     if (!info)
       return;
 
-    // With H > 1, tt.reshape infers a blocked encoding that does not match the
-    // 2D block store's hardware delivery pattern: the hardware places each
-    // lane's values at intervals of threadsPerWarp in the packed-flat tile, but
-    // the inferred encoding places them in adjacent positions.
-    if (info->H != 1) {
-      LDBG("H=" << info->H
-                << " > 1 not yet supported for store, skip 1D reshape");
-      return;
-    }
-
     // Create reshaped tensors: [N] -> [H, W].
     Location loc = op.getLoc();
     OpBuilder builder(op);
     SmallVector<int64_t> newShape = {info->H, info->W};
 
-    // Use the ReshapeOp builder that infers the 2D encoding automatically.
+    unsigned threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(
+        op->getParentOfType<ModuleOp>());
+    unsigned numWarps = info->numWarps;
+    unsigned perWarpH = static_cast<unsigned>(info->H / numWarps);
+    unsigned W = static_cast<unsigned>(info->W);
+
+    // threadsPerWarp=[1,tpw] on a dimension of size W < tpw is replicated, and
+    // the reshape lowering rejects it as an "expensive view" (make_llir
+    // failure).  W not a multiple of tpw would make the encoding cover fewer
+    // than W columns in the lane mapping, which is not the hardware delivery
+    // order.
+    if (W < threadsPerWarp || W % threadsPerWarp != 0) {
+      LDBG("W=" << W << " is not a positive multiple of threadsPerWarp="
+                << threadsPerWarp << ", skip 1D store reshape");
+      return;
+    }
+
+    // Each warp must own at least one row; with fewer rows than warps the HW
+    // delivery encoding cannot be constructed (sizePerThread[0] would be 0).
+    if (perWarpH == 0) {
+      LDBG("H=" << info->H << " < numWarps=" << numWarps
+                << " (perWarpH=0), cannot construct HW delivery encoding, "
+                << "skip 1D store reshape");
+      return;
+    }
+
+    // Reshape pointer and value to [H, W] with their natural 2D encodings
     auto ptrReshape = tt::ReshapeOp::create(builder, loc, newShape, info->ptr,
                                             /*allowReorder=*/false);
-    Value val = op.getValue();
-    auto valReshape = tt::ReshapeOp::create(builder, loc, newShape, val,
-                                            /*allowReorder=*/false);
+    auto valReshape =
+        tt::ReshapeOp::create(builder, loc, newShape, op.getValue(),
+                              /*allowReorder=*/false);
+
+    // Build HW delivery encoding and convert both ptr and val into it.
+    auto storeEnc =
+        buildHWDelivery2DEncoding(ctx, perWarpH, W, threadsPerWarp, numWarps);
+    auto storePtrTy =
+        RankedTensorType::get(newShape, ptrTensorTy.getElementType(), storeEnc);
+    Value storePtr =
+        ttg::ConvertLayoutOp::create(builder, loc, storePtrTy, ptrReshape);
+    auto valTy = cast<RankedTensorType>(op.getValue().getType());
+    auto storeValTy =
+        RankedTensorType::get(newShape, valTy.getElementType(), storeEnc);
+    Value storeVal =
+        ttg::ConvertLayoutOp::create(builder, loc, storeValTy, valReshape);
 
     // Create the new 2D store.
-    auto newStore = tt::StoreOp::create(builder, loc, ptrReshape, valReshape,
+    auto newStore = tt::StoreOp::create(builder, loc, storePtr, storeVal,
                                         op.getCache(), op.getEvict());
 
     setBlockIOAttrs(newStore, ctx, info->S);
     copyNonBlockIOAttrs(op, newStore);
 
-    LDBG("Created 2D block store: " << *newStore);
+    LDBG("Created 2D block store with layout conversion: " << *newStore);
 
     op.erase();
   }
@@ -769,63 +849,36 @@ private:
     // remaining lanes' delivery pattern does not match a plain row/col
     // layout, and constructing a BlockedEncoding with threadsPerWarp=[1,tpw]
     // would create a replicated layout that the reshape lowering rejects
-    // as an "expensive view" (make_llir failure).  Bail out for now; this
-    // case can be re-enabled once the lowering handles sub-subgroup tiles.
-    if (W < threadsPerWarp) {
-      LDBG("W=" << W << " < threadsPerWarp=" << threadsPerWarp
-                << " not supported for 1D load reshape");
+    // as an "expensive view" (make_llir failure).  Likewise, when W is not
+    // a multiple of tpw the HW delivery encoding covers fewer than W columns
+    // in the lane mapping, which would mismatch the consumer encoding derived
+    // from the 1D layout.  Bail out in both cases.
+    if (W < threadsPerWarp || W % threadsPerWarp != 0) {
+      LDBG("W=" << W << " is not a positive multiple of threadsPerWarp="
+                << threadsPerWarp << ", not supported for 1D load reshape");
+      return;
+    }
+
+    // Each warp must own at least one row; with fewer rows than warps the HW
+    // delivery encoding cannot be constructed (sizePerThread[0] would be 0).
+    if (perWarpH == 0) {
+      LDBG("H=" << info->H << " < numWarps=" << numWarps
+                << " (perWarpH=0), cannot construct HW delivery encoding, "
+                << "skip 1D load reshape");
       return;
     }
 
     // Construct "load encoding" matching HW delivery:
     // lane k = column k, registers stack rows.
-    // When W > tpw, each thread owns W/tpw consecutive columns.
-    unsigned loadSpt1 = W / threadsPerWarp;
-    auto loadEnc = ttg::BlockedEncodingAttr::get(
-        ctx,
-        /*sizePerThread=*/{perWarpH, loadSpt1},
-        /*threadsPerWarp=*/{1, threadsPerWarp},
-        /*warpsPerCTA=*/{numWarps, 1},
-        /*order=*/{1, 0},
-        ttg::CGAEncodingAttr::fromSplitParams(
-            ctx, /*CTAsPerCGA=*/SmallVector<unsigned>(2, 1),
-            /*CTASplitNum=*/SmallVector<unsigned>(2, 1),
-            /*CTAOrder=*/{0, 1}));
+    auto loadEnc =
+        buildHWDelivery2DEncoding(ctx, perWarpH, W, threadsPerWarp, numWarps);
 
     // Construct "consumer encoding" — the natural 2D reshape of the original
-    // 1D encoding. For a 1D blocked encoding with sizePerThread=[spt],
-    // threadsPerWarp=[tpw], warpsPerCTA=[wpc], order=[0], the natural reshape
-    // to [H, W] with order=[1,0] distributes elements column-first.
-    auto origEnc =
-        dyn_cast<ttg::BlockedEncodingAttr>(ptrTensorTy.getEncoding());
-    if (!origEnc || origEnc.getSizePerThread().size() != 1 ||
-        origEnc.getOrder().size() != 1 || origEnc.getOrder()[0] != 0) {
-      LDBG("Expected 1D blocked encoding with order=[0], skip 1D reshape");
+    // 1D encoding, i.e. what the rest of the pipeline expects.
+    std::optional<Attribute> consumerEnc =
+        derive2DConsumerEncoding(ctx, ptrTensorTy, info->W);
+    if (!consumerEnc)
       return;
-    }
-    unsigned spt = origEnc.getSizePerThread()[0];
-    unsigned tpw = origEnc.getThreadsPerWarp()[0];
-    unsigned wpc = origEnc.getWarpsPerCTA()[0];
-    unsigned spt1 = std::min(spt, static_cast<unsigned>(info->W));
-    if (spt1 == 0 || spt % spt1 != 0) {
-      LDBG("Original sizePerThread ("
-           << spt << ") not divisible by spt1=" << spt1 << ", skip 1D reshape");
-      return;
-    }
-    unsigned spt0 = spt / spt1;
-    unsigned tpw1 = std::min(tpw, static_cast<unsigned>(info->W) / spt1);
-    if (tpw1 == 0 || tpw % tpw1 != 0) {
-      LDBG("Original threadsPerWarp ("
-           << tpw << ") not divisible by tpw1=" << tpw1 << ", skip 1D reshape");
-      return;
-    }
-    unsigned tpw0 = tpw / tpw1;
-    auto consumerEnc = ttg::BlockedEncodingAttr::get(
-        ctx, {spt0, spt1}, {tpw0, tpw1}, {wpc, 1}, {1, 0},
-        ttg::CGAEncodingAttr::fromSplitParams(
-            ctx, /*CTAsPerCGA=*/SmallVector<unsigned>(2, 1),
-            /*CTASplitNum=*/SmallVector<unsigned>(2, 1),
-            /*CTAOrder=*/{0, 1}));
 
     // Reshape pointer to [H, W] with load encoding.
     // Mark efficient_layout so RemoveLayoutConversions does not
@@ -861,7 +914,7 @@ private:
 
     // ConvertLayoutOp: load encoding -> consumer encoding.
     auto consumerResultTy =
-        RankedTensorType::get(newShape, pointeeTy, consumerEnc);
+        RankedTensorType::get(newShape, pointeeTy, *consumerEnc);
     auto converted =
         ttg::ConvertLayoutOp::create(builder, loc, consumerResultTy, newLoad);
 

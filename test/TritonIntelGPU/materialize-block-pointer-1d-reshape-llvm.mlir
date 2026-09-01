@@ -30,15 +30,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
-// COM: Test 2: Multi-row tile (H > 1) — no 2D block store emitted.
+// COM: Test 2: Multi-row tile (H > 1) — one 2D block store per warp.
 // COM: numElements=1024, W=32, S=96, fp16, numWarps=4, H = 1024/32 = 32.
-// COM: FIXME: The 2D block store lowering does not correctly handle H > 1
-// COM: because offsetY is hardcoded to 0. Once the lowering is fixed, this
-// COM: test should expect triton_gen.2Dblockstore.
+// COM: Per-warp height is 32/4 = 8, so the message carries a vector<8xi16>:
+// COM: lane k holds column k of all 8 rows, which is exactly what the hardware
+// COM: consumes.  Geometry comes from the shared getBlockIOStoreTileSize helper
+// COM: (elem_size_in_bits = 16, tile_width = 32) — no hand-built tile.
 
 #blocked1d = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
   // CHECK-LABEL: llvm.func spir_kernelcc @test_1d_reshape_multi_row
+  // CHECK: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 16, tile_width = 32, tile_height = 8, v_blocks = 1, cache_control = Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32, vector<8xi16>)
   // CHECK-NOT: triton_gen.2Dblockstore
   tt.func @test_1d_reshape_multi_row(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: tensor<1024xf16, #blocked1d>) {
     %idx = tt.make_range {start = 0 : i32, end = 1024 : i32} : tensor<1024xi32, #blocked1d>
