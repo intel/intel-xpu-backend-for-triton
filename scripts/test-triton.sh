@@ -534,8 +534,12 @@ if [ "$TEST_ASAN" = true ]; then
   # to -- a false use-after-poison that aborts every MLIR tool at static init.
   # Disabling user poisoning makes those manual poison calls no-ops; it does NOT
   # weaken leak detection or ASan redzone checks for heap overflow/use-after-free.
-  export ASAN_OPTIONS="detect_leaks=1:allow_user_poisoning=0:${ASAN_OPTIONS:-}"
-  export LSAN_OPTIONS="suppressions=$SCRIPTS_DIR/asan/lsan.supp:print_suppressions=0:${LSAN_OPTIONS:-}"
+  # Prepend any pre-existing options so our harness-critical settings come LAST:
+  # ASan/LSan use a last-wins parser, so listing ours last keeps them in force
+  # regardless of what the environment already set. The ${VAR:+$VAR:} form emits
+  # the trailing ':' only when VAR is non-empty, avoiding a stray leading ':'.
+  export ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}detect_leaks=1:allow_user_poisoning=0"
+  export LSAN_OPTIONS="${LSAN_OPTIONS:+$LSAN_OPTIONS:}suppressions=$SCRIPTS_DIR/asan/lsan.supp:print_suppressions=0"
 fi
 
 if [ "$TRITON_TEST_REPORTS" == true ]; then

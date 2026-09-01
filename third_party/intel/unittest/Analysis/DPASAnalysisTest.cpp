@@ -136,19 +136,17 @@ protected:
 // ===----------------------------------------------------------------------===//
 
 TEST_F(DPASAnalysisTest, DotOp_FP16_FP16_FP32) {
-  OwningOpRef<ModuleOp> moduleRef = createModule(/*supportDPAS=*/true);
-  ModuleOp module = *moduleRef;
-  auto dotOp = createDotOp(module, builder->getF16Type(), builder->getF16Type(),
-                           builder->getF32Type());
+  OwningOpRef<ModuleOp> module = createModule(/*supportDPAS=*/true);
+  auto dotOp = createDotOp(*module, builder->getF16Type(),
+                           builder->getF16Type(), builder->getF32Type());
 
   auto dpasType = DPASAnalysisV1::getDPASType(dotOp);
   EXPECT_EQ(dpasType, DPASEngineTypeXe2::FP32_FP32_FP16_FP16);
 }
 
 TEST_F(DPASAnalysisTest, DotOp_BF16_BF16_BF16) {
-  OwningOpRef<ModuleOp> moduleRef = createModule(/*supportDPAS=*/true);
-  ModuleOp module = *moduleRef;
-  auto dotOp = createDotOp(module, builder->getBF16Type(),
+  OwningOpRef<ModuleOp> module = createModule(/*supportDPAS=*/true);
+  auto dotOp = createDotOp(*module, builder->getBF16Type(),
                            builder->getBF16Type(), builder->getBF16Type());
 
   auto dpasType = DPASAnalysisV1::getDPASType(dotOp);
@@ -156,9 +154,8 @@ TEST_F(DPASAnalysisTest, DotOp_BF16_BF16_BF16) {
 }
 
 TEST_F(DPASAnalysisTest, DotOp_BF16_BF16_FP32) {
-  OwningOpRef<ModuleOp> moduleRef = createModule(/*supportDPAS=*/true);
-  ModuleOp module = *moduleRef;
-  auto dotOp = createDotOp(module, builder->getBF16Type(),
+  OwningOpRef<ModuleOp> module = createModule(/*supportDPAS=*/true);
+  auto dotOp = createDotOp(*module, builder->getBF16Type(),
                            builder->getBF16Type(), builder->getF32Type());
 
   auto dpasType = DPASAnalysisV1::getDPASType(dotOp);
@@ -166,20 +163,19 @@ TEST_F(DPASAnalysisTest, DotOp_BF16_BF16_FP32) {
 }
 
 TEST_F(DPASAnalysisTest, DotOp_FP32_TF32_FP32) {
-  OwningOpRef<ModuleOp> moduleRef = createModule(/*supportDPAS=*/true);
-  ModuleOp module = *moduleRef;
-  auto dotOp = createDotOp(module, builder->getF32Type(), builder->getF32Type(),
-                           builder->getF32Type(), InputPrecision::TF32);
+  OwningOpRef<ModuleOp> module = createModule(/*supportDPAS=*/true);
+  auto dotOp =
+      createDotOp(*module, builder->getF32Type(), builder->getF32Type(),
+                  builder->getF32Type(), InputPrecision::TF32);
 
   auto dpasType = DPASAnalysisV1::getDPASType(dotOp);
   EXPECT_EQ(dpasType, DPASEngineTypeXe2::FP32_FP32_TF32_TF32);
 }
 
 TEST_F(DPASAnalysisTest, DotOp_FP8_Native) {
-  OwningOpRef<ModuleOp> moduleRef =
+  OwningOpRef<ModuleOp> module =
       createModule(/*supportDPAS=*/true, /*supportFp8=*/true);
-  ModuleOp module = *moduleRef;
-  auto dotOp = createDotOp(module, Float8E5M2Type::get(&ctx),
+  auto dotOp = createDotOp(*module, Float8E5M2Type::get(&ctx),
                            Float8E5M2Type::get(&ctx), builder->getF32Type());
 
   auto dpasTypeXe2 = DPASAnalysisV1::getDPASType(dotOp);
@@ -187,10 +183,9 @@ TEST_F(DPASAnalysisTest, DotOp_FP8_Native) {
 }
 
 TEST_F(DPASAnalysisTest, DotOp_FP8_Upcast) {
-  OwningOpRef<ModuleOp> moduleRef =
+  OwningOpRef<ModuleOp> module =
       createModule(/*supportDPAS=*/true, /*supportFp8=*/false);
-  ModuleOp module = *moduleRef;
-  auto dotOp = createDotOp(module, Float8E4M3FNType::get(&ctx),
+  auto dotOp = createDotOp(*module, Float8E4M3FNType::get(&ctx),
                            Float8E4M3FNType::get(&ctx), builder->getF32Type());
 
   auto dpasType = DPASAnalysisV1::getDPASType(dotOp);
@@ -199,31 +194,28 @@ TEST_F(DPASAnalysisTest, DotOp_FP8_Upcast) {
 }
 
 TEST_F(DPASAnalysisTest, DotOp_INT8_Signed) {
-  OwningOpRef<ModuleOp> moduleRef = createModule(/*supportDPAS=*/true);
-  ModuleOp module = *moduleRef;
+  OwningOpRef<ModuleOp> module = createModule(/*supportDPAS=*/true);
   auto i8Type = builder->getIntegerType(8, /*isSigned=*/true);
   auto si32Type = builder->getIntegerType(32, /*isSigned=*/true);
-  auto dotOp = createDotOp(module, i8Type, i8Type, si32Type);
+  auto dotOp = createDotOp(*module, i8Type, i8Type, si32Type);
 
   auto dpasType = DPASAnalysisV1::getDPASType(dotOp);
   EXPECT_EQ(dpasType, DPASEngineTypeXe2::S32_S32_S8_S8);
 }
 
 TEST_F(DPASAnalysisTest, DotOp_INT8_Unsigned) {
-  OwningOpRef<ModuleOp> moduleRef = createModule(/*supportDPAS=*/true);
-  ModuleOp module = *moduleRef;
+  OwningOpRef<ModuleOp> module = createModule(/*supportDPAS=*/true);
   auto ui8Type = builder->getIntegerType(8, /*isSigned=*/false);
   auto ui32Type = builder->getIntegerType(32, /*isSigned=*/false);
-  auto dotOp = createDotOp(module, ui8Type, ui8Type, ui32Type);
+  auto dotOp = createDotOp(*module, ui8Type, ui8Type, ui32Type);
 
   auto dpasType = DPASAnalysisV1::getDPASType(dotOp);
   EXPECT_EQ(dpasType, DPASEngineTypeXe2::U32_U32_U8_U8);
 }
 
 TEST_F(DPASAnalysisTest, DotOp_MismatchedTypes) {
-  OwningOpRef<ModuleOp> moduleRef = createModule(/*supportDPAS=*/true);
-  ModuleOp module = *moduleRef;
-  auto dotOp = createDotOp(module, builder->getF16Type(),
+  OwningOpRef<ModuleOp> module = createModule(/*supportDPAS=*/true);
+  auto dotOp = createDotOp(*module, builder->getF16Type(),
                            builder->getBF16Type(), builder->getF32Type());
 
   auto dpasType = DPASAnalysisV1::getDPASType(dotOp);
@@ -231,10 +223,9 @@ TEST_F(DPASAnalysisTest, DotOp_MismatchedTypes) {
 }
 
 TEST_F(DPASAnalysisTest, DotOp_Xe3P_BF16_FP8) {
-  OwningOpRef<ModuleOp> moduleRef =
+  OwningOpRef<ModuleOp> module =
       createModule(/*supportDPAS=*/true, /*supportFp8=*/true);
-  ModuleOp module = *moduleRef;
-  auto dotOp = createDotOp(module, Float8E5M2Type::get(&ctx),
+  auto dotOp = createDotOp(*module, Float8E5M2Type::get(&ctx),
                            Float8E5M2Type::get(&ctx), builder->getBF16Type());
 
   auto dpasType = DPASAnalysisV2::getDPASType(dotOp);
@@ -246,11 +237,10 @@ TEST_F(DPASAnalysisTest, DotOp_Xe3P_BF16_FP8) {
 // ===----------------------------------------------------------------------===//
 
 TEST_F(DPASAnalysisTest, DotScaledOp_BF16_FP8) {
-  OwningOpRef<ModuleOp> moduleRef =
+  OwningOpRef<ModuleOp> module =
       createModule(/*supportDPAS=*/true, /*supportFp8=*/true);
-  ModuleOp module = *moduleRef;
   auto dotScaledOp = createDotScaledOp(
-      module, builder->getBF16Type(), Float8E5M2Type::get(&ctx),
+      *module, builder->getBF16Type(), Float8E5M2Type::get(&ctx),
       builder->getF32Type(), ScaleDotElemType::BF16, ScaleDotElemType::E5M2);
 
   auto dpasType = DPASAnalysisV1::getDPASType(dotScaledOp);
@@ -258,11 +248,10 @@ TEST_F(DPASAnalysisTest, DotScaledOp_BF16_FP8) {
 }
 
 TEST_F(DPASAnalysisTest, DotScaledOp_FP8_FP8) {
-  OwningOpRef<ModuleOp> moduleRef =
+  OwningOpRef<ModuleOp> module =
       createModule(/*supportDPAS=*/true, /*supportFp8=*/true);
-  ModuleOp module = *moduleRef;
   auto dotScaledOp = createDotScaledOp(
-      module, Float8E4M3FNType::get(&ctx), Float8E5M2Type::get(&ctx),
+      *module, Float8E4M3FNType::get(&ctx), Float8E5M2Type::get(&ctx),
       builder->getF32Type(), ScaleDotElemType::E4M3, ScaleDotElemType::E5M2);
 
   auto dpasType = DPASAnalysisV1::getDPASType(dotScaledOp);
@@ -270,12 +259,11 @@ TEST_F(DPASAnalysisTest, DotScaledOp_FP8_FP8) {
 }
 
 TEST_F(DPASAnalysisTest, DotScaledOp_FP4_FP4) {
-  OwningOpRef<ModuleOp> moduleRef =
+  OwningOpRef<ModuleOp> module =
       createModule(/*supportDPAS=*/true, /*supportFp8=*/true);
-  ModuleOp module = *moduleRef;
   auto dotScaledOp = createDotScaledOp(
-      module, builder->getI8Type(), builder->getI8Type(), builder->getF32Type(),
-      ScaleDotElemType::E2M1, ScaleDotElemType::E2M1,
+      *module, builder->getI8Type(), builder->getI8Type(),
+      builder->getF32Type(), ScaleDotElemType::E2M1, ScaleDotElemType::E2M1,
       /*lhsKPack=*/true, /*rhsKPack=*/true);
 
   auto dpasType = DPASAnalysisV1::getDPASType(dotScaledOp);
@@ -283,11 +271,10 @@ TEST_F(DPASAnalysisTest, DotScaledOp_FP4_FP4) {
 }
 
 TEST_F(DPASAnalysisTest, DotScaledOp_Mixed_FP16_FP8) {
-  OwningOpRef<ModuleOp> moduleRef =
+  OwningOpRef<ModuleOp> module =
       createModule(/*supportDPAS=*/true, /*supportFp8=*/true);
-  ModuleOp module = *moduleRef;
   auto dotScaledOp = createDotScaledOp(
-      module, builder->getF16Type(), Float8E4M3FNType::get(&ctx),
+      *module, builder->getF16Type(), Float8E4M3FNType::get(&ctx),
       builder->getF32Type(), ScaleDotElemType::FP16, ScaleDotElemType::E4M3);
 
   auto dpasType = DPASAnalysisV1::getDPASType(dotScaledOp);
@@ -299,81 +286,75 @@ TEST_F(DPASAnalysisTest, DotScaledOp_Mixed_FP16_FP8) {
 // ===----------------------------------------------------------------------===//
 
 TEST_F(DPASAnalysisTest, CanUseDPAS_EmptyFunction) {
-  OwningOpRef<ModuleOp> moduleRef = createModule(/*supportDPAS=*/true);
-  ModuleOp module = *moduleRef;
-  auto funcOp = createFunction(module);
+  OwningOpRef<ModuleOp> module = createModule(/*supportDPAS=*/true);
+  auto funcOp = createFunction(*module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
   builder->create<func::ReturnOp>(builder->getUnknownLoc());
 
-  DPASAnalysisV1 analysis(module);
+  DPASAnalysisV1 analysis(*module);
   auto result = analysis.canUseDPAS(funcOp);
   EXPECT_EQ(result, DPASAnalysisResult::False);
 }
 
 TEST_F(DPASAnalysisTest, CanUseDPAS_WithValidDotOp) {
-  OwningOpRef<ModuleOp> moduleRef = createModule(/*supportDPAS=*/true);
-  ModuleOp module = *moduleRef;
-  createDotOp(module, builder->getF16Type(), builder->getF16Type(),
+  OwningOpRef<ModuleOp> module = createModule(/*supportDPAS=*/true);
+  createDotOp(*module, builder->getF16Type(), builder->getF16Type(),
               builder->getF32Type());
 
-  DPASAnalysisV1 analysis(module);
-  auto funcOp = *module.getOps<func::FuncOp>().begin();
+  DPASAnalysisV1 analysis(*module);
+  auto funcOp = *(*module).getOps<func::FuncOp>().begin();
   auto result = analysis.canUseDPAS(funcOp);
   EXPECT_EQ(result, DPASAnalysisResult::True);
 }
 
 TEST_F(DPASAnalysisTest, CanUseDPAS_WrongWarpSize) {
-  OwningOpRef<ModuleOp> moduleRef =
+  OwningOpRef<ModuleOp> module =
       createModule(/*supportDPAS=*/true, /*supportFp8=*/false,
                    /*minSGSize=*/16, /*threadsPerWarp=*/8);
-  ModuleOp module = *moduleRef;
-  createDotOp(module, builder->getF16Type(), builder->getF16Type(),
+  createDotOp(*module, builder->getF16Type(), builder->getF16Type(),
               builder->getF32Type());
 
-  DPASAnalysisV1 analysis(module);
-  auto funcOp = *module.getOps<func::FuncOp>().begin();
+  DPASAnalysisV1 analysis(*module);
+  auto funcOp = *(*module).getOps<func::FuncOp>().begin();
   auto result = analysis.canUseDPAS(funcOp);
   EXPECT_EQ(result, DPASAnalysisResult::False);
 }
 
 TEST_F(DPASAnalysisTest, CanUseDPAS_MaybeResult) {
-  OwningOpRef<ModuleOp> moduleRef = createModule(/*supportDPAS=*/true);
-  ModuleOp module = *moduleRef;
+  OwningOpRef<ModuleOp> module = createModule(/*supportDPAS=*/true);
   // Don't set threads-per-warp attribute
-  module->removeAttr(AttrNumThreadsPerWarp);
-  createDotOp(module, builder->getF16Type(), builder->getF16Type(),
+  (*module)->removeAttr(AttrNumThreadsPerWarp);
+  createDotOp(*module, builder->getF16Type(), builder->getF16Type(),
               builder->getF32Type());
 
-  DPASAnalysisV1 analysis(module);
-  auto funcOp = *module.getOps<func::FuncOp>().begin();
+  DPASAnalysisV1 analysis(*module);
+  auto funcOp = *(*module).getOps<func::FuncOp>().begin();
   auto result = analysis.canUseDPAS(funcOp);
   EXPECT_EQ(result, DPASAnalysisResult::Maybe);
 }
 
 TEST_F(DPASAnalysisTest, CanUseDPAS_NotApplicableType) {
-  OwningOpRef<ModuleOp> moduleRef = createModule(/*supportDPAS=*/true);
-  ModuleOp module = *moduleRef;
+  OwningOpRef<ModuleOp> module = createModule(/*supportDPAS=*/true);
   // Create a dot with mismatched types
-  createDotOp(module, builder->getF16Type(), builder->getF32Type(),
+  createDotOp(*module, builder->getF16Type(), builder->getF32Type(),
               builder->getF32Type());
 
-  DPASAnalysisV1 analysis(module);
-  auto funcOp = *module.getOps<func::FuncOp>().begin();
+  DPASAnalysisV1 analysis(*module);
+  auto funcOp = *(*module).getOps<func::FuncOp>().begin();
   auto result = analysis.canUseDPAS(funcOp);
   EXPECT_EQ(result, DPASAnalysisResult::False);
 }
 
 TEST_F(DPASAnalysisTest, CanUseDPAS_Warp32_Enabled) {
   // Set environment variable through test (would normally be set externally)
-  OwningOpRef<ModuleOp> moduleRef =
+  OwningOpRef<ModuleOp> module =
       createModule(/*supportDPAS=*/true, /*supportFp8=*/false,
                    /*minSGSize=*/16, /*threadsPerWarp=*/32);
-  ModuleOp module = *moduleRef;
-  createDotOp(module, builder->getF16Type(), builder->getF16Type(),
+  createDotOp(*module, builder->getF16Type(), builder->getF16Type(),
               builder->getF32Type());
 
-  DPASAnalysisV1 analysis(module);
-  auto funcOp = *module.getOps<func::FuncOp>().begin();
+  DPASAnalysisV1 analysis(*module);
+  auto funcOp = *(*module).getOps<func::FuncOp>().begin();
   auto result = analysis.canUseDPAS(funcOp);
   // Result depends on TRITON_INTEL_ENABLE_DPAS_FOR_WARP_SIZE_32 env var
   EXPECT_TRUE(result == DPASAnalysisResult::True ||
@@ -385,31 +366,26 @@ TEST_F(DPASAnalysisTest, CanUseDPAS_Warp32_Enabled) {
 // ===----------------------------------------------------------------------===//
 
 TEST_F(DPASAnalysisTest, Factory_CreateXe2Analysis) {
-  OwningOpRef<ModuleOp> moduleRef =
+  OwningOpRef<ModuleOp> module =
       createModule(/*supportDPAS=*/true, /*supportFp8=*/false);
-  ModuleOp module = *moduleRef;
-
-  auto analysis = DPASAnalysisFactory::createDPASAnalysis(module);
+  auto analysis = DPASAnalysisFactory::createDPASAnalysis(*module);
   EXPECT_TRUE(std::holds_alternative<DPASAnalysisV1>(analysis));
 }
 
 TEST_F(DPASAnalysisTest, Factory_CreateXe3PAnalysis) {
-  OwningOpRef<ModuleOp> moduleRef =
+  OwningOpRef<ModuleOp> module =
       createModule(/*supportDPAS=*/true, /*supportFp8=*/true);
-  ModuleOp module = *moduleRef;
-
-  auto analysis = DPASAnalysisFactory::createDPASAnalysis(module);
+  auto analysis = DPASAnalysisFactory::createDPASAnalysis(*module);
   EXPECT_TRUE(std::holds_alternative<DPASAnalysisV2>(analysis));
 }
 
 TEST_F(DPASAnalysisTest, Factory_GetDPASType) {
-  OwningOpRef<ModuleOp> moduleRef =
+  OwningOpRef<ModuleOp> module =
       createModule(/*supportDPAS=*/true, /*supportFp8=*/true);
-  ModuleOp module = *moduleRef;
-  auto dotOp = createDotOp(module, builder->getF16Type(), builder->getF16Type(),
-                           builder->getF32Type());
+  auto dotOp = createDotOp(*module, builder->getF16Type(),
+                           builder->getF16Type(), builder->getF32Type());
 
-  auto analysis = DPASAnalysisFactory::createDPASAnalysis(module);
+  auto analysis = DPASAnalysisFactory::createDPASAnalysis(*module);
   auto dpasType = DPASAnalysisFactory::getDPASType(dotOp, analysis);
 
   EXPECT_TRUE(std::holds_alternative<DPASEngineTypeXe3P>(dpasType));
@@ -418,12 +394,11 @@ TEST_F(DPASAnalysisTest, Factory_GetDPASType) {
 }
 
 TEST_F(DPASAnalysisTest, Factory_CanUseDPASOperation) {
-  OwningOpRef<ModuleOp> moduleRef = createModule(/*supportDPAS=*/true);
-  ModuleOp module = *moduleRef;
-  auto dotOp = createDotOp(module, builder->getF16Type(), builder->getF16Type(),
-                           builder->getF32Type());
+  OwningOpRef<ModuleOp> module = createModule(/*supportDPAS=*/true);
+  auto dotOp = createDotOp(*module, builder->getF16Type(),
+                           builder->getF16Type(), builder->getF32Type());
 
-  auto analysis = DPASAnalysisFactory::createDPASAnalysis(module);
+  auto analysis = DPASAnalysisFactory::createDPASAnalysis(*module);
   auto result = DPASAnalysisFactory::canUseDPAS(dotOp, analysis);
 
   EXPECT_EQ(result, DPASAnalysisResult::True);
@@ -434,21 +409,19 @@ TEST_F(DPASAnalysisTest, Factory_CanUseDPASOperation) {
 // ===----------------------------------------------------------------------===//
 
 TEST_F(DPASAnalysisTest, EdgeCase_NoDPASSupport) {
-  OwningOpRef<ModuleOp> moduleRef = createModule(/*supportDPAS=*/false);
-  ModuleOp module = *moduleRef;
-  createDotOp(module, builder->getF16Type(), builder->getF16Type(),
+  OwningOpRef<ModuleOp> module = createModule(/*supportDPAS=*/false);
+  createDotOp(*module, builder->getF16Type(), builder->getF16Type(),
               builder->getF32Type());
 
-  DPASAnalysisV1 analysis(module);
-  auto funcOp = *module.getOps<func::FuncOp>().begin();
+  DPASAnalysisV1 analysis(*module);
+  auto funcOp = *(*module).getOps<func::FuncOp>().begin();
   auto result = analysis.canUseDPAS(funcOp);
   EXPECT_EQ(result, DPASAnalysisResult::False);
 }
 
 TEST_F(DPASAnalysisTest, EdgeCase_MultipleDotOps) {
-  OwningOpRef<ModuleOp> moduleRef = createModule(/*supportDPAS=*/true);
-  ModuleOp module = *moduleRef;
-  auto funcOp = createFunction(module);
+  OwningOpRef<ModuleOp> module = createModule(/*supportDPAS=*/true);
+  auto funcOp = createFunction(*module);
 
   OpBuilder::InsertionGuard guard(*builder);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
@@ -471,15 +444,14 @@ TEST_F(DPASAnalysisTest, EdgeCase_MultipleDotOps) {
   }
   builder->create<func::ReturnOp>(builder->getUnknownLoc());
 
-  DPASAnalysisV1 analysis(module);
+  DPASAnalysisV1 analysis(*module);
   auto result = analysis.canUseDPAS(funcOp);
   EXPECT_EQ(result, DPASAnalysisResult::True);
 }
 
 TEST_F(DPASAnalysisTest, EdgeCase_MixedValidAndInvalidOps) {
-  OwningOpRef<ModuleOp> moduleRef = createModule(/*supportDPAS=*/true);
-  ModuleOp module = *moduleRef;
-  auto funcOp = createFunction(module);
+  OwningOpRef<ModuleOp> module = createModule(/*supportDPAS=*/true);
+  auto funcOp = createFunction(*module);
 
   OpBuilder::InsertionGuard guard(*builder);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
@@ -521,7 +493,7 @@ TEST_F(DPASAnalysisTest, EdgeCase_MixedValidAndInvalidOps) {
 
   builder->create<func::ReturnOp>(builder->getUnknownLoc());
 
-  DPASAnalysisV1 analysis(module);
+  DPASAnalysisV1 analysis(*module);
   auto result = analysis.canUseDPAS(funcOp);
   // Should be False because one op cannot use DPAS
   EXPECT_EQ(result, DPASAnalysisResult::False);

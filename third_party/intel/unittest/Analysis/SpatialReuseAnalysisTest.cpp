@@ -80,9 +80,8 @@ TEST_F(SpatialReuseAnalysisTest, BlockedWarpsPartition) {
                                           warpsPerCTA, order, cgaLayout);
   auto ty = RankedTensorType::get({32, 32}, builder->getF32Type(), blocked);
 
-  OwningOpRef<ModuleOp> moduleRef = buildModule();
-  ModuleOp module = *moduleRef;
-  SpatialReuseAnalysis analysis(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  SpatialReuseAnalysis analysis(*module);
   EXPECT_THAT(analysis.getWarpInvariantOutDims(ty), ElementsAre(1u));
   EXPECT_TRUE(analysis.hasCrossSubgroupReuse(ty));
 }
@@ -96,9 +95,8 @@ TEST_F(SpatialReuseAnalysisTest, DotOperandDpasOpA) {
       DotOperandEncodingAttr::get(&ctx, /*opIdx=*/0, dpas, /*kWidth=*/1);
   auto ty = RankedTensorType::get({64, 64}, builder->getF32Type(), dotOpEnc);
 
-  OwningOpRef<ModuleOp> moduleRef = buildModule();
-  ModuleOp module = *moduleRef;
-  SpatialReuseAnalysis analysis(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  SpatialReuseAnalysis analysis(*module);
   EXPECT_THAT(analysis.getWarpInvariantOutDims(ty), ElementsAre(1u));
   EXPECT_TRUE(analysis.hasCrossSubgroupReuse(ty));
 }
@@ -112,9 +110,8 @@ TEST_F(SpatialReuseAnalysisTest, DotOperandDpasOpB) {
       DotOperandEncodingAttr::get(&ctx, /*opIdx=*/1, dpas, /*kWidth=*/2);
   auto ty = RankedTensorType::get({64, 64}, builder->getF32Type(), dotOpEnc);
 
-  OwningOpRef<ModuleOp> moduleRef = buildModule();
-  ModuleOp module = *moduleRef;
-  SpatialReuseAnalysis analysis(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  SpatialReuseAnalysis analysis(*module);
   EXPECT_THAT(analysis.getWarpInvariantOutDims(ty), ElementsAre(0u));
   EXPECT_TRUE(analysis.hasCrossSubgroupReuse(ty));
 }
@@ -145,9 +142,8 @@ TEST_F(SpatialReuseAnalysisTest, NestedSliceUnwrap) {
   auto ty3D =
       RankedTensorType::get({2, 2, 64}, builder->getF32Type(), blocked3D);
 
-  OwningOpRef<ModuleOp> moduleRef = buildModule();
-  ModuleOp module = *moduleRef;
-  SpatialReuseAnalysis analysis(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  SpatialReuseAnalysis analysis(*module);
   // 3D: dim 2 has warpsPerCTA==1 → warp-invariant → {2}.
   EXPECT_THAT(analysis.getWarpInvariantOutDims(ty3D), ElementsAre(2u));
   // 1D nested: only remaining dim (parent dim 0) has warpsPerCTA==2 →
@@ -161,9 +157,8 @@ TEST_F(SpatialReuseAnalysisTest, ScalarPointerLoad) {
   // Scalar pointer load (no tensor): the bool wrapper returns true
   // conservatively, while the axis-set entry point returns empty
   // because there are no tensor axes to report.
-  OwningOpRef<ModuleOp> moduleRef = buildModule();
-  ModuleOp module = *moduleRef;
-  auto funcOp = buildFunc(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  auto funcOp = buildFunc(*module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
   Type i32Ty = builder->getI32Type();
@@ -176,7 +171,7 @@ TEST_F(SpatialReuseAnalysisTest, ScalarPointerLoad) {
 
   auto loadOp = LoadOp::create(*builder, builder->getUnknownLoc(), ptr);
 
-  SpatialReuseAnalysis analysis(module);
+  SpatialReuseAnalysis analysis(*module);
   EXPECT_TRUE(analysis.hasCrossSubgroupReuse(loadOp));
   EXPECT_THAT(analysis.getWarpInvariantOutDims(loadOp), IsEmpty());
 }
@@ -187,9 +182,8 @@ TEST_F(SpatialReuseAnalysisTest, NullptrEncoding) {
   auto ty = RankedTensorType::get({32, 32}, builder->getI32Type(),
                                   /*encoding=*/Attribute{});
 
-  OwningOpRef<ModuleOp> moduleRef = buildModule();
-  ModuleOp module = *moduleRef;
-  SpatialReuseAnalysis analysis(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  SpatialReuseAnalysis analysis(*module);
   EXPECT_THAT(analysis.getWarpInvariantOutDims(ty), ElementsAre(0u, 1u));
   EXPECT_TRUE(analysis.hasCrossSubgroupReuse(ty));
 }
@@ -206,9 +200,8 @@ TEST_F(SpatialReuseAnalysisTest, NonPowerOfTwoShape) {
                                           warpsPerCTA, order, cgaLayout);
   auto ty = RankedTensorType::get({24, 32}, builder->getF32Type(), blocked);
 
-  OwningOpRef<ModuleOp> moduleRef = buildModule();
-  ModuleOp module = *moduleRef;
-  SpatialReuseAnalysis analysis(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  SpatialReuseAnalysis analysis(*module);
   EXPECT_THAT(analysis.getWarpInvariantOutDims(ty), ElementsAre(0u, 1u));
   EXPECT_TRUE(analysis.hasCrossSubgroupReuse(ty));
 }
@@ -221,9 +214,8 @@ TEST_F(SpatialReuseAnalysisTest, Known_NullEncoding_ReturnsNullopt) {
   auto ty = RankedTensorType::get({32, 32}, builder->getI32Type(),
                                   /*encoding=*/Attribute{});
 
-  OwningOpRef<ModuleOp> moduleRef = buildModule();
-  ModuleOp module = *moduleRef;
-  SpatialReuseAnalysis analysis(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  SpatialReuseAnalysis analysis(*module);
   EXPECT_FALSE(analysis.knownWarpInvariantOutDims(ty).has_value());
   EXPECT_FALSE(analysis.knownCrossSubgroupReuse(ty));
 }
@@ -240,9 +232,8 @@ TEST_F(SpatialReuseAnalysisTest, Known_NonPowerOfTwo_ReturnsNullopt) {
                                           warpsPerCTA, order, cgaLayout);
   auto ty = RankedTensorType::get({24, 32}, builder->getF32Type(), blocked);
 
-  OwningOpRef<ModuleOp> moduleRef = buildModule();
-  ModuleOp module = *moduleRef;
-  SpatialReuseAnalysis analysis(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  SpatialReuseAnalysis analysis(*module);
   EXPECT_FALSE(analysis.knownWarpInvariantOutDims(ty).has_value());
   EXPECT_FALSE(analysis.knownCrossSubgroupReuse(ty));
 }
@@ -262,9 +253,8 @@ TEST_F(SpatialReuseAnalysisTest, Known_NoWarpInDim_ReturnsNullopt) {
   // With warpsPerCTA=[1,1], the LinearLayout has no warp distribution.
   auto ty = RankedTensorType::get({32, 32}, builder->getF32Type(), blocked);
 
-  OwningOpRef<ModuleOp> moduleRef = buildModule();
-  ModuleOp module = *moduleRef;
-  SpatialReuseAnalysis analysis(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  SpatialReuseAnalysis analysis(*module);
   // This shape actually has a warp in-dim (cgaLayout guarantees it), so the
   // fallback is shape-based. To truly test no-warp-in-dim we'd need an
   // encoding without CGA. Instead, verify the behavior: with warpsPerCTA=[1,1]
@@ -292,9 +282,8 @@ TEST_F(SpatialReuseAnalysisTest, Known_BlockedWarpsPartition_ReturnsAxes) {
                                           warpsPerCTA, order, cgaLayout);
   auto ty = RankedTensorType::get({32, 32}, builder->getF32Type(), blocked);
 
-  OwningOpRef<ModuleOp> moduleRef = buildModule();
-  ModuleOp module = *moduleRef;
-  SpatialReuseAnalysis analysis(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  SpatialReuseAnalysis analysis(*module);
   std::optional<SmallVector<unsigned>> dims =
       analysis.knownWarpInvariantOutDims(ty);
   ASSERT_TRUE(dims.has_value());
@@ -310,9 +299,8 @@ TEST_F(SpatialReuseAnalysisTest, Known_DotOperandDpasOpA_ReturnsAxes) {
       DotOperandEncodingAttr::get(&ctx, /*opIdx=*/0, dpas, /*kWidth=*/1);
   auto ty = RankedTensorType::get({64, 64}, builder->getF32Type(), dotOpEnc);
 
-  OwningOpRef<ModuleOp> moduleRef = buildModule();
-  ModuleOp module = *moduleRef;
-  SpatialReuseAnalysis analysis(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  SpatialReuseAnalysis analysis(*module);
   std::optional<SmallVector<unsigned>> dims =
       analysis.knownWarpInvariantOutDims(ty);
   ASSERT_TRUE(dims.has_value());
@@ -335,9 +323,8 @@ TEST_F(SpatialReuseAnalysisTest, Known_FullCoverageEveryAxis) {
                                             warpsPerCTA, order, cgaLayout);
   auto ty = RankedTensorType::get({8, 8, 8}, builder->getF32Type(), blocked3D);
 
-  OwningOpRef<ModuleOp> moduleRef = buildModule();
-  ModuleOp module = *moduleRef;
-  SpatialReuseAnalysis analysis(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  SpatialReuseAnalysis analysis(*module);
   std::optional<SmallVector<unsigned>> dims =
       analysis.knownWarpInvariantOutDims(ty);
   ASSERT_TRUE(dims.has_value());
@@ -370,9 +357,8 @@ TEST_F(SpatialReuseAnalysisTest, Subgroup2DBlockEncoding) {
   auto ty =
       RankedTensorType::get({32, 64}, builder->getF16Type(), subgroup2DBlock);
 
-  OwningOpRef<ModuleOp> moduleRef = buildModule();
-  ModuleOp module = *moduleRef;
-  SpatialReuseAnalysis analysis(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  SpatialReuseAnalysis analysis(*module);
   EXPECT_THAT(analysis.getWarpInvariantOutDims(ty), ElementsAre(1u));
   EXPECT_TRUE(analysis.hasCrossSubgroupReuse(ty));
 }
@@ -381,9 +367,8 @@ TEST_F(SpatialReuseAnalysisTest, DescriptorLoadOpOverload) {
   // DescriptorLoadOp producing DotOperand{Dpas, opIdx=0}: op overload
   // forwards to type-based query. Expected axis set: {1} (K is
   // warp-broadcast). hasCrossSubgroupReuse: true.
-  OwningOpRef<ModuleOp> moduleRef = buildModule();
-  ModuleOp module = *moduleRef;
-  auto funcOp = buildFunc(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  auto funcOp = buildFunc(*module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
   DpasEncodingAttr dpas = makeDpas();
@@ -405,7 +390,7 @@ TEST_F(SpatialReuseAnalysisTest, DescriptorLoadOpOverload) {
   auto loadOp = DescriptorLoadOp::create(*builder, builder->getUnknownLoc(),
                                          resultTy, desc);
 
-  SpatialReuseAnalysis analysis(module);
+  SpatialReuseAnalysis analysis(*module);
   EXPECT_THAT(analysis.getWarpInvariantOutDims(loadOp), ElementsAre(1u));
   EXPECT_TRUE(analysis.hasCrossSubgroupReuse(loadOp));
 }
@@ -413,9 +398,8 @@ TEST_F(SpatialReuseAnalysisTest, DescriptorLoadOpOverload) {
 TEST_F(SpatialReuseAnalysisTest, DescriptorGatherOpOverload) {
   // DescriptorGatherOp producing Blocked-encoded tensor. Op overload
   // must match type-based query on result type.
-  OwningOpRef<ModuleOp> moduleRef = buildModule();
-  ModuleOp module = *moduleRef;
-  auto funcOp = buildFunc(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  auto funcOp = buildFunc(*module);
   builder->setInsertionPointToStart(&funcOp.getBody().front());
 
   SmallVector<unsigned> sizePerThread = {1, 1};
@@ -448,7 +432,7 @@ TEST_F(SpatialReuseAnalysisTest, DescriptorGatherOpOverload) {
   auto gatherOp = mlir::triton::DescriptorGatherOp::create(
       *builder, builder->getUnknownLoc(), resultTy, desc, xOffsets, yOffset);
 
-  SpatialReuseAnalysis analysis(module);
+  SpatialReuseAnalysis analysis(*module);
   SmallVector<unsigned> opAxes = analysis.getWarpInvariantOutDims(gatherOp);
   SmallVector<unsigned> typeAxes = analysis.getWarpInvariantOutDims(resultTy);
   EXPECT_EQ(opAxes, typeAxes);
@@ -468,9 +452,8 @@ TEST_F(SpatialReuseAnalysisTest, BareRankedTensorType) {
                                           warpsPerCTA, order, cgaLayout);
   auto ty = RankedTensorType::get({32, 32}, builder->getF32Type(), blocked);
 
-  OwningOpRef<ModuleOp> moduleRef = buildModule();
-  ModuleOp module = *moduleRef;
-  SpatialReuseAnalysis analysis(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  SpatialReuseAnalysis analysis(*module);
   EXPECT_THAT(analysis.getWarpInvariantOutDims(ty), ElementsAre(1u));
   EXPECT_TRUE(analysis.hasCrossSubgroupReuse(ty));
 }
@@ -485,9 +468,8 @@ TEST_F(SpatialReuseAnalysisTest, BroadcastFactor_NullEncoding_ReturnsNullopt) {
   auto ty = RankedTensorType::get({32, 32}, builder->getI32Type(),
                                   /*encoding=*/Attribute{});
 
-  OwningOpRef<ModuleOp> moduleRef = buildModule();
-  ModuleOp module = *moduleRef;
-  SpatialReuseAnalysis analysis(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  SpatialReuseAnalysis analysis(*module);
   EXPECT_FALSE(analysis.knownWarpBroadcastFactor(ty).has_value());
 }
 
@@ -501,9 +483,8 @@ TEST_F(SpatialReuseAnalysisTest, BroadcastFactor_NonPow2_ReturnsNullopt) {
                                           warpsPerCTA, order, cgaLayout);
   auto ty = RankedTensorType::get({24, 32}, builder->getF32Type(), blocked);
 
-  OwningOpRef<ModuleOp> moduleRef = buildModule();
-  ModuleOp module = *moduleRef;
-  SpatialReuseAnalysis analysis(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  SpatialReuseAnalysis analysis(*module);
   EXPECT_FALSE(analysis.knownWarpBroadcastFactor(ty).has_value());
 }
 
@@ -517,9 +498,8 @@ TEST_F(SpatialReuseAnalysisTest, BroadcastFactor_DotOpA_TilesM_FactorEqualsWn) {
       DotOperandEncodingAttr::get(&ctx, /*opIdx=*/0, dpas, /*kWidth=*/1);
   auto ty = RankedTensorType::get({64, 64}, builder->getF32Type(), dotOpEnc);
 
-  OwningOpRef<ModuleOp> moduleRef = buildModule();
-  ModuleOp module = *moduleRef;
-  SpatialReuseAnalysis analysis(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  SpatialReuseAnalysis analysis(*module);
   std::optional<unsigned> factor = analysis.knownWarpBroadcastFactor(ty);
   ASSERT_TRUE(factor.has_value());
   EXPECT_EQ(*factor, 2u);
@@ -537,9 +517,8 @@ TEST_F(SpatialReuseAnalysisTest,
       DotOperandEncodingAttr::get(&ctx, /*opIdx=*/0, dpas, /*kWidth=*/1);
   auto ty = RankedTensorType::get({64, 64}, builder->getF32Type(), dotOpEnc);
 
-  OwningOpRef<ModuleOp> moduleRef = buildModule();
-  ModuleOp module = *moduleRef;
-  SpatialReuseAnalysis analysis(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  SpatialReuseAnalysis analysis(*module);
   std::optional<unsigned> factor = analysis.knownWarpBroadcastFactor(ty);
   ASSERT_TRUE(factor.has_value());
   EXPECT_EQ(*factor, 1u);
@@ -554,9 +533,8 @@ TEST_F(SpatialReuseAnalysisTest,
       DotOperandEncodingAttr::get(&ctx, /*opIdx=*/1, dpas, /*kWidth=*/2);
   auto ty = RankedTensorType::get({64, 64}, builder->getF32Type(), dotOpEnc);
 
-  OwningOpRef<ModuleOp> moduleRef = buildModule();
-  ModuleOp module = *moduleRef;
-  SpatialReuseAnalysis analysis(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  SpatialReuseAnalysis analysis(*module);
   std::optional<unsigned> factor = analysis.knownWarpBroadcastFactor(ty);
   ASSERT_TRUE(factor.has_value());
   EXPECT_EQ(*factor, 1u);
@@ -571,9 +549,8 @@ TEST_F(SpatialReuseAnalysisTest,
       DotOperandEncodingAttr::get(&ctx, /*opIdx=*/0, dpas, /*kWidth=*/1);
   auto ty = RankedTensorType::get({64, 64}, builder->getF32Type(), dotOpEnc);
 
-  OwningOpRef<ModuleOp> moduleRef = buildModule();
-  ModuleOp module = *moduleRef;
-  SpatialReuseAnalysis analysis(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  SpatialReuseAnalysis analysis(*module);
   std::optional<unsigned> factor = analysis.knownWarpBroadcastFactor(ty);
   ASSERT_TRUE(factor.has_value());
   EXPECT_EQ(*factor, 4u);
@@ -593,9 +570,8 @@ TEST_F(SpatialReuseAnalysisTest,
                                           warpsPerCTA, order, cgaLayout);
   auto ty = RankedTensorType::get({32, 32}, builder->getF32Type(), blocked);
 
-  OwningOpRef<ModuleOp> moduleRef = buildModule();
-  ModuleOp module = *moduleRef;
-  SpatialReuseAnalysis analysis(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  SpatialReuseAnalysis analysis(*module);
   std::optional<unsigned> factor = analysis.knownWarpBroadcastFactor(ty);
   ASSERT_TRUE(factor.has_value());
   EXPECT_EQ(*factor, 1u);
@@ -621,9 +597,8 @@ TEST_F(SpatialReuseAnalysisTest, KnownLaneBroadcastFactor_SliceBlockedFamily1) {
   auto slice = SliceEncodingAttr::get(&ctx, /*dim=*/1, blocked1);
   auto ty = RankedTensorType::get({16}, builder->getI32Type(), slice);
 
-  OwningOpRef<ModuleOp> moduleRef = buildModule();
-  ModuleOp module = *moduleRef;
-  SpatialReuseAnalysis analysis(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  SpatialReuseAnalysis analysis(*module);
   std::optional<unsigned> factor = analysis.knownLaneBroadcastFactor(ty);
   ASSERT_TRUE(factor.has_value());
   EXPECT_EQ(*factor, 16u);
@@ -644,9 +619,8 @@ TEST_F(SpatialReuseAnalysisTest, KnownLaneBroadcastFactor_SliceBlockedFamily2) {
   auto slice = SliceEncodingAttr::get(&ctx, /*dim=*/1, blocked2);
   auto ty = RankedTensorType::get({16}, builder->getI32Type(), slice);
 
-  OwningOpRef<ModuleOp> moduleRef = buildModule();
-  ModuleOp module = *moduleRef;
-  SpatialReuseAnalysis analysis(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  SpatialReuseAnalysis analysis(*module);
   std::optional<unsigned> factor = analysis.knownLaneBroadcastFactor(ty);
   ASSERT_TRUE(factor.has_value());
   EXPECT_EQ(*factor, 8u);
@@ -672,9 +646,8 @@ TEST_F(SpatialReuseAnalysisTest,
   auto slice = SliceEncodingAttr::get(&ctx, /*dim=*/1, dpas);
   auto ty = RankedTensorType::get({16}, builder->getI32Type(), slice);
 
-  OwningOpRef<ModuleOp> moduleRef = buildModule();
-  ModuleOp module = *moduleRef;
-  SpatialReuseAnalysis analysis(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  SpatialReuseAnalysis analysis(*module);
   std::optional<unsigned> factor = analysis.knownLaneBroadcastFactor(ty);
   ASSERT_TRUE(factor.has_value());
   EXPECT_EQ(*factor, 16u);
@@ -693,9 +666,8 @@ TEST_F(SpatialReuseAnalysisTest,
                                             warpsPerCTA, order, cgaLayout);
   auto ty = RankedTensorType::get({1024}, builder->getF32Type(), blocked1d);
 
-  OwningOpRef<ModuleOp> moduleRef = buildModule();
-  ModuleOp module = *moduleRef;
-  SpatialReuseAnalysis analysis(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  SpatialReuseAnalysis analysis(*module);
   std::optional<unsigned> factor = analysis.knownLaneBroadcastFactor(ty);
   ASSERT_TRUE(factor.has_value());
   EXPECT_EQ(*factor, 1u);
@@ -723,9 +695,8 @@ TEST_F(SpatialReuseAnalysisTest, KnownLaneBroadcastFactor_FallbackCases) {
   auto tyNonPow2 =
       RankedTensorType::get({17}, builder->getF32Type(), blocked1d);
 
-  OwningOpRef<ModuleOp> moduleRef = buildModule();
-  ModuleOp module = *moduleRef;
-  SpatialReuseAnalysis analysis(module);
+  OwningOpRef<ModuleOp> module = buildModule();
+  SpatialReuseAnalysis analysis(*module);
 
   EXPECT_FALSE(analysis.knownLaneBroadcastFactor(tyNullEnc).has_value());
   EXPECT_FALSE(analysis.knownLaneBroadcastFactor(tyNonPow2).has_value());

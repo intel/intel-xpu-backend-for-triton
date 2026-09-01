@@ -86,10 +86,9 @@ protected:
 // ===----------------------------------------------------------------------===//
 
 TEST_F(AliasAnalysisTest, TwoLoadsSameArgDifferentOffsets) {
-  OwningOpRef<ModuleOp> moduleRef = createModule();
-  ModuleOp module = *moduleRef;
+  OwningOpRef<ModuleOp> module = createModule();
   auto ptrType = getPtrType(builder->getF16Type());
-  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
+  auto funcOp = createFunctionWithReturn(*module, "test_func", {ptrType});
   auto loc = builder->getUnknownLoc();
   auto arg0 = funcOp.getArgument(0);
 
@@ -112,11 +111,10 @@ TEST_F(AliasAnalysisTest, TwoLoadsSameArgDifferentOffsets) {
 }
 
 TEST_F(AliasAnalysisTest, TwoLoadsDistinctArgs) {
-  OwningOpRef<ModuleOp> moduleRef = createModule();
-  ModuleOp module = *moduleRef;
+  OwningOpRef<ModuleOp> module = createModule();
   auto ptrType = getPtrType(builder->getF16Type());
   auto funcOp =
-      createFunctionWithReturn(module, "test_func", {ptrType, ptrType});
+      createFunctionWithReturn(*module, "test_func", {ptrType, ptrType});
   auto loc = builder->getUnknownLoc();
   auto arg0 = funcOp.getArgument(0);
   auto arg1 = funcOp.getArgument(1);
@@ -130,10 +128,9 @@ TEST_F(AliasAnalysisTest, TwoLoadsDistinctArgs) {
 }
 
 TEST_F(AliasAnalysisTest, LoadAndStoreSameArg) {
-  OwningOpRef<ModuleOp> moduleRef = createModule();
-  ModuleOp module = *moduleRef;
+  OwningOpRef<ModuleOp> module = createModule();
   auto ptrType = getPtrType(builder->getF16Type());
-  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
+  auto funcOp = createFunctionWithReturn(*module, "test_func", {ptrType});
   auto loc = builder->getUnknownLoc();
   auto arg0 = funcOp.getArgument(0);
 
@@ -158,11 +155,10 @@ TEST_F(AliasAnalysisTest, LoadAndStoreSameArg) {
 }
 
 TEST_F(AliasAnalysisTest, LoadAndStoreDistinctArgs) {
-  OwningOpRef<ModuleOp> moduleRef = createModule();
-  ModuleOp module = *moduleRef;
+  OwningOpRef<ModuleOp> module = createModule();
   auto ptrType = getPtrType(builder->getF16Type());
   auto funcOp =
-      createFunctionWithReturn(module, "test_func", {ptrType, ptrType});
+      createFunctionWithReturn(*module, "test_func", {ptrType, ptrType});
   auto loc = builder->getUnknownLoc();
   auto argA = funcOp.getArgument(0);
   auto argB = funcOp.getArgument(1);
@@ -180,10 +176,9 @@ TEST_F(AliasAnalysisTest, LoadAndStoreDistinctArgs) {
 }
 
 TEST_F(AliasAnalysisTest, SCFForIterCarriedPointer_JoinsWithInit) {
-  OwningOpRef<ModuleOp> moduleRef = createModule();
-  ModuleOp module = *moduleRef;
+  OwningOpRef<ModuleOp> module = createModule();
   auto ptrType = getPtrType(builder->getF16Type());
-  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
+  auto funcOp = createFunctionWithReturn(*module, "test_func", {ptrType});
   auto loc = builder->getUnknownLoc();
   auto argA = funcOp.getArgument(0);
 
@@ -222,11 +217,10 @@ TEST_F(AliasAnalysisTest, SCFForIterCarriedPointer_JoinsWithInit) {
 }
 
 TEST_F(AliasAnalysisTest, OpaqueLoadAliasesOpaqueAtomic) {
-  OwningOpRef<ModuleOp> moduleRef = createModule();
-  ModuleOp module = *moduleRef;
+  OwningOpRef<ModuleOp> module = createModule();
   auto ptrType = getPtrType(builder->getI32Type());
   auto funcOp =
-      createFunctionWithReturn(module, "test_func", {ptrType, ptrType});
+      createFunctionWithReturn(*module, "test_func", {ptrType, ptrType});
   auto loc = builder->getUnknownLoc();
   auto arg0 = funcOp.getArgument(0);
   auto arg1 = funcOp.getArgument(1);
@@ -260,11 +254,10 @@ TEST_F(AliasAnalysisTest, OpaqueLoadAliasesOpaqueAtomic) {
 }
 
 TEST_F(AliasAnalysisTest, AtomicResolvedDistinctFromLoad) {
-  OwningOpRef<ModuleOp> moduleRef = createModule();
-  ModuleOp module = *moduleRef;
+  OwningOpRef<ModuleOp> module = createModule();
   auto ptrType = getPtrType(builder->getI32Type());
   auto funcOp =
-      createFunctionWithReturn(module, "test_func", {ptrType, ptrType});
+      createFunctionWithReturn(*module, "test_func", {ptrType, ptrType});
   auto loc = builder->getUnknownLoc();
   auto argA = funcOp.getArgument(0);
   auto argB = funcOp.getArgument(1);
@@ -290,11 +283,10 @@ TEST_F(AliasAnalysisTest, OpaquePointerAliasesResolvedPointer) {
   // arith.select) has an unresolved origin. It must conservatively MayAlias
   // every tracked pointer — including resolved pointers derived directly
   // from a function argument that the opaque pointer could equal at runtime.
-  OwningOpRef<ModuleOp> moduleRef = createModule();
-  ModuleOp module = *moduleRef;
+  OwningOpRef<ModuleOp> module = createModule();
   auto ptrType = getPtrType(builder->getI32Type());
   auto funcOp =
-      createFunctionWithReturn(module, "test_func", {ptrType, ptrType});
+      createFunctionWithReturn(*module, "test_func", {ptrType, ptrType});
   auto loc = builder->getUnknownLoc();
   auto arg0 = funcOp.getArgument(0);
   auto arg1 = funcOp.getArgument(1);
@@ -332,8 +324,7 @@ TEST_F(AliasAnalysisTest, OpaquePointerAliasesResolvedPointer) {
 }
 
 TEST_F(AliasAnalysisTest, ConvertLayoutPointerPassThrough) {
-  OwningOpRef<ModuleOp> moduleRef = createModule();
-  ModuleOp module = *moduleRef;
+  OwningOpRef<ModuleOp> module = createModule();
   auto ptrType = getPtrType(builder->getF16Type());
 
   // Create a tensor-of-pointer type for load operand
@@ -347,7 +338,7 @@ TEST_F(AliasAnalysisTest, ConvertLayoutPointerPassThrough) {
       /*warpsPerCTA=*/{1}, /*order=*/{0}, cgaLayout);
   auto tensorPtrTypeWithEnc = RankedTensorType::get({128}, ptrType, blockedEnc);
 
-  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
+  auto funcOp = createFunctionWithReturn(*module, "test_func", {ptrType});
   auto loc = builder->getUnknownLoc();
   auto basePtr = funcOp.getArgument(0);
 
@@ -382,10 +373,9 @@ TEST_F(AliasAnalysisTest, ConvertLayoutPointerPassThrough) {
 }
 
 TEST_F(AliasAnalysisTest, ThreeLoadsSameArgReturnsBoth) {
-  OwningOpRef<ModuleOp> moduleRef = createModule();
-  ModuleOp module = *moduleRef;
+  OwningOpRef<ModuleOp> module = createModule();
   auto ptrType = getPtrType(builder->getF32Type());
-  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
+  auto funcOp = createFunctionWithReturn(*module, "test_func", {ptrType});
   auto loc = builder->getUnknownLoc();
   auto arg0 = funcOp.getArgument(0);
 
@@ -405,10 +395,9 @@ TEST_F(AliasAnalysisTest, ThreeLoadsSameArgReturnsBoth) {
 }
 
 TEST_F(AliasAnalysisTest, DescriptorLoadAndDescriptorStoreSameBase) {
-  OwningOpRef<ModuleOp> moduleRef = createModule();
-  ModuleOp module = *moduleRef;
+  OwningOpRef<ModuleOp> module = createModule();
   auto ptrType = getPtrType(builder->getF32Type());
-  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
+  auto funcOp = createFunctionWithReturn(*module, "test_func", {ptrType});
   auto loc = builder->getUnknownLoc();
   auto base = funcOp.getArgument(0);
 
@@ -447,10 +436,9 @@ TEST_F(AliasAnalysisTest, DescriptorLoadAndDescriptorStoreSameBase) {
 }
 
 TEST_F(AliasAnalysisTest, DescriptorLoadAndRawLoadSameBase) {
-  OwningOpRef<ModuleOp> moduleRef = createModule();
-  ModuleOp module = *moduleRef;
+  OwningOpRef<ModuleOp> module = createModule();
   auto ptrType = getPtrType(builder->getF32Type());
-  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
+  auto funcOp = createFunctionWithReturn(*module, "test_func", {ptrType});
   auto loc = builder->getUnknownLoc();
   auto base = funcOp.getArgument(0);
 
@@ -490,10 +478,9 @@ TEST_F(AliasAnalysisTest, DescriptorLoadThroughSCFForIterArg) {
   // MakeTensorDescOp result. findAllMakeTensorDescOps must trace through the
   // iter_arg back to the original descriptor so the op is not dropped and
   // its base pointer is resolved correctly.
-  OwningOpRef<ModuleOp> moduleRef = createModule();
-  ModuleOp module = *moduleRef;
+  OwningOpRef<ModuleOp> module = createModule();
   auto ptrType = getPtrType(builder->getF32Type());
-  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
+  auto funcOp = createFunctionWithReturn(*module, "test_func", {ptrType});
   auto loc = builder->getUnknownLoc();
   auto base = funcOp.getArgument(0);
 
@@ -559,11 +546,10 @@ TEST_F(AliasAnalysisTest, DescriptorThroughSCFIfMismatch) {
   // MakeTensorDescOps from different base pointers), the descriptor
   // becomes opaque and should conservatively MayAlias loads from either
   // base.
-  OwningOpRef<ModuleOp> moduleRef = createModule();
-  ModuleOp module = *moduleRef;
+  OwningOpRef<ModuleOp> module = createModule();
   auto ptrType = getPtrType(builder->getF32Type());
   auto funcOp =
-      createFunctionWithReturn(module, "test_func", {ptrType, ptrType});
+      createFunctionWithReturn(*module, "test_func", {ptrType, ptrType});
   auto loc = builder->getUnknownLoc();
   auto baseA = funcOp.getArgument(0);
   auto baseB = funcOp.getArgument(1);
@@ -628,11 +614,10 @@ TEST_F(AliasAnalysisTest, InterfaceTrackedOpWithNoPointerIsPeer) {
   // `tt.print` has MemWrite<GlobalMemory> and takes no pointer operands
   // (only a string prefix + optional variadic scalar args), so it becomes
   // a tracked op with a null pointer slot — a universal MayAlias peer.
-  OwningOpRef<ModuleOp> moduleRef = createModule();
-  ModuleOp module = *moduleRef;
+  OwningOpRef<ModuleOp> module = createModule();
   auto ptrType = getPtrType(builder->getF32Type());
   auto funcOp =
-      createFunctionWithReturn(module, "test_func", {ptrType, ptrType});
+      createFunctionWithReturn(*module, "test_func", {ptrType, ptrType});
   auto loc = builder->getUnknownLoc();
   auto argA = funcOp.getArgument(0);
   auto argB = funcOp.getArgument(1);
@@ -666,11 +651,10 @@ TEST_F(AliasAnalysisTest, NonMemoryOpsDoNotPessimize) {
   // Verify that a function containing only pure ops (no memory effects)
   // does not pessimize aliasing. Two distinct-arg loads should remain
   // NoAlias (peer sets empty).
-  OwningOpRef<ModuleOp> moduleRef = createModule();
-  ModuleOp module = *moduleRef;
+  OwningOpRef<ModuleOp> module = createModule();
   auto ptrType = getPtrType(builder->getF32Type());
   auto funcOp =
-      createFunctionWithReturn(module, "test_func", {ptrType, ptrType});
+      createFunctionWithReturn(*module, "test_func", {ptrType, ptrType});
   auto loc = builder->getUnknownLoc();
   auto argA = funcOp.getArgument(0);
   auto argB = funcOp.getArgument(1);
@@ -697,11 +681,10 @@ TEST_F(AliasAnalysisTest, OpaqueDescriptorPropagatesUnknown) {
   // Regression test for isPointerLike(TensorDescType) — a descriptor that
   // escapes control flow (via arith.select) should propagate Unknown and
   // conservatively MayAlias loads from either candidate base.
-  OwningOpRef<ModuleOp> moduleRef = createModule();
-  ModuleOp module = *moduleRef;
+  OwningOpRef<ModuleOp> module = createModule();
   auto ptrType = getPtrType(builder->getF32Type());
   auto funcOp =
-      createFunctionWithReturn(module, "test_func", {ptrType, ptrType});
+      createFunctionWithReturn(*module, "test_func", {ptrType, ptrType});
   auto loc = builder->getUnknownLoc();
   auto baseA = funcOp.getArgument(0);
   auto baseB = funcOp.getArgument(1);
@@ -759,10 +742,9 @@ TEST_F(AliasAnalysisTest, OpaqueDescriptorPropagatesUnknown) {
 using ::mlir::triton::intel::AliasAnalysis;
 
 TEST_F(AliasAnalysisTest, PointerRootsKnownViaAddPtr) {
-  OwningOpRef<ModuleOp> moduleRef = createModule();
-  ModuleOp module = *moduleRef;
+  OwningOpRef<ModuleOp> module = createModule();
   auto ptrType = getPtrType(builder->getF16Type());
-  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
+  auto funcOp = createFunctionWithReturn(*module, "test_func", {ptrType});
   auto loc = builder->getUnknownLoc();
   auto arg0 = funcOp.getArgument(0);
 
@@ -779,10 +761,9 @@ TEST_F(AliasAnalysisTest, PointerRootsKnownViaAddPtr) {
 }
 
 TEST_F(AliasAnalysisTest, PointerRootsKnownViaSplat) {
-  OwningOpRef<ModuleOp> moduleRef = createModule();
-  ModuleOp module = *moduleRef;
+  OwningOpRef<ModuleOp> module = createModule();
   auto ptrType = getPtrType(builder->getF16Type());
-  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
+  auto funcOp = createFunctionWithReturn(*module, "test_func", {ptrType});
   auto loc = builder->getUnknownLoc();
   auto arg0 = funcOp.getArgument(0);
 
@@ -797,11 +778,10 @@ TEST_F(AliasAnalysisTest, PointerRootsKnownViaSplat) {
 }
 
 TEST_F(AliasAnalysisTest, PointerRootsUnknownViaArithSelect) {
-  OwningOpRef<ModuleOp> moduleRef = createModule();
-  ModuleOp module = *moduleRef;
+  OwningOpRef<ModuleOp> module = createModule();
   auto ptrType = getPtrType(builder->getF16Type());
   auto funcOp = createFunctionWithReturn(
-      module, "test_func", {ptrType, ptrType, builder->getI1Type()});
+      *module, "test_func", {ptrType, ptrType, builder->getI1Type()});
   auto loc = builder->getUnknownLoc();
   auto arg0 = funcOp.getArgument(0);
   auto arg1 = funcOp.getArgument(1);
@@ -818,10 +798,9 @@ TEST_F(AliasAnalysisTest, PointerRootsUnknownViaArithSelect) {
 }
 
 TEST_F(AliasAnalysisTest, PointerRootsNotTrackedForNonMemOpPointer) {
-  OwningOpRef<ModuleOp> moduleRef = createModule();
-  ModuleOp module = *moduleRef;
+  OwningOpRef<ModuleOp> module = createModule();
   auto ptrType = getPtrType(builder->getF16Type());
-  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
+  auto funcOp = createFunctionWithReturn(*module, "test_func", {ptrType});
   auto loc = builder->getUnknownLoc();
   auto arg0 = funcOp.getArgument(0);
 
@@ -841,10 +820,9 @@ TEST_F(AliasAnalysisTest, PointerRootsNotTrackedForNonMemOpPointer) {
 }
 
 TEST_F(AliasAnalysisTest, PointerRootsKnownThroughScfForIterArg) {
-  OwningOpRef<ModuleOp> moduleRef = createModule();
-  ModuleOp module = *moduleRef;
+  OwningOpRef<ModuleOp> module = createModule();
   auto ptrType = getPtrType(builder->getF16Type());
-  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
+  auto funcOp = createFunctionWithReturn(*module, "test_func", {ptrType});
   auto loc = builder->getUnknownLoc();
   auto arg0 = funcOp.getArgument(0);
 
