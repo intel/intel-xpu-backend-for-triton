@@ -209,85 +209,89 @@ def test_block_io(M, N, dtype_str, layout, transpose, device, tmp_path: pathlib.
         assert load_count > 0 or transpose
 
 
-# The 2D block I/O tile only covers the inner two dimensions, so every leading
-# (batch) dimension needs its own stride from the tensor descriptor. Re-deriving
-# it from the 2D surface parameters steps an outer batch dimension by the wrong
-# amount whenever its stride differs from `shapes[-2] * strides[-2]`, and reads
-# the wrong slice with no diagnostic (issue #7882). Of the shapes below only the
-# rank-4 one has such a dimension; the rank-3 shapes are dense and happen to
-# agree with the re-derived value, so they serve as controls that the common
-# path is unaffected.
-#
-# Row-major only, deliberately. A `ttig.block_io = "column_major"` descriptor
-# load must declare the descriptor's inner two dimensions *swapped* relative to
-# the result tensor -- see `descriptor_load_store_to_llvm.mlir`, which documents
-# "the column_major flag swaps the inner two dims before the load" and encodes
-# it as `!tt.tensordesc<16x8xf32> -> tensor<8x16xf32>`. Giving the descriptor
-# and the result the same type, as a column-major variant of this test would,
-# is not valid input for that path, so it tests nothing about the batch stride:
-# measured on BMG, all nine such combinations fail identically with and without
-# the #7882 fix. Build the descriptor with swapped inner dims if column-major
-# rank > 2 coverage is wanted; do not just re-add a `transpose` parameter here.
+# The 2D block I/O tile covers only the inner two dimensions, so every leading
+# dimension needs its own stride from the tensor descriptor. Re-deriving it from the
+# 2D surface parameters steps a leading dimension by the wrong amount whenever its
+# stride differs from `shapes[-2] * strides[-2]`, reading the wrong slice with no
+# diagnostic (issue #7882). Only the rank-4 shape below has such a dimension; the
+# dense rank-3 shapes agree with the re-derived value and act as controls.
 @pytest.mark.parametrize("shape", [[64, 64, 32], [128, 128, 16], [4, 64, 64, 32]])
 @pytest.mark.parametrize("dtype_str", ["float32", "float16", "int8"])
+@pytest.mark.parametrize("block_io", ["row_major", "column_major"])
 @pytest.mark.skipif(not is_xpu(), reason="Block store tests are specific to the XPU backend")
-def test_block_io_nd(shape, dtype_str, device, tmp_path: pathlib.Path):
+def test_block_io_nd(shape, dtype_str, block_io, device, tmp_path: pathlib.Path):
     rank = len(shape)
-
-    if rank == 3:
-        layout = BlockedLayout([1, 1, 1], [1, 2, 16], [8, 4, 1], [2, 1, 0])
-    else:
-        layout = BlockedLayout([1, 1, 1, 1], [1, 1, 2, 16], [4, 2, 4, 1], [3, 2, 1, 0])
-
-    # Generate IR constants for shape and strides.
-    shapes_ir = "\n".join([f"%dim{i}_i32 = arith.constant {s} : i32" for i, s in enumerate(shape)])
-    strides_row_major = [shape[-2] * shape[-1], shape[-1], 1]
-    for s in reversed(shape[1:-2]):
-        strides_row_major.insert(0, strides_row_major[0] * s)
-    strides_row_major_ir = "\n".join(
-        [f"%stride_row_major_{i}_i64 = arith.constant {s} : i64" for i, s in enumerate(strides_row_major)])
-    strides_row_major_list = [f"%stride_row_major_{i}_i64" for i in range(rank)]
-
     ty = {"float32": "f32", "float16": "f16", "bfloat16": "i16", "int8": "i8"}[dtype_str]
+    torch_dtype = getattr(torch, dtype_str)
     support_block_io = triton.runtime.driver.active.get_current_target().arch['has_2d_block_io']
 
-    tensor_type = "x".join(str(s) for s in shape) + f"x{ty}"
-    offsets = ", ".join(["%c0_i32"] * rank)
+    # A column_major load reads along the tile's second-to-last dimension, so that
+    # dimension has to vary fastest and, below 32 bits, pack to d32 per lane, or the
+    # tile is rejected and never becomes a block load at all.
+    transpose = block_io == "column_major"
+    size_per_thread, order = [1] * rank, list(reversed(range(rank)))
+    if transpose:
+        size_per_thread[rank - 2] = 4 // torch_dtype.itemsize
+        order[0], order[1] = order[1], order[0]
+    layout = BlockedLayout(size_per_thread, [1, 2, 16] if rank == 3 else [1, 1, 2, 16],
+                           [8, 4, 1] if rank == 3 else [4, 2, 4, 1], order)
+
+    # A column_major load declares the descriptor's inner two dimensions swapped
+    # relative to the loaded tile, so the two types differ and must not be merged. The
+    # source is twice as deep and read at index `batch`, so that leading stride is both
+    # folded into the base pointer and walked by the result layout.
+    desc_shape = shape[:-2] + [shape[-1], shape[-2]] if transpose else list(shape)
+    batch = desc_shape[0]
+    src_shape = [2 * batch] + desc_shape[1:]
+
+    def consts(name, values, mlir_ty):
+        return "\n            ".join(f"%{name}{i} = arith.constant {v} : {mlir_ty}" for i, v in enumerate(values))
+
+    def refs(name):
+        return ", ".join(f"%{name}{i}" for i in range(rank))
+
+    def dense_strides(s):
+        return list(np.cumprod([1] + s[:0:-1]))[::-1]
+
+    src_type = "x".join(str(s) for s in desc_shape) + f"x{ty}"
+    dst_type = "x".join(str(s) for s in shape) + f"x{ty}"
 
     ir = f"""
     #layout = {layout}
     module attributes {{{"ttig.support_2d_block_io," if support_block_io else ""} "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = {int(np.prod(warps_per_cta(layout)))} : i32, ttg.target = "xpu", "ttg.threads-per-warp" = {int(np.prod(layout.threads_per_warp))} : i32}} {{
         tt.func public @block_store(%src: !tt.ptr<{ty}> {{tt.divisibility = 16 : i32}}, %dst: !tt.ptr<{ty}> {{tt.divisibility = 16 : i32}}) {{
-            {shapes_ir}
-            {strides_row_major_ir}
-            %c1_i64 = arith.constant 1 : i64
-            %c0_i32 = arith.constant 0 : i32
+            {consts("src_dim", src_shape, "i32")}
+            {consts("src_str", dense_strides(src_shape), "i64")}
+            {consts("src_off", [batch] + [0] * (rank - 1), "i32")}
+            {consts("dst_dim", shape, "i32")}
+            {consts("dst_str", dense_strides(shape), "i64")}
+            {consts("dst_off", [0] * rank, "i32")}
 
-            %src_ptr = tt.make_tensor_descriptor %src, [{", ".join([f"%dim{i}_i32" for i in range(rank)])}], {"[" + ", ".join(strides_row_major_list) + "]"} : !tt.ptr<{ty}>, !tt.tensordesc<{tensor_type}>
-            %store_val = tt.descriptor_load %src_ptr[{offsets}] {{ttig.block_io = "row_major", padding = 1 : i32}} : !tt.tensordesc<{tensor_type}> -> tensor<{tensor_type}, #layout>
+            %src_desc = tt.make_tensor_descriptor %src, [{refs("src_dim")}], [{refs("src_str")}] : !tt.ptr<{ty}>, !tt.tensordesc<{src_type}>
+            %val = tt.descriptor_load %src_desc[{refs("src_off")}] {{ttig.block_io = "{block_io}", padding = 1 : i32}} : !tt.tensordesc<{src_type}> -> tensor<{dst_type}, #layout>
 
-            %dst_ptr = tt.make_tensor_descriptor %dst, [{", ".join([f"%dim{i}_i32" for i in range(rank)])}], {"[" + ", ".join(strides_row_major_list) + "]"} : !tt.ptr<{ty}>, !tt.tensordesc<{tensor_type}>
-            tt.descriptor_store %dst_ptr [{offsets}], %store_val {{ttig.block_io = "row_major"}} : !tt.tensordesc<{tensor_type}>, tensor<{tensor_type}, #layout>
+            %dst_desc = tt.make_tensor_descriptor %dst, [{refs("dst_dim")}], [{refs("dst_str")}] : !tt.ptr<{ty}>, !tt.tensordesc<{dst_type}>
+            tt.descriptor_store %dst_desc[{refs("dst_off")}], %val {{ttig.block_io = "row_major"}} : !tt.tensordesc<{dst_type}>, tensor<{dst_type}, #layout>
 
             tt.return
         }}
     }}
     """
 
-    torch_dtype = getattr(torch, dtype_str)
     if torch_dtype.is_floating_point:
-        a = torch.randn(shape, dtype=torch_dtype, device=device)
+        a = torch.randn(src_shape, dtype=torch_dtype, device=device)
     else:
-        a = torch.randint(low=-127, high=128, size=shape, dtype=torch_dtype, device=device)
+        a = torch.randint(low=-127, high=128, size=src_shape, dtype=torch_dtype, device=device)
 
-    x = torch.empty_like(a)
+    x = torch.empty(shape, dtype=torch_dtype, device=device)
 
     temp_file = tmp_path / "test_block_io_nd.ttgir"
     temp_file.write_text(ir)
     kernel = triton.compile(str(temp_file))
 
     kernel[(1, 1, 1)](a, x)
-    assert torch.equal(a, x)
+    tile = a[batch:2 * batch]
+    assert torch.equal(tile.transpose(-2, -1) if transpose else tile, x)
 
     if support_block_io:
         llir = kernel.asm["llir"]
