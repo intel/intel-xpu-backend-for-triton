@@ -347,11 +347,17 @@ SwizzledSharedEncodingAttr DpasEncodingAttr::composeSharedLayoutForOperand(
     CGAEncodingAttr cgaLayout, int operandIdx, ArrayRef<int64_t> operandShape,
     ArrayRef<unsigned> sharedOrder, unsigned vectorSize, unsigned elemBitWidth,
     bool needTrans) const {
-  // Determine K dimension based on operand index
-  int kDimIndex = operandIdx == 0 ? 1 : 0;
+  // Determine K dimension based on operand index and rank
+  // For rank-2: opIdx 0 → K at dim 1, opIdx 1 → K at dim 0
+  // For rank-3: opIdx 0 → K at dim 2, opIdx 1 → K at dim 1
+  int rank = sharedOrder.size();
+  int kDimIndex = operandIdx == 0 ? rank - 1 : rank - 2;
 
+  // needTrans swaps the two non-batch dimensions
+  // For rank-2: swap between dim 0 and dim 1 → kDim' = 1 - kDim
+  // For rank-3: swap between dim 1 and dim 2 → kDim' = 3 - kDim
   if (needTrans)
-    kDimIndex = 1 - kDimIndex;
+    kDimIndex = (2 * rank - 3) - kDimIndex;
 
   bool isKContig = sharedOrder[0] == kDimIndex;
 
