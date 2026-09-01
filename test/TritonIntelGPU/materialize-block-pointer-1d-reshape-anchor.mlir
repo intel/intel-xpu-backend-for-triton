@@ -1,15 +1,22 @@
 // RUN: triton-opt %s -split-input-file -tritonintelgpu-materialize-block-pointer -tritonintelgpu-remove-layout-conversions | FileCheck %s
 
-// COM: Regression test: verify that RemoveLayoutConversions does NOT remove
-// COM: the ConvertLayoutOp inserted by reshape1DStridedLoad.  The load encoding
-// COM: matches HW delivery order and must be anchored; without the anchor fix
-// COM: in isExpensiveLoadOrStore the ConvertLayoutOp is eliminated and the load
+// COM: Regression test for how RemoveLayoutConversions treats the two
+// COM: ConvertLayoutOps that reshape1DStridedLoad inserts.
+// COM:
+// COM: The one on the *result* must survive.  The load encoding matches HW
+// COM: delivery order and must be anchored; without the anchor fix in
+// COM: isExpensiveLoadOrStore that ConvertLayoutOp is eliminated and the load
 // COM: encoding is changed, producing incorrect results at runtime.
+// COM:
+// COM: The one on the *pointer* is expected to fold away.  RLC back-propagates
+// COM: the load encoding through the elementwise addptr chain, so the reshape
+// COM: feeds the load directly and no data movement remains.
 
 #blocked1d = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
   // CHECK-LABEL: tt.func @test_convert_layout_survives
-  // CHECK: tt.reshape %{{.*}} allow_reorder efficient_layout
+  // CHECK: tt.reshape %{{.*}} : tensor<1024x!tt.ptr<f16>, {{.*}}> -> tensor<32x32x!tt.ptr<f16>, {{.*}}>
+  // CHECK-NOT: ttg.convert_layout
   // CHECK: tt.load %{{.*}} {ttig.block_io = "row_major", ttig.block_io_stride = 96 : i64}
   // CHECK: tt.reshape %{{.*}} efficient_layout
   // CHECK: ttg.convert_layout
