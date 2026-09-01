@@ -87,8 +87,8 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 #slice_x = #ttg.slice<{dim = 1, parent = #blocked}>
 
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // CHECK-LABEL: llvm.func spir_kernelcc @descriptor_gather_default_path
-  tt.func public @descriptor_gather_default_path(
+  // CHECK-LABEL: llvm.func spir_kernelcc @descriptor_gather_fast_path_nonuniform_ptrs
+  tt.func public @descriptor_gather_fast_path_nonuniform_ptrs(
       %arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32},
       %arg1: tensor<8xi32, #slice_x>,
       %arg2: i32) -> tensor<8x16xf16, #blocked> {
@@ -140,8 +140,8 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 // Test 3: Fast path with numPtrsPerLoad != threadsPerWarp
 //
 // This DPAS dot-op A layout satisfies the gather fast-path tile checks, and it
-// requires fewer pointer-producing lanes than threadsPerWarp. The lowering packs
-// the computed addresses and predicates into vectors and emits
+// requires more number of pointers per load than threadsPerWarp. The lowering packs
+// the computed uniform addresses and predicates into vectors and emits
 // triton_gen.sub_group_gather_load. The test tracks the offset X data flow
 // through the pointer-vector construction.
 //   %arg1 (x_offsets tensor) → unpack → shuffleIdx(lane 0 broadcast)
@@ -156,8 +156,8 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 #slice_x = #ttg.slice<{dim = 1, parent = #dpas}>
 
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // CHECK-LABEL: llvm.func spir_kernelcc @descriptor_gather_fast_path
-  tt.func public @descriptor_gather_fast_path(
+  // CHECK-LABEL: llvm.func spir_kernelcc @descriptor_gather_fast_path_uniform_ptrs
+  tt.func public @descriptor_gather_fast_path_uniform_ptrs(
       %arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32},
       %arg1: tensor<64xi32, #slice_x>,
       %arg2: i32) -> tensor<64x32xf16, #dot0> {

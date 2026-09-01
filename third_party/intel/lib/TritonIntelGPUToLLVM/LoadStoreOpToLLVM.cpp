@@ -2262,10 +2262,12 @@ struct DescriptorGatherConversionBase : public BlockIOConversionBase {
     unsigned numElemsPerTile = numPackedValsPerTile * cfg.numPackedVals;
     unsigned totalBytesPerTile = numElemsPerTile * (elemSizeInBits / 8);
     cfg.bytesPerPtr = mlir::ceil(totalBytesPerTile, cfg.numPtrsPerLoad);
-    cfg.ptrsPerRow = ceil(bytesPerRow, cfg.bytesPerPtr);
+    cfg.ptrsPerRow = mlir::ceil(bytesPerRow, cfg.bytesPerPtr);
     cfg.numElemsPerLoad =
         (sizeInfo.tileHeight * sizeInfo.tileWidth * cfg.numPackedVals) /
         threadsPerWarp;
+    if (cfg.numElemsPerLoad == 0)
+      return failure();
 
     FailureOr<LinearLayout> offsetMapping = buildDescriptorGatherOffsetMapping(
         resultType, offsetsXType, cfg.numPtrsPerLoad, cfg.ptrsPerRow,
@@ -2493,6 +2495,9 @@ private:
       std::optional<LinearLayout> offsetsXLLEncoding =
           cast<DistributedEncodingTrait>(offsetsXType.getEncoding())
               .toLinearLayout(offsetsXType.getShape());
+      if (!offsetsXLLEncoding)
+        return rewriter.notifyMatchFailure(
+            op, "offsetsX encoding not convertible to LinearLayout");
       LinearLayout valueToOffsetMap =
           subLayout.invertAndCompose(*offsetsXLLEncoding);
       valueToOffsetMap = valueToOffsetMap.sublayout({kRegister}, {kRegister});
