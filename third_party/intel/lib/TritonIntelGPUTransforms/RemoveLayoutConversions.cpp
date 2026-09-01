@@ -17,6 +17,7 @@
 #include "mlir/Transforms/Passes.h"
 #include "mlir/Transforms/RegionUtils.h"
 
+#include "intel/include/Analysis/Utility.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/BlockIOUtils.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
@@ -198,7 +199,9 @@ private:
 
 class LayoutRematerialization {
 public:
-  LayoutRematerialization(tt::FuncOp F) : funcOp(F) {}
+  LayoutRematerialization(tt::FuncOp F,
+                          DenseMap<std::pair<Type, Attribute>, int64_t> &cache)
+      : funcOp(F), convertCostCache(cache) {}
 
   // Map the original value to the remat'ed one.
   void addRematValue(Value old, Attribute encoding, Value newV);
@@ -309,6 +312,9 @@ private:
   tt::FuncOp funcOp;
   DominanceInfo domInfo;
   PostDominanceInfo postDomInfo;
+  // Pass-level memoization cache for getConvertCost results. Keyed by
+  // (srcType, resultEncoding) — the cost is a pure function of these two.
+  DenseMap<std::pair<Type, Attribute>, int64_t> &convertCostCache;
 };
 
 void LayoutRematerialization::addRematValue(Value old, Attribute encoding,
@@ -1694,24 +1700,67 @@ static int64_t getByteCount(Value result, int64_t minElementCount = 0,
   return (elementCount * dtypeBitWidth) >> 3;
 }
 
+// Cost per byte of a sub-group shuffle convert, relative to load (8) / arith
+// (1) / SLM (96). Set by cost-model reasoning: a shuffle is a small multiple
+// of a register move, far below an SLM round-trip. No current representative
+// kernel produces a shuffle convert that reaches this path, so the value could
+// not be tuned from a benchmark sweep; refine if such a workload surfaces
+// (#7731).
+static constexpr int64_t SHUFFLE_RATE = 2;
+
 /// Compute the cost of a ConvertLayoutOp with source \p convertSrc producing a
-/// tensor with encoding \p resultEncoding.
-static int64_t getConvertCost(Value convertSrc, Attribute resultEncoding) {
+/// tensor with encoding \p resultEncoding. \p convertCostCache is a pass-level
+/// memoization cache keyed by (srcType, resultEncoding); the cost is a pure
+/// function of these two values so it is always safe to reuse a cached result.
+static int64_t getConvertCost(
+    Value convertSrc, Attribute resultEncoding,
+    DenseMap<std::pair<Type, Attribute>, int64_t> &convertCostCache) {
   auto srcType = cast<RankedTensorType>(convertSrc.getType());
+  // Consult the pass-level cache before doing any layout computation.
+  std::pair<Type, Attribute> cacheKey{srcType, resultEncoding};
+  if (auto it = convertCostCache.find(cacheKey); it != convertCostCache.end())
+    return it->second;
+
   auto resultType = srcType.cloneWithEncoding(resultEncoding);
-  // The minimum element count models the SLM round-trip granularity (one
-  // element per bank). A convert that only reorders registers within a thread
-  // performs no SLM round-trip, so that floor does not apply to it: it inflated
-  // the cost of tiny converts (e.g. a single-element reduction result) by
-  // orders of magnitude, which made rematerialization duplicate a global load
-  // and a reduction in order to remove an almost-free convert (#7540). The
-  // minimum bit width still applies, as sub-word values occupy a full register.
-  int64_t minElementCount = cvtReordersRegisters(srcType, resultType) ? 0 : 32;
-  int64_t convertLayoutBytes = getByteCount(convertSrc, minElementCount, 32);
-  // Intel GPU tuning: 3x factor accounts for higher SLM synchronization cost.
-  // FIXME: measure cost of smem load/store and synchronisation on Intel GPUs,
-  // and refine this model further. (#5476)
-  return 32 * convertLayoutBytes * 3;
+  // Compute once: register-reorder and sub-group-shuffle are disjoint
+  // categories, so the expensive cvtIsSubGroupShuffle call is only needed when
+  // the convert is not a register reorder.
+  bool reordersRegisters = cvtReordersRegisters(srcType, resultType);
+  int64_t cost;
+  // A sub-group shuffle exchanges one register per element across the lanes
+  // of a single warp; it never round-trips through SLM. It scales at roughly
+  // one shuffle per element (#7731), so price it per byte like the other
+  // register-resident ops in this model, not at the SLM rate below. The SLM
+  // element-count floor does not apply (no banking), but a nonzero
+  // minimum-work floor is kept (a shuffle of any nonempty tensor is not
+  // free), and the 32-bit minimum still applies (a sub-word value occupies a
+  // full register). Must stay > 0: a zero cost would make every shuffle
+  // convert look worth removing and drive over-rematerialization (the `>=`
+  // gate in isRematBeneficial; cf. @reduce_cvt2).
+  if (!reordersRegisters && ttgi::cvtIsSubGroupShuffle(srcType, resultType)) {
+    int64_t shuffleBytes =
+        getByteCount(convertSrc, /*minElementCount=*/1, /*minBitWidth=*/32);
+    cost = SHUFFLE_RATE * shuffleBytes;
+  } else {
+    // The minimum element count models the SLM round-trip granularity (one
+    // element per bank). A convert that only reorders registers within a thread
+    // performs no SLM round-trip, so that floor does not apply to it: it
+    // inflated the cost of tiny converts (e.g. a single-element reduction
+    // result) by orders of magnitude, which made rematerialization duplicate a
+    // global load and a reduction in order to remove an almost-free convert
+    // (#7540). The minimum bit width still applies, as sub-word values occupy a
+    // full register.
+    int64_t minElementCount = reordersRegisters ? 0 : 32;
+    int64_t convertLayoutBytes = getByteCount(convertSrc, minElementCount, 32);
+    // 32 × bytes × 3 = 96 × bytes is a coarse model for the SLM round-trip
+    // rate (one load + one store through shared memory, plus synchronisation
+    // barrier). The 32× base factor and ×3 multiplier should be refined with
+    // measured Intel SLM load/store and synchronisation costs on each target
+    // architecture (#7731).
+    cost = 32 * convertLayoutBytes * 3;
+  }
+  convertCostCache[cacheKey] = cost;
+  return cost;
 }
 
 /// Compute the set of values in \p slice that are transitively used outside
@@ -1750,9 +1799,10 @@ static SetVector<Value> getNonSliceOnlyValues(const SetVector<Value> &slice,
 /// Determine whether rematerializing \p slice is beneficial given that it will
 /// eliminate \p convertOp and require creating new convert ops with cost \p
 /// newCvtCost.
-static bool isRematBeneficial(ttg::ConvertLayoutOp convertOp,
-                              const SetVector<Value> &slice,
-                              int64_t newCvtCost) {
+static bool isRematBeneficial(
+    ttg::ConvertLayoutOp convertOp, const SetVector<Value> &slice,
+    int64_t newCvtCost,
+    DenseMap<std::pair<Type, Attribute>, int64_t> &convertCostCache) {
   auto nonSliceOnlyValues = getNonSliceOnlyValues(slice, convertOp);
 
   SetVector<Operation *> sliceOps;
@@ -1760,8 +1810,8 @@ static bool isRematBeneficial(ttg::ConvertLayoutOp convertOp,
     if (Operation *op = v.getDefiningOp())
       sliceOps.insert(op);
 
-  int64_t convertLayoutCost =
-      getConvertCost(convertOp.getSrc(), convertOp.getType().getEncoding());
+  int64_t convertLayoutCost = getConvertCost(
+      convertOp.getSrc(), convertOp.getType().getEncoding(), convertCostCache);
   int64_t rematerialisationCost = newCvtCost;
 
   for (Operation *op : sliceOps) {
@@ -1918,7 +1968,8 @@ void LayoutRematerialization::backwardRematerialization(
   }
 
   // 3. Determine whether rematerialisation is beneficial.
-  if (!isRematBeneficial(convertOp, slice, /*newCvtCost=*/0)) {
+  if (!isRematBeneficial(convertOp, slice, /*newCvtCost=*/0,
+                         convertCostCache)) {
     LDBG("  skipped rematerialization");
     return;
   }
@@ -2069,7 +2120,7 @@ void LayoutRematerialization::hoistConvertDotOperand(
   auto noDataMovement = [](Operation *op) {
     return (op->hasTrait<OpTrait::Elementwise>() && isMemoryEffectFree(op)) ||
            isa<tt::BroadcastOp, ttg::Fp4ToFpOp, ttg::ConvertLayoutOp,
-               ttg::UpcastFpOpInterface>(op) ||
+               ttg::CastFpOpInterface>(op) ||
            isView(op);
   };
   // Stop the slice as soon as we find an operation that cannot be done without
@@ -2227,9 +2278,9 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     LDBG("  skip remat: would degrade a load encoding");
     return;
   }
-  int64_t newCvtCost =
-      getConvertCost(extOrBroadcastOp->getOperand(0), srcEncoding);
-  if (!isRematBeneficial(convertOp, slice, newCvtCost))
+  int64_t newCvtCost = getConvertCost(extOrBroadcastOp->getOperand(0),
+                                      srcEncoding, convertCostCache);
+  if (!isRematBeneficial(convertOp, slice, newCvtCost, convertCostCache))
     return;
 
   // Move the convert before the ext op and rewrite the slice.
@@ -2383,7 +2434,8 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
   // when the duplication cost exceeds the convert cost. Use newCvtCost=0
   // (matching backwardRematerialization pattern) since we're hoisting into
   // branches where the convert would be eliminated.
-  if (!isRematBeneficial(convertOp, slice, /*newCvtCost=*/0)) {
+  if (!isRematBeneficial(convertOp, slice, /*newCvtCost=*/0,
+                         convertCostCache)) {
     // Clean up orphaned convert ops created by hoistRemat before returning.
     for (auto it = newConverts.rbegin(); it != newConverts.rend(); ++it)
       (*it)->erase();
@@ -2393,30 +2445,37 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
   rewriteSlice(slice, layout, convertOp, mapping);
 }
 
-bool backwardRematerialization(ModuleOp module) {
+bool backwardRematerialization(
+    ModuleOp module,
+    DenseMap<std::pair<Type, Attribute>, int64_t> &convertCostCache) {
   bool changed = false;
   module.walk([&](tt::FuncOp funcOp) {
-    LayoutRematerialization layoutRemat(funcOp);
+    LayoutRematerialization layoutRemat(funcOp, convertCostCache);
     changed |= layoutRemat.backwardRematerialization();
     layoutRemat.cleanup();
   });
   return changed;
 }
 
-void hoistConvert(ModuleOp module) {
-  SmallVector<ttg::ConvertLayoutOp> convertOps;
-  module.walk([](tt::FuncOp funcOp) {
-    LayoutRematerialization layoutRemat(funcOp);
-    layoutRemat.hoistConvertOnTopOfExtOrBroadcast();
-    layoutRemat.cleanup();
-
-    layoutRemat = LayoutRematerialization(funcOp);
-    layoutRemat.hoistConvertIntoConditionals();
-    layoutRemat.cleanup();
-
-    layoutRemat = LayoutRematerialization(funcOp);
-    layoutRemat.hoistConvertDotOperand();
-    layoutRemat.cleanup();
+void hoistConvert(
+    ModuleOp module,
+    DenseMap<std::pair<Type, Attribute>, int64_t> &convertCostCache) {
+  module.walk([&](tt::FuncOp funcOp) {
+    {
+      LayoutRematerialization layoutRemat(funcOp, convertCostCache);
+      layoutRemat.hoistConvertOnTopOfExtOrBroadcast();
+      layoutRemat.cleanup();
+    }
+    {
+      LayoutRematerialization layoutRemat(funcOp, convertCostCache);
+      layoutRemat.hoistConvertIntoConditionals();
+      layoutRemat.cleanup();
+    }
+    {
+      LayoutRematerialization layoutRemat(funcOp, convertCostCache);
+      layoutRemat.hoistConvertDotOperand();
+      layoutRemat.cleanup();
+    }
   });
 }
 } // namespace
@@ -2478,10 +2537,16 @@ public:
     // TODO: Increase the default once the IGC crash on paged-attention kernels
     // is resolved (see
     // https://github.com/intel/intel-xpu-backend-for-triton/issues/6447).
+    //
+    // Pass-level memoization cache for getConvertCost: the cost is a pure
+    // function of (srcType, resultEncoding), so results are valid for the
+    // entire pass run. This avoids repeated toLinearLayout + quotient calls
+    // for the same (type, encoding) pair across iterations.
+    DenseMap<std::pair<Type, Attribute>, int64_t> convertCostCache;
     unsigned iteration = 0;
     bool changed = false;
     do {
-      changed = backwardRematerialization(m);
+      changed = backwardRematerialization(m, convertCostCache);
       LLVM_DEBUG({
         DBGS() << "Module after backward remat (iteration " << iteration
                << "):\n";
@@ -2499,7 +2564,7 @@ public:
 
     // 3. For remaining converts, try to hoist them above cast generating larger
     // size types in order to reduce the cost of the convert op.
-    hoistConvert(m);
+    hoistConvert(m, convertCostCache);
     LLVM_DEBUG({
       DBGS() << "Module after hoisting converts:\n";
       m.dump();

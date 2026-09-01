@@ -134,6 +134,24 @@ jobs:
         with:
           use-branch-wheel: ${{ inputs.use_branch_wheel }}
 
+      - name: Report environment details
+        timeout-minutes: 1
+        run: |
+          cat <<EOF | tee "$REPORTS/.env"
+          TIMESTAMP=$(date '+%Y%m%d%H%M%S')
+          GITHUB_RUN_ID=$GITHUB_RUN_ID
+          GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER
+          GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT
+          PYTHON_VERSION=$PYTHON_VERSION
+          TRITON_REPO=$GITHUB_REPOSITORY
+          TRITON_COMMIT_ID=$GITHUB_SHA
+          TRITON_BRANCH=$GITHUB_REF_NAME
+          VLLM_PIN=$(cat scripts/vllm/vllm-pin.txt)
+          VLLM_XPU_KERNELS_PIN=$(cat scripts/vllm/vllm-xpu-kernels-pin.txt)
+          OS=${{ runner.os }}
+          EOF
+          ./scripts/capture-hw-details.sh | tee -a "$REPORTS/.env"
+
       - name: Run vllm unified attention bf16
         if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
         run: |

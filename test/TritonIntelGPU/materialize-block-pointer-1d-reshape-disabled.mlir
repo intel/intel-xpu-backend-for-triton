@@ -67,3 +67,35 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return %result : tensor<1024xf16, #blocked1d_large>
   }
 }
+
+// -----
+
+// COM: Test 3: 1D strided STORE with H > 1 When enabled it reshapes
+// COM: [1024] -> [32, 32], converts the value into the HW delivery encoding
+// COM: and annotates the store. When disabled the original tt.store must survive unchanged.
+
+#blocked1d_large = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @test_1d_strided_store_multi_row
+  tt.func @test_1d_strided_store_multi_row(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: tensor<1024xf16, #blocked1d_large>) {
+    %idx = tt.make_range {start = 0 : i32, end = 1024 : i32} : tensor<1024xi32, #blocked1d_large>
+    %c32 = arith.constant dense<32> : tensor<1024xi32, #blocked1d_large>
+    %c96 = arith.constant dense<96> : tensor<1024xi32, #blocked1d_large>
+    %rem = arith.remui %idx, %c32 : tensor<1024xi32, #blocked1d_large>
+    %div = arith.divui %idx, %c32 : tensor<1024xi32, #blocked1d_large>
+    %mul = arith.muli %div, %c96 : tensor<1024xi32, #blocked1d_large>
+    %off = arith.addi %rem, %mul : tensor<1024xi32, #blocked1d_large>
+    %base = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1024x!tt.ptr<f16>, #blocked1d_large>
+    %ptrs = tt.addptr %base, %off : tensor<1024x!tt.ptr<f16>, #blocked1d_large>, tensor<1024xi32, #blocked1d_large>
+    // DISABLED-NOT: tt.reshape
+    // DISABLED: tt.store %{{.*}}, %{{.*}} : tensor<1024x!tt.ptr<f16>
+    // DISABLED-NOT: ttig.block_io
+    // ENABLED: tt.reshape %{{.*}} : tensor<1024x!tt.ptr<f16>,
+    // ENABLED: tt.reshape %{{.*}} : tensor<1024xf16,
+    // ENABLED: ttg.convert_layout
+    // ENABLED: ttg.convert_layout
+    // ENABLED: tt.store %{{.*}}, %{{.*}} {ttig.block_io = "row_major", ttig.block_io_stride = 96 : i64} : tensor<32x32x!tt.ptr<f16>
+    tt.store %ptrs, %arg1 : tensor<1024x!tt.ptr<f16>, #blocked1d_large>
+    tt.return
+  }
+}

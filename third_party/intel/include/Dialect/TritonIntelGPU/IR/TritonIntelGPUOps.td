@@ -124,10 +124,12 @@ def TTIG_BroadcastOp : TTIG_Op<"broadcast", [Pure, SameOperandsAndResultElementT
   }];
 }
 
-class IsLocalPointerToElementType<string pointer, string value, string summary> :
+// `tt.ptr` no longer spells the workgroup (SLM) address space: PtrAddrSpace
+// only has global/descriptor/constant, and adding a case would break the
+// exhaustive switches every backend has over it. Match the pointee type only.
+class IsPointerToElementType<string pointer, string value, string summary> :
     TypesMatchWith<summary, value, pointer, [{
-      ::mlir::triton::PointerType::get( }] # ElementType<"_self">.result # [{,
-          static_cast<unsigned>(::mlir::triton::TritonGEN::kWorkgroup))
+      ::mlir::triton::PointerType::get( }] # ElementType<"_self">.result # [{)
     }]>;
 
 // NOTE: This operation shouldn't be needed, as simply modifying the encoding
@@ -136,7 +138,7 @@ class IsLocalPointerToElementType<string pointer, string value, string summary> 
 def TTIG_SubGroupTransposeOp
     : TTIG_Op<"sub_group_transpose",
         [AllTypesMatch<["src", "res"]>,
-         IsLocalPointerToElementType<"local_buffer", "src",
+         IsPointerToElementType<"local_buffer", "src",
              "local_buffer can be used to store src in local memory">]> {
   let summary = "Sub-group elements transpose operation";
      let description = [{
