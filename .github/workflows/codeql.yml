@@ -8,7 +8,7 @@ on:
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
-    runs-on: code-scanning
+    runs-on: rss-ubuntu-2404
     permissions:
       # required for all workflows
       security-events: write
@@ -35,6 +35,19 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v7
+
+    # rss-ubuntu-2404 has no C compiler preinstalled; pyenv needs one (plus libffi
+    # for the _ctypes module) to build Python from source.
+    - name: Install build toolchain
+      if: matrix.build-mode == 'manual'
+      run: |
+        if command -v gcc >/dev/null 2>&1; then
+          echo "gcc already present: $(gcc --version | head -n1)"
+        else
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential libffi-dev
+        fi
+        echo "MAX_JOBS=${MAX_JOBS:-2}" >> "$GITHUB_ENV"
 
     # Initialize FIRST so the build tracer is installed before the C/C++ compile.
     - name: Initialize CodeQL
@@ -74,7 +87,7 @@ jobs:
   report:
     name: Generate SDL Security Report
     needs: analyze
-    runs-on: code-scanning
+    runs-on: rss-ubuntu-2404
     permissions:
       security-events: read
       contents: read
