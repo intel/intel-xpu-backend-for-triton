@@ -404,17 +404,18 @@ struct LoadStoreConversionBase {
         valueElemTy, rewriter, boundaryCheck, blockLevelCheck, padding);
   }
 
-  /// Build per-element NaN masks for out-of-bounds elements.
+  /// Build per-element masks identifying out-of-bounds elements.
   ///
   /// Returns a vector of i1 values, one per thread element, where `true`
-  /// means the element is in-bounds. The caller should select NaN for
-  /// elements where the mask is `false`.
+  /// means the element is in-bounds. The caller selects its fill value (NaN
+  /// for PAD_NAN, zero for PAD_ZERO) for elements where the mask is `false`;
+  /// the mask itself is independent of the padding mode.
   ///
   /// \p offsets     Base offsets for each dimension (e.g. descriptor indices).
   /// \p shapes      Boundary shapes for each dimension (i64).
   /// \p tensorType  The result tensor type (determines layout and element
   ///                count).
-  SmallVector<Value> buildNaNMasks(Location loc, ArrayRef<Value> offsets,
+  SmallVector<Value> buildOOBMasks(Location loc, ArrayRef<Value> offsets,
                                    ArrayRef<Value> shapes,
                                    RankedTensorType tensorType,
                                    ConversionPatternRewriter &rewriter) const {
@@ -1106,14 +1107,14 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
 
   /// Unpack a 2D block load result into individual element values.
   /// Populates unpackedLoadedVals[registerIdx] for each unpacked element.
-  /// Optionally applies mask/other/NaN padding when otherElems or
-  /// nanMaskElems are non-empty.
+  /// Optionally applies boundary padding when otherElems or oobMaskElems are
+  /// non-empty; \p useZeroFill picks zero rather than NaN as the fill value.
   static void unpackBlockLoadResult(
       Value ret, MutableArrayRef<Value> unpackedLoadedVals, size_t elemIdx,
       const LinearLayout &regMapping, const LinearLayout &shuffleMapping,
       Type packedDPASOperandType, Type unpackedType, unsigned numValuesPerLoad,
       unsigned numPackedVals, Value pred, ArrayRef<Value> otherElems,
-      ArrayRef<Value> nanMaskElems, Location loc,
+      ArrayRef<Value> oobMaskElems, Location loc,
       ConversionPatternRewriter &rewriter, MLIRContext *ctx,
       bool useZeroFill = false) {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -1167,7 +1168,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
           other = b.insert_element(other, falseVal, b.i32_val(i));
         }
         unpackedVal = b.select(pred, unpackedVal, other);
-      } else if (nanMaskElems.size() != 0) {
+      } else if (oobMaskElems.size() != 0) {
         Type unpackedElemType = getElementTypeOrSelf(unpackedType);
         auto floatType = cast<FloatType>(unpackedElemType);
 
@@ -1189,7 +1190,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
             b.undef(VectorType::get(numElemsPerUnpackedType, i1_ty));
 
         for (const auto [i, registerIdx] : llvm::enumerate(unpackIndices)) {
-          packedPred = b.insert_element(packedPred, nanMaskElems[registerIdx],
+          packedPred = b.insert_element(packedPred, oobMaskElems[registerIdx],
                                         b.i32_val(i));
         }
         unpackedVal = b.select(packedPred, unpackedVal, other);
@@ -3922,7 +3923,7 @@ static LogicalResult lowerBlockLoad2D(
     function_ref<SubTileAddress(unsigned registerIdx,
                                 ArrayRef<std::pair<StringAttr, Value>> offsets)>
         computeAddress,
-    ArrayRef<Value> otherElems, ArrayRef<Value> nanMaskElems,
+    ArrayRef<Value> otherElems, ArrayRef<Value> oobMaskElems,
     std::optional<int> staticBaseHeight,
     const triton::intel::TargetInfo &targetInfo,
     const LLVMTypeConverter *typeConverter, Location loc,
@@ -4013,7 +4014,7 @@ static LogicalResult lowerBlockLoad2D(
     BlockIOConversionBase::unpackBlockLoadResult(
         ret, unpackedLoadedVals, elemIdx, cfg.regMapping, cfg.shuffleMapping,
         cfg.packedDPASOperandType, cfg.unpackedType, cfg.numValuesPerLoad,
-        cfg.numPackedVals, addr.pred, otherElems, nanMaskElems, loc, rewriter,
+        cfg.numPackedVals, addr.pred, otherElems, oobMaskElems, loc, rewriter,
         ctx, useZeroFill);
   }
 
@@ -4120,11 +4121,10 @@ struct Subgroup2DBlockLoadOpConversion
       baseOffsetX = b.add(baseOffsetX, misalignElems);
     }
 
-    // Build NaN masks if pad_nan is set.
-    // Build OOB masks for pad_nan and pad_zero paths. Both use the same mask
-    // (in-bounds predicate per register), differing only in the fill value.
-    SmallVector<Value> nanMaskElems;
-    SmallVector<Value> zeroMaskElems;
+    // Build out-of-bounds masks for the pad_nan and pad_zero paths. The mask is
+    // identical for both — an in-bounds predicate per register — and only the
+    // fill value selected against it differs (see useZeroFill below).
+    SmallVector<Value> oobMaskElems;
     if (op.getPadNan() || op.getPadZero()) {
       SmallVector<Value> resultOffsets(rank, b.i32_val(0));
       SmallVector<Value> resultShapes(rank);
@@ -4141,12 +4141,8 @@ struct Subgroup2DBlockLoadOpConversion
           (contiguousDim == rank - 1) ? rank - 2 : rank - 1;
       resultOffsets[surfaceColDim] = baseOffsetX;
       resultOffsets[surfaceRowDim] = baseOffsetY;
-      auto maskElems =
-          buildNaNMasks(loc, resultOffsets, resultShapes, tensorType, rewriter);
-      if (op.getPadNan())
-        nanMaskElems = maskElems;
-      else
-        zeroMaskElems = maskElems;
+      oobMaskElems =
+          buildOOBMasks(loc, resultOffsets, resultShapes, tensorType, rewriter);
     }
 
     unsigned blockRowIdx = cfg.isTransposeRequired ? cfg.colDim : cfg.rowDim;
@@ -4167,12 +4163,14 @@ struct Subgroup2DBlockLoadOpConversion
 
     // Round base_width up to the hardware alignment requirement for padded
     // loads. This is done AFTER the mask is built so the mask boundary uses
-    // baseWidth as it stands at this point. Note: if alignment compensation ran
-    // above, baseWidth = original + (ptr & 0x3f), but ptr & 0x3f is always 0 at
-    // runtime (hardware requires 64-byte aligned base pointers), so baseWidth
-    // effectively equals the declared surface width here.
-    // For already-aligned constants the arithmetic folds to a no-op; for
-    // runtime values it emits the rounding as IR executed on the GPU.
+    // baseWidth as it stands at this point. If alignment compensation ran
+    // above, baseWidth = original + (ptr & 0x3f); the base pointer is only
+    // guaranteed 4-byte aligned, so that term is a runtime value which may be
+    // non-zero. LowerTo2DBlockLoad requires pitch >= roundedBytes + 65 before
+    // emitting a padded load with a misaligned base_width, which is what keeps
+    // the clamp below inert so this rounding actually takes effect. For
+    // already-aligned constants the arithmetic folds to a no-op; for runtime
+    // values it emits the rounding as IR executed on the GPU.
     Value hwBaseWidth = baseWidth;
     if (op.getPadNan() || op.getPadZero()) {
       unsigned alignBytes = std::max(4u, elemSizeInBits / 8u);
@@ -4227,8 +4225,7 @@ struct Subgroup2DBlockLoadOpConversion
     //           zero mask replaces them with 0.0 via the same mechanism.
     const bool useZeroFill = op.getPadZero().has_value();
     return lowerBlockLoad2D(op, cfg, *llEncoding, pitch, computeAddress,
-                            /*otherElems=*/{},
-                            useZeroFill ? zeroMaskElems : nanMaskElems,
+                            /*otherElems=*/{}, oobMaskElems,
                             /*staticBaseHeight=*/std::nullopt, targetInfo,
                             getTypeConverter(), loc, rewriter, useZeroFill);
   }
@@ -4367,7 +4364,7 @@ struct Subgroup2DBlockLoadFromPtrOpConversion
     };
 
     return lowerBlockLoad2D(op, cfg, *llEncoding, pitch, computeAddress,
-                            otherElems, /*nanMaskElems=*/{},
+                            otherElems, /*oobMaskElems=*/{},
                             /*staticBaseHeight=*/op.getBaseHeight(), targetInfo,
                             getTypeConverter(), loc, rewriter);
   }

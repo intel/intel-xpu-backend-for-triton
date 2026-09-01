@@ -2,16 +2,23 @@
 // shapes. Both PAD_NAN and PAD_ZERO descriptors take this path.
 //
 // Pitch-vs-rounding cases:
-//  (a) pitch < rounded_base_width  →  fallback to scalar (tt.descriptor_load
-//      survives, NO ttig.2d_block_load emitted)
-//  (b) pitch >= rounded_base_width →  ttig.2d_block_load IS emitted.
+//  (a) pitch < minPitch  →  fallback to scalar (tt.descriptor_load survives,
+//      NO ttig.2d_block_load emitted)
+//  (b) pitch >= minPitch →  ttig.2d_block_load IS emitted.
 //      base_width stays at the ORIGINAL (unrounded) value in the op.
 //      LoadStoreOpToLLVM.cpp applies the rounding for the hardware instruction.
+//
+// minPitch = rounded_base_width + kAlignCompBound(65).  The headroom covers the
+// 64-byte base-address alignment compensation applied downstream, which widens
+// base_width by (ptr & 0x3F) — unknowable here — and is unconditional.  With a
+// tight pitch and a base pointer that is not 64-byte aligned, the compensation
+// shifts the surface out from under the requested columns, so a misaligned
+// column count needs real pitch slack (~49 fp16 elements) to be emittable.
 //
 // Background: PVC Max 1100 applies 2D block load OOB checks at i32 (4-byte)
 // granularity.  base_width must be a multiple of 4 bytes (verifier constraint).
 // For fp16 with 15 columns, base_width=30 bytes is not 4-aligned.  Rounding up
-// to 32 is safe when pitch >= 32; otherwise the instruction would violate
+// to 32 is safe when pitch >= minPitch; otherwise the instruction would violate
 // pitch >= base_width, so we fall back to scalar loads.
 //
 // Additional cases:
@@ -30,9 +37,8 @@
 //  (g) PAD_NAN with an aligned column count: `pad_nan` IS still set. Hardware
 //      never fills NaN, so this mask is unconditional — the asymmetry with (f)
 //      is deliberate.
-//  (h)/(i) Non-zero column index: 64-byte alignment compensation widens
-//      base_width by `ptr & 0x3F` before rounding, so the pitch must clear
-//      roundedBytes + kAlignCompBound (65) rather than just roundedBytes.
+//  (h)/(i) Bracket minPitch exactly for a wider column count: the pitch must
+//      clear roundedBytes + kAlignCompBound (65), not just roundedBytes.
 
 // RUN: triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load \
 // RUN:   | FileCheck %s
@@ -41,7 +47,8 @@
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
   // COM: (a) Contiguous fp16 tensor with 15 columns: pitch = 15*2 = 30 bytes.
-  // COM: rounded_base_width = ceil(30/4)*4 = 32 bytes.  30 < 32 -> scalar fallback.
+  // COM: rounded_base_width = ceil(30/4)*4 = 32, minPitch = 32 + 65 = 97.
+  // COM: 30 < 97 -> scalar fallback.
   // COM: The tt.descriptor_load must survive (not be converted to 2d_block_load).
   // CHECK-LABEL: tt.func @pad_nan_scalar_fallback
   // CHECK: tt.descriptor_load
@@ -51,7 +58,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %c15_i64 = arith.constant 15  : i64
     %c1_i64  = arith.constant 1   : i64
     %c0_i32  = arith.constant 0   : i32
-    // shape=[%m, 15], stride=[15, 1]  →  pitch = 15*2 = 30 bytes < rounded=32
+    // shape=[%m, 15], stride=[15, 1]  →  pitch = 15*2 = 30 bytes < minPitch=97
     %desc = tt.make_tensor_descriptor %arg0, [%m, %c15], [%c15_i64, %c1_i64]
               {padding = 2 : i32} : <f16>, !tt.tensordesc<64x16xf16, #dot0>
     %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32]
@@ -81,11 +88,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
   // CHECK-SAME: {row_major, pad_nan}
   tt.func @pad_nan_rounded_base_width(%arg0: !tt.ptr<f16>, %m: i32) -> tensor<64x16xf16, #dot0> {
     %c15     = arith.constant 15  : i32
-    %c16_i64 = arith.constant 16  : i64
+    %c64_i64 = arith.constant 64  : i64
     %c1_i64  = arith.constant 1   : i64
     %c0_i32  = arith.constant 0   : i32
-    // shape=[%m, 15], stride=[16, 1]  →  pitch = 16*2 = 32 bytes >= rounded=32
-    %desc = tt.make_tensor_descriptor %arg0, [%m, %c15], [%c16_i64, %c1_i64]
+    // shape=[%m, 15], stride=[64, 1]  →  pitch = 64*2 = 128 bytes >= minPitch=97
+    %desc = tt.make_tensor_descriptor %arg0, [%m, %c15], [%c64_i64, %c1_i64]
               {padding = 2 : i32} : <f16>, !tt.tensordesc<64x16xf16, #dot0>
     %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32]
            {ttig.block_io = "row_major", ttig.desc_padding = 2 : i32}
@@ -147,13 +154,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
   tt.func @pad_nan_row_major_a_odd_row_count_should_not_fallback(%arg0: !tt.ptr<f16>) -> tensor<128x16xf16, #dot0_ra> {
     %c127    = arith.constant 127 : i32  // M-1 = 127 (odd): row-major A, no VNNI
     %c15     = arith.constant 15  : i32  // N-1 = 15 (misaligned col count)
-    %c16_i64 = arith.constant 16  : i64  // pitch stride = 16 elements
+    %c64_i64 = arith.constant 64  : i64  // pitch stride = 64 elements
     %c1_i64  = arith.constant 1   : i64
     %c0_i32  = arith.constant 0   : i32
-    // A descriptor: shape=[127, 15], stride=[16, 1] -> pitch=32 >= rounded(30)=32
+    // A descriptor: shape=[127, 15], stride=[64, 1] -> pitch=128 >= minPitch=97
     // Row count 127 is odd: outer shape check INCORRECTLY causes scalar fallback
     // for A because A has no VNNI row-pairing — the check should not apply here.
-    %desc = tt.make_tensor_descriptor %arg0, [%c127, %c15], [%c16_i64, %c1_i64]
+    %desc = tt.make_tensor_descriptor %arg0, [%c127, %c15], [%c64_i64, %c1_i64]
               {padding = 2 : i32} : <f16>, !tt.tensordesc<128x16xf16, #dot0_ra>
     %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32]
            {ttig.block_io = "row_major", ttig.desc_padding = 2 : i32}
@@ -180,10 +187,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
   tt.func @pad_zero_misaligned_sets_pad_zero(%arg0: !tt.ptr<f16>, %m: i32) -> tensor<64x16xf16, #dot0_ez> {
     %c15     = arith.constant 15  : i32
-    %c16_i64 = arith.constant 16  : i64
+    %c64_i64 = arith.constant 64  : i64
     %c1_i64  = arith.constant 1   : i64
     %c0_i32  = arith.constant 0   : i32
-    %desc = tt.make_tensor_descriptor %arg0, [%m, %c15], [%c16_i64, %c1_i64]
+    // pitch = 64*2 = 128 bytes >= minPitch = roundedBytes(32) + 65
+    %desc = tt.make_tensor_descriptor %arg0, [%m, %c15], [%c64_i64, %c1_i64]
               {padding = 1 : i32} : <f16>, !tt.tensordesc<64x16xf16, #dot0_ez>
     %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32]
            {ttig.block_io = "row_major", ttig.desc_padding = 1 : i32}
@@ -255,11 +263,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
-// Case (h): non-zero column index, pitch just BELOW the required headroom.
-// A non-zero column index means LoadStoreOpToLLVM's 64-byte alignment
-// compensation can widen base_width by up to 63 bytes (`ptr & 0x3F`) BEFORE
-// rounding, so the pitch has to clear roundedBytes + kAlignCompBound, not just
-// roundedBytes.
+// Case (h): pitch just BELOW the required headroom.
+// The 64-byte alignment compensation can widen base_width by up to 63 bytes
+// (`ptr & 0x3F`), so the pitch has to clear roundedBytes + kAlignCompBound, not
+// just roundedBytes.  The column index here is non-zero, but the bound does not
+// depend on it — the compensation in TritonGENToLLVMPass.cpp is unconditional.
 //   colBytes = 63*2 = 126, roundedBytes = 128, minPitch = 128 + 65 = 193
 //   pitch = 96*2 = 192  <  193  ->  scalar fallback
 // This pins kAlignCompBound: with the plain `pitch >= roundedBytes` check this

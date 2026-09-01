@@ -311,15 +311,14 @@ private:
     for (unsigned d = 0; d + 2 < rank; ++d)
       batchStrides.push_back(strides[d + (descRank - rank)]);
 
-    // Determine padding mode from the descriptor. PAD_ZERO is the default for
-    // `tt.make_tensor_descriptor`, so it covers the vast majority of loads.
-    bool padNan = padding == tt::PaddingOption::PAD_NAN;
-    bool padZero = padding == tt::PaddingOption::PAD_ZERO;
-    UnitAttr padNanAttr = padNan ? builder.getUnitAttr() : UnitAttr();
-    // `pad_zero` is only set when the boundary fixup below is actually needed
-    // (see `colNeedsRounding`). Hardware already zero-fills out-of-bounds
-    // elements, so for an aligned base_width the attribute would only add
-    // redundant rounding arithmetic and selects at LLVM lowering.
+    // Does the descriptor request boundary padding? PAD_NAN and PAD_ZERO need
+    // the identical analysis below and differ only in the attribute attached to
+    // the resulting op, so they are one condition here. PAD_ZERO is the default
+    // for `tt.make_tensor_descriptor`, so it covers the vast majority of loads.
+    const bool isPadded = padding == tt::PaddingOption::PAD_NAN ||
+                          padding == tt::PaddingOption::PAD_ZERO;
+    // Set below when base_width is not kAlignBytes-aligned and LLVM lowering
+    // will therefore round it up.
     bool colNeedsRounding = false;
 
     // PVC Max 1100 applies OOB boundary checks at i32 (4-byte) granularity for
@@ -343,7 +342,7 @@ private:
     // For the K-row direction in VNNI loads (base_height), we currently always
     // fall back when the row count is odd, as there is no pitch equivalent in
     // the height direction.
-    if (padNan || padZero) {
+    if (isPadded) {
       const unsigned elemSizeInBytes = elemSizeInBits / 8;
       // kAlignBytes must match the alignment used in LoadStoreOpToLLVM.cpp:
       // std::max(4u, elemSizeInBits/8u). For all currently supported element
@@ -351,8 +350,11 @@ private:
       // constants must be updated consistently.
       constexpr unsigned kAlignBytes = 4; // i32 word = hardware OOB granularity
 
-      // Extra pitch headroom required beyond roundedBytes to account for
-      // 64-byte alignment compensation in LoadStoreOpToLLVM.cpp:
+      // Extra pitch headroom required beyond roundedBytes to account for the
+      // 64-byte base-address alignment compensation applied downstream. The
+      // base pointer is only guaranteed 4-byte aligned, so the compensation
+      // widens base_width by (ptr & 0x3F) — a runtime quantity we cannot bound
+      // any tighter than 63 here:
       //   offsetInBytes = ptr & 0x3F  (at most 63 bytes)
       //   hwBaseWidth   = roundUp(colBytes + offsetInBytes, kAlignBytes)
       //                 ≤ colBytes + 63 + (kAlignBytes - 1)
@@ -364,6 +366,15 @@ private:
       // hwBaseWidth ≤ pitch for all element types.
       // kAlignCompBound = ALIGNMENT_MASK + (kAlignBytes-1) - min(r) = 63+3-1 =
       // 65
+      //
+      // The headroom is unconditional. computeAlignedBasePtrWidthAndOffset in
+      // TritonGENToLLVMPass.cpp runs for every 2D block IO op on targets that
+      // require compensation, independent of the column index. The additional
+      // pre-application in LoadStoreOpToLLVM.cpp is gated on a non-zero column
+      // index, but that gate exists only as a workaround for suboptimal IGC
+      // instruction scheduling (issue #6540) — it changes the order in which
+      // widening and rounding are applied, not whether widening happens. Do not
+      // reintroduce a column-index condition on this bound.
       constexpr int64_t kAlignCompBound = 63 + (kAlignBytes - 1) - 1; // = 65
 
       // Column direction: align base_width to kAlignBytes.
@@ -391,15 +402,7 @@ private:
               d->getOperand(2 * descRank - 1));
           int64_t pitchBytes = pitchSt ? (*pitchSt * elemSizeInBytes) : 0;
 
-          // Alignment compensation in LoadStoreOpToLLVM adds offsetInBytes
-          // (ptr & 0x3F) to baseWidth before rounding. This only fires when
-          // the column descriptor index is non-zero, so we only need the extra
-          // headroom in that case.
-          auto colIdxConst =
-              tt::intel::getFoldedConstantValue(op.getIndices()[descRank - 1]);
-          const bool colMayBeNonZero = !colIdxConst || *colIdxConst != 0;
-          const int64_t minPitch =
-              roundedBytes + (colMayBeNonZero ? kAlignCompBound : 0);
+          const int64_t minPitch = roundedBytes + kAlignCompBound;
 
           if (!pitchSt || pitchBytes < minPitch) {
             // pitch too small or unknown: cannot safely widen base_width.
@@ -453,9 +456,16 @@ private:
     // PAD_NAN always needs the mask (hardware fills zero, not NaN). PAD_ZERO
     // only needs it when base_width is rounded up at LLVM lowering: rounding
     // makes the hardware treat the padding bytes as in-bounds, so the mask has
-    // to restore the zero fill the hardware would have done otherwise.
+    // to restore the zero fill the hardware would have done otherwise. For an
+    // aligned base_width the hardware zero fill is already exact, and the
+    // attribute would only add rounding arithmetic and per-register selects.
+    UnitAttr padNanAttr = (padding == tt::PaddingOption::PAD_NAN)
+                              ? builder.getUnitAttr()
+                              : UnitAttr();
     UnitAttr padZeroAttr =
-        (padZero && colNeedsRounding) ? builder.getUnitAttr() : UnitAttr();
+        (padding == tt::PaddingOption::PAD_ZERO && colNeedsRounding)
+            ? builder.getUnitAttr()
+            : UnitAttr();
 
     auto blockLoadOp = ttgi::Subgroup2DBlockLoadOp::create(
         builder, loc, op.getType(), basePtr, baseWidth, baseHeight, basePitch,
