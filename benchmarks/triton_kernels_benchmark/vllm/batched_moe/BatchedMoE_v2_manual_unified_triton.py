@@ -20,6 +20,25 @@ import triton
 import triton.language as tl
 
 
+def dequant_to_bf16(q, scale, block_shape=None):
+    """Dequantize a batched fp8 tensor to bf16 by applying its scale.
+
+    Mirrors vLLM's tests.kernels.quant_utils.dequant: per-tensor / per-token
+    scales broadcast directly; block scales (block_shape != None) are expanded
+    to full resolution over the trailing two dims before multiplying.
+    """
+    if scale is None:
+        return q.to(torch.bfloat16)
+    f = q.to(torch.float32)
+    if block_shape is None:
+        return (f * scale).to(torch.bfloat16)
+    block_n, block_k = block_shape
+    s = torch.repeat_interleave(scale, block_n, dim=-2)
+    s = torch.repeat_interleave(s, block_k, dim=-1)
+    s = s[..., :f.shape[-2], :f.shape[-1]]
+    return (f * s).to(torch.bfloat16)
+
+
 def normalize_batched_scales_shape(scales, num_experts):
     if scales is not None and scales.ndim < 3:
         if scales.numel() == 1:
@@ -365,12 +384,16 @@ class Model(torch.nn.Module):
         self.QUANT = QUANT  # 0=bf16, 1=fp8_w8a8, 2=int8_w8a16
         self._packed = False
         self._A_cached_ptr = None
+        self._A_scale = None
+        self._B_scale = None
+        self._block_shape = None
 
     def _pack_weights(self, A: torch.Tensor, B: torch.Tensor):
         device = A.device
         if self.QUANT == 1:
-            # gpu-15 fp8 trick: B = B.to(fp8).to(bf16) once. Kernel runs as bf16.
-            self._B_bf16_quant = B.to(torch.float8_e4m3fn).to(torch.bfloat16)
+            # gpu-15 fp8 trick: dequant B (fp8) to bf16 once, applying its scale.
+            # Kernel then runs as bf16 (quant absorbed host-side).
+            self._B_bf16_quant = dequant_to_bf16(B, self._B_scale, self._block_shape)
         elif self.QUANT == 2:
             # gpu-17/18/19 int8 trick: cache B as int8 + per-N B_scale.
             self._B_int8 = B.to(torch.int8)
@@ -381,14 +404,21 @@ class Model(torch.nn.Module):
         self._packed = True
 
     def forward(self, A: torch.Tensor, B: torch.Tensor,
-                expert_num_tokens: torch.Tensor) -> torch.Tensor:
+                expert_num_tokens: torch.Tensor,
+                A_scale: torch.Tensor = None, B_scale: torch.Tensor = None,
+                block_shape=None) -> torch.Tensor:
+        if self.QUANT == 1:
+            # Stash scales/block_shape so _pack_weights can dequant B correctly.
+            self._A_scale = A_scale
+            self._B_scale = B_scale
+            self._block_shape = block_shape
         if not self._packed:
             self._pack_weights(A, B)
 
         if self.QUANT == 1:
-            # Cache A's quant-bf16 conversion on data_ptr identity.
+            # Cache A's dequant-to-bf16 conversion on data_ptr identity.
             if self._A_cached_ptr != A.data_ptr():
-                self._A_bf16_quant = A.to(torch.float8_e4m3fn).to(torch.bfloat16)
+                self._A_bf16_quant = dequant_to_bf16(A, A_scale, block_shape)
                 self._A_cached_ptr = A.data_ptr()
             A_in = self._A_bf16_quant
             B_in = self._B_bf16_quant

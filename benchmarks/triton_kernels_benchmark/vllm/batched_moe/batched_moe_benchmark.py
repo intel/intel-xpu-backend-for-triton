@@ -280,12 +280,23 @@ def get_batched_mm_benchmark(
 
         elif provider == 'xeforge':
             # Standalone unified BatchedMoE kernel. Its Model runs the same
-            # batched (E, M, N) grouped GEMM as the triton provider (bf16,
-            # QUANT=0), so it compares directly against the torch reference.
-            model = XeForgeModel(num_experts, max_tokens_per_expert, K, N, QUANT=0)
+            # batched (E, M, N) grouped GEMM as the triton provider, so it
+            # compares directly against the torch reference.
+            #   * bf16 (QUANT=0): plain batched GEMM on the bf16 operands.
+            #   * fp8  (QUANT=1): the gpu-15 "host bf16 trick" — dequant the fp8
+            #     operands to bf16 (applying A_scale/B_scale) once host-side,
+            #     then run the bf16 kernel. Matches the fp8 torch reference.
+            quant = 1 if fp8 else 0
+            model = XeForgeModel(num_experts, max_tokens_per_expert, K, N, QUANT=quant)
 
-            def xeforge_fn():
-                return model(A_q, B_q, num_expert_tokens)
+            if fp8:
+
+                def xeforge_fn():
+                    return model(A_q, B_q, num_expert_tokens, A_scale, B_scale, block_shape)
+            else:
+
+                def xeforge_fn():
+                    return model(A_q, B_q, num_expert_tokens)
 
             benchmark_suite.assert_close(xeforge_fn, torch_fn, atol=atol, rtol=rtol, err_msg='xeforge to torch')
             _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
