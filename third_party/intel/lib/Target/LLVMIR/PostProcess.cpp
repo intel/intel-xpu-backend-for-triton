@@ -148,6 +148,40 @@ void expandSubByteBitwiseAnd(Module &module) {
   }
 }
 
+// W/A for GPUToLLVMSPV's hardcoded names, there are four parameterless names that omit
+// the trailing 'v' that is required for an empty parameter list.
+//
+// ex. `_Z16get_sub_group_id` never demangles, so the SPIRV translator leaves it as an
+// external call and Level Zero rejects the module with an unresolved import.
+// It should be `_Z16get_sub_group_idv`.
+//
+// Names are matched exactly.
+void fixSubGroupMangling(Module &module) {
+  static constexpr StringRef MalformedNames[] = {
+      "_Z16get_sub_group_id", "_Z18get_num_sub_groups",
+      "_Z18get_sub_group_size", "_Z22get_sub_group_local_id"};
+
+  for (StringRef malformed : MalformedNames) {
+    Function *func = module.getFunction(malformed);
+    if (!func || !func->isDeclaration() || func->arg_size() != 0)
+      // continue if the function is not present in the module, is not a declaration, or has parameters.
+      continue;
+
+    std::string fixed = (malformed + "v").str();
+
+    // If the correctly mangled declaration already exists, forward uses to it.
+    if (Function *existing = module.getFunction(fixed)) {
+      if (existing->getFunctionType() == func->getFunctionType()) {
+        func->replaceAllUsesWith(existing);
+        func->eraseFromParent();
+      }
+      continue;
+    }
+
+    func->setName(fixed);
+  }
+}
+
 void postProcessLLVMIR(llvm::Module &mod) {
   // __devicelib_assert_fail must be a declaration so that
   // IGC can replace it with a runtime assert function.
@@ -167,6 +201,9 @@ void postProcessLLVMIR(llvm::Module &mod) {
   // Widen sub-byte bit ops forbidden by SPV_INTEL_int4.
   expandSubByteBitReverse(mod);
   expandSubByteBitwiseAnd(mod);
+
+  // Repair no-parameter subgroup name manglings before SPIR-V translation.
+  fixSubGroupMangling(mod);
 }
 
 } // namespace mlir::triton::intel
