@@ -161,27 +161,38 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
 // accumulator (%acc_g) only as a REGION CAPTURE inside an scf.if's body --
 // %acc_g is referenced directly from the then-branch, it is NOT passed as a
 // formal top-level operand of the scf.if (whose only top-level operand is
-// %cond). This is the same hazard as invalid.mlir's
-// carried_depends_on_acc_no_distribute, but reached via nested-region capture
-// rather than a direct top-level operand -- the safety check must walk into
-// nested regions, not just each slice member's top-level operands, to catch it.
+// %cond). The ownership analysis must walk into nested regions, not just each
+// slice member's top-level operands, to see the read: the chain reads exactly
+// one accumulator, so index 2 is OWNED by dot0's loop.
 //
-// Why it is rejected rather than placed in the loop that owns %acc_g: carried
-// chains are replicated into BOTH distributed loops and their result is taken
-// from the first one, so this chain would read the frozen pass-through %acc_g
-// slot in the second loop. Keeping it in the first loop only would need
-// per-iter_arg ownership (clone into the owning loop, freeze the slot in the
-// other, wire the result from the owner) plus a check that the other loop never
-// reads that iter_arg; see the follow-up issue.
-// CHECK-LABEL: @carried_captures_accumulator_no_distribute
-// CHECK: scf.for
-// CHECK:   tt.dot
-// CHECK-NOT: scf.for
-// CHECK:   tt.dot
-// CHECK:   scf.yield
-// CHECK-NOT: scf.for
+// Consequently the scf.if is cloned into the FIRST loop only; the second loop
+// freezes index 2 (yields its own block argument unchanged), and the function
+// result for index 2 is wired from the first loop. Replicating the chain into
+// both loops instead would make the second copy read that loop's frozen
+// pass-through %acc_g slot.
+// CHECK-LABEL: @carried_captures_accumulator_distribute
+// CHECK: %[[ACC_INIT:.*]] = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
+// CHECK: %[[LOOP1:.*]]:3 = scf.for {{.*}}iter_args(%[[L1_ACCG:[^ ]+]] = %[[ACC_INIT]], %[[L1_ACCFC:[^ ]+]] = %[[ACC_INIT]], %[[L1_CARRY:[^ ]+]] = %[[ACC_INIT]])
+// CHECK:   %[[X1:.*]] = tt.descriptor_load %arg0
+// CHECK:   %[[WG:.*]] = tt.descriptor_load %arg1
+// CHECK:   %[[D0:.*]] = tt.dot %[[X1]], %[[WG]], %[[L1_ACCG]]
+// CHECK-NOT: tt.dot
+// CHECK:   %[[NEW_CARRY:.*]] = scf.if
+// CHECK:     arith.addf %[[L1_ACCG]], %[[L1_ACCG]]
+// CHECK:     scf.yield %[[L1_CARRY]]
+// CHECK:   scf.yield %[[D0]], %[[L1_ACCFC]], %[[NEW_CARRY]]
+// CHECK: %[[LOOP2:.*]]:3 = scf.for {{.*}}iter_args(%[[L2_ACCG:[^ ]+]] = %[[ACC_INIT]], %[[L2_ACCFC:[^ ]+]] = %[[ACC_INIT]], %[[L2_CARRY:[^ ]+]] = %[[ACC_INIT]])
+// The owned chain's scf.if is NOT replicated here.
+// CHECK-NOT: scf.if
+// CHECK:   %[[X2:.*]] = tt.descriptor_load %arg0
+// CHECK:   %[[WFC:.*]] = tt.descriptor_load %arg2
+// CHECK:   %[[D1:.*]] = tt.dot %[[X2]], %[[WFC]], %[[L2_ACCFC]]
+// CHECK-NOT: tt.dot
+// Index 2 is frozen here: yielded unchanged.
+// CHECK:   scf.yield %[[L2_ACCG]], %[[D1]], %[[L2_CARRY]]
+// CHECK: tt.return %[[LOOP1]]#0, %[[LOOP2]]#1, %[[LOOP1]]#2
 module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  tt.func @carried_captures_accumulator_no_distribute(%arg0: !tt.tensordesc<128x64xbf16>, %arg1: !tt.tensordesc<64x128xbf16>, %arg2: !tt.tensordesc<64x128xbf16>, %cond: i1) -> (tensor<128x128xf32>, tensor<128x128xf32>) {
+  tt.func @carried_captures_accumulator_distribute(%arg0: !tt.tensordesc<128x64xbf16>, %arg1: !tt.tensordesc<64x128xbf16>, %arg2: !tt.tensordesc<64x128xbf16>, %cond: i1) -> (tensor<128x128xf32>, tensor<128x128xf32>, tensor<128x128xf32>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
     %c0_i32 = arith.constant 0 : i32
     %c64_i32 = arith.constant 64 : i32
@@ -202,6 +213,6 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
       }
       scf.yield %d0, %d1, %new_carry : tensor<128x128xf32>, tensor<128x128xf32>, tensor<128x128xf32>
     }
-    tt.return %0#0, %0#1 : tensor<128x128xf32>, tensor<128x128xf32>
+    tt.return %0#0, %0#1, %0#2 : tensor<128x128xf32>, tensor<128x128xf32>, tensor<128x128xf32>
   }
 }

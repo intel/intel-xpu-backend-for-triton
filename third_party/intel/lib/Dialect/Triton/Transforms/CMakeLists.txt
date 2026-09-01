@@ -7,6 +7,7 @@ add_triton_library(TritonIntelTransforms
   RemoveMasks.cpp
   RewriteTensorDescriptorToPointer.cpp
   SimplifySignedArithmetic.cpp
+  SpeculateSignedDivRem.cpp
   StrideVersioning.cpp
 
   DEPENDS
