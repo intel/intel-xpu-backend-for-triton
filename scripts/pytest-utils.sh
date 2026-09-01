@@ -11,6 +11,15 @@ TRITON_TEST_IGNORE_ERRORS="${TRITON_TEST_IGNORE_ERRORS:-false}"
 TRITON_TEST_RUN_ALL="${TRITON_TEST_RUN_ALL:-false}"
 TRITON_TEST_EXIT_CODE=0
 
+# When a test suite is split into shards, every shard writes a report for the same
+# test suite, so reports must go to different directories, otherwise they overwrite
+# each other when report artifacts of all shards are merged. The directory name must
+# start with `test-report`, because only such report subdirectories are taken into
+# account by `triton-utils` by default.
+if [[ -v TRITON_TEST_SHARDS && -v TRITON_TEST_SHARD_NUMBER ]]; then
+    TRITON_TEST_REPORTS_DIR="$TRITON_TEST_REPORTS_DIR/test-reports-shard-$TRITON_TEST_SHARD_NUMBER"
+fi
+
 if [[ $TEST_UNSKIP = true ]]; then
     TRITON_TEST_IGNORE_ERRORS=true
 fi
@@ -84,8 +93,21 @@ pytest() {
         fi
     fi
 
+    if [[ -v TRITON_TEST_SHARDS && -v TRITON_TEST_SHARD_NUMBER ]]; then
+        pytest_extra_args+=(
+            "--shard-id=$TRITON_TEST_SHARD_NUMBER"
+            "--num-shards=$TRITON_TEST_SHARDS"
+            "--sharding-mode=round-robin"
+        )
+        USING_SHARDS=true
+    else
+        USING_SHARDS=false
+    fi
+
     export TEST_UNSKIP
-    python -u -m pytest "${pytest_extra_args[@]}" "$@" || handle_test_error
+    # Exit code 5 means no tests were collected, which is not an error for a shard:
+    # a shard may get no tests at all if the suite has fewer tests than shards.
+    python -u -m pytest "${pytest_extra_args[@]}" "$@" || [[ $? -eq 5 && $USING_SHARDS = true ]] || handle_test_error
 }
 
 capture_runtime_env() {
