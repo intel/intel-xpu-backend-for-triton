@@ -16,12 +16,25 @@
 
 #blocked1d = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  // COM: The ConvertLayoutOp must survive *between* the load and the reshape back
+  // COM: to 1D, and that reshape must keep the result encoding it was created with
+  // COM: rather than having the anchored load encoding propagated into it.  Binding
+  // COM: the encodings makes this assert that property: an earlier version of these
+  // COM: CHECKs only required *some* ttg.convert_layout to appear near the second
+  // COM: reshape, which was also satisfied by a convert that layout propagation had
+  // COM: inserted after rewriting the reshape's encoding.
+  // COM:
+  // COM: Note the pointer reshape's operand encoding is *not* the function's 1D
+  // COM: encoding: RemoveLayoutConversions back-propagates the load encoding through
+  // COM: the elementwise addptr chain, so it becomes a #ttg.linear layout.  Only the
+  // COM: final reshape's result is required to match the 1D return type.
   // CHECK-LABEL: tt.func @test_convert_layout_survives
-  // CHECK: tt.reshape %{{.*}} : tensor<1024x!tt.ptr<f16>, {{.*}}> -> tensor<32x32x!tt.ptr<f16>, {{.*}}>
-  // CHECK-NOT: ttg.convert_layout
-  // CHECK: tt.load %{{.*}} {ttig.block_io = "row_major", ttig.block_io_stride = 96 : i64}
-  // CHECK: tt.reshape %{{.*}} efficient_layout
-  // CHECK: ttg.convert_layout
+  // CHECK:      [[PTRS:%.*]] = tt.reshape %{{.*}} : tensor<1024x!tt.ptr<f16>, #{{[a-z0-9_]+}}> -> tensor<32x32x!tt.ptr<f16>, #[[BHW:[a-z0-9_]+]]>
+  // CHECK-NOT:  ttg.convert_layout
+  // CHECK:      [[LOAD:%.*]] = tt.load [[PTRS]], %{{.*}} {ttig.block_io = "row_major", ttig.block_io_stride = 96 : i64} : tensor<32x32x!tt.ptr<f16>, #[[BHW]]>
+  // CHECK:      [[CVT:%.*]] = ttg.convert_layout [[LOAD]] : tensor<32x32xf16, #[[BHW]]> -> tensor<32x32xf16, #[[BNAT:[a-z0-9_]+]]>
+  // CHECK:      [[RES:%.*]] = tt.reshape [[CVT]] efficient_layout : tensor<32x32xf16, #[[BNAT]]> -> tensor<1024xf16, #[[B1D:[a-z0-9_]+]]>
+  // CHECK-NEXT: tt.return [[RES]] : tensor<1024xf16, #[[B1D]]>
   tt.func @test_convert_layout_survives(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> tensor<1024xf16, #blocked1d> {
     %idx = tt.make_range {start = 0 : i32, end = 1024 : i32} : tensor<1024xi32, #blocked1d>
     %c32 = arith.constant dense<32> : tensor<1024xi32, #blocked1d>
