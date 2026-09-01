@@ -36,3 +36,4 @@ echo "Applying PyTorch patches in $REPO_ROOT"
 
 # put your patch applies here
 apply_patch patch/skip-test-topk-xpu.patch
+apply_patch patch/revert_ext_oneapi_wait_and_throw.patch
