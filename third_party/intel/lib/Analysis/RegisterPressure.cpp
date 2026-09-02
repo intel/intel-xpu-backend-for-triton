@@ -3,9 +3,21 @@
 #include "mlir/IR/Matchers.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/ADT/STLExtras.h"
+
+#include <array>
 
 using namespace mlir;
 using namespace mlir::triton;
+
+namespace {
+/// The set of `grf-mode` values `RegisterPressureAnalysis::getGRFBytesPerThread`
+/// assigns a real, mode-specific budget to. Anything else silently collapses
+/// to its "default" fallback inside that function, so an unrecognized value
+/// is caught and warned about here instead.
+constexpr std::array<StringRef, 5> kValidGRFModes = {"default", "auto", "128",
+                                                     "256", "512"};
+} // namespace
 
 namespace mlir::triton::gpu::intel {
 
@@ -44,6 +56,23 @@ unsigned RegisterPressureAnalysis::getGRFBytesPerThread(StringRef grfMode) {
       .Case("256", 8192)
       .Case("512", 16384)
       .Default(4096);
+}
+
+unsigned RegisterPressureAnalysis::getPerLaneGRFBudgetInBytes(StringRef grfMode,
+                                                              ModuleOp mod) {
+  if (!llvm::is_contained(kValidGRFModes, grfMode))
+    mod.emitWarning("unrecognized grf-mode '" + grfMode +
+                    "'; falling back to the 'default' GRF budget");
+  unsigned grfBudget = getGRFBytesPerThread(grfMode);
+  int threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(mod);
+  if (threadsPerWarp <= 0) {
+    mod.emitWarning(
+        "ttg.threads-per-warp is missing or non-positive; cannot convert "
+        "the per-hardware-thread GRF budget to a per-lane figure, falling "
+        "back to the unscaled per-thread budget");
+    return grfBudget;
+  }
+  return grfBudget / static_cast<unsigned>(threadsPerWarp);
 }
 
 bool RegisterPressureAnalysis::isRematerializable(Value value) const {
