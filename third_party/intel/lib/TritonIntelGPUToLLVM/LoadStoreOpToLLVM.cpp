@@ -1108,7 +1108,7 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
   /// Unpack a 2D block load result into individual element values.
   /// Populates unpackedLoadedVals[registerIdx] for each unpacked element.
   /// Optionally applies boundary padding when otherElems or oobMaskElems are
-  /// non-empty; \p useZeroFill picks zero rather than NaN as the fill value.
+  /// non-empty.
   static void unpackBlockLoadResult(
       Value ret, MutableArrayRef<Value> unpackedLoadedVals, size_t elemIdx,
       const LinearLayout &regMapping, const LinearLayout &shuffleMapping,
@@ -4162,20 +4162,11 @@ struct Subgroup2DBlockLoadOpConversion
       return failure();
 
     // Round base_width up to the hardware alignment requirement for padded
-    // loads. This is done AFTER the mask is built so the mask boundary uses
-    // baseWidth as it stands at this point. If alignment compensation ran
-    // above, baseWidth = original + (ptr & 0x3f); the base pointer is only
-    // guaranteed 4-byte aligned, so that term is a runtime value which may be
-    // non-zero. LowerTo2DBlockLoad requires pitch >= roundedBytes + 65 before
-    // emitting a padded load with a misaligned base_width, which is what keeps
-    // the clamp below inert so this rounding actually takes effect. For
-    // already-aligned constants the arithmetic folds to a no-op; for runtime
-    // values it emits the rounding as IR executed on the GPU.
+    // loads.
     Value hwBaseWidth = baseWidth;
     if (op.getPaddingMode()) {
       unsigned alignBytes = std::max(4u, elemSizeInBits / 8u);
       Value align = b.i32_val(alignBytes);
-      // roundUp(x, a) = ((x + a - 1) / a) * a
       Value rounded = b.mul(
           b.udiv(b.add(baseWidth, b.i32_val(alignBytes - 1)), align), align);
       // Clamp to pitch: hardware requires base_width <= pitch. When the static

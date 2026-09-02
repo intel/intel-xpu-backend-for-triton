@@ -311,43 +311,11 @@ private:
     for (unsigned d = 0; d + 2 < rank; ++d)
       batchStrides.push_back(strides[d + (descRank - rank)]);
 
-    // Does the descriptor request boundary padding? PAD_NAN and PAD_ZERO need
-    // the identical analysis below and differ only in the attribute attached to
-    // the resulting op, so they are one condition here. PAD_ZERO is the default
-    // for `tt.make_tensor_descriptor`, so it covers the vast majority of loads.
     const bool isPadded = padding == tt::PaddingOption::PAD_NAN ||
                           padding == tt::PaddingOption::PAD_ZERO;
-    // Set below when base_width is not kAlignBytes-aligned and LLVM lowering
-    // will therefore round it up.
     bool colNeedsRounding = false;
-
-    // PVC Max 1100 applies OOB boundary checks at i32 (4-byte) granularity for
-    // 2D block loads, even for fp16 (elem_size_in_bits=16).  When base_width is
-    // not a multiple of 4 bytes, the last partial i32 word is considered OOB
-    // and hardware zeroes it — including any in-bounds fp16 element it
-    // contains. The 2Dblockload verifier enforces: base_width % max(4,
-    // elemSize) == 0.
-    //
-    // Fix strategy for the column direction (base_width):
-    //   1. If base_width is not 4-byte aligned, check pitch from the
-    //   descriptor.
-    //      Let rounded = ceil(base_width/4)*4.
-    //   2. If pitch >= rounded: emit the 2D block load. base_width is NOT
-    //      rounded here — it flows through at its original value. The rounding
-    //      is applied in LoadStoreOpToLLVM.cpp (after the NaN/zero mask is
-    //      built using the original value, so the mask boundary stays correct).
-    //   3. If pitch < rounded (contiguous tensor with no padding row): a valid
-    //      2D block load cannot be emitted; fall back to scalar loads.
-    //
-    // For the K-row direction in VNNI loads (base_height), we currently always
-    // fall back when the row count is odd, as there is no pitch equivalent in
-    // the height direction.
     if (isPadded) {
       const unsigned elemSizeInBytes = elemSizeInBits / 8;
-      // kAlignBytes must match the alignment used in LoadStoreOpToLLVM.cpp:
-      // std::max(4u, elemSizeInBits/8u). For all currently supported element
-      // types (<=4 bytes), 4 dominates. If a >4-byte type is added, both
-      // constants must be updated consistently.
       constexpr unsigned kAlignBytes = 4; // i32 word = hardware OOB granularity
 
       // Extra pitch headroom required beyond roundedBytes to account for the
@@ -366,21 +334,9 @@ private:
       // hwBaseWidth ≤ pitch for all element types.
       // kAlignCompBound = ALIGNMENT_MASK + (kAlignBytes-1) - min(r) = 63+3-1 =
       // 65
-      //
-      // The headroom is unconditional. computeAlignedBasePtrWidthAndOffset in
-      // TritonGENToLLVMPass.cpp runs for every 2D block IO op on targets that
-      // require compensation, independent of the column index. The additional
-      // pre-application in LoadStoreOpToLLVM.cpp is gated on a non-zero column
-      // index, but that gate exists only as a workaround for suboptimal IGC
-      // instruction scheduling (issue #6540) — it changes the order in which
-      // widening and rounding are applied, not whether widening happens. Do not
-      // reintroduce a column-index condition on this bound.
-      constexpr int64_t kAlignCompBound = 63 + (kAlignBytes - 1) - 1; // = 65
+      constexpr int64_t kAlignCompBound = 65;
 
       // Column direction: align base_width to kAlignBytes.
-      // MakeTensorDescOp operand layout: base(0), shapes[rank](1..rank),
-      //   strides[rank](rank+1..2*rank).  Column count = operand(descRank),
-      //   pitch stride = operand(2*descRank-1).
       for (auto d : allDescs) {
         const auto descColCount =
             tt::intel::getFoldedConstantValue(d->getOperand(descRank));
@@ -412,39 +368,29 @@ private:
                  << " — 2D block load skipped for: " << *op);
             return;
           }
-          // pitch >= rounded: safe to emit the 2D block load. base_width
-          // stays at the original (unrounded) value; LoadStoreOpToLLVM.cpp
-          // rounds it for the hardware instruction after building the NaN mask.
+
           LDBG("Padded load: base_width="
                << colBytes << " will be rounded to " << roundedBytes
                << " at LLVM lowering (pitch=" << pitchBytes << "): " << *op);
         }
       }
 
-      // Row direction: i32 granularity OOB check applies only to VNNI (B
-      // operand) loads where multiple K-rows are packed into each i32 word:
-      //   fp16/bf16 (2 bytes): 2 rows per i32 word
-      //   int8/fp8  (1 byte):  4 rows per i32 word
-      // Row-major A loads have no row packing — odd row counts are fine.
-      // Unlike the column direction there is no pitch equivalent for
-      // base_height, so we cannot round up — fall back to scalar when needed.
+      // Row direction: i32 granularity OOB check applies only to VNNI
+      // loads where multiple K-rows are packed into each i32 word
       auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(encoding);
       const bool isVNNILoad = dotOpEnc && dotOpEnc.getOpIdx() == 1;
       if (isVNNILoad) {
-        // Granularity = rows packed per i32 word = kAlignBytes /
-        // elemSizeInBytes
         const unsigned vnniGranularity = kAlignBytes / elemSizeInBytes;
         // TODO: non-constant row count returns !sh=true (conservatively
         // passes), but a runtime odd row count still causes the i32-pairing
         // problem at runtime. A proper fix requires either a runtime check or
         // restricting this path to constant-only row counts.
-        bool outerShapeAligned =
-            llvm::all_of(allDescs, [&](tt::MakeTensorDescOp d) {
-              const auto shape = tt::intel::getFoldedConstantValue(
-                  d->getOperand(1 + (descRank - 2)));
-              return !shape || (*shape % vnniGranularity == 0);
-            });
-        if (!outerShapeAligned) {
+        bool rowsAligned = llvm::all_of(allDescs, [&](tt::MakeTensorDescOp d) {
+          const auto descRowCount = tt::intel::getFoldedConstantValue(
+              d->getOperand(1 + (descRank - 2)));
+          return !descRowCount || (*descRowCount % vnniGranularity == 0);
+        });
+        if (!rowsAligned) {
           LDBG("Padded load: odd VNNI K-row count — 2D block load skipped "
                "for: "
                << *op);

@@ -1,44 +1,5 @@
 // Tests for boundary-padded descriptor loads with non-4-byte-aligned inner
 // shapes. Both PAD_NAN and PAD_ZERO descriptors take this path.
-//
-// Pitch-vs-rounding cases:
-//  (a) pitch < minPitch  →  fallback to scalar (tt.descriptor_load survives,
-//      NO ttig.2d_block_load emitted)
-//  (b) pitch >= minPitch →  ttig.2d_block_load IS emitted.
-//      base_width stays at the ORIGINAL (unrounded) value in the op.
-//      LoadStoreOpToLLVM.cpp applies the rounding for the hardware instruction.
-//
-// minPitch = rounded_base_width + kAlignCompBound(65).  The headroom covers the
-// 64-byte base-address alignment compensation applied downstream, which widens
-// base_width by (ptr & 0x3F) — unknowable here — and is unconditional.  With a
-// tight pitch and a base pointer that is not 64-byte aligned, the compensation
-// shifts the surface out from under the requested columns, so a misaligned
-// column count needs real pitch slack (~49 fp16 elements) to be emittable.
-//
-// Background: PVC Max 1100 applies 2D block load OOB checks at i32 (4-byte)
-// granularity.  base_width must be a multiple of 4 bytes (verifier constraint).
-// For fp16 with 15 columns, base_width=30 bytes is not 4-aligned.  Rounding up
-// to 32 is safe when pitch >= minPitch; otherwise the instruction would violate
-// pitch >= base_width, so we fall back to scalar loads.
-//
-// Additional cases:
-//  (c) int8 B operand VNNI with K_rows=2: must fall back to scalar because
-//      int8 packs 4 rows per i32 word (granularity 4/1=4) and 2 % 4 != 0.
-//      Fixed: outerShapeAligned uses kAlignBytes/elemSizeBytes as granularity.
-//  (d) Row-major A operand with compile-time odd row count: must emit
-//      ttig.2d_block_load (A has no VNNI row-pairing issue).
-//      Fixed: outerShapeAligned check restricted to VNNI B operand (opIdx==1).
-//  (e) PAD_ZERO with a misaligned column count: `pad_zero` IS set, because the
-//      lowering rounds base_width up and the mask must restore the zero fill.
-//  (f) PAD_ZERO with an aligned column count: `pad_zero` is NOT set. No
-//      rounding happens, so the hardware's own zero fill is already exact and
-//      the attribute would only add dead arithmetic. PAD_ZERO is the default
-//      for `tt.make_tensor_descriptor`, so this is the common path.
-//  (g) PAD_NAN with an aligned column count: `pad_nan` IS still set. Hardware
-//      never fills NaN, so this mask is unconditional — the asymmetry with (f)
-//      is deliberate.
-//  (h)/(i) Bracket minPitch exactly for a wider column count: the pitch must
-//      clear roundedBytes + kAlignCompBound (65), not just roundedBytes.
 
 // RUN: triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load \
 // RUN:   | FileCheck %s
@@ -73,11 +34,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
-  // COM: (b) Padded fp16 tensor: 15 valid columns but pitch stride = 16 elements.
-  // COM: pitch = 16*2 = 32 bytes >= rounded_base_width = 32 bytes.
-  // COM: The pass emits ttig.2d_block_load with base_width = ORIGINAL 30 bytes
-  // COM: (15 elements * 2 bytes). Rounding to 32 happens in LoadStoreOpToLLVM.
-  // COM: This also validates that the pitch-aware path is taken (not scalar).
+  // COM: (b) Padded fp16 tensor: 15 valid columns, pitch stride = 64 elements.
+  // COM: pitch = 64*2 = 128 bytes. rounded_base_width = ceil(30/4)*4 = 32,
+  // COM: minPitch = rounded_base_width + 65 = 97, so 128 >= 97 and the pass
+  // COM: emits ttig.2d_block_load with base_width = ORIGINAL 30 bytes.
+  // COM: Rounding to 32 happens later in LoadStoreOpToLLVM.
   // CHECK-LABEL: tt.func @pad_nan_rounded_base_width
   // CHECK-NOT: tt.descriptor_load
   // Capture the base_width SSA value (result of the muli on the extracted shape).
@@ -91,7 +52,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %c64_i64 = arith.constant 64  : i64
     %c1_i64  = arith.constant 1   : i64
     %c0_i32  = arith.constant 0   : i32
-    // shape=[%m, 15], stride=[64, 1]  →  pitch = 64*2 = 128 bytes >= minPitch=97
     %desc = tt.make_tensor_descriptor %arg0, [%m, %c15], [%c64_i64, %c1_i64]
               {padding = 2 : i32} : <f16>, !tt.tensordesc<64x16xf16, #dot0>
     %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32]
@@ -104,7 +64,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 // -----
 
 // Case (c): int8 B operand (VNNI) with K_rows=2.
-// The outerShapeAligned check uses vnniGranularity = kAlignBytes/elemSizeBytes.
+// The row count check uses vnniGranularity = kAlignBytes/elemSizeBytes.
 // For int8 (1 byte): 4/1=4. K_rows=2 % 4 != 0, so the hardware may zero rows
 // 0-1 as part of the OOB coarse i32 check.
 // Correct behavior: fall back to scalar (tt.descriptor_load survives).
