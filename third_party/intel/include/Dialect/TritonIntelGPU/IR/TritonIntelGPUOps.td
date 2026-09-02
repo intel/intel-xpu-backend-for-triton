@@ -234,19 +234,17 @@ def TTIG_Subgroup2DBlockLoadOp : TTIG_Op<"2d_block_load"> {
     / `base_pitch` (those describe a single 2D surface only), so they must be
     supplied by the producer of this op.
 
-    When `pad_nan` is set, the LLVM lowering builds boundary masks from
-    the surface dimensions and fills out-of-bounds elements with NaN.
-    Otherwise, the hardware zero-fills out-of-bounds elements.
-
-    `pad_zero` requests the same explicit boundary masking but with a zero
-    fill value. It is only set when the lowering rounds `base_width` up to
-    the hardware alignment granularity: the rounding makes the hardware treat
-    the padding bytes as in-bounds, so the mask has to restore the zero fill
-    the hardware would otherwise have applied. For an already-aligned
-    `base_width`, hardware zero-filling is exact and the attribute is omitted.
-
-    `pad_nan` and `pad_zero` are mutually exclusive: the verifier rejects
-    setting both.
+    `padding_mode` selects the boundary fill value: `pad_nan` makes the LLVM
+    lowering build boundary masks from the surface dimensions and fill
+    out-of-bounds elements with NaN (the hardware never fills NaN itself, so
+    this mask is unconditional whenever requested). `pad_zero` requests the
+    same explicit boundary masking but with a zero fill value, and is only
+    set when the lowering rounds `base_width` up to the hardware alignment
+    granularity: the rounding makes the hardware treat the padding bytes as
+    in-bounds, so the mask has to restore the zero fill the hardware would
+    otherwise have applied. For an already-aligned `base_width`, hardware
+    zero-filling is exact and the attribute is omitted. When absent, no
+    boundary mask is built and the hardware's own zero-fill applies as-is.
   }];
 
   let arguments = (ins
@@ -258,8 +256,7 @@ def TTIG_Subgroup2DBlockLoadOp : TTIG_Op<"2d_block_load"> {
     I32:$offset_x,
     I32:$offset_y,
     Variadic<I64>:$batch_strides,
-    OptionalAttr<UnitAttr>:$pad_nan,
-    OptionalAttr<UnitAttr>:$pad_zero,
+    OptionalAttr<TTIG_PaddingMode>:$padding_mode,
     TTIG_BlockIOMode:$memory_layout
   );
 
@@ -268,8 +265,7 @@ def TTIG_Subgroup2DBlockLoadOp : TTIG_Op<"2d_block_load"> {
     $base_ptr `,` $base_width `,` $base_height `,` $base_pitch
     `[` $offset_x `,` $offset_y `]`
     (`batch_strides` `[` $batch_strides^ `]`)?
-    `{` $memory_layout (`,` `pad_nan` $pad_nan^)?
-                       (`,` `pad_zero` $pad_zero^)? `}`
+    `{` $memory_layout (`,` $padding_mode^)? `}`
     attr-dict `:` type($base_ptr) `->` type($result)
   }];
   let hasVerifier = 1;

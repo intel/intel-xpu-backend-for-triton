@@ -4125,7 +4125,7 @@ struct Subgroup2DBlockLoadOpConversion
     // identical for both — an in-bounds predicate per register — and only the
     // fill value selected against it differs (see useZeroFill below).
     SmallVector<Value> oobMaskElems;
-    if (op.getPadNan() || op.getPadZero()) {
+    if (op.getPaddingMode()) {
       SmallVector<Value> resultOffsets(rank, b.i32_val(0));
       SmallVector<Value> resultShapes(rank);
       for (unsigned i = 0; i < rank; ++i) {
@@ -4172,7 +4172,7 @@ struct Subgroup2DBlockLoadOpConversion
     // already-aligned constants the arithmetic folds to a no-op; for runtime
     // values it emits the rounding as IR executed on the GPU.
     Value hwBaseWidth = baseWidth;
-    if (op.getPadNan() || op.getPadZero()) {
+    if (op.getPaddingMode()) {
       unsigned alignBytes = std::max(4u, elemSizeInBits / 8u);
       Value align = b.i32_val(alignBytes);
       // roundUp(x, a) = ((x + a - 1) / a) * a
@@ -4223,7 +4223,7 @@ struct Subgroup2DBlockLoadOpConversion
     // PAD_NAN: hardware loads, NaN mask replaces OOB elements with NaN.
     // PAD_ZERO: hardware loads (base_width rounded, OOB appears in-bounds),
     //           zero mask replaces them with 0.0 via the same mechanism.
-    const bool useZeroFill = op.getPadZero().has_value();
+    const bool useZeroFill = op.getPaddingMode() == PaddingMode::PadZero;
     return lowerBlockLoad2D(op, cfg, *llEncoding, pitch, computeAddress,
                             /*otherElems=*/{}, oobMaskElems,
                             /*staticBaseHeight=*/std::nullopt, targetInfo,

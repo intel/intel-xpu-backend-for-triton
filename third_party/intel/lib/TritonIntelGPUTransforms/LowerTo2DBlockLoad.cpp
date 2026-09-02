@@ -459,17 +459,17 @@ private:
     // to restore the zero fill the hardware would have done otherwise. For an
     // aligned base_width the hardware zero fill is already exact, and the
     // attribute would only add rounding arithmetic and per-register selects.
-    UnitAttr padNanAttr = (padding == tt::PaddingOption::PAD_NAN)
-                              ? builder.getUnitAttr()
-                              : UnitAttr();
-    UnitAttr padZeroAttr =
-        (padding == tt::PaddingOption::PAD_ZERO && colNeedsRounding)
-            ? builder.getUnitAttr()
-            : UnitAttr();
+    ttgi::PaddingModeAttr paddingModeAttr;
+    if (padding == tt::PaddingOption::PAD_NAN)
+      paddingModeAttr = ttgi::PaddingModeAttr::get(builder.getContext(),
+                                                   ttgi::PaddingMode::PadNan);
+    else if (padding == tt::PaddingOption::PAD_ZERO && colNeedsRounding)
+      paddingModeAttr = ttgi::PaddingModeAttr::get(builder.getContext(),
+                                                   ttgi::PaddingMode::PadZero);
 
     auto blockLoadOp = ttgi::Subgroup2DBlockLoadOp::create(
         builder, loc, op.getType(), basePtr, baseWidth, baseHeight, basePitch,
-        offsetX, offsetY, batchStrides, padNanAttr, padZeroAttr,
+        offsetX, offsetY, batchStrides, paddingModeAttr,
         ttgi::BlockIOModeAttr::get(builder.getContext(), memLayout));
 
     // Propagate one_matrix_per_load attribute if present.
