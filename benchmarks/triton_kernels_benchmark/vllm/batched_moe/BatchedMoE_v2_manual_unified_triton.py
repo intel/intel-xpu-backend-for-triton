@@ -20,25 +20,6 @@ import triton
 import triton.language as tl
 
 
-def dequant_to_bf16(q, scale, block_shape=None):
-    """Dequantize a batched fp8 tensor to bf16 by applying its scale.
-
-    Mirrors vLLM's tests.kernels.quant_utils.dequant: per-tensor / per-token
-    scales broadcast directly; block scales (block_shape != None) are expanded
-    to full resolution over the trailing two dims before multiplying.
-    """
-    if scale is None:
-        return q.to(torch.bfloat16)
-    f = q.to(torch.float32)
-    if block_shape is None:
-        return (f * scale).to(torch.bfloat16)
-    block_n, block_k = block_shape
-    s = torch.repeat_interleave(scale, block_n, dim=-2)
-    s = torch.repeat_interleave(s, block_k, dim=-1)
-    s = s[..., :f.shape[-2], :f.shape[-1]]
-    return (f * s).to(torch.bfloat16)
-
-
 def normalize_batched_scales_shape(scales, num_experts):
     if scales is not None and scales.ndim < 3:
         if scales.numel() == 1:
@@ -372,7 +353,8 @@ def invoke_moe_batched_triton_kernel(
 
 # ---------------------------------------------------------------------------
 # Model class — pack-once weight cache + pre-allocated C buffer.
-# Implements the gpu-15 fp8->bf16 host trick and the gpu-17/18/19 int8 caching.
+# fp8_w8a8 runs the kernel's native fp8 path (operands stay fp8, scales applied
+# in-kernel); int8_w8a16 uses the gpu-17/18/19 int8 caching.
 # ---------------------------------------------------------------------------
 class Model(torch.nn.Module):
     def __init__(self, E: int, M: int, K: int, N: int, QUANT: int = 0):
@@ -381,20 +363,12 @@ class Model(torch.nn.Module):
         self.M = M
         self.K = K
         self.N = N
-        self.QUANT = QUANT  # 0=bf16, 1=fp8_w8a8, 2=int8_w8a16
+        self.QUANT = QUANT  # 0=bf16, 1=fp8_w8a8 (native), 2=int8_w8a16
         self._packed = False
-        self._A_cached_ptr = None
-        self._A_scale = None
-        self._B_scale = None
-        self._block_shape = None
 
     def _pack_weights(self, A: torch.Tensor, B: torch.Tensor):
         device = A.device
-        if self.QUANT == 1:
-            # gpu-15 fp8 trick: dequant B (fp8) to bf16 once, applying its scale.
-            # Kernel then runs as bf16 (quant absorbed host-side).
-            self._B_bf16_quant = dequant_to_bf16(B, self._B_scale, self._block_shape)
-        elif self.QUANT == 2:
+        if self.QUANT == 2:
             # gpu-17/18/19 int8 trick: cache B as int8 + per-N B_scale.
             self._B_int8 = B.to(torch.int8)
             self._B_scale_w8a16 = torch.ones(self.E, 1, self.N,
@@ -407,35 +381,27 @@ class Model(torch.nn.Module):
                 expert_num_tokens: torch.Tensor,
                 A_scale: torch.Tensor = None, B_scale: torch.Tensor = None,
                 block_shape=None) -> torch.Tensor:
-        if self.QUANT == 1:
-            # Stash scales/block_shape so _pack_weights can dequant B correctly.
-            self._A_scale = A_scale
-            self._B_scale = B_scale
-            self._block_shape = block_shape
         if not self._packed:
             self._pack_weights(A, B)
 
+        blk = None
         if self.QUANT == 1:
-            # Cache A's dequant-to-bf16 conversion on data_ptr identity.
-            if self._A_cached_ptr != A.data_ptr():
-                self._A_bf16_quant = dequant_to_bf16(A, A_scale, block_shape)
-                self._A_cached_ptr = A.data_ptr()
-            A_in = self._A_bf16_quant
-            B_in = self._B_bf16_quant
-            A_scale = None
-            B_scale = None
-            use_fp8_flag = False     # kernel runs bf16; quant already absorbed host-side
+            # Native fp8: operands stay fp8, the kernel dequants per-tile using
+            # the scales (per-tensor at the epilogue, block per K-group).
+            A_in, B_in = A, B
+            a_scale, b_scale = A_scale, B_scale
+            use_fp8_flag = True
             use_int8_w8a16 = False
+            blk = block_shape
         elif self.QUANT == 2:
             A_in = A
             B_in = self._B_int8
-            A_scale = None
-            B_scale = self._B_scale_w8a16
+            a_scale, b_scale = None, self._B_scale_w8a16
             use_fp8_flag = False
             use_int8_w8a16 = True
         else:
             A_in, B_in = A, B
-            A_scale, B_scale = None, None
+            a_scale, b_scale = None, None
             use_fp8_flag = False
             use_int8_w8a16 = False
 
@@ -443,10 +409,10 @@ class Model(torch.nn.Module):
         invoke_moe_batched_triton_kernel(
             A_in, B_in, self._C_buf, expert_num_tokens,
             compute_type=tl.bfloat16,
-            A_scale=A_scale, B_scale=B_scale, B_zp=None,
+            A_scale=a_scale, B_scale=b_scale, B_zp=None,
             use_fp8_w8a8=use_fp8_flag, use_int8_w8a16=use_int8_w8a16,
             use_int4_w4a16=False,
             per_act_token_quant=False,
-            block_shape=None,
+            block_shape=blk,
         )
         return self._C_buf

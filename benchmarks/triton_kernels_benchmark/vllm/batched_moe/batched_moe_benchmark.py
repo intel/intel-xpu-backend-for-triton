@@ -283,9 +283,9 @@ def get_batched_mm_benchmark(
             # batched (E, M, N) grouped GEMM as the triton provider, so it
             # compares directly against the torch reference.
             #   * bf16 (QUANT=0): plain batched GEMM on the bf16 operands.
-            #   * fp8  (QUANT=1): the gpu-15 "host bf16 trick" — dequant the fp8
-            #     operands to bf16 (applying A_scale/B_scale) once host-side,
-            #     then run the bf16 kernel. Matches the fp8 torch reference.
+            #   * fp8  (QUANT=1): native fp8 GEMM — operands stay fp8 and the
+            #     kernel dequants per-tile with A_scale/B_scale (apples-to-apples
+            #     with the triton fp8 provider). Matches the fp8 torch reference.
             quant = 1 if fp8 else 0
             model = XeForgeModel(num_experts, max_tokens_per_expert, K, N, QUANT=quant)
 
