@@ -27,7 +27,7 @@ on:
       use_pyenv_python:
         description: Use Python built with pyenv
         type: boolean
-        default: true
+        default: false
 
 permissions: read-all
 
