@@ -158,7 +158,7 @@ jobs:
             done
           fi
           for s in $SEQUENTIAL_SUITES; do
-            matrix="$matrix, {\"suite\":\"$s\",\"shard_id\":0}"
+            matrix="$matrix, {\"suite\":\"$s\",\"shard_id\":-1}"
           done
           echo "matrix=[${matrix#,}]" | tee -a $GITHUB_OUTPUT
 
@@ -197,7 +197,7 @@ jobs:
           path: reports
 
   integration-tests:
-    name: ${{ format('Integration tests {0}{1}', matrix.loop.suite, matrix.loop.shard_id && format(' - shard {0}', matrix.loop.shard_id) || '') }}
+    name: ${{ format('Integration tests {0}{1}', matrix.loop.suite, matrix.loop.shard_id >= 0 && format(' - shard {0}', matrix.loop.shard_id) || '') }}
     needs: build
     strategy:
       fail-fast: false
