@@ -1,16 +1,18 @@
 // RUN: triton-opt %s -split-input-file -tritonintelgpu-materialize-block-pointer -tritonintelgpu-remove-layout-conversions | FileCheck %s
 
-// COM: Regression test for how RemoveLayoutConversions treats the two
-// COM: ConvertLayoutOps that reshape1DStridedLoad inserts.
+// COM: Regression test for how RemoveLayoutConversions treats the ConvertLayoutOps
+// COM: that reshape1DStridedLoad inserts: one per reshaped operand (pointer, and
+// COM: mask when the load is masked) plus one on the result.
 // COM:
 // COM: The one on the *result* must survive.  The load encoding matches HW
 // COM: delivery order and must be anchored; without the anchor fix in
 // COM: isExpensiveLoadOrStore that ConvertLayoutOp is eliminated and the load
 // COM: encoding is changed, producing incorrect results at runtime.
 // COM:
-// COM: The one on the *pointer* is expected to fold away.  RLC back-propagates
-// COM: the load encoding through the elementwise addptr chain, so the reshape
-// COM: feeds the load directly and no data movement remains.
+// COM: The ones on the *pointer* and *mask* are expected to fold away.  RLC
+// COM: back-propagates the load encoding through the elementwise addptr chain and
+// COM: into the mask constant, so the reshapes feed the load directly and no data
+// COM: movement remains — which the CHECK-NOT below pins.
 
 #blocked1d = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
