@@ -137,6 +137,10 @@ def get_batched_mm_benchmark(
         supported_providers['sycl-tla'] = 'sycl-tla'
 
     supported_providers['xeforge'] = 'xeforge'
+    if is_fp8:
+        # xeforge's fp8 strategy (host bf16 trick) as a separate line; only
+        # meaningful for fp8 (nothing to convert in the bf16 case).
+        supported_providers['xeforge-bf16trick'] = 'xeforge-bf16trick'
 
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
     configs = MM_CONFIGS_FP8 if is_fp8 else MM_CONFIGS_BF16
@@ -278,15 +282,25 @@ def get_batched_mm_benchmark(
                 quantiles=quantiles,
             )
 
-        elif provider == 'xeforge':
+        elif provider in ('xeforge', 'xeforge-bf16trick'):
             # Standalone unified BatchedMoE kernel. Its Model runs the same
             # batched (E, M, N) grouped GEMM as the triton provider, so it
             # compares directly against the torch reference.
             #   * bf16 (QUANT=0): plain batched GEMM on the bf16 operands.
-            #   * fp8  (QUANT=1): native fp8 GEMM — operands stay fp8 and the
-            #     kernel dequants per-tile with A_scale/B_scale (apples-to-apples
-            #     with the triton fp8 provider). Matches the fp8 torch reference.
-            quant = 1 if fp8 else 0
+            #   * fp8, 'xeforge' (QUANT=1): native fp8 GEMM — operands stay fp8
+            #     and the kernel dequants per-tile with A_scale/B_scale. This is
+            #     apples-to-apples with the triton fp8 provider (both do the fp8
+            #     work in-kernel, timed every call).
+            #   * fp8, 'xeforge-bf16trick' (QUANT=3): xeforge's own fp8 strategy
+            #     — dequant fp8->bf16 host-side (B once, A cached) then run the
+            #     bf16 kernel. Faster, but the conversion is excluded from timing
+            #     so it is NOT comparable to triton's in-kernel fp8 work.
+            if not fp8:
+                quant = 0
+            elif provider == 'xeforge-bf16trick':
+                quant = 3
+            else:
+                quant = 1
             model = XeForgeModel(num_experts, max_tokens_per_expert, K, N, QUANT=quant)
 
             if fp8:
@@ -298,7 +312,7 @@ def get_batched_mm_benchmark(
                 def xeforge_fn():
                     return model(A_q, B_q, num_expert_tokens)
 
-            benchmark_suite.assert_close(xeforge_fn, torch_fn, atol=atol, rtol=rtol, err_msg='xeforge to torch')
+            benchmark_suite.assert_close(xeforge_fn, torch_fn, atol=atol, rtol=rtol, err_msg=f'{provider} to torch')
             _, min_ms, max_ms, mean_ms, cv = benchmark_suite.do_bench(
                 xeforge_fn,
                 n_warmup=n_warmup,

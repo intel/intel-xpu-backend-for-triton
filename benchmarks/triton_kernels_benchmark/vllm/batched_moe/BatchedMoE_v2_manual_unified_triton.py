@@ -20,6 +20,32 @@ import triton
 import triton.language as tl
 
 
+def dequant_to_bf16(q, scale, block_shape=None):
+    """Dequantize a batched fp8 tensor to bf16 by applying its scale.
+
+    Used by the fp8 "host bf16 trick" (QUANT=3). Dequantizes per-expert into a
+    preallocated bf16 output: XPU casts fp8 -> f32 under the hood, so a
+    whole-tensor dequant would hold a 4x-fp8 fp32 temp (which OOMs the larger
+    llama4/qwen fp8 B matrices). Looping over experts bounds that temp to a
+    single (rows, cols) slice, keeping peak at ~2x fp8. Per-tensor / per-token
+    scales broadcast directly; block scales are expanded over the trailing dims.
+    """
+    if scale is None:
+        return q.to(torch.bfloat16)
+    out = torch.empty(q.shape, dtype=torch.bfloat16, device=q.device)
+    if block_shape is None:
+        for e in range(q.shape[0]):
+            out[e] = (q[e].to(torch.float32) * scale[e]).to(torch.bfloat16)
+        return out
+    block_n, block_k = block_shape
+    for e in range(q.shape[0]):
+        s = torch.repeat_interleave(scale[e], block_n, dim=-2)
+        s = torch.repeat_interleave(s, block_k, dim=-1)
+        s = s[..., :q.shape[-2], :q.shape[-1]]
+        out[e] = (q[e].to(torch.float32) * s).to(torch.bfloat16)
+    return out
+
+
 def normalize_batched_scales_shape(scales, num_experts):
     if scales is not None and scales.ndim < 3:
         if scales.numel() == 1:
@@ -353,8 +379,10 @@ def invoke_moe_batched_triton_kernel(
 
 # ---------------------------------------------------------------------------
 # Model class — pack-once weight cache + pre-allocated C buffer.
-# fp8_w8a8 runs the kernel's native fp8 path (operands stay fp8, scales applied
-# in-kernel); int8_w8a16 uses the gpu-17/18/19 int8 caching.
+# fp8_w8a8 has two modes: QUANT=1 runs the kernel's native fp8 path (operands
+# stay fp8, scales applied in-kernel); QUANT=3 is the gpu-15 host bf16 trick
+# (dequant fp8->bf16 host-side, run a bf16 kernel). int8_w8a16 uses the
+# gpu-17/18/19 int8 caching.
 # ---------------------------------------------------------------------------
 class Model(torch.nn.Module):
     def __init__(self, E: int, M: int, K: int, N: int, QUANT: int = 0):
@@ -363,8 +391,10 @@ class Model(torch.nn.Module):
         self.M = M
         self.K = K
         self.N = N
-        self.QUANT = QUANT  # 0=bf16, 1=fp8_w8a8 (native), 2=int8_w8a16
+        self.QUANT = QUANT  # 0=bf16, 1=fp8 native, 2=int8_w8a16, 3=fp8 host bf16 trick
         self._packed = False
+        self._A_cached_ptr = None  # QUANT=3: cache A's bf16 conversion
+        self._fp8_scales = None    # QUANT=3: (A_scale, B_scale, block_shape)
 
     def _pack_weights(self, A: torch.Tensor, B: torch.Tensor):
         device = A.device
@@ -373,6 +403,10 @@ class Model(torch.nn.Module):
             self._B_int8 = B.to(torch.int8)
             self._B_scale_w8a16 = torch.ones(self.E, 1, self.N,
                                              device=device, dtype=torch.float32)
+        elif self.QUANT == 3:
+            # gpu-15 fp8 trick: dequant B (fp8) -> bf16 once, applying its scale.
+            _, B_scale, block_shape = self._fp8_scales
+            self._B_bf16 = dequant_to_bf16(B, B_scale, block_shape)
         self._C_buf = torch.zeros(self.E, self.M, self.N,
                                   device=device, dtype=torch.bfloat16)
         self._packed = True
@@ -381,6 +415,9 @@ class Model(torch.nn.Module):
                 expert_num_tokens: torch.Tensor,
                 A_scale: torch.Tensor = None, B_scale: torch.Tensor = None,
                 block_shape=None) -> torch.Tensor:
+        if self.QUANT == 3:
+            # Stash scales so _pack_weights can dequant B before the first run.
+            self._fp8_scales = (A_scale, B_scale, block_shape)
         if not self._packed:
             self._pack_weights(A, B)
 
@@ -393,6 +430,16 @@ class Model(torch.nn.Module):
             use_fp8_flag = True
             use_int8_w8a16 = False
             blk = block_shape
+        elif self.QUANT == 3:
+            # Host bf16 trick: run bf16, quant absorbed host-side. B dequant'd at
+            # pack; A dequant'd once and cached on data_ptr identity.
+            if self._A_cached_ptr != A.data_ptr():
+                self._A_bf16 = dequant_to_bf16(A, A_scale, block_shape)
+                self._A_cached_ptr = A.data_ptr()
+            A_in, B_in = self._A_bf16, self._B_bf16
+            a_scale, b_scale = None, None
+            use_fp8_flag = False
+            use_int8_w8a16 = False
         elif self.QUANT == 2:
             A_in = A
             B_in = self._B_int8
