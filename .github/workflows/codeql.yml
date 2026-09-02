@@ -42,10 +42,6 @@ jobs:
       if: matrix.build-mode == 'manual'
       uses: ./.github/actions/install-build-toolchain
 
-    - name: Set MAX_JOBS
-      if: matrix.build-mode == 'manual'
-      run: echo "MAX_JOBS=${MAX_JOBS:-2}" >> "$GITHUB_ENV"
-
     # Initialize FIRST so the build tracer is installed before the C/C++ compile.
     - name: Initialize CodeQL
       uses: github/codeql-action/init@v4
@@ -62,6 +58,10 @@ jobs:
       with:
         python_version: "3.10"
         use_pyenv: true
+
+    - name: Set MAX_JOBS
+      if: matrix.build-mode == 'manual'
+      run: echo "MAX_JOBS=${MAX_JOBS:-2}" >> "$GITHUB_ENV"
 
     - name: Build Triton (traced)
       if: matrix.build-mode == 'manual'
