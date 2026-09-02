@@ -37,11 +37,18 @@ def dequant_to_bf16(q, scale, block_shape=None):
         for e in range(q.shape[0]):
             out[e] = (q[e].to(torch.float32) * scale[e]).to(torch.bfloat16)
         return out
+    # Block quant: weights are 2D-block tiled (n_tiles, k_tiles), but activations
+    # are per-token-group (rows already == M, only K is tiled). Expand a dim by
+    # the block factor only when the scale is actually tiled along it.
     block_n, block_k = block_shape
+    rows, cols = q.shape[-2], q.shape[-1]
     for e in range(q.shape[0]):
-        s = torch.repeat_interleave(scale[e], block_n, dim=-2)
-        s = torch.repeat_interleave(s, block_k, dim=-1)
-        s = s[..., :q.shape[-2], :q.shape[-1]]
+        s = scale[e]
+        if s.shape[-2] != rows:
+            s = torch.repeat_interleave(s, block_n, dim=-2)
+        if s.shape[-1] != cols:
+            s = torch.repeat_interleave(s, block_k, dim=-1)
+        s = s[..., :rows, :cols]
         out[e] = (q[e].to(torch.float32) * s).to(torch.bfloat16)
     return out
 
