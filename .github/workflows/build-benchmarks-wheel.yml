@@ -37,7 +37,9 @@ concurrency:
   group: ${{ github.workflow }}-wheel-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'keep-going') && github.run_id || github.event.pull_request.number) || github.ref }}
   cancel-in-progress: true
 
-permissions: read-all
+permissions:
+  contents: read
+  id-token: write   # required for keyless Sigstore/OIDC signing
 
 jobs:
   build:
@@ -52,9 +54,6 @@ jobs:
       fail-fast: false
       max-parallel: 2
     timeout-minutes: 120
-    permissions:
-      id-token: write   # required for keyless Sigstore/OIDC signing
-      contents: read
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"

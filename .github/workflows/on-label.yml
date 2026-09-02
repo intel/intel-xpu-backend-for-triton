@@ -80,6 +80,9 @@ jobs:
   # ---- Build wheel ----
 
   build-wheel:
+    permissions:
+      contents: read
+      id-token: write   # for Sigstore signing in the reusable wheel-build workflow
     if: >-
       contains(github.event.pull_request.labels.*.name, 'run-benchmarks') ||
       contains(github.event.pull_request.labels.*.name, 'run-vllm-benchmarks') ||
