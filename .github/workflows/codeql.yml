@@ -40,14 +40,11 @@ jobs:
     # for the _ctypes module) to build Python from source.
     - name: Install build toolchain
       if: matrix.build-mode == 'manual'
-      run: |
-        if command -v gcc >/dev/null 2>&1; then
-          echo "gcc already present: $(gcc --version | head -n1)"
-        else
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends build-essential libffi-dev
-        fi
-        echo "MAX_JOBS=${MAX_JOBS:-2}" >> "$GITHUB_ENV"
+      uses: ./.github/actions/install-build-toolchain
+
+    - name: Set MAX_JOBS
+      if: matrix.build-mode == 'manual'
+      run: echo "MAX_JOBS=${MAX_JOBS:-2}" >> "$GITHUB_ENV"
 
     # Initialize FIRST so the build tracer is installed before the C/C++ compile.
     - name: Initialize CodeQL
