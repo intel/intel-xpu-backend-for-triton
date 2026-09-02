@@ -11,9 +11,7 @@ on:
       - scripts/sglang/**
       - .github/pins/pytorch.txt
   schedule:
-    # Thursday/Sunday 6:05AM PST (UTC-8) or 7:05AM PDT (UTC-7). Staggered a few hours
-    # after the vLLM test runs (10:05 UTC) so sglang does not queue behind them for the
-    # same b580 runners.
+    # Thursday/Sunday 6:05AM PST (UTC-8) or 7:05AM PDT (UTC-7).
     - cron: "5 14 * * THU"
     - cron: "5 14 * * SUN"
 
@@ -25,6 +23,6 @@ jobs:
   tests:
     uses: ./.github/workflows/sglang-tests-reusable.yml
     with:
-      runner_label: b580
+      runner_label: b60
       skip_list: xe2
     secrets: inherit

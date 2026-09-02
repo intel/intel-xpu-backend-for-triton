@@ -64,7 +64,7 @@ jobs:
       !contains(github.event.pull_request.labels.*.name, 'pvc-only')
     uses: ./.github/workflows/sglang-tests-reusable.yml
     with:
-      runner_label: b580
+      runner_label: b60
       skip_list: xe2
     secrets: inherit
 
