@@ -137,7 +137,6 @@ static llvm::SmallVector<SPIRV::ExtensionID> getAllowedExtensions(bool isLTS) {
       SPIRV::ExtensionID::SPV_INTEL_subgroups,
       SPIRV::ExtensionID::SPV_INTEL_tensor_float32_conversion,
       SPIRV::ExtensionID::SPV_INTEL_unstructured_loop_controls,
-      SPIRV::ExtensionID::SPV_INTEL_vector_compute,
       SPIRV::ExtensionID::SPV_KHR_bfloat16,
       SPIRV::ExtensionID::SPV_KHR_bit_instructions,
       SPIRV::ExtensionID::SPV_KHR_non_semantic_info,
@@ -146,6 +145,8 @@ static llvm::SmallVector<SPIRV::ExtensionID> getAllowedExtensions(bool isLTS) {
   // Extensions supported by the rolling driver only.
   if (!isLTS)
     AllowedExtensions.push_back(SPIRV::ExtensionID::SPV_EXT_long_vector);
+  else
+    AllowedExtensions.push_back(SPIRV::ExtensionID::SPV_INTEL_vector_compute);
 
   return AllowedExtensions;
 }
