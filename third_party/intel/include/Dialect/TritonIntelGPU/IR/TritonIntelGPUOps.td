@@ -244,6 +244,9 @@ def TTIG_Subgroup2DBlockLoadOp : TTIG_Op<"2d_block_load"> {
     the padding bytes as in-bounds, so the mask has to restore the zero fill
     the hardware would otherwise have applied. For an already-aligned
     `base_width`, hardware zero-filling is exact and the attribute is omitted.
+
+    `pad_nan` and `pad_zero` are mutually exclusive: the verifier rejects
+    setting both.
   }];
 
   let arguments = (ins

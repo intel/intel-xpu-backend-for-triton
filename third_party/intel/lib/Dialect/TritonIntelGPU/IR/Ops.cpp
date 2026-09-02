@@ -138,6 +138,16 @@ LogicalResult Subgroup2DBlockLoadOp::verify() {
            << (rank - 2) << " batch stride(s) for a rank-" << rank
            << " result, got " << getBatchStrides().size();
 
+  // `pad_nan` and `pad_zero` select the OOB fill value for the same mask;
+  // LLVM lowering picks zero fill whenever `pad_zero` is present
+  // (LoadStoreOpToLLVM.cpp's `useZeroFill`), so setting both would silently
+  // drop `pad_nan` instead of erroring. The single in-tree producer
+  // (LowerTo2DBlockLoad.cpp) sets at most one, derived from a single
+  // `PaddingOption`, but nothing else prevents hand-written IR from setting
+  // both.
+  if (getPadNan() && getPadZero())
+    return emitOpError("pad_nan and pad_zero are mutually exclusive");
+
   return success();
 }
 
