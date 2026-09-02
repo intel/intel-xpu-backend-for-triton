@@ -1,7 +1,6 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
 
 #include "Dialect/TritonIntelGPU/IR/Attributes.h"
@@ -17,7 +16,6 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 #include <algorithm>
-#include <array>
 #include <optional>
 
 namespace mlir::triton::gpu::intel {
@@ -43,40 +41,9 @@ namespace {
 // liveInPressure` reports bytes **per lane** (see RegisterPressure.h), so the
 // floor below must be expressed in the same per-lane unit rather than the
 // per-*hardware-thread* unit `getGRFBytesPerThread` returns on its own --
-// see `getPerLaneGRFBudgetInBytes`, which does that conversion using the
-// module's actual threads-per-warp rather than an assumed constant.
+// see `RegisterPressureAnalysis::getPerLaneGRFBudgetInBytes`, which does that
+// conversion using the module's actual threads-per-warp.
 constexpr uint32_t LIVE_IN_PRESSURE_GRF_BUDGET_MULTIPLIER = 2; // 200%
-
-/// The set of `grf-mode` values `getGRFBytesPerThread` assigns a real,
-/// mode-specific budget to. Anything else silently collapses to its
-/// "default" fallback (4096 bytes/thread) inside that function, so an
-/// unrecognized value is caught and warned about here instead.
-constexpr std::array<StringRef, 5> VALID_GRF_MODES = {"default", "auto", "128",
-                                                      "256", "512"};
-
-/// Convert the per-hardware-thread GRF budget for \p grfMode into a per-lane
-/// figure, dividing by the module's actual threads-per-warp so the result is
-/// in the same unit `RegisterPressureAnalysis::liveInPressure` reports.
-/// Falls back to the unscaled per-thread budget (with a diagnostic) if
-/// threads-per-warp is missing or non-positive, rather than dividing by zero.
-unsigned getPerLaneGRFBudgetInBytes(StringRef grfMode, ModuleOp mod) {
-  if (!llvm::is_contained(VALID_GRF_MODES, grfMode))
-    mod.emitWarning("unrecognized grf-mode '" + grfMode +
-                    "' for tritonintelgpu-reduce-variable-liveness; "
-                    "falling back to the 'default' GRF budget");
-  unsigned grfBudget =
-      ttg::intel::RegisterPressureAnalysis::getGRFBytesPerThread(grfMode);
-  int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
-  if (threadsPerWarp <= 0) {
-    mod.emitWarning(
-        "ttg.threads-per-warp is missing or non-positive; cannot convert "
-        "the per-hardware-thread GRF budget to a per-lane figure, falling "
-        "back to the unscaled per-thread budget for tritonintelgpu-"
-        "reduce-variable-liveness");
-    return grfBudget;
-  }
-  return grfBudget / static_cast<unsigned>(threadsPerWarp);
-}
 
 /// Return true if the lifespan of the \p v value is considered long.
 bool isLongLifeSpanVariable(
@@ -298,7 +265,9 @@ public:
 
     Operation *rootOperation = getOperation();
     ModuleOp mod = getOperation();
-    unsigned perLaneGRFBudget = getPerLaneGRFBudgetInBytes(grfMode, mod);
+    unsigned perLaneGRFBudget =
+        ttg::intel::RegisterPressureAnalysis::getPerLaneGRFBudgetInBytes(
+            grfMode, mod);
     ttg::intel::RegisterPressureAnalysis analysis(rootOperation);
     // TODO: extend the pass to handle `while` loops.
     rootOperation->walk([&](scf::ForOp forOp) {

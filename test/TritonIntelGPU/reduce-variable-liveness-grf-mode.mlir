@@ -2,7 +2,6 @@
 // RUN: triton-opt %s -tritonintelgpu-reduce-variable-liveness=grf-mode=128 -cse | FileCheck %s --check-prefixes=CHECK,SINK
 // RUN: triton-opt %s -tritonintelgpu-reduce-variable-liveness=grf-mode=256 -cse | FileCheck %s --check-prefixes=CHECK,SINK
 // RUN: triton-opt %s -tritonintelgpu-reduce-variable-liveness=grf-mode=512 -cse | FileCheck %s --check-prefixes=CHECK,KEEP
-// RUN: triton-opt %s -tritonintelgpu-reduce-variable-liveness=grf-mode=bogus -verify-diagnostics -o /dev/null
 // RUN: triton-opt %s -tritonintelgpu-reduce-variable-liveness=grf-mode=bogus -cse | FileCheck %s --check-prefixes=CHECK,SINK
 
 // COM: This module's `scf.for` body measures ~1536 B/lane live-in pressure at
@@ -14,12 +13,11 @@
 // COM: the 256-GRF-mode per-lane budget's 200% floor (1024 B) and the
 // COM: 512-GRF-mode one (2048 B), so default/128/256 sink the A operand's
 // COM: load into the loop while 512 keeps it outside. A bogus grf-mode falls
-// COM: back to the 'default' budget (with a warning), so it also sinks.
+// COM: back to the 'default' budget, so it also sinks.
 // CHECK: #[[$DPAS:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 8], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 8], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
 #dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>
-// expected-warning@+1 {{unrecognized grf-mode 'bogus' for tritonintelgpu-reduce-variable-liveness; falling back to the 'default' GRF budget}}
 module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32} {
   tt.func @grf_mode_gate(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
     // CHECK-LABEL: tt.func @grf_mode_gate
