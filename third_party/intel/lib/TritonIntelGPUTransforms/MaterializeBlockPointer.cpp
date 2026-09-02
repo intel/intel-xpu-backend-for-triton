@@ -340,6 +340,24 @@ private:
     if (!mask || matchPattern(mask, m_One()))
       return true;
 
+    // FIXME(#7890): WORKAROUND for IGC optimizer bug - remove once IGC is fixed
+    //
+    // IGC's optimizer incorrectly removes sync.allrd (synchronize all reads)
+    // barriers before stores when using predicated SPIR-V intrinsics, causing
+    // non-deterministic kernel outputs due to memory reordering.
+    //
+    // This workaround declines block_io for masked loads (but not stores),
+    // forcing the compiler to take an alternate path (typically routing through
+    // SLM with explicit barriers) that avoids triggering the IGC bug.
+    //
+    // IMPORTANT: This only hides the problem for this specific case. The root
+    // cause (IGC removing required memory barriers) can still manifest in other
+    // code patterns.
+    if constexpr (std::is_same_v<OpType, tt::LoadOp>) {
+      LDBG("Declining block IO for masked load (#7890 workaround)");
+      return false;
+    }
+
     const tt::AxisInfo *maskAxisInfo = axisInfoAnalysis.getAxisInfo(mask);
     if (!maskAxisInfo) {
       LDBG("No axis info for mask, skip block IO attribute");
