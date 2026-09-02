@@ -4,14 +4,10 @@
 
 // STATS: [HoistLayoutConversions] considered={{[0-9]+}} hoisted={{[0-9]+}} rejected_pressure={{[0-9]+}} skipped_other={{[0-9]+}}
 
-// COM: Case 1: Hoist ConvertLayoutOp with DotOperandEncoding out of scf.for loop,
-// COM: but only when the per-lane GRF budget actually allows it.
-// COM: liveIn=288 bytes/lane (arg0's 64 + arg1's 224, both live-in pre-hoist),
-// COM: hoistBytes=64 bytes/lane (arg0 re-encoded as dot_a) -- measured via the
-// COM: pass's own debug output (-debug-only=tritonintelgpu-hoist-layout-conversions).
-// COM: Per-lane GRF budget = getGRFBytesPerThread(mode) / threads-per-warp:
-// COM:   default (128 GRF): 4096 / 16 = 256 bytes/lane; 80% = 204 -> 352 exceeds, do NOT hoist.
-// COM:   256 GRF:           8192 / 16 = 512 bytes/lane; 80% = 409 -> 352 fits, DO hoist.
+// COM: Case 1: Hoist ConvertLayoutOp with DotOperandEncoding out of scf.for loop.
+// COM: The source of the convert_layout is defined outside the loop, so the pass
+// COM: should move the conversion before the loop.
+// COM: (352 bytes/lane needed; fits 256-GRF's 512/lane budget, exceeds 128-GRF's 256/lane.)
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -157,8 +153,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Case 6: Do NOT hoist at either GRF mode -- the hoisted tensor pushes
-// COM: live-in register usage well past the per-lane GRF budget at both.
+// COM: Case 6: Do NOT hoist at either GRF mode when the hoisted tensor would
+// COM: push live-in register usage over the per-lane GRF budget.
 // COM: With warpsPerCTA=[1,1] and threadsPerWarp=16, the live-in values to the
 // COM: loop body block are (arg2 is NOT live-in — it becomes a block argument
 // COM: via iter_args):
@@ -166,13 +162,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // COM:   - arg1 (64x16xf16, dot_b):      ~128 bytes/lane
 // COM:   - candidate (256x64xf16, dot_a): ~2048 bytes/lane (added if hoisted)
 // COM: Live-in total: ~2176 bytes/lane. After hoist: ~4224 bytes/lane.
-// COM: Per-lane GRF budget = getGRFBytesPerThread(mode) / threads-per-warp:
-// COM:   default (128 GRF): 4096 / 16 = 256 bytes/lane; 80% = 204 -> 4224 exceeds, do NOT hoist.
-// COM:   256 GRF:           8192 / 16 = 512 bytes/lane; 80% = 409 -> 4224 exceeds, do NOT hoist.
-// COM: (Before the per-lane budget fix, this compared per-lane bytes directly
-// COM: against the raw per-hardware-thread budget -- 4096/8192 without dividing
-// COM: by threads-per-warp -- so 256-GRF mode looked like it had 16x more
-// COM: headroom than it really does, and wrongly hoisted here.)
+// COM: 128 GRF budget = 4096/16 * 0.80 = 204 bytes -> 4224 exceeds, do NOT hoist.
+// COM: 256 GRF budget = 8192/16 * 0.80 = 409 bytes -> 4224 exceeds, do NOT hoist.
 
 #blocked6 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
 #dpas6 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -199,10 +190,6 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // COM: Case 7: Hoist ConvertLayoutOp when source is a constant defined outside
 // COM: the loop. The convert_layout should be moved after the arith.constant.
-// COM: Hoists at every GRF mode even though the candidate is the same size as
-// COM: cases 1/8's: the constant is rematerializable, so liveInPressure excludes
-// COM: it, leaving only arg0's small live-in contribution (liveIn=32, hoistBytes=64
-// COM: -- well under budget at any mode).
 
 #blocked7 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas7 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -233,8 +220,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // COM: loop-invariant w.r.t. the inner loop. The convert_layout moves before
 // COM: the inner scf.for but remains inside the outer loop. Hoisting further
 // COM: out of the outer loop is left as a follow-up.
-// COM: Same shapes and pressure numbers as case 1 (liveIn=288, hoistBytes=64),
-// COM: so the same GRF128-rejects/GRF256-accepts split applies.
+// COM: (Same pressure as case 1: GRF128 rejects, GRF256 accepts.)
 
 #blocked8 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas8 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>

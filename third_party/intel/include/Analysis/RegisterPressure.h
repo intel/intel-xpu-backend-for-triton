@@ -30,19 +30,12 @@ struct RegisterPressureOptions {
 ///
 /// This analysis builds on LivenessAnalysis and weights each live value by its
 /// per-thread size in bytes. For distributed tensors, the size is computed
-/// using the encoding's element distribution ("per thread" here follows
-/// Triton's layout convention, where a "thread" is one SIMD lane/work-item --
-/// see e.g. `getTotalElemsPerThread`). For scalars, the size is the element
-/// bitwidth in bytes.
+/// using the encoding's element distribution. For scalars, the size is the
+/// element bitwidth in bytes.
 ///
-/// The canonical unit is therefore **per-lane bytes**, NOT the
-/// per-hardware-thread unit `getGRFBytesPerThread` returns (one hardware
-/// thread on this backend executes a whole subgroup/warp of
-/// `threads-per-warp` lanes sharing one register file). Callers comparing
-/// this analysis's output against a GRF budget must use
-/// `getPerLaneGRFBudgetInBytes` below rather than `getGRFBytesPerThread`
-/// directly, or they will overstate the real per-lane budget by roughly a
-/// factor of `threads-per-warp`.
+/// The unit is **per-lane bytes** ("thread" = one SIMD lane, Triton's usual
+/// convention), NOT the per-hardware-thread unit `getGRFBytesPerThread`
+/// returns. Use `getPerLaneGRFBudgetInBytes` to compare against a GRF budget.
 class RegisterPressureAnalysis {
 public:
   /// Construct the analysis for the given root operation.
@@ -80,15 +73,9 @@ public:
   /// ultimately compile with fewer registers.
   static unsigned getGRFBytesPerThread(StringRef grfMode);
 
-  /// Returns the per-lane GRF budget in bytes for the given GRF mode and
-  /// module: `getGRFBytesPerThread(grfMode) / threads-per-warp`. This is the
-  /// figure to compare against `liveInPressure`/`pressureAt`/`peakPressure`/
-  /// `getPerThreadSizeInBytes`, all of which report per-lane bytes.
-  ///
-  /// Emits a warning (rather than failing) for an unrecognized \p grfMode, or
-  /// if the module's `ttg.threads-per-warp` is missing or non-positive; in
-  /// the latter case falls back to the unscaled per-hardware-thread budget
-  /// rather than dividing by zero.
+  /// Returns `getGRFBytesPerThread(grfMode) / threads-per-warp`: the figure
+  /// to compare against this analysis's (per-lane) output. Falls back to the
+  /// unscaled budget, with a warning, if threads-per-warp is missing/<=0.
   static unsigned getPerLaneGRFBudgetInBytes(StringRef grfMode, ModuleOp mod);
 
   /// Returns the per-thread size in bytes for the given type.
