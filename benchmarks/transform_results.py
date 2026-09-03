@@ -42,7 +42,7 @@ def parse_csv(csv_file_path, tag, bench_group, benchmark, param_cols):
 
     df['params'] = df.apply(serialize_params, axis=1)
 
-    compilers = ['pytorch', 'triton', 'triton-td', 'sycl-tla', 'xeforge']
+    compilers = ['pytorch', 'triton', 'triton-td', 'sycl-tla', 'xeforge', 'xeforge-bf16trick']
 
     dfs = []
     for compiler_name in compilers:
