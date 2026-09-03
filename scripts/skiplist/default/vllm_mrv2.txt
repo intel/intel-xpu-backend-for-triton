@@ -69,7 +69,6 @@ tests/v1/worker/test_gpu_model_runner.py::test_update_states_no_changes
 tests/v1/worker/test_gpu_model_runner.py::test_update_states_request_unscheduled
 tests/v1/worker/test_gpu_model_runner.py::test_update_states_pp_non_async_multi_request_keeps_token_buffers_consistent
 tests/v1/worker/test_gpu_model_runner.py::test_update_states_pp_async_multi_request_keeps_rank_state_consistent
-tests/v1/worker/test_gpu_model_runner.py::test_kv_cache_stride_order
 tests/v1/worker/test_gpu_model_runner.py::test_update_config
 tests/v1/worker/test_gpu_model_runner.py::test_load_model_weights_inplace
 tests/v1/worker/test_gpu_model_runner.py::test_reload_weights_before_load_model
