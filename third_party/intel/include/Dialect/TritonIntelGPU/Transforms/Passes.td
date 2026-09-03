@@ -506,4 +506,28 @@ def TritonIntelGPULoopDistribute
   ];
 }
 
+def TritonIntelGPUSplitLargeNDotScaled
+    : Pass<"tritonintelgpu-split-large-n-dot-scaled", "mlir::ModuleOp"> {
+  let summary = "Split fp4 DotScaledOps with GRF-overflowing N into two half-N ops";
+  let description = [{
+    On BMG (no hardware BDPAS), DecomposeScaledBlocked materialises 64 scalar
+    f32 B values per thread simultaneously during the scale multiply, overflowing
+    the 256-GRF budget when BLOCK_N >= 256.  This pass splits qualifying
+    DotScaledOps along N at TTIR level — before layout assignment — into two
+    half-N DotScaledOps.  Each downstream decomposition then sees only 32 B f32
+    values, keeping peak GRF ~196 and eliminating register spill.
+
+    The split is gated by a static GRF estimate and fires only when the target
+    lacks hardware BDPAS support (ttig.support_block_scale_dpas absent).
+  }];
+  let dependentDialects = [
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::intel::TritonIntelGPUDialect"
+  ];
+  let options = [
+    Option<"numWarps", "num-warps", "int32_t", /*default*/"4",
+           "Number of warps per CTA (sourced from compilation options)">,
+  ];
+}
+
 #endif // TRITON_INTEL_GPU_PASSES
