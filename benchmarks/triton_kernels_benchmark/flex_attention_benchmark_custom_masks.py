@@ -111,7 +111,8 @@ def run_bench_paged(q, k, v, score_mod, _, __):
     phys_block_mask = paged_attn.convert_logical_block_mask(logical_block_mask, batch_idx=batch_idx)
     phys_score_mod = paged_attn.get_score_mod(score_mod)
 
-    kernel_options = {'num_stages': 2, 'num_warps': 16 if D == 128 else 8, 'BLOCKS_ARE_CONTIGUOUS': False}
+    num_stages = 2 if D == 64 else 1
+    kernel_options = {'num_stages': num_stages, 'num_warps': 16 if D == 128 else 8, 'BLOCKS_ARE_CONTIGUOUS': False}
 
     return flex_attention(q, k_cache, v_cache, score_mod=phys_score_mod, block_mask=phys_block_mask,
                           kernel_options=kernel_options)
