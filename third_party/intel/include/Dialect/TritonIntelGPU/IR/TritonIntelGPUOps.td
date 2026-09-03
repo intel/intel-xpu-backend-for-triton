@@ -124,6 +124,21 @@ def TTIG_BroadcastOp : TTIG_Op<"broadcast", [Pure, SameOperandsAndResultElementT
   }];
 }
 
+def TTIG_ReinterpretConvertLayoutOp : TTIG_Op<"reinterpret_convert_layout",
+    [SameOperandsAndResultShape, SameOperandsAndResultElementType, Pure,
+     VerifyTensorLayoutsTrait]> {
+  let summary = "reinterpret a tensor layout without changing shape or element type";
+  let description = [{
+    The `reinterpret_convert_layout` operation mirrors `ttg.convert_layout`
+    shape and element-type constraints, but is intended to represent a layout
+    reinterpretation in the Intel backend.
+  }];
+
+  let arguments = (ins TT_Tensor:$src);
+  let results = (outs TT_Tensor:$result);
+  let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
+}
+
 // `tt.ptr` no longer spells the workgroup (SLM) address space: PtrAddrSpace
 // only has global/descriptor/constant, and adding a case would break the
 // exhaustive switches every backend has over it. Match the pointee type only.
