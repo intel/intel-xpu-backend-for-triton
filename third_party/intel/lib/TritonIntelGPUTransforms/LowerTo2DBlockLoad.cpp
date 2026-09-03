@@ -344,9 +344,11 @@ private:
           // Non-constant shape: cannot determine alignment statically.
           // Proceed with 2D block load — the alignment may be fine at runtime,
           // and we cannot do better without a runtime check.
-          // TODO: if the runtime width is misaligned and pitch is tight,
-          // hwBaseWidth rounding in LoadStoreOpToLLVM may produce
-          // hwBaseWidth > pitch, violating the hardware surface constraint.
+          // TODO: For runtime (non-constant) column counts we cannot prove that
+          // base_width widening is safe/sufficient. LoadStoreOpToLLVM clamps
+          // hwBaseWidth to pitch to satisfy base_width <= pitch, but when pitch
+          // is too small this can still leave i32-granularity OOB behavior
+          // incorrect; consider a runtime pitch check + scalar fallback.
           continue;
         }
         int64_t colBytes = *descColCount * elemSizeInBytes;
