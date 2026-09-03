@@ -90,6 +90,12 @@ clone_sglang() {
 patch_sglang() {
   git -C "$SGLANG_DIR" apply "$SGLANG_PATCH"
 
+  # Rewritten instead of patched: hundreds of hardcoded cuda references that
+  # would conflict on every pin bump. Recursive, and scoped to the test tree so
+  # no kernel dispatch behaviour is masked.
+  python3 "$SGLANG_SCRIPTS_DIR/xpu_device_rewrite.py" --quiet \
+    "$SGLANG_DIR/test/registered/kernels"
+
   # That's how sglang assumes we'll pick out platform for now.
   # NOTE: python/pyproject.toml is tracked upstream, so the reset in prepare_source
   # reverts this overwrite - it has to be redone on every preparation.
@@ -176,6 +182,11 @@ installed_at_pin() {
 
   # The patch has to be applied already, i.e. reverse-applying it must be possible.
   git -C "$SGLANG_DIR" apply --reverse --check "$SGLANG_PATCH" 2>/dev/null || return 1
+
+  # The device rewrite has to be applied already, otherwise a checkout prepared
+  # before it was introduced would be reused as-is.
+  python3 "$SGLANG_SCRIPTS_DIR/xpu_device_rewrite.py" --check --quiet \
+    "$SGLANG_DIR/test/registered/kernels" 2>/dev/null | grep -q 'no changes' || return 1
 }
 
 # Dependencies SGLang needs at runtime but that pyproject_xpu.toml deliberately

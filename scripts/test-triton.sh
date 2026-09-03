@@ -53,6 +53,7 @@ TEST:
     --sglang-gdn
     --sglang-kda
     --sglang-spec
+    --sglang-norm
     --install-sglang
     --liger
     --install-liger
@@ -114,6 +115,7 @@ TEST_SGLANG_MAMBA=false
 TEST_SGLANG_GDN=false
 TEST_SGLANG_KDA=false
 TEST_SGLANG_SPEC=false
+TEST_SGLANG_NORM=false
 INSTALL_SGLANG=false
 TEST_LIGER=false
 INSTALL_LIGER=false
@@ -316,6 +318,11 @@ while (( $# != 0 )); do
       ;;
     --sglang-spec)
       TEST_SGLANG_SPEC=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --sglang-norm)
+      TEST_SGLANG_NORM=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -904,6 +911,7 @@ run_sglang_tests() {
   run_sglang_gdn_tests
   run_sglang_kda_tests
   run_sglang_spec_tests
+  run_sglang_norm_tests
 }
 
 run_sglang_attention_tests() {
@@ -998,6 +1006,22 @@ run_sglang_spec_tests() {
   TRITON_TEST_SUITE=sglang_spec \
     run_pytest_command -vvv \
       test/registered/spec/dspark/test_dspark_kernel_parity.py
+}
+
+run_sglang_norm_tests() {
+  echo "********************************************************"
+  echo "******  Running SGLang norm/fused-op tests       *******"
+  echo "********************************************************"
+
+  enter_sglang_test_env
+  # Fused RMSNorm/layernorm ops and kernel registry dispatch. The rest of the
+  # kernel test tree needs nvcc, sgl_kernel or flashinfer for its reference;
+  # see scripts/sglang/README.md.
+  TRITON_TEST_SUITE=sglang_norm \
+    run_pytest_command -vvv \
+      test/registered/kernels/test_fused_op.py \
+      test/registered/kernels/test_fused_op_gpu_parity.py \
+      test/registered/kernels/test_kernels_namespace.py
 }
 
 run_liger_install() {
@@ -1439,6 +1463,9 @@ test_triton() {
   fi
   if [ "$TEST_SGLANG_SPEC" == true ]; then
     run_sglang_spec_tests
+  fi
+  if [ "$TEST_SGLANG_NORM" == true ]; then
+    run_sglang_norm_tests
   fi
   if [ "$INSTALL_LIGER" == true ]; then
     run_liger_install
