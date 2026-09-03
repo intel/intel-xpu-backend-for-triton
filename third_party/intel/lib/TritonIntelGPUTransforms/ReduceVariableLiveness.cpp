@@ -34,65 +34,37 @@ using TensorValue = TypedValue<RankedTensorType>;
 
 namespace {
 
-// Live-in register-pressure floor (in bytes, summed across all lanes of the
-// workgroup) below which shortening a load's live range is not worthwhile: the
-// loop body is not under enough pressure to benefit.
-//
-// `RegisterPressureAnalysis` reports *per-thread* bytes, so the gate scales the
-// reported value back up by the workgroup's thread count before comparing. That
-// keeps this threshold in the same unit it has always had, and therefore keeps
-// the gate firing on exactly the same loops at every warp count. Expressing the
-// floor per-thread instead is not equivalent: a fixed per-thread number is a
-// different full-tensor bound at every thread count, and the attention kernels
-// that this transform exists to help sit right at the boundary.
-constexpr uint32_t TOTAL_BLOCK_SIZE_THRESHOLD_IN_BYTES = 32768;
-constexpr uint32_t LARGE_TENSOR_MINOR_SHAPE_THRESHOLD = 128;
-constexpr uint32_t LARGE_TENSOR_MAJOR_SHAPE_THRESHOLD = 128;
-constexpr uint32_t LARGE_TENSOR_SIZE_THRESHOLD_IN_BYTES =
-    LARGE_TENSOR_MAJOR_SHAPE_THRESHOLD * LARGE_TENSOR_MINOR_SHAPE_THRESHOLD * 2;
-
-/// Return the total size of the tensor type /p tensorType in bytes.
-/// If the tensor element type is not a int or a float, this function return 0.
-unsigned getSizeInBytes(RankedTensorType &tensorType) {
-  Type elType = tensorType.getElementType();
-  if (!elType.isIntOrFloat())
-    return 0;
-  unsigned elTypeBitWidth = elType.getIntOrFloatBitWidth();
-  unsigned totalNumElement = 1;
-  for (int64_t dim : tensorType.getShape()) {
-    totalNumElement *= dim;
-  }
-  return totalNumElement * (elTypeBitWidth / 8);
-}
+// A load is worth sinking (moving closer to its use, with a cheap prefetch
+// left behind) when the loop it would otherwise stay live across is under
+// enough register pressure to make trading a redundant-but-cheap 2D block
+// load for freed registers a real win. `RegisterPressureAnalysis::
+// liveInPressure` reports bytes **per lane** (see RegisterPressure.h), so the
+// floor below must be expressed in the same per-lane unit rather than the
+// per-*hardware-thread* unit `getGRFBytesPerThread` returns on its own --
+// see `RegisterPressureAnalysis::getPerLaneGRFBudgetInBytes`, which does that
+// conversion using the module's actual threads-per-warp.
+constexpr uint32_t LIVE_IN_PRESSURE_GRF_BUDGET_MULTIPLIER = 2; // 200%
 
 /// Return true if the lifespan of the \p v value is considered long.
 bool isLongLifeSpanVariable(
     Value v, const ttg::intel::RegisterPressureAnalysis &analysis,
-    Block *dotBlock) {
-  // The variable is considered as a long life span elected for being moved if:
-  // the live-in variables of the forOp consist in a large amount of bytes and
-  // the variable defined by `v` is a large tensor (with large amount of element
-  // in the minor dimenssion) and the variable liveness of `v` expends before
-  // the dot block. i.e. used in a block - loaded in another block
+    Block *dotBlock, unsigned perLaneGRFBudget) {
+  // The variable is considered as a long life span elected for being moved if
+  // it is a 2D tensor, it is genuinely live-in to the block (defined outside,
+  // used inside -- i.e. it would otherwise stay resident across the whole
+  // loop), and the loop is under enough measured register pressure that
+  // shortening this value's live range is worth the redundant reload.
   TensorValue tensorV = dyn_cast<TensorValue>(v);
   if (!tensorV)
     return false;
 
   auto tensorType = cast<RankedTensorType>(tensorV.getType());
   auto tensorOrder = ttg::getOrder(tensorType);
-  // Scale the per-thread pressure reported by the analysis back to bytes summed
-  // across the workgroup, the unit TOTAL_BLOCK_SIZE_THRESHOLD_IN_BYTES is in.
-  auto mod = dotBlock->getParentOp()->getParentOfType<ModuleOp>();
-  unsigned numThreads = ttg::lookupNumWarps(dotBlock->getParentOp()) *
-                        ttg::TritonGPUDialect::getThreadsPerWarp(mod);
-  unsigned liveInSizeInBytes = analysis.liveInPressure(dotBlock) * numThreads;
-  return (
-      (tensorOrder.size() == 2) &&
-      (getSizeInBytes(tensorType) >= LARGE_TENSOR_SIZE_THRESHOLD_IN_BYTES) &&
-      (tensorType.getShape()[tensorOrder[1]] >=
-       LARGE_TENSOR_MINOR_SHAPE_THRESHOLD) &&
-      (liveInSizeInBytes > TOTAL_BLOCK_SIZE_THRESHOLD_IN_BYTES) &&
-      analysis.isLiveIn(dotBlock, v));
+  unsigned liveInSizeInBytes = analysis.liveInPressure(dotBlock);
+  return ((tensorOrder.size() == 2) &&
+          (liveInSizeInBytes >=
+           perLaneGRFBudget * LIVE_IN_PRESSURE_GRF_BUDGET_MULTIPLIER) &&
+          analysis.isLiveIn(dotBlock, v));
 }
 
 /// Return true if the \p loadOp is suitable to be moved.
@@ -148,7 +120,8 @@ void createPrefetchOp(tt::DescriptorLoadOp loadOp) {
 /// operands.
 /// Returns `true` if at least one operand has been moved.
 bool optimizeDotOperands(scf::ForOp forOp, SmallVector<Value> &prefetchedValue,
-                         ttg::intel::RegisterPressureAnalysis &analysis) {
+                         ttg::intel::RegisterPressureAnalysis &analysis,
+                         unsigned perLaneGRFBudget) {
   Block *loop = forOp.getBody();
   bool opMoved = false;
 
@@ -243,7 +216,8 @@ bool optimizeDotOperands(scf::ForOp forOp, SmallVector<Value> &prefetchedValue,
     // dot operand may be a ConvertLayoutOp result (possibly inside the loop)
     // while the load result is the truly long-lived value defined outside.
     Value loadResult = loadOp->getResult(0);
-    if (!isLongLifeSpanVariable(loadResult, analysis, dotBlock))
+    if (!isLongLifeSpanVariable(loadResult, analysis, dotBlock,
+                                perLaneGRFBudget))
       return;
     auto tensorType = cast<RankedTensorType>(operand.getType());
     Type elTy = tensorType.getElementType();
@@ -290,10 +264,15 @@ public:
     }
 
     Operation *rootOperation = getOperation();
+    ModuleOp mod = getOperation();
+    unsigned perLaneGRFBudget =
+        ttg::intel::RegisterPressureAnalysis::getPerLaneGRFBudgetInBytes(
+            grfMode, mod);
     ttg::intel::RegisterPressureAnalysis analysis(rootOperation);
     // TODO: extend the pass to handle `while` loops.
     rootOperation->walk([&](scf::ForOp forOp) {
-      if (optimizeDotOperands(forOp, prefetchedValue, analysis)) {
+      if (optimizeDotOperands(forOp, prefetchedValue, analysis,
+                              perLaneGRFBudget)) {
         // The register pressure analysis must be re-performed before the
         // processing of each "for loop" given that the liveness of variables
         // may have changed as a result of the code, and specifically `LoadOps`,
