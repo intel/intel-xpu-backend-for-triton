@@ -4041,6 +4041,7 @@ struct Subgroup2DBlockLoadOpConversion
     Value pitch = adaptor.getBasePitch();
     Value baseOffsetX = adaptor.getOffsetX();
     Value baseOffsetY = adaptor.getOffsetY();
+    ValueRange batchStrides = adaptor.getBatchStrides();
 
     Value elemBytes = b.i32_val(elemSizeInBits / 8);
 
@@ -4100,6 +4101,19 @@ struct Subgroup2DBlockLoadOpConversion
     unsigned blockRowIdx = cfg.isTransposeRequired ? cfg.colDim : cfg.rowDim;
     unsigned blockColIdx = cfg.isTransposeRequired ? cfg.rowDim : cfg.colDim;
 
+    // `computeAddress` indexes `batch_strides` by dimension number, so the 2D
+    // tile must cover exactly the inner two dimensions and each remaining
+    // dimension must have a stride. `LowerTo2DBlockLoad` enforces the tile
+    // shape when it creates the op, but that shape comes from the layout, so
+    // the op verifier can only count the strides. Bail rather than read out of
+    // bounds: `ttig` is illegal in this conversion and this is the op's only
+    // pattern, so this is a legalization failure, not a fallback to a slower
+    // path. No in-tree producer can reach it.
+    if (batchStrides.size() != rank - 2 ||
+        std::min(blockRowIdx, blockColIdx) != rank - 2 ||
+        std::max(blockRowIdx, blockColIdx) != rank - 1)
+      return failure();
+
     // Per-sub-tile: combine base offsets with linear layout offsets.
     auto computeAddress =
         [&](unsigned /*registerIdx*/,
@@ -4121,11 +4135,12 @@ struct Subgroup2DBlockLoadOpConversion
         else if (dim == blockColIdx)
           offsetX = adjustedOffset;
         else {
-          // Batch dimensions: fold into base pointer via GEP.
-          Value strideInElems =
-              b.zext(int_ty(64), b.mul(baseHeight, b.udiv(pitch, elemBytes)));
+          // Batch dimensions: fold into base pointer via GEP. The stride is
+          // carried by the op (`batch_strides`) — it cannot be recovered from
+          // the 2D surface parameters, which describe a single tile plane.
+          assert(dim < batchStrides.size() && "missing batch stride");
           Value offset64 = b.zext(int_ty(64), adjustedOffset);
-          Value batchOffset = b.mul(offset64, strideInElems);
+          Value batchOffset = b.mul(offset64, batchStrides[dim]);
           addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, batchOffset);
         }
       }

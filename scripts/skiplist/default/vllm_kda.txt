@@ -66,9 +66,3 @@ tests/models/kimi_k3/test_kda.py::test_packed_kda_decode_correctness[amd-8--5.0-
 tests/models/kimi_k3/test_kda.py::test_packed_kda_decode_correctness[amd-8-None-1]
 tests/models/kimi_k3/test_kda.py::test_packed_kda_decode_correctness[amd-8-None-8]
 tests/models/kimi_k3/test_kda.py::test_packed_kda_decode_correctness[amd-8-None-32]
-
-# Overflow when unpacking long long tensor data_ptr: https://github.com/intel/intel-xpu-backend-for-triton/issues/7789
-tests/models/kimi_k3/test_kda.py::test_kda_recoverssm_verify_and_group_commit[baseline]
-tests/models/kimi_k3/test_kda.py::test_kda_recoverssm_verify_and_group_commit[all-features]
-tests/models/kimi_k3/test_kda.py::test_kda_recoverssm_verify_and_group_commit[request-indexed]
-tests/models/kimi_k3/test_kda.py::test_kda_recoverssm_verify_and_group_commit[aligned]
