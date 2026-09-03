@@ -9,6 +9,7 @@ import ctypes
 import subprocess
 import sysconfig
 import tempfile
+import threading
 from pathlib import Path
 from functools import cached_property, lru_cache
 
@@ -25,6 +26,12 @@ from triton.backends.driver import expand_signature, wrap_handle_tensordesc_impl
 # (mode 0) is the workaround. Set at import, because PTI reads this when a collection session starts,
 # and via setdefault so an explicit choice by the user still wins.
 os.environ.setdefault("PTI_COLLECTION_MODE", "0")
+
+# IGC 2.38.x has a race condition in its in-process Level Zero JIT path (zeModuleCreate).
+# Concurrent calls from different threads in the same process can trigger an internal
+# compiler error (SIGABRT in libigdrcl.so). Serializing all load_binary calls prevents
+# the race without requiring an IGC fix. See issue #7581.
+_load_binary_lock = threading.Lock()
 
 # A hard-coded cache version that can be updated when we know that the cached file is invalid and
 # there are no other ways to detect that the runtime environment has changed. For example, a shared
@@ -307,16 +314,20 @@ class SpirvUtils:
         # IGC build log carries a PTSS marker, OutOfResources is raised
         # directly so triton.runtime.autotuner can skip the offending tile.
         # No per-launch overhead on the success path.
-        try:
-            return self.shared_library.load_binary(args)
-        except Exception as e:
-            from triton.runtime.errors import IntelGPUError, OutOfResources
-            if isinstance(e, OutOfResources):
-                raise
-            if str(e).startswith("ZE_"):
-                raise IntelGPUError("Error during Intel load_binary: " + str(e)) from e
-            else:
-                raise e
+        #
+        # _load_binary_lock serializes concurrent zeModuleCreate calls to
+        # work around a race condition in IGC 2.38.x in-process JIT. See #7581.
+        with _load_binary_lock:
+            try:
+                return self.shared_library.load_binary(args)
+            except Exception as e:
+                from triton.runtime.errors import IntelGPUError, OutOfResources
+                if isinstance(e, OutOfResources):
+                    raise
+                if str(e).startswith("ZE_"):
+                    raise IntelGPUError("Error during Intel load_binary: " + str(e)) from e
+                else:
+                    raise e
 
     if os.name != 'nt':
 
