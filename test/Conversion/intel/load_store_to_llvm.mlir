@@ -107,6 +107,63 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.sup
 
 // -----
 
+// COM: `ca` on a masked store is mapped to L1WB_L3WB -- the same control as
+// COM: `wb`, write-back being the store-side sense of "cached". It used to be
+// COM: missing from the store side of tritonToIntelCacheModifier(), so this
+// COM: kernel aborted the compiler on `invalid cache modifier for StoreOp`.
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.support_predicated_io} {
+  // CHECK-LABEL: store_ca_predicated
+  tt.func @store_ca_predicated(%ptr: tensor<1024x!tt.ptr<f32>, #blocked>, %val: tensor<1024xf32, #blocked>, %mask: tensor<1024xi1, #blocked>) {
+    // CHECK: triton_gen.predicated_store {{.*}} {cache_control = L1WB_L3WB} : (!llvm.ptr<1>, i32, i1) -> ()
+    tt.store %ptr, %val, %mask cacheModifier = ca : tensor<1024x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: `cv` on a masked store has a cache control of its own (L1 uncached,
+// COM: L3 uncached). It used to be missing from the store side of
+// COM: tritonToIntelCacheModifier(), so this kernel aborted the compiler on
+// COM: `invalid cache modifier for StoreOp`.
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.support_predicated_io} {
+  // CHECK-LABEL: store_cv_predicated
+  tt.func @store_cv_predicated(%ptr: tensor<1024x!tt.ptr<f32>, #blocked>, %val: tensor<1024xf32, #blocked>, %mask: tensor<1024xi1, #blocked>) {
+    // CHECK: triton_gen.predicated_store {{.*}} {cache_control = L1UC_L3UC} : (!llvm.ptr<1>, i32, i1) -> ()
+    tt.store %ptr, %val, %mask cacheModifier = cv : tensor<1024x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Masked `ca` and `cv` stores on a target WITHOUT predicated-I/O support
+// COM: fall back to control-flow-guarded plain llvm.store. `ca` (L1WB_L3WB)
+// COM: emits an unannotated store. `cv` (L1UC_L3UC) sets the `nontemporal`
+// COM: flag, which encodes it exactly. This fallback path is NOT changed by
+// COM: the fix that added `ca` and `cv` support to the predicated path. This
+// COM: test confirms the fallback behavior stayed intact.
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: store_ca_cv_scalar_fallback
+  tt.func @store_ca_cv_scalar_fallback(%ptr: tensor<1024x!tt.ptr<f32>, #blocked>, %val: tensor<1024xf32, #blocked>, %mask: tensor<1024xi1, #blocked>) {
+    tt.store %ptr, %val, %mask cacheModifier = ca : tensor<1024x!tt.ptr<f32>, #blocked>
+    tt.store %ptr, %val, %mask cacheModifier = cv : tensor<1024x!tt.ptr<f32>, #blocked>
+    // CHECK: llvm.store {{.*}} {alignment = 4 : i64} : i32, !llvm.ptr<1>
+    // CHECK-NOT: triton_gen.predicated_store
+    // CHECK: llvm.store {{.*}} {alignment = 4 : i64, nontemporal} : i32, !llvm.ptr<1>
+    // CHECK-NOT: triton_gen.predicated_store
+    tt.return
+  }
+}
+
+// -----
+
 // COM: evict_first without an explicit cache modifier routes to L1IAR_L3C on
 // COM: the predicated load path.
 

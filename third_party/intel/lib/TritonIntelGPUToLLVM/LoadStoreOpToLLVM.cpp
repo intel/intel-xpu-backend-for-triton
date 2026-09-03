@@ -552,6 +552,8 @@ struct LoadStoreConversionBase {
      * "cg" -> L1UC_L3WB (Cache at global level, not L1)
      * "cs" -> L1S_L3S (Cache streaming at all levels)
      * "wt" -> L1WT_L3WT (Cache write-through at all levels)
+     * "ca" -> L1WB_L3WB (Cache at all levels)
+     * "cv" -> L1UC_L3UC (Bypass cache at all levels)
      **/
     switch (cacheModifier) {
     case CacheModifier::NONE:
@@ -564,9 +566,14 @@ struct LoadStoreConversionBase {
       return TritonGEN::StoreCacheControl::L1S_L3S;
     case CacheModifier::WT:
       return TritonGEN::StoreCacheControl::L1WT_L3WT;
-    default:
-      llvm_unreachable("invalid cache modifier for StoreOp");
+    case CacheModifier::CA:
+      return TritonGEN::StoreCacheControl::L1WB_L3WB;
+    case CacheModifier::CV:
+      // Reconciles with the plain-store arm which maps cv to !nontemporal
+      // (IGC lowers to LSC .uc.uc = L1UC_L3UC).
+      return TritonGEN::StoreCacheControl::L1UC_L3UC;
     }
+    llvm_unreachable("invalid cache modifier for StoreOp");
   }
 
   template <typename OpType,
