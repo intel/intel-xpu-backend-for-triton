@@ -356,6 +356,9 @@ bool isLayoutAnchor(Operation *op) {
   if (auto reshape = dyn_cast<tt::ReshapeOp>(op))
     return reshape.getAllowReorder();
 
+  if (auto convertOp = dyn_cast<ttgi::ReinterpretConvertLayoutOp>(op))
+    return true;
+
   // Anchor a convert_layout that feeds a descriptor store when folding it would
   // demote the store from a 2D block write to a scalar scatter.
   //
