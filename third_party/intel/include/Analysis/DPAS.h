@@ -123,7 +123,7 @@ using DPASEngineTypeVariant =
 // Factory class used to create a concrete DPAS analysis.
 class DPASAnalysisFactory {
 public:
-  static DPASAnalysisVariant createDPASAnalysis(ModuleOp &mod) {
+  static DPASAnalysisVariant createDPASAnalysis(ModuleOp mod) {
     bool supportDPASWithBF8 =
         mod->hasAttr(TritonIntelGPUDialect::getSupportDPASWithBF8AttrName());
     if (!supportDPASWithBF8)
