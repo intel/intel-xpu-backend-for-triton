@@ -4,6 +4,7 @@
 
 #include "intel/include/Analysis/Utility.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENDialect.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 
 namespace mlir::triton::gpu {
 namespace {
@@ -25,6 +26,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                   ConversionPatternRewriter &rewriter) const override {
     MLIRContext *ctx = op.getContext();
 
+    llvm::outs() << "op: " << op << "\n";
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
 
@@ -577,6 +579,27 @@ struct ConvertLayoutOpGuard : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
   }
 };
 
+struct ReinterpretConvertLayoutOpConversion
+    : public ConvertOpToLLVMPattern<intel::ReinterpretConvertLayoutOp> {
+  using ConvertOpToLLVMPattern<
+      intel::ReinterpretConvertLayoutOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(intel::ReinterpretConvertLayoutOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto srcTy = op.getSrc().getType();
+    auto dstTy = op.getType();
+    if (!intel::cvtIsSubGroupReinterpret(srcTy, dstTy))
+      return rewriter.notifyMatchFailure(
+          op, "expected a supported sub-group reinterpret conversion");
+
+    auto cvt = ConvertLayoutOp::create(rewriter, op.getLoc(), op.getType(),
+                                       op.getSrc());
+    rewriter.replaceOp(op, cvt.getResult());
+    return success();
+  }
+};
+
 } // namespace
 
 } // namespace mlir::triton::gpu
@@ -594,6 +617,10 @@ void mlir::triton::intel::populateConvertLayoutOpToLLVMPatterns(
   // not used. Otherwise, SLM corruption might occur.
   patterns.add<gpu::ConvertLayoutOpGuard>(typeConverter,
                                           benefit.getBenefit() + 1);
+  // Lower Intel reinterpret-convert via ttg.convert_layout so the existing
+  // Intel linear-layout conversion pattern handles codegen.
+  patterns.add<gpu::ReinterpretConvertLayoutOpConversion>(
+      typeConverter, benefit.getBenefit() + 3);
   mlir::triton::populateConvertLayoutOpToLLVMPatterns(typeConverter, targetInfo,
                                                       patterns, benefit);
 }
