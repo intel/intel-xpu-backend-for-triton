@@ -1,4 +1,5 @@
 import importlib.metadata
+import numbers
 import os
 import json
 import re
@@ -264,34 +265,77 @@ class ArchParser:
 
 class SpirvUtils:
 
+    # Required C symbols — absence indicates a broken / partial build and must
+    # raise loudly (AttributeError propagated from ctypes) rather than surface
+    # later as a cryptic NoneType-call at the first hot-path call site.
+    _REQUIRED_METHODS = ("init_devices", "load_binary", "wait_on_sycl_queue", "sycl_queue_memset", "launch",
+                         "build_signature_metadata")
+    # Optional Fix E symbols. Older / stripped-down builds may lack them; the
+    # XPULauncher gates on `.has_packed_launch` and transparently falls back
+    # to the classic `launch` path when False.
+    _OPTIONAL_METHODS = ("launch_packed", "build_pack_layout")
+
     def __init__(self, cache_path: str):
         self.shared_library = ctypes.PyDLL(cache_path)
-        methods = ("init_devices", "load_binary", "wait_on_sycl_queue", "sycl_queue_memset", "launch",
-                   "build_signature_metadata")
-        for method in methods:
-            getattr(self.shared_library, method).restype = ctypes.py_object
-            getattr(self.shared_library, method).argtypes = (ctypes.py_object, )
+        for method in self._REQUIRED_METHODS:
+            fn = getattr(self.shared_library, method)
+            fn.restype = ctypes.py_object
+            fn.argtypes = (ctypes.py_object, )
+        # Configure optional Fix E symbols only if the underlying ctypes DLL
+        # actually exposes them — asymmetric partial builds (e.g. only
+        # `build_pack_layout` present) are rejected as a set.
+        optional_fns = {name: getattr(self.shared_library, name, None) for name in self._OPTIONAL_METHODS}
+        self.has_packed_launch = all(fn is not None for fn in optional_fns.values())
+        if self.has_packed_launch:
+            for fn in optional_fns.values():
+                fn.restype = ctypes.py_object
+                fn.argtypes = (ctypes.py_object, )
         self.shared_library.get_device_properties.restype = ctypes.py_object
         self.shared_library.get_device_properties.argtypes = (ctypes.c_int, )
         self.shared_library.get_last_selected_build_flags.restype = ctypes.py_object
-
-        self.shared_library.build_signature_metadata.restype = ctypes.py_object
-        self.shared_library.build_signature_metadata.argtypes = (ctypes.py_object, )
 
         self.shared_library.init_PyKernelArgType.restype = ctypes.py_object
         self.shared_library.init_PyKernelArgType.argtypes = tuple()
 
     def __getattribute__(self, name):
+        # Required C symbols: passthrough that raises AttributeError if the
+        # underlying DLL is missing them (ctypes.PyDLL raises on getattr, not
+        # None). Doing an explicit `getattr(_, name)` (no default) preserves
+        # this behavior — we only want None-fallback for the optional
+        # Fix E symbol `build_pack_layout`, gated via `has_packed_launch`.
         if name in ("get_device_properties", "init_devices", "wait_on_sycl_queue", "get_last_selected_build_flags",
                     "sycl_queue_memset", "build_signature_metadata", "init_PyKernelArgType"):
             shared_library = super().__getattribute__("shared_library")
             return getattr(shared_library, name)
+        if name == "build_pack_layout":
+            # Gate on has_packed_launch: launch_packed and build_pack_layout
+            # are set together on the DLL side; refuse to expose one without
+            # the other so a partial build can't produce a half-configured
+            # fast path.
+            if not super().__getattribute__("has_packed_launch"):
+                return None
+            shared_library = super().__getattribute__("shared_library")
+            return getattr(shared_library, name, None)
 
         return super().__getattribute__(name)
 
     def launch(self, *args):
         # the same reason as for `load_binary`
         return self.shared_library.launch(args)
+
+    @property
+    def launch_packed(self):
+        # Return None when the underlying C symbol is absent so callers can
+        # safely probe with `getattr(utils, 'launch_packed', None)`. Without
+        # this the class-level method would always be resolved regardless of
+        # the DLL's actual symbol table (defeating the probe).
+        if not self.has_packed_launch:
+            return None
+        return self._launch_packed_impl
+
+    def _launch_packed_impl(self, *args):
+        # See `launch()` for the rationale on tuple-wrapping.
+        return self.shared_library.launch_packed(args)
 
     def load_binary(self, *args):
         # if we don't use parameter passing in this way,
@@ -491,6 +535,10 @@ class XPUUtils(object):
         self.sycl_queue_memset = mod.sycl_queue_memset
         self.unload_module = lambda module: None
         self.launch = mod.launch
+        # `launch_packed` and `build_pack_layout` are optional (Fix E).
+        # Older builds without them fall back to the classic `launch` path.
+        self.launch_packed = getattr(mod, "launch_packed", None)
+        self.build_pack_layout = getattr(mod, "build_pack_layout", None)
         self.build_signature_metadata = mod.build_signature_metadata
         self._initialized = True
 
@@ -593,7 +641,6 @@ def wrap_handle_tensordesc(launcher, signature, tensordesc_meta):
 
 def serialize_args(args, constants, signature, dir_path):
     import torch
-    import numbers
     os.makedirs(dir_path, exist_ok=True)
 
     def serialize_kernel_metadata(arg, args_dict):
@@ -654,10 +701,58 @@ class XPULauncher(object):
         arg_idx = lambda x: (src.fn.arg_names.index(x), ) if isinstance(x, str) else x
         constants = {arg_idx(idx): value for idx, value in constants.items()}
         signature = {idx: value for idx, value in src.signature.items()}
-        launcher = triton.runtime.driver.active.utils.launch
+        utils = triton.runtime.driver.active.utils
         expanded_signature = expand_signature(signature.values(), tensordesc_meta=None, descriptor_type="*i8")
         self.arg_annotations = annotate_arguments(expanded_signature)
         self.kernel_signature = make_kernel_signature(expanded_signature)
+
+        # Fix E: pick the packed launcher when the kernel signature has pointer
+        # args and no tuple-nested annotations. Fallback: classic launch path.
+        # Tensordesc kernels also fall back because the raw args tuple passed
+        # to __call__ has TensorDescriptor objects, not the expanded pointer
+        # + shape/strides layout that arg_annotations describes; the
+        # wrap_handle_tensordesc wrapper expands args before hitting the C
+        # launcher but that expansion is invisible to the pack loop.
+
+        # Initialize defaults
+        self._use_packed_launch = False
+        self._pack_buf = None
+        self._pack_view = None
+        self._pointer_arg_indices = ()
+        launcher = utils.launch
+
+        # Read controls/capabilities for packed launch eligibility check.
+        # Both `launch_packed` and `build_pack_layout` are set together on the
+        # SpirvUtils side (see `SpirvUtils.has_packed_launch`) — they are
+        # non-None iff BOTH C symbols were present at DLL load; asymmetric
+        # partial builds are rejected as a set. We still assert this invariant
+        # locally so a future change on the utils side surfaces immediately.
+        disable_packed = os.environ.get("TRITON_INTEL_DISABLE_PACKED_LAUNCH") == "1"
+        launch_packed_fn = getattr(utils, "launch_packed", None)
+        build_pack_layout_fn = getattr(utils, "build_pack_layout", None)
+        # Unconditional check (not `assert`) so `python -O` doesn't silently
+        # skip the invariant and produce a half-configured fast path.
+        if (launch_packed_fn is None) != (build_pack_layout_fn is None):
+            raise RuntimeError("SpirvUtils packed-launch symbol pair is asymmetric — bug in SpirvUtils.__init__")
+        has_tensordesc = any(isinstance(sig, str) and sig.startswith("tensordesc") for sig in signature.values())
+
+        # Eligibility check
+        if ((not disable_packed) and launch_packed_fn is not None and build_pack_layout_fn is not None
+                and not has_tensordesc):
+            # build_pack_layout returns pointer_raw_indices as raw-args-tuple
+            # indices directly (walk done in C to avoid needing a PyMemberDef
+            # for PyKernelArg.type).
+            pointer_raw_indices, pack_buf_bytes, packable = build_pack_layout_fn(
+                (self.kernel_signature, self.arg_annotations))
+            if packable:
+                self._pointer_arg_indices = pointer_raw_indices  # already a tuple
+                self._pack_buf = bytearray(pack_buf_bytes)
+                # memoryview cast to native pointer array; each slot is 8B on
+                # 64-bit Windows/Linux. Writing view[i] = int stores 8 bytes.
+                self._pack_view = memoryview(self._pack_buf).cast("P")
+                launcher = launch_packed_fn
+                self._use_packed_launch = True
+
         self.launch = wrap_handle_tensordesc(launcher, signature, tensordesc_meta=[])
 
         # Serialize KernelArguments for SPIR-V Runner
@@ -731,8 +826,46 @@ class XPULauncher(object):
             self._dump_launch_params((gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata,
                                       launch_enter_hook, launch_exit_hook, *args), self.constants, self.signature)
 
-        self.launch(gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
-                    launch_exit_hook, self.arg_annotations, self.kernel_signature, args)
+        if self._use_packed_launch:
+            # Fix E fast path: pre-resolve pointer args in Python and hand
+            # C a flat void*-array via `self._pack_buf`. Scalars stay in
+            # `args` and are extracted C-side unchanged.
+            #
+            # Diagnostic parity with classic extractPointer (driver.c): the
+            # classic path accepts (a) int (PyLong_Check), and (b) any object
+            # with a `.data_ptr()` method that returns an int. Match both.
+            # We deliberately use bare `int` (not `numbers.Integral`) because
+            # the classic path's PyLong_Check rejects numpy scalar ints
+            # (np.int64/uint64) — using Integral here would silently accept
+            # them on the fast path only, creating cross-path semantic drift.
+            view = self._pack_view
+            for slot, raw_i in enumerate(self._pointer_arg_indices):
+                arg = args[raw_i]
+                if arg is None:
+                    view[slot] = 0
+                elif isinstance(arg, int):
+                    # isinstance(arg, int) matches PyLong_Check semantics
+                    # (accepts int and its subclasses; rejects numpy scalars
+                    # which are Integral but not int subclasses).
+                    view[slot] = arg
+                else:
+                    data_ptr_meth = getattr(arg, "data_ptr", None)
+                    if data_ptr_meth is None:
+                        raise TypeError("Pointer argument must be either uint64 or have data_ptr method")
+                    result = data_ptr_meth()
+                    if not isinstance(result, int):
+                        # Match the classic path's message for this exact
+                        # case (see extractPointer in driver.c, second
+                        # PyErr_SetString) — distinct from the "no data_ptr
+                        # method" message so callers can diagnose which
+                        # invariant failed.
+                        raise TypeError("data_ptr method of Pointer object must return 64-bit int")
+                    view[slot] = result
+            self.launch(gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
+                        launch_exit_hook, self.arg_annotations, self.kernel_signature, self._pack_buf, args)
+        else:
+            self.launch(gridX, gridY, gridZ, stream, function, kernel_metadata, launch_metadata, launch_enter_hook,
+                        launch_exit_hook, self.arg_annotations, self.kernel_signature, args)
 
 
 class XPUDriver(DriverBase):

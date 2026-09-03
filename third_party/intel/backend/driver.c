@@ -1307,6 +1307,147 @@ bool extractArgs(PyObject **final_list, int *list_idx, PyObject *kernel_args,
   return true;
 }
 
+// Walks arg_annotations (post-`expand_signature` shape) and builds a list of
+// raw-args-tuple indices corresponding to ARG_KERNEL entries encountered so
+// far. Returns:
+//   returns          = a new PyList (always non-NULL on success; borrowed
+//                      NULL only when a Python exception is set).
+//   *packable_out    = true iff the walk saw NO ARG_TUPLE entries. On false,
+//                      the returned list is truncated at the first ARG_TUPLE
+//                      and callers must not use it for pack-layout math.
+//                      Callers must check `*packable_out` — the list itself
+//                      is not a pack-ability signal.
+// Caller owns the returned list.
+static PyObject *buildRawKernelArgIndices(PyObject *arg_annotations,
+                                          bool *packable_out) {
+  PyObject *fast_annotations = PySequence_Fast(
+      arg_annotations, "Expected arg_annotations to be a sequence or iterable");
+  if (!fast_annotations) {
+    return NULL;
+  }
+  Py_ssize_t n = PySequence_Fast_GET_SIZE(fast_annotations);
+  PyObject **items = PySequence_Fast_ITEMS(fast_annotations);
+  PyObject *raw_arg_indices = PyList_New(0);
+  if (!raw_arg_indices) {
+    Py_DECREF(fast_annotations);
+    return NULL;
+  }
+  bool packable = true;
+  Py_ssize_t raw_i = 0;
+  for (Py_ssize_t i = 0; i < n; ++i) {
+    // build_pack_layout is exposed via ctypes, so callers can supply arbitrary
+    // Python objects. Validate before casting so `[None]` or a wrong type
+    // raises a Python exception instead of crashing on annotation->type.
+    if (!PyObject_TypeCheck(items[i], &PyKernelArgType)) {
+      PyErr_SetString(PyExc_TypeError,
+                      "arg_annotations entries must be PyKernelArg instances");
+      Py_DECREF(raw_arg_indices);
+      Py_DECREF(fast_annotations);
+      return NULL;
+    }
+    PyKernelArgObject *annotation = (PyKernelArgObject *)items[i];
+    if (annotation->type == ARG_TUPLE) {
+      packable = false;
+      break;
+    }
+    if (annotation->type == ARG_KERNEL) {
+      PyObject *idx = PyLong_FromSsize_t(raw_i);
+      if (!idx || PyList_Append(raw_arg_indices, idx) < 0) {
+        Py_XDECREF(idx);
+        Py_DECREF(raw_arg_indices);
+        Py_DECREF(fast_annotations);
+        return NULL;
+      }
+      Py_DECREF(idx);
+    }
+    // Both ARG_KERNEL and ARG_CONSTEXPR consume one raw-args slot.
+    raw_i++;
+  }
+  Py_DECREF(fast_annotations);
+  *packable_out = packable;
+  return raw_arg_indices;
+}
+
+// Fix E helper: given the kernel_signature bytes (one extractor code per
+// kernel arg) and arg_annotations, compute the pack layout used by the
+// packed launch fast path.
+//
+// Returns a 3-tuple (pointer_raw_indices, pack_buffer_size, packable):
+//   pointer_raw_indices : tuple[int] -- indices into the raw args tuple
+//                                       (as passed to XPULauncher.__call__)
+//                                       from which the packed pointer values
+//                                       should be drawn, in the order they
+//                                       appear in `signature`. All entries
+//                                       correspond to signature slots whose
+//                                       extractor is EXTRACTOR_POINTER_INDEX.
+//   pack_buffer_size    : int        -- bytes = len(pointer_raw_indices) *
+//   sizeof(void*). packable            : bool       -- True iff the fast path
+//   applies:
+//                                       no ARG_TUPLE annotations AND at least
+//                                       one pointer arg.
+extern "C" EXPORT_FUNC PyObject *build_pack_layout(PyObject *args) {
+  Py_buffer signature;
+  PyObject *arg_annotations = NULL;
+  if (!PyArg_ParseTuple(args, "y*O", &signature, &arg_annotations)) {
+    return NULL;
+  }
+
+  bool annotations_packable = true;
+  PyObject *kernel_arg_raw_indices =
+      buildRawKernelArgIndices(arg_annotations, &annotations_packable);
+  if (kernel_arg_raw_indices == NULL) {
+    PyBuffer_Release(&signature);
+    return NULL;
+  }
+
+  const uint8_t *sig = (const uint8_t *)signature.buf;
+  Py_ssize_t num_sig_args = signature.len;
+  // Invariant: when annotations_packable is true, both `kernel_signature`
+  // and the ARG_KERNEL-only sub-list of arg_annotations are derived from
+  // the same `expanded_signature` on the Python side (see
+  // make_kernel_signature + annotate_arguments in driver.py). Their lengths
+  // are equal by construction; no runtime check needed.
+
+  // Build the pointer_raw_indices list: for each signature slot that is a
+  // pointer, look up the raw-args index from kernel_arg_raw_indices.
+  PyObject *pointer_raw_indices = PyList_New(0);
+  if (!pointer_raw_indices) {
+    Py_DECREF(kernel_arg_raw_indices);
+    PyBuffer_Release(&signature);
+    return NULL;
+  }
+  if (annotations_packable) {
+    for (Py_ssize_t i = 0; i < num_sig_args; ++i) {
+      if (sig[i] == EXTRACTOR_POINTER_INDEX) {
+        PyObject *raw_idx =
+            PyList_GET_ITEM(kernel_arg_raw_indices, i); // borrowed
+        if (PyList_Append(pointer_raw_indices, raw_idx) < 0) {
+          Py_DECREF(pointer_raw_indices);
+          Py_DECREF(kernel_arg_raw_indices);
+          PyBuffer_Release(&signature);
+          return NULL;
+        }
+      }
+    }
+  }
+  Py_DECREF(kernel_arg_raw_indices);
+
+  Py_ssize_t num_pointer_slots = PyList_GET_SIZE(pointer_raw_indices);
+  Py_ssize_t pack_buffer_size = num_pointer_slots * (Py_ssize_t)sizeof(void *);
+  bool packable = annotations_packable && (num_pointer_slots > 0);
+
+  PyObject *pointer_raw_indices_tuple = PyList_AsTuple(pointer_raw_indices);
+  Py_DECREF(pointer_raw_indices);
+  if (!pointer_raw_indices_tuple) {
+    PyBuffer_Release(&signature);
+    return NULL;
+  }
+
+  PyBuffer_Release(&signature);
+  return Py_BuildValue("(NnO)", pointer_raw_indices_tuple, pack_buffer_size,
+                       packable ? Py_True : Py_False);
+}
+
 bool launchHook(PyObject *hook, PyObject *metadata) {
   if (hook != Py_None) {
     PyObject *ret = PyObject_CallOneArg(hook, metadata);
@@ -1460,6 +1601,200 @@ extern "C" EXPORT_FUNC PyObject *launch(PyObject *args) {
   }
   PyBuffer_Release(&signature);
   Py_RETURN_NONE;
+}
+
+// Fix E: fast-path launcher variant that skips the per-pointer Python C-API
+// call chain (PyObject_GetAttr + PyObject_CallNoArgs on `data_ptr`) by
+// consuming pointer values pre-resolved on the Python side.
+//
+// Compared to `launch()` above, the only differences are:
+//   1. An extra `y*` Python-buffer argument (`packed_pointers`) is parsed
+//      -- a contiguous array of `void*` values, one per pointer slot, in
+//      the order pointer slots appear in `signature`.
+//   2. Inside the extract loop, when `extractor_data[i] ==
+//   EXTRACTOR_POINTER_INDEX`,
+//      the raw pointer is copied straight from `packed_pointers` and
+//      validated via checkDevicePointer -- no Python calls.
+//      Scalar slots still call their extractor (fast path already).
+//
+// All other bookkeeping (extractArgs walk, alloca layout, kernel capsule
+// deref, SYCL submit, launch hooks, PyBuffer_Release on every error path)
+// mirrors `launch()` exactly. Any semantic drift here is a bug.
+extern "C" EXPORT_FUNC PyObject *launch_packed(PyObject *args) {
+  int gridX, gridY, gridZ;
+  PyObject *py_obj_stream;
+  PyObject *py_kernel;
+  PyObject *kernel_metadata = NULL;
+  PyObject *launch_metadata = NULL;
+  PyObject *launch_enter_hook = NULL;
+  PyObject *launch_exit_hook = NULL;
+  void *global_scratch = nullptr;
+  void *profile_scratch = nullptr;
+  PyObject *arg_annotations = NULL;
+  Py_buffer signature;
+  Py_buffer packed_pointers;
+  PyObject *kernel_args = NULL;
+
+  if (!PyArg_ParseTuple(args, "iiiOOOOOOOy*y*O", &gridX, &gridY, &gridZ,
+                        &py_obj_stream, &py_kernel, &kernel_metadata,
+                        &launch_metadata, &launch_enter_hook, &launch_exit_hook,
+                        &arg_annotations, &signature, &packed_pointers,
+                        &kernel_args)) {
+    return NULL;
+  }
+
+  // Local helper macro for the two-buffer release + return NULL path.
+#define RELEASE_AND_FAIL()                                                     \
+  do {                                                                         \
+    PyBuffer_Release(&signature);                                              \
+    PyBuffer_Release(&packed_pointers);                                        \
+    return NULL;                                                               \
+  } while (0)
+
+  // extract kernel metadata
+  // num_ctas is intentionally omitted here — it is dead in sycl_kernel_launch
+  // (classic launch() extracts it too but never uses it; that is left as
+  // separate cleanup on the classic path).
+  PyObject *num_warps_attr =
+      PyObject_GetAttrString(kernel_metadata, "num_warps");
+  int num_warps = PyLong_AsLong(num_warps_attr);
+  Py_DECREF(num_warps_attr);
+  PyObject *shared_attr = PyObject_GetAttrString(kernel_metadata, "shared");
+  int shared_memory = PyLong_AsLong(shared_attr);
+  Py_DECREF(shared_attr);
+  PyObject *threads_per_warp_attr =
+      PyObject_GetAttrString(kernel_metadata, "threads_per_warp");
+  int threads_per_warp = PyLong_AsLong(threads_per_warp_attr);
+  Py_DECREF(threads_per_warp_attr);
+
+  // Copy packed_pointers into call-local storage BEFORE the enter-hook.
+  // The enter-hook is arbitrary Python code that may re-enter the launch
+  // path for the same XPULauncher instance and overwrite its self._pack_buf
+  // (the memory that packed_pointers.buf points into). Consuming the
+  // reference directly after the hook would then see the inner launch's
+  // pointer values. Snapshot to alloca now so we're immune to that.
+  uint8_t *extractor_data = (uint8_t *)signature.buf;
+  Py_ssize_t num_args = signature.len;
+  Py_ssize_t num_pointer_slots =
+      packed_pointers.len / (Py_ssize_t)sizeof(void *);
+  void **pointer_slots_local =
+      (void **)alloca(num_pointer_slots * sizeof(void *));
+  if (num_pointer_slots > 0) {
+    memcpy(pointer_slots_local, packed_pointers.buf,
+           num_pointer_slots * sizeof(void *));
+  }
+  void *const *pointer_slots = pointer_slots_local;
+
+  if (!launchHook(launch_enter_hook, launch_metadata)) {
+    RELEASE_AND_FAIL();
+  }
+
+  void *pStream = PyLong_AsVoidPtr(py_obj_stream);
+  if (pStream == nullptr || py_kernel == nullptr) {
+    RELEASE_AND_FAIL();
+  }
+  sycl::queue stream = *(static_cast<sycl::queue *>(pStream));
+
+  PyObject **args_data = (PyObject **)alloca(num_args * sizeof(PyObject *));
+  if (args_data == NULL) {
+    RELEASE_AND_FAIL();
+  }
+  int list_idx = 0;
+  if (!extractArgs(args_data, &list_idx, kernel_args, arg_annotations)) {
+    RELEASE_AND_FAIL();
+  }
+
+  int num_params = num_args + 2;
+  void **params = (void **)alloca(num_params * sizeof(void *));
+  int params_idx = 0;
+  PointerCheckScope pointerCheckScope(stream);
+
+  // Layout: same as launch(), see comments there. This loop is invariant per
+  // kernel specialization; Fix E's future follow-up may hoist it, but for
+  // now we keep the alloca form for behavioral parity with launch().
+  Extractor *extractors = (Extractor *)alloca(num_args * sizeof(Extractor));
+  size_t *param_offset = (size_t *)alloca(num_args * sizeof(size_t));
+  size_t total_size = 0;
+  size_t max_alignment = 1;
+  for (Py_ssize_t i = 0; i < num_args; ++i) {
+    extractors[i] = getExtractor(extractor_data[i]);
+    if (extractors[i].extract == NULL) {
+      RELEASE_AND_FAIL();
+    }
+    size_t alignment = extractors[i].alignment ? extractors[i].alignment : 1;
+    total_size = alignUp(total_size, alignment);
+    param_offset[i] = total_size;
+    total_size += extractors[i].size;
+    if (alignment > max_alignment) {
+      max_alignment = alignment;
+    }
+  }
+  char *param_storage_raw = (char *)alloca(total_size + max_alignment - 1);
+  char *param_storage =
+      (char *)alignUp((uintptr_t)param_storage_raw, max_alignment);
+
+  // Extraction loop: pointers read from packed buffer + validated; scalars
+  // still run their extractor. `next_pointer` walks pointer_slots as we
+  // encounter pointer entries in `extractor_data`.
+  Py_ssize_t next_pointer = 0;
+  for (Py_ssize_t i = 0; i < num_args; ++i) {
+    g_pointer_check_arg_idx = static_cast<int>(i);
+    params[params_idx] = param_storage + param_offset[i];
+
+    if (extractor_data[i] == EXTRACTOR_POINTER_INDEX) {
+      // Should never overshoot -- Python-side pre-pack must have provided
+      // one slot per pointer in signature order. Defensive check.
+      if (next_pointer >= num_pointer_slots) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "launch_packed: packed_pointers underrun");
+        RELEASE_AND_FAIL();
+      }
+      void *ptr = pointer_slots[next_pointer++];
+      *(void **)params[params_idx] = ptr;
+      if (!checkDevicePointer(ptr, g_pointer_check_arg_idx,
+                              *g_pointer_check_queue)) {
+        RELEASE_AND_FAIL();
+      }
+    } else {
+      Extractor extractor = extractors[i];
+      PyObject *current_arg = args_data[i];
+      if (!extractor.extract(params[params_idx], current_arg)) {
+        RELEASE_AND_FAIL();
+      }
+    }
+    params_idx++;
+  }
+  g_pointer_check_arg_idx = -1;
+
+  // Add scratch objects.
+  params[params_idx++] = &global_scratch;
+  params[params_idx++] = &profile_scratch;
+
+  sycl::kernel *kernel_ptr = reinterpret_cast<sycl::kernel *>(
+      PyCapsule_GetPointer(py_kernel, "kernel"));
+  if (kernel_ptr == nullptr) {
+    RELEASE_AND_FAIL();
+  }
+  sycl::kernel kernel = *kernel_ptr;
+
+  Py_BEGIN_ALLOW_THREADS;
+  sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp,
+                     shared_memory, stream, kernel, global_scratch,
+                     profile_scratch, num_params, params, extractor_data);
+  Py_END_ALLOW_THREADS;
+
+  if (PyErr_Occurred()) {
+    RELEASE_AND_FAIL();
+  }
+
+  if (!launchHook(launch_exit_hook, launch_metadata)) {
+    RELEASE_AND_FAIL();
+  }
+  PyBuffer_Release(&signature);
+  PyBuffer_Release(&packed_pointers);
+  Py_RETURN_NONE;
+
+#undef RELEASE_AND_FAIL
 }
 
 extern "C" EXPORT_FUNC PyTypeObject *init_PyKernelArgType() {
