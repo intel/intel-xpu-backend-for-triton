@@ -502,6 +502,7 @@ struct LoadStoreConversionBase {
     /******** LoadOp ********
      * ""   -> DEFAULT (No cache modifier provided)
      * "cg" -> L1UC_L3C (Cache at global level, not L1)
+     * "cs" -> L1S_L3C (Streaming in L1, still cached in L3)
      * "cv" -> L1UC_L3UC (Do not cache at all)
      * "ca" -> L1C_L3C (Cache at all levels)
      **/
@@ -524,6 +525,13 @@ struct LoadStoreConversionBase {
       return TritonGEN::LoadCacheControl::DEFAULT;
     case CacheModifier::CG:
       return TritonGEN::LoadCacheControl::L1UC_L3C;
+    case CacheModifier::CS:
+      // `cs` is "streaming": the line is expected to be touched once, so it is
+      // marked for early replacement in L1 rather than evicted from it. There
+      // is no L1S_L3S load control (unlike the store side), and L3 must stay
+      // cached for the same reason `cg` maps to L1UC_L3C -- see
+      // getNonTemporalFlag().
+      return TritonGEN::LoadCacheControl::L1S_L3C;
     case CacheModifier::CV:
       return TritonGEN::LoadCacheControl::L1UC_L3UC;
     case CacheModifier::CA:
@@ -568,6 +576,40 @@ struct LoadStoreConversionBase {
     switch (op.getCache()) {
     case triton::CacheModifier::CG:
     case triton::CacheModifier::CS:
+      // `!nontemporal` is a *single bit*, and IGC turns it into LSC `.uc.uc` --
+      // bypass L1 **and** L3. That is the exact meaning of `cv` (L1UC_L3UC) but
+      // it over-states `cg` (L1UC_L3C) and `cs` (L1S_L3C), both of which keep
+      // L3 cached. Emitting an L3 bypass for `cg` destroyed cross-kernel L3
+      // reuse and cost 1.58x end-to-end on TorchBench pyhpc_isoneutral_mixing
+      // (issue #7843), so no load may take that path.
+      //
+      // The faithful encoding is a per-level SPV_INTEL_cache_controls
+      // decoration, which is what the predicated path emits via the
+      // `cache_control` operand of TritonGEN::PredicatedLoadOp. It cannot be
+      // reused here: the decoration would have to ride on the `llvm.load` as
+      // `!spirv.DecorationCacheControlINTEL` metadata, and LLVM InstCombine
+      // folds `load <N x iM>` + `bitcast` into a retyped `load <N x fM>`,
+      // recreating the instruction and copying only the metadata kinds it knows
+      // about. Custom SPIR-V metadata is dropped there, long before IGC sees
+      // it; `!nontemporal` survives only because it has a first-class
+      // `MD_nontemporal` kind. The predicated path is immune because its
+      // carrier is a call, which InstCombine never retypes.
+      //
+      // So a plain load leaves both modifiers unannotated and runs at the
+      // hardware default (`.ca.ca`). Cache modifiers are performance hints, so
+      // caching more than asked is always safe, and it measures fastest of the
+      // available options on the workload above. Revisit if LLVM starts
+      // preserving unknown metadata across load retyping.
+      //
+      // This covers every load arm of both `tt.load` and `tt.descriptor_load`:
+      // the unmasked plain load, the masked fallback that guards a plain load
+      // with control flow, and (correctly, via the decoration) the predicated
+      // load. Which of the two masked arms is taken depends on
+      // TRITON_INTEL_PREDICATED_LOAD, so neither may rely on the flag.
+      //
+      // FIXME: the store path still collapses `cg`/`cs` onto this flag and
+      // needs the same treatment.
+      return std::is_same_v<OpType, StoreOp>;
     case triton::CacheModifier::CV:
       return true;
     case triton::CacheModifier::CA:
