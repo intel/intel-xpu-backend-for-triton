@@ -75,9 +75,9 @@ env:
   # Number of shards for the suites listed in PARALLEL_SUITES
   NUM_SHARDS: 2
   # Suites that are split into NUM_SHARDS shards, each shard runs on its own runner
-  PARALLEL_SUITES: "language"
+  PARALLEL_SUITES: "scaled_dot"
   # Suites that are run without sharding, one runner per suite
-  SEQUENTIAL_SUITES: "minicore scaled_dot gluon triton-kernels rest tutorial-fa-128-nofwdfp8"
+  SEQUENTIAL_SUITES: "minicore language gluon triton-kernels rest tutorial-fa-128-nofwdfp8"
 
 jobs:
   build:
