@@ -34,8 +34,8 @@ unsigned RegisterPressureAnalysis::getPerThreadSizeInBytes(Type type) {
   return 0;
 }
 
-unsigned RegisterPressureAnalysis::getGRFBytesPerHardwareThread(
-    StringRef grfMode) {
+unsigned
+RegisterPressureAnalysis::getGRFBytesPerHardwareThread(StringRef grfMode) {
   // Explicit GRF modes map to exact per-hardware-thread budgets (one hardware
   // thread executes a whole subgroup/warp of lanes sharing one register file).
   // For "default" and "auto", conservatively assume 128-register mode (4096
