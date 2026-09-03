@@ -39,9 +39,6 @@ tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[ngram-raw_logprobs]
 tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[ngram-processed_logits]
 tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[ngram-processed_logprobs]
 
-# vLLM returns 6 logprob entries when 5 are expected: https://github.com/intel/intel-xpu-backend-for-triton/issues/7161
-tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[False-0.0-BatchLogprobsComposition.SAMPLE]
-
 # oneCCL fails to start worker thread: https://github.com/intel/intel-xpu-backend-for-triton/issues/7686
 tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[False-0.0-BatchLogprobsComposition.NONE]
 tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[True-0.0-BatchLogprobsComposition.NONE]
@@ -72,7 +69,6 @@ tests/v1/worker/test_gpu_model_runner.py::test_update_states_no_changes
 tests/v1/worker/test_gpu_model_runner.py::test_update_states_request_unscheduled
 tests/v1/worker/test_gpu_model_runner.py::test_update_states_pp_non_async_multi_request_keeps_token_buffers_consistent
 tests/v1/worker/test_gpu_model_runner.py::test_update_states_pp_async_multi_request_keeps_rank_state_consistent
-tests/v1/worker/test_gpu_model_runner.py::test_kv_cache_stride_order
 tests/v1/worker/test_gpu_model_runner.py::test_update_config
 tests/v1/worker/test_gpu_model_runner.py::test_load_model_weights_inplace
 tests/v1/worker/test_gpu_model_runner.py::test_reload_weights_before_load_model

@@ -32,14 +32,13 @@ def get_fused_gemm_autotune_configs() -> list[triton.Config]:
                 'BLOCK_SIZE_N': BN,
                 'BLOCK_SIZE_K': BK,
                 'GROUP_SIZE_M': G,
-                'grf_mode': '256',
-                'loop_distribute': True,
+                'grf_mode': '128',
             },
             num_stages=s,
             num_warps=w,
         )
         for BM in [128, 256]
-        for BN in [64, 128]
+        for BN in [32, 64]
         for BK in [32, 64]
         for G in [4, 8, 16]
         for s in [2, 3, 4]

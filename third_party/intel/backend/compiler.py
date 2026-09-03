@@ -174,14 +174,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
     @staticmethod
     def core_clock_rate(tgt_prop) -> int:
-        if (rate := tgt_prop.get('core_clock_rate')) is None:
-            from triton.runtime import driver
-            # Not `driver.active.utils`: creating it initializes the device, which raises
-            # when compiling in a forked process.
-            if (utils := driver.active.__dict__.get('utils')) is None:
-                return 0
-            rate = utils.get_device_properties(driver.active.get_current_device()).get('sm_clock_rate', 0)
-        return rate or 0
+        return tgt_prop.get('core_clock_rate') or 0
 
     def parse_target(self, tgt_prop) -> dict:
         dev_prop = {}
@@ -257,12 +250,16 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
     @staticmethod
     def _get_max_divisibility(value):
-        """Get the highest power-of-2 divisor of value.
+        """Get the highest power-of-2 divisor of value, capped at 4.
+
+        Cap rationale: MaterializeBlockPointer's alignment check requires
+        divisibility by at most 4 (for fp8 with 8-bit elements). Higher
+        divisibilities provide no additional benefit for 2D block I/O.
         """
         if value == 0:
             return 1
         div = 1
-        while value % (div * 2) == 0:
+        while div < 4 and value % (div * 2) == 0:
             div *= 2
         return div
 
@@ -282,21 +279,20 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
     @staticmethod
     def min_dot_size(device_props: dict):
-        # (M, N, K)
-        # M: repeatCount. 1,2,4,8
-        # N: executionSize. 16 for PVC, 8 for ATS
-        # K: systolicDepth x opsPerChan. systolicDepth must be 8
-        repeat_count = 1
-        sdepth = 8
-        exec_size = min(device_props["sub_group_sizes"])
+        execution_size = min(device_props["sub_group_sizes"])
 
-        def get_ops_per_channel(lhs_type, rhs_type):
-            l_bitwidth = lhs_type.scalar.primitive_bitwidth
-            r_bitwidth = rhs_type.scalar.primitive_bitwidth
-            max_ops_per_chan = 32 / max(l_bitwidth, r_bitwidth)
-            return min(8, max_ops_per_chan)
+        def get_min_dot_size(lhs_type, rhs_type):
+            lhs_type = lhs_type.scalar
+            rhs_type = rhs_type.scalar
 
-        return lambda lhs_type, rhs_type: (repeat_count, exec_size, sdepth * get_ops_per_channel(lhs_type, rhs_type))
+            # FMA path currently has accuracy errors for INT8 dots.
+            if lhs_type.is_int8() and rhs_type.is_int8():
+                return (1, execution_size, 32)
+
+            # Fallback to use FMA if size configurations not supported/performant for DPAS.
+            return (1, 1, 1)
+
+        return get_min_dot_size
 
     def get_codegen_implementation(self, options):
         from triton.language.extra.intel import convert_custom_float8
@@ -575,6 +571,16 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             metadata["num_warps"] = total_num_warps
         metadata["threads_per_warp"] = intel.get_threads_per_warp(src)
         metadata["shared"] = src.get_int_attr("ttg.shared")
+        # Shared memory is now allocated statically (see `initSharedMemory` in
+        # TritonGPUToLLVM.cpp), so an oversized request fails the SPIR-V module
+        # build later (an opaque `ZE_RESULT_ERROR_MODULE_BUILD_FAILURE`) instead
+        # of failing at kernel launch. Raise `OutOfResources` here instead, so
+        # `triton.runtime.autotuner.Autotuner` (and callers that bypass
+        # `CompiledKernel._init_handles`, e.g. torch Inductor's static XPU
+        # launcher) can skip the offending config instead of crashing.
+        max_shared_mem = metadata["target"].arch.get("local_mem_size")
+        if max_shared_mem is not None and metadata["shared"] > max_shared_mem:
+            raise OutOfResources(metadata["shared"], max_shared_mem, "shared memory")
         metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size")
         metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment")
         metadata["profile_scratch_size"] = src.get_int_attr("ttg.profile_scratch_memory_size") or 0

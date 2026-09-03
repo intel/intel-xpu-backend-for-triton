@@ -13,7 +13,7 @@ tt.func @ttig.prefetch(%arg0: tensor<2x32x!tt.ptr<f32>>, %arg1: tensor<4x32xi1>)
 #warp = #ttig.warp<{sizePerThread = [16, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_2d_block_io} {
-  tt.func @ttig.sub_group_transpose.encoding(%local_buffer : !tt.ptr<f16, 3>, %src : tensor<16x16xf16, #warp>) -> tensor<16x16xf16, #warp> {
+  tt.func @ttig.sub_group_transpose.encoding(%local_buffer : !tt.ptr<f16>, %src : tensor<16x16xf16, #warp>) -> tensor<16x16xf16, #warp> {
     // expected-error @below {{'ttig.sub_group_transpose' op can only be used on tensors of shape <sub_group_size x sub_group_size> with no encoding}}
     %res = ttig.sub_group_transpose %local_buffer, %src : tensor<16x16xf16, #warp>
     tt.return %res : tensor<16x16xf16, #warp>
@@ -23,7 +23,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 // -----
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_2d_block_io} {
-  tt.func @ttig.sub_group_transpose.shape(%local_buffer : !tt.ptr<f16, 3>, %src : tensor<8x16xf16>) -> tensor<8x16xf16> {
+  tt.func @ttig.sub_group_transpose.shape(%local_buffer : !tt.ptr<f16>, %src : tensor<8x16xf16>) -> tensor<8x16xf16> {
     // expected-error @below {{'ttig.sub_group_transpose' op can only be used on tensors of shape <sub_group_size x sub_group_size> with no encoding}}
     %res = ttig.sub_group_transpose %local_buffer, %src : tensor<8x16xf16>
     tt.return %res : tensor<8x16xf16>
@@ -106,6 +106,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     // expected-error @below {{'ttig.2d_block_load' op result tensor must have rank >= 2, got 1}}
     %0 = ttig.2d_block_load %base_ptr, %width, %height, %pitch[%x, %y] {row_major} : !tt.ptr<f16> -> tensor<32xf16, #ttg.slice<{dim = 0, parent = #dot0}>>
     tt.return %0 : tensor<32xf16, #ttg.slice<{dim = 0, parent = #dot0}>>
+  }
+}
+
+// -----
+
+// COM: Every leading (batch) dim needs its own stride: the 2D surface params
+// COM: describe a single tile plane and cannot express the batch step (#7882).
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4, 2], repCluster = [1, 1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  tt.func @ttig.2d_block_load.missing_batch_stride(%base_ptr: !tt.ptr<f16>, %width: i32, %height: i32, %pitch: i32, %x: i32, %y: i32) -> tensor<2x64x32xf16, #dot0> {
+    // expected-error @below {{'ttig.2d_block_load' op expected 1 batch stride(s) for a rank-3 result, got 0}}
+    %0 = ttig.2d_block_load %base_ptr, %width, %height, %pitch[%x, %y] {row_major} : !tt.ptr<f16> -> tensor<2x64x32xf16, #dot0>
+    tt.return %0 : tensor<2x64x32xf16, #dot0>
   }
 }
 

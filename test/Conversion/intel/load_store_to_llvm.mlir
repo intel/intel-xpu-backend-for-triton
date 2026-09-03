@@ -21,12 +21,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     %14 = tt.load %6 cacheModifier = cs : tensor<256x!tt.ptr<f32>, #blocked0>
     %15 = tt.load %6 cacheModifier = wt : tensor<256x!tt.ptr<f32>, #blocked0>
     %16 = tt.load %6 cacheModifier = cv : tensor<256x!tt.ptr<f32>, #blocked0>
+    // COM: isVolatile
     // CHECK-COUNT-2: llvm.load volatile {{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<4xi32>
+    // COM: `ca` -> L1C_L3C, the hardware default, so no annotation.
     // CHECK-COUNT-2: llvm.load {{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<4xi32>
-    // CHECK-COUNT-2: llvm.load {{.*}} {alignment = 16 : i64, nontemporal} : !llvm.ptr<1> -> vector<4xi32>
+    // COM: `cg` -> L1UC_L3C, and `cs` -> L1S_L3C, both keep L3 cached. Neither is
+    // COM: expressible as `nontemporal`, a single bit that IGC turns into LSC
+    // COM: `.uc.uc` and so bypasses L3 too (#7843). A plain load carries no
+    // COM: annotation for them; see getNonTemporalFlag() for why the per-level
+    // COM: decoration cannot be used here either.
     // CHECK-COUNT-2: llvm.load {{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<4xi32>
-    // CHECK-COUNT-2: llvm.load {{.*}} {alignment = 16 : i64, nontemporal} : !llvm.ptr<1> -> vector<4xi32>
+    // COM: `wb` is store-only; no load annotation.
     // CHECK-COUNT-2: llvm.load {{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<4xi32>
+    // COM: `cs`
+    // CHECK-COUNT-2: llvm.load {{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<4xi32>
+    // COM: `wt` is store-only; no load annotation.
+    // CHECK-COUNT-2: llvm.load {{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<4xi32>
+    // COM: `cv` -> L1UC_L3UC, which `nontemporal` does express exactly.
     // CHECK-COUNT-2: llvm.load {{.*}} {alignment = 16 : i64, nontemporal} : !llvm.ptr<1> -> vector<4xi32>
     tt.return
   }
@@ -74,6 +85,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.sup
     %val = tt.load %ptr, %mask cacheModifier = cg : tensor<1024x!tt.ptr<f32>, #blocked>
     // CHECK: triton_gen.predicated_store {{.*}} {cache_control = L1WT_L3WT} : (!llvm.ptr<1>, i32, i1) -> ()
     tt.store %ptr, %val, %mask cacheModifier = wt : tensor<1024x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: `cs` on a load has a cache control of its own (L1 streaming, L3 cached).
+// COM: It used to be missing from the load side of tritonToIntelCacheModifier(),
+// COM: so this kernel aborted the compiler on `invalid cache modifier for LoadOp`.
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.support_predicated_io} {
+  // CHECK-LABEL: load_cs_predicated
+  tt.func @load_cs_predicated(%ptr: tensor<1024x!tt.ptr<f32>, #blocked>, %mask: tensor<1024xi1, #blocked>) {
+    // CHECK: triton_gen.predicated_load {{.*}} {cache_control = L1S_L3C} : (!llvm.ptr<1>, i1, i32) -> i32
+    %val = tt.load %ptr, %mask cacheModifier = cs : tensor<1024x!tt.ptr<f32>, #blocked>
     tt.return
   }
 }
@@ -168,13 +195,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.sup
 
 // -----
 
-// COM: descriptor_load with an explicit `cg` cache modifier sets the
-// COM: `nontemporal` flag on the underlying llvm.load, matching regular tt.load
-// COM: (see global_load_with_attributes). `cg` means "cache at global level, not
-// COM: L1", so bypassing L1 via nontemporal is the faithful lowering. This is the
-// COM: explicit-cache-modifier path and is independent of the eviction-policy
-// COM: handling above (an explicit modifier is always honored, unlike the soft
-// COM: evict_first hint on the CacheModifier::NONE path).
+// COM: descriptor_load on a target WITHOUT predicated-I/O support falls back to a
+// COM: control-flow-guarded plain llvm.load. `cg` (L1UC_L3C) and `cs` (L1S_L3C)
+// COM: both keep L3 cached, so neither may set `nontemporal` -- that is a single
+// COM: bit which IGC turns into LSC `.uc.uc`, bypassing L3 too (#7843). They
+// COM: therefore emit an unannotated load at the hardware default; see
+// COM: getNonTemporalFlag(). `cv` (L1UC_L3UC) keeps the flag, which encodes it
+// COM: exactly. The faithfully-decorated lowering is the predicated one, covered
+// COM: by descriptor_load_cg_predicated below.
 
 #blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
@@ -182,7 +210,64 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   tt.func @descriptor_load_cg_scalar(%desc: !tt.tensordesc<256xf32>) {
     %c0_i32 = arith.constant 0 : i32
     %val = tt.descriptor_load %desc[%c0_i32] cacheModifier = cg : !tt.tensordesc<256xf32> -> tensor<256xf32, #blocked0>
+    // CHECK-COUNT-8: llvm.load {{.*}} {alignment = 4 : i64} : !llvm.ptr<1> -> i32
+    tt.return
+  }
+}
+
+// -----
+
+#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: descriptor_load_cs_scalar
+  tt.func @descriptor_load_cs_scalar(%desc: !tt.tensordesc<256xf32>) {
+    %c0_i32 = arith.constant 0 : i32
+    %val = tt.descriptor_load %desc[%c0_i32] cacheModifier = cs : !tt.tensordesc<256xf32> -> tensor<256xf32, #blocked0>
+    // CHECK-COUNT-8: llvm.load {{.*}} {alignment = 4 : i64} : !llvm.ptr<1> -> i32
+    tt.return
+  }
+}
+
+// -----
+
+#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: descriptor_load_cv_scalar
+  tt.func @descriptor_load_cv_scalar(%desc: !tt.tensordesc<256xf32>) {
+    %c0_i32 = arith.constant 0 : i32
+    %val = tt.descriptor_load %desc[%c0_i32] cacheModifier = cv : !tt.tensordesc<256xf32> -> tensor<256xf32, #blocked0>
     // CHECK-COUNT-8: llvm.load {{.*}} {alignment = 4 : i64, nontemporal} : !llvm.ptr<1> -> i32
+    tt.return
+  }
+}
+
+// -----
+
+// COM: On a predicated-I/O target (the default since #7867) descriptor_load
+// COM: carries its cache modifier faithfully as a per-level
+// COM: SPV_INTEL_cache_controls decoration, so `cg` stays L1UC_L3C rather than
+// COM: being flattened onto `nontemporal`.
+
+#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttig.support_predicated_io} {
+  // CHECK-LABEL: descriptor_load_cg_predicated
+  tt.func @descriptor_load_cg_predicated(%desc: !tt.tensordesc<256xf32>) {
+    %c0_i32 = arith.constant 0 : i32
+    %val = tt.descriptor_load %desc[%c0_i32] cacheModifier = cg : !tt.tensordesc<256xf32> -> tensor<256xf32, #blocked0>
+    // CHECK-COUNT-8: triton_gen.predicated_load {{.*}} {cache_control = L1UC_L3C} : (!llvm.ptr<1>, i1, i32) -> i32
+    tt.return
+  }
+}
+
+// -----
+
+#blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttig.support_predicated_io} {
+  // CHECK-LABEL: descriptor_load_cs_predicated
+  tt.func @descriptor_load_cs_predicated(%desc: !tt.tensordesc<256xf32>) {
+    %c0_i32 = arith.constant 0 : i32
+    %val = tt.descriptor_load %desc[%c0_i32] cacheModifier = cs : !tt.tensordesc<256xf32> -> tensor<256xf32, #blocked0>
+    // CHECK-COUNT-8: triton_gen.predicated_load {{.*}} {cache_control = L1S_L3C} : (!llvm.ptr<1>, i1, i32) -> i32
     tt.return
   }
 }

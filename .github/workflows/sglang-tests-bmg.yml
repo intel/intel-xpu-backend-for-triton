@@ -1,0 +1,28 @@
+name: SGLang tests, BMG
+
+permissions: read-all
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/sglang-tests*.yml
+      - scripts/sglang/**
+      - .github/pins/pytorch.txt
+  schedule:
+    # Thursday/Sunday 6:05AM PST (UTC-8) or 7:05AM PDT (UTC-7).
+    - cron: "5 14 * * THU"
+    - cron: "5 14 * * SUN"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || 'ci' }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    uses: ./.github/workflows/sglang-tests-reusable.yml
+    with:
+      runner_label: b60
+      skip_list: xe2
+    secrets: inherit
