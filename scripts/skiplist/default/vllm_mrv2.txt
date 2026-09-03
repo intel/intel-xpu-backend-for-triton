@@ -52,7 +52,7 @@ tests/v1/kv_connector/unit/test_nixl_connector.py::test_abort_timeout_on_prefill
 tests/v1/sample/test_logprobs.py::test_prompt_logprobs_mode
 
 # NIXL is not available: https://github.com/intel/intel-xpu-backend-for-triton/issues/7419
-tests/v1/kv_connector/unit/test_nixl_connector.py::test_reqs_to_send_deadline_rebased_to_worker_clock
+#tests/v1/kv_connector/unit/test_nixl_connector.py::test_reqs_to_send_deadline_rebased_to_worker_clock
 
 # GPU mode runner tried to instantiate dummy base class Event: https://github.com/intel/intel-xpu-backend-for-triton/issues/7684
 tests/v1/worker/test_gpu_model_runner.py::test_reasoning_config_without_custom_logitsprocs_does_not_need_output_token_ids
