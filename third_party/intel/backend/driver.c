@@ -315,16 +315,9 @@ extern "C" EXPORT_FUNC PyObject *get_device_properties(int device_id) {
                        "sub_group_sizes", subgroup_sizes);
 }
 
-enum class BindSharedMemoryState : int8_t {
-  Uninitialized = -1,
-  Disabled = 0,
-  Enabled = 1,
-};
-
 struct KernelInfo {
   sycl::kernel *kernel;
   uint32_t kernel_num_args;
-  BindSharedMemoryState bind_shared_memory_state;
 };
 
 void freeKernel(PyObject *p) {
@@ -633,8 +626,11 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
       new sycl::kernel(sycl::make_kernel<sycl::backend::ext_oneapi_level_zero>(
           {*mod, l0_kernel, sycl::ext::oneapi::level_zero::ownership::transfer},
           ctx));
-  KernelInfo *kernel_info =
-      new KernelInfo{fun, 0u, BindSharedMemoryState::Uninitialized};
+
+  const uint32_t kernel_num_args =
+      fun->get_info<sycl::info::kernel::num_args>();
+  KernelInfo *kernel_info = new KernelInfo{fun, kernel_num_args};
+
   auto kernel_py = PyCapsule_New(reinterpret_cast<void *>(kernel_info),
                                  "kernel", freeKernel);
   auto kernel_bundle_py = PyCapsule_New(reinterpret_cast<void *>(mod),
@@ -1114,20 +1110,9 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
   // a kernel argument. Kernels that need a dynamic allocation (compiled with
   // TRITON_INTEL_DYNAMIC_SHARED_MEMORY=1, or using a partitioned shared
   // layout) do take a trailing shared memory argument, which is not part of
-  // `params`; detect that from the kernel once and cache it in KernelInfo so
-  // both flavors can be launched.
-  if (kernel_info->bind_shared_memory_state ==
-      BindSharedMemoryState::Uninitialized) {
-    kernel_info->kernel_num_args =
-        kernel.get_info<sycl::info::kernel::num_args>();
-    kernel_info->bind_shared_memory_state =
-        (shared_memory && (kernel_info->kernel_num_args == num_params + 1))
-            ? BindSharedMemoryState::Enabled
-            : BindSharedMemoryState::Disabled;
-  }
-
+  // `params`; detect that from the kernel so both flavors can be launched.
   const bool is_bind_shared_memory =
-      kernel_info->bind_shared_memory_state == BindSharedMemoryState::Enabled;
+      shared_memory && (kernel_info->kernel_num_args == num_params + 1);
 
   assert(num_params == // Actual number of params
              kernel_info->kernel_num_args -
