@@ -55,6 +55,11 @@ def _has_block_store(llir):
     return 'spirv_Subgroup2DBlockStoreINTEL' in llir or 'GenISA.LSC2DBlockWrite' in llir
 
 
+def _has_block_load(llir):
+    """True if the kernel emitted a 2D block load message."""
+    return 'spirv_Subgroup2DBlockLoadINTEL' in llir or 'GenISA.LSC2DBlockRead' in llir
+
+
 @pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
 @pytest.mark.parametrize(
     "W, S, XBLOCK, num_warps, expect_block_store, dtype_str",
@@ -381,4 +386,100 @@ def test_1d_reshape_strided_load_w_gt_tpw(W, S, H, dtype_str, device):
         to_numpy(out_tri),
         out_ref,
         err_msg=f"Load mismatch W={W} S={S} H={H} (W > threadsPerWarp bug)",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for the wrong per-warp row base in reshape1DStridedLoad.
+#
+# See: https://github.com/intel/intel-xpu-backend-for-triton/issues/7918
+#
+# The pointer and mask used to be reshaped with `allow_reorder
+# efficient_layout`, which only retypes the tensor and moves no data, so the
+# registers still held pointers in 1D order while the type claimed the 2D
+# block load's delivery encoding.  The lowering reads each warp's base address
+# out of that tensor, so warp w started at the row the *1D* layout put there
+# rather than at row perWarpH*w.
+#
+# The bug is invisible unless the 1D source layout needs more than one
+# register repetition per lane, i.e.
+#
+#     reps1D = XBLOCK / (sizePerThread1D * threadsPerWarp * num_warps) > 1
+#
+# because at reps1D == 1 the two layouts happen to agree on the warp base.
+# That is why the tests above miss it: `test_1d_reshape_strided_load` uses
+# XBLOCK=1024 with num_warps=4, giving 1024/(8*32*4) = 1, and the
+# `_w_gt_tpw` tests use num_warps=1, where no per-warp base exists at all.
+# Every config below has reps1D >= 2 and num_warps >= 2.
+# ---------------------------------------------------------------------------
+@pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
+@pytest.mark.parametrize(
+    "W, S, XBLOCK, num_warps, dtype_str",
+    [
+        # The shape reported in #7918: reps1D = 4096/(8*32*4) = 4, per-warp
+        # height 32 (the load hardware maximum).  Warp w read row 8*w instead
+        # of 32*w, so 3072 of every 4096 elements came back wrong.
+        (32, 96, 4096, 4, "float16"),
+        (32, 128, 4096, 4, "float16"),
+        (32, 192, 4096, 4, "float16"),
+        # Fewer warps, same reps1D = 2048/(8*32*2) = 4: per-warp height is
+        # still 32 but there are only two warps to get wrong.
+        (32, 96, 2048, 2, "float16"),
+        # More warps, reps1D = 4096/(8*32*8) = 2 and per-warp height 16.
+        # Exercises a per-warp height below the hardware maximum.
+        (32, 96, 4096, 8, "float16"),
+    ],
+    ids=[
+        "W32_S96_X4096_w4_f16",
+        "W32_S128_X4096_w4_f16",
+        "W32_S192_X4096_w4_f16",
+        "W32_S96_X2048_w2_f16",
+        "W32_S96_X4096_w8_f16",
+    ],
+)
+def test_1d_reshape_strided_load_multi_warp_base(W, S, XBLOCK, num_warps, dtype_str, device):
+    """Every warp must read from its own row base after the 1D->2D load reshape.
+
+    Uses the same Inductor-style gather as `test_1d_reshape_strided_load` but
+    with reps1D >= 2, the regime in which a wrong per-warp base is observable.
+    Four program instances are launched so the per-program offset is exercised
+    alongside the per-warp base.
+    """
+    # Enough rows for four program instances.
+    rows_per_block = XBLOCK // W
+    num_rows = 4 * rows_per_block
+    xnumel = W * num_rows
+
+    rs = RandomState(17)
+    # Padded 2D input surface [num_rows, S]; the kernel reads its first W columns.
+    in_full = numpy_random((num_rows, S), dtype_str=dtype_str, rs=rs)
+    out_ref = in_full[:, :W].flatten() * np.dtype(dtype_str).type(2.0)
+
+    in_tri = to_triton(in_full.flatten(), device=device)
+    out_tri = torch.zeros(xnumel, dtype=getattr(torch, dtype_str), device=device)
+
+    grid = (xnumel + XBLOCK - 1) // XBLOCK
+    kernel = strided_load_kernel[(grid, )](
+        in_tri,
+        out_tri,
+        xnumel,
+        W=W,
+        S=S,
+        XBLOCK=XBLOCK,
+        num_warps=num_warps,
+    )
+
+    # Pin that the 1D->2D reshape actually fired.  Without this the test would
+    # keep passing if the optimization were disabled, and would no longer guard
+    # anything.  Skip the check on devices that have no 2D block I/O.
+    if triton.runtime.driver.active.get_current_target().arch.get('has_2d_block_io', False):
+        assert _has_block_load(kernel.asm["llir"]), \
+            f"1D->2D load reshape did not fire for W={W} S={S} XBLOCK={XBLOCK} num_warps={num_warps}"
+
+    np.testing.assert_allclose(
+        to_numpy(out_tri),
+        out_ref,
+        rtol=1e-3,
+        atol=1e-3,
+        err_msg=f"Strided load mismatch for W={W}, S={S}, XBLOCK={XBLOCK}, num_warps={num_warps}",
     )

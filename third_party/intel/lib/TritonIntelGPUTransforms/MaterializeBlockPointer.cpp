@@ -880,31 +880,35 @@ private:
     if (!consumerEnc)
       return;
 
-    // Reshape pointer to [H, W] with load encoding.
-    // Mark efficient_layout so RemoveLayoutConversions does not
-    // rematerialize these reshapes with a different encoding.
+    // Reshape pointer to [H, W] with its natural 2D encoding, then convert it
+    // into the load encoding, mirroring reshape1DStridedStore.  A plain relabel
+    // (allow_reorder + efficient_layout) would be incorrect: that reshape
+    // lowers to a no-op, so the registers would still hold the pointers laid
+    // out per the 1D source encoding while the type claims HW delivery order.
+    auto ptrReshape = tt::ReshapeOp::create(builder, loc, newShape, info->ptr,
+                                            /*allowReorder=*/false);
     auto loadPtrTy =
         RankedTensorType::get(newShape, ptrTensorTy.getElementType(), loadEnc);
-    auto ptrReshape = tt::ReshapeOp::create(builder, loc, loadPtrTy, info->ptr,
-                                            /*allowReorder=*/true,
-                                            /*efficientLayout=*/true);
+    Value loadPtr =
+        ttg::ConvertLayoutOp::create(builder, loc, loadPtrTy, ptrReshape);
 
-    // Reshape mask if present.
+    // Reshape mask if present, same treatment as the pointer.
     Value mask2d;
     if (Value mask = op.getMask()) {
       auto maskTy = cast<RankedTensorType>(mask.getType());
+      auto maskReshape = tt::ReshapeOp::create(builder, loc, newShape, mask,
+                                               /*allowReorder=*/false);
       auto loadMaskTy =
           RankedTensorType::get(newShape, maskTy.getElementType(), loadEnc);
-      mask2d = tt::ReshapeOp::create(builder, loc, loadMaskTy, mask,
-                                     /*allowReorder=*/true,
-                                     /*efficientLayout=*/true);
+      mask2d =
+          ttg::ConvertLayoutOp::create(builder, loc, loadMaskTy, maskReshape);
     }
 
     // Create 2D load with load encoding.
     Type pointeeTy =
         cast<tt::PointerType>(ptrTensorTy.getElementType()).getPointeeType();
     auto loadResultTy = RankedTensorType::get(newShape, pointeeTy, loadEnc);
-    auto newLoad = tt::LoadOp::create(builder, loc, loadResultTy, ptrReshape,
+    auto newLoad = tt::LoadOp::create(builder, loc, loadResultTy, loadPtr,
                                       mask2d, op.getOther(), op.getCache(),
                                       op.getEvict(), op.getIsVolatile());
 
