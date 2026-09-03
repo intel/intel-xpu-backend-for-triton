@@ -751,4 +751,14 @@ def TritonIntelGPURewriteDescriptorGatherScatter
   ];
 }
 
+def TritonIntelGPUEmptyAnalysis
+    : Pass<"tritonintelgpu-empty-analysis", "mlir::ModuleOp"> {
+  let summary = "Empty placeholder analysis pass";
+
+  let description = [{
+    No-op Intel backend analysis pass used as a placeholder for future
+    analysis-only logic.
+  }];
+}
+
 #endif // TRITON_INTEL_GPU_PASSES

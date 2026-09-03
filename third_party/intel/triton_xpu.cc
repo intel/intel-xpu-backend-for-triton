@@ -206,6 +206,8 @@ void init_triton_intel_passes_ttgpuir(py::module_ &&m) {
   ADD_PASS_WRAPPER_0(
       "add_rewrite_tensor_descriptor_gather_scatter",
       gpu::intel::createTritonIntelGPURewriteDescriptorGatherScatter);
+  ADD_PASS_WRAPPER_0("add_empty_analysis",
+                     gpu::intel::createTritonIntelGPUEmptyAnalysis);
 }
 
 void init_triton_intel_passes_arith(py::module_ &&m) {
