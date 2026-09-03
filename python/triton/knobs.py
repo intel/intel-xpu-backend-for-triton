@@ -597,6 +597,9 @@ class intel_knobs(base_knobs):
     # where it triggers E2E performance regressions (see issue #7495).
     disable_annotate_cache_control: env_bool = env_bool("TRITON_INTEL_DISABLE_ANNOTATE_CACHE_CONTROL", os.name == "nt")
     enable_code_sinking: env_bool = env_bool("TRITON_INTEL_ENABLE_CODE_SINKING", False)
+    # ReorderForLiveness is on by default: it is gated internally on a register
+    # pressure estimate, so it is a no-op for kernels that would not spill.
+    disable_reorder_for_liveness: env_bool = env_bool("TRITON_INTEL_DISABLE_REORDER_FOR_LIVENESS", False)
     disable_canonicalize_pointers: env_bool = env_bool("TRITON_INTEL_DISABLE_CANONICALIZE_POINTERS", True)
     enable_loop_distribution: env_bool = env_bool("TRITON_INTEL_ENABLE_LOOP_DISTRIBUTION", False)
     enable_sub_32_dpas: env_bool = env_bool("TRITON_INTEL_ENABLE_DPAS_FOR_WARP_SIZE_32", False)

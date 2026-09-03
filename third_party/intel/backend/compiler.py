@@ -46,6 +46,7 @@ class XPUOptions:
     grf_mode: str = 'default'
     loop_distribute: bool = knobs.intel.enable_loop_distribution
     code_sinking: bool = knobs.intel.enable_code_sinking
+    reorder_for_liveness: bool = not knobs.intel.disable_reorder_for_liveness
     sub_32_dpas: bool = knobs.intel.enable_sub_32_dpas
     dynamic_shared_memory: bool = knobs.intel.dynamic_shared_memory
     use_barrier: bool = False
@@ -461,6 +462,13 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if knobs.intel.opt_reduction_locality:
             intel.passes.ttgpuir.add_optimize_reduction_locality(pm)
         intel.passes.arith.add_arith_emulate_unsupported_floats(pm, ["bf16"], "f32")
+        # Runs after every pass that adds or removes operations: this only
+        # permutes them, so it must see the final set to estimate the register
+        # pressure it is minimizing, and a later canonicalization could undo the
+        # order it picks. Gated internally on that estimate, so it is a no-op
+        # unless a pointwise block is dense enough to spill (see issue #7782).
+        if opt.reorder_for_liveness:
+            intel.passes.ttgpuir.add_reorder_for_liveness(pm)
         if opt.instrumentation_mode == "fpsan":
             passes.ttgpuir.add_fp_sanitizer(pm, opt.fpsan_homomorphic_casts)
         pm.run(mod, 'make_ttgir')

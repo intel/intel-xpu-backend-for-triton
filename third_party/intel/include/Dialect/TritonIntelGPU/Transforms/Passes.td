@@ -381,6 +381,43 @@ def TritonIntelGPUCodeSinking
                            "mlir::scf::SCFDialect"];
 }
 
+def TritonIntelGPUReorderForLiveness
+    : Pass<"tritonintelgpu-reorder-for-liveness", "mlir::ModuleOp"> {
+  let summary = "Reorder pure ops in high-pressure pointwise blocks to reduce peak liveness";
+
+  let description = [{
+    Reorders the pure operations of a straight-line block so that fewer values
+    are live simultaneously. The set of operations is unchanged and no
+    expression is reassociated -- only the order of mutually independent
+    statements differs -- so results are bit-identical.
+
+    Large fused pointwise kernels are often emitted in an order that keeps far
+    more values live than the dependence graph requires. For the ~400 fp64
+    temporaries `torch.compile` emits for `pyhpc_equation_of_state` (#7782), two
+    orderings of the *same* dependence graph differed by 15 live values, which
+    was the difference between 384 and 0 bytes of spill at 256 GRF and a 2.75x
+    difference in kernel time. Spilling also has a second-order cost: it makes
+    inductor's autotuner discard the config, so the kernel additionally runs at
+    a block size it never intended.
+
+    The transform is deliberately narrow. A block is reordered only when:
+    - it contains no region-bearing op (loops and conditionals are left to
+      `tritonintelgpu-code-sinking`) and no dot operation, i.e. it is a
+      pointwise body, so GEMM and attention schedules are never perturbed;
+    - it is large enough for the ordering to matter; and
+    - its estimated peak per-lane register footprint exceeds the point at which
+      IGC starts to spill straight-line code.
+
+    Operations with memory effects keep their relative order and are issued as
+    soon as their operands are available, ahead of any effect-free op, so loads
+    are not sunk towards their uses; only effect-free ops move. The new order is
+    applied only if it lowers the estimated peak.
+  }];
+
+  let dependentDialects = ["mlir::triton::TritonDialect",
+                           "mlir::triton::gpu::TritonGPUDialect"];
+}
+
 def TritonIntelGPUAnnotateCacheControl
     : Pass<"tritonintelgpu-annotate-cache-control", "mlir::ModuleOp"> {
   let summary = "Annotate tt.load ops with .cg cache control unless the load's encoding indicates cross-subgroup L1 reuse";

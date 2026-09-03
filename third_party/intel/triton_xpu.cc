@@ -173,6 +173,8 @@ void init_triton_intel_passes_ttgpuir(py::module_ &&m) {
                      gpu::intel::createTritonIntelGPULoopDistribute);
   ADD_PASS_WRAPPER_0("add_code_sinking",
                      gpu::intel::createTritonIntelGPUCodeSinking);
+  ADD_PASS_WRAPPER_0("add_reorder_for_liveness",
+                     gpu::intel::createTritonIntelGPUReorderForLiveness);
   ADD_PASS_WRAPPER_0("add_annotate_cache_control",
                      gpu::intel::createTritonIntelGPUAnnotateCacheControl);
   ADD_PASS_WRAPPER_0("add_widen_load_store_encoding",
