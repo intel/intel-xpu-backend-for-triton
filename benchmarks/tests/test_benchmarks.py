@@ -3,15 +3,18 @@ from __future__ import annotations
 import dataclasses
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 from typing import List, Tuple
 
 import pytest
+from torch.autograd import DeviceType
 
 from benchmark_helpers import make_cfg
 from triton_kernels_benchmark.benchmark_shapes_parser import ShapePatternParser
 from triton_kernels_benchmark.benchmark_testing import (
     BenchmarkCategory,
     MarkArgs,
+    get_profiled_kernels,
 )
 from triton_kernels_benchmark.benchmark_utils import BenchmarkConfigs
 from triton_kernels_benchmark.configs.benchmark_config_templates import CONFIGS
@@ -42,6 +45,19 @@ def _collect_cases() -> List[Tuple[str, str, str]]:
 
 CASES = _collect_cases()
 ALL_CATEGORIES = {cat.value for cat in BenchmarkCategory}
+
+
+def test_get_profiled_kernels_uses_cpu_marker_kernels_only() -> None:
+    marker_kernel = SimpleNamespace(name="marker", duration=1.0)
+    duplicate_kernel = SimpleNamespace(name="marker", duration=1.0)
+    cache_kernel = SimpleNamespace(name="cache", duration=0.1)
+    marker = SimpleNamespace(
+        device_type=DeviceType.CPU,
+        kernels=[marker_kernel],
+        cpu_children=[SimpleNamespace(kernels=[duplicate_kernel, cache_kernel], cpu_children=[])],
+    )
+
+    assert get_profiled_kernels([marker]) == [[marker_kernel]]
 
 
 @pytest.mark.parametrize(("config_key", "shape", "provider"), CASES)
