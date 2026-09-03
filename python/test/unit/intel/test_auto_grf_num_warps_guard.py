@@ -108,8 +108,8 @@ def _launch(num_warps, n=4096, kernel=None):
 
 @triton.jit
 def _heavy_spill(a_ptr, b_ptr, c_ptr, d_ptr, out_ptr, n, BLOCK: tl.constexpr):
-    """A kernel with enough live values to spill hard (n_spills > 1000) at a
-    large BLOCK, so the runtime spill-based recompile (driver.c) fires."""
+    """A kernel with enough live values to spill at a large BLOCK, so the
+    runtime spill-based recompile (driver.c, any nonzero spill bytes) fires."""
     offs = tl.arange(0, BLOCK)
     m = offs < n
     a = tl.load(a_ptr + offs, mask=m, other=0.0)
