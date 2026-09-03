@@ -353,9 +353,16 @@ private:
     // IMPORTANT: This only hides the problem for this specific case. The root
     // cause (IGC removing required memory barriers) can still manifest in other
     // code patterns.
+    //
+    // Environment variable to disable workaround (default: enabled):
+    //   TRITON_INTEL_DISABLE_IGC_FENCE_WORKAROUND=1
+    static bool workaroundEnabled =
+        !tt::tools::getBoolEnv("TRITON_INTEL_DISABLE_IGC_FENCE_WORKAROUND");
     if constexpr (std::is_same_v<OpType, tt::LoadOp>) {
-      LDBG("Declining block IO for masked load (#7890 workaround)");
-      return false;
+      if (workaroundEnabled) {
+        LDBG("Declining block IO for masked load (#7890 workaround)");
+        return false;
+      }
     }
 
     const tt::AxisInfo *maskAxisInfo = axisInfoAnalysis.getAxisInfo(mask);

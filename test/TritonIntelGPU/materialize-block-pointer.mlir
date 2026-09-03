@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --tritonintelgpu-materialize-block-pointer | FileCheck %s
+// RUN: env TRITON_INTEL_DISABLE_IGC_FENCE_WORKAROUND=1 triton-opt %s -split-input-file --tritonintelgpu-materialize-block-pointer | FileCheck %s
 
 // COM: Ensure pointers with strides [0, 1]/[1, 0] are considered row/column major respectively.
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 4], warpsPerCTA = [32, 1], order = [1, 0]}>
