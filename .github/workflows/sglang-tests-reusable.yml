@@ -230,7 +230,7 @@ jobs:
         run: |
           ${{ env.TRITON_TEST_CMD }} --sglang-mamba
 
-      # sglang-rest groups short suites: gdn, kda, spec
+      # sglang-rest groups short suites: gdn, kda, spec, norm
       - name: Run gdn tests
         if: ${{ matrix.suite == 'sglang-rest' && steps.install.outcome == 'success' && !cancelled() }}
         run: |
@@ -245,6 +245,11 @@ jobs:
         if: ${{ matrix.suite == 'sglang-rest' && steps.install.outcome == 'success' && !cancelled() }}
         run: |
           ${{ env.TRITON_TEST_CMD }} --sglang-spec
+
+      - name: Run norm tests
+        if: ${{ matrix.suite == 'sglang-rest' && steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --sglang-norm
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}

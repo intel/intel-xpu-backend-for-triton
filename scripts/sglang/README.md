@@ -10,6 +10,12 @@ Install SGLang and run its Triton kernel tests on Intel XPU.
   Triton survive, installs SGLang editable into `$TRITON_PROJ/sglang`.
 - `sglang-pin.txt` - upstream commit.
 - `sglang-test-fix.patch` - XPU fixes on top of the pin.
+- `xpu_device_rewrite.py` - rewrites hardcoded `device="cuda"`, `.cuda()` and
+  `torch.cuda.*` to their XPU equivalents under `test/registered/kernels`,
+  recursively. Run by `install-sglang.sh` after patching. It is a rewrite rather
+  than patch hunks because there are ~150 such references at this pin and ~1600
+  once SGLang's `kernels/ops/` test reorganisation lands, all of which would
+  conflict on every pin bump. Idempotent; `--check` reports without writing.
 
 `import sglang` needs torchvision, which `install-sglang.sh` does not install.
 CI builds it from `pytorch/.github/ci_commit_pins/vision.txt`.
@@ -28,6 +34,7 @@ One flag per kernel family, each with its own `TRITON_TEST_SUITE` and skip list
 | `--sglang-gdn` | `registered/attention/test_chunk_gated_delta_rule.py` |
 | `--sglang-kda` | `registered/attention/test_kda_kernels.py` |
 | `--sglang-spec` | `registered/spec/dspark/test_dspark_kernel_parity.py` |
+| `--sglang-norm` | `registered/kernels/test_fused_op.py`, `test_fused_op_gpu_parity.py`, `test_kernels_namespace.py` |
 
 Two things to know before editing this:
 
@@ -111,6 +118,13 @@ fork silently picks the NVIDIA kernels instead of failing.
 | `expand_prefill_causally`, `build_page_table_positions`, `build_causal_swa_page_indices` | `kernels/ops/attention/dsv4_attn_metadata_kernels.py` |
 | `dspark_accept`, `dspark_attn_metadata`, `dspark_draft_model`, `dspark_schedule`, `dspark_verify_window` | `srt/speculative/dspark_components/kernels/` |
 
+`--sglang-norm`:
+
+| Kernels | Source |
+|---|---|
+| `fused_add_rmsnorm`, `rmsnorm`, `gemma_rmsnorm`, `gemma_fused_add_rmsnorm` | `kernels/ops/layernorm/fused_op.py` |
+| kernel registry / capability dispatch (`K.capabilities_satisfied`) | `kernels/registry.py` |
+
 ## Results on Max 1100
 
 Local run at the current pin, one suite at a time. The skip lists come from it.
@@ -124,8 +138,52 @@ Local run at the current pin, one suite at a time. The skip lists come from it.
 | `--sglang-gdn` | 29 skipped, all skip-listed | 4s |
 | `--sglang-kda` | 1 passed, 12 skipped upstream | 6s |
 | `--sglang-spec` | 1 skipped, skip-listed | 6s |
+| `--sglang-norm` | 94 passed | 13s |
 
 Nothing failed because of Triton codegen.
+
+## Why the rest of the kernel test tree is not in a suite
+
+Measured on SGLang `771e613d`, i.e. after the `kernels/ops/<family>/` test
+reorganisation that follows this pin - so this is the map for the next pin bump.
+All 45 test files of the `gemm`, `layernorm`, `elementwise`, `activation`,
+`embeddings`, `kvcache` and `quantization` families were run on Max 1100 after
+the device rewrite. Only the three `--sglang-norm` files are green. The others
+fail or skip for reasons that have nothing to do with Triton codegen - not one
+file produced a Triton compile error:
+
+| Blocker | Files | Detail |
+|---|---|---|
+| nvcc | 13 | the test compares Triton against an sgl-kernel CUDA reference that it JIT-builds with `nvcc` |
+| `sgl_kernel` | 7 | import-time failure, same gap as the #7655 files |
+| `flashinfer`, `deep_gemm`, `cutedsl`, `tilelang`, `imageio` | 6 | CUDA-only reference implementation or optional dep |
+| upstream skip | 6 | gated on `is_cuda()`, so they self-skip (`gemm` is entirely in this state: 482 skipped) |
+| SGLang XPU dispatch gap | 5 | the XPU branch never reaches the Triton kernel, e.g. `VocabParallelEmbedding._use_triton_embedding` returns False, `test_kvcacheio_asymmetric` raises `NameError` on undefined XPU transfer kernels |
+| CUDA graphs | 1 | `gemm/test_chunked_sgmv_cuda_graph.py` needs graph capture plus `JITFunction._clear_cache` |
+
+Files with a passing subset but a blocked remainder, worth revisiting when the
+blockers clear (the failures are parametrizations, not whole test functions, so
+skip-listing them is not worth the noise today):
+`layernorm/test_rmsnorm.py` 17/45, `layernorm/test_rmsnorm_hf.py` 15/43,
+`layernorm/test_gemma4_fused_routing.py` 17/47, `layernorm/test_mhc_kernels.py`
+4/24, `kvcache/test_set_mla_kv_buffer.py` 6/25,
+`elementwise/test_bias_gelu.py` 1/8.
+
+## SGLang's own XPU tests
+
+`test/registered/xpu/` (24 files, `register_xpu_ci`) is not a source of Triton
+coverage and is deliberately not wired in: 13 files launch a server, 6 are
+nightly multi-GPU model tests, and the 5 kernel-level ones test dispatch or
+SYCL/oneDNN paths, not Triton - `test_topk.py` takes `topk_sigmoid`/
+`topk_softmax` from `sgl_kernel` when `is_xpu()`, and `test_xpu_int4_dense.py`
+uses `aten._convert_weight_to_int4pack`. All 24 fail at import without
+`sgl_kernel`, which for XPU is a separate SYCL repo (`sgl-kernel-xpu`, built by
+upstream's `release-whl-kernel-xpu.yml`).
+
+SGLang's only XPU-specific Triton code is
+`srt/hardware_backend/xpu/kernels/fla/{chunk_delta_h,chunk_fwd}.py`, which uses
+`tl.make_block_ptr` 25 times and so cannot run here at all - see the block
+pointer gap below.
 
 ## Known gaps
 
@@ -169,7 +227,7 @@ Matrix entries, one report artifact each, aggregated by the `reports` job:
 | `sglang-quant` | `--sglang-quant` |
 | `sglang-moe` | `--sglang-moe` |
 | `sglang-mamba` | `--sglang-mamba` |
-| `sglang-rest` | `--sglang-gdn`, `--sglang-kda`, `--sglang-spec` |
+| `sglang-rest` | `--sglang-gdn`, `--sglang-kda`, `--sglang-spec`, `--sglang-norm` |
 
 The short suites share `sglang-rest`, like `vllm-rest`. Each entry installs
 SGLang itself, because `run_sglang_tests` calls `install-sglang.sh` - there is no
@@ -189,6 +247,7 @@ bash scripts/test-triton.sh --sglang-mamba --skip-pip-install --skip-pytorch-ins
 bash scripts/test-triton.sh --sglang-gdn --skip-pip-install --skip-pytorch-install
 bash scripts/test-triton.sh --sglang-kda --skip-pip-install --skip-pytorch-install
 bash scripts/test-triton.sh --sglang-spec --skip-pip-install --skip-pytorch-install
+bash scripts/test-triton.sh --sglang-norm --skip-pip-install --skip-pytorch-install
 ```
 
 ## Reference
