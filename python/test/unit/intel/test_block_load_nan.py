@@ -97,23 +97,31 @@ def test_block_load_dpas_layout(M, N, dtype_str, padding_id, expected_oob, devic
 
 
 @pytest.mark.parametrize("M, N", [[256, 64], [128, 16], [64, 64], [32, 32]])
-@pytest.mark.parametrize("padding_id, expected_oob", [(2, float('nan')), (1, 0.0)], ids=["pad_nan", "pad_zero"])
+@pytest.mark.parametrize(
+    "dtype_str, padding_id, expected_oob",
+    [
+        ("float16", 2, float('nan')),
+        ("float16", 1, 0.0),
+        # PAD_NAN excluded for int16: there is no NaN encoding for integers
+        ("int16", 1, 0.0),
+    ],
+    ids=["float16-pad_nan", "float16-pad_zero", "int16-pad_zero"],
+)
 @pytest.mark.skipif(not is_xpu(), reason="Block load tests are specific to the XPU backend")
 @pytest.mark.xfail(not triton.runtime.driver.active.get_current_target().arch['has_2d_block_io'],
                    reason="Block loads not supported on this architecture", run=False)
-def test_block_load_dpas_layout_pitch_rounding(M, N, padding_id, expected_oob, device, tmp_path: pathlib.Path):
-    """Test pitch-aware fp16 base_width rounding, for both PAD_NAN and PAD_ZERO.
-
-    Uses stride=[N, 1] (full tensor stride) so pitch = N*2 bytes >= rounded
-    base_width. Verifies in-bounds elements read as 1.0 and the OOB column
-    reads as NaN (PAD_NAN) or 0.0 (PAD_ZERO), rather than leaking the 99.0
-    sentinel placed in the OOB padding slot.
-    """
+def test_block_load_dpas_layout_pitch_rounding(M, N, dtype_str, padding_id, expected_oob, device,
+                                               tmp_path: pathlib.Path):
+    """Test pitch-aware base_width rounding, for PAD_NAN and PAD_ZERO, float16 and int16."""
+    # 64 extra elements of row stride -> >=128 bytes of pitch headroom for the
+    # 2-byte element types tested here, comfortably clearing the 65-byte
+    # minPitch margin for any M, N in this parametrization.
+    PITCH_PAD = 64
     A_width, B_width = 1, 2
     layouts = "#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 4], repCluster = [4, 2]}>"
     num_warps = 32
-    ty = "f16"
-    torch_dtype = torch.float16
+    ty = {"float16": "f16", "int16": "i16"}[dtype_str]
+    torch_dtype = getattr(torch, dtype_str)
 
     ir = layouts + f"""
     module attributes {{ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_2d_block_io, ttig.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = {num_warps} : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32}} {{
@@ -129,17 +137,21 @@ def test_block_load_dpas_layout_pitch_rounding(M, N, padding_id, expected_oob, d
             %N_i32 = arith.constant {N} : i32
             %M_i64 = arith.constant {M} : i64
             %N_i64 = arith.constant {N} : i64
+            %NPitch_i64 = arith.constant {N + PITCH_PAD} : i64
+            %MPitch_i64 = arith.constant {M + PITCH_PAD} : i64
             %c1_i64 = arith.constant 1 : i64
             %c0_i32 = arith.constant 0 : i32
 
-            // A matrix: shape=(M-1, N-1), stride=(N, 1)  →  pitch=N*2 >= rounded
-            %1 = tt.make_tensor_descriptor %arg0, [%Mload_i32, %Nload_i32], [%N_i64, %c1_i64] {{padding = {padding_id} : i32}} : <{ty}>, !tt.tensordesc<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>
+            // A matrix: shape=(M-1, N-1), stride=(N+PAD, 1) -> pitch=(N+PAD)*2 >= minPitch.
+            // Output descriptor stays contiguous (stride=N): the store never
+            // requests padding, so it has no pitch-headroom requirement.
+            %1 = tt.make_tensor_descriptor %arg0, [%Mload_i32, %Nload_i32], [%NPitch_i64, %c1_i64] {{padding = {padding_id} : i32}} : <{ty}>, !tt.tensordesc<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>
             %2 = tt.descriptor_load %1[%0, %c0_i32] {{ttig.block_io = "row_major", ttig.desc_padding = {padding_id} : i32}} : !tt.tensordesc<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>> -> tensor<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>
             %3 = tt.make_tensor_descriptor %arg1, [%M_i32, %N_i32], [%N_i64, %c1_i64] : <{ty}>, !tt.tensordesc<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>
             tt.descriptor_store %3[%0, %c0_i32], %2 : !tt.tensordesc<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}> >, tensor<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>
 
-            // B matrix: shape=(N-1, M-1), stride=(M, 1)  →  pitch=M*2 >= rounded
-            %4 = tt.make_tensor_descriptor %arg2, [%Nload_i32, %Mload_i32], [%M_i64, %c1_i64] {{padding = {padding_id} : i32}} : <{ty}>, !tt.tensordesc<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>
+            // B matrix: shape=(N-1, M-1), stride=(M+PAD, 1) -> pitch=(M+PAD)*2 >= minPitch
+            %4 = tt.make_tensor_descriptor %arg2, [%Nload_i32, %Mload_i32], [%MPitch_i64, %c1_i64] {{padding = {padding_id} : i32}} : <{ty}>, !tt.tensordesc<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>
             %5 = tt.descriptor_load %4[%c0_i32, %0] {{ttig.block_io = "row_major", ttig.desc_padding = {padding_id} : i32}} : !tt.tensordesc<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>> -> tensor<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>
             %6 = tt.make_tensor_descriptor %arg3, [%N_i32, %M_i32], [%M_i64, %c1_i64] : <{ty}>, !tt.tensordesc<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>
             tt.descriptor_store %6[%c0_i32, %0], %5 : !tt.tensordesc<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}> >, tensor<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>
@@ -149,12 +161,18 @@ def test_block_load_dpas_layout_pitch_rounding(M, N, padding_id, expected_oob, d
     }}
     """
 
-    a = torch.ones((M, N), dtype=torch_dtype, device=device)
+    # A/B are allocated PITCH_PAD columns wider than their logical (M,N)/(N,M)
+    # shape so the descriptor's widened stride still addresses real, owned
+    # memory for every row -- the load's own tile width stays exactly N/M
+    # (base_width rounds up to exactly the full tile for these even N/M
+    # values), so the extra PITCH_PAD columns are never read, only skipped
+    # over between rows. Outputs (x, y) stay the original, unpadded shape.
+    a = torch.ones((M, N + PITCH_PAD), dtype=torch_dtype, device=device)
     a[:, N - 1] = 99.0  # OOB col padding slot — must not appear in output
-    b = torch.ones((N, M), dtype=torch_dtype, device=device)
+    b = torch.ones((N, M + PITCH_PAD), dtype=torch_dtype, device=device)
     b[:, M - 1] = 99.0  # OOB col padding slot for B
-    x = torch.empty_like(a)
-    y = torch.empty_like(b)
+    x = torch.empty((M, N), dtype=torch_dtype, device=device)
+    y = torch.empty((N, M), dtype=torch_dtype, device=device)
 
     temp_file = tmp_path / "test_block_load_pitch_rounding.ttgir"
     temp_file.write_text(ir)
@@ -185,13 +203,14 @@ def test_block_load_dpas_layout_pitch_rounding(M, N, padding_id, expected_oob, d
 def test_block_load_nan_mask_col_bound(device, tmp_path: pathlib.Path):
     """Reproducer for NaN mask column bound bug in pitch-aware rounding.
 
-    When base_width is rounded up (e.g., K=31 fp16, pitch=32 elements → pitch=64
-    bytes ≥ rounded(62)=64), the NaN mask must use the ORIGINAL inner shape (31)
-    as its column bound, NOT the rounded base_width / elemBytes (32). Otherwise
-    col N-1=31 is considered in-bounds and gets 99.0 (sentinel leaked from the
-    OOB padding slot) instead of NaN.
+    When base_width is rounded up (e.g., K=31 fp16, pitch=96 elements ->
+    pitch=192 bytes >= minPitch=rounded(62)+65=129), the NaN mask must use the
+    ORIGINAL inner shape (31) as its column bound, NOT the rounded base_width
+    / elemBytes (32). Otherwise col N-1=31 is considered in-bounds and gets
+    99.0 (sentinel leaked from the OOB padding slot) instead of NaN.
     """
-    M, N = 8, 32  # pitch = N*2 = 64 bytes (minimum for 2D block load)
+    M, N = 8, 32
+    PITCH_PAD = 64  # stride = N + PITCH_PAD -> pitch = 96*2 = 192 bytes >= minPitch=129
     ty = "f16"
     torch_dtype = torch.float16
     # Two K-reps (K=32 = 2 * K_tile=16) in single warp; lane 15 -> cols 15 and 31.
@@ -212,20 +231,23 @@ def test_block_load_nan_mask_col_bound(device, tmp_path: pathlib.Path):
             %c31_i32 = arith.constant {N - 1} : i32   // inner shape = 31 (foldable)
             %c8_i32  = arith.constant {M}     : i32
             %c32_i32 = arith.constant {N}     : i32
-            %c32_i64 = arith.constant {N}     : i64   // stride = 32; pitch = 64 bytes
+            %c32_i64 = arith.constant {N}     : i64   // output stride: contiguous, no padding requested
+            %cPitch_i64 = arith.constant {N + PITCH_PAD} : i64   // input stride: real pitch headroom
             %c1_i64  = arith.constant 1       : i64
             %c0_i32  = arith.constant 0       : i32
-            // shape=[%arg2, 31], stride=[32, 1]
-            // pitch=64 >= rounded(31*2=62)=64 -> pitch-aware rounding applies
+            // shape=[%arg2, 31], stride=[96, 1]
+            // pitch=192 >= minPitch=rounded(31*2=62)+65=129 -> pitch-aware rounding applies
             // %arg2 (M-1=7) is runtime -> outer-shape check cannot fold -> passes
-            %desc = tt.make_tensor_descriptor %arg0, [%arg2, %c31_i32], [%c32_i64, %c1_i64]
+            %desc = tt.make_tensor_descriptor %arg0, [%arg2, %c31_i32], [%cPitch_i64, %c1_i64]
                       {{padding = 2 : i32}} : <{ty}>, !tt.tensordesc<{M}x{N}x{ty},
                       #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = 1}}>>
             %loaded = tt.descriptor_load %desc[%c0_i32, %c0_i32]
                         {{ttig.block_io = "row_major", ttig.desc_padding = 2 : i32}}
                       : !tt.tensordesc<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = 1}}>>
                      -> tensor<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = 1}}>>
-            // Output uses full [M, N] shape so ALL elements (incl. row M-1, col N-1) are written.
+            // Output uses full [M, N] shape, contiguous stride, so ALL elements
+            // (incl. row M-1, col N-1) are written; the store never requests
+            // padding, so it has no pitch-headroom requirement of its own.
             %out_desc = tt.make_tensor_descriptor %arg1, [%c8_i32, %c32_i32], [%c32_i64, %c1_i64]
                           : <{ty}>, !tt.tensordesc<{M}x{N}x{ty},
                           #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = 1}}>>
@@ -237,7 +259,10 @@ def test_block_load_nan_mask_col_bound(device, tmp_path: pathlib.Path):
     }}
     """)
     # Col N-1 is the OOB padding slot — sentinel 99.0 distinguishes a leaked value from NaN.
-    a = torch.ones((M, N), dtype=torch_dtype, device=device)
+    # `a` is allocated PITCH_PAD columns wider than N so the descriptor's
+    # widened stride still addresses real, owned memory (see
+    # test_block_load_dpas_layout_pitch_rounding for the full rationale).
+    a = torch.ones((M, N + PITCH_PAD), dtype=torch_dtype, device=device)
     a[:, N - 1] = 99.0
     x = torch.empty((M, N), dtype=torch_dtype, device=device)
     temp_file = tmp_path / "test_nan_mask_col_bound.ttgir"

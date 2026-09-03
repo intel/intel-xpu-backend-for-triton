@@ -1170,15 +1170,22 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
         unpackedVal = b.select(pred, unpackedVal, other);
       } else if (oobMaskElems.size() != 0) {
         Type unpackedElemType = getElementTypeOrSelf(unpackedType);
-        auto floatType = cast<FloatType>(unpackedElemType);
 
-        SmallVector<Attribute> constOtherElems;
-        for (auto i = 0; i < numElemsPerUnpackedType; ++i) {
-          APFloat fillVal =
-              useZeroFill ? APFloat::getZero(floatType.getFloatSemantics())
-                          : APFloat::getNaN(floatType.getFloatSemantics());
-          constOtherElems.push_back(FloatAttr::get(unpackedElemType, fillVal));
+        Attribute fillAttr;
+        if (useZeroFill) {
+          fillAttr = isa<FloatType>(unpackedElemType)
+                         ? static_cast<Attribute>(
+                               FloatAttr::get(unpackedElemType, 0.0))
+                         : static_cast<Attribute>(
+                               IntegerAttr::get(unpackedElemType, 0));
+        } else {
+          auto floatType = cast<FloatType>(unpackedElemType);
+          fillAttr = FloatAttr::get(
+              unpackedElemType, APFloat::getNaN(floatType.getFloatSemantics()));
         }
+
+        SmallVector<Attribute> constOtherElems(numElemsPerUnpackedType,
+                                               fillAttr);
 
         Value other = b.const_val(
             unpackedType,
