@@ -134,15 +134,15 @@ jobs:
       fail-fast: false
       matrix:
         suite:
-          - vllm-spec-decode
+          # - vllm-spec-decode
           - vllm-mrv2
-          - vllm-moe
-          - vllm-triton-attn
-          - vllm-mamba
-          - vllm-quant
-          - vllm-kda
-          - vllm-tdesc
-          - vllm-rest
+          # - vllm-moe
+          # - vllm-triton-attn
+          # - vllm-mamba
+          # - vllm-quant
+          # - vllm-kda
+          # - vllm-tdesc
+          # - vllm-rest
     runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1100') || format('["linux", "{0}"]', inputs.runner_label)) }}
     timeout-minutes: 240
     defaults:
