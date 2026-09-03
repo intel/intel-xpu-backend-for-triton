@@ -158,11 +158,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 #blocked1d = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  // COM: The pointer and mask must be reshaped without reordering and then
+  // COM: physically converted into the load encoding. A relabelling reshape
+  // COM: (allow_reorder efficient_layout) moves no data, so the operands would
+  // COM: claim the load encoding while still holding 1D-ordered values.
   // CHECK-LABEL: tt.func @test_1d_strided_load
-  // CHECK: tt.reshape %{{.*}} allow_reorder efficient_layout
-  // CHECK: tt.load %{{.*}} {ttig.block_io = "row_major", ttig.block_io_stride = 96 : i64}
-  // CHECK: ttg.convert_layout
-  // CHECK: tt.reshape %{{.*}} efficient_layout
+  // CHECK: [[PTR2D:%[0-9]+]] = tt.reshape %{{.*}} : tensor<1024x!tt.ptr<f16>, {{.*}}> -> tensor<32x32x!tt.ptr<f16>, [[CONSENC:#[a-z0-9_]+]]>
+  // CHECK: [[PTRCVT:%[0-9]+]] = ttg.convert_layout [[PTR2D]] : tensor<32x32x!tt.ptr<f16>, [[CONSENC]]> -> tensor<32x32x!tt.ptr<f16>, [[LOADENC:#[a-z0-9_]+]]>
+  // CHECK: [[MASK2D:%[0-9]+]] = tt.reshape %{{.*}} : tensor<1024xi1, {{.*}}> -> tensor<32x32xi1, [[CONSENC]]>
+  // CHECK: [[MASKCVT:%[0-9]+]] = ttg.convert_layout [[MASK2D]] : tensor<32x32xi1, [[CONSENC]]> -> tensor<32x32xi1, [[LOADENC]]>
+  // CHECK: [[LOADED:%[0-9]+]] = tt.load [[PTRCVT]], [[MASKCVT]] {ttig.block_io = "row_major", ttig.block_io_stride = 96 : i64} : tensor<32x32x!tt.ptr<f16>, [[LOADENC]]>
+  // CHECK: [[CVT:%[0-9]+]] = ttg.convert_layout [[LOADED]] : tensor<32x32xf16, [[LOADENC]]> -> tensor<32x32xf16, [[CONSENC]]>
+  // CHECK: tt.reshape [[CVT]] efficient_layout : tensor<32x32xf16, [[CONSENC]]> -> tensor<1024xf16, {{.*}}>
   tt.func @test_1d_strided_load(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> tensor<1024xf16, #blocked1d> {
     %idx = tt.make_range {start = 0 : i32, end = 1024 : i32} : tensor<1024xi32, #blocked1d>
     %c32 = arith.constant dense<32> : tensor<1024xi32, #blocked1d>

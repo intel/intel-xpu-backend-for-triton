@@ -59,7 +59,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // DISABLED-NOT: tt.reshape
     // DISABLED: tt.load %{{.*}} : tensor<1024x!tt.ptr<f16>
     // DISABLED-NOT: ttig.block_io
-    // ENABLED: tt.reshape %{{.*}} allow_reorder efficient_layout
+    // ENABLED: tt.reshape %{{.*}} : tensor<1024x!tt.ptr<f16>, {{.*}}> -> tensor<32x32x!tt.ptr<f16>, {{.*}}>
+    // ENABLED: ttg.convert_layout
     // ENABLED: tt.load %{{.*}} {ttig.block_io = "row_major", ttig.block_io_stride = 96 : i64}
     // ENABLED: ttg.convert_layout
     // ENABLED: tt.reshape %{{.*}} efficient_layout
