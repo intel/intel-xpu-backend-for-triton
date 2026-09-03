@@ -34,8 +34,10 @@ unsigned RegisterPressureAnalysis::getPerThreadSizeInBytes(Type type) {
   return 0;
 }
 
-unsigned RegisterPressureAnalysis::getGRFBytesPerThread(StringRef grfMode) {
-  // Explicit GRF modes map to exact per-thread budgets.
+unsigned RegisterPressureAnalysis::getGRFBytesPerHardwareThread(
+    StringRef grfMode) {
+  // Explicit GRF modes map to exact per-hardware-thread budgets (one hardware
+  // thread executes a whole subgroup/warp of lanes sharing one register file).
   // For "default" and "auto", conservatively assume 128-register mode (4096
   // bytes) to avoid exceeding hardware limits when the compiler ultimately
   // chooses a smaller configuration.
@@ -48,15 +50,8 @@ unsigned RegisterPressureAnalysis::getGRFBytesPerThread(StringRef grfMode) {
 
 unsigned RegisterPressureAnalysis::getPerLaneGRFBudgetInBytes(StringRef grfMode,
                                                               ModuleOp mod) {
-  unsigned grfBudget = getGRFBytesPerThread(grfMode);
+  unsigned grfBudget = getGRFBytesPerHardwareThread(grfMode);
   int threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(mod);
-  if (threadsPerWarp <= 0) {
-    mod.emitWarning(
-        "ttg.threads-per-warp is missing or non-positive; cannot convert "
-        "the per-hardware-thread GRF budget to a per-lane figure, falling "
-        "back to the unscaled per-thread budget");
-    return grfBudget;
-  }
   return grfBudget / static_cast<unsigned>(threadsPerWarp);
 }
 
