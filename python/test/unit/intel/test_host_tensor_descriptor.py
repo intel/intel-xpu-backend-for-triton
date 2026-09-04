@@ -119,3 +119,43 @@ def test_host_descriptor_matmul_2d_block_io(M, N, K, dtype, device):
     assert device_loads > 0, "device-side path: no 2D block loads found"
     assert host_loads == device_loads, \
         f"host has {host_loads} 2D block loads, expected {device_loads} (same as device)"
+
+
+@triton.jit
+def _one_head_tile_kernel(a_desc, b_ptr, c_ptr, head, N: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_D: tl.constexpr):
+    a = a_desc.load([0, head, 0]).reshape(BLOCK_M, BLOCK_D)
+    offs_n = tl.arange(0, N)
+    b = tl.load(b_ptr + tl.arange(0, BLOCK_D)[:, None] * N + offs_n[None, :])
+    tl.store(c_ptr + tl.arange(0, BLOCK_M)[:, None] * N + offs_n[None, :], tl.dot(a, b))
+
+
+# One-head tile of a (TOKENS, HEADS, HEAD_DIM) tensor. The (BLOCK_M, 1, BLOCK_D) block
+# spans dimensions 0 and 2, so 2D block I/O needs the unit middle dimension collapsed.
+# Collapsing is only correct while the tile fits one head: past that it would read the
+# next head instead of zero-padding (issues/7679, issues/7464).
+@pytest.mark.parametrize("HEAD_DIM, collapse", [(128, True), (104, False)])
+@pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
+@pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
+def test_host_descriptor_rank3_unit_middle_dim(HEAD_DIM, collapse, device):
+    TOKENS, HEADS, N = 256, 4, 64
+    BLOCK_M, BLOCK_D, HEAD = 64, 128, 1
+
+    torch.manual_seed(42)
+    a = torch.randn((TOKENS, HEADS, HEAD_DIM), dtype=torch.float16, device=device)
+    b = torch.randn((BLOCK_D, N), dtype=torch.float16, device=device)
+    c = torch.empty((BLOCK_M, N), dtype=torch.float32, device=device)
+
+    desc = TensorDescriptor(a, list(a.shape), list(a.stride()), [BLOCK_M, 1, BLOCK_D])
+    kernel = _one_head_tile_kernel[(1, )](desc, b, c, HEAD, N, BLOCK_M, BLOCK_D)
+
+    tile = torch.zeros((BLOCK_M, BLOCK_D), dtype=torch.float16, device=device)
+    tile[:, :HEAD_DIM] = a[:BLOCK_M, HEAD, :]
+    torch.testing.assert_close(c, tile.to(torch.float32) @ b.to(torch.float32), rtol=1e-2, atol=1e-2)
+
+    # Check the descriptor rank, not `tt.reshape`: a rank-reducing descriptor_load also
+    # leaves no reshape behind, yet nothing was collapsed.
+    ttir = kernel.asm["ttir"]
+    assert (f"!tt.tensordesc<{BLOCK_M}x1x{BLOCK_D}x" in ttir) != collapse
+    if collapse:
+        llir = kernel.asm["llir"]
+        assert llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead') > 0
