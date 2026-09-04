@@ -761,31 +761,50 @@ static unsigned getNumOperandsPerDword(TritonGEN::PrecisionType pTy) {
 
 // Values are defined in
 // https://github.khronos.org/SPIRV-Registry/extensions/INTEL/SPV_INTEL_subgroup_matrix_multiply_accumulate.html.
-static unsigned
-getMatrixMultiplyAccumulateOperandsVal(Type cTy, TritonGEN::PrecisionType pTy) {
-  unsigned res = 0;
-  if (cTy.isBF16())
-    res |= 0x4 | 0x8;
+// Only the matrix A bits are listed, the bit for matrix B is always the
+// corresponding matrix A bit shifted left by one.
+static unsigned getMatrixAOperandsVal(TritonGEN::PrecisionType pTy) {
   switch (pTy) {
   case TritonGEN::PrecisionType::TF32:
-    return res | 0x100 | 0x200;
+    return 0x100;
   case TritonGEN::PrecisionType::BF16:
-    return res | 0x1000 | 0x2000;
+    return 0x1000;
   case TritonGEN::PrecisionType::FP16:
-    return res | 0x400 | 0x800;
+    return 0x400;
   case TritonGEN::PrecisionType::U8:
-    return res | 0x10 | 0x20;
+    return 0x10;
   case TritonGEN::PrecisionType::S8:
-    return res | 0x1 | 0x2 | 0x10 | 0x20;
+    return 0x1 | 0x10;
   case TritonGEN::PrecisionType::F8E5M2:
-    return res | 0x10000 | 0x20000;
+    return 0x10000;
   case TritonGEN::PrecisionType::F8E4M3FN:
-    return res | 0x4000 | 0x8000;
+    return 0x4000;
   case TritonGEN::PrecisionType::F4E2M1:
-    return res | 0x40000 | 0x80000;
+    return 0x40000;
   default:
     llvm_unreachable("unsupported TritonGEN::PrecisionType");
   }
+}
+
+static unsigned
+getMatrixMultiplyAccumulateOperandsVal(Type cTy, TritonGEN::PrecisionType pA,
+                                       TritonGEN::PrecisionType pB) {
+  unsigned res = 0;
+  if (cTy.isBF16())
+    res |= 0x4 | 0x8;
+  return res | getMatrixAOperandsVal(pA) | (getMatrixAOperandsVal(pB) << 1);
+}
+
+// Values are defined in
+// https://github.khronos.org/SPIRV-Registry/extensions/INTEL/SPV_INTEL_subgroup_scaled_matrix_multiply_accumulate.html.
+// The scale factors are always in the E8M0 format and both of them must be
+// described, even when the corresponding scale operand is defaulted.
+static unsigned getScaledMatrixMultiplyAccumulateOperandsVal(
+    Type cTy, TritonGEN::PrecisionType pA, TritonGEN::PrecisionType pB) {
+  constexpr unsigned ScaleAFloat8E8M0 = 0x100000;
+  constexpr unsigned ScaleBFloat8E8M0 = 0x200000;
+  return getMatrixMultiplyAccumulateOperandsVal(cTy, pA, pB) |
+         ScaleAFloat8E8M0 | ScaleBFloat8E8M0;
 }
 
 struct TritonMatrixDPASLowering
@@ -855,7 +874,7 @@ struct TritonMatrixDPASLowering
     SmallVector<Value> args{
         kDim, a, b, c,
         builder.i32_val(getMatrixMultiplyAccumulateOperandsVal(
-            cOrigTy.getElementType(), precisionA))};
+            cOrigTy.getElementType(), precisionA, precisionA))};
     auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
         /*other=*/LLVM::ModRefInfo::NoModRef,
         /*argMem=*/LLVM::ModRefInfo::NoModRef,
@@ -917,8 +936,9 @@ struct TritonMatrixBlockScaleDPASLowering
            "Accumulator and result type mismatch");
     VectorType cTy = cOrigTy;
 
-    TritonGEN::PrecisionType precision = op.getPa();
-    Type scaleTy = getScaleType(rewriter, precision);
+    TritonGEN::PrecisionType precisionA = op.getPa();
+    TritonGEN::PrecisionType precisionB = op.getPb();
+    Type scaleTy = getScaleType(rewriter, precisionA);
 
     Value scaleA = op.getScaleA();
     Value scaleB = op.getScaleB();
@@ -937,7 +957,7 @@ struct TritonMatrixBlockScaleDPASLowering
 
     TritonLLVMOpBuilder builder(loc, rewriter);
     Value kDim = builder.i32_val(8 /*systolic depth*/ *
-                                 getNumOperandsPerDword(precision));
+                                 getNumOperandsPerDword(precisionA));
     SmallVector<Value> args{
         kDim,
         a,
@@ -945,8 +965,8 @@ struct TritonMatrixBlockScaleDPASLowering
         c,
         scaleA,
         scaleB,
-        builder.i32_val(getMatrixMultiplyAccumulateOperandsVal(
-            cOrigTy.getElementType(), precision))};
+        builder.i32_val(getScaledMatrixMultiplyAccumulateOperandsVal(
+            cOrigTy.getElementType(), precisionA, precisionB))};
     auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
         /*other=*/LLVM::ModRefInfo::NoModRef,
         /*argMem=*/LLVM::ModRefInfo::NoModRef,
