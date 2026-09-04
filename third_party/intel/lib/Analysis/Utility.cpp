@@ -347,13 +347,22 @@ bool cvtIsSubGroupReinterpret(RankedTensorType srcTy, RankedTensorType dstTy) {
   if (!dstLayout)
     return false;
 
-  LinearLayout comp = srcLayout->invertAndCompose(*dstLayout);
+  // The reinterpret layout casting need to get the map layout from dst = map *
+  // src map = dst.invertAndCompose(src)
+  LinearLayout comp = dstLayout->invertAndCompose(*srcLayout);
   std::optional<LinearLayout> conversion = comp.quotient(kBlock);
   if (!conversion)
     return false;
   conversion = conversion->quotient(kWarp);
   if (!conversion)
     return false;
+
+  llvm::outs() << "reinterpret srcLayout: " << *srcLayout << "\n";
+  llvm::outs() << "reinterpret dstLayout: " << *dstLayout << "\n";
+  llvm::outs() << "reinterpret comp: " << comp << "\n";
+  llvm::outs() << "reinterpret comp 2222: "
+               << dstLayout->invertAndCompose(*srcLayout) << "\n";
+  llvm::outs() << "reinterpret cast conversion: " << conversion << "\n";
 
   // TODO: Support more kind of reinterpret cast.
   //   The conversion which can be used for reinterpret cast has to be a mapping
@@ -375,8 +384,28 @@ bool cvtIsSubGroupReinterpret(RankedTensorType srcTy, RankedTensorType dstTy) {
   // 3. The Register M -> Lane (threadsPerWarp/size) should be in order.
   unsigned packedRegisterSize = 1;
   unsigned threadsPerWarp = conversion->getInDimSize(kLane);
-  bool hasLaneToLaneMapping = false;
   auto laneBases = conversion->getBases().lookup(kLane);
+  auto checkLaneIncContigous = [&](StringAttr outDim) {
+    int outBase = -1;
+    for (size_t i = 0; i < conversion->getInDimSizeLog2(kLane); i++) {
+      int lane2Out = laneBases[i][conversion->getOutDimIndex(outDim)];
+      if (lane2Out) {
+        if (outBase < 0) {
+          outBase = lane2Out;
+        } else if (lane2Out == outBase << 1) {
+          outBase = lane2Out;
+        } else {
+          return false;
+        }
+      }
+    }
+    return true;
+  };
+  if (!checkLaneIncContigous(kRegister))
+    return false;
+  if (!checkLaneIncContigous(kLane))
+    return false;
+  bool packOrUnpack = false; // true - pack, false = unpack
   for (size_t i = 0; i < conversion->getInDimSizeLog2(kLane); i++) {
     auto lane2Reg = laneBases[i][conversion->getOutDimIndex(kRegister)];
     auto lane2Lane = laneBases[i][conversion->getOutDimIndex(kLane)];
@@ -384,17 +413,16 @@ bool cvtIsSubGroupReinterpret(RankedTensorType srcTy, RankedTensorType dstTy) {
       return false;
     if (!lane2Reg && !lane2Lane) // invalid.
       return false;
-    if (lane2Reg &&
-        hasLaneToLaneMapping) // cannot map the disjoint lane to reg.
-      return false;
-
+    if (i == 0) {
+      packOrUnpack = (lane2Reg > 0);
+    }
     if (lane2Reg == packedRegisterSize) {
       packedRegisterSize <<= 1;
       continue;
     }
-    if (lane2Lane && (lane2Lane != (1 << i) / packedRegisterSize))
+    if (packOrUnpack && lane2Lane &&
+        (lane2Lane != (1 << i) / packedRegisterSize))
       return false;
-    hasLaneToLaneMapping = true;
   }
   if (packedRegisterSize == 1)
     return false;
@@ -409,13 +437,17 @@ bool cvtIsSubGroupReinterpret(RankedTensorType srcTy, RankedTensorType dstTy) {
   if (packedRegisterSize * bitsPerElement >= 128)
     return false;
 
+  unsigned reg2LaneBase =
+      packOrUnpack ? threadsPerWarp / packedRegisterSize : 1;
   for (size_t i = 0; i < conversion->getInDimSizeLog2(kRegister); ++i) {
     // Check the packed Register M -> Lane (threadsPerWarp/packedRegisterSize).
     // This has to be in incremental order now.
     auto reg2Lane = conversion->getBases().lookup(
         kRegister)[i][conversion->getOutDimIndex(kLane)];
-    if (reg2Lane == threadsPerWarp / packedRegisterSize)
+    if (reg2Lane == reg2LaneBase) {
+      reg2LaneBase <<= 1;
       packedRegisterSize >>= 1;
+    }
   }
   return packedRegisterSize == 1;
 }

@@ -463,6 +463,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.arith.add_arith_emulate_unsupported_floats(pm, ["bf16"], "f32")
         if opt.instrumentation_mode == "fpsan":
             passes.ttgpuir.add_fp_sanitizer(pm, opt.fpsan_homomorphic_casts)
+
+        intel.passes.ttgpuir.add_empty_analysis(pm)
+        intel.passes.ttgpuir.add_remove_layout_conversions(pm)
+
         pm.run(mod, 'make_ttgir')
         return mod
 

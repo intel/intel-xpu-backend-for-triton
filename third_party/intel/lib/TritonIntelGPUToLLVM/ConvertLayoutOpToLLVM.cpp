@@ -413,7 +413,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     StringAttr kWarp = str_attr("warp");
     StringAttr kBlock = str_attr("block");
     LinearLayout comp =
-        *srcLayout.invertAndCompose(dstLayout).quotient({kWarp, kBlock});
+        *dstLayout.invertAndCompose(srcLayout).quotient({kWarp, kBlock});
     return comp;
   }
 
@@ -502,9 +502,13 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     StringAttr kLane = str_attr("lane");
 
     unsigned packedRegisterSize = 1;
+    bool packOrUnpack = false;
     for (size_t i = 0; i < comp.getInDimSizeLog2(kLane); i++) {
       auto lane2Reg =
           comp.getBases().lookup(kLane)[i][comp.getOutDimIndex(kRegister)];
+      if (i == 0 && lane2Reg) {
+        packOrUnpack = true;
+      }
       if (lane2Reg == packedRegisterSize)
         packedRegisterSize <<= 1;
     }
@@ -512,15 +516,19 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     unsigned threadsPerWarp = comp.getInDimSize(kLane);
     unsigned checkedPackRegisterSize = packedRegisterSize;
     unsigned vecSize = 1, packRegIdx = 0;
+    // llvm::outs() << "comp:" << comp << "\n";
     std::vector<std::vector<int>> regMapBases(comp.getInDimSizeLog2(kRegister));
+    unsigned regMapBase =
+        packOrUnpack ? threadsPerWarp / packedRegisterSize : 1;
     for (size_t i = 0; i < comp.getInDimSizeLog2(kRegister); i++) {
       if (checkedPackRegisterSize != 1) {
         vecSize <<= 1;
       }
       auto bases = comp.getBases().lookup(kRegister)[i];
       auto reg2Lane = bases[comp.getOutDimIndex(kLane)];
-      if (reg2Lane == threadsPerWarp / checkedPackRegisterSize) {
+      if (reg2Lane == regMapBase) {
         checkedPackRegisterSize >>= 1;
+        regMapBase <<= 1;
         regMapBases[packRegIdx++] = {1 << i};
       } else {
         auto reg2Reg = bases[comp.getOutDimIndex(kRegister)];
@@ -532,10 +540,12 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     LinearLayout regMapping = LinearLayout(
         {{kRegister, regMapBases}}, {{kRegister, comp.getInDimSize(kRegister)}},
         /*requireSurjective=*/true);
-    Type reinterType =
+
+    // llvm::outs() << "regMapping:" << regMapping << "\n";
+    Type packedType =
         vec_ty(int_ty(elementType.getIntOrFloatBitWidth() * packedRegisterSize),
                vecSize / packedRegisterSize);
-    VectorType vecType = vec_ty(elementType, vecSize);
+    VectorType unpackedType = vec_ty(elementType, vecSize);
 
     int numElems = inVals.size();
     SmallVector<Value> result;
@@ -546,10 +556,15 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         slice.push_back(inVals[regId]);
       }
       Value vec = packLLVector(loc, slice, rewriter);
-      Value shuffled = TritonGEN::SubGroupBitcastShuffleOp::create(
-                           rewriter, loc, reinterType, vec)
-                           ->getResult(0);
-      Value reinterVec = b.bitcast(shuffled, vecType);
+      Value input = packOrUnpack ? vec : b.bitcast(vec, packedType);
+      Value shuffled =
+          TritonGEN::SubGroupBitcastShuffleOp::create(
+              rewriter, loc, packOrUnpack ? packedType : unpackedType, input)
+              ->getResult(0);
+
+      Value reinterVec =
+          packOrUnpack ? b.bitcast(shuffled, unpackedType) : shuffled;
+
       SmallVector<Value> unpackedVec =
           unpackLLVector(loc, reinterVec, rewriter);
       for (size_t j = 0; j < vecSize; ++j) {
