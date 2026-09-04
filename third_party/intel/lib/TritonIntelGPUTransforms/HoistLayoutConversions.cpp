@@ -37,7 +37,8 @@ namespace {
 ///
 /// \param cvtOp      The convert_layout operation to consider for hoisting.
 /// \param analysis   Module-level register pressure analysis.
-/// \param grfBudget  The GRF budget in bytes per thread for the current mode.
+/// \param grfBudget  Per-lane GRF budget in bytes for the current mode (see
+///                   `RegisterPressureAnalysis::getPerLaneGRFBudgetInBytes`).
 static void
 hoistCvtDotOpOutOfLoop(ttg::ConvertLayoutOp cvtOp,
                        const ttg::intel::RegisterPressureAnalysis &analysis,
@@ -122,7 +123,8 @@ class TritonIntelGPUHoistLayoutConversionsPass
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     unsigned grfBudget =
-        ttg::intel::RegisterPressureAnalysis::getGRFBytesPerThread(grfMode);
+        ttg::intel::RegisterPressureAnalysis::getPerLaneGRFBudgetInBytes(
+            grfMode, mod);
     ttg::intel::RegisterPressureAnalysis analysis(mod);
 
     SmallVector<ttg::ConvertLayoutOp> cvtOps;
