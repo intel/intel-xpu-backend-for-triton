@@ -249,17 +249,12 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         return ret
 
     @staticmethod
-    def _get_max_divisibility(value):
-        """Get the highest power-of-2 divisor of value, capped at 4.
-
-        Cap rationale: MaterializeBlockPointer's alignment check requires
-        divisibility by at most 4 (for fp8 with 8-bit elements). Higher
-        divisibilities provide no additional benefit for 2D block I/O.
-        """
+    def _get_max_divisibility(value, cap=4):
+        """Get the highest power-of-2 divisor of value, capped at `cap`."""
         if value == 0:
             return 1
         div = 1
-        while div < 4 and value % (div * 2) == 0:
+        while div < cap and value % (div * 2) == 0:
             div *= 2
         return div
 
@@ -269,9 +264,14 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         key = ""
         if getattr(arg, "padding", None) == "nan":
             key += "N"
+        # A cap of 4 is enough for the 2D block I/O alignment check, but collapsing a
+        # unit dim of a rank-3 descriptor needs shape[i] % block_shape[i] == 0, so for
+        # that shape cap at the block extent instead (issues/7679).
+        block_shape = getattr(arg, "block_shape", None)
+        collapsible = block_shape is not None and len(block_shape) == 3 and 1 in block_shape[:2]
         for i, shape_val in enumerate(arg.shape):
-            div = XPUBackend._get_max_divisibility(shape_val)
-            key += f"S{i}D{div}"
+            cap = max(4, block_shape[i]) if collapsible else 4
+            key += f"S{i}D{XPUBackend._get_max_divisibility(shape_val, cap)}"
         return key
 
     def pack_metadata(self, metadata):
