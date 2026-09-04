@@ -740,6 +740,54 @@ struct TritonSplitBarrierWaitLowering
 // Matrix operations
 //===----------------------------------------------------------------------===//
 
+static unsigned getNumOperandsPerDword(TritonGEN::PrecisionType pTy) {
+  switch (pTy) {
+  case TritonGEN::PrecisionType::TF32:
+    return 1;
+  case TritonGEN::PrecisionType::BF16:
+  case TritonGEN::PrecisionType::FP16:
+    return 2;
+  case TritonGEN::PrecisionType::U8:
+  case TritonGEN::PrecisionType::S8:
+  case TritonGEN::PrecisionType::F8E5M2:
+  case TritonGEN::PrecisionType::F8E4M3FN:
+    return 4;
+  case TritonGEN::PrecisionType::F4E2M1:
+    return 8;
+  default:
+    llvm_unreachable("unsupported TritonGEN::PrecisionType");
+  }
+}
+
+// Values are defined in
+// https://github.khronos.org/SPIRV-Registry/extensions/INTEL/SPV_INTEL_subgroup_matrix_multiply_accumulate.html.
+static unsigned
+getMatrixMultiplyAccumulateOperandsVal(Type cTy, TritonGEN::PrecisionType pTy) {
+  unsigned res = 0;
+  if (cTy.isBF16())
+    res |= 0x4 | 0x8;
+  switch (pTy) {
+  case TritonGEN::PrecisionType::TF32:
+    return res | 0x100 | 0x200;
+  case TritonGEN::PrecisionType::BF16:
+    return res | 0x1000 | 0x2000;
+  case TritonGEN::PrecisionType::FP16:
+    return res | 0x400 | 0x800;
+  case TritonGEN::PrecisionType::U8:
+    return res | 0x10 | 0x20;
+  case TritonGEN::PrecisionType::S8:
+    return res | 0x1 | 0x2 | 0x10 | 0x20;
+  case TritonGEN::PrecisionType::F8E5M2:
+    return res | 0x10000 | 0x20000;
+  case TritonGEN::PrecisionType::F8E4M3FN:
+    return res | 0x4000 | 0x8000;
+  case TritonGEN::PrecisionType::F4E2M1:
+    return res | 0x40000 | 0x80000;
+  default:
+    llvm_unreachable("unsupported TritonGEN::PrecisionType");
+  }
+}
+
 struct TritonMatrixDPASLowering
     : public ConvertOpToLLVMPattern<TritonGEN::MatrixDPASOp> {
   using ConvertOpToLLVMPattern<TritonGEN::MatrixDPASOp>::ConvertOpToLLVMPattern;
@@ -827,52 +875,6 @@ struct TritonMatrixDPASLowering
     rewriter.replaceOp(op, result);
     return success();
   }
-
-private:
-  static unsigned getNumOperandsPerDword(TritonGEN::PrecisionType pTy) {
-    switch (pTy) {
-    case TritonGEN::PrecisionType::TF32:
-      return 1;
-    case TritonGEN::PrecisionType::BF16:
-    case TritonGEN::PrecisionType::FP16:
-      return 2;
-    case TritonGEN::PrecisionType::U8:
-    case TritonGEN::PrecisionType::S8:
-    case TritonGEN::PrecisionType::F8E5M2:
-    case TritonGEN::PrecisionType::F8E4M3FN:
-      return 4;
-    default:
-      llvm_unreachable("unsupported TritonGEN::PrecisionType");
-    }
-  }
-
-  // Values are defined in
-  // https://github.khronos.org/SPIRV-Registry/extensions/INTEL/SPV_INTEL_subgroup_matrix_multiply_accumulate.html.
-  static unsigned
-  getMatrixMultiplyAccumulateOperandsVal(Type cTy,
-                                         TritonGEN::PrecisionType pTy) {
-    unsigned res = 0;
-    if (cTy.isBF16())
-      res |= 0x4 | 0x8;
-    switch (pTy) {
-    case TritonGEN::PrecisionType::TF32:
-      return res | 0x100 | 0x200;
-    case TritonGEN::PrecisionType::BF16:
-      return res | 0x1000 | 0x2000;
-    case TritonGEN::PrecisionType::FP16:
-      return res | 0x400 | 0x800;
-    case TritonGEN::PrecisionType::U8:
-      return res | 0x10 | 0x20;
-    case TritonGEN::PrecisionType::S8:
-      return res | 0x1 | 0x2 | 0x10 | 0x20;
-    case TritonGEN::PrecisionType::F8E5M2:
-      return res | 0x10000 | 0x20000;
-    case TritonGEN::PrecisionType::F8E4M3FN:
-      return res | 0x4000 | 0x8000;
-    default:
-      llvm_unreachable("unsupported TritonGEN::PrecisionType");
-    }
-  }
 };
 
 struct TritonMatrixBlockScaleDPASLowering
@@ -921,18 +923,6 @@ struct TritonMatrixBlockScaleDPASLowering
     Value scaleA = op.getScaleA();
     Value scaleB = op.getScaleB();
 
-    SmallVector<Type> funcTypes{cTy, cTy, aTy, bTy, scaleTy, scaleTy};
-    std::string funcName =
-        "llvm.genx.GenISA.sub.group.bdpas." + getGenISATypeMangling(funcTypes);
-
-    SmallVector<Type> argTypes{cTy,     aTy,     bTy,    scaleTy,
-                               scaleTy, int32Ty, int32Ty};
-
-    auto precA = LLVM::ConstantOp::create(rewriter, loc, int32Ty,
-                                          static_cast<int>(op.getPa()));
-    auto precB = LLVM::ConstantOp::create(rewriter, loc, int32Ty,
-                                          static_cast<int>(op.getPb()));
-
     // When either scale operand is missing, set it to the value 1.0 in E8M0
     // format (encoded as 0x7f).
     if (!scaleA)
@@ -940,12 +930,38 @@ struct TritonMatrixBlockScaleDPASLowering
     if (!scaleB)
       scaleB = defineScale(rewriter, loc, 0x7f, scaleTy);
 
-    SmallVector<Value> args{c, a, b, scaleA, scaleB, precA, precB};
+    std::string fnName = "__spirv_SubgroupScaledMatrixMultiplyAccumulateINTEL";
+    SmallVector<Type> argTypes{int32Ty, aTy,     bTy,    cTy,
+                               scaleTy, scaleTy, int32Ty};
+    fnName = intel::mangle(fnName, argTypes);
 
-    LLVM::CallOp call = intel::createDeviceFunctionCall(
-        rewriter, funcName, cTy, argTypes, args, {},
-        intel::convergentNoUnwindWillReturnAttrs);
-    rewriter.replaceOp(op, call);
+    TritonLLVMOpBuilder builder(loc, rewriter);
+    Value kDim = builder.i32_val(8 /*systolic depth*/ *
+                                 getNumOperandsPerDword(precision));
+    SmallVector<Value> args{
+        kDim,
+        a,
+        b,
+        c,
+        scaleA,
+        scaleB,
+        builder.i32_val(getMatrixMultiplyAccumulateOperandsVal(
+            cOrigTy.getElementType(), precision))};
+    auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
+        /*other=*/LLVM::ModRefInfo::NoModRef,
+        /*argMem=*/LLVM::ModRefInfo::NoModRef,
+        /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef,
+        /*errnoMem=*/LLVM::ModRefInfo::NoModRef,
+        /*targetMem0=*/LLVM::ModRefInfo::NoModRef,
+        /*targetMem1=*/LLVM::ModRefInfo::NoModRef);
+    auto funcAttrs = intel::convergentNoUnwindWillReturnAttrs;
+    funcAttrs.memEffectsAttr = memAttr;
+
+    Value result = intel::createDeviceFunctionCall(
+                       rewriter, fnName, cTy, argTypes, args, {}, funcAttrs)
+                       ->getResult(0);
+
+    rewriter.replaceOp(op, result);
     return success();
   }
 
