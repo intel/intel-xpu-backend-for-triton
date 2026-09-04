@@ -452,13 +452,17 @@ struct LoadStoreConversionBase {
             op, TritonIntelGPUDialect::getSupportPredicatedIOAttrName()))
       return false;
 
-    // Predicated load is enabled by default for LoadOp but disabled by default
-    // for DescriptorLoadOp. DescriptorLoadOp always generates boundary-check
-    // predicates (even when all elements are in-bounds), and the predicated
-    // load intrinsic prevents IGC from optimizing these uniformly-true
-    // predicates as effectively as the control-flow-based approach. Both can be
-    // overridden by env vars. Predicated store is enabled by default for both
-    // op types.
+    // Predicated load and store are enabled by default for all four op types
+    // (LoadOp, StoreOp, DescriptorLoadOp, DescriptorStoreOp). Either env var
+    // (TRITON_INTEL_PREDICATED_LOAD, TRITON_INTEL_PREDICATED_STORE) overrides
+    // in both directions.
+    //
+    // Note that DescriptorLoadOp always emits a boundary-check mask, even for
+    // provably in-bounds tiles, so this choice applies to all of its masked
+    // fallback loads (2D block loads bypass this path entirely). Predicating
+    // them costs IGC's folding of the uniformly-true predicates that the
+    // control-flow form exposes; that trade measured favorable on Xe2, see
+    // issue #7090.
     static const std::optional<bool> usePredicatedLoad =
         tools::isEnvValueBool(tools::getStrEnv("TRITON_INTEL_PREDICATED_LOAD"));
     static const std::optional<bool> usePredicatedStore = tools::isEnvValueBool(
@@ -471,7 +475,7 @@ struct LoadStoreConversionBase {
     } else if constexpr (std::is_same_v<OpType, StoreOp>) {
       return !usePredicatedStore.has_value() || usePredicatedStore.value();
     } else if constexpr (std::is_same_v<OpType, DescriptorLoadOp>) {
-      return usePredicatedLoad.has_value() && usePredicatedLoad.value();
+      return !usePredicatedLoad.has_value() || usePredicatedLoad.value();
     } else if constexpr (std::is_same_v<OpType, DescriptorStoreOp>) {
       return !usePredicatedStore.has_value() || usePredicatedStore.value();
     }
@@ -498,6 +502,7 @@ struct LoadStoreConversionBase {
     /******** LoadOp ********
      * ""   -> DEFAULT (No cache modifier provided)
      * "cg" -> L1UC_L3C (Cache at global level, not L1)
+     * "cs" -> L1S_L3C (Streaming in L1, still cached in L3)
      * "cv" -> L1UC_L3UC (Do not cache at all)
      * "ca" -> L1C_L3C (Cache at all levels)
      **/
@@ -520,6 +525,13 @@ struct LoadStoreConversionBase {
       return TritonGEN::LoadCacheControl::DEFAULT;
     case CacheModifier::CG:
       return TritonGEN::LoadCacheControl::L1UC_L3C;
+    case CacheModifier::CS:
+      // `cs` is "streaming": the line is expected to be touched once, so it is
+      // marked for early replacement in L1 rather than evicted from it. There
+      // is no L1S_L3S load control (unlike the store side), and L3 must stay
+      // cached for the same reason `cg` maps to L1UC_L3C -- see
+      // getNonTemporalFlag().
+      return TritonGEN::LoadCacheControl::L1S_L3C;
     case CacheModifier::CV:
       return TritonGEN::LoadCacheControl::L1UC_L3UC;
     case CacheModifier::CA:
@@ -540,6 +552,8 @@ struct LoadStoreConversionBase {
      * "cg" -> L1UC_L3WB (Cache at global level, not L1)
      * "cs" -> L1S_L3S (Cache streaming at all levels)
      * "wt" -> L1WT_L3WT (Cache write-through at all levels)
+     * "ca" -> L1WB_L3WB (Cache at all levels)
+     * "cv" -> L1UC_L3UC (Bypass cache at all levels)
      **/
     switch (cacheModifier) {
     case CacheModifier::NONE:
@@ -552,9 +566,14 @@ struct LoadStoreConversionBase {
       return TritonGEN::StoreCacheControl::L1S_L3S;
     case CacheModifier::WT:
       return TritonGEN::StoreCacheControl::L1WT_L3WT;
-    default:
-      llvm_unreachable("invalid cache modifier for StoreOp");
+    case CacheModifier::CA:
+      return TritonGEN::StoreCacheControl::L1WB_L3WB;
+    case CacheModifier::CV:
+      // Reconciles with the plain-store arm which maps cv to !nontemporal
+      // (IGC lowers to LSC .uc.uc = L1UC_L3UC).
+      return TritonGEN::StoreCacheControl::L1UC_L3UC;
     }
+    llvm_unreachable("invalid cache modifier for StoreOp");
   }
 
   template <typename OpType,
@@ -564,6 +583,51 @@ struct LoadStoreConversionBase {
     switch (op.getCache()) {
     case triton::CacheModifier::CG:
     case triton::CacheModifier::CS:
+      // `!nontemporal` is a *single bit*, and IGC turns it into LSC `.uc.uc` --
+      // bypass L1 **and** L3. That is the exact meaning of `cv` (L1UC_L3UC) but
+      // it over-states `cg` (L1UC_L3C) and `cs` (L1S_L3C), both of which keep
+      // L3 cached. Emitting an L3 bypass for `cg` destroyed cross-kernel L3
+      // reuse and cost 1.58x end-to-end on TorchBench pyhpc_isoneutral_mixing
+      // (issue #7843), so no load may take that path.
+      //
+      // The faithful encoding is a per-level SPV_INTEL_cache_controls
+      // decoration, which is what the predicated path emits via the
+      // `cache_control` operand of TritonGEN::PredicatedLoadOp. It cannot be
+      // reused here: the decoration would have to ride on the `llvm.load` as
+      // `!spirv.DecorationCacheControlINTEL` metadata, and LLVM InstCombine
+      // folds `load <N x iM>` + `bitcast` into a retyped `load <N x fM>`,
+      // recreating the instruction and copying only the metadata kinds it knows
+      // about. Custom SPIR-V metadata is dropped there, long before IGC sees
+      // it; `!nontemporal` survives only because it has a first-class
+      // `MD_nontemporal` kind. The predicated path is immune because its
+      // carrier is a call, which InstCombine never retypes.
+      //
+      // So a plain load or store leaves both modifiers unannotated. A plain
+      // load then runs at the hardware default (`.ca.ca`); a plain store runs
+      // at the platform store default, which is not `.ca.ca` and whose policy
+      // is not established here. Cache modifiers are performance hints, so
+      // caching more than asked is always safe, and for loads it measures
+      // fastest of the available options on the workload above. Revisit if LLVM
+      // starts preserving unknown metadata across load retyping.
+      //
+      // This covers every arm of `tt.load`, `tt.descriptor_load` and `tt.store`
+      // that emits a plain `llvm.load`/`llvm.store`: the unmasked access, the
+      // masked fallback that guards a plain access with control flow, the
+      // masked store whose mask is statically uniform across the vector group,
+      // and the fast arm of the two-armed predicated store block. Explicit
+      // per-level cache controls are emitted only on the paths that pass a
+      // Load/StoreCacheControl to TritonGEN::Predicated{Load,Store}Op. Which of
+      // the masked arms is taken depends on
+      // TRITON_INTEL_PREDICATED_{LOAD,STORE}, so no arm may rely on the flag.
+      //
+      // NOTE: for `cs` this is a deliberate approximation. `L1S_L3S` cannot be
+      // expressed on a plain store, so the only choice is between bypassing L3
+      // (which `cs` did not ask for) and the platform default (which may retain
+      // in L1). We take the default: it is what the predicated arm ends up with
+      // anyway, since IGC was measured to drop the explicit `L1S_L3S`, and
+      // caching more than asked cannot affect correctness -- these modifiers
+      // are performance hints.
+      return false;
     case triton::CacheModifier::CV:
       return true;
     case triton::CacheModifier::CA:
@@ -4037,6 +4101,7 @@ struct Subgroup2DBlockLoadOpConversion
     Value pitch = adaptor.getBasePitch();
     Value baseOffsetX = adaptor.getOffsetX();
     Value baseOffsetY = adaptor.getOffsetY();
+    ValueRange batchStrides = adaptor.getBatchStrides();
 
     Value elemBytes = b.i32_val(elemSizeInBits / 8);
 
@@ -4096,6 +4161,19 @@ struct Subgroup2DBlockLoadOpConversion
     unsigned blockRowIdx = cfg.isTransposeRequired ? cfg.colDim : cfg.rowDim;
     unsigned blockColIdx = cfg.isTransposeRequired ? cfg.rowDim : cfg.colDim;
 
+    // `computeAddress` indexes `batch_strides` by dimension number, so the 2D
+    // tile must cover exactly the inner two dimensions and each remaining
+    // dimension must have a stride. `LowerTo2DBlockLoad` enforces the tile
+    // shape when it creates the op, but that shape comes from the layout, so
+    // the op verifier can only count the strides. Bail rather than read out of
+    // bounds: `ttig` is illegal in this conversion and this is the op's only
+    // pattern, so this is a legalization failure, not a fallback to a slower
+    // path. No in-tree producer can reach it.
+    if (batchStrides.size() != rank - 2 ||
+        std::min(blockRowIdx, blockColIdx) != rank - 2 ||
+        std::max(blockRowIdx, blockColIdx) != rank - 1)
+      return failure();
+
     // Per-sub-tile: combine base offsets with linear layout offsets.
     auto computeAddress =
         [&](unsigned /*registerIdx*/,
@@ -4117,11 +4195,12 @@ struct Subgroup2DBlockLoadOpConversion
         else if (dim == blockColIdx)
           offsetX = adjustedOffset;
         else {
-          // Batch dimensions: fold into base pointer via GEP.
-          Value strideInElems =
-              b.zext(int_ty(64), b.mul(baseHeight, b.udiv(pitch, elemBytes)));
+          // Batch dimensions: fold into base pointer via GEP. The stride is
+          // carried by the op (`batch_strides`) — it cannot be recovered from
+          // the 2D surface parameters, which describe a single tile plane.
+          assert(dim < batchStrides.size() && "missing batch stride");
           Value offset64 = b.zext(int_ty(64), adjustedOffset);
-          Value batchOffset = b.mul(offset64, strideInElems);
+          Value batchOffset = b.mul(offset64, batchStrides[dim]);
           addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, batchOffset);
         }
       }

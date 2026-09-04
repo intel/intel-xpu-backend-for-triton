@@ -67,6 +67,8 @@ OPTION:
     --warning-reports
     --ignore-errors
     --run-all
+    --asan            run host-only unit + LIT tests under AddressSanitizer/LeakSanitizer;
+                      requires a build produced with TRITON_BUILD_WITH_ASAN=1
     --skip-list SKIPLIST
     --extra-skip-list-suffixes SEMICOLON-SEPARATED LIST OF SUFFIXES
     --select-from-file SELECTFILE
@@ -139,6 +141,7 @@ TRITON_TEST_RUN_ALL=false
 SKIP_PIP=false
 SKIP_PYTORCH=false
 TEST_UNSKIP=false
+TEST_ASAN=false
 
 while (( $# != 0 )); do
   case "$1" in
@@ -438,6 +441,10 @@ while (( $# != 0 )); do
       TRITON_TEST_RUN_ALL=true
       shift
       ;;
+    --asan)
+      TEST_ASAN=true
+      shift
+      ;;
     --skip-list)
       # Must be absolute
       TRITON_TEST_SKIPLIST_DIR="$(mkdir -p "$2" && cd "$2" && pwd)"
@@ -483,6 +490,57 @@ SCRIPTS_DIR="$TRITON_PROJ/scripts"
 source "$SCRIPTS_DIR/pytest-utils.sh"
 # Provides the `pip` wrapper (pip or `uv pip`).
 source "$SCRIPTS_DIR/pip-utils.sh"
+
+# AddressSanitizer / LeakSanitizer mode. ASan does not work with binaries that
+# run code on the GPU, so this is restricted to the host-side test surface:
+# the C++ unittests and the LIT tests, both of which exercise triton-opt without
+# touching the device. Requires a build produced with TRITON_BUILD_WITH_ASAN=1.
+# See https://github.com/intel/intel-xpu-backend-for-triton/issues/5029
+if [ "$TEST_ASAN" = true ]; then
+  # Restrict to the host-only unit-test suite (CXX unittests + LIT).
+  TEST_DEFAULT=false
+  TEST_UNIT=true
+  TEST_CORE=false
+  TEST_TUTORIAL=false
+  TEST_MICRO_BENCHMARKS=false
+  TEST_TRITON_KERNELS=false
+  # No Python/GPU tests run under ASan, so skip the pip/pytorch install steps.
+  SKIP_PIP=true
+  SKIP_PYTORCH=true
+
+  # Fail early with a clear message if the build is not ASan-instrumented.
+  # Note: the script runs under `set -o pipefail`, so avoid `... | grep -q`
+  # patterns -- grep closes the pipe on first match and the upstream command
+  # dies with SIGPIPE (141), which pipefail would report as failure. Capture
+  # the output first, then match.
+  ASAN_TRITON_OPT=$(ls -1 "$TRITON_PROJ"/build/cmake*/bin/triton-opt 2>/dev/null || true)
+  ASAN_TRITON_OPT=${ASAN_TRITON_OPT%%$'\n'*}
+  if [ -z "$ASAN_TRITON_OPT" ]; then
+    err "****** ERROR: triton-opt not found. Build Triton first (with TRITON_BUILD_WITH_ASAN=1). ******"
+  fi
+  ASAN_SYMS=$(nm "$ASAN_TRITON_OPT" 2>/dev/null | grep -c '__asan_init' || true)
+  if [ "$ASAN_SYMS" -eq 0 ]; then
+    err "****** ERROR: $ASAN_TRITON_OPT is not ASan-instrumented. Rebuild with TRITON_BUILD_WITH_ASAN=1. ******"
+  fi
+
+  # LeakSanitizer runs at exit; suppress known-benign LLVM/MLIR global leaks so
+  # real leaks stand out. detect_leaks defaults to on for Linux ASan; set it
+  # explicitly for clarity.
+  #
+  # allow_user_poisoning=0 is required: the prebuilt LLVM we link against is not
+  # ASan-instrumented, but its allocators emit __asan_poison_memory_region calls
+  # that resolve against our runtime, poisoning buffers that instrumented Triton
+  # code (e.g. MLIR SmallVector move-assignment in Dialect::addType) then writes
+  # to -- a false use-after-poison that aborts every MLIR tool at static init.
+  # Disabling user poisoning makes those manual poison calls no-ops; it does NOT
+  # weaken leak detection or ASan redzone checks for heap overflow/use-after-free.
+  # Prepend any pre-existing options so our harness-critical settings come LAST:
+  # ASan/LSan use a last-wins parser, so listing ours last keeps them in force
+  # regardless of what the environment already set. The ${VAR:+$VAR:} form emits
+  # the trailing ':' only when VAR is non-empty, avoiding a stray leading ':'.
+  export ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}detect_leaks=1:allow_user_poisoning=0"
+  export LSAN_OPTIONS="${LSAN_OPTIONS:+$LSAN_OPTIONS:}suppressions=$SCRIPTS_DIR/asan/lsan.supp:print_suppressions=0"
+fi
 
 if [ "$TRITON_TEST_REPORTS" == true ]; then
     capture_runtime_env

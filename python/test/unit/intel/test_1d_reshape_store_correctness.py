@@ -55,6 +55,22 @@ def _has_block_store(llir):
     return 'spirv_Subgroup2DBlockStoreINTEL' in llir or 'GenISA.LSC2DBlockWrite' in llir
 
 
+def _has_block_load(llir):
+    """True if the kernel emitted a 2D block load message."""
+    return 'spirv_Subgroup2DBlockLoadINTEL' in llir or 'GenISA.LSC2DBlockRead' in llir
+
+
+def _reshaped_to_block_io(ttgir):
+    """True if MaterializeBlockPointer reshaped the access to a tagged 2D one.
+
+    Weaker than `_has_block_load`, and the right marker for masked loads: the
+    pass reshapes and tags them, but a non-constant mask makes the later
+    2D-block-load lowering fall back to a predicated gather, so no block-load
+    message reaches LLIR.
+    """
+    return 'ttig.block_io_stride' in ttgir
+
+
 @pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
 @pytest.mark.parametrize(
     "W, S, XBLOCK, num_warps, expect_block_store, dtype_str",
@@ -381,4 +397,390 @@ def test_1d_reshape_strided_load_w_gt_tpw(W, S, H, dtype_str, device):
         to_numpy(out_tri),
         out_ref,
         err_msg=f"Load mismatch W={W} S={S} H={H} (W > threadsPerWarp bug)",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for the wrong per-warp row base in reshape1DStridedLoad.
+#
+# See: https://github.com/intel/intel-xpu-backend-for-triton/issues/7918
+#
+# The pointer and mask used to be reshaped with `allow_reorder
+# efficient_layout`, which only retypes the tensor and moves no data, so the
+# registers still held pointers in 1D order while the type claimed the 2D
+# block load's delivery encoding.  The lowering reads each warp's base address
+# out of that tensor, so warp w started at the row the *1D* layout put there
+# rather than at row perWarpH*w.
+#
+# The bug is invisible unless the 1D source layout needs more than one
+# register repetition per lane, i.e.
+#
+#     reps1D = XBLOCK / (sizePerThread1D * threadsPerWarp * num_warps) > 1
+#
+# because at reps1D == 1 the two layouts happen to agree on the warp base.
+# That is why the tests above miss it: `test_1d_reshape_strided_load` uses
+# XBLOCK=1024 with num_warps=4, giving 1024/(8*32*4) = 1, and the
+# `_w_gt_tpw` tests use num_warps=1, where no per-warp base exists at all.
+# Every config below has reps1D >= 2 and num_warps >= 2.
+# ---------------------------------------------------------------------------
+@pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
+@pytest.mark.parametrize(
+    "W, S, XBLOCK, num_warps, dtype_str",
+    [
+        # The shape reported in #7918: reps1D = 4096/(8*32*4) = 4, per-warp
+        # height 32 (the load hardware maximum).  Warp w read row 8*w instead
+        # of 32*w, so 3072 of every 4096 elements came back wrong.
+        (32, 96, 4096, 4, "float16"),
+        (32, 128, 4096, 4, "float16"),
+        (32, 192, 4096, 4, "float16"),
+        # Fewer warps, same reps1D = 2048/(8*32*2) = 4: per-warp height is
+        # still 32 but there are only two warps to get wrong.
+        (32, 96, 2048, 2, "float16"),
+        # More warps, reps1D = 4096/(8*32*8) = 2 and per-warp height 16.
+        # Exercises a per-warp height below the hardware maximum.
+        (32, 96, 4096, 8, "float16"),
+    ],
+    ids=[
+        "W32_S96_X4096_w4_f16",
+        "W32_S128_X4096_w4_f16",
+        "W32_S192_X4096_w4_f16",
+        "W32_S96_X2048_w2_f16",
+        "W32_S96_X4096_w8_f16",
+    ],
+)
+def test_1d_reshape_strided_load_multi_warp_base(W, S, XBLOCK, num_warps, dtype_str, device):
+    """Every warp must read from its own row base after the 1D->2D load reshape.
+
+    Uses the same Inductor-style gather as `test_1d_reshape_strided_load` but
+    with reps1D >= 2, the regime in which a wrong per-warp base is observable.
+    Four program instances are launched so the per-program offset is exercised
+    alongside the per-warp base.
+    """
+    # Enough rows for four program instances.
+    rows_per_block = XBLOCK // W
+    num_rows = 4 * rows_per_block
+    xnumel = W * num_rows
+
+    rs = RandomState(17)
+    # Padded 2D input surface [num_rows, S]; the kernel reads its first W columns.
+    in_full = numpy_random((num_rows, S), dtype_str=dtype_str, rs=rs)
+    out_ref = in_full[:, :W].flatten() * np.dtype(dtype_str).type(2.0)
+
+    in_tri = to_triton(in_full.flatten(), device=device)
+    out_tri = torch.zeros(xnumel, dtype=getattr(torch, dtype_str), device=device)
+
+    grid = (xnumel + XBLOCK - 1) // XBLOCK
+    kernel = strided_load_kernel[(grid, )](
+        in_tri,
+        out_tri,
+        xnumel,
+        W=W,
+        S=S,
+        XBLOCK=XBLOCK,
+        num_warps=num_warps,
+    )
+
+    # Pin that the 1D->2D reshape actually fired.  Without this the test would
+    # keep passing if the optimization were disabled, and would no longer guard
+    # anything.  Skip the check on devices that have no 2D block I/O.
+    if triton.runtime.driver.active.get_current_target().arch.get('has_2d_block_io', False):
+        assert _has_block_load(kernel.asm["llir"]), \
+            f"1D->2D load reshape did not fire for W={W} S={S} XBLOCK={XBLOCK} num_warps={num_warps}"
+
+    np.testing.assert_allclose(
+        to_numpy(out_tri),
+        out_ref,
+        rtol=1e-3,
+        atol=1e-3,
+        err_msg=f"Strided load mismatch for W={W}, S={S}, XBLOCK={XBLOCK}, num_warps={num_warps}",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for issue #7928 — `other` parameter handling in
+# `reshape1DStridedLoad`.
+#
+# Before the fix, MaterializeBlockPointer reshaped `ptr` and `mask` to 2D but
+# forwarded `other` verbatim as 1D, causing a verifier error:
+#   'tt.load' op failed to verify that other matches ptr type
+#
+# These tests guard against the verifier regression and verify correct
+# numerics with both constant and non-constant `other` values.
+# ---------------------------------------------------------------------------
+
+
+@triton.jit
+def strided_load_with_other_kernel(
+    in_ptr,
+    out_ptr,
+    xnumel,
+    W: tl.constexpr,
+    S: tl.constexpr,
+    XBLOCK: tl.constexpr,
+):
+    """Inductor-style strided load with `other=0.0` — issue #7928 repro."""
+    xoffset = tl.program_id(0) * XBLOCK
+    xindex = xoffset + tl.arange(0, XBLOCK)
+    xmask = xindex < xnumel
+
+    # Strided load address computation (Inductor pattern)
+    col = xindex % W
+    row = xindex // W
+    in_offset = col + row * S
+
+    # Load with `other=0.0` — triggers the bug when mask is not provably true
+    val = tl.load(in_ptr + in_offset, xmask, other=0.0)
+
+    # Contiguous store
+    tl.store(out_ptr + xindex, val, mask=xmask)
+
+
+@pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
+def test_1d_reshape_strided_load_with_other_issue7928(device):
+    """Issue #7928 repro: strided load with `other=0.0` and xnumel == XBLOCK.
+
+    This is the exact kernel from the issue report. Before the fix, it failed
+    with a verifier error. After the fix, it compiles and produces correct
+    results.
+    """
+    W, S, XBLOCK = 32, 96, 4096
+    num_warps = 4
+    rows = XBLOCK // W
+    xnumel = XBLOCK  # Mask is provably true for this case
+
+    rs = RandomState(17)
+    # Create padded 2D input surface [rows, S]
+    in_full = numpy_random((rows, S), dtype_str="float16", rs=rs)
+    # Reference: read first W columns of each row
+    in_values = in_full[:, :W].flatten()
+    out_ref = in_values.copy()
+
+    # Device tensors
+    in_tri = to_triton(in_full.flatten(), device=device)
+    out_tri = torch.zeros(XBLOCK, dtype=torch.float16, device=device)
+
+    grid = (XBLOCK + XBLOCK - 1) // XBLOCK
+    kernel = strided_load_with_other_kernel[(grid, )](
+        in_tri,
+        out_tri,
+        xnumel,
+        W=W,
+        S=S,
+        XBLOCK=XBLOCK,
+        num_warps=num_warps,
+    )
+
+    # Pin that the 1D->2D reshape actually fired: this is the path `other` has
+    # to survive, and without the assertion the test would keep passing if the
+    # optimization stopped firing.  A masked load is reshaped and tagged but
+    # lowers to a predicated gather, so assert on the TTGIR tag, not on an
+    # emitted block-load message.
+    if triton.runtime.driver.active.get_current_target().arch.get('has_2d_block_io', False):
+        assert _reshaped_to_block_io(kernel.asm["ttgir"]), \
+            "1D->2D load reshape did not fire"
+
+    np.testing.assert_allclose(
+        to_numpy(out_tri),
+        out_ref,
+        rtol=1e-3,
+        atol=1e-3,
+        err_msg="Issue #7928 repro: strided load with other=0.0 failed",
+    )
+
+
+@triton.jit
+def strided_load_partial_mask_kernel(
+    in_ptr,
+    out_ptr,
+    xnumel,
+    W: tl.constexpr,
+    S: tl.constexpr,
+    XBLOCK: tl.constexpr,
+):
+    """Strided load with partial mask and sentinel `other=-1.0`."""
+    xoffset = tl.program_id(0) * XBLOCK
+    xindex = xoffset + tl.arange(0, XBLOCK)
+    xmask = xindex < xnumel
+
+    # Strided load address computation (Inductor pattern)
+    col = xindex % W
+    row = xindex // W
+    in_offset = col + row * S
+
+    # Load with sentinel `other=-1.0` — masked-off positions should be -1.0
+    val = tl.load(in_ptr + in_offset, xmask, other=-1.0)
+
+    # Contiguous store (including masked-off positions)
+    tl.store(out_ptr + xindex, val)
+
+
+@pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
+@pytest.mark.parametrize(
+    "xnumel",
+    [
+        900,  # Boundary inside tile: 900 / 32 = 28.125 rows
+        1000,  # Boundary inside tile: 1000 / 32 = 31.25 rows
+        950,  # Boundary inside tile: 950 / 32 = 29.6875 rows
+        864,  # Boundary inside tile: 864 / 32 = 27 rows (aligned to row but not tile)
+    ],
+    ids=["xnumel_900", "xnumel_1000", "xnumel_950", "xnumel_864"],
+)
+def test_1d_reshape_strided_load_partial_mask_with_other(xnumel, device):
+    """Partial mask + sentinel `other=-1.0` — correctness test for issue #7928.
+
+    This test verifies that `other` is correctly applied to masked-off positions
+    when the mask boundary falls *inside* a candidate tile (not just at a
+    tile-aligned tail). This is the only case that proves correctness rather
+    than verifier-cleanliness.
+    """
+    W, S, XBLOCK = 32, 96, 1024
+    num_warps = 4
+    rows = (xnumel + W - 1) // W
+
+    rs = RandomState(17)
+    # Create padded 2D input surface [rows, S]
+    in_full = numpy_random((rows, S), dtype_str="float16", rs=rs)
+
+    # Reference: read first W columns of each row, then apply mask
+    out_ref = np.full(XBLOCK, -1.0, dtype=np.float16)
+    for i in range(xnumel):
+        row_i = i // W
+        col_i = i % W
+        if row_i < rows:
+            out_ref[i] = in_full[row_i, col_i]
+
+    # Device tensors
+    in_tri = to_triton(in_full.flatten(), device=device)
+    out_tri = torch.zeros(XBLOCK, dtype=torch.float16, device=device)
+
+    grid = (XBLOCK + XBLOCK - 1) // XBLOCK
+    kernel = strided_load_partial_mask_kernel[(grid, )](
+        in_tri,
+        out_tri,
+        xnumel,
+        W=W,
+        S=S,
+        XBLOCK=XBLOCK,
+        num_warps=num_warps,
+    )
+
+    # Pin that the 1D->2D reshape actually fired: this is the path `other` has
+    # to survive, and without the assertion the test would keep passing if the
+    # optimization stopped firing.  A masked load is reshaped and tagged but
+    # lowers to a predicated gather, so assert on the TTGIR tag, not on an
+    # emitted block-load message.
+    if triton.runtime.driver.active.get_current_target().arch.get('has_2d_block_io', False):
+        assert _reshaped_to_block_io(kernel.asm["ttgir"]), \
+            "1D->2D load reshape did not fire"
+
+    # Verify loaded values (positions < xnumel)
+    np.testing.assert_allclose(
+        to_numpy(out_tri)[:xnumel],
+        out_ref[:xnumel],
+        rtol=1e-3,
+        atol=1e-3,
+        err_msg=f"Loaded values mismatch for xnumel={xnumel}",
+    )
+
+    # Verify masked-off values (positions >= xnumel) are sentinel -1.0
+    np.testing.assert_allclose(
+        to_numpy(out_tri)[xnumel:],
+        out_ref[xnumel:],
+        rtol=0,
+        atol=0,
+        err_msg=f"Masked-off values not -1.0 for xnumel={xnumel}",
+    )
+
+
+@triton.jit
+def strided_load_nonsplat_other_kernel(
+    in_ptr,
+    other_ptr,
+    out_ptr,
+    xnumel,
+    W: tl.constexpr,
+    S: tl.constexpr,
+    XBLOCK: tl.constexpr,
+):
+    """Strided load with non-splat `other` from a loaded tensor."""
+    xoffset = tl.program_id(0) * XBLOCK
+    xindex = xoffset + tl.arange(0, XBLOCK)
+    xmask = xindex < xnumel
+
+    # Load the `other` tensor (distinct per-element values)
+    other_vals = tl.load(other_ptr + xindex)
+
+    # Strided load address computation (Inductor pattern)
+    col = xindex % W
+    row = xindex // W
+    in_offset = col + row * S
+
+    # Load with non-splat `other` — verifies `other` is reshaped, not broadcast
+    val = tl.load(in_ptr + in_offset, xmask, other=other_vals)
+
+    # Contiguous store
+    tl.store(out_ptr + xindex, val)
+
+
+@pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
+def test_1d_reshape_strided_load_nonsplat_other(device):
+    """Non-splat `other` — verifies `other` is reshaped, not narrowed.
+
+    This test uses a loaded tensor with distinct per-element values as `other`.
+    If the lowering incorrectly broadcasts a single register value or
+    mis-indexes `otherElems`, the test will fail on elementwise comparison.
+    """
+    W, S, XBLOCK = 32, 96, 1024
+    num_warps = 4
+    xnumel = 900  # Partial mask
+    rows = (xnumel + W - 1) // W
+
+    rs = RandomState(17)
+    # Create padded 2D input surface [rows, S]
+    in_full = numpy_random((rows, S), dtype_str="float16", rs=rs)
+
+    # Create non-splat `other` tensor (distinct values)
+    other_np = np.arange(XBLOCK, dtype=np.float16) * 0.01
+
+    # Reference: apply mask, using `other` for masked-off positions
+    out_ref = other_np.copy()
+    for i in range(xnumel):
+        row_i = i // W
+        col_i = i % W
+        if row_i < rows:
+            out_ref[i] = in_full[row_i, col_i]
+
+    # Device tensors
+    in_tri = to_triton(in_full.flatten(), device=device)
+    other_tri = to_triton(other_np, device=device)
+    out_tri = torch.zeros(XBLOCK, dtype=torch.float16, device=device)
+
+    grid = (XBLOCK + XBLOCK - 1) // XBLOCK
+    kernel = strided_load_nonsplat_other_kernel[(grid, )](
+        in_tri,
+        other_tri,
+        out_tri,
+        xnumel,
+        W=W,
+        S=S,
+        XBLOCK=XBLOCK,
+        num_warps=num_warps,
+    )
+
+    # Pin that the 1D->2D reshape actually fired: this is the path `other` has
+    # to survive, and without the assertion the test would keep passing if the
+    # optimization stopped firing.  A masked load is reshaped and tagged but
+    # lowers to a predicated gather, so assert on the TTGIR tag, not on an
+    # emitted block-load message.
+    if triton.runtime.driver.active.get_current_target().arch.get('has_2d_block_io', False):
+        assert _reshaped_to_block_io(kernel.asm["ttgir"]), \
+            "1D->2D load reshape did not fire"
+
+    # Elementwise comparison
+    np.testing.assert_allclose(
+        to_numpy(out_tri),
+        out_ref,
+        rtol=1e-3,
+        atol=1e-3,
+        err_msg="Non-splat other mismatch",
     )

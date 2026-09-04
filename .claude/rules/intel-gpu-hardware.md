@@ -18,8 +18,10 @@ Each hardware thread has a private register file. **Do not guess** GRF register 
 ### Auto-GRF Mode Selection (`grf_mode='default'`)
 1. Compile with default (small) GRF
 2. Extract spill size from ZEBIN `.ze_info` section
-3. If `spill_size > 1000` bytes → recompile with 256-GRF mode
-4. Threshold of 1000 is empirical, aligned between `compiler.py` and `driver.c`
+3. If `spill_size > 0` bytes → recompile with 256-GRF mode
+4. The threshold is `0` — *any* spill retries — aligned between `MAX_REG_SPILL` in `compiler.py` and `max_reg_spill` in `driver.c`
+
+The retry is gated on the raw **byte** count, which Level Zero allocates per hardware thread.
 
 ### Constraints
 - **256-GRF requires `num_warps ≤ 32`** (because halved thread occupancy limits available hardware threads)
