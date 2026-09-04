@@ -65,12 +65,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     tt.store %6, %cst cacheModifier = cs : tensor<256x!tt.ptr<f32>, #blocked0>
     tt.store %6, %cst cacheModifier = wt : tensor<256x!tt.ptr<f32>, #blocked0>
     tt.store %6, %cst cacheModifier = cv : tensor<256x!tt.ptr<f32>, #blocked0>
+    // COM: no cache modifier
     // CHECK-COUNT-2: llvm.store {{.*}} {alignment = 16 : i64} : vector<4xi32>, !llvm.ptr<1>
+    // COM: `ca` -> L1WB_L3WB, write-back being the store-side sense of
+    // COM: "cached", so no annotation.
     // CHECK-COUNT-2: llvm.store {{.*}} {alignment = 16 : i64} : vector<4xi32>, !llvm.ptr<1>
-    // CHECK-COUNT-2: llvm.store {{.*}} {alignment = 16 : i64, nontemporal} : vector<4xi32>, !llvm.ptr<1>
+    // COM: `cg` -> L1UC_L3WB, which asks for L3 write-back. `nontemporal` is a
+    // COM: single bit that IGC turns into LSC `.uc.uc`, bypassing L3 too, so it
+    // COM: cannot express `cg`; a plain store carries no annotation for it.
+    // COM: See getNonTemporalFlag().
     // CHECK-COUNT-2: llvm.store {{.*}} {alignment = 16 : i64} : vector<4xi32>, !llvm.ptr<1>
-    // CHECK-COUNT-2: llvm.store {{.*}} {alignment = 16 : i64, nontemporal} : vector<4xi32>, !llvm.ptr<1>
+    // COM: `wb` -> L1WB_L3WB; no annotation.
     // CHECK-COUNT-2: llvm.store {{.*}} {alignment = 16 : i64} : vector<4xi32>, !llvm.ptr<1>
+    // COM: `cs` -> L1S_L3S, which keeps the line in L3, so `nontemporal` does
+    // COM: not express it either. Unannotated, a documented approximation.
+    // CHECK-COUNT-2: llvm.store {{.*}} {alignment = 16 : i64} : vector<4xi32>, !llvm.ptr<1>
+    // COM: `wt` -> L1WT_L3WT; no annotation.
+    // CHECK-COUNT-2: llvm.store {{.*}} {alignment = 16 : i64} : vector<4xi32>, !llvm.ptr<1>
+    // COM: `cv` -> L1UC_L3UC, which `nontemporal` does express exactly, and is
+    // COM: the sole store modifier that sets it.
     // CHECK-COUNT-2: llvm.store {{.*}} {alignment = 16 : i64, nontemporal} : vector<4xi32>, !llvm.ptr<1>
     tt.return
   }
