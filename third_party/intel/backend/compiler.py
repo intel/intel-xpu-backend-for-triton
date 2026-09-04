@@ -79,8 +79,11 @@ class XPUOptions:
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
-# Aligned with max_reg_spill in third_party/intel/backend/driver.c
-MAX_REG_SPILL = 0
+# Per-lane spill budget matching PyTorch inductor's spill-rejection threshold.
+# The effective byte threshold is this value times the compiled SIMD width
+# (sub-group size), i.e. 256 B on SIMD16 (DPAS) and 512 B on SIMD32. Kept in
+# sync with the equivalent computation in third_party/intel/backend/driver.c.
+MAX_REG_SPILL_PER_LANE = 16
 
 SPILL_SIZE_RE = re.compile(r'spill_size\s*[:=]\s*(\d+)')
 PTSS_OVERFLOW_RE = re.compile(
@@ -669,7 +672,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                     subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
                     if options.grf_mode == "default":
                         spill_size = extract_spill_size_from_zebin(fbin)
-                        if spill_size <= MAX_REG_SPILL:
+                        max_reg_spill = MAX_REG_SPILL_PER_LANE * metadata["threads_per_warp"]
+                        if spill_size <= max_reg_spill:
                             break
                 except (subprocess.CalledProcessError, IntelGPUError) as e:
                     # If GRF mode was not last yet, retry with different GRF mode

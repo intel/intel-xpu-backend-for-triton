@@ -334,9 +334,11 @@ void freeKernelBundle(PyObject *p) {
 }
 
 using Spills = int32_t;
+// Compiled SIMD width (sub-group size): 16 for DPAS kernels, 32 otherwise.
+using SIMDWidth = int32_t;
 
 template <typename L0_DEVICE, typename L0_CONTEXT>
-std::tuple<ze_module_handle_t, ze_kernel_handle_t, Spills>
+std::tuple<ze_module_handle_t, ze_kernel_handle_t, Spills, SIMDWidth>
 compileLevelZeroObjects(uint8_t *binary_ptr, const size_t binary_size,
                         const std::string &kernel_name, L0_DEVICE l0_device,
                         L0_CONTEXT l0_context, const std::string &build_flags,
@@ -360,7 +362,7 @@ compileLevelZeroObjects(uint8_t *binary_ptr, const size_t binary_size,
                                      __FILE__, __LINE__);
   if (PyErr_Occurred()) {
     cleanupPartialObjects();
-    return std::make_tuple(nullptr, nullptr, -1);
+    return std::make_tuple(nullptr, nullptr, -1, 0);
   }
 
   // Retrieve the kernel properties (e.g. register spills).
@@ -368,7 +370,7 @@ compileLevelZeroObjects(uint8_t *binary_ptr, const size_t binary_size,
                                      __FILE__, __LINE__);
   if (PyErr_Occurred()) {
     cleanupPartialObjects();
-    return std::make_tuple(nullptr, nullptr, -1);
+    return std::make_tuple(nullptr, nullptr, -1, 0);
   }
 
   ze_kernel_properties_t props;
@@ -380,12 +382,18 @@ compileLevelZeroObjects(uint8_t *binary_ptr, const size_t binary_size,
       __LINE__);
   if (PyErr_Occurred()) {
     cleanupPartialObjects();
-    return std::make_tuple(nullptr, nullptr, -1);
+    return std::make_tuple(nullptr, nullptr, -1, 0);
   }
 
   const int32_t n_spills = props.spillMemSize;
+  // The compiled sub-group size (SIMD width): the required size when the kernel
+  // fixed one (DPAS forces 16), otherwise the max the compiler selected.
+  const SIMDWidth simd_width =
+      props.requiredSubgroupSize != 0
+          ? static_cast<SIMDWidth>(props.requiredSubgroupSize)
+          : static_cast<SIMDWidth>(props.maxSubgroupSize);
 
-  return std::make_tuple(l0_module, l0_kernel, n_spills);
+  return std::make_tuple(l0_module, l0_kernel, n_spills, simd_width);
 }
 
 struct BuildFlags {
@@ -509,7 +517,7 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   zeDeviceGetComputeProperties(l0_device, &compute_properties);
   int32_t n_max_threads = compute_properties.maxTotalGroupSize;
 
-  auto [l0_module, l0_kernel, n_spills] =
+  auto [l0_module, l0_kernel, n_spills, simd_width] =
       compileLevelZeroObjects(binary_ptr, binary_size, kernel_name, l0_device,
                               l0_context, build_flags(), is_spv);
   bool firstBuildFailed = PyErr_Occurred();
@@ -519,7 +527,12 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   }
 
   const bool debugEnabled = getBoolEnv("TRITON_DEBUG");
-  constexpr int32_t max_reg_spill = 0;
+  // Match PyTorch inductor's per-lane spill-rejection budget: only rebuild at
+  // large GRF when the spill frame exceeds 16 bytes/lane, i.e. 512 B on SIMD32
+  // and 256 B on SIMD16 (DPAS). `simd_width` is the compiled sub-group size; a
+  // width of 0 (unknown) falls back to retrying on any spill (issue #7821).
+  constexpr int32_t kMaxSpillBytesPerLane = 16;
+  const int32_t max_reg_spill = kMaxSpillBytesPerLane * simd_width;
 
   if (canRetryWithLargeGRF && (firstBuildFailed || n_spills > max_reg_spill)) {
     PyObject *orig_type = nullptr, *orig_value = nullptr, *orig_tb = nullptr;
@@ -540,9 +553,13 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
     }
 
     try {
-      auto [l0_module_retry, l0_kernel_retry, n_spills_retry] =
+      auto [l0_module_retry, l0_kernel_retry, n_spills_retry,
+            simd_width_retry] =
           compileLevelZeroObjects(binary_ptr, binary_size, kernel_name,
                                   l0_device, l0_context, build_flags(), is_spv);
+      // The SIMD width is unchanged by GRF mode; only the first build's is used
+      // for the threshold above.
+      (void)simd_width_retry;
 
       if (PyErr_Occurred()) {
         if (firstBuildFailed) {
