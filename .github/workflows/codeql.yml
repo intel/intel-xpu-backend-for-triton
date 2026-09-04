@@ -65,9 +65,16 @@ jobs:
             - '**/lib/Conversion/TritonToTritonGPU/**'
             - '**/include/triton/Dialect/**'
             - '**/include/triton/Tools/**'
+            - '**/include/triton/Analysis/**'
             - '**/include/triton/Conversion/TritonGPUToLLVM/**'
             - '**/unittest/**'
             - '**/test/lib/**'
+            - '**/include/pybind11/**'
+            - '**/googletest/**'
+            - '**/json/include/nlohmann/**'
+            - '**/cmake/**/Modules/**'
+            - '**/build/**'
+            - '**/cache/**'
 
     # Traced build: runs AFTER init, BEFORE analyze, only on the manual (c-cpp) leg.
     - name: Setup Python
