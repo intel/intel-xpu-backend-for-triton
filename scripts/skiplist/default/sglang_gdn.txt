@@ -15,6 +15,7 @@ registered/attention/test_chunk_gated_delta_rule.py::TestChunkGatedDeltaRule::te
 registered/attention/test_chunk_gated_delta_rule.py::TestChunkGatedDeltaRule::test_large_pool
 registered/attention/test_chunk_gated_delta_rule.py::TestChunkGatedDeltaRule::test_long_prompt
 registered/attention/test_chunk_gated_delta_rule.py::TestChunkGatedDeltaRule::test_multi_chunk_nt8
+registered/attention/test_chunk_gated_delta_rule.py::TestChunkGatedDeltaRule::test_padded_state_index_is_skipped
 registered/attention/test_chunk_gated_delta_rule.py::TestChunkGatedDeltaRule::test_production_nt1
 registered/attention/test_chunk_gated_delta_rule.py::TestChunkGatedDeltaRule::test_production_nt2
 registered/attention/test_chunk_gated_delta_rule.py::TestChunkGatedDeltaRule::test_production_nt4

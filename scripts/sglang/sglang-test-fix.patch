@@ -1,8 +1,8 @@
-diff --git a/python/sglang/jit_kernel/dsv4/compress.py b/python/sglang/jit_kernel/dsv4/compress.py
-index bf82bff04..c8c9f0fcf 100644
---- a/python/sglang/jit_kernel/dsv4/compress.py
-+++ b/python/sglang/jit_kernel/dsv4/compress.py
-@@ -15,23 +15,27 @@ from sglang.srt.utils import is_hip, is_xpu
+diff --git a/python/sglang/kernels/ops/attention/dsv4/compress.py b/python/sglang/kernels/ops/attention/dsv4/compress.py
+index 99b9597c99..981e9839d9 100644
+--- a/python/sglang/kernels/ops/attention/dsv4/compress.py
++++ b/python/sglang/kernels/ops/attention/dsv4/compress.py
+@@ -19,23 +19,27 @@ from sglang.srt.utils import is_hip, is_xpu
  from .utils import make_name
  
  _is_xpu = is_xpu()
@@ -46,11 +46,51 @@ index bf82bff04..c8c9f0fcf 100644
  
  
  if TYPE_CHECKING:
+diff --git a/python/sglang/kernels/ops/attention/dsv4/elementwise.py b/python/sglang/kernels/ops/attention/dsv4/elementwise.py
+index 053eb01c6c..fe941fb8cb 100644
+--- a/python/sglang/kernels/ops/attention/dsv4/elementwise.py
++++ b/python/sglang/kernels/ops/attention/dsv4/elementwise.py
+@@ -15,9 +15,15 @@ from .utils import make_name
+ _is_hip = is_hip()
+ _is_xpu = is_xpu()
+ 
+-if _is_xpu:
+-    from sgl_kernel import fused_k_norm_rope_flashmla as fused_k_norm_rope_flashmla_xpu
+-    from sgl_kernel import fused_q_norm_rope as fused_q_norm_rope_xpu
++try:
++    if _is_xpu:
++        from sgl_kernel import (
++            fused_k_norm_rope_flashmla as fused_k_norm_rope_flashmla_xpu,
++        )
++        from sgl_kernel import fused_q_norm_rope as fused_q_norm_rope_xpu
++except ImportError:
++    # sgl-kernel-xpu is optional, so just run without the DSv4 elementwise kernels.
++    _is_xpu = False
+ 
+ 
+ @cache_once
+diff --git a/python/sglang/kernels/ops/quantization/fp8_kernel.py b/python/sglang/kernels/ops/quantization/fp8_kernel.py
+index 6c8c805f09..02fcf2a505 100644
+--- a/python/sglang/kernels/ops/quantization/fp8_kernel.py
++++ b/python/sglang/kernels/ops/quantization/fp8_kernel.py
+@@ -59,7 +59,11 @@ if _is_cuda:
+         per_tensor_quant_fp8 as sgl_per_tensor_quant_fp8,
+     )
+ elif _is_xpu:
+-    from sgl_kernel import sgl_per_tensor_quant_fp8, sgl_per_token_quant_fp8
++    try:
++        from sgl_kernel import sgl_per_tensor_quant_fp8, sgl_per_token_quant_fp8
++    except ImportError:
++        # sgl-kernel-xpu is optional, so just run without the FP8 quant kernels.
++        pass
+ 
+ if _is_musa:
+     from sgl_kernel import sgl_per_token_quant_fp8
 diff --git a/test/registered/attention/test_triton_attention_kernels.py b/test/registered/attention/test_triton_attention_kernels.py
-index 10d2e9717..a312eb087 100644
+index ff90b20a70..4a49fb66a5 100644
 --- a/test/registered/attention/test_triton_attention_kernels.py
 +++ b/test/registered/attention/test_triton_attention_kernels.py
-@@ -815,15 +815,22 @@ class TestTritonAttention(CustomTestCase):
+@@ -1004,15 +1004,22 @@ class TestTritonAttention(CustomTestCase):
              v_scale=1.0,
          )
  
