@@ -332,4 +332,92 @@ bool cvtIsSubGroupTranspose(RankedTensorType srcTy, RankedTensorType dstTy) {
                                                         laneInDimSize));
 }
 
+bool cvtIsSubGroupReinterpret(RankedTensorType srcTy, RankedTensorType dstTy) {
+  MLIRContext *ctx = srcTy.getContext();
+  StringAttr kRegister = str_attr("register");
+  StringAttr kLane = str_attr("lane");
+  StringAttr kWarp = str_attr("warp");
+  StringAttr kBlock = str_attr("block");
+
+  std::optional<LinearLayout> srcLayout = toLinearLayout(srcTy);
+  if (!srcLayout)
+    return false;
+
+  std::optional<LinearLayout> dstLayout = toLinearLayout(dstTy);
+  if (!dstLayout)
+    return false;
+
+  LinearLayout comp = srcLayout->invertAndCompose(*dstLayout);
+  std::optional<LinearLayout> conversion = comp.quotient(kBlock);
+  if (!conversion)
+    return false;
+  conversion = conversion->quotient(kWarp);
+  if (!conversion)
+    return false;
+
+  // TODO: Support more kind of reinterpret cast.
+  //   The conversion which can be used for reinterpret cast has to be a mapping
+  //   from registers to lanes, i.e.,:
+  // - register=1 -> (2, 0)
+  //   register=2 -> (4, 0)
+  //   register=4 -> (8, 0)
+  //   register=8 -> (0, 8)
+  //   register=16 -> (16, 0)
+  //   register=32 -> (32, 0)
+  // - lane=1 -> (1, 0)
+  //   lane=2 -> (0, 1)
+  //   lane=4 -> (0, 2)
+  //   lane=8 -> (0, 4)
+  // where out dims are: [register (size 32), lane (size 16)]
+  // 1. The lane M -> Register M at the beginning of the pattern, which is
+  // needed to make sure the reinterpret cast is valid.
+  // 2. The lane to reg number should be equal to the reg to lane number.
+  // 3. The Register M -> Lane (threadsPerWarp/size) should be in order.
+  unsigned packedRegisterSize = 1;
+  unsigned threadsPerWarp = conversion->getInDimSize(kLane);
+  bool hasLaneToLaneMapping = false;
+  auto laneBases = conversion->getBases().lookup(kLane);
+  for (size_t i = 0; i < conversion->getInDimSizeLog2(kLane); i++) {
+    auto lane2Reg = laneBases[i][conversion->getOutDimIndex(kRegister)];
+    auto lane2Lane = laneBases[i][conversion->getOutDimIndex(kLane)];
+    if (lane2Reg && lane2Lane) // invalid.
+      return false;
+    if (!lane2Reg && !lane2Lane) // invalid.
+      return false;
+    if (lane2Reg &&
+        hasLaneToLaneMapping) // cannot map the disjoint lane to reg.
+      return false;
+
+    if (lane2Reg == packedRegisterSize) {
+      packedRegisterSize <<= 1;
+      continue;
+    }
+    if (lane2Lane && (lane2Lane != (1 << i) / packedRegisterSize))
+      return false;
+    hasLaneToLaneMapping = true;
+  }
+  if (packedRegisterSize == 1)
+    return false;
+
+  // IGC doesn't support bitcast >= i128. Fallback to shared memory in this
+  // case.
+  Type elemType = srcTy.getElementType();
+  unsigned bitsPerElement =
+      isa<PointerType>(elemType)
+          ? kPtrBitWidth
+          : std::max<int>(8, elemType.getIntOrFloatBitWidth());
+  if (packedRegisterSize * bitsPerElement >= 128)
+    return false;
+
+  for (size_t i = 0; i < conversion->getInDimSizeLog2(kRegister); ++i) {
+    // Check the packed Register M -> Lane (threadsPerWarp/packedRegisterSize).
+    // This has to be in incremental order now.
+    auto reg2Lane = conversion->getBases().lookup(
+        kRegister)[i][conversion->getOutDimIndex(kLane)];
+    if (reg2Lane == threadsPerWarp / packedRegisterSize)
+      packedRegisterSize >>= 1;
+  }
+  return packedRegisterSize == 1;
+}
+
 } // namespace mlir::triton::gpu::intel
