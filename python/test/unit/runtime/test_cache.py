@@ -4,6 +4,7 @@ import itertools
 import multiprocessing
 import os
 import re
+import time
 import gc
 import pathlib
 from concurrent.futures import Executor, Future, ThreadPoolExecutor
@@ -1048,6 +1049,787 @@ def test_async_compile_error(fresh_triton_cache):
     # After the AsyncCompileMode context manager exits, the active mode should
     # be set to None again, even if there was an error.
     assert triton.runtime._async_compile.active_mode.get() is None
+    # Failed async placeholders must not stay cached; otherwise their Future
+    # objects keep exception tracebacks alive.
+    assert len(fn.device_caches[0][0]) == 0
+
+
+def test_async_compile_multiple_errors(fresh_triton_cache):
+
+    @triton.jit
+    def bad_a(x: tl.constexpr):
+        tl.static_assert(x == 111)
+
+    @triton.jit
+    def bad_b(x: tl.constexpr):
+        tl.static_assert(x == 222)
+
+    with pytest.raises(triton.compiler.errors.CompileTimeAssertionFailure):
+        with (
+                ThreadPoolExecutor(2) as pool,
+                triton.AsyncCompileMode(pool),
+        ):
+            bad_a.warmup(1, grid=(1, ))
+            bad_b.warmup(1, grid=(1, ))
+
+            assert len(bad_a.device_caches[0][0]) == 1
+            assert len(bad_b.device_caches[0][0]) == 1
+
+    # The drain has to reach every pending compile, not stop at the first one
+    # that raises: a leftover FutureKernel keeps its exception traceback, and
+    # through it the whole compilation context, alive until interpreter exit.
+    assert len(bad_a.device_caches[0][0]) == 0
+    assert len(bad_b.device_caches[0][0]) == 0
+    assert triton.runtime._async_compile.active_mode.get() is None
+
+
+def _make_failed_future_kernel():
+    future = Future()
+    future.set_running_or_notify_cancel()
+    try:
+        raise ValueError("boom")
+    except ValueError as exc:
+        # Set from inside the handler so the future carries a real traceback.
+        future.set_exception(exc)
+    future_kernel = triton.FutureKernel(future)
+    future_kernel.add_callbacks(lambda kernel: None, lambda fk: None)
+    return future_kernel
+
+
+def test_async_compile_failed_future_repeated_result():
+    resolved_twice = _make_failed_future_kernel()
+    with pytest.raises(ValueError, match="boom"):
+        resolved_twice.result()
+    with pytest.raises(RuntimeError, match="previously failed"):
+        resolved_twice.result()
+
+    ignored_twice = _make_failed_future_kernel()
+    assert ignored_twice.result(ignore_errors=True) is None
+    assert ignored_twice.result(ignore_errors=True) is None
+
+    attribute_probe = _make_failed_future_kernel()
+    assert attribute_probe.result(ignore_errors=True) is None
+    with pytest.raises(RuntimeError, match="previously failed"):
+        _ = attribute_probe.does_not_exist
+
+    late_waiter = _make_failed_future_kernel()
+    assert late_waiter.result(ignore_errors=True) is None
+    drained = []
+    late_waiter.add_callbacks(lambda kernel: drained.append("finalize"), lambda fk: drained.append("cleanup"))
+    assert late_waiter.result(ignore_errors=True) is None
+    assert drained == ["cleanup"]
+
+    for future_kernel in (resolved_twice, ignored_twice, attribute_probe, late_waiter):
+        assert not any(isinstance(value, BaseException) for value in vars(future_kernel).values())
+
+
+def test_async_compile_base_exception_evicts_cache():
+    cache = {}
+    future = Future()
+    future.set_running_or_notify_cancel()
+    try:
+        raise KeyboardInterrupt("worker interrupted")
+    except KeyboardInterrupt as exc:
+        future.set_exception(exc)
+
+    def store(kernel):
+        cache["K"] = kernel
+
+    def evict(_future_kernel):
+        cache.pop("K", None)
+
+    future_kernel = triton.FutureKernel(future)
+    future_kernel.add_callbacks(store, evict)
+    cache["K"] = future_kernel
+
+    # A worker can fail with a BaseException, and the bookkeeping still has to
+    # run: a retained Future keeps the exception traceback and every compiler
+    # frame behind it. ignore_errors covers compile errors only, so an
+    # interpreter-level exception must still propagate.
+    with pytest.raises(KeyboardInterrupt):
+        future_kernel.result(ignore_errors=True)
+
+    assert "K" not in cache
+    assert future_kernel.future is None
+    assert future_kernel._state == "failed"
+    assert not any(isinstance(value, BaseException) for value in vars(future_kernel).values())
+
+    with pytest.raises(RuntimeError, match="previously failed"):
+        future_kernel.result()
+
+    # ignore_errors only ever covers compilation errors, so the terminal state
+    # of an interrupted compile has to keep raising rather than quietly
+    # returning None on every later resolution.
+    with pytest.raises(RuntimeError, match="previously failed"):
+        future_kernel.result(ignore_errors=True)
+
+    # Contrast: a compile that failed with a plain Exception stays ignorable.
+    exception_future = Future()
+    exception_future.set_running_or_notify_cancel()
+    try:
+        raise ValueError("compile blew up")
+    except ValueError as exc:
+        exception_future.set_exception(exc)
+
+    ignorable = triton.FutureKernel(exception_future)
+    ignorable.add_callbacks(store, evict)
+    assert ignorable.result(ignore_errors=True) is None
+    assert ignorable.result(ignore_errors=True) is None
+
+
+def test_async_compile_base_exception_mid_drain_evicts_pending():
+    INTERRUPT_DELAY = 0.05
+    SLOW_COMPILE_DELAY = 1.5
+    cache = {}
+
+    def finalize(slot):
+
+        def store(kernel):
+            cache[slot] = kernel
+
+        return store
+
+    def cleanup(slot):
+
+        def evict(_future_kernel):
+            cache.pop(slot, None)
+
+        return evict
+
+    def interrupted_compile():
+        time.sleep(INTERRUPT_DELAY)
+        raise KeyboardInterrupt("simulated ctrl-c in worker")
+
+    def slow_compile():
+        time.sleep(SLOW_COMPILE_DELAY)
+        return "kernel-b"
+
+    # The pool is driven by hand rather than with `with`: its shutdown waits for
+    # the slow compile, which would hide the very promptness being measured.
+    pool = ThreadPoolExecutor(2)
+    try:
+        started = time.perf_counter()
+        with pytest.raises(KeyboardInterrupt):
+            with triton.AsyncCompileMode(pool) as mode:
+                cache["a"] = mode.submit("KA", interrupted_compile, finalize("a"), cleanup("a"))
+                abandoned = mode.submit("KB", slow_compile, finalize("b"), cleanup("b"))
+                cache["b"] = abandoned
+        elapsed = time.perf_counter() - started
+    finally:
+        pool.shutdown(wait=True)
+
+    assert not isinstance(cache.get("a"), triton.FutureKernel)
+    assert not isinstance(cache.get("b"), triton.FutureKernel)
+    assert abandoned.future is None
+    assert abandoned._state == "failed"
+    assert not any(isinstance(value, BaseException) for value in vars(abandoned).values())
+    # Aborting must not wait on compiles still in flight; without this the fix
+    # could regress into draining everything before re-raising.
+    assert elapsed < 1.0
+
+
+def test_async_compile_interrupt_while_waiting_evicts_pending(monkeypatch):
+    SENTINEL = object()
+    cache = {}
+
+    def interrupted_as_completed(_futures):
+        raise KeyboardInterrupt("simulated ctrl-c while waiting for compiles")
+
+    monkeypatch.setattr(triton.runtime._async_compile, "as_completed", interrupted_as_completed)
+
+    def finalize(slot):
+
+        def store(kernel):
+            cache[slot] = kernel
+
+        return store
+
+    def cleanup(slot):
+
+        def evict(_future_kernel):
+            cache.pop(slot, None)
+
+        return evict
+
+    # A real Ctrl-C most likely lands while the thread is parked inside
+    # as_completed(), which raises from the for statement rather than from
+    # result(), so the abandon sweep has to cover the whole drain and not just
+    # the resolution of one future.
+    with MockThreadPool() as pool:
+        with pytest.raises(KeyboardInterrupt):
+            with triton.AsyncCompileMode(pool) as mode:
+                cache["a"] = mode.submit("KA", lambda: SENTINEL, finalize("a"), cleanup("a"))
+                cache["b"] = mode.submit("KB", lambda: SENTINEL, finalize("b"), cleanup("b"))
+
+    assert not isinstance(cache.get("a"), triton.FutureKernel)
+    assert not isinstance(cache.get("b"), triton.FutureKernel)
+
+
+def test_async_compile_interrupt_cleanup_submit_evicts_everything(monkeypatch):
+    SENTINEL = object()
+    cache = {}
+    queued = []
+
+    def interrupted_as_completed(_futures):
+        raise KeyboardInterrupt("simulated ctrl-c while waiting for compiles")
+
+    monkeypatch.setattr(triton.runtime._async_compile, "as_completed", interrupted_as_completed)
+
+    def finalize(slot):
+
+        def store(kernel):
+            cache[slot] = kernel
+
+        return store
+
+    def cleanup(slot):
+
+        def evict(_future_kernel):
+            cache.pop(slot, None)
+
+        return evict
+
+    with MockThreadPool() as pool:
+        with pytest.raises(KeyboardInterrupt):
+            with triton.AsyncCompileMode(pool) as mode:
+
+                def evict_and_submit_new_key(_future_kernel):
+                    cache.pop("a", None)
+                    # Inserts a brand-new key while the abandon sweep is running
+                    # its own cleanup callbacks, so a sweep that walked a
+                    # snapshot taken up front could never visit it.
+                    second = mode.submit("KB", lambda: SENTINEL, finalize("b"), cleanup("b"))
+                    cache["b"] = second
+                    queued.append(second)
+
+                cache["a"] = mode.submit("KA", lambda: SENTINEL, finalize("a"), evict_and_submit_new_key)
+
+    assert not isinstance(cache.get("a"), triton.FutureKernel)
+    assert not isinstance(cache.get("b"), triton.FutureKernel)
+    assert len(queued) == 1
+    assert queued[0]._state == "failed"
+    assert queued[0].future is None
+
+
+def test_async_compile_body_interrupt_does_not_wait():
+    cache = {}
+
+    def slow_compile():
+        time.sleep(1.5)
+        return object()
+
+    def store(kernel):
+        cache["slow"] = kernel
+
+    def evict(_future_kernel):
+        cache.pop("slow", None)
+
+    pool = ThreadPoolExecutor(2)
+    try:
+        started = time.perf_counter()
+        with pytest.raises(KeyboardInterrupt):
+            with triton.AsyncCompileMode(pool) as mode:
+                cache["slow"] = mode.submit("slow", slow_compile, store, evict)
+                raise KeyboardInterrupt("simulated ctrl-c in the with body")
+        elapsed = time.perf_counter() - started
+    finally:
+        # Executor.__exit__ waits for the slow compile, which would fold that
+        # wait into the measurement, so shut the pool down outside it.
+        pool.shutdown(wait=True)
+
+    assert not isinstance(cache.get("slow"), triton.FutureKernel)
+    # An interrupt raised in the body must abort just as promptly as one coming
+    # out of a worker, instead of draining every compile still in flight.
+    assert elapsed < 1.0
+
+
+def test_async_compile_future_kernel_dunder_probe_does_not_compile():
+    never_completed = Future()
+    future_kernel = triton.FutureKernel(never_completed)
+    future_kernel.add_callbacks(lambda kernel: None, lambda fk: None)
+
+    assert hasattr(future_kernel, "__deepcopy__") is False
+    assert hasattr(future_kernel, "__copy__") is False
+    assert hasattr(future_kernel, "__setstate__") is False
+    # Probing must not have blocked on (or resolved) the pending compile.
+    assert future_kernel.future is never_completed
+    assert not never_completed.done()
+
+
+def test_async_compile_future_kernel_forwards_private_kernel_api():
+
+    class FakeKernel:
+
+        def __init__(self):
+            self.calls = []
+            self._run = "launcher"
+
+        def _init_handles(self):
+            self.calls.append("_init_handles")
+
+    fake = FakeKernel()
+    future = Future()
+    future.set_result(fake)
+    future_kernel = triton.FutureKernel(future)
+    future_kernel.add_callbacks(lambda kernel: None, lambda fk: None)
+
+    # CompiledKernel exposes _init_handles/_run and callers reach for them
+    # through whatever the JIT cache handed back, so the proxy has to forward
+    # single-underscore names instead of treating them as its own privates.
+    future_kernel._init_handles()
+    assert fake.calls == ["_init_handles"]
+    assert future_kernel._run == "launcher"
+    assert future_kernel.kernel is fake
+
+
+def test_async_compile_future_kernel_new_without_init():
+    uninitialized = triton.FutureKernel.__new__(triton.FutureKernel)
+
+    # Allocated without __init__, so there is no state to resolve. __getattr__
+    # must refuse instead of recursing through result() to read the very
+    # attribute it was asked for, which would hang or blow the stack.
+    with pytest.raises(AttributeError):
+        getattr(uninitialized, "anything")
+    with pytest.raises(AttributeError):
+        getattr(uninitialized, "_state")
+    assert hasattr(uninitialized, "__deepcopy__") is False
+
+
+def test_async_compile_future_kernel_forwards_getitem():
+    launched = []
+
+    class FakeKernel:
+
+        def __getitem__(self, grid):
+            launched.append(grid)
+            return f"runner{grid}"
+
+    future = Future()
+    future.set_result(FakeKernel())
+    future_kernel = triton.FutureKernel(future)
+    future_kernel.add_callbacks(lambda kernel: None, lambda fk: None)
+
+    # kernel[grid](...) is the launch idiom, and implicit dunder lookup goes to
+    # the type rather than through __getattr__, so the proxy needs a real
+    # __getitem__ for a warmed-up kernel to be launchable at all.
+    assert future_kernel[(1, 2, 3)] == "runner(1, 2, 3)"
+    assert future_kernel.__getitem__((4, 5, 6)) == "runner(4, 5, 6)"
+    assert launched == [(1, 2, 3), (4, 5, 6)]
+    assert hasattr(future_kernel, "__deepcopy__") is False
+
+
+def test_async_compile_cleanup_base_exception_still_evicts():
+    calls = []
+    cache = {"a": "placeholder", "b": "placeholder", "c": "placeholder"}
+    future = Future()
+    future.set_running_or_notify_cancel()
+    try:
+        raise ValueError("compile blew up")
+    except ValueError as exc:
+        future.set_exception(exc)
+
+    def cleanup(slot, interrupt=False):
+
+        def evict(_future_kernel):
+            calls.append(slot)
+            cache.pop(slot, None)
+            if interrupt:
+                raise KeyboardInterrupt("simulated ctrl-c in a cleanup callback")
+
+        return evict
+
+    future_kernel = triton.FutureKernel(future)
+    future_kernel.add_callbacks(lambda kernel: None, cleanup("a", interrupt=True))
+    future_kernel.add_callbacks(lambda kernel: None, cleanup("b"))
+    future_kernel.add_callbacks(lambda kernel: None, cleanup("c"))
+
+    # A second Ctrl-C is plausible exactly while cleanup is running, and it must
+    # not cost the remaining waiters their eviction: all of them run, and the
+    # interrupt surfaces afterwards.
+    with pytest.raises(KeyboardInterrupt):
+        future_kernel.result()
+
+    assert calls == ["a", "b", "c"]
+    assert cache == {}
+    assert future_kernel._state == "failed"
+    assert future_kernel.future is None
+
+
+def test_async_compile_callback_error_does_not_block_others():
+    compiled = object()
+    calls = []
+
+    def record(name, raises=False):
+
+        def callback(_):
+            calls.append(name)
+            if raises:
+                raise RuntimeError(name)
+
+        return callback
+
+    with MockThreadPool() as pool:
+        succeeding = triton.FutureKernel(pool.submit(lambda: compiled))
+        succeeding.add_callbacks(record("f1", raises=True), record("c1"))
+        succeeding.add_callbacks(record("f2"), record("c2"))
+        succeeding.add_callbacks(record("f3"), record("c3"))
+        pool.run_one()
+
+        with pytest.raises(Exception) as finalize_failure:
+            succeeding.result()
+        assert calls == ["f1", "f2", "f3"]
+        assert str(finalize_failure.value) == "f1"
+
+        calls.clear()
+
+        def failing_compile():
+            raise ValueError("compile blew up")
+
+        failing = triton.FutureKernel(pool.submit(failing_compile))
+        failing.add_callbacks(record("f1"), record("c1", raises=True))
+        failing.add_callbacks(record("f2"), record("c2"))
+        failing.add_callbacks(record("f3"), record("c3"))
+        pool.run_one()
+
+        with pytest.raises(Exception) as compile_failure:
+            failing.result()
+        assert calls == ["c1", "c2", "c3"]
+        assert isinstance(compile_failure.value, ValueError)
+        assert str(compile_failure.value) == "compile blew up"
+
+
+def test_async_compile_shared_key_late_waiter():
+    SENTINEL = object()
+    cache = {}
+
+    def finalize(slot):
+
+        def store(kernel):
+            cache[slot] = kernel
+
+        return store
+
+    def cleanup(slot):
+
+        def evict(_future_kernel):
+            cache.pop(slot, None)
+
+        return evict
+
+    with MockThreadPool() as pool, triton.AsyncCompileMode(pool) as mode:
+        # Mirrors jit.py: the cache slot is overwritten with the FutureKernel
+        # right after submit() returns, so a late waiter that joins a resolved
+        # compile has to be finalized by result().
+        first = mode.submit("K", lambda: SENTINEL, finalize("a"), cleanup("a"))
+        cache["a"] = first
+        pool.run_one()
+        assert first.result() is SENTINEL
+        assert cache["a"] is SENTINEL
+
+        late = mode.submit("K", lambda: SENTINEL, finalize("b"), cleanup("b"))
+        cache["b"] = late
+        assert late is first
+
+    assert cache["b"] is SENTINEL
+    assert not isinstance(cache["b"], triton.FutureKernel)
+
+
+def test_async_compile_exit_drains_reentrant_submits():
+    SENTINEL = object()
+    cache = {}
+
+    def finalize(slot):
+
+        def store(kernel):
+            cache[slot] = kernel
+
+        return store
+
+    def cleanup(slot):
+
+        def evict(_future_kernel):
+            cache.pop(slot, None)
+
+        return evict
+
+    with ThreadPoolExecutor(2) as pool, triton.AsyncCompileMode(pool) as mode:
+
+        def finalize_and_submit_more(kernel):
+            cache["a"] = kernel
+            # Queued from inside a finalize callback, i.e. after the drain has
+            # already started: __exit__ must notice the new work instead of
+            # walking a one-shot snapshot of the future list.
+            cache["b"] = mode.submit("KB", lambda: SENTINEL, finalize("b"), cleanup("b"))
+
+        cache["a"] = mode.submit("KA", lambda: SENTINEL, finalize_and_submit_more, cleanup("a"))
+
+    assert cache["a"] is SENTINEL
+    assert cache["b"] is SENTINEL
+    assert not isinstance(cache["b"], triton.FutureKernel)
+    assert mode.raw_futures == []
+    assert mode.future_kernels == {}
+
+
+def test_async_compile_exit_drains_same_key_reentrant_submits():
+    SENTINEL = object()
+    cache = {}
+
+    def finalize(slot):
+
+        def store(kernel):
+            cache[slot] = kernel
+
+        return store
+
+    def cleanup(slot):
+
+        def evict(_future_kernel):
+            cache.pop(slot, None)
+
+        return evict
+
+    with ThreadPoolExecutor(2) as pool, triton.AsyncCompileMode(pool) as mode:
+
+        def finalize_and_resubmit_same_key(kernel):
+            cache["a"] = kernel
+            # Same key, so submit() takes the dedup path: this appends another
+            # finalize callback but queues no new future, which leaves the
+            # callback runner as the only thing that can ever drain it.
+            cache["b"] = mode.submit("K", lambda: SENTINEL, finalize("b"), cleanup("b"))
+
+        cache["a"] = mode.submit("K", lambda: SENTINEL, finalize_and_resubmit_same_key, cleanup("a"))
+
+    assert cache["a"] is SENTINEL
+    assert cache["b"] is SENTINEL
+    assert not isinstance(cache["a"], triton.FutureKernel)
+    assert not isinstance(cache["b"], triton.FutureKernel)
+    assert mode.raw_futures == []
+    assert mode.future_kernels == {}
+
+
+def test_async_compile_reentrant_result_from_finalize_callback():
+    SENTINEL = object()
+    calls = []
+    future = Future()
+    future.set_result(SENTINEL)
+    future_kernel = triton.FutureKernel(future)
+
+    def finalize_reentrant(kernel):
+        calls.append("reentrant")
+        assert future_kernel.result() is kernel
+
+    def finalize_plain(_kernel):
+        calls.append("plain")
+
+    def cleanup(_future_kernel):
+        calls.append("cleanup")
+
+    future_kernel.add_callbacks(finalize_reentrant, cleanup)
+    future_kernel.add_callbacks(finalize_plain, cleanup)
+
+    # Resolving from inside a finalize callback must not re-run any callback nor
+    # leave the lifecycle half-applied, even though the outer resolution has not
+    # reached its terminal assignments yet.
+    assert future_kernel.result() is SENTINEL
+    assert calls == ["reentrant", "plain"]
+    assert future_kernel._state == "succeeded"
+    assert future_kernel.future is None
+    assert future_kernel.kernel is SENTINEL
+
+    assert future_kernel.result() is SENTINEL
+    assert calls == ["reentrant", "plain"]
+
+
+def test_async_compile_same_key_submit_from_cleanup_callback():
+    cache = {}
+
+    def compile_fails():
+        raise ValueError("compile blew up")
+
+    def cleanup(slot):
+
+        def evict(_future_kernel):
+            cache.pop(slot, None)
+
+        return evict
+
+    with pytest.raises(ValueError, match="compile blew up"):
+        with MockThreadPool() as pool, triton.AsyncCompileMode(pool) as mode:
+
+            def resubmit_same_key(_future_kernel):
+                cache.pop("a", None)
+                # Same key from inside a cleanup callback: submit() dedups onto
+                # this very FutureKernel, so only the cleanup runner can ever
+                # reach the callback it appends.
+                cache["b"] = mode.submit("K", compile_fails, lambda kernel: None, cleanup("b"))
+
+            cache["a"] = mode.submit("K", compile_fails, lambda kernel: None, resubmit_same_key)
+            pool.run_all()
+
+    assert "a" not in cache
+    assert "b" not in cache
+
+
+def test_async_compile_mode_rejects_nesting():
+    with MockThreadPool() as pool, triton.AsyncCompileMode(pool) as outer:
+        assert triton.runtime._async_compile.active_mode.get() is outer
+
+        with pytest.raises(RuntimeError, match="already active"):
+            with triton.AsyncCompileMode(pool):
+                pass
+
+        # __enter__ raised before installing itself, so __exit__ never ran and
+        # the outer mode must still be the active one.
+        assert triton.runtime._async_compile.active_mode.get() is outer
+
+    assert triton.runtime._async_compile.active_mode.get() is None
+
+
+def test_async_compile_ignore_errors_mode_swallows_compile_failures():
+    cache = {}
+
+    def compile_fails():
+        raise ValueError("compile blew up")
+
+    def store(kernel):
+        cache["K"] = kernel
+
+    def evict(_future_kernel):
+        cache.pop("K", None)
+
+    with MockThreadPool() as pool, triton.AsyncCompileMode(pool, ignore_errors=True) as mode:
+        cache["K"] = mode.submit("K", compile_fails, store, evict)
+        pool.run_all()
+
+    assert "K" not in cache
+    assert triton.runtime._async_compile.active_mode.get() is None
+
+
+def test_async_compile_submit_deduplicates_by_key():
+    SENTINEL = object()
+    cache = {}
+    compiles = []
+
+    def compile_once():
+        compiles.append("compile")
+        return SENTINEL
+
+    def finalize(slot):
+
+        def store(kernel):
+            cache[slot] = kernel
+
+        return store
+
+    def cleanup(slot):
+
+        def evict(_future_kernel):
+            cache.pop(slot, None)
+
+        return evict
+
+    with MockThreadPool() as pool, triton.AsyncCompileMode(pool) as mode:
+        first = mode.submit("K", compile_once, finalize("a"), cleanup("a"))
+        cache["a"] = first
+        second = mode.submit("K", compile_once, finalize("b"), cleanup("b"))
+        cache["b"] = second
+
+        assert second is first
+        assert len(pool.work_queue) == 1
+        assert len(mode.raw_futures) == 1
+        pool.run_all()
+
+    assert compiles == ["compile"]
+    assert cache["a"] is SENTINEL
+    assert cache["b"] is SENTINEL
+
+
+def test_async_compile_body_exception_with_compile_failure():
+    cache = {}
+
+    def compile_fails():
+        raise ValueError("compile blew up")
+
+    def store(kernel):
+        cache["K"] = kernel
+
+    def evict(_future_kernel):
+        cache.pop("K", None)
+
+    with pytest.raises(ValueError, match="compile blew up") as compile_failure:
+        with MockThreadPool() as pool, triton.AsyncCompileMode(pool) as mode:
+            cache["K"] = mode.submit("K", compile_fails, store, evict)
+            pool.run_all()
+            raise RuntimeError("body blew up")
+
+    # The drain's first error is what propagates, and the body exception has to
+    # survive as its context so neither failure is lost.
+    assert isinstance(compile_failure.value.__context__, RuntimeError)
+    assert str(compile_failure.value.__context__) == "body blew up"
+    assert "K" not in cache
+
+
+def test_async_compile_finalize_error_leaves_terminal_state():
+    SENTINEL = object()
+    calls = []
+    future = Future()
+    future.set_result(SENTINEL)
+
+    def finalize_raises(_kernel):
+        calls.append("finalize")
+        raise RuntimeError("finalize blew up")
+
+    def cleanup(_future_kernel):
+        calls.append("cleanup")
+
+    future_kernel = triton.FutureKernel(future)
+    future_kernel.add_callbacks(finalize_raises, cleanup)
+
+    with pytest.raises(RuntimeError, match="finalize blew up"):
+        future_kernel.result()
+
+    assert future_kernel.kernel is SENTINEL
+    assert future_kernel.future is None
+    assert future_kernel._state == "succeeded"
+    assert calls == ["finalize"]
+
+    # A callback error must not leave the compile unresolved: resolving again
+    # hands back the kernel and must not re-run the callback that raised.
+    assert future_kernel.result() is SENTINEL
+    assert calls == ["finalize"]
+
+
+def test_async_compile_finalize_base_exception_leaves_terminal_state():
+    SENTINEL = object()
+    calls = []
+    future = Future()
+    future.set_result(SENTINEL)
+
+    def finalize_interrupts(_kernel):
+        calls.append("interrupt")
+        raise KeyboardInterrupt("simulated ctrl-c in a finalize callback")
+
+    def finalize_plain(_kernel):
+        calls.append("plain")
+
+    def cleanup(_future_kernel):
+        calls.append("cleanup")
+
+    future_kernel = triton.FutureKernel(future)
+    future_kernel.add_callbacks(finalize_interrupts, cleanup)
+    future_kernel.add_callbacks(finalize_plain, cleanup)
+
+    # The compile itself succeeded, so an interrupt out of a callback must not
+    # cost the remaining waiters their finalize nor abandon the terminal
+    # transition: dropping it would lose the kernel and keep the future.
+    with pytest.raises(KeyboardInterrupt):
+        future_kernel.result()
+
+    assert calls == ["interrupt", "plain"]
+    assert future_kernel._state == "succeeded"
+    assert future_kernel.future is None
+    assert future_kernel.kernel is SENTINEL
+    assert not any(isinstance(value, BaseException) for value in vars(future_kernel).values())
 
 
 def test_higher_order_kernel(device, fresh_triton_cache, capsys):
