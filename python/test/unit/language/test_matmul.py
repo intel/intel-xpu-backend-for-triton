@@ -481,7 +481,7 @@ def test_mxfp(BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS, device)
         assert "mma.sync.aligned.m16n8k32.row.col.kind::mxf8f6f4.block_scale.scale_vec::1X" in ptx
     if is_xpu_cri():
         llir = out.asm["llir"]
-        count = llir.count("llvm.genx.GenISA.sub.group.bdpas")
+        count = llir.count("__spirv_SubgroupScaledMatrixMultiplyAccumulateINTEL")
         assert count > 0, "Unexpected LLVM IR generated."
 
 
@@ -1392,7 +1392,7 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
         assert "fp4Padded = true" in ttgir
     if is_xpu_cri():
         llir = out.asm["llir"]
-        count = llir.count("llvm.genx.GenISA.sub.group.bdpas")
+        count = llir.count("__spirv_SubgroupScaledMatrixMultiplyAccumulateINTEL")
         assert count > 0, "Unexpected LLVM IR generated."
 
     torch.testing.assert_close(ref_out, output, atol=1e-3, rtol=1e-3)
@@ -1552,7 +1552,7 @@ def test_batched_mxfp(BATCH_SIZE, BLOCK_BATCH_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, N
         assert "mma.sync.aligned.m16n8k32.row.col.kind::mxf8f6f4.block_scale.scale_vec::1X" in ptx
     if is_xpu_cri():
         llir = out.asm["llir"]
-        assert "llvm.genx.GenISA.sub.group.bdpas" in llir
+        assert "__spirv_SubgroupScaledMatrixMultiplyAccumulateINTEL" in llir
 
 
 @triton.jit

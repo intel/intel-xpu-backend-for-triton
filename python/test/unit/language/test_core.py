@@ -4575,7 +4575,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
         assert (re.search(r"v_cvt_scalef32_pk_.*?(fp4|fp8|bf8).*?op_sel", amdgcn))
     if is_xpu_cri():
         llir = pgm.asm["llir"]
-        count = llir.count("llvm.genx.GenISA.sub.group.bdpas")
+        count = llir.count("__spirv_SubgroupScaledMatrixMultiplyAccumulateINTEL")
         assert count > 0, "Unexpected LLVM IR generated."
 
 
