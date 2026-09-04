@@ -2639,9 +2639,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-DAG: [[LINEAR:#.*]] = #ttg.linear
   // CHECK-DAG: [[BLOCKED:#.*]] = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
-  // CHECK: tt.split {{.*}} : tensor<32x2xf32, [[LINEAR]]> -> tensor<32xf32, #ttg.slice<{dim = 1, parent = [[BLOCKED]]}>>
+  // CHECK: tt.split {{.*}} : tensor<32x2xf32, [[BLOCKED]]> -> tensor<32xf32, #ttg.slice<{dim = 1, parent = [[BLOCKED]]}>>
   tt.func public @split_slice_backward_propagation() -> tensor<32xf32, #ttg.slice<{dim=1, parent=#blocked2}>> {
     %cst = arith.constant dense<0.0> : tensor<32x2xf32, #blocked1>
     %outLHS, %outRHS = tt.split %cst : tensor<32x2xf32, #blocked1> -> tensor<32xf32, #blocked>
@@ -3121,5 +3120,124 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.targ
     %6 = ttg.convert_layout %tmp26 : tensor<1x1xf32, #blocked_nll> -> tensor<1x1xf32, #blocked1_nll>
     tt.store %5, %6 {ttig.block_io = "column_major"} : tensor<1x1x!tt.ptr<f32>, #blocked1_nll>
     tt.return
+  }
+}
+
+// -----
+
+// Test for #7731: site-B (hoistConvertOnTopOfExtOrBroadcast) — sub-group shuffle
+// convert pricing, POSITIVE case (hoist fires under both OLD and NEW code).
+//
+// Layout pair used here (16-lane, 1D sliced shuffle):
+//   #srow = #ttg.slice<{dim=1, parent=#ttg.blocked<{sizePerThread=[1,16],
+//             threadsPerWarp=[16,1], warpsPerCTA=[1,1], order=[0,1]}>}>
+//   #scol = #ttg.slice<{dim=1, parent=#ttg.blocked<{sizePerThread=[16,1],
+//             threadsPerWarp=[1,16], warpsPerCTA=[1,1], order=[0,1]}>}>
+// cvtIsSubGroupShuffle returns true for this pair (confirmed via debug output).
+//
+// Chain: tensor<16xf32, #srow> → arith.extf → tensor<16xf64, #srow>
+//        → ttg.convert_layout → tensor<16xf64, #scol>
+//
+// The hoist is site-B (hoistConvertOnTopOfExtOrBroadcast).  Cost gate:
+//   convertLayoutCost = getConvertCost(f64[16], #scol)   [SHUFFLE_RATE × 128 = 256]
+//   newCvtCost        = getConvertCost(f32[16], #scol)   [SHUFFLE_RATE × 64  = 128]
+//   rematerialisationCost = newCvtCost + 0 (no external slice ops) = 128
+//   256 >= 128 → hoist fires; convert moved before extf.
+//
+// Under OLD code (SLM rate 96×):
+//   convertLayoutCost = 32 × max(128,128) × 3 = 12288
+//   newCvtCost        = 32 × max(64,128)  × 3 = 12288  (floor: 16<32 min elements)
+//   12288 >= 12288 → hoist also fires.
+//
+// The hoist fires under BOTH old and new, so this test is a code-path guard:
+// it ensures the shuffle branch of getConvertCost is reached and produces a
+// non-zero, non-SLM cost for both convertLayoutCost and newCvtCost.
+// A discriminating test (fires OLD, blocked NEW) is given below.
+
+// CHECK-LABEL: @shuffle_hoist_extf_fires
+// COM: extf is hoisted: convert_layout appears before extf, none after.
+// CHECK: %[[CVT:.+]] = ttg.convert_layout
+// CHECK: arith.extf %[[CVT]]
+// CHECK-NOT: ttg.convert_layout
+// CHECK: tt.return
+
+#shuf_row_p = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+#shuf_col_p = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [0, 1]}>
+#sliced_row_p = #ttg.slice<{dim = 1, parent = #shuf_row_p}>
+#sliced_col_p = #ttg.slice<{dim = 1, parent = #shuf_col_p}>
+
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  tt.func @shuffle_hoist_extf_fires(%arg0: tensor<16xf32, #sliced_row_p>)
+      -> tensor<16xf64, #sliced_col_p> {
+    %0 = arith.extf %arg0 : tensor<16xf32, #sliced_row_p> to tensor<16xf64, #sliced_row_p>
+    %1 = ttg.convert_layout %0 : tensor<16xf64, #sliced_row_p> -> tensor<16xf64, #sliced_col_p>
+    tt.return %1 : tensor<16xf64, #sliced_col_p>
+  }
+}
+
+// -----
+
+// Test for #7731: site-B (hoistConvertOnTopOfExtOrBroadcast) — sub-group shuffle
+// convert pricing, DISCRIMINATING case (hoist blocked by NEW shuffle rate, fires
+// under OLD SLM rate).
+//
+// Layout pair: same 16-lane 1D sliced shuffle pair as above but 64 elements
+// (sizePerThread=[4,16], threadsPerWarp=[16,1]).  cvtIsSubGroupShuffle returns
+// true for the 64-element sliced pair (confirmed via debug output).
+//
+// Chain:
+//   %arg0  : tensor<64xf32, #srow64>
+//   %ext   = arith.extf %arg0  → tensor<64xf64, #srow64>   ← extOrBroadcastOp
+//   %add1  = arith.addf %ext, %ext   ← externally used (returned)
+//   %add2  = arith.addf %ext, %ext   ← externally used (returned)
+//   %add3  = arith.addf %add1, %add2 ← convertOp's source
+//   %cvt   = ttg.convert_layout %add3 → tensor<64xf64, #scol64>
+//
+// Cost gate under NEW code (SHUFFLE_RATE = 2):
+//   convertLayoutCost = SHUFFLE_RATE × 64×8B = 1024
+//   newCvtCost        = SHUFFLE_RATE × 64×4B =  512  (f32 pre-ext)
+//   dup (%add1,%add2,%ext, transitively) = 3 × 1 × 64×8B = 1536
+//   rematerialisationCost = 512 + 1536 = 2048
+//   1024 >= 2048 → FALSE → hoist BLOCKED; convert_layout survives.
+//
+// Cost gate under OLD code (SLM rate 32×3 = 96×):
+//   convertLayoutCost = 96 × max(64×8B, 32×4B) = 96 × 512 = 49152
+//   newCvtCost        = 96 × max(64×4B, 32×4B) = 96 × 256 = 24576
+//   dup (same three ops, no-floor for arith): 3 × 64×8B = 1536
+//   rematerialisationCost = 24576 + 1536 = 26112
+//   49152 >= 26112 → TRUE → hoist FIRES; convert_layout eliminated.
+//
+// The new SHUFFLE_RATE=2 correctly identifies that the sub-group-shuffle convert
+// is cheap relative to duplicating the producer chain; it is therefore cheaper
+// to keep the convert than to rematerialise the producers in the new layout.
+
+// CHECK-LABEL: @shuffle_hoist_extf_blocked
+// COM: Under NEW cost: hoist blocked (shuffle rate makes convert cheap vs.
+// COM: duplicating producers). extf appears before convert_layout in the output.
+// COM: Under OLD cost: hoist would fire (SLM rate inflates convertLayoutCost).
+// CHECK-NOT: ttg.convert_layout
+// CHECK: arith.extf
+// CHECK: arith.addf
+// CHECK: ttg.convert_layout
+// CHECK: tt.return
+
+#shuf_row_d = #ttg.blocked<{sizePerThread = [4, 16], threadsPerWarp = [16, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+#shuf_col_d = #ttg.blocked<{sizePerThread = [16, 4], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [0, 1]}>
+#sliced_row_d = #ttg.slice<{dim = 1, parent = #shuf_row_d}>
+#sliced_col_d = #ttg.slice<{dim = 1, parent = #shuf_col_d}>
+
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // COM: Three arith ops (extf + two addf) with two addf results used externally.
+  // COM: The hoist is blocked because the shuffle-priced convertLayoutCost (1024)
+  // COM: is less than the rematerialisationCost (2048) under SHUFFLE_RATE=2.
+  tt.func @shuffle_hoist_extf_blocked(%arg0: tensor<64xf32, #sliced_row_d>)
+      -> (tensor<64xf64, #sliced_col_d>, tensor<64xf64, #sliced_row_d>, tensor<64xf64, #sliced_row_d>) {
+    %ext  = arith.extf %arg0 : tensor<64xf32, #sliced_row_d> to tensor<64xf64, #sliced_row_d>
+    %add1 = arith.addf %ext, %ext : tensor<64xf64, #sliced_row_d>
+    %add2 = arith.addf %ext, %ext : tensor<64xf64, #sliced_row_d>
+    %add3 = arith.addf %add1, %add2 : tensor<64xf64, #sliced_row_d>
+    %cvt  = ttg.convert_layout %add3 : tensor<64xf64, #sliced_row_d> -> tensor<64xf64, #sliced_col_d>
+    tt.return %cvt, %add1, %add2
+        : tensor<64xf64, #sliced_col_d>, tensor<64xf64, #sliced_row_d>, tensor<64xf64, #sliced_row_d>
   }
 }

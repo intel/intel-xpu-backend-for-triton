@@ -34,6 +34,15 @@ def TTG_TensorMemorySpace : AttrDef<TritonNvidiaGPU_Dialect, "TensorMemorySpace"
   }];
 }
 
+def TTNG_TMEMWaitKindAttr : I32EnumAttr<
+    "TMEMWaitKind", "tensor memory wait kind",
+    [
+        I32EnumAttrCase<"LOAD", 0, "load">,
+        I32EnumAttrCase<"STORE", 1, "store">,
+    ]> {
+  let cppNamespace = "::mlir::triton::nvidia_gpu";
+}
+
 def TTNG_TMEMLoadReduceModifierAttr : I32EnumAttr<
     "TMEMLoadReduceModifier", "",
     [
@@ -44,6 +53,34 @@ def TTNG_TMEMLoadReduceModifierAttr : I32EnumAttr<
     let genSpecializedAttr = 0;
 }
 def TTNG_TMEMLoadReduceModifierEnum : EnumAttr<TritonNvidiaGPU_Dialect, TTNG_TMEMLoadReduceModifierAttr, "redOp"> {
+  let assemblyFormat = "`<` $value `>`";
+}
+
+def TTNG_PackedArithOpKindAttr : I32EnumAttr<
+    "PackedArithOpKind", "packed arithmetic operation",
+    [
+        I32EnumAttrCase<"ADD", 0, "add">,
+        I32EnumAttrCase<"SUB", 1, "sub">,
+        I32EnumAttrCase<"MUL", 2, "mul">,
+        I32EnumAttrCase<"FMA", 3, "fma">,
+        I32EnumAttrCase<"MIN", 4, "min">,
+        I32EnumAttrCase<"MAX", 5, "max">,
+    ]> {
+  let cppNamespace = "::mlir::triton::nvidia_gpu";
+}
+
+def TTNG_TensorMemoryScalesBlockRepOrderAttr : I32EnumAttr<
+    "TensorMemoryScalesBlockRepOrder", "",
+    [
+        I32EnumAttrCase<"MN_THEN_K", 0, "mnThenK">,
+        I32EnumAttrCase<"K_THEN_MN", 1, "kThenMn">,
+    ]> {
+    let cppNamespace = "::mlir::triton::nvidia_gpu";
+    let genSpecializedAttr = 0;
+}
+def TTNG_TensorMemoryScalesBlockRepOrderEnum
+    : EnumAttr<TritonNvidiaGPU_Dialect,
+               TTNG_TensorMemoryScalesBlockRepOrderAttr, "blockRepOrder"> {
   let assemblyFormat = "`<` $value `>`";
 }
 
@@ -109,14 +146,29 @@ def TTG_TensorMemoryScalesEncodingAttr
   let description = [{
     An encoding to represent the layout of tensor memory scales.
     As described in the PTX doc, blocked scales in TMEM must be in a special layout. They are organized
-    as a multiple copies of "chunk", each of which having the size 32x4x4B. Moreover, such chunks are duplicated
+    as a multiple copies of a block, each of which having the size 32x4x4B. Moreover, such blocks are duplicated
     over 4 warps to fill entire 128 rows of TMEM. This encoding indicates that a tensor in TMEM is in such a special
     layout.
+    The parameter blockRepOrder determines the ordering of repeated scale blocks along TMEM columns. Here `mn`
+    denotes the MMA instruction's non-K matrix dimension: `M` for A scales and `N` for B scales. `mnThenK`
+    advances along that dimension before advancing K, while `kThenMn` advances along K before advancing the
+    non-K dimension. When one MMA instruction consumes only one scale block along K, the value of this parameter
+    does not matter. Otherwise, it must match the hardware instruction layout. For example, Rubin NVFP4 A scales
+    with `BLOCK_M = 256` require `kThenMn`, while B scales keep the default `mnThenK`.
   }];
   let parameters = (
     ins
-    TTNG_CGALayoutRankTwoParam:$CGALayout
+    TTNG_CGALayoutRankTwoParam:$CGALayout,
+    DefaultValuedParameter<
+        "::mlir::triton::nvidia_gpu::TensorMemoryScalesBlockRepOrder",
+        "::mlir::triton::nvidia_gpu::TensorMemoryScalesBlockRepOrder::MN_THEN_K">:$blockRepOrder
   );
+  let builders = [
+    AttrBuilder<(ins "::mlir::triton::gpu::CGAEncodingAttr":$CGALayout), [{
+      return get(context, CGALayout,
+                 ::mlir::triton::nvidia_gpu::TensorMemoryScalesBlockRepOrder::MN_THEN_K);
+    }]>
+  ];
   let genVerifyDecl = 1;
   let assemblyFormat = "`<` struct(params) `>`";
 }

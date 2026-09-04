@@ -1,8 +1,12 @@
 // RUN: triton-opt %s -split-input-file --convert-triton-intel-gpu-to-llvm --tritonintelgpu-rewrite-stack-ptr | FileCheck %s
+// RUN: triton-opt %s -split-input-file --convert-triton-intel-gpu-to-llvm=dynamic-shared-memory=true --tritonintelgpu-rewrite-stack-ptr | FileCheck %s --check-prefix=DYNAMIC
 
 module attributes {"ttg.num-warps" = 1 : i32, ttg.shared = 0 : i32} {
-  // CHECK-LABEL: llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
+  // No shared memory: uses of `global_smem` are poison in both modes.
+  // CHECK-LABEL: llvm.mlir.global internal @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
   // CHECK: llvm.func spir_kernelcc @kernel(%arg0: !llvm.ptr<1> {tt.pointee_type = f32}, %arg1: !llvm.ptr<1> {tt.pointee_type = f32}, %arg2: !llvm.ptr<1> {tt.pointee_type = f32}, [[GLOBAL_PTR:%.*]]: !llvm.ptr<1>, [[PROFILE_PTR:%.*]]: !llvm.ptr<1>)
+  // DYNAMIC-LABEL: llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
+  // DYNAMIC: llvm.func spir_kernelcc @kernel(%arg0: !llvm.ptr<1> {tt.pointee_type = f32}, %arg1: !llvm.ptr<1> {tt.pointee_type = f32}, %arg2: !llvm.ptr<1> {tt.pointee_type = f32}, [[GLOBAL_PTR:%.*]]: !llvm.ptr<1>, [[PROFILE_PTR:%.*]]: !llvm.ptr<1>)
   tt.func public @kernel(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %arg2: !tt.ptr<f32>) {
     %0 = tt.load %arg0 : !tt.ptr<f32>
     %1 = tt.load %arg1 : !tt.ptr<f32>
@@ -10,6 +14,8 @@ module attributes {"ttg.num-warps" = 1 : i32, ttg.shared = 0 : i32} {
     // CHECK: [[LOAD1:%.*]] = llvm.bitcast {{.*}} : i32 to f32
     // CHECK: [[POISON:%.*]] = llvm.mlir.poison : !llvm.ptr<3>
     // CHECK: llvm.call spir_funccc @noinline_simple_fn__fp32_fp32_Pfp32__([[LOAD0]], [[LOAD1]], %arg2, [[POISON]], %arg3, %arg4)
+    // DYNAMIC: [[DYN_POISON:%.*]] = llvm.mlir.poison : !llvm.ptr<3>
+    // DYNAMIC: llvm.call spir_funccc @noinline_simple_fn__fp32_fp32_Pfp32__({{.*}}, {{.*}}, %arg2, [[DYN_POISON]], %arg3, %arg4)
     tt.call @noinline_simple_fn__fp32_fp32_Pfp32__(%0, %1, %arg2) : (f32, f32, !tt.ptr<f32>) -> ()
     tt.return
   }
@@ -28,19 +34,32 @@ module attributes {"ttg.num-warps" = 1 : i32, ttg.shared = 0 : i32} {
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 1 : i32, ttg.shared = 1280 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // CHECK-LABEL: llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
-  // CHECK: llvm.func spir_kernelcc @kernel(%arg0: !llvm.ptr<1> {tt.pointee_type = f32}, %arg1: !llvm.ptr<1> {tt.pointee_type = f32}, %arg2: !llvm.ptr<1> {tt.pointee_type = f32}, [[GLOBAL_PTR:%.*]]: !llvm.ptr<1>, [[PROFILE_PTR:%.*]]: !llvm.ptr<1>, [[SHARED_MEM_PTR:%.*]]: !llvm.ptr<3>)
+  // Static allocation: `global_smem` is sized after `ttg.shared` and the kernel
+  // takes no shared memory argument.
+  // CHECK-LABEL: llvm.mlir.global internal @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<1280 x i8>
+  // CHECK: llvm.func spir_kernelcc @kernel(%arg0: !llvm.ptr<1> {tt.pointee_type = f32}, %arg1: !llvm.ptr<1> {tt.pointee_type = f32}, %arg2: !llvm.ptr<1> {tt.pointee_type = f32}, [[GLOBAL_PTR:%.*]]: !llvm.ptr<1>, [[PROFILE_PTR:%.*]]: !llvm.ptr<1>)
+  // Dynamic allocation: the base is a trailing kernel argument.
+  // DYNAMIC-LABEL: llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
+  // DYNAMIC: llvm.func spir_kernelcc @kernel(%arg0: !llvm.ptr<1> {tt.pointee_type = f32}, %arg1: !llvm.ptr<1> {tt.pointee_type = f32}, %arg2: !llvm.ptr<1> {tt.pointee_type = f32}, [[DYN_GLOBAL_PTR:%.*]]: !llvm.ptr<1>, [[DYN_PROFILE_PTR:%.*]]: !llvm.ptr<1>, [[SHARED_MEM_PTR:%.*]]: !llvm.ptr<3>)
   tt.func public @kernel(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %arg2: !tt.ptr<f32>) {
     %0 = tt.load %arg0 : !tt.ptr<f32>
     %1 = tt.load %arg1 : !tt.ptr<f32>
     // CHECK: [[LOAD0:%.*]] = llvm.bitcast {{.*}} : i32 to f32
     // CHECK: [[LOAD1:%.*]] = llvm.bitcast {{.*}} : i32 to f32
-    // CHECK: llvm.call spir_funccc @noinline_shared_fn([[LOAD0]], [[LOAD1]], %arg2, [[SHARED_MEM_PTR]], [[GLOBAL_PTR]], [[PROFILE_PTR]])
+    // The callee receives the base offset by its allocator-provided offset.
+    // CHECK: [[SMEM:%.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+    // CHECK: [[CALLEE_SMEM:%.*]] = llvm.getelementptr [[SMEM]][{{.*}}] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // CHECK: llvm.call spir_funccc @noinline_shared_fn([[LOAD0]], [[LOAD1]], %arg2, [[CALLEE_SMEM]], [[GLOBAL_PTR]], [[PROFILE_PTR]])
+    // DYNAMIC: [[DYN_CALLEE_SMEM:%.*]] = llvm.getelementptr [[SHARED_MEM_PTR]][{{.*}}] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+    // DYNAMIC: llvm.call spir_funccc @noinline_shared_fn({{.*}}, {{.*}}, %arg2, [[DYN_CALLEE_SMEM]], [[DYN_GLOBAL_PTR]], [[DYN_PROFILE_PTR]])
     tt.call @noinline_shared_fn(%0, %1, %arg2) {allocation.offset = 0 : i32} : (f32, f32, !tt.ptr<f32>) -> ()
     tt.return
   }
+  // Non-kernel functions keep receiving the base as an argument in both modes.
   // CHECK: llvm.func internal spir_funccc @noinline_shared_fn(%arg0: f32, %arg1: f32, %arg2: !llvm.ptr<1> {tt.pointee_type = f32}, %arg3: !llvm.ptr<3>, %arg4: !llvm.ptr<1>, %arg5: !llvm.ptr<1>)
   // CHECK: llvm.getelementptr %arg3[{{.*}}]
+  // DYNAMIC: llvm.func internal spir_funccc @noinline_shared_fn(%arg0: f32, %arg1: f32, %arg2: !llvm.ptr<1> {tt.pointee_type = f32}, %arg3: !llvm.ptr<3>, %arg4: !llvm.ptr<1>, %arg5: !llvm.ptr<1>)
+  // DYNAMIC: llvm.getelementptr %arg3[{{.*}}]
   tt.func private @noinline_shared_fn(%arg0: f32, %arg1: f32, %arg2: !tt.ptr<f32>) attributes {noinline = true} {
     %cst = arith.constant dense<16> : tensor<16x1xi32, #blocked>
     %0 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
@@ -63,6 +82,37 @@ module attributes {"ttg.num-warps" = 1 : i32, ttg.shared = 1280 : i32, "ttg.thre
     %17 = arith.addf %15, %16 fastmath<fast> : tensor<16x16xf32, #mma>
     %18 = ttg.convert_layout %17 {allocation.offset = 0 : i32} : tensor<16x16xf32, #mma> -> tensor<16x16xf32, #blocked>
     tt.store %9, %18 : tensor<16x16x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// `ttg.shared` is missing, so the shared memory size is unknown and the
+// conversion keeps the dynamic allocation in both modes: the base is appended as
+// a kernel argument. Only reachable when the passes are run standalone, i.e. in
+// tests: `intel-allocate-shared-memory` always sets `ttg.shared` in the
+// compilation pipeline.
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK: llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
+  // CHECK: llvm.func spir_kernelcc @kernel_no_shared_attr(%arg0: !llvm.ptr<1> {tt.pointee_type = f32}, %arg1: !llvm.ptr<1>, %arg2: !llvm.ptr<1>, [[SHARED_MEM_PTR:%.*]]: !llvm.ptr<3>)
+  // DYNAMIC: llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
+  // DYNAMIC: llvm.func spir_kernelcc @kernel_no_shared_attr(%arg0: !llvm.ptr<1> {tt.pointee_type = f32}, %arg1: !llvm.ptr<1>, %arg2: !llvm.ptr<1>, [[DYN_SHARED_MEM_PTR:%.*]]: !llvm.ptr<3>)
+  tt.func public @kernel_no_shared_attr(%arg0: !tt.ptr<f32>) {
+    %0 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #blocked>
+    %1 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<16x!tt.ptr<f32>, #blocked>
+    %2 = tt.addptr %1, %0 : tensor<16x!tt.ptr<f32>, #blocked>, tensor<16xi32, #blocked>
+    %3 = tt.load %2 : tensor<16x!tt.ptr<f32>, #blocked>
+    // CHECK-NOT: llvm.mlir.addressof @global_smem
+    // CHECK: llvm.getelementptr [[SHARED_MEM_PTR]]
+    // DYNAMIC-NOT: llvm.mlir.addressof @global_smem
+    // DYNAMIC: llvm.getelementptr [[DYN_SHARED_MEM_PTR]]
+    %4 = ttg.local_alloc %3 {allocation.offset = 0 : i32} : (tensor<16xf32, #blocked>) -> !ttg.memdesc<16xf32, #shared, #smem>
+    %5 = ttg.local_load %4 : !ttg.memdesc<16xf32, #shared, #smem> -> tensor<16xf32, #blocked>
+    tt.store %2, %5 : tensor<16x!tt.ptr<f32>, #blocked>
     tt.return
   }
 }

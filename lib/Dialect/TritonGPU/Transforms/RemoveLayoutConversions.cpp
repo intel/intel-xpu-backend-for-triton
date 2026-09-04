@@ -123,16 +123,17 @@ public:
     return rematMapping.lookup(value).lookup(encoding);
   }
 
-  bool backwardRematerialization();
+  bool backwardRematerialization(bool disableRematSplitting);
 
   /// Rematerialize the backward slice leading up to \p convertOp to produce the
   /// result layout directly if it is possible and profitable to do so.
   /// \return true if \p convertOp was eliminated, false otherwise.
-  bool backwardRematerialization(ConvertLayoutOp convertOp);
+  bool backwardRematerialization(ConvertLayoutOp convertOp,
+                                 bool disableRematSplitting);
 
-  // TODO: Merge the three hoistConvert*(); functions as they are duplicate code
+  void runHoistConvertPass(std::function<bool(ConvertLayoutOp)> tryHoist);
   void hoistConvertDotOperand();
-  void hoistConvertOnTopOfExtOrBroadcast();
+  void hoistConvertOnTopOfExtOrBroadcast(bool disableRematSplitting);
   void hoistConvertIntoConditionals();
 
   /// Attempt to hoist \p convertOp above operations that make the tensor larger
@@ -140,7 +141,8 @@ public:
   /// possible, rematerialize the slice between the convert and that operation
   /// and hoist the convert above it.
   /// \return true if \p convertOp was hoisted, false otherwise.
-  bool hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp);
+  bool hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp,
+                                         bool disableRematSplitting);
 
   /// Attempt to hoist \p convertOp into conditionals so the conversion is only
   /// conditionally executed. If this is possible, rematerialize the slice
@@ -225,14 +227,8 @@ bool isLayoutAnchor(Operation *op) {
     return true;
   if (auto gatherOp = dyn_cast<GatherOp>(op))
     return gatherOp.getEfficientLayout();
-
-  // Heuristic: Mark permuting reshape as a layout anchor.  Its dst can be
-  // anything, so it stops forward-propagation of layouts.  We rely on the
-  // backwards pass to fix it up if necessary.  (If we didn't do this, then
-  // anything following the reshape won't be covered by the forward pass at
-  // all.)
   if (auto reshape = dyn_cast<ReshapeOp>(op))
-    return reshape.getAllowReorder();
+    return reshape.getEfficientLayout();
 
   return false;
 }
@@ -684,7 +680,7 @@ bool canBeRemat(Operation *op) {
   if (isa<scf::WhileOp, scf::ConditionOp>(op))
     return false;
 
-  return true;
+  return !hasEffect<MemoryEffects::Write>(op);
 }
 
 void LayoutRematerialization::updateRematMapping(
@@ -714,24 +710,15 @@ void LayoutRematerialization::rewriteSlice(
     SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
     const DenseMap<std::pair<Value, Attribute>, Value> &existingRemats,
     ConvertLayoutOp convertOp, IRMapping &mapping) {
+  for (const auto &[value, encoding] : layout) {
+    if (Value remat = existingRemats.lookup({value, encoding}))
+      mapping.map(value, remat);
+  }
+
   SetVector<Operation *> opsToRewrite;
   // Keep track of yield operands that need to be duplicated.
   DenseMap<Operation *, SmallVector<int>> yieldOperandsMap;
-  // Keep these around to remove them from the slice after our collection pass
-  // This ensures we don't duplicate them during an for rewrite or causing the
-  // for/yield to fall out of sync
-  SetVector<Value> valuesWithExistingRemat;
   for (Value v : slice) {
-    auto layoutIt = layout.find(v);
-    assert(layoutIt != layout.end());
-    // If we found a valid rematerialization for this value while constructing
-    // the slice, use that.
-    if (Value remat = existingRemats.lookup({v, layoutIt->second})) {
-      assert(getRematValue(v, layoutIt->second) == remat && "remat mismatch");
-      mapping.map(v, remat);
-      valuesWithExistingRemat.insert(v);
-      continue;
-    }
     if (v.getDefiningOp()) {
       opsToRewrite.insert(v.getDefiningOp());
       if (auto ifOp = v.getDefiningOp<scf::IfOp>()) {
@@ -753,7 +740,6 @@ void LayoutRematerialization::rewriteSlice(
       }
     }
   }
-  slice.set_subtract(valuesWithExistingRemat);
   opsToRewrite = mlir::topologicalSort(opsToRewrite);
 
   // replaceAllUsesWith calls delayed until after initial rewrite.
@@ -761,7 +747,7 @@ void LayoutRematerialization::rewriteSlice(
   SmallVector<std::tuple<Value, Value>> replacements;
 
   SmallVector<Operation *> deadOps;
-  IRRewriter builder(slice.begin()->getContext());
+  IRRewriter builder(convertOp.getContext());
   for (Operation *op : opsToRewrite) {
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
       // Keep a mapping of the operands index to the new operands index.
@@ -939,7 +925,7 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
   auto existingRemats = existingRematsArg;
   LogicalResult result = getConvertBackwardSlice(
       root, rootEncoding, slice, layout, existingRemats, stopPropagation);
-  if (result.failed() || slice.empty())
+  if (result.failed())
     return failure();
 
   // Check if all the operations in the slice can be rematerialized.
@@ -955,14 +941,15 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
   return success();
 }
 
-bool LayoutRematerialization::backwardRematerialization() {
+bool LayoutRematerialization::backwardRematerialization(
+    bool disableRematSplitting) {
   bool changed = false;
   // Go through each ConvertLayoutOp.
   SmallVector<ConvertLayoutOp> convertOps;
   funcOp.walk(
       [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
   for (ConvertLayoutOp convertOp : convertOps) {
-    if (!backwardRematerialization(convertOp)) {
+    if (!backwardRematerialization(convertOp, disableRematSplitting)) {
       // If the conversion didn't get removed, consider it for reuse in future
       // backward slices.
       addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
@@ -974,13 +961,13 @@ bool LayoutRematerialization::backwardRematerialization() {
   return changed;
 }
 
-void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast() {
-  // Go through each ConvertLayoutOp.
+void LayoutRematerialization::runHoistConvertPass(
+    std::function<bool(ConvertLayoutOp)> tryHoist) {
   SmallVector<ConvertLayoutOp> convertOps;
   funcOp.walk(
       [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
   for (ConvertLayoutOp convertOp : convertOps) {
-    if (!hoistConvertOnTopOfExtOrBroadcast(convertOp)) {
+    if (!tryHoist(convertOp)) {
       // If the conversion didn't get removed, consider it for reuse in future
       // backward slices.
       addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
@@ -989,19 +976,17 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast() {
   }
 }
 
+void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
+    bool disableRematSplitting) {
+  runHoistConvertPass([&](ConvertLayoutOp convertOp) {
+    return hoistConvertOnTopOfExtOrBroadcast(convertOp, disableRematSplitting);
+  });
+}
+
 void LayoutRematerialization::hoistConvertIntoConditionals() {
-  // Go through each ConvertLayoutOp.
-  SmallVector<ConvertLayoutOp> convertOps;
-  funcOp.walk(
-      [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
-  for (ConvertLayoutOp convertOp : convertOps) {
-    if (!hoistConvertIntoConditionals(convertOp)) {
-      // If the conversion didn't get removed, consider it for reuse in future
-      // backward slices.
-      addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
-                    convertOp.getResult());
-    }
-  }
+  runHoistConvertPass([&](ConvertLayoutOp convertOp) {
+    return hoistConvertIntoConditionals(convertOp);
+  });
 }
 
 static bool isExpensiveMathOp(Operation *op) {
@@ -1072,7 +1057,7 @@ static unsigned getCostFactor(Value result, Attribute rematEncoding) {
 /// newCvtCost.
 bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
                        const DenseMap<Value, Attribute> &layout,
-                       int64_t newCvtCost) {
+                       int64_t newCvtCost, bool disableRematSplitting) {
   // Identify all operations in the slice
   SetVector<Operation *> sliceOps;
   for (Value v : slice) {
@@ -1138,6 +1123,11 @@ bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
     for (auto operand : op->getOperands())
       if (slice.contains(operand))
         nonSliceOnlyValues.insert(operand);
+  }
+
+  if (disableRematSplitting && !nonSliceOnlyValues.empty()) {
+    LDBG("  skipped rematerialization because it would split the slice");
+    return false;
   }
 
   int64_t convertLayoutCost =
@@ -1210,7 +1200,7 @@ bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
 }
 
 bool LayoutRematerialization::backwardRematerialization(
-    ConvertLayoutOp convertOp) {
+    ConvertLayoutOp convertOp, bool disableRematSplitting) {
   // DotOperand is hoisted by hoistDotOperand
   RankedTensorType targetType = convertOp.getType();
   if (isa<DotOperandEncodingAttr>(targetType.getEncoding()))
@@ -1218,17 +1208,6 @@ bool LayoutRematerialization::backwardRematerialization(
   Value oldV = convertOp.getSrc();
   LDBG("check backward remat with source " << oldV << " encoding "
                                            << targetType.getEncoding());
-  // Check to see if there are existing remat'ed values for the pair of oldValue
-  // and encoding. Make sure it dominates the current conversion.
-  Value newV = getRematValue(oldV, targetType.getEncoding());
-  if (newV && domInfo.properlyDominates(newV, convertOp)) {
-    // Replace it with the remat'ed value.
-    convertOp.replaceAllUsesWith(newV);
-    convertOp->erase();
-    LDBG("found remat'ed value" << newV);
-    return true;
-  }
-
   // 1. Take a backward slice of all the tensor dependencies that can be
   // rematerialized.
   SetVector<Value> slice;
@@ -1243,8 +1222,9 @@ bool LayoutRematerialization::backwardRematerialization(
   }
 
   // 2. Determine whether rematerialisation is beneficial.
-  if (!isRematBeneficial(convertOp, slice, layout, /*newCvtCost=*/0)) {
-    LDBG("  skipped rematerialization due to higher cost");
+  if (!isRematBeneficial(convertOp, slice, layout, /*newCvtCost=*/0,
+                         disableRematSplitting)) {
+    LDBG("  skipped rematerialization because it is not beneficial");
     return false;
   }
 
@@ -1260,18 +1240,9 @@ bool LayoutRematerialization::backwardRematerialization(
 }
 
 void LayoutRematerialization::hoistConvertDotOperand() {
-  // Go through each ConvertLayoutOp.
-  SmallVector<ConvertLayoutOp> convertOps;
-  funcOp.walk(
-      [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
-  for (ConvertLayoutOp convertOp : convertOps) {
-    if (!hoistConvertDotOperand(convertOp)) {
-      // If the conversion didn't get removed, consider it for reuse in future
-      // backward slices.
-      addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
-                    convertOp.getResult());
-    }
-  }
+  runHoistConvertPass([&](ConvertLayoutOp convertOp) {
+    return hoistConvertDotOperand(convertOp);
+  });
 }
 
 bool LayoutRematerialization::hoistConvertDotOperand(
@@ -1317,7 +1288,7 @@ bool LayoutRematerialization::hoistConvertDotOperand(
   // threads We do views and elementwise pure ops for now
   auto noDataMovement = [](Operation *op) {
     return (op->hasTrait<OpTrait::Elementwise>() && isMemoryEffectFree(op)) ||
-           isa<BroadcastOp, Fp4ToFpOp, ConvertLayoutOp, UpcastFpOpInterface>(
+           isa<BroadcastOp, Fp4ToFpOp, ConvertLayoutOp, CastFpOpInterface>(
                op) ||
            isView(op);
   };
@@ -1389,7 +1360,7 @@ bool LayoutRematerialization::hoistConvertDotOperand(
 // For convert left we try to hoist them above type extension to reduce the cost
 // of the convert.
 bool LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
-    ConvertLayoutOp convertOp) {
+    ConvertLayoutOp convertOp, bool disableRematSplitting) {
   // DotOperand is hoisted by hoistDotOperand
   RankedTensorType targetType = convertOp.getType();
   if (isa<DotOperandEncodingAttr>(targetType.getEncoding()))
@@ -1400,8 +1371,6 @@ bool LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
             ExpandDimsOp>(op)) {
       return true;
     }
-    if (auto reshapeOp = dyn_cast<ReshapeOp>(op))
-      return reshapeOp.getExpandDimsAxis().has_value();
     if (auto fpToFpOp = dyn_cast<FpToFpOp>(op)) {
       auto srcType = cast<RankedTensorType>(fpToFpOp.getOperand().getType());
       return getElementBitWidth(srcType) <
@@ -1452,7 +1421,8 @@ bool LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     return false;
   int64_t newCvtCost =
       getConvertCost(extOrBroadcastOp->getOperand(0), srcEncoding);
-  if (!isRematBeneficial(convertOp, slice, layout, newCvtCost))
+  if (!isRematBeneficial(convertOp, slice, layout, newCvtCost,
+                         /*disableRematSplitting=*/disableRematSplitting))
     return false;
   // Move the convert before the ext op and rewrite the slice.
   OpBuilder builder(extOrBroadcastOp);
@@ -1592,19 +1562,22 @@ bool LayoutRematerialization::hoistConvertIntoConditionals(
   return true;
 }
 
-bool backwardRematerialization(ModuleOp module) {
+bool backwardRematerialization(ModuleOp module, bool disableRematSplitting) {
   bool changed = false;
   module.walk([&](FuncOp funcOp) {
     LayoutRematerialization layoutRemat(funcOp);
-    changed |= layoutRemat.backwardRematerialization();
+    changed |= layoutRemat.backwardRematerialization(disableRematSplitting);
   });
   return changed;
 }
 
-void hoistConvert(ModuleOp module) {
-  SmallVector<ConvertLayoutOp> convertOps;
-  module.walk([](FuncOp funcOp) {
-    LayoutRematerialization(funcOp).hoistConvertOnTopOfExtOrBroadcast();
+void hoistConvert(ModuleOp module, bool disableRematSplitting) {
+  module.walk([&](FuncOp funcOp) {
+    LayoutRematerialization(funcOp).hoistConvertOnTopOfExtOrBroadcast(
+        disableRematSplitting);
+    if (disableRematSplitting)
+      return;
+
     LayoutRematerialization(funcOp).hoistConvertIntoConditionals();
     LayoutRematerialization(funcOp).hoistConvertDotOperand();
   });
@@ -1615,6 +1588,10 @@ class TritonGPURemoveLayoutConversionsPass
     : public impl::TritonGPURemoveLayoutConversionsBase<
           TritonGPURemoveLayoutConversionsPass> {
 public:
+  using impl::TritonGPURemoveLayoutConversionsBase<
+      TritonGPURemoveLayoutConversionsPass>::
+      TritonGPURemoveLayoutConversionsBase;
+
   // Cleanup convert ops.
   void cleanupConvertOps() {
     MLIRContext *context = &getContext();
@@ -1656,7 +1633,7 @@ public:
       changed = false;
       // 2. For remaining convert ops, try to rematerialize the slice of
       // producer operation to avoid having to convert.
-      changed = backwardRematerialization(m);
+      changed = backwardRematerialization(m, disableRematSplitting);
       LLVM_DEBUG({
         DBGS() << "Module after backward remat:\n";
         m.dump();
@@ -1665,9 +1642,10 @@ public:
       // Cleanup dummy converts created during backward remat.
       cleanupConvertOps();
     } while (changed);
-    // 3. For remaining converts, try to hoist them above cast generating larger
-    // size types in order to reduce the cost of the convert op.
-    hoistConvert(m);
+
+    // 3. For remaining converts, try to hoist them above cast generating
+    // larger size types in order to reduce the cost of the convert op.
+    hoistConvert(m, disableRematSplitting);
     LLVM_DEBUG({
       DBGS() << "Module after hoisting converts:\n";
       m.dump();

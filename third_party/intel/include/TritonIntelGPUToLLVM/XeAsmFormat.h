@@ -6,6 +6,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace mlir {
@@ -315,6 +316,11 @@ struct XeInstrExecution {
   bool onlyAttachMLIRArgs{};
 };
 
+struct XeVISAInstr : public XeInstrBase<XeVISAInstr> {
+  using XeInstrBase<XeVISAInstr>::XeInstrBase;
+
+  static std::optional<std::string> getTypeName(Type scalarTy);
+};
 } // namespace triton
 } // namespace mlir
 

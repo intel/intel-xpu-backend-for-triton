@@ -162,7 +162,7 @@ llvm.func @triton_gen.sub_group_block_write(%ptr: !llvm.ptr<1>, %val : i32) {
 
 // -----
 
-// CHECK: llvm.func spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi(!llvm.ptr<1>, i1, i32) -> i32 attributes {no_unwind, will_return}
+// CHECK: llvm.func spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi(!llvm.ptr<1>, i1, i32) -> i32 attributes {memory_effects = #llvm.memory_effects<other = none, argMem = read, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return}
 llvm.func @triton_gen.predicated_load(%ptr : !llvm.ptr<1>, %predicate : i1, %default_value : i32) {
   // CHECK:     llvm.func @triton_gen.predicated_load(%arg0: !llvm.ptr<1>, %arg1: i1, %arg2: i32) {
   // CHECK:       %0 = llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi(%arg0, %arg1, %arg2) {{.*}} : (!llvm.ptr<1>, i1, i32) -> i32
@@ -343,4 +343,14 @@ llvm.func @triton_gen.sub_group_bitcast_shuffle(%val : vector<4xi8>) -> vector<2
   // CHECK:         llvm.return [[RES]]
   %0 = triton_gen.sub_group_bitcast_shuffle %val : vector<4xi8> -> vector<2xi16>
   llvm.return %0 : vector<2xi16>
+}
+
+// -----
+
+llvm.func @triton_gen.sub_group_gather_load(%addrs: vector<32xi64>, %preds: vector<32xi1>) -> vector<1xi64> {
+  // CHECK-LABEL: llvm.func @triton_gen.sub_group_gather_load(
+  // CHECK: [[RET:%.*]] = llvm.inline_asm{{.*}}"{{.*}}lsc_load.ugm{{.*}}", "=rw,rw.u,rw.u" {{.*}} : (vector<32xi64>, vector<32xi1>) -> vector<1xi64>
+  // CHECK: llvm.return [[RET]] : vector<1xi64>
+  %0 = triton_gen.sub_group_gather_load %addrs, %preds : (vector<32xi64>, vector<32xi1>) -> vector<1xi64>
+  llvm.return %0 : vector<1xi64>
 }

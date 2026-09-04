@@ -2,6 +2,9 @@
 
 set -euo pipefail
 
+# Provides the `pip` wrapper (pip or `uv pip`).
+source "$(dirname "$0")/pip-utils.sh"
+
 # Select what to install.
 BUILD_PYTORCH=false
 BUILD_LATEST=false
@@ -185,7 +188,7 @@ if [ "$BUILD_PYTORCH" = false ]; then
     --dir $TEMP_DIR
   cd $TEMP_DIR/$WHEEL_PATTERN
   echo "**** Install PyTorch and pinned dependencies from nightly builds. ****"
-  pip install torch*
+  pip install torch*.whl
   rm -rf $TEMP_DIR
   exit 0
 fi

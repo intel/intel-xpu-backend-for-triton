@@ -149,8 +149,10 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // -----
 
 // Comparisons between loop-carried accumulators and loaded values must NOT be
-// folded. The accumulator starts at INT64_MAX but gets updated each iteration,
-// so "accumulator < loaded_value" is not always false despite the initial value.
+// folded to a constant. The accumulator starts at INT64_MAX but gets updated
+// each iteration, so "accumulator < loaded_value" is not always false despite
+// the initial value. The cmpi/select pair is instead canonicalized to
+// arith.minsi, which preserves the loop-carried dependency.
 // This is a regression test for a bug where getTripCount returned 0 due to
 // std::optional<bool> misuse, preventing iter_arg range propagation.
 module attributes {"ttg.num-warps" = 4 : i32} {
@@ -175,5 +177,5 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 // CHECK-LABEL:   tt.func @loop_carried_cmpi_not_folded
 // CHECK:           scf.for
-// CHECK:             arith.cmpi slt
+// CHECK:             arith.minsi
 // CHECK:           tt.return

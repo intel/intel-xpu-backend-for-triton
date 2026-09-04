@@ -441,6 +441,7 @@ class compilation_knobs(base_knobs):
     # Instrumentation mode is checked on every run, which is expensive.
     # We cache the value here to avoid the expensive check on every run.
     instrumentation_mode: str = env_str("TRITON_INSTRUMENTATION_MODE", "").get()
+    fpsan_homomorphic_casts: env_bool = env_bool("TRITON_FPSAN_HOMOMORPHIC_CASTS")
     listener: Union[CompilationListener, None] = None
 
 
@@ -592,9 +593,11 @@ class intel_knobs(base_knobs):
     gen_native_code: env_bool = env_bool("TRITON_XPU_GEN_NATIVE_CODE", False)
     opt_reduction_locality: env_bool = env_bool("TRITON_INTEL_OPTIMIZE_REDUCTION_LOCALITY", False)
     disable_igc_opt: env_bool = env_bool("TRITON_INTEL_DISABLE_IGC_OPT", False)
-    disable_annotate_cache_control: env_bool = env_bool("TRITON_INTEL_DISABLE_ANNOTATE_CACHE_CONTROL", False)
+    # Enable the AnnotateCacheControl pass by default everywhere except Windows,
+    # where it triggers E2E performance regressions (see issue #7495).
+    disable_annotate_cache_control: env_bool = env_bool("TRITON_INTEL_DISABLE_ANNOTATE_CACHE_CONTROL", os.name == "nt")
     enable_code_sinking: env_bool = env_bool("TRITON_INTEL_ENABLE_CODE_SINKING", False)
-    disable_canonicalize_pointers: env_bool = env_bool("TRITON_INTEL_DISABLE_CANONICALIZE_POINTERS", False)
+    disable_canonicalize_pointers: env_bool = env_bool("TRITON_INTEL_DISABLE_CANONICALIZE_POINTERS", True)
     enable_loop_distribution: env_bool = env_bool("TRITON_INTEL_ENABLE_LOOP_DISTRIBUTION", False)
     enable_sub_32_dpas: env_bool = env_bool("TRITON_INTEL_ENABLE_DPAS_FOR_WARP_SIZE_32", False)
     fast_math: _env_fast_math = _env_fast_math()
@@ -612,6 +615,10 @@ class intel_knobs(base_knobs):
     device_arch: env_opt_str = env_opt_str("TRITON_INTEL_DEVICE_ARCH")
     # SYCL compiler Triton needs to be compatible with when generating kernel launchers
     sycl_compiler: env_opt_str = env_opt_str("TRITON_INTEL_SYCL_COMPILER")
+    # Allocate shared (work-group) memory dynamically, as an extra kernel argument bound
+    # with a `sycl::local_accessor`, instead of statically in the module. Legacy behavior,
+    # kept as an escape hatch for driver issues with module scope work-group memory.
+    dynamic_shared_memory: env_bool = env_bool("TRITON_INTEL_DYNAMIC_SHARED_MEMORY", False)
 
 
 class amd_knobs(base_knobs):
@@ -627,6 +634,7 @@ class amd_knobs(base_knobs):
     use_block_pingpong: env_opt_bool = env_opt_bool("TRITON_HIP_USE_BLOCK_PINGPONG")
     use_in_thread_transpose: env_opt_bool = env_opt_bool("TRITON_HIP_USE_IN_THREAD_TRANSPOSE")
     use_async_copy: env_opt_bool = env_opt_bool("TRITON_HIP_USE_ASYNC_COPY")
+    use_coexec_scheduler: env_opt_bool = env_opt_bool("TRITON_HIP_USE_COEXEC_SCHEDULER")
     use_expert_scheduling: env_opt_bool = env_opt_bool("TRITON_HIP_USE_EXPERT_SCHEDULING")
 
     scalarize_packed_fops: env_bool = env_bool("AMDGCN_SCALARIZE_PACKED_FOPS")
@@ -647,8 +655,15 @@ class proton_knobs(base_knobs):
     cupti_lib_blackwell_dir: env_str = env_str(
         "TRITON_CUPTI_LIB_BLACKWELL_PATH",
         str(pathlib.Path(__file__).parent.absolute() / "backends" / "nvidia" / "lib" / "cupti-blackwell"))
+    hsa_runtime_path: env_opt_str = env_opt_str("TRITON_HSA_RUNTIME_PATH")
+    hsa_runtime_library: env_opt_str = env_opt_str("TRITON_HSA_RUNTIME_LIBRARY")
     rocprofiler_sdk_include_path: env_opt_str = env_opt_str("TRITON_ROCPROFILER_SDK_INCLUDE_PATH")
     rocprofiler_sdk_lib_path: env_opt_str = env_opt_str("TRITON_ROCPROFILER_SDK_LIB_PATH")
+    rocprofiler_sdk_library: env_opt_str = env_opt_str("TRITON_ROCPROFILER_SDK_LIBRARY")
+    roctracer_lib_path: env_opt_str = env_opt_str("TRITON_ROCTRACER_LIB_PATH")
+    roctracer_library: env_opt_str = env_opt_str("TRITON_ROCTRACER_LIBRARY")
+    roctx_lib_path: env_opt_str = env_opt_str("TRITON_ROCTX_LIB_PATH")
+    roctx_library: env_str = env_str("TRITON_ROCTX_LIBRARY", "libroctx64.so")
     profile_buffer_size: env_int = env_int("TRITON_PROFILE_BUFFER_SIZE", 64 * 1024 * 1024)
     profile_metric_buffer_size: env_int = env_int("TRITON_PROFILE_METRIC_BUFFER_SIZE", 64 * 1024 * 1024)
     enable_nvtx: env_bool = env_bool("TRITON_ENABLE_NVTX", True)

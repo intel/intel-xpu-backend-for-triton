@@ -124,10 +124,12 @@ def TTIG_BroadcastOp : TTIG_Op<"broadcast", [Pure, SameOperandsAndResultElementT
   }];
 }
 
-class IsLocalPointerToElementType<string pointer, string value, string summary> :
+// `tt.ptr` no longer spells the workgroup (SLM) address space: PtrAddrSpace
+// only has global/descriptor/constant, and adding a case would break the
+// exhaustive switches every backend has over it. Match the pointee type only.
+class IsPointerToElementType<string pointer, string value, string summary> :
     TypesMatchWith<summary, value, pointer, [{
-      ::mlir::triton::PointerType::get( }] # ElementType<"_self">.result # [{,
-          static_cast<unsigned>(::mlir::triton::TritonGEN::kWorkgroup))
+      ::mlir::triton::PointerType::get( }] # ElementType<"_self">.result # [{)
     }]>;
 
 // NOTE: This operation shouldn't be needed, as simply modifying the encoding
@@ -136,7 +138,7 @@ class IsLocalPointerToElementType<string pointer, string value, string summary> 
 def TTIG_SubGroupTransposeOp
     : TTIG_Op<"sub_group_transpose",
         [AllTypesMatch<["src", "res"]>,
-         IsLocalPointerToElementType<"local_buffer", "src",
+         IsPointerToElementType<"local_buffer", "src",
              "local_buffer can be used to store src in local memory">]> {
   let summary = "Sub-group elements transpose operation";
      let description = [{
@@ -223,6 +225,15 @@ def TTIG_Subgroup2DBlockLoadOp : TTIG_Op<"2d_block_load"> {
     descriptor indices) that are combined with per-sub-tile linear layout
     offsets during LLVM lowering.
 
+    `batch_strides` carries the element stride of each leading (batch)
+    dimension of the result tensor, i.e. one value per dimension in
+    `[0, rank - 2)`, outermost first. The 2D block I/O tile only ever covers
+    the inner two dimensions, so the LLVM lowering walks the batch dimensions
+    of the result layout and folds `offset * batch_strides[dim]` into the base
+    pointer. These strides cannot be derived from `base_width` / `base_height`
+    / `base_pitch` (those describe a single 2D surface only), so they must be
+    supplied by the producer of this op.
+
     When `pad_nan` is set, the LLVM lowering builds boundary masks from
     the surface dimensions and fills out-of-bounds elements with NaN.
     Otherwise, the hardware zero-fills out-of-bounds elements.
@@ -236,6 +247,7 @@ def TTIG_Subgroup2DBlockLoadOp : TTIG_Op<"2d_block_load"> {
     I32:$base_pitch,
     I32:$offset_x,
     I32:$offset_y,
+    Variadic<I64>:$batch_strides,
     OptionalAttr<UnitAttr>:$pad_nan,
     TTIG_BlockIOMode:$memory_layout
   );
@@ -244,6 +256,7 @@ def TTIG_Subgroup2DBlockLoadOp : TTIG_Op<"2d_block_load"> {
   let assemblyFormat = [{
     $base_ptr `,` $base_width `,` $base_height `,` $base_pitch
     `[` $offset_x `,` $offset_y `]`
+    (`batch_strides` `[` $batch_strides^ `]`)?
     `{` $memory_layout (`,` `pad_nan` $pad_nan^)? `}`
     attr-dict `:` type($base_ptr) `->` type($result)
   }];

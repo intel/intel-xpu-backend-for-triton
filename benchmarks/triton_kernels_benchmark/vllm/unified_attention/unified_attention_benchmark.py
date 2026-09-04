@@ -296,7 +296,7 @@ def get_unified_attention_benchmark(
             line_names=list(providers.values()),
             styles=[('green', '-'), ('blue', '--'), ('orange', ':')],
             ylabel=['GB/s', 'TFlops'],
-            plot_name='unified-attention-performance' + ('-td' if is_td_patched else ''),
+            plot_name='unified-attention-performance' + ('-fp8' if is_fp8 else '') + ('-td' if is_td_patched else ''),
             args={},
         ))
     def benchmark(q_heads, k_heads, head_size, qdtype, seq_lens, sliding_window, soft_cap, num_blocks, block_size,
@@ -470,6 +470,16 @@ def get_unified_attention_benchmark(
         return (gbps(mean_ms), gbps(max_ms), gbps(min_ms)), (tflops(mean_ms), tflops(max_ms), tflops(min_ms)), cv
 
     return benchmark
+
+
+def get_benchmark(providers_filter: Optional[list[str]] = None, is_fp8=False, is_td_patched=None):
+    if is_td_patched is None:
+        is_td_patched = os.getenv('TD_PATCHED', '0') == '1'
+    return get_unified_attention_benchmark(
+        providers_filter=providers_filter,
+        is_fp8=is_fp8,
+        is_td_patched=is_td_patched,
+    )
 
 
 if __name__ == '__main__':

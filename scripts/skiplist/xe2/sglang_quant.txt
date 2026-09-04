@@ -1,0 +1,2 @@
+# UR_RESULT_ERROR_OUT_OF_RESOURCES on B580 (small shapes wedge the device): https://github.com/intel/intel-xpu-backend-for-triton/issues/7779
+registered/quant/test_awq_dequant.py::TestAWQTriton::test_gemm

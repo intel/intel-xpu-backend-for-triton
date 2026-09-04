@@ -25,7 +25,7 @@ def is_pingpong_schedule_enabled(arch, use_async_copy):
 
 
 def is_in_thread_transpose_enabled(arch):
-    return (arch == "gfx942" or "gfx110" in arch or "gfx115" in arch or "gfx120" in arch) \
+    return (arch == "gfx942" or "gfx110" in arch or "gfx115" in arch or "gfx117" in arch or "gfx120" in arch) \
         if knobs.amd.use_in_thread_transpose is None else knobs.amd.use_in_thread_transpose
 
 
@@ -33,16 +33,16 @@ def is_async_copy_enabled(arch):
     return (arch in ["gfx950", "gfx1250"]) if knobs.amd.use_async_copy is None else knobs.amd.use_async_copy
 
 
-def is_coexec_scheduler_supported(arch):
+def is_coexec_scheduler_enabled(arch):
+    if knobs.amd.use_coexec_scheduler is not None:
+        return knobs.amd.use_coexec_scheduler
     return arch in ["gfx1250"]
 
 
 def is_expert_scheduling_enabled(arch):
-    if arch not in ["gfx1250"]:
-        return False
-    if knobs.amd.use_expert_scheduling is None:
-        return True
-    return knobs.amd.use_expert_scheduling
+    if knobs.amd.use_expert_scheduling is not None:
+        return knobs.amd.use_expert_scheduling
+    return arch in ["gfx1250"]
 
 
 def is_fpsan_supported(arch):
@@ -51,10 +51,6 @@ def is_fpsan_supported(arch):
 
 def is_consan_supported(arch):
     return arch in ["gfx1250"]
-
-
-def disable_real_true16_feature(arch):
-    return '-real-true16' if arch.startswith('gfx11') else ''
 
 
 def _parse_llvm_fn_attrs(attrs):
@@ -95,6 +91,7 @@ class HIPOptions:
     max_num_imprecise_acc_default: int = 0
     backend_name: str = 'hip'
     instrumentation_mode: str = ""
+    fpsan_homomorphic_casts: bool = False
 
     # The following option provides hints to the AMDGPU backend regarding instruction scheduling
     # for all `tt.dot` operations in a kernel. Experimental; right now no effect.
@@ -140,6 +137,13 @@ class HIPBackend(BaseBackend):
         return target.backend == 'hip'
 
     def __init__(self, target: GPUTarget) -> None:
+        if not isinstance(target.warp_size, int):
+            try:
+                warp_size = int(target.warp_size)
+            except ValueError:
+                raise ValueError(f"HIP backend expects a numeric warp_size, got '{target.warp_size}'")
+            target = GPUTarget(target.backend, target.arch, warp_size)
+
         super().__init__(target)
         assert isinstance(target.arch, str)
         self.binary_ext = "hsaco"
@@ -314,7 +318,7 @@ class HIPBackend(BaseBackend):
         passes.common.add_symbol_dce(pm)
         if options.instrumentation_mode == "fpsan" and is_fpsan_supported(options.arch):
             amd.passes.ttgpuir.add_fp_sanitizer(pm)
-            passes.ttgpuir.add_fp_sanitizer(pm)
+            passes.ttgpuir.add_fp_sanitizer(pm, options.fpsan_homomorphic_casts)
         pm.run(mod, 'make_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
         return mod
@@ -332,12 +336,14 @@ class HIPBackend(BaseBackend):
         passes.gluon.add_canonicalizer(pm)
         passes.ttir.add_loop_unroll(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
+        if options.instrumentation_mode == "fpsan" and is_fpsan_supported(options.arch):
+            passes.common.add_symbol_dce(pm)
         amd.passes.ttgpuir.add_warp_pipeline(pm)
         passes.ttgpuir.add_allocate_warp_groups(pm)
 
         if options.instrumentation_mode == "fpsan" and is_fpsan_supported(options.arch):
             amd.passes.ttgpuir.add_fp_sanitizer(pm)
-            passes.ttgpuir.add_fp_sanitizer(pm)
+            passes.ttgpuir.add_fp_sanitizer(pm, options.fpsan_homomorphic_casts)
 
         pm.run(mod, 'gluon_to_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
@@ -455,18 +461,15 @@ class HIPBackend(BaseBackend):
             total_warps_num = total_num_warps
         kernel_fn.add_fn_attr("amdgpu-flat-work-group-size", f"1,{total_warps_num*options.warp_size}")
         kernel_fn.add_fn_attr("uniform-work-group-size", "true")
-        # LLVM AMDGPU backend supports the attribute "amdgpu-waves-per-eu"="<min>[, <max>]".
-        # This attribute may be attached to a kernel function definition and is an optimization hint.
-        # <min> parameter specifies the requested minimum number of waves per EU, and optional <max> parameter
-        # specifies the requested maximum number of waves per EU (must be >= <min> if specified).
-        # If <max> is omitted, then there is no restriction on the maximum number of waves per EU other than
-        # the one dictated by the hardware for which the kernel is compiled. Passing 0, 0 as <min>, <max>
-        # implies the default behavior (no limits).
-        # Specifying N, N forces LLVM to focus on a single register count, simplifies some heuristics
-        # and may improve scheduling.
-        kernel_fn.add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu}, {options.waves_per_eu}")
+        # "amdgpu-waves-per-eu"="<min>[,<max>]" allows controlling the minimal and (optional)
+        # maximal number of waves per SIMD. If <max> is omitted, then no restriction other than
+        # whatever allowed by the hardware for occupancy.
+        # Specifying "N,N" forces LLVM to focus on a single register budget, simplifies some
+        # heuristics and may improve scheduling.
+        if options.waves_per_eu != 0:
+            kernel_fn.add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu},{options.waves_per_eu}")
 
-        if is_coexec_scheduler_supported(options.arch) and options.num_warps <= 4:
+        if is_coexec_scheduler_enabled(options.arch) and options.num_warps <= 4:
             kernel_fn.add_fn_attr("amdgpu-sched-strategy", "coexec")
 
         denormal_mode = "preserve-sign" if options.allow_flush_denorm else "ieee"
@@ -525,6 +528,9 @@ class HIPBackend(BaseBackend):
         metadata["profile_scratch_align"] = src.get_int_attr("ttg.profile_scratch_memory_alignment") or 1
 
         amd.cleanup_bitcode_metadata(llvm_mod)
+        # Add Triton and LLVM versions to the dumped IR.
+        if knobs.compilation.dump_ir:
+            llvm.add_version_info(llvm_mod)
         # Disable inlining of print related functions,
         # because inlining of these function could slow down compilation significantly
         amd.disable_print_inline(llvm_mod)
@@ -540,9 +546,11 @@ class HIPBackend(BaseBackend):
         metadata["name"] = names[0]
         # llvm -> hsaco
         flags = []
+        if options.arch in ["gfx942", "gfx950"]:
+            flags.append("amdgpu-use-amdgpu-trackers")
         if is_expert_scheduling_enabled(options.arch):
             flags.append("amdgpu-expert-scheduling-mode")
-        features = disable_real_true16_feature(options.arch)
+        features = ''
         ir_hash = hashlib.sha256(src.encode("utf-8")).hexdigest()
         dump_file_id = names[0] + '_' + ir_hash
         _ = llvm.translate_to_mir(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
@@ -568,8 +576,6 @@ class HIPBackend(BaseBackend):
         target_features = []
         if knobs.compilation.enable_asan:
             target_features.append('+xnack')
-        if true16 := disable_real_true16_feature(options.arch):
-            target_features.append(true16)
         hsaco = amd.assemble_amdgcn(src, options.arch, ','.join(target_features))
         with tempfile.NamedTemporaryFile() as tmp_out:
             with tempfile.NamedTemporaryFile() as tmp_in:

@@ -502,3 +502,107 @@ module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion
     tt.return
   }
 }
+
+// -----
+
+// CHECK: #[[$DPAS4:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 2], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
+#mma4 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 2], repCluster = [2, 2], A = [16, 16], B = [16, 32], C = [16, 32]}>
+module attributes {ttig.min_sg_size = 16 : i32, ttig.support_bfloat16_conversion, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_2d_block_io, ttig.target_arch = "spir64", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
+  tt.func @_attn_fwd_other_use_in_preceding_loop(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: f32, %arg4: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg5: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    // CHECK-LABEL:   tt.func @_attn_fwd_other_use_in_preceding_loop
+    // COM: A single Q load feeds a user nested in a loop that PRECEDES the dot
+    // COM: loop. This is the shape of causal attention, where one Q load feeds a
+    // COM: dot in each of two sibling loops. The load is still rematerialized
+    // COM: inside the dot loop, but the user in the preceding loop must keep
+    // COM: using the original load: a copy placed after the dot loop would not
+    // COM: dominate it, which used to produce invalid IR ("operand #0 does not
+    // COM: dominate this use").
+    %c8192_i64 = arith.constant 8192 : i64
+    %c128_i32 = arith.constant 128 : i32
+    %c128_i64 = arith.constant 128 : i64
+    %c64_i64 = arith.constant 64 : i64
+    %c1_i64 = arith.constant 1 : i64
+    %c0_i32 = arith.constant 0 : i32
+    %cst = arith.constant 1.44269502 : f32
+    %c64_i32 = arith.constant 64 : i32
+    %cst_0 = arith.constant dense<1.000000e+00> : tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma4}>>
+    %cst_1 = arith.constant dense<0xFF800000> : tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma4}>>
+    %cst_2 = arith.constant dense<0.000000e+00> : tensor<512x128xf32, #mma4>
+    %0 = tt.get_program_id x : i32
+    %1 = tt.get_program_id z : i32
+    %2 = arith.extsi %1 : i32 to i64
+    %3 = arith.muli %2, %c8192_i64 : i64
+    %4 = tt.addptr %arg0, %3 : !tt.ptr<f16>, i64
+    %5 = arith.muli %0, %c128_i32 : i32
+    // Q descriptor (row_major)
+    %6 = tt.make_tensor_descriptor %4, [%c128_i32, %c64_i32], [%c64_i64, %c1_i64] : <f16>, <512x128xf16>
+    %7 = tt.addptr %arg2, %3 : !tt.ptr<f16>, i64
+    // V descriptor (row_major)
+    %8 = tt.make_tensor_descriptor %7, [%c128_i32, %c64_i32], [%c64_i64, %c1_i64] : <f16>, <128x128xf16>
+    %9 = tt.addptr %arg1, %3 : !tt.ptr<f16>, i64
+    // K descriptor (row_major descriptor, loaded with column_major attribute for transpose)
+    %10 = tt.make_tensor_descriptor %9, [%c128_i32, %c64_i32], [%c64_i64, %c1_i64] : <f16>, <128x128xf16>
+    %11 = tt.addptr %arg5, %3 : !tt.ptr<f32>, i64
+    // Output descriptor (row_major): shape [128, 64], strides [64, 1]
+    %12 = tt.make_tensor_descriptor %11, [%c128_i32, %c64_i32], [%c64_i64, %c1_i64] : <f32>, <512x128xf32>
+    %13 = arith.mulf %arg3, %cst : f32
+    %scratch = tt.make_tensor_descriptor %11, [%c128_i32, %c64_i32], [%c64_i64, %c1_i64] : <f32>, <512x128xf32>
+    %14 = tt.descriptor_load %6[%5, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<512x128xf16> -> tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma4, kWidth = 1}>>
+    %15 = tt.splat %13 : f32 -> tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma4}>>
+    %16 = tt.splat %13 : f32 -> tensor<512x128xf32, #mma4>
+    // CHECK:      ttig.descriptor_prefetch %{{.*}} : !tt.tensordesc<512x128xf16>
+    // COM: The original load is kept, for the user in the preceding loop.
+    // CHECK:      %[[ORIG:.*]] = tt.descriptor_load %{{.*}} : !tt.tensordesc<512x128xf16>
+    // CHECK:      scf.for
+    // CHECK:        ttg.convert_layout %[[ORIG]]
+    scf.for %arg11 = %c0_i32 to %c128_i32 step %c64_i32  : i32 {
+      %cvt = ttg.convert_layout %14 : tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma4, kWidth = 1}>> -> tensor<512x128xf16, #mma4>
+      %ext = arith.extf %cvt : tensor<512x128xf16, #mma4> to tensor<512x128xf32, #mma4>
+      tt.descriptor_store %scratch[%5, %c0_i32], %ext : !tt.tensordesc<512x128xf32>, tensor<512x128xf32, #mma4>
+    }
+    // COM: The dot loop still gets its own copy of the load ...
+    // CHECK:      scf.for
+    // CHECK:        tt.descriptor_load %{{.*}} : !tt.tensordesc<512x128xf16>
+    // COM: ... and no copy is emitted after the loops.
+    // CHECK-NOT:  tt.descriptor_load %{{.*}} : !tt.tensordesc<512x128xf16>
+    %17:4 = scf.for %arg6 = %c0_i32 to %c128_i32 step %c64_i32 iter_args(%arg7 = %cst_0, %arg8 = %cst_2, %arg9 = %cst_1, %arg10 = %c0_i32) -> (tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma4}>>, tensor<512x128xf32, #mma4>, tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma4}>>, i32)  : i32 {
+      %21 = tt.descriptor_load %10[%arg10, %c0_i32] {ttig.block_io = "column_major"} : !tt.tensordesc<128x128xf16> -> tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma4, kWidth = 2}>>
+      %22 = tt.dot %14, %21, %cst_2, inputPrecision = tf32 : tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma4, kWidth = 1}>> * tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma4, kWidth = 2}>> -> tensor<512x128xf32, #mma4>
+      %23 = "tt.reduce"(%22) <{axis = 1 : i32}> ({
+      ^bb0(%arg12: f32, %arg13: f32):
+        %45 = arith.maxnumf %arg12, %arg13 : f32
+        tt.reduce.return %45 : f32
+      }) : (tensor<512x128xf32, #mma4>) -> tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma4}>>
+      %24 = arith.mulf %23, %15 : tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma4}>>
+      %25 = arith.maxnumf %arg9, %24 : tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma4}>>
+      %26 = arith.mulf %22, %16 : tensor<512x128xf32, #mma4>
+      %27 = tt.expand_dims %25 {axis = 1 : i32} : tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma4}>> -> tensor<512x1xf32, #mma4>
+      %28 = tt.broadcast %27 : tensor<512x1xf32, #mma4> -> tensor<512x128xf32, #mma4>
+      %29 = arith.subf %26, %28 : tensor<512x128xf32, #mma4>
+      %30 = math.exp2 %29 : tensor<512x128xf32, #mma4>
+      %31 = "tt.reduce"(%30) <{axis = 1 : i32}> ({
+      ^bb0(%arg12: f32, %arg13: f32):
+        %45 = arith.addf %arg12, %arg13 : f32
+        tt.reduce.return %45 : f32
+      }) : (tensor<512x128xf32, #mma4>) -> tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma4}>>
+      %32 = arith.subf %arg9, %25 : tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma4}>>
+      %33 = math.exp2 %32 : tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma4}>>
+      %34 = arith.mulf %arg7, %33 : tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma4}>>
+      %35 = arith.addf %34, %31 : tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma4}>>
+      %36 = tt.expand_dims %33 {axis = 1 : i32} : tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma4}>> -> tensor<512x1xf32, #mma4>
+      %37 = tt.broadcast %36 : tensor<512x1xf32, #mma4> -> tensor<512x128xf32, #mma4>
+      %38 = arith.mulf %arg8, %37 : tensor<512x128xf32, #mma4>
+      %39 = tt.descriptor_load %8[%arg10, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<128x128xf16> -> tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma4, kWidth = 2}>>
+      %40 = arith.truncf %30 : tensor<512x128xf32, #mma4> to tensor<512x128xf16, #mma4>
+      %41 = ttg.convert_layout %40 : tensor<512x128xf16, #mma4> -> tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma4, kWidth = 1}>>
+      %42 = tt.dot %41, %39, %38, inputPrecision = tf32 : tensor<512x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma4, kWidth = 1}>> * tensor<128x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma4, kWidth = 2}>> -> tensor<512x128xf32, #mma4>
+      %43 = arith.addi %arg10, %c64_i32 : i32
+      scf.yield %35, %42, %25, %43 : tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma4}>>, tensor<512x128xf32, #mma4>, tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma4}>>, i32
+    }
+    %18 = tt.expand_dims %17#0 {axis = 1 : i32} : tensor<512xf32, #ttg.slice<{dim = 1, parent = #mma4}>> -> tensor<512x1xf32, #mma4>
+    %19 = tt.broadcast %18 : tensor<512x1xf32, #mma4> -> tensor<512x128xf32, #mma4>
+    %20 = arith.divf %17#1, %19 : tensor<512x128xf32, #mma4>
+    tt.descriptor_store %12[%5, %c0_i32], %20 : !tt.tensordesc<512x128xf32>, tensor<512x128xf32, #mma4>
+    tt.return
+  }
+}

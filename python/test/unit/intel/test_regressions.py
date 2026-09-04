@@ -1,6 +1,96 @@
 import pathlib
 
+import pytest
 import triton
+import triton.language as tl
+from triton.runtime.errors import OutOfResources
+
+
+def test_regression_7875(device, tmp_path: pathlib.Path):
+    """Shared memory is allocated statically (`global_smem` sized after
+    `ttg.shared`, see #7606), so a kernel whose local_alloc exceeds the
+    device's shared memory capacity must be rejected as `OutOfResources`
+    at compile time by `triton.compile`, so the autotuner can skip the
+    offending config instead of crashing later at kernel launch/module
+    build time with an opaque
+    `torch._C._StaticXpuLauncher._load_kernel: L0 runtime error: 70000004`
+    (`ZE_RESULT_ERROR_MODULE_BUILD_FAILURE`), as happened in
+    https://github.com/intel/intel-xpu-backend-for-triton/issues/7875 (a
+    regression from #7606 surfaced via PyTorch Inductor's
+    `test_large_block_sizes_dynamic_shapes_xpu`, which deliberately
+    autotunes into an oversized-shared-memory config expecting it to be
+    skipped rather than crash).
+    """
+    ir = """
+    #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+    #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+    #smem = #ttg.shared_memory
+    module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
+      tt.func public @kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
+        %cst = arith.constant dense<0.000000e+00> : tensor<1024x1024xf32, #blocked>
+        %0 = ttg.local_alloc %cst : (tensor<1024x1024xf32, #blocked>) -> !ttg.memdesc<1024x1024xf32, #shared, #smem>
+        %1 = ttg.local_load %0 : !ttg.memdesc<1024x1024xf32, #shared, #smem> -> tensor<1024x1024xf32, #blocked>
+        %2 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x1024x!tt.ptr<f32>, #blocked>
+        tt.store %2, %1 : tensor<1024x1024x!tt.ptr<f32>, #blocked>
+        tt.return
+      }
+    }
+    """
+
+    temp_file = tmp_path / "test_regression_7875.ttgir"
+    temp_file.write_text(ir)
+
+    with pytest.raises(OutOfResources, match="shared memory"):
+        triton.compile(str(temp_file))
+
+
+def test_regression_7925(device):
+    from torch._inductor.runtime import triton_helpers
+
+    @triton.jit
+    def _triton_helper_fn_add0(arg0_0, arg1_0):
+        tmp0 = arg0_0 + arg1_0
+        return tmp0
+
+    @triton.jit
+    def triton_per_fused_cumsum_le_sort_sub_0(in_ptr0, out_ptr3, out_ptr4, xnumel, r0_numel, XBLOCK: tl.constexpr):
+        xnumel = 2
+        r0_numel = 16
+        R0_BLOCK: tl.constexpr = 16
+        rnumel = r0_numel
+        xoffset = tl.program_id(0) * XBLOCK
+        xindex = xoffset + tl.arange(0, XBLOCK)[:, None]
+        xmask = xindex < xnumel
+        r0_index = tl.arange(0, R0_BLOCK)[None, :]
+        r0_mask = r0_index < r0_numel
+        r0_1 = r0_index
+        x0 = xindex
+        tmp0 = tl.load(in_ptr0 + (r0_1 + 16 * x0), r0_mask & xmask, eviction_policy='evict_first', other=0.0)
+        tmp1 = (r0_1).to(tl.int16)
+        tmp2 = (tmp1).to(tl.int16)
+        tmp3 = tl.broadcast_to(tmp0, [XBLOCK, R0_BLOCK])
+        tmp4 = tl.broadcast_to(tmp2, [XBLOCK, R0_BLOCK])
+        tmp5, tmp6, = triton_helpers.sort_with_index(tmp3, tmp4, rnumel, 1, stable=False, descending=False)
+        tmp7 = tmp5.to(tl.float32)
+        tmp8 = tl.broadcast_to(tmp7, [XBLOCK, R0_BLOCK])
+        tmp9, = tl.associative_scan((tmp8, ), 1, _triton_helper_fn_add0)
+        tmp10 = tmp9 - tmp5
+        tmp11 = tl.full([1, 1], 0.1, tl.float32)
+        tmp12 = tmp10 <= tmp11
+        tmp13 = tmp6.to(tl.int64)
+        tl.store(out_ptr3 + (r0_1 + 16 * x0), tmp12, r0_mask & xmask)
+        tl.store(out_ptr4 + (r0_1 + 16 * x0), tmp13, r0_mask & xmask)
+
+    signature = {
+        'in_ptr0': '*fp32', 'out_ptr3': '*i1', 'out_ptr4': '*i64', 'xnumel': 'i32', 'r0_numel': 'i32', 'XBLOCK':
+        'constexpr'
+    }
+    constexprs = {'XBLOCK': 1}
+    attrs = {(0, ): [['tt.divisibility', 16]], (1, ): [['tt.divisibility', 16]], (2, ): [['tt.divisibility', 16]],
+             (4, ): [['tt.divisibility', 16]]}
+    ast = triton.compiler.ASTSource(fn=triton_per_fused_cumsum_le_sort_sub_0, signature=signature,
+                                    constexprs=constexprs, attrs=attrs)
+    triton.compile(ast, options={"num_ctas": 1, "num_stages": 1, "num_warps": 2})
 
 
 def test_regression_4441(device, tmp_path: pathlib.Path):

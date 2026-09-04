@@ -13,6 +13,7 @@
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/MathExtras.h"
 #include <limits>
 #include <optional>
 
@@ -181,7 +182,7 @@ private:
     // For descriptor loads, the 2D block I/O tile must use only the inner 2
     // dims. Reject if rowDim or colDim falls in a batch dimension.
     if (rank > 2) {
-      auto sizeInfo = ttgi::getBlockIOTileSize<true>(
+      auto sizeInfo = ttgi::getBlockIOLoadTileSize(
           llEncoding, contiguousDim, elemSizeInBits,
           /*maskAxisInfo=*/nullptr, oneMatrixPerLoadForBT);
       int innerDimStart = static_cast<int>(rank - 2);
@@ -203,7 +204,7 @@ private:
     // per iteration. Struct layout: { shapes[rank], strides[rank], base_ptr }.
     Type i64Ty = builder.getI64Type();
     Type ptrType =
-        tt::PointerType::get(descType.getBlockType().getElementType(), 1);
+        tt::PointerType::get(descType.getBlockType().getElementType());
     SmallVector<Value> shapes(descRank);
     SmallVector<Value> strides(descRank);
     for (unsigned d = 0; d < descRank; ++d) {
@@ -302,13 +303,21 @@ private:
     Value offsetX = indices[descRank - 1];
     Value offsetY = indices[descRank - 2];
 
+    // The batch *indices* were folded into base_ptr above, but the result
+    // layout also walks the batch dimensions during LLVM lowering and needs
+    // their real strides, which are not derivable from the 2D surface params.
+    // Result dim d is descriptor dim d + (descRank - rank).
+    SmallVector<Value> batchStrides;
+    for (unsigned d = 0; d + 2 < rank; ++d)
+      batchStrides.push_back(strides[d + (descRank - rank)]);
+
     // Determine padding mode from the descriptor.
     bool padNan = padding == tt::PaddingOption::PAD_NAN;
     UnitAttr padNanAttr = padNan ? builder.getUnitAttr() : UnitAttr();
 
     auto blockLoadOp = ttgi::Subgroup2DBlockLoadOp::create(
         builder, loc, op.getType(), basePtr, baseWidth, baseHeight, basePitch,
-        offsetX, offsetY, padNanAttr,
+        offsetX, offsetY, batchStrides, padNanAttr,
         ttgi::BlockIOModeAttr::get(builder.getContext(), memLayout));
 
     // Propagate one_matrix_per_load attribute if present.
@@ -346,8 +355,9 @@ private:
     if (op.getMask())
       maskAxisInfo = axisInfoAnalysis.getAxisInfo(op.getMask());
 
-    // For 1D->2D reshape loads, skip tile validation and use the stride
-    // attribute directly for pitch.
+    // Whether this load was annotated by the 1D→2D reshape in
+    // MaterializeBlockPointer. Used for pitch and base-height computation
+    // below.
     bool has1DReshapeStride =
         op->hasAttr(ttgi::TritonIntelGPUDialect::getBlockIOStrideAttrName());
 
@@ -359,31 +369,26 @@ private:
     int tileHeight = -1;
     int numPackedVals = -1;
     bool isTranspose = false;
-    if (has1DReshapeStride) {
-      // 1D reshape: conventional dims, no tile validation needed.
-      rowDim = memoryRowMajor ? rank - 2 : rank - 1;
-      colDim = memoryRowMajor ? rank - 1 : rank - 2;
-    } else {
-      Attribute encoding = tensorTy.getEncoding();
-      LinearLayout llEncoding =
-          cast<ttg::DistributedEncodingTrait>(encoding).toLinearLayout(
-              tensorTy.getShape());
-      if (!ttgi::validate2DBlockLoadTile(llEncoding, contiguousDim,
-                                         elemSizeInBits, tensorTy,
-                                         oneMatrixPerLoadForBT, maskAxisInfo)) {
-        LDBG("Tile validation failed for load: " << *op);
-        return;
-      }
-      auto sizeInfo = ttgi::getBlockIOTileSize<true>(
-          llEncoding, contiguousDim, elemSizeInBits, maskAxisInfo,
-          oneMatrixPerLoadForBT);
-      rowDim = sizeInfo.rowDim;
-      colDim = sizeInfo.colDim;
-      tileWidth = sizeInfo.tileWidth;
-      tileHeight = sizeInfo.tileHeight;
-      isTranspose = sizeInfo.transpose;
-      numPackedVals = sizeInfo.numElemPerPackedVal;
+
+    Attribute encoding = tensorTy.getEncoding();
+    LinearLayout llEncoding =
+        cast<ttg::DistributedEncodingTrait>(encoding).toLinearLayout(
+            tensorTy.getShape());
+    if (!ttgi::validate2DBlockLoadTile(llEncoding, contiguousDim,
+                                       elemSizeInBits, tensorTy,
+                                       oneMatrixPerLoadForBT, maskAxisInfo)) {
+      LDBG("Tile validation failed for load: " << *op);
+      return;
     }
+    auto sizeInfo =
+        ttgi::getBlockIOLoadTileSize(llEncoding, contiguousDim, elemSizeInBits,
+                                     maskAxisInfo, oneMatrixPerLoadForBT);
+    rowDim = sizeInfo.rowDim;
+    colDim = sizeInfo.colDim;
+    tileWidth = sizeInfo.tileWidth;
+    tileHeight = sizeInfo.tileHeight;
+    isTranspose = sizeInfo.transpose;
+    numPackedVals = sizeInfo.numElemPerPackedVal;
 
     // For the 2D block load surface, the pitch dimension is always the
     // non-contiguous memory direction. For transposed loads, rowDim is the
@@ -429,12 +434,18 @@ private:
 
     if (!has1DReshapeStride) {
       if (isBroadcast) {
-        // Use the full surface row width (in bytes) as the baseline pitch.
-        // Lowering may widen base_width (e.g. due to alignment), so ensure the
-        // dummy pitch doesn't end up smaller than base_width.
+        // For broadcast (height=1) loads, pitch is a dummy value (no row
+        // advancement), but the HW still enforces pitch >= base_width.
+        // Downstream lowering widens base_width by up to 63 bytes for 64-byte
+        // pointer alignment compensation. Account for that here so the
+        // constraint is never violated at runtime.
         int64_t fullRowBytes =
             tensorTy.getDimSize(surfaceWidthDim) * elemSizeInBits / 8;
-        pitch = std::max(MIN_PITCH, fullRowBytes);
+        constexpr int64_t MAX_ALIGN_OVERHEAD = 63;
+        int64_t maxAdjustedWidth = fullRowBytes + MAX_ALIGN_OVERHEAD;
+        // Pitch must be a multiple of 16 bytes.
+        pitch =
+            llvm::alignTo(std::max(MIN_PITCH, maxAdjustedWidth), int64_t(16));
       } else {
         int64_t pitchStride = getStride(strideAnalysis, op.getPtr(), pitchDim);
         if (pitchStride < 0) {

@@ -140,3 +140,4 @@ from . import nvidia
 from . import amd
 from . import intel
 from . import extra
+from . import fpsan

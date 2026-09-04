@@ -61,12 +61,30 @@ function agama_version {
         powershell -Command '(Get-WmiObject Win32_VideoController | where {$_.VideoProcessor -like "*Intel*" }).DriverVersion'
         return
     fi
+    local pkg version ocloc_version ocloc_upstream ocloc_build
     if dpkg-query --show libigc2 &> /dev/null; then
-        dpkg-query --show --showformat='${version}\n' libigc2 | sed 's/.*-\(.*\)~.*/\1/'
+        pkg=libigc2
     elif dpkg-query --show libigc1 &> /dev/null; then
-        dpkg-query --show --showformat='${version}\n' libigc1 | sed 's/.*-\(.*\)~.*/\1/'
+        pkg=libigc1
     else
         echo "Not Installed"
+        return
+    fi
+    version="$(dpkg-query --show --showformat='${version}\n' "$pkg")"
+
+    if dpkg-query --show intel-ocloc &> /dev/null; then
+        ocloc_version="$(dpkg-query --show --showformat='${version}\n' intel-ocloc)"
+        ocloc_upstream="${ocloc_version%%-*}"
+        ocloc_build="$(echo "$ocloc_upstream" | cut -d. -f3)"
+    fi
+
+    if [[ ${ocloc_build:-} =~ ^[0-9]+$ ]] && ((ocloc_build > 38308)); then
+        # New scheme: the ocloc "<build>.<revision>", e.g. "38646.6".
+        echo "$ocloc_upstream" | cut -d. -f3-
+    else
+        # Old scheme: build number embedded in the libigc Debian revision,
+        # e.g. "1.0.17537.24-1032~22.04" -> "1032".
+        echo "$version" | sed 's/.*-\(.*\)~.*/\1/'
     fi
 }
 
@@ -113,6 +131,12 @@ else
     export TORCH_VERSION="Not installed"
 fi
 
+if [ -f /opt/intel/installed.txt ]; then
+    export DLE_VERSION=$(grep -oP 'deep-learning-essentials-\K[0-9.]+' /opt/intel/installed.txt)
+else
+    export DLE_VERSION="Not installed"
+fi
+
 if icpx --version &> /dev/null; then
     export COMPILER_VERSION=$(icpx --version | grep "DPC++/C++ Compiler" | sed 's/.*(\(.*\))/\1/' | cut -d '.' -f 1-3)
 else
@@ -125,6 +149,7 @@ if [[ $QUIET = false ]]; then
     echo "AGAMA_VERSION=$AGAMA_VERSION"
     echo "GPU_DEVICE=$GPU_DEVICE"
     echo "TORCH_VERSION=$TORCH_VERSION"
+    echo "DLE_VERSION=$DLE_VERSION"
     echo "COMPILER_VERSION=$COMPILER_VERSION"
     if [[ ${BENCHMARKING_METHOD:-} ]]; then
         echo "BENCHMARKING_METHOD=$BENCHMARKING_METHOD"

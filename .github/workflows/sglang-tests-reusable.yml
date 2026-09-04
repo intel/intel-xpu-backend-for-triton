@@ -1,0 +1,271 @@
+name: SGLang tests reusable workflow
+
+on:
+  workflow_call:
+    inputs:
+      runner_label:
+        description: Runner label, keep empty for default
+        type: string
+        default: ""
+      sglang_pin:
+        description: SGLang pin (commit hash), keep empty for default
+        type: string
+        default: ""
+      skip_list:
+        description: Skip list directory override
+        type: string
+        default: ""
+      python_version:
+        description: Python version
+        type: string
+        default: "3.12"
+      ignore_errors:
+        description: Ignore test errors
+        type: boolean
+        default: false
+      use_pyenv_python:
+        description: Use Python built with pyenv
+        type: boolean
+        default: true
+
+permissions: read-all
+
+env:
+  PYTHON_VERSION: ${{ inputs.python_version }}
+  # Increase this value to reset cache
+  PIP_CACHE_NUMBER: 1
+  HF_TOKEN: ${{ secrets.HF_TOKEN || '' }}
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  setup:
+    name: Setup
+    runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1100') || format('["linux", "{0}"]', inputs.runner_label)) }}
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+    outputs:
+      test-triton-command: ${{ steps.test-triton.outputs.command }}
+    steps:
+      - name: Print inputs
+        run: |
+          cat <<EOF
+          ${{ toJSON(inputs) }}
+          EOF
+
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Load pip cache
+        id: pip-cache
+        uses: ./.github/actions/load
+        with:
+          path: $HOME/.cache/pip
+          key: pip-${{ inputs.python_version }}-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.PIP_CACHE_NUMBER }}
+
+      - name: Install Python
+        uses: ./.github/actions/setup-python
+        with:
+          python_version: ${{ inputs.python_version }}
+          use_pyenv: ${{ inputs.use_pyenv_python }}
+
+      - name: Identify Python version
+        run: |
+          PYTHON_VERSION="$(python -c 'import sys; print(f"{sys.version_info[0]}.{ sys.version_info[1]}")')"
+          echo "PYTHON_VERSION=$PYTHON_VERSION" | tee -a $GITHUB_ENV
+
+      - name: Install Python build dependencies
+        run: |
+          pip install cmake
+          pip install -r python/requirements.txt
+
+      - name: Setup PyTorch
+        uses: ./.github/actions/setup-pytorch
+
+      - name: Build Triton wheel
+        run: |
+          python -m build --wheel --no-isolation
+          ls -lh dist/*.whl
+
+      - name: Upload Triton wheel
+        uses: actions/upload-artifact@v7
+        with:
+          name: triton-sglang-${{ inputs.python_version }}
+          path: dist/*.whl
+
+      - name: Install Triton from wheel
+        run: |
+          pip install dist/*.whl
+
+      - name: Set test-triton command line
+        id: test-triton
+        run: |
+          skiplist="$GITHUB_WORKSPACE/scripts/skiplist/default"
+          if [[ -n "${{ inputs.skip_list }}" ]]; then
+            skiplist="$GITHUB_WORKSPACE/scripts/skiplist/${{ inputs.skip_list }}"
+          fi
+          TRITON_TEST_CMD="bash -x scripts/test-triton.sh --skip-pip-install --skip-pytorch-install --reports-dir $GITHUB_WORKSPACE/reports --skip-list $skiplist ${{ inputs.ignore_errors && '--ignore-errors' || '' }}"
+          echo "command=$TRITON_TEST_CMD" | tee -a $GITHUB_OUTPUT
+
+      - name: Install test dependencies
+        run: |
+          pip install -r scripts/requirements-test.txt
+
+      - name: Save pip cache
+        if: ${{ steps.pip-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.pip-cache.outputs.path }}
+          dest: ${{ steps.pip-cache.outputs.dest }}
+
+  tests:
+    name: ${{ matrix.suite }}
+    needs: setup
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - sglang-attention
+          - sglang-quant
+          - sglang-moe
+          - sglang-mamba
+          - sglang-rest
+    runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1100') || format('["linux", "{0}"]', inputs.runner_label)) }}
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Override SGLang pin
+        if: ${{ inputs.sglang_pin }}
+        run: |
+          echo "${{ inputs.sglang_pin }}" > scripts/sglang/sglang-pin.txt
+          echo "Overriding SGLang pin to: ${{ inputs.sglang_pin }}"
+
+      - name: Load pip cache
+        id: pip-cache
+        uses: ./.github/actions/load
+        with:
+          path: $HOME/.cache/pip
+          key: pip-${{ inputs.python_version }}-${{ matrix.suite }}-${{ hashFiles('pyproject.toml', 'setup.py') }}-${{ env.PIP_CACHE_NUMBER }}
+
+      - name: Download Triton wheel
+        uses: actions/download-artifact@v8
+        with:
+          name: triton-sglang-${{ inputs.python_version }}
+          path: dist/
+
+      - name: Install Python
+        uses: ./.github/actions/setup-python
+        with:
+          python_version: ${{ inputs.python_version }}
+          use_pyenv: ${{ inputs.use_pyenv_python }}
+
+      - name: Identify Python version
+        run: |
+          PYTHON_VERSION="$(python -c 'import sys; print(f"{sys.version_info[0]}.{ sys.version_info[1]}")')"
+          echo "PYTHON_VERSION=$PYTHON_VERSION" | tee -a $GITHUB_ENV
+
+      - name: Install Python build dependencies
+        run: |
+          pip install cmake
+
+      - name: Setup PyTorch
+        id: setup-pytorch
+        uses: ./.github/actions/setup-pytorch
+
+      # sglang imports torchvision.io at module level and install-sglang.sh strips
+      # torch* from its pyproject, so it has to be installed here, from the PyTorch pin.
+      - name: Identify torchvision pin
+        run: |
+          echo "TORCHVISION_COMMIT_ID=$(<pytorch/.github/ci_commit_pins/vision.txt)" | tee -a "$GITHUB_ENV"
+
+      - name: Install torchvision package
+        uses: ./.github/actions/install-dependency
+        with:
+          package: torchvision
+          repository: pytorch/vision
+          ref: ${{ env.TORCHVISION_COMMIT_ID }}
+          extra-cache-key: ${{ steps.setup-pytorch.outputs.pytorch_cache_key }}
+
+      - name: Install Triton from wheel
+        id: install
+        run: |
+          pip install dist/*.whl
+          python -c 'import triton; print(triton.__version__)'
+
+      - name: Install test dependencies
+        run: |
+          pip install -r scripts/requirements-test.txt
+
+      - name: Set test-triton command line
+        run: |
+          echo "TRITON_TEST_CMD=${{ needs.setup.outputs.test-triton-command }}" | tee -a $GITHUB_ENV
+
+      - name: Create reports dir
+        run: |
+          mkdir -p reports
+
+      - name: Run attention tests
+        if: ${{ matrix.suite == 'sglang-attention' && steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --sglang-attention
+
+      - name: Run quant tests
+        if: ${{ matrix.suite == 'sglang-quant' && steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --sglang-quant
+
+      - name: Run moe tests
+        if: ${{ matrix.suite == 'sglang-moe' && steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --sglang-moe
+
+      - name: Run mamba tests
+        if: ${{ matrix.suite == 'sglang-mamba' && steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --sglang-mamba
+
+      # sglang-rest groups short suites: gdn, kda, spec
+      - name: Run gdn tests
+        if: ${{ matrix.suite == 'sglang-rest' && steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --sglang-gdn
+
+      - name: Run kda tests
+        if: ${{ matrix.suite == 'sglang-rest' && steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --sglang-kda
+
+      - name: Run spec tests
+        if: ${{ matrix.suite == 'sglang-rest' && steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --sglang-spec
+
+      - name: Save pip cache
+        if: ${{ steps.pip-cache.outputs.status == 'miss' }}
+        uses: ./.github/actions/save
+        with:
+          path: ${{ steps.pip-cache.outputs.path }}
+          dest: ${{ steps.pip-cache.outputs.dest }}
+
+      - name: Upload test report
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports-${{ matrix.suite }}
+          path: reports
+
+  reports:
+    needs: tests
+    if: always()
+    uses: ./.github/workflows/reports-reusable.yml
+    with:
+      artifact_pattern: test-reports-sglang-*
+      python_version: ${{ inputs.python_version }}
+      runner_label: ${{ inputs.runner_label }}
+      use_pyenv_python: ${{ inputs.use_pyenv_python }}

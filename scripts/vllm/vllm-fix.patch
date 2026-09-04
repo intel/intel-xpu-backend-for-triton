@@ -1,5 +1,18 @@
+diff --git a/tests/kernels/attention/test_cascade_flash_attn.py b/tests/kernels/attention/test_cascade_flash_attn.py
+index 80c5c853de..e6ef4c1833 100755
+--- a/tests/kernels/attention/test_cascade_flash_attn.py
++++ b/tests/kernels/attention/test_cascade_flash_attn.py
+@@ -21,6 +21,8 @@ except ImportError:
+             "vllm_flash_attn is not supported for vLLM on ROCm.",
+             allow_module_level=True,
+         )
++    is_fa_version_supported = lambda _: False
++    fa_version_unsupported_reason = lambda _: "vllm_flash_attn is not installed"
+ 
+ NUM_HEADS = [(4, 4), (8, 2), (16, 2)]
+ HEAD_SIZES = [128, 192, 256]
 diff --git a/tests/kernels/mamba/test_mamba_mixer2.py b/tests/kernels/mamba/test_mamba_mixer2.py
-index 973e7885c..e474275f5 100644
+index 973e7885c6..e474275f57 100644
 --- a/tests/kernels/mamba/test_mamba_mixer2.py
 +++ b/tests/kernels/mamba/test_mamba_mixer2.py
 @@ -12,6 +12,7 @@ from vllm.distributed.parallel_state import (
@@ -44,7 +57,7 @@ index 973e7885c..e474275f5 100644
          mixer_single_gpu = Mixer2RMSNormGated(
              full_hidden_size=hidden_size,
 diff --git a/tests/kernels/mamba/utils.py b/tests/kernels/mamba/utils.py
-index fb8a4b0a2..7ab490aaf 100644
+index b82c4d82c3..483672927a 100644
 --- a/tests/kernels/mamba/utils.py
 +++ b/tests/kernels/mamba/utils.py
 @@ -66,10 +66,9 @@ def selective_state_update_ref(
@@ -61,11 +74,84 @@ index fb8a4b0a2..7ab490aaf 100644
      if D is not None:
          out += (x * D).to(out.dtype)
      out = (out if z is None else out * F.silu(z)).to(x.dtype)
+diff --git a/tests/kernels/moe/test_moe.py b/tests/kernels/moe/test_moe.py
+index 26e0370a3e..b7d097959c 100644
+--- a/tests/kernels/moe/test_moe.py
++++ b/tests/kernels/moe/test_moe.py
+@@ -380,6 +380,20 @@ def test_fused_moe(
+ 
+     score = torch.randn((m, e), device=DEVICE_TYPE, dtype=dtype)
+ 
++    # Random BF16 scores can tie at the top-k boundary. Tied experts are
++    # equally valid, but top-k implementations may select different IDs,
++    # causing false test failures. Reroll only rows with boundary ties.
++    for _ in range(10):
++        routing_scores = torch.softmax(score, dim=-1, dtype=torch.float32)
++        topk_plus_one = torch.topk(routing_scores, topk + 1, dim=-1).values
++        boundary_ties = topk_plus_one[:, topk - 1] == topk_plus_one[:, topk]
++        if not torch.any(boundary_ties):
++            break
++
++        score[boundary_ties] = torch.randn_like(score[boundary_ties])
++    else:
++        raise AssertionError("Failed to generate scores without top-k boundary ties")
++
+     if ep_size > 1:
+         local_e = e // ep_size
+         e_ids = torch.randint(0, e, (local_e,), device=DEVICE_TYPE, dtype=torch.int32)
+@@ -1014,7 +1028,10 @@ class MarlinMoEWeightData:
+     ),
+     marlin_moe_generate_valid_test_cases(),
+ )
+-@pytest.mark.skipif(current_platform.is_rocm(), reason="Skip for rocm")
++@pytest.mark.skipif(
++    current_platform.is_rocm() or current_platform.is_xpu(),
++    reason="Skip for ROCm and XPU",
++)
+ @pytest.mark.usefixtures("default_vllm_config")
+ def test_fused_marlin_moe(
+     a_type: ScalarType,
+@@ -1145,7 +1162,10 @@ def test_fused_marlin_moe(
+ 
+ 
+ @pytest.mark.flaky(reruns=2)
+-@pytest.mark.skipif(current_platform.is_rocm(), reason="Skip for rocm")
++@pytest.mark.skipif(
++    current_platform.is_rocm() or current_platform.is_xpu(),
++    reason="Skip for ROCm and XPU",
++)
+ @pytest.mark.usefixtures("default_vllm_config")
+ @pytest.mark.parametrize("m", [1, 256])
+ def test_fused_marlin_moe_with_bias(m):
+@@ -1218,7 +1238,10 @@ def test_fused_marlin_moe_with_bias(m):
+ 
+ 
+ @pytest.mark.flaky(reruns=2)
+-@pytest.mark.skipif(current_platform.is_rocm(), reason="Skip for rocm")
++@pytest.mark.skipif(
++    current_platform.is_rocm() or current_platform.is_xpu(),
++    reason="Skip for ROCm and XPU",
++)
+ @pytest.mark.usefixtures("default_vllm_config")
+ @pytest.mark.parametrize("m", [1, 64, 256])
+ @pytest.mark.parametrize("n,k", [(1024, 1024), (2048, 2048)])
+@@ -1686,7 +1709,10 @@ def _batched_fused_marlin_moe_cases() -> list[Any]:
+     ("m,n,k,e,topk,max_tokens_per_batch,dtype,quant_dtype,input_type,atol"),
+     _batched_fused_marlin_moe_cases(),
+ )
+-@pytest.mark.skipif(current_platform.is_rocm(), reason="Skip for rocm")
++@pytest.mark.skipif(
++    current_platform.is_rocm() or current_platform.is_xpu(),
++    reason="Skip for ROCm and XPU",
++)
+ def test_batched_fused_marlin_moe(
+     m: int,
+     n: int,
 diff --git a/tests/utils.py b/tests/utils.py
-index 2a3bdb91f..c74587d5f 100644
+index 71f9d4b669..c2a2924524 100644
 --- a/tests/utils.py
 +++ b/tests/utils.py
-@@ -1896,7 +1896,12 @@ def spawn_new_process_for_each_test(f: Callable[_P, None]) -> Callable[_P, None]
+@@ -1923,7 +1923,12 @@ def spawn_new_process_for_each_test(f: Callable[_P, None]) -> Callable[_P, None]
  
              repo_root = str(VLLM_PATH.resolve())
              env = os.environ.copy()
@@ -79,25 +165,139 @@ index 2a3bdb91f..c74587d5f 100644
              env[_SPAWN_CHILD_ENV] = "1"
  
              result = subprocess.run(
-diff --git a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
-index 21bda8e17..e7f11e934 100644
---- a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
-+++ b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
-@@ -618,7 +618,7 @@ class NaiveBatchedExperts(mk.FusedMoEExpertsModular):
-             # Indexing expert_num_tokens doesn't work w/cudagraphs or inductor
-             if (
-                 torch.compiler.is_compiling()
--                or torch.cuda.is_current_stream_capturing()
-+                or (torch.cuda.is_available() and torch.cuda.is_current_stream_capturing())
-             ):
-                 num = hidden_states.shape[1]
-             else:
-@@ -659,7 +659,7 @@ def batched_moe_kernel_quantize_input(
-     per_act_token_quant: bool,
-     block_shape: list[int] | None = None,
- ) -> tuple[torch.Tensor, torch.Tensor | None]:
--    if torch.compiler.is_compiling() or torch.cuda.is_current_stream_capturing():
-+    if torch.compiler.is_compiling() or (torch.cuda.is_available() and torch.cuda.is_current_stream_capturing()):
-         # Note: this does a bunch of extra work because expert_num_tokens is
-         # ignored but it does support torch.compile + cudagraphs.
-         hidden_dim = A.size(-1)
+diff --git a/vllm/model_executor/warmup/minimax_m3_msa_warmup.py b/vllm/model_executor/warmup/minimax_m3_msa_warmup.py
+index 18bf142491..c47cbf80ff 100644
+--- a/vllm/model_executor/warmup/minimax_m3_msa_warmup.py
++++ b/vllm/model_executor/warmup/minimax_m3_msa_warmup.py
+@@ -4,7 +4,6 @@
+ from typing import TYPE_CHECKING
+ 
+ from vllm.logger import init_logger
+-from vllm.models.minimax_m3.nvidia.model import MiniMaxM3SparseAttention
+ from vllm.platforms import current_platform
+ from vllm.tracing import instrument
+ 
+@@ -16,6 +15,13 @@ logger = init_logger(__name__)
+ 
+ @instrument(span_name="MiniMax M3 MSA warmup")
+ def minimax_m3_msa_warmup(worker: "Worker") -> None:
++    if not (
++        current_platform.is_cuda() and current_platform.is_device_capability_family(100)
++    ):
++        return
++
++    from vllm.models.minimax_m3.nvidia.model import MiniMaxM3SparseAttention
++
+     sparse_module = next(
+         (
+             module
+@@ -26,10 +32,6 @@ def minimax_m3_msa_warmup(worker: "Worker") -> None:
+     )
+     if sparse_module is None:
+         return
+-    if not (
+-        current_platform.is_cuda() and current_platform.is_device_capability_family(100)
+-    ):
+-        return
+ 
+     logger.info("Warming up MiniMax M3 MSA kernels.")
+ 
+diff --git a/vllm/models/kimi_k3/nvidia/ops/recoverssm.py b/vllm/models/kimi_k3/nvidia/ops/recoverssm.py
+index c603ec7ed1..26375a877f 100644
+--- a/vllm/models/kimi_k3/nvidia/ops/recoverssm.py
++++ b/vllm/models/kimi_k3/nvidia/ops/recoverssm.py
+@@ -855,7 +855,7 @@ class KDARecoverSSMCommitContext:
+         def _base_addrs(tensors: Sequence[torch.Tensor]) -> torch.Tensor:
+             return torch.tensor(
+                 [tensor.data_ptr() for tensor in tensors],
+-                dtype=torch.int64,
++                dtype=torch.uint64,
+                 device=device,
+             )
+ 
+diff --git a/vllm/third_party/flash_linear_attention/ops/kda.py b/vllm/third_party/flash_linear_attention/ops/kda.py
+index 1701cd47ac..4d47e5d020 100644
+--- a/vllm/third_party/flash_linear_attention/ops/kda.py
++++ b/vllm/third_party/flash_linear_attention/ops/kda.py
+@@ -455,79 +455,8 @@ def rms_norm_gated(
+     return y if not prenorm else (y, residual_out.reshape(x_shape_og))
+ 
+ 
+-@CustomOp.register("fused_rms_norm_gated")
+-class FusedRMSNormGated(CustomOp):
+-    def __init__(
+-        self,
+-        hidden_size: int,
+-        elementwise_affine: bool = True,
+-        eps: float = 1e-5,
+-        activation: str = "swish",
+-        device: torch.device | None = None,
+-        dtype: torch.dtype | None = None,
+-    ) -> None:
+-        factory_kwargs = {"device": device, "dtype": dtype}
+-        super().__init__()
+-
+-        self.hidden_size = hidden_size
+-        self.elementwise_affine = elementwise_affine
+-        self.eps = eps
+-        self.activation = activation
+-
+-        if self.activation not in ["swish", "silu", "sigmoid"]:
+-            raise ValueError(f"Unsupported activation: {self.activation}")
+-
+-        if elementwise_affine:
+-            self.weight = nn.Parameter(torch.empty(hidden_size, **factory_kwargs))
+-        else:
+-            self.register_parameter("weight", None)
+-        self.register_parameter("bias", None)
+-
+-    def forward_native(
+-        self,
+-        x: torch.Tensor,
+-        g: torch.Tensor,
+-        residual: torch.Tensor | None = None,
+-        prenorm: bool = False,
+-        residual_in_fp32: bool = False,
+-    ) -> torch.Tensor:
+-        """Decomposed PyTorch ops for torch.compile/inductor fusion."""
+-        # TODO(https://github.com/vllm-project/vllm/issues/36175): implement
+-        # native residual/prenorm path and unify with RMSNormGated.
+-        # For now, fall back to the triton kernel.
+-        if residual is not None or prenorm:
+-            return self.forward_cuda(x, g, residual, prenorm, residual_in_fp32)
+-        x_float = x.float()
+-        variance = x_float.pow(2).mean(dim=-1, keepdim=True)
+-        x_normed = x_float * torch.rsqrt(variance + self.eps)
+-        if self.weight is not None:
+-            x_normed = x_normed * self.weight.float()
+-        g_float = g.float()
+-        if self.activation in ("swish", "silu"):
+-            out = x_normed * g_float * torch.sigmoid(g_float)
+-        else:  # sigmoid
+-            out = x_normed * torch.sigmoid(g_float)
+-        return out.to(x.dtype)
+-
+-    def forward_cuda(
+-        self,
+-        x: torch.Tensor,
+-        g: torch.Tensor,
+-        residual: torch.Tensor | None = None,
+-        prenorm: bool = False,
+-        residual_in_fp32: bool = False,
+-    ) -> torch.Tensor:
+-        return rms_norm_gated(
+-            x,
+-            g,
+-            self.weight,
+-            self.bias,
+-            self.activation,
+-            residual=residual,
+-            eps=self.eps,
+-            prenorm=prenorm,
+-            residual_in_fp32=residual_in_fp32,
+-        )
++# Re-export to avoid registering "fused_rms_norm_gated" twice.
++from .fused_norm_gate import FusedRMSNormGated  # noqa: E402
+ 
+ 
+ @triton.heuristics({"IS_VARLEN": lambda args: args["cu_seqlens"] is not None})

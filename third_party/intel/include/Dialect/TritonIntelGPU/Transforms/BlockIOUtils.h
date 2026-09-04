@@ -49,23 +49,11 @@ struct BlockIOTileSizeInfo {
   }
 };
 
-/// Compute the 2D block I/O tile shape from a LinearLayout.
-/// Returns BlockIOTileSizeInfo::unknown() if the layout does not support
-/// 2D block I/O.
-template <bool isLoad>
-BlockIOTileSizeInfo
-getBlockIOTileSize(const LinearLayout &ll, unsigned memContiguousDim,
-                   unsigned elemSizeInBits, AxisInfo *maskAxisInfo,
-                   bool oneMatrixPerLoadForBT);
-
-// Explicit instantiation declarations.
-extern template BlockIOTileSizeInfo
-getBlockIOTileSize<true>(const LinearLayout &, unsigned, unsigned, AxisInfo *,
-                         bool);
-extern template BlockIOTileSizeInfo
-getBlockIOTileSize<false>(const LinearLayout &, unsigned, unsigned, AxisInfo *,
-                          bool);
-
+BlockIOTileSizeInfo getBlockIOLoadTileSize(const LinearLayout &, unsigned,
+                                           unsigned, AxisInfo *, bool);
+BlockIOTileSizeInfo getBlockIOPrefetchTileSize(const LinearLayout &, unsigned,
+                                               unsigned, AxisInfo *,
+                                               bool allow256Bytes);
 /// Return the tensor dimension along which consecutive lanes (the fastest-
 /// varying lane bit) advance in `ll` -- the dimension the hardware vectorizes
 /// for 2D block I/O. This is the dimension getBlockIOTileSize uses to decide
@@ -90,7 +78,7 @@ DpasEncodingAttr getDpasLayout(RankedTensorType tensorTy);
 /// and the LLVM lowering (to produce the actual mapping).
 FailureOr<LinearLayout> computeTransposeShuffleMapping(
     RankedTensorType tensorType, const LinearLayout &regMapping,
-    int64_t numElemsPerLoad, unsigned numPackedVals, unsigned tileHeight,
+    int64_t numElemsPerLoad, const BlockIOTileSizeInfo &sizeInfo,
     unsigned threadsPerWarp, bool hasDPASOperandType, MLIRContext *ctx);
 
 /// Check whether the packed element size and tile width satisfy the
