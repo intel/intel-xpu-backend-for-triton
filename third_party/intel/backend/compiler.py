@@ -594,6 +594,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             intel.passes.ttgpuir.add_remove_layout_conversions(pm)
             passes.common.add_canonicalizer(pm)
             passes.common.add_cse(pm)
+
+        intel.passes.ttgpuir.add_empty_analysis(pm)
+        intel.passes.ttgpuir.add_remove_layout_conversions(pm)
+
         pm.run(mod, 'make_ttgir')
         return mod
 
