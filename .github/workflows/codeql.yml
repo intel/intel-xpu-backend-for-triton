@@ -50,6 +50,24 @@ jobs:
         build-mode: ${{ matrix.build-mode }}
         # If you wish to specify custom queries, you can do so here or in a config file.
         # queries: security-extended,security-and-quality
+        config: |
+          paths-ignore:
+            - '**/third_party/nvidia/**'
+            - '**/third_party/amd/**'
+            - '**/third_party/proton/**'
+            - '**/SPIRVToLLVMTranslator/**'
+            - '**/lib/Dialect/Triton/**'
+            - '**/lib/Dialect/TritonGPU/**'
+            - '**/lib/Dialect/TritonNvidiaGPU/**'
+            - '**/lib/Dialect/NVGPU/**'
+            - '**/lib/Analysis/**'
+            - '**/lib/Conversion/TritonGPUToLLVM/**'
+            - '**/lib/Conversion/TritonToTritonGPU/**'
+            - '**/include/triton/Dialect/**'
+            - '**/include/triton/Tools/**'
+            - '**/include/triton/Conversion/TritonGPUToLLVM/**'
+            - '**/unittest/**'
+            - '**/test/lib/**'
 
     # Traced build: runs AFTER init, BEFORE analyze, only on the manual (c-cpp) leg.
     - name: Setup Python
