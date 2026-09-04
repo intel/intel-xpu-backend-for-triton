@@ -552,6 +552,8 @@ struct LoadStoreConversionBase {
      * "cg" -> L1UC_L3WB (Cache at global level, not L1)
      * "cs" -> L1S_L3S (Cache streaming at all levels)
      * "wt" -> L1WT_L3WT (Cache write-through at all levels)
+     * "ca" -> L1WB_L3WB (Cache at all levels)
+     * "cv" -> L1UC_L3UC (Bypass cache at all levels)
      **/
     switch (cacheModifier) {
     case CacheModifier::NONE:
@@ -564,9 +566,14 @@ struct LoadStoreConversionBase {
       return TritonGEN::StoreCacheControl::L1S_L3S;
     case CacheModifier::WT:
       return TritonGEN::StoreCacheControl::L1WT_L3WT;
-    default:
-      llvm_unreachable("invalid cache modifier for StoreOp");
+    case CacheModifier::CA:
+      return TritonGEN::StoreCacheControl::L1WB_L3WB;
+    case CacheModifier::CV:
+      // Reconciles with the plain-store arm which maps cv to !nontemporal
+      // (IGC lowers to LSC .uc.uc = L1UC_L3UC).
+      return TritonGEN::StoreCacheControl::L1UC_L3UC;
     }
+    llvm_unreachable("invalid cache modifier for StoreOp");
   }
 
   template <typename OpType,
@@ -595,21 +602,32 @@ struct LoadStoreConversionBase {
       // `MD_nontemporal` kind. The predicated path is immune because its
       // carrier is a call, which InstCombine never retypes.
       //
-      // So a plain load leaves both modifiers unannotated and runs at the
-      // hardware default (`.ca.ca`). Cache modifiers are performance hints, so
-      // caching more than asked is always safe, and it measures fastest of the
-      // available options on the workload above. Revisit if LLVM starts
-      // preserving unknown metadata across load retyping.
+      // So a plain load or store leaves both modifiers unannotated. A plain
+      // load then runs at the hardware default (`.ca.ca`); a plain store runs
+      // at the platform store default, which is not `.ca.ca` and whose policy
+      // is not established here. Cache modifiers are performance hints, so
+      // caching more than asked is always safe, and for loads it measures
+      // fastest of the available options on the workload above. Revisit if LLVM
+      // starts preserving unknown metadata across load retyping.
       //
-      // This covers every load arm of both `tt.load` and `tt.descriptor_load`:
-      // the unmasked plain load, the masked fallback that guards a plain load
-      // with control flow, and (correctly, via the decoration) the predicated
-      // load. Which of the two masked arms is taken depends on
-      // TRITON_INTEL_PREDICATED_LOAD, so neither may rely on the flag.
+      // This covers every arm of `tt.load`, `tt.descriptor_load` and `tt.store`
+      // that emits a plain `llvm.load`/`llvm.store`: the unmasked access, the
+      // masked fallback that guards a plain access with control flow, the
+      // masked store whose mask is statically uniform across the vector group,
+      // and the fast arm of the two-armed predicated store block. Explicit
+      // per-level cache controls are emitted only on the paths that pass a
+      // Load/StoreCacheControl to TritonGEN::Predicated{Load,Store}Op. Which of
+      // the masked arms is taken depends on
+      // TRITON_INTEL_PREDICATED_{LOAD,STORE}, so no arm may rely on the flag.
       //
-      // FIXME: the store path still collapses `cg`/`cs` onto this flag and
-      // needs the same treatment.
-      return std::is_same_v<OpType, StoreOp>;
+      // NOTE: for `cs` this is a deliberate approximation. `L1S_L3S` cannot be
+      // expressed on a plain store, so the only choice is between bypassing L3
+      // (which `cs` did not ask for) and the platform default (which may retain
+      // in L1). We take the default: it is what the predicated arm ends up with
+      // anyway, since IGC was measured to drop the explicit `L1S_L3S`, and
+      // caching more than asked cannot affect correctness -- these modifiers
+      // are performance hints.
+      return false;
     case triton::CacheModifier::CV:
       return true;
     case triton::CacheModifier::CA:
