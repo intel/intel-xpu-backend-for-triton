@@ -58,6 +58,7 @@ class XPUOptions:
     arch: str = ""
     instrumentation_mode: str = ""
     fpsan_homomorphic_casts: bool = False
+    maxnreg: int | None = None
     core_clock_rate: int = 0  # kHz, scales the in-kernel cycle counter
     is_lts: bool = True
 
@@ -81,6 +82,7 @@ class XPUOptions:
 
 # Aligned with max_reg_spill in third_party/intel/backend/driver.c
 MAX_REG_SPILL = 0
+VALID_MAXNREG = frozenset((128, 256, 512))
 
 SPILL_SIZE_RE = re.compile(r'spill_size\s*[:=]\s*(\d+)')
 PTSS_OVERFLOW_RE = re.compile(
@@ -117,6 +119,35 @@ def extract_spill_size_from_zebin(file):
         if match is not None:
             return int(match.group(1))
     return 0
+
+
+def normalize_maxnreg(maxnreg):
+    if maxnreg is None:
+        return None
+    if maxnreg not in VALID_MAXNREG:
+        raise RuntimeError(f"maxnreg must be one of {sorted(VALID_MAXNREG)}")
+    return maxnreg
+
+
+def get_max_reg_spill_threshold():
+    return MAX_REG_SPILL
+
+
+def grf_flag_from_maxnreg(maxnreg):
+    if maxnreg == 128:
+        return ""
+    if maxnreg == 256:
+        return "-cl-intel-256-GRF-per-thread"
+    if maxnreg == 512:
+        return "-cl-intel-512-GRF-per-thread"
+    raise RuntimeError(f"Unsupported maxnreg value: {maxnreg}")
+
+
+def get_auto_grf_retry_flag(maxnreg, arch):
+    maxnreg = normalize_maxnreg(maxnreg)
+    if maxnreg is None:
+        maxnreg = 512 if arch == "cri" else 256
+    return grf_flag_from_maxnreg(maxnreg)
 
 
 def min_dot_size(device_props: Union[Dict, GPUTarget]):
@@ -233,6 +264,11 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         args["is_lts"] = self.properties['is_lts']
         if "enable_fp_fusion" not in args:
             args["enable_fp_fusion"] = knobs.language.default_fp_fusion
+        maxnreg = normalize_maxnreg(args.get("maxnreg"))
+        grf_mode = args.get("grf_mode", "default")
+        if maxnreg is not None and grf_mode in {"128", "256", "512"} and int(grf_mode) < maxnreg:
+            raise RuntimeError("grf_mode must define a GRF size greater than or equal to maxnreg")
+        args["maxnreg"] = maxnreg
         return XPUOptions(**args)
 
     @staticmethod
@@ -601,6 +637,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         os.environ["INTEL_XPU_BACKEND_IS_LTS"] = "1" if cls.is_lts(driver_version) else "0"
         spirv, name = intel.translate_to_spirv(src)
         metadata["name"] = name
+        metadata["maxnreg"] = options.maxnreg or 0
         metadata.setdefault("build_flags", "")
         if options.grf_mode == '128':
             metadata["build_flags"] += " -cl-intel-128-GRF-per-thread"
@@ -653,10 +690,9 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             if options.grf_mode == 'default' and options.num_warps <= 32:
                 # Try rebuilding with larger GRF modes (default first, then larger).
                 retry_grf_mode_list = [""]  # default GRF mode by omitting the flag
-                if metadata["target"].arch.get("arch") == 'cri':
-                    retry_grf_mode_list.append("-cl-intel-512-GRF-per-thread")
-                else:
-                    retry_grf_mode_list.append("-cl-intel-256-GRF-per-thread")
+                retry_grf_flag = get_auto_grf_retry_flag(options.maxnreg, metadata["target"].arch.get("arch"))
+                if retry_grf_flag:
+                    retry_grf_mode_list.append(retry_grf_flag)
             else:
                 # Non-default GRF mode is already encoded in metadata["build_flags"] (including "auto").
                 retry_grf_mode_list = [""]
@@ -669,7 +705,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                     subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
                     if options.grf_mode == "default":
                         spill_size = extract_spill_size_from_zebin(fbin)
-                        if spill_size <= MAX_REG_SPILL:
+                        if spill_size <= get_max_reg_spill_threshold():
                             break
                 except (subprocess.CalledProcessError, IntelGPUError) as e:
                     # If GRF mode was not last yet, retry with different GRF mode
