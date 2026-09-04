@@ -316,7 +316,7 @@ try_install_wheel_from_run() {
   wheel_commit="${wheel_commit%%.*}"
 
   if [[ "$vllm_xpu_kernels_pinned_commit" != "$wheel_commit"* ]]; then
-    echo "*** vLLM XPU kernels wheel commit ($wheel_commit) does not match pinned commit ($vllm_xpu_kernels_pinned_commit). ***"
+    echo "*** vLLM XPU kernels nightly wheel commit ($wheel_commit) does not match pinned commit ($vllm_xpu_kernels_pinned_commit). ***"
     return 1
   fi
 
