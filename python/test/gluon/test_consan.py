@@ -4044,16 +4044,10 @@ def test_payload_reuse_requires_barrier_invalidation(ACCESS, INVALIDATE, device,
             ampere.async_copy.async_load(smem, source + offsets)
             ampere.async_copy.commit_group()
             ampere.async_copy.wait_group(0)
-        elif ACCESS == "convert-layout":
-            dst_layout: ttgl.constexpr = ttgl.SliceLayout(1, ttgl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0]))
-            dst_offsets = ttgl.arange(0, XBLOCK, layout=dst_layout)
-            values = ttgl.load(source + offsets)
-            ttgl.store(output + dst_offsets, ttgl.convert_layout(values, dst_layout))
         else:
             values = ttgl.full([XBLOCK], 7, ttgl.int32, layout)
             smem = ttgl.allocate_shared_memory(ttgl.int32, [XBLOCK], smem_layout, values)
-        if ACCESS != "convert-layout":
-            ttgl.store(output + offsets, smem.load(layout))
+        ttgl.store(output + offsets, smem.load(layout))
 
     source = torch.arange(XBLOCK.value, device=device, dtype=torch.int32)
     output = torch.empty_like(source)

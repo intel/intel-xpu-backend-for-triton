@@ -43,7 +43,12 @@ struct AtomicPollOpConversion
     auto moduleOp = op->getParentOfType<ModuleOp>();
     assert(moduleOp && "Parent ModuleOp not found for AtomicPollOp");
 
-    unsigned bitWidth = adaptor.getExpected().getType().getIntOrFloatBitWidth();
+    Type expectedTy = op.getExpected().getType();
+    if (!expectedTy.isIntOrFloat())
+      return rewriter.notifyMatchFailure(
+          op, "tensor atomic_poll defers to upstream lowering");
+
+    unsigned bitWidth = expectedTy.getIntOrFloatBitWidth();
     bool support16BitAtomics = moduleOp->hasAttr(
         ttgi::TritonIntelGPUDialect::getSupport16BitAtomicsAttrName());
     if (bitWidth != 16 || support16BitAtomics)
