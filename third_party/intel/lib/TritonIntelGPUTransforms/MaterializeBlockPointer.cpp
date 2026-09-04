@@ -908,9 +908,23 @@ private:
     Type pointeeTy =
         cast<tt::PointerType>(ptrTensorTy.getElementType()).getPointeeType();
     auto loadResultTy = RankedTensorType::get(newShape, pointeeTy, loadEnc);
-    auto newLoad = tt::LoadOp::create(builder, loc, loadResultTy, loadPtr,
-                                      mask2d, op.getOther(), op.getCache(),
-                                      op.getEvict(), op.getIsVolatile());
+
+    // Reshape `other` if present, same treatment as the pointer and the mask.
+    // Its type is verifier-locked to getPointeeType(ptr), so its 2D form is
+    // exactly the new load result type.  The block-IO lowering indexes
+    // otherElems[registerIdx] alongside maskElems[registerIdx], so it must
+    // carry the load encoding rather than the 1D source encoding.
+    Value other2d;
+    if (Value other = op.getOther()) {
+      auto otherReshape = tt::ReshapeOp::create(builder, loc, newShape, other,
+                                                /*allowReorder=*/false);
+      other2d = ttg::ConvertLayoutOp::create(builder, loc, loadResultTy,
+                                             otherReshape);
+    }
+
+    auto newLoad =
+        tt::LoadOp::create(builder, loc, loadResultTy, loadPtr, mask2d, other2d,
+                           op.getCache(), op.getEvict(), op.getIsVolatile());
 
     // Set block IO attributes.
     setBlockIOAttrs(newLoad, ctx, info->S);
