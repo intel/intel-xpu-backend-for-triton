@@ -130,7 +130,13 @@ def test_normalize_maxnreg_rejects_invalid_value():
 
 
 def test_get_max_reg_spill_threshold():
-    assert get_max_reg_spill_threshold() == 1000
+    assert get_max_reg_spill_threshold() == 0
+
+
+def _make_backend_for_parse_options():
+    backend = object.__new__(XPUBackend)
+    backend.properties = {"core_clock_rate": 0, "is_lts": True}
+    return backend
 
 
 @pytest.mark.parametrize(("maxnreg", "arch", "expected"), [(None, "pvc", "-cl-intel-256-GRF-per-thread"),
@@ -144,12 +150,12 @@ def test_get_auto_grf_retry_flag(maxnreg, arch, expected):
 
 @pytest.mark.parametrize("grf_mode", ["default", "auto", "256", "512"])
 def test_xpu_backend_parse_options_accepts_maxnreg(grf_mode):
-    backend = object.__new__(XPUBackend)
+    backend = _make_backend_for_parse_options()
     options = backend.parse_options({"maxnreg": 256, "grf_mode": grf_mode})
     assert options.maxnreg == 256
 
 
 def test_xpu_backend_parse_options_rejects_mismatched_grf_mode():
-    backend = object.__new__(XPUBackend)
+    backend = _make_backend_for_parse_options()
     with pytest.raises(RuntimeError, match="greater than or equal to maxnreg"):
         backend.parse_options({"maxnreg": 256, "grf_mode": "128"})

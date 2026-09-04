@@ -30,15 +30,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
-// COM: Test 2: Multi-row tile (H > 1) — no 2D block store emitted.
+// COM: Test 2: Multi-row tile (H > 1) — one 2D block store per warp.
 // COM: numElements=1024, W=32, S=96, fp16, numWarps=4, H = 1024/32 = 32.
-// COM: FIXME: The 2D block store lowering does not correctly handle H > 1
-// COM: because offsetY is hardcoded to 0. Once the lowering is fixed, this
-// COM: test should expect triton_gen.2Dblockstore.
+// COM: Per-warp height is 32/4 = 8, so the message carries a vector<8xi16>:
+// COM: lane k holds column k of all 8 rows, which is exactly what the hardware
+// COM: consumes.  Geometry comes from the shared getBlockIOStoreTileSize helper
+// COM: (elem_size_in_bits = 16, tile_width = 32) — no hand-built tile.
 
 #blocked1d = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
   // CHECK-LABEL: llvm.func spir_kernelcc @test_1d_reshape_multi_row
+  // CHECK: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 16, tile_width = 32, tile_height = 8, v_blocks = 1, cache_control = Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32, vector<8xi16>)
   // CHECK-NOT: triton_gen.2Dblockstore
   tt.func @test_1d_reshape_multi_row(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: tensor<1024xf16, #blocked1d>) {
     %idx = tt.make_range {start = 0 : i32, end = 1024 : i32} : tensor<1024xi32, #blocked1d>
@@ -158,5 +160,53 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %mask = arith.constant dense<true> : tensor<128xi1, #blocked1d>
     %result = tt.load %ptrs, %mask : tensor<128x!tt.ptr<f16>, #blocked1d>
     tt.return %result : tensor<128xf16, #blocked1d>
+  }
+}
+
+// -----
+
+// COM: Test 7: 1D strided load with partial mask and `other` — issue #7928.
+// COM: This tests both the verifier regression (does `other` get reshaped?) and
+// COM: the end-to-end correctness. The mask is genuinely partial: xindex < xnumel
+// COM: where xnumel=900 falls inside the 1024-element tile boundary. This prevents
+// COM: canonicalization from dropping `other` as dead (a provably-true mask makes
+// COM: `other` unused and can be folded away).
+// COM:
+// COM: MaterializeBlockPointer *does* reshape this load to 2D and tag it with
+// COM: ttig.block_io / ttig.block_io_stride — the point of the fix is that the
+// COM: reshaped load stays well-typed, since forwarding `other` as 1D makes the
+// COM: verifier reject the whole kernel.  The subsequent 2D-block-load lowering
+// COM: then declines: a non-constant mask forces the per-element predicated
+// COM: gather.  Measured on PVC 1100: with `xindex < xnumel` no
+// COM: Subgroup2DBlockLoadINTEL / LSC2DBlockRead reaches LLIR, and that is true
+// COM: with *and without* `other`, so it is a property of the masked path rather
+// COM: than of this fix.  Hence CHECK-NOT below, placed between the label and
+// COM: the llvm.return anchor so it scans the whole function body.
+
+#blocked1d = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @test_1d_strided_load_partial_mask_with_other
+  // CHECK-NOT: triton_gen.2Dblockload
+  // CHECK: llvm.return
+  tt.func @test_1d_strided_load_partial_mask_with_other(
+      %arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32},
+      %xnumel: i32) -> tensor<1024xf16, #blocked1d> {
+    %idx = tt.make_range {start = 0 : i32, end = 1024 : i32} : tensor<1024xi32, #blocked1d>
+    %c32 = arith.constant dense<32> : tensor<1024xi32, #blocked1d>
+    %c96 = arith.constant dense<96> : tensor<1024xi32, #blocked1d>
+    %rem = arith.remui %idx, %c32 : tensor<1024xi32, #blocked1d>
+    %div = arith.divui %idx, %c32 : tensor<1024xi32, #blocked1d>
+    %mul = arith.muli %div, %c96 : tensor<1024xi32, #blocked1d>
+    %off = arith.addi %rem, %mul : tensor<1024xi32, #blocked1d>
+    %base = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1024x!tt.ptr<f16>, #blocked1d>
+    %ptrs = tt.addptr %base, %off : tensor<1024x!tt.ptr<f16>, #blocked1d>, tensor<1024xi32, #blocked1d>
+
+    // Partial mask: xindex < xnumel, not a provably-true constant
+    %xnumel_splat = tt.splat %xnumel : i32 -> tensor<1024xi32, #blocked1d>
+    %mask = arith.cmpi slt, %idx, %xnumel_splat : tensor<1024xi32, #blocked1d>
+    %other = arith.constant dense<-1.0> : tensor<1024xf16, #blocked1d>
+
+    %result = tt.load %ptrs, %mask, %other : tensor<1024x!tt.ptr<f16>, #blocked1d>
+    tt.return %result : tensor<1024xf16, #blocked1d>
   }
 }

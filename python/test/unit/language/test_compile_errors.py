@@ -399,7 +399,7 @@ def test_fp8_support(fresh_triton_cache, dtype):
             raise assertion_err from e.value
 
 
-@pytest.mark.parametrize("dtype", [tl.float8e5, tl.int8, tl.float16])
+@pytest.mark.parametrize("dtype", [tl.float8e5, tl.int8, tl.float16, tl.bfloat16])
 def test_min_dot_size(dtype):
     error_msg = "Input shapes should have "
     if is_cuda():
@@ -411,10 +411,11 @@ def test_min_dot_size(dtype):
         # hip supports arbitrary sizes
         error_msg = None
     elif is_xpu():
-        # XPU supports all sizes
-        pass
+        # invalid DPAS INT8 dots are rejected, other dots
+        # fallback to FMA.
+        error_msg = "Input shapes should have " if dtype.is_int8() else None
     else:
-        pytest.skip("Test only supported on CUDA and HIP")
+        pytest.skip("Test only supported on CUDA, HIP and XPU")
 
     @triton.jit
     def dot_kernel(dtype: tl.constexpr):
@@ -592,3 +593,18 @@ def test_err_nested_function_def():
     err_msg = format_exception(e.type, value=e.value, tb=e.tb)
     assert "StopIteration" not in err_msg, "nested def should not leak StopIteration"
     assert "nested function" in err_msg, "error should mention nested function"
+
+
+@pytest.mark.parametrize("ptr_ty", ["*i8", "*i16", "*i64"])
+def test_err_histogram_non_32bit_int(ptr_ty):
+
+    @triton.jit
+    def kernel(x_ptr, z_ptr, N: tl.constexpr):
+        x = tl.load(x_ptr + tl.arange(0, 8))
+        tl.store(z_ptr + tl.arange(0, N), tl.histogram(x, N))
+
+    with pytest.raises(CompilationError) as e:
+        triton.compile(
+            triton.compiler.ASTSource(fn=kernel, signature={"x_ptr": ptr_ty, "z_ptr": "*i32", "N": "constexpr"},
+                                      constexprs={"N": 4}))
+    assert "histogram only supports 32-bit integer input" in str(e.value.__cause__)

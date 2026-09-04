@@ -1,0 +1,158 @@
+name: On label
+
+permissions: read-all
+
+on:
+  pull_request:
+    branches:
+      - main
+    types: [labeled]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # ---- Platform selection for benchmarks ----
+  # FIXME: Temporarily lost max1550 machines, so PVC benchmarks are disabled by default.
+  # Use 'pvc-only' label to explicitly enable them.
+
+  select-benchmark-platforms:
+    runs-on: ubuntu-latest
+    outputs:
+      run-pvc-benchmarks: ${{ steps.determine.outputs.run-pvc-benchmarks }}
+    steps:
+      - name: Determine if PVC benchmarks should run
+        id: determine
+        run: |
+          LABELS='${{ toJSON(github.event.pull_request.labels.*.name) }}'
+          PVC_ONLY=$(echo "$LABELS" | jq 'contains(["pvc-only"])')
+
+          # PVC benchmarks (max1550) only run if pvc-only label is present
+          if [ "$PVC_ONLY" = "true" ]; then
+            echo "run-pvc-benchmarks=true" >> $GITHUB_OUTPUT
+          else
+            echo "run-pvc-benchmarks=false" >> $GITHUB_OUTPUT
+          fi
+
+  # ---- vLLM tests ----
+
+  vllm-tests-bmg:
+    if: >-
+      contains(github.event.pull_request.labels.*.name, 'run-vllm-tests') &&
+      !contains(github.event.pull_request.labels.*.name, 'pvc-only')
+    uses: ./.github/workflows/vllm-tests-reusable.yml
+    with:
+      runner_label: b580
+      skip_list: xe2
+    secrets: inherit
+
+  vllm-tests-pvc:
+    if: >-
+      contains(github.event.pull_request.labels.*.name, 'run-vllm-tests') &&
+      !contains(github.event.pull_request.labels.*.name, 'bmg-only')
+    uses: ./.github/workflows/vllm-tests-reusable.yml
+    with:
+      runner_label: max1100
+    secrets: inherit
+
+  # ---- SGLang tests ----
+
+  sglang-tests-bmg:
+    if: >-
+      contains(github.event.pull_request.labels.*.name, 'run-sglang-tests') &&
+      !contains(github.event.pull_request.labels.*.name, 'pvc-only')
+    uses: ./.github/workflows/sglang-tests-reusable.yml
+    with:
+      runner_label: b60
+      skip_list: xe2
+    secrets: inherit
+
+  sglang-tests-pvc:
+    if: >-
+      contains(github.event.pull_request.labels.*.name, 'run-sglang-tests') &&
+      !contains(github.event.pull_request.labels.*.name, 'bmg-only')
+    uses: ./.github/workflows/sglang-tests-reusable.yml
+    with:
+      runner_label: max1100
+    secrets: inherit
+
+  # ---- Build wheel ----
+
+  build-wheel:
+    permissions:
+      contents: read
+      id-token: write   # for Sigstore signing in the reusable wheel-build workflow
+    if: >-
+      contains(github.event.pull_request.labels.*.name, 'run-benchmarks') ||
+      contains(github.event.pull_request.labels.*.name, 'run-vllm-benchmarks') ||
+      contains(github.event.pull_request.labels.*.name, 'run-sglang-benchmarks')
+    uses: ./.github/workflows/build-benchmarks-wheel.yml
+    with:
+      python-version: "3.12"
+
+  # ---- vLLM benchmarks ----
+
+  vllm-benchmarks-bmg:
+    needs: build-wheel
+    if: >-
+      contains(github.event.pull_request.labels.*.name, 'run-vllm-benchmarks') &&
+      !contains(github.event.pull_request.labels.*.name, 'pvc-only')
+    uses: ./.github/workflows/vllm-benchmarks.yml
+    with:
+      runner_label: b580
+    secrets: inherit
+
+  vllm-benchmarks-pvc:
+    needs: [select-benchmark-platforms, build-wheel]
+    if: >-
+      contains(github.event.pull_request.labels.*.name, 'run-vllm-benchmarks') &&
+      needs.select-benchmark-platforms.outputs.run-pvc-benchmarks == 'true'
+    uses: ./.github/workflows/vllm-benchmarks.yml
+    with:
+      runner_label: max1550
+    secrets: inherit
+
+  # ---- Triton benchmarks ----
+
+  triton-benchmarks-bmg:
+    needs: build-wheel
+    if: >-
+      contains(github.event.pull_request.labels.*.name, 'run-benchmarks') &&
+      !contains(github.event.pull_request.labels.*.name, 'pvc-only')
+    uses: ./.github/workflows/triton-benchmarks.yml
+    with:
+      runner_label: b580
+      skip_benchmarks: '["flex-attention-causal-batch16"]'
+
+  triton-benchmarks-pvc:
+    needs: [select-benchmark-platforms, build-wheel]
+    if: >-
+      contains(github.event.pull_request.labels.*.name, 'run-benchmarks') &&
+      needs.select-benchmark-platforms.outputs.run-pvc-benchmarks == 'true'
+    uses: ./.github/workflows/triton-benchmarks.yml
+    with:
+      runner_label: max1550
+      skip_benchmarks: "[]"
+
+  # ---- SGLang benchmarks ----
+
+  sglang-benchmarks-bmg:
+    needs: build-wheel
+    if: >-
+      contains(github.event.pull_request.labels.*.name, 'run-sglang-benchmarks') &&
+      !contains(github.event.pull_request.labels.*.name, 'pvc-only')
+    uses: ./.github/workflows/sglang-benchmarks.yml
+    with:
+      runner_label: b580
+    secrets: inherit
+
+  sglang-benchmarks-pvc:
+    needs: [select-benchmark-platforms, build-wheel]
+    if: >-
+      contains(github.event.pull_request.labels.*.name, 'run-sglang-benchmarks') &&
+      needs.select-benchmark-platforms.outputs.run-pvc-benchmarks == 'true'
+    uses: ./.github/workflows/sglang-benchmarks.yml
+    with:
+      runner_label: max1550
+    secrets: inherit

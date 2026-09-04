@@ -330,8 +330,6 @@ LogicalResult getConvertBackwardSlice(
         continue;
       if (stopPropagation && stopPropagation(definingOp))
         continue;
-      if (isa<triton::CatOp>(definingOp))
-        return failure();
       if (auto gather = dyn_cast<GatherOp>(definingOp)) {
         // Specially handle gather since its transfer function only applies
         // between its index operand and result.
@@ -347,8 +345,8 @@ LogicalResult getConvertBackwardSlice(
       for (auto [i, operand] : llvm::enumerate(definingOp->getOpOperands())) {
         if (isa<RankedTensorType>(operand.get().getType())) {
           Attribute srcEncoding;
-          if (auto upcast = dyn_cast<gpu::UpcastFpOpInterface>(definingOp))
-            srcEncoding = upcast.inferSrcEncoding(i, encoding);
+          if (auto castOp = dyn_cast<gpu::CastFpOpInterface>(definingOp))
+            srcEncoding = castOp.inferSrcEncoding(i, encoding);
           else
             srcEncoding = ttgi::inferSrcEncoding(definingOp, encoding);
           if (!srcEncoding)

@@ -2,6 +2,23 @@
 tests/v1/worker/test_gpu_model_runner.py::test_hybrid_attention_mamba_tensor_shapes
 tests/v1/worker/test_gpu_model_runner.py::test_mamba_cache_raises_when_max_num_seqs_exceeds_blocks
 
+# GPU mode runner tried to instantiate dummy base class Event: https://github.com/intel/intel-xpu-backend-for-triton/issues/7684
+tests/v1/worker/test_gpu_model_runner.py::test_reasoning_config_without_custom_logitsprocs_does_not_need_output_token_ids
+tests/v1/worker/test_gpu_model_runner.py::test_init_kv_cache_without_kv_sharing
+tests/v1/worker/test_gpu_model_runner.py::test_init_kv_cache_with_kv_sharing_valid
+tests/v1/worker/test_gpu_model_runner.py::test_hybrid_cache_integration
+tests/v1/worker/test_gpu_model_runner.py::test_update_states_new_request
+tests/v1/worker/test_gpu_model_runner.py::test_update_states_request_finished
+tests/v1/worker/test_gpu_model_runner.py::test_update_states_request_resumed
+tests/v1/worker/test_gpu_model_runner.py::test_get_nans_in_logits
+tests/v1/worker/test_gpu_model_runner.py::test_update_states_no_changes
+tests/v1/worker/test_gpu_model_runner.py::test_update_states_request_unscheduled
+tests/v1/worker/test_gpu_model_runner.py::test_update_states_pp_non_async_multi_request_keeps_token_buffers_consistent
+tests/v1/worker/test_gpu_model_runner.py::test_update_states_pp_async_multi_request_keeps_rank_state_consistent
+tests/v1/worker/test_gpu_model_runner.py::test_update_config
+tests/v1/worker/test_gpu_model_runner.py::test_load_model_weights_inplace
+tests/v1/worker/test_gpu_model_runner.py::test_reload_weights_before_load_model
+
 # compute_prompt_logprobs torch.cat incompatible shapes: https://github.com/intel/intel-xpu-backend-for-triton/issues/7159
 tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[False-0.0-BatchLogprobsComposition.PROMPT]
 tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[False-0.0-BatchLogprobsComposition.SAMPLE_PROMPT]
@@ -27,9 +44,10 @@ tests/v1/sample/test_logprobs.py::test_utf8_edge_cases_with_real_model
 tests/v1/sample/test_logprobs.py::test_correct_decoded_token_preserves_valid_tokens
 tests/v1/sample/test_logprobs.py::test_prompt_logprobs_with_chunking_and_preemption
 
-# Pytest segmentation fault on B580: https://github.com/intel/intel-xpu-backend-for-triton/issues/7420
-tests/v1/kv_connector/unit/test_nixl_connector.py::test_abort_timeout_on_prefiller[None]
+# oneCCL fails to start worker thread: https://github.com/intel/intel-xpu-backend-for-triton/issues/7686
+tests/v1/sample/test_logprobs.py::test_prompt_logprobs_mode
 
 # NIXL is not available: https://github.com/intel/intel-xpu-backend-for-triton/issues/7419
 tests/v1/kv_connector/unit/test_nixl_connector.py::test_kv_both_deprecation_warning
 tests/v1/kv_connector/unit/test_nixl_connector.py::test_explicit_kv_role_no_deprecation_warning
+tests/v1/kv_connector/unit/test_nixl_connector.py::test_reqs_to_send_deadline_rebased_to_worker_clock

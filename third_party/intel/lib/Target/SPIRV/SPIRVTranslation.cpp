@@ -123,7 +123,6 @@ static SPIRV::TranslatorOpts getSPIRVOpts() {
       SPIRV::ExtensionID::SPV_INTEL_fp_conversions,
       SPIRV::ExtensionID::SPV_INTEL_fp_fast_math_mode,
       SPIRV::ExtensionID::SPV_INTEL_inline_assembly,
-      SPIRV::ExtensionID::SPV_INTEL_int4,
       SPIRV::ExtensionID::SPV_INTEL_kernel_attributes,
       SPIRV::ExtensionID::SPV_INTEL_memory_access_aliasing,
       SPIRV::ExtensionID::SPV_INTEL_predicated_io,
@@ -137,7 +136,8 @@ static SPIRV::TranslatorOpts getSPIRVOpts() {
       SPIRV::ExtensionID::SPV_INTEL_vector_compute,
       SPIRV::ExtensionID::SPV_KHR_bfloat16,
       SPIRV::ExtensionID::SPV_KHR_bit_instructions,
-      SPIRV::ExtensionID::SPV_KHR_non_semantic_info};
+      SPIRV::ExtensionID::SPV_KHR_non_semantic_info,
+      SPIRV::ExtensionID::SPV_KHR_shader_clock};
 
   SPIRVOpts.setMemToRegEnabled(true);
   SPIRVOpts.setPreserveOCLKernelArgTypeMetadataThroughString(true);

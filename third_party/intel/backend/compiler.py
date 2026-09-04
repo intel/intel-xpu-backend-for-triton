@@ -1,6 +1,6 @@
 from triton.backends.compiler import BaseBackend, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm, intel
-from triton.backends.intel.driver import compile_module_from_src
+from triton.backends.intel.driver import compile_module_from_src, is_lts
 from triton.backends.intel.track import track
 from triton.backends.intel.extension_utils import query_device_extensions
 from triton import knobs
@@ -25,8 +25,6 @@ try:  # XPUBackend allows metaclasses injection
 except ImportError:
     XPUBackendMeta = type(BaseBackend)
 
-_VERSION_PATTERN = re.compile(r'(\d+)\.(\d+)\.(\d+)(?:\+(\d+))?')
-
 
 @dataclass
 class XPUOptions:
@@ -49,6 +47,7 @@ class XPUOptions:
     loop_distribute: bool = knobs.intel.enable_loop_distribution
     code_sinking: bool = knobs.intel.enable_code_sinking
     sub_32_dpas: bool = knobs.intel.enable_sub_32_dpas
+    dynamic_shared_memory: bool = knobs.intel.dynamic_shared_memory
     use_barrier: bool = False
     max_num_imprecise_acc_default: int = 0  # `max_num_imprecise_acc` only applies to fp8 -> fp32 dot on sm_90 for cuda
     extern_libs: dict = None
@@ -60,6 +59,8 @@ class XPUOptions:
     instrumentation_mode: str = ""
     fpsan_homomorphic_casts: bool = False
     maxnreg: int | None = None
+    core_clock_rate: int = 0  # kHz, scales the in-kernel cycle counter
+    is_lts: bool = True
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -80,7 +81,7 @@ class XPUOptions:
 
 
 # Aligned with max_reg_spill in third_party/intel/backend/driver.c
-MAX_REG_SPILL = 1000
+MAX_REG_SPILL = 0
 VALID_MAXNREG = frozenset((128, 256, 512))
 
 SPILL_SIZE_RE = re.compile(r'spill_size\s*[:=]\s*(\d+)')
@@ -198,14 +199,13 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     def get_target_name(self, options) -> str:
         return f"xpu:{self.device_arch}"
 
-    @classmethod
-    def is_lts(cls, ver) -> bool:
-        if not ver:
-            return True
-        m = _VERSION_PATTERN.match(ver)
-        if not m:
-            return True
-        return tuple(int(x) if x is not None else 0 for x in m.groups()) < (1, 6, 35096, 9)
+    @staticmethod
+    def is_lts(ver) -> bool:
+        return is_lts(ver)
+
+    @staticmethod
+    def core_clock_rate(tgt_prop) -> int:
+        return tgt_prop.get('core_clock_rate') or 0
 
     def parse_target(self, tgt_prop) -> dict:
         dev_prop = {}
@@ -240,6 +240,12 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         dev_prop['has_256b_load_store'] = tgt_prop.get('has_256b_prefetch', False)
         dev_prop['has_rounded_divide_sqrt'] = tgt_prop.get('has_rounded_divide_sqrt', not is_lts)
         dev_prop['has_sigmoid'] = tgt_prop.get('has_sigmoid', False)
+        # HW base-address alignment requirement (in bytes) for 2D block IO.
+        # Defaults to 64; targets with a relaxed requirement (e.g. CRI) override
+        # this so the downstream 64-byte alignment compensation is skipped.
+        dev_prop['block_io_base_alignment'] = tgt_prop.get('block_io_base_alignment', 64)
+        dev_prop['core_clock_rate'] = self.core_clock_rate(tgt_prop)
+        dev_prop['is_lts'] = is_lts
 
         if '__intel_already_queried_extensions__' not in tgt_prop:
             # All GPUs with the same device_id have the same extensions, so we just
@@ -254,6 +260,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     def parse_options(self, opts) -> Any:
         args = {k: v for k, v in opts.items() if k in XPUOptions.__dataclass_fields__}
         args["allow_fp8e4nv"] = True
+        args["core_clock_rate"] = self.properties['core_clock_rate']
+        args["is_lts"] = self.properties['is_lts']
         if "enable_fp_fusion" not in args:
             args["enable_fp_fusion"] = knobs.language.default_fp_fusion
         maxnreg = normalize_maxnreg(args.get("maxnreg"))
@@ -268,40 +276,38 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         ret = BaseBackend.parse_attr(desc)
         if "N" in desc:
             ret += [["tt.padding", 1]]
-        # "S" section: encodes shape and stride values as constexpr.
-        # Format: "S<shape0>,<shape1>,...;<stride0>,<stride1>,..."
-        # Enables isDivisible checks to pass trivially on constants.
-        if "S" in desc:
-            idx = desc.index("S") + 1
-            s_str = desc[idx:]
-            try:
-                parts = s_str.split(";")
-                shapes = [int(x) for x in parts[0].split(",") if x]
-                for i, s in enumerate(shapes):
-                    ret += [[f"tt.shape.{i}", s]]
-                if len(parts) > 1:
-                    strides = [int(x) for x in parts[1].split(",") if x]
-                    for i, s in enumerate(strides):
-                        ret += [[f"tt.stride.{i}", s]]
-            except (ValueError, IndexError):
-                pass
+        # Shape divisibility: S<dim>D<divisor> (e.g., S0D128)
+        import re
+        for match in re.finditer(r'S(\d+)D(\d+)', desc):
+            dim = int(match.group(1))
+            divisor = int(match.group(2))
+            ret += [[f"tt.shape.{dim}.divisibility", divisor]]
         return ret
 
     @staticmethod
+    def _get_max_divisibility(value):
+        """Get the highest power-of-2 divisor of value, capped at 4.
+
+        Cap rationale: MaterializeBlockPointer's alignment check requires
+        divisibility by at most 4 (for fp8 with 8-bit elements). Higher
+        divisibilities provide no additional benefit for 2D block I/O.
+        """
+        if value == 0:
+            return 1
+        div = 1
+        while div < 4 and value % (div * 2) == 0:
+            div *= 2
+        return div
+
+    @staticmethod
     def get_tensordesc_specialization(arg, **kwargs):
-        # "N" = NaN padding (enables tt.padding attribute).
-        # "S<shapes>;<strides>" = shape and stride values as constexpr.
-        #   Shapes: enables satisfies2DBlockReadAlignment and FuseReshape checks.
-        #   Strides (rank-3+ only): enables FuseReshape stride divisibility.
+        # Format: "N" (padding) + "S<dim>D<divisor>" (shape divisibility)
         key = ""
         if getattr(arg, "padding", None) == "nan":
             key += "N"
-        # Encode all shapes and non-last strides (rank-3+ only) as constants.
-        shapes_str = ",".join(str(s) for s in arg.shape)
-        strides_str = ",".join(str(s) for s in arg.strides[:-1]) if len(arg.strides) >= 3 else ""
-        key += "S" + shapes_str
-        if strides_str:
-            key += ";" + strides_str
+        for i, shape_val in enumerate(arg.shape):
+            div = XPUBackend._get_max_divisibility(shape_val)
+            key += f"S{i}D{div}"
         return key
 
     def pack_metadata(self, metadata):
@@ -309,21 +315,20 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
     @staticmethod
     def min_dot_size(device_props: dict):
-        # (M, N, K)
-        # M: repeatCount. 1,2,4,8
-        # N: executionSize. 16 for PVC, 8 for ATS
-        # K: systolicDepth x opsPerChan. systolicDepth must be 8
-        repeat_count = 1
-        sdepth = 8
-        exec_size = min(device_props["sub_group_sizes"])
+        execution_size = min(device_props["sub_group_sizes"])
 
-        def get_ops_per_channel(lhs_type, rhs_type):
-            l_bitwidth = lhs_type.scalar.primitive_bitwidth
-            r_bitwidth = rhs_type.scalar.primitive_bitwidth
-            max_ops_per_chan = 32 / max(l_bitwidth, r_bitwidth)
-            return min(8, max_ops_per_chan)
+        def get_min_dot_size(lhs_type, rhs_type):
+            lhs_type = lhs_type.scalar
+            rhs_type = rhs_type.scalar
 
-        return lambda lhs_type, rhs_type: (repeat_count, exec_size, sdepth * get_ops_per_channel(lhs_type, rhs_type))
+            # FMA path currently has accuracy errors for INT8 dots.
+            if lhs_type.is_int8() and rhs_type.is_int8():
+                return (1, execution_size, 32)
+
+            # Fallback to use FMA if size configurations not supported/performant for DPAS.
+            return (1, 1, 1)
+
+        return get_min_dot_size
 
     def get_codegen_implementation(self, options):
         from triton.language.extra.intel import convert_custom_float8
@@ -376,6 +381,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         module_opts.threads_per_warp = opt.warp_size
         module_opts.sub_32_dpas = opt.sub_32_dpas
         module_opts.target_arch = cls.target_arch
+        module_opts.block_io_base_alignment = properties["block_io_base_alignment"]
 
     @classmethod
     @track
@@ -531,6 +537,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if cls.is_lts(driver_version):
             intel.set_is_lts(mod)
 
+        # `getGlobalTimer` counts core clock cycles and needs the rate to report
+        # nanoseconds.
+        intel.set_core_clock_rate(mod, cls.core_clock_rate(metadata["target"].arch))
+
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
@@ -544,7 +554,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
         if cls.instrumentation:
             cls.instrumentation.patch("ttgpuir_to_llvmir", pm, mod.context)
-        intel.passes.ttgpuir.add_to_llvmir(pm)
+        intel.passes.ttgpuir.add_to_llvmir(pm, options.dynamic_shared_memory)
         intel.passes.ttgpuir.add_gen_to_llvm(pm)
         passes.common.add_canonicalizer(pm)
         intel.passes.ttgpuir.add_rewrite_stack_ptr(pm)
@@ -597,10 +607,24 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             metadata["num_warps"] = total_num_warps
         metadata["threads_per_warp"] = intel.get_threads_per_warp(src)
         metadata["shared"] = src.get_int_attr("ttg.shared")
+        # Shared memory is now allocated statically (see `initSharedMemory` in
+        # TritonGPUToLLVM.cpp), so an oversized request fails the SPIR-V module
+        # build later (an opaque `ZE_RESULT_ERROR_MODULE_BUILD_FAILURE`) instead
+        # of failing at kernel launch. Raise `OutOfResources` here instead, so
+        # `triton.runtime.autotuner.Autotuner` (and callers that bypass
+        # `CompiledKernel._init_handles`, e.g. torch Inductor's static XPU
+        # launcher) can skip the offending config instead of crashing.
+        max_shared_mem = metadata["target"].arch.get("local_mem_size")
+        if max_shared_mem is not None and metadata["shared"] > max_shared_mem:
+            raise OutOfResources(metadata["shared"], max_shared_mem, "shared memory")
         metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size")
         metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment")
         metadata["profile_scratch_size"] = src.get_int_attr("ttg.profile_scratch_memory_size") or 0
         metadata["profile_scratch_align"] = src.get_int_attr("ttg.profile_scratch_memory_alignment") or 1
+
+        # Add Triton and LLVM versions to the dumped IR.
+        if knobs.compilation.dump_ir:
+            llvm.add_version_info(llvm_mod)
         ret = str(llvm_mod)
         del llvm_mod
         del context
@@ -657,7 +681,13 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                 '-options', metadata['build_flags'] + shader_dump_opt
             ]
 
-            if options.grf_mode == 'default':
+            # A larger GRF mode doubles the registers per hardware thread and thereby
+            # halves the maximum work-group size, so `num_warps > 32` becomes
+            # unlaunchable. The explicit `grf_mode='256'`/`'512'` paths already refuse
+            # that combination in `make_spv`; skip the *automatic* upgrade for the same
+            # reason and keep the working (if slower, spilling) default-GRF binary
+            # rather than producing a kernel that fails at launch.
+            if options.grf_mode == 'default' and options.num_warps <= 32:
                 # Try rebuilding with larger GRF modes (default first, then larger).
                 retry_grf_mode_list = [""]  # default GRF mode by omitting the flag
                 retry_grf_flag = get_auto_grf_retry_flag(options.maxnreg, metadata["target"].arch.get("arch"))

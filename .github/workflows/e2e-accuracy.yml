@@ -64,6 +64,12 @@ on:
         description: Custom run name
         type: string
         default: "E2E accuracy"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/e2e-accuracy.yml
+      - .github/workflows/e2e-reusable.yml
   schedule:
     # twice a week, on Wednesday and Saturday
     - cron: "0 22 * * 3,6"

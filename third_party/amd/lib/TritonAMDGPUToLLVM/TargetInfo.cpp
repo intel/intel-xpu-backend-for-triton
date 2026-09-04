@@ -247,7 +247,8 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
   bool addAliasGroup = localLoadOp && requiresAliasInfoForAsyncOps() &&
                        isSyncedViaAsyncWait(localLoadOp);
   return mlir::LLVM::AMD::llLoad(rewriter, loc, ptr, elemTy, pred, falseVal, {},
-                                 triton::CacheModifier::NONE, addAliasGroup);
+                                 triton::CacheModifier::NONE,
+                                 /*isVolatile=*/false, addAliasGroup);
 }
 
 Value TargetInfo::shuffleXor(RewriterBase &rewriter, Location loc, Value val,
@@ -798,6 +799,10 @@ bool TargetInfo::supportsHwScaledUpcast() const {
   return targetFeatures.supportsHwScaledUpcast();
 }
 
+bool TargetInfo::supportsHwScaledDowncast() const {
+  return targetFeatures.supportsHwScaledDowncast();
+}
+
 void TargetInfo::localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
                                        Operation *llLoadOp) const {
   if (requiresAliasInfoForAsyncOps())
@@ -812,17 +817,15 @@ std::pair<mlir::triton::gpu::LocalMemOpTile, mlir::triton::gpu::LocalMemOpTile>
 TargetInfo::getSharedLdStTiles(int32_t vecBitwidth) const {
   switch (getISAFamily()) {
   case ISAFamily::CDNA3:
-  case ISAFamily::RDNA1:
   case ISAFamily::RDNA2:
   case ISAFamily::RDNA3:
   case ISAFamily::RDNA4m:
     if (vecBitwidth == 128)
-      return {/*load tile*/ {{}, {0, 1, 4}}, /*store tile*/ {}};
+      return {/*load tile*/ {{}, {}, {1, 2, 20}}, /*store tile*/ {}};
     break;
   case ISAFamily::CDNA4:
-  case ISAFamily::GFX1250:
     if (vecBitwidth == 128)
-      return {/*load tile*/ {{}, {0, 1, 3, 4}}, /*store tile*/ {}};
+      return {/*load tile*/ {{}, {}, {1, 2, 12, 20}}, /*store tile*/ {}};
     break;
   default:
     break;

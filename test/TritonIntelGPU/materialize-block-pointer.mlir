@@ -133,21 +133,51 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
 
 // -----
 
-// COM: Negative case - dynamic (non-trivial) masked 2D load should NOT get block_io attribute.
-// COM: The downstream LLVM lowering cannot handle non-trivial/dynamic masks and crashes,
-// COM: so block_io must only be attached to loads with a compile-time all-true mask.
+// COM: Negative case - the row bound of the mask is an opaque runtime scalar, so
+// COM: the mask has constancy 1 along the row dimension. A 2D block message carries
+// COM: a single predicate for the whole tile, so the tile would be clamped to one
+// COM: row; decline block IO instead and let the load keep its coalesced layout.
 #blocked7 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 4], warpsPerCTA = [32, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
-  // CHECK-LABEL: tt.func public @dynamic_masked_load_no_block_io
-  tt.func public @dynamic_masked_load_no_block_io(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg1: tensor<256x32xi1, #blocked7>) {
+  // CHECK-LABEL: tt.func public @masked_opaque_row_bound_no_block_io
+  tt.func public @masked_opaque_row_bound_no_block_io(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
+    %m_size = tt.load %arg1 : !tt.ptr<i32>
     %0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked7}>>
     %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked7}>> -> tensor<1x32xi32, #blocked7>
     %2 = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<1x32x!tt.ptr<bf16>, #blocked7>
     %3 = tt.addptr %2, %1 : tensor<1x32x!tt.ptr<bf16>, #blocked7>, tensor<1x32xi32, #blocked7>
     %4 = tt.broadcast %3 : tensor<1x32x!tt.ptr<bf16>, #blocked7> -> tensor<256x32x!tt.ptr<bf16>, #blocked7>
-    // CHECK: tt.load
+    %5 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked7}>>
+    %6 = tt.expand_dims %5 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked7}>> -> tensor<256x1xi32, #blocked7>
+    %7 = tt.splat %m_size : i32 -> tensor<256x1xi32, #blocked7>
+    %8 = arith.cmpi slt, %6, %7 : tensor<256x1xi32, #blocked7>
+    %mask = tt.broadcast %8 : tensor<256x1xi1, #blocked7> -> tensor<256x32xi1, #blocked7>
     // CHECK-NOT: ttig.block_io
-    tt.load %4, %arg1 : tensor<256x32x!tt.ptr<bf16>, #blocked7>
+    tt.load %4, %mask : tensor<256x32x!tt.ptr<bf16>, #blocked7>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: The same mask shape as above, but the row bound is known to be a multiple
+// COM: of 16, so the mask is uniform over a 16-row tile and block IO is kept.
+#blocked8 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 4], warpsPerCTA = [32, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @masked_divisible_row_bound_load
+  tt.func public @masked_divisible_row_bound_load(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %m_size: i32 {tt.divisibility = 16 : i32}) {
+    %0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked8}>>
+    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked8}>> -> tensor<1x32xi32, #blocked8>
+    %2 = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<1x32x!tt.ptr<bf16>, #blocked8>
+    %3 = tt.addptr %2, %1 : tensor<1x32x!tt.ptr<bf16>, #blocked8>, tensor<1x32xi32, #blocked8>
+    %4 = tt.broadcast %3 : tensor<1x32x!tt.ptr<bf16>, #blocked8> -> tensor<256x32x!tt.ptr<bf16>, #blocked8>
+    %5 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked8}>>
+    %6 = tt.expand_dims %5 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked8}>> -> tensor<256x1xi32, #blocked8>
+    %7 = tt.splat %m_size : i32 -> tensor<256x1xi32, #blocked8>
+    %8 = arith.cmpi slt, %6, %7 : tensor<256x1xi32, #blocked8>
+    %mask = tt.broadcast %8 : tensor<256x1xi1, #blocked8> -> tensor<256x32xi1, #blocked8>
+    // CHECK: tt.load {{.*}} {ttig.block_io = "row_major"}
+    tt.load %4, %mask : tensor<256x32x!tt.ptr<bf16>, #blocked8>
     tt.return
   }
 }

@@ -8,7 +8,7 @@ on:
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
-    runs-on: code-scanning
+    runs-on: rss-ubuntu-2404
     permissions:
       # required for all workflows
       security-events: write
@@ -36,6 +36,12 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v7
 
+    # rss-ubuntu-2404 has no C compiler preinstalled; pyenv needs one (plus libffi
+    # for the _ctypes module) to build Python from source.
+    - name: Install build toolchain
+      if: matrix.build-mode == 'manual'
+      uses: ./.github/actions/install-build-toolchain
+
     # Initialize FIRST so the build tracer is installed before the C/C++ compile.
     - name: Initialize CodeQL
       uses: github/codeql-action/init@v4
@@ -53,6 +59,10 @@ jobs:
         python_version: "3.10"
         use_pyenv: true
 
+    - name: Set MAX_JOBS
+      if: matrix.build-mode == 'manual'
+      run: echo "MAX_JOBS=${MAX_JOBS:-2}" >> "$GITHUB_ENV"
+
     - name: Build Triton (traced)
       if: matrix.build-mode == 'manual'
       uses: ./.github/actions/setup-triton
@@ -63,23 +73,61 @@ jobs:
       uses: github/codeql-action/analyze@v4
       with:
         category: "/language:${{matrix.language}}"
+        output: results
+
+    - name: Upload SARIF results
+      uses: actions/upload-artifact@v7
+      with:
+        name: sarif-results-${{ matrix.language }}
+        path: results
 
   report:
     name: Generate SDL Security Report
     needs: analyze
-    runs-on: code-scanning
+    runs-on: rss-ubuntu-2404
     permissions:
       security-events: read
       contents: read
     steps:
+    - name: Download SARIF results
+      uses: actions/download-artifact@v8
+      with:
+        pattern: sarif-results-*
+        path: results
+        merge-multiple: true
+
+    # The report action renders the PDF with puppeteer-core using channel: 'chrome',
+    # which requires a system Chrome at the hardcoded /opt/google/chrome/chrome.
+    - name: Install Chrome for PDF generation
+      run: |
+        if [[ -x /opt/google/chrome/chrome ]]; then
+          echo "Chrome already present: $(/opt/google/chrome/chrome --version)"
+          exit 0
+        fi
+        tmp="$(mktemp -d)"
+        trap 'rm -rf "$tmp"' EXIT
+        curl -fsSL -o "$tmp/chrome.deb" \
+          https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+        sudo apt-get update
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+          "$tmp/chrome.deb"
+        /opt/google/chrome/chrome --version
+
     - name: Generate Security Report
-      uses: rsdmike/github-security-report-action@v3.0.4
+      uses: rsdmike/github-security-report-action@1df22b1e0a7e15b32f728ccf7bab259e46c80589 # v4.0.1
       with:
         template: report
         token: ${{ secrets.SECURITY_TOKEN }}
+        sarifReportDir: results
+
+    # The report action swallows PDF-generation errors and exits 0, so check explicitly.
+    - name: Verify report was generated
+      run: test -s ./report.pdf
+
     - name: GitHub Upload Release Artifacts
-      uses: actions/upload-artifact@v4   # v2 is retired on github.com — must be v4
+      uses: actions/upload-artifact@v7   # v2 is retired on github.com — must be v4+
       with:
         name: report
         path: |
           ./report.pdf
+        if-no-files-found: error

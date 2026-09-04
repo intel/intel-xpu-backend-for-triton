@@ -206,6 +206,16 @@ static bool isSPVBuiltinAvailableImpl(TritonGEN::Matrix2DBlockPrefetchOp op) {
       op.getVBlocks() == 1)
     return false;
 
+  // intel_sub_group_2d_block_prefetch_8b_?r16x1c
+  if (op.getElemSizeInBits() == 8 && op.getTileWidth() == 16 &&
+      op.getVBlocks() == 1)
+    return false;
+
+  // intel_sub_group_2d_block_prefetch_64b_{1,2,4}r8x1c
+  if (op.getElemSizeInBits() == 64 && op.getTileWidth() == 8 &&
+      op.getVBlocks() == 1 && op.getTileHeight() < 8)
+    return false;
+
   return true;
 }
 
@@ -234,6 +244,11 @@ template <
 static std::tuple<Value, Value, Value>
 computeAlignedBasePtrWidthAndOffset(OpTy op,
                                     ConversionPatternRewriter &rewriter) {
+  // Skip compensation when the base address already satisfies the HW alignment
+  // requirement.
+  if (!intel::needs2DBlockIOAlignmentCompensation(op))
+    return {op.getPtr(), op.getBaseWidth(), op.getX()};
+
   Location loc = op->getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value baseAddr = b.ptrtoint(int_ty(64), op.getPtr());
@@ -1338,9 +1353,22 @@ struct TritonPredicatedLoadOpLowering
     SmallVector<Value> args{op.getPtr(), op.getPredicate(),
                             op.getDefaultValue()};
 
+    // A predicated load only reads memory reachable through its pointer
+    // argument. Declare that explicitly: defaulting to `memory(readwrite)`
+    // prevents LLVM and IGC from redundancy-eliminating, hoisting and
+    // reordering these calls the way they do for plain loads.
+    auto memAttr = rewriter.getAttr<LLVM::MemoryEffectsAttr>(
+        /*other=*/LLVM::ModRefInfo::NoModRef,
+        /*argMem=*/LLVM::ModRefInfo::Ref,
+        /*inaccessibleMem=*/LLVM::ModRefInfo::NoModRef,
+        /*errnoMem=*/LLVM::ModRefInfo::NoModRef,
+        /*targetMem0=*/LLVM::ModRefInfo::NoModRef,
+        /*targetMem1=*/LLVM::ModRefInfo::NoModRef);
+    auto funcAttrs = intel::noUnwindWillReturnAttrs;
+    funcAttrs.memEffectsAttr = memAttr;
+
     LLVM::CallOp callOp = intel::createDeviceFunctionCall(
-        rewriter, fnName, resType, argTypes, args, {},
-        intel::noUnwindWillReturnAttrs);
+        rewriter, fnName, resType, argTypes, args, {}, funcAttrs);
 
     if (std::optional<TritonGEN::DecorationCacheControlAttr> optCacheControls =
             loadCacheControlToCacheControls(rewriter, op.getCacheControl(),
