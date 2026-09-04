@@ -129,6 +129,10 @@ def do_bench_elapsed_time(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quan
     return _summarize_statistics(times, quantiles, return_mode)
 
 
+def get_profiled_kernels(functions):
+    return [list(function.kernels) for function in functions if function.kernels]
+
+
 def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_none=None, quantiles=None,
                                        return_mode="mean", device="xpu", sync_submitting=True, time_warmup=True,
                                        benchmark_label=None, max_iters=1500):
@@ -206,13 +210,7 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
         prof.events())
     functions = list(profiling_func_filter)
 
-    def extract_kernels(funcs):
-        kernels = []
-        kernels += list(itertools.chain.from_iterable(map(lambda func: extract_kernels(func.cpu_children), funcs)))
-        kernels += list(itertools.chain.from_iterable([func.kernels for func in funcs]))
-        return kernels
-
-    kernels = [extract_kernels(func.cpu_children) for func in functions]
+    kernels = get_profiled_kernels(functions)
     # For example, for backward FA, kernels can be empty for one of the threads.
     # Keep in mind that `backward` function is launched in another thread and
     # requires the use of `record_function` function additionally in its thread
