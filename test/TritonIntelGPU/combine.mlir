@@ -1882,6 +1882,81 @@ tt.func @whileop(%ptr: tensor<1024x!tt.ptr<f32>, #blocked>, %cond: i1) {
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// CHECK-LABEL: whileop_backward_negative
+// CHECK: scf.while
+// CHECK:  scf.yield
+// CHECK: ttg.convert_layout
+tt.func @whileop_backward_negative(%ptr: tensor<1024x!tt.ptr<i32>, #blocked>, %cond: i1) {
+  %1 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked1>
+  %2 = scf.while (%arg0 = %1, %arg1 = %cond) : (tensor<1024xi32, #blocked1>, i1) -> (tensor<1024xi32, #blocked1>) {
+      scf.condition(%arg1) %arg0 : tensor<1024xi32, #blocked1>
+    } do {
+    ^bb0(%arg0: tensor<1024xi32, #blocked1>):
+      %4 = ttg.convert_layout %arg0 : tensor<1024xi32, #blocked1> -> tensor<1024xi32, #blocked>
+      %5 = arith.addi %4, %4 : tensor<1024xi32, #blocked>
+      %6 = ttg.convert_layout %5 : tensor<1024xi32, #blocked> -> tensor<1024xi32, #blocked1>
+      scf.yield %6, %cond : tensor<1024xi32, #blocked1>, i1
+    }
+  %3 = ttg.convert_layout %2 : tensor<1024xi32, #blocked1> -> tensor<1024xi32, #blocked>
+  tt.store %ptr, %3 : tensor<1024x!tt.ptr<i32>, #blocked>
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// CHECK-LABEL: warp_specialize_backward_negative
+// CHECK: ttg.warp_specialize
+// CHECK: ttg.warp_yield {{.*}} : tensor<1024xi32, #blocked>
+// CHECK: () -> tensor<1024xi32, #blocked>
+// CHECK: ttg.convert_layout {{.*}} : tensor<1024xi32, #blocked> -> tensor<1024xi32, #blocked1>
+tt.func @warp_specialize_backward_negative(%arg0: tensor<1024xi32, #blocked>) -> tensor<1024xi32, #blocked1> {
+  %0 = ttg.warp_specialize()
+  default {
+    %1 = arith.addi %arg0, %arg0 : tensor<1024xi32, #blocked>
+    ttg.warp_yield %1 : tensor<1024xi32, #blocked>
+  } : () -> tensor<1024xi32, #blocked>
+  %2 = ttg.convert_layout %0 : tensor<1024xi32, #blocked> -> tensor<1024xi32, #blocked1>
+  tt.return %2 : tensor<1024xi32, #blocked1>
+}
+}
+
+// -----
+
+// scf.index_switch is not special-cased by rewriteSlice, so retyping its result
+// would leave the scf.yield in each region at the old encoding (the same defect
+// as ttg.warp_yield above). It is blocked because it implements
+// RegionBranchOpInterface, so the convert below must survive.
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// CHECK-LABEL: index_switch_backward_negative
+// CHECK: %[[SW:[0-9]+]] = scf.index_switch
+// CHECK: ttg.convert_layout %[[SW]] : tensor<1024xi32, #blocked1> -> tensor<1024xi32, #blocked>
+tt.func @index_switch_backward_negative(%ptr: tensor<1024x!tt.ptr<i32>, #blocked>, %idx: index) {
+  %1 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked1>
+  %2 = scf.index_switch %idx -> tensor<1024xi32, #blocked1>
+  case 0 {
+    scf.yield %1 : tensor<1024xi32, #blocked1>
+  }
+  default {
+    %3 = arith.addi %1, %1 : tensor<1024xi32, #blocked1>
+    scf.yield %3 : tensor<1024xi32, #blocked1>
+  }
+  %4 = ttg.convert_layout %2 : tensor<1024xi32, #blocked1> -> tensor<1024xi32, #blocked>
+  tt.store %ptr, %4 : tensor<1024x!tt.ptr<i32>, #blocked>
+  tt.return
+}
+}
+
+// -----
+
 // Suppose we have a loop which yields a value from outside the loop:
 //   %x = ...
 //   %y = ...
