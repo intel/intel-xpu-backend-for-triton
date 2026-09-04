@@ -315,8 +315,16 @@ extern "C" EXPORT_FUNC PyObject *get_device_properties(int device_id) {
                        "sub_group_sizes", subgroup_sizes);
 }
 
+struct KernelInfo {
+  sycl::kernel *kernel;
+  uint32_t kernel_num_args;
+};
+
 void freeKernel(PyObject *p) {
-  delete reinterpret_cast<sycl::kernel *>(PyCapsule_GetPointer(p, "kernel"));
+  KernelInfo *info =
+      reinterpret_cast<KernelInfo *>(PyCapsule_GetPointer(p, "kernel"));
+  delete info->kernel;
+  delete info;
 }
 
 void freeKernelBundle(PyObject *p) {
@@ -618,8 +626,13 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
       new sycl::kernel(sycl::make_kernel<sycl::backend::ext_oneapi_level_zero>(
           {*mod, l0_kernel, sycl::ext::oneapi::level_zero::ownership::transfer},
           ctx));
-  auto kernel_py =
-      PyCapsule_New(reinterpret_cast<void *>(fun), "kernel", freeKernel);
+
+  const uint32_t kernel_num_args =
+      fun->get_info<sycl::info::kernel::num_args>();
+  KernelInfo *kernel_info = new KernelInfo{fun, kernel_num_args};
+
+  auto kernel_py = PyCapsule_New(reinterpret_cast<void *>(kernel_info),
+                                 "kernel", freeKernel);
   auto kernel_bundle_py = PyCapsule_New(reinterpret_cast<void *>(mod),
                                         "kernel_bundle", freeKernelBundle);
   last_build_flag = build_flags;
@@ -1082,18 +1095,30 @@ static inline uintptr_t alignUp(uintptr_t value, size_t alignment) {
 static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
                                int num_warps, int threads_per_warp,
                                int shared_memory, sycl::queue &stream,
-                               sycl::kernel &kernel_ptr, void *global_scratch,
+                               KernelInfo *kernel_info, void *global_scratch,
                                void *profile_scratch, uint32_t num_params,
                                void **params, uint8_t *extractor_data) {
+  sycl::kernel &kernel = *kernel_info->kernel;
 
 #if defined(TRITON_INTEL_INJECT_PYTORCH)
   std::string kernel_name =
-      kernel_ptr.get_info<sycl::info::kernel::function_name>();
+      kernel.get_info<sycl::info::kernel::function_name>();
   RECORD_FUNCTION("XPU Triton kernel:" + kernel_name, {});
 #endif
 
-  uint32_t kernel_num_args =
-      kernel_ptr.get_info<sycl::info::kernel::num_args>();
+  // Shared memory is allocated statically in the kernel module, so it is not
+  // a kernel argument. Kernels that need a dynamic allocation (compiled with
+  // TRITON_INTEL_DYNAMIC_SHARED_MEMORY=1, or using a partitioned shared
+  // layout) do take a trailing shared memory argument, which is not part of
+  // `params`; detect that from the kernel so both flavors can be launched.
+  const bool is_bind_shared_memory =
+      shared_memory && (kernel_info->kernel_num_args == num_params + 1);
+
+  assert(num_params == // Actual number of params
+             kernel_info->kernel_num_args -
+                 (is_bind_shared_memory ? 1 : 0) && // Expected number of params
+         "number of kernel param not matched");
+
   size_t global_range_x =
       static_cast<size_t>(gridX) * threads_per_warp * num_warps;
   size_t global_range_y = gridY;
@@ -1105,31 +1130,20 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
   sycl::range<3> local_range(local_range_z, local_range_y, local_range_x);
   sycl::nd_range<3> parallel_work_size(global_range, local_range);
 
-  // Shared memory is allocated statically in the kernel module, so it is not a
-  // kernel argument. Kernels that need a dynamic allocation (compiled with
-  // TRITON_INTEL_DYNAMIC_SHARED_MEMORY=1, or using a partitioned shared layout)
-  // do take a trailing shared memory argument, which is not part of `params`;
-  // detect that from the kernel so both flavors can be launched.
-  const bool bind_shared_memory =
-      shared_memory && (kernel_num_args == num_params + 1);
-  uint32_t expected_num_params = kernel_num_args - (bind_shared_memory ? 1 : 0);
-
   static bool launchDebug = getBoolEnv("TRITON_INTEL_LAUNCH_DEBUG");
   if (launchDebug) {
 #if !defined(TRITON_INTEL_INJECT_PYTORCH)
     std::string kernel_name =
-        kernel_ptr.get_info<sycl::info::kernel::function_name>();
+        kernel.get_info<sycl::info::kernel::function_name>();
 #endif
-    std::cout << "kernel info name:" << kernel_name << " @" << &kernel_ptr
+    std::cout << "kernel info name:" << kernel_name << " @" << &kernel
               << std::endl;
     std::cout << "kernel info attributes:"
-              << kernel_ptr.get_info<sycl::info::kernel::attributes>()
-              << std::endl;
+              << kernel.get_info<sycl::info::kernel::attributes>() << std::endl;
     std::cout << "kernel info reference_count:"
-              << kernel_ptr.get_info<sycl::info::kernel::reference_count>()
+              << kernel.get_info<sycl::info::kernel::reference_count>()
               << std::endl;
-    std::cout << "kernel info num_args:"
-              << kernel_ptr.get_info<sycl::info::kernel::num_args>()
+    std::cout << "kernel info num_args:" << kernel_info->kernel_num_args
               << std::endl;
 
     std::cout << "launch num param:" << num_params << std::endl;
@@ -1154,8 +1168,6 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
     printScalarArgByType(num_params - 1, params[num_params - 1],
                          EXTRACTOR_POINTER_INDEX);
   }
-  assert(num_params == expected_num_params &&
-         "number of kernel param not matched");
   // Submit the imported kernel.
   auto cgf = [&](sycl::handler &cgh) {
     // Set kernel arguments dynamically using extractor type information
@@ -1165,12 +1177,12 @@ static void sycl_kernel_launch(uint32_t gridX, uint32_t gridY, uint32_t gridZ,
     // Set scratch memory arguments
     set_scalar_arg<void *>(cgh, num_params - 2, params[num_params - 2]);
     set_scalar_arg<void *>(cgh, num_params - 1, params[num_params - 1]);
-    if (bind_shared_memory) {
+    if (is_bind_shared_memory) {
       using share_mem_t = sycl::local_accessor<int8_t, 1>;
       share_mem_t local_buffer = share_mem_t(shared_memory, cgh);
       cgh.set_arg(num_params, local_buffer);
     }
-    syclex::nd_launch(cgh, parallel_work_size, kernel_ptr);
+    syclex::nd_launch(cgh, parallel_work_size, kernel);
   };
   // Event-less submit: nothing in the launch path consumes the event.
   //
@@ -1437,15 +1449,14 @@ extern "C" EXPORT_FUNC PyObject *launch(PyObject *args) {
   // Add scratch objects.
   params[params_idx++] = &global_scratch;
   params[params_idx++] = &profile_scratch;
-  sycl::kernel *kernel_ptr = reinterpret_cast<sycl::kernel *>(
-      PyCapsule_GetPointer(py_kernel, "kernel"));
-  if (kernel_ptr == nullptr)
+  KernelInfo *kernel_info =
+      reinterpret_cast<KernelInfo *>(PyCapsule_GetPointer(py_kernel, "kernel"));
+  if (kernel_info == nullptr)
     return NULL;
-  sycl::kernel kernel = *kernel_ptr;
 
   Py_BEGIN_ALLOW_THREADS;
   sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp,
-                     shared_memory, stream, kernel, global_scratch,
+                     shared_memory, stream, kernel_info, global_scratch,
                      profile_scratch, num_params, params, extractor_data);
   Py_END_ALLOW_THREADS;
 
