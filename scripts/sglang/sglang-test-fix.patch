@@ -1,5 +1,5 @@
 diff --git a/python/sglang/jit_kernel/dsv4/compress.py b/python/sglang/jit_kernel/dsv4/compress.py
-index bf82bff04..c8c9f0fcf 100644
+index bf82bff042..037efbffe6 100644
 --- a/python/sglang/jit_kernel/dsv4/compress.py
 +++ b/python/sglang/jit_kernel/dsv4/compress.py
 @@ -15,23 +15,27 @@ from sglang.srt.utils import is_hip, is_xpu
@@ -46,8 +46,155 @@ index bf82bff04..c8c9f0fcf 100644
  
  
  if TYPE_CHECKING:
+diff --git a/python/sglang/srt/layers/activation.py b/python/sglang/srt/layers/activation.py
+index a7db9d27af..2ddc400017 100644
+--- a/python/sglang/srt/layers/activation.py
++++ b/python/sglang/srt/layers/activation.py
+@@ -64,7 +64,23 @@ if _is_cuda:
+         silu_and_mul,
+     )
+ elif _is_xpu:
+-    from sgl_kernel import gelu_and_mul, gelu_tanh_and_mul, silu_and_mul
++    try:
++        from sgl_kernel import gelu_and_mul, gelu_tanh_and_mul, silu_and_mul
++    except ImportError:
++        # sgl-kernel-xpu is optional. Fall back to the same math forward_native
++        # uses, keeping the (input, out) signature the forward_xpu methods expect.
++        def silu_and_mul(input: torch.Tensor, out: torch.Tensor) -> None:
++            d = input.shape[-1] // 2
++            out.copy_(F.silu(input[..., :d]) * input[..., d:])
++
++        def gelu_and_mul(input: torch.Tensor, out: torch.Tensor) -> None:
++            d = input.shape[-1] // 2
++            out.copy_(F.gelu(input[..., :d], approximate="none") * input[..., d:])
++
++        def gelu_tanh_and_mul(input: torch.Tensor, out: torch.Tensor) -> None:
++            d = input.shape[-1] // 2
++            out.copy_(F.gelu(input[..., :d], approximate="tanh") * input[..., d:])
++
+ elif _is_hip:
+     from sgl_kernel import gelu_and_mul, gelu_quick, gelu_tanh_and_mul, silu_and_mul
+ elif _is_musa:
+diff --git a/python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe.py b/python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe.py
+index 6b1f011..04d3cc4 100644
+--- a/python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe.py
++++ b/python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe.py
+@@ -74,7 +74,12 @@ elif _is_hip:
+     # Note: vllm_ops is not needed for HIP when _use_aiter=False
+     # because the code uses moe_sum_reduce_triton as fallback (line 619)
+ elif _is_xpu:
+-    from sgl_kernel import moe_sum_reduce, silu_and_mul
++    try:
++        from sgl_kernel import moe_sum_reduce, silu_and_mul
++    except ImportError:
++        # sgl-kernel-xpu is optional, so fall through to the native torch
++        # silu_and_mul and the Triton moe_sum_reduce_triton below.
++        _is_xpu = False
+ elif _is_musa:
+     from sgl_kernel import moe_sum_reduce
+ 
+diff --git a/python/sglang/srt/layers/moe/moe_runner/triton_utils/moe_align_block_size.py b/python/sglang/srt/layers/moe/moe_runner/triton_utils/moe_align_block_size.py
+index fd535dc..83d6f70 100644
+--- a/python/sglang/srt/layers/moe/moe_runner/triton_utils/moe_align_block_size.py
++++ b/python/sglang/srt/layers/moe/moe_runner/triton_utils/moe_align_block_size.py
+@@ -18,6 +18,61 @@ _is_musa = is_musa()
+ if _is_cuda or _is_hip or _is_xpu or _is_musa:
+     from sglang.kernels.ops.moe import moe_align_block_size as sgl_moe_align_block_size
+ 
++if _is_xpu:
++    try:
++        import sgl_kernel  # noqa: F401
++    except ImportError:
++        # sgl-kernel-xpu is optional, but sgl_moe_align_block_size resolves to an
++        # AOT sgl_kernel op with no Triton or JIT alternative, so without it the
++        # Triton MoE kernels have no way to group tokens by expert. Group them with
++        # torch instead: same layout, sentinel padding and per-block expert ids.
++        def sgl_moe_align_block_size(
++            topk_ids: torch.Tensor,
++            num_experts: int,
++            block_size: int,
++            sorted_ids: torch.Tensor,
++            expert_ids: torch.Tensor,
++            num_tokens_post_pad: torch.Tensor,
++            cumsum_buffer: torch.Tensor,
++            pad_sorted_token_ids: bool = False,
++            ignore_invalid_expert: bool = False,
++        ) -> None:
++            numel = topk_ids.numel()
++            flat = topk_ids.flatten().to(torch.int64)
++            if bool((flat < 0).any()):
++                raise NotImplementedError(
++                    "the torch moe_align_block_size fallback does not handle the "
++                    "expert-parallel -1 sentinel; install sgl-kernel-xpu for EP"
++                )
++            order = torch.argsort(flat, stable=True).cpu()
++            counts = torch.bincount(flat, minlength=num_experts).cpu().tolist()
++
++            # Tokens past num_tokens_post_pad are never read, but the padding
++            # sentinel numel is >= num_valid_tokens so the kernels mask it out.
++            sorted_ids.fill_(numel)
++            expert_ids.zero_()
++
++            blocks, block_experts, pos = [], [], 0
++            for expert, count in enumerate(counts):
++                if count == 0:
++                    continue
++                num_blocks = triton.cdiv(count, block_size)
++                block = torch.full((num_blocks * block_size,), numel, dtype=torch.int32)
++                block[:count] = order[pos : pos + count].to(torch.int32)
++                pos += count
++                blocks.append(block)
++                block_experts += [expert] * num_blocks
++
++            if not blocks:
++                num_tokens_post_pad.zero_()
++                return
++            tokens = torch.cat(blocks)
++            sorted_ids[: tokens.numel()].copy_(tokens)
++            expert_ids[: len(block_experts)].copy_(
++                torch.tensor(block_experts, dtype=torch.int32)
++            )
++            num_tokens_post_pad.fill_(tokens.numel())
++
+ 
+ def moe_align_block_size(
+     topk_ids: torch.Tensor,
+diff --git a/python/sglang/srt/layers/moe/topk.py b/python/sglang/srt/layers/moe/topk.py
+index 9c47af7..c300ca5 100644
+--- a/python/sglang/srt/layers/moe/topk.py
++++ b/python/sglang/srt/layers/moe/topk.py
+@@ -180,7 +180,28 @@ if _is_cuda or _is_hip or _is_xpu:
+         # XPU has no tvm_ffi, so the CUDA JIT topk_sigmoid isn't reachable;
+         # use the AOT symbols from sgl_kernel directly. topk_sigmoid was aligned
+         # with the post-#28715 CUDA signature in sgl-kernel-xpu#285.
+-        from sgl_kernel import topk_sigmoid, topk_softmax
++        try:
++            from sgl_kernel import topk_sigmoid, topk_softmax
++        except ImportError:
++            # sgl-kernel-xpu is optional. Route softmax scoring through torch and
++            # leave topk_sigmoid undefined, exactly as the branch below does when
++            # its JIT kernel is missing.
++            def topk_softmax(
++                topk_weights: torch.Tensor,
++                topk_ids: torch.Tensor,
++                gating_output: torch.Tensor,
++                renormalize: bool = False,
++            ) -> None:
++                weights, ids = torch.topk(
++                    torch.softmax(gating_output.float(), dim=-1),
++                    topk_ids.shape[1],
++                    dim=-1,
++                )
++                if renormalize:
++                    weights = weights / weights.sum(dim=-1, keepdim=True)
++                topk_weights.copy_(weights)
++                topk_ids.copy_(ids)
++
+     else:
+         from sglang.kernels.ops.moe import topk_softmax
+ 
 diff --git a/test/registered/attention/test_triton_attention_kernels.py b/test/registered/attention/test_triton_attention_kernels.py
-index 10d2e9717..a312eb087 100644
+index 10d2e97178..a164d27695 100644
 --- a/test/registered/attention/test_triton_attention_kernels.py
 +++ b/test/registered/attention/test_triton_attention_kernels.py
 @@ -815,15 +815,22 @@ class TestTritonAttention(CustomTestCase):
@@ -79,3 +226,21 @@ index 10d2e9717..a312eb087 100644
  
          unified_kv_indptr, unified_kv_indices, prefix_lens = build_unified_kv_indices(
              kv_indptr,
+diff --git a/test/registered/moe/test_fused_moe.py b/test/registered/moe/test_fused_moe.py
+index d7f22c2c65..1f636cd2c5 100644
+--- a/test/registered/moe/test_fused_moe.py
++++ b/test/registered/moe/test_fused_moe.py
+@@ -117,7 +117,12 @@ class TestFusedMOE(CustomTestCase):
+         if use_fp8_w8a8:
+             # AssertionError: fp8e4nv data type is not supported on CUDA arch < 89
+             capability = get_device_capability()
+-            if not _is_hip and not (capability[0] >= 9 or capability == (8, 9)):
++            # get_device_capability() reports (None, None) on XPU, so treat an
++            # unknown capability as unsupported rather than raising a TypeError.
++            if not _is_hip and (
++                capability[0] is None
++                or not (capability[0] >= 9 or capability == (8, 9))
++            ):
+                 return
+ 
+             a = self.create_random_gpu_tensor((m, k), dtype)
