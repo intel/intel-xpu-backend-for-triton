@@ -20,6 +20,19 @@ def TTIG_BlockIOMode : I32EnumAttr<"BlockIOMode",
 }
 
 //===----------------------------------------------------------------------===//
+// 2D Block Load Padding Mode Enum
+//===----------------------------------------------------------------------===//
+
+def TTIG_PadNan  : I32EnumAttrCase<"PadNan",  0, "pad_nan">;
+def TTIG_PadZero : I32EnumAttrCase<"PadZero", 1, "pad_zero">;
+
+def TTIG_PaddingMode : I32EnumAttr<"PaddingMode",
+  "TritonIntelGPU 2D block load boundary padding fill mode",
+  [TTIG_PadNan, TTIG_PadZero]> {
+  let cppNamespace = "::mlir::triton::gpu::intel";
+}
+
+//===----------------------------------------------------------------------===//
 // Intel DPAS Layout Encoding
 //===----------------------------------------------------------------------===//
 

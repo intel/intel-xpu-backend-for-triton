@@ -311,13 +311,113 @@ private:
     for (unsigned d = 0; d + 2 < rank; ++d)
       batchStrides.push_back(strides[d + (descRank - rank)]);
 
-    // Determine padding mode from the descriptor.
-    bool padNan = padding == tt::PaddingOption::PAD_NAN;
-    UnitAttr padNanAttr = padNan ? builder.getUnitAttr() : UnitAttr();
+    const bool isPadded = padding == tt::PaddingOption::PAD_NAN ||
+                          padding == tt::PaddingOption::PAD_ZERO;
+    bool colNeedsRounding = false;
+    if (isPadded) {
+      const unsigned elemSizeInBytes = elemSizeInBits / 8;
+      constexpr unsigned kAlignBytes = 4; // i32 word = hardware OOB granularity
+
+      // Extra pitch headroom required beyond roundedBytes to account for the
+      // 64-byte base-address alignment compensation applied downstream. The
+      // base pointer is only guaranteed 4-byte aligned, so the compensation
+      // widens base_width by (ptr & 0x3F) — a runtime quantity we cannot bound
+      // any tighter than 63 here:
+      //   offsetInBytes = ptr & 0x3F  (at most 63 bytes)
+      //   hwBaseWidth   = roundUp(colBytes + offsetInBytes, kAlignBytes)
+      //                 ≤ colBytes + 63 + (kAlignBytes - 1)
+      //                 = colBytes + 66
+      //   roundedBytes  = colBytes + r,  r ∈ [1, kAlignBytes-1]  (≥ 1 since
+      //                   we only enter here when colBytes % kAlignBytes != 0)
+      // => hwBaseWidth - roundedBytes ≤ 66 - r ≤ 66 - 1 = 65
+      // pitch must satisfy pitch ≥ roundedBytes + kAlignCompBound to guarantee
+      // hwBaseWidth ≤ pitch for all element types.
+      // kAlignCompBound = ALIGNMENT_MASK + (kAlignBytes-1) - min(r) = 63+3-1 =
+      // 65
+      constexpr int64_t kAlignCompBound = 65;
+
+      // Column direction: align base_width to kAlignBytes.
+      for (auto d : allDescs) {
+        const auto descColCount =
+            tt::intel::getFoldedConstantValue(d->getOperand(descRank));
+        if (!descColCount) {
+          // Non-constant shape: cannot determine alignment statically.
+          // Proceed with 2D block load — the alignment may be fine at runtime,
+          // and we cannot do better without a runtime check.
+          // TODO: For runtime (non-constant) column counts we cannot prove that
+          // base_width widening is safe/sufficient. LoadStoreOpToLLVM clamps
+          // hwBaseWidth to pitch to satisfy base_width <= pitch, but when pitch
+          // is too small this can still leave i32-granularity OOB behavior
+          // incorrect; consider a runtime pitch check + scalar fallback.
+          continue;
+        }
+        int64_t colBytes = *descColCount * elemSizeInBytes;
+        if (colBytes % kAlignBytes != 0) {
+          colNeedsRounding = true;
+          int64_t roundedBytes =
+              ((colBytes + kAlignBytes - 1) / kAlignBytes) * kAlignBytes;
+          auto pitchSt = tt::intel::getFoldedConstantValue(
+              d->getOperand(2 * descRank - 1));
+          int64_t pitchBytes = pitchSt ? (*pitchSt * elemSizeInBytes) : 0;
+
+          const int64_t minPitch = roundedBytes + kAlignCompBound;
+
+          if (!pitchSt || pitchBytes < minPitch) {
+            // pitch too small or unknown: cannot safely widen base_width.
+            LDBG("Padded load: base_width="
+                 << colBytes << " not 4-aligned, pitch=" << pitchBytes
+                 << " < minPitch=" << minPitch
+                 << " — 2D block load skipped for: " << *op);
+            return;
+          }
+
+          LDBG("Padded load: base_width="
+               << colBytes << " will be rounded to " << roundedBytes
+               << " at LLVM lowering (pitch=" << pitchBytes << "): " << *op);
+        }
+      }
+
+      // Row direction: i32 granularity OOB check applies only to VNNI
+      // loads where multiple K-rows are packed into each i32 word
+      auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(encoding);
+      const bool isVNNILoad = dotOpEnc && dotOpEnc.getOpIdx() == 1;
+      if (isVNNILoad) {
+        const unsigned vnniGranularity = kAlignBytes / elemSizeInBytes;
+        // TODO: non-constant row count returns !sh=true (conservatively
+        // passes), but a runtime odd row count still causes the i32-pairing
+        // problem at runtime. A proper fix requires either a runtime check or
+        // restricting this path to constant-only row counts.
+        bool rowsAligned = llvm::all_of(allDescs, [&](tt::MakeTensorDescOp d) {
+          const auto descRowCount = tt::intel::getFoldedConstantValue(
+              d->getOperand(1 + (descRank - 2)));
+          return !descRowCount || (*descRowCount % vnniGranularity == 0);
+        });
+        if (!rowsAligned) {
+          LDBG("Padded load: odd VNNI K-row count — 2D block load skipped "
+               "for: "
+               << *op);
+          return;
+        }
+      }
+    }
+
+    // PAD_NAN always needs the mask (hardware fills zero, not NaN). PAD_ZERO
+    // only needs it when base_width is rounded up at LLVM lowering: rounding
+    // makes the hardware treat the padding bytes as in-bounds, so the mask has
+    // to restore the zero fill the hardware would have done otherwise. For an
+    // aligned base_width the hardware zero fill is already exact, and the
+    // attribute would only add rounding arithmetic and per-register selects.
+    ttgi::PaddingModeAttr paddingModeAttr;
+    if (padding == tt::PaddingOption::PAD_NAN)
+      paddingModeAttr = ttgi::PaddingModeAttr::get(builder.getContext(),
+                                                   ttgi::PaddingMode::PadNan);
+    else if (padding == tt::PaddingOption::PAD_ZERO && colNeedsRounding)
+      paddingModeAttr = ttgi::PaddingModeAttr::get(builder.getContext(),
+                                                   ttgi::PaddingMode::PadZero);
 
     auto blockLoadOp = ttgi::Subgroup2DBlockLoadOp::create(
         builder, loc, op.getType(), basePtr, baseWidth, baseHeight, basePitch,
-        offsetX, offsetY, batchStrides, padNanAttr,
+        offsetX, offsetY, batchStrides, paddingModeAttr,
         ttgi::BlockIOModeAttr::get(builder.getContext(), memLayout));
 
     // Propagate one_matrix_per_load attribute if present.
