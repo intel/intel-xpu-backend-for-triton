@@ -79,8 +79,12 @@ class XPUOptions:
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
-# Aligned with max_reg_spill in third_party/intel/backend/driver.c
-MAX_REG_SPILL = 0
+# Largest spill the auto-large-GRF upgrade tolerates before rebuilding, in the
+# unit external consumers compare `n_spills` in: dword-equivalents per lane. 16
+# is PyTorch inductor's default `spill_threshold` for non-HIP, so a spill at or
+# below this cannot change inductor's verdict and a rebuild would only cost
+# compile time. Kept in sync with `kMaxSpillSlotsPerLane` in driver.c.
+MAX_REG_SPILL_SLOTS_PER_LANE = 16
 
 SPILL_SIZE_RE = re.compile(r'spill_size\s*[:=]\s*(\d+)')
 PTSS_OVERFLOW_RE = re.compile(
@@ -117,6 +121,19 @@ def extract_spill_size_from_zebin(file):
         if match is not None:
             return int(match.group(1))
     return 0
+
+
+def spill_slots_per_lane(spill_size, threads_per_warp):
+    """Convert a zebin `spill_size` to the unit `n_spills` is reported in.
+
+    `spill_size` is bytes allocated per hardware thread; CUDA and HIP report
+    `n_spills` as dword-equivalents per lane, and that is the unit external
+    consumers threshold on. Mirrors `Spills::slotsPerLane` in driver.c, down to
+    the truncating division and the raw-byte fallback for an unknown width.
+    """
+    if spill_size <= 0 or threads_per_warp <= 0:
+        return spill_size
+    return spill_size // (4 * threads_per_warp)
 
 
 def min_dot_size(device_props: Union[Dict, GPUTarget]):
@@ -669,7 +686,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                     subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
                     if options.grf_mode == "default":
                         spill_size = extract_spill_size_from_zebin(fbin)
-                        if spill_size <= MAX_REG_SPILL:
+                        spill_slots = spill_slots_per_lane(spill_size, metadata["threads_per_warp"])
+                        if spill_slots <= MAX_REG_SPILL_SLOTS_PER_LANE:
                             break
                 except (subprocess.CalledProcessError, IntelGPUError) as e:
                     # If GRF mode was not last yet, retry with different GRF mode
