@@ -9,7 +9,9 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
-from triton_kernels_benchmark import sycl_tla_kernel
+from triton_kernels_benchmark.benchmark_testing import DEVICE, DEVICE_MODULE, get_xpu_extension
+
+sycl_tla_kernel = get_xpu_extension('sycl_tla_kernel')
 
 
 # pylint: disable=unused-argument
@@ -563,7 +565,7 @@ def get_benchmark(
     supported_providers = {
         'triton': 'Triton',
     }
-    if not use_fp8:
+    if sycl_tla_kernel is not None and not use_fp8:
         supported_providers['sycl-tla'] = 'SYCL-TLA'
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
@@ -609,11 +611,11 @@ def get_benchmark(
         if MODE not in modes:
             raise AssertionError(f'Unknown {MODE}, supported modes are {modes}')
         dtype = torch.float16
-        torch.xpu.empty_cache()
+        DEVICE_MODULE.empty_cache()
         torch.manual_seed(20)
-        q = (torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device='xpu').normal_(mean=0.0, std=0.5).requires_grad_())
-        k = (torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device='xpu').normal_(mean=0.0, std=0.5).requires_grad_())
-        v = (torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device='xpu').normal_(mean=0.0, std=0.5).requires_grad_())
+        q = (torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
+        k = (torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
+        v = (torch.empty((Z, H, N_CTX, D_HEAD), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
         sm_scale = 0.125
         atol = 1e-1 if N_CTX == 16384 else 1e-2
         bwd_atol = 1e-1 if N_CTX >= 4096 else 1e-2
@@ -638,7 +640,7 @@ def get_benchmark(
                         q_ref = q.detach().to(torch.float32)
                         k_ref = k.detach().to(torch.float32)
                         v_ref = v.detach().to(torch.float32)
-                        causal_mask = torch.tril(torch.ones((N_CTX, N_CTX), device='xpu'))
+                        causal_mask = torch.tril(torch.ones((N_CTX, N_CTX), device=DEVICE))
                         p_ref = torch.matmul(q_ref, k_ref.transpose(2, 3)) * sm_scale
                         if CAUSAL:
                             p_ref[:, :, causal_mask == 0] = float('-inf')
@@ -675,7 +677,7 @@ def get_benchmark(
             if MODE == 'fwd':
                 name = 'attention'
                 func = getattr(sycl_tla_kernel, name)
-                out = torch.zeros((Z, H, N_CTX, D_HEAD), device='xpu', dtype=torch.float32, requires_grad=True)
+                out = torch.zeros((Z, H, N_CTX, D_HEAD), device=DEVICE, dtype=torch.float32, requires_grad=True)
 
                 def sycl_tla_fwd_fn():
                     func(q, k, v, out, Z, H, H, N_CTX, N_CTX, D_HEAD, D_HEAD, CAUSAL, sm_scale)
