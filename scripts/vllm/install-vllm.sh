@@ -204,6 +204,10 @@ while [[ $# -gt 0 ]]; do
       cat <<EOF
 Usage: $0 [options]
 
+By default, prebuilt nightly vLLM XPU kernels wheels matching the pinned commit are installed from the $DEFAULT_BRANCH
+branch nightly builds. If no matching wheel is available, the script automatically falls back to building from source.
+vLLM is built and installed from source as an editable install.
+
 Options:
   --source                       Build vLLM XPU kernels from source using pinned commit.
 
@@ -312,7 +316,7 @@ try_install_wheel_from_run() {
   wheel_commit="${wheel_commit%%.*}"
 
   if [[ "$vllm_xpu_kernels_pinned_commit" != "$wheel_commit"* ]]; then
-    echo "ERROR: vLLM XPU kernels nightly wheel commit ($wheel_commit) does not match pinned commit ($vllm_xpu_kernels_pinned_commit). Use --source to build from source." >&2
+    echo "*** vLLM XPU kernels wheel commit ($wheel_commit) does not match pinned commit ($vllm_xpu_kernels_pinned_commit). ***"
     return 1
   fi
 
@@ -324,19 +328,34 @@ try_install_wheel_from_run() {
   return 0
 }
 
-# Try a run id.
-# Exits the script on install (0) or commit-mismatch (1).
-# Returns to caller when the run_id is null or the run has no wheel.
+# Install a run's vLLM XPU kernels wheel, exiting on success; returns if it has no matching wheel.
 try_run() {
   [[ "$1" == "null" ]] && return 0
 
-  local status
   rm -rf "$temp_dir"/*
-  try_install_wheel_from_run "$1" "$wheel_pattern" "$temp_dir" && exit 0 || status=$?
-
-  [[ $status -eq 1 ]] && exit 1
+  try_install_wheel_from_run "$1" "$wheel_pattern" "$temp_dir" && exit 0 || true
 
   return 0
+}
+
+# Print the pinned vLLM XPU kernels commit recorded at a given triton commit (empty on error).
+pin_at_ref() {
+  gh api "repos/$triton_repo/contents/scripts/vllm/vllm-xpu-kernels-pin.txt?ref=$1" \
+    --jq '.content' 2>/dev/null | base64 -d 2>/dev/null | tr -d '[:space:]'
+}
+
+# List recent nightly-wheels runs as JSON, with retries (the run-list API is flaky).
+list_nightly_runs() {
+  local attempt out
+  for attempt in 1 2 3; do
+    if out="$(gh run list --workflow nightly-wheels.yml --branch "$triton_repo_branch" \
+        -R "$triton_repo" --json databaseId,headSha,createdAt,conclusion --limit 50 2>/dev/null)"; then
+      printf '%s' "$out"
+      return 0
+    fi
+    sleep $((attempt * 3))
+  done
+  return 1
 }
 
 if [[ "$build_vllm" == false ]]; then
@@ -350,22 +369,31 @@ if [[ "$build_vllm" == false ]]; then
     exit 1
   fi
 
-  echo "*** Downloading nightly builds. ***"
+  echo "*** Locating a prebuilt vLLM XPU kernels wheel matching the pinned commit. ***"
   wheel_pattern="wheels-vllm-py$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")-*"
   temp_dir="$(mktemp -d)"
   trap 'rm -rf "$temp_dir"' EXIT
 
-  # Try latest completed run first (any conclusion)
-  latest_run="$(gh run list --workflow nightly-wheels.yml --branch "$triton_repo_branch" -R "$triton_repo" --status completed --json databaseId --limit 1 | jq -r '.[0].databaseId')"
-  try_run "$latest_run"
+  # gh run list ordering is unstable (cli/cli#6678), so don't trust "latest": sort a window
+  # ourselves and pick the run whose pinned commit matches (read cheaply from its head commit).
+  runs_json="$(list_nightly_runs)" || runs_json=""
 
-  # Latest run didn't have a wheel for this Python version, try latest successful run
-  echo "*** Latest run has no wheel for this Python version, trying latest successful run... ***"
-  latest_success_run="$(gh run list --workflow nightly-wheels.yml --branch "$triton_repo_branch" -R "$triton_repo" --json databaseId,conclusion --limit 20 | jq -r '[.[] | select(.conclusion=="success")][0].databaseId')"
-  [[ "$latest_success_run" != "$latest_run" ]] && try_run "$latest_success_run"
+  candidate_runs=()
+  if [[ -n "$runs_json" ]]; then
+    mapfile -t candidate_runs < <(printf '%s' "$runs_json" \
+      | jq -r '[.[] | select(.conclusion == "success")] | sort_by(.createdAt) | reverse | .[] | "\(.databaseId)\t\(.headSha)"')
+  fi
 
-  echo "ERROR: No nightly build vllm-xpu-kernels wheel found. Use --source to build from source." >&2
-  exit 1
+  for entry in "${candidate_runs[@]}"; do
+    run_id="${entry%%$'\t'*}"
+    head_sha="${entry##*$'\t'}"
+    [[ "$(pin_at_ref "$head_sha")" == "$vllm_xpu_kernels_pinned_commit" ]] || continue
+    try_run "$run_id"
+  done
+
+  # No matching wheel available for this Python version: fall back to building from source.
+  echo "*** No matching nightly vllm-xpu-kernels wheel found. Falling back to building from source. ***"
+  build_vllm=true
 fi
 
 echo "*** Base directory: $ROOT. ***"
