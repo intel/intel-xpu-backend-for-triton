@@ -1097,6 +1097,53 @@ static bool isRematerializableInSlice(Operation *op) {
   return canBeRemat(op) || isExpensiveLoadRematCandidate(op);
 }
 
+// FIXME(#7890): Helper function to get the base pointer by tracing through
+// AddPtrOp and SplatOp operations.
+static Value getBasePointer(Value ptr) {
+  Value base = ptr;
+  // Trace through AddPtrOp chains
+  while (auto addPtrOp = base.getDefiningOp<tt::AddPtrOp>())
+    base = addPtrOp.getPtr();
+  // Trace through SplatOp to get the scalar pointer
+  if (auto splatOp = base.getDefiningOp<tt::SplatOp>())
+    base = splatOp.getSrc();
+  return base;
+}
+
+// FIXME(#7890): Check if a pointer is stored to anywhere in the function with
+// a DIFFERENT encoding than the target encoding. Used to reject
+// rematerializations that could create race conditions when the same pointer is
+// accessed with different encodings. If the store uses the SAME encoding, it's
+// safe.
+static bool isPointerStoredWithDifferentEncoding(Value basePtr,
+                                                 tt::FuncOp funcOp,
+                                                 Attribute targetEncoding) {
+  // Lambda to check if a store conflicts with the target encoding
+  auto checkStoreEncoding = [&](Value storePtr, Value storeValue) -> bool {
+    if (getBasePointer(storePtr) == basePtr) {
+      auto valueTy = dyn_cast<RankedTensorType>(storeValue.getType());
+      if (valueTy) {
+        Attribute storeEncoding = valueTy.getEncoding();
+        if (storeEncoding != targetEncoding)
+          return true; // Different encoding - conflict!
+      }
+    }
+    return false;
+  };
+
+  auto result = funcOp.walk([&](Operation *op) {
+    if (auto storeOp = dyn_cast<tt::StoreOp>(op)) {
+      if (checkStoreEncoding(storeOp.getPtr(), storeOp.getValue()))
+        return WalkResult::interrupt();
+    } else if (auto descStoreOp = dyn_cast<tt::DescriptorStoreOp>(op)) {
+      if (checkStoreEncoding(descStoreOp.getDesc(), descStoreOp.getSrc()))
+        return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  return result.wasInterrupted();
+}
+
 void LayoutRematerialization::updateRematMapping(
     SmallVector<std::tuple<Value, Value>> &values) {
   for (auto [old, newV] : values) {
@@ -1600,6 +1647,49 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
         return failure();
     }
   }
+
+  // FIXME(#7890): Check to prevent rematerializing loads from pointers that are
+  // stored to elsewhere with a DIFFERENT encoding.
+  //
+  // When rematerializing memory operations with different encodings, we must
+  // ensure that operations on the same pointer use consistent thread-to-address
+  // mappings. Otherwise, different work-items will access different addresses
+  // for the same logical element, creating a race condition.
+  //
+  // Example: If in_out_ptr0 is loaded in this slice (to be rematerialized with
+  // #blocked1), and there's a store to in_out_ptr0 elsewhere with #blocked,
+  // we would create:
+  //   - Path 1 (store): Lane 0 writes to address X (encoding #blocked)
+  //   - Path 2 (load):  Lane 0 reads from address Y (encoding #blocked1,
+  //   transposed)
+  // This creates a race where lanes read/write each other's data.
+  //
+  // However, if the store uses the SAME encoding (rootEncoding), both the load
+  // and store would use the same thread-to-address mapping, which is safe.
+  for (Value v : slice) {
+    Operation *op = v.getDefiningOp();
+    if (!op)
+      continue;
+
+    // Check loads - if the pointer is stored to with a different encoding,
+    // reject
+    Value ptr;
+    if (auto loadOp = dyn_cast<tt::LoadOp>(op))
+      ptr = loadOp.getPtr();
+    else if (auto descLoadOp = dyn_cast<tt::DescriptorLoadOp>(op))
+      ptr = descLoadOp.getDesc();
+    else
+      continue;
+
+    Value basePtr = getBasePointer(ptr);
+    if (isPointerStoredWithDifferentEncoding(basePtr, funcOp, rootEncoding)) {
+      LDBG("Rejecting slice: pointer "
+           << basePtr << " is loaded (in slice) with encoding " << rootEncoding
+           << " but stored elsewhere with different encoding");
+      return failure();
+    }
+  }
+
   sliceArg = std::move(slice);
   layoutArg = std::move(layout);
   return success();
