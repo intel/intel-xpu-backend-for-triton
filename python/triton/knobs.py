@@ -599,6 +599,10 @@ class intel_knobs(base_knobs):
     enable_code_sinking: env_bool = env_bool("TRITON_INTEL_ENABLE_CODE_SINKING", False)
     disable_canonicalize_pointers: env_bool = env_bool("TRITON_INTEL_DISABLE_CANONICALIZE_POINTERS", True)
     enable_loop_distribution: env_bool = env_bool("TRITON_INTEL_ENABLE_LOOP_DISTRIBUTION", False)
+    # Run loop distribution only on the loops its profitability cost model
+    # accepts. `enable_loop_distribution` takes precedence and distributes
+    # every legal loop.
+    enable_loop_distribution_cost_model: env_bool = env_bool("TRITON_INTEL_ENABLE_LOOP_DISTRIBUTION_COST_MODEL", False)
     enable_sub_32_dpas: env_bool = env_bool("TRITON_INTEL_ENABLE_DPAS_FOR_WARP_SIZE_32", False)
     fast_math: _env_fast_math = _env_fast_math()
 
