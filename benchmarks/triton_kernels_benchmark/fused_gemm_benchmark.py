@@ -25,25 +25,41 @@ def native_torch_fused_gemm(x, w_g, w_fc, b_g, b_fc):
 
 
 def get_fused_gemm_autotune_configs() -> list[triton.Config]:
-    return [
-        triton.Config(
-            {
-                'BLOCK_SIZE_M': BM,
-                'BLOCK_SIZE_N': BN,
-                'BLOCK_SIZE_K': BK,
-                'GROUP_SIZE_M': G,
-                'grf_mode': '128',
-            },
-            num_stages=s,
-            num_warps=w,
-        )
-        for BM in [128, 256]
-        for BN in [32, 64]
-        for BK in [32, 64]
-        for G in [4, 8, 16]
-        for s in [2, 3, 4]
-        for w in [8, 16, 32]
+    configs = []
+
+    # Test three loop distribution strategies:
+    # 1. No distribution (baseline)
+    # 2. Force distribution (original behavior)
+    # 3. Cost model gated distribution (new behavior)
+    loop_dist_configs = [
+        {'loop_distribute': False, 'loop_distribute_cost_model': False},
+        {'loop_distribute': True, 'loop_distribute_cost_model': False},
+        {'loop_distribute': False, 'loop_distribute_cost_model': True},
     ]
+
+    for ld_cfg in loop_dist_configs:
+        for BM in [128, 256]:
+            for BN in [32, 64]:
+                for BK in [32, 64]:
+                    for G in [4, 8, 16]:
+                        for s in [2, 3, 4]:
+                            for w in [8, 16, 32]:
+                                configs.append(
+                                    triton.Config(
+                                        {
+                                            'BLOCK_SIZE_M': BM,
+                                            'BLOCK_SIZE_N': BN,
+                                            'BLOCK_SIZE_K': BK,
+                                            'GROUP_SIZE_M': G,
+                                            'grf_mode': '128',
+                                            **ld_cfg,
+                                        },
+                                        num_stages=s,
+                                        num_warps=w,
+                                    )
+                                )
+
+    return configs
 
 
 @triton.autotune(
