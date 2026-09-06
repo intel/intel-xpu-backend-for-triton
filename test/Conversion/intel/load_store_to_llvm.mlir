@@ -65,12 +65,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     tt.store %6, %cst cacheModifier = cs : tensor<256x!tt.ptr<f32>, #blocked0>
     tt.store %6, %cst cacheModifier = wt : tensor<256x!tt.ptr<f32>, #blocked0>
     tt.store %6, %cst cacheModifier = cv : tensor<256x!tt.ptr<f32>, #blocked0>
+    // COM: no cache modifier
     // CHECK-COUNT-2: llvm.store {{.*}} {alignment = 16 : i64} : vector<4xi32>, !llvm.ptr<1>
+    // COM: `ca` -> L1WB_L3WB, write-back being the store-side sense of
+    // COM: "cached", so no annotation.
     // CHECK-COUNT-2: llvm.store {{.*}} {alignment = 16 : i64} : vector<4xi32>, !llvm.ptr<1>
-    // CHECK-COUNT-2: llvm.store {{.*}} {alignment = 16 : i64, nontemporal} : vector<4xi32>, !llvm.ptr<1>
+    // COM: `cg` -> L1UC_L3WB, which asks for L3 write-back. `nontemporal` is a
+    // COM: single bit that IGC turns into LSC `.uc.uc`, bypassing L3 too, so it
+    // COM: cannot express `cg`; a plain store carries no annotation for it.
+    // COM: See getNonTemporalFlag().
     // CHECK-COUNT-2: llvm.store {{.*}} {alignment = 16 : i64} : vector<4xi32>, !llvm.ptr<1>
-    // CHECK-COUNT-2: llvm.store {{.*}} {alignment = 16 : i64, nontemporal} : vector<4xi32>, !llvm.ptr<1>
+    // COM: `wb` -> L1WB_L3WB; no annotation.
     // CHECK-COUNT-2: llvm.store {{.*}} {alignment = 16 : i64} : vector<4xi32>, !llvm.ptr<1>
+    // COM: `cs` -> L1S_L3S, which keeps the line in L3, so `nontemporal` does
+    // COM: not express it either. Unannotated, a documented approximation.
+    // CHECK-COUNT-2: llvm.store {{.*}} {alignment = 16 : i64} : vector<4xi32>, !llvm.ptr<1>
+    // COM: `wt` -> L1WT_L3WT; no annotation.
+    // CHECK-COUNT-2: llvm.store {{.*}} {alignment = 16 : i64} : vector<4xi32>, !llvm.ptr<1>
+    // COM: `cv` -> L1UC_L3UC, which `nontemporal` does express exactly, and is
+    // COM: the sole store modifier that sets it.
     // CHECK-COUNT-2: llvm.store {{.*}} {alignment = 16 : i64, nontemporal} : vector<4xi32>, !llvm.ptr<1>
     tt.return
   }
@@ -101,6 +114,63 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.sup
   tt.func @load_cs_predicated(%ptr: tensor<1024x!tt.ptr<f32>, #blocked>, %mask: tensor<1024xi1, #blocked>) {
     // CHECK: triton_gen.predicated_load {{.*}} {cache_control = L1S_L3C} : (!llvm.ptr<1>, i1, i32) -> i32
     %val = tt.load %ptr, %mask cacheModifier = cs : tensor<1024x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: `ca` on a masked store is mapped to L1WB_L3WB -- the same control as
+// COM: `wb`, write-back being the store-side sense of "cached". It used to be
+// COM: missing from the store side of tritonToIntelCacheModifier(), so this
+// COM: kernel aborted the compiler on `invalid cache modifier for StoreOp`.
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.support_predicated_io} {
+  // CHECK-LABEL: store_ca_predicated
+  tt.func @store_ca_predicated(%ptr: tensor<1024x!tt.ptr<f32>, #blocked>, %val: tensor<1024xf32, #blocked>, %mask: tensor<1024xi1, #blocked>) {
+    // CHECK: triton_gen.predicated_store {{.*}} {cache_control = L1WB_L3WB} : (!llvm.ptr<1>, i32, i1) -> ()
+    tt.store %ptr, %val, %mask cacheModifier = ca : tensor<1024x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: `cv` on a masked store has a cache control of its own (L1 uncached,
+// COM: L3 uncached). It used to be missing from the store side of
+// COM: tritonToIntelCacheModifier(), so this kernel aborted the compiler on
+// COM: `invalid cache modifier for StoreOp`.
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.support_predicated_io} {
+  // CHECK-LABEL: store_cv_predicated
+  tt.func @store_cv_predicated(%ptr: tensor<1024x!tt.ptr<f32>, #blocked>, %val: tensor<1024xf32, #blocked>, %mask: tensor<1024xi1, #blocked>) {
+    // CHECK: triton_gen.predicated_store {{.*}} {cache_control = L1UC_L3UC} : (!llvm.ptr<1>, i32, i1) -> ()
+    tt.store %ptr, %val, %mask cacheModifier = cv : tensor<1024x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Masked `ca` and `cv` stores on a target WITHOUT predicated-I/O support
+// COM: fall back to control-flow-guarded plain llvm.store. `ca` (L1WB_L3WB)
+// COM: emits an unannotated store. `cv` (L1UC_L3UC) sets the `nontemporal`
+// COM: flag, which encodes it exactly. This fallback path is NOT changed by
+// COM: the fix that added `ca` and `cv` support to the predicated path. This
+// COM: test confirms the fallback behavior stayed intact.
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: store_ca_cv_scalar_fallback
+  tt.func @store_ca_cv_scalar_fallback(%ptr: tensor<1024x!tt.ptr<f32>, #blocked>, %val: tensor<1024xf32, #blocked>, %mask: tensor<1024xi1, #blocked>) {
+    tt.store %ptr, %val, %mask cacheModifier = ca : tensor<1024x!tt.ptr<f32>, #blocked>
+    tt.store %ptr, %val, %mask cacheModifier = cv : tensor<1024x!tt.ptr<f32>, #blocked>
+    // CHECK: llvm.store {{.*}} {alignment = 4 : i64} : i32, !llvm.ptr<1>
+    // CHECK-NOT: triton_gen.predicated_store
+    // CHECK: llvm.store {{.*}} {alignment = 4 : i64, nontemporal} : i32, !llvm.ptr<1>
+    // CHECK-NOT: triton_gen.predicated_store
     tt.return
   }
 }
