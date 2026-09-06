@@ -80,11 +80,6 @@ def test_block_load_dpas_layout(M, N, dtype_str, padding_id, expected_oob, devic
 
     torch.set_printoptions(profile="full", precision=2, sci_mode=0, linewidth=200)
 
-    # Build expected output explicitly: 1.0 for in-bounds elements, NaN for OOB
-    # (PAD_NAN) or 0.0 (PAD_ZERO). The descriptor has shape (M-1, N-1) for A and
-    # (N-1, M-1) for B, loaded into full (M, N) and (N, M) tiles respectively.
-    # This avoids depending on a zero-padding reference path, which is unreliable
-    # for packed fp16 (kWidth=2) operands where hardware boundary behaviour varies.
     x_expected = torch.ones((M, N), dtype=torch_dtype, device=device)
     x_expected[M - 1:, :] = expected_oob  # OOB row
     x_expected[:, N - 1:] = expected_oob  # OOB col

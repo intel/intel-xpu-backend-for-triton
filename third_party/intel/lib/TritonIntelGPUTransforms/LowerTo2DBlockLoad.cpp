@@ -353,8 +353,8 @@ private:
         }
       }
 
-      // Row direction: i32 granularity OOB check applies only to VNNI (B
-      // operand) loads where multiple K-rows are packed into each i32 word.
+      // Row direction: i32 granularity OOB check to VNNI loads
+      // where multiple K-rows are packed into each i32 word.
       auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(encoding);
       const bool isVNNILoad = dotOpEnc && dotOpEnc.getOpIdx() == 1;
       if (isVNNILoad) {
