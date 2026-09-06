@@ -39,12 +39,12 @@ namespace {
 // A load is worth sinking (moving closer to its use, with a cheap prefetch
 // left behind) when the loop it would otherwise stay live across is under
 // enough register pressure to make trading a redundant-but-cheap 2D block
-// load for freed registers a real win. `RegisterPressureAnalysis::
-// liveInPressure` reports bytes **per lane** (see RegisterPressure.h), so the
-// floor below must be expressed in the same per-lane unit rather than the
-// per-*hardware-thread* unit `getGRFBytesPerThread` returns on its own --
-// see `getPerLaneGRFBudgetInBytes`, which does that conversion using the
-// module's actual threads-per-warp rather than an assumed constant.
+// load for freed registers a real win.
+//
+// NOTE: This version does NOT perform units conversion - it compares
+// liveInPressure (per-lane bytes) directly against getGRFBytesPerThread
+// (per-hardware-thread bytes). This is intentionally testing the performance
+// impact of the units mismatch to inform the proper fix approach.
 constexpr uint32_t LIVE_IN_PRESSURE_GRF_BUDGET_MULTIPLIER = 2; // 200%
 
 /// The set of `grf-mode` values `getGRFBytesPerThread` assigns a real,
@@ -54,34 +54,10 @@ constexpr uint32_t LIVE_IN_PRESSURE_GRF_BUDGET_MULTIPLIER = 2; // 200%
 constexpr std::array<StringRef, 5> VALID_GRF_MODES = {"default", "auto", "128",
                                                       "256", "512"};
 
-/// Convert the per-hardware-thread GRF budget for \p grfMode into a per-lane
-/// figure, dividing by the module's actual threads-per-warp so the result is
-/// in the same unit `RegisterPressureAnalysis::liveInPressure` reports.
-/// Falls back to the unscaled per-thread budget (with a diagnostic) if
-/// threads-per-warp is missing or non-positive, rather than dividing by zero.
-unsigned getPerLaneGRFBudgetInBytes(StringRef grfMode, ModuleOp mod) {
-  if (!llvm::is_contained(VALID_GRF_MODES, grfMode))
-    mod.emitWarning("unrecognized grf-mode '" + grfMode +
-                    "' for tritonintelgpu-reduce-variable-liveness; "
-                    "falling back to the 'default' GRF budget");
-  unsigned grfBudget =
-      ttg::intel::RegisterPressureAnalysis::getGRFBytesPerThread(grfMode);
-  int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
-  if (threadsPerWarp <= 0) {
-    mod.emitWarning(
-        "ttg.threads-per-warp is missing or non-positive; cannot convert "
-        "the per-hardware-thread GRF budget to a per-lane figure, falling "
-        "back to the unscaled per-thread budget for tritonintelgpu-"
-        "reduce-variable-liveness");
-    return grfBudget;
-  }
-  return grfBudget / static_cast<unsigned>(threadsPerWarp);
-}
-
 /// Return true if the lifespan of the \p v value is considered long.
 bool isLongLifeSpanVariable(
     Value v, const ttg::intel::RegisterPressureAnalysis &analysis,
-    Block *dotBlock, unsigned perLaneGRFBudget) {
+    Block *dotBlock, StringRef grfMode, ModuleOp mod) {
   // The variable is considered as a long life span elected for being moved if
   // it is a 2D tensor, it is genuinely live-in to the block (defined outside,
   // used inside -- i.e. it would otherwise stay resident across the whole
@@ -94,9 +70,21 @@ bool isLongLifeSpanVariable(
   auto tensorType = cast<RankedTensorType>(tensorV.getType());
   auto tensorOrder = ttg::getOrder(tensorType);
   unsigned liveInSizeInBytes = analysis.liveInPressure(dotBlock);
-  return ((tensorOrder.size() == 2) &&
-          (liveInSizeInBytes >=
-           perLaneGRFBudget * LIVE_IN_PRESSURE_GRF_BUDGET_MULTIPLIER) &&
+
+  // Validate grf-mode
+  if (!llvm::is_contained(VALID_GRF_MODES, grfMode))
+    mod.emitWarning("unrecognized grf-mode '" + grfMode +
+                    "' for tritonintelgpu-reduce-variable-liveness; "
+                    "falling back to the 'default' GRF budget");
+
+  // NO units conversion: direct comparison between liveInPressure (per-lane)
+  // and getGRFBytesPerThread (per-thread). This is intentionally wrong for
+  // testing purposes - comparing mismatched units to see performance impact.
+  unsigned grfBudget =
+      ttg::intel::RegisterPressureAnalysis::getGRFBytesPerThread(grfMode);
+  unsigned threshold = grfBudget * LIVE_IN_PRESSURE_GRF_BUDGET_MULTIPLIER;
+
+  return ((tensorOrder.size() == 2) && (liveInSizeInBytes >= threshold) &&
           analysis.isLiveIn(dotBlock, v));
 }
 
@@ -154,7 +142,7 @@ void createPrefetchOp(tt::DescriptorLoadOp loadOp) {
 /// Returns `true` if at least one operand has been moved.
 bool optimizeDotOperands(scf::ForOp forOp, SmallVector<Value> &prefetchedValue,
                          ttg::intel::RegisterPressureAnalysis &analysis,
-                         unsigned perLaneGRFBudget) {
+                         StringRef grfMode, ModuleOp mod) {
   Block *loop = forOp.getBody();
   bool opMoved = false;
 
@@ -249,8 +237,7 @@ bool optimizeDotOperands(scf::ForOp forOp, SmallVector<Value> &prefetchedValue,
     // dot operand may be a ConvertLayoutOp result (possibly inside the loop)
     // while the load result is the truly long-lived value defined outside.
     Value loadResult = loadOp->getResult(0);
-    if (!isLongLifeSpanVariable(loadResult, analysis, dotBlock,
-                                perLaneGRFBudget))
+    if (!isLongLifeSpanVariable(loadResult, analysis, dotBlock, grfMode, mod))
       return;
     auto tensorType = cast<RankedTensorType>(operand.getType());
     Type elTy = tensorType.getElementType();
@@ -298,12 +285,10 @@ public:
 
     Operation *rootOperation = getOperation();
     ModuleOp mod = getOperation();
-    unsigned perLaneGRFBudget = getPerLaneGRFBudgetInBytes(grfMode, mod);
     ttg::intel::RegisterPressureAnalysis analysis(rootOperation);
     // TODO: extend the pass to handle `while` loops.
     rootOperation->walk([&](scf::ForOp forOp) {
-      if (optimizeDotOperands(forOp, prefetchedValue, analysis,
-                              perLaneGRFBudget)) {
+      if (optimizeDotOperands(forOp, prefetchedValue, analysis, grfMode, mod)) {
         // The register pressure analysis must be re-performed before the
         // processing of each "for loop" given that the liveness of variables
         // may have changed as a result of the code, and specifically `LoadOps`,
