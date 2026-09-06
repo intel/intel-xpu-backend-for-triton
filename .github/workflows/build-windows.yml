@@ -23,9 +23,6 @@ jobs:
     runs-on:
       - windows
     steps:
-      - name: Prepare git
-        run: git config --global core.autocrlf false
-
       - name: Checkout repository
         uses: actions/checkout@v7
 
