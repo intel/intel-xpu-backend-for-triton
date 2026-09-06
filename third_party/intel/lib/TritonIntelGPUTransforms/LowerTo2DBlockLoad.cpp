@@ -315,19 +315,17 @@ private:
     bool padNan = padding == tt::PaddingOption::PAD_NAN;
     UnitAttr padNanAttr = padNan ? builder.getUnitAttr() : UnitAttr();
 
-    // PVC Max 1100 applies OOB boundary checks at i32 (4-byte) granularity for
-    // 2D block loads, even for fp16 (elem_size_in_bits=16). When base_width is
+    // OOB boundary checks are applied at i32 (4-byte) granularity for
+    // 2D block loads, even for elem_size_in_bits < 32. When base_width is
     // not a multiple of 4 bytes, the last partial i32 word is considered OOB
     // and hardware zeroes it -- including any in-bounds element it contains.
-    // For VNNI (B-operand) loads, the hardware additionally packs
+    // For VNNI loads, the hardware additionally packs
     // kAlignBytes/elemSizeInBytes K-rows into each i32 word; an odd row count
     // causes the same coarse-granularity corruption in the row direction.
     //
     // This is a conservative, compile-time-only fix: whenever either check
     // could be violated for a compile-time-constant descriptor shape, bail to
     // the existing scalar-load fallback instead of emitting a 2D block load.
-    // Widening base_width (when pitch headroom permits) instead of bailing is
-    // left to a follow-up patch (#6002).
     const bool isPadded = padding == tt::PaddingOption::PAD_NAN ||
                           padding == tt::PaddingOption::PAD_ZERO;
     if (isPadded) {

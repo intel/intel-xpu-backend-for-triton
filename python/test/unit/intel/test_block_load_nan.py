@@ -10,10 +10,11 @@ from triton._internal_testing import is_xpu
 @pytest.mark.parametrize("M, N",
                          [[256, 64], [256, 32], [128, 32], [128, 16], [128, 8], [64, 64], [64, 32], [32, 32], [16, 64]])
 @pytest.mark.parametrize("dtype_str", ["float32", "float16"])
+@pytest.mark.parametrize("padding_id, expected_oob", [(2, float('nan')), (1, 0.0)], ids=["pad_nan", "pad_zero"])
 @pytest.mark.skipif(not is_xpu(), reason="Block load tests are specific to the XPU backend")
 @pytest.mark.xfail(not triton.runtime.driver.active.get_current_target().arch['has_2d_block_io'],
                    reason="Block loads not supported on this architecture", run=False)
-def test_block_load_dpas_layout(M, N, dtype_str, device, tmp_path: pathlib.Path):
+def test_block_load_dpas_layout(M, N, dtype_str, padding_id, expected_oob, device, tmp_path: pathlib.Path):
     # modify the layouts to ensure the correct OCL/SPIRV intrinsic is called for each datatype
     if dtype_str == "float32":
         A_width = 1
@@ -48,14 +49,14 @@ def test_block_load_dpas_layout(M, N, dtype_str, device, tmp_path: pathlib.Path)
             %c0_i32 = arith.constant 0 : i32
 
             // A matrix
-            %1 = tt.make_tensor_descriptor %arg0, [%Mload_i32, %Nload_i32], [%Nload_i64, %c1_i64] {{padding = 2 : i32}} : <{ty}>, !tt.tensordesc<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>
-            %2 = tt.descriptor_load %1[%0, %c0_i32] {{ttig.block_io = "row_major", ttig.desc_padding = 2 : i32}} : !tt.tensordesc<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>> -> tensor<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>
+            %1 = tt.make_tensor_descriptor %arg0, [%Mload_i32, %Nload_i32], [%Nload_i64, %c1_i64] {{padding = {padding_id} : i32}} : <{ty}>, !tt.tensordesc<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>
+            %2 = tt.descriptor_load %1[%0, %c0_i32] {{ttig.block_io = "row_major", ttig.desc_padding = {padding_id} : i32}} : !tt.tensordesc<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>> -> tensor<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>
             %3 = tt.make_tensor_descriptor %arg1, [%M_i32, %N_i32], [%N_i64, %c1_i64] : <{ty}>, !tt.tensordesc<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>
             tt.descriptor_store %3[%0, %c0_i32], %2 : !tt.tensordesc<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}> >, tensor<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>
 
             // B matrix
-            %4 = tt.make_tensor_descriptor %arg2, [%Nload_i32, %Mload_i32], [%Mload_i64, %c1_i64] {{padding = 2 : i32}} : <{ty}>, !tt.tensordesc<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>
-            %5 = tt.descriptor_load %4[%c0_i32, %0] {{ttig.block_io = {block_io}, ttig.desc_padding = 2 : i32}} : !tt.tensordesc<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>> -> tensor<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>
+            %4 = tt.make_tensor_descriptor %arg2, [%Nload_i32, %Mload_i32], [%Mload_i64, %c1_i64] {{padding = {padding_id} : i32}} : <{ty}>, !tt.tensordesc<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>
+            %5 = tt.descriptor_load %4[%c0_i32, %0] {{ttig.block_io = {block_io}, ttig.desc_padding = {padding_id} : i32}} : !tt.tensordesc<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>> -> tensor<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>
             %6 = tt.make_tensor_descriptor %arg3, [%N_i32, %M_i32], [%M_i64, %c1_i64] : <{ty}>, !tt.tensordesc<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>
             tt.descriptor_store %6[%c0_i32, %0], %5 : !tt.tensordesc<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}> >, tensor<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>
 
@@ -79,17 +80,17 @@ def test_block_load_dpas_layout(M, N, dtype_str, device, tmp_path: pathlib.Path)
 
     torch.set_printoptions(profile="full", precision=2, sci_mode=0, linewidth=200)
 
-    # Build expected output explicitly: 1.0 for in-bounds elements, NaN for OOB.
-    # The descriptor has shape (M-1, N-1) for A and (N-1, M-1) for B, loaded into
-    # full (M, N) and (N, M) tiles respectively.
+    # Build expected output explicitly: 1.0 for in-bounds elements, NaN for OOB
+    # (PAD_NAN) or 0.0 (PAD_ZERO). The descriptor has shape (M-1, N-1) for A and
+    # (N-1, M-1) for B, loaded into full (M, N) and (N, M) tiles respectively.
     # This avoids depending on a zero-padding reference path, which is unreliable
     # for packed fp16 (kWidth=2) operands where hardware boundary behaviour varies.
     x_expected = torch.ones((M, N), dtype=torch_dtype, device=device)
-    x_expected[M - 1:, :] = float('nan')  # OOB row
-    x_expected[:, N - 1:] = float('nan')  # OOB col
+    x_expected[M - 1:, :] = expected_oob  # OOB row
+    x_expected[:, N - 1:] = expected_oob  # OOB col
 
     y_expected = torch.ones((N, M), dtype=torch_dtype, device=device)
-    y_expected[N - 1:, :] = float('nan')  # OOB row
-    y_expected[:, M - 1:] = float('nan')  # OOB col
+    y_expected[N - 1:, :] = expected_oob  # OOB row
+    y_expected[:, M - 1:] = expected_oob  # OOB col
 
     assert torch.allclose(x_expected, x, equal_nan=True) and torch.allclose(y_expected, y, equal_nan=True)
