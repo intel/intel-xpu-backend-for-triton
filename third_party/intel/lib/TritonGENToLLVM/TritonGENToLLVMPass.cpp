@@ -1173,6 +1173,19 @@ struct TritonMatrix2DBlockPrefetchLowering
   LogicalResult
   matchAndRewrite(TritonGEN::Matrix2DBlockPrefetchOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    // The GenISA fallback is only supported by LTS drivers. On regular
+    // drivers the SPIR-V translator passes llvm.genx.GenISA intrinsics
+    // through as unresolved external functions, which crashes IGC during
+    // module translation. The prefetch is only a performance hint, so drop
+    // it when no SPIR-V builtin form exists. Erase before the assert
+    // branches are created, so no asserts are left for the dropped op.
+    if (!op->getParentOfType<mlir::ModuleOp>()->hasAttr(
+            intel::TritonIntelGPUDialect::getIsLTSAttrName()) &&
+        !isSPVBuiltinAvailable(op)) {
+      rewriter.eraseOp(op);
+      return success();
+    }
+
     create2DBlockAsserts(op, rewriter, emitter);
 
     if (!isSPVBuiltinAvailable(op)) {

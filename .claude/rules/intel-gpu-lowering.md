@@ -80,7 +80,7 @@ For SPIR-V stores, the value is first stored to a local alloca, then a pointer t
 
 **GenISA path**: `llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid`
 
-Prefetch always uses SPIR-V (never falls back to GenISA) — `isSPVBuiltinAvailableImpl` returns `true` unconditionally for prefetch.
+Prefetch prefers the SPIR-V builtin; `isSPVBuiltinAvailableImpl` returns `false` for three configurations with no SPIR-V runtime builtin — d16 with tile_width=32 / v_blocks=1, 8b with tile_width=16 / v_blocks=1, and 64b with tile_width=8 / v_blocks=1 / tile_height<8. On LTS drivers these fall back to GenISA; on non-LTS drivers the GenISA fallback is erased, which is safe since the prefetch is only a performance hint.
 
 ### 64-Byte Alignment Compensation
 Hardware requires 64-byte aligned base addresses. The lowering compensates non-aligned addresses:

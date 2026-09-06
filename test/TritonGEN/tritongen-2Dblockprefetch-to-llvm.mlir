@@ -345,6 +345,10 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
 
 // -----
 
+// COM: 8b with tile_width=16, vBlocks=1 has no SPV runtime builtin, so it
+// COM: falls back to GenISA. The GenISA fallback is only emitted on LTS
+// COM: drivers; model one here (ttig.is_lts) so the fallback stays exercised.
+module attributes {ttig.is_lts} {
 llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK-COUNT-2: llvm.mlir.constant(1 : i32) : i32
   // CHECK:         [[ElemSize:%.*]] = llvm.mlir.constant(8 : i32) : i32
@@ -354,6 +358,7 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
   // CHECK:    llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid({{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %arg5, [[ElemSize]], [[TileWidth]], [[TileHeight]], [[VBlocks]], {{.*}}) {{.*}} : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> ()
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=16, tile_height=32, v_blocks=1, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
+}
 }
 
 // -----
@@ -445,12 +450,15 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
 // -----
 
 // COM: d16 with tile_width=32, vBlocks=1 has no SPV runtime builtin (16b_?r32x1c
-// COM: is missing). Verify it falls back to GenISA LSC2DBlockPrefetch intrinsic.
+// COM: is missing). Verify it falls back to GenISA LSC2DBlockPrefetch intrinsic
+// COM: on LTS drivers (ttig.is_lts).
+module attributes {ttig.is_lts} {
 llvm.func @triton_gen.2Dblockprefetch_d16_genisa_fallback(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
   // CHECK-NOT: @_Z36__spirv_Subgroup2DBlockPrefetchINTEL
   // CHECK:     llvm.call spir_funccc @llvm.genx.GenISA.LSC2DBlockPrefetch.isVoid({{.*}}) {{.*}} : (i64, i32, i32, i32, i32, i32, i32, i32, i32, i32, i1, i1, i32) -> ()
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=16, tile_width=32, tile_height=8, v_blocks=1, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
+}
 }
 
 // -----
@@ -477,4 +485,31 @@ llvm.func @triton_gen.2Dblockprefetch(%ptr : !llvm.ptr<1>, %base_width : i32, %b
   triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=32, tile_height=8, v_blocks=1, cache_control=L1UC_L3UC} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
   llvm.return
 }
+}
+
+// -----
+
+// COM: d16 with tile_width=32, vBlocks=1 has no SPV runtime builtin (16b_?r32x1c
+// COM: is missing). On non-LTS drivers (no ttig.is_lts) the GenISA fallback is
+// COM: not supported either, so the prefetch hint is dropped entirely.
+llvm.func @triton_gen.2Dblockprefetch_dropped_non_lts(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
+  // CHECK:     llvm.func @triton_gen.2Dblockprefetch_dropped_non_lts
+  // CHECK-NOT: 2DBlockPrefetch
+  // CHECK:     llvm.return
+  triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=16, tile_width=32, tile_height=8, v_blocks=1, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
+  llvm.return
+}
+
+// -----
+
+// COM: 8b with tile_width=16, vBlocks=1 has no SPV runtime builtin
+// COM: (intel_sub_group_2d_block_prefetch_8b_?r16x1c is missing). On non-LTS
+// COM: drivers (no ttig.is_lts) the GenISA fallback is not supported either,
+// COM: so the prefetch hint is dropped entirely.
+llvm.func @triton_gen.2Dblockprefetch_dropped_non_lts_8b(%ptr : !llvm.ptr<1>, %base_width : i32, %base_height : i32, %base_pitch : i32, %x : i32, %y : i32) {
+  // CHECK:     llvm.func @triton_gen.2Dblockprefetch_dropped_non_lts_8b
+  // CHECK-NOT: 2DBlockPrefetch
+  // CHECK:     llvm.return
+  triton_gen.2Dblockprefetch %ptr, %base_width, %base_height, %base_pitch, %x, %y {elem_size_in_bits=8, tile_width=16, tile_height=8, v_blocks=1, cache_control=Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32)
+  llvm.return
 }
