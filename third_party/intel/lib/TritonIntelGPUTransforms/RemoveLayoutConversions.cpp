@@ -1899,6 +1899,53 @@ static bool rematDegradesLoad(const SetVector<Value> &slice,
   return false;
 }
 
+/// Backward remat bakes the convert's target encoding into the whole
+/// producer chain in the slice. ptr/mask/offset chains have no equivalent
+/// DPAS conversion path — the block-IO specializations only handle dot
+/// data types — so relabeling them with a DPAS-family encoding mislowers
+/// them. The check therefore inspects every value in the slice rather
+/// than the convert's result type alone (the slice of a sitofp carries
+/// i32 offsets, that of a dot-operand load its mask).
+static bool
+rematBakesDpasOntoNonDotDataType(const SetVector<Value> &slice,
+                                 const DenseMap<Value, Attribute> &layout) {
+  for (Value v : slice) {
+    auto it = layout.find(v);
+    if (it == layout.end())
+      continue; // Not relabeled.
+
+    // Unwrap to the layout that determines the per-element distribution.
+    Attribute enc = it->second;
+    if (auto sliceEnc = dyn_cast<ttg::SliceEncodingAttr>(enc))
+      enc = sliceEnc.getParent();
+    bool isDpasFamily = isa<ttgi::DpasEncodingAttr>(enc);
+    if (!isDpasFamily) {
+      if (auto dotEnc = dyn_cast<ttg::DotOperandEncodingAttr>(enc))
+        isDpasFamily = isa<ttgi::DpasEncodingAttr>(dotEnc.getParent());
+    }
+    if (!isDpasFamily)
+      continue;
+
+    auto tensorTy = dyn_cast<RankedTensorType>(v.getType());
+    if (!tensorTy)
+      continue;
+    // DPAS dot data types of this backend: float and 8-bit integers (i8/u8,
+    // packed four per channel). Only these are reproduced by the elementwise
+    // lowering; i1/i16/i32/i64/pointer values are vetoed below.
+    auto elemTy = tensorTy.getElementType();
+    auto intTy = dyn_cast<IntegerType>(elemTy);
+    if (isa<FloatType>(elemTy) || (intTy && intTy.getWidth() == 8))
+      continue;
+    // Values that already use the target encoding are not rewritten by
+    // rewriteSlice, so they are not made worse by this remat.
+    if (tensorTy.getEncoding() == it->second)
+      continue;
+    return true;
+  }
+
+  return false;
+}
+
 void LayoutRematerialization::backwardRematerialization(
     ttg::ConvertLayoutOp convertOp) {
   RankedTensorType targetType = convertOp.getType();
@@ -1961,13 +2008,22 @@ void LayoutRematerialization::backwardRematerialization(
     return;
   }
 
-  // 2. Veto if rematerialization would degrade a load encoding.
+  // 2. Veto if rematerialization would bake a DPAS-family encoding onto a
+  // value whose element type is not a DPAS dot data type (see
+  // rematBakesDpasOntoNonDotDataType).
+  if (rematBakesDpasOntoNonDotDataType(slice, layout)) {
+    LDBG("  skip remat: would bake a DPAS encoding onto a non-dot-data-type "
+         "value");
+    return;
+  }
+
+  // 3. Veto if rematerialization would degrade a load encoding.
   if (rematDegradesLoad(slice, layout)) {
     LDBG("  skip remat: would degrade a load encoding");
     return;
   }
 
-  // 3. Determine whether rematerialisation is beneficial.
+  // 4. Determine whether rematerialisation is beneficial.
   if (!isRematBeneficial(convertOp, slice, /*newCvtCost=*/0,
                          convertCostCache)) {
     LDBG("  skipped rematerialization");
@@ -1983,7 +2039,7 @@ void LayoutRematerialization::backwardRematerialization(
   // Compute external-use analysis before rewriteSlice mutates slice.
   auto nonSliceOnlyValues = getNonSliceOnlyValues(slice, convertOp);
 
-  // 4. Rewrite the slice.
+  // 5. Rewrite the slice.
   rewriteSlice(slice, layout, convertOp);
 
   // Build forward propagation candidates using pre-rewrite analysis.

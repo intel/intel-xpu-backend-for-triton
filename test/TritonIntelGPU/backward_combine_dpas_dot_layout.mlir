@@ -3,7 +3,10 @@
 // COM: Case 1:
 // COM: Checks that the loads for the operands of a tt.dot operation are placed
 // COM: into registers (have dot layout) rather than shared local memory (via a
-// COM: ttg.convert_layout operation).
+// COM: ttg.convert_layout operation). The backward-remat veto is per slice
+// COM: value and only rejects element types that are not DPAS dot data
+// COM: types, so the f16 descriptor loads below still rematerialize
+// COM: directly into dot_op<dpas>.
 
 // CHECK: #[[DPAS:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 2], order = [1, 0]}>
@@ -128,8 +131,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %desc_a = tt.make_tensor_descriptor %arg0, [%arg3, %arg5], [%arg6, %c1_i64] : <f16>, <64x32xf16>
     %desc_b = tt.make_tensor_descriptor %arg1, [%arg5, %arg4], [%arg7, %c1_i64] : <f16>, <32x256xf16>
     %23 = scf.for %arg9 = %c0_i32 to %arg5 step %c32_i32 iter_args(%arg10 = %cst) -> (tensor<64x256xf32, #dpas>) : i32 {
-      // COM: Layout conversions in the loop should be removed.
+      // COM: Layout conversions in the loop are removed: the f16 descriptor
+      // COM: loads rematerialize in dot_op<dpas> directly.
       // CHECK: scf.for
+      // CHECK: tt.descriptor_load {{.*}} -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #[[DPAS]], kWidth = 1}>>
+      // CHECK: tt.descriptor_load {{.*}} -> tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #[[DPAS]], kWidth = 2}>>
       // CHECK-NOT: ttg.convert_layout
       // CHECK: scf.yield
       %28 = tt.descriptor_load %desc_a[%c0_i32, %arg9] {ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #blocked>
@@ -184,7 +190,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %desc_a = tt.make_tensor_descriptor %arg0, [%arg5, %arg5], [%c0_i64, %c1_i64] : <f16>, <64x32xf16>
     %desc_b = tt.make_tensor_descriptor %arg1, [%arg5, %arg5], [%c0_i64, %c1_i64] : <f16>, <32x256xf16>
     %23 = scf.for %arg9 = %c0_i32 to %arg5 step %c32_i32 iter_args(%arg10 = %cst) -> (tensor<64x256xf32, #blocked1>) : i32 {
+      // COM: Layout conversions in the loop are removed: the f16 descriptor
+      // COM: loads rematerialize in dot_op<dpas> directly.
       // CHECK: scf.for
+      // CHECK: tt.descriptor_load {{.*}} -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #[[DPAS]], kWidth = 1}>>
+      // CHECK: tt.descriptor_load {{.*}} -> tensor<32x256xf16, #ttg.dot_op<{opIdx = 1, parent = #[[DPAS]], kWidth = 2}>>
       // CHECK-NOT: ttg.convert_layout
       // CHECK: scf.yield
       %28 = tt.descriptor_load %desc_a[%c0_i32, %arg9] {ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #blocked>

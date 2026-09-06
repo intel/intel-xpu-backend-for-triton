@@ -2441,10 +2441,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<64x64x!tt.ptr<f16>, #blocked2>
     %3 = tt.splat %arg1 : !tt.ptr<i8> -> tensor<128x64x!tt.ptr<i8>, #blocked>
     %4 = tt.splat %arg1 : !tt.ptr<i8> -> tensor<128x64x!tt.ptr<i8>, #blocked>
-    // CHECK: %[[F:.+]]:3 = scf.for {{.*}} -> (tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked}>>)
+    // COM: The backward-remat veto fires per value in the slice: the dot
+    // COM: operand converts (%7, %8) and the i1 compare convert to the DPAS
+    // COM: layout (%13, i1 is not a DPAS dot data type) cannot be
+    // COM: rematerialized away because their slices cover pointer/i1 chains,
+    // COM: and the loop drops the now-dead DPAS loop-carried chain, so it
+    // COM: carries two values instead of three.
+    // CHECK: %[[F:.+]]:2 = scf.for {{.*}} -> (tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked}>>)
     // CHECK-COUNT-4: convert_layout
     // CHECK-NOT: convert_layout
-    // CHECK:   scf.yield {{.*}} : tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    // CHECK:   scf.yield {{.*}} : tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
     // CHECK: }
     // CHECK: tt.return %[[F]]#0, %[[F]]#1 : tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
      %5:3 = scf.for %arg2 = %c0_i32 to %c2048_i32 step %c64_i32 iter_args(%arg3 = %cst_2, %arg4 = %cst, %arg5 = %cst_0) -> (tensor<128x64xf32, #dpas>, tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked}>>)  : i32 {
@@ -2985,8 +2991,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
       scf.yield %74, %75, %76 : tensor<256x256xf32, #blocked>, tensor<256x32x!tt.ptr<f16>, #blocked2>, tensor<32x256x!tt.ptr<f16>, #blocked1>
     }
     // CHECK: [[SCF:%.*]]:3 = scf.for {{.*}} -> (tensor<256x256xf32, #[[$DPAS]]>, {{.*}})  : i32 {
-    // CHECK: tt.expand_dims {{.*}} -> tensor<256x1xi32, #[[$DPAS]]>
-    // CHECK-NOT: ttg.convert_layout
+    // COM: The slice-level guard keeps the i32/i1 address and mask chains in
+    // COM: their blocked layout (pointer/i1 values are not DPAS dot data
+    // COM: types); the store operands are materialized in the DPAS layout
+    // COM: through explicit convert_layout ops instead.
+    // CHECK: tt.expand_dims {{.*}} -> tensor<256x1xi32, #blocked1>
+    // CHECK: ttg.convert_layout {{.*}} : tensor<256x256x!tt.ptr<f16>, #blocked1> -> tensor<256x256x!tt.ptr<f16>, #[[$DPAS]]>
     // CHECK: [[RES:%.*]] = arith.truncf [[SCF]]#0 : tensor<256x256xf32, #[[$DPAS]]> to tensor<256x256xf16, #[[$DPAS]]>
     // CHECK: tt.store {{.*}}, [[RES]], {{.*}} : tensor<256x256x!tt.ptr<f16>, #[[$DPAS]]>
     %42 = tt.expand_dims %3 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked1}>> -> tensor<256x1xi32, #blocked1>
