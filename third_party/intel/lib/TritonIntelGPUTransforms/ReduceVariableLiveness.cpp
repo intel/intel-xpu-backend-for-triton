@@ -47,23 +47,12 @@ namespace {
 // module's actual threads-per-warp rather than an assumed constant.
 constexpr uint32_t LIVE_IN_PRESSURE_GRF_BUDGET_MULTIPLIER = 2; // 200%
 
-/// The set of `grf-mode` values `getGRFBytesPerThread` assigns a real,
-/// mode-specific budget to. Anything else silently collapses to its
-/// "default" fallback (4096 bytes/thread) inside that function, so an
-/// unrecognized value is caught and warned about here instead.
-constexpr std::array<StringRef, 5> VALID_GRF_MODES = {"default", "auto", "128",
-                                                      "256", "512"};
-
 /// Convert the per-hardware-thread GRF budget for \p grfMode into a per-lane
 /// budget by dividing by threads-per-warp, so the result is in the same unit
 /// that `RegisterPressureAnalysis::liveInPressure` reports. getThreadsPerWarp()
 /// returns 32 by default if the module attribute is not set, so this division
 /// is always well-defined.
 unsigned getPerLaneGRFBudgetInBytes(StringRef grfMode, ModuleOp mod) {
-  if (!llvm::is_contained(VALID_GRF_MODES, grfMode))
-    mod.emitWarning("unrecognized grf-mode '" + grfMode +
-                    "' for tritonintelgpu-reduce-variable-liveness; "
-                    "falling back to the 'default' GRF budget");
   unsigned grfBudget =
       ttg::intel::RegisterPressureAnalysis::getGRFBytesPerThread(grfMode);
   int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
