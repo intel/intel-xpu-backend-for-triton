@@ -1097,8 +1097,8 @@ static bool isRematerializableInSlice(Operation *op) {
   return canBeRemat(op) || isExpensiveLoadRematCandidate(op);
 }
 
-// FIXME(#7890): Helper function to get the base pointer by tracing through
-// AddPtrOp and SplatOp operations.
+// Helper function to get the base pointer by tracing through AddPtrOp and
+// SplatOp operations.
 static Value getBasePointer(Value ptr) {
   Value base = ptr;
   // Trace through AddPtrOp chains
@@ -1110,11 +1110,10 @@ static Value getBasePointer(Value ptr) {
   return base;
 }
 
-// FIXME(#7890): Check if a pointer is stored to anywhere in the function with
-// a DIFFERENT encoding than the target encoding. Used to reject
-// rematerializations that could create race conditions when the same pointer is
-// accessed with different encodings. If the store uses the SAME encoding, it's
-// safe.
+// Check if a pointer is stored to anywhere in the function with a DIFFERENT
+// encoding than the target encoding. Used to reject rematerializations that
+// could create race conditions when the same pointer is accessed with different
+// encodings. If the store uses the SAME encoding, it's safe.
 static bool isPointerStoredWithDifferentEncoding(Value basePtr,
                                                  tt::FuncOp funcOp,
                                                  Attribute targetEncoding) {
@@ -1648,8 +1647,8 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
     }
   }
 
-  // FIXME(#7890): Check to prevent rematerializing loads from pointers that are
-  // stored to elsewhere with a DIFFERENT encoding.
+  // Check to prevent rematerializing loads from pointers that are stored to
+  // elsewhere with a DIFFERENT encoding.
   //
   // When rematerializing memory operations with different encodings, we must
   // ensure that operations on the same pointer use consistent thread-to-address
