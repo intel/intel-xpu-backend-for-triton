@@ -1,6 +1,7 @@
 # Try to find SPIRV-LLVM-Translator.
 #
 include(FetchContent)
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
 if (NOT SPIRVToLLVMTranslator_FOUND)
 
@@ -26,6 +27,96 @@ if (NOT SPIRVToLLVMTranslator_FOUND)
             set(LLVM_SPIRV_BUILD_EXTERNAL YES CACHE BOOL "Build SPIRV-LLVM Translator as external" FORCE)
 
             FetchContent_MakeAvailable(spirv-llvm-translator)
+
+            # Diagnose patching problems early: repository status, EOL config, and
+            # raw newline style of the patch file often explain why "git apply"
+            # fails even when the file is otherwise present.
+            execute_process(
+                COMMAND git config --show-origin --get core.autocrlf
+                WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
+                OUTPUT_VARIABLE SPIRV_LLVM_AUTOCONFIG
+                ERROR_VARIABLE SPIRV_LLVM_AUTOCONFIG_ERR
+                RESULT_VARIABLE SPIRV_LLVM_AUTOCONFIG_RESULT
+            )
+            if(SPIRV_LLVM_AUTOCONFIG)
+                string(STRIP "${SPIRV_LLVM_AUTOCONFIG}" SPIRV_LLVM_AUTOCONFIG)
+                message(STATUS "SPIRV-LLVM-Translator git core.autocrlf: ${SPIRV_LLVM_AUTOCONFIG}")
+            endif()
+            if(SPIRV_LLVM_AUTOCONFIG_ERR)
+                message(STATUS "SPIRV-LLVM-Translator git core.autocrlf stderr: ${SPIRV_LLVM_AUTOCONFIG_ERR}")
+            endif()
+
+            execute_process(
+                COMMAND git config --show-origin --get core.eol
+                WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
+                OUTPUT_VARIABLE SPIRV_LLVM_CORE_EOL
+                ERROR_VARIABLE SPIRV_LLVM_CORE_EOL_ERR
+                RESULT_VARIABLE SPIRV_LLVM_CORE_EOL_RESULT
+            )
+            if(SPIRV_LLVM_CORE_EOL)
+                string(STRIP "${SPIRV_LLVM_CORE_EOL}" SPIRV_LLVM_CORE_EOL)
+                message(STATUS "SPIRV-LLVM-Translator git core.eol: ${SPIRV_LLVM_CORE_EOL}")
+            endif()
+            if(SPIRV_LLVM_CORE_EOL_ERR)
+                message(STATUS "SPIRV-LLVM-Translator git core.eol stderr: ${SPIRV_LLVM_CORE_EOL_ERR}")
+            endif()
+
+            execute_process(
+                COMMAND git status --short --untracked-files=normal
+                WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
+                OUTPUT_VARIABLE SPIRV_LLVM_STATUS
+                ERROR_VARIABLE SPIRV_LLVM_STATUS_ERR
+                RESULT_VARIABLE SPIRV_LLVM_STATUS_RESULT
+            )
+            if(SPIRV_LLVM_STATUS)
+                message(STATUS "SPIRV-LLVM-Translator git status before patch:\n${SPIRV_LLVM_STATUS}")
+            else()
+                message(STATUS "SPIRV-LLVM-Translator git status before patch: clean")
+            endif()
+            if(SPIRV_LLVM_STATUS_ERR)
+                message(STATUS "SPIRV-LLVM-Translator git status stderr: ${SPIRV_LLVM_STATUS_ERR}")
+            endif()
+
+            execute_process(
+                COMMAND git diff --check
+                WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
+                OUTPUT_VARIABLE SPIRV_LLVM_DIFF_CHECK
+                ERROR_VARIABLE SPIRV_LLVM_DIFF_CHECK_ERR
+                RESULT_VARIABLE SPIRV_LLVM_DIFF_CHECK_RESULT
+            )
+            if(SPIRV_LLVM_DIFF_CHECK)
+                message(STATUS "SPIRV-LLVM-Translator git diff --check before patch:\n${SPIRV_LLVM_DIFF_CHECK}")
+            endif()
+            if(SPIRV_LLVM_DIFF_CHECK_ERR)
+                message(STATUS "SPIRV-LLVM-Translator git diff --check stderr: ${SPIRV_LLVM_DIFF_CHECK_ERR}")
+            endif()
+
+            execute_process(
+                COMMAND git ls-files --eol lib/SPIRV/SPIRVWriter.cpp
+                WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
+                OUTPUT_VARIABLE SPIRV_LLVM_WRITER_EOL
+                ERROR_VARIABLE SPIRV_LLVM_WRITER_EOL_ERR
+                RESULT_VARIABLE SPIRV_LLVM_WRITER_EOL_RESULT
+            )
+            if(SPIRV_LLVM_WRITER_EOL)
+                message(STATUS "SPIRV-LLVM-Translator lib/SPIRV/SPIRVWriter.cpp eol info: ${SPIRV_LLVM_WRITER_EOL}")
+            endif()
+            if(SPIRV_LLVM_WRITER_EOL_ERR)
+                message(STATUS "SPIRV-LLVM-Translator lib/SPIRV/SPIRVWriter.cpp eol stderr: ${SPIRV_LLVM_WRITER_EOL_ERR}")
+            endif()
+
+            execute_process(
+                COMMAND ${Python3_EXECUTABLE} -c "from pathlib import Path; import sys; p = Path(sys.argv[1]); b = p.read_bytes(); print(f\"{p}: CRLF={b.count(b'\\r\\n')} LF={b.count(b'\\n')} CR={b.count(b'\\r')}\")" ${CMAKE_CURRENT_LIST_DIR}/3122.patch
+                OUTPUT_VARIABLE SPIRV_LLVM_PATCH_EOL
+                ERROR_VARIABLE SPIRV_LLVM_PATCH_EOL_ERR
+                RESULT_VARIABLE SPIRV_LLVM_PATCH_EOL_RESULT
+            )
+            if(SPIRV_LLVM_PATCH_EOL)
+                message(STATUS "SPIRV-LLVM-Translator patch file eol info: ${SPIRV_LLVM_PATCH_EOL}")
+            endif()
+            if(SPIRV_LLVM_PATCH_EOL_ERR)
+                message(STATUS "SPIRV-LLVM-Translator patch file eol stderr: ${SPIRV_LLVM_PATCH_EOL_ERR}")
+            endif()
 
             # FIXME: Don't apply patch when LTS driver is updated.
             set(PATCH_STATUS "failed")
