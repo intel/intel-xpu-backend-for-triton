@@ -349,7 +349,7 @@ def TritonIntelGPUReduceVariableLiveness
     by reducing the distance between loads and usage.
 
     A load is only sunk when the loop it would otherwise stay live across is
-    measured (via RegisterPressureAnalysis) to be under at least 200% of the
+    measured (via RegisterPressureAnalysis) to be at or above 200% of the
     per-lane GRF budget for the given GRF mode.
   }];
 

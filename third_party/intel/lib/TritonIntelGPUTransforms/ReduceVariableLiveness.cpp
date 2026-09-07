@@ -55,11 +55,10 @@ constexpr std::array<StringRef, 5> VALID_GRF_MODES = {"default", "auto", "128",
                                                       "256", "512"};
 
 /// Convert the per-hardware-thread GRF budget for \p grfMode into a per-lane
-/// figure, dividing by the module's actual threads-per-warp so the result is
-/// in the same unit `RegisterPressureAnalysis::liveInPressure` reports.
-/// Converts the per-hardware-thread GRF budget to a per-lane budget by
-/// dividing by threads-per-warp. getThreadsPerWarp() returns 32 by default
-/// if the module attribute is not set, so this division is always well-defined.
+/// budget by dividing by threads-per-warp, so the result is in the same unit
+/// that `RegisterPressureAnalysis::liveInPressure` reports. getThreadsPerWarp()
+/// returns 32 by default if the module attribute is not set, so this division
+/// is always well-defined.
 unsigned getPerLaneGRFBudgetInBytes(StringRef grfMode, ModuleOp mod) {
   if (!llvm::is_contained(VALID_GRF_MODES, grfMode))
     mod.emitWarning("unrecognized grf-mode '" + grfMode +
@@ -86,9 +85,9 @@ bool isLongLifeSpanVariable(
 
   auto tensorType = cast<RankedTensorType>(tensorV.getType());
   auto tensorOrder = ttg::getOrder(tensorType);
-  unsigned liveInSizeInBytes = analysis.liveInPressure(dotBlock);
+  unsigned liveInPressurePerLane = analysis.liveInPressure(dotBlock);
   return ((tensorOrder.size() == 2) &&
-          (liveInSizeInBytes >=
+          (liveInPressurePerLane >=
            perLaneGRFBudget * LIVE_IN_PRESSURE_GRF_BUDGET_MULTIPLIER) &&
           analysis.isLiveIn(dotBlock, v));
 }
