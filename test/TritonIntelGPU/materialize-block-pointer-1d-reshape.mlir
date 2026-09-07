@@ -158,11 +158,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 #blocked1d = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  // COM: The pointer and mask must be reshaped without reordering and then
+  // COM: physically converted into the load encoding. A relabelling reshape
+  // COM: (allow_reorder efficient_layout) moves no data, so the operands would
+  // COM: claim the load encoding while still holding 1D-ordered values.
   // CHECK-LABEL: tt.func @test_1d_strided_load
-  // CHECK: tt.reshape %{{.*}} allow_reorder efficient_layout
-  // CHECK: tt.load %{{.*}} {ttig.block_io = "row_major", ttig.block_io_stride = 96 : i64}
-  // CHECK: ttg.convert_layout
-  // CHECK: tt.reshape %{{.*}} efficient_layout
+  // CHECK: [[PTR2D:%[0-9]+]] = tt.reshape %{{.*}} : tensor<1024x!tt.ptr<f16>, {{.*}}> -> tensor<32x32x!tt.ptr<f16>, [[CONSENC:#[a-z0-9_]+]]>
+  // CHECK: [[PTRCVT:%[0-9]+]] = ttg.convert_layout [[PTR2D]] : tensor<32x32x!tt.ptr<f16>, [[CONSENC]]> -> tensor<32x32x!tt.ptr<f16>, [[LOADENC:#[a-z0-9_]+]]>
+  // CHECK: [[MASK2D:%[0-9]+]] = tt.reshape %{{.*}} : tensor<1024xi1, {{.*}}> -> tensor<32x32xi1, [[CONSENC]]>
+  // CHECK: [[MASKCVT:%[0-9]+]] = ttg.convert_layout [[MASK2D]] : tensor<32x32xi1, [[CONSENC]]> -> tensor<32x32xi1, [[LOADENC]]>
+  // CHECK: [[LOADED:%[0-9]+]] = tt.load [[PTRCVT]], [[MASKCVT]] {ttig.block_io = "row_major", ttig.block_io_stride = 96 : i64} : tensor<32x32x!tt.ptr<f16>, [[LOADENC]]>
+  // CHECK: [[CVT:%[0-9]+]] = ttg.convert_layout [[LOADED]] : tensor<32x32xf16, [[LOADENC]]> -> tensor<32x32xf16, [[CONSENC]]>
+  // CHECK: tt.reshape [[CVT]] efficient_layout : tensor<32x32xf16, [[CONSENC]]> -> tensor<1024xf16, {{.*}}>
   tt.func @test_1d_strided_load(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> tensor<1024xf16, #blocked1d> {
     %idx = tt.make_range {start = 0 : i32, end = 1024 : i32} : tensor<1024xi32, #blocked1d>
     %c32 = arith.constant dense<32> : tensor<1024xi32, #blocked1d>
@@ -319,5 +326,91 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
     %ptrs = tt.addptr %base, %off : tensor<64x!tt.ptr<i8>, #blocked_h_lt_nw_load>, tensor<64xi32, #blocked_h_lt_nw_load>
     %res  = tt.load %ptrs : tensor<64x!tt.ptr<i8>, #blocked_h_lt_nw_load>
     tt.return %res : tensor<64xi8, #blocked_h_lt_nw_load>
+  }
+}
+
+// -----
+
+// COM: Test 12: 1D strided load with `other` operand — issue #7928 repro.
+// COM: W=32, S=96, f16, 1024 elements, H=32, numWarps=4.
+// COM: The load has both a mask and an `other` operand (dense<0.0>).
+// COM: Before the fix: MaterializeBlockPointer reshapes ptr and mask to 2D but
+// COM: forwards `other` verbatim as 1D → verifier error.
+// COM: After the fix: `other` is reshaped to match the 2D load's result type.
+// COM: Check the SSA flow: both ptr2d and other2d flow into the new tt.load,
+// COM: and the load produces a 2D result with the HW delivery encoding.
+
+// CHECK-DAG: [[LOAD2DENC:#[a-z0-9_]+]] = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+// CHECK-DAG: [[CONS2DENC:#[a-z0-9_]+]] = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+// CHECK-DAG: [[ENC1D:#[a-z0-9_]+]] = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+#blocked1d = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  // CHECK: tt.func @test_1d_strided_load_with_other
+  tt.func @test_1d_strided_load_with_other(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> tensor<1024xf16, #blocked1d> {
+    %idx = tt.make_range {start = 0 : i32, end = 1024 : i32} : tensor<1024xi32, #blocked1d>
+    %c32 = arith.constant dense<32> : tensor<1024xi32, #blocked1d>
+    %c96 = arith.constant dense<96> : tensor<1024xi32, #blocked1d>
+    %rem = arith.remui %idx, %c32 : tensor<1024xi32, #blocked1d>
+    %div = arith.divui %idx, %c32 : tensor<1024xi32, #blocked1d>
+    %mul = arith.muli %div, %c96 : tensor<1024xi32, #blocked1d>
+    %off = arith.addi %rem, %mul : tensor<1024xi32, #blocked1d>
+    %base = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1024x!tt.ptr<f16>, #blocked1d>
+    %ptrs = tt.addptr %base, %off : tensor<1024x!tt.ptr<f16>, #blocked1d>, tensor<1024xi32, #blocked1d>
+    %mask = arith.constant dense<true> : tensor<1024xi1, #blocked1d>
+    %other = arith.constant dense<0.0> : tensor<1024xf16, #blocked1d>
+    // COM: ptr, mask and `other` must all end up in the SAME encoding — the HW
+    // COM: delivery encoding the new load is typed with. tt.load's verifier
+    // COM: requires mask/other to match ptr's type, and the block-IO lowering
+    // COM: indexes otherElems[registerIdx] alongside maskElems.
+    // COM: Each one is a data-moving reshape (no allow_reorder) into its natural
+    // COM: 2D encoding followed by a ttg.convert_layout into HW delivery order.
+    // COM: A relabel (allow_reorder efficient_layout) would be wrong here: it
+    // COM: lowers to a no-op, so the registers would still hold the 1D order
+    // COM: while the type claimed HW delivery order (see #7918).
+    // CHECK: [[PTRR:%[0-9]+]] = tt.reshape %{{.*}} : tensor<1024x!tt.ptr<f16>, [[ENC1D]]> -> tensor<32x32x!tt.ptr<f16>, [[CONS2DENC]]>
+    // CHECK: [[PTR2D:%[0-9]+]] = ttg.convert_layout [[PTRR]] : tensor<32x32x!tt.ptr<f16>, [[CONS2DENC]]> -> tensor<32x32x!tt.ptr<f16>, [[LOAD2DENC]]>
+    // CHECK: [[MASKR:%[0-9]+]] = tt.reshape %{{.*}} : tensor<1024xi1, [[ENC1D]]> -> tensor<32x32xi1, [[CONS2DENC]]>
+    // CHECK: [[MASK2D:%[0-9]+]] = ttg.convert_layout [[MASKR]] : tensor<32x32xi1, [[CONS2DENC]]> -> tensor<32x32xi1, [[LOAD2DENC]]>
+    // CHECK: [[OTHERR:%[0-9]+]] = tt.reshape %{{.*}} : tensor<1024xf16, [[ENC1D]]> -> tensor<32x32xf16, [[CONS2DENC]]>
+    // CHECK: [[OTHER2D:%[0-9]+]] = ttg.convert_layout [[OTHERR]] : tensor<32x32xf16, [[CONS2DENC]]> -> tensor<32x32xf16, [[LOAD2DENC]]>
+    // CHECK: [[LOAD2D:%[0-9]+]] = tt.load [[PTR2D]], [[MASK2D]], [[OTHER2D]] {ttig.block_io = "row_major", ttig.block_io_stride = 96 : i64} : tensor<32x32x!tt.ptr<f16>, [[LOAD2DENC]]>
+    // CHECK: [[CVT:%[0-9]+]] = ttg.convert_layout [[LOAD2D]] : tensor<32x32xf16, [[LOAD2DENC]]> -> tensor<32x32xf16, [[CONS2DENC]]>
+    // CHECK: tt.reshape [[CVT]] efficient_layout : tensor<32x32xf16, [[CONS2DENC]]> -> tensor<1024xf16, [[ENC1D]]>
+    %result = tt.load %ptrs, %mask, %other : tensor<1024x!tt.ptr<f16>, #blocked1d>
+    tt.return %result : tensor<1024xf16, #blocked1d>
+  }
+}
+
+// -----
+
+// COM: Test 13: 1D strided load with non-splat `other` — block argument.
+// COM: This pins that `other` is actually reshaped and not narrowed to a
+// COM: scalar or single register value. The block argument is a block-scoped
+// COM: SSA value with distinct per-element contents.
+
+#blocked1d = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @test_1d_strided_load_with_nonsplat_other
+  tt.func @test_1d_strided_load_with_nonsplat_other(
+      %arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32},
+      %arg_other: tensor<1024xf16, #blocked1d>) -> tensor<1024xf16, #blocked1d> {
+    %idx = tt.make_range {start = 0 : i32, end = 1024 : i32} : tensor<1024xi32, #blocked1d>
+    %c32 = arith.constant dense<32> : tensor<1024xi32, #blocked1d>
+    %c96 = arith.constant dense<96> : tensor<1024xi32, #blocked1d>
+    %rem = arith.remui %idx, %c32 : tensor<1024xi32, #blocked1d>
+    %div = arith.divui %idx, %c32 : tensor<1024xi32, #blocked1d>
+    %mul = arith.muli %div, %c96 : tensor<1024xi32, #blocked1d>
+    %off = arith.addi %rem, %mul : tensor<1024xi32, #blocked1d>
+    %base = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1024x!tt.ptr<f16>, #blocked1d>
+    %ptrs = tt.addptr %base, %off : tensor<1024x!tt.ptr<f16>, #blocked1d>, tensor<1024xi32, #blocked1d>
+    %mask = arith.constant dense<true> : tensor<1024xi1, #blocked1d>
+    // COM: Pin the 2D result shape: a lowering that narrowed `other` to a single
+    // COM: register value or broadcast one element would not produce 32x32.
+    // CHECK: [[OTHERR:%[0-9]+]] = tt.reshape %arg1 : tensor<1024xf16, {{.*}}> -> tensor<32x32xf16, {{.*}}>
+    // CHECK: [[OTHER2D:%[0-9]+]] = ttg.convert_layout [[OTHERR]] : tensor<32x32xf16, {{.*}}> -> tensor<32x32xf16, {{.*}}>
+    // CHECK: tt.load {{.*}}, {{.*}}, [[OTHER2D]]
+    %result = tt.load %ptrs, %mask, %arg_other : tensor<1024x!tt.ptr<f16>, #blocked1d>
+    tt.return %result : tensor<1024xf16, #blocked1d>
   }
 }

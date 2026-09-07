@@ -318,20 +318,32 @@ class SpirvUtils:
             else:
                 raise e
 
-    if os.name != 'nt':
-
-        def __del__(self):
-            if hasattr(self, "shared_library"):
-                handle = self.shared_library._handle
-                self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
-                self.shared_library.dlclose(handle)
-    else:
-
-        def __del__(self):
-            if hasattr(self, "shared_library"):
-                handle = self.shared_library._handle
-                ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
-                ctypes.windll.kernel32.FreeLibrary(handle)
+    # Deliberately no `__del__`: `spirv_utils` must never be unloaded.
+    #
+    # `driver.c` defines the statically allocated `PyKernelArgType`, and instances of it
+    # are cached for the lifetime of every compiled kernel (`XPULauncher.arg_annotations`).
+    # Unloading the module frees the storage of that type object while those instances are
+    # still reachable, so the next cyclic-GC pass dereferences a dangling `ob_type` and the
+    # interpreter dies with `Fatal Python error: Segmentation fault`
+    # (`tupletraverse` -> `visit_decref` -> `_PyObject_IS_GC` -> `Py_TYPE`).
+    # See https://github.com/intel/intel-xpu-backend-for-triton/issues/7682 and
+    # https://github.com/python/cpython/issues/114538.
+    #
+    # The type is not the only thing here that outlives an unload, so do not "fix" this by
+    # moving `PyKernelArgType` into Python and restoring the unload: `load_binary` returns
+    # capsules whose destructors (`freeKernel`, `freeKernelBundle`) and whose name strings
+    # live in this module, and every `XPULauncher` holds callables from it. Unloading is safe
+    # only once nothing reachable from Python can reference this module's code or storage.
+    #
+    # Windows is why this unload existed (#3090: a mapped `.pyd` cannot be deleted), so do not
+    # restore it for that reason either. Nothing here needs it any more: `runtime/cache.py`
+    # tolerates the `PermissionError` from `os.replace` on `nt`, and the `fresh_triton_cache`
+    # fixtures defer cache deletion past process exit (#7312).
+    #
+    # `ArchParser` and `ExtensionUtils` keep their unload because they are out of scope here,
+    # not because they are proven safe. `ArchParser.__getattribute__` returns a closure over
+    # the raw ctypes function that does not keep its owner alive, so a caller outliving the
+    # parser would call into an unloaded library.
 
 
 class ExtensionUtils:

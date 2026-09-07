@@ -34,11 +34,13 @@ public:
     builder = std::make_unique<OpBuilder>(&ctx);
   }
 
-  ModuleOp createModule() {
+  // Returns an owning handle so the caller controls the module's lifetime.
+  OwningOpRef<ModuleOp> createModule() {
     auto loc = builder->getUnknownLoc();
-    auto module = ModuleOp::create(loc);
-    module->setAttr(ttg::AttrNumWarpsName, builder->getI32IntegerAttr(4));
-    module->setAttr(ttg::AttrNumThreadsPerWarp, builder->getI32IntegerAttr(16));
+    OwningOpRef<ModuleOp> module = ModuleOp::create(loc);
+    (*module)->setAttr(ttg::AttrNumWarpsName, builder->getI32IntegerAttr(4));
+    (*module)->setAttr(ttg::AttrNumThreadsPerWarp,
+                       builder->getI32IntegerAttr(16));
     return module;
   }
 
@@ -115,10 +117,10 @@ protected:
 // Spatial analysis reports reuse (warp-invariant dim) while temporal reports
 // none (load outside any loop). Union: anyReuse == true.
 TEST_F(ReuseAnalysisTest, UnionTrueFromSpatial) {
-  auto module = createModule();
+  OwningOpRef<ModuleOp> module = createModule();
   auto f16Ty = builder->getF16Type();
   auto ptrType = getPtrType(f16Ty);
-  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
+  auto funcOp = createFunctionWithReturn(*module, "test_func", {ptrType});
   auto loc = builder->getUnknownLoc();
   auto basePtr = funcOp.getArgument(0);
 
@@ -137,9 +139,9 @@ TEST_F(ReuseAnalysisTest, UnionTrueFromSpatial) {
   auto splatPtr = tt::SplatOp::create(*builder, loc, ptrTensorTy, basePtr);
   auto loadOp = makeLoad(splatPtr, resultTy);
 
-  tti::ModuleAxisInfoAnalysis axisInfo(module);
-  tti::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
-  ttgi::ReuseAnalysis analysis(module, strideAnalysis);
+  tti::ModuleAxisInfoAnalysis axisInfo(*module);
+  tti::ModuleStrideAnalysis strideAnalysis(*module, axisInfo);
+  ttgi::ReuseAnalysis analysis(*module, strideAnalysis);
 
   EXPECT_TRUE(analysis.anyReuse(loadOp));
 }
@@ -148,10 +150,10 @@ TEST_F(ReuseAnalysisTest, UnionTrueFromSpatial) {
 // axis) while temporal reports reuse (loop-invariant pointer).
 // Union: anyReuse == true.
 TEST_F(ReuseAnalysisTest, UnionTrueFromTemporal) {
-  auto module = createModule();
+  OwningOpRef<ModuleOp> module = createModule();
   auto f16Ty = builder->getF16Type();
   auto ptrType = getPtrType(f16Ty);
-  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
+  auto funcOp = createFunctionWithReturn(*module, "test_func", {ptrType});
   auto loc = builder->getUnknownLoc();
   auto basePtr = funcOp.getArgument(0);
 
@@ -182,9 +184,9 @@ TEST_F(ReuseAnalysisTest, UnionTrueFromTemporal) {
     loadOp = makeLoad(splatPtr, resultTy);
   }
 
-  tti::ModuleAxisInfoAnalysis axisInfo(module);
-  tti::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
-  ttgi::ReuseAnalysis analysis(module, strideAnalysis);
+  tti::ModuleAxisInfoAnalysis axisInfo(*module);
+  tti::ModuleStrideAnalysis strideAnalysis(*module, axisInfo);
+  ttgi::ReuseAnalysis analysis(*module, strideAnalysis);
 
   EXPECT_TRUE(analysis.anyReuse(loadOp));
 }
@@ -192,10 +194,10 @@ TEST_F(ReuseAnalysisTest, UnionTrueFromTemporal) {
 // Neither analysis reports reuse: 1-D streaming load outside any loop with
 // warps tiling the only axis. Union: anyReuse == false.
 TEST_F(ReuseAnalysisTest, UnionFalse) {
-  auto module = createModule();
+  OwningOpRef<ModuleOp> module = createModule();
   auto f16Ty = builder->getF16Type();
   auto ptrType = getPtrType(f16Ty);
-  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
+  auto funcOp = createFunctionWithReturn(*module, "test_func", {ptrType});
   auto loc = builder->getUnknownLoc();
   auto basePtr = funcOp.getArgument(0);
 
@@ -207,9 +209,9 @@ TEST_F(ReuseAnalysisTest, UnionFalse) {
   auto splatPtr = tt::SplatOp::create(*builder, loc, ptrTensorTy, basePtr);
   auto loadOp = makeLoad(splatPtr, resultTy);
 
-  tti::ModuleAxisInfoAnalysis axisInfo(module);
-  tti::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
-  ttgi::ReuseAnalysis analysis(module, strideAnalysis);
+  tti::ModuleAxisInfoAnalysis axisInfo(*module);
+  tti::ModuleStrideAnalysis strideAnalysis(*module, axisInfo);
+  ttgi::ReuseAnalysis analysis(*module, strideAnalysis);
 
   EXPECT_FALSE(analysis.anyReuse(loadOp));
 }
@@ -220,10 +222,10 @@ TEST_F(ReuseAnalysisTest, Known_TrueFromSpatial) {
   // Mirror UnionTrueFromSpatial (line 116): DPAS dot-operand A with warp-
   // invariant K (dim 1), load outside any loop. Spatial known reuse fires,
   // temporal does not. Expected: knownReuse == true.
-  auto module = createModule();
+  OwningOpRef<ModuleOp> module = createModule();
   auto f16Ty = builder->getF16Type();
   auto ptrType = getPtrType(f16Ty);
-  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
+  auto funcOp = createFunctionWithReturn(*module, "test_func", {ptrType});
   auto loc = builder->getUnknownLoc();
   auto basePtr = funcOp.getArgument(0);
 
@@ -239,9 +241,9 @@ TEST_F(ReuseAnalysisTest, Known_TrueFromSpatial) {
   auto splatPtr = tt::SplatOp::create(*builder, loc, ptrTensorTy, basePtr);
   auto loadOp = makeLoad(splatPtr, resultTy);
 
-  tti::ModuleAxisInfoAnalysis axisInfo(module);
-  tti::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
-  ttgi::ReuseAnalysis analysis(module, strideAnalysis);
+  tti::ModuleAxisInfoAnalysis axisInfo(*module);
+  tti::ModuleStrideAnalysis strideAnalysis(*module, axisInfo);
+  ttgi::ReuseAnalysis analysis(*module, strideAnalysis);
 
   EXPECT_TRUE(analysis.knownReuse(loadOp));
   // Regression guard: anyReuse still true.
@@ -252,10 +254,10 @@ TEST_F(ReuseAnalysisTest, Known_TrueFromTemporal) {
   // Mirror UnionTrueFromTemporal (line 149): 1-D blocked encoding with warps
   // tiling the only axis (no spatial reuse), but pointer is loop-invariant
   // inside scf.for (temporal proven reuse). Expected: knownReuse == true.
-  auto module = createModule();
+  OwningOpRef<ModuleOp> module = createModule();
   auto f16Ty = builder->getF16Type();
   auto ptrType = getPtrType(f16Ty);
-  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
+  auto funcOp = createFunctionWithReturn(*module, "test_func", {ptrType});
   auto loc = builder->getUnknownLoc();
   auto basePtr = funcOp.getArgument(0);
 
@@ -282,9 +284,9 @@ TEST_F(ReuseAnalysisTest, Known_TrueFromTemporal) {
     loadOp = makeLoad(splatPtr, resultTy);
   }
 
-  tti::ModuleAxisInfoAnalysis axisInfo(module);
-  tti::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
-  ttgi::ReuseAnalysis analysis(module, strideAnalysis);
+  tti::ModuleAxisInfoAnalysis axisInfo(*module);
+  tti::ModuleStrideAnalysis strideAnalysis(*module, axisInfo);
+  ttgi::ReuseAnalysis analysis(*module, strideAnalysis);
 
   EXPECT_TRUE(analysis.knownReuse(loadOp));
   EXPECT_TRUE(analysis.anyReuse(loadOp));
@@ -298,10 +300,10 @@ TEST_F(ReuseAnalysisTest, Known_FalseFromConservativeFallback_NonPow2) {
   //   - getSpatial().knownCrossSubgroupReuse(ty) == false
   //   - knownReuse(loadOp) == false
   //   - anyReuse(loadOp) == true (conservative positive preserved)
-  auto module = createModule();
+  OwningOpRef<ModuleOp> module = createModule();
   auto f32Ty = builder->getF32Type();
   auto ptrType = getPtrType(f32Ty);
-  auto funcOp = createFunctionWithReturn(module, "test_func", {ptrType});
+  auto funcOp = createFunctionWithReturn(*module, "test_func", {ptrType});
   auto loc = builder->getUnknownLoc();
   auto basePtr = funcOp.getArgument(0);
 
@@ -317,9 +319,9 @@ TEST_F(ReuseAnalysisTest, Known_FalseFromConservativeFallback_NonPow2) {
   auto splatPtr = tt::SplatOp::create(*builder, loc, ptrTensorTy, basePtr);
   auto loadOp = makeLoad(splatPtr, resultTy);
 
-  tti::ModuleAxisInfoAnalysis axisInfo(module);
-  tti::ModuleStrideAnalysis strideAnalysis(module, axisInfo);
-  ttgi::ReuseAnalysis analysis(module, strideAnalysis);
+  tti::ModuleAxisInfoAnalysis axisInfo(*module);
+  tti::ModuleStrideAnalysis strideAnalysis(*module, axisInfo);
+  ttgi::ReuseAnalysis analysis(*module, strideAnalysis);
 
   // Existing accessor returns fallback full axis set.
   EXPECT_THAT(analysis.getSpatial().getWarpInvariantOutDims(resultTy),

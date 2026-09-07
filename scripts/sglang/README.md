@@ -158,7 +158,7 @@ Nothing failed because of Triton codegen.
 | `sglang-tests-reusable.yml` | `workflow_call`, builds the wheel once, then runs the suite matrix |
 | `sglang-tests.yml` | `workflow_dispatch` with runner, pin and skip list overrides |
 | `sglang-tests-pvc.yml` | Thursday/Sunday, `max1100` |
-| `sglang-tests-bmg.yml` | Thursday/Sunday, `b580`, `skip_list: xe2` |
+| `sglang-tests-bmg.yml` | Thursday/Sunday, `b60`, `skip_list: xe2` |
 | `on-label.yml` | label `run-sglang-tests`, both PVC and BMG |
 
 Matrix entries, one report artifact each, aggregated by the `reports` job:

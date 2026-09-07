@@ -303,13 +303,21 @@ private:
     Value offsetX = indices[descRank - 1];
     Value offsetY = indices[descRank - 2];
 
+    // The batch *indices* were folded into base_ptr above, but the result
+    // layout also walks the batch dimensions during LLVM lowering and needs
+    // their real strides, which are not derivable from the 2D surface params.
+    // Result dim d is descriptor dim d + (descRank - rank).
+    SmallVector<Value> batchStrides;
+    for (unsigned d = 0; d + 2 < rank; ++d)
+      batchStrides.push_back(strides[d + (descRank - rank)]);
+
     // Determine padding mode from the descriptor.
     bool padNan = padding == tt::PaddingOption::PAD_NAN;
     UnitAttr padNanAttr = padNan ? builder.getUnitAttr() : UnitAttr();
 
     auto blockLoadOp = ttgi::Subgroup2DBlockLoadOp::create(
         builder, loc, op.getType(), basePtr, baseWidth, baseHeight, basePitch,
-        offsetX, offsetY, padNanAttr,
+        offsetX, offsetY, batchStrides, padNanAttr,
         ttgi::BlockIOModeAttr::get(builder.getContext(), memLayout));
 
     // Propagate one_matrix_per_load attribute if present.

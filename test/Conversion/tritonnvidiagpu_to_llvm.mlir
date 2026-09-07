@@ -3,6 +3,7 @@
 // RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=86' --initialize-ws-cluster-barriers='compute-capability=90 ptx-version=86' -reconcile-unrealized-casts | FileCheck --check-prefix=PTX86 %s
 // RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=107 ptx-version=94' --initialize-ws-cluster-barriers='compute-capability=107 ptx-version=94' -reconcile-unrealized-casts | FileCheck --check-prefix=RUBIN %s
 // RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm=compute-capability=90 --initialize-ws-cluster-barriers=compute-capability=90 --canonicalize-llvm-ir -reconcile-unrealized-casts | FileCheck --check-prefix=CLUSTER-MASK %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=86' --initialize-ws-cluster-barriers='compute-capability=100 ptx-version=86' --canonicalize-llvm-ir -reconcile-unrealized-casts | FileCheck --check-prefix=CANONICALIZE-SM100 %s
 
 #shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
@@ -519,7 +520,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: async_tma_store_wait_read_only
-  // CHECK: nvvm.cp.async.bulk.wait_group 0 read
+  // CHECK: nvvm.cp.async.bulk.wait_group 0 {read}
   tt.func @async_tma_store_wait_read_only() {
     ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
     tt.return
@@ -659,7 +660,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   tt.func public @async_copy_mbarrier_arrive(%arg0: !ttg.memdesc<1xi64, #shared, #ttg.shared_memory>)  attributes { noinline = false } {
     // CHECK: nvvm.cp.async.mbarrier.arrive %{{.*}} : !llvm.ptr<3>
     ttng.async_copy_mbarrier_arrive %arg0 : !ttg.memdesc<1xi64, #shared, #ttg.shared_memory>
-    // CHECK: nvvm.cp.async.mbarrier.arrive %{{.*}} noinc = true : !llvm.ptr<3>
+    // CHECK: nvvm.cp.async.mbarrier.arrive %{{.*}} {noinc = true} : !llvm.ptr<3>
     ttng.async_copy_mbarrier_arrive %arg0 { noIncrement } : !ttg.memdesc<1xi64, #shared, #ttg.shared_memory>
     tt.return
   }
@@ -670,7 +671,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK-LABEL: mbarrier_sync_cluster_init
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @mbarrier_sync_cluster_init() {
-    // CHECK: fence.mbarrier_init.release.cluster
+    // CHECK: [[ELECT:%.*]] = nvvm.elect.sync
+    // CHECK: [[ISSUER:%.*]] = llvm.and %{{.*}}, [[ELECT]] : i1
+    // CHECK: fence.mbarrier_init.release.cluster {{.*}}"b" [[ISSUER]]
     // CHECK: nvvm.cluster.arrive.relaxed
     // CHECK-NEXT: nvvm.cluster.wait
     ttng.fence_mbarrier_init_release_cluster
@@ -1138,5 +1141,67 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.tot
     // CHECK-NEXT: ttg.warp_return
     ttng.cluster_barrier {relaxed = true}
     llvm.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CANONICALIZE-SM100-LABEL: @redux_max_abs(
+  // CANONICALIZE-SM100-NOT: llvm.intr.fabs
+  // CANONICALIZE-SM100: nvvm.redux.sync fmax {{.*}} {abs = true} : f32 -> f32
+  // CANONICALIZE-SM100-NEXT: llvm.return
+  tt.func private @redux_max_abs(%x: tensor<32xf32, #blocked>) -> f32 {
+    %abs = math.absf %x : tensor<32xf32, #blocked>
+    %r = "tt.reduce"(%abs) <{axis = 0 : i32}> ({
+    ^bb0(%a: f32, %b: f32):
+      %combined = arith.maxnumf %a, %b : f32
+      tt.reduce.return %combined : f32
+    }) {allocation.offset = 0 : i32} : (tensor<32xf32, #blocked>) -> f32
+    tt.return %r : f32
+  }
+
+  // CANONICALIZE-SM100-LABEL: @redux_max_abs_nan(
+  // CANONICALIZE-SM100-NOT: llvm.intr.fabs
+  // CANONICALIZE-SM100: nvvm.redux.sync fmax {{.*}} {abs = true, nan = true} : f32 -> f32
+  // CANONICALIZE-SM100-NEXT: llvm.return
+  tt.func private @redux_max_abs_nan(%x: tensor<32xf32, #blocked>) -> f32 {
+    %abs = math.absf %x : tensor<32xf32, #blocked>
+    %r = "tt.reduce"(%abs) <{axis = 0 : i32}> ({
+    ^bb0(%a: f32, %b: f32):
+      %combined = arith.maximumf %a, %b : f32
+      tt.reduce.return %combined : f32
+    }) {allocation.offset = 0 : i32} : (tensor<32xf32, #blocked>) -> f32
+    tt.return %r : f32
+  }
+
+  // CANONICALIZE-SM100-LABEL: @redux_min_abs(
+  // CANONICALIZE-SM100-NOT: llvm.intr.fabs
+  // CANONICALIZE-SM100: nvvm.redux.sync fmin {{.*}} {abs = true} : f32 -> f32
+  // CANONICALIZE-SM100-NEXT: llvm.return
+  tt.func private @redux_min_abs(%x: tensor<32xf32, #blocked>) -> f32 {
+    %abs = math.absf %x : tensor<32xf32, #blocked>
+    %r = "tt.reduce"(%abs) <{axis = 0 : i32}> ({
+    ^bb0(%a: f32, %b: f32):
+      %combined = arith.minnumf %a, %b : f32
+      tt.reduce.return %combined : f32
+    }) {allocation.offset = 0 : i32} : (tensor<32xf32, #blocked>) -> f32
+    tt.return %r : f32
+  }
+
+  // CANONICALIZE-SM100-LABEL: @redux_max_abs_multiple_values(
+  // CANONICALIZE-SM100-COUNT-2: llvm.intr.fabs
+  // CANONICALIZE-SM100-NEXT: llvm.intr.maxnum
+  // CANONICALIZE-SM100-NEXT: nvvm.redux.sync fmax %{{[^ ]+}}, %{{[^ ]+}} : f32 -> f32
+  // CANONICALIZE-SM100-NEXT: llvm.return
+  tt.func private @redux_max_abs_multiple_values(%x: tensor<64xf32, #blocked>) -> f32 {
+    %abs = math.absf %x : tensor<64xf32, #blocked>
+    %r = "tt.reduce"(%abs) <{axis = 0 : i32}> ({
+    ^bb0(%a: f32, %b: f32):
+      %combined = arith.maxnumf %a, %b : f32
+      tt.reduce.return %combined : f32
+    }) {allocation.offset = 0 : i32} : (tensor<64xf32, #blocked>) -> f32
+    tt.return %r : f32
   }
 }

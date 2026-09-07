@@ -1,3 +1,4 @@
+import math
 import pytest
 from triton._internal_testing import is_cuda
 import torch
@@ -93,10 +94,10 @@ def test_mxfp4_value_shuffled_rejects_odd_n(k, destination):
 @pytest.mark.parametrize("block_n", [128, 256])
 @pytest.mark.parametrize("step", [1, 2])
 def test_mxfp4_value_shuffled_matches_torch(shape, block_k, block_n, step):
-    input_shape = tuple(step * size for size in shape[:-1]) + shape[-1:]
+    input_shape = tuple(step * size for size in shape)
     data_cpu = torch.randint(0, 256, input_shape, dtype=torch.uint8, generator=torch.Generator().manual_seed(0))
     data_cuda = data_cpu.cuda()
-    index = (slice(step - 1, None, step), ) * (len(shape) - 1) + (slice(None), )
+    index = (slice(step - 1, None, step), ) * len(shape)
     data_cpu, data_cuda = data_cpu[index], data_cuda[index]
     logical_shape = list(data_cpu.shape)
     logical_shape[-1] *= 2
@@ -118,21 +119,40 @@ def test_mxfp4_value_shuffled_matches_torch(shape, block_k, block_n, step):
     assert torch.equal(restored_cpu, data_cpu)
 
 
-@pytest.mark.parametrize("shape", [(256, 128), (2, 258, 65)])
-def test_mxfp4_value_shuffled_convert_layout_matches_torch(shape):
-    data_cpu = torch.randint(0, 256, shape, dtype=torch.uint8)
+@pytest.mark.parametrize("shape", [(256, 128), (2, 258, 65), (2, 3, 130, 66)])
+@pytest.mark.parametrize("layout", [
+    BlackwellMXValueLayout(),
+    BlackwellMX4ValueShuffledLayout(),
+    BlackwellMX4ValueShuffledLayout(block_k=256, block_n=128),
+])
+@pytest.mark.parametrize("trans", [False, True])
+@pytest.mark.parametrize("step", [1, 2])
+@pytest.mark.enable_warmup
+def test_mxfp4_value_convert_layout_matches_torch(shape, layout, trans, step):
+    input_shape = tuple(step * size for size in shape[:-1]) + shape[-1:]
+    data_cpu = torch.randint(0, 256, (math.prod(input_shape) + 1, ), dtype=torch.uint8)
     data_cuda = data_cpu.cuda()
-    data_cpu, data_cuda = data_cpu.mT, data_cuda.mT
+    data_cpu, data_cuda = data_cpu[1:].view(input_shape), data_cuda[1:].view(input_shape)
+    index = (slice(step - 1, None, step), ) * (len(shape) - 1) + (slice(None), )
+    data_cpu, data_cuda = data_cpu[index], data_cuda[index]
+    if trans:
+        data_cpu, data_cuda = data_cpu.mT, data_cuda.mT
     src_cpu = wrap_torch_tensor(data_cpu, dtype=FP4)
     src_cuda = wrap_torch_tensor(data_cuda, dtype=FP4)
-    layout = BlackwellMX4ValueShuffledLayout()
 
     expected = convert_layout(src_cpu, layout)
     actual = convert_layout(src_cuda, layout)
     roundtrip = convert_layout(actual, src_cuda.storage.layout)
 
-    assert actual.storage.data.is_contiguous()
-    assert torch.equal(actual.storage.data.cpu(), expected.storage.data)
+    assert actual.storage.data.shape == expected.storage.data.shape
+    if isinstance(layout, BlackwellMXValueLayout):
+        # Default Blackwell padding is unspecified; compare its logical bytes.
+        assert actual.storage.data.stride() == expected.storage.data.stride()
+        assert torch.equal(actual.data[..., :src_cpu.shape[-2] // 2, :].cpu(),
+                           expected.data[..., :src_cpu.shape[-2] // 2, :])
+    else:
+        assert actual.storage.data.is_contiguous()
+        assert torch.equal(actual.storage.data.cpu(), expected.storage.data)
     assert torch.equal(roundtrip.storage.data, data_cuda)
 
 

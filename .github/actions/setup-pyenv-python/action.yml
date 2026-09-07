@@ -51,6 +51,8 @@ runs:
       shell: bash
       run: |
         set -x
+        mkdir -p ~/.local/bin
+        echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
         ls -l ~/.local/bin/
         ln -sf $(which pip${{ inputs.python-version }}) ~/.local/bin/pip
         ln -sf $(which python${{ inputs.python-version }}) ~/.local/bin/python
