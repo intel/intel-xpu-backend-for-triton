@@ -14,6 +14,7 @@ add_triton_library(TritonIntelGPUToLLVM
     ControlFlowOpToLLVM.cpp
     ConvertLayoutOpToLLVM.cpp
     DotOpToLLVM/DPAS.cpp
+    DotOpToLLVM/FMA.cpp
     DotOpToLLVM.cpp
     ElementwiseOpToLLVM.cpp
     Fp4ToFpOpToLLVM.cpp
