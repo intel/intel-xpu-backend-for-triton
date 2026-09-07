@@ -15,6 +15,7 @@ if (NOT SPIRVToLLVMTranslator_FOUND)
     FetchContent_Declare(spirv-llvm-translator
             GIT_REPOSITORY    https://github.com/KhronosGroup/SPIRV-LLVM-Translator.git
             GIT_TAG           ${SPIRVToLLVMTranslator_TAG}
+            GIT_CONFIG        core.autocrlf=false
             SOURCE_DIR ${SPIRVToLLVMTranslator_SOURCE_DIR}
             )
 
