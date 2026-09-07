@@ -523,6 +523,14 @@ void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
   }
 }
 
+// A constant's value attribute must keep the result type, so it cannot be
+// re-encoded in place.
+static bool hasConstantOperand(ValueRange values) {
+  return llvm::any_of(values, [](Value v) {
+    return isa_and_nonnull<arith::ConstantOp>(v.getDefiningOp());
+  });
+}
+
 SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
                                                        LayoutInfo &info) {
   SmallVector<Value> changed;
@@ -599,7 +607,14 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
         SmallVector<Value> valuesToChange{storeOp.getPtr(), storeOp.getValue()};
         if (storeOp.getMask())
           valuesToChange.emplace_back(storeOp.getMask());
-        setEncoding(valuesToChange, info, changed, user);
+        // Skip stores with constant operands. A constant cannot be
+        // re-encoded in place, and resolveConflicts() prefers mma-derived
+        // encodings for non-load/store ops, which would resolve the constant
+        // to an encoding it cannot carry. Propagating onto the remaining
+        // operands only would also leave the store with mixed operand
+        // encodings.
+        if (!hasConstantOperand(valuesToChange))
+          setEncoding(valuesToChange, info, changed, user);
       }
       continue;
     }
@@ -607,7 +622,9 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
       if (llvm::all_of(info.encodings, checkMMAorMMADerived)) {
         SmallVector<Value> valuesToChange{descStoreOp.getDesc(),
                                           descStoreOp.getSrc()};
-        setEncoding(valuesToChange, info, changed, user);
+        // See tt::StoreOp above: constants cannot be re-encoded in place.
+        if (!hasConstantOperand(valuesToChange))
+          setEncoding(valuesToChange, info, changed, user);
       }
       continue;
     }
