@@ -57,8 +57,9 @@ constexpr std::array<StringRef, 5> VALID_GRF_MODES = {"default", "auto", "128",
 /// Convert the per-hardware-thread GRF budget for \p grfMode into a per-lane
 /// figure, dividing by the module's actual threads-per-warp so the result is
 /// in the same unit `RegisterPressureAnalysis::liveInPressure` reports.
-/// Falls back to the unscaled per-thread budget (with a diagnostic) if
-/// threads-per-warp is missing or non-positive, rather than dividing by zero.
+/// Converts the per-hardware-thread GRF budget to a per-lane budget by
+/// dividing by threads-per-warp. getThreadsPerWarp() returns 32 by default
+/// if the module attribute is not set, so this division is always well-defined.
 unsigned getPerLaneGRFBudgetInBytes(StringRef grfMode, ModuleOp mod) {
   if (!llvm::is_contained(VALID_GRF_MODES, grfMode))
     mod.emitWarning("unrecognized grf-mode '" + grfMode +
@@ -67,14 +68,6 @@ unsigned getPerLaneGRFBudgetInBytes(StringRef grfMode, ModuleOp mod) {
   unsigned grfBudget =
       ttg::intel::RegisterPressureAnalysis::getGRFBytesPerThread(grfMode);
   int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
-  if (threadsPerWarp <= 0) {
-    mod.emitWarning(
-        "ttg.threads-per-warp is missing or non-positive; cannot convert "
-        "the per-hardware-thread GRF budget to a per-lane figure, falling "
-        "back to the unscaled per-thread budget for tritonintelgpu-"
-        "reduce-variable-liveness");
-    return grfBudget;
-  }
   return grfBudget / static_cast<unsigned>(threadsPerWarp);
 }
 
