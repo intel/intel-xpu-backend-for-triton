@@ -19,6 +19,9 @@ inputs:
   mode:
     description: Source or wheels
     default: source
+  max_jobs:
+    description: MAX_JOBS for the PyTorch build, keep empty for one job per core
+    default: ""
   cache:
     description: Cache enabled or disabled
     default: enabled
@@ -119,6 +122,10 @@ runs:
 
         # Limit AOT
         export TORCH_XPU_ARCH_LIST="pvc,bmg,dg2,arl-h,mtl-h"
+
+        if [[ -n "${{ inputs.max_jobs }}" ]]; then
+          export MAX_JOBS="${{ inputs.max_jobs }}"
+        fi
 
         cd pytorch
         # FIXME: Compatibility with versions of CMake older than 3.5 has been removed, this brakes compilation of third_party/protobuf:

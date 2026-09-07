@@ -24,5 +24,7 @@ jobs:
     uses: ./.github/workflows/sglang-tests-reusable.yml
     with:
       runner_label: b60
+      max_jobs: 8
+      setup_timeout_minutes: 240
       skip_list: xe2
     secrets: inherit
