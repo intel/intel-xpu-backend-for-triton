@@ -31,21 +31,44 @@ if (NOT SPIRVToLLVMTranslator_FOUND)
             execute_process(
                 COMMAND git apply --check ${CMAKE_CURRENT_LIST_DIR}/3122.patch
                 WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
-                ERROR_QUIET
+                OUTPUT_VARIABLE PATCH_CHECK_STDOUT
+                ERROR_VARIABLE PATCH_CHECK_STDERR
                 RESULT_VARIABLE PATCH_RESULT
             )
+            if(PATCH_CHECK_STDOUT)
+                message(STATUS "git apply --check stdout: ${PATCH_CHECK_STDOUT}")
+            endif()
+            if(PATCH_CHECK_STDERR)
+                message(STATUS "git apply --check stderr: ${PATCH_CHECK_STDERR}")
+            endif()
             if(PATCH_RESULT EQUAL 0)
                 execute_process(
                         COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/3122.patch
                         WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
+                        OUTPUT_VARIABLE PATCH_APPLY_STDOUT
+                        ERROR_VARIABLE PATCH_APPLY_STDERR
                         RESULT_VARIABLE PATCH_RESULT
                 )
+                if(PATCH_APPLY_STDOUT)
+                    message(STATUS "git apply stdout: ${PATCH_APPLY_STDOUT}")
+                endif()
+                if(PATCH_APPLY_STDERR)
+                    message(STATUS "git apply stderr: ${PATCH_APPLY_STDERR}")
+                endif()
             else()
                 execute_process( # Check if the patch is already applied
                         COMMAND git apply --reverse --check ${CMAKE_CURRENT_LIST_DIR}/3122.patch
                         WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
+                        OUTPUT_VARIABLE PATCH_REVERSE_CHECK_STDOUT
+                        ERROR_VARIABLE PATCH_REVERSE_CHECK_STDERR
                         RESULT_VARIABLE PATCH_RESULT
                 )
+                if(PATCH_REVERSE_CHECK_STDOUT)
+                    message(STATUS "git apply --reverse --check stdout: ${PATCH_REVERSE_CHECK_STDOUT}")
+                endif()
+                if(PATCH_REVERSE_CHECK_STDERR)
+                    message(STATUS "git apply --reverse --check stderr: ${PATCH_REVERSE_CHECK_STDERR}")
+                endif()
             endif()
             if(NOT PATCH_RESULT EQUAL 0)
                 message(FATAL_ERROR "Failed to apply 3122.patch to SPIRV-LLVM-Translator")
