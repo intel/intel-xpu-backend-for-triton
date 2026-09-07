@@ -16,7 +16,6 @@ if (NOT SPIRVToLLVMTranslator_FOUND)
     FetchContent_Declare(spirv-llvm-translator
             GIT_REPOSITORY    https://github.com/KhronosGroup/SPIRV-LLVM-Translator.git
             GIT_TAG           ${SPIRVToLLVMTranslator_TAG}
-            GIT_CONFIG        core.autocrlf=false
             SOURCE_DIR ${SPIRVToLLVMTranslator_SOURCE_DIR}
             )
 
@@ -106,7 +105,7 @@ if (NOT SPIRVToLLVMTranslator_FOUND)
             endif()
 
             execute_process(
-                COMMAND ${Python3_EXECUTABLE} -c "from pathlib import Path; import sys; p = Path(sys.argv[1]); b = p.read_bytes(); print(f\"{p}: CRLF={b.count(b'\\r\\n')} LF={b.count(b'\\n')} CR={b.count(b'\\r')}\")" ${CMAKE_CURRENT_LIST_DIR}/3122.patch
+                COMMAND ${Python3_EXECUTABLE} -c "from pathlib import Path; import sys; p = Path(sys.argv[1]); b = p.read_bytes(); crlf = b.count(b'\\r\\n'); lf = b.count(b'\\n'); cr = b.count(b'\\r'); print(f'{p}: CRLF={crlf} LF={lf} CR={cr}')" ${CMAKE_CURRENT_LIST_DIR}/3122.patch
                 OUTPUT_VARIABLE SPIRV_LLVM_PATCH_EOL
                 ERROR_VARIABLE SPIRV_LLVM_PATCH_EOL_ERR
                 RESULT_VARIABLE SPIRV_LLVM_PATCH_EOL_RESULT
