@@ -6,6 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include <algorithm>
 #include <cstddef>
 #include <cstring>
 #include <iostream>
@@ -383,7 +384,23 @@ compileLevelZeroObjects(uint8_t *binary_ptr, const size_t binary_size,
     return std::make_tuple(nullptr, nullptr, -1);
   }
 
-  const int32_t n_spills = props.spillMemSize;
+  // `spillMemSize` is in bytes per *hardware thread*, i.e. per sub-group. The
+  // `n_spills` returned by `load_binary` is a backend-agnostic quantity that
+  // consumers (e.g. inductor's `spill_threshold`) compare against fixed
+  // thresholds, and its established unit is spilled 32-bit registers per
+  // work-item: the CUDA backend divides `CU_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES`
+  // (bytes per thread, and a CUDA thread is one lane) by 4. Convert to that
+  // unit here: divide by the sub-group size to go from per-hardware-thread to
+  // per-work-item, and by 4 to go from bytes to 32-bit registers. Reporting
+  // raw bytes inflates the number by a factor of `4 * sub_group_size` (128x at
+  // SIMD 32), making such thresholds fire on kernels that barely spill. Round
+  // up so a non-zero spill never reports as zero.
+  const uint32_t subGroupSize = props.requiredSubgroupSize
+                                    ? props.requiredSubgroupSize
+                                    : std::max(props.maxSubgroupSize, 1u);
+  const uint32_t bytesPerSpilledReg = 4 * subGroupSize;
+  const int32_t n_spills =
+      (props.spillMemSize + bytesPerSpilledReg - 1) / bytesPerSpilledReg;
 
   return std::make_tuple(l0_module, l0_kernel, n_spills);
 }
@@ -593,7 +610,8 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
 
         if (debugEnabled)
           std::cout << "(I): Retry with large GRF succeeded, kernel has "
-                    << n_spills << " spills" << std::endl;
+                    << n_spills << " spilled registers per work-item"
+                    << std::endl;
       }
     } catch (const std::exception &e) {
       if (firstBuildFailed) {
@@ -611,8 +629,9 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   }
 
   if (debugEnabled && n_spills) {
-    std::cout << "(I): Detected " << n_spills << " spills for  \""
-              << kernel_name << "\"" << std::endl;
+    std::cout << "(I): Detected " << n_spills
+              << " spilled registers per work-item for  \"" << kernel_name
+              << "\"" << std::endl;
   }
 
   auto n_regs = build_flags.n_regs();
