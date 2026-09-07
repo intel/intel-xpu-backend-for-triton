@@ -28,6 +28,7 @@ if (NOT SPIRVToLLVMTranslator_FOUND)
             FetchContent_MakeAvailable(spirv-llvm-translator)
 
             # FIXME: Don't apply patch when LTS driver is updated.
+            set(PATCH_COMMAND "git apply --check")
             execute_process(
                 COMMAND git apply --check ${CMAKE_CURRENT_LIST_DIR}/3122.patch
                 WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
@@ -42,6 +43,7 @@ if (NOT SPIRVToLLVMTranslator_FOUND)
                 message(STATUS "git apply --check stderr: ${PATCH_CHECK_STDERR}")
             endif()
             if(PATCH_RESULT EQUAL 0)
+                set(PATCH_COMMAND "git apply")
                 execute_process(
                         COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/3122.patch
                         WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
@@ -56,6 +58,7 @@ if (NOT SPIRVToLLVMTranslator_FOUND)
                     message(STATUS "git apply stderr: ${PATCH_APPLY_STDERR}")
                 endif()
             else()
+                set(PATCH_COMMAND "git apply --reverse --check")
                 execute_process( # Check if the patch is already applied
                         COMMAND git apply --reverse --check ${CMAKE_CURRENT_LIST_DIR}/3122.patch
                         WORKING_DIRECTORY ${spirv-llvm-translator_SOURCE_DIR}
@@ -71,7 +74,7 @@ if (NOT SPIRVToLLVMTranslator_FOUND)
                 endif()
             endif()
             if(NOT PATCH_RESULT EQUAL 0)
-                message(FATAL_ERROR "Failed to apply 3122.patch to SPIRV-LLVM-Translator")
+                message(FATAL_ERROR "Failed during '${PATCH_COMMAND}' for 3122.patch in SPIRV-LLVM-Translator (exit code: ${PATCH_RESULT})")
             endif()
     endif()
 
