@@ -110,7 +110,7 @@ public:
     Value ptr = op.getPtr();
     unsigned vec =
         getVectorSize(hasSupport256bLoadStore(op), ptr, axisInfoAnalysis);
-    llvm::outs() << "johnlu op:" << op << "\n";
+    // llvm::outs() << "johnlu op:" << op << "\n";
     Type valueElemTy = getElementTypeOrSelf(op.getType());
     auto tensorType = cast<RankedTensorType>(op.getType());
     Attribute encoding = tensorType.getEncoding();
@@ -132,25 +132,6 @@ public:
     // llvm::outs() << "johnlu load packed from:" << nWords << "xi" << width
     //              << "\n";
     // llvm::outs() << "johnlu to: " << vec << "xi" << valueElemNBits << "\n";
-    // The layout convert reinterpret the packed type returned by load to
-    // element type of tensor. e.g: numElems=8, valueElemNBits=16, vec=8. The
-    // load type is packed to 4xi32 (nWords=4, width=32) The 4xi32 is
-    // reinterpreted as 8xi16 by the layout convertion:
-    // - register=1 -> (2, 0)
-    //   register=2 -> (4, 0)
-    //   register=4 -> (8, 0)
-    //   register=8 -> (0, 8)
-    //   register=16 -> (16, 0)
-    //   register=32 -> (32, 0)
-    // - lane=1 -> (1, 0)
-    //   lane=2 -> (0, 1)
-    //   lane=4 -> (0, 2)
-    //   lane=8 -> (0, 4)
-    // where out dims are: [register (size 32), lane (size 16)]
-    // 1. The lane M -> Register M at the beginning of the pattern, which is
-    // needed to make sure the reinterpret cast is valid.
-    // 2. The lane to reg number should be equal to the reg to lane number.
-    // 3. The Register M -> Lane (threadsPerWarp/size) should be in order.
     size_t packedElemsPerLane = mlir::ceil<size_t>(width, valueElemNBits);
     unsigned threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(
         op->getParentOfType<ModuleOp>());
@@ -175,13 +156,20 @@ public:
         LinearLayout::identity1D(numElems, kRegister, kDim0) *
         LinearLayout::identity1D(threadsPerWarp, kLane, kDim1);
     // llvm::outs() << "reinterpretLayout layout:" << reinterpretLayout << "\n";
+    // The cvtLayout is: loadLayout = cvtLayout.compose(reinterpretLayout)
     LinearLayout cvtLayout = loadLayout.invertAndCompose(reinterpretLayout);
     // llvm::outs() << "cvtLayout layout:" << cvtLayout << "\n";
+    // llvm::outs() << "cvtLayout.compose(loadLayout):" <<
+    // cvtLayout.compose(loadLayout) << "\n"; llvm::outs() <<
+    // "cvtLayout.compose(reinterpretLayout):" <<
+    // cvtLayout.compose(reinterpretLayout) << "\n";
     cvtLayout *=
         LinearLayout::identity1D(llEncoding->getInDimSize(kWarp), kWarp, kWarp);
     cvtLayout *= LinearLayout::identity1D(llEncoding->getInDimSize(kBlock),
                                           kBlock, kBlock);
     // llvm::outs() << "cvtLayout layout:" << cvtLayout << "\n";
+    // The new layout is the cvtMapping to map the original layout with the new
+    // register and lane mapping.
     LinearLayout newAoSLayout = cvtLayout.compose(*llEncoding);
     // llvm::outs() << "newAoSLayout layout:" << newAoSLayout << "\n";
 
