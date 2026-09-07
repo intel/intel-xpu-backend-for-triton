@@ -7,7 +7,7 @@
 module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32} {
   tt.func @matmul_kernel_small_tensor(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
     // CHECK-LABEL:   tt.func @matmul_kernel_small_tensor
-    // COM: This test verifies that that tensor whose size is under the defined threshold are not moved.
+    // COM: This test verifies that loads without block_io attribute are rejected by isLoadCandidate.
     %cst = arith.constant dense<0.000000e+00> : tensor<16x256xf32, #dpas>
     %c64_i32 = arith.constant 64 : i32
     %c0_i32 = arith.constant 0 : i32
@@ -40,7 +40,7 @@ module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 32 : i32, "ttg.th
 module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32} {
   tt.func @matmul_kernel_no_candidate_load(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
     // CHECK-LABEL:   tt.func @matmul_kernel_no_candidate_load
-    // COM: This test checks that loads are not moved if the total size of "in variables" are under the defined threshold.
+    // COM: This test checks that loads without block_io attribute are rejected (no candidate loads).
     %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #dpas>
     %c64_i32 = arith.constant 64 : i32
     %c0_i32 = arith.constant 0 : i32
