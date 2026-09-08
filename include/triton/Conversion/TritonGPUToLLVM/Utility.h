@@ -269,32 +269,6 @@ struct TritonLLVMOpBuilder {
   Value i32_val(int64_t val) { return int_val(32, val); }
   Value i64_val(int64_t val) { return int_val(64, val); }
 
-  Value const_val(Type ty, Attribute attr) {
-    return LLVM::ConstantOp::create(*builder, loc, ty, attr);
-  }
-
-  Value vec_splat_i1_cons(unsigned numElements, int32_t val) {
-    auto type = builder->getIntegerType(1);
-    SmallVector<int32_t> consElems(numElements, val);
-    SmallVector<Attribute> attrElems;
-    for (auto c : consElems)
-      attrElems.push_back(builder->getIntegerAttr(type, c));
-    auto attr =
-        DenseElementsAttr::get(VectorType::get(numElements, type), attrElems);
-    return const_val(VectorType::get(numElements, type), attr);
-  }
-
-  Value vec_splat_i32_cons(unsigned numElements, int32_t val) {
-    auto type = builder->getIntegerType(32);
-    SmallVector<int32_t> consElems(numElements, val);
-    SmallVector<Attribute> attrElems;
-    for (auto c : consElems)
-      attrElems.push_back(builder->getIntegerAttr(type, c));
-    auto attr =
-        DenseElementsAttr::get(VectorType::get(numElements, type), attrElems);
-    return const_val(VectorType::get(numElements, type), attr);
-  }
-
   Location loc;
   OpBuilder *builder;
 };
@@ -808,6 +782,15 @@ SmallVector<Value> inlineRegion(RewriterBase &rewriter, Region &region,
 // #thenBlock
 std::tuple</*prevBlock=*/Block *, /*ifBlock=*/Block *, /*thenBlock=*/Block *>
 createIfBlock(RewriterBase &b, Location loc, Value cnd);
+
+// Broadcast canonical owners' results to redundant threads and CTAs. Both the
+// input and returned values contain only unique registers.
+SmallVector<Value>
+broadcastTensorResult(Operation *op, RankedTensorType tensorTy,
+                      ConversionPatternRewriter &rewriter,
+                      ArrayRef<Value> uniqueResultVals, Type valueElemTy,
+                      TritonLLVMOpBuilder &b, Value threadPred,
+                      const TargetInfoBase &targetInfo);
 
 void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
                                  ConversionPatternRewriter &rewriter,
