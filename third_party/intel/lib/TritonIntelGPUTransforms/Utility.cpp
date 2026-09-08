@@ -8,6 +8,7 @@
 
 #include "triton/Analysis/Utility.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Transforms/DialectConversion.h"
 
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
@@ -277,6 +278,20 @@ LogicalResult getConvertBackwardSlice(
     auto currentValueType = cast<RankedTensorType>(currentValue.getType());
     if (currentValueType.getEncoding() == encoding)
       continue;
+    // Backward propagation is only supported for region ops whose results
+    // survive rewriteSlice's generic clone+setType path. ForOp and IfOp have
+    // explicit handling below; everything else implementing
+    // RegionBranchOpInterface is rejected, because retyping a result tied to a
+    // region terminator's operands leaves the terminator at the old encoding
+    // (see WarpYieldOp::verify). Note this is a conservative proxy for
+    // structured control flow, not an exact test: region ops that do not
+    // implement the interface (tt.reduce, tt.scan, tt.map_elementwise) pass
+    // through here and rely on their regions being scalar-level, so retyping
+    // the tensor result keeps them valid.
+    if (Operation *defOp = currentValue.getDefiningOp())
+      if (isa<RegionBranchOpInterface>(defOp) &&
+          !isa<scf::ForOp, scf::IfOp>(defOp))
+        return failure();
     slice.insert(currentValue);
 
     Value existing;
