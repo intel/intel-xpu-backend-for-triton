@@ -334,7 +334,7 @@ module attributes {"ttg.num-warps" = 1 : i32, ttg.shared = 1280 : i32, "ttg.thre
     // CHECK-COUNT-4:  llvm.call spir_funccc @llvm.genx.GenISA.SubgroupBitcastShuffle.v1i64.v4i16
     %1 = ttg.convert_layout %arg1 : tensor<16x16xf16, #mma> -> tensor<16x16xf16, #blocked>
     // COM: This should be converted to a call to GenISA.SubgroupBitcastShuffle, but IGC currently don't support bitcast >= 128 bits.
-    // CHECK-NOT: llvm.call spir_funccc llvm.genx.GenISA.SubgroupBitcastShuffle
+    // CHECK-NOT: llvm.call spir_funccc @llvm.genx.GenISA.SubgroupBitcastShuffle
     %0 = ttg.convert_layout %arg0 {allocation.offset = 0 : i32} : tensor<16x16xf32, #mma> -> tensor<16x16xf32, #blocked>
     tt.return %0, %1 : tensor<16x16xf32, #blocked>, tensor<16x16xf16, #blocked>
   }
