@@ -448,9 +448,10 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         })
         .Default([](auto) { llvm_unreachable("Unsupported type"); });
 
-    SmallVector<Value> outVals = performSubGroupReinterpret(
-        loc, inVals, rewriter,
-        *intel::getReinterpretCastMapping(srcLayout, dstLayout));
+    SmallVector<Value> outVals =
+        performSubGroupReinterpret(loc, inVals, rewriter,
+                                   *intel::getReinterpretCastMapping(
+                                       op.getContext(), srcLayout, dstLayout));
 
     TypeSwitch<Type>(origElemTy)
         .Case([&](FloatType floatTy) {
@@ -498,8 +499,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     unsigned threadsPerWarp = comp.getInDimSize(kLane);
     unsigned vecSize = packedRegisterSize;
     std::vector<std::vector<int>> regMapBases(comp.getInDimSizeLog2(kRegister));
-    unsigned regMapBase =
-        packOrUnpack ? threadsPerWarp / packedRegisterSize : 1;
     auto regBases = comp.getBases().lookup(kRegister);
     auto getRegBaseOf = [&](StringAttr dim, unsigned val) {
       std::optional<unsigned> base;

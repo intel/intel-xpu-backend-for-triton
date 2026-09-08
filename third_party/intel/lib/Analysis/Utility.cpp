@@ -416,7 +416,7 @@ bool cvtIsSubGroupReinterpret(RankedTensorType srcTy, RankedTensorType dstTy) {
   //   3. The Register M -> Lane (1) should be in order.
   unsigned threadsPerWarp = conversion->getInDimSize(kLane);
   auto laneBases = conversion->getBases().lookup(kLane);
-  auto checkLaneIncContigous = [&](StringAttr outDim) {
+  auto checkLaneIncContiguous = [&](StringAttr outDim) {
     int outBase = -1;
     for (size_t i = 0; i < conversion->getInDimSizeLog2(kLane); i++) {
       int lane2Out = laneBases[i][conversion->getOutDimIndex(outDim)];
@@ -432,9 +432,9 @@ bool cvtIsSubGroupReinterpret(RankedTensorType srcTy, RankedTensorType dstTy) {
     }
     return true;
   };
-  if (!checkLaneIncContigous(kRegister))
+  if (!checkLaneIncContiguous(kRegister))
     return false;
-  if (!checkLaneIncContigous(kLane))
+  if (!checkLaneIncContiguous(kLane))
     return false;
 
   // Check whether the mapping is valid reinterpret cast.
@@ -448,7 +448,7 @@ bool cvtIsSubGroupReinterpret(RankedTensorType srcTy, RankedTensorType dstTy) {
   }
 
   std::optional<SubGroupReinterpretPackInfo> packInfo =
-      getSubGroupReinterpretPackInfo(*conversion);
+      getSubGroupReinterpretPackInfo(ctx, *conversion);
   if (!packInfo)
     return false;
 
