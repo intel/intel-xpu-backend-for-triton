@@ -344,13 +344,14 @@ pin_at_ref() {
     --jq '.content' 2>/dev/null | base64 -d 2>/dev/null | tr -d '[:space:]'
 }
 
-# List all nightly-wheels runs from the last 14 days as a JSON array, with retries. The
+# List all nightly-wheels runs from the last 7 days as a JSON array, with retries. The
 # run-list API is flaky and unordered (cli/cli#6678); paginating the created window bounds the
 # set by a key we control with no result cap (per_page is just page size), and callers must
-# still sort the result themselves.
+# still sort the result themselves. A wheel is uploaded on every daily run (even ones whose
+# run conclusion is "failure" due to an unrelated Python-matrix leg), so a short window is fine.
 list_nightly_runs() {
   local attempt out since
-  since="$(date -u -d '14 days ago' +%Y-%m-%d)"
+  since="$(date -u -d '7 days ago' +%Y-%m-%d)"
   for attempt in 1 2 3; do
     if out="$(gh api --paginate \
         "repos/$triton_repo/actions/workflows/nightly-wheels.yml/runs?branch=$triton_repo_branch&created=%3E%3D$since&exclude_pull_requests=true&per_page=100" \
@@ -381,12 +382,14 @@ if [[ "$build_vllm" == false ]]; then
 
   # gh run list ordering is unstable (cli/cli#6678), so don't trust "latest": sort a window
   # ourselves and pick the run whose pinned commit matches (read cheaply from its head commit).
+  # Consider every completed run (conclusion != null), not just successful ones: the wheel is
+  # what matters, and it is uploaded even when the run's conclusion is "failure".
   runs_json="$(list_nightly_runs)" || runs_json=""
 
   candidate_runs=()
   if [[ -n "$runs_json" ]]; then
     mapfile -t candidate_runs < <(printf '%s' "$runs_json" \
-      | jq -r '[.[] | select(.conclusion == "success")] | sort_by(.createdAt) | reverse | .[] | "\(.databaseId)\t\(.headSha)"')
+      | jq -r '[.[] | select(.conclusion != null)] | sort_by(.createdAt) | reverse | .[] | "\(.databaseId)\t\(.headSha)"')
   fi
 
   for entry in "${candidate_runs[@]}"; do
