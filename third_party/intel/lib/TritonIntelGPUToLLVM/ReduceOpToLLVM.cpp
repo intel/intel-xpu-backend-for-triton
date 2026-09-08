@@ -4,6 +4,7 @@
 #include <tuple>
 #include <utility>
 
+#include "intel/include/Analysis/Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Support/LLVM.h"
@@ -20,6 +21,7 @@
 
 using namespace mlir;
 using namespace mlir::triton;
+namespace ttgi = mlir::triton::gpu::intel;
 
 using ::mlir::LLVM::linearize;
 using ::mlir::triton::gpu::DistributedEncodingTrait;
@@ -137,7 +139,7 @@ public:
             op, helper, regLl, accs, intelAccs, indices, rewriter)))
       return failure();
 
-    if (helper.isWarpSynchronous()) {
+    if (ttgi::isWarpSynchronous(helper, op)) {
       packResultsIntel(op, helper, intelAccs, rewriter);
       return success();
     }
@@ -668,7 +670,7 @@ private:
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
     unsigned axis = op.getAxis();
-    auto smemShape = helper.getScratchRepShape();
+    auto smemShape = ttgi::getScratchRepShape(helper, op);
     SmallVector<int64_t> smemShapeI64(smemShape.begin(), smemShape.end());
 
     auto reducedEnc =
@@ -688,7 +690,7 @@ private:
 
     Value warpIdAxis = multiDimWarpId[axis];
 
-    auto smemOrder = helper.getOrderWithAxisAtBeginning();
+    auto smemOrder = ttgi::getOrderWithAxisAtBeginning(helper, op);
     for (auto it : accs) {
       const SmallVector<unsigned> &key = it.first;
       SmallVector<Value> &acc = it.second;
@@ -711,7 +713,7 @@ private:
   void accumulatePartialReductions(triton::ReduceOp op, ReduceOpHelper &helper,
                                    SmallVector<Value> &smemBases,
                                    ConversionPatternRewriter &rewriter) const {
-    auto smemShape = helper.getScratchRepShape();
+    auto smemShape = ttgi::getScratchRepShape(helper, op);
     unsigned elems = product<unsigned>(smemShape);
     unsigned sizeInterWarps = helper.getInterWarpSizeWithUniqueData();
     assert(((sizeInterWarps - 1) & sizeInterWarps) == 0 &&
@@ -802,7 +804,7 @@ private:
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto axis = op.getAxis();
-    auto smemOrder = helper.getOrderWithAxisAtBeginning();
+    auto smemOrder = ttgi::getOrderWithAxisAtBeginning(helper, op);
     SmallVector<Value> results(op.getNumOperands());
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
       auto elemTy = getElementType(op, i);
@@ -856,7 +858,7 @@ private:
     Location loc = op.getLoc();
 
     // Compute a shared memory base per operand.
-    auto smemShape = helper.getScratchRepShape();
+    auto smemShape = ttgi::getScratchRepShape(helper, op);
     SmallVector<Value> smemBases =
         getSmemBases(op, product<unsigned>(smemShape), rewriter, targetInfo);
 

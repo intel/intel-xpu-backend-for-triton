@@ -332,4 +332,46 @@ bool cvtIsSubGroupTranspose(RankedTensorType srcTy, RankedTensorType dstTy) {
                                                         laneInDimSize));
 }
 
+bool isWarpSynchronous(ReduceOpHelper &helper, triton::ReduceOp op) {
+  RankedTensorType srcTy = helper.getSrcTy();
+  return getWarpsPerCTA(srcTy.getEncoding(), srcTy.getShape())[op.getAxis()] ==
+         1;
+}
+
+SmallVector<unsigned> getScratchRepShape(ReduceOpHelper &helper,
+                                         triton::ReduceOp op) {
+  SmallVector<unsigned> smemShape;
+  // This case doesn't need inter-warp communication
+  if (isWarpSynchronous(helper, op))
+    return {0, 0};
+
+  smemShape = convertType<unsigned>(helper.getSrcTy().getShape());
+  smemShape[op.getAxis()] = helper.getInterWarpSizeWithUniqueData();
+
+  return smemShape;
+}
+
+SmallVector<unsigned> getOrderWithAxisAtBeginning(ReduceOpHelper &helper,
+                                                  triton::ReduceOp op) {
+  unsigned axis = op.getAxis();
+  auto order = toLinearEncoding(helper.getSrcTy()).getOrder();
+  auto it = std::find(order.begin(), order.end(), axis);
+  // delete the axis from order
+  order.erase(it);
+  // insert axis at the beginning of order
+  order.insert(order.begin(), axis);
+  return order;
+}
+
+unsigned getScratchSizeInBytesOld(ReduceOpHelper &helper, triton::ReduceOp op) {
+  auto smemShape = getScratchRepShape(helper, op);
+  auto elems = product<unsigned>(smemShape);
+
+  unsigned bytesPerElem = 0;
+  for (const auto &ty : op.getElementTypes()) {
+    bytesPerElem += ceil<unsigned>(ty.getIntOrFloatBitWidth(), 8);
+  }
+  return bytesPerElem * elems;
+}
+
 } // namespace mlir::triton::gpu::intel

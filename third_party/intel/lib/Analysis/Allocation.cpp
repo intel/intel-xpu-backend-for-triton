@@ -3,6 +3,8 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "llvm/ADT/TypeSwitch.h"
 
+namespace ttgi = mlir::triton::gpu::intel;
+
 namespace mlir::triton::intel {
 namespace {
 constexpr int kPtrBitWidth = 64;
@@ -42,8 +44,10 @@ unsigned allocationAnalysisScratchSizeFn(Operation *op) {
         return size == invalidSize ? defaultAllocationAnalysisScratchSizeFn(op)
                                    : size;
       })
-      .Case<ReduceOp>(
-          [](auto op) { return ReduceOpHelper(op).getScratchSizeInBytesOld(); })
+      .Case<ReduceOp>([](auto op) {
+        ReduceOpHelper helper(op);
+        return ttgi::getScratchSizeInBytesOld(helper, op);
+      })
       .Default([](Operation *op) {
         return defaultAllocationAnalysisScratchSizeFn(op);
       });
