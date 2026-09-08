@@ -1,26 +1,3 @@
-diff --git a/tests/conftest.py b/tests/conftest.py
-index e277b35dd4..a7cdc96049 100644
---- a/tests/conftest.py
-+++ b/tests/conftest.py
-@@ -284,7 +284,7 @@ def cleanup_fixture(should_do_global_cleanup_after_test: bool):
- def workspace_init():
-     """Initialize the workspace manager for tests that need it.
- 
--    This fixture initializes the workspace manager with a CUDA device
-+    This fixture initializes the workspace manager with an accelerator device
-     if available, and resets it after the test completes. Tests that
-     create a full vLLM engine should NOT use this fixture as the engine
-     will initialize the workspace manager itself.
-@@ -297,6 +297,9 @@ def workspace_init():
-     if torch.cuda.is_available():
-         device = torch.device("cuda:0")
-         init_workspace_manager(device)
-+    elif torch.xpu.is_available():
-+        device = torch.device("xpu:0")
-+        init_workspace_manager(device)
-     yield
-     reset_workspace_manager()
- 
 diff --git a/tests/kernels/attention/test_cascade_flash_attn.py b/tests/kernels/attention/test_cascade_flash_attn.py
 index 80c5c853de..e6ef4c1833 100755
 --- a/tests/kernels/attention/test_cascade_flash_attn.py
@@ -98,10 +75,10 @@ index b82c4d82c3..483672927a 100644
          out += (x * D).to(out.dtype)
      out = (out if z is None else out * F.silu(z)).to(x.dtype)
 diff --git a/tests/kernels/moe/test_moe.py b/tests/kernels/moe/test_moe.py
-index 5db21f671c..a54a8368ea 100644
+index 26e0370a3e..b7d097959c 100644
 --- a/tests/kernels/moe/test_moe.py
 +++ b/tests/kernels/moe/test_moe.py
-@@ -339,6 +339,20 @@ def test_fused_moe(
+@@ -380,6 +380,20 @@ def test_fused_moe(
  
      score = torch.randn((m, e), device=DEVICE_TYPE, dtype=dtype)
  
@@ -122,7 +99,7 @@ index 5db21f671c..a54a8368ea 100644
      if ep_size > 1:
          local_e = e // ep_size
          e_ids = torch.randint(0, e, (local_e,), device=DEVICE_TYPE, dtype=torch.int32)
-@@ -929,7 +943,10 @@ class MarlinMoEWeightData:
+@@ -1014,7 +1028,10 @@ class MarlinMoEWeightData:
      ),
      marlin_moe_generate_valid_test_cases(),
  )
@@ -134,7 +111,7 @@ index 5db21f671c..a54a8368ea 100644
  @pytest.mark.usefixtures("default_vllm_config")
  def test_fused_marlin_moe(
      a_type: ScalarType,
-@@ -1060,7 +1077,10 @@ def test_fused_marlin_moe(
+@@ -1145,7 +1162,10 @@ def test_fused_marlin_moe(
  
  
  @pytest.mark.flaky(reruns=2)
@@ -146,7 +123,7 @@ index 5db21f671c..a54a8368ea 100644
  @pytest.mark.usefixtures("default_vllm_config")
  @pytest.mark.parametrize("m", [1, 256])
  def test_fused_marlin_moe_with_bias(m):
-@@ -1133,7 +1153,10 @@ def test_fused_marlin_moe_with_bias(m):
+@@ -1218,7 +1238,10 @@ def test_fused_marlin_moe_with_bias(m):
  
  
  @pytest.mark.flaky(reruns=2)
@@ -158,7 +135,7 @@ index 5db21f671c..a54a8368ea 100644
  @pytest.mark.usefixtures("default_vllm_config")
  @pytest.mark.parametrize("m", [1, 64, 256])
  @pytest.mark.parametrize("n,k", [(1024, 1024), (2048, 2048)])
-@@ -1600,7 +1623,10 @@ def _batched_fused_marlin_moe_cases() -> list[Any]:
+@@ -1686,7 +1709,10 @@ def _batched_fused_marlin_moe_cases() -> list[Any]:
      ("m,n,k,e,topk,max_tokens_per_batch,dtype,quant_dtype,input_type,atol"),
      _batched_fused_marlin_moe_cases(),
  )
@@ -171,10 +148,10 @@ index 5db21f671c..a54a8368ea 100644
      m: int,
      n: int,
 diff --git a/tests/utils.py b/tests/utils.py
-index fac455ab73..f77d9973d6 100644
+index 71f9d4b669..c2a2924524 100644
 --- a/tests/utils.py
 +++ b/tests/utils.py
-@@ -1903,7 +1903,12 @@ def spawn_new_process_for_each_test(f: Callable[_P, None]) -> Callable[_P, None]
+@@ -1923,7 +1923,12 @@ def spawn_new_process_for_each_test(f: Callable[_P, None]) -> Callable[_P, None]
  
              repo_root = str(VLLM_PATH.resolve())
              env = os.environ.copy()

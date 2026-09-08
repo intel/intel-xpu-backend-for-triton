@@ -287,6 +287,11 @@ jobs:
         run: |
           ${{ env.TRITON_TEST_CMD }} --vllm-deepgemm
 
+      - name: Run inductor tests
+        if: ${{ matrix.suite == 'vllm-rest' && steps.install-vllm.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --vllm-inductor
+
       - name: Run tdesc tests
         if: ${{ matrix.suite == 'vllm-tdesc' && steps.install-vllm.outcome == 'success' && !cancelled() }}
         run: |
