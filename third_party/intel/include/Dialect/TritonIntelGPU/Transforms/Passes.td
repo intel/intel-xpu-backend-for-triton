@@ -532,13 +532,15 @@ def TritonIntelGPULoopDistribute
     Empirically the model never rejects the best pass-off configuration of a
     kernel, i.e. gating never regresses autotuned code.
 
-    Note that distribution does not remove the spill. Measurements on BMG
-    show the spill size unchanged or even larger after distribution, while
-    the loop still runs several times faster. The benefit comes from
-    shrinking the *per-iteration* working set -- each loop hot-loops over a
-    single accumulator -- rather than from lowering peak register pressure:
-    an accumulator produced by an earlier loop stays live across the later
-    ones.
+    Note that distribution does not eliminate the spill. Measurements on BMG
+    show the spill size after distribution going either way -- smaller on
+    some configurations, larger on others -- but never down to zero, while
+    the loop still runs several times faster. Peak register pressure is not
+    halved either: an accumulator produced by an earlier loop stays live
+    across the later ones. The likely explanation is the smaller
+    *per-iteration* working set -- each loop hot-loops over a single
+    accumulator -- but that mechanism has not been confirmed directly, so do
+    not use the spill size to decide whether this pass helped.
 
     Distributing a spilling loop also does not necessarily make it
     competitive; it mainly recovers a badly-chosen tiling. Reducing the tile
