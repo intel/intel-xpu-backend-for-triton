@@ -5,10 +5,10 @@ a distribution named `triton`.
 
 Installing:
 
-    pip install --extra-index-url https://download.pytorch.org/whl/xpu triton==3.7.2+xpu
+    pip install --extra-index-url https://download.pytorch.org/whl/xpu triton==3.8.0+xpu
 automatically installs:
 
-    triton-xpu==3.7.2
+    triton-xpu==3.8.0
 
 from the PyTorch XPU wheel index.
 
