@@ -1399,7 +1399,7 @@ run_triton_kernels_tests() {
   echo "***************************************************"
   echo "******    Running Triton Kernels tests      *******"
   echo "***************************************************"
-  cd $TRITON_PROJ/python/triton_kernels/tests
+  cd $TRITON_PROJ/python/triton_kernels
 
   # available after `capture_runtime_env` call
   gpu_file="$TRITON_TEST_REPORTS_DIR/gpu.txt"
@@ -1415,7 +1415,7 @@ run_triton_kernels_tests() {
   fi
   # skipping mxfp, they are part of mxfp_tests suite
   TRITON_TEST_SUITE=triton_kernels \
-    run_pytest_command -vvv -n $max_procs --device xpu . -k 'not test_mxfp'
+    run_pytest_command -vvv -n $max_procs --device xpu tests -k 'not test_mxfp'
 }
 
 test_triton() {
