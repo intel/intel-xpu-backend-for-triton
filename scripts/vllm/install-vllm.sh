@@ -344,15 +344,17 @@ pin_at_ref() {
     --jq '.content' 2>/dev/null | base64 -d 2>/dev/null | tr -d '[:space:]'
 }
 
-# List nightly-wheels runs from the last 30 days as JSON, with retries. The run-list API is
-# flaky and unordered (cli/cli#6678); the date window bounds the set by a key we control, and
-# callers must still sort the result themselves.
+# List all nightly-wheels runs from the last 14 days as a JSON array, with retries. The
+# run-list API is flaky and unordered (cli/cli#6678); paginating the created window bounds the
+# set by a key we control with no result cap (per_page is just page size), and callers must
+# still sort the result themselves.
 list_nightly_runs() {
   local attempt out since
-  since="$(date -u -d '30 days ago' +%Y-%m-%d)"
+  since="$(date -u -d '14 days ago' +%Y-%m-%d)"
   for attempt in 1 2 3; do
-    if out="$(gh run list --workflow nightly-wheels.yml --branch "$triton_repo_branch" \
-        -R "$triton_repo" --created ">=$since" --json databaseId,headSha,createdAt,conclusion --limit 100 2>/dev/null)"; then
+    if out="$(gh api --paginate \
+        "repos/$triton_repo/actions/workflows/nightly-wheels.yml/runs?branch=$triton_repo_branch&created=%3E%3D$since&exclude_pull_requests=true&per_page=100" \
+        --jq '.workflow_runs[] | {databaseId: .id, headSha: .head_sha, createdAt: .created_at, conclusion: .conclusion}' 2>/dev/null | jq -s '.')"; then
       printf '%s' "$out"
       return 0
     fi
