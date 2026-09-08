@@ -344,12 +344,15 @@ pin_at_ref() {
     --jq '.content' 2>/dev/null | base64 -d 2>/dev/null | tr -d '[:space:]'
 }
 
-# List recent nightly-wheels runs as JSON, with retries (the run-list API is flaky).
+# List nightly-wheels runs from the last 30 days as JSON, with retries. The run-list API is
+# flaky and unordered (cli/cli#6678); the date window bounds the set by a key we control, and
+# callers must still sort the result themselves.
 list_nightly_runs() {
-  local attempt out
+  local attempt out since
+  since="$(date -u -d '30 days ago' +%Y-%m-%d)"
   for attempt in 1 2 3; do
     if out="$(gh run list --workflow nightly-wheels.yml --branch "$triton_repo_branch" \
-        -R "$triton_repo" --json databaseId,headSha,createdAt,conclusion --limit 50 2>/dev/null)"; then
+        -R "$triton_repo" --created ">=$since" --json databaseId,headSha,createdAt,conclusion --limit 100 2>/dev/null)"; then
       printf '%s' "$out"
       return 0
     fi
@@ -391,7 +394,6 @@ if [[ "$build_vllm" == false ]]; then
     try_run "$run_id"
   done
 
-  # No matching wheel available for this Python version: fall back to building from source.
   echo "*** No matching nightly vllm-xpu-kernels wheel found. Falling back to building from source. ***"
   build_vllm=true
 fi
