@@ -13,10 +13,6 @@ runs:
     - name: Run install-vllm.sh
       shell: bash --noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
       run: |
-        # install-vllm.sh installs the prebuilt wheel matching the pinned commit and falls
-        # back to building from source when none is available, so no --source flag is forced
-        # here. The from-source path is validated separately by nightly-wheels.yml, which runs
-        # on PRs touching install-vllm.sh / the pin / that workflow.
         install_args=()
         if [[ "${{ inputs.use-branch-wheel }}" == "true" ]]; then
           install_args+=(--triton-repo-branch "${{ github.ref_name }}")
