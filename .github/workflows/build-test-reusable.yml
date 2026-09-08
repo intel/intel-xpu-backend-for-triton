@@ -78,7 +78,7 @@ env:
   PARALLEL_SUITES: "scaled_dot"
   # Suites that are run without sharding, one runner per suite
   SEQUENTIAL_SUITES: "minicore language gluon triton-kernels rest tutorial-fa-128-nofwdfp8"
-  IGC_EnableSubDWordMergeAlignmentCheck: 0
+  IGC_EnableSubDWordMergeAlignmentCheck: 1
 
 jobs:
   build:
