@@ -362,7 +362,14 @@ getSubGroupReinterpretPackInfo(MLIRContext *ctx,
       continue;
 
     bool isPack = i != 0;
-    unsigned packedRegisterSize = isPack ? (1u << i) / lane2Lane : lane2Lane;
+    unsigned curLaneBase = 1 << i;
+    unsigned packedRegisterSize = isPack ? curLaneBase : lane2Lane;
+    // Reinterpret cast only support shuffle value contiguously.
+    unsigned expectedLane = isPack ? curLaneBase / packedRegisterSize
+                                   : curLaneBase * packedRegisterSize;
+    if (lane2Lane != expectedLane) {
+      break;
+    }
     return SubGroupReinterpretPackInfo{isPack, packedRegisterSize};
   }
 
@@ -387,9 +394,8 @@ bool cvtIsSubGroupReinterpret(RankedTensorType srcTy, RankedTensorType dstTy) {
   if (!conversion)
     return false;
 
-  // TODO: Support more kind of reinterpret cast.
   // The conversion which can be used for reinterpret cast has to be a mapping
-  // from lanes to registers, i.e.,:
+  // from lanes to registers/lanes, i.e.,:
   // For 2xi16 -> i32, the conversion is:
   // - register=1 -> (0, 16)
   // - lane=1 -> (1, 0)
@@ -398,11 +404,8 @@ bool cvtIsSubGroupReinterpret(RankedTensorType srcTy, RankedTensorType dstTy) {
   //   lane=8 -> (0, 4)
   //   lane=16 -> (0, 8)
   // where out dims are: [register (size 2), lane (size 32)]
-  //   1. The lane M -> Register M at the beginning of the pattern, which is
-  //   needed to make sure the reinterpret cast is valid.
-  //   2. The lane to reg number should be equal to the reg to lane number.
-  //   3. The Register M -> Lane (threadsPerWarp/size) should be in order.
-  // A reverse convert for i32 -> 2xi16, the conversion is:
+  //
+  // The reverse convert for i32 -> 2xi16, the conversion is:
   // - register=1 -> (0, 1)
   // - lane=1 -> (0, 2)
   //   lane=2 -> (0, 4)
@@ -410,34 +413,9 @@ bool cvtIsSubGroupReinterpret(RankedTensorType srcTy, RankedTensorType dstTy) {
   //   lane=8 -> (0, 16)
   //   lane=16 -> (1, 0)
   // where out dims are: [register (size 2), lane (size 32)]
-  //   1. The lane M -> Lane M*packNum at the begining of the pattern, which is
-  //   needed to make sure the reinterpret cast is valid.
-  //   2. The lane to reg number should be equal to the reg to lane number.
-  //   3. The Register M -> Lane (1) should be in order.
-  unsigned threadsPerWarp = conversion->getInDimSize(kLane);
   auto laneBases = conversion->getBases().lookup(kLane);
-  auto checkLaneIncContiguous = [&](StringAttr outDim) {
-    int outBase = -1;
-    for (size_t i = 0; i < conversion->getInDimSizeLog2(kLane); i++) {
-      int lane2Out = laneBases[i][conversion->getOutDimIndex(outDim)];
-      if (lane2Out) {
-        if (outBase < 0) {
-          outBase = lane2Out;
-        } else if (lane2Out == outBase << 1) {
-          outBase = lane2Out;
-        } else {
-          return false;
-        }
-      }
-    }
-    return true;
-  };
-  if (!checkLaneIncContiguous(kRegister))
-    return false;
-  if (!checkLaneIncContiguous(kLane))
-    return false;
 
-  // Check whether the mapping is valid reinterpret cast.
+  // Check whether the mapping is valid for reinterpret cast.
   for (size_t i = 0; i < conversion->getInDimSizeLog2(kLane); i++) {
     auto lane2Reg = laneBases[i][conversion->getOutDimIndex(kRegister)];
     auto lane2Lane = laneBases[i][conversion->getOutDimIndex(kLane)];
@@ -457,6 +435,35 @@ bool cvtIsSubGroupReinterpret(RankedTensorType srcTy, RankedTensorType dstTy) {
   if (packedRegisterSize == 1)
     return false;
 
+  // Reinterpret-cast lane mapping can be viewed as follows.
+  // Pack case: lane base is shifted right by log2(packedElems) (example: 1).
+  //   lane  1 >> 1 = 0  (lanes 0 and 1 are combined; map to a register base)
+  //         2 >> 1 = 1
+  //         4 >> 1 = 2
+  //         8 >> 1 = 4
+  //        16 >> 1 = 8
+  // register=1 = 16     shuffle the register value to the lane 16.
+  // Unpack case: lane base is shifted left by log2(packedElems) (example: 1).
+  //   lane  1 << 1 = 2
+  //         2 << 1 = 4
+  //         4 << 1 = 8
+  //         8 << 1 = 16
+  //        16 << 1 = 0 (32 % 32 - exceeds lane-base range; map to a register
+  //        base)
+  //  register=1 = 1     shuffle the register value to the lane 1.
+  unsigned shiftedOutLaneNum = llvm::Log2_32(packedRegisterSize);
+  unsigned threadsPerWarp = conversion->getInDimSize(kLane);
+  for (size_t i = 0; i < conversion->getInDimSizeLog2(kLane); i++) {
+    int lane2Lane = laneBases[i][conversion->getOutDimIndex(kLane)];
+    int curLaneBase = 1 << i;
+    unsigned expectedMappedLane =
+        (packOrUnpack ? curLaneBase >> shiftedOutLaneNum
+                      : curLaneBase << shiftedOutLaneNum) %
+        threadsPerWarp;
+    if (lane2Lane != expectedMappedLane)
+      return false;
+  }
+
   // IGC doesn't support bitcast >= i128. Fallback to shared memory in this
   // case.
   Type elemType = srcTy.getElementType();
@@ -467,19 +474,23 @@ bool cvtIsSubGroupReinterpret(RankedTensorType srcTy, RankedTensorType dstTy) {
   if (packedRegisterSize * bitsPerElement >= 128)
     return false;
 
-  unsigned reg2LaneBase =
-      packOrUnpack ? threadsPerWarp / packedRegisterSize : 1;
+  // Check the register base mapped to the lane base to complement the shuffled
+  // elements out from lane base.
+  unsigned reg2LaneBitMap = 0;
   for (size_t i = 0; i < conversion->getInDimSizeLog2(kRegister); ++i) {
-    // Check the packed Register M -> Lane (threadsPerWarp/packedRegisterSize).
-    // This has to be in incremental order now.
     auto reg2Lane = conversion->getBases().lookup(
         kRegister)[i][conversion->getOutDimIndex(kLane)];
-    if (reg2Lane == reg2LaneBase) {
-      reg2LaneBase <<= 1;
-      packedRegisterSize >>= 1;
+    if (reg2Lane) {
+      reg2LaneBitMap |= reg2Lane;
     }
   }
-  return packedRegisterSize == 1;
+  unsigned expectedComlementLaneBitMap = (1 << shiftedOutLaneNum) - 1;
+  unsigned remainedLaneNum = threadsPerWarp / packedRegisterSize;
+  expectedComlementLaneBitMap = packOrUnpack
+                                    ? expectedComlementLaneBitMap
+                                          << llvm::Log2_32(remainedLaneNum)
+                                    : expectedComlementLaneBitMap;
+  return reg2LaneBitMap == expectedComlementLaneBitMap;
 }
 
 } // namespace mlir::triton::gpu::intel

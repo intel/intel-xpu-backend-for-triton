@@ -324,6 +324,203 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [16, 2], warpsPerCTA = [1, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 1 : i32, ttg.shared = 0 : i32, "ttg.threads-per-warp" = 32 : i32} {
+
+  // CHECK:   llvm.func spir_funccc @llvm.genx.GenISA.SubgroupBitcastShuffle.v16i32.v8i64(vector<8xi64>) -> vector<16xi32>
+  // CHECK-LABEL:   llvm.func spir_kernelcc @test_reinterpret(
+  tt.func public @test_reinterpret(%arg0: tensor<64x64xi32, #blocked>)  -> tensor<64x64xi32, #blocked1> {
+
+    // Reinterpret cast are vectorized.
+    // Reinterpret cast mapping:
+    //  - register=1 -> (1, 0)
+    //    register=2 -> (2, 0)
+    //    register=4 -> (0, 1)
+    //    register=8 -> (4, 0)
+    //    register=16 -> (8, 0)
+    //    register=32 -> (16, 0)
+    //    register=64 -> (64, 0)
+    //  - lane=1 -> (0, 2)
+    //    lane=2 -> (0, 4)
+    //    lane=4 -> (0, 8)
+    //    lane=8 -> (0, 16)
+    //    lane=16 -> (32, 0)
+    // where out dims are: [register (size 128), lane (size 32)]
+
+    // The register reorder mapping:
+    //  - register=1 -> (4)     reg -> lane
+    //    register=2 -> (8)     reg -> reg shuffle
+    //    register=4 -> (16)    reg -> reg shuffle
+    //    register=8 -> (32)    reg -> reg shuffle  vec size end here = 16.
+    //    register=16 -> (1)    reg -> reg identical
+    //    register=32 -> (2)    reg -> reg identical
+    //    register=64 -> (64)   reg -> reg identical
+
+    // CHECK:           %[[SRC_0:.*]] = llvm.extractvalue %arg0[0] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_1:.*]] = llvm.extractvalue %arg0[1] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_2:.*]] = llvm.extractvalue %arg0[2] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_3:.*]] = llvm.extractvalue %arg0[3] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_4:.*]] = llvm.extractvalue %arg0[4] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_5:.*]] = llvm.extractvalue %arg0[5] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_6:.*]] = llvm.extractvalue %arg0[6] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_7:.*]] = llvm.extractvalue %arg0[7] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_8:.*]] = llvm.extractvalue %arg0[8] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_9:.*]] = llvm.extractvalue %arg0[9] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_10:.*]] = llvm.extractvalue %arg0[10] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_11:.*]] = llvm.extractvalue %arg0[11] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_12:.*]] = llvm.extractvalue %arg0[12] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_13:.*]] = llvm.extractvalue %arg0[13] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_14:.*]] = llvm.extractvalue %arg0[14] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_15:.*]] = llvm.extractvalue %arg0[15] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_16:.*]] = llvm.extractvalue %arg0[16] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_17:.*]] = llvm.extractvalue %arg0[17] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_18:.*]] = llvm.extractvalue %arg0[18] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_19:.*]] = llvm.extractvalue %arg0[19] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_20:.*]] = llvm.extractvalue %arg0[20] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_21:.*]] = llvm.extractvalue %arg0[21] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_22:.*]] = llvm.extractvalue %arg0[22] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_23:.*]] = llvm.extractvalue %arg0[23] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_24:.*]] = llvm.extractvalue %arg0[24] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_25:.*]] = llvm.extractvalue %arg0[25] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_26:.*]] = llvm.extractvalue %arg0[26] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_27:.*]] = llvm.extractvalue %arg0[27] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_28:.*]] = llvm.extractvalue %arg0[28] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_29:.*]] = llvm.extractvalue %arg0[29] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_30:.*]] = llvm.extractvalue %arg0[30] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_31:.*]] = llvm.extractvalue %arg0[31] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_32:.*]] = llvm.extractvalue %arg0[32] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_33:.*]] = llvm.extractvalue %arg0[33] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_34:.*]] = llvm.extractvalue %arg0[34] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_35:.*]] = llvm.extractvalue %arg0[35] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_36:.*]] = llvm.extractvalue %arg0[36] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_37:.*]] = llvm.extractvalue %arg0[37] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_38:.*]] = llvm.extractvalue %arg0[38] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_39:.*]] = llvm.extractvalue %arg0[39] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_40:.*]] = llvm.extractvalue %arg0[40] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_41:.*]] = llvm.extractvalue %arg0[41] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_42:.*]] = llvm.extractvalue %arg0[42] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_43:.*]] = llvm.extractvalue %arg0[43] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_44:.*]] = llvm.extractvalue %arg0[44] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_45:.*]] = llvm.extractvalue %arg0[45] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_46:.*]] = llvm.extractvalue %arg0[46] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_47:.*]] = llvm.extractvalue %arg0[47] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_48:.*]] = llvm.extractvalue %arg0[48] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_49:.*]] = llvm.extractvalue %arg0[49] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_50:.*]] = llvm.extractvalue %arg0[50] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_51:.*]] = llvm.extractvalue %arg0[51] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_52:.*]] = llvm.extractvalue %arg0[52] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_53:.*]] = llvm.extractvalue %arg0[53] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_54:.*]] = llvm.extractvalue %arg0[54] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_55:.*]] = llvm.extractvalue %arg0[55] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_56:.*]] = llvm.extractvalue %arg0[56] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_57:.*]] = llvm.extractvalue %arg0[57] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_58:.*]] = llvm.extractvalue %arg0[58] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_59:.*]] = llvm.extractvalue %arg0[59] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_60:.*]] = llvm.extractvalue %arg0[60] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_61:.*]] = llvm.extractvalue %arg0[61] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_62:.*]] = llvm.extractvalue %arg0[62] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_63:.*]] = llvm.extractvalue %arg0[63] : !llvm.struct<(i32
+    // CHECK-COUNT-32:  llvm.extractvalue %arg0
+
+    // COM: reinterpret cast and register reorder for the convert layout.
+    // CHECK:           %[[UNPACKED_SRC:.*]] = llvm.mlir.undef : vector<16xi32>
+    // CHECK:           %[[MLIR_1:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[UNPACKED_SRC_0:.*]] = llvm.insertelement %[[SRC_0]], %[[UNPACKED_SRC]]{{\[}}%[[MLIR_1]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_2:.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK:           %[[UNPACKED_SRC_1:.*]] = llvm.insertelement %[[SRC_4]], %[[UNPACKED_SRC_0]]{{\[}}%[[MLIR_2]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_3:.*]] = llvm.mlir.constant(2 : i32) : i32
+    // CHECK:           %[[UNPACKED_SRC_2:.*]] = llvm.insertelement %[[SRC_8]], %[[UNPACKED_SRC_1]]{{\[}}%[[MLIR_3]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_4:.*]] = llvm.mlir.constant(3 : i32) : i32
+    // CHECK:           %[[UNPACKED_SRC_3:.*]] = llvm.insertelement %[[SRC_12]], %[[UNPACKED_SRC_2]]{{\[}}%[[MLIR_4]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_5:.*]] = llvm.mlir.constant(4 : i32) : i32
+    // CHECK:           %[[UNPACKED_SRC_4:.*]] = llvm.insertelement %[[SRC_16]], %[[UNPACKED_SRC_3]]{{\[}}%[[MLIR_5]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_6:.*]] = llvm.mlir.constant(5 : i32) : i32
+    // CHECK:           %[[UNPACKED_SRC_5:.*]] = llvm.insertelement %[[SRC_20]], %[[UNPACKED_SRC_4]]{{\[}}%[[MLIR_6]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_7:.*]] = llvm.mlir.constant(6 : i32) : i32
+    // CHECK:           %[[UNPACKED_SRC_6:.*]] = llvm.insertelement %[[SRC_24]], %[[UNPACKED_SRC_5]]{{\[}}%[[MLIR_7]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_8:.*]] = llvm.mlir.constant(7 : i32) : i32
+    // CHECK:           %[[UNPACKED_SRC_7:.*]] = llvm.insertelement %[[SRC_28]], %[[UNPACKED_SRC_6]]{{\[}}%[[MLIR_8]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_9:.*]] = llvm.mlir.constant(8 : i32) : i32
+    // CHECK:           %[[UNPACKED_SRC_8:.*]] = llvm.insertelement %[[SRC_32]], %[[UNPACKED_SRC_7]]{{\[}}%[[MLIR_9]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_10:.*]] = llvm.mlir.constant(9 : i32) : i32
+    // CHECK:           %[[UNPACKED_SRC_9:.*]] = llvm.insertelement %[[SRC_36]], %[[UNPACKED_SRC_8]]{{\[}}%[[MLIR_10]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_11:.*]] = llvm.mlir.constant(10 : i32) : i32
+    // CHECK:           %[[UNPACKED_SRC_10:.*]] = llvm.insertelement %[[SRC_40]], %[[UNPACKED_SRC_9]]{{\[}}%[[MLIR_11]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_12:.*]] = llvm.mlir.constant(11 : i32) : i32
+    // CHECK:           %[[UNPACKED_SRC_11:.*]] = llvm.insertelement %[[SRC_44]], %[[UNPACKED_SRC_10]]{{\[}}%[[MLIR_12]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_13:.*]] = llvm.mlir.constant(12 : i32) : i32
+    // CHECK:           %[[UNPACKED_SRC_12:.*]] = llvm.insertelement %[[SRC_48]], %[[UNPACKED_SRC_11]]{{\[}}%[[MLIR_13]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_14:.*]] = llvm.mlir.constant(13 : i32) : i32
+    // CHECK:           %[[UNPACKED_SRC_13:.*]] = llvm.insertelement %[[SRC_52]], %[[UNPACKED_SRC_12]]{{\[}}%[[MLIR_14]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_15:.*]] = llvm.mlir.constant(14 : i32) : i32
+    // CHECK:           %[[UNPACKED_SRC_14:.*]] = llvm.insertelement %[[SRC_56]], %[[UNPACKED_SRC_13]]{{\[}}%[[MLIR_15]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_16:.*]] = llvm.mlir.constant(15 : i32) : i32
+    // CHECK:           %[[UNPACKED_SRC_15:.*]] = llvm.insertelement %[[SRC_60]], %[[UNPACKED_SRC_14]]{{\[}}%[[MLIR_16]] : i32] : vector<16xi32>
+    // CHECK:           %[[PACKED_SRC:.*]] = llvm.bitcast %[[UNPACKED_SRC_15]] : vector<16xi32> to vector<8xi64>
+    // CHECK:           %[[UNPACKED_SRC:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.SubgroupBitcastShuffle.v16i32.v8i64(%[[PACKED_SRC]])
+
+    // CHECK:           %[[MLIR_17:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[EXTRACTELEMENT_0:.*]] = llvm.extractelement %[[UNPACKED_SRC]]{{\[}}%[[MLIR_17]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_18:.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK:           %[[EXTRACTELEMENT_1:.*]] = llvm.extractelement %[[UNPACKED_SRC]]{{\[}}%[[MLIR_18]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_19:.*]] = llvm.mlir.constant(2 : i32) : i32
+    // CHECK:           %[[EXTRACTELEMENT_2:.*]] = llvm.extractelement %[[UNPACKED_SRC]]{{\[}}%[[MLIR_19]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_20:.*]] = llvm.mlir.constant(3 : i32) : i32
+    // CHECK:           %[[EXTRACTELEMENT_3:.*]] = llvm.extractelement %[[UNPACKED_SRC]]{{\[}}%[[MLIR_20]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_21:.*]] = llvm.mlir.constant(4 : i32) : i32
+    // CHECK:           %[[EXTRACTELEMENT_4:.*]] = llvm.extractelement %[[UNPACKED_SRC]]{{\[}}%[[MLIR_21]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_22:.*]] = llvm.mlir.constant(5 : i32) : i32
+    // CHECK:           %[[EXTRACTELEMENT_5:.*]] = llvm.extractelement %[[UNPACKED_SRC]]{{\[}}%[[MLIR_22]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_23:.*]] = llvm.mlir.constant(6 : i32) : i32
+    // CHECK:           %[[EXTRACTELEMENT_6:.*]] = llvm.extractelement %[[UNPACKED_SRC]]{{\[}}%[[MLIR_23]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_24:.*]] = llvm.mlir.constant(7 : i32) : i32
+    // CHECK:           %[[EXTRACTELEMENT_7:.*]] = llvm.extractelement %[[UNPACKED_SRC]]{{\[}}%[[MLIR_24]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_25:.*]] = llvm.mlir.constant(8 : i32) : i32
+    // CHECK:           %[[EXTRACTELEMENT_8:.*]] = llvm.extractelement %[[UNPACKED_SRC]]{{\[}}%[[MLIR_25]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_26:.*]] = llvm.mlir.constant(9 : i32) : i32
+    // CHECK:           %[[EXTRACTELEMENT_9:.*]] = llvm.extractelement %[[UNPACKED_SRC]]{{\[}}%[[MLIR_26]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_27:.*]] = llvm.mlir.constant(10 : i32) : i32
+    // CHECK:           %[[EXTRACTELEMENT_10:.*]] = llvm.extractelement %[[UNPACKED_SRC]]{{\[}}%[[MLIR_27]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_28:.*]] = llvm.mlir.constant(11 : i32) : i32
+    // CHECK:           %[[EXTRACTELEMENT_11:.*]] = llvm.extractelement %[[UNPACKED_SRC]]{{\[}}%[[MLIR_28]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_29:.*]] = llvm.mlir.constant(12 : i32) : i32
+    // CHECK:           %[[EXTRACTELEMENT_12:.*]] = llvm.extractelement %[[UNPACKED_SRC]]{{\[}}%[[MLIR_29]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_30:.*]] = llvm.mlir.constant(13 : i32) : i32
+    // CHECK:           %[[EXTRACTELEMENT_13:.*]] = llvm.extractelement %[[UNPACKED_SRC]]{{\[}}%[[MLIR_30]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_31:.*]] = llvm.mlir.constant(14 : i32) : i32
+    // CHECK:           %[[EXTRACTELEMENT_14:.*]] = llvm.extractelement %[[UNPACKED_SRC]]{{\[}}%[[MLIR_31]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_32:.*]] = llvm.mlir.constant(15 : i32) : i32
+    // CHECK:           %[[EXTRACTELEMENT_15:.*]] = llvm.extractelement %[[UNPACKED_SRC]]{{\[}}%[[MLIR_32]] : i32] : vector<16xi32>
+
+    // CHECK-COUNT-7:  llvm.call spir_funccc @llvm.genx.GenISA.SubgroupBitcastShuffle.v16i32.v8i64
+
+    // CHECK:           %[[MLIR_264:.*]] = llvm.mlir.undef : !llvm.struct<(i32,
+    // CHECK:           %[[INSERTVALUE_0:.*]] = llvm.insertvalue %[[EXTRACTELEMENT_0]], {{.*}}[0] : !llvm.struct<(i32,
+    // CHECK:           %[[INSERTVALUE_4:.*]] = llvm.insertvalue %[[EXTRACTELEMENT_2]], {{.*}}[4] : !llvm.struct<(i32,
+    // CHECK:           %[[INSERTVALUE_8:.*]] = llvm.insertvalue %[[EXTRACTELEMENT_4]], {{.*}}[8] : !llvm.struct<(i32,
+    // CHECK:           %[[INSERTVALUE_12:.*]] = llvm.insertvalue %[[EXTRACTELEMENT_6]], {{.*}}[12] : !llvm.struct<(i32,
+    // CHECK:           %[[INSERTVALUE_16:.*]] = llvm.insertvalue %[[EXTRACTELEMENT_8]], {{.*}}[16] : !llvm.struct<(i32,
+    // CHECK:           %[[INSERTVALUE_20:.*]] = llvm.insertvalue %[[EXTRACTELEMENT_10]], {{.*}}[20] : !llvm.struct<(i32,
+    // CHECK:           %[[INSERTVALUE_24:.*]] = llvm.insertvalue %[[EXTRACTELEMENT_12]], {{.*}}[24] : !llvm.struct<(i32,
+    // CHECK:           %[[INSERTVALUE_28:.*]] = llvm.insertvalue %[[EXTRACTELEMENT_14]], {{.*}}[28] : !llvm.struct<(i32,
+    // CHECK:           %[[INSERTVALUE_32:.*]] = llvm.insertvalue %[[EXTRACTELEMENT_1]], {{.*}}[32] : !llvm.struct<(i32,
+    // CHECK:           %[[INSERTVALUE_36:.*]] = llvm.insertvalue %[[EXTRACTELEMENT_3]], {{.*}}[36] : !llvm.struct<(i32,
+    // CHECK:           %[[INSERTVALUE_40:.*]] = llvm.insertvalue %[[EXTRACTELEMENT_5]], {{.*}}[40] : !llvm.struct<(i32,
+    // CHECK:           %[[INSERTVALUE_44:.*]] = llvm.insertvalue %[[EXTRACTELEMENT_7]], {{.*}}[44] : !llvm.struct<(i32,
+    // CHECK:           %[[INSERTVALUE_48:.*]] = llvm.insertvalue %[[EXTRACTELEMENT_9]], {{.*}}[48] : !llvm.struct<(i32,
+    // CHECK:           %[[INSERTVALUE_52:.*]] = llvm.insertvalue %[[EXTRACTELEMENT_11]], {{.*}}[52] : !llvm.struct<(i32,
+    // CHECK:           %[[INSERTVALUE_56:.*]] = llvm.insertvalue %[[EXTRACTELEMENT_13]], {{.*}}[56] : !llvm.struct<(i32,
+    // CHECK:           %[[INSERTVALUE_60:.*]] = llvm.insertvalue %[[EXTRACTELEMENT_15]], {{.*}}[60] : !llvm.struct<(i32,
+
+    %0 = ttg.convert_layout %arg0 {allocation.offset = 0 : i32} : tensor<64x64xi32, #blocked> -> tensor<64x64xi32, #blocked1>
+    tt.return %0 : tensor<64x64xi32, #blocked1>
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 4], warpsPerCTA = [1, 1], order = [1, 0]}>
 #mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [2, 1], A = [16, 8], B = [8, 16], C = [16, 16]}>
 
@@ -337,5 +534,71 @@ module attributes {"ttg.num-warps" = 1 : i32, ttg.shared = 1280 : i32, "ttg.thre
     // CHECK-NOT: llvm.call spir_funccc @llvm.genx.GenISA.SubgroupBitcastShuffle
     %0 = ttg.convert_layout %arg0 {allocation.offset = 0 : i32} : tensor<16x16xf32, #mma> -> tensor<16x16xf32, #blocked>
     tt.return %0, %1 : tensor<16x16xf32, #blocked>, tensor<16x16xf16, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [1, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 1 : i32, ttg.shared = 1280 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL:   llvm.func spir_kernelcc @test_reinterpret(
+  tt.func public @test_reinterpret(%arg0: tensor<32x32xf16, #blocked>)  -> tensor<32x32xf16, #blocked1> {
+    //  lane mapping is not valid for reinterpret cast:
+    //  - lane=1 -> (2, 0)
+    //    lane=2 -> (4, 0)
+    //    lane=4 -> (0, 2)
+    //    lane=8 -> (0, 4)
+    //    lane=16 -> (0, 8)
+    //  where out dims are: [register (size 32), lane (size 32)]
+    // But maybe can be implemented with a new shuffle intrinsic. For now, just use a generic convert_layout.
+    // CHECK-NOT: llvm.call spir_funccc @llvm.genx.GenISA.SubgroupBitcastShuffle
+    %0 = ttg.convert_layout %arg0 {allocation.offset = 0 : i32} : tensor<32x32xf16, #blocked> -> tensor<32x32xf16, #blocked1>
+    tt.return %0 : tensor<32x32xf16, #blocked1>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL:   llvm.func spir_kernelcc @test_reinterpret(
+  tt.func public @test_reinterpret(%arg0: tensor<32x32xf32, #blocked>)  -> tensor<32x32xf32, #blocked1> {
+    //  lane mapping is not valid for reinterpret cast:
+    // - lane=1 -> (0, 2)
+    //   lane=2 -> (0, 4)
+    //   lane=4 -> (0, 8)
+    //   lane=8 -> (2, 0)
+    //   lane=16 -> (0, 16)
+    // where out dims are: [register (size 32), lane (size 32)]
+    // But maybe can be implemented with a new shuffle intrinsic. For now, just use a generic convert_layout.
+    // CHECK-NOT: llvm.call spir_funccc @llvm.genx.GenISA.SubgroupBitcastShuffle
+    %0 = ttg.convert_layout %arg0 : tensor<32x32xf32, #blocked> -> tensor<32x32xf32, #blocked1>
+    tt.return %0 : tensor<32x32xf32, #blocked1>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [2, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL:   llvm.func spir_kernelcc @test_reinterpret(
+  tt.func public @test_reinterpret(%arg0: tensor<32x32xf16, #blocked>)  -> tensor<32x32xf16, #blocked1> {
+    //  lane mapping is not valid for reinterpret cast:
+    // - lane=1 -> (0, 4)
+    //   lane=2 -> (0, 8)
+    //   lane=4 -> (16, 0)
+    //   lane=8 -> (1, 0)
+    //   lane=16 -> (2, 0)
+    //where out dims are: [register (size 32), lane (size 32)]
+    // But maybe can be implemented with a new shuffle intrinsic. For now, just use a generic convert_layout.
+    // CHECK-NOT: llvm.call spir_funccc @llvm.genx.GenISA.SubgroupBitcastShuffle
+    %0 = ttg.convert_layout %arg0 : tensor<32x32xf16, #blocked> -> tensor<32x32xf16, #blocked1>
+    tt.return %0 : tensor<32x32xf16, #blocked1>
   }
 }
