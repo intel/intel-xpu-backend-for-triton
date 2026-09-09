@@ -48,6 +48,7 @@ class XPUOptions:
     allow_fp8e4b15: bool = True
     grf_mode: str = 'default'
     loop_distribute: bool = knobs.intel.enable_loop_distribution
+    propagate_select_conditions: bool = not knobs.intel.disable_propagate_select_conditions
     code_sinking: bool = knobs.intel.enable_code_sinking
     sub_32_dpas: bool = knobs.intel.enable_sub_32_dpas
     dynamic_shared_memory: bool = knobs.intel.dynamic_shared_memory
@@ -386,6 +387,14 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttir.add_simplify_signed_arithmetic(pm)
         passes.ttir.add_reorder_broadcast(pm)
         passes.common.add_cse(pm)
+        if opt.propagate_select_conditions:
+            # Runs after CSE, which unifies the `tt.addptr` chains the pass
+            # matches redundant loads on. The pass only makes the two arms of a
+            # select equal; CSE unifies the values it duplicated and the
+            # canonicalizer folds `select %c, %v, %v` and drops what dies.
+            intel.passes.ttir.add_propagate_select_conditions(pm)
+            passes.common.add_cse(pm)
+            passes.common.add_canonicalizer(pm)
         passes.common.add_symbol_dce(pm)
         if opt.loop_distribute:
             intel.passes.ttgpuir.add_loop_distribute(pm)
