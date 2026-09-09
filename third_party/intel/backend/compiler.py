@@ -4,6 +4,7 @@ from triton.backends.intel.driver import compile_module_from_src, is_lts
 from triton.backends.intel.track import track
 from triton.backends.intel.extension_utils import query_device_extensions
 from triton import knobs
+from triton._instrumentation import instrument as _instrument, is_enabled
 from triton.runtime.errors import IntelGPUError, OutOfResources
 
 from dataclasses import dataclass
@@ -24,6 +25,8 @@ try:  # XPUBackend allows metaclasses injection
     from .meta import XPUBackendMeta
 except ImportError:
     XPUBackendMeta = type(BaseBackend)
+
+instrument = functools.partial(_instrument, backend="intel")
 
 
 @dataclass
@@ -79,8 +82,12 @@ class XPUOptions:
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
-# Aligned with max_reg_spill in third_party/intel/backend/driver.c
-MAX_REG_SPILL = 0
+# Largest spill the auto-large-GRF upgrade tolerates before rebuilding, in the
+# unit external consumers compare `n_spills` in: dword-equivalents per lane. 16
+# is PyTorch inductor's default `spill_threshold` for non-HIP, so a spill at or
+# below this cannot change inductor's verdict and a rebuild would only cost
+# compile time. Kept in sync with `kMaxSpillSlotsPerLane` in driver.c.
+MAX_REG_SPILL_SLOTS_PER_LANE = 16
 
 SPILL_SIZE_RE = re.compile(r'spill_size\s*[:=]\s*(\d+)')
 PTSS_OVERFLOW_RE = re.compile(
@@ -119,6 +126,19 @@ def extract_spill_size_from_zebin(file):
     return 0
 
 
+def spill_slots_per_lane(spill_size, threads_per_warp):
+    """Convert a zebin `spill_size` to the unit `n_spills` is reported in.
+
+    `spill_size` is bytes allocated per hardware thread; CUDA and HIP report
+    `n_spills` as dword-equivalents per lane, and that is the unit external
+    consumers threshold on. Mirrors `Spills::slotsPerLane` in driver.c, down to
+    the truncating division and the raw-byte fallback for an unknown width.
+    """
+    if spill_size <= 0 or threads_per_warp <= 0:
+        return spill_size
+    return spill_size // (4 * threads_per_warp)
+
+
 def min_dot_size(device_props: Union[Dict, GPUTarget]):
     if isinstance(device_props, GPUTarget):
         backend = XPUBackend(device_props)
@@ -133,7 +153,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     arch_to_impl = {}  # Architecture id to backend implementation class mapping
     binary_ext = "spv"
     target_arch = "spir64"
-    instrumentation = None
 
     @staticmethod
     def supports_target(target: GPUTarget):
@@ -307,8 +326,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
     def load_dialects(self, ctx):
         intel.load_dialects(ctx)
-        if self.instrumentation:
-            self.instrumentation.load_dialects(ctx)
+        instrument(ctx, point="load-dialects")
 
     @staticmethod
     def validate_options(opt, properties):
@@ -461,7 +479,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if knobs.intel.opt_reduction_locality:
             intel.passes.ttgpuir.add_optimize_reduction_locality(pm)
         intel.passes.arith.add_arith_emulate_unsupported_floats(pm, ["bf16"], "f32")
-        if opt.instrumentation_mode == "fpsan":
+        if is_enabled(opt, "fpsan"):
             passes.ttgpuir.add_fp_sanitizer(pm, opt.fpsan_homomorphic_casts)
         pm.run(mod, 'make_ttgir')
         return mod
@@ -477,7 +495,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.ttir.add_loop_aware_cse(pm)
         passes.gluon.add_canonicalizer(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
-        if options.instrumentation_mode == "fpsan":
+        if is_enabled(options, "fpsan"):
             passes.ttgpuir.add_fp_sanitizer(pm, options.fpsan_homomorphic_casts)
 
         pm.run(mod, 'gluon_to_ttgir')
@@ -516,8 +534,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttgpuir.add_allocate_shared_memory(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
-        if cls.instrumentation:
-            cls.instrumentation.patch("ttgpuir_to_llvmir", pm, mod.context)
+        instrument(pm, point="ttgpuir-to-llvmir", context=mod.context)
         intel.passes.ttgpuir.add_to_llvmir(pm, options.dynamic_shared_memory)
         intel.passes.ttgpuir.add_gen_to_llvm(pm)
         passes.common.add_canonicalizer(pm)
@@ -531,8 +548,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if not knobs.compilation.disable_line_info and not knobs.compilation.dump_ir_extract_di_local_variables:
             passes.llvmir.add_di_scope(pm)
 
-        if cls.instrumentation:
-            cls.instrumentation.patch("llvmir_to_llvm", pm, mod.context)
+        instrument(pm, point="llvmir-to-llvm", context=mod.context)
         pm.run(mod, 'make_llir')
 
         if knobs.compilation.dump_ir_extract_di_local_variables:
@@ -598,8 +614,9 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     @track
     def make_spv(cls, src, metadata, options):
         driver_version = metadata["target"].arch.get("driver_version")
-        os.environ["INTEL_XPU_BACKEND_IS_LTS"] = "1" if cls.is_lts(driver_version) else "0"
-        spirv, name = intel.translate_to_spirv(src)
+        is_lts = cls.is_lts(driver_version)
+        os.environ["INTEL_XPU_BACKEND_IS_LTS"] = "1" if is_lts else "0"
+        spirv, name = intel.translate_to_spirv(src, is_lts)
         metadata["name"] = name
         metadata.setdefault("build_flags", "")
         if options.grf_mode == '128':
@@ -669,7 +686,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                     subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
                     if options.grf_mode == "default":
                         spill_size = extract_spill_size_from_zebin(fbin)
-                        if spill_size <= MAX_REG_SPILL:
+                        spill_slots = spill_slots_per_lane(spill_size, metadata["threads_per_warp"])
+                        if spill_slots <= MAX_REG_SPILL_SLOTS_PER_LANE:
                             break
                 except (subprocess.CalledProcessError, IntelGPUError) as e:
                     # If GRF mode was not last yet, retry with different GRF mode
