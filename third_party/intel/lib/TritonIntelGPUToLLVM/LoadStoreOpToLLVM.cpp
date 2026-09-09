@@ -1195,8 +1195,8 @@ struct BlockIOConversionBase : public LoadStoreConversionBase {
                              APFloat::getNaN(floatType.getFloatSemantics())));
         }
 
-        Value other = b.const_val(
-            unpackedType,
+        Value other = LLVM::ConstantOp::create(
+            rewriter, loc, unpackedType,
             DenseElementsAttr::get(
                 VectorType::get(numElemsPerUnpackedType, unpackedElemType),
                 constOtherElems));
