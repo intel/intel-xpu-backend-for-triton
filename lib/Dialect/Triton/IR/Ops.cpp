@@ -1275,8 +1275,7 @@ void IntToPtrOp::getCanonicalizationPatterns(RewritePatternSet &results,
 void FuncOp::build(OpBuilder &builder, OperationState &state, StringRef name,
                    FunctionType type, ArrayRef<NamedAttribute> attrs,
                    ArrayRef<DictionaryAttr> argAttrs) {
-  state.addAttribute(SymbolTable::getSymbolAttrName(),
-                     builder.getStringAttr(name));
+  state.getOrAddProperties<Properties>().sym_name = builder.getStringAttr(name);
   state.addAttribute(getFunctionTypeAttrName(state.name), TypeAttr::get(type));
   state.attributes.append(attrs.begin(), attrs.end());
   state.addRegion();
