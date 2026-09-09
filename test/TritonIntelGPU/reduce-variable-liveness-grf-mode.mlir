@@ -1,8 +1,8 @@
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness -cse | FileCheck %s --check-prefixes=CHECK,SINK
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness=grf-mode=128 -cse | FileCheck %s --check-prefixes=CHECK,SINK
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness=grf-mode=256 -cse | FileCheck %s --check-prefixes=CHECK,SINK
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness=grf-mode=auto -cse | FileCheck %s --check-prefixes=CHECK,SINK
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness=grf-mode=512 -cse | FileCheck %s --check-prefixes=CHECK,KEEP
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness -cse | FileCheck %s --check-prefixes=CHECK,SINK,SINK2
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness=grf-mode=128 -cse | FileCheck %s --check-prefixes=CHECK,SINK,SINK2
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness=grf-mode=256 -cse | FileCheck %s --check-prefixes=CHECK,SINK,KEEP2
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness=grf-mode=auto -cse | FileCheck %s --check-prefixes=CHECK,SINK,SINK2
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness=grf-mode=512 -cse | FileCheck %s --check-prefixes=CHECK,KEEP,KEEP2
 
 // COM: This module's `scf.for` body measures exactly 1024 B/lane live-in
 // COM: pressure (the 256x128 f16 A operand = 256×128×2 bytes / 32 warps / 16 threads
@@ -49,11 +49,14 @@ module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 32 : i32, "ttg.th
 
 // COM: Test small tile (sub-128 dimension) can now sink on high pressure alone.
 // COM: This tests the semantic change: old logic had hard 128x128x2 size floor.
-// COM: 64x128 f16 A operand = 64×128×2 bytes / 32 warps / 16 threads = 512 B/lane.
-// COM: Pressure exactly at default-mode 200% threshold (512 bytes per thread).
-// COM: A operand 128x128xf16: 128×128×2 bytes / 32 warps / 16 threads = 512 B/thread.
-// COM: Tests that small tiles (128x128 < old 128×128×2 size gate) sink when pressure
-// COM: is high, validating the behavioral change from size-based to pressure-based gating.
+// COM: A operand 128x128xf16 = 128×128×2 bytes / 32 warps / 16 threads = 512 B/lane.
+// COM: This clears the default/128/auto-mode 200% threshold (256 B/lane budget * 2 =
+// COM: 512 B/lane), so those modes sink -- validating the behavioral change from
+// COM: size-based to pressure-based gating (128x128 < the old 128×128×2 size gate).
+// COM: It does NOT clear the 256-mode threshold (512 B/lane budget * 2 = 1024 B/lane)
+// COM: or the 512-mode threshold (1024 B/lane budget * 2 = 2048 B/lane), so those
+// COM: modes keep it outside the loop -- unlike `grf_mode_gate` above, this tile's
+// COM: pressure is not high enough to clear every GRF mode's budget.
 #dpas2 = #ttig.dpas<{repeatCount = 4, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 8], repCluster = [1, 1], A = [4, 16], B = [16, 16], C = [4, 16]}>
 #dot0_2 = #ttg.dot_op<{opIdx = 0, parent = #dpas2, kWidth=1}>
 #dot1_2 = #ttg.dot_op<{opIdx = 1, parent = #dpas2, kWidth=2}>
@@ -66,12 +69,15 @@ module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 32 : i32, "ttg.th
     %c0_i64 = arith.constant 0 : i64
     %0 = tt.make_tensor_descriptor %arg0, [%c0_i32, %c0_i32], [%c0_i64, %c0_i64] : <f16>, <128x128xf16>
     %1 = tt.make_tensor_descriptor %arg1, [%c0_i32, %c0_i32], [%c0_i64, %c0_i64] : <f16>, <128x256xf16>
-    // SINK:      ttig.descriptor_prefetch
-    // SINK-NOT:  tt.descriptor_load {{.*}} : !tt.tensordesc<128x128xf16>
+    // SINK2:      ttig.descriptor_prefetch %{{.*}}[%c0_i32, %c0_i32] {{.*}} : !tt.tensordesc<128x128xf16>
+    // SINK2-NOT:  tt.descriptor_load %{{.*}}[%c0_i32, %c0_i32] {{.*}} : !tt.tensordesc<128x128xf16>
+    // KEEP2:      tt.descriptor_load %{{.*}}[%c0_i32, %c0_i32] {{.*}} : !tt.tensordesc<128x128xf16> -> tensor<128x128xf16, #ttg.dot_op<{{.*}}>>
+    // KEEP2-NOT:  ttig.descriptor_prefetch %{{.*}}[%c0_i32, %c0_i32] {{.*}} : !tt.tensordesc<128x128xf16>
     %2 = tt.descriptor_load %0[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<128x128xf16> -> tensor<128x128xf16, #dot0_2>
     ttig.descriptor_prefetch %1[%c0_i32, %c0_i32] : !tt.tensordesc<128x256xf16>
     %4:2 = scf.for %arg3 = %c0_i32 to %c128_i32 step %c128_i32 iter_args(%arg4 = %cst, %arg5 = %c0_i32) -> (tensor<128x256xf32, #dpas2>, i32)  : i32 {
-      // SINK:  tt.descriptor_load {{.*}} : !tt.tensordesc<128x128xf16>
+      // SINK2:      tt.descriptor_load {{.*}} : !tt.tensordesc<128x128xf16>
+      // KEEP2-NOT:  tt.descriptor_load {{.*}} : !tt.tensordesc<128x128xf16>
       %7 = arith.addi %arg5, %c128_i32 : i32
       ttig.descriptor_prefetch %1[%7, %c0_i32] : !tt.tensordesc<128x256xf16>
       %8 = tt.descriptor_load %1[%arg5, %c0_i32] {ttig.block_io = "column_major"} : !tt.tensordesc<128x256xf16> -> tensor<128x256xf16, #dot1_2>

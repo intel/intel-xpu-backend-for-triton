@@ -1,7 +1,6 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
 
 #include "Dialect/TritonIntelGPU/IR/Attributes.h"
@@ -17,7 +16,6 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 #include <algorithm>
-#include <array>
 #include <optional>
 
 namespace mlir::triton::gpu::intel {
