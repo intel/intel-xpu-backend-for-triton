@@ -276,6 +276,30 @@ def TritonIntelPropagateSelectConditions
     the transformation rewrites the true arm's mask to `%w`, which makes `%v1`
     identical to `%v0`, and CSE plus canonicalization then collapse the whole
     thing to `%v0`.
+
+    The same relation is then applied in the opposite direction: the conditions
+    under which a load's consumers observe it are carried back *up* into its mask,
+    so it stops reading lanes nothing ever looks at. Given
+
+        %v = tt.load %ptr, %w, %other
+        %r = arith.select %c, %v, %z
+
+    the mask becomes `%w & %c`; in the false arm it becomes `%w & !%c`. If the
+    strengthened mask is provably false the load only ever contributes `%other`,
+    and is dropped. The condition usually has to be hoisted above the load, which
+    is possible because the values it is computed from already precede it.
+
+    Only this direction may be applied to the mask of an existing load: weakening
+    one would read addresses the program never read, so the reuse direction never
+    edits a load and only redirects a use to a different load, whereas
+    strengthening one reads a subset of what the load already read and can neither
+    fault nor change an observed value.
+
+    Reuse runs first, because it retires a send outright where narrowing only
+    shrinks one, with a clean-up in between: reuse duplicates the operations
+    between a load and the select arm it feeds, and until those are unified the
+    load has several consumers and the narrowing, which follows a single-use
+    chain, cannot see the condition on the far end.
   }];
 
   let dependentDialects = [
