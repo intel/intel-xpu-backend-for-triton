@@ -9,7 +9,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
 
-#define DEBUG_TYPE "triton-intel-propagate-select-conditions"
+#define DEBUG_TYPE "triton-intel-optimize-load-masks"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
@@ -17,7 +17,7 @@ using namespace mlir;
 namespace tt = mlir::triton;
 
 namespace mlir::triton::intel {
-#define GEN_PASS_DEF_TRITONINTELPROPAGATESELECTCONDITIONS
+#define GEN_PASS_DEF_TRITONINTELOPTIMIZELOADMASKS
 #include "intel/include/Dialect/Triton/Transforms/Passes.h.inc"
 } // namespace mlir::triton::intel
 
@@ -722,9 +722,9 @@ bool Propagator::run(ModuleOp mod) {
   return narrowMasksByUse(mod) || changed;
 }
 
-struct PropagateSelectConditionsPass
-    : public tt::intel::impl::TritonIntelPropagateSelectConditionsBase<
-          PropagateSelectConditionsPass> {
+struct OptimizeLoadMasksPass
+    : public tt::intel::impl::TritonIntelOptimizeLoadMasksBase<
+          OptimizeLoadMasksPass> {
   void runOnOperation() override {
     Propagator propagator(getOperation());
     if (!propagator.run(getOperation()))

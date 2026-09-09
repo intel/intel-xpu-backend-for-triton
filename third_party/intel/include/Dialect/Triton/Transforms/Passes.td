@@ -248,11 +248,16 @@ def TritonIntelReassociateDotScale
   ];
 }
 
-def TritonIntelPropagateSelectConditions
-    : Pass<"triton-intel-propagate-select-conditions", "mlir::ModuleOp"> {
-  let summary = "Simplify a select arm under the assumption its condition holds";
+def TritonIntelOptimizeLoadMasks
+    : Pass<"triton-intel-optimize-load-masks", "mlir::ModuleOp"> {
+  let summary = "Reduce masked-load work using the conditions selects carry";
 
   let description = [{
+    Relates the mask of a `tt.load` to the conditions of the `arith.select`s
+    around it, in both directions: a mask is weakened to make its load coincide
+    with one the program already performs, and strengthened to stop it reading
+    lanes nothing observes.
+
     Simplifies the value feeding an `arith.select` arm using the fact that the
     select's condition holds (in the true arm) or does not hold (in the false
     arm) on the lanes that arm decides. This is what LLVM's GVN does for a
