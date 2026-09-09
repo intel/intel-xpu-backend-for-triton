@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -triton-intel-propagate-select-conditions | FileCheck %s
+// RUN: triton-opt %s -split-input-file -triton-intel-optimize-load-masks | FileCheck %s
 
 // COM: The core rewrite. In the true arm of `select %c`, the mask `%c & %w` is
 // COM: `%w`, so the narrow load coincides with the wide one already present.
