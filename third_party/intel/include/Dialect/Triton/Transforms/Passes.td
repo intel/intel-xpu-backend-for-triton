@@ -248,4 +248,40 @@ def TritonIntelReassociateDotScale
   ];
 }
 
+def TritonIntelPropagateSelectConditions
+    : Pass<"triton-intel-propagate-select-conditions", "mlir::ModuleOp"> {
+  let summary = "Simplify a select arm under the assumption its condition holds";
+
+  let description = [{
+    Simplifies the value feeding an `arith.select` arm using the fact that the
+    select's condition holds (in the true arm) or does not hold (in the false
+    arm) on the lanes that arm decides. This is what LLVM's GVN does for a
+    conditional branch (`propagateEquality`), applied to the branch-free form
+    Triton emits.
+
+    The rule that pays off is that `%c & %w` is just `%w` in the true arm of
+    `select %c`, and false in the false arm. Inductor lowers a chained
+    `tl.where` over guarded loads into exactly that shape: a load masked by
+    `%c & %w` feeding the true arm of a select on `%c`, next to a load of the
+    same pointers masked by `%w` alone. Weakening the mask makes the two loads
+    coincide, so one of them goes away -- and with it a predicated send, its
+    flag register, and the address arithmetic feeding it.
+
+    For example, given:
+        %m  = arith.andi %c, %w
+        %v0 = tt.load %ptr, %w
+        %v1 = tt.load %ptr, %m
+        %r  = arith.select %c, %v1, %v0
+
+    the transformation rewrites the true arm's mask to `%w`, which makes `%v1`
+    identical to `%v0`, and CSE plus canonicalization then collapse the whole
+    thing to `%v0`.
+  }];
+
+  let dependentDialects = [
+    "mlir::arith::ArithDialect",
+    "mlir::triton::TritonDialect"
+  ];
+}
+
 #endif // TRITON_DIALECT_TRITON_INTEL_TRANSFORMS_PASSES
