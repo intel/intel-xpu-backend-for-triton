@@ -45,6 +45,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
+#poll = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @poll_tensor_i32
+  tt.func @poll_tensor_i32(%ptr: tensor<128x!tt.ptr<i32>, #poll>, %expected: tensor<128xi32, #poll>) {
+    // CHECK-NOT: llvm.bitcast %{{.*}} : i32 to vector<2xi16>
+    // CHECK: llvm.load %{{.*}} atomic syncscope("device") monotonic {alignment = 4 : i64} : !llvm.ptr<1> -> i32
+    %0 = tt.atomic_poll relaxed, gpu, %ptr, %expected : tensor<128x!tt.ptr<i32>, #poll>, tensor<128xi32, #poll> -> tensor<128xi1, #poll>
+    tt.return
+  }
+}
+
+// -----
+
 // COM: With ttig.support_16bit_atomics the override defers to upstream: native i16.
 module attributes {ttig.support_16bit_atomics = true, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: llvm.func spir_kernelcc @poll_i16_hw_support
