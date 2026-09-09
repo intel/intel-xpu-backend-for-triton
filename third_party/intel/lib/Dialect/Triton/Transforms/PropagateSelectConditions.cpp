@@ -1,8 +1,11 @@
 #include "intel/include/Dialect/Triton/Transforms/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Transforms/CSE.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
 
@@ -30,6 +33,9 @@ using Facts = SmallVector<std::pair<Value, bool>, 4>;
 constexpr unsigned MaxDepth = 12;
 constexpr unsigned MaxSteps = 512;
 
+/// How far forward from a load the search for its consumers' conditions walks.
+constexpr unsigned MaxUseChain = 16;
+
 static std::optional<bool> lookupFact(const Facts &facts, Value v) {
   for (auto [pred, holds] : facts)
     if (pred == v)
@@ -53,6 +59,14 @@ static std::optional<bool> getConstantMask(Value v) {
     if (dense.isSplat() && dense.getElementType().isInteger(1))
       return dense.getSplatValue<APInt>().isOne();
   return std::nullopt;
+}
+
+/// Returns the attribute for a uniform boolean of \p type, which may be a
+/// tensor of `i1` or a plain `i1`.
+static TypedAttr boolAttr(Type type, bool value, OpBuilder &builder) {
+  if (auto shaped = dyn_cast<ShapedType>(type))
+    return DenseElementsAttr::get(shaped, value);
+  return builder.getBoolAttr(value);
 }
 
 /// Returns true if \p op maps lane `i` of its result from lane `i` of its
@@ -130,14 +144,189 @@ static bool writesBetween(Operation *from, Operation *to) {
   return false;
 }
 
+/// Flattens the `i1` conjunction rooted at \p v into \p conjuncts. A mask built
+/// as `%a & %b & %c` contributes all three, because the mask is false wherever
+/// any single one of them is.
+static void collectConjuncts(Value v, SmallVectorImpl<Value> &conjuncts,
+                             unsigned depth = 0) {
+  auto andOp = v.getDefiningOp<arith::AndIOp>();
+  if (depth > MaxDepth || !andOp ||
+      !getElementTypeOrSelf(v.getType()).isInteger(1)) {
+    conjuncts.push_back(v);
+    return;
+  }
+  collectConjuncts(andOp.getLhs(), conjuncts, depth + 1);
+  collectConjuncts(andOp.getRhs(), conjuncts, depth + 1);
+}
+
+/// Collects into \p facts the conditions under which the data \p v carries is
+/// observed. Reaching the true arm of `select %c` means every lane of \p v that
+/// anything downstream ever reads is a lane where `%c` holds.
+///
+/// This is the same relation `simplify` consumes, gathered in the opposite
+/// direction: `simplify` is handed the conditions of the arm it was called for
+/// and walks towards the definitions, this walks from a definition towards its
+/// consumers to discover them.
+///
+/// Returns false if \p v flows somewhere this walk cannot describe, or if
+/// nothing was learned; in either case \p facts must not be used.
+static bool collectUseFacts(Value v, Facts &facts) {
+  for (unsigned step = 0; step != MaxUseChain; ++step) {
+    // Nothing observes this at all. `simplify` leaves the arm it replaced
+    // behind for the canonicalizer, so a chain that dead-ends is exactly a load
+    // it has already retired; strengthening that load's mask would be pure
+    // waste.
+    if (v.use_empty())
+      return false;
+
+    // With more than one consumer the value is observed under the *disjunction*
+    // of their conditions, which this does not represent. The facts gathered so
+    // far still hold -- every one of those consumers is downstream of them --
+    // so stop here rather than give up.
+    if (!v.hasOneUse())
+      return !facts.empty();
+
+    OpOperand &use = *v.getUses().begin();
+    Operation *user = use.getOwner();
+
+    if (auto select = dyn_cast<arith::SelectOp>(user)) {
+      // Operand 0 is the condition. A value used there is not a datum whose
+      // lanes the select picks between, so it carries no condition.
+      if (use.getOperandNumber() == 0)
+        return false;
+      facts.emplace_back(select.getCondition(), use.getOperandNumber() == 1);
+      v = select.getResult();
+      continue;
+    }
+
+    // Anything that mixes lanes reads the very lanes the conditions would let
+    // us drop, so it ends the walk -- for the same reason `simplify` refuses to
+    // rewrite through one.
+    if (!isLaneWise(user) || user->getNumResults() != 1)
+      return !facts.empty();
+    v = user->getResult(0);
+  }
+  return !facts.empty();
+}
+
+/// Returns true if every lane on which a mask with conjuncts \p maskConjuncts
+/// is true is a lane on which \p pred is true. Established structurally: each
+/// conjunct of \p pred is also a conjunct of the mask.
+///
+/// Both sides are flattened, because a predicate is routinely a conjunction
+/// that the mask carries as its own conjuncts rather than as that one value:
+/// the mask
+/// `(%a & %b) & %w` implies `%a & %b`, but neither `%a & %b` nor its parts
+/// appear in the mask's leaves as a single term to compare against.
+static bool maskImplies(ArrayRef<Value> maskConjuncts, Value pred) {
+  SmallVector<Value> predConjuncts;
+  collectConjuncts(pred, predConjuncts);
+  return llvm::all_of(predConjuncts, [&](Value conjunct) {
+    return llvm::is_contained(maskConjuncts, conjunct);
+  });
+}
+
+/// Returns true if \p mask is false on every lane where \p facts hold: the mask
+/// requires a predicate to hold that the facts require not to.
+static bool maskExcludedByFacts(Value mask, const Facts &facts) {
+  SmallVector<Value> conjuncts;
+  collectConjuncts(mask, conjuncts);
+  return llvm::any_of(facts, [&](const std::pair<Value, bool> &fact) {
+    return !fact.second && maskImplies(conjuncts, fact.first);
+  });
+}
+
+/// Erases the operations `simplify` orphaned. It replaces the value feeding a
+/// select arm and leaves the old one in place, so what it retires is a whole
+/// subtree whose every internal value still has a consumer -- walking a use
+/// chain cannot recognise that, and the second phase has to not see it.
+///
+/// Only operations that produce a value and hold no region are considered,
+/// which is everything `simplify` clones and leaves behind, and keeps functions
+/// and anything with hidden effects out of reach.
+static void eraseOrphanedOps(ModuleOp mod, RewriterBase &rewriter) {
+  SmallVector<Operation *> candidates;
+  mod.walk([&](Operation *op) {
+    if (op->getNumResults() != 0 && op->getNumRegions() == 0)
+      candidates.push_back(op);
+  });
+  // `walk` yields a block in program order, so visiting in reverse considers
+  // every consumer of a value before the value itself. One pass therefore
+  // retires a whole chain.
+  for (Operation *op : llvm::reverse(candidates))
+    if (isOpTriviallyDead(op))
+      rewriter.eraseOp(op);
+}
+
+/// Cleans up after `simplify` so `narrowMasksByUse` can see what it left
+/// behind.
+///
+/// `simplify` clones the operations between a load and the select arm it feeds,
+/// so the load it kept ends up with several identical consumers -- and the
+/// narrowing, which follows a single-use chain, stops at the first of them.
+/// Deduplicating those is not enough on its own: what they feed are selects
+/// whose two arms `simplify` made equal, and each of those has to fold to its
+/// arm before the duplicates above it become dead and CSE can merge what
+/// remains.
+///
+/// Both are needed. Neither CSE nor folding alone exposes the narrowing on a
+/// `tl.where` tree, because the two take turns: folding a select makes a
+/// duplicate dead, erasing it makes the next select foldable.
+static LogicalResult cleanupAfterReuse(ModuleOp mod, RewriterBase &rewriter) {
+  MLIRContext *ctx = mod.getContext();
+  eraseOrphanedOps(mod, rewriter);
+  DominanceInfo domInfo(mod);
+  eliminateCommonSubExpressions(rewriter, domInfo, mod);
+  // The greedy driver folds and retires dead operations on its own, which is
+  // what `select %c, %v, %v -> %v` needs; the select patterns are here for the
+  // arms `simplify` leaves in other shapes.
+  RewritePatternSet patterns(ctx);
+  arith::SelectOp::getCanonicalizationPatterns(patterns, ctx);
+  return applyPatternsGreedily(mod, std::move(patterns));
+}
+
+/// Collects into \p toMove the pure operations that have to be moved above \p
+/// before for \p v to be available there, in an order where each comes after
+/// what it depends on. Returns false, having collected nothing usable, if some
+/// definition cannot be moved.
+///
+/// A condition is routinely computed *after* the load it could narrow -- the
+/// two are unrelated in the source, so Inductor emits them in source order. The
+/// values that condition is computed from are already available; only its own
+/// arithmetic sits too late.
+static bool collectHoistable(Value v, Operation *before, DominanceInfo &domInfo,
+                             SetVector<Operation *> &toMove, unsigned depth) {
+  if (domInfo.properlyDominates(v, before))
+    return true;
+  if (depth > MaxDepth)
+    return false;
+  Operation *def = v.getDefiningOp();
+  // A value that does not already dominate and has no definition to move (a
+  // block argument of another block) cannot be made available. Neither can one
+  // whose definition is not pure, sits in another block, or hides operations in
+  // a region.
+  if (!def || def->getBlock() != before->getBlock() || !isPure(def) ||
+      def->getNumRegions() != 0)
+    return false;
+  for (Value operand : def->getOperands())
+    if (!collectHoistable(operand, before, domInfo, toMove, depth + 1))
+      return false;
+  toMove.insert(def);
+  return true;
+}
+
 class Propagator {
 public:
   Propagator(ModuleOp mod) : rewriter(mod.getContext()) {}
 
-  /// Rewrites the select arms of \p mod. Returns true if the IR was modified.
-  bool run(ModuleOp mod);
+  /// Rewrites the select arms and load masks of \p mod, setting \p changed if
+  /// the IR was modified. Fails only if the clean-up between the two does.
+  LogicalResult run(ModuleOp mod, bool &changed);
 
 private:
+  /// Strengthens load masks by the conditions their consumers impose.
+  bool narrowMasksByUse(ModuleOp mod);
+
   /// Returns a value equal to \p v on every lane where \p facts hold, or \p v
   /// itself if nothing could be simplified. Operations created along the way
   /// are recorded so that they can be dropped if the rewrite is not worth
@@ -167,11 +356,7 @@ private:
 };
 
 Value Propagator::boolConstant(Type type, bool value, Location loc) {
-  TypedAttr attr;
-  if (auto shaped = dyn_cast<ShapedType>(type))
-    attr = DenseElementsAttr::get(shaped, value);
-  else
-    attr = rewriter.getBoolAttr(value);
+  TypedAttr attr = boolAttr(type, value, rewriter);
   Operation *op = arith::ConstantOp::create(rewriter, loc, type, attr);
   created.push_back(op);
   return op->getResult(0);
@@ -355,7 +540,109 @@ tt::LoadOp Propagator::findRedundantLoad(tt::LoadOp load, Value mask) {
   return nullptr;
 }
 
-bool Propagator::run(ModuleOp mod) {
+/// Strengthens the mask of a load by the conditions under which its consumers
+/// observe it, so it stops reading lanes nothing ever looks at. When the
+/// strengthened mask is empty the load goes away entirely.
+///
+/// This is the mirror image of `simplify`. There a select's condition is
+/// carried *down* into a mask to make it weaker, which pays off when the
+/// weakened mask makes the load coincide with one the program already performs.
+/// Here the consumers' conditions are carried *up* into a mask to make it
+/// stronger, which pays off in the lanes the load stops reading.
+///
+/// Only this direction may be applied to the mask of an existing load.
+/// Weakening one would read addresses the program never read, so `simplify`
+/// never edits a load and only ever redirects a use to a different load;
+/// strengthening one reads a subset of what the load already read, so it can
+/// neither fault nor change an observed value.
+bool Propagator::narrowMasksByUse(ModuleOp mod) {
+  SmallVector<tt::LoadOp> loads;
+  mod.walk([&](tt::LoadOp load) { loads.push_back(load); });
+
+  bool changed = false;
+  for (tt::LoadOp load : loads) {
+    Value mask = load.getMask();
+    // A volatile load must be issued exactly as written; an unmasked one has no
+    // mask operand to strengthen.
+    if (!mask || load.getIsVolatile())
+      continue;
+
+    Facts facts;
+    if (!collectUseFacts(load.getResult(), facts))
+      continue;
+
+    // The mask is already false wherever anything looks: the load contributes
+    // nothing but `other`, which is an explicit zero when absent.
+    if (maskExcludedByFacts(mask, facts)) {
+      Value other = load.getOther();
+      if (!other) {
+        TypedAttr zero = rewriter.getZeroAttr(load.getType());
+        if (!zero)
+          continue;
+        rewriter.setInsertionPoint(load);
+        other = arith::ConstantOp::create(rewriter, load.getLoc(), zero);
+      }
+      LDBG("dropping unobserved " << *load.getOperation());
+      // `collectUseFacts` only walks single-use edges, so the first of them is
+      // the load's sole use and replacing the result affects nothing else.
+      rewriter.replaceAllUsesWith(load.getResult(), other);
+      changed = true;
+      continue;
+    }
+
+    // Otherwise AND in the conditions the mask does not already imply. A
+    // positive condition the mask already implies contributes nothing, and
+    // re-anding it would only add an operation for the canonicalizer to remove.
+    SmallVector<Value> conjuncts;
+    collectConjuncts(mask, conjuncts);
+    SmallVector<std::pair<Value, bool>> missing;
+    for (auto [cond, holds] : facts) {
+      if (holds && maskImplies(conjuncts, cond))
+        continue;
+      if (llvm::is_contained(missing, std::make_pair(cond, holds)))
+        continue;
+      // A mask and a condition on differently shaped lanes are not the same
+      // lanes; only combine what has one shape.
+      if (cond.getType() != mask.getType())
+        continue;
+      missing.emplace_back(cond, holds);
+    }
+    if (missing.empty())
+      continue;
+
+    // The conditions have to be available at the load, which usually means
+    // moving the pure arithmetic that computes them above it.
+    DominanceInfo domInfo(load->getParentOfType<tt::FuncOp>());
+    SetVector<Operation *> toMove;
+    if (!llvm::all_of(missing, [&](std::pair<Value, bool> lit) {
+          return collectHoistable(lit.first, load, domInfo, toMove, 0);
+        }))
+      continue;
+    for (Operation *op : toMove)
+      op->moveBefore(load);
+
+    rewriter.setInsertionPoint(load);
+    Value narrowed = mask;
+    for (auto [cond, holds] : missing) {
+      Value literal = cond;
+      if (!holds) {
+        Value allOnes = arith::ConstantOp::create(
+            rewriter, cond.getLoc(), boolAttr(cond.getType(), true, rewriter));
+        literal = arith::XOrIOp::create(rewriter, cond.getLoc(), cond, allOnes);
+      }
+      narrowed =
+          arith::AndIOp::create(rewriter, load.getLoc(), narrowed, literal);
+    }
+
+    LDBG("narrowing mask of " << *load.getOperation());
+    rewriter.modifyOpInPlace(load,
+                             [&] { load.getMaskMutable().assign(narrowed); });
+    changed = true;
+  }
+  return changed;
+}
+
+LogicalResult Propagator::run(ModuleOp mod, bool &changed) {
   SmallVector<arith::SelectOp> selects;
   mod.walk([&](arith::SelectOp op) { selects.push_back(op); });
 
@@ -363,7 +650,6 @@ bool Propagator::run(ModuleOp mod) {
   // its arms carry the largest set of assumptions, so visiting in reverse finds
   // the most profitable rewrite before an inner select clones a subtree under a
   // narrower assumption.
-  bool changed = false;
   for (arith::SelectOp select : llvm::reverse(selects)) {
     for (unsigned arm : {0u, 1u}) {
       reset();
@@ -389,7 +675,17 @@ bool Propagator::run(ModuleOp mod) {
       changed = true;
     }
   }
-  return changed;
+
+  // Second, and only second. The two directions compete for the same loads, and
+  // reuse wins: it retires a send outright, where dropping an unobserved load
+  // retires one that the reuse would have retired anyway. Reuse also gives the
+  // load it kept an extra consumer, so running this first would both forfeit
+  // the reuse and see fewer loads as unobserved.
+  if (changed && failed(cleanupAfterReuse(mod, rewriter)))
+    return failure();
+  changed |= narrowMasksByUse(mod);
+
+  return success();
 }
 
 struct PropagateSelectConditionsPass
@@ -397,7 +693,10 @@ struct PropagateSelectConditionsPass
           PropagateSelectConditionsPass> {
   void runOnOperation() override {
     Propagator propagator(getOperation());
-    if (!propagator.run(getOperation()))
+    bool changed = false;
+    if (failed(propagator.run(getOperation(), changed)))
+      return signalPassFailure();
+    if (!changed)
       markAllAnalysesPreserved();
   }
 };

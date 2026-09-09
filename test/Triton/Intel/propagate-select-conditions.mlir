@@ -1,5 +1,4 @@
 // RUN: triton-opt %s -split-input-file -triton-intel-propagate-select-conditions | FileCheck %s
-// RUN: triton-opt %s -split-input-file -triton-intel-propagate-select-conditions -cse -canonicalize | FileCheck %s --check-prefix=FOLDED
 
 // COM: The core rewrite. In the true arm of `select %c`, the mask `%c & %w` is
 // COM: `%w`, so the narrow load coincides with the wide one already present.
@@ -17,12 +16,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 }
 // CHECK-LABEL:   tt.func @reuse_wider_load(
 // CHECK:           %[[V0:.*]] = tt.load %arg0, %arg2 :
-// CHECK-NOT:       %[[V0]] = tt.load
-// CHECK:           arith.select %arg1, %[[V0]], %[[V0]]
-// FOLDED-LABEL:   tt.func @reuse_wider_load(
-// FOLDED:           %[[V0:.*]] = tt.load
-// FOLDED-NOT:       tt.load
-// FOLDED:           tt.return %[[V0]]
+// CHECK-NOT:       tt.load
+// CHECK:           tt.return %[[V0]]
 
 // -----
 
@@ -42,11 +37,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 }
 // CHECK-LABEL:   tt.func @through_nested_selects(
 // CHECK:           %[[V0:.*]] = tt.load %{{.*}}, %arg2, %{{.*}} :
+// CHECK-NOT:       tt.load
 // CHECK:           %[[NEW:.*]] = arith.select %arg3, %arg4, %[[V0]]
 // CHECK:           arith.select %arg1, %[[NEW]], %[[V0]]
-// FOLDED-LABEL:   tt.func @through_nested_selects(
-// FOLDED:           %[[V0:.*]] = tt.load
-// FOLDED-NOT:       tt.load
 
 // -----
 
@@ -62,10 +55,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
   }
 }
 // CHECK-LABEL:   tt.func @false_arm_yields_other(
+// CHECK-NOT:       tt.load
 // CHECK:           %[[CST:.*]] = arith.constant dense<0.000000e+00>
 // CHECK:           arith.select %arg1, %arg3, %[[CST]]
-// FOLDED-LABEL:   tt.func @false_arm_yields_other(
-// FOLDED-NOT:       tt.load
 
 // -----
 
@@ -85,12 +77,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 }
 // CHECK-LABEL:   tt.func @reuse_unmasked_load(
 // CHECK:           %[[V0:.*]] = tt.load %arg0 :
-// CHECK-NOT:       %[[V0]], %{{.*}} :
-// CHECK:           arith.select %arg1, %[[V0]], %[[V0]]
-// FOLDED-LABEL:   tt.func @reuse_unmasked_load(
-// FOLDED:           %[[V0:.*]] = tt.load %arg0 :
-// FOLDED-NOT:       tt.load
-// FOLDED:           tt.return %[[V0]]
+// CHECK-NOT:       tt.load
+// CHECK:           tt.return %[[V0]]
 
 // -----
 
@@ -108,14 +96,17 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     tt.return %r : tensor<512xf16>
   }
 }
+// COM: Both loads survive. `%v0` is then left observed only under the false arm,
+// COM: which is exactly what the narrowing direction acts on, so its mask comes
+// COM: out strengthened to `%w & !%c`.
 // CHECK-LABEL:   tt.func @nonzero_other_blocks_reuse(
 // CHECK:           %[[ONE:.*]] = arith.constant dense<1.000000e+00>
 // CHECK:           %[[M:.*]] = arith.andi %arg1, %arg2
-// CHECK:           %[[V0:.*]] = tt.load %arg0, %arg2 :
+// CHECK:           %[[NC:.*]] = arith.xori %arg1, %{{.*}}
+// CHECK:           %[[MV0:.*]] = arith.andi %arg2, %[[NC]]
+// CHECK:           %[[V0:.*]] = tt.load %arg0, %[[MV0]] :
 // CHECK:           %[[V1:.*]] = tt.load %arg0, %[[M]], %[[ONE]] :
 // CHECK:           arith.select %arg1, %[[V1]], %[[V0]]
-// FOLDED-LABEL:   tt.func @nonzero_other_blocks_reuse(
-// FOLDED-COUNT-2:   tt.load
 
 // -----
 
@@ -135,8 +126,6 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           %[[M:.*]] = arith.andi %arg1, %arg2
 // CHECK:           %[[V1:.*]] = tt.load %arg0, %[[M]], %{{.*}} :
 // CHECK:           arith.select %arg1, %[[V1]], %arg3
-// FOLDED-LABEL:   tt.func @never_widens_a_load(
-// FOLDED-COUNT-1:   tt.load
 
 // -----
 
@@ -158,8 +147,6 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           tt.store
 // CHECK:           %[[V1:.*]] = tt.load
 // CHECK:           arith.select %arg1, %[[V1]], %[[V0]]
-// FOLDED-LABEL:   tt.func @write_between_blocks_reuse(
-// FOLDED-COUNT-2:   tt.load
 
 // -----
 
@@ -178,11 +165,11 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 }
 // CHECK-LABEL:   tt.func @conflicting_other_blocks_reuse(
 // CHECK:           %[[M:.*]] = arith.andi %arg1, %arg2
-// CHECK:           %[[V0:.*]] = tt.load %arg0, %arg2, %{{.*}} :
+// CHECK:           %[[NC:.*]] = arith.xori %arg1, %{{.*}}
+// CHECK:           %[[MV0:.*]] = arith.andi %arg2, %[[NC]]
+// CHECK:           %[[V0:.*]] = tt.load %arg0, %[[MV0]], %{{.*}} :
 // CHECK:           %[[V1:.*]] = tt.load %arg0, %[[M]], %{{.*}} :
 // CHECK:           arith.select %arg1, %[[V1]], %[[V0]]
-// FOLDED-LABEL:   tt.func @conflicting_other_blocks_reuse(
-// FOLDED-COUNT-2:   tt.load
 
 // -----
 
@@ -209,8 +196,6 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           %[[M:.*]] = arith.andi %arg1, %arg2
 // CHECK:           %[[V1:.*]] = tt.load %arg0, %[[M]], %{{.*}} :
 // CHECK:           "tt.reduce"(%[[V1]])
-// FOLDED-LABEL:   tt.func @reduction_blocks_propagation(
-// FOLDED-COUNT-2:   tt.load
 
 // -----
 
@@ -238,13 +223,10 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK-LABEL:   tt.func @wide_andi_is_not_a_mask(
 // CHECK-DAG:       %[[C1:.*]] = arith.constant 1 : i32
 // CHECK:           %[[V0:.*]] = tt.load %arg0, %arg2 :
-// CHECK:           %[[A:.*]] = arith.andi %[[C1]], %arg3 : i32
+// CHECK:           %[[A:.*]] = arith.andi %arg3, %[[C1]] : i32
 // CHECK:           %[[AF:.*]] = arith.sitofp %[[A]] : i32 to f32
 // CHECK:           %[[S:.*]] = arith.addf %[[V0]], %[[AF]] : f32
 // CHECK:           arith.select %arg1, %[[S]], %[[V0]]
-// FOLDED-LABEL:   tt.func @wide_andi_is_not_a_mask(
-// FOLDED:           %[[FC1:.*]] = arith.constant 1 : i32
-// FOLDED:           arith.andi %arg3, %[[FC1]] : i32
 
 // -----
 
@@ -264,16 +246,13 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     tt.return %outer : tensor<512xf32>
   }
 }
-// COM: The pass itself does not clean up: the rewritten arm is a fresh select and
-// COM: the old one, with the load it kept alive, is left dead for the canonicalizer.
+// COM: The rewritten arm is a fresh select, leaving the old one and the load it
+// COM: kept alive dead. The pass's own clean-up retires both, so nothing of the
+// COM: two-level tree survives.
 // CHECK-LABEL:   tt.func @nested_conjunction(
 // CHECK:           %[[V1:.*]] = tt.load %arg0, %arg3 :
-// CHECK:           %[[INNER:.*]] = arith.select %arg2, %[[V1]], %[[V1]]
-// CHECK:           arith.select %arg1, %[[INNER]], %[[V1]]
-// FOLDED-LABEL:   tt.func @nested_conjunction(
-// FOLDED:           %[[V1:.*]] = tt.load
-// FOLDED-NOT:       tt.load
-// FOLDED:           tt.return %[[V1]]
+// CHECK-NOT:       tt.load
+// CHECK:           tt.return %[[V1]]
 
 // -----
 
@@ -290,10 +269,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 }
 // CHECK-LABEL:   tt.func @mask_is_the_condition(
 // CHECK:           %[[V0:.*]] = tt.load %arg0 :
+// CHECK-NOT:       tt.load
 // CHECK:           arith.select %arg1, %[[V0]], %arg2
-// FOLDED-LABEL:   tt.func @mask_is_the_condition(
-// FOLDED:           %[[V0:.*]] = tt.load %arg0 :
-// FOLDED-NOT:       tt.load
 
 // -----
 
@@ -312,4 +289,193 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           %[[INNER:.*]] = arith.select %[[M]], %arg2, %arg3
 // CHECK:           arith.select %arg0, %[[INNER]], %arg3
 // CHECK-NOT:       arith.select
-// FOLDED-LABEL:   tt.func @no_load_no_rewrite(
+
+// -----
+
+// COM: The core rewrite. `%v` is read only in the true arm of `select %c`, so it
+// COM: need not read the lanes where `%c` is false.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @narrow_by_true_arm(%ptr: tensor<512x!tt.ptr<f16>>, %c: tensor<512xi1>, %w: tensor<512xi1>, %z: tensor<512xf16>) -> tensor<512xf16> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<512xf16>
+    %v = tt.load %ptr, %w, %cst : tensor<512x!tt.ptr<f16>>
+    %r = arith.select %c, %v, %z : tensor<512xi1>, tensor<512xf16>
+    tt.return %r : tensor<512xf16>
+  }
+}
+// CHECK-LABEL:   tt.func @narrow_by_true_arm(
+// CHECK:           %[[M:.*]] = arith.andi %arg2, %arg1 : tensor<512xi1>
+// CHECK:           %[[V:.*]] = tt.load %arg0, %[[M]], %{{.*}} :
+// CHECK:           arith.select %arg1, %[[V]], %arg3
+
+// -----
+
+// COM: A condition the mask already requires adds nothing, and must not be
+// COM: re-anded just because the mask spells it out as its parts: the mask carries
+// COM: a conjunction as its own conjuncts rather than as the one value the select
+// COM: tests, so the two have to be compared flattened. `(%a & %b) & %w` already
+// COM: implies `%a & %b`. @never_widens_a_load above covers the unflattened form.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @implied_condition_adds_nothing(%ptr: tensor<512x!tt.ptr<f16>>, %a: tensor<512xi1>, %b: tensor<512xi1>, %w: tensor<512xi1>, %z: tensor<512xf16>) -> tensor<512xf16> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<512xf16>
+    %ab = arith.andi %a, %b : tensor<512xi1>
+    %m = arith.andi %ab, %w : tensor<512xi1>
+    %v = tt.load %ptr, %m, %cst : tensor<512x!tt.ptr<f16>>
+    %r = arith.select %ab, %v, %z : tensor<512xi1>, tensor<512xf16>
+    tt.return %r : tensor<512xf16>
+  }
+}
+// CHECK-LABEL:   tt.func @implied_condition_adds_nothing(
+// CHECK:           %[[AB:.*]] = arith.andi %arg1, %arg2
+// CHECK:           %[[M:.*]] = arith.andi %[[AB]], %arg3
+// CHECK:           %[[V:.*]] = tt.load %arg0, %[[M]], %{{.*}} :
+// CHECK-NOT:       arith.andi
+// CHECK:           arith.select %[[AB]], %[[V]], %arg4
+
+// -----
+
+// COM: The condition is routinely computed *after* the load it narrows, because
+// COM: the two are unrelated in the source. Its own inputs are already available,
+// COM: so only its arithmetic has to move above the load.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @hoists_the_condition(%ptr: tensor<512x!tt.ptr<f16>>, %x: tensor<512xi32>, %w: tensor<512xi1>, %z: tensor<512xf16>) -> tensor<512xf16> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<512xf16>
+    %lim = arith.constant dense<7> : tensor<512xi32>
+    %v = tt.load %ptr, %w, %cst : tensor<512x!tt.ptr<f16>>
+    %c = arith.cmpi slt, %x, %lim : tensor<512xi32>
+    %r = arith.select %c, %v, %z : tensor<512xi1>, tensor<512xf16>
+    tt.return %r : tensor<512xf16>
+  }
+}
+// COM: The `cmpi` now precedes the load it feeds the mask of.
+// CHECK-LABEL:   tt.func @hoists_the_condition(
+// CHECK:           %[[C:.*]] = arith.cmpi slt, %arg1
+// CHECK:           %[[M:.*]] = arith.andi %arg2, %[[C]]
+// CHECK:           %[[V:.*]] = tt.load %arg0, %[[M]], %{{.*}} :
+// CHECK:           arith.select %[[C]], %[[V]], %arg3
+
+// -----
+
+// COM: A condition that cannot be made available at the load leaves the mask
+// COM: alone. The `tt.load` feeding it may not be moved above a store it is
+// COM: ordered after.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @unhoistable_condition_blocks_narrowing(%ptr: tensor<512x!tt.ptr<f16>>, %cptr: tensor<512x!tt.ptr<i32>>, %w: tensor<512xi1>, %z: tensor<512xf16>, %val: tensor<512xi32>) -> tensor<512xf16> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<512xf16>
+    %lim = arith.constant dense<7> : tensor<512xi32>
+    %v = tt.load %ptr, %w, %cst : tensor<512x!tt.ptr<f16>>
+    tt.store %cptr, %val, %w : tensor<512x!tt.ptr<i32>>
+    %x = tt.load %cptr, %w : tensor<512x!tt.ptr<i32>>
+    %c = arith.cmpi slt, %x, %lim : tensor<512xi32>
+    %r = arith.select %c, %v, %z : tensor<512xi1>, tensor<512xf16>
+    tt.return %r : tensor<512xf16>
+  }
+}
+// CHECK-LABEL:   tt.func @unhoistable_condition_blocks_narrowing(
+// CHECK:           %[[V:.*]] = tt.load %arg0, %arg2, %{{.*}} :
+// CHECK:           tt.store
+// CHECK:           arith.select %{{.*}}, %[[V]], %arg3
+
+// -----
+
+// COM: Two consumers observe the value under the *disjunction* of their
+// COM: conditions, which is not what narrowing by either one would produce.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @two_consumers_block_narrowing(%ptr: tensor<512x!tt.ptr<f16>>, %c: tensor<512xi1>, %d: tensor<512xi1>, %w: tensor<512xi1>, %z: tensor<512xf16>) -> tensor<512xf16> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<512xf16>
+    %v = tt.load %ptr, %w, %cst : tensor<512x!tt.ptr<f16>>
+    %r0 = arith.select %c, %v, %z : tensor<512xi1>, tensor<512xf16>
+    %r1 = arith.select %d, %v, %z : tensor<512xi1>, tensor<512xf16>
+    %r = arith.addf %r0, %r1 : tensor<512xf16>
+    tt.return %r : tensor<512xf16>
+  }
+}
+// CHECK-LABEL:   tt.func @two_consumers_block_narrowing(
+// CHECK:           %[[V:.*]] = tt.load %arg0, %arg3, %{{.*}} :
+// CHECK-NOT:       arith.andi
+// CHECK:           arith.select %arg1, %[[V]], %arg4
+
+// -----
+
+// COM: A load whose result is used as a select's *condition* is not a datum the
+// COM: select picks lanes of, so it carries no condition to narrow by.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @load_as_condition_blocks_narrowing(%ptr: tensor<512x!tt.ptr<i1>>, %w: tensor<512xi1>, %x: tensor<512xf16>, %y: tensor<512xf16>) -> tensor<512xf16> {
+    %cst = arith.constant dense<false> : tensor<512xi1>
+    %v = tt.load %ptr, %w, %cst : tensor<512x!tt.ptr<i1>>
+    %r = arith.select %v, %x, %y : tensor<512xi1>, tensor<512xf16>
+    tt.return %r : tensor<512xf16>
+  }
+}
+// CHECK-LABEL:   tt.func @load_as_condition_blocks_narrowing(
+// CHECK:           %[[V:.*]] = tt.load %arg0, %arg1, %{{.*}} :
+// CHECK-NOT:       arith.andi
+// CHECK:           arith.select %[[V]], %arg2, %arg3
+
+// -----
+
+// COM: A volatile load has to be issued exactly as written.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @volatile_load_is_left_alone(%ptr: tensor<512x!tt.ptr<f16>>, %c: tensor<512xi1>, %w: tensor<512xi1>, %z: tensor<512xf16>) -> tensor<512xf16> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<512xf16>
+    %v = tt.load %ptr, %w, %cst {isVolatile = true} : tensor<512x!tt.ptr<f16>>
+    %r = arith.select %c, %v, %z : tensor<512xi1>, tensor<512xf16>
+    tt.return %r : tensor<512xf16>
+  }
+}
+// CHECK-LABEL:   tt.func @volatile_load_is_left_alone(
+// CHECK:           %[[V:.*]] = tt.load %arg0, %arg2, %{{.*}} {isVolatile = true}
+// CHECK-NOT:       arith.andi
+// CHECK:           arith.select %arg1, %[[V]], %arg3
+
+// -----
+
+// COM: An unmasked load has no mask operand to strengthen. Giving it one would
+// COM: be a narrowing too, but it would also change what the lanes it stops
+// COM: reading yield from the loaded value to a fabricated `other`.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @unmasked_load_is_left_alone(%ptr: tensor<512x!tt.ptr<f16>>, %c: tensor<512xi1>, %z: tensor<512xf16>) -> tensor<512xf16> {
+    %v = tt.load %ptr : tensor<512x!tt.ptr<f16>>
+    %r = arith.select %c, %v, %z : tensor<512xi1>, tensor<512xf16>
+    tt.return %r : tensor<512xf16>
+  }
+}
+// CHECK-LABEL:   tt.func @unmasked_load_is_left_alone(
+// CHECK:           %[[V:.*]] = tt.load %arg0 :
+// CHECK-NOT:       arith.andi
+// CHECK:           arith.select %arg1, %[[V]], %arg2
+
+// -----
+
+// COM: The narrowing reaches through the lane-wise arithmetic Inductor puts
+// COM: between a load and the `tl.where` that consumes it.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @reaches_through_lanewise_ops(%ptr: tensor<512x!tt.ptr<f16>>, %c: tensor<512xi1>, %w: tensor<512xi1>, %z: tensor<512xf32>) -> tensor<512xf32> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<512xf16>
+    %v = tt.load %ptr, %w, %cst : tensor<512x!tt.ptr<f16>>
+    %e = arith.extf %v : tensor<512xf16> to tensor<512xf32>
+    %n = arith.negf %e : tensor<512xf32>
+    %r = arith.select %c, %n, %z : tensor<512xi1>, tensor<512xf32>
+    tt.return %r : tensor<512xf32>
+  }
+}
+// CHECK-LABEL:   tt.func @reaches_through_lanewise_ops(
+// CHECK:           %[[M:.*]] = arith.andi %arg2, %arg1
+// CHECK:           %[[V:.*]] = tt.load %arg0, %[[M]], %{{.*}} :
+
+// -----
+
+// COM: Nested selects compose: the value is observed only where both conditions
+// COM: agree, so both narrow the mask.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @nested_selects_compose(%ptr: tensor<512x!tt.ptr<f16>>, %c: tensor<512xi1>, %d: tensor<512xi1>, %w: tensor<512xi1>, %z: tensor<512xf16>) -> tensor<512xf16> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<512xf16>
+    %v = tt.load %ptr, %w, %cst : tensor<512x!tt.ptr<f16>>
+    %inner = arith.select %c, %v, %z : tensor<512xi1>, tensor<512xf16>
+    %outer = arith.select %d, %inner, %z : tensor<512xi1>, tensor<512xf16>
+    tt.return %outer : tensor<512xf16>
+  }
+}
+// CHECK-LABEL:   tt.func @nested_selects_compose(
+// CHECK:           %[[M0:.*]] = arith.andi %arg3, %arg1
+// CHECK:           %[[M1:.*]] = arith.andi %[[M0]], %arg2
+// CHECK:           %[[V:.*]] = tt.load %arg0, %[[M1]], %{{.*}} :
