@@ -4,6 +4,7 @@ from triton.backends.intel.driver import compile_module_from_src, is_lts
 from triton.backends.intel.track import track
 from triton.backends.intel.extension_utils import query_device_extensions
 from triton import knobs
+from triton._instrumentation import instrument as _instrument, is_enabled
 from triton.runtime.errors import IntelGPUError, OutOfResources
 
 from dataclasses import dataclass
@@ -24,6 +25,8 @@ try:  # XPUBackend allows metaclasses injection
     from .meta import XPUBackendMeta
 except ImportError:
     XPUBackendMeta = type(BaseBackend)
+
+instrument = functools.partial(_instrument, backend="intel")
 
 
 @dataclass
@@ -133,7 +136,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     arch_to_impl = {}  # Architecture id to backend implementation class mapping
     binary_ext = "spv"
     target_arch = "spir64"
-    instrumentation = None
 
     @staticmethod
     def supports_target(target: GPUTarget):
@@ -307,8 +309,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
     def load_dialects(self, ctx):
         intel.load_dialects(ctx)
-        if self.instrumentation:
-            self.instrumentation.load_dialects(ctx)
+        instrument(ctx, point="load-dialects")
 
     @staticmethod
     def validate_options(opt, properties):
@@ -461,7 +462,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if knobs.intel.opt_reduction_locality:
             intel.passes.ttgpuir.add_optimize_reduction_locality(pm)
         intel.passes.arith.add_arith_emulate_unsupported_floats(pm, ["bf16"], "f32")
-        if opt.instrumentation_mode == "fpsan":
+        if is_enabled(opt, "fpsan"):
             passes.ttgpuir.add_fp_sanitizer(pm, opt.fpsan_homomorphic_casts)
         pm.run(mod, 'make_ttgir')
         return mod
@@ -477,7 +478,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.ttir.add_loop_aware_cse(pm)
         passes.gluon.add_canonicalizer(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
-        if options.instrumentation_mode == "fpsan":
+        if is_enabled(options, "fpsan"):
             passes.ttgpuir.add_fp_sanitizer(pm, options.fpsan_homomorphic_casts)
 
         pm.run(mod, 'gluon_to_ttgir')
@@ -516,8 +517,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttgpuir.add_allocate_shared_memory(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
-        if cls.instrumentation:
-            cls.instrumentation.patch("ttgpuir_to_llvmir", pm, mod.context)
+        instrument(pm, point="ttgpuir-to-llvmir", context=mod.context)
         intel.passes.ttgpuir.add_to_llvmir(pm, options.dynamic_shared_memory)
         intel.passes.ttgpuir.add_gen_to_llvm(pm)
         passes.common.add_canonicalizer(pm)
@@ -531,8 +531,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if not knobs.compilation.disable_line_info and not knobs.compilation.dump_ir_extract_di_local_variables:
             passes.llvmir.add_di_scope(pm)
 
-        if cls.instrumentation:
-            cls.instrumentation.patch("llvmir_to_llvm", pm, mod.context)
+        instrument(pm, point="llvmir-to-llvm", context=mod.context)
         pm.run(mod, 'make_llir')
 
         if knobs.compilation.dump_ir_extract_di_local_variables:
