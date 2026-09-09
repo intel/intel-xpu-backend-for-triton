@@ -21,7 +21,7 @@ One flag per kernel family, each with its own `TRITON_TEST_SUITE` and skip list
 
 | Flag | Test files, relative to `sglang/test/` |
 |---|---|
-| `--sglang-attention` | `registered/attention/test_create_kvindices.py`, `registered/attention/test_triton_attention_kernels.py` |
+| `--sglang-attention` | `registered/attention/test_create_kvindices.py`, `registered/attention/test_triton_attention_kernels.py`, `registered/attention/unittests/dense/test_triton.py` |
 | `--sglang-quant` | `registered/quant/test_fp8_kernel.py`, `test_triton_scaled_mm.py`, `test_awq_dequant.py` |
 | `--sglang-moe` | `registered/lora/test_fused_moe_lora_kernel.py` |
 | `--sglang-mamba` | `registered/layers/mamba/test_causal_conv1d.py`, `test_mamba_ssm.py`, `test_mamba_ssm_ssd.py` |
@@ -49,7 +49,22 @@ kernels to `kernels/ops/` (RFC #29630), so recheck them after a pin bump.
 | `decode_attention_fwd`, `_normal`, `_grouped` | `kernels/ops/attention/decode_attention.py` |
 | `extend_attention_fwd`, `_unified`, `build_unified_kv_indices` | `kernels/ops/attention/extend_attention.py` |
 | `context_attention_fwd` | `kernels/ops/attention/prefill_attention.py` |
-| `create_flashinfer_kv_indices_triton` | `kernels/ops/attention/utils.py` |
+| `create_flashinfer_kv_indices_triton` | `kernels/ops/kvcache/kv_indices.py`, re-exported from `kernels/ops/attention/utils.py` |
+| `get_num_kv_splits_triton` | `kernels/ops/attention/metadata.py` |
+
+`unittests/dense/test_triton.py` is the second source of coverage for those
+kernels and the only one that reaches `get_num_kv_splits_triton`. Instead of
+calling the kernels directly it drives `RadixAttention` through the real
+`TritonAttnBackend` and compares against HF-style torch reference modules, so it
+also covers the metadata builders, page sizes 1/16/32, CUDA-graph decode,
+split-op extend and spec-verify. Measured launches for one run: `_fwd_kernel` 55,
+`_fwd_kernel_stage2` 41, `_fwd_kernel_stage1` 34, `create_flashinfer_kv_indices_triton` 70,
+`get_num_kv_splits_triton` 22, `_fwd_grouped_kernel_stage1` 7.
+
+Upstream gates it on `torch.cuda.is_available()` and registers it for CUDA and
+ROCm only; `sglang-test-fix.patch` makes the gate, the RNG seeding and the
+capture stream device-agnostic via `get_device_module()` and adds
+`register_xpu_ci`. Those hunks are written to be upstreamable as-is.
 
 `--sglang-quant`:
 
@@ -117,7 +132,7 @@ Local run at the current pin, one suite at a time. The skip lists come from it.
 
 | Suite | Result | Time |
 |---|---|---|
-| `--sglang-attention` | 8 passed, 2 skipped (1 upstream, 1 skip-listed) | 26s |
+| `--sglang-attention` | 18 passed, 2 skipped (1 upstream, 1 skip-listed) | 116s |
 | `--sglang-quant` | 5 passed | 43s |
 | `--sglang-moe` | 108 skipped, all skip-listed | 4s |
 | `--sglang-mamba` | 932 passed, 16 skipped upstream | 15s |
@@ -143,6 +158,22 @@ Nothing failed because of Triton codegen.
 - **CUDA-only tests.** `test_fused_moe_lora_kernel.py` is parametrized with
   `device="cuda:0"` and `test_dspark_kernel_parity.py` calls `torch.cuda`; both
   are skip-listed. Two of three `test_kda_kernels.py` classes skip themselves.
+- **Two kernels still uncovered.** `compute_position_kernel`
+  (`kernels/ops/attention/position.py`) and `write_req_to_token_pool_triton`
+  (`kernels/ops/memory/common.py`) run on every XPU extend forward and no SGLang
+  test touches them. `unittests/dense/` does not help: it builds `ForwardBatch`
+  directly and passes `positions=` in by hand, bypassing `ForwardBatch.init_new`
+  where `compute_position` is called. Both need a new test, upstream.
+- **Other `unittests/` families are still CUDA-gated.** Only `dense/test_triton.py`
+  is enabled here. 29 more files under `registered/attention/unittests/` carry the
+  same `torch.cuda.is_available()` gate, including the other Triton-backend rows
+  `mla/test_triton.py`, `swa/test_triton.py`, `lightning/test_triton.py`,
+  `kda/test_triton.py` and `gdn/test_triton.py`. Eight kits besides
+  `speculative_draft_runner.py` also repeat the `torch.cuda` RNG pattern
+  (`mla_attention.py`, `gdn_attention.py`, `kda_attention.py`, `mamba2_attention.py`,
+  `lightning_attention.py`, `dsa_attention.py`, `dsv4_attention.py`,
+  `dual_chunk_attention.py`). Enable one family at a time; `gdn/` and `kda/` stay
+  blocked on `tl.make_block_ptr` regardless (see below).
 - **Sliding window OOM.** `test_extend_attention_sliding_window` runs the kernel
   fine, but its torch reference needs more than 48 GB. Unskip when it is chunked.
 - **BMG.** `scripts/skiplist/xe2/` is a copy of `default/`; nothing measured on
