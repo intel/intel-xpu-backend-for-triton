@@ -479,3 +479,44 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           %[[M0:.*]] = arith.andi %arg3, %arg1
 // CHECK:           %[[M1:.*]] = arith.andi %[[M0]], %arg2
 // CHECK:           %[[V:.*]] = tt.load %arg0, %[[M1]], %{{.*}} :
+
+// -----
+
+// COM: `tt.elementwise_inline_asm` carries the `Elementwise` trait, but hands the
+// COM: asm `packed_element` lanes at a time and leaves the grouping to it, so a
+// COM: lane of its result may come from a neighbouring lane's input. Narrowing
+// COM: through it would feed those lanes `other` instead of loaded data, so it
+// COM: ends the walk like any other lane-mixing consumer.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @inline_asm_blocks_narrowing(%ptr: tensor<512x!tt.ptr<f16>>, %c: tensor<512xi1>, %w: tensor<512xi1>, %z: tensor<512xf16>) -> tensor<512xf16> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<512xf16>
+    %v = tt.load %ptr, %w, %cst : tensor<512x!tt.ptr<f16>>
+    %a = tt.elementwise_inline_asm "nop" {constraints = "=r,r", packed_element = 2 : i32, pure = true} %v : tensor<512xf16> -> tensor<512xf16>
+    %r = arith.select %c, %a, %z : tensor<512xi1>, tensor<512xf16>
+    tt.return %r : tensor<512xf16>
+  }
+}
+// CHECK-LABEL:   tt.func @inline_asm_blocks_narrowing(
+// CHECK:           %[[V:.*]] = tt.load %arg0, %arg2, %{{.*}} :
+// CHECK-NOT:       arith.andi
+// CHECK:           tt.elementwise_inline_asm
+
+// -----
+
+// COM: A rank-2 load is a candidate for the 2D block I/O path, which
+// COM: `MaterializeBlockPointer` withholds from a mask whose per-dimension
+// COM: constancy is not a power of two of at least 2. The conditions narrowing
+// COM: would AND in are routinely data-dependent, whose constancy is 1, and
+// COM: losing the block tile costs far more than the lanes narrowing saves.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @rank2_load_is_left_alone(%ptr: tensor<64x64x!tt.ptr<f16>>, %c: tensor<64x64xi1>, %w: tensor<64x64xi1>, %z: tensor<64x64xf16>) -> tensor<64x64xf16> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf16>
+    %v = tt.load %ptr, %w, %cst : tensor<64x64x!tt.ptr<f16>>
+    %r = arith.select %c, %v, %z : tensor<64x64xi1>, tensor<64x64xf16>
+    tt.return %r : tensor<64x64xf16>
+  }
+}
+// CHECK-LABEL:   tt.func @rank2_load_is_left_alone(
+// CHECK:           %[[V:.*]] = tt.load %arg0, %arg2, %{{.*}} :
+// CHECK-NOT:       arith.andi
+// CHECK:           arith.select %arg1, %[[V]], %arg3

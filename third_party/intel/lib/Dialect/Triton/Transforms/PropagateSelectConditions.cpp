@@ -79,6 +79,12 @@ static TypedAttr boolAttr(Type type, bool value, OpBuilder &builder) {
 /// does not hold. `tt.load` qualifies as well but is not pure, so it is matched
 /// separately.
 static bool isLaneWise(Operation *op) {
+  // `tt.elementwise_inline_asm` carries the trait but is not lane-wise in this
+  // sense: it hands the asm `packed_element` lanes at a time and leaves the
+  // grouping to it, so a lane of its result may be computed from a neighbouring
+  // lane's input.
+  if (isa<tt::ElementwiseInlineAsmOp>(op))
+    return false;
   return isPure(op) && op->hasTrait<OpTrait::Elementwise>();
 }
 
@@ -272,7 +278,7 @@ static void eraseOrphanedOps(ModuleOp mod, RewriterBase &rewriter) {
 /// Both are needed. Neither CSE nor folding alone exposes the narrowing on a
 /// `tl.where` tree, because the two take turns: folding a select makes a
 /// duplicate dead, erasing it makes the next select foldable.
-static LogicalResult cleanupAfterReuse(ModuleOp mod, RewriterBase &rewriter) {
+static void cleanupAfterReuse(ModuleOp mod, RewriterBase &rewriter) {
   MLIRContext *ctx = mod.getContext();
   eraseOrphanedOps(mod, rewriter);
   DominanceInfo domInfo(mod);
@@ -282,7 +288,13 @@ static LogicalResult cleanupAfterReuse(ModuleOp mod, RewriterBase &rewriter) {
   // arms `simplify` leaves in other shapes.
   RewritePatternSet patterns(ctx);
   arith::SelectOp::getCanonicalizationPatterns(patterns, ctx);
-  return applyPatternsGreedily(mod, std::move(patterns));
+  // The result is deliberately dropped. The greedy driver also reports failure
+  // when it merely runs out of iterations, which says nothing about the IR: the
+  // rewrites already applied are valid either way, and the only cost of an
+  // unfinished clean-up is that the narrowing below sees fewer opportunities.
+  // Failing the pass over it would abort a compile on valid input.
+  if (failed(applyPatternsGreedily(mod, std::move(patterns))))
+    LDBG("clean-up did not converge; continuing");
 }
 
 /// Collects into \p toMove the pure operations that have to be moved above \p
@@ -319,9 +331,10 @@ class Propagator {
 public:
   Propagator(ModuleOp mod) : rewriter(mod.getContext()) {}
 
-  /// Rewrites the select arms and load masks of \p mod, setting \p changed if
-  /// the IR was modified. Fails only if the clean-up between the two does.
-  LogicalResult run(ModuleOp mod, bool &changed);
+  /// Rewrites the select arms and load masks of \p mod, returning whether the
+  /// IR was modified. Every rewrite is optional, so this cannot fail: one that
+  /// does not apply is simply not made.
+  bool run(ModuleOp mod);
 
 private:
   /// Strengthens load masks by the conditions their consumers impose.
@@ -559,6 +572,11 @@ bool Propagator::narrowMasksByUse(ModuleOp mod) {
   SmallVector<tt::LoadOp> loads;
   mod.walk([&](tt::LoadOp load) { loads.push_back(load); });
 
+  // Built once. `collectHoistable` only ever accepts definitions from the
+  // load's own block, so every move below is within a block, which leaves the
+  // dominator tree intact -- an intra-block query answers from the block's own
+  // operation order, which MLIR maintains itself.
+  DominanceInfo domInfo(mod);
   bool changed = false;
   for (tt::LoadOp load : loads) {
     Value mask = load.getMask();
@@ -590,6 +608,24 @@ bool Propagator::narrowMasksByUse(ModuleOp mod) {
       continue;
     }
 
+    // Everything past this point ANDs a condition into the mask, which a
+    // rank-2-or-higher load cannot afford. `MaterializeBlockPointer` withholds
+    // `ttig.block_io` from a mask whose per-dimension constancy is not a power
+    // of two of at least 2 (`maskPermitsBlockTile`), and the conditions
+    // narrowing has to offer are routinely data-dependent, whose constancy is
+    // 1. Losing the 2D block tile costs a hardware message per row plus a
+    // shuffle per element, orders more than the lanes narrowing saves.
+    //
+    // Deciding this properly would need the axis info of a mask not yet built,
+    // from an analysis that only runs after layout assignment, so bound the
+    // rewrite by the rank instead: `MaterializeBlockPointer` skips rank < 2
+    // outright, so those loads have no block tile to lose -- and they are where
+    // the win was measured. Dropping an unobserved load above is exempt: it
+    // adds no mask arithmetic, it removes the load.
+    if (auto tensorTy = dyn_cast<RankedTensorType>(load.getType());
+        tensorTy && tensorTy.getRank() >= 2)
+      continue;
+
     // Otherwise AND in the conditions the mask does not already imply. A
     // positive condition the mask already implies contributes nothing, and
     // re-anding it would only add an operation for the canonicalizer to remove.
@@ -612,7 +648,6 @@ bool Propagator::narrowMasksByUse(ModuleOp mod) {
 
     // The conditions have to be available at the load, which usually means
     // moving the pure arithmetic that computes them above it.
-    DominanceInfo domInfo(load->getParentOfType<tt::FuncOp>());
     SetVector<Operation *> toMove;
     if (!llvm::all_of(missing, [&](std::pair<Value, bool> lit) {
           return collectHoistable(lit.first, load, domInfo, toMove, 0);
@@ -642,7 +677,8 @@ bool Propagator::narrowMasksByUse(ModuleOp mod) {
   return changed;
 }
 
-LogicalResult Propagator::run(ModuleOp mod, bool &changed) {
+bool Propagator::run(ModuleOp mod) {
+  bool changed = false;
   SmallVector<arith::SelectOp> selects;
   mod.walk([&](arith::SelectOp op) { selects.push_back(op); });
 
@@ -681,11 +717,9 @@ LogicalResult Propagator::run(ModuleOp mod, bool &changed) {
   // retires one that the reuse would have retired anyway. Reuse also gives the
   // load it kept an extra consumer, so running this first would both forfeit
   // the reuse and see fewer loads as unobserved.
-  if (changed && failed(cleanupAfterReuse(mod, rewriter)))
-    return failure();
-  changed |= narrowMasksByUse(mod);
-
-  return success();
+  if (changed)
+    cleanupAfterReuse(mod, rewriter);
+  return narrowMasksByUse(mod) || changed;
 }
 
 struct PropagateSelectConditionsPass
@@ -693,10 +727,7 @@ struct PropagateSelectConditionsPass
           PropagateSelectConditionsPass> {
   void runOnOperation() override {
     Propagator propagator(getOperation());
-    bool changed = false;
-    if (failed(propagator.run(getOperation(), changed)))
-      return signalPassFailure();
-    if (!changed)
+    if (!propagator.run(getOperation()))
       markAllAnalysesPreserved();
   }
 };
