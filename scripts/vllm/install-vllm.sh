@@ -338,32 +338,6 @@ try_run() {
   return 0
 }
 
-# Print the pinned vLLM XPU kernels commit recorded at a given triton commit (empty on error).
-pin_at_ref() {
-  gh api "repos/$triton_repo/contents/scripts/vllm/vllm-xpu-kernels-pin.txt?ref=$1" \
-    --jq '.content' 2>/dev/null | base64 -d 2>/dev/null | tr -d '[:space:]'
-}
-
-# List all nightly-wheels runs from the last 7 days as a JSON array, with retries. The
-# run-list API is flaky and unordered (cli/cli#6678); paginating the created window bounds the
-# set by a key we control with no result cap (per_page is just page size), and callers must
-# still sort the result themselves. A wheel is uploaded on every daily run (even ones whose
-# run conclusion is "failure" due to an unrelated Python-matrix leg), so a short window is fine.
-list_nightly_runs() {
-  local attempt out since
-  since="$(date -u -d '7 days ago' +%Y-%m-%d)"
-  for attempt in 1 2 3; do
-    if out="$(gh api --paginate \
-        "repos/$triton_repo/actions/workflows/nightly-wheels.yml/runs?branch=$triton_repo_branch&created=%3E%3D$since&exclude_pull_requests=true&per_page=100" \
-        --jq '.workflow_runs[] | {databaseId: .id, headSha: .head_sha, createdAt: .created_at, conclusion: .conclusion}' 2>/dev/null | jq -s '.')"; then
-      printf '%s' "$out"
-      return 0
-    fi
-    sleep $((attempt * 3))
-  done
-  return 1
-}
-
 if [[ "$build_vllm" == false ]]; then
   if ! command -v gh &>/dev/null; then
     echo "ERROR: gh is not installed." >&2
@@ -380,24 +354,15 @@ if [[ "$build_vllm" == false ]]; then
   temp_dir="$(mktemp -d)"
   trap 'rm -rf "$temp_dir"' EXIT
 
-  # gh run list ordering is unstable (cli/cli#6678), so don't trust "latest": sort a window
-  # ourselves and pick the run whose pinned commit matches (read cheaply from its head commit).
-  # Consider every completed run (conclusion != null), not just successful ones: the wheel is
-  # what matters, and it is uploaded even when the run's conclusion is "failure".
-  runs_json="$(list_nightly_runs)" || runs_json=""
+  # Try the latest completed run, then the latest successful one (any conclusion works -- the
+  # wheel is uploaded even when a run fails on an unrelated Python-matrix leg). try_run installs
+  # a matching wheel and exits; otherwise we fall through and, failing both, build from source.
+  latest_run="$(gh run list --workflow nightly-wheels.yml --branch "$triton_repo_branch" -R "$triton_repo" --status completed --json databaseId --limit 1 | jq -r '.[0].databaseId')"
+  try_run "$latest_run"
 
-  candidate_runs=()
-  if [[ -n "$runs_json" ]]; then
-    mapfile -t candidate_runs < <(printf '%s' "$runs_json" \
-      | jq -r '[.[] | select(.conclusion != null)] | sort_by(.createdAt) | reverse | .[] | "\(.databaseId)\t\(.headSha)"')
-  fi
-
-  for entry in "${candidate_runs[@]}"; do
-    run_id="${entry%%$'\t'*}"
-    head_sha="${entry##*$'\t'}"
-    [[ "$(pin_at_ref "$head_sha")" == "$vllm_xpu_kernels_pinned_commit" ]] || continue
-    try_run "$run_id"
-  done
+  echo "*** Latest completed run has no matching wheel, trying latest successful run... ***"
+  latest_success_run="$(gh run list --workflow nightly-wheels.yml --branch "$triton_repo_branch" -R "$triton_repo" --json databaseId,conclusion --limit 20 | jq -r '[.[] | select(.conclusion == "success")][0].databaseId')"
+  [[ "$latest_success_run" != "$latest_run" ]] && try_run "$latest_success_run"
 
   echo "*** No matching nightly vllm-xpu-kernels wheel found. Falling back to building from source. ***"
   build_vllm=true
