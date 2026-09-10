@@ -331,7 +331,7 @@ try_install_wheel_from_run() {
   return 0
 }
 
-# Install a run's vLLM XPU kernels wheel, exiting on success and returning if it has no matching wheel.
+# Install a run's vllm-xpu-kernels wheel, exiting on success and returning if the run has no matching wheel.
 try_run() {
   [[ "$1" == "null" ]] && return 0
 
