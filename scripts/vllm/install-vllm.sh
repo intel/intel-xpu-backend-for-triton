@@ -207,9 +207,9 @@ Usage: $0 [options]
 vLLM is built and installed from source as an editable install.
 vLLM XPU kernels are installed via a prebuilt wheel matching the pinned commit
 from the $DEFAULT_BRANCH branch nightly wheels. The latest completed run,
-regardless of its outcome, and the latest successful run are checked for a
-matching wheel. If no such wheel is available, the script defaults to building
-vLLM XPU kernels from source.
+regardless of outcome, and the latest successful run are checked for a matching
+wheel. If no such wheel is available, the script defaults to building vLLM XPU
+kernels from source.
 
 Options:
   --source                       Build vLLM XPU kernels from source using pinned commit.
