@@ -844,15 +844,10 @@ run_benchmark_flash_attention() {
   cd $TRITON_PROJ/benchmarks
   pip install .
 
-  echo "Forward - Default path (with tensor descriptor):"
+  echo "Forward:"
   python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
 
-  echo "Forward - Advanced path:"
-  TRITON_INTEL_ADVANCED_PATH=1 \
-    IGC_VISAOptions=" -enableBCR" \
-    python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
-
-  echo "Backward - Default path:"
+  echo "Backward:"
   FA_KERNEL_MODE="bwd" \
     python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
 }
