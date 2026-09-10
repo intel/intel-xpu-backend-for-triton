@@ -352,7 +352,7 @@ if [[ "$build_vllm" == false ]]; then
     exit 1
   fi
 
-  echo "*** Locating a prebuilt vLLM XPU kernels wheel matching the pinned commit. ***"
+  echo "*** Downloading nightly builds. ***"
   wheel_pattern="wheels-vllm-py$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")-*"
   temp_dir="$(mktemp -d)"
   trap 'rm -rf "$temp_dir"' EXIT
