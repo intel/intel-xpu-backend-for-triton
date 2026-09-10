@@ -36,6 +36,13 @@ constexpr unsigned MaxSteps = 512;
 /// How far forward from a load the search for its consumers' conditions walks.
 constexpr unsigned MaxUseChain = 16;
 
+/// How many operations may be moved above a load to make a condition narrowing
+/// its mask available there. Everything moved has its live range stretched
+/// across the load, and the load cannot issue until it has retired, neither of
+/// which is weighed against the lanes narrowing saves -- so bound the breadth
+/// the way `MaxDepth` bounds the depth.
+constexpr unsigned MaxHoist = 4;
+
 static std::optional<bool> lookupFact(const Facts &facts, Value v) {
   for (auto [pred, holds] : facts)
     if (pred == v)
@@ -305,7 +312,18 @@ static void cleanupAfterReuse(ModuleOp mod, RewriterBase &rewriter) {
 /// A condition is routinely computed *after* the load it could narrow -- the
 /// two are unrelated in the source, so Inductor emits them in source order. The
 /// values that condition is computed from are already available; only its own
-/// arithmetic sits too late.
+/// mask arithmetic sits too late.
+///
+/// Moving anything at all has a price nothing here can weigh: the moved value
+/// is live across the load where before it did not exist yet, and the load
+/// waits on it instead of issuing while it computes. Two bounds keep that
+/// price to what narrowing was going to pay regardless. Only a mask, or a
+/// constant, may move: narrowing needs a mask live at the load in any case and
+/// a constant is rematerialized rather than carried, where the wider arithmetic
+/// behind a mask -- an index tensor of the loaded shape, several times the
+/// load's own destination -- would be held across the load for nothing, and
+/// would delay it. And no more than `MaxHoist` operations, so a wide mask DAG
+/// cannot pile up what the depth limit alone would admit.
 static bool collectHoistable(Value v, Operation *before, DominanceInfo &domInfo,
                              SetVector<Operation *> &toMove, unsigned depth) {
   if (domInfo.properlyDominates(v, before))
@@ -320,11 +338,14 @@ static bool collectHoistable(Value v, Operation *before, DominanceInfo &domInfo,
   if (!def || def->getBlock() != before->getBlock() || !isPure(def) ||
       def->getNumRegions() != 0)
     return false;
+  if (!getElementTypeOrSelf(v.getType()).isInteger(1) &&
+      !def->hasTrait<OpTrait::ConstantLike>())
+    return false;
   for (Value operand : def->getOperands())
     if (!collectHoistable(operand, before, domInfo, toMove, depth + 1))
       return false;
   toMove.insert(def);
-  return true;
+  return toMove.size() <= MaxHoist;
 }
 
 class Propagator {
@@ -618,10 +639,13 @@ bool Propagator::narrowMasksByUse(ModuleOp mod) {
     //
     // Deciding this properly would need the axis info of a mask not yet built,
     // from an analysis that only runs after layout assignment, so bound the
-    // rewrite by the rank instead: `MaterializeBlockPointer` skips rank < 2
-    // outright, so those loads have no block tile to lose -- and they are where
-    // the win was measured. Dropping an unobserved load above is exempt: it
-    // adds no mask arithmetic, it removes the load.
+    // rewrite by the rank instead: `maskPermitsBlockTile` is only consulted on
+    // the rank >= 2 path. A rank-1 load does still get a tile, from the
+    // 1D-to-2D reshape in `reshape1DStridedLoad`, but that path decides on the
+    // pointer alone and never inspects the mask, so an extra data-dependent
+    // conjunct cannot cost it -- and rank < 2 is where the win was measured.
+    // Dropping an unobserved load above is exempt: it adds no mask arithmetic,
+    // it removes the load.
     if (auto tensorTy = dyn_cast<RankedTensorType>(load.getType());
         tensorTy && tensorTy.getRank() >= 2)
       continue;

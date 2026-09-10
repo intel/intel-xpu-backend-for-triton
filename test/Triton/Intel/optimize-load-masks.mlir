@@ -377,6 +377,34 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 // -----
 
+// COM: Narrowing moves the mask arithmetic of a condition above the load, but
+// COM: not the wider arithmetic behind it. `%idx` is an index tensor of the
+// COM: loaded shape, more per lane than the load's own destination, and the
+// COM: store needs it after the load either way -- holding it across the load,
+// COM: and making the load wait on it, is not weighed against the lanes the
+// COM: narrowed mask saves.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @wide_arithmetic_blocks_narrowing(%ptr: tensor<512x!tt.ptr<f16>>, %out: !tt.ptr<f16>, %off: tensor<512xi32>, %stride: tensor<512xi32>, %n: tensor<512xi32>, %w: tensor<512xi1>, %z: tensor<512xf16>) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<512xf16>
+    %v = tt.load %ptr, %w, %cst : tensor<512x!tt.ptr<f16>>
+    %idx = arith.muli %off, %stride : tensor<512xi32>
+    %lim = arith.cmpi slt, %idx, %n : tensor<512xi32>
+    %sel = arith.select %lim, %v, %z : tensor<512xi1>, tensor<512xf16>
+    %base = tt.splat %out : !tt.ptr<f16> -> tensor<512x!tt.ptr<f16>>
+    %sptr = tt.addptr %base, %idx : tensor<512x!tt.ptr<f16>>, tensor<512xi32>
+    tt.store %sptr, %sel : tensor<512x!tt.ptr<f16>>
+    tt.return
+  }
+}
+// CHECK-LABEL:   tt.func @wide_arithmetic_blocks_narrowing(
+// CHECK:           %[[V:.*]] = tt.load %arg0, %arg5, %{{.*}} :
+// CHECK-NOT:       arith.andi
+// CHECK:           %[[IDX:.*]] = arith.muli %arg2, %arg3
+// CHECK:           %[[LIM:.*]] = arith.cmpi slt, %[[IDX]], %arg4
+// CHECK:           arith.select %[[LIM]], %[[V]], %arg6
+
+// -----
+
 // COM: Two consumers observe the value under the *disjunction* of their
 // COM: conditions, which is not what narrowing by either one would produce.
 module attributes {"ttg.num-warps" = 4 : i32} {

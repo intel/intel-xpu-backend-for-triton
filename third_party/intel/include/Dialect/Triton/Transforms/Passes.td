@@ -253,58 +253,67 @@ def TritonIntelOptimizeLoadMasks
   let summary = "Reduce masked-load work using the conditions selects carry";
 
   let description = [{
-    Relates the mask of a `tt.load` to the conditions of the `arith.select`s
-    around it, in both directions: a mask is weakened to make its load coincide
-    with one the program already performs, and strengthened to stop it reading
-    lanes nothing observes.
+    Removes memory reads that Inductor-generated kernels perform but do not
+    need.
 
-    Simplifies the value feeding an `arith.select` arm using the fact that the
-    select's condition holds (in the true arm) or does not hold (in the false
-    arm) on the lanes that arm decides. This is what LLVM's GVN does for a
-    conditional branch (`propagateEquality`), applied to the branch-free form
-    Triton emits.
+    Inductor typically asks "is this index in range?" twice -- once as the mask
+    of a `tt.load`, once as an `arith.select` on the loaded value afterwards --
+    and emits the two independently. Two costs follow, and a kernel may show
+    either alone: the same addresses are read twice under masks differing only
+    by a condition the select already establishes, and a read fetches lanes
+    whose values a downstream select discards. Neither is visible to CSE, which
+    compares mask operands for identity, or to canonicalization, which has no
+    rule relating a select's condition to a nearby load's mask.
 
-    The rule that pays off is that `%c & %w` is just `%w` in the true arm of
-    `select %c`, and false in the false arm. Inductor lowers a chained
-    `tl.where` over guarded loads into exactly that shape: a load masked by
-    `%c & %w` feeding the true arm of a select on `%c`, next to a load of the
-    same pointers masked by `%w` alone. Weakening the mask makes the two loads
-    coincide, so one of them goes away -- and with it a predicated send, its
-    flag register, and the address arithmetic feeding it.
+    This pass relates the two -- what LLVM's GVN does for a conditional branch
+    (`propagateEquality`), applied to the branch-free form Triton emits. On the
+    lanes an arm decides, the select's condition holds (true arm) or does not
+    (false arm), and the rule that pays off is that `%c & %w` is just `%w` in
+    the true arm of `select %c`, and false in the false arm.
 
-    For example, given:
-        %m  = arith.andi %c, %w
-        %v0 = tt.load %ptr, %w
-        %v1 = tt.load %ptr, %m
-        %r  = arith.select %c, %v1, %v0
+    Weakening a mask lets a load coincide with one already present:
 
-    the transformation rewrites the true arm's mask to `%w`, which makes `%v1`
-    identical to `%v0`, and CSE plus canonicalization then collapse the whole
-    thing to `%v0`.
+        %cst = arith.constant dense<0.000000e+00>
+        %m   = arith.andi %c, %w
+        %v0  = tt.load %ptr, %w
+        %v1  = tt.load %ptr, %m, %cst
+        %r   = arith.select %c, %v1, %v0
 
-    The same relation is then applied in the opposite direction: the conditions
-    under which a load's consumers observe it are carried back *up* into its mask,
-    so it stops reading lanes nothing ever looks at. Given
+    `%v1` is observed only where `%c` holds, and there `%m` is `%w`, so `%v1` is
+    `%v0`. The arm's use is redirected to `%v0`; `%v1` and the select are then
+    dead and the pass erases them, leaving one predicated read where there were
+    two. This needs the two loads to agree on their masked-off lanes -- an
+    absent `other` counts as zero -- and nothing that writes memory in between.
 
-        %v = tt.load %ptr, %w, %other
+    Strengthening a mask stops a load reading lanes nothing observes. Following
+    a load's single-use chain through pure elementwise operations and selects:
+
+        %v = tt.load %ptr, %w, %cst
         %r = arith.select %c, %v, %z
 
-    the mask becomes `%w & %c`; in the false arm it becomes `%w & !%c`. If the
-    strengthened mask is provably false the load only ever contributes `%other`,
-    and is dropped. The condition usually has to be hoisted above the load, which
-    is possible because the values it is computed from already precede it.
+    `%v` is read only where `%c` holds, so the mask becomes `%w & %c` -- and
+    `%w & !%c` for the false arm. The condition usually sits after the load and
+    is hoisted above it when the mask arithmetic that computes it can be moved.
+    Where the strengthened mask is provably false the load contributes only its
+    `other` on every lane observed, so it is dropped outright; that applies at
+    any rank, whereas ANDing a routinely data-dependent condition into the mask
+    of a load of rank 2 or more would cost the `ttig.block_io` tile a later pass
+    grants on the strength of the mask's per-dimension constancy, so that
+    rewrite is limited to rank < 2.
 
-    Only this direction may be applied to the mask of an existing load: weakening
-    one would read addresses the program never read, so the reuse direction never
-    edits a load and only redirects a use to a different load, whereas
-    strengthening one reads a subset of what the load already read and can neither
-    fault nor change an observed value.
+    Only strengthening may be applied to an existing load's mask: it reads a
+    subset of what the load already read, so it can neither fault nor change an
+    observed value, where weakening one would read addresses the program never
+    read. The reuse direction therefore never edits a mask; it only redirects a
+    use to a load already present.
 
-    Reuse runs first, because it retires a send outright where narrowing only
-    shrinks one, with a clean-up in between: reuse duplicates the operations
+    Reuse runs first, because dropping an unobserved load would retire one reuse
+    would have retired anyway, and because reuse gives the load it keeps an extra
+    consumer -- narrowing first would forfeit the reuse and see fewer loads as
+    unobserved. A clean-up runs in between: reuse can duplicate the operations
     between a load and the select arm it feeds, and until those are unified the
-    load has several consumers and the narrowing, which follows a single-use
-    chain, cannot see the condition on the far end.
+    load has several consumers and the single-use walk cannot reach the
+    condition on the far end.
   }];
 
   let dependentDialects = [
