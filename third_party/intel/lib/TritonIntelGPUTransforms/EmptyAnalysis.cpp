@@ -127,11 +127,6 @@ public:
     const size_t nWords = std::max<size_t>(1, totalWidth / width);
     const size_t wordNElems = width / valueElemNBits;
     assert(wordNElems * nWords * numVecs == numElems);
-    // llvm::outs() << "johnlu numElems: " << numElems << "xi" << valueElemNBits
-    //              << "\n";
-    // llvm::outs() << "johnlu load packed from:" << nWords << "xi" << width
-    //              << "\n";
-    // llvm::outs() << "johnlu to: " << vec << "xi" << valueElemNBits << "\n";
     size_t packedElemsPerLane = mlir::ceil<size_t>(width, valueElemNBits);
     unsigned threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(
         op->getParentOfType<ModuleOp>());
@@ -149,29 +144,23 @@ public:
         LinearLayout::identity1D(packedElemsPerLane, kLane, kDim0) *
         LinearLayout::identity1D(vec / packedElemsPerLane, kRegister, kDim0) *
         LinearLayout::identity1D(numElems / vec, kRegister, kDim0);
-    // llvm::outs() << "tt.load result layout:" << *llEncoding << "\n";
-    // llvm::outs() << "loadLayout layout:" << loadLayout << "\n";
     // The SoA mapping of the non-uniform value of vector.
     LinearLayout reinterpretLayout =
         LinearLayout::identity1D(numElems, kRegister, kDim0) *
         LinearLayout::identity1D(threadsPerWarp, kLane, kDim1);
-    // llvm::outs() << "reinterpretLayout layout:" << reinterpretLayout << "\n";
-    // The cvtLayout is: loadLayout = cvtLayout.compose(reinterpretLayout)
-    LinearLayout cvtLayout = loadLayout.invertAndCompose(reinterpretLayout);
-    // llvm::outs() << "cvtLayout layout:" << cvtLayout << "\n";
-    // llvm::outs() << "cvtLayout.compose(loadLayout):" <<
-    // cvtLayout.compose(loadLayout) << "\n"; llvm::outs() <<
-    // "cvtLayout.compose(reinterpretLayout):" <<
-    // cvtLayout.compose(reinterpretLayout) << "\n";
-    cvtLayout *=
+    // The cvtLayoutDstToSrcMap is: loadLayout =
+    // cvtLayoutDstToSrcMap.compose(reinterpretLayout)
+    LinearLayout cvtLayoutDstToSrcMap =
+        reinterpretLayout.invertAndCompose(loadLayout);
+    cvtLayoutDstToSrcMap *=
         LinearLayout::identity1D(llEncoding->getInDimSize(kWarp), kWarp, kWarp);
-    cvtLayout *= LinearLayout::identity1D(llEncoding->getInDimSize(kBlock),
-                                          kBlock, kBlock);
-    // llvm::outs() << "cvtLayout layout:" << cvtLayout << "\n";
+    cvtLayoutDstToSrcMap *= LinearLayout::identity1D(
+        llEncoding->getInDimSize(kBlock), kBlock, kBlock);
     // The new layout is the cvtMapping to map the original layout with the new
     // register and lane mapping.
-    LinearLayout newAoSLayout = cvtLayout.compose(*llEncoding);
-    // llvm::outs() << "newAoSLayout layout:" << newAoSLayout << "\n";
+    LinearLayout newAoSLayout = cvtLayoutDstToSrcMap.compose(*llEncoding);
+
+    auto reinterpretComp = llEncoding->invertAndCompose(newAoSLayout);
 
     OpBuilder builder(op);
     Location loc = op.getLoc();
