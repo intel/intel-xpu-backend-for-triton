@@ -443,9 +443,14 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 // COM: no credit: the projection is the full 288 + 64 = 352 bytes/lane instead of
 // COM: case 1's 288 + 64 - 256 = 96, and the hoist is rejected at 128-GRF
 // COM: (threshold 204) while still fitting at 256-GRF (threshold 409).
-// COM: Measured: loop live-in is 288 bytes/lane before the hoist and 352 after,
-// COM: i.e. the projection is exact and case 1's credit would have undercounted
-// COM: the real occupancy by 3.7x.
+// COM: Measured with -test-register-pressure: the loop body's live-in is 288
+// COM: bytes/lane before the hoist and 96 after. That 96 is exactly the figure
+// COM: the old accounting projected, and it is the one to distrust: block
+// COM: liveness stops counting %arg0 as live-in once no op inside the body reads
+// COM: it, even though %arg0's register still has to survive the whole loop to
+// COM: feed %post. Real occupancy is 96 + 256 = 352, so the credit undercounted
+// COM: it by 3.7x. The measured live-in cannot be used to confirm the projection
+// COM: here; the projection is the more faithful number of the two.
 
 #blocked13 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas13 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
