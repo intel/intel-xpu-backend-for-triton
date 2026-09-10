@@ -2311,6 +2311,24 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   if (isa<ttg::DotOperandEncodingAttr>(targetType.getEncoding()))
     return;
 
+  if (ttgi::cvtIsSubGroupReinterpret(convertOp.getSrc().getType(),
+                                     targetType)) {
+    auto filter = [&convertOp](Operation *op) {
+      return op->getParentRegion() == convertOp->getParentRegion();
+    };
+    SetVector<Operation *> slice;
+    if (getBackwardSlice(convertOp.getOperation(), &slice, {filter})
+            .succeeded()) {
+      bool hasReinterpretCvtOp = llvm::any_of(slice, [](Operation *op) {
+        return isa_and_nonnull<ttgi::ReinterpretConvertLayoutOp>(op);
+      });
+      if (hasReinterpretCvtOp) {
+        LDBG("  skip remat: backward slice contains sub-group reinterpret");
+        return;
+      }
+    }
+  }
+
   auto isExtOrBroadcastOp = [](Operation *op) {
     if (isa<arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp, tt::BroadcastOp,
             tt::ExpandDimsOp>(op)) {
