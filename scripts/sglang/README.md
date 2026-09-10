@@ -28,6 +28,7 @@ One flag per kernel family, each with its own `TRITON_TEST_SUITE` and skip list
 | `--sglang-gdn` | `registered/attention/test_chunk_gated_delta_rule.py` |
 | `--sglang-kda` | `registered/attention/test_kda_kernels.py` |
 | `--sglang-spec` | `registered/spec/dspark/test_dspark_kernel_parity.py` |
+| `--sglang-e2e` | `registered/xpu/test_xpu_basic.py` |
 
 Two things to know before editing this:
 
@@ -111,6 +112,35 @@ fork silently picks the NVIDIA kernels instead of failing.
 | `expand_prefill_causally`, `build_page_table_positions`, `build_causal_swa_page_indices` | `kernels/ops/attention/dsv4_attn_metadata_kernels.py` |
 | `dspark_accept`, `dspark_attn_metadata`, `dspark_draft_model`, `dspark_schedule`, `dspark_verify_window` | `srt/speculative/dspark_components/kernels/` |
 
+`--sglang-e2e`. The only suite that runs a real forward pass, so the only one
+that reaches these two - every other suite builds `ForwardBatch` directly and
+passes `positions` in by hand, bypassing `ForwardBatch.init_new`:
+
+| Kernels | Source |
+|---|---|
+| `compute_position_kernel` | `kernels/ops/attention/position.py` |
+| `write_req_to_token_pool_triton` | `kernels/ops/memory/common.py` |
+
+It also re-covers the attention kernels through the serving path. Measured
+launches for one `bench_one_batch` run on Max 1100: `_fwd_grouped_kernel_stage1`
+168, `_fwd_kernel_stage2` 168, `_fwd_kernel` 56, `create_flashinfer_kv_indices_triton`
+8, `get_num_kv_splits_triton` 6, `compute_position_kernel` 2,
+`write_req_to_token_pool_triton` 2.
+
+Two things it does not give you. It asserts `decode_throughput > 0`, so it catches
+a crash or a compile failure in those kernels but not a wrong value. And it needs
+model weights (`Qwen/Qwen2.5-1.5B-Instruct`, ungated) plus a server launch, so it
+is slower and less hermetic than the kernel suites - hence its own CI entry rather
+than joining `sglang-rest`.
+
+`get_xpu_memory_capacity()` has to be patched for any of this to start:
+`torch.xpu.mem_get_info()` raises `RuntimeError` on Data Center GPU Max, which does
+not implement the free-memory query, and the function only catches
+`AttributeError`. It escapes through `get_device_memory_capacity()` into the KV
+pool and pipeline setup. Only element `[1]` (total) is read, so the patch falls
+back to `torch.xpu.get_device_properties().total_memory` - 49136 MB either way on
+Max 1100.
+
 ## Results on Max 1100
 
 Local run at the current pin, one suite at a time. The skip lists come from it.
@@ -124,6 +154,7 @@ Local run at the current pin, one suite at a time. The skip lists come from it.
 | `--sglang-gdn` | 29 skipped, all skip-listed | 4s |
 | `--sglang-kda` | 1 passed, 12 skipped upstream | 6s |
 | `--sglang-spec` | 1 skipped, skip-listed | 6s |
+| `--sglang-e2e` | not measured locally - needs model weights and a server launch | - |
 
 Nothing failed because of Triton codegen.
 
@@ -143,6 +174,9 @@ Nothing failed because of Triton codegen.
 - **CUDA-only tests.** `test_fused_moe_lora_kernel.py` is parametrized with
   `device="cuda:0"` and `test_dspark_kernel_parity.py` calls `torch.cuda`; both
   are skip-listed. Two of three `test_kda_kernels.py` classes skip themselves.
+- **e2e is smoke only.** `--sglang-e2e` asserts throughput, not numerics, so a
+  subtly wrong position id or token-pool write still passes. No SGLang test
+  checks those two kernels against a reference.
 - **Sliding window OOM.** `test_extend_attention_sliding_window` runs the kernel
   fine, but its torch reference needs more than 48 GB. Unskip when it is chunked.
 - **BMG.** `scripts/skiplist/xe2/` is a copy of `default/`; nothing measured on
@@ -170,10 +204,13 @@ Matrix entries, one report artifact each, aggregated by the `reports` job:
 | `sglang-moe` | `--sglang-moe` |
 | `sglang-mamba` | `--sglang-mamba` |
 | `sglang-rest` | `--sglang-gdn`, `--sglang-kda`, `--sglang-spec` |
+| `sglang-e2e` | `--sglang-e2e` |
 
-The short suites share `sglang-rest`, like `vllm-rest`. Each entry installs
-SGLang itself, because `run_sglang_tests` calls `install-sglang.sh` - there is no
-install step in the workflow as there is for vLLM.
+The short suites share `sglang-rest`, like `vllm-rest`. `sglang-e2e` gets its own
+entry instead, because it launches a server and downloads model weights. Each
+entry installs SGLang itself, because `run_sglang_tests` calls
+`install-sglang.sh` - there is no install step in the workflow as there is for
+vLLM.
 
 ## Usage
 
@@ -189,6 +226,7 @@ bash scripts/test-triton.sh --sglang-mamba --skip-pip-install --skip-pytorch-ins
 bash scripts/test-triton.sh --sglang-gdn --skip-pip-install --skip-pytorch-install
 bash scripts/test-triton.sh --sglang-kda --skip-pip-install --skip-pytorch-install
 bash scripts/test-triton.sh --sglang-spec --skip-pip-install --skip-pytorch-install
+bash scripts/test-triton.sh --sglang-e2e --skip-pip-install --skip-pytorch-install
 ```
 
 ## Reference

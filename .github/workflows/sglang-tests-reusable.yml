@@ -131,6 +131,7 @@ jobs:
           - sglang-moe
           - sglang-mamba
           - sglang-rest
+          - sglang-e2e
     runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1100') || format('["linux", "{0}"]', inputs.runner_label)) }}
     timeout-minutes: 240
     defaults:
@@ -245,6 +246,13 @@ jobs:
         if: ${{ matrix.suite == 'sglang-rest' && steps.install.outcome == 'success' && !cancelled() }}
         run: |
           ${{ env.TRITON_TEST_CMD }} --sglang-spec
+
+      # sglang-e2e launches a server and downloads model weights, so it gets its
+      # own entry rather than joining the short-suite group.
+      - name: Run e2e tests
+        if: ${{ matrix.suite == 'sglang-e2e' && steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --sglang-e2e
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}

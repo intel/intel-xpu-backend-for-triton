@@ -54,6 +54,7 @@ TEST:
     --sglang-gdn
     --sglang-kda
     --sglang-spec
+    --sglang-e2e
     --install-sglang
     --liger
     --install-liger
@@ -117,6 +118,7 @@ TEST_SGLANG_MAMBA=false
 TEST_SGLANG_GDN=false
 TEST_SGLANG_KDA=false
 TEST_SGLANG_SPEC=false
+TEST_SGLANG_E2E=false
 INSTALL_SGLANG=false
 TEST_LIGER=false
 INSTALL_LIGER=false
@@ -321,6 +323,11 @@ while (( $# != 0 )); do
       ;;
     --sglang-spec)
       TEST_SGLANG_SPEC=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --sglang-e2e)
+      TEST_SGLANG_E2E=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -969,6 +976,7 @@ run_sglang_tests() {
   run_sglang_gdn_tests
   run_sglang_kda_tests
   run_sglang_spec_tests
+  run_sglang_e2e_tests
 }
 
 run_sglang_attention_tests() {
@@ -1063,6 +1071,21 @@ run_sglang_spec_tests() {
   TRITON_TEST_SUITE=sglang_spec \
     run_pytest_command -vvv \
       test/registered/spec/dspark/test_dspark_kernel_parity.py
+}
+
+run_sglang_e2e_tests() {
+  echo "********************************************************"
+  echo "******  Running SGLang end-to-end tests          *******"
+  echo "********************************************************"
+
+  enter_sglang_test_env
+  # The only suite that runs a real forward pass, so the only one that reaches
+  # compute_position_kernel and write_req_to_token_pool_triton: every other suite
+  # builds ForwardBatch directly and passes positions in by hand. Launches a
+  # server and downloads weights, unlike the kernel suites.
+  TRITON_TEST_SUITE=sglang_e2e \
+    run_pytest_command -vvv \
+      test/registered/xpu/test_xpu_basic.py
 }
 
 run_liger_install() {
@@ -1517,6 +1540,9 @@ test_triton() {
   fi
   if [ "$TEST_SGLANG_SPEC" == true ]; then
     run_sglang_spec_tests
+  fi
+  if [ "$TEST_SGLANG_E2E" == true ]; then
+    run_sglang_e2e_tests
   fi
   if [ "$INSTALL_LIGER" == true ]; then
     run_liger_install
