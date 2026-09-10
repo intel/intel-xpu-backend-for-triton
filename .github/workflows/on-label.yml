@@ -125,16 +125,6 @@ jobs:
       runner_label: b580
       skip_benchmarks: '["flex-attention-causal-batch16"]'
 
-  triton-benchmarks-pvc:
-    needs: [select-benchmark-platforms, build-wheel]
-    if: >-
-      contains(github.event.pull_request.labels.*.name, 'run-benchmarks') &&
-      needs.select-benchmark-platforms.outputs.run-pvc-benchmarks == 'true'
-    uses: ./.github/workflows/triton-benchmarks.yml
-    with:
-      runner_label: max1550
-      skip_benchmarks: "[]"
-
   # ---- SGLang benchmarks ----
 
   sglang-benchmarks-bmg:
