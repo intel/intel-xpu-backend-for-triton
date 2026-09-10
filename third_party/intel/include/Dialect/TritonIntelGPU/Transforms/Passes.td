@@ -119,9 +119,12 @@ def TritonIntelGPUHoistLayoutConversions
     oversized blocked layout on a narrow tensor) *lowers* live-in pressure,
     and an additive-only estimate would reject it.
 
-    A source shared by several conversions in the same loop is credited only
-    once, to whichever conversion is the last to leave the loop; a source with
-    any other use inside the loop is never credited.
+    A source is only credited when the hoist really retires it: nothing else
+    inside the loop may read it, and nothing after the loop may either (a source
+    read below the loop occupies a register for the loop's whole duration
+    wherever the conversion sits, so moving the conversion frees nothing). A
+    source shared by several conversions in the same loop is therefore credited
+    only once, to whichever conversion is the last to leave the loop.
 
     Non-goals of the pressure model, all deliberate:
 
@@ -132,10 +135,6 @@ def TritonIntelGPUHoistLayoutConversions
       the straight-line code before it, which can *raise* whole-function peak
       pressure even as loop peak falls. That program point is not measured, so
       such a hoist is judged solely on the (unchanged) loop live-in figure.
-    * **Sources that outlive the loop.** Crediting a retired source assumes it
-      is no longer occupying a register during the loop. A source also used
-      *after* the loop physically stays live across it, but is not in the loop
-      body's live-in set, so the credit is optimistic for that shape.
     * **Loop trip count and conversion cost.** The saved per-iteration
       conversion work is not weighed against the pressure change, and the trip
       count is not consulted.

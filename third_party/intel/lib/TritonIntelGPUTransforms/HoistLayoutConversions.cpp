@@ -34,14 +34,25 @@ namespace {
 
 /// Returns true if hoisting \p cvtOp out of \p forOp retires \p cvtOp's source
 /// from the loop, i.e. once \p cvtOp has moved out, nothing remaining inside
-/// the loop reads the source, so it stops being live-in to the loop body.
+/// the loop reads the source *and* nothing after the loop does either, so it
+/// stops being live-in to the loop body.
 ///
-/// This inspects the *current* IR rather than the (immutable) liveness
-/// analysis, because earlier hoists performed by this same pass have already
-/// moved their conversions out of the loop and so must count as gone. A source
-/// shared by several conversions in one loop is therefore only credited to the
-/// last of them to leave, which is exactly when it stops crossing the loop.
-static bool hoistRetiresSource(ttg::ConvertLayoutOp cvtOp, scf::ForOp forOp) {
+/// The in-loop half of the question is asked of the *current* IR rather than of
+/// the (immutable) liveness analysis, because earlier hoists performed by this
+/// same pass have already moved their conversions out of the loop and so must
+/// count as gone. A source shared by several conversions in one loop is
+/// therefore only credited to the last of them to leave, which is exactly when
+/// it stops crossing the loop.
+///
+/// The after-loop half has to be asked too: a source read once more below the
+/// loop occupies a register for the loop's whole duration no matter where the
+/// conversion sits, so hoisting frees nothing and crediting it would
+/// under-count the real occupancy.
+static bool
+hoistRetiresSource(ttg::ConvertLayoutOp cvtOp, scf::ForOp forOp,
+                   const ttg::intel::RegisterPressureAnalysis &analysis) {
+  if (!analysis.isDeadAfter(cvtOp.getSrc(), forOp))
+    return false;
   for (Operation *user : cvtOp.getSrc().getUsers()) {
     if (user == cvtOp.getOperation())
       continue;
@@ -104,8 +115,9 @@ hoistCvtDotOpOutOfLoop(ttg::ConvertLayoutOp cvtOp,
   // would be after the hoist and compare that against the budget.
   //
   // Hoisting is a *substitution*, not an addition: the conversion's result
-  // starts crossing the loop, and when nothing left inside the loop reads the
-  // conversion's source, that source stops crossing it. Modelling only the
+  // starts crossing the loop, and when nothing left inside the loop (and
+  // nothing below it) reads the conversion's source, that source stops crossing
+  // it. Modelling only the
   // arrival systematically overestimates the cost, and rejects hoists that
   // would in fact have lowered pressure -- most importantly when the source
   // layout is per-lane fatter than the dot-operand layout it feeds, which is
@@ -116,7 +128,7 @@ hoistCvtDotOpOutOfLoop(ttg::ConvertLayoutOp cvtOp,
   unsigned hoistBytes =
       ttg::intel::RegisterPressureAnalysis::getPerThreadSizeInBytes(rtType);
   unsigned retiredBytes =
-      hoistRetiresSource(cvtOp, parentForOp)
+      hoistRetiresSource(cvtOp, parentForOp, analysis)
           ? analysis.liveInContribution(bodyBlock, cvtOp.getSrc())
           : 0;
 
