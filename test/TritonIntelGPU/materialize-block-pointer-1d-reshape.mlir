@@ -376,7 +376,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK: [[OTHER2D:%[0-9]+]] = ttg.convert_layout [[OTHERR]] : tensor<32x32xf16, [[CONS2DENC]]> -> tensor<32x32xf16, [[LOAD2DENC]]>
     // CHECK: [[LOAD2D:%[0-9]+]] = tt.load [[PTR2D]], [[MASK2D]], [[OTHER2D]] {ttig.block_io = "row_major", ttig.block_io_stride = 96 : i64} : tensor<32x32x!tt.ptr<f16>, [[LOAD2DENC]]>
     // CHECK: [[CVT:%[0-9]+]] = ttg.convert_layout [[LOAD2D]] : tensor<32x32xf16, [[LOAD2DENC]]> -> tensor<32x32xf16, [[CONS2DENC]]>
-    // CHECK: tt.reshape [[CVT]] efficient_layout : tensor<32x32xf16, [[CONS2DENC]]> -> tensor<1024xf16, [[ENC1D]]>
+    // CHECK: tt.reshape [[CVT]] : tensor<32x32xf16, [[CONS2DENC]]> -> tensor<1024xf16, [[ENC1D]]>
     %result = tt.load %ptrs, %mask, %other : tensor<1024x!tt.ptr<f16>, #blocked1d>
     tt.return %result : tensor<1024xf16, #blocked1d>
   }
