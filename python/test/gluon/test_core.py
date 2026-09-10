@@ -14,6 +14,7 @@ from triton._internal_testing import (
     is_blackwell,
     is_blackwell_ultra,
     is_rubin,
+    is_hip,
     is_hip_rdna,
     is_hip_rdna3,
     is_hip_rdna4,
@@ -3570,7 +3571,7 @@ def test_tcgen05_mma_scaled_lhs_tmem(a_format, a_torch_dtype, b_format, b_torch_
     torch.testing.assert_close(out, ref, atol=atol, rtol=rtol)
 
 
-@pytest.mark.xfail(not is_ampere_or_newer(), reason="Requires Ampere or newer", run=False)
+@pytest.mark.xfail(not (is_ampere_or_newer() or is_hip()), reason="Requires Ampere or newer, or AMD", run=False)
 def test_coalesced_layout():
 
     @gluon.jit
@@ -3615,7 +3616,7 @@ def test_coalesced_layout():
     torch.testing.assert_close(output, ref)
 
 
-@pytest.mark.xfail(not is_ampere_or_newer(), reason="Requires Ampere or newer", run=False)
+@pytest.mark.xfail(not (is_ampere_or_newer() or is_hip()), reason="Requires Ampere or newer, or AMD", run=False)
 def test_convert_auto_layout_to_coalesced_layout():
 
     @gluon.jit
