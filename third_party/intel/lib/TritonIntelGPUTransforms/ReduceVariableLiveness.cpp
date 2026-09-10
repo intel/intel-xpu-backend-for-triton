@@ -132,6 +132,20 @@ bool isLoadCandidate(tt::DescriptorLoadOp loadOp, Type expectedElementType,
   return true;
 }
 
+/// Identifies the tile a descriptor load reads: the descriptor together with
+/// the indices it is read at. Two loads of the same descriptor at different
+/// indices touch different memory, so each one needs its own prefetch; keying
+/// the bookkeeping on the descriptor alone would drop every prefetch but the
+/// first.
+using PrefetchKey = SmallVector<Value, 3>;
+
+/// Return the prefetch key of \p loadOp.
+PrefetchKey getPrefetchKey(tt::DescriptorLoadOp loadOp) {
+  PrefetchKey key{loadOp.getDesc()};
+  llvm::append_range(key, loadOp.getIndices());
+  return key;
+}
+
 /// Create a prefetch operation for the given load operation.
 void createPrefetchOp(tt::DescriptorLoadOp loadOp) {
   OpBuilder builder(loadOp);
@@ -147,7 +161,8 @@ void createPrefetchOp(tt::DescriptorLoadOp loadOp) {
 /// Investigate opportunities for the reducing register pressure by moving DotOp
 /// operands.
 /// Returns `true` if at least one operand has been moved.
-bool optimizeDotOperands(scf::ForOp forOp, SmallVector<Value> &prefetchedValue,
+bool optimizeDotOperands(scf::ForOp forOp,
+                         SmallVector<PrefetchKey> &prefetchedTiles,
                          ttg::intel::RegisterPressureAnalysis &analysis) {
   Block *loop = forOp.getBody();
   bool opMoved = false;
@@ -167,7 +182,7 @@ bool optimizeDotOperands(scf::ForOp forOp, SmallVector<Value> &prefetchedValue,
   };
 
   // Prefetch the dotOp operand and move it closer to dotOp.
-  auto moveOperand = [&prefetchedValue, &opMoved](uint8_t opId, tt::DotOp dotOp,
+  auto moveOperand = [&prefetchedTiles, &opMoved](uint8_t opId, tt::DotOp dotOp,
                                                   tt::DescriptorLoadOp loadOp) {
     assert(opId < 2 && "opId must be 0 or 1");
     OpBuilder b(dotOp);
@@ -186,11 +201,10 @@ bool optimizeDotOperands(scf::ForOp forOp, SmallVector<Value> &prefetchedValue,
       }
     }
 
-    Value prefetchKey = loadOp.getDesc();
-    if (std::find(prefetchedValue.begin(), prefetchedValue.end(),
-                  prefetchKey) == prefetchedValue.end()) {
+    PrefetchKey prefetchKey = getPrefetchKey(loadOp);
+    if (!llvm::is_contained(prefetchedTiles, prefetchKey)) {
       createPrefetchOp(loadOp);
-      prefetchedValue.push_back(prefetchKey);
+      prefetchedTiles.push_back(prefetchKey);
     }
     b.setInsertionPoint(insertBeforeOp);
     auto *newLoad = b.clone(*loadOp);
@@ -280,7 +294,7 @@ public:
 
   void runOnOperation() override {
     // Canonicalize convert ops to make the pattern matching easier.
-    SmallVector<Value> prefetchedValue;
+    SmallVector<PrefetchKey> prefetchedTiles;
     RewritePatternSet cleanUpPatterns(&getContext());
     ttg::ConvertLayoutOp::getCanonicalizationPatterns(cleanUpPatterns,
                                                       &getContext());
@@ -293,7 +307,7 @@ public:
     ttg::intel::RegisterPressureAnalysis analysis(rootOperation);
     // TODO: extend the pass to handle `while` loops.
     rootOperation->walk([&](scf::ForOp forOp) {
-      if (optimizeDotOperands(forOp, prefetchedValue, analysis)) {
+      if (optimizeDotOperands(forOp, prefetchedTiles, analysis)) {
         // The register pressure analysis must be re-performed before the
         // processing of each "for loop" given that the liveness of variables
         // may have changed as a result of the code, and specifically `LoadOps`,
