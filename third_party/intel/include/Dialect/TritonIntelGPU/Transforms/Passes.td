@@ -126,6 +126,15 @@ def TritonIntelGPUHoistLayoutConversions
     source shared by several conversions in the same loop is therefore credited
     only once, to whichever conversion is the last to leave the loop.
 
+    Candidates belonging to one loop are decided as a set, cheapest (most
+    pressure-reducing) first, rather than in the order they appear in the loop
+    body. Because a hoist can lower the projection as well as raise it, deciding
+    in program order would make an early rejection depend on credit that a later
+    candidate had not yet contributed, and a rejection is irrevocable (it stamps
+    `tt.no_licm`, which later generic LICM honors). Ordering by measured cost
+    makes the pass's output a function of the loop's register pressure rather
+    than of its syntax.
+
     Non-goals of the pressure model, all deliberate:
 
     * **Transient overlap at the hoist site.** The projection is about the
@@ -135,6 +144,13 @@ def TritonIntelGPUHoistLayoutConversions
       the straight-line code before it, which can *raise* whole-function peak
       pressure even as loop peak falls. That program point is not measured, so
       such a hoist is judged solely on the (unchanged) loop live-in figure.
+    * **Groups sharing a source are not evaluated jointly.** Since the credit
+      only lands on the last conversion to leave, hoisting the first `k-1` of
+      `k` conversions that share a source projects the arrivals with none of the
+      departure. With three or more sharers under a tight budget the pass can
+      therefore stop partway through a group whose completed net effect would
+      have fit the budget. The error is in the conservative direction (too few
+      hoists, never too many).
     * **Loop trip count and conversion cost.** The saved per-iteration
       conversion work is not weighed against the pressure change, and the trip
       count is not consulted.

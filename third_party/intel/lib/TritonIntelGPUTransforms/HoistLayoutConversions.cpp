@@ -5,6 +5,7 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetEnv.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/Debug.h"
@@ -62,111 +63,163 @@ hoistRetiresSource(ttg::ConvertLayoutOp cvtOp, scf::ForOp forOp,
   return true;
 }
 
-/// Hoist a convert_layout with DotOperandEncodingAttr destination out of its
-/// parent scf.for loop when the source is loop-invariant and the resulting
-/// register pressure stays within the GRF budget.
-///
-/// \param cvtOp      The convert_layout operation to consider for hoisting.
-/// \param analysis   Module-level register pressure analysis.
-/// \param grfBudget  Per-lane GRF budget in bytes for the current mode (see
-///                   `RegisterPressureAnalysis::getPerLaneGRFBudgetInBytes`).
-/// \param netHoistBytes  Per-loop running total of the pressure change caused
-///                   by hoists this pass has already performed in that loop.
-static void
-hoistCvtDotOpOutOfLoop(ttg::ConvertLayoutOp cvtOp,
-                       const ttg::intel::RegisterPressureAnalysis &analysis,
-                       unsigned grfBudget,
-                       DenseMap<Operation *, int> &netHoistBytes) {
+/// Returns the `scf.for` loop \p cvtOp could be hoisted out of, or a null
+/// `scf::ForOp` when \p cvtOp is not a hoisting candidate at all (wrong
+/// destination encoding, not directly in a loop body, or a loop-variant
+/// source). Bumps the "considered" and "skipped" statistics.
+static scf::ForOp getHoistCandidateLoop(ttg::ConvertLayoutOp cvtOp) {
   ++NumConsidered;
   // Check the destination has DotOperandEncodingAttr.
   auto rtType = dyn_cast<RankedTensorType>(cvtOp.getType());
   if (!rtType) {
     ++NumSkippedOther;
-    return;
+    return {};
   }
   Attribute encoding = rtType.getEncoding();
   if (!encoding || !isa<ttg::DotOperandEncodingAttr>(encoding)) {
     ++NumSkippedOther;
-    return;
+    return {};
   }
 
   // Find the enclosing scf.for loop.
   auto parentForOp = cvtOp->getParentOfType<scf::ForOp>();
   if (!parentForOp) {
     ++NumSkippedOther;
-    return;
+    return {};
   }
 
   // Only hoist if the cvtOp is directly in the ForOp's body, not nested
   // inside a conditional (e.g., scf.if with a loop-variant condition).
   if (cvtOp->getParentRegion() != &parentForOp.getRegion()) {
     ++NumSkippedOther;
-    return;
+    return {};
   }
 
   // Check the source is loop-invariant (defined outside the loop).
   // isDefinedOutsideOfLoop correctly rejects iter_args and induction vars.
   if (!parentForOp.isDefinedOutsideOfLoop(cvtOp.getSrc())) {
     ++NumSkippedOther;
-    return;
+    return {};
   }
 
-  // Register pressure check. Estimate what the loop body's live-in pressure
-  // would be after the hoist and compare that against the budget.
-  //
-  // Hoisting is a *substitution*, not an addition: the conversion's result
-  // starts crossing the loop, and when nothing left inside the loop (and
-  // nothing below it) reads the conversion's source, that source stops crossing
-  // it. Modelling only the
-  // arrival systematically overestimates the cost, and rejects hoists that
-  // would in fact have lowered pressure -- most importantly when the source
-  // layout is per-lane fatter than the dot-operand layout it feeds, which is
-  // the common case for an oversized blocked layout on a narrow tensor.
-  // See https://github.com/intel/intel-xpu-backend-for-triton/issues/7993.
-  Block *bodyBlock = parentForOp.getBody();
-  unsigned liveInBytes = analysis.liveInPressure(bodyBlock);
-  unsigned hoistBytes =
-      ttg::intel::RegisterPressureAnalysis::getPerThreadSizeInBytes(rtType);
-  unsigned retiredBytes =
-      hoistRetiresSource(cvtOp, parentForOp, analysis)
-          ? analysis.liveInContribution(bodyBlock, cvtOp.getSrc())
-          : 0;
+  return parentForOp;
+}
 
+/// Returns the signed change, in per-lane bytes, that hoisting \p cvtOp out of
+/// \p forOp would make to the loop body's live-in pressure.
+///
+/// Hoisting is a *substitution*, not an addition: the conversion's result
+/// starts crossing the loop, and when nothing left inside the loop (and nothing
+/// below it) reads the conversion's source, that source stops crossing it.
+/// Modelling only the arrival systematically overestimates the cost, and
+/// rejects hoists that would in fact have lowered pressure -- most importantly
+/// when the source layout is per-lane fatter than the dot-operand layout it
+/// feeds, which is the common case for an oversized blocked layout on a narrow
+/// tensor. See
+/// https://github.com/intel/intel-xpu-backend-for-triton/issues/7993.
+///
+/// The credit has to come from the analysis rather than from the source's type,
+/// because `liveInPressure` filters out rematerializable values: a constant
+/// source never occupied the bytes its type suggests.
+static int
+hoistDeltaBytes(ttg::ConvertLayoutOp cvtOp, scf::ForOp forOp,
+                const ttg::intel::RegisterPressureAnalysis &analysis) {
+  unsigned hoistBytes =
+      ttg::intel::RegisterPressureAnalysis::getPerThreadSizeInBytes(
+          cvtOp.getType());
+  unsigned retiredBytes =
+      hoistRetiresSource(cvtOp, forOp, analysis)
+          ? analysis.liveInContribution(forOp.getBody(), cvtOp.getSrc())
+          : 0;
+  return static_cast<int>(hoistBytes) - static_cast<int>(retiredBytes);
+}
+
+/// Decide, for every hoisting candidate of a single \p forOp, whether to hoist
+/// it out of the loop or to reject it on register pressure grounds.
+///
+/// The candidates are *not* processed in program order. Because a hoist can
+/// lower the projected pressure as well as raise it, the running total is no
+/// longer monotonically non-decreasing, and a rejection is only safely
+/// conservative if every pressure-reducing candidate has already been credited
+/// when it is made -- a rejection is irrevocable, since it stamps `tt.no_licm`
+/// and the later generic LICM pass then never revisits the conversion. So the
+/// candidate with the smallest (most negative) projected delta is always
+/// decided first, which makes the outcome depend on the candidates' measured
+/// costs rather than on their syntactic order inside the loop.
+///
+/// The delta is re-measured before each decision rather than sorted once up
+/// front, because a candidate sharing its source with a sibling only retires
+/// that source once the sibling has left.
+///
+/// \param forOp      The loop the candidates live in.
+/// \param candidates Hoisting candidates directly inside \p forOp's body, in
+///                   program order.
+/// \param analysis   Module-level register pressure analysis.
+/// \param grfBudget  Per-lane GRF budget in bytes for the current mode (see
+///                   `RegisterPressureAnalysis::getPerLaneGRFBudgetInBytes`).
+static void hoistCvtDotOpsOutOfLoop(
+    scf::ForOp forOp, ArrayRef<ttg::ConvertLayoutOp> candidates,
+    const ttg::intel::RegisterPressureAnalysis &analysis, unsigned grfBudget) {
   // `liveInBytes` comes from an analysis built once at pass entry, so it does
-  // not reflect hoists this pass has already performed. `netHoistBytes` carries
+  // not reflect hoists this pass has already performed. `netBytes` carries
   // their accumulated effect (which may be negative) forward instead.
-  int alreadyHoisted = netHoistBytes.lookup(parentForOp);
-  int thisHoist = static_cast<int>(hoistBytes) - static_cast<int>(retiredBytes);
-  int projectedBytes =
-      std::max(0, static_cast<int>(liveInBytes) + alreadyHoisted + thisHoist);
+  unsigned liveInBytes = analysis.liveInPressure(forOp.getBody());
+  int netBytes = 0;
 
   // Only hoist if the projected live-in pressure stays within 80% of the GRF
   // budget. The 20% headroom accounts for scalars, temporaries, and
   // loop-internal values not tracked by live-in liveness. Use integer
   // arithmetic (4/5) to avoid float-to-unsigned truncation.
-  if (projectedBytes >= static_cast<int>(grfBudget * 4 / 5)) {
-    LDBG("Skipping hoist: liveIn="
-         << liveInBytes << " + alreadyHoisted=" << alreadyHoisted
-         << " + hoistBytes=" << hoistBytes << " - retiredBytes=" << retiredBytes
-         << " = " << projectedBytes << " exceeds 80% of budget=" << grfBudget);
-    ++NumRejectedPressure;
-    cvtOp->setAttr("tt.no_licm", UnitAttr::get(cvtOp.getContext()));
-    return;
+  int threshold = static_cast<int>(grfBudget * 4 / 5);
+
+  SmallVector<ttg::ConvertLayoutOp> pending(candidates);
+  while (!pending.empty()) {
+    // Pick the cheapest remaining candidate, breaking ties in program order.
+    // Ties are outcome-neutral: equal deltas project the same values whichever
+    // of the two is decided first.
+    unsigned bestIdx = 0;
+    int bestDelta = hoistDeltaBytes(pending[0], forOp, analysis);
+    for (unsigned i = 1, e = pending.size(); i != e; ++i) {
+      int delta = hoistDeltaBytes(pending[i], forOp, analysis);
+      if (delta < bestDelta) {
+        bestDelta = delta;
+        bestIdx = i;
+      }
+    }
+    ttg::ConvertLayoutOp cvtOp = pending[bestIdx];
+    pending.erase(pending.begin() + bestIdx);
+
+    // Estimate what the loop body's live-in pressure would be after the hoist
+    // and compare that against the budget. A source is credited at most once
+    // and only for bytes it contributed to `liveInBytes`, so the projection
+    // cannot go negative.
+    int projectedBytes = static_cast<int>(liveInBytes) + netBytes + bestDelta;
+    assert(projectedBytes >= 0 && "over-credited a hoist's retired source");
+
+    if (projectedBytes >= threshold) {
+      LDBG("Skipping hoist: liveIn="
+           << liveInBytes << " + alreadyHoisted=" << netBytes
+           << " + thisHoist=" << bestDelta << " = " << projectedBytes
+           << " B/lane exceeds 80% of budget=" << grfBudget << " B/lane");
+      ++NumRejectedPressure;
+      cvtOp->setAttr("tt.no_licm", UnitAttr::get(cvtOp.getContext()));
+      continue;
+    }
+
+    LDBG("Hoisting convert_layout out of loop: liveIn="
+         << liveInBytes << " + alreadyHoisted=" << netBytes
+         << " + thisHoist=" << bestDelta << " = " << projectedBytes
+         << " B/lane budget=" << grfBudget << " B/lane");
+    // Hoist the conversion out of the loop.
+    Operation *srcDefOp = cvtOp.getSrc().getDefiningOp();
+    if (srcDefOp)
+      cvtOp->moveAfter(srcDefOp);
+    else
+      cvtOp->moveBefore(forOp);
+
+    ++NumHoisted;
+    netBytes += bestDelta;
   }
-
-  LDBG("Hoisting convert_layout out of loop: liveIn="
-       << liveInBytes << " + alreadyHoisted=" << alreadyHoisted
-       << " + hoistBytes=" << hoistBytes << " - retiredBytes=" << retiredBytes
-       << " = " << projectedBytes << " budget=" << grfBudget);
-  // Hoist the conversion out of the loop.
-  Operation *srcDefOp = cvtOp.getSrc().getDefiningOp();
-  if (srcDefOp)
-    cvtOp->moveAfter(srcDefOp);
-  else
-    cvtOp->moveBefore(parentForOp);
-
-  ++NumHoisted;
-  netHoistBytes[parentForOp] += thisHoist;
 }
 
 class TritonIntelGPUHoistLayoutConversionsPass
@@ -184,12 +237,21 @@ class TritonIntelGPUHoistLayoutConversionsPass
             grfMode, mod);
     ttg::intel::RegisterPressureAnalysis analysis(mod);
 
-    SmallVector<ttg::ConvertLayoutOp> cvtOps;
-    mod.walk([&](ttg::ConvertLayoutOp cvtOp) { cvtOps.push_back(cvtOp); });
+    // Group the candidates by the loop they would leave, so that each loop's
+    // budget can be spent on its candidates as a set rather than in whatever
+    // order the walk happens to reach them. Insertion order (program order) is
+    // preserved to keep the tie-break in `hoistCvtDotOpsOutOfLoop`
+    // deterministic. Inner loops are visited before their enclosing loop's
+    // later candidates, but the two never share a body block, so their budgets
+    // are independent.
+    llvm::MapVector<scf::ForOp, SmallVector<ttg::ConvertLayoutOp>> candidates;
+    mod.walk([&](ttg::ConvertLayoutOp cvtOp) {
+      if (scf::ForOp forOp = getHoistCandidateLoop(cvtOp))
+        candidates[forOp].push_back(cvtOp);
+    });
 
-    DenseMap<Operation *, int> netHoistBytes;
-    for (auto cvtOp : cvtOps)
-      hoistCvtDotOpOutOfLoop(cvtOp, analysis, grfBudget, netHoistBytes);
+    for (auto &[forOp, loopCandidates] : candidates)
+      hoistCvtDotOpsOutOfLoop(forOp, loopCandidates, analysis, grfBudget);
 
     if (mlir::triton::tools::getBoolEnv("TRITON_INTEL_HLC_STATS")) {
       llvm::errs() << "[HoistLayoutConversions] considered=" << NumConsidered

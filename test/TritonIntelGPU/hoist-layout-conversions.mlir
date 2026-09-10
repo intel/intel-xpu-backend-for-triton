@@ -394,6 +394,12 @@ module attributes {"ttg.num-warps" = 1 : i32} {
 // COM: accounting the first hoist charged +128 to the loop, which pushed the
 // COM: second over the threshold and rejected it, splitting the two operands.
 // COM: See https://github.com/intel/intel-xpu-backend-for-triton/issues/7993.
+// COM:
+// COM: The pass-through iter_args (%q_i, %do_i) are load-bearing, not noise:
+// COM: routing %qT and %doT through the loop-carried arguments keeps them out of
+// COM: the body's live-in set. Reading them directly would raise live-in from 256
+// COM: to 1280 bytes/lane, which is over budget in every GRF mode, and the case
+// COM: would then demonstrate nothing.
 
 #blocked12 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
 #dpas12 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
@@ -463,5 +469,82 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     // COM: The use that keeps %arg0 live across the loop.
     %post = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked13>
     tt.return %result, %post : tensor<128x16xf32, #dpas13>, tensor<128x16xf16, #blocked13>
+  }
+}
+
+// -----
+
+// COM: Cases 14 and 15: the same two candidates in one loop, written in the two
+// COM: possible orders, must produce the same result. Two candidates:
+// COM:   - "lean" %arg0: 128x16xf16 #blocked (256 bytes/lane) -> #dot_a (64), and
+// COM:     the hoist retires it, so it contributes 64 - 256 = -192.
+// COM:   - "fat" %argF: 16x16xf16 #blocked (32 bytes/lane) -> #dot_b (32), but
+// COM:     %argF is also read by an in-loop arith.addf that no hoist can move, so
+// COM:     it is never retired and the conversion contributes its full +32.
+// COM: Loop live-in is 256 (%arg0) + 32 (%argB) + 32 (%argF) = 320 bytes/lane,
+// COM: already past the 128-GRF threshold of 204, so the order of the two
+// COM: decisions decides the outcome:
+// COM:   - fat first:  320 + 32 = 352 >= 204, rejected -- and a rejection is
+// COM:     irrevocable, since it stamps tt.no_licm.
+// COM:   - lean first: 320 - 192 = 128 < 204, hoisted; the fat candidate is then
+// COM:     judged at 128 + 32 = 160 < 204 and hoisted too.
+// COM: The pass therefore decides a loop's candidates cheapest-first rather than
+// COM: in program order, and both spellings below hoist both conversions (which
+// COM: also fixes the hoisted pair's order: lean before fat, by cost).
+// COM: See https://github.com/intel/intel-xpu-backend-for-triton/issues/7993.
+
+#blocked14 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dpas14 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
+#dot_a14 = #ttg.dot_op<{opIdx = 0, parent = #dpas14, kWidth = 1}>
+#dot_b14 = #ttg.dot_op<{opIdx = 1, parent = #dpas14, kWidth = 2}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // COM: Case 14: the fat candidate is written first.
+  // CHECK-LABEL: tt.func @order_independent_fat_first
+  tt.func @order_independent_fat_first(%arg0: tensor<128x16xf16, #blocked14>, %argB: tensor<16x16xf16, #dot_b14>,
+                                       %argF: tensor<16x16xf16, #blocked14>, %arg2: tensor<128x16xf32, #dpas14>)
+                                       -> (tensor<128x16xf32, #dpas14>, tensor<128x16xf32, #dpas14>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %c1_i32 = arith.constant 1 : i32
+    // CHECK: ttg.convert_layout %{{.*}} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // CHECK-NEXT: ttg.convert_layout %{{.*}} : tensor<16x16xf16, #{{.*}}> -> tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #{{.*}}, kWidth = 2}>>
+    // CHECK-NEXT: scf.for
+    // CHECK-NOT: ttg.convert_layout
+    %res:2 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %arg2, %acc2 = %arg2)
+        -> (tensor<128x16xf32, #dpas14>, tensor<128x16xf32, #dpas14>) : i32 {
+      %fat = ttg.convert_layout %argF : tensor<16x16xf16, #blocked14> -> tensor<16x16xf16, #dot_b14>
+      %lean = ttg.convert_layout %arg0 : tensor<128x16xf16, #blocked14> -> tensor<128x16xf16, #dot_a14>
+      %d1 = tt.dot %lean, %argB, %acc, inputPrecision = tf32 : tensor<128x16xf16, #dot_a14> * tensor<16x16xf16, #dot_b14> -> tensor<128x16xf32, #dpas14>
+      %d2 = tt.dot %lean, %fat, %acc2, inputPrecision = tf32 : tensor<128x16xf16, #dot_a14> * tensor<16x16xf16, #dot_b14> -> tensor<128x16xf32, #dpas14>
+      // COM: Pins %argF inside the loop, so the fat conversion earns no credit.
+      %pin = arith.addf %argF, %argF : tensor<16x16xf16, #blocked14>
+      scf.yield %d1, %d2 : tensor<128x16xf32, #dpas14>, tensor<128x16xf32, #dpas14>
+    }
+    tt.return %res#0, %res#1 : tensor<128x16xf32, #dpas14>, tensor<128x16xf32, #dpas14>
+  }
+
+  // COM: Case 15: the same loop with the lean candidate written first.
+  // CHECK-LABEL: tt.func @order_independent_lean_first
+  tt.func @order_independent_lean_first(%arg0: tensor<128x16xf16, #blocked14>, %argB: tensor<16x16xf16, #dot_b14>,
+                                        %argF: tensor<16x16xf16, #blocked14>, %arg2: tensor<128x16xf32, #dpas14>)
+                                        -> (tensor<128x16xf32, #dpas14>, tensor<128x16xf32, #dpas14>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %c1_i32 = arith.constant 1 : i32
+    // CHECK: ttg.convert_layout %{{.*}} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // CHECK-NEXT: ttg.convert_layout %{{.*}} : tensor<16x16xf16, #{{.*}}> -> tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #{{.*}}, kWidth = 2}>>
+    // CHECK-NEXT: scf.for
+    // CHECK-NOT: ttg.convert_layout
+    %res:2 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %arg2, %acc2 = %arg2)
+        -> (tensor<128x16xf32, #dpas14>, tensor<128x16xf32, #dpas14>) : i32 {
+      %lean = ttg.convert_layout %arg0 : tensor<128x16xf16, #blocked14> -> tensor<128x16xf16, #dot_a14>
+      %fat = ttg.convert_layout %argF : tensor<16x16xf16, #blocked14> -> tensor<16x16xf16, #dot_b14>
+      %d1 = tt.dot %lean, %argB, %acc, inputPrecision = tf32 : tensor<128x16xf16, #dot_a14> * tensor<16x16xf16, #dot_b14> -> tensor<128x16xf32, #dpas14>
+      %d2 = tt.dot %lean, %fat, %acc2, inputPrecision = tf32 : tensor<128x16xf16, #dot_a14> * tensor<16x16xf16, #dot_b14> -> tensor<128x16xf32, #dpas14>
+      // COM: Pins %argF inside the loop, so the fat conversion earns no credit.
+      %pin = arith.addf %argF, %argF : tensor<16x16xf16, #blocked14>
+      scf.yield %d1, %d2 : tensor<128x16xf32, #dpas14>, tensor<128x16xf32, #dpas14>
+    }
+    tt.return %res#0, %res#1 : tensor<128x16xf32, #dpas14>, tensor<128x16xf32, #dpas14>
   }
 }
