@@ -352,7 +352,7 @@ if [[ "$build_vllm" == false ]]; then
     exit 1
   fi
 
-  echo "*** Downloading nightly builds. ***"
+  echo "*** Searching for a prebuilt vLLM XPU kernels wheel matching the pin. ***"
   wheel_pattern="wheels-vllm-py$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")-*"
   temp_dir="$(mktemp -d)"
   trap 'rm -rf "$temp_dir"' EXIT
@@ -360,12 +360,15 @@ if [[ "$build_vllm" == false ]]; then
   # Try latest completed run first (any conclusion)
   latest_run="$(gh run list --workflow nightly-wheels.yml --branch "$triton_repo_branch" -R "$triton_repo" --status completed --json databaseId --limit 1 | jq -r '.[0].databaseId')"
   try_run "$latest_run"
+  echo "*** Latest completed run has no matching wheel. ***"
 
-  echo "*** Latest completed run has no matching wheel, trying latest successful run... ***"
   latest_success_run="$(gh run list --workflow nightly-wheels.yml --branch "$triton_repo_branch" -R "$triton_repo" --status success --json databaseId --limit 1 | jq -r '.[0].databaseId')"
-  [[ "$latest_success_run" != "$latest_run" ]] && try_run "$latest_success_run"
+  if [[ "$latest_success_run" != "$latest_run" ]]; then
+    try_run "$latest_success_run"
+    echo "*** Latest successful run has no matching wheel. ***"
+  fi
 
-  echo "*** No matching vLLM XPU kernels nightly wheel found. Defaulting to building from source. ***"
+  echo "*** Defaulting to building from source. ***"
   build_vllm=true
 fi
 
