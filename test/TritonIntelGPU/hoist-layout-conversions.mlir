@@ -8,6 +8,13 @@
 // COM: The source of the convert_layout is defined outside the loop, so the pass
 // COM: should move the conversion before the loop.
 // COM: (352 bytes/lane needed; fits 256-GRF's 512/lane budget, exceeds 128-GRF's 256/lane.)
+// COM: NOTE: the GRF128 rejection below records current behavior, not desired
+// COM: behavior. Hoisting here would actually *lower* pressure (loop live-in
+// COM: 288 -> 96 bytes/lane, loop peak 484 -> 356), because the #blocked source
+// COM: is 4x fatter per lane than the #dot_op result. The gate rejects it anyway
+// COM: because its cost model is additive-only: it adds the hoisted value's
+// COM: bytes without subtracting the source's bytes that stop crossing the loop.
+// COM: Tracked as https://github.com/intel/intel-xpu-backend-for-triton/issues/7993.
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -221,6 +228,10 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // COM: the inner scf.for but remains inside the outer loop. Hoisting further
 // COM: out of the outer loop is left as a follow-up.
 // COM: (Same pressure as case 1: GRF128 rejects, GRF256 accepts.)
+// COM: NOTE: as in case 1, the GRF128 rejection is the additive-only cost model
+// COM: turning down a hoist that would have reduced pressure, not a correct
+// COM: budget decision. See
+// COM: https://github.com/intel/intel-xpu-backend-for-triton/issues/7993.
 
 #blocked8 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas8 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -303,5 +314,48 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32}
       scf.yield %dot : tensor<8x16xf32, #dpas10>
     }
     tt.return %result : tensor<8x16xf32, #dpas10>
+  }
+}
+
+// -----
+
+// COM: Case 11: Exercise the divide-by-32 default in
+// COM: RegisterPressureAnalysis::getPerLaneGRFBudgetInBytes. This module
+// COM: deliberately omits ttg.threads-per-warp, so getThreadsPerWarp returns its
+// COM: 32 default and the per-hardware-thread budget is divided by 32 rather than
+// COM: the DPAS-typical 16. All layouts here are 32-lane so the module still
+// COM: verifies (deleting the attribute from a SIMD16 module would not).
+// COM:
+// COM: Measured pressure: live-in 144 bytes/lane (arg0 #blocked 128 + arg1
+// COM: #dot_b 16; acc is a block argument, so it is not live-in), plus 16
+// COM: bytes/lane for the hoisted #dot_a value = 160 bytes/lane total.
+// COM:
+// COM: Thresholds are 80% of the per-lane budget:
+// COM:   grf-mode=default -> 4096/32 = 128 B/lane -> threshold 102 -> reject
+// COM:   grf-mode=256     -> 8192/32 = 256 B/lane -> threshold 204 -> hoist
+// COM: Were the divisor wrongly 16, the thresholds would be 204 and 409 and this
+// COM: case would hoist at both modes, so the GRF128 rejection below is what pins
+// COM: the divide-by-32 behavior.
+
+#blocked11 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
+#dpas11 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 32, warpsPerCTA = [1, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot_a11 = #ttg.dot_op<{opIdx = 0, parent = #dpas11, kWidth = 1}>
+#dot_b11 = #ttg.dot_op<{opIdx = 1, parent = #dpas11, kWidth = 2}>
+module attributes {"ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: tt.func @default_threads_per_warp
+  tt.func @default_threads_per_warp(%arg0: tensor<16x16xf16, #blocked11>, %arg1: tensor<16x16xf16, #dot_b11>, %arg2: tensor<16x16xf32, #dpas11>) -> tensor<16x16xf32, #dpas11> {
+    %c0_i32 = arith.constant 0 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %c1_i32 = arith.constant 1 : i32
+    // GRF256: ttg.convert_layout %{{.*}} : tensor<16x16xf16, #{{.*}}> -> tensor<16x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // GRF256-NEXT: scf.for
+    // GRF128: scf.for
+    // GRF128: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<16x16xf16, #{{.*}}> -> tensor<16x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    %result = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %arg2) -> (tensor<16x16xf32, #dpas11>) : i32 {
+      %cvt = ttg.convert_layout %arg0 : tensor<16x16xf16, #blocked11> -> tensor<16x16xf16, #dot_a11>
+      %dot = tt.dot %cvt, %arg1, %acc, inputPrecision = tf32 : tensor<16x16xf16, #dot_a11> * tensor<16x16xf16, #dot_b11> -> tensor<16x16xf32, #dpas11>
+      scf.yield %dot : tensor<16x16xf32, #dpas11>
+    }
+    tt.return %result : tensor<16x16xf32, #dpas11>
   }
 }
