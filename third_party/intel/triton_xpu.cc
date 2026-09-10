@@ -68,6 +68,8 @@ void init_triton_intel_passes_ttir(py::module_ &&m) {
   ADD_PASS_WRAPPER_0("add_descriptor_versioning",
                      intel::createTritonIntelDescriptorVersioning);
   ADD_PASS_WRAPPER_0("add_fuse_reshape", intel::createTritonIntelFuseReshape);
+  ADD_PASS_WRAPPER_0("add_optimize_load_masks",
+                     intel::createTritonIntelOptimizeLoadMasks);
   ADD_PASS_WRAPPER_0("add_simplify_signed_arithmetic",
                      intel::createTritonIntelSimplifySignedArithmetic);
   ADD_PASS_WRAPPER_0("add_speculate_signed_div_rem",
