@@ -34,7 +34,7 @@ struct RegisterPressureOptions {
 /// element bitwidth in bytes.
 ///
 /// The unit is **per-lane bytes** ("thread" = one SIMD lane, Triton's usual
-/// convention), NOT the per-hardware-thread unit `getGRFBytesPerThread`
+/// convention), NOT the per-hardware-thread unit `getGRFBytesPerHardwareThread`
 /// returns. Use `getPerLaneGRFBudgetInBytes` to compare against a GRF budget.
 class RegisterPressureAnalysis {
 public:
