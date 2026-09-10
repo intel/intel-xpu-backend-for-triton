@@ -331,7 +331,7 @@ try_install_wheel_from_run() {
   return 0
 }
 
-# Install a run's vLLM XPU kernels wheel, exiting on success and returning if it has no wheel matching the pattern.
+# Install a run's vLLM XPU kernels wheel, exiting on success and returning if it has no matching wheel.
 try_run() {
   [[ "$1" == "null" ]] && return 0
 
@@ -357,14 +357,13 @@ if [[ "$build_vllm" == false ]]; then
   temp_dir="$(mktemp -d)"
   trap 'rm -rf "$temp_dir"' EXIT
 
-  # Try the latest completed run, then the latest successful one (any conclusion works -- the
-  # wheel is uploaded even when a run fails on an unrelated Python-matrix leg). try_run installs
-  # a matching wheel and exits; otherwise we fall through and, failing both, build from source.
+  # Try latest completed run first (any conclusion)
   latest_run="$(gh run list --workflow nightly-wheels.yml --branch "$triton_repo_branch" -R "$triton_repo" --status completed --json databaseId --limit 1 | jq -r '.[0].databaseId')"
   try_run "$latest_run"
 
+  # Latest run didn't have a wheel for this Python version, try latest successful run
   echo "*** Latest completed run has no matching wheel, trying latest successful run... ***"
-  latest_success_run="$(gh run list --workflow nightly-wheels.yml --branch "$triton_repo_branch" -R "$triton_repo" --status success --limit 1 --json databaseId | jq -r '.[0].databaseId')"
+  latest_success_run="$(gh run list --workflow nightly-wheels.yml --branch "$triton_repo_branch" -R "$triton_repo" --status success --json databaseId --limit 1 | jq -r '.[0].databaseId')"
   [[ "$latest_success_run" != "$latest_run" ]] && try_run "$latest_success_run"
 
   echo "*** No matching nightly vllm-xpu-kernels wheel found. Falling back to building from source. ***"
