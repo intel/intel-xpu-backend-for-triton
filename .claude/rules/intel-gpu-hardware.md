@@ -70,9 +70,25 @@ When `is_lts=true`, certain lowering paths use GenISA intrinsics instead of SPIR
 ## Register Pressure Management
 
 ### ReduceVariableLiveness Pass
-Activated when `opt.reduce_variable_liveness = true`. Thresholds from source:
-- Total block size threshold: **32768 bytes**
-- Large tensor threshold: **128 × 128 × 2 = 32768 bytes** (per-dimension shape ≥ 128)
+Activated when `opt.reduce_variable_liveness = true`. Takes a `grf-mode` option
+(`'default'`, `'auto'`, `'128'`, `'256'`, `'512'`) that must match the `grf_mode`
+the kernel is compiled with.
+
+Gate: a 2D operand load that is live-in to a loop is sunk into it (leaving a
+prefetch behind) when the loop body's **peak** register pressure, from
+`RegisterPressureAnalysis::peakPressure(loop)`, is at or above the **per-lane**
+GRF budget — `getGRFBytesPerThread(grfMode) / threads-per-warp`. At
+`threads-per-warp = 16` that is 256 B/lane for default/auto/128, 512 for 256 and
+1024 for 512. There is no fixed tensor-size floor; sizes only matter through
+their contribution to the measured pressure.
+
+Peak, not live-in, pressure is the gate: `liveInPressure` derives from
+`LivenessBlockInfo::in()`, which excludes block arguments and so never counts the
+loop-carried DPAS accumulator.
+
+The decision is per loop: once a loop is over budget, every eligible load in it
+is sunk. Spill cost vs. redundant-reload cost is not modelled, and the loop trip
+count is not consulted.
 
 ### Design Rationale
 Intel GPUs load dot operands directly into registers from memory (no intermediate SLM staging for A/B matrices). The hardware I/O buffer and cache handle redundant accesses. This differs from NVIDIA GPUs which typically stage through shared memory.
