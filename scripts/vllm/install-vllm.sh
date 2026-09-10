@@ -204,9 +204,12 @@ while [[ $# -gt 0 ]]; do
       cat <<EOF
 Usage: $0 [options]
 
-By default, prebuilt nightly vLLM XPU kernels wheels matching the pinned commit are installed from the $DEFAULT_BRANCH
-branch nightly builds. If no matching wheel is available, the script automatically falls back to building from source.
 vLLM is built and installed from source as an editable install.
+vLLM XPU kernels are installed via a prebuilt wheel matching the pinned commit
+from the $DEFAULT_BRANCH branch nightly wheels. The latest completed workflow
+run, regardless of its outcome, and the latest successful workflow run are
+checked for a matching wheel. If no such wheel is available, the script defaults
+to building vLLM XPU kernels from source.
 
 Options:
   --source                       Build vLLM XPU kernels from source using pinned commit.
