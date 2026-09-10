@@ -331,7 +331,7 @@ try_install_wheel_from_run() {
   return 0
 }
 
-# Install a run's vllm-xpu-kernels wheel, exiting on success and returning if the run has no matching wheel.
+# Install a run's vLLM XPU kernels wheel, exiting on success and returning if the run has no matching wheel.
 try_run() {
   [[ "$1" == "null" ]] && return 0
 
@@ -365,7 +365,7 @@ if [[ "$build_vllm" == false ]]; then
   latest_success_run="$(gh run list --workflow nightly-wheels.yml --branch "$triton_repo_branch" -R "$triton_repo" --status success --json databaseId --limit 1 | jq -r '.[0].databaseId')"
   [[ "$latest_success_run" != "$latest_run" ]] && try_run "$latest_success_run"
 
-  echo "*** No matching nightly vllm-xpu-kernels wheel found. Defaulting to building from source. ***"
+  echo "*** No matching vLLM XPU kernels nightly wheel found. Defaulting to building from source. ***"
   build_vllm=true
 fi
 
