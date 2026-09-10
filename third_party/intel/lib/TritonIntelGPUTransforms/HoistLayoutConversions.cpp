@@ -38,26 +38,36 @@ namespace {
 /// the loop reads the source *and* nothing after the loop does either, so it
 /// stops being live-in to the loop body.
 ///
-/// The in-loop half of the question is asked of the *current* IR rather than of
-/// the (immutable) liveness analysis, because earlier hoists performed by this
-/// same pass have already moved their conversions out of the loop and so must
-/// count as gone. A source shared by several conversions in one loop is
-/// therefore only credited to the last of them to leave, which is exactly when
-/// it stops crossing the loop.
+/// Both halves of the question are asked of the *current* IR rather than of the
+/// (immutable) liveness analysis, because hoists this pass has already
+/// performed have moved their conversions and so must count as moved:
 ///
-/// The after-loop half has to be asked too: a source read once more below the
-/// loop occupies a register for the loop's whole duration no matter where the
-/// conversion sits, so hoisting frees nothing and crediting it would
-/// under-count the real occupancy.
-static bool
-hoistRetiresSource(ttg::ConvertLayoutOp cvtOp, scf::ForOp forOp,
-                   const ttg::intel::RegisterPressureAnalysis &analysis) {
-  if (!analysis.isDeadAfter(cvtOp.getSrc(), forOp))
-    return false;
+/// * In-loop: a source shared by several conversions in one loop is only
+///   credited to the last of them to leave, which is exactly when it stops
+///   crossing the loop.
+/// * After the loop: a source read below the loop occupies a register for the
+///   loop's whole duration no matter where the conversion sits, so hoisting
+///   frees nothing and crediting it would under-count the real occupancy. But
+///   "below the loop" has to mean below it *now*: when the reader below is
+///   itself a conversion that this pass has already hoisted to above the loop,
+///   the source no longer crosses the loop and the credit is real. Asking the
+///   frozen analysis instead made the answer depend on which of two loops
+///   sharing a source the pass happened to reach first (see
+///   `runOnOperation`, which visits loops last-to-first so this view is final).
+static bool hoistRetiresSource(ttg::ConvertLayoutOp cvtOp, scf::ForOp forOp) {
+  Block *loopBlock = forOp->getBlock();
   for (Operation *user : cvtOp.getSrc().getUsers()) {
     if (user == cvtOp.getOperation())
       continue;
     if (forOp->isProperAncestor(user))
+      return false;
+    // Locate the user in the loop's own block to compare positions. A user
+    // that cannot be placed there (a different region altogether) might run
+    // after the loop, so refuse the credit.
+    Operation *ancestor = loopBlock->findAncestorOpInBlock(*user);
+    if (!ancestor)
+      return false;
+    if (forOp->isBeforeInBlock(ancestor))
       return false;
   }
   return true;
@@ -128,7 +138,7 @@ hoistDeltaBytes(ttg::ConvertLayoutOp cvtOp, scf::ForOp forOp,
       ttg::intel::RegisterPressureAnalysis::getPerThreadSizeInBytes(
           cvtOp.getType());
   unsigned retiredBytes =
-      hoistRetiresSource(cvtOp, forOp, analysis)
+      hoistRetiresSource(cvtOp, forOp)
           ? analysis.liveInContribution(forOp.getBody(), cvtOp.getSrc())
           : 0;
   return static_cast<int>(hoistBytes) - static_cast<int>(retiredBytes);
@@ -196,7 +206,16 @@ static void hoistCvtDotOpsOutOfLoop(
     int projectedBytes = static_cast<int>(liveInBytes) + netBytes + bestDelta;
     assert(projectedBytes >= 0 && "over-credited a hoist's retired source");
 
-    if (projectedBytes >= threshold) {
+    // The budget only vetoes a hoist that spends it. A hoist whose net effect
+    // on the loop body's live-in pressure is zero or negative leaves the loop
+    // exactly as far over (or under) budget as it already was, so rejecting it
+    // buys back no register and only forgoes the loop-invariant conversion --
+    // and the rejection is irrevocable, since it stamps `tt.no_licm`. Gating
+    // such a hoist on a figure it does not move is what made this pass reject
+    // six of _attn_bwd's eight loop-invariant dot-operand conversions at
+    // HEAD_DIM=128, where all eight are measurably free (see the pass
+    // description) and rejecting them cost 21.7% geomean on flash-attn-bwd.
+    if (bestDelta > 0 && projectedBytes >= threshold) {
       LDBG("Skipping hoist: liveIn="
            << liveInBytes << " + alreadyHoisted=" << netBytes
            << " + thisHoist=" << bestDelta << " = " << projectedBytes
@@ -250,7 +269,15 @@ class TritonIntelGPUHoistLayoutConversionsPass
         candidates[forOp].push_back(cvtOp);
     });
 
-    for (auto &[forOp, loopCandidates] : candidates)
+    // Decide the loops in reverse walk order, i.e. last to first. A hoist only
+    // ever moves a conversion *earlier* in its block, so once every loop that
+    // follows `forOp` has been decided, no later hoist can add or remove a use
+    // of a source below `forOp`, and `hoistRetiresSource`'s after-loop question
+    // has a final answer. Deciding first-to-last instead denied the credit to
+    // the *earlier* of two loops sharing a source, purely because the later
+    // loop's conversion had not moved out from under it yet -- the same
+    // order-dependence that `hoistCvtDotOpsOutOfLoop` removes within one loop.
+    for (auto &[forOp, loopCandidates] : llvm::reverse(candidates))
       hoistCvtDotOpsOutOfLoop(forOp, loopCandidates, analysis, grfBudget);
 
     if (mlir::triton::tools::getBoolEnv("TRITON_INTEL_HLC_STATS")) {

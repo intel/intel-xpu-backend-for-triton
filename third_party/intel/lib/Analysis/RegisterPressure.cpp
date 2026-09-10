@@ -156,10 +156,6 @@ bool RegisterPressureAnalysis::isLiveIn(Block *block, Value value) const {
   return blockInfo && blockInfo->isLiveIn(value);
 }
 
-bool RegisterPressureAnalysis::isDeadAfter(Value value, Operation *op) const {
-  return liveness.isDeadAfter(value, op);
-}
-
 unsigned RegisterPressureAnalysis::liveInContribution(Block *block,
                                                       Value value) const {
   // Mirror liveInPressure's per-value accounting exactly, so that subtracting
