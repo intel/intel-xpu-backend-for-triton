@@ -361,12 +361,11 @@ if [[ "$build_vllm" == false ]]; then
   latest_run="$(gh run list --workflow nightly-wheels.yml --branch "$triton_repo_branch" -R "$triton_repo" --status completed --json databaseId --limit 1 | jq -r '.[0].databaseId')"
   try_run "$latest_run"
 
-  # Latest run didn't have a wheel for this Python version, try latest successful run
   echo "*** Latest completed run has no matching wheel, trying latest successful run... ***"
   latest_success_run="$(gh run list --workflow nightly-wheels.yml --branch "$triton_repo_branch" -R "$triton_repo" --status success --json databaseId --limit 1 | jq -r '.[0].databaseId')"
   [[ "$latest_success_run" != "$latest_run" ]] && try_run "$latest_success_run"
 
-  echo "*** No matching nightly vllm-xpu-kernels wheel found. Falling back to building from source. ***"
+  echo "*** No matching nightly vllm-xpu-kernels wheel found. Defaulting to building from source. ***"
   build_vllm=true
 fi
 
