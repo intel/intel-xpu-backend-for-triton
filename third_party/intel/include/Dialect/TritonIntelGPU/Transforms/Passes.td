@@ -106,9 +106,42 @@ def TritonIntelGPUHoistLayoutConversions
     defined outside the loop. This keeps loop-invariant dot operand layout
     conversions in registers, avoiding redundant conversion on every iteration.
 
-    Hoisting is only performed when the resulting register pressure (measured
-    via liveness analysis) stays within 80% of the GRF budget for the given
-    GRF mode.
+    Hoisting is only performed when the projected register pressure stays
+    within 80% of the per-lane GRF budget for the given GRF mode. The
+    projection models a hoist as a *substitution* of the loop body's live-in
+    set rather than an addition: the conversion's result starts crossing the
+    loop, and when no operation remaining inside the loop reads the
+    conversion's source, that source stops crossing it and exactly the bytes it
+    contributed to that live-in figure are credited back (so a rematerializable
+    source, which contributed none, earns no credit). This matters because a
+    hoist whose source layout is
+    per-lane fatter than the dot-operand layout it feeds (typical for an
+    oversized blocked layout on a narrow tensor) *lowers* live-in pressure,
+    and an additive-only estimate would reject it.
+
+    A source shared by several conversions in the same loop is credited only
+    once, to whichever conversion is the last to leave the loop; a source with
+    any other use inside the loop is never credited.
+
+    Non-goals of the pressure model, all deliberate:
+
+    * **Transient overlap at the hoist site.** The projection is about the
+      loop body's live-in pressure. When the source and the hoisted result are
+      the same per-lane size, hoisting leaves live-in unchanged but moves the
+      moment at which both are simultaneously live out of the loop and into
+      the straight-line code before it, which can *raise* whole-function peak
+      pressure even as loop peak falls. That program point is not measured, so
+      such a hoist is judged solely on the (unchanged) loop live-in figure.
+    * **Sources that outlive the loop.** Crediting a retired source assumes it
+      is no longer occupying a register during the loop. A source also used
+      *after* the loop physically stays live across it, but is not in the loop
+      body's live-in set, so the credit is optimistic for that shape.
+    * **Loop trip count and conversion cost.** The saved per-iteration
+      conversion work is not weighed against the pressure change, and the trip
+      count is not consulted.
+
+    A rejected conversion is marked `tt.no_licm` so that later generic LICM
+    does not hoist it anyway.
   }];
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
 

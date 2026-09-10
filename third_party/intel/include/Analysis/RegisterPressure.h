@@ -64,6 +64,20 @@ public:
   /// consumers need not build their own liveness analysis.
   bool isLiveIn(Block *block, Value value) const;
 
+  /// Returns the number of bytes `value` currently contributes to
+  /// `liveInPressure(block)`, and 0 if it contributes nothing (not live-in, or
+  /// filtered out by excludeRematerializable).
+  ///
+  /// This exists so a caller reasoning about how a transform will change a
+  /// block's live-in pressure can subtract exactly the term this analysis
+  /// counted, rather than re-deriving it from the value's type and duplicating
+  /// the filtering rules. It is by construction consistent with
+  /// `liveInPressure`: if a transform's only effect on `block`'s live-in set is
+  /// to remove `v` and add `w`, then the new live-in pressure is
+  /// `liveInPressure(block) - liveInContribution(block, v) +
+  /// getPerThreadSizeInBytes(w.getType())`.
+  unsigned liveInContribution(Block *block, Value value) const;
+
   /// Returns the per-hardware-thread GRF budget in bytes for the given GRF
   /// mode (one hardware thread executes a whole subgroup/warp of lanes sharing
   /// one register file).
