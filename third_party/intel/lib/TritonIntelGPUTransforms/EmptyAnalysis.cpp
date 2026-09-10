@@ -1,3 +1,4 @@
+#include <Analysis/Utility.h>
 #include <triton/Dialect/Triton/IR/Utility.h>
 
 #include "intel/include/Analysis/AxisInfoExt.h"
@@ -169,8 +170,15 @@ public:
 
     ttg::LinearEncodingAttr newLayout =
         ttg::LinearEncodingAttr::get(ctx, newAoSLayout);
+    auto reinterpretedTensorType = tensorType.cloneWithEncoding(newLayout);
+    if (!ttgi::cvtIsSubGroupReinterpret(tensorType, reinterpretedTensorType)) {
+      // It could be false if there is zero base lane mapping in the load result
+      // layout. e.g: lane1 -> 0, 0, 0 The layout mapping is coalesced and loss
+      // lane 2 lane mapping information.
+      return;
+    }
     auto reinterpretedResult = ttgi::ReinterpretConvertLayoutOp::create(
-        builder, loc, tensorType.cloneWithEncoding(newLayout), op.getResult());
+        builder, loc, reinterpretedTensorType, op.getResult());
     auto convertLayoutPair = ttg::ConvertLayoutOp::create(
         builder, loc, tensorType, reinterpretedResult.getResult());
 
