@@ -1,6 +1,7 @@
 #include "intel/include/Target/SPIRV/SPIRVTranslation.h"
 
 #include "LLVMSPIRVLib.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
@@ -105,9 +106,12 @@ public:
   SmallVectorBuffer(llvm::SmallVectorImpl<char> &O) : OS(O) {}
 };
 
-static SPIRV::TranslatorOpts getSPIRVOpts() {
-  SPIRV::TranslatorOpts SPIRVOpts{SPIRV::VersionNumber::SPIRV_1_4};
-  static constexpr std::array<SPIRV::ExtensionID, 30> AllowedExtensions{
+/// Returns the list of SPIR-V extensions the translator is allowed to use.
+/// Ideally the driver would be queried for the extensions it supports, however
+/// no such query is available yet, therefore extensions that are not supported
+/// by all drivers are gated on the driver kind (e.g. LTS vs. rolling).
+static llvm::SmallVector<SPIRV::ExtensionID> getAllowedExtensions(bool isLTS) {
+  llvm::SmallVector<SPIRV::ExtensionID> AllowedExtensions{
       SPIRV::ExtensionID::SPV_EXT_shader_atomic_float_add,
       SPIRV::ExtensionID::SPV_EXT_shader_atomic_float16_add,
       SPIRV::ExtensionID::SPV_EXT_float8,
@@ -133,11 +137,22 @@ static SPIRV::TranslatorOpts getSPIRVOpts() {
       SPIRV::ExtensionID::SPV_INTEL_subgroups,
       SPIRV::ExtensionID::SPV_INTEL_tensor_float32_conversion,
       SPIRV::ExtensionID::SPV_INTEL_unstructured_loop_controls,
-      SPIRV::ExtensionID::SPV_INTEL_vector_compute,
       SPIRV::ExtensionID::SPV_KHR_bfloat16,
       SPIRV::ExtensionID::SPV_KHR_bit_instructions,
       SPIRV::ExtensionID::SPV_KHR_non_semantic_info,
       SPIRV::ExtensionID::SPV_KHR_shader_clock};
+
+  // Extensions supported by the rolling driver only.
+  if (!isLTS)
+    AllowedExtensions.push_back(SPIRV::ExtensionID::SPV_EXT_long_vector);
+  else
+    AllowedExtensions.push_back(SPIRV::ExtensionID::SPV_INTEL_vector_compute);
+
+  return AllowedExtensions;
+}
+
+static SPIRV::TranslatorOpts getSPIRVOpts(bool isLTS) {
+  SPIRV::TranslatorOpts SPIRVOpts{SPIRV::VersionNumber::SPIRV_1_4};
 
   SPIRVOpts.setMemToRegEnabled(true);
   SPIRVOpts.setPreserveOCLKernelArgTypeMetadataThroughString(true);
@@ -152,12 +167,12 @@ static SPIRV::TranslatorOpts getSPIRVOpts() {
     SPIRVOpts.setAllowExtraDIExpressionsEnabled(true);
   }
 
-  for (auto &Ext : AllowedExtensions)
+  for (SPIRV::ExtensionID Ext : getAllowedExtensions(isLTS))
     SPIRVOpts.setAllowedToUseExtension(Ext, true);
   return SPIRVOpts;
 }
 
-std::string translateLLVMIRToSPIRV(llvm::Module &module) {
+std::string translateLLVMIRToSPIRV(llvm::Module &module, bool isLTS) {
   llvm::SmallVector<char, 0> buffer;
 
   // verify and store llvm
@@ -177,7 +192,7 @@ std::string translateLLVMIRToSPIRV(llvm::Module &module) {
   std::ostream OS(&StreamBuf);
   std::string Err;
 
-  SPIRV::TranslatorOpts SPIRVOpts = getSPIRVOpts();
+  SPIRV::TranslatorOpts SPIRVOpts = getSPIRVOpts(isLTS);
 
 #if defined(LLVM_SPIRV_BACKEND_TARGET_PRESENT)
   int SpvTranslateMode = 0;

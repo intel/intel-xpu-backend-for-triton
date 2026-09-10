@@ -13,7 +13,7 @@ launch with the raw `ZE_RESULT_ERROR_INVALID_GROUP_SIZE_DIMENSION`.
 The fix drops the large-GRF entries from `make_zebin`'s retry list when
 `num_warps > 32`, so both automatic upgrade triggers are covered:
 
-  * the spill-based upgrade (`spill_size > MAX_REG_SPILL`), and
+  * the spill-based upgrade (`spill_slots_per_lane(...) > MAX_REG_SPILL_SLOTS_PER_LANE`), and
   * the build-failure retry (e.g. the LTS2 degenerate-zebin case),
 
 keeping the working — if slower, spilling — default-GRF binary in both cases.
