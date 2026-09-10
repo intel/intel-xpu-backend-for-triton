@@ -119,7 +119,7 @@ unsigned ReduceOpHelper::getScratchSizeInBytesOld() {
 
 bool ReduceOpHelper::isReduceWithinCTA() {
   // TODO: Support reduce across CTAS
-  // Layout optimization passes such as PlanCTAPass and
+  // Layout optimization passes such as AssignCGALayoutsPass and
   // RemoveLayoutConversionPass should avoid cross-CTA reduction
   return getCTASplitNum(srcEncoding)[axis] == 1;
 }
