@@ -84,6 +84,9 @@ void init_triton_intel_passes_ttgpuir(py::module_ &&m) {
   ADD_PASS_OPTION_WRAPPER_1(
       "add_to_llvmir", gpu::intel::createConvertTritonIntelGPUToLLVM, bool);
   ADD_PASS_WRAPPER_0("add_gen_to_llvm", createConvertTritonGENToLLVM);
+  ADD_PASS_OPTION_WRAPPER_1(
+      "add_split_large_n_dot_scaled",
+      gpu::intel::createTritonIntelGPUSplitLargeNDotScaled, int);
   ADD_PASS_WRAPPER_0("add_accelerate_matmul",
                      gpu::intel::createTritonIntelGPUAccelerateMatmul);
   ADD_PASS_WRAPPER_0("add_fold_fp_to_fp",
