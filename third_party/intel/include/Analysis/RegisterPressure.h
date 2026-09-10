@@ -64,10 +64,10 @@ public:
   /// consumers need not build their own liveness analysis.
   bool isLiveIn(Block *block, Value value) const;
 
-  /// Returns true if `value` is not live after `op`, i.e. nothing executed after
-  /// `op` reads it. Convenience accessor over the underlying liveness analysis,
-  /// for callers asking whether moving a use of `value` frees a register: it
-  /// only does if no *later* use keeps `value` alive anyway.
+  /// Returns true if `value` is not live after `op`, i.e. nothing executed
+  /// after `op` reads it. Convenience accessor over the underlying liveness
+  /// analysis, for callers asking whether moving a use of `value` frees a
+  /// register: it only does if no *later* use keeps `value` alive anyway.
   bool isDeadAfter(Value value, Operation *op) const;
 
   /// Returns the number of bytes `value` currently contributes to
