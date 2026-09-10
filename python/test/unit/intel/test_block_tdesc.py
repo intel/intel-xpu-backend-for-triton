@@ -6,14 +6,6 @@ import triton
 from triton._internal_testing import is_xpu
 
 
-@pytest.fixture(autouse=True, params=[False, True], ids=["branch-io", "predicated-io"])
-def predicated_io(request, monkeypatch):
-    if request.param:
-        monkeypatch.setenv("TRITON_INTEL_PREDICATED_LOAD", "1")
-        monkeypatch.setenv("TRITON_INTEL_PREDICATED_STORE", "1")
-    yield
-
-
 @pytest.mark.parametrize("M, N",
                          [[256, 64], [256, 32], [128, 32], [128, 16], [64, 64], [64, 32], [32, 32], [16, 64], [16, 16]])
 @pytest.mark.parametrize("dtype_str", ["float32", "float16", "int8"])

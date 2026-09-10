@@ -9,8 +9,10 @@ class Module;
 
 namespace triton {
 
-// Translate TritonGPU IR to SPIRV code.
-std::string translateLLVMIRToSPIRV(llvm::Module &module);
+// Translate TritonGPU IR to SPIRV code. \p isLTS indicates whether the target
+// driver is a LTS driver, which restricts the set of SPIR-V extensions the
+// translator is allowed to use.
+std::string translateLLVMIRToSPIRV(llvm::Module &module, bool isLTS);
 
 } // namespace triton
 

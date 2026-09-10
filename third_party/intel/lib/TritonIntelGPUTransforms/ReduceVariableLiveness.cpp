@@ -1,4 +1,3 @@
-#include "mlir/Analysis/Liveness.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -7,7 +6,7 @@
 #include "Dialect/TritonIntelGPU/IR/Attributes.h"
 #include "Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "intel/include/Analysis/DPAS.h"
-#include "intel/include/Analysis/Liveness.h"
+#include "intel/include/Analysis/RegisterPressure.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Passes.h"
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
@@ -35,6 +34,17 @@ using TensorValue = TypedValue<RankedTensorType>;
 
 namespace {
 
+// Live-in register-pressure floor (in bytes, summed across all lanes of the
+// workgroup) below which shortening a load's live range is not worthwhile: the
+// loop body is not under enough pressure to benefit.
+//
+// `RegisterPressureAnalysis` reports *per-thread* bytes, so the gate scales the
+// reported value back up by the workgroup's thread count before comparing. That
+// keeps this threshold in the same unit it has always had, and therefore keeps
+// the gate firing on exactly the same loops at every warp count. Expressing the
+// floor per-thread instead is not equivalent: a fixed per-thread number is a
+// different full-tensor bound at every thread count, and the attention kernels
+// that this transform exists to help sit right at the boundary.
 constexpr uint32_t TOTAL_BLOCK_SIZE_THRESHOLD_IN_BYTES = 32768;
 constexpr uint32_t LARGE_TENSOR_MINOR_SHAPE_THRESHOLD = 128;
 constexpr uint32_t LARGE_TENSOR_MAJOR_SHAPE_THRESHOLD = 128;
@@ -55,25 +65,10 @@ unsigned getSizeInBytes(RankedTensorType &tensorType) {
   return totalNumElement * (elTypeBitWidth / 8);
 }
 
-/// Return the size in bytes of all the variables that have been identified as
-/// live-in variable for the block.
-unsigned getBlockLiveInSizeInBytes(const LivenessBlockInfo *livenessBlockInfo) {
-  unsigned blockInSize = 0;
-  for (Value liveVal : livenessBlockInfo->in()) {
-    Type liveValTy = liveVal.getType();
-    if (TensorValue tensorV = dyn_cast<TensorValue>(liveVal)) {
-      auto tensorType = dyn_cast<RankedTensorType>(tensorV.getType());
-      blockInSize += getSizeInBytes(tensorType);
-    } else if (liveValTy.isIntOrFloat()) {
-      blockInSize += liveValTy.getIntOrFloatBitWidth() / 8;
-    }
-  }
-  return blockInSize;
-}
-
 /// Return true if the lifespan of the \p v value is considered long.
-bool isLongLifeSpanVariable(Value v, const LivenessBlockInfo *livenessBlockInfo,
-                            unsigned LiveInSizeInBytes) {
+bool isLongLifeSpanVariable(
+    Value v, const ttg::intel::RegisterPressureAnalysis &analysis,
+    Block *dotBlock) {
   // The variable is considered as a long life span elected for being moved if:
   // the live-in variables of the forOp consist in a large amount of bytes and
   // the variable defined by `v` is a large tensor (with large amount of element
@@ -85,13 +80,19 @@ bool isLongLifeSpanVariable(Value v, const LivenessBlockInfo *livenessBlockInfo,
 
   auto tensorType = cast<RankedTensorType>(tensorV.getType());
   auto tensorOrder = ttg::getOrder(tensorType);
+  // Scale the per-thread pressure reported by the analysis back to bytes summed
+  // across the workgroup, the unit TOTAL_BLOCK_SIZE_THRESHOLD_IN_BYTES is in.
+  auto mod = dotBlock->getParentOp()->getParentOfType<ModuleOp>();
+  unsigned numThreads = ttg::lookupNumWarps(dotBlock->getParentOp()) *
+                        ttg::TritonGPUDialect::getThreadsPerWarp(mod);
+  unsigned liveInSizeInBytes = analysis.liveInPressure(dotBlock) * numThreads;
   return (
       (tensorOrder.size() == 2) &&
       (getSizeInBytes(tensorType) >= LARGE_TENSOR_SIZE_THRESHOLD_IN_BYTES) &&
       (tensorType.getShape()[tensorOrder[1]] >=
        LARGE_TENSOR_MINOR_SHAPE_THRESHOLD) &&
-      (LiveInSizeInBytes > TOTAL_BLOCK_SIZE_THRESHOLD_IN_BYTES) &&
-      livenessBlockInfo->isLiveIn(v));
+      (liveInSizeInBytes > TOTAL_BLOCK_SIZE_THRESHOLD_IN_BYTES) &&
+      analysis.isLiveIn(dotBlock, v));
 }
 
 /// Return true if the \p loadOp is suitable to be moved.
@@ -147,7 +148,7 @@ void createPrefetchOp(tt::DescriptorLoadOp loadOp) {
 /// operands.
 /// Returns `true` if at least one operand has been moved.
 bool optimizeDotOperands(scf::ForOp forOp, SmallVector<Value> &prefetchedValue,
-                         Liveness &livenessAnalysis) {
+                         ttg::intel::RegisterPressureAnalysis &analysis) {
   Block *loop = forOp.getBody();
   bool opMoved = false;
 
@@ -237,14 +238,12 @@ bool optimizeDotOperands(scf::ForOp forOp, SmallVector<Value> &prefetchedValue,
     tt::DescriptorLoadOp loadOp = getLoad(operand);
     if (!loadOp)
       return;
-    auto livenessBlockInfo = livenessAnalysis.getLiveness(dot->getBlock());
-    unsigned liveInSizeInBytes = getBlockLiveInSizeInBytes(livenessBlockInfo);
+    Block *dotBlock = dot->getBlock();
     // Check liveness on the load's result, not the dot operand, because the
     // dot operand may be a ConvertLayoutOp result (possibly inside the loop)
     // while the load result is the truly long-lived value defined outside.
     Value loadResult = loadOp->getResult(0);
-    if (!isLongLifeSpanVariable(loadResult, livenessBlockInfo,
-                                liveInSizeInBytes))
+    if (!isLongLifeSpanVariable(loadResult, analysis, dotBlock))
       return;
     auto tensorType = cast<RankedTensorType>(operand.getType());
     Type elTy = tensorType.getElementType();
@@ -291,15 +290,15 @@ public:
     }
 
     Operation *rootOperation = getOperation();
-    Liveness livenessAnalysis(rootOperation);
+    ttg::intel::RegisterPressureAnalysis analysis(rootOperation);
     // TODO: extend the pass to handle `while` loops.
     rootOperation->walk([&](scf::ForOp forOp) {
-      if (optimizeDotOperands(forOp, prefetchedValue, livenessAnalysis)) {
-        // The liveness analysis must be re-performed before the processing of
-        // each "for loop" given that the liveness of variables may have changed
-        // as a result of the code, and specifically `LoadOps`, being modified
-        // by the pass.
-        livenessAnalysis = Liveness(rootOperation);
+      if (optimizeDotOperands(forOp, prefetchedValue, analysis)) {
+        // The register pressure analysis must be re-performed before the
+        // processing of each "for loop" given that the liveness of variables
+        // may have changed as a result of the code, and specifically `LoadOps`,
+        // being modified by the pass.
+        analysis = ttg::intel::RegisterPressureAnalysis(rootOperation);
         return;
       }
     });

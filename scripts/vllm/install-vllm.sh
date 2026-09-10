@@ -287,6 +287,58 @@ if [[ "$clean" == true ]]; then
   python "$SCRIPTS_DIR/vllm/vllm_xpu_patch.py" "$VLLM_PROJ"
 fi
 
+# Try downloading and installing vLLM XPU kernels wheel from a specific run.
+# Returns: 0 = installed successfully, 1 = wrong commit, 2 = no wheel found
+try_install_wheel_from_run() {
+  local run_id="$1"
+  local wheel_pattern="$2"
+  local temp_dir="$3"
+
+  echo "*** Trying run $run_id... ***"
+  if ! gh run download "$run_id" \
+      --repo "$triton_repo" \
+      --pattern "$wheel_pattern" \
+      --dir "$temp_dir"; then
+    return 2
+  fi
+
+  local downloaded_wheel="$(find "$temp_dir" -name 'vllm_xpu_kernels-*.whl' -print -quit)"
+  if [[ -z "$downloaded_wheel" ]]; then
+    return 2
+  fi
+
+  local wheel_commit="$(basename "$downloaded_wheel")"
+  wheel_commit="${wheel_commit#*+g}"
+  wheel_commit="${wheel_commit%%.*}"
+
+  if [[ "$vllm_xpu_kernels_pinned_commit" != "$wheel_commit"* ]]; then
+    echo "ERROR: vLLM XPU kernels nightly wheel commit ($wheel_commit) does not match pinned commit ($vllm_xpu_kernels_pinned_commit). Use --source to build from source." >&2
+    return 1
+  fi
+
+  echo "*** Installing vLLM XPU kernels from nightly builds. ***"
+  pip install "$downloaded_wheel"
+  echo "*** Installing vLLM from source. ***"
+  install_vllm
+  show_installs
+  return 0
+}
+
+# Try a run id.
+# Exits the script on install (0) or commit-mismatch (1).
+# Returns to caller when the run_id is null or the run has no wheel.
+try_run() {
+  [[ "$1" == "null" ]] && return 0
+
+  local status
+  rm -rf "$temp_dir"/*
+  try_install_wheel_from_run "$1" "$wheel_pattern" "$temp_dir" && exit 0 || status=$?
+
+  [[ $status -eq 1 ]] && exit 1
+
+  return 0
+}
+
 if [[ "$build_vllm" == false ]]; then
   if ! command -v gh &>/dev/null; then
     echo "ERROR: gh is not installed." >&2
@@ -299,36 +351,20 @@ if [[ "$build_vllm" == false ]]; then
   fi
 
   echo "*** Downloading nightly builds. ***"
-  run_id="$(gh run list --workflow nightly-wheels.yml --branch "$triton_repo_branch" -R "$triton_repo" --json databaseId,conclusion | jq -r '[.[] | select(.conclusion=="success")][0].databaseId')"
+  wheel_pattern="wheels-vllm-py$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")-*"
   temp_dir="$(mktemp -d)"
   trap 'rm -rf "$temp_dir"' EXIT
-  wheel_pattern="wheels-vllm-py$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")-*"
-  gh run download "$run_id" \
-    --repo "$triton_repo" \
-    --pattern "$wheel_pattern" \
-    --dir "$temp_dir"
 
-  downloaded_wheel="$(find "$temp_dir" -name 'vllm_xpu_kernels-*.whl' -print -quit)"
-  if [[ -n "$downloaded_wheel" ]]; then
-    wheel_commit="$(basename "$downloaded_wheel")"
-    wheel_commit="${wheel_commit#*+g}"
-    wheel_commit="${wheel_commit%%.*}"
+  # Try latest completed run first (any conclusion)
+  latest_run="$(gh run list --workflow nightly-wheels.yml --branch "$triton_repo_branch" -R "$triton_repo" --status completed --json databaseId --limit 1 | jq -r '.[0].databaseId')"
+  try_run "$latest_run"
 
-    if [[ "$vllm_xpu_kernels_pinned_commit" == "$wheel_commit"* ]]; then
-      echo "*** Installing vLLM XPU kernels from nightly builds. ***"
-      pip install "$downloaded_wheel"
-      echo "*** Installing vLLM from source. ***"
-      install_vllm
-      show_installs
+  # Latest run didn't have a wheel for this Python version, try latest successful run
+  echo "*** Latest run has no wheel for this Python version, trying latest successful run... ***"
+  latest_success_run="$(gh run list --workflow nightly-wheels.yml --branch "$triton_repo_branch" -R "$triton_repo" --json databaseId,conclusion --limit 20 | jq -r '[.[] | select(.conclusion=="success")][0].databaseId')"
+  [[ "$latest_success_run" != "$latest_run" ]] && try_run "$latest_success_run"
 
-      exit 0
-    fi
-
-    echo "ERROR: vLLM XPU kernels nightly wheel commit ($wheel_commit) does not match pinned commit ($vllm_xpu_kernels_pinned_commit). Use --source to build from source." >&2
-  else
-    echo "ERROR: No nightly build vllm-xpu-kernels wheel found. Use --source to build from source." >&2
-  fi
-
+  echo "ERROR: No nightly build vllm-xpu-kernels wheel found. Use --source to build from source." >&2
   exit 1
 fi
 

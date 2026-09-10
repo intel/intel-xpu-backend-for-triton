@@ -350,7 +350,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttig.su
     %10 = arith.cmpi "slt", %4, %9 : tensor<64xi32, #blocked>
     // load op has a vector width = 1 due to the %mask's alignment
     // PREDICATED: llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi({{.*}}) {{.*}} : (!llvm.ptr<1>, i1, i32) -> i32
-    // NO_PREDICATED: llvm.load %{{.*}} {alignment = 4 : i64} : !llvm.ptr<1> -> i32
+    // NO-PREDICATED: llvm.load %{{.*}} {alignment = 4 : i64} : !llvm.ptr<1> -> i32
     %11 = tt.load %6, %10 : tensor<64x!tt.ptr<f32>, #blocked>
     %12 = tt.load %8, %10 : tensor<64x!tt.ptr<f32>, #blocked>
     %13 = arith.addf %11, %12 : tensor<64xf32, #blocked>

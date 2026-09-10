@@ -17,9 +17,18 @@ Each hardware thread has a private register file. **Do not guess** GRF register 
 
 ### Auto-GRF Mode Selection (`grf_mode='default'`)
 1. Compile with default (small) GRF
-2. Extract spill size from ZEBIN `.ze_info` section
-3. If `spill_size > 1000` bytes → recompile with 256-GRF mode
-4. Threshold of 1000 is empirical, aligned between `compiler.py` and `driver.c`
+2. Extract spill size from ZEBIN `.ze_info` section (AOT) or query Level Zero
+   `spillMemSize` (JIT) — both are **bytes per hardware thread**
+3. Normalize to **dword-equivalents per lane** (`bytes / (4 × sub-group size)`),
+   the unit CUDA/HIP report `n_spills` in and that external consumers threshold on
+4. If that exceeds `16` → recompile with 256-GRF mode
+
+The threshold is `16` dword-equivalents/lane, aligned between
+`MAX_REG_SPILL_SLOTS_PER_LANE` in `compiler.py` and `kMaxSpillSlotsPerLane` in
+`driver.c`. It is PyTorch inductor's default `spill_threshold` for non-HIP, so a
+spill at or below it cannot change inductor's autotuning verdict and a rebuild
+would only cost compile time. Compare in the normalized unit, not in bytes —
+inductor tests the truncated per-lane count, so a byte threshold over-triggers.
 
 ### Constraints
 - **256-GRF requires `num_warps ≤ 32`** (because halved thread occupancy limits available hardware threads)
