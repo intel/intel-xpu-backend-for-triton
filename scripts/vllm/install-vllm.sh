@@ -206,10 +206,10 @@ Usage: $0 [options]
 
 vLLM is built and installed from source as an editable install.
 vLLM XPU kernels are installed via a prebuilt wheel matching the pinned commit
-from the $DEFAULT_BRANCH branch nightly wheels. The latest completed workflow
-run, regardless of its outcome, and the latest successful workflow run are
-checked for a matching wheel. If no such wheel is available, the script defaults
-to building vLLM XPU kernels from source.
+from the $DEFAULT_BRANCH branch nightly wheels. The latest completed run,
+regardless of its outcome, and the latest successful run are checked for a
+matching wheel. If no such wheel is available, the script defaults to building
+vLLM XPU kernels from source.
 
 Options:
   --source                       Build vLLM XPU kernels from source using pinned commit.
@@ -331,7 +331,7 @@ try_install_wheel_from_run() {
   return 0
 }
 
-# Install a run's vLLM XPU kernels wheel, exiting on success; returns if it has no matching wheel.
+# Install a run's vLLM XPU kernels wheel, exiting on success and returning if it has no wheel matching the pattern.
 try_run() {
   [[ "$1" == "null" ]] && return 0
 
