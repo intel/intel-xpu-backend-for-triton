@@ -87,7 +87,7 @@ index dff0b21c6..2a12c3112 100644
      right = num_seqs
      while left < right:
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index b0231dd0c..9e9132194 100644
+index b0231dd0c..3817c3f4e 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -7,8 +7,6 @@
@@ -107,7 +107,7 @@ index b0231dd0c..9e9132194 100644
      init_softmax_M,
      load_qq_bias_tile,
      resolve_seq_and_query_len,
-@@ -175,6 +172,242 @@ def _store_output_td(
+@@ -175,6 +172,257 @@ def _store_output_td(
      )
  
  
@@ -134,20 +134,31 @@ index b0231dd0c..9e9132194 100644
 +
 +BF16_ORDINARY_LAUNCH_CONFIGS = {
 +    (16, 16, 2, 2, "default"),
++    (16, 16, 2, 3, "default"),
 +    (16, 16, 4, 2, "256"),
 +    (16, 16, 4, 2, "default"),
++    (16, 16, 4, 3, "default"),
 +    (16, 16, 8, 2, "256"),
 +    (16, 16, 8, 2, "default"),
 +    (16, 16, 8, 3, "default"),
 +    (16, 32, 2, 2, "default"),
 +    (16, 32, 4, 2, "256"),
 +    (16, 32, 4, 2, "default"),
++    (16, 32, 8, 2, "256"),
++    (16, 32, 8, 3, "256"),
++    (16, 32, 8, 3, "default"),
++    (32, 16, 4, 2, "256"),
++    (32, 16, 4, 3, "default"),
 +    (32, 16, 8, 2, "256"),
++    (32, 16, 8, 2, "default"),
++    (32, 16, 8, 3, "256"),
++    (32, 16, 8, 3, "default"),
 +    (64, 16, 4, 2, "256"),
 +    (64, 16, 4, 2, "default"),
 +    (64, 16, 4, 3, "default"),
 +    (64, 16, 8, 2, "256"),
 +    (64, 16, 8, 2, "default"),
++    (64, 16, 8, 3, "256"),
 +    (64, 32, 8, 2, "256"),
 +    (64, 32, 8, 2, "default"),
 +    (64, 32, 8, 3, "256"),
@@ -158,8 +169,12 @@ index b0231dd0c..9e9132194 100644
 +FP8_TILE32_LAUNCH_CONFIGS = {
 +    (16, 4, 2, "default"),
 +    (16, 4, 2, "256"),
++    (16, 8, 2, "default"),
++    (16, 8, 3, "default"),
 +    (64, 8, 2, "default"),
 +    (64, 8, 2, "256"),
++    (64, 8, 3, "default"),
++    (64, 8, 3, "256"),
 +}
 +
 +
@@ -350,7 +365,7 @@ index b0231dd0c..9e9132194 100644
  @triton.jit
  def kernel_unified_attention(
      # Output destination for the 2D path.  In 3D mode per-segment partials
-@@ -285,6 +518,12 @@ def kernel_unified_attention(
+@@ -285,6 +533,12 @@ def kernel_unified_attention(
      USE_TD: tl.constexpr = False,
      USE_TD_QO: tl.constexpr = False,
      Q_IS_FP8: tl.constexpr = False,
@@ -363,7 +378,7 @@ index b0231dd0c..9e9132194 100644
      # Gemma4: clamp mm_prefix bidirectional ranges by the sliding window
      # instead of letting them override it. Default False preserves the
      # original (causal AND SW) OR mm_prefix behavior for all other models.
-@@ -319,9 +558,30 @@ def kernel_unified_attention(
+@@ -319,9 +573,30 @@ def kernel_unified_attention(
      if q_block_local_idx * BLOCK_Q >= cur_batch_query_len:
          return
  
@@ -394,7 +409,7 @@ index b0231dd0c..9e9132194 100644
              return
      else:
          tiles_per_segment = 0
-@@ -332,13 +592,8 @@ def kernel_unified_attention(
+@@ -332,13 +607,8 @@ def kernel_unified_attention(
          BLOCK_Q, cur_batch_query_len - q_block_local_idx * BLOCK_Q
      )
  
@@ -408,7 +423,7 @@ index b0231dd0c..9e9132194 100644
      query_offset = (
          query_offset_0[:, None] * query_stride_0
          + query_offset_1[:, None] * query_stride_1
-@@ -346,8 +601,6 @@ def kernel_unified_attention(
+@@ -346,8 +616,6 @@ def kernel_unified_attention(
      )
  
      dim_mask = tl.where(offs_d < HEAD_SIZE, 1, 0).to(tl.int1)
@@ -417,7 +432,7 @@ index b0231dd0c..9e9132194 100644
  
      # Q : (BLOCK_M, HEAD_SIZE_PADDED)
      if USE_TD_QO:
-@@ -539,12 +792,12 @@ def kernel_unified_attention(
+@@ -539,12 +807,12 @@ def kernel_unified_attention(
  
          # S : (BLOCK_M, TILE_SIZE)
          S = tl.zeros(shape=(BLOCK_M, TILE_SIZE), dtype=tl.float32)
@@ -434,7 +449,7 @@ index b0231dd0c..9e9132194 100644
  
          if USE_SOFTCAP:
              S = apply_softcap(S, softcap)
-@@ -566,27 +819,14 @@ def kernel_unified_attention(
+@@ -566,27 +834,14 @@ def kernel_unified_attention(
          M, L, P, alpha = softmax_step(S, M, L)
          acc = acc * alpha[:, None]
  
@@ -466,7 +481,7 @@ index b0231dd0c..9e9132194 100644
  
      # ---- Epilogue ---------------------------------------------------------
      if IS_3D:
-@@ -700,11 +940,9 @@ def reduce_segments(
+@@ -700,11 +955,9 @@ def reduce_segments(
      output_stride_0: tl.int64,  # int
      output_stride_1: tl.int64,  # int, should be equal to head_size
      block_table_stride: tl.int64,  # int
@@ -478,7 +493,7 @@ index b0231dd0c..9e9132194 100644
      NUM_SEGMENTS_PER_SEQ: tl.constexpr,  # int
      USE_FP8: tl.constexpr,  # bool
      FP8_MIN: tl.constexpr = float8_info.min,
-@@ -713,32 +951,19 @@ def reduce_segments(
+@@ -713,32 +966,19 @@ def reduce_segments(
      query_token_idx = tl.program_id(0)
      query_head_idx = tl.program_id(1)
  
@@ -516,7 +531,7 @@ index b0231dd0c..9e9132194 100644
  
      # load and rescale segment exp sums
      segm_expsum = tl.load(segm_expsum_ptr + segm_offset, mask=segm_mask, other=0.0)
-@@ -776,33 +1001,6 @@ def reduce_segments(
+@@ -776,33 +1016,6 @@ def reduce_segments(
      tl.store(output_ptr + output_offset, acc, mask=dim_mask)
  
  
@@ -550,7 +565,7 @@ index b0231dd0c..9e9132194 100644
  
  def unified_attention(
      q,
-@@ -934,41 +1132,15 @@ def unified_attention(
+@@ -934,41 +1147,15 @@ def unified_attention(
      num_queries_per_kv = num_query_heads // num_kv_heads
      head_size = q.shape[2]
  
@@ -596,7 +611,7 @@ index b0231dd0c..9e9132194 100644
  
      sliding_window_val = 1 + window_size[0] if window_size[0] >= 0 else 0
  
-@@ -980,25 +1152,15 @@ def unified_attention(
+@@ -980,25 +1167,15 @@ def unified_attention(
      elif sliding_window_val <= 0:
          chunk_lookback = -1
  
@@ -631,7 +646,7 @@ index b0231dd0c..9e9132194 100644
  
      # Tensor descriptors for Q load / output store require every element
      # of ``block_shape`` to be a power of 2.  ``num_queries_per_kv`` is
-@@ -1041,18 +1203,11 @@ def unified_attention(
+@@ -1041,18 +1218,11 @@ def unified_attention(
      # Launch the 2D kernel if
      # 1. No intermediate tiled softmax buffers for the 3D kernel have been allocated, or
      # 2. The batch includes at least one prefill request, or
@@ -655,7 +670,7 @@ index b0231dd0c..9e9132194 100644
  
      # The kernel signature is the same for 2D and 3D — only the launch
      # grid + a handful of constexpr toggles differ.  Per-token-head scale
-@@ -1073,24 +1228,56 @@ def unified_attention(
+@@ -1073,24 +1243,56 @@ def unified_attention(
          v_scale_ptr = None
      # 3D needs real segm tensors; 2D never touches them.  Pass ``None`` in
      # 2D mode so Triton can skip materialising these pointer arguments.
@@ -723,7 +738,7 @@ index b0231dd0c..9e9132194 100644
  
      kernel_unified_attention[grid](
          output_ptr=out,
-@@ -1122,7 +1309,6 @@ def unified_attention(
+@@ -1122,7 +1324,6 @@ def unified_attention(
          output_stride_1=out.stride(1),
          qq_bias_stride_0=qq_bias.stride(0) if use_qq_bias else 0,
          BLOCK_SIZE=block_size,
@@ -731,7 +746,7 @@ index b0231dd0c..9e9132194 100644
          HEAD_SIZE=head_size,
          HEAD_SIZE_PADDED=head_size_padded,
          USE_ALIBI_SLOPES=use_alibi_slopes,
-@@ -1155,12 +1341,15 @@ def unified_attention(
+@@ -1155,12 +1356,15 @@ def unified_attention(
          stride_vs_slot=vs_slot,
          stride_vs_head=vs_head,
          query_start_len_ptr=cu_seqlens_q,
@@ -749,7 +764,7 @@ index b0231dd0c..9e9132194 100644
          KV_QUANT_MODE=kv_quant_mode,
          Q_IS_FP8=(q.dtype == current_platform.fp8_dtype()),
          CHUNK_LOOKBACK=chunk_lookback,
-@@ -1168,7 +1357,6 @@ def unified_attention(
+@@ -1168,7 +1372,6 @@ def unified_attention(
          USE_TD=use_td,
          USE_TD_QO=use_td_qo,
          MM_PREFIX_CLAMP_SW=mm_prefix_clamp_sliding_window,
@@ -757,7 +772,7 @@ index b0231dd0c..9e9132194 100644
      )
  
      if use_3d:
-@@ -1184,11 +1372,9 @@ def unified_attention(
+@@ -1184,11 +1387,9 @@ def unified_attention(
              output_stride_0=out.stride(0),
              output_stride_1=out.stride(1),
              block_table_stride=block_table.stride(0),
