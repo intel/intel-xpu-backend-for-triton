@@ -110,7 +110,8 @@ public:
     Value ptr = op.getPtr();
     unsigned vec =
         getVectorSize(hasSupport256bLoadStore(op), ptr, axisInfoAnalysis);
-    // llvm::outs() << "johnlu op:" << op << "\n";
+    if (vec == 1)
+      return;
     Type valueElemTy = getElementTypeOrSelf(op.getType());
     auto tensorType = cast<RankedTensorType>(op.getType());
     Attribute encoding = tensorType.getEncoding();
