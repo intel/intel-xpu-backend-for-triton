@@ -2445,6 +2445,14 @@ private:
     Type unpackedType;
   };
 
+  struct GatherStringAttrs {
+    StringAttr kRegister;
+    StringAttr kLane;
+    StringAttr kPtrs;
+    StringAttr kOffIdx;
+    StringAttr kDim1;
+  };
+
   static Value
   getNamedOffset(const SmallVector<std::pair<StringAttr, Value>> &offsets,
                  StringAttr dimName) {
@@ -2549,27 +2557,24 @@ private:
   }
 
   Value generatePerLaneLoad(Location loc, ConversionPatternRewriter &rewriter,
-                            const GatherLoadCommon &common, Value laneId,
+                            const GatherLoadCommon &common,
+                            const GatherStringAttrs &attrs, Value laneId,
                             unsigned registerIdx,
                             const LinearLayout &offMapping) const {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    MLIRContext *ctx = rewriter.getContext();
-    StringAttr kRegister = StringAttr::get(ctx, "register");
-    StringAttr kLane = StringAttr::get(ctx, "lane");
-    StringAttr kOffIdx = StringAttr::get(ctx, "offx_idx");
-    StringAttr kDim1 = StringAttr::get(ctx, "dim1");
 
-    auto offsetsForX = offMapping.apply({{kRegister, registerIdx}, {kLane, 0}});
+    auto offsetsForX =
+        offMapping.apply({{attrs.kRegister, registerIdx}, {attrs.kLane, 0}});
     auto offsetXIdx = offsetsForX[0];
-    assert(offsetXIdx.first == kOffIdx);
+    assert(offsetXIdx.first == attrs.kOffIdx);
 
     auto offsetsForY = applyLinearLayout(
         loc, rewriter, offMapping,
-        {{kRegister, b.i32_val(registerIdx)}, {kLane, laneId}});
+        {{attrs.kRegister, b.i32_val(registerIdx)}, {attrs.kLane, laneId}});
 
     Value offsetX = common.offsetsX[offsetXIdx.second];
     Value laneOffsetY =
-        b.add(common.basicOffsetY, getNamedOffset(offsetsForY, kDim1));
+        b.add(common.basicOffsetY, getNamedOffset(offsetsForY, attrs.kDim1));
     GatherAddressAndPred gatherAddr =
         buildGatherAddressAndPred(b, rewriter.getContext(), common.valueElemTy,
                                   common.desc, offsetX, laneOffsetY);
@@ -2586,29 +2591,22 @@ private:
     return *endBlock.args_begin();
   }
 
-  Value generateSubgroupGatherLoad(Location loc,
-                                   ConversionPatternRewriter &rewriter,
-                                   const GatherLoadCommon &common,
-                                   unsigned registerIdx,
-                                   const LinearLayout &offMapping,
-                                   unsigned numPtrToOffX,
-                                   unsigned numPtrToOffY) const {
+  Value generateSubgroupGatherLoad(
+      Location loc, ConversionPatternRewriter &rewriter,
+      const GatherLoadCommon &common, const GatherStringAttrs &attrs,
+      unsigned registerIdx, const LinearLayout &offMapping,
+      unsigned numPtrToOffX, unsigned numPtrToOffY) const {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    MLIRContext *ctx = rewriter.getContext();
     Type indexTy = getTypeConverter()->getIndexType();
-    StringAttr kRegister = StringAttr::get(ctx, "register");
-    StringAttr kPtrs = StringAttr::get(ctx, "ptrs");
-    StringAttr kOffIdx = StringAttr::get(ctx, "offx_idx");
-    StringAttr kDim1 = StringAttr::get(ctx, "dim1");
 
     SmallVector<Value> addrs, predicts;
     // Compute the addresses one by one.
     for (size_t i = 0; i < numPtrToOffX; ++i) {
       unsigned ptrIdx = i * numPtrToOffY;
-      auto offsetsForX =
-          offMapping.apply({{kRegister, registerIdx}, {kPtrs, ptrIdx}});
+      auto offsetsForX = offMapping.apply(
+          {{attrs.kRegister, registerIdx}, {attrs.kPtrs, ptrIdx}});
       auto offsetXIdx = offsetsForX[0];
-      assert(offsetXIdx.first == kOffIdx);
+      assert(offsetXIdx.first == attrs.kOffIdx);
 
       // Note: here assume the offsetX is uniform value which is deduced
       // from slice layout of the result layout.
@@ -2618,10 +2616,10 @@ private:
 
       for (size_t j = 0; j < numPtrToOffY; ++j) {
         ptrIdx = i * numPtrToOffY + j;
-        auto offsetsForY =
-            offMapping.apply({{kRegister, registerIdx}, {kPtrs, ptrIdx}});
+        auto offsetsForY = offMapping.apply(
+            {{attrs.kRegister, registerIdx}, {attrs.kPtrs, ptrIdx}});
         auto linearOffsetY = offsetsForY[1];
-        assert(linearOffsetY.first == kDim1);
+        assert(linearOffsetY.first == attrs.kDim1);
         Value ptrOffsetY =
             b.add(common.basicOffsetY, b.i32_val(linearOffsetY.second));
         // The address and pred are uniform value.
@@ -2680,6 +2678,7 @@ private:
     StringAttr kPtrs = S("ptrs");
     StringAttr kOffIdx = S("offx_idx");
     StringAttr kDim1 = S("dim1");
+    GatherStringAttrs gatherAttrs{kRegister, kLane, kPtrs, kOffIdx, kDim1};
 
     Type valueElemTy = typeConverter->convertType(resultType.getElementType());
     unsigned numElems = getTotalElemsPerThread(resultType);
@@ -2735,12 +2734,12 @@ private:
 
       Value ret;
       if (layoutConfig.numPtrsPerLoad == threadsPerWarp) {
-        ret = generatePerLaneLoad(loc, rewriter, common, laneId, registerIdx,
-                                  layoutConfig.offMapping);
+        ret = generatePerLaneLoad(loc, rewriter, common, gatherAttrs, laneId,
+                                  registerIdx, layoutConfig.offMapping);
       } else {
-        ret = generateSubgroupGatherLoad(loc, rewriter, common, registerIdx,
-                                         layoutConfig.offMapping, numPtrToOffX,
-                                         numPtrToOffY);
+        ret = generateSubgroupGatherLoad(loc, rewriter, common, gatherAttrs,
+                                         registerIdx, layoutConfig.offMapping,
+                                         numPtrToOffX, numPtrToOffY);
       }
 
       unpackBlockLoadResult(ret, loadedVals, elemIdx, layoutConfig.regMapping,
