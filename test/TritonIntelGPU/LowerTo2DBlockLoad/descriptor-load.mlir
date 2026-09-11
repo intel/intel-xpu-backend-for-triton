@@ -78,6 +78,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 // COM: The result layout also spans the batch dim, so the op must additionally
 // COM: carry that dim's real stride in `batch_strides` — the surface params
 // COM: describe a single tile plane and cannot express it (issue #7882).
+// COM: Because the descriptor rank is > 2 the op also carries one `batch_offsets`
+// COM: and one `batch_shapes` entry per descriptor batch dim, to bound-check the
+// COM: batch axis (issue #7922).
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4, 2], repCluster = [1, 1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
@@ -86,13 +89,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %c1_i64 = arith.constant 1 : i64
     %c0_i32 = arith.constant 0 : i32
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2, %arg3], [%arg4, %arg5, %c1_i64] : <f16>, <2x64x32xf16>
-    // CHECK: ttig.extract_desc
+    // CHECK: %[[SHAPE0:.*]] = ttig.extract_desc %{{.*}}[0] : <2x64x32xf16> -> i64
     // CHECK: %[[STRIDE0:.*]] = ttig.extract_desc %{{.*}}[3] : <2x64x32xf16> -> i64
     // CHECK: %[[BATCH_EXT:.*]] = arith.extsi %arg6 : i32 to i64
     // CHECK: %[[BATCH_OFF:.*]] = arith.muli %[[BATCH_EXT]], %[[STRIDE0]]
     // CHECK: %[[ADJ_PTR:.*]] = tt.addptr %{{.*}}, %[[BATCH_OFF]]
+    // CHECK: %[[SHAPE0_I32:.*]] = arith.trunci %[[SHAPE0]] : i64 to i32
     // CHECK: ttig.2d_block_load %[[ADJ_PTR]]
     // CHECK-SAME: batch_strides{{\[}}%[[STRIDE0]]{{\]}}
+    // CHECK-SAME: batch_offsets{{\[}}%arg6{{\]}}
+    // CHECK-SAME: batch_shapes{{\[}}%[[SHAPE0_I32]]{{\]}}
+    // CHECK-SAME: {row_major}
     %0 = tt.descriptor_load %desc[%batch_idx, %c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<2x64x32xf16> -> tensor<2x64x32xf16, #dot0>
     tt.return %0 : tensor<2x64x32xf16, #dot0>
   }
@@ -102,7 +109,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // COM: 3D column-major descriptor load. A column_major load declares the descriptor's
 // COM: inner two dims swapped relative to the result (<2x64x32> -> <2x32x64>), so the
-// COM: batch dim is still leading and still needs its own stride.
+// COM: batch dim is still leading and still needs its own stride, plus its own
+// COM: `batch_offsets`/`batch_shapes` entry (issue #7922).
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4, 2], repCluster = [1, 1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
@@ -111,13 +119,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %c1_i64 = arith.constant 1 : i64
     %c0_i32 = arith.constant 0 : i32
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2, %arg3], [%arg4, %arg5, %c1_i64] : <f16>, <2x64x32xf16>
-    // CHECK: ttig.extract_desc
+    // CHECK: %[[SHAPE0:.*]] = ttig.extract_desc %{{.*}}[0] : <2x64x32xf16> -> i64
     // CHECK: %[[STRIDE0:.*]] = ttig.extract_desc %{{.*}}[3] : <2x64x32xf16> -> i64
     // CHECK: %[[BATCH_EXT:.*]] = arith.extsi %arg6 : i32 to i64
     // CHECK: %[[BATCH_OFF:.*]] = arith.muli %[[BATCH_EXT]], %[[STRIDE0]]
     // CHECK: %[[ADJ_PTR:.*]] = tt.addptr %{{.*}}, %[[BATCH_OFF]]
+    // CHECK: %[[SHAPE0_I32:.*]] = arith.trunci %[[SHAPE0]] : i64 to i32
     // CHECK: ttig.2d_block_load %[[ADJ_PTR]]
     // CHECK-SAME: batch_strides{{\[}}%[[STRIDE0]]{{\]}}
+    // CHECK-SAME: batch_offsets{{\[}}%arg6{{\]}}
+    // CHECK-SAME: batch_shapes{{\[}}%[[SHAPE0_I32]]{{\]}}
     // CHECK-SAME: {column_major}
     %0 = tt.descriptor_load %desc[%batch_idx, %c0_i32, %c0_i32] {ttig.block_io = "column_major"} : !tt.tensordesc<2x64x32xf16> -> tensor<2x32x64xf16, #dot1>
     tt.return %0 : tensor<2x32x64xf16, #dot1>
@@ -129,6 +140,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 // COM: Rank-reducing descriptor load. The descriptor has rank 3 (with a leading
 // COM: size-1 batch dim) but the result tensor has rank 2. The batch index is
 // COM: folded into the base pointer via tt.addptr.
+// COM: Because the result rank is 2 the batch dim is NOT spanned by the result
+// COM: layout, so `batch_strides` stays EMPTY while `batch_offsets`/`batch_shapes`
+// COM: are still emitted for the bounds check (issue #7922).
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
@@ -138,12 +152,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %c1_i64 = arith.constant 1 : i64
     %c0_i32 = arith.constant 0 : i32
     %desc = tt.make_tensor_descriptor %arg0, [%c1_i32, %arg1, %arg2], [%arg3, %c1_i64, %c1_i64] : <f16>, <1x64x32xf16>
-    // CHECK: ttig.extract_desc
+    // CHECK: %[[SHAPE0:.*]] = ttig.extract_desc %{{.*}}[0] : <1x64x32xf16> -> i64
     // CHECK: ttig.extract_desc
     // CHECK: %[[BATCH_EXT:.*]] = arith.extsi %arg4 : i32 to i64
     // CHECK: %[[BATCH_OFF:.*]] = arith.muli %[[BATCH_EXT]], %{{.*}}
     // CHECK: %[[ADJ_PTR:.*]] = tt.addptr %{{.*}}, %[[BATCH_OFF]]
+    // CHECK: %[[SHAPE0_I32:.*]] = arith.trunci %[[SHAPE0]] : i64 to i32
     // CHECK: ttig.2d_block_load %[[ADJ_PTR]]
+    // CHECK-SAME: batch_offsets{{\[}}%arg4{{\]}}
+    // CHECK-SAME: batch_shapes{{\[}}%[[SHAPE0_I32]]{{\]}}
+    // CHECK-SAME: {row_major}
     %0 = tt.descriptor_load %desc[%batch_idx, %c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<1x64x32xf16> -> tensor<64x32xf16, #dot0>
     tt.return %0 : tensor<64x32xf16, #dot0>
   }
@@ -227,5 +245,34 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %b_k = tt.descriptor_load %k_desc[%c0_i32, %c0_i32] {ttig.block_io = "column_major", ttig.desc_padding = 1 : i32} : !tt.tensordesc<64x64xbf16> -> tensor<64x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
 
     tt.return
+  }
+}
+
+// -----
+
+// COM: Rank-4 descriptor load, rank-reducing to 2. With two batch dims the operand
+// COM: ORDER becomes observable: both lists must be outermost-first, so that entry i
+// COM: of each describes the same descriptor dim (issue #7922). The dims are distinct
+// COM: SSA values so a reversed list cannot match.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @descriptor_load_two_batch_dims
+  tt.func @descriptor_load_two_batch_dims(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i64, %bi0: i32, %bi1: i32) -> tensor<64x32xf16, #dot0> {
+    %c1_i64 = arith.constant 1 : i64
+    %c0_i32 = arith.constant 0 : i32
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2, %arg3, %arg4], [%arg5, %arg5, %c1_i64, %c1_i64] : <f16>, <1x1x64x32xf16>
+    // CHECK: %[[SHAPE0:.*]] = ttig.extract_desc %{{.*}}[0] : <1x1x64x32xf16> -> i64
+    // CHECK: %[[SHAPE1:.*]] = ttig.extract_desc %{{.*}}[1] : <1x1x64x32xf16> -> i64
+    // CHECK: %[[S0:.*]] = arith.trunci %[[SHAPE0]] : i64 to i32
+    // CHECK: %[[S1:.*]] = arith.trunci %[[SHAPE1]] : i64 to i32
+    // CHECK: ttig.2d_block_load
+    // COM: `AttrSizedOperandSegments` must not leak its attribute into printed IR.
+    // CHECK-NOT: operandSegmentSizes
+    // CHECK-SAME: batch_offsets{{\[}}%arg6, %arg7{{\]}}
+    // CHECK-SAME: batch_shapes{{\[}}%[[S0]], %[[S1]]{{\]}}
+    // CHECK-SAME: {row_major}
+    %0 = tt.descriptor_load %desc[%bi0, %bi1, %c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<1x1x64x32xf16> -> tensor<64x32xf16, #dot0>
+    tt.return %0 : tensor<64x32xf16, #dot0>
   }
 }

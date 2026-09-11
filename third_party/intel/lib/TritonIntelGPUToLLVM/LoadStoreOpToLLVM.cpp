@@ -4547,6 +4547,8 @@ struct Subgroup2DBlockLoadOpConversion
     Value baseOffsetX = adaptor.getOffsetX();
     Value baseOffsetY = adaptor.getOffsetY();
     ValueRange batchStrides = adaptor.getBatchStrides();
+    ValueRange batchOffsets = adaptor.getBatchOffsets();
+    ValueRange batchShapes = adaptor.getBatchShapes();
 
     Value elemBytes = b.i32_val(elemSizeInBits / 8);
 
@@ -4581,28 +4583,6 @@ struct Subgroup2DBlockLoadOpConversion
       baseOffsetX = b.add(baseOffsetX, misalignElems);
     }
 
-    // Build NaN masks if pad_nan is set.
-    SmallVector<Value> nanMaskElems;
-    if (op.getPadNan()) {
-      SmallVector<Value> resultOffsets(rank, b.i32_val(0));
-      SmallVector<Value> resultShapes(rank);
-      for (unsigned i = 0; i < rank; ++i) {
-        if (static_cast<int>(i) == cfg.rowDim)
-          resultShapes[i] = baseHeight;
-        else if (static_cast<int>(i) == cfg.colDim)
-          resultShapes[i] = b.udiv(baseWidth, elemBytes);
-        else
-          resultShapes[i] = b.i32_val(tensorType.getDimSize(i));
-      }
-      unsigned surfaceColDim = contiguousDim;
-      unsigned surfaceRowDim =
-          (contiguousDim == rank - 1) ? rank - 2 : rank - 1;
-      resultOffsets[surfaceColDim] = baseOffsetX;
-      resultOffsets[surfaceRowDim] = baseOffsetY;
-      nanMaskElems =
-          buildNaNMasks(loc, resultOffsets, resultShapes, tensorType, rewriter);
-    }
-
     unsigned blockRowIdx = cfg.isTransposeRequired ? cfg.colDim : cfg.rowDim;
     unsigned blockColIdx = cfg.isTransposeRequired ? cfg.rowDim : cfg.colDim;
 
@@ -4619,12 +4599,73 @@ struct Subgroup2DBlockLoadOpConversion
         std::max(blockRowIdx, blockColIdx) != rank - 1)
       return failure();
 
+    // Descriptor batch dimensions the result layout does not span, because a
+    // rank-reducing load dropped them. They are the leading entries of
+    // `batch_offsets`/`batch_shapes`, so descriptor batch dimension
+    // `rankDelta + d` corresponds to result batch dimension `d`.
+    unsigned rankDelta = batchOffsets.size() - batchStrides.size();
+
+    auto andPred = [&](Value acc, Value pred) -> Value {
+      return acc ? Value(b.and_(acc, pred)) : pred;
+    };
+
+    // A batch index is folded into the base pointer, so it escapes the
+    // hardware's base_width x base_height clamp and needs an explicit check.
+    // Compare signed: a negative descriptor index is out of bounds, and an
+    // overflowing sum wraps negative rather than becoming spuriously in range.
+    auto inDescBounds = [&](Value index, Value shape) -> Value {
+      Value isNonNegative = b.icmp_sge(index, b.i32_val(0));
+      Value isBelowShape = b.icmp_slt(index, shape);
+      return b.and_(isNonNegative, isBelowShape);
+    };
+
+    // Dropped dimensions are not spanned by the result layout, so their bounds
+    // check is the same for every sub-tile. Emit it once here rather than
+    // rebuilding it inside `computeAddress`.
+    Value droppedDimPred;
+    for (unsigned d = 0; d < rankDelta; ++d)
+      droppedDimPred = andPred(droppedDimPred,
+                               inDescBounds(batchOffsets[d], batchShapes[d]));
+
+    // Build NaN masks if pad_nan is set.
+    SmallVector<Value> nanMaskElems;
+    if (op.getPadNan()) {
+      SmallVector<Value> resultOffsets(rank, b.i32_val(0));
+      SmallVector<Value> resultShapes(rank);
+      for (unsigned i = 0; i < rank; ++i) {
+        if (static_cast<int>(i) == cfg.rowDim)
+          resultShapes[i] = baseHeight;
+        else if (static_cast<int>(i) == cfg.colDim)
+          resultShapes[i] = b.udiv(baseWidth, elemBytes);
+        else {
+          // Batch dimension: bound it by the descriptor's declared extent at
+          // the descriptor's index. The tile extent at index 0 would mark every
+          // element in range and pad nothing.
+          resultShapes[i] = batchShapes[i + rankDelta];
+          resultOffsets[i] = batchOffsets[i + rankDelta];
+        }
+      }
+      unsigned surfaceColDim = contiguousDim;
+      unsigned surfaceRowDim =
+          (contiguousDim == rank - 1) ? rank - 2 : rank - 1;
+      resultOffsets[surfaceColDim] = baseOffsetX;
+      resultOffsets[surfaceRowDim] = baseOffsetY;
+      nanMaskElems =
+          buildNaNMasks(loc, resultOffsets, resultShapes, tensorType, rewriter);
+      // Dropped dimensions have no result dimension for the mask to iterate, so
+      // gate every element on their bounds check instead.
+      if (droppedDimPred)
+        for (Value &mask : nanMaskElems)
+          mask = b.and_(droppedDimPred, mask);
+    }
+
     // Per-sub-tile: combine base offsets with linear layout offsets.
     auto computeAddress =
         [&](unsigned /*registerIdx*/,
             ArrayRef<std::pair<StringAttr, Value>> offsets) -> SubTileAddress {
       Value addrElem = basePtr;
       Value offsetX, offsetY;
+      Value pred = droppedDimPred;
       unsigned surfaceColDim = contiguousDim;
       unsigned surfaceRowDim =
           (contiguousDim == rank - 1) ? rank - 2 : rank - 1;
@@ -4647,10 +4688,14 @@ struct Subgroup2DBlockLoadOpConversion
           Value offset64 = b.zext(int_ty(64), adjustedOffset);
           Value batchOffset = b.mul(offset64, batchStrides[dim]);
           addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, batchOffset);
+          // The descriptor index is already in `basePtr`, so the coordinate to
+          // bounds-check is that index plus this sub-tile's layout offset.
+          unsigned descDim = dim + rankDelta;
+          Value index = b.add(batchOffsets[descDim], adjustedOffset);
+          pred = andPred(pred, inDescBounds(index, batchShapes[descDim]));
         }
       }
-      return {addrElem,        offsetX, offsetY, baseWidth, baseHeight,
-              /*pred=*/Value()};
+      return {addrElem, offsetX, offsetY, baseWidth, baseHeight, pred};
     };
 
     return lowerBlockLoad2D(op, cfg, *llEncoding, pitch, computeAddress,

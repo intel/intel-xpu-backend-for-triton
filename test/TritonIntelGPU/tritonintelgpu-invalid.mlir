@@ -228,3 +228,33 @@ tt.func @invalid_desc_scatter_src_rank(%arg0: !tt.tensordesc<1x128xbf16>, %arg1:
   ttig.descriptor_scatter %arg0[%arg1, %arg2], %arg3 : !tt.tensordesc<1x128xbf16>, tensor<32xi32>, i32, tensor<128xbf16>
   tt.return
 }
+
+// -----
+
+// COM: `batch_offsets` and `batch_shapes` are the descriptor index and its
+// COM: declared extent for the same batch dim, so they only bounds-check when
+// COM: they come in pairs.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4, 2], repCluster = [1, 1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  tt.func @mismatched_batch_offsets_shapes(%base_ptr: !tt.ptr<f16>, %width: i32, %height: i32, %pitch: i32, %x: i32, %y: i32, %batch_stride: i64, %batch_offset: i32, %batch_shape0: i32, %batch_shape1: i32) -> tensor<2x64x32xf16, #dot0> {
+    // expected-error @below {{'ttig.2d_block_load' op expected the same number of batch offsets and batch shapes, got 1 and 2}}
+    %0 = ttig.2d_block_load %base_ptr, %width, %height, %pitch[%x, %y] batch_strides[%batch_stride] batch_offsets[%batch_offset] batch_shapes[%batch_shape0, %batch_shape1] {row_major} : !tt.ptr<f16> -> tensor<2x64x32xf16, #dot0>
+    tt.return %0 : tensor<2x64x32xf16, #dot0>
+  }
+}
+
+// -----
+
+// COM: Every descriptor batch dim escapes the hardware surface clamp once its
+// COM: offset is folded into the base pointer, so the descriptor must supply at
+// COM: least as many batch offsets as the result has batch strides.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4, 2], repCluster = [1, 1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  tt.func @too_few_batch_offsets(%base_ptr: !tt.ptr<f16>, %width: i32, %height: i32, %pitch: i32, %x: i32, %y: i32, %batch_stride: i64) -> tensor<2x64x32xf16, #dot0> {
+    // expected-error @below {{'ttig.2d_block_load' op expected at least 1 batch offset(s), one per descriptor batch dimension, got 0}}
+    %0 = ttig.2d_block_load %base_ptr, %width, %height, %pitch[%x, %y] batch_strides[%batch_stride] {row_major} : !tt.ptr<f16> -> tensor<2x64x32xf16, #dot0>
+    tt.return %0 : tensor<2x64x32xf16, #dot0>
+  }
+}
