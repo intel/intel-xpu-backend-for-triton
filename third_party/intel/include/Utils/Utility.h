@@ -30,6 +30,16 @@ std::optional<int64_t> getFoldedConstantValue(Value v, int depth = 8);
 // expected.
 bool isConstant(Value val, int64_t expected);
 
+// Look through value-preserving operations to the value that ultimately defines
+// `value`, e.g. through casts, broadcasts and adding zero.
+//
+// An scf.for iteration argument resolves to its INIT operand: the yielded
+// update is never inspected. That is intended for callers asking "what is this
+// value outside the loop", but it makes the result UNSOUND for an alignment or
+// divisibility proof, because `off = 0; off += 3` resolves to the constant 0.
+// Issue #7990 was exactly that. For such a proof, query the raw value through
+// ModuleAxisInfoAnalysis, which reaches a fixpoint over the loop, and conjoin
+// this only as a conservative second opinion.
 Value getFinalValue(Value value);
 
 // Erase the operations in \p operations.
