@@ -2474,10 +2474,10 @@ private:
     return {pred, addr};
   }
 
-  FailureOr<GatherLayoutConfig>
+  static FailureOr<GatherLayoutConfig>
   buildLayoutConfig(const LinearLayout &llEncoding, RankedTensorType resultType,
                     const LinearLayout &offsetsXLLEncoding, Type valueElemTy,
-                    ModuleOp moduleOp) const {
+                    ModuleOp moduleOp) {
     MLIRContext *ctx = resultType.getContext();
     StringAttr kRegister = S("register");
     StringAttr kLane = S("lane");
