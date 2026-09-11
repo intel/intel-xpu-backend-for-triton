@@ -2286,11 +2286,11 @@ struct DescriptorGatherConversionBase : public BlockIOConversionBase {
   };
 
   static FailureOr<DescriptorGatherLoadConfig>
-  buildDescriptorGatherLoadConfig(const LinearLayout &llEncoding,
-                                  RankedTensorType resultType,
-                                  RankedTensorType offsetsXType,
+  buildDescriptorGatherLoadConfig(MLIRContext *ctx,
+                                  const LinearLayout &llEncoding,
+                                  const LinearLayout &offsetsXLLEncoding,
                                   Type valueElemTy, unsigned threadsPerWarp) {
-    size_t resultRank = resultType.getRank();
+    size_t resultRank = llEncoding.getNumOutDims();
     unsigned elemSizeInBits = std::max(8u, valueElemTy.getIntOrFloatBitWidth());
     BlockIOTileSizeInfo sizeInfo = getBlockIOLoadTileSize(
         llEncoding, resultRank - 1, elemSizeInBits, nullptr, false);
@@ -2331,7 +2331,7 @@ struct DescriptorGatherConversionBase : public BlockIOConversionBase {
       return failure();
 
     FailureOr<LinearLayout> offsetMapping = buildDescriptorGatherOffsetMapping(
-        resultType, offsetsXType, cfg.numPtrsPerLoad, cfg.ptrsPerRow,
+        ctx, llEncoding, offsetsXLLEncoding, cfg.numPtrsPerLoad, cfg.ptrsPerRow,
         cfg.bytesPerPtr, elemSizeInBits);
     if (failed(offsetMapping))
       return failure();
@@ -2340,19 +2340,9 @@ struct DescriptorGatherConversionBase : public BlockIOConversionBase {
   }
 
   static FailureOr<LinearLayout> buildDescriptorGatherOffsetMapping(
-      RankedTensorType resultType, RankedTensorType offsetsXType,
-      unsigned numPtrsPerLoad, unsigned ptrsPerRow, unsigned bytesPerPtr,
-      unsigned elemSizeInBits) {
-    std::optional<LinearLayout> llEncoding =
-        cast<DistributedEncodingTrait>(resultType.getEncoding())
-            .toLinearLayout(resultType.getShape());
-    std::optional<LinearLayout> offsetsXLLEncoding =
-        cast<DistributedEncodingTrait>(offsetsXType.getEncoding())
-            .toLinearLayout(offsetsXType.getShape());
-    if (!llEncoding || !offsetsXLLEncoding)
-      return failure();
-
-    MLIRContext *ctx = resultType.getContext();
+      MLIRContext *ctx, const LinearLayout &llEncoding,
+      const LinearLayout &offsetsXLLEncoding, unsigned numPtrsPerLoad,
+      unsigned ptrsPerRow, unsigned bytesPerPtr, unsigned elemSizeInBits) {
     StringAttr kRegister = StringAttr::get(ctx, "register");
     StringAttr kLane = StringAttr::get(ctx, "lane");
     StringAttr kWarp = StringAttr::get(ctx, "warp");
@@ -2361,9 +2351,9 @@ struct DescriptorGatherConversionBase : public BlockIOConversionBase {
     StringAttr dim1Attr = StringAttr::get(ctx, "dim1");
     StringAttr offxIdxAttr = StringAttr::get(ctx, "offx_idx");
 
-    auto subLayout = llEncoding->sublayout(
-        llvm::to_vector(llEncoding->getInDimNames()), {dim0Attr});
-    auto regMLayout = subLayout.invertAndCompose(*offsetsXLLEncoding);
+    auto subLayout = llEncoding.sublayout(
+        llvm::to_vector(llEncoding.getInDimNames()), {dim0Attr});
+    auto regMLayout = subLayout.invertAndCompose(offsetsXLLEncoding);
     std::optional<LinearLayout> conversion = regMLayout.quotient(kBlock);
     if (!conversion)
       return failure();
@@ -2374,7 +2364,7 @@ struct DescriptorGatherConversionBase : public BlockIOConversionBase {
     if (!conversion)
       return failure();
 
-    auto offsetYLayout = llEncoding->sublayout(kRegister, {dim1Attr});
+    auto offsetYLayout = llEncoding.sublayout(kRegister, {dim1Attr});
     if (!llvm::isPowerOf2_32(numPtrsPerLoad) ||
         !llvm::isPowerOf2_32(ptrsPerRow))
       return failure();
@@ -2396,11 +2386,11 @@ struct DescriptorGatherConversionBase : public BlockIOConversionBase {
       offsetMapBases.push_back({offsetXBase[0], offsetYBase[0]});
     }
 
-    auto inDimSize = offsetsXLLEncoding->getInDimSize(kRegister);
+    auto inDimSize = offsetsXLLEncoding.getInDimSize(kRegister);
     return LinearLayout(
         {{kRegister, offsetMapBases}, {StringAttr::get(ctx, "ptrs"), ptrBases}},
         {{offxIdxAttr, inDimSize},
-         {dim1Attr, llEncoding->getOutDimSize(dim1Attr)}},
+         {dim1Attr, llEncoding.getOutDimSize(dim1Attr)}},
         /*requireSurjective=*/false);
   }
 };
@@ -2486,7 +2476,7 @@ private:
 
   FailureOr<GatherLayoutConfig>
   buildLayoutConfig(const LinearLayout &llEncoding, RankedTensorType resultType,
-                    RankedTensorType offXTy, Type valueElemTy,
+                    const LinearLayout &offsetsXLLEncoding, Type valueElemTy,
                     ModuleOp moduleOp) const {
     MLIRContext *ctx = resultType.getContext();
     StringAttr kRegister = S("register");
@@ -2502,7 +2492,7 @@ private:
     config.numPtrsPerLoad = threadsPerWarp;
 
     FailureOr<DescriptorGatherLoadConfig> gatherLoadCfgOr =
-        buildDescriptorGatherLoadConfig(llEncoding, resultType, offXTy,
+        buildDescriptorGatherLoadConfig(ctx, llEncoding, offsetsXLLEncoding,
                                         valueElemTy, threadsPerWarp);
     if (succeeded(gatherLoadCfgOr)) {
       DescriptorGatherLoadConfig &gatherLoadCfg = *gatherLoadCfgOr;
@@ -2544,13 +2534,8 @@ private:
 
     auto subLayout = llEncoding.sublayout(
         llvm::to_vector(llEncoding.getInDimNames()), {kDim0});
-    std::optional<LinearLayout> offsetsXLLEncoding =
-        cast<DistributedEncodingTrait>(offXTy.getEncoding())
-            .toLinearLayout(offXTy.getShape());
-    if (!offsetsXLLEncoding)
-      return failure();
     LinearLayout valueToOffsetMap =
-        subLayout.invertAndCompose(*offsetsXLLEncoding);
+        subLayout.invertAndCompose(offsetsXLLEncoding);
     valueToOffsetMap = valueToOffsetMap.sublayout({kRegister}, {kRegister});
     valueToOffsetMap =
         renameLinearLayoutDims(valueToOffsetMap, /*inDimRenames=*/{},
@@ -2683,6 +2668,12 @@ private:
     if (!llEncoding)
       return rewriter.notifyMatchFailure(
           op, "result encoding not convertible to LinearLayout");
+    std::optional<LinearLayout> offsetsXLLEncoding =
+        cast<DistributedEncodingTrait>(offXTy.getEncoding())
+            .toLinearLayout(offXTy.getShape());
+    if (!offsetsXLLEncoding)
+      return rewriter.notifyMatchFailure(
+          op, "offsetsX encoding not convertible to LinearLayout");
 
     StringAttr kRegister = S("register");
     StringAttr kLane = S("lane");
@@ -2700,11 +2691,12 @@ private:
     size_t descRank = descTensorType.getRank();
 
     auto layoutConfigOr =
-        buildLayoutConfig(*llEncoding, resultType, offXTy, valueElemTy,
-                          op->getParentOfType<ModuleOp>());
-    if (failed(layoutConfigOr))
+        buildLayoutConfig(*llEncoding, resultType, *offsetsXLLEncoding,
+                          valueElemTy, op->getParentOfType<ModuleOp>());
+    if (failed(layoutConfigOr)) {
       return rewriter.notifyMatchFailure(
           op, "failed to build gather layout config");
+    }
     GatherLayoutConfig layoutConfig = *layoutConfigOr;
     // All validity checks passed; now generate IR.
     SmallVector<Value> offsetsX =
