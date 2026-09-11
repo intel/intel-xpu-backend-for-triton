@@ -15,7 +15,6 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
-#include <algorithm>
 #include <optional>
 
 namespace mlir::triton::gpu::intel {
