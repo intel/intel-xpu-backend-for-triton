@@ -2433,8 +2433,6 @@ private:
     unsigned numPackedVals = 1;
     unsigned numPtrsPerLoad = 1;
     unsigned numElemsPerLoad = 1;
-    unsigned numPtrToOffX = 0;
-    unsigned numPtrToOffY = 0;
     LinearLayout regMapping;
     LinearLayout offMapping;
   };
@@ -2503,8 +2501,6 @@ private:
       config.numElemsPerLoad = gatherLoadCfg.numElemsPerLoad;
       config.offMapping = std::move(gatherLoadCfg.offsetMapping);
 
-      auto ptrToOffX = config.offMapping.sublayout({kPtrs}, {kOffIdx});
-      auto ptrToOffY = config.offMapping.sublayout({kPtrs}, {kDim1});
       if (config.numPtrsPerLoad == threadsPerWarp) {
         // If the number of pointers for gather load matches the warp size, map
         // pointers onto lanes so we can use the per-lane load path.
@@ -2514,14 +2510,6 @@ private:
             LinearLayout::identity1D(config.numPtrsPerLoad, {kLane}, {kPtrs});
         config.offMapping = newMapping.compose(config.offMapping);
       }
-
-      config.numPtrToOffY =
-          ptrToOffY.removeZeroBasesAlongDim(kPtrs).getInDimSize(kPtrs);
-      config.numPtrToOffX =
-          ptrToOffX.removeZeroBasesAlongDim(kPtrs).getInDimSize(kPtrs);
-      assert(config.numPtrToOffX * config.numPtrToOffY ==
-                 config.numPtrsPerLoad &&
-             "invalid ptrToOffMapping");
       assert(regPackedBases.has_value() &&
              "invalid register bases for packing elems.");
       config.regMapping =
@@ -2679,6 +2667,8 @@ private:
     StringAttr kLane = S("lane");
     StringAttr kBlock = S("block");
     StringAttr kWarp = S("warp");
+    StringAttr kPtrs = S("ptrs");
+    StringAttr kOffIdx = S("offx_idx");
     StringAttr kDim1 = S("dim1");
 
     Type valueElemTy = typeConverter->convertType(resultType.getElementType());
@@ -2720,6 +2710,18 @@ private:
     Value basicOffsetY = b.add(offsetY, getNamedOffset(offsets, kDim1));
     GatherLoadCommon common{desc, offsetsX, basicOffsetY, valueElemTy,
                             unpackedType};
+    unsigned numPtrToOffX = 0;
+    unsigned numPtrToOffY = 0;
+    if (layoutConfig.numPtrsPerLoad != threadsPerWarp) {
+      auto ptrToOffX = layoutConfig.offMapping.sublayout({kPtrs}, {kOffIdx});
+      auto ptrToOffY = layoutConfig.offMapping.sublayout({kPtrs}, {kDim1});
+      numPtrToOffY =
+          ptrToOffY.removeZeroBasesAlongDim(kPtrs).getInDimSize(kPtrs);
+      numPtrToOffX =
+          ptrToOffX.removeZeroBasesAlongDim(kPtrs).getInDimSize(kPtrs);
+      assert(numPtrToOffX * numPtrToOffY == layoutConfig.numPtrsPerLoad &&
+             "invalid ptrToOffMapping");
+    }
 
     for (size_t elemIdx = 0; elemIdx < numElems;
          elemIdx += layoutConfig.numElemsPerLoad) {
@@ -2731,9 +2733,9 @@ private:
         ret = generatePerLaneLoad(loc, rewriter, common, laneId, registerIdx,
                                   layoutConfig.offMapping);
       } else {
-        ret = generateSubgroupGatherLoad(
-            loc, rewriter, common, registerIdx, layoutConfig.offMapping,
-            layoutConfig.numPtrToOffX, layoutConfig.numPtrToOffY);
+        ret = generateSubgroupGatherLoad(loc, rewriter, common, registerIdx,
+                                         layoutConfig.offMapping, numPtrToOffX,
+                                         numPtrToOffY);
       }
 
       unpackBlockLoadResult(ret, loadedVals, elemIdx, layoutConfig.regMapping,
