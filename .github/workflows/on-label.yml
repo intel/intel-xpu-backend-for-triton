@@ -154,5 +154,5 @@ jobs:
       needs.select-benchmark-platforms.outputs.run-pvc-benchmarks == 'true'
     uses: ./.github/workflows/sglang-benchmarks.yml
     with:
-      runner_label: max1550
+      runner_label: max1100
     secrets: inherit
