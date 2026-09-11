@@ -119,3 +119,106 @@ index ff90b20a70..4a49fb66a5 100644
  
          unified_kv_indptr, unified_kv_indices, prefix_lens = build_unified_kv_indices(
              kv_indptr,
+diff --git a/python/sglang/test/kits/attention_unittest/attention_methods/dense_attention.py b/python/sglang/test/kits/attention_unittest/attention_methods/dense_attention.py
+index b352cd7c29..382b758886 100644
+--- a/python/sglang/test/kits/attention_unittest/attention_methods/dense_attention.py
++++ b/python/sglang/test/kits/attention_unittest/attention_methods/dense_attention.py
+@@ -22,6 +22,7 @@ from sglang.srt.model_executor.graph_shared_output import GraphSharedOutput
+ from sglang.srt.model_executor.model_runner import ModelRunner
+ from sglang.srt.runtime_context import get_context, get_parallel
+ from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
++from sglang.srt.utils import get_device, get_device_module
+ 
+ # Unit tests run without distributed initialization. Backends that size buffers by
+ # attention tensor-parallel degree should see the single-rank default.
+@@ -32,7 +33,7 @@ DEFAULT_HEAD_DIM = 16
+ DEFAULT_HIDDEN_SIZE = 64
+ DEFAULT_MAX_CONTEXT_LEN = 64
+ DEFAULT_DTYPE = torch.float16
+-DEFAULT_DEVICE = "cuda"
++DEFAULT_DEVICE = get_device()
+ DENSE_ATOL = 3e-2
+ DENSE_RTOL = 3e-2
+ 
+@@ -979,7 +980,7 @@ def build_dense_attention_fixture(
+ ) -> DenseAttentionFixture:
+     seed = 2026 + len(case.name) + case.num_kv_heads
+     torch.manual_seed(seed)
+-    torch.cuda.manual_seed_all(seed)
++    get_device_module().manual_seed_all(seed)
+ 
+     model_config = TinyModelConfig(
+         num_heads=case.num_heads,
+diff --git a/python/sglang/test/kits/attention_unittest/runner_modes/speculative_draft_runner.py b/python/sglang/test/kits/attention_unittest/runner_modes/speculative_draft_runner.py
+index cbebd85c09..9aa2a04860 100644
+--- a/python/sglang/test/kits/attention_unittest/runner_modes/speculative_draft_runner.py
++++ b/python/sglang/test/kits/attention_unittest/runner_modes/speculative_draft_runner.py
+@@ -32,6 +32,7 @@ from sglang.srt.speculative.frozen_kv_mtp_info import (
+ )
+ from sglang.srt.speculative.frozen_kv_mtp_worker_v2 import FrozenKVMTPDraftWorker
+ from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
++from sglang.srt.utils import get_device_module
+ 
+ from ..attention_methods.dense_attention import (
+     DEFAULT_DEVICE,
+@@ -266,22 +267,25 @@ def _seeded_rng(seed: int, *, device: str | torch.device):
+     input builders below need deterministic randomness per case but must not
+     leak that seed into the rest of the test process (build_*_fixture relies
+     on its own seeding for parameter init)."""
++    device_module = get_device_module()
+     cpu_state = torch.random.get_rng_state()
+-    cuda_state = torch.cuda.get_rng_state(device=device)
++    device_state = device_module.get_rng_state(device=device)
+     try:
+         torch.manual_seed(seed)
+-        torch.cuda.manual_seed_all(seed)
++        device_module.manual_seed_all(seed)
+         yield
+     finally:
+         torch.random.set_rng_state(cpu_state)
+-        torch.cuda.set_rng_state(cuda_state, device=device)
++        device_module.set_rng_state(device_state, device=device)
+ 
+ 
+ @contextmanager
+ def _single_rank_graph_capture(stream=None):
+     # Mirrors `graph_capture(stream=None)`: capture runs on the caller's stream
+     # when it leases one, so the shim stays valid for both call shapes.
+-    yield SimpleNamespace(stream=stream if stream is not None else torch.cuda.Stream())
++    yield SimpleNamespace(
++        stream=stream if stream is not None else get_device_module().Stream()
++    )
+ 
+ 
+ def _reset_cuda_graph_test_buffers() -> None:
+diff --git a/test/registered/attention/unittests/dense/test_triton.py b/test/registered/attention/unittests/dense/test_triton.py
+index 5cb86c296e..7933988446 100644
+--- a/test/registered/attention/unittests/dense/test_triton.py
++++ b/test/registered/attention/unittests/dense/test_triton.py
+@@ -3,8 +3,12 @@ import unittest
+ import torch
+ 
+ from sglang.srt.model_executor.forward_batch_info import ForwardMode
+-from sglang.srt.utils import is_hip
+-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
++from sglang.srt.utils import get_device_module, is_hip
++from sglang.test.ci.ci_register import (
++    register_amd_ci,
++    register_cuda_ci,
++    register_xpu_ci,
++)
+ from sglang.test.kits.attention_unittest.attention_methods.dense_attention import (
+     DenseAttentionCase,
+     make_dense_cases,
+@@ -33,9 +37,10 @@ from sglang.test.test_utils import CustomTestCase
+ register_cuda_ci(est_time=25, stage="base-b", runner_config="4-gpu-b200")
+ register_cuda_ci(est_time=25, stage="base-b", runner_config="1-gpu-large")
+ register_amd_ci(est_time=25, suite="stage-b-test-1-gpu-large-amd")
++register_xpu_ci(est_time=25, suite="stage-b-test-1-gpu-xpu")
+ 
+ 
+-@unittest.skipIf(not torch.cuda.is_available(), "CUDA is required")
++@unittest.skipIf(not get_device_module().is_available(), "an accelerator is required")
+ class TestTritonDenseAttentionBackendCorrectness(CustomTestCase):
+     CASES = make_dense_cases("triton")
+     CUDA_GRAPH_CASES = (
