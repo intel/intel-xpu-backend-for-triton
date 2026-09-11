@@ -2285,10 +2285,12 @@ struct DescriptorGatherConversionBase : public BlockIOConversionBase {
     LinearLayout offsetMapping;
   };
 
-  static FailureOr<DescriptorGatherLoadConfig> buildDescriptorGatherLoadConfig(
-      const LinearLayout &llEncoding, RankedTensorType resultType,
-      RankedTensorType offsetsXType, size_t resultRank, Type valueElemTy,
-      ModuleOp moduleOp) {
+  static FailureOr<DescriptorGatherLoadConfig>
+  buildDescriptorGatherLoadConfig(const LinearLayout &llEncoding,
+                                  RankedTensorType resultType,
+                                  RankedTensorType offsetsXType,
+                                  Type valueElemTy, unsigned threadsPerWarp) {
+    size_t resultRank = resultType.getRank();
     unsigned elemSizeInBits = std::max(8u, valueElemTy.getIntOrFloatBitWidth());
     BlockIOTileSizeInfo sizeInfo = getBlockIOLoadTileSize(
         llEncoding, resultRank - 1, elemSizeInBits, nullptr, false);
@@ -2305,7 +2307,6 @@ struct DescriptorGatherConversionBase : public BlockIOConversionBase {
         LinearLayout::empty(),
     };
 
-    unsigned threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(moduleOp);
     constexpr unsigned totalBytesPerGatherLoadNonTrans = 256;
     unsigned bytesPerRow =
         sizeInfo.numElemPerPackedVal * sizeInfo.tileWidth * elemSizeInBits / 8;
@@ -2448,6 +2449,14 @@ private:
     LinearLayout offMapping;
   };
 
+  struct GatherLoadCommon {
+    const DescriptorFields &desc;
+    ArrayRef<Value> offsetsX;
+    Value basicOffsetY;
+    Type valueElemTy;
+    Type unpackedType;
+  };
+
   static Value
   getNamedOffset(const SmallVector<std::pair<StringAttr, Value>> &offsets,
                  StringAttr dimName) {
@@ -2477,9 +2486,8 @@ private:
 
   FailureOr<GatherLayoutConfig>
   buildLayoutConfig(const LinearLayout &llEncoding, RankedTensorType resultType,
-                    RankedTensorType offXTy, size_t resultRank,
-                    Type valueElemTy, unsigned numElems,
-                    unsigned threadsPerWarp, ModuleOp moduleOp) const {
+                    RankedTensorType offXTy, Type valueElemTy,
+                    ModuleOp moduleOp) const {
     MLIRContext *ctx = resultType.getContext();
     StringAttr kRegister = S("register");
     StringAttr kLane = S("lane");
@@ -2487,13 +2495,15 @@ private:
     StringAttr kOffIdx = S("offx_idx");
     StringAttr kDim0 = S("dim0");
     StringAttr kDim1 = S("dim1");
+    unsigned threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(moduleOp);
+    unsigned numElems = getTotalElemsPerThread(resultType);
 
     GatherLayoutConfig config;
     config.numPtrsPerLoad = threadsPerWarp;
 
     FailureOr<DescriptorGatherLoadConfig> gatherLoadCfgOr =
         buildDescriptorGatherLoadConfig(llEncoding, resultType, offXTy,
-                                        resultRank, valueElemTy, moduleOp);
+                                        valueElemTy, threadsPerWarp);
     if (succeeded(gatherLoadCfgOr)) {
       DescriptorGatherLoadConfig &gatherLoadCfg = *gatherLoadCfgOr;
       config.numPackedVals = gatherLoadCfg.numPackedVals;
@@ -2555,17 +2565,16 @@ private:
     return config;
   }
 
-  Value generatePerLaneLoad(Location loc, TritonLLVMOpBuilder &b,
-                            ConversionPatternRewriter &rewriter,
-                            MLIRContext *ctx, const DescriptorFields &desc,
-                            ArrayRef<Value> offsetsX, Value basicOffsetY,
-                            Value laneId, unsigned registerIdx,
-                            const LinearLayout &offMapping, Type valueElemTy,
-                            Type unpackedType) const {
-    StringAttr kRegister = S("register");
-    StringAttr kLane = S("lane");
-    StringAttr kOffIdx = S("offx_idx");
-    StringAttr kDim1 = S("dim1");
+  Value generatePerLaneLoad(Location loc, ConversionPatternRewriter &rewriter,
+                            const GatherLoadCommon &common, Value laneId,
+                            unsigned registerIdx,
+                            const LinearLayout &offMapping) const {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    MLIRContext *ctx = rewriter.getContext();
+    StringAttr kRegister = StringAttr::get(ctx, "register");
+    StringAttr kLane = StringAttr::get(ctx, "lane");
+    StringAttr kOffIdx = StringAttr::get(ctx, "offx_idx");
+    StringAttr kDim1 = StringAttr::get(ctx, "dim1");
 
     auto offsetsForX = offMapping.apply({{kRegister, registerIdx}, {kLane, 0}});
     auto offsetXIdx = offsetsForX[0];
@@ -2575,33 +2584,39 @@ private:
         loc, rewriter, offMapping,
         {{kRegister, b.i32_val(registerIdx)}, {kLane, laneId}});
 
-    Value offsetX = offsetsX[offsetXIdx.second];
-    Value laneOffsetY = b.add(basicOffsetY, getNamedOffset(offsetsForY, kDim1));
-    GatherAddressAndPred gatherAddr = buildGatherAddressAndPred(
-        b, ctx, valueElemTy, desc, offsetX, laneOffsetY);
+    Value offsetX = common.offsetsX[offsetXIdx.second];
+    Value laneOffsetY =
+        b.add(common.basicOffsetY, getNamedOffset(offsetsForY, kDim1));
+    GatherAddressAndPred gatherAddr =
+        buildGatherAddressAndPred(b, rewriter.getContext(), common.valueElemTy,
+                                  common.desc, offsetX, laneOffsetY);
 
     auto createLoad = [&]() {
-      return SmallVector<Value>{b.load(unpackedType, gatherAddr.addr,
+      return SmallVector<Value>{b.load(common.unpackedType, gatherAddr.addr,
                                        /*align=*/1,
                                        /*isVolatile=*/false,
                                        /*isNonTemporal=*/false)};
     };
     Block &endBlock = LLVM::intel::createPredicatedBlock(
         rewriter, loc, gatherAddr.pred,
-        SmallVector<Value, 1>{b.undef(unpackedType)}, createLoad);
+        SmallVector<Value, 1>{b.undef(common.unpackedType)}, createLoad);
     return *endBlock.args_begin();
   }
 
-  Value generateSubgroupGatherLoad(
-      Location loc, TritonLLVMOpBuilder &b, ConversionPatternRewriter &rewriter,
-      MLIRContext *ctx, const DescriptorFields &desc, ArrayRef<Value> offsetsX,
-      Value basicOffsetY, unsigned registerIdx, const LinearLayout &offMapping,
-      unsigned numPtrToOffX, unsigned numPtrToOffY, Type valueElemTy,
-      Type unpackedType, Type indexTy) const {
-    StringAttr kRegister = S("register");
-    StringAttr kPtrs = S("ptrs");
-    StringAttr kOffIdx = S("offx_idx");
-    StringAttr kDim1 = S("dim1");
+  Value generateSubgroupGatherLoad(Location loc,
+                                   ConversionPatternRewriter &rewriter,
+                                   const GatherLoadCommon &common,
+                                   unsigned registerIdx,
+                                   const LinearLayout &offMapping,
+                                   unsigned numPtrToOffX,
+                                   unsigned numPtrToOffY) const {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    MLIRContext *ctx = rewriter.getContext();
+    Type indexTy = getTypeConverter()->getIndexType();
+    StringAttr kRegister = StringAttr::get(ctx, "register");
+    StringAttr kPtrs = StringAttr::get(ctx, "ptrs");
+    StringAttr kOffIdx = StringAttr::get(ctx, "offx_idx");
+    StringAttr kDim1 = StringAttr::get(ctx, "dim1");
 
     SmallVector<Value> addrs, predicts;
     // Compute the addresses one by one.
@@ -2615,8 +2630,8 @@ private:
       // Note: here assume the offsetX is uniform value which is deduced
       // from slice layout of the result layout.
       // TODO: need to improve this.
-      Value offsetX =
-          targetInfo.shuffleIdx(rewriter, loc, offsetsX[offsetXIdx.second], 0);
+      Value offsetX = targetInfo.shuffleIdx(
+          rewriter, loc, common.offsetsX[offsetXIdx.second], 0);
 
       for (size_t j = 0; j < numPtrToOffY; ++j) {
         ptrIdx = i * numPtrToOffY + j;
@@ -2624,10 +2639,12 @@ private:
             offMapping.apply({{kRegister, registerIdx}, {kPtrs, ptrIdx}});
         auto linearOffsetY = offsetsForY[1];
         assert(linearOffsetY.first == kDim1);
-        Value ptrOffsetY = b.add(basicOffsetY, b.i32_val(linearOffsetY.second));
+        Value ptrOffsetY =
+            b.add(common.basicOffsetY, b.i32_val(linearOffsetY.second));
         // The address and pred are uniform value.
         GatherAddressAndPred gatherAddr = buildGatherAddressAndPred(
-            b, ctx, valueElemTy, desc, offsetX, ptrOffsetY);
+            b, rewriter.getContext(), common.valueElemTy, common.desc, offsetX,
+            ptrOffsetY);
 
         predicts.push_back(gatherAddr.pred);
         addrs.push_back(b.ptrtoint(i64_ty, gatherAddr.addr));
@@ -2642,8 +2659,8 @@ private:
       predVec = b.insert_element(predVec, predicts[i], sVal);
     }
 
-    return TritonGEN::SubGroupGatherLoadOp::create(rewriter, loc, unpackedType,
-                                                   ptrVec, predVec);
+    return TritonGEN::SubGroupGatherLoadOp::create(
+        rewriter, loc, common.unpackedType, ptrVec, predVec);
   }
 
   LogicalResult
@@ -2673,7 +2690,6 @@ private:
     StringAttr kWarp = S("warp");
     StringAttr kDim1 = S("dim1");
 
-    size_t resultRank = resultType.getRank();
     Type valueElemTy = typeConverter->convertType(resultType.getElementType());
     unsigned numElems = getTotalElemsPerThread(resultType);
     unsigned threadsPerWarp =
@@ -2683,9 +2699,9 @@ private:
     RankedTensorType descTensorType = descType.getBlockType();
     size_t descRank = descTensorType.getRank();
 
-    auto layoutConfigOr = buildLayoutConfig(
-        *llEncoding, resultType, offXTy, resultRank, valueElemTy, numElems,
-        threadsPerWarp, op->getParentOfType<ModuleOp>());
+    auto layoutConfigOr =
+        buildLayoutConfig(*llEncoding, resultType, offXTy, valueElemTy,
+                          op->getParentOfType<ModuleOp>());
     if (failed(layoutConfigOr))
       return rewriter.notifyMatchFailure(
           op, "failed to build gather layout config");
@@ -2711,8 +2727,8 @@ private:
                                       {kBlock, b.i32_val(0)}});
     // Add sub-offset Y from warp Id.
     Value basicOffsetY = b.add(offsetY, getNamedOffset(offsets, kDim1));
-
-    Type indexTy = typeConverter->getIndexType();
+    GatherLoadCommon common{desc, offsetsX, basicOffsetY, valueElemTy,
+                            unpackedType};
 
     for (size_t elemIdx = 0; elemIdx < numElems;
          elemIdx += layoutConfig.numElemsPerLoad) {
@@ -2721,14 +2737,12 @@ private:
 
       Value ret;
       if (layoutConfig.numPtrsPerLoad == threadsPerWarp) {
-        ret = generatePerLaneLoad(
-            loc, b, rewriter, ctx, desc, offsetsX, basicOffsetY, laneId,
-            registerIdx, layoutConfig.offMapping, valueElemTy, unpackedType);
+        ret = generatePerLaneLoad(loc, rewriter, common, laneId, registerIdx,
+                                  layoutConfig.offMapping);
       } else {
         ret = generateSubgroupGatherLoad(
-            loc, b, rewriter, ctx, desc, offsetsX, basicOffsetY, registerIdx,
-            layoutConfig.offMapping, layoutConfig.numPtrToOffX,
-            layoutConfig.numPtrToOffY, valueElemTy, unpackedType, indexTy);
+            loc, rewriter, common, registerIdx, layoutConfig.offMapping,
+            layoutConfig.numPtrToOffX, layoutConfig.numPtrToOffY);
       }
 
       unpackBlockLoadResult(ret, loadedVals, elemIdx, layoutConfig.regMapping,
