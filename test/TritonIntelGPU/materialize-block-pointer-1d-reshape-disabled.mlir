@@ -63,7 +63,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // ENABLED: ttg.convert_layout
     // ENABLED: tt.load %{{.*}} {ttig.block_io = "row_major", ttig.block_io_stride = 96 : i64}
     // ENABLED: ttg.convert_layout
-    // ENABLED: tt.reshape %{{.*}} efficient_layout
+    // ENABLED: tt.reshape %{{.*}} : tensor<32x32xf16, {{.*}}> -> tensor<1024xf16, {{.*}}>
     %result = tt.load %ptrs, %mask : tensor<1024x!tt.ptr<f16>, #blocked1d_large>
     tt.return %result : tensor<1024xf16, #blocked1d_large>
   }
