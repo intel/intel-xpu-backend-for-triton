@@ -2501,6 +2501,16 @@ private:
       config.numElemsPerLoad = gatherLoadCfg.numElemsPerLoad;
       config.offMapping = std::move(gatherLoadCfg.offsetMapping);
 
+      // Validate ptr decomposition on the original ptr-based mapping.
+      auto ptrToOffX = config.offMapping.sublayout({kPtrs}, {kOffIdx});
+      auto ptrToOffY = config.offMapping.sublayout({kPtrs}, {kDim1});
+      unsigned numPtrToOffY =
+          ptrToOffY.removeZeroBasesAlongDim(kPtrs).getInDimSize(kPtrs);
+      unsigned numPtrToOffX =
+          ptrToOffX.removeZeroBasesAlongDim(kPtrs).getInDimSize(kPtrs);
+      assert(numPtrToOffX * numPtrToOffY == config.numPtrsPerLoad &&
+             "invalid ptrToOffMapping");
+
       if (config.numPtrsPerLoad == threadsPerWarp) {
         // If the number of pointers for gather load matches the warp size, map
         // pointers onto lanes so we can use the per-lane load path.
