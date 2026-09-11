@@ -32,21 +32,6 @@ def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
 class TTIG_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonIntelGPU_Dialect, mnemonic, !listconcat(traits, [VerifyMemDescLayoutsTrait])>;
 
-def TTIG_AllocOp : TTIG_Op<"alloc", [MemoryEffects<[MemAlloc]>]> {
-  let summary = "Memory allocation operation";
-  let description = [{
-    The `alloc` operation allocates a region of memory as specified by its type.
-    Example:
-      ```mlir
-      %0 = ttig.alloc() : <8x64xf32, 3>
-      ```
-  }];
-  let results = (outs TT_Ptr:$result);
-  let assemblyFormat = [{
-    attr-dict `:` type($result)
-  }];
-}
-
 def TTIG_PrefetchOp : TTIG_Op<"prefetch", [
   MemoryEffects<[MemWrite<L2Cache>]>,
   DeclareOpInterfaceMethods<PredicatedOpInterface>,
@@ -106,22 +91,6 @@ def TTIG_DescriptorPrefetchOp : TTIG_Op<"descriptor_prefetch", [MemoryEffects<[M
     attr-dict `:` qualified(type($desc))
   }];
   let hasVerifier = 1;
-}
-
-// same as tt.broadcast except that we don't require SameOperandsAndResultEncoding
-def TTIG_BroadcastOp : TTIG_Op<"broadcast", [Pure, SameOperandsAndResultElementType]> {
-  let summary = "broadcast a tensor";
-  let description = [{
-    For a given tensor, broadcast changes one or more dimensions with size 1
-    to a new size, e.g. tensor<1x32x1xf32> -> tensor<2x32x4xf32>.  You cannot
-    change the size of a non-1 dimension.
-  }];
-
-  let arguments = (ins TT_Tensor:$src);
-  let results = (outs TT_Tensor:$result);
-  let assemblyFormat = [{
-    $src attr-dict `:` type($src) `->` type($result)
-  }];
 }
 
 // `tt.ptr` no longer spells the workgroup (SLM) address space: PtrAddrSpace

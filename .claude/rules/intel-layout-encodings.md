@@ -18,7 +18,6 @@ DistributedEncoding (base class, combines DistributedEncodingTrait + LayoutEncod
   |
   +-- BlockedEncodingAttr        (upstream, memory-coalesced access)
   +-- DpasEncodingAttr           (Intel, #ttig.dpas, + MmaEncodingTrait)
-  +-- WarpEncodingAttr           (Intel, #ttig.warp)
   +-- Subgroup2DBlockEncodingAttr (Intel, #ttig.subgroup_2d_block, + MmaEncodingTrait)
   +-- LinearEncodingAttr         (upstream, flexible coordinate mapping)
 
@@ -106,17 +105,6 @@ DPAS uses register and lane bases to map thread/register coordinates to tensor c
 - `repCluster[M]` limited by max 2D block load tile_height (32 rows)
 - `repCluster[N]` limited by max 2D block load bytes per row (64 bytes)
 - Both values are powers of 2
-
-## WarpEncodingAttr (`#ttig.warp`)
-
-Thread-tile distribution encoding for non-DPAS operations. **Do not guess** parameter details — read them from `.claude/reference/build-and-debug-reference.md`.
-
-### Element Distribution
-```
-elemsPerThread[i] = sizePerThread[i] * threadsPerWarp[i]
-```
-
-Each thread owns a contiguous tile of `sizePerThread` elements, and `threadsPerWarp` threads are distributed across each dimension.
 
 ## Subgroup2DBlockEncodingAttr (`#ttig.subgroup_2d_block`)
 

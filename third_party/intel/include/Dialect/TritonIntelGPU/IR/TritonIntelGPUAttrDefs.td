@@ -321,38 +321,6 @@ The semantic of this `tt.dot` includes GEMM tiling configuration as:
 }
 
 //===----------------------------------------------------------------------===//
-// Intel Warp Encoding
-//===----------------------------------------------------------------------===//
-
-def WarpEncodingAttr : DistributedEncoding<"WarpEncoding", "intel_warp_encoding",
-                                     [DeclareLayoutEncodingMethods]> {
-  let dialect = TritonIntelGPU_Dialect;
-  let mnemonic = "warp";
-
-  let description = [{
-   An encoding characterized by two tuples -- thread tile size and warp tile size
-   which specify the amount of elements owned by each thread and warp respectively.
-   currently all their meaning remain the same as above blocked encoding.
-  }];
-
-  let parameters = (
-    ins
-    ArrayRefParameter<"unsigned">:$sizePerThread_,
-    ArrayRefParameter<"unsigned">:$threadsPerWarp_,
-    ArrayRefParameter<"unsigned">:$order_ // the fastest-changing axis first
-  );
-
-  let extraClassDeclaration = extraDistributedDeclaration #  [{
-    unsigned getTotalElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const;
-    SmallVector<unsigned> getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const;
-    SmallVector<unsigned> getSizePerThread() const;
-    SmallVector<unsigned> getThreadsPerWarp() const;
-  }];
-
-  let hasCustomAssemblyFormat = 1;
-}
-
-//===----------------------------------------------------------------------===//
 // Intel Subgroup2DBlock Encoding
 //===----------------------------------------------------------------------===//
 
