@@ -208,7 +208,9 @@ def TTIG_ExtractDescOp : TTIG_Op<"extract_desc", [Pure]> {
   let assemblyFormat = "$desc `[` $index `]` attr-dict `:` type($desc) `->` type($result)";
 }
 
-def TTIG_Subgroup2DBlockLoadOp : TTIG_Op<"2d_block_load"> {
+def TTIG_Subgroup2DBlockLoadOp : TTIG_Op<"2d_block_load", [
+  AttrSizedOperandSegments
+]> {
   let summary = "2D block load from a descriptor-based surface";
   let description = [{
     Loads a 2D tile from a memory surface described by decomposed parameters.
@@ -234,6 +236,17 @@ def TTIG_Subgroup2DBlockLoadOp : TTIG_Op<"2d_block_load"> {
     / `base_pitch` (those describe a single 2D surface only), so they must be
     supplied by the producer of this op.
 
+    `batch_offsets` and `batch_shapes` carry the index and the declared extent
+    of every batch dimension of the *descriptor*, outermost first. They are used
+    only to bounds-check those dimensions: `base_ptr` already includes every
+    batch offset, so a batch index escapes the hardware's `base_width` x
+    `base_height` clamp and cannot be checked by the hardware. Unlike
+    `batch_strides`, which describes only what the result layout walks
+    (`rank - 2` entries), these describe the descriptor (`descriptor_rank - 2`
+    entries) and so also cover the leading dimensions a rank-reducing load
+    drops. The dropped dimensions are therefore the first
+    `batch_offsets.size() - batch_strides.size()` entries.
+
     When `pad_nan` is set, the LLVM lowering builds boundary masks from
     the surface dimensions and fills out-of-bounds elements with NaN.
     Otherwise, the hardware zero-fills out-of-bounds elements.
@@ -248,6 +261,8 @@ def TTIG_Subgroup2DBlockLoadOp : TTIG_Op<"2d_block_load"> {
     I32:$offset_x,
     I32:$offset_y,
     Variadic<I64>:$batch_strides,
+    Variadic<I32>:$batch_offsets,
+    Variadic<I32>:$batch_shapes,
     OptionalAttr<UnitAttr>:$pad_nan,
     TTIG_BlockIOMode:$memory_layout
   );
@@ -257,6 +272,8 @@ def TTIG_Subgroup2DBlockLoadOp : TTIG_Op<"2d_block_load"> {
     $base_ptr `,` $base_width `,` $base_height `,` $base_pitch
     `[` $offset_x `,` $offset_y `]`
     (`batch_strides` `[` $batch_strides^ `]`)?
+    (`batch_offsets` `[` $batch_offsets^ `]`)?
+    (`batch_shapes` `[` $batch_shapes^ `]`)?
     `{` $memory_layout (`,` `pad_nan` $pad_nan^)? `}`
     attr-dict `:` type($base_ptr) `->` type($result)
   }];

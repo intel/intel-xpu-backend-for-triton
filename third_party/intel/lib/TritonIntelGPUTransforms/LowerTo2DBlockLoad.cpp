@@ -311,13 +311,23 @@ private:
     for (unsigned d = 0; d + 2 < rank; ++d)
       batchStrides.push_back(strides[d + (descRank - rank)]);
 
+    // Batch indices folded into base_ptr re-base the 2D surface, so they
+    // escape the hardware's clamp; the lowering needs each index and its
+    // declared extent to predicate the load. For that check only -- never for
+    // addressing, since base_ptr already carries the offsets.
+    SmallVector<Value> batchOffsets, batchShapes;
+    for (unsigned d = 0; d < numBatchDims; ++d) {
+      batchOffsets.push_back(indices[d]);
+      batchShapes.push_back(toI32(shapes[d]));
+    }
+
     // Determine padding mode from the descriptor.
     bool padNan = padding == tt::PaddingOption::PAD_NAN;
     UnitAttr padNanAttr = padNan ? builder.getUnitAttr() : UnitAttr();
 
     auto blockLoadOp = ttgi::Subgroup2DBlockLoadOp::create(
         builder, loc, op.getType(), basePtr, baseWidth, baseHeight, basePitch,
-        offsetX, offsetY, batchStrides, padNanAttr,
+        offsetX, offsetY, batchStrides, batchOffsets, batchShapes, padNanAttr,
         ttgi::BlockIOModeAttr::get(builder.getContext(), memLayout));
 
     // Propagate one_matrix_per_load attribute if present.

@@ -205,11 +205,23 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
   // CHECK-LABEL: @block_load_batch_rank3
-  tt.func public @block_load_batch_rank3(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i64) {
+  tt.func public @block_load_batch_rank3(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i64, %arg7: i32, %arg8: i32) {
     // CHECK: %[[BOFF:.*]] = llvm.mul %{{.*}}, %arg6 : i64
     // CHECK: %[[BPTR:.*]] = llvm.getelementptr %{{.*}}{{\[}}%[[BOFF]]{{\]}} : (!llvm.ptr<1>, i64) -> !llvm.ptr<1>, f16
+    // COM: The batch offset is folded into the base pointer, which re-bases the
+    // COM: 2D surface and so escapes the hardware's base_width x base_height
+    // COM: clamp. It must be bounds-checked against the descriptor's declared
+    // COM: extent instead (issue #7922). Signed compares, because a negative
+    // COM: descriptor index is out of bounds and must not wrap.
+    // CHECK: %[[IDX:.*]] = llvm.add %arg7, %{{.*}} : i32
+    // CHECK-DAG: %[[GE0:.*]] = llvm.icmp "sge" %[[IDX]], %{{.*}} : i32
+    // CHECK-DAG: %[[LT:.*]] = llvm.icmp "slt" %[[IDX]], %arg8 : i32
+    // CHECK: %[[PRED:.*]] = llvm.and %[[GE0]], %[[LT]]
+    // COM: A failing check pushes the Y coordinate past base_height, so the
+    // COM: hardware returns the zero padding instead of reading the surface.
+    // CHECK: llvm.select %[[PRED]]
     // CHECK: triton_gen.2Dblockload %[[BPTR]]
-    %0 = ttig.2d_block_load %arg0, %arg1, %arg2, %arg3[%arg4, %arg5] batch_strides[%arg6] {row_major} : !tt.ptr<f16> -> tensor<2x64x32xf16, #dot0>
+    %0 = ttig.2d_block_load %arg0, %arg1, %arg2, %arg3[%arg4, %arg5] batch_strides[%arg6] batch_offsets[%arg7] batch_shapes[%arg8] {row_major} : !tt.ptr<f16> -> tensor<2x64x32xf16, #dot0>
     tt.return
   }
 }
@@ -222,13 +234,24 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 #blocked = #ttg.blocked<{sizePerThread = [1, 1, 8, 1], threadsPerWarp = [1, 1, 1, 16], warpsPerCTA = [2, 2, 2, 1], order = [3, 2, 1, 0]}>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
   // CHECK-LABEL: @block_load_batch_rank4
-  tt.func public @block_load_batch_rank4(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i64, %arg7: i64) {
+  tt.func public @block_load_batch_rank4(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i64, %arg7: i64, %arg8: i32, %arg9: i32, %arg10: i32, %arg11: i32) {
     // CHECK: %[[B0:.*]] = llvm.mul %{{.*}}, %arg6 : i64
     // CHECK: %[[P0:.*]] = llvm.getelementptr %{{.*}}{{\[}}%[[B0]]{{\]}} : (!llvm.ptr<1>, i64) -> !llvm.ptr<1>, f16
+    // COM: Each batch dim is bounds-checked against ITS OWN declared extent,
+    // COM: interleaved with the GEP chain: dim 0 against %arg10, dim 1 against
+    // COM: %arg11. Checking both against one extent would be an indexing bug
+    // COM: (issue #7922).
+    // CHECK: %[[LT0:.*]] = llvm.icmp "slt" %{{.*}}, %arg10 : i32
+    // CHECK: %[[PRED0:.*]] = llvm.and %{{.*}}, %[[LT0]] : i1
     // CHECK: %[[B1:.*]] = llvm.mul %{{.*}}, %arg7 : i64
     // CHECK: %[[P1:.*]] = llvm.getelementptr %[[P0]]{{\[}}%[[B1]]{{\]}} : (!llvm.ptr<1>, i64) -> !llvm.ptr<1>, f16
+    // CHECK: %[[LT1:.*]] = llvm.icmp "slt" %{{.*}}, %arg11 : i32
+    // CHECK: %[[PRED1:.*]] = llvm.and %{{.*}}, %[[LT1]] : i1
+    // COM: Both dimensions must gate the load, so their predicates are ANDed.
+    // CHECK: %[[PRED:.*]] = llvm.and %[[PRED0]], %[[PRED1]] : i1
+    // CHECK: llvm.select %[[PRED]]
     // CHECK: triton_gen.2Dblockload %[[P1]]
-    %0 = ttig.2d_block_load %arg0, %arg1, %arg2, %arg3[%arg4, %arg5] batch_strides[%arg6, %arg7] {row_major} : !tt.ptr<f16> -> tensor<2x2x16x16xf16, #blocked>
+    %0 = ttig.2d_block_load %arg0, %arg1, %arg2, %arg3[%arg4, %arg5] batch_strides[%arg6, %arg7] batch_offsets[%arg8, %arg9] batch_shapes[%arg10, %arg11] {row_major} : !tt.ptr<f16> -> tensor<2x2x16x16xf16, #blocked>
     tt.return
   }
 }
@@ -241,12 +264,41 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 #dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
   // CHECK-LABEL: @block_load_batch_rank3_column_major
-  tt.func public @block_load_batch_rank3_column_major(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i64) {
+  tt.func public @block_load_batch_rank3_column_major(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i64, %arg7: i32, %arg8: i32) {
     // CHECK: %[[BOFF:.*]] = llvm.mul %{{.*}}, %arg6 : i64
     // CHECK: %[[BPTR:.*]] = llvm.getelementptr %{{.*}}{{\[}}%[[BOFF]]{{\]}} : (!llvm.ptr<1>, i64) -> !llvm.ptr<1>, f16
     // CHECK: triton_gen.2Dblockload %[[BPTR]]
     // CHECK-SAME: transpose = true
-    %0 = ttig.2d_block_load %arg0, %arg1, %arg2, %arg3[%arg4, %arg5] batch_strides[%arg6] {column_major} : !tt.ptr<f16> -> tensor<2x32x64xf16, #dot1>
+    %0 = ttig.2d_block_load %arg0, %arg1, %arg2, %arg3[%arg4, %arg5] batch_strides[%arg6] batch_offsets[%arg7] batch_shapes[%arg8] {column_major} : !tt.ptr<f16> -> tensor<2x32x64xf16, #dot1>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Test a MIXED rank-reducing block load: the descriptor is rank 4 but the
+// COM: result is rank 3, so descriptor batch dim 0 is dropped while dim 1 is still
+// COM: spanned by the result layout. Both indices are folded into the base pointer
+// COM: and so escape the hardware surface clamp (issue #7922), but they need
+// COM: different checks: the dropped dim is uniform across sub-tiles, the retained
+// COM: one is not. This is the only case where `batch_offsets`/`batch_shapes` are
+// COM: indexed at a non-zero `rankDelta`, so it is what pins that mapping.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4, 2], repCluster = [1, 1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @block_load_batch_mixed_rank_reducing
+  tt.func public @block_load_batch_mixed_rank_reducing(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i64, %arg7: i32, %arg8: i32, %arg9: i32, %arg10: i32) {
+    // COM: Dropped dim 0: no sub-tile offset is added, so its index is compared
+    // COM: directly against its own extent.
+    // CHECK: llvm.icmp "slt" %arg7, %arg9 : i32
+    // COM: Retained dim 1 is offset by the sub-tile and checked against ITS extent.
+    // COM: Reading either operand list at the wrong `rankDelta` would compare
+    // COM: against %arg7/%arg9 here and silently bound the wrong dimension.
+    // CHECK: %[[IDX:.*]] = llvm.add %arg8, %{{.*}} : i32
+    // CHECK: llvm.icmp "slt" %[[IDX]], %arg10 : i32
+    // CHECK: llvm.select
+    // CHECK: triton_gen.2Dblockload
+    %0 = ttig.2d_block_load %arg0, %arg1, %arg2, %arg3[%arg4, %arg5] batch_strides[%arg6] batch_offsets[%arg7, %arg8] batch_shapes[%arg9, %arg10] {row_major} : !tt.ptr<f16> -> tensor<2x64x32xf16, #dot0>
     tt.return
   }
 }
@@ -292,6 +344,47 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32,
   tt.func public @block_load_dot_b_subgroup32_transpose(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32) {
     // CHECK: triton_gen.2Dblockload {{.*}} transpose = true
     %0 = ttig.2d_block_load %arg0, %arg1, %arg2, %arg3[%arg4, %arg5] {column_major} : !tt.ptr<f16> -> tensor<32x32xf16, #dot>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Test pad_nan on a rank-3 (batched) block load. The NaN mask must bound the
+// COM: batch dim by the descriptor's declared extent at the descriptor's index,
+// COM: not by the tile extent at index 0 (issue #7922). All NaN-mask IR is emitted
+// COM: before any address IR, so a compare against the declared extent %arg8 that
+// COM: precedes the batch-stride multiply can only come from the mask.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 4, 2], repCluster = [1, 1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @block_load_batch_rank3_pad_nan
+  tt.func public @block_load_batch_rank3_pad_nan(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i64, %arg7: i32, %arg8: i32) {
+    // COM: Bounding by the tile extent instead would never reference %arg8 here.
+    // CHECK: %[[EXT:.*]] = llvm.trunc %arg8
+    // CHECK: llvm.icmp "slt" %{{.*}}, %[[EXT]] : i32
+    // CHECK: triton_gen.2Dblockload
+    %0 = ttig.2d_block_load %arg0, %arg1, %arg2, %arg3[%arg4, %arg5] batch_strides[%arg6] batch_offsets[%arg7] batch_shapes[%arg8] {row_major, pad_nan} : !tt.ptr<f16> -> tensor<2x64x32xf16, #dot0>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Test pad_nan on a rank-reducing block load. The dropped batch dim has no
+// COM: result dimension for the NaN mask to iterate, so its bounds check must be
+// COM: ANDed into every mask element instead (issue #7922). Without this, an
+// COM: out-of-range batch index yields zeros rather than NaN.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: @block_load_batch_rank_reducing_pad_nan
+  tt.func public @block_load_batch_rank_reducing_pad_nan(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i32, %arg6: i32, %arg7: i32) {
+    // CHECK: %[[LT:.*]] = llvm.icmp "slt" %arg6, %arg7 : i32
+    // CHECK: %[[DROP:.*]] = llvm.and %{{.*}}, %[[LT]] : i1
+    // CHECK: llvm.and %[[DROP]], %{{.*}} : i1
+    // CHECK: triton_gen.2Dblockload
+    %0 = ttig.2d_block_load %arg0, %arg1, %arg2, %arg3[%arg4, %arg5] batch_offsets[%arg6] batch_shapes[%arg7] {row_major, pad_nan} : !tt.ptr<f16> -> tensor<64x32xf16, #dot0>
     tt.return
   }
 }
