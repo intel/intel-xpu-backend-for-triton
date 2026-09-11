@@ -119,3 +119,23 @@ index ff90b20a70..4a49fb66a5 100644
  
          unified_kv_indptr, unified_kv_indices, prefix_lens = build_unified_kv_indices(
              kv_indptr,
+diff --git a/python/sglang/srt/utils/common.py b/python/sglang/srt/utils/common.py
+index 04b04eb9c0..229012024d 100644
+--- a/python/sglang/srt/utils/common.py
++++ b/python/sglang/srt/utils/common.py
+@@ -765,7 +765,14 @@ def get_cpu_memory_capacity():
+ def get_xpu_memory_capacity():
+     try:
+         if torch.xpu.is_available():
+-            return torch.xpu.mem_get_info()[1] // 1024 // 1024  # unit: MB
++            try:
++                return torch.xpu.mem_get_info()[1] // 1024 // 1024  # unit: MB
++            except RuntimeError:
++                # Data Center GPU Max (PVC) does not implement the free-memory
++                # query, so mem_get_info raises there. Only element [1] (total)
++                # is read here and device properties report the same value.
++                total = torch.xpu.get_device_properties().total_memory
++                return total // 1024 // 1024  # unit: MB
+         raise ValueError("No GPU memory values found.")
+     except AttributeError:
+         raise RuntimeError("torch.xpu is not available.")
