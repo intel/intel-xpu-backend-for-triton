@@ -2501,7 +2501,7 @@ private:
           std::move(gatherLoadCfg.regPackedBases);
       config.numPtrsPerLoad = gatherLoadCfg.numPtrsPerLoad;
       config.numElemsPerLoad = gatherLoadCfg.numElemsPerLoad;
-      config.offMapping = gatherLoadCfg.offsetMapping;
+      config.offMapping = std::move(gatherLoadCfg.offsetMapping);
 
       auto ptrToOffX = config.offMapping.sublayout({kPtrs}, {kOffIdx});
       auto ptrToOffY = config.offMapping.sublayout({kPtrs}, {kDim1});
@@ -2697,7 +2697,7 @@ private:
       return rewriter.notifyMatchFailure(
           op, "failed to build gather layout config");
     }
-    GatherLayoutConfig layoutConfig = *layoutConfigOr;
+    GatherLayoutConfig layoutConfig = std::move(*layoutConfigOr);
     // All validity checks passed; now generate IR.
     SmallVector<Value> offsetsX =
         unpackLLElements(loc, adaptor.getXOffsets(), rewriter);
