@@ -15,14 +15,6 @@ on:
         description: vLLM pin (commit hash), keep empty for default
         type: string
         default: ""
-      vllm_xpu_kernels_pin:
-        description: vLLM XPU kernels pin (commit hash), keep empty for default
-        type: string
-        default: ""
-      use_branch_wheel:
-        description: Use prebuilt vLLM XPU kernels wheel from the current branch (must have a successful nightly build)
-        type: boolean
-        default: false
   workflow_call:
     inputs:
       runner_label:
@@ -38,18 +30,10 @@ on:
         description: vLLM pin (commit hash), keep empty for default
         type: string
         default: ""
-      vllm_xpu_kernels_pin:
-        description: vLLM XPU kernels pin (commit hash), keep empty for default
-        type: string
-        default: ""
-      use_branch_wheel:
-        description: Use prebuilt vLLM XPU kernels wheel from the current branch (must have a successful nightly build)
-        type: boolean
-        default: false
 
 permissions: read-all
 
-# VLLM installation from upstream uses vllm-xpu-kernels wheel which is built just for python==3.12
+# vLLM XPU kernels ship a single abi3 wheel; 3.12 is the version the vLLM suites are validated on.
 env:
   PYTHON_VERSION: "3.12"
   TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number)) || (github.event_name == 'schedule' && 'ci') || 'test' }}
@@ -83,12 +67,6 @@ jobs:
         run: |
           echo "${{ inputs.vllm_pin }}" > scripts/vllm/vllm-pin.txt
           echo "Overriding vLLM pin to: ${{ inputs.vllm_pin }}"
-
-      - name: Override vLLM XPU kernels pin
-        if: ${{ inputs.vllm_xpu_kernels_pin }}
-        run: |
-          echo "${{ inputs.vllm_xpu_kernels_pin }}" > scripts/vllm/vllm-xpu-kernels-pin.txt
-          echo "Overriding vLLM XPU kernels pin to: ${{ inputs.vllm_xpu_kernels_pin }}"
 
       - name: Install Python (from pyenv) ${{ inputs.python_version }}
         uses: ./.github/actions/setup-pyenv-python
@@ -131,8 +109,6 @@ jobs:
         id: install-vllm
         if: ${{ steps.install-benchmarks.outcome == 'success' && !cancelled() }}
         uses: ./.github/actions/install-vllm
-        with:
-          use-branch-wheel: ${{ inputs.use_branch_wheel }}
 
       - name: Report environment details
         timeout-minutes: 1
@@ -147,7 +123,6 @@ jobs:
           TRITON_COMMIT_ID=$GITHUB_SHA
           TRITON_BRANCH=$GITHUB_REF_NAME
           VLLM_PIN=$(cat scripts/vllm/vllm-pin.txt)
-          VLLM_XPU_KERNELS_PIN=$(cat scripts/vllm/vllm-xpu-kernels-pin.txt)
           OS=${{ runner.os }}
           EOF
           ./scripts/capture-hw-details.sh | tee -a "$REPORTS/.env"

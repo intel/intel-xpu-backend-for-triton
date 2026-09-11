@@ -11,10 +11,6 @@ on:
         description: vLLM pin (commit hash), keep empty for default
         type: string
         default: ""
-      vllm_xpu_kernels_pin:
-        description: vLLM XPU kernels pin (commit hash), keep empty for default
-        type: string
-        default: ""
       skip_list:
         description: Skip list directory override
         type: string
@@ -31,10 +27,6 @@ on:
         description: Use Python built with pyenv
         type: boolean
         default: true
-      use_branch_wheel:
-        description: Use prebuilt vLLM XPU kernels wheel from the current branch (must have a successful nightly build)
-        type: boolean
-        default: false
 
 permissions: read-all
 
@@ -158,12 +150,6 @@ jobs:
           echo "${{ inputs.vllm_pin }}" > scripts/vllm/vllm-pin.txt
           echo "Overriding vLLM pin to: ${{ inputs.vllm_pin }}"
 
-      - name: Override vLLM XPU kernels pin
-        if: ${{ inputs.vllm_xpu_kernels_pin }}
-        run: |
-          echo "${{ inputs.vllm_xpu_kernels_pin }}" > scripts/vllm/vllm-xpu-kernels-pin.txt
-          echo "Overriding vLLM XPU kernels pin to: ${{ inputs.vllm_xpu_kernels_pin }}"
-
       - name: Load pip cache
         id: pip-cache
         uses: ./.github/actions/load
@@ -229,8 +215,6 @@ jobs:
         id: install-vllm
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         uses: ./.github/actions/install-vllm
-        with:
-          use-branch-wheel: ${{ inputs.use_branch_wheel }}
 
       - name: Create reports dir
         run: |
