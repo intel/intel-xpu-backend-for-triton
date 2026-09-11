@@ -2060,3 +2060,21 @@ module {
     temp_file = tmp_path / "test_regression_7022.ttir"
     temp_file.write_text(ir)
     triton.compile(str(temp_file))
+
+
+def test_regression_7945_annotate_cache_control_enabled_on_every_os(fresh_knobs):
+    """`TRITON_INTEL_DISABLE_ANNOTATE_CACHE_CONTROL` used to default to
+    `os.name == "nt"`, keeping the `AnnotateCacheControl` pass off on Windows
+    after the regressions reported in
+    https://github.com/intel/intel-xpu-backend-for-triton/issues/7495. The
+    harmful `cg`-to-`!nontemporal` lowering, which IGC turns into an
+    L3-bypassing LSC access, was removed in #7901, so the pass is enabled on
+    every OS again (#7945). Windows CI observes the flip here.
+    """
+    assert fresh_knobs.intel.disable_annotate_cache_control is False
+
+
+@pytest.mark.parametrize("value, expected", [("1", True), ("0", False)])
+def test_regression_7945_annotate_cache_control_env_override(fresh_knobs, monkeypatch, value, expected):
+    monkeypatch.setenv("TRITON_INTEL_DISABLE_ANNOTATE_CACHE_CONTROL", value)
+    assert fresh_knobs.intel.disable_annotate_cache_control is expected
