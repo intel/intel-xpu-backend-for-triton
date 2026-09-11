@@ -83,6 +83,8 @@ jobs:
       - name: Setup PyTorch
         id: setup-pytorch
         uses: ./.github/actions/setup-pytorch
+        with:
+          lts: ${{ inputs.runner_label == 'lts' }}
 
       # sglang imports torchvision.io at module level and install-sglang.sh strips
       # torch* from its pyproject, so it has to be installed here, from the PyTorch pin.
