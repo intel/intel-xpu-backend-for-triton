@@ -315,6 +315,68 @@ private:
     bool padNan = padding == tt::PaddingOption::PAD_NAN;
     UnitAttr padNanAttr = padNan ? builder.getUnitAttr() : UnitAttr();
 
+    // OOB boundary checks are applied at i32 (4-byte) granularity for
+    // 2D block loads, even for elem_size_in_bits < 32. When base_width is
+    // not a multiple of 4 bytes, the last partial i32 word is considered OOB
+    // and hardware zeroes it -- including any in-bounds element it contains.
+    // For VNNI loads, the hardware additionally packs
+    // kAlignBytes/elemSizeInBytes K-rows into each i32 word; an odd row count
+    // causes the same coarse-granularity corruption in the row direction.
+    //
+    // This is a conservative, compile-time-only fix: whenever either check
+    // could be violated for a compile-time-constant descriptor shape, bail to
+    // the existing scalar-load fallback instead of emitting a 2D block load.
+    const bool isPadded = padding == tt::PaddingOption::PAD_NAN ||
+                          padding == tt::PaddingOption::PAD_ZERO;
+    if (isPadded) {
+      const unsigned elemSizeInBytes = elemSizeInBits / 8;
+      constexpr unsigned kAlignBytes = 4; // i32 word = hardware OOB granularity
+
+      // Column direction: base_width (last dim) must be a multiple of
+      // kAlignBytes, or the last partial i32 word's OOB check corrupts the
+      // in-bounds element(s) sharing that word.
+      for (auto d : allDescs) {
+        const auto descColCount =
+            tt::intel::getFoldedConstantValue(d->getOperand(descRank));
+        if (!descColCount) {
+          // Non-constant shape: cannot determine alignment statically.
+          // TODO: runtime column counts still hit the underlying hardware bug
+          // when misaligned; a runtime check + fallback would close this gap.
+          continue;
+        }
+        int64_t colBytes = *descColCount * elemSizeInBytes;
+        if (colBytes % kAlignBytes != 0) {
+          LDBG("Padded load: base_width="
+               << colBytes
+               << " not 4-aligned — 2D block load skipped for: " << *op);
+          return;
+        }
+      }
+
+      // Row direction: i32 granularity OOB check to VNNI loads
+      // where multiple K-rows are packed into each i32 word.
+      auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(encoding);
+      const bool isVNNILoad = dotOpEnc && dotOpEnc.getOpIdx() == 1;
+      if (isVNNILoad) {
+        const unsigned vnniGranularity = kAlignBytes / elemSizeInBytes;
+        // TODO: non-constant row count returns true (conservatively passes),
+        // but a runtime odd row count still causes the i32-pairing problem at
+        // runtime. A proper fix requires either a runtime check or
+        // restricting this path to constant-only row counts.
+        bool rowsAligned = llvm::all_of(allDescs, [&](tt::MakeTensorDescOp d) {
+          const auto descRowCount = tt::intel::getFoldedConstantValue(
+              d->getOperand(1 + (descRank - 2)));
+          return !descRowCount || (*descRowCount % vnniGranularity == 0);
+        });
+        if (!rowsAligned) {
+          LDBG("Padded load: odd VNNI K-row count — 2D block load skipped "
+               "for: "
+               << *op);
+          return;
+        }
+      }
+    }
+
     auto blockLoadOp = ttgi::Subgroup2DBlockLoadOp::create(
         builder, loc, op.getType(), basePtr, baseWidth, baseHeight, basePitch,
         offsetX, offsetY, batchStrides, padNanAttr,
