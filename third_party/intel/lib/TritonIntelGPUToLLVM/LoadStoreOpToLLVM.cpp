@@ -2472,7 +2472,7 @@ private:
     return {pred, addr};
   }
 
-  static FailureOr<GatherLayoutConfig>
+  static GatherLayoutConfig
   buildLayoutConfig(const LinearLayout &llEncoding, RankedTensorType resultType,
                     const LinearLayout &offsetsXLLEncoding, Type valueElemTy,
                     ModuleOp moduleOp) {
@@ -2680,13 +2680,8 @@ private:
     RankedTensorType descTensorType = descType.getBlockType();
     size_t descRank = descTensorType.getRank();
 
-    auto layoutConfigOr = buildLayoutConfig(
+    GatherLayoutConfig layoutConfig = buildLayoutConfig(
         *llEncoding, resultType, *offsetsXLLEncoding, valueElemTy, mod);
-    if (failed(layoutConfigOr)) {
-      return rewriter.notifyMatchFailure(
-          op, "failed to build gather layout config");
-    }
-    GatherLayoutConfig layoutConfig = std::move(*layoutConfigOr);
     // All validity checks passed; now generate IR.
     SmallVector<Value> offsetsX =
         unpackLLElements(loc, adaptor.getXOffsets(), rewriter);
