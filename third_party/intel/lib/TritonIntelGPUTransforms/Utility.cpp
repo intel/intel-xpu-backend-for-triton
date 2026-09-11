@@ -143,6 +143,13 @@ Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
   return mlir::inferSrcEncoding(op, encoding);
 }
 
+CachePolicy getCachePolicy(Attribute cachePolicy) {
+  auto policy = dyn_cast_if_present<tt::CachePolicyAttr>(cachePolicy);
+  if (!policy)
+    return {};
+  return {policy.getCacheModifier(), policy.getEvictionPolicy()};
+}
+
 bool isExpensiveLoadOrStore(Operation *op) {
   assert((isa<tt::LoadOp, tt::StoreOp, tt::DescriptorLoadOp,
               tt::DescriptorStoreOp>(op)) &&

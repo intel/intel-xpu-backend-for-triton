@@ -3174,7 +3174,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.targ
     %tmp14_13 = arith.addi %tmp12, %tmp14_12 : tensor<1x256xi64, #blocked_nll>
     %tmp14_14 = tt.splat %in_ptr1 : !tt.ptr<f32> -> tensor<1x256x!tt.ptr<f32>, #blocked_nll>
     %tmp14_15 = tt.addptr %tmp14_14, %tmp14_13 : tensor<1x256x!tt.ptr<f32>, #blocked_nll>, tensor<1x256xi64, #blocked_nll>
-    %tmp14_16 = tt.load %tmp14_15 evictionPolicy = evict_last : tensor<1x256x!tt.ptr<f32>, #blocked_nll>
+    %tmp14_16 = tt.load %tmp14_15 {cachePolicy = #tt.cache_policy<cache_modifier = none, eviction_policy = evict_last>} : tensor<1x256x!tt.ptr<f32>, #blocked_nll>
     %tmp16 = arith.subf %tmp14_16, %tmp15_6 : tensor<1x256xf32, #blocked_nll>
     %tmp18 = arith.subf %tmp16, %tmp17_8 : tensor<1x256xf32, #blocked_nll>
     %tmp19 = arith.subf %cst_0, %tmp18 : tensor<1x256xf32, #blocked_nll>

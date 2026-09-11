@@ -22,7 +22,7 @@ module {
     %8 = arith.divsi %5, %cst_8 : tensor<32x1xi32>
     %9 = tt.splat %in_ptr1 : !tt.ptr<f16> -> tensor<32x1x!tt.ptr<f16>>
     %10 = tt.addptr %9, %7 : tensor<32x1x!tt.ptr<f16>>, tensor<32x1xi32>
-    %11 = tt.load %10 evictionPolicy = evict_last : tensor<32x1x!tt.ptr<f16>>
+    %11 = tt.load %10 {cachePolicy = #tt.cache_policy<cache_modifier = none, eviction_policy = evict_last>} : tensor<32x1x!tt.ptr<f16>>
     %12 = arith.extf %11 : tensor<32x1xf16> to tensor<32x1xf32>
     %13 = tt.broadcast %7 : tensor<32x1xi32> -> tensor<32x32xi32>
     %14 = arith.muli %8, %cst_4 : tensor<32x1xi32>
@@ -39,7 +39,7 @@ module {
       %50 = arith.addi %49, %15 : tensor<32x32xi32>
       %51 = tt.addptr %16, %50 : tensor<32x32x!tt.ptr<f16>>, tensor<32x32xi32>
       %52 = tt.broadcast %46 : tensor<1x32xi1> -> tensor<32x32xi1>
-      %53 = tt.load %51, %52, %cst evictionPolicy = evict_last : tensor<32x32x!tt.ptr<f16>>
+      %53 = tt.load %51, %52, %cst {cachePolicy = #tt.cache_policy<cache_modifier = none, eviction_policy = evict_last>} : tensor<32x32x!tt.ptr<f16>>
       %54 = arith.extf %53 : tensor<32x32xf16> to tensor<32x32xf32>
       %55 = arith.addf %54, %17 : tensor<32x32xf32>
       %mask = arith.cmpf ogt, %_tmp5_9, %55 : tensor<32x32xf32>
@@ -54,7 +54,7 @@ module {
   // CHECK: tt.func public @test1
   // CHECK:   scf.for
   // CHECK:     [[PTR:%.+]] = tt.addptr {{.*}} : tensor<32x32x!tt.ptr<f16>>, tensor<32x32xi32>
-  // CHECK:     [[LOAD:%.+]] = tt.load [[PTR]] evictionPolicy = evict_last : tensor<32x32x!tt.ptr<f16>>
+  // CHECK:     [[LOAD:%.+]] = tt.load [[PTR]] {cachePolicy = #tt.cache_policy<cache_modifier = none, eviction_policy = evict_last>} : tensor<32x32x!tt.ptr<f16>>
   // CHECK:     arith.extf [[LOAD]] : tensor<32x32xf16> to tensor<32x32xf32>
   // CHECK:     [[ORI:%.+]] = arith.ori {{.*}} : tensor<32x32xi1>
   // CHECK:     [[SEL:%.+]] = arith.select [[ORI]], {{.*}}, {{.*}} : tensor<32x32xi1>, tensor<32x32xf32>
@@ -95,7 +95,7 @@ module {
       %31 = arith.addi %30, %12 : tensor<64x8xi32>
       %32 = tt.addptr %13, %31 : tensor<64x8x!tt.ptr<f32>>, tensor<64x8xi32>
       %33 = tt.broadcast %27 : tensor<1x8xi1> -> tensor<64x8xi1>
-      %34 = tt.load %32, %33, %cst_1 evictionPolicy = evict_first : tensor<64x8x!tt.ptr<f32>>
+      %34 = tt.load %32, %33, %cst_1 {cachePolicy = #tt.cache_policy<cache_modifier = none, eviction_policy = evict_first>} : tensor<64x8x!tt.ptr<f32>>
       %35 = arith.cmpi eq, %arg6, %c0_i32 : i32
       %36:3 = scf.if %35 -> (tensor<64x8xf32>, tensor<64x8xf32>, tensor<64x8xf32>) {
         scf.yield %cst_1, %34, %cst_0 : tensor<64x8xf32>, tensor<64x8xf32>, tensor<64x8xf32>
@@ -119,7 +119,7 @@ module {
   // CHECK: tt.func public @test2
   // CHECK:   scf.for
   // CHECK:     [[PTR:%.+]] = tt.addptr {{.*}} : tensor<64x8x!tt.ptr<f32>>, tensor<64x8xi32>
-  // CHECK:     [[LOAD:%.+]] = tt.load [[PTR]] evictionPolicy = evict_first : tensor<64x8x!tt.ptr<f32>>
+  // CHECK:     [[LOAD:%.+]] = tt.load [[PTR]] {cachePolicy = #tt.cache_policy<cache_modifier = none, eviction_policy = evict_first>} : tensor<64x8x!tt.ptr<f32>>
   // CHECK:     [[IF_RES:%.+]]:3 = scf.if {{.*}} -> (tensor<64x8xf32>, tensor<64x8xf32>, tensor<64x8xf32>)
   // CHECK:       scf.yield {{.*}}, [[LOAD]], {{.*}} : tensor<64x8xf32>, tensor<64x8xf32>, tensor<64x8xf32>
   // CHECK:     else

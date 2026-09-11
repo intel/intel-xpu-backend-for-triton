@@ -135,9 +135,11 @@ bool isLoadCandidate(tt::DescriptorLoadOp loadOp, Type expectedElementType,
 /// Create a prefetch operation for the given load operation.
 void createPrefetchOp(tt::DescriptorLoadOp loadOp) {
   OpBuilder builder(loadOp);
+  ttgi::CachePolicy cachePolicy =
+      ttgi::getCachePolicy(loadOp.getCachePolicyAttr());
   auto prefetchOp = ttgi::DescriptorPrefetchOp::create(
       builder, loadOp->getLoc(), loadOp.getDesc(), loadOp.getIndices(),
-      loadOp.getCache(), loadOp.getEvict());
+      cachePolicy.cacheModifier, cachePolicy.evictionPolicy);
 
   // inherit attributes from the load operation
   auto attrs = loadOp->getAttrDictionary();

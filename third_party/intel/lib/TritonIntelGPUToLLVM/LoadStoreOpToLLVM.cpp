@@ -497,7 +497,7 @@ struct LoadStoreConversionBase {
   template <typename OpType, typename = std::enable_if_t<llvm::is_one_of<
                                  OpType, LoadOp, DescriptorLoadOp>::value>>
   TritonGEN::LoadCacheControl tritonToIntelCacheModifier(OpType &op) const {
-    CacheModifier cacheModifier = op.getCache();
+    CachePolicy cachePolicy = getCachePolicy(op.getCachePolicyAttr());
 
     /******** LoadOp ********
      * ""   -> DEFAULT (No cache modifier provided)
@@ -506,7 +506,7 @@ struct LoadStoreConversionBase {
      * "cv" -> L1UC_L3UC (Do not cache at all)
      * "ca" -> L1C_L3C (Cache at all levels)
      **/
-    switch (cacheModifier) {
+    switch (cachePolicy.cacheModifier) {
     case CacheModifier::NONE:
       // No explicit cache modifier: honor the eviction policy hint via the LSC
       // cache-control decoration. EVICT_FIRST reads the line without retaining
@@ -514,7 +514,7 @@ struct LoadStoreConversionBase {
       // anticipated reuse. This decoration does NOT bypass L1 for the load, so
       // spatially-coalesced subgroup reads still share the line (see
       // getNonTemporalFlag() for why EVICT_FIRST must not set nontemporal).
-      switch (op.getEvict()) {
+      switch (cachePolicy.evictionPolicy) {
       case EvictionPolicy::EVICT_FIRST:
         return TritonGEN::LoadCacheControl::L1IAR_L3C;
       case EvictionPolicy::EVICT_LAST:
@@ -544,7 +544,8 @@ struct LoadStoreConversionBase {
   template <typename OpType,
             typename = std::enable_if_t<std::is_same_v<OpType, StoreOp>>>
   TritonGEN::StoreCacheControl tritonToIntelCacheModifier(OpType &op) const {
-    CacheModifier cacheModifier = op.getCache();
+    CacheModifier cacheModifier =
+        getCachePolicy(op.getCachePolicyAttr()).cacheModifier;
 
     /******** StoreOp ********
      * ""   -> DEFAULT (No cache modifier provided)
@@ -580,7 +581,7 @@ struct LoadStoreConversionBase {
             typename = std::enable_if_t<llvm::is_one_of<
                 OpType, LoadOp, StoreOp, DescriptorLoadOp>::value>>
   bool getNonTemporalFlag(OpType op) const {
-    switch (op.getCache()) {
+    switch (getCachePolicy(op.getCachePolicyAttr()).cacheModifier) {
     case triton::CacheModifier::CG:
     case triton::CacheModifier::CS:
       // `!nontemporal` is a *single bit*, and IGC turns it into LSC `.uc.uc` --
@@ -3964,9 +3965,11 @@ struct AtomicCASOpConversion
     }
 
     if (tensorTy) {
-      finalizeTensorAtomicResults(op, tensorTy, rewriter, resultVals,
-                                  valueElemTy, b, mask, targetInfo,
-                                  getTypeConverter());
+      resultVals =
+          actionRemoveBroadcastedRegs(triton::gpu::toLinearLayout(tensorTy))
+              .apply(resultVals);
+      finalizeAtomicResults(op, rewriter, resultVals, valueElemTy, b, mask,
+                            targetInfo, getTypeConverter());
     }
     return success();
   }
@@ -4220,9 +4223,11 @@ struct AtomicRMWOpConversion
     }
 
     if (tensorTy) {
-      finalizeTensorAtomicResults(op, tensorTy, rewriter, resultVals,
-                                  valueElemTy, b, threadPred, targetInfo,
-                                  getTypeConverter());
+      resultVals =
+          actionRemoveBroadcastedRegs(triton::gpu::toLinearLayout(tensorTy))
+              .apply(resultVals);
+      finalizeAtomicResults(op, rewriter, resultVals, valueElemTy, b,
+                            threadPred, targetInfo, getTypeConverter());
     }
     return success();
   }
@@ -4926,12 +4931,8 @@ struct LocalAtomicScatterRMWOpConversion
       return success();
     }
 
-    if (!info.removeBroadcast.isIdentity())
-      results = broadcastAs(results, info.regLayout);
-
-    finalizeTensorAtomicResults(op, info.valuesTy, rewriter, results,
-                                info.llvmElemTy, b, info.threadPred, targetInfo,
-                                getTypeConverter());
+    finalizeAtomicResults(op, rewriter, results, info.llvmElemTy, b,
+                          info.threadPred, targetInfo, getTypeConverter());
     return success();
   }
 

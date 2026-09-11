@@ -112,7 +112,8 @@ public:
                                          ValueRange indices,
                                          RankedTensorType resultTy) {
     Location loc = b.getUnknownLoc();
-    return DescriptorLoadOp::create(b, loc, resultTy, desc, indices);
+    return DescriptorLoadOp::create(b, loc, resultTy, desc, indices,
+                                    /*cachePolicy=*/Attribute());
   }
 
   // Helper to build a tt.descriptor_gather

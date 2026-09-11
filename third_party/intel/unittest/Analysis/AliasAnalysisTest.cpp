@@ -67,11 +67,9 @@ public:
     return funcOp;
   }
 
-  /// Creates a tt.load with default cache/eviction attributes.
+  /// Creates a tt.load with the default cache policy.
   triton::LoadOp makeLoad(Value ptr) {
-    return triton::LoadOp::create(
-        *builder, builder->getUnknownLoc(), ptr, triton::CacheModifier::NONE,
-        triton::EvictionPolicy::NORMAL, /*isVolatile=*/false);
+    return triton::LoadOp::create(*builder, builder->getUnknownLoc(), ptr);
   }
 
   Type getPtrType(Type elemType) { return triton::PointerType::get(elemType); }
@@ -145,9 +143,7 @@ TEST_F(AliasAnalysisTest, LoadAndStoreSameArg) {
   auto ptr2 = triton::AddPtrOp::create(*builder, loc, ptrType, arg0, offset2);
   auto value = arith::ConstantOp::create(*builder, loc, builder->getF16Type(),
                                          builder->getF16FloatAttr(1.0));
-  auto storeOp = triton::StoreOp::create(*builder, loc, ptr2, value,
-                                         triton::CacheModifier::NONE,
-                                         triton::EvictionPolicy::NORMAL);
+  auto storeOp = triton::StoreOp::create(*builder, loc, ptr2, value);
 
   mlir::triton::intel::AliasAnalysis analysis(funcOp);
   EXPECT_THAT(analysis.getAliasingMemOps(load),
@@ -167,9 +163,7 @@ TEST_F(AliasAnalysisTest, LoadAndStoreDistinctArgs) {
 
   auto value = arith::ConstantOp::create(*builder, loc, builder->getF16Type(),
                                          builder->getF16FloatAttr(1.0));
-  triton::StoreOp::create(*builder, loc, argB, value,
-                          triton::CacheModifier::NONE,
-                          triton::EvictionPolicy::NORMAL);
+  triton::StoreOp::create(*builder, loc, argB, value);
 
   mlir::triton::intel::AliasAnalysis analysis(funcOp);
   EXPECT_THAT(analysis.getAliasingMemOps(load), ::testing::IsEmpty());
@@ -204,9 +198,7 @@ TEST_F(AliasAnalysisTest, SCFForIterCarriedPointer_JoinsWithInit) {
   builder->setInsertionPoint(funcOp.front().getTerminator());
   auto value = arith::ConstantOp::create(*builder, loc, builder->getF16Type(),
                                          builder->getF16FloatAttr(1.0));
-  auto storeOp = triton::StoreOp::create(*builder, loc, argA, value,
-                                         triton::CacheModifier::NONE,
-                                         triton::EvictionPolicy::NORMAL);
+  auto storeOp = triton::StoreOp::create(*builder, loc, argA, value);
 
   triton::LoadOp loadInLoop;
   forOp.getBody()->walk([&](triton::LoadOp op) { loadInLoop = op; });
@@ -351,9 +343,7 @@ TEST_F(AliasAnalysisTest, ConvertLayoutPointerPassThrough) {
       *builder, loc, tensorPtrTypeWithEnc, splatPtr);
 
   // Load using the converted pointer
-  auto loadedValue = triton::LoadOp::create(
-      *builder, loc, convertedPtr, triton::CacheModifier::NONE,
-      triton::EvictionPolicy::NORMAL, false);
+  auto loadedValue = triton::LoadOp::create(*builder, loc, convertedPtr);
 
   // Store using the base pointer (through a different chain)
   auto i32Type = builder->getI32Type();
@@ -363,9 +353,7 @@ TEST_F(AliasAnalysisTest, ConvertLayoutPointerPassThrough) {
       triton::AddPtrOp::create(*builder, loc, ptrType, basePtr, offset);
   auto storeValue = arith::ConstantOp::create(
       *builder, loc, builder->getF16Type(), builder->getF16FloatAttr(1.0));
-  auto storeOp = triton::StoreOp::create(*builder, loc, storePtr, storeValue,
-                                         triton::CacheModifier::NONE,
-                                         triton::EvictionPolicy::NORMAL);
+  auto storeOp = triton::StoreOp::create(*builder, loc, storePtr, storeValue);
 
   mlir::triton::intel::AliasAnalysis analysis(funcOp);
   EXPECT_THAT(analysis.getAliasingMemOps(loadedValue),
@@ -423,7 +411,8 @@ TEST_F(AliasAnalysisTest, DescriptorLoadAndDescriptorStoreSameBase) {
                                                ValueRange{c128, c64},
                                                ValueRange{c64_i64, c1});
   auto dload = triton::DescriptorLoadOp::create(*builder, loc, tensorType, desc,
-                                                ValueRange{idx0, idx1});
+                                                ValueRange{idx0, idx1},
+                                                /*cachePolicy=*/Attribute());
   auto val = arith::ConstantOp::create(
       *builder, loc, tensorType,
       DenseElementsAttr::get(tensorType, builder->getF32FloatAttr(1.0)));
@@ -464,7 +453,8 @@ TEST_F(AliasAnalysisTest, DescriptorLoadAndRawLoadSameBase) {
                                                ValueRange{c128, c64},
                                                ValueRange{c64_i64, c1});
   auto dload = triton::DescriptorLoadOp::create(*builder, loc, tensorType, desc,
-                                                ValueRange{idx0, idx1});
+                                                ValueRange{idx0, idx1},
+                                                /*cachePolicy=*/Attribute());
   auto rawload = makeLoad(base);
 
   mlir::triton::intel::AliasAnalysis analysis(funcOp);
@@ -521,7 +511,8 @@ TEST_F(AliasAnalysisTest, DescriptorLoadThroughSCFForIterArg) {
     builder->setInsertionPointToStart(forOp.getBody());
     auto iterDesc = forOp.getRegionIterArg(0);
     dload = triton::DescriptorLoadOp::create(*builder, loc, tensorType,
-                                             iterDesc, ValueRange{idx0, idx1});
+                                             iterDesc, ValueRange{idx0, idx1},
+                                             /*cachePolicy=*/Attribute());
     scf::YieldOp::create(*builder, loc, ValueRange{iterDesc});
   }
 
@@ -598,7 +589,8 @@ TEST_F(AliasAnalysisTest, DescriptorThroughSCFIfMismatch) {
   auto idx1 = arith::ConstantOp::create(*builder, loc, i32Type,
                                         builder->getI32IntegerAttr(0));
   auto dload = triton::DescriptorLoadOp::create(
-      *builder, loc, tensorType, opaqueDesc, ValueRange{idx0, idx1});
+      *builder, loc, tensorType, opaqueDesc, ValueRange{idx0, idx1},
+      /*cachePolicy=*/Attribute());
 
   auto loadA = makeLoad(baseA);
 
@@ -723,9 +715,9 @@ TEST_F(AliasAnalysisTest, OpaqueDescriptorPropagatesUnknown) {
                                         builder->getI32IntegerAttr(0));
   auto idx1 = arith::ConstantOp::create(*builder, loc, i32Type,
                                         builder->getI32IntegerAttr(0));
-  auto dload = triton::DescriptorLoadOp::create(*builder, loc, tensorType,
-                                                opaqueDesc.getResult(),
-                                                ValueRange{idx0, idx1});
+  auto dload = triton::DescriptorLoadOp::create(
+      *builder, loc, tensorType, opaqueDesc.getResult(), ValueRange{idx0, idx1},
+      /*cachePolicy=*/Attribute());
 
   auto loadA = makeLoad(baseA);
 

@@ -1,6 +1,5 @@
 #include <vector>
 
-#include "intel/include/Dialect/TritonIntelGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"

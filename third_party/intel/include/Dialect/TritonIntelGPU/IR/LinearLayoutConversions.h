@@ -23,9 +23,6 @@ LinearLayout BlockScaledDPAStoLinearLayout(ArrayRef<int64_t> shape,
                                            Attribute layout, unsigned opIdx = 2,
                                            int scaleKIndex = -1);
 
-LinearLayout dotOperandDpasToLinearLayout(DotOperandEncodingAttr dotDpasLayout,
-                                          ArrayRef<int64_t> shape);
-
 LinearLayout
 subgroup2DBlockToLinearLayout(ArrayRef<int64_t> shape,
                               intel::Subgroup2DBlockEncodingAttr layout,
