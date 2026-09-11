@@ -2683,16 +2683,15 @@ private:
 
     Type valueElemTy = typeConverter->convertType(resultType.getElementType());
     unsigned numElems = getTotalElemsPerThread(resultType);
-    unsigned threadsPerWarp =
-        TritonGPUDialect::getThreadsPerWarp(op->getParentOfType<ModuleOp>());
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+    unsigned threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(mod);
 
     auto descType = cast<triton::TensorDescType>(op.getDesc().getType());
     RankedTensorType descTensorType = descType.getBlockType();
     size_t descRank = descTensorType.getRank();
 
-    auto layoutConfigOr =
-        buildLayoutConfig(*llEncoding, resultType, *offsetsXLLEncoding,
-                          valueElemTy, op->getParentOfType<ModuleOp>());
+    auto layoutConfigOr = buildLayoutConfig(
+        *llEncoding, resultType, *offsetsXLLEncoding, valueElemTy, mod);
     if (failed(layoutConfigOr)) {
       return rewriter.notifyMatchFailure(
           op, "failed to build gather layout config");
