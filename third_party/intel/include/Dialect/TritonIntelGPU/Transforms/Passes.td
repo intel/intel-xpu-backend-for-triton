@@ -347,11 +347,30 @@ def TritonIntelGPUReduceVariableLiveness
   let description = [{
     This pass attempts to reduce the variable liveness
     by reducing the distance between loads and usage.
+
+    A 2D operand load defined outside a loop and used inside it is sunk into the
+    loop (leaving a prefetch behind at the original site) when the loop body's
+    *peak* register pressure, as measured by RegisterPressureAnalysis, is at or
+    above the per-lane GRF budget of the given GRF mode. The budget is the
+    hardware thread's GRF size divided by "ttg.threads-per-warp", because the
+    analysis weighs each live tensor by its per-work-item element count.
+
+    The decision is per loop, not per load: once a loop is over budget every
+    eligible load in it is sunk. Sinking trades one extra (prefetched, and so
+    normally cache-resident) 2D block load per iteration for a shorter live
+    range, which is only worth doing when the loop would otherwise spill. The
+    pass does not model spill cost against reload cost, and does not take the
+    loop trip count into account.
   }];
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::scf::SCFDialect",
                            "mlir::arith::ArithDialect"];
+
+  let options = [
+    Option<"grfMode", "grf-mode", "std::string", /*default*/"\"default\"",
+           "GRF mode ('default', 'auto', '128', '256' or '512')">,
+  ];
 }
 
 def TritonIntelGPUCodeSinking

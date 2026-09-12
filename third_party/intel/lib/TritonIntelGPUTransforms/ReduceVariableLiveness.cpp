@@ -1,6 +1,7 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
 
 #include "Dialect/TritonIntelGPU/IR/Attributes.h"
@@ -30,68 +31,39 @@ namespace ttgi = mlir::triton::gpu::intel;
 using TensorValue = TypedValue<RankedTensorType>;
 
 #define DEBUG_TYPE "tritonintelgpu-reduce-variable-liveness"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace {
 
-// Live-in register-pressure floor (in bytes, summed across all lanes of the
-// workgroup) below which shortening a load's live range is not worthwhile: the
-// loop body is not under enough pressure to benefit.
-//
-// `RegisterPressureAnalysis` reports *per-thread* bytes, so the gate scales the
-// reported value back up by the workgroup's thread count before comparing. That
-// keeps this threshold in the same unit it has always had, and therefore keeps
-// the gate firing on exactly the same loops at every warp count. Expressing the
-// floor per-thread instead is not equivalent: a fixed per-thread number is a
-// different full-tensor bound at every thread count, and the attention kernels
-// that this transform exists to help sit right at the boundary.
-constexpr uint32_t TOTAL_BLOCK_SIZE_THRESHOLD_IN_BYTES = 32768;
-constexpr uint32_t LARGE_TENSOR_MINOR_SHAPE_THRESHOLD = 128;
-constexpr uint32_t LARGE_TENSOR_MAJOR_SHAPE_THRESHOLD = 128;
-constexpr uint32_t LARGE_TENSOR_SIZE_THRESHOLD_IN_BYTES =
-    LARGE_TENSOR_MAJOR_SHAPE_THRESHOLD * LARGE_TENSOR_MINOR_SHAPE_THRESHOLD * 2;
-
-/// Return the total size of the tensor type /p tensorType in bytes.
-/// If the tensor element type is not a int or a float, this function return 0.
-unsigned getSizeInBytes(RankedTensorType &tensorType) {
-  Type elType = tensorType.getElementType();
-  if (!elType.isIntOrFloat())
-    return 0;
-  unsigned elTypeBitWidth = elType.getIntOrFloatBitWidth();
-  unsigned totalNumElement = 1;
-  for (int64_t dim : tensorType.getShape()) {
-    totalNumElement *= dim;
-  }
-  return totalNumElement * (elTypeBitWidth / 8);
+/// Convert the per-hardware-thread GRF budget for \p grfMode into a per-lane
+/// budget by dividing by threads-per-warp.
+///
+/// The two quantities are expressed in different units:
+/// `getGRFBytesPerThread` reports the register file of a whole *hardware
+/// thread*, which backs an entire sub-group, while
+/// `RegisterPressureAnalysis` weighs every live value by
+/// `getTotalElemsPerThread`, a per-*work-item* (per-lane) count. Comparing
+/// them without this conversion overstates the budget by a factor of
+/// threads-per-warp. getThreadsPerWarp() falls back to 32 when the module
+/// attribute is absent, so the division is always well-defined.
+unsigned getPerLaneGRFBudgetInBytes(StringRef grfMode, ModuleOp mod) {
+  unsigned grfBudget =
+      ttg::intel::RegisterPressureAnalysis::getGRFBytesPerThread(grfMode);
+  int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
+  assert(threadsPerWarp > 0 && "threads-per-warp must be positive");
+  return grfBudget / static_cast<unsigned>(threadsPerWarp);
 }
 
-/// Return true if the lifespan of the \p v value is considered long.
-bool isLongLifeSpanVariable(
-    Value v, const ttg::intel::RegisterPressureAnalysis &analysis,
-    Block *dotBlock) {
-  // The variable is considered as a long life span elected for being moved if:
-  // the live-in variables of the forOp consist in a large amount of bytes and
-  // the variable defined by `v` is a large tensor (with large amount of element
-  // in the minor dimenssion) and the variable liveness of `v` expends before
-  // the dot block. i.e. used in a block - loaded in another block
-  TensorValue tensorV = dyn_cast<TensorValue>(v);
-  if (!tensorV)
-    return false;
-
-  auto tensorType = cast<RankedTensorType>(tensorV.getType());
-  auto tensorOrder = ttg::getOrder(tensorType);
-  // Scale the per-thread pressure reported by the analysis back to bytes summed
-  // across the workgroup, the unit TOTAL_BLOCK_SIZE_THRESHOLD_IN_BYTES is in.
-  auto mod = dotBlock->getParentOp()->getParentOfType<ModuleOp>();
-  unsigned numThreads = ttg::lookupNumWarps(dotBlock->getParentOp()) *
-                        ttg::TritonGPUDialect::getThreadsPerWarp(mod);
-  unsigned liveInSizeInBytes = analysis.liveInPressure(dotBlock) * numThreads;
-  return (
-      (tensorOrder.size() == 2) &&
-      (getSizeInBytes(tensorType) >= LARGE_TENSOR_SIZE_THRESHOLD_IN_BYTES) &&
-      (tensorType.getShape()[tensorOrder[1]] >=
-       LARGE_TENSOR_MINOR_SHAPE_THRESHOLD) &&
-      (liveInSizeInBytes > TOTAL_BLOCK_SIZE_THRESHOLD_IN_BYTES) &&
-      analysis.isLiveIn(dotBlock, v));
+/// Return true if \p v is a 2D tensor that is live-in to \p loopBody (defined
+/// outside the loop and used inside it), i.e. a value that would otherwise
+/// occupy registers for the whole duration of the loop.
+bool isLiveIn2DTensor(Value v,
+                      const ttg::intel::RegisterPressureAnalysis &analysis,
+                      Block *loopBody) {
+  auto tensorType = dyn_cast<RankedTensorType>(v.getType());
+  return tensorType && tensorType.getRank() == 2 &&
+         analysis.isLiveIn(loopBody, v);
 }
 
 /// Return true if the \p loadOp is suitable to be moved.
@@ -121,6 +93,16 @@ bool isLoadCandidate(tt::DescriptorLoadOp loadOp, Type expectedElementType,
   if (any_of(loadOp->getUsers(), [&](Operation *user) {
         return ((user->getBlock() == forOp->getBlock()) &&
                 user->isBeforeInBlock(forOp));
+      }))
+    return false;
+  // A user nested in a region *inside* the loop (e.g. an `scf.if` body) cannot
+  // be redirected to the sunk copy: `moveOperand` only rewires uses sitting
+  // directly in the loop body block, and the after-loop copy does not dominate
+  // it either. Such a use keeps the original load live across the whole loop,
+  // so sinking would add a redundant load and a prefetch while relieving no
+  // register pressure at all.
+  if (any_of(loadOp->getUsers(), [&](Operation *user) {
+        return user->getParentOp() != forOp && forOp->isAncestor(user);
       }))
     return false;
   // We skip the load if the defining op is not is the same region.
@@ -162,9 +144,9 @@ void createPrefetchOp(tt::DescriptorLoadOp loadOp) {
 /// Returns `true` if at least one operand has been moved.
 bool optimizeDotOperands(scf::ForOp forOp,
                          SmallVector<PrefetchKey> &prefetchedTiles,
-                         ttg::intel::RegisterPressureAnalysis &analysis) {
+                         ttg::intel::RegisterPressureAnalysis &analysis,
+                         unsigned perLaneGRFBudget) {
   Block *loop = forOp.getBody();
-  bool opMoved = false;
 
   // Returns the DescriptorLoadOp that produces the value v, walking back
   // through ConvertLayoutOps. Returns nullptr if no DescriptorLoadOp is found.
@@ -180,13 +162,37 @@ bool optimizeDotOperands(scf::ForOp forOp,
     return nullptr;
   };
 
+  // The in-loop copy created for a given load, so that a load feeding several
+  // dot operands is cloned once instead of once per operand. Cloning it per
+  // operand would emit several identical 2D block loads per iteration -- the
+  // opposite of what this pass is for.
+  DenseMap<Operation *, Operation *> sunkLoads;
+
   // Prefetch the dotOp operand and move it closer to dotOp.
-  auto moveOperand = [&prefetchedTiles, &opMoved](uint8_t opId, tt::DotOp dotOp,
-                                                  tt::DescriptorLoadOp loadOp) {
+  auto moveOperand = [&](uint8_t opId, tt::DotOp dotOp,
+                         tt::DescriptorLoadOp loadOp) {
     assert(opId < 2 && "opId must be 0 or 1");
     OpBuilder b(dotOp);
     TensorValue tensorV = opId == 0 ? dotOp.getA() : dotOp.getB();
     auto tensorType = cast<RankedTensorType>(tensorV.getType());
+
+    // Already sunk for another operand: reuse the copy. It was inserted before
+    // the earliest in-loop user of the load, so it dominates this dot.
+    if (Operation *sunkLoad = sunkLoads.lookup(loadOp)) {
+      // Nothing to do when this operand already reads from the copy: making the
+      // copy rewires every in-loop user of the load, which may well include the
+      // op feeding this operand.
+      if (getLoad(tensorV).getOperation() == sunkLoad)
+        return;
+      Value operand = sunkLoad->getResult(0);
+      if (operand.getType() != tensorType)
+        operand = ttg::ConvertLayoutOp::create(b, tensorV.getLoc(), tensorType,
+                                               operand)
+                      .getResult();
+      dotOp.setOperand(opId, operand);
+      return;
+    }
+
     Operation *insertBeforeOp = dotOp;
     SmallVector<Operation *> usesInSameLoop;
     // Other use(s) in the same loop
@@ -207,6 +213,7 @@ bool optimizeDotOperands(scf::ForOp forOp,
     }
     b.setInsertionPoint(insertBeforeOp);
     auto *newLoad = b.clone(*loadOp);
+    sunkLoads.try_emplace(loadOp, newLoad);
     auto newCvt = ttg::ConvertLayoutOp::create(b, tensorV.getLoc(), tensorType,
                                                newLoad->getResult(0));
     dotOp.setOperand(opId, newCvt.getResult());
@@ -242,26 +249,32 @@ bool optimizeDotOperands(scf::ForOp forOp,
                                                dominatedByCopy);
       }
     }
-    opMoved = true;
   };
 
-  // Try to match and move a dot operand sourced from a descriptor load.
-  auto tryMoveOperand = [&](uint8_t opId, tt::DotOp dot, Value operand,
-                            Operation *forOp) {
+  // One entry per dot operand that could take its value from an in-loop copy of
+  // a load defined outside the loop. Two entries may name the same load; it is
+  // `moveOperand` that keeps the load itself to a single copy (see
+  // `sunkLoads`), because every operand still needs its own layout conversion.
+  struct Candidate {
+    uint8_t opId;
+    tt::DotOp dot;
+    tt::DescriptorLoadOp loadOp;
+  };
+  SmallVector<Candidate> candidates;
+
+  auto collectOperand = [&](uint8_t opId, tt::DotOp dot, Value operand) {
     tt::DescriptorLoadOp loadOp = getLoad(operand);
     if (!loadOp)
       return;
-    Block *dotBlock = dot->getBlock();
-    // Check liveness on the load's result, not the dot operand, because the
-    // dot operand may be a ConvertLayoutOp result (possibly inside the loop)
-    // while the load result is the truly long-lived value defined outside.
-    Value loadResult = loadOp->getResult(0);
-    if (!isLongLifeSpanVariable(loadResult, analysis, dotBlock))
+    // Check liveness on the load's result, not on the dot operand: the operand
+    // may be a ConvertLayoutOp result defined inside the loop, while the load
+    // result is the value that is actually live across the whole loop.
+    if (!isLiveIn2DTensor(loadOp.getResult(), analysis, loop))
       return;
     auto tensorType = cast<RankedTensorType>(operand.getType());
-    Type elTy = tensorType.getElementType();
-    if (isLoadCandidate(loadOp, elTy, forOp))
-      moveOperand(opId, dot, loadOp);
+    if (!isLoadCandidate(loadOp, tensorType.getElementType(), forOp))
+      return;
+    candidates.push_back({opId, dot, loadOp});
   };
 
   SmallVector<tt::DotOp> dotsInFor;
@@ -278,10 +291,43 @@ bool optimizeDotOperands(scf::ForOp forOp,
     return false;
 
   for (tt::DotOp dot : dotsInFor) {
-    tryMoveOperand(0, dot, dot.getA(), forOp);
-    tryMoveOperand(1, dot, dot.getB(), forOp);
+    collectOperand(0, dot, dot.getA());
+    collectOperand(1, dot, dot.getB());
   }
-  return opMoved;
+
+  if (candidates.empty())
+    return false;
+
+  // Gate on the *peak* pressure of the loop body rather than on its live-in
+  // pressure: live-in pressure is computed from `LivenessBlockInfo::in()`,
+  // which by construction excludes the block arguments, so it does not see the
+  // loop-carried values -- including the DPAS accumulator, frequently the
+  // largest live tensor in the loop. Peak pressure is what determines whether
+  // the register allocator has to spill, which is the condition under which
+  // trading a redundant (but prefetched and cached) 2D block load for a
+  // shorter live range pays off.
+  //
+  // The decision is per loop: sink every eligible operand or none. Choosing a
+  // subset would need a model of how much a given sink actually lowers the
+  // peak, which depends on where the peak sits relative to each live range.
+  // Nothing here measures that, so a partial choice would be arbitrary rather
+  // than selective.
+  unsigned peakPressurePerLane = analysis.peakPressure(loop);
+  if (peakPressurePerLane < perLaneGRFBudget) {
+    LDBG("Keeping " << candidates.size()
+                    << " dot operand(s) in place: peak pressure "
+                    << peakPressurePerLane << " B/lane is within the "
+                    << perLaneGRFBudget << " B/lane GRF budget");
+    return false;
+  }
+
+  LDBG("Sinking " << candidates.size() << " dot operand(s): peak pressure "
+                  << peakPressurePerLane << " B/lane is at or above the "
+                  << perLaneGRFBudget << " B/lane GRF budget");
+  for (Candidate &c : candidates)
+    moveOperand(c.opId, c.dot, c.loadOp);
+
+  return true;
 }
 
 class ReduceVariableLivenessPass
@@ -303,10 +349,13 @@ public:
     }
 
     Operation *rootOperation = getOperation();
+    ModuleOp mod = getOperation();
+    unsigned perLaneGRFBudget = getPerLaneGRFBudgetInBytes(grfMode, mod);
     ttg::intel::RegisterPressureAnalysis analysis(rootOperation);
     // TODO: extend the pass to handle `while` loops.
     rootOperation->walk([&](scf::ForOp forOp) {
-      if (optimizeDotOperands(forOp, prefetchedTiles, analysis)) {
+      if (optimizeDotOperands(forOp, prefetchedTiles, analysis,
+                              perLaneGRFBudget)) {
         // The register pressure analysis must be re-performed before the
         // processing of each "for loop" given that the liveness of variables
         // may have changed as a result of the code, and specifically `LoadOps`,
