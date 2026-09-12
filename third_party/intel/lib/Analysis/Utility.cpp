@@ -1,5 +1,6 @@
 #include "intel/include/Analysis/Utility.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Attributes.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -376,7 +377,15 @@ getSubGroupReinterpretPackInfo(MLIRContext *ctx,
   return std::nullopt;
 }
 
-bool cvtIsSubGroupReinterpret(RankedTensorType srcTy, RankedTensorType dstTy) {
+bool cvtIsSubGroupReinterpret(ConvertLayoutOp op) {
+  // The sub-group bitcast shuffle operation is lowered to a GenISA intrinsic
+  // not implemented by the LTS driver.
+  auto mod = op->getParentOfType<ModuleOp>();
+  if (mod && mod->hasAttr(TritonIntelGPUDialect::getIsLTSAttrName()))
+    return false;
+
+  RankedTensorType srcTy = op.getSrc().getType();
+  RankedTensorType dstTy = op.getType();
   MLIRContext *ctx = srcTy.getContext();
   StringAttr kRegister = str_attr("register");
   StringAttr kLane = str_attr("lane");

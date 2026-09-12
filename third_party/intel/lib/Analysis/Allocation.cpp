@@ -31,7 +31,7 @@ unsigned allocationAnalysisScratchSizeFn(gpu::ConvertLayoutOp convertLayout) {
     unsigned numMatrixCells = (numElements / subGroupSize) * (subGroupSize + 1);
     return numMatrixCells * bytesPerElement;
   }
-  if (gpu::intel::cvtIsSubGroupReinterpret(srcTy, dstTy))
+  if (gpu::intel::cvtIsSubGroupReinterpret(convertLayout))
     return 0;
   return invalidSize;
 }
