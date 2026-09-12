@@ -161,8 +161,9 @@ static Operation *dropMask(Operation *op, bool maskVal) {
       .Case<tt::LoadOp>([&](auto loadOp) {
         if (maskVal) {
           auto newLoadOp = tt::LoadOp::create(
-              builder, loc, loadOp.getPtr(), loadOp.getCache(),
-              loadOp.getEvict(), loadOp.getIsVolatile());
+              builder, loc, loadOp.getPtr(), /*mask=*/Value(),
+              /*other=*/Value(), loadOp.getCachePolicyAttr(),
+              loadOp.getIsVolatile());
           loadOp->replaceAllUsesWith(newLoadOp);
         } else if (Value other = loadOp.getOther()) {
           loadOp->replaceAllUsesWith(ValueRange{other});
@@ -1014,8 +1015,9 @@ public:
       if (auto loadOp = dyn_cast<tt::LoadOp>(mappedOp)) {
         OpBuilder builder(mappedOp);
         auto newLoad = tt::LoadOp::create(
-            builder, loadOp.getLoc(), loadOp.getPtr(), loadOp.getCache(),
-            loadOp.getEvict(), loadOp.getIsVolatile());
+            builder, loadOp.getLoc(), loadOp.getPtr(), /*mask=*/Value(),
+            /*other=*/Value(), loadOp.getCachePolicyAttr(),
+            loadOp.getIsVolatile());
         mappedOp->replaceAllUsesWith(newLoad);
         mappedOp->erase();
       }
@@ -1085,8 +1087,9 @@ public:
       auto loadOp = cast<tt::LoadOp>(map.lookup(maskedOp));
       OpBuilder builder(loadOp);
       auto newLoad = tt::LoadOp::create(
-          builder, loadOp.getLoc(), loadOp.getPtr(), loadOp.getCache(),
-          loadOp.getEvict(), loadOp.getIsVolatile());
+          builder, loadOp.getLoc(), loadOp.getPtr(), /*mask=*/Value(),
+          /*other=*/Value(), loadOp.getCachePolicyAttr(),
+          loadOp.getIsVolatile());
       loadOp->replaceAllUsesWith(newLoad);
       loadOp->erase();
     }

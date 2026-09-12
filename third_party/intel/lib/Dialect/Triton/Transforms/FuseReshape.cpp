@@ -208,7 +208,7 @@ private:
     auto resType = cast<tt::TensorDescType>(newDesc.getType()).getBlockType();
     auto newDescLoadOp = tt::DescriptorLoadOp::create(
         builder, descLoadOp.getLoc(), resType, newDesc, newOffsets,
-        descLoadOp.getCache(), descLoadOp.getEvict());
+        descLoadOp.getCachePolicyAttr());
     newDescLoadOp->setAttrs(descLoadOp->getAttrs());
 
     LLVM_DEBUG(llvm::dbgs() << "newDescLoadOp:\n  " << newDescLoadOp << "\n");
@@ -375,7 +375,7 @@ private:
       OpBuilder rewriter(loadOp);
       auto newLoadOp = tt::LoadOp::create(rewriter, loadOp.getLoc(), newVal,
                                           loadOp.getMask(), loadOp.getOther(),
-                                          loadOp.getCache(), loadOp.getEvict(),
+                                          loadOp.getCachePolicyAttr(),
                                           loadOp.getIsVolatile());
       newLoadOp->setAttrs(loadOp->getAttrs());
       mapping.map(static_cast<Operation *>(loadOp),

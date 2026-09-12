@@ -25,6 +25,7 @@
 #include "intel/lib/Target/LLVMIR/LLVMPasses.h"
 
 #include "intel/include/Target/SPIRV/SPIRVTranslation.h"
+#include "triton/Tools/LLVMOptions.h"
 #include "triton/Tools/Sys/GetEnv.h"
 
 #include <nanobind/nanobind.h>
@@ -206,22 +207,26 @@ void init_triton_intel(py::module_ &m) {
 
         py::gil_scoped_release gil_release;
 
-        // Check to see if we are passing a list of flags to disable
-        // optimizations.
-        auto flagList = mlir::triton::tools::getStrEnv("DISABLE_LLVM_OPT");
         using namespace llvm;
-        if (!flagList.empty()) {
-          auto options = llvm::cl::getRegisteredOptions();
-          llvm::SmallVector<StringRef, 3> split;
-          StringRef(flagList.c_str()).split(split, ',');
-          for (auto flag : split) {
-            auto optIt = options.find(flag);
-            if (optIt != options.end()) {
-              auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
-              *optPtr = true;
-            }
-          }
-        }
+
+        // LLVM command line options are process-wide globals that codegen
+        // reads as it goes, so they may only be overridden through the
+        // registry lock (see triton/Tools/LLVMOptions.h). The scope must
+        // outlive the pipeline run below.
+        std::vector<mlir::triton::tools::ScopedLLVMOptions::Setting> settings;
+
+        // DISABLE_LLVM_OPT may hold a list of flags to disable individual
+        // optimizations instead of a boolean.
+        auto flagList = mlir::triton::tools::getStrEnv("DISABLE_LLVM_OPT");
+        SmallVector<StringRef> flags;
+        StringRef(flagList).split(flags, ',', /*MaxSplit=*/-1,
+                                  /*KeepEmpty=*/false);
+        for (StringRef flag : flags)
+          settings.emplace_back(flag.str(), "true");
+        if (mlir::triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP"))
+          settings.emplace_back("print-after-all", "true");
+        mlir::triton::tools::ScopedLLVMOptions optionScope(settings);
+
         LoopAnalysisManager lam;
         FunctionAnalysisManager fam;
         CGSCCAnalysisManager cgam;
@@ -236,12 +241,6 @@ void init_triton_intel(py::module_ &m) {
             passStartTimes;
 
         if (mlir::triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
-          auto optMap = llvm::cl::getRegisteredOptions();
-          auto optIt = optMap.find("print-after-all");
-          if (optIt != optMap.end()) {
-            auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
-            *optPtr = true;
-          }
           standardInstr.registerCallbacks(passInstrCb, &mam);
           instrCbPtr = &passInstrCb;
         } else if (pyCb) {
