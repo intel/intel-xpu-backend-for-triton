@@ -6,6 +6,7 @@
 #define TRITON_INTEL_ANALYSIS_REGISTER_PRESSURE_H
 
 #include "intel/include/Analysis/Liveness.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 #include "llvm/ADT/StringRef.h"
 
@@ -32,8 +33,9 @@ struct RegisterPressureOptions {
 /// using the encoding's element distribution. For scalars, the size is the
 /// element bitwidth in bytes.
 ///
-/// The canonical unit is **per-thread bytes**, matching how GRF budget is
-/// expressed (e.g., 4096 bytes for 128-GRF mode).
+/// The unit is **per-lane bytes** ("thread" = one SIMD lane, Triton's usual
+/// convention), NOT the per-hardware-thread unit `getGRFBytesPerHardwareThread`
+/// returns. Use `getPerLaneGRFBudgetInBytes` to compare against a GRF budget.
 class RegisterPressureAnalysis {
 public:
   /// Construct the analysis for the given root operation.
@@ -62,14 +64,38 @@ public:
   /// consumers need not build their own liveness analysis.
   bool isLiveIn(Block *block, Value value) const;
 
-  /// Returns the per-thread GRF budget in bytes for the given GRF mode.
+  /// Returns the number of bytes `value` currently contributes to
+  /// `liveInPressure(block)`, and 0 if it contributes nothing (not live-in, or
+  /// filtered out by excludeRematerializable).
   ///
-  /// Explicit sizes ("128", "256", "512") map to the exact per-thread budget.
-  /// For "default" and "auto" the compiler chooses the GRF size at JIT time,
-  /// so this function conservatively returns the smallest (128-register)
+  /// This exists so a caller reasoning about how a transform will change a
+  /// block's live-in pressure can subtract exactly the term this analysis
+  /// counted, rather than re-deriving it from the value's type and duplicating
+  /// the filtering rules. It is by construction consistent with
+  /// `liveInPressure`: if a transform's only effect on `block`'s live-in set is
+  /// to remove `v` and add `w`, then the new live-in pressure is
+  /// `liveInPressure(block) - liveInContribution(block, v) +
+  /// getPerThreadSizeInBytes(w.getType())`.
+  unsigned liveInContribution(Block *block, Value value) const;
+
+  /// Returns the per-hardware-thread GRF budget in bytes for the given GRF
+  /// mode (one hardware thread executes a whole subgroup/warp of lanes sharing
+  /// one register file).
+  ///
+  /// Explicit sizes ("128", "256", "512") map to the exact per-hardware-thread
+  /// budget. For "default" and "auto" the compiler chooses the GRF size at JIT
+  /// time, so this function conservatively returns the smallest (128-register)
   /// budget to avoid exceeding the hardware limit on configurations that
   /// ultimately compile with fewer registers.
-  static unsigned getGRFBytesPerThread(StringRef grfMode);
+  static unsigned getGRFBytesPerHardwareThread(StringRef grfMode);
+
+  /// Returns `getGRFBytesPerHardwareThread(grfMode) / threads-per-warp`: the
+  /// per-lane figure to compare against this analysis's (per-lane) output.
+  /// When the module's ttg.threads-per-warp attribute is absent,
+  /// getThreadsPerWarp returns 32 as a default, so the budget is divided by 32
+  /// (128 bytes/lane at default GRF mode) rather than the DPAS-typical 16
+  /// (256 bytes/lane).
+  static unsigned getPerLaneGRFBudgetInBytes(StringRef grfMode, ModuleOp mod);
 
   /// Returns the per-thread size in bytes for the given type.
   ///
