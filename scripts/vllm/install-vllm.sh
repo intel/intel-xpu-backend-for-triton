@@ -6,7 +6,6 @@ readonly ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 readonly DEFAULT_BRANCH="main"
 readonly SCRIPTS_DIR="$ROOT/scripts"
 readonly VLLM_PROJ="$ROOT/vllm"
-readonly VLLM_XPU_KERNELS_PROJ="$ROOT/vllm-xpu-kernels"
 
 # Provides the `pip` wrapper (pip or `uv pip`).
 source "$SCRIPTS_DIR/pip-utils.sh"
@@ -121,6 +120,10 @@ prepare_source() {
 }
 
 # Install vLLM in editable mode from the source directory.
+#
+# `vllm_xpu_kernels` is deliberately left in `requirements/xpu.txt`: vLLM pins an
+# exact kernels release there and publishes a matching wheel on its own index, so
+# the kernels are installed from vLLM's pin instead of being built here.
 install_vllm() {
   if [[ ! -d "$VLLM_PROJ/tests" ]]; then
     echo "ERROR: tests dir not found in vLLM." >&2
@@ -131,7 +134,6 @@ install_vllm() {
     -e '/^pytest-shard/d' \
     -e '/^torch/d' \
     -e '/^triton/d' \
-    -e '/^vllm[_-]xpu[_-]kernels/d' \
     -e '/^xgrammar/d' \
     -e '/^--extra-index-url.*https:\/\/download\.pytorch\.org\/whl/d' \
     "$VLLM_PROJ/requirements/xpu.txt"
@@ -142,38 +144,24 @@ install_vllm() {
 
 cd "$ROOT"
 
-build_vllm=false
 prepare_source_only=false
 latest=false
 force_reinstall=false
-check_wheel=false
 use_venv=false
 clean=true
-triton_repo=intel/intel-xpu-backend-for-triton
-triton_repo_branch=$DEFAULT_BRANCH
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --source)
-      build_vllm=true
-      shift
-      ;;
     --prepare-source)
-      build_vllm=true
       prepare_source_only=true
       shift
       ;;
     --latest)
-      build_vllm=true
       latest=true
       shift
       ;;
     --force-reinstall)
       force_reinstall=true
-      shift
-      ;;
-    --check-wheel)
-      check_wheel=true
       shift
       ;;
     --venv)
@@ -184,57 +172,34 @@ while [[ $# -gt 0 ]]; do
       clean=false
       shift
       ;;
-    --triton-repo)
-      if [[ -z "${2:-}" ]]; then
-        echo "ERROR: --triton-repo requires an argument." >&2
-        exit 1
-      fi
-      triton_repo="$2"
-      shift 2
-      ;;
-    --triton-repo-branch)
-      if [[ -z "${2:-}" ]]; then
-        echo "ERROR: --triton-repo-branch requires an argument." >&2
-        exit 1
-      fi
-      triton_repo_branch="$2"
-      shift 2
-      ;;
     --help)
       cat <<EOF
 Usage: $0 [options]
 
+vLLM is built and installed from source as an editable install. vLLM XPU kernels
+are installed from the release that vLLM pins in requirements/xpu.txt.
+
 Options:
-  --source                       Build vLLM XPU kernels from source using pinned commit.
+  --prepare-source               Prepare vLLM source only (clone/reset + patch), without build/install. With
+                                 --no-clean and an existing source tree, checkout/reset and patching are
+                                 skipped and the tree is reused as-is.
 
-  --prepare-source               Prepare vLLM and vLLM XPU kernels source only (clone/reset + patch), without
-                                 build/install. With --no-clean and an existing source tree, checkout/reset and
-                                 patching are skipped and the tree is reused as-is.
+  --latest                       Build vLLM from the latest commit in the $DEFAULT_BRANCH branch.
 
-  --latest                       Build vLLM and vLLM XPU kernels from the latest commits in the $DEFAULT_BRANCH branch.
-
-  --force-reinstall              Force reinstallation of vLLM and vLLM XPU kernels.
-
-  --check-wheel                  Check if a prebuilt vLLM XPU kernels wheel already exists before building.
+  --force-reinstall              Force reinstallation of vLLM.
 
   --venv                         Activate Python virtual environment from .venv/ before installation.
 
-  -nc, --no-clean                Reuse existing vLLM and vLLM XPU kernels source trees without cleanup; skips
-                                 checkout/reset and patching when source exists.
-
-  --triton-repo <repo>           GitHub repo to fetch prebuilt vLLM XPU kernels wheels from
-                                 (default: intel/intel-xpu-backend-for-triton).
-
-  --triton-repo-branch <branch>  Branch to fetch prebuilt vLLM XPU kernels wheels from (default: $DEFAULT_BRANCH).
+  -nc, --no-clean                Reuse existing vLLM source tree without cleanup; skips checkout/reset and
+                                 patching when source exists.
 
   --help                         Show this help message and exit.
 
 Examples:
-  ./install-vllm.sh --source
+  ./install-vllm.sh
   ./install-vllm.sh --prepare-source
   ./install-vllm.sh --prepare-source --latest
   ./install-vllm.sh --latest --venv
-  ./install-vllm.sh --triton-repo my_fork/intel-xpu-backend-for-triton --triton-repo-branch dev
 EOF
       exit 0
       ;;
@@ -251,35 +216,23 @@ if [[ "$use_venv" == true ]]; then
 fi
 
 vllm_pinned_commit=""
-vllm_xpu_kernels_pinned_commit=""
 
 if [[ "$latest" == false ]]; then
   vllm_pinned_commit="$(<"$SCRIPTS_DIR/vllm/vllm-pin.txt")"
   echo "*** Using the pinned vllm commit: $vllm_pinned_commit. ***"
-
-  vllm_xpu_kernels_pinned_commit="$(<"$SCRIPTS_DIR/vllm/vllm-xpu-kernels-pin.txt")"
-  echo "*** Using the pinned vllm-xpu-kernels commit: $vllm_xpu_kernels_pinned_commit. ***"
 fi
 
 if [[ "$prepare_source_only" == false ]]; then
-  correct_vllm_installed=false
-  correct_vllm_xpu_kernels_installed=false
-
   if check_installed_package "vllm" "${vllm_pinned_commit:-}" "$force_reinstall" "$latest"; then
-    correct_vllm_installed=true
-  fi
-
-  if check_installed_package "vllm-xpu-kernels" "${vllm_xpu_kernels_pinned_commit:-}" "$force_reinstall" "$latest"; then
-    correct_vllm_xpu_kernels_installed=true
-  fi
-
-  if [[ "$correct_vllm_installed" == true && "$correct_vllm_xpu_kernels_installed" == true ]]; then
     show_installs
 
-    echo "*** Both vllm and vllm-xpu-kernels are installed at the correct commits. ***"
+    echo "*** vllm is installed at the correct commit. ***"
     exit 0
   fi
 fi
+
+echo "*** Base directory: $ROOT. ***"
+echo "*** vLLM project: $VLLM_PROJ. ***"
 
 prepare_source "$VLLM_PROJ" "https://github.com/vllm-project/vllm.git" "${vllm_pinned_commit:-}" "$latest"
 if [[ "$clean" == true ]]; then
@@ -287,136 +240,12 @@ if [[ "$clean" == true ]]; then
   python "$SCRIPTS_DIR/vllm/vllm_xpu_patch.py" "$VLLM_PROJ"
 fi
 
-# Try downloading and installing vLLM XPU kernels wheel from a specific run.
-# Returns: 0 = installed successfully, 1 = wrong commit, 2 = no wheel found
-try_install_wheel_from_run() {
-  local run_id="$1"
-  local wheel_pattern="$2"
-  local temp_dir="$3"
-
-  echo "*** Trying run $run_id... ***"
-  if ! gh run download "$run_id" \
-      --repo "$triton_repo" \
-      --pattern "$wheel_pattern" \
-      --dir "$temp_dir"; then
-    return 2
-  fi
-
-  local downloaded_wheel="$(find "$temp_dir" -name 'vllm_xpu_kernels-*.whl' -print -quit)"
-  if [[ -z "$downloaded_wheel" ]]; then
-    return 2
-  fi
-
-  local wheel_commit="$(basename "$downloaded_wheel")"
-  wheel_commit="${wheel_commit#*+g}"
-  wheel_commit="${wheel_commit%%.*}"
-
-  if [[ "$vllm_xpu_kernels_pinned_commit" != "$wheel_commit"* ]]; then
-    echo "ERROR: vLLM XPU kernels nightly wheel commit ($wheel_commit) does not match pinned commit ($vllm_xpu_kernels_pinned_commit). Use --source to build from source." >&2
-    return 1
-  fi
-
-  echo "*** Installing vLLM XPU kernels from nightly builds. ***"
-  pip install "$downloaded_wheel"
-  echo "*** Installing vLLM from source. ***"
-  install_vllm
-  show_installs
-  return 0
-}
-
-# Try a run id.
-# Exits the script on install (0) or commit-mismatch (1).
-# Returns to caller when the run_id is null or the run has no wheel.
-try_run() {
-  [[ "$1" == "null" ]] && return 0
-
-  local status
-  rm -rf "$temp_dir"/*
-  try_install_wheel_from_run "$1" "$wheel_pattern" "$temp_dir" && exit 0 || status=$?
-
-  [[ $status -eq 1 ]] && exit 1
-
-  return 0
-}
-
-if [[ "$build_vllm" == false ]]; then
-  if ! command -v gh &>/dev/null; then
-    echo "ERROR: gh is not installed." >&2
-    exit 1
-  fi
-
-  if ! command -v jq &>/dev/null; then
-    echo "ERROR: jq is not installed." >&2
-    exit 1
-  fi
-
-  echo "*** Downloading nightly builds. ***"
-  wheel_pattern="wheels-vllm-py$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")-*"
-  temp_dir="$(mktemp -d)"
-  trap 'rm -rf "$temp_dir"' EXIT
-
-  # Try latest completed run first (any conclusion)
-  latest_run="$(gh run list --workflow nightly-wheels.yml --branch "$triton_repo_branch" -R "$triton_repo" --status completed --json databaseId --limit 1 | jq -r '.[0].databaseId')"
-  try_run "$latest_run"
-
-  # Latest run didn't have a wheel for this Python version, try latest successful run
-  echo "*** Latest run has no wheel for this Python version, trying latest successful run... ***"
-  latest_success_run="$(gh run list --workflow nightly-wheels.yml --branch "$triton_repo_branch" -R "$triton_repo" --json databaseId,conclusion --limit 20 | jq -r '[.[] | select(.conclusion=="success")][0].databaseId')"
-  [[ "$latest_success_run" != "$latest_run" ]] && try_run "$latest_success_run"
-
-  echo "ERROR: No nightly build vllm-xpu-kernels wheel found. Use --source to build from source." >&2
-  exit 1
-fi
-
-echo "*** Base directory: $ROOT. ***"
-echo "*** vLLM project: $VLLM_PROJ. ***"
-echo "*** vLLM XPU kernels project: $VLLM_XPU_KERNELS_PROJ. ***"
-
 if [[ "$prepare_source_only" == true ]]; then
-  prepare_source "$VLLM_XPU_KERNELS_PROJ" "https://github.com/vllm-project/vllm-xpu-kernels.git" "${vllm_xpu_kernels_pinned_commit:-}" "$latest"
-
   echo "*** vLLM source prepared at $VLLM_PROJ. ***"
   echo "*** Current commit: $(git -C "$VLLM_PROJ" rev-parse HEAD). ***"
-  echo "*** vLLM XPU kernels source prepared at $VLLM_XPU_KERNELS_PROJ. ***"
-  echo "*** Current commit: $(git -C "$VLLM_XPU_KERNELS_PROJ" rev-parse HEAD). ***"
   exit 0
 fi
 
-vllm_xpu_kernels_wheel_exists=false
-if [[ "$latest" == true ]]; then
-  echo "*** --latest specified: skipping wheel check.  ***"
-elif [[ -d "$VLLM_XPU_KERNELS_PROJ/dist" ]]; then
-  python_version="$(python -c "import sys; print(f'{sys.version_info.major}{sys.version_info.minor}')")"
-  wheel_pattern="vllm_xpu_kernels-*+g${vllm_xpu_kernels_pinned_commit:0:7}.d*-cp${python_version}-cp${python_version}-linux_x86_64.whl"
-  wheel="$(find "$VLLM_XPU_KERNELS_PROJ/dist" -maxdepth 1 -type f -name "$wheel_pattern" -printf '%f\n' 2>/dev/null | head -n 1)"
-
-  if [[ -n "$wheel" ]]; then
-    echo "*** Found vllm_xpu_kernels wheel: $wheel. ***"
-    vllm_xpu_kernels_wheel_exists=true
-  else
-    echo "*** No matching wheel in $VLLM_XPU_KERNELS_PROJ/dist. ***"
-  fi
-else
-  echo "*** $VLLM_XPU_KERNELS_PROJ/dist does not exist. ***"
-fi
-
-if [[ "$check_wheel" == false ]] || [[ "$vllm_xpu_kernels_wheel_exists" == false ]]; then
-  prepare_source "$VLLM_XPU_KERNELS_PROJ" "https://github.com/vllm-project/vllm-xpu-kernels.git" "${vllm_xpu_kernels_pinned_commit:-}" "$latest"
-
-  sed -i \
-    -e '/"torch/d' \
-    "$VLLM_XPU_KERNELS_PROJ/pyproject.toml"
-
-  sed -i \
-    -e '/^torch/d' \
-    -e '/^triton/d' \
-    -e '/^--extra-index-url.*https:\/\/download\.pytorch\.org\/whl/d' \
-    "$VLLM_XPU_KERNELS_PROJ/requirements.txt"
-  pip install -r "$VLLM_XPU_KERNELS_PROJ/requirements.txt"
-  VLLM_TARGET_DEVICE=xpu python -m build --wheel --no-isolation "$VLLM_XPU_KERNELS_PROJ"
-fi
-
 install_vllm
-pip install "$VLLM_XPU_KERNELS_PROJ"/dist/*.whl
 
 show_installs

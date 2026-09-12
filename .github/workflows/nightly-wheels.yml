@@ -20,16 +20,12 @@ on:
     paths:
       - .github/workflows/nightly-wheels.yml
       - .github/pins/pytorch.txt
-      - scripts/vllm/install-vllm.sh
-      - scripts/vllm/vllm-xpu-kernels-pin.txt
   pull_request:
     branches:
       - main
     paths:
       - .github/workflows/nightly-wheels.yml
       - .github/pins/pytorch.txt
-      - scripts/vllm/install-vllm.sh
-      - scripts/vllm/vllm-xpu-kernels-pin.txt
 
 permissions: read-all
 
@@ -85,8 +81,6 @@ jobs:
           echo "TORCHAUDIO_COMMIT_ID=$(<.github/ci_commit_pins/audio.txt)" | tee -a $GITHUB_ENV
           echo "TIMM_COMMIT_ID=$(<.ci/docker/ci_commit_pins/timm.txt)" | tee -a $GITHUB_ENV
           cd ..
-          echo "VLLM_PIN=$(<scripts/vllm/vllm-pin.txt)" | tee -a $GITHUB_ENV
-          echo "VLLM_XPU_KERNELS_PIN=$(<scripts/vllm/vllm-xpu-kernels-pin.txt)" | tee -a $GITHUB_ENV
 
       - name: Identify Triton commit id
         run: |
@@ -132,11 +126,6 @@ jobs:
           cd pytorch
           pip install -r .ci/docker/ci_commit_pins/huggingface-requirements.txt
 
-      - name: Install vLLM and vLLM XPU kernels
-        if: contains(fromJSON('["3.10", "3.11", "3.12"]'), matrix.python)
-        run: |
-          scripts/vllm/install-vllm.sh --source --force-reinstall
-
       - name: Prepare wheels for upload
         run: |
           mkdir -p wheels
@@ -152,20 +141,6 @@ jobs:
         uses: sigstore/gh-action-sigstore-python@a5caf349bc536fbef3668a10ed7f5cd309a4b53d # v3.2.0
         with:
           inputs: wheels/*.whl
-
-      - name: Prepare vLLM wheels for upload
-        if: contains(fromJSON('["3.10", "3.11", "3.12"]'), matrix.python)
-        run: |
-          mkdir -p wheels-vllm
-          cp -L vllm-xpu-kernels/dist/*.whl wheels-vllm/
-          ls -lh wheels-vllm/
-
-      - name: Sign vLLM wheels with Sigstore (keyless)
-        if: contains(fromJSON('["3.10", "3.11", "3.12"]'), matrix.python)
-        # SHA-pinned for supply-chain safety; comment tracks the human-readable version.
-        uses: sigstore/gh-action-sigstore-python@a5caf349bc536fbef3668a10ed7f5cd309a4b53d # v3.2.0
-        with:
-          inputs: wheels-vllm/*.whl
 
       - name: Report environment details
         run: |
@@ -188,8 +163,6 @@ jobs:
           TRITON_COMMIT_ID=$TRITON_COMMIT_ID
           TORCHVISION_COMMIT_ID=$TORCHVISION_COMMIT_ID
           TORCHAUDIO_COMMIT_ID=$TORCHAUDIO_COMMIT_ID
-          VLLM_PIN=$VLLM_PIN
-          VLLM_XPU_KERNELS_PIN=$VLLM_XPU_KERNELS_PIN
           EOF
           ./scripts/capture-hw-details.sh | tee -a "$reports_file"
 
@@ -198,12 +171,4 @@ jobs:
         with:
           name: wheels-pytorch-py${{ matrix.python }}-${{ env.TIMESTAMP }}
           path: wheels
-          include-hidden-files: true
-
-      - name: Upload vLLM wheels to artifacts
-        if: contains(fromJSON('["3.10", "3.11", "3.12"]'), matrix.python)
-        uses: actions/upload-artifact@v7
-        with:
-          name: wheels-vllm-py${{ matrix.python }}-${{ env.TIMESTAMP }}
-          path: wheels-vllm
           include-hidden-files: true
