@@ -10,13 +10,13 @@ tt.func @ttig.prefetch(%arg0: tensor<2x32x!tt.ptr<f32>>, %arg1: tensor<4x32xi1>)
 
 // -----
 
-#warp = #ttig.warp<{sizePerThread = [16, 64], threadsPerWarp = [1, 1], order = [1, 0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [1, 8], order = [1, 0]}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_2d_block_io} {
-  tt.func @ttig.sub_group_transpose.encoding(%local_buffer : !tt.ptr<f16>, %src : tensor<16x16xf16, #warp>) -> tensor<16x16xf16, #warp> {
+  tt.func @ttig.sub_group_transpose.encoding(%local_buffer : !tt.ptr<f16>, %src : tensor<16x16xf16, #blocked>) -> tensor<16x16xf16, #blocked> {
     // expected-error @below {{'ttig.sub_group_transpose' op can only be used on tensors of shape <sub_group_size x sub_group_size> with no encoding}}
-    %res = ttig.sub_group_transpose %local_buffer, %src : tensor<16x16xf16, #warp>
-    tt.return %res : tensor<16x16xf16, #warp>
+    %res = ttig.sub_group_transpose %local_buffer, %src : tensor<16x16xf16, #blocked>
+    tt.return %res : tensor<16x16xf16, #blocked>
   }
 }
 

@@ -650,15 +650,15 @@ module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 32 : i32, "ttg.th
 
 // COM: Two loads of the *same* descriptor at *different* offsets denote two
 // COM: different tiles. Each sunk load needs its own prefetch, so the prefetch
-// COM: bookkeeping must be keyed on the descriptor and the indices, not on the
+// COM: bookkeeping must be keyed on the descriptor *and* the indices, not on the
 // COM: descriptor alone.
-#dpas6 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 8], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
-#dot0_6 = #ttg.dot_op<{opIdx = 0, parent = #dpas6, kWidth=1}>
-#dot1_6 = #ttg.dot_op<{opIdx = 1, parent = #dpas6, kWidth=2}>
+#dpas5 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 8], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0_5 = #ttg.dot_op<{opIdx = 0, parent = #dpas5, kWidth=1}>
+#dot1_5 = #ttg.dot_op<{opIdx = 1, parent = #dpas5, kWidth=2}>
 module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32} {
   tt.func @same_desc_two_offsets(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
     // CHECK-LABEL:   tt.func @same_desc_two_offsets
-    %cst = arith.constant dense<0.000000e+00> : tensor<256x256xf32, #dpas6>
+    %cst = arith.constant dense<0.000000e+00> : tensor<256x256xf32, #dpas5>
     %c128_i32 = arith.constant 128 : i32
     %c0_i32 = arith.constant 0 : i32
     %c0_i64 = arith.constant 0 : i64
@@ -667,19 +667,19 @@ module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 32 : i32, "ttg.th
     %out = tt.make_tensor_descriptor %arg2, [%c0_i32, %c0_i32], [%c0_i64, %c0_i64] : <f32>, <256x256xf32>
     // CHECK:      ttig.descriptor_prefetch %[[DESC:.*]][%c0_i32, %c0_i32] {{.*}} : !tt.tensordesc<256x128xf16>
     // CHECK:      ttig.descriptor_prefetch %[[DESC]][%c128_i32, %c0_i32] {{.*}} : !tt.tensordesc<256x128xf16>
-    %2 = tt.descriptor_load %0[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<256x128xf16> -> tensor<256x128xf16, #dot0_6>
-    %3 = tt.descriptor_load %0[%c128_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<256x128xf16> -> tensor<256x128xf16, #dot0_6>
-    %4:2 = scf.for %arg3 = %c0_i32 to %c128_i32 step %c128_i32 iter_args(%arg4 = %cst, %arg5 = %c0_i32) -> (tensor<256x256xf32, #dpas6>, i32)  : i32 {
+    %2 = tt.descriptor_load %0[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<256x128xf16> -> tensor<256x128xf16, #dot0_5>
+    %3 = tt.descriptor_load %0[%c128_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<256x128xf16> -> tensor<256x128xf16, #dot0_5>
+    %4:2 = scf.for %arg3 = %c0_i32 to %c128_i32 step %c128_i32 iter_args(%arg4 = %cst, %arg5 = %c0_i32) -> (tensor<256x256xf32, #dpas5>, i32)  : i32 {
       // CHECK:      scf.for
       // CHECK:      tt.descriptor_load %{{.*}}[%c0_i32, %c0_i32] {{.*}} : !tt.tensordesc<256x128xf16>
       // CHECK:      tt.descriptor_load %{{.*}}[%c128_i32, %c0_i32] {{.*}} : !tt.tensordesc<256x128xf16>
       %5 = arith.addi %arg5, %c128_i32 : i32
-      %6 = tt.descriptor_load %1[%arg5, %c0_i32] {ttig.block_io = "column_major"} : !tt.tensordesc<128x256xf16> -> tensor<128x256xf16, #dot1_6>
-      %7 = tt.dot %2, %6, %arg4, inputPrecision = tf32 : tensor<256x128xf16, #dot0_6> * tensor<128x256xf16, #dot1_6> -> tensor<256x256xf32, #dpas6>
-      %8 = tt.dot %3, %6, %7, inputPrecision = tf32 : tensor<256x128xf16, #dot0_6> * tensor<128x256xf16, #dot1_6> -> tensor<256x256xf32, #dpas6>
-      scf.yield %8, %5 : tensor<256x256xf32, #dpas6>, i32
+      %6 = tt.descriptor_load %1[%arg5, %c0_i32] {ttig.block_io = "column_major"} : !tt.tensordesc<128x256xf16> -> tensor<128x256xf16, #dot1_5>
+      %7 = tt.dot %2, %6, %arg4, inputPrecision = tf32 : tensor<256x128xf16, #dot0_5> * tensor<128x256xf16, #dot1_5> -> tensor<256x256xf32, #dpas5>
+      %8 = tt.dot %3, %6, %7, inputPrecision = tf32 : tensor<256x128xf16, #dot0_5> * tensor<128x256xf16, #dot1_5> -> tensor<256x256xf32, #dpas5>
+      scf.yield %8, %5 : tensor<256x256xf32, #dpas5>, i32
     }
-    tt.descriptor_store %out[%c0_i32, %c0_i32], %4#0 : !tt.tensordesc<256x256xf32>, tensor<256x256xf32, #dpas6>
+    tt.descriptor_store %out[%c0_i32, %c0_i32], %4#0 : !tt.tensordesc<256x256xf32>, tensor<256x256xf32, #dpas5>
     tt.return
   }
 }

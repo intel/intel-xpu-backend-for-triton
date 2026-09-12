@@ -844,15 +844,10 @@ run_benchmark_flash_attention() {
   cd $TRITON_PROJ/benchmarks
   pip install .
 
-  echo "Forward - Default path (with tensor descriptor):"
+  echo "Forward:"
   python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
 
-  echo "Forward - Advanced path:"
-  TRITON_INTEL_ADVANCED_PATH=1 \
-    IGC_VISAOptions=" -enableBCR" \
-    python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
-
-  echo "Backward - Default path:"
+  echo "Backward:"
   FA_KERNEL_MODE="bwd" \
     python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
 }
@@ -1007,11 +1002,13 @@ run_sglang_moe_tests() {
   echo "********************************************************"
 
   enter_sglang_test_env
-  # Fused MoE + LoRA.
-  # test_fused_moe.py and test/manual/test_triton_moe_wna16.py are left out: same
-  # sgl_kernel import as the INT8 tests.
+  # Fused MoE + LoRA. sglang-test-fix.patch guards the optional sgl_kernel
+  # imports on the Triton MoE path and adds native fallbacks, which is what
+  # lets test_fused_moe.py import and run here.
+  # test/manual/test_triton_moe_wna16.py is still left out.
   TRITON_TEST_SUITE=sglang_moe \
     run_pytest_command -vvv \
+      test/registered/moe/test_fused_moe.py \
       test/registered/lora/test_fused_moe_lora_kernel.py
 }
 

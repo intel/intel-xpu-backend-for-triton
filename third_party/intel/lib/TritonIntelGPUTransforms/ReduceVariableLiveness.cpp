@@ -16,7 +16,6 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
-#include <algorithm>
 #include <optional>
 
 namespace mlir::triton::gpu::intel {
@@ -67,17 +66,6 @@ bool isLiveIn2DTensor(Value v,
          analysis.isLiveIn(loopBody, v);
 }
 
-/// A prefetch is identified by the descriptor *and* the indices it is read at:
-/// the same descriptor read at two different offsets denotes two different
-/// tiles, each of which needs its own prefetch.
-using PrefetchKey = SmallVector<Value, 3>;
-
-PrefetchKey getPrefetchKey(tt::DescriptorLoadOp loadOp) {
-  PrefetchKey key{loadOp.getDesc()};
-  llvm::append_range(key, loadOp.getIndices());
-  return key;
-}
-
 /// Return true if the \p loadOp is suitable to be moved.
 /// \p expectedElementType is the element type expected for the load to be a
 /// candidate,
@@ -123,6 +111,20 @@ bool isLoadCandidate(tt::DescriptorLoadOp loadOp, Type expectedElementType,
   if (!loadSource.getDefiningOp())
     return false;
   return true;
+}
+
+/// Identifies the tile a descriptor load reads: the descriptor together with
+/// the indices it is read at. Two loads of the same descriptor at different
+/// indices touch different memory, so each one needs its own prefetch; keying
+/// the bookkeeping on the descriptor alone would drop every prefetch but the
+/// first.
+using PrefetchKey = SmallVector<Value, 3>;
+
+/// Return the prefetch key of \p loadOp.
+PrefetchKey getPrefetchKey(tt::DescriptorLoadOp loadOp) {
+  PrefetchKey key{loadOp.getDesc()};
+  llvm::append_range(key, loadOp.getIndices());
+  return key;
 }
 
 /// Create a prefetch operation for the given load operation.

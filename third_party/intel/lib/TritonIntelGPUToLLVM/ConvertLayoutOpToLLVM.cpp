@@ -50,6 +50,10 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         performSubGroupTranspose(op, srcLayout, dstLayout, adaptor, rewriter);
         return success();
       }
+      if (intel::cvtIsSubGroupReinterpret(srcTy, dstTy)) {
+        performSubGroupReinterpret(op, srcLayout, dstLayout, adaptor, rewriter);
+        return success();
+      }
     }
     return failure();
   }
@@ -397,6 +401,217 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     }
     return unwrapFromVectors(loc, transposedVecs, rewriter);
   }
+
+  void performSubGroupReinterpret(ConvertLayoutOp op,
+                                  const LinearLayout &srcLayout,
+                                  const LinearLayout &dstLayout,
+                                  OpAdaptor adaptor,
+                                  ConversionPatternRewriter &rewriter) const {
+    assert(
+        intel::cvtIsSubGroupReinterpret(op.getSrc().getType(), op.getType()) &&
+        "Expecting sub-group reinterpret cast");
+
+    Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    SmallVector<Value> inVals =
+        unpackLLElements(loc, adaptor.getSrc(), rewriter);
+
+    Type origElemTy = inVals.front().getType();
+
+    TypeSwitch<Type>(origElemTy)
+        .Case([&](FloatType floatTy) {
+          // TODO: Support FP4.
+          Type dstType = int_ty(floatTy.getWidth());
+          assert(intel::isValidElementTypeForSubGroupTranspose(dstType) &&
+                 "Expecting valid type");
+          llvm::transform(inVals, std::begin(inVals), [&](Value val) -> Value {
+            return b.bitcast(val, dstType);
+          });
+        })
+        .Case([&](IntegerType intTy) {
+          if (intel::isValidElementTypeForSubGroupTranspose(intTy))
+            return;
+          Type dstType = i8_ty;
+          llvm::transform(inVals, std::begin(inVals), [&](Value val) -> Value {
+            return b.zext(dstType, val);
+          });
+        })
+        .Case([&](LLVM::LLVMPointerType) {
+          Type dstType = i64_ty;
+          assert(intel::isValidElementTypeForSubGroupTranspose(dstType) &&
+                 "i64 type should be supported");
+          llvm::transform(inVals, std::begin(inVals), [&](Value val) -> Value {
+            return b.ptrtoint(dstType, val);
+          });
+        })
+        .Default([](auto) { llvm_unreachable("Unsupported type"); });
+
+    SmallVector<Value> outVals =
+        performSubGroupReinterpret(loc, inVals, rewriter,
+                                   *intel::getReinterpretCastMapping(
+                                       op.getContext(), srcLayout, dstLayout));
+
+    TypeSwitch<Type>(origElemTy)
+        .Case([&](FloatType floatTy) {
+          llvm::transform(
+              outVals, std::begin(outVals),
+              [&](Value val) -> Value { return b.bitcast(val, origElemTy); });
+        })
+        .Case([&](IntegerType intTy) {
+          // Check whether conversion took place.
+          if (intTy == outVals.front().getType())
+            return;
+          llvm::transform(
+              outVals, std::begin(outVals),
+              [&](Value val) -> Value { return b.trunc(origElemTy, val); });
+        })
+        .Case([&](LLVM::LLVMPointerType ptrTy) {
+          llvm::transform(
+              outVals, std::begin(outVals),
+              [&](Value val) -> Value { return b.inttoptr(ptrTy, val); });
+        })
+        .Default([](auto) { llvm_unreachable("Unsupported type"); });
+
+    Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
+                                  op.getType());
+    rewriter.replaceOp(op, result);
+  }
+
+  SmallVector<Value>
+  performSubGroupReinterpret(Location loc, ArrayRef<Value> inVals,
+                             ConversionPatternRewriter &rewriter,
+                             const LinearLayout &comp) const {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    Type elementType = inVals.front().getType();
+    MLIRContext *ctx = rewriter.getContext();
+    StringAttr kRegister = str_attr("register");
+    StringAttr kLane = str_attr("lane");
+
+    std::optional<intel::SubGroupReinterpretPackInfo> packInfo =
+        intel::getSubGroupReinterpretPackInfo(ctx, comp);
+    assert(packInfo && "Expected valid sub-group reinterpret mapping");
+
+    bool packOrUnpack = packInfo->isPack;
+    unsigned packedRegisterSize = packInfo->packedRegisterSize;
+
+    unsigned threadsPerWarp = comp.getInDimSize(kLane);
+    unsigned lane2Reg = packOrUnpack ? 1 : threadsPerWarp / packedRegisterSize;
+
+    std::vector<std::vector<int>> regMapBases(comp.getInDimSizeLog2(kRegister));
+    auto regBases = comp.getBases().lookup(kRegister);
+    auto getRegBaseOf = [&](StringAttr dim, unsigned val) {
+      std::optional<unsigned> base;
+      for (size_t i = 0; i < regBases.size(); i++) {
+        auto bases = regBases[i];
+        auto regBase = bases[comp.getOutDimIndex(dim)];
+        if (regBase == val) {
+          base = i;
+        }
+      }
+      return base;
+    };
+    unsigned laneBase = packOrUnpack ? threadsPerWarp / packedRegisterSize : 1;
+    unsigned packedBaseNum = llvm::Log2_32(packedRegisterSize);
+    // Reinterpret cast are vectorized.
+    // Reinterpret cast mapping:
+    //  - register=1 -> (1, 0)
+    //    register=2 -> (2, 0)
+    //    register=4 -> (0, 1)
+    //    register=8 -> (4, 0)
+    //    register=16 -> (8, 0)
+    //    register=32 -> (16, 0)
+    //    register=64 -> (64, 0)
+    //  - lane=1 -> (0, 2)
+    //    lane=2 -> (0, 4)
+    //    lane=4 -> (0, 8)
+    //    lane=8 -> (0, 16)
+    //    lane=16 -> (32, 0)
+    // where out dims are: [register (size 128), lane (size 32)]
+    // 1st put reg -> lane mapping at beginning.
+    // 2nd put reg -> reg swizzle mapping which groups the reorder into one
+    // llvm.shuffle operation. 3nd put reg -> reg identical mapping at end to
+    // reduce the fradgement issue. E.G: regMapping:
+    //  - register=1 -> (4)     reg -> lane
+    //    register=2 -> (8)     reg -> reg shuffle
+    //    register=4 -> (16)    reg -> reg shuffle
+    //    register=8 -> (32)    reg -> reg shuffle  vec size end here.
+    //    register=16 -> (1)    reg -> reg identical
+    //    register=32 -> (2)    reg -> reg identical
+    //    register=64 -> (64)   reg -> reg identical
+    unsigned vecSize = packedRegisterSize;
+    // first push the reg base that reg -> lane mapping.
+    for (size_t i = 0; i < packedBaseNum; i++) {
+      auto base = getRegBaseOf(kLane, laneBase << i);
+      assert(base && "base should be found");
+      regMapBases[i] = {1 << *base};
+    }
+
+    // second push the reg base that reg -> reg mapping are swizzled and
+    // increase the vecSize.
+    for (size_t i = 0; i < comp.getInDimSizeLog2(kRegister); i++) {
+      auto base = getRegBaseOf(kRegister, 1 << i);
+      if (base) {
+        if (*base != i) {
+          regMapBases[packedBaseNum++] = {1 << *base};
+          vecSize <<= 1;
+        }
+      }
+    }
+
+    // third push the reg bast that reg -> reg mapping are identical.
+    for (size_t i = 0; i < comp.getInDimSizeLog2(kRegister); i++) {
+      auto base = getRegBaseOf(kRegister, 1 << i);
+      if (base) {
+        if (*base == i) {
+          regMapBases[packedBaseNum++] = {1 << *base};
+        }
+      }
+    }
+
+    LinearLayout regMapping = LinearLayout(
+        {{kRegister, regMapBases}}, {{kRegister, comp.getInDimSize(kRegister)}},
+        /*requireSurjective=*/true);
+    auto reorderMapping =
+        (regMapping *
+         LinearLayout::identity1D(comp.getInDimSize(kLane), kLane, kLane))
+            .compose(comp);
+
+    Type packedType =
+        vec_ty(int_ty(elementType.getIntOrFloatBitWidth() * packedRegisterSize),
+               vecSize / packedRegisterSize);
+    VectorType unpackedType = vec_ty(elementType, vecSize);
+
+    int numElems = inVals.size();
+    SmallVector<Value> result(numElems);
+    for (size_t i = 0; i < numElems; i += vecSize) {
+      SmallVector<Value> slice;
+      for (size_t j = 0; j < vecSize; ++j) {
+        auto regId = regMapping.apply({{kRegister, i + j}})[0].second;
+        slice.push_back(inVals[regId]);
+      }
+      Value vec = packLLVector(loc, slice, rewriter);
+      Value input = packOrUnpack ? vec : b.bitcast(vec, packedType);
+      Value shuffled =
+          TritonGEN::SubGroupBitcastShuffleOp::create(
+              rewriter, loc, packOrUnpack ? packedType : unpackedType, input)
+              ->getResult(0);
+
+      Value reinterVec =
+          packOrUnpack ? b.bitcast(shuffled, unpackedType) : shuffled;
+
+      SmallVector<Value> unpackedVec =
+          unpackLLVector(loc, reinterVec, rewriter);
+      for (size_t j = 0; j < vecSize; ++j) {
+        auto srcLaneId = lane2Reg * (j % packedRegisterSize);
+        auto dstRegId =
+            reorderMapping.apply({{kRegister, i + j}, {kLane, srcLaneId}})[0]
+                .second;
+        result[dstRegId] = (unpackedVec[j]);
+      }
+    }
+    return result;
+  }
 };
 
 struct ConvertLayoutOpGuard : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
@@ -411,6 +626,9 @@ struct ConvertLayoutOpGuard : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
            "Failed to lower layout conversion through sub-group shuffles");
     assert(!intel::cvtIsSubGroupTranspose(srcTy, dstTy) &&
            "Failed to lower layout conversion through sub-group transpose");
+    assert(
+        !intel::cvtIsSubGroupReinterpret(srcTy, dstTy) &&
+        "Failed to lower layout conversion through sub-group reinterpret cast");
     return failure();
   }
 };
