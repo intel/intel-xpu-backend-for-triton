@@ -55,17 +55,6 @@ check_installed_package() {
   return 1
 }
 
-# Check whether the installed vllm-xpu-kernels was built from source by this script
-# before it switched to the release vLLM pins. Such builds carry a setuptools-scm
-# local version segment (e.g. 0.1.0+gbaaa05b.d20260824), releases do not.
-# Returns 0 if the installed kernels were built from source, 1 otherwise.
-locally_built_kernels() {
-  local version=""
-  version="$(pip show vllm-xpu-kernels 2>/dev/null | awk '/^Version:/ {print $2}')" || return 1
-
-  [[ "$version" == *+* ]]
-}
-
 show_installs() {
   echo "*** Installed versions: ***"
   echo "vllm: $(pip show vllm | awk '/^Version:/ {print $2}')."
@@ -234,14 +223,6 @@ if [[ "$latest" == false ]]; then
 fi
 
 if [[ "$prepare_source_only" == false ]]; then
-  if locally_built_kernels; then
-    # Reinstalling vllm is what pulls in the kernels release pinned by vLLM, so a
-    # source-built leftover must not let the check below exit early.
-    echo "*** Installed vllm-xpu-kernels was built from source: reinstalling vllm to pick up the pinned release. ***"
-    pip uninstall -y vllm-xpu-kernels
-    force_reinstall=true
-  fi
-
   if check_installed_package "vllm" "${vllm_pinned_commit:-}" "$force_reinstall" "$latest"; then
     show_installs
 
