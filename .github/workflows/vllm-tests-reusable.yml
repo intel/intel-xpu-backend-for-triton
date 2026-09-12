@@ -143,6 +143,7 @@ jobs:
           - vllm-kda
           - vllm-tdesc
           - vllm-rest
+          - vllm-omni
     runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1100') || format('["linux", "{0}"]', inputs.runner_label)) }}
     timeout-minutes: 240
     defaults:
@@ -197,12 +198,12 @@ jobs:
         uses: ./.github/actions/setup-pytorch
 
       - name: Identify torchvision pin
-        if: ${{ matrix.suite == 'vllm-mrv2' || matrix.suite == 'vllm-rest' }}
+        if: ${{ matrix.suite == 'vllm-mrv2' || matrix.suite == 'vllm-rest' || matrix.suite == 'vllm-omni' }}
         run: |
           echo "TORCHVISION_COMMIT_ID=$(<pytorch/.github/ci_commit_pins/vision.txt)" | tee -a "$GITHUB_ENV"
 
       - name: Install torchvision package
-        if: ${{ matrix.suite == 'vllm-mrv2' || matrix.suite == 'vllm-rest' }}
+        if: ${{ matrix.suite == 'vllm-mrv2' || matrix.suite == 'vllm-rest' || matrix.suite == 'vllm-omni' }}
         uses: ./.github/actions/install-dependency
         with:
           package: torchvision
@@ -231,6 +232,12 @@ jobs:
         uses: ./.github/actions/install-vllm
         with:
           use-branch-wheel: ${{ inputs.use_branch_wheel }}
+
+      - name: Install vllm-omni
+        id: install-vllm-omni
+        if: ${{ matrix.suite == 'vllm-omni' && steps.install-vllm.outcome == 'success' && !cancelled() }}
+        run: |
+          scripts/vllm/install-vllm-omni.sh
 
       - name: Create reports dir
         run: |
