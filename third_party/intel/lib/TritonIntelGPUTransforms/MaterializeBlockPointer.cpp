@@ -796,8 +796,9 @@ private:
         ttg::ConvertLayoutOp::create(builder, loc, storeValTy, valReshape);
 
     // Create the new 2D store.
-    auto newStore = tt::StoreOp::create(builder, loc, storePtr, storeVal,
-                                        op.getCache(), op.getEvict());
+    auto newStore =
+        tt::StoreOp::create(builder, loc, storePtr, storeVal, /*mask=*/Value(),
+                            op.getCachePolicyAttr(), op.getIgnoreCta());
 
     setBlockIOAttrs(newStore, ctx, info->S);
     copyNonBlockIOAttrs(op, newStore);
@@ -924,7 +925,7 @@ private:
 
     auto newLoad =
         tt::LoadOp::create(builder, loc, loadResultTy, loadPtr, mask2d, other2d,
-                           op.getCache(), op.getEvict(), op.getIsVolatile());
+                           op.getCachePolicyAttr(), op.getIsVolatile());
 
     // Set block IO attributes.
     setBlockIOAttrs(newLoad, ctx, info->S);
