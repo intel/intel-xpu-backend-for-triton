@@ -150,7 +150,7 @@ pip install -U pybind11 cmake
 Build and install Triton:
 
 ```
-pip install -v '.[build,tests,tutorials]'
+pip install -v .
 cd ..
 ```
 
