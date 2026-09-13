@@ -275,7 +275,8 @@ struct ElementwiseInlineAsmOpConversion
                            /*asm_string=*/op.getAsmString(),
                            /*constraints=*/op.getConstraints(),
                            /*has_side_effects=*/!op.getPure(),
-                           /*is_align_stack=*/false, LLVM::TailCallKind::None,
+                           /*is_align_stack=*/false,
+                           LLVM::TailCallKind::None, /*convergent=*/false,
                            /*asm_dialect=*/
                            LLVM::AsmDialectAttr::get(rewriter.getContext(),
                                                      LLVM::AsmDialect::AD_ATT),

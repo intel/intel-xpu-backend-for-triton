@@ -106,6 +106,7 @@ mlir::Value PTXBuilder::launch(OpBuilder &rewriter, Location loc, Type resTy,
       hasSideEffect,                          // has_side_effects
       isAlignStack,                           // is_align_stack
       LLVM::TailCallKind::None,
+      /*convergent=*/false,
       LLVM::AsmDialectAttr::get(ctx,
                                 LLVM::AsmDialect::AD_ATT), // asm_dialect
       ArrayAttr::get(ctx, attrs)                           // operand_attrs

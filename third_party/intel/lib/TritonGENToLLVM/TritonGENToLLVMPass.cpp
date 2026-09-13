@@ -1404,7 +1404,7 @@ struct TritonSubGroupGatherLoadLowering
         ValueRange{adaptor.getAddrs(), adaptor.getPreds()}, asmText,
         "=rw,rw.u,rw.u",
         /*has_side_effects=*/false,
-        /*is_align_stack=*/false, LLVM::TailCallKind::None,
+        /*is_align_stack=*/false, LLVM::TailCallKind::None, false,
         LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
         ArrayAttr::get(ctx, {}));
 
