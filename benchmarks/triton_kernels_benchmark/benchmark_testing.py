@@ -212,14 +212,18 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
         kernels += list(itertools.chain.from_iterable([func.kernels for func in funcs]))
         return kernels
 
-    # The profiler links a device kernel to the innermost enclosing op or annotation.
-    # A Triton launch has no `aten::` op wrapping it -- it goes straight through the
-    # Level Zero / UR API, and those traced API events carry no device activity -- so
-    # the innermost owner is the profiled range itself. Ops that do go through an
-    # `aten::` wrapper (oneDNN, PyTorch eager) are linked to both the range and the
-    # `aten::` child. So read the range first and walk the children only as a fallback:
-    # summing both double-counts `aten::` work, while walking children alone never finds
-    # a Triton kernel at all.
+    # Read the device time off the profiled range itself, and walk the children only as
+    # a fallback. The range's own kernel list is the aggregate of the device activity it
+    # encloses, so it is correct regardless of how that activity got attributed further
+    # down the tree. Walking the children instead is fragile in two ways:
+    #  * The launcher only opens an `XPU Triton kernel:<name>` scope around the launch
+    #    when it was built with `-DTRITON_INTEL_INJECT_PYTORCH=1`. Without it there is no
+    #    child owning the kernel -- the descendant Level Zero / UR API events carry no
+    #    device activity -- so the walk returns nothing and the check below fires.
+    #  * Device kernels can also be appended to *unlinked* runtime events (`external_id
+    #    == 0`, e.g. `zeMemGetAllocProperties`) that happen to be nested in the range,
+    #    which both duplicates the Triton kernel and drags in foreign work such as the
+    #    `cache.zero_()` fill. See https://github.com/pytorch/pytorch/pull/196282.
     kernels = [func.kernels or extract_kernels(func.cpu_children) for func in functions]
     # For example, for backward FA, kernels can be empty for one of the threads.
     # Keep in mind that `backward` function is launched in another thread and
