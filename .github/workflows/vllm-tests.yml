@@ -12,6 +12,10 @@ on:
         description: vLLM pin (commit hash), keep empty for default
         type: string
         default: ""
+      kernels_hash:
+        description: vLLM XPU kernels commit hash to build from source, keep empty to install vLLM's pinned release
+        type: string
+        default: ""
       skip_list:
         description: Skip list
         type: string
@@ -37,6 +41,7 @@ jobs:
     with:
       runner_label: ${{ inputs.runner_label }}
       vllm_pin: ${{ inputs.vllm_pin }}
+      kernels_hash: ${{ inputs.kernels_hash }}
       skip_list: ${{ inputs.skip_list }}
       ignore_errors: ${{ inputs.ignore_errors }}
       use_pyenv_python: ${{ inputs.use_pyenv_python }}

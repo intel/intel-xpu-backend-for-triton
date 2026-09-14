@@ -11,6 +11,10 @@ on:
         description: vLLM pin (commit hash), keep empty for default
         type: string
         default: ""
+      kernels_hash:
+        description: vLLM XPU kernels commit hash to build from source, keep empty to install vLLM's pinned release
+        type: string
+        default: ""
       skip_list:
         description: Skip list directory override
         type: string
@@ -219,6 +223,8 @@ jobs:
         id: install-vllm
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         uses: ./.github/actions/install-vllm
+        with:
+          kernels-hash: ${{ inputs.kernels_hash }}
 
       - name: Create reports dir
         run: |

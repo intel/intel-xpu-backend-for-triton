@@ -15,6 +15,10 @@ on:
         description: vLLM pin (commit hash), keep empty for default
         type: string
         default: ""
+      kernels_hash:
+        description: vLLM XPU kernels commit hash to build from source, keep empty to install vLLM's pinned release
+        type: string
+        default: ""
   workflow_call:
     inputs:
       runner_label:
@@ -30,10 +34,13 @@ on:
         description: vLLM pin (commit hash), keep empty for default
         type: string
         default: ""
+      kernels_hash:
+        description: vLLM XPU kernels commit hash to build from source, keep empty to install vLLM's pinned release
+        type: string
+        default: ""
 
 permissions: read-all
 
-# vLLM XPU kernels ship a single abi3 wheel; 3.12 is the version the vLLM suites are validated on.
 env:
   PYTHON_VERSION: "3.12"
   TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number)) || (github.event_name == 'schedule' && 'ci') || 'test' }}
@@ -111,6 +118,8 @@ jobs:
         id: install-vllm
         if: ${{ steps.install-benchmarks.outcome == 'success' && !cancelled() }}
         uses: ./.github/actions/install-vllm
+        with:
+          kernels-hash: ${{ inputs.kernels_hash }}
 
       - name: Report environment details
         timeout-minutes: 1
@@ -125,6 +134,7 @@ jobs:
           TRITON_COMMIT_ID=$GITHUB_SHA
           TRITON_BRANCH=$GITHUB_REF_NAME
           VLLM_PIN=$(cat scripts/vllm/vllm-pin.txt)
+          VLLM_XPU_KERNELS_VERSION=$(pip show vllm-xpu-kernels | awk '/^Version:/ {print $2}')
           OS=${{ runner.os }}
           EOF
           ./scripts/capture-hw-details.sh | tee -a "$REPORTS/.env"

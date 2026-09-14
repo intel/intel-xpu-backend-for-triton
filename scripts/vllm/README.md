@@ -8,7 +8,8 @@ Scripts for installing and testing vLLM on Intel XPU as part of the Triton CI.
   pinned commit checkout, `vllm-fix.patch` application, AST-based CUDA-to-XPU
   test patching, and dependency installation with torch constraint protection.
   `vllm-xpu-kernels` is installed from the release vLLM pins in
-  `requirements/xpu.txt` rather than built here.
+  `requirements/xpu.txt` by default; pass `--kernels-source` (top of main) or
+  `--kernels-hash <hash>` to build the kernels from source instead.
 - **vllm-xpu-patch.py** - AST-guided patcher that scans vLLM test files for
   hardcoded CUDA references and applies source-level XPU replacements.
 

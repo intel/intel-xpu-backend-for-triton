@@ -1,10 +1,20 @@
 name: Install vllm
 description: Install vLLM
 
+inputs:
+  kernels-hash:
+    description: vLLM XPU kernels commit hash to build from source, keep empty to install vLLM's pinned release
+    required: false
+    default: ""
+
 runs:
   using: composite
   steps:
     - name: Run install-vllm.sh
       shell: bash --noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
       run: |
-        ./scripts/vllm/install-vllm.sh
+        install_args=()
+        if [[ -n "${{ inputs.kernels-hash }}" ]]; then
+          install_args+=(--kernels-hash "${{ inputs.kernels-hash }}")
+        fi
+        ./scripts/vllm/install-vllm.sh "${install_args[@]}"
