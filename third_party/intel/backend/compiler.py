@@ -482,7 +482,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if is_enabled(opt, "fpsan"):
             passes.ttgpuir.add_fp_sanitizer(pm, opt.fpsan_homomorphic_casts)
 
+        # experimental for SIMD aware optimization on Xe3.
         intel.passes.ttgpuir.add_empty_analysis(pm)
+        intel.passes.ttgpuir.add_remove_layout_conversions(pm)
+        intel.passes.ttgpuir.add_simd_reduce_locality(pm)
         intel.passes.ttgpuir.add_remove_layout_conversions(pm)
 
         pm.run(mod, 'make_ttgir')
