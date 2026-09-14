@@ -50,7 +50,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         performSubGroupTranspose(op, srcLayout, dstLayout, adaptor, rewriter);
         return success();
       }
-      if (intel::cvtIsSubGroupReinterpret(srcTy, dstTy)) {
+      if (intel::cvtIsSubGroupReinterpret(op)) {
         performSubGroupReinterpret(op, srcLayout, dstLayout, adaptor, rewriter);
         return success();
       }
@@ -407,9 +407,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
                                   const LinearLayout &dstLayout,
                                   OpAdaptor adaptor,
                                   ConversionPatternRewriter &rewriter) const {
-    assert(
-        intel::cvtIsSubGroupReinterpret(op.getSrc().getType(), op.getType()) &&
-        "Expecting sub-group reinterpret cast");
+    assert(intel::cvtIsSubGroupReinterpret(op) &&
+           "Expecting sub-group reinterpret cast");
 
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -627,7 +626,7 @@ struct ConvertLayoutOpGuard : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
     assert(!intel::cvtIsSubGroupTranspose(srcTy, dstTy) &&
            "Failed to lower layout conversion through sub-group transpose");
     assert(
-        !intel::cvtIsSubGroupReinterpret(srcTy, dstTy) &&
+        !intel::cvtIsSubGroupReinterpret(op) &&
         "Failed to lower layout conversion through sub-group reinterpret cast");
     return failure();
   }

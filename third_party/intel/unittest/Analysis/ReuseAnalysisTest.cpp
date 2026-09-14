@@ -97,12 +97,12 @@ public:
         warpsPerCTA, repCluster, threadsPerWarp, std::nullopt);
   }
 
-  /// Creates a tt.load with default cache/eviction attributes.
+  /// Creates a tt.load with the default cache policy.
   tt::LoadOp makeLoad(Value ptr, Type resultType) {
-    return tt::LoadOp::create(
-        *builder, builder->getUnknownLoc(), resultType, ptr, /*mask=*/Value(),
-        /*other=*/Value(), tt::CacheModifier::NONE, tt::EvictionPolicy::NORMAL,
-        /*isVolatile=*/false);
+    return tt::LoadOp::create(*builder, builder->getUnknownLoc(), resultType,
+                              ptr, /*mask=*/Value(), /*other=*/Value(),
+                              /*cachePolicy=*/Attribute(),
+                              /*isVolatile=*/false);
   }
 
 protected:

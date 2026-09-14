@@ -165,7 +165,7 @@ private:
                               transposedType.getEncoding());
     auto newLoad = tt::DescriptorLoadOp::create(
         builder, descLoadOp.getLoc(), newResultType, descLoadOp.getDesc(),
-        descLoadOp.getIndices(), descLoadOp.getCache(), descLoadOp.getEvict());
+        descLoadOp.getIndices(), descLoadOp.getCachePolicyAttr());
 
     // Copy any discardable attributes from the original load,
     // except block_io which we set explicitly below.

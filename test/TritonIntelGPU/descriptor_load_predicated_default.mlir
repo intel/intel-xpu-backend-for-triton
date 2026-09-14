@@ -142,7 +142,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.sup
     // NO-PREDICATED-NOT: L1IAR_L3C
     // NO-PREDICATED:     llvm.cond_br
     // NO-PREDICATED-NOT: L1IAR_L3C
-    %val = tt.descriptor_load %desc[%c0_i32] evictionPolicy = evict_first : !tt.tensordesc<128xf32> -> tensor<128xf32, #blocked1>
+    %val = tt.descriptor_load %desc[%c0_i32] {cachePolicy = #tt.cache_policy<cache_modifier = none, eviction_policy = evict_first>} : !tt.tensordesc<128xf32> -> tensor<128xf32, #blocked1>
     tt.return
   }
 }
