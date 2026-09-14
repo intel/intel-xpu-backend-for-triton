@@ -212,7 +212,15 @@ def do_bench_upstream_pytorch_profiler(fn, n_warmup=25, n_repeat=100, grad_to_no
         kernels += list(itertools.chain.from_iterable([func.kernels for func in funcs]))
         return kernels
 
-    kernels = [extract_kernels(func.cpu_children) for func in functions]
+    # The profiler links a device kernel to the innermost enclosing op or annotation.
+    # A Triton launch has no `aten::` op wrapping it -- it goes straight through the
+    # Level Zero / UR API, and those traced API events carry no device activity -- so
+    # the innermost owner is the profiled range itself. Ops that do go through an
+    # `aten::` wrapper (oneDNN, PyTorch eager) are linked to both the range and the
+    # `aten::` child. So read the range first and walk the children only as a fallback:
+    # summing both double-counts `aten::` work, while walking children alone never finds
+    # a Triton kernel at all.
+    kernels = [func.kernels or extract_kernels(func.cpu_children) for func in functions]
     # For example, for backward FA, kernels can be empty for one of the threads.
     # Keep in mind that `backward` function is launched in another thread and
     # requires the use of `record_function` function additionally in its thread
