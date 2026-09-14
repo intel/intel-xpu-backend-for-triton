@@ -23,6 +23,10 @@ Kernel C adds a loop-carried value that reads one dot's accumulator, which
 exercises the per-iter_arg ownership path: the chain is computed only in the
 loop owning that accumulator, its slot is frozen in the other loop, and its
 result is wired from the owner.
+
+The last two tests cover the `loop_distribute_cost_model` XPUOptions field /
+TRITON_INTEL_ENABLE_LOOP_DISTRIBUTION_COST_MODEL, which runs the pass only on
+loops whose accumulators do not fit the register budget.
 """
 
 import pytest
@@ -367,3 +371,82 @@ def test_dual_dot_carry_reads_acc_loop_distribute(device):
     # loop_distribute=False and loop_distribute=True must agree with each other.
     for i in range(3):
         torch.testing.assert_close(results[False][i].float(), results[True][i].float(), rtol=1e-2, atol=1e-2)
+
+
+def _run_dual_dot_ptr_kernel(device, block, **options):
+    """Compile and run `_dual_dot_ptr_kernel` on `block`x`block` tiles, check the
+    result against a torch reference and return the compiled TTIR."""
+    M = N = block
+    K, BLOCK_K = 256, 64
+
+    torch.manual_seed(17)
+    a = torch.randn((M, K), dtype=torch.float16, device=device)
+    w_g = torch.randn((K, N), dtype=torch.float16, device=device)
+    w_fc = torch.randn((K, N), dtype=torch.float16, device=device)
+    c_g = torch.empty((M, N), dtype=torch.float16, device=device)
+    c_fc = torch.empty((M, N), dtype=torch.float16, device=device)
+
+    kernel = _dual_dot_ptr_kernel[(1, 1)](
+        a,
+        w_g,
+        w_fc,
+        c_g,
+        c_fc,
+        K,
+        a.stride(0),
+        a.stride(1),
+        w_g.stride(0),
+        w_g.stride(1),
+        w_fc.stride(0),
+        w_fc.stride(1),
+        c_g.stride(0),
+        c_g.stride(1),
+        BLOCK_M=M,
+        BLOCK_N=N,
+        BLOCK_K=BLOCK_K,
+        **options,
+    )
+
+    err_g = (c_g.float() - torch.matmul(a.float(), w_g.float())).abs().max().item()
+    err_fc = (c_fc.float() - torch.matmul(a.float(), w_fc.float())).abs().max().item()
+    assert err_g < 2e-1, f"{options}: acc_g max abs error {err_g} exceeds 2e-1"
+    assert err_fc < 2e-1, f"{options}: acc_fc max abs error {err_fc} exceeds 2e-1"
+
+    return kernel.asm["ttir"]
+
+
+@pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
+@pytest.mark.parametrize(
+    "block, num_warps, grf_mode, expected_loops",
+    [
+        # Two BLOCK_M x BLOCK_N f32 accumulators, so the fused loop holds
+        # 2 * block * block * 4 / num_warps bytes per thread; the budget is
+        # 4096 bytes for grf_mode='128' and 8192 for '256' and 'default'.
+        (128, 4, 'default', 2),  # 32768 > 8192: distribute
+        (128, 16, 'default', 1),  # 8192, not greater: leave fused
+        (64, 4, 'default', 1),  # 8192, not greater: leave fused
+        (64, 4, '128', 2),  # 8192 > 4096: distribute
+        (64, 4, '256', 1),  # 8192, not greater: leave fused
+    ],
+)
+def test_dual_dot_ptr_gemm_loop_distribute_cost_model(device, block, num_warps, grf_mode, expected_loops):
+    """The cost model distributes a loop only when its accumulators exceed the
+    register budget, so the verdict must track both `num_warps` and
+    `grf_mode`."""
+    ttir = _run_dual_dot_ptr_kernel(device, block, num_warps=num_warps, grf_mode=grf_mode,
+                                    loop_distribute_cost_model=True)
+    assert ttir.count("scf.for") == expected_loops, (
+        f"block={block} num_warps={num_warps} grf_mode={grf_mode}: expected {expected_loops} "
+        f"scf.for in ttir, got {ttir.count('scf.for')}\n{ttir}")
+
+
+@pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
+def test_loop_distribute_force_beats_cost_model(device):
+    """`loop_distribute` distributes every legal loop, so it must win over the
+    cost model on a loop the cost model rejects (64x64 f32 accumulators at 4
+    warps sit exactly at the default budget)."""
+    gated = _run_dual_dot_ptr_kernel(device, 64, num_warps=4, loop_distribute_cost_model=True)
+    assert gated.count("scf.for") == 1, f"cost model should have rejected this loop\n{gated}"
+
+    forced = _run_dual_dot_ptr_kernel(device, 64, num_warps=4, loop_distribute=True, loop_distribute_cost_model=True)
+    assert forced.count("scf.for") == 2, f"loop_distribute should have distributed this loop\n{forced}"
