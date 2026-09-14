@@ -183,6 +183,8 @@ void init_triton_intel_passes_ttgpuir(py::module_ &&m) {
                      gpu::intel::createTritonIntelGPUWidenLoadStoreEncoding);
   ADD_PASS_WRAPPER_0("add_empty_analysis",
                      gpu::intel::createTritonIntelGPUEmptyAnalysis);
+  ADD_PASS_WRAPPER_0("add_simd_reduce_locality",
+                     gpu::intel::createTritonIntelGPUSIMDReduceLocality);
 }
 
 void init_triton_intel_passes_arith(py::module_ &&m) {

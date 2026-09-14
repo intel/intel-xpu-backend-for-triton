@@ -620,4 +620,14 @@ def TritonIntelGPUEmptyAnalysis
   }];
 }
 
+def TritonIntelGPUSIMDReduceLocality
+    : Pass<"tritonintelgpu-simd-reduce-locality", "mlir::ModuleOp"> {
+  let summary = "Empty placeholder pass for SIMD reduction locality analysis";
+
+  let description = [{
+    No-op Intel backend analysis placeholder for future SIMD reduction
+    locality modeling.
+  }];
+}
+
 #endif // TRITON_INTEL_GPU_PASSES
