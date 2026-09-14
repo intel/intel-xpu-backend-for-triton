@@ -118,6 +118,7 @@ jobs:
         with:
           ref: ${{ inputs.pytorch_ref }}
           mode: ${{ inputs.pytorch_mode }}
+          lts: ${{ inputs.runner_label == 'lts' || inputs.driver_version == 'lts' }}
 
       - name: Build Triton
         uses: ./.github/actions/setup-triton
@@ -236,6 +237,7 @@ jobs:
         with:
           ref: ${{ inputs.pytorch_ref }}
           mode: ${{ inputs.pytorch_mode }}
+          lts: ${{ inputs.runner_label == 'lts' || inputs.driver_version == 'lts' }}
 
       - name: Download Triton wheels
         uses: actions/download-artifact@v8
