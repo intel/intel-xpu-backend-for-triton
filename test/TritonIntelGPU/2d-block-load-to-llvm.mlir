@@ -211,8 +211,8 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // COM: The batch offset is folded into the base pointer, which re-bases the
     // COM: 2D surface and so escapes the hardware's base_width x base_height
     // COM: clamp. It must be bounds-checked against the descriptor's declared
-    // COM: extent instead (issue #7922). Signed compares, because a negative
-    // COM: descriptor index is out of bounds and must not wrap.
+    // COM: extent instead (issue #7922). The compares are signed because a
+    // COM: negative declared extent must not read as a huge unsigned bound.
     // CHECK: %[[IDX:.*]] = llvm.add %arg7, %{{.*}} : i32
     // CHECK-DAG: %[[GE0:.*]] = llvm.icmp "sge" %[[IDX]], %{{.*}} : i32
     // CHECK-DAG: %[[LT:.*]] = llvm.icmp "slt" %[[IDX]], %arg8 : i32

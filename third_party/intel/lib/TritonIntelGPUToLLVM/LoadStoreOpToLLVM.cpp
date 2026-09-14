@@ -4607,8 +4607,8 @@ struct Subgroup2DBlockLoadOpConversion
 
     // A batch index is folded into the base pointer, so it escapes the
     // hardware's base_width x base_height clamp and needs an explicit check.
-    // Compare signed: a negative descriptor index is out of bounds, and an
-    // overflowing sum wraps negative rather than becoming spuriously in range.
+    // Both compares are signed: nothing verifies that a descriptor extent is
+    // non-negative, and a lone `icmp ult` would take one as a huge bound.
     auto inDescBounds = [&](Value index, Value shape) -> Value {
       Value isNonNegative = b.icmp_sge(index, b.i32_val(0));
       Value isBelowShape = b.icmp_slt(index, shape);
