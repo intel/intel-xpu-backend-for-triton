@@ -36,25 +36,6 @@ using TensorValue = TypedValue<RankedTensorType>;
 
 namespace {
 
-/// Convert the per-hardware-thread GRF budget for \p grfMode into a per-lane
-/// budget by dividing by threads-per-warp.
-///
-/// The two quantities are expressed in different units:
-/// `getGRFBytesPerThread` reports the register file of a whole *hardware
-/// thread*, which backs an entire sub-group, while
-/// `RegisterPressureAnalysis` weighs every live value by
-/// `getTotalElemsPerThread`, a per-*work-item* (per-lane) count. Comparing
-/// them without this conversion overstates the budget by a factor of
-/// threads-per-warp. getThreadsPerWarp() falls back to 32 when the module
-/// attribute is absent, so the division is always well-defined.
-unsigned getPerLaneGRFBudgetInBytes(StringRef grfMode, ModuleOp mod) {
-  unsigned grfBudget =
-      ttg::intel::RegisterPressureAnalysis::getGRFBytesPerThread(grfMode);
-  int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
-  assert(threadsPerWarp > 0 && "threads-per-warp must be positive");
-  return grfBudget / static_cast<unsigned>(threadsPerWarp);
-}
-
 /// Return true if \p v is a 2D tensor that is live-in to \p loopBody (defined
 /// outside the loop and used inside it), i.e. a value that would otherwise
 /// occupy registers for the whole duration of the loop.
@@ -352,7 +333,9 @@ public:
 
     Operation *rootOperation = getOperation();
     ModuleOp mod = getOperation();
-    unsigned perLaneGRFBudget = getPerLaneGRFBudgetInBytes(grfMode, mod);
+    unsigned perLaneGRFBudget =
+        ttg::intel::RegisterPressureAnalysis::getPerLaneGRFBudgetInBytes(
+            grfMode, mod);
     ttg::intel::RegisterPressureAnalysis analysis(rootOperation);
     // TODO: extend the pass to handle `while` loops.
     rootOperation->walk([&](scf::ForOp forOp) {
