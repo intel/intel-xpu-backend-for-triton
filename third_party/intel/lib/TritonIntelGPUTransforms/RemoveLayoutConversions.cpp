@@ -523,6 +523,14 @@ void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
   }
 }
 
+// A constant's value attribute must keep the result type, so it cannot be
+// re-encoded in place.
+static bool hasConstantOperand(ValueRange values) {
+  return llvm::any_of(values, [](Value v) {
+    return isa_and_nonnull<arith::ConstantOp>(v.getDefiningOp());
+  });
+}
+
 SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
                                                        LayoutInfo &info) {
   SmallVector<Value> changed;
@@ -602,7 +610,26 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
         SmallVector<Value> valuesToChange{storeOp.getPtr(), storeOp.getValue()};
         if (storeOp.getMask())
           valuesToChange.emplace_back(storeOp.getMask());
-        setEncoding(valuesToChange, info, changed, user);
+        // All operands of a store must share a single encoding. Only
+        // propagate the layout if every encoding already assigned to an
+        // operand is part of the incoming set, so that the first chain to
+        // reach the store determines its candidates and a later chain with
+        // a different encoding is not propagated onto the operands. This
+        // is conservative: a store reached by multiple incompatible chains
+        // is left unfolded, and rewriteStoreOp() below still rejects the
+        // rewrite if the operands resolve to different encodings. Skip
+        // stores with constant operands as well: a constant cannot be
+        // re-encoded in place, and propagating onto the remaining operands
+        // only would also leave the store with mixed operand encodings.
+        bool isCompatible = llvm::all_of(valuesToChange, [&](Value v) {
+          auto it = layouts.find(v);
+          return it == layouts.end() ||
+                 llvm::all_of(it->second.encodings, [&](Attribute e) {
+                   return info.encodings.contains(e);
+                 });
+        });
+        if (isCompatible && !hasConstantOperand(valuesToChange))
+          setEncoding(valuesToChange, info, changed, user);
       }
       continue;
     }
@@ -610,7 +637,9 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
       if (llvm::all_of(info.encodings, checkMMAorMMADerived)) {
         SmallVector<Value> valuesToChange{descStoreOp.getDesc(),
                                           descStoreOp.getSrc()};
-        setEncoding(valuesToChange, info, changed, user);
+        // See tt::StoreOp above: constants cannot be re-encoded in place.
+        if (!hasConstantOperand(valuesToChange))
+          setEncoding(valuesToChange, info, changed, user);
       }
       continue;
     }
@@ -929,16 +958,25 @@ bool LayoutPropagation::rewriteStoreOp(tt::StoreOp storeOp) {
   Operation *op = storeOp.getOperation();
   llvm::MutableArrayRef<OpOperand> operands = op->getOpOperands();
   // Check if all store op operands should use new encoding.
-  bool usesNewEncoding = llvm::all_of(operands, [&](OpOperand &operand) {
+  SmallVector<Attribute, 3> newEncodings;
+  bool usesNewEncoding = true;
+  for (OpOperand &operand : operands) {
     auto it = layouts.find(operand.get());
-    if (it == layouts.end())
-      return false;
+    if (it == layouts.end()) {
+      usesNewEncoding = false;
+      break;
+    }
     LayoutInfo &info = it->second;
     assert(info.encodings.size() == 1 &&
            "we should have resolved to a single encoding");
-    auto encoding = getEncodingBeforeRewrite(operand.get());
-    return encoding != *info.encodings.begin();
-  });
+    newEncodings.push_back(*info.encodings.begin());
+    usesNewEncoding &=
+        getEncodingBeforeRewrite(operand.get()) != *info.encodings.begin();
+  }
+  // The verifier requires all operands of a store to have the same encoding.
+  // If the analysis resolved them to different encodings, leave the store
+  // untouched rather than remapping each operand to a different layout.
+  usesNewEncoding &= llvm::all_equal(newEncodings);
   if (usesNewEncoding) {
     for (OpOperand &operand : op->getOpOperands()) {
       auto it = layouts.find(operand.get());
