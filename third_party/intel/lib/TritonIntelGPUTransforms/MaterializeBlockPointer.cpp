@@ -796,8 +796,9 @@ private:
         ttg::ConvertLayoutOp::create(builder, loc, storeValTy, valReshape);
 
     // Create the new 2D store.
-    auto newStore = tt::StoreOp::create(builder, loc, storePtr, storeVal,
-                                        op.getCache(), op.getEvict());
+    auto newStore =
+        tt::StoreOp::create(builder, loc, storePtr, storeVal, /*mask=*/Value(),
+                            op.getCachePolicyAttr(), op.getIgnoreCta());
 
     setBlockIOAttrs(newStore, ctx, info->S);
     copyNonBlockIOAttrs(op, newStore);
@@ -924,7 +925,7 @@ private:
 
     auto newLoad =
         tt::LoadOp::create(builder, loc, loadResultTy, loadPtr, mask2d, other2d,
-                           op.getCache(), op.getEvict(), op.getIsVolatile());
+                           op.getCachePolicyAttr(), op.getIsVolatile());
 
     // Set block IO attributes.
     setBlockIOAttrs(newLoad, ctx, info->S);
@@ -936,11 +937,19 @@ private:
     auto converted =
         ttg::ConvertLayoutOp::create(builder, loc, consumerResultTy, newLoad);
 
-    // Reshape back to 1D with original result type.
+    // Reshape back to 1D with original result type.  Deliberately *not* marked
+    // `efficient_layout`: that flag means "a pass computed this destination
+    // layout, do not undo the choice", but `origResultTy` is simply the
+    // encoding the original 1D load already had — nothing was computed here to
+    // protect. The flag would also be inert on a reshape without
+    // `allow_reorder`, whose result encoding the verifier pins to the relabel
+    // of its operand anyway. What keeps the 2D block load's HW-delivery
+    // encoding intact is `isExpensiveLoadOrStore` anchoring the load, not this
+    // reshape.
     auto origResultTy = cast<RankedTensorType>(op.getType());
     auto reshapeBack = tt::ReshapeOp::create(builder, loc, origResultTy,
                                              converted, /*allowReorder=*/false,
-                                             /*efficientLayout=*/true);
+                                             /*efficientLayout=*/false);
 
     LDBG("Created 2D block load with layout conversion: " << *newLoad);
 
