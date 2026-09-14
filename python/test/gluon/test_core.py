@@ -82,7 +82,7 @@ def _inline_asm_tmem_load(outputs, inputs):
 ])
 def test_inline_asm_memdesc_view(memory_space, threadwise, pack, device):
     if not is_cuda() or (memory_space == "tensor" and not (is_blackwell() or is_blackwell_ultra() or is_rubin())):
-        pytest.skip("requires CUDA shared memory or Blackwell tensor memory")
+        pytest.xfail("requires CUDA shared memory or Blackwell tensor memory")
 
     generator = _inline_asm_tmem_load if memory_space == "tensor" else _inline_asm_shared_load
     if threadwise:
@@ -138,7 +138,7 @@ def _inline_asm_sum(outputs, inputs):
 @pytest.mark.parametrize("elementwise", [False, True])
 def test_inline_asm_memdesc_store(elementwise, device):
     if not is_cuda():
-        pytest.skip("uses PTX")
+        pytest.xfail("uses PTX")
 
     @gluon.jit
     def kernel(Out, ELEMENTWISE: ttgl.constexpr):
@@ -169,7 +169,7 @@ def test_inline_asm_memdesc_store(elementwise, device):
 
 def test_inline_asm_many_elements(device):
     if not is_cuda():
-        pytest.skip("uses PTX")
+        pytest.xfail("uses PTX")
 
     @gluon.jit
     def kernel(X, Y):
@@ -197,7 +197,7 @@ def _inline_asm_add_bias(outputs, inputs):
 
 def test_inline_asm_replicated_registers(device):
     if not is_cuda():
-        pytest.skip("uses PTX")
+        pytest.xfail("uses PTX")
 
     @gluon.jit
     def kernel(X, Y, bias):
@@ -223,7 +223,7 @@ def _inline_asm_count(out):
 @pytest.mark.parametrize("warp_specialized", [False, True])
 def test_inline_asm_once_per_thread(warp_specialized, device):
     if not is_cuda():
-        pytest.skip("uses PTX")
+        pytest.xfail("uses PTX")
 
     @gluon.jit
     def kernel(Out, WS: ttgl.constexpr):
