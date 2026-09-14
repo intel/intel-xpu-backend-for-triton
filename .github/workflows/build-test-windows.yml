@@ -209,6 +209,10 @@ jobs:
         run: |
           rm -rf ~/.triton/cache
 
+      # Triton compiles `spirv_utils` at runtime and needs Level Zero headers to do so.
+      - name: Install Level Zero SDK
+        uses: ./.github/actions/install-level-zero-sdk
+
       # `capture_runtime_env` in scripts/pytest-utils.sh reads the Triton commit id from `dist/*.whl`.
       - name: Download Triton wheels
         uses: actions/download-artifact@v8

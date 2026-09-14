@@ -1,0 +1,56 @@
+name: install-level-zero-sdk
+description: Install the Level Zero SDK on Windows and export LEVEL_ZERO_V1_SDK_PATH
+
+# The Intel® Deep Learning Essentials package does not ship Level Zero headers or import
+# libraries, so on Windows nothing provides `level_zero/ze_api.h` and `ze_loader.lib`. Without
+# them the runtime build of `spirv_utils` fails with
+# `sycl_functions.h: fatal error: 'level_zero/ze_api.h' file not found`.
+
+inputs:
+  version:
+    description: Level Zero SDK version
+    default: 1.33.1
+  sha256:
+    description: SHA256 checksum of level-zero-win-sdk-<version>.zip
+    default: ff845844b1a57a22abf646ebffb32cd07839249e0e2b962d0d5684a7a70689c1
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install Level Zero SDK
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = "Stop"
+        $ProgressPreference = "SilentlyContinue"
+
+        $root = Join-Path $env:RUNNER_TOOL_CACHE "level-zero-sdk\${{ inputs.version }}"
+        $header = Join-Path $root "include\level_zero\ze_api.h"
+        $lib = Join-Path $root "lib\ze_loader.lib"
+
+        if (-not ((Test-Path $header) -and (Test-Path $lib))) {
+          $zip = Join-Path $env:RUNNER_TEMP "level-zero-win-sdk-$(New-Guid).zip"
+          $url = "https://github.com/oneapi-src/level-zero/releases/download/v${{ inputs.version }}/level-zero-win-sdk-${{ inputs.version }}.zip"
+          try {
+            Invoke-WebRequest -Uri $url -OutFile $zip
+
+            $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash
+            if ($hash -ne "${{ inputs.sha256 }}") {
+              throw "Checksum mismatch for $url : expected ${{ inputs.sha256 }}, got $hash"
+            }
+
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction Ignore
+            Expand-Archive -LiteralPath $zip -DestinationPath $root
+          }
+          finally {
+            Remove-Item -LiteralPath $zip -Force -ErrorAction Ignore
+          }
+        }
+
+        foreach ($path in @($header, $lib)) {
+          if (-not (Test-Path $path)) {
+            throw "Level Zero SDK is incomplete: $path not found"
+          }
+        }
+
+        Write-Output "LEVEL_ZERO_V1_SDK_PATH=$root" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        Write-Output "Level Zero SDK ${{ inputs.version }}: $root"

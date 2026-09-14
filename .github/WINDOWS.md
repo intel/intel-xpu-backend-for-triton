@@ -45,6 +45,24 @@ Install Microsoft Visual Studio 2022 and make sure the following [components](ht
 Install [Intel® Deep Learning Essentials 2026.1](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html?packages=dl-essentials&dl-essentials-os=windows&dl-win=offline).
 By default, it is installed to `C:\Program Files (x86)\Intel\oneAPI`.
 
+### Level Zero SDK
+
+Intel® Deep Learning Essentials does not include Level Zero headers, which Triton needs to compile
+its device utilities. Download `level-zero-win-sdk-<version>.zip` from
+[Level Zero releases](https://github.com/oneapi-src/level-zero/releases) and unpack it, for example
+to `C:\level-zero-sdk`:
+
+```
+Expand-Archive -Path level-zero-win-sdk-1.33.1.zip -DestinationPath C:\level-zero-sdk
+```
+
+Point `LEVEL_ZERO_V1_SDK_PATH` at that directory and make it available in new PowerShell sessions:
+
+```
+$env:LEVEL_ZERO_V1_SDK_PATH = "C:\level-zero-sdk"
+[Environment]::SetEnvironmentVariable("LEVEL_ZERO_V1_SDK_PATH", $env:LEVEL_ZERO_V1_SDK_PATH, "User")
+```
+
 ### Chocolatey
 
 ```
@@ -168,6 +186,15 @@ Initialize environment variables:
 ```
 .venv\Scripts\activate.ps1
 Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+```
+
+Check that `LEVEL_ZERO_V1_SDK_PATH` points to a usable Level Zero SDK, otherwise Triton fails to
+compile its device utilities with
+`sycl_functions.h: fatal error: 'level_zero/ze_api.h' file not found`:
+
+```
+Test-Path "$env:LEVEL_ZERO_V1_SDK_PATH\include\level_zero\ze_api.h"
+Test-Path "$env:LEVEL_ZERO_V1_SDK_PATH\lib\ze_loader.lib"
 ```
 
 Check that PyTorch and Triton are available:
