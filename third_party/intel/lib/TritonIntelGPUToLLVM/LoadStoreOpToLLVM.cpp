@@ -4605,10 +4605,6 @@ struct Subgroup2DBlockLoadOpConversion
     // `rankDelta + d` corresponds to result batch dimension `d`.
     unsigned rankDelta = batchOffsets.size() - batchStrides.size();
 
-    auto andPred = [&](Value acc, Value pred) -> Value {
-      return acc ? Value(b.and_(acc, pred)) : pred;
-    };
-
     // A batch index is folded into the base pointer, so it escapes the
     // hardware's base_width x base_height clamp and needs an explicit check.
     // Compare signed: a negative descriptor index is out of bounds, and an
@@ -4624,8 +4620,8 @@ struct Subgroup2DBlockLoadOpConversion
     // rebuilding it inside `computeAddress`.
     Value droppedDimPred;
     for (unsigned d = 0; d < rankDelta; ++d)
-      droppedDimPred = andPred(droppedDimPred,
-                               inDescBounds(batchOffsets[d], batchShapes[d]));
+      droppedDimPred = maybeAnd(rewriter, loc, droppedDimPred,
+                                inDescBounds(batchOffsets[d], batchShapes[d]));
 
     // Build NaN masks if pad_nan is set.
     SmallVector<Value> nanMaskElems;
@@ -4692,7 +4688,8 @@ struct Subgroup2DBlockLoadOpConversion
           // bounds-check is that index plus this sub-tile's layout offset.
           unsigned descDim = dim + rankDelta;
           Value index = b.add(batchOffsets[descDim], adjustedOffset);
-          pred = andPred(pred, inDescBounds(index, batchShapes[descDim]));
+          pred = maybeAnd(rewriter, loc, pred,
+                          inDescBounds(index, batchShapes[descDim]));
         }
       }
       return {addrElem, offsetX, offsetY, baseWidth, baseHeight, pred};
