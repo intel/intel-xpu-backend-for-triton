@@ -134,6 +134,7 @@ static llvm::SmallVector<SPIRV::ExtensionID> getAllowedExtensions(bool isLTS) {
       SPIRV::ExtensionID::SPV_INTEL_subgroup_matrix_multiply_accumulate,
       SPIRV::ExtensionID::SPV_INTEL_subgroup_matrix_multiply_accumulate_float4,
       SPIRV::ExtensionID::SPV_INTEL_subgroup_matrix_multiply_accumulate_float8,
+      SPIRV::ExtensionID::SPV_INTEL_subgroup_scaled_matrix_multiply_accumulate,
       SPIRV::ExtensionID::SPV_INTEL_subgroups,
       SPIRV::ExtensionID::SPV_INTEL_tensor_float32_conversion,
       SPIRV::ExtensionID::SPV_INTEL_unstructured_loop_controls,

@@ -244,7 +244,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @store_with_cache_attr(%a_ptr_init : tensor<256x!tt.ptr<f32>, #blocked0>, %cst : tensor<256xi1, #blocked0>, %cst_0 : tensor<256xf32, #blocked0>) {
     // CHECK llvm.store %{{.*}}, %{{.*}} {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
     // CHECK llvm.store %{{.*}}, %{{.*}} {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
-    tt.store %a_ptr_init, %cst_0, %cst evictionPolicy = evict_last cacheModifier = ca : tensor<256x!tt.ptr<f32>, #blocked0>
+    tt.store %a_ptr_init, %cst_0, %cst {cachePolicy = #tt.cache_policy<cache_modifier = none, eviction_policy = evict_last>} : tensor<256x!tt.ptr<f32>, #blocked0>
     tt.return
   }
 }
