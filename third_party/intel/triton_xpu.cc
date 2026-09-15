@@ -366,6 +366,26 @@ void init_triton_intel(py::module_ &m) {
     return result.wasInterrupted();
   });
 
+  // True if the module contains an fp8e4m3 -> fp16 conversion that will be
+  // lowered to the software sequence, i.e. the target has no hardware
+  // conversion instruction. Callers use this to scope workarounds for that
+  // sequence to the modules that actually emit it.
+  m.def("has_software_fp8e4m3_to_fp16_conversion",
+        [](mlir::ModuleOp &mod) -> bool {
+          using namespace mlir;
+          if (mod->hasAttr(mlir::triton::gpu::intel::TritonIntelGPUDialect::
+                               getSupportF8ConversionAttrName()))
+            return false;
+          WalkResult result = mod.walk([&](mlir::triton::FpToFpOp op) {
+            if (isa<Float8E4M3FNType>(
+                    getElementTypeOrSelf(op.getSrc().getType())) &&
+                getElementTypeOrSelf(op.getType()).isF16())
+              return WalkResult::interrupt();
+            return WalkResult::advance();
+          });
+          return result.wasInterrupted();
+        });
+
   m.def("set_is_lts", [](mlir::ModuleOp &mod) {
     using namespace mlir::triton::gpu::intel;
     if (!mod->hasAttr(TritonIntelGPUDialect::getIsLTSAttrName())) {

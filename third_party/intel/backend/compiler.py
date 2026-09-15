@@ -528,6 +528,18 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if cls.is_lts(driver_version):
             intel.set_is_lts(mod)
 
+        # The software fp8e4m3 -> fp16 sequence makes the LoopSink pass in LTS IGC
+        # clone the conversion chain roughly 6x between its `optimized` and `codegen`
+        # stages, which multiplies ocloc time and register spills without helping
+        # runtime. Turn the pass off for the modules that emit that sequence; see
+        # https://github.com/intel/intel-xpu-backend-for-triton/issues/8046.
+        # FIXME: drop this flag and the `has_software_fp8e4m3_to_fp16_conversion`
+        # binding it uses once the LTS driver line picks up an IGC that no longer
+        # mispredicts this sequence -- the rolling driver (1.17.39395+13) already
+        # does not. Worth re-checking whenever the LTS driver pin is bumped.
+        metadata["igc_disable_loop_sink"] = (cls.is_lts(driver_version)
+                                             and intel.has_software_fp8e4m3_to_fp16_conversion(mod))
+
         # `getGlobalTimer` counts core clock cycles and needs the rate to report
         # nanoseconds.
         intel.set_core_clock_rate(mod, cls.core_clock_rate(metadata["target"].arch))
@@ -652,11 +664,14 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     def make_zebin(cls, src, metadata, options):
         metadata["binary_ext"] = "zebin"
 
-        shader_dump_opt = ""
+        # `ocloc` accumulates every `-igc_opts` occurrence, so the options below compose.
+        igc_opts = ""
         if knobs.intel.dump_shader_info:
             # The IGC (Intel Graphic Compiler) only parses the options at first time in JIT-ing the binary per process.
             # Have to use the `ocloc` to generate the binary in sub-process to work around the limitation.
-            shader_dump_opt = f" -igc_opts ',DumpToCustomDir={metadata['cache_dir']},ShaderDumpEnable=1'"
+            igc_opts += f" -igc_opts ',DumpToCustomDir={metadata['cache_dir']},ShaderDumpEnable=1'"
+        if metadata.get("igc_disable_loop_sink"):
+            igc_opts += " -igc_opts ',DisableLoopSink=1'"
 
         metadata["generate_native_code"] = options.generate_native_code
 
@@ -667,7 +682,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
             ocloc_cmd = [
                 'ocloc', 'compile', '-file', fsrc.name, '-o', fbin, '-spirv_input', '-device', cls.device_arch,
-                '-options', metadata['build_flags'] + shader_dump_opt
+                '-options', metadata['build_flags'] + igc_opts
             ]
 
             # A larger GRF mode doubles the registers per hardware thread and thereby
@@ -690,7 +705,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             base_build_flags = metadata["build_flags"]
             for grf_flag in retry_grf_mode_list:
                 metadata["build_flags"] = f"{base_build_flags} {grf_flag}".strip()
-                ocloc_cmd[-1] = metadata["build_flags"] + shader_dump_opt
+                ocloc_cmd[-1] = metadata["build_flags"] + igc_opts
                 try:
                     subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
                     if options.grf_mode == "default":
