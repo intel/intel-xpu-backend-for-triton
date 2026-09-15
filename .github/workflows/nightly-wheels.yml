@@ -149,7 +149,7 @@ jobs:
 
       - name: Sign PyTorch-related wheels with Sigstore (keyless)
         # SHA-pinned for supply-chain safety; comment tracks the human-readable version.
-        uses: sigstore/gh-action-sigstore-python@a5caf349bc536fbef3668a10ed7f5cd309a4b53d # v3.2.0
+        uses: sigstore/gh-action-sigstore-python@790bc6befb9d733738f18d8f895854b453640ec9 # v3.5.0
         with:
           inputs: wheels/*.whl
 
@@ -163,7 +163,7 @@ jobs:
       - name: Sign vLLM wheels with Sigstore (keyless)
         if: contains(fromJSON('["3.10", "3.11", "3.12"]'), matrix.python)
         # SHA-pinned for supply-chain safety; comment tracks the human-readable version.
-        uses: sigstore/gh-action-sigstore-python@a5caf349bc536fbef3668a10ed7f5cd309a4b53d # v3.2.0
+        uses: sigstore/gh-action-sigstore-python@790bc6befb9d733738f18d8f895854b453640ec9 # v3.5.0
         with:
           inputs: wheels-vllm/*.whl
 
