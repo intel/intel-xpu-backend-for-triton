@@ -377,7 +377,9 @@ struct FpToFpOpConversion
           "unsupported rounding mode for f32->bf16 conversion: " +
           stringifyRoundingMode(rounding) + "\n");
     }
-    return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, bf16_ty, {v})
+    Value pzo = LLVM::createConstantI1(loc, rewriter, false);
+    return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, bf16_ty,
+                                           {v, pzo})
         .getResult(0);
   }
 
@@ -455,7 +457,7 @@ struct FpToFpOpConversion
             // F32 -> F8
             {{F32TyID, F8E4M3TyID, RoundingMode::RTNE}, Fp32_to_Fp8E4M3Nv},
             {{F32TyID, F8E5M2TyID, RoundingMode::RTNE}, Fp32_to_Fp8E5M2},
-        };
+    };
     std::tuple<TypeID, TypeID, RoundingMode> key = {
         srcTy.getTypeID(), dstTy.getTypeID(),
         roundingMode.value_or(undefRounding)};

@@ -37,6 +37,7 @@ Value sequenceGroup0(RewriterBase &rewriter, Location loc, Value group0) {
              /*asm_string=*/"", /*constraints=*/"=s,0",
              /*has_side_effects=*/true, /*is_align_stack=*/false,
              LLVM::TailCallKind::None,
+             /*convergent=*/false,
              LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
              /*operand_attrs=*/ArrayAttr::get(ctx, {}))
       .getRes();
