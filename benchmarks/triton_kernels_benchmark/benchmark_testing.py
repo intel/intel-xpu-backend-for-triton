@@ -59,7 +59,7 @@ def get_xpu_extension(name: str):
 # autotune config lists can be reused as-is.
 if DEVICE == "cuda":
     import triton as _triton_mod  # pylint: disable=C0412
-    _XPU_ONLY_CONFIG_KEYS = frozenset({"grf_mode", "xpu_arch", "warp_size", "loop_distribute"})
+    _XPU_ONLY_CONFIG_KEYS = frozenset({"grf_mode", "xpu_arch", "warp_size"})
     _OrigConfig = _triton_mod.Config
 
     class _CudaSafeConfig(_OrigConfig):
