@@ -33,6 +33,7 @@ bool cvtIsSubGroupTranspose(RankedTensorType srcTy, RankedTensorType dstTy);
 /// sub-group bitcast shuffle (reinterpret cast).
 bool cvtIsSubGroupReinterpret(ConvertLayoutOp op);
 bool cvtIsSubGroupReinterpret(RankedTensorType srcTy, RankedTensorType dstTy);
+bool cvtIsIdentical(ConvertLayoutOp op);
 /// Return whether `type` is a valid element type for a fast sub-group
 /// transpose.
 bool isValidElementTypeForSubGroupTranspose(Type type);
