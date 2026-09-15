@@ -386,6 +386,10 @@ bool cvtIsSubGroupReinterpret(ConvertLayoutOp op) {
 
   RankedTensorType srcTy = op.getSrc().getType();
   RankedTensorType dstTy = op.getType();
+  return cvtIsSubGroupReinterpret(srcTy, dstTy);
+}
+
+bool cvtIsSubGroupReinterpret(RankedTensorType srcTy, RankedTensorType dstTy) {
   MLIRContext *ctx = srcTy.getContext();
   StringAttr kRegister = str_attr("register");
   StringAttr kLane = str_attr("lane");
