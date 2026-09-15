@@ -1,3 +1,4 @@
+#include <Analysis/Utility.h>
 #include <algorithm>
 #include <triton/Analysis/Utility.h>
 #include <triton/Dialect/TritonGPU/Transforms/Utility.h>
@@ -78,8 +79,9 @@ public:
         break;
       }
     }
-    llvm::outs() << "check reduce lane shiftDownSizeLog2:" << shiftDownSizeLog2
-                 << "\n";
+    // llvm::outs() << "check reduce lane shiftDownSizeLog2:" <<
+    // shiftDownSizeLog2
+    //              << "\n";
 
     std::vector<unsigned> shuffleRegCandidate;
     auto regBases = laneMapping.getBases().lookup(kRegister);
@@ -160,6 +162,12 @@ public:
         ttg::LinearEncodingAttr::get(ctx, newReduceLayout);
     auto tensorType = helper.getSrcTy();
     auto reinterpretedTensorType = tensorType.cloneWithEncoding(newLayout);
+
+    if (!ttgi::cvtIsSubGroupReinterpret(tensorType, reinterpretedTensorType)) {
+      // if the reinterpret cast is not supported. return.
+      return;
+    }
+
     auto newReduceOp = createReduce(builder, op, reinterpretedTensorType);
     auto convertLayoutOp =
         createConvertLayout(builder, op->getResult(0).getType(), newReduceOp);
