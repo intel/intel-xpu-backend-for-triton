@@ -1419,11 +1419,11 @@ struct FpToFpOpConversion
     // otherwise one of two software sequences chosen by driver. See
     // Fp8E4M3Nv_to_Fp16Int for why LTS needs the integer-domain one.
     //
-    // FIXME: revisit before the LTS driver line moves to a newer IGC. The
-    // rolling driver (1.17.39395+13) does not mispredict the oneDNN sequence,
-    // so once LTS ships an IGC that does not either, drop this early return
-    // and Fp8E4M3Nv_to_Fp16Int so every target gets the faster sequence
-    // (~1.7x at runtime on fp8 GEMMs).
+    // FIXME: drop this early return and Fp8E4M3Nv_to_Fp16Int once the LTS
+    // driver line picks up an IGC that no longer mispredicts the oneDNN
+    // sequence -- the rolling driver (1.17.39395+13) already does not -- so
+    // every target gets the faster sequence (~1.7x at runtime on fp8 GEMMs).
+    // Worth re-checking whenever the LTS driver pin is bumped.
     if (srcTy.getTypeID() == F8E4M3TyID && dstTy.getTypeID() == F16TyID &&
         !HasAttr<SUPPORT_F8_CONV>(op) && HasAttr<IS_LTS>(op)) {
       static Converter c{Fp8E4M3Nv_to_Fp16Int, 2};
