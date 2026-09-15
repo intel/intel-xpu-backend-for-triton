@@ -581,12 +581,22 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   }
 
   const bool debugEnabled = getBoolEnv("TRITON_DEBUG");
-  constexpr int32_t max_reg_spill = 0;
+  // Only rebuild at large GRF once the kernel spills past what torch inductor's
+  // autotuner tolerates, so the rebuild can only rescue a config inductor would
+  // have discarded and never perturbs one it would have kept. 16 is inductor's
+  // default `spill_threshold` for non-HIP (`triton_heuristics.py`); a caller
+  // that overrides it is not tracked here.
+  //
+  // Compared against `slotsPerLane()` -- the very value handed to Python as
+  // `n_spills` -- rather than converting the budget into bytes: inductor tests
+  // the truncated per-lane count, so a byte threshold would also fire on the
+  // band that truncates back down to an accepted value. An unknown SIMD width
+  // makes `slotsPerLane()` fall back to raw bytes, which retries on all but the
+  // smallest spills (issue #7821).
+  constexpr int64_t kMaxSpillSlotsPerLane = 16;
 
-  // Gated on raw bytes, not on the normalized per-lane count, so GRF-mode
-  // selection -- and therefore codegen -- is unchanged by #7896.
   if (canRetryWithLargeGRF &&
-      (firstBuildFailed || n_spills.getBytes() > max_reg_spill)) {
+      (firstBuildFailed || n_spills.slotsPerLane() > kMaxSpillSlotsPerLane)) {
     PyObject *orig_type = nullptr, *orig_value = nullptr, *orig_tb = nullptr;
     // Save the original error before clearing it for the retry attempt.
     if (firstBuildFailed)

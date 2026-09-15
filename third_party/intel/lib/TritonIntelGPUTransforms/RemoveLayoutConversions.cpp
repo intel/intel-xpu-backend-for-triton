@@ -594,6 +594,9 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
         continue;
       }
     }
+    if (auto reshapeOp = dyn_cast<tt::ReshapeOp>(user);
+        reshapeOp && reshapeOp.getEfficientLayout())
+      continue;
     if (auto storeOp = dyn_cast<tt::StoreOp>(user)) {
       if (llvm::all_of(info.encodings, checkMMAorMMADerived)) {
         SmallVector<Value> valuesToChange{storeOp.getPtr(), storeOp.getValue()};

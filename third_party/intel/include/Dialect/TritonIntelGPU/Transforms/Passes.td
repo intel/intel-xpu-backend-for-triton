@@ -106,9 +106,94 @@ def TritonIntelGPUHoistLayoutConversions
     defined outside the loop. This keeps loop-invariant dot operand layout
     conversions in registers, avoiding redundant conversion on every iteration.
 
-    Hoisting is only performed when the resulting register pressure (measured
-    via liveness analysis) stays within 80% of the GRF budget for the given
-    GRF mode.
+    A hoist that would raise the loop body's projected live-in pressure past
+    80% of the per-lane GRF budget for the given GRF mode is rejected. The
+    projection models a hoist as a *substitution* of the loop body's live-in
+    set rather than an addition: the conversion's result starts crossing the
+    loop, and when no operation remaining inside the loop reads the
+    conversion's source, that source stops crossing it and exactly the bytes it
+    contributed to that live-in figure are credited back (so a rematerializable
+    source, which contributed none, earns no credit). This matters because a
+    hoist whose source layout is
+    per-lane fatter than the dot-operand layout it feeds (typical for an
+    oversized blocked layout on a narrow tensor) *lowers* live-in pressure,
+    and an additive-only estimate would reject it.
+
+    Only a hoist that *spends* budget is subject to the budget. When the
+    substitution comes out at zero or negative, the loop is left exactly as far
+    over (or under) budget as it already was, so the threshold has nothing to
+    say: rejecting such a hoist buys back no register and only forgoes the
+    loop-invariant conversion, irrevocably (it stamps `tt.no_licm`). Measured on
+    `_attn_bwd` at HEAD_DIM=128, all eight loop-invariant dot-operand
+    conversions are break-even substitutions, and hoisting all eight leaves
+    every loop body's live-in pressure (292/260/452/516 bytes/lane) and the
+    whole-function peak (2048 bytes/lane) bit-for-bit unchanged while dropping
+    one loop's peak by 64 bytes/lane. Gating them on the unchanged live-in
+    figure rejected six and cost 21.7% geomean on flash-attn-bwd.
+
+    A source is only credited when the hoist really retires it: nothing else
+    inside the loop may read it, and nothing after the loop may either (a source
+    read below the loop occupies a register for the loop's whole duration
+    wherever the conversion sits, so moving the conversion frees nothing). A
+    source shared by several conversions in the same loop is therefore credited
+    only once, to whichever conversion is the last to leave the loop.
+
+    Both halves of that question are asked of the IR as it stands, so a
+    conversion this pass has already hoisted counts as moved. Two decisions
+    follow from that:
+
+    * Candidates belonging to one loop are decided as a set, cheapest (most
+      pressure-reducing) first, rather than in the order they appear in the loop
+      body. Because a hoist can lower the projection as well as raise it,
+      deciding in program order would make an early rejection depend on credit
+      that a later candidate had not yet contributed.
+    * The loops themselves are decided last to first. A hoist only ever moves a
+      conversion earlier in its block, so once every loop below a given loop has
+      been decided, no later hoist can add or remove a use of a source below it.
+      Deciding first-to-last instead denied the credit to the earlier of two
+      loops sharing a source, purely because the later loop's conversion had not
+      moved out from under it yet.
+
+    Both orderings make the pass's output a function of the loops' register
+    pressure rather than of their syntax.
+
+    Non-goals of the pressure model, all deliberate:
+
+    * **Transient overlap at the hoist site.** The projection is about the
+      loop body's live-in pressure. When the source and the hoisted result are
+      the same per-lane size, hoisting leaves live-in unchanged but moves the
+      moment at which both are simultaneously live out of the loop and into
+      the straight-line code before it, which can *raise* whole-function peak
+      pressure even as loop peak falls. That program point is not measured, so
+      such a hoist is judged solely on the (unchanged) loop live-in figure --
+      and, per the rule above, is therefore taken. It does not bite on
+      `_attn_bwd`, whose whole-function peak is unchanged by all eight hoists,
+      but a kernel where it does would be hoisted anyway.
+    * **A block-argument source is not freed for earlier loops.** A conversion
+      whose source has no defining op is hoisted to immediately before its own
+      loop, which is still *after* any earlier loop sharing that source. The
+      earlier loop then correctly earns no credit (the source really does still
+      cross it), so the last-to-first ordering only helps sources with a
+      defining op to hoist above -- which is the common case, the source being a
+      load.
+    * **Groups sharing a source are not evaluated jointly.** Since the credit
+      only lands on the last conversion to leave, hoisting the first `k-1` of
+      `k` conversions that share a source projects the arrivals with none of the
+      departure. With three or more sharers under a tight budget the pass can
+      therefore stop partway through a group whose completed net effect would
+      have fit the budget. The error is in the conservative direction (too few
+      hoists, never too many).
+    * **Loop trip count and conversion cost.** The saved per-iteration
+      conversion work is not weighed against the pressure change, and the trip
+      count is not consulted.
+    * **Pre-existing loop pressure.** `liveInPressure` counts only values used
+      inside the loop body, so a value that merely spans the loop to feed code
+      below it is invisible to the baseline the threshold is compared against.
+      The gate is a check on what a hoist *adds*, not a claim about the loop's
+      absolute occupancy.
+
+    A rejected conversion is marked `tt.no_licm` so that later generic LICM
+    does not hoist it anyway.
   }];
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
 

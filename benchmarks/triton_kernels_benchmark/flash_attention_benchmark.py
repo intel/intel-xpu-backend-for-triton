@@ -455,7 +455,6 @@ def _attn_bwd(Q, K, V, sm_scale,  #
 
 class _attention(torch.autograd.Function):
     tune_attn_fwd: Callable = None
-    attn_fwd: Callable = None
     tune_attn_bwd: Callable = None
 
     @staticmethod
@@ -569,8 +568,6 @@ def get_benchmark(
         supported_providers['sycl-tla'] = 'SYCL-TLA'
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
-    # Initialize _attention class forward kernel (untuned for the advanced path and tuned for the default path).
-    _attention.attn_fwd = attn_fwd
     _attention.tune_attn_fwd = tuner(attn_fwd)
     _attention.tune_attn_bwd = bwd_tuner(_attn_bwd)
 

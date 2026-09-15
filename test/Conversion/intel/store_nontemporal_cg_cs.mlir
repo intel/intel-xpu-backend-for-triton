@@ -23,7 +23,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttig.sup
     %2 = tt.addptr %1, %0 : tensor<128x!tt.ptr<f32>, #blocked>, tensor<128xi32, #blocked>
     %3 = tt.splat %n : i32 -> tensor<128xi32, #blocked>
     %4 = arith.cmpi slt, %0, %3 : tensor<128xi32, #blocked>
-    tt.store %2, %cst, %4 cacheModifier = cg : tensor<128x!tt.ptr<f32>, #blocked>
+    tt.store %2, %cst, %4 {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>} : tensor<128x!tt.ptr<f32>, #blocked>
     // CHECK: llvm.cond_br
     // COM: Fast arm: one wide unannotated store.
     // CHECK: llvm.store {{.*}} {alignment = 16 : i64} : vector<4xi32>, !llvm.ptr<1>
@@ -47,7 +47,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttig.sup
     %2 = tt.addptr %1, %0 : tensor<128x!tt.ptr<f32>, #blocked>, tensor<128xi32, #blocked>
     %3 = tt.splat %n : i32 -> tensor<128xi32, #blocked>
     %4 = arith.cmpi slt, %0, %3 : tensor<128xi32, #blocked>
-    tt.store %2, %cst, %4 cacheModifier = cs : tensor<128x!tt.ptr<f32>, #blocked>
+    tt.store %2, %cst, %4 {cachePolicy = #tt.cache_policy<cache_modifier = cs, eviction_policy = evict_normal>} : tensor<128x!tt.ptr<f32>, #blocked>
     // CHECK: llvm.cond_br
     // COM: Fast arm: one wide unannotated store. Dropping the flag here is an
     // COM: approximation, not an exact lowering -- a plain `llvm.store` has no
