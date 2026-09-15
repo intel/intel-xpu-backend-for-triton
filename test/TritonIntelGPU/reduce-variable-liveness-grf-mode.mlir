@@ -1,7 +1,7 @@
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness -cse | FileCheck %s --check-prefixes=CHECK,SINK2,SINK3,SINK4
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness -cse | FileCheck %s --check-prefixes=CHECK,KEEP2,KEEP3,KEEP4
 // RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness=grf-mode=128 -cse | FileCheck %s --check-prefixes=CHECK,SINK2,SINK3,SINK4
 // RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness=grf-mode=256 -cse | FileCheck %s --check-prefixes=CHECK,SINK2,KEEP3,KEEP4
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness=grf-mode=auto -cse | FileCheck %s --check-prefixes=CHECK,SINK2,SINK3,SINK4
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness=grf-mode=auto -cse | FileCheck %s --check-prefixes=CHECK,KEEP2,KEEP3,KEEP4
 // RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness=grf-mode=512 -cse | FileCheck %s --check-prefixes=CHECK,KEEP2,KEEP3,KEEP4
 
 // COM: A loop-invariant 2D load is sunk into the loop when the loop body's *peak*
@@ -11,16 +11,26 @@
 // COM: for the `scf.for` body block.
 // COM:
 // COM: With "ttg.threads-per-warp" = 16 the per-lane budgets are:
-// COM:   default / auto / 128 -> 4096 B/thread / 16 = 256 B/lane
-// COM:   256                  -> 8192 B/thread / 16 = 512 B/lane
-// COM:   512                  -> 16384 B/thread / 16 = 1024 B/lane
+// COM:   128           -> 4096 B/thread / 16 = 256 B/lane
+// COM:   256           -> 8192 B/thread / 16 = 512 B/lane
+// COM:   default / auto / 512 -> 16384 B/thread / 16 = 1024 B/lane
+// COM:
+// COM: "default"/"auto" match "512", not "128": the true GRF size isn't known at
+// COM: this point in the pipeline, and this gate treats the budget as a threshold
+// COM: to sink rather than a ceiling on what may be added, so the safe assumption
+// COM: under uncertainty is the *largest* GRF size the device supports (assuming
+// COM: the smallest would make the pass sink more than the real hardware, once
+// COM: known, would ever have required -- see RegisterPressureAnalysis's
+// COM: UnknownGRFSizeAssumption).
 // COM:
 // COM: The three modules have peaks of 2564, 644 and 388 B/lane, one per bucket, so
 // COM: together they pin every budget boundary. The peaks deliberately sit inside
 // COM: their bucket rather than exactly on a boundary: a loop body always keeps a
 // COM: few bytes of scalar values live too (the induction variable and friends), so
 // COM: an exactly-power-of-two peak is not reachable, and a calibration that only
-// COM: just clears a boundary breaks on any unrelated change to the analysis.
+// COM: just clears a boundary breaks on any unrelated change to the analysis. The
+// COM: fourth module below is the exception, landing exactly on the 256 B/lane
+// COM: boundary on purpose -- see its own comment.
 
 // COM: Peak 2564 B/lane -- above every budget, so the A operand's load sinks in all
 // COM: five GRF modes.
@@ -95,7 +105,8 @@ module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 32 : i32, "ttg.th
 // -----
 
 // COM: Peak 388 B/lane -- at or above the 256 B/lane budget only, so the A load
-// COM: sinks in default/auto/128 and stays put in 256 and 512 modes.
+// COM: sinks in the 128 mode only, and stays put in default, auto, 256 and 512
+// COM: (whose budgets are all 512 B/lane or higher).
 // COM: The A tile is 64x64, far below the 128x128-element floor the pass used to
 // COM: require before a load could be sunk, so this module also pins the move from
 // COM: a fixed tensor-size gate to a pressure-based one.
@@ -133,11 +144,12 @@ module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 32 : i32, "ttg.th
 
 // -----
 
-// COM: Peak 256 B/lane -- exactly at the default/auto/128 budget boundary, so
-// COM: the A load sinks in those three modes (the gate is `>=`) and stays put
-// COM: in 256 and 512, whose budgets are strictly above it. Landing exactly on
-// COM: a boundary (unlike the three loops above, which deliberately sit inside
-// COM: their bucket -- see the file comment) pins the `>=` vs `>` choice
+// COM: Peak 256 B/lane -- exactly at the 128 mode's budget boundary, so the A
+// COM: load sinks there (the gate is `>=`) and stays put in default, auto, 256
+// COM: and 512, whose budgets are all strictly above it (default/auto now
+// COM: share 512's 1024 B/lane budget, not 128's -- see the file comment).
+// COM: Landing exactly on a boundary (unlike the three loops above, which
+// COM: deliberately sit inside their bucket) pins the `>=` vs `>` choice
 // COM: itself: flipping the comparison to `>` would flip this case's outcome
 // COM: while leaving every other loop in this file unchanged. The shape is
 // COM: `@loop_with_dpas_accumulator` from test/Analysis/register-pressure.mlir

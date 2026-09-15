@@ -77,10 +77,16 @@ the kernel is compiled with.
 Gate: a 2D operand load that is live-in to a loop is sunk into it (leaving a
 prefetch behind) when the loop body's **peak** register pressure, from
 `RegisterPressureAnalysis::peakPressure(loop)`, is at or above the **per-lane**
-GRF budget — `getGRFBytesPerThread(grfMode) / threads-per-warp`. At
-`threads-per-warp = 16` that is 256 B/lane for default/auto/128, 512 for 256 and
-1024 for 512. There is no fixed tensor-size floor; sizes only matter through
-their contribution to the measured pressure.
+GRF budget — `getPerLaneGRFBudgetInBytes(grfMode, mod, UnknownGRFSizeAssumption::Largest)`.
+At `threads-per-warp = 16` that is 256 B/lane for `'128'`, 512 for `'256'`, and
+1024 for `'512'` and for `'default'`/`'auto'` (the true GRF size isn't known at
+this point in the pipeline, and this gate treats the budget as a threshold to
+sink rather than a ceiling, so the safe assumption under uncertainty is the
+*largest* size the device supports — see `RegisterPressureAnalysis`'s
+`UnknownGRFSizeAssumption` for the full rationale, including why
+`HoistLayoutConversions` correctly assumes the opposite (`Smallest`) for the
+same unknown modes). There is no fixed tensor-size floor; sizes only matter
+through their contribution to the measured pressure.
 
 Peak, not live-in, pressure is the gate: `liveInPressure` derives from
 `LivenessBlockInfo::in()`, which excludes block arguments and so never counts the
