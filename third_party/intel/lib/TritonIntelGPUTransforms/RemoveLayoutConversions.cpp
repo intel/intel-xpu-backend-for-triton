@@ -2314,8 +2314,7 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   if (isa<ttg::DotOperandEncodingAttr>(targetType.getEncoding()))
     return;
 
-  if (ttgi::cvtIsSubGroupReinterpret(convertOp.getSrc().getType(),
-                                     targetType)) {
+  if (ttgi::cvtIsSubGroupReinterpret(convertOp)) {
     auto filter = [&convertOp](Operation *op) {
       return op->getParentRegion() == convertOp->getParentRegion();
     };
