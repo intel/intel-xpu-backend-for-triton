@@ -65,8 +65,9 @@ module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 32 : i32, "ttg.th
 
 // -----
 
-// COM: Peak 644 B/lane -- at or above the 256 and 512 B/lane budgets but below the
-// COM: 1024 B/lane one, so the A load sinks in every mode except 512.
+// COM: Peak 644 B/lane -- at or above the 256 B/lane budget only, so the A load
+// COM: sinks in the 128 and 256 modes, and stays put in default, auto and 512
+// COM: (whose budgets are 1024 B/lane).
 #dpas1 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 8], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0_1 = #ttg.dot_op<{opIdx = 0, parent = #dpas1, kWidth=1}>
 #dot1_1 = #ttg.dot_op<{opIdx = 1, parent = #dpas1, kWidth=2}>

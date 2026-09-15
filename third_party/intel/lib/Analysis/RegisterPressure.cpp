@@ -47,6 +47,8 @@ unsigned RegisterPressureAnalysis::getGRFBytesPerHardwareThread(
   // "default" and "auto": the compiler chooses the GRF size at JIT time, so
   // the true value isn't known here. Which bound is safe depends on the
   // caller; see UnknownGRFSizeAssumption's documentation.
+  //
+  // FIXME(#8074): Largest's 16384 is not per-target; see the enum's doc.
   return unknownAssumption == UnknownGRFSizeAssumption::Smallest ? 4096 : 16384;
 }
 

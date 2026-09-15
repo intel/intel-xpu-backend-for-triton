@@ -99,7 +99,13 @@ public:
   enum class UnknownGRFSizeAssumption {
     /// Assume the smallest GRF size the device supports (128-register mode).
     Smallest,
-    /// Assume the largest GRF size the device supports (512-register mode).
+    /// Assume the largest GRF size the device supports.
+    ///
+    /// FIXME(#8074): this is currently 512-register mode unconditionally,
+    /// but the backend only ever selects 512-register mode on "cri"; every
+    /// other target (including BMG and PVC) caps at 256-register mode (see
+    /// third_party/intel/backend/compiler.py's GRF retry logic). This should
+    /// be the true per-target largest size, not a hardcoded constant.
     Largest,
   };
 
