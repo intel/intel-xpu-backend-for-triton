@@ -377,6 +377,23 @@ getSubGroupReinterpretPackInfo(MLIRContext *ctx,
   return std::nullopt;
 }
 
+bool cvtIsIdentical(ConvertLayoutOp op) {
+  MLIRContext *ctx = op.getContext();
+
+  auto srcTy = op.getSrc().getType();
+  auto dstTy = op.getType();
+
+  auto kRegister = str_attr("register");
+
+  auto srcLayout = toLinearLayout(srcTy).removeZeroBasesAlongDim(kRegister);
+  auto dstLayout = toLinearLayout(dstTy).removeZeroBasesAlongDim(kRegister);
+  LinearLayout conversion = minimalCvtLayout(srcLayout, dstLayout);
+
+  assert(to_vector(conversion.getInDimNames()) ==
+         to_vector(conversion.getOutDimNames()));
+  return (conversion.getNumInDims() == 0);
+}
+
 bool cvtIsSubGroupReinterpret(ConvertLayoutOp op) {
   // The sub-group bitcast shuffle operation is lowered to a GenISA intrinsic
   // not implemented by the LTS driver.
