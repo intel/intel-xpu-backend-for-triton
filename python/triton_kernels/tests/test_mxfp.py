@@ -98,7 +98,7 @@ def _mxfp_scale_boundary_data(src_dtype, dst_dtype, device):
 def test_mxfp_upcast_scale_boundaries(upcast, src_dtype, dst_dtype, axis, device):
     if (upcast is upcast_from_mxfp and src_dtype == torch.float8_e4m3fn and is_cuda()
             and torch.cuda.get_device_capability() < (8, 9)):
-        pytest.skip("E4M3 conversion requires CUDA capability 8.9 or newer")
+        pytest.xfail("E4M3 conversion requires CUDA capability 8.9 or newer")
     tensor, scale, expected = _mxfp_scale_boundary_data(src_dtype, dst_dtype, device)
     tensor, scale, expected = (x.transpose(axis, -1) for x in (tensor, scale, expected))
     actual = upcast(tensor, scale, dst_dtype, axis)

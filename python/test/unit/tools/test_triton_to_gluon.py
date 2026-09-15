@@ -282,10 +282,10 @@ def test_triton_to_gluon_dot_scaled(
 @pytest.mark.parametrize("scale_storage", ["uint8", "int8", "float"])
 def test_triton_to_gluon_dot_scaled_minimum_scale(rhs_scale, normal_type, scale_factor, scale_storage, tmp_path):
     if not (is_hopper_or_newer() or is_hip_cdna4() or is_hip_gfx1250()):
-        pytest.skip("Requires Hopper, Blackwell, CDNA4, or gfx1250")
+        pytest.xfail("Requires Hopper, Blackwell, CDNA4, or gfx1250")
     float_scale = scale_storage == "float"
     if float_scale and not is_cuda():
-        pytest.skip("Floating-point scale controls require CUDA")
+        pytest.xfail("Floating-point scale controls require CUDA")
 
     kernel = convert_kernel(dot_scaled_tile_kernel, "dot_scaled_tile_kernel", tmp_path)
     dtype = torch.bfloat16 if normal_type == "bf16" else torch.float16

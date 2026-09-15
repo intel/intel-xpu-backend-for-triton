@@ -38,7 +38,7 @@ def _compact_scaled_upcast_fp4_kernel(x_ptr, scale_ptr, out_ptr, M: ttgl.constex
     ttgl.store(out_ptr + out_offsets, out)
 
 
-@pytest.mark.skipif(not IS_CDNA3_OR_CDNA4, reason="Requires CDNA3 or CDNA4")
+@pytest.mark.xfail(not IS_CDNA3_OR_CDNA4, reason="Requires CDNA3 or CDNA4", run=False)
 @pytest.mark.parametrize(
     "k_packed, scale_k, spt_packed", [(128, 8, 16), (256, 16, 32), (256, 8, 32), (512, 16, 64)], ids=[
         "one_scale_register", "two_scale_registers", "one_scale_register_64_elements", "two_scale_registers_64_elements"
@@ -99,7 +99,7 @@ def _scaled_upcast_scale_edges_kernel(x_ptr, scale_ptr, out_ptr, FP4: ttgl.const
     ttgl.store(out_ptr + out_rows[:, None] * 64 + out_cols[None, :], out)
 
 
-@pytest.mark.skipif(not IS_CDNA3_OR_CDNA4, reason="Requires CDNA3 or CDNA4")
+@pytest.mark.xfail(not IS_CDNA3_OR_CDNA4, reason="Requires CDNA3 or CDNA4", run=False)
 @pytest.mark.parametrize("dtype", [torch.uint8, torch.float8_e4m3fn, torch.float8_e5m2])
 @pytest.mark.parametrize("out_dtype", [torch.bfloat16, torch.float16])
 @pytest.mark.parametrize("nan_scale", [False, True])

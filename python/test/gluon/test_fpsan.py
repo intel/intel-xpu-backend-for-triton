@@ -1513,7 +1513,7 @@ def _ue8m0_decode_payload_kernel(scale_ptr, native_ptr, portable_ptr, THREADS_PE
 
 
 def test_ue8m0_decode_payload_equivalence(device, fresh_knobs):
-    _require_cuda_backend(device)
+    _require_backend(device)
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
     scales = torch.arange(256, device=device, dtype=torch.int32).to(torch.uint8)
@@ -2582,7 +2582,7 @@ def test_tcgen05_mma_warp_specialize_partition(device, partition_warps, fresh_kn
 @pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
 @pytest.mark.parametrize("num_ctas", [1, 2, 4])
 def test_tcgen05_mma_independent_ctas(device, num_ctas, fresh_knobs):
-    _require_cuda_backend(device)
+    _require_backend(device)
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
     m, n, k = 64, 64 * num_ctas, 32
     replicated = tuple((0, 0) for _ in range(num_ctas.bit_length() - 1))

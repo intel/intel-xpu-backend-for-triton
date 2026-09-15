@@ -704,8 +704,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
 def test_matmul_mixed_fp8_resource_limits(shape, fp8_lhs, constraints, device, opt_flags_scope):
     if is_cuda() and torch.cuda.get_device_capability()[0] < 9:
         pytest.skip("requires Hopper or newer")
-    if is_hip() and constraints.get("is_persistent"):
-        pytest.skip("Persistent kernel not supported on AMD GPU")
+    if (is_hip() or is_xpu()) and constraints.get("is_persistent"):
+        pytest.xfail("Persistent kernel not supported on AMD GPU or XPU")
 
     torch.manual_seed(0)
     m, n, k = shape
@@ -725,8 +725,8 @@ def test_matmul_mixed_fp8_resource_limits(shape, fp8_lhs, constraints, device, o
 def test_matmul_mixed_fp8_preserves_fp16_precision(fp8_lhs, is_persistent, device, opt_flags_scope):
     if is_cuda() and torch.cuda.get_device_capability()[0] < 9:
         pytest.skip("requires Hopper or newer")
-    if is_hip() and is_persistent:
-        pytest.skip("Persistent kernel not supported on AMD GPU")
+    if (is_hip() or is_xpu()) and is_persistent:
+        pytest.xfail("Persistent kernel not supported on AMD GPU or XPU")
 
     a = torch.zeros((128, 128), dtype=torch.float16, device=device)
     b = torch.zeros_like(a)

@@ -45,7 +45,7 @@ def plus_a_reduce(x, a):
 def test_reduce_mxfp_scale_boundaries(dtype, k, scale, scale_dtype, device):
     uses_fp8_emulation = is_cuda() and torch.cuda.get_device_capability() < (8, 9)
     if uses_fp8_emulation and dtype == torch.float8_e4m3fn:
-        pytest.skip("E4M3 conversion requires CUDA capability 8.9 or newer")
+        pytest.xfail("E4M3 conversion requires CUDA capability 8.9 or newer")
 
     x = torch.full((k, 3, 128), 4, dtype=dtype, device=device).requires_grad_()
     scales = torch.full((k, 3, 4), scale, dtype=torch.uint8, device=device).view(scale_dtype)
@@ -55,7 +55,7 @@ def test_reduce_mxfp_scale_boundaries(dtype, k, scale, scale_dtype, device):
     torch.testing.assert_close(y, expected, rtol=0, atol=0, equal_nan=True)
 
     if uses_fp8_emulation and dtype == torch.float8_e5m2 and scale == 255:
-        pytest.skip("E5M2 NaN downcast requires CUDA capability 8.9 or newer")
+        pytest.xfail("E5M2 NaN downcast requires CUDA capability 8.9 or newer")
     dy = 2.0**120 if scale < 127 else 1.0
     y.backward(torch.full_like(y, dy))
     expected_grad = torch.full_like(x, dy * decoded)
