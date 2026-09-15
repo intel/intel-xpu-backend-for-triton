@@ -78,8 +78,8 @@ public:
         break;
       }
     }
-    // llvm::outs() << "check reduce lane shiftDownSizeLog2:" <<
-    // shiftDownSizeLog2 << "\n";
+    llvm::outs() << "check reduce lane shiftDownSizeLog2:" << shiftDownSizeLog2
+                 << "\n";
 
     std::vector<unsigned> shuffleRegCandidate;
     auto regBases = laneMapping.getBases().lookup(kRegister);
@@ -125,14 +125,13 @@ public:
     }
     std::vector<std::vector<int>> laneMappingBases;
     unsigned regCandidate = 0;
+    unsigned maxLaneBase = threadsPerWarp / 2;
     for (size_t i = 0; i < laneMapping.getInDimSizeLog2(kLane); i++) {
       int curLaneBase = 1 << i;
       int shiftedLaneBase = (packOrUnpack ? curLaneBase >> packSizeLog2
                                           : curLaneBase << packSizeLog2);
       // clamp to threadsPerWarp
-      shiftedLaneBase = shiftedLaneBase > (threadsPerWarp >> packSizeLog2)
-                            ? 0
-                            : shiftedLaneBase;
+      shiftedLaneBase = shiftedLaneBase > maxLaneBase ? 0 : shiftedLaneBase;
       if (shiftedLaneBase) {
         laneMappingBases.push_back({0, shiftedLaneBase});
       } else {
@@ -144,12 +143,12 @@ public:
     auto reinterPretCvtMap =
         LinearLayout({{kRegister, regMappingBases}, {kLane, laneMappingBases}},
                      {kRegister, kLane});
+    // llvm::outs() << "optimize reduce lane local reinterPretCvtMap:" <<
+    // reinterPretCvtMap << "\n";
     reinterPretCvtMap *=
         LinearLayout::identity1D(inputLl.getInDimSize(kWarp), kWarp, kWarp) *
         LinearLayout::identity1D(inputLl.getInDimSize(kBlock), kBlock, kBlock);
 
-    // llvm::outs() << "optimize reduce lane local reinterPretCvtMap:" <<
-    // reinterPretCvtMap << "\n";
     auto newReduceLayout = reinterPretCvtMap.compose(inputLl);
     // llvm::outs() << "optimize reduce lane local composed:" << newReduceLayout
     // << "\n";
