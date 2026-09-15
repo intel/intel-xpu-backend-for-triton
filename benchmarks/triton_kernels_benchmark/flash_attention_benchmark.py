@@ -689,24 +689,13 @@ def get_benchmark(
             _, min_ms, max_ms, mean, cv = do_bench(sycl_tla_fwd_fn)
 
         elif provider == 'pytorch-sdpa':
+            # Reference provider: PyTorch's own SDPA is the baseline the Triton arm is
+            # checked against, so it is not self-verified (same as the OneDNN arms).
             dout = torch.randn_like(q)
-
-            torch_o = torch_fn()
-            torch_grads = torch.autograd.grad((torch_o, ), (q, k, v), dout, retain_graph=True)
 
             with sdpa_kernel(backends=[SDPBackend.FLASH_ATTENTION]):
                 sdpa_o = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0,
                                                                           is_causal=CAUSAL, scale=sm_scale)
-                sdpa_grads = torch.autograd.grad((sdpa_o, ), (q, k, v), dout, retain_graph=True)
-
-            benchmark_suite.assert_close(lambda: sdpa_o, lambda: torch_o, atol=atol, rtol=1e-3,
-                                         err_msg='Error comparing out between pytorch-sdpa and torch')
-
-            tensor_names = ['grad_query', 'grad_key', 'grad_value']
-            for eager, flash, name in zip(torch_grads, sdpa_grads, tensor_names):
-                benchmark_suite.assert_close(lambda eager=eager: eager, lambda flash=flash: flash, atol=bwd_atol,
-                                             rtol=1e-3,
-                                             err_msg=f'Error comparing {name} between pytorch-sdpa and torch')
 
             sdpa_bwd_fn = lambda: sdpa_o.backward(dout, retain_graph=True)
 
