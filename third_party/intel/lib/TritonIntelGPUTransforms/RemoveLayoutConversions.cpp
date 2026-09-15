@@ -2404,6 +2404,11 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   if (isa<ttg::DotOperandEncodingAttr>(targetType.getEncoding()))
     return;
 
+  if (ttgi::cvtIsIdentical(convertOp)) {
+    LDBG("  hoist skip cvtop: layout are identical");
+    return;
+  }
+
   if (ttgi::cvtIsSubGroupReinterpret(convertOp)) {
     auto filter = [&convertOp](Operation *op) {
       return op->getParentRegion() == convertOp->getParentRegion();
@@ -2415,7 +2420,8 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
         return isa_and_nonnull<ttgi::ReinterpretConvertLayoutOp>(op);
       });
       if (hasReinterpretCvtOp) {
-        LDBG("  skip remat: backward slice contains sub-group reinterpret");
+        LDBG("  hoist skip cvtop: backward slice contains sub-group "
+             "reinterpret");
         return;
       }
     }
