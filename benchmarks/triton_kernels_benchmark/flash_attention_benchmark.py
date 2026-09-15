@@ -563,7 +563,15 @@ def get_benchmark(
         'triton': 'Triton',
     }
     if not use_fp8:
-        supported_providers['sycl-tla'] = 'SYCL-TLA'
+        if fa_kernel_mode == 'fwd':
+            supported_providers['sycl-tla'] = 'SYCL-TLA'
+        else:
+            # FIXME: switch back to a 'sycl-tla' provider once SYCL-TLA gains a backward
+            # FMHA kernel, see https://github.com/intel/intel-xpu-backend-for-triton/issues/4871.
+            # Upstream is forward-only, and the `sycl_tla_kernel` extension exposes just the
+            # forward `attention` entry point, so the backward reference is PyTorch XPU SDPA
+            # (`SDPBackend.FLASH_ATTENTION`) and is labelled as such rather than as SYCL-TLA.
+            supported_providers['pytorch-sdpa'] = 'PyTorch SDPA'
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
     _attention.tune_attn_fwd = tuner(attn_fwd)
@@ -600,7 +608,7 @@ def get_benchmark(
         # Performance is best at 250-400ms range, but we want stable, not just best at ~600ms (triton/sycl-tla providers)
         n_warmup_fwd = 600
         # For BWD mode: Performance doesn't really improve much with warmup for triton
-        n_warmup_bwd = 400  # Maximum across sycl-tla=400, triton=10, onednn=10
+        n_warmup_bwd = 400  # Maximum across pytorch-sdpa=400, triton=10, onednn=10
         n_warmup = n_warmup_fwd if MODE == 'fwd' else n_warmup_bwd
         do_bench = benchmark_suite.get_do_bench(n_warmup=n_warmup, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
         if MODE not in modes:
@@ -669,32 +677,31 @@ def get_benchmark(
                 benchmark_label='__profile_kernel_of_func_bwd_fa' if MODE == 'bwd' else None)
 
         elif provider == 'sycl-tla':
-            if MODE == 'fwd':
-                name = 'attention'
-                func = getattr(sycl_tla_kernel, name)
-                out = torch.zeros((Z, H, N_CTX, D_HEAD), device='xpu', dtype=torch.float32, requires_grad=True)
+            name = 'attention'
+            func = getattr(sycl_tla_kernel, name)
+            out = torch.zeros((Z, H, N_CTX, D_HEAD), device='xpu', dtype=torch.float32, requires_grad=True)
 
-                def sycl_tla_fwd_fn():
-                    func(q, k, v, out, Z, H, H, N_CTX, N_CTX, D_HEAD, D_HEAD, CAUSAL, sm_scale)
-                    return out
+            def sycl_tla_fwd_fn():
+                func(q, k, v, out, Z, H, H, N_CTX, N_CTX, D_HEAD, D_HEAD, CAUSAL, sm_scale)
+                return out
 
-                benchmark_suite.assert_close(sycl_tla_fwd_fn, torch_fn, atol=atol, rtol=1e-3,
-                                             err_msg='sycl-tla to torch')
+            benchmark_suite.assert_close(sycl_tla_fwd_fn, torch_fn, atol=atol, rtol=1e-3, err_msg='sycl-tla to torch')
 
-                _, min_ms, max_ms, mean, cv = do_bench(sycl_tla_fwd_fn)
+            _, min_ms, max_ms, mean, cv = do_bench(sycl_tla_fwd_fn)
 
-            else:
-                dout = torch.randn_like(q)
+        elif provider == 'pytorch-sdpa':
+            # Reference provider: PyTorch's own SDPA is the baseline the Triton arm is
+            # checked against, so it is not self-verified (same as the OneDNN arms).
+            dout = torch.randn_like(q)
 
-                with sdpa_kernel(backends=[SDPBackend.FLASH_ATTENTION]):
-                    sycl_tla_o = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None,
-                                                                                  dropout_p=0.0, is_causal=CAUSAL,
-                                                                                  scale=sm_scale)
+            with sdpa_kernel(backends=[SDPBackend.FLASH_ATTENTION]):
+                sdpa_o = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0,
+                                                                          is_causal=CAUSAL, scale=sm_scale)
 
-                sycl_tla_bwd_fn = lambda: sycl_tla_o.backward(dout, retain_graph=True)
+            sdpa_bwd_fn = lambda: sdpa_o.backward(dout, retain_graph=True)
 
-                _, min_ms, max_ms, mean, cv = do_bench(sycl_tla_bwd_fn, grad_to_none=(q, k, v),
-                                                       benchmark_label='ScaledDotProductFlashAttentionBackward0')
+            _, min_ms, max_ms, mean, cv = do_bench(sdpa_bwd_fn, grad_to_none=(q, k, v),
+                                                   benchmark_label='ScaledDotProductFlashAttentionBackward0')
         else:
             raise NotImplementedError(f'Unsupported provider {provider}')
 
