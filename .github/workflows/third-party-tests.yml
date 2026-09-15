@@ -75,6 +75,8 @@ jobs:
 
       - name: Setup PyTorch
         uses: ./.github/actions/setup-pytorch
+        with:
+          lts: ${{ inputs.runner_label == 'lts' }}
 
       - name: Setup Triton
         id: install

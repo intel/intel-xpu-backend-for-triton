@@ -96,6 +96,8 @@ jobs:
       - name: Setup PyTorch
         id: setup-pytorch
         uses: ./.github/actions/setup-pytorch
+        with:
+          lts: ${{ inputs.runner_label == 'lts' }}
 
       - name: Identify torchvision pin
         if: ${{ inputs.benchmarks == '' || contains(fromJson(inputs.benchmarks || '[]'), 'sglang') }}
