@@ -326,7 +326,7 @@ def _tr_import_hook(name, *args, orig_import=__builtins__["__import__"], decorat
         @functools.wraps(fn := module.ir.pass_manager.run)
         def pm_run(*args, **kwargs):
             with track("pm.run") as tr:
-                args[0].enable_timing(tr.callback("passes"))
+                module.intel.enable_pm_timing(args[0], tr.callback("passes"))
                 fn(*args, **kwargs)
 
         module.ir.pass_manager.run = pm_run
