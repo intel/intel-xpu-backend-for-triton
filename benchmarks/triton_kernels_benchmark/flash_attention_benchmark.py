@@ -566,10 +566,11 @@ def get_benchmark(
         if fa_kernel_mode == 'fwd':
             supported_providers['sycl-tla'] = 'SYCL-TLA'
         else:
-            # SYCL-TLA has no backward FMHA kernel: the `sycl_tla_kernel` extension only
-            # exposes the forward `attention` entry point. The backward reference is
-            # PyTorch XPU SDPA (`SDPBackend.FLASH_ATTENTION`), so label it as such
-            # instead of attributing it to SYCL-TLA.
+            # FIXME: switch back to a 'sycl-tla' provider once SYCL-TLA gains a backward
+            # FMHA kernel, see https://github.com/intel/intel-xpu-backend-for-triton/issues/4871.
+            # Upstream is forward-only, and the `sycl_tla_kernel` extension exposes just the
+            # forward `attention` entry point, so the backward reference is PyTorch XPU SDPA
+            # (`SDPBackend.FLASH_ATTENTION`) and is labelled as such rather than as SYCL-TLA.
             supported_providers['pytorch-sdpa'] = 'PyTorch SDPA'
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
