@@ -1,8 +1,8 @@
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness -cse | FileCheck %s --check-prefixes=CHECK,SINK2,SINK3
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness=grf-mode=128 -cse | FileCheck %s --check-prefixes=CHECK,SINK2,SINK3
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness=grf-mode=256 -cse | FileCheck %s --check-prefixes=CHECK,SINK2,KEEP3
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness=grf-mode=auto -cse | FileCheck %s --check-prefixes=CHECK,SINK2,SINK3
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness=grf-mode=512 -cse | FileCheck %s --check-prefixes=CHECK,KEEP2,KEEP3
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness -cse | FileCheck %s --check-prefixes=CHECK,SINK2,SINK3,SINK4
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness=grf-mode=128 -cse | FileCheck %s --check-prefixes=CHECK,SINK2,SINK3,SINK4
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness=grf-mode=256 -cse | FileCheck %s --check-prefixes=CHECK,SINK2,KEEP3,KEEP4
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness=grf-mode=auto -cse | FileCheck %s --check-prefixes=CHECK,SINK2,SINK3,SINK4
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness=grf-mode=512 -cse | FileCheck %s --check-prefixes=CHECK,KEEP2,KEEP3,KEEP4
 
 // COM: A loop-invariant 2D load is sunk into the loop when the loop body's *peak*
 // COM: register pressure is at or above the per-lane GRF budget of the selected GRF
@@ -126,6 +126,50 @@ module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 32 : i32, "ttg.th
       %8 = tt.descriptor_load %1[%arg5, %c0_i32] {ttig.block_io = "column_major"} : !tt.tensordesc<64x128xf16> -> tensor<64x128xf16, #dot1_2>
       %9 = tt.dot %2, %8, %arg4, inputPrecision = tf32 : tensor<64x64xf16, #dot0_2> * tensor<64x128xf16, #dot1_2> -> tensor<64x128xf32, #dpas2>
       scf.yield %9, %7 : tensor<64x128xf32, #dpas2>, i32
+    }
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Peak 256 B/lane -- exactly at the default/auto/128 budget boundary, so
+// COM: the A load sinks in those three modes (the gate is `>=`) and stays put
+// COM: in 256 and 512, whose budgets are strictly above it. Landing exactly on
+// COM: a boundary (unlike the three loops above, which deliberately sit inside
+// COM: their bucket -- see the file comment) pins the `>=` vs `>` choice
+// COM: itself: flipping the comparison to `>` would flip this case's outcome
+// COM: while leaving every other loop in this file unchanged. The shape is
+// COM: `@loop_with_dpas_accumulator` from test/Analysis/register-pressure.mlir
+// COM: (peak = 256 bytes there, confirmed by --test-register-pressure), with
+// COM: the A descriptor's load hoisted above the loop so it is live-in and
+// COM: thus a sink candidate; the set of values live at the tt.dot is
+// COM: unchanged, so the peak is still exactly 256.
+#dpas3 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0_3 = #ttg.dot_op<{opIdx = 0, parent = #dpas3, kWidth=1}>
+#dot1_3 = #ttg.dot_op<{opIdx = 1, parent = #dpas3, kWidth=2}>
+module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  tt.func @boundary_pressure_gate(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+    // CHECK-LABEL: tt.func @boundary_pressure_gate
+    %cst = arith.constant dense<0.000000e+00> : tensor<8x16xf32, #dpas3>
+    %c64_i32 = arith.constant 64 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %c0_i64 = arith.constant 0 : i64
+    %0 = tt.make_tensor_descriptor %arg0, [%c0_i32, %c0_i32], [%c0_i64, %c0_i64] : <f16>, <8x64xf16>
+    %1 = tt.make_tensor_descriptor %arg1, [%c0_i32, %c0_i32], [%c0_i64, %c0_i64] : <f16>, <64x16xf16>
+    // KEEP4-NOT:  ttig.descriptor_prefetch {{.*}} : !tt.tensordesc<8x64xf16>
+    // SINK4:      ttig.descriptor_prefetch %{{.*}}[%c0_i32, %c0_i32] {{.*}} : !tt.tensordesc<8x64xf16>
+    // SINK4-NOT:  tt.descriptor_load {{.*}} : !tt.tensordesc<8x64xf16>
+    // KEEP4:      tt.descriptor_load %{{.*}}[%c0_i32, %c0_i32] {{.*}} : !tt.tensordesc<8x64xf16>
+    %2 = tt.descriptor_load %0[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<8x64xf16> -> tensor<8x64xf16, #dot0_3>
+    %3 = scf.for %arg2 = %c0_i32 to %c64_i32 step %c64_i32 iter_args(%arg3 = %cst) -> (tensor<8x16xf32, #dpas3>) : i32 {
+      // CHECK:      scf.for
+      ttig.descriptor_prefetch %1[%c0_i32, %c0_i32] : !tt.tensordesc<64x16xf16>
+      %4 = tt.descriptor_load %1[%c0_i32, %c0_i32] {ttig.block_io = "column_major"} : !tt.tensordesc<64x16xf16> -> tensor<64x16xf16, #dot1_3>
+      // SINK4:      tt.descriptor_load {{.*}} : !tt.tensordesc<8x64xf16>
+      // KEEP4-NOT:  tt.descriptor_load {{.*}} : !tt.tensordesc<8x64xf16>
+      %5 = tt.dot %2, %4, %arg3, inputPrecision = tf32 : tensor<8x64xf16, #dot0_3> * tensor<64x16xf16, #dot1_3> -> tensor<8x16xf32, #dpas3>
+      scf.yield %5 : tensor<8x16xf32, #dpas3>
     }
     tt.return
   }
