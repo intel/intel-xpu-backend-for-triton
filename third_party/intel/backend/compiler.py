@@ -524,10 +524,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # stages, which multiplies ocloc time and register spills without helping
         # runtime. Turn the pass off for the modules that emit that sequence; see
         # https://github.com/intel/intel-xpu-backend-for-triton/issues/8046.
-        # FIXME: revisit before the LTS driver line moves to a newer IGC. The
-        # rolling driver (1.17.39395+13) does not mispredict this sequence, so once
-        # LTS ships an IGC that does not either, drop this flag and the
-        # `has_software_fp8e4m3_to_fp16_conversion` binding it uses.
+        # FIXME: drop this flag and the `has_software_fp8e4m3_to_fp16_conversion`
+        # binding it uses once the LTS driver line picks up an IGC that no longer
+        # mispredicts this sequence -- the rolling driver (1.17.39395+13) already
+        # does not. Worth re-checking whenever the LTS driver pin is bumped.
         metadata["igc_disable_loop_sink"] = (cls.is_lts(driver_version)
                                              and intel.has_software_fp8e4m3_to_fp16_conversion(mod))
 
