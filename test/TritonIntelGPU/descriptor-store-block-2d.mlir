@@ -248,3 +248,52 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     tt.return
   }
 }
+
+// -----
+// COM: Rank-reducing descriptor store with a non-zero leading index: the index
+// COM: is folded into the base pointer with the leading stride (%arg4).
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @store_rank_reducing_nonzero_batch_index
+  tt.func public @store_rank_reducing_nonzero_batch_index(%arg0: !tt.ptr<f32>, %arg1: i32,
+                                                          %arg2: i32, %arg3: i64, %arg4: i64,
+                                                          %arg5: i32) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #dpas>
+    %c0_i32 = arith.constant 0 : i32
+    %c2_i32 = arith.constant 2 : i32
+    %c1_i64 = arith.constant 1 : i64
+    // Struct slot 3 is stride[0] (%arg4), slot 4 is stride[1] (%arg3).
+    // CHECK: llvm.insertvalue %arg4, %{{.*}}[3] : !llvm.struct<(i64, i64, i64, i64, i64, i64, ptr<1>)>
+    // CHECK: llvm.insertvalue %arg3, %{{.*}}[4] : !llvm.struct<(i64, i64, i64, i64, i64, i64, ptr<1>)>
+    %desc = tt.make_tensor_descriptor %arg0, [%c2_i32, %arg1, %arg2], [%arg4, %arg3, %c1_i64] : <f32>, <1x32x32xf32, #dpas>
+    // CHECK: %[[SHAPE0:.*]] = llvm.extractvalue %[[DESC:.*]][0] : !llvm.struct<(i64, i64, i64, i64, i64, i64, ptr<1>)>
+    // CHECK: %[[SHAPE1:.*]] = llvm.extractvalue %[[DESC]][1] : !llvm.struct<(i64, i64, i64, i64, i64, i64, ptr<1>)>
+    // CHECK: %[[SHAPE2:.*]] = llvm.extractvalue %[[DESC]][2] : !llvm.struct<(i64, i64, i64, i64, i64, i64, ptr<1>)>
+    // CHECK: %[[BSTRIDE:.*]] = llvm.extractvalue %[[DESC]][3] : !llvm.struct<(i64, i64, i64, i64, i64, i64, ptr<1>)>
+    // CHECK: %[[STRIDE1:.*]] = llvm.extractvalue %[[DESC]][4] : !llvm.struct<(i64, i64, i64, i64, i64, i64, ptr<1>)>
+    // CHECK: %[[BASE:.*]] = llvm.extractvalue %[[DESC]][6] : !llvm.struct<(i64, i64, i64, i64, i64, i64, ptr<1>)>
+    // The 2D surface is the innermost two dimensions.
+    // CHECK: %[[W:.*]] = llvm.mul %[[SHAPE2]], %{{.*}} : i64
+    // CHECK: %[[WIDTH:.*]] = llvm.trunc %[[W]] : i64 to i32
+    // CHECK: %[[HEIGHT:.*]] = llvm.trunc %[[SHAPE1]] : i64 to i32
+    // CHECK: %[[P:.*]] = llvm.mul %[[STRIDE1]], %{{.*}} : i64
+    // CHECK: %[[PITCH:.*]] = llvm.trunc %[[P]] : i64 to i32
+    // CHECK: %[[BOFF64:.*]] = llvm.zext %arg5 : i32 to i64
+    // CHECK: %[[BOFF:.*]] = llvm.mul %[[BOFF64]], %[[BSTRIDE]] : i64
+    // CHECK: %[[BPTR:.*]] = llvm.getelementptr %[[BASE]]{{\[}}%[[BOFF]]{{\]}} : (!llvm.ptr<1>, i64) -> !llvm.ptr<1>, f32
+    // Signed check against shape[0]; out of range moves offsetY to base_height.
+    // CHECK: %[[GE0:.*]] = llvm.icmp "sge" %arg5, %{{.*}} : i32
+    // CHECK: %[[EXT0:.*]] = llvm.trunc %[[SHAPE0]] : i64 to i32
+    // CHECK: %[[LT:.*]] = llvm.icmp "slt" %arg5, %[[EXT0]] : i32
+    // CHECK: %[[INB:.*]] = llvm.and %[[GE0]], %[[LT]] : i1
+    // CHECK: %[[OY:.*]] = llvm.select %[[INB]], %{{.*}}, %[[HEIGHT]] : i1, i32
+    // CHECK: triton_gen.2Dblockstore %[[BPTR]], %[[WIDTH]], %[[HEIGHT]], %[[PITCH]], %{{.*}}, %[[OY]], %{{.*}} {elem_size_in_bits = 32, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
+    // 8 stores, no fallback.
+    // CHECK-COUNT-7: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 32, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
+    // CHECK-NOT: triton_gen.2Dblockstore
+    // CHECK-NOT: triton_gen.predicated.store
+    tt.descriptor_store %desc[%arg5, %c0_i32, %c0_i32], %cst {ttig.block_io = "row_major"} : !tt.tensordesc<1x32x32xf32, #dpas>, tensor<32x32xf32, #dpas>
+    tt.return
+  }
+}
