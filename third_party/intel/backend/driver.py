@@ -9,6 +9,7 @@ import ctypes
 import subprocess
 import sysconfig
 import tempfile
+import warnings
 from pathlib import Path
 from functools import cached_property, lru_cache
 
@@ -50,12 +51,24 @@ def find_sycl_icpx(include_dir: list[str]) -> tuple[list[str], list[str]]:
 
     oneapi_root = os.getenv("ONEAPI_ROOT")
     if oneapi_root:
-        include_dir += [
-            os.path.join(oneapi_root, "compiler/latest/include"),
-            os.path.join(oneapi_root, "compiler/latest/include/sycl")
-        ]
-        sycl_dir = os.path.join(oneapi_root, "compiler/latest/lib")
-        return include_dir, [sycl_dir]
+        # Any oneAPI component's `setvars.sh` sets `ONEAPI_ROOT`, so it does not mean a compiler is
+        # installed here (a VTune-only install has no `compiler` directory at all). Check that both
+        # paths exist before returning them.
+        # See https://github.com/intel/intel-xpu-backend-for-triton/issues/7977.
+        compiler_root = os.path.join(oneapi_root, "compiler/latest")
+        sycl_dir = os.path.join(compiler_root, "lib")
+        if os.path.isfile(os.path.join(compiler_root, "include/sycl/sycl.hpp")) and os.path.isdir(sycl_dir):
+            include_dir += [os.path.join(compiler_root, "include"), os.path.join(compiler_root, "include/sycl")]
+            return include_dir, [sycl_dir]
+        if os.path.isdir(compiler_root):
+            # A compiler directory with only half of SYCL in it is not something a normal install
+            # leaves behind, and the SYCL found below may be a different version than the one
+            # meant to be used, so do not skip it silently.
+            warnings.warn(
+                f"{compiler_root} does not provide SYCL (need include/sycl/sycl.hpp and lib); "
+                "ignoring ONEAPI_ROOT and looking for SYCL elsewhere.",
+                stacklevel=2,
+            )
 
     try:
         sycl_rt = importlib.metadata.metadata("intel-sycl-rt")
