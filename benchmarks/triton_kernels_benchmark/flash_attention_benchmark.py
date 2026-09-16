@@ -571,7 +571,9 @@ def get_benchmark(
             # Upstream is forward-only, and the `sycl_tla_kernel` extension exposes just the
             # forward `attention` entry point, so the backward reference is PyTorch XPU SDPA
             # (`SDPBackend.FLASH_ATTENTION`) and is labelled as such rather than as SYCL-TLA.
-            supported_providers['pytorch-sdpa'] = 'PyTorch SDPA'
+            # The label must equal the key up to case: _BenchmarkSummary.reference_provider returns
+            # the key and is matched against the labels (benchmark_testing.py:798-800).
+            supported_providers['pytorch-sdpa'] = 'PyTorch-SDPA'
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
 
     _attention.tune_attn_fwd = tuner(attn_fwd)
