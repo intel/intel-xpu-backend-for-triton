@@ -270,3 +270,38 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttig.sup
     tt.return
   }
 }
+
+// -----
+
+// COM: The gather fallback's vector width must follow the load index, not just the
+// COM: descriptor: an odd 16-bit index leaves a 128-bit access misaligned (#7990).
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 4], warpsPerCTA = [8, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: descriptor_load_odd_index_narrows
+  tt.func public @descriptor_load_odd_index_narrows(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}) {
+    %c0_i32 = arith.constant 0 : i32
+    %idx = arith.constant 3 : i32
+    %cols = arith.constant 64 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %stride = arith.constant 64 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %cols], [%stride, %c1_i64] : <f16>, <64x32xf16>
+    // CHECK-COUNT-16: llvm.load {{.*}} {alignment = 2 : i64} : !llvm.ptr<1> -> i16
+    // CHECK-NOT: llvm.load {{.*}} -> vector<4xi32>
+    %v = tt.descriptor_load %desc[%c0_i32, %idx] : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #blocked>
+    tt.return
+  }
+
+  // CHECK-LABEL: descriptor_load_aligned_index_stays_vectorized
+  tt.func public @descriptor_load_aligned_index_stays_vectorized(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}) {
+    %c0_i32 = arith.constant 0 : i32
+    %idx = arith.constant 8 : i32
+    %cols = arith.constant 64 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %stride = arith.constant 64 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %cols], [%stride, %c1_i64] : <f16>, <64x32xf16>
+    // CHECK-COUNT-2: llvm.load {{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<4xi32>
+    %v = tt.descriptor_load %desc[%c0_i32, %idx] : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #blocked>
+    tt.return
+  }
+}

@@ -274,12 +274,14 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 // Test vectorized descriptor load and store: with sizePerThread > 1 and stride-1
 // on the fast dimension, the gather fallback should emit wider (vectorized) I/O.
 // Here sizePerThread=[1,4] with f16 gives vec=4 (4*16=64 bits < 128 bit max).
+// %arg2 needs a divisibility hint: the index shifts the base by index * elemBytes,
+// so vectorizing requires it to be a multiple of vec (#7990).
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
 
 module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_predicated_io"} {
   // CHECK-LABEL: llvm.func spir_kernelcc @vectorized_descriptor_load_store
-  tt.func public @vectorized_descriptor_load_store(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32) -> (tensor<4x16xf16, #blocked>) {
+  tt.func public @vectorized_descriptor_load_store(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32 {tt.divisibility = 16 : i32}) -> (tensor<4x16xf16, #blocked>) {
     %c4_i32 = arith.constant 4 : i32
     %c16_i32 = arith.constant 16 : i32
     %c16_i64 = arith.constant 16 : i64
