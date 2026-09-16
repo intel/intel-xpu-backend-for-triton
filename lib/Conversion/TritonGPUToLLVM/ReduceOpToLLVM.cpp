@@ -480,6 +480,20 @@ private:
                    (getBitwidth(inputTy) / 8);
       offset += bytes;
     }
+    // FIXME: issue #6719 scaffolding; strip before the PR. `offset` is now the
+    // total this round touches, and because the offsets are a prefix sum,
+    // max(offsets[i] + bytes[i]) telescopes to exactly that total whatever the
+    // sort order is. Called once per conversion round, including the final
+    // output-layout one that getScratchSizeInBytes() never sizes, so comparing
+    // it here is what shows whether that round can under-allocate.
+    if (::getenv("TRITON_INTEL_REDUCE_LOG_SCRATCH")) {
+      ReduceOpHelper helper(op);
+      llvm::errs() << "[reduce-scratch] demand=" << offset
+                   << " allocated=" << helper.getScratchSizeInBytes()
+                   << " srcOutDims=" << srcLayout.getNumOutDims()
+                   << " dstOutDims=" << dstLayout.getNumOutDims() << " at "
+                   << op.getLoc() << "\n";
+    }
     return offsets;
   }
 };
