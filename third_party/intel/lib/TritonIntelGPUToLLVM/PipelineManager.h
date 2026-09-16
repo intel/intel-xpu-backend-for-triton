@@ -220,8 +220,16 @@ public:
     intel::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo,
                                              patterns, axisInfoAnalysis,
                                              strideAnalysis, benefit);
-    intel::populateReduceOpToLLVMPatterns(typeConverter, patterns, targetInfo,
-                                          benefit);
+    // FIXME: issue #6719 A/B scaffolding. Delegating to the common pattern
+    // rather than resyncing the Intel copy is what makes the arm genuinely
+    // upstream. Kept in lockstep with the allocation callback in
+    // intel/lib/Analysis/Allocation.cpp.
+    if (gpu::intel::useCommonReduceLowering())
+      mlir::triton::populateReduceOpToLLVMPatterns(typeConverter, patterns,
+                                                   targetInfo, benefit);
+    else
+      intel::populateReduceOpToLLVMPatterns(typeConverter, patterns, targetInfo,
+                                            benefit);
     mlir::triton::populateScanOpToLLVMPatterns(typeConverter, patterns,
                                                targetInfo, benefit);
     mlir::triton::populateGatherOpToLLVMPatterns(typeConverter, patterns,

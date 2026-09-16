@@ -62,6 +62,8 @@ public:
                   triton::ReduceOp op,
                   unsigned reduceLaneIdMask) const override;
 
+  unsigned getReductionTreeArity(Operation *combinerOp) const override;
+
   std::string getMulhiFuncName(Type resultElementTy) const override;
 
   void printf(RewriterBase &rewriter, Value formatStrStart,

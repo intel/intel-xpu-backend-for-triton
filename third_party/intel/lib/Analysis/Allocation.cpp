@@ -1,5 +1,6 @@
 #include "intel/include/Analysis/Allocation.h"
 #include "intel/include/Analysis/Utility.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Utils.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -46,9 +47,28 @@ unsigned allocationAnalysisScratchSizeFn(Operation *op) {
         return size == invalidSize ? defaultAllocationAnalysisScratchSizeFn(op)
                                    : size;
       })
-      .Case<ReduceOp>([](auto op) {
+      .Case<ReduceOp>([](auto op) -> unsigned {
+        // FIXME: issue #6719 A/B scaffolding. Must stay in lockstep with the
+        // pattern selection in TritonIntelGPUToLLVM/PipelineManager.h: the
+        // common lowering computes its shared-memory offsets from
+        // getScratchSizeInBytes(), the Intel one from the legacy shape-based
+        // size, and the two are unordered.
         ReduceOpHelper helper(op);
-        return ttgi::getScratchSizeInBytesOld(helper, op);
+        unsigned oldSize = ttgi::getScratchSizeInBytesOld(helper, op);
+        unsigned newSize = defaultAllocationAnalysisScratchSizeFn(op);
+
+        // FIXME: issue #6719 step-0 scaffolding; strip before the PR. Records
+        // the sign of old - new to establish whether the two sizes really are
+        // unordered.
+        if (::getenv("TRITON_INTEL_REDUCE_DEBUG_COUNTS"))
+          llvm::errs() << "[reduce-6719-scratch] old=" << oldSize
+                       << " new=" << newSize << " sign="
+                       << (oldSize < newSize
+                               ? "old<new"
+                               : (newSize < oldSize ? "new<old" : "equal"))
+                       << " loc=" << op.getLoc() << "\n";
+
+        return ttgi::useCommonReduceLowering() ? newSize : oldSize;
       })
       .Default([](Operation *op) {
         return defaultAllocationAnalysisScratchSizeFn(op);

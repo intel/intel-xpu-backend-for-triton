@@ -14,6 +14,7 @@
 #include "Utils/Mangling.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENMemorySpace.h"
 
+#include <limits>
 #include <numeric>
 
 #if defined(_MSC_VER) && !defined(__clang__)
@@ -278,6 +279,36 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
                             StringRef message, StringRef file, StringRef func,
                             int line) const {
   return emitter.assertFail(rewriter, loc, message, file, func, line);
+}
+
+unsigned TargetInfo::getReductionTreeArity(Operation *combinerOp) const {
+  // FIXME: issue #6719. This reproduces, for the common reduce lowering, the
+  // left fold that intel/lib/TritonIntelGPUToLLVM/ReduceOpToLLVM.cpp applies
+  // within a thread: #6667 added it to fix TIMM fp16/bf16 accuracy, and #6914
+  // narrowed it to non-float and sub-32-bit-float types because left-folding
+  // fp32 costs ~1.5e-6 relative error. treeReduce degenerates to a left fold
+  // when the arity is at least the number of values being combined.
+  if (gpu::intel::disableReduceLeftFold())
+    return TargetInfoBase::getReductionTreeArity(combinerOp);
+
+  // Classify from the *source* tensor's first element type, matching the Intel
+  // predicate. A rule based on the combiner's own operands would differ: for a
+  // multi-operand reduce (argmax) operand 0 of the combiner can be the index,
+  // which would left-fold fp32 and reintroduce #6914.
+  Type elemTy;
+  if (auto reduceOp =
+          dyn_cast_or_null<triton::ReduceOp>(combinerOp->getParentOp())) {
+    elemTy = getElementTypeOrSelf(reduceOp.getOperandTypes().front());
+  } else {
+    // Detached synthesized vector combine region; single-operand by
+    // construction, so unwrapping vector<2xT> to T is exact. Unreachable
+    // today, as Intel reports false for supportBitwidth{16,32}Elementwise.
+    elemTy = getElementTypeOrSelf(combinerOp->getOperand(0).getType());
+  }
+
+  if (isa<FloatType>(elemTy) && elemTy.getIntOrFloatBitWidth() >= 32)
+    return TargetInfoBase::getReductionTreeArity(combinerOp);
+  return std::numeric_limits<unsigned>::max();
 }
 
 int TargetInfo::getSharedAddressSpace() const {

@@ -1,8 +1,15 @@
 // RUN: triton-opt %s --split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s
+// RUN: env TRITON_INTEL_REDUCE_USE_COMMON_LOWERING=1 triton-opt %s --split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s
 
 // COM: Verify that f32 within-thread reduction uses tree reduction (parallel pairs)
-// COM: while f16 uses left-fold (sequential accumulation) to preserve low-precision
-// COM: accuracy. See issue #6904 and PR #6667.
+// COM: while f16 and integer types use left-fold (sequential accumulation) to
+// COM: preserve low-precision accuracy. See issue #6904 and PR #6667.
+// COM:
+// COM: The second RUN line lowers through the common upstream pattern instead of
+// COM: the Intel one (issue #6719). It shares this file's CHECK lines on purpose:
+// COM: the common lowering takes its association solely from
+// COM: TargetInfo::getReductionTreeArity, so passing under both RUN lines is what
+// COM: demonstrates the Intel arity override reproduces the forked fold order.
 
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32, ttig.min_sg_size = 32 : i32} {
@@ -45,5 +52,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
       tt.reduce.return %add : f16
     }) {axis = 0 : i32} : (tensor<128xf16, #blocked>) -> f16
     tt.return %g : f16
+  }
+}
+
+// -----
+
+// COM: Non-float types also left-fold, regardless of width: the predicate is
+// COM: "float and >= 32 bits" for tree reduction, so i32 folds. This is the
+// COM: majority of the left-folded cases, so it must be covered.
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32, ttig.min_sg_size = 32 : i32} {
+  // CHECK-LABEL: reduce_i32_left_fold
+  tt.func @reduce_i32_left_fold(%f : tensor<128xi32, #blocked>) -> i32 {
+    // CHECK: llvm.extractvalue {{.*}}[0]
+    // CHECK: llvm.extractvalue {{.*}}[1]
+    // CHECK: llvm.extractvalue {{.*}}[2]
+    // CHECK: llvm.extractvalue {{.*}}[3]
+    // CHECK: [[S0:%.*]] = llvm.add %{{.*}}, %{{.*}} : i32
+    // CHECK: [[S1:%.*]] = llvm.add [[S0]], %{{.*}} : i32
+    // CHECK: llvm.add [[S1]], %{{.*}} : i32
+    %g = "tt.reduce" (%f) ({
+    ^bb0(%arg0: i32, %arg1: i32):
+      %add = arith.addi %arg0, %arg1 : i32
+      tt.reduce.return %add : i32
+    }) {axis = 0 : i32} : (tensor<128xi32, #blocked>) -> i32
+    tt.return %g : i32
   }
 }

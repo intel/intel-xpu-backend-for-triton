@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "intel/include/Analysis/Utility.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Support/LLVM.h"
@@ -36,10 +37,6 @@ using ::mlir::triton::gpu::getTotalElemsPerThread;
 // to two additional warp reductions until the reduction axis size becomes 1.
 #ifndef TRITON_INTEL_REDUCE_USE_COMMON_CROSS_WARP
 #define TRITON_INTEL_REDUCE_USE_COMMON_CROSS_WARP 0
-#endif
-
-#ifndef TRITON_INTEL_REDUCE_USE_LEFT_FOLD_THREAD_REDUCE
-#define TRITON_INTEL_REDUCE_USE_LEFT_FOLD_THREAD_REDUCE 1
 #endif
 
 namespace {
@@ -79,6 +76,25 @@ public:
     // of the scratch space.
     assert(regLl ==
            ReduceOpHelper::reducedRegLaneLayout(helper.getSrcTy(), axis));
+
+    // FIXME: issue #6719 step-0 scaffolding; strip before the PR. Reports how
+    // often the cross-warp path would run. Prints both predicates because the
+    // common lowering branches on the layout, not on isWarpSynchronous().
+    // Uses ::getenv to avoid registering a throwaway name in GetEnv.h.
+    if (::getenv("TRITON_INTEL_REDUCE_DEBUG_COUNTS")) {
+      auto kAxisDbg = *(regLl.getOutDimNames().begin() + axis);
+      RankedTensorType srcTy = helper.getSrcTy();
+      llvm::errs() << "[reduce-6719] axis=" << axis << " srcTy=" << srcTy
+                   << " warpsPerCTA[axis]="
+                   << triton::gpu::getWarpsPerCTA(srcTy.getEncoding(),
+                                                  srcTy.getShape())[axis]
+                   << " isWarpSynchronous="
+                   << ttgi::isWarpSynchronous(helper, op)
+                   << " commonAxisSizeAfterWarpReduce="
+                   << regLl.getOutDimSize(kAxisDbg)
+                   << " isReduceWithinCTA=" << helper.isReduceWithinCTA()
+                   << "\n";
+    }
 
     // Step 3: reduce across warps.
 #if TRITON_INTEL_REDUCE_USE_COMMON_CROSS_WARP
@@ -333,7 +349,7 @@ private:
     // Non-float types keep left fold (integer addition is associative,
     // so the reduction order does not affect the result).
     bool useLeftFold =
-        TRITON_INTEL_REDUCE_USE_LEFT_FOLD_THREAD_REDUCE &&
+        !ttgi::disableReduceLeftFold() &&
         !(isa<FloatType>(elemTy) && elemTy.getIntOrFloatBitWidth() >= 32);
 
     unsigned numOperands = accs.size();
