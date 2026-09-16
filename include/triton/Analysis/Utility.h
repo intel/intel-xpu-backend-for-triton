@@ -61,18 +61,9 @@ public:
 
   RankedTensorType getSrcTy() { return srcTy; }
 
-  bool isWarpSynchronous();
-
   unsigned getInterWarpSizeWithUniqueData();
 
   unsigned getIntraWarpSizeWithUniqueData();
-
-  // The shape of the shared memory space needed for the reduction.
-  SmallVector<unsigned> getScratchRepShape();
-
-  SmallVector<unsigned> getOrderWithAxisAtBeginning();
-
-  unsigned getScratchSizeInBytesOld();
 
   bool isReduceWithinCTA();
 
