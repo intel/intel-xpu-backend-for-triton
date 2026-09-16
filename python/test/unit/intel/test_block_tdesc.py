@@ -226,10 +226,6 @@ def _loop_carried_index_kernel(a_ptr, b_ptr, c_ptr, M, N, KA, BLOCK_M: tl.conste
     tl.store(c_ptr + offs_m[:, None] * BLOCK_N + offs_n[None, :], acc)
 
 
-# Both gates are needed and are not redundant: skipif covers a non-XPU backend, xfail covers an XPU
-# that lacks the capability (the test would genuinely fail there, not be inapplicable). is_xpu() is
-# evaluated twice because _has_2d_block_io needs it to stay collection-safe -- `.arch` is an int, not
-# a dict, on a CUDA target.
 # The odd arm's numeric result is expected to be wrong until the descriptor fallback is fixed:
 # refusing the 2D block message hands the load to a fallback that derives its vector width from the
 # descriptor's base and pitch divisibility and ignores the load-time index, so it issues a 128-bit
@@ -237,11 +233,6 @@ def _loop_carried_index_kernel(a_ptr, b_ptr, c_ptr, M, N, KA, BLOCK_M: tl.conste
 # pre-existing and unrelated to this gate -- this change touches only MaterializeBlockPointer.cpp,
 # so the lowering of a load main already refuses is byte-for-byte what main emits -- but it means
 # #7990's symptom survives this change on affected hardware.
-#
-# The expected failure is declared imperatively below rather than as an xfail mark, so that only the
-# numeric comparison is excused. The gate's own decision is a compile-time artifact the fallback
-# cannot affect, and is hard-asserted on both arms: a mark here would swallow a regression of the
-# very thing this PR fixes.
 @pytest.mark.parametrize("step", [2, 3])
 @pytest.mark.skipif(not is_xpu(), reason="Tensor descriptor block I/O is specific to the XPU backend")
 @pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)

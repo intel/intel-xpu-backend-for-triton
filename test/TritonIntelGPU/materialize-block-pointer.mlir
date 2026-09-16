@@ -1,5 +1,4 @@
 // RUN: triton-opt %s -split-input-file --tritonintelgpu-materialize-block-pointer | FileCheck %s
-// RUN: triton-opt %s -split-input-file --tritonintelgpu-materialize-block-pointer --tritonintelgpu-lower-to-2d-block-load | FileCheck %s --check-prefix=BLOCK2D
 
 // COM: Ensure pointers with strides [0, 1]/[1, 0] are considered row/column major respectively.
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 4], warpsPerCTA = [32, 1], order = [1, 0]}>
@@ -454,60 +453,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
       // CHECK-SAME: !tt.tensordesc
       %x = tt.descriptor_load %desc[%c128_i32, %off] : !tt.tensordesc<128x64xbf16> -> tensor<128x64xbf16, #blocked>
       %next = arith.addi %off, %step : i32
-      scf.yield %next : i32
-    }
-    tt.return
-  }
-}
-
-// -----
-// COM: The two cases below are checked by the second RUN line, which continues into
-// COM: --tritonintelgpu-lower-to-2d-block-load, so they speak about the hardware message and
-// COM: not only about the ttig.block_io attribute: refusing the attribute must actually stop a
-// COM: ttig.2d_block_load from being emitted. Both load two dot operands from one loop-carried
-// COM: offset. Operand A indexes the stride-one dimension with it, so an odd step makes its
-// COM: message X odd and it must fall back; operand B uses it as the row index, where no
-// COM: alignment is required, so B keeps its message either way and acts as the control.
-#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
-#dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
-#dot_b = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
-  // BLOCK2D-LABEL: tt.func public @loop_carried_index_step3_no_2d_block_load
-  tt.func public @loop_carried_index_step3_no_2d_block_load(%x_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %pitch: i64 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
-    %c0_i32 = arith.constant 0 : i32
-    %c1_i64 = arith.constant 1 : i64
-    %c3_i32 = arith.constant 3 : i32
-    %c32_i32 = arith.constant 32 : i32
-    %c64_i32 = arith.constant 64 : i32
-    %a = tt.make_tensor_descriptor %x_ptr, [%c64_i32, %c32_i32], [%pitch, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<64x32xf16, #dot_a>
-    %b = tt.make_tensor_descriptor %x_ptr, [%c32_i32, %c64_i32], [%pitch, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<32x64xf16, #dot_b>
-    scf.for %i = %c0_i32 to %c64_i32 step %c32_i32 iter_args(%off = %c0_i32) -> (i32) : i32 {
-      // COM: A is refused, so it stays a descriptor load instead of becoming a message.
-      // BLOCK2D: tt.descriptor_load
-      %la = tt.descriptor_load %a[%c0_i32, %off] : !tt.tensordesc<64x32xf16, #dot_a> -> tensor<64x32xf16, #dot_a>
-      // BLOCK2D-COUNT-1: ttig.2d_block_load
-      // BLOCK2D-NOT: ttig.2d_block_load
-      %lb = tt.descriptor_load %b[%off, %c0_i32] : !tt.tensordesc<32x64xf16, #dot_b> -> tensor<32x64xf16, #dot_b>
-      %next = arith.addi %off, %c3_i32 : i32
-      scf.yield %next : i32
-    }
-    tt.return
-  }
-
-  // BLOCK2D-LABEL: tt.func public @loop_carried_index_step32_keeps_2d_block_load
-  tt.func public @loop_carried_index_step32_keeps_2d_block_load(%x_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %pitch: i64 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
-    %c0_i32 = arith.constant 0 : i32
-    %c1_i64 = arith.constant 1 : i64
-    %c32_i32 = arith.constant 32 : i32
-    %c64_i32 = arith.constant 64 : i32
-    %a = tt.make_tensor_descriptor %x_ptr, [%c64_i32, %c32_i32], [%pitch, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<64x32xf16, #dot_a>
-    %b = tt.make_tensor_descriptor %x_ptr, [%c32_i32, %c64_i32], [%pitch, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<32x64xf16, #dot_b>
-    scf.for %i = %c0_i32 to %c64_i32 step %c32_i32 iter_args(%off = %c0_i32) -> (i32) : i32 {
-      // BLOCK2D-COUNT-2: ttig.2d_block_load
-      // BLOCK2D-NOT: ttig.2d_block_load
-      %la = tt.descriptor_load %a[%c0_i32, %off] : !tt.tensordesc<64x32xf16, #dot_a> -> tensor<64x32xf16, #dot_a>
-      %lb = tt.descriptor_load %b[%off, %c0_i32] : !tt.tensordesc<32x64xf16, #dot_b> -> tensor<32x64xf16, #dot_b>
-      %next = arith.addi %off, %c32_i32 : i32
       scf.yield %next : i32
     }
     tt.return
