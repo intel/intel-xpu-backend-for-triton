@@ -49,7 +49,7 @@ jobs:
   setup:
     name: Setup
     runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1100') || format('["linux", "{0}"]', inputs.runner_label)) }}
-    timeout-minutes: 180
+    timeout-minutes: 300
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
@@ -146,7 +146,7 @@ jobs:
           - vllm-tdesc
           - vllm-rest
     runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1100') || format('["linux", "{0}"]', inputs.runner_label)) }}
-    timeout-minutes: 240
+    timeout-minutes: 300
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
@@ -201,12 +201,12 @@ jobs:
           lts: ${{ inputs.runner_label == 'lts' }}
 
       - name: Identify torchvision pin
-        if: ${{ matrix.suite == 'vllm-mrv2' || matrix.suite == 'vllm-rest' }}
+        if: ${{ matrix.suite == 'vllm-spec-decode' || matrix.suite == 'vllm-mrv2' || matrix.suite == 'vllm-rest' }}
         run: |
           echo "TORCHVISION_COMMIT_ID=$(<pytorch/.github/ci_commit_pins/vision.txt)" | tee -a "$GITHUB_ENV"
 
       - name: Install torchvision package
-        if: ${{ matrix.suite == 'vllm-mrv2' || matrix.suite == 'vllm-rest' }}
+        if: ${{ matrix.suite == 'vllm-spec-decode' || matrix.suite == 'vllm-mrv2' || matrix.suite == 'vllm-rest' }}
         uses: ./.github/actions/install-dependency
         with:
           package: torchvision
