@@ -193,3 +193,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// COM: The descriptor comes from an scf.if whose two candidates disagree on
+// COM: padding (default PAD_ZERO vs PAD_NAN). DescriptorDefinitions::
+// COM: consistentPadding() returns nullopt, so the pass refuses the conversion
+// COM: even though block_io is present and every other constraint is met.
+// COM: @if_consistent_padding in descriptor-load.mlir is the positive twin --
+// COM: without it this case would also pass if the pass simply failed to trace
+// COM: through scf.if at all.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @if_divergent_padding
+  tt.func @if_divergent_padding(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: i32, %arg3: i32, %arg4: i64, %cond: i1) -> tensor<64x32xf16, #dot0> {
+    %c1_i64 = arith.constant 1 : i64
+    %c0_i32 = arith.constant 0 : i32
+    %desc = scf.if %cond -> (!tt.tensordesc<64x32xf16>) {
+      %d1 = tt.make_tensor_descriptor %arg0, [%arg2, %arg3], [%arg4, %c1_i64] : <f16>, <64x32xf16>
+      scf.yield %d1 : !tt.tensordesc<64x32xf16>
+    } else {
+      %d2 = tt.make_tensor_descriptor %arg1, [%arg2, %arg3], [%arg4, %c1_i64] {padding = 2 : i32} : <f16>, <64x32xf16>
+      scf.yield %d2 : !tt.tensordesc<64x32xf16>
+    }
+    // CHECK: tt.descriptor_load
+    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
+    tt.return %0 : tensor<64x32xf16, #dot0>
+  }
+}
