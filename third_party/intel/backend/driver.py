@@ -421,6 +421,13 @@ def get_hasher_common(is_lts: bool = False):
 def compile_module_from_src(src: str, name: str, is_lts: bool = False):
     hasher = get_hasher_common(is_lts).copy()
     hasher.update(src.encode("utf-8"))
+    # `spirv_utils` is compiled with `-DTRITON_INTEL_INJECT_PYTORCH=1` when
+    # `INJECT_PYTORCH=True` (see below), which wraps kernel launches in a
+    # `RECORD_FUNCTION` scope. That flag is not part of `src`, so without it in the key
+    # an uninstrumented .so cached by an earlier run (e.g. the unit tests, which never
+    # set `INJECT_PYTORCH`) is reused and the profiler scope silently disappears.
+    if name == "spirv_utils" and COMPILATION_HELPER.inject_pytorch_dep:
+        hasher.update("inject_pytorch=True".encode("utf-8"))
     key = hasher.hexdigest()
     cache = get_cache_manager(key)
     suffix = sysconfig.get_config_var("EXT_SUFFIX")
