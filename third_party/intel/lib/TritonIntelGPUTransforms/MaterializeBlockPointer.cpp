@@ -51,6 +51,8 @@ static bool isBlockIOForAllLayoutsExplicitlyDisabled() {
 // means the alignment is unknown; we trust the 16-byte make_tensor_descriptor
 // contract rather than reject the 2D block IO path. This silently miscompiles
 // if a caller breaks that contract, so the LDBG traces when we rely on it.
+// For values the contract says nothing about - the load/store index - use
+// isDescriptorIndexAligned instead, which refuses an unknown divisibility.
 static bool isDescriptorAligned(tt::intel::ModuleAxisInfoAnalysis &axisInfo,
                                 Value v, unsigned divisor) {
   if (matchPattern(v, m_Constant()))
@@ -64,6 +66,34 @@ static bool isDescriptorAligned(tt::intel::ModuleAxisInfoAnalysis &axisInfo,
     return true;
   }
   return div % divisor == 0;
+}
+
+// Check a descriptor's load/store-time index in the stride-one dimension.
+// Unlike isDescriptorAligned (base pointer / pitch), an unknown divisibility
+// must refuse here: make_tensor_descriptor makes no alignment promise about the
+// indices, so there is no contract to fall back on. ttgi::isDivisible alone is
+// unsound because tt::intel::getFinalValue resolves an scf.for iteration
+// argument to its init operand and never sees the yielded update, so an index
+// initialized to zero and advanced by an odd step is proved from the zero and
+// an odd offsetX reaches the 2D block message (issue #7990). Requiring the
+// dataflow analysis - which trusts tt.divisibility hints - to agree closes that
+// hole; being a conjunction it can only refuse more, never admit an index that
+// is rejected today. ttgi::isDivisible is kept rather than replaced because it
+// also refuses a nested-loop induction variable that the analysis would admit,
+// so dropping it would widen the gate; it is not kept for soundness.
+static bool
+isDescriptorIndexAligned(tt::intel::ModuleAxisInfoAnalysis &axisInfo, Value v,
+                         unsigned divisor) {
+  // Note for future callers: an unknown divisibility is reported as 1, so
+  // calling this with divisor == 1 degrades it to a no-op. That is the correct
+  // answer at that divisor - everything is 1-aligned - but it is not a check.
+  const tt::AxisInfo *info = axisInfo.getAxisInfo(v);
+  int64_t div = info ? info->getDivisibility(0) : 1;
+  if (div % divisor != 0) {
+    LDBG("Index " << v << " has divisibility " << div << ", need " << divisor);
+    return false;
+  }
+  return ttgi::isDivisible(tt::intel::getFinalValue(v), divisor);
 }
 
 struct TritonIntelGPUMaterializeBlockPointerPass
@@ -796,8 +826,9 @@ private:
         ttg::ConvertLayoutOp::create(builder, loc, storeValTy, valReshape);
 
     // Create the new 2D store.
-    auto newStore = tt::StoreOp::create(builder, loc, storePtr, storeVal,
-                                        op.getCache(), op.getEvict());
+    auto newStore =
+        tt::StoreOp::create(builder, loc, storePtr, storeVal, /*mask=*/Value(),
+                            op.getCachePolicyAttr(), op.getIgnoreCta());
 
     setBlockIOAttrs(newStore, ctx, info->S);
     copyNonBlockIOAttrs(op, newStore);
@@ -924,7 +955,7 @@ private:
 
     auto newLoad =
         tt::LoadOp::create(builder, loc, loadResultTy, loadPtr, mask2d, other2d,
-                           op.getCache(), op.getEvict(), op.getIsVolatile());
+                           op.getCachePolicyAttr(), op.getIsVolatile());
 
     // Set block IO attributes.
     setBlockIOAttrs(newLoad, ctx, info->S);
@@ -936,11 +967,19 @@ private:
     auto converted =
         ttg::ConvertLayoutOp::create(builder, loc, consumerResultTy, newLoad);
 
-    // Reshape back to 1D with original result type.
+    // Reshape back to 1D with original result type.  Deliberately *not* marked
+    // `efficient_layout`: that flag means "a pass computed this destination
+    // layout, do not undo the choice", but `origResultTy` is simply the
+    // encoding the original 1D load already had — nothing was computed here to
+    // protect. The flag would also be inert on a reshape without
+    // `allow_reorder`, whose result encoding the verifier pins to the relabel
+    // of its operand anyway. What keeps the 2D block load's HW-delivery
+    // encoding intact is `isExpensiveLoadOrStore` anchoring the load, not this
+    // reshape.
     auto origResultTy = cast<RankedTensorType>(op.getType());
     auto reshapeBack = tt::ReshapeOp::create(builder, loc, origResultTy,
                                              converted, /*allowReorder=*/false,
-                                             /*efficientLayout=*/true);
+                                             /*efficientLayout=*/false);
 
     LDBG("Created 2D block load with layout conversion: " << *newLoad);
 
@@ -998,8 +1037,13 @@ private:
 
     // Analyze the shape of the stride one dimension to ensure it satisfies HW
     // constraints.
+    // NOTE: this still proves the extent through getFinalValue and so carries
+    // the same init-only hole as the index check below did, for a descriptor
+    // rebuilt in a loop with a loop-carried extent, and only at element widths
+    // under 32 bits where the divisor exceeds 1. No in-tree kernel writes that
+    // shape, so it is left out of scope here rather than widened into this fix.
     Value baseWidth = tt::intel::getFinalValue(shape[strideOneDimVal]);
-    unsigned divisor = std::max(2u, llvm::divideCeil(32u, elementWidth));
+    unsigned divisor = llvm::divideCeil(32u, elementWidth);
     if (!ttgi::isDivisible(baseWidth, divisor)) {
       LLVM_DEBUG({
         llvm::dbgs() << "baseWidth does not satisfies HW constraint: ";
@@ -1012,8 +1056,8 @@ private:
 
     // Analyze the load/store-time index in the stride-one dimension to ensure
     // it satisfies HW constraints.
-    Value offset = tt::intel::getFinalValue(op.getIndices()[strideOneDimVal]);
-    if (!ttgi::isDivisible(offset, divisor)) {
+    Value offset = op.getIndices()[strideOneDimVal];
+    if (!isDescriptorIndexAligned(axisInfoAnalysis, offset, divisor)) {
       LLVM_DEBUG({
         llvm::dbgs() << "descriptor index does not satisfy HW constraints: ";
         offset.printAsOperand(llvm::dbgs(), {});

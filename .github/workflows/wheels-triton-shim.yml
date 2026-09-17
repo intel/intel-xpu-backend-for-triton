@@ -4,8 +4,8 @@ name: Triton shim wheels
 # *.whl.sigstore.json bundle in the triton-shim-dist artifact.
 #
 # Verify a downloaded shim wheel + bundle:
-#   cosign verify-blob triton-3.7.2+xpu-*.whl \
-#     --bundle triton-3.7.2+xpu-*.whl.sigstore.json \
+#   cosign verify-blob triton-3.8.0+xpu-*.whl \
+#     --bundle triton-3.8.0+xpu-*.whl.sigstore.json \
 #     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
 #     --certificate-identity-regexp \
 #       'https://github.com/intel/intel-xpu-backend-for-triton/.github/workflows/wheels-triton-shim.yml@.*'

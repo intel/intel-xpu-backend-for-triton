@@ -138,6 +138,19 @@ LogicalResult Subgroup2DBlockLoadOp::verify() {
            << (rank - 2) << " batch stride(s) for a rank-" << rank
            << " result, got " << getBatchStrides().size();
 
+  if (getBatchOffsets().size() != getBatchShapes().size())
+    return emitOpError("expected the same number of batch offsets and batch "
+                       "shapes, got ")
+           << getBatchOffsets().size() << " and " << getBatchShapes().size();
+
+  // A rank-reducing load drops leading descriptor dimensions from the result,
+  // so the descriptor has at least as many batch dimensions as the result.
+  if (getBatchOffsets().size() < getBatchStrides().size())
+    return emitOpError("expected at least ")
+           << getBatchStrides().size()
+           << " batch offset(s), one per descriptor batch dimension, got "
+           << getBatchOffsets().size();
+
   return success();
 }
 
