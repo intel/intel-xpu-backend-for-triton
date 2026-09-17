@@ -201,12 +201,12 @@ jobs:
           lts: ${{ inputs.runner_label == 'lts' }}
 
       - name: Identify torchvision pin
-        if: ${{ matrix.suite == 'vllm-mrv2' || matrix.suite == 'vllm-rest' }}
+        if: ${{ matrix.suite == 'vllm-spec-decode' || matrix.suite == 'vllm-mrv2' || matrix.suite == 'vllm-rest' }}
         run: |
           echo "TORCHVISION_COMMIT_ID=$(<pytorch/.github/ci_commit_pins/vision.txt)" | tee -a "$GITHUB_ENV"
 
       - name: Install torchvision package
-        if: ${{ matrix.suite == 'vllm-mrv2' || matrix.suite == 'vllm-rest' }}
+        if: ${{ matrix.suite == 'vllm-spec-decode' || matrix.suite == 'vllm-mrv2' || matrix.suite == 'vllm-rest' }}
         uses: ./.github/actions/install-dependency
         with:
           package: torchvision
