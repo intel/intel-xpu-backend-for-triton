@@ -247,25 +247,21 @@ struct LoadStoreConversionBase {
     assert(vec > 0 && "vec must be positive for Log2_32");
     vec = std::max(1u, 1u << llvm::Log2_32(vec));
 
-    // descAxisInfo describes the descriptor, not the address actually accessed:
-    // the index shifts the base by index * elemBytes on the stride-one
-    // dimension, so a `vec`-element access is naturally aligned only when the
-    // index is a multiple of `vec`. Without this, an odd 16-bit index leaves a
-    // 128-bit access at a 2-mod-4 address and it returns shifted data (#7990).
-    // Only descDim needs checking: on the other dimensions the shift is
-    // index * stride, and a stride too coarsely aligned to preserve the base's
-    // alignment has already lowered descDivisibility above.
-    if (descDim < indices.size()) {
-      AxisInfo *idxAxisInfo =
-          const_cast<triton::intel::ModuleAxisInfoAnalysis &>(axisAnalysisPass)
-              .getAxisInfo(indices[descDim]);
-      // Divisibility is a power of two, so vec stays one. An unknown index
-      // reports 1 (assume unaligned); a constant 0 reports kMaxDivisor.
-      vec = std::min<int64_t>(vec, idxAxisInfo ? idxAxisInfo->getDivisibility(0)
-                                               : 1);
-    }
-
-    return vec;
+    // The index shifts the base by index * elemBytes on the stride-one
+    // dimension, so a `vec`-element access is aligned only when index % vec ==
+    // 0 (#7990). Other dimensions are already covered: makeTensorDescAxisInfo
+    // folds their stride divisibility into descDivisibility. Both operands of
+    // the min are powers of two, so it is their gcd and needs no re-rounding.
+    AxisInfo *idxAxisInfo =
+        descDim < indices.size()
+            ? const_cast<triton::intel::ModuleAxisInfoAnalysis &>(
+                  axisAnalysisPass)
+                  .getAxisInfo(indices[descDim])
+            : nullptr;
+    // An unprovable or absent index is assumed unaligned; a constant 0 reports
+    // kMaxDivisor.
+    return std::min<int64_t>(vec,
+                             idxAxisInfo ? idxAxisInfo->getDivisibility(0) : 1);
   }
 
   std::tuple<SmallVector<Value>, SmallVector<Value>, SmallVector<Value>>

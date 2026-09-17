@@ -273,8 +273,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttig.sup
 
 // -----
 
-// COM: The gather fallback's vector width must follow the load index, not just the
-// COM: descriptor: an odd 16-bit index leaves a 128-bit access misaligned (#7990).
+// COM: Gather-fallback vector width must follow the access index, not just the descriptor (#7990).
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 4], warpsPerCTA = [8, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
@@ -302,6 +301,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %cols], [%stride, %c1_i64] : <f16>, <64x32xf16>
     // CHECK-COUNT-2: llvm.load {{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<4xi32>
     %v = tt.descriptor_load %desc[%c0_i32, %idx] : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #blocked>
+    tt.return
+  }
+
+  // COM: Store side; index 2 is divisible by 2 but not 8, so vec narrows 8 -> 2, not to a scalar.
+  // CHECK-LABEL: descriptor_store_index_narrows
+  tt.func public @descriptor_store_index_narrows(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}, %arg2: tensor<64x32xf16, #blocked>) {
+    %c0_i32 = arith.constant 0 : i32
+    %idx = arith.constant 2 : i32
+    %cols = arith.constant 64 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %stride = arith.constant 64 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %cols], [%stride, %c1_i64] : <f16>, <64x32xf16>
+    // CHECK-COUNT-8: llvm.store {{.*}} {alignment = 4 : i64} : i32, !llvm.ptr<1>
+    // CHECK-NOT: llvm.store {{.*}} : vector<4xi32>, !llvm.ptr<1>
+    tt.descriptor_store %desc[%c0_i32, %idx], %arg2 : !tt.tensordesc<64x32xf16>, tensor<64x32xf16, #blocked>
     tt.return
   }
 }
