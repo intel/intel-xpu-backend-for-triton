@@ -307,3 +307,148 @@ def test_descriptor_runtime_empty_collapsed_dim_pads(device, with_allocator):
     llir = kernel.asm["llir"]
     assert llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead') == 0, \
         "must stay on the generic path: the 2D path encodes a zero extent as 0 - 1"
+
+
+@triton.jit
+def _overlap_outer_kernel(a_ptr, out_ptr, batch, B: tl.constexpr, R: tl.constexpr, C: tl.constexpr, S0: tl.constexpr,
+                          BLOCK_R: tl.constexpr, BLOCK_C: tl.constexpr, PADDING: tl.constexpr):
+    desc = tl.make_tensor_descriptor(a_ptr, shape=[B, R, C], strides=[S0, C, 1], block_shape=[1, BLOCK_R, BLOCK_C],
+                                     padding_option=PADDING)
+    a = desc.load([batch, 0, 0]).reshape(BLOCK_R, BLOCK_C)
+    acc = tl.dot(a, _identity(BLOCK_C))
+    offs = tl.arange(0, BLOCK_R)[:, None] * BLOCK_C + tl.arange(0, BLOCK_C)[None, :]
+    tl.store(out_ptr + offs, acc)
+
+
+# `S0 < R * C` makes the slices overlap, so the stride ratio (16) is smaller than
+# the merged extent's own dimension (32): an out-of-range collapsed index merges
+# to 4*16 == 64, which sits *inside* the extent (B-1)*16 + 32 == 80 and read real
+# data. The rank-3 form pads the whole tile, so the fused form must too (#8070).
+#
+# `batch` is a runtime argument on purpose. A `tl.constexpr` would still catch the
+# wrong values - the guard folds to the extent, as @fuseGuardsOutOfRangeIndex-
+# OverlappingStrides shows - but it would not cover emitting the guard itself.
+@pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
+@pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
+def test_descriptor_overlapping_strides_out_of_range_outer_pads(device, with_allocator):
+    B, R, C, S0, BLOCK_R, BLOCK_C = 4, 32, 64, 1024, 32, 64
+
+    torch.manual_seed(42)
+    # Shifted away from zero so padding cannot be mistaken for real data, and
+    # sized past the pre-guard read (rows 64..95) so that read stays in-bounds.
+    a = torch.randn(8192, dtype=torch.float16, device=device) + 1.0
+    out = torch.full((BLOCK_R, BLOCK_C), -1.0, dtype=torch.float32, device=device)
+    kernel = _overlap_outer_kernel[(1, )](a, out, B, B, R, C, S0, BLOCK_R, BLOCK_C, "zero")
+
+    torch.testing.assert_close(out, torch.zeros_like(out))
+
+    assert f"!tt.tensordesc<1x{BLOCK_R}x{BLOCK_C}x" not in kernel.asm["ttir"], "not fused"
+    llir = kernel.asm["llir"]
+    assert llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead') > 0
+
+
+# The same, with `padding_option="nan"`: forcing the index out of range is only
+# correct if the padding *value* still comes from the descriptor. `test_block_io.
+# py::test_block_io_nd_out_of_bounds` covers the 2D path's NaN masks from
+# hand-written TTGIR; this reaches them through the fusion.
+@pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
+@pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
+def test_descriptor_out_of_range_collapsed_index_pads_nan(device, with_allocator):
+    B, R, C, S0, BLOCK_R, BLOCK_C = 4, 32, 64, 1024, 32, 64
+
+    torch.manual_seed(42)
+    a = torch.randn(8192, dtype=torch.float16, device=device) + 1.0
+    out = torch.full((BLOCK_R, BLOCK_C), -1.0, dtype=torch.float32, device=device)
+    kernel = _overlap_outer_kernel[(1, )](a, out, B, B, R, C, S0, BLOCK_R, BLOCK_C, "nan")
+
+    assert torch.isnan(out).all(), "padding must keep the descriptor's padding value"
+
+    assert f"!tt.tensordesc<1x{BLOCK_R}x{BLOCK_C}x" not in kernel.asm["ttir"], "not fused"
+    # Without this a gather would satisfy the check above and leave the NaN masks
+    # this test is here for untested.
+    llir = kernel.asm["llir"]
+    assert llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead') > 0
+
+
+# A *negative* collapsed index, exercising the guard's `sge` half - the
+# out-of-range cases above only reach the `slt` half. The base is offset into the
+# allocation so that the pre-guard backwards read stayed inside it.
+@pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
+@pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
+def test_descriptor_runtime_negative_collapsed_index_pads(device, with_allocator):
+    B, R, C, S0, BLOCK_R, BLOCK_C = 4, 32, 64, 1024, 32, 64
+
+    torch.manual_seed(42)
+    a = torch.randn(8192, dtype=torch.float16, device=device) + 1.0
+    out = torch.full((BLOCK_R, BLOCK_C), -1.0, dtype=torch.float32, device=device)
+    # S0 elements in: a multiple of 8 f16 elements, so the base stays 16-byte
+    # aligned as `make_tensor_descriptor` requires.
+    kernel = _overlap_outer_kernel[(1, )](a[S0:], out, -1, B, R, C, S0, BLOCK_R, BLOCK_C, "zero")
+
+    torch.testing.assert_close(out, torch.zeros_like(out))
+
+    assert f"!tt.tensordesc<1x{BLOCK_R}x{BLOCK_C}x" not in kernel.asm["ttir"], "not fused"
+
+
+# The guard's *true* branch: an emitted guard must still read the slice it was
+# asked for. Every other in-range case in the suite folds it away, so this is the
+# only one that would catch an inverted `inRange`.
+#
+# `BATCH` is 2, not 1: `specialize.cc` turns an integer argument equal to 1 into a
+# `constexpr`, which would fold the guard and make this a duplicate of the lit
+# case. The assertion on the emitted comparisons keeps that from creeping back.
+@pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
+@pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
+def test_descriptor_runtime_in_range_collapsed_index_reads_slice(device, with_allocator):
+    B, R, C, S0, BLOCK_R, BLOCK_C, BATCH = 4, 32, 64, 1024, 32, 64, 2
+
+    torch.manual_seed(42)
+    a = torch.randn(8192, dtype=torch.float16, device=device) + 1.0
+    out = torch.full((BLOCK_R, BLOCK_C), -1.0, dtype=torch.float32, device=device)
+    kernel = _overlap_outer_kernel[(1, )](a, out, BATCH, B, R, C, S0, BLOCK_R, BLOCK_C, "zero")
+
+    # `BLOCK_R == R` and `BLOCK_C == C`, so the slice is contiguous from `BATCH * S0`.
+    tile = a[BATCH * S0:BATCH * S0 + BLOCK_R * BLOCK_C].reshape(BLOCK_R, BLOCK_C)
+    torch.testing.assert_close(out, tile.to(torch.float32))
+
+    assert f"!tt.tensordesc<1x{BLOCK_R}x{BLOCK_C}x" not in kernel.asm["ttir"], "not fused"
+    ttir = kernel.asm["ttir"]
+    assert "arith.cmpi sge" in ttir and "arith.cmpi slt" in ttir, "guard folded away"
+    llir = kernel.asm["llir"]
+    assert llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead') > 0
+
+
+@triton.jit
+def _overlap_middle_kernel(a_ptr, out_ptr, head, TOKENS: tl.constexpr, HEADS: tl.constexpr, HEAD_DIM: tl.constexpr,
+                           S0: tl.constexpr, S1: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_D: tl.constexpr):
+    desc = tl.make_tensor_descriptor(a_ptr, shape=[TOKENS, HEADS, HEAD_DIM], strides=[S0, S1, 1],
+                                     block_shape=[BLOCK_M, 1, BLOCK_D])
+    a = desc.load([0, head, 0]).reshape(BLOCK_M, BLOCK_D)
+    acc = tl.dot(a, _identity(BLOCK_D))
+    offs = tl.arange(0, BLOCK_M)[:, None] * BLOCK_D + tl.arange(0, BLOCK_D)[None, :]
+    tl.store(out_ptr + offs, acc)
+
+
+# The middle-collapse counterpart: here the guarded index becomes surface *X*,
+# the one `satisfies2DBlockReadAlignment` queries, so this is the case whose
+# `block_io` depends on `isDivisible` seeing through the guard's `muli`/`addi`.
+# A failure here with the outer case passing localises that immediately.
+#
+# `S1 < HEAD_DIM` overlaps the heads, so head 4 merges to 4*64 == 256, inside the
+# extent 3*64 + 128 == 320. The pitch `S0` is promoted to the surface pitch, so
+# it has to cover that extent (320 * 2 bytes <= 512 * 2 bytes).
+@pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
+@pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
+def test_descriptor_overlapping_strides_out_of_range_middle_pads(device, with_allocator):
+    TOKENS, HEADS, HEAD_DIM, S0, S1, BLOCK_M, BLOCK_D = 64, 4, 128, 512, 64, 64, 64
+
+    torch.manual_seed(42)
+    a = torch.randn(TOKENS * S0, dtype=torch.float16, device=device) + 1.0
+    out = torch.full((BLOCK_M, BLOCK_D), -1.0, dtype=torch.float32, device=device)
+    kernel = _overlap_middle_kernel[(1, )](a, out, HEADS, TOKENS, HEADS, HEAD_DIM, S0, S1, BLOCK_M, BLOCK_D)
+
+    torch.testing.assert_close(out, torch.zeros_like(out))
+
+    assert f"!tt.tensordesc<{BLOCK_M}x1x{BLOCK_D}x" not in kernel.asm["ttir"], "not fused"
+    llir = kernel.asm["llir"]
+    assert llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead') > 0
