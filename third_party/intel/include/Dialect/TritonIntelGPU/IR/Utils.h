@@ -18,26 +18,6 @@
 
 namespace mlir::triton::gpu::intel {
 
-// FIXME: temporary A/B scaffolding for issue #6719 (delete the Intel-specific
-// ReduceOpToLLVM.cpp). Both knobs default to false, so an unset environment
-// reproduces today's behaviour exactly. Strip together with the Intel pattern.
-
-/// True if `tt.reduce` should be lowered by the common upstream pattern instead
-/// of the Intel one. Must be read by the pattern registration site *and* the
-/// scratch-allocation callback: the common lowering sizes shared memory with
-/// `ReduceOpHelper::getScratchSizeInBytes()`, and mixing the two allocators
-/// with the wrong lowering silently under-allocates.
-inline bool useCommonReduceLowering() {
-  return tools::getBoolEnv("TRITON_INTEL_REDUCE_USE_COMMON_LOWERING");
-}
-
-/// True if the within-thread combine should use upstream's tree reduction for
-/// *all* types. Inverted sense: unset keeps the left fold that #6667/#6914
-/// added for non-float and sub-32-bit-float reductions.
-inline bool disableReduceLeftFold() {
-  return tools::getBoolEnv("TRITON_INTEL_REDUCE_DISABLE_LEFT_FOLD");
-}
-
 /// Calculate the optimal number of elements per thread for a given operation
 /// along an axis with greatest continuity.
 inline unsigned getNumElementsPerThread(

@@ -28,14 +28,7 @@ config.substitutions.append(('%PATH%', config.environment['PATH']))
 config.substitutions.append(("%shlibdir", config.llvm_shlib_dir))
 config.substitutions.append(("%shlibext", config.llvm_shlib_ext))
 
-llvm_config.with_system_environment([
-    'HOME', 'INCLUDE', 'LIB', 'TMP', 'TEMP',
-    # FIXME: issue #6719 A/B scaffolding; strip before the PR. lit does not
-    # inherit the caller's environment, so without these the suite silently runs
-    # the default arm no matter what the shell exports.
-    'TRITON_INTEL_REDUCE_USE_COMMON_LOWERING',
-    'TRITON_INTEL_REDUCE_DISABLE_LEFT_FOLD',
-])
+llvm_config.with_system_environment(['HOME', 'INCLUDE', 'LIB', 'TMP', 'TEMP'])
 
 # llvm_config.use_default_substitutions()
 

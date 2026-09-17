@@ -64,25 +64,6 @@ public:
     assert(regLl ==
            ReduceOpHelper::reducedRegLaneLayout(helper.getSrcTy(), axis));
 
-    // FIXME: issue #6719 step-0 scaffolding; strip before the PR. Reports how
-    // often the cross-warp path would run. Prints both predicates because the
-    // common lowering branches on the layout, not on isWarpSynchronous().
-    // Uses ::getenv to avoid registering a throwaway name in GetEnv.h.
-    if (::getenv("TRITON_INTEL_REDUCE_DEBUG_COUNTS")) {
-      auto kAxisDbg = *(regLl.getOutDimNames().begin() + axis);
-      RankedTensorType srcTy = helper.getSrcTy();
-      llvm::errs() << "[reduce-6719] axis=" << axis << " srcTy=" << srcTy
-                   << " warpsPerCTA[axis]="
-                   << triton::gpu::getWarpsPerCTA(srcTy.getEncoding(),
-                                                  srcTy.getShape())[axis]
-                   << " isWarpSynchronous="
-                   << ttgi::isWarpSynchronous(helper, op)
-                   << " commonAxisSizeAfterWarpReduce="
-                   << regLl.getOutDimSize(kAxisDbg)
-                   << " isReduceWithinCTA=" << helper.isReduceWithinCTA()
-                   << "\n";
-    }
-
     // Step 3: reduce across warps.
     if (!helper.isReduceWithinCTA())
       return rewriter.notifyMatchFailure(op,

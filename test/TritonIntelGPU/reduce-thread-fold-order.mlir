@@ -1,15 +1,11 @@
 // RUN: triton-opt %s --split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s
-// RUN: env TRITON_INTEL_REDUCE_USE_COMMON_LOWERING=1 triton-opt %s --split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s
 
 // COM: Verify that f32 within-thread reduction uses tree reduction (parallel pairs)
 // COM: while f16 and integer types use left-fold (sequential accumulation) to
 // COM: preserve low-precision accuracy. See issue #6904 and PR #6667.
 // COM:
-// COM: The second RUN line lowers through the common upstream pattern instead of
-// COM: the Intel one (issue #6719). It shares this file's CHECK lines on purpose:
-// COM: the common lowering takes its association solely from
-// COM: TargetInfo::getReductionTreeArity, so passing under both RUN lines is what
-// COM: demonstrates the Intel arity override reproduces the forked fold order.
+// COM: The fold order comes solely from TargetInfo::getReductionTreeArity, so this
+// COM: file pins that hook rather than a predicate inlined in the lowering.
 
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32, ttig.min_sg_size = 32 : i32} {
