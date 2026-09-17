@@ -47,6 +47,7 @@
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Dialect/LLVMIR/Transforms/InlinerInterfaceImpl.h"
+#include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
 #include "mlir/InitAllPasses.h"
 
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
@@ -212,5 +213,5 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
       mlir::triton::proton::gpu::ProtonGPUDialect, mlir::ROCDL::ROCDLDialect,
       mlir::triton::gpu::intel::TritonIntelGPUDialect,
       mlir::triton::TritonGEN::TritonGENDialect,
-      mlir::triton::gluon::GluonDialect>();
+      mlir::triton::gluon::GluonDialect, mlir::spirv::SPIRVDialect>();
 }
