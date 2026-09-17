@@ -1,0 +1,51 @@
+diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
+index b0231dd0c0..e895b4ca0f 100644
+--- a/vllm/v1/attention/ops/triton_unified_attention.py
++++ b/vllm/v1/attention/ops/triton_unified_attention.py
+@@ -1043,13 +1043,9 @@ def unified_attention(
+     # 2. The batch includes at least one prefill request, or
+     # 3. The number of sequences exceeds the configured threshold, or
+     # 4. Batch invariance is enabled
++    seq_threshold_3D = 32
+     use_3d = not (
+-        seq_threshold_3D is None
+-        or num_par_softmax_segments is None
+-        or softmax_segm_output is None
+-        or softmax_segm_max is None
+-        or softmax_segm_expsum is None
+-        or max_seqlen_q > 1
++        max_seqlen_q > 1
+         or num_seqs > seq_threshold_3D
+         or is_batch_invariant
+     )
+@@ -1073,6 +1069,30 @@ def unified_attention(
+         v_scale_ptr = None
+     # 3D needs real segm tensors; 2D never touches them.  Pass ``None`` in
+     # 2D mode so Triton can skip materialising these pointer arguments.
++    if use_3d:
++        num_par_softmax_segments = 16
++        softmax_segm_output = torch.empty(
++            q.shape[0],
++            num_query_heads,
++            num_par_softmax_segments,
++            triton.next_power_of_2(head_size),
++            dtype=torch.float32,
++            device=q.device,
++        )
++        softmax_segm_max = torch.empty(
++            q.shape[0],
++            num_query_heads,
++            num_par_softmax_segments,
++            dtype=torch.float32,
++            device=q.device,
++        )
++        softmax_segm_expsum = torch.empty(
++            q.shape[0],
++            num_query_heads,
++            num_par_softmax_segments,
++            dtype=torch.float32,
++            device=q.device,
++        )
+     segm_output_ptr = softmax_segm_output if use_3d else None
+     segm_max_ptr = softmax_segm_max if use_3d else None
+     segm_expsum_ptr = softmax_segm_expsum if use_3d else None
