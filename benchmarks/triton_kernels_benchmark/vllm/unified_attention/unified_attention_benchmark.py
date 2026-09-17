@@ -269,14 +269,19 @@ def get_unified_attention_benchmark(
     providers_filter: Optional[list[str]] = None,
     is_fp8=False,
     is_td_patched=False,
+    provider_label='',
 ):
+    # ``provider_label`` (e.g. a patch name from run_benchmark.sh sweeping the
+    # incremental patch series) makes the triton provider and plot name unique
+    # per patch so separate runs don't collide. Empty keeps the original names.
+    triton_provider = ('triton' + ('-td' if is_td_patched else '') + (f'-{provider_label}' if provider_label else ''))
     supported_providers = {
-        'triton' + ('-td' if is_td_patched else ''): 'triton' + ('-td' if is_td_patched else ''),
+        triton_provider: triton_provider,
         'pytorch': 'pytorch',
     }
     if os.getenv("TRITON_INTERPRET", "0") == "1" and is_td_patched:
-        # Skip triton providers if interpreter is used because if fails
-        del supported_providers['triton']
+        # Skip triton providers if interpreter is used because it fails
+        supported_providers.pop(triton_provider, None)
 
     if not is_fp8:
         supported_providers['sycl-tla'] = 'sycl-tla'
@@ -296,7 +301,8 @@ def get_unified_attention_benchmark(
             line_names=list(providers.values()),
             styles=[('green', '-'), ('blue', '--'), ('orange', ':')],
             ylabel=['GB/s', 'TFlops'],
-            plot_name='unified-attention-performance' + ('-fp8' if is_fp8 else '') + ('-td' if is_td_patched else ''),
+            plot_name=('unified-attention-performance' + ('-fp8' if is_fp8 else '') + ('-td' if is_td_patched else '') +
+                       (f'-{provider_label}' if provider_label else '')),
             args={},
         ))
     def benchmark(q_heads, k_heads, head_size, qdtype, seq_lens, sliding_window, soft_cap, num_blocks, block_size,
@@ -472,17 +478,21 @@ def get_unified_attention_benchmark(
     return benchmark
 
 
-def get_benchmark(providers_filter: Optional[list[str]] = None, is_fp8=False, is_td_patched=None):
+def get_benchmark(providers_filter: Optional[list[str]] = None, is_fp8=False, is_td_patched=None, provider_label=None):
     if is_td_patched is None:
         is_td_patched = os.getenv('TD_PATCHED', '0') == '1'
+    if provider_label is None:
+        provider_label = os.getenv('PROVIDER_LABEL', '')
     return get_unified_attention_benchmark(
         providers_filter=providers_filter,
         is_fp8=is_fp8,
         is_td_patched=is_td_patched,
+        provider_label=provider_label,
     )
 
 
 if __name__ == '__main__':
     is_td_patched = os.getenv('TD_PATCHED', '0') == '1'
-    _benchmark_attention = get_unified_attention_benchmark(is_fp8=IS_FP8, is_td_patched=is_td_patched)
+    _benchmark_attention = get_unified_attention_benchmark(is_fp8=IS_FP8, is_td_patched=is_td_patched,
+                                                           provider_label=os.getenv('PROVIDER_LABEL', ''))
     _benchmark_attention.run(show_plots=False, print_data=True)

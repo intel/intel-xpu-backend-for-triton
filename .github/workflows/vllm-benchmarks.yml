@@ -53,7 +53,7 @@ jobs:
     runs-on:
       - linux
       - ${{ inputs.runner_label || 'b580' }}
-    timeout-minutes: 720
+    timeout-minutes: 1080
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"

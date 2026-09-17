@@ -42,11 +42,27 @@ def parse_csv(csv_file_path, tag, bench_group, benchmark, param_cols):
 
     df['params'] = df.apply(serialize_params, axis=1)
 
-    compilers = ['pytorch', 'triton', 'triton-td', 'sycl-tla']
+    metrics = ['TFlops', 'GB/s', 'time_us']
+
+    # Base providers, plus any per-patch labelled variants that extend a base name,
+    # e.g. 'triton-td-2-tile-size' emitted when run_benchmark.sh sweeps an incremental
+    # patch series. Metric columns are named '<compiler>-<metric>'; the -min/-max/-CV
+    # variants carry an extra suffix and are intentionally not treated as compilers.
+    # Restricting discovery to names that extend a base provider keeps every other
+    # benchmark's captured provider set unchanged (they only use the base names).
+    base_compilers = ['pytorch', 'triton', 'triton-td', 'sycl-tla']
+    compilers = list(base_compilers)
+    for col in df.columns:
+        for value_name in metrics:
+            if col.endswith(f'-{value_name}'):
+                name = col[:-(len(value_name) + 1)]
+                if name and name not in compilers and any(name.startswith(f'{b}-') for b in base_compilers):
+                    compilers.append(name)
+                break
 
     dfs = []
     for compiler_name in compilers:
-        for value_name in ['TFlops', 'GB/s', 'time_us']:
+        for value_name in metrics:
             col = f'{compiler_name}-{value_name}'
             if col not in df.columns:
                 continue

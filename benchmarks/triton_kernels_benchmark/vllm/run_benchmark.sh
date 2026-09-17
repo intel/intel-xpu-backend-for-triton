@@ -5,8 +5,20 @@
 #   bash run_benchmark.sh BENCHMARK_FOLDER [extra args passed to benchmark script...]
 #
 # BENCHMARK_FOLDER must contain:
-#   NAME.patch          - patch to apply to the vllm checkout
 #   NAME_benchmark.py   - benchmark script (NAME = basename of BENCHMARK_FOLDER)
+#   and either:
+#     NAME.patch        - single patch: run baseline (TD off) then patched (TD on), or
+#     N-*.patch files   - an incremental patch series: each patch is swept as its own
+#                         provider (see "Patch-series sweep" below).
+#
+# Patch-series sweep (folders containing N-*.patch files, e.g. unified_attention):
+#   Each numbered patch is applied on its own and benchmarked as a distinct provider,
+#   labelled by the patch basename (PROVIDER_LABEL) so runs don't collide. Patches
+#   0 and 1 are the baselines and run in both tensor-descriptor modes (use_td=False
+#   and use_td=True); every other patch runs with tensor descriptors on (use_td=True).
+#   The reference NAME.patch is never applied. The pytorch/sycl-tla providers do not
+#   depend on the patched kernel, so they are benchmarked once up front and each
+#   per-patch run selects only its own triton provider (no redundant re-timing).
 #
 # Environment variables forwarded to the benchmark script:
 #   FP8=1         - enable FP8 configurations
@@ -36,7 +48,6 @@ if [ "${FP8:-0}" = "1" ]; then
     esac
 fi
 
-# Ensure patch is not already applied before baseline
 cd "$VLLM_DIR"
 
 # The moe benchmarks import vLLM's source-tree test helpers (`from tests.kernels...`),
@@ -44,22 +55,101 @@ cd "$VLLM_DIR"
 # so those imports resolve when the benchmark runs from the installed CLI wheel.
 export PYTHONPATH="$VLLM_DIR${PYTHONPATH:+:$PYTHONPATH}"
 
-if git apply --reverse --check "$PATCH_FILE" 2>/dev/null; then
-    echo "=== Reverting previously applied patch ==="
+# Collect the incremental patch series (N-*.patch), numerically sorted. Excludes the
+# reference NAME.patch, which never starts with a digit.
+mapfile -t SERIES_PATCHES < <(find "$BENCHMARK_DIR" -maxdepth 1 -name '[0-9]*-*.patch' -printf '%f\n' | sort -V)
+
+# ---------------------------------------------------------------------------
+# Single-patch mode (no numbered series): baseline then patched, as before.
+# ---------------------------------------------------------------------------
+if [ "${#SERIES_PATCHES[@]}" -eq 0 ]; then
+    if git apply --reverse --check "$PATCH_FILE" 2>/dev/null; then
+        echo "=== Reverting previously applied patch ==="
+        git apply -R "$PATCH_FILE"
+    fi
+
+    echo "=== Running benchmark WITHOUT patch ==="
+    TD_PATCHED=0 triton-benchmarks run "$KEY" "$@"
+
+    echo ""
+    echo "=== Applying patch ==="
+    git apply "$PATCH_FILE"
+
+    echo ""
+    echo "=== Running benchmark WITH tensor descriptor patch ==="
+    TD_PATCHED=1 triton-benchmarks run "$KEY" "$@"
+
+    echo ""
+    echo "=== Reverting patch ==="
     git apply -R "$PATCH_FILE"
+    exit 0
 fi
 
-echo "=== Running benchmark WITHOUT patch ==="
-TD_PATCHED=0 triton-benchmarks run "$KEY" "$@"
+# ---------------------------------------------------------------------------
+# Patch-series sweep: one provider per patch (baselines 0 and 1 get both TD modes).
+# ---------------------------------------------------------------------------
 
-echo ""
-echo "=== Applying patch ==="
-git apply "$PATCH_FILE"
+# Revert whatever patch is currently applied (best effort) so the tree is clean on exit.
+CURRENT_PATCH=""
+cleanup() {
+    if [ -n "$CURRENT_PATCH" ] && git apply -R --check "$CURRENT_PATCH" 2>/dev/null; then
+        echo "=== Reverting $(basename "$CURRENT_PATCH") ==="
+        git apply -R "$CURRENT_PATCH"
+    fi
+    CURRENT_PATCH=""
+}
+trap cleanup EXIT
 
-echo ""
-echo "=== Running benchmark WITH tensor descriptor patch ==="
-TD_PATCHED=1 triton-benchmarks run "$KEY" "$@"
+# Start from a clean tree: undo any series patch left applied by a previous run.
+for f in "${SERIES_PATCHES[@]}"; do
+    if git apply -R --check "$BENCHMARK_DIR/$f" 2>/dev/null; then
+        echo "=== Reverting previously applied $f ==="
+        git apply -R "$BENCHMARK_DIR/$f"
+    fi
+done
 
+# The pytorch and sycl-tla providers don't use the (patched) triton kernel, so their
+# results are identical for every patch. Benchmark them once on the clean tree; the
+# per-patch runs below select only their own triton provider via --provider.
+REF_PROVIDERS=(--provider pytorch)
+ref_desc="pytorch"
+if [ "${FP8:-0}" != "1" ]; then
+    REF_PROVIDERS+=(--provider sycl-tla)
+    ref_desc="$ref_desc, sycl-tla"
+fi
 echo ""
-echo "=== Reverting patch ==="
-git apply -R "$PATCH_FILE"
+echo "=== Running reference providers once ($ref_desc) ==="
+TD_PATCHED=0 triton-benchmarks run "$KEY" "${REF_PROVIDERS[@]}" "$@"
+
+for f in "${SERIES_PATCHES[@]}"; do
+    label="${f%.patch}"          # provider label, e.g. 0-no-non-pass
+    num="${label%%-*}"           # leading patch number
+
+    # Baselines 0 and 1 run both TD modes; every other patch runs with TD on only.
+    if [ "$num" = "0" ] || [ "$num" = "1" ]; then
+        td_modes=(0 1)
+    else
+        td_modes=(1)
+    fi
+
+    echo ""
+    echo "=== Applying $f ==="
+    CURRENT_PATCH="$BENCHMARK_DIR/$f"
+    git apply "$CURRENT_PATCH"
+
+    for td in "${td_modes[@]}"; do
+        # Provider name must match the key built in the benchmark:
+        # triton[-td]-<label>. Select only it so pytorch/sycl-tla aren't re-timed.
+        prov="triton"
+        [ "$td" = "1" ] && prov="triton-td"
+        prov="$prov-$label"
+        echo ""
+        echo "=== Running $prov (TD_PATCHED=$td) ==="
+        TD_PATCHED="$td" PROVIDER_LABEL="$label" triton-benchmarks run "$KEY" --provider "$prov" "$@"
+    done
+
+    echo ""
+    echo "=== Reverting $f ==="
+    git apply -R "$CURRENT_PATCH"
+    CURRENT_PATCH=""
+done
