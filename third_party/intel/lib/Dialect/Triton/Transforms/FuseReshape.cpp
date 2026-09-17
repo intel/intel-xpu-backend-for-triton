@@ -571,8 +571,9 @@ private:
 
     // If both fold, the remainder is exact at any magnitude, so answer here
     // rather than narrowing the denominator to `unsigned` below. Both are
-    // required positive: the caller declines non-positive strides, and a
-    // negative operand would make `%` implementation-defined in sign.
+    // required positive because this models the emitted `divui`, for which a
+    // negative operand is a large unsigned value that a signed `%` does not
+    // answer for (the caller already declines non-positive strides).
     std::optional<int64_t> numCst =
         tt::intel::getFoldedConstantValue(numerator);
     std::optional<int64_t> denCst =
