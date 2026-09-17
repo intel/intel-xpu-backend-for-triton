@@ -141,18 +141,15 @@ private:
 
     // Find all MakeTensorDescOps that could define this descriptor.
     Value desc = op.getDesc();
-    SmallVector<tt::MakeTensorDescOp> allDescs =
-        tt::intel::findAllMakeTensorDescOps(desc);
-    if (allDescs.empty()) {
+    tt::intel::DescriptorDefinitions defs =
+        tt::intel::findDescriptorDefinitions(desc);
+    if (defs.empty()) {
       LDBG("Could not find MakeTensorDescOp for: " << *op);
       return;
     }
 
-    // All candidates must have the same padding.
-    tt::PaddingOption padding = allDescs[0].getPadding();
-    if (!llvm::all_of(allDescs, [&](tt::MakeTensorDescOp d) {
-          return d.getPadding() == padding;
-        })) {
+    std::optional<tt::PaddingOption> padding = defs.consistentPadding();
+    if (!padding) {
       LDBG("Inconsistent padding across descriptor candidates for: " << *op);
       return;
     }
@@ -273,7 +270,7 @@ private:
     constexpr int64_t kMax2DBlockField = int64_t(1) << 24;
     int64_t elemBytesConst = elemSizeInBits / 8;
     auto wouldOverflow = [&](unsigned operandIdx) {
-      return llvm::any_of(allDescs, [&](tt::MakeTensorDescOp d) {
+      return llvm::any_of(defs, [&](tt::MakeTensorDescOp d) {
         auto folded =
             tt::intel::getFoldedConstantValue(d->getOperand(operandIdx));
         return folded && *folded * elemBytesConst > kMax2DBlockField;
@@ -322,7 +319,7 @@ private:
     }
 
     // Determine padding mode from the descriptor.
-    bool padNan = padding == tt::PaddingOption::PAD_NAN;
+    bool padNan = *padding == tt::PaddingOption::PAD_NAN;
     UnitAttr padNanAttr = padNan ? builder.getUnitAttr() : UnitAttr();
 
     auto blockLoadOp = ttgi::Subgroup2DBlockLoadOp::create(

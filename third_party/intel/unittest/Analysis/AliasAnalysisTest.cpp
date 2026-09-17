@@ -465,7 +465,7 @@ TEST_F(AliasAnalysisTest, DescriptorLoadAndRawLoadSameBase) {
 TEST_F(AliasAnalysisTest, DescriptorLoadThroughSCFForIterArg) {
   // When a descriptor flows through scf.for iter_args, the
   // tt.descriptor_load's getDesc() is a block argument, not a direct
-  // MakeTensorDescOp result. findAllMakeTensorDescOps must trace through the
+  // MakeTensorDescOp result. findMakeTensorDescOp must trace through the
   // iter_arg back to the original descriptor so the op is not dropped and
   // its base pointer is resolved correctly.
   OwningOpRef<ModuleOp> module = createModule();

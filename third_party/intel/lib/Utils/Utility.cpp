@@ -7,9 +7,11 @@
 #include "mlir/Interfaces/LoopLikeInterface.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include <optional>
+#include <type_traits>
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -220,7 +222,7 @@ void eraseOperations(SmallPtrSetImpl<Operation *> &operations) {
   }
 }
 
-SmallVector<tt::MakeTensorDescOp> findAllMakeTensorDescOps(Value val) {
+static SmallVector<tt::MakeTensorDescOp> findAllMakeTensorDescOps(Value val) {
   llvm::SmallSetVector<tt::MakeTensorDescOp, 4> results;
   SmallPtrSet<Value, 8> visited;
   SmallVector<Value, 8> worklist;
@@ -320,6 +322,40 @@ std::optional<tt::MakeTensorDescOp> findMakeTensorDescOp(Value val) {
   if (all.size() == 1)
     return all[0];
   return std::nullopt;
+}
+
+DescriptorDefinitions findDescriptorDefinitions(Value val) {
+  return DescriptorDefinitions(findAllMakeTensorDescOps(val));
+}
+
+// The value `get` returns for every candidate, or nullopt if they disagree.
+template <typename Getter>
+static auto consistentValue(ArrayRef<tt::MakeTensorDescOp> ops, Getter get)
+    -> std::optional<std::decay_t<decltype(get(ops.front()))>> {
+  if (ops.empty())
+    return std::nullopt;
+  auto first = get(ops.front());
+  if (!llvm::all_of(ops.drop_front(),
+                    [&](tt::MakeTensorDescOp d) { return get(d) == first; }))
+    return std::nullopt;
+  return first;
+}
+
+std::optional<tt::PaddingOption>
+DescriptorDefinitions::consistentPadding() const {
+  return consistentValue(ops,
+                         [](tt::MakeTensorDescOp d) { return d.getPadding(); });
+}
+
+std::optional<Operation::operand_range>
+DescriptorDefinitions::consistentShape() const {
+  return consistentValue(ops,
+                         [](tt::MakeTensorDescOp d) { return d.getShape(); });
+}
+
+bool DescriptorDefinitions::allSatisfy(
+    llvm::function_ref<bool(tt::MakeTensorDescOp)> pred) const {
+  return !ops.empty() && llvm::all_of(ops, pred);
 }
 
 } // namespace mlir::triton::intel

@@ -1101,7 +1101,7 @@ static bool descArgFeedsOnlyLoadStore(Value descArg) {
 /// Pre-pass: For public FuncOps with TensorDescType-typed arguments that feed
 /// only DescriptorLoad/Store, expand the function signature and insert a
 /// synthetic MakeTensorDescOp. This makes the descriptor traceable by
-/// findAllMakeTensorDescOps() and enables the 2D block I/O fast path for
+/// findDescriptorDefinitions() and enables the 2D block I/O fast path for
 /// host-side tensor descriptors.
 static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
   moduleOp->walk([](triton::FuncOp funcOp) {
@@ -1323,7 +1323,7 @@ class TritonRewriteTensorDescriptorToPointerPass
 
     // Pre-pass: Synthesize MakeTensorDescOps for host-side tensor descriptor
     // function arguments. This enables the 2D block I/O fast path by making
-    // descriptors traceable via findAllMakeTensorDescOps().
+    // descriptors traceable via findDescriptorDefinitions().
     synthesizeDescriptorsFromFuncArgs(op);
 
     // Pre-pass: Rewrite contiguous DescriptorGatherOps/DescriptorScatterOps to
@@ -1363,12 +1363,13 @@ class TritonRewriteTensorDescriptorToPointerPass
           .Case<triton::DescriptorLoadOp, triton::DescriptorStoreOp>(
               [&](auto op) {
                 for (auto d :
-                     triton::intel::findAllMakeTensorDescOps(op.getDesc()))
+                     triton::intel::findDescriptorDefinitions(op.getDesc()))
                   candidateMakeTensorDescOps.insert(d);
               })
           .Case<triton::DescriptorGatherOp, triton::DescriptorScatterOp,
                 triton::DescriptorReduceOp>([&](auto op) {
-            for (auto d : triton::intel::findAllMakeTensorDescOps(op.getDesc()))
+            for (auto d :
+                 triton::intel::findDescriptorDefinitions(op.getDesc()))
               unhandledMakeTensorDescOps.insert(d);
           })
           .Default([](auto) {});
@@ -1392,12 +1393,12 @@ class TritonRewriteTensorDescriptorToPointerPass
             for (Value operand : op->getOperands()) {
               if (!isa<triton::TensorDescType>(operand.getType()))
                 continue;
-              auto allDescs = triton::intel::findAllMakeTensorDescOps(operand);
-              if (allDescs.empty())
-                return false;
-              if (!llvm::all_of(allDescs, [&](auto d) {
-                    return candidateMakeTensorDescOps.contains(d);
-                  }))
+              // allSatisfy is false for an empty trace, which is what we want:
+              // an untraceable descriptor is not a candidate.
+              if (!triton::intel::findDescriptorDefinitions(operand).allSatisfy(
+                      [&](auto d) {
+                        return candidateMakeTensorDescOps.contains(d);
+                      }))
                 return false;
             }
             return true;
