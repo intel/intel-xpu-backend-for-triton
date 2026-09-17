@@ -138,24 +138,58 @@ public:
   /// getPerThreadSizeInBytes(w.getType())`.
   unsigned liveInContribution(Block *block, Value value) const;
 
+  /// For "default"/"auto" GRF mode, the actual GRF size the compiler will
+  /// pick is not known at the point these budget helpers run. Which bound is
+  /// safe to assume depends on how the *caller* uses the budget, so callers
+  /// must choose explicitly rather than relying on a shared default:
+  ///
+  ///   - A caller that treats the budget as a ceiling on how much it may add
+  ///     (e.g. HoistLayoutConversions, deciding how much it may safely hoist)
+  ///     wants `Smallest`: underestimating the true GRF size keeps the
+  ///     caller safely inside the real (possibly larger) limit.
+  ///   - A caller that treats the budget as a threshold whose crossing
+  ///     triggers a transform (e.g. ReduceVariableLiveness, deciding whether
+  ///     pressure is high enough to justify sinking a load) wants `Largest`:
+  ///     underestimating the true GRF size would trigger the transform more
+  ///     often than the real (possibly larger) budget actually warrants.
+  ///
+  /// There is deliberately no default value for this parameter: a new
+  /// caller must consciously pick one rather than silently inheriting
+  /// whichever direction happened to suit an earlier caller.
+  enum class UnknownGRFSizeAssumption {
+    /// Assume the smallest GRF size the device supports (128-register mode).
+    Smallest,
+    /// Assume the largest GRF size the device supports.
+    ///
+    /// FIXME(#8074): this is currently 512-register mode unconditionally,
+    /// but the backend only ever selects 512-register mode on "cri"; every
+    /// other target (including BMG and PVC) caps at 256-register mode (see
+    /// third_party/intel/backend/compiler.py's GRF retry logic). This should
+    /// be the true per-target largest size, not a hardcoded constant.
+    Largest,
+  };
+
   /// Returns the per-hardware-thread GRF budget in bytes for the given GRF
   /// mode (one hardware thread executes a whole subgroup/warp of lanes sharing
   /// one register file).
   ///
   /// Explicit sizes ("128", "256", "512") map to the exact per-hardware-thread
-  /// budget. For "default" and "auto" the compiler chooses the GRF size at JIT
-  /// time, so this function conservatively returns the smallest (128-register)
-  /// budget to avoid exceeding the hardware limit on configurations that
-  /// ultimately compile with fewer registers.
-  static unsigned getGRFBytesPerHardwareThread(StringRef grfMode);
+  /// budget, ignoring `unknownAssumption`. For "default" and "auto", returns
+  /// the smallest or largest GRF size per `unknownAssumption` (see its
+  /// documentation for which one a given caller needs).
+  static unsigned
+  getGRFBytesPerHardwareThread(StringRef grfMode,
+                               UnknownGRFSizeAssumption unknownAssumption);
 
-  /// Returns `getGRFBytesPerHardwareThread(grfMode) / threads-per-warp`: the
-  /// per-lane figure to compare against this analysis's (per-lane) output.
-  /// When the module's ttg.threads-per-warp attribute is absent,
-  /// getThreadsPerWarp returns 32 as a default, so the budget is divided by 32
-  /// (128 bytes/lane at default GRF mode) rather than the DPAS-typical 16
-  /// (256 bytes/lane).
-  static unsigned getPerLaneGRFBudgetInBytes(StringRef grfMode, ModuleOp mod);
+  /// Returns `getGRFBytesPerHardwareThread(grfMode, unknownAssumption) /
+  /// threads-per-warp`: the per-lane figure to compare against this
+  /// analysis's (per-lane) output. When the module's ttg.threads-per-warp
+  /// attribute is absent, getThreadsPerWarp returns 32 as a default, so the
+  /// budget is divided by 32 (128 bytes/lane at default GRF mode, smallest
+  /// assumption) rather than the DPAS-typical 16 (256 bytes/lane).
+  static unsigned
+  getPerLaneGRFBudgetInBytes(StringRef grfMode, ModuleOp mod,
+                             UnknownGRFSizeAssumption unknownAssumption);
 
   /// Returns the per-thread size in bytes for the given type.
   ///

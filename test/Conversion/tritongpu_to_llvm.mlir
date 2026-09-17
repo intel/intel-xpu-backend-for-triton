@@ -3324,6 +3324,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: llvm.func internal @call_smem_leaf(
+  // CHECK-SAME: ws_num_warps = 4 : i32
   tt.func private @call_smem_leaf() attributes {noinline = true} {
     %inner = ttg.local_alloc : () -> !ttg.memdesc<16xi32, #shared, #smem, mutable>
     ttg.local_dealloc %inner : !ttg.memdesc<16xi32, #shared, #smem, mutable>
@@ -3505,6 +3506,35 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.prof
 
 // -----
 
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 1, 1], instrShape = [1, 8, 8]}>
+#a = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>
+#b = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
+  // FP64 fragments already have the MMA register order, including across batches.
+  // CHECK-LABEL: llvm.func @mma_fp64_large_k_batched(
+  // CHECK-DAG: %[[A0:.*]] = llvm.extractvalue %arg0[0]
+  // CHECK-DAG: %[[A8:.*]] = llvm.extractvalue %arg0[8]
+  // CHECK-DAG: %[[AC0:.*]] = llvm.bitcast %[[A0]] : f64 to f64
+  // CHECK-DAG: %[[AC8:.*]] = llvm.bitcast %[[A8]] : f64 to f64
+  // CHECK-DAG: %[[AV0:.*]] = llvm.insertelement %[[AC0]], {{.*}} : vector<1xf64>
+  // CHECK-DAG: %[[AV8:.*]] = llvm.insertelement %[[AC8]], {{.*}} : vector<1xf64>
+  // CHECK-DAG: %[[B0:.*]] = llvm.extractvalue %arg1[0]
+  // CHECK-DAG: %[[B8:.*]] = llvm.extractvalue %arg1[8]
+  // CHECK-DAG: %[[BC0:.*]] = llvm.bitcast %[[B0]] : f64 to f64
+  // CHECK-DAG: %[[BC8:.*]] = llvm.bitcast %[[B8]] : f64 to f64
+  // CHECK-DAG: %[[BV0:.*]] = llvm.insertelement %[[BC0]], {{.*}} : vector<1xf64>
+  // CHECK-DAG: %[[BV8:.*]] = llvm.insertelement %[[BC8]], {{.*}} : vector<1xf64>
+  // CHECK: llvm.inline_asm{{.*}}mma.sync.aligned.m8n8k4{{.*}}%[[BV0]], %[[AV0]] :
+  // CHECK: llvm.inline_asm{{.*}}mma.sync.aligned.m8n8k4{{.*}}%[[BV8]], %[[AV8]] :
+  tt.func @mma_fp64_large_k_batched(%a: tensor<2x16x16xf64, #a>, %b: tensor<2x16x16xf64, #b>) {
+    %c = arith.constant dense<0.0> : tensor<2x16x16xf64, #mma>
+    %d = tt.dot %a, %b, %c : tensor<2x16x16xf64, #a> * tensor<2x16x16xf64, #b> -> tensor<2x16x16xf64, #mma>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
@@ -3527,6 +3557,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     ttg.inline_asm "bar.sync 0;" {constraints = "", pure = false} : () -> ()
     // CHECK-NOT: llvm.inline_asm
     // CHECK: llvm.return
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+  // A one-warp caller must issue both 16x64 messages from its outlined helper.
+  // CHECK-LABEL: llvm.func internal @outlined_single_warp_tma
+  // CHECK-SAME: ws_num_warps = 1 : i32
+  // CHECK-COUNT-2: cp.async.bulk.tensor.2d.shared::cta.global.mbarrier::complete_tx::bytes
+  // CHECK-NOT: cp.async.bulk.tensor
+  // CHECK: llvm.return
+  tt.func private @outlined_single_warp_tma(%desc: !tt.tensordesc<16x128xf16, #shared>, %dst: !ttg.memdesc<16x128xf16, #shared, #smem, mutable>, %bar: !ttg.memdesc<1xi64, #barrier, #smem, mutable>, %x: i32, %pred: i1) attributes {noinline = true, "ttg.num-warps" = 1 : i32} {
+    ttng.async_tma_copy_global_to_local %desc[%x, %x] %dst, %bar, %pred : !tt.tensordesc<16x128xf16, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<16x128xf16, #shared, #smem, mutable>
     tt.return
   }
 }

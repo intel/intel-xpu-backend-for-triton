@@ -507,6 +507,9 @@ Fp16_to_Fp8E4M3B15(Location loc, ConversionPatternRewriter &rewriter,
 // the fallback is the i32 domain: `lshr i32, 1` + `and 0x3FFF3FFF` +
 // `and 0x80008000` + `or`. That is 8 ops instead of 6 and was verified
 // bit-identical on all 256 bytes.
+//
+// Not used on LTS drivers, where it triggers an IGC compile-time blowup; see
+// Fp8E4M3Nv_to_Fp16Int below and the dispatch in getConversionFunc().
 static SmallVector<Value> Fp8E4M3Nv_to_Fp16(Location loc,
                                             ConversionPatternRewriter &rewriter,
                                             const SmallVector<Value> &v) {
@@ -554,6 +557,108 @@ static SmallVector<Value> Fp8E4M3Nv_to_Fp16(Location loc,
 
   return {b.extract_element(f16_ty, h, b.i32_val(0)),
           b.extract_element(f16_ty, h, b.i32_val(1))};
+}
+
+// Fp8E4M3 -> Fp16 (packed), integer domain. Used only on LTS drivers.
+//
+// 11 ops against the 6 of Fp8E4M3Nv_to_Fp16 above, and slower at runtime
+// (~1.7x on fp8 GEMMs), but it is what LTS can compile in reasonable time.
+// The LTS IGC (2.11) runs a LoopSink pass whose cost model treats the other
+// sequence -- short, straight-line, unpredicated float arithmetic -- as free
+// to rematerialize, and clones it ~6x inside the already-unrolled loop body.
+// On a 128x128 fp8 GEMM tile that is 22s of ocloc time and 1882 spill slots
+// against 4.7s and 840. The `icmp`/`select` pair below is what makes this
+// version ineligible or unprofitable to sink, so it is left alone. Newer IGC
+// does not mispredict this, hence the gate rather than a blanket switch.
+// See https://github.com/intel/intel-xpu-backend-for-triton/issues/8046.
+//
+// A single multiplication by 256.0 (= 2^8) re-biases BOTH the normal and the
+// subnormal paths in one shot, so no predicate is needed for the rebias:
+//   After stripping the sign and computing `(byte & 0x7F) << 7`, the fp8
+//   byte's exponent (4 bits) lands at fp16 bit positions 10-13 (still
+//   bias-7), and the fp8 mantissa (3 bits) lands at fp16 bit positions 7-9
+//   (top 3 bits of the fp16 mantissa, low 7 bits zero).
+//   * Normal path (fp8 exp != 0): the bit pattern is a normal fp16 with
+//     exponent = fp8 exp (bias-7) and mantissa = mmm * 128, i.e. the value
+//     (1 + mmm/8) * 2^(e-15). Multiplying by 2^8 increments the biased
+//     exponent by 8 -> (1 + mmm/8) * 2^(e-7), exactly the fp8-defined value.
+//   * Subnormal path (fp8 exp == 0): the bit pattern is an fp16 subnormal
+//     with significand mmm * 128, i.e. mmm * 2^(-17). Multiplying by 2^8
+//     yields mmm * 2^(-9), exactly the fp8 subnormal value.
+// Being an exact power of two, the multiply is exact for every input, so
+// unlike the oneDNN sequence this converter does not depend on RNE.
+//
+// NaN: reserved bytes 0x7F/0xFF decode to fp16 0x7E00 with the sign
+// preserved, matching the AMD and NVIDIA software converters. This differs
+// from Fp8E4M3Nv_to_Fp16, which yields the hardware default quiet NaN with
+// the sign discarded -- both are NaN, and the payload is unspecified.
+static SmallVector<Value>
+Fp8E4M3Nv_to_Fp16Int(Location loc, ConversionPatternRewriter &rewriter,
+                     const SmallVector<Value> &v) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+  // Pack two i8 inputs into byte positions 1 and 3 of an i32. Bytes 0 and 2
+  // are zero, which is what keeps the shifts below lane-independent.
+  auto fp8x4VecTy = vec_ty(i8_ty, 4);
+  Value pack4 = b.undef(fp8x4VecTy);
+  pack4 = b.insert_element(fp8x4VecTy, pack4, b.int_val(8, 0), b.i32_val(0));
+  pack4 = b.insert_element(fp8x4VecTy, pack4, v[0], b.i32_val(1));
+  pack4 = b.insert_element(fp8x4VecTy, pack4, b.int_val(8, 0), b.i32_val(2));
+  pack4 = b.insert_element(fp8x4VecTy, pack4, v[1], b.i32_val(3));
+  Value packi32 = b.bitcast(pack4, i32_ty);
+
+  // Move bytes from positions 1,3 to positions 0,2 (so each fp8 byte sits at
+  // the bottom of its 16-bit lane).
+  Value shifted = b.lshr(i32_ty, packi32, b.i32_val(8));
+
+  // Strip both signs in parallel.
+  Value stripped = b.and_(i32_ty, shifted, b.i32_val(0x007F007F));
+
+  // Align fp8 exp+mantissa into fp16 layout: exp at fp16 bits 10-13 (still
+  // bias-7), mantissa at fp16 bits 7-9.
+  Value aligned = b.shl(i32_ty, stripped, b.i32_val(7));
+
+  // Reinterpret as <2 x half> and re-bias by multiplying by 256.0.
+  auto fp16x2VecTy = vec_ty(f16_ty, 2);
+  Value hIn = b.bitcast(aligned, fp16x2VecTy);
+  Value mul256 = b.undef(fp16x2VecTy);
+  Value c256 = b.f16_val(256.0f);
+  mul256 = b.insert_element(fp16x2VecTy, mul256, c256, b.i32_val(0));
+  mul256 = b.insert_element(fp16x2VecTy, mul256, c256, b.i32_val(1));
+  Value hOut = b.fmul(hIn, mul256);
+
+  // OR the sign bits back in (i32 positions 15 and 31, which is exactly
+  // where the fp16 sign bits go).
+  Value iOut = b.bitcast(hOut, i32_ty);
+  Value signs = b.and_(i32_ty, packi32, b.i32_val(0x80008000));
+  Value iSigned = b.or_(i32_ty, iOut, signs);
+
+  // NaN fixup: a reserved fp8 byte (abs == 0x7F) must produce fp16 NaN
+  // (0x7E00), not +-480.0. Check both 16-bit lanes in the packed i32 domain;
+  // `stripped` holds abs(byte0) in bits [6:0] and abs(byte1) in bits [22:16].
+  Value isNan0 = b.icmp_eq(b.and_(i32_ty, stripped, b.i32_val(0x0000007F)),
+                           b.i32_val(0x0000007F));
+  Value isNan1 = b.icmp_eq(b.and_(i32_ty, stripped, b.i32_val(0x007F0000)),
+                           b.i32_val(0x007F0000));
+  // fp16 0x7E00 with the lane's sign bit OR-ed in.
+  Value nan0 = b.or_(i32_ty, b.i32_val(0x00007E00),
+                     b.and_(i32_ty, signs, b.i32_val(0x00008000)));
+  Value nan1 = b.or_(i32_ty, b.i32_val(0x7E000000),
+                     b.and_(i32_ty, signs, b.i32_val(0x80000000)));
+  // Splice nan0 into the low 16-bit lane of iSigned when lane 0 is NaN.
+  iSigned = b.select(
+      isNan0,
+      b.or_(i32_ty, b.and_(i32_ty, iSigned, b.i32_val(0xFFFF0000)), nan0),
+      iSigned);
+  // Splice nan1 into the high 16-bit lane of iSigned when lane 1 is NaN.
+  iSigned = b.select(
+      isNan1,
+      b.or_(i32_ty, b.and_(i32_ty, iSigned, b.i32_val(0x0000FFFF)), nan1),
+      iSigned);
+
+  Value result = b.bitcast(iSigned, fp16x2VecTy);
+  return {b.extract_element(f16_ty, result, b.i32_val(0)),
+          b.extract_element(f16_ty, result, b.i32_val(1))};
 }
 
 // Fp16 -> Fp8E4M3 (packed)
@@ -1033,6 +1138,8 @@ constexpr const auto SUPPORT_F8_CONV =
     triton::gpu::intel::TritonIntelGPUDialect::getSupportF8ConversionAttrName;
 constexpr const auto SUPPORT_BF16_ARITH = triton::gpu::intel::
     TritonIntelGPUDialect::getSupportBFloat16ArithmeticAttrName;
+constexpr const auto IS_LTS =
+    triton::gpu::intel::TritonIntelGPUDialect::getIsLTSAttrName;
 constexpr const char BUILTIN_HFTOHF8[] =
     "__builtin_spirv_ClampConvertFP16ToE4M3INTEL";
 constexpr const char BUILTIN_HFTOBF8[] =
@@ -1306,6 +1413,23 @@ struct FpToFpOpConversion
     std::tuple<TypeID, TypeID, RoundingMode> key = {
         srcTy.getTypeID(), dstTy.getTypeID(),
         roundingMode.value_or(undefRounding)};
+
+    // fp8e4m3 -> fp16 has three implementations rather than the two a
+    // ConverterSelector holds: the hardware builtin where available, and
+    // otherwise one of two software sequences chosen by driver. See
+    // Fp8E4M3Nv_to_Fp16Int for why LTS needs the integer-domain one.
+    //
+    // FIXME: drop this early return and Fp8E4M3Nv_to_Fp16Int once the LTS
+    // driver line picks up an IGC that no longer mispredicts the oneDNN
+    // sequence -- the rolling driver (1.17.39395+13) already does not -- so
+    // every target gets the faster sequence (~1.7x at runtime on fp8 GEMMs).
+    // Worth re-checking whenever the LTS driver pin is bumped.
+    if (srcTy.getTypeID() == F8E4M3TyID && dstTy.getTypeID() == F16TyID &&
+        !HasAttr<SUPPORT_F8_CONV>(op) && HasAttr<IS_LTS>(op)) {
+      static Converter c{Fp8E4M3Nv_to_Fp16Int, 2};
+      return c;
+    }
+
     if (auto it = srcMap.find(key); it != srcMap.end()) {
       auto &c = it->second;
       return c.predicate(op) ? c.converterA : c.converterB;

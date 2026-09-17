@@ -43,7 +43,7 @@ jobs:
       !contains(github.event.pull_request.labels.*.name, 'pvc-only')
     uses: ./.github/workflows/vllm-tests-reusable.yml
     with:
-      runner_label: b580
+      runner_label: b60
       skip_list: xe2
     secrets: inherit
 
@@ -125,14 +125,4 @@ jobs:
     uses: ./.github/workflows/sglang-benchmarks.yml
     with:
       runner_label: b580
-    secrets: inherit
-
-  sglang-benchmarks-pvc:
-    needs: [select-benchmark-platforms, build-wheel]
-    if: >-
-      contains(github.event.pull_request.labels.*.name, 'run-sglang-benchmarks') &&
-      needs.select-benchmark-platforms.outputs.run-pvc-benchmarks == 'true'
-    uses: ./.github/workflows/sglang-benchmarks.yml
-    with:
-      runner_label: max1550
     secrets: inherit

@@ -69,6 +69,8 @@ void init_triton_intel_passes_ttir(py::module_ &&m) {
   ADD_PASS_WRAPPER_0("add_descriptor_versioning",
                      intel::createTritonIntelDescriptorVersioning);
   ADD_PASS_WRAPPER_0("add_fuse_reshape", intel::createTritonIntelFuseReshape);
+  ADD_PASS_WRAPPER_0("add_optimize_load_masks",
+                     intel::createTritonIntelOptimizeLoadMasks);
   ADD_PASS_WRAPPER_0("add_simplify_signed_arithmetic",
                      intel::createTritonIntelSimplifySignedArithmetic);
   ADD_PASS_WRAPPER_0("add_speculate_signed_div_rem",
@@ -168,8 +170,9 @@ void init_triton_intel_passes_ttgpuir(py::module_ &&m) {
                      gpu::intel::createTritonIntelGPUOptimizeReductionLocality);
   ADD_PASS_WRAPPER_0("add_lower_to_2d_block_load",
                      gpu::intel::createTritonIntelGPULowerTo2DBlockLoad);
-  ADD_PASS_WRAPPER_0("add_reduce_variable_liveness",
-                     gpu::intel::createTritonIntelGPUReduceVariableLiveness);
+  ADD_PASS_OPTION_WRAPPER_1(
+      "add_reduce_variable_liveness",
+      gpu::intel::createTritonIntelGPUReduceVariableLiveness, std::string);
   ADD_PASS_WRAPPER_0("add_loop_distribute",
                      gpu::intel::createTritonIntelGPULoopDistribute);
   ADD_PASS_WRAPPER_0("add_code_sinking",

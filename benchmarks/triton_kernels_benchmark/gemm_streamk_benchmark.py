@@ -5,12 +5,16 @@ Stream K is a approach that aims to resovle quantization inefficiency in GPU wor
 This script implements a Stream K GEMM with tensor descriptors to achieve better hardware utilization.
 """
 
+from typing import List
+
 import torch
 import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
-from triton_kernels_benchmark import sycl_tla_kernel
+from triton_kernels_benchmark.benchmark_testing import DEVICE, get_xpu_extension
+
+sycl_tla_kernel = get_xpu_extension('sycl_tla_kernel')
 
 
 # pylint: disable=unused-argument
@@ -93,12 +97,26 @@ def mac_loop(
         tl.atomic_add(c_ptr_, acc, mask=mask, sem='relaxed')
 
 
-@triton.autotune(
-    configs=[
+def get_autotune_configs() -> List[triton.Config]:
+    if DEVICE == 'cuda':
+        return [
+            triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4},
+                          num_stages=3, num_warps=8),
+        ]
+    return [
         triton.Config(
             {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '256'},
             num_stages=2, num_warps=32),
-    ],
+    ]
+
+
+# Stream-K splits the work on the host, so the tile math in `matmul` has to use the same block sizes as
+# the kernels. Autotuning over several configs would desynchronize the two, hence the single config.
+BLOCK_SIZES = get_autotune_configs()[0].kwargs
+
+
+@triton.autotune(
+    configs=get_autotune_configs(),
     key=['M', 'N', 'K'],
     restore_value=['c_ptr'],
 )
@@ -131,11 +149,7 @@ def first_wave(
 
 
 @triton.autotune(
-    configs=[
-        triton.Config(
-            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'grf_mode': '256'},
-            num_stages=2, num_warps=32),
-    ],
+    configs=get_autotune_configs(),
     key=['M', 'N', 'K'],
     restore_value=['c_ptr'],
 )
@@ -188,13 +202,15 @@ def full_tiles(
 
 
 def matmul(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor):
-    num_xe_core = torch.xpu.get_device_capability(0)['gpu_subslice_count']
+    if DEVICE == 'xpu':
+        num_xe_core = torch.xpu.get_device_capability(0)['gpu_subslice_count']
+    else:
+        num_xe_core = torch.cuda.get_device_properties(0).multi_processor_count
     streamk_programs = num_xe_core
 
-    # TODO: use autotune config instread of hardcoding
-    BLOCK_SIZE_M = 256
-    BLOCK_SIZE_N = 256
-    BLOCK_SIZE_K = 32
+    BLOCK_SIZE_M = BLOCK_SIZES['BLOCK_SIZE_M']
+    BLOCK_SIZE_N = BLOCK_SIZES['BLOCK_SIZE_N']
+    BLOCK_SIZE_K = BLOCK_SIZES['BLOCK_SIZE_K']
 
     # Check constraints.
     assert a.shape[1] == b.shape[0], 'Incompatible dimensions'
@@ -246,9 +262,9 @@ def matmul(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor):
         line_arg='provider',
         # argument name whose value corresponds to a different line in the plot
         # possible values for `line_arg``
-        line_vals=['triton', 'onednn', 'sycl-tla'],
+        line_vals=['triton', 'onednn'] + (['sycl-tla'] if sycl_tla_kernel is not None else []),
         # label name for the lines
-        line_names=['Triton', 'OneDNN', 'SYCL-TLA'],
+        line_names=['Triton', 'OneDNN'] + (['SYCL-TLA'] if sycl_tla_kernel is not None else []),
         # line styles
         styles=[('green', '-'), ('green', '--'), ('blue', '-')],
         ylabel=['GB/s', 'TFlops'],  # label name for the y-axis
@@ -260,8 +276,8 @@ def benchmark(M, N, K, provider):
     # n_warmup set to maximum across providers: onednn=10, triton=1000, sycl-tla=100
     do_bench = benchmark_suite.get_do_bench(n_warmup=1000, n_repeat=10, quantiles=[0.5, 0.0, 1.0])
     torch.manual_seed(0)
-    a = torch.rand((M, K), device='xpu', dtype=torch.bfloat16)
-    b = torch.rand((K, N), device='xpu', dtype=torch.bfloat16)
+    a = torch.rand((M, K), device=DEVICE, dtype=torch.bfloat16)
+    b = torch.rand((K, N), device=DEVICE, dtype=torch.bfloat16)
 
     if provider == 'onednn':
         _, min_ms, max_ms, mean_ms, cv = do_bench(lambda: torch.matmul(a, b))
@@ -273,7 +289,7 @@ def benchmark(M, N, K, provider):
         _, min_ms, max_ms, mean_ms, cv = do_bench(triton_fn)
     elif provider == 'sycl-tla':
         # NOTE: SYCL-TLA doesn't have a stream-k matmul op
-        c = torch.zeros((M, N), device='xpu', dtype=torch.float32)
+        c = torch.zeros((M, N), device=DEVICE, dtype=torch.float32)
         func = getattr(sycl_tla_kernel, 'gemm')
         sycl_tla_fn = lambda: (func(a, b, c, M, N, K, 1), c)[1]
         torch_fn = lambda: torch.matmul(a, b).to(torch.float32)

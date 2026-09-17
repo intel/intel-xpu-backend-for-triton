@@ -3335,6 +3335,13 @@ struct TritonGPUInferLayoutInterface
       // Verify that the operands are supported on the selected MMA version.
       if (!supportMMA(dotOp, mmaResEncoding.getVersionMajor()))
         return op->emitError("unsupported MMA version");
+      // MMAv2 distributes K over four lanes, each owning kWidth contiguous
+      // elements. A smaller K repeats elements across lanes, which a static
+      // register permutation cannot resolve.
+      auto aType = cast<RankedTensorType>(dotOp.getA().getType());
+      if (mmaResEncoding.isAmpere() &&
+          getShapePerCTA(aType).back() < 4 * aEncoding.getKWidth())
+        return op->emitError("MMA operand layout requires K >= 4 * kWidth");
     }
 
     return verifyWmmaCGACompatibility(op, aEncoding, bEncoding,
@@ -4513,6 +4520,10 @@ std::optional<int> triton::gpu::maybeLookupNumWarps(Operation *op) {
     unsigned idx = op->getParentRegion()->getRegionNumber();
     return partitions.getParentOp().getPartitionNumWarps()[idx];
   }
+  // Function conversion preserves an outlined helper's warp count here.
+  if (isa<FunctionOpInterface>(op))
+    if (auto attr = op->getAttrOfType<IntegerAttr>("ws_num_warps"))
+      return attr.getInt();
   if (Operation *parent = op->getParentOp())
     return maybeLookupNumWarps(parent);
   return {};

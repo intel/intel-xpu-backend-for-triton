@@ -34,23 +34,28 @@ unsigned RegisterPressureAnalysis::getPerThreadSizeInBytes(Type type) {
   return 0;
 }
 
-unsigned
-RegisterPressureAnalysis::getGRFBytesPerHardwareThread(StringRef grfMode) {
+unsigned RegisterPressureAnalysis::getGRFBytesPerHardwareThread(
+    StringRef grfMode, UnknownGRFSizeAssumption unknownAssumption) {
   // Explicit GRF modes map to exact per-hardware-thread budgets (one hardware
   // thread executes a whole subgroup/warp of lanes sharing one register file).
-  // For "default" and "auto", conservatively assume 128-register mode (4096
-  // bytes) to avoid exceeding hardware limits when the compiler ultimately
-  // chooses a smaller configuration.
-  return llvm::StringSwitch<unsigned>(grfMode)
-      .Case("128", 4096)
-      .Case("256", 8192)
-      .Case("512", 16384)
-      .Default(4096);
+  if (grfMode == "128")
+    return 4096;
+  if (grfMode == "256")
+    return 8192;
+  if (grfMode == "512")
+    return 16384;
+  // "default" and "auto": the compiler chooses the GRF size at JIT time, so
+  // the true value isn't known here. Which bound is safe depends on the
+  // caller; see UnknownGRFSizeAssumption's documentation.
+  //
+  // FIXME(#8074): Largest's 16384 is not per-target; see the enum's doc.
+  return unknownAssumption == UnknownGRFSizeAssumption::Smallest ? 4096 : 16384;
 }
 
-unsigned RegisterPressureAnalysis::getPerLaneGRFBudgetInBytes(StringRef grfMode,
-                                                              ModuleOp mod) {
-  unsigned grfBudget = getGRFBytesPerHardwareThread(grfMode);
+unsigned RegisterPressureAnalysis::getPerLaneGRFBudgetInBytes(
+    StringRef grfMode, ModuleOp mod,
+    UnknownGRFSizeAssumption unknownAssumption) {
+  unsigned grfBudget = getGRFBytesPerHardwareThread(grfMode, unknownAssumption);
   int threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(mod);
   return grfBudget / static_cast<unsigned>(threadsPerWarp);
 }

@@ -1,4 +1,5 @@
 import re
+import shutil
 
 import pytest
 import torch
@@ -10,6 +11,7 @@ import pathlib
 from triton.runtime.driver import driver
 from triton._internal_testing import is_xpu_cri
 from triton.backends.intel import extension_utils
+from triton.backends.intel.driver import find_sycl_icpx
 from triton.runtime.errors import IntelGPUError, OutOfResources
 
 
@@ -104,6 +106,65 @@ def test_n_spills_zero_without_spills(device):
     y = torch.empty(1, dtype=torch.float32, device=device)
     kernel = _tiny[(1, )](x, y)
     assert kernel.n_spills == 0
+
+
+@pytest.fixture
+def no_icpx(monkeypatch):
+    """Hide `icpx`, which `find_sycl_icpx` checks first and would return early on."""
+    real_which = shutil.which
+    monkeypatch.setattr(shutil, "which", lambda cmd, *args, **kwargs: None
+                        if cmd == "icpx" else real_which(cmd, *args, **kwargs))
+
+
+@pytest.mark.parametrize("layout, warns", [("no_compiler", False), ("header_only", True), ("lib_only", True)])
+def test_find_sycl_skips_oneapi_root(monkeypatch, no_icpx, recwarn, tmp_path: pathlib.Path, layout, warns):
+    """`ONEAPI_ROOT` is used only when a SYCL install is really under it.
+
+    Every oneAPI component's `setvars.sh` sets `ONEAPI_ROOT`, so it does not mean a compiler is
+    installed. Using it anyway hid a working `intel-sycl-rt` and broke the next build with
+    `fatal error: sycl/sycl.hpp: No such file or directory`.
+    See https://github.com/intel/intel-xpu-backend-for-triton/issues/7977.
+
+    A root with no `compiler` directory is just a component install, so it is skipped quietly. Half
+    an install is worth a warning: the header and the library directory are always used together,
+    and with only the header the build reaches the link step and fails with `cannot find -lsycl`.
+    """
+    compiler_root = tmp_path / "compiler" / "latest"
+    if layout == "no_compiler":
+        (tmp_path / "dummy_component").mkdir()  # some other component, but no compiler
+    elif layout == "header_only":
+        (compiler_root / "include" / "sycl").mkdir(parents=True)
+        (compiler_root / "include" / "sycl" / "sycl.hpp").touch()
+    else:
+        (compiler_root / "lib").mkdir(parents=True)
+    monkeypatch.setenv("ONEAPI_ROOT", str(tmp_path))
+
+    include_dir, sycl_dirs = find_sycl_icpx([])
+
+    # Check the leak first: it is the real bug, and it gives the clearer failure message.
+    assert not any(str(tmp_path) in d for d in include_dir + sycl_dirs), \
+        f"rejected ONEAPI_ROOT leaked into the compiler flags: {include_dir + sycl_dirs}"
+    warned = [str(w.message) for w in recwarn]
+    if warns:
+        assert any("does not provide SYCL" in m for m in warned), f"half an install was skipped silently: {warned}"
+    else:
+        assert not warned, f"unexpected warnings: {warned}"
+
+
+def test_find_sycl_uses_oneapi_root(monkeypatch, no_icpx, recwarn, tmp_path: pathlib.Path):
+    """A `ONEAPI_ROOT` with a full SYCL install is still used, ahead of the wheel."""
+    compiler_root = tmp_path / "compiler" / "latest"
+    (compiler_root / "include" / "sycl").mkdir(parents=True)
+    (compiler_root / "include" / "sycl" / "sycl.hpp").touch()
+    (compiler_root / "lib").mkdir()
+    monkeypatch.setenv("ONEAPI_ROOT", str(tmp_path))
+
+    include_dir, sycl_dirs = find_sycl_icpx([])
+
+    assert sycl_dirs == [str(compiler_root / "lib")]
+    assert str(compiler_root / "include") in include_dir
+    assert str(compiler_root / "include" / "sycl") in include_dir
+    assert not [str(w.message) for w in recwarn], f"unexpected warnings: {[str(w.message) for w in recwarn]}"
 
 
 def test_get_properties_error(device):
