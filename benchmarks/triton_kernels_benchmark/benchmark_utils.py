@@ -17,6 +17,7 @@ from triton_kernels_benchmark.benchmark_testing import (
     BenchmarkConfig,
     BenchmarkConfigRunResult,
     BenchmarkCategory,
+    DEVICE,
     MarkArgs,
 )
 from triton_kernels_benchmark.benchmark_shapes_parser import ShapePatternParser
@@ -392,7 +393,8 @@ class BenchmarkConfigs(MarkArgs):
 def main():
     configs = BenchmarkConfigs.from_args()
     configs.run()
-    if configs.collect_only:
+    # The C++ extensions are built with the oneAPI compiler and are XPU-only
+    if configs.collect_only and DEVICE == "xpu":
         validate_cpp_extensions()
 
 

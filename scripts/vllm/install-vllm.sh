@@ -59,7 +59,21 @@ check_installed_package() {
 show_installs() {
   echo "*** Installed versions: ***"
   echo "vllm: $(pip show vllm | awk '/^Version:/ {print $2}')."
-  echo "vllm-xpu-kernels: $(pip show vllm-xpu-kernels | awk '/^Version:/ {print $2}')."
+  if [[ "$target_device" == xpu ]]; then
+    echo "vllm-xpu-kernels: $(pip show vllm-xpu-kernels | awk '/^Version:/ {print $2}')."
+  fi
+}
+
+# Print the device the installation should target: `xpu` or `cuda`.
+detect_target_device() {
+  local device
+  device="$(python -c '
+import torch
+
+print("cuda" if not torch.xpu.is_available() and torch.cuda.is_available() else "xpu")
+' 2>/dev/null)" || device=""
+
+  echo "${device:-xpu}"
 }
 
 update_submodules_and_clean() {
@@ -127,17 +141,36 @@ install_vllm() {
     exit 1
   fi
 
+  local requirements="$VLLM_PROJ/requirements/xpu.txt"
+  local -a xpu_only_deletions=(-e '/^pytest-shard/d' -e '/^vllm[_-]xpu[_-]kernels/d' -e '/^xgrammar/d')
+  if [[ "$target_device" == cuda ]]; then
+    requirements="$VLLM_PROJ/requirements/common.txt"
+    xpu_only_deletions=()
+  fi
+
   sed -i \
-    -e '/^pytest-shard/d' \
     -e '/^torch/d' \
     -e '/^triton/d' \
-    -e '/^vllm[_-]xpu[_-]kernels/d' \
-    -e '/^xgrammar/d' \
     -e '/^--extra-index-url.*https:\/\/download\.pytorch\.org\/whl/d' \
-    "$VLLM_PROJ/requirements/xpu.txt"
-  pip install -r "$VLLM_PROJ/requirements/xpu.txt"
+    "${xpu_only_deletions[@]}" \
+    "$requirements"
+  pip install -r "$requirements"
 
-  VLLM_TARGET_DEVICE=xpu pip install --no-deps --no-build-isolation -e "$VLLM_PROJ"
+  if [[ "$target_device" == cuda ]]; then
+    # On CUDA add needed build requirements and remove torch to keep installed torch version.
+    local build_requirements="$VLLM_PROJ/requirements/build/cuda.txt"
+    sed -i -e '/^torch/d' "$build_requirements"
+    pip install -r "$build_requirements"
+  fi
+
+  (
+    export VLLM_TARGET_DEVICE="$target_device"
+    if [[ "$target_device" == cuda ]]; then
+      export VLLM_USE_PRECOMPILED=1
+    fi
+
+    pip install --no-deps --no-build-isolation -e "$VLLM_PROJ"
+  )
 }
 
 cd "$ROOT"
@@ -229,6 +262,11 @@ Options:
 
   --help                         Show this help message and exit.
 
+Environment variables:
+  VLLM_TARGET_DEVICE            Device to install for: xpu (default when an XPU is present) or
+                                cuda. On cuda, vllm-xpu-kernels and the XPU test patcher are
+                                skipped and vLLM is always installed from source.
+
 Examples:
   ./install-vllm.sh --source
   ./install-vllm.sh --prepare-source
@@ -250,6 +288,9 @@ if [[ "$use_venv" == true ]]; then
   source .venv/bin/activate
 fi
 
+target_device="${VLLM_TARGET_DEVICE:-$(detect_target_device)}"
+echo "*** Installing vLLM for target device: $target_device. ***"
+
 vllm_pinned_commit=""
 vllm_xpu_kernels_pinned_commit=""
 
@@ -258,18 +299,25 @@ if [[ "$latest" == false ]]; then
   echo "*** Using the pinned vllm commit: $vllm_pinned_commit. ***"
 
   vllm_xpu_kernels_pinned_commit="$(<"$SCRIPTS_DIR/vllm/vllm-xpu-kernels-pin.txt")"
-  echo "*** Using the pinned vllm-xpu-kernels commit: $vllm_xpu_kernels_pinned_commit. ***"
+  if [[ "$target_device" == xpu ]]; then
+    echo "*** Using the pinned vllm-xpu-kernels commit: $vllm_xpu_kernels_pinned_commit. ***"
+  fi
 fi
 
 if [[ "$prepare_source_only" == false ]]; then
   correct_vllm_installed=false
+  # vllm-xpu-kernels is an XPU-only package, so on CUDA there is nothing to check or install.
   correct_vllm_xpu_kernels_installed=false
+  if [[ "$target_device" == cuda ]]; then
+    correct_vllm_xpu_kernels_installed=true
+  fi
 
   if check_installed_package "vllm" "${vllm_pinned_commit:-}" "$force_reinstall" "$latest"; then
     correct_vllm_installed=true
   fi
 
-  if check_installed_package "vllm-xpu-kernels" "${vllm_xpu_kernels_pinned_commit:-}" "$force_reinstall" "$latest"; then
+  if [[ "$target_device" == xpu ]] &&
+    check_installed_package "vllm-xpu-kernels" "${vllm_xpu_kernels_pinned_commit:-}" "$force_reinstall" "$latest"; then
     correct_vllm_xpu_kernels_installed=true
   fi
 
@@ -284,7 +332,23 @@ fi
 prepare_source "$VLLM_PROJ" "https://github.com/vllm-project/vllm.git" "${vllm_pinned_commit:-}" "$latest"
 if [[ "$clean" == true ]]; then
   git -C "$VLLM_PROJ" apply "$SCRIPTS_DIR/vllm/vllm-fix.patch"
-  python "$SCRIPTS_DIR/vllm/vllm_xpu_patch.py" "$VLLM_PROJ"
+  # The patcher rewrites hardcoded CUDA references in vLLM's tests to XPU ones.
+  if [[ "$target_device" == xpu ]]; then
+    python "$SCRIPTS_DIR/vllm/vllm_xpu_patch.py" "$VLLM_PROJ"
+  fi
+fi
+
+# On CUDA there is no vllm-xpu-kernels wheel to fetch, so vllm is always installed from source.
+if [[ "$target_device" == cuda ]]; then
+  if [[ "$prepare_source_only" == true ]]; then
+    echo "*** vLLM source prepared at $VLLM_PROJ. ***"
+    echo "*** Current commit: $(git -C "$VLLM_PROJ" rev-parse HEAD). ***"
+    exit 0
+  fi
+
+  install_vllm
+  show_installs
+  exit 0
 fi
 
 # Try downloading and installing vLLM XPU kernels wheel from a specific run.

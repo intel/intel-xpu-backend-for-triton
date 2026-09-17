@@ -17,6 +17,8 @@ import torch
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
+from triton_kernels_benchmark.benchmark_testing import DEVICE, DEVICE_MODULE
+from triton_kernels_benchmark.vllm import import_xpu_only
 
 from vllm.model_executor.layers.fused_moe.experts.fused_batched_moe import invoke_moe_batched_triton_kernel
 
@@ -24,7 +26,8 @@ from vllm.model_executor.layers.fused_moe.experts.fused_batched_moe import invok
 from tests.kernels.moe.utils import make_quantized_test_activations, make_test_weight
 from tests.kernels.quant_utils import native_batched_masked_quant_matmul
 
-from vllm_xpu_kernels.fused_moe_interface import cutlass_grouped_gemm_xe2 as sycl_tla_grouped_gemm
+# The SYCL-TLA grouped GEMM ships with vllm-xpu-kernels, so it is only available on XPU.
+sycl_tla_grouped_gemm = import_xpu_only('vllm_xpu_kernels.fused_moe_interface.cutlass_grouped_gemm_xe2')
 
 # Benchmark shapes for batched MoE
 # (E: num_experts, M: max_tokens_per_expert, K: hidden_dim, N: intermediate_dim, fp8, block_quant)
@@ -128,7 +131,7 @@ def get_batched_mm_benchmark(
         # pytorch is very slow with fp8 case, for (8, 64, 1024, 2048) case it has ~0.15 TFlops vs 1.5 for triton
         del supported_providers['pytorch']
 
-    if not is_fp8:
+    if DEVICE == 'xpu' and not is_fp8:
         supported_providers['sycl-tla'] = 'sycl-tla'
 
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
@@ -157,7 +160,7 @@ def get_batched_mm_benchmark(
         block_shape = (128, 128) if block_quant else None
 
         # Create random number of expert tokens
-        num_expert_tokens = torch.randint(low=0, high=max_tokens_per_expert + 1, size=(num_experts, ), device='xpu',
+        num_expert_tokens = torch.randint(low=0, high=max_tokens_per_expert + 1, size=(num_experts, ), device=DEVICE,
                                           dtype=torch.int32)
         out_shape = (num_experts, max_tokens_per_expert, N)
 
@@ -188,11 +191,11 @@ def get_batched_mm_benchmark(
             del A, B
         quantiles = [0.5, 0.0, 1.0]
 
-        C = torch.zeros(out_shape, device='xpu', dtype=dtype)
+        C = torch.zeros(out_shape, device=DEVICE, dtype=dtype)
         compute_tl_dtype = {torch.float16: tl.float16, torch.bfloat16: tl.bfloat16, torch.float32: tl.float32}[C.dtype]
         rtol = 6e-2 if dtype == torch.bfloat16 else 1e-2
         atol = 6e-2 if dtype == torch.bfloat16 else 1e-2
-        ref = torch.zeros(out_shape, device='xpu', dtype=dtype)
+        ref = torch.zeros(out_shape, device=DEVICE, dtype=dtype)
 
         def torch_fn():
             native_batched_masked_quant_matmul(A_q, B_q, ref, num_expert_tokens, A_scale, B_scale, block_shape,
@@ -246,13 +249,13 @@ def get_batched_mm_benchmark(
             # Free batched-format tensors unused by the grouped path, then empty_cache():
             # del alone keeps them reserved, so input_B_grouped stacks on top and OOMs BMG.
             del B, B_q, B_scale, C, ref
-            torch.xpu.empty_cache()
+            DEVICE_MODULE.empty_cache()
 
-            input_B_grouped = torch.empty((num_experts, K, N), device='xpu', dtype=dtype)
+            input_B_grouped = torch.empty((num_experts, K, N), device=DEVICE, dtype=dtype)
             input_B_grouped.normal_().div_(15)
             total_tokens = sum(counts)
             ref_grouped = torch.cat([A_q[e, :counts[e], :] @ input_B_grouped[e] for e in range(num_experts)], dim=0)
-            output_sycl = torch.empty((total_tokens, N), device='xpu', dtype=dtype)
+            output_sycl = torch.empty((total_tokens, N), device=DEVICE, dtype=dtype)
 
             # Drop per-expert padding inside the timed region so this compaction is
             # measured with the GEMM, matching Triton's in-kernel masking.
