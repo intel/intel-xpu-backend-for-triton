@@ -93,6 +93,10 @@ unsigned RegisterPressureAnalysis::pressureContribution(Value value) const {
   // block; see the header for why that matters. Live-in based figures are
   // unaffected: a value is live-in to a block precisely because something below
   // reads it.
+  //
+  // It does lower `peakPressure(loop)` for a body that defines an unread value,
+  // which `ReduceVariableLiveness` gates its sink on -- only ever downward, so
+  // that gate can keep an operand it would have sunk, never the reverse.
   if (value.use_empty())
     return 0;
   if (options.excludeRematerializable && isRematerializable(value))

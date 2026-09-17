@@ -159,6 +159,18 @@ def TritonIntelGPUHoistLayoutConversions
     nothing. Conservative refusals are counted apart from measured ones
     (`rejected_function_peak_fallback` versus `rejected_function_peak_exact`).
 
+    The departing source's credit has its own fallbacks. It is withheld whenever
+    something other than the conversion may still read the source at a corridor
+    operation, which is usually the true answer -- a reader below the loop does
+    hold it live throughout. Four cases withhold it only conservatively, and so
+    count as fallbacks: a reader unorderable against the loop, a body reader
+    *above* the conversion (the source dies mid-corridor, so later corridor
+    operations are overpriced), a CFG cycle around the conversion, and a reader
+    in an enclosing loop, whose back edge re-reads the source after the
+    corridor. That last one can leave the projection above the very peak it
+    gates, since the metric compared against is itself back-edge blind
+    (measured: 1376 projected against a post-hoist 1248).
+
     Cost is one whole-function pressure walk per candidate that follows an
     accepted hoist, plus the initial build, and `RegisterPressureAnalysis`
     memoizes nothing: on the module above (596 lines of TTGIR, `grf-mode=256`,
