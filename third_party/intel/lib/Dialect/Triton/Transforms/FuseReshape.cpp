@@ -45,14 +45,17 @@ namespace {
 //   %d = %a / %b
 //   %i = max(min(%x, max(%s0,1)-1), 0)         // this load's collapsed index
 //   %e = (%i*%d + %s1) * (%s0 > 0)             // merged extent
+//   %g = (%x >= 0) & (%x < %s0)                // collapsed index in range
+//   %j = (%x*%d + %y) * %g + (1 - %g) * %e     // merged index, %e when padding
 //   %desc = tt.make_tensor_descriptor %base, [%e,%s2], [%b,%c]
 //                       : !tt.tensordesc<512x64xf16>
-//   %A = tt.descriptor_load %desc[%x*%d+%y,%z] -> tensor<512x64xf16>
+//   %A = tt.descriptor_load %desc[%j,%z] -> tensor<512x64xf16>
 //   dot %A, ... : tensor<512x64xf16> x tensor<64x32xf16> -> tensor<512x32xf16>
 // A unit-extent middle dimension (e.g. a one-head tile of a contiguous
-// (TOKENS, HEADS, HEAD_DIM) tensor) is collapsed the same way, with %d = %b/%c:
+// (TOKENS, HEADS, HEAD_DIM) tensor) is collapsed the same way, with %d = %b/%c,
+// %g guarding %y against %s1 and %j merging %y and %z:
 //   %desc = tt.make_tensor_descriptor %base, [%s0,%e], [%a,%c]
-//   %A = tt.descriptor_load %desc[%x,%y*%d+%z] -> tensor<64x128xf16>
+//   %A = tt.descriptor_load %desc[%x,%j] -> tensor<64x128xf16>
 // The merged extent is per *load*, not per dimension: bounding it with the
 // whole collapsed dimension ((%s0-1)*%d+%s1) is tight only for the last index
 // of that dimension and lets every other index read rows the rank-3 form pads
@@ -253,8 +256,29 @@ private:
     // Merge the load indices the same way, unclamped: they are indices.
     builder.setInsertionPoint(descLoadOp);
     SmallVector<Value> newOffsets = dropDim(offsets, collapsedDim);
-    newOffsets[collapsedDim] =
-        merge(offsets[collapsedDim], newOffsets[collapsedDim]);
+    Value mergedIdx = merge(offsets[collapsedDim], newOffsets[collapsedDim]);
+
+    // The collapsed dimension's block extent is 1, so the rank-3 form pads the
+    // whole block exactly when `offsets[cd]` is out of range, whereas the
+    // merged coordinate loses that check: `offsets[md]` (or the per-element
+    // tile coordinate, which is added before the bounds check) can lift it back
+    // into range (issue #8070). Force it to the merged extent, which no row of
+    // the block can fall below, so the fused load pads too. Written as
+    // multiplies for the same `isDivisible` reason as `nonEmpty` above.
+    Value inRange = builder.createOrFold<arith::ExtUIOp>(
+        loc, indexTy,
+        builder.createOrFold<arith::AndIOp>(
+            loc,
+            builder.createOrFold<arith::CmpIOp>(loc, arith::CmpIPredicate::sge,
+                                                collapsedOffset, zero),
+            builder.createOrFold<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
+                                                collapsedOffset,
+                                                collapsedShape)));
+    Value outOfRange = builder.createOrFold<arith::SubIOp>(loc, one, inRange);
+    newOffsets[collapsedDim] = builder.createOrFold<arith::AddIOp>(
+        loc, builder.createOrFold<arith::MulIOp>(loc, mergedIdx, inRange),
+        builder.createOrFold<arith::MulIOp>(loc, outOfRange,
+                                            newShape[collapsedDim]));
 
     auto resType = cast<tt::TensorDescType>(newDesc.getType()).getBlockType();
     auto newDescLoadOp = tt::DescriptorLoadOp::create(
@@ -413,6 +437,17 @@ private:
                      "`unsigned`");
     if (!mlir::triton::gpu::intel::isDivisible(shapes[mergedDim], blockExtent))
       return decline("merged extent is not provably a multiple of the block");
+
+    // The merged dimension keeps its lower bound only through the merged
+    // coordinate, which `offsets[cd]*ratio` can lift back into range (#8070).
+    // Guarding it like the collapsed index is not an option: the block spans
+    // this dimension, so a negative index pads only its leading rows, which one
+    // rank-2 coordinate cannot express. Hence a decline - and only for a folded
+    // constant, so a computed or runtime negative stays open in #8070.
+    std::optional<int64_t> mergedOffset =
+        tt::intel::getFoldedConstantValue(descLoadOp.getIndices()[mergedDim]);
+    if (mergedOffset && *mergedOffset < 0)
+      return decline("negative index on the merged dimension");
 
     return canDeclareLegalSurface(descLoadOp, *makeTensorDescOp, tensorTy,
                                   collapsedDim, decline);

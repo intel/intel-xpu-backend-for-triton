@@ -1,9 +1,10 @@
 // RUN: triton-opt %s -split-input-file -triton-intel-fuse-reshape | FileCheck %s
 
 // COM: Unit outermost dimension. The merged extent is per *load*: the collapsed
-// COM: index 2 clamps to max(1,1)-1 == 0, so the extent is 0*(1024/4) + 64 == 64
-// COM: while the merged index stays unclamped at 2*256 + 1 == 513. 513 >= 64, so
-// COM: the fused load pads exactly as the rank-3 one did (off_0 == 2 >= s_0).
+// COM: index 2 clamps to max(1,1)-1 == 0, so the extent is 0*(1024/4) + 64 == 64.
+// COM: That index is out of range (off_0 == 2 >= s_0 == 1), so the guard forces
+// COM: the merged index to the extent and the fused load pads exactly as the
+// COM: rank-3 one did.
 tt.func public @fuseLoadWithReshape1(%arg0: tensor<256x32xbf16>, %arg1: !tt.ptr<bf16>) {
   %c0_i32 = arith.constant 0 : i32
   %c1_i32 = arith.constant 1 : i32
@@ -27,8 +28,9 @@ tt.func public @fuseLoadWithReshape1(%arg0: tensor<256x32xbf16>, %arg1: !tt.ptr<
 // CHECK: arith.constant dense<0.000000e+00>
 // CHECK: [[EXTENT:%.*]] = arith.constant 64 : i32
 // CHECK: [[DESC:%.*]] = tt.make_tensor_descriptor %arg1, [[[EXTENT]], %c1024_i32], [%c4_i64, %c1_i64] : <bf16>, <32x256xbf16>
-// CHECK: [[INDEX:%.*]] = arith.constant 513 : i32
-// CHECK: [[LOAD_B:%.*]] = tt.descriptor_load [[DESC]][[[INDEX]], %c0_i32] : !tt.tensordesc<32x256xbf16> -> tensor<32x256xbf16>
+// COM: Not 513: the guard folds the out-of-range index to the extent. Matched by
+// COM: constant name, since folding it materializes more than one `64`.
+// CHECK: [[LOAD_B:%.*]] = tt.descriptor_load [[DESC]][%c64_i32{{[_0-9]*}}, %c0_i32] : !tt.tensordesc<32x256xbf16> -> tensor<32x256xbf16>
 // CHECK: tt.dot {{.*}}, [[LOAD_B]], {{.*}}, inputPrecision = tf32 : tensor<256x32xbf16> * tensor<32x256xbf16> -> tensor<256x256xf32>
 
 // -----
@@ -936,8 +938,8 @@ tt.func public @noFuseMiddlePitchBytesOverflow(%arg0: tensor<16x16xf32>, %arg1: 
 
 // COM: A negative collapsed offset is legal input (the rank-3 load pads
 // COM: entirely) and must keep fusing: the clamp pins the extent to shapes[md]
-// COM: while the merged offset stays unclamped at -3 * 256, so the fused load
-// COM: pads the same way.
+// COM: and the guard forces the merged offset to that extent, so the fused load
+// COM: pads the same way - through the upper bound instead of the lower one.
 tt.func public @fuseNegativeCollapsedOffset(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<f32>) {
   %c0_i32 = arith.constant 0 : i32
   %cm3_i32 = arith.constant -3 : i32
@@ -983,6 +985,9 @@ tt.func public @fuseDynamicCollapsedShape(%arg0: tensor<16x16xf32>, %arg1: !tt.p
 // COM: descriptor, so this range is where a `select` formulation would land.
 // CHECK-NOT: arith.select
 // CHECK: tt.make_tensor_descriptor
+// COM: The index guard lands *after* the descriptor, and is multiply-based for
+// COM: the same reason, so this range must be select-free too.
+// CHECK-NOT: arith.select
 // CHECK: tt.descriptor_load
 // CHECK-NOT: tt.reshape
 
@@ -1117,5 +1122,212 @@ tt.func public @noFuseWideInexactStrideRatio(%arg0: tensor<16x256xf32>, %arg1: !
   tt.return
 }
 // CHECK-LABEL: noFuseWideInexactStrideRatio
+// CHECK: tt.descriptor_load
+// CHECK: tt.reshape
+
+// -----
+
+// COM: A dynamic collapsed index cannot be proven in range, so the merged index
+// COM: is guarded: `(merged * inRange) + ((1 - inRange) * extent)`, which forces
+// COM: it to the extent - and so makes the load pad, as the rank-3 form does -
+// COM: whenever the index is out of range (issue #8070). Multiplies, not an
+// COM: `arith.select`, for the same `ttgi::isDivisible` reason as the extent.
+tt.func public @fuseGuardsDynamicOuterIndex(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<f32>, %off: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c256_i64 = arith.constant 256 : i64
+  %c8_i32 = arith.constant 8 : i32
+  %c16_i32 = arith.constant 16 : i32
+  %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32>
+  %0 = tt.make_tensor_descriptor %arg1, [%c8_i32, %c16_i32, %c16_i32], [%c256_i64, %c1_i64, %c1_i64] : <f32>, <1x16x16xf32>
+  %1 = tt.descriptor_load %0[%off, %c0_i32, %c0_i32] : !tt.tensordesc<1x16x16xf32> -> tensor<1x16x16xf32>
+  %2 = tt.reshape %1 : tensor<1x16x16xf32> -> tensor<16x16xf32>
+  %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<16x16xf32> * tensor<16x16xf32> -> tensor<16x16xf32>
+  tt.return
+}
+// CHECK-LABEL: fuseGuardsDynamicOuterIndex
+// CHECK-NOT: tt.reshape
+// CHECK: [[EXTENT:%.*]] = arith.addi
+// CHECK: [[DESC:%.*]] = tt.make_tensor_descriptor %arg1, [[[EXTENT]], %c16_i32]
+// CHECK: [[MERGED:%.*]] = arith.muli %arg2, %c256_i32
+// CHECK: [[GE:%.*]] = arith.cmpi sge, %arg2, %c0_i32
+// CHECK: [[LT:%.*]] = arith.cmpi slt, %arg2, %c8_i32
+// CHECK: [[AND:%.*]] = arith.andi [[GE]], [[LT]]
+// CHECK: [[IN:%.*]] = arith.extui [[AND]]
+// CHECK: [[OUT:%.*]] = arith.subi %c1_i32, [[IN]]
+// CHECK: [[KEEP:%.*]] = arith.muli [[MERGED]], [[IN]]
+// CHECK: [[PAD:%.*]] = arith.muli [[OUT]], [[EXTENT]]
+// CHECK: [[IDX:%.*]] = arith.addi [[KEEP]], [[PAD]]
+// CHECK-NOT: arith.select
+// CHECK: tt.descriptor_load [[DESC]][[[IDX]], %c0_i32]
+
+// -----
+
+// COM: The same guard on a middle collapse, where the guarded index becomes the
+// COM: index `satisfies2DBlockReadAlignment` queries. This pins the shape that
+// COM: keeps `block_io` reachable - `isDivisible` handles `muli`/`addi` but not
+// COM: `arith.select`; that it is actually kept is checked end-to-end by
+// COM: test_host_tensor_descriptor.py, since this RUN line stops at this pass.
+tt.func public @fuseGuardsDynamicMiddleIndex(%arg0: tensor<16x256xf32>, %arg1: !tt.ptr<f32>, %off: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c16_i32 = arith.constant 16 : i32
+  %c64_i32 = arith.constant 64 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c16_i64 = arith.constant 16 : i64
+  %c1024_i64 = arith.constant 1024 : i64
+  %cst = arith.constant dense<0.000000e+00> : tensor<64x256xf32>
+  %0 = tt.make_tensor_descriptor %arg1, [%c64_i32, %c16_i32, %c16_i32], [%c1024_i64, %c16_i64, %c1_i64] : <f32>, <64x1x16xf32>
+  %1 = tt.descriptor_load %0[%c0_i32, %off, %c0_i32] : !tt.tensordesc<64x1x16xf32> -> tensor<64x1x16xf32>
+  %2 = tt.reshape %1 : tensor<64x1x16xf32> -> tensor<64x16xf32>
+  %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<64x16xf32> * tensor<16x256xf32> -> tensor<64x256xf32>
+  tt.return
+}
+// CHECK-LABEL: fuseGuardsDynamicMiddleIndex
+// CHECK-NOT: tt.reshape
+// CHECK: [[EXTENT:%.*]] = arith.addi
+// CHECK: [[DESC:%.*]] = tt.make_tensor_descriptor %arg1, [%c64_i32, [[EXTENT]]]
+// CHECK: [[MERGED:%.*]] = arith.muli %arg2, %c16_i32
+// CHECK: [[GE:%.*]] = arith.cmpi sge, %arg2, %c0_i32
+// CHECK: [[LT:%.*]] = arith.cmpi slt, %arg2, %c16_i32
+// CHECK: [[AND:%.*]] = arith.andi [[GE]], [[LT]]
+// CHECK: [[IN:%.*]] = arith.extui [[AND]]
+// CHECK: [[OUT:%.*]] = arith.subi %c1_i32, [[IN]]
+// CHECK: [[KEEP:%.*]] = arith.muli [[MERGED]], [[IN]]
+// CHECK: [[PAD:%.*]] = arith.muli [[OUT]], [[EXTENT]]
+// CHECK: [[IDX:%.*]] = arith.addi [[KEEP]], [[PAD]]
+// CHECK-NOT: arith.select
+// CHECK: tt.descriptor_load [[DESC]][%c0_i32, [[IDX]]]
+
+// -----
+
+// COM: Overlapping strides: ratio 16 < shapes[md] 32, so index 4 == shapes[cd]
+// COM: merges to 4*16 + 0 == 64, inside the extent 3*16 + 32 == 80, and read
+// COM: real data before the guard. It now folds to the extent instead, which
+// COM: pads as the rank-3 form does.
+tt.func public @fuseGuardsOutOfRangeIndexOverlappingStrides(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<f32>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c4_i32 = arith.constant 4 : i32
+  %c16_i32 = arith.constant 16 : i32
+  %c32_i32 = arith.constant 32 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c16_i64 = arith.constant 16 : i64
+  %cst = arith.constant dense<0.000000e+00> : tensor<32x16xf32>
+  %0 = tt.make_tensor_descriptor %arg1, [%c4_i32, %c32_i32, %c16_i32], [%c16_i64, %c1_i64, %c1_i64] : <f32>, <1x32x16xf32>
+  %1 = tt.descriptor_load %0[%c4_i32, %c0_i32, %c0_i32] : !tt.tensordesc<1x32x16xf32> -> tensor<1x32x16xf32>
+  %2 = tt.reshape %1 : tensor<1x32x16xf32> -> tensor<32x16xf32>
+  %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<32x16xf32> * tensor<16x16xf32> -> tensor<32x16xf32>
+  tt.return
+}
+// CHECK-LABEL: fuseGuardsOutOfRangeIndexOverlappingStrides
+// CHECK-NOT: tt.reshape
+// CHECK: [[EXTENT:%.*]] = arith.constant 80 : i32
+// CHECK: [[DESC:%.*]] = tt.make_tensor_descriptor %arg1, [[[EXTENT]], %c16_i32], [%c1_i64, %c1_i64] : <f32>, <32x16xf32>
+// COM: Not 64: everything folds, and the guarded index is the extent. Matched by
+// COM: constant name, since folding it materializes more than one `80`.
+// CHECK: tt.descriptor_load [[DESC]][%c80_i32{{[_0-9]*}}, %c0_i32]
+
+// -----
+
+// COM: Both indices out of range, in opposite directions: -1 * 32 + 32 == 0 read
+// COM: row 0 before the guard. Exercises the `sge` half of it - the other
+// COM: out-of-range cases only reach the `slt` half.
+tt.func public @fuseGuardsCancellingOutOfRangeIndices(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<f32>) {
+  %c0_i32 = arith.constant 0 : i32
+  %cm1_i32 = arith.constant -1 : i32
+  %c4_i32 = arith.constant 4 : i32
+  %c16_i32 = arith.constant 16 : i32
+  %c32_i32 = arith.constant 32 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c32_i64 = arith.constant 32 : i64
+  %cst = arith.constant dense<0.000000e+00> : tensor<32x16xf32>
+  %0 = tt.make_tensor_descriptor %arg1, [%c4_i32, %c32_i32, %c16_i32], [%c32_i64, %c1_i64, %c1_i64] : <f32>, <1x32x16xf32>
+  %1 = tt.descriptor_load %0[%cm1_i32, %c32_i32, %c0_i32] : !tt.tensordesc<1x32x16xf32> -> tensor<1x32x16xf32>
+  %2 = tt.reshape %1 : tensor<1x32x16xf32> -> tensor<32x16xf32>
+  %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<32x16xf32> * tensor<16x16xf32> -> tensor<32x16xf32>
+  tt.return
+}
+// CHECK-LABEL: fuseGuardsCancellingOutOfRangeIndices
+// CHECK-NOT: tt.reshape
+// COM: Extent and index are both 32 here, so both are matched by constant name.
+// CHECK: [[DESC:%.*]] = tt.make_tensor_descriptor %arg1, [%c32_i32{{[_0-9]*}}, %c16_i32], [%c1_i64, %c1_i64] : <f32>, <32x16xf32>
+// COM: Not 0, which is what -1*32 + 32 merged to before the guard.
+// CHECK: tt.descriptor_load [[DESC]][%c32_i32{{[_0-9]*}}, %c0_i32]
+
+// -----
+
+// COM: A negative collapsed index whose merged dimension is *in* range: the base
+// COM: merges to -1*32 + 24 == -8, and the per-element tile coordinate (added
+// COM: before the signed bounds check) lifts rows 8..15 back inside the extent.
+// COM: The guard forces the whole tile to pad.
+tt.func public @fuseGuardsNegativeIndexLiftedByTile(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<f32>) {
+  %c0_i32 = arith.constant 0 : i32
+  %cm1_i32 = arith.constant -1 : i32
+  %c4_i32 = arith.constant 4 : i32
+  %c16_i32 = arith.constant 16 : i32
+  %c24_i32 = arith.constant 24 : i32
+  %c32_i32 = arith.constant 32 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c32_i64 = arith.constant 32 : i64
+  %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32>
+  %0 = tt.make_tensor_descriptor %arg1, [%c4_i32, %c32_i32, %c16_i32], [%c32_i64, %c1_i64, %c1_i64] : <f32>, <1x16x16xf32>
+  %1 = tt.descriptor_load %0[%cm1_i32, %c24_i32, %c0_i32] : !tt.tensordesc<1x16x16xf32> -> tensor<1x16x16xf32>
+  %2 = tt.reshape %1 : tensor<1x16x16xf32> -> tensor<16x16xf32>
+  %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<16x16xf32> * tensor<16x16xf32> -> tensor<16x16xf32>
+  tt.return
+}
+// CHECK-LABEL: fuseGuardsNegativeIndexLiftedByTile
+// CHECK-NOT: tt.reshape
+// CHECK: [[DESC:%.*]] = tt.make_tensor_descriptor %arg1, [%c32_i32{{[_0-9]*}}, %c16_i32], [%c1_i64, %c1_i64] : <f32>, <16x16xf32>
+// COM: Not -8, the pre-guard merged base.
+// CHECK: tt.descriptor_load [[DESC]][%c32_i32{{[_0-9]*}}, %c0_i32]
+
+// -----
+
+// COM: A provably in-range index pays nothing: the guard folds away entirely and
+// COM: the load keeps the plain merged index 3*256 + 0 == 768.
+tt.func public @fuseInRangeIndexFoldsGuard(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<f32>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c3_i32 = arith.constant 3 : i32
+  %c8_i32 = arith.constant 8 : i32
+  %c16_i32 = arith.constant 16 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c256_i64 = arith.constant 256 : i64
+  %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32>
+  %0 = tt.make_tensor_descriptor %arg1, [%c8_i32, %c16_i32, %c16_i32], [%c256_i64, %c1_i64, %c1_i64] : <f32>, <1x16x16xf32>
+  %1 = tt.descriptor_load %0[%c3_i32, %c0_i32, %c0_i32] : !tt.tensordesc<1x16x16xf32> -> tensor<1x16x16xf32>
+  %2 = tt.reshape %1 : tensor<1x16x16xf32> -> tensor<16x16xf32>
+  %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<16x16xf32> * tensor<16x16xf32> -> tensor<16x16xf32>
+  tt.return
+}
+// CHECK-LABEL: fuseInRangeIndexFoldsGuard
+// CHECK-NOT: tt.reshape
+// CHECK: [[EXTENT:%.*]] = arith.constant 784 : i32
+// CHECK: [[DESC:%.*]] = tt.make_tensor_descriptor %arg1, [[[EXTENT]], %c16_i32], [%c1_i64, %c1_i64] : <f32>, <16x16xf32>
+// CHECK-NOT: arith.cmpi
+// CHECK: tt.descriptor_load [[DESC]][%c768_i32{{[_0-9]*}}, %c0_i32]
+
+// -----
+
+// COM: A folded negative index on the *merged* dimension is not expressible in
+// COM: the merged form - it pads only some rows - so decline instead (#8070).
+// COM: Only literal/folded negatives are caught: `getFoldedConstantValue` does
+// COM: not see through a computed one.
+tt.func public @noFuseNegativeMergedIndex(%arg0: tensor<64x64xf32>, %arg1: !tt.ptr<f32>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %cm1_i32 = arith.constant -1 : i32
+  %c2_i32 = arith.constant 2 : i32
+  %c64_i32 = arith.constant 64 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c64_i64 = arith.constant 64 : i64
+  %c4096_i64 = arith.constant 4096 : i64
+  %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32>
+  %0 = tt.make_tensor_descriptor %arg1, [%c2_i32, %c64_i32, %c64_i32], [%c4096_i64, %c64_i64, %c1_i64] : <f32>, <1x64x64xf32>
+  %1 = tt.descriptor_load %0[%c1_i32, %cm1_i32, %c0_i32] : !tt.tensordesc<1x64x64xf32> -> tensor<1x64x64xf32>
+  %2 = tt.reshape %1 : tensor<1x64x64xf32> -> tensor<64x64xf32>
+  %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<64x64xf32> * tensor<64x64xf32> -> tensor<64x64xf32>
+  tt.return
+}
+// CHECK-LABEL: noFuseNegativeMergedIndex
 // CHECK: tt.descriptor_load
 // CHECK: tt.reshape
