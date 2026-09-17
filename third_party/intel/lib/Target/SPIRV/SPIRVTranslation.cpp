@@ -143,8 +143,13 @@ static llvm::SmallVector<SPIRV::ExtensionID> getAllowedExtensions(bool isLTS) {
       SPIRV::ExtensionID::SPV_KHR_non_semantic_info,
       SPIRV::ExtensionID::SPV_KHR_shader_clock};
 
-  // Extensions supported by the rolling driver only.
-  if (!isLTS)
+  // FIXME: Windows driver cuurrently does not support SPV_EXT_long_vector.
+#if defined(_WIN32)
+  constexpr bool IsWindows = true;
+#else
+  constexpr bool IsWindows = false;
+#endif
+  if (!isLTS && !IsWindows)
     AllowedExtensions.push_back(SPIRV::ExtensionID::SPV_EXT_long_vector);
   else
     AllowedExtensions.push_back(SPIRV::ExtensionID::SPV_INTEL_vector_compute);
