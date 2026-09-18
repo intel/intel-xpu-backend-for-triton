@@ -111,15 +111,22 @@ done
 # The pytorch and sycl-tla providers don't use the (patched) triton kernel, so their
 # results are identical for every patch. Benchmark them once on the clean tree; the
 # per-patch runs below select only their own triton provider via --provider.
-REF_PROVIDERS=(--provider pytorch)
-ref_desc="pytorch"
+#
+# Each reference provider runs in its OWN best-effort invocation: they are only
+# comparison baselines, so a failure must NOT abort the triton patch sweep below.
+# (e.g. sycl-tla lacks a compiled kernel for some configs and its fallback path can
+# OOM — a vllm-xpu-kernels limitation, unrelated to the triton kernel under test.)
+# A distinct PROVIDER_LABEL per provider keeps their plots/reports from colliding.
+ref_providers=(pytorch)
 if [ "${FP8:-0}" != "1" ]; then
-    REF_PROVIDERS+=(--provider sycl-tla)
-    ref_desc="$ref_desc, sycl-tla"
+    ref_providers+=(sycl-tla)
 fi
-echo ""
-echo "=== Running reference providers once ($ref_desc) ==="
-TD_PATCHED=0 triton-benchmarks run "$KEY" "${REF_PROVIDERS[@]}" "$@"
+for rp in "${ref_providers[@]}"; do
+    echo ""
+    echo "=== Running reference provider: $rp (once, best-effort) ==="
+    TD_PATCHED=0 PROVIDER_LABEL="$rp" triton-benchmarks run "$KEY" --provider "$rp" "$@" \
+        || echo "WARN: reference provider '$rp' failed; continuing without it"
+done
 
 for f in "${SERIES_PATCHES[@]}"; do
     label="${f%.patch}"          # provider label, e.g. 0-no-non-pass
