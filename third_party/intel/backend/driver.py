@@ -45,7 +45,7 @@ def find_sycl_icpx(include_dir: list[str]) -> tuple[list[str], list[str]]:
     if icpx_path:
         # only `icpx` compiler knows where sycl runtime binaries and header files are
         compiler_root = os.path.abspath(f"{icpx_path}/../..")
-        include_dir += [os.path.join(compiler_root, "include"), os.path.join(compiler_root, "include/sycl")]
+        include_dir += [os.path.join(compiler_root, "include"), os.path.join(compiler_root, "include", "sycl")]
         sycl_dir = os.path.join(compiler_root, "lib")
         return include_dir, [sycl_dir]
 
@@ -55,10 +55,10 @@ def find_sycl_icpx(include_dir: list[str]) -> tuple[list[str], list[str]]:
         # installed here (a VTune-only install has no `compiler` directory at all). Check that both
         # paths exist before returning them.
         # See https://github.com/intel/intel-xpu-backend-for-triton/issues/7977.
-        compiler_root = os.path.join(oneapi_root, "compiler/latest")
+        compiler_root = os.path.join(oneapi_root, "compiler", "latest")
         sycl_dir = os.path.join(compiler_root, "lib")
-        if os.path.isfile(os.path.join(compiler_root, "include/sycl/sycl.hpp")) and os.path.isdir(sycl_dir):
-            include_dir += [os.path.join(compiler_root, "include"), os.path.join(compiler_root, "include/sycl")]
+        if os.path.isfile(os.path.join(compiler_root, "include", "sycl", "sycl.hpp")) and os.path.isdir(sycl_dir):
+            include_dir += [os.path.join(compiler_root, "include"), os.path.join(compiler_root, "include", "sycl")]
             return include_dir, [sycl_dir]
         if os.path.isdir(compiler_root):
             # A compiler directory with only half of SYCL in it is not something a normal install
