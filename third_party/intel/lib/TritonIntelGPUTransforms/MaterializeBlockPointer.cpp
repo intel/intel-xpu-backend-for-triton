@@ -151,21 +151,15 @@ private:
 
     Value desc = op.getDesc();
     // Find all MakeTensorDescOps that could define this descriptor.
-    SmallVector<tt::MakeTensorDescOp> allDescs =
-        tt::intel::findAllMakeTensorDescOps(desc);
-    if (allDescs.empty()) {
+    tt::intel::DescriptorDefinitions defs =
+        tt::intel::findDescriptorDefinitions(desc);
+    if (defs.empty()) {
       LDBG("Could not find any make tensor desc op for: " << *op);
       return;
     }
 
-    tt::MakeTensorDescOp makeTensorDescOp = allDescs[0];
-    LDBG("Make tensor desc op: " << makeTensorDescOp);
-
-    // All candidates must have the same padding.
-    tt::PaddingOption padding = makeTensorDescOp.getPadding();
-    if (!llvm::all_of(allDescs, [&](tt::MakeTensorDescOp d) {
-          return d.getPadding() == padding;
-        })) {
+    std::optional<tt::PaddingOption> padding = defs.consistentPadding();
+    if (!padding) {
       LDBG("Inconsistent padding across candidates");
       return;
     }
@@ -173,13 +167,28 @@ private:
     // Propagate padding from MakeTensorDescOp unconditionally so the LLVM
     // lowering can read it even after MakeTensorDescOp has been converted
     // in the same applyPartialConversion phase.
+    //
+    // This must stay ahead of the shape check below: the generic gather
+    // lowering reads this attribute without checking block_io and defaults to
+    // PAD_ZERO when it is absent, so bailing earlier would silently turn a
+    // PAD_NAN descriptor's out-of-bounds fill into zeros.
     op->setAttr(ttgi::TritonIntelGPUDialect::getDescPaddingAttrName(),
-                tt::PaddingOptionAttr::get(context, padding));
+                tt::PaddingOptionAttr::get(context, *padding));
 
-    Operation::operand_range shape = makeTensorDescOp.getShape();
-    unsigned rank = shape.size();
+    // Take the rank from the shape operands rather than the descriptor type:
+    // the stride indexing below subscripts EVERY candidate at rank-1/rank-2,
+    // and nothing ties the block-type rank to a candidate's operand count.
+    // An identical shape range across candidates plus SameVariadicOperandSize
+    // does, making both subscripts in bounds by construction.
+    std::optional<Operation::operand_range> shape = defs.consistentShape();
+    if (!shape) {
+      LDBG("Inconsistent shape across candidates");
+      return;
+    }
+    unsigned rank = shape->size();
     LDBG("Rank: " << rank);
-    if (rank == 1)
+    // rank is unsigned, so rank 0 would wrap rank-1 and rank-2 below.
+    if (rank < 2)
       return;
 
     if (!satisfies2DBlockReadAlignment(op, axisInfoAnalysis)) {
@@ -190,19 +199,17 @@ private:
     unsigned elementWidth = tensorType.getElementTypeBitWidth();
     LDBG("elementWidth: " << elementWidth);
 
-    Operation::operand_range strides = makeTensorDescOp.getStrides();
-    // For tensor descriptors, the last stride is always one (row major).
-    unsigned strideOneDimVal = rank - 1;
-
-    // Verify that tensor descriptor has stride=1 in last dimension.
-    Value fastChangeStride = strides[strideOneDimVal];
-    assert(tt::intel::isConstant(fastChangeStride, 1) &&
-           "Tensor descriptor must have stride=1 in last dimension");
+    // For tensor descriptors, the last stride is always one (row major). The
+    // row_major attribute stamped below covers every candidate, so check every
+    // candidate rather than just the first.
+    assert(defs.allSatisfy([&](tt::MakeTensorDescOp d) {
+      return tt::intel::isConstant(d.getStrides()[rank - 1], 1);
+    }) && "Tensor descriptor must have stride=1 in last dimension");
 
     // Across Intel platforms, the strictest pitch restriction is to be a
     // multiple of OWord(128 bits). All candidates must satisfy this.
     unsigned pitchDivisor = llvm::divideCeil(128, elementWidth);
-    if (!llvm::all_of(allDescs, [&](tt::MakeTensorDescOp d) {
+    if (!defs.allSatisfy([&](tt::MakeTensorDescOp d) {
           return isDescriptorAligned(axisInfoAnalysis, d.getStrides()[rank - 2],
                                      pitchDivisor);
         }))
@@ -996,31 +1003,29 @@ private:
     Value desc = op.getDesc();
 
     // Find all MakeTensorDescOps that could define this descriptor.
-    SmallVector<tt::MakeTensorDescOp> allDescs =
-        tt::intel::findAllMakeTensorDescOps(desc);
-    if (allDescs.empty())
+    tt::intel::DescriptorDefinitions defs =
+        tt::intel::findDescriptorDefinitions(desc);
+    if (defs.empty())
       return false;
 
-    tt::MakeTensorDescOp makeTensorDescOp = allDescs[0];
-    Operation::operand_range shape = makeTensorDescOp.getShape();
-    // All candidates must have the same shape operands.
-    if (!llvm::all_of(allDescs, [&](tt::MakeTensorDescOp d) {
-          return d.getShape() == shape;
-        })) {
+    std::optional<Operation::operand_range> shape = defs.consistentShape();
+    if (!shape) {
       LDBG("Inconsistent shape across descriptor candidates");
       return false;
     }
 
-    unsigned rank = shape.size();
-    if (rank == 1)
+    unsigned rank = shape->size();
+    // rank is unsigned, so rank 0 would wrap rank-1 below.
+    if (rank < 2)
       return false;
 
     // For tensor descriptors, the last stride is always one (row major).
     unsigned strideOneDimVal = rank - 1;
 
-    // Get the tensor type from the descriptor
-    tt::TensorDescType descType =
-        cast<tt::TensorDescType>(makeTensorDescOp.getType());
+    // Take the element width from the descriptor the op actually consumes, not
+    // from a candidate: the tracer follows a one-input unrealized cast without
+    // comparing its input and result types, so a candidate's type can differ.
+    tt::TensorDescType descType = cast<tt::TensorDescType>(desc.getType());
     RankedTensorType tensorType = descType.getBlockType();
     unsigned elementWidth = tensorType.getElementTypeBitWidth();
     LDBG("strideOneDim: " << strideOneDimVal);
@@ -1028,7 +1033,7 @@ private:
     // Ensure the base ptr is 4-byte aligned.
     // Note: the HW requires the address to be 64-byte aligned, however we will
     // compensate by imposing restrictions on the offsetX and baseWidth.
-    if (!llvm::all_of(allDescs, [&](tt::MakeTensorDescOp d) {
+    if (!defs.allSatisfy([&](tt::MakeTensorDescOp d) {
           return isDescriptorAligned(axisInfoAnalysis, d.getBase(), 4);
         })) {
       LDBG("Found non 4 bytes aligned base");
@@ -1042,7 +1047,7 @@ private:
     // rebuilt in a loop with a loop-carried extent, and only at element widths
     // under 32 bits where the divisor exceeds 1. No in-tree kernel writes that
     // shape, so it is left out of scope here rather than widened into this fix.
-    Value baseWidth = tt::intel::getFinalValue(shape[strideOneDimVal]);
+    Value baseWidth = tt::intel::getFinalValue((*shape)[strideOneDimVal]);
     unsigned divisor = llvm::divideCeil(32u, elementWidth);
     if (!ttgi::isDivisible(baseWidth, divisor)) {
       LLVM_DEBUG({
