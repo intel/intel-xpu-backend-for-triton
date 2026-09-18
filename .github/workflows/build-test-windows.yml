@@ -230,6 +230,22 @@ jobs:
           pip install -r scripts\requirements-test.txt
           pip uninstall pytest_forked -y
 
+      - name: Run core tests
+        if: ${{ !cancelled() }}
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          cd ${{ env.NEW_WORKSPACE }}
+          ${{ env.TRITON_TEST_CMD }} --core
+
+      - name: Run interpreter tests
+        if: ${{ !cancelled() }}
+        run: |
+          .venv\Scripts\activate.ps1
+          Invoke-BatchFile "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          cd ${{ env.NEW_WORKSPACE }}
+          ${{ env.TRITON_TEST_CMD }} --interpreter
+
       - name: Run tutorials
         if: ${{ !cancelled() }}
         run: |
