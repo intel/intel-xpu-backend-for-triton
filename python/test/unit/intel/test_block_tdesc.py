@@ -226,13 +226,10 @@ def _loop_carried_index_kernel(a_ptr, b_ptr, c_ptr, M, N, KA, BLOCK_M: tl.conste
     tl.store(c_ptr + offs_m[:, None] * BLOCK_N + offs_n[None, :], acc)
 
 
-# The odd arm's numeric result is expected to be wrong until the descriptor fallback is fixed:
-# refusing the 2D block message hands the load to a fallback that derives its vector width from the
-# descriptor's base and pitch divisibility and ignores the load-time index, so it issues a 128-bit
-# load (256-bit where supported) at a 2-mod-4 byte address for an odd 16-bit index. That is
-# pre-existing and unrelated to this gate -- this change touches only MaterializeBlockPointer.cpp,
-# so the lowering of a load main already refuses is byte-for-byte what main emits -- but it means
-# #7990's symptom survives this change on affected hardware.
+# Both arms must be exact. The even arm rides the 2D block message; the odd arm is refused and
+# lands on the gather fallback, which used to derive its vector width from the descriptor's base
+# and pitch divisibility alone and so issued a 128-bit load at a 2-mod-4 byte address for an odd
+# 16-bit index. getDescriptorVecSize now folds the load-time index in, so the odd arm is exact too.
 @pytest.mark.parametrize("step", [2, 3])
 @pytest.mark.skipif(not is_xpu(), reason="Tensor descriptor block I/O is specific to the XPU backend")
 @pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
@@ -295,13 +292,6 @@ def test_tdesc_loop_carried_index(step, device, with_allocator):
     else:
         assert block_loads == 0, \
             f"step={step}: odd index must be refused, but {block_loads} 2D block load(s) were emitted"
-
-    # The odd arm still returns wrong data through the descriptor fallback (see above), so excuse
-    # only that comparison, and only when it actually fails -- if the fallback is fixed, or is
-    # already correct on this architecture, the test passes rather than XPASSing.
-    if step % 2 != 0 and not torch.equal(c, ref):
-        pytest.xfail(f"step={step}: descriptor fallback over-vectorizes at an odd stride-one index, "
-                     f"{num_wrong}/{M * N} elements wrong; #7990 symptom persists")
 
     assert torch.equal(c, ref), \
         f"step={step}: {num_wrong}/{M * N} elements wrong with {block_loads} 2D block load(s)"
