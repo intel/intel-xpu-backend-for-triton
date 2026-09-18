@@ -340,6 +340,12 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             raise ValueError(
                 f"num_warps={opt.num_warps} is unsupported for the target (limit is {properties['max_num_sub_groups']})"
             )
+        # The backend has no CTA cluster support: getClusterCTAId is hardwired to
+        # 0, clusterBarrier is a plain workgroup barrier, and loadDShared /
+        # storeDShared ignore the ctaId they are given. Accepting num_ctas > 1
+        # would silently miscompile any cross-CTA communication.
+        if opt.num_ctas != 1:
+            raise ValueError(f"num_ctas={opt.num_ctas} is unsupported for the target (only num_ctas=1 is supported)")
 
     @classmethod
     def annotate_module(cls, module_opts, properties, opt):
