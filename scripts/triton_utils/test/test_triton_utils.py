@@ -593,6 +593,67 @@ TESTS_WITH_MULTIPLE_RESULTS = {
 }
 
 
+TESTS_WITH_VARIANT_AGGREGATION = {
+    'tutorials.xml':
+    '''<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+    <testsuite name="pytest" errors="1" failures="2" skipped="4" tests="8" time="12.000" timestamp="2026-04-16T09:55:09.584573+00:00" hostname="hostname">
+        <testcase classname="python.test.tutorials.test_tutorials" name="test_06_fused_attention[default]" time="1.000">
+            <skipped type="pytest.skip" message="fa_config=default skipped">fa_config=default skipped</skipped>
+        </testcase>
+        <testcase classname="python.test.tutorials.test_tutorials" name="test_06_fused_attention[fp8_only]" time="1.000">
+            <skipped type="pytest.skip" message="fa_config=fp8_only skipped">fa_config=fp8_only skipped</skipped>
+        </testcase>
+        <testcase classname="python.test.tutorials.test_tutorials" name="test_06_fused_attention[skip_fp8]" time="1.000" />
+        <testcase classname="python.test.tutorials.test_tutorials" name="test_07_extern_functions" time="2.000" />
+        <testcase classname="python.test.tutorials.test_tutorials" name="test_08_grouped_gemm[small]" time="2.000">
+            <failure message="grouped_gemm small failed">grouped_gemm small failed</failure>
+        </testcase>
+        <testcase classname="python.test.tutorials.test_tutorials" name="test_08_grouped_gemm[large]" time="2.000">
+            <failure message="grouped_gemm large failed">grouped_gemm large failed</failure>
+        </testcase>
+        <testcase classname="python.test.tutorials.test_tutorials" name="test_09_persistent_matmul[default]" time="1.500">
+            <skipped type="pytest.xfail" message="persistent default xfailed" />
+        </testcase>
+        <testcase classname="python.test.tutorials.test_tutorials" name="test_09_persistent_matmul[tma]" time="1.500">
+            <skipped type="pytest.xfail" message="persistent tma xfailed" />
+        </testcase>
+    </testsuite>
+</testsuites>
+'''
+}
+
+
+TESTS_FOR_AGGREGATION_COMPARE = {
+    'test-report1/tutorials.xml':
+    '''<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+    <testsuite name="pytest" errors="0" failures="0" skipped="2" tests="4" time="8.000" timestamp="2026-04-16T09:55:09.584573+00:00" hostname="hostname">
+        <testcase classname="python.test.tutorials.test_tutorials" name="test_06_fused_attention[default]" time="1.000">
+            <skipped type="pytest.skip" message="fa_config=default skipped">fa_config=default skipped</skipped>
+        </testcase>
+        <testcase classname="python.test.tutorials.test_tutorials" name="test_06_fused_attention[fp8_only]" time="1.000">
+            <skipped type="pytest.skip" message="fa_config=fp8_only skipped">fa_config=fp8_only skipped</skipped>
+        </testcase>
+        <testcase classname="python.test.tutorials.test_tutorials" name="test_06_fused_attention[skip_fp8]" time="1.000" />
+        <testcase classname="python.test.tutorials.test_tutorials" name="test_07_extern_functions" time="5.000" />
+    </testsuite>
+</testsuites>
+''',
+    'test-report2/tutorials.xml':
+    '''<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+    <testsuite name="pytest" errors="0" failures="0" skipped="0" tests="4" time="8.000" timestamp="2026-04-16T09:55:09.584573+00:00" hostname="hostname">
+        <testcase classname="python.test.tutorials.test_tutorials" name="test_06_fused_attention[default]" time="1.000" />
+        <testcase classname="python.test.tutorials.test_tutorials" name="test_06_fused_attention[fp8_only]" time="1.000" />
+        <testcase classname="python.test.tutorials.test_tutorials" name="test_06_fused_attention[skip_fp8]" time="1.000" />
+        <testcase classname="python.test.tutorials.test_tutorials" name="test_07_extern_functions" time="5.000" />
+    </testsuite>
+</testsuites>
+''',
+}
+
+
 @pytest.mark.parametrize(
     ('merge_test_results', 'exclude_subdir_patterns', 'include_subdir_patterns', 'passed', 'skipped', 'xfailed', 'failed', 'warning'),
     [
@@ -650,6 +711,73 @@ def test_tests_with_multiple_results(  # pylint: disable=R0913, R0914, R0917
 
 
 @pytest.mark.parametrize(
+    ('aggregation_level', 'passed', 'skipped', 'xfailed', 'failed', 'total'),
+    [
+        ('none', 2, 2, 2, 2, 8),
+        ('test_function', 2, 1, 1, 1, 5),
+    ]
+)
+def test_pass_rate_aggregation_level(
+    tmp_path,
+    aggregation_level: str,
+    passed: int,
+    skipped: int,
+    xfailed: int,
+    failed: int,
+    total: int,
+):
+    report_path = tmp_path / 'tutorials.xml'
+    report_path.write_text(TESTS_WITH_VARIANT_AGGREGATION['tutorials.xml'], encoding='utf-8')
+
+    config = triton_utils.Config(
+        action='pass_rate',
+        reports=str(tmp_path),
+        aggregation_level=aggregation_level,
+    )
+
+    out, _ = triton_utils.PassRateActionRunner(config)()
+    pass_rate_dict = extract_pass_rate_dict(out)
+    assert pass_rate_dict['passed'] == passed
+    assert pass_rate_dict['skipped'] == skipped
+    assert pass_rate_dict['xfailed'] == xfailed
+    assert pass_rate_dict['failed'] == failed
+    assert pass_rate_dict['total'] == total
+
+
+@pytest.mark.parametrize(
+    ('aggregation_level', 'passed', 'skipped', 'time'),
+    [
+        ('none', 1, 2, 3.0),
+        ('test_function', 1, 1, 3.0),
+    ]
+)
+def test_tests_stats_aggregation_level(
+    tmp_path,
+    aggregation_level: str,
+    passed: int,
+    skipped: int,
+    time: float,
+):
+    report_path = tmp_path / 'tutorials.xml'
+    report_path.write_text(TESTS_WITH_VARIANT_AGGREGATION['tutorials.xml'], encoding='utf-8')
+
+    config = triton_utils.Config(
+        action='tests_stats',
+        reports=str(tmp_path),
+        aggregation_level=aggregation_level,
+        _report_grouping_level=triton_utils.TestGroupingLevel.TEST.value,
+    )
+
+    out = triton_utils.TestsStatsActionRunner(config)()
+    rows = extract_pass_rate_dicts(out)
+    row_key = 'tutorials::python/test/tutorials/test_tutorials.py::test_06_fused_attention'
+    row = next(item[row_key] for item in rows if row_key in item)
+    assert row['passed'] == passed
+    assert row['skipped'] == skipped
+    assert row['time'] == time
+
+
+@pytest.mark.parametrize(
     ('args', 'config'),
     [
         (
@@ -676,11 +804,27 @@ def test_tests_with_multiple_results(  # pylint: disable=R0913, R0914, R0917
             )
         ),
         (
+            'pass_rate --reports /path/to/reports --aggregation-level test_function',
+            triton_utils.Config(
+                action='pass_rate',
+                reports='/path/to/reports',
+                aggregation_level='test_function',
+            )
+        ),
+        (
             'tests_stats --r /path/to/reports --status skipped',
             triton_utils.Config(
                 action='tests_stats',
                 reports='/path/to/reports',
                 status_filter=['skipped'],
+            )
+        ),
+        (
+            'tests_stats --r /path/to/reports --aggregation-level test_function',
+            triton_utils.Config(
+                action='tests_stats',
+                reports='/path/to/reports',
+                aggregation_level='test_function',
             )
         ),
         (
@@ -697,6 +841,15 @@ def test_tests_with_multiple_results(  # pylint: disable=R0913, R0914, R0917
                 action='compare_reports',
                 reports='/path/to/reports',
                 reports_2='/path/to/reports2'
+            )
+        ),
+        (
+            'compare --r /path/to/reports --r2 /path/to/reports2 --aggregation-level test_function',
+            triton_utils.Config(
+                action='compare_reports',
+                reports='/path/to/reports',
+                reports_2='/path/to/reports2',
+                aggregation_level='test_function',
             )
         ),
     ]
@@ -752,6 +905,46 @@ def test_compare_reports(  # pylint: disable=R0913, R0914, R0917
         assert comparision.loc[results_row, (key, 'r1')] == result[0]
         assert comparision.loc[results_row, (key, 'r2')] == result[1]
         assert comparision.loc[results_row, (key, 'Δ')] == result[2]
+
+
+@pytest.mark.parametrize(
+    ('aggregation_level', 'passed', 'skipped', 'passed_delta', 'skipped_delta'),
+    [
+        ('none', [1, 3], [2, 0], 2, -2),
+        ('test_function', [1, 1], [1, 0], 0, -1),
+    ]
+)
+def test_compare_reports_aggregation_level(
+    tmp_path,
+    aggregation_level: str,
+    passed: list[int],
+    skipped: list[int],
+    passed_delta: int,
+    skipped_delta: int,
+):
+    for report_name, doc_str in TESTS_FOR_AGGREGATION_COMPARE.items():
+        report_name_parts = report_name.split('/')
+        subdir_path = tmp_path / report_name_parts[0]
+        subdir_path.mkdir(parents=True, exist_ok=True)
+        report_file = subdir_path / report_name_parts[1]
+        report_file.write_text(doc_str, encoding='utf-8')
+
+    config = triton_utils.Config(
+        action='compare_reports',
+        reports=str(tmp_path / 'test-report1'),
+        reports_2=str(tmp_path / 'test-report2'),
+        aggregation_level=aggregation_level,
+        _report_grouping_level=triton_utils.TestGroupingLevel.TEST.value,
+    )
+
+    comparison = triton_utils.run(config)
+    row_key = 'python/test/tutorials/test_tutorials.py::test_06_fused_attention'
+    assert comparison.loc[row_key, ('passed', 'r1')] == passed[0]
+    assert comparison.loc[row_key, ('passed', 'r2')] == passed[1]
+    assert comparison.loc[row_key, ('passed', 'Δ')] == passed_delta
+    assert comparison.loc[row_key, ('skipped', 'r1')] == skipped[0]
+    assert comparison.loc[row_key, ('skipped', 'r2')] == skipped[1]
+    assert comparison.loc[row_key, ('skipped', 'Δ')] == skipped_delta
 
 
 TESTS_WITH_FLAKY_RESULTS = {
