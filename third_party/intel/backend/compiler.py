@@ -87,7 +87,9 @@ class XPUOptions:
 # unit external consumers compare `n_spills` in: dword-equivalents per lane. 16
 # is PyTorch inductor's default `spill_threshold` for non-HIP, so a spill at or
 # below this cannot change inductor's verdict and a rebuild would only cost
-# compile time. Kept in sync with `kMaxSpillSlotsPerLane` in driver.c.
+# compile time. Kept in sync with `kMaxSpillSlotsPerLane` in driver.c, except on
+# the LTS driver line -- see `accepts_default_grf` -- because driver.c has no
+# driver-version context and the SPV path it gates was not measured for #8106.
 MAX_REG_SPILL_SLOTS_PER_LANE = 16
 
 SPILL_SIZE_RE = re.compile(r'spill_size\s*[:=]\s*(\d+)')
@@ -138,6 +140,27 @@ def spill_slots_per_lane(spill_size, threads_per_warp):
     if spill_size <= 0 or threads_per_warp <= 0:
         return spill_size
     return spill_size // (4 * threads_per_warp)
+
+
+def accepts_default_grf(spill_size, threads_per_warp, is_lts):
+    """Whether the default-GRF build is good enough to skip the large-GRF rebuild.
+
+    On the rolling driver line a spill at or below inductor's `spill_threshold`
+    cannot change its accept/reject verdict, so the rebuild would only add
+    compile time. LTS IGC prices the resulting binaries differently: declining
+    the rebuild costs +21% end to end on `pyhpc_isoneutral_mixing` (Max 1100,
+    12 of 165 configs affected, issue #8106), while the same 12 configs measure
+    neutral on rolling. So LTS keeps the older rule of rebuilding on any spill
+    and rolling keeps the compile-time saving.
+
+    The LTS branch compares BYTES rather than slots on purpose. Because
+    `spill_slots_per_lane` truncates, a slot threshold of 0 would still accept a
+    64 B spill (0 slots at SIMD32) and skip the rebuild -- and a 64 B config is
+    one of the 12 this is meant to cover.
+    """
+    if is_lts:
+        return spill_size <= 0
+    return spill_slots_per_lane(spill_size, threads_per_warp) <= MAX_REG_SPILL_SLOTS_PER_LANE
 
 
 def min_dot_size(device_props: Union[Dict, GPUTarget]):
@@ -695,8 +718,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                     subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
                     if options.grf_mode == "default":
                         spill_size = extract_spill_size_from_zebin(fbin)
-                        spill_slots = spill_slots_per_lane(spill_size, metadata["threads_per_warp"])
-                        if spill_slots <= MAX_REG_SPILL_SLOTS_PER_LANE:
+                        if accepts_default_grf(spill_size, metadata["threads_per_warp"], options.is_lts):
                             break
                 except (subprocess.CalledProcessError, IntelGPUError) as e:
                     # If GRF mode was not last yet, retry with different GRF mode
