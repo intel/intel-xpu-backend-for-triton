@@ -211,6 +211,36 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
+// COM: Boundary-check mask with other=0. The mask is a typical pattern from
+// COM: RewriteTensorDescriptorToPointer: andi of per-dimension boundary checks.
+// COM: Since 2D block loads have implicit boundary checking and other=0, the
+// COM: mask should be stripped entirely.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @boundary_check_mask_stripped
+  tt.func @boundary_check_mask_stripped(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i64) -> tensor<64x32xf16, #dot0> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x32xf16, #dot0>
+    %0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>>
+    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>> -> tensor<1x32xi32, #dot0>
+    %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1x32x!tt.ptr<f16>, #dot0>
+    %3 = tt.addptr %2, %1 : tensor<1x32x!tt.ptr<f16>, #dot0>, tensor<1x32xi32, #dot0>
+    %4 = tt.broadcast %3 : tensor<1x32x!tt.ptr<f16>, #dot0> -> tensor<64x32x!tt.ptr<f16>, #dot0>
+    // Build boundary-check mask: (col_offset + range) < splat(N)
+    %col_splat = tt.splat %arg1 : i32 -> tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>>
+    %col_cmp = arith.cmpi slt, %0, %col_splat : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>>
+    %col_mask_expanded = tt.expand_dims %col_cmp {axis = 0 : i32} : tensor<32xi1, #ttg.slice<{dim = 0, parent = #dot0}>> -> tensor<1x32xi1, #dot0>
+    %mask = tt.broadcast %col_mask_expanded : tensor<1x32xi1, #dot0> -> tensor<64x32xi1, #dot0>
+    // CHECK: ttig.2d_block_load_from_ptr %4 {row_major}
+    // CHECK-NOT: %mask
+    // CHECK-NOT: %cst
+    %7 = tt.load %4, %mask, %cst {ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #dot0>
+    tt.return %7 : tensor<64x32xf16, #dot0>
+  }
+}
+
+// -----
+
 // COM: Grouped GEMM advances the pointer inside the K-loop, so the load sees a
 // COM: loop-carried iter-arg. The runtime stride (`lda`) is loop-invariant, so
 // COM: the dataflow fixpoint still recovers it and the in-loop load lowers to a
@@ -242,6 +272,40 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     }
     %final = tt.load %res {ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #dot0>
     tt.return %final : tensor<64x32xf16, #dot0>
+  }
+}
+
+// -----
+
+// COM: Boundary-check mask (2D: both row and column) with other=0. Tests the
+// COM: multi-dimension andi pattern from RewriteTensorDescriptorToPointer.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @boundary_check_mask_2d_stripped
+  tt.func @boundary_check_mask_2d_stripped(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32) -> tensor<64x32xf16, #dot0> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x32xf16, #dot0>
+    %0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>>
+    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>> -> tensor<1x32xi32, #dot0>
+    %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1x32x!tt.ptr<f16>, #dot0>
+    %3 = tt.addptr %2, %1 : tensor<1x32x!tt.ptr<f16>, #dot0>, tensor<1x32xi32, #dot0>
+    %4 = tt.broadcast %3 : tensor<1x32x!tt.ptr<f16>, #dot0> -> tensor<64x32x!tt.ptr<f16>, #dot0>
+    // Build 2D boundary-check mask: (col < N) & (row < M)
+    %col_splat = tt.splat %arg1 : i32 -> tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>>
+    %col_cmp = arith.cmpi slt, %0, %col_splat : tensor<32xi32, #ttg.slice<{dim = 0, parent = #dot0}>>
+    %col_mask_expanded = tt.expand_dims %col_cmp {axis = 0 : i32} : tensor<32xi1, #ttg.slice<{dim = 0, parent = #dot0}>> -> tensor<1x32xi1, #dot0>
+    %col_mask = tt.broadcast %col_mask_expanded : tensor<1x32xi1, #dot0> -> tensor<64x32xi1, #dot0>
+    %row_range = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %row_splat = tt.splat %arg2 : i32 -> tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %row_cmp = arith.cmpi slt, %row_range, %row_splat : tensor<64xi32, #ttg.slice<{dim = 1, parent = #dot0}>>
+    %row_mask_expanded = tt.expand_dims %row_cmp {axis = 1 : i32} : tensor<64xi1, #ttg.slice<{dim = 1, parent = #dot0}>> -> tensor<64x1xi1, #dot0>
+    %row_mask = tt.broadcast %row_mask_expanded : tensor<64x1xi1, #dot0> -> tensor<64x32xi1, #dot0>
+    %mask = arith.andi %col_mask, %row_mask : tensor<64x32xi1, #dot0>
+    // CHECK: ttig.2d_block_load_from_ptr %4 {row_major}
+    // CHECK-NOT: %mask
+    // CHECK-NOT: %cst
+    %7 = tt.load %4, %mask, %cst {ttig.block_io = "row_major"} : tensor<64x32x!tt.ptr<f16>, #dot0>
+    tt.return %7 : tensor<64x32xf16, #dot0>
   }
 }
 
