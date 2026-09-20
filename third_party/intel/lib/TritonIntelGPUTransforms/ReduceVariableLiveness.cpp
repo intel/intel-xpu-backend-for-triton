@@ -147,10 +147,24 @@ bool crossesAliasingWrite(Operation *start, Operation *end) {
 /// that other backends route dot operands through and that Intel does not --
 /// so it never sees these loads.
 ///
-/// Sinking adds no memory access and does not expose the load's latency: the
-/// tile is already prefetched earlier in the body (by the pipeliner, or by
-/// `moveOperand` above).
-bool sinkInLoopDotOperandLoads(scf::ForOp forOp) {
+/// Unlike `moveOperand`, this leaves nothing behind at the original position,
+/// so a load that is sunk without need has its latency exposed rather than
+/// overlapped. Each load is therefore checked individually against a necessary
+/// condition for the sink to relieve any spilling at all: shortening a live
+/// range can only lower the pressure at program points *inside* the range it
+/// removes, so unless some point between the load and its first use is already
+/// at or above the GRF budget, the loop's over-budget region lies entirely
+/// outside what the sink shortens and the move can only cost latency.
+///
+/// \p analysis describes the loop as it was on entry, so once a load has moved
+/// the pressure reported for the loads examined after it is stale. It is stale
+/// in the safe direction only: a sink can only lower the pressure over the
+/// interval it vacates, so a later load can be sunk on the strength of pressure
+/// an earlier sink has already relieved, but never kept in place because of
+/// pressure that is no longer there.
+bool sinkInLoopDotOperandLoads(
+    scf::ForOp forOp, const ttg::intel::RegisterPressureAnalysis &analysis,
+    unsigned perLaneGRFBudget) {
   Block *loop = forOp.getBody();
   bool changed = false;
 
@@ -184,7 +198,21 @@ bool sinkInLoopDotOperandLoads(scf::ForOp forOp) {
     if (crossesAliasingWrite(loadOp, firstUse))
       continue;
 
-    LDBG("Sinking in-loop dot operand load to its first use: " << *loadOp);
+    // Highest pressure over the live range this sink would remove.
+    unsigned rangePressure = 0;
+    for (Operation *op = loadOp; op && op != firstUse; op = op->getNextNode())
+      rangePressure = std::max(rangePressure, analysis.pressureAt(op));
+    if (rangePressure < perLaneGRFBudget) {
+      LDBG("Keeping in-loop dot operand load in place: its live range peaks at "
+           << rangePressure << " B/lane, within the " << perLaneGRFBudget
+           << " B/lane GRF budget: " << *loadOp);
+      continue;
+    }
+
+    LDBG("Sinking in-loop dot operand load to its first use (live range peaks "
+         "at "
+         << rangePressure << " B/lane, at or above the " << perLaneGRFBudget
+         << " B/lane GRF budget): " << *loadOp);
     loadOp->moveBefore(firstUse);
     changed = true;
   }
@@ -385,11 +413,15 @@ bool optimizeDotOperands(scf::ForOp forOp,
   // trading a redundant (but prefetched and cached) 2D block load for a
   // shorter live range pays off.
   //
-  // The decision is per loop: sink every eligible operand or none. Choosing a
-  // subset would need a model of how much a given sink actually lowers the
-  // peak, which depends on where the peak sits relative to each live range.
-  // Nothing here measures that, so a partial choice would be arbitrary rather
-  // than selective.
+  // For the candidates handled by `moveOperand` the decision is per loop: sink
+  // every eligible operand or none. Choosing a subset would need a model of how
+  // much a given sink actually lowers the peak, which depends on where the peak
+  // sits relative to each live range. Nothing here measures that, so a partial
+  // choice would be arbitrary rather than selective -- and it would buy little,
+  // since `moveOperand` leaves a prefetch behind and so costs almost nothing
+  // when it sinks an operand that did not need sinking. The in-loop sink below
+  // has no such fallback and is therefore gated per load instead; see
+  // `sinkInLoopDotOperandLoads`.
   unsigned peakPressurePerLane = analysis.peakPressure(loop);
   if (peakPressurePerLane < perLaneGRFBudget) {
     LDBG("Keeping " << candidates.size()
@@ -403,13 +435,16 @@ bool optimizeDotOperands(scf::ForOp forOp,
        << candidates.size() << " operand(s) to sink into the loop): peak "
        << "pressure " << peakPressurePerLane << " B/lane is at or above the "
        << perLaneGRFBudget << " B/lane GRF budget");
+  // Operands already loaded inside the loop are not reached by `moveOperand`,
+  // but their live range within one iteration is just as expensive; shorten
+  // those too, per load (see `sinkInLoopDotOperandLoads`). Done first, while
+  // `analysis` still describes the IR exactly: `moveOperand` inserts loads and
+  // prefetches the analysis has no pressure information for.
+  bool sunkInLoop =
+      sinkInLoopDotOperandLoads(forOp, analysis, perLaneGRFBudget);
+
   for (Candidate &c : candidates)
     moveOperand(c.opId, c.dot, c.loadOp);
-
-  // Operands already loaded inside the loop are not reached by `moveOperand`,
-  // but their live range within one iteration is just as expensive; shorten it
-  // too, under the same pressure gate.
-  bool sunkInLoop = sinkInLoopDotOperandLoads(forOp);
 
   return !candidates.empty() || sunkInLoop;
 }
