@@ -544,6 +544,28 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
         instrument(pm, point="ttgpuir-to-llvmir", context=mod.context)
+        pm.run(mod, 'make_llir.allocate_memory')
+
+        metadata["shared"] = src.get_int_attr("ttg.shared")
+        # Shared memory is now allocated statically (see `initSharedMemory` in
+        # TritonGPUToLLVM.cpp), so an oversized request fails the SPIR-V module
+        # build later (an opaque `ZE_RESULT_ERROR_MODULE_BUILD_FAILURE`) instead
+        # of failing at kernel launch. Raise `OutOfResources` here instead, so
+        # `triton.runtime.autotuner.Autotuner` (and callers that bypass
+        # `CompiledKernel._init_handles`, e.g. torch Inductor's static XPU
+        # launcher) can skip the offending config instead of crashing. The check
+        # is done as soon as `ttg.shared` is final, because lowering an oversized
+        # allocation to LLVM is slow enough to dominate the compile time of a
+        # config that cannot run anyway. The `ttgpuir-to-llvmir` instrumentation
+        # passes have to run first: Proton's `allocate_proton_shared_memory`
+        # grows `ttg.shared` to make room for its profiling buffer.
+        max_shared_mem = metadata["target"].arch.get("local_mem_size")
+        if max_shared_mem is not None and metadata["shared"] > max_shared_mem:
+            raise OutOfResources(metadata["shared"], max_shared_mem, "shared memory")
+
+        pm = ir.pass_manager(mod.context)
+        pm.enable_debug()
+
         intel.passes.ttgpuir.add_to_llvmir(pm, options.dynamic_shared_memory)
         intel.passes.ttgpuir.add_gen_to_llvm(pm)
         passes.common.add_canonicalizer(pm)
@@ -595,17 +617,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if total_num_warps is not None:
             metadata["num_warps"] = total_num_warps
         metadata["threads_per_warp"] = intel.get_threads_per_warp(src)
-        metadata["shared"] = src.get_int_attr("ttg.shared")
-        # Shared memory is now allocated statically (see `initSharedMemory` in
-        # TritonGPUToLLVM.cpp), so an oversized request fails the SPIR-V module
-        # build later (an opaque `ZE_RESULT_ERROR_MODULE_BUILD_FAILURE`) instead
-        # of failing at kernel launch. Raise `OutOfResources` here instead, so
-        # `triton.runtime.autotuner.Autotuner` (and callers that bypass
-        # `CompiledKernel._init_handles`, e.g. torch Inductor's static XPU
-        # launcher) can skip the offending config instead of crashing.
-        max_shared_mem = metadata["target"].arch.get("local_mem_size")
-        if max_shared_mem is not None and metadata["shared"] > max_shared_mem:
-            raise OutOfResources(metadata["shared"], max_shared_mem, "shared memory")
         metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size")
         metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment")
         metadata["profile_scratch_size"] = src.get_int_attr("ttg.profile_scratch_memory_size") or 0
