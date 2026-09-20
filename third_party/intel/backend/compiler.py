@@ -88,7 +88,9 @@ class XPUOptions:
 # is PyTorch inductor's default `spill_threshold` for non-HIP, so a spill at or
 # below this cannot change inductor's verdict and a rebuild would only cost
 # compile time. Kept in sync with `kMaxSpillSlotsPerLane` in driver.c.
-MAX_REG_SPILL_SLOTS_PER_LANE = 16
+# FIXME: return this value to 16, so that this does not lead to regressions
+# in PyTorch E2E models like in #8077 or #8106.
+MAX_REG_SPILL_SLOTS_PER_LANE = 8
 
 SPILL_SIZE_RE = re.compile(r'spill_size\s*[:=]\s*(\d+)')
 PTSS_OVERFLOW_RE = re.compile(

@@ -593,7 +593,9 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   // band that truncates back down to an accepted value. An unknown SIMD width
   // makes `slotsPerLane()` fall back to raw bytes, which retries on all but the
   // smallest spills (issue #7821).
-  constexpr int64_t kMaxSpillSlotsPerLane = 16;
+  // FIXME: return this value to 16, so that this does not lead to regressions
+  // in PyTorch E2E models like in #8077 or #8106.
+  constexpr int64_t kMaxSpillSlotsPerLane = 8;
 
   if (canRetryWithLargeGRF &&
       (firstBuildFailed || n_spills.slotsPerLane() > kMaxSpillSlotsPerLane)) {
