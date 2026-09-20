@@ -1,4 +1,5 @@
 #include "mlir/IR/IRMapping.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "llvm/ADT/STLExtras.h"
@@ -92,6 +93,103 @@ bool isLoadCandidate(tt::DescriptorLoadOp loadOp, Type expectedElementType,
   if (!loadSource.getDefiningOp())
     return false;
   return true;
+}
+
+/// Return true if \p op may write to a resource that a global-memory 2D block
+/// load can alias, or if its effects are unknown.
+///
+/// A write to shared memory (`ttg.local_alloc`/`ttg.local_store`, which the SLM
+/// round trip of a `tt.trans` is lowered through) or to the L2 cache (a
+/// prefetch, which declares a write only to keep CSE/DCE from removing it)
+/// cannot change what a global load reads, so neither blocks moving such a load
+/// past it.
+bool mayWriteMemoryAliasingGlobalLoad(Operation *op) {
+  std::optional<SmallVector<MemoryEffects::EffectInstance>> effects =
+      getEffectsRecursively(op);
+  if (!effects)
+    return true; // conservative: unknown effects -> assume an aliasing write
+  return llvm::any_of(*effects, [](const MemoryEffects::EffectInstance &effect) {
+    if (!isa<MemoryEffects::Write>(effect.getEffect()))
+      return false;
+    SideEffects::Resource *resource = effect.getResource();
+    if (isa<ttg::SharedMemory>(resource))
+      return false;
+    if (resource->getResourceID() == ttgi::L2Cache::getResourceID())
+      return false;
+    return true;
+  });
+}
+
+/// Return true if any operation strictly between \p start and \p end may write
+/// memory that a global load reads. \p start and \p end must be in the same
+/// block, with \p start before \p end.
+bool crossesAliasingWrite(Operation *start, Operation *end) {
+  assert(start->getBlock() == end->getBlock() && "expecting the same block");
+  for (Operation *op = start->getNextNode(); op && op != end;
+       op = op->getNextNode())
+    if (mayWriteMemoryAliasingGlobalLoad(op))
+      return true;
+  return false;
+}
+
+/// Sink 2D dot-operand loads that already sit in \p forOp's body down to just
+/// before the first operation that uses them. Returns `true` if any load moved.
+///
+/// Intel lowers DPAS A/B operands straight from a 2D block load into registers,
+/// so an operand tile loaded near the top of a loop body but consumed by a dot
+/// near the bottom holds its full per-lane footprint for the whole iteration.
+/// A B operand is the expensive case: with `warpsPerCTA[N] == 1` it is
+/// replicated in every warp, so its live range costs `K * N * elemBytes /
+/// threadsPerWarp` bytes per lane with no `num_warps` divisor.
+///
+/// Upstream `ReorderInstructions` shortens exactly this kind of live range, but
+/// only for `ttg.local_load`/`ttg.convert_layout` -- the shared-memory staging
+/// that other backends route dot operands through and that Intel does not --
+/// so it never sees these loads.
+///
+/// Sinking adds no memory access and does not expose the load's latency: the
+/// tile is already prefetched earlier in the body (by the pipeliner, or by
+/// `moveOperand` above).
+bool sinkInLoopDotOperandLoads(scf::ForOp forOp) {
+  Block *loop = forOp.getBody();
+  bool changed = false;
+
+  SmallVector<tt::DescriptorLoadOp> loads;
+  for (Operation &op : *loop)
+    if (auto loadOp = dyn_cast<tt::DescriptorLoadOp>(&op))
+      loads.push_back(loadOp);
+
+  for (tt::DescriptorLoadOp loadOp : loads) {
+    auto tensorType = dyn_cast<RankedTensorType>(loadOp.getResult().getType());
+    if (!tensorType || tensorType.getRank() != 2)
+      continue;
+    if (!isa<ttg::DotOperandEncodingAttr>(tensorType.getEncoding()))
+      continue;
+
+    // The earliest user, as seen from the loop body block. A user with no
+    // ancestor there lives in an unrelated region: bail rather than guess.
+    Operation *firstUse = nullptr;
+    bool hasOutOfBlockUser = false;
+    for (Operation *user : loadOp->getUsers()) {
+      Operation *ancestor = loop->findAncestorOpInBlock(*user);
+      if (!ancestor) {
+        hasOutOfBlockUser = true;
+        break;
+      }
+      if (!firstUse || ancestor->isBeforeInBlock(firstUse))
+        firstUse = ancestor;
+    }
+    if (hasOutOfBlockUser || !firstUse || firstUse == loadOp->getNextNode())
+      continue;
+    if (crossesAliasingWrite(loadOp, firstUse))
+      continue;
+
+    LDBG("Sinking in-loop dot operand load to its first use: " << *loadOp);
+    loadOp->moveBefore(firstUse);
+    changed = true;
+  }
+
+  return changed;
 }
 
 /// Identifies the tile a descriptor load reads: the descriptor together with
@@ -278,9 +376,6 @@ bool optimizeDotOperands(scf::ForOp forOp,
     collectOperand(1, dot, dot.getB());
   }
 
-  if (candidates.empty())
-    return false;
-
   // Gate on the *peak* pressure of the loop body rather than on its live-in
   // pressure: live-in pressure is computed from `LivenessBlockInfo::in()`,
   // which by construction excludes the block arguments, so it does not see the
@@ -304,13 +399,19 @@ bool optimizeDotOperands(scf::ForOp forOp,
     return false;
   }
 
-  LDBG("Sinking " << candidates.size() << " dot operand(s): peak pressure "
-                  << peakPressurePerLane << " B/lane is at or above the "
-                  << perLaneGRFBudget << " B/lane GRF budget");
+  LDBG("Shortening dot operand live ranges ("
+       << candidates.size() << " operand(s) to sink into the loop): peak "
+       << "pressure " << peakPressurePerLane << " B/lane is at or above the "
+       << perLaneGRFBudget << " B/lane GRF budget");
   for (Candidate &c : candidates)
     moveOperand(c.opId, c.dot, c.loadOp);
 
-  return true;
+  // Operands already loaded inside the loop are not reached by `moveOperand`,
+  // but their live range within one iteration is just as expensive; shorten it
+  // too, under the same pressure gate.
+  bool sunkInLoop = sinkInLoopDotOperandLoads(forOp);
+
+  return !candidates.empty() || sunkInLoop;
 }
 
 class ReduceVariableLivenessPass
