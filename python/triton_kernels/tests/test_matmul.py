@@ -739,10 +739,12 @@ def test_matmul_mixed_fp8_matches_upcast(fp8_lhs, dtype, out_dtype, b_transpose,
                                         constraints, device, opt_flags_scope, fresh_knobs):
     if is_cuda() and torch.cuda.get_device_capability()[0] < 9:
         pytest.skip("requires Hopper or newer")
-    if is_hip() and constraints.get("is_persistent"):
-        pytest.skip("Persistent kernel not supported on AMD GPU")
+    if (is_hip() or is_xpu()) and constraints.get("is_persistent"):
+        pytest.xfail("Persistent kernel not supported on AMD GPU or XPU")
     if use_fpsan and is_hip() and not (is_hip_cdna3() or is_hip_cdna4() or is_hip_gfx1250()):
         pytest.skip("FPSan requires gfx942, gfx950, or gfx1250")
+    if use_fpsan and is_xpu():
+        pytest.skip("FPSan not supported on XPU yet")
 
     fresh_knobs.compilation.instrumentation_mode = "fpsan" if use_fpsan else ""
     torch.manual_seed(0)
