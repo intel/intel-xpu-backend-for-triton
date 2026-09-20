@@ -443,6 +443,11 @@ private:
       unsigned rank = shape.size();
       assert((rank == 2 || rank == 3) && "expecting a 2D or 3D dot operation");
       SmallVector<unsigned> ret(rank, 1);
+      if (chainedDotKind == ChainedDotKind::ChainedAlongA) {
+        // roll back for chainded dot a.
+        ret[0] = numWarps;
+        return ret;
+      }
       unsigned maxNumWarpsAlongM = clampToPowerOfTwo(
           mlir::ceil<unsigned>(shape[rank - 2], dpasCap.repeatCount));
       unsigned maxNumWarpsAlongN = clampToPowerOfTwo(
