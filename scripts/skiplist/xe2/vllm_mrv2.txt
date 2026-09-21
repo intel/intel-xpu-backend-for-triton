@@ -2,6 +2,12 @@
 tests/v1/worker/test_gpu_model_runner.py::test_hybrid_attention_mamba_tensor_shapes
 tests/v1/worker/test_gpu_model_runner.py::test_mamba_cache_raises_when_max_num_seqs_exceeds_blocks
 
+# Model Runner V2 does not yet support: ngram/ngram_gpu speculative decoding: https://github.com/intel/intel-xpu-backend-for-triton/issues/7166
+tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[ngram-raw_logits]
+tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[ngram-raw_logprobs]
+tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[ngram-processed_logits]
+tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[ngram-processed_logprobs]
+
 # GPU mode runner tried to instantiate dummy base class Event: https://github.com/intel/intel-xpu-backend-for-triton/issues/7684
 tests/v1/worker/test_gpu_model_runner.py::test_reasoning_config_without_custom_logitsprocs_does_not_need_output_token_ids
 tests/v1/worker/test_gpu_model_runner.py::test_init_kv_cache_without_kv_sharing
