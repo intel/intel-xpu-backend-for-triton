@@ -44,7 +44,8 @@ namespace {
 // into:
 //   %d = %a / %b
 //   %i = max(min(%x, max(%s0,1)-1), 0)         // this load's collapsed index
-//   %e = (%i*%d + %s1) * (%s0 > 0)             // merged extent
+//   %n = (%s0 > 0)                             // collapsed dimension not empty
+//   %e = (%i*%d + %s1) * %n + %f * (1 - %n)    // merged extent, %f when empty
 //   %g = (%x >= 0) & (%x < %s0)                // collapsed index in range
 //   %j = (%x*%d + %y) * %g + (1 - %g) * %e     // merged index, %e when padding
 //   %desc = tt.make_tensor_descriptor %base, [%e,%s2], [%b,%c]
@@ -59,7 +60,10 @@ namespace {
 // The merged extent is per *load*, not per dimension: bounding it with the
 // whole collapsed dimension ((%s0-1)*%d+%s1) is tight only for the last index
 // of that dimension and lets every other index read rows the rank-3 form pads
-// (issue #8001).
+// (issue #8001). `%f` is the smallest legal surface extent, declared when the
+// collapsed dimension is empty at runtime: a zero extent is emitted as `0 - 1`
+// and reads back as a 16MB surface, so the empty case declares a legal one and
+// relies on `%g` forcing the load out of range to make it pad.
 class FuseReshapeWithLoad : public tt::intel::Fuser {
 public:
   void run(ModuleOp moduleOp) {
@@ -189,7 +193,6 @@ private:
     // available there; otherwise it is rebuilt at the load. Reconstructing the
     // descriptor per load is cheap: `LowerTo2DBlockLoad` re-extracts every
     // shape/stride field per load anyway.
-    DominanceInfo domInfo;
     Operation *insertionPoint =
         domInfo.properlyDominates(collapsedOffset, makeTensorDescOp)
             ? static_cast<Operation *>(makeTensorDescOp)
@@ -233,20 +236,44 @@ private:
         zero);
     Value merged = merge(clampedIdx, newShape[collapsedDim]);
 
-    // An empty collapsed dimension keeps an extent of 0, which is what makes
-    // the load pad on the generic path, as the rank-3 form does. Write it as a
-    // multiply and not as `select(shapes[cd] > 0, merged, 0)`: on the middle
-    // branch the merged extent is the stride-one dimension, and a top-level
-    // `arith.select` is invisible to `ttgi::isDivisible`, which would cost the
-    // load its `block_io` attribute. That helper's `muli` case is an OR over
-    // the operands, so `muli(merged, nonEmpty)` reduces to the query it
-    // answers today.
+    // An empty collapsed dimension cannot keep an extent of 0: every surface
+    // field is emitted as `extent - 1`, so a zero declares a 16MB surface over
+    // a pointer to nothing instead of padding. Declare the smallest legal
+    // surface and let the index guard below force the load out of range, which
+    // is what makes it pad - on the 2D path as well as the generic one.
+    //
+    // Write both branches as multiplies and not as
+    // `select(shapes[cd] > 0, merged, floor)`: on the middle branch the merged
+    // extent is the stride-one dimension, and a top-level `arith.select` is
+    // invisible to `ttgi::isDivisible`, which would cost the load its
+    // `block_io` attribute for 16-bit and narrower types (for a 32-bit element
+    // the divisor is 1, which that helper answers unconditionally). Its `muli`
+    // case is an OR over the operands and its `addi` case an AND, so both terms
+    // have to stay divisible by the block extent: `muli(merged, nonEmpty)`
+    // reduces to the query it answers today, and the floor is a multiple of the
+    // block extent by construction.
+    std::optional<int64_t> floorExtent = emptyExtentFloor(
+        makeTensorDescOp.getType().getBlockType(), collapsedDim);
+    assert(floorExtent && "isCandidate should have declined this fusion");
     Value nonEmpty = builder.createOrFold<arith::ExtUIOp>(
         loc, indexTy,
         builder.createOrFold<arith::CmpIOp>(loc, arith::CmpIPredicate::sgt,
                                             collapsedShape, zero));
-    newShape[collapsedDim] =
+    // `canDeclareLegalSurface` has declined anything above the 24-bit surface
+    // limit, so the floor fits an `int`.
+    Value floor = tt::intel::findOrCreateIntConstant(
+        loc, static_cast<int>(*floorExtent), indexBitWidth, builder);
+    // One term per statement: ops appear in the order they are created, and C++
+    // leaves the evaluation order of a call's arguments unspecified, so
+    // building this as one nested expression makes the emitted order
+    // compiler-dependent.
+    Value isEmpty = builder.createOrFold<arith::SubIOp>(loc, one, nonEmpty);
+    Value keepExtent =
         builder.createOrFold<arith::MulIOp>(loc, merged, nonEmpty);
+    Value emptyExtent =
+        builder.createOrFold<arith::MulIOp>(loc, floor, isEmpty);
+    newShape[collapsedDim] =
+        builder.createOrFold<arith::AddIOp>(loc, keepExtent, emptyExtent);
 
     Value newDesc = tt::MakeTensorDescOp::create(
         builder, loc, newDescType, makeTensorDescOp.getBase(), newShape,
@@ -265,20 +292,21 @@ private:
     // into range (issue #8070). Force it to the merged extent, which no row of
     // the block can fall below, so the fused load pads too. Written as
     // multiplies for the same `isDivisible` reason as `nonEmpty` above.
+    // One term per statement here too, for the emission order reason above.
+    Value nonNegative = builder.createOrFold<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::sge, collapsedOffset, zero);
+    Value belowExtent = builder.createOrFold<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::slt, collapsedOffset, collapsedShape);
     Value inRange = builder.createOrFold<arith::ExtUIOp>(
         loc, indexTy,
-        builder.createOrFold<arith::AndIOp>(
-            loc,
-            builder.createOrFold<arith::CmpIOp>(loc, arith::CmpIPredicate::sge,
-                                                collapsedOffset, zero),
-            builder.createOrFold<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
-                                                collapsedOffset,
-                                                collapsedShape)));
+        builder.createOrFold<arith::AndIOp>(loc, nonNegative, belowExtent));
     Value outOfRange = builder.createOrFold<arith::SubIOp>(loc, one, inRange);
-    newOffsets[collapsedDim] = builder.createOrFold<arith::AddIOp>(
-        loc, builder.createOrFold<arith::MulIOp>(loc, mergedIdx, inRange),
-        builder.createOrFold<arith::MulIOp>(loc, outOfRange,
-                                            newShape[collapsedDim]));
+    Value keepIdx =
+        builder.createOrFold<arith::MulIOp>(loc, mergedIdx, inRange);
+    Value padIdx = builder.createOrFold<arith::MulIOp>(loc, outOfRange,
+                                                       newShape[collapsedDim]);
+    newOffsets[collapsedDim] =
+        builder.createOrFold<arith::AddIOp>(loc, keepIdx, padIdx);
 
     auto resType = cast<tt::TensorDescType>(newDesc.getType()).getBlockType();
     auto newDescLoadOp = tt::DescriptorLoadOp::create(
@@ -432,7 +460,8 @@ private:
     // SIGFPE, and a value wider than `unsigned` narrows to 0 (same) or to 1 (a
     // false "divisible"). Only the zero is reachable today - the tensor
     // verifier caps a block at 2^20 elements - but the narrowing is silent.
-    if (blockExtent <= 0 || !fitsUnsigned(blockExtent))
+    if (blockExtent <= 0 ||
+        !llvm::isUInt<32>(static_cast<uint64_t>(blockExtent)))
       return decline("merged-dimension block extent is not a positive "
                      "`unsigned`");
     if (!mlir::triton::gpu::intel::isDivisible(shapes[mergedDim], blockExtent))
@@ -453,6 +482,51 @@ private:
                                   collapsedDim, decline);
   }
 
+  /// `triton_gen.2Dblockload` bounds, in bytes for the byte-valued fields.
+  static constexpr int64_t MaxSurfaceExtent = 1 << 24;
+  static constexpr int64_t MinSurfaceBytes = 64;
+
+  /// Return the extent the fusion emits when the collapsed dimension turns out
+  /// to be empty at runtime, or `std::nullopt` if it cannot be computed without
+  /// overflow. A zero extent is not an option: every surface field is emitted
+  /// as `extent - 1`, so a zero reads back as 0xFFFFFF, i.e. a 16MB surface
+  /// over a pointer to nothing. The empty case therefore declares the smallest
+  /// legal surface and forces the load out of range instead, which is what
+  /// makes it pad on both lowering paths.
+  ///
+  /// The floor is a multiple of the merged dimension's block extent so that
+  /// `DescriptorLoadOpConversion`'s static mask classification is unchanged: it
+  /// asks `ttgi::isDivisible` about the emitted shape and index, `arith.addi`
+  /// is an AND over its operands there, and a floor that is not a multiple of
+  /// the block would demote the dimension to per-element masking for every
+  /// fused load with a dynamic collapsed shape - not just the empty ones.
+  static std::optional<int64_t> emptyExtentFloor(RankedTensorType tensorTy,
+                                                 unsigned collapsedDim) {
+    int64_t blockExtent = tensorTy.getDimSize(collapsedDim + 1);
+    // `isCandidate` has already declined a non-positive block extent; keep the
+    // helper total anyway, because it divides by this below.
+    if (blockExtent <= 0)
+      return std::nullopt;
+    // Collapsing dimension 0 makes the extent the surface height in rows, which
+    // has no lower bound; one block of rows is enough.
+    if (collapsedDim == 0)
+      return blockExtent;
+
+    // Collapsing the middle dimension makes it the surface width, which must be
+    // at least `MinSurfaceBytes` wide. Every operand of the two `divideCeil`s
+    // is positive, so the unsigned overload they resolve to is exact.
+    unsigned elemBitWidth = tensorTy.getElementTypeBitWidth();
+    if (elemBitWidth < 8)
+      return std::nullopt;
+    int64_t elemBytes = elemBitWidth / 8;
+    int64_t minElems = llvm::divideCeil(MinSurfaceBytes, elemBytes);
+    int64_t blocks = llvm::divideCeil(minElems, blockExtent);
+    int64_t floorElems;
+    if (llvm::MulOverflow(blockExtent, blocks, floorElems))
+      return std::nullopt;
+    return floorElems;
+  }
+
   /// Return true if the collapse of \p collapsedDim can declare a legal 2D
   /// block surface for every foldable input of \p descLoadOp. Everything here
   /// is foldable-only: a field built from function arguments is trusted, as
@@ -460,15 +534,29 @@ private:
   /// verifier trust it. All comparisons are signed, because a folded value can
   /// be negative and an unsigned compare would turn a negative pitch into a
   /// huge legal-looking one.
+  ///
+  /// Residual, knowingly accepted: when `shapes[collapsedDim]` does not fold
+  /// there is no bracket and the width rules below stay dead. This is a
+  /// stronger assumption than trusting a dynamic descriptor operand, because
+  /// the merged extent is *derived*: the stride ratio can amplify individually
+  /// sane inputs past the field limits. Three ways it can go wrong at runtime,
+  /// none of them statically visible:
+  ///   - the extent exceeds the 24-bit surface field, so the `- 1` encoding
+  ///     truncates it;
+  ///   - `clampedIdx * ratio + shapeMd` overflows the i32 that the surface
+  ///     fields are computed in;
+  ///   - the emitted `trunci(divui(...))` ratio truncates, or that overflow
+  ///     wraps the extent to a small value - including back to zero, which
+  ///     re-creates the `0 - 1 == 0xFFFFFF` surface that the floor below exists
+  ///     to prevent, by a route no static check can see. That last one is worse
+  ///     than an over-large field, not merely different.
+  /// Declining instead would lose the motivating dynamic case (a `batch*heads`
+  /// collapse), and clamping at runtime would turn real data into padding.
   template <typename DeclineFn>
   static bool canDeclareLegalSurface(tt::DescriptorLoadOp descLoadOp,
                                      tt::MakeTensorDescOp makeTensorDescOp,
                                      RankedTensorType tensorTy,
                                      unsigned collapsedDim, DeclineFn decline) {
-    // `triton_gen.2Dblockload` bounds, in bytes for the byte-valued fields.
-    constexpr int64_t MaxSurfaceExtent = 1 << 24;
-    constexpr int64_t MinSurfaceBytes = 64;
-
     const unsigned mergedDim = collapsedDim + 1;
     OperandRange shapes = makeTensorDescOp.getShape();
     OperandRange strides = makeTensorDescOp.getStrides();
@@ -487,7 +575,7 @@ private:
       // Both are positive here (non-positive folded strides are declined
       // earlier), so the signed division matches the emitted `divui`.
       ratio = *strideCd / *strideMd;
-      if (!fitsInt32(*ratio))
+      if (!llvm::isInt<32>(*ratio))
         return decline("stride ratio does not fit i32");
     }
 
@@ -500,31 +588,73 @@ private:
     std::optional<int64_t> offMd = folded(offsets[mergedDim]);
     if (ratio && offCd && offMd) {
       int64_t scaled, mergedOffset;
-      if (llvm::MulOverflow(*offCd, *ratio, scaled) || !fitsInt32(scaled) ||
+      if (llvm::MulOverflow(*offCd, *ratio, scaled) ||
+          !llvm::isInt<32>(scaled) ||
           llvm::AddOverflow(scaled, *offMd, mergedOffset) ||
-          !fitsInt32(mergedOffset))
+          !llvm::isInt<32>(mergedOffset))
         return decline("merged load offset does not fit i32");
     }
 
-    // The extent this fusion will emit, where it folds.
+    // The extent this fusion will emit, bracketed over the clamp range. Do not
+    // gate this on the collapsed index folding: the emitted extent is
+    // `clamp(offCd, 0, max(shapeCd,1)-1) * ratio + shapeMd`, monotone
+    // non-decreasing in the clamped index because `ratio` is non-negative here
+    // (non-positive folded strides are declined earlier), so the endpoints of
+    // the clamp range bracket every extent this load can emit. Gating on
+    // `offCd` instead leaves every rule below dead for a dynamic collapsed
+    // index while the load still fuses - i.e. it declares a surface nothing
+    // ever checks. A folded index collapses the bracket to a point and
+    // reproduces the exact check. `shapeCd` folds positive here, so the
+    // empty-dimension branch of the emitted extent is dead and `lastIdx` is
+    // `shapeCd - 1`; that branch's floor is checked separately below, because
+    // it is live whenever `shapeCd` does not fold.
     std::optional<int64_t> shapeCd = folded(shapes[collapsedDim]);
     std::optional<int64_t> shapeMd = folded(shapes[mergedDim]);
-    std::optional<int64_t> extent;
-    if (ratio && shapeCd && shapeMd && offCd) {
+    std::optional<int64_t> minExtent, maxExtent;
+    bool extentIsExact = false;
+    if (ratio && shapeCd && shapeMd) {
       int64_t lastIdx = std::max<int64_t>(*shapeCd, 1) - 1;
-      int64_t clampedIdx = std::clamp<int64_t>(*offCd, 0, lastIdx);
-      int64_t scaled, value;
-      if (llvm::MulOverflow(clampedIdx, *ratio, scaled) ||
-          llvm::AddOverflow(scaled, *shapeMd, value) || !fitsInt32(value))
+      int64_t loIdx = 0, hiIdx = lastIdx;
+      if (offCd)
+        loIdx = hiIdx = std::clamp<int64_t>(*offCd, 0, lastIdx);
+      auto mergedExtent = [&](int64_t idx) -> std::optional<int64_t> {
+        int64_t scaled, value;
+        if (llvm::MulOverflow(idx, *ratio, scaled) ||
+            llvm::AddOverflow(scaled, *shapeMd, value) ||
+            !llvm::isInt<32>(value))
+          return std::nullopt;
+        return value;
+      };
+      minExtent = mergedExtent(loIdx);
+      maxExtent = mergedExtent(hiIdx);
+      if (!minExtent || !maxExtent)
         return decline("merged extent does not fit i32");
-      extent = value;
+      extentIsExact = (loIdx == hiIdx);
     }
+
+    // The extent emitted for an empty collapsed dimension is a compile-time
+    // constant, so it is checked unconditionally: unlike the bracket above,
+    // nothing about it depends on an input that folds. Only the floor-vs-pitch
+    // rule below can actually fire today, because `verifyTensorSize`
+    // (lib/Dialect/Triton/IR/Traits.cpp) requires a power-of-two element count
+    // and caps it at 2^20: the block extent is therefore a power of two, which
+    // makes the floor either exactly `MinSurfaceBytes` or a power-of-two
+    // multiple of the element size above it - aligned, and at most 2^23 bytes
+    // either way. The magnitude and alignment rules are kept because they cost
+    // one comparison each and the alternative is a field derived by this pass
+    // that nothing ever checks.
+    std::optional<int64_t> floorExtent =
+        emptyExtentFloor(tensorTy, collapsedDim);
+    if (!floorExtent)
+      return decline("empty-dimension extent floor cannot be computed");
 
     if (collapsedDim == 0) {
       // The merged extent becomes the surface height, in rows: only the 24-bit
       // cap applies, and `wouldOverflow` never checks the height.
-      if (extent && *extent > MaxSurfaceExtent)
+      if (maxExtent && *maxExtent > MaxSurfaceExtent)
         return decline("merged extent exceeds the surface height limit");
+      if (*floorExtent > MaxSurfaceExtent)
+        return decline("empty-dimension height floor exceeds its limit");
       return true;
     }
 
@@ -545,17 +675,24 @@ private:
 
     // Compute the byte fields with checked arithmetic: `strides[0] * elemBytes`
     // alone can exceed int64_t for a hostile constant descriptor.
-    int64_t extentBytes = 0;
+    auto toBytes = [&](int64_t elems, int64_t &bytes) {
+      return !llvm::MulOverflow(elems, elemBytes, bytes);
+    };
+    int64_t minExtentBytes = 0, maxExtentBytes = 0;
     bool haveExtentBytes = false;
-    if (extent) {
-      if (llvm::MulOverflow(*extent, elemBytes, extentBytes))
+    if (minExtent && maxExtent) {
+      if (!toBytes(*minExtent, minExtentBytes) ||
+          !toBytes(*maxExtent, maxExtentBytes))
         return decline("merged surface width in bytes overflows");
       haveExtentBytes = true;
     }
+    int64_t floorBytes = 0;
+    if (!toBytes(*floorExtent, floorBytes))
+      return decline("empty-dimension width floor in bytes overflows");
     int64_t pitchBytes = 0;
     bool havePitchBytes = false;
     if (std::optional<int64_t> pitch = folded(strides[0])) {
-      if (llvm::MulOverflow(*pitch, elemBytes, pitchBytes))
+      if (!toBytes(*pitch, pitchBytes))
         return decline("promoted surface pitch in bytes overflows");
       havePitchBytes = true;
     }
@@ -565,30 +702,36 @@ private:
     // would let a known-bad pitch through whenever anything else is dynamic.
     // The `%` rules duplicate a `MaterializeBlockPointer` check that merely
     // withholds `block_io`; the magnitude rules are the load-bearing ones.
+    //
+    // Which end of the width bracket binds depends on the rule: the lower bound
+    // binds at its minimum, the 24-bit cap and the pitch at its maximum. The
+    // `%` rule cannot be decided from endpoints at all, so it applies only to
+    // an exact bracket. Skipping it otherwise cannot admit a misaligned width
+    // that the hardware ever sees: `MaterializeBlockPointer` grants `block_io`
+    // only when the stride-one extent is a multiple of `ceil(32/elemBitWidth)`
+    // elements, which is exactly 4 bytes for 8- and 16-bit types, while a 32-
+    // or 64-bit element is 4-byte aligned on its own. Sub-byte types are
+    // declined above, so a width that fails this rule on a non-exact bracket
+    // belongs to a load that never got `block_io` in the first place.
     if (haveExtentBytes &&
-        (extentBytes < MinSurfaceBytes || extentBytes > MaxSurfaceExtent ||
-         extentBytes % std::max<int64_t>(4, elemBytes) != 0))
+        (minExtentBytes < MinSurfaceBytes ||
+         maxExtentBytes > MaxSurfaceExtent ||
+         (extentIsExact &&
+          maxExtentBytes % std::max<int64_t>(4, elemBytes) != 0)))
       return decline("merged surface width is not legal");
+    if (floorBytes < MinSurfaceBytes || floorBytes > MaxSurfaceExtent ||
+        floorBytes % std::max<int64_t>(4, elemBytes) != 0)
+      return decline("empty-dimension width floor is not legal");
     if (havePitchBytes &&
         (pitchBytes < MinSurfaceBytes || pitchBytes > MaxSurfaceExtent ||
          pitchBytes % 16 != 0))
       return decline("promoted surface pitch is not legal");
-    if (haveExtentBytes && havePitchBytes && extentBytes > pitchBytes)
+    if (havePitchBytes && floorBytes > pitchBytes)
+      return decline("empty-dimension width floor exceeds its pitch");
+    if (haveExtentBytes && havePitchBytes && maxExtentBytes > pitchBytes)
       return decline("merged surface width exceeds its pitch");
 
     return true;
-  }
-
-  /// Return true if \p value is representable as an `int32_t`.
-  static bool fitsInt32(int64_t value) {
-    return value >= std::numeric_limits<int32_t>::min() &&
-           value <= std::numeric_limits<int32_t>::max();
-  }
-
-  /// Return true if \p value is representable as an `unsigned`.
-  static bool fitsUnsigned(int64_t value) {
-    return value >= 0 &&
-           static_cast<uint64_t>(value) <= std::numeric_limits<unsigned>::max();
   }
 
   /// Return true if \p numerator is provably divisible by \p denominator.
@@ -700,6 +843,13 @@ private:
 
     llvm_unreachable("Unexpected kind of user");
   }
+
+  /// Queried once per fused chain. The pass creates one fuser per run, so this
+  /// is built once per run. Reusing it across fusions is safe because the
+  /// rewrites add and erase operations but create no blocks or regions, and
+  /// MLIR keeps the intra-block ordering `properlyDominates` relies on up to
+  /// date.
+  DominanceInfo domInfo;
 };
 
 struct TritonIntelFuseReshape

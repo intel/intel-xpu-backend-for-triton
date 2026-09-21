@@ -549,19 +549,20 @@ tt.func public @noFuseMiddleDimWidthMisaligned(%arg0: tensor<16x16xbf16>, %arg1:
 // COM: The retained pitch, load-bearing: `LowerTo2DBlockLoad`'s static pitch
 // COM: check folds an `extract_desc` result, which never folds, so it is dead
 // COM: code for descriptor loads. 8 elements = 32 bytes < 64. The collapsed
-// COM: offset is dynamic, so the width cannot fold: this pins the per-field
-// COM: behaviour - a constant-bad pitch must reject even when the extent is not
-// COM: foldable.
-tt.func public @noFuseMiddleDimPitchBelow64(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<f32>, %off: i32) {
+// COM: *shape* is dynamic, so the merged extent cannot be bracketed: this pins
+// COM: the per-field behaviour - a constant-bad pitch must reject even when the
+// COM: extent is not foldable. It cannot isolate the rule, because the
+// COM: empty-dimension width floor is 64 bytes and so exceeds any pitch this
+// COM: rule rejects; no input can separate the two.
+tt.func public @noFuseMiddleDimPitchBelow64(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<f32>, %shape1: i32) {
   %c0_i32 = arith.constant 0 : i32
   %c1_i64 = arith.constant 1 : i64
   %c8_i64 = arith.constant 8 : i64
   %c16_i64 = arith.constant 16 : i64
-  %c4_i32 = arith.constant 4 : i32
   %c16_i32 = arith.constant 16 : i32
   %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32>
-  %0 = tt.make_tensor_descriptor %arg1, [%c16_i32, %c4_i32, %c16_i32], [%c8_i64, %c16_i64, %c1_i64] : <f32>, <16x1x16xf32>
-  %1 = tt.descriptor_load %0[%c0_i32, %off, %c0_i32] : !tt.tensordesc<16x1x16xf32> -> tensor<16x1x16xf32>
+  %0 = tt.make_tensor_descriptor %arg1, [%c16_i32, %shape1, %c16_i32], [%c8_i64, %c16_i64, %c1_i64] : <f32>, <16x1x16xf32>
+  %1 = tt.descriptor_load %0[%c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<16x1x16xf32> -> tensor<16x1x16xf32>
   %2 = tt.reshape %1 : tensor<16x1x16xf32> -> tensor<16x16xf32>
   %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<16x16xf32> * tensor<16x16xf32> -> tensor<16x16xf32>
   tt.return
@@ -574,18 +575,18 @@ tt.func public @noFuseMiddleDimPitchBelow64(%arg0: tensor<16x16xf32>, %arg1: !tt
 
 // COM: Pitch alignment: 21 f32 elements = 84 bytes, not a multiple of 16. Like
 // COM: the width alignment rule this duplicates a `MaterializeBlockPointer`
-// COM: check; it is here for uniformity. The collapsed offset is dynamic so only
-// COM: the pitch can fire.
-tt.func public @noFuseMiddleDimPitchMisaligned(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<f32>, %off: i32) {
+// COM: check; it is here for uniformity. The collapsed *shape* is dynamic so the
+// COM: merged extent cannot be bracketed, and 84 bytes is above both 64 and the
+// COM: 64-byte width floor, so only the pitch alignment can fire.
+tt.func public @noFuseMiddleDimPitchMisaligned(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<f32>, %shape1: i32) {
   %c0_i32 = arith.constant 0 : i32
   %c1_i64 = arith.constant 1 : i64
   %c16_i64 = arith.constant 16 : i64
   %c21_i64 = arith.constant 21 : i64
-  %c4_i32 = arith.constant 4 : i32
   %c16_i32 = arith.constant 16 : i32
   %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32>
-  %0 = tt.make_tensor_descriptor %arg1, [%c16_i32, %c4_i32, %c16_i32], [%c21_i64, %c16_i64, %c1_i64] : <f32>, <16x1x16xf32>
-  %1 = tt.descriptor_load %0[%c0_i32, %off, %c0_i32] : !tt.tensordesc<16x1x16xf32> -> tensor<16x1x16xf32>
+  %0 = tt.make_tensor_descriptor %arg1, [%c16_i32, %shape1, %c16_i32], [%c21_i64, %c16_i64, %c1_i64] : <f32>, <16x1x16xf32>
+  %1 = tt.descriptor_load %0[%c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<16x1x16xf32> -> tensor<16x1x16xf32>
   %2 = tt.reshape %1 : tensor<16x1x16xf32> -> tensor<16x16xf32>
   %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<16x16xf32> * tensor<16x16xf32> -> tensor<16x16xf32>
   tt.return
@@ -622,7 +623,9 @@ tt.func public @noFuseMiddleDimWidthAbove24Bit(%arg0: tensor<16x16xf32>, %arg1: 
 
 // COM: Load-bearing 24-bit cap on the promoted pitch: 4194308 f32 elements =
 // COM: 16777232 bytes > 2^24, and a multiple of 16 so only the cap can fire. The
-// COM: collapsed offset is dynamic, so the width cannot fold.
+// COM: collapsed offset is dynamic, so the width is bracketed by its clamp
+// COM: endpoints rather than folded - [64, 256] bytes here, legal at both ends
+// COM: and well under this pitch, so no width rule interferes.
 tt.func public @noFuseMiddleDimPitchAbove24Bit(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<f32>, %off: i32) {
   %c0_i32 = arith.constant 0 : i32
   %c1_i64 = arith.constant 1 : i64
@@ -961,10 +964,18 @@ tt.func public @fuseNegativeCollapsedOffset(%arg0: tensor<16x16xf32>, %arg1: !tt
 
 // -----
 
-// COM: A dynamic collapsed shape still fuses, and the zero-forcing factor is
-// COM: `muli(merged, extui(cmpi sgt))`, never an `arith.select`:
-// COM: `ttgi::isDivisible` understands `muli` (either operand) but not `select`,
-// COM: so a select would silently cost the fused load its `block_io` attribute.
+// COM: A dynamic collapsed shape still fuses, and an empty one does not get an
+// COM: extent of 0 - every surface field is emitted as `extent - 1`, so a zero
+// COM: would declare a 16MB surface - but the smallest legal one, here one
+// COM: 16-element block of rows. The form is
+// COM: `merged * nonEmpty + floor * (1 - nonEmpty)` with
+// COM: `nonEmpty = extui(cmpi sgt)`, never an `arith.select`: `ttgi::isDivisible`
+// COM: understands `muli` (either operand) and `addi` (both) but not `select`, so
+// COM: a select would silently change what `DescriptorLoadOpConversion` decides
+// COM: about the emitted shape. That argument is about the stride-one dimension
+// COM: and so does not bite on this case, where the collapse of dimension 0 puts
+// COM: the merged extent in the height; `fuseDynamicCollapsedShapeMiddleDim` is
+// COM: the case it bites on. The form is kept uniform across both branches.
 tt.func public @fuseDynamicCollapsedShape(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<f32>, %shape0: i32) {
   %c0_i32 = arith.constant 0 : i32
   %c1_i64 = arith.constant 1 : i64
@@ -978,17 +989,28 @@ tt.func public @fuseDynamicCollapsedShape(%arg0: tensor<16x16xf32>, %arg1: !tt.p
   tt.return
 }
 // CHECK-LABEL: fuseDynamicCollapsedShape
-// CHECK: arith.cmpi sgt
-// CHECK: arith.extui
-// CHECK: arith.muli
-// COM: The zero-forcing factor is the last thing computed before the new
-// COM: descriptor, so this range is where a `select` formulation would land.
+// CHECK-NOT: tt.reshape
+// CHECK: [[MERGED:%.*]] = arith.addi {{%.*}}, %c16_i32
+// CHECK: [[SGT:%.*]] = arith.cmpi sgt, %arg2, %c0_i32
+// CHECK: [[NONEMPTY:%.*]] = arith.extui [[SGT]]
+// CHECK: [[EMPTY:%.*]] = arith.subi %c1_i32, [[NONEMPTY]]
+// CHECK: [[KEEP:%.*]] = arith.muli [[MERGED]], [[NONEMPTY]]
+// COM: The floor: one 16-row block of the surface height.
+// CHECK: [[FLOOR:%.*]] = arith.muli [[EMPTY]], %c16_i32
+// CHECK: [[EXTENT:%.*]] = arith.addi [[KEEP]], [[FLOOR]]
+// COM: The extent is the last thing computed before the new descriptor, so this
+// COM: range is where a `select` formulation would land.
 // CHECK-NOT: arith.select
-// CHECK: tt.make_tensor_descriptor
+// CHECK: [[DESC:%.*]] = tt.make_tensor_descriptor %arg1, [[[EXTENT]], %c16_i32]
 // COM: The index guard lands *after* the descriptor, and is multiply-based for
-// COM: the same reason, so this range must be select-free too.
+// COM: the same reason, so this range must be select-free too. The load index of
+// COM: this case is a constant 0, so the guard's in-range term folds away and
+// COM: what is left is the padding term: an empty dimension reads at exactly the
+// COM: extent, which is out of range on both lowering paths.
 // CHECK-NOT: arith.select
-// CHECK: tt.descriptor_load
+// CHECK: [[OUT:%.*]] = arith.subi %c1_i32, {{%.*}}
+// CHECK: [[IDX:%.*]] = arith.muli [[OUT]], [[EXTENT]]
+// CHECK: tt.descriptor_load [[DESC]][[[IDX]], %c0_i32]
 // CHECK-NOT: tt.reshape
 
 // -----
@@ -1331,3 +1353,173 @@ tt.func public @noFuseNegativeMergedIndex(%arg0: tensor<64x64xf32>, %arg1: !tt.p
 // CHECK-LABEL: noFuseNegativeMergedIndex
 // CHECK: tt.descriptor_load
 // CHECK: tt.reshape
+
+// -----
+
+// COM: The reviewer's reproducer for a *dynamic* collapsed offset. Same
+// COM: descriptor as `fuseMiddleDimNarrowPitch`, which fuses at offset 0, but the
+// COM: offset is now a function argument, so no single extent folds. The clamp
+// COM: range is [0, 3] and the merged extent is monotone in it, so its endpoints
+// COM: bracket every extent this load can declare: [16, 64] elements = [64, 256]
+// COM: bytes. The upper end exceeds the 64-byte pitch, so this must decline -
+// COM: before this bracket existed every width rule was dead here and the load
+// COM: fused straight into case 4 of issue #8001.
+tt.func public @noFuseMiddleDimDynamicOffsetWidthPastPitch(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<f32>, %off: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c16_i64 = arith.constant 16 : i64
+  %c4_i32 = arith.constant 4 : i32
+  %c16_i32 = arith.constant 16 : i32
+  %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32>
+  %0 = tt.make_tensor_descriptor %arg1, [%c16_i32, %c4_i32, %c16_i32], [%c16_i64, %c16_i64, %c1_i64] : <f32>, <16x1x16xf32>
+  %1 = tt.descriptor_load %0[%c0_i32, %off, %c0_i32] : !tt.tensordesc<16x1x16xf32> -> tensor<16x1x16xf32>
+  %2 = tt.reshape %1 : tensor<16x1x16xf32> -> tensor<16x16xf32>
+  %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<16x16xf32> * tensor<16x16xf32> -> tensor<16x16xf32>
+  tt.return
+}
+// CHECK-LABEL: noFuseMiddleDimDynamicOffsetWidthPastPitch
+// CHECK: tt.descriptor_load
+// CHECK: tt.reshape
+
+// -----
+
+// COM: The bracket is a bound, not a veto: the same load with a pitch wide enough
+// COM: for its whole clamp range (strides[0] == 64 elements == 256 bytes) still
+// COM: fuses. Guards against the endpoint rules over-declining every dynamic
+// COM: collapsed offset, which is the motivating case for this pass.
+tt.func public @fuseMiddleDimDynamicOffsetWithinPitch(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<f32>, %off: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c16_i64 = arith.constant 16 : i64
+  %c64_i64 = arith.constant 64 : i64
+  %c4_i32 = arith.constant 4 : i32
+  %c16_i32 = arith.constant 16 : i32
+  %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32>
+  %0 = tt.make_tensor_descriptor %arg1, [%c16_i32, %c4_i32, %c16_i32], [%c64_i64, %c16_i64, %c1_i64] : <f32>, <16x1x16xf32>
+  %1 = tt.descriptor_load %0[%c0_i32, %off, %c0_i32] : !tt.tensordesc<16x1x16xf32> -> tensor<16x1x16xf32>
+  %2 = tt.reshape %1 : tensor<16x1x16xf32> -> tensor<16x16xf32>
+  %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<16x16xf32> * tensor<16x16xf32> -> tensor<16x16xf32>
+  tt.return
+}
+// CHECK-LABEL: fuseMiddleDimDynamicOffsetWithinPitch
+// CHECK: tt.make_tensor_descriptor
+// CHECK: tt.descriptor_load
+// CHECK-NOT: tt.reshape
+
+// -----
+
+// COM: The *lower* endpoint of the bracket, which is the collapsed index 0 and so
+// COM: is `shapes[2]` alone: 8 f32 elements = 32 bytes < 64. The pitch (64 bytes)
+// COM: and the 64-byte empty-dimension floor are both legal, so only the minimum
+// COM: width rule can fire. This is why the bracket needs both endpoints - the
+// COM: maximum alone is legal here.
+tt.func public @noFuseMiddleDimDynamicOffsetWidthBelow64(%arg0: tensor<8x16xf32>, %arg1: !tt.ptr<f32>, %off: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c8_i64 = arith.constant 8 : i64
+  %c16_i64 = arith.constant 16 : i64
+  %c4_i32 = arith.constant 4 : i32
+  %c8_i32 = arith.constant 8 : i32
+  %c16_i32 = arith.constant 16 : i32
+  %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32>
+  %0 = tt.make_tensor_descriptor %arg1, [%c16_i32, %c4_i32, %c8_i32], [%c16_i64, %c8_i64, %c1_i64] : <f32>, <16x1x8xf32>
+  %1 = tt.descriptor_load %0[%c0_i32, %off, %c0_i32] : !tt.tensordesc<16x1x8xf32> -> tensor<16x1x8xf32>
+  %2 = tt.reshape %1 : tensor<16x1x8xf32> -> tensor<16x8xf32>
+  %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<16x8xf32> * tensor<8x16xf32> -> tensor<16x16xf32>
+  tt.return
+}
+// CHECK-LABEL: noFuseMiddleDimDynamicOffsetWidthBelow64
+// CHECK: tt.descriptor_load
+// CHECK: tt.reshape
+
+// -----
+
+// COM: The same bracket on the height, where an outermost collapse puts the
+// COM: merged extent. The clamp range is [0, 7] and the ratio is 4194304, so the
+// COM: upper endpoint is 7*4194304 + 16 == 29360144 rows > 2^24. No pitch or
+// COM: width rule applies to a collapse of dimension 0, so only the height cap
+// COM: can fire.
+tt.func public @noFuseOuterDynamicOffsetHeightAbove24Bit(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<f32>, %off: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c4194304_i64 = arith.constant 4194304 : i64
+  %c8_i32 = arith.constant 8 : i32
+  %c16_i32 = arith.constant 16 : i32
+  %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32>
+  %0 = tt.make_tensor_descriptor %arg1, [%c8_i32, %c16_i32, %c16_i32], [%c4194304_i64, %c1_i64, %c1_i64] : <f32>, <1x16x16xf32>
+  %1 = tt.descriptor_load %0[%off, %c0_i32, %c0_i32] : !tt.tensordesc<1x16x16xf32> -> tensor<1x16x16xf32>
+  %2 = tt.reshape %1 : tensor<1x16x16xf32> -> tensor<16x16xf32>
+  %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<16x16xf32> * tensor<16x16xf32> -> tensor<16x16xf32>
+  tt.return
+}
+// CHECK-LABEL: noFuseOuterDynamicOffsetHeightAbove24Bit
+// CHECK: tt.descriptor_load
+// CHECK: tt.reshape
+
+// -----
+
+// COM: The empty-collapsed-dimension width floor is checked like any other field,
+// COM: and unlike the merged extent it is a compile-time constant, so it is
+// COM: checked even when nothing else folds. The collapsed shape is dynamic here,
+// COM: so there is no extent bracket at all; the floor is one 32-element block ==
+// COM: 128 bytes, over a 64-byte pitch. Reachable only where the non-empty width
+// COM: is illegal by the same rule (`shapes[2]` is a positive multiple of the
+// COM: block extent, so it is never narrower than the floor) - declining is still
+// COM: better than declaring a surface wider than its own pitch.
+tt.func public @noFuseMiddleDimFloorPastPitch(%arg0: tensor<32x16xf32>, %arg1: !tt.ptr<f32>, %shape1: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c16_i64 = arith.constant 16 : i64
+  %c32_i64 = arith.constant 32 : i64
+  %c16_i32 = arith.constant 16 : i32
+  %c32_i32 = arith.constant 32 : i32
+  %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32>
+  %0 = tt.make_tensor_descriptor %arg1, [%c16_i32, %shape1, %c32_i32], [%c16_i64, %c32_i64, %c1_i64] : <f32>, <16x1x32xf32>
+  %1 = tt.descriptor_load %0[%c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<16x1x32xf32> -> tensor<16x1x32xf32>
+  %2 = tt.reshape %1 : tensor<16x1x32xf32> -> tensor<16x32xf32>
+  %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<16x32xf32> * tensor<32x16xf32> -> tensor<16x16xf32>
+  tt.return
+}
+// CHECK-LABEL: noFuseMiddleDimFloorPastPitch
+// CHECK: tt.descriptor_load
+// CHECK: tt.reshape
+
+// -----
+
+// COM: The middle-dimension counterpart of `fuseDynamicCollapsedShape`, where the
+// COM: `isDivisible` argument for the multiply-based form is load-bearing: the
+// COM: merged extent *is* the stride-one dimension here, so the emitted shape is
+// COM: what `DescriptorLoadOpConversion` asks about when it classifies the mask.
+// COM: Both terms stay multiples of the 16-element block extent - `merged`
+// COM: because `shapes[2]` is, and the floor by construction - so the
+// COM: classification is the one the unfused load got.
+tt.func public @fuseDynamicCollapsedShapeMiddleDim(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<f32>, %shape1: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c16_i64 = arith.constant 16 : i64
+  %c16_i32 = arith.constant 16 : i32
+  %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32>
+  %0 = tt.make_tensor_descriptor %arg1, [%c16_i32, %shape1, %c16_i32], [%c16_i64, %c16_i64, %c1_i64] : <f32>, <16x1x16xf32>
+  %1 = tt.descriptor_load %0[%c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<16x1x16xf32> -> tensor<16x1x16xf32>
+  %2 = tt.reshape %1 : tensor<16x1x16xf32> -> tensor<16x16xf32>
+  %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<16x16xf32> * tensor<16x16xf32> -> tensor<16x16xf32>
+  tt.return
+}
+// CHECK-LABEL: fuseDynamicCollapsedShapeMiddleDim
+// CHECK-NOT: tt.reshape
+// CHECK: [[MERGED:%.*]] = arith.addi {{%.*}}, %c16_i32
+// CHECK: [[SGT:%.*]] = arith.cmpi sgt, %arg2, %c0_i32
+// CHECK: [[NONEMPTY:%.*]] = arith.extui [[SGT]]
+// CHECK: [[EMPTY:%.*]] = arith.subi %c1_i32, [[NONEMPTY]]
+// CHECK: [[KEEP:%.*]] = arith.muli [[MERGED]], [[NONEMPTY]]
+// COM: The floor here is a width, so it is also the 64-byte minimum: 16 f32
+// COM: elements, which is a multiple of the 16-element block extent.
+// CHECK: [[FLOOR:%.*]] = arith.muli [[EMPTY]], %c16_i32
+// CHECK: [[EXTENT:%.*]] = arith.addi [[KEEP]], [[FLOOR]]
+// CHECK-NOT: arith.select
+// CHECK: [[DESC:%.*]] = tt.make_tensor_descriptor %arg1, [%c16_i32, [[EXTENT]]]
+// CHECK-NOT: arith.select
+// CHECK: [[OUT:%.*]] = arith.subi %c1_i32, {{%.*}}
+// CHECK: [[IDX:%.*]] = arith.muli [[OUT]], [[EXTENT]]
+// CHECK: tt.descriptor_load [[DESC]][%c0_i32, [[IDX]]]
+// CHECK-NOT: tt.reshape

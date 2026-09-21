@@ -269,44 +269,93 @@ def test_descriptor_negative_outer_stride_declines(device, with_allocator):
 
 @triton.jit
 def _runtime_empty_kernel(a_ptr, out_ptr, heads, col_off, TOKENS: tl.constexpr, HEAD_DIM: tl.constexpr,
-                          S0: tl.constexpr, S1: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_D: tl.constexpr):
+                          S0: tl.constexpr, S1: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_D: tl.constexpr,
+                          PADDING: tl.constexpr):
     desc = tl.make_tensor_descriptor(a_ptr, shape=[TOKENS, heads, HEAD_DIM], strides=[S0, S1, 1],
-                                     block_shape=[BLOCK_M, 1, BLOCK_D])
+                                     block_shape=[BLOCK_M, 1, BLOCK_D], padding_option=PADDING)
     a = desc.load([0, 0, col_off]).reshape(BLOCK_M, BLOCK_D)
     acc = tl.dot(a, _identity(BLOCK_D))
     offs = tl.arange(0, BLOCK_M)[:, None] * BLOCK_D + tl.arange(0, BLOCK_D)[None, :]
     tl.store(out_ptr + offs, acc)
 
 
-# A collapsed dimension that is empty only at runtime. The extent is forced to
-# zero, which pads on the generic path. Device-side because a host
+# A collapsed dimension that is empty only at runtime, collapsing the *middle*
+# dimension so the merged extent is the surface width. The extent cannot be
+# forced to zero - every surface field is emitted as `extent - 1`, so a zero
+# declares a 16MB surface over a pointer to nothing - so it is forced to the
+# smallest legal surface (one 64-element block == 128 bytes) and the index is
+# forced past it, which is what makes it pad. Device-side because a host
 # TensorDescriptor asserts every shape positive and cannot express it.
 #
 # `S1 < HEAD_DIM` makes the heads overlap, which nothing rejects. That is what
 # makes this test bite: for a non-overlapping descriptor the old extent was
 # already <= 0 here, so only the overlapping form distinguishes the two.
 #
-# `col_off` is a runtime stride-one index that cannot be proven divisible, so
-# fusion still happens while `block_io` is withheld and the load stays on the
-# generic path. Both are asserted: an unfused rank-3 load pads on an empty
-# dimension by itself, and the 2D path encodes a zero extent as `0 - 1`.
+# `col_off` selects the lowering path, and both must pad. It is the stride-one
+# index: 0 is provably divisible so `block_io` is granted and the load is a 2D
+# block read, which pads by reading past `base_width`; 3 is not, so `block_io` is
+# withheld and the generic path pads by predication. `block_io` is asserted in
+# both directions, because a silent demotion to a gather would leave the path
+# this padding is about untested.
+@pytest.mark.parametrize("padding", ["zero", "nan"])
+@pytest.mark.parametrize("col_off, block_io", [(0, True), (3, False)])
 @pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
 @pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
-def test_descriptor_runtime_empty_collapsed_dim_pads(device, with_allocator):
-    TOKENS, HEAD_DIM, S0, S1, BLOCK_M, BLOCK_D, COL_OFF = 64, 128, 512, 64, 64, 64, 3
+def test_descriptor_runtime_empty_collapsed_dim_pads(device, with_allocator, col_off, block_io, padding):
+    TOKENS, HEAD_DIM, S0, S1, BLOCK_M, BLOCK_D = 64, 128, 512, 64, 64, 64
 
     torch.manual_seed(42)
     # Shifted away from zero so padding cannot be mistaken for real data.
     a = torch.randn(TOKENS * S0, dtype=torch.float16, device=device) + 1.0
     out = torch.full((BLOCK_M, BLOCK_D), -1.0, dtype=torch.float32, device=device)
-    kernel = _runtime_empty_kernel[(1, )](a, out, 0, COL_OFF, TOKENS, HEAD_DIM, S0, S1, BLOCK_M, BLOCK_D)
+    kernel = _runtime_empty_kernel[(1, )](a, out, 0, col_off, TOKENS, HEAD_DIM, S0, S1, BLOCK_M, BLOCK_D, padding)
 
-    torch.testing.assert_close(out, torch.zeros_like(out))
+    if padding == "nan":
+        assert torch.isnan(out).all(), "padding must keep the descriptor's padding value"
+    else:
+        torch.testing.assert_close(out, torch.zeros_like(out))
 
     assert f"!tt.tensordesc<{BLOCK_M}x1x{BLOCK_D}x" not in kernel.asm["ttir"], "not fused"
     llir = kernel.asm["llir"]
-    assert llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead') == 0, \
-        "must stay on the generic path: the 2D path encodes a zero extent as 0 - 1"
+    loads = llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead')
+    assert (loads > 0) == block_io, f"expected block_io={block_io}, got {loads} 2D block loads"
+
+
+@triton.jit
+def _runtime_empty_outer_kernel(a_ptr, out_ptr, batches, R: tl.constexpr, C: tl.constexpr, S0: tl.constexpr,
+                                BLOCK_R: tl.constexpr, BLOCK_C: tl.constexpr, PADDING: tl.constexpr):
+    desc = tl.make_tensor_descriptor(a_ptr, shape=[batches, R, C], strides=[S0, C, 1],
+                                     block_shape=[1, BLOCK_R, BLOCK_C], padding_option=PADDING)
+    a = desc.load([0, 0, 0]).reshape(BLOCK_R, BLOCK_C)
+    acc = tl.dot(a, _identity(BLOCK_C))
+    offs = tl.arange(0, BLOCK_R)[:, None] * BLOCK_C + tl.arange(0, BLOCK_C)[None, :]
+    tl.store(out_ptr + offs, acc)
+
+
+# The outermost-collapse counterpart: the merged extent is the surface *height*,
+# where the hardware has no 64-byte minimum, so the floor is one block of rows
+# instead. A separate case because the two branches compute different floors and
+# the out-of-range read goes out of bounds in a different direction - past
+# `base_height` here, past `base_width` above.
+@pytest.mark.parametrize("padding", ["zero", "nan"])
+@pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
+@pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
+def test_descriptor_runtime_empty_outer_dim_pads(device, with_allocator, padding):
+    R, C, S0, BLOCK_R, BLOCK_C = 32, 64, 1024, 32, 64
+
+    torch.manual_seed(42)
+    a = torch.randn(8192, dtype=torch.float16, device=device) + 1.0
+    out = torch.full((BLOCK_R, BLOCK_C), -1.0, dtype=torch.float32, device=device)
+    kernel = _runtime_empty_outer_kernel[(1, )](a, out, 0, R, C, S0, BLOCK_R, BLOCK_C, padding)
+
+    if padding == "nan":
+        assert torch.isnan(out).all(), "padding must keep the descriptor's padding value"
+    else:
+        torch.testing.assert_close(out, torch.zeros_like(out))
+
+    assert f"!tt.tensordesc<1x{BLOCK_R}x{BLOCK_C}x" not in kernel.asm["ttir"], "not fused"
+    llir = kernel.asm["llir"]
+    assert llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead') > 0
 
 
 @triton.jit
