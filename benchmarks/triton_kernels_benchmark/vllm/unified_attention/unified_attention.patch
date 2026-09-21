@@ -61,7 +61,7 @@ index dff0b21c64..2a12c31122 100644
      right = num_seqs
      while left < right:
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index b0231dd0c0..99df2284d8 100644
+index b0231dd0c0..9814b38f86 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -7,8 +7,6 @@
@@ -271,7 +271,7 @@ index b0231dd0c0..99df2284d8 100644
  
      # Wider KV tile for the tuned large-head path (see above). Only the 2D
      # path (used when max_seqlen_q > 1) reads TILE_SIZE_PREFILL.
-@@ -1043,15 +1073,13 @@ def unified_attention(
+@@ -1043,13 +1073,9 @@ def unified_attention(
      # 2. The batch includes at least one prefill request, or
      # 3. The number of sequences exceeds the configured threshold, or
      # 4. Batch invariance is enabled
@@ -286,12 +286,8 @@ index b0231dd0c0..99df2284d8 100644
 +        max_seqlen_q > 1
          or num_seqs > seq_threshold_3D
          or is_batch_invariant
-+        # 2d kernel includes crucial optimizations for models with sliding window
-+        or 0 < sliding_window_val <= 1024
      )
- 
-     # The kernel signature is the same for 2D and 3D — only the launch
-@@ -1073,17 +1101,57 @@ def unified_attention(
+@@ -1073,17 +1099,57 @@ def unified_attention(
          v_scale_ptr = None
      # 3D needs real segm tensors; 2D never touches them.  Pass ``None`` in
      # 2D mode so Triton can skip materialising these pointer arguments.
@@ -352,7 +348,7 @@ index b0231dd0c0..99df2284d8 100644
          tile_size = TILE_SIZE_DECODE
  
      launch_kwargs: dict[str, int] = {}
-@@ -1155,9 +1223,7 @@ def unified_attention(
+@@ -1155,9 +1221,7 @@ def unified_attention(
          stride_vs_slot=vs_slot,
          stride_vs_head=vs_head,
          query_start_len_ptr=cu_seqlens_q,
@@ -362,7 +358,7 @@ index b0231dd0c0..99df2284d8 100644
          NUM_SEGMENTS_PER_SEQ=num_segments,
          USE_FP8=output_scale is not None,
          IS_3D=use_3d,
-@@ -1188,7 +1254,6 @@ def unified_attention(
+@@ -1188,7 +1252,6 @@ def unified_attention(
              HEAD_SIZE=head_size,
              HEAD_SIZE_PADDED=head_size_padded,
              query_start_len_ptr=cu_seqlens_q,
