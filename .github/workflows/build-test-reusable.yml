@@ -90,12 +90,24 @@ jobs:
     outputs:
       test-triton-command: ${{ steps.test-triton.outputs.command }}
       integration-tests-matrix: ${{ steps.test-triton.outputs.matrix }}
+      artifact-label: ${{ steps.artifact-label.outputs.label }}
     steps:
       - name: Print inputs
         run: |
           cat <<EOF
           ${{ toJSON(inputs) }}
           EOF
+
+      # actions/upload-artifact rejects characters like ':' in artifact names, but runner
+      # labels/driver versions (e.g. "dle:2026.1.3") may contain them, so sanitize first.
+      - name: Compute artifact label
+        id: artifact-label
+        run: |
+          label="${{ inputs.runner_label || inputs.driver_version }}"
+          label="$(printf '%s' "$label" | tr -d '\r\n' | tr ':"<>|*?\/' '-')"
+          echo "label=$label" | tee -a "$GITHUB_OUTPUT"
+          echo "ARTIFACT_LABEL=$label" | tee -a "$GITHUB_ENV"
+
       - name: Checkout repository
         uses: actions/checkout@v7
 
@@ -187,13 +199,13 @@ jobs:
       - name: Upload Triton wheels
         uses: actions/upload-artifact@v7
         with:
-          name: triton-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          name: triton-${{ inputs.python_version }}-${{ env.ARTIFACT_LABEL }}
           path: dist/*.whl
 
       - name: Upload test reports
         uses: actions/upload-artifact@v7
         with:
-          name: test-reports-build-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          name: test-reports-build-${{ inputs.python_version }}-${{ env.ARTIFACT_LABEL }}
           include-hidden-files: true
           path: reports
 
@@ -242,7 +254,7 @@ jobs:
       - name: Download Triton wheels
         uses: actions/download-artifact@v8
         with:
-          name: triton-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          name: triton-${{ inputs.python_version }}-${{ needs.build.outputs.artifact-label }}
 
       - name: Install Triton
         run: |
@@ -385,7 +397,7 @@ jobs:
       - name: Upload test reports
         uses: actions/upload-artifact@v7
         with:
-          name: test-reports-${{ matrix.loop.suite }}-${{ matrix.loop.shard_id || 0 }}-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          name: test-reports-${{ matrix.loop.suite }}-${{ matrix.loop.shard_id || 0 }}-${{ inputs.python_version }}-${{ needs.build.outputs.artifact-label }}
           include-hidden-files: true
           path: reports
 

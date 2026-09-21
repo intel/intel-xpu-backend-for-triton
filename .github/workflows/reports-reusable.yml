@@ -71,12 +71,20 @@ jobs:
         run: |
           pip install ./scripts/triton_utils
 
+      # actions/upload-artifact rejects characters like ':' in artifact names, but runner
+      # labels/driver versions (e.g. "dle:2026.1.3") may contain them, so sanitize first.
+      - name: Compute artifact label
+        run: |
+          label="${{ inputs.runner_label || inputs.driver_version }}"
+          label="$(printf '%s' "$label" | tr -d '\r\n' | tr ':"<>|*?\/' '-')"
+          echo "ARTIFACT_LABEL=$label" | tee -a "$GITHUB_ENV"
+
       # Download artifacts from the current workflow run (when called from build-test-reusable)
       - name: Download test reports (artifacts)
         if: inputs.reports_dir == ''
         uses: actions/download-artifact@v8
         with:
-          pattern: ${{ inputs.artifact_pattern || format('test-reports-*-{0}-{1}', inputs.python_version, inputs.runner_label || inputs.driver_version) }}
+          pattern: ${{ inputs.artifact_pattern || format('test-reports-*-{0}-{1}', inputs.python_version, env.ARTIFACT_LABEL) }}
           path: reports
           merge-multiple: true
 
@@ -185,13 +193,13 @@ jobs:
       - name: Upload pass rate report
         uses: actions/upload-artifact@v7
         with:
-          name: pass_rate-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          name: pass_rate-${{ inputs.python_version }}-${{ env.ARTIFACT_LABEL }}
           path: pass_rate*.json
 
       - name: Upload tutorials test report
         uses: actions/upload-artifact@v7
         with:
-          name: test-reports-tutorials-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          name: test-reports-tutorials-${{ inputs.python_version }}-${{ env.ARTIFACT_LABEL }}
           include-hidden-files: true
           path: |
             reports/tutorials*.xml
@@ -200,7 +208,7 @@ jobs:
       - name: Upload tutorials performance report
         uses: actions/upload-artifact@v7
         with:
-          name: tutorials-${{ inputs.python_version }}-${{ inputs.runner_label || inputs.driver_version }}
+          name: tutorials-${{ inputs.python_version }}-${{ env.ARTIFACT_LABEL }}
           if-no-files-found: warn
           include-hidden-files: true
           path: |
