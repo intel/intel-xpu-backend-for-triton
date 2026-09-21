@@ -128,6 +128,14 @@ for rp in "${ref_providers[@]}"; do
         || echo "WARN: reference provider '$rp' failed; continuing without it"
 done
 
+# The pristine (unpatched) upstream triton kernel, TD off: the original 'triton'
+# baseline. Runs here on the clean tree (no patch applied), best-effort like the
+# other baselines. Unlabelled so it is the classic 'triton' provider.
+echo ""
+echo "=== Running baseline provider: triton (unpatched, TD off) ==="
+TD_PATCHED=0 triton-benchmarks run "$KEY" --provider triton "$@" \
+    || echo "WARN: baseline provider 'triton' failed; continuing without it"
+
 for f in "${SERIES_PATCHES[@]}"; do
     label="${f%.patch}"          # provider label, e.g. 0-no-non-pass
     num="${label%%-*}"           # leading patch number
