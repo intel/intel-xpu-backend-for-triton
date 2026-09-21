@@ -108,16 +108,17 @@ bool mayWriteMemoryAliasingGlobalLoad(Operation *op) {
       getEffectsRecursively(op);
   if (!effects)
     return true; // conservative: unknown effects -> assume an aliasing write
-  return llvm::any_of(*effects, [](const MemoryEffects::EffectInstance &effect) {
-    if (!isa<MemoryEffects::Write>(effect.getEffect()))
-      return false;
-    SideEffects::Resource *resource = effect.getResource();
-    if (isa<ttg::SharedMemory>(resource))
-      return false;
-    if (resource->getResourceID() == ttgi::L2Cache::getResourceID())
-      return false;
-    return true;
-  });
+  return llvm::any_of(
+      *effects, [](const MemoryEffects::EffectInstance &effect) {
+        if (!isa<MemoryEffects::Write>(effect.getEffect()))
+          return false;
+        SideEffects::Resource *resource = effect.getResource();
+        if (isa<ttg::SharedMemory>(resource))
+          return false;
+        if (resource->getResourceID() == ttgi::L2Cache::getResourceID())
+          return false;
+        return true;
+      });
 }
 
 /// Return true if any operation strictly between \p start and \p end may write
