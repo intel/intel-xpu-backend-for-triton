@@ -1653,8 +1653,6 @@ def test_noinline_returns_tensor(device):
 @pytest.mark.parametrize("scalar", [False, True])
 @pytest.mark.parametrize("ordered", [False, True])
 def test_atomic_load_store(dtype, scalar, ordered, device):
-    if is_xpu() and dtype in (torch.bool, torch.int8, torch.uint8, torch.int16):
-        pytest.skip("FIXME: https://github.com/intel/intel-xpu-backend-for-triton/issues/8027")
 
     @triton.jit
     def kernel(src, dst, N: tl.constexpr, SCALAR: tl.constexpr, ORDERED: tl.constexpr):
