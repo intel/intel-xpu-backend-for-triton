@@ -33,7 +33,7 @@ index dff0b21c64..2a12c31122 100644
      right = num_seqs
      while left < right:
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index b0231dd0c0..b6c7be47dc 100644
+index b0231dd0c0..77b69f6de6 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -7,8 +7,6 @@
@@ -119,7 +119,31 @@ index b0231dd0c0..b6c7be47dc 100644
      # Per-(token, head) scale caches: used iff KV_QUANT_MODE in {2, 3}.
      USE_PER_TOKEN_HEAD_SCALES: tl.constexpr = (KV_QUANT_MODE >= 2) and (
          KV_QUANT_MODE <= 3
-@@ -704,7 +762,6 @@ def reduce_segments(
+@@ -566,21 +624,8 @@ def kernel_unified_attention(
+         M, L, P, alpha = softmax_step(S, M, L)
+         acc = acc * alpha[:, None]
+ 
+-        if SLIDING_WINDOW:
+-            qpos_lo = q_block_local_idx * BLOCK_Q
+-            dist = context_len + qpos_lo - seq_offset[:, None]
+-            if USE_PER_SEQ_CAUSAL:
+-                is_causal_seq = tl.load(per_seq_causal_ptr + seq_idx)
+-                sw_mask_v = tl.where(
+-                    is_causal_seq,
+-                    dist < SLIDING_WINDOW,
+-                    (dist < SLIDING_WINDOW) & (dist > -SLIDING_WINDOW),
+-                )
+-            elif USE_CAUSAL:
+-                sw_mask_v = dist < SLIDING_WINDOW
+-            else:
+-                sw_mask_v = (dist < SLIDING_WINDOW) & (dist > -SLIDING_WINDOW)
+-            V = tl.where(sw_mask_v, V, 0.0)
++        # In the upstream there is an additional zeroing of V for tokens outside of the sliding window which is redundant.
++        # Adding it decreases performance for sliding window case
+         if USE_PER_TOKEN_HEAD_SCALES:
+             # Per-token-head quant: apply v_scale to P instead of V.
+             P_v = (P * v_token_head_scales[None, :]).to(V.dtype)
+@@ -704,7 +749,6 @@ def reduce_segments(
      HEAD_SIZE: tl.constexpr,  # int, must be power of 2
      HEAD_SIZE_PADDED: tl.constexpr,  # int, must be power of 2
      query_start_len_ptr,  # [num_seqs+1]
@@ -127,7 +151,7 @@ index b0231dd0c0..b6c7be47dc 100644
      NUM_SEGMENTS_PER_SEQ: tl.constexpr,  # int
      USE_FP8: tl.constexpr,  # bool
      FP8_MIN: tl.constexpr = float8_info.min,
-@@ -714,7 +771,7 @@ def reduce_segments(
+@@ -714,7 +758,7 @@ def reduce_segments(
      query_head_idx = tl.program_id(1)
  
      seq_idx = find_seq_idx(
@@ -136,7 +160,7 @@ index b0231dd0c0..b6c7be47dc 100644
      )
  
      # sequence len for this particular sequence
-@@ -934,11 +991,6 @@ def unified_attention(
+@@ -934,11 +978,6 @@ def unified_attention(
      num_queries_per_kv = num_query_heads // num_kv_heads
      head_size = q.shape[2]
  
@@ -148,7 +172,7 @@ index b0231dd0c0..b6c7be47dc 100644
      # Tuned launch parameters; ``None`` lets Triton pick its defaults.
      launch_num_warps: int | None = None
      launch_num_stages: int | None = None
-@@ -954,22 +1006,9 @@ def unified_attention(
+@@ -954,22 +993,9 @@ def unified_attention(
          and current_platform.is_device_capability_family(100)
      )
      if tuned_large_head:
@@ -171,7 +195,7 @@ index b0231dd0c0..b6c7be47dc 100644
      sliding_window_val = 1 + window_size[0] if window_size[0] >= 0 else 0
  
      # Compute chunked block size from sliding window if needed.
-@@ -980,12 +1019,16 @@ def unified_attention(
+@@ -980,12 +1006,16 @@ def unified_attention(
      elif sliding_window_val <= 0:
          chunk_lookback = -1
  
@@ -194,7 +218,7 @@ index b0231dd0c0..b6c7be47dc 100644
  
      # Wider KV tile for the tuned large-head path (see above). Only the 2D
      # path (used when max_seqlen_q > 1) reads TILE_SIZE_PREFILL.
-@@ -1043,15 +1086,13 @@ def unified_attention(
+@@ -1043,13 +1073,9 @@ def unified_attention(
      # 2. The batch includes at least one prefill request, or
      # 3. The number of sequences exceeds the configured threshold, or
      # 4. Batch invariance is enabled
@@ -209,12 +233,8 @@ index b0231dd0c0..b6c7be47dc 100644
 +        max_seqlen_q > 1
          or num_seqs > seq_threshold_3D
          or is_batch_invariant
-+        # 2d kernel includes crucial optimizations for models with sliding window
-+        or 0 < sliding_window_val <= 1024
      )
- 
-     # The kernel signature is the same for 2D and 3D — only the launch
-@@ -1073,17 +1114,57 @@ def unified_attention(
+@@ -1073,17 +1099,57 @@ def unified_attention(
          v_scale_ptr = None
      # 3D needs real segm tensors; 2D never touches them.  Pass ``None`` in
      # 2D mode so Triton can skip materialising these pointer arguments.
@@ -275,7 +295,7 @@ index b0231dd0c0..b6c7be47dc 100644
          tile_size = TILE_SIZE_DECODE
  
      launch_kwargs: dict[str, int] = {}
-@@ -1155,9 +1236,7 @@ def unified_attention(
+@@ -1155,9 +1221,7 @@ def unified_attention(
          stride_vs_slot=vs_slot,
          stride_vs_head=vs_head,
          query_start_len_ptr=cu_seqlens_q,
@@ -285,7 +305,7 @@ index b0231dd0c0..b6c7be47dc 100644
          NUM_SEGMENTS_PER_SEQ=num_segments,
          USE_FP8=output_scale is not None,
          IS_3D=use_3d,
-@@ -1188,7 +1267,6 @@ def unified_attention(
+@@ -1188,7 +1252,6 @@ def unified_attention(
              HEAD_SIZE=head_size,
              HEAD_SIZE_PADDED=head_size_padded,
              query_start_len_ptr=cu_seqlens_q,
