@@ -160,3 +160,24 @@ for f in "${SERIES_PATCHES[@]}"; do
     git apply -R "$CURRENT_PATCH"
     CURRENT_PATCH=""
 done
+
+# Finally, benchmark the reference patch (NAME.patch — the full optimization, the
+# de-facto endpoint of the series) as the classic unlabelled 'triton-td' provider,
+# TD on. The patch file itself is not modified, only applied and reverted.
+if [ -f "$PATCH_FILE" ]; then
+    # Undo any leftover application from a previous crashed run.
+    if git apply -R --check "$PATCH_FILE" 2>/dev/null; then git apply -R "$PATCH_FILE"; fi
+    echo ""
+    echo "=== Applying reference patch $(basename "$PATCH_FILE") ==="
+    CURRENT_PATCH="$PATCH_FILE"
+    git apply "$CURRENT_PATCH"
+
+    echo ""
+    echo "=== Running triton-td (reference / full optimization, TD_PATCHED=1) ==="
+    TD_PATCHED=1 triton-benchmarks run "$KEY" --provider triton-td "$@"
+
+    echo ""
+    echo "=== Reverting reference patch ==="
+    git apply -R "$CURRENT_PATCH"
+    CURRENT_PATCH=""
+fi
