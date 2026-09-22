@@ -427,9 +427,10 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // COM: A load whose result is used as a select's *condition* is not a datum the
 // COM: select picks lanes of, so it carries no condition to narrow by.
 module attributes {"ttg.num-warps" = 4 : i32} {
-  tt.func @load_as_condition_blocks_narrowing(%ptr: tensor<512x!tt.ptr<i1>>, %w: tensor<512xi1>, %x: tensor<512xf16>, %y: tensor<512xf16>) -> tensor<512xf16> {
-    %cst = arith.constant dense<false> : tensor<512xi1>
-    %v = tt.load %ptr, %w, %cst : tensor<512x!tt.ptr<i1>>
+  tt.func @load_as_condition_blocks_narrowing(%ptr: tensor<512x!tt.ptr<i8>>, %w: tensor<512xi1>, %x: tensor<512xf16>, %y: tensor<512xf16>) -> tensor<512xf16> {
+    %cst = arith.constant dense<0> : tensor<512xi8>
+    %v8 = tt.load %ptr, %w, %cst : tensor<512x!tt.ptr<i8>>
+    %v = arith.trunci %v8 : tensor<512xi8> to tensor<512xi1>
     %r = arith.select %v, %x, %y : tensor<512xi1>, tensor<512xf16>
     tt.return %r : tensor<512xf16>
   }
@@ -437,7 +438,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK-LABEL:   tt.func @load_as_condition_blocks_narrowing(
 // CHECK:           %[[V:.*]] = tt.load %arg0, %arg1, %{{.*}} :
 // CHECK-NOT:       arith.andi
-// CHECK:           arith.select %[[V]], %arg2, %arg3
+// CHECK:           %[[T:.*]] = arith.trunci %[[V]]
+// CHECK:           arith.select %[[T]], %arg2, %arg3
 
 // -----
 

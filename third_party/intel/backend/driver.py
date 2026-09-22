@@ -45,7 +45,7 @@ def find_sycl_icpx(include_dir: list[str]) -> tuple[list[str], list[str]]:
     if icpx_path:
         # only `icpx` compiler knows where sycl runtime binaries and header files are
         compiler_root = os.path.abspath(f"{icpx_path}/../..")
-        include_dir += [os.path.join(compiler_root, "include"), os.path.join(compiler_root, "include/sycl")]
+        include_dir += [os.path.join(compiler_root, "include"), os.path.join(compiler_root, "include", "sycl")]
         sycl_dir = os.path.join(compiler_root, "lib")
         return include_dir, [sycl_dir]
 
@@ -55,10 +55,10 @@ def find_sycl_icpx(include_dir: list[str]) -> tuple[list[str], list[str]]:
         # installed here (a VTune-only install has no `compiler` directory at all). Check that both
         # paths exist before returning them.
         # See https://github.com/intel/intel-xpu-backend-for-triton/issues/7977.
-        compiler_root = os.path.join(oneapi_root, "compiler/latest")
+        compiler_root = os.path.join(oneapi_root, "compiler", "latest")
         sycl_dir = os.path.join(compiler_root, "lib")
-        if os.path.isfile(os.path.join(compiler_root, "include/sycl/sycl.hpp")) and os.path.isdir(sycl_dir):
-            include_dir += [os.path.join(compiler_root, "include"), os.path.join(compiler_root, "include/sycl")]
+        if os.path.isfile(os.path.join(compiler_root, "include", "sycl", "sycl.hpp")) and os.path.isdir(sycl_dir):
+            include_dir += [os.path.join(compiler_root, "include"), os.path.join(compiler_root, "include", "sycl")]
             return include_dir, [sycl_dir]
         if os.path.isdir(compiler_root):
             # A compiler directory with only half of SYCL in it is not something a normal install
@@ -421,6 +421,13 @@ def get_hasher_common(is_lts: bool = False):
 def compile_module_from_src(src: str, name: str, is_lts: bool = False):
     hasher = get_hasher_common(is_lts).copy()
     hasher.update(src.encode("utf-8"))
+    # `spirv_utils` is compiled with `-DTRITON_INTEL_INJECT_PYTORCH=1` when
+    # `INJECT_PYTORCH=True` (see below), which wraps kernel launches in a
+    # `RECORD_FUNCTION` scope. That flag is not part of `src`, so without it in the key
+    # an uninstrumented .so cached by an earlier run (e.g. the unit tests, which never
+    # set `INJECT_PYTORCH`) is reused and the profiler scope silently disappears.
+    if name == "spirv_utils" and COMPILATION_HELPER.inject_pytorch_dep:
+        hasher.update("inject_pytorch=True".encode("utf-8"))
     key = hasher.hexdigest()
     cache = get_cache_manager(key)
     suffix = sysconfig.get_config_var("EXT_SUFFIX")

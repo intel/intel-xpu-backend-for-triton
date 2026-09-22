@@ -1058,6 +1058,9 @@ static SmallVector<Value> Bf16_to_Fp8E4M3Nv(Location loc,
           b.extract_element(i8_ty, fp8x4Vec, b.i32_val(3))};
 }
 
+// For undefRounding callers. Re-biases the packed exponent+mantissa bits
+// directly; clamps rather than saturates, so BF16 Inf/NaN/overflow map to
+// the wrong FP16 bit pattern. See Bf16_to_Fp16WithRounding for the fix.
 static SmallVector<Value> Bf16_to_Fp16(Location loc,
                                        ConversionPatternRewriter &rewriter,
                                        const SmallVector<Value> &v) {
@@ -1094,6 +1097,27 @@ static SmallVector<Value> Bf16_to_Fp16(Location loc,
   fp16x2Vec = b.bitcast(fp16x2Vec, fp16x2VecTy);
   return {b.extract_element(f16_ty, fp16x2Vec, b.i32_val(0)),
           b.extract_element(f16_ty, fp16x2Vec, b.i32_val(1))};
+}
+
+// For RTNE/RTZ callers. Round-trips through FP32 (exact for BF16 -> FP32) so
+// the constrained FP trunc saturates overflow/Inf/NaN correctly.
+template <RoundingMode Rounding>
+static SmallVector<Value>
+Bf16_to_Fp16WithRounding(Location loc, ConversionPatternRewriter &rewriter,
+                         const SmallVector<Value> &v) {
+  MLIRContext *ctx = rewriter.getContext();
+  SmallVector<Value> result;
+  result.reserve(v.size());
+  for (Value elem : v) {
+    Value fp32 = LLVM::FPExtOp::create(rewriter, loc, f32_ty, elem);
+    Value fp16 = LLVM::ConstrainedFPTruncIntr::create(
+        rewriter, loc, f16_ty, fp32,
+        LLVM::RoundingModeAttr::get(
+            ctx, LLVM::intel::convertTritonRoundingModeToLLVM(Rounding)),
+        arith::getLLVMDefaultFPExceptionBehavior(*ctx));
+    result.push_back(fp16);
+  }
+  return result;
 }
 
 inline Type getFunctionType(Type resultType, ValueRange operands) {
@@ -1390,6 +1414,10 @@ struct FpToFpOpConversion
               {Fp_to_Fp8_RTNE<BFloat16Type, Float8E4M3Type>, 1}}},
             // BF16 -> F16
             {{BF16TyID, F16TyID, undefRounding}, {Bf16_to_Fp16, 2}},
+            {{BF16TyID, F16TyID, RoundingMode::RTNE},
+             {Bf16_to_Fp16WithRounding<RoundingMode::RTNE>, 2}},
+            {{BF16TyID, F16TyID, RoundingMode::RTZ},
+             {Bf16_to_Fp16WithRounding<RoundingMode::RTZ>, 2}},
             // F32 -> F8
             {{F32TyID, F8E4M3TyID, RoundingMode::RTNE},
              {Fp_to_Fp8_RTNE<Float32Type, Float8E4M3Type>, 1}},

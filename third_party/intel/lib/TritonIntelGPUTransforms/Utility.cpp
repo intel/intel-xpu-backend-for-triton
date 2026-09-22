@@ -8,6 +8,7 @@
 
 #include "triton/Analysis/Utility.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Transforms/DialectConversion.h"
 
@@ -150,6 +151,43 @@ CachePolicy getCachePolicy(Attribute cachePolicy) {
   return {policy.getCacheModifier(), policy.getEvictionPolicy()};
 }
 
+/// True for a masked load whose result does not reach a dot. `block_io` is what
+/// tells the layout propagation the load is free in any encoding, so the load
+/// is rematerialized into its consumer's layout. That is the right trade when
+/// the consumer is a dot: the 2D block message delivers the DPAS operand
+/// directly. With any other consumer the load gives up its coalesced encoding
+/// for nothing, and the mask bounds the resulting tile besides. Keep such a
+/// load anchored -- it can still lower to a 2D block message, just in the
+/// encoding the memory access itself wants.
+static bool isMaskedLoadWithoutDotConsumer(Operation *op) {
+  auto loadOp = dyn_cast<tt::LoadOp>(op);
+  if (!loadOp)
+    return false;
+  Value mask = loadOp.getMask();
+  if (!mask || matchPattern(mask, m_One()))
+    return false;
+
+  SmallVector<Value> worklist{loadOp.getResult()};
+  SmallPtrSet<Operation *, 16> visited;
+  while (!worklist.empty()) {
+    Value val = worklist.pop_back_val();
+    for (Operation *user : val.getUsers()) {
+      if (isa<tt::DotOp, tt::DotScaledOp>(user))
+        return false;
+      // Only look through layout-preserving and elementwise producers: a dot
+      // reached past a reduction is not fed by this tile.
+      if (!isa<ttg::ConvertLayoutOp, tt::FpToFpOp, tt::TransOp, tt::BroadcastOp,
+               tt::ReshapeOp, tt::SplatOp>(user) &&
+          !user->hasTrait<OpTrait::Elementwise>())
+        continue;
+      if (!visited.insert(user).second)
+        continue;
+      llvm::append_range(worklist, user->getResults());
+    }
+  }
+  return true;
+}
+
 bool isExpensiveLoadOrStore(Operation *op) {
   assert((isa<tt::LoadOp, tt::StoreOp, tt::DescriptorLoadOp,
               tt::DescriptorStoreOp>(op)) &&
@@ -173,7 +211,8 @@ bool isExpensiveLoadOrStore(Operation *op) {
   Attribute blockIOAttr =
       op->getAttr(TritonIntelGPUDialect::getBlockIOAttrName());
   if (blockIOAttr &&
-      !op->getAttr(TritonIntelGPUDialect::getBlockIOStrideAttrName()))
+      !op->getAttr(TritonIntelGPUDialect::getBlockIOStrideAttrName()) &&
+      !isMaskedLoadWithoutDotConsumer(op))
     return false;
 
   // Loads or stores that use more threads than elements can be presumed to have

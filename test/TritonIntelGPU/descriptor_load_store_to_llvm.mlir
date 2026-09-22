@@ -862,3 +862,88 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// Test that an untraceable descriptor keeps the conservative per-element mask.
+//
+// The descriptor arrives as a function entry-block argument, which the def-chain
+// trace cannot look through, so the candidate set is empty. `allSatisfy` is false
+// on an empty set, so no dimension is promoted to a block-level check.
+//
+// Indices are constant 0 so the divisibility term of the classification is
+// satisfied outright, leaving the candidate term as the only thing that can
+// decide it. Contrast @load_divisible above: same constant-zero indices and a
+// divisible shape, but a traceable descriptor, and it does get block-level checks.
+//
+// A vacuously-true `allSatisfy` would not remove masking -- it would change what
+// is compared, since the block-level check uses offsets[dim] instead of the
+// per-thread index. So the CHECKs pin the compared operand: the value multiplied
+// by the stride to form the GEP offset must be the value compared to the shape.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @load_untraceable_desc
+  tt.func public @load_untraceable_desc(%arg0: !tt.tensordesc<4x4xf32>) -> (tensor<4x4xf32, #blocked>) {
+    %c0_i32 = arith.constant 0 : i32
+
+    // CHECK-DAG: %[[SHAPE0:.*]] = llvm.extractvalue %arg0[0] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
+    // CHECK-DAG: %[[SHAPE1:.*]] = llvm.extractvalue %arg0[1] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
+    // CHECK-DAG: %[[STRIDE0:.*]] = llvm.extractvalue %arg0[2] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
+    // CHECK-DAG: %[[STRIDE1:.*]] = llvm.extractvalue %arg0[3] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
+
+    // COM: Bind the per-element indices from the GEP offset computation.
+    // CHECK: %[[STRIDE0_I32:.*]] = llvm.trunc %[[STRIDE0]] : i64 to i32
+    // CHECK: llvm.mul %[[IDX0:[0-9]+]], %[[STRIDE0_I32]] : i32
+    // CHECK: %[[STRIDE1_I32:.*]] = llvm.trunc %[[STRIDE1]] : i64 to i32
+    // CHECK: llvm.mul %[[IDX1:[0-9]+]], %[[STRIDE1_I32]] : i32
+
+    // COM: The same per-element indices -- not offsets[dim] -- are what the mask
+    // COM: compares. This is the assertion that a vacuous allSatisfy would break.
+    // CHECK: llvm.icmp "sge" %[[IDX0]], %{{.*}} : i32
+    // CHECK: %[[SHAPE0_I32:.*]] = llvm.trunc %[[SHAPE0]] : i64 to i32
+    // CHECK: llvm.icmp "slt" %[[IDX0]], %[[SHAPE0_I32]] : i32
+    // CHECK: llvm.icmp "sge" %[[IDX1]], %{{.*}} : i32
+    // CHECK: %[[SHAPE1_I32:.*]] = llvm.trunc %[[SHAPE1]] : i64 to i32
+    // CHECK: llvm.icmp "slt" %[[IDX1]], %[[SHAPE1_I32]] : i32
+
+    %3 = tt.descriptor_load %arg0[%c0_i32, %c0_i32] : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
+    tt.return %3 : tensor<4x4xf32, #blocked>
+  }
+}
+
+// -----
+
+// Store-side mirror of @load_untraceable_desc. The descriptor-store lowering has
+// its own copy of the classification loop, so migrating one does not cover the
+// other.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @store_untraceable_desc
+  tt.func public @store_untraceable_desc(%arg0: !tt.tensordesc<4x4xf32>, %arg1: tensor<4x4xf32, #blocked>) {
+    %c0_i32 = arith.constant 0 : i32
+
+    // CHECK-DAG: %[[SHAPE0:.*]] = llvm.extractvalue %arg0[0] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
+    // CHECK-DAG: %[[SHAPE1:.*]] = llvm.extractvalue %arg0[1] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
+    // CHECK-DAG: %[[STRIDE0:.*]] = llvm.extractvalue %arg0[2] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
+    // CHECK-DAG: %[[STRIDE1:.*]] = llvm.extractvalue %arg0[3] : !llvm.struct<(i64, i64, i64, i64, ptr<1>)>
+
+    // CHECK: %[[STRIDE0_I32:.*]] = llvm.trunc %[[STRIDE0]] : i64 to i32
+    // CHECK: llvm.mul %[[IDX0:[0-9]+]], %[[STRIDE0_I32]] : i32
+    // CHECK: %[[STRIDE1_I32:.*]] = llvm.trunc %[[STRIDE1]] : i64 to i32
+    // CHECK: llvm.mul %[[IDX1:[0-9]+]], %[[STRIDE1_I32]] : i32
+
+    // CHECK: llvm.icmp "sge" %[[IDX0]], %{{.*}} : i32
+    // CHECK: %[[SHAPE0_I32:.*]] = llvm.trunc %[[SHAPE0]] : i64 to i32
+    // CHECK: llvm.icmp "slt" %[[IDX0]], %[[SHAPE0_I32]] : i32
+    // CHECK: llvm.icmp "sge" %[[IDX1]], %{{.*}} : i32
+    // CHECK: %[[SHAPE1_I32:.*]] = llvm.trunc %[[SHAPE1]] : i64 to i32
+    // CHECK: llvm.icmp "slt" %[[IDX1]], %[[SHAPE1_I32]] : i32
+
+    tt.descriptor_store %arg0[%c0_i32, %c0_i32], %arg1 : !tt.tensordesc<4x4xf32>, tensor<4x4xf32, #blocked>
+    tt.return
+  }
+}

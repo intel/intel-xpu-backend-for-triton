@@ -11,8 +11,8 @@ on:
         description: vLLM pin (commit hash), keep empty for default
         type: string
         default: ""
-      vllm_xpu_kernels_pin:
-        description: vLLM XPU kernels pin (commit hash), keep empty for default
+      kernels_hash:
+        description: vLLM XPU kernels commit hash to build from source, keep empty to install vLLM's pinned release
         type: string
         default: ""
       skip_list:
@@ -29,10 +29,6 @@ on:
         default: false
       use_pyenv_python:
         description: Use Python built with pyenv
-        type: boolean
-        default: false
-      use_branch_wheel:
-        description: Use prebuilt vLLM XPU kernels wheel from the current branch (must have a successful nightly build)
         type: boolean
         default: false
 
@@ -160,12 +156,6 @@ jobs:
           echo "${{ inputs.vllm_pin }}" > scripts/vllm/vllm-pin.txt
           echo "Overriding vLLM pin to: ${{ inputs.vllm_pin }}"
 
-      - name: Override vLLM XPU kernels pin
-        if: ${{ inputs.vllm_xpu_kernels_pin }}
-        run: |
-          echo "${{ inputs.vllm_xpu_kernels_pin }}" > scripts/vllm/vllm-xpu-kernels-pin.txt
-          echo "Overriding vLLM XPU kernels pin to: ${{ inputs.vllm_xpu_kernels_pin }}"
-
       - name: Load pip cache
         id: pip-cache
         uses: ./.github/actions/load
@@ -201,12 +191,12 @@ jobs:
           lts: ${{ inputs.runner_label == 'lts' }}
 
       - name: Identify torchvision pin
-        if: ${{ matrix.suite == 'vllm-mrv2' || matrix.suite == 'vllm-rest' }}
+        if: ${{ matrix.suite == 'vllm-spec-decode' || matrix.suite == 'vllm-mrv2' || matrix.suite == 'vllm-rest' }}
         run: |
           echo "TORCHVISION_COMMIT_ID=$(<pytorch/.github/ci_commit_pins/vision.txt)" | tee -a "$GITHUB_ENV"
 
       - name: Install torchvision package
-        if: ${{ matrix.suite == 'vllm-mrv2' || matrix.suite == 'vllm-rest' }}
+        if: ${{ matrix.suite == 'vllm-spec-decode' || matrix.suite == 'vllm-mrv2' || matrix.suite == 'vllm-rest' }}
         uses: ./.github/actions/install-dependency
         with:
           package: torchvision
@@ -234,7 +224,7 @@ jobs:
         if: ${{ steps.install.outcome == 'success' && !cancelled() }}
         uses: ./.github/actions/install-vllm
         with:
-          use-branch-wheel: ${{ inputs.use_branch_wheel }}
+          kernels-hash: ${{ inputs.kernels_hash }}
 
       - name: Create reports dir
         run: |

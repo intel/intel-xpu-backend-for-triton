@@ -984,8 +984,8 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   // RUBIN: %[[RUBIN_COUNTER:.*]] = llvm.load
   // RUBIN-NEXT: nvvm.barrier
   // RUBIN: %[[CTA:.*]] = nvvm.read.ptx.sreg.cluster.ctarank
-  // RUBIN-DAG: %[[ALL_CTAS:.*]] = llvm.mlir.constant(15 : i32) : i32
-  // RUBIN-DAG: %[[SELF_MASK:.*]] = llvm.shl %{{.*}}, %[[CTA]] : i32
+  // RUBIN: %[[ALL_CTAS:.*]] = llvm.mlir.constant(15 : i32) : i32
+  // RUBIN: %[[SELF_MASK:.*]] = llvm.shl %{{.*}}, %[[CTA]] : i32
   // RUBIN: %[[PEER_MASK:.*]] = llvm.xor %[[ALL_CTAS]], %[[SELF_MASK]] : i32
   // RUBIN-COUNT-1: mbarrier.arrive.release.cluster.shared::cluster.multicast::cluster::32b.b64 _, [$1], $2;
   // RUBIN-NOT: mbarrier.arrive

@@ -408,7 +408,7 @@ class AsmDict(dict):
 
         if key == "sass":
             value = get_sass(self["cubin"])
-        if key == "spvdis":
+        elif key == "spvdis":
             value = get_spvdis(self["spv"])
         else:
             raise KeyError("Unknown key: '%s'" % key)
