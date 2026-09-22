@@ -11,6 +11,7 @@ import pathlib
 from triton.runtime.driver import driver
 from triton._internal_testing import is_xpu_cri
 from triton.backends.intel import extension_utils
+from triton.backends.intel.compiler import min_spill_slots_for_rebuild
 from triton.backends.intel.driver import find_sycl_icpx
 from triton.runtime.errors import IntelGPUError, OutOfResources
 
@@ -37,9 +38,10 @@ def test_auto_grf(device, monkeypatch, capfd):
     # The output should contain the recompiling information for large GRF mode.
     assert "retrying with large GRF mode" in outs[0]
     # The spill size of returned kernel should be same kernel as the one compiled with large GRF mode.
-    # Compare the *byte* counts specifically: the auto-GRF retry is gated on raw
-    # bytes (driver.c `max_reg_spill`), not on the per-lane count that #7896
-    # normalizes for Python, so this is what pins the retry behaviour.
+    # Compare the byte counts because they identify the *binary*: both lines
+    # describe the retried build, so equality pins that it is the one returned. The
+    # gate's own arithmetic (`slotsPerLane()` vs `minSlotsForRebuild()`) is covered
+    # by test_n_spills_reported_per_lane.
     retried = re.search(r"kernel has (\d+) spill bytes per hardware thread", outs[1])
     selected = re.search(r"Detected (\d+) spill bytes per hardware thread", outs[2])
     assert retried is not None, f"unexpected retry log line: {outs[1]!r}"
@@ -53,11 +55,18 @@ def test_n_spills_reported_per_lane(device, monkeypatch, capfd, warp_size):
     """`n_spills` is dword-equivalents per lane, as on CUDA/HIP (issue #7896).
 
     Level Zero reports `spillMemSize` in bytes per hardware thread, so the value
-    handed to Python is `bytes // (4 * SIMD)`. Both operands come from the
-    post-retry log line rather than from the request, because the compiled width
-    can differ from the requested `warp_size` under the auto-GRF retry; that
+    handed to Python is `bytes // (4 * SIMD)`. Both operands come from the log
+    line for the *selected* pass rather than from the request, because the compiled
+    width can differ from the requested `warp_size` under the auto-GRF retry; that
     agreement is asserted separately so a divergence fails loudly instead of
     being absorbed into the arithmetic.
+
+    Also checks the rebuild gate, which needs both logs: the selected-pass line
+    reports the post-retry spill once a rebuild succeeds, so only the retry
+    announcement testifies about the decision. The threshold equality holds on
+    every driver line -- `minSlotsForRebuild()` is a function of the SIMD width
+    alone -- but it licenses no claim that the two *gates* agree, since driver.c
+    has no `is_lts` input and compiler.py rebuilds on any spill for LTS.
     """
     monkeypatch.setenv("TRITON_DEBUG", "1")
     BLOCK = 1024 * 8
@@ -75,13 +84,19 @@ def test_n_spills_reported_per_lane(device, monkeypatch, capfd, warp_size):
     kernel = _kernel[(1, )](z_tri, BLOCK=BLOCK, num_warps=2, warp_size=warp_size)
 
     out = capfd.readouterr().out
-    pattern = re.compile(r"Detected (\d+) spill bytes per hardware thread; "
-                         r"n_spills (\d+) dword-equivalents/lane \(SIMD(\d+)\)")
+    selected = re.compile(r"Detected (\d+) spill bytes per hardware thread; "
+                          r"n_spills (\d+) dword-equivalents/lane \(SIMD(\d+)\), "
+                          r"rebuild at (\d+)")
+    # The "Detected spills for" prefix is load-bearing: "Build failed for" enters the
+    # same branch with bytes == -1 and no threshold involvement.
+    retried = re.compile(r"Detected spills for \"[^\"]*\", retrying with large GRF mode "
+                         r"\(spill (\d+) B/hardware-thread = (\d+) dword-equivalents/lane "
+                         r"at SIMD(\d+), rebuild at (\d+)\)")
     # Keep the last match: it describes the finally selected binary.
-    matches = pattern.findall(out)
+    matches = selected.findall(out)
     if not matches:
         pytest.skip(f"fixture no longer spills on this IGC version; log was:\n{out}")
-    spill_bytes, logged_slots, logged_simd = (int(group) for group in matches[-1])
+    spill_bytes, logged_slots, logged_simd, logged_min_slots = (int(group) for group in matches[-1])
 
     # Pin the divisor against the request, so a compiled-width divergence is a
     # failure rather than something the arithmetic below hides.
@@ -93,6 +108,21 @@ def test_n_spills_reported_per_lane(device, monkeypatch, capfd, warp_size):
     assert kernel.n_spills == logged_slots
     # The unit really changed: raw bytes must not reach Python any more.
     assert kernel.n_spills < spill_bytes
+
+    # driver.c is compiled at runtime and cannot import the Python helper, so the
+    # arithmetic is duplicated; this is what catches the two copies drifting apart.
+    assert logged_min_slots == min_spill_slots_for_rebuild(warp_size)
+
+    # Which log testifies about the decision depends on whether a rebuild happened, so
+    # the oracle has two sides and each is valid only where the other is not.
+    rebuilds = retried.findall(out)
+    if rebuilds:
+        pre_slots, pre_simd, pre_min_slots = (int(group) for group in rebuilds[-1][1:])
+        assert pre_slots >= pre_min_slots, f"rebuilt below the threshold: {rebuilds[-1]}"
+        assert pre_min_slots == min_spill_slots_for_rebuild(pre_simd)
+    else:
+        assert logged_slots < logged_min_slots, (f"accepted {logged_slots} dword-equivalents/lane at or above the "
+                                                 f"{logged_min_slots} rebuild threshold")
 
 
 def test_n_spills_zero_without_spills(device):
