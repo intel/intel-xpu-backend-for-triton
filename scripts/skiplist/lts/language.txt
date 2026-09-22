@@ -8,3 +8,16 @@ python/test/unit/language/test_tensor_descriptor.py::test_tensor_descriptor_redu
 # Below tests require AGAMA 1208 or above
 python/test/unit/language/test_core.py::test_side_effectful_reduction
 python/test/unit/language/test_core.py::test_side_effectful_reduction_2d
+# Below bf16 <-> f16 conversions broke on the LTS driver in #8088 (merge commit `2c63b08`):
+# the mixed bf16/f16 binary ops return garbage and the bf16 clamp tests abort the test
+# process. The rolling driver passes all of them.
+python/test/unit/language/test_core.py::test_bin_op[1-bfloat16-float16-+]
+python/test/unit/language/test_core.py::test_bin_op[1-bfloat16-float16--]
+python/test/unit/language/test_core.py::test_bin_op[1-bfloat16-float16-*]
+python/test/unit/language/test_core.py::test_bin_op[1-float16-bfloat16-+]
+python/test/unit/language/test_core.py::test_bin_op[1-float16-bfloat16--]
+python/test/unit/language/test_core.py::test_bin_op[1-float16-bfloat16-*]
+python/test/unit/language/test_core.py::test_clamp[bfloat16]
+python/test/unit/language/test_core.py::test_clamp_symmetric[bfloat16]
+python/test/unit/language/test_core.py::test_propagate_nan[clamp-ALL-bfloat16]
+python/test/unit/language/test_core.py::test_propagate_nan[clamp-NONE-bfloat16]

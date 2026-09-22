@@ -1,0 +1,4 @@
+# All 432 `normal_type=fp16` cases mismatch by ~100% on the LTS driver since #8088
+# (merge commit `2c63b08`). The `bf16`, `e4m3` and `e5m2` cases pass, and the rolling
+# driver passes all of them.
+python/test/unit/language/test_core.py::test_scaled_dot[r".*-fp16-4-16-1$"]@regexp
