@@ -3,8 +3,8 @@ import triton
 import triton.language as tl
 
 from triton._internal_testing import numpy_random, to_triton, is_xpu_cri
-from triton.backends.intel.compiler import (MAX_REG_SPILL_SLOTS_PER_LANE, XPUBackend, accepts_default_grf,
-                                            extract_spill_size_from_zebin, spill_slots_per_lane)
+from triton.backends.intel.compiler import (XPUBackend, accepts_default_grf, extract_spill_size_from_zebin,
+                                            min_spill_slots_for_rebuild, spill_slots_per_lane)
 
 
 def test_empty_kernel(device):
@@ -28,10 +28,22 @@ def test_empty_kernel(device):
         # the byte-wise rule degenerates into the slot-wise one (issue #8106).
         (64, 32, False, True),
         (64, 32, True, False),
-        # At and just past the rolling limit, both SIMD widths.
-        (2048, 32, False, True),  # 16 slots/lane -- at the limit
-        (2176, 32, False, False),  # 17 slots/lane -- rebuild
-        (1024, 16, False, True),  # 16 slots/lane at SIMD16
+        # The rolling boundary is 1024 B/hardware-thread at every SIMD width. This
+        # triple is the only check of that width invariance (issue #8077).
+        (960, 32, False, True),  # 7 slots/lane
+        (1024, 32, False, False),  # 8 slots/lane -- first rebuild
+        (960, 16, False, True),  # 15 slots/lane
+        (1024, 16, False, False),  # 16 slots/lane -- same bytes, half the width
+        (544, 8, False, True),  # 17 slots/lane -- SIMD8 reversal, `slots > 16` rebuilt here
+        (1024, 8, False, False),  # 32 slots/lane
+        # Unknown width falls back to raw bytes on both sides. Only meaningful as a
+        # pair: an erroneous 8-slot threshold also rejects 1024, but accepts 960.
+        (960, 0, False, True),
+        (1024, 0, False, False),
+        # Past the boundary, including a real dead-zone size from the #8077 census.
+        (1408, 32, False, False),  # 11 slots/lane
+        (2048, 32, False, False),  # 16 slots/lane
+        (2176, 32, False, False),  # 17 slots/lane
         (1088, 16, False, False),  # 17 slots/lane at SIMD16
         # LTS rebuilds for any spill regardless of magnitude or width.
         (2048, 32, True, False),
@@ -54,8 +66,15 @@ def test_auto_large_grf(device, tmp_path):
 
     x = to_triton(numpy_random(SIZE, dtype_str="float32"), device=device, dst_type="float32")
     # Triton XPU chooses large GRF mode when the spill frame, normalized to
-    # dword-equivalents per lane, exceeds the reported-`n_spills` budget.
+    # dword-equivalents per lane, reaches the reported-`n_spills` budget.
     k = kernel[(1, )](x, SIZE=SIZE, num_warps=1, generate_native_code=True, grf_mode='default')
+    if "-cl-intel-256-GRF-per-thread" in k.metadata.build_flags:
+        return  # the rebuild fired, which is the whole assertion
+
+    # Read the outcome before the predicate: `make_zebin` keeps the *adopted*
+    # binary, so a successful rebuild lowers `k.kernel`'s spill below the gate and
+    # asking the predicate first would skip exactly when it should assert. Reaching
+    # here means no rebuild happened, so this spill is the one the gate acted on.
     zebin = tmp_path / "kernel.zebin"
     zebin.write_bytes(k.kernel)
     spill_size = extract_spill_size_from_zebin(str(zebin))
@@ -63,9 +82,10 @@ def test_auto_large_grf(device, tmp_path):
     # The gate differs by driver line (issue #8106), so ask the predicate the
     # backend itself uses rather than re-deriving the rolling rule here.
     is_lts = XPUBackend.is_lts(k.metadata.target.arch.get("driver_version"))
-    if accepts_default_grf(spill_size, k.metadata.threads_per_warp, is_lts):
-        threshold = "any spill" if is_lts else f"{MAX_REG_SPILL_SLOTS_PER_LANE} dword-equivalents/lane"
-        pytest.skip(f"Kernel did not spill above the threshold ({spill_slots} dword-equivalents/lane "
-                    f"from {spill_size} B/thread, limit is {threshold}); auto-large-GRF path was not "
-                    "exercised. Consider increasing SIZE.")
-    assert "-cl-intel-256-GRF-per-thread" in k.metadata.build_flags
+    threshold = ("any spill"
+                 if is_lts else f"{min_spill_slots_for_rebuild(k.metadata.threads_per_warp)} dword-equivalents/lane")
+    observed = f"{spill_slots} dword-equivalents/lane from {spill_size} B/thread, rebuild at {threshold}"
+    if not accepts_default_grf(spill_size, k.metadata.threads_per_warp, is_lts):
+        pytest.fail(f"Gate should have rebuilt at large GRF but did not ({observed}).")
+    pytest.skip(f"Kernel did not spill up to the threshold ({observed}); auto-large-GRF path was not "
+                "exercised. Consider increasing SIZE.")

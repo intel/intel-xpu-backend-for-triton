@@ -373,6 +373,20 @@ public:
     return bytes / (int64_t{4} * subgroupSize);
   }
 
+  // First `slotsPerLane()` value that triggers the large-GRF rebuild: a quarter
+  // of the per-lane GRF budget, i.e. the same 1024 B per hardware thread at
+  // every SIMD width. Mirrors `min_spill_slots_for_rebuild` in compiler.py --
+  // see the comment there for why 4096 is a policy baseline and the quarter is
+  // calibration rather than hardware.
+  int64_t minSlotsForRebuild() const {
+    constexpr int64_t kDefaultGRFBytesPerThread = 4096;
+    constexpr int64_t kRebuildSpillBytesPerThread =
+        kDefaultGRFBytesPerThread / 4;
+    if (subgroupSize == 0)
+      return kRebuildSpillBytesPerThread; // slotsPerLane() falls back to bytes
+    return kRebuildSpillBytesPerThread / 4 / int64_t{subgroupSize};
+  }
+
 private:
   int64_t bytes = -1;        // L0 spillMemSize (uint32_t) widened; -1 == error.
   uint32_t subgroupSize = 0; // Compiled SIMD width; 0 == unknown.
@@ -581,32 +595,37 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   }
 
   const bool debugEnabled = getBoolEnv("TRITON_DEBUG");
-  // Only rebuild at large GRF once the kernel spills past what torch inductor's
-  // autotuner tolerates, so the rebuild can only rescue a config inductor would
-  // have discarded and never perturbs one it would have kept. 16 is inductor's
-  // default `spill_threshold` for non-HIP (`triton_heuristics.py`); a caller
-  // that overrides it is not tracked here.
+  // Rebuild once spilling reaches a quarter of the register file. The earlier
+  // rule aligned this with torch inductor's `spill_threshold = 16` -- a spill
+  // inductor tolerates cannot change its verdict -- but that left the gate
+  // silent across the whole region inductor accepts while spilling, which is
+  // where the latency went (issue #8077).
   //
-  // Compared against `slotsPerLane()` -- the very value handed to Python as
-  // `n_spills` -- rather than converting the budget into bytes: inductor tests
-  // the truncated per-lane count, so a byte threshold would also fire on the
-  // band that truncates back down to an accepted value. An unknown SIMD width
-  // makes `slotsPerLane()` fall back to raw bytes, which retries on all but the
-  // smallest spills (issue #7821).
-  constexpr int64_t kMaxSpillSlotsPerLane = 16;
-
+  // Mirrors `accepts_default_grf` in compiler.py, except that compiler.py
+  // additionally rebuilds on any spill for LTS drivers: `load_binary` has no
+  // `is_lts` input, so this gate cannot express that carve-out.
   if (canRetryWithLargeGRF &&
-      (firstBuildFailed || n_spills.slotsPerLane() > kMaxSpillSlotsPerLane)) {
+      (firstBuildFailed ||
+       n_spills.slotsPerLane() >= n_spills.minSlotsForRebuild())) {
     PyObject *orig_type = nullptr, *orig_value = nullptr, *orig_tb = nullptr;
     // Save the original error before clearing it for the retry attempt.
     if (firstBuildFailed)
       PyErr_Fetch(&orig_type, &orig_value, &orig_tb);
 
+    // Report the numbers the gate acted on here, not later: the retry
+    // overwrites `n_spills` below, so this is the only place the pre-retry
+    // spill is visible. A build failure enters this branch with an unknown
+    // `Spills` (bytes == -1) and no threshold involvement -- the prefix is what
+    // distinguishes the two.
     if (debugEnabled)
       std::cout << (firstBuildFailed ? "(I): Build failed for \""
                                      : "(I): Detected spills for \"")
-                << kernel_name << "\", retrying with large GRF mode"
-                << std::endl;
+                << kernel_name << "\", retrying with large GRF mode (spill "
+                << n_spills.getBytes()
+                << " B/hardware-thread = " << n_spills.slotsPerLane()
+                << " dword-equivalents/lane at SIMD"
+                << n_spills.getSubgroupSize() << ", rebuild at "
+                << n_spills.minSlotsForRebuild() << ")" << std::endl;
 
     if (std::strcmp(resolvedDeviceArch, "cri") == 0) {
       build_flags.addXLargeGRFSizeFlag();
@@ -689,15 +708,18 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
     }
   }
 
-  // Both numbers are logged: the byte count is what the retry gate above acts
-  // on, the per-lane count is what Python receives. test_auto_grf matches the
-  // byte count specifically to pin the retry, so keep that wording stable.
+  // Reports the *selected* pass -- post-retry after a successful replacement,
+  // the default build on the accept path or after a failed retry. The threshold
+  // is printed too so tests can assert it against
+  // `min_spill_slots_for_rebuild`. test_auto_grf matches the byte count to pin
+  // the retry, so keep that wording.
   if (debugEnabled && n_spills.getBytes()) {
     std::cout << "(I): Detected " << n_spills.getBytes()
               << " spill bytes per hardware thread; n_spills "
               << n_spills.slotsPerLane() << " dword-equivalents/lane (SIMD"
-              << n_spills.getSubgroupSize() << ") for \"" << kernel_name << "\""
-              << std::endl;
+              << n_spills.getSubgroupSize() << "), rebuild at "
+              << n_spills.minSlotsForRebuild() << " for \"" << kernel_name
+              << "\"" << std::endl;
   }
 
   auto n_regs = build_flags.n_regs();
