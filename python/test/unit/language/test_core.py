@@ -2252,6 +2252,7 @@ def test_tensor_atomic_cas(sem, size, dtype_str, num_ctas, device):
 @pytest.mark.interpreter
 @pytest.mark.skipif(not (is_xpu() or is_interpreter()) and (not is_cuda() or torch.cuda.get_device_capability()[0] < 9),
                     reason="Requires compute capability >= 9 for NV")
+@pytest.mark.skipif(is_xpu(), reason="XPU has no CTA cluster support; num_ctas > 1 is rejected")
 def test_load_scope_sem_coop_grid_cta_not_one(device):
 
     @triton.jit
