@@ -13,7 +13,7 @@ launch with the raw `ZE_RESULT_ERROR_INVALID_GROUP_SIZE_DIMENSION`.
 The fix drops the large-GRF entries from `make_zebin`'s retry list when
 `num_warps > 32`, so both automatic upgrade triggers are covered:
 
-  * the spill-based upgrade (`spill_size > MAX_REG_SPILL`), and
+  * the spill-based upgrade (`spill_slots_per_lane(...) > MAX_REG_SPILL_SLOTS_PER_LANE`), and
   * the build-failure retry (e.g. the LTS2 degenerate-zebin case),
 
 keeping the working — if slower, spilling — default-GRF binary in both cases.
@@ -108,8 +108,8 @@ def _launch(num_warps, n=4096, kernel=None):
 
 @triton.jit
 def _heavy_spill(a_ptr, b_ptr, c_ptr, d_ptr, out_ptr, n, BLOCK: tl.constexpr):
-    """A kernel with enough live values to spill hard (n_spills > 1000) at a
-    large BLOCK, so the runtime spill-based recompile (driver.c) fires."""
+    """A kernel with enough live values to spill at a large BLOCK, so the
+    runtime spill-based recompile (driver.c, `kMaxSpillSlotsPerLane`) fires."""
     offs = tl.arange(0, BLOCK)
     m = offs < n
     a = tl.load(a_ptr + offs, mask=m, other=0.0)
@@ -117,8 +117,10 @@ def _heavy_spill(a_ptr, b_ptr, c_ptr, d_ptr, out_ptr, n, BLOCK: tl.constexpr):
     c = tl.load(c_ptr + offs, mask=m, other=0.0)
     d = tl.load(d_ptr + offs, mask=m, other=0.0)
     acc = a
-    # Keep a wide set of intermediates live to force register spilling.
-    for i in tl.static_range(64):
+    # Keep a wide set of intermediates live to force register spilling. The
+    # spill depth comes from BLOCK -- the live vector length -- not from this
+    # unroll count, which only adds IGC compile time.
+    for i in tl.static_range(8):
         a = a * 1.001 + b
         b = b * 1.002 + c
         c = c * 1.003 + d

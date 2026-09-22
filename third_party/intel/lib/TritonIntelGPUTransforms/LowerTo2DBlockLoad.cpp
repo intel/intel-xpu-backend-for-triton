@@ -141,18 +141,15 @@ private:
 
     // Find all MakeTensorDescOps that could define this descriptor.
     Value desc = op.getDesc();
-    SmallVector<tt::MakeTensorDescOp> allDescs =
-        tt::intel::findAllMakeTensorDescOps(desc);
-    if (allDescs.empty()) {
+    tt::intel::DescriptorDefinitions defs =
+        tt::intel::findDescriptorDefinitions(desc);
+    if (defs.empty()) {
       LDBG("Could not find MakeTensorDescOp for: " << *op);
       return;
     }
 
-    // All candidates must have the same padding.
-    tt::PaddingOption padding = allDescs[0].getPadding();
-    if (!llvm::all_of(allDescs, [&](tt::MakeTensorDescOp d) {
-          return d.getPadding() == padding;
-        })) {
+    std::optional<tt::PaddingOption> padding = defs.consistentPadding();
+    if (!padding) {
       LDBG("Inconsistent padding across descriptor candidates for: " << *op);
       return;
     }
@@ -204,7 +201,7 @@ private:
     // per iteration. Struct layout: { shapes[rank], strides[rank], base_ptr }.
     Type i64Ty = builder.getI64Type();
     Type ptrType =
-        tt::PointerType::get(descType.getBlockType().getElementType(), 1);
+        tt::PointerType::get(descType.getBlockType().getElementType());
     SmallVector<Value> shapes(descRank);
     SmallVector<Value> strides(descRank);
     for (unsigned d = 0; d < descRank; ++d) {
@@ -273,7 +270,7 @@ private:
     constexpr int64_t kMax2DBlockField = int64_t(1) << 24;
     int64_t elemBytesConst = elemSizeInBits / 8;
     auto wouldOverflow = [&](unsigned operandIdx) {
-      return llvm::any_of(allDescs, [&](tt::MakeTensorDescOp d) {
+      return llvm::any_of(defs, [&](tt::MakeTensorDescOp d) {
         auto folded =
             tt::intel::getFoldedConstantValue(d->getOperand(operandIdx));
         return folded && *folded * elemBytesConst > kMax2DBlockField;
@@ -303,13 +300,31 @@ private:
     Value offsetX = indices[descRank - 1];
     Value offsetY = indices[descRank - 2];
 
+    // The batch *indices* were folded into base_ptr above, but the result
+    // layout also walks the batch dimensions during LLVM lowering and needs
+    // their real strides, which are not derivable from the 2D surface params.
+    // Result dim d is descriptor dim d + (descRank - rank).
+    SmallVector<Value> batchStrides;
+    for (unsigned d = 0; d + 2 < rank; ++d)
+      batchStrides.push_back(strides[d + (descRank - rank)]);
+
+    // Batch indices folded into base_ptr re-base the 2D surface, so they
+    // escape the hardware's clamp; the lowering needs each index and its
+    // declared extent to predicate the load. For that check only -- never for
+    // addressing, since base_ptr already carries the offsets.
+    SmallVector<Value> batchOffsets, batchShapes;
+    for (unsigned d = 0; d < numBatchDims; ++d) {
+      batchOffsets.push_back(indices[d]);
+      batchShapes.push_back(toI32(shapes[d]));
+    }
+
     // Determine padding mode from the descriptor.
-    bool padNan = padding == tt::PaddingOption::PAD_NAN;
+    bool padNan = *padding == tt::PaddingOption::PAD_NAN;
     UnitAttr padNanAttr = padNan ? builder.getUnitAttr() : UnitAttr();
 
     auto blockLoadOp = ttgi::Subgroup2DBlockLoadOp::create(
         builder, loc, op.getType(), basePtr, baseWidth, baseHeight, basePitch,
-        offsetX, offsetY, padNanAttr,
+        offsetX, offsetY, batchStrides, batchOffsets, batchShapes, padNanAttr,
         ttgi::BlockIOModeAttr::get(builder.getContext(), memLayout));
 
     // Propagate one_matrix_per_load attribute if present.
@@ -347,8 +362,9 @@ private:
     if (op.getMask())
       maskAxisInfo = axisInfoAnalysis.getAxisInfo(op.getMask());
 
-    // For 1D->2D reshape loads, skip tile validation and use the stride
-    // attribute directly for pitch.
+    // Whether this load was annotated by the 1D→2D reshape in
+    // MaterializeBlockPointer. Used for pitch and base-height computation
+    // below.
     bool has1DReshapeStride =
         op->hasAttr(ttgi::TritonIntelGPUDialect::getBlockIOStrideAttrName());
 
@@ -360,31 +376,26 @@ private:
     int tileHeight = -1;
     int numPackedVals = -1;
     bool isTranspose = false;
-    if (has1DReshapeStride) {
-      // 1D reshape: conventional dims, no tile validation needed.
-      rowDim = memoryRowMajor ? rank - 2 : rank - 1;
-      colDim = memoryRowMajor ? rank - 1 : rank - 2;
-    } else {
-      Attribute encoding = tensorTy.getEncoding();
-      LinearLayout llEncoding =
-          cast<ttg::DistributedEncodingTrait>(encoding).toLinearLayout(
-              tensorTy.getShape());
-      if (!ttgi::validate2DBlockLoadTile(llEncoding, contiguousDim,
-                                         elemSizeInBits, tensorTy,
-                                         oneMatrixPerLoadForBT, maskAxisInfo)) {
-        LDBG("Tile validation failed for load: " << *op);
-        return;
-      }
-      auto sizeInfo = ttgi::getBlockIOLoadTileSize(llEncoding, contiguousDim,
-                                                   elemSizeInBits, maskAxisInfo,
-                                                   oneMatrixPerLoadForBT);
-      rowDim = sizeInfo.rowDim;
-      colDim = sizeInfo.colDim;
-      tileWidth = sizeInfo.tileWidth;
-      tileHeight = sizeInfo.tileHeight;
-      isTranspose = sizeInfo.transpose;
-      numPackedVals = sizeInfo.numElemPerPackedVal;
+
+    Attribute encoding = tensorTy.getEncoding();
+    LinearLayout llEncoding =
+        cast<ttg::DistributedEncodingTrait>(encoding).toLinearLayout(
+            tensorTy.getShape());
+    if (!ttgi::validate2DBlockLoadTile(llEncoding, contiguousDim,
+                                       elemSizeInBits, tensorTy,
+                                       oneMatrixPerLoadForBT, maskAxisInfo)) {
+      LDBG("Tile validation failed for load: " << *op);
+      return;
     }
+    auto sizeInfo =
+        ttgi::getBlockIOLoadTileSize(llEncoding, contiguousDim, elemSizeInBits,
+                                     maskAxisInfo, oneMatrixPerLoadForBT);
+    rowDim = sizeInfo.rowDim;
+    colDim = sizeInfo.colDim;
+    tileWidth = sizeInfo.tileWidth;
+    tileHeight = sizeInfo.tileHeight;
+    isTranspose = sizeInfo.transpose;
+    numPackedVals = sizeInfo.numElemPerPackedVal;
 
     // For the 2D block load surface, the pitch dimension is always the
     // non-contiguous memory direction. For transposed loads, rowDim is the

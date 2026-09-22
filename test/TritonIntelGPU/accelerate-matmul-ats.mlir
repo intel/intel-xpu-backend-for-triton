@@ -13,7 +13,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32,
    %164: tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>,
    %165: tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked2}>>,
    %173: tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked1}>>,
-   %153: tensor<128x64x!tt.ptr<f16, 1>, #blocked1>) {
+   %153: tensor<128x64x!tt.ptr<f16>, #blocked1>) {
     %c0_i32 = arith.constant 0 : i32
     %c8_i32 = arith.constant 8 : i32
     %c1_i32 = arith.constant 1 : i32
@@ -76,7 +76,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 8 : i32, 
    %164: tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>,
    %165: tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked2}>>,
    %173: tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked1}>>,
-   %153: tensor<128x64x!tt.ptr<f16, 1>, #blocked1>) {
+   %153: tensor<128x64x!tt.ptr<f16>, #blocked1>) {
     %c0_i32 = arith.constant 0 : i32
     %c8_i32 = arith.constant 8 : i32
     %c1_i32 = arith.constant 1 : i32

@@ -126,9 +126,30 @@ LogicalResult Subgroup2DBlockLoadOp::verify() {
   if (!resultType)
     return emitOpError("result must be a ranked tensor type");
 
-  if (resultType.getRank() < 2)
-    return emitOpError("result tensor must have rank >= 2, got ")
-           << resultType.getRank();
+  unsigned rank = resultType.getRank();
+  if (rank < 2)
+    return emitOpError("result tensor must have rank >= 2, got ") << rank;
+
+  // The 2D block I/O tile covers the inner 2 dimensions only; every leading
+  // (batch) dimension needs an explicit stride because it cannot be derived
+  // from the 2D surface parameters.
+  if (getBatchStrides().size() != rank - 2)
+    return emitOpError("expected ")
+           << (rank - 2) << " batch stride(s) for a rank-" << rank
+           << " result, got " << getBatchStrides().size();
+
+  if (getBatchOffsets().size() != getBatchShapes().size())
+    return emitOpError("expected the same number of batch offsets and batch "
+                       "shapes, got ")
+           << getBatchOffsets().size() << " and " << getBatchShapes().size();
+
+  // A rank-reducing load drops leading descriptor dimensions from the result,
+  // so the descriptor has at least as many batch dimensions as the result.
+  if (getBatchOffsets().size() < getBatchStrides().size())
+    return emitOpError("expected at least ")
+           << getBatchStrides().size()
+           << " batch offset(s), one per descriptor batch dimension, got "
+           << getBatchOffsets().size();
 
   return success();
 }

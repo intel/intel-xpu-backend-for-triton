@@ -18,10 +18,11 @@
 // CHECK: %[[T2:.*]] = llvm.mul %{{.*}}, %{{.*}} : i64
 // CHECK: llvm.udiv %[[T2]], %{{.*}} : i64
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, "ttig.core_clock_rate_khz" = 1600000 : i32} {
-  tt.func public @poll_timeout(%arg0: !tt.ptr<i32>, %arg1: !tt.ptr<i1>, %timeout: i64) {
+  tt.func public @poll_timeout(%arg0: !tt.ptr<i32>, %arg1: !tt.ptr<i32>, %timeout: i64) {
     %expected = arith.constant 1 : i32
     %matched = tt.atomic_poll relaxed, gpu, %arg0, %expected timeout %timeout : !tt.ptr<i32>, i32 -> i1
-    tt.store %arg1, %matched : !tt.ptr<i1>
+    %result = arith.extui %matched : i1 to i32
+    tt.store %arg1, %result : !tt.ptr<i32>
     tt.return
   }
 }
@@ -33,10 +34,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK-LABEL: llvm.func spir_kernelcc @poll_no_timeout
 // CHECK-NOT: __spirv_ReadClockKHR
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, "ttig.core_clock_rate_khz" = 1600000 : i32} {
-  tt.func public @poll_no_timeout(%arg0: !tt.ptr<i32>, %arg1: !tt.ptr<i1>) {
+  tt.func public @poll_no_timeout(%arg0: !tt.ptr<i32>, %arg1: !tt.ptr<i32>) {
     %expected = arith.constant 1 : i32
     %matched = tt.atomic_poll relaxed, gpu, %arg0, %expected : !tt.ptr<i32>, i32 -> i1
-    tt.store %arg1, %matched : !tt.ptr<i1>
+    %result = arith.extui %matched : i1 to i32
+    tt.store %arg1, %result : !tt.ptr<i32>
     tt.return
   }
 }
@@ -50,10 +52,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK: llvm.call spir_funccc @__builtin_IB_read_cycle_counter()
 // CHECK-NOT: __spirv_ReadClockKHR
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, "ttig.core_clock_rate_khz" = 1600000 : i32, ttig.is_lts} {
-  tt.func public @poll_timeout_lts(%arg0: !tt.ptr<i32>, %arg1: !tt.ptr<i1>, %timeout: i64) {
+  tt.func public @poll_timeout_lts(%arg0: !tt.ptr<i32>, %arg1: !tt.ptr<i32>, %timeout: i64) {
     %expected = arith.constant 1 : i32
     %matched = tt.atomic_poll relaxed, gpu, %arg0, %expected timeout %timeout : !tt.ptr<i32>, i32 -> i1
-    tt.store %arg1, %matched : !tt.ptr<i1>
+    %result = arith.extui %matched : i1 to i32
+    tt.store %arg1, %result : !tt.ptr<i32>
     tt.return
   }
 }
@@ -64,10 +67,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // NO-RATE: getGlobalTimer needs a positive ttig.core_clock_rate_khz
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32} {
-  tt.func public @poll_timeout_no_core_clock_rate(%arg0: !tt.ptr<i32>, %arg1: !tt.ptr<i1>, %timeout: i64) {
+  tt.func public @poll_timeout_no_core_clock_rate(%arg0: !tt.ptr<i32>, %arg1: !tt.ptr<i32>, %timeout: i64) {
     %expected = arith.constant 1 : i32
     %matched = tt.atomic_poll relaxed, gpu, %arg0, %expected timeout %timeout : !tt.ptr<i32>, i32 -> i1
-    tt.store %arg1, %matched : !tt.ptr<i1>
+    %result = arith.extui %matched : i1 to i32
+    tt.store %arg1, %result : !tt.ptr<i32>
     tt.return
   }
 }

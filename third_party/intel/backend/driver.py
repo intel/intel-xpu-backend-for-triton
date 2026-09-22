@@ -9,6 +9,7 @@ import ctypes
 import subprocess
 import sysconfig
 import tempfile
+import warnings
 from pathlib import Path
 from functools import cached_property, lru_cache
 
@@ -44,18 +45,30 @@ def find_sycl_icpx(include_dir: list[str]) -> tuple[list[str], list[str]]:
     if icpx_path:
         # only `icpx` compiler knows where sycl runtime binaries and header files are
         compiler_root = os.path.abspath(f"{icpx_path}/../..")
-        include_dir += [os.path.join(compiler_root, "include"), os.path.join(compiler_root, "include/sycl")]
+        include_dir += [os.path.join(compiler_root, "include"), os.path.join(compiler_root, "include", "sycl")]
         sycl_dir = os.path.join(compiler_root, "lib")
         return include_dir, [sycl_dir]
 
     oneapi_root = os.getenv("ONEAPI_ROOT")
     if oneapi_root:
-        include_dir += [
-            os.path.join(oneapi_root, "compiler/latest/include"),
-            os.path.join(oneapi_root, "compiler/latest/include/sycl")
-        ]
-        sycl_dir = os.path.join(oneapi_root, "compiler/latest/lib")
-        return include_dir, [sycl_dir]
+        # Any oneAPI component's `setvars.sh` sets `ONEAPI_ROOT`, so it does not mean a compiler is
+        # installed here (a VTune-only install has no `compiler` directory at all). Check that both
+        # paths exist before returning them.
+        # See https://github.com/intel/intel-xpu-backend-for-triton/issues/7977.
+        compiler_root = os.path.join(oneapi_root, "compiler", "latest")
+        sycl_dir = os.path.join(compiler_root, "lib")
+        if os.path.isfile(os.path.join(compiler_root, "include", "sycl", "sycl.hpp")) and os.path.isdir(sycl_dir):
+            include_dir += [os.path.join(compiler_root, "include"), os.path.join(compiler_root, "include", "sycl")]
+            return include_dir, [sycl_dir]
+        if os.path.isdir(compiler_root):
+            # A compiler directory with only half of SYCL in it is not something a normal install
+            # leaves behind, and the SYCL found below may be a different version than the one
+            # meant to be used, so do not skip it silently.
+            warnings.warn(
+                f"{compiler_root} does not provide SYCL (need include/sycl/sycl.hpp and lib); "
+                "ignoring ONEAPI_ROOT and looking for SYCL elsewhere.",
+                stacklevel=2,
+            )
 
     try:
         sycl_rt = importlib.metadata.metadata("intel-sycl-rt")
@@ -318,20 +331,32 @@ class SpirvUtils:
             else:
                 raise e
 
-    if os.name != 'nt':
-
-        def __del__(self):
-            if hasattr(self, "shared_library"):
-                handle = self.shared_library._handle
-                self.shared_library.dlclose.argtypes = (ctypes.c_void_p, )
-                self.shared_library.dlclose(handle)
-    else:
-
-        def __del__(self):
-            if hasattr(self, "shared_library"):
-                handle = self.shared_library._handle
-                ctypes.windll.kernel32.FreeLibrary.argtypes = (ctypes.c_uint64, )
-                ctypes.windll.kernel32.FreeLibrary(handle)
+    # Deliberately no `__del__`: `spirv_utils` must never be unloaded.
+    #
+    # `driver.c` defines the statically allocated `PyKernelArgType`, and instances of it
+    # are cached for the lifetime of every compiled kernel (`XPULauncher.arg_annotations`).
+    # Unloading the module frees the storage of that type object while those instances are
+    # still reachable, so the next cyclic-GC pass dereferences a dangling `ob_type` and the
+    # interpreter dies with `Fatal Python error: Segmentation fault`
+    # (`tupletraverse` -> `visit_decref` -> `_PyObject_IS_GC` -> `Py_TYPE`).
+    # See https://github.com/intel/intel-xpu-backend-for-triton/issues/7682 and
+    # https://github.com/python/cpython/issues/114538.
+    #
+    # The type is not the only thing here that outlives an unload, so do not "fix" this by
+    # moving `PyKernelArgType` into Python and restoring the unload: `load_binary` returns
+    # capsules whose destructors (`freeKernel`, `freeKernelBundle`) and whose name strings
+    # live in this module, and every `XPULauncher` holds callables from it. Unloading is safe
+    # only once nothing reachable from Python can reference this module's code or storage.
+    #
+    # Windows is why this unload existed (#3090: a mapped `.pyd` cannot be deleted), so do not
+    # restore it for that reason either. Nothing here needs it any more: `runtime/cache.py`
+    # tolerates the `PermissionError` from `os.replace` on `nt`, and the `fresh_triton_cache`
+    # fixtures defer cache deletion past process exit (#7312).
+    #
+    # `ArchParser` and `ExtensionUtils` keep their unload because they are out of scope here,
+    # not because they are proven safe. `ArchParser.__getattribute__` returns a closure over
+    # the raw ctypes function that does not keep its owner alive, so a caller outliving the
+    # parser would call into an unloaded library.
 
 
 class ExtensionUtils:
@@ -396,6 +421,13 @@ def get_hasher_common(is_lts: bool = False):
 def compile_module_from_src(src: str, name: str, is_lts: bool = False):
     hasher = get_hasher_common(is_lts).copy()
     hasher.update(src.encode("utf-8"))
+    # `spirv_utils` is compiled with `-DTRITON_INTEL_INJECT_PYTORCH=1` when
+    # `INJECT_PYTORCH=True` (see below), which wraps kernel launches in a
+    # `RECORD_FUNCTION` scope. That flag is not part of `src`, so without it in the key
+    # an uninstrumented .so cached by an earlier run (e.g. the unit tests, which never
+    # set `INJECT_PYTORCH`) is reused and the profiler scope silently disappears.
+    if name == "spirv_utils" and COMPILATION_HELPER.inject_pytorch_dep:
+        hasher.update("inject_pytorch=True".encode("utf-8"))
     key = hasher.hexdigest()
     cache = get_cache_manager(key)
     suffix = sysconfig.get_config_var("EXT_SUFFIX")
@@ -414,9 +446,9 @@ def compile_module_from_src(src: str, name: str, is_lts: bool = False):
 
             if COMPILATION_HELPER.inject_pytorch_dep and name == "spirv_utils":
                 if os.name == "nt":
-                    extra_compiler_args += ["/DTRITON_INTEL_INJECT_PYTORCH=1"]
+                    extra_compiler_args += ["/DTRITON_INTEL_INJECT_PYTORCH=1", "/std:c++20"]
                 else:
-                    extra_compiler_args += ["-DTRITON_INTEL_INJECT_PYTORCH=1"]
+                    extra_compiler_args += ["-DTRITON_INTEL_INJECT_PYTORCH=1", "-std=c++20"]
 
             if name == "spirv_utils" and not is_lts:
                 if os.name == "nt":

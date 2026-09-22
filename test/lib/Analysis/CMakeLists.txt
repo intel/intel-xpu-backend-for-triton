@@ -8,6 +8,7 @@ add_library(TritonTestAnalysis
   TestBufferRegion.cpp
   TestLivenessAnalysis.cpp
   TestMembar.cpp
+  TestRegisterPressureAnalysis.cpp
 )
 target_link_libraries(TritonTestAnalysis PUBLIC MLIRPass TritonAnalysis TritonIntelAnalysis TritonNvidiaGPUTransforms)
 target_compile_options(TritonTestAnalysis PRIVATE ${TRITON_DISABLE_EH_RTTI_FLAGS})

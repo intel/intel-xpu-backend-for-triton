@@ -8,7 +8,7 @@ tt.func @cast() {
   %0 = arith.extsi %cst : i32 to i64
   // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [128], constant_value = 1
   %cst_tensor = arith.constant dense<1> : tensor<128xi32>
-  // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [128], constant_value = 1
+  // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [128], constant_value = <none>
   %1 = tt.bitcast %cst_tensor : tensor<128xi32> -> tensor<128xf32>
   tt.return
 }
@@ -261,7 +261,7 @@ tt.func @cmp_all_contiguous() {
   %14 = arith.constant dense<8> : tensor<128xi32>
   // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [8], constant_value = <none>
   %15 = arith.cmpi sgt, %14, %0 : tensor<128xi32>
-  // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [128], constant_value = 1
+  // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [128], constant_value = -1
   %16 = arith.cmpi sgt, %14, %1 : tensor<128xi32>
   tt.return
 }
@@ -472,14 +472,14 @@ tt.func @for() {
   %b_init = arith.constant dense<1> : tensor<128x32xi32>
   // CHECK-NEXT: contiguity = [1, 1], divisibility = [4, 4], constancy = [128, 32], constant_value = 4
   %c_init = arith.constant dense<4> : tensor<128x32xi32>
-  // CHECK-NEXT: contiguity = [1], divisibility = [128], constancy = [1], constant_value = 128
+  // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>
   %ub = arith.constant 128 : index
-  // CHECK-NEXT: contiguity = [1], divisibility = [4611686018427387904], constancy = [1], constant_value = 0
+  // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>
   %lb = arith.constant 0 : index
-  // CHECK-NEXT: contiguity = [1], divisibility = [16], constancy = [1], constant_value = 16
+  // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>
   %step = arith.constant 16 : index
   %a, %b, %c = scf.for %iv = %lb to %ub step %step iter_args(%a = %a_init, %b = %b_init, %c = %c_init) -> (tensor<128x32xi32>, tensor<128x32xi32>, tensor<128x32xi32>) {
-    // CHECK-NEXT: contiguity = [1], divisibility = [16], constancy = [1], constant_value = <none>
+    // CHECK-NEXT: contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>
     %t = arith.index_cast %iv : index to i32
     // CHECK: contiguity = [1, 1], divisibility = [1, 1], constancy = [128, 32], constant_value = <none>
     // CHECK: contiguity = [1, 1], divisibility = [1, 1], constancy = [128, 32], constant_value = <none>

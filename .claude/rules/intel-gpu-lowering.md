@@ -34,19 +34,33 @@ Arguments: `(k_dim: i32, a: aTy, b: bTy, c: cTy, flags: i32)`
 **Do not guess** type packing rules (precision to SPIR-V type mapping) — read them from `.claude/reference/build-and-debug-reference.md`.
 
 ### GenISA Path (LTS fallback)
-Standard DPAS uses SPIR-V even on LTS. Only Block Scale DPAS always uses GenISA.
+When the module has the `ttig.is_lts` attribute, `triton_gen.dpas` lowers via `createGenISADPAS()` instead:
+
+Function: `llvm.genx.GenISA.sub.group.dpas.<type_mangling>` (mangling from `{cTy, cTy, aTy, bTy}`)
+
+Arguments (8): `(c: cTy, a: aTy, b: bTy, pa: i32, pb: i32, systolicDepth: i32, rc: i32, isDpasw: i1)`
+
+- `pa`, `pb`: i32 precision enum values (`static_cast<unsigned>(op.getPa())`)
+- `systolicDepth` is always 8; `isDpasw` is always false
+- Operands are bitcast to the same packed types as the SPIR-V path (bf16 accumulator → i16)
+
+Block Scale DPAS has no GenISA path — it always uses the SPIR-V builtin, on LTS as well.
 
 ## Block Scale DPAS Lowering
 
-**Always** uses GenISA intrinsics (no SPIR-V builtin available):
+**Always** uses the SPIR-V builtin (`SPV_INTEL_subgroup_scaled_matrix_multiply_accumulate`):
 
-Function: `llvm.genx.GenISA.sub.group.bdpas.<type_mangling>`
+Function: `__spirv_SubgroupScaledMatrixMultiplyAccumulateINTEL`
 
-Arguments (7): `(c, a, b, scaleA, scaleB, precA, precB)`
+Arguments (7): `(k_dim: i32, a: aTy, b: bTy, c: cTy, scaleA: scaleTy, scaleB: scaleTy, flags: i32)`
 
-- `precA`, `precB`: i32 precision enum values (e.g., `static_cast<int>(op.getPa())`)
-- Default scale value when operand is absent: **0x7f** (represents 1.0 in E8M0 format)
-- Function type mangling includes: `{cTy, cTy, aTy, bTy, scaleTy, scaleTy}`
+- `k_dim` = systolicDepth × opsPerChannel (e.g., 32 for FP8, 64 for FP4)
+- Default scale value when the operand is absent: **0x7f** (represents 1.0 in E8M0 format)
+- `flags` is the matrix-operands bitmask: the same matrix A/B precision bits as the
+  non-scaled builtin, plus `ScaleAFloat8E8M0INTEL` (0x100000) and
+  `ScaleBFloat8E8M0INTEL` (0x200000). Both scale bits must always be set, even when
+  the corresponding scale operand is defaulted, and the B bits come from `pb`
+  (matrix A and B precisions may differ for block scale DPAS).
 
 ## 2D Block I/O Lowering
 
@@ -155,6 +169,6 @@ Cache controls are encoded as `!spirv.DecorationCacheControlINTEL` LLVM IR metad
 
 ## SPIR-V Extensions
 
-The backend registers 25 SPIR-V extensions (19 Intel + 6 Khronos/EXT) in `SPIRVTranslation.cpp`. Key extensions: `SPV_INTEL_2d_block_io`, `SPV_INTEL_subgroup_matrix_multiply_accumulate`, `SPV_INTEL_cache_controls`, `SPV_INTEL_split_barrier`, `SPV_INTEL_bfloat16_conversion`, `SPV_EXT_float8`.
+The backend registers 31 SPIR-V extensions (24 Intel + 7 Khronos/EXT) in `SPIRVTranslation.cpp`. Key extensions: `SPV_INTEL_2d_block_io`, `SPV_INTEL_subgroup_matrix_multiply_accumulate` (+ `_float4`, `_float8`), `SPV_INTEL_subgroup_scaled_matrix_multiply_accumulate`, `SPV_INTEL_cache_controls`, `SPV_INTEL_split_barrier`, `SPV_INTEL_bfloat16_conversion`, `SPV_EXT_float8`.
 
 When using GenISA intrinsics, the SPIR-V translator must be configured to allow unknown LLVM intrinsics (they are passed through and resolved by IGC during JIT compilation).

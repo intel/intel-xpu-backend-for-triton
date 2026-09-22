@@ -3,10 +3,12 @@ add_triton_library(TritonIntelTransforms
   FoldTrueCmpIOp.cpp
   FuseReshape.cpp
   PrepareIfCombining.cpp
+  OptimizeLoadMasks.cpp
   ReassociateDotScale.cpp
   RemoveMasks.cpp
   RewriteTensorDescriptorToPointer.cpp
   SimplifySignedArithmetic.cpp
+  SpeculateSignedDivRem.cpp
   StrideVersioning.cpp
 
   DEPENDS

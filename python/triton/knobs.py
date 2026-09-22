@@ -593,10 +593,12 @@ class intel_knobs(base_knobs):
     gen_native_code: env_bool = env_bool("TRITON_XPU_GEN_NATIVE_CODE", False)
     opt_reduction_locality: env_bool = env_bool("TRITON_INTEL_OPTIMIZE_REDUCTION_LOCALITY", False)
     disable_igc_opt: env_bool = env_bool("TRITON_INTEL_DISABLE_IGC_OPT", False)
-    # Enable the AnnotateCacheControl pass by default everywhere except Windows,
-    # where it triggers E2E performance regressions (see issue #7495).
-    disable_annotate_cache_control: env_bool = env_bool("TRITON_INTEL_DISABLE_ANNOTATE_CACHE_CONTROL", os.name == "nt")
+    # Disabled on Windows after the regressions tracked in issue #7495. The harmful
+    # `cg`-to-`!nontemporal` lowering (an L3 bypass) was removed in issue #7901, so
+    # the pass is enabled on every OS again. See issue #7945.
+    disable_annotate_cache_control: env_bool = env_bool("TRITON_INTEL_DISABLE_ANNOTATE_CACHE_CONTROL", False)
     enable_code_sinking: env_bool = env_bool("TRITON_INTEL_ENABLE_CODE_SINKING", False)
+    disable_optimize_load_masks: env_bool = env_bool("TRITON_INTEL_DISABLE_OPTIMIZE_LOAD_MASKS", False)
     disable_canonicalize_pointers: env_bool = env_bool("TRITON_INTEL_DISABLE_CANONICALIZE_POINTERS", True)
     enable_loop_distribution: env_bool = env_bool("TRITON_INTEL_ENABLE_LOOP_DISTRIBUTION", False)
     enable_sub_32_dpas: env_bool = env_bool("TRITON_INTEL_ENABLE_DPAS_FOR_WARP_SIZE_32", False)
@@ -622,6 +624,7 @@ class intel_knobs(base_knobs):
 
 
 class amd_knobs(base_knobs):
+    codegen_path: env_opt_str = env_opt_str("TRITON_AMD_CODEGEN_PATH")
     use_buffer_ops: env_bool = env_bool("AMDGCN_USE_BUFFER_OPS", True)
     # Note: This requires use_buffer_ops be true to have any effect
     use_buffer_atomics: env_bool = env_bool("AMDGCN_USE_BUFFER_ATOMICS", True)
@@ -655,8 +658,15 @@ class proton_knobs(base_knobs):
     cupti_lib_blackwell_dir: env_str = env_str(
         "TRITON_CUPTI_LIB_BLACKWELL_PATH",
         str(pathlib.Path(__file__).parent.absolute() / "backends" / "nvidia" / "lib" / "cupti-blackwell"))
+    hsa_runtime_path: env_opt_str = env_opt_str("TRITON_HSA_RUNTIME_PATH")
+    hsa_runtime_library: env_opt_str = env_opt_str("TRITON_HSA_RUNTIME_LIBRARY")
     rocprofiler_sdk_include_path: env_opt_str = env_opt_str("TRITON_ROCPROFILER_SDK_INCLUDE_PATH")
     rocprofiler_sdk_lib_path: env_opt_str = env_opt_str("TRITON_ROCPROFILER_SDK_LIB_PATH")
+    rocprofiler_sdk_library: env_opt_str = env_opt_str("TRITON_ROCPROFILER_SDK_LIBRARY")
+    roctracer_lib_path: env_opt_str = env_opt_str("TRITON_ROCTRACER_LIB_PATH")
+    roctracer_library: env_opt_str = env_opt_str("TRITON_ROCTRACER_LIBRARY")
+    roctx_lib_path: env_opt_str = env_opt_str("TRITON_ROCTX_LIB_PATH")
+    roctx_library: env_str = env_str("TRITON_ROCTX_LIBRARY", "libroctx64.so")
     profile_buffer_size: env_int = env_int("TRITON_PROFILE_BUFFER_SIZE", 64 * 1024 * 1024)
     profile_metric_buffer_size: env_int = env_int("TRITON_PROFILE_METRIC_BUFFER_SIZE", 64 * 1024 * 1024)
     enable_nvtx: env_bool = env_bool("TRITON_ENABLE_NVTX", True)

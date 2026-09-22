@@ -1,3 +1,4 @@
+import ast
 import binascii
 import hashlib
 import importlib.util
@@ -85,6 +86,14 @@ def main():
     compile_kernel(args)
 
 
+def parse_target(target: str) -> triton.backends.compiler.GPUTarget:
+    # An XPU arch is a property dict whose repr contains ':', so rejoin the middle fields.
+    backend, *arch, warp_size = target.split(":")
+    arch = ":".join(arch)
+    return triton.backends.compiler.GPUTarget(backend,
+                                              ast.literal_eval(arch) if arch[0] == "{" else arch, int(warp_size))
+
+
 def compile_kernel(args: CompileArgs):
     out_name = args.out_name if args.out_name else args.kernel_name
     out_path = args.out_path if args.out_path else Path(out_name)
@@ -142,8 +151,7 @@ def compile_kernel(args: CompileArgs):
     attrs = {k: [["tt.divisibility", 16]] for k, v in hints.items() if v == 16}
     kernel.create_binder()
     src = kernel.ASTSource(fn=kernel, constexprs=constants, signature=signature, attrs=attrs)
-    target = triton.backends.compiler.GPUTarget(*args.target.split(":")) \
-        if args.target else triton.runtime.driver.active.get_current_target()
+    target = parse_target(args.target) if args.target else triton.runtime.driver.active.get_current_target()
     backend = triton.compiler.make_backend(target)
     kwargs = {"num_warps": args.num_warps, "num_stages": args.num_stages}
     if is_xpu():

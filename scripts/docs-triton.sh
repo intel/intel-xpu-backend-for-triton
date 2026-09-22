@@ -2,6 +2,9 @@
 
 set -euo pipefail
 
+# Provides the `pip` wrapper (pip or `uv pip`).
+source "$(dirname "$0")/pip-utils.sh"
+
 # Select which tests to run.
 VENV=false
 ARGS=
@@ -36,7 +39,7 @@ export TRITON_PROJ=$BASE/intel-xpu-backend-for-triton
 export TRITON_PROJ_BUILD=$TRITON_PROJ/python/build
 export SCRIPTS_DIR=$(cd $(dirname "$0") && pwd)
 
-python3 -m pip install lit pytest pytest-xdist pytest-rerunfailures 'pytest-skip>=0.2.0'
+pip install lit pytest pytest-xdist pytest-rerunfailures 'pytest-skip>=0.2.0'
 
 source $SCRIPTS_DIR/pytest-utils.sh
 $SCRIPTS_DIR/install-pytorch.sh $([ $VENV = true ] && echo "--venv")
@@ -52,7 +55,7 @@ run_build_docs() {
   echo "***************************************************"
   echo "************   Building Triton Docs    ************"
   echo "***************************************************"
-  python3 -m pip install matplotlib 'pandas<3.0' tabulate sphinx sphinx_rtd_theme sphinx_gallery sphinx_multiversion myst_parser -q
+  pip install matplotlib 'pandas<3.0' tabulate sphinx sphinx_rtd_theme sphinx_gallery sphinx_multiversion myst_parser -q
   cd $TRITON_PROJ/docs
   python3 -m sphinx . _build/html/mai
 }

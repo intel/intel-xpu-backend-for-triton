@@ -131,6 +131,12 @@ else
     export TORCH_VERSION="Not installed"
 fi
 
+if [ -f /opt/intel/installed.txt ]; then
+    export DLE_VERSION=$(grep -oP 'deep-learning-essentials-\K[0-9.]+' /opt/intel/installed.txt)
+else
+    export DLE_VERSION="Not installed"
+fi
+
 if icpx --version &> /dev/null; then
     export COMPILER_VERSION=$(icpx --version | grep "DPC++/C++ Compiler" | sed 's/.*(\(.*\))/\1/' | cut -d '.' -f 1-3)
 else
@@ -143,6 +149,7 @@ if [[ $QUIET = false ]]; then
     echo "AGAMA_VERSION=$AGAMA_VERSION"
     echo "GPU_DEVICE=$GPU_DEVICE"
     echo "TORCH_VERSION=$TORCH_VERSION"
+    echo "DLE_VERSION=$DLE_VERSION"
     echo "COMPILER_VERSION=$COMPILER_VERSION"
     if [[ ${BENCHMARKING_METHOD:-} ]]; then
         echo "BENCHMARKING_METHOD=$BENCHMARKING_METHOD"

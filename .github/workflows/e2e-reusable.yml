@@ -96,6 +96,7 @@ jobs:
         uses: ./.github/actions/setup-pytorch
         with:
           ref: ${{ inputs.pytorch_ref }}
+          lts: ${{ inputs.runner_label == 'lts' }}
 
       - name: Identify pinned versions
         run: |

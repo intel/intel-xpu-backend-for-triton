@@ -268,7 +268,9 @@ protected:
     if (auto c = getScalarIntConstant(v))
       return c;
     if (auto *ai = axisInfoLookup(v))
-      return ai->getConstantValue();
+      if (const std::optional<APInt> &c = ai->getConstantValue();
+          c && c->getBitWidth() <= 64)
+        return c->getSExtValue();
     return std::nullopt;
   }
 

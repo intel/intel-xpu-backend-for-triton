@@ -2,9 +2,6 @@
 # Large-token fused MoE accuracy failure on XPU after the memory-query patch.
 tests/kernels/moe/test_moe.py::test_fused_moe_int64_overflow
 
-# Waiting for upstream fix https://github.com/intel/intel-xpu-backend-for-triton/issues/7705
-tests/kernels/moe/test_silu_mul_fp8_quant_deep_gemm.py::test_silu_mul_fp8_quant_deep_gemm
-
 tests/kernels/moe/test_batched_moe.py::test_fused_moe_batched_experts
 
 # Block FP8 modular MoE tests require FP32-SiLU reference https://github.com/intel/intel-xpu-backend-for-triton/issues/7614
@@ -160,6 +157,7 @@ tests/kernels/moe/test_moe.py::test_fused_moe[True-False-dtype0-4-2-8-40000-1024
 tests/kernels/moe/test_moe.py::test_fused_moe[True-False-dtype0-4-6-8-32768-2048-511]
 tests/kernels/moe/test_moe.py::test_fused_moe[True-False-dtype0-4-6-8-40000-1024-1024]
 
+# Reference moe_sum kernel interface mismatch: https://github.com/intel/intel-xpu-backend-for-triton/issues/7811
 tests/kernels/moe/test_moe.py::test_moe_sum[contig-dtype0-128-2-1]
 tests/kernels/moe/test_moe.py::test_moe_sum[contig-dtype0-128-2-33]
 tests/kernels/moe/test_moe.py::test_moe_sum[contig-dtype0-128-2-222]

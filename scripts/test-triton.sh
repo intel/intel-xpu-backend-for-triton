@@ -43,9 +43,17 @@ TEST:
     --vllm-linear-attn
     --vllm-deepgemm
     --vllm-kda
+    --vllm-inductor
     --vllm-tdesc
     --install-vllm
     --sglang
+    --sglang-attention
+    --sglang-quant
+    --sglang-moe
+    --sglang-mamba
+    --sglang-gdn
+    --sglang-kda
+    --sglang-spec
     --install-sglang
     --liger
     --install-liger
@@ -60,6 +68,8 @@ OPTION:
     --warning-reports
     --ignore-errors
     --run-all
+    --asan            run host-only unit + LIT tests under AddressSanitizer/LeakSanitizer;
+                      requires a build produced with TRITON_BUILD_WITH_ASAN=1
     --skip-list SKIPLIST
     --extra-skip-list-suffixes SEMICOLON-SEPARATED LIST OF SUFFIXES
     --select-from-file SELECTFILE
@@ -100,6 +110,13 @@ TEST_BENCHMARK_FLEX_ATTENTION=false
 TEST_INSTRUMENTATION=false
 TEST_INDUCTOR=false
 TEST_SGLANG=false
+TEST_SGLANG_ATTENTION=false
+TEST_SGLANG_QUANT=false
+TEST_SGLANG_MOE=false
+TEST_SGLANG_MAMBA=false
+TEST_SGLANG_GDN=false
+TEST_SGLANG_KDA=false
+TEST_SGLANG_SPEC=false
 INSTALL_SGLANG=false
 TEST_LIGER=false
 INSTALL_LIGER=false
@@ -114,6 +131,7 @@ TEST_VLLM_QUANT=false
 TEST_VLLM_LINEAR_ATTN=false
 TEST_VLLM_DEEPGEMM=false
 TEST_VLLM_KDA=false
+TEST_VLLM_INDUCTOR=false
 TEST_VLLM_TDESC=false
 INSTALL_VLLM=false
 TEST_TRITON_KERNELS=false
@@ -125,6 +143,7 @@ TRITON_TEST_RUN_ALL=false
 SKIP_PIP=false
 SKIP_PYTORCH=false
 TEST_UNSKIP=false
+TEST_ASAN=false
 
 while (( $# != 0 )); do
   case "$1" in
@@ -270,6 +289,41 @@ while (( $# != 0 )); do
       TEST_DEFAULT=false
       shift
       ;;
+    --sglang-attention)
+      TEST_SGLANG_ATTENTION=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --sglang-quant)
+      TEST_SGLANG_QUANT=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --sglang-moe)
+      TEST_SGLANG_MOE=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --sglang-mamba)
+      TEST_SGLANG_MAMBA=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --sglang-gdn)
+      TEST_SGLANG_GDN=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --sglang-kda)
+      TEST_SGLANG_KDA=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --sglang-spec)
+      TEST_SGLANG_SPEC=true
+      TEST_DEFAULT=false
+      shift
+      ;;
     --install-sglang)
       INSTALL_SGLANG=true
       TEST_DEFAULT=false
@@ -345,6 +399,11 @@ while (( $# != 0 )); do
       TEST_DEFAULT=false
       shift
       ;;
+    --vllm-inductor)
+      TEST_VLLM_INDUCTOR=true
+      TEST_DEFAULT=false
+      shift
+      ;;
     --vllm-tdesc)
       TEST_VLLM_TDESC=true
       TEST_DEFAULT=false
@@ -387,6 +446,10 @@ while (( $# != 0 )); do
       ;;
     --run-all)
       TRITON_TEST_RUN_ALL=true
+      shift
+      ;;
+    --asan)
+      TEST_ASAN=true
       shift
       ;;
     --skip-list)
@@ -432,6 +495,59 @@ fi
 TRITON_PROJ="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && cd .. && pwd )"
 SCRIPTS_DIR="$TRITON_PROJ/scripts"
 source "$SCRIPTS_DIR/pytest-utils.sh"
+# Provides the `pip` wrapper (pip or `uv pip`).
+source "$SCRIPTS_DIR/pip-utils.sh"
+
+# AddressSanitizer / LeakSanitizer mode. ASan does not work with binaries that
+# run code on the GPU, so this is restricted to the host-side test surface:
+# the C++ unittests and the LIT tests, both of which exercise triton-opt without
+# touching the device. Requires a build produced with TRITON_BUILD_WITH_ASAN=1.
+# See https://github.com/intel/intel-xpu-backend-for-triton/issues/5029
+if [ "$TEST_ASAN" = true ]; then
+  # Restrict to the host-only unit-test suite (CXX unittests + LIT).
+  TEST_DEFAULT=false
+  TEST_UNIT=true
+  TEST_CORE=false
+  TEST_TUTORIAL=false
+  TEST_MICRO_BENCHMARKS=false
+  TEST_TRITON_KERNELS=false
+  # No Python/GPU tests run under ASan, so skip the pip/pytorch install steps.
+  SKIP_PIP=true
+  SKIP_PYTORCH=true
+
+  # Fail early with a clear message if the build is not ASan-instrumented.
+  # Note: the script runs under `set -o pipefail`, so avoid `... | grep -q`
+  # patterns -- grep closes the pipe on first match and the upstream command
+  # dies with SIGPIPE (141), which pipefail would report as failure. Capture
+  # the output first, then match.
+  ASAN_TRITON_OPT=$(ls -1 "$TRITON_PROJ"/build/cmake*/bin/triton-opt 2>/dev/null || true)
+  ASAN_TRITON_OPT=${ASAN_TRITON_OPT%%$'\n'*}
+  if [ -z "$ASAN_TRITON_OPT" ]; then
+    err "****** ERROR: triton-opt not found. Build Triton first (with TRITON_BUILD_WITH_ASAN=1). ******"
+  fi
+  ASAN_SYMS=$(nm "$ASAN_TRITON_OPT" 2>/dev/null | grep -c '__asan_init' || true)
+  if [ "$ASAN_SYMS" -eq 0 ]; then
+    err "****** ERROR: $ASAN_TRITON_OPT is not ASan-instrumented. Rebuild with TRITON_BUILD_WITH_ASAN=1. ******"
+  fi
+
+  # LeakSanitizer runs at exit; suppress known-benign LLVM/MLIR global leaks so
+  # real leaks stand out. detect_leaks defaults to on for Linux ASan; set it
+  # explicitly for clarity.
+  #
+  # allow_user_poisoning=0 is required: the prebuilt LLVM we link against is not
+  # ASan-instrumented, but its allocators emit __asan_poison_memory_region calls
+  # that resolve against our runtime, poisoning buffers that instrumented Triton
+  # code (e.g. MLIR SmallVector move-assignment in Dialect::addType) then writes
+  # to -- a false use-after-poison that aborts every MLIR tool at static init.
+  # Disabling user poisoning makes those manual poison calls no-ops; it does NOT
+  # weaken leak detection or ASan redzone checks for heap overflow/use-after-free.
+  # Prepend any pre-existing options so our harness-critical settings come LAST:
+  # ASan/LSan use a last-wins parser, so listing ours last keeps them in force
+  # regardless of what the environment already set. The ${VAR:+$VAR:} form emits
+  # the trailing ':' only when VAR is non-empty, avoiding a stray leading ':'.
+  export ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}detect_leaks=1:allow_user_poisoning=0"
+  export LSAN_OPTIONS="${LSAN_OPTIONS:+$LSAN_OPTIONS:}suppressions=$SCRIPTS_DIR/asan/lsan.supp:print_suppressions=0"
+fi
 
 if [ "$TRITON_TEST_REPORTS" == true ]; then
     capture_runtime_env
@@ -442,10 +558,10 @@ install_deps() {
     echo "**** Skipping installation of pip dependencies ****"
   else
     echo "**** Installing pip dependencies ****"
-    python -m pip install -r "$SCRIPTS_DIR/requirements-test.txt"
+    pip install -r "$SCRIPTS_DIR/requirements-test.txt"
 
     if [ "$TRITON_TEST_WARNING_REPORTS" == true ]; then
-      python -m pip install git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.2.0
+      pip install git+https://github.com/kwasd/pytest-capturewarnings-ng@v1.2.0
     fi
   fi
 
@@ -591,7 +707,7 @@ run_tools_tests() {
   ensure_spirv_dis
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=tools \
-    run_pytest_command -n ${PYTEST_MAX_PROCESSES:-8} -k "not test_disam_cubin" --verbose tools
+    run_pytest_command -n ${PYTEST_MAX_PROCESSES:-8} -k "not test_disam_cubin" --verbose --device xpu tools
 }
 
 run_regression_tests() {
@@ -661,7 +777,7 @@ run_tutorial_tests() {
   echo "***************************************************"
   echo "**** Running Triton Tutorial tests           ******"
   echo "***************************************************"
-  python -m pip install matplotlib 'pandas<3.0' tabulate -q
+  pip install matplotlib 'pandas<3.0' tabulate -q
 
   cd $TRITON_PROJ/python/test/tutorials
 
@@ -728,15 +844,10 @@ run_benchmark_flash_attention() {
   cd $TRITON_PROJ/benchmarks
   pip install .
 
-  echo "Forward - Default path (with tensor descriptor):"
+  echo "Forward:"
   python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
 
-  echo "Forward - Advanced path:"
-  TRITON_INTEL_ADVANCED_PATH=1 \
-    IGC_VISAOptions=" -enableBCR" \
-    python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
-
-  echo "Backward - Default path:"
+  echo "Backward:"
   FA_KERNEL_MODE="bwd" \
     python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
 }
@@ -802,7 +913,7 @@ run_test_deps_install() {
 
 run_vllm_test_deps_install() {
   run_test_deps_install
-  python -m pip install \
+  pip install \
     accelerate \
     blake3 \
     cachetools \
@@ -824,19 +935,131 @@ enter_vllm_test_env() {
 }
 
 run_sglang_install() {
+  echo "************************************************"
+  echo "******    Installing SGLang               ******"
+  echo "************************************************"
+
   "$SCRIPTS_DIR/sglang/install-sglang.sh"
 }
+
+enter_sglang_test_env() {
+  run_sglang_install
+  run_test_deps_install
+  cd "$TRITON_PROJ/sglang"
+}
+
+# Kernel/test mapping: scripts/sglang/README.md, issue #7655.
+# No -n: with -n 4 the attention tests crash an xdist worker with a GPU page fault
+# on a single-GPU runner.
 
 run_sglang_tests() {
   echo "***************************************************"
   echo "******    Running SGLang Triton tests        ******"
   echo "***************************************************"
 
-  run_sglang_install
-  run_test_deps_install
-  cd sglang
-  TRITON_TEST_SUITE=sglang \
-    run_pytest_command -vvv -n ${PYTEST_MAX_PROCESSES:-4} test/registered/attention/test_triton_attention_kernels.py
+  run_sglang_attention_tests
+  run_sglang_quant_tests
+  run_sglang_moe_tests
+  run_sglang_mamba_tests
+  run_sglang_gdn_tests
+  run_sglang_kda_tests
+  run_sglang_spec_tests
+}
+
+run_sglang_attention_tests() {
+  echo "********************************************************"
+  echo "******  Running SGLang attention tests           *******"
+  echo "********************************************************"
+
+  enter_sglang_test_env
+  # KV index build, decode/extend/prefill attention.
+  # test_fp4_indexer.py is left out: it imports sgl_kernel, which is not installed.
+  TRITON_TEST_SUITE=sglang_attention \
+    run_pytest_command -vvv \
+      test/registered/attention/test_create_kvindices.py \
+      test/registered/attention/test_triton_attention_kernels.py
+}
+
+run_sglang_quant_tests() {
+  echo "********************************************************"
+  echo "******  Running SGLang quantization tests        *******"
+  echo "********************************************************"
+
+  enter_sglang_test_env
+  # FP8 quant + block GEMM, scaled GEMM, AWQ dequant + GEMM.
+  # test_int8_kernel.py and test_block_int8.py are left out: they import
+  # srt.layers.activation, which needs sgl_kernel on XPU.
+  TRITON_TEST_SUITE=sglang_quant \
+    run_pytest_command -vvv \
+      test/registered/quant/test_fp8_kernel.py \
+      test/registered/quant/test_triton_scaled_mm.py \
+      test/registered/quant/test_awq_dequant.py
+}
+
+run_sglang_moe_tests() {
+  echo "********************************************************"
+  echo "******  Running SGLang MoE tests                 *******"
+  echo "********************************************************"
+
+  enter_sglang_test_env
+  # Fused MoE + LoRA. sglang-test-fix.patch guards the optional sgl_kernel
+  # imports on the Triton MoE path and adds native fallbacks, which is what
+  # lets test_fused_moe.py import and run here.
+  # test/manual/test_triton_moe_wna16.py is still left out.
+  TRITON_TEST_SUITE=sglang_moe \
+    run_pytest_command -vvv \
+      test/registered/moe/test_fused_moe.py \
+      test/registered/lora/test_fused_moe_lora_kernel.py
+}
+
+run_sglang_mamba_tests() {
+  echo "********************************************************"
+  echo "******  Running SGLang Mamba tests               *******"
+  echo "********************************************************"
+
+  enter_sglang_test_env
+  # causal_conv1d (shared with GDN/KDA), Mamba2 SSM and SSD scans.
+  TRITON_TEST_SUITE=sglang_mamba \
+    run_pytest_command -vvv \
+      test/registered/layers/mamba/test_causal_conv1d.py \
+      test/registered/layers/mamba/test_mamba_ssm.py \
+      test/registered/layers/mamba/test_mamba_ssm_ssd.py
+}
+
+run_sglang_gdn_tests() {
+  echo "********************************************************"
+  echo "******  Running SGLang GDN tests                 *******"
+  echo "********************************************************"
+
+  enter_sglang_test_env
+  # Gated delta rule (fla kernels, with XPU overrides upstream).
+  TRITON_TEST_SUITE=sglang_gdn \
+    run_pytest_command -vvv \
+      test/registered/attention/test_chunk_gated_delta_rule.py
+}
+
+run_sglang_kda_tests() {
+  echo "********************************************************"
+  echo "******  Running SGLang KDA tests                 *******"
+  echo "********************************************************"
+
+  enter_sglang_test_env
+  # Kimi delta attention.
+  TRITON_TEST_SUITE=sglang_kda \
+    run_pytest_command -vvv \
+      test/registered/attention/test_kda_kernels.py
+}
+
+run_sglang_spec_tests() {
+  echo "********************************************************"
+  echo "******  Running SGLang speculative decoding tests ******"
+  echo "********************************************************"
+
+  enter_sglang_test_env
+  # DSpark Triton vs torch parity.
+  TRITON_TEST_SUITE=sglang_spec \
+    run_pytest_command -vvv \
+      test/registered/spec/dspark/test_dspark_kernel_parity.py
 }
 
 run_liger_install() {
@@ -902,6 +1125,7 @@ run_vllm_tests() {
   run_vllm_linear_attn_tests
   run_vllm_deepgemm_tests
   run_vllm_kda_tests
+  run_vllm_inductor_tests
   run_vllm_tdesc_tests
 }
 
@@ -1047,7 +1271,6 @@ run_vllm_quant_tests() {
       tests/kernels/quantization/test_triton_scaled_mm.py \
       tests/kernels/quantization/test_awq_triton.py \
       tests/kernels/quantization/test_int8_kernel.py \
-      tests/kernels/quantization/test_block_int8.py \
       tests/kernels/quantization/test_fp8_quant.py \
       tests/kernels/quantization/test_fp8_quant_group.py \
       tests/kernels/quantization/test_block_fp8.py \
@@ -1099,6 +1322,18 @@ run_vllm_kda_tests() {
 }
 
 
+run_vllm_inductor_tests() {
+  echo "********************************************************"
+  echo "******  Running vLLM Inductor tests              *******"
+  echo "********************************************************"
+
+  cd "$TRITON_PROJ/benchmarks/triton_kernels_benchmark/vllm"
+  TRITON_TEST_SUITE=vllm_inductor \
+    run_pytest_command -vvv \
+      test/test_wan22_torch_compile.py
+}
+
+
 run_vllm_tdesc_tests() {
   echo "********************************************************"
   echo "******  Running vLLM tensor descriptor tests     *******"
@@ -1109,6 +1344,7 @@ run_vllm_tdesc_tests() {
   local VLLM_PROJ="$TRITON_PROJ/vllm"
   local PATCH_FILES=(
     "$TRITON_PROJ/benchmarks/triton_kernels_benchmark/vllm/batched_moe/batched_moe.patch"
+    "$TRITON_PROJ/benchmarks/triton_kernels_benchmark/vllm/fused_moe/fused_moe.patch"
     "$TRITON_PROJ/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention.patch"
   )
 
@@ -1135,6 +1371,12 @@ run_vllm_tdesc_tests() {
     VLLM_TRITON_USE_TD=1 TRITON_TEST_SUITE=vllm_tdesc \
       run_pytest_command -vvv \
         tests/kernels/moe/test_batched_moe.py \
+        tests/kernels/moe/test_block_fp8.py \
+        tests/kernels/moe/test_block_int8.py \
+        tests/kernels/moe/test_moe.py \
+        tests/kernels/moe/test_moe_layer.py \
+        tests/kernels/moe/test_triton_moe_ptpc_fp8.py \
+        tests/kernels/quantization/test_int8_kernel.py \
         tests/kernels/attention/test_triton_unified_attention.py \
         || exit_status=$?
   fi
@@ -1154,7 +1396,7 @@ run_triton_kernels_tests() {
   echo "***************************************************"
   echo "******    Running Triton Kernels tests      *******"
   echo "***************************************************"
-  cd $TRITON_PROJ/python/triton_kernels/tests
+  cd $TRITON_PROJ/python/triton_kernels
 
   # available after `capture_runtime_env` call
   gpu_file="$TRITON_TEST_REPORTS_DIR/gpu.txt"
@@ -1170,7 +1412,7 @@ run_triton_kernels_tests() {
   fi
   # skipping mxfp, they are part of mxfp_tests suite
   TRITON_TEST_SUITE=triton_kernels \
-    run_pytest_command -vvv -n $max_procs --device xpu . -k 'not test_mxfp'
+    run_pytest_command -vvv -n $max_procs --device xpu tests -k 'not test_mxfp'
 }
 
 test_triton() {
@@ -1252,6 +1494,27 @@ test_triton() {
   if [ "$TEST_SGLANG" == true ]; then
     run_sglang_tests
   fi
+  if [ "$TEST_SGLANG_ATTENTION" == true ]; then
+    run_sglang_attention_tests
+  fi
+  if [ "$TEST_SGLANG_QUANT" == true ]; then
+    run_sglang_quant_tests
+  fi
+  if [ "$TEST_SGLANG_MOE" == true ]; then
+    run_sglang_moe_tests
+  fi
+  if [ "$TEST_SGLANG_MAMBA" == true ]; then
+    run_sglang_mamba_tests
+  fi
+  if [ "$TEST_SGLANG_GDN" == true ]; then
+    run_sglang_gdn_tests
+  fi
+  if [ "$TEST_SGLANG_KDA" == true ]; then
+    run_sglang_kda_tests
+  fi
+  if [ "$TEST_SGLANG_SPEC" == true ]; then
+    run_sglang_spec_tests
+  fi
   if [ "$INSTALL_LIGER" == true ]; then
     run_liger_install
   fi
@@ -1293,6 +1556,9 @@ test_triton() {
   fi
   if [ "$TEST_VLLM_KDA" == true ]; then
     run_vllm_kda_tests
+  fi
+  if [ "$TEST_VLLM_INDUCTOR" == true ]; then
+    run_vllm_inductor_tests
   fi
   if [ "$TEST_VLLM_TDESC" == true ]; then
     run_vllm_tdesc_tests

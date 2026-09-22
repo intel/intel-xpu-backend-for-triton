@@ -5,6 +5,7 @@ import triton
 import triton.language as tl
 
 import triton_kernels_benchmark as benchmark_suite
+from triton_kernels_benchmark.benchmark_testing import DEVICE
 
 
 @triton.jit
@@ -45,7 +46,7 @@ def get_benchmark(providers_filter: Optional[List[str]] = None):
         ))
     def benchmark(M, N, AXIS, provider):
         do_bench = benchmark_suite.get_do_bench(n_warmup=1000, n_repeat=100, quantiles=[0.5, 0.0, 1.0])
-        x = torch.rand(M, N, device="xpu", dtype=torch.float32)
+        x = torch.rand(M, N, device=DEVICE, dtype=torch.float32)
 
         if provider == "triton":
             triton_fn = lambda: scan_kernel[(1, )](x, BLOCK_SIZE_M=M, BLOCK_SIZE_N=N, AXIS=AXIS)

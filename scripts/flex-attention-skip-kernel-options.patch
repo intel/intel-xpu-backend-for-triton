@@ -1,0 +1,15 @@
+--- a/test/inductor/test_flex_attention.py
++++ b/test/inductor/test_flex_attention.py
+@@ -4645,6 +4645,12 @@
+     @supported_platform
+     @skip_on_cpu
+     @skip_on_mps  # asserts Triton "BLOCK_M : tl.constexpr" string in generated code
++    # FIXME: the BLOCK_M=16 flex attention kernel this test compiles is enqueued
++    # and never retires on IGC 2.40.x, so the *next* test in the file hangs
++    # forever at its first synchronization and the job burns its whole timeout.
++    # https://github.com/intel/intel-xpu-backend-for-triton/issues/8028
++    # Re-enable once the CI runners are on IGC >= 2.41.x.
++    @skip_on_xpu
+     def test_kernel_options_argument_is_respected(self, device):
+         make_tensor = functools.partial(
+             torch.randn,

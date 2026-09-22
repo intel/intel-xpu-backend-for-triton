@@ -4,6 +4,7 @@ from triton.backends.intel.driver import compile_module_from_src, is_lts
 from triton.backends.intel.track import track
 from triton.backends.intel.extension_utils import query_device_extensions
 from triton import knobs
+from triton._instrumentation import instrument as _instrument, is_enabled
 from triton.runtime.errors import IntelGPUError, OutOfResources
 
 from dataclasses import dataclass
@@ -25,6 +26,8 @@ try:  # XPUBackend allows metaclasses injection
 except ImportError:
     XPUBackendMeta = type(BaseBackend)
 
+instrument = functools.partial(_instrument, backend="intel")
+
 
 @dataclass
 class XPUOptions:
@@ -45,6 +48,7 @@ class XPUOptions:
     allow_fp8e4b15: bool = True
     grf_mode: str = 'default'
     loop_distribute: bool = knobs.intel.enable_loop_distribution
+    optimize_load_masks: bool = not knobs.intel.disable_optimize_load_masks
     code_sinking: bool = knobs.intel.enable_code_sinking
     sub_32_dpas: bool = knobs.intel.enable_sub_32_dpas
     dynamic_shared_memory: bool = knobs.intel.dynamic_shared_memory
@@ -79,8 +83,14 @@ class XPUOptions:
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
-# Aligned with max_reg_spill in third_party/intel/backend/driver.c
-MAX_REG_SPILL = 0
+# Largest spill the auto-large-GRF upgrade tolerates before rebuilding, in the
+# unit external consumers compare `n_spills` in: dword-equivalents per lane. 16
+# is PyTorch inductor's default `spill_threshold` for non-HIP, so a spill at or
+# below this cannot change inductor's verdict and a rebuild would only cost
+# compile time. Kept in sync with `kMaxSpillSlotsPerLane` in driver.c, except on
+# the LTS driver line -- see `accepts_default_grf` -- because driver.c has no
+# driver-version context and the SPV path it gates was not measured for #8106.
+MAX_REG_SPILL_SLOTS_PER_LANE = 16
 
 SPILL_SIZE_RE = re.compile(r'spill_size\s*[:=]\s*(\d+)')
 PTSS_OVERFLOW_RE = re.compile(
@@ -119,6 +129,40 @@ def extract_spill_size_from_zebin(file):
     return 0
 
 
+def spill_slots_per_lane(spill_size, threads_per_warp):
+    """Convert a zebin `spill_size` to the unit `n_spills` is reported in.
+
+    `spill_size` is bytes allocated per hardware thread; CUDA and HIP report
+    `n_spills` as dword-equivalents per lane, and that is the unit external
+    consumers threshold on. Mirrors `Spills::slotsPerLane` in driver.c, down to
+    the truncating division and the raw-byte fallback for an unknown width.
+    """
+    if spill_size <= 0 or threads_per_warp <= 0:
+        return spill_size
+    return spill_size // (4 * threads_per_warp)
+
+
+def accepts_default_grf(spill_size, threads_per_warp, is_lts):
+    """Whether the default-GRF build is good enough to skip the large-GRF rebuild.
+
+    On the rolling driver line a spill at or below inductor's `spill_threshold`
+    cannot change its accept/reject verdict, so the rebuild would only add
+    compile time. LTS IGC prices the resulting binaries differently: declining
+    the rebuild costs +21% end to end on `pyhpc_isoneutral_mixing` (Max 1100,
+    12 of 165 configs affected, issue #8106), while the same 12 configs measure
+    neutral on rolling. So LTS keeps the older rule of rebuilding on any spill
+    and rolling keeps the compile-time saving.
+
+    The LTS branch compares BYTES rather than slots on purpose. Because
+    `spill_slots_per_lane` truncates, a slot threshold of 0 would still accept a
+    64 B spill (0 slots at SIMD32) and skip the rebuild -- and a 64 B config is
+    one of the 12 this is meant to cover.
+    """
+    if is_lts:
+        return spill_size <= 0
+    return spill_slots_per_lane(spill_size, threads_per_warp) <= MAX_REG_SPILL_SLOTS_PER_LANE
+
+
 def min_dot_size(device_props: Union[Dict, GPUTarget]):
     if isinstance(device_props, GPUTarget):
         backend = XPUBackend(device_props)
@@ -133,7 +177,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     arch_to_impl = {}  # Architecture id to backend implementation class mapping
     binary_ext = "spv"
     target_arch = "spir64"
-    instrumentation = None
 
     @staticmethod
     def supports_target(target: GPUTarget):
@@ -174,14 +217,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
     @staticmethod
     def core_clock_rate(tgt_prop) -> int:
-        if (rate := tgt_prop.get('core_clock_rate')) is None:
-            from triton.runtime import driver
-            # Not `driver.active.utils`: creating it initializes the device, which raises
-            # when compiling in a forked process.
-            if (utils := driver.active.__dict__.get('utils')) is None:
-                return 0
-            rate = utils.get_device_properties(driver.active.get_current_device()).get('sm_clock_rate', 0)
-        return rate or 0
+        return tgt_prop.get('core_clock_rate') or 0
 
     def parse_target(self, tgt_prop) -> dict:
         dev_prop = {}
@@ -256,13 +292,12 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         return ret
 
     @staticmethod
-    def _get_max_divisibility(value):
-        """Get the highest power-of-2 divisor of value.
-        """
+    def _get_max_divisibility(value, cap=4):
+        """Get the highest power-of-2 divisor of value, capped at `cap`."""
         if value == 0:
             return 1
         div = 1
-        while value % (div * 2) == 0:
+        while div < cap and value % (div * 2) == 0:
             div *= 2
         return div
 
@@ -272,9 +307,14 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         key = ""
         if getattr(arg, "padding", None) == "nan":
             key += "N"
+        # A cap of 4 is enough for the 2D block I/O alignment check, but collapsing a
+        # unit dim of a rank-3 descriptor needs shape[i] % block_shape[i] == 0, so for
+        # that shape cap at the block extent instead (issues/7679).
+        block_shape = getattr(arg, "block_shape", None)
+        collapsible = block_shape is not None and len(block_shape) == 3 and 1 in block_shape[:2]
         for i, shape_val in enumerate(arg.shape):
-            div = XPUBackend._get_max_divisibility(shape_val)
-            key += f"S{i}D{div}"
+            cap = max(4, block_shape[i]) if collapsible else 4
+            key += f"S{i}D{XPUBackend._get_max_divisibility(shape_val, cap)}"
         return key
 
     def pack_metadata(self, metadata):
@@ -282,21 +322,20 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
     @staticmethod
     def min_dot_size(device_props: dict):
-        # (M, N, K)
-        # M: repeatCount. 1,2,4,8
-        # N: executionSize. 16 for PVC, 8 for ATS
-        # K: systolicDepth x opsPerChan. systolicDepth must be 8
-        repeat_count = 1
-        sdepth = 8
-        exec_size = min(device_props["sub_group_sizes"])
+        execution_size = min(device_props["sub_group_sizes"])
 
-        def get_ops_per_channel(lhs_type, rhs_type):
-            l_bitwidth = lhs_type.scalar.primitive_bitwidth
-            r_bitwidth = rhs_type.scalar.primitive_bitwidth
-            max_ops_per_chan = 32 / max(l_bitwidth, r_bitwidth)
-            return min(8, max_ops_per_chan)
+        def get_min_dot_size(lhs_type, rhs_type):
+            lhs_type = lhs_type.scalar
+            rhs_type = rhs_type.scalar
 
-        return lambda lhs_type, rhs_type: (repeat_count, exec_size, sdepth * get_ops_per_channel(lhs_type, rhs_type))
+            # FMA path currently has accuracy errors for INT8 dots.
+            if lhs_type.is_int8() and rhs_type.is_int8():
+                return (1, execution_size, 32)
+
+            # Fallback to use FMA if size configurations not supported/performant for DPAS.
+            return (1, 1, 1)
+
+        return get_min_dot_size
 
     def get_codegen_implementation(self, options):
         from triton.language.extra.intel import convert_custom_float8
@@ -311,8 +350,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
     def load_dialects(self, ctx):
         intel.load_dialects(ctx)
-        if self.instrumentation:
-            self.instrumentation.load_dialects(ctx)
+        instrument(ctx, point="load-dialects")
 
     @staticmethod
     def validate_options(opt, properties):
@@ -325,6 +363,12 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             raise ValueError(
                 f"num_warps={opt.num_warps} is unsupported for the target (limit is {properties['max_num_sub_groups']})"
             )
+        # The backend has no CTA cluster support: getClusterCTAId is hardwired to
+        # 0, clusterBarrier is a plain workgroup barrier, and loadDShared /
+        # storeDShared ignore the ctaId they are given. Accepting num_ctas > 1
+        # would silently miscompile any cross-CTA communication.
+        if opt.num_ctas != 1:
+            raise ValueError(f"num_ctas={opt.num_ctas} is unsupported for the target (only num_ctas=1 is supported)")
 
     @classmethod
     def annotate_module(cls, module_opts, properties, opt):
@@ -372,6 +416,14 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttir.add_simplify_signed_arithmetic(pm)
         passes.ttir.add_reorder_broadcast(pm)
         passes.common.add_cse(pm)
+        if opt.optimize_load_masks:
+            # Runs after CSE, which unifies the `tt.addptr` chains the pass
+            # matches redundant loads on. The pass only makes the two arms of a
+            # select equal; CSE unifies the values it duplicated and the
+            # canonicalizer folds `select %c, %v, %v` and drops what dies.
+            intel.passes.ttir.add_optimize_load_masks(pm)
+            passes.common.add_cse(pm)
+            passes.common.add_canonicalizer(pm)
         passes.common.add_symbol_dce(pm)
         if opt.loop_distribute:
             intel.passes.ttgpuir.add_loop_distribute(pm)
@@ -432,7 +484,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier)
 
         if (opt.reduce_variable_liveness):
-            intel.passes.ttgpuir.add_reduce_variable_liveness(pm)
+            intel.passes.ttgpuir.add_reduce_variable_liveness(pm, opt.grf_mode)
 
         # Off by default: code sinking is perf-neutral on measured kernels (it
         # reliably reduces register spills, but the relieved traffic is not on
@@ -465,7 +517,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if knobs.intel.opt_reduction_locality:
             intel.passes.ttgpuir.add_optimize_reduction_locality(pm)
         intel.passes.arith.add_arith_emulate_unsupported_floats(pm, ["bf16"], "f32")
-        if opt.instrumentation_mode == "fpsan":
+        if is_enabled(opt, "fpsan"):
             passes.ttgpuir.add_fp_sanitizer(pm, opt.fpsan_homomorphic_casts)
         pm.run(mod, 'make_ttgir')
         return mod
@@ -481,7 +533,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.ttir.add_loop_aware_cse(pm)
         passes.gluon.add_canonicalizer(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
-        if options.instrumentation_mode == "fpsan":
+        if is_enabled(options, "fpsan"):
             passes.ttgpuir.add_fp_sanitizer(pm, options.fpsan_homomorphic_casts)
 
         pm.run(mod, 'gluon_to_ttgir')
@@ -520,8 +572,29 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttgpuir.add_allocate_shared_memory(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
-        if cls.instrumentation:
-            cls.instrumentation.patch("ttgpuir_to_llvmir", pm, mod.context)
+        instrument(pm, point="ttgpuir-to-llvmir", context=mod.context)
+        pm.run(mod, 'make_llir.allocate_memory')
+
+        metadata["shared"] = src.get_int_attr("ttg.shared")
+        # Shared memory is now allocated statically (see `initSharedMemory` in
+        # TritonGPUToLLVM.cpp), so an oversized request fails the SPIR-V module
+        # build later (an opaque `ZE_RESULT_ERROR_MODULE_BUILD_FAILURE`) instead
+        # of failing at kernel launch. Raise `OutOfResources` here instead, so
+        # `triton.runtime.autotuner.Autotuner` (and callers that bypass
+        # `CompiledKernel._init_handles`, e.g. torch Inductor's static XPU
+        # launcher) can skip the offending config instead of crashing. The check
+        # is done as soon as `ttg.shared` is final, because lowering an oversized
+        # allocation to LLVM is slow enough to dominate the compile time of a
+        # config that cannot run anyway. The `ttgpuir-to-llvmir` instrumentation
+        # passes have to run first: Proton's `allocate_proton_shared_memory`
+        # grows `ttg.shared` to make room for its profiling buffer.
+        max_shared_mem = metadata["target"].arch.get("local_mem_size")
+        if max_shared_mem is not None and metadata["shared"] > max_shared_mem:
+            raise OutOfResources(metadata["shared"], max_shared_mem, "shared memory")
+
+        pm = ir.pass_manager(mod.context)
+        pm.enable_debug()
+
         intel.passes.ttgpuir.add_to_llvmir(pm, options.dynamic_shared_memory)
         intel.passes.ttgpuir.add_gen_to_llvm(pm)
         passes.common.add_canonicalizer(pm)
@@ -535,8 +608,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if not knobs.compilation.disable_line_info and not knobs.compilation.dump_ir_extract_di_local_variables:
             passes.llvmir.add_di_scope(pm)
 
-        if cls.instrumentation:
-            cls.instrumentation.patch("llvmir_to_llvm", pm, mod.context)
+        instrument(pm, point="llvmir-to-llvm", context=mod.context)
         pm.run(mod, 'make_llir')
 
         if knobs.compilation.dump_ir_extract_di_local_variables:
@@ -574,7 +646,6 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if total_num_warps is not None:
             metadata["num_warps"] = total_num_warps
         metadata["threads_per_warp"] = intel.get_threads_per_warp(src)
-        metadata["shared"] = src.get_int_attr("ttg.shared")
         metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size")
         metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment")
         metadata["profile_scratch_size"] = src.get_int_attr("ttg.profile_scratch_memory_size") or 0
@@ -592,8 +663,9 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     @track
     def make_spv(cls, src, metadata, options):
         driver_version = metadata["target"].arch.get("driver_version")
-        os.environ["INTEL_XPU_BACKEND_IS_LTS"] = "1" if cls.is_lts(driver_version) else "0"
-        spirv, name = intel.translate_to_spirv(src)
+        is_lts = cls.is_lts(driver_version)
+        os.environ["INTEL_XPU_BACKEND_IS_LTS"] = "1" if is_lts else "0"
+        spirv, name = intel.translate_to_spirv(src, is_lts)
         metadata["name"] = name
         metadata.setdefault("build_flags", "")
         if options.grf_mode == '128':
@@ -663,7 +735,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                     subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
                     if options.grf_mode == "default":
                         spill_size = extract_spill_size_from_zebin(fbin)
-                        if spill_size <= MAX_REG_SPILL:
+                        if accepts_default_grf(spill_size, metadata["threads_per_warp"], options.is_lts):
                             break
                 except (subprocess.CalledProcessError, IntelGPUError) as e:
                     # If GRF mode was not last yet, retry with different GRF mode
@@ -704,6 +776,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
             stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, self.properties)
         elif language == Language.GLUON:
+            stages["glir"] = lambda src, metadata: src
             stages["ttgir"] = lambda src, metadata: self.gluon_to_ttgir(src, metadata, options)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
         stages["spv"] = lambda src, metadata: self.make_spv(src, metadata, options)

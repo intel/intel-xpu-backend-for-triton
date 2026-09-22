@@ -1,0 +1,2 @@
+# Parametrized with device="cuda:0"
+registered/lora/test_fused_moe_lora_kernel.py::test_fused_moe_lora_kernel[r".*cuda.*"]@regexp

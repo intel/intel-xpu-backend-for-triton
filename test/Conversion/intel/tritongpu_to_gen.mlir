@@ -244,7 +244,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @store_with_cache_attr(%a_ptr_init : tensor<256x!tt.ptr<f32>, #blocked0>, %cst : tensor<256xi1, #blocked0>, %cst_0 : tensor<256xf32, #blocked0>) {
     // CHECK llvm.store %{{.*}}, %{{.*}} {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
     // CHECK llvm.store %{{.*}}, %{{.*}} {alignment = 4 : i64} : vector<1xi32>, !llvm.ptr<1>
-    tt.store %a_ptr_init, %cst_0, %cst evictionPolicy = evict_last cacheModifier = ca : tensor<256x!tt.ptr<f32>, #blocked0>
+    tt.store %a_ptr_init, %cst_0, %cst {cachePolicy = #tt.cache_policy<cache_modifier = none, eviction_policy = evict_last>} : tensor<256x!tt.ptr<f32>, #blocked0>
     tt.return
   }
 }
@@ -350,7 +350,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttig.su
     %10 = arith.cmpi "slt", %4, %9 : tensor<64xi32, #blocked>
     // load op has a vector width = 1 due to the %mask's alignment
     // PREDICATED: llvm.call spir_funccc @_Z27__spirv_PredicatedLoadINTELPU3AS1vbi({{.*}}) {{.*}} : (!llvm.ptr<1>, i1, i32) -> i32
-    // NO_PREDICATED: llvm.load %{{.*}} {alignment = 4 : i64} : !llvm.ptr<1> -> i32
+    // NO-PREDICATED: llvm.load %{{.*}} {alignment = 4 : i64} : !llvm.ptr<1> -> i32
     %11 = tt.load %6, %10 : tensor<64x!tt.ptr<f32>, #blocked>
     %12 = tt.load %8, %10 : tensor<64x!tt.ptr<f32>, #blocked>
     %13 = arith.addf %11, %12 : tensor<64xf32, #blocked>
