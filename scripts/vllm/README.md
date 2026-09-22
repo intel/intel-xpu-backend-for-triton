@@ -13,6 +13,8 @@ Scripts for installing and testing vLLM on Intel XPU as part of the Triton CI.
 - **vllm-xpu-patch.py** - AST-guided patcher that scans vLLM test files for
   hardcoded CUDA references and applies source-level XPU replacements.
 
+- **[ua_tuning/](ua_tuning/README.md)** - CI input adapters and manifests for offline unified-attention tuning.
+
 ## Test Suites
 
 ### `--vllm-spec-decode` (TRITON_TEST_SUITE=vllm_spec_decode)

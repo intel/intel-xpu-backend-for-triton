@@ -40,6 +40,11 @@ TOTAL_MEMORY_BYTES = benchmark_suite.get_total_gpu_memory_bytes()
 
 IS_FP8 = (os.getenv('FP8', '0') == '1')
 
+# Temporary SYCL accuracy skip: https://github.com/intel/intel-xpu-backend-for-triton/actions/runs/37194365383
+BENCHMARK_SKIPLIST = {
+    ('sycl-tla', 64, 4, 128, None, ((4096, 4096), ), None, None, 2048, 64),
+}
+
 
 def ref_paged_attn(
     query: torch.Tensor,
@@ -307,6 +312,11 @@ def get_unified_attention_benchmark(
                   provider):
         print("Config:", q_heads, k_heads, head_size, qdtype, seq_lens, sliding_window, soft_cap, num_blocks,
               block_size, provider)
+        skip_key = (provider, q_heads, k_heads, head_size, qdtype, tuple(map(tuple, seq_lens)), sliding_window,
+                    soft_cap, num_blocks, block_size)
+        if skip_key in BENCHMARK_SKIPLIST:
+            print("Skipping known SYCL-TLA accuracy failure; reporting NaN measurements.")
+            return (float("nan"), ) * 3, (float("nan"), ) * 3, float("nan")
         dtype = torch.bfloat16
         torch.manual_seed(20)
         n_warmup = 100
