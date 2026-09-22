@@ -275,9 +275,8 @@ def test_tdesc_loop_carried_index(step, device, with_allocator):
     num_wrong = int((c != ref).sum())
 
     # Prove the gate's decision from the compiled artifact FIRST, so it is checked on both arms
-    # even though the odd arm's numeric result is an expected failure. This also keeps the test
-    # meaningful on a device or driver where the odd-X load happens not to corrupt. It assumes
-    # the NITER loop still carries `off` in iter_args when MaterializeBlockPointer runs; if it
+    # and stays meaningful on a device or driver where the odd-X load happens not to corrupt. It
+    # assumes the NITER loop still carries `off` in iter_args when MaterializeBlockPointer runs; if it
     # were ever unrolled to constant indices first, the even iterations would be legitimately
     # admitted and this assert would fail for an unrelated reason.
     #

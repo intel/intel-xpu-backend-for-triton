@@ -756,3 +756,109 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     tt.return %3 : tensor<8x16xf32, #blocked>
   }
 }
+
+// -----
+
+// COM: Gather-fallback vector width must follow the access index, not just the descriptor (#7990).
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 4], warpsPerCTA = [8, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @descriptor_load_odd_index_narrows
+  tt.func public @descriptor_load_odd_index_narrows(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}) {
+    %c0_i32 = arith.constant 0 : i32
+    %idx = arith.constant 3 : i32
+    %cols = arith.constant 64 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %stride = arith.constant 64 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %cols], [%stride, %c1_i64] : <f16>, <64x32xf16>
+    // CHECK-NOT: llvm.load {{.*}} -> vector<4xi32>
+    // CHECK-COUNT-16: llvm.load {{.*}} {alignment = 2 : i64} : !llvm.ptr<1> -> i16
+    // CHECK-NOT: llvm.load {{.*}} -> vector<4xi32>
+    %v = tt.descriptor_load %desc[%c0_i32, %idx] : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #blocked>
+    tt.return
+  }
+
+  // CHECK-LABEL: llvm.func spir_kernelcc @descriptor_load_aligned_index_stays_vectorized
+  tt.func public @descriptor_load_aligned_index_stays_vectorized(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}) {
+    %c0_i32 = arith.constant 0 : i32
+    %idx = arith.constant 8 : i32
+    %cols = arith.constant 64 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %stride = arith.constant 64 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %cols], [%stride, %c1_i64] : <f16>, <64x32xf16>
+    // CHECK-COUNT-2: llvm.load {{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<4xi32>
+    %v = tt.descriptor_load %desc[%c0_i32, %idx] : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #blocked>
+    tt.return
+  }
+
+  // COM: 6 only proves the index is a multiple of 6, i.e. 2-element aligned, so
+  // COM: vec must be 2. Leaving it at 6 trips the numVecs assert; rounding
+  // COM: min(8, 6) down to 4 instead promises `alignment = 8` at index 6, which
+  // COM: sits at byte 12.
+  // CHECK-LABEL: llvm.func spir_kernelcc @descriptor_load_non_pow2_index_hint
+  tt.func public @descriptor_load_non_pow2_index_hint(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}, %idx: i32 {tt.divisibility = 6 : i32}) {
+    %c0_i32 = arith.constant 0 : i32
+    %cols = arith.constant 64 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %stride = arith.constant 64 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %cols], [%stride, %c1_i64] : <f16>, <64x32xf16>
+    // CHECK-NOT: llvm.load {{.*}} -> vector<
+    // CHECK-COUNT-8: llvm.load {{.*}} {alignment = 4 : i64} : !llvm.ptr<1> -> i32
+    // CHECK-NOT: llvm.load {{.*}} -> vector<
+    %v = tt.descriptor_load %desc[%c0_i32, %idx] : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #blocked>
+    tt.return
+  }
+
+  // COM: Store side; index 2 is divisible by 2 but not 8, so vec narrows 8 -> 2, not to a scalar.
+  // CHECK-LABEL: llvm.func spir_kernelcc @descriptor_store_index_narrows
+  tt.func public @descriptor_store_index_narrows(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}, %arg2: tensor<64x32xf16, #blocked>) {
+    %c0_i32 = arith.constant 0 : i32
+    %idx = arith.constant 2 : i32
+    %cols = arith.constant 64 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %stride = arith.constant 64 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %cols], [%stride, %c1_i64] : <f16>, <64x32xf16>
+    // CHECK-NOT: llvm.store {{.*}} : vector<4xi32>, !llvm.ptr<1>
+    // CHECK-COUNT-8: llvm.store {{.*}} {alignment = 4 : i64} : i32, !llvm.ptr<1>
+    // CHECK-NOT: llvm.store {{.*}} : vector<4xi32>, !llvm.ptr<1>
+    tt.descriptor_store %desc[%c0_i32, %idx], %arg2 : !tt.tensordesc<64x32xf16>, tensor<64x32xf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Same narrowing on the predicated arm, which is what ships for descriptor
+// COM: I/O on a non-LTS driver. The arm is selected by ttig.support_predicated_io,
+// COM: not by the TRITON_INTEL_PREDICATED_* env vars (#7990).
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 4], warpsPerCTA = [8, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io, ttig.support_predicated_io} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @descriptor_load_odd_index_narrows_predicated
+  tt.func public @descriptor_load_odd_index_narrows_predicated(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}) {
+    %c0_i32 = arith.constant 0 : i32
+    %idx = arith.constant 3 : i32
+    %cols = arith.constant 64 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %stride = arith.constant 64 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %cols], [%stride, %c1_i64] : <f16>, <64x32xf16>
+    // CHECK-NOT: triton_gen.predicated_load {{.*}} -> vector<4xi32>
+    // CHECK-COUNT-16: triton_gen.predicated_load {{.*}} : (!llvm.ptr<1>, i1, i16) -> i16
+    // CHECK-NOT: triton_gen.predicated_load {{.*}} -> vector<4xi32>
+    %v = tt.descriptor_load %desc[%c0_i32, %idx] : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #blocked>
+    tt.return
+  }
+
+  // CHECK-LABEL: llvm.func spir_kernelcc @descriptor_load_aligned_index_stays_vectorized_predicated
+  tt.func public @descriptor_load_aligned_index_stays_vectorized_predicated(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}) {
+    %c0_i32 = arith.constant 0 : i32
+    %idx = arith.constant 8 : i32
+    %cols = arith.constant 64 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %stride = arith.constant 64 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %cols], [%stride, %c1_i64] : <f16>, <64x32xf16>
+    // CHECK-COUNT-2: triton_gen.predicated_load {{.*}} : (!llvm.ptr<1>, i1, vector<4xi32>) -> vector<4xi32>
+    %v = tt.descriptor_load %desc[%c0_i32, %idx] : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #blocked>
+    tt.return
+  }
+}
