@@ -248,25 +248,22 @@ struct LoadStoreConversionBase {
     vec = std::max(1u, 1u << llvm::Log2_32(vec));
 
     // The index shifts the base by index * elemBytes on the stride-one
-    // dimension, so a `vec`-element access is aligned only when index % vec ==
-    // 0 (#7990). Other dimensions are already covered: makeTensorDescAxisInfo
-    // folds their stride divisibility into descDivisibility. An unprovable or
-    // absent index is assumed unaligned; a constant 0 reports kMaxDivisor.
+    // dimension, so a `vec`-element access is aligned only when the index is
+    // itself a multiple of `vec` (#7990). Other dimensions are already folded
+    // into descDivisibility by makeTensorDescAxisInfo; an absent or unprovable
+    // index is assumed unaligned.
     AxisInfo *idxAxisInfo =
         descDim < indices.size()
             ? const_cast<triton::intel::ModuleAxisInfoAnalysis &>(
                   axisAnalysisPass)
                   .getAxisInfo(indices[descDim])
             : nullptr;
-    // A `tt.divisibility` hint is floored at 1 but never rounded, so "multiple
-    // of 6" only proves a 2-element alignment: clamp to the greatest
-    // power-of-two divisor rather than rounding the min. int64_t because a
-    // constant 0 index reports kMaxDivisor.
+    // A `tt.divisibility` hint is floored at 1 but never rounded, so a hint of
+    // 6 proves only a 2-element alignment: clamp to the greatest power-of-two
+    // divisor instead of rounding the min, which leaves both operands of the
+    // min powers of two. int64_t: a constant 0 index reports kMaxDivisor.
     int64_t idxDiv = idxAxisInfo ? idxAxisInfo->getDivisibility(0) : 1;
     int64_t idxAlign = idxDiv > 0 ? (idxDiv & -idxDiv) : 1;
-
-    // Both operands of the min are powers of two, so it is their gcd and needs
-    // no re-rounding.
     return static_cast<unsigned>(std::min<int64_t>(vec, idxAlign));
   }
 
