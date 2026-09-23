@@ -269,6 +269,11 @@ extern "C" EXPORT_FUNC PyObject *get_device_properties(int device_id) {
       device_properties.numSlices * device_properties.numSubslicesPerSlice;
   // To align with other backends - convert MHz to KHz
   int sm_clock_rate = device_properties.coreClockRate * 1000;
+  // `multiprocessor_count` counts sub-slices (Xe-cores), so
+  // `threads_per_eu * eus_per_subslice` is the number of hardware threads
+  // (sub-groups) that can be resident on a single "SM".
+  int threads_per_eu = device_properties.numThreadsPerEU;
+  int eus_per_subslice = device_properties.numEUsPerSubslice;
 
   ze_device_compute_properties_t compute_properties = {};
   compute_properties.stype = ZE_STRUCTURE_TYPE_DEVICE_COMPUTE_PROPERTIES;
@@ -309,12 +314,13 @@ extern "C" EXPORT_FUNC PyObject *get_device_properties(int device_id) {
     PyTuple_SetItem(subgroup_sizes, i, item);
   }
 
-  return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i, s:i, s:N}", "max_shared_mem",
-                       max_shared_mem, "multiprocessor_count",
+  return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i, s:i, s:i, s:i, s:N}",
+                       "max_shared_mem", max_shared_mem, "multiprocessor_count",
                        multiprocessor_count, "sm_clock_rate", sm_clock_rate,
                        "mem_clock_rate", mem_clock_rate, "mem_bus_width",
                        mem_bus_width, "max_work_group_size", max_group_size,
-                       "sub_group_sizes", subgroup_sizes);
+                       "threads_per_eu", threads_per_eu, "eus_per_subslice",
+                       eus_per_subslice, "sub_group_sizes", subgroup_sizes);
 }
 
 struct KernelInfo {
