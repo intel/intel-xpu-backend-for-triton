@@ -304,6 +304,16 @@ static SmallVector<tt::MakeTensorDescOp> findAllMakeTensorDescOps(Value val) {
     }
     if (auto opRes = dyn_cast<OpResult>(cur)) {
       Operation *defOp = opRes.getOwner();
+      if (auto whileOp = dyn_cast<scf::WhileOp>(defOp)) {
+        // An `scf.while` result is the `scf.condition` arg, not the after
+        // region's yield that `getYieldedValues` returns. `getConditionOp`
+        // reads the before region (see `hasEmptyRegion`).
+        if (hasEmptyRegion(defOp))
+          return {};
+        worklist.push_back(
+            whileOp.getConditionOp().getArgs()[opRes.getResultNumber()]);
+        continue;
+      }
       if (auto loopOp = dyn_cast<LoopLikeOpInterface>(defOp)) {
         // `getYieldedValues` reaches the region terminator, so it must not run
         // on a transiently region-less loop (see `hasEmptyRegion`).
