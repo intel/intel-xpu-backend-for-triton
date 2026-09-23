@@ -63,6 +63,10 @@ jobs:
       if: matrix.build-mode == 'manual'
       run: echo "MAX_JOBS=${MAX_JOBS:-2}" >> "$GITHUB_ENV"
 
+    - name: Install AMD codegen bootstrap dependencies
+      if: matrix.build-mode == 'manual'
+      run: sudo apt-get update && sudo apt-get install -y --no-install-recommends zlib1g-dev libxml2-dev
+
     - name: Build Triton (traced)
       if: matrix.build-mode == 'manual'
       uses: ./.github/actions/setup-triton
