@@ -1131,8 +1131,8 @@ def sinh(arg0, _semantic=None):
 def tanh(arg0, _semantic=None):
     return core.extern_elementwise(
         "", "", [arg0], {
-            (core.dtype("fp32"), ): ("__imf_tanhf", core.dtype("fp32")),
-            (core.dtype("fp64"), ): ("__imf_tanh", core.dtype("fp64")),
+            (core.dtype("fp32"), ): ("__imf_tanhf_ep", core.dtype("fp32")),
+            (core.dtype("fp64"), ): ("__imf_tanh_ep", core.dtype("fp64")),
         }, is_pure=True, _semantic=_semantic)
 
 
