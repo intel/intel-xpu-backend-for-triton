@@ -1360,12 +1360,29 @@ class TritonRewriteTensorDescriptorToPointerPass
         unhandledMakeTensorDescOps;
     op->walk([&](Operation *op) {
       TypeSwitch<Operation *>(op)
-          .Case<triton::DescriptorLoadOp, triton::DescriptorStoreOp>(
-              [&](auto op) {
-                for (auto d :
-                     triton::intel::findDescriptorDefinitions(op.getDesc()))
-                  candidateMakeTensorDescOps.insert(d);
-              })
+          .Case<triton::DescriptorLoadOp>([&](triton::DescriptorLoadOp op) {
+            triton::intel::DescriptorDefinitions defs =
+                triton::intel::findDescriptorDefinitions(op.getDesc());
+            // Candidates that disagree on `padding` leave the descriptor-native
+            // path with no compile-time fill value (#8102): the load would
+            // silently get PAD_ZERO even on the branch that asked for PAD_NAN.
+            // The pointer expansion carries padding as a runtime i1 and selects
+            // the fill per branch, so route those descriptors to it. An empty
+            // trace is NOT divergence -- it is already a non-candidate via
+            // allSatisfy, so it must not be evicted here.
+            bool divergentPadding = !defs.empty() && !defs.consistentPadding();
+            for (triton::MakeTensorDescOp d : defs) {
+              candidateMakeTensorDescOps.insert(d);
+              if (divergentPadding)
+                unhandledMakeTensorDescOps.insert(d);
+            }
+          })
+          .Case<triton::DescriptorStoreOp>([&](triton::DescriptorStoreOp op) {
+            // Stores carry no padding, so there is nothing to diverge on.
+            for (triton::MakeTensorDescOp d :
+                 triton::intel::findDescriptorDefinitions(op.getDesc()))
+              candidateMakeTensorDescOps.insert(d);
+          })
           .Case<triton::DescriptorGatherOp, triton::DescriptorScatterOp,
                 triton::DescriptorReduceOp>([&](auto op) {
             for (auto d :
