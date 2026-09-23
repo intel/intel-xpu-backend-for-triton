@@ -310,6 +310,9 @@ static SmallVector<tt::MakeTensorDescOp> findAllMakeTensorDescOps(Value val) {
         if (hasEmptyRegion(defOp))
           return {};
         worklist.push_back(loopOp.getYieldedValues()[opRes.getResultNumber()]);
+        // A zero-trip loop returns its init, so trace that too.
+        if (OpOperand *init = loopOp.getTiedLoopInit(opRes))
+          worklist.push_back(init->get());
         continue;
       }
       if (auto ifOp = dyn_cast<scf::IfOp>(defOp)) {
