@@ -268,6 +268,12 @@ static SmallVector<tt::MakeTensorDescOp> findAllMakeTensorDescOps(Value val) {
         continue;
       }
       if (auto whileOp = dyn_cast<scf::WhileOp>(parentOp)) {
+        // `getBefore().front()` / `getAfter().front()` read both loop regions,
+        // and `ConvertWhileOpTypes` comes from the same
+        // `populateSCFStructuralTypeConversions` call as `ConvertForOpTypes`,
+        // so this branch has the `scf.for` hazard above (see `hasEmptyRegion`).
+        if (hasEmptyRegion(parentOp))
+          return {};
         unsigned idx = arg.getArgNumber();
         Block *beforeBlock = &whileOp.getBefore().front();
         Block *afterBlock = &whileOp.getAfter().front();
