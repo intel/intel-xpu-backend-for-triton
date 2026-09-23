@@ -1,5 +1,4 @@
 # Other
-tests/kernels/moe/test_batched_moe.py::test_fused_moe_batched_experts
 
 tests/kernels/moe/test_moe.py::test_naive_block_assignment_moe[True-dtype0-1-128-2-2048-511]
 tests/kernels/moe/test_moe.py::test_naive_block_assignment_moe[True-dtype0-2-128-2-2048-511]
