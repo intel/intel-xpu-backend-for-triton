@@ -2829,7 +2829,7 @@ struct DescriptorLoadOpConversion
       if (defs.allSatisfy([&](MakeTensorDescOp d) {
             return isDivisible(d.getShape()[i], bs);
           }) &&
-          isDivisible(op.getIndices()[i], static_cast<unsigned>(bs))) {
+          isDivisible(op.getIndices()[i], bs)) {
         blockLevelDims.push_back(i);
       } else {
         perElementDims.push_back(i);
@@ -3069,7 +3069,7 @@ struct DescriptorStoreOpConversion
       if (defs.allSatisfy([&](MakeTensorDescOp d) {
             return isDivisible(d.getShape()[i], bs);
           }) &&
-          isDivisible(op.getIndices()[i], static_cast<unsigned>(bs))) {
+          isDivisible(op.getIndices()[i], bs)) {
         blockLevelDims.push_back(i);
       } else {
         perElementDims.push_back(i);

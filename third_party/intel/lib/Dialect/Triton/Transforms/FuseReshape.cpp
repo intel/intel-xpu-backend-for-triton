@@ -336,9 +336,9 @@ private:
     // If denominator is a constant, use isDivisible which leverages
     // tt.divisibility attributes on function arguments and constants.
     APInt denVal;
-    if (matchPattern(denominator, m_ConstantInt(&denVal)) && !denVal.isZero())
-      return mlir::triton::gpu::intel::isDivisible(numerator,
-                                                   denVal.getZExtValue());
+    if (matchPattern(denominator, m_ConstantInt(&denVal)))
+      if (std::optional<int64_t> den = denVal.trySExtValue())
+        return mlir::triton::gpu::intel::isDivisible(numerator, *den);
 
     return false;
   }

@@ -29,3 +29,14 @@ add_triton_ut(
     TritonIntelGPUTransforms
     TritonNvidiaGPUTransforms
 )
+add_triton_ut(
+  NAME TritonIntelGPUUtility
+  SRCS UtilityTest.cpp
+  LIBS
+    TritonIntelGPUIR
+    TritonGPUIR
+    TritonGPUTransforms
+    TritonIntelAnalysis
+    TritonIntelGPUTransforms
+    TritonNvidiaGPUTransforms
+)

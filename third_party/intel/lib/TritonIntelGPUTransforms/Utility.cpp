@@ -57,15 +57,24 @@ static bool isSingleValue(Value value) {
   return true;
 }
 
-bool isDivisible(Value value, unsigned divisor) {
+bool isDivisible(Value value, int64_t divisor) {
+  // Nothing is provably divisible by zero, and a negative divisor has no
+  // meaning for the extents, strides and offsets callers pass.
+  if (divisor <= 0)
+    return false;
+
   // Every integer is divisible by 1, regardless of how `value` is defined.
   if (divisor == 1)
     return true;
 
-  // Case 1: Value is defined by a constant operation
+  // Case 1: Value is defined by a constant operation. Integer constants are
+  // interpreted as signed, as the index arithmetic producing them is.
   if (auto constantOp = value.getDefiningOp<arith::ConstantOp>()) {
     auto integerAttr = dyn_cast<IntegerAttr>(constantOp.getValue());
-    return integerAttr && integerAttr.getValue().getZExtValue() % divisor == 0;
+    if (!integerAttr)
+      return false;
+    std::optional<int64_t> intVal = integerAttr.getValue().trySExtValue();
+    return intVal && *intVal % divisor == 0;
   }
 
   // Case 2: Value is a block argument of the entry block
