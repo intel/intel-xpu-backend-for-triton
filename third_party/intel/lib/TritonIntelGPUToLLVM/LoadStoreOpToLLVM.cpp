@@ -2844,10 +2844,13 @@ struct DescriptorLoadOpConversion
     } else if (tracedPadding) {
       padding = *tracedPadding;
     } else {
-      // No provenance at all: the descriptor reaches an untraceable value
-      // (e.g. an opaque function argument in hand-written TTGIR). The LLVM
-      // descriptor struct carries no padding field, so fall back to PAD_ZERO
-      // -- the declared default of `tt.make_tensor_descriptor`.
+      // Empty trace: some path reaches an untraceable value (e.g. an opaque
+      // function argument in hand-written TTGIR). The trace is all-or-nothing,
+      // so other paths may still reach a traceable producer whose padding is
+      // lost here. The LLVM descriptor struct carries no padding field, so
+      // fall back to PAD_ZERO -- the declared default of
+      // `tt.make_tensor_descriptor`. This is a compatibility fallback, not a
+      // derivation of the descriptor's padding.
       padding = PaddingOption::PAD_ZERO;
     }
 

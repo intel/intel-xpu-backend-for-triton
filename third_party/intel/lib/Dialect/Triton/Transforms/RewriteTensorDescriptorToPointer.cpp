@@ -1394,7 +1394,9 @@ class TritonRewriteTensorDescriptorToPointerPass
 
       // Legality is decided per op over all of its descriptor-typed operands
       // and results, so their producers form one group that must be converted
-      // together. An empty trace adds nothing to the group.
+      // together. An empty trace adds nothing to the group, so a producer
+      // that shares an op only with an untraceable value is not dragged
+      // along (#8170).
       llvm::SmallSetVector<triton::MakeTensorDescOp, 4> group;
       auto addDefs = [&](Value v) {
         if (!isa<triton::TensorDescType>(v.getType()))
@@ -1414,8 +1416,8 @@ class TritonRewriteTensorDescriptorToPointerPass
 
     // With `buildMaterializations = false` legality cannot be mixed within a
     // group: one producer leaving the descriptor path (evicted, or never a
-    // candidate) drags every producer that shares an op with it. Close the
-    // evicted set over the groups.
+    // candidate) drags every traced producer that shares an op with it. Close
+    // the evicted set over the groups.
     auto isEvicted = [&](triton::MakeTensorDescOp d) {
       return unhandledMakeTensorDescOps.contains(d) ||
              !candidateMakeTensorDescOps.contains(d);
