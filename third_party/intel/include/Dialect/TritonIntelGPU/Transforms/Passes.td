@@ -145,9 +145,13 @@ def TritonIntelGPUHoistLayoutConversions
     peak.
 
     The bounded figure is the peak as `RegisterPressureAnalysis` reports it, not
-    physical allocator demand (see its header). Projection and comparand are the
-    same metric by construction: the corridor steps over a nested region as one
-    operation rather than descending into it.
+    physical allocator demand (see its header). The corridor still walks a
+    nested region the arriving result spans -- a sibling loop stepped over on
+    the way to the loop being hoisted from, say -- as the single operation
+    that region-holding op is, rather than descending into it op by op; but the
+    projection separately prices that region's own internal peak against the
+    arriving result too, so stepping over it is only about how the walk is
+    structured, not a gap in what gets priced.
 
     Where a term cannot be established -- a corridor spanning two blocks or
     longer than `corridor-op-cap`, an insertion point at the end of its block --
@@ -179,7 +183,10 @@ def TritonIntelGPUHoistLayoutConversions
     rejected. A rejected candidate pays too. A function with no candidate reaching
     this gate pays nothing: the analysis is built lazily on the first one.
     Lowering `peak-rebuild-cap` bounds those rebuilds, i.e. cost, and spends
-    hoists to do it.
+    hoists to do it. Each region-holding corridor entry now also pays a
+    `peakPressure` walk of that region on top of the per-op pricing above --
+    real added cost on a kernel with a sibling loop in the corridor, not yet
+    re-measured against the figures above.
 
     ### Non-goals, all deliberate
 

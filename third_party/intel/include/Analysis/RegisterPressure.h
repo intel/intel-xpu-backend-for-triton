@@ -9,6 +9,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringRef.h"
 
 namespace mlir::triton::gpu::intel {
@@ -37,7 +38,67 @@ struct RegisterPressureOptions {
 /// The unit is **per-lane bytes** ("thread" = one SIMD lane, Triton's usual
 /// convention), NOT the per-hardware-thread unit `getGRFBytesPerHardwareThread`
 /// returns. Use `getPerLaneGRFBudgetInBytes` to compare against a GRF budget.
+///
+/// The analysis is region-aware in two distinct ways. `peakPressure(Block *)`
+/// accounts for values live inside any region nested under the block (an
+/// `scf.if` body, an inner loop, ...); `pressureAt` and its siblings
+/// (`pressureAt(Operation *, Value)`, `pressureBefore`) account for values
+/// that merely live *through* the region-holding ops enclosing the queried
+/// point, without being touched inside them -- all three share one
+/// underlying live-through computation, so they cannot silently disagree
+/// about what is live at a nested point. None of the three descend into the
+/// queried op's own regions -- use `peakPressure` for that. (The live-in
+/// accessors below -- `liveInPressure`, `isLiveIn`, `liveInContribution` --
+/// are block-local by design and do not descend into or climb past nested
+/// regions either; see their own doc comments.) See their individual doc
+/// comments for the exact rules. `peakPressure` and `pressureAt` are not free
+/// to call: see the `LiveValuesCache`/`AncestorLiveThroughCache` comment below
+/// for what they cost and why.
 class RegisterPressureAnalysis {
+private:
+  /// Memoized results of `LivenessBlockInfo::currentlyLiveValues()`, keyed by
+  /// the program point queried. MLIR documents that query as expensive and does
+  /// not cache it, while reporting pressure over a nest of blocks queries the
+  /// same few points over and over: each op enclosing a block is queried once
+  /// per operation that block's walk visits, and each nested op is walked again
+  /// on behalf of every block enclosing it.
+  ///
+  /// A cache is owned by (and lives no longer than) a single top-level query,
+  /// never by the analysis: consumers run inside passes, which must not carry
+  /// mutable state across invocations. Every public entry point creates one and
+  /// threads it through the whole traversal it performs, so that within one
+  /// such query the live set of any given program point is computed exactly
+  /// once.
+  ///
+  /// NOTE ON COST: even with this cache, `peakPressure`/`pressureAt` are real,
+  /// non-trivial per-candidate costs, not free predicates -- each query still
+  /// builds and returns a value set, and `peakPressure(Block *)` invokes one
+  /// such query per op in the (possibly deeply nested) block it walks. A prior
+  /// hardware A/B of this analysis measured roughly 3x longer compile times
+  /// across six real kernel regimes, severe enough that the test DUT went into
+  /// swap during the run. Any future cost-model work that calls these
+  /// primitives per candidate (e.g. to rank several possible transforms) must
+  /// account for that cost explicitly rather than assume it is negligible.
+  using LiveValuesCache = DenseMap<Operation *, Liveness::ValueSetT>;
+
+  /// Memoized live-through contribution of an ancestor (a region-holding op
+  /// enclosing the point of interest) and everything enclosing *that*
+  /// ancestor, up to (but not including) the analysis root. Each entry is the
+  /// union of the ancestor's own filtered live values (its own results are
+  /// dropped -- see `getLiveThroughAncestorSet`'s implementation for why) with
+  /// the entry for its own parent.
+  ///
+  /// This exists so that querying pressure at N sibling (or cousin) ops that
+  /// share an ancestor chain costs that chain's union exactly once in total,
+  /// not once per query: without it, `pressureAt` would re-walk and re-union
+  /// the same ancestor chain from scratch for every op `peakPressure(Block *)`
+  /// visits, an O(ops visited x nesting depth) cost that grows with how deep a
+  /// kernel nests `scf.if`/`scf.for`. With it, computing a given ancestor's
+  /// entry costs only that ancestor's own live set once (its parent's entry is
+  /// reused, not recomputed), and each descendant query becomes a single union
+  /// of its own live set with the already-computed ancestor entry.
+  using AncestorLiveThroughCache = DenseMap<Operation *, Liveness::ValueSetT>;
+
 public:
   /// Construct the analysis for the given root operation.
   explicit RegisterPressureAnalysis(Operation *op,
@@ -45,14 +106,49 @@ public:
 
   /// Returns the per-thread register pressure in bytes at the given operation,
   /// accounting for all live values at that program point.
+  ///
+  /// For an op nested inside one or more regions, this includes values that are
+  /// live *through* every enclosing region-holding op (defined before it and
+  /// used after it): they occupy a register for the whole duration of that op
+  /// even though they are neither defined nor used in the nested block. Each
+  /// such value is counted once, no matter how many nesting levels it spans.
   unsigned pressureAt(Operation *op) const;
 
   /// Returns the peak per-thread register pressure in bytes within the given
-  /// block.
+  /// block, including operations nested in the regions of ops in the block (an
+  /// scf.if body, an inner loop body, ...). A block therefore never reports
+  /// less pressure than any block nested inside it.
   unsigned peakPressure(Block *block) const;
 
+  /// Opaque handle sharing this analysis's liveness caches across a run of
+  /// `pressureAt`/`pressureBefore` queries against one IR generation -- the
+  /// per-op equivalent of the cache pair every block-/function-level entry
+  /// point above already threads through internally. Construct one, pass it
+  /// to repeated queries over a stable range of operations (e.g. a candidate
+  /// load's live range), and let it go out of scope once the IR they describe
+  /// is about to change (a sink, a hoist, ...): nothing here is safe to reuse
+  /// across a mutation, matching every other cache in this class.
+  class QueryCache {
+  public:
+    QueryCache() = default;
+
+  private:
+    friend class RegisterPressureAnalysis;
+    LiveValuesCache liveCache;
+    AncestorLiveThroughCache ancestorCache;
+  };
+
+  /// Same as `pressureAt(Operation *)`, but reusing and extending \p cache
+  /// instead of building a fresh pair of caches for this one call. Prefer
+  /// this overload for any loop that queries more than one operation, e.g.
+  /// walking a candidate's live range one operation at a time -- the
+  /// single-op overload pays the whole ancestor-chain cost from scratch on
+  /// every call, which is exactly the cost `QueryCache` exists to amortize.
+  unsigned pressureAt(Operation *op, QueryCache &cache) const;
+
   /// Returns the peak per-thread register pressure in bytes within the given
-  /// loop, considering all blocks in the loop body region.
+  /// loop, considering all blocks in the loop body region, nested regions
+  /// included.
   unsigned peakPressure(LoopLikeOpInterface loop) const;
 
   /// Returns the peak per-thread register pressure in bytes over *every* block
@@ -60,13 +156,6 @@ public:
   /// allocation must cover the maximum over all blocks, not any one block's.
   ///
   /// Shares its block walk with `print()` so the two cannot drift apart.
-  ///
-  /// Model limit inherited from `pressureAt`: that primitive consults only the
-  /// containing block's liveness info, so a value live *through* a nested
-  /// region but unused inside it is absent from that region's ops. The figure
-  /// therefore under-counts inside such a region even though the value does
-  /// occupy a register there. Callers must state a transform's guarantees
-  /// relative to this metric rather than to physical allocator demand.
   unsigned peakPressure(FunctionOpInterface func) const;
 
   /// Returns the per-thread register pressure in bytes immediately *above*
@@ -95,7 +184,9 @@ public:
   };
 
   /// Returns the pressure at \p op together with whether \p value is live
-  /// there, from **one** `currentlyLiveValues(op)` build.
+  /// there, from **one** region-aware live-set build (the same one
+  /// `pressureAt(Operation *)` computes -- this overload just also reports
+  /// whether \p value is a member).
   ///
   /// That set is uncached and expensive to build (see `pressureAt`), and a
   /// caller walking a run of operations while adjusting the pressure by a
@@ -205,6 +296,39 @@ public:
   void print(raw_ostream &os) const;
 
 private:
+  /// Returns the raw (unfiltered) `currentlyLiveValues()` result at \p point,
+  /// memoizing it in \p cache.
+  const Liveness::ValueSetT &getRawLiveValuesAt(Operation *point,
+                                                LiveValuesCache &cache) const;
+
+  /// Returns (and memoizes in \p ancestorCache) the union of live-through
+  /// values contributed by \p ancestor and every op enclosing it up to (but
+  /// not including) \p rootOp. See `AncestorLiveThroughCache`'s doc for why
+  /// this is memoized per ancestor rather than recomputed per query.
+  const Liveness::ValueSetT &
+  getLiveThroughAncestorSet(Operation *ancestor, LiveValuesCache &liveCache,
+                            AncestorLiveThroughCache &ancestorCache,
+                            Operation *rootOp) const;
+
+  /// Returns the full region-aware live set at \p op: its own block-local raw
+  /// live values unioned with whatever lives through every enclosing
+  /// region-holding op. The one computation `pressureAt`, `pressureBefore`,
+  /// and the two-argument `pressureAt` overload all share, so they cannot
+  /// disagree about what is live at a nested point.
+  Liveness::ValueSetT
+  computeLiveValues(Operation *op, LiveValuesCache &liveCache,
+                    AncestorLiveThroughCache &ancestorCache) const;
+
+  /// Implements `pressureAt`, reusing and extending \p liveCache and
+  /// \p ancestorCache for the liveness queries it performs.
+  unsigned pressureAt(Operation *op, LiveValuesCache &liveCache,
+                      AncestorLiveThroughCache &ancestorCache) const;
+
+  /// Implements `peakPressure(Block *)`, reusing and extending \p liveCache
+  /// and \p ancestorCache for the liveness queries it performs.
+  unsigned peakPressure(Block *block, LiveValuesCache &liveCache,
+                        AncestorLiveThroughCache &ancestorCache) const;
+
   /// Returns true if the defining op of \p value is rematerializable (cheap to
   /// regenerate on demand, such as constants or simple range ops).
   bool isRematerializable(Value value) const;
