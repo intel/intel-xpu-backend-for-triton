@@ -151,7 +151,7 @@ if [ "$PREPARE_SOURCE_ONLY" = false ]; then
   ############################################################################
   # Check installed torch pinned dependencies
 
-  PINNED_TORCH_DEPENDENCIES_REGEX="^torchaudio==|^torchvision=="
+  PINNED_TORCH_DEPENDENCIES_REGEX="^torchao==|^torchaudio==|^torchvision=="
   INSTALLED_PINNED_TORCH_DEPENDENCIES=$(pip list --format=freeze | grep -iE "$PINNED_TORCH_DEPENDENCIES_REGEX" || true)
 
   if [ -n "$INSTALLED_PINNED_TORCH_DEPENDENCIES" ]; then
@@ -165,7 +165,7 @@ if [ "$PREPARE_SOURCE_ONLY" = false ]; then
       echo "**** INFO: PyTorch pinned dependencies build from source mode is not supported. ****"
       exit 1
     fi
-    pip uninstall -y torchaudio torchvision
+    pip uninstall -y torchao torchaudio torchvision
   fi
 fi
 
