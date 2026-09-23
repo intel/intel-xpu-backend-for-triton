@@ -149,7 +149,7 @@ index 8e5d6d048c..79df66b8e0 100644
      from sgl_kernel import gelu_and_mul, gelu_quick, gelu_tanh_and_mul, silu_and_mul
  elif _is_musa:
 diff --git a/python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe.py b/python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe.py
-index 758c2eacf6..8bb83ed3c5 100644
+index 758c2eacf6..b02fe7708b 100644
 --- a/python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe.py
 +++ b/python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe.py
 @@ -73,7 +73,12 @@ elif _is_hip:
@@ -165,6 +165,66 @@ index 758c2eacf6..8bb83ed3c5 100644
 +        _is_xpu = False
  elif _is_musa:
      from sgl_kernel import moe_sum_reduce
+ 
+@@ -95,6 +100,39 @@ padding_size = get_moe_padding_size(_use_aiter)
+ logger = logging.getLogger(__name__)
+ 
+ 
++def _sgl_fused_experts_supports(
++    hidden_states: torch.Tensor,
++    w1: torch.Tensor,
++    w2: torch.Tensor,
++    *,
++    quantized: bool,
++) -> bool:
++    """Whether sgl-kernel-xpu's grouped GEMM can take these operands.
++
++    The unquantized XPU route ends in ``moe_grouped_mm_nt_xe20``, which is built
++    for bfloat16 only -- its kernels live under ``kernels/moe/xe20/bf16`` and the
++    launcher template carries no element type -- and which reads A and B through
++    2D block loads whose pitch is the row length in bytes, so the hardware wants
++    that 16-byte aligned. The kernel checks neither: another dtype aborts from
++    the middle of the model, and an unaligned row silently returns wrong numbers.
++    The rule is known on the sgl-kernel side -- its own ``silu_and_mul`` wrapper
++    rejects a row that is not a multiple of 16 bytes -- just not applied here.
++
++    So keep operands it cannot handle on the Triton path below, which has no such
++    restriction. The quantized routes go to different operators
++    (``moe_grouped_mm_nt_xe20_fp8_w8a16``, ``_w4a16``) whose envelope this has not
++    characterized, so they are left exactly as they were.
++    """
++    if quantized:
++        return True
++    for tensor in (hidden_states, w1, w2):
++        if tensor.dtype != torch.bfloat16:
++            return False
++        if (tensor.shape[-1] * tensor.element_size()) % 16 != 0:
++            return False
++    return True
++
++
+ def _validate_fused_swiglu_interleaved(
+     *,
+     activation: str,
+@@ -1131,7 +1169,18 @@ def fused_moe(
+     Returns:
+     - torch.Tensor: The output tensor after applying the MoE layer.
+     """
+-    if _is_xpu and not get_moe_runner_backend().is_triton():
++    if (
++        _is_xpu
++        and not get_moe_runner_backend().is_triton()
++        and _sgl_fused_experts_supports(
++            hidden_states,
++            w1,
++            w2,
++            quantized=(
++                use_fp8_w8a8 or use_int8_w8a8 or use_int8_w8a16 or use_int4_w4a16
++            ),
++        )
++    ):
+         topk_weight, topk_ids, _ = topk_output
+         from sgl_kernel import fused_experts as sgl_fused_experts
  
 diff --git a/python/sglang/srt/layers/moe/moe_runner/triton_utils/moe_align_block_size.py b/python/sglang/srt/layers/moe/moe_runner/triton_utils/moe_align_block_size.py
 index 9c611a4682..f2dbdb928f 100644
