@@ -15,6 +15,7 @@ from itertools import product
 from typing import Optional
 
 import torch
+import triton
 
 import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark.benchmark_testing import BENCHMARKING_CONFIG
@@ -371,6 +372,35 @@ def get_unified_attention_benchmark(
                 k_descale = torch.rand(scale_shape, dtype=torch.float32)
                 v_descale = torch.rand(scale_shape, dtype=torch.float32)
 
+            # Enable the 3D (split-softmax) unified-attention path through the
+            # wrapper's public interface instead of hard-coding it inside the
+            # patched kernel. When the segment buffers are provided (and the
+            # batch is decode-shaped) ``unified_attention`` selects the 3D path;
+            # passing ``None`` leaves it on the 2D path. The heuristic mirrors
+            # the one the TD patch previously baked into ``unified_attention``,
+            # so the 3D path is used only for the patched (tensor-descriptor)
+            # run.
+            seq_threshold_3D = None
+            num_par_softmax_segments = None
+            softmax_segm_output = softmax_segm_max = softmax_segm_expsum = None
+            sliding_window_val = (1 + window_size[0] if window_size[0] >= 0 else 0)
+            use_3d = is_td_patched and not (max_query_len > 1  #
+                                            or num_seqs > 32  #
+                                            # 2d kernel includes crucial optimizations for sliding window
+                                            or 0 < sliding_window_val <= 1024)
+            if use_3d:
+                seq_threshold_3D = 32
+                num_par_softmax_segments = 16
+                total_query_tokens = maybe_quantized_query.shape[0]
+                head_size_padded = triton.next_power_of_2(head_size)
+                device = maybe_quantized_query.device
+                softmax_segm_output = torch.empty(total_query_tokens, q_heads, num_par_softmax_segments,
+                                                  head_size_padded, dtype=torch.float32, device=device)
+                softmax_segm_max = torch.empty(total_query_tokens, q_heads, num_par_softmax_segments,
+                                               dtype=torch.float32, device=device)
+                softmax_segm_expsum = torch.empty(total_query_tokens, q_heads, num_par_softmax_segments,
+                                                  dtype=torch.float32, device=device)
+
             def triton_fn():
                 unified_attention(
                     q=maybe_quantized_query,
@@ -389,6 +419,11 @@ def get_unified_attention_benchmark(
                     q_descale=q_descale,
                     k_descale=k_descale,
                     v_descale=v_descale,
+                    seq_threshold_3D=seq_threshold_3D,
+                    num_par_softmax_segments=num_par_softmax_segments,
+                    softmax_segm_output=softmax_segm_output,
+                    softmax_segm_max=softmax_segm_max,
+                    softmax_segm_expsum=softmax_segm_expsum,
                     use_td=is_td_patched,
                 )
                 return output
