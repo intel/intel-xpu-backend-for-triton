@@ -1358,6 +1358,7 @@ class TritonRewriteTensorDescriptorToPointerPass
         candidateMakeTensorDescOps;
     llvm::SmallSetVector<triton::MakeTensorDescOp, 4>
         unhandledMakeTensorDescOps;
+    SmallVector<llvm::SmallSetVector<triton::MakeTensorDescOp, 4>> descGroups;
     op->walk([&](Operation *op) {
       TypeSwitch<Operation *>(op)
           .Case<triton::DescriptorLoadOp>([&](triton::DescriptorLoadOp op) {
@@ -1390,8 +1391,46 @@ class TritonRewriteTensorDescriptorToPointerPass
               unhandledMakeTensorDescOps.insert(d);
           })
           .Default([](auto) {});
+
+      // Legality is decided per op over all of its descriptor-typed operands
+      // and results, so their producers form one group that must be converted
+      // together. An empty trace adds nothing to the group.
+      llvm::SmallSetVector<triton::MakeTensorDescOp, 4> group;
+      auto addDefs = [&](Value v) {
+        if (!isa<triton::TensorDescType>(v.getType()))
+          return;
+        for (triton::MakeTensorDescOp d :
+             triton::intel::findDescriptorDefinitions(v))
+          group.insert(d);
+      };
+      for (Value operand : op->getOperands())
+        addDefs(operand);
+      for (Value result : op->getResults())
+        addDefs(result);
+      if (group.size() > 1)
+        descGroups.push_back(std::move(group));
       return WalkResult::advance();
     });
+
+    // With `buildMaterializations = false` legality cannot be mixed within a
+    // group: one producer leaving the descriptor path (evicted, or never a
+    // candidate) drags every producer that shares an op with it. Close the
+    // evicted set over the groups.
+    auto isEvicted = [&](triton::MakeTensorDescOp d) {
+      return unhandledMakeTensorDescOps.contains(d) ||
+             !candidateMakeTensorDescOps.contains(d);
+    };
+    bool changed = true;
+    while (changed) {
+      changed = false;
+      for (const llvm::SmallSetVector<triton::MakeTensorDescOp, 4> &group :
+           descGroups) {
+        if (!llvm::any_of(group, isEvicted))
+          continue;
+        for (triton::MakeTensorDescOp d : group)
+          changed |= unhandledMakeTensorDescOps.insert(d);
+      }
+    }
     for (auto op : unhandledMakeTensorDescOps)
       candidateMakeTensorDescOps.remove(op);
 
