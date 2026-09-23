@@ -240,3 +240,49 @@ tt.func public @noFuseZeroExtentMergedDim(%arg0: tensor<16x16xf32>, %arg1: !tt.p
 // CHECK-LABEL: noFuseZeroExtentMergedDim
 // CHECK: tt.descriptor_load
 // CHECK: tt.reshape
+
+// -----
+
+// COM: The merged dimension's extent must be divisible by the block extent.
+// COM: isDivisible proves it through maxsi and select when every operand is
+// COM: (issues/8073).
+tt.func public @fuseMergedDimFromSelect(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<f32>, %G: i32, %a: i32 {tt.divisibility = 16 : i32}, %b: i32 {tt.divisibility = 16 : i32}, %cond: i1) {
+  %c0_i32 = arith.constant 0 : i32
+  %c16_i32 = arith.constant 16 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c16_i64 = arith.constant 16 : i64
+  %c256_i64 = arith.constant 256 : i64
+  %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32>
+  %max = arith.maxsi %a, %b : i32
+  %K = arith.select %cond, %max, %b : i32
+  %0 = tt.make_tensor_descriptor %arg1, [%G, %K, %c16_i32], [%c256_i64, %c16_i64, %c1_i64] : <f32>, <1x16x16xf32>
+  %1 = tt.descriptor_load %0[%c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<1x16x16xf32> -> tensor<1x16x16xf32>
+  %2 = tt.reshape %1 : tensor<1x16x16xf32> -> tensor<16x16xf32>
+  %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<16x16xf32> * tensor<16x16xf32> -> tensor<16x16xf32>
+  tt.return
+}
+// CHECK-LABEL: fuseMergedDimFromSelect
+// CHECK-NOT: tt.reshape
+// CHECK: tt.make_tensor_descriptor %arg1, [{{.*}}, %c16_i32], [%c16_i64, %c1_i64] : <f32>, <16x16xf32>
+// CHECK: tt.descriptor_load {{.*}} : !tt.tensordesc<16x16xf32> -> tensor<16x16xf32>
+
+// -----
+
+// COM: Same, but one value the select can produce is not known to be divisible.
+tt.func public @noFuseMergedDimFromSelect(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<f32>, %G: i32, %a: i32 {tt.divisibility = 16 : i32}, %odd: i32, %cond: i1) {
+  %c0_i32 = arith.constant 0 : i32
+  %c16_i32 = arith.constant 16 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c16_i64 = arith.constant 16 : i64
+  %c256_i64 = arith.constant 256 : i64
+  %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32>
+  %K = arith.select %cond, %a, %odd : i32
+  %0 = tt.make_tensor_descriptor %arg1, [%G, %K, %c16_i32], [%c256_i64, %c16_i64, %c1_i64] : <f32>, <1x16x16xf32>
+  %1 = tt.descriptor_load %0[%c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<1x16x16xf32> -> tensor<1x16x16xf32>
+  %2 = tt.reshape %1 : tensor<1x16x16xf32> -> tensor<16x16xf32>
+  %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<16x16xf32> * tensor<16x16xf32> -> tensor<16x16xf32>
+  tt.return
+}
+// CHECK-LABEL: noFuseMergedDimFromSelect
+// CHECK: tt.descriptor_load
+// CHECK: tt.reshape

@@ -223,3 +223,48 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// COM: The f16 row length must be even. isDivisible proves it through subi,
+// COM: minsi, maxsi and select when every operand is (issues/8073), and still
+// COM: refuses when one operand is unknown.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @materialize_tensor_descriptor_row_length_ops(
+  tt.func public @materialize_tensor_descriptor_row_length_ops(%base: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %pitch: i64 {tt.divisibility = 16 : i32}, %a: i32 {tt.divisibility = 16 : i32}, %b: i32 {tt.divisibility = 16 : i32}, %odd: i32, %cond: i1) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c64_i32 = arith.constant 64 : i32
+
+    // CHECK: tt.descriptor_load {{.*}} {ttig.block_io = "row_major"{{.*}}}
+    %sub = arith.subi %a, %b : i32
+    %0 = tt.make_tensor_descriptor %base, [%c64_i32, %sub], [%pitch, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<64x32xf16, #dot_a>
+    %1 = tt.descriptor_load %0[%c0_i32, %c0_i32] : !tt.tensordesc<64x32xf16, #dot_a> -> tensor<64x32xf16, #dot_a>
+
+    // CHECK: tt.descriptor_load {{.*}} {ttig.block_io = "row_major"{{.*}}}
+    %min = arith.minsi %a, %b : i32
+    %2 = tt.make_tensor_descriptor %base, [%c64_i32, %min], [%pitch, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<64x32xf16, #dot_a>
+    %3 = tt.descriptor_load %2[%c0_i32, %c0_i32] : !tt.tensordesc<64x32xf16, #dot_a> -> tensor<64x32xf16, #dot_a>
+
+    // CHECK: tt.descriptor_load {{.*}} {ttig.block_io = "row_major"{{.*}}}
+    %max = arith.maxsi %a, %b : i32
+    %4 = tt.make_tensor_descriptor %base, [%c64_i32, %max], [%pitch, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<64x32xf16, #dot_a>
+    %5 = tt.descriptor_load %4[%c0_i32, %c0_i32] : !tt.tensordesc<64x32xf16, #dot_a> -> tensor<64x32xf16, #dot_a>
+
+    // CHECK: tt.descriptor_load {{.*}} {ttig.block_io = "row_major"{{.*}}}
+    %sel = arith.select %cond, %a, %b : i32
+    %6 = tt.make_tensor_descriptor %base, [%c64_i32, %sel], [%pitch, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<64x32xf16, #dot_a>
+    %7 = tt.descriptor_load %6[%c0_i32, %c0_i32] : !tt.tensordesc<64x32xf16, #dot_a> -> tensor<64x32xf16, #dot_a>
+
+    // CHECK: tt.descriptor_load
+    // CHECK-NOT: ttig.block_io
+    // CHECK: tt.return
+    %sel_odd = arith.select %cond, %a, %odd : i32
+    %8 = tt.make_tensor_descriptor %base, [%c64_i32, %sel_odd], [%pitch, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<64x32xf16, #dot_a>
+    %9 = tt.descriptor_load %8[%c0_i32, %c0_i32] : !tt.tensordesc<64x32xf16, #dot_a> -> tensor<64x32xf16, #dot_a>
+
+    tt.return
+  }
+}
