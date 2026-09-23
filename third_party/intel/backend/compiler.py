@@ -283,6 +283,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         ret = BaseBackend.parse_attr(desc)
         if "N" in desc:
             ret += [["tt.padding", 1]]
+        if "T" in desc:
+            ret += [["tt.round_f32_to_tf32", 1]]
         # Shape divisibility: S<dim>D<divisor> (e.g., S0D128)
         import re
         for match in re.finditer(r'S(\d+)D(\d+)', desc):
@@ -303,10 +305,12 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
     @staticmethod
     def get_tensordesc_specialization(arg, **kwargs):
-        # Format: "N" (padding) + "S<dim>D<divisor>" (shape divisibility)
+        # Format: "N" (padding) + "T" (tf32 rounding) + "S<dim>D<divisor>" (shape divisibility)
         key = ""
         if getattr(arg, "padding", None) == "nan":
             key += "N"
+        if getattr(arg, "round_f32_to_tf32", False):
+            key += "T"
         # A cap of 4 is enough for the 2D block I/O alignment check, but collapsing a
         # unit dim of a rank-3 descriptor needs shape[i] % block_shape[i] == 0, so for
         # that shape cap at the block extent instead (issues/7679).
