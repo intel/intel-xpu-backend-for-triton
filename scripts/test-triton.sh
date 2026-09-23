@@ -1140,7 +1140,12 @@ run_vllm_triton_attn_tests() {
   # Triton attention kernels: merge_attn_states_kernel, _fwd_kernel_stage1,
   # _fwd_grouped_kernel_stage1, _fwd_kernel_stage2, kernel_unified_attention_2d,
   # kernel_unified_attention_3d, reduce_segments
-  VLLM_USE_V2_MODEL_RUNNER=1 TRITON_TEST_SUITE=vllm_triton_attn \
+  # #7395 experiment: disable vLLM's per-test torch.accelerator.empty_cache()
+  # (via the vllm-fix.patch env gate) for this suite only, to test whether the
+  # nondeterministic fp8 unified_attention accuracy errors are caused by the
+  # allocator churn between tests. Scoped here so other vLLM jobs keep their
+  # memory bounding (avoids OOM confounding the signal). Revert before merge.
+  VLLM_XPU_DISABLE_EMPTY_CACHE=1 VLLM_USE_V2_MODEL_RUNNER=1 TRITON_TEST_SUITE=vllm_triton_attn \
     run_pytest_command -vvv \
       tests/v1/attention/test_mla_backends.py \
       tests/kernels/attention/test_merge_attn_states.py \

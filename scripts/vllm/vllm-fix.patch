@@ -311,3 +311,29 @@ index 1701cd47ac..4d47e5d020 100644
  
  
  @triton.heuristics({"IS_VARLEN": lambda args: args["cu_seqlens"] is not None})
+diff --git a/vllm/distributed/parallel_state.py b/vllm/distributed/parallel_state.py
+--- a/vllm/distributed/parallel_state.py
++++ b/vllm/distributed/parallel_state.py
+@@ -2297,13 +2297,15 @@
+     gc.collect()
+     from vllm.platforms import current_platform
+ 
+     if not current_platform.is_cpu():
+-        torch.accelerator.empty_cache()
+-        try:
+-            torch.accelerator.empty_host_cache()
+-        except AttributeError:
+-            logger.warning(
+-                "torch.accelerator.empty_host_cache() only available in Pytorch >=2.9"
+-            )
++        import os
++        if os.environ.get("VLLM_XPU_DISABLE_EMPTY_CACHE") != "1":
++            torch.accelerator.empty_cache()
++            try:
++                torch.accelerator.empty_host_cache()
++            except AttributeError:
++                logger.warning(
++                    "torch.accelerator.empty_host_cache() only available in Pytorch >=2.9"
++                )
+ 
+     logger.debug_once("[shutdown] Distributed: cleanup complete")
