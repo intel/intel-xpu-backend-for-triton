@@ -295,8 +295,20 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # Largest GRF mode the backend's automatic escalation will ever select
         # for this target; see `get_max_grf_mode`. A driver- or out-of-tree
         # arch-module-supplied override wins, same as every other capability
-        # above.
+        # above. Unlike its siblings, an invalid value here is not merely
+        # cosmetic: `make_zebin` interpolates it directly into an `ocloc`
+        # flag (hard failure on a typo), `driver.c`'s JIT retry silently
+        # falls back to 256 for anything that isn't exactly "512"/"128", and
+        # `RegisterPressureAnalysis` silently falls back to 512 for anything
+        # that isn't exactly "128"/"256" -- three different interpretations
+        # of the same bad value, with the worst combination (a permissive
+        # 512-byte pressure budget paired with a 256-GRF hardware ceiling)
+        # silently reproducing the exact undercount #8074 exists to fix.
+        # Validate here, once, so every downstream consumer agrees.
         dev_prop['max_grf_mode'] = tgt_prop.get('max_grf_mode', get_max_grf_mode(tgt_prop))
+        if dev_prop['max_grf_mode'] not in ("128", "256", "512"):
+            raise AssertionError(
+                f"invalid max_grf_mode override {dev_prop['max_grf_mode']!r}: must be one of '128', '256', '512'")
 
         if '__intel_already_queried_extensions__' not in tgt_prop:
             # All GPUs with the same device_id have the same extensions, so we just

@@ -79,20 +79,19 @@ the kernel is compiled with.
 Gate: a 2D operand load that is live-in to a loop is sunk into it (leaving a
 prefetch behind) when the loop body's **peak** register pressure, from
 `RegisterPressureAnalysis::peakPressure(loop)`, is at or above the **per-lane**
-GRF budget — `getPerLaneGRFBudgetInBytes(grfMode, mod, UnknownGRFSizeAssumption::Largest)`.
+GRF budget, `getPerLaneGRFBudgetInBytes(grfMode, mod, UnknownGRFSizeAssumption::Largest)`.
 At `threads-per-warp = 16` that is 256 B/lane for `'128'`, 512 for `'256'`, and
 1024 for `'512'`. For `'default'`/`'auto'` the true GRF size isn't known at
 this point in the pipeline, and this gate treats the budget as a threshold to
 sink rather than a ceiling, so the safe assumption under uncertainty is the
 *largest* mode **this target's automatic (`default`/`auto`) escalation
-reaches** — read from the `ttig.max_grf_mode` module attribute (see issue
-#8074), not the largest any device supports and not the largest mode the
-target can be explicitly told to use (BMG and PVC both accept an explicit
-`grf_mode='512'`; 256 is only where their own automatic path stops). That
-budget is 512 B/lane on every non-`cri` target (BMG, PVC, ...) and 1024
-B/lane on `cri`. If the attribute is absent entirely (e.g. hand-written TTGIR that
-never went through `TritonAnnotateModule`), the fallback is 1024 B/lane,
-the pre-#8074 behaviour. See `RegisterPressureAnalysis`'s
+reaches**, read from the `ttig.max_grf_mode` module attribute, not the
+largest any device supports and not the largest mode the target can be
+explicitly told to use (BMG and PVC both accept an explicit `grf_mode='512'`;
+256 is only where their own automatic path stops). That budget is 512 B/lane
+on every non-`cri` target (BMG, PVC, ...) and 1024 B/lane on `cri`. If the
+attribute is absent entirely (e.g. hand-written TTGIR that never went through
+`TritonAnnotateModule`), the fallback is 1024 B/lane. See `RegisterPressureAnalysis`'s
 `UnknownGRFSizeAssumption` for the
 full rationale, including why `HoistLayoutConversions` correctly assumes the
 opposite (`Smallest`) for the same unknown modes. There is no fixed
