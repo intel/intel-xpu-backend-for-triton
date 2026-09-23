@@ -552,6 +552,9 @@ tests/kernels/moe/test_moe.py::test_moe_sum[slice-dtype1-1024-8-1]
 tests/kernels/moe/test_moe.py::test_moe_sum[slice-dtype1-1024-8-33]
 tests/kernels/moe/test_moe.py::test_moe_sum[slice-dtype1-1024-8-222]
 
+# Accuracy error on the tensor-descriptor path: https://github.com/intel/intel-xpu-backend-for-triton/issues/7813
+tests/kernels/moe/test_moe.py::test_fused_moe_int64_overflow
+
 # Skip some fused_moe tests due to excessive autotune overhead: https://github.com/intel/intel-xpu-backend-for-triton/issues/7812
 tests/kernels/moe/test_block_fp8.py::test_w8a8_block_fp8_fused_moe
 tests/kernels/moe/test_block_fp8.py::test_w8a8_block_fp8_deep_gemm_fused_moe
