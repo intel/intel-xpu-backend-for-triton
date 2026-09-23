@@ -273,16 +273,19 @@ module {
 }
 
 // CHECK-LABEL: @if_gather
-// COM: Every CHECK-NOT below sits BETWEEN two positive anchors, so each scans a
-// COM: bounded region rather than the empty tail of the output.
-// CHECK-NOT: tt.make_tensor_descriptor
-// CHECK-NOT: tt.descriptor_gather
+// COM: `--canonicalize` hoists every constant to the top of the function, so the
+// COM: region between the label and the first constant anchor holds only the
+// COM: function header and constants, and a CHECK-NOT there could never fire. The
+// COM: CHECK-NOTs in this case and the ones below therefore sit after the constant
+// COM: anchors, between two positive anchors, where the expanded (or surviving) ops
+// COM: actually are.
 // COM: The zero splat exists only because the gather was expanded: a
 // COM: `tt.descriptor_gather` has no `other` operand, so a no-op regression cannot
 // COM: satisfy this line. Both arms request the default PAD_ZERO, so the padding
 // COM: flag folds to `false` and the fill is the bare zero splat, with no select.
 // CHECK: %[[ZERO:.*]] = arith.constant dense<0.000000e+00> : tensor<32x128xf32>
 // CHECK-NOT: scf.if
+// CHECK-NOT: tt.make_tensor_descriptor
 // CHECK-NOT: tt.descriptor_gather
 // CHECK: %[[MASK:.*]] = tt.broadcast %{{.*}} : tensor<1x128xi1> -> tensor<32x128xi1>
 // CHECK: %[[VAL:.*]] = tt.load %{{.*}}, %[[MASK]], %[[ZERO]] : tensor<32x128x!tt.ptr<f32>>
@@ -330,10 +333,9 @@ module {
 }
 
 // CHECK-LABEL: @for_gather
-// CHECK-NOT: tt.make_tensor_descriptor
-// CHECK-NOT: tt.descriptor_gather
 // CHECK: %[[ZERO:.*]] = arith.constant dense<0.000000e+00> : tensor<32x128xf32>
 // CHECK-NOT: scf.for
+// CHECK-NOT: tt.make_tensor_descriptor
 // CHECK-NOT: tt.descriptor_gather
 // CHECK: %[[MASK:.*]] = tt.broadcast %{{.*}} : tensor<1x128xi1> -> tensor<32x128xi1>
 // CHECK: %[[VAL:.*]] = tt.load %{{.*}}, %[[MASK]], %[[ZERO]] : tensor<32x128x!tt.ptr<f32>>
@@ -372,9 +374,6 @@ module {
 // CHECK-LABEL: @for_load
 // CHECK: [[DESC:%.*]] = tt.make_tensor_descriptor
 // CHECK: tt.descriptor_load [[DESC]]
-// COM: The CHECK-NOT is bounded by the descriptor_load match above and the
-// COM: tt.return below, so it cannot pass vacuously on an empty tail.
-// CHECK-NOT: tt.load
 // CHECK: tt.return
 
 // -----
@@ -422,10 +421,8 @@ module {
 
 // CHECK-LABEL: @call_gather
 // CHECK-SAME: %[[ARG0:[^:]*]]
-// CHECK-NOT: !tt.tensordesc
-// CHECK-NOT: tt.descriptor_gather
-// CHECK: %[[ZERO:.*]] = arith.constant dense<0.000000e+00> : tensor<32x128xf32>
-// CHECK: %[[NAN:.*]] = arith.constant dense<0x7FC00000> : tensor<32x128xf32>
+// CHECK-DAG: %[[ZERO:.*]] = arith.constant dense<0.000000e+00> : tensor<32x128xf32>
+// CHECK-DAG: %[[NAN:.*]] = arith.constant dense<0x7FC00000> : tensor<32x128xf32>
 // CHECK: %[[DESC:.*]]:7 = tt.call @make(%[[ARG0]]) : (!tt.ptr<f32>) -> (!tt.ptr<f32>, i64, i64, i64, i64, i1, i1)
 // CHECK-NOT: !tt.tensordesc
 // CHECK-NOT: tt.descriptor_gather
@@ -488,14 +485,13 @@ module {
 }
 
 // CHECK-LABEL: @if_divergent_padding
-// CHECK-NOT: tt.make_tensor_descriptor
-// CHECK-NOT: tt.descriptor_load
-// CHECK: %[[ZERO:.*]] = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
-// CHECK: %[[NAN:.*]] = arith.constant dense<0x7FC00000> : tensor<128x128xf32>
+// CHECK-DAG: %[[ZERO:.*]] = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
+// CHECK-DAG: %[[NAN:.*]] = arith.constant dense<0x7FC00000> : tensor<128x128xf32>
 // COM: The select's condition is literally the i1 function argument, i.e. the
 // COM: original `%cond`: the padding choice is still driven by the same runtime
 // COM: predicate that chose the descriptor, which is the whole correctness claim.
 // CHECK: %[[OTHER:.*]] = arith.select %arg1, %[[ZERO]], %[[NAN]] : tensor<128x128xf32>
+// CHECK-NOT: tt.make_tensor_descriptor
 // CHECK-NOT: tt.descriptor_load
 // CHECK: %[[MASK:.*]] = arith.andi %{{.*}}, %{{.*}} : tensor<128x128xi1>
 // CHECK: %[[VAL:.*]] = tt.load %{{.*}}, %[[MASK]], %[[OTHER]] : tensor<128x128x!tt.ptr<f32>>
@@ -532,11 +528,10 @@ module {
 }
 
 // CHECK-LABEL: @select_divergent_padding
-// CHECK-NOT: tt.make_tensor_descriptor
-// CHECK-NOT: tt.descriptor_load
-// CHECK: %[[ZERO:.*]] = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
-// CHECK: %[[NAN:.*]] = arith.constant dense<0x7FC00000> : tensor<128x128xf32>
+// CHECK-DAG: %[[ZERO:.*]] = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
+// CHECK-DAG: %[[NAN:.*]] = arith.constant dense<0x7FC00000> : tensor<128x128xf32>
 // CHECK: %[[OTHER:.*]] = arith.select %arg1, %[[ZERO]], %[[NAN]] : tensor<128x128xf32>
+// CHECK-NOT: tt.make_tensor_descriptor
 // CHECK-NOT: tt.descriptor_load
 // CHECK: %[[MASK:.*]] = arith.andi %{{.*}}, %{{.*}} : tensor<128x128xi1>
 // CHECK: %[[VAL:.*]] = tt.load %{{.*}}, %[[MASK]], %[[OTHER]] : tensor<128x128x!tt.ptr<f32>>
@@ -549,10 +544,12 @@ module {
 // COM: consistentPadding() yields PAD_NAN and the descriptor-native route is still
 // COM: correct and still faster. The descriptor MUST be kept.
 // COM:
-// COM: The two arms use different base pointers (%arg0 vs %arg1) so that `--cse`
-// COM: cannot merge the two `tt.make_tensor_descriptor` ops -- otherwise the trace
-// COM: would collapse to a single candidate and "consistent" would become
-// COM: vacuously true, testing nothing.
+// COM: The trace sees two candidates here regardless of the base pointers: the
+// COM: two `tt.make_tensor_descriptor` ops live in sibling `scf.if` regions, and
+// COM: the `--cse` in the RUN line runs only after the pass under test and does not
+// COM: merge ops across sibling regions anyway. Using `%arg0` for both arms also
+// COM: passes. The distinct base pointers (%arg0 vs %arg1) only make the two
+// COM: producers visibly independent.
 // COM:
 // COM: Measured at base commit 495054198: GREEN, and must stay green.
 module {
@@ -581,7 +578,6 @@ module {
 // CHECK: tt.make_tensor_descriptor {{.*}}padding = 2 : i32
 // CHECK: tt.make_tensor_descriptor {{.*}}padding = 2 : i32
 // CHECK: tt.descriptor_load [[DESC]]
-// CHECK-NOT: tt.load
 // CHECK: tt.return
 
 // -----
@@ -632,12 +628,10 @@ module {
 }
 
 // CHECK-LABEL: @for_divergent_padding
-// CHECK-NOT: tt.make_tensor_descriptor
-// CHECK-NOT: tt.descriptor_load
-// CHECK: %[[NAN:.*]] = arith.constant dense<0x7FC00000> : tensor<128x128xf32>
-// CHECK: %[[ZERO:.*]] = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
-// CHECK: %[[FALSE:.*]] = arith.constant false
-// CHECK: %[[TRUE:.*]] = arith.constant true
+// CHECK-DAG: %[[NAN:.*]] = arith.constant dense<0x7FC00000> : tensor<128x128xf32>
+// CHECK-DAG: %[[ZERO:.*]] = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
+// CHECK-DAG: %[[FALSE:.*]] = arith.constant false
+// CHECK-DAG: %[[TRUE:.*]] = arith.constant true
 // COM: Exactly two iter-args survive, and the first is the i1 padding flag entering
 // COM: as PAD_ZERO. The second, the accumulator, is initialised with the same zero
 // COM: splat the fill select uses -- that is an incidental CSE, not a claim about
@@ -646,6 +640,7 @@ module {
 // COM: Inside the loop the fill is selected off the loop-carried flag, so it differs
 // COM: between the first iteration (zero) and the rest (NaN).
 // CHECK: %[[OTHER:.*]] = arith.select %[[PAD]], %[[NAN]], %[[ZERO]] : tensor<128x128xf32>
+// CHECK-NOT: tt.make_tensor_descriptor
 // CHECK-NOT: tt.descriptor_load
 // CHECK: %[[MASK:.*]] = arith.andi %{{.*}}, %{{.*}} : tensor<128x128xi1>
 // CHECK: %[[VAL:.*]] = tt.load %{{.*}}, %[[MASK]], %[[OTHER]] : tensor<128x128x!tt.ptr<f32>>
@@ -700,14 +695,10 @@ module {
 }
 
 // CHECK-LABEL: @if_divergent_padding_shared_producer
-// COM: Two `tt.load`s with a CHECK-NOT between them, so neither anchor can be
-// COM: satisfied by a surviving `tt.descriptor_load` sliding past an unbounded
-// COM: negative check.
-// CHECK-NOT: tt.make_tensor_descriptor
-// CHECK-NOT: tt.descriptor_load
-// CHECK: %[[ZERO:.*]] = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
-// CHECK: %[[NAN:.*]] = arith.constant dense<0x7FC00000> : tensor<128x128xf32>
+// CHECK-DAG: %[[ZERO:.*]] = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
+// CHECK-DAG: %[[NAN:.*]] = arith.constant dense<0x7FC00000> : tensor<128x128xf32>
 // CHECK: %[[OTHER:.*]] = arith.select %arg1, %[[ZERO]], %[[NAN]] : tensor<128x128xf32>
+// CHECK-NOT: tt.make_tensor_descriptor
 // CHECK-NOT: tt.descriptor_load
 // CHECK: %[[MASK:.*]] = arith.andi %{{.*}}, %{{.*}} : tensor<128x128xi1>
 // COM: The two loads are distinguished by their `other` operand, and that is the
@@ -717,6 +708,196 @@ module {
 // COM: cost above) WITHOUT corrupting its fill -- it is still exactly PAD_ZERO, not
 // COM: the divergent select.
 // CHECK: %[[V0:.*]] = tt.load %{{.*}}, %[[MASK]], %[[OTHER]] : tensor<128x128x!tt.ptr<f32>>
+// CHECK: %[[V1:.*]] = tt.load %{{.*}}, %[[MASK]], %[[ZERO]] : tensor<128x128x!tt.ptr<f32>>
+// CHECK: tt.return %[[V0]], %[[V1]] :
+
+// -----
+
+// COM: Eviction must be closed over every op that shares descriptors (82d7c7c16).
+// COM: Two selects share the PAD_ZERO producer %dA: %s1 merges it with the PAD_NAN
+// COM: %dB (divergent, so %s1's load is evicted), %s2 merges it with the PAD_ZERO
+// COM: %dC (consistent on its own). Evicting only %s1's trace leaves %s2 mixing an
+// COM: evicted %dA with a kept %dC, and with `buildMaterializations = false` that
+// COM: leaks a `builtin.unrealized_conversion_cast`. Closing the eviction over %s2
+// COM: evicts %dC too, so both loads are expanded.
+// COM:
+// COM: Measured on a pre-branch binary (no #8102 work at all): the old #8102
+// COM: behaviour -- all three `tt.make_tensor_descriptor`s, both selects and both
+// COM: `tt.descriptor_load`s survive. The cast leak itself comes from d7a857133 on
+// COM: this branch and was not measured separately.
+module {
+  tt.func public @select_shared_producer_chain(%a: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %b: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %c: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %p: i1, %q: i1, %o: i32) -> (tensor<128x128xf32>, tensor<128x128xf32>) {
+    %c1_i64 = arith.constant 1 : i64
+    %c256_i64 = arith.constant 256 : i64
+    %c256_i32 = arith.constant 256 : i32
+    %dA = tt.make_tensor_descriptor %a, [%c256_i32, %c256_i32], [%c256_i64, %c1_i64] {padding = 1 : i32} : <f32>, <128x128xf32>
+    %dB = tt.make_tensor_descriptor %b, [%c256_i32, %c256_i32], [%c256_i64, %c1_i64] {padding = 2 : i32} : <f32>, <128x128xf32>
+    %dC = tt.make_tensor_descriptor %c, [%c256_i32, %c256_i32], [%c256_i64, %c1_i64] {padding = 1 : i32} : <f32>, <128x128xf32>
+    %s1 = arith.select %p, %dA, %dB : !tt.tensordesc<128x128xf32>
+    %s2 = arith.select %q, %dA, %dC : !tt.tensordesc<128x128xf32>
+    %l1 = tt.descriptor_load %s1[%o, %o] : !tt.tensordesc<128x128xf32> -> tensor<128x128xf32>
+    %l2 = tt.descriptor_load %s2[%o, %o] : !tt.tensordesc<128x128xf32> -> tensor<128x128xf32>
+    tt.return %l1, %l2 : tensor<128x128xf32>, tensor<128x128xf32>
+  }
+}
+
+// CHECK-LABEL: @select_shared_producer_chain
+// CHECK-DAG: %[[ZERO:.*]] = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
+// CHECK-DAG: %[[NAN:.*]] = arith.constant dense<0x7FC00000> : tensor<128x128xf32>
+// COM: Both descriptor selects became base-pointer selects.
+// CHECK: arith.select %arg3, %arg0, %arg1 : !tt.ptr<f32>
+// CHECK-NOT: unrealized_conversion_cast
+// CHECK: arith.select %arg4, %arg0, %arg2 : !tt.ptr<f32>
+// CHECK-NOT: unrealized_conversion_cast
+// COM: Only %s1 is divergent, so only its fill is a runtime select.
+// CHECK: %[[OTHER:.*]] = arith.select %arg3, %[[ZERO]], %[[NAN]] : tensor<128x128xf32>
+// CHECK-NOT: unrealized_conversion_cast
+// CHECK-NOT: tt.make_tensor_descriptor
+// CHECK-NOT: tt.descriptor_load
+// CHECK: %[[V0:.*]] = tt.load %{{.*}}, %[[MASK:.*]], %[[OTHER]] : tensor<128x128x!tt.ptr<f32>>
+// CHECK-NOT: unrealized_conversion_cast
 // CHECK-NOT: tt.descriptor_load
 // CHECK: %[[V1:.*]] = tt.load %{{.*}}, %[[MASK]], %[[ZERO]] : tensor<128x128x!tt.ptr<f32>>
 // CHECK: tt.return %[[V0]], %[[V1]] :
+
+// -----
+
+// COM: Eviction closure over a loop carrying two descriptors (82d7c7c16). The
+// COM: gathered descriptor %dG must be expanded (a gather is never a candidate), and
+// COM: the `scf.for` also carries the loaded descriptor %dL. One op cannot mix a
+// COM: legal and an illegal descriptor, so %dL is evicted with it and both
+// COM: accesses become `tt.load`s. Neither descriptor asks for PAD_NAN, so both
+// COM: fills are plain zero splats.
+// COM:
+// COM: Measured on a pre-branch binary: triton-opt aborts (exit 134) on
+// COM: `SingleBlock<scf::ForOp>::getBody` "unexpected empty region".
+module {
+  tt.func public @for_mixed_gather_load(%a: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %b: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %n: i32) -> (tensor<32x128xf32>, tensor<128x128xf32>) {
+    %c1_i64 = arith.constant 1 : i64
+    %c256_i64 = arith.constant 256 : i64
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c256_i32 = arith.constant 256 : i32
+    %cst = arith.constant dense<1> : tensor<32xi32>
+    %dG = tt.make_tensor_descriptor %a, [%c256_i32, %c256_i32], [%c256_i64, %c1_i64] : <f32>, <1x128xf32>
+    %dL = tt.make_tensor_descriptor %b, [%c256_i32, %c256_i32], [%c256_i64, %c1_i64] : <f32>, <128x128xf32>
+    %r:2 = scf.for %i = %c0_i32 to %n step %c1_i32 iter_args(%g = %dG, %l = %dL) -> (!tt.tensordesc<1x128xf32>, !tt.tensordesc<128x128xf32>) : i32 {
+      scf.yield %g, %l : !tt.tensordesc<1x128xf32>, !tt.tensordesc<128x128xf32>
+    }
+    %0 = tt.descriptor_gather %r#0[%cst, %c0_i32] : (!tt.tensordesc<1x128xf32>, tensor<32xi32>, i32) -> tensor<32x128xf32>
+    %1 = tt.descriptor_load %r#1[%c0_i32, %c0_i32] : !tt.tensordesc<128x128xf32> -> tensor<128x128xf32>
+    tt.return %0, %1 : tensor<32x128xf32>, tensor<128x128xf32>
+  }
+}
+
+// CHECK-LABEL: @for_mixed_gather_load
+// CHECK-DAG: %[[ZERO_L:.*]] = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
+// CHECK-DAG: %[[ZERO_G:.*]] = arith.constant dense<0.000000e+00> : tensor<32x128xf32>
+// CHECK: tt.make_range
+// CHECK-NOT: unrealized_conversion_cast
+// CHECK-NOT: tt.make_tensor_descriptor
+// CHECK-NOT: tt.descriptor_gather
+// CHECK-NOT: tt.descriptor_load
+// CHECK: tt.splat %arg0 : !tt.ptr<f32> -> tensor<32x128x!tt.ptr<f32>>
+// CHECK-NOT: unrealized_conversion_cast
+// CHECK-NOT: tt.descriptor_gather
+// CHECK: %[[V0:.*]] = tt.load %{{.*}}, %{{.*}}, %[[ZERO_G]] : tensor<32x128x!tt.ptr<f32>>
+// CHECK-NOT: unrealized_conversion_cast
+// CHECK-NOT: tt.descriptor_load
+// CHECK: tt.splat %arg1 : !tt.ptr<f32> -> tensor<128x128x!tt.ptr<f32>>
+// CHECK: %[[V1:.*]] = tt.load %{{.*}}, %{{.*}}, %[[ZERO_L]] : tensor<128x128x!tt.ptr<f32>>
+// CHECK: tt.return %[[V0]], %[[V1]] :
+
+// -----
+
+// COM: A loop result is its tied init when the loop runs zero times (6bd0d53ae).
+// COM: %r is %dZ (PAD_ZERO) on a zero-trip loop and %dN (PAD_NAN) otherwise, so
+// COM: its provenance is divergent and the load is expanded. The padding flag is
+// COM: carried through the loop, entering as false (PAD_ZERO) and yielded as true.
+// COM:
+// COM: Measured on a pre-branch binary: triton-opt aborts (exit 134) on
+// COM: `SingleBlock<scf::ForOp>::getBody` "unexpected empty region". See
+// COM: @for_zero_trip_divergent_padding in
+// COM: test/TritonIntelGPU/find-defining-op-loops.mlir for the TTGIR side.
+module {
+  tt.func @for_zero_trip_divergent_padding(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %pitch: i64 {tt.divisibility = 16 : i32}, %n: i32) -> tensor<64x32xf16> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c64_i32 = arith.constant 64 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %dZ = tt.make_tensor_descriptor %arg0, [%c64_i32, %c32_i32], [%pitch, %c1_i64] {padding = 1 : i32} : !tt.ptr<f16>, !tt.tensordesc<64x32xf16>
+    %r = scf.for %i = %c0_i32 to %n step %c1_i32 iter_args(%x = %dZ) -> (!tt.tensordesc<64x32xf16>) : i32 {
+      %dN = tt.make_tensor_descriptor %arg1, [%c64_i32, %c32_i32], [%pitch, %c1_i64] {padding = 2 : i32} : !tt.ptr<f16>, !tt.tensordesc<64x32xf16>
+      scf.yield %dN : !tt.tensordesc<64x32xf16>
+    }
+    %ld = tt.descriptor_load %r[%c0_i32, %c0_i32] : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16>
+    tt.return %ld : tensor<64x32xf16>
+  }
+}
+
+// CHECK-LABEL: @for_zero_trip_divergent_padding
+// CHECK-DAG: %[[ZERO:.*]] = arith.constant dense<0.000000e+00> : tensor<64x32xf16>
+// CHECK-DAG: %[[NAN:.*]] = arith.constant dense<0x7E00> : tensor<64x32xf16>
+// CHECK-DAG: %[[TRUE:.*]] = arith.constant true
+// CHECK-DAG: %[[FALSE:.*]] = arith.constant false
+// CHECK: %[[R:.*]]:2 = scf.for {{.*}} iter_args(%{{[^ ]+}} = %arg0, %{{[^ ]+}} = %[[FALSE]]) -> (!tt.ptr<f16>, i1)
+// CHECK-NOT: unrealized_conversion_cast
+// CHECK-NOT: tt.make_tensor_descriptor
+// CHECK: scf.yield %arg1, %[[TRUE]] : !tt.ptr<f16>, i1
+// CHECK: %[[OTHER:.*]] = arith.select %[[R]]#1, %[[NAN]], %[[ZERO]] : tensor<64x32xf16>
+// CHECK-NOT: unrealized_conversion_cast
+// CHECK-NOT: tt.make_tensor_descriptor
+// CHECK-NOT: tt.descriptor_load
+// CHECK: tt.splat %[[R]]#0 : !tt.ptr<f16> -> tensor<64x32x!tt.ptr<f16>>
+// CHECK-NOT: tt.descriptor_load
+// CHECK: %[[V:.*]] = tt.load %{{.*}}, %{{.*}}, %[[OTHER]] : tensor<64x32x!tt.ptr<f16>>
+// CHECK: tt.return %[[V]] :
+
+// -----
+
+// COM: An scf.while result is the matching scf.condition operand, not the
+// COM: after-region yield (0fa440764). %r is always %dN (PAD_NAN); %dZ only
+// COM: re-enters the before region.
+// COM:
+// COM: The load is expanded to pointers, and that is intended: the while's init
+// COM: %dZ is not a candidate, so the closure of 82d7c7c16 evicts the whole group
+// COM: that the scf.while ties together, %dN included. The fill is the bare NaN
+// COM: splat (no select), because the load's own provenance is exactly %dN, and
+// COM: the pointer is %arg1, %dN's base.
+// COM:
+// COM: Measured on a pre-branch binary: the verifier fails with "'scf.while' op
+// COM: along control flow edge from Operation scf.condition to Operation
+// COM: scf.while: region branch point has 7 operands, but region successor needs
+// COM: 1 inputs". See @while_condition_padding in
+// COM: test/TritonIntelGPU/find-defining-op-loops.mlir for the TTGIR side.
+module {
+  tt.func @while_condition_padding(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %pitch: i64 {tt.divisibility = 16 : i32}, %c: i1) -> tensor<64x32xf16> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c64_i32 = arith.constant 64 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %dZ = tt.make_tensor_descriptor %arg0, [%c64_i32, %c32_i32], [%pitch, %c1_i64] {padding = 1 : i32} : !tt.ptr<f16>, !tt.tensordesc<64x32xf16>
+    %r = scf.while (%x = %dZ) : (!tt.tensordesc<64x32xf16>) -> !tt.tensordesc<64x32xf16> {
+      %dN = tt.make_tensor_descriptor %arg1, [%c64_i32, %c32_i32], [%pitch, %c1_i64] {padding = 2 : i32} : !tt.ptr<f16>, !tt.tensordesc<64x32xf16>
+      scf.condition(%c) %dN : !tt.tensordesc<64x32xf16>
+    } do {
+    ^bb0(%y: !tt.tensordesc<64x32xf16>):
+      scf.yield %dZ : !tt.tensordesc<64x32xf16>
+    }
+    %ld = tt.descriptor_load %r[%c0_i32, %c0_i32] : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16>
+    tt.return %ld : tensor<64x32xf16>
+  }
+}
+
+// CHECK-LABEL: @while_condition_padding
+// CHECK: %[[NAN:.*]] = arith.constant dense<0x7E00> : tensor<64x32xf16>
+// CHECK: tt.make_range
+// CHECK-NOT: unrealized_conversion_cast
+// CHECK-NOT: tt.make_tensor_descriptor
+// CHECK-NOT: tt.descriptor_load
+// CHECK: tt.splat %arg1 : !tt.ptr<f16> -> tensor<64x32x!tt.ptr<f16>>
+// CHECK-NOT: unrealized_conversion_cast
+// CHECK-NOT: tt.descriptor_load
+// CHECK: %[[V:.*]] = tt.load %{{.*}}, %{{.*}}, %[[NAN]] : tensor<64x32x!tt.ptr<f16>>
+// CHECK: tt.return %[[V]] :

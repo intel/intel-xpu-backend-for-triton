@@ -216,3 +216,70 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// COM: A loop result is its tied init when the loop runs zero times (6bd0d53ae).
+// COM: %r is %dZ (PAD_ZERO) on a zero-trip loop and %dN (PAD_NAN) otherwise, so its
+// COM: provenance is divergent and consistentPadding() stamps nothing.
+// COM:
+// COM: Measured on a pre-branch binary: the provenance followed only the yield, so
+// COM: the load was stamped `{ttig.block_io = "row_major", ttig.desc_padding = 2 : i32}`,
+// COM: i.e. a zero-trip loop would fill out-of-bounds elements with NaN instead of 0.
+// COM:
+// COM: As in @if_divergent_padding, the ` :` immediately after the indices on the
+// COM: same line proves the load carries no attribute dictionary, hence neither
+// COM: ttig.desc_padding nor ttig.block_io. (A CHECK-NOT after a
+// COM: `CHECK: tt.descriptor_load` would start on the next line and miss it.)
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @for_zero_trip_divergent_padding
+  tt.func @for_zero_trip_divergent_padding(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %pitch: i64 {tt.divisibility = 16 : i32}, %n: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c64_i32 = arith.constant 64 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %dZ = tt.make_tensor_descriptor %arg0, [%c64_i32, %c32_i32], [%pitch, %c1_i64] {padding = 1 : i32} : !tt.ptr<f16>, !tt.tensordesc<64x32xf16, #dot_a>
+    %r = scf.for %i = %c0_i32 to %n step %c1_i32 iter_args(%x = %dZ) -> (!tt.tensordesc<64x32xf16, #dot_a>) : i32 {
+      %dN = tt.make_tensor_descriptor %arg1, [%c64_i32, %c32_i32], [%pitch, %c1_i64] {padding = 2 : i32} : !tt.ptr<f16>, !tt.tensordesc<64x32xf16, #dot_a>
+      scf.yield %dN : !tt.tensordesc<64x32xf16, #dot_a>
+    }
+    // CHECK: tt.descriptor_load %{{[0-9]+}}[%c0_i32, %c0_i32] :
+    %ld = tt.descriptor_load %r[%c0_i32, %c0_i32] : !tt.tensordesc<64x32xf16, #dot_a> -> tensor<64x32xf16, #dot_a>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: An scf.while result is the matching scf.condition operand, not the
+// COM: after-region yield (0fa440764). %r is always %dN (PAD_NAN); the PAD_ZERO %dZ
+// COM: only re-enters the before region, so the load must be stamped PAD_NAN.
+// COM:
+// COM: Measured on a pre-branch binary: the provenance followed the after-region
+// COM: yield (%dZ), so the load was stamped `ttig.desc_padding = 1 : i32` and a
+// COM: PAD_NAN descriptor would have been filled with zeros.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @while_condition_padding
+  tt.func @while_condition_padding(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %pitch: i64 {tt.divisibility = 16 : i32}, %c: i1) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c64_i32 = arith.constant 64 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %dZ = tt.make_tensor_descriptor %arg0, [%c64_i32, %c32_i32], [%pitch, %c1_i64] {padding = 1 : i32} : !tt.ptr<f16>, !tt.tensordesc<64x32xf16, #dot_a>
+    %r = scf.while (%x = %dZ) : (!tt.tensordesc<64x32xf16, #dot_a>) -> !tt.tensordesc<64x32xf16, #dot_a> {
+      %dN = tt.make_tensor_descriptor %arg1, [%c64_i32, %c32_i32], [%pitch, %c1_i64] {padding = 2 : i32} : !tt.ptr<f16>, !tt.tensordesc<64x32xf16, #dot_a>
+      scf.condition(%c) %dN : !tt.tensordesc<64x32xf16, #dot_a>
+    } do {
+    ^bb0(%y: !tt.tensordesc<64x32xf16, #dot_a>):
+      scf.yield %dZ : !tt.tensordesc<64x32xf16, #dot_a>
+    }
+    // CHECK: tt.descriptor_load %{{[0-9]+}}[%c0_i32, %c0_i32] {ttig.block_io = "row_major", ttig.desc_padding = 2 : i32} :
+    %ld = tt.descriptor_load %r[%c0_i32, %c0_i32] : !tt.tensordesc<64x32xf16, #dot_a> -> tensor<64x32xf16, #dot_a>
+    tt.return
+  }
+}

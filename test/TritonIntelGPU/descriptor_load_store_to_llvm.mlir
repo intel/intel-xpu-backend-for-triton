@@ -839,3 +839,104 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     tt.return
   }
 }
+
+// -----
+
+// COM: Issue #8102 -- the padding comes from provenance when the load carries no
+// COM: `ttig.desc_padding` attribute. The defining `tt.make_tensor_descriptor`
+// COM: ops are traceable and agree on PAD_NAN, so the out-of-bounds fill must be
+// COM: NaN. Before the fix the lowering read "no attribute" as PAD_ZERO and filled
+// COM: with 0.0 here. Measured on a pre-fix build: this case fails on the FILL
+// COM: constant.
+// COM:
+// COM: The shape [5,5] is not divisible by the 4x4 block, so the load is
+// COM: predicated and the fill really is the value of the masked-off lanes. The
+// COM: CHECKs follow the constant into the not-taken operand of the `llvm.cond_br`
+// COM: that guards the load.
+// COM:
+// COM: Two producers joined by `arith.select` make the trace see two candidates
+// COM: that agree, not just one. The distinct base pointers are not needed for
+// COM: that (no CSE runs in this RUN line); they only keep the two producers
+// COM: visibly independent.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @load_consistent_nan_padding_no_attr
+  tt.func public @load_consistent_nan_padding_no_attr(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %cond: i1) -> (tensor<4x4xf32, #blocked>) {
+    %c1_i64 = arith.constant 1 : i64
+    %c4_i64 = arith.constant 4 : i64
+    %c0_i32 = arith.constant 0 : i32
+    %c5_i32 = arith.constant 5 : i32
+    %d0 = tt.make_tensor_descriptor %arg0, [%c5_i32, %c5_i32], [%c1_i64, %c4_i64] {order = array<i32: 0>, padding = 2 : i32} : <f32>, <4x4xf32>
+    %d1 = tt.make_tensor_descriptor %arg1, [%c5_i32, %c5_i32], [%c1_i64, %c4_i64] {order = array<i32: 0>, padding = 2 : i32} : <f32>, <4x4xf32>
+    %desc = arith.select %cond, %d0, %d1 : !tt.tensordesc<4x4xf32>
+    // CHECK: %[[FILL:.*]] = llvm.mlir.constant(0x7FC00000 : f32) : f32
+    // CHECK: %[[FILL_V:.*]] = llvm.insertelement %[[FILL]], %{{.*}}[%{{.*}} : i64] : vector<1xf32>
+    // CHECK: %[[FILL_I:.*]] = llvm.bitcast %[[FILL_V]] : vector<1xf32> to i32
+    // CHECK: llvm.cond_br %{{.*}}, ^{{bb[0-9]+}}, ^{{bb[0-9]+}}(%[[FILL_I]] : i32)
+    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
+    tt.return %0 : tensor<4x4xf32, #blocked>
+  }
+}
+
+// -----
+
+// COM: Issue #8102 -- single-producer variant of the case above: one
+// COM: `tt.make_tensor_descriptor` with PAD_NAN and no `ttig.desc_padding`
+// COM: attribute. Measured on a pre-fix build: this was also silently lowered
+// COM: to a 0.0 fill, so the bug did not need divergence or a merge to show.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @load_single_nan_padding_no_attr
+  tt.func public @load_single_nan_padding_no_attr(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) -> (tensor<4x4xf32, #blocked>) {
+    %c1_i64 = arith.constant 1 : i64
+    %c4_i64 = arith.constant 4 : i64
+    %c0_i32 = arith.constant 0 : i32
+    %c5_i32 = arith.constant 5 : i32
+    %d0 = tt.make_tensor_descriptor %arg0, [%c5_i32, %c5_i32], [%c1_i64, %c4_i64] {order = array<i32: 0>, padding = 2 : i32} : <f32>, <4x4xf32>
+    // CHECK: %[[FILL:.*]] = llvm.mlir.constant(0x7FC00000 : f32) : f32
+    // CHECK: %[[FILL_V:.*]] = llvm.insertelement %[[FILL]], %{{.*}}[%{{.*}} : i64] : vector<1xf32>
+    // CHECK: %[[FILL_I:.*]] = llvm.bitcast %[[FILL_V]] : vector<1xf32> to i32
+    // CHECK: llvm.cond_br %{{.*}}, ^{{bb[0-9]+}}, ^{{bb[0-9]+}}(%[[FILL_I]] : i32)
+    %0 = tt.descriptor_load %d0[%c0_i32, %c0_i32] : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
+    tt.return %0 : tensor<4x4xf32, #blocked>
+  }
+}
+
+// -----
+
+// COM: Issue #8102 -- PAD_ZERO twin of @load_consistent_nan_padding_no_attr:
+// COM: both producers request PAD_ZERO and the load has no attribute, so the fill
+// COM: must be 0.0 and no NaN constant may appear anywhere in the function. The
+// COM: CHECK-NOTs sit between anchors (label -> fill constant -> return) so that
+// COM: together they cover the whole function body.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @load_consistent_zero_padding_no_attr
+  tt.func public @load_consistent_zero_padding_no_attr(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %cond: i1) -> (tensor<4x4xf32, #blocked>) {
+    %c1_i64 = arith.constant 1 : i64
+    %c4_i64 = arith.constant 4 : i64
+    %c0_i32 = arith.constant 0 : i32
+    %c5_i32 = arith.constant 5 : i32
+    %d0 = tt.make_tensor_descriptor %arg0, [%c5_i32, %c5_i32], [%c1_i64, %c4_i64] {order = array<i32: 0>, padding = 1 : i32} : <f32>, <4x4xf32>
+    %d1 = tt.make_tensor_descriptor %arg1, [%c5_i32, %c5_i32], [%c1_i64, %c4_i64] {order = array<i32: 0>, padding = 1 : i32} : <f32>, <4x4xf32>
+    %desc = arith.select %cond, %d0, %d1 : !tt.tensordesc<4x4xf32>
+    // CHECK-NOT: 0x7FC00000
+    // CHECK: %[[FILL:.*]] = llvm.mlir.constant(0.000000e+00 : f32) : f32
+    // CHECK-NOT: 0x7FC00000
+    // CHECK: %[[FILL_V:.*]] = llvm.insertelement %[[FILL]], %{{.*}}[%{{.*}} : i64] : vector<1xf32>
+    // CHECK-NOT: 0x7FC00000
+    // CHECK: %[[FILL_I:.*]] = llvm.bitcast %[[FILL_V]] : vector<1xf32> to i32
+    // CHECK-NOT: 0x7FC00000
+    // CHECK: llvm.cond_br %{{.*}}, ^{{bb[0-9]+}}, ^{{bb[0-9]+}}(%[[FILL_I]] : i32)
+    // CHECK-NOT: 0x7FC00000
+    // CHECK: llvm.return
+    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
+    tt.return %0 : tensor<4x4xf32, #blocked>
+  }
+}

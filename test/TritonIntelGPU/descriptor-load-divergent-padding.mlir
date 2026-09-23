@@ -24,9 +24,11 @@
 // COM: empty-region window that issue #8167 is about, so the diagnostics stay
 // COM: deterministic and a failure here can only mean the padding check changed.
 // COM:
-// COM: Shape is [5,5] against a 4x4 block, i.e. NOT divisible, so the lowering
-// COM: really does generate boundary checks and the padding value really is
-// COM: load-bearing. With a divisible shape the whole question would be moot.
+// COM: The shape does not affect these diagnostics: both `emitError`s fire
+// COM: before the boundary-check classification is reached. The [5,5] shape
+// COM: (not divisible by the 4x4 block) only matters if the checks are removed,
+// COM: in which case the lowering succeeds, emits a predicated load, and the fill
+// COM: value it picks is what reaches the masked-off lanes.
 // COM:
 // COM: TWO diagnostics are expected per case: the conversion pattern's own
 // COM: `emitError`, plus the dialect-conversion driver's follow-up
@@ -106,9 +108,11 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
 
 // COM: Case 3 -- CONSISTENT provenance (both candidates request PAD_NAN) but a
-// COM: `ttig.desc_padding` attribute that CONTRADICTS it (PAD_ZERO). Two distinct
-// COM: base pointers keep the two `tt.make_tensor_descriptor` ops distinct, so the
-// COM: trace really does see two candidates that agree rather than one.
+// COM: `ttig.desc_padding` attribute that CONTRADICTS it (PAD_ZERO). The two
+// COM: `tt.make_tensor_descriptor` ops are separate ops whatever their operands:
+// COM: this RUN line has no CSE, so the trace sees two candidates that agree.
+// COM: The distinct base pointers are not needed for that; using `%arg0` for both
+// COM: also passes. They only make the two producers visibly independent.
 // COM:
 // COM: This case has nothing to do with divergence; it guards the other failure
 // COM: mode of the same invariant. A stale or mis-stamped attribute is just as
