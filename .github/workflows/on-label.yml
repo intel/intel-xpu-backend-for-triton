@@ -66,6 +66,7 @@ jobs:
     with:
       runner_label: b60
       skip_list: xe2
+      install_sgl_kernel_xpu: true
     secrets: inherit
 
   sglang-tests-pvc:

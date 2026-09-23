@@ -27,6 +27,10 @@ on:
         description: Use Python built with pyenv
         type: boolean
         default: false
+      install_sgl_kernel_xpu:
+        description: Build and install sgl-kernel-xpu (BMG/Xe2 only, no PVC target)
+        type: boolean
+        default: false
 
 permissions: read-all
 
@@ -205,6 +209,11 @@ jobs:
       - name: Install test dependencies
         run: |
           pip install -r scripts/requirements-test.txt
+
+      - name: Install sgl-kernel-xpu
+        if: ${{ inputs.install_sgl_kernel_xpu }}
+        run: |
+          ${{ needs.setup.outputs.test-triton-command }} --install-sgl-kernel-xpu
 
       - name: Set test-triton command line
         run: |

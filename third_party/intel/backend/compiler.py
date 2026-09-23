@@ -363,6 +363,12 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             raise ValueError(
                 f"num_warps={opt.num_warps} is unsupported for the target (limit is {properties['max_num_sub_groups']})"
             )
+        # The backend has no CTA cluster support: getClusterCTAId is hardwired to
+        # 0, clusterBarrier is a plain workgroup barrier, and loadDShared /
+        # storeDShared ignore the ctaId they are given. Accepting num_ctas > 1
+        # would silently miscompile any cross-CTA communication.
+        if opt.num_ctas != 1:
+            raise ValueError(f"num_ctas={opt.num_ctas} is unsupported for the target (only num_ctas=1 is supported)")
 
     @classmethod
     def annotate_module(cls, module_opts, properties, opt):
@@ -657,9 +663,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     @track
     def make_spv(cls, src, metadata, options):
         driver_version = metadata["target"].arch.get("driver_version")
-        is_lts = cls.is_lts(driver_version)
-        os.environ["INTEL_XPU_BACKEND_IS_LTS"] = "1" if is_lts else "0"
-        spirv, name = intel.translate_to_spirv(src, is_lts)
+        spirv, name = intel.translate_to_spirv(src, cls.is_lts(driver_version))
         metadata["name"] = name
         metadata.setdefault("build_flags", "")
         if options.grf_mode == '128':
