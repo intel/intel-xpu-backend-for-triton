@@ -174,6 +174,18 @@ def TritonIntelGPU_Dialect : Dialect {
       return "ttig.desc_padding";
     }
 
+    /// Get the name of the attribute holding the largest GRF mode ("128",
+    /// "256" or "512") the backend's automatic escalation paths target for
+    /// the device, i.e. the register-mode ceiling `ReduceVariableLiveness`'s
+    /// "default"/"auto" GRF budget resolution should assume. Mirrors the
+    /// same per-target policy compiler.py's `get_max_grf_mode()` computes
+    /// (only "cri" gets 512-register mode; every other target caps at 256).
+    /// Absent when unknown (e.g. a hand-written test module, or a
+    /// `-triton-annotate-module` invocation that didn't set `max-grf-mode`).
+    static constexpr llvm::StringRef getMaxGRFModeAttrName() {
+      return "ttig.max_grf_mode";
+    }
+
     /// Get the name of the attribute conveying the HW base-address alignment
     /// requirement (in bytes) for 2D block IO operations. MaterializeBlockPointer
     /// guarantees a 4-byte aligned base, so when this value is <= 4 the base

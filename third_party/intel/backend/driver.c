@@ -486,12 +486,18 @@ struct BuildFlags {
     return false;
   }
 
-  void addLargeGRFSizeFlag() {
-    build_flags_str = build_flags_str.append(" ").append(LARGE_GRF_FLAG);
-  }
-
-  void addXLargeGRFSizeFlag() {
-    build_flags_str = build_flags_str.append(" ").append(XLARGE_GRF_FLAG);
+  // Appends the `-cl-intel-<n>-GRF-per-thread` flag for GRF mode `mode`
+  // ("128", "256" or "512"). The mode is decided by the Python compiler
+  // backend (see `get_max_grf_mode` in compiler.py); an unrecognised value
+  // falls back to 256, the mode every currently-supported target other than
+  // "cri" auto-escalates to.
+  void addGRFSizeFlag(const char *mode) {
+    const char *flag = LARGE_GRF_FLAG;
+    if (std::strcmp(mode, "512") == 0)
+      flag = XLARGE_GRF_FLAG;
+    else if (std::strcmp(mode, "128") == 0)
+      flag = SMALL_GRF_FLAG;
+    build_flags_str = build_flags_str.append(" ").append(flag);
   }
 };
 
@@ -530,20 +536,29 @@ extern "C" EXPORT_FUNC PyObject *get_last_selected_build_flags() {
 }
 
 extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
-  const char *name, *build_flags_ptr, *deviceArch = nullptr;
+  const char *name, *build_flags_ptr, *maxGRFMode = nullptr;
   int shared;
   PyObject *py_bytes;
   int is_spv;
   int devId;
 
   if (!PyArg_ParseTuple(args, "sSispi|z", &name, &py_bytes, &shared,
-                        &build_flags_ptr, &is_spv, &devId, &deviceArch)) {
+                        &build_flags_ptr, &is_spv, &devId, &maxGRFMode)) {
     // PyArg_ParseTuple will set a PyErr
     return NULL;
   }
 
-  const char *resolvedDeviceArch =
-      (deviceArch != nullptr && deviceArch[0] != '\0') ? deviceArch : "unknown";
+  // Largest GRF mode this target auto-escalates to, decided in Python
+  // (`get_max_grf_mode` in compiler.py, carried via `metadata["max_grf_mode"]`)
+  // and handed over rather than re-derived here: this retry runs per-kernel at
+  // JIT time and has no access to the module attributes the compile-time
+  // consumers read. Default "256" preserves this call's own pre-existing
+  // behaviour on a missing argument (it previously resolved to "unknown",
+  // which already selected 256) -- the same absence-preserves-status-quo
+  // principle as `RegisterPressure.cpp`'s divergent 512 default; see that
+  // file's comment if either fallback's rationale ever changes.
+  const char *resolvedMaxGRFMode =
+      (maxGRFMode != nullptr && maxGRFMode[0] != '\0') ? maxGRFMode : "256";
 
   TRITON_ZE_FAIL_IF(devId >= g_sycl_l0_device_list.size(),
                     "Device is not found");
@@ -605,14 +620,10 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
     if (debugEnabled)
       std::cout << (firstBuildFailed ? "(I): Build failed for \""
                                      : "(I): Detected spills for \"")
-                << kernel_name << "\", retrying with large GRF mode"
-                << std::endl;
+                << kernel_name << "\", retrying with large GRF mode ("
+                << resolvedMaxGRFMode << ")" << std::endl;
 
-    if (std::strcmp(resolvedDeviceArch, "cri") == 0) {
-      build_flags.addXLargeGRFSizeFlag();
-    } else {
-      build_flags.addLargeGRFSizeFlag();
-    }
+    build_flags.addGRFSizeFlag(resolvedMaxGRFMode);
 
     try {
       auto [l0_module_retry, l0_kernel_retry, n_spills_retry] =

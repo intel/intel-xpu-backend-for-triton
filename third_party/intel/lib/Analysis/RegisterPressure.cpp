@@ -1,8 +1,10 @@
 #include "intel/include/Analysis/RegisterPressure.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Matchers.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include <optional>
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -34,28 +36,68 @@ unsigned RegisterPressureAnalysis::getPerThreadSizeInBytes(Type type) {
   return 0;
 }
 
-unsigned RegisterPressureAnalysis::getGRFBytesPerHardwareThread(
-    StringRef grfMode, UnknownGRFSizeAssumption unknownAssumption) {
-  // Explicit GRF modes map to exact per-hardware-thread budgets (one hardware
-  // thread executes a whole subgroup/warp of lanes sharing one register file).
+/// Maps an explicit GRF mode string ("128"/"256"/"512") to its exact
+/// per-hardware-thread budget in bytes (one hardware thread executes a whole
+/// subgroup/warp of lanes sharing one register file). Returns std::nullopt
+/// for anything else ("default", "auto", empty, or an unrecognized value),
+/// so callers can distinguish "not an explicit mode" from "unrecognized
+/// explicit mode" and choose their own fallback rather than one of the two
+/// silently degrading into the other.
+static std::optional<unsigned> explicitGRFModeToBytes(StringRef grfMode) {
   if (grfMode == "128")
     return 4096;
   if (grfMode == "256")
     return 8192;
   if (grfMode == "512")
     return 16384;
+  return std::nullopt;
+}
+
+unsigned RegisterPressureAnalysis::getGRFBytesPerHardwareThread(
+    StringRef grfMode, ModuleOp mod,
+    UnknownGRFSizeAssumption unknownAssumption) {
+  if (auto explicitBytes = explicitGRFModeToBytes(grfMode))
+    return *explicitBytes;
   // "default" and "auto": the compiler chooses the GRF size at JIT time, so
   // the true value isn't known here. Which bound is safe depends on the
   // caller; see UnknownGRFSizeAssumption's documentation.
-  //
-  // FIXME(#8074): Largest's 16384 is not per-target; see the enum's doc.
-  return unknownAssumption == UnknownGRFSizeAssumption::Smallest ? 4096 : 16384;
+  if (unknownAssumption == UnknownGRFSizeAssumption::Smallest)
+    return 4096;
+  // On the `grf_mode='default'` path, `make_zebin`'s automatic-escalation
+  // retry -- the only path that would ever realize `ttig.max_grf_mode` --
+  // is itself skipped outright once `num_warps > 32`: a larger GRF mode
+  // halves the launchable work-group size, so escalating would produce an
+  // unlaunchable kernel (see `make_zebin`'s own guard in compiler.py).
+  // Above that bound the realizable ceiling is the same as `Smallest`,
+  // regardless of what `ttig.max_grf_mode` says. `grf_mode='auto'` is not
+  // included: its escalation happens inside IGC, not through this retry, and
+  // is not itself gated on `num_warps`.
+  if (grfMode == "default" && lookupNumWarps(mod) > 32)
+    return 4096;
+  // Largest: the true ceiling is per-target, mirrored onto the module via the
+  // ttig.max_grf_mode attribute (see UnknownGRFSizeAssumption::Largest's
+  // documentation). Reuse the same explicit-mode table above so a value other
+  // than exactly "256"/"512"/"128" (a typo, a future mode, or the attribute
+  // being absent) cannot silently resolve to the wrong budget: it falls
+  // through to the behaviour-preserving 512-register-mode default below.
+  if (auto maxGRFMode = mod->getAttrOfType<StringAttr>(
+          TritonIntelGPUDialect::getMaxGRFModeAttrName()))
+    if (auto explicitBytes = explicitGRFModeToBytes(maxGRFMode.getValue()))
+      return *explicitBytes;
+  // Absence resolves to 512-register mode here, not `driver.c`'s "256" for a
+  // missing `load_binary` argument: each side preserves its own pre-existing
+  // behaviour on absence (this one hardcoded 16384 before `ttig.max_grf_mode`
+  // existed; `driver.c` already resolved a missing arg to "unknown", which
+  // already selected 256). Not a bug -- but if either fallback's rationale
+  // ever changes, check whether the other one still makes sense.
+  return 16384;
 }
 
 unsigned RegisterPressureAnalysis::getPerLaneGRFBudgetInBytes(
     StringRef grfMode, ModuleOp mod,
     UnknownGRFSizeAssumption unknownAssumption) {
-  unsigned grfBudget = getGRFBytesPerHardwareThread(grfMode, unknownAssumption);
+  unsigned grfBudget =
+      getGRFBytesPerHardwareThread(grfMode, mod, unknownAssumption);
   int threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(mod);
   return grfBudget / static_cast<unsigned>(threadsPerWarp);
 }

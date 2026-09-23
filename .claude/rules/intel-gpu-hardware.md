@@ -13,7 +13,7 @@ applyTo: '**/TritonIntelGPUTransforms/**/*.cpp, **/TritonIntelGPUTransforms/**/*
 
 ## GRF (General Register File)
 
-Each hardware thread has a private register file. **Do not guess** GRF register specs or mode details (128/256/auto flags) — read them from `.claude/reference/hardware-reference.md`.
+Each hardware thread has a private register file. **Do not guess** GRF register specs or mode details (128/256/512/auto flags) — read them from `.claude/reference/hardware-reference.md`.
 
 ### Auto-GRF Mode Selection (`grf_mode='default'`)
 1. Compile with default (small) GRF
@@ -21,7 +21,9 @@ Each hardware thread has a private register file. **Do not guess** GRF register 
    `spillMemSize` (JIT) — both are **bytes per hardware thread**
 3. Normalize to **dword-equivalents per lane** (`bytes / (4 × sub-group size)`),
    the unit CUDA/HIP report `n_spills` in and that external consumers threshold on
-4. If that exceeds `16` → recompile with 256-GRF mode
+4. If that exceeds `16` → recompile with the largest GRF mode this target
+   auto-escalates to (256-GRF on every non-`cri` target; 512-GRF on `cri` —
+   see `get_max_grf_mode()` in `compiler.py`, issue #8074)
 
 The threshold is `16` dword-equivalents/lane, aligned between
 `MAX_REG_SPILL_SLOTS_PER_LANE` in `compiler.py` and `kMaxSpillSlotsPerLane` in
@@ -31,8 +33,8 @@ would only cost compile time. Compare in the normalized unit, not in bytes —
 inductor tests the truncated per-lane count, so a byte threshold over-triggers.
 
 ### Constraints
-- **256-GRF requires `num_warps ≤ 32`** (because halved thread occupancy limits available hardware threads)
-- `grf_mode` options: `'default'`, `'128'`, `'256'`, `'auto'`
+- **256-GRF and 512-GRF require `num_warps ≤ 32`** (256-GRF halves, and 512-GRF quarters, the hardware threads available per subslice — see the occupancy column in `.claude/reference/hardware-reference.md`'s GRF mode table — capping the launchable work-group size below what `num_warps > 32` needs)
+- `grf_mode` options: `'default'`, `'128'`, `'256'`, `'512'`, `'auto'`
 
 ## Subgroups and SIMD Execution
 
@@ -79,14 +81,23 @@ prefetch behind) when the loop body's **peak** register pressure, from
 `RegisterPressureAnalysis::peakPressure(loop)`, is at or above the **per-lane**
 GRF budget — `getPerLaneGRFBudgetInBytes(grfMode, mod, UnknownGRFSizeAssumption::Largest)`.
 At `threads-per-warp = 16` that is 256 B/lane for `'128'`, 512 for `'256'`, and
-1024 for `'512'` and for `'default'`/`'auto'` (the true GRF size isn't known at
+1024 for `'512'`. For `'default'`/`'auto'` the true GRF size isn't known at
 this point in the pipeline, and this gate treats the budget as a threshold to
 sink rather than a ceiling, so the safe assumption under uncertainty is the
-*largest* size the device supports — see `RegisterPressureAnalysis`'s
-`UnknownGRFSizeAssumption` for the full rationale, including why
-`HoistLayoutConversions` correctly assumes the opposite (`Smallest`) for the
-same unknown modes). There is no fixed tensor-size floor; sizes only matter
-through their contribution to the measured pressure.
+*largest* mode **this target's automatic (`default`/`auto`) escalation
+reaches** — read from the `ttig.max_grf_mode` module attribute (see issue
+#8074), not the largest any device supports and not the largest mode the
+target can be explicitly told to use (BMG and PVC both accept an explicit
+`grf_mode='512'`; 256 is only where their own automatic path stops). That
+budget is 512 B/lane on every non-`cri` target (BMG, PVC, ...) and 1024
+B/lane on `cri`. If the attribute is absent entirely (e.g. hand-written TTGIR that
+never went through `TritonAnnotateModule`), the fallback is 1024 B/lane,
+the pre-#8074 behaviour. See `RegisterPressureAnalysis`'s
+`UnknownGRFSizeAssumption` for the
+full rationale, including why `HoistLayoutConversions` correctly assumes the
+opposite (`Smallest`) for the same unknown modes. There is no fixed
+tensor-size floor; sizes only matter through their contribution to the
+measured pressure.
 
 Peak, not live-in, pressure is the gate: `liveInPressure` derives from
 `LivenessBlockInfo::in()`, which excludes block arguments and so never counts the

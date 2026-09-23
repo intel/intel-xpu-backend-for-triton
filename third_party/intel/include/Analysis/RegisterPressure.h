@@ -159,13 +159,39 @@ public:
   enum class UnknownGRFSizeAssumption {
     /// Assume the smallest GRF size the device supports (128-register mode).
     Smallest,
-    /// Assume the largest GRF size the device supports.
+    /// Assume the largest GRF size the backend's automatic escalation will
+    /// ever select for this target ("automatic" is load-bearing -- see
+    /// below).
     ///
-    /// FIXME(#8074): this is currently 512-register mode unconditionally,
-    /// but the backend only ever selects 512-register mode on "cri"; every
-    /// other target (including BMG and PVC) caps at 256-register mode (see
-    /// third_party/intel/backend/compiler.py's GRF retry logic). This should
-    /// be the true per-target largest size, not a hardcoded constant.
+    /// The true ceiling is per-target: the backend's automatic escalation
+    /// paths only ever select 512-register mode on "cri"; every other target
+    /// (including BMG and PVC) caps at 256-register mode (see
+    /// third_party/intel/backend/compiler.py's `get_max_grf_mode()`, the
+    /// single source of truth for this policy). That value is mirrored onto
+    /// the module as the `ttig.max_grf_mode` attribute (stamped by
+    /// TritonAnnotateModule) and `getGRFBytesPerHardwareThread` reads it back
+    /// when resolving this case. BMG and PVC *do* support 512-register mode
+    /// (an explicit `grf_mode='512'` works on both) -- they just never
+    /// auto-select it, which is the only thing this assumption describes.
+    ///
+    /// "Automatic" covers two distinct backend paths with two distinct
+    /// caveats: `grf_mode='default'`'s AOT/JIT retry (`make_zebin`/
+    /// `driver.c`), which `getGRFBytesPerHardwareThread` additionally caps at
+    /// `Smallest` once `num_warps > 32` (that retry is skipped outright
+    /// above that bound, so `ttig.max_grf_mode` is unreachable there); and
+    /// `grf_mode='auto'`, whose escalation happens inside IGC rather than
+    /// through either backend retry path, and is not itself gated on
+    /// `num_warps` at the backend level. Reusing the same per-target ceiling
+    /// for `'auto'` is believed correct but is not itself validated by either
+    /// backend path `get_max_grf_mode`'s policy is documented against.
+    ///
+    /// If the attribute is absent (e.g. a hand-written test module that never
+    /// went through the Python compiler pipeline), the behaviour-preserving
+    /// pre-existing default applies: assume 512-register mode.
+    /// ("Conservative" is deliberately avoided here: 512 is the *largest*
+    /// budget, hence the *highest* sink threshold, hence the *least* sinking
+    /// -- conservative about changing behaviour, not about register
+    /// consumption.)
     Largest,
   };
 
@@ -176,12 +202,14 @@ public:
   /// Explicit sizes ("128", "256", "512") map to the exact per-hardware-thread
   /// budget, ignoring `unknownAssumption`. For "default" and "auto", returns
   /// the smallest or largest GRF size per `unknownAssumption` (see its
-  /// documentation for which one a given caller needs).
+  /// documentation for which one a given caller needs, for how `Largest`
+  /// uses `mod`'s `ttig.max_grf_mode` attribute, and for the `num_warps > 32`
+  /// exception on the `grfMode == "default"` path).
   static unsigned
-  getGRFBytesPerHardwareThread(StringRef grfMode,
+  getGRFBytesPerHardwareThread(StringRef grfMode, ModuleOp mod,
                                UnknownGRFSizeAssumption unknownAssumption);
 
-  /// Returns `getGRFBytesPerHardwareThread(grfMode, unknownAssumption) /
+  /// Returns `getGRFBytesPerHardwareThread(grfMode, mod, unknownAssumption) /
   /// threads-per-warp`: the per-lane figure to compare against this
   /// analysis's (per-lane) output. When the module's ttg.threads-per-warp
   /// attribute is absent, getThreadsPerWarp returns 32 as a default, so the

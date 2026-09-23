@@ -495,15 +495,19 @@ class CompiledKernel:
         if knobs.runtime.kernel_load_start_hook is not None:
             knobs.runtime.kernel_load_start_hook(self.module, self.function, self.name, self.metadata_group, self.hash)
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
-        # `build_flags`/`generate_native_code` are Intel/XPU-specific metadata fields.
+        # `build_flags`/`generate_native_code`/`max_grf_mode` are Intel/XPU-specific metadata fields.
         # Backends that don't define them (e.g. NVIDIA/CUDA) use the plain load_binary signature.
+        # `build_flags` alone is the backend discriminator (as before #8074) --
+        # a metadata blob predating #8074, or an out-of-tree backend defining
+        # only some of these fields, still belongs on the six-argument Intel
+        # path, not the generic four-argument one. `max_grf_mode` is read via
+        # `getattr` with a `None` default so its absence doesn't route Intel
+        # metadata down the wrong path; `driver.c`'s `|z` format already
+        # treats a missing/`None` mode as its own pre-existing fallback.
         if hasattr(self.metadata, "build_flags"):
-            device_arch = "unknown"
-            if isinstance(self.metadata.target.arch, dict):
-                device_arch = self.metadata.target.arch.get("arch", "unknown")
             self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
                 self.name, self.kernel, self.metadata.shared, self.metadata.build_flags,
-                not self.metadata.generate_native_code, device, device_arch)
+                not self.metadata.generate_native_code, device, getattr(self.metadata, "max_grf_mode", None))
             # PyTorch could use the updated build flags in load binary.
             if hasattr(driver.active.utils, "get_last_selected_build_flags"):
                 new_build_flags = driver.active.utils.get_last_selected_build_flags()
