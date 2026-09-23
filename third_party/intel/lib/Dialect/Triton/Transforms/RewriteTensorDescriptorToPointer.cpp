@@ -1390,17 +1390,30 @@ class TritonRewriteTensorDescriptorToPointerPass
           // Check if all tensor descriptor values in the op trace back to
           // candidate MakeTensorDescOps.
           auto allDescValuesAreCandidate = [&](Operation *op) {
-            for (Value operand : op->getOperands()) {
-              if (!isa<triton::TensorDescType>(operand.getType()))
-                continue;
+            auto tracesToCandidates = [&](Value v) {
               // allSatisfy is false for an empty trace, which is what we want:
               // an untraceable descriptor is not a candidate.
-              if (!triton::intel::findDescriptorDefinitions(operand).allSatisfy(
-                      [&](auto d) {
-                        return candidateMakeTensorDescOps.contains(d);
-                      }))
+              return triton::intel::findDescriptorDefinitions(v).allSatisfy(
+                  [&](triton::MakeTensorDescOp d) {
+                    return candidateMakeTensorDescOps.contains(d);
+                  });
+            };
+            for (Value operand : op->getOperands())
+              if (isa<triton::TensorDescType>(operand.getType()) &&
+                  !tracesToCandidates(operand))
                 return false;
-            }
+            // Results matter too: an op that only *produces* a non-candidate
+            // descriptor (an scf.if yielding one, a tt.call returning one)
+            // would otherwise stay legal while
+            // populateSCFStructuralTypeConversions /
+            // populateFunctionTypeConversions rewrite its yield/callee 1->N,
+            // leaving a signature that no longer matches its own body. Upstream
+            // marks an op illegal on operands OR results; this restores that
+            // invariant while keeping the candidate carve-out. See #8166.
+            for (Value result : op->getResults())
+              if (isa<triton::TensorDescType>(result.getType()) &&
+                  !tracesToCandidates(result))
+                return false;
             return true;
           };
 
