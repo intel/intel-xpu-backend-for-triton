@@ -11,7 +11,7 @@
 // COM: and check the sum: hoisted + the three rejected counters + skipped_other
 // COM: must equal considered.
 // STATS: [HoistLayoutConversions] considered={{[0-9]+}} hoisted={{[0-9]+}} rejected_pressure={{[0-9]+}} rejected_function_peak_exact={{[0-9]+}} rejected_function_peak_fallback={{[0-9]+}} skipped_other={{[0-9]+}}
-// STATS: [HoistLayoutConversions] considered=39 hoisted=24 rejected_pressure=3 rejected_function_peak_exact=4 rejected_function_peak_fallback=2 skipped_other=6
+// STATS: [HoistLayoutConversions] considered=41 hoisted=24 rejected_pressure=3 rejected_function_peak_exact=0 rejected_function_peak_fallback=7 skipped_other=7
 
 // COM: Case 1: Hoist ConvertLayoutOp with DotOperandEncoding out of scf.for loop.
 // COM: The source of the convert_layout is defined outside the loop, so the pass
@@ -1550,5 +1550,63 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
       scf.yield %d2, %c : tensor<128x16xf32, #dpas33>, tensor<128x16xf16, #blocked33>
     }
     tt.return %r#0, %r#1 : tensor<128x16xf32, #dpas33>, tensor<128x16xf16, #blocked33>
+  }
+}
+
+// -----
+
+// COM: Case 34 (#8053 follow-up): %cvt's only use is early inside the
+// COM: scf.if's then-branch, and a chain of high-pressure fillers (%h1..%h4)
+// COM: follows it, later in the *same* branch, before the if closes.
+// COM: lastBodyUser maps that nested use onto the scf.if itself, so
+// COM: collectCorridor excludes the if op -- and everything from %cvt up to
+// COM: it -- from the corridor, on the theory that the un-hoisted result is
+// COM: already locally live there at the same cost hoisting would add. That
+// COM: theory only holds up to the real nested use; the filler chain runs
+// COM: strictly after it, still inside the same branch, and needs the same
+// COM: post-last-use pricing any other corridor entry gets. Before this fix
+// COM: that interval was priced as zero, since the if op was never a corridor
+// COM: entry at all (neither the per-op walk nor the region-peak fallback
+// COM: -- which only fires for corridor entries -- ever reaches it).
+// COM: Measured at default GRF: with the fix, prePeak=1441, corridor=1505
+// COM: over 2 ops, newPoint=737 -- corridor now dominates and exceeds the
+// COM: 1441 ceiling, so the hoist is correctly refused. Without the fix,
+// COM: corridor is only 609 (prePeak=1441 dominates instead), so the
+// COM: projection stays within the ceiling and the hoist is wrongly
+// COM: accepted -- a real, decision-flipping undercount, not just a
+// COM: theoretical one.
+
+#blocked34 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dpas34 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
+#dot_a34 = #ttg.dot_op<{opIdx = 0, parent = #dpas34, kWidth = 1}>
+#dot_b34 = #ttg.dot_op<{opIdx = 1, parent = #dpas34, kWidth = 2}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+
+  // CHECK-LABEL: tt.func @price_tail_after_nested_last_use
+  tt.func @price_tail_after_nested_last_use(%arg0: tensor<128x16xf16, #blocked34>, %argB: tensor<16x16xf16, #dot_b34>, %acc0: tensor<128x16xf32, #dpas34>, %cond: i1) -> tensor<128x16xf32, #dpas34> {
+    %c0_i32 = arith.constant 0 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %c1_i32 = arith.constant 1 : i32
+    // CHECK: scf.for
+    // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    %src = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked34>
+    %r = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%a = %acc0) -> (tensor<128x16xf32, #dpas34>) : i32 {
+      %cvt = ttg.convert_layout %src : tensor<128x16xf16, #blocked34> -> tensor<128x16xf16, #dot_a34>
+      %hot = scf.if %cond -> (tensor<128x16xf32, #dpas34>) {
+        %use = tt.dot %cvt, %argB, %a, inputPrecision = tf32 : tensor<128x16xf16, #dot_a34> * tensor<16x16xf16, #dot_b34> -> tensor<128x16xf32, #dpas34>
+        %h1 = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked34>
+        %h2 = arith.addf %h1, %arg0 : tensor<128x16xf16, #blocked34>
+        %h3 = arith.addf %h2, %arg0 : tensor<128x16xf16, #blocked34>
+        %h4 = arith.addf %h3, %h1 : tensor<128x16xf16, #blocked34>
+        %h5 = arith.addf %use, %use : tensor<128x16xf32, #dpas34>
+        %h6 = ttg.convert_layout %h4 : tensor<128x16xf16, #blocked34> -> tensor<128x16xf16, #dot_a34>
+        %h7 = tt.dot %h6, %argB, %h5, inputPrecision = tf32 : tensor<128x16xf16, #dot_a34> * tensor<16x16xf16, #dot_b34> -> tensor<128x16xf32, #dpas34>
+        scf.yield %h7 : tensor<128x16xf32, #dpas34>
+      } else {
+        scf.yield %a : tensor<128x16xf32, #dpas34>
+      }
+      scf.yield %hot : tensor<128x16xf32, #dpas34>
+    }
+    tt.return %r : tensor<128x16xf32, #dpas34>
   }
 }

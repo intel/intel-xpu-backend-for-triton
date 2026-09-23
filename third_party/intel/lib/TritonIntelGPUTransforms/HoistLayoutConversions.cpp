@@ -576,7 +576,33 @@ projectedFunctionPeak(ttg::ConvertLayoutOp cvtOp, scf::ForOp forOp,
     if (op->getNumRegions() > 0 && op != forOp.getOperation()) {
       uint64_t regionPriced = regionPeakThroughOp(op, analysis) + dstBytes;
       projection.corridorTerm = std::max(projection.corridorTerm, regionPriced);
+      // No source credit was applied above, so this term may overstate the
+      // true peak; the projection can no longer be reported as exact.
+      projection.exact = false;
     }
+  }
+
+  // `lastBodyUser` maps a use nested inside a sub-region (an `scf.if` branch,
+  // say) onto the top-level op in the body that contains it, and
+  // `collectCorridor` deliberately excludes that mapped op -- along with
+  // everything from `cvtOp` up to it -- from the corridor, to avoid
+  // double-counting the portion already locally live before the real,
+  // nested last use. That exclusion is only sound up to the actual nested
+  // use point: if a higher-pressure operation follows later in the *same*
+  // branch, still inside the mapped op's region, it runs strictly after
+  // `cvtOp`'s real last use and needs the same new-charge treatment as any
+  // other post-last-use corridor entry -- but because the mapped op itself
+  // was never added to the corridor, neither the per-op loop above nor its
+  // region-peak fallback ever prices it. Conservatively price the mapped
+  // op's own region peak here instead of trying to locate the exact nested
+  // position: this may overstate the true peak (it covers the whole region,
+  // not just the tail after the real use), which is why it also clears
+  // `exact`, but it closes the gap rather than silently pricing it as zero.
+  if (Operation *lastUse = lastBodyUser(cvtOp, forOp.getBody());
+      lastUse && lastUse->getNumRegions() > 0) {
+    uint64_t regionPriced = regionPeakThroughOp(lastUse, analysis) + dstBytes;
+    projection.corridorTerm = std::max(projection.corridorTerm, regionPriced);
+    projection.exact = false;
   }
 
   // No operation *outside the loop and after the anchor* needs pricing beyond

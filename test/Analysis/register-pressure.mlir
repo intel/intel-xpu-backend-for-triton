@@ -433,6 +433,61 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
+// COM: Regression guard for the isFullyForwardedThrough over-application bug
+// COM: (#8053 follow-up): %v is defined before the *outer* loop and its only
+// COM: use anywhere is as the *inner* loop's own init operand -- forwarded
+// COM: through the inner loop, never read directly. That makes %v genuinely
+// COM: superseded from the inner loop's own perspective (it is the inner
+// COM: loop's own operand, so getLiveThroughAncestorSet(innerLoop, ...)
+// COM: correctly drops it), but NOT from the outer loop's: the inner loop
+// COM: re-evaluates its own init fresh every time the outer loop's back edge
+// COM: loops around, so %v must still be charged for the *outer* loop's whole
+// COM: duration. A version of isFullyForwardedThrough that checks only
+// COM: "is this some loop's own init operand" (any loop, at any nesting
+// COM: depth) rather than "is this *ancestor's* own init operand" wrongly
+// COM: drops %v at the outer level too, under-reporting the peak by exactly
+// COM: %v's 512 bytes.
+// COM: Measured (-test-register-pressure): peak = 1056 bytes everywhere
+// COM: (%arg8 512 + %arg6 32 + %v 512). Without this fix, %v is dropped from
+// COM: the outer loop's live-through set and peak drops to 544 -- confirmed
+// COM: by temporarily reverting the fix and rebuilding. Live-in is *not*
+// COM: the discriminating field here: both loop bodies' live-in figures
+// COM: (0 for the inner, 512 for the outer, from %v) are identical with or
+// COM: without the fix, since `liveInPressure` reads MLIR's own
+// COM: `LivenessBlockInfo::in()` directly -- a block-level query that is
+// COM: already region-aware on its own, unrelated to and unaffected by
+// COM: `isFullyForwardedThrough`/`getLiveThroughAncestorSet`, which only
+// COM: feed into `pressureAt`'s ancestor-climbing and therefore only affect
+// COM: the peak.
+#blocked8 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dpas8 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: outer_loop_value_forwarded_only_to_inner_init
+  // CHECK-NEXT: Register Pressure Analysis (per-thread bytes):
+  // CHECK-NEXT: Peak over all blocks in tt.func: 1056 bytes
+  // CHECK-NEXT: Block {{.*}} in scf.for: peak = 1056 bytes, live-in = 0 bytes
+  // CHECK-NEXT: Block {{.*}} in scf.for: peak = 1056 bytes, live-in = 512 bytes
+  // CHECK-NEXT: Block {{.*}} in tt.func: peak = 1056 bytes, live-in = 0 bytes
+  tt.func @outer_loop_value_forwarded_only_to_inner_init(%arg0: !tt.ptr<f32>) {
+    %c64_i32 = arith.constant 64 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %c0_i64 = arith.constant 0 : i64
+    %cst = arith.constant dense<0.000000e+00> : tensor<8x16xf32, #dpas8>
+    %0 = tt.make_tensor_descriptor %arg0, [%c0_i32, %c0_i32], [%c0_i64, %c0_i64] : <f32>, <64x128xf32>
+    %v = tt.descriptor_load %0[%c0_i32, %c0_i32] : !tt.tensordesc<64x128xf32> -> tensor<64x128xf32, #blocked8>
+    %outer = scf.for %arg5 = %c0_i32 to %c64_i32 step %c64_i32 iter_args(%arg6 = %cst) -> (tensor<8x16xf32, #dpas8>) : i32 {
+      %inner = scf.for %arg7 = %c0_i32 to %c64_i32 step %c64_i32 iter_args(%arg8 = %v) -> (tensor<64x128xf32, #blocked8>) : i32 {
+        scf.yield %arg8 : tensor<64x128xf32, #blocked8>
+      }
+      %11 = arith.addf %arg6, %arg6 : tensor<8x16xf32, #dpas8>
+      scf.yield %11 : tensor<8x16xf32, #dpas8>
+    }
+    tt.return
+  }
+}
+
+// -----
+
 
 // COM: Originally meant as the hazard the whole-function peak line exists to
 // COM: expose, measured on the same function before and after hoisting the

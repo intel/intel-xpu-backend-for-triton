@@ -143,12 +143,19 @@ static bool isLoopInitUse(OpOperand &use) {
 
 /// Returns true if \p value has at least one "relevant" use with respect to
 /// \p ancestor (either \p ancestor's own operand, or a use strictly inside
-/// one of \p ancestor's regions), and *every* such relevant use is a pure
-/// forwarding conduit (`isLoopInitUse`) -- i.e. \p value's only role in
-/// \p ancestor's scope, at any nesting depth, is to be handed down into some
-/// (possibly nested) loop's own init operand, never read directly. Such a
-/// value is fully superseded: whichever block argument ultimately carries it
-/// is already counted by that block's own raw liveness.
+/// one of \p ancestor's regions), and *every* such relevant use is \p
+/// ancestor's own operand *and* a pure forwarding conduit into \p ancestor's
+/// own init list (`isLoopInitUse`) -- i.e. \p value's only role is to be
+/// handed down into \p ancestor's own loop-carried state, never read
+/// directly. Such a value is fully superseded: the block argument \p
+/// ancestor's own entry rebinds it to is already counted by that block's own
+/// raw liveness.
+///
+/// A relevant use nested *inside* one of \p ancestor's regions is never a
+/// conduit at \p ancestor's own level, even if that use happens to be some
+/// descendant loop's own init operand: the descendant re-evaluates that init
+/// fresh every time \p ancestor's own back edge loops around, so \p value
+/// must still be charged for \p ancestor's whole duration.
 static bool isFullyForwardedThrough(Value value, Operation *ancestor) {
   bool hasRelevantUse = false;
   for (OpOperand &use : value.getUses()) {
@@ -157,7 +164,7 @@ static bool isFullyForwardedThrough(Value value, Operation *ancestor) {
     if (!isAncestorsOwnOperand && !isInsideRegions)
       continue;
     hasRelevantUse = true;
-    if (!isLoopInitUse(use))
+    if (!isAncestorsOwnOperand || !isLoopInitUse(use))
       return false;
   }
   return hasRelevantUse;
