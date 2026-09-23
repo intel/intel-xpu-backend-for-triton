@@ -113,13 +113,28 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 // COM: consistentPadding() returns nullopt and bails before either stamp, so the
 // COM: load keeps no attribute dictionary at all.
 // COM:
-// COM: This pins current behaviour, which is NOT correct behaviour. With no
-// COM: ttig.desc_padding the generic descriptor lowering in LoadStoreOpToLLVM
-// COM: defaults to PAD_ZERO, so at runtime the branch selecting the PAD_NAN
-// COM: descriptor still gets a zero out-of-bounds fill. That hole predates this
-// COM: test -- refusing the 2D block path is strictly safer than taking it with
-// COM: the wrong padding -- and is tracked separately. Do not read this case as
-// COM: "divergent padding is handled".
+// COM: Stamping nothing is the CORRECT and COMPLETE behaviour, but for two
+// COM: different reasons depending on how this IR was reached:
+// COM:
+// COM: (a) In the normal pipeline this TTGIR is unreachable. A descriptor load
+// COM:     whose provenance disagrees on padding is routed to the pointer
+// COM:     expansion (--triton-intel-rewrite-tensor-descriptor-to-pointer), which
+// COM:     models padding as a runtime i1 and selects between a NaN splat and a
+// COM:     zero splat -- see @if_divergent_padding in
+// COM:     test/Triton/Intel/rewrite-tensor-descriptor-to-pointer.mlir. So by the
+// COM:     time TTGIR exists there is no divergent descriptor left, and refusing
+// COM:     to stamp a padding here costs nothing.
+// COM:
+// COM: (b) For standalone hand-written TTGIR like this fixture, which never went
+// COM:     through that expansion, refusing is still correct -- taking the 2D block
+// COM:     path with a guessed padding would be strictly worse -- and it is no
+// COM:     longer the last line of defence: such a load is now rejected outright by
+// COM:     the LLVM lowering, which errors instead of silently defaulting to
+// COM:     PAD_ZERO. See test/TritonIntelGPU/descriptor-load-divergent-padding.mlir.
+// COM:
+// COM: Issue #8102 is the silent-PAD_ZERO degradation that both of those close.
+// COM: This case asserts only the attribute-stamping half: no ttig.desc_padding,
+// COM: therefore no ttig.block_io.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
