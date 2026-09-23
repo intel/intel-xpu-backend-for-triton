@@ -1298,7 +1298,11 @@ run_vllm_tdesc_tests() {
   done
 
   if [ "$exit_status" -eq 0 ]; then
-    VLLM_TRITON_USE_TD=1 TRITON_TEST_SUITE=vllm_tdesc \
+    # #7395 experiment: disable vLLM's per-test empty_cache for this suite too
+    # (see run_vllm_triton_attn_tests and scripts/vllm/vllm-fix.patch). NOTE: this
+    # suite also runs memory-heavy MoE tests, so disabling empty_cache raises OOM
+    # risk on 12 GB parts -- read the vllm-triton-attn result as primary. Revert before merge.
+    VLLM_XPU_DISABLE_EMPTY_CACHE=1 VLLM_TRITON_USE_TD=1 TRITON_TEST_SUITE=vllm_tdesc \
       run_pytest_command -vvv \
         tests/kernels/moe/test_batched_moe.py \
         tests/kernels/moe/test_block_fp8.py \
