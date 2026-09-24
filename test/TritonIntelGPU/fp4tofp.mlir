@@ -22,7 +22,7 @@ module attributes {triton_intel_gpu.support_bfloat16_conversion, triton_intel_gp
   }
 }
 
-// CHECK-SPIRV-COUNT-2: llvm.call spir_funccc @_Z38__builtin_spirv_ConvertE2M1ToBF16INTELDv16_i
+// CHECK-SPIRV-COUNT-2: llvm.call spir_funccc @_Z36__builtin_spirv_ConvertE2M1ToBF16EXTDv16_i
 // CHECK-DAG: [[C4V:%.+]] = llvm.mlir.constant(dense<4> : vector<4xi32>) : vector<4xi32>
 // CHECK-DAG: [[C15V:%.+]] = llvm.mlir.constant(dense<252645135> : vector<4xi32>) : vector<4xi32>
 // CHECK-DAG: [[TABLE:%.+]] = llvm.mlir.constant(dense<[0.000000e+00, 5.000000e-01, 1.000000e+00, 1.500000e+00, 2.000000e+00, 3.000000e+00, 4.000000e+00, 6.000000e+00, -0.000000e+00, -5.000000e-01, -1.000000e+00, -1.500000e+00, -2.000000e+00, -3.000000e+00, -4.000000e+00, -6.000000e+00]> : vector<16xbf16>) : vector<16xbf16>
@@ -61,7 +61,7 @@ module attributes {triton_intel_gpu.support_bfloat16_conversion, triton_intel_gp
   }
 }
 
-// CHECK-SPIRV-COUNT-2: llvm.call spir_funccc @_Z38__builtin_spirv_ConvertE2M1ToBF16INTELDv16_i
+// CHECK-SPIRV-COUNT-2: llvm.call spir_funccc @_Z36__builtin_spirv_ConvertE2M1ToBF16EXTDv16_i
 // CHECK-DAG: [[C4V:%.+]] = llvm.mlir.constant(dense<4> : vector<4xi8>) : vector<4xi8>
 // CHECK-DAG: [[C15V:%.+]] = llvm.mlir.constant(dense<15> : vector<4xi8>) : vector<4xi8>
 // CHECK-DAG: [[TABLE:%.+]] = llvm.mlir.constant(dense<[0.000000e+00, 5.000000e-01, 1.000000e+00, 1.500000e+00, 2.000000e+00, 3.000000e+00, 4.000000e+00, 6.000000e+00, -0.000000e+00, -5.000000e-01, -1.000000e+00, -1.500000e+00, -2.000000e+00, -3.000000e+00, -4.000000e+00, -6.000000e+00]> : vector<16xbf16>) : vector<16xbf16>
@@ -96,7 +96,7 @@ module attributes {triton_intel_gpu.support_bfloat16_conversion, triton_intel_gp
   }
 }
 
-// CHECK-SPIRV-COUNT-2: llvm.call spir_funccc @_Z38__builtin_spirv_ConvertE2M1ToBF16INTELDv16_i
+// CHECK-SPIRV-COUNT-2: llvm.call spir_funccc @_Z36__builtin_spirv_ConvertE2M1ToBF16EXTDv16_i
 // CHECK-DAG: [[C4:%.+]] = llvm.mlir.constant(4 : i8) : i8
 // CHECK-DAG: [[C15:%.+]] = llvm.mlir.constant(15 : i8) : i8
 // CHECK-DAG: [[TABLE:%.+]] = llvm.mlir.constant(dense<[0.000000e+00, 5.000000e-01, 1.000000e+00, 1.500000e+00, 2.000000e+00, 3.000000e+00, 4.000000e+00, 6.000000e+00, -0.000000e+00, -5.000000e-01, -1.000000e+00, -1.500000e+00, -2.000000e+00, -3.000000e+00, -4.000000e+00, -6.000000e+00]> : vector<16xbf16>) : vector<16xbf16>
@@ -112,7 +112,7 @@ module attributes {triton_intel_gpu.support_bfloat16_conversion, triton_intel_gp
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32, ttig.min_sg_size = 16 : i32, ttig.target_arch = "spir64" } {
   tt.func public @convert(%src: tensor<4xi8, #blocked>) -> tensor<8xf16, #blocked1> {
     %dst = ttg.fp4_to_fp %src {axis = 0 : i32} : tensor<4xi8, #blocked> -> tensor<8xf16, #blocked1>
-    // CHECK-SPIRV: llvm.call spir_funccc @_Z38__builtin_spirv_ConvertE2M1ToFP16INTELDv8_i
+    // CHECK-SPIRV: llvm.call spir_funccc @_Z36__builtin_spirv_ConvertE2M1ToFP16EXTDv8_i
     tt.return %dst : tensor<8xf16, #blocked1>
   }
 }
@@ -124,7 +124,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32, ttig.min_sg_size = 16 : i32, ttig.target_arch = "spir64" } {
   tt.func public @convert(%src: tensor<2xi8, #blocked>) -> tensor<4xf16, #blocked1> {
     %dst = ttg.fp4_to_fp %src {axis = 0 : i32} : tensor<2xi8, #blocked> -> tensor<4xf16, #blocked1>
-    // CHECK-SPIRV: llvm.call spir_funccc @_Z38__builtin_spirv_ConvertE2M1ToFP16INTELDv4_i
+    // CHECK-SPIRV: llvm.call spir_funccc @_Z36__builtin_spirv_ConvertE2M1ToFP16EXTDv4_i
     tt.return %dst : tensor<4xf16, #blocked1>
   }
 }
@@ -136,7 +136,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 32 : i32, ttig.min_sg_size = 16 : i32, ttig.target_arch = "spir64" } {
   tt.func public @convert(%src: tensor<1xi8, #blocked>) -> tensor<2xf16, #blocked1> {
     %dst = ttg.fp4_to_fp %src {axis = 0 : i32} : tensor<1xi8, #blocked> -> tensor<2xf16, #blocked1>
-    // CHECK-SPIRV: llvm.call spir_funccc @_Z38__builtin_spirv_ConvertE2M1ToFP16INTELDv2_i
+    // CHECK-SPIRV: llvm.call spir_funccc @_Z36__builtin_spirv_ConvertE2M1ToFP16EXTDv2_i
     tt.return %dst : tensor<2xf16, #blocked1>
   }
 }
