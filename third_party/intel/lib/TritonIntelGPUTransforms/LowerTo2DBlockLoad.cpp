@@ -189,6 +189,49 @@ private:
       }
     }
 
+    // The 2D block message encodes base_width (bytes), base_height (rows) and
+    // base_pitch (bytes) as value-1 in 24-bit fields, so each must be in
+    // [1, 2^24]. This is the last point a descriptor load can fall back:
+    // Subgroup2DBlockLoadOpConversion does not re-validate. Bail if ANY
+    // candidate MakeTensorDescOp has a compile-time-foldable field outside
+    // that range. Check before emitting any IR: the ttig.extract_desc values
+    // built below do not fold, so read the defining MakeTensorDescOp(s).
+    //
+    // Not checked here:
+    //  - Non-foldable (runtime) values are trusted to be in range.
+    //  - Alignment (base 4B, width multiple of 4B, pitch multiple of 16B):
+    //    in the normal pipeline MaterializeBlockPointer checks it before it
+    //    tags the load (runtime values rely on the tt.make_tensor_descriptor
+    //    16-byte contract); hand-tagged IR is not re-checked here.
+    //  - The HW 64-byte minimum for width/pitch is deliberately not enforced;
+    //    it would move narrow descriptors off 2D block I/O.
+    constexpr int64_t kMax2DBlockField = int64_t(1) << 24;
+    int64_t elemBytesConst = elemSizeInBits / 8;
+    auto isOutOfRange = [&](unsigned operandIdx, int64_t scale,
+                            StringRef field) {
+      return llvm::any_of(defs, [&](tt::MakeTensorDescOp d) {
+        std::optional<int64_t> folded =
+            tt::intel::getFoldedConstantValue(d->getOperand(operandIdx));
+        if (!folded)
+          return false;
+        int64_t value;
+        if (!llvm::MulOverflow(*folded, scale, value) && value >= 1 &&
+            value <= kMax2DBlockField)
+          return false;
+        LDBG("Invalid " << field << " (" << *folded << " x " << scale
+                        << ") for descriptor load: " << *op);
+        return true;
+      });
+    };
+    // MakeTensorDescOp operands: base, shape[descRank], strides[descRank].
+    if (isOutOfRange(/*inner shape*/ 1 + (descRank - 1), elemBytesConst,
+                     "base_width") ||
+        isOutOfRange(/*outer shape*/ 1 + (descRank - 2), /*scale=*/1,
+                     "base_height") ||
+        isOutOfRange(/*pitch stride*/ 1 + descRank + (descRank - 2),
+                     elemBytesConst, "base_pitch"))
+      return;
+
     OpBuilder builder(op);
     Location loc = op.getLoc();
     Type i32Ty = builder.getI32Type();
@@ -236,53 +279,6 @@ private:
         return arith::TruncIOp::create(builder, loc, i32Ty, v);
       return v;
     };
-
-    // If the pitch stride is a known constant AND the descriptor/result ranks
-    // match, validate HW constraints (>= 64 bytes, 16-byte aligned, encoded
-    // in 24 bits per the `triton_gen.2Dblockload` verifier).
-    // For rank-reducing loads, the stride interpretation may differ from the
-    // 2D surface pitch, so skip static validation (runtime will handle it).
-    if (rank == descRank) {
-      std::optional<int64_t> pitchStride =
-          tt::intel::getFoldedConstantValue(strides[descRank - 2]);
-      if (pitchStride) {
-        int64_t pitchBytes = *pitchStride * elemSizeInBits / 8;
-        if (pitchBytes < 64 || (pitchBytes % 16) != 0 ||
-            pitchBytes > (int64_t(1) << 24)) {
-          LDBG("Invalid pitch " << pitchBytes
-                                << " for descriptor load: " << *op);
-          return;
-        }
-      }
-    }
-
-    // The 2Dblockload HW encodes base_width / base_pitch in 24 bits (the
-    // TritonGEN→LLVM lowering subtracts 1 on emission, so the user-facing
-    // max is 2^24). Bail out if any compile-time-foldable byte value
-    // exceeds that range — otherwise the top bits would be silently
-    // dropped, producing a garbage surface descriptor. Non-foldable
-    // (runtime) shapes/strides are trusted to fit — the HW verifier will
-    // complain if they don't.
-    //
-    // We chase the descriptor's defining MakeTensorDescOp(s) to reach the
-    // original SSA — `strides`/`shapes` above are ttig.extract_desc results
-    // whose defining ops the folder can't see through.
-    constexpr int64_t kMax2DBlockField = int64_t(1) << 24;
-    int64_t elemBytesConst = elemSizeInBits / 8;
-    auto wouldOverflow = [&](unsigned operandIdx) {
-      return llvm::any_of(defs, [&](tt::MakeTensorDescOp d) {
-        auto folded =
-            tt::intel::getFoldedConstantValue(d->getOperand(operandIdx));
-        return folded && *folded * elemBytesConst > kMax2DBlockField;
-      });
-    };
-    // MakeTensorDescOp operands: base, shape[rank], strides[rank].
-    if (wouldOverflow(/*inner shape*/ 1 + (descRank - 1)) ||
-        wouldOverflow(/*pitch stride*/ 1 + descRank + (descRank - 2))) {
-      LDBG("Pitch/base_width exceeds HW 24-bit range for descriptor load: "
-           << *op);
-      return;
-    }
 
     // Surface width = inner dimension size * element bytes.
     // Surface height = second-to-last dimension size.
