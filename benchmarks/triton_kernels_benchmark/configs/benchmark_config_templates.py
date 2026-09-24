@@ -16,6 +16,7 @@ from triton_kernels_benchmark import (
     flash_attention_benchmark,
     flex_attention_benchmark_causal_mask,
     flex_attention_benchmark_custom_masks,
+    inductor_fused_add_native_layer_norm_transpose_348_benchmark,
     prefix_sums,
 )
 
@@ -230,6 +231,15 @@ CONFIGS = [
         categories={BenchmarkCategory.OPTIONAL, BenchmarkCategory.PREFIX_SUMS},
         description="Prefix Sums kernel benchmark",
         report_name="prefix_sums",
+    ),
+    BenchmarkConfig(
+        key="inductor-layer-norm-348",
+        get_benchmark=inductor_fused_add_native_layer_norm_transpose_348_benchmark.get_benchmark,
+        run_opts={},
+        categories={BenchmarkCategory.EXPERIMENTAL},
+        description=
+        "Benchmark for the extracted TorchInductor kernel triton_per_fused_add_native_layer_norm_transpose_348",
+        report_name="inductor-layer-norm-348",
     ),
     BenchmarkConfig(
         key="vllm-unified-attention",
