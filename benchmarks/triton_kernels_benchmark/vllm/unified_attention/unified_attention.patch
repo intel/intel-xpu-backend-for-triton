@@ -61,7 +61,7 @@ index dff0b21c64..2a12c31122 100644
      right = num_seqs
      while left < right:
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index b0231dd0c0..99df2284d8 100644
+index b0231dd0c0..2a73231cd2 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -7,8 +7,6 @@
@@ -287,7 +287,7 @@ index b0231dd0c0..99df2284d8 100644
          or num_seqs > seq_threshold_3D
          or is_batch_invariant
 +        # 2d kernel includes crucial optimizations for models with sliding window
-+        or 0 < sliding_window_val <= 1024
++        or 0 < sliding_window_val
      )
  
      # The kernel signature is the same for 2D and 3D — only the launch
