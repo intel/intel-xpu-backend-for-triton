@@ -598,6 +598,8 @@ class intel_knobs(base_knobs):
     # the pass is enabled on every OS again. See issue #7945.
     disable_annotate_cache_control: env_bool = env_bool("TRITON_INTEL_DISABLE_ANNOTATE_CACHE_CONTROL", False)
     enable_code_sinking: env_bool = env_bool("TRITON_INTEL_ENABLE_CODE_SINKING", False)
+    # Unset: the backend's per-arch default for ReduceVariableLiveness's in-loop sink.
+    in_loop_sink: env_opt_bool = env_opt_bool("TRITON_INTEL_IN_LOOP_SINK")
     disable_optimize_load_masks: env_bool = env_bool("TRITON_INTEL_DISABLE_OPTIMIZE_LOAD_MASKS", False)
     disable_canonicalize_pointers: env_bool = env_bool("TRITON_INTEL_DISABLE_CANONICALIZE_POINTERS", True)
     enable_loop_distribution: env_bool = env_bool("TRITON_INTEL_ENABLE_LOOP_DISTRIBUTION", False)

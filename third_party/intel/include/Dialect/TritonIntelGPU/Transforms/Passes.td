@@ -470,6 +470,9 @@ def TritonIntelGPUReduceVariableLiveness
   let options = [
     Option<"grfMode", "grf-mode", "std::string", /*default*/"\"default\"",
            "GRF mode ('default', 'auto', '128', '256' or '512')">,
+    Option<"disableInLoopSink", "disable-in-loop-sink", "bool",
+           /*default*/"false",
+           "Leave dot operand loads already inside a loop in place">,
   ];
 }
 

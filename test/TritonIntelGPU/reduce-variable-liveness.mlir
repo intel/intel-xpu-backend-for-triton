@@ -1,4 +1,5 @@
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness -cse | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness -cse | FileCheck %s --check-prefixes=CHECK,SINK
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness=disable-in-loop-sink=true -cse | FileCheck %s --check-prefixes=CHECK,NOSINK
 
 // CHECK: #[[$DPAS:.+]] = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 8], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 8], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
@@ -758,6 +759,51 @@ module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 32 : i32, "ttg.th
       scf.yield %8, %5 : tensor<256x256xf32, #dpas8>, i32
     }
     tt.descriptor_store %out[%c0_i32, %c0_i32], %4#0 : !tt.tensordesc<256x256xf32>, tensor<256x256xf32, #dpas8>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: Peak 1472 B/lane, above the 1024 B/lane budget, with both kinds of candidate:
+// COM: %late is loaded in the loop (the in-loop sink moves it down to its dot), %a
+// COM: before it (`moveOperand` prefetches it there and reloads it in the loop).
+// COM: disable-in-loop-sink must leave %late in place and change nothing else.
+#dpas9 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 1], repCluster = [1, 2], A = [8, 16], B = [16, 32], C = [8, 32]}>
+#dot0_9 = #ttg.dot_op<{opIdx = 0, parent = #dpas9, kWidth = 1}>
+#dot1_9 = #ttg.dot_op<{opIdx = 1, parent = #dpas9, kWidth = 2}>
+module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  tt.func @in_loop_and_loop_invariant_candidates(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
+    // CHECK-LABEL:   tt.func @in_loop_and_loop_invariant_candidates
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #dpas9>
+    %c64_i32 = arith.constant 64 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %c0_i64 = arith.constant 0 : i64
+    // CHECK:      %[[DESC_A:.*]] = tt.make_tensor_descriptor %arg0
+    // CHECK:      %[[DESC_B:.*]] = tt.make_tensor_descriptor %arg1
+    %desc_a = tt.make_tensor_descriptor %arg0, [%c0_i32, %c0_i32], [%c0_i64, %c0_i64] : <bf16>, <64x64xbf16>
+    %desc_b = tt.make_tensor_descriptor %arg1, [%c0_i32, %c0_i32], [%c0_i64, %c0_i64] : <bf16>, <64x64xbf16>
+    %desc_c = tt.make_tensor_descriptor %arg2, [%c0_i32, %c0_i32], [%c0_i64, %c0_i64] : <f32>, <64x64xf32>
+    // CHECK:      ttig.descriptor_prefetch %[[DESC_B]][%c0_i32, %c0_i32]
+    // CHECK-NOT:  tt.descriptor_load
+    // CHECK:      scf.for
+    // NOSINK-NEXT: tt.descriptor_load %[[DESC_A]]
+    // CHECK-NEXT: tt.descriptor_load %[[DESC_B]][%c0_i32, %{{.*}}]
+    // CHECK-NEXT: %[[SUNK:.*]] = tt.descriptor_load %[[DESC_B]][%c0_i32, %c0_i32]
+    // CHECK-NEXT: %[[CVT:.*]] = ttg.convert_layout %[[SUNK]]
+    // CHECK-NEXT: tt.dot %[[CVT]]
+    // SINK-NEXT:  tt.descriptor_load %[[DESC_A]]
+    // CHECK-NEXT: tt.dot %[[SUNK]]
+    %a = tt.descriptor_load %desc_b[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<64x64xbf16> -> tensor<64x64xbf16, #dot0_9>
+    %r:2 = scf.for %iv = %c0_i32 to %c64_i32 step %c64_i32 iter_args(%acc0 = %cst, %acc1 = %cst) -> (tensor<64x64xf32, #dpas9>, tensor<64x64xf32, #dpas9>) : i32 {
+      %late = tt.descriptor_load %desc_a[%iv, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<64x64xbf16> -> tensor<64x64xbf16, #dot1_9>
+      %b = tt.descriptor_load %desc_b[%c0_i32, %iv] {ttig.block_io = "column_major"} : !tt.tensordesc<64x64xbf16> -> tensor<64x64xbf16, #dot1_9>
+      %d0 = tt.dot %a, %b, %acc0, inputPrecision = tf32 : tensor<64x64xbf16, #dot0_9> * tensor<64x64xbf16, #dot1_9> -> tensor<64x64xf32, #dpas9>
+      %d1 = tt.dot %a, %late, %acc1, inputPrecision = tf32 : tensor<64x64xbf16, #dot0_9> * tensor<64x64xbf16, #dot1_9> -> tensor<64x64xf32, #dpas9>
+      scf.yield %d0, %d1 : tensor<64x64xf32, #dpas9>, tensor<64x64xf32, #dpas9>
+    }
+    tt.descriptor_store %desc_c[%c0_i32, %c0_i32], %r#0 : !tt.tensordesc<64x64xf32>, tensor<64x64xf32, #dpas9>
+    tt.descriptor_store %desc_c[%c64_i32, %c0_i32], %r#1 : !tt.tensordesc<64x64xf32>, tensor<64x64xf32, #dpas9>
     tt.return
   }
 }
