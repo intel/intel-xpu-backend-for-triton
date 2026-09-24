@@ -552,6 +552,11 @@ tests/kernels/moe/test_moe.py::test_moe_sum[slice-dtype1-1024-8-1]
 tests/kernels/moe/test_moe.py::test_moe_sum[slice-dtype1-1024-8-33]
 tests/kernels/moe/test_moe.py::test_moe_sum[slice-dtype1-1024-8-222]
 
+# NCCL/expert parallel load balancing unsupported: https://github.com/intel/intel-xpu-backend-for-triton/issues/8179
+tests/kernels/moe/test_moe_layer.py::test_moe_layer[False-allgather_reducescatter-1-2-False]
+tests/kernels/moe/test_moe_layer.py::test_moe_layer[False-allgather_reducescatter-2-1-True]
+tests/kernels/moe/test_moe_layer.py::test_moe_layer[True-allgather_reducescatter-2-1-True]
+
 # Skip some fused_moe tests due to excessive autotune overhead: https://github.com/intel/intel-xpu-backend-for-triton/issues/7812
 tests/kernels/moe/test_block_fp8.py::test_w8a8_block_fp8_fused_moe
 tests/kernels/moe/test_block_fp8.py::test_w8a8_block_fp8_deep_gemm_fused_moe
