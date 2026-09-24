@@ -55,6 +55,7 @@ TEST:
     --sglang-kda
     --sglang-spec
     --install-sglang
+    --install-sgl-kernel-xpu
     --liger
     --install-liger
 
@@ -118,6 +119,7 @@ TEST_SGLANG_GDN=false
 TEST_SGLANG_KDA=false
 TEST_SGLANG_SPEC=false
 INSTALL_SGLANG=false
+INSTALL_SGL_KERNEL_XPU=false
 TEST_LIGER=false
 INSTALL_LIGER=false
 TEST_VLLM=false
@@ -326,6 +328,11 @@ while (( $# != 0 )); do
       ;;
     --install-sglang)
       INSTALL_SGLANG=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --install-sgl-kernel-xpu)
+      INSTALL_SGL_KERNEL_XPU=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -942,6 +949,14 @@ run_sglang_install() {
   "$SCRIPTS_DIR/sglang/install-sglang.sh"
 }
 
+run_sgl_kernel_xpu_install() {
+  echo "************************************************"
+  echo "******    Installing sgl-kernel-xpu       ******"
+  echo "************************************************"
+
+  "$SCRIPTS_DIR/sglang/install-sgl-kernel-xpu.sh"
+}
+
 enter_sglang_test_env() {
   run_sglang_install
   run_test_deps_install
@@ -973,11 +988,15 @@ run_sglang_attention_tests() {
 
   enter_sglang_test_env
   # KV index build, decode/extend/prefill attention.
+  # unittests/dense/test_triton.py drives the same kernels through RadixAttention
+  # against HF-style torch references, and is the only thing here that covers
+  # get_num_kv_splits_triton. sglang-test-fix.patch makes it device-agnostic.
   # test_fp4_indexer.py is left out: it imports sgl_kernel, which is not installed.
   TRITON_TEST_SUITE=sglang_attention \
     run_pytest_command -vvv \
       test/registered/attention/test_create_kvindices.py \
-      test/registered/attention/test_triton_attention_kernels.py
+      test/registered/attention/test_triton_attention_kernels.py \
+      test/registered/attention/unittests/dense/test_triton.py
 }
 
 run_sglang_quant_tests() {
@@ -1487,6 +1506,9 @@ test_triton() {
   fi
   if [ "$TEST_INDUCTOR" == true ]; then
     run_inductor_tests
+  fi
+  if [ "$INSTALL_SGL_KERNEL_XPU" == true ]; then
+    run_sgl_kernel_xpu_install
   fi
   if [ "$INSTALL_SGLANG" == true ]; then
     run_sglang_install

@@ -149,7 +149,7 @@ index 8e5d6d048c..79df66b8e0 100644
      from sgl_kernel import gelu_and_mul, gelu_quick, gelu_tanh_and_mul, silu_and_mul
  elif _is_musa:
 diff --git a/python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe.py b/python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe.py
-index 758c2eacf6..8bb83ed3c5 100644
+index 758c2eacf6..b02fe7708b 100644
 --- a/python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe.py
 +++ b/python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe.py
 @@ -73,7 +73,12 @@ elif _is_hip:
@@ -165,6 +165,66 @@ index 758c2eacf6..8bb83ed3c5 100644
 +        _is_xpu = False
  elif _is_musa:
      from sgl_kernel import moe_sum_reduce
+ 
+@@ -95,6 +100,39 @@ padding_size = get_moe_padding_size(_use_aiter)
+ logger = logging.getLogger(__name__)
+ 
+ 
++def _sgl_fused_experts_supports(
++    hidden_states: torch.Tensor,
++    w1: torch.Tensor,
++    w2: torch.Tensor,
++    *,
++    quantized: bool,
++) -> bool:
++    """Whether sgl-kernel-xpu's grouped GEMM can take these operands.
++
++    The unquantized XPU route ends in ``moe_grouped_mm_nt_xe20``, which is built
++    for bfloat16 only -- its kernels live under ``kernels/moe/xe20/bf16`` and the
++    launcher template carries no element type -- and which reads A and B through
++    2D block loads whose pitch is the row length in bytes, so the hardware wants
++    that 16-byte aligned. The kernel checks neither: another dtype aborts from
++    the middle of the model, and an unaligned row silently returns wrong numbers.
++    The rule is known on the sgl-kernel side -- its own ``silu_and_mul`` wrapper
++    rejects a row that is not a multiple of 16 bytes -- just not applied here.
++
++    So keep operands it cannot handle on the Triton path below, which has no such
++    restriction. The quantized routes go to different operators
++    (``moe_grouped_mm_nt_xe20_fp8_w8a16``, ``_w4a16``) whose envelope this has not
++    characterized, so they are left exactly as they were.
++    """
++    if quantized:
++        return True
++    for tensor in (hidden_states, w1, w2):
++        if tensor.dtype != torch.bfloat16:
++            return False
++        if (tensor.shape[-1] * tensor.element_size()) % 16 != 0:
++            return False
++    return True
++
++
+ def _validate_fused_swiglu_interleaved(
+     *,
+     activation: str,
+@@ -1131,7 +1169,18 @@ def fused_moe(
+     Returns:
+     - torch.Tensor: The output tensor after applying the MoE layer.
+     """
+-    if _is_xpu and not get_moe_runner_backend().is_triton():
++    if (
++        _is_xpu
++        and not get_moe_runner_backend().is_triton()
++        and _sgl_fused_experts_supports(
++            hidden_states,
++            w1,
++            w2,
++            quantized=(
++                use_fp8_w8a8 or use_int8_w8a8 or use_int8_w8a16 or use_int4_w4a16
++            ),
++        )
++    ):
+         topk_weight, topk_ids, _ = topk_output
+         from sgl_kernel import fused_experts as sgl_fused_experts
  
 diff --git a/python/sglang/srt/layers/moe/moe_runner/triton_utils/moe_align_block_size.py b/python/sglang/srt/layers/moe/moe_runner/triton_utils/moe_align_block_size.py
 index 9c611a4682..f2dbdb928f 100644
@@ -939,3 +999,167 @@ index ead49963c0..8ad4092226 100644
  
  
  def chunk_gated_delta_rule_fwd_intra(
+diff --git a/python/sglang/test/kits/attention_unittest/attention_methods/dense_attention.py b/python/sglang/test/kits/attention_unittest/attention_methods/dense_attention.py
+index b352cd7c29..382b758886 100644
+--- a/python/sglang/test/kits/attention_unittest/attention_methods/dense_attention.py
++++ b/python/sglang/test/kits/attention_unittest/attention_methods/dense_attention.py
+@@ -22,6 +22,7 @@ from sglang.srt.model_executor.graph_shared_output import GraphSharedOutput
+ from sglang.srt.model_executor.model_runner import ModelRunner
+ from sglang.srt.runtime_context import get_context, get_parallel
+ from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
++from sglang.srt.utils import get_device, get_device_module
+ 
+ # Unit tests run without distributed initialization. Backends that size buffers by
+ # attention tensor-parallel degree should see the single-rank default.
+@@ -32,7 +33,7 @@ DEFAULT_HEAD_DIM = 16
+ DEFAULT_HIDDEN_SIZE = 64
+ DEFAULT_MAX_CONTEXT_LEN = 64
+ DEFAULT_DTYPE = torch.float16
+-DEFAULT_DEVICE = "cuda"
++DEFAULT_DEVICE = get_device()
+ DENSE_ATOL = 3e-2
+ DENSE_RTOL = 3e-2
+ 
+@@ -979,7 +980,7 @@ def build_dense_attention_fixture(
+ ) -> DenseAttentionFixture:
+     seed = 2026 + len(case.name) + case.num_kv_heads
+     torch.manual_seed(seed)
+-    torch.cuda.manual_seed_all(seed)
++    get_device_module().manual_seed_all(seed)
+ 
+     model_config = TinyModelConfig(
+         num_heads=case.num_heads,
+diff --git a/python/sglang/test/kits/attention_unittest/runner_modes/speculative_draft_runner.py b/python/sglang/test/kits/attention_unittest/runner_modes/speculative_draft_runner.py
+index cbebd85c09..9aa2a04860 100644
+--- a/python/sglang/test/kits/attention_unittest/runner_modes/speculative_draft_runner.py
++++ b/python/sglang/test/kits/attention_unittest/runner_modes/speculative_draft_runner.py
+@@ -32,6 +32,7 @@ from sglang.srt.speculative.frozen_kv_mtp_info import (
+ )
+ from sglang.srt.speculative.frozen_kv_mtp_worker_v2 import FrozenKVMTPDraftWorker
+ from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
++from sglang.srt.utils import get_device_module
+ 
+ from ..attention_methods.dense_attention import (
+     DEFAULT_DEVICE,
+@@ -266,22 +267,25 @@ def _seeded_rng(seed: int, *, device: str | torch.device):
+     input builders below need deterministic randomness per case but must not
+     leak that seed into the rest of the test process (build_*_fixture relies
+     on its own seeding for parameter init)."""
++    device_module = get_device_module()
+     cpu_state = torch.random.get_rng_state()
+-    cuda_state = torch.cuda.get_rng_state(device=device)
++    device_state = device_module.get_rng_state(device=device)
+     try:
+         torch.manual_seed(seed)
+-        torch.cuda.manual_seed_all(seed)
++        device_module.manual_seed_all(seed)
+         yield
+     finally:
+         torch.random.set_rng_state(cpu_state)
+-        torch.cuda.set_rng_state(cuda_state, device=device)
++        device_module.set_rng_state(device_state, device=device)
+ 
+ 
+ @contextmanager
+ def _single_rank_graph_capture(stream=None):
+     # Mirrors `graph_capture(stream=None)`: capture runs on the caller's stream
+     # when it leases one, so the shim stays valid for both call shapes.
+-    yield SimpleNamespace(stream=stream if stream is not None else torch.cuda.Stream())
++    yield SimpleNamespace(
++        stream=stream if stream is not None else get_device_module().Stream()
++    )
+ 
+ 
+ def _reset_cuda_graph_test_buffers() -> None:
+diff --git a/test/registered/attention/unittests/dense/test_triton.py b/test/registered/attention/unittests/dense/test_triton.py
+index 5cb86c296e..7933988446 100644
+--- a/test/registered/attention/unittests/dense/test_triton.py
++++ b/test/registered/attention/unittests/dense/test_triton.py
+@@ -3,8 +3,12 @@ import unittest
+ import torch
+ 
+ from sglang.srt.model_executor.forward_batch_info import ForwardMode
+-from sglang.srt.utils import is_hip
+-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
++from sglang.srt.utils import get_device_module, is_hip
++from sglang.test.ci.ci_register import (
++    register_amd_ci,
++    register_cuda_ci,
++    register_xpu_ci,
++)
+ from sglang.test.kits.attention_unittest.attention_methods.dense_attention import (
+     DenseAttentionCase,
+     make_dense_cases,
+@@ -33,9 +37,10 @@ from sglang.test.test_utils import CustomTestCase
+ register_cuda_ci(est_time=25, stage="base-b", runner_config="4-gpu-b200")
+ register_cuda_ci(est_time=25, stage="base-b", runner_config="1-gpu-large")
+ register_amd_ci(est_time=25, suite="stage-b-test-1-gpu-large-amd")
++register_xpu_ci(est_time=25, suite="stage-b-test-1-gpu-xpu")
+ 
+ 
+-@unittest.skipIf(not torch.cuda.is_available(), "CUDA is required")
++@unittest.skipIf(not get_device_module().is_available(), "an accelerator is required")
+ class TestTritonDenseAttentionBackendCorrectness(CustomTestCase):
+     CASES = make_dense_cases("triton")
+     CUDA_GRAPH_CASES = (
+diff --git a/python/sglang/srt/layers/attention/dual_chunk_flashattention_backend.py b/python/sglang/srt/layers/attention/dual_chunk_flashattention_backend.py
+index 83c22746ea..f72956bbf3 100644
+--- a/python/sglang/srt/layers/attention/dual_chunk_flashattention_backend.py
++++ b/python/sglang/srt/layers/attention/dual_chunk_flashattention_backend.py
+@@ -9,11 +9,28 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+ 
+ import torch
+ import torch.nn.functional as F
+-from sgl_kernel.sparse_flash_attn import (
+-    convert_vertical_slash_indexes,
+-    convert_vertical_slash_indexes_mergehead,
+-    sparse_attn_func,
+-)
++try:
++    from sgl_kernel.sparse_flash_attn import (
++        convert_vertical_slash_indexes,
++        convert_vertical_slash_indexes_mergehead,
++        sparse_attn_func,
++    )
++except ImportError:
++    # sgl-kernel-xpu is optional (and has no PVC build at all), but importing this
++    # module must not fail: the attention unittest kit reaches it through
++    # attention_methods/dual_chunk_attention.py, so an unguarded import here also
++    # takes out the dense Triton attention tests, which never touch dual chunk
++    # attention. These three are only called from the sparse path below, so defer
++    # the failure to whoever actually asks for it.
++    def _sgl_kernel_sparse_flash_attn_required(*args, **kwargs):
++        raise ImportError(
++            "dual chunk sparse attention requires sgl-kernel-xpu, which is not "
++            "installed"
++        )
++
++    convert_vertical_slash_indexes = _sgl_kernel_sparse_flash_attn_required
++    convert_vertical_slash_indexes_mergehead = _sgl_kernel_sparse_flash_attn_required
++    sparse_attn_func = _sgl_kernel_sparse_flash_attn_required
+ 
+ from sglang.kernels.ops.attention.flash_attention import (
+     flash_attn_varlen_func,
+diff --git a/python/sglang/srt/layers/attention/flashattention_backend.py b/python/sglang/srt/layers/attention/flashattention_backend.py
+index 2c81c59373..12fdc291e6 100644
+--- a/python/sglang/srt/layers/attention/flashattention_backend.py
++++ b/python/sglang/srt/layers/attention/flashattention_backend.py
+@@ -47,7 +47,17 @@ if TYPE_CHECKING:
+     from sglang.srt.layers.radix_attention import RadixAttention
+     from sglang.srt.model_executor.model_runner import ModelRunner
+ 
+-from sgl_kernel import merge_state_v2
++try:
++    from sgl_kernel import merge_state_v2
++except ImportError:
++    # sgl-kernel-xpu is optional (and has no PVC build), but this module must stay
++    # importable: the attention unittest kit reaches it through the dual chunk
++    # backend, so an unguarded import here also takes out the dense Triton
++    # attention tests. merge_state_v2 is only called from the paths below.
++    def merge_state_v2(*args, **kwargs):
++        raise ImportError(
++            "merge_state_v2 requires sgl-kernel-xpu, which is not installed"
++        )
+ 
+ from sglang.kernels.ops.attention.flash_attention import (
+     flash_attn_varlen_func,

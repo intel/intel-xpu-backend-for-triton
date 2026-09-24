@@ -10,6 +10,10 @@ Install SGLang and run its Triton kernel tests on Intel XPU.
   Triton survive, installs SGLang editable into `$TRITON_PROJ/sglang`.
 - `sglang-pin.txt` - upstream commit.
 - `sglang-test-fix.patch` - XPU fixes on top of the pin.
+- `install-sgl-kernel-xpu.sh` - builds `sgl-kernel-xpu` at
+  `sgl-kernel-xpu-pin.txt` and installs the wheel, providing the `sgl_kernel`
+  module. **BMG/Xe2 only**; see `sgl_kernel` below.
+- `sgl-kernel-xpu-pin.txt` - upstream `sgl-project/sgl-kernel-xpu` commit.
 
 `import sglang` needs torchvision, which `install-sglang.sh` does not install.
 CI builds it from `pytorch/.github/ci_commit_pins/vision.txt`.
@@ -21,7 +25,7 @@ One flag per kernel family, each with its own `TRITON_TEST_SUITE` and skip list
 
 | Flag | Test files, relative to `sglang/test/` |
 |---|---|
-| `--sglang-attention` | `registered/attention/test_create_kvindices.py`, `registered/attention/test_triton_attention_kernels.py` |
+| `--sglang-attention` | `registered/attention/test_create_kvindices.py`, `registered/attention/test_triton_attention_kernels.py`, `registered/attention/unittests/dense/test_triton.py` |
 | `--sglang-quant` | `registered/quant/test_fp8_kernel.py`, `test_triton_scaled_mm.py`, `test_awq_dequant.py` |
 | `--sglang-moe` | `registered/lora/test_fused_moe_lora_kernel.py` |
 | `--sglang-mamba` | `registered/layers/mamba/test_causal_conv1d.py`, `test_mamba_ssm.py`, `test_mamba_ssm_ssd.py` |
@@ -49,7 +53,22 @@ kernels to `kernels/ops/` (RFC #29630), so recheck them after a pin bump.
 | `decode_attention_fwd`, `_normal`, `_grouped` | `kernels/ops/attention/decode_attention.py` |
 | `extend_attention_fwd`, `_unified`, `build_unified_kv_indices` | `kernels/ops/attention/extend_attention.py` |
 | `context_attention_fwd` | `kernels/ops/attention/prefill_attention.py` |
-| `create_flashinfer_kv_indices_triton` | `kernels/ops/attention/utils.py` |
+| `create_flashinfer_kv_indices_triton` | `kernels/ops/kvcache/kv_indices.py`, re-exported from `kernels/ops/attention/utils.py` |
+| `get_num_kv_splits_triton` | `kernels/ops/attention/metadata.py` |
+
+`unittests/dense/test_triton.py` is the second source of coverage for those
+kernels and the only one that reaches `get_num_kv_splits_triton`. Instead of
+calling the kernels directly it drives `RadixAttention` through the real
+`TritonAttnBackend` and compares against HF-style torch reference modules, so it
+also covers the metadata builders, page sizes 1/16/32, CUDA-graph decode,
+split-op extend and spec-verify. Measured launches for one run: `_fwd_kernel` 55,
+`_fwd_kernel_stage2` 41, `_fwd_kernel_stage1` 34, `create_flashinfer_kv_indices_triton` 70,
+`get_num_kv_splits_triton` 22, `_fwd_grouped_kernel_stage1` 7.
+
+Upstream gates it on `torch.cuda.is_available()` and registers it for CUDA and
+ROCm only; `sglang-test-fix.patch` makes the gate, the RNG seeding and the
+capture stream device-agnostic via `get_device_module()` and adds
+`register_xpu_ci`. Those hunks are written to be upstreamable as-is.
 
 `--sglang-quant`:
 
@@ -117,7 +136,7 @@ Local run at the current pin, one suite at a time. The skip lists come from it.
 
 | Suite | Result | Time |
 |---|---|---|
-| `--sglang-attention` | 8 passed, 2 skipped (1 upstream, 1 skip-listed) | 26s |
+| `--sglang-attention` | 18 passed, 2 skipped (1 upstream, 1 skip-listed) | 116s |
 | `--sglang-quant` | 5 passed | 43s |
 | `--sglang-moe` | 108 skipped, all skip-listed | 4s |
 | `--sglang-mamba` | 932 passed, 16 skipped upstream | 15s |
@@ -129,12 +148,40 @@ Nothing failed because of Triton codegen.
 
 ## Known gaps
 
-- **sgl-kernel.** Five files from #7655 cannot be imported without it, so they
-  are in no suite: `test_fp4_indexer.py` (imports `sgl_kernel` directly) plus
-  `test_int8_kernel.py`, `test_block_int8.py`, `test_fused_moe.py` and
-  `test/manual/test_triton_moe_wna16.py` (all import
-  `srt/layers/activation.py`, whose XPU branch needs it). Wire them in once
-  sgl-kernel-xpu is installable in CI.
+- **`sgl_kernel`** (#8013), provided by `install-sgl-kernel-xpu.sh` on BMG only.
+  Without it SGLang's `ModelRegistry` catches the `ImportError` and drops 208 of
+  219 architectures, leaving 11 encoder/embedding models, so the e2e suite cannot
+  load one: Qwen2 falls back to `TransformersForCausalLM`, which is dropped too.
+  Three unguarded imports account for all of it, measured at pin `771e613d96`
+  with the `activation.py` guard applied - `srt/layers/layernorm.py:102` (156
+  models), `srt/layers/rotary_embedding/base.py:75` (161 once layernorm is
+  fixed), `srt/layers/attention/vision.py:76` (41).
+
+  `install-sglang.sh` strips the `sgl-kernel @ git+...` requirement together with
+  the `torch==2.13.0+xpu` pin next to it: resolving it through pip builds in an
+  isolated environment without our torch, and pulls that pin over it. The
+  out-of-band build avoids both (`--no-isolation`, and `dependencies = []`
+  upstream, so nothing can replace torch or Triton).
+
+  **No PVC.** `DPCPP_SYCL_TARGET` has no PVC value, and the kernel sources are
+  architecture-gated in 79 places with no Xe-HPC branch, so there is nothing to
+  target. vllm-xpu-kernels serves `max1100` and `b580` from one wheel
+  (`SYCL_SUPPORTED_ARCHS` includes `intel_gpu_pvc`); this cannot.
+  Upstream ships no artifact either: not on PyPI (PyPI `sgl-kernel` is the
+  unrelated CUDA package, the XPU distribution is `sglang-kernel-xpu`) and the
+  `v0.2.0` / `v0.1.0+xpu` releases have no assets.
+
+  A `bmg` wheel does load on PVC, and the light ops fall back to SPIR-V JIT
+  correctly (on Max 1550: `rmsnorm` bit-exact, `silu_and_mul` 1.2e-03 in fp16,
+  `hadamard_transform` runs). The CUTLASS-SYCL kernels do not: one
+  `flash_attn_varlen_func` call ran 19m44s in the JIT without finishing. So
+  installing it there would trade a loud `ImportError` for a hang.
+
+  The build is slow - 871 ninja targets, 61m41s wall and 34 CPU-hours at `-j32`,
+  7.5 GB of output, 83 `libsgl-ops-sycl-*.so`, dominated by the AOT CUTLASS-SYCL
+  FMHA/MLA instantiations. `USE_SYCL_JIT=ON` is upstream's lever for that; it
+  moves the cost to the first call per configuration and needs `icpx` at test
+  time, which the CI shell already provides via `setvars.sh`.
 - **Block pointers.** All 29 GDN tests and most of KDA fail to compile: SGLang's
   fla kernels still call `tl.make_block_ptr`, removed from this Triton
   ([#7781](https://github.com/intel/intel-xpu-backend-for-triton/issues/7781)).
@@ -143,6 +190,22 @@ Nothing failed because of Triton codegen.
 - **CUDA-only tests.** `test_fused_moe_lora_kernel.py` is parametrized with
   `device="cuda:0"` and `test_dspark_kernel_parity.py` calls `torch.cuda`; both
   are skip-listed. Two of three `test_kda_kernels.py` classes skip themselves.
+- **Two kernels still uncovered.** `compute_position_kernel`
+  (`kernels/ops/attention/position.py`) and `write_req_to_token_pool_triton`
+  (`kernels/ops/memory/common.py`) run on every XPU extend forward and no SGLang
+  test touches them. `unittests/dense/` does not help: it builds `ForwardBatch`
+  directly and passes `positions=` in by hand, bypassing `ForwardBatch.init_new`
+  where `compute_position` is called. Both need a new test, upstream.
+- **Other `unittests/` families are still CUDA-gated.** Only `dense/test_triton.py`
+  is enabled here. 29 more files under `registered/attention/unittests/` carry the
+  same `torch.cuda.is_available()` gate, including the other Triton-backend rows
+  `mla/test_triton.py`, `swa/test_triton.py`, `lightning/test_triton.py`,
+  `kda/test_triton.py` and `gdn/test_triton.py`. Eight kits besides
+  `speculative_draft_runner.py` also repeat the `torch.cuda` RNG pattern
+  (`mla_attention.py`, `gdn_attention.py`, `kda_attention.py`, `mamba2_attention.py`,
+  `lightning_attention.py`, `dsa_attention.py`, `dsv4_attention.py`,
+  `dual_chunk_attention.py`). Enable one family at a time; `gdn/` and `kda/` stay
+  blocked on `tl.make_block_ptr` regardless (see below).
 - **Sliding window OOM.** `test_extend_attention_sliding_window` runs the kernel
   fine, but its torch reference needs more than 48 GB. Unskip when it is chunked.
 - **BMG.** `scripts/skiplist/xe2/` is a copy of `default/`; nothing measured on
@@ -156,10 +219,10 @@ Nothing failed because of Triton codegen.
 | Workflow | Trigger |
 |---|---|
 | `sglang-tests-reusable.yml` | `workflow_call`, builds the wheel once, then runs the suite matrix |
-| `sglang-tests.yml` | `workflow_dispatch` with runner, pin and skip list overrides |
+| `sglang-tests.yml` | `workflow_dispatch` with runner, pin, skip list and `install_sgl_kernel_xpu` overrides |
 | `sglang-tests-pvc.yml` | Thursday/Sunday, `max1100` |
-| `sglang-tests-bmg.yml` | Thursday/Sunday, `b60`, `skip_list: xe2` |
-| `on-label.yml` | label `run-sglang-tests`, both PVC and BMG |
+| `sglang-tests-bmg.yml` | Thursday/Sunday, `b60`, `skip_list: xe2`, `install_sgl_kernel_xpu: true` |
+| `on-label.yml` | label `run-sglang-tests`, both PVC and BMG (BMG leg sets `install_sgl_kernel_xpu`) |
 
 Matrix entries, one report artifact each, aggregated by the `reports` job:
 
@@ -175,11 +238,18 @@ The short suites share `sglang-rest`, like `vllm-rest`. Each entry installs
 SGLang itself, because `run_sglang_tests` calls `install-sglang.sh` - there is no
 install step in the workflow as there is for vLLM.
 
+`install_sgl_kernel_xpu` adds one `--install-sgl-kernel-xpu` step before the
+suites and is only set for BMG. It is idempotent across matrix entries, but the
+pip cache key is per suite, so the first entry on a fresh runner pays the build.
+
 ## Usage
 
 ```bash
 # needs torch and triton installed already
 bash scripts/sglang/install-sglang.sh
+
+# optional, BMG only: provides `sgl_kernel`. Needs oneAPI.
+bash scripts/sglang/install-sgl-kernel-xpu.sh
 
 bash scripts/test-triton.sh --sglang --skip-pip-install --skip-pytorch-install
 bash scripts/test-triton.sh --sglang-attention --skip-pip-install --skip-pytorch-install
@@ -195,4 +265,7 @@ bash scripts/test-triton.sh --sglang-spec --skip-pip-install --skip-pytorch-inst
 
 - Issue [#7655](https://github.com/intel/intel-xpu-backend-for-triton/issues/7655)
   - the agreed kernel and test list
+- Issue [#8013](https://github.com/intel/intel-xpu-backend-for-triton/issues/8013)
+  - the `sgl_kernel` gap
 - SGLang RFC #29630 - the `sglang.kernels` namespace
+- `sgl-project/sgl-kernel-xpu` - the SYCL kernel library, built from source
