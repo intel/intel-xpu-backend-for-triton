@@ -8,7 +8,7 @@ on:
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
-    runs-on: [cpu, "name:triton-idc-3", runner-0.0.22]
+    runs-on: ${{ matrix.runner }}
     permissions:
       # required for all workflows
       security-events: write
@@ -26,10 +26,13 @@ jobs:
         include:
         - language: actions
           build-mode: none
+          runner: rss-ubuntu-2404
         - language: c-cpp
           build-mode: manual
+          runner: [cpu, "name:triton-idc-3", runner-0.0.22]
         - language: python
           build-mode: none
+          runner: rss-ubuntu-2404
         # CodeQL supports the following values keywords for 'language': 'actions', 'c-cpp', 'csharp', 'go', 'java-kotlin', 'javascript-typescript', 'python', 'ruby', 'rust', 'swift'
 
     steps:
