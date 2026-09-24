@@ -161,29 +161,36 @@ public:
     Smallest,
     /// Assume the largest GRF size the backend's automatic escalation will
     /// ever select for this target ("automatic" is load-bearing -- see
-    /// below).
+    /// below) -- but this per-target ceiling only applies to
+    /// `grf_mode='default'`; `'auto'` always gets the unconditional
+    /// 512-register-mode bound described further down, for reasons covered
+    /// there.
     ///
-    /// The true ceiling is per-target: the backend's automatic escalation
-    /// paths only ever select 512-register mode on "cri"; every other target
-    /// (including BMG and PVC) caps at 256-register mode (see
-    /// third_party/intel/backend/compiler.py's `get_max_grf_mode()`, the
-    /// single source of truth for this policy). That value is mirrored onto
-    /// the module as the `ttig.max_grf_mode` attribute (stamped by
-    /// TritonAnnotateModule) and `getGRFBytesPerHardwareThread` reads it back
-    /// when resolving this case. BMG and PVC *do* support 512-register mode
-    /// (an explicit `grf_mode='512'` works on both) -- they just never
-    /// auto-select it, which is the only thing this assumption describes.
+    /// `grf_mode='default'`'s ceiling is per-target: its AOT/JIT retry
+    /// (`make_zebin`/`driver.c`) only ever selects 512-register mode on
+    /// "cri"; every other target (including BMG and PVC) caps at
+    /// 256-register mode (see third_party/intel/backend/compiler.py's
+    /// `get_max_grf_mode()`, the single source of truth for this policy).
+    /// That value is mirrored onto the module as the `ttig.max_grf_mode`
+    /// attribute (stamped by TritonAnnotateModule) and
+    /// `getGRFBytesPerHardwareThread` reads it back when resolving this case
+    /// for `'default'`. BMG and PVC *do* support 512-register mode (an
+    /// explicit `grf_mode='512'` works on both) -- they just never
+    /// auto-select it, which is the only thing this per-target ceiling
+    /// describes. `getGRFBytesPerHardwareThread` additionally caps this at
+    /// `Smallest` once `num_warps > 32`: a larger GRF mode halves the
+    /// maximum launchable work-group size, so the AOT path skips the retry
+    /// outright above that bound and the JIT path attempts it and fails to
+    /// build -- either way `ttig.max_grf_mode` never actually takes effect
+    /// there.
     ///
-    /// "Automatic" covers two distinct backend paths with two distinct
-    /// caveats: `grf_mode='default'`'s AOT/JIT retry (`make_zebin`/
-    /// `driver.c`), which `getGRFBytesPerHardwareThread` additionally caps at
-    /// `Smallest` once `num_warps > 32` (that retry is skipped outright
-    /// above that bound, so `ttig.max_grf_mode` is unreachable there); and
-    /// `grf_mode='auto'`, whose escalation happens inside IGC rather than
-    /// through either backend retry path, and is not itself gated on
-    /// `num_warps` at the backend level. Reusing the same per-target ceiling
-    /// for `'auto'` is believed correct but is not itself validated by either
-    /// backend path `get_max_grf_mode`'s policy is documented against.
+    /// `grf_mode='auto'`'s escalation happens inside IGC, which decides on
+    /// its own with no backend path that reads back or constrains its
+    /// choice. `ttig.max_grf_mode` is only ever realized by `'default'`'s
+    /// own rebuild, so it has no established relationship to what IGC
+    /// actually picks under `'auto'` and is not applied there; `'auto'`
+    /// always resolves to the unconditional 512-register-mode bound below,
+    /// same as an absent attribute.
     ///
     /// If the attribute is absent (e.g. a hand-written test module that never
     /// went through the Python compiler pipeline), the behaviour-preserving

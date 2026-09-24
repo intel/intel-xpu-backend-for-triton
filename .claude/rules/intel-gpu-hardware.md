@@ -84,14 +84,16 @@ At `threads-per-warp = 16` that is 256 B/lane for `'128'`, 512 for `'256'`, and
 1024 for `'512'`. For `'default'`/`'auto'` the true GRF size isn't known at
 this point in the pipeline, and this gate treats the budget as a threshold to
 sink rather than a ceiling, so the safe assumption under uncertainty is the
-*largest* mode **this target's automatic (`default`/`auto`) escalation
-reaches**, read from the `ttig.max_grf_mode` module attribute, not the
-largest any device supports and not the largest mode the target can be
-explicitly told to use (BMG and PVC both accept an explicit `grf_mode='512'`;
-256 is only where their own automatic path stops). That budget is 512 B/lane
-on every non-`cri` target (BMG, PVC, ...) and 1024 B/lane on `cri`. If the
-attribute is absent entirely (e.g. hand-written TTGIR that never went through
-`TritonAnnotateModule`), the fallback is 1024 B/lane. See `RegisterPressureAnalysis`'s
+*largest* mode this target's escalation reaches. That only means something
+target-specific for `'default'`, whose own AOT/JIT retry is the one path
+that actually realizes the `ttig.max_grf_mode` module attribute (512 B/lane
+on every non-`cri` target, 1024 B/lane on `cri`, or 1024 B/lane if the
+attribute is absent entirely, e.g. hand-written TTGIR that never went
+through `TritonAnnotateModule`). `'auto'`'s escalation happens inside IGC
+with no backend path that reads back or constrains it, so `ttig.max_grf_mode`
+has no established relationship to what IGC picks under `'auto'` and is not
+applied there -- `'auto'` always resolves to the unconditional 1024 B/lane
+bound, same as an absent attribute, regardless of target. See `RegisterPressureAnalysis`'s
 `UnknownGRFSizeAssumption` for the
 full rationale, including why `HoistLayoutConversions` correctly assumes the
 opposite (`Smallest`) for the same unknown modes. There is no fixed

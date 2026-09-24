@@ -112,4 +112,25 @@ TEST_F(RegisterPressureGRFModeTest, NumWarpsAtBoundaryIsUnaffected) {
   EXPECT_EQ(largestBytes(*module, "default"), 16384u);
 }
 
+TEST_F(RegisterPressureGRFModeTest, AutoModeIgnoresMaxGRFMode) {
+  // ttig.max_grf_mode is only ever realized by 'default''s own rebuild; IGC
+  // decides 'auto' escalation on its own with nothing in this backend that
+  // reads back or constrains it, so the attribute must not apply to 'auto'.
+  // A target whose max_grf_mode is "256" (non-"cri") would previously have
+  // collapsed 'auto' to the same 8192-byte budget as 'default'; it must now
+  // stay at the unconditional 16384-byte bound instead.
+  auto module = createModule(StringRef("256"));
+  EXPECT_EQ(largestBytes(*module, "auto"), 16384u);
+}
+
+TEST_F(RegisterPressureGRFModeTest, UnrecognizedGRFModeAsserts) {
+  // A typo'd or otherwise-unrecognized grf-mode string (neither an explicit
+  // mode, "default", nor "auto") is an internal-invariant violation, not
+  // input this function is expected to recover from: every caller is
+  // supposed to have already narrowed grfMode to one of those five values.
+  auto module = createModule(/*maxGRFMode=*/std::nullopt);
+  EXPECT_DEATH(largestBytes(*module, "not-a-real-mode"),
+               "grfMode must be an explicit mode");
+}
+
 } // namespace

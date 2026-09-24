@@ -1,7 +1,7 @@
 // RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness -cse | FileCheck %s --check-prefixes=CHECK,KEEP2,KEEP3,KEEP4,SINK5
 // RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness=grf-mode=128 -cse | FileCheck %s --check-prefixes=CHECK,SINK2,SINK3,SINK4,SINK5
 // RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness=grf-mode=256 -cse | FileCheck %s --check-prefixes=CHECK,SINK2,KEEP3,KEEP4,SINK5
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness=grf-mode=auto -cse | FileCheck %s --check-prefixes=CHECK,KEEP2,KEEP3,KEEP4,SINK5
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness=grf-mode=auto -cse | FileCheck %s --check-prefixes=CHECK,KEEP2,KEEP3,KEEP4,KEEP5
 // RUN: triton-opt %s -split-input-file -tritonintelgpu-reduce-variable-liveness=grf-mode=512 -cse | FileCheck %s --check-prefixes=CHECK,KEEP2,KEEP3,KEEP4,KEEP5
 
 // COM: A loop-invariant 2D load is sunk into the loop when the loop body's *peak*
@@ -14,9 +14,13 @@
 // COM:   128    -> 4096 B/thread / 16 = 256 B/lane
 // COM:   256    -> 8192 B/thread / 16 = 512 B/lane
 // COM:   512    -> 16384 B/thread / 16 = 1024 B/lane
-// COM:   default / auto -> reads `ttig.max_grf_mode` if the module has it (module 5
+// COM:   default -> reads `ttig.max_grf_mode` if the module has it (module 5
 // COM:     below), otherwise falls back to 16384 B/thread / 16 = 1024 B/lane
 // COM:     (modules 1-4, which have no such attribute)
+// COM:   auto -> always 16384 B/thread / 16 = 1024 B/lane, regardless of
+// COM:     `ttig.max_grf_mode`: IGC decides 'auto' escalation on its own with
+// COM:     nothing in this backend that reads back or constrains it, so the
+// COM:     attribute (realized only by 'default''s own rebuild) does not apply
 // COM:
 // COM: The true GRF size isn't known at this point in the pipeline, and this gate
 // COM: treats the budget as a threshold to sink rather than a ceiling on what may
@@ -30,9 +34,10 @@
 // COM: UnknownGRFSizeAssumption). Before #8074 that was
 // COM: unconditionally 512-register mode (1024 B/lane) for every target; modules
 // COM: 1-4 still exercise that pre-#8074 fallback since they never set
-// COM: `ttig.max_grf_mode`. Module 5 pins the target-aware replacement: with the
-// COM: attribute present, "default"/"auto" resolve to whatever mode it names
-// COM: instead of always falling back to 1024 B/lane.
+// COM: `ttig.max_grf_mode`, and so does "auto" even in module 5, which only pins
+// COM: the target-aware replacement for "default": with the attribute present,
+// COM: only "default" resolves to whatever mode it names -- "auto" still falls
+// COM: back to 1024 B/lane, same as if the attribute were absent.
 // COM:
 // COM: The first four modules have peaks of 2564, 644, 388 and 256 B/lane, spanning
 // COM: every budget boundary between them -- though not one per bucket: 388 and 256
