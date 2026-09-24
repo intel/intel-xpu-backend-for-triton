@@ -22,6 +22,7 @@ import torch
 import triton
 import triton.language as tl
 from triton._internal_testing import is_xpu
+from triton.runtime._allocation import NullAllocator
 
 
 @triton.jit
@@ -32,9 +33,8 @@ def _divergent_padding_load(in_ptr, out_ptr, cond_ptr, IM, IN, YN, M_BLOCK: tl.c
     # by the JIT (constexpr-folded), the `if` would be resolved at compile time,
     # only one `tl.make_tensor_descriptor` would survive, the descriptor's
     # provenance would have a single candidate, and the test would pass while
-    # testing nothing at all. The structural guard in the test body asserts the
-    # `scf.if` really is present in the compiled TTIR so that this cannot rot
-    # silently.
+    # testing nothing at all. The test body checks that the load's fill is a
+    # runtime select between NaN and zero, so this cannot rot silently.
     cond = tl.load(cond_ptr) != 0
 
     if cond:
@@ -94,14 +94,23 @@ def _splat_value(line):
         return None
 
 
-@pytest.mark.skipif(not is_xpu(), reason="Divergent descriptor padding lowering is specific to the XPU backend")
-def test_descriptor_divergent_padding(device):
-
-    # Tensor descriptors require a global memory allocation.
+@pytest.fixture
+def xpu_allocator(device):
+    # Tensor descriptors require a global memory allocation. The allocator is
+    # process-wide, so restore the null one afterwards instead of leaking it
+    # into later tests.
     def alloc_fn(size: int, alignment: int, stream):
         return torch.empty(size, device=device, dtype=torch.int8)
 
     triton.set_allocator(alloc_fn)
+    try:
+        yield
+    finally:
+        triton.set_allocator(NullAllocator())
+
+
+@pytest.mark.skipif(not is_xpu(), reason="Divergent descriptor padding lowering is specific to the XPU backend")
+def test_descriptor_divergent_padding(device, xpu_allocator):
 
     # Surface is 48x48, tiles are 32x32 and the grid covers 64x64, so every tile
     # except (0, 0) is partially or wholly out of bounds. That is what makes the
@@ -137,7 +146,9 @@ def test_descriptor_divergent_padding(device):
     # module -- the descriptor is already a tuple of pointer/shape/stride/padding
     # values and the load is a plain masked `tt.load`. Asserting on the
     # descriptor type or on the producer count here would be asserting on IR that
-    # no longer exists at this stage.
+    # no longer exists at this stage. Nor is `scf.if` asserted: a pass may
+    # legally turn it into an `arith.select`, and the fill check below already
+    # fails if the `if` was folded away.
     #
     # What is asserted instead is the actual subject of #8102: the load's
     # out-of-bounds fill is chosen at RUNTIME between a NaN splat and a zero
@@ -147,9 +158,6 @@ def test_descriptor_divergent_padding(device):
     # constant fill, as `test_tdesc_load_zero_padding` shows), and the per-branch
     # fill reached the load.
     ttir = handles[1].asm["ttir"]
-
-    assert "scf.if" in ttir, ("expected the runtime `if` to survive into the compiled TTIR; it was probably "
-                              "constant-folded, which would make this test vacuous")
 
     fill = _load_fill_operand(ttir)
     assert fill is not None, f"no masked `tt.load` with an `other` operand in the compiled TTIR:\n{ttir}"
