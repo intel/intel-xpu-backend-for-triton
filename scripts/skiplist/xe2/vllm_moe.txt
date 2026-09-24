@@ -118,6 +118,12 @@ tests/kernels/moe/test_moe_layer.py::test_moe_layer_no_parallel[True-False-True-
 tests/kernels/moe/test_moe_layer.py::test_moe_layer_no_parallel[True-False-True-fp8_blocked-6-64-1-128-256]
 tests/kernels/moe/test_moe_layer.py::test_moe_layer_no_parallel[True-False-True-fp8_blocked-6-64-32-512-512]
 
+# Distributed MoE tests use NCCL or EPLB unsupported by the pinned XPU build.
+# https://github.com/intel/intel-xpu-backend-for-triton/actions/runs/35919227435/job/107383050520
+tests/kernels/moe/test_moe_layer.py::test_moe_layer[False-allgather_reducescatter-1-2-False]
+tests/kernels/moe/test_moe_layer.py::test_moe_layer[False-allgather_reducescatter-2-1-True]
+tests/kernels/moe/test_moe_layer.py::test_moe_layer[True-allgather_reducescatter-2-1-True]
+
 # Reference moe_sum kernel interface mismatch: https://github.com/intel/intel-xpu-backend-for-triton/issues/7811
 tests/kernels/moe/test_moe.py::test_moe_sum[contig-dtype0-128-2-1]
 tests/kernels/moe/test_moe.py::test_moe_sum[contig-dtype0-128-2-33]

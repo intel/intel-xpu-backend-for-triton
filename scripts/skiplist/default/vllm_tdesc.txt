@@ -548,6 +548,12 @@ tests/kernels/moe/test_moe.py::test_moe_sum[slice-dtype1-1024-8-1]
 tests/kernels/moe/test_moe.py::test_moe_sum[slice-dtype1-1024-8-33]
 tests/kernels/moe/test_moe.py::test_moe_sum[slice-dtype1-1024-8-222]
 
+# Distributed MoE tests use NCCL or EPLB unsupported by the pinned XPU build.
+# https://github.com/intel/intel-xpu-backend-for-triton/actions/runs/35919227435/job/107383050520
+tests/kernels/moe/test_moe_layer.py::test_moe_layer[False-allgather_reducescatter-1-2-False]
+tests/kernels/moe/test_moe_layer.py::test_moe_layer[False-allgather_reducescatter-2-1-True]
+tests/kernels/moe/test_moe_layer.py::test_moe_layer[True-allgather_reducescatter-2-1-True]
+
 # Accuracy error on the tensor-descriptor path: https://github.com/intel/intel-xpu-backend-for-triton/issues/7813
 tests/kernels/moe/test_moe.py::test_fused_moe_int64_overflow
 
