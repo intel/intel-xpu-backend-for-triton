@@ -240,10 +240,13 @@ private:
     // field is emitted as `extent - 1`, so a zero declares a 16MB surface over
     // a pointer to nothing instead of padding. Declare the smallest legal
     // surface and let the index guard below force the load out of range, which
-    // is what makes it pad - on the 2D path as well as the generic one.
+    // is what makes it pad - on the 2D path as well as the generic one. An
+    // empty merged dimension needs the same: `isCandidate` declines only a
+    // folded one, and at runtime the extent `clampedIdx * ratio + 0` is 0
+    // whenever `offsets[cd] <= 0`.
     //
     // Write both branches as multiplies and not as
-    // `select(shapes[cd] > 0, merged, floor)`: on the middle branch the merged
+    // `select(nonEmpty, merged, floor)`: on the middle branch the merged
     // extent is the stride-one dimension, and a top-level `arith.select` is
     // invisible to `ttgi::isDivisible`, which would cost the load its
     // `block_io` attribute for 16-bit and narrower types (for a 32-bit element
@@ -255,10 +258,14 @@ private:
     std::optional<int64_t> floorExtent = emptyExtentFloor(
         makeTensorDescOp.getType().getBlockType(), collapsedDim);
     assert(floorExtent && "isCandidate should have declined this fusion");
+    Value collapsedNonEmpty = builder.createOrFold<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::sgt, collapsedShape, zero);
+    Value mergedNonEmpty = builder.createOrFold<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::sgt, shapes[mergedDim], zero);
     Value nonEmpty = builder.createOrFold<arith::ExtUIOp>(
         loc, indexTy,
-        builder.createOrFold<arith::CmpIOp>(loc, arith::CmpIPredicate::sgt,
-                                            collapsedShape, zero));
+        builder.createOrFold<arith::AndIOp>(loc, collapsedNonEmpty,
+                                            mergedNonEmpty));
     // `canDeclareLegalSurface` has declined anything above the 24-bit surface
     // limit, so the floor fits an `int`.
     Value floor = tt::intel::findOrCreateIntConstant(
@@ -290,16 +297,22 @@ private:
     // merged coordinate loses that check: `offsets[md]` (or the per-element
     // tile coordinate, which is added before the bounds check) can lift it back
     // into range (issue #8070). Force it to the merged extent, which no row of
-    // the block can fall below, so the fused load pads too. Written as
-    // multiplies for the same `isDivisible` reason as `nonEmpty` above.
+    // the block can fall below, so the fused load pads too. An empty merged
+    // dimension makes the rank-3 load pure padding at any index, so it counts
+    // as out of range as well: an in-range `offsets[cd]` can still merge to an
+    // index inside the floor (`0 * ratio + 0` is row 0) and read real data.
+    // Written as multiplies for the same `isDivisible` reason as `nonEmpty`
+    // above.
     // One term per statement here too, for the emission order reason above.
     Value nonNegative = builder.createOrFold<arith::CmpIOp>(
         loc, arith::CmpIPredicate::sge, collapsedOffset, zero);
     Value belowExtent = builder.createOrFold<arith::CmpIOp>(
         loc, arith::CmpIPredicate::slt, collapsedOffset, collapsedShape);
+    Value inBounds =
+        builder.createOrFold<arith::AndIOp>(loc, nonNegative, belowExtent);
     Value inRange = builder.createOrFold<arith::ExtUIOp>(
         loc, indexTy,
-        builder.createOrFold<arith::AndIOp>(loc, nonNegative, belowExtent));
+        builder.createOrFold<arith::AndIOp>(loc, inBounds, mergedNonEmpty));
     Value outOfRange = builder.createOrFold<arith::SubIOp>(loc, one, inRange);
     Value keepIdx =
         builder.createOrFold<arith::MulIOp>(loc, mergedIdx, inRange);
@@ -432,7 +445,9 @@ private:
     // An empty collapsed dimension makes the rank-3 load pure padding, which no
     // rank-2 surface can express, and a non-positive merged extent wraps to a
     // huge surface (the field is emitted as `extent - 1`). A zero `shapes[md]`
-    // passes the divisibility check below, since `0 % n == 0`.
+    // passes the divisibility check below, since `0 % n == 0`. Only a folded
+    // value is declined: a runtime-empty dimension of either kind fuses, and
+    // `fuseMakeTensorDescOp`'s floor and index guard make the load pad.
     if (isProvablyNonPositive(shapes[collapsedDim]))
       return decline("empty collapsed dimension");
     if (isProvablyNonPositive(shapes[mergedDim]))
@@ -486,13 +501,13 @@ private:
   static constexpr int64_t MaxSurfaceExtent = 1 << 24;
   static constexpr int64_t MinSurfaceBytes = 64;
 
-  /// Return the extent the fusion emits when the collapsed dimension turns out
-  /// to be empty at runtime, or `std::nullopt` if it cannot be computed without
-  /// overflow. A zero extent is not an option: every surface field is emitted
-  /// as `extent - 1`, so a zero reads back as 0xFFFFFF, i.e. a 16MB surface
-  /// over a pointer to nothing. The empty case therefore declares the smallest
-  /// legal surface and forces the load out of range instead, which is what
-  /// makes it pad on both lowering paths.
+  /// Return the extent the fusion emits when the collapsed or the merged
+  /// dimension turns out to be empty at runtime, or `std::nullopt` if it cannot
+  /// be computed without overflow. A zero extent is not an option: every
+  /// surface field is emitted as `extent - 1`, so a zero reads back as
+  /// 0xFFFFFF, i.e. a 16MB surface over a pointer to nothing. The empty case
+  /// therefore declares the smallest legal surface and forces the load out of
+  /// range instead, which is what makes it pad on both lowering paths.
   ///
   /// The floor is a multiple of the merged dimension's block extent so that
   /// `DescriptorLoadOpConversion`'s static mask classification is unchanged: it
@@ -535,12 +550,12 @@ private:
   /// be negative and an unsigned compare would turn a negative pitch into a
   /// huge legal-looking one.
   ///
-  /// Residual, knowingly accepted: when `shapes[collapsedDim]` does not fold
-  /// there is no bracket and the width rules below stay dead. This is a
-  /// stronger assumption than trusting a dynamic descriptor operand, because
-  /// the merged extent is *derived*: the stride ratio can amplify individually
-  /// sane inputs past the field limits. Three ways it can go wrong at runtime,
-  /// none of them statically visible:
+  /// Residual, knowingly accepted: when either of the two shapes or strides
+  /// being merged does not fold there is no bracket and the width rules below
+  /// stay dead. This is a stronger assumption than trusting a dynamic
+  /// descriptor operand, because the merged extent is *derived*: the stride
+  /// ratio can amplify individually sane inputs past the field limits. Three
+  /// ways it can go wrong at runtime, none of them statically visible:
   ///   - the extent exceeds the 24-bit surface field, so the `- 1` encoding
   ///     truncates it;
   ///   - `clampedIdx * ratio + shapeMd` overflows the i32 that the surface
@@ -604,10 +619,10 @@ private:
     // `offCd` instead leaves every rule below dead for a dynamic collapsed
     // index while the load still fuses - i.e. it declares a surface nothing
     // ever checks. A folded index collapses the bracket to a point and
-    // reproduces the exact check. `shapeCd` folds positive here, so the
+    // reproduces the exact check. Both shapes fold positive here, so the
     // empty-dimension branch of the emitted extent is dead and `lastIdx` is
     // `shapeCd - 1`; that branch's floor is checked separately below, because
-    // it is live whenever `shapeCd` does not fold.
+    // it is live whenever either shape does not fold.
     std::optional<int64_t> shapeCd = folded(shapes[collapsedDim]);
     std::optional<int64_t> shapeMd = folded(shapes[mergedDim]);
     std::optional<int64_t> minExtent, maxExtent;
@@ -632,7 +647,7 @@ private:
       extentIsExact = (loIdx == hiIdx);
     }
 
-    // The extent emitted for an empty collapsed dimension is a compile-time
+    // The extent emitted for an empty dimension is a compile-time
     // constant, so it is checked unconditionally: unlike the bracket above,
     // nothing about it depends on an input that folds. Only the floor-vs-pitch
     // rule below can actually fire today, because `verifyTensorSize`

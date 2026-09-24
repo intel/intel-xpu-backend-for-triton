@@ -359,6 +359,51 @@ def test_descriptor_runtime_empty_outer_dim_pads(device, with_allocator, padding
 
 
 @triton.jit
+def _runtime_empty_merged_kernel(a_ptr, out_ptr, n, batch, B: tl.constexpr, C: tl.constexpr, S0: tl.constexpr,
+                                 BLOCK_R: tl.constexpr, BLOCK_C: tl.constexpr):
+    # `n * BLOCK_R` is a runtime extent the fusion still accepts: it is provably a
+    # multiple of the block.
+    desc = tl.make_tensor_descriptor(a_ptr, shape=[B, n * BLOCK_R, C], strides=[S0, C, 1],
+                                     block_shape=[1, BLOCK_R, BLOCK_C])
+    a = desc.load([batch, 0, 0]).reshape(BLOCK_R, BLOCK_C)
+    acc = tl.dot(a, _identity(BLOCK_C))
+    offs = tl.arange(0, BLOCK_R)[:, None] * BLOCK_C + tl.arange(0, BLOCK_C)[None, :]
+    tl.store(out_ptr + offs, acc)
+
+
+# The *merged* dimension empty at runtime (`n == 0`), with the collapsed one not.
+# The merged extent is then `clamp(batch) * ratio + 0`, which is 0 for any
+# `batch <= 0`: unless the floor and the guard key on the merged dimension too,
+# that zero declares a 16MB surface, and a negative `batch` is pushed to the
+# extent, i.e. row 0 of it, which reads real data. `batch` covers both halves of
+# the guard and the in-range case; `n == 2` checks that the extra runtime terms
+# still read the right slice (1 would be specialized to a `constexpr`).
+@pytest.mark.parametrize("batch", [-1, 0, 3])
+@pytest.mark.parametrize("n", [0, 2])
+@pytest.mark.skipif(not is_xpu(), reason="XPU-specific test")
+@pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
+def test_descriptor_runtime_empty_merged_dim_pads(device, with_allocator, n, batch):
+    B, C, S0, BLOCK_R, BLOCK_C = 4, 64, 4096, 32, 64
+
+    torch.manual_seed(42)
+    a = torch.randn((B + 1) * S0, dtype=torch.float16, device=device) + 1.0
+    out = torch.full((BLOCK_R, BLOCK_C), -1.0, dtype=torch.float32, device=device)
+    # S0 elements in, so that a negative index escaping the guard reads inside the
+    # allocation and fails the comparison rather than faulting.
+    kernel = _runtime_empty_merged_kernel[(1, )](a[S0:], out, n, batch, B, C, S0, BLOCK_R, BLOCK_C)
+
+    tile = torch.zeros((BLOCK_R, BLOCK_C), dtype=torch.float16, device=device)
+    if n > 0 and 0 <= batch < B:
+        start = (batch + 1) * S0
+        tile = a[start:start + BLOCK_R * BLOCK_C].reshape(BLOCK_R, BLOCK_C)
+    torch.testing.assert_close(out, tile.to(torch.float32))
+
+    assert f"!tt.tensordesc<1x{BLOCK_R}x{BLOCK_C}x" not in kernel.asm["ttir"], "not fused"
+    llir = kernel.asm["llir"]
+    assert llir.count('spirv_Subgroup2DBlockLoad') + llir.count('GenISA.LSC2DBlockRead') > 0
+
+
+@triton.jit
 def _overlap_outer_kernel(a_ptr, out_ptr, batch, B: tl.constexpr, R: tl.constexpr, C: tl.constexpr, S0: tl.constexpr,
                           BLOCK_R: tl.constexpr, BLOCK_C: tl.constexpr, PADDING: tl.constexpr):
     desc = tl.make_tensor_descriptor(a_ptr, shape=[B, R, C], strides=[S0, C, 1], block_shape=[1, BLOCK_R, BLOCK_C],

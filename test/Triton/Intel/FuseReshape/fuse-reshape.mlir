@@ -1185,6 +1185,53 @@ tt.func public @fuseGuardsDynamicOuterIndex(%arg0: tensor<16x16xf32>, %arg1: !tt
 
 // -----
 
+// COM: A merged dimension that is empty only at runtime (`%n == 0`). The merged
+// COM: extent `clamp(%off) * 256 + 0` is then 0 for any `%off <= 0`, so the
+// COM: floor and the guard both key on `shapes[1] > 0` too: without it in the
+// COM: floor, a zero extent declares a 16MB surface; without it in the guard, an
+// COM: in-range `%off` of 0 merges to row 0 of the floor and reads real data.
+// COM: `shapes[0]` is a constant, so its own `sgt` folds away and the merged one
+// COM: is all that is left in either place.
+tt.func public @fuseDynamicMergedShape(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<f32>, %n: i32, %off: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c256_i64 = arith.constant 256 : i64
+  %c8_i32 = arith.constant 8 : i32
+  %c16_i32 = arith.constant 16 : i32
+  %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32>
+  %rows = arith.muli %n, %c16_i32 : i32
+  %0 = tt.make_tensor_descriptor %arg1, [%c8_i32, %rows, %c16_i32], [%c256_i64, %c1_i64, %c1_i64] : <f32>, <1x16x16xf32>
+  %1 = tt.descriptor_load %0[%off, %c0_i32, %c0_i32] : !tt.tensordesc<1x16x16xf32> -> tensor<1x16x16xf32>
+  %2 = tt.reshape %1 : tensor<1x16x16xf32> -> tensor<16x16xf32>
+  %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<16x16xf32> * tensor<16x16xf32> -> tensor<16x16xf32>
+  tt.return
+}
+// CHECK-LABEL: fuseDynamicMergedShape
+// CHECK-NOT: tt.reshape
+// CHECK: [[ROWS:%.*]] = arith.muli %arg2, %c16_i32
+// CHECK: [[MERGED:%.*]] = arith.addi {{%.*}}, [[ROWS]]
+// CHECK: [[SGT:%.*]] = arith.cmpi sgt, [[ROWS]], %c0_i32
+// CHECK: [[NONEMPTY:%.*]] = arith.extui [[SGT]]
+// CHECK: [[EMPTY:%.*]] = arith.subi %c1_i32, [[NONEMPTY]]
+// CHECK: [[KEEP:%.*]] = arith.muli [[MERGED]], [[NONEMPTY]]
+// CHECK: [[FLOOR:%.*]] = arith.muli [[EMPTY]], %c16_i32
+// CHECK: [[EXTENT:%.*]] = arith.addi [[KEEP]], [[FLOOR]]
+// CHECK: [[DESC:%.*]] = tt.make_tensor_descriptor %arg1, [[[EXTENT]], %c16_i32]
+// CHECK: [[MIDX:%.*]] = arith.muli %arg3, %c256_i32
+// CHECK: [[GE:%.*]] = arith.cmpi sge, %arg3, %c0_i32
+// CHECK: [[LT:%.*]] = arith.cmpi slt, %arg3, %c8_i32
+// CHECK: [[AND:%.*]] = arith.andi [[GE]], [[LT]]
+// CHECK: [[INAND:%.*]] = arith.andi [[AND]], [[SGT]]
+// CHECK: [[IN:%.*]] = arith.extui [[INAND]]
+// CHECK: [[OUT:%.*]] = arith.subi %c1_i32, [[IN]]
+// CHECK: [[KEEPIDX:%.*]] = arith.muli [[MIDX]], [[IN]]
+// CHECK: [[PAD:%.*]] = arith.muli [[OUT]], [[EXTENT]]
+// CHECK: [[IDX:%.*]] = arith.addi [[KEEPIDX]], [[PAD]]
+// CHECK-NOT: arith.select
+// CHECK: tt.descriptor_load [[DESC]][[[IDX]], %c0_i32]
+
+// -----
+
 // COM: The same guard on a middle collapse, where the guarded index becomes the
 // COM: index `satisfies2DBlockReadAlignment` queries. This pins the shape that
 // COM: keeps `block_io` reachable - `isDivisible` handles `muli`/`addi` but not
