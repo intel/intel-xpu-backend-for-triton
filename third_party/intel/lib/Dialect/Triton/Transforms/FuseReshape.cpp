@@ -172,7 +172,8 @@ private:
     // `collapsedDim` leaves the merged entry at index `collapsedDim`, so shape
     // [s0,s1,s2] / stride [a,b,c] yields [(s0-1)*a/b+s1, s2] / [b,c] or
     // [s0, (s1-1)*b/c+s2] / [a,c].
-    auto div = arith::DivUIOp::create(builder, loc, strides[collapsedDim],
+    // Signed, to agree with the divisibility proof in `isCandidate`.
+    auto div = arith::DivSIOp::create(builder, loc, strides[collapsedDim],
                                       strides[mergedDim]);
     Value ratio = builder.createOrFold<arith::TruncIOp>(
         loc, shapes[collapsedDim].getType(), div);
@@ -314,7 +315,8 @@ private:
     // ragged/padded last block (issues/7464).
     OperandRange shapes = makeTensorDescOp->getShape();
     int64_t blockExtent = tensorTy.getDimSize(mergedDim);
-    if (!mlir::triton::gpu::intel::isDivisible(shapes[mergedDim], blockExtent))
+    if (blockExtent <= 0 ||
+        !mlir::triton::gpu::intel::isDivisible(shapes[mergedDim], blockExtent))
       return false;
 
     return true;
@@ -338,7 +340,8 @@ private:
     APInt denVal;
     if (matchPattern(denominator, m_ConstantInt(&denVal)))
       if (std::optional<int64_t> den = denVal.trySExtValue())
-        return mlir::triton::gpu::intel::isDivisible(numerator, *den);
+        return *den > 0 &&
+               mlir::triton::gpu::intel::isDivisible(numerator, *den);
 
     return false;
   }

@@ -19,7 +19,7 @@ tt.func public @fuseLoadWithReshape1(%arg0: tensor<256x32xbf16>, %arg1: !tt.ptr<
 }
 // CHECK-LABEL: fuseLoadWithReshape1
 // CHECK-NOT: tt.reshape
-// CHECK: [[DIV:%.*]] = arith.divui %c1024_i64, %c4_i64 : i64
+// CHECK: [[DIV:%.*]] = arith.divsi %c1024_i64, %c4_i64 : i64
 // CHECK: [[TRUNC:%.*]] = arith.trunci [[DIV]] : i64 to i32
 // CHECK-DAG: [[ONE:%.*]] = arith.constant 1 : i32
 // CHECK: [[SUB:%.*]] = arith.subi %c1_i32, [[ONE]] : i32
@@ -55,7 +55,7 @@ tt.func public @fuseLoadWithReshape2(%arg0: tensor<32x256xbf16>, %arg1: !tt.ptr<
 }
 // CHECK-LABEL: fuseLoadWithReshape2
 // CHECK-NOT: tt.reshape
-// CHECK: [[DIV:%.*]] = arith.divui %c1024_i64, %c1_i64 : i64
+// CHECK: [[DIV:%.*]] = arith.divsi %c1024_i64, %c1_i64 : i64
 // CHECK: [[TRUNC:%.*]] = arith.trunci [[DIV]] : i64 to i32
 // CHECK-DAG: [[ONE:%.*]] = arith.constant 1 : i32
 // CHECK: [[SUB:%.*]] = arith.subi %c512_i32, [[ONE]] : i32
@@ -133,7 +133,7 @@ tt.func public @fuseLoadWithReshapeMiddleDim(%arg0: tensor<128x256xbf16>, %arg1:
 }
 // CHECK-LABEL: fuseLoadWithReshapeMiddleDim
 // CHECK-NOT: tt.reshape
-// CHECK: [[DIV:%.*]] = arith.divui %c128_i64, %c1_i64 : i64
+// CHECK: [[DIV:%.*]] = arith.divsi %c128_i64, %c1_i64 : i64
 // CHECK: [[TRUNC:%.*]] = arith.trunci [[DIV]] : i64 to i32
 // CHECK-DAG: [[ONE:%.*]] = arith.constant 1 : i32
 // CHECK: [[SUB:%.*]] = arith.subi %c32_i32, [[ONE]] : i32

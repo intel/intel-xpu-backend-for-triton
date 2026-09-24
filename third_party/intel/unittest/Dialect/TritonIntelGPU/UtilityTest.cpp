@@ -37,10 +37,14 @@ protected:
   OwningOpRef<ModuleOp> module;
 };
 
-TEST_F(IsDivisibleTest, NonPositiveDivisorIsNeverDivisible) {
+TEST_F(IsDivisibleTest, NonPositiveDivisorIsRejected) {
+  // A non-positive divisor is a caller bug: it asserts in debug builds and is
+  // answered conservatively in release builds.
   Value c16 = constant(16, 64);
-  EXPECT_FALSE(isDivisible(c16, 0));
-  EXPECT_FALSE(isDivisible(c16, -16));
+  EXPECT_DEBUG_DEATH(EXPECT_FALSE(isDivisible(c16, 0)),
+                     "Expecting a positive divisor");
+  EXPECT_DEBUG_DEATH(EXPECT_FALSE(isDivisible(c16, -16)),
+                     "Expecting a positive divisor");
 }
 
 TEST_F(IsDivisibleTest, DivisorWiderThan32Bits) {

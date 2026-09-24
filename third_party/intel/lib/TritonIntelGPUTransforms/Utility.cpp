@@ -59,7 +59,9 @@ static bool isSingleValue(Value value) {
 
 bool isDivisible(Value value, int64_t divisor) {
   // Nothing is provably divisible by zero, and a negative divisor has no
-  // meaning for the extents, strides and offsets callers pass.
+  // meaning for the extents, strides and offsets callers pass. Callers must
+  // reject such divisors themselves; release builds answer conservatively.
+  assert(divisor > 0 && "Expecting a positive divisor");
   if (divisor <= 0)
     return false;
 
