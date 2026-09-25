@@ -83,14 +83,17 @@ class XPUOptions:
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
-# Largest spill the auto-large-GRF upgrade tolerates before rebuilding, in the
-# unit external consumers compare `n_spills` in: dword-equivalents per lane. 16
-# is PyTorch inductor's default `spill_threshold` for non-HIP, so a spill at or
-# below this cannot change inductor's verdict and a rebuild would only cost
-# compile time. Kept in sync with `kMaxSpillSlotsPerLane` in driver.c, except on
-# the LTS driver line -- see `accepts_default_grf` -- because driver.c has no
-# driver-version context and the SPV path it gates was not measured for #8106.
-MAX_REG_SPILL_SLOTS_PER_LANE = 16
+# The 128-GRF file is this many bytes per *hardware thread* at every SIMD width
+# (`RegisterPressureAnalysis::getGRFBytesPerHardwareThread`), so the per-lane budget
+# scales with the width. A policy baseline, not a measurement: the real size under
+# `grf_mode='default'` is unknown here (`RegisterPressure.h`) and the rebuild asks 256.
+DEFAULT_GRF_BYTES_PER_THREAD = 4096
+
+# Rebuild once spilling reaches a quarter of it. The quarter is calibration, not
+# hardware: it puts the gate where the measured byte rule was (issue #8077), but
+# relative to the budget so it tracks the SIMD width. Kept in sync with driver.c,
+# except on the LTS driver line -- see `accepts_default_grf`.
+REBUILD_SPILL_BYTES_PER_THREAD = DEFAULT_GRF_BYTES_PER_THREAD // 4
 
 SPILL_SIZE_RE = re.compile(r'spill_size\s*[:=]\s*(\d+)')
 PTSS_OVERFLOW_RE = re.compile(
@@ -142,16 +145,32 @@ def spill_slots_per_lane(spill_size, threads_per_warp):
     return spill_size // (4 * threads_per_warp)
 
 
+def min_spill_slots_for_rebuild(threads_per_warp):
+    """First spill that triggers the auto-large-GRF rebuild, in `n_spills`' own unit.
+
+    8 dword-equivalents/lane at SIMD32, 16 at SIMD16 -- the same 1024 B per hardware
+    thread either way. An unknown width makes `spill_slots_per_lane` fall back to raw
+    bytes, so this falls back to the byte form of the same budget. Mirrors
+    `Spills::minSlotsForRebuild` in driver.c.
+    """
+    if threads_per_warp <= 0:
+        return REBUILD_SPILL_BYTES_PER_THREAD
+    return REBUILD_SPILL_BYTES_PER_THREAD // 4 // threads_per_warp
+
+
 def accepts_default_grf(spill_size, threads_per_warp, is_lts):
     """Whether the default-GRF build is good enough to skip the large-GRF rebuild.
 
-    On the rolling driver line a spill at or below inductor's `spill_threshold`
-    cannot change its accept/reject verdict, so the rebuild would only add
-    compile time. LTS IGC prices the resulting binaries differently: declining
-    the rebuild costs +21% end to end on `pyhpc_isoneutral_mixing` (Max 1100,
-    12 of 165 configs affected, issue #8106), while the same 12 configs measure
-    neutral on rolling. So LTS keeps the older rule of rebuilding on any spill
-    and rolling keeps the compile-time saving.
+    Rolling rebuilds once the spill reaches a quarter of the register file. The
+    earlier rule aligned this with inductor's `spill_threshold = 16` -- a spill
+    inductor tolerates cannot change its verdict -- but that left the gate silent
+    across the whole region inductor accepts while spilling, costing 1.20x on
+    `timm_models/mixnet_l` (issue #8077).
+
+    LTS IGC prices the resulting binaries differently: declining the rebuild costs
+    +21% end to end on `pyhpc_isoneutral_mixing` (Max 1100, 12 of 165 configs
+    affected, issue #8106), while the same 12 configs measure neutral on rolling. So
+    LTS keeps the older rule of rebuilding on any spill.
 
     The LTS branch compares BYTES rather than slots on purpose. Because
     `spill_slots_per_lane` truncates, a slot threshold of 0 would still accept a
@@ -160,7 +179,7 @@ def accepts_default_grf(spill_size, threads_per_warp, is_lts):
     """
     if is_lts:
         return spill_size <= 0
-    return spill_slots_per_lane(spill_size, threads_per_warp) <= MAX_REG_SPILL_SLOTS_PER_LANE
+    return spill_slots_per_lane(spill_size, threads_per_warp) < min_spill_slots_for_rebuild(threads_per_warp)
 
 
 def min_dot_size(device_props: Union[Dict, GPUTarget]):
