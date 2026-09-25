@@ -1910,43 +1910,6 @@ struct PreciseDivFOpConversion
   }
 };
 
-// Following two patterns are copied from the common part to fix-up calling
-// convention for created function declaration.
-// TODO: propose changes in the common part to use CC provided by target.
-struct MulhiUIOpConversion
-    : public ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion> {
-  using Base = ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-  explicit MulhiUIOpConversion(LLVMTypeConverter &typeConverter,
-                               ModuleAxisInfoAnalysis &axisAnalysisPass,
-                               const TargetInfoBase &targetInfo,
-                               PatternBenefit benefit = 1)
-      : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
-        targetInfo(targetInfo) {}
-
-  SmallVector<Value> createDestOps(MulhiUIOp op, Adaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-
-    Type resultElementTy = getElementTypeOrSelf(op.getResult().getType());
-    assert(resultElementTy.isInteger(32) || resultElementTy.isInteger(64));
-
-    auto funcName = targetInfo.getMulhiFuncName(resultElementTy);
-    Type funcType = getFunctionType(elemTy, operands[0]);
-    LLVM::LLVMFuncOp funcOp =
-        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
-    funcOp.setCConv(triton::gpu::intel::getDefaultCConv(op));
-    auto callOp = LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]);
-    callOp.setCConv(funcOp.getCConv());
-    return {callOp.getResult()};
-  }
-
-protected:
-  const TargetInfoBase &targetInfo;
-};
-
 // Match a / (1 + exp(b)), setting expArg = b. Returns false if the RHS
 // doesn't have that shape. Does not inspect the sign of b — callers emit
 // fsigm(-b) so the folder handles any double-negation.
@@ -2028,6 +1991,9 @@ struct SigmoidConversion : public ConvertOpToLLVMPattern<arith::DivFOp> {
   }
 };
 
+// Following pattern is copied from the common part to fix-up calling
+// convention for created function declaration.
+// TODO: propose changes in the common part to use CC provided by target.
 struct ExternElementwiseOpConversion
     : public ElementwiseOpConversionBase<ExternElementwiseOp,
                                          ExternElementwiseOpConversion> {
@@ -2067,16 +2033,13 @@ void populateElementwiseOpToLLVMPatterns(
                                         benefit);
   patterns.add<PreciseDivFOpConversion>(typeConverter, axisInfoAnalysis,
                                         benefit);
-  patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis, targetInfo,
-                                    benefit);
   patterns.add<ExternElementwiseOpConversion>(typeConverter, axisInfoAnalysis,
                                               benefit);
 
   // Use lower benefit for common patterns to prioritize our versions.
   assert(benefit > 0);
   mlir::triton::populateElementwiseOpToLLVMPatterns(
-      typeConverter, patterns, axisInfoAnalysis, targetInfo,
-      benefit.getBenefit() - 1);
+      typeConverter, patterns, axisInfoAnalysis, benefit.getBenefit() - 1);
 
   patterns.add<AbsFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SigmoidConversion>(typeConverter, benefit.getBenefit() + 10);
