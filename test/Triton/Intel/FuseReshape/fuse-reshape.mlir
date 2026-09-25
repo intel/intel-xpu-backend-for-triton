@@ -19,7 +19,7 @@ tt.func public @fuseLoadWithReshape1(%arg0: tensor<256x32xbf16>, %arg1: !tt.ptr<
 }
 // CHECK-LABEL: fuseLoadWithReshape1
 // CHECK-NOT: tt.reshape
-// CHECK: [[DIV:%.*]] = arith.divui %c1024_i64, %c4_i64 : i64
+// CHECK: [[DIV:%.*]] = arith.divsi %c1024_i64, %c4_i64 : i64
 // CHECK: [[TRUNC:%.*]] = arith.trunci [[DIV]] : i64 to i32
 // CHECK-DAG: [[ONE:%.*]] = arith.constant 1 : i32
 // CHECK: [[SUB:%.*]] = arith.subi %c1_i32, [[ONE]] : i32
@@ -55,7 +55,7 @@ tt.func public @fuseLoadWithReshape2(%arg0: tensor<32x256xbf16>, %arg1: !tt.ptr<
 }
 // CHECK-LABEL: fuseLoadWithReshape2
 // CHECK-NOT: tt.reshape
-// CHECK: [[DIV:%.*]] = arith.divui %c1024_i64, %c1_i64 : i64
+// CHECK: [[DIV:%.*]] = arith.divsi %c1024_i64, %c1_i64 : i64
 // CHECK: [[TRUNC:%.*]] = arith.trunci [[DIV]] : i64 to i32
 // CHECK-DAG: [[ONE:%.*]] = arith.constant 1 : i32
 // CHECK: [[SUB:%.*]] = arith.subi %c512_i32, [[ONE]] : i32
@@ -133,7 +133,7 @@ tt.func public @fuseLoadWithReshapeMiddleDim(%arg0: tensor<128x256xbf16>, %arg1:
 }
 // CHECK-LABEL: fuseLoadWithReshapeMiddleDim
 // CHECK-NOT: tt.reshape
-// CHECK: [[DIV:%.*]] = arith.divui %c128_i64, %c1_i64 : i64
+// CHECK: [[DIV:%.*]] = arith.divsi %c128_i64, %c1_i64 : i64
 // CHECK: [[TRUNC:%.*]] = arith.trunci [[DIV]] : i64 to i32
 // CHECK-DAG: [[ONE:%.*]] = arith.constant 1 : i32
 // CHECK: [[SUB:%.*]] = arith.subi %c32_i32, [[ONE]] : i32
@@ -215,5 +215,28 @@ tt.func public @noFuseBlockShapeMismatch(%arg0: tensor<128x256xbf16>, %arg1: !tt
   tt.return
 }
 // CHECK-LABEL: noFuseBlockShapeMismatch
+// CHECK: tt.descriptor_load
+// CHECK: tt.reshape
+
+// -----
+
+// COM: Do not fuse, and do not crash, when the merged dimension of the block
+// COM: has zero extent: the boundary check divides the merged shape by it
+// COM: (issues/8073).
+tt.func public @noFuseZeroExtentMergedDim(%arg0: tensor<16x16xf32>, %arg1: !tt.ptr<f32>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c8_i32 = arith.constant 8 : i32
+  %c16_i32 = arith.constant 16 : i32
+  %c1_i64 = arith.constant 1 : i64
+  %c4_i64 = arith.constant 4 : i64
+  %c1024_i64 = arith.constant 1024 : i64
+  %cst = arith.constant dense<0.000000e+00> : tensor<0x16xf32>
+  %0 = tt.make_tensor_descriptor %arg1, [%c8_i32, %c16_i32, %c16_i32], [%c1024_i64, %c4_i64, %c1_i64] : <f32>, <1x0x16xf32>
+  %1 = tt.descriptor_load %0[%c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<1x0x16xf32> -> tensor<1x0x16xf32>
+  %2 = tt.reshape %1 : tensor<1x0x16xf32> -> tensor<0x16xf32>
+  %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<0x16xf32> * tensor<16x16xf32> -> tensor<0x16xf32>
+  tt.return
+}
+// CHECK-LABEL: noFuseZeroExtentMergedDim
 // CHECK: tt.descriptor_load
 // CHECK: tt.reshape

@@ -43,6 +43,7 @@ TEST:
     --vllm-linear-attn
     --vllm-deepgemm
     --vllm-kda
+    --vllm-inductor
     --vllm-tdesc
     --install-vllm
     --sglang
@@ -54,6 +55,7 @@ TEST:
     --sglang-kda
     --sglang-spec
     --install-sglang
+    --install-sgl-kernel-xpu
     --liger
     --install-liger
 
@@ -117,6 +119,7 @@ TEST_SGLANG_GDN=false
 TEST_SGLANG_KDA=false
 TEST_SGLANG_SPEC=false
 INSTALL_SGLANG=false
+INSTALL_SGL_KERNEL_XPU=false
 TEST_LIGER=false
 INSTALL_LIGER=false
 TEST_VLLM=false
@@ -130,6 +133,7 @@ TEST_VLLM_QUANT=false
 TEST_VLLM_LINEAR_ATTN=false
 TEST_VLLM_DEEPGEMM=false
 TEST_VLLM_KDA=false
+TEST_VLLM_INDUCTOR=false
 TEST_VLLM_TDESC=false
 INSTALL_VLLM=false
 TEST_TRITON_KERNELS=false
@@ -327,6 +331,11 @@ while (( $# != 0 )); do
       TEST_DEFAULT=false
       shift
       ;;
+    --install-sgl-kernel-xpu)
+      INSTALL_SGL_KERNEL_XPU=true
+      TEST_DEFAULT=false
+      shift
+      ;;
     --liger)
       TEST_LIGER=true
       TEST_DEFAULT=false
@@ -394,6 +403,11 @@ while (( $# != 0 )); do
       ;;
     --vllm-kda)
       TEST_VLLM_KDA=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --vllm-inductor)
+      TEST_VLLM_INDUCTOR=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -700,7 +714,7 @@ run_tools_tests() {
   ensure_spirv_dis
 
   TRITON_DISABLE_LINE_INFO=1 TRITON_TEST_SUITE=tools \
-    run_pytest_command -n ${PYTEST_MAX_PROCESSES:-8} -k "not test_disam_cubin" --verbose tools
+    run_pytest_command -n ${PYTEST_MAX_PROCESSES:-8} -k "not test_disam_cubin" --verbose --device xpu tools
 }
 
 run_regression_tests() {
@@ -837,15 +851,10 @@ run_benchmark_flash_attention() {
   cd $TRITON_PROJ/benchmarks
   pip install .
 
-  echo "Forward - Default path (with tensor descriptor):"
+  echo "Forward:"
   python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
 
-  echo "Forward - Advanced path:"
-  TRITON_INTEL_ADVANCED_PATH=1 \
-    IGC_VISAOptions=" -enableBCR" \
-    python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
-
-  echo "Backward - Default path:"
+  echo "Backward:"
   FA_KERNEL_MODE="bwd" \
     python $TRITON_PROJ/benchmarks/triton_kernels_benchmark/flash_attention_benchmark.py
 }
@@ -940,6 +949,14 @@ run_sglang_install() {
   "$SCRIPTS_DIR/sglang/install-sglang.sh"
 }
 
+run_sgl_kernel_xpu_install() {
+  echo "************************************************"
+  echo "******    Installing sgl-kernel-xpu       ******"
+  echo "************************************************"
+
+  "$SCRIPTS_DIR/sglang/install-sgl-kernel-xpu.sh"
+}
+
 enter_sglang_test_env() {
   run_sglang_install
   run_test_deps_install
@@ -971,11 +988,15 @@ run_sglang_attention_tests() {
 
   enter_sglang_test_env
   # KV index build, decode/extend/prefill attention.
+  # unittests/dense/test_triton.py drives the same kernels through RadixAttention
+  # against HF-style torch references, and is the only thing here that covers
+  # get_num_kv_splits_triton. sglang-test-fix.patch makes it device-agnostic.
   # test_fp4_indexer.py is left out: it imports sgl_kernel, which is not installed.
   TRITON_TEST_SUITE=sglang_attention \
     run_pytest_command -vvv \
       test/registered/attention/test_create_kvindices.py \
-      test/registered/attention/test_triton_attention_kernels.py
+      test/registered/attention/test_triton_attention_kernels.py \
+      test/registered/attention/unittests/dense/test_triton.py
 }
 
 run_sglang_quant_tests() {
@@ -1000,11 +1021,13 @@ run_sglang_moe_tests() {
   echo "********************************************************"
 
   enter_sglang_test_env
-  # Fused MoE + LoRA.
-  # test_fused_moe.py and test/manual/test_triton_moe_wna16.py are left out: same
-  # sgl_kernel import as the INT8 tests.
+  # Fused MoE + LoRA. sglang-test-fix.patch guards the optional sgl_kernel
+  # imports on the Triton MoE path and adds native fallbacks, which is what
+  # lets test_fused_moe.py import and run here.
+  # test/manual/test_triton_moe_wna16.py is still left out.
   TRITON_TEST_SUITE=sglang_moe \
     run_pytest_command -vvv \
+      test/registered/moe/test_fused_moe.py \
       test/registered/lora/test_fused_moe_lora_kernel.py
 }
 
@@ -1121,6 +1144,7 @@ run_vllm_tests() {
   run_vllm_linear_attn_tests
   run_vllm_deepgemm_tests
   run_vllm_kda_tests
+  run_vllm_inductor_tests
   run_vllm_tdesc_tests
 }
 
@@ -1317,6 +1341,18 @@ run_vllm_kda_tests() {
 }
 
 
+run_vllm_inductor_tests() {
+  echo "********************************************************"
+  echo "******  Running vLLM Inductor tests              *******"
+  echo "********************************************************"
+
+  cd "$TRITON_PROJ/benchmarks/triton_kernels_benchmark/vllm"
+  TRITON_TEST_SUITE=vllm_inductor \
+    run_pytest_command -vvv \
+      test/test_wan22_torch_compile.py
+}
+
+
 run_vllm_tdesc_tests() {
   echo "********************************************************"
   echo "******  Running vLLM tensor descriptor tests     *******"
@@ -1379,7 +1415,7 @@ run_triton_kernels_tests() {
   echo "***************************************************"
   echo "******    Running Triton Kernels tests      *******"
   echo "***************************************************"
-  cd $TRITON_PROJ/python/triton_kernels/tests
+  cd $TRITON_PROJ/python/triton_kernels
 
   # available after `capture_runtime_env` call
   gpu_file="$TRITON_TEST_REPORTS_DIR/gpu.txt"
@@ -1395,7 +1431,7 @@ run_triton_kernels_tests() {
   fi
   # skipping mxfp, they are part of mxfp_tests suite
   TRITON_TEST_SUITE=triton_kernels \
-    run_pytest_command -vvv -n $max_procs --device xpu . -k 'not test_mxfp'
+    run_pytest_command -vvv -n $max_procs --device xpu tests -k 'not test_mxfp'
 }
 
 test_triton() {
@@ -1471,6 +1507,9 @@ test_triton() {
   if [ "$TEST_INDUCTOR" == true ]; then
     run_inductor_tests
   fi
+  if [ "$INSTALL_SGL_KERNEL_XPU" == true ]; then
+    run_sgl_kernel_xpu_install
+  fi
   if [ "$INSTALL_SGLANG" == true ]; then
     run_sglang_install
   fi
@@ -1539,6 +1578,9 @@ test_triton() {
   fi
   if [ "$TEST_VLLM_KDA" == true ]; then
     run_vllm_kda_tests
+  fi
+  if [ "$TEST_VLLM_INDUCTOR" == true ]; then
+    run_vllm_inductor_tests
   fi
   if [ "$TEST_VLLM_TDESC" == true ]; then
     run_vllm_tdesc_tests

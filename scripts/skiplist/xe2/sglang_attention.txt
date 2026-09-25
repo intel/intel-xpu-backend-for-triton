@@ -2,3 +2,5 @@
 registered/attention/test_triton_attention_kernels.py::TestTritonAttention::test_extend_attention_sliding_window
 # Out of memory on B580: allocates ~12.38 GiB but the card has only 11.93 GiB (passes on PVC's 48 GB).
 registered/attention/test_triton_attention_kernels.py::TestTritonAttention::test_decode_attention_large_batch_int64_offset
+# https://github.com/intel/intel-xpu-backend-for-triton/issues/7984
+registered/attention/test_triton_attention_kernels.py::TestTritonAttention::test_extend_attention

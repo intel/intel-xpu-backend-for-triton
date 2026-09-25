@@ -17,11 +17,18 @@ Each hardware thread has a private register file. **Do not guess** GRF register 
 
 ### Auto-GRF Mode Selection (`grf_mode='default'`)
 1. Compile with default (small) GRF
-2. Extract spill size from ZEBIN `.ze_info` section
-3. If `spill_size > 0` bytes → recompile with 256-GRF mode
-4. The threshold is `0` — *any* spill retries — aligned between `MAX_REG_SPILL` in `compiler.py` and `max_reg_spill` in `driver.c`
+2. Extract spill size from ZEBIN `.ze_info` section (AOT) or query Level Zero
+   `spillMemSize` (JIT) — both are **bytes per hardware thread**
+3. Normalize to **dword-equivalents per lane** (`bytes / (4 × sub-group size)`),
+   the unit CUDA/HIP report `n_spills` in and that external consumers threshold on
+4. If that exceeds `16` → recompile with 256-GRF mode
 
-The retry is gated on the raw **byte** count, which Level Zero allocates per hardware thread.
+The threshold is `16` dword-equivalents/lane, aligned between
+`MAX_REG_SPILL_SLOTS_PER_LANE` in `compiler.py` and `kMaxSpillSlotsPerLane` in
+`driver.c`. It is PyTorch inductor's default `spill_threshold` for non-HIP, so a
+spill at or below it cannot change inductor's autotuning verdict and a rebuild
+would only cost compile time. Compare in the normalized unit, not in bytes —
+inductor tests the truncated per-lane count, so a byte threshold over-triggers.
 
 ### Constraints
 - **256-GRF requires `num_warps ≤ 32`** (because halved thread occupancy limits available hardware threads)
@@ -63,9 +70,31 @@ When `is_lts=true`, certain lowering paths use GenISA intrinsics instead of SPIR
 ## Register Pressure Management
 
 ### ReduceVariableLiveness Pass
-Activated when `opt.reduce_variable_liveness = true`. Thresholds from source:
-- Total block size threshold: **32768 bytes**
-- Large tensor threshold: **128 × 128 × 2 = 32768 bytes** (per-dimension shape ≥ 128)
+Activated when `opt.reduce_variable_liveness = true`. Takes a `grf-mode` option
+(`'default'`, `'auto'`, `'128'`, `'256'`, `'512'`) that must match the `grf_mode`
+the kernel is compiled with.
+
+Gate: a 2D operand load that is live-in to a loop is sunk into it (leaving a
+prefetch behind) when the loop body's **peak** register pressure, from
+`RegisterPressureAnalysis::peakPressure(loop)`, is at or above the **per-lane**
+GRF budget — `getPerLaneGRFBudgetInBytes(grfMode, mod, UnknownGRFSizeAssumption::Largest)`.
+At `threads-per-warp = 16` that is 256 B/lane for `'128'`, 512 for `'256'`, and
+1024 for `'512'` and for `'default'`/`'auto'` (the true GRF size isn't known at
+this point in the pipeline, and this gate treats the budget as a threshold to
+sink rather than a ceiling, so the safe assumption under uncertainty is the
+*largest* size the device supports — see `RegisterPressureAnalysis`'s
+`UnknownGRFSizeAssumption` for the full rationale, including why
+`HoistLayoutConversions` correctly assumes the opposite (`Smallest`) for the
+same unknown modes). There is no fixed tensor-size floor; sizes only matter
+through their contribution to the measured pressure.
+
+Peak, not live-in, pressure is the gate: `liveInPressure` derives from
+`LivenessBlockInfo::in()`, which excludes block arguments and so never counts the
+loop-carried DPAS accumulator.
+
+The decision is per loop: once a loop is over budget, every eligible load in it
+is sunk. Spill cost vs. redundant-reload cost is not modelled, and the loop trip
+count is not consulted.
 
 ### Design Rationale
 Intel GPUs load dot operands directly into registers from memory (no intermediate SLM staging for A/B matrices). The hardware I/O buffer and cache handle redundant accesses. This differs from NVIDIA GPUs which typically stage through shared memory.

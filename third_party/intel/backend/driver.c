@@ -7,8 +7,10 @@
 //===----------------------------------------------------------------------===//
 
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -333,7 +335,58 @@ void freeKernelBundle(PyObject *p) {
       PyCapsule_GetPointer(p, "kernel_bundle"));
 }
 
-using Spills = int32_t;
+// Scratch/spill accounting for one compiled kernel.
+//
+// Level Zero reports `spillMemSize` in bytes, allocated per hardware thread:
+// compute-runtime forwards zebin `execution_env.spill_size` unchanged, and the
+// same per-thread quantity is multiplied by the hardware thread count to size
+// the scratch surface. CUDA and HIP instead report `n_spills` as
+// `LOCAL_SIZE_BYTES / 4` -- dword-equivalents per lane. External consumers
+// (torch inductor) compare `n_spills` against thresholds calibrated on that
+// unit, so XPU normalizes to it before handing the value to Python.
+class Spills {
+public:
+  // Unknown: the Level Zero query failed, so there is no byte count and no
+  // SIMD width. -1 is the sentinel `load_binary` hands to Python, and it must
+  // survive `spillsToPyInt` intact rather than being clamped to 0.
+  Spills() = default;
+
+  Spills(int64_t bytes, uint32_t subgroupSize)
+      : bytes(bytes), subgroupSize(subgroupSize) {}
+
+  // Names the default-constructed unknown state, which a bare `Spills()` at a
+  // call site does not.
+  static Spills unknown() { return Spills(); }
+
+  int64_t getBytes() const { return bytes; }
+  uint32_t getSubgroupSize() const { return subgroupSize; }
+
+  // Approximate dword-equivalents per lane. Truncating division deliberately
+  // matches the CUDA/HIP `n_spills /= 4`, so a scratch allocation smaller than
+  // one dword per lane reports 0 exactly as a small CUDA stack frame does.
+  // Returns `bytes` unchanged when the SIMD width is unknown: L0 reports
+  // scratch per hardware thread, so that over-reports rather than hiding an
+  // allocation.
+  int64_t slotsPerLane() const {
+    if (bytes <= 0 || subgroupSize == 0)
+      return bytes; // error sentinel, no allocation, or unknown width
+    return bytes / (int64_t{4} * subgroupSize);
+  }
+
+private:
+  int64_t bytes = -1;        // L0 spillMemSize (uint32_t) widened; -1 == error.
+  uint32_t subgroupSize = 0; // Compiled SIMD width; 0 == unknown.
+};
+
+// Converts a spill count to the `Py_BuildValue("i")` domain, saturating rather
+// than wrapping. Only the unknown-width byte passthrough can approach the
+// bound. Positive values only -- the -1 error sentinel must survive intact, so
+// this must not be a clamp against a 0 lower bound.
+static int spillsToPyInt(int64_t slots) {
+  constexpr int64_t maxPyInt = std::numeric_limits<int>::max();
+  return slots > maxPyInt ? std::numeric_limits<int>::max()
+                          : static_cast<int>(slots);
+}
 
 template <typename L0_DEVICE, typename L0_CONTEXT>
 std::tuple<ze_module_handle_t, ze_kernel_handle_t, Spills>
@@ -360,7 +413,7 @@ compileLevelZeroObjects(uint8_t *binary_ptr, const size_t binary_size,
                                      __FILE__, __LINE__);
   if (PyErr_Occurred()) {
     cleanupPartialObjects();
-    return std::make_tuple(nullptr, nullptr, -1);
+    return std::make_tuple(nullptr, nullptr, Spills::unknown());
   }
 
   // Retrieve the kernel properties (e.g. register spills).
@@ -368,10 +421,10 @@ compileLevelZeroObjects(uint8_t *binary_ptr, const size_t binary_size,
                                      __FILE__, __LINE__);
   if (PyErr_Occurred()) {
     cleanupPartialObjects();
-    return std::make_tuple(nullptr, nullptr, -1);
+    return std::make_tuple(nullptr, nullptr, Spills::unknown());
   }
 
-  ze_kernel_properties_t props;
+  ze_kernel_properties_t props{};
   props.stype = ZE_STRUCTURE_TYPE_KERNEL_PROPERTIES;
   props.pNext = nullptr;
 
@@ -380,12 +433,21 @@ compileLevelZeroObjects(uint8_t *binary_ptr, const size_t binary_size,
       __LINE__);
   if (PyErr_Occurred()) {
     cleanupPartialObjects();
-    return std::make_tuple(nullptr, nullptr, -1);
+    return std::make_tuple(nullptr, nullptr, Spills::unknown());
   }
 
-  const int32_t n_spills = props.spillMemSize;
+  // `requiredSubgroupSize` is the kernel contract, populated from the
+  // `intel_reqd_sub_group_size` attribute that Triton always emits, and is 0
+  // when that attribute is absent. `maxSubgroupSize` is not a device capability
+  // bound: compute-runtime maps it to the kernel's own compiled SIMD width
+  // (zebin `execution_env.simd_size`, a required field), which makes it a sound
+  // fallback and leaves the unknown-width path effectively unreachable.
+  const uint32_t subgroupSize = props.requiredSubgroupSize != 0
+                                    ? props.requiredSubgroupSize
+                                    : props.maxSubgroupSize;
 
-  return std::make_tuple(l0_module, l0_kernel, n_spills);
+  return std::make_tuple(l0_module, l0_kernel,
+                         Spills(props.spillMemSize, subgroupSize));
 }
 
 struct BuildFlags {
@@ -519,9 +581,22 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   }
 
   const bool debugEnabled = getBoolEnv("TRITON_DEBUG");
-  constexpr int32_t max_reg_spill = 0;
+  // Only rebuild at large GRF once the kernel spills past what torch inductor's
+  // autotuner tolerates, so the rebuild can only rescue a config inductor would
+  // have discarded and never perturbs one it would have kept. 16 is inductor's
+  // default `spill_threshold` for non-HIP (`triton_heuristics.py`); a caller
+  // that overrides it is not tracked here.
+  //
+  // Compared against `slotsPerLane()` -- the very value handed to Python as
+  // `n_spills` -- rather than converting the budget into bytes: inductor tests
+  // the truncated per-lane count, so a byte threshold would also fire on the
+  // band that truncates back down to an accepted value. An unknown SIMD width
+  // makes `slotsPerLane()` fall back to raw bytes, which retries on all but the
+  // smallest spills (issue #7821).
+  constexpr int64_t kMaxSpillSlotsPerLane = 16;
 
-  if (canRetryWithLargeGRF && (firstBuildFailed || n_spills > max_reg_spill)) {
+  if (canRetryWithLargeGRF &&
+      (firstBuildFailed || n_spills.slotsPerLane() > kMaxSpillSlotsPerLane)) {
     PyObject *orig_type = nullptr, *orig_value = nullptr, *orig_tb = nullptr;
     // Save the original error before clearing it for the retry attempt.
     if (firstBuildFailed)
@@ -593,7 +668,11 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
 
         if (debugEnabled)
           std::cout << "(I): Retry with large GRF succeeded, kernel has "
-                    << n_spills << " spills" << std::endl;
+                    << n_spills.getBytes()
+                    << " spill bytes per hardware thread; "
+                    << "n_spills " << n_spills.slotsPerLane()
+                    << " dword-equivalents/lane (SIMD"
+                    << n_spills.getSubgroupSize() << ")" << std::endl;
       }
     } catch (const std::exception &e) {
       if (firstBuildFailed) {
@@ -610,9 +689,15 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
     }
   }
 
-  if (debugEnabled && n_spills) {
-    std::cout << "(I): Detected " << n_spills << " spills for  \""
-              << kernel_name << "\"" << std::endl;
+  // Both numbers are logged: the byte count is what the retry gate above acts
+  // on, the per-lane count is what Python receives. test_auto_grf matches the
+  // byte count specifically to pin the retry, so keep that wording stable.
+  if (debugEnabled && n_spills.getBytes()) {
+    std::cout << "(I): Detected " << n_spills.getBytes()
+              << " spill bytes per hardware thread; n_spills "
+              << n_spills.slotsPerLane() << " dword-equivalents/lane (SIMD"
+              << n_spills.getSubgroupSize() << ") for \"" << kernel_name << "\""
+              << std::endl;
   }
 
   auto n_regs = build_flags.n_regs();
@@ -636,8 +721,8 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   auto kernel_bundle_py = PyCapsule_New(reinterpret_cast<void *>(mod),
                                         "kernel_bundle", freeKernelBundle);
   last_build_flag = build_flags;
-  return Py_BuildValue("(OOiii)", kernel_bundle_py, kernel_py, n_regs, n_spills,
-                       n_max_threads);
+  return Py_BuildValue("(OOiii)", kernel_bundle_py, kernel_py, n_regs,
+                       spillsToPyInt(n_spills.slotsPerLane()), n_max_threads);
 }
 
 extern "C" EXPORT_FUNC PyObject *init_devices(PyObject *cap) {
@@ -1454,11 +1539,30 @@ extern "C" EXPORT_FUNC PyObject *launch(PyObject *args) {
   if (kernel_info == nullptr)
     return NULL;
 
+  // A rejected submit throws `sycl::exception` on this thread. It must not
+  // unwind out of the ctypes entry point, where it would reach
+  // `std::terminate` and abort the process; report it as `IntelGPUError`
+  // instead, like the Level Zero failures in `load_binary`.
+  bool launchFailed = false;
+  std::string launchError;
   Py_BEGIN_ALLOW_THREADS;
-  sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp,
-                     shared_memory, stream, kernel_info, global_scratch,
-                     profile_scratch, num_params, params, extractor_data);
+  try {
+    sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp,
+                       shared_memory, stream, kernel_info, global_scratch,
+                       profile_scratch, num_params, params, extractor_data);
+  } catch (const std::exception &e) {
+    launchFailed = true;
+    launchError = e.what();
+  }
   Py_END_ALLOW_THREADS;
+
+  if (launchFailed) {
+    PyObject *exc_class = getIntelGPUErrorClass();
+    PyErr_Format(exc_class ? exc_class : PyExc_RuntimeError,
+                 "Error during Intel kernel launch: %s", launchError.c_str());
+    PyBuffer_Release(&signature);
+    return NULL;
+  }
 
   if (PyErr_Occurred()) {
     PyBuffer_Release(&signature);

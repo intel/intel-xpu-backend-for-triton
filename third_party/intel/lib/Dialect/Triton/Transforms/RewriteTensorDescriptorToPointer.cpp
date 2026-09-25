@@ -635,8 +635,9 @@ struct RewriteContiguousGather
 
     // Create tt.descriptor_load with offsets [baseOffset, yOffset].
     SmallVector<Value> indices = {setup->baseOffset, gatherOp.getYOffset()};
-    auto descLoadOp = triton::DescriptorLoadOp::create(rewriter, loc, resultTy,
-                                                       newMakeDesc, indices);
+    auto descLoadOp = triton::DescriptorLoadOp::create(
+        rewriter, loc, resultTy, newMakeDesc, indices,
+        /*cachePolicy=*/Attribute());
 
     // TF32 rounding for f32 types is handled by RewriteLoadPattern
     // when it converts the DescriptorLoadOp in the subsequent phase.
@@ -693,7 +694,8 @@ struct RewriteMultiRangeGather
           rewriter, loc, rewriter.getI32IntegerAttr(range.start));
       SmallVector<Value> indices = {startOffset, gatherOp.getYOffset()};
       auto load = triton::DescriptorLoadOp::create(
-          rewriter, loc, setup->sliceTy, desc, indices);
+          rewriter, loc, setup->sliceTy, desc, indices,
+          /*cachePolicy=*/Attribute());
       loads.push_back(load.getResult());
     }
 
@@ -875,7 +877,7 @@ struct RewriteLoadPattern : OpConversionPattern<triton::DescriptorLoadOp> {
     auto newLoad = triton::LoadOp::create(
         rewriter, loc, generatePtr(rewriter, loc, blockShape, desc, offsets),
         generateMask(rewriter, loc, blockShape, desc, offsets), other,
-        triton::CacheModifier::NONE, triton::EvictionPolicy::NORMAL, false);
+        op.getCachePolicyAttr());
     newLoad->setAttrs(filterSegmentSizes(op->getAttrs()));
 
     Value result = newLoad.getResult();
@@ -912,8 +914,7 @@ struct RewriteStorePattern : OpConversionPattern<triton::DescriptorStoreOp> {
 
     auto newStore = rewriter.replaceOpWithNewOp<triton::StoreOp>(
         op, generatePtr(rewriter, loc, blockShape, desc, offsets), op.getSrc(),
-        generateMask(rewriter, loc, blockShape, desc, offsets),
-        triton::CacheModifier::NONE, triton::EvictionPolicy::NORMAL);
+        generateMask(rewriter, loc, blockShape, desc, offsets));
     newStore->setAttrs(filterSegmentSizes(op->getAttrs()));
 
     return llvm::success();
@@ -956,9 +957,7 @@ struct RewriteGatherPattern : OpConversionPattern<triton::DescriptorGatherOp> {
     auto other = generateOther(rewriter, loc,
                                descTy.getSignlessBlockType().getElementType(),
                                blockShape, desc.paddingOption);
-    auto newLoad = triton::LoadOp::create(
-        rewriter, loc, ptr, mask, other, triton::CacheModifier::NONE,
-        triton::EvictionPolicy::NORMAL, false);
+    auto newLoad = triton::LoadOp::create(rewriter, loc, ptr, mask, other);
     newLoad->setAttrs(filterSegmentSizes(op->getAttrs()));
 
     Value result = newLoad.getResult();
@@ -987,8 +986,7 @@ struct RewriteScatterPattern
     auto [ptr, mask] = generateGatherScatterPtrMask(
         rewriter, loc, blockShape, desc, op.getXOffsets(), op.getYOffset());
     auto newStore = rewriter.replaceOpWithNewOp<triton::StoreOp>(
-        op, ptr, op.getSrc(), mask, triton::CacheModifier::NONE,
-        triton::EvictionPolicy::NORMAL);
+        op, ptr, op.getSrc(), mask);
     newStore->setAttrs(filterSegmentSizes(op->getAttrs()));
 
     return llvm::success();
@@ -1103,7 +1101,7 @@ static bool descArgFeedsOnlyLoadStore(Value descArg) {
 /// Pre-pass: For public FuncOps with TensorDescType-typed arguments that feed
 /// only DescriptorLoad/Store, expand the function signature and insert a
 /// synthetic MakeTensorDescOp. This makes the descriptor traceable by
-/// findAllMakeTensorDescOps() and enables the 2D block I/O fast path for
+/// findDescriptorDefinitions() and enables the 2D block I/O fast path for
 /// host-side tensor descriptors.
 static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
   moduleOp->walk([](triton::FuncOp funcOp) {
@@ -1325,7 +1323,7 @@ class TritonRewriteTensorDescriptorToPointerPass
 
     // Pre-pass: Synthesize MakeTensorDescOps for host-side tensor descriptor
     // function arguments. This enables the 2D block I/O fast path by making
-    // descriptors traceable via findAllMakeTensorDescOps().
+    // descriptors traceable via findDescriptorDefinitions().
     synthesizeDescriptorsFromFuncArgs(op);
 
     // Pre-pass: Rewrite contiguous DescriptorGatherOps/DescriptorScatterOps to
@@ -1365,12 +1363,13 @@ class TritonRewriteTensorDescriptorToPointerPass
           .Case<triton::DescriptorLoadOp, triton::DescriptorStoreOp>(
               [&](auto op) {
                 for (auto d :
-                     triton::intel::findAllMakeTensorDescOps(op.getDesc()))
+                     triton::intel::findDescriptorDefinitions(op.getDesc()))
                   candidateMakeTensorDescOps.insert(d);
               })
           .Case<triton::DescriptorGatherOp, triton::DescriptorScatterOp,
                 triton::DescriptorReduceOp>([&](auto op) {
-            for (auto d : triton::intel::findAllMakeTensorDescOps(op.getDesc()))
+            for (auto d :
+                 triton::intel::findDescriptorDefinitions(op.getDesc()))
               unhandledMakeTensorDescOps.insert(d);
           })
           .Default([](auto) {});
@@ -1394,12 +1393,12 @@ class TritonRewriteTensorDescriptorToPointerPass
             for (Value operand : op->getOperands()) {
               if (!isa<triton::TensorDescType>(operand.getType()))
                 continue;
-              auto allDescs = triton::intel::findAllMakeTensorDescOps(operand);
-              if (allDescs.empty())
-                return false;
-              if (!llvm::all_of(allDescs, [&](auto d) {
-                    return candidateMakeTensorDescOps.contains(d);
-                  }))
+              // allSatisfy is false for an empty trace, which is what we want:
+              // an untraceable descriptor is not a candidate.
+              if (!triton::intel::findDescriptorDefinitions(operand).allSatisfy(
+                      [&](auto d) {
+                        return candidateMakeTensorDescOps.contains(d);
+                      }))
                 return false;
             }
             return true;

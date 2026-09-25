@@ -202,3 +202,26 @@ module {
 // CHECK-NOT: tt.make_tensor_descriptor
 // CHECK-NOT: tt.descriptor_gather
 // CHECK: tt.load
+
+// -----
+
+// COM: Negative twin of @host_descriptor_load: same descriptor entry-block
+// COM: argument, but the function is private, so synthesizeDescriptorsFromFuncArgs
+// COM: skips it and the trace stays empty. The legality predicate relies on
+// COM: DescriptorDefinitions::allSatisfy being *false* for an empty trace -- an
+// COM: untraceable descriptor is not a candidate -- which makes the load illegal
+// COM: and sends it down the pointer path. Were allSatisfy vacuously true on an
+// COM: empty trace, the load would be ruled legal and survive as
+// COM: tt.descriptor_load on an operand whose type the signature conversion has
+// COM: already rewritten.
+module {
+  tt.func private @private_descriptor_load(%desc: !tt.tensordesc<128x64xf16>, %sh0: i32, %sh1: i32, %st0: i64, %st1: i64, %offset_y: i32, %offset_x: i32) -> tensor<128x64xf16> {
+    %0 = tt.descriptor_load %desc[%offset_y, %offset_x] : !tt.tensordesc<128x64xf16> -> tensor<128x64xf16>
+    tt.return %0 : tensor<128x64xf16>
+  }
+}
+
+// CHECK-LABEL: @private_descriptor_load
+// CHECK-NOT: tt.make_tensor_descriptor
+// CHECK-NOT: tt.descriptor_load
+// CHECK: tt.load

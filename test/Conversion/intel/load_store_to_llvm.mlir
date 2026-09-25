@@ -15,12 +15,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<256x!tt.ptr<f32>, #blocked0>
     %6 = tt.addptr %5, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
     %9 = tt.load %6 {isVolatile = true} : tensor<256x!tt.ptr<f32>, #blocked0>
-    %10 = tt.load %6 cacheModifier = ca : tensor<256x!tt.ptr<f32>, #blocked0>
-    %12 = tt.load %6 cacheModifier = cg : tensor<256x!tt.ptr<f32>, #blocked0>
-    %13 = tt.load %6 cacheModifier = wb : tensor<256x!tt.ptr<f32>, #blocked0>
-    %14 = tt.load %6 cacheModifier = cs : tensor<256x!tt.ptr<f32>, #blocked0>
-    %15 = tt.load %6 cacheModifier = wt : tensor<256x!tt.ptr<f32>, #blocked0>
-    %16 = tt.load %6 cacheModifier = cv : tensor<256x!tt.ptr<f32>, #blocked0>
+    %10 = tt.load %6 {cachePolicy = #tt.cache_policy<cache_modifier = ca, eviction_policy = evict_normal>} : tensor<256x!tt.ptr<f32>, #blocked0>
+    %12 = tt.load %6 {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>} : tensor<256x!tt.ptr<f32>, #blocked0>
+    %14 = tt.load %6 {cachePolicy = #tt.cache_policy<cache_modifier = cs, eviction_policy = evict_normal>} : tensor<256x!tt.ptr<f32>, #blocked0>
+    %16 = tt.load %6 {cachePolicy = #tt.cache_policy<cache_modifier = cv, eviction_policy = evict_normal>} : tensor<256x!tt.ptr<f32>, #blocked0>
     // COM: isVolatile
     // CHECK-COUNT-2: llvm.load volatile {{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<4xi32>
     // COM: `ca` -> L1C_L3C, the hardware default, so no annotation.
@@ -31,11 +29,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     // COM: annotation for them; see getNonTemporalFlag() for why the per-level
     // COM: decoration cannot be used here either.
     // CHECK-COUNT-2: llvm.load {{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<4xi32>
-    // COM: `wb` is store-only; no load annotation.
-    // CHECK-COUNT-2: llvm.load {{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<4xi32>
     // COM: `cs`
-    // CHECK-COUNT-2: llvm.load {{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<4xi32>
-    // COM: `wt` is store-only; no load annotation.
     // CHECK-COUNT-2: llvm.load {{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<4xi32>
     // COM: `cv` -> L1UC_L3UC, which `nontemporal` does express exactly.
     // CHECK-COUNT-2: llvm.load {{.*}} {alignment = 16 : i64, nontemporal} : !llvm.ptr<1> -> vector<4xi32>
@@ -59,19 +53,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<256x!tt.ptr<f32>, #blocked0>
     %6 = tt.addptr %5, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
     tt.store %6, %cst : tensor<256x!tt.ptr<f32>, #blocked0>
-    tt.store %6, %cst cacheModifier = ca : tensor<256x!tt.ptr<f32>, #blocked0>
-    tt.store %6, %cst cacheModifier = cg : tensor<256x!tt.ptr<f32>, #blocked0>
-    tt.store %6, %cst cacheModifier = wb : tensor<256x!tt.ptr<f32>, #blocked0>
-    tt.store %6, %cst cacheModifier = cs : tensor<256x!tt.ptr<f32>, #blocked0>
-    tt.store %6, %cst cacheModifier = wt : tensor<256x!tt.ptr<f32>, #blocked0>
-    tt.store %6, %cst cacheModifier = cv : tensor<256x!tt.ptr<f32>, #blocked0>
+    tt.store %6, %cst {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>} : tensor<256x!tt.ptr<f32>, #blocked0>
+    tt.store %6, %cst {cachePolicy = #tt.cache_policy<cache_modifier = wb, eviction_policy = evict_normal>} : tensor<256x!tt.ptr<f32>, #blocked0>
+    tt.store %6, %cst {cachePolicy = #tt.cache_policy<cache_modifier = cs, eviction_policy = evict_normal>} : tensor<256x!tt.ptr<f32>, #blocked0>
+    tt.store %6, %cst {cachePolicy = #tt.cache_policy<cache_modifier = wt, eviction_policy = evict_normal>} : tensor<256x!tt.ptr<f32>, #blocked0>
+    // COM: no cache modifier
     // CHECK-COUNT-2: llvm.store {{.*}} {alignment = 16 : i64} : vector<4xi32>, !llvm.ptr<1>
+    // COM: `cg` -> L1UC_L3WB, which asks for L3 write-back. `nontemporal` is a
+    // COM: single bit that IGC turns into LSC `.uc.uc`, bypassing L3 too, so it
+    // COM: cannot express `cg`; a plain store carries no annotation for it.
+    // COM: See getNonTemporalFlag().
     // CHECK-COUNT-2: llvm.store {{.*}} {alignment = 16 : i64} : vector<4xi32>, !llvm.ptr<1>
-    // CHECK-COUNT-2: llvm.store {{.*}} {alignment = 16 : i64, nontemporal} : vector<4xi32>, !llvm.ptr<1>
+    // COM: `wb` -> L1WB_L3WB; no annotation.
     // CHECK-COUNT-2: llvm.store {{.*}} {alignment = 16 : i64} : vector<4xi32>, !llvm.ptr<1>
-    // CHECK-COUNT-2: llvm.store {{.*}} {alignment = 16 : i64, nontemporal} : vector<4xi32>, !llvm.ptr<1>
+    // COM: `cs` -> L1S_L3S, which keeps the line in L3, so `nontemporal` does
+    // COM: not express it either. Unannotated, a documented approximation.
     // CHECK-COUNT-2: llvm.store {{.*}} {alignment = 16 : i64} : vector<4xi32>, !llvm.ptr<1>
-    // CHECK-COUNT-2: llvm.store {{.*}} {alignment = 16 : i64, nontemporal} : vector<4xi32>, !llvm.ptr<1>
+    // COM: `wt` -> L1WT_L3WT; no annotation.
+    // CHECK-COUNT-2: llvm.store {{.*}} {alignment = 16 : i64} : vector<4xi32>, !llvm.ptr<1>
     tt.return
   }
 }
@@ -82,9 +81,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.support_predicated_io} {
   tt.func @load_store_cache_pred(%ptr: tensor<1024x!tt.ptr<f32>, #blocked>, %mask: tensor<1024xi1, #blocked>) {
     // CHECK: triton_gen.predicated_load {{.*}} {cache_control = L1UC_L3C} : (!llvm.ptr<1>, i1, i32) -> i32
-    %val = tt.load %ptr, %mask cacheModifier = cg : tensor<1024x!tt.ptr<f32>, #blocked>
+    %val = tt.load %ptr, %mask {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>} : tensor<1024x!tt.ptr<f32>, #blocked>
     // CHECK: triton_gen.predicated_store {{.*}} {cache_control = L1WT_L3WT} : (!llvm.ptr<1>, i32, i1) -> ()
-    tt.store %ptr, %val, %mask cacheModifier = wt : tensor<1024x!tt.ptr<f32>, #blocked>
+    tt.store %ptr, %val, %mask {cachePolicy = #tt.cache_policy<cache_modifier = wt, eviction_policy = evict_normal>} : tensor<1024x!tt.ptr<f32>, #blocked>
     tt.return
   }
 }
@@ -100,7 +99,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.sup
   // CHECK-LABEL: load_cs_predicated
   tt.func @load_cs_predicated(%ptr: tensor<1024x!tt.ptr<f32>, #blocked>, %mask: tensor<1024xi1, #blocked>) {
     // CHECK: triton_gen.predicated_load {{.*}} {cache_control = L1S_L3C} : (!llvm.ptr<1>, i1, i32) -> i32
-    %val = tt.load %ptr, %mask cacheModifier = cs : tensor<1024x!tt.ptr<f32>, #blocked>
+    %val = tt.load %ptr, %mask {cachePolicy = #tt.cache_policy<cache_modifier = cs, eviction_policy = evict_normal>} : tensor<1024x!tt.ptr<f32>, #blocked>
     tt.return
   }
 }
@@ -115,7 +114,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.sup
   // CHECK-LABEL: load_evict_first_predicated
   tt.func @load_evict_first_predicated(%ptr: tensor<1024x!tt.ptr<f32>, #blocked>, %mask: tensor<1024xi1, #blocked>) {
     // CHECK: triton_gen.predicated_load {{.*}} {cache_control = L1IAR_L3C} : (!llvm.ptr<1>, i1, i32) -> i32
-    %val = tt.load %ptr, %mask evictionPolicy = evict_first : tensor<1024x!tt.ptr<f32>, #blocked>
+    %val = tt.load %ptr, %mask {cachePolicy = #tt.cache_policy<cache_modifier = none, eviction_policy = evict_first>} : tensor<1024x!tt.ptr<f32>, #blocked>
     tt.return
   }
 }
@@ -130,7 +129,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.sup
   // CHECK-LABEL: load_evict_last_predicated
   tt.func @load_evict_last_predicated(%ptr: tensor<1024x!tt.ptr<f32>, #blocked>, %mask: tensor<1024xi1, #blocked>) {
     // CHECK: triton_gen.predicated_load {{.*}} {cache_control = L1C_L3C} : (!llvm.ptr<1>, i1, i32) -> i32
-    %val = tt.load %ptr, %mask evictionPolicy = evict_last : tensor<1024x!tt.ptr<f32>, #blocked>
+    %val = tt.load %ptr, %mask {cachePolicy = #tt.cache_policy<cache_modifier = none, eviction_policy = evict_last>} : tensor<1024x!tt.ptr<f32>, #blocked>
     tt.return
   }
 }
@@ -144,7 +143,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.sup
   // CHECK-LABEL: explicit_cache_wins_over_eviction
   tt.func @explicit_cache_wins_over_eviction(%ptr: tensor<1024x!tt.ptr<f32>, #blocked>, %mask: tensor<1024xi1, #blocked>) {
     // CHECK: triton_gen.predicated_load {{.*}} {cache_control = L1UC_L3C} : (!llvm.ptr<1>, i1, i32) -> i32
-    %val = tt.load %ptr, %mask cacheModifier = cg evictionPolicy = evict_last : tensor<1024x!tt.ptr<f32>, #blocked>
+    %val = tt.load %ptr, %mask {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_last>} : tensor<1024x!tt.ptr<f32>, #blocked>
     tt.return
   }
 }
@@ -171,7 +170,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     %4 = arith.addi %3, %2 : tensor<256xi32, #blocked0>
     %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<256x!tt.ptr<f32>, #blocked0>
     %6 = tt.addptr %5, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
-    %7 = tt.load %6 evictionPolicy = evict_first : tensor<256x!tt.ptr<f32>, #blocked0>
+    %7 = tt.load %6 {cachePolicy = #tt.cache_policy<cache_modifier = none, eviction_policy = evict_first>} : tensor<256x!tt.ptr<f32>, #blocked0>
     // CHECK-COUNT-2: llvm.load {{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<4xi32>
     // CHECK-NOT: nontemporal
     tt.return
@@ -188,7 +187,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.sup
   tt.func @descriptor_load_evict_first_predicated(%desc: !tt.tensordesc<128xf32>) {
     %c0_i32 = arith.constant 0 : i32
     // CHECK: triton_gen.predicated_load {{.*}} {cache_control = L1IAR_L3C} : (!llvm.ptr<1>, i1, i32) -> i32
-    %val = tt.descriptor_load %desc[%c0_i32] evictionPolicy = evict_first : !tt.tensordesc<128xf32> -> tensor<128xf32, #blocked>
+    %val = tt.descriptor_load %desc[%c0_i32] {cachePolicy = #tt.cache_policy<cache_modifier = none, eviction_policy = evict_first>} : !tt.tensordesc<128xf32> -> tensor<128xf32, #blocked>
     tt.return
   }
 }
@@ -209,7 +208,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // CHECK-LABEL: descriptor_load_cg_scalar
   tt.func @descriptor_load_cg_scalar(%desc: !tt.tensordesc<256xf32>) {
     %c0_i32 = arith.constant 0 : i32
-    %val = tt.descriptor_load %desc[%c0_i32] cacheModifier = cg : !tt.tensordesc<256xf32> -> tensor<256xf32, #blocked0>
+    %val = tt.descriptor_load %desc[%c0_i32] {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>} : !tt.tensordesc<256xf32> -> tensor<256xf32, #blocked0>
     // CHECK-COUNT-8: llvm.load {{.*}} {alignment = 4 : i64} : !llvm.ptr<1> -> i32
     tt.return
   }
@@ -222,7 +221,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // CHECK-LABEL: descriptor_load_cs_scalar
   tt.func @descriptor_load_cs_scalar(%desc: !tt.tensordesc<256xf32>) {
     %c0_i32 = arith.constant 0 : i32
-    %val = tt.descriptor_load %desc[%c0_i32] cacheModifier = cs : !tt.tensordesc<256xf32> -> tensor<256xf32, #blocked0>
+    %val = tt.descriptor_load %desc[%c0_i32] {cachePolicy = #tt.cache_policy<cache_modifier = cs, eviction_policy = evict_normal>} : !tt.tensordesc<256xf32> -> tensor<256xf32, #blocked0>
     // CHECK-COUNT-8: llvm.load {{.*}} {alignment = 4 : i64} : !llvm.ptr<1> -> i32
     tt.return
   }
@@ -235,7 +234,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // CHECK-LABEL: descriptor_load_cv_scalar
   tt.func @descriptor_load_cv_scalar(%desc: !tt.tensordesc<256xf32>) {
     %c0_i32 = arith.constant 0 : i32
-    %val = tt.descriptor_load %desc[%c0_i32] cacheModifier = cv : !tt.tensordesc<256xf32> -> tensor<256xf32, #blocked0>
+    %val = tt.descriptor_load %desc[%c0_i32] {cachePolicy = #tt.cache_policy<cache_modifier = cv, eviction_policy = evict_normal>} : !tt.tensordesc<256xf32> -> tensor<256xf32, #blocked0>
     // CHECK-COUNT-8: llvm.load {{.*}} {alignment = 4 : i64, nontemporal} : !llvm.ptr<1> -> i32
     tt.return
   }
@@ -253,7 +252,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttig.sup
   // CHECK-LABEL: descriptor_load_cg_predicated
   tt.func @descriptor_load_cg_predicated(%desc: !tt.tensordesc<256xf32>) {
     %c0_i32 = arith.constant 0 : i32
-    %val = tt.descriptor_load %desc[%c0_i32] cacheModifier = cg : !tt.tensordesc<256xf32> -> tensor<256xf32, #blocked0>
+    %val = tt.descriptor_load %desc[%c0_i32] {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>} : !tt.tensordesc<256xf32> -> tensor<256xf32, #blocked0>
     // CHECK-COUNT-8: triton_gen.predicated_load {{.*}} {cache_control = L1UC_L3C} : (!llvm.ptr<1>, i1, i32) -> i32
     tt.return
   }
@@ -266,7 +265,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttig.sup
   // CHECK-LABEL: descriptor_load_cs_predicated
   tt.func @descriptor_load_cs_predicated(%desc: !tt.tensordesc<256xf32>) {
     %c0_i32 = arith.constant 0 : i32
-    %val = tt.descriptor_load %desc[%c0_i32] cacheModifier = cs : !tt.tensordesc<256xf32> -> tensor<256xf32, #blocked0>
+    %val = tt.descriptor_load %desc[%c0_i32] {cachePolicy = #tt.cache_policy<cache_modifier = cs, eviction_policy = evict_normal>} : !tt.tensordesc<256xf32> -> tensor<256xf32, #blocked0>
     // CHECK-COUNT-8: triton_gen.predicated_load {{.*}} {cache_control = L1S_L3C} : (!llvm.ptr<1>, i1, i32) -> i32
     tt.return
   }

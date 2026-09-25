@@ -1,6 +1,7 @@
 #include "intel/include/Target/SPIRV/SPIRVTranslation.h"
 
 #include "LLVMSPIRVLib.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
@@ -105,39 +106,63 @@ public:
   SmallVectorBuffer(llvm::SmallVectorImpl<char> &O) : OS(O) {}
 };
 
-static SPIRV::TranslatorOpts getSPIRVOpts() {
-  SPIRV::TranslatorOpts SPIRVOpts{SPIRV::VersionNumber::SPIRV_1_4};
-  static constexpr std::array<SPIRV::ExtensionID, 30> AllowedExtensions{
+/// Returns the list of SPIR-V extensions the translator is allowed to use.
+/// Ideally the driver would be queried for the extensions it supports, however
+/// no such query is available yet, therefore extensions that are not supported
+/// by all drivers are gated on the driver kind (e.g. LTS vs. rolling).
+///
+/// The split below reflects the extensions the IGC shipped with the LTS driver
+/// knows about; it can be refreshed for a newer LTS by extracting the extension
+/// names from the shipped compiler library, e.g.:
+///   strings -a libigc.so.<version> | grep -oE 'SPV_[A-Za-z0-9_]+' | sort -u
+static llvm::SmallVector<SPIRV::ExtensionID> getAllowedExtensions(bool isLTS) {
+  llvm::SmallVector<SPIRV::ExtensionID> AllowedExtensions{
       SPIRV::ExtensionID::SPV_EXT_shader_atomic_float_add,
       SPIRV::ExtensionID::SPV_EXT_shader_atomic_float16_add,
-      SPIRV::ExtensionID::SPV_EXT_float8,
-      SPIRV::ExtensionID::SPV_INTEL_16bit_atomics,
-      SPIRV::ExtensionID::SPV_INTEL_sigmoid,
       SPIRV::ExtensionID::SPV_INTEL_2d_block_io,
       SPIRV::ExtensionID::SPV_INTEL_arbitrary_precision_integers,
       SPIRV::ExtensionID::SPV_INTEL_arithmetic_fence,
-      SPIRV::ExtensionID::SPV_INTEL_bfloat16_arithmetic,
       SPIRV::ExtensionID::SPV_INTEL_bfloat16_conversion,
       SPIRV::ExtensionID::SPV_INTEL_cache_controls,
-      SPIRV::ExtensionID::SPV_INTEL_float4,
-      SPIRV::ExtensionID::SPV_INTEL_fp_conversions,
       SPIRV::ExtensionID::SPV_INTEL_fp_fast_math_mode,
       SPIRV::ExtensionID::SPV_INTEL_inline_assembly,
       SPIRV::ExtensionID::SPV_INTEL_kernel_attributes,
       SPIRV::ExtensionID::SPV_INTEL_memory_access_aliasing,
-      SPIRV::ExtensionID::SPV_INTEL_predicated_io,
       SPIRV::ExtensionID::SPV_INTEL_split_barrier,
       SPIRV::ExtensionID::SPV_INTEL_subgroup_matrix_multiply_accumulate,
-      SPIRV::ExtensionID::SPV_INTEL_subgroup_matrix_multiply_accumulate_float4,
-      SPIRV::ExtensionID::SPV_INTEL_subgroup_matrix_multiply_accumulate_float8,
       SPIRV::ExtensionID::SPV_INTEL_subgroups,
       SPIRV::ExtensionID::SPV_INTEL_tensor_float32_conversion,
       SPIRV::ExtensionID::SPV_INTEL_unstructured_loop_controls,
-      SPIRV::ExtensionID::SPV_INTEL_vector_compute,
-      SPIRV::ExtensionID::SPV_KHR_bfloat16,
       SPIRV::ExtensionID::SPV_KHR_bit_instructions,
       SPIRV::ExtensionID::SPV_KHR_non_semantic_info,
       SPIRV::ExtensionID::SPV_KHR_shader_clock};
+
+  if (!isLTS) {
+    AllowedExtensions.append(
+        {SPIRV::ExtensionID::SPV_EXT_float8,
+         SPIRV::ExtensionID::SPV_EXT_long_vector,
+         SPIRV::ExtensionID::SPV_INTEL_16bit_atomics,
+         SPIRV::ExtensionID::SPV_INTEL_bfloat16_arithmetic,
+         SPIRV::ExtensionID::SPV_INTEL_float4,
+         SPIRV::ExtensionID::SPV_INTEL_fp_conversions,
+         SPIRV::ExtensionID::SPV_INTEL_predicated_io,
+         SPIRV::ExtensionID::SPV_INTEL_sigmoid,
+         SPIRV::ExtensionID::
+             SPV_INTEL_subgroup_matrix_multiply_accumulate_float4,
+         SPIRV::ExtensionID::
+             SPV_INTEL_subgroup_matrix_multiply_accumulate_float8,
+         SPIRV::ExtensionID::
+             SPV_INTEL_subgroup_scaled_matrix_multiply_accumulate,
+         SPIRV::ExtensionID::SPV_KHR_bfloat16});
+  } else {
+    AllowedExtensions.push_back(SPIRV::ExtensionID::SPV_INTEL_vector_compute);
+  }
+
+  return AllowedExtensions;
+}
+
+static SPIRV::TranslatorOpts getSPIRVOpts(bool isLTS) {
+  SPIRV::TranslatorOpts SPIRVOpts{SPIRV::VersionNumber::SPIRV_1_4};
 
   SPIRVOpts.setMemToRegEnabled(true);
   SPIRVOpts.setPreserveOCLKernelArgTypeMetadataThroughString(true);
@@ -152,12 +177,12 @@ static SPIRV::TranslatorOpts getSPIRVOpts() {
     SPIRVOpts.setAllowExtraDIExpressionsEnabled(true);
   }
 
-  for (auto &Ext : AllowedExtensions)
+  for (SPIRV::ExtensionID Ext : getAllowedExtensions(isLTS))
     SPIRVOpts.setAllowedToUseExtension(Ext, true);
   return SPIRVOpts;
 }
 
-std::string translateLLVMIRToSPIRV(llvm::Module &module) {
+std::string translateLLVMIRToSPIRV(llvm::Module &module, bool isLTS) {
   llvm::SmallVector<char, 0> buffer;
 
   // verify and store llvm
@@ -177,7 +202,7 @@ std::string translateLLVMIRToSPIRV(llvm::Module &module) {
   std::ostream OS(&StreamBuf);
   std::string Err;
 
-  SPIRV::TranslatorOpts SPIRVOpts = getSPIRVOpts();
+  SPIRV::TranslatorOpts SPIRVOpts = getSPIRVOpts(isLTS);
 
 #if defined(LLVM_SPIRV_BACKEND_TARGET_PRESENT)
   int SpvTranslateMode = 0;

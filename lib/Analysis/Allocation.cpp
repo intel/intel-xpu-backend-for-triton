@@ -68,28 +68,30 @@ unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
       getBitwidth(srcTy), numBanks, srcTile, dstTile);
 }
 
-// Both `atomic_cas` and `atomic_rmw` may need scratch memory to store values
-// because Triton's block-based programming model ensures that
-// all threads sharing the same partition of the tensor see the same values,
-// even for threads that do not participate in the atomic operation
-static SmallVector<unsigned> getRepShapeForAtomic(Value result) {
+static unsigned getResultBroadcastScratchSize(Value result) {
+  if (result.use_empty())
+    return 0;
+
   SmallVector<unsigned> smemShape;
-  if (!result.use_empty()) {
-    if (auto tensorTy = dyn_cast<RankedTensorType>(result.getType())) {
-      auto freeVariableMasks =
-          gpu::toLinearLayout(tensorTy).getFreeVariableMasks();
-      if (llvm::any_of(freeVariableMasks, [](auto variableMask) {
-            return variableMask.second != 0;
-          })) {
-        // The tensor has broadcasted dimensions
-        smemShape = convertType<unsigned>(gpu::getShapePerCTA(tensorTy));
-      }
-    } else {
-      // If the result is a scalar, we need to allocate a single element.
-      smemShape.push_back(1);
-    }
+  if (auto tensorTy = dyn_cast<RankedTensorType>(result.getType())) {
+    auto freeVariableMasks =
+        gpu::toLinearLayout(tensorTy).getFreeVariableMasks();
+    auto *ctx = tensorTy.getContext();
+    bool hasThreadReplication =
+        freeVariableMasks.lookup(StringAttr::get(ctx, "lane")) != 0 ||
+        freeVariableMasks.lookup(StringAttr::get(ctx, "warp")) != 0 ||
+        freeVariableMasks.lookup(StringAttr::get(ctx, "block")) != 0;
+    if (!hasThreadReplication)
+      return 0;
+    smemShape = convertType<unsigned>(gpu::getShapePerCTA(tensorTy));
+  } else {
+    smemShape.push_back(1);
   }
-  return smemShape;
+
+  unsigned elems = getNumScratchElements(smemShape);
+  Type elemTy = getElementTypeOrSelf(result.getType());
+  unsigned bitWidth = getIntOrFloatOrPtrBitWidth(elemTy);
+  return elems * std::max(8u, bitWidth) / 8;
 }
 
 unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
@@ -125,16 +127,12 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     // need to be broadcast through shared memory.
     if (!poll.getTimeout())
       return 0;
+    return getResultBroadcastScratchSize(poll.getResult());
   }
-  if (isa<gpu::LocalAtomicScatterRMWOp, AtomicPollOp>(op) ||
-      isa<AtomicOpInterface>(op)) {
-    auto value = op->getOperand(0);
-    auto smemShape = getRepShapeForAtomic(op->getResult(0));
-    auto elems = getNumScratchElements(smemShape);
-    if (elems == 0)
+  if (isa<gpu::LocalAtomicScatterRMWOp>(op) || isa<AtomicOpInterface>(op)) {
+    if (op->getNumResults() == 0)
       return 0;
-    auto elemTy = getElementTypeOrSelf(getPointeeType(value.getType()));
-    return elems * std::max<int>(8, elemTy.getIntOrFloatBitWidth()) / 8;
+    return getResultBroadcastScratchSize(op->getResult(0));
   }
   if (isa<ttng::TensormapCreateOp>(op)) {
     constexpr int32_t kTMASize = 128;
@@ -148,6 +146,8 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
 
 std::optional<uint16_t> getAtomicScratchBroadcastMask(Operation *op) {
   if (!isa<AtomicOpInterface, AtomicPollOp, gpu::LocalAtomicScatterRMWOp>(op))
+    return std::nullopt;
+  if (op->getNumResults() == 0)
     return std::nullopt;
 
   Type resultTy = op->getResult(0).getType();
@@ -169,8 +169,11 @@ bool hasCrossCTAScratch(Operation *op) {
   if (auto reduce = dyn_cast<ReduceOp>(op))
     return !ReduceOpHelper(reduce).isReduceWithinCTA();
   if (auto poll = dyn_cast<AtomicPollOp>(op))
-    return poll.getTimeout() && !poll.getResult().use_empty();
+    return poll.getTimeout() && !poll.getResult().use_empty() &&
+           getAtomicScratchBroadcastMask(op).value_or(0) != 0;
   if (isa<AtomicOpInterface, gpu::LocalAtomicScatterRMWOp>(op)) {
+    if (op->getNumResults() == 0)
+      return false;
     Value result = op->getResult(0);
     if (result.use_empty())
       return false;
@@ -321,6 +324,9 @@ private:
         for (auto alloc : info.getAllocs()) {
           if (allocation->valueBuffer.count(alloc))
             allocation->addAlias(value, alloc);
+          else if (auto argument = dyn_cast<BlockArgument>(alloc);
+                   argument && argument.getOwner()->getParentOp() == operation)
+            allocation->argumentAliases[value].insert(argument.getArgNumber());
         }
       }
     }

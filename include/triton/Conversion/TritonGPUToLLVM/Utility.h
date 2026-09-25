@@ -14,6 +14,7 @@
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 
 #include <optional>
 
@@ -48,6 +49,11 @@ createLLVMIntrinsicCallOp(OpBuilder &builder, Location loc, StringRef intrinsic,
 } // namespace mlir::LLVM
 
 namespace mlir::triton {
+
+// The address of the descriptor's logical origin in its memory space.
+Value getMemDescAddress(RewriterBase &rewriter, Location loc,
+                        const LLVMTypeConverter *typeConverter,
+                        gpu::MemDescType type, Value lowered);
 
 struct TritonLLVMOpBuilder {
   TritonLLVMOpBuilder(Location loc, OpBuilder &builder)
@@ -268,32 +274,6 @@ struct TritonLLVMOpBuilder {
   Value i16_val(int64_t val) { return int_val(16, val); }
   Value i32_val(int64_t val) { return int_val(32, val); }
   Value i64_val(int64_t val) { return int_val(64, val); }
-
-  Value const_val(Type ty, Attribute attr) {
-    return LLVM::ConstantOp::create(*builder, loc, ty, attr);
-  }
-
-  Value vec_splat_i1_cons(unsigned numElements, int32_t val) {
-    auto type = builder->getIntegerType(1);
-    SmallVector<int32_t> consElems(numElements, val);
-    SmallVector<Attribute> attrElems;
-    for (auto c : consElems)
-      attrElems.push_back(builder->getIntegerAttr(type, c));
-    auto attr =
-        DenseElementsAttr::get(VectorType::get(numElements, type), attrElems);
-    return const_val(VectorType::get(numElements, type), attr);
-  }
-
-  Value vec_splat_i32_cons(unsigned numElements, int32_t val) {
-    auto type = builder->getIntegerType(32);
-    SmallVector<int32_t> consElems(numElements, val);
-    SmallVector<Attribute> attrElems;
-    for (auto c : consElems)
-      attrElems.push_back(builder->getIntegerAttr(type, c));
-    auto attr =
-        DenseElementsAttr::get(VectorType::get(numElements, type), attrElems);
-    return const_val(VectorType::get(numElements, type), attr);
-  }
 
   Location loc;
   OpBuilder *builder;
@@ -752,6 +732,14 @@ std::optional<LLVM::AtomicBinOp> matchAtomicOp(RMWOp atomicOp);
 
 std::optional<LLVM::AtomicOrdering> getMemoryOrdering(MemSemantic memOrdering);
 
+/// Emit `bodyBuilder` inline when `pred` is null. Otherwise, emit it only when
+/// `pred` is true and merge its results with `falseValues` in a continuation
+/// block.
+SmallVector<Value>
+emitPredicated(RewriterBase &rewriter, Location loc, Value pred,
+               ValueRange falseValues,
+               llvm::function_ref<SmallVector<Value>()> bodyBuilder);
+
 /// Insert CTA or cluster barriers around an atomic operation according to its
 /// acquire/release semantics. `emitBarrierAfter` may be false when result
 /// staging already emits the required barrier after the atomic instruction.
@@ -809,13 +797,21 @@ SmallVector<Value> inlineRegion(RewriterBase &rewriter, Region &region,
 std::tuple</*prevBlock=*/Block *, /*ifBlock=*/Block *, /*thenBlock=*/Block *>
 createIfBlock(RewriterBase &b, Location loc, Value cnd);
 
-void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
-                                 ConversionPatternRewriter &rewriter,
-                                 SmallVector<Value> &resultVals,
-                                 Type valueElemTy, TritonLLVMOpBuilder &b,
-                                 Value threadPred,
-                                 const TargetInfoBase &targetInfo,
-                                 const LLVMTypeConverter *typeConverter);
+// Broadcast canonical owners' results to redundant threads and CTAs. Both the
+// input and returned values contain only unique registers.
+SmallVector<Value>
+broadcastTensorResult(Operation *op, RankedTensorType tensorTy,
+                      ConversionPatternRewriter &rewriter,
+                      ArrayRef<Value> uniqueResultVals, Type valueElemTy,
+                      TritonLLVMOpBuilder &b, Value threadPred,
+                      const TargetInfoBase &targetInfo);
+
+/// Synchronize an atomic result, then replace the op.
+void finalizeAtomicResults(Operation *op, ConversionPatternRewriter &rewriter,
+                           SmallVector<Value> &resultVals, Type valueElemTy,
+                           TritonLLVMOpBuilder &b, Value threadPred,
+                           const TargetInfoBase &targetInfo,
+                           const LLVMTypeConverter *typeConverter);
 
 // -----------------------------------------------------------------------
 // FuncOp conversion utilities
