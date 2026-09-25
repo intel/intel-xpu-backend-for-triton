@@ -194,7 +194,8 @@ struct LoadStoreConversionBase {
   /// Queries the descriptor's address-level AxisInfo (analogous to how
   /// getVectorSize queries the pointer operand's AxisInfo for LoadOp).
   unsigned getDescriptorVecSize(bool support256bLoadStore, Value desc,
-                                RankedTensorType resultType, Type valueElemTy,
+                                ValueRange indices, RankedTensorType resultType,
+                                Type valueElemTy,
                                 StringAttr blockIOAttr) const {
     unsigned rank = resultType.getRank();
     if (rank == 0)
@@ -244,7 +245,26 @@ struct LoadStoreConversionBase {
     unsigned vec =
         std::min({maxVec, threadContig, descContiguity, ptrAlignElems});
     assert(vec > 0 && "vec must be positive for Log2_32");
-    return std::max(1u, 1u << llvm::Log2_32(vec));
+    vec = std::max(1u, 1u << llvm::Log2_32(vec));
+
+    // The index shifts the base by index * elemBytes on the stride-one
+    // dimension, so a `vec`-element access is aligned only when the index is
+    // itself a multiple of `vec` (#7990). Other dimensions are already folded
+    // into descDivisibility by makeTensorDescAxisInfo; an absent or unprovable
+    // index is assumed unaligned.
+    AxisInfo *idxAxisInfo =
+        descDim < indices.size()
+            ? const_cast<triton::intel::ModuleAxisInfoAnalysis &>(
+                  axisAnalysisPass)
+                  .getAxisInfo(indices[descDim])
+            : nullptr;
+    // A `tt.divisibility` hint is floored at 1 but never rounded, so a hint of
+    // 6 proves only a 2-element alignment: clamp to the greatest power-of-two
+    // divisor instead of rounding the min, which leaves both operands of the
+    // min powers of two. int64_t: a constant 0 index reports kMaxDivisor.
+    int64_t idxDiv = idxAxisInfo ? idxAxisInfo->getDivisibility(0) : 1;
+    int64_t idxAlign = idxDiv > 0 ? (idxDiv & -idxDiv) : 1;
+    return static_cast<unsigned>(std::min<int64_t>(vec, idxAlign));
   }
 
   std::tuple<SmallVector<Value>, SmallVector<Value>, SmallVector<Value>>
@@ -2899,10 +2919,11 @@ struct DescriptorLoadOpConversion
 
     // Determine vectorization by querying the descriptor's address-level
     // AxisInfo, analogous to how LoadOp queries getVectorSize(ptr).
-    unsigned vec = getDescriptorVecSize(
-        hasSupport256bLoadStore(op), op.getDesc(), resultType, valueElemTy,
-        op->getAttrOfType<StringAttr>(
-            TritonIntelGPUDialect::getBlockIOAttrName()));
+    unsigned vec =
+        getDescriptorVecSize(hasSupport256bLoadStore(op), op.getDesc(),
+                             op.getIndices(), resultType, valueElemTy,
+                             op->getAttrOfType<StringAttr>(
+                                 TritonIntelGPUDialect::getBlockIOAttrName()));
 
     // vectorized iteration through all pointer elements
     const int valueElemNBits =
@@ -3098,9 +3119,10 @@ struct DescriptorStoreOpConversion
 
     // Determine vectorization by querying the descriptor's address-level
     // AxisInfo, analogous to how StoreOp queries getVectorSize(ptr).
-    unsigned vec = getDescriptorVecSize(hasSupport256bLoadStore(op),
-                                        op.getDesc(), valueTy, valueElemTy,
-                                        /*blockIOAttr=*/nullptr);
+    unsigned vec =
+        getDescriptorVecSize(hasSupport256bLoadStore(op), op.getDesc(),
+                             op.getIndices(), valueTy, valueElemTy,
+                             /*blockIOAttr=*/nullptr);
 
     const size_t dtsize =
         std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);
