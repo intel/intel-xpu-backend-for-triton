@@ -10,3 +10,6 @@ tests/v1/spec_decode/test_max_len.py::test_ngram_max_len
 
 # oneCCL fails to start worker thread: https://github.com/intel/intel-xpu-backend-for-triton/issues/7686
 tests/v1/spec_decode/test_speculators_eagle3.py::test_eagle3_speculators_model
+
+# GLM-5.3-Flash does not support XPU:
+tests/v1/spec_decode/test_mtp.py::test_glm_mtp_defers_lm_head
