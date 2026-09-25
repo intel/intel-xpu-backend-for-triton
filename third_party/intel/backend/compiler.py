@@ -64,6 +64,7 @@ class XPUOptions:
     fpsan_homomorphic_casts: bool = False
     core_clock_rate: int = 0  # kHz, scales the in-kernel cycle counter
     is_lts: bool = True
+    has_thread_pause: bool = False  # EU pause counter, see `supports_thread_pause`
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -163,6 +164,29 @@ def accepts_default_grf(spill_size, threads_per_warp, is_lts):
     return spill_slots_per_lane(spill_size, threads_per_warp) <= MAX_REG_SPILL_SLOTS_PER_LANE
 
 
+# SYCL `architecture` values of devices that must not get the pause: Xe-HPC
+# (Ponte Vecchio; `parse_device_arch` names only the first of the two), and
+# `unknown` or no value at all, which cannot rule out Xe-HPC.
+_NO_THREAD_PAUSE_ARCHITECTURES = (
+    0x000000030F000700,  # intel_gpu_pvc
+    0x000000030F400700,  # intel_gpu_pvc_vg
+    0x9900000000000000,  # unknown
+    0,  # not reported by the target
+)
+
+
+def supports_thread_pause(device_arch, architecture):
+    """Whether the EU thread-pause counter can be used on this target.
+
+    Xe-HPC is the one family whose vISA finalizer rejects the write to `tm0.4`
+    ("Pause counter is not supported on PVC and PVCXT") -- a compile error, not
+    an ignored instruction, so it must not be emitted there. Xe-HPC is matched by
+    name as well, so a `TRITON_INTEL_DEVICE_ARCH=pvc` override also leaves the
+    pause out.
+    """
+    return not device_arch.startswith("pvc") and architecture not in _NO_THREAD_PAUSE_ARCHITECTURES
+
+
 def min_dot_size(device_props: Union[Dict, GPUTarget]):
     if isinstance(device_props, GPUTarget):
         backend = XPUBackend(device_props)
@@ -258,6 +282,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         dev_prop['block_io_base_alignment'] = tgt_prop.get('block_io_base_alignment', 64)
         dev_prop['core_clock_rate'] = self.core_clock_rate(tgt_prop)
         dev_prop['is_lts'] = is_lts
+        dev_prop['has_thread_pause'] = supports_thread_pause(self.device_arch, tgt_prop.get('architecture', 0))
 
         if '__intel_already_queried_extensions__' not in tgt_prop:
             # All GPUs with the same device_id have the same extensions, so we just
@@ -274,6 +299,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         args["allow_fp8e4nv"] = True
         args["core_clock_rate"] = self.properties['core_clock_rate']
         args["is_lts"] = self.properties['is_lts']
+        args["has_thread_pause"] = self.properties['has_thread_pause']
         if "enable_fp_fusion" not in args:
             args["enable_fp_fusion"] = knobs.language.default_fp_fusion
         return XPUOptions(**args)
