@@ -222,6 +222,21 @@ void eraseOperations(SmallPtrSetImpl<Operation *> &operations) {
   }
 }
 
+// True if any region of `op` has no blocks.
+//
+// An operation can be transiently region-less *during* dialect conversion:
+// while `ConvertForOpTypes` rebuilds an `scf.for` with converted iter-arg types
+// the original op holds no blocks, and the conversion driver re-queries the
+// legality of that loop's consumers in exactly that window. Anything reaching a
+// region terminator from there trips
+// `SingleBlock<scf::ForOp>::getBody(): '!region.empty()'`. Such a region is
+// unreadable, which is *untraceable*, not absent -- so the callers must be told
+// the trace failed rather than handed a partial answer. See #8167.
+static bool hasEmptyRegion(Operation *op) {
+  return llvm::any_of(op->getRegions(),
+                      [](Region &region) { return region.empty(); });
+}
+
 static SmallVector<tt::MakeTensorDescOp> findAllMakeTensorDescOps(Value val) {
   llvm::SmallSetVector<tt::MakeTensorDescOp, 4> results;
   SmallPtrSet<Value, 8> visited;
@@ -239,6 +254,10 @@ static SmallVector<tt::MakeTensorDescOp> findAllMakeTensorDescOps(Value val) {
         return {};
 
       if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
+        // Both `getInductionVar` and `getBody` below read the loop body, so the
+        // emptiness check has to come first (see `hasEmptyRegion`).
+        if (hasEmptyRegion(parentOp))
+          return {};
         // The induction variable (argNumber == 0) is not traceable.
         if (arg == forOp.getInductionVar())
           return {};
@@ -249,6 +268,12 @@ static SmallVector<tt::MakeTensorDescOp> findAllMakeTensorDescOps(Value val) {
         continue;
       }
       if (auto whileOp = dyn_cast<scf::WhileOp>(parentOp)) {
+        // `getBefore().front()` / `getAfter().front()` read both loop regions,
+        // and `ConvertWhileOpTypes` comes from the same
+        // `populateSCFStructuralTypeConversions` call as `ConvertForOpTypes`,
+        // so this branch has the `scf.for` hazard above (see `hasEmptyRegion`).
+        if (hasEmptyRegion(parentOp))
+          return {};
         unsigned idx = arg.getArgNumber();
         Block *beforeBlock = &whileOp.getBefore().front();
         Block *afterBlock = &whileOp.getAfter().front();
@@ -279,23 +304,46 @@ static SmallVector<tt::MakeTensorDescOp> findAllMakeTensorDescOps(Value val) {
     }
     if (auto opRes = dyn_cast<OpResult>(cur)) {
       Operation *defOp = opRes.getOwner();
+      if (auto whileOp = dyn_cast<scf::WhileOp>(defOp)) {
+        // An `scf.while` result is the `scf.condition` arg, not the after
+        // region's yield that `getYieldedValues` returns. `getConditionOp`
+        // reads the before region (see `hasEmptyRegion`).
+        if (hasEmptyRegion(defOp))
+          return {};
+        worklist.push_back(
+            whileOp.getConditionOp().getArgs()[opRes.getResultNumber()]);
+        continue;
+      }
       if (auto loopOp = dyn_cast<LoopLikeOpInterface>(defOp)) {
+        // `getYieldedValues` reaches the region terminator, so it must not run
+        // on a transiently region-less loop (see `hasEmptyRegion`).
+        if (hasEmptyRegion(defOp))
+          return {};
         worklist.push_back(loopOp.getYieldedValues()[opRes.getResultNumber()]);
+        // A zero-trip loop returns its init, so trace that too.
+        if (OpOperand *init = loopOp.getTiedLoopInit(opRes))
+          worklist.push_back(init->get());
         continue;
       }
       if (auto ifOp = dyn_cast<scf::IfOp>(defOp)) {
+        // An `scf.if` that produces results is required by the verifier to have
+        // both regions, so an empty arm can only be transient conversion state
+        // (see `hasEmptyRegion`) -- checking it is therefore behaviour
+        // preserving on stable IR. This used to *skip* the unreadable arm,
+        // which is the quiet half of #8167: the walk returns a non-empty set
+        // assembled from one arm only, and a caller reasoning about `padding`
+        // reads it as a consistent -- and confidently wrong -- answer. Report
+        // the trace as failed instead.
+        if (hasEmptyRegion(defOp))
+          return {};
         Region &thenRgn = ifOp.getThenRegion();
         Region &elseRgn = ifOp.getElseRegion();
-        if (!thenRgn.empty()) {
-          auto thenYieldOp =
-              cast<scf::YieldOp>(thenRgn.getBlocks().front().getTerminator());
-          worklist.push_back(thenYieldOp->getOperand(opRes.getResultNumber()));
-        }
-        if (!elseRgn.empty()) {
-          auto elseYieldOp =
-              cast<scf::YieldOp>(elseRgn.getBlocks().front().getTerminator());
-          worklist.push_back(elseYieldOp->getOperand(opRes.getResultNumber()));
-        }
+        auto thenYieldOp =
+            cast<scf::YieldOp>(thenRgn.getBlocks().front().getTerminator());
+        worklist.push_back(thenYieldOp->getOperand(opRes.getResultNumber()));
+        auto elseYieldOp =
+            cast<scf::YieldOp>(elseRgn.getBlocks().front().getTerminator());
+        worklist.push_back(elseYieldOp->getOperand(opRes.getResultNumber()));
         continue;
       }
       if (auto selectOp = dyn_cast<arith::SelectOp>(defOp)) {

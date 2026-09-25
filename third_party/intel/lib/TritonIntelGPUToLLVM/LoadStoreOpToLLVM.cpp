@@ -2801,12 +2801,58 @@ struct DescriptorLoadOpConversion
     assertDescriptorInnerShapeCompatible(op, descTensorType.getShape(),
                                          resultType.getShape(), permuteDescDim);
 
-    // Get padding from the propagated attribute (set by
-    // MaterializeBlockPointer).
-    PaddingOption padding = PaddingOption::PAD_ZERO;
-    if (auto paddingAttr = op->getAttrOfType<triton::PaddingOptionAttr>(
-            TritonIntelGPUDialect::getDescPaddingAttrName()))
+    // Resolve the out-of-bounds fill value. Provenance is validated *before*
+    // the `ttig.desc_padding` attribute is trusted: the attribute is only
+    // stamped (by MaterializeBlockPointer) when every candidate descriptor
+    // agreed, so the defining ops are the stronger evidence of the two.
+    // Checking them first is safe because findDescriptorDefinitions is
+    // all-or-nothing -- any untraceable path yields an empty set -- so it can
+    // degrade a divergent set to empty but never fabricate a disagreement.
+    mlir::triton::intel::DescriptorDefinitions defs =
+        mlir::triton::intel::findDescriptorDefinitions(op.getDesc());
+    std::optional<PaddingOption> tracedPadding = defs.consistentPadding();
+    auto paddingAttr = op->getAttrOfType<triton::PaddingOptionAttr>(
+        TritonIntelGPUDialect::getDescPaddingAttrName());
+
+    // Traceable provenance whose candidates disagree: no single compile-time
+    // fill value exists, so the descriptor-native path cannot represent this
+    // load (part of issue #8102). The TTIR pointer expansion
+    // (RewriteTensorDescriptorToPointer) carries the padding mode as a runtime
+    // value and selects the fill per branch, and it evicts such descriptors
+    // from the descriptor-native path, so this is only reachable from
+    // hand-written TTGIR. Fail loudly rather than silently picking a mode.
+    if (!defs.empty() && !tracedPadding)
+      return op.emitError(
+          "descriptor padding is divergent: the operations defining this "
+          "descriptor disagree, so there is no single out-of-bounds fill "
+          "value; such a descriptor must be expanded to pointers by the "
+          "'triton-intel-rewrite-tensor-descriptor-to-pointer' pass, which "
+          "encodes the padding mode as a runtime value");
+
+    // The attribute is only stamped when provenance agreed, so a disagreement
+    // here means it is stale or hand-written. Neither value can be preferred
+    // over the other, and quietly keeping one would reintroduce the silent
+    // substitution this check exists to prevent.
+    if (paddingAttr && tracedPadding &&
+        paddingAttr.getValue() != *tracedPadding)
+      return op.emitError("'ttig.desc_padding' disagrees with the padding of "
+                          "the operations defining this descriptor");
+
+    PaddingOption padding;
+    if (paddingAttr) {
       padding = paddingAttr.getValue();
+    } else if (tracedPadding) {
+      padding = *tracedPadding;
+    } else {
+      // Empty trace: some path reaches an untraceable value (e.g. an opaque
+      // function argument in hand-written TTGIR). The trace is all-or-nothing,
+      // so other paths may still reach a traceable producer whose padding is
+      // lost here. The LLVM descriptor struct carries no padding field, so
+      // fall back to PAD_ZERO -- the declared default of
+      // `tt.make_tensor_descriptor`. This is a compatibility fallback, not a
+      // derivation of the descriptor's padding.
+      padding = PaddingOption::PAD_ZERO;
+    }
 
     // Build the boundary-check dimension lists. Classify each dimension:
     //   - perElementDims: shape[i] or offset[i] is NOT divisible by
@@ -2820,9 +2866,9 @@ struct DescriptorLoadOpConversion
     //     is all-in or all-out, but NOT necessarily in-bounds — a fully
     //     out-of-bounds tile (offset >= shape) must be predicated to preserve
     //     zero-padding semantics.
+    // `defs` is the provenance already computed for the padding resolution
+    // above.
     ArrayRef<int64_t> blockShape = descTensorType.getShape();
-    mlir::triton::intel::DescriptorDefinitions defs =
-        mlir::triton::intel::findDescriptorDefinitions(op.getDesc());
     SmallVector<int32_t> perElementDims, blockLevelDims;
     for (size_t i = 0; i < descRank; ++i) {
       int64_t bs = blockShape[i];

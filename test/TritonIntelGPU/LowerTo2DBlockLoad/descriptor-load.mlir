@@ -284,6 +284,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 // COM: conversion proceeds. `pad_nan` on the emitted op is the part that
 // COM: matters -- it shows the padding *value* survived the trace, not merely
 // COM: that some conversion happened.
+// COM:
+// COM: The pairing with @if_divergent_padding is what makes both cases meaningful,
+// COM: and the asymmetry between them is deliberate rather than a gap:
+// COM:
+// COM: (a) In the normal pipeline the divergent twin is unreachable -- such a load
+// COM:     is expanded to pointers before TTGIR exists, so refusing the 2D block
+// COM:     path there is correct and complete. This consistent case is the one the
+// COM:     pipeline actually produces, and it must keep its fast path; that is the
+// COM:     over-eviction guard. Its counterpart on the expansion side is
+// COM:     @if_consistent_padding in
+// COM:     test/Triton/Intel/rewrite-tensor-descriptor-to-pointer.mlir, which
+// COM:     asserts the same "do not evict a consistent descriptor" contract one
+// COM:     stage earlier.
+// COM:
+// COM: (b) For standalone hand-written TTGIR, the divergent twin is additionally
+// COM:     rejected outright by the LLVM lowering instead of silently defaulting to
+// COM:     PAD_ZERO (issue #8102); see
+// COM:     test/TritonIntelGPU/descriptor-load-divergent-padding.mlir. Nothing about
+// COM:     that hardening may touch THIS case: a consistent PAD_NAN provenance must
+// COM:     still reach ttig.2d_block_load with `pad_nan`.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
