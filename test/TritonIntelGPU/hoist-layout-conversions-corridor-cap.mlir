@@ -1,7 +1,7 @@
 // RUN: triton-opt %s -split-input-file -tritonintelgpu-hoist-layout-conversions="corridor-op-cap=1" | FileCheck %s --check-prefixes=CHECK,CAP1
-// RUN: triton-opt %s -split-input-file -tritonintelgpu-hoist-layout-conversions="corridor-op-cap=2" | FileCheck %s --check-prefixes=CHECK,CAP2
+// RUN: triton-opt %s -split-input-file -tritonintelgpu-hoist-layout-conversions="corridor-op-cap=3" | FileCheck %s --check-prefixes=CHECK,CAP2
 // RUN: env TRITON_INTEL_HLC_STATS=1 triton-opt %s -split-input-file -tritonintelgpu-hoist-layout-conversions="corridor-op-cap=1" 2>&1 | FileCheck %s --check-prefix=STATS1
-// RUN: env TRITON_INTEL_HLC_STATS=1 triton-opt %s -split-input-file -tritonintelgpu-hoist-layout-conversions="corridor-op-cap=2" 2>&1 | FileCheck %s --check-prefix=STATS2
+// RUN: env TRITON_INTEL_HLC_STATS=1 triton-opt %s -split-input-file -tritonintelgpu-hoist-layout-conversions="corridor-op-cap=3" 2>&1 | FileCheck %s --check-prefix=STATS2
 
 // COM: The corridor operation cap bounds what the whole-function peak projection
 // COM: will price. The projection walks every operation between a hoist's
@@ -13,12 +13,17 @@
 // COM:
 // COM: The default cap is far above anything a real kernel reaches, so it can only
 // COM: be exercised by lowering it. This file lowers it around a fixed pair of
-// COM: hoists whose corridors are 2 and 3 operations long, which is why the same
-// COM: IR gives two different outcomes:
+// COM: hoists whose corridors are 3 and 4 operations long (one op longer each
+// COM: than a corridor covering only the operations *above* the conversion's old
+// COM: position, since `collectCorridor` also walks the body past the
+// COM: conversion's own last use -- here just the loop's own `scf.yield` -- to
+// COM: price the loop's back edge; see `collectCorridor`'s doc comment in
+// COM: HoistLayoutConversions.cpp), which is why the same IR gives two different
+// COM: outcomes:
 // COM:   cap=1: both corridors exceed the cap, both hoists are charged
 // COM:          prePeak + 64 = 992 > 928 and both are refused.
-// COM:   cap=2: the 2-operation corridor is priced (608, accepted at the 928
-// COM:          ceiling) and only the 3-operation one bails.
+// COM:   cap=3: the 3-operation corridor is priced (928, accepted at the 928
+// COM:          ceiling) and only the 4-operation one bails.
 // COM: Both hoists are free -- each retires a 256-byte source in exchange for a
 // COM: 64-byte result -- so the loop-level gate passes them in every
 // COM: configuration and the verdicts here are the corridor cap's alone. This is
@@ -26,7 +31,7 @@
 // COM: with lost hoists.
 // COM:
 // COM: The two loops are decided last-to-first (see the sibling-loop case in
-// COM: hoist-layout-conversions.mlir), which at cap=2 is why the *second* loop's
+// COM: hoist-layout-conversions.mlir), which at cap=3 is why the *second* loop's
 // COM: conversion is the one that moves: it is decided first, and its corridor is
 // COM: shorter by the loop the other candidate has to step over.
 // COM:
@@ -56,7 +61,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CAP1: scf.for
     // CAP1-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
 
-    // COM: cap=2: the second loop's conversion moves up beside %s2, the first
+    // COM: cap=3: the second loop's conversion moves up beside %s2, the first
     // COM: loop's stays put.
     // CAP2: arith.addf
     // CAP2-NEXT: arith.addf

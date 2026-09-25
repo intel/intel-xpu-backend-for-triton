@@ -761,3 +761,86 @@ module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 32 : i32, "ttg.th
     tt.return
   }
 }
+
+// -----
+
+// COM: Regression guard for #8053, at the level of RVL's actual sink/no-sink
+// COM: *decision* rather than a raw `-test-register-pressure` value (that gap
+// COM: -- a future regression to RegisterPressureAnalysis changing the number
+// COM: silently instead of flipping a decision here -- is what this test
+// COM: closes). This loop's own top-level operations (the two DPAS-operand
+// COM: loads, the dot, the accumulator) are cheap on their own: by the same
+// COM: byte math as `loop_with_live_in_operand` in
+// COM: test/Analysis/register-pressure.mlir, they peak around 257 B/lane,
+// COM: far under the 1024 B/lane default-GRF-mode budget
+// COM: (getPerLaneGRFBudgetInBytes("default", mod, Largest) = 16384 / 16).
+// COM: But the loop also holds an `scf.if` whose body alone -- two loads of a
+// COM: 512 B/lane tensor plus their sum, live simultaneously -- reaches 1536
+// COM: B/lane, the same shape as `loop_with_nested_if` in that file, plus the
+// COM: live-through contributions their notes derive (the yielded dot result,
+// COM: the `scf.if` condition, and here also the live-in A operand): 1536 +
+// COM: 32 + 1 + 64 = 1633 B/lane total, comfortably over budget.
+// COM: This number, and the sink decision it drives, are unaffected by
+// COM: #8053's follow-up operand-supersession fix to
+// COM: `getLiveThroughAncestorSet` (which stops charging a value that dies as
+// COM: an ancestor's own operand, e.g. a loop's init arg, once for that
+// COM: ancestor and again for the block argument or yielded value that
+// COM: supersedes it -- see that function's implementation comment). The
+// COM: `%arg3` condition IS such an operand at the `scf.if` level and is
+// COM: correctly dropped there, but it is separately, correctly recovered:
+// COM: its single real use is nested two levels below the `scf.for`, so by
+// COM: the same nested-use attribution that makes the live-in A operand
+// COM: live-through here, `%arg3` is also raw-live at the *enclosing*
+// COM: `scf.for`'s own point, where it is not an operand (the `scf.for`'s
+// COM: operands are only its bounds and the accumulator init) and so is kept
+// COM: unconditionally there. The recursive ancestor union re-unions that
+// COM: `scf.for`-level contribution into the `scf.if`-level one the peak
+// COM: query actually reads, so the byte this fix removes at one level is
+// COM: restored by the next, and the total does not move. Verified by hand
+// COM: for this exact case; not asserted here as a `-test-register-pressure`
+// COM: peak (this file only checks the sink/no-sink decision), so a future
+// COM: change that broke this cancellation would not be caught by this test
+// COM: -- it would show up as a value change under
+// COM: test/Analysis/register-pressure.mlir instead.
+// COM: If `RegisterPressureAnalysis::peakPressure`/`pressureAt` ever regress
+// COM: to scanning only a block's own operation list (missing the `scf.if`
+// COM: body entirely) or drop the live-through-ancestor union, the measured
+// COM: peak here falls back to ~257 B/lane, under budget, and the load below
+// COM: silently stops being sunk -- a correctness-of-heuristic regression
+// COM: that would otherwise show up only as a value change under
+// COM: `-test-register-pressure`, never as a decision change here.
+// CHECK-LABEL: tt.func @loop_pressure_hidden_in_nested_if
+#dpas9 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0_9 = #ttg.dot_op<{opIdx = 0, parent = #dpas9, kWidth=1}>
+#dot1_9 = #ttg.dot_op<{opIdx = 1, parent = #dpas9, kWidth=2}>
+#blocked9 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  tt.func @loop_pressure_hidden_in_nested_if(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i1) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<8x16xf32, #dpas9>
+    %c64_i32 = arith.constant 64 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %c0_i64 = arith.constant 0 : i64
+    %0 = tt.make_tensor_descriptor %arg0, [%c0_i32, %c0_i32], [%c0_i64, %c0_i64] : <f16>, <8x64xf16>
+    %1 = tt.make_tensor_descriptor %arg1, [%c0_i32, %c0_i32], [%c0_i64, %c0_i64] : <f16>, <64x16xf16>
+    %2 = tt.make_tensor_descriptor %arg2, [%c0_i32, %c0_i32], [%c0_i64, %c0_i64] : <f32>, <64x128xf32>
+    // CHECK:      ttig.descriptor_prefetch %{{.*}}[%c0_i32, %c0_i32] {{.*}} : !tt.tensordesc<8x64xf16>
+    // CHECK-NOT:  tt.descriptor_load {{.*}} : !tt.tensordesc<8x64xf16>
+    %3 = tt.descriptor_load %0[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<8x64xf16> -> tensor<8x64xf16, #dot0_9>
+    %4 = scf.for %arg4 = %c0_i32 to %c64_i32 step %c64_i32 iter_args(%arg5 = %cst) -> (tensor<8x16xf32, #dpas9>) : i32 {
+      // CHECK:  scf.for
+      // COM: The sunk copy: the fix above must keep sinking this load for the
+      // COM: test to keep exercising the decision it guards.
+      // CHECK:  tt.descriptor_load {{.*}} : !tt.tensordesc<8x64xf16>
+      %5 = tt.descriptor_load %1[%c0_i32, %c0_i32] : !tt.tensordesc<64x16xf16> -> tensor<64x16xf16, #dot1_9>
+      %6 = tt.dot %3, %5, %arg5, inputPrecision = tf32 : tensor<8x64xf16, #dot0_9> * tensor<64x16xf16, #dot1_9> -> tensor<8x16xf32, #dpas9>
+      scf.if %arg3 {
+        %7 = tt.descriptor_load %2[%c0_i32, %c0_i32] : !tt.tensordesc<64x128xf32> -> tensor<64x128xf32, #blocked9>
+        %8 = tt.descriptor_load %2[%c0_i32, %c0_i32] : !tt.tensordesc<64x128xf32> -> tensor<64x128xf32, #blocked9>
+        %9 = arith.addf %7, %8 : tensor<64x128xf32, #blocked9>
+        tt.descriptor_store %2[%c0_i32, %c0_i32], %9 : !tt.tensordesc<64x128xf32>, tensor<64x128xf32, #blocked9>
+      }
+      scf.yield %6 : tensor<8x16xf32, #dpas9>
+    }
+    tt.return
+  }
+}
