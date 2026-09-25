@@ -25,13 +25,14 @@ One flag per kernel family, each with its own `TRITON_TEST_SUITE` and skip list
 
 | Flag | Test files, relative to `sglang/test/` |
 |---|---|
-| `--sglang-attention` | `registered/attention/test_create_kvindices.py`, `registered/attention/test_triton_attention_kernels.py` |
+| `--sglang-attention` | `registered/attention/test_create_kvindices.py`, `registered/attention/test_triton_attention_kernels.py`, `registered/attention/unittests/dense/test_triton.py` |
 | `--sglang-quant` | `registered/quant/test_fp8_kernel.py`, `test_triton_scaled_mm.py`, `test_awq_dequant.py` |
 | `--sglang-moe` | `registered/lora/test_fused_moe_lora_kernel.py` |
 | `--sglang-mamba` | `registered/layers/mamba/test_causal_conv1d.py`, `test_mamba_ssm.py`, `test_mamba_ssm_ssd.py` |
 | `--sglang-gdn` | `registered/attention/test_chunk_gated_delta_rule.py` |
 | `--sglang-kda` | `registered/attention/test_kda_kernels.py` |
 | `--sglang-spec` | `registered/spec/dspark/test_dspark_kernel_parity.py` |
+| `--sglang-e2e` | `registered/xpu/test_xpu_basic.py` |
 
 Two things to know before editing this:
 
@@ -53,7 +54,22 @@ kernels to `kernels/ops/` (RFC #29630), so recheck them after a pin bump.
 | `decode_attention_fwd`, `_normal`, `_grouped` | `kernels/ops/attention/decode_attention.py` |
 | `extend_attention_fwd`, `_unified`, `build_unified_kv_indices` | `kernels/ops/attention/extend_attention.py` |
 | `context_attention_fwd` | `kernels/ops/attention/prefill_attention.py` |
-| `create_flashinfer_kv_indices_triton` | `kernels/ops/attention/utils.py` |
+| `create_flashinfer_kv_indices_triton` | `kernels/ops/kvcache/kv_indices.py`, re-exported from `kernels/ops/attention/utils.py` |
+| `get_num_kv_splits_triton` | `kernels/ops/attention/metadata.py` |
+
+`unittests/dense/test_triton.py` is the second source of coverage for those
+kernels and the only one that reaches `get_num_kv_splits_triton`. Instead of
+calling the kernels directly it drives `RadixAttention` through the real
+`TritonAttnBackend` and compares against HF-style torch reference modules, so it
+also covers the metadata builders, page sizes 1/16/32, CUDA-graph decode,
+split-op extend and spec-verify. Measured launches for one run: `_fwd_kernel` 55,
+`_fwd_kernel_stage2` 41, `_fwd_kernel_stage1` 34, `create_flashinfer_kv_indices_triton` 70,
+`get_num_kv_splits_triton` 22, `_fwd_grouped_kernel_stage1` 7.
+
+Upstream gates it on `torch.cuda.is_available()` and registers it for CUDA and
+ROCm only; `sglang-test-fix.patch` makes the gate, the RNG seeding and the
+capture stream device-agnostic via `get_device_module()` and adds
+`register_xpu_ci`. Those hunks are written to be upstreamable as-is.
 
 `--sglang-quant`:
 
@@ -115,19 +131,49 @@ fork silently picks the NVIDIA kernels instead of failing.
 | `expand_prefill_causally`, `build_page_table_positions`, `build_causal_swa_page_indices` | `kernels/ops/attention/dsv4_attn_metadata_kernels.py` |
 | `dspark_accept`, `dspark_attn_metadata`, `dspark_draft_model`, `dspark_schedule`, `dspark_verify_window` | `srt/speculative/dspark_components/kernels/` |
 
+`--sglang-e2e`. The only suite that runs a real forward pass, so the only one
+that reaches these two - every other suite builds `ForwardBatch` directly and
+passes `positions` in by hand, bypassing `ForwardBatch.init_new`:
+
+| Kernels | Source |
+|---|---|
+| `compute_position_kernel` | `kernels/ops/attention/position.py` |
+| `write_req_to_token_pool_triton` | `kernels/ops/memory/common.py` |
+
+It also re-covers the attention kernels through the serving path. Measured
+launches for one `bench_one_batch` run on Max 1100: `_fwd_grouped_kernel_stage1`
+168, `_fwd_kernel_stage2` 168, `_fwd_kernel` 56, `create_flashinfer_kv_indices_triton`
+8, `get_num_kv_splits_triton` 6, `compute_position_kernel` 2,
+`write_req_to_token_pool_triton` 2.
+
+Two things it does not give you. It asserts `decode_throughput > 0`, so it catches
+a crash or a compile failure in those kernels but not a wrong value. And it needs
+model weights (`Qwen/Qwen2.5-1.5B-Instruct`, ungated) plus a server launch, so it
+is slower and less hermetic than the kernel suites - hence its own CI entry rather
+than joining `sglang-rest`.
+
+`get_xpu_memory_capacity()` has to be patched for any of this to start:
+`torch.xpu.mem_get_info()` raises `RuntimeError` on Data Center GPU Max, which does
+not implement the free-memory query, and the function only catches
+`AttributeError`. It escapes through `get_device_memory_capacity()` into the KV
+pool and pipeline setup. Only element `[1]` (total) is read, so the patch falls
+back to `torch.xpu.get_device_properties().total_memory` - 49136 MB either way on
+Max 1100.
+
 ## Results on Max 1100
 
 Local run at the current pin, one suite at a time. The skip lists come from it.
 
 | Suite | Result | Time |
 |---|---|---|
-| `--sglang-attention` | 8 passed, 2 skipped (1 upstream, 1 skip-listed) | 26s |
+| `--sglang-attention` | 18 passed, 2 skipped (1 upstream, 1 skip-listed) | 116s |
 | `--sglang-quant` | 5 passed | 43s |
 | `--sglang-moe` | 108 skipped, all skip-listed | 4s |
 | `--sglang-mamba` | 932 passed, 16 skipped upstream | 15s |
 | `--sglang-gdn` | 29 skipped, all skip-listed | 4s |
 | `--sglang-kda` | 1 passed, 12 skipped upstream | 6s |
 | `--sglang-spec` | 1 skipped, skip-listed | 6s |
+| `--sglang-e2e` | not measured locally - needs model weights and a server launch | - |
 
 Nothing failed because of Triton codegen.
 
@@ -140,7 +186,13 @@ Nothing failed because of Triton codegen.
   Three unguarded imports account for all of it, measured at pin `771e613d96`
   with the `activation.py` guard applied - `srt/layers/layernorm.py:102` (156
   models), `srt/layers/rotary_embedding/base.py:75` (161 once layernorm is
-  fixed), `srt/layers/attention/vision.py:76` (41).
+  fixed), `srt/layers/attention/vision.py:76` (41). Because of this the
+  `sglang-e2e` matrix entry only exists where `install_sgl_kernel_xpu` is set:
+  the suite passes on BMG and fails on PVC at `ValueError: Model architectures
+  ['TransformersForCausalLM'] are not supported for now`. Guarding the three
+  imports would let it run on PVC too, but `RMSNorm.forward_xpu` calls
+  `rmsnorm`/`fused_add_rmsnorm` directly, so that needs real torch fallbacks
+  rather than deferred import errors.
 
   `install-sglang.sh` strips the `sgl-kernel @ git+...` requirement together with
   the `torch==2.13.0+xpu` pin next to it: resolving it through pip builds in an
@@ -175,6 +227,19 @@ Nothing failed because of Triton codegen.
 - **CUDA-only tests.** `test_fused_moe_lora_kernel.py` is parametrized with
   `device="cuda:0"` and `test_dspark_kernel_parity.py` calls `torch.cuda`; both
   are skip-listed. Two of three `test_kda_kernels.py` classes skip themselves.
+- **e2e is smoke only.** `--sglang-e2e` asserts throughput, not numerics, so a
+  subtly wrong position id or token-pool write still passes. No SGLang test
+  checks those two kernels against a reference.
+- **Other `unittests/` families are still CUDA-gated.** Only `dense/test_triton.py`
+  is enabled here. 29 more files under `registered/attention/unittests/` carry the
+  same `torch.cuda.is_available()` gate, including the other Triton-backend rows
+  `mla/test_triton.py`, `swa/test_triton.py`, `lightning/test_triton.py`,
+  `kda/test_triton.py` and `gdn/test_triton.py`. Eight kits besides
+  `speculative_draft_runner.py` also repeat the `torch.cuda` RNG pattern
+  (`mla_attention.py`, `gdn_attention.py`, `kda_attention.py`, `mamba2_attention.py`,
+  `lightning_attention.py`, `dsa_attention.py`, `dsv4_attention.py`,
+  `dual_chunk_attention.py`). Enable one family at a time; `gdn/` and `kda/` stay
+  blocked on `tl.make_block_ptr` regardless (see below).
 - **Sliding window OOM.** `test_extend_attention_sliding_window` runs the kernel
   fine, but its torch reference needs more than 48 GB. Unskip when it is chunked.
 - **BMG.** `scripts/skiplist/xe2/` is a copy of `default/`; nothing measured on
@@ -202,10 +267,13 @@ Matrix entries, one report artifact each, aggregated by the `reports` job:
 | `sglang-moe` | `--sglang-moe` |
 | `sglang-mamba` | `--sglang-mamba` |
 | `sglang-rest` | `--sglang-gdn`, `--sglang-kda`, `--sglang-spec` |
+| `sglang-e2e` | `--sglang-e2e` |
 
-The short suites share `sglang-rest`, like `vllm-rest`. Each entry installs
-SGLang itself, because `run_sglang_tests` calls `install-sglang.sh` - there is no
-install step in the workflow as there is for vLLM.
+The short suites share `sglang-rest`, like `vllm-rest`. `sglang-e2e` gets its own
+entry instead, because it launches a server and downloads model weights. Each
+entry installs SGLang itself, because `run_sglang_tests` calls
+`install-sglang.sh` - there is no install step in the workflow as there is for
+vLLM.
 
 `install_sgl_kernel_xpu` adds one `--install-sgl-kernel-xpu` step before the
 suites and is only set for BMG. It is idempotent across matrix entries, but the
@@ -228,6 +296,7 @@ bash scripts/test-triton.sh --sglang-mamba --skip-pip-install --skip-pytorch-ins
 bash scripts/test-triton.sh --sglang-gdn --skip-pip-install --skip-pytorch-install
 bash scripts/test-triton.sh --sglang-kda --skip-pip-install --skip-pytorch-install
 bash scripts/test-triton.sh --sglang-spec --skip-pip-install --skip-pytorch-install
+bash scripts/test-triton.sh --sglang-e2e --skip-pip-install --skip-pytorch-install
 ```
 
 ## Reference
