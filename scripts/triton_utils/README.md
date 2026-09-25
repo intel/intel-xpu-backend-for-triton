@@ -152,6 +152,17 @@ To merge multiple test results for the same test and keep only the best outcome:
 --merge-test-results
 ```
 
+##### Aggregate variant counts by test function
+
+To count statuses once per test function instead of once per variant:
+```bash
+--aggregation-level test_function
+```
+
+Default: `none`.
+
+With `test_function`, each test function contributes `1` to a status if any of its variants ended in that status.
+
 For the full list of options run:
 ```bash
 triton-utils pass_rate --help
@@ -171,6 +182,7 @@ This mode supports all filtering and merging options from `pass_rate` mode, plus
 
 ```bash
 --report-grouping-level <grouping_level>  # Options: report, testsuite, test (default: test)
+--aggregation-level <level>               # Options: none, test_function
 ```
 
 #### Additional options
@@ -202,6 +214,12 @@ triton-utils export_to --format csv --file-name <csv_file_name> --reports <repor
 ```
 
 This mode supports all filtering and merging options from `pass_rate` mode.
+
+It also supports:
+
+```bash
+--aggregation-level <level>  # Options: none, test_function
+```
 
 ### 5. Compare test reports
 

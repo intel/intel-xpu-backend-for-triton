@@ -134,6 +134,11 @@ class CompareScope(Enum):
     BOTH = "both"
 
 
+class AggregationLevel(Enum):
+    NONE = "none"
+    TEST_FUNCTION = "test_function"
+
+
 class SortByStats(str, Enum):
     NAME = "name"
     PASSED = "passed"
@@ -374,17 +379,27 @@ class Test:
             test_variants_str += f"{result}({len(test_variants)}):\n{test_variants_text}\n"
         return test_variants_str
 
-    def get_stats(self) -> ReportStats:
+    def get_stats(self, aggregation_level: str = AggregationLevel.NONE.value) -> ReportStats:
         stats = ReportStats(name=f"{self.testsuite}::{self.pytest_name}")
+        aggregation = AggregationLevel(aggregation_level)
+        if aggregation == AggregationLevel.TEST_FUNCTION:
+            results = {test_case.result for test_case in self.test_cases}
+            stats.passed = int(RunResult.PASSED in results)
+            stats.failed = int(RunResult.FAILED in results)
+            stats.skipped = int(RunResult.SKIPPED in results)
+            stats.xfailed = int(RunResult.XFAILED in results)
+        else:
+            for test_case in self.test_cases:
+                if test_case.result == RunResult.PASSED:
+                    stats.passed += 1
+                if test_case.result == RunResult.FAILED:
+                    stats.failed += 1
+                if test_case.result == RunResult.SKIPPED:
+                    stats.skipped += 1
+                if test_case.result == RunResult.XFAILED:
+                    stats.xfailed += 1
+
         for test_case in self.test_cases:
-            if test_case.result == RunResult.PASSED:
-                stats.passed += 1
-            if test_case.result == RunResult.FAILED:
-                stats.failed += 1
-            if test_case.result == RunResult.SKIPPED:
-                stats.skipped += 1
-            if test_case.result == RunResult.XFAILED:
-                stats.xfailed += 1
             stats.time += test_case.time
         return stats
 
@@ -441,6 +456,7 @@ class TestReport:
     name: str = ""
     testsuite_filter: str = ""
     testname_filter: str = ""
+    aggregation_level: str = AggregationLevel.NONE.value
 
     @classmethod
     def _extract_test_reports(  # pylint: disable=too-many-locals
@@ -448,6 +464,7 @@ class TestReport:
         search_folder: str,
         tests_with_multiple_testsuites: bool,
         ignore_testsuites_filter: list[str],
+        aggregation_level: str = "none",
         pattern_matcher: PatternMatcher | None = None,
     ) -> dict[str, Test]:
         search_folder_path = pathlib.Path(search_folder)
@@ -514,7 +531,12 @@ class TestReport:
                     ignore_testsuites=ignore_testsuites,
             ):
                 filtered_tests[test_key] = filtered_test
-        return TestReport(filtered_tests, str(testsuite), str(testname_wo_variant))
+        return TestReport(
+            filtered_tests,
+            str(testsuite),
+            str(testname_wo_variant),
+            aggregation_level=self.aggregation_level,
+        )
 
     def merge_test_results(self) -> TestReport:
 
@@ -552,7 +574,12 @@ class TestReport:
                 testsuite=test.testsuite,
                 testname=test.testname,
             )
-        return TestReport(merged_tests, self.testsuite_filter, self.testname_filter)
+        return TestReport(
+            merged_tests,
+            self.testsuite_filter,
+            self.testname_filter,
+            aggregation_level=self.aggregation_level,
+        )
 
     def list_test_instances(
         self,
@@ -580,7 +607,7 @@ class TestReport:
     def get_summary_stats(self) -> ReportStats:
         agg_stats = ReportStats(name=self.name)
         for test in self.tests.values():
-            agg_stats += test.get_stats()
+            agg_stats += test.get_stats(self.aggregation_level)
             # test_stats = test.get_stats()
             # for stat_key, stat_value in test_stats.items():
             #     agg_stats[stat_key] = agg_stats[stat_key] + stat_value
@@ -616,7 +643,9 @@ class TestReport:
                         testsuites[test.testsuite][test_key] = test
                     for testsuite, tests in testsuites.items():
                         report_stats = report_stats | TestReport(
-                            tests=tests, name=testsuite
+                            tests=tests,
+                            name=testsuite,
+                            aggregation_level=report.aggregation_level,
                         ).get_summary_stats().to_named_dict(fields_filter=fields_filter)
                     reports_stats.append(report_stats)
                 case TestGroupingLevel.TEST:
@@ -625,7 +654,9 @@ class TestReport:
                         report_stats = report_stats | TestReport(
                             tests={
                                 pytest_key: test
-                            }, name=pytest_key
+                            },
+                            name=pytest_key,
+                            aggregation_level=report.aggregation_level,
                         ).get_summary_stats().to_named_dict(fields_filter=fields_filter)
                     reports_stats.append(report_stats)
                 case _:
@@ -691,7 +722,10 @@ class TestReport:
                 testsuites: dict[str, dict[str, Test]] = defaultdict(dict)
                 for test_key, test in self.tests.items():
                     testsuites[test.testsuite][test_key] = test
-                test_reports = [TestReport(tests=tests, name=testsuite) for testsuite, tests in testsuites.items()]
+                test_reports = [
+                    TestReport(tests=tests, name=testsuite, aggregation_level=self.aggregation_level)
+                    for testsuite, tests in testsuites.items()
+                ]
                 return "\n".join([test_report.get_summary_stats().to_json() for test_report in test_reports])
             case TestGroupingLevel.TEST:
                 if pretty_print:
@@ -701,7 +735,7 @@ class TestReport:
                     )
                 test_stats = ""
                 for test_key, test in self.tests.items():
-                    test_stats += test.get_stats().to_json() + "\n"
+                    test_stats += test.get_stats(self.aggregation_level).to_json() + "\n"
                     if list_test_instances:
                         test_stats += test.get_test_variants() + "\n"
                     if list_failure_reasons:
@@ -787,7 +821,11 @@ class TestReport:
         with open(json_file, "w", encoding="utf-8") as f:
             for testsuite_name, testsuite_tests in testsuites.items():
                 # Create a TestReport for this testsuite (or "all")
-                testsuite_report = TestReport(tests=testsuite_tests, name=testsuite_name)
+                testsuite_report = TestReport(
+                    tests=testsuite_tests,
+                    name=testsuite_name,
+                    aggregation_level=self.aggregation_level,
+                )
 
                 # Get data dict using helper method
                 data = testsuite_report.get_pass_rate_json_data(testsuite_name=testsuite_name)
@@ -985,6 +1023,7 @@ class TestReport:
         folder: str,
         tests_with_multiple_testsuites: bool,
         ignore_testsuites_filter: list[str],
+        aggregation_level: str = "none",
         pattern_matcher: PatternMatcher | None = None,
     ) -> TestReport:
         return TestReport(
@@ -992,6 +1031,8 @@ class TestReport:
                 folder,
                 tests_with_multiple_testsuites,
                 ignore_testsuites_filter,
+                aggregation_level=aggregation_level,
                 pattern_matcher=pattern_matcher,
-            )
+            ),
+            aggregation_level=aggregation_level,
         )
