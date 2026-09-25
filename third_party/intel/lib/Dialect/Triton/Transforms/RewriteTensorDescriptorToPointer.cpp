@@ -1058,7 +1058,9 @@ struct RewriteReducePattern : OpConversionPattern<triton::DescriptorReduceOp> {
 /// Check if a descriptor-typed function argument only feeds DescriptorLoadOp
 /// or DescriptorStoreOp (directly or through loops/conditionals), and does NOT
 /// feed DescriptorGatherOp, DescriptorScatterOp, or DescriptorReduceOp.
-static bool descArgFeedsOnlyLoadStore(Value descArg) {
+static bool
+descArgFeedsOnlyLoadStore(Value descArg,
+                          SmallVectorImpl<triton::DescriptorLoadOp> &loads) {
   SmallVector<Value, 8> worklist;
   SmallPtrSet<Value, 8> visited;
   worklist.push_back(descArg);
@@ -1072,6 +1074,8 @@ static bool descArgFeedsOnlyLoadStore(Value descArg) {
     for (OpOperand &use : cur.getUses()) {
       Operation *user = use.getOwner();
       if (isa<triton::DescriptorLoadOp, triton::DescriptorStoreOp>(user)) {
+        if (auto load = dyn_cast<triton::DescriptorLoadOp>(user))
+          loads.push_back(load);
         hasLoadOrStore = true;
         continue;
       }
@@ -1101,7 +1105,7 @@ static bool descArgFeedsOnlyLoadStore(Value descArg) {
 /// Pre-pass: For public FuncOps with TensorDescType-typed arguments that feed
 /// only DescriptorLoad/Store, expand the function signature and insert a
 /// synthetic MakeTensorDescOp. This makes the descriptor traceable by
-/// findAllMakeTensorDescOps() and enables the 2D block I/O fast path for
+/// findDescriptorDefinitions() and enables the 2D block I/O fast path for
 /// host-side tensor descriptors.
 static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
   moduleOp->walk([](triton::FuncOp funcOp) {
@@ -1145,7 +1149,8 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
       Type elemType = blockType.getElementType();
       Value descArg = entryBlock.getArgument(idx);
 
-      if (!descArgFeedsOnlyLoadStore(descArg))
+      SmallVector<triton::DescriptorLoadOp> loads;
+      if (!descArgFeedsOnlyLoadStore(descArg, loads))
         continue;
 
       // The frontend (tensor_descriptor_type._flatten_ir_types) places i32
@@ -1242,6 +1247,30 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
       oldDescArg.replaceAllUsesWith(syntheticDesc);
       entryBlock.eraseArgument(oldDescIdx);
 
+      // Determine TF32 rounding from the tt.round_f32_to_tf32 attribute on the
+      // descriptor arg (set by the specialization system, like tt.padding
+      // above). Using the attribute rather than the runtime i1 argument keeps
+      // the flag a compile-time constant, so the non-rounding path costs
+      // nothing instead of paying for a select on every loaded element.
+      bool roundF32 = false;
+      if (descArgAttrs) {
+        if (auto roundAttr = dyn_cast_or_null<IntegerAttr>(
+                descArgAttrs.get("tt.round_f32_to_tf32")))
+          roundF32 = roundAttr.getValue().getZExtValue() != 0;
+      }
+
+      // MakeTensorDescOp has no TF32 flag, round the loaded values instead.
+      if (elemType.isF32() && roundF32) {
+        for (triton::DescriptorLoadOp load : loads) {
+          Value x = load.getResult();
+          SmallVector<OpOperand *> uses(llvm::make_pointer_range(x.getUses()));
+          builder.setInsertionPointAfter(load);
+          Value rounded = roundF32ToTF32(builder, load.getLoc(), x);
+          for (OpOperand *use : uses)
+            use->set(rounded);
+        }
+      }
+
       // Update the function type.
       funcOp.setType(FunctionType::get(ctx, entryBlock.getArgumentTypes(),
                                        funcType.getResults()));
@@ -1323,7 +1352,7 @@ class TritonRewriteTensorDescriptorToPointerPass
 
     // Pre-pass: Synthesize MakeTensorDescOps for host-side tensor descriptor
     // function arguments. This enables the 2D block I/O fast path by making
-    // descriptors traceable via findAllMakeTensorDescOps().
+    // descriptors traceable via findDescriptorDefinitions().
     synthesizeDescriptorsFromFuncArgs(op);
 
     // Pre-pass: Rewrite contiguous DescriptorGatherOps/DescriptorScatterOps to
@@ -1363,12 +1392,13 @@ class TritonRewriteTensorDescriptorToPointerPass
           .Case<triton::DescriptorLoadOp, triton::DescriptorStoreOp>(
               [&](auto op) {
                 for (auto d :
-                     triton::intel::findAllMakeTensorDescOps(op.getDesc()))
+                     triton::intel::findDescriptorDefinitions(op.getDesc()))
                   candidateMakeTensorDescOps.insert(d);
               })
           .Case<triton::DescriptorGatherOp, triton::DescriptorScatterOp,
                 triton::DescriptorReduceOp>([&](auto op) {
-            for (auto d : triton::intel::findAllMakeTensorDescOps(op.getDesc()))
+            for (auto d :
+                 triton::intel::findDescriptorDefinitions(op.getDesc()))
               unhandledMakeTensorDescOps.insert(d);
           })
           .Default([](auto) {});
@@ -1392,12 +1422,12 @@ class TritonRewriteTensorDescriptorToPointerPass
             for (Value operand : op->getOperands()) {
               if (!isa<triton::TensorDescType>(operand.getType()))
                 continue;
-              auto allDescs = triton::intel::findAllMakeTensorDescOps(operand);
-              if (allDescs.empty())
-                return false;
-              if (!llvm::all_of(allDescs, [&](auto d) {
-                    return candidateMakeTensorDescOps.contains(d);
-                  }))
+              // allSatisfy is false for an empty trace, which is what we want:
+              // an untraceable descriptor is not a candidate.
+              if (!triton::intel::findDescriptorDefinitions(operand).allSatisfy(
+                      [&](auto d) {
+                        return candidateMakeTensorDescOps.contains(d);
+                      }))
                 return false;
             }
             return true;

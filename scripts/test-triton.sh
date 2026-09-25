@@ -54,7 +54,9 @@ TEST:
     --sglang-gdn
     --sglang-kda
     --sglang-spec
+    --sglang-e2e
     --install-sglang
+    --install-sgl-kernel-xpu
     --liger
     --install-liger
 
@@ -117,7 +119,9 @@ TEST_SGLANG_MAMBA=false
 TEST_SGLANG_GDN=false
 TEST_SGLANG_KDA=false
 TEST_SGLANG_SPEC=false
+TEST_SGLANG_E2E=false
 INSTALL_SGLANG=false
+INSTALL_SGL_KERNEL_XPU=false
 TEST_LIGER=false
 INSTALL_LIGER=false
 TEST_VLLM=false
@@ -324,8 +328,18 @@ while (( $# != 0 )); do
       TEST_DEFAULT=false
       shift
       ;;
+    --sglang-e2e)
+      TEST_SGLANG_E2E=true
+      TEST_DEFAULT=false
+      shift
+      ;;
     --install-sglang)
       INSTALL_SGLANG=true
+      TEST_DEFAULT=false
+      shift
+      ;;
+    --install-sgl-kernel-xpu)
+      INSTALL_SGL_KERNEL_XPU=true
       TEST_DEFAULT=false
       shift
       ;;
@@ -942,6 +956,14 @@ run_sglang_install() {
   "$SCRIPTS_DIR/sglang/install-sglang.sh"
 }
 
+run_sgl_kernel_xpu_install() {
+  echo "************************************************"
+  echo "******    Installing sgl-kernel-xpu       ******"
+  echo "************************************************"
+
+  "$SCRIPTS_DIR/sglang/install-sgl-kernel-xpu.sh"
+}
+
 enter_sglang_test_env() {
   run_sglang_install
   run_test_deps_install
@@ -964,6 +986,7 @@ run_sglang_tests() {
   run_sglang_gdn_tests
   run_sglang_kda_tests
   run_sglang_spec_tests
+  run_sglang_e2e_tests
 }
 
 run_sglang_attention_tests() {
@@ -973,11 +996,15 @@ run_sglang_attention_tests() {
 
   enter_sglang_test_env
   # KV index build, decode/extend/prefill attention.
+  # unittests/dense/test_triton.py drives the same kernels through RadixAttention
+  # against HF-style torch references, and is the only thing here that covers
+  # get_num_kv_splits_triton. sglang-test-fix.patch makes it device-agnostic.
   # test_fp4_indexer.py is left out: it imports sgl_kernel, which is not installed.
   TRITON_TEST_SUITE=sglang_attention \
     run_pytest_command -vvv \
       test/registered/attention/test_create_kvindices.py \
-      test/registered/attention/test_triton_attention_kernels.py
+      test/registered/attention/test_triton_attention_kernels.py \
+      test/registered/attention/unittests/dense/test_triton.py
 }
 
 run_sglang_quant_tests() {
@@ -1060,6 +1087,21 @@ run_sglang_spec_tests() {
   TRITON_TEST_SUITE=sglang_spec \
     run_pytest_command -vvv \
       test/registered/spec/dspark/test_dspark_kernel_parity.py
+}
+
+run_sglang_e2e_tests() {
+  echo "********************************************************"
+  echo "******  Running SGLang end-to-end tests          *******"
+  echo "********************************************************"
+
+  enter_sglang_test_env
+  # The only suite that runs a real forward pass, so the only one that reaches
+  # compute_position_kernel and write_req_to_token_pool_triton: every other suite
+  # builds ForwardBatch directly and passes positions in by hand. Launches a
+  # server and downloads weights, unlike the kernel suites.
+  TRITON_TEST_SUITE=sglang_e2e \
+    run_pytest_command -vvv \
+      test/registered/xpu/test_xpu_basic.py
 }
 
 run_liger_install() {
@@ -1488,6 +1530,9 @@ test_triton() {
   if [ "$TEST_INDUCTOR" == true ]; then
     run_inductor_tests
   fi
+  if [ "$INSTALL_SGL_KERNEL_XPU" == true ]; then
+    run_sgl_kernel_xpu_install
+  fi
   if [ "$INSTALL_SGLANG" == true ]; then
     run_sglang_install
   fi
@@ -1514,6 +1559,9 @@ test_triton() {
   fi
   if [ "$TEST_SGLANG_SPEC" == true ]; then
     run_sglang_spec_tests
+  fi
+  if [ "$TEST_SGLANG_E2E" == true ]; then
+    run_sglang_e2e_tests
   fi
   if [ "$INSTALL_LIGER" == true ]; then
     run_liger_install

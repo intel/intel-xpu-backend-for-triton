@@ -2821,17 +2821,15 @@ struct DescriptorLoadOpConversion
     //     out-of-bounds tile (offset >= shape) must be predicated to preserve
     //     zero-padding semantics.
     ArrayRef<int64_t> blockShape = descTensorType.getShape();
-    SmallVector<MakeTensorDescOp> allDescs =
-        mlir::triton::intel::findAllMakeTensorDescOps(op.getDesc());
+    mlir::triton::intel::DescriptorDefinitions defs =
+        mlir::triton::intel::findDescriptorDefinitions(op.getDesc());
     SmallVector<int32_t> perElementDims, blockLevelDims;
     for (size_t i = 0; i < descRank; ++i) {
       int64_t bs = blockShape[i];
-      if (!allDescs.empty() &&
-          llvm::all_of(allDescs,
-                       [&](MakeTensorDescOp d) {
-                         return isDivisible(d.getShape()[i], bs);
-                       }) &&
-          isDivisible(op.getIndices()[i], static_cast<unsigned>(bs))) {
+      if (bs > 0 && defs.allSatisfy([&](MakeTensorDescOp d) {
+            return isDivisible(d.getShape()[i], bs);
+          }) &&
+          isDivisible(op.getIndices()[i], bs)) {
         blockLevelDims.push_back(i);
       } else {
         perElementDims.push_back(i);
@@ -3063,17 +3061,15 @@ struct DescriptorStoreOpConversion
 
     // Build the boundary-check dimension lists (same logic as load).
     ArrayRef<int64_t> blockShape = descTensorType.getShape();
-    SmallVector<MakeTensorDescOp> allDescs =
-        mlir::triton::intel::findAllMakeTensorDescOps(op.getDesc());
+    mlir::triton::intel::DescriptorDefinitions defs =
+        mlir::triton::intel::findDescriptorDefinitions(op.getDesc());
     SmallVector<int32_t> perElementDims, blockLevelDims;
     for (size_t i = 0; i < descRank; ++i) {
       int64_t bs = blockShape[i];
-      if (!allDescs.empty() &&
-          llvm::all_of(allDescs,
-                       [&](MakeTensorDescOp d) {
-                         return isDivisible(d.getShape()[i], bs);
-                       }) &&
-          isDivisible(op.getIndices()[i], static_cast<unsigned>(bs))) {
+      if (bs > 0 && defs.allSatisfy([&](MakeTensorDescOp d) {
+            return isDivisible(d.getShape()[i], bs);
+          }) &&
+          isDivisible(op.getIndices()[i], bs)) {
         blockLevelDims.push_back(i);
       } else {
         perElementDims.push_back(i);

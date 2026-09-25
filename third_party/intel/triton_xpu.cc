@@ -2,6 +2,7 @@
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Support/Timing.h"
 #include "passes.h"
 
 #include "llvm/IR/InstIterator.h"
@@ -170,8 +171,9 @@ void init_triton_intel_passes_ttgpuir(py::module_ &&m) {
                      gpu::intel::createTritonIntelGPUOptimizeReductionLocality);
   ADD_PASS_WRAPPER_0("add_lower_to_2d_block_load",
                      gpu::intel::createTritonIntelGPULowerTo2DBlockLoad);
-  ADD_PASS_WRAPPER_0("add_reduce_variable_liveness",
-                     gpu::intel::createTritonIntelGPUReduceVariableLiveness);
+  ADD_PASS_OPTION_WRAPPER_1(
+      "add_reduce_variable_liveness",
+      gpu::intel::createTritonIntelGPUReduceVariableLiveness, std::string);
   ADD_PASS_WRAPPER_0("add_loop_distribute",
                      gpu::intel::createTritonIntelGPULoopDistribute);
   ADD_PASS_WRAPPER_0("add_code_sinking",
@@ -199,6 +201,43 @@ void init_triton_intel(py::module_ &m) {
   init_triton_intel_passes_ttir(passes.def_submodule("ttir"));
   init_triton_intel_passes_ttgpuir(passes.def_submodule("ttgpuir"));
   init_triton_intel_passes_arith(passes.def_submodule("arith"));
+
+  m.def("enable_pm_timing", [](mlir::PassManager &pm, py::callable cb) {
+    struct CallBackStrategy : mlir::OutputStrategy {
+      py::callable cb;
+
+      CallBackStrategy(py::callable cb)
+          : OutputStrategy(llvm::errs()), cb(cb) {}
+
+      void printHeader(const mlir::TimeRecord &total) override {}
+
+      void printFooter() override {}
+
+      void printTime(const mlir::TimeRecord &time,
+                     const mlir::TimeRecord &total) override {}
+
+      void printListEntry(llvm::StringRef name, const mlir::TimeRecord &time,
+                          const mlir::TimeRecord &total,
+                          bool lastEntry = false) override {
+        cb(std::string(name), time.wall, 0);
+      }
+
+      void printTreeEntry(unsigned indent, llvm::StringRef name,
+                          const mlir::TimeRecord &time,
+                          const mlir::TimeRecord &total) override {
+        cb(std::string(name), time.wall, 1);
+      }
+
+      void printTreeEntryEnd(unsigned indent, bool lastEntry = false) override {
+        cb(std::string(""), 0., 2);
+      }
+    };
+
+    auto tm = std::make_unique<mlir::DefaultTimingManager>();
+    tm->setOutput(std::make_unique<CallBackStrategy>(cb));
+    tm->setEnabled(true);
+    pm.enableTiming(std::move(tm));
+  });
 
   m.def(
       "optimize_module",

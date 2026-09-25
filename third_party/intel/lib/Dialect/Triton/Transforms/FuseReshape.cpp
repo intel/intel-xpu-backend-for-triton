@@ -21,7 +21,6 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
-#include <limits>
 
 #define DEBUG_TYPE "triton-intel-fuse-reshape"
 
@@ -204,9 +203,10 @@ private:
     // `collapsedDim` leaves the merged entry at index `collapsedDim`, so shape
     // [s0,s1,s2] / stride [a,b,c] yields [e, s2] / [b,c] or [s0, e] / [a,c],
     // with `e` the merged extent computed below.
+    // Signed, to agree with the divisibility proof in `isCandidate`.
     Value ratio = builder.createOrFold<arith::TruncIOp>(
         loc, indexTy,
-        builder.createOrFold<arith::DivUIOp>(loc, strides[collapsedDim],
+        builder.createOrFold<arith::DivSIOp>(loc, strides[collapsedDim],
                                              strides[mergedDim]));
     auto merge = [&](Value hi, Value lo) -> Value {
       return builder.createOrFold<arith::AddIOp>(
@@ -470,15 +470,10 @@ private:
     // a boundary between two "rows" of the collapsed dimension, e.g. a
     // ragged/padded last block (issues/7464).
     int64_t blockExtent = tensorTy.getDimSize(mergedDim);
-    // `isDivisible` takes an `unsigned` divisor and divides by it unguarded, so
-    // it must be positive: a zero-extent block reaches it as 0 and raises
-    // SIGFPE, and a value wider than `unsigned` narrows to 0 (same) or to 1 (a
-    // false "divisible"). Only the zero is reachable today - the tensor
-    // verifier caps a block at 2^20 elements - but the narrowing is silent.
-    if (blockExtent <= 0 ||
-        !llvm::isUInt<32>(static_cast<uint64_t>(blockExtent)))
-      return decline("merged-dimension block extent is not a positive "
-                     "`unsigned`");
+    // `isDivisible` requires a positive divisor, and a zero-extent block
+    // reaches it as 0.
+    if (blockExtent <= 0)
+      return decline("merged-dimension block extent is not positive");
     if (!mlir::triton::gpu::intel::isDivisible(shapes[mergedDim], blockExtent))
       return decline("merged extent is not provably a multiple of the block");
 
@@ -777,18 +772,10 @@ private:
     // If denominator is a constant, use isDivisible which leverages
     // tt.divisibility attributes on function arguments and constants.
     APInt denVal;
-    if (matchPattern(denominator, m_ConstantInt(&denVal)) && !denVal.isZero()) {
-      // `isDivisible` takes an `unsigned` divisor and this denominator is an
-      // i64 stride: narrowing a wider value would divide by zero, or hit that
-      // helper's `divisor == 1` early return and report a divisibility that
-      // does not hold. Decline instead of narrowing. The guard lives here, and
-      // not ahead of the whole function, because the cases above are exact for
-      // a stride of any magnitude.
-      uint64_t den = denVal.getZExtValue();
-      if (den > std::numeric_limits<unsigned>::max())
-        return false;
-      return mlir::triton::gpu::intel::isDivisible(numerator, den);
-    }
+    if (matchPattern(denominator, m_ConstantInt(&denVal)))
+      if (std::optional<int64_t> den = denVal.trySExtValue())
+        return *den > 0 &&
+               mlir::triton::gpu::intel::isDivisible(numerator, *den);
 
     return false;
   }

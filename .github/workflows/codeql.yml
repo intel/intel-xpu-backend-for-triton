@@ -8,7 +8,9 @@ on:
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
-    runs-on: rss-ubuntu-2404
+    runs-on:
+      - cpu
+      - runner-0.0.22
     permissions:
       # required for all workflows
       security-events: write
@@ -57,7 +59,7 @@ jobs:
       uses: ./.github/actions/setup-python
       with:
         python_version: "3.10"
-        use_pyenv: true
+        use_pyenv: false
 
     - name: Set MAX_JOBS
       if: matrix.build-mode == 'manual'
@@ -84,7 +86,9 @@ jobs:
   report:
     name: Generate SDL Security Report
     needs: analyze
-    runs-on: rss-ubuntu-2404
+    runs-on:
+      - cpu
+      - runner-0.0.22
     permissions:
       security-events: read
       contents: read

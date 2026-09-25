@@ -109,7 +109,7 @@ def _launch(num_warps, n=4096, kernel=None):
 @triton.jit
 def _heavy_spill(a_ptr, b_ptr, c_ptr, d_ptr, out_ptr, n, BLOCK: tl.constexpr):
     """A kernel with enough live values to spill at a large BLOCK, so the
-    runtime spill-based recompile (driver.c, any nonzero spill bytes) fires."""
+    runtime spill-based recompile (driver.c, `kMaxSpillSlotsPerLane`) fires."""
     offs = tl.arange(0, BLOCK)
     m = offs < n
     a = tl.load(a_ptr + offs, mask=m, other=0.0)
@@ -117,8 +117,10 @@ def _heavy_spill(a_ptr, b_ptr, c_ptr, d_ptr, out_ptr, n, BLOCK: tl.constexpr):
     c = tl.load(c_ptr + offs, mask=m, other=0.0)
     d = tl.load(d_ptr + offs, mask=m, other=0.0)
     acc = a
-    # Keep a wide set of intermediates live to force register spilling.
-    for i in tl.static_range(64):
+    # Keep a wide set of intermediates live to force register spilling. The
+    # spill depth comes from BLOCK -- the live vector length -- not from this
+    # unroll count, which only adds IGC compile time.
+    for i in tl.static_range(8):
         a = a * 1.001 + b
         b = b * 1.002 + c
         c = c * 1.003 + d

@@ -26,7 +26,11 @@ on:
       use_pyenv_python:
         description: Use Python built with pyenv
         type: boolean
-        default: true
+        default: false
+      install_sgl_kernel_xpu:
+        description: Build and install sgl-kernel-xpu (BMG/Xe2 only, no PVC target)
+        type: boolean
+        default: false
 
 permissions: read-all
 
@@ -133,6 +137,13 @@ jobs:
           - sglang-moe
           - sglang-mamba
           - sglang-rest
+          - sglang-e2e
+        # sglang-e2e starts a real server, so it needs a usable model registry.
+        # Without sgl-kernel-xpu SGLang drops most model modules, including the one
+        # the test needs, so run it only where install_sgl_kernel_xpu built the
+        # kernels. See scripts/sglang/README.md.
+        exclude:
+          - suite: ${{ !inputs.install_sgl_kernel_xpu && 'sglang-e2e' || '' }}
     runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1100') || format('["linux", "{0}"]', inputs.runner_label)) }}
     timeout-minutes: 240
     defaults:
@@ -206,6 +217,11 @@ jobs:
         run: |
           pip install -r scripts/requirements-test.txt
 
+      - name: Install sgl-kernel-xpu
+        if: ${{ inputs.install_sgl_kernel_xpu }}
+        run: |
+          ${{ needs.setup.outputs.test-triton-command }} --install-sgl-kernel-xpu
+
       - name: Set test-triton command line
         run: |
           echo "TRITON_TEST_CMD=${{ needs.setup.outputs.test-triton-command }}" | tee -a $GITHUB_ENV
@@ -249,6 +265,13 @@ jobs:
         if: ${{ matrix.suite == 'sglang-rest' && steps.install.outcome == 'success' && !cancelled() }}
         run: |
           ${{ env.TRITON_TEST_CMD }} --sglang-spec
+
+      # sglang-e2e launches a server and downloads model weights, so it gets its
+      # own entry rather than joining the short-suite group.
+      - name: Run e2e tests
+        if: ${{ matrix.suite == 'sglang-e2e' && steps.install.outcome == 'success' && !cancelled() }}
+        run: |
+          ${{ env.TRITON_TEST_CMD }} --sglang-e2e
 
       - name: Save pip cache
         if: ${{ steps.pip-cache.outputs.status == 'miss' }}
