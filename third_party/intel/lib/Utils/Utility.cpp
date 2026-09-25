@@ -136,7 +136,7 @@ bool isConstant(Value val, int64_t expected) {
   return (getFoldedConstantValue(val) == expected);
 }
 
-Value getFinalValue(Value value) {
+Value getFinalValue(Value value, bool *crossedLoopCarriedValue) {
   assert(value && "Expecting a valid value");
   Operation *defOp = value.getDefiningOp();
   if (!defOp) {
@@ -152,7 +152,17 @@ Value getFinalValue(Value value) {
       auto initArgs = forOp.getInitArgs();
       assert(initArgIdx >= 0 && initArgIdx < initArgs.size() &&
              "Unexpected 'initArgIdx' value");
-      return getFinalValue(initArgs[initArgIdx]);
+
+      // The init operand describes this argument's value on the first
+      // iteration. It describes every iteration only if the loop yields the
+      // argument unchanged.
+      if (crossedLoopCarriedValue) {
+        auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+        if (yieldOp.getOperand(initArgIdx) != blockArg)
+          *crossedLoopCarriedValue = true;
+      }
+
+      return getFinalValue(initArgs[initArgIdx], crossedLoopCarriedValue);
     }
 
     return value;
@@ -160,40 +170,40 @@ Value getFinalValue(Value value) {
 
   if (isa<tt::ExpandDimsOp, tt::BroadcastOp, tt::SplatOp, arith::IndexCastOp,
           arith::ExtSIOp, arith::ExtUIOp>(defOp))
-    return getFinalValue(defOp->getOperand(0));
+    return getFinalValue(defOp->getOperand(0), crossedLoopCarriedValue);
 
   if (auto addOp = dyn_cast<arith::AddIOp>(defOp)) {
     if (isConstant(addOp.getLhs(), 0))
-      return getFinalValue(addOp.getRhs());
+      return getFinalValue(addOp.getRhs(), crossedLoopCarriedValue);
     if (isConstant(addOp.getRhs(), 0))
-      return getFinalValue(addOp.getLhs());
+      return getFinalValue(addOp.getLhs(), crossedLoopCarriedValue);
     return addOp.getResult();
   }
 
   if (auto subOp = dyn_cast<arith::SubIOp>(defOp)) {
     if (isConstant(subOp.getRhs(), 0))
-      return getFinalValue(subOp.getLhs());
+      return getFinalValue(subOp.getLhs(), crossedLoopCarriedValue);
     return subOp.getResult();
   }
 
   if (auto mulOp = dyn_cast<arith::MulIOp>(defOp)) {
     if (isConstant(mulOp.getLhs(), 1) || isConstant(mulOp.getRhs(), 0))
-      return getFinalValue(mulOp.getRhs());
+      return getFinalValue(mulOp.getRhs(), crossedLoopCarriedValue);
     if (isConstant(mulOp.getRhs(), 1) || isConstant(mulOp.getLhs(), 0))
-      return getFinalValue(mulOp.getLhs());
+      return getFinalValue(mulOp.getLhs(), crossedLoopCarriedValue);
     return mulOp.getResult();
   }
 
   if (auto divOp = dyn_cast<arith::DivUIOp>(defOp)) {
     if (isConstant(divOp.getRhs(), 1) || isConstant(divOp.getLhs(), 0))
-      return getFinalValue(divOp.getLhs());
+      return getFinalValue(divOp.getLhs(), crossedLoopCarriedValue);
     return divOp.getResult();
   }
 
   if (auto extOp = dyn_cast<arith::ExtSIOp>(defOp))
-    return getFinalValue(extOp.getIn());
+    return getFinalValue(extOp.getIn(), crossedLoopCarriedValue);
   if (auto extOp = dyn_cast<arith::ExtUIOp>(defOp))
-    return getFinalValue(extOp.getIn());
+    return getFinalValue(extOp.getIn(), crossedLoopCarriedValue);
 
   return value;
 }
