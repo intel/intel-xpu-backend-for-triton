@@ -1089,10 +1089,9 @@ module attributes {"ttg.target" = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warp
     // CHECK:        [[C_0:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK:        [[SMEM_0:%.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
     // CHECK:        [[GEP:%.*]] = llvm.getelementptr [[SMEM_0]]{{\[}}[[C_0]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
-    // CHECK-NEXT:   [[GEP_CAST:%.*]] = llvm.bitcast [[GEP]] : !llvm.ptr<3> to !llvm.ptr<3>
     // CHECK-NEXT: llvm.cond_br [[MASK]], ^bb3, ^bb4
     // CHECK-NEXT: ^bb3:
-    // CHECK-NEXT:   llvm.store [[RES_CAST]], [[GEP_CAST]] : f32, !llvm.ptr<3>
+    // CHECK-NEXT:   llvm.store [[RES_CAST]], [[GEP]] : f32, !llvm.ptr<3>
     // CHECK-NEXT:   llvm.br ^bb4
     // CHECK-NEXT: ^bb4:
     // CHECK-NEXT:   [[ONE:%.*]] = llvm.mlir.constant(3 : i32) : i32
@@ -1207,10 +1206,9 @@ module attributes {"ttg.target" = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warp
     // CHECK:        [[C_0:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK:        [[SMEM_0:%.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
     // CHECK:        [[GEP:%.*]] = llvm.getelementptr [[SMEM_0]]{{\[}}[[C_0]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
-    // CHECK-NEXT:   [[GEP_CAST:%.*]] = llvm.bitcast [[GEP]] : !llvm.ptr<3> to !llvm.ptr<3>
-    // CHECK-NEXT:   llvm.cond_br [[PRED]], ^bb3, ^bb4
+    // CHECK-NEXT:   llvm.cond_br [[MASK]], ^bb3, ^bb4
     // CHECK-NEXT:  ^bb3:
-    // CHECK-NEXT:    llvm.store [[RMW_CAST]], [[GEP_CAST]] : f32, !llvm.ptr<3>
+    // CHECK-NEXT:    llvm.store [[RMW_CAST]], [[GEP]] : f32, !llvm.ptr<3>
     // CHECK-NEXT:    llvm.br ^bb4
     // CHECK-NEXT:  ^bb4:
     // CHECK-NEXT:    [[ONE:%.*]] = llvm.mlir.constant(3 : i32) : i32
