@@ -64,6 +64,10 @@ class XPUOptions:
     fpsan_homomorphic_casts: bool = False
     core_clock_rate: int = 0  # kHz, scales the in-kernel cycle counter
     is_lts: bool = True
+    # Largest GRF mode the backend's automatic escalation will ever select
+    # for this target ("256" everywhere except "cri", which gets "512"); see
+    # `get_max_grf_mode`, the single source of truth for this policy.
+    max_grf_mode: str = "256"
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -140,6 +144,36 @@ def spill_slots_per_lane(spill_size, threads_per_warp):
     if spill_size <= 0 or threads_per_warp <= 0:
         return spill_size
     return spill_size // (4 * threads_per_warp)
+
+
+def get_max_grf_mode(arch: dict) -> str:
+    """
+    Returns the largest GRF mode the backend's automatic escalation paths
+    will ever select for a target ("automatic" is load-bearing: an explicit
+    `grf_mode='512'` bypasses this, and a `num_warps > 32` kernel on
+    `grf_mode='default'` gets no automatic escalation at all, see
+    `make_spv`/`make_zebin`).
+
+    This is the single source of truth for the "cri" vs. everything-else GRF
+    policy. `parse_target` calls this once per target to populate
+    `dev_prop['max_grf_mode']` (see the `tgt_prop.get('max_grf_mode', ...)`
+    call there for how a driver- or out-of-tree-arch-module-supplied override
+    participates, the same mechanism every other per-target capability in
+    this file uses), from which it reaches every consumer as
+    `opt.max_grf_mode`: `annotate_module`'s `ttig.max_grf_mode` module
+    attribute (read by `RegisterPressureAnalysis::getGRFBytesPerHardwareThread`
+    to resolve its `UnknownGRFSizeAssumption::Largest` case, see issue #8074),
+    `metadata["max_grf_mode"]` (via `options.__dict__`, handed to `driver.c`'s
+    `load_binary` so the JIT large-GRF retry escalates to the same mode), and
+    `make_zebin`'s ocloc auto-large-GRF retry flag.
+
+    Arguments:
+      arch: the `target.arch` dict for the current device.
+
+    Returns:
+      "512" if the target is "cri", otherwise "256".
+    """
+    return "512" if arch.get("arch") == "cri" else "256"
 
 
 def accepts_default_grf(spill_size, threads_per_warp, is_lts):
@@ -258,6 +292,23 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         dev_prop['block_io_base_alignment'] = tgt_prop.get('block_io_base_alignment', 64)
         dev_prop['core_clock_rate'] = self.core_clock_rate(tgt_prop)
         dev_prop['is_lts'] = is_lts
+        # Largest GRF mode the backend's automatic escalation will ever select
+        # for this target; see `get_max_grf_mode`. A driver- or out-of-tree
+        # arch-module-supplied override wins, same as every other capability
+        # above. Unlike its siblings, an invalid value here is not merely
+        # cosmetic: `make_zebin` interpolates it directly into an `ocloc`
+        # flag (hard failure on a typo), `driver.c`'s JIT retry silently
+        # falls back to 256 for anything that isn't exactly "512"/"128", and
+        # `RegisterPressureAnalysis` silently falls back to 512 for anything
+        # that isn't exactly "128"/"256" -- three different interpretations
+        # of the same bad value, with the worst combination (a permissive
+        # 512-byte pressure budget paired with a 256-GRF hardware ceiling)
+        # silently reproducing the exact undercount #8074 exists to fix.
+        # Validate here, once, so every downstream consumer agrees.
+        dev_prop['max_grf_mode'] = tgt_prop.get('max_grf_mode', get_max_grf_mode(tgt_prop))
+        if dev_prop['max_grf_mode'] not in ("128", "256", "512"):
+            raise AssertionError(
+                f"invalid max_grf_mode override {dev_prop['max_grf_mode']!r}: must be one of '128', '256', '512'")
 
         if '__intel_already_queried_extensions__' not in tgt_prop:
             # All GPUs with the same device_id have the same extensions, so we just
@@ -274,6 +325,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         args["allow_fp8e4nv"] = True
         args["core_clock_rate"] = self.properties['core_clock_rate']
         args["is_lts"] = self.properties['is_lts']
+        args["max_grf_mode"] = self.properties['max_grf_mode']
         if "enable_fp_fusion" not in args:
             args["enable_fp_fusion"] = knobs.language.default_fp_fusion
         return XPUOptions(**args)
@@ -398,6 +450,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         module_opts.sub_32_dpas = opt.sub_32_dpas
         module_opts.target_arch = cls.target_arch
         module_opts.block_io_base_alignment = properties["block_io_base_alignment"]
+        module_opts.max_grf_mode = opt.max_grf_mode
 
     @classmethod
     @track
@@ -670,6 +723,12 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         spirv, name = intel.translate_to_spirv(src, cls.is_lts(driver_version))
         metadata["name"] = name
         metadata.setdefault("build_flags", "")
+        # `metadata["max_grf_mode"]` is already populated from `options.__dict__`
+        # at compile-metadata init time (see `XPUOptions.max_grf_mode`, sourced
+        # from `parse_target`'s `get_max_grf_mode` call), covering both the
+        # Triton and the Gluon stage lists uniformly. Carried downstream to
+        # `make_zebin`'s retry below and to `driver.c`'s JIT retry via the
+        # `load_binary` metadata argument.
         if options.grf_mode == '128':
             metadata["build_flags"] += " -cl-intel-128-GRF-per-thread"
         elif options.grf_mode == '256':
@@ -721,10 +780,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             if options.grf_mode == 'default' and options.num_warps <= 32:
                 # Try rebuilding with larger GRF modes (default first, then larger).
                 retry_grf_mode_list = [""]  # default GRF mode by omitting the flag
-                if metadata["target"].arch.get("arch") == 'cri':
-                    retry_grf_mode_list.append("-cl-intel-512-GRF-per-thread")
-                else:
-                    retry_grf_mode_list.append("-cl-intel-256-GRF-per-thread")
+                retry_grf_mode_list.append(f"-cl-intel-{metadata['max_grf_mode']}-GRF-per-thread")
             else:
                 # Non-default GRF mode is already encoded in metadata["build_flags"] (including "auto").
                 retry_grf_mode_list = [""]

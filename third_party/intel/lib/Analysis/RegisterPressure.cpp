@@ -1,4 +1,5 @@
 #include "intel/include/Analysis/RegisterPressure.h"
+#include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Matchers.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -34,28 +35,75 @@ unsigned RegisterPressureAnalysis::getPerThreadSizeInBytes(Type type) {
   return 0;
 }
 
+/// Per-hardware-thread GRF register width in bytes (256 bits); see
+/// hardware-reference.md's GRF Register Specifications.
+static constexpr unsigned kGRFRegisterSizeBytes = 32;
+
+/// Maps an explicit GRF mode string ("128"/"256"/"512") to its exact
+/// per-hardware-thread budget in bytes (one hardware thread executes a whole
+/// subgroup/warp of lanes sharing one register file). Returns 0 for anything
+/// else ("default", "auto", empty, or an unrecognized value) -- 0 bytes is
+/// never a valid budget, so it is an unambiguous "not an explicit mode"
+/// signal callers can test directly, without needing std::optional.
+static unsigned explicitGRFModeToBytes(StringRef grfMode) {
+  unsigned mode = 0;
+  if (grfMode.getAsInteger(10, mode) ||
+      (mode != 128 && mode != 256 && mode != 512))
+    return 0;
+  return mode * kGRFRegisterSizeBytes;
+}
+
 unsigned RegisterPressureAnalysis::getGRFBytesPerHardwareThread(
-    StringRef grfMode, UnknownGRFSizeAssumption unknownAssumption) {
-  // Explicit GRF modes map to exact per-hardware-thread budgets (one hardware
-  // thread executes a whole subgroup/warp of lanes sharing one register file).
-  if (grfMode == "128")
-    return 4096;
-  if (grfMode == "256")
-    return 8192;
-  if (grfMode == "512")
-    return 16384;
+    StringRef grfMode, ModuleOp mod,
+    UnknownGRFSizeAssumption unknownAssumption) {
+  if (unsigned explicitBytes = explicitGRFModeToBytes(grfMode))
+    return explicitBytes;
+  assert((grfMode == "default" || grfMode == "auto") &&
+         "grfMode must be an explicit mode (\"128\"/\"256\"/\"512\"), "
+         "\"default\", or \"auto\"");
   // "default" and "auto": the compiler chooses the GRF size at JIT time, so
   // the true value isn't known here. Which bound is safe depends on the
   // caller; see UnknownGRFSizeAssumption's documentation.
-  //
-  // FIXME(#8074): Largest's 16384 is not per-target; see the enum's doc.
-  return unknownAssumption == UnknownGRFSizeAssumption::Smallest ? 4096 : 16384;
+  if (unknownAssumption == UnknownGRFSizeAssumption::Smallest)
+    return 4096;
+  // 'auto' escalation happens inside IGC, which decides on its own with no
+  // path in this backend that reads back or constrains its choice --
+  // ttig.max_grf_mode (below) is only ever realized by the 'default' path's
+  // own rebuild, so it has no established relationship to what IGC actually
+  // picks under 'auto' and must not be applied there.
+  if (grfMode != "default")
+    return 16384;
+  // A larger GRF mode halves the maximum launchable work-group size, so a
+  // num_warps > 32 kernel can never actually run at a larger mode: the AOT
+  // path (make_zebin) skips the escalation attempt outright, and the JIT
+  // path (driver.c) attempts it and fails to build -- same ceiling either
+  // way, regardless of what `ttig.max_grf_mode` says.
+  if (lookupNumWarps(mod) > 32)
+    return 4096;
+  // Largest: the true ceiling is per-target, mirrored onto the module via the
+  // ttig.max_grf_mode attribute (see UnknownGRFSizeAssumption::Largest's
+  // documentation). Reuse the same explicit-mode table above so a value other
+  // than exactly "256"/"512"/"128" (a typo, a future mode, or the attribute
+  // being absent) cannot silently resolve to the wrong budget: it falls
+  // through to the behaviour-preserving 512-register-mode default below.
+  if (auto maxGRFMode = mod->getAttrOfType<StringAttr>(
+          TritonIntelGPUDialect::getMaxGRFModeAttrName()))
+    if (unsigned explicitBytes = explicitGRFModeToBytes(maxGRFMode.getValue()))
+      return explicitBytes;
+  // Absence resolves to 512-register mode here, not `driver.c`'s "256" for a
+  // missing `load_binary` argument: each side preserves its own pre-existing
+  // behaviour on absence (this one hardcoded 16384 before `ttig.max_grf_mode`
+  // existed; `driver.c` already resolved a missing arg to "unknown", which
+  // already selected 256). Not a bug -- but if either fallback's rationale
+  // ever changes, check whether the other one still makes sense.
+  return 16384;
 }
 
 unsigned RegisterPressureAnalysis::getPerLaneGRFBudgetInBytes(
     StringRef grfMode, ModuleOp mod,
     UnknownGRFSizeAssumption unknownAssumption) {
-  unsigned grfBudget = getGRFBytesPerHardwareThread(grfMode, unknownAssumption);
+  unsigned grfBudget =
+      getGRFBytesPerHardwareThread(grfMode, mod, unknownAssumption);
   int threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(mod);
   return grfBudget / static_cast<unsigned>(threadsPerWarp);
 }

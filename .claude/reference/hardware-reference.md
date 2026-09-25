@@ -35,7 +35,14 @@ Key performance characteristics per Xe-core:
 |------|-----------|------------|-----------------|------------|
 | Small GRF (128) | 128 | 4 KB | 8 (max occupancy) | `-cl-intel-128-GRF-per-thread` |
 | Large GRF (256) | 256 | 8 KB | 4 (halved occupancy) | `-cl-intel-256-GRF-per-thread` |
+| XLarge GRF (512) | 512 | 16 KB | 2 (quartered occupancy) | `-cl-intel-512-GRF-per-thread` |
 | Auto Large GRF | Auto | Auto | Auto | `-cl-intel-enable-auto-large-GRF-mode` |
+
+The largest GRF mode the *automatic* escalation paths (spill-triggered ocloc
+retry, `driver.c`'s JIT retry) will select is target-dependent: `"512"` on
+`cri`, `"256"` on every other target (PVC, BMG, ...). See
+`get_max_grf_mode()` in `third_party/intel/backend/compiler.py`, the single
+source of truth for this policy (issue #8074).
 
 ### Supported Subgroup Sizes (typical)
 | Architecture | Subgroup Sizes |
@@ -77,6 +84,7 @@ Capabilities queried via Level Zero and set as module attributes:
 | `has_f4_conversions` | `ttig.support_f4_conversion` | FP4 (E2M1) conversions |
 | `has_predicated_io` | `ttig.support_predicated_io` | Predicated load/store |
 | `has_256b_prefetch` | `ttig.support_prefetch_256b` | 256-byte 2D block prefetch |
+| `max_grf_mode` (derived, `get_max_grf_mode()`) | `ttig.max_grf_mode` | Largest GRF mode ("256"/"512") this target's automatic escalation paths select; read by `RegisterPressureAnalysis::getGRFBytesPerHardwareThread` to resolve `UnknownGRFSizeAssumption::Largest` for `'default'`/`'auto'` GRF mode (issue #8074) |
 
 ### DPAS Hardware Constants
 

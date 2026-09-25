@@ -15,6 +15,21 @@ add_triton_ut(
     TRITON_DPAS_UNIT_TESTING
 )
 
+add_triton_ut(
+  NAME RegisterPressure
+  SRCS RegisterPressureTest.cpp
+  LIBS
+    TritonIntelGPUIR
+    TritonGPUIR
+    TritonIR
+    TritonGPUTransforms
+    TritonIntelAnalysis
+    TritonIntelGPUTransforms
+    TritonNvidiaGPUTransforms
+    MLIRArithDialect
+    MLIRFuncDialect
+)
+
 # Suppress deprecation warnings for OpBuilder::create<> API
 # TODO: Migrate to modern MLIR operation creation patterns
 if(NOT WIN32)
