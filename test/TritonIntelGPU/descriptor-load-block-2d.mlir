@@ -8,7 +8,7 @@
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
   // CHECK-LABEL: @descriptor_load_dot_a
-  tt.func public @descriptor_load_dot_a(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i32, %arg5: i32) {
+  tt.func public @descriptor_load_dot_a(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64 {tt.divisibility = 16 : i32}, %arg4: i32, %arg5: i32) {
     %c1_i64 = arith.constant 1 : i64
     // Verify struct packing for MakeTensorDescOp:
     //   struct { i64 shape[2], i64 stride[2], ptr<1> base }
@@ -33,7 +33,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
   // CHECK-LABEL: @descriptor_load_nan_padding
-  tt.func public @descriptor_load_nan_padding(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i32, %arg5: i32) {
+  tt.func public @descriptor_load_nan_padding(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64 {tt.divisibility = 16 : i32}, %arg4: i32, %arg5: i32) {
     %c1_i64 = arith.constant 1 : i64
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] {padding = 2 : i32} : <f16>, <64x32xf16>
     // CHECK: triton_gen.2Dblockload
@@ -77,7 +77,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 #dot0_align = #ttg.dot_op<{opIdx = 0, parent = #dpas_align, kWidth=1}>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
   // CHECK-LABEL: @descriptor_load_pre_alignment_nonzero_col
-  tt.func public @descriptor_load_pre_alignment_nonzero_col(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i32, %arg5: i32) {
+  tt.func public @descriptor_load_pre_alignment_nonzero_col(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64 {tt.divisibility = 16 : i32}, %arg4: i32, %arg5: i32) {
     %c1_i64 = arith.constant 1 : i64
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <64x32xf16>
 
@@ -113,7 +113,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 #dot0_noalign = #ttg.dot_op<{opIdx = 0, parent = #dpas_noalign, kWidth=1}>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
   // CHECK-LABEL: @descriptor_load_no_pre_alignment_zero_col
-  tt.func public @descriptor_load_no_pre_alignment_zero_col(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i32) {
+  tt.func public @descriptor_load_no_pre_alignment_zero_col(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64 {tt.divisibility = 16 : i32}, %arg4: i32) {
     %c0_i32 = arith.constant 0 : i32
     %c1_i64 = arith.constant 1 : i64
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <64x32xf16>
@@ -141,7 +141,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 #dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
   // CHECK-LABEL: @descriptor_load_dot_b_vnni
-  tt.func public @descriptor_load_dot_b_vnni(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i32, %arg5: i32) {
+  tt.func public @descriptor_load_dot_b_vnni(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64 {tt.divisibility = 16 : i32}, %arg4: i32, %arg5: i32) {
     %c1_i64 = arith.constant 1 : i64
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <32x64xf16>
     // For DPAS B with f16: tile_height=32, tile_width=16, v_blocks=1, vnni_transform=true.
@@ -159,7 +159,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
 module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
   // CHECK-LABEL: @descriptor_load_f32_dot_a
-  tt.func public @descriptor_load_f32_dot_a(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i32, %arg5: i32) {
+  tt.func public @descriptor_load_f32_dot_a(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: i32, %arg3: i64 {tt.divisibility = 16 : i32}, %arg4: i32, %arg5: i32) {
     %c1_i64 = arith.constant 1 : i64
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f32>, <64x32xf32>
     // For DPAS A with f32: tile_height=8, tile_width=8, v_blocks=2.
@@ -197,7 +197,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
   // CHECK-LABEL: @descriptor_load_blocked_no_block_io
   // DPAS-LAYOUT-NOT: triton_gen.2Dblockload
   // ALL-LAYOUT-COUNT-32: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 1, v_blocks = 1, transpose = false, vnni_transform = false, cache_control = Default}
-  tt.func public @descriptor_load_blocked_no_block_io(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i32, %arg5: i32) {
+  tt.func public @descriptor_load_blocked_no_block_io(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64 {tt.divisibility = 16 : i32}, %arg4: i32, %arg5: i32) {
     %c1_i64 = arith.constant 1 : i64
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <64x32xf16>
     %load = tt.descriptor_load %desc[%arg4, %arg5] {ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #blocked>
@@ -250,7 +250,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
   // CHECK-LABEL: @descriptor_load_matmul
-  tt.func public @descriptor_load_matmul(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i64, %arg6: i64) {
+  tt.func public @descriptor_load_matmul(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i64 {tt.divisibility = 16 : i32}, %arg6: i64 {tt.divisibility = 16 : i32}) {
     %c0_i32 = arith.constant 0 : i32
     %c1_i64 = arith.constant 1 : i64
     %C = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #dpas>
@@ -281,7 +281,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
   // CHECK-LABEL: @descriptor_load_column_major_matmul
-  tt.func public @descriptor_load_column_major_matmul(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i64, %arg6: i64) {
+  tt.func public @descriptor_load_column_major_matmul(%arg0: !tt.ptr<f16>, %arg1: !tt.ptr<f16>, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i64 {tt.divisibility = 16 : i32}, %arg6: i64 {tt.divisibility = 16 : i32}) {
     %c0_i32 = arith.constant 0 : i32
     %c1_i64 = arith.constant 1 : i64
     %C = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #dpas>
@@ -315,7 +315,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 #dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
   // CHECK-LABEL: @descriptor_load_column_major
-  tt.func public @descriptor_load_column_major(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i32, %arg5: i32) {
+  tt.func public @descriptor_load_column_major(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64 {tt.divisibility = 16 : i32}, %arg4: i32, %arg5: i32) {
     %c1_i64 = arith.constant 1 : i64
     // Row-major descriptor: shape [N, K], strides [K_stride, 1], block <64x32>.
     // The load produces a transposed result tensor<32x64, dot1>.
@@ -340,7 +340,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 #dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=1}>
 module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
   // CHECK-LABEL: @descriptor_load_column_major_f32
-  tt.func public @descriptor_load_column_major_f32(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i32, %arg5: i32) {
+  tt.func public @descriptor_load_column_major_f32(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: i32, %arg3: i64 {tt.divisibility = 16 : i32}, %arg4: i32, %arg5: i32) {
     %c1_i64 = arith.constant 1 : i64
     // B stored as [N=64, K=32] row-major in memory (N rows, K contiguous cols).
     // The descriptor shape is [N, K]; after permuteDescDim the surface width
@@ -364,7 +364,7 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
 #dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
   // CHECK-LABEL: @descriptor_load_column_major_one_matrix_per_load
-  tt.func public @descriptor_load_column_major_one_matrix_per_load(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i32, %arg5: i32) {
+  tt.func public @descriptor_load_column_major_one_matrix_per_load(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64 {tt.divisibility = 16 : i32}, %arg4: i32, %arg5: i32) {
     %c1_i64 = arith.constant 1 : i64
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <32x64xf16>
     // With one_matrix_per_load, tile_height should be 16 (not doubled to 32).
@@ -383,7 +383,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 #dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
   // CHECK-LABEL: @descriptor_load_explicit_row_major
-  tt.func public @descriptor_load_explicit_row_major(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i32, %arg5: i32) {
+  tt.func public @descriptor_load_explicit_row_major(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64 {tt.divisibility = 16 : i32}, %arg4: i32, %arg5: i32) {
     %c1_i64 = arith.constant 1 : i64
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <32x64xf16>
     // CHECK-COUNT-2: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 1, transpose = false, vnni_transform = true, cache_control = Default}
@@ -420,7 +420,7 @@ module attributes {"ttg.num-warps" = 64 : i32, "ttg.threads-per-warp" = 16 : i32
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
   // CHECK-LABEL: @descriptor_load_rank3_dot_a
-  tt.func public @descriptor_load_rank3_dot_a(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i64, %arg5: i64, %arg6: i32, %arg7: i32, %arg8: i32) {
+  tt.func public @descriptor_load_rank3_dot_a(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i64, %arg5: i64 {tt.divisibility = 16 : i32}, %arg6: i32, %arg7: i32, %arg8: i32) {
     %c1_i64 = arith.constant 1 : i64
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2, %arg3], [%arg4, %arg5, %c1_i64] : <f16>, <4x64x32xf16>
     // CHECK-COUNT-8: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 2, transpose = false, vnni_transform = false, cache_control = Default}
@@ -438,7 +438,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 #dot1 = #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth=2}>
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
   // CHECK-LABEL: @descriptor_load_rank3_dot_b
-  tt.func public @descriptor_load_rank3_dot_b(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i64, %arg5: i64, %arg6: i32, %arg7: i32, %arg8: i32) {
+  tt.func public @descriptor_load_rank3_dot_b(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i64, %arg5: i64 {tt.divisibility = 16 : i32}, %arg6: i32, %arg7: i32, %arg8: i32) {
     %c1_i64 = arith.constant 1 : i64
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2, %arg3], [%arg4, %arg5, %c1_i64] : <f16>, <4x32x64xf16>
     // CHECK-COUNT-8: triton_gen.2Dblockload {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 32, v_blocks = 1, transpose = false, vnni_transform = true, cache_control = Default}
@@ -459,7 +459,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
   // CHECK-LABEL: llvm.func spir_kernelcc @descriptor_load_rank3_column_major(
   // CHECK-NOT: triton_gen.2Dblockload
   // CHECK: llvm.getelementptr
-  tt.func public @descriptor_load_rank3_column_major(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i64, %arg5: i64, %arg6: i32, %arg7: i32, %arg8: i32) {
+  tt.func public @descriptor_load_rank3_column_major(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i64, %arg5: i64 {tt.divisibility = 16 : i32}, %arg6: i32, %arg7: i32, %arg8: i32) {
     %c1_i64 = arith.constant 1 : i64
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2, %arg3], [%arg4, %arg5, %c1_i64] : <f16>, <2x64x32xf16>
     %load = tt.descriptor_load %desc[%arg6, %arg7, %arg8] {ttig.block_io = "column_major"} : !tt.tensordesc<2x64x32xf16> -> tensor<2x32x64xf16, #blocked3d>
