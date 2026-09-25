@@ -34,6 +34,11 @@ public:
           dyn_cast<triton::gpu::DotOperandEncodingAttr>(dstType.getEncoding());
       if (!dstDotOp)
         return;
+      // Skip size-1 dims: the round trip cannot reproduce a size-1 non-K dim's
+      // cross-lane replication; K=1 is skipped too, only a missed optimization.
+      if (llvm::any_of(dstType.getShape(),
+                       [](int64_t dim) { return dim == 1; }))
+        return;
       if (!cvtNeedsSharedMemory(cvtOp))
         return;
       auto srcOrder = triton::gpu::getOrder(srcType);
