@@ -40,6 +40,7 @@ class XPUOptions:
     enable_fp_fusion: bool = True
     launch_cooperative_grid: bool = False
     reduce_variable_liveness: bool = True
+    in_loop_sink: bool = True
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e4nv", "fp8e4b15")
     deprecated_fp8_dot_operand_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "tf32"
@@ -276,7 +277,15 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         args["is_lts"] = self.properties['is_lts']
         if "enable_fp_fusion" not in args:
             args["enable_fp_fusion"] = knobs.language.default_fp_fusion
+        if "in_loop_sink" not in args:
+            env = knobs.intel.in_loop_sink
+            args["in_loop_sink"] = self.default_in_loop_sink() if env is None else env
         return XPUOptions(**args)
+
+    def default_in_loop_sink(self) -> bool:
+        """Whether ReduceVariableLiveness sinks in-loop dot operand loads when neither the
+        `in_loop_sink` option nor TRITON_INTEL_IN_LOOP_SINK sets it; override per arch."""
+        return True
 
     @staticmethod
     def parse_attr(desc):
@@ -488,7 +497,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier)
 
         if (opt.reduce_variable_liveness):
-            intel.passes.ttgpuir.add_reduce_variable_liveness(pm, opt.grf_mode)
+            intel.passes.ttgpuir.add_reduce_variable_liveness(pm, opt.grf_mode, not opt.in_loop_sink)
 
         # Off by default: code sinking is perf-neutral on measured kernels (it
         # reliably reduces register spills, but the relieved traffic is not on
