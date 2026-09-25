@@ -1991,6 +1991,31 @@ struct SigmoidConversion : public ConvertOpToLLVMPattern<arith::DivFOp> {
   }
 };
 
+// The LTS IGC miscompiles the i128 multiply upstream emits for 64-bit umulhi.
+struct MulhiUIOpConversion
+    : public ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion> {
+  using Base = ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(MulhiUIOp op, Adaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    Type resultElementTy = getElementTypeOrSelf(op.getResult().getType());
+    assert(resultElementTy.isInteger(32) || resultElementTy.isInteger(64));
+    StringRef funcName =
+        resultElementTy.isInteger(32) ? "__imf_umulhi" : "__imf_umul64hi";
+    Type funcType = getFunctionType(elemTy, operands[0]);
+    LLVM::LLVMFuncOp funcOp =
+        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
+    funcOp.setCConv(triton::gpu::intel::getDefaultCConv(op));
+    auto callOp = LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]);
+    callOp.setCConv(funcOp.getCConv());
+    return {callOp.getResult()};
+  }
+};
+
 // Following pattern is copied from the common part to fix-up calling
 // convention for created function declaration.
 // TODO: propose changes in the common part to use CC provided by target.
@@ -2033,6 +2058,9 @@ void populateElementwiseOpToLLVMPatterns(
                                         benefit);
   patterns.add<PreciseDivFOpConversion>(typeConverter, axisInfoAnalysis,
                                         benefit);
+  if (axisInfoAnalysis.getModuleOp()->hasAttr(
+          gpu::intel::TritonIntelGPUDialect::getIsLTSAttrName()))
+    patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<ExternElementwiseOpConversion>(typeConverter, axisInfoAnalysis,
                                               benefit);
 
