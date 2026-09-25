@@ -158,7 +158,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.sup
 // CHECK-NOT lines would fire.
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io", "ttig.support_predicated_io"} {
   // CHECK-LABEL: llvm.func spir_kernelcc @desc_load_2d_block_immune(
-  tt.func public @desc_load_2d_block_immune(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64, %arg4: i32, %arg5: i32) {
+  tt.func public @desc_load_2d_block_immune(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i64 {tt.divisibility = 16 : i32}, %arg4: i32, %arg5: i32) {
     %c1_i64 = arith.constant 1 : i64
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <64x32xf16>
     // CHECK-NOT:     triton_gen.predicated_load
