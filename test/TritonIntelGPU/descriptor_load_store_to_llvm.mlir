@@ -274,6 +274,20 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 // Test vectorized descriptor load and store: with sizePerThread > 1 and stride-1
 // on the fast dimension, the gather fallback should emit wider (vectorized) I/O.
 // Here sizePerThread=[1,4] with f16 gives vec=4 (4*16=64 bits < 128 bit max).
+//
+// The descriptor shape [4,16] exactly equals the block shape, but the offsets
+// (%arg1, %arg2) are runtime function arguments with no divisibility hint, so
+// both dimensions are classified perElementDims: the boundary mask is a
+// genuine per-lane check that can differ across a vec=4 group when a shape
+// boundary falls inside it (e.g. offset=13 leaves lanes 13,14,15 in-bounds
+// but lane 16 out-of-bounds, all within the same group). getDescriptorVecSize
+// picks vec=4 independently of this classification (see LoadStoreOpToLLVM.cpp
+// getDescriptorVecSize), so the lowering must use a dynamic two-armed guard:
+// fast arm = one wide vector<2xi32> load/store, gated on the AND-reduction of
+// the group's 4 mask elements; slow arm = the exact per-element
+// triton_gen.predicated_load/store fallback, feeding the same vector<2xi32>
+// type into a merge-block phi (for the load) so downstream extraction code
+// is agnostic to which arm ran.
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
 
@@ -288,12 +302,51 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     %desc = tt.make_tensor_descriptor %arg0, [%c4_i32, %c16_i32], [%c16_i64, %c1_i64] : <f16>, <4x16xf16>
 
     // With vec=4 and f16: totalWidth=64, maxWordWidth=32, width=32, nWords=2.
-    // Return type is vector<2xi32>. Verify wider-than-scalar predicated loads.
-    // CHECK: triton_gen.predicated_load {{.*}} : (!llvm.ptr<1>, i1, vector<2xi32>) -> vector<2xi32>
+    // 16 elements/thread / vec=4 gives 4 vec-groups; each gets its own
+    // two-armed guard: a dynamic AND-reduction gates one fast wide
+    // vector<2xi32> load, immediately followed (within its ^bb) by an exact
+    // per-element triton_gen.predicated_load fallback (4 lanes) merging
+    // into the same vector<2xi32> type via a block argument (phi). Written
+    // out per-group (rather than via CHECK-COUNT) since cond_br/load pairs
+    // interleave and this file's RUN line doesn't scope FileCheck
+    // variables to allow reusing block-label captures across groups.
+    // CHECK: llvm.cond_br
+    // CHECK-NEXT: ^bb{{[0-9]+}}:
+    // CHECK-NEXT: llvm.load {{.*}} : !llvm.ptr<1> -> vector<2xi32>
+    // CHECK-COUNT-4: triton_gen.predicated_load {{.*}} : (!llvm.ptr<1>, i1, f16) -> f16
+    // CHECK: llvm.cond_br
+    // CHECK-NEXT: ^bb{{[0-9]+}}:
+    // CHECK-NEXT: llvm.load {{.*}} : !llvm.ptr<1> -> vector<2xi32>
+    // CHECK-COUNT-4: triton_gen.predicated_load {{.*}} : (!llvm.ptr<1>, i1, f16) -> f16
+    // CHECK: llvm.cond_br
+    // CHECK-NEXT: ^bb{{[0-9]+}}:
+    // CHECK-NEXT: llvm.load {{.*}} : !llvm.ptr<1> -> vector<2xi32>
+    // CHECK-COUNT-4: triton_gen.predicated_load {{.*}} : (!llvm.ptr<1>, i1, f16) -> f16
+    // CHECK: llvm.cond_br
+    // CHECK-NEXT: ^bb{{[0-9]+}}:
+    // CHECK-NEXT: llvm.load {{.*}} : !llvm.ptr<1> -> vector<2xi32>
+    // CHECK-COUNT-4: triton_gen.predicated_load {{.*}} : (!llvm.ptr<1>, i1, f16) -> f16
     %load = tt.descriptor_load %desc[%arg1, %arg2] : !tt.tensordesc<4x16xf16> -> tensor<4x16xf16, #blocked>
 
-    // Verify wider-than-scalar predicated stores with the same descriptor.
-    // CHECK: triton_gen.predicated_store {{.*}} {cache_control = Default} : (!llvm.ptr<1>, vector<2xi32>, i1)
+    // Same two-armed structure for the store with the same descriptor: one
+    // fast wide vector<2xi32> store per group, with an exact per-element
+    // triton_gen.predicated_store fallback (4 lanes) per group.
+    // CHECK: llvm.cond_br
+    // CHECK-NEXT: ^bb{{[0-9]+}}:
+    // CHECK-NEXT: llvm.store {{.*}} : vector<2xi32>, !llvm.ptr<1>
+    // CHECK-COUNT-4: triton_gen.predicated_store {{.*}} {cache_control = Default} : (!llvm.ptr<1>, f16, i1) -> ()
+    // CHECK: llvm.cond_br
+    // CHECK-NEXT: ^bb{{[0-9]+}}:
+    // CHECK-NEXT: llvm.store {{.*}} : vector<2xi32>, !llvm.ptr<1>
+    // CHECK-COUNT-4: triton_gen.predicated_store {{.*}} {cache_control = Default} : (!llvm.ptr<1>, f16, i1) -> ()
+    // CHECK: llvm.cond_br
+    // CHECK-NEXT: ^bb{{[0-9]+}}:
+    // CHECK-NEXT: llvm.store {{.*}} : vector<2xi32>, !llvm.ptr<1>
+    // CHECK-COUNT-4: triton_gen.predicated_store {{.*}} {cache_control = Default} : (!llvm.ptr<1>, f16, i1) -> ()
+    // CHECK: llvm.cond_br
+    // CHECK-NEXT: ^bb{{[0-9]+}}:
+    // CHECK-NEXT: llvm.store {{.*}} : vector<2xi32>, !llvm.ptr<1>
+    // CHECK-COUNT-4: triton_gen.predicated_store {{.*}} {cache_control = Default} : (!llvm.ptr<1>, f16, i1) -> ()
     tt.descriptor_store %desc[%arg1, %arg2], %load : !tt.tensordesc<4x16xf16>, tensor<4x16xf16, #blocked>
     tt.return %load : tensor<4x16xf16, #blocked>
   }
