@@ -167,11 +167,14 @@ create_module(ze_context_handle_t context, ze_device_handle_t device,
   module_description.inputSize = static_cast<uint32_t>(binary_size);
   module_description.pInputModule = binary_ptr;
   module_description.pBuildFlags = build_flags;
-  ze_module_build_log_handle_t buildlog;
+  ze_module_build_log_handle_t buildlog = nullptr;
   ze_module_handle_t module;
   auto error_no =
       zeModuleCreate(context, device, &module_description, &module, &buildlog);
-  if (error_no != ZE_RESULT_SUCCESS) {
+  // A failing zeModuleCreate() is not required to write *phBuildLog: the loader
+  // and the validation layer can return early. Only read the handle if the
+  // stack actually produced one, otherwise error_no is reported as-is.
+  if (error_no != ZE_RESULT_SUCCESS && buildlog != nullptr) {
     size_t szLog = 0;
     ZE_CHECK(zeModuleBuildLogGetString(buildlog, &szLog, nullptr));
     char *strLog = (char *)malloc(szLog);
