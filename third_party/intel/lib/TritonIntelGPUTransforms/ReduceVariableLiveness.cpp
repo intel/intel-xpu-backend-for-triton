@@ -251,7 +251,8 @@ void createPrefetchOp(tt::DescriptorLoadOp loadOp) {
 
 /// Investigate opportunities for the reducing register pressure by moving DotOp
 /// operands.
-/// Loads already inside the loop are left in place when \p disableInLoopSink.
+/// Loads already inside the loop are left in place when \p disableInLoopSink is
+/// true.
 /// Returns `true` if at least one operand has been moved.
 bool optimizeDotOperands(scf::ForOp forOp,
                          SmallVector<PrefetchKey> &prefetchedTiles,

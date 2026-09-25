@@ -46,8 +46,17 @@ def test_in_loop_sink_reaches_rvl(in_loop_sink, device):
     x = torch.empty((1024, 64), dtype=torch.float16, device=device)
     kernel = _attn_like_kernel.warmup(x, x, x, x, N_CTX=1024, HEAD_DIM=64, BLOCK_M=128, BLOCK_N=64, num_warps=8,
                                       grid=(1, ), in_loop_sink=in_loop_sink)
-    body = kernel.asm["ttgir"].split("scf.for", 1)[1]
-    v_load = re.search(r"tt\.descriptor_load %desc_v\b", body).start()
+    ttgir = kernel.asm["ttgir"]
+    # SSA names come from source locations, which TRITON_DISABLE_LINE_INFO=1 drops, so look
+    # up V's descriptor through the (always named) kernel argument.
+    desc_v = re.search(r"(%\w+) = tt\.make_tensor_descriptor %V\b", ttgir)
+    assert desc_v, "V's make_tensor_descriptor not found in the TTGIR"
+    assert "scf.for" in ttgir, "expected a loop in the TTGIR"
+    body = ttgir.split("scf.for", 1)[1]
+    v_match = re.search(rf"tt\.descriptor_load {re.escape(desc_v.group(1))}\[", body)
+    assert v_match, "V's descriptor_load not found in the loop body"
+    v_load = v_match.start()
+    assert "tt.dot" in body, "no tt.dot in the loop body"
     first_dot = body.index("tt.dot")
     # The sink moves V's load from the top of the body to just before its dot.
     assert (v_load > first_dot) == in_loop_sink
