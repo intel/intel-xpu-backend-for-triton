@@ -61,7 +61,7 @@ index dff0b21c64..2a12c31122 100644
      right = num_seqs
      while left < right:
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index b0231dd0c0..1ec454fed4 100644
+index b0231dd0c0..c7c4ac424e 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -7,8 +7,6 @@
@@ -254,19 +254,8 @@ index b0231dd0c0..1ec454fed4 100644
  
      # Wider KV tile for the tuned large-head path (see above). Only the 2D
      # path (used when max_seqlen_q > 1) reads TILE_SIZE_PREFILL.
-@@ -1043,15 +1073,13 @@ def unified_attention(
-     # 2. The batch includes at least one prefill request, or
-     # 3. The number of sequences exceeds the configured threshold, or
-     # 4. Batch invariance is enabled
-+    seq_threshold_3D = 32
-     use_3d = not (
--        seq_threshold_3D is None
--        or num_par_softmax_segments is None
--        or softmax_segm_output is None
--        or softmax_segm_max is None
--        or softmax_segm_expsum is None
--        or max_seqlen_q > 1
-+        max_seqlen_q > 1
+@@ -1052,6 +1082,8 @@ def unified_attention(
+         or max_seqlen_q > 1
          or num_seqs > seq_threshold_3D
          or is_batch_invariant
 +        # 2d kernel includes crucial optimizations for models with sliding window
@@ -274,36 +263,7 @@ index b0231dd0c0..1ec454fed4 100644
      )
  
      # The kernel signature is the same for 2D and 3D — only the launch
-@@ -1073,17 +1101,57 @@ def unified_attention(
-         v_scale_ptr = None
-     # 3D needs real segm tensors; 2D never touches them.  Pass ``None`` in
-     # 2D mode so Triton can skip materialising these pointer arguments.
-+    if use_3d:
-+        num_par_softmax_segments = 16
-+        softmax_segm_output = torch.empty(
-+            q.shape[0],
-+            num_query_heads,
-+            num_par_softmax_segments,
-+            triton.next_power_of_2(head_size),
-+            dtype=torch.float32,
-+            device=q.device,
-+        )
-+        softmax_segm_max = torch.empty(
-+            q.shape[0],
-+            num_query_heads,
-+            num_par_softmax_segments,
-+            dtype=torch.float32,
-+            device=q.device,
-+        )
-+        softmax_segm_expsum = torch.empty(
-+            q.shape[0],
-+            num_query_heads,
-+            num_par_softmax_segments,
-+            dtype=torch.float32,
-+            device=q.device,
-+        )
-     segm_output_ptr = softmax_segm_output if use_3d else None
-     segm_max_ptr = softmax_segm_max if use_3d else None
+@@ -1078,12 +1110,28 @@ def unified_attention(
      segm_expsum_ptr = softmax_segm_expsum if use_3d else None
      num_segments = num_par_softmax_segments if use_3d else 1
  
@@ -335,7 +295,7 @@ index b0231dd0c0..1ec454fed4 100644
          tile_size = TILE_SIZE_DECODE
  
      launch_kwargs: dict[str, int] = {}
-@@ -1155,9 +1223,7 @@ def unified_attention(
+@@ -1155,9 +1203,7 @@ def unified_attention(
          stride_vs_slot=vs_slot,
          stride_vs_head=vs_head,
          query_start_len_ptr=cu_seqlens_q,
@@ -345,7 +305,7 @@ index b0231dd0c0..1ec454fed4 100644
          NUM_SEGMENTS_PER_SEQ=num_segments,
          USE_FP8=output_scale is not None,
          IS_3D=use_3d,
-@@ -1188,7 +1254,6 @@ def unified_attention(
+@@ -1188,7 +1234,6 @@ def unified_attention(
              HEAD_SIZE=head_size,
              HEAD_SIZE_PADDED=head_size_padded,
              query_start_len_ptr=cu_seqlens_q,

@@ -15,6 +15,7 @@ from itertools import product
 from typing import Optional
 
 import torch
+import triton
 
 import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark.benchmark_testing import BENCHMARKING_CONFIG
@@ -371,6 +372,25 @@ def get_unified_attention_benchmark(
                 k_descale = torch.rand(scale_shape, dtype=torch.float32)
                 v_descale = torch.rand(scale_shape, dtype=torch.float32)
 
+            # Provide the 3D (split-softmax) softmax segment buffers through the
+            # wrapper's public interface instead of hard-coding their allocation
+            # inside the patched kernel. ``unified_attention`` selects the 3D vs
+            # 2D path itself based on batch shape / sliding window; here we just
+            # hand it the buffers it needs. Allocated for every triton run
+            # (baseline and patched) so the baseline is free to use the 3D path
+            # too, keeping the tensor-descriptor comparison apples-to-apples.
+            seq_threshold_3D = 32
+            num_par_softmax_segments = 16
+            total_query_tokens = maybe_quantized_query.shape[0]
+            head_size_padded = triton.next_power_of_2(head_size)
+            device = maybe_quantized_query.device
+            softmax_segm_output = torch.empty(total_query_tokens, q_heads, num_par_softmax_segments, head_size_padded,
+                                              dtype=torch.float32, device=device)
+            softmax_segm_max = torch.empty(total_query_tokens, q_heads, num_par_softmax_segments, dtype=torch.float32,
+                                           device=device)
+            softmax_segm_expsum = torch.empty(total_query_tokens, q_heads, num_par_softmax_segments,
+                                              dtype=torch.float32, device=device)
+
             def triton_fn():
                 unified_attention(
                     q=maybe_quantized_query,
@@ -389,6 +409,11 @@ def get_unified_attention_benchmark(
                     q_descale=q_descale,
                     k_descale=k_descale,
                     v_descale=v_descale,
+                    seq_threshold_3D=seq_threshold_3D,
+                    num_par_softmax_segments=num_par_softmax_segments,
+                    softmax_segm_output=softmax_segm_output,
+                    softmax_segm_max=softmax_segm_max,
+                    softmax_segm_expsum=softmax_segm_expsum,
                     use_td=is_td_patched,
                 )
                 return output
