@@ -239,8 +239,8 @@ public:
     populateAssertOpToLLVMPattern(typeConverter, patterns, targetInfo, benefit);
     intel::populateMemoryOpToLLVMPattern(typeConverter, targetInfo, patterns,
                                          benefit);
-    mlir::triton::populateMemoryOpToLLVMPatterns(typeConverter, targetInfo,
-                                                 patterns, benefit);
+    mlir::triton::populateMemoryOpToLLVMPatterns(
+        typeConverter, targetInfo, patterns, axisInfoAnalysis, benefit);
     intel::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
                                               targetInfo, benefit);
     mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,

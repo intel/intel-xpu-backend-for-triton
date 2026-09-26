@@ -3892,13 +3892,6 @@ struct StoreOpConversion
   }
 };
 
-void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
-                   int numCTAs) {
-  assert(numCTAs == 1 && "Expecting numCTA to be 1");
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  b.barrier(triton::gpu::AddrSpace::Local);
-}
-
 struct AtomicCASOpConversion
     : public ConvertTritonGPUOpToLLVMPattern<triton::AtomicCASOp>,
       public LoadStoreConversionBase {
@@ -3923,7 +3916,6 @@ struct AtomicCASOpConversion
 
     auto moduleOp = op->getParentOfType<ModuleOp>();
     assert(moduleOp && "Parent ModuleOp not found for AtomicCASOp");
-    int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
 
     Value llPtr = adaptor.getPtr();
     Value llCmp = adaptor.getCmp();
@@ -4011,32 +4003,15 @@ struct AtomicCASOpConversion
         }
       }
 
-      ret = b.bitcast(ret, valueElemTy);
-
-      if (tensorTy) {
-        resultVals[i] = ret;
-      } else {
-        if (op.getResult().use_empty()) {
-          rewriter.eraseOp(op);
-          return success();
-        }
-        Value atomPtr = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
-                                                  op.getOperation());
-        atomPtr = b.bitcast(atomPtr, ptr_ty(ctx, 3));
-        targetInfo.storeShared(rewriter, loc, atomPtr, ret, mask);
-        createBarrier(rewriter, loc, numCTAs);
-        Value ret = b.load(valueElemTy, atomPtr);
-        rewriter.replaceOp(op, {ret});
-      }
+      resultVals[i] = b.bitcast(ret, valueElemTy);
     }
 
-    if (tensorTy) {
+    if (tensorTy)
       resultVals =
           actionRemoveBroadcastedRegs(triton::gpu::toLinearLayout(tensorTy))
               .apply(resultVals);
-      finalizeAtomicResults(op, rewriter, resultVals, valueElemTy, b, mask,
-                            targetInfo, getTypeConverter());
-    }
+    finalizeAtomicResults(op, rewriter, resultVals, valueElemTy, b, mask,
+                          targetInfo, getTypeConverter());
     return success();
   }
 
@@ -4133,7 +4108,6 @@ struct AtomicRMWOpConversion
 
     auto moduleOp = op->getParentOfType<ModuleOp>();
     assert(moduleOp && "Parent ModuleOp not found for AtomicRMWOp");
-    int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
 
     auto atomicRmwAttr = op.getAtomicRmwOp();
     MemSemantic memSem = op.getSem();
@@ -4266,35 +4240,18 @@ struct AtomicRMWOpConversion
       Type retType = (!tensorTy || vec == 1) ? valueElemTy : vecTy;
       ret = b.bitcast(ret, retType);
 
-      if (tensorTy) {
-        for (int ii = 0; ii < vec; ++ii) {
-          resultVals[i + ii] =
-              vec == 1 ? ret
-                       : b.extract_element(valueElemTy, ret, b.i32_val(ii));
-        }
-      } else {
-        if (op.getResult().use_empty()) {
-          rewriter.eraseOp(op);
-          return success();
-        }
-        Value atomPtr = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
-                                                  op.getOperation());
-        atomPtr = b.bitcast(atomPtr, ptr_ty(ctx, 3));
-        // Only threads with rmwMask = True store the result
-        targetInfo.storeShared(rewriter, loc, atomPtr, ret, rmwMask);
-        createBarrier(rewriter, loc, numCTAs);
-        Value loadVal = b.load(valueElemTy, atomPtr);
-        rewriter.replaceOp(op, {loadVal});
+      for (int ii = 0; ii < vec; ++ii) {
+        resultVals[i + ii] =
+            vec == 1 ? ret : b.extract_element(valueElemTy, ret, b.i32_val(ii));
       }
     }
 
-    if (tensorTy) {
+    if (tensorTy)
       resultVals =
           actionRemoveBroadcastedRegs(triton::gpu::toLinearLayout(tensorTy))
               .apply(resultVals);
-      finalizeAtomicResults(op, rewriter, resultVals, valueElemTy, b,
-                            threadPred, targetInfo, getTypeConverter());
-    }
+    finalizeAtomicResults(op, rewriter, resultVals, valueElemTy, b, threadPred,
+                          targetInfo, getTypeConverter());
     return success();
   }
 
