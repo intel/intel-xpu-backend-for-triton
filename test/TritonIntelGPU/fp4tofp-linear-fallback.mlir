@@ -28,6 +28,6 @@ module attributes {triton_intel_gpu.support_bfloat16_conversion, triton_intel_gp
 
 // CHECK-LABEL: llvm.func {{.*}}@fp4_vec2xi32_path
 // COM: Table-lookup fallback used (hardware builtin requires explicit capability).
-// CHECK-NOT: __builtin_spirv_ConvertE2M1ToBF16INTEL
+// CHECK-NOT: __builtin_spirv_ConvertE2M1ToBF16EXT
 // COM: 16 bf16 results written (8 i8 inputs x 2 nibbles each):
 // CHECK-COUNT-16: llvm.extractelement {{.*}} : vector<16xbf16>
