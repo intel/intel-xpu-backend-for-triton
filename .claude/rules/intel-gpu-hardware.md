@@ -23,7 +23,7 @@ Each hardware thread has a private register file. **Do not guess** GRF register 
    the unit CUDA/HIP report `n_spills` in and that external consumers threshold on
 4. If that exceeds `16` → recompile with the largest GRF mode this target
    auto-escalates to (256-GRF on every non-`cri` target; 512-GRF on `cri` —
-   see `get_max_grf_mode()` in `compiler.py`, issue #8074)
+   see `get_max_grf_mode()` in `compiler.py`)
 
 The threshold is `16` dword-equivalents/lane, aligned between
 `MAX_REG_SPILL_SLOTS_PER_LANE` in `compiler.py` and `kMaxSpillSlotsPerLane` in
@@ -81,24 +81,22 @@ prefetch behind) when the loop body's **peak** register pressure, from
 `RegisterPressureAnalysis::peakPressure(loop)`, is at or above the **per-lane**
 GRF budget, `getPerLaneGRFBudgetInBytes(grfMode, mod, UnknownGRFSizeAssumption::Largest)`.
 At `threads-per-warp = 16` that is 256 B/lane for `'128'`, 512 for `'256'`, and
-1024 for `'512'`. For `'default'`/`'auto'` the true GRF size isn't known at
+1024 for `'512'`. The true GRF size for `'default'`/`'auto'` isn't known at
 this point in the pipeline, and this gate treats the budget as a threshold to
 sink rather than a ceiling, so the safe assumption under uncertainty is the
-*largest* mode this target's escalation reaches. That only means something
-target-specific for `'default'`, whose own AOT/JIT retry is the one path
-that actually realizes the `ttig.max_grf_mode` module attribute (512 B/lane
-on every non-`cri` target, 1024 B/lane on `cri`, or 1024 B/lane if the
-attribute is absent entirely, e.g. hand-written TTGIR that never went
-through `TritonAnnotateModule`). `'auto'`'s escalation happens inside IGC
-with no backend path that reads back or constrains it, so `ttig.max_grf_mode`
-has no established relationship to what IGC picks under `'auto'` and is not
-applied there -- `'auto'` always resolves to the unconditional 1024 B/lane
-bound, same as an absent attribute, regardless of target. See `RegisterPressureAnalysis`'s
-`UnknownGRFSizeAssumption` for the
-full rationale, including why `HoistLayoutConversions` correctly assumes the
-opposite (`Smallest`) for the same unknown modes. There is no fixed
-tensor-size floor; sizes only matter through their contribution to the
-measured pressure.
+*largest* mode reachable, per `RegisterPressureAnalysis`'s
+`UnknownGRFSizeAssumption` (see why `HoistLayoutConversions` correctly
+assumes the opposite, `Smallest`, for the same unknown modes).
+
+Only `'default'` gets a target-specific ceiling here: its own AOT/JIT retry is
+the one path that realizes the `ttig.max_grf_mode` module attribute (512
+B/lane on every non-`cri` target, 1024 B/lane on `cri`, or 1024 B/lane if the
+attribute is absent, e.g. hand-written TTGIR that never went through
+`TritonAnnotateModule`). `'auto'`'s escalation happens inside IGC with no
+backend path that reads back or constrains it, so it always resolves to the
+unconditional 1024 B/lane bound regardless of target or the attribute. There
+is no fixed tensor-size floor; sizes only matter through their contribution to
+the measured pressure.
 
 Peak, not live-in, pressure is the gate: `liveInPressure` derives from
 `LivenessBlockInfo::in()`, which excludes block arguments and so never counts the

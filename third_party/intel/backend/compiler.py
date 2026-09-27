@@ -162,10 +162,11 @@ def get_max_grf_mode(arch: dict) -> str:
     this file uses), from which it reaches every consumer as
     `opt.max_grf_mode`: `annotate_module`'s `ttig.max_grf_mode` module
     attribute (read by `RegisterPressureAnalysis::getGRFBytesPerHardwareThread`
-    to resolve its `UnknownGRFSizeAssumption::Largest` case, see issue #8074),
-    `metadata["max_grf_mode"]` (via `options.__dict__`, handed to `driver.c`'s
-    `load_binary` so the JIT large-GRF retry escalates to the same mode), and
-    `make_zebin`'s ocloc auto-large-GRF retry flag.
+    to resolve its `UnknownGRFSizeAssumption::Largest` case for
+    `grf_mode='default'` only), `metadata["max_grf_mode"]` (via
+    `options.__dict__`, handed to `driver.c`'s `load_binary` so the JIT
+    large-GRF retry escalates to the same mode), and `make_zebin`'s ocloc
+    auto-large-GRF retry flag.
 
     Arguments:
       arch: the `target.arch` dict for the current device.
@@ -300,10 +301,10 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         # flag (hard failure on a typo), `driver.c`'s JIT retry silently
         # falls back to 256 for anything that isn't exactly "512"/"128", and
         # `RegisterPressureAnalysis` silently falls back to 512 for anything
-        # that isn't exactly "128"/"256" -- three different interpretations
-        # of the same bad value, with the worst combination (a permissive
+        # that isn't exactly "128"/"256": three different interpretations of
+        # the same bad value, with the worst combination (a permissive
         # 512-byte pressure budget paired with a 256-GRF hardware ceiling)
-        # silently reproducing the exact undercount #8074 exists to fix.
+        # silently reproducing a register-pressure undercount.
         # Validate here, once, so every downstream consumer agrees.
         dev_prop['max_grf_mode'] = tgt_prop.get('max_grf_mode', get_max_grf_mode(tgt_prop))
         if dev_prop['max_grf_mode'] not in ("128", "256", "512"):

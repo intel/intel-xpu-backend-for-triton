@@ -1,11 +1,11 @@
 // Pins `getGRFBytesPerHardwareThread`'s `UnknownGRFSizeAssumption::Largest`
 // resolution table end to end: every `ttig.max_grf_mode` value the Python
 // producer (`get_max_grf_mode` in compiler.py) can stamp, the values it
-// deliberately does not, and the `num_warps > 32` exception (issue #8074,
-// review findings 1 and 6). A lit test exercising the same table through
-// `ReduceVariableLiveness`'s sink decision cannot distinguish an explicit
-// "512" from an absent attribute (both resolve to the same 16384-byte
-// budget), so this is checked directly here instead.
+// deliberately does not, and the `num_warps > 32` exception. A lit test
+// exercising the same table through `ReduceVariableLiveness`'s sink decision
+// cannot distinguish an explicit "512" from an absent attribute (both
+// resolve to the same 16384-byte budget), so this is checked directly here
+// instead.
 #include "intel/include/Analysis/RegisterPressure.h"
 #include "intel/include/Dialect/TritonIntelGPU/IR/Dialect.h"
 #include "mlir/IR/Builders.h"
@@ -70,12 +70,12 @@ TEST_F(RegisterPressureGRFModeTest, ExplicitAttr512) {
 
 TEST_F(RegisterPressureGRFModeTest,
        ExplicitAttr128CollapsesLargestIntoSmallest) {
-  // "128" is not a value the Python producer ever stamps (see #8074's
-  // review, finding 3): a kernel already gets 128-GRF without any
-  // escalation, so a *maximum auto-escalation target* of "128" is
-  // incoherent. Documented here rather than silently assumed: if this ever
-  // starts mattering (a hand-written module or a future producer stamping
-  // it), `Largest` degenerates to exactly `Smallest`'s answer.
+  // "128" is not a value the Python producer ever stamps: a kernel already
+  // gets 128-GRF without any escalation, so a *maximum auto-escalation
+  // target* of "128" is incoherent. Documented here rather than silently
+  // assumed: if this ever starts mattering (a hand-written module or a
+  // future producer stamping it), `Largest` degenerates to exactly
+  // `Smallest`'s answer.
   auto module = createModule(StringRef("128"));
   EXPECT_EQ(largestBytes(*module), 4096u);
 }
@@ -89,8 +89,8 @@ TEST_F(RegisterPressureGRFModeTest, InvalidAttrFallsThroughToAbsenceDefault) {
 }
 
 TEST_F(RegisterPressureGRFModeTest, NumWarpsOver32CapsDefaultModeAtSmallest) {
-  // `make_zebin`'s automatic-escalation retry -- the only path that would
-  // ever realize `ttig.max_grf_mode` on the `grf_mode='default'` path -- is
+  // `make_zebin`'s automatic-escalation retry, the only path that would
+  // ever realize `ttig.max_grf_mode` on the `grf_mode='default'` path, is
   // itself skipped outright once `num_warps > 32`, so the realizable
   // ceiling is `Smallest`'s answer regardless of what the attribute says.
   auto module = createModule(StringRef("512"), /*numWarps=*/64);

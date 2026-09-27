@@ -24,43 +24,46 @@
 // COM:
 // COM: The true GRF size isn't known at this point in the pipeline, and this gate
 // COM: treats the budget as a threshold to sink rather than a ceiling on what may
-// COM: be added, so the safe assumption under uncertainty is the *largest* mode
-// COM: *this target's automatic* ("default"/"auto") escalation reaches -- not the
-// COM: largest mode the target can be explicitly told to use (BMG and PVC both
-// COM: accept an explicit grf_mode='512'; 256 is only where their own automatic
-// COM: path stops), and not the largest any device supports (assuming the
+// COM: be added, so the safe assumption under uncertainty is the *largest* size
+// COM: (see RegisterPressureAnalysis's UnknownGRFSizeAssumption for why the
 // COM: smallest would make the pass sink more than the real hardware, once known,
-// COM: would ever have required -- see RegisterPressureAnalysis's
-// COM: UnknownGRFSizeAssumption). Before #8074 that was
-// COM: unconditionally 512-register mode (1024 B/lane) for every target; modules
-// COM: 1-4 still exercise that pre-#8074 fallback since they never set
-// COM: `ttig.max_grf_mode`, and so does "auto" even in module 5, which only pins
-// COM: the target-aware replacement for "default": with the attribute present,
-// COM: only "default" resolves to whatever mode it names -- "auto" still falls
-// COM: back to 1024 B/lane, same as if the attribute were absent.
+// COM: would ever have required).
+// COM:
+// COM: For "default" that means the largest mode *this target's own automatic
+// COM: escalation* reaches, not the largest mode it can be explicitly told to use
+// COM: (BMG and PVC both accept an explicit grf_mode='512'; 256 is only where their
+// COM: automatic path stops), and not the largest any device supports. Modules 1-4
+// COM: never set `ttig.max_grf_mode`, so they exercise the pre-target-aware
+// COM: fallback: unconditionally 512-register mode (1024 B/lane).
+// COM:
+// COM: "auto" also always resolves to that same unconditional 1024 B/lane bound,
+// COM: but for an unrelated reason: IGC decides its own escalation with nothing in
+// COM: this backend that reads back or constrains it, so `ttig.max_grf_mode`
+// COM: (realized only by "default"'s own rebuild) simply does not apply to it,
+// COM: including in module 5 below, which sets that attribute.
 // COM:
 // COM: The first four modules have peaks of 2564, 644, 388 and 256 B/lane, spanning
-// COM: every budget boundary between them -- though not one per bucket: 388 and 256
+// COM: every budget boundary between them, though not one per bucket: 388 and 256
 // COM: deliberately share the lowest [256, 512) bucket, which is why SINK3/SINK4 and
 // COM: KEEP3/KEEP4 are paired on every RUN line above. The peaks mostly sit inside
 // COM: their bucket rather than exactly on a boundary: a loop body always keeps a
 // COM: few bytes of scalar values live too (the induction variable and friends), so
 // COM: an exactly-power-of-two peak is hard to hit by accident. The fourth module
 // COM: below is the exception, landing exactly on the 256 B/lane boundary on
-// COM: purpose -- see its own comment.
+// COM: purpose, see its own comment.
 // COM:
 // COM: The fifth module below sets the `ttig.max_grf_mode` module attribute
 // COM: directly (the attribute `TritonAnnotateModule` would normally stamp from
-// COM: Python-side device info -- see compiler.py's `get_max_grf_mode()`), since
+// COM: Python-side device info, see compiler.py's `get_max_grf_mode()`), since
 // COM: this lit test builds MLIR directly and never runs the Python compiler
 // COM: pipeline that would otherwise populate it. It pins the target-aware
-// COM: resolution of `UnknownGRFSizeAssumption::Largest` (#8074): with the
-// COM: attribute set to "256", "default"/"auto" now share the 512 B/lane budget
-// COM: of an explicit "256" mode, not the 1024 B/lane one modules 1-4 (which have
-// COM: no such attribute, and so fall back to the pre-#8074 conservative
-// COM: 512-register-mode assumption) still get under "default"/"auto".
+// COM: resolution of `UnknownGRFSizeAssumption::Largest` for "default" only: with
+// COM: the attribute set to "256", "default" now resolves to the 512 B/lane budget
+// COM: of an explicit "256" mode instead of the 1024 B/lane fallback modules 1-4
+// COM: get (they have no such attribute). "auto" is unaffected by the attribute
+// COM: and keeps the unconditional 1024 B/lane bound regardless.
 
-// COM: Peak 2564 B/lane -- above every budget, so the A operand's load sinks in all
+// COM: Peak 2564 B/lane, above every budget, so the A operand's load sinks in all
 // COM: five GRF modes.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 8], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth=1}>
@@ -93,7 +96,7 @@ module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 32 : i32, "ttg.th
 
 // -----
 
-// COM: Peak 644 B/lane -- at or above the 256 B/lane budget only, so the A load
+// COM: Peak 644 B/lane, at or above the 256 B/lane budget only, so the A load
 // COM: sinks in the 128 and 256 modes, and stays put in default, auto and 512
 // COM: (whose budgets are 1024 B/lane).
 #dpas1 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 8], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
@@ -133,7 +136,7 @@ module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 32 : i32, "ttg.th
 
 // -----
 
-// COM: Peak 388 B/lane -- at or above the 256 B/lane budget only, so the A load
+// COM: Peak 388 B/lane, at or above the 256 B/lane budget only, so the A load
 // COM: sinks in the 128 mode only, and stays put in default, auto, 256 and 512
 // COM: (whose budgets are all 512 B/lane or higher).
 // COM: The A tile is 64x64, far below the 128x128-element floor the pass used to
@@ -173,10 +176,10 @@ module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 32 : i32, "ttg.th
 
 // -----
 
-// COM: Peak 256 B/lane -- exactly at the 128 mode's budget boundary, so the A
+// COM: Peak 256 B/lane, exactly at the 128 mode's budget boundary, so the A
 // COM: load sinks there (the gate is `>=`) and stays put in default, auto, 256
 // COM: and 512, whose budgets are all strictly above it (default/auto now
-// COM: share 512's 1024 B/lane budget, not 128's -- see the file comment).
+// COM: share 512's 1024 B/lane budget, not 128's, see the file comment).
 // COM: Landing exactly on a boundary (unlike the three loops above, which
 // COM: deliberately sit inside their bucket) pins the `>=` vs `>` choice
 // COM: itself: flipping the comparison to `>` would flip this case's outcome
@@ -219,16 +222,16 @@ module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 4 : i32, "ttg.thr
 // -----
 
 // COM: Peak 644 B/lane, the same shape as @mid_pressure_gate above, but this module
-// COM: also sets `ttig.max_grf_mode = "256"` -- the attribute `TritonAnnotateModule`
+// COM: also sets `ttig.max_grf_mode = "256"`, the attribute `TritonAnnotateModule`
 // COM: stamps from the "cri"-vs-everything-else policy in compiler.py's
-// COM: `get_max_grf_mode()` (see #8074). With it set, "default"/"auto" resolve
+// COM: `get_max_grf_mode()`. With it set, "default" resolves
 // COM: `UnknownGRFSizeAssumption::Largest` to the 512 B/lane budget of an explicit
-// COM: "256" mode instead of the 1024 B/lane one they get in the four modules above
-// COM: (which have no such attribute and so fall back to the pre-#8074 conservative
-// COM: 512-register-mode assumption): 644 is at or above 512, so the A load now
-// COM: sinks in "default"/"auto" too, not just "128" and "256". The explicit "512"
-// COM: mode is unaffected by the attribute (it always means the literal
-// COM: 512-register-mode budget), so the A load still stays put there.
+// COM: "256" mode instead of the 1024 B/lane fallback the four modules above get
+// COM: (they have no such attribute): 644 is at or above 512, so the A load now
+// COM: sinks in "default" too, not just "128" and "256". "auto" is unaffected by
+// COM: the attribute and keeps its unconditional 1024 B/lane bound, so it still
+// COM: stays put, same as the explicit "512" mode (which is also unaffected by
+// COM: the attribute: it always means the literal 512-register-mode budget).
 #dpas4 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 8], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0_4 = #ttg.dot_op<{opIdx = 0, parent = #dpas4, kWidth=1}>
 #dot1_4 = #ttg.dot_op<{opIdx = 1, parent = #dpas4, kWidth=2}>

@@ -37,7 +37,7 @@ unsigned RegisterPressureAnalysis::getPerThreadSizeInBytes(Type type) {
 
 /// Per-hardware-thread GRF register width in bytes (256 bits); see
 /// hardware-reference.md's GRF Register Specifications.
-static constexpr unsigned kGRFRegisterSizeBytes = 32;
+static constexpr unsigned GRFRegisterSizeBytes = 32;
 
 /// Maps an explicit GRF mode string ("128"/"256"/"512") to its exact
 /// per-hardware-thread budget in bytes (one hardware thread executes a whole
@@ -50,7 +50,7 @@ static unsigned explicitGRFModeToBytes(StringRef grfMode) {
   if (grfMode.getAsInteger(10, mode) ||
       (mode != 128 && mode != 256 && mode != 512))
     return 0;
-  return mode * kGRFRegisterSizeBytes;
+  return mode * GRFRegisterSizeBytes;
 }
 
 unsigned RegisterPressureAnalysis::getGRFBytesPerHardwareThread(

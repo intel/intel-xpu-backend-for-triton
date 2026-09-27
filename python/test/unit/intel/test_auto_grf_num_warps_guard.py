@@ -184,7 +184,8 @@ def _large_grf_flag() -> str:
     which is too late to save an import-time exception.
     """
     arch = triton.runtime.driver.active.get_current_target().arch
-    return f"-cl-intel-{intel_compiler.get_max_grf_mode(arch)}-GRF-per-thread"
+    max_grf_mode = arch.get("max_grf_mode", intel_compiler.get_max_grf_mode(arch))
+    return f"-cl-intel-{max_grf_mode}-GRF-per-thread"
 
 
 def _large_grf_retries(calls) -> int:
