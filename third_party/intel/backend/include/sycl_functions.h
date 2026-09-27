@@ -190,6 +190,8 @@ create_module(ze_context_handle_t context, ze_device_handle_t device,
     ZE_CHECK(zeModuleBuildLogDestroy(buildlog));
   }
   ZE_CHECK(error_no);
+  if (buildlog != nullptr)
+    zeModuleBuildLogDestroy(buildlog);
   return std::make_tuple(module, error_no);
 }
 
