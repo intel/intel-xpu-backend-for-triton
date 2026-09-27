@@ -121,13 +121,14 @@ public:
   unsigned peakPressure(Block *block) const;
 
   /// Opaque handle sharing this analysis's liveness caches across a run of
-  /// `pressureAt`/`pressureBefore` queries against one IR generation -- the
+  /// `pressureAt`/`peakPressure` queries against one IR generation -- the
   /// per-op equivalent of the cache pair every block-/function-level entry
-  /// point above already threads through internally. Construct one, pass it
-  /// to repeated queries over a stable range of operations (e.g. a candidate
-  /// load's live range), and let it go out of scope once the IR they describe
-  /// is about to change (a sink, a hoist, ...): nothing here is safe to reuse
-  /// across a mutation, matching every other cache in this class.
+  /// point above already threads through internally. `pressureBefore` has no
+  /// cache-taking overload yet. Construct one, pass it to repeated queries
+  /// over a stable range of operations (e.g. a candidate load's live range),
+  /// and let it go out of scope once the IR they describe is about to change
+  /// (a sink, a hoist, ...): nothing here is safe to reuse across a
+  /// mutation, matching every other cache in this class.
   class QueryCache {
   public:
     QueryCache() = default;

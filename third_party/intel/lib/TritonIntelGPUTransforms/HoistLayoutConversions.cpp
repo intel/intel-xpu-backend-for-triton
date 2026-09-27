@@ -509,6 +509,13 @@ static uint64_t regionPeakThroughOp(
 /// why that tail needs its own pass rather than folding into
 /// `regionPeakThroughOp`'s whole-region charge.
 ///
+/// Every per-op charge here is either an unconditional result charge or a
+/// credit decided by a fully determined fact (nothing to credit, a real
+/// remaining reader, or `srcLiveness.creditable`, whose own uncertainty the
+/// caller already propagates via `srcLiveness.exact`), so this walk never
+/// discovers a *new* uncertainty of its own and has no exactness of its own
+/// to report.
+///
 /// Returns false (leaving \p peak unspecified) if the walk exceeds
 /// \p corridorOpCap, so the caller falls back to a fully conservative charge
 /// instead of an unbounded one.
@@ -517,8 +524,7 @@ static bool priceTailAfter(
     const ttg::intel::RegisterPressureAnalysis &analysis,
     const SourceLiveness &srcLiveness, scf::ForOp forOp, unsigned corridorOpCap,
     ttg::intel::RegisterPressureAnalysis::QueryCache &queryCache,
-    DenseMap<Operation *, uint64_t> &regionPeakCache, uint64_t &peak,
-    bool &exact) {
+    DenseMap<Operation *, uint64_t> &regionPeakCache, uint64_t &peak) {
   peak = 0;
   unsigned walked = 0;
   for (Operation *op = start->getNextNode(); op; op = op->getNextNode()) {
@@ -537,10 +543,15 @@ static bool priceTailAfter(
       uint64_t regionPriced =
           regionPeakThroughOp(op, analysis, queryCache, regionPeakCache) +
           dstBytes;
+      // `credit` is false here either because nothing is live to credit, or
+      // because a real remaining reader provably keeps `src` alive, or
+      // because `srcLiveness.creditable` is false -- and that last case is
+      // already reflected in `srcLiveness.exact`, which the caller ANDs into
+      // `projection.exact` once for the whole function. None of the three is
+      // a *local* uncertainty this loop discovers, so there is nothing to
+      // clear `exact` for here.
       if (credit)
         regionPriced -= srcBytes;
-      else
-        exact = false;
       peak = std::max(peak, regionPriced);
     }
   }
@@ -675,15 +686,15 @@ static PeakProjection projectedFunctionPeak(
       // region still needs it), that something can only be `cvtOp`, since
       // every other real consumer is already accounted for in `srcLiveness`.
       // So wherever this credit applies, the subtraction is exact, not
-      // merely conservative, here just as it is above.
+      // merely conservative, here just as it is above. And wherever it does
+      // not apply, that is either because nothing here is live to credit or
+      // because a real remaining reader provably keeps `src` alive, or
+      // because `srcLiveness.creditable` is false -- already reflected in
+      // `srcLiveness.exact` above, not a fresh local uncertainty -- so there
+      // is nothing to clear `exact` for on this branch either.
       if (srcLiveness.creditable && point.valueLive &&
-          srcDeadAfterMoveAt(srcLiveness, op, forOp)) {
+          srcDeadAfterMoveAt(srcLiveness, op, forOp))
         regionPriced -= srcBytes;
-      } else {
-        // No source credit could be applied, so this term may overstate the
-        // true peak; the projection can no longer be reported as exact.
-        projection.exact = false;
-      }
       projection.corridorTerm = std::max(projection.corridorTerm, regionPriced);
     }
   }
@@ -717,13 +728,11 @@ static PeakProjection projectedFunctionPeak(
     // real extra work to get right, not correctness.
     Operation *nestedLast = realLastUse(cvtOp);
     uint64_t tailPeak = 0;
-    bool tailExact = true;
     if (nestedLast && nestedLast->getBlock()->getParentOp() == lastUse &&
         priceTailAfter(nestedLast, src, srcBytes, dstBytes, analysis,
                        srcLiveness, forOp, corridorOpCap, queryCache,
-                       regionPeakCache, tailPeak, tailExact)) {
+                       regionPeakCache, tailPeak)) {
       projection.corridorTerm = std::max(projection.corridorTerm, tailPeak);
-      projection.exact &= tailExact;
     } else {
       // Conservatively price the mapped op's own whole-region peak instead:
       // this may overstate the true peak (it covers the whole region, not
