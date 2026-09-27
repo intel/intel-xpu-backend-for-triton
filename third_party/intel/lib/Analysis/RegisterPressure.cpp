@@ -39,10 +39,18 @@ unsigned RegisterPressureAnalysis::getPerThreadSizeInBytes(Type type) {
 /// hardware-reference.md's GRF Register Specifications.
 static constexpr unsigned GRFRegisterSizeBytes = 32;
 
+/// Per-hardware-thread budget of the smallest ("128") and largest ("512")
+/// explicit GRF modes, in bytes. Named so the `Smallest`/`Largest`
+/// fallbacks below express themselves in the same unit as
+/// `explicitGRFModeToBytes` rather than repeating the arithmetic as bare
+/// literals.
+static constexpr unsigned SmallestGRFModeBytes = 128 * GRFRegisterSizeBytes;
+static constexpr unsigned LargestGRFModeBytes = 512 * GRFRegisterSizeBytes;
+
 /// Maps an explicit GRF mode string ("128"/"256"/"512") to its exact
 /// per-hardware-thread budget in bytes (one hardware thread executes a whole
 /// subgroup/warp of lanes sharing one register file). Returns 0 for anything
-/// else ("default", "auto", empty, or an unrecognized value) -- 0 bytes is
+/// else ("default", "auto", empty, or an unrecognized value): 0 bytes is
 /// never a valid budget, so it is an unambiguous "not an explicit mode"
 /// signal callers can test directly, without needing std::optional.
 static unsigned explicitGRFModeToBytes(StringRef grfMode) {
@@ -65,21 +73,21 @@ unsigned RegisterPressureAnalysis::getGRFBytesPerHardwareThread(
   // the true value isn't known here. Which bound is safe depends on the
   // caller; see UnknownGRFSizeAssumption's documentation.
   if (unknownAssumption == UnknownGRFSizeAssumption::Smallest)
-    return 4096;
+    return SmallestGRFModeBytes;
   // 'auto' escalation happens inside IGC, which decides on its own with no
-  // path in this backend that reads back or constrains its choice --
+  // path in this backend that reads back or constrains its choice.
   // ttig.max_grf_mode (below) is only ever realized by the 'default' path's
   // own rebuild, so it has no established relationship to what IGC actually
   // picks under 'auto' and must not be applied there.
   if (grfMode != "default")
-    return 16384;
+    return LargestGRFModeBytes;
   // A larger GRF mode halves the maximum launchable work-group size, so a
   // num_warps > 32 kernel can never actually run at a larger mode: the AOT
   // path (make_zebin) skips the escalation attempt outright, and the JIT
-  // path (driver.c) attempts it and fails to build -- same ceiling either
+  // path (driver.c) attempts it and fails to build. Same ceiling either
   // way, regardless of what `ttig.max_grf_mode` says.
   if (lookupNumWarps(mod) > 32)
-    return 4096;
+    return SmallestGRFModeBytes;
   // Largest: the true ceiling is per-target, mirrored onto the module via the
   // ttig.max_grf_mode attribute (see UnknownGRFSizeAssumption::Largest's
   // documentation). Reuse the same explicit-mode table above so a value other
@@ -94,9 +102,9 @@ unsigned RegisterPressureAnalysis::getGRFBytesPerHardwareThread(
   // missing `load_binary` argument: each side preserves its own pre-existing
   // behaviour on absence (this one hardcoded 16384 before `ttig.max_grf_mode`
   // existed; `driver.c` already resolved a missing arg to "unknown", which
-  // already selected 256). Not a bug -- but if either fallback's rationale
+  // already selected 256). Not a bug, but if either fallback's rationale
   // ever changes, check whether the other one still makes sense.
-  return 16384;
+  return LargestGRFModeBytes;
 }
 
 unsigned RegisterPressureAnalysis::getPerLaneGRFBudgetInBytes(
