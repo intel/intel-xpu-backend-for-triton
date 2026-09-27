@@ -11,7 +11,7 @@
 // COM: and check the sum: hoisted + the three rejected counters + skipped_other
 // COM: must equal considered.
 // STATS: [HoistLayoutConversions] considered={{[0-9]+}} hoisted={{[0-9]+}} rejected_pressure={{[0-9]+}} rejected_function_peak_exact={{[0-9]+}} rejected_function_peak_fallback={{[0-9]+}} skipped_other={{[0-9]+}}
-// STATS: [HoistLayoutConversions] considered=41 hoisted=24 rejected_pressure=3 rejected_function_peak_exact=0 rejected_function_peak_fallback=7 skipped_other=7
+// STATS: [HoistLayoutConversions] considered=43 hoisted=25 rejected_pressure=3 rejected_function_peak_exact=1 rejected_function_peak_fallback=6 skipped_other=8
 
 // COM: Case 1: Hoist ConvertLayoutOp with DotOperandEncoding out of scf.for loop.
 // COM: The source of the convert_layout is defined outside the loop, so the pass
@@ -736,26 +736,31 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32}
 // COM: Case 18: unsound-credit regression. %heavy reads the conversion's source
 // COM: between the source's definition and the loop, so at %heavy the source is
 // COM: still live no matter where the conversion goes and the corridor may not
-// COM: credit it there. That credit-withholding mechanism is still intact and
-// COM: still what this case pins: the corridor term is unchanged from before the
-// COM: region-aware fix, still 7296, still not crediting %src at %heavy (had it
-// COM: been (wrongly) credited there, the corridor would price 7296 - 2048 =
-// COM: 5248 instead).
+// COM: credit it there.
 // COM:
-// COM: What has changed is that %heavy is *also* a value spanning the loop
-// COM: entirely unused (it is only read after the loop, in the tt.return) --
-// COM: exactly case 17's shape -- so it is now correctly charged as live
-// COM: through the loop's own body too, raising prePeak from the old,
-// COM: under-counted 6272 to 8320 (the +2048 is exactly %heavy). prePeak now
-// COM: dominates the projection instead of the corridor, and being prePeak, it
-// COM: cannot be exceeded by any hoist: the loop already carried this much
-// COM: pressure with or without the conversion moving. So this case's decision
-// COM: flips from reject to accept, but for a reason unrelated to the
-// COM: credit-withholding mechanism it was built to pin -- that mechanism
-// COM: would still correctly block an unsound credit if the newly-dominant
-// COM: prePeak term happened to be lower.
-// COM: Measured: prePeak=8320, corridor=7296 over 3 ops, newPoint=5248; ceiling
-// COM: 8320.
+// COM: An earlier version of this case returned %heavy after the loop, making
+// COM: it *also* a value spanning the loop entirely unused -- exactly case 17's
+// COM: shape -- so the region-aware fix correctly charged it as live through
+// COM: the loop's own body too, raising prePeak from 6272 to 8320 (exactly
+// COM: %heavy's own 2048 bytes). Being prePeak, that floor cannot be exceeded
+// COM: by any hoist, so the decision flipped from reject to accept regardless
+// COM: of whether the credit-withholding mechanism below still worked: with
+// COM: it correctly withholding credit, corridor was 7296, still comfortably
+// COM: under the now-8320 ceiling; had it been wrongly credited instead
+// COM: (7296 - 2048 = 5248), the verdict would have been identical. The test
+// COM: could no longer tell the two apart.
+// COM:
+// COM: %heavy2 fixes this: it gives %heavy a real second reader (so %heavy
+// COM: keeps its own weight at its own corridor entry, rather than being
+// COM: filtered to 0 bytes as an unused value) without either value surviving
+// COM: past the loop, so neither is case 17's shape and prePeak stays at the
+// COM: lower, un-inflated 6272.
+// COM: Measured: prePeak=6272, corridor=7296 over 4 ops, newPoint=5248; ceiling
+// COM: 6272 -- corridor now dominates and exceeds it, so the hoist is refused,
+// COM: with credit still correctly withheld at %heavy's own entry. Had it been
+// COM: wrongly credited there instead (7296 - 1024 = 6272, tying the ceiling
+// COM: rather than exceeding it), the verdict would flip to accept -- the two
+// COM: answers land on opposite sides of the threshold again.
 
 #blocked18 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
 #dpas18 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -764,22 +769,28 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32}
 module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
 
   // CHECK-LABEL: tt.func @no_credit_while_source_still_read
-  tt.func @no_credit_while_source_still_read(%arg0: tensor<256x64xf16, #blocked18>, %arg1: tensor<64x16xf16, #dot_b18>, %arg2: tensor<256x16xf32, #dpas18>) -> (tensor<256x16xf32, #dpas18>, tensor<256x64xf16, #blocked18>) {
+  tt.func @no_credit_while_source_still_read(%arg0: tensor<256x64xf16, #blocked18>, %arg1: tensor<64x16xf16, #dot_b18>, %arg2: tensor<256x16xf32, #dpas18>) -> tensor<256x16xf32, #dpas18> {
     %c0_i32 = arith.constant 0 : i32
     %c8_i32 = arith.constant 8 : i32
     %c1_i32 = arith.constant 1 : i32
     %src = arith.addf %arg0, %arg0 : tensor<256x64xf16, #blocked18>
-    // CHECK: ttg.convert_layout %{{.*}} : tensor<256x64xf16, #{{.*}}> -> tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
-    // CHECK-NEXT: arith.addf
+    // CHECK: scf.for
+    // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<256x64xf16, #{{.*}}> -> tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // %heavy must still read %src between %src's definition and the loop (the
+    // whole point of this case), and must still carry its own real weight at
+    // that point (consumed by %heavy2, also before the loop) so that entry
+    // stays the dominant one -- but neither may survive to be read *after*
+    // the loop, or it becomes case 17's shape (a value spanning the loop
+    // unused) and inflates prePeak enough to mask the credit-withholding
+    // check this case exists to pin.
     %heavy = arith.addf %src, %src : tensor<256x64xf16, #blocked18>
-    // CHECK-NEXT: scf.for
-    // CHECK-NOT: ttg.convert_layout
+    %heavy2 = arith.addf %heavy, %heavy : tensor<256x64xf16, #blocked18>
     %result = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %arg2) -> (tensor<256x16xf32, #dpas18>) : i32 {
       %cvt = ttg.convert_layout %src : tensor<256x64xf16, #blocked18> -> tensor<256x64xf16, #dot_a18>
       %dot = tt.dot %cvt, %arg1, %acc, inputPrecision = tf32 : tensor<256x64xf16, #dot_a18> * tensor<64x16xf16, #dot_b18> -> tensor<256x16xf32, #dpas18>
       scf.yield %dot : tensor<256x16xf32, #dpas18>
     }
-    tt.return %result, %heavy : tensor<256x16xf32, #dpas18>, tensor<256x64xf16, #blocked18>
+    tt.return %result : tensor<256x16xf32, #dpas18>
   }
 }
 
@@ -887,21 +898,27 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // COM: "don't over-price a stepped-over sibling's own high pressure" point this
 // COM: case was built to pin is still true and still demonstrated.
 // COM:
-// COM: What now separately decides it: %hot itself is a value that spans the
-// COM: *second* loop (%r) entirely unused -- it is defined before %r and not
-// COM: read again until the final tt.return, after %r closes -- exactly case
-// COM: 17/18's shape, just with the spanned region being a different loop than
-// COM: the one being hoisted from. With the region-aware fix, %hot is now
-// COM: correctly charged as live through %r's whole body, which raises both
-// COM: prePeak (the loop's own peak, wherever it is measured, contributes to
-// COM: the function's) and, once mechanism #2 extends the corridor to price
-// COM: %r's body past the conversion's old position too, the corridor term at
-// COM: whatever point in %r's body was otherwise highest. That is a genuinely
-// COM: new, real hazard the old analysis could not see (it had no way to know
-// COM: %hot spans %r at all), unrelated to the sibling-region point above.
-// COM: Measured: prePeak=1568, corridor=1632 over 3 ops, newPoint=865, ceiling
-// COM: 1568 -- the corridor now dominates and exceeds it, so the hoist is
-// COM: correctly refused in every GRF mode.
+// COM: %hot itself is a value that spans the *second* loop (%r) entirely
+// COM: unused -- it is defined before %r and not read again until the final
+// COM: tt.return, after %r closes -- exactly case 17/18's shape, just with the
+// COM: spanned region being a different loop than the one being hoisted from.
+// COM: With the region-aware fix, %hot is correctly charged as live through
+// COM: %r's whole body, which raises prePeak to 1568 -- a bound this candidate
+// COM: cannot lower, since %hot's live range lives in %r's body untouched by
+// COM: this hoist.
+// COM:
+// COM: %src, read only by %cvt (this candidate) and nothing else, is *also*
+// COM: live through the if -- not because the if reads it, but because %cvt,
+// COM: still sitting inside %r at this point in the walk, reads it later in
+// COM: the same block. That is credited away: the same rule the flat per-op
+// COM: charge above uses (nothing but %cvt itself still needs %src past the
+// COM: if, so the credit is exact, not conservative) applies equally to a
+// COM: stepped-over sibling's own internal peak, dropping the if's own
+// COM: internal peak by %src's 256 bytes and adding the hoisted result's 64:
+// COM: regionPeakThroughOp(if) + 64 - 256 = 1568 - 256 + 64 = 1376.
+// COM: Measured: prePeak=1568, corridor=1376 over 3 ops, newPoint=865, ceiling
+// COM: 1568 -- prePeak now dominates, and this break-even hoist sits exactly at
+// COM: the ceiling, so it is accepted in every GRF mode, matching main.
 
 #blocked21 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas21 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -916,6 +933,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     %c1_i32 = arith.constant 1 : i32
     %src = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked21>
     // CHECK: arith.addf
+    // CHECK-NEXT: %[[CVT:.*]] = ttg.convert_layout %{{.*}} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
     // CHECK-NEXT: scf.if
     %hot = scf.if %cond -> (tensor<128x16xf32, #dpas21>) {
       %h1 = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked21>
@@ -930,7 +948,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
       scf.yield %acc1 : tensor<128x16xf32, #dpas21>
     }
     // CHECK: scf.for
-    // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // CHECK-NOT: ttg.convert_layout
+    // CHECK: tt.dot %[[CVT]]
     %r = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%a = %acc0) -> (tensor<128x16xf32, #dpas21>) : i32 {
       %cvt = ttg.convert_layout %src : tensor<128x16xf16, #blocked21> -> tensor<128x16xf16, #dot_a21>
       %d = tt.dot %cvt, %argB, %a, inputPrecision = tf32 : tensor<128x16xf16, #dot_a21> * tensor<16x16xf16, #dot_b21> -> tensor<128x16xf32, #dpas21>
@@ -1564,17 +1583,25 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // COM: already locally live there at the same cost hoisting would add. That
 // COM: theory only holds up to the real nested use; the filler chain runs
 // COM: strictly after it, still inside the same branch, and needs the same
-// COM: post-last-use pricing any other corridor entry gets. Before this fix
+// COM: post-last-use pricing any other corridor entry gets. Before either fix
 // COM: that interval was priced as zero, since the if op was never a corridor
 // COM: entry at all (neither the per-op walk nor the region-peak fallback
 // COM: -- which only fires for corridor entries -- ever reaches it).
-// COM: Measured at default GRF: with the fix, prePeak=1441, corridor=1505
-// COM: over 2 ops, newPoint=737 -- corridor now dominates and exceeds the
-// COM: 1441 ceiling, so the hoist is correctly refused. Without the fix,
-// COM: corridor is only 609 (prePeak=1441 dominates instead), so the
-// COM: projection stays within the ceiling and the hoist is wrongly
-// COM: accepted -- a real, decision-flipping undercount, not just a
-// COM: theoretical one.
+// COM:
+// COM: %cvt's real (not top-level-mapped) last use is %use, at the very top
+// COM: of the branch; realLastUse finds it directly since it is %cvt's only
+// COM: use, and priceTailAfter then prices only the filler chain after it
+// COM: (%h1..%h7, the yield), crediting %src the same exact way the flat
+// COM: corridor charge does -- %cvt is %src's only reader, so nothing needs
+// COM: %src past the if either.
+// COM: Measured at default GRF: prePeak=1441, corridor=1249 over 2 ops,
+// COM: newPoint=737 -- prePeak now dominates and this break-even hoist sits
+// COM: exactly at the ceiling, so it is accepted, matching main.
+// COM: A whole-region charge with no credit and no tail restriction (the
+// COM: fallback this case exercised before the tail fix) would instead price
+// COM: the if's full internal peak plus %cvt's own bytes twice over (once
+// COM: already counted from %use up to %h5, once added back on top): 1505,
+// COM: which exceeds the ceiling and wrongly refuses a hoist main accepts.
 
 #blocked34 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas34 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -1587,11 +1614,15 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     %c0_i32 = arith.constant 0 : i32
     %c8_i32 = arith.constant 8 : i32
     %c1_i32 = arith.constant 1 : i32
-    // CHECK: scf.for
-    // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // CHECK: %[[SRC:.*]] = arith.addf
+    // CHECK-NEXT: %[[CVT:.*]] = ttg.convert_layout %[[SRC]] : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // CHECK-NEXT: scf.for
     %src = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked34>
     %r = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%a = %acc0) -> (tensor<128x16xf32, #dpas34>) : i32 {
       %cvt = ttg.convert_layout %src : tensor<128x16xf16, #blocked34> -> tensor<128x16xf16, #dot_a34>
+      // CHECK: scf.if
+      // CHECK-NOT: ttg.convert_layout
+      // CHECK: tt.dot %[[CVT]]
       %hot = scf.if %cond -> (tensor<128x16xf32, #dpas34>) {
         %use = tt.dot %cvt, %argB, %a, inputPrecision = tf32 : tensor<128x16xf16, #dot_a34> * tensor<16x16xf16, #dot_b34> -> tensor<128x16xf32, #dpas34>
         %h1 = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked34>
@@ -1608,5 +1639,67 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
       scf.yield %hot : tensor<128x16xf32, #dpas34>
     }
     tt.return %r : tensor<128x16xf32, #dpas34>
+  }
+}
+
+// -----
+
+
+// COM: Case 35 (#8053 follow-up): %cvt has two uses in *different* branches of
+// COM: the same scf.if (one in "then", one in "else"), with the same
+// COM: high-pressure filler chain (%h1..%h4) as case 34 in the "then" branch
+// COM: to make sure this case's own charge, not just prePeak, decides it (see
+// COM: below). realLastUse requires every use to share one immediate block to
+// COM: place a single last-use position; here the two users' blocks differ,
+// COM: so it returns null and priceTailAfter's precise path is skipped in
+// COM: favor of the conservative, uncredited whole-region charge -- the
+// COM: fallback case 34's fix deliberately declines to make precise.
+// COM: An earlier version of this case had no filler chain and measured
+// COM: prePeak=673, corridor=673: an exact tie that only pinned "the fallback
+// COM: fires and does not crash," not its arithmetic -- dropping `+ dstBytes`
+// COM: entirely from the fallback's charge, an undercount, left corridor at
+// COM: 609, still masked by the tied prePeak, and the test kept passing.
+// COM: With the filler chain raising the if's own internal peak, that
+// COM: masking is gone: dropping `+ dstBytes` the same way now drops corridor
+// COM: to 1441, exactly prePeak, and wrongly accepts -- caught.
+// COM: Measured at default GRF: prePeak=1441, corridor=1505 over 2 ops,
+// COM: newPoint=737 -- corridor dominates and exceeds the 1441 ceiling, so
+// COM: the hoist is refused. %src (256 bytes) is read in both branches, so
+// COM: main cannot retire it either; refusing here is not a missed
+// COM: optimization, just a conservative charge landing on the safe side.
+
+#blocked35 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dpas35 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
+#dot_a35 = #ttg.dot_op<{opIdx = 0, parent = #dpas35, kWidth = 1}>
+#dot_b35 = #ttg.dot_op<{opIdx = 1, parent = #dpas35, kWidth = 2}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+
+  // CHECK-LABEL: tt.func @no_precise_tail_for_multi_branch_use
+  tt.func @no_precise_tail_for_multi_branch_use(%arg0: tensor<128x16xf16, #blocked35>, %argB: tensor<16x16xf16, #dot_b35>, %acc0: tensor<128x16xf32, #dpas35>, %cond: i1) -> tensor<128x16xf32, #dpas35> {
+    %c0_i32 = arith.constant 0 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %c1_i32 = arith.constant 1 : i32
+    // CHECK: scf.for
+    // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    %src = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked35>
+    %r = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%a = %acc0) -> (tensor<128x16xf32, #dpas35>) : i32 {
+      %cvt = ttg.convert_layout %src : tensor<128x16xf16, #blocked35> -> tensor<128x16xf16, #dot_a35>
+      %hot = scf.if %cond -> (tensor<128x16xf32, #dpas35>) {
+        %use1 = tt.dot %cvt, %argB, %a, inputPrecision = tf32 : tensor<128x16xf16, #dot_a35> * tensor<16x16xf16, #dot_b35> -> tensor<128x16xf32, #dpas35>
+        %h1 = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked35>
+        %h2 = arith.addf %h1, %arg0 : tensor<128x16xf16, #blocked35>
+        %h3 = arith.addf %h2, %arg0 : tensor<128x16xf16, #blocked35>
+        %h4 = arith.addf %h3, %h1 : tensor<128x16xf16, #blocked35>
+        %h5 = arith.addf %use1, %use1 : tensor<128x16xf32, #dpas35>
+        %h6 = ttg.convert_layout %h4 : tensor<128x16xf16, #blocked35> -> tensor<128x16xf16, #dot_a35>
+        %h7 = tt.dot %h6, %argB, %h5, inputPrecision = tf32 : tensor<128x16xf16, #dot_a35> * tensor<16x16xf16, #dot_b35> -> tensor<128x16xf32, #dpas35>
+        scf.yield %h7 : tensor<128x16xf32, #dpas35>
+      } else {
+        %use2 = tt.dot %cvt, %argB, %a, inputPrecision = tf32 : tensor<128x16xf16, #dot_a35> * tensor<16x16xf16, #dot_b35> -> tensor<128x16xf32, #dpas35>
+        scf.yield %use2 : tensor<128x16xf32, #dpas35>
+      }
+      scf.yield %hot : tensor<128x16xf32, #dpas35>
+    }
+    tt.return %r : tensor<128x16xf32, #dpas35>
   }
 }

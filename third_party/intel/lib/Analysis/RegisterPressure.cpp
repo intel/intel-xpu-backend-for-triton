@@ -303,7 +303,18 @@ RegisterPressureAnalysis::pressureAt(Operation *op, Value value) const {
   // call -- same rationale as the other single-op standalone overloads.
   LiveValuesCache liveCache;
   AncestorLiveThroughCache ancestorCache;
+  return pressureAt(op, value, liveCache, ancestorCache);
+}
 
+RegisterPressureAnalysis::PressureAtPoint
+RegisterPressureAnalysis::pressureAt(Operation *op, Value value,
+                                     QueryCache &cache) const {
+  return pressureAt(op, value, cache.liveCache, cache.ancestorCache);
+}
+
+RegisterPressureAnalysis::PressureAtPoint RegisterPressureAnalysis::pressureAt(
+    Operation *op, Value value, LiveValuesCache &liveCache,
+    AncestorLiveThroughCache &ancestorCache) const {
   PressureAtPoint result;
   for (Value liveVal : computeLiveValues(op, liveCache, ancestorCache)) {
     result.pressure += pressureContribution(liveVal);
@@ -334,6 +345,11 @@ unsigned RegisterPressureAnalysis::peakPressure(Block *block) const {
   LiveValuesCache liveCache;
   AncestorLiveThroughCache ancestorCache;
   return peakPressure(block, liveCache, ancestorCache);
+}
+
+unsigned RegisterPressureAnalysis::peakPressure(Block *block,
+                                                QueryCache &cache) const {
+  return peakPressure(block, cache.liveCache, cache.ancestorCache);
 }
 
 unsigned RegisterPressureAnalysis::peakPressure(

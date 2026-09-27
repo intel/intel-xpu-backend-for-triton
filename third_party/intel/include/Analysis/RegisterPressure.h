@@ -146,6 +146,13 @@ public:
   /// every call, which is exactly the cost `QueryCache` exists to amortize.
   unsigned pressureAt(Operation *op, QueryCache &cache) const;
 
+  /// Same as `peakPressure(Block *)`, but reusing and extending \p cache
+  /// instead of building a fresh pair of caches for this one call. Prefer
+  /// this overload when querying the same block, or several blocks that share
+  /// an ancestor chain, more than once within one IR generation -- e.g.
+  /// re-pricing the same sibling region across several hoist candidates.
+  unsigned peakPressure(Block *block, QueryCache &cache) const;
+
   /// Returns the peak per-thread register pressure in bytes within the given
   /// loop, considering all blocks in the loop body region, nested regions
   /// included.
@@ -193,6 +200,14 @@ public:
   /// nominated value needs both answers at every step; asking separately
   /// doubles the dominant cost. A null \p value reports `false`.
   PressureAtPoint pressureAt(Operation *op, Value value) const;
+
+  /// Same as `pressureAt(Operation *, Value)`, but reusing and extending
+  /// \p cache instead of paying the whole ancestor-chain cost from scratch on
+  /// every call. Prefer this overload for any loop that queries more than one
+  /// operation while also tracking a nominated value's liveness, e.g. pricing
+  /// a hoist candidate's corridor one operation at a time.
+  PressureAtPoint pressureAt(Operation *op, Value value,
+                             QueryCache &cache) const;
 
   /// Returns the bytes \p value contributes to the figures this analysis
   /// reports: its per-thread size after filtering, or 0 when it is
@@ -328,6 +343,12 @@ private:
   /// and \p ancestorCache for the liveness queries it performs.
   unsigned peakPressure(Block *block, LiveValuesCache &liveCache,
                         AncestorLiveThroughCache &ancestorCache) const;
+
+  /// Implements `pressureAt(Operation *, Value)`, reusing and extending
+  /// \p liveCache and \p ancestorCache for the liveness queries it performs.
+  PressureAtPoint pressureAt(Operation *op, Value value,
+                             LiveValuesCache &liveCache,
+                             AncestorLiveThroughCache &ancestorCache) const;
 
   /// Returns true if the defining op of \p value is rematerializable (cheap to
   /// regenerate on demand, such as constants or simple range ops).
