@@ -779,9 +779,11 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32}
 // COM: Measured: prePeak=6272, corridor=7296 over 4 ops, newPoint=5248; ceiling
 // COM: 6272 -- corridor now dominates and exceeds it, so the hoist is refused,
 // COM: with credit still correctly withheld at %heavy's own entry. Had it been
-// COM: wrongly credited there instead (7296 - 1024 = 6272, tying the ceiling
-// COM: rather than exceeding it), the verdict would flip to accept -- the two
-// COM: answers land on opposite sides of the threshold again.
+// COM: wrongly credited there instead using %src's own real size (2048 bytes,
+// COM: the same type as %heavy's, per its own entry above): 7296 - 2048 = 5248,
+// COM: well under the 6272 ceiling instead of exceeding it, so the verdict
+// COM: would flip to accept -- the two answers land on opposite sides of the
+// COM: threshold again.
 
 #blocked18 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
 #dpas18 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
