@@ -231,7 +231,8 @@ def TritonIntelGPUHoistLayoutConversions
       its own ordinary loop-level budget check, so there is no freed-source
       moment for a second loop's refusal to miss in the first place, and a
       second run of the pass on its own output changes nothing there,
-      unlike at 256-GRF where a second run does reach the lower joint peak).
+      unlike at 256-GRF where a second run does reach the lower joint peak;
+      tracked as issue #8202).
     * Neither trip count nor conversion cost is weighed against the pressure
       change.
     * `liveInPressure` ignores a value merely spanning the loop to feed code
