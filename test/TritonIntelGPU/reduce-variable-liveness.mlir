@@ -780,22 +780,24 @@ module attributes {ttig.support_2d_block_io, "ttg.num-warps" = 32 : i32, "ttg.th
 // COM: live-through contributions their notes derive (the yielded dot result,
 // COM: the `scf.if` condition, and here also the live-in A operand): 1536 +
 // COM: 32 + 1 + 64 = 1633 B/lane total, comfortably over budget.
-// COM: This number, and the sink decision it drives, are unaffected by
-// COM: #8053's follow-up operand-supersession fix to
-// COM: `getLiveThroughAncestorSet` (which stops charging a value that dies as
-// COM: an ancestor's own operand, e.g. a loop's init arg, once for that
-// COM: ancestor and again for the block argument or yielded value that
-// COM: supersedes it -- see that function's implementation comment). The
-// COM: `%arg3` condition IS such an operand at the `scf.if` level and is
-// COM: correctly dropped there, but it is separately, correctly recovered:
-// COM: its single real use is nested two levels below the `scf.for`, so by
-// COM: the same nested-use attribution that makes the live-in A operand
-// COM: live-through here, `%arg3` is also raw-live at the *enclosing*
-// COM: `scf.for`'s own point, where it is not an operand (the `scf.for`'s
-// COM: operands are only its bounds and the accumulator init) and so is kept
-// COM: unconditionally there. The recursive ancestor union re-unions that
-// COM: `scf.for`-level contribution into the `scf.if`-level one the peak
-// COM: query actually reads, so the byte this fix removes at one level is
+// COM: This number, and the sink decision it drives, are unaffected by the
+// COM: separate, non-loop `liveAfterAncestor` rule in
+// COM: `getLiveThroughAncestorSet`, which drops `%arg3` at the `scf.if` level
+// COM: since it is not touched inside the `scf.if`'s body and is not live
+// COM: immediately after it. `%arg3` is NOT handled by #8053's loop-init
+// COM: operand-supersession fix (`isFullyForwardedThrough`/`isLoopInitUse`):
+// COM: that path is only ever consulted when the ancestor is a
+// COM: `LoopLikeOpInterface`, and `%arg3` is a condition operand of an
+// COM: `scf.if`, not an init operand of a loop, so it never runs here. But
+// COM: the dropped byte is separately, correctly recovered: `%arg3`'s single
+// COM: real use is nested two levels below the `scf.for`, so by the same
+// COM: nested-use attribution that makes the live-in A operand live-through
+// COM: here, `%arg3` is also raw-live at the *enclosing* `scf.for`'s own
+// COM: point, where it is not an operand (the `scf.for`'s operands are only
+// COM: its bounds and the accumulator init) and so is kept unconditionally
+// COM: there. The recursive ancestor union re-unions that `scf.for`-level
+// COM: contribution into the `scf.if`-level one the peak query actually
+// COM: reads, so the byte `liveAfterAncestor` removes at one level is
 // COM: restored by the next, and the total does not move. Verified by hand
 // COM: for this exact case; not asserted here as a `-test-register-pressure`
 // COM: peak (this file only checks the sink/no-sink decision), so a future

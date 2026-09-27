@@ -308,16 +308,21 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     // COM: conditions at 1 byte each, for 2594 bytes. Each is counted once even
     // COM: though the conditions and %6 are live at several nesting levels.
     // COM: %arg3/%arg4 ARE operands of the scf.if they each condition, and are
-    // COM: each dropped by #8053's operand-supersession fix at that scf.if's own
-    // COM: level (see getLiveThroughAncestorSet), since neither is touched inside
-    // COM: its scf.if's body and neither is live immediately after it. But each is
-    // COM: separately, correctly recovered one level up: its only real use is
-    // COM: nested inside the scf.for's region too, so it is also raw-live at the
-    // COM: scf.for's own point, where it is NOT an operand (the scf.for's operands
-    // COM: are only its bounds and the accumulator init) and so is kept there
-    // COM: unconditionally. The recursive ancestor union re-unions that scf.for-
-    // COM: level contribution back in, so the byte the fix removes at the scf.if
-    // COM: level is restored at the scf.for level and the total does not move.
+    // COM: each dropped at that scf.if's own level by the separate, non-loop
+    // COM: liveAfterAncestor rule in getLiveThroughAncestorSet -- not by
+    // COM: #8053's loop-init operand-supersession fix (isFullyForwardedThrough/
+    // COM: isLoopInitUse), which is only ever consulted when the ancestor is a
+    // COM: LoopLikeOpInterface; an scf.if is not one, so that path never runs
+    // COM: here at all. Each condition is dropped because neither is touched
+    // COM: inside its scf.if's body and neither is live immediately after it.
+    // COM: But each is separately, correctly recovered one level up: its only
+    // COM: real use is nested inside the scf.for's region too, so it is also
+    // COM: raw-live at the scf.for's own point, where it is NOT an operand (the
+    // COM: scf.for's operands are only its bounds and the accumulator init) and
+    // COM: so is kept there unconditionally. The recursive ancestor union
+    // COM: re-unions that scf.for-level contribution back in, so the byte
+    // COM: liveAfterAncestor drops at the scf.if level is restored at the
+    // COM: scf.for level and the total does not move.
     // COM: By the time %15 executes both conditions have already branched, so
     // COM: charging them here at all is a ~2-byte overcount -- but it is *not*
     // COM: pre-existing or unrelated to the fix above: it is the very same

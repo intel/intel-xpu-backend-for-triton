@@ -799,9 +799,25 @@ static PeakProjection projectedFunctionPeak(
     // that same branch), so falling back conservatively for anything more
     // exotic costs precision only where the precise answer would take
     // real extra work to get right, not correctness.
+    //
+    // A further precondition, beyond the two above: `nestedLast` itself must
+    // hold no regions of its own. `priceTailAfter`'s walk starts at
+    // `nestedLast->getNextNode()` -- it prices every op *after* `nestedLast`
+    // in its own block, checking each one for regions via
+    // `regionPeakThroughOp`, but it never applies that same check to
+    // `nestedLast` itself. If `cvtOp`'s result is used only as, say, an inner
+    // `scf.for`'s own `iter_args` init (so `nestedLast` is that inner loop),
+    // the inner loop's own internal peak would go unpriced by both this path
+    // and `siblingBlocksPeak` (which only covers `lastUse`'s *other* blocks,
+    // not `nestedLast`'s own nested ones) -- exactly the same class of gap
+    // this function exists to close, one level deeper. Falling back to the
+    // conservative whole-region charge below is safe and simple; a precise
+    // charge for this case would need its own `regionPeakThroughOp` call on
+    // `nestedLast`, not attempted here since the fallback already covers it.
     Operation *nestedLast = realLastUse(cvtOp);
     uint64_t tailPeak = 0;
     if (nestedLast && nestedLast->getBlock()->getParentOp() == lastUse &&
+        nestedLast->getNumRegions() == 0 &&
         priceTailAfter(nestedLast, src, srcBytes, cvtOp.getResult(), dstBytes,
                        analysis, srcLiveness, forOp, corridorOpCap, queryCache,
                        regionPeakCache, tailPeak)) {

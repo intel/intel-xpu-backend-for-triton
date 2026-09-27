@@ -908,15 +908,17 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // COM: Case 21: an intervening scf.if with high local pressure that reads
 // COM: neither the source nor the result. The corridor steps over the region as
 // COM: one operation and does not descend into it.
-// COM: That rule is load-bearing here: the function's peak (1184) lives *inside*
-// COM: the if body, at %h3, where four 256-byte values are live at once. The
-// COM: hoisted result spans that region unused, so the metric this projection
-// COM: bounds does not report it there; charging it anyway would price %h3 at
-// COM: 1184 + 64 = 1248. That specific point is still not what decides this
-// COM: case: `projectedFunctionPeak` still never prices %hot's *own* internal
-// COM: peak against this candidate (regionPeakThroughOp(%hot) + dstBytes =
-// COM: 1184 + 64 = 1248, below the corridor's dominant term either way), so the
-// COM: "don't over-price a stepped-over sibling's own high pressure" point this
+// COM: That rule is load-bearing here: pressure lives *inside* the if body, at
+// COM: %h3, where four 256-byte values are live at once. Before the
+// COM: sibling-region-pricing fix, the per-op corridor walk's point-pressure
+// COM: query did not report that peak at all (the hoisted result spans the
+// COM: region unused), so the whole-function peak this candidate was checked
+// COM: against read as 1184, and adding %h3's own internal peak on top would
+// COM: have priced it at 1184 + 64 = 1248. With the fix, `projectedFunctionPeak`
+// COM: does separately check %hot's own internal peak against this candidate
+// COM: via `regionPeakThroughOp` -- see the real, current figures a few
+// COM: paragraphs below (1568, not 1184; corridor 1376, not 1248) -- so the
+// COM: "don't fail to price a stepped-over sibling's own high pressure" point this
 // COM: case was built to pin is still true and still demonstrated.
 // COM:
 // COM: %hot itself is a value that spans the *second* loop (%r) entirely
@@ -2226,5 +2228,68 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     }
     %post = arith.addf %src, %src : tensor<128x16xf16, #blocked41>
     tt.return %r, %post : tensor<128x16xf32, #dpas41>, tensor<128x16xf16, #blocked41>
+  }
+}
+
+// -----
+
+// COM: Case 42 (Copilot round-4): `%cvt`'s only use is as an inner `scf.for`'s
+// COM: own `iter_args` init, that inner loop itself sitting inside the outer
+// COM: `scf.if` (`lastUse`). `realLastUse` resolves to the inner loop op
+// COM: itself, so `nestedLast->getNumRegions() > 0`, and the precondition
+// COM: added this round skips the precise `priceTailAfter`/`siblingBlocksPeak`
+// COM: path entirely, falling back to `lastUse`'s own conservative
+// COM: whole-region charge. Before that precondition existed, the precise
+// COM: path still ran here: `priceTailAfter` walks strictly after
+// COM: `nestedLast`, so it never priced the inner loop's own body, and
+// COM: `siblingBlocksPeak` only covers `lastUse`'s *other* blocks, not
+// COM: `nestedLast`'s nested ones -- so the inner loop's own internal peak
+// COM: went unpriced by either.
+// COM: Measured at every GRF mode: corridor was 673 before this round's fix,
+// COM: 1505 after (the fallback's whole-region charge on `lastUse`), against
+// COM: prePeak=1441 and ceiling=1441 -- the fix correctly rejects here where
+// COM: the old code accepted. Checked directly whether the old accept was
+// COM: actually unsound, not just incomplete: hand-running
+// COM: `-test-register-pressure` on the old code's own hoisted output
+// COM: measures a real peak of 1249, under the 1441 ceiling -- so in this
+// COM: specific shape the old accept, while computed from a materially wrong
+// COM: corridor figure, was not itself a real violation. The fix closes a
+// COM: genuine gap in what gets priced either way; this case pins the
+// COM: now-conservative verdict it produces, not a confirmed prior unsound
+// COM: accept.
+
+#blocked42 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dpas42 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
+#dot_a42 = #ttg.dot_op<{opIdx = 0, parent = #dpas42, kWidth = 1}>
+#dot_b42 = #ttg.dot_op<{opIdx = 1, parent = #dpas42, kWidth = 2}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+
+  // CHECK-LABEL: tt.func @price_tail_after_nested_last_use_holding_a_region
+  tt.func @price_tail_after_nested_last_use_holding_a_region(%arg0: tensor<128x16xf16, #blocked42>, %argB: tensor<16x16xf16, #dot_b42>, %acc0: tensor<128x16xf32, #dpas42>, %cond: i1) -> tensor<128x16xf32, #dpas42> {
+    %c0_i32 = arith.constant 0 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %c1_i32 = arith.constant 1 : i32
+    // CHECK: scf.for
+    %src = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked42>
+    %r = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%a = %acc0) -> (tensor<128x16xf32, #dpas42>) : i32 {
+      // CHECK: ttg.convert_layout
+      %cvt = ttg.convert_layout %src : tensor<128x16xf16, #blocked42> -> tensor<128x16xf16, #dot_a42>
+      %hot = scf.if %cond -> (tensor<128x16xf32, #dpas42>) {
+        %inner = scf.for %j = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%c = %cvt) -> (tensor<128x16xf16, #dot_a42>) : i32 {
+          %g1 = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked42>
+          %g2 = arith.addf %g1, %arg0 : tensor<128x16xf16, #blocked42>
+          %g3 = arith.addf %g2, %arg0 : tensor<128x16xf16, #blocked42>
+          %g4 = arith.addf %g3, %g1 : tensor<128x16xf16, #blocked42>
+          %g5 = ttg.convert_layout %g4 : tensor<128x16xf16, #blocked42> -> tensor<128x16xf16, #dot_a42>
+          scf.yield %g5 : tensor<128x16xf16, #dot_a42>
+        }
+        %use = tt.dot %inner, %argB, %a, inputPrecision = tf32 : tensor<128x16xf16, #dot_a42> * tensor<16x16xf16, #dot_b42> -> tensor<128x16xf32, #dpas42>
+        scf.yield %use : tensor<128x16xf32, #dpas42>
+      } else {
+        scf.yield %a : tensor<128x16xf32, #dpas42>
+      }
+      scf.yield %hot : tensor<128x16xf32, #dpas42>
+    }
+    tt.return %r : tensor<128x16xf32, #dpas42>
   }
 }
