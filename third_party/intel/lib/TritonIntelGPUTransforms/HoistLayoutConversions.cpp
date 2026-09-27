@@ -295,10 +295,13 @@ static SourceLiveness classifySource(ttg::ConvertLayoutOp cvtOp,
       continue;
     if (enclosingLoop && enclosingLoop->isProperAncestor(user)) {
       // An enclosing loop's back edge re-reads the source after the corridor,
-      // so physically the credit must go. The metric compared against is
-      // back-edge blind, though, so the resulting projection can exceed the
-      // peak it is gating (measured: case 23 projects 1376 against a post-hoist
-      // 1248).
+      // so physically the credit must go. This is not a blind spot in what
+      // `RegisterPressureAnalysis` itself reports -- it is back-edge aware
+      // throughout -- it is a deliberate choice not to reason about the
+      // enclosing loop's own iteration structure at all, so the caller prices
+      // as if the departing source were still fully live. That can leave the
+      // projection above the very peak it gates (measured: case 23 projects
+      // 1376 against a post-hoist 1248).
       result.exact = false;
       return result;
     }
@@ -466,15 +469,16 @@ static bool collectCorridor(ttg::ConvertLayoutOp cvtOp, scf::ForOp forOp,
 /// program point, which is silent about a higher peak reached *inside* that
 /// region -- exactly the gap `RegisterPressureAnalysis`'s own class doc warns
 /// `pressureAt` does not cover (only `peakPressure` descends into regions).
-/// A value merely spanning \p op unused, with no relevant use inside it, is
-/// *not* automatically excluded from this: if `op` is a single-execution
-/// region (an `scf.if`) and the value is still needed again after `op`
-/// closes, the ancestor live-through rule counts it inside `op`'s own region
-/// too, on top of whatever `op`'s region genuinely reads -- exactly the case
-/// the sibling-region credit above relies on being true (nothing else could
-/// be contributing that value's bytes there). Only a value with no need
-/// anywhere past `op`'s own scope, dead the instant it stops crossing it, is
-/// truly absent from the region's own figure.
+/// Any value live across \p op -- defined before it, still needed after it
+/// closes -- is already included in this figure by the ancestor
+/// live-through rule, for a loop and a single-execution region (an
+/// `scf.if`) alike: nothing here is excluded just because \p op itself has
+/// no relevant use of it. The caller's own `+ dstBytes` on top of this
+/// figure models only the newly arriving result, not anything already
+/// counted here; that is exactly what the sibling-region term in
+/// `projectedFunctionPeak` and the per-op corridor loop above it both rely
+/// on being true (nothing else could be contributing a departing source's
+/// bytes inside a region it does not itself read).
 ///
 /// Memoized in \p regionPeakCache, keyed by \p op: many candidates in the same
 /// loop (or in sibling loops) can step over the same region-holding op, and
@@ -598,9 +602,18 @@ static uint64_t siblingBlocksPeak(
       if (&block == excluded || block.empty())
         continue;
       // Any op in the block answers "is cvtResult/src already live here" the
-      // same way: computeLiveValues unions in the *same* ancestor-live-through
-      // set (keyed on `op`, this block's parent) for every op in the block, so
-      // membership in that set does not depend on which op is asked.
+      // same way, *given this function's own callers*: `realLastUse` already
+      // guarantees no sibling block holds a use of `cvtResult` (all of
+      // `cvtOp`'s uses share one block, checked before this is ever called),
+      // and `srcLiveness.creditable` guarantees no other in-loop reader of
+      // `src` -- so within a sibling block, liveness for either value can only
+      // come from the ancestor live-through set, which `computeLiveValues`
+      // unions in identically (keyed on `op`, this block's parent) for every
+      // op in the block, making membership independent of which op is asked.
+      // This does not hold unconditionally: absent that precondition, a value
+      // can die partway through a block (a real, local last use inside it),
+      // and asking at `block.front()` instead of at the actual die point would
+      // wrongly answer "live" past where it no longer is.
       Operation *rep = &block.front();
       bool resultAlreadyLive =
           analysis.pressureAt(rep, cvtResult, queryCache).valueLive;
