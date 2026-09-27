@@ -6,6 +6,14 @@ inputs:
     description: vLLM XPU kernels commit hash to build from source, keep empty to install vLLM's pinned release
     required: false
     default: ""
+  pin-file:
+    description: File with the vLLM commit hash, keep empty to use scripts/vllm/vllm-pin.txt
+    required: false
+    default: ""
+  fix-patch:
+    description: Apply vllm-fix.patch to the vLLM source
+    required: false
+    default: "true"
 
 runs:
   using: composite
@@ -16,5 +24,11 @@ runs:
         install_args=()
         if [[ -n "${{ inputs.kernels-hash }}" ]]; then
           install_args+=(--kernels-hash "${{ inputs.kernels-hash }}")
+        fi
+        if [[ -n "${{ inputs.pin-file }}" ]]; then
+          install_args+=(--pin-file "${{ inputs.pin-file }}")
+        fi
+        if [[ "${{ inputs.fix-patch }}" == false ]]; then
+          install_args+=(--no-fix-patch)
         fi
         ./scripts/vllm/install-vllm.sh "${install_args[@]}"
