@@ -164,8 +164,10 @@ def TritonIntelGPUHoistLayoutConversions
 
     Where a term cannot be established -- a corridor spanning two blocks or
     longer than `corridor-op-cap`, an insertion point at the end of its block,
-    or the conversion's nested last use sitting more than one level below the
-    op it maps to -- the projection charges the arriving result on top of the
+    the conversion's nested last use sitting more than one level below the
+    op it maps to, or that nested last use itself holding regions (an inner
+    loop the conversion's result feeds as its own `iter_args` init, say) --
+    the projection charges the arriving result on top of the
     current peak (or, for that last case, on top of the mapped op's own
     whole-region peak), which refuses unless the result costs nothing at all
     -- an unread conversion is charged zero bytes and still fits. Reaching
