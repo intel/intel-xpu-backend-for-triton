@@ -28,6 +28,10 @@ on:
         description: Use Python built with pyenv
         type: boolean
         default: false
+      install_sgl_kernel_xpu:
+        description: Build and install sgl-kernel-xpu (BMG/Xe2 runners only, long build)
+        type: boolean
+        default: false
 
 permissions: read-all
 
@@ -40,4 +44,5 @@ jobs:
       skip_list: ${{ inputs.skip_list }}
       ignore_errors: ${{ inputs.ignore_errors }}
       use_pyenv_python: ${{ inputs.use_pyenv_python }}
+      install_sgl_kernel_xpu: ${{ inputs.install_sgl_kernel_xpu }}
     secrets: inherit

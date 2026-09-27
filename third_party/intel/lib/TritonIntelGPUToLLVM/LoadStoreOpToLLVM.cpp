@@ -2826,10 +2826,10 @@ struct DescriptorLoadOpConversion
     SmallVector<int32_t> perElementDims, blockLevelDims;
     for (size_t i = 0; i < descRank; ++i) {
       int64_t bs = blockShape[i];
-      if (defs.allSatisfy([&](MakeTensorDescOp d) {
+      if (bs > 0 && defs.allSatisfy([&](MakeTensorDescOp d) {
             return isDivisible(d.getShape()[i], bs);
           }) &&
-          isDivisible(op.getIndices()[i], static_cast<unsigned>(bs))) {
+          isDivisible(op.getIndices()[i], bs)) {
         blockLevelDims.push_back(i);
       } else {
         perElementDims.push_back(i);
@@ -3066,10 +3066,10 @@ struct DescriptorStoreOpConversion
     SmallVector<int32_t> perElementDims, blockLevelDims;
     for (size_t i = 0; i < descRank; ++i) {
       int64_t bs = blockShape[i];
-      if (defs.allSatisfy([&](MakeTensorDescOp d) {
+      if (bs > 0 && defs.allSatisfy([&](MakeTensorDescOp d) {
             return isDivisible(d.getShape()[i], bs);
           }) &&
-          isDivisible(op.getIndices()[i], static_cast<unsigned>(bs))) {
+          isDivisible(op.getIndices()[i], bs)) {
         blockLevelDims.push_back(i);
       } else {
         perElementDims.push_back(i);
