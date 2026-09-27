@@ -151,7 +151,13 @@ def TritonIntelGPUHoistLayoutConversions
     that region-holding op is, rather than descending into it op by op; but the
     projection separately prices that region's own internal peak against the
     arriving result too, so stepping over it is only about how the walk is
-    structured, not a gap in what gets priced.
+    structured, not a gap in what gets priced. The same holds when the
+    conversion's own last use sits nested inside a branch of some region-holding
+    op (an `scf.if`, an inner loop): the corridor never visits that op at all,
+    but the projection prices the branch precisely and *also* prices every
+    sibling branch of that same op (an `else` the conversion never touches, say)
+    against the arriving result, since hoisting makes the result live-in to the
+    whole loop body those siblings sit in too.
 
     Where a term cannot be established -- a corridor spanning two blocks or
     longer than `corridor-op-cap`, an insertion point at the end of its block --
@@ -171,22 +177,30 @@ def TritonIntelGPUHoistLayoutConversions
     *above* the conversion (the source dies mid-corridor, so later corridor
     operations are overpriced), a CFG cycle around the conversion, and a reader
     in an enclosing loop, whose back edge re-reads the source after the
-    corridor. That last one can leave the projection above the very peak it
-    gates, since the metric compared against is itself back-edge blind
-    (measured: 1376 projected against a post-hoist 1248).
+    corridor. That last one is not a blind spot in what `RegisterPressureAnalysis`
+    itself reports -- the analysis is back-edge aware throughout, that is this
+    PR's own core change -- it is a deliberate choice not to reason about the
+    enclosing loop's own iteration structure at all, so the projection prices as
+    if the departing source were still fully live. That can leave the projection
+    above the very peak it gates (measured: 1376 projected against a real
+    post-hoist 1248).
 
     Cost is one whole-function pressure walk per candidate that follows an
-    accepted hoist, plus the initial build, and `RegisterPressureAnalysis`
-    memoizes nothing: on the module above (596 lines of TTGIR, `grf-mode=256`,
-    debug build) the pass takes 2.83s for eight hoists against 0.09s to parse and
-    print it -- eight walks there, one per hoist, only because no candidate was
-    rejected. A rejected candidate pays too. A function with no candidate reaching
-    this gate pays nothing: the analysis is built lazily on the first one.
-    Lowering `peak-rebuild-cap` bounds those rebuilds, i.e. cost, and spends
-    hoists to do it. Each region-holding corridor entry now also pays a
-    `peakPressure` walk of that region on top of the per-op pricing above --
-    real added cost on a kernel with a sibling loop in the corridor, not yet
-    re-measured against the figures above.
+    accepted hoist, plus the initial build. `RegisterPressureAnalysis` itself
+    memoizes within one such walk (a `QueryCache` shared across the ops it
+    visits) but nothing survives across walks; on the module above (596 lines of
+    TTGIR, `grf-mode=256`, debug build) the pass takes 2.83s for eight hoists
+    against 0.09s to parse and print it -- eight walks there, one per hoist, only
+    because no candidate was rejected. A rejected candidate pays too. A function
+    with no candidate reaching this gate pays nothing: the analysis is built
+    lazily on the first one. Lowering `peak-rebuild-cap` bounds those rebuilds,
+    i.e. cost, and spends hoists to do it. Each region-holding corridor entry now
+    also pays a `peakPressure` walk of that region on top of the per-op pricing
+    above -- real added cost on a kernel with a sibling loop in the corridor,
+    amortized by `regionPeakCache` for repeat candidates against the same region
+    within one generation (cleared on every rebuild above), but the first
+    encounter of a given region within a generation still pays the full walk,
+    and none of this is re-measured against the 2.83s figure above.
 
     ### Non-goals, all deliberate
 
@@ -196,6 +210,12 @@ def TritonIntelGPUHoistLayoutConversions
       since the conversion still lands after that loop.
     * Conversions sharing a source are not evaluated jointly, so a group can
       stop partway through even where its completed net effect would have fit.
+      This also crosses loops: two sibling loops each converting the same
+      source are decided in two separate calls, and a refusal is never
+      revisited once made, even after a later-decided sibling's own hoist
+      frees the source the refusal was missing (case 16 in
+      hoist-layout-conversions.mlir measures this losing 192 B/lane of a
+      genuinely lower joint peak to the single-pass ordering).
     * Neither trip count nor conversion cost is weighed against the pressure
       change.
     * `liveInPressure` ignores a value merely spanning the loop to feed code

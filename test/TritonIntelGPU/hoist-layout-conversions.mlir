@@ -11,7 +11,7 @@
 // COM: and check the sum: hoisted + the three rejected counters + skipped_other
 // COM: must equal considered.
 // STATS: [HoistLayoutConversions] considered={{[0-9]+}} hoisted={{[0-9]+}} rejected_pressure={{[0-9]+}} rejected_function_peak_exact={{[0-9]+}} rejected_function_peak_fallback={{[0-9]+}} skipped_other={{[0-9]+}}
-// STATS: [HoistLayoutConversions] considered=43 hoisted=25 rejected_pressure=3 rejected_function_peak_exact=4 rejected_function_peak_fallback=3 skipped_other=8
+// STATS: [HoistLayoutConversions] considered=45 hoisted=26 rejected_pressure=3 rejected_function_peak_exact=5 rejected_function_peak_fallback=3 skipped_other=8
 
 // COM: Case 1: Hoist ConvertLayoutOp with DotOperandEncoding out of scf.for loop.
 // COM: The source of the convert_layout is defined outside the loop, so the pass
@@ -623,13 +623,26 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // COM: no-defining-op-anchor limitation above), so once hoisted, %cvt2's own
 // COM: result is *also* live through the whole of loop 1 -- unused there, but
 // COM: occupying a register for its entire duration, the same back-edge rule
-// COM: that charges %src. That is a genuinely new 64 B/lane charge at %t4 (the
-// COM: old, buggy analysis could not see it, which is why this case used to
-// COM: accept both hoists), pushing the projected peak to 1056 and correctly
-// COM: vetoing loop 2's hoist at every GRF mode: prePeak=992, corridor=1056
-// COM: over 3 ops (loop 1, stepped over as a sibling region and priced by its
-// COM: own internal peak rather than its own program point), newPoint=480;
-// COM: ceiling 992.
+// COM: that charges %src. That is a genuinely new 64 B/lane charge at %t4,
+// COM: pushing the projected peak to 1056 and vetoing loop 2's hoist, decided
+// COM: alone, at every GRF mode: prePeak=992, corridor=1056 over 3 ops (loop
+// COM: 1, stepped over as a sibling region and priced by its own internal
+// COM: peak rather than its own program point), newPoint=480; ceiling 992.
+// COM: This case used to accept both hoists under the old, buggy analysis,
+// COM: which could not see this charge at all -- but that is not the whole
+// COM: story: hoisting *both* conversions together genuinely does lower the
+// COM: function's peak below either single hoist (measured by hand-hoisting
+// COM: both: 800, against 992 for loop 1 alone), since once neither loop
+// COM: reads %src any more, its 256 bytes retire for real and two 64-byte
+// COM: dot_a results replace it. Deciding one loop at a time can't see that:
+// COM: loop 2 is refused here because loop 1 still reads %src at the moment
+// COM: loop 2 is decided, and loop 2's refusal is never revisited once loop 1
+// COM: later frees it. Running this same pass a second time on its own output
+// COM: does reach the 800 state (loop 2's conversion then hoists cleanly), so
+// COM: the loss is specifically in deciding loops once, independently, and
+// COM: not in the analysis under either the old or the corrected accounting.
+// COM: See the pass description's non-goals for why this PR does not attempt
+// COM: to decide correlated candidates jointly or re-queue a refused one.
 // COM:
 // COM: Loop 1's own hoist does not have this problem: nothing sits between
 // COM: %src's definition and loop 1, so its corridor never steps over a sibling
@@ -1701,5 +1714,143 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
       scf.yield %hot : tensor<128x16xf32, #dpas35>
     }
     tt.return %r : tensor<128x16xf32, #dpas35>
+  }
+}
+
+// -----
+
+
+// COM: Case 36 (#8053 follow-up, independent-review F1): `%cvt`'s only use is
+// COM: in the "then" branch of `%hot`, `realLastUse` succeeds, and
+// COM: `priceTailAfter` prices the (empty) tail after it precisely -- but
+// COM: never looks at the "else" branch at all, since `%hot` is never itself a
+// COM: corridor entry once its real nested last use is found. Once hoisted,
+// COM: `%cvt` is loop-invariant and, by the loop back-edge rule, live through
+// COM: the *whole* loop body, "else" included, where a 17-op filler chain
+// COM: (unrelated to `%cvt`/`%src`) drives that branch's own peak up. Before
+// COM: the fix this silently undercounted by exactly `dstBytes` (64) and
+// COM: tripped the `FunctionPeakGate` invariant assert in a Debug build
+// COM: (`freshPeak <= pendingProjection`); a Release build would have
+// COM: accepted a hoist that overruns the ceiling by 64 B/lane.
+// COM: `%src` is also read after the loop (in `%post`) so no source credit
+// COM: applies, matching the shape that actually reaches this code path in
+// COM: practice (credit alone cannot mask the gap; see the independent
+// COM: review's own note that crediting `%src` away hides the bug).
+// COM: Measured at every GRF mode: prePeak=865, corridor=929 over 2 ops
+// COM: (the "then" tail, empty, and the "else" sibling peak, 865 + 64),
+// COM: newPoint=289; ceiling 865. corridor now dominates and matches the
+// COM: real post-hoist peak (929, measured by hand-hoisting through
+// COM: `-test-register-pressure`) exactly, so the hoist is correctly refused.
+
+#blocked36 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dpas36 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
+#dot_a36 = #ttg.dot_op<{opIdx = 0, parent = #dpas36, kWidth = 1}>
+#dot_b36 = #ttg.dot_op<{opIdx = 1, parent = #dpas36, kWidth = 2}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+
+  // CHECK-LABEL: tt.func @price_sibling_else_of_nested_last_use
+  tt.func @price_sibling_else_of_nested_last_use(%arg0: tensor<128x16xf16, #blocked36>, %argB: tensor<16x16xf16, #dot_b36>, %acc0: tensor<128x16xf32, #dpas36>, %cond: i1) -> (tensor<128x16xf32, #dpas36>, tensor<128x16xf16, #blocked36>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %src = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked36>
+    // CHECK: scf.for
+    // CHECK-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    %r = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%a = %acc0) -> (tensor<128x16xf32, #dpas36>) : i32 {
+      %cvt = ttg.convert_layout %src : tensor<128x16xf16, #blocked36> -> tensor<128x16xf16, #dot_a36>
+      %hot = scf.if %cond -> (tensor<128x16xf32, #dpas36>) {
+        %use = tt.dot %cvt, %argB, %a, inputPrecision = tf32 : tensor<128x16xf16, #dot_a36> * tensor<16x16xf16, #dot_b36> -> tensor<128x16xf32, #dpas36>
+        scf.yield %use : tensor<128x16xf32, #dpas36>
+      } else {
+        %h1 = arith.addf %a, %a : tensor<128x16xf32, #dpas36>
+        %h2 = arith.addf %h1, %a : tensor<128x16xf32, #dpas36>
+        %h3 = arith.addf %h2, %h1 : tensor<128x16xf32, #dpas36>
+        %h4 = arith.addf %h3, %h2 : tensor<128x16xf32, #dpas36>
+        %h5 = arith.addf %h4, %h3 : tensor<128x16xf32, #dpas36>
+        %h6 = arith.addf %h5, %h1 : tensor<128x16xf32, #dpas36>
+        %h7 = arith.addf %h6, %h2 : tensor<128x16xf32, #dpas36>
+        %h8 = arith.addf %h7, %h3 : tensor<128x16xf32, #dpas36>
+        %h9 = arith.addf %h8, %h4 : tensor<128x16xf32, #dpas36>
+        %h10 = arith.addf %h9, %h5 : tensor<128x16xf32, #dpas36>
+        %h11 = arith.addf %h10, %h6 : tensor<128x16xf32, #dpas36>
+        %h12 = arith.addf %h11, %h7 : tensor<128x16xf32, #dpas36>
+        %h13 = arith.addf %h12, %h8 : tensor<128x16xf32, #dpas36>
+        %h14 = arith.addf %h13, %h9 : tensor<128x16xf32, #dpas36>
+        %h15 = arith.addf %h14, %h10 : tensor<128x16xf32, #dpas36>
+        %h16 = arith.addf %h15, %h11 : tensor<128x16xf32, #dpas36>
+        %h17 = arith.addf %h16, %h12 : tensor<128x16xf32, #dpas36>
+        scf.yield %h17 : tensor<128x16xf32, #dpas36>
+      }
+      scf.yield %hot : tensor<128x16xf32, #dpas36>
+    }
+    %post = arith.addf %src, %src : tensor<128x16xf16, #blocked36>
+    tt.return %r, %post : tensor<128x16xf32, #dpas36>, tensor<128x16xf16, #blocked36>
+  }
+}
+
+// -----
+
+
+// COM: Case 37 (#8053 follow-up, independent-review F2): `%cvt`'s only use is
+// COM: at the top of an *inner* `scf.for`'s body (`%hot`), followed by a
+// COM: 13-op filler chain reading only the dot's own result, not `%cvt`
+// COM: again. `realLastUse` succeeds and `priceTailAfter` walks the filler
+// COM: chain -- but the inner loop is itself a loop ancestor, so the
+// COM: region-aware analysis this PR adds already keeps `%cvt` live at every
+// COM: op of that chain *before* any hoisting, via the same loop back-edge
+// COM: rule that makes the hoisted result live through the outer loop.
+// COM: Charging `dstBytes` unconditionally at each op of the chain therefore
+// COM: double-counts a weight the pre-hoist measurement already includes.
+// COM: Before the fix this refused a hoist that costs nothing (measured by
+// COM: hand-hoisting: the peak is unchanged at 928) and reported the refusal
+// COM: as `rejected_function_peak_exact`, i.e. as if it were certain rather
+// COM: than an artifact of the double charge.
+// COM: `%src` is also read after the loop so no source credit applies,
+// COM: isolating the double-charge from the (separately tested) credit path.
+// COM: Measured at every GRF mode: prePeak=928, corridor=928 over 2 ops,
+// COM: newPoint=288; ceiling 928. The hoist is now accepted, matching the
+// COM: unchanged real peak.
+
+#blocked37 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dpas37 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
+#dot_a37 = #ttg.dot_op<{opIdx = 0, parent = #dpas37, kWidth = 1}>
+#dot_b37 = #ttg.dot_op<{opIdx = 1, parent = #dpas37, kWidth = 2}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+
+  // CHECK-LABEL: tt.func @no_double_charge_for_inner_loop_tail
+  tt.func @no_double_charge_for_inner_loop_tail(%arg0: tensor<128x16xf16, #blocked37>, %argB: tensor<16x16xf16, #dot_b37>, %acc0: tensor<128x16xf32, #dpas37>) -> (tensor<128x16xf32, #dpas37>, tensor<128x16xf16, #blocked37>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %src = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked37>
+    // CHECK: arith.addf
+    // CHECK-NEXT: %[[CVT:.*]] = ttg.convert_layout %{{.*}} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // CHECK-NEXT: scf.for
+    %r = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%a = %acc0) -> (tensor<128x16xf32, #dpas37>) : i32 {
+      %cvt = ttg.convert_layout %src : tensor<128x16xf16, #blocked37> -> tensor<128x16xf16, #dot_a37>
+      // CHECK: scf.for
+      // CHECK-NOT: ttg.convert_layout
+      // CHECK: tt.dot %[[CVT]]
+      %hot = scf.for %j = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%b = %a) -> (tensor<128x16xf32, #dpas37>) : i32 {
+        %use = tt.dot %cvt, %argB, %b, inputPrecision = tf32 : tensor<128x16xf16, #dot_a37> * tensor<16x16xf16, #dot_b37> -> tensor<128x16xf32, #dpas37>
+        %h1 = arith.addf %use, %use : tensor<128x16xf32, #dpas37>
+        %h2 = arith.addf %h1, %use : tensor<128x16xf32, #dpas37>
+        %h3 = arith.addf %h2, %h1 : tensor<128x16xf32, #dpas37>
+        %h4 = arith.addf %h3, %h2 : tensor<128x16xf32, #dpas37>
+        %h5 = arith.addf %h4, %h3 : tensor<128x16xf32, #dpas37>
+        %h6 = arith.addf %h5, %h1 : tensor<128x16xf32, #dpas37>
+        %h7 = arith.addf %h6, %h2 : tensor<128x16xf32, #dpas37>
+        %h8 = arith.addf %h7, %h3 : tensor<128x16xf32, #dpas37>
+        %h9 = arith.addf %h8, %h4 : tensor<128x16xf32, #dpas37>
+        %h10 = arith.addf %h9, %h5 : tensor<128x16xf32, #dpas37>
+        %h11 = arith.addf %h10, %h6 : tensor<128x16xf32, #dpas37>
+        %h12 = arith.addf %h11, %h7 : tensor<128x16xf32, #dpas37>
+        %h13 = arith.addf %h12, %h8 : tensor<128x16xf32, #dpas37>
+        scf.yield %h13 : tensor<128x16xf32, #dpas37>
+      }
+      scf.yield %hot : tensor<128x16xf32, #dpas37>
+    }
+    %post = arith.addf %src, %src : tensor<128x16xf16, #blocked37>
+    tt.return %r, %post : tensor<128x16xf32, #dpas37>, tensor<128x16xf16, #blocked37>
   }
 }

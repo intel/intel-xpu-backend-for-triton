@@ -467,8 +467,14 @@ static bool collectCorridor(ttg::ConvertLayoutOp cvtOp, scf::ForOp forOp,
 /// region -- exactly the gap `RegisterPressureAnalysis`'s own class doc warns
 /// `pressureAt` does not cover (only `peakPressure` descends into regions).
 /// A value merely spanning \p op unused, with no relevant use inside it, is
-/// unaffected: pricing the region's own peak adds no charge for a value that
-/// contributes nothing inside it in the first place.
+/// *not* automatically excluded from this: if `op` is a single-execution
+/// region (an `scf.if`) and the value is still needed again after `op`
+/// closes, the ancestor live-through rule counts it inside `op`'s own region
+/// too, on top of whatever `op`'s region genuinely reads -- exactly the case
+/// the sibling-region credit above relies on being true (nothing else could
+/// be contributing that value's bytes there). Only a value with no need
+/// anywhere past `op`'s own scope, dead the instant it stops crossing it, is
+/// truly absent from the region's own figure.
 ///
 /// Memoized in \p regionPeakCache, keyed by \p op: many candidates in the same
 /// loop (or in sibling loops) can step over the same region-holding op, and
@@ -498,30 +504,37 @@ static uint64_t regionPeakThroughOp(
 
 /// Prices every operation strictly after \p start, in \p start's own block,
 /// the same way `projectedFunctionPeak`'s own corridor loop prices a body
-/// operation strictly after `cvtOp`'s last use: the newly-live result is
-/// charged unconditionally (the same loop-back-edge reasoning applies -- see
-/// `collectCorridor`'s doc comment -- regardless of how deeply \p start's
-/// block nests inside \p forOp's body), \p src is credited via the exact same
-/// rule used everywhere else in this file, and any op that itself holds a
-/// region is additionally checked via `regionPeakThroughOp`. Used to price
-/// the tail of a nested branch after \p cvtOp's own *real* (not
+/// operation strictly after `cvtOp`'s last use: \p src is credited via the
+/// exact same rule used everywhere else in this file, and any op that itself
+/// holds a region is additionally checked via `regionPeakThroughOp`. Used to
+/// price the tail of a nested branch after \p cvtOp's own *real* (not
 /// top-level-mapped) last use; see `projectedFunctionPeak`'s call site for
 /// why that tail needs its own pass rather than folding into
 /// `regionPeakThroughOp`'s whole-region charge.
 ///
-/// Every per-op charge here is either an unconditional result charge or a
-/// credit decided by a fully determined fact (nothing to credit, a real
-/// remaining reader, or `srcLiveness.creditable`, whose own uncertainty the
-/// caller already propagates via `srcLiveness.exact`), so this walk never
-/// discovers a *new* uncertainty of its own and has no exactness of its own
-/// to report.
+/// \p cvtResult's own weight, \p dstBytes, is charged at an op only when it is
+/// not already live there in the current, pre-hoist IR. It usually is not --
+/// that is the whole reason this tail needs pricing at all, the un-hoisted
+/// result is dead past its own last use inside a single-execution region
+/// (see `collectCorridor`'s doc comment). But if \p start's block nests
+/// inside a *loop* (an inner `scf.for` between \p start and `forOp`, say),
+/// that loop's own back edge already keeps \p cvtResult live for its whole
+/// duration -- the same rule that makes the hoisted result live through
+/// `forOp` itself -- so charging it again here would double it.
+///
+/// Every per-op charge here is either a result charge decided by a fully
+/// determined fact (already live or not) or a credit decided the same way
+/// (nothing to credit, a real remaining reader, or `srcLiveness.creditable`,
+/// whose own uncertainty the caller already propagates via
+/// `srcLiveness.exact`), so this walk never discovers a *new* uncertainty of
+/// its own and has no exactness of its own to report.
 ///
 /// Returns false (leaving \p peak unspecified) if the walk exceeds
 /// \p corridorOpCap, so the caller falls back to a fully conservative charge
 /// instead of an unbounded one.
 static bool priceTailAfter(
-    Operation *start, Value src, uint64_t srcBytes, uint64_t dstBytes,
-    const ttg::intel::RegisterPressureAnalysis &analysis,
+    Operation *start, Value src, uint64_t srcBytes, Value cvtResult,
+    uint64_t dstBytes, const ttg::intel::RegisterPressureAnalysis &analysis,
     const SourceLiveness &srcLiveness, scf::ForOp forOp, unsigned corridorOpCap,
     ttg::intel::RegisterPressureAnalysis::QueryCache &queryCache,
     DenseMap<Operation *, uint64_t> &regionPeakCache, uint64_t &peak) {
@@ -532,7 +545,9 @@ static bool priceTailAfter(
       return false;
 
     auto point = analysis.pressureAt(op, src, queryCache);
-    uint64_t priced = point.pressure + dstBytes;
+    bool resultAlreadyLive =
+        analysis.pressureAt(op, cvtResult, queryCache).valueLive;
+    uint64_t priced = point.pressure + (resultAlreadyLive ? 0 : dstBytes);
     bool credit = srcLiveness.creditable && point.valueLive &&
                   srcDeadAfterMoveAt(srcLiveness, op, forOp);
     if (credit)
@@ -542,7 +557,7 @@ static bool priceTailAfter(
     if (op->getNumRegions() > 0) {
       uint64_t regionPriced =
           regionPeakThroughOp(op, analysis, queryCache, regionPeakCache) +
-          dstBytes;
+          (resultAlreadyLive ? 0 : dstBytes);
       // `credit` is false here either because nothing is live to credit, or
       // because a real remaining reader provably keeps `src` alive, or
       // because `srcLiveness.creditable` is false -- and that last case is
@@ -556,6 +571,50 @@ static bool priceTailAfter(
     }
   }
   return true;
+}
+
+/// Returns the peak per-thread pressure over every block in \p op's own
+/// regions except \p excluded, crediting \p src the same way everywhere else
+/// in this file and skipping \p dstBytes wherever \p cvtResult is already
+/// live there in the current, pre-hoist IR.
+///
+/// Used to price a sibling of the one block `priceTailAfter` already prices
+/// precisely (an `else` branch when `cvtOp`'s only use is in `then`, say):
+/// \p op (`lastUse`) is never itself a corridor entry once its real nested
+/// last use is found, so nothing else in this function ever looks at its
+/// other blocks -- but once hoisted, `cvtResult` becomes loop-invariant and,
+/// by the same loop back-edge rule as everywhere else in this file, live
+/// through *every* block of the loop body it now sits above, sibling blocks
+/// included.
+static uint64_t siblingBlocksPeak(
+    Operation *op, Block *excluded, Value src, uint64_t srcBytes,
+    Value cvtResult, uint64_t dstBytes,
+    const ttg::intel::RegisterPressureAnalysis &analysis,
+    const SourceLiveness &srcLiveness, scf::ForOp forOp,
+    ttg::intel::RegisterPressureAnalysis::QueryCache &queryCache) {
+  uint64_t peak = 0;
+  for (Region &region : op->getRegions()) {
+    for (Block &block : region) {
+      if (&block == excluded || block.empty())
+        continue;
+      // Any op in the block answers "is cvtResult/src already live here" the
+      // same way: computeLiveValues unions in the *same* ancestor-live-through
+      // set (keyed on `op`, this block's parent) for every op in the block, so
+      // membership in that set does not depend on which op is asked.
+      Operation *rep = &block.front();
+      bool resultAlreadyLive =
+          analysis.pressureAt(rep, cvtResult, queryCache).valueLive;
+      uint64_t priced = analysis.peakPressure(&block, queryCache) +
+                        (resultAlreadyLive ? 0 : dstBytes);
+      bool credit = srcLiveness.creditable &&
+                    analysis.pressureAt(rep, src, queryCache).valueLive &&
+                    srcDeadAfterMoveAt(srcLiveness, rep, forOp);
+      if (credit)
+        priced -= srcBytes;
+      peak = std::max(peak, priced);
+    }
+  }
+  return peak;
 }
 
 /// The terms of the whole-function peak projection, kept apart so the debug log
@@ -586,10 +645,11 @@ struct PeakProjection {
 /// describe the function as it stands now and \p prePeak must be its measured
 /// whole-function peak.
 ///
-/// This bounds the *reported* metric, not physical allocator demand: a value
-/// live through a nested region but unused inside it is absent from that
-/// region's figure, as for the loop-level gate. The arithmetic is widened to 64
-/// bits to keep the added terms from wrapping.
+/// This bounds the *reported* metric, not physical allocator demand: a real
+/// allocator could still do better (rematerializing, spilling around a
+/// narrow peak) than the flat per-thread-bytes figure this analysis reports,
+/// same as for the loop-level gate. The arithmetic is widened to 64 bits to
+/// keep the added terms from wrapping.
 static PeakProjection projectedFunctionPeak(
     ttg::ConvertLayoutOp cvtOp, scf::ForOp forOp,
     const ttg::intel::RegisterPressureAnalysis &analysis, uint64_t prePeak,
@@ -729,10 +789,18 @@ static PeakProjection projectedFunctionPeak(
     Operation *nestedLast = realLastUse(cvtOp);
     uint64_t tailPeak = 0;
     if (nestedLast && nestedLast->getBlock()->getParentOp() == lastUse &&
-        priceTailAfter(nestedLast, src, srcBytes, dstBytes, analysis,
-                       srcLiveness, forOp, corridorOpCap, queryCache,
+        priceTailAfter(nestedLast, src, srcBytes, cvtOp.getResult(), dstBytes,
+                       analysis, srcLiveness, forOp, corridorOpCap, queryCache,
                        regionPeakCache, tailPeak)) {
       projection.corridorTerm = std::max(projection.corridorTerm, tailPeak);
+
+      // `lastUse` may hold other blocks besides `nestedLast`'s own (an
+      // `else` branch, say) that the precise tail walk above never visits.
+      // Price them too; see `siblingBlocksPeak`'s doc for why they matter.
+      uint64_t siblingPeak = siblingBlocksPeak(
+          lastUse, nestedLast->getBlock(), src, srcBytes, cvtOp.getResult(),
+          dstBytes, analysis, srcLiveness, forOp, queryCache);
+      projection.corridorTerm = std::max(projection.corridorTerm, siblingPeak);
     } else {
       // Conservatively price the mapped op's own whole-region peak instead:
       // this may overstate the true peak (it covers the whole region, not
