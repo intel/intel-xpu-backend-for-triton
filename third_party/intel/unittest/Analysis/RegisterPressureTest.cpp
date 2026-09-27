@@ -70,12 +70,12 @@ TEST_F(RegisterPressureGRFModeTest, ExplicitAttr512) {
 
 TEST_F(RegisterPressureGRFModeTest,
        ExplicitAttr128CollapsesLargestIntoSmallest) {
-  // "128" is not a value the Python producer ever stamps: a kernel already
-  // gets 128-GRF without any escalation, so a *maximum auto-escalation
-  // target* of "128" is incoherent. Documented here rather than silently
-  // assumed: if this ever starts mattering (a hand-written module or a
-  // future producer stamping it), `Largest` degenerates to exactly
-  // `Smallest`'s answer.
+  // "128" is not a value the built-in "cri"-vs-everything-else policy ever
+  // stamps automatically (a kernel already gets 128-GRF without any
+  // escalation, so a *maximum auto-escalation target* of "128" is
+  // incoherent), though a driver- or out-of-tree-supplied override can still
+  // set it explicitly. Documented here rather than silently assumed: however
+  // it gets there, `Largest` degenerates to exactly `Smallest`'s answer.
   auto module = createModule(StringRef("128"));
   EXPECT_EQ(largestBytes(*module), 4096u);
 }
@@ -123,6 +123,11 @@ TEST_F(RegisterPressureGRFModeTest, AutoModeIgnoresMaxGRFMode) {
   EXPECT_EQ(largestBytes(*module, "auto"), 16384u);
 }
 
+#ifndef NDEBUG
+// The `assert()` this pins is compiled out under NDEBUG (e.g. a Release
+// build), so there is nothing for EXPECT_DEATH to observe there; guard the
+// whole test rather than let it fail on a build where the invariant it
+// checks cannot fire.
 TEST_F(RegisterPressureGRFModeTest, UnrecognizedGRFModeAsserts) {
   // A typo'd or otherwise-unrecognized grf-mode string (neither an explicit
   // mode, "default", nor "auto") is an internal-invariant violation, not
@@ -132,5 +137,6 @@ TEST_F(RegisterPressureGRFModeTest, UnrecognizedGRFModeAsserts) {
   EXPECT_DEATH(largestBytes(*module, "not-a-real-mode"),
                "grfMode must be an explicit mode");
 }
+#endif // NDEBUG
 
 } // namespace

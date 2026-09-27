@@ -175,7 +175,7 @@ public:
     /// do support 512-register mode explicitly (`grf_mode='512'` works on
     /// both); they just never auto-escalate to it, which is all this
     /// per-target ceiling describes. This case additionally caps at
-    /// `Smallest` once `num_warps > 32`: a larger GRF mode halves the maximum
+    /// `Smallest` once `num_warps > 32`: a larger GRF mode reduces the maximum
     /// launchable work-group size, so the AOT path skips the retry outright
     /// above that bound and the JIT path attempts it and fails to build;
     /// either way `ttig.max_grf_mode` never actually takes effect there.

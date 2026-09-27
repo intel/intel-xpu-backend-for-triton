@@ -81,7 +81,7 @@ unsigned RegisterPressureAnalysis::getGRFBytesPerHardwareThread(
   // picks under 'auto' and must not be applied there.
   if (grfMode != "default")
     return LargestGRFModeBytes;
-  // A larger GRF mode halves the maximum launchable work-group size, so a
+  // A larger GRF mode reduces the maximum launchable work-group size, so a
   // num_warps > 32 kernel can never actually run at a larger mode: the AOT
   // path (make_zebin) skips the escalation attempt outright, and the JIT
   // path (driver.c) attempts it and fails to build. Same ceiling either
