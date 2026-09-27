@@ -661,6 +661,22 @@ struct TritonIntelGPUInferLayoutInterface
   }
 
   LogicalResult
+  verifyBroadcastOpEncoding(RankedTensorType srcType,
+                            RankedTensorType dstType) const override {
+    if (!isa<DistributedEncodingTrait>(dstType.getEncoding()))
+      return failure();
+    auto src = toLinearLayout(srcType);
+    auto dst = toLinearLayout(dstType);
+    // Ignore coordinates along the dimensions being broadcast.
+    for (auto [dim, size] : src.getOutDims())
+      dst = dst.resizeOutDim(dim, size);
+
+    auto kRegister = StringAttr::get(srcType.getContext(), "register");
+    return success(src.removeZeroBasesAlongDim(kRegister) ==
+                   dst.removeZeroBasesAlongDim(kRegister));
+  }
+
+  LogicalResult
   inferDotOpEncoding(Attribute operandEncoding, unsigned opIdx,
                      Attribute retEncoding,
                      std::optional<Location> location) const override {
