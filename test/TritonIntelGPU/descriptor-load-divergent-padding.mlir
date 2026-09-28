@@ -6,11 +6,9 @@
 // COM: constant, and it is carried on the load by `ttig.desc_padding`. When the
 // COM: load's provenance has several `tt.make_tensor_descriptor` candidates whose
 // COM: `padding` disagrees, `DescriptorDefinitions::consistentPadding()` returns
-// COM: nullopt and every producer of that attribute bails. The LLVM lowering then
-// COM: reads the *absence* of `ttig.desc_padding` as PAD_ZERO
-// COM: (LoadStoreOpToLLVM.cpp: `PaddingOption padding = PaddingOption::PAD_ZERO;`
-// COM: before the attribute lookup), so a branch that asked for a NaN fill silently
-// COM: gets zeros.
+// COM: nullopt and every producer of that attribute bails. Before the fix the LLVM
+// COM: lowering read the *absence* of `ttig.desc_padding` as PAD_ZERO, so a branch
+// COM: that asked for a NaN fill silently got zeros.
 // COM:
 // COM: In the normal pipeline such loads are now expanded to pointers long before
 // COM: TTGIR exists, so these cases are unreachable there. This file is the
@@ -35,10 +33,9 @@
 // COM: "failed to legalize operation 'tt.descriptor_load'". The driver returns on
 // COM: the first failed op, so there is exactly one of the latter per case.
 // COM:
-// COM: MEASURED AT BASE COMMIT 495054198: all three cases FAIL as
-// COM:   error: expected error "..." was not produced
-// COM: because today no diagnostic is emitted at all -- the conversion succeeds and
-// COM: emits a zero-filled gather. That is precisely the bug.
+// COM: Every case is a fix witness: without the fix the lowering emits no padding
+// COM: diagnostic at all -- the conversion succeeds with a zero-filled gather -- so
+// COM: each fails as `expected error "..." was not produced`.
 // COM:
 // COM: The `expected-error` strings below are deliberately specific, and a loose
 // COM: substring here is not merely weak -- it silently matches the WRONG
@@ -49,17 +46,15 @@
 // COM: for a reason that has nothing to do with the code under test. Keep both
 // COM: annotations quoting wording unique to the diagnostic they belong to.
 // COM:
-// COM: MEASURED on the fixed build: each case emits exactly two diagnostics, both
-// COM: matched, and `-verify-diagnostics` stays in its default strict mode (any
-// COM: unexpected diagnostic is an error), so a conversion pattern retried into
-// COM: emitting duplicates would fail this file rather than pass it quietly.
+// COM: `-verify-diagnostics` runs in its default strict mode, where an unannotated
+// COM: diagnostic is an error, so a conversion pattern retried into emitting
+// COM: duplicates fails this file rather than passing it quietly.
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
 
 // COM: Case 1 -- divergent provenance, NO `ttig.desc_padding` attribute. This is
-// COM: the shape produced by the real pipeline today: MaterializeBlockPointer saw
-// COM: an undecidable padding and stamped nothing, and "nothing" is what the
-// COM: lowering silently turns into PAD_ZERO.
+// COM: what MaterializeBlockPointer leaves for an undecidable padding: it stamps
+// COM: nothing, and "nothing" is what the lowering used to turn into PAD_ZERO.
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
   tt.func public @divergent_padding_no_attr(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %cond: i1) -> (tensor<4x4xf32, #blocked>) {
     %c1_i64 = arith.constant 1 : i64

@@ -2842,6 +2842,8 @@ struct DescriptorLoadOpConversion
     if (paddingAttr) {
       padding = paddingAttr.getValue();
     } else if (tracedPadding) {
+      // Not an error: MaterializeBlockPointer never runs when compiling from
+      // TTGIR (e.g. `triton.compile("k.ttgir")`), so nothing stamped it.
       padding = *tracedPadding;
     } else {
       // Empty trace: some path reaches an untraceable value (e.g. an opaque
