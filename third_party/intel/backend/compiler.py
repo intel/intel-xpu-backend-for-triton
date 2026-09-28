@@ -650,6 +650,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if total_num_warps is not None:
             metadata["num_warps"] = total_num_warps
         metadata["threads_per_warp"] = intel.get_threads_per_warp(src)
+        metadata["warp_size"] = metadata["threads_per_warp"]
         metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size")
         metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment")
         metadata["profile_scratch_size"] = src.get_int_attr("ttg.profile_scratch_memory_size") or 0
