@@ -60,8 +60,9 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     %c0_i32 = arith.constant 0 : i32
     %c1_i32 = arith.constant 1 : i32
     %c1_i64 = arith.constant 1 : i64
+    %c32_i64 = arith.constant 32 : i64
 
-    %desc = tt.make_tensor_descriptor %arg0, [%c1_i32, %arg1, %arg2], [%arg3, %c1_i64, %c1_i64] : <f16>, <1x64x32xf16>
+    %desc = tt.make_tensor_descriptor %arg0, [%c1_i32, %arg1, %arg2], [%arg3, %c32_i64, %c1_i64] : <f16>, <1x64x32xf16>
     %load = tt.descriptor_load %desc[%c0_i32, %arg4, %arg5] {ttig.block_io = "row_major"} : !tt.tensordesc<1x64x32xf16> -> tensor<64x32xf16, #dot0>
     tt.return
   }

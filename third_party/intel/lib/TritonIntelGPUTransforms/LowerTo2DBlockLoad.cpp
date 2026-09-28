@@ -274,30 +274,29 @@ private:
     // lose the block load. A constant stride is checked here. A runtime stride
     // is fine when axis-info proves it 16-byte aligned; otherwise we only have
     // the make_tensor_descriptor contract, so the load is guarded at runtime.
-    // Skip rank-reducing loads: the stride may not be the surface pitch there.
+    // The pitch is the descriptor's second-to-last stride for every load,
+    // rank-reducing ones included: their leading indices are folded into
+    // base_ptr above and the 2D surface is unchanged.
     constexpr int64_t kPitchAlignBytes = 16;
     bool pitchNeedsRuntimeGuard = false;
-    if (rank == descRank) {
-      unsigned pitchOperandIdx = 1 + descRank + (descRank - 2);
-      int64_t pitchDivisor = llvm::divideCeil(128u, elemSizeInBits);
-      for (tt::MakeTensorDescOp d : defs) {
-        Value stride = d->getOperand(pitchOperandIdx);
-        if (std::optional<int64_t> folded =
-                tt::intel::getFoldedConstantValue(stride)) {
-          int64_t pitchBytes = *folded * elemBytesConst;
-          if ((pitchBytes % kPitchAlignBytes) != 0 ||
-              pitchBytes > kMax2DBlockField) {
-            LDBG("Invalid pitch " << pitchBytes
-                                  << " for descriptor load: " << *op);
-            return;
-          }
-          continue;
+    int64_t pitchDivisor = llvm::divideCeil(128u, elemSizeInBits);
+    for (tt::MakeTensorDescOp d : defs) {
+      Value stride = d.getStrides()[descRank - 2];
+      if (std::optional<int64_t> folded =
+              tt::intel::getFoldedConstantValue(stride)) {
+        int64_t pitchBytes = *folded * elemBytesConst;
+        if ((pitchBytes % kPitchAlignBytes) != 0 ||
+            pitchBytes > kMax2DBlockField) {
+          LDBG("Invalid pitch " << pitchBytes
+                                << " for descriptor load: " << *op);
+          return;
         }
-        const tt::AxisInfo *info = axisInfoAnalysis.getAxisInfo(stride);
-        int64_t divisibility = info ? info->getDivisibility(0) : 1;
-        if (divisibility % pitchDivisor != 0)
-          pitchNeedsRuntimeGuard = true;
+        continue;
       }
+      const tt::AxisInfo *info = axisInfoAnalysis.getAxisInfo(stride);
+      int64_t divisibility = info ? info->getDivisibility(0) : 1;
+      if (divisibility % pitchDivisor != 0)
+        pitchNeedsRuntimeGuard = true;
     }
 
     // Surface width = inner dimension size * element bytes.
