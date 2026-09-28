@@ -1012,6 +1012,13 @@ static inline void printScalarArgByType(uint32_t index, const void *value,
 }
 
 static PyObject *data_ptr_str = NULL;
+// Interned kernel metadata attribute names, read on every launch.
+// `PyObject_GetAttrString` would create a new string per call, which the
+// type attribute cache then keeps alive.
+static PyObject *num_warps_str = NULL;
+static PyObject *num_ctas_str = NULL;
+static PyObject *shared_str = NULL;
+static PyObject *threads_per_warp_str = NULL;
 
 // Extract a XPU device pointer from a pointer-like PyObject obj, and store
 // it to the memory location pointed by ptr.
@@ -1437,18 +1444,17 @@ extern "C" EXPORT_FUNC PyObject *launch(PyObject *args) {
   }
 
   // extract kernel metadata
-  PyObject *num_warps_attr =
-      PyObject_GetAttrString(kernel_metadata, "num_warps");
+  PyObject *num_warps_attr = PyObject_GetAttr(kernel_metadata, num_warps_str);
   int num_warps = PyLong_AsLong(num_warps_attr);
   Py_DECREF(num_warps_attr);
-  PyObject *num_ctas_attr = PyObject_GetAttrString(kernel_metadata, "num_ctas");
+  PyObject *num_ctas_attr = PyObject_GetAttr(kernel_metadata, num_ctas_str);
   int num_ctas = PyLong_AsLong(num_ctas_attr);
   Py_DECREF(num_ctas_attr);
-  PyObject *shared_attr = PyObject_GetAttrString(kernel_metadata, "shared");
+  PyObject *shared_attr = PyObject_GetAttr(kernel_metadata, shared_str);
   int shared_memory = PyLong_AsLong(shared_attr);
   Py_DECREF(shared_attr);
   PyObject *threads_per_warp_attr =
-      PyObject_GetAttrString(kernel_metadata, "threads_per_warp");
+      PyObject_GetAttr(kernel_metadata, threads_per_warp_str);
   int threads_per_warp = PyLong_AsLong(threads_per_warp_attr);
   Py_DECREF(threads_per_warp_attr);
 
@@ -1592,6 +1598,12 @@ extern "C" EXPORT_FUNC PyTypeObject *init_PyKernelArgType() {
 
   data_ptr_str = PyUnicode_InternFromString("data_ptr");
   if (data_ptr_str == NULL)
+    return NULL;
+  num_warps_str = PyUnicode_InternFromString("num_warps");
+  num_ctas_str = PyUnicode_InternFromString("num_ctas");
+  shared_str = PyUnicode_InternFromString("shared");
+  threads_per_warp_str = PyUnicode_InternFromString("threads_per_warp");
+  if (!num_warps_str || !num_ctas_str || !shared_str || !threads_per_warp_str)
     return NULL;
 
   Py_INCREF(&PyKernelArgType);
