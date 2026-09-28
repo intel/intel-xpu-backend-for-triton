@@ -756,7 +756,7 @@ for HEAD_DIM in [64, 128]:
 
                 if HEAD_DIM not in HEAD_DIMS or mode not in MODES:
                     continue
-                include_fp8 = mode != 'fwd' or 'fp8' in FWD_DTYPES
+                include_fp8 = mode == 'fwd' and 'fp8' in FWD_DTYPES
                 include_fp16 = mode != 'fwd' or 'fp16' in FWD_DTYPES
 
                 configs.append(

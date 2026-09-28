@@ -1,11 +1,11 @@
 // RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm | FileCheck %s
 
-// Test basic 32-bit atomic CAS with shared memory allocation
+// Test basic 32-bit atomic CAS, result broadcast by sub-group shuffle
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
-  // CHECK-DAG: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
+  // CHECK-DAG: llvm.func spir_funccc @_Z17sub_group_shuffleij(i32, i32) -> i32 attributes {convergent, no_unwind, will_return}
   // CHECK-DAG: llvm.func spir_funccc @_Z12get_local_idj(i32) -> i64 attributes {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return}
-  // CHECK-DAG: llvm.mlir.global internal @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<4 x i8>
+  // CHECK-DAG: llvm.mlir.global internal @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
 
   // CHECK-LABEL: llvm.func spir_kernelcc @test_atomic_cas_i32_global
   // CHECK-SAME: (%arg0: !llvm.ptr<1> {tt.pointee_type = i32}, %arg1: i32, %arg2: i32, %arg3: !llvm.ptr<1>, %arg4: !llvm.ptr<1>) -> i32
@@ -23,13 +23,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     // CHECK: %[[RESULT:.*]] = llvm.cmpxchg %arg0, %[[C21]], %[[C22]] acq_rel monotonic : !llvm.ptr<1>, i32
     // CHECK: %[[EXTRACT:.*]] = llvm.extractvalue %[[RESULT]][0] : !llvm.struct<(i32, i1)>
 
-    // CHECK: %[[SMEM_ADDR:.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
-    // CHECK: %[[SMEM_PTR:.*]] = llvm.getelementptr %[[SMEM_ADDR]]
-    // CHECK: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<3>
-
-    // CHECK: llvm.call spir_funccc @_Z7barrierj(%{{.*}}) {convergent, no_unwind, will_return} : (i32) -> ()
-
-    // CHECK: %[[FINAL_RESULT:.*]] = llvm.load %{{.*}} : !llvm.ptr<3> -> i32
+    // CHECK: ^bb2(%[[PHI_RESULT:.*]]: i32):
+    // CHECK: %[[RESULT_CAST:.*]] = llvm.bitcast %[[PHI_RESULT]] : i32 to i32
+    // CHECK: %[[LANE0:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: %[[FINAL_RESULT:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleij(%[[RESULT_CAST]], %[[LANE0]])
     // CHECK: llvm.return %[[FINAL_RESULT]] : i32
 
     %0 = tt.atomic_cas acq_rel, cta, %ptr, %cmp, %val : (!tt.ptr<i32>, i32, i32) -> i32
@@ -42,9 +39,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 // Test 64-bit atomic CAS
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
-  // CHECK-DAG: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
+  // CHECK-DAG: llvm.func spir_funccc @_Z17sub_group_shufflelj(i64, i32) -> i64 attributes {convergent, no_unwind, will_return}
   // CHECK-DAG: llvm.func spir_funccc @_Z12get_local_idj(i32) -> i64 attributes {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return}
-  // CHECK-DAG: llvm.mlir.global internal @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<8 x i8>
+  // CHECK-DAG: llvm.mlir.global internal @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
 
   // CHECK-LABEL: llvm.func spir_kernelcc @test_atomic_cas_i64_global
   // CHECK-SAME: (%arg0: !llvm.ptr<1> {tt.pointee_type = i64}, %arg1: i64, %arg2: i64, %arg3: !llvm.ptr<1>, %arg4: !llvm.ptr<1>) -> i64
@@ -62,13 +59,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     // CHECK: %[[RESULT:.*]] = llvm.cmpxchg %arg0, %[[C21]], %[[C22]] acq_rel monotonic : !llvm.ptr<1>, i64
     // CHECK: %[[EXTRACT:.*]] = llvm.extractvalue %[[RESULT]][0] : !llvm.struct<(i64, i1)>
 
-    // CHECK: %[[SMEM_ADDR:.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
-    // CHECK: %[[SMEM_PTR:.*]] = llvm.getelementptr %[[SMEM_ADDR]]
-    // CHECK: llvm.store %{{.*}}, %{{.*}} : i64, !llvm.ptr<3>
-
-    // CHECK: llvm.call spir_funccc @_Z7barrierj(%{{.*}}) {convergent, no_unwind, will_return} : (i32) -> ()
-
-    // CHECK: %[[FINAL_RESULT:.*]] = llvm.load %{{.*}} : !llvm.ptr<3> -> i64
+    // CHECK: ^bb2(%[[PHI_RESULT:.*]]: i64):
+    // CHECK: %[[RESULT_CAST:.*]] = llvm.bitcast %[[PHI_RESULT]] : i64 to i64
+    // CHECK: %[[LANE0:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: %[[FINAL_RESULT:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflelj(%[[RESULT_CAST]], %[[LANE0]])
     // CHECK: llvm.return %[[FINAL_RESULT]] : i64
 
     %0 = tt.atomic_cas acq_rel, cta, %ptr, %cmp, %val : (!tt.ptr<i64>, i64, i64) -> i64
@@ -130,9 +124,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 // Test 16-bit atomic CAS with hardware support
 module attributes {ttig.support_16bit_atomics = true, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 2 : i32} {
 
-  // CHECK-DAG: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
+  // CHECK-DAG: llvm.func spir_funccc @_Z17sub_group_shufflesj(i16, i32) -> i16 attributes {convergent, no_unwind, will_return}
   // CHECK-DAG: llvm.func spir_funccc @_Z12get_local_idj(i32) -> i64 attributes {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return}
-  // CHECK-DAG: llvm.mlir.global internal @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<2 x i8>
+  // CHECK-DAG: llvm.mlir.global internal @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
 
   // CHECK-LABEL: llvm.func spir_kernelcc @test_atomic_cas_i16_hw_support
   // CHECK-SAME: (%arg0: !llvm.ptr<1> {tt.pointee_type = i16}, %arg1: i16, %arg2: i16, %arg3: !llvm.ptr<1>, %arg4: !llvm.ptr<1>) -> i16
@@ -176,20 +170,8 @@ module attributes {ttig.support_16bit_atomics = true, "ttg.num-ctas" = 1 : i32, 
 
     // CHECK: ^bb2(%[[PHI_RESULT:.*]]: i16):
     // CHECK: %[[RESULT_CAST:.*]] = llvm.bitcast %[[PHI_RESULT]] : i16 to i16
-    // CHECK: %[[C0_5:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK: %[[SMEM_ADDR:.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
-    // CHECK: %[[GEP:.*]] = llvm.getelementptr %[[SMEM_ADDR]][%[[C0_5]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
-    // CHECK: %[[SMEM_PTR:.*]] = llvm.bitcast %[[GEP]] : !llvm.ptr<3> to !llvm.ptr<3>
-    // CHECK: llvm.cond_br %[[FINAL_CMP]], ^bb3, ^bb4
-
-    // CHECK: ^bb3:
-    // CHECK: llvm.store %[[RESULT_CAST]], %[[SMEM_PTR]] : i16, !llvm.ptr<3>
-    // CHECK: llvm.br ^bb4
-
-    // CHECK: ^bb4:
-    // CHECK: %[[BARRIER_FLAG:.*]] = llvm.mlir.constant(3 : i32) : i32
-    // CHECK: llvm.call spir_funccc @_Z7barrierj(%[[BARRIER_FLAG]]) {convergent, no_unwind, will_return} : (i32) -> ()
-    // CHECK: %[[FINAL_RESULT:.*]] = llvm.load %[[SMEM_PTR]] : !llvm.ptr<3> -> i16
+    // CHECK: %[[LANE0:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: %[[FINAL_RESULT:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflesj(%[[RESULT_CAST]], %[[LANE0]])
     // CHECK: llvm.return %[[FINAL_RESULT]] : i16
 
     %0 = tt.atomic_cas acq_rel, cta, %ptr, %cmp, %val : (!tt.ptr<i16>, i16, i16) -> i16
@@ -202,9 +184,9 @@ module attributes {ttig.support_16bit_atomics = true, "ttg.num-ctas" = 1 : i32, 
 // Test 16-bit atomic CAS with emulation (no hardware support)
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 2 : i32} {
 
-  // CHECK-DAG: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
+  // CHECK-DAG: llvm.func spir_funccc @_Z17sub_group_shufflesj(i16, i32) -> i16 attributes {convergent, no_unwind, will_return}
   // CHECK-DAG: llvm.func spir_funccc @_Z12get_local_idj(i32) -> i64 attributes {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return}
-  // CHECK-DAG: llvm.mlir.global internal @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<2 x i8>
+  // CHECK-DAG: llvm.mlir.global internal @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
 
   // CHECK-LABEL: llvm.func spir_kernelcc @test_atomic_cas_i16_emulated
   // CHECK-SAME: (%arg0: !llvm.ptr<1> {tt.pointee_type = i16}, %arg1: i16, %arg2: i16, %arg3: !llvm.ptr<1>, %arg4: !llvm.ptr<1>) -> i16
@@ -226,9 +208,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 // Test f16 atomic CAS with emulation
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 2 : i32} {
 
-  // CHECK-DAG: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
+  // CHECK-DAG: llvm.func spir_funccc @_Z17sub_group_shuffleDhj(f16, i32) -> f16 attributes {convergent, no_unwind, will_return}
   // CHECK-DAG: llvm.func spir_funccc @_Z12get_local_idj(i32) -> i64 attributes {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return}
-  // CHECK-DAG: llvm.mlir.global internal @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<2 x i8>
+  // CHECK-DAG: llvm.mlir.global internal @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
 
   // CHECK-LABEL: llvm.func spir_kernelcc @test_atomic_cas_f16_emulated
   // CHECK-SAME: (%arg0: !llvm.ptr<1> {tt.pointee_type = f16}, %arg1: f16, %arg2: f16, %arg3: !llvm.ptr<1>, %arg4: !llvm.ptr<1>) -> f16
@@ -251,8 +233,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: llvm.cmpxchg %{{.*}}, %{{.*}}, %{{.*}} acq_rel monotonic : !llvm.ptr<1>, i32
 
     // CHECK: %[[RESULT_F16:.*]] = llvm.bitcast %{{.*}} : i16 to f16
-    // CHECK: llvm.store %[[RESULT_F16]], %{{.*}} : f16, !llvm.ptr<3>
-    // CHECK: %{{.*}} = llvm.load %{{.*}} : !llvm.ptr<3> -> f16
+    // CHECK: %[[FINAL_RESULT:.*]] = llvm.call spir_funccc @_Z17sub_group_shuffleDhj(%[[RESULT_F16]], %{{.*}})
+    // CHECK: llvm.return %[[FINAL_RESULT]] : f16
 
     %0 = tt.atomic_cas acq_rel, cta, %ptr, %cmp, %val : (!tt.ptr<f16>, f16, f16) -> f16
     tt.return %0 : f16
@@ -264,9 +246,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 // Test bf16 atomic CAS with emulation
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 2 : i32} {
 
-  // CHECK-DAG: llvm.func spir_funccc @_Z7barrierj(i32) attributes {convergent, no_unwind, will_return}
+  // CHECK-DAG: llvm.func spir_funccc @_Z17sub_group_shufflesj(i16, i32) -> i16 attributes {convergent, no_unwind, will_return}
   // CHECK-DAG: llvm.func spir_funccc @_Z12get_local_idj(i32) -> i64 attributes {memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return}
-  // CHECK-DAG: llvm.mlir.global internal @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<2 x i8>
+  // CHECK-DAG: llvm.mlir.global internal @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
 
   // CHECK-LABEL: llvm.func spir_kernelcc @test_atomic_cas_bf16_emulated
   // CHECK-SAME: (%arg0: !llvm.ptr<1> {tt.pointee_type = bf16}, %arg1: bf16, %arg2: bf16, %arg3: !llvm.ptr<1>, %arg4: !llvm.ptr<1>) -> bf16
@@ -289,8 +271,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: llvm.cmpxchg %{{.*}}, %{{.*}}, %{{.*}} acq_rel monotonic : !llvm.ptr<1>, i32
 
     // CHECK: %[[RESULT_BF16:.*]] = llvm.bitcast %{{.*}} : i16 to bf16
-    // CHECK: llvm.store %[[RESULT_BF16]], %{{.*}} : bf16, !llvm.ptr<3>
-    // CHECK: %{{.*}} = llvm.load %{{.*}} : !llvm.ptr<3> -> bf16
+    // CHECK: %[[RESULT_I16:.*]] = llvm.bitcast %[[RESULT_BF16]] : bf16 to i16
+    // CHECK: %[[SHUFFLED:.*]] = llvm.call spir_funccc @_Z17sub_group_shufflesj(%[[RESULT_I16]], %{{.*}})
+    // CHECK: %[[FINAL_RESULT:.*]] = llvm.bitcast %[[SHUFFLED]] : i16 to bf16
+    // CHECK: llvm.return %[[FINAL_RESULT]] : bf16
 
     %0 = tt.atomic_cas acq_rel, cta, %ptr, %cmp, %val : (!tt.ptr<bf16>, bf16, bf16) -> bf16
     tt.return %0 : bf16
