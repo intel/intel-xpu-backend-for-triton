@@ -27,8 +27,8 @@ Each hardware thread has a private register file. **Do not guess** GRF register 
 The threshold is a constant in bytes per hardware thread, the unit both spill probes
 report: `REBUILD_SPILL_BYTES_PER_THREAD` in `compiler.py` and
 `kRebuildSpillBytesPerThread` in `driver.c`. The compiled sub-group size is not an
-input to the gate — only to `n_spills`' presentation (`spill_slots_per_lane` /
-`Spills::slotsPerLane`).
+input to the gate — only to `n_spills`' presentation (`Spills::slotsPerLane` in
+`driver.c`, the only producer of `n_spills` on either path).
 
 1024 B is the largest threshold that keeps every *accepted* kernel strictly below
 PyTorch inductor's `spill_threshold` (16 dword-equivalents/lane by default off HIP) at

@@ -4,7 +4,7 @@ import triton.language as tl
 
 from triton._internal_testing import numpy_random, to_triton, is_xpu_cri
 from triton.backends.intel.compiler import (REBUILD_SPILL_BYTES_PER_THREAD, XPUBackend, accepts_default_grf,
-                                            extract_spill_size_from_zebin, spill_slots_per_lane)
+                                            extract_spill_size_from_zebin)
 
 
 def test_empty_kernel(device):
@@ -72,7 +72,10 @@ def test_auto_large_grf(device, tmp_path):
     zebin = tmp_path / "kernel.zebin"
     zebin.write_bytes(k.kernel)
     spill_size = extract_spill_size_from_zebin(str(zebin))
-    spill_slots = spill_slots_per_lane(spill_size, k.metadata.threads_per_warp)
+    # Only for the diagnostic below: the gate compares bytes. Mirrors
+    # `Spills::slotsPerLane` in driver.c, whose truncation is what makes the per-lane
+    # count a poor thing to gate on.
+    spill_slots = spill_size // (4 * k.metadata.threads_per_warp)
     # The gate differs by driver line (issue #8106), so ask the predicate the
     # backend itself uses rather than re-deriving the rolling rule here.
     is_lts = XPUBackend.is_lts(k.metadata.target.arch.get("driver_version"))

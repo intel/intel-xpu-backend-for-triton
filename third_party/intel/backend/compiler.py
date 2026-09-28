@@ -139,19 +139,6 @@ def extract_spill_size_from_zebin(file):
     return 0
 
 
-def spill_slots_per_lane(spill_size, threads_per_warp):
-    """Convert a zebin `spill_size` to the unit `n_spills` is reported in.
-
-    `spill_size` is bytes allocated per hardware thread; CUDA and HIP report
-    `n_spills` as dword-equivalents per lane, and that is the unit external
-    consumers threshold on. Mirrors `Spills::slotsPerLane` in driver.c, down to
-    the truncating division and the raw-byte fallback for an unknown width.
-    """
-    if spill_size <= 0 or threads_per_warp <= 0:
-        return spill_size
-    return spill_size // (4 * threads_per_warp)
-
-
 def accepts_default_grf(spill_size, is_lts):
     """Whether the default-GRF build is good enough to skip the large-GRF rebuild.
 
@@ -175,10 +162,12 @@ def accepts_default_grf(spill_size, is_lts):
 
     Both branches compare bytes, the unit both spill probes report. Neither needs the
     compiled sub-group size: routing the spill and the threshold through the same
-    truncating `spill_slots_per_lane` cancels the divisor, so the per-lane form of this
-    gate decided exactly `spill_size >= REBUILD_SPILL_BYTES_PER_THREAD` at every width
-    a power-of-two 4 * threads_per_warp divides -- every width the backend can reach,
-    plus the unknown-width fallback. `n_spills`' per-lane unit is for reporting.
+    truncating bytes-to-dword-equivalents conversion cancels the divisor, so the
+    per-lane form of this gate decided exactly
+    `spill_size >= REBUILD_SPILL_BYTES_PER_THREAD` at every width a power-of-two
+    4 * threads_per_warp divides -- every width the backend can reach, plus the
+    unknown-width fallback. That conversion lives in `Spills::slotsPerLane` in
+    driver.c, which is the only producer of `n_spills` on either path.
     """
     if is_lts:
         return spill_size <= 0
