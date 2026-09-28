@@ -37,7 +37,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   tt.func @poll_i32(%ptr: !tt.ptr<i32>, %expected: i32) {
     // CHECK-NOT: llvm.bitcast %{{.*}} : i32 to vector<2xi16>
     // CHECK: %[[LOADED:.*]] = llvm.load %arg0 atomic syncscope("device") monotonic {alignment = 4 : i64} : !llvm.ptr<1> -> i32
-    // CHECK: %{{.*}} = llvm.icmp "eq" %[[LOADED]], %arg1 : i32
+    // CHECK: llvm.br ^[[MERGE:bb[0-9]+]](%[[LOADED]] : i32)
+    // CHECK: ^[[MERGE]](%[[POLLED:.*]]: i32):
+    // CHECK: %{{.*}} = llvm.icmp "eq" %[[POLLED]], %arg1 : i32
     %0 = tt.atomic_poll relaxed, gpu, %ptr, %expected : !tt.ptr<i32>, i32 -> i1
     tt.return
   }
@@ -64,7 +66,9 @@ module attributes {ttig.support_16bit_atomics = true, "ttg.num-ctas" = 1 : i32, 
   tt.func @poll_i16_hw_support(%ptr: !tt.ptr<i16>, %expected: i16) {
     // CHECK-NOT: llvm.bitcast %{{.*}} : i32 to vector<2xi16>
     // CHECK: %[[LOADED:.*]] = llvm.load %arg0 atomic syncscope("device") monotonic {alignment = 2 : i64} : !llvm.ptr<1> -> i16
-    // CHECK: %{{.*}} = llvm.icmp "eq" %[[LOADED]], %arg1 : i16
+    // CHECK: llvm.br ^[[MERGE:bb[0-9]+]](%[[LOADED]] : i16)
+    // CHECK: ^[[MERGE]](%[[POLLED:.*]]: i16):
+    // CHECK: %{{.*}} = llvm.icmp "eq" %[[POLLED]], %arg1 : i16
     %0 = tt.atomic_poll relaxed, gpu, %ptr, %expected : !tt.ptr<i16>, i16 -> i1
     tt.return
   }
