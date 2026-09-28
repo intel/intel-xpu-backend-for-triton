@@ -199,12 +199,15 @@ private:
     unsigned elementWidth = tensorType.getElementTypeBitWidth();
     LDBG("elementWidth: " << elementWidth);
 
-    // For tensor descriptors, the last stride is always one (row major). The
-    // row_major attribute stamped below covers every candidate, so check every
-    // candidate rather than just the first.
-    assert(defs.allSatisfy([&](tt::MakeTensorDescOp d) {
-      return tt::intel::isConstant(d.getStrides()[rank - 1], 1);
-    }) && "Tensor descriptor must have stride=1 in last dimension");
+    // The row_major attribute stamped below requires a unit last stride. The
+    // dialect does not guarantee one, and the attribute covers every
+    // candidate, so every candidate must have it.
+    if (!defs.allSatisfy([&](tt::MakeTensorDescOp d) {
+          return tt::intel::isConstant(d.getStrides()[rank - 1], 1);
+        })) {
+      LDBG("Last stride is not 1 for every candidate: " << *op);
+      return;
+    }
 
     // Across Intel platforms, the strictest pitch restriction is to be a
     // multiple of OWord(128 bits). All candidates must satisfy this.
@@ -215,7 +218,7 @@ private:
         }))
       return;
 
-    // Tensor descriptors are always row major.
+    // Every candidate was checked to have a unit last stride above.
     op->setAttr(ttgi::TritonIntelGPUDialect::getBlockIOAttrName(),
                 StringAttr::get(context, "row_major"));
   }
@@ -1019,7 +1022,8 @@ private:
     if (rank < 2)
       return false;
 
-    // For tensor descriptors, the last stride is always one (row major).
+    // A descriptor is only stamped row major if its last stride is one, which
+    // visitDescriptor checks separately.
     unsigned strideOneDimVal = rank - 1;
 
     // Take the element width from the descriptor the op actually consumes, not
