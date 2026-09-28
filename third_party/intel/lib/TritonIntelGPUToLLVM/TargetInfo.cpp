@@ -102,6 +102,37 @@ StringRef TargetInfo::getAtomicSyncScope(MemSyncScope scope) const {
   llvm_unreachable("unknown memory synchronization scope");
 }
 
+Value TargetInfo::loadRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
+                              Type valueTy, Value pred,
+                              MemSyncScope scope) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto results =
+      emitPredicated(rewriter, loc, pred, ValueRange{b.undef(valueTy)}, [&] {
+        unsigned alignment = valueTy.getIntOrFloatBitWidth() / 8;
+        Value loaded = LLVM::LoadOp::create(
+            rewriter, loc, valueTy, ptr, alignment, /*isVolatile=*/false,
+            /*isNonTemporal=*/false, /*isInvariant=*/false,
+            /*isInvariantGroup=*/false, LLVM::AtomicOrdering::monotonic,
+            getAtomicSyncScope(scope));
+        return SmallVector<Value>{loaded};
+      });
+  return results.front();
+}
+
+void TargetInfo::storeRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
+                              Value value, Value pred,
+                              MemSyncScope scope) const {
+  emitPredicated(rewriter, loc, pred, ValueRange{}, [&] {
+    unsigned alignment = value.getType().getIntOrFloatBitWidth() / 8;
+    LLVM::StoreOp::create(rewriter, loc, value, ptr, alignment,
+                          /*isVolatile=*/false, /*isNonTemporal=*/false,
+                          /*isInvariantGroup=*/false,
+                          LLVM::AtomicOrdering::monotonic,
+                          getAtomicSyncScope(scope));
+    return SmallVector<Value>{};
+  });
+}
+
 void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
                          triton::gpu::AddrSpace targets) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -125,8 +156,43 @@ Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
   return b.i32_val(0);
 }
 
+// SPIR-V has no vector of pointers without SPV_INTEL_masked_gather_scatter.
+// Cast per element: a cast of the whole vector keeps the pointer vector type.
+static Value ptrsToInts(RewriterBase &rewriter, Location loc, Value val) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto vecTy = dyn_cast<VectorType>(val.getType());
+  if (!vecTy)
+    return b.ptrtoint(i64_ty, val);
+
+  Value res = b.undef(vecTy.clone(i64_ty));
+  for (int i = 0; i < vecTy.getNumElements(); ++i) {
+    Value idx = b.i32_val(i);
+    Value elem = b.extract_element(val, idx);
+    res = b.insert_element(res, b.ptrtoint(i64_ty, elem), idx);
+  }
+  return res;
+}
+
+static Value intsToPtrs(RewriterBase &rewriter, Location loc, Value val,
+                        Type ptrTy) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto vecTy = dyn_cast<VectorType>(ptrTy);
+  if (!vecTy)
+    return b.inttoptr(ptrTy, val);
+
+  Value res = b.undef(vecTy);
+  for (int i = 0; i < vecTy.getNumElements(); ++i) {
+    Value idx = b.i32_val(i);
+    Value elem = b.extract_element(val, idx);
+    res = b.insert_element(res, b.inttoptr(vecTy.getElementType(), elem), idx);
+  }
+  return res;
+}
+
 void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
                               Value ctaId, Value val, Value pred) const {
+  if (isa<LLVM::LLVMPointerType>(getElementTypeOrSelf(val.getType())))
+    val = ptrsToInts(rewriter, loc, val);
   LLVM::intel::createPredicatedBlock(rewriter, loc, pred, [&] {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     b.store(val, ptr);
@@ -137,6 +203,15 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
 Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
                               Value ctaId, Type elemTy, Value pred,
                               Operation *localLoadOp) const {
+  if (isa<LLVM::LLVMPointerType>(getElementTypeOrSelf(elemTy))) {
+    Type loadTy = i64_ty;
+    if (auto vecTy = dyn_cast<VectorType>(elemTy))
+      loadTy = vecTy.clone(i64_ty);
+    Value result =
+        loadDShared(rewriter, loc, ptr, ctaId, loadTy, pred, localLoadOp);
+    return intsToPtrs(rewriter, loc, result, elemTy);
+  }
+
   assert(cast<mlir::LLVM::LLVMPointerType>(ptr.getType()).getAddressSpace() ==
              3 &&
          "Invalid addr space for loadShared");
@@ -184,7 +259,8 @@ Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
 
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
-                            unsigned reduceLaneIdMask) const {
+                            unsigned reduceLaneIdMask,
+                            unsigned /*broadcastLaneIdMask*/) const {
   /**
   The reduceLaneIdMask is the bit map of the bases of the linear layout to be
   reduced within warp. Here is the code pieces of ReduceOpToLLVM.cpp:
@@ -255,12 +331,6 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
   }
 
   return true;
-}
-
-std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
-  std::string funcName =
-      resultElementTy.isInteger(32) ? "__imf_umulhi" : "__imf_umul64hi";
-  return funcName;
 }
 
 void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,

@@ -1058,7 +1058,9 @@ struct RewriteReducePattern : OpConversionPattern<triton::DescriptorReduceOp> {
 /// Check if a descriptor-typed function argument only feeds DescriptorLoadOp
 /// or DescriptorStoreOp (directly or through loops/conditionals), and does NOT
 /// feed DescriptorGatherOp, DescriptorScatterOp, or DescriptorReduceOp.
-static bool descArgFeedsOnlyLoadStore(Value descArg) {
+static bool
+descArgFeedsOnlyLoadStore(Value descArg,
+                          SmallVectorImpl<triton::DescriptorLoadOp> &loads) {
   SmallVector<Value, 8> worklist;
   SmallPtrSet<Value, 8> visited;
   worklist.push_back(descArg);
@@ -1072,6 +1074,8 @@ static bool descArgFeedsOnlyLoadStore(Value descArg) {
     for (OpOperand &use : cur.getUses()) {
       Operation *user = use.getOwner();
       if (isa<triton::DescriptorLoadOp, triton::DescriptorStoreOp>(user)) {
+        if (auto load = dyn_cast<triton::DescriptorLoadOp>(user))
+          loads.push_back(load);
         hasLoadOrStore = true;
         continue;
       }
@@ -1145,7 +1149,8 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
       Type elemType = blockType.getElementType();
       Value descArg = entryBlock.getArgument(idx);
 
-      if (!descArgFeedsOnlyLoadStore(descArg))
+      SmallVector<triton::DescriptorLoadOp> loads;
+      if (!descArgFeedsOnlyLoadStore(descArg, loads))
         continue;
 
       // The frontend (tensor_descriptor_type._flatten_ir_types) places i32
@@ -1241,6 +1246,30 @@ static void synthesizeDescriptorsFromFuncArgs(Operation *moduleOp) {
       // Replace all uses of the old descriptor arg and erase it.
       oldDescArg.replaceAllUsesWith(syntheticDesc);
       entryBlock.eraseArgument(oldDescIdx);
+
+      // Determine TF32 rounding from the tt.round_f32_to_tf32 attribute on the
+      // descriptor arg (set by the specialization system, like tt.padding
+      // above). Using the attribute rather than the runtime i1 argument keeps
+      // the flag a compile-time constant, so the non-rounding path costs
+      // nothing instead of paying for a select on every loaded element.
+      bool roundF32 = false;
+      if (descArgAttrs) {
+        if (auto roundAttr = dyn_cast_or_null<IntegerAttr>(
+                descArgAttrs.get("tt.round_f32_to_tf32")))
+          roundF32 = roundAttr.getValue().getZExtValue() != 0;
+      }
+
+      // MakeTensorDescOp has no TF32 flag, round the loaded values instead.
+      if (elemType.isF32() && roundF32) {
+        for (triton::DescriptorLoadOp load : loads) {
+          Value x = load.getResult();
+          SmallVector<OpOperand *> uses(llvm::make_pointer_range(x.getUses()));
+          builder.setInsertionPointAfter(load);
+          Value rounded = roundF32ToTF32(builder, load.getLoc(), x);
+          for (OpOperand *use : uses)
+            use->set(rounded);
+        }
+      }
 
       // Update the function type.
       funcOp.setType(FunctionType::get(ctx, entryBlock.getArgumentTypes(),
