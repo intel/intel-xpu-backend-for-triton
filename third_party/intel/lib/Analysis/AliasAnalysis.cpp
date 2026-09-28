@@ -72,7 +72,7 @@ static bool hasReadOrWriteEffect(Operation *op) {
 /// the five tt.descriptor_* ops), returns the pointer operand directly. For
 /// descriptor ops, traces the base pointer through SCF iter_args, yields,
 /// `scf.if`, `arith.select`, and unrealized casts via
-/// `findDefiningOpOfType<tt::MakeTensorDescOp>`. When that trace fails
+/// `findMakeTensorDescOp`. When that trace fails
 /// (e.g., the descriptor comes from a call, a region with mismatched
 /// branches, or any unmodeled producer), returns the descriptor Value
 /// itself. That value is never seeded by the dataflow, so the snapshot
@@ -97,9 +97,9 @@ static Value getMemOpPointer(Operation *op) {
             tt::DescriptorScatterOp, tt::DescriptorReduceOp>(
           [](auto op) -> Value {
             Value desc = op.getDesc();
-            auto allDescs = tt::intel::findAllMakeTensorDescOps(desc);
-            if (allDescs.size() == 1)
-              return allDescs[0].getBase();
+            if (std::optional<tt::MakeTensorDescOp> d =
+                    tt::intel::findMakeTensorDescOp(desc))
+              return d->getBase();
             // Couldn't resolve to a unique MakeTensorDescOp — keep the op
             // alive by returning the descriptor itself as an opaque sentinel.
             return desc;

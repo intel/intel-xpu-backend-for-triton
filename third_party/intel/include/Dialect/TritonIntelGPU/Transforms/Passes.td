@@ -102,19 +102,119 @@ def TritonIntelGPUHoistLayoutConversions
   let summary = "Hoist layout conversions out of loops";
   let description = [{
     Hoist `ttg.convert_layout` operations out of `scf.for` loops when the
-    destination encoding is `DotOperandEncodingAttr` and the source operand is
-    defined outside the loop. This keeps loop-invariant dot operand layout
-    conversions in registers, avoiding redundant conversion on every iteration.
+    destination encoding is `DotOperandEncodingAttr` and the source is defined
+    outside the loop, so a loop-invariant dot operand is converted once instead
+    of on every iteration. Two vetoes guard a hoist; whichever refuses stamps
+    `tt.no_licm` so later generic LICM does not hoist the conversion anyway.
 
-    Hoisting is only performed when the resulting register pressure (measured
-    via liveness analysis) stays within 80% of the GRF budget for the given
-    GRF mode.
+    ### Loop-level live-in gate
+
+    Rejects a hoist that would raise the loop body's projected live-in pressure
+    past 80% of the per-lane GRF budget. The projection is a *substitution*, not
+    an addition: the result starts crossing the loop, and if nothing left inside
+    or below reads the source, the source stops crossing it and its bytes are
+    credited back (a rematerializable source contributed none, so earns none). A
+    source fatter per-lane than the dot operand it feeds therefore *lowers*
+    live-in pressure, which an additive-only estimate would reject. Only a hoist
+    that spends budget faces the budget: refusing a break-even one buys back no
+    register. On `_attn_bwd` at HEAD_DIM=128 all eight candidates are
+    break-even, and gating them on the unchanged live-in figure rejected six and
+    cost 21.7% geomean on flash-attn-bwd.
+
+    Credit is asked of the IR as it stands, so two orderings keep the result a
+    function of pressure rather than of syntax: candidates in one loop are
+    decided cheapest-first (a hoist can lower the projection), and loops
+    last-to-first (so no later hoist can add a use below a source under
+    consideration). A source shared by several conversions in one loop is
+    credited once, to the last of them to leave.
+
+    ### Whole-function peak gate
+
+    The live-in set cannot show what a hoist costs *outside* the loop: moving a
+    conversion up creates a point where source and result are both live. This
+    gate bounds the post-hoist peak without mutating IR, as the maximum of the
+    current peak (a hoist can move it but not remove it), the *corridor* --
+    every operation from the insertion point to the conversion's old position,
+    charged the arriving result and credited the departing source only where it
+    is provably dead -- and the *new program point*, where both are live. The
+    hoist is taken when that projection does not exceed
+    `max(current peak, threshold)`: below the threshold a rise costs nothing,
+    above it the rule is "do not make
+    the peak worse". The gate earns its keep on the eight `_attn_bwd` configs
+    with `BLOCK_N1=64` and `num_warps=16`, where the eighth hoist does raise the
+    peak.
+
+    The bounded figure is the peak as `RegisterPressureAnalysis` reports it, not
+    physical allocator demand (see its header). Projection and comparand are the
+    same metric by construction: the corridor steps over a nested region as one
+    operation rather than descending into it.
+
+    Where a term cannot be established -- a corridor spanning two blocks or
+    longer than `corridor-op-cap`, an insertion point at the end of its block --
+    the projection charges the arriving result on top of the current peak, which
+    refuses unless the result costs nothing at all -- an unread conversion is
+    charged zero bytes and still fits. Reaching `peak-rebuild-cap` refuses
+    outright: each accepted hoist
+    invalidates the analysis, and a projection against a stale peak bounds
+    nothing. Conservative refusals are counted apart from measured ones
+    (`rejected_function_peak_fallback` versus `rejected_function_peak_exact`).
+
+    The departing source's credit has its own fallbacks. It is withheld whenever
+    something other than the conversion may still read the source at a corridor
+    operation, which is usually the true answer -- a reader below the loop does
+    hold it live throughout. Four cases withhold it only conservatively, and so
+    count as fallbacks: a reader unorderable against the loop, a body reader
+    *above* the conversion (the source dies mid-corridor, so later corridor
+    operations are overpriced), a CFG cycle around the conversion, and a reader
+    in an enclosing loop, whose back edge re-reads the source after the
+    corridor. That last one can leave the projection above the very peak it
+    gates, since the metric compared against is itself back-edge blind
+    (measured: 1376 projected against a post-hoist 1248).
+
+    Cost is one whole-function pressure walk per candidate that follows an
+    accepted hoist, plus the initial build, and `RegisterPressureAnalysis`
+    memoizes nothing: on the module above (596 lines of TTGIR, `grf-mode=256`,
+    debug build) the pass takes 2.83s for eight hoists against 0.09s to parse and
+    print it -- eight walks there, one per hoist, only because no candidate was
+    rejected. A rejected candidate pays too. A function with no candidate reaching
+    this gate pays nothing: the analysis is built lazily on the first one.
+    Lowering `peak-rebuild-cap` bounds those rebuilds, i.e. cost, and spends
+    hoists to do it.
+
+    ### Non-goals, all deliberate
+
+    * No retry at a cheaper insertion point; the point is fixed, after the
+      source's defining operation or before the loop if it has none.
+    * A block-argument source is never freed for an earlier loop sharing it,
+      since the conversion still lands after that loop.
+    * Conversions sharing a source are not evaluated jointly, so a group can
+      stop partway through even where its completed net effect would have fit.
+    * Neither trip count nor conversion cost is weighed against the pressure
+      change.
+    * `liveInPressure` ignores a value merely spanning the loop to feed code
+      below it, so the loop-level baseline measures what a hoist adds, not
+      absolute occupancy. The peak gate does see such a value.
   }];
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
 
   let options = [
     Option<"grfMode", "grf-mode", "std::string", /*default*/"\"default\"",
            "GRF mode (default, 128, 256, or auto)">,
+    Option<"corridorOpCap", "corridor-op-cap", "unsigned", /*default*/"512",
+           "Maximum number of operations between a hoist's insertion point and "
+           "the conversion's old position that the whole-function peak "
+           "projection prices individually; past this it charges "
+           "conservatively. _attn_bwd's eight hoists at HEAD_DIM=128 walk "
+           "corridors of 24 to 39 operations, so the default leaves better than "
+           "a factor of ten in hand. For pathological input, not a routine "
+           "path.">,
+    Option<"peakRebuildCap", "peak-rebuild-cap", "unsigned", /*default*/"32",
+           "Maximum whole-function pressure analysis rebuilds per function. "
+           "Each accepted hoist invalidates the analysis; the next candidate "
+           "needing it spends one rebuild. Past the cap candidates are "
+           "rejected, since a stale analysis bounds nothing. _attn_bwd's eight "
+           "hoists at HEAD_DIM=128 spend seven rebuilds -- the first build is "
+           "not a rebuild -- so a cap of seven already accepts all eight.">,
   ];
 }
 
@@ -347,11 +447,30 @@ def TritonIntelGPUReduceVariableLiveness
   let description = [{
     This pass attempts to reduce the variable liveness
     by reducing the distance between loads and usage.
+
+    A 2D operand load defined outside a loop and used inside it is sunk into the
+    loop (leaving a prefetch behind at the original site) when the loop body's
+    *peak* register pressure, as measured by RegisterPressureAnalysis, is at or
+    above the per-lane GRF budget of the given GRF mode. The budget is the
+    hardware thread's GRF size divided by "ttg.threads-per-warp", because the
+    analysis weighs each live tensor by its per-work-item element count.
+
+    The decision is per loop, not per load: once a loop is over budget every
+    eligible load in it is sunk. Sinking trades one extra (prefetched, and so
+    normally cache-resident) 2D block load per iteration for a shorter live
+    range, which is only worth doing when the loop would otherwise spill. The
+    pass does not model spill cost against reload cost, and does not take the
+    loop trip count into account.
   }];
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::scf::SCFDialect",
                            "mlir::arith::ArithDialect"];
+
+  let options = [
+    Option<"grfMode", "grf-mode", "std::string", /*default*/"\"default\"",
+           "GRF mode ('default', 'auto', '128', '256' or '512')">,
+  ];
 }
 
 def TritonIntelGPUCodeSinking

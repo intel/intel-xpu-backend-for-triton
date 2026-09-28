@@ -32,10 +32,35 @@ namespace ttng = mlir::triton::nvidia_gpu;
 bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
   // Scratch writes are CTA-local. When the scratch spans CTAs, only its read
   // phase accesses another CTA's shared memory.
-  if (hasCrossCTAScratch(op))
-    return isRead;
-  if (isa<ttng::CLCTryCancelOp, ttng::AsyncSharedStoreOp>(op)) {
+  if (hasCrossCTAScratch(op) && isRead)
+    return true;
+
+  if (auto load = dyn_cast<ttg::LocalLoadOp>(op)) {
+    return isCrossCTALoadStore(load.getSrc().getType(), load.getType());
+  } else if (auto store = dyn_cast<ttg::LocalStoreOp>(op)) {
+    return isCrossCTALoadStore(store.getDst().getType(),
+                               store.getSrc().getType());
+  } else if (auto alloc = dyn_cast<ttg::LocalAllocOp>(op)) {
+    return alloc.getSrc() &&
+           isCrossCTALoadStore(alloc.getType(), alloc.getSrc().getType());
+  } else if (auto gather = dyn_cast<ttg::LocalGatherOp>(op)) {
+    return isCrossCTAGatherScatter(gather.getSrc().getType(), gather.getType(),
+                                   gather.getAxis());
+  } else if (auto scatter = dyn_cast<ttg::LocalScatterOp>(op)) {
+    return isCrossCTAGatherScatter(scatter.getDst().getType(),
+                                   scatter.getValues().getType(),
+                                   scatter.getAxis());
+  } else if (auto atomic = dyn_cast<ttg::LocalAtomicScatterRMWOp>(op)) {
+    return isCrossCTAGatherScatter(atomic.getDst().getType(),
+                                   atomic.getValues().getType(),
+                                   atomic.getAxis());
+  }
+
+  if (isa<ttng::CLCTryCancelOp>(op)) {
     return ttg::lookupNumCTAs(op) > 1;
+  } else if (auto store = dyn_cast<ttng::AsyncSharedStoreOp>(op)) {
+    return isCrossCTALoadStore(store.getDst().getType(),
+                               store.getSrc().getType());
   } else if (isa<ttng::TMEMCopyOp>(op)) {
     return ttng::getModuleTwoCTAs(op);
   } else if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
@@ -57,20 +82,6 @@ bool isPreAllocAliasSliceFilter(const AllocationSlice &lhsSlice,
   return bufferId != Allocation::InvalidBufferId &&
          bufferId == rhsSlice.getBufferId() &&
          allocation->isExplicitBuffer(bufferId);
-}
-
-bool hasUnresolvedCrossClusterDependency(const BlockInfo &blockInfo) {
-  auto hasDistributedDependency = [](const BlockInfo::SliceMapT &slices,
-                                     bool isRead) {
-    for (const auto &sliceAndOps : slices)
-      for (Operation *depOp : sliceAndOps.second)
-        if (isDistributedMultiCTAOp(depOp, isRead))
-          return true;
-    return false;
-  };
-
-  return hasDistributedDependency(blockInfo.syncReadSlices, /*isRead=*/true) ||
-         hasDistributedDependency(blockInfo.syncWriteSlices, /*isRead=*/false);
 }
 
 bool valueAliasesTrackedBuffers(Value value,

@@ -447,6 +447,39 @@ private:
           mlir::ceil<unsigned>(shape[rank - 2], dpasCap.repeatCount));
       unsigned maxNumWarpsAlongN = clampToPowerOfTwo(
           mlir::ceil<unsigned>(shape[rank - 1], dpasCap.executionSize));
+
+      // Distribute \p warps over the batch dimension (if any) and return the
+      // number of warps left to distribute over the M and N dimensions.
+      auto assignBatchWarps = [&](unsigned warps) {
+        if (rank == 2)
+          return warps;
+        unsigned batch = static_cast<unsigned>(std::max<int64_t>(shape[0], 1));
+        ret[0] = std::min(clampToPowerOfTwo(batch), warps);
+        return mlir::ceil<unsigned>(warps, ret[0]);
+      };
+
+      // When the chain runs through operand A, N is the K dimension of the
+      // consumer dot, so distributing warps along N forces the intermediate
+      // result to be exchanged between warps through shared memory on every
+      // iteration of the enclosing loop. If M cannot hold more than one warp
+      // (e.g. M == 1 for attention decode) there is nothing to trade: keep the
+      // warps on the batch and M dimensions, because duplicating the
+      // computation is cheaper than that exchange.
+      //
+      // The mirrored case (a chain through operand B, whose M is the K
+      // dimension of the consumer dot) has the same defect but is deliberately
+      // left alone: there the degenerate dimension is N, and a chain with a
+      // narrow N can still have a large M. Moving the warps onto N would
+      // duplicate all but one of them and forfeit that M parallelism to save a
+      // per-iteration exchange -- measured 1.6x to 7.6x slower for N == 16,
+      // M == 128, growing with the warp count. Trading the exchange against the
+      // parallelism it costs needs a cost model rather than this guard.
+      if (chainedDotKind == ChainedDotKind::ChainedAlongA &&
+          maxNumWarpsAlongM == 1) {
+        ret[rank - 2] = assignBatchWarps(numWarps);
+        return ret;
+      }
+
       if (chainedDotKind == ChainedDotKind::ChainedAlongA) {
         ret[rank - 2] = std::min(maxNumWarpsAlongM, numWarps);
         ret[rank - 1] = std::min(maxNumWarpsAlongN,
@@ -459,13 +492,8 @@ private:
 
       unsigned numWarpsUsed = ret[rank - 1] * ret[rank - 2];
       if (numWarpsUsed < numWarps) {
-        unsigned remainingWarps = mlir::ceil<unsigned>(numWarps, numWarpsUsed);
-        if (rank > 2) {
-          unsigned batch =
-              static_cast<unsigned>(std::max<int64_t>(shape[0], 1));
-          ret[0] = std::min(clampToPowerOfTwo(batch), remainingWarps);
-          remainingWarps = mlir::ceil<unsigned>(remainingWarps, ret[0]);
-        }
+        unsigned remainingWarps =
+            assignBatchWarps(mlir::ceil<unsigned>(numWarps, numWarpsUsed));
 
         // Put remaining parallelism on the non-chained dot dimension.
         if (chainedDotKind == ChainedDotKind::ChainedAlongA) {

@@ -375,6 +375,7 @@ class CMakeBuild(build_ext):
             "TRITON_ROCPROFILER_SDK_INCLUDE_PATH",
             "TRITON_ROCPROFILER_SDK_LIB_PATH",
             "TRITON_NVDISASM_PATH",
+            "TRITON_AMD_CODEGEN_PATH",
             "TRITON_PTXAS_PATH",
             "TRITON_PTXAS_BLACKWELL_PATH",
         ]
@@ -607,7 +608,7 @@ def get_triton_version_suffix():
 
 
 # keep it separate for easy substitution
-TRITON_VERSION = "3.8.0" + get_triton_version_suffix()
+TRITON_VERSION = "3.9.0" + get_triton_version_suffix()
 
 # Dynamically define supported Python versions and classifiers
 MIN_PYTHON = (3, 10)

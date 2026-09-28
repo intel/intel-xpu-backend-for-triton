@@ -23,6 +23,9 @@ concurrency:
 
 jobs:
   build-wheel:
+    permissions:
+      contents: read
+      id-token: write   # for Sigstore signing in the reusable wheel-build workflow
     uses: ./.github/workflows/build-benchmarks-wheel.yml
     with:
       python-version: "3.12"

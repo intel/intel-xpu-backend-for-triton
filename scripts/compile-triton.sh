@@ -187,7 +187,7 @@ build_triton() {
   fi
 
   # Install triton and its dependencies.
-  pip install -v -e '.[build,tests]'
+  pip install -v -e .
 }
 
 build() {
