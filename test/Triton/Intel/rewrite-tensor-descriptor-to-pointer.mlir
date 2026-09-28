@@ -238,10 +238,9 @@ module {
 // COM: forcing function here: a gather consumer never registers its descriptor as a
 // COM: candidate, so expansion is mandatory and cannot be dodged.
 // COM:
-// COM: Measured at base commit 495054198: hard error
-// COM:   'scf.if' op along control flow edge from Operation scf.yield to Operation
-// COM:   scf.if: region branch point has 7 operands, but region successor needs 1
-// COM:   inputs
+// COM: Fix witness: with legality decided on operands alone the `scf.if` stays
+// COM: legal and the verifier rejects the region-branch arity -- 7 yielded operands
+// COM: against 1 expected input.
 // COM:
 // COM: Post-fix, the widened 7-result `scf.if` is NOT observable in this output and
 // COM: must not be asserted: `scf.if` with side-effect-free arms canonicalizes to
@@ -298,13 +297,12 @@ module {
 // COM: `scf.if`, this shape does not merely mis-convert: the pass walks the region
 // COM: while it is transiently empty.
 // COM:
-// COM: Measured at base commit 495054198: triton-opt aborts on the assertion
-// COM:   triton-opt: mlir/include/mlir/IR/OpDefinition.h:920:
-// COM:   mlir::Block *mlir::OpTrait::SingleBlock<mlir::scf::ForOp>::getBody(unsigned)
-// COM:   Assertion `!region.empty() && "unexpected empty region"' failed.
-// COM: Because the process aborts, this chunk kills the whole -split-input-file
-// COM: run at base -- other chunks in this file cannot be observed until it is
-// COM: fixed. @for_load below is the control that isolates the trigger.
+// COM: Fix witness: the provenance walk reaches the loop body while it is
+// COM: transiently empty and aborts on `SingleBlock<scf::ForOp>::getBody`'s
+// COM: "unexpected empty region". Being a process abort, it takes the whole
+// COM: -split-input-file run down with it, so no other chunk in this file can be
+// COM: observed while it is broken. @for_load below is the control that isolates
+// COM: the trigger.
 // COM:
 // COM: As with @if_gather, the expanded loop is NOT observable post-fix and must not
 // COM: be asserted: every one of the 7 components is loop-invariant here (the yield
@@ -347,7 +345,7 @@ module {
 // COM: consumer is `tt.descriptor_load`, so the descriptor stays a candidate, the
 // COM: loop is never converted, and nothing crashes. This is what proves the
 // COM: #8167 crash needs the ForOp to be *converted*, not merely to carry a
-// COM: descriptor iter-arg. It is green at base and must stay green.
+// COM: descriptor iter-arg. Regression guard: green before and after the fix.
 // COM:
 // COM: Note the `scf.for` is absent from the output: with the descriptor left
 // COM: alone the loop becomes trivially loop-invariant and the `--canonicalize` in
@@ -383,8 +381,9 @@ module {
 // COM: `tt.call` has no descriptor-typed operand, so the operands-only predicate
 // COM: rules it legal while the callee signature is rewritten underneath it.
 // COM:
-// COM: Measured at base commit 495054198: hard error
-// COM:   'tt.call' op incorrect number of results for callee
+// COM: Fix witness: the call site keeps its 1-result signature while the callee is
+// COM: rewritten to 7, and the verifier reports "incorrect number of results for
+// COM: callee".
 // COM:
 // COM: This is the ONE case of the three where the widened arity really is
 // COM: observable -- a `tt.call` has no region for `--canonicalize` to collapse, so
@@ -452,10 +451,10 @@ module {
 // COM: descriptor and the out-of-bounds fill becomes
 // COM: `arith.select %padFlag, NaN_splat, zero_splat` feeding `tt.load`'s `other`.
 // COM:
-// COM: Measured at base commit 495054198: WRONG-BUT-GREEN. The pass is a no-op --
-// COM: `tt.make_tensor_descriptor` (x2) and `tt.descriptor_load` all survive, so
-// COM: the load stays on the descriptor-native route and the silent PAD_ZERO
-// COM: degradation happens downstream.
+// COM: Fix witness: without the fix the pass is a no-op on this shape -- both
+// COM: `tt.make_tensor_descriptor`s and the `tt.descriptor_load` survive, tripping
+// COM: the CHECK-NOTs below, and the load stays on the descriptor-native route
+// COM: where the silent PAD_ZERO degradation happens downstream.
 // COM:
 // COM: Post-fix the `scf.if` is gone (side-effect-free arms canonicalize to
 // COM: per-result selects) and the fill really is a runtime select, but NOTE THE
@@ -506,8 +505,8 @@ module {
 // COM: by the transient-empty-region window, so if this case regresses the cause
 // COM: is the padding decision itself and nothing else.
 // COM:
-// COM: Measured at base commit 495054198: WRONG-BUT-GREEN -- pass is a no-op, both
-// COM: `tt.make_tensor_descriptor` and the `tt.descriptor_load` survive.
+// COM: Fix witness: as above, the pass is a no-op on this shape without the fix, so
+// COM: the surviving descriptor ops trip the CHECK-NOTs below.
 // COM:
 // COM: Post-fix output is identical to @if_divergent_padding's, down to the operand
 // COM: order of the fill select -- which is itself the useful signal: a region op and
@@ -551,7 +550,7 @@ module {
 // COM: passes. The distinct base pointers (%arg0 vs %arg1) only make the two
 // COM: producers visibly independent.
 // COM:
-// COM: Measured at base commit 495054198: GREEN, and must stay green.
+// COM: Regression guard: green before and after the fix.
 module {
   tt.func public @if_consistent_padding(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %cond: i1) -> tensor<128x128xf32> {
     %c1_i64 = arith.constant 1 : i64
@@ -591,8 +590,8 @@ module {
 // COM: zero `scf.for` coverage before -- which is why both #8102 and #8167 survived
 // COM: here undetected.
 // COM:
-// COM: Measured at base commit 495054198: WRONG-BUT-GREEN -- pass is a no-op, both
-// COM: `tt.make_tensor_descriptor` and the in-loop `tt.descriptor_load` survive.
+// COM: Fix witness: without the fix the pass is a no-op here, so both
+// COM: `tt.make_tensor_descriptor`s and the in-loop `tt.descriptor_load` survive.
 // COM:
 // COM: This is the one case in the file where the expanded loop survives
 // COM: `--canonicalize`, and the surviving shape is much more interesting than the
@@ -673,8 +672,8 @@ module {
 // COM: would then be expected to stay a `tt.descriptor_load`. Do not "fix" it by
 // COM: relaxing the CHECKs; change it deliberately and say why.
 // COM:
-// COM: Measured at base commit 495054198: WRONG-BUT-GREEN -- pass is a no-op, the
-// COM: shared producer and both `tt.descriptor_load`s survive.
+// COM: Fix witness: without the fix the pass is a no-op -- the shared producer and
+// COM: both `tt.descriptor_load`s survive.
 module {
   tt.func public @if_divergent_padding_shared_producer(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %cond: i1) -> (tensor<128x128xf32>, tensor<128x128xf32>) {
     %c1_i64 = arith.constant 1 : i64
@@ -721,10 +720,10 @@ module {
 // COM: leaks a `builtin.unrealized_conversion_cast`. Closing the eviction over %s2
 // COM: evicts %dC too, so both loads are expanded.
 // COM:
-// COM: Measured on a pre-branch binary (no #8102 work at all): the old #8102
-// COM: behaviour -- all three `tt.make_tensor_descriptor`s, both selects and both
-// COM: `tt.descriptor_load`s survive. The cast leak itself comes from d7a857133 on
-// COM: this branch and was not measured separately.
+// COM: Fix witness: without the closure all three `tt.make_tensor_descriptor`s, both
+// COM: selects and both `tt.descriptor_load`s survive. The leaked cast is the second
+// COM: symptom, reachable only once the eviction is partial, which is why the
+// COM: CHECK-NOTs below pin both.
 module {
   tt.func public @select_shared_producer_chain(%a: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %b: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %c: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %p: i1, %q: i1, %o: i32) -> (tensor<128x128xf32>, tensor<128x128xf32>) {
     %c1_i64 = arith.constant 1 : i64
@@ -769,8 +768,8 @@ module {
 // COM: accesses become `tt.load`s. Neither descriptor asks for PAD_NAN, so both
 // COM: fills are plain zero splats.
 // COM:
-// COM: Measured on a pre-branch binary: triton-opt aborts (exit 134) on
-// COM: `SingleBlock<scf::ForOp>::getBody` "unexpected empty region".
+// COM: Fix witness: without the region-less guard the provenance walk aborts on
+// COM: `SingleBlock<scf::ForOp>::getBody`'s "unexpected empty region".
 module {
   tt.func public @for_mixed_gather_load(%a: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %b: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %n: i32) -> (tensor<32x128xf32>, tensor<128x128xf32>) {
     %c1_i64 = arith.constant 1 : i64
@@ -815,9 +814,8 @@ module {
 // COM: its provenance is divergent and the load is expanded. The padding flag is
 // COM: carried through the loop, entering as false (PAD_ZERO) and yielded as true.
 // COM:
-// COM: Measured on a pre-branch binary: triton-opt aborts (exit 134) on
-// COM: `SingleBlock<scf::ForOp>::getBody` "unexpected empty region". See
-// COM: @for_zero_trip_divergent_padding in
+// COM: Fix witness: the same "unexpected empty region" abort as @for_mixed_gather_load
+// COM: without the region-less guard. See @for_zero_trip_divergent_padding in
 // COM: test/TritonIntelGPU/find-defining-op-loops.mlir for the TTGIR side.
 module {
   tt.func @for_zero_trip_divergent_padding(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %pitch: i64 {tt.divisibility = 16 : i32}, %n: i32) -> tensor<64x32xf16> {
@@ -866,11 +864,9 @@ module {
 // COM: splat (no select), because the load's own provenance is exactly %dN, and
 // COM: the pointer is %arg1, %dN's base.
 // COM:
-// COM: Measured on a pre-branch binary: the verifier fails with "'scf.while' op
-// COM: along control flow edge from Operation scf.condition to Operation
-// COM: scf.while: region branch point has 7 operands, but region successor needs
-// COM: 1 inputs". See @while_condition_padding in
-// COM: test/TritonIntelGPU/find-defining-op-loops.mlir for the TTGIR side.
+// COM: Fix witness: the verifier rejects the scf.while region-branch arity -- 7
+// COM: `scf.condition` operands against 1 expected input. See @while_condition_padding
+// COM: in test/TritonIntelGPU/find-defining-op-loops.mlir for the TTGIR side.
 module {
   tt.func @while_condition_padding(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %pitch: i64 {tt.divisibility = 16 : i32}, %c: i1) -> tensor<64x32xf16> {
     %c0_i32 = arith.constant 0 : i32
@@ -901,3 +897,81 @@ module {
 // CHECK-NOT: tt.descriptor_load
 // CHECK: %[[V:.*]] = tt.load %{{.*}}, %{{.*}}, %[[NAN]] : tensor<64x32x!tt.ptr<f16>>
 // CHECK: tt.return %[[V]] :
+
+// -----
+
+// COM: An untraceable descriptor evicts the group it shares an op with (#8170).
+// COM: `%arg` is a function parameter, so findDescriptorDefinitions returns nothing
+// COM: for it. That already makes this `tt.return` illegal, while `%dC` -- reached
+// COM: directly by a load -- stayed a candidate, and an empty trace contributes no
+// COM: producer for the closure to spread from. With `buildMaterializations = false`
+// COM: the two paths cannot meet on one op.
+// COM:
+// COM: Fix witness: without the eviction the pass exits 0 but leaks
+// COM: `%1:7 = builtin.unrealized_conversion_cast %0 : !tt.tensordesc<128x128xf32> to
+// COM: !tt.ptr<f32>, i64, i64, i64, i64, i1, i1` -- hence the CHECK-NOT.
+module {
+  tt.func private @f(%arg: !tt.tensordesc<128x128xf32>, %c: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %o: i32) -> (tensor<128x128xf32>, !tt.tensordesc<128x128xf32>, !tt.tensordesc<128x128xf32>) attributes {noinline = true} {
+    %c1_i64 = arith.constant 1 : i64
+    %c256_i64 = arith.constant 256 : i64
+    %c256_i32 = arith.constant 256 : i32
+    %dC = tt.make_tensor_descriptor %c, [%c256_i32, %c256_i32], [%c256_i64, %c1_i64] {padding = 1 : i32} : <f32>, <128x128xf32>
+    %l = tt.descriptor_load %dC[%o, %o] : !tt.tensordesc<128x128xf32> -> tensor<128x128xf32>
+    tt.return %l, %dC, %arg : tensor<128x128xf32>, !tt.tensordesc<128x128xf32>, !tt.tensordesc<128x128xf32>
+  }
+}
+
+// CHECK-LABEL: @f
+// CHECK-NOT: unrealized_conversion_cast
+// CHECK-NOT: tt.make_tensor_descriptor
+// CHECK-NOT: tt.descriptor_load
+// CHECK: %[[V:.*]] = tt.load
+// CHECK-NOT: unrealized_conversion_cast
+// CHECK-NOT: tt.tensordesc
+// CHECK: tt.return
+
+// -----
+
+// COM: The same hole on an `arith.select` (#8170): `%s` merges the candidate %dC with
+// COM: the untraceable parameter %arg, so the select is illegal while %dC stays a
+// COM: candidate. Two independent fixes are needed to get here.
+// COM:
+// COM: Fix witness 1 (AxisInfoAnalysisExt::setToEntryState): the select never reaches
+// COM: the legality check, because the gather/scatter pre-pass' AxisInfo aborts on it
+// COM: first -- MakeTensorDescOpAxisInfoVisitor gives %dC rank 2 while %arg is seeded
+// COM: at rank 1, and joining the two trips AxisInfo::join's "Mismatched ranks". Being
+// COM: a process abort it takes the whole -split-input-file run down with it.
+// COM:
+// COM: Fix witness 2 (the eviction): %dC otherwise stays a candidate while the select
+// COM: is illegal, and with `buildMaterializations = false` the two paths cannot meet
+// COM: on one op.
+// COM:
+// COM: %arg carries its padding as a runtime i1, so the merged descriptor's fill is a
+// COM: runtime select between NaN and zero. The load fed by %dC alone keeps its
+// COM: compile-time zero: the eviction costs the fast path, not the fill.
+module {
+  tt.func public @g(%arg: !tt.tensordesc<128x128xf32>, %c: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %p: i1, %o: i32) -> (tensor<128x128xf32>, tensor<128x128xf32>) {
+    %c1_i64 = arith.constant 1 : i64
+    %c256_i64 = arith.constant 256 : i64
+    %c256_i32 = arith.constant 256 : i32
+    %dC = tt.make_tensor_descriptor %c, [%c256_i32, %c256_i32], [%c256_i64, %c1_i64] {padding = 1 : i32} : <f32>, <128x128xf32>
+    %l = tt.descriptor_load %dC[%o, %o] : !tt.tensordesc<128x128xf32> -> tensor<128x128xf32>
+    %s = arith.select %p, %dC, %arg : !tt.tensordesc<128x128xf32>
+    %l2 = tt.descriptor_load %s[%o, %o] : !tt.tensordesc<128x128xf32> -> tensor<128x128xf32>
+    tt.return %l, %l2 : tensor<128x128xf32>, tensor<128x128xf32>
+  }
+}
+
+// CHECK-LABEL: @g
+// CHECK: %[[ZERO:.*]] = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
+// CHECK: %[[NAN:.*]] = arith.constant dense<0x7FC00000> : tensor<128x128xf32>
+// CHECK-NOT: unrealized_conversion_cast
+// CHECK-NOT: tt.make_tensor_descriptor
+// CHECK-NOT: tt.descriptor_load
+// CHECK: %[[V0:.*]] = tt.load %{{.*}}, %{{.*}}, %[[ZERO]] : tensor<128x128x!tt.ptr<f32>>
+// CHECK: %[[PAD:.*]] = arith.select %{{.*}}, %false, %{{.*}} : i1
+// CHECK: %[[FILL:.*]] = arith.select %[[PAD]], %[[NAN]], %[[ZERO]] : tensor<128x128xf32>
+// CHECK: tt.load %{{.*}}, %{{.*}}, %[[FILL]] : tensor<128x128x!tt.ptr<f32>>
+// CHECK-NOT: unrealized_conversion_cast
+// CHECK-NOT: tt.descriptor_load
+// CHECK: tt.return %[[V0]],

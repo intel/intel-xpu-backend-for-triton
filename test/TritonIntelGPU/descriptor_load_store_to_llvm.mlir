@@ -845,9 +845,8 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 // COM: Issue #8102 -- the padding comes from provenance when the load carries no
 // COM: `ttig.desc_padding` attribute. The defining `tt.make_tensor_descriptor`
 // COM: ops are traceable and agree on PAD_NAN, so the out-of-bounds fill must be
-// COM: NaN. Before the fix the lowering read "no attribute" as PAD_ZERO and filled
-// COM: with 0.0 here. Measured on a pre-fix build: this case fails on the FILL
-// COM: constant.
+// COM: NaN. Fix witness: without the provenance fallback the lowering reads "no
+// COM: attribute" as PAD_ZERO and the FILL constant below is 0.0.
 // COM:
 // COM: The shape [5,5] is not divisible by the 4x4 block, so the load is
 // COM: predicated and the fill really is the value of the masked-off lanes. The
@@ -884,8 +883,8 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // COM: Issue #8102 -- single-producer variant of the case above: one
 // COM: `tt.make_tensor_descriptor` with PAD_NAN and no `ttig.desc_padding`
-// COM: attribute. Measured on a pre-fix build: this was also silently lowered
-// COM: to a 0.0 fill, so the bug did not need divergence or a merge to show.
+// COM: attribute. Fix witness: this too gets a 0.0 fill without the fallback, so
+// COM: the bug needs neither divergence nor a merge to show.
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
 

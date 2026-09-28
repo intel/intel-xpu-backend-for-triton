@@ -372,6 +372,23 @@ AxisInfoAnalysisExt::loadAnalysis(DataFlowSolver *solver) {
   return solver->load<AxisInfoAnalysisExt>();
 }
 
+void AxisInfoAnalysisExt::setToEntryState(
+    dataflow::Lattice<AxisInfo> *lattice) {
+  // MakeTensorDescOpAxisInfoVisitor gives a descriptor one axis per block
+  // dimension, but a descriptor is not a shaped type, so upstream's pessimistic
+  // state gives it rank 1. Any join of the two ranks -- an `arith.select`
+  // merging a MakeTensorDescOp with a descriptor function parameter -- then
+  // trips AxisInfo::join's rank assertion. Seed descriptors at the visitor's
+  // rank so the two agree (#8170).
+  Value value = lattice->getAnchor();
+  if (auto descTy = dyn_cast<triton::TensorDescType>(value.getType())) {
+    AxisInfo::DimVectorT ones(descTy.getBlockType().getRank(), 1);
+    propagateIfChanged(lattice, lattice->join(AxisInfo(ones, ones, ones)));
+    return;
+  }
+  triton::AxisInfoAnalysis::setToEntryState(lattice);
+}
+
 //===----------------------------------------------------------------------===//
 // ModuleAxisInfoAnalysis
 //===----------------------------------------------------------------------===//

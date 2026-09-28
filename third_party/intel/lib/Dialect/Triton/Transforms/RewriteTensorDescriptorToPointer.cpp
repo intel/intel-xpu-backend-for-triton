@@ -1394,21 +1394,32 @@ class TritonRewriteTensorDescriptorToPointerPass
 
       // Legality is decided per op over all of its descriptor-typed operands
       // and results, so their producers form one group that must be converted
-      // together. An empty trace adds nothing to the group, so a producer
-      // that shares an op only with an untraceable value is not dragged
-      // along (#8170).
+      // together.
       llvm::SmallSetVector<triton::MakeTensorDescOp, 4> group;
+      bool hasUntraceable = false;
       auto addDefs = [&](Value v) {
         if (!isa<triton::TensorDescType>(v.getType()))
           return;
-        for (triton::MakeTensorDescOp d :
-             triton::intel::findDescriptorDefinitions(v))
+        triton::intel::DescriptorDefinitions defs =
+            triton::intel::findDescriptorDefinitions(v);
+        if (defs.empty()) {
+          hasUntraceable = true;
+          return;
+        }
+        for (triton::MakeTensorDescOp d : defs)
           group.insert(d);
       };
       for (Value operand : op->getOperands())
         addDefs(operand);
       for (Value result : op->getResults())
         addDefs(result);
+      // An untraceable descriptor contributes no producer, so the closure below
+      // has nothing to spread from -- yet it already makes this op illegal
+      // (`tracesToCandidates` is false for an empty trace), leaving the op
+      // converted around producers that stay unconverted. Mirror the predicate:
+      // evict the group outright (#8170).
+      if (hasUntraceable)
+        unhandledMakeTensorDescOps.insert(group.begin(), group.end());
       if (group.size() > 1)
         descGroups.push_back(std::move(group));
       return WalkResult::advance();

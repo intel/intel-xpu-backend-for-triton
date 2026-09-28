@@ -107,13 +107,24 @@ public:
 
   void runOnOperation() override {
     ModuleOp mod = getOperation();
+    MLIRContext *context = &getContext();
+
+    // Padding propagation does not depend on 2D block I/O and must run even
+    // when the gate below closes: the generic masked lowering reads
+    // `ttig.desc_padding` and treats its absence as PAD_ZERO, so without this a
+    // PAD_NAN descriptor gets a zero fill on a target lacking the capability
+    // (#8102).
+    mod.walk(
+        [&](tt::DescriptorLoadOp op) { propagateDescPadding(op, context); });
+    mod.walk(
+        [&](tt::DescriptorStoreOp op) { propagateDescPadding(op, context); });
+
     if (!mod->hasAttr(
             ttgi::TritonIntelGPUDialect::getSupport2DBlockIOAttrName()))
       return;
 
     tt::intel::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
     tt::intel::ModuleStrideAnalysis strideAnalysis(mod, axisInfoAnalysis);
-    MLIRContext *context = &getContext();
     mod.walk([&](tt::LoadOp op) {
       visit(op, axisInfoAnalysis, strideAnalysis, context);
     });
@@ -129,6 +140,20 @@ public:
   }
 
 private:
+  // Record the descriptor's out-of-bounds fill mode on `op`, so the LLVM
+  // lowering can still read it once the defining MakeTensorDescOp has been
+  // converted. Stamps nothing when provenance is untraceable or disagrees --
+  // consistentPadding() is nullopt for both, and the lowering handles them.
+  template <typename OpType>
+  void propagateDescPadding(OpType op, MLIRContext *context) const {
+    std::optional<tt::PaddingOption> padding =
+        tt::intel::findDescriptorDefinitions(op.getDesc()).consistentPadding();
+    if (!padding)
+      return;
+    op->setAttr(ttgi::TritonIntelGPUDialect::getDescPaddingAttrName(),
+                tt::PaddingOptionAttr::get(context, *padding));
+  }
+
   // Visit method for descriptor operations
   void visit(tt::DescriptorLoadOp op,
              tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis,
@@ -158,22 +183,13 @@ private:
       return;
     }
 
-    std::optional<tt::PaddingOption> padding = defs.consistentPadding();
-    if (!padding) {
+    // A 2D block load carries one compile-time fill value, so candidates that
+    // disagree cannot take this path. `ttig.desc_padding` is stamped by
+    // propagateDescPadding, ahead of this pass' capability gate, not here.
+    if (!defs.consistentPadding()) {
       LDBG("Inconsistent padding across candidates");
       return;
     }
-
-    // Propagate padding from MakeTensorDescOp unconditionally so the LLVM
-    // lowering can read it even after MakeTensorDescOp has been converted
-    // in the same applyPartialConversion phase.
-    //
-    // This must stay ahead of the shape check below: the generic gather
-    // lowering reads this attribute without checking block_io and defaults to
-    // PAD_ZERO when it is absent, so bailing earlier would silently turn a
-    // PAD_NAN descriptor's out-of-bounds fill into zeros.
-    op->setAttr(ttgi::TritonIntelGPUDialect::getDescPaddingAttrName(),
-                tt::PaddingOptionAttr::get(context, *padding));
 
     // Take the rank from the shape operands rather than the descriptor type:
     // the stride indexing below subscripts EVERY candidate at rank-1/rank-2,

@@ -168,10 +168,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 // COM: absent because consistentShape() returned nullopt, not because of an
 // COM: unrelated base-width failure.
 // COM:
-// COM: This is the case that pins the ordering constraint in visitDescriptor:
-// COM: the padding stamp must precede the shape bail. Hoisting consistentShape()
-// COM: above it would drop ttig.desc_padding here and silently turn a PAD_NAN
-// COM: descriptor's out-of-bounds fill into zeros.
+// COM: This case pins padding propagation being independent of the block-IO
+// COM: decision: ttig.desc_padding is stamped by its own walk, so folding the
+// COM: stamp back into visitDescriptor would drop it here and silently turn a
+// COM: PAD_NAN descriptor's out-of-bounds fill into zeros.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
@@ -201,10 +201,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // COM: Rank-0 descriptor. `rank` is unsigned, so before the `rank < 2` guard
 // COM: this fell through to `rank - 1` / `rank - 2` and indexed the shape and
-// COM: stride operand ranges far out of bounds. Verified against ac39409b1:
-// COM: triton-opt aborts (exit 134) on OperandRange::operator[]'s
-// COM: `Index < size()` assertion, so under NDEBUG this is an out-of-bounds
-// COM: read, not merely an unsigned wrap. A 0-D descriptor is representable:
+// COM: stride operand ranges far out of bounds. Fix witness: without the guard this
+// COM: trips OperandRange::operator[]'s `Index < size()` assertion, so under NDEBUG
+// COM: it is an out-of-bounds read, not merely an unsigned wrap. A 0-D descriptor
+// COM: is representable:
 // COM: the type is a dimension list plus a scalar element type, and an empty
 // COM: dimension list parses.
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
@@ -223,9 +223,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 // COM: %r is %dZ (PAD_ZERO) on a zero-trip loop and %dN (PAD_NAN) otherwise, so its
 // COM: provenance is divergent and consistentPadding() stamps nothing.
 // COM:
-// COM: Measured on a pre-branch binary: the provenance followed only the yield, so
-// COM: the load was stamped `{ttig.block_io = "row_major", ttig.desc_padding = 2 : i32}`,
-// COM: i.e. a zero-trip loop would fill out-of-bounds elements with NaN instead of 0.
+// COM: Fix witness: following only the yield stamps `ttig.desc_padding = 2 : i32`
+// COM: (PAD_NAN), so a zero-trip loop fills out-of-bounds elements with NaN instead
+// COM: of 0.
 // COM:
 // COM: As in @if_divergent_padding, the ` :` immediately after the indices on the
 // COM: same line proves the load carries no attribute dictionary, hence neither
@@ -258,9 +258,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 // COM: after-region yield (0fa440764). %r is always %dN (PAD_NAN); the PAD_ZERO %dZ
 // COM: only re-enters the before region, so the load must be stamped PAD_NAN.
 // COM:
-// COM: Measured on a pre-branch binary: the provenance followed the after-region
-// COM: yield (%dZ), so the load was stamped `ttig.desc_padding = 1 : i32` and a
-// COM: PAD_NAN descriptor would have been filled with zeros.
+// COM: Fix witness: following the after-region yield (%dZ) stamps
+// COM: `ttig.desc_padding = 1 : i32`, filling a PAD_NAN descriptor with zeros.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
