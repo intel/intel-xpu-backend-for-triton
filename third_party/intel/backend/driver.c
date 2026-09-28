@@ -1539,11 +1539,30 @@ extern "C" EXPORT_FUNC PyObject *launch(PyObject *args) {
   if (kernel_info == nullptr)
     return NULL;
 
+  // A rejected submit throws `sycl::exception` on this thread. It must not
+  // unwind out of the ctypes entry point, where it would reach
+  // `std::terminate` and abort the process; report it as `IntelGPUError`
+  // instead, like the Level Zero failures in `load_binary`.
+  bool launchFailed = false;
+  std::string launchError;
   Py_BEGIN_ALLOW_THREADS;
-  sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp,
-                     shared_memory, stream, kernel_info, global_scratch,
-                     profile_scratch, num_params, params, extractor_data);
+  try {
+    sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp,
+                       shared_memory, stream, kernel_info, global_scratch,
+                       profile_scratch, num_params, params, extractor_data);
+  } catch (const std::exception &e) {
+    launchFailed = true;
+    launchError = e.what();
+  }
   Py_END_ALLOW_THREADS;
+
+  if (launchFailed) {
+    PyObject *exc_class = getIntelGPUErrorClass();
+    PyErr_Format(exc_class ? exc_class : PyExc_RuntimeError,
+                 "Error during Intel kernel launch: %s", launchError.c_str());
+    PyBuffer_Release(&signature);
+    return NULL;
+  }
 
   if (PyErr_Occurred()) {
     PyBuffer_Release(&signature);

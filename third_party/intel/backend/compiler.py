@@ -283,6 +283,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         ret = BaseBackend.parse_attr(desc)
         if "N" in desc:
             ret += [["tt.padding", 1]]
+        if "T" in desc:
+            ret += [["tt.round_f32_to_tf32", 1]]
         # Shape divisibility: S<dim>D<divisor> (e.g., S0D128)
         import re
         for match in re.finditer(r'S(\d+)D(\d+)', desc):
@@ -303,10 +305,12 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
     @staticmethod
     def get_tensordesc_specialization(arg, **kwargs):
-        # Format: "N" (padding) + "S<dim>D<divisor>" (shape divisibility)
+        # Format: "N" (padding) + "T" (tf32 rounding) + "S<dim>D<divisor>" (shape divisibility)
         key = ""
         if getattr(arg, "padding", None) == "nan":
             key += "N"
+        if getattr(arg, "round_f32_to_tf32", False):
+            key += "T"
         # A cap of 4 is enough for the 2D block I/O alignment check, but collapsing a
         # unit dim of a rank-3 descriptor needs shape[i] % block_shape[i] == 0, so for
         # that shape cap at the block extent instead (issues/7679).
@@ -646,6 +650,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if total_num_warps is not None:
             metadata["num_warps"] = total_num_warps
         metadata["threads_per_warp"] = intel.get_threads_per_warp(src)
+        metadata["warp_size"] = metadata["threads_per_warp"]
         metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size")
         metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment")
         metadata["profile_scratch_size"] = src.get_int_attr("ttg.profile_scratch_memory_size") or 0
@@ -663,9 +668,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     @track
     def make_spv(cls, src, metadata, options):
         driver_version = metadata["target"].arch.get("driver_version")
-        is_lts = cls.is_lts(driver_version)
-        os.environ["INTEL_XPU_BACKEND_IS_LTS"] = "1" if is_lts else "0"
-        spirv, name = intel.translate_to_spirv(src, is_lts)
+        spirv, name = intel.translate_to_spirv(src, cls.is_lts(driver_version))
         metadata["name"] = name
         metadata.setdefault("build_flags", "")
         if options.grf_mode == '128':

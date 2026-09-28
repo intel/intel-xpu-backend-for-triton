@@ -1,7 +1,5 @@
 # Other
 
-tests/kernels/moe/test_batched_moe.py::test_fused_moe_batched_experts
-
 # Accuracy errors on BMG: https://github.com/intel/intel-xpu-backend-for-triton/issues/7813
 tests/kernels/moe/test_moe.py::test_fused_moe[True-True-dtype0-1-6-192-32768-2048-511]
 tests/kernels/moe/test_moe.py::test_fused_moe[True-True-dtype0-1-6-192-40000-1024-1024]
