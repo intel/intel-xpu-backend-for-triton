@@ -2073,6 +2073,9 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<SigmoidConversion>(typeConverter, benefit.getBenefit() + 10);
   patterns.add<ElementwiseOpConversion<arith::DivFOp, LLVM::FDivOp>>(
       typeConverter, axisInfoAnalysis, benefit);
+  // The default fp32 division is already approximate on Intel GPUs.
+  patterns.add<ElementwiseOpConversion<triton::ApproxDivFOp, LLVM::FDivOp>>(
+      typeConverter, axisInfoAnalysis, benefit);
   patterns.add<ElementwiseOpConversion<arith::MulFOp, LLVM::FMulOp>>(
       typeConverter, axisInfoAnalysis, benefit);
   patterns.add<ElementwiseOpConversion<arith::AddFOp, LLVM::FAddOp>>(
