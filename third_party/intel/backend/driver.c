@@ -619,19 +619,24 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
 
     // Report the numbers the gate acted on here, not later: the retry
     // overwrites `n_spills` below, so this is the only place the pre-retry
-    // spill is visible. A build failure enters this branch with an unknown
-    // `Spills` (bytes == -1) and no threshold involvement -- the prefix is what
-    // distinguishes the two.
-    if (debugEnabled)
-      std::cout << (firstBuildFailed ? "(I): Build failed for \""
-                                     : "(I): Detected spills for \"")
-                << kernel_name << "\", retrying with large GRF mode (spill "
-                << n_spills.getBytes()
-                << " B/hardware-thread = " << n_spills.slotsPerLane()
-                << " dword-equivalents/lane at SIMD"
-                << n_spills.getSubgroupSize() << ", rebuild at "
-                << kRebuildSpillBytesPerThread << " B/hardware-thread)"
-                << std::endl;
+    // spill is visible. The build-failure path has no numbers to report -- it
+    // enters on `firstBuildFailed` with an unknown `Spills` (bytes == -1,
+    // SIMD 0) and never reaches the threshold -- so printing them there would
+    // only invite reading `-1 B at SIMD0` as a measurement.
+    if (debugEnabled) {
+      if (firstBuildFailed)
+        std::cout << "(I): Build failed for \"" << kernel_name
+                  << "\", retrying with large GRF mode" << std::endl;
+      else
+        std::cout << "(I): Detected spills for \"" << kernel_name
+                  << "\", retrying with large GRF mode (spill "
+                  << n_spills.getBytes()
+                  << " B/hardware-thread = " << n_spills.slotsPerLane()
+                  << " dword-equivalents/lane at SIMD"
+                  << n_spills.getSubgroupSize() << ", rebuild at "
+                  << kRebuildSpillBytesPerThread << " B/hardware-thread)"
+                  << std::endl;
+    }
 
     if (std::strcmp(resolvedDeviceArch, "cri") == 0) {
       build_flags.addXLargeGRFSizeFlag();

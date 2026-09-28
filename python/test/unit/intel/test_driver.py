@@ -87,8 +87,8 @@ def test_n_spills_reported_per_lane(device, monkeypatch, capfd, warp_size):
     selected = re.compile(r"Detected (\d+) spill bytes per hardware thread; "
                           r"n_spills (\d+) dword-equivalents/lane \(SIMD(\d+)\), "
                           r"rebuild at (\d+) B/hardware-thread")
-    # The "Detected spills for" prefix is load-bearing: "Build failed for" enters the
-    # same branch with bytes == -1 and no threshold involvement.
+    # Only the spill path logs numbers: the build-failure path enters the same branch
+    # with an unknown `Spills` and reaches neither the threshold nor this format.
     retried = re.compile(r"Detected spills for \"[^\"]*\", retrying with large GRF mode "
                          r"\(spill (\d+) B/hardware-thread = (\d+) dword-equivalents/lane "
                          r"at SIMD(\d+), rebuild at (\d+) B/hardware-thread\)")
