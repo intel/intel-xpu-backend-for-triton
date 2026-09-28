@@ -1,6 +1,17 @@
 ---
 description: 'Intel GPU hardware architecture: Xe generations, GRF modes, DPAS encoding, target capabilities, register pressure, compilation pipeline'
-applyTo: '**/TritonIntelGPUTransforms/**/*.cpp, **/TritonIntelGPUTransforms/**/*.h, **/Dialect/TritonIntelGPU/**/*.td, **/Dialect/TritonIntelGPU/**/*.cpp, **/Dialect/TritonIntelGPU/**/*.h, **/backend/compiler.py, **/backend/driver.c, **/backend/driver.py, **/Analysis/**/*.h, **/Analysis/**/*.cpp, **/Analysis/**/*.tpp'
+paths:
+  - "**/TritonIntelGPUTransforms/**/*.cpp"
+  - "**/TritonIntelGPUTransforms/**/*.h"
+  - "**/Dialect/TritonIntelGPU/**/*.td"
+  - "**/Dialect/TritonIntelGPU/**/*.cpp"
+  - "**/Dialect/TritonIntelGPU/**/*.h"
+  - "**/backend/compiler.py"
+  - "**/backend/driver.c"
+  - "**/backend/driver.py"
+  - "**/Analysis/**/*.h"
+  - "**/Analysis/**/*.cpp"
+  - "**/Analysis/**/*.tpp"
 ---
 
 # Intel GPU Hardware Architecture
