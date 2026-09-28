@@ -14,9 +14,6 @@ public:
   AxisInfoAnalysisExt(DataFlowSolver &solver);
 
   static triton::AxisInfoAnalysis *loadAnalysis(DataFlowSolver *solver);
-
-protected:
-  void setToEntryState(dataflow::Lattice<AxisInfo> *lattice) override;
 };
 
 /// Module level axis info analysis based on the call graph, assuming that we do
