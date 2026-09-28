@@ -1323,6 +1323,9 @@ def test_histogram_small_masked_input(bins, num_warps, device):
     layout = ttgl.BlockedLayout([1], [THREADS_PER_WARP], [num_warps], [0])
     compiled = kernel[(1, )](x, result, bins, layout, num_warps=num_warps)
     torch.testing.assert_close(result, expected, atol=0, rtol=0)
+    if is_xpu():
+        # XPU counts histograms with shared memory atomics, not warp ballots.
+        return
     assert "atomicrmw" not in compiled.asm["llir"]
     if num_warps == 1:
         assert compiled.metadata.shared == 0
