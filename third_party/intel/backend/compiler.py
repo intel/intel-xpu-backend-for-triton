@@ -149,13 +149,11 @@ def min_spill_slots_for_rebuild(threads_per_warp):
     """First spill that triggers the auto-large-GRF rebuild, in `n_spills`' own unit.
 
     8 dword-equivalents/lane at SIMD32, 16 at SIMD16 -- the same 1024 B per hardware
-    thread either way. An unknown width makes `spill_slots_per_lane` fall back to raw
-    bytes, so this falls back to the byte form of the same budget. Mirrors
+    thread either way. Converted by `spill_slots_per_lane` itself, so it shares that
+    unit and its raw-byte fallback for an unknown width. Mirrors
     `Spills::minSlotsForRebuild` in driver.c.
     """
-    if threads_per_warp <= 0:
-        return REBUILD_SPILL_BYTES_PER_THREAD
-    return REBUILD_SPILL_BYTES_PER_THREAD // 4 // threads_per_warp
+    return spill_slots_per_lane(REBUILD_SPILL_BYTES_PER_THREAD, threads_per_warp)
 
 
 def accepts_default_grf(spill_size, threads_per_warp, is_lts):
