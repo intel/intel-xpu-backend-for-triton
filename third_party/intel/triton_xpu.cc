@@ -113,6 +113,9 @@ void init_triton_intel_passes_ttgpuir(py::module_ &&m) {
               &gpu::intel::TritonAnnotateModuleOptions::support16BitAtomics)
       .def_rw("support_sigmoid",
               &gpu::intel::TritonAnnotateModuleOptions::supportSigmoid)
+      .def_rw("support_split_work_group_barrier",
+              &gpu::intel::TritonAnnotateModuleOptions::
+                  supportSplitWorkGroupBarrier)
       .def_rw("support_2d_block_io",
               &gpu::intel::TritonAnnotateModuleOptions::support2DBlockIO)
       .def_rw(

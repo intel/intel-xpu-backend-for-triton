@@ -14,10 +14,12 @@
 #include "mlir/Conversion/LLVMCommon/ConversionTarget.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Conversion/SPIRVToLLVM/SPIRVToLLVM.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/FunctionCallUtils.h"
 #include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
+#include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
 #include "mlir/Dialect/SPIRV/IR/TargetAndABI.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -664,6 +666,77 @@ namespace {
 //===----------------------------------------------------------------------===//
 // Synchronization
 //===----------------------------------------------------------------------===//
+
+// Check after layout lowering, which may have introduced workgroup barriers.
+static bool isSafeBetweenWorkgroupBarriers(Operation *op) {
+  if (isa<TritonGEN::MatrixDPASOp, TritonGEN::Matrix2DBlockLoadOp,
+          TritonGEN::Matrix2DBlockPrefetchOp, TritonGEN::PredicatedLoadOp,
+          LLVM::LoadOp, LLVM::StoreOp, UnrealizedConversionCastOp>(op))
+    return true;
+  if (auto call = dyn_cast<LLVM::CallOp>(op)) {
+    auto name = call.getCallee();
+    if (name == "_Z16get_sub_group_id" || name == "_Z12get_local_idj" ||
+        name == "llvm.exp2.f32" || name == "_Z27__spirv_ConvertFToBF16INTELf")
+      return true;
+    if ((name == "_Z27__spirv_GroupNonUniformFMaxiif" ||
+         name == "_Z27__spirv_GroupNonUniformFAddiif") &&
+        call.getNumOperands() == 3) {
+      APInt scope;
+      return matchPattern(call.getOperand(0), m_ConstantInt(&scope)) &&
+             scope == static_cast<unsigned>(spirv::Scope::Subgroup);
+    }
+    return false;
+  }
+  return isa<LLVM::LLVMDialect, arith::ArithDialect>(op->getDialect()) &&
+         op->getNumRegions() == 0 && !isa<LLVM::InlineAsmOp>(op) &&
+         isMemoryEffectFree(op);
+}
+
+static void lowerWorkgroupSplitBarriers(ModuleOp module) {
+  if (!module->hasAttr(intel::TritonIntelGPUDialect::
+                           getSupportSplitWorkGroupBarrierAttrName()))
+    return;
+  SmallVector<
+      std::pair<TritonGEN::SplitBarrierArriveOp, TritonGEN::SplitBarrierWaitOp>>
+      pairs;
+  module.walk([&](TritonGEN::SplitBarrierArriveOp arrive) {
+    if (!arrive.getWorkgroupCandidateAttr() || !arrive->hasOneUse())
+      return;
+    auto wait = dyn_cast<TritonGEN::SplitBarrierWaitOp>(*arrive->user_begin());
+    if (!wait || arrive->getBlock() != wait->getBlock() ||
+        !arrive->isBeforeInBlock(wait))
+      return;
+    for (Operation *op = arrive->getNextNode(); op != wait;
+         op = op->getNextNode())
+      if (!isSafeBetweenWorkgroupBarriers(op))
+        return;
+    pairs.emplace_back(arrive, wait);
+  });
+
+  IRRewriter rewriter(module.getContext());
+  auto emit = [&](Operation *op, StringRef name, spirv::MemorySemantics order) {
+    rewriter.setInsertionPoint(op);
+    TritonLLVMOpBuilder b(op->getLoc(), rewriter);
+    Value scope = b.i32_val(static_cast<int>(spirv::Scope::Workgroup));
+    auto semantics = order | spirv::MemorySemantics::WorkgroupMemory |
+                     spirv::MemorySemantics::CrossWorkgroupMemory;
+    Value memory = b.i32_val(static_cast<int>(semantics));
+    intel::LLVMFuncAttributeOptions attrs;
+    attrs.isConvergent = true;
+    attrs.isNoUnwind = true;
+    createDeviceFunctionCall(rewriter, name, void_ty(module.getContext()),
+                             {i32_ty, i32_ty, i32_ty}, {scope, scope, memory},
+                             {}, attrs);
+  };
+  for (auto [arrive, wait] : pairs) {
+    emit(arrive, "_Z33__spirv_ControlBarrierArriveINTELiii",
+         spirv::MemorySemantics::Release);
+    emit(wait, "_Z31__spirv_ControlBarrierWaitINTELiii",
+         spirv::MemorySemantics::Acquire);
+    rewriter.eraseOp(wait);
+    rewriter.eraseOp(arrive);
+  }
+}
 
 struct TritonSplitBarrierArriveLowering
     : public ConvertOpToLLVMPattern<TritonGEN::SplitBarrierArriveOp> {
@@ -1505,6 +1578,8 @@ struct ConvertTritonGENToLLVM
     LowerToLLVMOptions options(ctx);
     LLVMTypeConverter typeConverter(ctx, options);
     LLVMConversionTarget target(*ctx);
+
+    lowerWorkgroupSplitBarriers(getOperation());
 
     mlir::triton::gpu::intel::LibCallEmitter emitter;
 

@@ -79,6 +79,8 @@ def query_device_extensions(device_id: int):
         has_device_extension(device_id, "cl_intel_subgroup_matrix_multiply_accumulate"),
         "has_subgroup_matrix_multiply_accumulate_tensor_float32":
         has_device_extension(device_id, "cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32"),
+        "has_split_work_group_barrier":
+        has_device_extension(device_id, "cl_intel_split_work_group_barrier"),
         "has_2d_block_io":
         has_device_extension(device_id, "cl_intel_subgroup_2d_block_io"),
         "has_bfloat16_conversion":

@@ -354,3 +354,233 @@ llvm.func @triton_gen.sub_group_gather_load(%addrs: vector<32xi64>, %preds: vect
   %0 = triton_gen.sub_group_gather_load %addrs, %preds : (vector<32xi64>, vector<32xi1>) -> vector<1xi64>
   llvm.return %0 : vector<1xi64>
 }
+
+// -----
+
+// CHECK-DAG: llvm.func spir_funccc @_Z33__spirv_ControlBarrierArriveINTELiii(i32, i32, i32) attributes {convergent, no_unwind}
+// CHECK-DAG: llvm.func spir_funccc @_Z31__spirv_ControlBarrierWaitINTELiii(i32, i32, i32) attributes {convergent, no_unwind}
+module attributes {ttig.support_split_work_group_barrier, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: llvm.func @workgroup_split_barrier
+  // CHECK-NOT: intel_manageable_barrier
+  // CHECK: %[[SCOPE:.*]] = llvm.mlir.constant(2 : i32) : i32
+  // CHECK: %[[RELEASE:.*]] = llvm.mlir.constant(772 : i32) : i32
+  // CHECK: llvm.call spir_funccc @_Z33__spirv_ControlBarrierArriveINTELiii(%[[SCOPE]], %[[SCOPE]], %[[RELEASE]]) {{.*}}convergent{{.*}}no_unwind
+  // CHECK: %[[WAIT_SCOPE:.*]] = llvm.mlir.constant(2 : i32) : i32
+  // CHECK: %[[ACQUIRE:.*]] = llvm.mlir.constant(770 : i32) : i32
+  // CHECK: llvm.call spir_funccc @_Z31__spirv_ControlBarrierWaitINTELiii(%[[WAIT_SCOPE]], %[[WAIT_SCOPE]], %[[ACQUIRE]]) {{.*}}convergent{{.*}}no_unwind
+  // CHECK-NOT: intel_manageable_barrier
+  // CHECK: llvm.return
+  llvm.func @workgroup_split_barrier() {
+    %b = triton_gen.split_barrier_arrive {workgroup_candidate}
+    %c0 = llvm.mlir.constant(0 : i32) : i32
+    %bridge = builtin.unrealized_conversion_cast %c0 : i32 to i32
+    %sum = llvm.add %bridge, %c0 : i32
+    triton_gen.split_barrier_wait %b
+    llvm.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32} {
+  llvm.func @opaque()
+  llvm.func @escape(!llvm.ptr<3>)
+  // CHECK-LABEL: llvm.func @unsupported_workgroup_split_barrier
+  // CHECK-NOT: __spirv_ControlBarrierArriveINTEL
+  // CHECK: llvm.call spir_funccc @intel_manageable_barrier_init
+  // CHECK: llvm.call spir_funccc @intel_manageable_barrier_arrive
+  // CHECK: llvm.call spir_funccc @intel_manageable_barrier_wait
+  // CHECK: llvm.call spir_funccc @intel_manageable_barrier_release
+  // CHECK-NOT: __spirv_ControlBarrierWaitINTEL
+  // CHECK: llvm.return
+  llvm.func @unsupported_workgroup_split_barrier() {
+    %b = triton_gen.split_barrier_arrive {workgroup_candidate}
+    triton_gen.split_barrier_wait %b
+    llvm.return
+  }
+}
+
+// -----
+
+module attributes {ttig.support_split_work_group_barrier, "ttg.num-warps" = 4 : i32} {
+  llvm.func @opaque()
+  llvm.func @escape(!llvm.ptr<3>)
+  // CHECK-LABEL: llvm.func @intervening_workgroup_barrier
+  // CHECK-NOT: __spirv_ControlBarrierArriveINTEL
+  // CHECK: llvm.call spir_funccc @intel_manageable_barrier_init
+  // CHECK: llvm.call spir_funccc @intel_manageable_barrier_arrive
+  // CHECK: llvm.call spir_funccc @intel_manageable_barrier_wait
+  // CHECK: llvm.call spir_funccc @intel_manageable_barrier_release
+  // CHECK-NOT: __spirv_ControlBarrierWaitINTEL
+  // CHECK: llvm.return
+  llvm.func @intervening_workgroup_barrier() {
+    %b = triton_gen.split_barrier_arrive {workgroup_candidate}
+    triton_gen.barrier {mem_fence = Local}
+    triton_gen.split_barrier_wait %b
+    llvm.return
+  }
+}
+
+// -----
+
+module attributes {ttig.support_split_work_group_barrier, "ttg.num-warps" = 4 : i32} {
+  llvm.func @opaque()
+  llvm.func @escape(!llvm.ptr<3>)
+  // CHECK-LABEL: llvm.func @opaque_call_between_barriers
+  // CHECK-NOT: __spirv_ControlBarrierArriveINTEL
+  // CHECK: llvm.call spir_funccc @intel_manageable_barrier_init
+  // CHECK: llvm.call spir_funccc @intel_manageable_barrier_arrive
+  // CHECK: llvm.call spir_funccc @intel_manageable_barrier_wait
+  // CHECK: llvm.call spir_funccc @intel_manageable_barrier_release
+  // CHECK-NOT: __spirv_ControlBarrierWaitINTEL
+  // CHECK: llvm.return
+  llvm.func @opaque_call_between_barriers() {
+    %b = triton_gen.split_barrier_arrive {workgroup_candidate}
+    llvm.call @opaque() : () -> ()
+    triton_gen.split_barrier_wait %b
+    llvm.return
+  }
+}
+
+// -----
+
+module attributes {ttig.support_split_work_group_barrier, "ttg.num-warps" = 4 : i32} {
+  llvm.func @opaque()
+  llvm.func @escape(!llvm.ptr<3>)
+  // CHECK-LABEL: llvm.func @overlapping_barrier_handles
+  // CHECK-NOT: __spirv_ControlBarrierArriveINTEL
+  // CHECK: llvm.call spir_funccc @intel_manageable_barrier_init
+  // CHECK: llvm.call spir_funccc @intel_manageable_barrier_arrive
+  // CHECK: llvm.call spir_funccc @intel_manageable_barrier_wait
+  // CHECK: llvm.call spir_funccc @intel_manageable_barrier_release
+  // CHECK-NOT: __spirv_ControlBarrierWaitINTEL
+  // CHECK: llvm.return
+  llvm.func @overlapping_barrier_handles() {
+    %b = triton_gen.split_barrier_arrive {workgroup_candidate}
+    %inner = triton_gen.split_barrier_arrive
+    triton_gen.split_barrier_wait %inner
+    triton_gen.split_barrier_wait %b
+    llvm.return
+  }
+}
+
+// -----
+
+module attributes {ttig.support_split_work_group_barrier, "ttg.num-warps" = 4 : i32} {
+  llvm.func @opaque()
+  llvm.func @escape(!llvm.ptr<3>)
+  // CHECK-LABEL: llvm.func @barrier_handle_escapes
+  // CHECK-NOT: __spirv_ControlBarrierArriveINTEL
+  // CHECK: llvm.call spir_funccc @intel_manageable_barrier_init
+  // CHECK: llvm.call spir_funccc @intel_manageable_barrier_arrive
+  // CHECK: llvm.call spir_funccc @intel_manageable_barrier_wait
+  // CHECK: llvm.call spir_funccc @intel_manageable_barrier_release
+  // CHECK-NOT: __spirv_ControlBarrierWaitINTEL
+  // CHECK: llvm.return
+  llvm.func @barrier_handle_escapes() {
+    %b = triton_gen.split_barrier_arrive {workgroup_candidate}
+    llvm.call @escape(%b) : (!llvm.ptr<3>) -> ()
+    triton_gen.split_barrier_wait %b
+    llvm.return
+  }
+}
+
+// -----
+
+module attributes {ttig.support_split_work_group_barrier, "ttg.num-warps" = 4 : i32} {
+  llvm.func @opaque()
+  llvm.func @escape(!llvm.ptr<3>)
+  // CHECK-LABEL: llvm.func @barrier_wait_in_different_block
+  // CHECK-NOT: __spirv_ControlBarrierArriveINTEL
+  // CHECK: llvm.call spir_funccc @intel_manageable_barrier_init
+  // CHECK: llvm.call spir_funccc @intel_manageable_barrier_arrive
+  // CHECK: llvm.call spir_funccc @intel_manageable_barrier_wait
+  // CHECK: llvm.call spir_funccc @intel_manageable_barrier_release
+  // CHECK-NOT: __spirv_ControlBarrierWaitINTEL
+  // CHECK: llvm.return
+  llvm.func @barrier_wait_in_different_block() {
+    %b = triton_gen.split_barrier_arrive {workgroup_candidate}
+    llvm.br ^next
+  ^next:
+    triton_gen.split_barrier_wait %b
+    llvm.return
+  }
+}
+
+// -----
+
+module attributes {ttig.support_split_work_group_barrier, "ttg.num-warps" = 4 : i32} {
+  llvm.func @_Z27__spirv_GroupNonUniformFMaxiif(i32, i32, f32) -> f32
+  llvm.func @_Z27__spirv_GroupNonUniformFAddiif(i32, i32, f32) -> f32
+  llvm.func @llvm.exp2.f32(f32) -> f32
+  // CHECK-LABEL: llvm.func @subgroup_softmax
+  // CHECK: llvm.call spir_funccc @_Z33__spirv_ControlBarrierArriveINTELiii
+  // CHECK: llvm.call spir_funccc @_Z31__spirv_ControlBarrierWaitINTELiii
+  // CHECK-NOT: intel_manageable_barrier
+  // CHECK: llvm.return
+  llvm.func @subgroup_softmax(%ptr: !llvm.ptr<1>, %x: f32, %scope: i32) -> f32 {
+    %b = triton_gen.split_barrier_arrive {workgroup_candidate}
+    %scope_const = llvm.mlir.constant(3 : i32) : i32
+    %reduce = llvm.mlir.constant(0 : i32) : i32
+    %true = llvm.mlir.constant(true) : i1
+    %zero = llvm.mlir.constant(0 : i32) : i32
+    %load = triton_gen.predicated_load %ptr, %true, %zero {cache_control = Default} : (!llvm.ptr<1>, i1, i32) -> i32
+    %m = llvm.call @_Z27__spirv_GroupNonUniformFMaxiif(%scope_const, %reduce, %x) : (i32, i32, f32) -> f32
+    %p = llvm.call @llvm.exp2.f32(%m) : (f32) -> f32
+    %sum = llvm.call @_Z27__spirv_GroupNonUniformFAddiif(%scope_const, %reduce, %p) : (i32, i32, f32) -> f32
+    triton_gen.split_barrier_wait %b
+    llvm.return %sum : f32
+  }
+}
+
+// -----
+
+module attributes {ttig.support_split_work_group_barrier, "ttg.num-warps" = 4 : i32} {
+  llvm.func @_Z27__spirv_GroupNonUniformFMaxiif(i32, i32, f32) -> f32
+  llvm.func @_Z27__spirv_GroupNonUniformFAddiif(i32, i32, f32) -> f32
+  llvm.func @llvm.exp2.f32(f32) -> f32
+  // CHECK-LABEL: llvm.func @workgroup_reduction
+  // CHECK-NOT: __spirv_ControlBarrierArriveINTEL
+  // CHECK: llvm.call spir_funccc @intel_manageable_barrier_init
+  // CHECK: llvm.call spir_funccc @intel_manageable_barrier_wait
+  // CHECK: llvm.return
+  llvm.func @workgroup_reduction(%ptr: !llvm.ptr<1>, %x: f32, %scope: i32) -> f32 {
+    %b = triton_gen.split_barrier_arrive {workgroup_candidate}
+    %scope_const = llvm.mlir.constant(2 : i32) : i32
+    %reduce = llvm.mlir.constant(0 : i32) : i32
+    %true = llvm.mlir.constant(true) : i1
+    %zero = llvm.mlir.constant(0 : i32) : i32
+    %load = triton_gen.predicated_load %ptr, %true, %zero {cache_control = Default} : (!llvm.ptr<1>, i1, i32) -> i32
+    %m = llvm.call @_Z27__spirv_GroupNonUniformFMaxiif(%scope_const, %reduce, %x) : (i32, i32, f32) -> f32
+    %p = llvm.call @llvm.exp2.f32(%m) : (f32) -> f32
+    %sum = llvm.call @_Z27__spirv_GroupNonUniformFAddiif(%scope_const, %reduce, %p) : (i32, i32, f32) -> f32
+    triton_gen.split_barrier_wait %b
+    llvm.return %sum : f32
+  }
+}
+
+// -----
+
+module attributes {ttig.support_split_work_group_barrier, "ttg.num-warps" = 4 : i32} {
+  llvm.func @_Z27__spirv_GroupNonUniformFMaxiif(i32, i32, f32) -> f32
+  llvm.func @_Z27__spirv_GroupNonUniformFAddiif(i32, i32, f32) -> f32
+  llvm.func @llvm.exp2.f32(f32) -> f32
+  // CHECK-LABEL: llvm.func @unknown_reduction_scope
+  // CHECK-NOT: __spirv_ControlBarrierArriveINTEL
+  // CHECK: llvm.call spir_funccc @intel_manageable_barrier_init
+  // CHECK: llvm.call spir_funccc @intel_manageable_barrier_wait
+  // CHECK: llvm.return
+  llvm.func @unknown_reduction_scope(%ptr: !llvm.ptr<1>, %x: f32, %scope: i32) -> f32 {
+    %b = triton_gen.split_barrier_arrive {workgroup_candidate}
+    %scope_const = llvm.mlir.constant(3 : i32) : i32
+    %reduce = llvm.mlir.constant(0 : i32) : i32
+    %true = llvm.mlir.constant(true) : i1
+    %zero = llvm.mlir.constant(0 : i32) : i32
+    %load = triton_gen.predicated_load %ptr, %true, %zero {cache_control = Default} : (!llvm.ptr<1>, i1, i32) -> i32
+    %m = llvm.call @_Z27__spirv_GroupNonUniformFMaxiif(%scope, %reduce, %x) : (i32, i32, f32) -> f32
+    %p = llvm.call @llvm.exp2.f32(%m) : (f32) -> f32
+    %sum = llvm.call @_Z27__spirv_GroupNonUniformFAddiif(%scope, %reduce, %p) : (i32, i32, f32) -> f32
+    triton_gen.split_barrier_wait %b
+    llvm.return %sum : f32
+  }
+}
