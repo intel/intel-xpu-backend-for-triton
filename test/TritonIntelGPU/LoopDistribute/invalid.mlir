@@ -215,40 +215,6 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
 
 // -----
 
-// Test: a loop-carried chain (%carry) is updated from a dot accumulator's
-// block argument (%acc_g) directly, rather than from a value that is safe to
-// replicate identically into both new loops. Replicating this chain would
-// read a different (frozen or partial) %acc_g in each new loop, so
-// distribution must be rejected.
-// CHECK-LABEL: @carried_depends_on_acc_no_distribute
-// CHECK: scf.for
-// CHECK:   tt.dot
-// CHECK-NOT: scf.for
-// CHECK:   tt.dot
-// CHECK:   scf.yield
-// CHECK-NOT: scf.for
-module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  tt.func @carried_depends_on_acc_no_distribute(%arg0: !tt.tensordesc<128x64xbf16>, %arg1: !tt.tensordesc<64x128xbf16>, %arg2: !tt.tensordesc<64x128xbf16>) -> (tensor<128x128xf32>, tensor<128x128xf32>) {
-    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
-    %c0_i32 = arith.constant 0 : i32
-    %c64_i32 = arith.constant 64 : i32
-    %c512_i32 = arith.constant 512 : i32
-    %0:3 = scf.for %k = %c0_i32 to %c512_i32 step %c64_i32 iter_args(%acc_g = %cst, %acc_fc = %cst, %carry = %cst) -> (tensor<128x128xf32>, tensor<128x128xf32>, tensor<128x128xf32>) : i32 {
-      %x = tt.descriptor_load %arg0[%c0_i32, %k] : !tt.tensordesc<128x64xbf16> -> tensor<128x64xbf16>
-      %wg = tt.descriptor_load %arg1[%k, %c0_i32] : !tt.tensordesc<64x128xbf16> -> tensor<64x128xbf16>
-      %wfc = tt.descriptor_load %arg2[%k, %c0_i32] : !tt.tensordesc<64x128xbf16> -> tensor<64x128xbf16>
-      %d0 = tt.dot %x, %wg, %acc_g, inputPrecision = tf32 : tensor<128x64xbf16> * tensor<64x128xbf16> -> tensor<128x128xf32>
-      %d1 = tt.dot %x, %wfc, %acc_fc, inputPrecision = tf32 : tensor<128x64xbf16> * tensor<64x128xbf16> -> tensor<128x128xf32>
-      // %carry's update reads dot0's accumulator block-argument directly.
-      %bad = arith.addf %carry, %acc_g : tensor<128x128xf32>
-      scf.yield %d0, %d1, %bad : tensor<128x128xf32>, tensor<128x128xf32>, tensor<128x128xf32>
-    }
-    tt.return %0#0, %0#1 : tensor<128x128xf32>, tensor<128x128xf32>
-  }
-}
-
-// -----
-
 // Test: a loop-carried chain (%carry) is updated from a dot's RESULT (%d0)
 // directly, rather than the accumulator iter_arg. This must also be
 // rejected -- a carried chain may not depend on either dot's output.
@@ -487,6 +453,194 @@ module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32
       %d0 = tt.dot %x, %wg, %acc_g, inputPrecision = tf32 : tensor<128x128xf32> * tensor<128x128xf32> -> tensor<128x128xf32>
       %d1 = tt.dot %x, %wfc, %acc_fc, inputPrecision = tf32 : tensor<128x128xf32> * tensor<128x128xf32> -> tensor<128x128xf32>
       scf.yield %d0, %d1 : tensor<128x128xf32>, tensor<128x128xf32>
+    }
+    tt.return %0#0, %0#1 : tensor<128x128xf32>, tensor<128x128xf32>
+  }
+}
+
+// -----
+
+// Test: a carried chain reads BOTH dot accumulators (%acc_g via %sum, and
+// %acc_fc via %sum). A carried chain that reads exactly one accumulator can be
+// given to that accumulator's loop, but this one can be given to neither: each
+// distributed loop keeps only one accumulator live and freezes the other, so
+// wherever the chain is placed it would read a frozen slot. Reject.
+// CHECK-LABEL: @carried_depends_on_both_accs_no_distribute
+// CHECK: scf.for
+// CHECK:   tt.dot
+// CHECK-NOT: scf.for
+// CHECK:   tt.dot
+// CHECK:   scf.yield
+// CHECK-NOT: scf.for
+module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  tt.func @carried_depends_on_both_accs_no_distribute(%arg0: !tt.tensordesc<128x64xbf16>, %arg1: !tt.tensordesc<64x128xbf16>, %arg2: !tt.tensordesc<64x128xbf16>) -> (tensor<128x128xf32>, tensor<128x128xf32>) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
+    %c0_i32 = arith.constant 0 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %c512_i32 = arith.constant 512 : i32
+    %0:3 = scf.for %k = %c0_i32 to %c512_i32 step %c64_i32 iter_args(%acc_g = %cst, %acc_fc = %cst, %carry = %cst) -> (tensor<128x128xf32>, tensor<128x128xf32>, tensor<128x128xf32>) : i32 {
+      %x = tt.descriptor_load %arg0[%c0_i32, %k] : !tt.tensordesc<128x64xbf16> -> tensor<128x64xbf16>
+      %wg = tt.descriptor_load %arg1[%k, %c0_i32] : !tt.tensordesc<64x128xbf16> -> tensor<64x128xbf16>
+      %wfc = tt.descriptor_load %arg2[%k, %c0_i32] : !tt.tensordesc<64x128xbf16> -> tensor<64x128xbf16>
+      %d0 = tt.dot %x, %wg, %acc_g, inputPrecision = tf32 : tensor<128x64xbf16> * tensor<64x128xbf16> -> tensor<128x128xf32>
+      %d1 = tt.dot %x, %wfc, %acc_fc, inputPrecision = tf32 : tensor<128x64xbf16> * tensor<64x128xbf16> -> tensor<128x128xf32>
+      // Reads both accumulator block arguments.
+      %sum = arith.addf %acc_g, %acc_fc : tensor<128x128xf32>
+      %bad = arith.addf %carry, %sum : tensor<128x128xf32>
+      scf.yield %d0, %d1, %bad : tensor<128x128xf32>, tensor<128x128xf32>, tensor<128x128xf32>
+    }
+    tt.return %0#0, %0#1 : tensor<128x128xf32>, tensor<128x128xf32>
+  }
+}
+
+// -----
+
+// Test: %carry (index 2) reads %acc_g, so it is owned by dot0's loop and its
+// slot is frozen in dot1's loop -- but dot1's own operand slice reads %carry
+// too (via %wfc). dot1 would then consume the frozen pass-through slot, i.e.
+// the init value rather than the advanced one, so distribution must be
+// rejected. Ownership is only sound when the loop that freezes a slot never
+// reads it.
+// CHECK-LABEL: @dot1_slice_reads_owned_carry_no_distribute
+// CHECK: scf.for
+// CHECK:   tt.dot
+// CHECK-NOT: scf.for
+// CHECK:   tt.dot
+// CHECK:   scf.yield
+// CHECK-NOT: scf.for
+module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  tt.func @dot1_slice_reads_owned_carry_no_distribute(%arg0: !tt.tensordesc<128x128xbf16>, %arg1: !tt.tensordesc<128x128xbf16>, %arg2: !tt.tensordesc<128x128xbf16>) -> (tensor<128x128xf32>, tensor<128x128xf32>) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
+    %cstb = arith.constant dense<0.000000e+00> : tensor<128x128xbf16>
+    %c0_i32 = arith.constant 0 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %c512_i32 = arith.constant 512 : i32
+    %0:3 = scf.for %k = %c0_i32 to %c512_i32 step %c64_i32 iter_args(%acc_g = %cst, %acc_fc = %cst, %carry = %cstb) -> (tensor<128x128xf32>, tensor<128x128xf32>, tensor<128x128xbf16>) : i32 {
+      %x = tt.descriptor_load %arg0[%c0_i32, %k] : !tt.tensordesc<128x128xbf16> -> tensor<128x128xbf16>
+      %wg = tt.descriptor_load %arg1[%k, %c0_i32] : !tt.tensordesc<128x128xbf16> -> tensor<128x128xbf16>
+      %wfc_raw = tt.descriptor_load %arg2[%k, %c0_i32] : !tt.tensordesc<128x128xbf16> -> tensor<128x128xbf16>
+      // dot1's B operand is derived from %carry -- an indirect read, not a
+      // direct dot operand.
+      %wfc = arith.addf %wfc_raw, %carry : tensor<128x128xbf16>
+      %d0 = tt.dot %x, %wg, %acc_g, inputPrecision = tf32 : tensor<128x128xbf16> * tensor<128x128xbf16> -> tensor<128x128xf32>
+      %d1 = tt.dot %x, %wfc, %acc_fc, inputPrecision = tf32 : tensor<128x128xbf16> * tensor<128x128xbf16> -> tensor<128x128xf32>
+      // Makes index 2 owned by dot0's loop.
+      %accg_bf = arith.truncf %acc_g : tensor<128x128xf32> to tensor<128x128xbf16>
+      %next = arith.addf %carry, %accg_bf : tensor<128x128xbf16>
+      scf.yield %d0, %d1, %next : tensor<128x128xf32>, tensor<128x128xf32>, tensor<128x128xbf16>
+    }
+    tt.return %0#0, %0#1 : tensor<128x128xf32>, tensor<128x128xf32>
+  }
+}
+
+// -----
+
+// Test: the same hazard as @dot1_slice_reads_owned_carry_no_distribute, but the
+// reader of the frozen slot is another CARRIED CHAIN rather than a dot. %owned
+// (index 2) reads %acc_g so it is owned by dot0's loop; %other (index 3) reads
+// no accumulator so it is replicated into both loops -- and its copy in dot1's
+// loop would read the frozen index-2 slot. Note that index 3's own backward
+// slice stops at the %owned block argument and so never reaches %acc_g: the
+// check must look at which iter_args a chain reads, not just which
+// accumulators.
+// CHECK-LABEL: @carried_reads_owned_carry_no_distribute
+// CHECK: scf.for
+// CHECK:   tt.dot
+// CHECK-NOT: scf.for
+// CHECK:   tt.dot
+// CHECK:   scf.yield
+// CHECK-NOT: scf.for
+module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  tt.func @carried_reads_owned_carry_no_distribute(%arg0: !tt.tensordesc<128x64xbf16>, %arg1: !tt.tensordesc<64x128xbf16>, %arg2: !tt.tensordesc<64x128xbf16>) -> (tensor<128x128xf32>, tensor<128x128xf32>) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
+    %c0_i32 = arith.constant 0 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %c512_i32 = arith.constant 512 : i32
+    %0:4 = scf.for %k = %c0_i32 to %c512_i32 step %c64_i32 iter_args(%acc_g = %cst, %acc_fc = %cst, %owned = %cst, %other = %cst) -> (tensor<128x128xf32>, tensor<128x128xf32>, tensor<128x128xf32>, tensor<128x128xf32>) : i32 {
+      %x = tt.descriptor_load %arg0[%c0_i32, %k] : !tt.tensordesc<128x64xbf16> -> tensor<128x64xbf16>
+      %wg = tt.descriptor_load %arg1[%k, %c0_i32] : !tt.tensordesc<64x128xbf16> -> tensor<64x128xbf16>
+      %wfc = tt.descriptor_load %arg2[%k, %c0_i32] : !tt.tensordesc<64x128xbf16> -> tensor<64x128xbf16>
+      %d0 = tt.dot %x, %wg, %acc_g, inputPrecision = tf32 : tensor<128x64xbf16> * tensor<64x128xbf16> -> tensor<128x128xf32>
+      %d1 = tt.dot %x, %wfc, %acc_fc, inputPrecision = tf32 : tensor<128x64xbf16> * tensor<64x128xbf16> -> tensor<128x128xf32>
+      // Index 2: reads %acc_g, so owned by dot0's loop.
+      %next_owned = arith.addf %owned, %acc_g : tensor<128x128xf32>
+      // Index 3: replicable on its own, but reads the owned index-2 slot.
+      %next_other = arith.addf %other, %owned : tensor<128x128xf32>
+      scf.yield %d0, %d1, %next_owned, %next_other : tensor<128x128xf32>, tensor<128x128xf32>, tensor<128x128xf32>, tensor<128x128xf32>
+    }
+    tt.return %0#0, %0#1 : tensor<128x128xf32>, tensor<128x128xf32>
+  }
+}
+
+// -----
+
+// Test: index 3 does not merely read the owned index-2 slot through an op, its
+// yielded value IS %owned, the index-2 block argument, with nothing in between.
+// A backward slice rooted at a block argument is empty, so the slice carries no
+// evidence of the read at all -- the check must compare the yielded value
+// itself against the frozen block argument, not only walk the slice. Without
+// that comparison this loop distributes and index 3 silently returns the frozen
+// init value.
+// CHECK-LABEL: @both_slot_aliases_owned_carry_no_distribute
+// CHECK: scf.for
+// CHECK:   tt.dot
+// CHECK-NOT: scf.for
+// CHECK:   tt.dot
+// CHECK:   scf.yield
+// CHECK-NOT: scf.for
+module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  tt.func @both_slot_aliases_owned_carry_no_distribute(%arg0: !tt.tensordesc<128x64xbf16>, %arg1: !tt.tensordesc<64x128xbf16>, %arg2: !tt.tensordesc<64x128xbf16>) -> (tensor<128x128xf32>, tensor<128x128xf32>) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
+    %c0_i32 = arith.constant 0 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %c512_i32 = arith.constant 512 : i32
+    %0:4 = scf.for %k = %c0_i32 to %c512_i32 step %c64_i32 iter_args(%acc_g = %cst, %acc_fc = %cst, %owned = %cst, %alias = %cst) -> (tensor<128x128xf32>, tensor<128x128xf32>, tensor<128x128xf32>, tensor<128x128xf32>) : i32 {
+      %x = tt.descriptor_load %arg0[%c0_i32, %k] : !tt.tensordesc<128x64xbf16> -> tensor<128x64xbf16>
+      %wg = tt.descriptor_load %arg1[%k, %c0_i32] : !tt.tensordesc<64x128xbf16> -> tensor<64x128xbf16>
+      %wfc = tt.descriptor_load %arg2[%k, %c0_i32] : !tt.tensordesc<64x128xbf16> -> tensor<64x128xbf16>
+      %d0 = tt.dot %x, %wg, %acc_g, inputPrecision = tf32 : tensor<128x64xbf16> * tensor<64x128xbf16> -> tensor<128x128xf32>
+      %d1 = tt.dot %x, %wfc, %acc_fc, inputPrecision = tf32 : tensor<128x64xbf16> * tensor<64x128xbf16> -> tensor<128x128xf32>
+      // Index 2: reads %acc_g, so owned by dot0's loop.
+      %next_owned = arith.addf %owned, %acc_g : tensor<128x128xf32>
+      // Index 3 yields the index-2 block argument verbatim.
+      scf.yield %d0, %d1, %next_owned, %owned : tensor<128x128xf32>, tensor<128x128xf32>, tensor<128x128xf32>, tensor<128x128xf32>
+    }
+    tt.return %0#0, %0#1 : tensor<128x128xf32>, tensor<128x128xf32>
+  }
+}
+
+// -----
+
+// Test: the frozen owned slot is read as a DIRECT operand of dot1, not through
+// an op in dot1's slice. %carry (index 2) reads %acc_g so it is owned by dot0's
+// loop, and it is also dot1's A operand -- so dot1's loop, which freezes index
+// 2, would multiply the init value every iteration. The check must inspect the
+// dot's own operands as well as its backward slice.
+// CHECK-LABEL: @dot1_operand_is_owned_carry_no_distribute
+// CHECK: scf.for
+// CHECK:   tt.dot
+// CHECK-NOT: scf.for
+// CHECK:   tt.dot
+// CHECK:   scf.yield
+// CHECK-NOT: scf.for
+module attributes {"ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  tt.func @dot1_operand_is_owned_carry_no_distribute(%arg0: !tt.tensordesc<128x128xbf16>, %arg1: !tt.tensordesc<128x128xbf16>, %arg2: !tt.tensordesc<128x128xbf16>) -> (tensor<128x128xf32>, tensor<128x128xf32>) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
+    %cstb = arith.constant dense<0.000000e+00> : tensor<128x128xbf16>
+    %c0_i32 = arith.constant 0 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %c512_i32 = arith.constant 512 : i32
+    %0:3 = scf.for %k = %c0_i32 to %c512_i32 step %c64_i32 iter_args(%acc_g = %cst, %acc_fc = %cst, %carry = %cstb) -> (tensor<128x128xf32>, tensor<128x128xf32>, tensor<128x128xbf16>) : i32 {
+      %x = tt.descriptor_load %arg0[%c0_i32, %k] : !tt.tensordesc<128x128xbf16> -> tensor<128x128xbf16>
+      %wg = tt.descriptor_load %arg1[%k, %c0_i32] : !tt.tensordesc<128x128xbf16> -> tensor<128x128xbf16>
+      %wfc = tt.descriptor_load %arg2[%k, %c0_i32] : !tt.tensordesc<128x128xbf16> -> tensor<128x128xbf16>
+      %d0 = tt.dot %x, %wg, %acc_g, inputPrecision = tf32 : tensor<128x128xbf16> * tensor<128x128xbf16> -> tensor<128x128xf32>
+      // %carry is dot1's A operand directly.
+      %d1 = tt.dot %carry, %wfc, %acc_fc, inputPrecision = tf32 : tensor<128x128xbf16> * tensor<128x128xbf16> -> tensor<128x128xf32>
+      // Makes index 2 owned by dot0's loop.
+      %accg_bf = arith.truncf %acc_g : tensor<128x128xf32> to tensor<128x128xbf16>
+      %next = arith.addf %carry, %accg_bf : tensor<128x128xbf16>
+      scf.yield %d0, %d1, %next : tensor<128x128xf32>, tensor<128x128xf32>, tensor<128x128xbf16>
     }
     tt.return %0#0, %0#1 : tensor<128x128xf32>, tensor<128x128xf32>
   }

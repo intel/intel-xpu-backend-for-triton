@@ -62,6 +62,7 @@ jobs:
         with:
           ref: ${{ inputs.pytorch_ref }}
           cache: disabled
+          lts: ${{ inputs.runner_label == 'lts' }}
 
       - name: Setup Triton
         uses: ./.github/actions/setup-triton

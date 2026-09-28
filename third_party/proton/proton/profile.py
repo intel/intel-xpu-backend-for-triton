@@ -104,7 +104,7 @@ def start(
                                                Defaults to None.
                                                For "cupti", available options are [None, "pcsampling", "periodic_flushing"].
                                                For "xpupti", available options are [None].
-                                               For "rocprofiler", available options are [None, "periodic_flushing"].
+                                               For "rocprofiler", available options are [None, "pcsampling", "periodic_flushing"].
                                                For "roctracer", available options are [None, "periodic_flushing"].
                                                For "instrumentation", available options are [None].
                                                Each mode has a set of control knobs following with the mode name.

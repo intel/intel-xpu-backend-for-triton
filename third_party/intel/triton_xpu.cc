@@ -2,6 +2,7 @@
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Support/Timing.h"
 #include "passes.h"
 
 #include "llvm/IR/InstIterator.h"
@@ -25,6 +26,7 @@
 #include "intel/lib/Target/LLVMIR/LLVMPasses.h"
 
 #include "intel/include/Target/SPIRV/SPIRVTranslation.h"
+#include "triton/Tools/LLVMOptions.h"
 #include "triton/Tools/Sys/GetEnv.h"
 
 #include <nanobind/nanobind.h>
@@ -68,8 +70,12 @@ void init_triton_intel_passes_ttir(py::module_ &&m) {
   ADD_PASS_WRAPPER_0("add_descriptor_versioning",
                      intel::createTritonIntelDescriptorVersioning);
   ADD_PASS_WRAPPER_0("add_fuse_reshape", intel::createTritonIntelFuseReshape);
+  ADD_PASS_WRAPPER_0("add_optimize_load_masks",
+                     intel::createTritonIntelOptimizeLoadMasks);
   ADD_PASS_WRAPPER_0("add_simplify_signed_arithmetic",
                      intel::createTritonIntelSimplifySignedArithmetic);
+  ADD_PASS_WRAPPER_0("add_speculate_signed_div_rem",
+                     intel::createTritonIntelSpeculateSignedDivRem);
   ADD_PASS_WRAPPER_0("add_fold_true_cmpi",
                      intel::createTritonIntelGPUFoldTrueCmpI);
   ADD_FUNC_PASS_WRAPPER_0("add_prepare_if_combining",
@@ -165,8 +171,9 @@ void init_triton_intel_passes_ttgpuir(py::module_ &&m) {
                      gpu::intel::createTritonIntelGPUOptimizeReductionLocality);
   ADD_PASS_WRAPPER_0("add_lower_to_2d_block_load",
                      gpu::intel::createTritonIntelGPULowerTo2DBlockLoad);
-  ADD_PASS_WRAPPER_0("add_reduce_variable_liveness",
-                     gpu::intel::createTritonIntelGPUReduceVariableLiveness);
+  ADD_PASS_OPTION_WRAPPER_1(
+      "add_reduce_variable_liveness",
+      gpu::intel::createTritonIntelGPUReduceVariableLiveness, std::string);
   ADD_PASS_WRAPPER_0("add_loop_distribute",
                      gpu::intel::createTritonIntelGPULoopDistribute);
   ADD_PASS_WRAPPER_0("add_code_sinking",
@@ -195,6 +202,43 @@ void init_triton_intel(py::module_ &m) {
   init_triton_intel_passes_ttgpuir(passes.def_submodule("ttgpuir"));
   init_triton_intel_passes_arith(passes.def_submodule("arith"));
 
+  m.def("enable_pm_timing", [](mlir::PassManager &pm, py::callable cb) {
+    struct CallBackStrategy : mlir::OutputStrategy {
+      py::callable cb;
+
+      CallBackStrategy(py::callable cb)
+          : OutputStrategy(llvm::errs()), cb(cb) {}
+
+      void printHeader(const mlir::TimeRecord &total) override {}
+
+      void printFooter() override {}
+
+      void printTime(const mlir::TimeRecord &time,
+                     const mlir::TimeRecord &total) override {}
+
+      void printListEntry(llvm::StringRef name, const mlir::TimeRecord &time,
+                          const mlir::TimeRecord &total,
+                          bool lastEntry = false) override {
+        cb(std::string(name), time.wall, 0);
+      }
+
+      void printTreeEntry(unsigned indent, llvm::StringRef name,
+                          const mlir::TimeRecord &time,
+                          const mlir::TimeRecord &total) override {
+        cb(std::string(name), time.wall, 1);
+      }
+
+      void printTreeEntryEnd(unsigned indent, bool lastEntry = false) override {
+        cb(std::string(""), 0., 2);
+      }
+    };
+
+    auto tm = std::make_unique<mlir::DefaultTimingManager>();
+    tm->setOutput(std::make_unique<CallBackStrategy>(cb));
+    tm->setEnabled(true);
+    pm.enableTiming(std::move(tm));
+  });
+
   m.def(
       "optimize_module",
       [](llvm::Module *mod, const llvm::OptimizationLevel &opt,
@@ -204,22 +248,26 @@ void init_triton_intel(py::module_ &m) {
 
         py::gil_scoped_release gil_release;
 
-        // Check to see if we are passing a list of flags to disable
-        // optimizations.
-        auto flagList = mlir::triton::tools::getStrEnv("DISABLE_LLVM_OPT");
         using namespace llvm;
-        if (!flagList.empty()) {
-          auto options = llvm::cl::getRegisteredOptions();
-          llvm::SmallVector<StringRef, 3> split;
-          StringRef(flagList.c_str()).split(split, ',');
-          for (auto flag : split) {
-            auto optIt = options.find(flag);
-            if (optIt != options.end()) {
-              auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
-              *optPtr = true;
-            }
-          }
-        }
+
+        // LLVM command line options are process-wide globals that codegen
+        // reads as it goes, so they may only be overridden through the
+        // registry lock (see triton/Tools/LLVMOptions.h). The scope must
+        // outlive the pipeline run below.
+        std::vector<mlir::triton::tools::ScopedLLVMOptions::Setting> settings;
+
+        // DISABLE_LLVM_OPT may hold a list of flags to disable individual
+        // optimizations instead of a boolean.
+        auto flagList = mlir::triton::tools::getStrEnv("DISABLE_LLVM_OPT");
+        SmallVector<StringRef> flags;
+        StringRef(flagList).split(flags, ',', /*MaxSplit=*/-1,
+                                  /*KeepEmpty=*/false);
+        for (StringRef flag : flags)
+          settings.emplace_back(flag.str(), "true");
+        if (mlir::triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP"))
+          settings.emplace_back("print-after-all", "true");
+        mlir::triton::tools::ScopedLLVMOptions optionScope(settings);
+
         LoopAnalysisManager lam;
         FunctionAnalysisManager fam;
         CGSCCAnalysisManager cgam;
@@ -234,12 +282,6 @@ void init_triton_intel(py::module_ &m) {
             passStartTimes;
 
         if (mlir::triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
-          auto optMap = llvm::cl::getRegisteredOptions();
-          auto optIt = optMap.find("print-after-all");
-          if (optIt != optMap.end()) {
-            auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
-            *optPtr = true;
-          }
           standardInstr.registerCallbacks(passInstrCb, &mam);
           instrCbPtr = &passInstrCb;
         } else if (pyCb) {
@@ -419,7 +461,8 @@ void init_triton_intel(py::module_ &m) {
 
   m.def(
       "translate_to_spirv",
-      [](const std::string &llvmIR) -> std::tuple<py::object, std::string> {
+      [](const std::string &llvmIR,
+         bool isLTS) -> std::tuple<py::object, std::string> {
         std::string name;
         std::string spirvBitcode;
         {
@@ -441,12 +484,12 @@ void init_triton_intel(py::module_ &m) {
           const uint32_t numKernels = findKernels(*module, kernels);
           assert(numKernels == 1 && "Expecting a single SPIR kernel");
           name = (*kernels.begin())->getName().str();
-          spirvBitcode = triton::translateLLVMIRToSPIRV(*module);
+          spirvBitcode = triton::translateLLVMIRToSPIRV(*module, isLTS);
         }
         return std::make_tuple(
             py::bytes(spirvBitcode.data(), spirvBitcode.size()), name);
       },
-      ret::take_ownership);
+      py::arg("llvmIR"), py::arg("isLTS"), ret::take_ownership);
 
   m.def(
       "calculate_warps_per_tile",

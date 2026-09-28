@@ -199,37 +199,43 @@ public:
   void runOnOperation() final {
     ModuleOp moduleOp = getOperation();
 
+    // Collect candidate loops during the walk, but do NOT version them here:
+    // LoopVersioner::version() erases the loop, and mutating the IR while the
+    // walker still holds iterators into it is a use-after-free (the walker
+    // dereferences the erased op's regions and the parent block iterator steps
+    // past the freed node). Only non-nested loops are candidates, so they are
+    // top-level siblings and versioning one never invalidates another's handle.
+    SmallVector<scf::ForOp> candidateLoops;
     moduleOp->walk<WalkOrder::PreOrder>([&](Operation *op) {
-      if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-        if (!isCandidateLoop(forOp))
-          return WalkResult::advance();
-
-        // Collect candidate operations. These are descriptor load/store
-        // operations with no stride equal to one (at compile time).
-        OpSelector selector;
-        OpsCollector collector(forOp, selector);
-        if (collector.collectOps() == 0)
-          return WalkResult::advance();
-
-        OpBuilder builder(forOp);
-        SmallVector<Operation *> selectedOps;
-        std::unordered_map<Operation *, Value> selectedOpToStride;
-        for (Operation *op : collector.getOps()) {
-          TypeSwitch<Operation *>(op)
-              .Case<tt::DescriptorLoadOp>([&](auto loadOp) {
-                processDescLoad(loadOp, selectedOps, selectedOpToStride);
-              })
-              .Default([](auto) { return false; });
-        }
-
-        if (!selectedOpToStride.empty()) {
-          LoopVersioner loopVersioner;
-          loopVersioner.version(forOp, selectedOps, selectedOpToStride);
-        }
-      }
-
+      if (auto forOp = dyn_cast<scf::ForOp>(op))
+        if (isCandidateLoop(forOp))
+          candidateLoops.push_back(forOp);
       return WalkResult::advance();
     });
+
+    for (scf::ForOp forOp : candidateLoops) {
+      // Collect candidate operations. These are descriptor load/store
+      // operations with no stride equal to one (at compile time).
+      OpSelector selector;
+      OpsCollector collector(forOp, selector);
+      if (collector.collectOps() == 0)
+        continue;
+
+      SmallVector<Operation *> selectedOps;
+      std::unordered_map<Operation *, Value> selectedOpToStride;
+      for (Operation *op : collector.getOps()) {
+        TypeSwitch<Operation *>(op)
+            .Case<tt::DescriptorLoadOp>([&](auto loadOp) {
+              processDescLoad(loadOp, selectedOps, selectedOpToStride);
+            })
+            .Default([](auto) { return false; });
+      }
+
+      if (!selectedOpToStride.empty()) {
+        LoopVersioner loopVersioner;
+        loopVersioner.version(forOp, selectedOps, selectedOpToStride);
+      }
+    }
 
     LLVM_DEBUG(llvm::dbgs() << "After versioning:\n" << moduleOp << "\n");
     assert(succeeded(verify(moduleOp)) && "Module verification failed");

@@ -70,6 +70,15 @@ def convert_fp8e4b15_to_float16(arg, _semantic):
     return core.tensor(upcast, dst_ty)
 
 
+def convert_float_to_fp8e4b15(arg, fp_downcast_rounding, _semantic):
+    tmp_ty = _semantic.builder.get_fp8e4b8_ty()
+    if arg.type.is_block():
+        tmp_ty = _semantic.builder.get_block_ty(tmp_ty, arg.type.shape)
+    tmp = _semantic.builder.create_fp_to_fp(arg.handle, tmp_ty, fp_downcast_rounding)
+    dst_ty = arg.type.with_element_ty(core.float8e4b15) if arg.type.is_block() else core.float8e4b15
+    return core.tensor(_semantic.builder.create_bitcast(tmp, dst_ty.to_ir(_semantic.builder)), dst_ty)
+
+
 @core.builtin
 def convert_custom_float8(arg, dst_ty, fp_downcast_rounding=None, _semantic=None):
     if arg.type.scalar.is_fp8e4b15():
@@ -79,5 +88,10 @@ def convert_custom_float8(arg, dst_ty, fp_downcast_rounding=None, _semantic=None
         if dst_ty.scalar.is_fp32():
             upcast_val = upcast_val.to(core.float32, _semantic=_semantic)
         return upcast_val
+
+    if dst_ty.scalar.is_fp8e4b15():
+        if not (arg.type.scalar.is_fp16() or arg.type.scalar.is_fp32()):
+            raise AssertionError
+        return convert_float_to_fp8e4b15(arg, fp_downcast_rounding, _semantic=_semantic)
 
     raise AssertionError(f"Intel target doesn't provide conversion for {arg.type} to {dst_ty}")

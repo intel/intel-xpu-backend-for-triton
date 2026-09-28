@@ -54,7 +54,7 @@ jobs:
           Invoke-BatchFile "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
           cd ${{ env.NEW_WORKSPACE }}
           pip install -U pybind11 cmake
-          pip install -v '.[build]'
+          pip install -v .
 
       - name: Clean
         if: ${{ always() }}

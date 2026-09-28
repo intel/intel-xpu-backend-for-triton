@@ -16,10 +16,12 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/ADT/bit.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <optional>
@@ -287,6 +289,36 @@ public:
 
     Type elemType = oldAType.getElementType();
     unsigned opsPerChan = getOpsPerChannel(elemType, mod);
+
+    // Verify shape for DPAS dot. (N >= minimumAcceleratedN),
+    // (K >= nativeK and K is divisible by nativeK)
+    // and (dimension > 0 && isPowerOf2). Does not apply
+    // to tt::DotScaledOp.
+    if constexpr (std::is_same_v<OpTy, tt::DotOp>) {
+      size_t rank = retShape.size();
+      int64_t n = retShape[rank - 1];
+      int64_t k = oldAType.getShape().back();
+
+      bool resultShapeSupported = llvm::all_of(retShape, [](int64_t dimension) {
+        return dimension > 0 && llvm::isPowerOf2_64(dimension);
+      });
+      bool kLayoutSupported = k > 0 && llvm::isPowerOf2_64(k);
+
+      const int64_t nativeK = static_cast<int64_t>(dpasCap->systolicDepth) *
+                              static_cast<int64_t>(opsPerChan);
+      bool kInstructionSupported = k >= nativeK && k % nativeK == 0;
+
+      const int64_t minimumAcceleratedN =
+          static_cast<int64_t>(dpasCap->executionSize);
+      bool nSupported = n >= minimumAcceleratedN;
+
+      if (!resultShapeSupported || !kLayoutSupported ||
+          !kInstructionSupported || !nSupported) {
+        return rewriter.notifyMatchFailure(
+            op, "dot shape is not eligible for DPAS");
+      }
+    }
+
     SmallVector<unsigned> warpsPerTile =
         getWarpsPerTile(op, *dpasCap, retShape, numWarps);
     unsigned threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
@@ -415,6 +447,39 @@ private:
           mlir::ceil<unsigned>(shape[rank - 2], dpasCap.repeatCount));
       unsigned maxNumWarpsAlongN = clampToPowerOfTwo(
           mlir::ceil<unsigned>(shape[rank - 1], dpasCap.executionSize));
+
+      // Distribute \p warps over the batch dimension (if any) and return the
+      // number of warps left to distribute over the M and N dimensions.
+      auto assignBatchWarps = [&](unsigned warps) {
+        if (rank == 2)
+          return warps;
+        unsigned batch = static_cast<unsigned>(std::max<int64_t>(shape[0], 1));
+        ret[0] = std::min(clampToPowerOfTwo(batch), warps);
+        return mlir::ceil<unsigned>(warps, ret[0]);
+      };
+
+      // When the chain runs through operand A, N is the K dimension of the
+      // consumer dot, so distributing warps along N forces the intermediate
+      // result to be exchanged between warps through shared memory on every
+      // iteration of the enclosing loop. If M cannot hold more than one warp
+      // (e.g. M == 1 for attention decode) there is nothing to trade: keep the
+      // warps on the batch and M dimensions, because duplicating the
+      // computation is cheaper than that exchange.
+      //
+      // The mirrored case (a chain through operand B, whose M is the K
+      // dimension of the consumer dot) has the same defect but is deliberately
+      // left alone: there the degenerate dimension is N, and a chain with a
+      // narrow N can still have a large M. Moving the warps onto N would
+      // duplicate all but one of them and forfeit that M parallelism to save a
+      // per-iteration exchange -- measured 1.6x to 7.6x slower for N == 16,
+      // M == 128, growing with the warp count. Trading the exchange against the
+      // parallelism it costs needs a cost model rather than this guard.
+      if (chainedDotKind == ChainedDotKind::ChainedAlongA &&
+          maxNumWarpsAlongM == 1) {
+        ret[rank - 2] = assignBatchWarps(numWarps);
+        return ret;
+      }
+
       if (chainedDotKind == ChainedDotKind::ChainedAlongA) {
         ret[rank - 2] = std::min(maxNumWarpsAlongM, numWarps);
         ret[rank - 1] = std::min(maxNumWarpsAlongN,
@@ -427,13 +492,8 @@ private:
 
       unsigned numWarpsUsed = ret[rank - 1] * ret[rank - 2];
       if (numWarpsUsed < numWarps) {
-        unsigned remainingWarps = mlir::ceil<unsigned>(numWarps, numWarpsUsed);
-        if (rank > 2) {
-          unsigned batch =
-              static_cast<unsigned>(std::max<int64_t>(shape[0], 1));
-          ret[0] = std::min(clampToPowerOfTwo(batch), remainingWarps);
-          remainingWarps = mlir::ceil<unsigned>(remainingWarps, ret[0]);
-        }
+        unsigned remainingWarps =
+            assignBatchWarps(mlir::ceil<unsigned>(numWarps, numWarpsUsed));
 
         // Put remaining parallelism on the non-chained dot dimension.
         if (chainedDotKind == ChainedDotKind::ChainedAlongA) {

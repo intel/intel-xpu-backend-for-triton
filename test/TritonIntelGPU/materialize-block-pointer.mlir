@@ -133,6 +133,57 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
 
 // -----
 
+// COM: Negative case - the row bound of the mask is an opaque runtime scalar, so
+// COM: the mask has constancy 1 along the row dimension. A 2D block message carries
+// COM: a single predicate for the whole tile, so the tile would be clamped to one
+// COM: row; decline block IO instead and let the load keep its coalesced layout.
+#blocked7 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 4], warpsPerCTA = [32, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @masked_opaque_row_bound_no_block_io
+  tt.func public @masked_opaque_row_bound_no_block_io(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
+    %m_size = tt.load %arg1 : !tt.ptr<i32>
+    %0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked7}>>
+    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked7}>> -> tensor<1x32xi32, #blocked7>
+    %2 = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<1x32x!tt.ptr<bf16>, #blocked7>
+    %3 = tt.addptr %2, %1 : tensor<1x32x!tt.ptr<bf16>, #blocked7>, tensor<1x32xi32, #blocked7>
+    %4 = tt.broadcast %3 : tensor<1x32x!tt.ptr<bf16>, #blocked7> -> tensor<256x32x!tt.ptr<bf16>, #blocked7>
+    %5 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked7}>>
+    %6 = tt.expand_dims %5 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked7}>> -> tensor<256x1xi32, #blocked7>
+    %7 = tt.splat %m_size : i32 -> tensor<256x1xi32, #blocked7>
+    %8 = arith.cmpi slt, %6, %7 : tensor<256x1xi32, #blocked7>
+    %mask = tt.broadcast %8 : tensor<256x1xi1, #blocked7> -> tensor<256x32xi1, #blocked7>
+    // CHECK-NOT: ttig.block_io
+    tt.load %4, %mask : tensor<256x32x!tt.ptr<bf16>, #blocked7>
+    tt.return
+  }
+}
+
+// -----
+
+// COM: The same mask shape as above, but the row bound is known to be a multiple
+// COM: of 16, so the mask is uniform over a 16-row tile and block IO is kept.
+#blocked8 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 4], warpsPerCTA = [32, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @masked_divisible_row_bound_load
+  tt.func public @masked_divisible_row_bound_load(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %m_size: i32 {tt.divisibility = 16 : i32}) {
+    %0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked8}>>
+    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked8}>> -> tensor<1x32xi32, #blocked8>
+    %2 = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<1x32x!tt.ptr<bf16>, #blocked8>
+    %3 = tt.addptr %2, %1 : tensor<1x32x!tt.ptr<bf16>, #blocked8>, tensor<1x32xi32, #blocked8>
+    %4 = tt.broadcast %3 : tensor<1x32x!tt.ptr<bf16>, #blocked8> -> tensor<256x32x!tt.ptr<bf16>, #blocked8>
+    %5 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked8}>>
+    %6 = tt.expand_dims %5 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked8}>> -> tensor<256x1xi32, #blocked8>
+    %7 = tt.splat %m_size : i32 -> tensor<256x1xi32, #blocked8>
+    %8 = arith.cmpi slt, %6, %7 : tensor<256x1xi32, #blocked8>
+    %mask = tt.broadcast %8 : tensor<256x1xi1, #blocked8> -> tensor<256x32xi1, #blocked8>
+    // CHECK: tt.load {{.*}} {ttig.block_io = "row_major"}
+    tt.load %4, %mask : tensor<256x32x!tt.ptr<bf16>, #blocked8>
+    tt.return
+  }
+}
+
+// -----
+
 // COM: 3D regular pointer.
 #blocked = #ttg.blocked<{sizePerThread = [1, 4, 4], threadsPerWarp = [1, 4, 8], warpsPerCTA = [2, 2, 1], order = [2, 1, 0]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.support_2d_block_io} {
@@ -186,8 +237,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32,
     %37 = tt.broadcast %36 : tensor<1x1x32xi32, #blocked> -> tensor<2x32x32xi32, #blocked>
     %38 = arith.addi %26, %37 : tensor<2x32x32xi32, #blocked>
     %39 = tt.addptr %27, %38 : tensor<2x32x32x!tt.ptr<f16>, #blocked>, tensor<2x32x32xi32, #blocked>
-    // CHECK: tt.load {{.*}} {ttig.block_io = "row_major"}
-    %40 = tt.load %39 evictionPolicy = evict_last : tensor<2x32x32x!tt.ptr<f16>, #blocked>
+    // CHECK: tt.load {{.*}}ttig.block_io = "row_major"
+    %40 = tt.load %39 {cachePolicy = #tt.cache_policy<cache_modifier = none, eviction_policy = evict_last>} : tensor<2x32x32x!tt.ptr<f16>, #blocked>
     // CHECK: tt.store {{.*}} {ttig.block_io = "row_major"}
     tt.store %39, %40 : tensor<2x32x32x!tt.ptr<f16>, #blocked>
     tt.return
@@ -253,6 +304,156 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
         // CHECK-NOT: ttig.block_io
         %x = tt.descriptor_load %desc[%c128_i32, %k] : !tt.tensordesc<128x64xbf16> -> tensor<128x64xbf16, #blocked>
       }
+    }
+    tt.return
+  }
+}
+
+// -----
+// COM: A loop-carried offset stepped by a non-divisible amount must not enable block IO:
+// COM: the index is odd on every other iteration, and the 2D block message
+// COM: requires a 2-element aligned X for 16-bit elements (issue #7990).
+#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @offset_loop_carried_indivisible
+  tt.func public @offset_loop_carried_indivisible(%x_ptr: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %M: i32 {tt.divisibility = 16 : i32}, %K: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c3_i32 = arith.constant 3 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %desc_x = arith.extsi %K : i32 to i64
+    %desc = tt.make_tensor_descriptor %x_ptr, [%M, %K], [%desc_x, %c1_i64] : <bf16>, <128x64xbf16>
+    scf.for %i = %c0_i32 to %K step %c64_i32 iter_args(%off = %c0_i32) -> (i32) : i32 {
+      // CHECK: tt.descriptor_load
+      // CHECK-NOT: ttig.block_io
+      // CHECK-SAME: !tt.tensordesc
+      %x = tt.descriptor_load %desc[%c128_i32, %off] : !tt.tensordesc<128x64xbf16> -> tensor<128x64xbf16, #blocked>
+      %next = arith.addi %off, %c3_i32 : i32
+      scf.yield %next : i32
+    }
+    tt.return
+  }
+}
+
+// -----
+// COM: A loop-carried offset stepped by a divisible amount must keep block IO lowering.
+#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @offset_loop_carried_divisible
+  tt.func public @offset_loop_carried_divisible(%x_ptr: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %M: i32 {tt.divisibility = 16 : i32}, %K: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c32_i32 = arith.constant 32 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %desc_x = arith.extsi %K : i32 to i64
+    %desc = tt.make_tensor_descriptor %x_ptr, [%M, %K], [%desc_x, %c1_i64] : <bf16>, <128x64xbf16>
+    scf.for %i = %c0_i32 to %K step %c64_i32 iter_args(%off = %c0_i32) -> (i32) : i32 {
+      // CHECK: tt.descriptor_load {{.*}} {ttig.block_io = "row_major", ttig.desc_padding = 1 : i32}
+      %x = tt.descriptor_load %desc[%c128_i32, %off] : !tt.tensordesc<128x64xbf16> -> tensor<128x64xbf16, #blocked>
+      %next = arith.addi %off, %c32_i32 : i32
+      scf.yield %next : i32
+    }
+    tt.return
+  }
+}
+
+// -----
+// COM: The stream-K shape (gemm_streamk_benchmark.py): a loop-carried offset whose
+// COM: initial value is itself a multiple of the step must keep block IO lowering.
+#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @offset_loop_carried_divisible_mul_init
+  tt.func public @offset_loop_carried_divisible_mul_init(%x_ptr: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %M: i32 {tt.divisibility = 16 : i32}, %K: i32 {tt.divisibility = 16 : i32}, %remain_iters: i32) attributes {noinline = false} {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c32_i32 = arith.constant 32 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %desc_x = arith.extsi %K : i32 to i64
+    %desc = tt.make_tensor_descriptor %x_ptr, [%M, %K], [%desc_x, %c1_i64] : <bf16>, <128x64xbf16>
+    %init_off = arith.muli %remain_iters, %c32_i32 : i32
+    scf.for %i = %c0_i32 to %K step %c64_i32 iter_args(%off = %init_off) -> (i32) : i32 {
+      // CHECK: tt.descriptor_load {{.*}} {ttig.block_io = "row_major", ttig.desc_padding = 1 : i32}
+      %x = tt.descriptor_load %desc[%c128_i32, %off] : !tt.tensordesc<128x64xbf16> -> tensor<128x64xbf16, #blocked>
+      %next = arith.addi %off, %c32_i32 : i32
+      scf.yield %next : i32
+    }
+    tt.return
+  }
+}
+
+// -----
+// COM: 8-bit elements need a 4-element aligned index, so a loop-carried offset stepped
+// COM: by 2 must not enable block IO lowering even though 2 is even.
+#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @offset_loop_carried_i8_indivisible
+  tt.func public @offset_loop_carried_i8_indivisible(%x_ptr: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %M: i32 {tt.divisibility = 16 : i32}, %K: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c2_i32 = arith.constant 2 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %desc_x = arith.extsi %K : i32 to i64
+    %desc = tt.make_tensor_descriptor %x_ptr, [%M, %K], [%desc_x, %c1_i64] : <i8>, <128x64xi8>
+    scf.for %i = %c0_i32 to %K step %c64_i32 iter_args(%off = %c0_i32) -> (i32) : i32 {
+      // CHECK: tt.descriptor_load
+      // CHECK-NOT: ttig.block_io
+      // CHECK-SAME: !tt.tensordesc
+      %x = tt.descriptor_load %desc[%c128_i32, %off] : !tt.tensordesc<128x64xi8> -> tensor<128x64xi8, #blocked>
+      %next = arith.addi %off, %c2_i32 : i32
+      scf.yield %next : i32
+    }
+    tt.return
+  }
+}
+
+// -----
+// COM: A loop-carried offset stepped by a function argument carrying a tt.divisibility
+// COM: hint must keep block IO lowering.
+#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @offset_loop_carried_step_divisible_arg
+  tt.func public @offset_loop_carried_step_divisible_arg(%x_ptr: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %M: i32 {tt.divisibility = 16 : i32}, %K: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c64_i32 = arith.constant 64 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %desc_x = arith.extsi %K : i32 to i64
+    %desc = tt.make_tensor_descriptor %x_ptr, [%M, %K], [%desc_x, %c1_i64] : <bf16>, <128x64xbf16>
+    scf.for %i = %c0_i32 to %M step %c64_i32 iter_args(%off = %c0_i32) -> (i32) : i32 {
+      // CHECK: tt.descriptor_load {{.*}} {ttig.block_io = "row_major", ttig.desc_padding = 1 : i32}
+      %x = tt.descriptor_load %desc[%c128_i32, %off] : !tt.tensordesc<128x64xbf16> -> tensor<128x64xbf16, #blocked>
+      %next = arith.addi %off, %K : i32
+      scf.yield %next : i32
+    }
+    tt.return
+  }
+}
+
+// -----
+// COM: A loop-carried offset stepped by an unconstrained runtime value is not provably
+// COM: aligned, so block IO must be refused. This is intentional: a kernel that knows
+// COM: the step is aligned can say so with tl.multiple_of.
+#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func public @offset_loop_carried_runtime_step
+  tt.func public @offset_loop_carried_runtime_step(%x_ptr: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %M: i32 {tt.divisibility = 16 : i32}, %K: i32 {tt.divisibility = 16 : i32}, %step: i32) attributes {noinline = false} {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c64_i32 = arith.constant 64 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %desc_x = arith.extsi %K : i32 to i64
+    %desc = tt.make_tensor_descriptor %x_ptr, [%M, %K], [%desc_x, %c1_i64] : <bf16>, <128x64xbf16>
+    scf.for %i = %c0_i32 to %M step %c64_i32 iter_args(%off = %c0_i32) -> (i32) : i32 {
+      // CHECK: tt.descriptor_load
+      // CHECK-NOT: ttig.block_io
+      // CHECK-SAME: !tt.tensordesc
+      %x = tt.descriptor_load %desc[%c128_i32, %off] : !tt.tensordesc<128x64xbf16> -> tensor<128x64xbf16, #blocked>
+      %next = arith.addi %off, %step : i32
+      scf.yield %next : i32
     }
     tt.return
   }
