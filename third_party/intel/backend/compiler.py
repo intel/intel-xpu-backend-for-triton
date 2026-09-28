@@ -152,18 +152,7 @@ def spill_slots_per_lane(spill_size, threads_per_warp):
     return spill_size // (4 * threads_per_warp)
 
 
-def min_spill_slots_for_rebuild(threads_per_warp):
-    """First spill that triggers the auto-large-GRF rebuild, in `n_spills`' own unit.
-
-    8 dword-equivalents/lane at SIMD32, 16 at SIMD16 -- the same 1024 B per hardware
-    thread either way. Converted by `spill_slots_per_lane` itself, so it shares that
-    unit and its raw-byte fallback for an unknown width. Mirrors
-    `Spills::minSlotsForRebuild` in driver.c.
-    """
-    return spill_slots_per_lane(REBUILD_SPILL_BYTES_PER_THREAD, threads_per_warp)
-
-
-def accepts_default_grf(spill_size, threads_per_warp, is_lts):
+def accepts_default_grf(spill_size, is_lts):
     """Whether the default-GRF build is good enough to skip the large-GRF rebuild.
 
     Rolling rebuilds once the spill reaches `REBUILD_SPILL_BYTES_PER_THREAD` bytes per
@@ -184,14 +173,16 @@ def accepts_default_grf(spill_size, threads_per_warp, is_lts):
     affected, issue #8106), while the same 12 configs measure neutral on rolling. So
     LTS keeps the older rule of rebuilding on any spill.
 
-    The LTS branch compares BYTES rather than slots on purpose. Because
-    `spill_slots_per_lane` truncates, a slot threshold of 0 would still accept a
-    64 B spill (0 slots at SIMD32) and skip the rebuild -- and a 64 B config is
-    one of the 12 this is meant to cover.
+    Both branches compare bytes, the unit both spill probes report. Neither needs the
+    compiled sub-group size: routing the spill and the threshold through the same
+    truncating `spill_slots_per_lane` cancels the divisor, so the per-lane form of this
+    gate decided exactly `spill_size >= REBUILD_SPILL_BYTES_PER_THREAD` at every width
+    a power-of-two 4 * threads_per_warp divides -- every width the backend can reach,
+    plus the unknown-width fallback. `n_spills`' per-lane unit is for reporting.
     """
     if is_lts:
         return spill_size <= 0
-    return spill_slots_per_lane(spill_size, threads_per_warp) < min_spill_slots_for_rebuild(threads_per_warp)
+    return spill_size < REBUILD_SPILL_BYTES_PER_THREAD
 
 
 def min_dot_size(device_props: Union[Dict, GPUTarget]):
@@ -766,7 +757,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                     subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
                     if options.grf_mode == "default":
                         spill_size = extract_spill_size_from_zebin(fbin)
-                        if accepts_default_grf(spill_size, metadata["threads_per_warp"], options.is_lts):
+                        if accepts_default_grf(spill_size, options.is_lts):
                             break
                 except (subprocess.CalledProcessError, IntelGPUError) as e:
                     # If GRF mode was not last yet, retry with different GRF mode

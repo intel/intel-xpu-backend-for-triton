@@ -190,12 +190,11 @@ def _large_grf_retries(calls) -> int:
 @_requires_warps(4)
 @pytest.mark.skipif(not _has_ocloc(), reason="`ocloc` not on PATH — AOT path can't be exercised")
 def test_spill_gate_rebuilds_at_1024_bytes_per_thread(monkeypatch, fresh_triton_cache, spill_size, expected_retries):
-    """The rebuild fires at 1024 B/hardware-thread and not one slot below it.
+    """The rebuild fires at 1024 B/hardware-thread and not one dword-per-lane below.
 
     Stubbing the spill probe is what makes this the only place the exact boundary
     meets the real retry loop, with no dependence on how much a kernel happens to
-    spill. 960/1024 B is the boundary at every SIMD width (15/16 slots at SIMD16,
-    7/8 at SIMD32), so `WARP_SIZE` needs no special casing.
+    spill. The gate compares bytes, so `WARP_SIZE` does not enter into it.
     """
     # On LTS any positive spill rebuilds (issue #8106), so 960 B would retry too.
     if is_lts(torch.xpu.get_device_capability(torch.xpu.current_device()).get("driver_version")):

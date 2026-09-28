@@ -373,21 +373,22 @@ public:
     return bytes / (int64_t{4} * subgroupSize);
   }
 
-  // First `slotsPerLane()` value that triggers the large-GRF rebuild: 1024 B per
-  // hardware thread at every SIMD width, i.e. 16 slots/lane at SIMD16 and 8 at
-  // SIMD32. Mirrors `min_spill_slots_for_rebuild` in compiler.py -- see the
-  // comment on `REBUILD_SPILL_BYTES_PER_THREAD` there for where 1024 comes from.
-  int64_t minSlotsForRebuild() const {
-    constexpr int64_t kRebuildSpillBytesPerThread = 1024;
-    // Converted by slotsPerLane() itself, so it shares that unit and its
-    // raw-byte fallback for an unknown width.
-    return Spills(kRebuildSpillBytesPerThread, subgroupSize).slotsPerLane();
-  }
-
 private:
   int64_t bytes = -1;        // L0 spillMemSize (uint32_t) widened; -1 == error.
   uint32_t subgroupSize = 0; // Compiled SIMD width; 0 == unknown.
 };
+
+// Spill at which `load_binary` rebuilds at large GRF, in the unit both spill
+// probes report: bytes per hardware thread. Mirrors
+// `REBUILD_SPILL_BYTES_PER_THREAD` in compiler.py -- see the comment there for
+// where 1024 comes from.
+//
+// Compared in bytes rather than in `slotsPerLane()`'s per-lane unit because the
+// compiled sub-group size has no part in the decision: routing the spill and
+// the threshold through the same truncating conversion cancels the divisor, so
+// the per-lane form of this gate decided exactly this comparison at every width
+// the backend can reach.
+constexpr int64_t kRebuildSpillBytesPerThread = 1024;
 
 // Converts a spill count to the `Py_BuildValue("i")` domain, saturating rather
 // than wrapping. Only the unknown-width byte passthrough can approach the
@@ -610,7 +611,7 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   // `is_lts` input, so this gate cannot express that carve-out.
   if (canRetryWithLargeGRF &&
       (firstBuildFailed ||
-       n_spills.slotsPerLane() >= n_spills.minSlotsForRebuild())) {
+       n_spills.getBytes() >= kRebuildSpillBytesPerThread)) {
     PyObject *orig_type = nullptr, *orig_value = nullptr, *orig_tb = nullptr;
     // Save the original error before clearing it for the retry attempt.
     if (firstBuildFailed)
@@ -629,7 +630,8 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
                 << " B/hardware-thread = " << n_spills.slotsPerLane()
                 << " dword-equivalents/lane at SIMD"
                 << n_spills.getSubgroupSize() << ", rebuild at "
-                << n_spills.minSlotsForRebuild() << ")" << std::endl;
+                << kRebuildSpillBytesPerThread << " B/hardware-thread)"
+                << std::endl;
 
     if (std::strcmp(resolvedDeviceArch, "cri") == 0) {
       build_flags.addXLargeGRFSizeFlag();
@@ -715,15 +717,15 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   // Reports the *selected* pass -- post-retry after a successful replacement,
   // the default build on the accept path or after a failed retry. The threshold
   // is printed too so tests can assert it against
-  // `min_spill_slots_for_rebuild`. test_auto_grf matches the byte count to pin
-  // the retry, so keep that wording.
+  // `REBUILD_SPILL_BYTES_PER_THREAD`. test_auto_grf matches the byte count to
+  // pin the retry, so keep that wording.
   if (debugEnabled && n_spills.getBytes()) {
     std::cout << "(I): Detected " << n_spills.getBytes()
               << " spill bytes per hardware thread; n_spills "
               << n_spills.slotsPerLane() << " dword-equivalents/lane (SIMD"
               << n_spills.getSubgroupSize() << "), rebuild at "
-              << n_spills.minSlotsForRebuild() << " for \"" << kernel_name
-              << "\"" << std::endl;
+              << kRebuildSpillBytesPerThread << " B/hardware-thread for \""
+              << kernel_name << "\"" << std::endl;
   }
 
   auto n_regs = build_flags.n_regs();

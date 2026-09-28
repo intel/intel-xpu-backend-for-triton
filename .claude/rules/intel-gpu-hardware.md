@@ -19,16 +19,16 @@ Each hardware thread has a private register file. **Do not guess** GRF register 
 1. Compile with default (small) GRF
 2. Extract spill size from ZEBIN `.ze_info` section (AOT) or query Level Zero
    `spillMemSize` (JIT) — both are **bytes per hardware thread**
-3. Normalize to **dword-equivalents per lane** (`bytes / (4 × sub-group size)`),
-   the unit CUDA/HIP report `n_spills` in and that external consumers threshold on
-4. If the spill reaches **1024 B per hardware thread** → recompile with
+3. If the spill reaches **1024 B per hardware thread** → recompile with
    256-GRF mode (512 on CRI)
+4. Normalize to **dword-equivalents per lane** (`bytes / (4 × sub-group size)`) for
+   *reporting* `n_spills`, the unit CUDA/HIP use and external consumers threshold on
 
-The threshold is a function of the sub-group size, not a constant:
-`min_spill_slots_for_rebuild` in `compiler.py` and `Spills::minSlotsForRebuild` in
-`driver.c`, both `1024 / (4 × threads_per_warp)` — **8** slots/lane at SIMD32,
-**16** at SIMD16. An unknown width makes the per-lane conversion fall back to raw
-bytes, so the threshold falls back to `1024` too.
+The threshold is a constant in bytes per hardware thread, the unit both spill probes
+report: `REBUILD_SPILL_BYTES_PER_THREAD` in `compiler.py` and
+`kRebuildSpillBytesPerThread` in `driver.c`. The compiled sub-group size is not an
+input to the gate — only to `n_spills`' presentation (`spill_slots_per_lane` /
+`Spills::slotsPerLane`).
 
 1024 B is the largest threshold that keeps every *accepted* kernel strictly below
 PyTorch inductor's `spill_threshold` (16 dword-equivalents/lane by default off HIP) at
