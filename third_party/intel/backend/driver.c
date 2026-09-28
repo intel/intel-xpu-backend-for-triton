@@ -382,9 +382,9 @@ public:
     constexpr int64_t kDefaultGRFBytesPerThread = 4096;
     constexpr int64_t kRebuildSpillBytesPerThread =
         kDefaultGRFBytesPerThread / 4;
-    if (subgroupSize == 0)
-      return kRebuildSpillBytesPerThread; // slotsPerLane() falls back to bytes
-    return kRebuildSpillBytesPerThread / 4 / int64_t{subgroupSize};
+    // Converted by slotsPerLane() itself, so it shares that unit and its
+    // raw-byte fallback for an unknown width.
+    return Spills(kRebuildSpillBytesPerThread, subgroupSize).slotsPerLane();
   }
 
 private:
