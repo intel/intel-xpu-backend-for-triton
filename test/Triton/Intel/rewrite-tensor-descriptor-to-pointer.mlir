@@ -298,7 +298,7 @@ module {
 // COM: `scf.if`, this shape does not merely mis-convert: the pass walks the region
 // COM: while it is transiently empty.
 // COM:
-// COM: Measured at base commit 495054198: ASSERTION CRASH, exit 141
+// COM: Measured at base commit 495054198: triton-opt aborts on the assertion
 // COM:   triton-opt: mlir/include/mlir/IR/OpDefinition.h:920:
 // COM:   mlir::Block *mlir::OpTrait::SingleBlock<mlir::scf::ForOp>::getBody(unsigned)
 // COM:   Assertion `!region.empty() && "unexpected empty region"' failed.
