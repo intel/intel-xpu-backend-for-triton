@@ -373,11 +373,10 @@ public:
     return bytes / (int64_t{4} * subgroupSize);
   }
 
-  // First `slotsPerLane()` value that triggers the large-GRF rebuild:
-  // inductor's `spill_threshold` of 16 slots/lane at SIMD16, i.e. the same
-  // 1024 B per hardware thread at every SIMD width (8 slots/lane at SIMD32).
-  // Mirrors `min_spill_slots_for_rebuild` in compiler.py -- see the comment on
-  // `REBUILD_SPILL_BYTES_PER_THREAD` there for the derivation.
+  // First `slotsPerLane()` value that triggers the large-GRF rebuild: 1024 B per
+  // hardware thread at every SIMD width, i.e. 16 slots/lane at SIMD16 and 8 at
+  // SIMD32. Mirrors `min_spill_slots_for_rebuild` in compiler.py -- see the
+  // comment on `REBUILD_SPILL_BYTES_PER_THREAD` there for where 1024 comes from.
   int64_t minSlotsForRebuild() const {
     constexpr int64_t kRebuildSpillBytesPerThread = 1024;
     // Converted by slotsPerLane() itself, so it shares that unit and its
@@ -593,15 +592,18 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   }
 
   const bool debugEnabled = getBoolEnv("TRITON_DEBUG");
-  // Rebuild once spilling reaches 1024 B per hardware thread: torch inductor's
-  // `spill_threshold` of 16 dword-equivalents/lane, measured at SIMD16, the
-  // narrowest width we generate. The earlier rule compared slots directly, so
-  // the effective budget doubled with the sub-group size -- 2176 B at SIMD32 --
-  // and the gate stayed silent across a band where rebuilding measurably paid
-  // (issue #8077). A spill below inductor's threshold is not one inductor has
-  // approved: the threshold only prunes configs from its timing contest, so
-  // declining the rebuild leaves inductor timing the spilling default-GRF
-  // binary with no faster rival to pick.
+  // Rebuild once spilling reaches 1024 B per hardware thread -- the level that
+  // keeps an accepted kernel under inductor's `spill_threshold` of 16
+  // dword-equivalents/lane at SIMD16, the narrowest width we compile at; see
+  // `REBUILD_SPILL_BYTES_PER_THREAD` in compiler.py. Fixing a byte count rather
+  // than a per-lane slot count is what makes that hold at every width: #7959's
+  // rule compared slots at the compiled width, so the effective budget doubled
+  // with the sub-group size -- 2176 B at SIMD32 -- and the gate stayed silent
+  // across a band where rebuilding measurably paid (issue #8077). Inductor's
+  // threshold sets the level but grants no licence below it: it prunes configs
+  // from inductor's timing contest rather than approving them, so declining the
+  // rebuild leaves inductor timing the spilling default-GRF binary with no
+  // faster rival.
   //
   // Mirrors `accepts_default_grf` in compiler.py, except that compiler.py
   // additionally rebuilds on any spill for LTS drivers: `load_binary` has no

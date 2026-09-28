@@ -30,12 +30,20 @@ The threshold is a function of the sub-group size, not a constant:
 **16** at SIMD16. An unknown width makes the per-lane conversion fall back to raw
 bytes, so the threshold falls back to `1024` too.
 
-1024 B is PyTorch inductor's default `spill_threshold = 16` dword-equivalents/lane
-at SIMD16, the narrowest width the backend generates (`warp_size` defaults to 32 and
-`setThreadsPerWarp` only ever lowers it to 16). The threshold only prunes configs
-from inductor's timing contest; a spill below it is not one inductor has approved. The
-earlier flat `16` slots/lane meant 2176 B at SIMD32 but 1088 at SIMD16, which is
-what issue #8077 reported as an inductor regression.
+1024 B is the largest threshold that keeps every *accepted* kernel strictly below
+PyTorch inductor's `spill_threshold` (16 dword-equivalents/lane by default off HIP) at
+every width the backend can compile at. SIMD16 is the binding case, being the narrowest
+(`warp_size` defaults to 32 and `setThreadsPerWarp` only ever lowers it to 16): 16
+slots/lane is 16 × 4 × 16 = 1024 B there, so 1025 would let a SIMD16 kernel reach
+inductor's threshold on the default-GRF build. Inductor prunes strictly above 16, so
+this leaves a slot of margin at SIMD16, and the threshold only prunes configs from
+inductor's timing contest — a spill below it is not one inductor has approved.
+
+Bytes, not slots, is what makes that bound hold: 16 slots/lane is 2048 B at SIMD32, so
+comparing slots at the *compiled* width lets the byte budget float up with it. #7959 did
+exactly that and the gate went silent from 1024 B up to 2175 B at SIMD32 — the band
+issue #8077 reported as an inductor regression. Taking the minimum over widths means the
+wider width fires early (8 slots/lane at SIMD32), the safe direction.
 
 Rolling only. On LTS, `accepts_default_grf` rebuilds for **any** positive spill
 (issue #8106); `driver.c` takes no `is_lts` input at all, so the two gates are not
