@@ -29,13 +29,11 @@ def test_empty_kernel(device):
         (64, 32, False, True),
         (64, 32, True, False),
         # The rolling boundary is 1024 B/hardware-thread at every SIMD width. This
-        # triple is the only check of that width invariance (issue #8077).
+        # pair is the only check of that width invariance (issue #8077).
         (960, 32, False, True),  # 7 slots/lane
         (1024, 32, False, False),  # 8 slots/lane -- first rebuild
         (960, 16, False, True),  # 15 slots/lane
         (1024, 16, False, False),  # 16 slots/lane -- same bytes, half the width
-        (544, 8, False, True),  # 17 slots/lane -- SIMD8 reversal, `slots > 16` rebuilt here
-        (1024, 8, False, False),  # 32 slots/lane
         # Unknown width falls back to raw bytes on both sides. Only meaningful as a
         # pair: an erroneous 8-slot threshold also rejects 1024, but accepts 960.
         (960, 0, False, True),

@@ -373,15 +373,13 @@ public:
     return bytes / (int64_t{4} * subgroupSize);
   }
 
-  // First `slotsPerLane()` value that triggers the large-GRF rebuild: a quarter
-  // of the per-lane GRF budget, i.e. the same 1024 B per hardware thread at
-  // every SIMD width. Mirrors `min_spill_slots_for_rebuild` in compiler.py --
-  // see the comment there for why 4096 is a policy baseline and the quarter is
-  // calibration rather than hardware.
+  // First `slotsPerLane()` value that triggers the large-GRF rebuild:
+  // inductor's `spill_threshold` of 16 slots/lane at SIMD16, i.e. the same
+  // 1024 B per hardware thread at every SIMD width (8 slots/lane at SIMD32).
+  // Mirrors `min_spill_slots_for_rebuild` in compiler.py -- see the comment on
+  // `REBUILD_SPILL_BYTES_PER_THREAD` there for the derivation.
   int64_t minSlotsForRebuild() const {
-    constexpr int64_t kDefaultGRFBytesPerThread = 4096;
-    constexpr int64_t kRebuildSpillBytesPerThread =
-        kDefaultGRFBytesPerThread / 4;
+    constexpr int64_t kRebuildSpillBytesPerThread = 1024;
     // Converted by slotsPerLane() itself, so it shares that unit and its
     // raw-byte fallback for an unknown width.
     return Spills(kRebuildSpillBytesPerThread, subgroupSize).slotsPerLane();
@@ -595,11 +593,15 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   }
 
   const bool debugEnabled = getBoolEnv("TRITON_DEBUG");
-  // Rebuild once spilling reaches a quarter of the register file. The earlier
-  // rule aligned this with torch inductor's `spill_threshold = 16` -- a spill
-  // inductor tolerates cannot change its verdict -- but that left the gate
-  // silent across the whole region inductor accepts while spilling, which is
-  // where the latency went (issue #8077).
+  // Rebuild once spilling reaches 1024 B per hardware thread: torch inductor's
+  // `spill_threshold` of 16 dword-equivalents/lane, measured at SIMD16, the
+  // narrowest width we generate. The earlier rule compared slots directly, so
+  // the effective budget doubled with the sub-group size -- 2176 B at SIMD32 --
+  // and the gate stayed silent across a band where rebuilding measurably paid
+  // (issue #8077). A spill below inductor's threshold is not one inductor has
+  // approved: the threshold only prunes configs from its timing contest, so
+  // declining the rebuild leaves inductor timing the spilling default-GRF
+  // binary with no faster rival to pick.
   //
   // Mirrors `accepts_default_grf` in compiler.py, except that compiler.py
   // additionally rebuilds on any spill for LTS drivers: `load_binary` has no

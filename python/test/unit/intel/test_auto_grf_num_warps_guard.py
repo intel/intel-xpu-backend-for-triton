@@ -189,8 +189,7 @@ def _large_grf_retries(calls) -> int:
 @pytest.mark.parametrize("spill_size, expected_retries", [(960, 0), (1024, 1)])
 @_requires_warps(4)
 @pytest.mark.skipif(not _has_ocloc(), reason="`ocloc` not on PATH — AOT path can't be exercised")
-def test_spill_gate_rebuilds_at_a_quarter_of_the_grf_budget(monkeypatch, fresh_triton_cache, spill_size,
-                                                            expected_retries):
+def test_spill_gate_rebuilds_at_1024_bytes_per_thread(monkeypatch, fresh_triton_cache, spill_size, expected_retries):
     """The rebuild fires at 1024 B/hardware-thread and not one slot below it.
 
     Stubbing the spill probe is what makes this the only place the exact boundary

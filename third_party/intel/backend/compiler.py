@@ -83,17 +83,15 @@ class XPUOptions:
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
-# The 128-GRF file is this many bytes per *hardware thread* at every SIMD width
-# (`RegisterPressureAnalysis::getGRFBytesPerHardwareThread`), so the per-lane budget
-# scales with the width. A policy baseline, not a measurement: the real size under
-# `grf_mode='default'` is unknown here (`RegisterPressure.h`) and the rebuild asks 256.
-DEFAULT_GRF_BYTES_PER_THREAD = 4096
-
-# Rebuild once spilling reaches a quarter of it. The quarter is calibration, not
-# hardware: it puts the gate where the measured byte rule was (issue #8077), but
-# relative to the budget so it tracks the SIMD width. Kept in sync with driver.c,
-# except on the LTS driver line -- see `accepts_default_grf`.
-REBUILD_SPILL_BYTES_PER_THREAD = DEFAULT_GRF_BYTES_PER_THREAD // 4
+# Rebuild once the spill reaches 16 dword-equivalents per lane -- PyTorch inductor's
+# default `spill_threshold` for non-HIP -- at SIMD16, the narrowest subgroup width we
+# generate (`warp_size` defaults to 32 and `setThreadsPerWarp` only ever lowers it to
+# 16). Expressed in bytes per hardware thread so one constant covers both widths: 16
+# slots/lane at SIMD16, 8 at SIMD32. A multiple of 4 * 32 so `spill_slots_per_lane`'s
+# truncation cannot move the boundary -- this is what rules out a literal 1000, which
+# would collapse to 960/896 at SIMD16/32. Kept in sync with driver.c, except on the
+# LTS driver line -- see `accepts_default_grf`.
+REBUILD_SPILL_BYTES_PER_THREAD = 1024
 
 SPILL_SIZE_RE = re.compile(r'spill_size\s*[:=]\s*(\d+)')
 PTSS_OVERFLOW_RE = re.compile(
@@ -159,11 +157,15 @@ def min_spill_slots_for_rebuild(threads_per_warp):
 def accepts_default_grf(spill_size, threads_per_warp, is_lts):
     """Whether the default-GRF build is good enough to skip the large-GRF rebuild.
 
-    Rolling rebuilds once the spill reaches a quarter of the register file. The
-    earlier rule aligned this with inductor's `spill_threshold = 16` -- a spill
-    inductor tolerates cannot change its verdict -- but that left the gate silent
-    across the whole region inductor accepts while spilling, costing 1.20x on
-    `timm_models/mixnet_l` (issue #8077).
+    Rolling rebuilds once the spill reaches 1024 B per hardware thread: inductor's
+    `spill_threshold` of 16 dword-equivalents/lane, measured at SIMD16, the narrowest
+    width we generate. Fixing the byte count rather than the slot count is the point.
+    The earlier rule compared slots directly, so the effective budget doubled with the
+    sub-group size -- 2176 B at SIMD32 -- and the gate stayed silent across a band
+    where rebuilding measurably paid (issue #8077). A spill below inductor's threshold
+    is not a spill inductor has approved: the threshold only prunes configs from its
+    timing contest, so declining the rebuild leaves inductor timing the spilling
+    default-GRF binary with no faster rival to pick.
 
     LTS IGC prices the resulting binaries differently: declining the rebuild costs
     +21% end to end on `pyhpc_isoneutral_mixing` (Max 1100, 12 of 165 configs

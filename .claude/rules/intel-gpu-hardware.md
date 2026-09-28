@@ -21,22 +21,21 @@ Each hardware thread has a private register file. **Do not guess** GRF register 
    `spillMemSize` (JIT) — both are **bytes per hardware thread**
 3. Normalize to **dword-equivalents per lane** (`bytes / (4 × sub-group size)`),
    the unit CUDA/HIP report `n_spills` in and that external consumers threshold on
-4. If that reaches a **quarter of the per-lane GRF budget** → recompile with
+4. If the spill reaches **1024 B per hardware thread** → recompile with
    256-GRF mode (512 on CRI)
 
 The threshold is a function of the sub-group size, not a constant:
 `min_spill_slots_for_rebuild` in `compiler.py` and `Spills::minSlotsForRebuild` in
-`driver.c`, both `4096 / 4 / threads_per_warp / 4` — **8** slots/lane at SIMD32,
-**16** at SIMD16, i.e. the same **1024 B per hardware thread** at every width,
-because one hardware thread owns the whole 4096-byte file regardless of how many
-lanes share it. An unknown width makes the per-lane conversion fall back to raw
+`driver.c`, both `1024 / (4 × threads_per_warp)` — **8** slots/lane at SIMD32,
+**16** at SIMD16. An unknown width makes the per-lane conversion fall back to raw
 bytes, so the threshold falls back to `1024` too.
 
-The `4096` is a policy baseline (the real size under `grf_mode='default'` is not
-known at that stage) and the quarter is calibration: it puts the rule where the
-measured pre-#7959 byte rule was, expressed relative to the budget so it tracks
-the width. The earlier flat `16` slots/lane meant 2176 B at SIMD32 but 1088 at
-SIMD16, which is what issue #8077 reported as an inductor regression.
+1024 B is PyTorch inductor's default `spill_threshold = 16` dword-equivalents/lane
+at SIMD16, the narrowest width the backend generates (`warp_size` defaults to 32 and
+`setThreadsPerWarp` only ever lowers it to 16). The threshold only prunes configs
+from inductor's timing contest; a spill below it is not one inductor has approved. The
+earlier flat `16` slots/lane meant 2176 B at SIMD32 but 1088 at SIMD16, which is
+what issue #8077 reported as an inductor regression.
 
 Rolling only. On LTS, `accepts_default_grf` rebuilds for **any** positive spill
 (issue #8106); `driver.c` takes no `is_lts` input at all, so the two gates are not
