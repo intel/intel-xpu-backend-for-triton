@@ -87,14 +87,24 @@ class XPUOptions:
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
-# Largest spill the auto-large-GRF upgrade tolerates before rebuilding, in the
-# unit external consumers compare `n_spills` in: dword-equivalents per lane. 16
-# is PyTorch inductor's default `spill_threshold` for non-HIP, so a spill at or
-# below this cannot change inductor's verdict and a rebuild would only cost
-# compile time. Kept in sync with `kMaxSpillSlotsPerLane` in driver.c, except on
-# the LTS driver line -- see `accepts_default_grf` -- because driver.c has no
-# driver-version context and the SPV path it gates was not measured for #8106.
-MAX_REG_SPILL_SLOTS_PER_LANE = 16
+# The largest rebuild threshold that keeps every *accepted* kernel strictly below
+# PyTorch inductor's `spill_threshold` -- 16 dword-equivalents per lane by default off
+# HIP -- at every sub-group width the backend can compile at. SIMD16 is the binding
+# case, being the narrowest (`warp_size` defaults to 32 and `setThreadsPerWarp` only
+# ever lowers it to 16): 16 slots/lane is 16 * 4 * 16 = 1024 B there, so 1025 would
+# already let a SIMD16 kernel reach inductor's threshold on the default-GRF build.
+# Inductor prunes strictly above 16, so this leaves a slot of margin at SIMD16.
+#
+# Bytes, not slots, is what makes that bound hold: the same 16 slots/lane is 2048 B at
+# SIMD32, so comparing slots at the *compiled* width lets the byte budget float up with
+# it. #7959 did exactly that and the gate went silent from 1024 B all the way to 2175 B
+# at SIMD32 -- the band issue #8077 regressed in. Taking the minimum over widths means
+# the wider width fires early (8 slots/lane at SIMD32), which is the safe direction: a
+# rebuild costs compile time, while declining leaves inductor timing a spilling binary.
+#
+# Kept in sync with driver.c, except on the LTS driver line -- see
+# `accepts_default_grf`.
+REBUILD_SPILL_BYTES_PER_THREAD = 1024
 
 SPILL_SIZE_RE = re.compile(r'spill_size\s*[:=]\s*(\d+)')
 PTSS_OVERFLOW_RE = re.compile(
@@ -133,19 +143,6 @@ def extract_spill_size_from_zebin(file):
     return 0
 
 
-def spill_slots_per_lane(spill_size, threads_per_warp):
-    """Convert a zebin `spill_size` to the unit `n_spills` is reported in.
-
-    `spill_size` is bytes allocated per hardware thread; CUDA and HIP report
-    `n_spills` as dword-equivalents per lane, and that is the unit external
-    consumers threshold on. Mirrors `Spills::slotsPerLane` in driver.c, down to
-    the truncating division and the raw-byte fallback for an unknown width.
-    """
-    if spill_size <= 0 or threads_per_warp <= 0:
-        return spill_size
-    return spill_size // (4 * threads_per_warp)
-
-
 def get_max_grf_mode(arch: dict) -> str:
     """
     Returns the largest GRF mode the backend's automatic escalation paths
@@ -177,25 +174,39 @@ def get_max_grf_mode(arch: dict) -> str:
     return "512" if arch.get("arch") == "cri" else "256"
 
 
-def accepts_default_grf(spill_size, threads_per_warp, is_lts):
+def accepts_default_grf(spill_size, is_lts):
     """Whether the default-GRF build is good enough to skip the large-GRF rebuild.
 
-    On the rolling driver line a spill at or below inductor's `spill_threshold`
-    cannot change its accept/reject verdict, so the rebuild would only add
-    compile time. LTS IGC prices the resulting binaries differently: declining
-    the rebuild costs +21% end to end on `pyhpc_isoneutral_mixing` (Max 1100,
-    12 of 165 configs affected, issue #8106), while the same 12 configs measure
-    neutral on rolling. So LTS keeps the older rule of rebuilding on any spill
-    and rolling keeps the compile-time saving.
+    Rolling rebuilds once the spill reaches `REBUILD_SPILL_BYTES_PER_THREAD` bytes per
+    hardware thread -- the level that keeps an accepted kernel under inductor's
+    `spill_threshold` at the narrowest width we compile at. Fixing a byte count rather
+    than a per-lane slot count is what makes that hold at every width: #7959's rule
+    compared slots at the compiled width, so the effective budget doubled with the
+    sub-group size -- 2176 B at SIMD32 -- and the gate stayed silent across a band where
+    rebuilding measurably paid (issue #8077).
 
-    The LTS branch compares BYTES rather than slots on purpose. Because
-    `spill_slots_per_lane` truncates, a slot threshold of 0 would still accept a
-    64 B spill (0 slots at SIMD32) and skip the rebuild -- and a 64 B config is
-    one of the 12 this is meant to cover.
+    Inductor's threshold sets the level but grants no licence below it: it only prunes
+    configs from inductor's timing contest, so a spill under it is not one inductor has
+    approved. Declining the rebuild leaves inductor timing the spilling default-GRF
+    binary with no faster rival to pick.
+
+    LTS IGC prices the resulting binaries differently: declining the rebuild costs
+    +21% end to end on `pyhpc_isoneutral_mixing` (Max 1100, 12 of 165 configs
+    affected, issue #8106), while the same 12 configs measure neutral on rolling. So
+    LTS keeps the older rule of rebuilding on any spill.
+
+    Both branches compare bytes, the unit both spill probes report. Neither needs the
+    compiled sub-group size: routing the spill and the threshold through the same
+    truncating bytes-to-dword-equivalents conversion cancels the divisor, so the
+    per-lane form of this gate decided exactly
+    `spill_size >= REBUILD_SPILL_BYTES_PER_THREAD` at every width a power-of-two
+    4 * threads_per_warp divides -- every width the backend can reach, plus the
+    unknown-width fallback. That conversion lives in `Spills::slotsPerLane` in
+    driver.c, which is the only producer of `n_spills` on either path.
     """
     if is_lts:
         return spill_size <= 0
-    return spill_slots_per_lane(spill_size, threads_per_warp) <= MAX_REG_SPILL_SLOTS_PER_LANE
+    return spill_size < REBUILD_SPILL_BYTES_PER_THREAD
 
 
 def min_dot_size(device_props: Union[Dict, GPUTarget]):
@@ -704,6 +715,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if total_num_warps is not None:
             metadata["num_warps"] = total_num_warps
         metadata["threads_per_warp"] = intel.get_threads_per_warp(src)
+        metadata["warp_size"] = metadata["threads_per_warp"]
         metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size")
         metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment")
         metadata["profile_scratch_size"] = src.get_int_attr("ttg.profile_scratch_memory_size") or 0
@@ -794,7 +806,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                     subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
                     if options.grf_mode == "default":
                         spill_size = extract_spill_size_from_zebin(fbin)
-                        if accepts_default_grf(spill_size, metadata["threads_per_warp"], options.is_lts):
+                        if accepts_default_grf(spill_size, options.is_lts):
                             break
                 except (subprocess.CalledProcessError, IntelGPUError) as e:
                     # If GRF mode was not last yet, retry with different GRF mode

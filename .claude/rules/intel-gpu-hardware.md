@@ -19,18 +19,36 @@ Each hardware thread has a private register file. **Do not guess** GRF register 
 1. Compile with default (small) GRF
 2. Extract spill size from ZEBIN `.ze_info` section (AOT) or query Level Zero
    `spillMemSize` (JIT) — both are **bytes per hardware thread**
-3. Normalize to **dword-equivalents per lane** (`bytes / (4 × sub-group size)`),
-   the unit CUDA/HIP report `n_spills` in and that external consumers threshold on
-4. If that exceeds `16` → recompile with the largest GRF mode this target
-   auto-escalates to (256-GRF on every non-`cri` target; 512-GRF on `cri` —
-   see `get_max_grf_mode()` in `compiler.py`)
+3. If the spill reaches **1024 B per hardware thread** → recompile with the
+   largest GRF mode this target auto-escalates to (256-GRF on every non-`cri`
+   target; 512-GRF on `cri` — see `get_max_grf_mode()` in `compiler.py`)
+4. Normalize to **dword-equivalents per lane** (`bytes / (4 × sub-group size)`) for
+   *reporting* `n_spills`, the unit CUDA/HIP use and external consumers threshold on
 
-The threshold is `16` dword-equivalents/lane, aligned between
-`MAX_REG_SPILL_SLOTS_PER_LANE` in `compiler.py` and `kMaxSpillSlotsPerLane` in
-`driver.c`. It is PyTorch inductor's default `spill_threshold` for non-HIP, so a
-spill at or below it cannot change inductor's autotuning verdict and a rebuild
-would only cost compile time. Compare in the normalized unit, not in bytes —
-inductor tests the truncated per-lane count, so a byte threshold over-triggers.
+The threshold is a constant in bytes per hardware thread, the unit both spill probes
+report: `REBUILD_SPILL_BYTES_PER_THREAD` in `compiler.py` and
+`kRebuildSpillBytesPerThread` in `driver.c`. The compiled sub-group size is not an
+input to the gate — only to `n_spills`' presentation (`Spills::slotsPerLane` in
+`driver.c`, the only producer of `n_spills` on either path).
+
+1024 B is the largest threshold that keeps every *accepted* kernel strictly below
+PyTorch inductor's `spill_threshold` (16 dword-equivalents/lane by default off HIP) at
+every width the backend can compile at. SIMD16 is the binding case, being the narrowest
+(`warp_size` defaults to 32 and `setThreadsPerWarp` only ever lowers it to 16): 16
+slots/lane is 16 × 4 × 16 = 1024 B there, so 1025 would let a SIMD16 kernel reach
+inductor's threshold on the default-GRF build. Inductor prunes strictly above 16, so
+this leaves a slot of margin at SIMD16, and the threshold only prunes configs from
+inductor's timing contest — a spill below it is not one inductor has approved.
+
+Bytes, not slots, is what makes that bound hold: 16 slots/lane is 2048 B at SIMD32, so
+comparing slots at the *compiled* width lets the byte budget float up with it. #7959 did
+exactly that and the gate went silent from 1024 B up to 2175 B at SIMD32 — the band
+issue #8077 reported as an inductor regression. Taking the minimum over widths means the
+wider width fires early (8 slots/lane at SIMD32), the safe direction.
+
+Rolling only. On LTS, `accepts_default_grf` rebuilds for **any** positive spill
+(issue #8106); `driver.c` takes no `is_lts` input at all, so the two gates are not
+symmetric there.
 
 ### Constraints
 - **256-GRF and 512-GRF require `num_warps ≤ 32`** (256-GRF halves, and 512-GRF quarters, the hardware threads available per subslice — see the occupancy column in `.claude/reference/hardware-reference.md`'s GRF mode table — capping the launchable work-group size below what `num_warps > 32` needs)

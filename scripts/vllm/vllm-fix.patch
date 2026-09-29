@@ -254,3 +254,16 @@ index 8b9aa86f9e..07b4a38893 100644
  )
  @triton.jit(do_not_specialize=["B", "T"])
  def chunk_kda_fwd_kernel_intra_sub_chunk(
+diff --git a/vllm/platforms/rocm.py b/vllm/platforms/rocm.py
+index 9089d025e0..ee5aaf7cc8 100644
+--- a/vllm/platforms/rocm.py
++++ b/vllm/platforms/rocm.py
+@@ -196,7 +196,7 @@ def _get_gcn_arch() -> str:
+     except Exception as e:
+         logger.debug("Failed to get GCN arch via amdsmi: %s", e)
+     # Ultimate fallback: use torch.cuda (will initialize CUDA)
+-    return torch.cuda.get_device_properties("cuda").gcnArchName
++    return torch.cuda.get_device_properties("cuda").gcnArchName if torch.cuda.is_available() else ""
+ 
+ 
+ # Resolve once at module load. Uses amdsmi (no CUDA init) so Ray workers
