@@ -1022,7 +1022,7 @@ bool canBeRemat(Operation *op) {
   if (isa<scf::WhileOp, scf::ConditionOp>(op))
     return false;
 
-  return true;
+  return !hasEffect<MemoryEffects::Write>(op);
 }
 
 // Returns true for shape-changing ops that carry no encoding constraint of
