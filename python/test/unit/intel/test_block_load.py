@@ -61,7 +61,7 @@ def test_block_tdesc_load_dpas_layout(M, N, dtype_str, device, tmp_path: pathlib
             %src_a = tt.make_tensor_descriptor %arg0, [%cM_i32, %cN_i32], [%N_i64, %c1_i64]
                      : !tt.ptr<{ty}>, !tt.tensordesc<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>
 
-            %a = tt.descriptor_load %src_a [%0, %c0_i32]
+            %a = tt.descriptor_load %src_a [%0, %c0_i32] {{ttig.desc_padding = 1 : i32}}
                  : !tt.tensordesc<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>
                  -> tensor<{M}x{N}x{ty}, #ttg.dot_op<{{opIdx = 0, parent = #mma, kWidth = {A_width}}}>>
 
@@ -76,7 +76,7 @@ def test_block_tdesc_load_dpas_layout(M, N, dtype_str, device, tmp_path: pathlib
             %src_b = tt.make_tensor_descriptor %arg2, [%cN_i32, %cM_i32], [%M_i64, %c1_i64]
                      : !tt.ptr<{ty}>, !tt.tensordesc<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>
 
-            %b = tt.descriptor_load %src_b [%c0_i32, %0]
+            %b = tt.descriptor_load %src_b [%c0_i32, %0] {{ttig.desc_padding = 1 : i32}}
                  : !tt.tensordesc<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>
                  -> tensor<{N}x{M}x{ty}, #ttg.dot_op<{{opIdx = 1, parent = #mma, kWidth = {B_width}}}>>
 
