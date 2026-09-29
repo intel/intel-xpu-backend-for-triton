@@ -1410,6 +1410,7 @@ run_vllm_tdesc_tests() {
   done
 
   if [ "$exit_status" -eq 0 ]; then
+    VLLM_TUNED_CONFIG_FOLDER="${VLLM_TUNED_CONFIG_FOLDER:-$TRITON_PROJ/benchmarks/triton_kernels_benchmark/vllm/unified_attention/profiles}" \
     VLLM_TRITON_USE_TD=1 TRITON_TEST_SUITE=vllm_tdesc \
       run_pytest_command -vvv \
         tests/kernels/moe/test_batched_moe.py \

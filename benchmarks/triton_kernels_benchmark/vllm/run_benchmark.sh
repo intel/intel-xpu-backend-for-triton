@@ -58,6 +58,9 @@ git apply "$PATCH_FILE"
 
 echo ""
 echo "=== Running benchmark WITH tensor descriptor patch ==="
+if [ "$NAME" = "unified_attention" ]; then
+    export VLLM_TUNED_CONFIG_FOLDER="${VLLM_TUNED_CONFIG_FOLDER:-$BENCHMARK_DIR/profiles}"
+fi
 TD_PATCHED=1 triton-benchmarks run "$KEY" "$@"
 
 echo ""
