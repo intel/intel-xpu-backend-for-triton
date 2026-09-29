@@ -552,11 +552,11 @@ private:
       return false;
 
     // Frontend eviction-policy override — a user-specified eviction policy
-    // (evict_first / evict_last) is honored by the LoadStoreOpToLLVM lowering,
-    // which maps it to a precise LSC cache mode (EVICT_FIRST -> L1IAR_L3C,
-    // EVICT_LAST -> L1C_L3C). Stamping `.cg` here would take precedence over
-    // that mapping (CG -> L1UC_L3C) and silently drop the user's hint, so leave
-    // such loads untouched — just like an explicit cache modifier above.
+    // (evict_first / evict_last) is left to the LoadStoreOpToLLVM lowering
+    // (EVICT_LAST -> L1C_L3C; EVICT_FIRST -> DEFAULT, since its L1 line is
+    // often shared, #8109). Stamping `.cg` here would take precedence over
+    // that mapping (CG -> L1UC_L3C), so leave such loads untouched — just like
+    // an explicit cache modifier above.
     if (cachePolicy.evictionPolicy != tt::EvictionPolicy::NORMAL)
       return false;
 
