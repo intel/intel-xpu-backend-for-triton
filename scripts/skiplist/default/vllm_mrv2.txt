@@ -8,6 +8,9 @@ tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[ngram-raw_logprobs]
 tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[ngram-processed_logits]
 tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[ngram-processed_logprobs]
 
+# Eagle speculative decoding produces unstable decoded-token logprobs on PVC: https://github.com/intel/intel-xpu-backend-for-triton/actions/runs/36503642176/job/109511198552
+tests/v1/sample/test_logprobs.py::test_spec_decode_logprobs[eagle3-raw_logits]
+
 # compute_prompt_logprobs torch.cat incompatible shapes: https://github.com/intel/intel-xpu-backend-for-triton/issues/7159
 tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[False-0.0-BatchLogprobsComposition.PROMPT]
 tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[False-0.0-BatchLogprobsComposition.SAMPLE_PROMPT]
