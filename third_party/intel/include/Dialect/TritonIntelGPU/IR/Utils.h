@@ -66,9 +66,6 @@ inline LLVM::cconv::CConv getRequiredCConv(CallOpInterface callOp) {
 }
 
 /// Whether to lower `tt.scan` to the hardware sub-group scan builtin.
-/// Sole read site for this environment variable, so the conversion pass and the
-/// layout pass (which must not link each other) cannot disagree, and the A/B
-/// measurement stays a single-binary comparison.
 inline bool isSubgroupScanEnabled() {
   return tools::isEnvValueBool(tools::getStrEnv("TRITON_INTEL_SUBGROUP_SCAN"))
       .value_or(true);
