@@ -15,6 +15,7 @@
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENMemorySpace.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
+#include <TritonGENToLLVM/GenIntrinsicHelper.h>
 
 #include <limits>
 #include <numeric>
@@ -285,8 +286,53 @@ bool TargetInfo::warpScan(RewriterBase &rewriter, Location loc,
   if (!isSupportedWarpScanOp(scanOp, inclusive, warpSize))
     return false;
 
+  enum class WaveOps : unsigned int {
+    SUM,
+    PROD,
+    UMIN,
+    UMAX,
+    IMIN,
+    IMAX,
+    OR,
+    XOR,
+    AND,
+    FSUM,
+    FPROD,
+    FMIN,
+    FMAX,
+    UNDEF
+  };
+  std::string batchedHorizontalReduce;
+  auto waveOps = WaveOps::UNDEF;
+  // TODO: support all possible reduction modes
+  TypeSwitch<Operation *>(scanOp)
+      .Case<arith::AddFOp>([&](auto) {
+        batchedHorizontalReduce = "add";
+        waveOps = WaveOps::FSUM;
+      })
+      .Case<arith::AddIOp>([&](auto) {
+        batchedHorizontalReduce = "add";
+        waveOps = WaveOps::SUM;
+      })
+      .Case<arith::MaxNumFOp>([&](auto) {
+        batchedHorizontalReduce = "max";
+        waveOps = WaveOps::FMAX;
+      })
+      .Default(
+          [&](auto) { llvm_unreachable("Unhandled batched reduce kind"); });
+
+  Type elemType = acc[0].getType();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  gpu::intel::Intrinsic wavePrefix =
+      gpu::intel::GenISA<llvm::GenISAIntrinsic::ID::GenISA_WavePrefix>(
+          rewriter, elemType);
+
   for (unsigned i = 0; i < acc.size(); ++i)
-    acc[i] = genWarpScan(rewriter, loc, acc[i], scanOp, inclusive, warpSize);
+    acc[i] = wavePrefix(rewriter, loc,
+                        {acc[i], b.i8_val((unsigned)waveOps),
+                         b.i1_val(inclusive), b.i1_val(1), b.i32_val(0)});
+  // for (unsigned i = 0; i < acc.size(); ++i)
+  //   acc[i] = genWarpScan(rewriter, loc, acc[i], scanOp, inclusive, warpSize);
 
   return true;
 }
