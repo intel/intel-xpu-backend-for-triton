@@ -6,12 +6,15 @@
 // COM: The statistics counters are process-global and are printed once per
 // COM: -split-input-file section, so the figures accumulate down the file. The
 // COM: first directive pins the field set and its order against any output line;
-// COM: the second pins the exact totals, which only the final section's line can
-// COM: carry. Update the totals whenever a case is added or a verdict changes,
-// COM: and check the sum: hoisted + the three rejected counters + skipped_other
-// COM: must equal considered.
+// COM: the second pins the exact totals, and the STATS-NOT after it forbids any
+// COM: later statistics line, so the totals must be on the final section's line
+// COM: rather than on any earlier line that happens to carry the same figures.
+// COM: Update the totals whenever a case is added or a verdict changes, and
+// COM: check the sum: hoisted + the three rejected counters + skipped_other must
+// COM: equal considered.
 // STATS: [HoistLayoutConversions] considered={{[0-9]+}} hoisted={{[0-9]+}} rejected_pressure={{[0-9]+}} rejected_function_peak_exact={{[0-9]+}} rejected_function_peak_fallback={{[0-9]+}} skipped_other={{[0-9]+}}
 // STATS: [HoistLayoutConversions] considered=67 hoisted=34 rejected_pressure=12 rejected_function_peak_exact=7 rejected_function_peak_fallback=5 skipped_other=9
+// STATS-NOT: [HoistLayoutConversions]
 
 // COM: Case 1: Hoist ConvertLayoutOp with DotOperandEncoding out of scf.for loop.
 // COM: The source of the convert_layout is defined outside the loop, so the pass

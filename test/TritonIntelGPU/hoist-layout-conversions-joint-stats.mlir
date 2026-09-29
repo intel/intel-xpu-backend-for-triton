@@ -5,14 +5,17 @@
 // COM: it is weighed: as hoisted if either phase takes it, else under the
 // COM: reason the one-at-a-time phase first refused it for. The counters are
 // COM: process-global and printed once per -split-input-file section, so each
-// COM: section pins the running totals. The IR is copied from cases 16, 45 and
-// COM: 46 of hoist-layout-conversions.mlir, which explain the byte math; this
-// COM: file runs at grf-mode=default only.
+// COM: section pins the running totals. A STATS-NOT follows every section's
+// COM: line, so each directive must match the next statistics line printed
+// COM: and none can skip ahead to a later section's. The IR is copied from
+// COM: cases 16, 45 and 46 of hoist-layout-conversions.mlir, which explain the
+// COM: byte math; this file runs at grf-mode=default only.
 
 // COM: Case 16's shape: both conversions refused alone (one by the peak, one
 // COM: by the loop-level gate), both overturned by the group. Two considered,
 // COM: two hoisted, nothing rejected.
 // STATS: [HoistLayoutConversions] considered=2 hoisted=2 rejected_pressure=0 rejected_function_peak_exact=0 rejected_function_peak_fallback=0 skipped_other=0
+// STATS-NOT: [HoistLayoutConversions]
 
 
 #blocked16 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -54,6 +57,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // COM: +5 rejected_pressure, +1 under whichever peak counter loop 6's
 // COM: projection reported.
 // STATS: [HoistLayoutConversions] considered=8 hoisted=2 rejected_pressure=5 rejected_function_peak_exact=1 rejected_function_peak_fallback=0 skipped_other=0
+// STATS-NOT: [HoistLayoutConversions]
 
 
 #blocked45 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -112,6 +116,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // COM: Case 46's shape: both refused alone by the loop-level gate, and the
 // COM: group refused by it again: +2 considered, +2 rejected_pressure.
 // STATS: [HoistLayoutConversions] considered=10 hoisted=2 rejected_pressure=7 rejected_function_peak_exact=1 rejected_function_peak_fallback=0 skipped_other=0
+// STATS-NOT: [HoistLayoutConversions]
 
 
 #blocked46 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
