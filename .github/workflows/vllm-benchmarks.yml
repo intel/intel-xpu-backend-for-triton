@@ -1,188 +1,72 @@
-name: vLLM benchmarks
+name: UA same-runner diagnostic
+run-name: UA diagnostic on B580 (${{ github.ref_name }})
 
 on:
   workflow_dispatch:
     inputs:
-      runner_label:
-        description: Runner label, keep empty for default
+      main_ref:
+        description: Pinned main commit supplying the online UA patch
         type: string
-        default: ""
-      tag:
-        description: Tag for benchmark results
-        type: string
-        default: "test"
-      vllm_pin:
-        description: vLLM pin (commit hash), keep empty for default
-        type: string
-        default: ""
-      kernels_hash:
-        description: vLLM XPU kernels commit hash to build from source, keep empty to install vLLM's pinned release
-        type: string
-        default: ""
-  workflow_call:
-    inputs:
-      runner_label:
-        description: Runner label
-        type: string
-      tag:
-        description: Tag for benchmark results
-        type: string
-        # Empty default so the TAG fallback below can resolve pr-<n>/ci from the
-        # caller's event. A non-empty default would short-circuit that expression.
-        default: ""
-      vllm_pin:
-        description: vLLM pin (commit hash), keep empty for default
-        type: string
-        default: ""
-      kernels_hash:
-        description: vLLM XPU kernels commit hash to build from source, keep empty to install vLLM's pinned release
-        type: string
-        default: ""
+        default: '0849431d24201f4a249636fda4c4eac559406bb2'
 
-permissions: read-all
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ua-same-runner-diagnostic
+  cancel-in-progress: false
 
 env:
-  PYTHON_VERSION: "3.12"
-  TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number)) || (github.event_name == 'schedule' && 'ci') || 'test' }}
-  HF_TOKEN: ${{ secrets.HF_TOKEN || '' }}
   GH_TOKEN: ${{ github.token }}
 
 jobs:
-  build:
-    name: vLLM benchmarks
-    runs-on:
-      - linux
-      - ${{ inputs.runner_label || 'b580' }}
-    timeout-minutes: 720
+  diagnostic:
+    runs-on: [linux, b580]
+    timeout-minutes: 120
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
     steps:
-      - name: Print inputs
-        run: |
-          cat <<EOF
-          ${{ toJSON(inputs) }}
-          EOF
-
-      - name: Checkout repository
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-
-      - name: Override vLLM pin
-        if: ${{ inputs.vllm_pin }}
-        run: |
-          echo "${{ inputs.vllm_pin }}" > scripts/vllm/vllm-pin.txt
-          echo "Overriding vLLM pin to: ${{ inputs.vllm_pin }}"
-
-      - name: Install Python (from pyenv) ${{ inputs.python_version }}
-        uses: ./.github/actions/setup-pyenv-python
+      - uses: ./.github/actions/setup-pyenv-python
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Identify Python version
+          python-version: '3.12'
+      - name: Install build dependencies
+        run: pip install cmake
+      - uses: ./.github/actions/setup-pytorch
+      - uses: ./.github/actions/setup-triton
+      - uses: ./.github/actions/install-vllm
+      - name: Record environment
         run: |
-          PYTHON_VERSION="$(python -c 'import sys; print(f"{sys.version_info[0]}.{ sys.version_info[1]}")')"
-          echo "PYTHON_VERSION=$PYTHON_VERSION" | tee -a $GITHUB_ENV
-
-      - name: Install Python build dependencies
+          mkdir -p reports
+          ./scripts/capture-hw-details.sh > reports/environment.txt
+          python -m pip freeze > reports/packages.txt
+          git rev-parse HEAD > reports/compiler-checkout.txt
+          git diff 0ea7fbf49e45b4cf1a3881a66ade4f3ba5a5c7ed -- python third_party include lib cmake > reports/compiler-changes.diff
+          test ! -s reports/compiler-changes.diff
+      - name: Compare main and offline UA
+        env:
+          MAIN_REF: ${{ inputs.main_ref }}
+          TRITON_CACHE_DIR: ${{ runner.temp }}/ua-diagnostic-${{ github.run_id }}
         run: |
-          pip install cmake
-
-      - name: Setup PyTorch
-        uses: ./.github/actions/setup-pytorch
-        with:
-          lts: ${{ inputs.runner_label == 'lts' }}
-
-      - name: Setup Triton
-        uses: ./.github/actions/setup-triton
-
-      - name: Create reports dir
+          export PYTHONPATH="$PWD/vllm${PYTHONPATH:+:$PYTHONPATH}"
+          python scripts/ua_ci_diagnostic.py \
+            --vllm-source "$PWD/vllm" \
+            --main-ref "$MAIN_REF" \
+            --output "$PWD/reports/ua" 2>&1 | tee reports/diagnostic.log
+      - name: Publish summary
+        if: always()
         run: |
-          mkdir reports
-          echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
-
-      - name: Install benchmark dependencies
-        id: install
-        run: |
-          pip install transformers 'pandas<3.0' pytest
-
-      - name: Install benchmarks
-        id: install-benchmarks
-        uses: ./.github/actions/install-benchmarks
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          github-token: ${{ github.token }}
-
-      - name: Install vllm
-        id: install-vllm
-        if: ${{ steps.install-benchmarks.outcome == 'success' && !cancelled() }}
-        uses: ./.github/actions/install-vllm
-        with:
-          kernels-hash: ${{ inputs.kernels_hash }}
-
-      - name: Report environment details
-        timeout-minutes: 1
-        run: |
-          cat <<EOF | tee "$REPORTS/.env"
-          TIMESTAMP=$(date '+%Y%m%d%H%M%S')
-          GITHUB_RUN_ID=$GITHUB_RUN_ID
-          GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER
-          GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT
-          PYTHON_VERSION=$PYTHON_VERSION
-          TRITON_REPO=$GITHUB_REPOSITORY
-          TRITON_COMMIT_ID=$GITHUB_SHA
-          TRITON_BRANCH=$GITHUB_REF_NAME
-          VLLM_PIN=$(cat scripts/vllm/vllm-pin.txt)
-          VLLM_XPU_KERNELS_VERSION=$(pip show vllm-xpu-kernels | awk '/^Version:/ {print $2}')
-          OS=${{ runner.os }}
-          EOF
-          ./scripts/capture-hw-details.sh | tee -a "$REPORTS/.env"
-
-      - name: Run vllm unified attention bf16
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-
-          cd benchmarks/triton_kernels_benchmark/vllm
-          bash run_benchmark.sh unified_attention --reports $REPORTS --tag $TAG
-
-      - name: Run vllm unified attention fp8
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-
-          cd benchmarks/triton_kernels_benchmark/vllm
-          FP8="1" bash run_benchmark.sh unified_attention --reports $REPORTS --tag $TAG
-
-      - name: Run vllm batched moe bf16
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-
-          cd benchmarks/triton_kernels_benchmark/vllm
-          bash run_benchmark.sh batched_moe --reports $REPORTS --tag $TAG
-
-
-      - name: Run vllm batched moe fp8
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-
-          cd benchmarks/triton_kernels_benchmark/vllm
-          FP8="1" bash run_benchmark.sh batched_moe --reports $REPORTS --tag $TAG
-
-      - name: Run vllm fused moe bf16
-        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
-        run: |
-          source ./scripts/capture-hw-details.sh
-
-          cd benchmarks/triton_kernels_benchmark/vllm
-          bash run_benchmark.sh fused_moe --reports $REPORTS --tag $TAG
-
-      - name: Upload benchmark reports
-        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+          if [ -f reports/ua/REPORT.md ]; then
+            cat reports/ua/REPORT.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload diagnostics
+        if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: benchmark-reports
+          name: ua-same-runner-diagnostic
           path: reports
+          if-no-files-found: warn
