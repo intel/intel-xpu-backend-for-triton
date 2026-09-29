@@ -129,13 +129,9 @@ HAS_WARP_SPECIALIZE = supports_ws() and HAS_TENSOR_DESC
 HAS_TMA_CLC = supports_clc() and HAS_HOST_TENSOR_DESC
 
 
-def is_xpu_cri():
-    return triton.runtime.driver.active.get_current_target().arch['arch'] == "cri"
-
-
 def matmul_get_configs(pre_hook=None):
-    stages_range = [2] if is_xpu_cri() else [2, 3, 4]
-    warps_range = [4] if is_xpu_cri() else [4, 8]
+    stages_range = [2, 3, 4]
+    warps_range = [4, 8]
 
     return [
         triton.Config({'BLOCK_SIZE_M': BM, 'BLOCK_SIZE_N': BN, "BLOCK_SIZE_K": BK, "GROUP_SIZE_M": 8}, num_stages=s,
@@ -417,8 +413,8 @@ def matmul_persistent(a, b):
 
 
 def matmul_tma_persistent_get_configs(pre_hook=None):
-    stages_range = [2] if is_xpu_cri() else [2, 3, 4]
-    warps_range = [4] if is_xpu_cri() else [4, 8]
+    stages_range = [2, 3, 4]
+    warps_range = [4, 8]
 
     return [
         triton.Config(
@@ -766,7 +762,7 @@ def torch_matmul(a, b):
     N, K = b.shape
     bytes_per_elem = a.element_size()
     flops_str = f"flops{bytes_per_elem * 8}"
-    if os.name != "nt" and not is_xpu_cri():
+    if os.name != "nt":
         with proton.scope(f"torch [M={M}, N={N}, K={K}]",
                           {"bytes": bytes_per_elem * (M * K + N * K + M * N), flops_str: 2. * M * N * K}):
             c = torch.matmul(a, b.T)
@@ -788,7 +784,7 @@ def bench_fn(label, reps, warmup_reps, fn, *args):
     print(f"Benchmarking {label}: ...", end="")
     for _ in range(warmup_reps):
         fn(*args)
-    if os.name != "nt" and not is_xpu_cri():
+    if os.name != "nt":
         with proton_context():
             for _ in range(reps):
                 fn(*args)
@@ -796,8 +792,8 @@ def bench_fn(label, reps, warmup_reps, fn, *args):
 
 
 def bench(K, dtype, reps=100, warmup_reps=100):
-    M = 256 if is_xpu_cri() else 8192
-    N = 256 if is_xpu_cri() else 8192
+    M = 8192
+    N = 8192
     if not is_enough_memory(M, N, K, dtype):
         return
 
@@ -882,8 +878,8 @@ def show_profile(precision, profile_name):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    default_K = 256 if is_xpu_cri() else 512
-    default_K_step = 256 if is_xpu_cri() else 512
+    default_K = 512
+    default_K_step = 512
     parser.add_argument("-K", type=int, required=False, default=default_K)
     parser.add_argument("--K_range", type=int, nargs=2)
     parser.add_argument("--K_step", type=int, default=default_K_step)
@@ -902,13 +898,13 @@ if __name__ == "__main__":
         torch.manual_seed(0)
 
         validate(32, 32, 32, dtype)
-        validation_size = 256 if is_xpu_cri() else 8192
+        validation_size = 8192
         validate(validation_size, validation_size, args.K_range[0], dtype)
-        if os.name != "nt" and not is_xpu_cri():
+        if os.name != "nt":
             proton.start("matmul", hook="triton")
             proton.deactivate()
         for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
             bench(K, dtype)
-        if os.name != "nt" and not is_xpu_cri():
+        if os.name != "nt":
             proton.finalize()
             show_profile(args.prec, "matmul")
