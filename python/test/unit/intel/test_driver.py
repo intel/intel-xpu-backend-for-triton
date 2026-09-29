@@ -16,10 +16,11 @@ from triton.backends.intel.driver import find_sycl_icpx
 from triton.runtime.errors import IntelGPUError, OutOfResources
 
 
-@pytest.mark.xfail(is_xpu_cri(), reason="unable to get spill_size")
 def test_auto_grf(device, monkeypatch, capfd):
     monkeypatch.setenv("TRITON_DEBUG", "1")
-    BLOCK = 1024 * 8
+    # CRI's larger (512-GRF) register file needs a bigger tile to spill; other
+    # targets already spill at 8K.
+    BLOCK = 1024 * 32 if is_xpu_cri() else 1024 * 8
     z_tri = torch.empty(BLOCK, dtype=torch.int32, device=device)
 
     @triton.jit
@@ -49,7 +50,6 @@ def test_auto_grf(device, monkeypatch, capfd):
     assert retried.group(1) == selected.group(1)
 
 
-@pytest.mark.xfail(is_xpu_cri(), reason="unable to get spill_size")
 @pytest.mark.parametrize("warp_size", [16, 32])
 def test_n_spills_reported_per_lane(device, monkeypatch, capfd, warp_size):
     """`n_spills` is dword-equivalents per lane, as on CUDA/HIP (issue #7896).
@@ -299,10 +299,6 @@ def test_auto_grf_on_build_failure(device, monkeypatch, capfd, grf_mode, expect_
     - load_binary (generate_native_code=False): L0 runtime compilation via zeModuleCreate
     - make_zebin (generate_native_code=True): offline compilation via ocloc
     """
-    # The build failure with grf_mode="128" is not simulated on CRI properly
-    if grf_mode == "128" and is_xpu_cri():
-        pytest.xfail("grf_mode=128 build failure is not simulated on CRI properly")
-
     monkeypatch.setenv("TRITON_DEBUG", "1")
 
     @triton.jit
