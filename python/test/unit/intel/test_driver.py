@@ -90,7 +90,7 @@ def test_n_spills_reported_per_lane(device, monkeypatch, capfd, warp_size):
     # Only the spill path logs numbers: the build-failure path enters the same branch
     # with an unknown `Spills` and reaches neither the threshold nor this format.
     retried = re.compile(r"Detected spills for \"[^\"]*\", retrying with large GRF mode "
-                         r"\(spill (\d+) B/hardware-thread = (\d+) dword-equivalents/lane "
+                         r"\(\w+, spill (\d+) B/hardware-thread = (\d+) dword-equivalents/lane "
                          r"at SIMD(\d+), rebuild at (\d+) B/hardware-thread\)")
     # Keep the last match: it describes the finally selected binary.
     matches = selected.findall(out)
