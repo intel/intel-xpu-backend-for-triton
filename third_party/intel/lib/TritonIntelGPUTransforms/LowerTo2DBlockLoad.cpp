@@ -6,7 +6,6 @@
 #include "intel/include/Dialect/TritonIntelGPU/Transforms/Utility.h"
 #include "intel/include/Utils/Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -122,7 +121,7 @@ public:
     SmallVector<tt::DescriptorLoadOp> descLoadOps;
     mod.walk([&](tt::DescriptorLoadOp op) { descLoadOps.push_back(op); });
     for (auto op : descLoadOps)
-      convertDescriptorLoadOp(op, axisInfoAnalysis);
+      convertDescriptorLoadOp(op);
 
     SmallVector<tt::LoadOp> loadOps;
     mod.walk([&](tt::LoadOp op) { loadOps.push_back(op); });
@@ -132,9 +131,7 @@ public:
 
 private:
   /// Convert a tt.descriptor_load to ttig.2d_block_load.
-  void
-  convertDescriptorLoadOp(tt::DescriptorLoadOp op,
-                          tt::intel::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+  void convertDescriptorLoadOp(tt::DescriptorLoadOp op) {
     if (!isBlockIOEligible(op))
       return;
 
@@ -268,35 +265,22 @@ private:
       return;
     }
 
-    // The HW needs the pitch to be a multiple of 16 bytes and to fit in 24
-    // bits. The documented 64-byte minimum is not enforced: 16- and 32-byte
-    // pitches work on PVC and BMG (test_block_io_nd) and small tensors would
-    // lose the block load. A constant stride is checked here. A runtime stride
-    // is fine when axis-info proves it 16-byte aligned; otherwise we only have
-    // the make_tensor_descriptor contract, so the load is guarded at runtime.
-    // The pitch is the descriptor's second-to-last stride for every load,
-    // rank-reducing ones included: their leading indices are folded into
-    // base_ptr above and the 2D surface is unchanged.
+    // The pitch must be a multiple of 16 bytes and fit in 24 bits (16- and
+    // 32-byte pitches work, so the documented 64-byte minimum is not enforced).
+    // A runtime stride is trusted to follow the make_tensor_descriptor
+    // contract, as in MaterializeBlockPointer.
     constexpr int64_t kPitchAlignBytes = 16;
-    bool pitchNeedsRuntimeGuard = false;
-    int64_t pitchDivisor = llvm::divideCeil(128u, elemSizeInBits);
     for (tt::MakeTensorDescOp d : defs) {
-      Value stride = d.getStrides()[descRank - 2];
-      if (std::optional<int64_t> folded =
-              tt::intel::getFoldedConstantValue(stride)) {
-        int64_t pitchBytes = *folded * elemBytesConst;
-        if ((pitchBytes % kPitchAlignBytes) != 0 ||
-            pitchBytes > kMax2DBlockField) {
-          LDBG("Invalid pitch " << pitchBytes
-                                << " for descriptor load: " << *op);
-          return;
-        }
+      std::optional<int64_t> stride =
+          tt::intel::getFoldedConstantValue(d.getStrides()[descRank - 2]);
+      if (!stride)
         continue;
+      int64_t pitchBytes = *stride * elemBytesConst;
+      if ((pitchBytes % kPitchAlignBytes) != 0 ||
+          pitchBytes > kMax2DBlockField) {
+        LDBG("Invalid pitch " << pitchBytes << " for descriptor load: " << *op);
+        return;
       }
-      const tt::AxisInfo *info = axisInfoAnalysis.getAxisInfo(stride);
-      int64_t divisibility = info ? info->getDivisibility(0) : 1;
-      if (divisibility % pitchDivisor != 0)
-        pitchNeedsRuntimeGuard = true;
     }
 
     // Surface width = inner dimension size * element bytes.
@@ -337,29 +321,6 @@ private:
     bool padNan = *padding == tt::PaddingOption::PAD_NAN;
     UnitAttr padNanAttr = padNan ? builder.getUnitAttr() : UnitAttr();
 
-    // Pitch unknown at compile time: check it at runtime and fall back to the
-    // plain descriptor load when it is out of spec.
-    scf::IfOp pitchGuard;
-    if (pitchNeedsRuntimeGuard) {
-      auto i64Const = [&](int64_t value) {
-        return arith::ConstantIntOp::create(builder, loc, value, 64);
-      };
-      Value pitchBytes = arith::MulIOp::create(
-          builder, loc, strides[descRank - 2], i64Const(elemBytesConst));
-      Value rem = arith::RemSIOp::create(builder, loc, pitchBytes,
-                                         i64Const(kPitchAlignBytes));
-      Value isAligned = arith::CmpIOp::create(
-          builder, loc, arith::CmpIPredicate::eq, rem, i64Const(0));
-      Value fitsField =
-          arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::sle,
-                                pitchBytes, i64Const(kMax2DBlockField));
-      Value isValid = arith::AndIOp::create(builder, loc, isAligned, fitsField);
-      pitchGuard = scf::IfOp::create(builder, loc, TypeRange{op.getType()},
-                                     isValid, /*addThenBlock=*/true,
-                                     /*addElseBlock=*/true);
-      builder.setInsertionPointToStart(pitchGuard.thenBlock());
-    }
-
     auto blockLoadOp = ttgi::Subgroup2DBlockLoadOp::create(
         builder, loc, op.getType(), basePtr, baseWidth, baseHeight, basePitch,
         offsetX, offsetY, batchStrides, batchOffsets, batchShapes, padNanAttr,
@@ -371,16 +332,7 @@ private:
           ttgi::TritonIntelGPUDialect::getOneMatrixPerLoadAttrName(),
           builder.getUnitAttr());
 
-    if (pitchGuard) {
-      scf::YieldOp::create(builder, loc, blockLoadOp.getResult());
-      // Keep the attributes, the generic lowering needs block_io and padding.
-      builder.setInsertionPointToStart(pitchGuard.elseBlock());
-      Operation *fallback = builder.clone(*op);
-      scf::YieldOp::create(builder, loc, fallback->getResult(0));
-      op.replaceAllUsesWith(pitchGuard.getResult(0));
-    } else {
-      op.replaceAllUsesWith(blockLoadOp.getResult());
-    }
+    op.replaceAllUsesWith(blockLoadOp.getResult());
     op.erase();
     LDBG("Converted descriptor load to ttig.2d_block_load: " << *blockLoadOp);
   }

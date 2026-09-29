@@ -2078,3 +2078,34 @@ def test_regression_7945_annotate_cache_control_enabled_on_every_os(fresh_knobs)
 def test_regression_7945_annotate_cache_control_env_override(fresh_knobs, monkeypatch, value, expected):
     monkeypatch.setenv("TRITON_INTEL_DISABLE_ANNOTATE_CACHE_CONTROL", value)
     assert fresh_knobs.intel.disable_annotate_cache_control is expected
+
+
+@pytest.mark.parametrize("stride, stride_is_constexpr, expect_block_load", [(1000, False, True), (1001, True, False)])
+def test_regression_8154(stride, stride_is_constexpr, expect_block_load, device, with_allocator):
+    """An aligned f16 stride with no divisibility hint (1000) takes the 2D block
+    load, a misaligned constexpr one (1001) the gather path. The dot with the
+    identity gives the load a DPAS layout, without which it is always a gather.
+    """
+    import torch
+
+    @triton.jit
+    def kernel(out_ptr, in_ptr, M, N, stride, STRIDE: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
+        if STRIDE > 0:
+            desc = tl.make_tensor_descriptor(in_ptr, shape=[M, N], strides=[STRIDE, 1], block_shape=[BLOCK_M, BLOCK_N])
+        else:
+            desc = tl.make_tensor_descriptor(in_ptr, shape=[M, N], strides=[stride, 1], block_shape=[BLOCK_M, BLOCK_N])
+        eye = (tl.arange(0, BLOCK_N)[:, None] == tl.arange(0, BLOCK_N)[None, :]).to(tl.float16)
+        block = tl.dot(desc.load([0, 0]), eye)
+        offs = tl.arange(0, BLOCK_M)[:, None] * BLOCK_N + tl.arange(0, BLOCK_N)[None, :]
+        tl.store(out_ptr + offs, block)
+
+    M, N = 32, 64
+    inp = torch.randn((M, stride), dtype=torch.float16, device=device)[:, :N]
+    out = torch.empty((M, N), dtype=torch.float32, device=device)
+    compiled = kernel[(1, )](out, inp, M, N, stride, stride if stride_is_constexpr else 0, M, N)
+    torch.testing.assert_close(out, inp.float(), rtol=0, atol=0)
+
+    if triton.runtime.driver.active.get_current_target().arch['has_2d_block_io']:
+        llir = compiled.asm['llir']
+        has_block_load = 'spirv_Subgroup2DBlockLoad' in llir or 'GenISA.LSC2DBlockRead' in llir
+        assert has_block_load == expect_block_load
