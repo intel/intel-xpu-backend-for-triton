@@ -29,7 +29,7 @@ index 9be58e6337..0bf8191d12 100644
      )
      return out
 diff --git a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
-index b8cd58635e..821fea63d6 100644
+index b8cd58635e..0e5298bc54 100644
 --- a/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
 +++ b/vllm/model_executor/layers/fused_moe/experts/fused_batched_moe.py
 @@ -172,7 +172,7 @@ def moe_mmk(
@@ -41,7 +41,7 @@ index b8cd58635e..821fea63d6 100644
  
          # Advance the ptrs to the next K block.
          a_ptrs += BLOCK_K * stride_ak
-@@ -288,12 +288,82 @@ def expert_triton_kernel(
+@@ -288,12 +288,95 @@ def expert_triton_kernel(
      )
  
      # store in C
@@ -68,7 +68,20 @@ index b8cd58635e..821fea63d6 100644
 +
 +
 +def get_batched_moe_configs():
-+    cfgs = []
++    cfgs = [
++        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 256, 'BLOCK_K': 32,
++                       'grf_mode': '256'}, num_stages=s, num_warps=32)
++        for s in [2, 3]
++    ] + [
++        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 128, 'BLOCK_K': 32,
++                       'grf_mode': m}, num_stages=s, num_warps=w)
++        for s in [2]
++        for (m, w) in ([('256', 32), ('128', 64)])
++    ] + [
++        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 32,
++                       'grf_mode': '256'}, num_stages=s, num_warps=32)
++        for s in [2]
++    ]
 +
 +    def C(BM, BN, BK, s, w, grf="256"):
 +        cfgs.append(triton.Config(
@@ -130,7 +143,7 @@ index b8cd58635e..821fea63d6 100644
  @triton.jit
  def batched_triton_kernel(
      a_ptr,  # [E, max_num_tokens, K]
-@@ -302,9 +372,9 @@ def batched_triton_kernel(
+@@ -302,9 +385,9 @@ def batched_triton_kernel(
      expert_num_tokens,  # [E]
      compute_type: tl.constexpr,
      # Dimensions
@@ -143,7 +156,7 @@ index b8cd58635e..821fea63d6 100644
      # Quantization data
      a_scale_ptr,
      b_scale_ptr,
-@@ -314,20 +384,20 @@ def batched_triton_kernel(
+@@ -314,20 +397,20 @@ def batched_triton_kernel(
      # how much to increase `a_ptr` by to get the element one row down
      # (A has M rows).
      stride_ae: tl.int64,
@@ -177,7 +190,7 @@ index b8cd58635e..821fea63d6 100644
      # Blockwise quantization data
      group_n: tl.constexpr,
      group_k: tl.constexpr,
-@@ -341,15 +411,14 @@ def batched_triton_kernel(
+@@ -341,15 +424,14 @@ def batched_triton_kernel(
      BLOCK_K: tl.constexpr,
      USE_TD: tl.constexpr = False,
  ):
@@ -196,7 +209,7 @@ index b8cd58635e..821fea63d6 100644
      num_pid_n = tl.cdiv(N, BLOCK_N)
      pid_m = pid_mn // num_pid_n
      pid_n = pid_mn % num_pid_n
-@@ -451,9 +520,10 @@ def invoke_moe_batched_triton_kernel(
+@@ -451,9 +533,10 @@ def invoke_moe_batched_triton_kernel(
      BLOCK_N = config["BLOCK_SIZE_N"]
      BLOCK_K = config["BLOCK_SIZE_K"]
  
@@ -209,7 +222,7 @@ index b8cd58635e..821fea63d6 100644
      )
  
      A_scale = normalize_batched_scales_shape(A_scale, expert_num_tokens.shape[0])
-@@ -542,10 +612,6 @@ def invoke_moe_batched_triton_kernel(
+@@ -542,10 +625,6 @@ def invoke_moe_batched_triton_kernel(
          use_fp8_w8a8,
          use_int8_w8a16,
          per_act_token_quant,
