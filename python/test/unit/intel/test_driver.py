@@ -69,7 +69,9 @@ def test_n_spills_reported_per_lane(device, monkeypatch, capfd, warp_size):
     on any spill for LTS.
     """
     monkeypatch.setenv("TRITON_DEBUG", "1")
-    BLOCK = 1024 * 8
+    # Same fixture size as test_auto_grf: CRI's larger (512-GRF) register file
+    # needs a bigger tile to spill; other targets already spill at 8K.
+    BLOCK = 1024 * 32 if is_xpu_cri() else 1024 * 8
     z_tri = torch.empty(BLOCK, dtype=torch.int32, device=device)
 
     # Known-spilling fixture, shared with test_auto_grf.
