@@ -182,16 +182,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %c64_i32 = arith.constant 64 : i32
     %c32_i32 = arith.constant 32 : i32
     %desc = scf.if %cond -> (!tt.tensordesc<64x32xf16, #dot_a>) {
-      %d1 = tt.make_tensor_descriptor %arg0, [%c64_i32, %c32_i32], [%pitch, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<64x32xf16, #dot_a>
+      %d1 = tt.make_tensor_descriptor %arg0, [%c64_i32, %c32_i32], [%pitch, %c1_i64] {padding = 2 : i32} : !tt.ptr<f16>, !tt.tensordesc<64x32xf16, #dot_a>
       scf.yield %d1 : !tt.tensordesc<64x32xf16, #dot_a>
     } else {
-      %d2 = tt.make_tensor_descriptor %arg1, [%c64_i32, %c64_i32], [%pitch, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<64x32xf16, #dot_a>
+      %d2 = tt.make_tensor_descriptor %arg1, [%c64_i32, %c64_i32], [%pitch, %c1_i64] {padding = 2 : i32} : !tt.ptr<f16>, !tt.tensordesc<64x32xf16, #dot_a>
       scf.yield %d2 : !tt.tensordesc<64x32xf16, #dot_a>
     }
     // COM: Pinning the whole attribute dictionary is what proves ttig.block_io
     // COM: is absent -- it sorts before ttig.desc_padding, so a CHECK-NOT
     // COM: anchored after the desc_padding match would not see it.
-    // CHECK: tt.descriptor_load {{.*}} {ttig.desc_padding = 1 : i32} :
+    // CHECK: tt.descriptor_load {{.*}} {ttig.desc_padding = 2 : i32} :
     %ld = tt.descriptor_load %desc[%c0_i32, %c0_i32] : !tt.tensordesc<64x32xf16, #dot_a> -> tensor<64x32xf16, #dot_a>
     tt.return
   }
