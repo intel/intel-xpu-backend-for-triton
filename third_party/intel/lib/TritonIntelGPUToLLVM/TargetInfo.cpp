@@ -306,29 +306,43 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
   // TritonGEN::SubGroupReduceOp.
   if (op.getNumOperands() != 1 || op.getNumResults() != 1)
     return false;
-  Region &combineOp = op.getCombineOp();
-  if (combineOp.getBlocks().size() > 1)
-    return false;
-  Block &block = *combineOp.begin();
-  Operation *yield = block.getTerminator();
-  Operation *reduceOp = yield->getOperand(0).getDefiningOp();
-  if (!reduceOp || reduceOp->getNumOperands() != 2 ||
-      reduceOp->getNumResults() != 1)
-    return false;
-  if (reduceOp->getOperand(0) != block.getArgument(0) ||
-      reduceOp->getOperand(1) != block.getArgument(1))
+  FailureOr<Operation *> reduceOp =
+      gpu::intel::matchSingleBinaryCombine(op.getCombineOp());
+  if (failed(reduceOp))
     return false;
 
   auto mod = op->getParentOfType<ModuleOp>();
   unsigned warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
-  if (!isSupportedWarpReduceOp(reduceOp, numLaneToReduce, warpSize))
+  if (!isSupportedWarpReduceOp(*reduceOp, numLaneToReduce, warpSize))
     return false;
 
   for (unsigned i = 0; i < acc.size(); ++i) {
-    acc[i] = genWarpReduce(rewriter, loc, acc[i], reduceOp, numLaneToReduce,
+    acc[i] = genWarpReduce(rewriter, loc, acc[i], *reduceOp, numLaneToReduce,
                            warpSize);
   }
+
+  return true;
+}
+
+bool TargetInfo::warpScan(RewriterBase &rewriter, Location loc,
+                          SmallVector<Value> &acc, triton::ScanOp op,
+                          unsigned scanDim, unsigned warpSize) const {
+  if (!gpu::intel::isSubgroupScanEnabled())
+    return false;
+
+  // `InclusiveScan` scans the entire sub-group and SPIR-V offers no portable
+  // clustered scan, so the axis must occupy every lane. Gate on the
+  // unique-data lane count, which discounts broadcast duplicates.
+  if (scanDim != warpSize)
+    return false;
+
+  FailureOr<Operation *> combineOp = matchSupportedWarpScanOp(op);
+  if (failed(combineOp))
+    return false;
+
+  for (Value &value : acc)
+    value = genWarpScan(rewriter, loc, value, *combineOp, warpSize);
 
   return true;
 }

@@ -3725,7 +3725,7 @@ def test_histogram_compare_mask(M, N, device):
     assert (out == ref).all(), f"expected {ref}, got {out}"
 
 
-@pytest.mark.parametrize("M, N", [(1, 64), (2, 32), (4, 16), (8, 8), (16, 4), (32, 2), (64, 1)])
+@pytest.mark.parametrize("M, N", [(1, 64), (2, 32), (4, 16), (8, 8), (16, 4), (32, 2), (64, 1), (128, 1), (256, 1)])
 def test_scan_1d(M, N, device):
 
     @triton.jit
