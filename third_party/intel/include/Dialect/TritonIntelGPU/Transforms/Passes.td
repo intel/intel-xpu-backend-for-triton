@@ -104,8 +104,9 @@ def TritonIntelGPUHoistLayoutConversions
     Hoist `ttg.convert_layout` operations out of `scf.for` loops when the
     destination encoding is `DotOperandEncodingAttr` and the source is defined
     outside the loop, so a loop-invariant dot operand is converted once instead
-    of on every iteration. Two vetoes guard a hoist; whichever refuses stamps
-    `tt.no_licm` so later generic LICM does not hoist the conversion anyway.
+    of on every iteration. Two vetoes guard a hoist. A refusal that survives the
+    shared-source phase below stamps `tt.no_licm` so later generic LICM does not
+    hoist the conversion anyway.
 
     ### Loop-level live-in gate
 
@@ -132,7 +133,8 @@ def TritonIntelGPUHoistLayoutConversions
 
     The live-in set cannot show what a hoist costs *outside* the loop: moving a
     conversion up creates a point where source and result are both live. This
-    gate bounds the post-hoist peak without mutating IR, as the maximum of the
+    gate bounds a single hoist's post-hoist peak without mutating IR, as the
+    maximum of the
     current peak (a hoist can move it but not remove it), the *corridor* --
     every operation from the insertion point to the conversion's old position,
     charged the arriving result and credited the departing source only where it
@@ -191,6 +193,30 @@ def TritonIntelGPUHoistLayoutConversions
     still fully live. That can leave the projection above the very peak it
     gates (measured: 1376 projected against a real post-hoist 1248).
 
+    ### Shared-source phase
+
+    Deciding one conversion at a time cannot see what a group sharing a source
+    is worth together: each is weighed while the others still read the source,
+    so none earns the credit for retiring it, and the peak projection charges
+    each arriving result on top of a source that stays live. One source feeding
+    a conversion in each of two sibling loops -- `_attn_bwd`'s shape, where
+    each hoisting source is read by both the dK/dV and the dQ loops -- is the
+    common case (case 16 in hoist-layout-conversions.mlir: at 128-GRF and
+    default both loops are refused alone, at 256-GRF the second still is, and
+    both together lower the function's peak from 992 to 800 B/lane; tracked as
+    issue #8202). So refusals are only recorded while loops are decided; once
+    a function's loops are all decided, the refused conversions of every source
+    that is shared (two or more refused, or one refused beside one already
+    hoisted) are moved *together* and then vetted as one change: the loop-level
+    gate once per loop they leave, with the source credited when the group
+    retires it from that loop, and the peak gate by *measuring* the moved IR
+    against the same `max(current peak, threshold)` ceiling, since the
+    single-hoist projection cannot express several moves at once. A group that
+    fails either is moved back exactly. Each group is tried once, whole, in the
+    order its first refusal was made; subsets are not tried. Only then are the
+    surviving refusals stamped and counted, so every candidate is counted once,
+    as hoisted or under the reason it was first refused for.
+
     Cost is one whole-function pressure walk per candidate that follows an
     accepted hoist, plus the initial build. The pricing `QueryCache` is owned
     by the gate, not by `RegisterPressureAnalysis` itself, and is reused
@@ -213,28 +239,25 @@ def TritonIntelGPUHoistLayoutConversions
     a branch-shaped last use's mapped op is a further, separate per-candidate
     cost that `regionPeakCache` does not cover (it walks blocks directly, not
     through `regionPeakThroughOp`). None of this is re-measured against the
-    2.83s figure above.
+    2.83s figure above. The shared-source phase adds one whole-function walk
+    per group it tries (the measurement), plus the rebuild the next decision
+    after an accepted group pays; both spend `peak-rebuild-cap`, and a group
+    the cap leaves no room for is not tried. A function whose refusals share no
+    source pays nothing extra.
 
     ### Non-goals, all deliberate
 
     * No retry at a cheaper insertion point; the point is fixed, after the
       source's defining operation or before the loop if it has none.
     * A block-argument source is never freed for an earlier loop sharing it,
-      since the conversion still lands after that loop.
-    * Conversions sharing a source are not evaluated jointly, so a group can
-      stop partway through even where its completed net effect would have fit.
-      This also crosses loops: two sibling loops each converting the same
-      source are decided in two separate calls, and a refusal is never
-      revisited once made, even after a later-decided sibling's own hoist
-      frees the source the refusal was missing (case 16 in
-      hoist-layout-conversions.mlir measures this losing 192 B/lane of a
-      genuinely lower joint peak to the single-pass ordering -- but only at
-      256-GRF: at 128-GRF and default, that case's first loop never clears
-      its own ordinary loop-level budget check, so there is no freed-source
-      moment for a second loop's refusal to miss in the first place, and a
-      second run of the pass on its own output changes nothing there,
-      unlike at 256-GRF where a second run does reach the lower joint peak;
-      tracked as issue #8202).
+      since the conversion still lands after that loop; the shared-source
+      phase inherits this (case 47 in hoist-layout-conversions.mlir).
+    * The shared-source phase tries each source's refused group whole and
+      once: a group that fails (cases 45 and 46 in
+      hoist-layout-conversions.mlir) is left in place rather than searched
+      for a subset that would fit, and no group is retried after a later
+      group's hoist changes the picture. Groups are formed per source only;
+      conversions of different sources are never weighed together.
     * Neither trip count nor conversion cost is weighed against the pressure
       change.
     * `liveInPressure` ignores a value merely spanning the loop to feed code
@@ -257,7 +280,8 @@ def TritonIntelGPUHoistLayoutConversions
     Option<"peakRebuildCap", "peak-rebuild-cap", "unsigned", /*default*/"32",
            "Maximum whole-function pressure analysis rebuilds per function. "
            "Each accepted hoist invalidates the analysis; the next candidate "
-           "needing it spends one rebuild. Past the cap candidates are "
+           "needing it spends one rebuild, and each shared-source group trial "
+           "spends one to measure. Past the cap candidates are "
            "rejected, since a stale analysis bounds nothing. _attn_bwd's eight "
            "hoists at HEAD_DIM=128 spend seven rebuilds -- the first build is "
            "not a rebuild -- so a cap of seven already accepts all eight.">,

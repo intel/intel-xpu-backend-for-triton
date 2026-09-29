@@ -916,6 +916,47 @@ public:
     return PeakVerdict::Accept;
   }
 
+  /// Readies the gate for a *trial*: a change the caller is about to apply to
+  /// the IR and have measured by `endTrial`, rather than projected by `decide`.
+  /// Used for a joint hoist of several conversions, whose combined effect the
+  /// single-candidate projection cannot express. Brings the analysis up to date
+  /// so the ceiling is the peak of the IR the trial starts from. Returns false,
+  /// and the caller must not apply the trial, once the rebuild cap leaves no
+  /// room for the trial's own measurement.
+  bool beginTrial() {
+    if (!refreshAnalysis() || rebuilds >= rebuildCap) {
+      LDBG("Skipping joint hoist: whole-function peak analysis rebuild cap ("
+           << rebuildCap << ") reached");
+      return false;
+    }
+    trialCeiling = std::max(prePeak, threshold);
+    return true;
+  }
+
+  /// Measures the peak of the IR the caller has changed since `beginTrial`.
+  /// The measurement is exact, not a projection, so a refusal is always
+  /// `RejectExact`. On a refusal the caller must restore the IR exactly: the
+  /// gate's own analysis still describes the pre-trial IR and is kept. On
+  /// `Accept` the trial's IR stands and the next `decide`/`beginTrial` rebuilds
+  /// against it, checking it against the figure measured here.
+  PeakVerdict endTrial() {
+    ++rebuilds;
+    ttg::intel::RegisterPressureAnalysis trial(func);
+    uint64_t trialPeak = trial.peakPressure(func);
+    if (trialPeak > trialCeiling) {
+      LDBG("Skipping joint hoist: measured function peak "
+           << trialPeak << " B/lane exceeds ceiling " << trialCeiling
+           << " B/lane");
+      return PeakVerdict::RejectExact;
+    }
+    LDBG("Function peak allows joint hoist: measured "
+         << trialPeak << " B/lane within ceiling " << trialCeiling
+         << " B/lane");
+    dirty = true;
+    pendingProjection = trialPeak;
+    return PeakVerdict::Accept;
+  }
+
   /// Records that the hoist `decide` just accepted has been performed, so the
   /// analysis now describes stale IR.
   void noteHoisted() {
@@ -944,9 +985,9 @@ public:
 private:
   /// Brings `analysis`/`prePeak` up to date, and checks the upper-bound
   /// invariant at the only point where both the freshly measured peak and the
-  /// projection that predicted it exist. (A rejected candidate cannot be
-  /// checked this way without speculatively mutating IR, which this gate does
-  /// not do.)
+  /// projection that predicted it exist. (A candidate `decide` rejects cannot
+  /// be checked this way without speculatively mutating IR, which only a
+  /// trial -- see `beginTrial` -- does.)
   ///
   /// Returns false once the rebuild cap is spent. Reusing the last analysis
   /// would be unsound, not merely loose: after a hoist it describes pre-move
@@ -1007,6 +1048,7 @@ private:
   uint64_t prePeak = 0;
   PeakProjection lastProjection;
   uint64_t pendingProjection = 0;
+  uint64_t trialCeiling = 0;
   bool dirty = false;
   unsigned rebuilds = 0;
   DenseMap<Value, SmallVector<Operation *>> userCache;
@@ -1015,19 +1057,66 @@ private:
   DenseMap<Operation *, uint64_t> regionPeakCache;
 };
 
+/// Why a candidate was refused, recorded rather than acted on at once so the
+/// shared-source phase (`reconsiderSharedSources`) can still overturn it; see
+/// `FunctionHoistState`.
+enum class RefusalReason {
+  Pressure,
+  FunctionPeakExact,
+  FunctionPeakFallback,
+};
+
+struct Refusal {
+  ttg::ConvertLayoutOp cvtOp;
+  scf::ForOp forOp;
+  RefusalReason reason;
+  /// Set once a joint hoist overturns this refusal.
+  bool overturned = false;
+};
+
+/// Decision state for one function, shared between the one-at-a-time phase
+/// (`hoistCvtDotOpsOutOfLoop`) and the shared-source phase
+/// (`reconsiderSharedSources`), and settled by `finalizeRefusals`.
+///
+/// A refusal is only *recorded* when made; `tt.no_licm` and the rejection
+/// statistics are applied once, when the function's last phase has run. That
+/// keeps every candidate counted exactly once however many times it is
+/// weighed: as hoisted if any phase takes it, else under the reason the
+/// one-at-a-time phase refused it for.
+struct FunctionHoistState {
+  /// Per loop: the accumulated effect of the hoists already taken on the
+  /// loop-level gate's projected live-in, in per-lane bytes (may be negative).
+  /// Keyed by loop so the shared-source phase continues each loop's figure
+  /// where the one-at-a-time phase left it.
+  DenseMap<Operation *, int> netBytes;
+  /// In the order the refusals were made.
+  SmallVector<Refusal> refusals;
+  /// Sources at least one of whose conversions has been hoisted.
+  llvm::SmallPtrSet<Value, 8> hoistedSources;
+};
+
+/// Returns the loop-level gate's threshold: 80% of the per-lane GRF budget
+/// \p grfBudget. The 20% headroom accounts for scalars, temporaries, and
+/// loop-internal values not tracked by live-in liveness. Integer arithmetic
+/// (4/5) avoids float-to-unsigned truncation.
+static int liveInThreshold(unsigned grfBudget) {
+  return static_cast<int>(grfBudget * 4 / 5);
+}
+
 /// Decide, for every hoisting candidate of a single \p forOp, whether to hoist
 /// it out of the loop or to reject it on register pressure grounds.
 ///
 /// The candidates are *not* processed in program order. A hoist can lower the
 /// projected pressure as well as raise it, so the running total is not
 /// monotonic and a rejection is only safely conservative once every
-/// pressure-reducing candidate has been credited -- and rejection is
-/// irrevocable, since it stamps `tt.no_licm` and the later generic LICM pass
-/// never revisits the conversion. Deciding the smallest (most negative)
-/// projected delta first makes the outcome depend on measured costs rather than
-/// syntactic order. The delta is re-measured per decision rather than sorted up
-/// front, because a candidate sharing its source with a sibling only retires
-/// that source once the sibling has left.
+/// pressure-reducing candidate has been credited -- and a rejection this phase
+/// makes is final unless `reconsiderSharedSources` overturns it, since it ends
+/// up stamping `tt.no_licm` and the later generic LICM pass never revisits the
+/// conversion. Deciding the smallest (most negative) projected delta first
+/// makes the outcome depend on measured costs rather than syntactic order. The
+/// delta is re-measured per decision rather than sorted up front, because a
+/// candidate sharing its source with a sibling only retires that source once
+/// the sibling has left.
 ///
 /// A candidate clearing the loop-level gate faces a second, independent veto on
 /// the whole *function's* peak. Hoisting relocates the point where source and
@@ -1039,23 +1128,21 @@ private:
 ///
 /// \p candidates are the candidates directly inside \p forOp's body, in program
 /// order; \p grfBudget is per-lane bytes (see
-/// `RegisterPressureAnalysis::getPerLaneGRFBudgetInBytes`).
-static void
-hoistCvtDotOpsOutOfLoop(scf::ForOp forOp,
-                        ArrayRef<ttg::ConvertLayoutOp> candidates,
-                        const ttg::intel::RegisterPressureAnalysis &analysis,
-                        unsigned grfBudget, FunctionPeakGate &peakGate) {
+/// `RegisterPressureAnalysis::getPerLaneGRFBudgetInBytes`). Refusals are
+/// recorded in \p state, not applied; see `FunctionHoistState`.
+static void hoistCvtDotOpsOutOfLoop(
+    scf::ForOp forOp, ArrayRef<ttg::ConvertLayoutOp> candidates,
+    const ttg::intel::RegisterPressureAnalysis &analysis, unsigned grfBudget,
+    FunctionPeakGate &peakGate, FunctionHoistState &state) {
   // `liveInBytes` comes from an analysis built once at pass entry, so it does
   // not reflect hoists this pass has already performed. `netBytes` carries
   // their accumulated effect (which may be negative) forward instead.
   unsigned liveInBytes = analysis.liveInPressure(forOp.getBody());
-  int netBytes = 0;
+  int &netBytes = state.netBytes[forOp.getOperation()];
 
   // Only hoist if the projected live-in pressure stays within 80% of the GRF
-  // budget. The 20% headroom accounts for scalars, temporaries, and
-  // loop-internal values not tracked by live-in liveness. Use integer
-  // arithmetic (4/5) to avoid float-to-unsigned truncation.
-  int threshold = static_cast<int>(grfBudget * 4 / 5);
+  // budget.
+  int threshold = liveInThreshold(grfBudget);
 
   SmallVector<ttg::ConvertLayoutOp> pending(candidates);
   while (!pending.empty()) {
@@ -1094,8 +1181,7 @@ hoistCvtDotOpsOutOfLoop(scf::ForOp forOp,
            << liveInBytes << " + alreadyHoisted=" << netBytes
            << " + thisHoist=" << bestDelta << " = " << projectedBytes
            << " B/lane exceeds 80% of budget=" << grfBudget << " B/lane");
-      ++NumRejectedPressure;
-      cvtOp->setAttr("tt.no_licm", UnitAttr::get(cvtOp.getContext()));
+      state.refusals.push_back({cvtOp, forOp, RefusalReason::Pressure});
       continue;
     }
 
@@ -1103,11 +1189,10 @@ hoistCvtDotOpsOutOfLoop(scf::ForOp forOp,
     // not measure.
     PeakVerdict verdict = peakGate.decide(cvtOp, forOp);
     if (verdict != PeakVerdict::Accept) {
-      if (verdict == PeakVerdict::RejectExact)
-        ++NumRejectedFunctionPeakExact;
-      else
-        ++NumRejectedFunctionPeakFallback;
-      cvtOp->setAttr("tt.no_licm", UnitAttr::get(cvtOp.getContext()));
+      state.refusals.push_back({cvtOp, forOp,
+                                verdict == PeakVerdict::RejectExact
+                                    ? RefusalReason::FunctionPeakExact
+                                    : RefusalReason::FunctionPeakFallback});
       continue;
     }
 
@@ -1124,8 +1209,157 @@ hoistCvtDotOpsOutOfLoop(scf::ForOp forOp,
 
     ++NumHoisted;
     netBytes += bestDelta;
+    state.hoistedSources.insert(cvtOp.getSrc());
     peakGate.noteHoisted();
   }
+}
+
+/// Moves \p cvtOp out of \p forOp to the point `hoistAnchor` names -- the same
+/// point `hoistCvtDotOpsOutOfLoop` moves an accepted candidate to.
+static void moveToHoistAnchor(ttg::ConvertLayoutOp cvtOp, scf::ForOp forOp) {
+  if (Operation *anchor = hoistAnchor(cvtOp, forOp))
+    cvtOp->moveAfter(anchor);
+  else
+    cvtOp->moveBefore(forOp);
+}
+
+/// Second phase: re-decide, *jointly*, the refused conversions of each source
+/// that is shared -- by two or more refused conversions, or by a refused one
+/// and one already hoisted.
+///
+/// Deciding one conversion at a time cannot see what a group sharing a source
+/// is worth together. Each is weighed while the others still read the source,
+/// so none earns the credit for retiring it, and the whole-function projection
+/// charges each arriving result on top of a source that stays live. Case 16 in
+/// hoist-layout-conversions.mlir is the shape: one source feeding a conversion
+/// in each of two sibling loops. Alone, the later loop's hoist lands above the
+/// earlier loop, whose own conversion still holds the source live through it,
+/// so the peak rises; and the earlier loop's hoist earns no credit because the
+/// later loop still reads the source. Together, the source dies right after
+/// the two conversions and the function's peak falls. Re-queueing a refusal
+/// once a sibling is hoisted is not enough: in that shape no sibling is ever
+/// hoisted alone at 128-GRF, so there is no such moment.
+///
+/// A group is decided by applying it and measuring, since the single-candidate
+/// projection has no way to express several moves at once. It must pass both
+/// vetoes, as one change:
+///   - the loop-level gate, once per loop the group leaves, with that loop's
+///     conversions' results charged and the source credited when the move
+///     retires it from that loop -- the same substitution as a single hoist,
+///     asked of the IR with the whole group moved;
+///   - the whole-function peak gate, measured on the moved IR against the same
+///     `max(prePeak, threshold)` ceiling.
+/// A group either moves as a whole or is restored exactly; subsets are not
+/// tried. Groups are decided once each, in the order their first refusal was
+/// made.
+static void
+reconsiderSharedSources(FunctionHoistState &state,
+                        const ttg::intel::RegisterPressureAnalysis &analysis,
+                        unsigned grfBudget, FunctionPeakGate &peakGate) {
+  llvm::MapVector<Value, SmallVector<Refusal *>> bySource;
+  for (Refusal &refusal : state.refusals)
+    bySource[refusal.cvtOp.getSrc()].push_back(&refusal);
+
+  int threshold = liveInThreshold(grfBudget);
+  for (auto &[src, group] : bySource) {
+    if (group.size() < 2 && !state.hoistedSources.contains(src))
+      continue;
+    if (!peakGate.beginTrial())
+      return;
+
+    // Apply the group, remembering where each conversion came from. The body
+    // terminator follows every candidate, so a next node always exists.
+    SmallVector<std::pair<ttg::ConvertLayoutOp, Operation *>> undo;
+    for (Refusal *refusal : group) {
+      undo.push_back({refusal->cvtOp, refusal->cvtOp->getNextNode()});
+      moveToHoistAnchor(refusal->cvtOp, refusal->forOp);
+    }
+    auto restore = [&]() {
+      // In reverse, so a conversion whose old successor was another member of
+      // the group finds that member back in place first.
+      for (auto &[cvtOp, next] : llvm::reverse(undo))
+        cvtOp->moveBefore(next);
+    };
+
+    // The loop-level gate, per loop the group leaves, on the moved IR. With the
+    // whole group moved, `hoistRetiresSource` gives the same answer for every
+    // member of one loop, so the first one stands for the loop and the source
+    // is credited once per loop.
+    llvm::MapVector<Operation *, int> deltas;
+    llvm::MapVector<Operation *, Refusal *> firstInLoop;
+    for (Refusal *refusal : group) {
+      Operation *loop = refusal->forOp.getOperation();
+      deltas[loop] += static_cast<int>(
+          ttg::intel::RegisterPressureAnalysis::getPerThreadSizeInBytes(
+              refusal->cvtOp.getType()));
+      firstInLoop.insert({loop, refusal});
+    }
+    bool fits = true;
+    for (auto &[loop, refusal] : firstInLoop) {
+      scf::ForOp forOp = refusal->forOp;
+      int &delta = deltas[loop];
+      if (hoistRetiresSource(refusal->cvtOp, forOp))
+        delta -=
+            static_cast<int>(analysis.liveInContribution(forOp.getBody(), src));
+      int projectedBytes =
+          static_cast<int>(analysis.liveInPressure(forOp.getBody())) +
+          state.netBytes[forOp.getOperation()] + delta;
+      assert(projectedBytes >= 0 && "over-credited a joint hoist's source");
+      if (delta > 0 && projectedBytes >= threshold) {
+        LDBG("Skipping joint hoist of "
+             << group.size() << " conversion(s): loop liveIn="
+             << analysis.liveInPressure(forOp.getBody())
+             << " + alreadyHoisted=" << state.netBytes[forOp.getOperation()]
+             << " + thisHoist=" << delta << " = " << projectedBytes
+             << " B/lane exceeds 80% of budget=" << grfBudget << " B/lane");
+        fits = false;
+        break;
+      }
+    }
+    if (!fits) {
+      restore();
+      continue;
+    }
+
+    if (peakGate.endTrial() != PeakVerdict::Accept) {
+      restore();
+      continue;
+    }
+
+    LDBG("Hoisting jointly a group of " << group.size()
+                                        << " conversion(s) sharing a source");
+    for (Refusal *refusal : group) {
+      refusal->overturned = true;
+      ++NumHoisted;
+    }
+    for (auto &[loop, delta] : deltas)
+      state.netBytes[loop] += delta;
+    state.hoistedSources.insert(src);
+  }
+}
+
+/// Applies every refusal no phase overturned: stamps `tt.no_licm`, so the later
+/// generic LICM pass does not hoist the conversion anyway, and counts it under
+/// the reason it was first refused for.
+static void finalizeRefusals(FunctionHoistState &state) {
+  for (Refusal &refusal : state.refusals) {
+    if (refusal.overturned)
+      continue;
+    switch (refusal.reason) {
+    case RefusalReason::Pressure:
+      ++NumRejectedPressure;
+      break;
+    case RefusalReason::FunctionPeakExact:
+      ++NumRejectedFunctionPeakExact;
+      break;
+    case RefusalReason::FunctionPeakFallback:
+      ++NumRejectedFunctionPeakFallback;
+      break;
+    }
+    refusal.cvtOp->setAttr("tt.no_licm",
+                           UnitAttr::get(refusal.cvtOp.getContext()));
+  }
+  state = FunctionHoistState();
 }
 
 class TritonIntelGPUHoistLayoutConversionsPass
@@ -1169,6 +1403,17 @@ class TritonIntelGPUHoistLayoutConversionsPass
     uint64_t threshold = grfBudget * 4 / 5;
     std::optional<FunctionPeakGate> peakGate;
     FunctionOpInterface gatedFunc;
+    // Scoped to `gatedFunc` like `peakGate`: a function's refusals are settled
+    // (jointly reconsidered, then stamped and counted) before the next
+    // function's loops are decided.
+    FunctionHoistState state;
+    auto settleFunction = [&]() {
+      if (!peakGate)
+        return;
+      reconsiderSharedSources(state, analysis, grfBudget, *peakGate);
+      finalizeRefusals(state);
+      peakGate->flushInvariantCheck();
+    };
 
     // Decide the loops last to first. A hoist only moves a conversion *earlier*
     // in its block, so once every loop after `forOp` has been decided, no later
@@ -1187,16 +1432,14 @@ class TritonIntelGPUHoistLayoutConversionsPass
       if (!func)
         continue;
       if (func != gatedFunc) {
-        if (peakGate)
-          peakGate->flushInvariantCheck();
+        settleFunction();
         gatedFunc = func;
         peakGate.emplace(func, threshold, corridorOpCap, peakRebuildCap);
       }
       hoistCvtDotOpsOutOfLoop(forOp, loopCandidates, analysis, grfBudget,
-                              *peakGate);
+                              *peakGate, state);
     }
-    if (peakGate)
-      peakGate->flushInvariantCheck();
+    settleFunction();
 
     if (mlir::triton::tools::getBoolEnv("TRITON_INTEL_HLC_STATS")) {
       llvm::errs() << "[HoistLayoutConversions] considered=" << NumConsidered
