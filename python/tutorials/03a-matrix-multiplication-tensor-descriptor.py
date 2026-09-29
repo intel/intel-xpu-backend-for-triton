@@ -94,10 +94,6 @@ import triton
 import triton.language as tl
 
 
-def is_xpu_cri():
-    return triton.runtime.driver.active.get_current_target().arch['arch'] == "cri"
-
-
 @triton.autotune(
     configs=[
         triton.Config(
@@ -335,7 +331,7 @@ INT8_TYPES = [(torch.int8, torch.int32, torch.int32)]
 FP8_TYPES = [(torch.float8_e4m3fn, torch.float32, torch.float16)]
 
 torch.manual_seed(0)
-matmul_size = 128 if is_xpu_cri() else 512
+matmul_size = 512
 test_types = FP16_TYPES + FP32_TYPES + INT8_TYPES + FP8_TYPES
 for dtype, accum_dtype, res_dtype in test_types:
     for shape in [(matmul_size, matmul_size), (4, matmul_size, matmul_size)]:

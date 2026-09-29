@@ -7,7 +7,7 @@ import pytest
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_cuda, is_xpu, is_xpu_cri, is_hip, is_hip_cdna2, is_hip_cdna3, is_hip_cdna4, is_hip_rdna3, is_hip_rdna4, is_hip_gfx1250
+from triton._internal_testing import is_cuda, is_xpu, is_hip, is_hip_cdna2, is_hip_cdna3, is_hip_cdna4, is_hip_rdna3, is_hip_rdna4, is_hip_gfx1250
 
 FP8_DTYPES = ('float8e5', 'float8e4b15', 'float8e4nv', 'float8e4b8', 'float8e5b16')
 
@@ -234,8 +234,6 @@ def launch_upcast_emulated(src, exponent_bits, mantissa_bits, exponent_bias, dev
 
 def downcast_test(src_dtype, dst_dtype, rounding, exponent_bits, mantissa_bits, exponent_bias, max_repr, offset, device):
     numel = 2**24
-    if is_xpu_cri():
-        numel = 2**12 # Limit input size to reduce test time.
 
     src = launch_exhaustive_populate(src_dtype, offset << 24, numel, False, src_dtype.primitive_bitwidth, max_repr, device)
     dst = launch_type_convert_triton(src, src_dtype, dst_dtype, device=device, rounding=rounding)
@@ -401,7 +399,7 @@ def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
         'float8e5b16': (5, 2, 16),
     }[dst_dtype]
 
-    for i in range(8 if is_xpu_cri() else 256):
+    for i in range(256):
         downcast_test(getattr(tl, src_dtype), getattr(tl, dst_dtype), rounding, *stuff, max_repr, i, device=device)
 
 @pytest.mark.parametrize("mode", [
