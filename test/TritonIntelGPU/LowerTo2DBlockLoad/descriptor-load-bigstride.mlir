@@ -7,9 +7,12 @@
 //
 // The 2Dblockload HW encodes base_width (bytes), base_height (rows) and
 // base_pitch (bytes) as 24-bit "value - 1" fields, so each must lie in
-// [1, 2^24]. For every candidate tt.make_tensor_descriptor, the transform
-// leaves the tt.descriptor_load unlowered if a field that is a compile-time
-// constant falls outside that range:
+// [1, 2^24]. Unless the module advertises a base alignment of at most 4 bytes
+// (ttig.2d_block_io_base_alignment), the lowering later adds up to 63 bytes of
+// base misalignment to base_width, so width must also stay <= 2^24 - 63
+// (Cases 5, 22 and 23). For every candidate tt.make_tensor_descriptor, the
+// transform leaves the tt.descriptor_load unlowered if a field that is a
+// compile-time constant falls outside that range:
 //   width  = shape[descRank-1] * elemBytes   (the column dim)
 //   height = shape[descRank-2]               (the row dim)
 //   pitch  = stride[descRank-2] * elemBytes  (the row dim)
@@ -113,7 +116,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
-// Case 5: width = 2^23 f16 elements = 2^24 B, the largest legal byte width; the upper bound is inclusive.
+// Case 5: width = 8388576 f16 elements = 2^24 - 64 B, the largest legal f16 width when the base may need 64-byte
+// alignment compensation (no ttig.2d_block_io_base_alignment attribute): it leaves room for the up to 63 bytes the
+// lowering adds.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
@@ -121,7 +126,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
   tt.func @descriptor_load_width_max_f16(%arg0: !tt.ptr<f16>, %argH: i32, %argP: i64) -> tensor<64x32xf16, #dot0> {
     %c1_i64 = arith.constant 1 : i64
     %c0_i32 = arith.constant 0 : i32
-    %width = arith.constant 8388608 : i32
+    %width = arith.constant 8388576 : i32
     %desc = tt.make_tensor_descriptor %arg0, [%argH, %width], [%argP, %c1_i64] : <f16>, <64x32xf16>
     // CHECK: ttig.2d_block_load
     %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
@@ -187,7 +192,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
-// Case 9: width = (2^23 + 1) f16 elements = 2^24 + 2 B, just past the byte bound (Case 5 is the last legal value).
+// Case 9: width = (2^23 + 1) f16 elements = 2^24 + 2 B, past the 24-bit field itself.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
@@ -491,5 +496,45 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
       scf.yield %new_desc : !tt.tensordesc<64x32xf16>
     }
     tt.return
+  }
+}
+
+// -----
+
+// Case 22: width = 8388577 f16 elements = 2^24 - 62 B, the first f16 width past Case 5. It fits the 24-bit field, but
+// not once the lowering adds up to 63 bytes of base misalignment, so the load must bail.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @descriptor_load_width_no_align_room_f16
+  tt.func @descriptor_load_width_no_align_room_f16(%arg0: !tt.ptr<f16>, %argH: i32, %argP: i64) -> tensor<64x32xf16, #dot0> {
+    %c1_i64 = arith.constant 1 : i64
+    %c0_i32 = arith.constant 0 : i32
+    %width = arith.constant 8388577 : i32
+    %desc = tt.make_tensor_descriptor %arg0, [%argH, %width], [%argP, %c1_i64] : <f16>, <64x32xf16>
+    // CHECK-NOT: ttig.2d_block_load
+    // CHECK-NOT: ttig.extract_desc
+    // CHECK: tt.descriptor_load
+    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
+    tt.return %0 : tensor<64x32xf16, #dot0>
+  }
+}
+
+// -----
+
+// Case 23: width = 2^23 f16 elements = 2^24 B on a module whose base alignment requirement is 4 bytes, so the lowering
+// adds no misalignment and the full inclusive 2^24 bound applies.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.2d_block_io_base_alignment = 4 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @descriptor_load_width_max_align4_f16
+  tt.func @descriptor_load_width_max_align4_f16(%arg0: !tt.ptr<f16>, %argH: i32, %argP: i64) -> tensor<64x32xf16, #dot0> {
+    %c1_i64 = arith.constant 1 : i64
+    %c0_i32 = arith.constant 0 : i32
+    %width = arith.constant 8388608 : i32
+    %desc = tt.make_tensor_descriptor %arg0, [%argH, %width], [%argP, %c1_i64] : <f16>, <64x32xf16>
+    // CHECK: ttig.2d_block_load
+    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
+    tt.return %0 : tensor<64x32xf16, #dot0>
   }
 }

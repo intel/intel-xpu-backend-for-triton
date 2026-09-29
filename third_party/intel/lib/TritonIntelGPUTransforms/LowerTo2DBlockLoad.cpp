@@ -191,11 +191,13 @@ private:
 
     // The 2D block message encodes base_width (bytes), base_height (rows) and
     // base_pitch (bytes) as value-1 in 24-bit fields, so each must be in
-    // [1, 2^24]. This is the last point a descriptor load can fall back:
-    // Subgroup2DBlockLoadOpConversion does not re-validate. Bail if ANY
-    // candidate MakeTensorDescOp has a compile-time-foldable field outside
-    // that range. Check before emitting any IR: the ttig.extract_desc values
-    // built below do not fold, so read the defining MakeTensorDescOp(s).
+    // [1, 2^24]. Where the target needs 64-byte base alignment, the lowering
+    // adds the base's misalignment (base & 63) to base_width, so base_width
+    // must leave 63 bytes of room. This is the last point a descriptor load
+    // can fall back: Subgroup2DBlockLoadOpConversion does not re-validate.
+    // Bail if ANY candidate MakeTensorDescOp has a compile-time-foldable field
+    // outside that range. Check before emitting any IR: the ttig.extract_desc
+    // values built below do not fold, so read the defining MakeTensorDescOp(s).
     //
     // Not checked here:
     //  - Non-foldable (runtime) values are trusted to be in range.
@@ -208,9 +210,12 @@ private:
     //  - pitch >= width (a TritonGEN verifier rule) is not a range check and
     //    is not enforced here either.
     constexpr int64_t kMax2DBlockField = int64_t(1) << 24;
+    int64_t maxBaseWidth = ttgi::needs2DBlockIOAlignmentCompensation(op)
+                               ? kMax2DBlockField - 63
+                               : kMax2DBlockField;
     int64_t elemBytesConst = elemSizeInBits / 8;
     auto isOutOfRange = [&](unsigned operandIdx, int64_t scale,
-                            StringRef field) {
+                            int64_t maxValue, StringRef field) {
       return llvm::any_of(defs, [&](tt::MakeTensorDescOp d) {
         std::optional<int64_t> folded =
             tt::intel::getFoldedConstantValue(d->getOperand(operandIdx));
@@ -218,7 +223,7 @@ private:
           return false;
         int64_t value;
         if (!llvm::MulOverflow(*folded, scale, value) && value >= 1 &&
-            value <= kMax2DBlockField)
+            value <= maxValue)
           return false;
         LDBG("Invalid " << field << " (" << *folded << " x " << scale
                         << ") for descriptor load: " << *op);
@@ -227,11 +232,11 @@ private:
     };
     // MakeTensorDescOp operands: base, shape[descRank], strides[descRank].
     if (isOutOfRange(/*inner shape*/ 1 + (descRank - 1), elemBytesConst,
-                     "base_width") ||
+                     maxBaseWidth, "base_width") ||
         isOutOfRange(/*outer shape*/ 1 + (descRank - 2), /*scale=*/1,
-                     "base_height") ||
+                     kMax2DBlockField, "base_height") ||
         isOutOfRange(/*pitch stride*/ 1 + descRank + (descRank - 2),
-                     elemBytesConst, "base_pitch"))
+                     elemBytesConst, kMax2DBlockField, "base_pitch"))
       return;
 
     OpBuilder builder(op);
