@@ -1387,14 +1387,32 @@ class TritonRewriteTensorDescriptorToPointerPass
         candidateMakeTensorDescOps;
     llvm::SmallSetVector<triton::MakeTensorDescOp, 4>
         unhandledMakeTensorDescOps;
+    SmallVector<llvm::SmallSetVector<triton::MakeTensorDescOp, 4>> descGroups;
     op->walk([&](Operation *op) {
       TypeSwitch<Operation *>(op)
-          .Case<triton::DescriptorLoadOp, triton::DescriptorStoreOp>(
-              [&](auto op) {
-                for (auto d :
-                     triton::intel::findDescriptorDefinitions(op.getDesc()))
-                  candidateMakeTensorDescOps.insert(d);
-              })
+          .Case<triton::DescriptorLoadOp>([&](triton::DescriptorLoadOp op) {
+            triton::intel::DescriptorDefinitions defs =
+                triton::intel::findDescriptorDefinitions(op.getDesc());
+            // Candidates that disagree on `padding` leave the descriptor-native
+            // path with no compile-time fill value (#8102): the load would
+            // silently get PAD_ZERO even on the branch that asked for PAD_NAN.
+            // The pointer expansion carries padding as a runtime i1 and selects
+            // the fill per branch, so route those descriptors to it. An empty
+            // trace is NOT divergence -- it is already a non-candidate via
+            // allSatisfy, so it must not be evicted here.
+            bool divergentPadding = !defs.empty() && !defs.consistentPadding();
+            for (triton::MakeTensorDescOp d : defs) {
+              candidateMakeTensorDescOps.insert(d);
+              if (divergentPadding)
+                unhandledMakeTensorDescOps.insert(d);
+            }
+          })
+          .Case<triton::DescriptorStoreOp>([&](triton::DescriptorStoreOp op) {
+            // Stores carry no padding, so there is nothing to diverge on.
+            for (triton::MakeTensorDescOp d :
+                 triton::intel::findDescriptorDefinitions(op.getDesc()))
+              candidateMakeTensorDescOps.insert(d);
+          })
           .Case<triton::DescriptorGatherOp, triton::DescriptorScatterOp,
                 triton::DescriptorReduceOp>([&](auto op) {
             for (auto d :
@@ -1402,8 +1420,59 @@ class TritonRewriteTensorDescriptorToPointerPass
               unhandledMakeTensorDescOps.insert(d);
           })
           .Default([](auto) {});
+
+      // Legality is decided per op over all of its descriptor-typed operands
+      // and results, so their producers form one group that must be converted
+      // together.
+      llvm::SmallSetVector<triton::MakeTensorDescOp, 4> group;
+      bool hasUntraceable = false;
+      auto addDefs = [&](Value v) {
+        if (!isa<triton::TensorDescType>(v.getType()))
+          return;
+        triton::intel::DescriptorDefinitions defs =
+            triton::intel::findDescriptorDefinitions(v);
+        if (defs.empty()) {
+          hasUntraceable = true;
+          return;
+        }
+        for (triton::MakeTensorDescOp d : defs)
+          group.insert(d);
+      };
+      for (Value operand : op->getOperands())
+        addDefs(operand);
+      for (Value result : op->getResults())
+        addDefs(result);
+      // An untraceable descriptor contributes no producer, so the closure below
+      // has nothing to spread from -- yet it already makes this op illegal
+      // (`tracesToCandidates` is false for an empty trace), leaving the op
+      // converted around producers that stay unconverted. Mirror the predicate:
+      // evict the group outright (#8170).
+      if (hasUntraceable)
+        unhandledMakeTensorDescOps.insert(group.begin(), group.end());
+      if (group.size() > 1)
+        descGroups.push_back(std::move(group));
       return WalkResult::advance();
     });
+
+    // With `buildMaterializations = false` legality cannot be mixed within a
+    // group: one producer leaving the descriptor path (evicted, or never a
+    // candidate) drags every traced producer that shares an op with it. Close
+    // the evicted set over the groups.
+    auto isEvicted = [&](triton::MakeTensorDescOp d) {
+      return unhandledMakeTensorDescOps.contains(d) ||
+             !candidateMakeTensorDescOps.contains(d);
+    };
+    bool changed = true;
+    while (changed) {
+      changed = false;
+      for (const llvm::SmallSetVector<triton::MakeTensorDescOp, 4> &group :
+           descGroups) {
+        if (!llvm::any_of(group, isEvicted))
+          continue;
+        for (triton::MakeTensorDescOp d : group)
+          changed |= unhandledMakeTensorDescOps.insert(d);
+      }
+    }
     for (auto op : unhandledMakeTensorDescOps)
       candidateMakeTensorDescOps.remove(op);
 
@@ -1419,17 +1488,30 @@ class TritonRewriteTensorDescriptorToPointerPass
           // Check if all tensor descriptor values in the op trace back to
           // candidate MakeTensorDescOps.
           auto allDescValuesAreCandidate = [&](Operation *op) {
-            for (Value operand : op->getOperands()) {
-              if (!isa<triton::TensorDescType>(operand.getType()))
-                continue;
+            auto tracesToCandidates = [&](Value v) {
               // allSatisfy is false for an empty trace, which is what we want:
               // an untraceable descriptor is not a candidate.
-              if (!triton::intel::findDescriptorDefinitions(operand).allSatisfy(
-                      [&](auto d) {
-                        return candidateMakeTensorDescOps.contains(d);
-                      }))
+              return triton::intel::findDescriptorDefinitions(v).allSatisfy(
+                  [&](triton::MakeTensorDescOp d) {
+                    return candidateMakeTensorDescOps.contains(d);
+                  });
+            };
+            for (Value operand : op->getOperands())
+              if (isa<triton::TensorDescType>(operand.getType()) &&
+                  !tracesToCandidates(operand))
                 return false;
-            }
+            // Results matter too: an op that only *produces* a non-candidate
+            // descriptor (an scf.if yielding one, a tt.call returning one)
+            // would otherwise stay legal while
+            // populateSCFStructuralTypeConversions /
+            // populateFunctionTypeConversions rewrite its yield/callee 1->N,
+            // leaving a signature that no longer matches its own body. Upstream
+            // marks an op illegal on operands OR results; this restores that
+            // invariant while keeping the candidate carve-out. See #8166.
+            for (Value result : op->getResults())
+              if (isa<triton::TensorDescType>(result.getType()) &&
+                  !tracesToCandidates(result))
+                return false;
             return true;
           };
 

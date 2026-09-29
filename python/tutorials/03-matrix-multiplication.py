@@ -165,10 +165,6 @@ def is_xpu():
     return triton.runtime.driver.active.get_current_target().backend == "xpu"
 
 
-def is_xpu_cri():
-    return triton.runtime.driver.active.get_current_target().arch['arch'] == "cri"
-
-
 def get_xpu_autotune_config():
     return [
         triton.Config(
@@ -398,7 +394,7 @@ def matmul(a, b, activation=""):
 # We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS).
 
 torch.manual_seed(0)
-matmul_size = 256 if is_xpu_cri() else 512
+matmul_size = 512
 a = torch.rand((matmul_size, matmul_size), device=DEVICE, dtype=torch.float16) - 0.5
 b = torch.rand((matmul_size, matmul_size), device=DEVICE, dtype=torch.float16) - 0.5
 triton_output = matmul(a, b)
