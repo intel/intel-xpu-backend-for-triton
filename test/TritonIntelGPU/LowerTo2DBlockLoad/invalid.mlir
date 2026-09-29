@@ -1,7 +1,9 @@
 // RUN: triton-opt %s -split-input-file --tritonintelgpu-lower-to-2d-block-load | FileCheck %s --implicit-check-not=ttig.2d_block_load_from_ptr --implicit-check-not=ttig.2d_block_load
 
 // COM: Descriptor load without ttig.block_io attribute should NOT be converted
-// COM: to ttig.2d_block_load — it must remain as tt.descriptor_load.
+// COM: to ttig.2d_block_load — it is lowered to tt.load as a fallback.
+// COM: When MakeTensorDescOp is visible, the fallback uses its values directly
+// COM: (no ExtractDescOp) so AxisInfo can infer contiguity for vectorization.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
@@ -10,8 +12,38 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %c1_i64 = arith.constant 1 : i64
     %c0_i32 = arith.constant 0 : i32
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <64x32xf16>
-    // CHECK: tt.descriptor_load
+    // Stride %c1_i64 is used directly (no ExtractDescOp), preserving AxisInfo.
+    // CHECK-NOT: ttig.extract_desc
+    // CHECK: tt.splat %arg0
+    // CHECK: tt.make_range
+    // CHECK: tt.addptr
+    // CHECK: arith.cmpi
+    // CHECK: tt.load
+    // CHECK-NOT: tt.descriptor_load
     %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
+    tt.return %0 : tensor<64x32xf16, #dot0>
+  }
+}
+
+// -----
+
+// COM: Column-major descriptor load that cannot find MakeTensorDescOp (passed
+// COM: as a function argument) should be lowered to tt.load with inner-2
+// COM: dimensions permuted. The descriptor has shape [32, 64] (N=32, K=64) but
+// COM: the result is [64, 32] (K, N) due to the column_major transpose.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
+  // CHECK-LABEL: tt.func @descriptor_load_column_major_fallback
+  tt.func @descriptor_load_column_major_fallback(%desc: !tt.tensordesc<32x64xf16>) -> tensor<64x32xf16, #dot0> {
+    %c0_i32 = arith.constant 0 : i32
+    // column_major means result [64, 32] = [K, N] (inner dims swapped).
+    // The fallback must permute shapes/strides/indices to match result order.
+    // CHECK: ttig.extract_desc
+    // CHECK: tt.make_range
+    // CHECK: tt.load
+    // CHECK-NOT: tt.descriptor_load
+    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "column_major"} : !tt.tensordesc<32x64xf16> -> tensor<64x32xf16, #dot0>
     tt.return %0 : tensor<64x32xf16, #dot0>
   }
 }
