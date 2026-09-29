@@ -48,9 +48,10 @@ def test_accepts_default_grf(spill_size, is_lts, accepted):
     assert accepts_default_grf(spill_size, is_lts) is accepted
 
 
-@pytest.mark.xfail(is_xpu_cri(), reason="unable to get spill_size")
 def test_auto_large_grf(device, tmp_path):
-    SIZE = 2048
+    # CRI's larger register file only spills past the large-GRF upgrade at a
+    # bigger tile; other targets already spill at 2048.
+    SIZE = 4096 if is_xpu_cri() else 2048
 
     @triton.jit
     def kernel(X, SIZE: tl.constexpr):
@@ -62,7 +63,10 @@ def test_auto_large_grf(device, tmp_path):
     # Triton XPU chooses large GRF mode once the spill frame reaches
     # `REBUILD_SPILL_BYTES_PER_THREAD` bytes per hardware thread.
     k = kernel[(1, )](x, SIZE=SIZE, num_warps=1, generate_native_code=True, grf_mode='default')
-    if "-cl-intel-256-GRF-per-thread" in k.metadata.build_flags:
+    # CRI's auto-GRF upgrade targets 512-GRF; other targets use 256 (see the
+    # retry_grf_mode_list branch in the Intel backend compiler).
+    large_grf_flag = "-cl-intel-512-GRF-per-thread" if is_xpu_cri() else "-cl-intel-256-GRF-per-thread"
+    if large_grf_flag in k.metadata.build_flags:
         return  # the rebuild fired, which is the whole assertion
 
     # Read the outcome before the predicate: `make_zebin` keeps the *adopted*

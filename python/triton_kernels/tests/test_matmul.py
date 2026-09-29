@@ -22,7 +22,7 @@ from triton_kernels.numerics_details.mxfp import upcast_from_mxfp, quantize_mxfp
 # testing utilities
 from triton_kernels.testing import assert_close, make_random_tensor
 # target-specific utilities
-from triton_kernels.target_info import is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_gfx1250, is_xpu, is_xpu_cri
+from triton_kernels.target_info import is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_gfx1250, is_xpu
 from triton_kernels.swiglu import swiglu, swiglu_fn
 from triton_kernels.swiglu import PrecisionConfig as SwiGLUPrecisionConfig
 from triton_kernels.tensor_details import layout
@@ -476,13 +476,6 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
             and not (weight_dtype_str == "float8_e4m3fn" and act_dtype_str in ("float16", "bfloat16"))):
         b_transpose = True
 
-    if is_xpu_cri():
-        # Limit input size to reduce test time.
-        # FIXME: check if we can relax it with higher parallelism in CI runs.
-        m = min(m, 128)
-        n = min(n, 128)
-        k = min(k, 512)
-
     torch.manual_seed(0)
 
     # set opt flags constraints
@@ -693,10 +686,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         maxtol, rmstol = 1e-12, 1e-12
     assert_close(ref_y, tri_y, maxtol=maxtol, rmstol=rmstol)
     if c_dtype.has_global_scale and not is_compile_warmup():
-        if is_xpu_cri():
-            torch.testing.assert_close(ref_y_scale, tri_y_scale, atol=1e-10, rtol=1e-5)
-        else:
-            assert torch.all((ref_y_scale - tri_y_scale).abs() < 1e-10), \
+        assert torch.all((ref_y_scale - tri_y_scale).abs() < 1e-10), \
                    f"ref_y_scale: {ref_y_scale}, tri_y_scale: {tri_y_scale.item()}"
 
 
