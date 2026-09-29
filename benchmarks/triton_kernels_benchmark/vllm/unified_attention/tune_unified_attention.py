@@ -364,13 +364,71 @@ def graph_timer(fn, device, warmup_ms, rep_ms):
         graph.reset()
 
 
-def benchmark_callable(fn, device, warmup_ms, rep_ms):
+@contextmanager
+def cold_graph_timer(fn, device, warmup_ms, rep_ms):
+    """Evict before each replay; time only the single-call attention graph."""
+    backend = getattr(torch, device.type)
+    cache = torch.empty(256 * 1024 * 1024 // 4, dtype=torch.int32, device=device)
+    attention, eviction = backend.XPUGraph(), backend.XPUGraph()
+    try:
+        fn()
+        cache.zero_()
+        backend.synchronize(device)
+        with backend.graph(attention):
+            fn()
+        with backend.graph(eviction):
+            cache.zero_()
+        eviction.replay()
+        attention.replay()
+        backend.synchronize(device)
+        pairs = [(backend.Event(enable_timing=True), backend.Event(enable_timing=True)) for _ in range(256)]
+        for start, end in pairs:
+            start.record()
+            end.record()
+        boundary_start, boundary_end = backend.Event(enable_timing=True), backend.Event(enable_timing=True)
+        boundary_start.record()
+        boundary_end.record()
+        backend.synchronize(device)
+
+        def batch(repeats):
+            boundary_start.record()
+            for start, end in pairs[:repeats]:
+                eviction.replay()
+                start.record()
+                attention.replay()
+                end.record()
+            boundary_end.record()
+            backend.synchronize(device)
+            samples = [start.elapsed_time(end) for start, end in pairs[:repeats]]
+            total_ms = boundary_start.elapsed_time(boundary_end)
+            if not all(math.isfinite(value) and value > 0 for value in samples + [total_ms]):
+                raise RuntimeError("Invalid cold graph timing")
+            # Bound work using total time, including eviction, but exclude it from the result.
+            return statistics.median(samples), total_ms
+
+        _, estimate = batch(3)
+        per_call_ms = estimate / 3
+        warmups = max(1, min(256, math.ceil(warmup_ms / per_call_ms)))
+        batch(warmups)
+        repeats = max(1, min(256, math.ceil(rep_ms / per_call_ms)))
+
+        def elapsed():
+            return batch(repeats)[0]
+
+        yield attention, elapsed
+    finally:
+        attention.reset()
+        eviction.reset()
+
+
+def benchmark_callable(fn, device, warmup_ms, rep_ms, clear_cache=False):
     """Time complete attention calls using graph replay and device events."""
-    with graph_timer(fn, device, warmup_ms, rep_ms) as (_, elapsed):
+    timer = cold_graph_timer if clear_cache else graph_timer
+    with timer(fn, device, warmup_ms, rep_ms) as (_, elapsed):
         return elapsed()
 
 
-def time_options(options, inputs, device, rounds, warmup_ms, rep_ms, seed, field):
+def time_options(options, inputs, device, rounds, warmup_ms, rep_ms, seed, field, clear_cache=False):
     generator = random.Random(seed)
     for _ in range(rounds):
         order = [option for option in options if option["status"] == "ok"]
@@ -379,7 +437,7 @@ def time_options(options, inputs, device, rounds, warmup_ms, rep_ms, seed, field
             config = runtime.AttentionConfig(**option["config"]) if option["config"] is not None else None
             try:
                 with runtime.override_config(config):
-                    value = benchmark_callable(lambda: unified_attention(**inputs), device, warmup_ms, rep_ms)
+                    value = benchmark_callable(lambda: unified_attention(**inputs), device, warmup_ms, rep_ms, clear_cache)
                 if not math.isfinite(value) or value <= 0:
                     raise RuntimeError(f"Invalid latency {value}")
                 option.setdefault(field, []).append(value)
@@ -397,7 +455,7 @@ def tune(args, manifest, device):
         "manifest": manifest,
         "settings": vars(args),
         "cases": [],
-        "timing_scope": "attention_sequence_graph_device",
+        "timing_scope": "attention_sequence_cold_graph_device" if args.clear_cache else "attention_sequence_graph_device",
         "started_at": time.time(),
     }
     checkpoint(args.measurements, data)
@@ -413,13 +471,16 @@ def tune(args, manifest, device):
                     raise RuntimeError(f"Fallback failed for {case['id']}: {fallback.get('error')}")
                 row["key"] = fallback["key"]
                 key = runtime.AttentionKey(**row["key"])  # pylint: disable=not-a-mapping
-                for config in candidate_configs():
+                for config_index, config in enumerate(candidate_configs()):
                     option = {"id": config_id(config), "config": config, "status": "pending", "samples_ms": []}
                     row["options"].append(option)
                     if not runtime.validate_config(runtime.AttentionConfig(**config), key, device.type):
                         option["status"] = "structurally_invalid"
                     else:
                         prepare_option(option, inputs, device)
+                    if config_index % 32 == 31:
+                        checkpoint(args.measurements, data)
+                        print(f"Prepared {config_index + 1} candidates for {case['id']}", flush=True)
                 time_options(
                     row["options"],
                     inputs,
@@ -429,6 +490,7 @@ def tune(args, manifest, device):
                     args.rep_ms,
                     args.seed + index,
                     "samples_ms",
+                    args.clear_cache,
                 )
                 checkpoint(args.measurements, data)
                 print(f"Measured {index + 1}/{len(manifest)}: {case['id']}", flush=True)
@@ -450,6 +512,7 @@ def tune(args, manifest, device):
                         args.rep_ms,
                         args.seed + 10000 + index,
                         "confirmation_ms",
+                        args.clear_cache,
                     )
                     del inputs
                 checkpoint(args.measurements, data)
@@ -474,7 +537,7 @@ def benchmark(args, manifest, device):
     for index, case in enumerate(manifest):
         inputs = allocate_case(case, device, args.seed + index)
         samples = [
-            benchmark_callable(lambda inputs=inputs: unified_attention(**inputs), device, args.warmup_ms, args.rep_ms)
+            benchmark_callable(lambda inputs=inputs: unified_attention(**inputs), device, args.warmup_ms, args.rep_ms, args.clear_cache)
             for _ in range(args.rounds)
         ]
         print(f"{case['id']}: {statistics.median(samples) * 1000:.3f} us", flush=True)
@@ -483,6 +546,7 @@ def benchmark(args, manifest, device):
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--clear-cache", action="store_true", help="Evict 256 MB before each graph replay, excluding eviction from timing")
     parser.add_argument("--tune", action="store_true", help="Search candidates and export winners")
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--save-dir", default=str(Path(__file__).with_name("profiles")),

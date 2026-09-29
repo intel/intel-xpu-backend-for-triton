@@ -29,6 +29,7 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--vllm-source', type=Path, required=True)
 parser.add_argument('--main-ref', default='0849431d24201f4a249636fda4c4eac559406bb2')
 parser.add_argument('--output', type=Path, required=True)
+parser.add_argument('--clear-cache', action='store_true')
 parser.add_argument('--rounds', type=int, default=3)
 parser.add_argument('--case', action='append', help='Limit local smoke measurements to these case IDs')
 args = parser.parse_args()
@@ -215,7 +216,7 @@ report = dict(complete=False, compiler_checkout=git('rev-parse', 'HEAD'), main_r
               torch=torch.__version__, triton=triton.__version__, triton_path=triton.__file__,
               device=torch.xpu.get_device_name(), device_properties=str(torch.xpu.get_device_properties(device)),
               runner=os.environ.get('RUNNER_NAME'), rounds=args.rounds,
-              timing=dict(graph_warmup_ms=5, graph_rep_ms=30, profiler_warmup_ms=25, profiler_repeats=10),
+              timing=dict(clear_cache=args.clear_cache, graph_warmup_ms=25, graph_rep_ms=100, profiler_warmup_ms=25, profiler_repeats=10),
               seeds=[], cases=[])
 try:
     with torch.inference_mode():
@@ -269,7 +270,7 @@ try:
                     status(stage='measure', case=case['id'], round=round_index, arm=arm)
                     with context(arm):
                         fn = lambda: module_for(arm).unified_attention(**inputs)
-                        metrics = [('graph_ms', lambda: t.benchmark_callable(fn, device, 5, 30)), ('profiler_ms', lambda: prof(fn))]
+                        metrics = [('graph_ms', lambda: t.benchmark_callable(fn, device, 25, 100, args.clear_cache)), ('profiler_ms', lambda: prof(fn))]
                         if round_index % 2:
                             metrics.reverse()
                         for metric, measure in metrics:

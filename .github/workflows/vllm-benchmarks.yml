@@ -1,29 +1,25 @@
-name: UA same-runner diagnostic
-run-name: UA diagnostic on B580 (${{ github.ref_name }})
+name: UA offline tuning with cold graph replay
+run-name: UA CI-input tuning on B580 (${{ github.ref_name }})
 
 on:
   workflow_dispatch:
-    inputs:
-      main_ref:
-        description: Pinned main commit supplying the online UA patch
-        type: string
-        default: '0849431d24201f4a249636fda4c4eac559406bb2'
 
 permissions:
   contents: read
   actions: read
 
 concurrency:
-  group: ua-same-runner-diagnostic
+  group: ua-ci-offline-tune
   cancel-in-progress: false
 
 env:
   GH_TOKEN: ${{ github.token }}
+  TRITON_CACHE_DIR: ${{ github.workspace }}/.ua-tuning-cache-${{ github.run_id }}
 
 jobs:
-  diagnostic:
+  tune:
     runs-on: [linux, b580]
-    timeout-minutes: 120
+    timeout-minutes: 720
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
@@ -39,34 +35,51 @@ jobs:
       - uses: ./.github/actions/setup-pytorch
       - uses: ./.github/actions/setup-triton
       - uses: ./.github/actions/install-vllm
-      - name: Record environment
+      - name: Record environment and inputs
         run: |
-          mkdir -p reports
+          mkdir -p reports/profiles
           ./scripts/capture-hw-details.sh > reports/environment.txt
           python -m pip freeze > reports/packages.txt
-          git rev-parse HEAD > reports/compiler-checkout.txt
+          git rev-parse HEAD > reports/checkout.txt
+          cp scripts/ua-ci-inputs-*.json reports/
           git diff 0ea7fbf49e45b4cf1a3881a66ade4f3ba5a5c7ed -- python third_party include lib cmake > reports/compiler-changes.diff
           test ! -s reports/compiler-changes.diff
-      - name: Compare main and offline UA
-        env:
-          MAIN_REF: ${{ inputs.main_ref }}
-          TRITON_CACHE_DIR: ${{ runner.temp }}/ua-diagnostic-${{ github.run_id }}
+      - name: Check cold graph timing against CI profiler
         run: |
           export PYTHONPATH="$PWD/vllm${PYTHONPATH:+:$PYTHONPATH}"
-          python scripts/ua_ci_diagnostic.py \
-            --vllm-source "$PWD/vllm" \
-            --main-ref "$MAIN_REF" \
-            --output "$PWD/reports/ua" 2>&1 | tee reports/diagnostic.log
-      - name: Publish summary
-        if: always()
+          python scripts/ua_ci_diagnostic.py --clear-cache \
+            --vllm-source "$PWD/vllm" --output "$PWD/reports/timing-check" \
+            2>&1 | tee reports/timing-check.log
+          python scripts/ua_check_cold_timing.py reports/timing-check/results.json
+      - name: Apply offline UA patch
         run: |
-          if [ -f reports/ua/REPORT.md ]; then
-            cat reports/ua/REPORT.md >> "$GITHUB_STEP_SUMMARY"
-          fi
-      - name: Upload diagnostics
+          git -C vllm apply --check "$PWD/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention.patch"
+          git -C vllm apply "$PWD/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention.patch"
+      - name: Tune 87 BF16 CI inputs
+        run: |
+          export PYTHONPATH="$PWD/vllm${PYTHONPATH:+:$PYTHONPATH}"
+          python scripts/ua_ci_tune.py --tune --clear-cache \
+            --manifest scripts/ua-ci-inputs-bfloat16.json \
+            --save-dir reports/profiles --measurements reports/bf16-measurements.json \
+            --warmup-ms 25 --rep-ms 100 2>&1 | tee reports/bf16-tuning.log
+      - name: Save BF16 profiles and measurements
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: ua-same-runner-diagnostic
+          name: ua-cold-graph-bf16-checkpoint
+          path: reports
+          if-no-files-found: warn
+      - name: Tune 10 FP8 CI inputs
+        run: |
+          export PYTHONPATH="$PWD/vllm${PYTHONPATH:+:$PYTHONPATH}"
+          python scripts/ua_ci_tune.py --tune --clear-cache \
+            --manifest scripts/ua-ci-inputs-float8_e4m3fn.json \
+            --save-dir reports/profiles --measurements reports/fp8-measurements.json \
+            --warmup-ms 25 --rep-ms 100 2>&1 | tee reports/fp8-tuning.log
+      - name: Upload generated JSONs and measurements
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ua-cold-graph-ci-profiles
           path: reports
           if-no-files-found: warn
