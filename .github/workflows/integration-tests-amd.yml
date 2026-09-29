@@ -72,6 +72,12 @@ jobs:
         uses: actions/checkout@v7
         with:
           submodules: 'true'
+      - name: Inspect AMD runner
+        env:
+          CI_CONTAINER_IMAGE: ${{ matrix.image }}
+          CI_RUNNER_LABELS: ${{ join(matrix.runner, ', ') }}
+        run: bash .github/amd-ci/runner-diagnostics.sh
+        shell: bash
       - name: Compute cache keys
         id: cache-key
         run: |

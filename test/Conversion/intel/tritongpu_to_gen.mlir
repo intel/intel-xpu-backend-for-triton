@@ -1089,10 +1089,9 @@ module attributes {"ttg.target" = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warp
     // CHECK:        [[C_0:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK:        [[SMEM_0:%.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
     // CHECK:        [[GEP:%.*]] = llvm.getelementptr [[SMEM_0]]{{\[}}[[C_0]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
-    // CHECK-NEXT:   [[GEP_CAST:%.*]] = llvm.bitcast [[GEP]] : !llvm.ptr<3> to !llvm.ptr<3>
     // CHECK-NEXT: llvm.cond_br [[MASK]], ^bb3, ^bb4
     // CHECK-NEXT: ^bb3:
-    // CHECK-NEXT:   llvm.store [[RES_CAST]], [[GEP_CAST]] : f32, !llvm.ptr<3>
+    // CHECK-NEXT:   llvm.store [[RES_CAST]], [[GEP]] : f32, !llvm.ptr<3>
     // CHECK-NEXT:   llvm.br ^bb4
     // CHECK-NEXT: ^bb4:
     // CHECK-NEXT:   [[ONE:%.*]] = llvm.mlir.constant(3 : i32) : i32
@@ -1207,10 +1206,9 @@ module attributes {"ttg.target" = "xpu", "ttg.num-ctas" = 1 : i32, "ttg.num-warp
     // CHECK:        [[C_0:%.*]] = llvm.mlir.constant(0 : i32) : i32
     // CHECK:        [[SMEM_0:%.*]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
     // CHECK:        [[GEP:%.*]] = llvm.getelementptr [[SMEM_0]]{{\[}}[[C_0]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
-    // CHECK-NEXT:   [[GEP_CAST:%.*]] = llvm.bitcast [[GEP]] : !llvm.ptr<3> to !llvm.ptr<3>
-    // CHECK-NEXT:   llvm.cond_br [[PRED]], ^bb3, ^bb4
+    // CHECK-NEXT:   llvm.cond_br [[MASK]], ^bb3, ^bb4
     // CHECK-NEXT:  ^bb3:
-    // CHECK-NEXT:    llvm.store [[RMW_CAST]], [[GEP_CAST]] : f32, !llvm.ptr<3>
+    // CHECK-NEXT:    llvm.store [[RMW_CAST]], [[GEP]] : f32, !llvm.ptr<3>
     // CHECK-NEXT:    llvm.br ^bb4
     // CHECK-NEXT:  ^bb4:
     // CHECK-NEXT:    [[ONE:%.*]] = llvm.mlir.constant(3 : i32) : i32
@@ -2069,6 +2067,37 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.sup
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.support_bfloat16_conversion} {
+  tt.func @bf16_to_f16_rtne(%arg0: tensor<256xbf16, #blocked>) {
+    // CHECK-LABEL: @bf16_to_f16_rtne
+    // CHECK: llvm.bitcast %{{.*}} : bf16 to i16
+    // CHECK-NEXT: llvm.call spir_funccc @_Z27__spirv_ConvertBF16ToFINTELs(%{{.*}}) {{.*}} : (i16) -> f32
+    // CHECK-NEXT: llvm.intr.experimental.constrained.fptrunc %{{.*}} tonearest ignore : f32 to f16
+    %a = tt.fp_to_fp %arg0, rounding = rtne : tensor<256xbf16, #blocked> -> tensor<256xf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @bf16_to_f16_rtz_no_bf16_conversion(%arg0: tensor<256xbf16, #blocked>) {
+    // CHECK-LABEL: @bf16_to_f16_rtz_no_bf16_conversion
+    // CHECK-NOT: llvm.fpext
+    // CHECK: llvm.bitcast %{{.*}} : bf16 to i16
+    // CHECK-NEXT: llvm.zext %{{.*}} : i16 to i32
+    // CHECK: llvm.shl
+    // CHECK-NEXT: llvm.bitcast %{{.*}} : i32 to f32
+    // CHECK-NEXT: llvm.intr.experimental.constrained.fptrunc %{{.*}} towardzero ignore : f32 to f16
+    %a = tt.fp_to_fp %arg0, rounding = rtz : tensor<256xbf16, #blocked> -> tensor<256xf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func @fp8_const(%arg0: tensor<1024xi1, #blocked>, %arg1: tensor<1024xf8E4M3FNUZ, #blocked>) {
@@ -2077,6 +2106,40 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK: llvm.mlir.constant(0.000000e+00 : f8E4M3FNUZ) : i8
     %cst = arith.constant dense<0.000000e+00> : tensor<1024xf8E4M3FNUZ, #blocked>
     %a = arith.select %arg0, %arg1, %cst : tensor<1024xi1, #blocked>, tensor<1024xf8E4M3FNUZ, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.support_bfloat16_conversion} {
+  // CHECK-LABEL: @clampf_bf16_no_bf16_arithmetic
+  tt.func @clampf_bf16_no_bf16_arithmetic(%x: tensor<128xbf16, #blocked>, %lo: tensor<128xbf16, #blocked>, %hi: tensor<128xbf16, #blocked>) {
+    // CHECK-NOT: llvm.intr.maxnum{{.*}}bf16
+    // CHECK: [[MAX:%.*]] = llvm.intr.maxnum(%{{.*}}, %{{.*}}) : (f32, f32) -> f32
+    // CHECK: [[MIN:%.*]] = llvm.intr.minnum([[MAX]], %{{.*}}) : (f32, f32) -> f32
+    // CHECK: llvm.call spir_funccc @_Z27__spirv_ConvertFToBF16INTELf([[MIN]])
+    %0 = tt.clampf %x, %lo, %hi, propagateNan = none : tensor<128xbf16, #blocked>
+    // CHECK: [[MAX:%.*]] = llvm.intr.maxnum(%{{.*}}, %{{.*}}) : (f32, f32) -> f32
+    // CHECK: [[MIN:%.*]] = llvm.intr.minnum([[MAX]], %{{.*}}) : (f32, f32) -> f32
+    // CHECK: [[ISNAN:%.*]] = llvm.fcmp "une"
+    // CHECK: [[RES:%.*]] = llvm.select [[ISNAN]], %{{.*}}, [[MIN]] : i1, f32
+    // CHECK: llvm.call spir_funccc @_Z27__spirv_ConvertFToBF16INTELf([[RES]])
+    %1 = tt.clampf %x, %lo, %hi, propagateNan = all : tensor<128xbf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.support_bfloat16_arithmetic} {
+  // CHECK-LABEL: @clampf_bf16_bf16_arithmetic
+  tt.func @clampf_bf16_bf16_arithmetic(%x: tensor<128xbf16, #blocked>, %lo: tensor<128xbf16, #blocked>, %hi: tensor<128xbf16, #blocked>) {
+    // CHECK: [[MAX:%.*]] = llvm.intr.maxnum(%{{.*}}, %{{.*}}) : (bf16, bf16) -> bf16
+    // CHECK: llvm.intr.minnum([[MAX]], %{{.*}}) : (bf16, bf16) -> bf16
+    %0 = tt.clampf %x, %lo, %hi, propagateNan = none : tensor<128xbf16, #blocked>
     tt.return
   }
 }

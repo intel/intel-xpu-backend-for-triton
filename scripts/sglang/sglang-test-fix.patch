@@ -149,7 +149,7 @@ index 8e5d6d048c..79df66b8e0 100644
      from sgl_kernel import gelu_and_mul, gelu_quick, gelu_tanh_and_mul, silu_and_mul
  elif _is_musa:
 diff --git a/python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe.py b/python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe.py
-index 758c2eacf6..8bb83ed3c5 100644
+index 758c2eacf6..b02fe7708b 100644
 --- a/python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe.py
 +++ b/python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe.py
 @@ -73,7 +73,12 @@ elif _is_hip:
@@ -165,6 +165,66 @@ index 758c2eacf6..8bb83ed3c5 100644
 +        _is_xpu = False
  elif _is_musa:
      from sgl_kernel import moe_sum_reduce
+ 
+@@ -95,6 +100,39 @@ padding_size = get_moe_padding_size(_use_aiter)
+ logger = logging.getLogger(__name__)
+ 
+ 
++def _sgl_fused_experts_supports(
++    hidden_states: torch.Tensor,
++    w1: torch.Tensor,
++    w2: torch.Tensor,
++    *,
++    quantized: bool,
++) -> bool:
++    """Whether sgl-kernel-xpu's grouped GEMM can take these operands.
++
++    The unquantized XPU route ends in ``moe_grouped_mm_nt_xe20``, which is built
++    for bfloat16 only -- its kernels live under ``kernels/moe/xe20/bf16`` and the
++    launcher template carries no element type -- and which reads A and B through
++    2D block loads whose pitch is the row length in bytes, so the hardware wants
++    that 16-byte aligned. The kernel checks neither: another dtype aborts from
++    the middle of the model, and an unaligned row silently returns wrong numbers.
++    The rule is known on the sgl-kernel side -- its own ``silu_and_mul`` wrapper
++    rejects a row that is not a multiple of 16 bytes -- just not applied here.
++
++    So keep operands it cannot handle on the Triton path below, which has no such
++    restriction. The quantized routes go to different operators
++    (``moe_grouped_mm_nt_xe20_fp8_w8a16``, ``_w4a16``) whose envelope this has not
++    characterized, so they are left exactly as they were.
++    """
++    if quantized:
++        return True
++    for tensor in (hidden_states, w1, w2):
++        if tensor.dtype != torch.bfloat16:
++            return False
++        if (tensor.shape[-1] * tensor.element_size()) % 16 != 0:
++            return False
++    return True
++
++
+ def _validate_fused_swiglu_interleaved(
+     *,
+     activation: str,
+@@ -1131,7 +1169,18 @@ def fused_moe(
+     Returns:
+     - torch.Tensor: The output tensor after applying the MoE layer.
+     """
+-    if _is_xpu and not get_moe_runner_backend().is_triton():
++    if (
++        _is_xpu
++        and not get_moe_runner_backend().is_triton()
++        and _sgl_fused_experts_supports(
++            hidden_states,
++            w1,
++            w2,
++            quantized=(
++                use_fp8_w8a8 or use_int8_w8a8 or use_int8_w8a16 or use_int4_w4a16
++            ),
++        )
++    ):
+         topk_weight, topk_ids, _ = topk_output
+         from sgl_kernel import fused_experts as sgl_fused_experts
  
 diff --git a/python/sglang/srt/layers/moe/moe_runner/triton_utils/moe_align_block_size.py b/python/sglang/srt/layers/moe/moe_runner/triton_utils/moe_align_block_size.py
 index 9c611a4682..f2dbdb928f 100644
@@ -284,3 +344,842 @@ index d7f22c2c65..1f636cd2c5 100644
                  return
  
              a = self.create_random_gpu_tensor((m, k), dtype)
+diff --git a/python/sglang/kernels/ops/attention/fla/chunk_o.py b/python/sglang/kernels/ops/attention/fla/chunk_o.py
+index c2c04312a4..6c8396e8f6 100644
+--- a/python/sglang/kernels/ops/attention/fla/chunk_o.py
++++ b/python/sglang/kernels/ops/attention/fla/chunk_o.py
+@@ -9,7 +9,7 @@ import triton
+ import triton.language as tl
+ 
+ from sglang.kernels.ops.attention.fla.index import prepare_chunk_indices
+-from sglang.kernels.ops.attention.fla.op import exp, safe_exp
++from sglang.kernels.ops.attention.fla.op import exp, make_tensor_descriptor, safe_exp
+ from sglang.kernels.ops.attention.fla.utils import check_shared_mem, is_nvidia_hopper
+ 
+ BKV_LIST = [64, 128] if check_shared_mem() else [32, 64]
+@@ -76,51 +76,54 @@ def chunk_fwd_kernel_o(
+     b_o = tl.zeros([BT, BV], dtype=tl.float32)
+     b_A = tl.zeros([BT, BT], dtype=tl.float32)
+ 
++    q_desc = make_tensor_descriptor(
++        base=q, shape=(T, K), strides=(Hg * K, 1), block_shape=(BT, BK)
++    )
++    # k is read transposed; a descriptor needs the contiguous dimension last, so
++    # load it row-major like q and transpose the block.
++    k_desc = make_tensor_descriptor(
++        base=k, shape=(T, K), strides=(Hg * K, 1), block_shape=(BT, BK)
++    )
++    h_desc = make_tensor_descriptor(
++        base=h, shape=(V, K), strides=(K, 1), block_shape=(BV, BK)
++    )
+     for i_k in range(tl.cdiv(K, BK)):
+-        p_q = tl.make_block_ptr(
+-            q, (T, K), (Hg * K, 1), (i_t * BT, i_k * BK), (BT, BK), (1, 0)
+-        )
+-        p_k = tl.make_block_ptr(
+-            k, (K, T), (1, Hg * K), (i_k * BK, i_t * BT), (BK, BT), (0, 1)
+-        )
+-        p_h = tl.make_block_ptr(
+-            h, (V, K), (K, 1), (i_v * BV, i_k * BK), (BV, BK), (1, 0)
+-        )
+         # [BT, BK]
+-        b_q = tl.load(p_q, boundary_check=(0, 1))
++        b_q = q_desc.load([i_t * BT, i_k * BK])
+         # [BK, BT]
+-        b_k = tl.load(p_k, boundary_check=(0, 1))
++        b_k = tl.trans(k_desc.load([i_t * BT, i_k * BK]))
+         # [BV, BK]
+-        b_h = tl.load(p_h, boundary_check=(0, 1))
++        b_h = h_desc.load([i_v * BV, i_k * BK])
+ 
+         # [BT, BK] @ [BK, BV] -> [BT, BV]
+         b_o += tl.dot(b_q, tl.trans(b_h))
+         # [BT, BK] @ [BK, BT] -> [BT, BT]
+         b_A += tl.dot(b_q, b_k)
+ 
++    o_i = tl.arange(0, BT)
++
+     if USE_G:
+-        g += bos * H + i_h
+-        p_g = tl.make_block_ptr(g, (T,), (H,), (i_t * BT,), (BT,), (0,))
+-        b_g = tl.load(p_g, boundary_check=(0,))
++        # g is a [T, H] slice, so a 1D block with stride H is indexed directly.
++        o_t = i_t * BT + o_i
++        b_g = tl.load(g + bos * H + i_h + o_t * H, mask=o_t < T, other=0.0)
+         b_o = b_o * exp(b_g)[:, None]
+         b_A = b_A * safe_exp(b_g[:, None] - b_g[None, :])
+ 
+-    o_i = tl.arange(0, BT)
+     m_A = o_i[:, None] >= o_i[None, :]
+     b_A = tl.where(m_A, b_A, 0)
+ 
+-    p_v = tl.make_block_ptr(
+-        v, (T, V), (H * V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0)
++    v_desc = make_tensor_descriptor(
++        base=v, shape=(T, V), strides=(H * V, 1), block_shape=(BT, BV)
+     )
+-    p_o = tl.make_block_ptr(
+-        o, (T, V), (H * V, 1), (i_t * BT, i_v * BV), (BT, BV), (1, 0)
++    o_desc = make_tensor_descriptor(
++        base=o, shape=(T, V), strides=(H * V, 1), block_shape=(BT, BV)
+     )
+-    b_v = tl.load(p_v, boundary_check=(0, 1))
++    b_v = v_desc.load([i_t * BT, i_v * BV])
+ 
+     # to fix mma -> mma layout conversion
+     # already solved by triton v3.2 or higher
+     b_o = b_o * scale + tl.dot(b_A.to(b_v.dtype), b_v) * scale
+-    tl.store(p_o, b_o.to(p_o.dtype.element_ty), boundary_check=(0, 1))
++    o_desc.store([i_t * BT, i_v * BV], b_o.to(o.dtype.element_ty))
+ 
+ 
+ def chunk_fwd_o(
+diff --git a/python/sglang/kernels/ops/attention/fla/cumsum.py b/python/sglang/kernels/ops/attention/fla/cumsum.py
+index 775a8f800e..59a8f7070d 100644
+--- a/python/sglang/kernels/ops/attention/fla/cumsum.py
++++ b/python/sglang/kernels/ops/attention/fla/cumsum.py
+@@ -9,6 +9,7 @@ import triton
+ import triton.language as tl
+ 
+ from sglang.kernels.ops.attention.fla.index import prepare_chunk_indices
++from sglang.kernels.ops.attention.fla.op import make_tensor_descriptor
+ from sglang.kernels.ops.attention.fla.utils import check_shared_mem, input_guard
+ 
+ BS_LIST = [32, 64] if check_shared_mem() else [16, 32]
+@@ -47,25 +48,24 @@ def chunk_local_cumsum_scalar_kernel(
+     else:
+         bos, eos = i_b * T, i_b * T + T
+ 
++    # A 1D block cannot be addressed by a tensor descriptor, so index directly.
++    o_t = i_t * BT + tl.arange(0, BT)
++    m_t = o_t < T
+     if HEAD_FIRST:
+-        p_s = tl.make_block_ptr(
+-            s + bos * H + i_h * T, (T,), (1,), (i_t * BT,), (BT,), (0,)
+-        )
+-        p_o = tl.make_block_ptr(
+-            o + bos * H + i_h * T, (T,), (1,), (i_t * BT,), (BT,), (0,)
+-        )
++        p_s = s + bos * H + i_h * T + o_t
++        p_o = o + bos * H + i_h * T + o_t
+     else:
+-        p_s = tl.make_block_ptr(s + bos * H + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,))
+-        p_o = tl.make_block_ptr(o + bos * H + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,))
++        p_s = s + bos * H + i_h + o_t * H
++        p_o = o + bos * H + i_h + o_t * H
+     # [BT]
+-    b_s = tl.load(p_s, boundary_check=(0,)).to(tl.float32)
++    b_s = tl.load(p_s, mask=m_t, other=0.0).to(tl.float32)
+     b_o = tl.cumsum(b_s, axis=0)
+     if REVERSE:
+         b_z = tl.sum(b_s, axis=0)
+         b_o = -b_o + b_z[None] + b_s
+     if HAS_SCALE:
+         b_o *= scale
+-    tl.store(p_o, b_o.to(p_o.dtype.element_ty), boundary_check=(0,))
++    tl.store(p_o, b_o.to(o.dtype.element_ty), mask=m_t)
+ 
+ 
+ @triton.autotune(
+@@ -115,45 +115,25 @@ def chunk_local_cumsum_vector_kernel(
+         m_s = tl.where(o_i[:, None] >= o_i[None, :], 1.0, 0.0)
+ 
+     if HEAD_FIRST:
+-        p_s = tl.make_block_ptr(
+-            s + (bos * H + i_h * T) * S,
+-            (T, S),
+-            (S, 1),
+-            (i_t * BT, i_s * BS),
+-            (BT, BS),
+-            (1, 0),
+-        )
+-        p_o = tl.make_block_ptr(
+-            o + (bos * H + i_h * T) * S,
+-            (T, S),
+-            (S, 1),
+-            (i_t * BT, i_s * BS),
+-            (BT, BS),
+-            (1, 0),
+-        )
++        stride_t = S
++        base_s = s + (bos * H + i_h * T) * S
++        base_o = o + (bos * H + i_h * T) * S
+     else:
+-        p_s = tl.make_block_ptr(
+-            s + (bos * H + i_h) * S,
+-            (T, S),
+-            (H * S, 1),
+-            (i_t * BT, i_s * BS),
+-            (BT, BS),
+-            (1, 0),
+-        )
+-        p_o = tl.make_block_ptr(
+-            o + (bos * H + i_h) * S,
+-            (T, S),
+-            (H * S, 1),
+-            (i_t * BT, i_s * BS),
+-            (BT, BS),
+-            (1, 0),
+-        )
++        stride_t = H * S
++        base_s = s + (bos * H + i_h) * S
++        base_o = o + (bos * H + i_h) * S
++    s_desc = make_tensor_descriptor(
++        base=base_s, shape=(T, S), strides=(stride_t, 1), block_shape=(BT, BS)
++    )
++    o_desc = make_tensor_descriptor(
++        base=base_o, shape=(T, S), strides=(stride_t, 1), block_shape=(BT, BS)
++    )
+     # [BT, BS]
+-    b_s = tl.load(p_s, boundary_check=(0, 1)).to(tl.float32)
++    b_s = s_desc.load([i_t * BT, i_s * BS]).to(tl.float32)
+     b_o = tl.dot(m_s, b_s, allow_tf32=False)
+     if HAS_SCALE:
+         b_o *= scale
+-    tl.store(p_o, b_o.to(p_o.dtype.element_ty), boundary_check=(0, 1))
++    o_desc.store([i_t * BT, i_s * BS], b_o.to(o.dtype.element_ty))
+ 
+ 
+ def chunk_local_cumsum_scalar(
+diff --git a/python/sglang/kernels/ops/attention/fla/l2norm.py b/python/sglang/kernels/ops/attention/fla/l2norm.py
+index 0527324a89..4b1d84dd7e 100644
+--- a/python/sglang/kernels/ops/attention/fla/l2norm.py
++++ b/python/sglang/kernels/ops/attention/fla/l2norm.py
+@@ -9,6 +9,7 @@ import torch.nn as nn
+ import triton
+ import triton.language as tl
+ 
++from sglang.kernels.ops.attention.fla.op import make_tensor_descriptor
+ from sglang.kernels.ops.attention.fla.utils import input_guard
+ 
+ BT_LIST = [8, 16, 32, 64, 128]
+@@ -62,12 +63,16 @@ def l2norm_fwd_kernel(
+     BD: tl.constexpr,
+ ):
+     i_t = tl.program_id(0)
+-    p_x = tl.make_block_ptr(x, (T, D), (D, 1), (i_t * BT, 0), (BT, BD), (1, 0))
+-    b_x = tl.load(p_x, boundary_check=(0, 1)).to(tl.float32)
++    x_desc = make_tensor_descriptor(
++        base=x, shape=(T, D), strides=(D, 1), block_shape=(BT, BD)
++    )
++    y_desc = make_tensor_descriptor(
++        base=y, shape=(T, D), strides=(D, 1), block_shape=(BT, BD)
++    )
++    b_x = x_desc.load([i_t * BT, 0]).to(tl.float32)
+     b_var = tl.sum(b_x * b_x, axis=1)
+     b_y = b_x / tl.sqrt(b_var + eps)[:, None]
+-    p_y = tl.make_block_ptr(y, (T, D), (D, 1), (i_t * BT, 0), (BT, BD), (1, 0))
+-    tl.store(p_y, b_y.to(p_y.dtype.element_ty), boundary_check=(0, 1))
++    y_desc.store([i_t * BT, 0], b_y.to(y.dtype.element_ty))
+ 
+ 
+ def l2norm_fwd(
+diff --git a/python/sglang/kernels/ops/attention/fla/wy_fast.py b/python/sglang/kernels/ops/attention/fla/wy_fast.py
+index 9956b6a92c..c85df2fdd1 100644
+--- a/python/sglang/kernels/ops/attention/fla/wy_fast.py
++++ b/python/sglang/kernels/ops/attention/fla/wy_fast.py
+@@ -9,6 +9,7 @@ import triton
+ import triton.language as tl
+ 
+ from sglang.kernels.ops.attention.fla.index import prepare_chunk_indices
++from sglang.kernels.ops.attention.fla.op import make_tensor_descriptor
+ 
+ 
+ # @triton.autotune(
+@@ -52,60 +53,54 @@ def recompute_w_u_fwd_kernel(
+         T = eos - bos
+     else:
+         bos, eos = i_b * T, i_b * T + T
+-    p_beta = tl.make_block_ptr(
+-        beta + bos * H + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,)
++    # beta and g are [T, H] slices, so a 1D block with stride H is indexed directly.
++    o_t = i_t * BT + tl.arange(0, BT)
++    m_t = o_t < T
++    b_beta = tl.load(beta + bos * H + i_h + o_t * H, mask=m_t, other=0.0)
++    b_g = tl.exp(tl.load(g + (bos * H + i_h) + o_t * H, mask=m_t, other=0.0))
++    A_desc = make_tensor_descriptor(
++        base=A + (bos * H + i_h) * BT,
++        shape=(T, BT),
++        strides=(H * BT, 1),
++        block_shape=(BT, BT),
+     )
+-    p_g = tl.make_block_ptr(g + (bos * H + i_h), (T,), (H,), (i_t * BT,), (BT,), (0,))
+-    p_A = tl.make_block_ptr(
+-        A + (bos * H + i_h) * BT, (T, BT), (H * BT, 1), (i_t * BT, 0), (BT, BT), (1, 0)
+-    )
+-    b_beta = tl.load(p_beta, boundary_check=(0,))
+-    b_A = tl.load(p_A, boundary_check=(0, 1))
+-    b_g = tl.exp(tl.load(p_g, boundary_check=(0,)))
++    b_A = A_desc.load([i_t * BT, 0])
+ 
++    v_desc = make_tensor_descriptor(
++        base=v + (bos * H + i_h) * V,
++        shape=(T, V),
++        strides=(H * V, 1),
++        block_shape=(BT, BV),
++    )
++    u_desc = make_tensor_descriptor(
++        base=u + (bos * H + i_h) * V,
++        shape=(T, V),
++        strides=(H * V, 1),
++        block_shape=(BT, BV),
++    )
+     for i_v in range(tl.cdiv(V, BV)):
+-        p_v = tl.make_block_ptr(
+-            v + (bos * H + i_h) * V,
+-            (T, V),
+-            (H * V, 1),
+-            (i_t * BT, i_v * BV),
+-            (BT, BV),
+-            (1, 0),
+-        )
+-        p_u = tl.make_block_ptr(
+-            u + (bos * H + i_h) * V,
+-            (T, V),
+-            (H * V, 1),
+-            (i_t * BT, i_v * BV),
+-            (BT, BV),
+-            (1, 0),
+-        )
+-        b_v = tl.load(p_v, boundary_check=(0, 1))
++        b_v = v_desc.load([i_t * BT, i_v * BV])
+         b_vb = (b_v * b_beta[:, None]).to(b_v.dtype)
+         b_u = tl.dot(b_A, b_vb, allow_tf32=False)
+-        tl.store(p_u, b_u.to(p_u.dtype.element_ty), boundary_check=(0, 1))
++        u_desc.store([i_t * BT, i_v * BV], b_u.to(u.dtype.element_ty))
+ 
++    k_desc = make_tensor_descriptor(
++        base=k + (bos * Hg + i_h // (H // Hg)) * K,
++        shape=(T, K),
++        strides=(Hg * K, 1),
++        block_shape=(BT, BK),
++    )
++    w_desc = make_tensor_descriptor(
++        base=w + (bos * H + i_h) * K,
++        shape=(T, K),
++        strides=(H * K, 1),
++        block_shape=(BT, BK),
++    )
+     for i_k in range(tl.cdiv(K, BK)):
+-        p_k = tl.make_block_ptr(
+-            k + (bos * Hg + i_h // (H // Hg)) * K,
+-            (T, K),
+-            (Hg * K, 1),
+-            (i_t * BT, i_k * BK),
+-            (BT, BK),
+-            (1, 0),
+-        )
+-        p_w = tl.make_block_ptr(
+-            w + (bos * H + i_h) * K,
+-            (T, K),
+-            (H * K, 1),
+-            (i_t * BT, i_k * BK),
+-            (BT, BK),
+-            (1, 0),
+-        )
+-        b_k = tl.load(p_k, boundary_check=(0, 1))
++        b_k = k_desc.load([i_t * BT, i_k * BK])
+         b_kb = (b_k * b_beta[:, None] * b_g[:, None]).to(b_k.dtype)
+         b_w = tl.dot(b_A, b_kb)
+-        tl.store(p_w, b_w.to(p_w.dtype.element_ty), boundary_check=(0, 1))
++        w_desc.store([i_t * BT, i_k * BK], b_w.to(w.dtype.element_ty))
+ 
+ 
+ def recompute_w_u_fwd(
+diff --git a/python/sglang/srt/hardware_backend/xpu/kernels/fla/chunk_delta_h.py b/python/sglang/srt/hardware_backend/xpu/kernels/fla/chunk_delta_h.py
+index 9f4734a41b..f121287ce7 100644
+--- a/python/sglang/srt/hardware_backend/xpu/kernels/fla/chunk_delta_h.py
++++ b/python/sglang/srt/hardware_backend/xpu/kernels/fla/chunk_delta_h.py
+@@ -121,9 +121,30 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64_k_loop(
+         h0 = h0 + i_h * V * K
+     if INPLACE_UPDATE:
+         ht = ht + i_h * V * K
++    h0_desc = make_tensor_descriptor(
++        base=h0,
++        shape=(V, K),
++        strides=(K, 1),
++        block_shape=(BV, 64),
++    )
++    ht_desc = make_tensor_descriptor(
++        base=ht,
++        shape=(V, K),
++        strides=(K, 1),
++        block_shape=(BV, 64),
++    )
++
++    # g is a [T, H] slice, so a 1D block with stride H is indexed directly.
++    o_t = tl.arange(0, BT)
+ 
+     # main recurrence — time is the outer loop
+     for i_t in range(NT):
++        ho_desc = make_tensor_descriptor(
++            base=h + i_t * stride_h,
++            shape=(V, K),
++            strides=(K, 1),
++            block_shape=(BV, 64),
++        )
+         ########################################################################
+         # Phase 1: store h to output, compute v_new = u - sum_k(w_k @ h_k^T)
+         ########################################################################
+@@ -132,30 +153,16 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64_k_loop(
+             # Load h: from initial_state (i_t==0) or scratch (i_t>0)
+             if i_t == 0:
+                 if USE_INITIAL_STATE and valid_state:
+-                    p_hs = tl.make_block_ptr(
+-                        h0, (V, K), (K, 1), (i_v * BV, k_blk), (BV, 64), (1, 0)
+-                    )
+-                    b_h = tl.load(p_hs, boundary_check=(0, 1)).to(tl.float32)
++                    b_h = h0_desc.load([i_v * BV, k_blk]).to(tl.float32)
+                 else:
+                     b_h = tl.zeros([BV, 64], dtype=tl.float32)
+             elif valid_state:
+-                p_hs = tl.make_block_ptr(
+-                    ht, (V, K), (K, 1), (i_v * BV, k_blk), (BV, 64), (1, 0)
+-                )
+-                b_h = tl.load(p_hs, boundary_check=(0, 1)).to(tl.float32)
++                b_h = ht_desc.load([i_v * BV, k_blk]).to(tl.float32)
+             else:
+                 b_h = tl.zeros([BV, 64], dtype=tl.float32)
+ 
+             # Store pre-update h to output
+-            p_ho = tl.make_block_ptr(
+-                h + i_t * stride_h,
+-                (V, K),
+-                (K, 1),
+-                (i_v * BV, k_blk),
+-                (BV, 64),
+-                (1, 0),
+-            )
+-            tl.store(p_ho, b_h.to(p_ho.dtype.element_ty), boundary_check=(0, 1))
++            ho_desc.store([i_v * BV, k_blk], b_h.to(h.dtype.element_ty))
+ 
+             # Accumulate correction: w_k @ h_k^T
+             b_w = w_desc.load([i_t * BT, k_blk])
+@@ -171,10 +178,8 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64_k_loop(
+         last_idx = min((i_t + 1) * BT, T) - 1
+         if USE_G:
+             b_g_last = tl.load(g + bos * H + last_idx * H + i_h)
+-            p_g = tl.make_block_ptr(
+-                g + bos * H + i_h, (T,), (H,), (i_t * BT,), (BT,), (0,)
+-            )
+-            b_g = tl.load(p_g, boundary_check=(0,))
++            o_ti = i_t * BT + o_t
++            b_g = tl.load(g + bos * H + i_h + o_ti * H, mask=o_ti < T, other=0.0)
+             b_v = b_v * tl.expand_dims(safe_exp(b_g_last - b_g), 1)
+             b_g_last = exp(b_g_last)
+ 
+@@ -187,17 +192,11 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64_k_loop(
+             # Reload h (same source as Phase 1)
+             if i_t == 0:
+                 if USE_INITIAL_STATE and valid_state:
+-                    p_hs = tl.make_block_ptr(
+-                        h0, (V, K), (K, 1), (i_v * BV, k_blk), (BV, 64), (1, 0)
+-                    )
+-                    b_h = tl.load(p_hs, boundary_check=(0, 1)).to(tl.float32)
++                    b_h = h0_desc.load([i_v * BV, k_blk]).to(tl.float32)
+                 else:
+                     b_h = tl.zeros([BV, 64], dtype=tl.float32)
+             elif valid_state:
+-                p_hs = tl.make_block_ptr(
+-                    ht, (V, K), (K, 1), (i_v * BV, k_blk), (BV, 64), (1, 0)
+-                )
+-                b_h = tl.load(p_hs, boundary_check=(0, 1)).to(tl.float32)
++                b_h = ht_desc.load([i_v * BV, k_blk]).to(tl.float32)
+             else:
+                 b_h = tl.zeros([BV, 64], dtype=tl.float32)
+ 
+@@ -223,10 +222,9 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64_k_loop(
+ 
+             # Save updated h to scratch (initial_state) for next time step
+             if INPLACE_UPDATE and valid_state:
+-                p_hs = tl.make_block_ptr(
+-                    ht, (V, K), (K, 1), (i_v * BV, k_blk), (BV, 64), (1, 0)
++                ht_desc.store(
++                    [i_v * BV, k_blk], b_h.to(initial_state.dtype.element_ty)
+                 )
+-                tl.store(p_hs, b_h.to(p_hs.dtype.element_ty), boundary_check=(0, 1))
+ 
+ 
+ def chunk_gated_delta_rule_fwd_h(
+diff --git a/python/sglang/srt/hardware_backend/xpu/kernels/fla/chunk_fwd.py b/python/sglang/srt/hardware_backend/xpu/kernels/fla/chunk_fwd.py
+index ead49963c0..8ad4092226 100644
+--- a/python/sglang/srt/hardware_backend/xpu/kernels/fla/chunk_fwd.py
++++ b/python/sglang/srt/hardware_backend/xpu/kernels/fla/chunk_fwd.py
+@@ -3,7 +3,7 @@ import triton
+ import triton.language as tl
+ 
+ from sglang.kernels.ops.attention.fla.index import prepare_chunk_indices
+-from sglang.kernels.ops.attention.fla.op import safe_exp
++from sglang.kernels.ops.attention.fla.op import make_tensor_descriptor, safe_exp
+ from sglang.kernels.ops.attention.fla.utils import (
+     autotune_cache_kwargs,
+ )
+@@ -55,7 +55,7 @@ def chunk_gated_delta_rule_fwd_kkt_solve_kernel_low_reg(
+                                   + sum_{m=j+1}^{i-1} Ai_im @ A_mj_raw) @ Ai_jj
+     Each K-loop holds exactly one [BC,BC] accumulator.  Raw blocks needed by
+     later correction terms are spilled to upper-triangular scratch slots in A
+-    (see _KKT_SCRATCH_COL for the layout; boundary_check makes out-of-bounds
++    (see _KKT_SCRATCH_COL for the layout; the tensor descriptor makes out-of-bounds
+     stores/loads safe so no runtime `if i_tcX < T` guards are needed).
+     """
+     i_t, i_bh = tl.program_id(0), tl.program_id(1)
+@@ -83,27 +83,29 @@ def chunk_gated_delta_rule_fwd_kkt_solve_kernel_low_reg(
+     m_d = o_i[:, None] > o_i[None, :]
+     m_I = o_i[:, None] == o_i[None, :]
+ 
++    # beta and g are [T, H] slices, so a 1D block with stride H is indexed directly.
++    p_b = beta + bos * H + i_h + o_i * H
++    if USE_G:
++        p_g = g + bos * H + i_h + o_i * H
++    k_desc = make_tensor_descriptor(
++        base=k, shape=(T, K), strides=(Hg * K, 1), block_shape=(BC, BK)
++    )
++    A_desc = make_tensor_descriptor(
++        base=A, shape=(T, BT), strides=(H * BT, 1), block_shape=(BC, BC)
++    )
++
+     ############################################################################
+     # Pass 1: diagonal blocks — one K-loop per sub-chunk (tl.static_range → 4)
+     ############################################################################
+     for i_b in tl.static_range(4):
+         i_tci = i_tc0 + i_b * BC
+         m_tci = (i_tci + o_i) < T
+-        p_bi = tl.make_block_ptr(
+-            beta + bos * H + i_h, (T,), (H,), (i_tci,), (BC,), (0,)
+-        )
+-        b_bi = tl.load(p_bi, boundary_check=(0,)).to(tl.float32)
++        b_bi = tl.load(p_b + i_tci * H, mask=m_tci, other=0.0).to(tl.float32)
+         if USE_G:
+-            p_gi = tl.make_block_ptr(
+-                g + bos * H + i_h, (T,), (H,), (i_tci,), (BC,), (0,)
+-            )
+-            b_gi = tl.load(p_gi, boundary_check=(0,)).to(tl.float32)
++            b_gi = tl.load(p_g + i_tci * H, mask=m_tci, other=0.0).to(tl.float32)
+         b_A = tl.zeros([BC, BC], dtype=tl.float32)
+         for i_k in range(tl.cdiv(K, BK)):
+-            p_k = tl.make_block_ptr(
+-                k, (T, K), (Hg * K, 1), (i_tci, i_k * BK), (BC, BK), (1, 0)
+-            )
+-            b_k = tl.load(p_k, boundary_check=(0, 1))
++            b_k = k_desc.load([i_tci, i_k * BK])
+             b_A += tl.dot(b_k, tl.trans(b_k))
+         if USE_G:
+             b_A *= safe_exp(b_gi[:, None] - b_gi[None, :])
+@@ -119,10 +121,7 @@ def chunk_gated_delta_rule_fwd_kkt_solve_kernel_low_reg(
+             b_a = b_a + tl.sum(b_a[:, None] * b_Ai, 0)
+             b_Ai = tl.where((o_i == i)[:, None], b_a, b_Ai)
+         b_Ai += m_I
+-        p_Aii = tl.make_block_ptr(
+-            A, (T, BT), (H * BT, 1), (i_tci, i_b * BC), (BC, BC), (1, 0)
+-        )
+-        tl.store(p_Aii, b_Ai.to(A.dtype.element_ty), boundary_check=(0, 1))
++        A_desc.store([i_tci, i_b * BC], b_Ai.to(A.dtype.element_ty))
+ 
+     ############################################################################
+     # Pass 2: off-diagonal blocks — one K-loop per (i,j) pair.
+@@ -137,31 +136,18 @@ def chunk_gated_delta_rule_fwd_kkt_solve_kernel_low_reg(
+             i = j + d  # compile-time ints from static_range
+             i_tci = i_tc0 + i * BC
+             i_tcj = i_tc0 + j * BC
+-            p_bi = tl.make_block_ptr(
+-                beta + bos * H + i_h, (T,), (H,), (i_tci,), (BC,), (0,)
+-            )
+-            b_bi = tl.load(p_bi, boundary_check=(0,)).to(tl.float32)
++            m_tci = (i_tci + o_i) < T
++            m_tcj = (i_tcj + o_i) < T
++            b_bi = tl.load(p_b + i_tci * H, mask=m_tci, other=0.0).to(tl.float32)
+             if USE_G:
+-                p_gi = tl.make_block_ptr(
+-                    g + bos * H + i_h, (T,), (H,), (i_tci,), (BC,), (0,)
+-                )
+-                p_gj = tl.make_block_ptr(
+-                    g + bos * H + i_h, (T,), (H,), (i_tcj,), (BC,), (0,)
+-                )
+-                b_gi = tl.load(p_gi, boundary_check=(0,)).to(tl.float32)
+-                b_gj = tl.load(p_gj, boundary_check=(0,)).to(tl.float32)
++                b_gi = tl.load(p_g + i_tci * H, mask=m_tci, other=0.0).to(tl.float32)
++                b_gj = tl.load(p_g + i_tcj * H, mask=m_tcj, other=0.0).to(tl.float32)
+             # K-loop: accumulate k_i @ k_j^T
+             b_A = tl.zeros([BC, BC], dtype=tl.float32)
+             for i_k in range(tl.cdiv(K, BK)):
+-                p_ki = tl.make_block_ptr(
+-                    k, (T, K), (Hg * K, 1), (i_tci, i_k * BK), (BC, BK), (1, 0)
+-                )
+-                p_kj = tl.make_block_ptr(
+-                    k, (T, K), (Hg * K, 1), (i_tcj, i_k * BK), (BC, BK), (1, 0)
+-                )
+                 b_A += tl.dot(
+-                    tl.load(p_ki, boundary_check=(0, 1)),
+-                    tl.trans(tl.load(p_kj, boundary_check=(0, 1))),
++                    k_desc.load([i_tci, i_k * BK]),
++                    tl.trans(k_desc.load([i_tcj, i_k * BK])),
+                 )
+             if USE_G:
+                 b_A *= safe_exp(b_gi[:, None] - b_gj[None, :])
+@@ -172,10 +158,7 @@ def chunk_gated_delta_rule_fwd_kkt_solve_kernel_low_reg(
+             #   (i=1,j=0)->col1  (i=2,j=1)->col2  (i=2,j=0)->col3
+             if i < 3:
+                 sc = 1 if (i == 1 and j == 0) else (2 if (i == 2 and j == 1) else 3)
+-                p_s = tl.make_block_ptr(
+-                    A, (T, BT), (H * BT, 1), (i_tc0, sc * BC), (BC, BC), (1, 0)
+-                )
+-                tl.store(p_s, b_A.to(A.dtype.element_ty), boundary_check=(0, 1))
++                A_desc.store([i_tc0, sc * BC], b_A.to(A.dtype.element_ty))
+             # Correction sum: sum_{m=j+1}^{i-1} Ai_im @ A_mj_raw
+             # Unrolled manually (d is a compile-time Python int from tl.static_range):
+             #   d=1: no corrections; d=2: m=j+1; d=3: m=j+1 then m=j+2
+@@ -185,15 +168,9 @@ def chunk_gated_delta_rule_fwd_kkt_solve_kernel_low_reg(
+                 sc_m1j = (
+                     1 if (m1 == 1 and j == 0) else (2 if (m1 == 2 and j == 1) else 3)
+                 )
+-                p_s_m1j = tl.make_block_ptr(
+-                    A, (T, BT), (H * BT, 1), (i_tc0, sc_m1j * BC), (BC, BC), (1, 0)
+-                )
+-                b_A_m1j = tl.load(p_s_m1j, boundary_check=(0, 1)).to(tl.float32)
+-                p_Ai_im1 = tl.make_block_ptr(
+-                    A, (T, BT), (H * BT, 1), (i_tci, m1 * BC), (BC, BC), (1, 0)
+-                )
++                b_A_m1j = A_desc.load([i_tc0, sc_m1j * BC]).to(tl.float32)
+                 b_corr += tl.dot(
+-                    tl.load(p_Ai_im1, boundary_check=(0, 1)).to(tl.float32),
++                    A_desc.load([i_tci, m1 * BC]).to(tl.float32),
+                     b_A_m1j,
+                     input_precision=_MERGE_DOT_PRECISION,
+                 )
+@@ -202,46 +179,28 @@ def chunk_gated_delta_rule_fwd_kkt_solve_kernel_low_reg(
+                 sc_m2j = (
+                     1 if (m2 == 1 and j == 0) else (2 if (m2 == 2 and j == 1) else 3)
+                 )
+-                p_s_m2j = tl.make_block_ptr(
+-                    A, (T, BT), (H * BT, 1), (i_tc0, sc_m2j * BC), (BC, BC), (1, 0)
+-                )
+-                b_A_m2j = tl.load(p_s_m2j, boundary_check=(0, 1)).to(tl.float32)
+-                p_Ai_im2 = tl.make_block_ptr(
+-                    A, (T, BT), (H * BT, 1), (i_tci, m2 * BC), (BC, BC), (1, 0)
+-                )
++                b_A_m2j = A_desc.load([i_tc0, sc_m2j * BC]).to(tl.float32)
+                 b_corr += tl.dot(
+-                    tl.load(p_Ai_im2, boundary_check=(0, 1)).to(tl.float32),
++                    A_desc.load([i_tci, m2 * BC]).to(tl.float32),
+                     b_A_m2j,
+                     input_precision=_MERGE_DOT_PRECISION,
+                 )
+             # Compute and store Ai_ij
+-            p_Ai_ii = tl.make_block_ptr(
+-                A, (T, BT), (H * BT, 1), (i_tci, i * BC), (BC, BC), (1, 0)
+-            )
+-            p_Ai_jj = tl.make_block_ptr(
+-                A, (T, BT), (H * BT, 1), (i_tcj, j * BC), (BC, BC), (1, 0)
+-            )
+-            b_Ai_ii = tl.load(p_Ai_ii, boundary_check=(0, 1)).to(tl.float32)
+-            b_Ai_jj = tl.load(p_Ai_jj, boundary_check=(0, 1)).to(tl.float32)
++            b_Ai_ii = A_desc.load([i_tci, i * BC]).to(tl.float32)
++            b_Ai_jj = A_desc.load([i_tcj, j * BC]).to(tl.float32)
+             b_Ai_ij = -tl.dot(
+                 tl.dot(b_Ai_ii, b_A, input_precision=_MERGE_DOT_PRECISION) + b_corr,
+                 b_Ai_jj,
+                 input_precision=_MERGE_DOT_PRECISION,
+             )
+-            p_Ai_ij = tl.make_block_ptr(
+-                A, (T, BT), (H * BT, 1), (i_tci, j * BC), (BC, BC), (1, 0)
+-            )
+-            tl.store(p_Ai_ij, b_Ai_ij.to(A.dtype.element_ty), boundary_check=(0, 1))
++            A_desc.store([i_tci, j * BC], b_Ai_ij.to(A.dtype.element_ty))
+ 
+     # Clean up scratch slots: Pass 2 stored raw A_ij blocks in the upper-triangular
+     # part of row i_tc0 (cols BC..3*BC). These must be zeroed because
+     # recompute_w_u_fwd reads the full BT×BT block.
+     b_zero = tl.zeros([BC, BC], dtype=tl.float32)
+     for sc in tl.static_range(1, BT // BC):
+-        p_scratch = tl.make_block_ptr(
+-            A, (T, BT), (H * BT, 1), (i_tc0, sc * BC), (BC, BC), (1, 0)
+-        )
+-        tl.store(p_scratch, b_zero.to(A.dtype.element_ty), boundary_check=(0, 1))
++        A_desc.store([i_tc0, sc * BC], b_zero.to(A.dtype.element_ty))
+ 
+ 
+ def chunk_gated_delta_rule_fwd_intra(
+diff --git a/python/sglang/test/kits/attention_unittest/attention_methods/dense_attention.py b/python/sglang/test/kits/attention_unittest/attention_methods/dense_attention.py
+index b352cd7c29..382b758886 100644
+--- a/python/sglang/test/kits/attention_unittest/attention_methods/dense_attention.py
++++ b/python/sglang/test/kits/attention_unittest/attention_methods/dense_attention.py
+@@ -22,6 +22,7 @@ from sglang.srt.model_executor.graph_shared_output import GraphSharedOutput
+ from sglang.srt.model_executor.model_runner import ModelRunner
+ from sglang.srt.runtime_context import get_context, get_parallel
+ from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
++from sglang.srt.utils import get_device, get_device_module
+ 
+ # Unit tests run without distributed initialization. Backends that size buffers by
+ # attention tensor-parallel degree should see the single-rank default.
+@@ -32,7 +33,7 @@ DEFAULT_HEAD_DIM = 16
+ DEFAULT_HIDDEN_SIZE = 64
+ DEFAULT_MAX_CONTEXT_LEN = 64
+ DEFAULT_DTYPE = torch.float16
+-DEFAULT_DEVICE = "cuda"
++DEFAULT_DEVICE = get_device()
+ DENSE_ATOL = 3e-2
+ DENSE_RTOL = 3e-2
+ 
+@@ -979,7 +980,7 @@ def build_dense_attention_fixture(
+ ) -> DenseAttentionFixture:
+     seed = 2026 + len(case.name) + case.num_kv_heads
+     torch.manual_seed(seed)
+-    torch.cuda.manual_seed_all(seed)
++    get_device_module().manual_seed_all(seed)
+ 
+     model_config = TinyModelConfig(
+         num_heads=case.num_heads,
+diff --git a/python/sglang/test/kits/attention_unittest/runner_modes/speculative_draft_runner.py b/python/sglang/test/kits/attention_unittest/runner_modes/speculative_draft_runner.py
+index cbebd85c09..9aa2a04860 100644
+--- a/python/sglang/test/kits/attention_unittest/runner_modes/speculative_draft_runner.py
++++ b/python/sglang/test/kits/attention_unittest/runner_modes/speculative_draft_runner.py
+@@ -32,6 +32,7 @@ from sglang.srt.speculative.frozen_kv_mtp_info import (
+ )
+ from sglang.srt.speculative.frozen_kv_mtp_worker_v2 import FrozenKVMTPDraftWorker
+ from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
++from sglang.srt.utils import get_device_module
+ 
+ from ..attention_methods.dense_attention import (
+     DEFAULT_DEVICE,
+@@ -266,22 +267,25 @@ def _seeded_rng(seed: int, *, device: str | torch.device):
+     input builders below need deterministic randomness per case but must not
+     leak that seed into the rest of the test process (build_*_fixture relies
+     on its own seeding for parameter init)."""
++    device_module = get_device_module()
+     cpu_state = torch.random.get_rng_state()
+-    cuda_state = torch.cuda.get_rng_state(device=device)
++    device_state = device_module.get_rng_state(device=device)
+     try:
+         torch.manual_seed(seed)
+-        torch.cuda.manual_seed_all(seed)
++        device_module.manual_seed_all(seed)
+         yield
+     finally:
+         torch.random.set_rng_state(cpu_state)
+-        torch.cuda.set_rng_state(cuda_state, device=device)
++        device_module.set_rng_state(device_state, device=device)
+ 
+ 
+ @contextmanager
+ def _single_rank_graph_capture(stream=None):
+     # Mirrors `graph_capture(stream=None)`: capture runs on the caller's stream
+     # when it leases one, so the shim stays valid for both call shapes.
+-    yield SimpleNamespace(stream=stream if stream is not None else torch.cuda.Stream())
++    yield SimpleNamespace(
++        stream=stream if stream is not None else get_device_module().Stream()
++    )
+ 
+ 
+ def _reset_cuda_graph_test_buffers() -> None:
+diff --git a/test/registered/attention/unittests/dense/test_triton.py b/test/registered/attention/unittests/dense/test_triton.py
+index 5cb86c296e..7933988446 100644
+--- a/test/registered/attention/unittests/dense/test_triton.py
++++ b/test/registered/attention/unittests/dense/test_triton.py
+@@ -3,8 +3,12 @@ import unittest
+ import torch
+ 
+ from sglang.srt.model_executor.forward_batch_info import ForwardMode
+-from sglang.srt.utils import is_hip
+-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
++from sglang.srt.utils import get_device_module, is_hip
++from sglang.test.ci.ci_register import (
++    register_amd_ci,
++    register_cuda_ci,
++    register_xpu_ci,
++)
+ from sglang.test.kits.attention_unittest.attention_methods.dense_attention import (
+     DenseAttentionCase,
+     make_dense_cases,
+@@ -33,9 +37,10 @@ from sglang.test.test_utils import CustomTestCase
+ register_cuda_ci(est_time=25, stage="base-b", runner_config="4-gpu-b200")
+ register_cuda_ci(est_time=25, stage="base-b", runner_config="1-gpu-large")
+ register_amd_ci(est_time=25, suite="stage-b-test-1-gpu-large-amd")
++register_xpu_ci(est_time=25, suite="stage-b-test-1-gpu-xpu")
+ 
+ 
+-@unittest.skipIf(not torch.cuda.is_available(), "CUDA is required")
++@unittest.skipIf(not get_device_module().is_available(), "an accelerator is required")
+ class TestTritonDenseAttentionBackendCorrectness(CustomTestCase):
+     CASES = make_dense_cases("triton")
+     CUDA_GRAPH_CASES = (
+diff --git a/python/sglang/srt/layers/attention/dual_chunk_flashattention_backend.py b/python/sglang/srt/layers/attention/dual_chunk_flashattention_backend.py
+index 83c22746ea..f72956bbf3 100644
+--- a/python/sglang/srt/layers/attention/dual_chunk_flashattention_backend.py
++++ b/python/sglang/srt/layers/attention/dual_chunk_flashattention_backend.py
+@@ -9,11 +9,28 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+ 
+ import torch
+ import torch.nn.functional as F
+-from sgl_kernel.sparse_flash_attn import (
+-    convert_vertical_slash_indexes,
+-    convert_vertical_slash_indexes_mergehead,
+-    sparse_attn_func,
+-)
++try:
++    from sgl_kernel.sparse_flash_attn import (
++        convert_vertical_slash_indexes,
++        convert_vertical_slash_indexes_mergehead,
++        sparse_attn_func,
++    )
++except ImportError:
++    # sgl-kernel-xpu is optional (and has no PVC build at all), but importing this
++    # module must not fail: the attention unittest kit reaches it through
++    # attention_methods/dual_chunk_attention.py, so an unguarded import here also
++    # takes out the dense Triton attention tests, which never touch dual chunk
++    # attention. These three are only called from the sparse path below, so defer
++    # the failure to whoever actually asks for it.
++    def _sgl_kernel_sparse_flash_attn_required(*args, **kwargs):
++        raise ImportError(
++            "dual chunk sparse attention requires sgl-kernel-xpu, which is not "
++            "installed"
++        )
++
++    convert_vertical_slash_indexes = _sgl_kernel_sparse_flash_attn_required
++    convert_vertical_slash_indexes_mergehead = _sgl_kernel_sparse_flash_attn_required
++    sparse_attn_func = _sgl_kernel_sparse_flash_attn_required
+ 
+ from sglang.kernels.ops.attention.flash_attention import (
+     flash_attn_varlen_func,
+diff --git a/python/sglang/srt/layers/attention/flashattention_backend.py b/python/sglang/srt/layers/attention/flashattention_backend.py
+index 2c81c59373..12fdc291e6 100644
+--- a/python/sglang/srt/layers/attention/flashattention_backend.py
++++ b/python/sglang/srt/layers/attention/flashattention_backend.py
+@@ -47,7 +47,17 @@ if TYPE_CHECKING:
+     from sglang.srt.layers.radix_attention import RadixAttention
+     from sglang.srt.model_executor.model_runner import ModelRunner
+ 
+-from sgl_kernel import merge_state_v2
++try:
++    from sgl_kernel import merge_state_v2
++except ImportError:
++    # sgl-kernel-xpu is optional (and has no PVC build), but this module must stay
++    # importable: the attention unittest kit reaches it through the dual chunk
++    # backend, so an unguarded import here also takes out the dense Triton
++    # attention tests. merge_state_v2 is only called from the paths below.
++    def merge_state_v2(*args, **kwargs):
++        raise ImportError(
++            "merge_state_v2 requires sgl-kernel-xpu, which is not installed"
++        )
+ 
+ from sglang.kernels.ops.attention.flash_attention import (
+     flash_attn_varlen_func,
+diff --git a/python/sglang/srt/utils/common.py b/python/sglang/srt/utils/common.py
+index 04b04eb9c0..229012024d 100644
+--- a/python/sglang/srt/utils/common.py
++++ b/python/sglang/srt/utils/common.py
+@@ -765,7 +765,14 @@ def get_cpu_memory_capacity():
+ def get_xpu_memory_capacity():
+     try:
+         if torch.xpu.is_available():
+-            return torch.xpu.mem_get_info()[1] // 1024 // 1024  # unit: MB
++            try:
++                return torch.xpu.mem_get_info()[1] // 1024 // 1024  # unit: MB
++            except RuntimeError:
++                # Data Center GPU Max (PVC) does not implement the free-memory
++                # query, so mem_get_info raises there. Only element [1] (total)
++                # is read here and device properties report the same value.
++                total = torch.xpu.get_device_properties().total_memory
++                return total // 1024 // 1024  # unit: MB
+         raise ValueError("No GPU memory values found.")
+     except AttributeError:
+         raise RuntimeError("torch.xpu is not available.")

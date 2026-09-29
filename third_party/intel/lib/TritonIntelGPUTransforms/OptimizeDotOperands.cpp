@@ -122,9 +122,7 @@ private:
     }
 
     // Must be able to find the defining MakeTensorDescOp.
-    SmallVector<tt::MakeTensorDescOp> allDescs =
-        tt::intel::findAllMakeTensorDescOps(descLoadOp.getDesc());
-    if (allDescs.empty())
+    if (tt::intel::findDescriptorDefinitions(descLoadOp.getDesc()).empty())
       return false;
 
     // Only fuse if the descriptor load carries block_io = "row_major", which

@@ -223,3 +223,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// COM: Fix witness: padding propagation is not gated on ttig.support_2d_block_io,
+// COM: which this module lacks. The LLVM lowering reads the ABSENCE of
+// COM: ttig.desc_padding as PAD_ZERO, so stamping it only behind the capability
+// COM: gate gave this PAD_NAN descriptor a zero fill on exactly the targets that
+// COM: take the generic masked path (#8102).
+// COM:
+// COM: Pinning the whole attribute dictionary is what proves ttig.block_io is
+// COM: absent: it sorts before ttig.desc_padding, so a CHECK-NOT anchored after
+// COM: the desc_padding match would not see it.
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+#dot_a = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL: tt.func public @desc_padding_without_2d_block_io(
+  tt.func public @desc_padding_without_2d_block_io(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %pitch: i64 {tt.divisibility = 16 : i32}) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c32_i32 = arith.constant 32 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %0 = tt.make_tensor_descriptor %arg0, [%c64_i32, %c32_i32], [%pitch, %c1_i64] {padding = 2 : i32} : !tt.ptr<f16>, !tt.tensordesc<64x32xf16, #dot_a>
+    // CHECK: tt.descriptor_load {{.*}} {ttig.desc_padding = 2 : i32} :
+    %1 = tt.descriptor_load %0[%c0_i32, %c0_i32] : !tt.tensordesc<64x32xf16, #dot_a> -> tensor<64x32xf16, #dot_a>
+    tt.return
+  }
+}

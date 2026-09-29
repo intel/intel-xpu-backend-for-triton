@@ -817,13 +817,15 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   }
 
   // CHECK-LABEL: @local_atomic_subslice_other_cta
-  // CHECK: mapa.shared::cluster.u32
+  // CHECK: nvvm.mapa
   // CHECK: atom.shared::cluster.cluster.relaxed.add.u32
+  // CHECK: nvvm.cluster.arrive
+  // CHECK: nvvm.cluster.wait
   tt.func @local_atomic_subslice_other_cta(%out: !tt.ptr<i32>, %vals: tensor<2x32xi32, #local_subslice_blocked>) {
     %src = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<4x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable>
     %tile = ttg.memdesc_subslice %src [2, 0] : !ttg.memdesc<4x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<2x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable, 4x32>
     %idx = arith.constant dense<0> : tensor<2x32xi32, #local_subslice_blocked>
-    %old = ttg.local_atomic_scatter_rmw add, %tile[%idx], %vals {axis = 1 : i32} : (!ttg.memdesc<2x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable, 4x32>, tensor<2x32xi32, #local_subslice_blocked>, tensor<2x32xi32, #local_subslice_blocked>) -> tensor<2x32xi32, #local_subslice_blocked>
+    %old = ttg.local_atomic_scatter_rmw add, %tile[%idx], %vals {axis = 1 : i32, allocation.offset = 256 : i32} : (!ttg.memdesc<2x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable, 4x32>, tensor<2x32xi32, #local_subslice_blocked>, tensor<2x32xi32, #local_subslice_blocked>) -> tensor<2x32xi32, #local_subslice_blocked>
     %ptrs = tt.splat %out : !tt.ptr<i32> -> tensor<2x32x!tt.ptr<i32>, #local_subslice_blocked>
     %offs = arith.constant dense<0> : tensor<2x32xi32, #local_subslice_blocked>
     %out_ptrs = tt.addptr %ptrs, %offs : tensor<2x32x!tt.ptr<i32>, #local_subslice_blocked>, tensor<2x32xi32, #local_subslice_blocked>
@@ -832,7 +834,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   }
 
   // CHECK-LABEL: @local_atomic_inc_subslice_other_cta
-  // CHECK: mapa.shared::cluster.u32
+  // CHECK: nvvm.mapa
   // CHECK: red.shared::cluster.cluster.relaxed.inc.u32
   tt.func @local_atomic_inc_subslice_other_cta() {
     %src = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<4x32xi32, #local_subslice_shared, #ttg.shared_memory, mutable>
@@ -984,8 +986,8 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   // RUBIN: %[[RUBIN_COUNTER:.*]] = llvm.load
   // RUBIN-NEXT: nvvm.barrier
   // RUBIN: %[[CTA:.*]] = nvvm.read.ptx.sreg.cluster.ctarank
-  // RUBIN-DAG: %[[ALL_CTAS:.*]] = llvm.mlir.constant(15 : i32) : i32
-  // RUBIN-DAG: %[[SELF_MASK:.*]] = llvm.shl %{{.*}}, %[[CTA]] : i32
+  // RUBIN: %[[ALL_CTAS:.*]] = llvm.mlir.constant(15 : i32) : i32
+  // RUBIN: %[[SELF_MASK:.*]] = llvm.shl %{{.*}}, %[[CTA]] : i32
   // RUBIN: %[[PEER_MASK:.*]] = llvm.xor %[[ALL_CTAS]], %[[SELF_MASK]] : i32
   // RUBIN-COUNT-1: mbarrier.arrive.release.cluster.shared::cluster.multicast::cluster::32b.b64 _, [$1], $2;
   // RUBIN-NOT: mbarrier.arrive

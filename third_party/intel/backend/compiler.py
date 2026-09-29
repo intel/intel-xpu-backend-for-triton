@@ -83,12 +83,24 @@ class XPUOptions:
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
-# Largest spill the auto-large-GRF upgrade tolerates before rebuilding, in the
-# unit external consumers compare `n_spills` in: dword-equivalents per lane. 16
-# is PyTorch inductor's default `spill_threshold` for non-HIP, so a spill at or
-# below this cannot change inductor's verdict and a rebuild would only cost
-# compile time. Kept in sync with `kMaxSpillSlotsPerLane` in driver.c.
-MAX_REG_SPILL_SLOTS_PER_LANE = 16
+# The largest rebuild threshold that keeps every *accepted* kernel strictly below
+# PyTorch inductor's `spill_threshold` -- 16 dword-equivalents per lane by default off
+# HIP -- at every sub-group width the backend can compile at. SIMD16 is the binding
+# case, being the narrowest (`warp_size` defaults to 32 and `setThreadsPerWarp` only
+# ever lowers it to 16): 16 slots/lane is 16 * 4 * 16 = 1024 B there, so 1025 would
+# already let a SIMD16 kernel reach inductor's threshold on the default-GRF build.
+# Inductor prunes strictly above 16, so this leaves a slot of margin at SIMD16.
+#
+# Bytes, not slots, is what makes that bound hold: the same 16 slots/lane is 2048 B at
+# SIMD32, so comparing slots at the *compiled* width lets the byte budget float up with
+# it. #7959 did exactly that and the gate went silent from 1024 B all the way to 2175 B
+# at SIMD32 -- the band issue #8077 regressed in. Taking the minimum over widths means
+# the wider width fires early (8 slots/lane at SIMD32), which is the safe direction: a
+# rebuild costs compile time, while declining leaves inductor timing a spilling binary.
+#
+# Kept in sync with driver.c, except on the LTS driver line -- see
+# `accepts_default_grf`.
+REBUILD_SPILL_BYTES_PER_THREAD = 1024
 
 SPILL_SIZE_RE = re.compile(r'spill_size\s*[:=]\s*(\d+)')
 PTSS_OVERFLOW_RE = re.compile(
@@ -127,17 +139,39 @@ def extract_spill_size_from_zebin(file):
     return 0
 
 
-def spill_slots_per_lane(spill_size, threads_per_warp):
-    """Convert a zebin `spill_size` to the unit `n_spills` is reported in.
+def accepts_default_grf(spill_size, is_lts):
+    """Whether the default-GRF build is good enough to skip the large-GRF rebuild.
 
-    `spill_size` is bytes allocated per hardware thread; CUDA and HIP report
-    `n_spills` as dword-equivalents per lane, and that is the unit external
-    consumers threshold on. Mirrors `Spills::slotsPerLane` in driver.c, down to
-    the truncating division and the raw-byte fallback for an unknown width.
+    Rolling rebuilds once the spill reaches `REBUILD_SPILL_BYTES_PER_THREAD` bytes per
+    hardware thread -- the level that keeps an accepted kernel under inductor's
+    `spill_threshold` at the narrowest width we compile at. Fixing a byte count rather
+    than a per-lane slot count is what makes that hold at every width: #7959's rule
+    compared slots at the compiled width, so the effective budget doubled with the
+    sub-group size -- 2176 B at SIMD32 -- and the gate stayed silent across a band where
+    rebuilding measurably paid (issue #8077).
+
+    Inductor's threshold sets the level but grants no licence below it: it only prunes
+    configs from inductor's timing contest, so a spill under it is not one inductor has
+    approved. Declining the rebuild leaves inductor timing the spilling default-GRF
+    binary with no faster rival to pick.
+
+    LTS IGC prices the resulting binaries differently: declining the rebuild costs
+    +21% end to end on `pyhpc_isoneutral_mixing` (Max 1100, 12 of 165 configs
+    affected, issue #8106), while the same 12 configs measure neutral on rolling. So
+    LTS keeps the older rule of rebuilding on any spill.
+
+    Both branches compare bytes, the unit both spill probes report. Neither needs the
+    compiled sub-group size: routing the spill and the threshold through the same
+    truncating bytes-to-dword-equivalents conversion cancels the divisor, so the
+    per-lane form of this gate decided exactly
+    `spill_size >= REBUILD_SPILL_BYTES_PER_THREAD` at every width a power-of-two
+    4 * threads_per_warp divides -- every width the backend can reach, plus the
+    unknown-width fallback. That conversion lives in `Spills::slotsPerLane` in
+    driver.c, which is the only producer of `n_spills` on either path.
     """
-    if spill_size <= 0 or threads_per_warp <= 0:
-        return spill_size
-    return spill_size // (4 * threads_per_warp)
+    if is_lts:
+        return spill_size <= 0
+    return spill_size < REBUILD_SPILL_BYTES_PER_THREAD
 
 
 def min_dot_size(device_props: Union[Dict, GPUTarget]):
@@ -260,6 +294,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         ret = BaseBackend.parse_attr(desc)
         if "N" in desc:
             ret += [["tt.padding", 1]]
+        if "T" in desc:
+            ret += [["tt.round_f32_to_tf32", 1]]
         # Shape divisibility: S<dim>D<divisor> (e.g., S0D128)
         import re
         for match in re.finditer(r'S(\d+)D(\d+)', desc):
@@ -280,10 +316,12 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
     @staticmethod
     def get_tensordesc_specialization(arg, **kwargs):
-        # Format: "N" (padding) + "S<dim>D<divisor>" (shape divisibility)
+        # Format: "N" (padding) + "T" (tf32 rounding) + "S<dim>D<divisor>" (shape divisibility)
         key = ""
         if getattr(arg, "padding", None) == "nan":
             key += "N"
+        if getattr(arg, "round_f32_to_tf32", False):
+            key += "T"
         # A cap of 4 is enough for the 2D block I/O alignment check, but collapsing a
         # unit dim of a rank-3 descriptor needs shape[i] % block_shape[i] == 0, so for
         # that shape cap at the block extent instead (issues/7679).
@@ -340,6 +378,12 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             raise ValueError(
                 f"num_warps={opt.num_warps} is unsupported for the target (limit is {properties['max_num_sub_groups']})"
             )
+        # The backend has no CTA cluster support: getClusterCTAId is hardwired to
+        # 0, clusterBarrier is a plain workgroup barrier, and loadDShared /
+        # storeDShared ignore the ctaId they are given. Accepting num_ctas > 1
+        # would silently miscompile any cross-CTA communication.
+        if opt.num_ctas != 1:
+            raise ValueError(f"num_ctas={opt.num_ctas} is unsupported for the target (only num_ctas=1 is supported)")
 
     @classmethod
     def annotate_module(cls, module_opts, properties, opt):
@@ -544,6 +588,28 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
         instrument(pm, point="ttgpuir-to-llvmir", context=mod.context)
+        pm.run(mod, 'make_llir.allocate_memory')
+
+        metadata["shared"] = src.get_int_attr("ttg.shared")
+        # Shared memory is now allocated statically (see `initSharedMemory` in
+        # TritonGPUToLLVM.cpp), so an oversized request fails the SPIR-V module
+        # build later (an opaque `ZE_RESULT_ERROR_MODULE_BUILD_FAILURE`) instead
+        # of failing at kernel launch. Raise `OutOfResources` here instead, so
+        # `triton.runtime.autotuner.Autotuner` (and callers that bypass
+        # `CompiledKernel._init_handles`, e.g. torch Inductor's static XPU
+        # launcher) can skip the offending config instead of crashing. The check
+        # is done as soon as `ttg.shared` is final, because lowering an oversized
+        # allocation to LLVM is slow enough to dominate the compile time of a
+        # config that cannot run anyway. The `ttgpuir-to-llvmir` instrumentation
+        # passes have to run first: Proton's `allocate_proton_shared_memory`
+        # grows `ttg.shared` to make room for its profiling buffer.
+        max_shared_mem = metadata["target"].arch.get("local_mem_size")
+        if max_shared_mem is not None and metadata["shared"] > max_shared_mem:
+            raise OutOfResources(metadata["shared"], max_shared_mem, "shared memory")
+
+        pm = ir.pass_manager(mod.context)
+        pm.enable_debug()
+
         intel.passes.ttgpuir.add_to_llvmir(pm, options.dynamic_shared_memory)
         intel.passes.ttgpuir.add_gen_to_llvm(pm)
         passes.common.add_canonicalizer(pm)
@@ -595,17 +661,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if total_num_warps is not None:
             metadata["num_warps"] = total_num_warps
         metadata["threads_per_warp"] = intel.get_threads_per_warp(src)
-        metadata["shared"] = src.get_int_attr("ttg.shared")
-        # Shared memory is now allocated statically (see `initSharedMemory` in
-        # TritonGPUToLLVM.cpp), so an oversized request fails the SPIR-V module
-        # build later (an opaque `ZE_RESULT_ERROR_MODULE_BUILD_FAILURE`) instead
-        # of failing at kernel launch. Raise `OutOfResources` here instead, so
-        # `triton.runtime.autotuner.Autotuner` (and callers that bypass
-        # `CompiledKernel._init_handles`, e.g. torch Inductor's static XPU
-        # launcher) can skip the offending config instead of crashing.
-        max_shared_mem = metadata["target"].arch.get("local_mem_size")
-        if max_shared_mem is not None and metadata["shared"] > max_shared_mem:
-            raise OutOfResources(metadata["shared"], max_shared_mem, "shared memory")
+        metadata["warp_size"] = metadata["threads_per_warp"]
         metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size")
         metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment")
         metadata["profile_scratch_size"] = src.get_int_attr("ttg.profile_scratch_memory_size") or 0
@@ -623,9 +679,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     @track
     def make_spv(cls, src, metadata, options):
         driver_version = metadata["target"].arch.get("driver_version")
-        is_lts = cls.is_lts(driver_version)
-        os.environ["INTEL_XPU_BACKEND_IS_LTS"] = "1" if is_lts else "0"
-        spirv, name = intel.translate_to_spirv(src, is_lts)
+        spirv, name = intel.translate_to_spirv(src, cls.is_lts(driver_version))
         metadata["name"] = name
         metadata.setdefault("build_flags", "")
         if options.grf_mode == '128':
@@ -695,8 +749,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                     subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
                     if options.grf_mode == "default":
                         spill_size = extract_spill_size_from_zebin(fbin)
-                        spill_slots = spill_slots_per_lane(spill_size, metadata["threads_per_warp"])
-                        if spill_slots <= MAX_REG_SPILL_SLOTS_PER_LANE:
+                        if accepts_default_grf(spill_size, options.is_lts):
                             break
                 except (subprocess.CalledProcessError, IntelGPUError) as e:
                     # If GRF mode was not last yet, retry with different GRF mode

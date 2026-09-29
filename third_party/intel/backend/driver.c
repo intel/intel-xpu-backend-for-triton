@@ -378,6 +378,18 @@ private:
   uint32_t subgroupSize = 0; // Compiled SIMD width; 0 == unknown.
 };
 
+// Spill at which `load_binary` rebuilds at large GRF, in the unit both spill
+// probes report: bytes per hardware thread. Mirrors
+// `REBUILD_SPILL_BYTES_PER_THREAD` in compiler.py -- see the comment there for
+// where 1024 comes from.
+//
+// Compared in bytes rather than in `slotsPerLane()`'s per-lane unit because the
+// compiled sub-group size has no part in the decision: routing the spill and
+// the threshold through the same truncating conversion cancels the divisor, so
+// the per-lane form of this gate decided exactly this comparison at every width
+// the backend can reach.
+constexpr int64_t kRebuildSpillBytesPerThread = 1024;
+
 // Converts a spill count to the `Py_BuildValue("i")` domain, saturating rather
 // than wrapping. Only the unknown-width byte passthrough can approach the
 // bound. Positive values only -- the -1 error sentinel must survive intact, so
@@ -581,32 +593,50 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   }
 
   const bool debugEnabled = getBoolEnv("TRITON_DEBUG");
-  // Only rebuild at large GRF once the kernel spills past what torch inductor's
-  // autotuner tolerates, so the rebuild can only rescue a config inductor would
-  // have discarded and never perturbs one it would have kept. 16 is inductor's
-  // default `spill_threshold` for non-HIP (`triton_heuristics.py`); a caller
-  // that overrides it is not tracked here.
+  // Rebuild once spilling reaches 1024 B per hardware thread -- the level that
+  // keeps an accepted kernel under inductor's `spill_threshold` of 16
+  // dword-equivalents/lane at SIMD16, the narrowest width we compile at; see
+  // `REBUILD_SPILL_BYTES_PER_THREAD` in compiler.py. Fixing a byte count rather
+  // than a per-lane slot count is what makes that hold at every width: #7959's
+  // rule compared slots at the compiled width, so the effective budget doubled
+  // with the sub-group size -- 2176 B at SIMD32 -- and the gate stayed silent
+  // across a band where rebuilding measurably paid (issue #8077). Inductor's
+  // threshold sets the level but grants no licence below it: it prunes configs
+  // from inductor's timing contest rather than approving them, so declining the
+  // rebuild leaves inductor timing the spilling default-GRF binary with no
+  // faster rival.
   //
-  // Compared against `slotsPerLane()` -- the very value handed to Python as
-  // `n_spills` -- rather than converting the budget into bytes: inductor tests
-  // the truncated per-lane count, so a byte threshold would also fire on the
-  // band that truncates back down to an accepted value. An unknown SIMD width
-  // makes `slotsPerLane()` fall back to raw bytes, which retries on all but the
-  // smallest spills (issue #7821).
-  constexpr int64_t kMaxSpillSlotsPerLane = 16;
-
+  // Mirrors `accepts_default_grf` in compiler.py, except that compiler.py
+  // additionally rebuilds on any spill for LTS drivers: `load_binary` has no
+  // `is_lts` input, so this gate cannot express that carve-out.
   if (canRetryWithLargeGRF &&
-      (firstBuildFailed || n_spills.slotsPerLane() > kMaxSpillSlotsPerLane)) {
+      (firstBuildFailed ||
+       n_spills.getBytes() >= kRebuildSpillBytesPerThread)) {
     PyObject *orig_type = nullptr, *orig_value = nullptr, *orig_tb = nullptr;
     // Save the original error before clearing it for the retry attempt.
     if (firstBuildFailed)
       PyErr_Fetch(&orig_type, &orig_value, &orig_tb);
 
-    if (debugEnabled)
-      std::cout << (firstBuildFailed ? "(I): Build failed for \""
-                                     : "(I): Detected spills for \"")
-                << kernel_name << "\", retrying with large GRF mode"
-                << std::endl;
+    // Report the numbers the gate acted on here, not later: the retry
+    // overwrites `n_spills` below, so this is the only place the pre-retry
+    // spill is visible. The build-failure path has no numbers to report -- it
+    // enters on `firstBuildFailed` with an unknown `Spills` (bytes == -1,
+    // SIMD 0) and never reaches the threshold -- so printing them there would
+    // only invite reading `-1 B at SIMD0` as a measurement.
+    if (debugEnabled) {
+      if (firstBuildFailed)
+        std::cout << "(I): Build failed for \"" << kernel_name
+                  << "\", retrying with large GRF mode" << std::endl;
+      else
+        std::cout << "(I): Detected spills for \"" << kernel_name
+                  << "\", retrying with large GRF mode (spill "
+                  << n_spills.getBytes()
+                  << " B/hardware-thread = " << n_spills.slotsPerLane()
+                  << " dword-equivalents/lane at SIMD"
+                  << n_spills.getSubgroupSize() << ", rebuild at "
+                  << kRebuildSpillBytesPerThread << " B/hardware-thread)"
+                  << std::endl;
+    }
 
     if (std::strcmp(resolvedDeviceArch, "cri") == 0) {
       build_flags.addXLargeGRFSizeFlag();
@@ -689,15 +719,18 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
     }
   }
 
-  // Both numbers are logged: the byte count is what the retry gate above acts
-  // on, the per-lane count is what Python receives. test_auto_grf matches the
-  // byte count specifically to pin the retry, so keep that wording stable.
+  // Reports the *selected* pass -- post-retry after a successful replacement,
+  // the default build on the accept path or after a failed retry. The threshold
+  // is printed too so tests can assert it against
+  // `REBUILD_SPILL_BYTES_PER_THREAD`. test_auto_grf matches the byte count to
+  // pin the retry, so keep that wording.
   if (debugEnabled && n_spills.getBytes()) {
     std::cout << "(I): Detected " << n_spills.getBytes()
               << " spill bytes per hardware thread; n_spills "
               << n_spills.slotsPerLane() << " dword-equivalents/lane (SIMD"
-              << n_spills.getSubgroupSize() << ") for \"" << kernel_name << "\""
-              << std::endl;
+              << n_spills.getSubgroupSize() << "), rebuild at "
+              << kRebuildSpillBytesPerThread << " B/hardware-thread for \""
+              << kernel_name << "\"" << std::endl;
   }
 
   auto n_regs = build_flags.n_regs();
@@ -1012,6 +1045,13 @@ static inline void printScalarArgByType(uint32_t index, const void *value,
 }
 
 static PyObject *data_ptr_str = NULL;
+// Interned kernel metadata attribute names, read on every launch.
+// `PyObject_GetAttrString` would create a new string per call, which the
+// type attribute cache then keeps alive.
+static PyObject *num_warps_str = NULL;
+static PyObject *num_ctas_str = NULL;
+static PyObject *shared_str = NULL;
+static PyObject *threads_per_warp_str = NULL;
 
 // Extract a XPU device pointer from a pointer-like PyObject obj, and store
 // it to the memory location pointed by ptr.
@@ -1437,18 +1477,17 @@ extern "C" EXPORT_FUNC PyObject *launch(PyObject *args) {
   }
 
   // extract kernel metadata
-  PyObject *num_warps_attr =
-      PyObject_GetAttrString(kernel_metadata, "num_warps");
+  PyObject *num_warps_attr = PyObject_GetAttr(kernel_metadata, num_warps_str);
   int num_warps = PyLong_AsLong(num_warps_attr);
   Py_DECREF(num_warps_attr);
-  PyObject *num_ctas_attr = PyObject_GetAttrString(kernel_metadata, "num_ctas");
+  PyObject *num_ctas_attr = PyObject_GetAttr(kernel_metadata, num_ctas_str);
   int num_ctas = PyLong_AsLong(num_ctas_attr);
   Py_DECREF(num_ctas_attr);
-  PyObject *shared_attr = PyObject_GetAttrString(kernel_metadata, "shared");
+  PyObject *shared_attr = PyObject_GetAttr(kernel_metadata, shared_str);
   int shared_memory = PyLong_AsLong(shared_attr);
   Py_DECREF(shared_attr);
   PyObject *threads_per_warp_attr =
-      PyObject_GetAttrString(kernel_metadata, "threads_per_warp");
+      PyObject_GetAttr(kernel_metadata, threads_per_warp_str);
   int threads_per_warp = PyLong_AsLong(threads_per_warp_attr);
   Py_DECREF(threads_per_warp_attr);
 
@@ -1539,11 +1578,30 @@ extern "C" EXPORT_FUNC PyObject *launch(PyObject *args) {
   if (kernel_info == nullptr)
     return NULL;
 
+  // A rejected submit throws `sycl::exception` on this thread. It must not
+  // unwind out of the ctypes entry point, where it would reach
+  // `std::terminate` and abort the process; report it as `IntelGPUError`
+  // instead, like the Level Zero failures in `load_binary`.
+  bool launchFailed = false;
+  std::string launchError;
   Py_BEGIN_ALLOW_THREADS;
-  sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp,
-                     shared_memory, stream, kernel_info, global_scratch,
-                     profile_scratch, num_params, params, extractor_data);
+  try {
+    sycl_kernel_launch(gridX, gridY, gridZ, num_warps, threads_per_warp,
+                       shared_memory, stream, kernel_info, global_scratch,
+                       profile_scratch, num_params, params, extractor_data);
+  } catch (const std::exception &e) {
+    launchFailed = true;
+    launchError = e.what();
+  }
   Py_END_ALLOW_THREADS;
+
+  if (launchFailed) {
+    PyObject *exc_class = getIntelGPUErrorClass();
+    PyErr_Format(exc_class ? exc_class : PyExc_RuntimeError,
+                 "Error during Intel kernel launch: %s", launchError.c_str());
+    PyBuffer_Release(&signature);
+    return NULL;
+  }
 
   if (PyErr_Occurred()) {
     PyBuffer_Release(&signature);
@@ -1573,6 +1631,12 @@ extern "C" EXPORT_FUNC PyTypeObject *init_PyKernelArgType() {
 
   data_ptr_str = PyUnicode_InternFromString("data_ptr");
   if (data_ptr_str == NULL)
+    return NULL;
+  num_warps_str = PyUnicode_InternFromString("num_warps");
+  num_ctas_str = PyUnicode_InternFromString("num_ctas");
+  shared_str = PyUnicode_InternFromString("shared");
+  threads_per_warp_str = PyUnicode_InternFromString("threads_per_warp");
+  if (!num_warps_str || !num_ctas_str || !shared_str || !threads_per_warp_str)
     return NULL;
 
   Py_INCREF(&PyKernelArgType);

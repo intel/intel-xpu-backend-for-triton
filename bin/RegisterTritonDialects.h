@@ -11,8 +11,10 @@
 
 #include "amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "amd/include/TritonAMDGPUTransforms/Passes.h"
+#include "amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "nvidia/include/Dialect/NVGPU/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
+#include "nvidia/lib/TritonNVIDIAGPUToLLVM/TargetInfo.h"
 #include "proton/Dialect/include/Conversion/ProtonGPUToLLVM/Passes.h"
 #include "proton/Dialect/include/Conversion/ProtonGPUToLLVM/ProtonAMDGPUToLLVM/Passes.h"
 #include "proton/Dialect/include/Conversion/ProtonGPUToLLVM/ProtonNvidiaGPUToLLVM/Passes.h"
@@ -47,6 +49,7 @@
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Dialect/LLVMIR/Transforms/InlinerInterfaceImpl.h"
+#include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
 #include "mlir/InitAllPasses.h"
 
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
@@ -84,6 +87,8 @@ void registerTestScopeIdAllocationPass();
 } // namespace mlir
 
 inline void registerTritonDialects(mlir::DialectRegistry &registry) {
+  mlir::triton::NVIDIA::registerTargetInfo();
+  mlir::triton::AMD::registerTargetInfo();
   mlir::registerAllPasses();
   mlir::triton::registerTritonPasses();
   mlir::triton::gpu::registerTritonGPUPasses();
@@ -211,6 +216,6 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
       mlir::triton::proton::ProtonDialect,
       mlir::triton::proton::gpu::ProtonGPUDialect, mlir::ROCDL::ROCDLDialect,
       mlir::triton::gpu::intel::TritonIntelGPUDialect,
-      mlir::triton::TritonGEN::TritonGENDialect,
+      mlir::triton::TritonGEN::TritonGENDialect, mlir::spirv::SPIRVDialect,
       mlir::triton::gluon::GluonDialect>();
 }
