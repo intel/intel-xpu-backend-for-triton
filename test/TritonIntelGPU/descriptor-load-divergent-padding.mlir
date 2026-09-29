@@ -17,12 +17,12 @@
 // COM: expansion's legality predicate. Reaching the LLVM lowering with an
 // COM: undecidable padding must be a hard error, not a silent PAD_ZERO.
 // COM:
-// COM: Every case here expresses divergence with `arith.select`, deliberately NOT
-// COM: `scf.if`. A region-free shape cannot be perturbed by the transient
+// COM: Every case here fans the provenance out with `arith.select`, deliberately
+// COM: NOT `scf.if`. A region-free shape cannot be perturbed by the transient
 // COM: empty-region window that issue #8167 is about, so the diagnostics stay
 // COM: deterministic and a failure here can only mean the padding check changed.
 // COM:
-// COM: The shape does not affect these diagnostics: both `emitError`s fire
+// COM: The shape does not affect these diagnostics: all three `emitError`s fire
 // COM: before the boundary-check classification is reached. The [5,5] shape
 // COM: (not divisible by the 4x4 block) only matters if the checks are removed,
 // COM: in which case the lowering succeeds, emits a predicated load, and the fill
@@ -34,16 +34,17 @@
 // COM: the first failed op, so there is exactly one of the latter per case.
 // COM:
 // COM: Every case is a fix witness: without the fix the lowering emits no padding
-// COM: diagnostic at all -- the conversion succeeds with a zero-filled gather -- so
-// COM: each fails as `expected error "..." was not produced`.
+// COM: diagnostic at all, so each fails as `expected error "..." was not produced`
+// COM: and the masked-off lanes quietly take whatever the pre-fix precedence gave
+// COM: them -- the stamped attribute, else the traced padding, else PAD_ZERO.
 // COM:
 // COM: The `expected-error` strings below are deliberately specific, and a loose
-// COM: substring here is not merely weak -- it silently matches the WRONG
-// COM: diagnostic. The driver's "failed to legalize operation" message embeds the
-// COM: printed op, and the op carries `ttig.desc_padding`, so an annotation of
-// COM: just `padding` pairs with the driver's message instead of the pattern's;
-// COM: the remaining annotation then has nothing left to match and the case fails
-// COM: for a reason that has nothing to do with the code under test. Keep both
+// COM: substring is not merely weak -- it silently matches the WRONG diagnostic.
+// COM: The driver's "failed to legalize operation" message embeds the printed op,
+// COM: so wherever that op is stamped with `ttig.desc_padding` -- cases 2 and 3 --
+// COM: an annotation of just `padding` pairs with the driver's message instead of
+// COM: the pattern's; the remaining annotation then has nothing left to match and
+// COM: the case fails for a reason unrelated to the code under test. Keep both
 // COM: annotations quoting wording unique to the diagnostic they belong to.
 // COM:
 // COM: `-verify-diagnostics` runs in its default strict mode, where an unannotated
@@ -127,6 +128,33 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // expected-error @+2 {{'ttig.desc_padding' disagrees with the padding of the operations defining this descriptor}}
     // expected-error @+1 {{failed to legalize operation 'tt.descriptor_load'}}
     %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
+    tt.return %0 : tensor<4x4xf32, #blocked>
+  }
+}
+
+// -----
+
+// COM: Consistent provenance, but nothing stamped the attribute. MaterializeBlockPointer
+// COM: stamps exactly when `consistentPadding()` yields a value, so this combination
+// COM: cannot come out of that pass. Erroring keeps `ttig.desc_padding` the single
+// COM: source of the fill -- the trace only validates it -- rather than re-deriving a
+// COM: padding no pass vouched for. @consistent_padding_mismatched_attr above is the
+// COM: *wrong*-attribute twin; here the value is simply absent.
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  tt.func public @consistent_padding_missing_attr(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %cond: i1) -> (tensor<4x4xf32, #blocked>) {
+    %c1_i64 = arith.constant 1 : i64
+    %c4_i64 = arith.constant 4 : i64
+    %c0_i32 = arith.constant 0 : i32
+    %c5_i32 = arith.constant 5 : i32
+    %d0 = tt.make_tensor_descriptor %arg0, [%c5_i32, %c5_i32], [%c1_i64, %c4_i64] {order = array<i32: 0>, padding = 2 : i32} : <f32>, <4x4xf32>
+    %d1 = tt.make_tensor_descriptor %arg1, [%c5_i32, %c5_i32], [%c1_i64, %c4_i64] {order = array<i32: 0>, padding = 2 : i32} : <f32>, <4x4xf32>
+    %desc = arith.select %cond, %d0, %d1 : !tt.tensordesc<4x4xf32>
+    // expected-error @+2 {{'ttig.desc_padding' is missing but the operations defining this descriptor agree on a padding mode}}
+    // expected-error @+1 {{failed to legalize operation 'tt.descriptor_load'}}
+    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
     tt.return %0 : tensor<4x4xf32, #blocked>
   }
 }

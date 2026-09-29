@@ -57,7 +57,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK: ^[[BB_MERGE]](%{{.*}}: i32):
 
     // CHECK: llvm.return
-    %3 = tt.descriptor_load %0[%arg1, %arg2] : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
+    %3 = tt.descriptor_load %0[%arg1, %arg2] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
     tt.return %3 : tensor<4x4xf32, #blocked>
   }
 }
@@ -117,7 +117,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK: triton_gen.predicated_load %[[LOAD_PTR]], %[[PRED]], %{{.*}} {cache_control = Default} : (!llvm.ptr<1>, i1, i32) -> i32
 
     // CHECK: llvm.return
-    %3 = tt.descriptor_load %0[%arg1, %arg2] : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
+    %3 = tt.descriptor_load %0[%arg1, %arg2] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
     tt.return %3 : tensor<4x4xf32, #blocked>
   }
 }
@@ -290,7 +290,7 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     // With vec=4 and f16: totalWidth=64, maxWordWidth=32, width=32, nWords=2.
     // Return type is vector<2xi32>. Verify wider-than-scalar predicated loads.
     // CHECK: triton_gen.predicated_load {{.*}} : (!llvm.ptr<1>, i1, vector<2xi32>) -> vector<2xi32>
-    %load = tt.descriptor_load %desc[%arg1, %arg2] : !tt.tensordesc<4x16xf16> -> tensor<4x16xf16, #blocked>
+    %load = tt.descriptor_load %desc[%arg1, %arg2] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<4x16xf16> -> tensor<4x16xf16, #blocked>
 
     // Verify wider-than-scalar predicated stores with the same descriptor.
     // CHECK: triton_gen.predicated_store {{.*}} {cache_control = Default} : (!llvm.ptr<1>, vector<2xi32>, i1)
@@ -319,7 +319,7 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
 
     // With unknown stride on the fast dimension, vec=1. Loads should be 16-bit (scalar f16).
     // CHECK: triton_gen.predicated_load {{.*}} : (!llvm.ptr<1>, i1, i16) -> i16
-    %load = tt.descriptor_load %desc[%arg1, %arg2] : !tt.tensordesc<4x16xf16> -> tensor<4x16xf16, #blocked>
+    %load = tt.descriptor_load %desc[%arg1, %arg2] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<4x16xf16> -> tensor<4x16xf16, #blocked>
 
     // Stores should also be 16-bit (scalar f16).
     // CHECK: triton_gen.predicated_store {{.*}}, %{{.*}}, %{{.*}} {cache_control = Default} : (!llvm.ptr<1>, i16, i1)
@@ -374,7 +374,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK: llvm.load %{{.*}} : !llvm.ptr<1> -> i32
     // CHECK: llvm.br ^[[BB_MERGE]]
 
-    %3 = tt.descriptor_load %0[%c0_i32, %c0_i32] : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
+    %3 = tt.descriptor_load %0[%c0_i32, %c0_i32] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
     tt.return %3 : tensor<4x4xf32, #blocked>
   }
 }
@@ -411,7 +411,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // Verify predicated load intrinsic with block-level predicate
     // CHECK: triton_gen.predicated_load %{{.*}}, %{{.*}}, %{{.*}} {cache_control = Default} : (!llvm.ptr<1>, i1, i32) -> i32
 
-    %3 = tt.descriptor_load %0[%c0_i32, %c0_i32] : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
+    %3 = tt.descriptor_load %0[%c0_i32, %c0_i32] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
     tt.return %3 : tensor<4x4xf32, #blocked>
   }
 }
@@ -508,7 +508,7 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     // Per-element checks for dims 2 and 3 (base + index):
     // CHECK-DAG: llvm.icmp "slt" %[[LINEAR_OFF2]], %{{.*}} : i32
     // CHECK-DAG: llvm.icmp "slt" %[[LINEAR_OFF3]], %{{.*}} : i32
-    %load = tt.descriptor_load %desc[%arg1, %arg2, %arg3, %arg4] : !tt.tensordesc<1x1x4x4xf32> -> tensor<4x4xf32, #blocked>
+    %load = tt.descriptor_load %desc[%arg1, %arg2, %arg3, %arg4] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<1x1x4x4xf32> -> tensor<4x4xf32, #blocked>
     tt.return %load : tensor<4x4xf32, #blocked>
   }
 }
@@ -620,7 +620,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 
     // CHECK: triton_gen.predicated_load %{{.*}}, %{{.*}}, %{{.*}} {cache_control = Default} : (!llvm.ptr<1>, i1, i32) -> i32
 
-    %3 = tt.descriptor_load %0[%c4_i32, %c4_i32] : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
+    %3 = tt.descriptor_load %0[%c4_i32, %c4_i32] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
     tt.return %3 : tensor<4x4xf32, #blocked>
   }
 }
@@ -667,11 +667,11 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
       // Verify predicated load inside loop
       // CHECK: triton_gen.predicated_load %{{.*}}, %{{.*}}, %{{.*}} {cache_control = Default} : (!llvm.ptr<1>, i1, i32) -> i32
 
-      %load = tt.descriptor_load %desc[%iv, %c0_i32] : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
+      %load = tt.descriptor_load %desc[%iv, %c0_i32] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
       scf.yield %accum : i32
     }
     // Outside the loop: constant-0 offsets, also block-level.
-    %ret = tt.descriptor_load %desc[%c0_i32, %c0_i32] : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
+    %ret = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
     tt.return %ret : tensor<4x4xf32, #blocked>
   }
 }
@@ -750,7 +750,7 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     // Verify at least the function compiles and emits a predicated load.
     // CHECK: triton_gen.predicated_load %{{.*}}, %{{.*}}, %{{.*}} {cache_control = Default} : (!llvm.ptr<1>, i1, i32) -> i32
 
-    %3 = tt.descriptor_load %desc[%c0_i32, %c8_i32] {ttig.block_io = "column_major"} : !tt.tensordesc<16x8xf32> -> tensor<8x16xf32, #blocked>
+    %3 = tt.descriptor_load %desc[%c0_i32, %c8_i32] {ttig.block_io = "column_major", ttig.desc_padding = 1 : i32} : !tt.tensordesc<16x8xf32> -> tensor<8x16xf32, #blocked>
     tt.return %3 : tensor<8x16xf32, #blocked>
   }
 }
@@ -842,27 +842,22 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Issue #8102 -- the padding comes from provenance when the load carries no
-// COM: `ttig.desc_padding` attribute. The defining `tt.make_tensor_descriptor`
-// COM: ops are traceable and agree on PAD_NAN, so the out-of-bounds fill must be
-// COM: NaN. Fix witness: without the provenance fallback the lowering reads "no
-// COM: attribute" as PAD_ZERO and the FILL constant below is 0.0.
+// COM: Issue #8102 -- `ttig.desc_padding` is the sole source of the out-of-bounds
+// COM: fill: a stamped PAD_NAN must reach the masked-off lanes as a NaN. Fix
+// COM: witness: the pre-fix lowering ignored the attribute on the generic masked
+// COM: path and the FILL constant below was 0.0.
 // COM:
-// COM: The shape [5,5] is not divisible by the 4x4 block, so the load is
-// COM: predicated and the fill really is the value of the masked-off lanes. The
-// COM: CHECKs follow the constant into the not-taken operand of the `llvm.cond_br`
-// COM: that guards the load.
-// COM:
-// COM: Two producers joined by `arith.select` make the trace see two candidates
-// COM: that agree, not just one. The distinct base pointers are not needed for
-// COM: that (no CSE runs in this RUN line); they only keep the two producers
-// COM: visibly independent.
+// COM: Shape [5,5] is not divisible by the 4x4 block, so the load is predicated and
+// COM: the fill really is what the masked-off lanes get; the CHECKs follow it into
+// COM: the not-taken `llvm.cond_br` operand. The two producers agree on PAD_NAN
+// COM: because the trace still validates the attribute -- disagreement is a hard
+// COM: error, see descriptor-load-divergent-padding.mlir.
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
 
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // CHECK-LABEL: llvm.func spir_kernelcc @load_consistent_nan_padding_no_attr
-  tt.func public @load_consistent_nan_padding_no_attr(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %cond: i1) -> (tensor<4x4xf32, #blocked>) {
+  // CHECK-LABEL: llvm.func spir_kernelcc @load_stamped_nan_padding
+  tt.func public @load_stamped_nan_padding(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %cond: i1) -> (tensor<4x4xf32, #blocked>) {
     %c1_i64 = arith.constant 1 : i64
     %c4_i64 = arith.constant 4 : i64
     %c0_i32 = arith.constant 0 : i32
@@ -874,50 +869,24 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK: %[[FILL_V:.*]] = llvm.insertelement %[[FILL]], %{{.*}}[%{{.*}} : i64] : vector<1xf32>
     // CHECK: %[[FILL_I:.*]] = llvm.bitcast %[[FILL_V]] : vector<1xf32> to i32
     // CHECK: llvm.cond_br %{{.*}}, ^{{bb[0-9]+}}, ^{{bb[0-9]+}}(%[[FILL_I]] : i32)
-    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
+    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.desc_padding = 2 : i32} : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
     tt.return %0 : tensor<4x4xf32, #blocked>
   }
 }
 
 // -----
 
-// COM: Issue #8102 -- single-producer variant of the case above: one
-// COM: `tt.make_tensor_descriptor` with PAD_NAN and no `ttig.desc_padding`
-// COM: attribute. Fix witness: this too gets a 0.0 fill without the fallback, so
-// COM: the bug needs neither divergence nor a merge to show.
+// COM: PAD_ZERO twin of @load_stamped_nan_padding: the fill must be 0.0 and no NaN
+// COM: constant may appear anywhere in the function -- the CHECK-NOTs sit between
+// COM: anchors (label -> fill -> return) so together they cover the whole body.
+// COM: PAD_ZERO is also the fallback for an unstamped load whose provenance is
+// COM: untraceable; test/Conversion/intel/load_store_to_llvm.mlir covers that.
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
 
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // CHECK-LABEL: llvm.func spir_kernelcc @load_single_nan_padding_no_attr
-  tt.func public @load_single_nan_padding_no_attr(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) -> (tensor<4x4xf32, #blocked>) {
-    %c1_i64 = arith.constant 1 : i64
-    %c4_i64 = arith.constant 4 : i64
-    %c0_i32 = arith.constant 0 : i32
-    %c5_i32 = arith.constant 5 : i32
-    %d0 = tt.make_tensor_descriptor %arg0, [%c5_i32, %c5_i32], [%c1_i64, %c4_i64] {order = array<i32: 0>, padding = 2 : i32} : <f32>, <4x4xf32>
-    // CHECK: %[[FILL:.*]] = llvm.mlir.constant(0x7FC00000 : f32) : f32
-    // CHECK: %[[FILL_V:.*]] = llvm.insertelement %[[FILL]], %{{.*}}[%{{.*}} : i64] : vector<1xf32>
-    // CHECK: %[[FILL_I:.*]] = llvm.bitcast %[[FILL_V]] : vector<1xf32> to i32
-    // CHECK: llvm.cond_br %{{.*}}, ^{{bb[0-9]+}}, ^{{bb[0-9]+}}(%[[FILL_I]] : i32)
-    %0 = tt.descriptor_load %d0[%c0_i32, %c0_i32] : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
-    tt.return %0 : tensor<4x4xf32, #blocked>
-  }
-}
-
-// -----
-
-// COM: Issue #8102 -- PAD_ZERO twin of @load_consistent_nan_padding_no_attr:
-// COM: both producers request PAD_ZERO and the load has no attribute, so the fill
-// COM: must be 0.0 and no NaN constant may appear anywhere in the function. The
-// COM: CHECK-NOTs sit between anchors (label -> fill constant -> return) so that
-// COM: together they cover the whole function body.
-
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 16], warpsPerCTA = [2, 4], order = [1, 0]}>
-
-module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32} {
-  // CHECK-LABEL: llvm.func spir_kernelcc @load_consistent_zero_padding_no_attr
-  tt.func public @load_consistent_zero_padding_no_attr(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %cond: i1) -> (tensor<4x4xf32, #blocked>) {
+  // CHECK-LABEL: llvm.func spir_kernelcc @load_stamped_zero_padding
+  tt.func public @load_stamped_zero_padding(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %cond: i1) -> (tensor<4x4xf32, #blocked>) {
     %c1_i64 = arith.constant 1 : i64
     %c4_i64 = arith.constant 4 : i64
     %c0_i32 = arith.constant 0 : i32
@@ -935,7 +904,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK: llvm.cond_br %{{.*}}, ^{{bb[0-9]+}}, ^{{bb[0-9]+}}(%[[FILL_I]] : i32)
     // CHECK-NOT: 0x7FC00000
     // CHECK: llvm.return
-    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
+    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
     tt.return %0 : tensor<4x4xf32, #blocked>
   }
 }

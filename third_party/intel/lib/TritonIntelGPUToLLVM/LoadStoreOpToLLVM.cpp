@@ -2838,13 +2838,17 @@ struct DescriptorLoadOpConversion
       return op.emitError("'ttig.desc_padding' disagrees with the padding of "
                           "the operations defining this descriptor");
 
+    if (!paddingAttr && tracedPadding)
+      return op.emitError(
+          "'ttig.desc_padding' is missing but the operations defining this "
+          "descriptor agree on a padding mode: the attribute is stamped by "
+          "the 'tritonintelgpu-materialize-block-pointer' pass whenever they "
+          "do, so add it to this operation (or run that pass) instead of "
+          "relying on the lowering to re-derive it");
+
     PaddingOption padding;
     if (paddingAttr) {
       padding = paddingAttr.getValue();
-    } else if (tracedPadding) {
-      // Not an error: MaterializeBlockPointer never runs when compiling from
-      // TTGIR (e.g. `triton.compile("k.ttgir")`), so nothing stamped it.
-      padding = *tracedPadding;
     } else {
       // Empty trace: some path reaches an untraceable value (e.g. an opaque
       // function argument in hand-written TTGIR). The trace is all-or-nothing,

@@ -390,10 +390,10 @@ module {
 // COM: the 7-result call site survives verbatim and is asserted below, mirroring the
 // COM: @callee/@caller pair earlier in this file.
 // COM:
-// COM: It is also the only case where the padding flag stays a genuine runtime value:
-// COM: it arrives as a call result, so nothing can fold the `arith.select` that
-// COM: chooses between the NaN and zero fills. That makes this the reference for the
-// COM: canonical select direction -- flag true selects NaN.
+// COM: It is also the only case where the padding flag itself survives as an i1: it
+// COM: arrives as a call result, so nothing can fold the `arith.select` onto another
+// COM: condition the way the divergent cases below do. That makes this the reference
+// COM: for the canonical select direction -- flag true selects NaN.
 module {
   tt.func private @make(%arg0: !tt.ptr<f32>) -> !tt.tensordesc<1x128xf32> attributes {noinline = true} {
     %c1_i64 = arith.constant 1 : i64
