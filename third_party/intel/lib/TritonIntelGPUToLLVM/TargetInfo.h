@@ -62,6 +62,9 @@ public:
                   triton::ReduceOp op,
                   unsigned reduceLaneIdMask) const override;
 
+  bool warpScan(RewriterBase &rewriter, Location loc, SmallVector<Value> &acc,
+                triton::ScanOp op, bool inclusive) const override;
+
   unsigned getReductionTreeArity(Operation *combinerOp) const override;
 
   std::string getMulhiFuncName(Type resultElementTy) const override;
@@ -91,6 +94,11 @@ protected:
   virtual Value genWarpReduce(RewriterBase &rewriter, Location loc, Value acc,
                               Operation *reduceOp, unsigned numLanesToReduce,
                               unsigned warpSize) const = 0;
+  virtual bool isSupportedWarpScanOp(Operation *op, bool inclusive,
+                                     unsigned warpSize) const = 0;
+  virtual Value genWarpScan(RewriterBase &rewriter, Location loc, Value acc,
+                            Operation *scanOp, bool inclusive,
+                            unsigned warpSize) const = 0;
 
 private:
   LLVM::GlobalOp getGlobalString(Location loc, RewriterBase &rewriter,

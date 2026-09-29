@@ -13,6 +13,8 @@
 #include "Utils/LLVMIntr.h"
 #include "Utils/Mangling.h"
 #include "intel/include/Dialect/TritonGEN/IR/TritonGENMemorySpace.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
+#include "llvm/ADT/STLExtras.h"
 
 #include <limits>
 #include <numeric>
@@ -31,6 +33,25 @@ static int __builtin_ctz(unsigned x) {
 using namespace mlir;
 
 namespace mlir::triton::intel {
+
+static Operation *getSingleCombiner(Region &combineOp) {
+  if (!llvm::hasSingleElement(combineOp))
+    return nullptr;
+  Block &block = combineOp.front();
+  Operation *yield = block.getTerminator();
+  Operation *combinerOp = yield->getOperand(0).getDefiningOp();
+  if (!combinerOp || combinerOp->getNumOperands() != 2 ||
+      combinerOp->getNumResults() != 1)
+    return nullptr;
+  Value arg0 = block.getArgument(0), arg1 = block.getArgument(1);
+  Value lhs = combinerOp->getOperand(0), rhs = combinerOp->getOperand(1);
+  bool reversedMapping = (lhs == arg1 && rhs == arg0) &&
+                         combinerOp->hasTrait<OpTrait::IsCommutative>();
+  if (!(lhs == arg0 && rhs == arg1) && !reversedMapping)
+    return nullptr;
+
+  return combinerOp;
+}
 
 bool TargetInfo::supportMaximumMinimum() const { return false; }
 Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
@@ -231,16 +252,8 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
   if (op.getNumOperands() != 1 || op.getNumResults() != 1)
     return false;
   Region &combineOp = op.getCombineOp();
-  if (combineOp.getBlocks().size() > 1)
-    return false;
-  Block &block = *combineOp.begin();
-  Operation *yield = block.getTerminator();
-  Operation *reduceOp = yield->getOperand(0).getDefiningOp();
-  if (!reduceOp || reduceOp->getNumOperands() != 2 ||
-      reduceOp->getNumResults() != 1)
-    return false;
-  if (reduceOp->getOperand(0) != block.getArgument(0) ||
-      reduceOp->getOperand(1) != block.getArgument(1))
+  Operation *reduceOp = getSingleCombiner(combineOp);
+  if (!reduceOp)
     return false;
 
   auto mod = op->getParentOfType<ModuleOp>();
@@ -253,6 +266,27 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
     acc[i] = genWarpReduce(rewriter, loc, acc[i], reduceOp, numLaneToReduce,
                            warpSize);
   }
+
+  return true;
+}
+
+bool TargetInfo::warpScan(RewriterBase &rewriter, Location loc,
+                          SmallVector<Value> &acc, triton::ScanOp op,
+                          bool inclusive) const {
+  if (op.getNumOperands() != 1 || op.getNumResults() != 1)
+    return false;
+
+  Operation *scanOp = getSingleCombiner(op.getCombineOp());
+  if (!scanOp)
+    return false;
+
+  auto mod = op->getParentOfType<ModuleOp>();
+  unsigned warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+  if (!isSupportedWarpScanOp(scanOp, inclusive, warpSize))
+    return false;
+
+  for (unsigned i = 0; i < acc.size(); ++i)
+    acc[i] = genWarpScan(rewriter, loc, acc[i], scanOp, inclusive, warpSize);
 
   return true;
 }

@@ -153,3 +153,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return %g : tensor<64xf32, #ttg.slice<{dim = 0, parent = #blocked}>>
   }
 }
+
+// -----
+
+// COM: Tests 1D integer add scan with a full 16-lane subgroup.
+// COM: The warp-level scan should lower to a SPIR-V subgroup inclusive scan
+// COM: instead of a shuffle-up loop.
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32} {
+  // CHECK-LABEL: scan_tpw16_addi
+  tt.func @scan_tpw16_addi(%f : tensor<16xi32, #blocked>) -> tensor<16xi32, #blocked> {
+    // CHECK: llvm.call spir_funccc @_Z27__spirv_GroupNonUniformIAddiij(%{{.*}}) {{.*}} : (i32, i32, i32) -> i32
+    %g = "tt.scan" (%f) ({
+    ^bb0(%arg0: i32, %arg1: i32):
+      %add = arith.addi %arg0, %arg1 : i32
+      tt.scan.return %add : i32
+    }) {axis = 0 : i32, reverse = false} : (tensor<16xi32, #blocked>) -> tensor<16xi32, #blocked>
+    tt.return %g : tensor<16xi32, #blocked>
+  }
+}

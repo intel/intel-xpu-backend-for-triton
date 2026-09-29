@@ -19,19 +19,27 @@ namespace {
 
 template <typename GroupOp>
 Value createSPIRVGroupOp(RewriterBase &rewriter, Location loc, Type resultTy,
-                         Value acc, unsigned numLanesToReduce,
-                         unsigned warpSize) {
+                         Value acc, spirv::GroupOperation spvGroupOp,
+                         Value clusterSize = {}) {
+  return GroupOp::create(rewriter, loc, resultTy, spirv::Scope::Subgroup,
+                         spvGroupOp, acc, clusterSize);
+}
+
+template <typename GroupOp>
+Value createSPIRVGroupReduce(RewriterBase &rewriter, Location loc,
+                             Type resultTy, Value acc,
+                             unsigned numLanesToReduce, unsigned warpSize) {
   auto spvGroupOp = spirv::GroupOperation::Reduce;
   Value clusterSize;
   if (numLanesToReduce != warpSize) {
     spvGroupOp = spirv::GroupOperation::ClusteredReduce;
-    clusterSize =
-        arith::ConstantOp::create(rewriter, loc, rewriter.getI32Type(),
-                                  rewriter.getI32IntegerAttr(numLanesToReduce));
+    clusterSize = arith::ConstantOp::create(
+        rewriter, loc, rewriter.getI32Type(),
+        rewriter.getI32IntegerAttr(static_cast<int32_t>(numLanesToReduce)));
   }
 
-  return GroupOp::create(rewriter, loc, resultTy, spirv::Scope::Subgroup,
-                         spvGroupOp, acc, clusterSize);
+  return createSPIRVGroupOp<GroupOp>(rewriter, loc, resultTy, acc, spvGroupOp,
+                                     clusterSize);
 }
 
 } // namespace
@@ -39,6 +47,14 @@ Value createSPIRVGroupOp(RewriterBase &rewriter, Location loc, Type resultTy,
 bool SPIRVTargetInfo::isSupportedWarpReduceOp(Operation *op,
                                               unsigned numLanesToReduce,
                                               unsigned warpSize) const {
+  return isa<arith::AddFOp, arith::AddIOp, arith::MulFOp, arith::MulIOp,
+             arith::MaxSIOp, arith::MaxUIOp, arith::MinSIOp, arith::MinUIOp,
+             arith::MaxNumFOp, arith::MinNumFOp, arith::AndIOp, arith::OrIOp,
+             arith::XOrIOp>(op);
+}
+
+bool SPIRVTargetInfo::isSupportedWarpScanOp(Operation *op, bool /*inclusive*/,
+                                            unsigned /*warpSize*/) const {
   return isa<arith::AddFOp, arith::AddIOp, arith::MulFOp, arith::MulIOp,
              arith::MaxSIOp, arith::MaxUIOp, arith::MinSIOp, arith::MinUIOp,
              arith::MaxNumFOp, arith::MinNumFOp, arith::AndIOp, arith::OrIOp,
@@ -55,17 +71,45 @@ Value SPIRVTargetInfo::genWarpReduce(RewriterBase &rewriter, Location loc,
     return TypeSwitch<mlir::Operation *, Value>(reduceOp)
         .Case<arith::AddIOp, arith::MulIOp, arith::MaxSIOp, arith::MaxUIOp,
               arith::MinSIOp, arith::MinUIOp, arith::AndIOp, arith::OrIOp,
-              arith::XOrIOp>([&](auto groupOp) {
-          return createSPIRVGroupOp<SPIRVLogicalGroupOpTy<decltype(groupOp)>>(
+              arith::XOrIOp>([&]([[maybe_unused]] auto groupOp) {
+          using GroupOpTy = SPIRVLogicalGroupOpTy<decltype(groupOp)>;
+          return createSPIRVGroupReduce<GroupOpTy>(
               rewriter, loc, resultType, acc, numLanesToReduce, warpSize);
         });
   return TypeSwitch<mlir::Operation *, Value>(reduceOp)
       .Case<arith::AddFOp, arith::AddIOp, arith::MulFOp, arith::MulIOp,
             arith::MaxSIOp, arith::MaxUIOp, arith::MinSIOp, arith::MinUIOp,
             arith::MaxNumFOp, arith::MinNumFOp, arith::AndIOp, arith::OrIOp,
-            arith::XOrIOp>([&](auto groupOp) {
-        return createSPIRVGroupOp<SPIRVGroupOpTy<decltype(groupOp)>>(
-            rewriter, loc, resultType, acc, numLanesToReduce, warpSize);
+            arith::XOrIOp>([&]([[maybe_unused]] auto groupOp) {
+        using GroupOpTy = SPIRVGroupOpTy<decltype(groupOp)>;
+        return createSPIRVGroupReduce<GroupOpTy>(rewriter, loc, resultType, acc,
+                                                 numLanesToReduce, warpSize);
+      });
+}
+
+Value SPIRVTargetInfo::genWarpScan(RewriterBase &rewriter, Location loc,
+                                   Value acc, Operation *scanOp, bool inclusive,
+                                   unsigned /*warpSize*/) const {
+  Type resultType = scanOp->getResult(0).getType();
+  auto spvGroupOp = inclusive ? spirv::GroupOperation::InclusiveScan
+                              : spirv::GroupOperation::ExclusiveScan;
+  if (resultType.isInteger(1))
+    return TypeSwitch<mlir::Operation *, Value>(scanOp)
+        .Case<arith::AddIOp, arith::MulIOp, arith::MaxSIOp, arith::MaxUIOp,
+              arith::MinSIOp, arith::MinUIOp, arith::AndIOp, arith::OrIOp,
+              arith::XOrIOp>([&]([[maybe_unused]] auto groupOp) {
+          using GroupOpTy = SPIRVLogicalGroupOpTy<decltype(groupOp)>;
+          return createSPIRVGroupOp<GroupOpTy>(rewriter, loc, resultType, acc,
+                                               spvGroupOp);
+        });
+  return TypeSwitch<mlir::Operation *, Value>(scanOp)
+      .Case<arith::AddFOp, arith::AddIOp, arith::MulFOp, arith::MulIOp,
+            arith::MaxSIOp, arith::MaxUIOp, arith::MinSIOp, arith::MinUIOp,
+            arith::MaxNumFOp, arith::MinNumFOp, arith::AndIOp, arith::OrIOp,
+            arith::XOrIOp>([&]([[maybe_unused]] auto groupOp) {
+        using GroupOpTy = SPIRVGroupOpTy<decltype(groupOp)>;
+        return createSPIRVGroupOp<GroupOpTy>(rewriter, loc, resultType, acc,
+                                             spvGroupOp);
       });
 }
 

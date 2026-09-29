@@ -52,7 +52,7 @@ scanThreadContiguousElements(SmallVector<SmallVector<Value>> &srcValues,
 // contiguous group of elements.
 static void warpScan(SmallVector<SmallVector<Value>> &srcValues,
                      ConversionPatternRewriter &rewriter,
-                     const TargetInfoBase &targetInfo,
+                     const TargetInfoBase &targetInfo, triton::ScanOp op,
                      ScanLoweringHelper &helper, Value laneIdAxis) {
   Location loc = helper.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -67,6 +67,10 @@ static void warpScan(SmallVector<SmallVector<Value>> &srcValues,
       continue;
     // Reduce within warps.
     SmallVector<Value> acc = srcValues[srcIndex];
+    if (targetInfo.warpScan(rewriter, loc, acc, op, /*inclusive=*/true)) {
+      srcValues[srcIndex] = std::move(acc);
+      continue;
+    }
     for (unsigned i = 1; i <= scanDim / 2; i <<= 1) {
       SmallVector<Value> shfl(acc.size());
       for (unsigned j = 0; j < acc.size(); ++j) {
@@ -496,7 +500,7 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   scanThreadContiguousElements(srcValues, rewriter, helper);
   // Apply warp level scan to the last element of each chunk of contiguous
   // elements.
-  warpScan(srcValues, rewriter, targetInfo, helper, laneIdAxis);
+  warpScan(srcValues, rewriter, targetInfo, op, helper, laneIdAxis);
 
   if (axisNumWarps > 1) {
     // Slow path for the case where there are multiple warps with unique data on

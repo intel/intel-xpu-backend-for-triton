@@ -77,6 +77,12 @@ public:
                           SmallVector<Value> &acc, triton::ReduceOp op,
                           unsigned reduceLaneIdMask) const = 0;
 
+  virtual bool warpScan(RewriterBase &rewriter, Location loc,
+                        SmallVector<Value> &acc, triton::ScanOp op,
+                        bool inclusive) const {
+    return false;
+  }
+
   virtual std::string getMulhiFuncName(Type resultElementTy) const = 0;
   // Emits LLVM code with |rewriter| to print a message following the given
   // format from the device. |formatStrStart| is the pointer to the start of
