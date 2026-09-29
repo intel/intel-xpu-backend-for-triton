@@ -1960,9 +1960,10 @@ struct DivFOpPattern : public OpRewritePattern<arith::DivFOp> {
   }
 };
 
-struct PreciseDivFOpPattern : public OpRewritePattern<tt::PreciseDivFOp> {
-  using OpRewritePattern::OpRewritePattern;
-  LogicalResult matchAndRewrite(tt::PreciseDivFOp op,
+template <typename OpTy>
+struct TritonDivFOpPattern : public OpRewritePattern<OpTy> {
+  using OpRewritePattern<OpTy>::OpRewritePattern;
+  LogicalResult matchAndRewrite(OpTy op,
                                 PatternRewriter &rewriter) const override {
     if (!isFloatLike(op.getType()))
       return failure();
@@ -3241,22 +3242,6 @@ struct ElementwiseInlineAsmPattern
         !llvm::all_of(op.getResultTypes(), isFloatLike))
       return failure();
 
-    auto srcTy = dyn_cast<RankedTensorType>(op.getOperand(0).getType());
-    auto dstTy = dyn_cast<RankedTensorType>(op->getResult(0).getType());
-    if (op.getAsmString() == "cvt.rn.bf16x2.ue8m0x2 $0, $1;" &&
-        op.getConstraints() == "=r,h" && op.getPackedElement() == 2 &&
-        op.getNumOperands() == 1 && op.getNumResults() == 1 && srcTy && dstTy &&
-        srcTy.getElementType().isInteger(8) &&
-        dstTy.getElementType().isBF16()) {
-      // Preserve the portable E8M0 decoder's payload when using native
-      // conversion.
-      auto loc = op.getLoc();
-      Value payload = scaleI8ToComputePayload(rewriter, loc, op.getOperand(0),
-                                              rewriter.getBF16Type());
-      rewriter.replaceOp(op, unembedToFloat(rewriter, loc, payload, dstTy));
-      return success();
-    }
-
     uint64_t hash = stableStringHash(op.getAsmString());
     SmallVector<Value> results;
     for (auto [resultIdx, resultTy] : llvm::enumerate(op.getResultTypes())) {
@@ -3395,19 +3380,20 @@ public:
     bool sharedClusterState = ttg::lookupNumCTAs(getOperation()) > 1;
     TmemScratchManager scratch(sharedClusterState);
     RewritePatternSet patterns(&getContext());
-    patterns.add<BinaryFloatToIntPattern<arith::AddFOp, arith::AddIOp>,
-                 BinaryFloatToIntPattern<arith::SubFOp, arith::SubIOp>,
-                 BinaryFloatToIntPattern<arith::MulFOp, arith::MulIOp>,
-                 BinaryFloatToIntPattern<arith::MinimumFOp, arith::MinSIOp>,
-                 BinaryFloatToIntPattern<arith::MaximumFOp, arith::MaxSIOp>,
-                 BinaryFloatToIntPattern<arith::MinNumFOp, arith::MinSIOp>,
-                 BinaryFloatToIntPattern<arith::MaxNumFOp, arith::MaxSIOp>,
-                 ClampFOpPattern, NegFOpPattern, DivFOpPattern,
-                 PreciseDivFOpPattern, RemFOpPattern, FmaPattern, ExpOpPattern,
-                 Exp2OpPattern, CosOpPattern, SinOpPattern, ExtFOpPattern,
-                 TruncFOpPattern, FpToFpPattern, Fp4ToFpPattern,
-                 PackedArithPattern, DotPattern, DotScaledPattern>(
-        &getContext());
+    patterns
+        .add<BinaryFloatToIntPattern<arith::AddFOp, arith::AddIOp>,
+             BinaryFloatToIntPattern<arith::SubFOp, arith::SubIOp>,
+             BinaryFloatToIntPattern<arith::MulFOp, arith::MulIOp>,
+             BinaryFloatToIntPattern<arith::MinimumFOp, arith::MinSIOp>,
+             BinaryFloatToIntPattern<arith::MaximumFOp, arith::MaxSIOp>,
+             BinaryFloatToIntPattern<arith::MinNumFOp, arith::MinSIOp>,
+             BinaryFloatToIntPattern<arith::MaxNumFOp, arith::MaxSIOp>,
+             ClampFOpPattern, NegFOpPattern, DivFOpPattern,
+             TritonDivFOpPattern<tt::PreciseDivFOp>,
+             TritonDivFOpPattern<tt::ApproxDivFOp>, RemFOpPattern, FmaPattern,
+             ExpOpPattern, Exp2OpPattern, CosOpPattern, SinOpPattern,
+             ExtFOpPattern, TruncFOpPattern, FpToFpPattern, Fp4ToFpPattern,
+             PackedArithPattern, DotPattern, DotScaledPattern>(&getContext());
     patterns.add<UnaryPattern<math::LogOp>>(&getContext(), UnaryOpId::Log);
     patterns.add<UnaryPattern<math::Log2Op>>(&getContext(), UnaryOpId::Log2);
     patterns.add<UnaryPattern<math::SqrtOp>>(&getContext(), UnaryOpId::Sqrt);

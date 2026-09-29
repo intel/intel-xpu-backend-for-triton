@@ -7,6 +7,7 @@
 
 #include "intel/include/Analysis/Liveness.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 #include "llvm/ADT/StringRef.h"
 
@@ -53,6 +54,65 @@ public:
   /// Returns the peak per-thread register pressure in bytes within the given
   /// loop, considering all blocks in the loop body region.
   unsigned peakPressure(LoopLikeOpInterface loop) const;
+
+  /// Returns the peak per-thread register pressure in bytes over *every* block
+  /// nested in \p func: registers are allocated per kernel, so a per-kernel
+  /// allocation must cover the maximum over all blocks, not any one block's.
+  ///
+  /// Shares its block walk with `print()` so the two cannot drift apart.
+  ///
+  /// Model limit inherited from `pressureAt`: that primitive consults only the
+  /// containing block's liveness info, so a value live *through* a nested
+  /// region but unused inside it is absent from that region's ops. The figure
+  /// therefore under-counts inside such a region even though the value does
+  /// occupy a register there. Callers must state a transform's guarantees
+  /// relative to this metric rather than to physical allocator demand.
+  unsigned peakPressure(FunctionOpInterface func) const;
+
+  /// Returns the per-thread register pressure in bytes immediately *above*
+  /// \p op: the values live at \p op minus \p op's own results. This is the
+  /// pressure an operation inserted at that program point would face -- name
+  /// the point by the operation below it.
+  ///
+  /// Not `pressureAt(op)`: that counts a value at its defining op, so it
+  /// charges results that do not exist yet above \p op. Subtracting \p op's
+  /// results is exact, not merely conservative -- nothing else live at \p op is
+  /// absent immediately above it.
+  ///
+  /// Not `liveInPressure(op->getBlock())` either: block arguments are
+  /// definitions of their block rather than live-ins, so a live block-argument
+  /// value contributes nothing there.
+  unsigned pressureBefore(Operation *op) const;
+
+  /// The pressure at one operation, together with whether one nominated value
+  /// is live there.
+  struct PressureAtPoint {
+    unsigned pressure = 0;
+    /// True if the nominated value is live at the operation in the sense
+    /// `pressureAt` counts it: a value consumed by, or defined by, the
+    /// operation counts as live.
+    bool valueLive = false;
+  };
+
+  /// Returns the pressure at \p op together with whether \p value is live
+  /// there, from **one** `currentlyLiveValues(op)` build.
+  ///
+  /// That set is uncached and expensive to build (see `pressureAt`), and a
+  /// caller walking a run of operations while adjusting the pressure by a
+  /// nominated value needs both answers at every step; asking separately
+  /// doubles the dominant cost. A null \p value reports `false`.
+  PressureAtPoint pressureAt(Operation *op, Value value) const;
+
+  /// Returns the bytes \p value contributes to the figures this analysis
+  /// reports: its per-thread size after filtering, or 0 when it is
+  /// rematerializable (and `excludeRematerializable` is set) or has no uses.
+  ///
+  /// The one place the filtering rule lives, so callers adjusting a reported
+  /// figure need not re-derive it from the type. Unused values must be
+  /// filtered: `currentlyLiveValues` charges a userless block argument at its
+  /// block's first operation, which a reordering transform would see as a
+  /// phantom change.
+  unsigned pressureContribution(Value value) const;
 
   /// Returns the per-thread register pressure in bytes from the values live-in
   /// to the given block (i.e. defined outside and used inside). Honors
@@ -138,13 +198,21 @@ public:
   /// For other types: returns 0.
   static unsigned getPerThreadSizeInBytes(Type type);
 
-  /// Print the peak pressure per block to the given stream.
+  /// Print the peak pressure over all nested blocks, then per block, to the
+  /// given stream. The first line is the figure `peakPressure` reports for the
+  /// analysis root; it is only a whole-*function* peak when the root is one
+  /// function (which is how the `-test-register-pressure` pass builds it).
   void print(raw_ostream &os) const;
 
 private:
   /// Returns true if the defining op of \p value is rematerializable (cheap to
   /// regenerate on demand, such as constants or simple range ops).
   bool isRematerializable(Value value) const;
+
+  /// Returns the peak of `peakPressure(Block *)` over every block nested in
+  /// \p root, in the walk order `print()` reports them in. Shared by
+  /// `peakPressure(FunctionOpInterface)` and `print()`.
+  unsigned peakPressureOverNestedBlocks(Operation *root) const;
 
   LivenessAnalysis liveness;
   RegisterPressureOptions options;

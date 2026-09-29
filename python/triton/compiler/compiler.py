@@ -408,7 +408,7 @@ class AsmDict(dict):
 
         if key == "sass":
             value = get_sass(self["cubin"])
-        if key == "spvdis":
+        elif key == "spvdis":
             value = get_spvdis(self["spv"])
         else:
             raise KeyError("Unknown key: '%s'" % key)
@@ -513,11 +513,7 @@ class CompiledKernel:
             self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
                 self.name, self.kernel, self.metadata.shared, device)
         self._module_pid = os.getpid()
-
-        if hasattr(self.metadata, "threads_per_warp"):
-            warp_size = self.metadata.threads_per_warp
-        else:
-            warp_size = driver.active.get_current_target().warp_size
+        warp_size = self.metadata.warp_size
         if self.metadata.num_warps * warp_size > self.n_max_threads:
             raise_(OutOfResources(self.metadata.num_warps * warp_size, self.n_max_threads, "threads"))
         if knobs.runtime.kernel_load_end_hook is not None:

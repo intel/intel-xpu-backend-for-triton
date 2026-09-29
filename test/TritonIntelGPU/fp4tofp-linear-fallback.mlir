@@ -17,7 +17,7 @@ module attributes {triton_intel_gpu.support_bfloat16_conversion, triton_intel_gp
     %0 = tt.get_program_id x : i32
     %1 = arith.muli %0, %c8_i32 : i32
     %2 = tt.make_tensor_descriptor %src_ptr, [%c1024_i32], [%c1_i64] : <i8>, !tt.tensordesc<8xi8, #blocked>
-    %3 = tt.descriptor_load %2[%1] : !tt.tensordesc<8xi8, #blocked> -> tensor<8xi8, #blocked>
+    %3 = tt.descriptor_load %2[%1] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<8xi8, #blocked> -> tensor<8xi8, #blocked>
     %4 = ttg.fp4_to_fp %3 {axis = 0 : i32} : tensor<8xi8, #blocked> -> tensor<16xbf16, #blocked1>
     %5 = arith.muli %0, %c16_i32 : i32
     %6 = tt.make_tensor_descriptor %dst_ptr, [%c1024_i32], [%c1_i64] : <bf16>, !tt.tensordesc<16xbf16, #blocked1>
