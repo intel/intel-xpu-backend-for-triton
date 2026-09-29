@@ -19,7 +19,7 @@
 // are trusted. The byte products are overflow-safe, so a stride whose product
 // wraps int64 back into range is still rejected. The batch dims of a
 // rank-reducing descriptor are not surface fields and are not range-checked
-// (Case 20). Each negative case also checks that the pass emitted no IR before
+// (Case 16). Each negative case also checks that the pass emitted no IR before
 // bailing (no stray ttig.extract_desc).
 //
 // This pass deliberately enforces neither the 64 B minimum nor the 16 B
@@ -28,10 +28,10 @@
 // (2 B pitch) is an existing test that must keep converting.
 //
 // From Case 3 on, at most one width/height/pitch operand is a compile-time
-// constant (the field under test; none in Case 20) and the others are runtime
+// constant (the field under test; none in Case 16) and the others are runtime
 // arguments. So are the remaining operands, except the innermost stride
 // (always %c1_i64) and the batch extent of the rank-reducing cases (plus the
-// batch stride in Case 20). A check on the wrong operand therefore fails the
+// batch stride in Case 16). A check on the wrong operand therefore fails the
 // test.
 
 // Case 1: descriptor pitch stride = 2^30 f16 elements → byte pitch = 2^31,
@@ -131,7 +131,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
-// Case 6 (control): f32 pitch stride 64 = 256 B is in range; baseline for the f32 pitch cases (and the value Case 16 wraps to).
+// Case 6 (control): f32 pitch stride 64 = 256 B is in range; baseline for the f32 pitch cases (and the value Case 12 wraps to).
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 8], B = [8, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
@@ -149,7 +149,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
-// Case 7: f32 pitch stride 2^22 = 2^24 B, the largest legal pitch; with Case 15 this pins the 4-byte element scale.
+// Case 7: f32 pitch stride 2^22 = 2^24 B, the largest legal pitch; with Case 11 this pins the 4-byte element scale.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 8], B = [8, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
@@ -187,67 +187,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
-// Case 9: height = 0 rows is below the lower bound; the value - 1 field would wrap it to 2^24 - 1.
-#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
-#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
-  // CHECK-LABEL: tt.func @descriptor_load_height_zero_f16
-  tt.func @descriptor_load_height_zero_f16(%arg0: !tt.ptr<f16>, %argW: i32, %argP: i64) -> tensor<64x32xf16, #dot0> {
-    %c1_i64 = arith.constant 1 : i64
-    %c0_i32 = arith.constant 0 : i32
-    %height = arith.constant 0 : i32
-    %desc = tt.make_tensor_descriptor %arg0, [%height, %argW], [%argP, %c1_i64] : <f16>, <64x32xf16>
-    // CHECK-NOT: ttig.2d_block_load
-    // CHECK-NOT: ttig.extract_desc
-    // CHECK: tt.descriptor_load
-    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
-    tt.return %0 : tensor<64x32xf16, #dot0>
-  }
-}
-
-// -----
-
-// Case 10: height = -1 is out of range; a negative shape must be rejected, not truncated into the 24-bit field.
-#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
-#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
-  // CHECK-LABEL: tt.func @descriptor_load_height_neg_f16
-  tt.func @descriptor_load_height_neg_f16(%arg0: !tt.ptr<f16>, %argW: i32, %argP: i64) -> tensor<64x32xf16, #dot0> {
-    %c1_i64 = arith.constant 1 : i64
-    %c0_i32 = arith.constant 0 : i32
-    %height = arith.constant -1 : i32
-    %desc = tt.make_tensor_descriptor %arg0, [%height, %argW], [%argP, %c1_i64] : <f16>, <64x32xf16>
-    // CHECK-NOT: ttig.2d_block_load
-    // CHECK-NOT: ttig.extract_desc
-    // CHECK: tt.descriptor_load
-    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
-    tt.return %0 : tensor<64x32xf16, #dot0>
-  }
-}
-
-// -----
-
-// Case 11: width = 0 B is below the lower bound; the value - 1 field would wrap it to 2^24 - 1.
-#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
-#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
-  // CHECK-LABEL: tt.func @descriptor_load_width_zero_f16
-  tt.func @descriptor_load_width_zero_f16(%arg0: !tt.ptr<f16>, %argH: i32, %argP: i64) -> tensor<64x32xf16, #dot0> {
-    %c1_i64 = arith.constant 1 : i64
-    %c0_i32 = arith.constant 0 : i32
-    %width = arith.constant 0 : i32
-    %desc = tt.make_tensor_descriptor %arg0, [%argH, %width], [%argP, %c1_i64] : <f16>, <64x32xf16>
-    // CHECK-NOT: ttig.2d_block_load
-    // CHECK-NOT: ttig.extract_desc
-    // CHECK: tt.descriptor_load
-    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
-    tt.return %0 : tensor<64x32xf16, #dot0>
-  }
-}
-
-// -----
-
-// Case 12: width = (2^23 + 1) f16 elements = 2^24 + 2 B, just past the byte bound (Case 5 is the last legal value).
+// Case 9: width = (2^23 + 1) f16 elements = 2^24 + 2 B, just past the byte bound (Case 5 is the last legal value).
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
@@ -267,7 +207,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
-// Case 13: pitch = 0 B is below the lower bound; the value - 1 field would wrap it to 2^24 - 1.
+// Case 10: pitch = 0 B is below the lower bound; the value - 1 field would wrap it to 2^24 - 1.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
@@ -287,27 +227,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
-// Case 14: pitch stride -64 f16 = -128 B is out of range; a negative pitch must be rejected, not truncated.
-#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
-#dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
-  // CHECK-LABEL: tt.func @descriptor_load_pitch_neg_f16
-  tt.func @descriptor_load_pitch_neg_f16(%arg0: !tt.ptr<f16>, %argH: i32, %argW: i32) -> tensor<64x32xf16, #dot0> {
-    %c1_i64 = arith.constant 1 : i64
-    %c0_i32 = arith.constant 0 : i32
-    %stride = arith.constant -64 : i64
-    %desc = tt.make_tensor_descriptor %arg0, [%argH, %argW], [%stride, %c1_i64] : <f16>, <64x32xf16>
-    // CHECK-NOT: ttig.2d_block_load
-    // CHECK-NOT: ttig.extract_desc
-    // CHECK: tt.descriptor_load
-    %0 = tt.descriptor_load %desc[%c0_i32, %c0_i32] {ttig.block_io = "row_major"} : !tt.tensordesc<64x32xf16> -> tensor<64x32xf16, #dot0>
-    tt.return %0 : tensor<64x32xf16, #dot0>
-  }
-}
-
-// -----
-
-// Case 15: f32 pitch stride 2^22 + 1 = 2^24 + 4 B, just past the byte bound; with Case 7 this pins the 4-byte element scale.
+// Case 11: f32 pitch stride 2^22 + 1 = 2^24 + 4 B, just past the byte bound; with Case 7 this pins the 4-byte element scale.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 8], B = [8, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
@@ -327,7 +247,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
-// Case 16: f32 pitch stride 2^62 + 64; stride * 4 wraps int64 to exactly 256 B (in range, cf. Case 6), so only an overflow-safe product rejects it.
+// Case 12: f32 pitch stride 2^62 + 64; stride * 4 wraps int64 to exactly 256 B (in range, cf. Case 6), so only an overflow-safe product rejects it.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 8], B = [8, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
@@ -347,16 +267,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
-// Case 17: rank-reducing load (1x64x32 desc -> 64x32 result); the height is desc dim 1 (= 0), not dim 0 (the valid batch of 1).
+// Case 13: rank-reducing load (1x64x32 desc -> 64x32 result); the height is desc dim 1 (= 2^24 + 1), not dim 0 (the valid batch of 1).
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
-  // CHECK-LABEL: tt.func @descriptor_load_rank_reducing_height_zero_f16
-  tt.func @descriptor_load_rank_reducing_height_zero_f16(%arg0: !tt.ptr<f16>, %argW: i32, %argB: i64, %argP: i64, %b: i32) -> tensor<64x32xf16, #dot0> {
+  // CHECK-LABEL: tt.func @descriptor_load_rank_reducing_height_over_f16
+  tt.func @descriptor_load_rank_reducing_height_over_f16(%arg0: !tt.ptr<f16>, %argW: i32, %argB: i64, %argP: i64, %b: i32) -> tensor<64x32xf16, #dot0> {
+    %c16777217_i32 = arith.constant 16777217 : i32
     %c1_i32 = arith.constant 1 : i32
     %c1_i64 = arith.constant 1 : i64
     %c0_i32 = arith.constant 0 : i32
-    %desc = tt.make_tensor_descriptor %arg0, [%c1_i32, %c0_i32, %argW], [%argB, %argP, %c1_i64] : <f16>, <1x64x32xf16>
+    %desc = tt.make_tensor_descriptor %arg0, [%c1_i32, %c16777217_i32, %argW], [%argB, %argP, %c1_i64] : <f16>, <1x64x32xf16>
     // CHECK-NOT: ttig.2d_block_load
     // CHECK-NOT: ttig.extract_desc
     // CHECK: tt.descriptor_load
@@ -367,7 +288,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
-// Case 18: scf.if yields one of two descriptors and only the then-branch one has height 0; every candidate must be checked.
+// Case 14: scf.if yields one of two descriptors and only the then-branch one has height 0; every candidate must be checked.
 // Candidates are collected LIFO (findAllMakeTensorDescOps pops the else-yield first), so this case catches a check that
 // inspects only the first candidate.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
@@ -394,7 +315,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
-// Case 19: mirror of Case 18 with the height-0 descriptor in the else-branch, so the test does not depend on candidate order.
+// Case 15: mirror of Case 14 with the height-0 descriptor in the else-branch, so the test does not depend on candidate order.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
@@ -419,13 +340,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
-// Case 20: rank-reducing load (1x64x32 desc -> 64x32 result) with batch extent 2^24 + 1 and batch stride 2^40 f16 elements;
+// Case 16: rank-reducing load (1x64x32 desc -> 64x32 result) with batch extent 2^24 + 1 and batch stride 2^40 f16 elements;
 // width, height and pitch are runtime values, so the load must convert. Batch dims are not surface fields and are not
 // range-checked: the batch stride is folded into the base pointer and the batch extent is passed as batch_shapes.
 // This catches field indices that use the result rank instead of descRank throughout: the height check would then read
-// the batch extent and bail. Case 17 cannot catch that uniform variant, because its mutated width index reads the bad
-// height (0) and bails for the wrong reason. It also catches a pitch index that drops the (descRank - 2) offset, which
-// would read the 2^40 batch stride.
+// the batch extent and bail. Case 13 cannot catch that uniform variant, because its mutated width index reads the bad
+// height (2^24 + 1) and bails for the wrong reason. It also catches a pitch index that drops the (descRank - 2) offset,
+// which would read the 2^40 batch stride.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
@@ -444,7 +365,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
-// Case 21: as Case 18, but for pitch: only the then-branch descriptor has pitch stride 0, so the pitch check must also
+// Case 17: as Case 14, but for pitch: only the then-branch descriptor has pitch stride 0, so the pitch check must also
 // inspect every candidate.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
@@ -471,7 +392,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
-// Case 22: mirror of Case 21 with the pitch-0 descriptor in the else-branch.
+// Case 18: mirror of Case 17 with the pitch-0 descriptor in the else-branch.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.support_2d_block_io} {
@@ -497,7 +418,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
-// Case 23: scf.for with the load on the loop-carried descriptor inside the body. The iter_arg traces to both the
+// Case 19: scf.for with the load on the loop-carried descriptor inside the body. The iter_arg traces to both the
 // (valid) init and the yielded descriptor, which has height 0, so the load must bail.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
@@ -522,7 +443,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
-// Case 24: scf.for with the load on the loop result after the loop. The result traces to the yielded descriptor,
+// Case 20: scf.for with the load on the loop result after the loop. The result traces to the yielded descriptor,
 // which has width 0, so the load must bail.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>
@@ -547,7 +468,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 
 // -----
 
-// Case 25: scf.while with the load on the after-region argument. It traces through scf.condition to the
+// Case 21: scf.while with the load on the after-region argument. It traces through scf.condition to the
 // before-region argument, and from there to the (valid) init and the after-region yield, which has pitch stride 0.
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
 #dot0 = #ttg.dot_op<{opIdx = 0, parent = #dpas, kWidth = 1}>

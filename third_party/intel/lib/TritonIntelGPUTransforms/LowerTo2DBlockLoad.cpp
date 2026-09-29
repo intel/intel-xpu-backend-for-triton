@@ -205,6 +205,8 @@ private:
     //    16-byte contract); hand-tagged IR is not re-checked here.
     //  - The HW 64-byte minimum for width/pitch is deliberately not enforced;
     //    it would move narrow descriptors off 2D block I/O.
+    //  - pitch >= width (a TritonGEN verifier rule) is not a range check and
+    //    is not enforced here either.
     constexpr int64_t kMax2DBlockField = int64_t(1) << 24;
     int64_t elemBytesConst = elemSizeInBits / 8;
     auto isOutOfRange = [&](unsigned operandIdx, int64_t scale,
