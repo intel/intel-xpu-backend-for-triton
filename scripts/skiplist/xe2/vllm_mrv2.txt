@@ -25,19 +25,6 @@ tests/v1/worker/test_gpu_model_runner.py::test_update_config
 tests/v1/worker/test_gpu_model_runner.py::test_load_model_weights_inplace
 tests/v1/worker/test_gpu_model_runner.py::test_reload_weights_before_load_model
 
-# compute_prompt_logprobs torch.cat incompatible shapes: https://github.com/intel/intel-xpu-backend-for-triton/issues/7159
-tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[False-0.0-BatchLogprobsComposition.PROMPT]
-tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[False-0.0-BatchLogprobsComposition.SAMPLE_PROMPT]
-tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[False-2.0-BatchLogprobsComposition.NONE]
-tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[False-2.0-BatchLogprobsComposition.SAMPLE]
-tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[False-2.0-BatchLogprobsComposition.PROMPT]
-tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[False-2.0-BatchLogprobsComposition.SAMPLE_PROMPT]
-tests/v1/sample/test_logprobs.py::test_none_logprobs[False]
-tests/v1/sample/test_logprobs.py::test_zero_logprobs[False]
-tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[True-2.0-BatchLogprobsComposition.SAMPLE_PROMPT]
-tests/v1/sample/test_logprobs.py::test_none_logprobs[True]
-tests/v1/sample/test_logprobs.py::test_zero_logprobs[True]
-
 # oneCCL fails to start worker thread: https://github.com/intel/intel-xpu-backend-for-triton/issues/7686
 tests/v1/sample/test_logprobs.py::test_prompt_logprobs_mode
 
