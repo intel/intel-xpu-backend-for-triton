@@ -295,10 +295,13 @@ static SourceLiveness classifySource(ttg::ConvertLayoutOp cvtOp,
       continue;
     if (enclosingLoop && enclosingLoop->isProperAncestor(user)) {
       // An enclosing loop's back edge re-reads the source after the corridor,
-      // so physically the credit must go. The metric compared against is
-      // back-edge blind, though, so the resulting projection can exceed the
-      // peak it is gating (measured: case 23 projects 1376 against a post-hoist
-      // 1248).
+      // so physically the credit must go. This is not a blind spot in what
+      // `RegisterPressureAnalysis` itself reports -- it is back-edge aware
+      // throughout -- it is a deliberate choice not to reason about the
+      // enclosing loop's own iteration structure at all, so the caller prices
+      // as if the departing source were still fully live. That can leave the
+      // projection above the very peak it gates (measured: case 23 projects
+      // 1376 against a post-hoist 1248).
       result.exact = false;
       return result;
     }
@@ -338,17 +341,72 @@ static bool srcDeadAfterMoveAt(const SourceLiveness &srcLiveness, Operation *op,
          srcLiveness.lastUser->isBeforeInBlock(forOp);
 }
 
-/// Collects into \p corridor the operations executed after a hoisted \p cvtOp's
-/// insertion point (just below \p anchor) and before \p cvtOp's current
-/// position -- the operations at which the conversion's result becomes newly
-/// live. Both endpoints are excluded: the conversion lands *after* \p anchor,
-/// and \p cvtOp itself is priced as the new program point instead.
+/// Returns the last operation in \p body, in block order, that uses \p
+/// cvtOp's result -- or null if it has none there. A use inside a nested
+/// region is mapped onto the top-level operation in \p body that contains it,
+/// same as `classifySource` does for the conversion's source.
+static Operation *lastBodyUser(ttg::ConvertLayoutOp cvtOp, Block *body) {
+  Operation *last = nullptr;
+  for (Operation *user : cvtOp.getResult().getUsers()) {
+    Operation *mapped = body->findAncestorOpInBlock(*user);
+    if (!mapped)
+      continue;
+    if (!last || last->isBeforeInBlock(mapped))
+      last = mapped;
+  }
+  return last;
+}
+
+/// Returns \p cvtOp's real last use, in its own block's own program order --
+/// unlike `lastBodyUser`, this does *not* map a nested use up to any enclosing
+/// top-level op. Returns null if \p cvtOp's uses don't all share one
+/// immediate containing block (spread across sibling branches of an
+/// `scf.if`, say, or across different nesting depths): comparing positions
+/// across different blocks has no defined order, so the caller must fall
+/// back to a fully conservative charge in that case. Also returns null for a
+/// userless conversion, which cannot happen for a hoist candidate but is
+/// handled the same conservative way for safety.
+static Operation *realLastUse(ttg::ConvertLayoutOp cvtOp) {
+  Operation *last = nullptr;
+  for (Operation *user : cvtOp.getResult().getUsers()) {
+    if (!last) {
+      last = user;
+      continue;
+    }
+    if (last->getBlock() != user->getBlock())
+      return nullptr;
+    if (last->isBeforeInBlock(user))
+      last = user;
+  }
+  return last;
+}
+
+/// Collects into \p corridor the operations at which a hoisted \p cvtOp's
+/// result becomes newly live: the tail of \p anchor's block down through the
+/// loop, the body operations \p cvtOp is being lifted over, and the body
+/// operations strictly after \p cvtOp's own last use in the body. \p cvtOp
+/// itself is excluded -- it is erased by the hoist and priced separately as
+/// the new program point -- and so is every body operation from \p cvtOp up
+/// to and including that last use: the un-hoisted result is already locally
+/// live there, at the same cost hoisting it would add, so pricing them again
+/// would double count.
 ///
-/// Does **not** recurse into nested regions. `pressureAt` consults only the
-/// containing block's liveness info, so after the move it does not count the
-/// result inside a region the corridor merely steps over (a sibling loop the
-/// result spans unused). Charging it there would add a term the metric never
-/// reports, letting any peak inside such a region veto the hoist.
+/// An operation strictly after that last use looks, in the body's own
+/// unhoisted liveness, like it runs once the result is already dead; hoisting
+/// changes that: the loop's back edge makes the result live through the
+/// *whole* loop once it no longer lives inside the body (see
+/// `RegisterPressureAnalysis::getLiveThroughAncestorSet`'s loop branch), so
+/// such an operation sees a genuinely new charge.
+///
+/// Does **not** recurse into nested regions: a sibling loop the corridor
+/// steps over is walked as the single operation that loop op is, not op by
+/// op. `pressureAt`/`pressureBefore` are region-aware (they include whatever
+/// lives through that loop, per `RegisterPressureAnalysis`'s own doc), so the
+/// region-holding op's own point already reflects anything live through it --
+/// but not the (possibly higher) peak at some op strictly inside it. The
+/// caller (`projectedFunctionPeak`) separately checks that peak for any
+/// corridor entry holding a region, so this not recursing is only about how
+/// the walk is *structured*, not a gap in what gets priced.
 ///
 /// Returns false when the corridor cannot be walked, or is longer than
 /// \p corridorOpCap; the caller must then fall back to a conservative charge.
@@ -389,7 +447,187 @@ static bool collectCorridor(ttg::ConvertLayoutOp cvtOp, scf::ForOp forOp,
     corridor.push_back(bodyOp);
   }
 
+  // Body operations strictly after `cvtOp`'s own last use -- see the doc
+  // comment above for why these need pricing and the ones in between do not.
+  Operation *lastUse = lastBodyUser(cvtOp, forOp.getBody());
+  Operation *start =
+      lastUse ? lastUse->getNextNode() : cvtOp.getOperation()->getNextNode();
+  for (Operation *bodyOp = start; bodyOp; bodyOp = bodyOp->getNextNode()) {
+    if (corridor.size() >= corridorOpCap)
+      return false;
+    corridor.push_back(bodyOp);
+  }
+
   return true;
+}
+
+/// Returns the peak per-thread pressure `analysis` reports over every block
+/// nested in \p op's own regions, or 0 if \p op holds none. Used to price a
+/// corridor entry that is itself a region-holding op (a sibling loop the
+/// corridor steps over without descending into, per `collectCorridor`'s doc
+/// comment): `pressureAt(op, ...)` only reports what is live at \p op's own
+/// program point, which is silent about a higher peak reached *inside* that
+/// region -- exactly the gap `RegisterPressureAnalysis`'s own class doc warns
+/// `pressureAt` does not cover (only `peakPressure` descends into regions).
+/// Any value live across \p op -- defined before it, still needed after it
+/// closes -- is already included in this figure by the ancestor
+/// live-through rule, for a loop and a single-execution region (an
+/// `scf.if`) alike: nothing here is excluded just because \p op itself has
+/// no relevant use of it. The caller's own `+ dstBytes` on top of this
+/// figure models only the newly arriving result, not anything already
+/// counted here; that is exactly what the sibling-region term in
+/// `projectedFunctionPeak` and the per-op corridor loop above it both rely
+/// on being true (nothing else could be contributing a departing source's
+/// bytes inside a region it does not itself read).
+///
+/// Memoized in \p regionPeakCache, keyed by \p op: many candidates in the same
+/// loop (or in sibling loops) can step over the same region-holding op, and
+/// without this, each one re-walks it -- and, transitively through
+/// `peakPressure`, every op and block nested inside it -- from scratch, an
+/// O(candidates x region size) cost. \p regionPeakCache and \p queryCache
+/// must both be reset whenever the analysis they describe is rebuilt (see
+/// `FunctionPeakGate`); within one such generation the IR they describe never
+/// changes, so \p op unambiguously identifies the same answer for as long as
+/// the entry survives.
+static uint64_t regionPeakThroughOp(
+    Operation *op, const ttg::intel::RegisterPressureAnalysis &analysis,
+    ttg::intel::RegisterPressureAnalysis::QueryCache &queryCache,
+    DenseMap<Operation *, uint64_t> &regionPeakCache) {
+  auto [it, inserted] = regionPeakCache.try_emplace(op, 0);
+  if (!inserted)
+    return it->second;
+
+  uint64_t peak = 0;
+  for (Region &region : op->getRegions())
+    for (Block &block : region)
+      peak = std::max(peak, static_cast<uint64_t>(
+                                analysis.peakPressure(&block, queryCache)));
+  it->second = peak;
+  return peak;
+}
+
+/// Prices every operation strictly after \p start, in \p start's own block,
+/// the same way `projectedFunctionPeak`'s own corridor loop prices a body
+/// operation strictly after `cvtOp`'s last use: \p src is credited via the
+/// exact same rule used everywhere else in this file, and any op that itself
+/// holds a region is additionally checked via `regionPeakThroughOp`. Used to
+/// price the tail of a nested branch after \p cvtOp's own *real* (not
+/// top-level-mapped) last use; see `projectedFunctionPeak`'s call site for
+/// why that tail needs its own pass rather than folding into
+/// `regionPeakThroughOp`'s whole-region charge.
+///
+/// \p cvtResult's own weight, \p dstBytes, is charged at an op only when it is
+/// not already live there in the current, pre-hoist IR. It usually is not --
+/// that is the whole reason this tail needs pricing at all, the un-hoisted
+/// result is dead past its own last use inside a single-execution region
+/// (see `collectCorridor`'s doc comment). But if \p start's block nests
+/// inside a *loop* (an inner `scf.for` between \p start and `forOp`, say),
+/// that loop's own back edge already keeps \p cvtResult live for its whole
+/// duration -- the same rule that makes the hoisted result live through
+/// `forOp` itself -- so charging it again here would double it.
+///
+/// Every per-op charge here is either a result charge decided by a fully
+/// determined fact (already live or not) or a credit decided the same way
+/// (nothing to credit, a real remaining reader, or `srcLiveness.creditable`,
+/// whose own uncertainty the caller already propagates via
+/// `srcLiveness.exact`), so this walk never discovers a *new* uncertainty of
+/// its own and has no exactness of its own to report.
+///
+/// Returns false (leaving \p peak unspecified) if the walk exceeds
+/// \p corridorOpCap, so the caller falls back to a fully conservative charge
+/// instead of an unbounded one.
+static bool priceTailAfter(
+    Operation *start, Value src, uint64_t srcBytes, Value cvtResult,
+    uint64_t dstBytes, const ttg::intel::RegisterPressureAnalysis &analysis,
+    const SourceLiveness &srcLiveness, scf::ForOp forOp, unsigned corridorOpCap,
+    ttg::intel::RegisterPressureAnalysis::QueryCache &queryCache,
+    DenseMap<Operation *, uint64_t> &regionPeakCache, uint64_t &peak) {
+  peak = 0;
+  unsigned walked = 0;
+  for (Operation *op = start->getNextNode(); op; op = op->getNextNode()) {
+    if (++walked > corridorOpCap)
+      return false;
+
+    auto point = analysis.pressureAt(op, src, queryCache);
+    bool resultAlreadyLive =
+        analysis.pressureAt(op, cvtResult, queryCache).valueLive;
+    uint64_t priced = point.pressure + (resultAlreadyLive ? 0 : dstBytes);
+    bool credit = srcLiveness.creditable && point.valueLive &&
+                  srcDeadAfterMoveAt(srcLiveness, op, forOp);
+    if (credit)
+      priced -= srcBytes;
+    peak = std::max(peak, priced);
+
+    if (op->getNumRegions() > 0) {
+      uint64_t regionPriced =
+          regionPeakThroughOp(op, analysis, queryCache, regionPeakCache) +
+          (resultAlreadyLive ? 0 : dstBytes);
+      // `credit` is false here either because nothing is live to credit, or
+      // because a real remaining reader provably keeps `src` alive, or
+      // because `srcLiveness.creditable` is false -- and that last case is
+      // already reflected in `srcLiveness.exact`, which the caller ANDs into
+      // `projection.exact` once for the whole function. None of the three is
+      // a *local* uncertainty this loop discovers, so there is nothing to
+      // clear `exact` for here.
+      if (credit)
+        regionPriced -= srcBytes;
+      peak = std::max(peak, regionPriced);
+    }
+  }
+  return true;
+}
+
+/// Returns the peak per-thread pressure over every block in \p op's own
+/// regions except \p excluded, crediting \p src the same way everywhere else
+/// in this file and skipping \p dstBytes wherever \p cvtResult is already
+/// live there in the current, pre-hoist IR.
+///
+/// Used to price a sibling of the one block `priceTailAfter` already prices
+/// precisely (an `else` branch when `cvtOp`'s only use is in `then`, say):
+/// \p op (`lastUse`) is never itself a corridor entry once its real nested
+/// last use is found, so nothing else in this function ever looks at its
+/// other blocks -- but once hoisted, `cvtResult` becomes loop-invariant and,
+/// by the same loop back-edge rule as everywhere else in this file, live
+/// through *every* block of the loop body it now sits above, sibling blocks
+/// included.
+static uint64_t siblingBlocksPeak(
+    Operation *op, Block *excluded, Value src, uint64_t srcBytes,
+    Value cvtResult, uint64_t dstBytes,
+    const ttg::intel::RegisterPressureAnalysis &analysis,
+    const SourceLiveness &srcLiveness, scf::ForOp forOp,
+    ttg::intel::RegisterPressureAnalysis::QueryCache &queryCache) {
+  uint64_t peak = 0;
+  for (Region &region : op->getRegions()) {
+    for (Block &block : region) {
+      if (&block == excluded || block.empty())
+        continue;
+      // Any op in the block answers "is cvtResult/src already live here" the
+      // same way, *given this function's own callers*: `realLastUse` already
+      // guarantees no sibling block holds a use of `cvtResult` (all of
+      // `cvtOp`'s uses share one block, checked before this is ever called),
+      // and `srcLiveness.creditable` guarantees no other in-loop reader of
+      // `src` -- so within a sibling block, liveness for either value can only
+      // come from the ancestor live-through set, which `computeLiveValues`
+      // unions in identically (keyed on `op`, this block's parent) for every
+      // op in the block, making membership independent of which op is asked.
+      // This does not hold unconditionally: absent that precondition, a value
+      // can die partway through a block (a real, local last use inside it),
+      // and asking at `block.front()` instead of at the actual die point would
+      // wrongly answer "live" past where it no longer is.
+      Operation *rep = &block.front();
+      bool resultAlreadyLive =
+          analysis.pressureAt(rep, cvtResult, queryCache).valueLive;
+      uint64_t priced = analysis.peakPressure(&block, queryCache) +
+                        (resultAlreadyLive ? 0 : dstBytes);
+      bool credit = srcLiveness.creditable &&
+                    analysis.pressureAt(rep, src, queryCache).valueLive &&
+                    srcDeadAfterMoveAt(srcLiveness, rep, forOp);
+      if (credit)
+        priced -= srcBytes;
+      peak = std::max(peak, priced);
+    }
+  }
+  return peak;
 }
 
 /// The terms of the whole-function peak projection, kept apart so the debug log
@@ -420,15 +658,17 @@ struct PeakProjection {
 /// describe the function as it stands now and \p prePeak must be its measured
 /// whole-function peak.
 ///
-/// This bounds the *reported* metric, not physical allocator demand: a value
-/// live through a nested region but unused inside it is absent from that
-/// region's figure, as for the loop-level gate. The arithmetic is widened to 64
-/// bits to keep the added terms from wrapping.
-static PeakProjection
-projectedFunctionPeak(ttg::ConvertLayoutOp cvtOp, scf::ForOp forOp,
-                      const ttg::intel::RegisterPressureAnalysis &analysis,
-                      uint64_t prePeak, ArrayRef<Operation *> srcUsers,
-                      unsigned corridorOpCap) {
+/// This bounds the *reported* metric, not physical allocator demand: a real
+/// allocator could still do better (rematerializing, spilling around a
+/// narrow peak) than the flat per-thread-bytes figure this analysis reports,
+/// same as for the loop-level gate. The arithmetic is widened to 64 bits to
+/// keep the added terms from wrapping.
+static PeakProjection projectedFunctionPeak(
+    ttg::ConvertLayoutOp cvtOp, scf::ForOp forOp,
+    const ttg::intel::RegisterPressureAnalysis &analysis, uint64_t prePeak,
+    ArrayRef<Operation *> srcUsers, unsigned corridorOpCap,
+    ttg::intel::RegisterPressureAnalysis::QueryCache &queryCache,
+    DenseMap<Operation *, uint64_t> &regionPeakCache) {
   PeakProjection projection;
   projection.prePeak = prePeak;
 
@@ -475,13 +715,17 @@ projectedFunctionPeak(ttg::ConvertLayoutOp cvtOp, scf::ForOp forOp,
     // is the dominant cost of this walk.
     //
     // The result is charged unconditionally because it is newly live at every
-    // corridor operation. That is structural: the corridor holds only
-    // operations of the anchor's block up to and including the loop, plus body
-    // operations strictly *above* the conversion, while the result's live range
-    // begins at the conversion. Even a result yielded out of the loop stays
-    // confined to the body region -- the yield creates a loop *result*, a
-    // different value.
-    auto point = analysis.pressureAt(op, src);
+    // corridor operation. For a point in the anchor's own block (up to and
+    // including the loop) or a body operation *above* the conversion's old
+    // position, that is because the result's live range now begins earlier
+    // than it used to. For a body operation strictly *after* the conversion's
+    // own last use, it is because the loop's back edge makes the hoisted
+    // result live through the whole loop, where the un-hoisted value would
+    // have already been dead (see `collectCorridor`'s doc comment). Either
+    // way, a result yielded out of the loop stays confined to the body region
+    // -- the yield creates a loop *result*, a different value -- so nothing
+    // outside the corridor needs pricing on the result's account.
+    auto point = analysis.pressureAt(op, src, queryCache);
     uint64_t priced = point.pressure + dstBytes;
     // Only subtract what the analysis actually counted here, and only where the
     // move really does retire it.
@@ -489,11 +733,122 @@ projectedFunctionPeak(ttg::ConvertLayoutOp cvtOp, scf::ForOp forOp,
         srcDeadAfterMoveAt(srcLiveness, op, forOp))
       priced -= srcBytes;
     projection.corridorTerm = std::max(projection.corridorTerm, priced);
+
+    // `op` may itself hold a region the corridor steps over without
+    // descending into (a *sibling* loop between the anchor and `forOp`, say).
+    // `pressureAt` above only reports what is live at `op`'s own program
+    // point, not the peak reached inside it, so also check that peak
+    // directly.
+    //
+    // `forOp` itself is excluded: it is not a region being stepped over, it
+    // is the loop `cvtOp` is being hoisted *out of*, and its own body is
+    // already priced op by op elsewhere in this same corridor (both the
+    // ops above `cvtOp` and the ones after its last use). Reusing
+    // `regionPeakThroughOp` for `forOp` would price its own pre-hoist
+    // internal peak plus `dstBytes` a second time, uncredited, on top of
+    // that per-op accounting.
+    if (op->getNumRegions() > 0 && op != forOp.getOperation()) {
+      uint64_t regionPriced =
+          regionPeakThroughOp(op, analysis, queryCache, regionPeakCache) +
+          dstBytes;
+      // Reuse the exact same credit the flat charge above just applied. It
+      // already proves that -- apart from `cvtOp` itself -- nothing at or
+      // after `op` reads `src`, and `op`'s own region is a subset of "at or
+      // after `op`": whenever `src` is counted inside that region at all
+      // (via the ancestor live-through rule, because something past the
+      // region still needs it), that something can only be `cvtOp`, since
+      // every other real consumer is already accounted for in `srcLiveness`.
+      // So wherever this credit applies, the subtraction is exact, not
+      // merely conservative, here just as it is above. And wherever it does
+      // not apply, that is either because nothing here is live to credit or
+      // because a real remaining reader provably keeps `src` alive, or
+      // because `srcLiveness.creditable` is false -- already reflected in
+      // `srcLiveness.exact` above, not a fresh local uncertainty -- so there
+      // is nothing to clear `exact` for on this branch either.
+      if (srcLiveness.creditable && point.valueLive &&
+          srcDeadAfterMoveAt(srcLiveness, op, forOp))
+        regionPriced -= srcBytes;
+      projection.corridorTerm = std::max(projection.corridorTerm, regionPriced);
+    }
   }
 
-  // No operation *at or after* the conversion needs pricing: the result is
-  // already live at every one it reaches, since its live range starts at the
-  // conversion and the move only extends that range upwards.
+  // `lastBodyUser` maps a use nested inside a sub-region (an `scf.if` branch,
+  // say) onto the top-level op in the body that contains it, and
+  // `collectCorridor` deliberately excludes that mapped op -- along with
+  // everything from `cvtOp` up to it -- from the corridor, to avoid
+  // double-counting the portion already locally live before the real,
+  // nested last use. That exclusion is only sound up to the actual nested
+  // use point: if a higher-pressure operation follows later in the *same*
+  // branch, still inside the mapped op's region, it runs strictly after
+  // `cvtOp`'s real last use and needs the same new-charge treatment as any
+  // other post-last-use corridor entry -- but because the mapped op itself
+  // was never added to the corridor, neither the per-op loop above nor its
+  // region-peak fallback ever prices it.
+  if (Operation *lastUse = lastBodyUser(cvtOp, forOp.getBody());
+      lastUse && lastUse->getNumRegions() > 0) {
+    // Try to price only the tail after the real nested use, crediting `src`
+    // the same exact way the rest of this function does. This is only sound
+    // one nesting level below `lastUse`: `realLastUse` needs every use of
+    // `cvtOp`'s result to share one immediate block (unrelated to how deep
+    // that block sits), and `priceTailAfter`'s own single-block walk covers
+    // everything after that use only up to the end of *that* block -- if the
+    // block sits deeper than directly inside `lastUse`, whatever lies between
+    // the end of that inner block and the end of `lastUse`'s own region would
+    // go unpriced. Both conditions hold for the common case this fixes (a
+    // single use early in one `scf.if` branch, followed by a filler chain in
+    // that same branch), so falling back conservatively for anything more
+    // exotic costs precision only where the precise answer would take
+    // real extra work to get right, not correctness.
+    //
+    // A further precondition, beyond the two above: `nestedLast` itself must
+    // hold no regions of its own. `priceTailAfter`'s walk starts at
+    // `nestedLast->getNextNode()` -- it prices every op *after* `nestedLast`
+    // in its own block, checking each one for regions via
+    // `regionPeakThroughOp`, but it never applies that same check to
+    // `nestedLast` itself. If `cvtOp`'s result is used only as, say, an inner
+    // `scf.for`'s own `iter_args` init (so `nestedLast` is that inner loop),
+    // the inner loop's own internal peak would go unpriced by both this path
+    // and `siblingBlocksPeak` (which only covers `lastUse`'s *other* blocks,
+    // not `nestedLast`'s own nested ones) -- exactly the same class of gap
+    // this function exists to close, one level deeper. Falling back to the
+    // conservative whole-region charge below is safe and simple; a precise
+    // charge for this case would need its own `regionPeakThroughOp` call on
+    // `nestedLast`, not attempted here since the fallback already covers it.
+    Operation *nestedLast = realLastUse(cvtOp);
+    uint64_t tailPeak = 0;
+    if (nestedLast && nestedLast->getBlock()->getParentOp() == lastUse &&
+        nestedLast->getNumRegions() == 0 &&
+        priceTailAfter(nestedLast, src, srcBytes, cvtOp.getResult(), dstBytes,
+                       analysis, srcLiveness, forOp, corridorOpCap, queryCache,
+                       regionPeakCache, tailPeak)) {
+      projection.corridorTerm = std::max(projection.corridorTerm, tailPeak);
+
+      // `lastUse` may hold other blocks besides `nestedLast`'s own (an
+      // `else` branch, say) that the precise tail walk above never visits.
+      // Price them too; see `siblingBlocksPeak`'s doc for why they matter.
+      uint64_t siblingPeak = siblingBlocksPeak(
+          lastUse, nestedLast->getBlock(), src, srcBytes, cvtOp.getResult(),
+          dstBytes, analysis, srcLiveness, forOp, queryCache);
+      projection.corridorTerm = std::max(projection.corridorTerm, siblingPeak);
+    } else {
+      // Conservatively price the mapped op's own whole-region peak instead:
+      // this may overstate the true peak (it covers the whole region, not
+      // just the tail after the real use, and applies no source credit),
+      // which is why it also clears `exact`, but it closes the gap rather
+      // than silently pricing it as zero.
+      uint64_t regionPriced =
+          regionPeakThroughOp(lastUse, analysis, queryCache, regionPeakCache) +
+          dstBytes;
+      projection.corridorTerm = std::max(projection.corridorTerm, regionPriced);
+      projection.exact = false;
+    }
+  }
+
+  // No operation *outside the loop and after the anchor* needs pricing beyond
+  // what the corridor above already covers: the result stays confined to the
+  // anchor's block, the loop op, and the loop body -- see `collectCorridor`'s
+  // doc comment for why the body's coverage now extends past the conversion's
+  // old position too.
   return projection;
 }
 
@@ -532,9 +887,9 @@ public:
       return PeakVerdict::RejectFallback;
     }
 
-    lastProjection =
-        projectedFunctionPeak(cvtOp, forOp, *analysis, prePeak,
-                              sourceUsers(cvtOp.getSrc()), corridorOpCap);
+    lastProjection = projectedFunctionPeak(
+        cvtOp, forOp, *analysis, prePeak, sourceUsers(cvtOp.getSrc()),
+        corridorOpCap, *queryCache, regionPeakCache);
     uint64_t projected = lastProjection.total();
     // No ratchet. Over budget the ceiling *is* the current peak, so no sequence
     // of hoists can raise it; under budget, only as far as the threshold.
@@ -602,6 +957,7 @@ private:
       // The first build is not a rebuild and does not spend the cap.
       analysis.emplace(func);
       prePeak = analysis->peakPressure(func);
+      resetPerGenerationCaches();
       return true;
     }
     if (!dirty)
@@ -614,7 +970,17 @@ private:
     assert(prePeak <= pendingProjection &&
            "hoist raised the reported function peak above its projection");
     dirty = false;
+    resetPerGenerationCaches();
     return true;
+  }
+
+  /// `queryCache`/`regionPeakCache` memoize answers about the IR `analysis`
+  /// describes. Both must be wiped in lockstep with every `analysis` rebuild
+  /// above -- an entry from a stale generation would silently describe IR
+  /// that a since-accepted hoist has already moved.
+  void resetPerGenerationCaches() {
+    queryCache.emplace();
+    regionPeakCache.clear();
   }
 
   /// Returns \p src's users, deduplicated, so sibling candidates sharing one
@@ -644,6 +1010,9 @@ private:
   bool dirty = false;
   unsigned rebuilds = 0;
   DenseMap<Value, SmallVector<Operation *>> userCache;
+  // Scoped to one `analysis` generation; see `resetPerGenerationCaches`.
+  std::optional<ttg::intel::RegisterPressureAnalysis::QueryCache> queryCache;
+  DenseMap<Operation *, uint64_t> regionPeakCache;
 };
 
 /// Decide, for every hoisting candidate of a single \p forOp, whether to hoist
