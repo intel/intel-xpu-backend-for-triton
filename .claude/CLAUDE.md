@@ -29,8 +29,9 @@ writing code in these areas, read the matching file; never guess values, names, 
   `is_xpu_*` architecture detection, numerical tolerances, pytest fixtures, and test-runner and
   Makefile targets.
 
-The detail behind each topic lives in the path-scoped rules under `.claude/rules/`, which load when
-you open a matching file.
+The detail behind each topic lives in the path-scoped rules under `.claude/rules/`, which load only
+when the `Read` tool opens a matching file — not via `Bash` (`cat`/`sed`/`grep`), `Grep`, or
+`Write`. `Read` a file before changing it through `Bash`.
 
 ## Architecture
 
