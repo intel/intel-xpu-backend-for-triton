@@ -295,7 +295,8 @@ def test_tensor_descriptor_load_nd(dtype_str, num_ctas, ndim, INNER_BLOCK, devic
     triton.set_allocator(alloc_fn)
 
     alloc_shape = (1, 1, 3, 7, INNER_BLOCK)[-ndim:]
-    inp = to_triton(numpy_random(alloc_shape, dtype_str)[..., :INNER_BLOCK - 3], device=device, dst_type=dtype_str)
+    inp = to_triton(numpy_random(alloc_shape, dtype_str), device=device, dst_type=dtype_str)
+    inp.data = inp.data[..., :INNER_BLOCK - 3]
 
     if INNER_BLOCK * inp.element_size() < 32:
         return pytest.xfail("Invalid last dim size")
