@@ -17,7 +17,8 @@ from typing import Optional
 import torch
 
 import triton_kernels_benchmark as benchmark_suite
-from triton_kernels_benchmark.benchmark_testing import BENCHMARKING_CONFIG
+from triton_kernels_benchmark.benchmark_testing import BENCHMARKING_CONFIG, DEVICE
+from triton_kernels_benchmark.vllm import import_xpu_only
 
 # This supports both current upstream and pinned version
 try:
@@ -28,7 +29,9 @@ except ImportError as e:
     raise ImportError(
         "Could not import unified_attention from vLLM. Please ensure vLLM is installed and accessible.") from e
 from vllm.platforms import current_platform
-from vllm_xpu_kernels.flash_attn_interface import flash_attn_varlen_func as sycl_tla_attention
+
+# SYCL-TLA attention ships with vllm-xpu-kernels, so it is only available on XPU.
+sycl_tla_attention = import_xpu_only('vllm_xpu_kernels.flash_attn_interface.flash_attn_varlen_func')
 
 float8_info = torch.finfo(current_platform.fp8_dtype())
 
@@ -278,7 +281,7 @@ def get_unified_attention_benchmark(
         # Skip triton providers if interpreter is used because if fails
         del supported_providers['triton']
 
-    if not is_fp8:
+    if DEVICE == 'xpu' and not is_fp8:
         supported_providers['sycl-tla'] = 'sycl-tla'
 
     providers = benchmark_suite.filter_providers(supported_providers, providers_filter)
@@ -308,7 +311,7 @@ def get_unified_attention_benchmark(
         n_warmup = 100
         quantiles = [0.5, 0.0, 1.0]
 
-        torch.set_default_device("xpu")
+        torch.set_default_device(DEVICE)
 
         num_seqs = len(seq_lens)
         query_lens = [x[0] for x in seq_lens]
