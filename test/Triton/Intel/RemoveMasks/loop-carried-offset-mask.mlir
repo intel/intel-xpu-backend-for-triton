@@ -44,7 +44,9 @@ module {
   // CHECK-LABEL: @loop_carried_offset_mask
   // CHECK: scf.for
   // CHECK:   %[[MASK:.*]] = arith.cmpi slt
-  // CHECK:   tt.load {{.*}}, %[[MASK]], {{.*}} : tensor<32x!tt.ptr<f16>>
+  // CHECK-NOT: tt.load
+  // CHECK:   %[[LOAD:.*]] = tt.load {{.*}}, %[[MASK]], %cst : tensor<32x!tt.ptr<f16>>
+  // CHECK:   tt.store {{.*}}, %[[LOAD]] :
   // CHECK: }
 }
 
