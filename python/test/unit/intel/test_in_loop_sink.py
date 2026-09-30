@@ -62,22 +62,20 @@ def test_in_loop_sink_reaches_rvl(in_loop_sink, device):
     assert (v_load > first_dot) == in_loop_sink
 
 
-@pytest.mark.parametrize("env, option, arch_default, expected", [
-    (None, None, True, True),
-    (None, None, False, False),
-    ("0", None, True, False),
-    ("1", None, False, True),
-    ("0", True, False, True),
-    ("1", False, True, False),
+@pytest.mark.parametrize("env, option, expected", [
+    (None, None, True),
+    ("0", None, False),
+    ("1", None, True),
+    ("0", True, True),
+    ("1", False, False),
 ])
-def test_in_loop_sink_precedence(env, option, arch_default, expected, monkeypatch):
-    # The option wins over TRITON_INTEL_IN_LOOP_SINK, which wins over the arch default.
+def test_in_loop_sink_precedence(env, option, expected, monkeypatch):
+    # The option wins over TRITON_INTEL_IN_LOOP_SINK, which defaults to True.
     if env is None:
         monkeypatch.delenv("TRITON_INTEL_IN_LOOP_SINK", raising=False)
     else:
         monkeypatch.setenv("TRITON_INTEL_IN_LOOP_SINK", env)
     backend = make_backend(triton.runtime.driver.active.get_current_target())
     assert isinstance(backend, XPUBackend)
-    monkeypatch.setattr(type(backend), "default_in_loop_sink", lambda self: arch_default)
     opts = {} if option is None else {"in_loop_sink": option}
     assert backend.parse_options(opts).in_loop_sink is expected

@@ -278,14 +278,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if "enable_fp_fusion" not in args:
             args["enable_fp_fusion"] = knobs.language.default_fp_fusion
         if "in_loop_sink" not in args:
-            env = knobs.intel.in_loop_sink
-            args["in_loop_sink"] = self.default_in_loop_sink() if env is None else env
+            args["in_loop_sink"] = knobs.intel.in_loop_sink
         return XPUOptions(**args)
-
-    def default_in_loop_sink(self) -> bool:
-        """Whether ReduceVariableLiveness sinks in-loop dot operand loads when neither the
-        `in_loop_sink` option nor TRITON_INTEL_IN_LOOP_SINK sets it; override per arch."""
-        return True
 
     @staticmethod
     def parse_attr(desc):
