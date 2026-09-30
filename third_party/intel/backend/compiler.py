@@ -40,6 +40,7 @@ class XPUOptions:
     enable_fp_fusion: bool = True
     launch_cooperative_grid: bool = False
     reduce_variable_liveness: bool = True
+    in_loop_sink: bool = True
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e4nv", "fp8e4b15")
     deprecated_fp8_dot_operand_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "tf32"
@@ -287,6 +288,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         args["is_lts"] = self.properties['is_lts']
         if "enable_fp_fusion" not in args:
             args["enable_fp_fusion"] = knobs.language.default_fp_fusion
+        if "in_loop_sink" not in args:
+            args["in_loop_sink"] = knobs.intel.in_loop_sink
         return XPUOptions(**args)
 
     @staticmethod
@@ -499,7 +502,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier)
 
         if (opt.reduce_variable_liveness):
-            intel.passes.ttgpuir.add_reduce_variable_liveness(pm, opt.grf_mode)
+            intel.passes.ttgpuir.add_reduce_variable_liveness(pm, opt.grf_mode, not opt.in_loop_sink)
 
         # Off by default: code sinking is perf-neutral on measured kernels (it
         # reliably reduces register spills, but the relieved traffic is not on

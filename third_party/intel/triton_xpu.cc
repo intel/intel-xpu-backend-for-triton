@@ -171,9 +171,10 @@ void init_triton_intel_passes_ttgpuir(py::module_ &&m) {
                      gpu::intel::createTritonIntelGPUOptimizeReductionLocality);
   ADD_PASS_WRAPPER_0("add_lower_to_2d_block_load",
                      gpu::intel::createTritonIntelGPULowerTo2DBlockLoad);
-  ADD_PASS_OPTION_WRAPPER_1(
+  ADD_PASS_OPTION_WRAPPER_2(
       "add_reduce_variable_liveness",
-      gpu::intel::createTritonIntelGPUReduceVariableLiveness, std::string);
+      gpu::intel::createTritonIntelGPUReduceVariableLiveness, std::string,
+      bool);
   ADD_PASS_WRAPPER_0("add_loop_distribute",
                      gpu::intel::createTritonIntelGPULoopDistribute);
   ADD_PASS_WRAPPER_0("add_code_sinking",
