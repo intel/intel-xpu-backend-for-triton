@@ -51,6 +51,7 @@ def Triton_Dialect : Dialect {
 
   let hasConstantMaterializer = 1;
   let useDefaultTypePrinterParser = 1;
+  let useStrictPropertiesInAssemblyFormat = 0;
 }
 
 include "triton/Dialect/Triton/IR/TritonTypes.td"
