@@ -35,6 +35,7 @@ def NVGPU_Dialect : Dialect {
   let dependentDialects = [
     "mlir::LLVM::LLVMDialect"
   ];
+  let useStrictPropertiesInAssemblyFormat = 0;
 }
 
 #endif
