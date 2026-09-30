@@ -292,7 +292,7 @@ private:
   SmallVector<Value> propagateToUsers(DenseMap<Value, Attribute> &values,
                                       Value value, Attribute &layout);
   void propagateLayout(DenseMap<Value, Attribute> &values);
-  Value getValueAs(Value value, Attribute encoding);
+  Value getValueAs(Value value, Attribute encoding, Operation *user);
   Operation *cloneElementwise(OpBuilder &rewriter, Operation *op,
                               Attribute encoding);
   Operation *rewriteOp(Operation *op, Attribute encoding);
@@ -321,10 +321,11 @@ void LayoutRematerialization::addRematValue(Value old, Attribute encoding,
                                             Value newV) {
   LDBG("addRematValue " << old << " encoding " << encoding << " " << newV);
   rematMapping[{old, encoding}] = newV;
-  if (mappedValues.contains(old))
-    mappedValues[old].push_back(encoding);
-  else
-    mappedValues[old] = {encoding};
+  // Re-recording an existing (old, encoding) pair only replaces the remat;
+  // a duplicate encoding would make updateRematMapping look up an erased key.
+  SmallVector<Attribute> &encodings = mappedValues[old];
+  if (!llvm::is_contained(encodings, encoding))
+    encodings.push_back(encoding);
 }
 
 // Remove unneeded values now that we are done with the rematMapping.
@@ -1466,13 +1467,22 @@ void LayoutRematerialization::propagateLayout(
   }
 }
 
-Value LayoutRematerialization::getValueAs(Value value, Attribute encoding) {
+Value LayoutRematerialization::getValueAs(Value value, Attribute encoding,
+                                          Operation *user) {
   return getValueAsImpl(
       value, encoding,
-      [this](Value v, Attribute enc) {
+      [this, user](Value v, Attribute enc) {
+        // Only reuse an existing remat if it dominates the op being rewritten;
+        // otherwise fall back to `v`, which getValueAsImpl converts right after
+        // its definition if the encoding differs. Checking `user` stands in for
+        // checking its clone because rewriteOp inserts the clone immediately
+        // before `user`.
         Value rematValue = getRematValue(v, enc);
-        if (rematValue)
+        if (!rematValue)
+          return v;
+        if (domInfo.properlyDominates(rematValue, user))
           return rematValue;
+        LDBG("getValueAs: skip non-dominating remat " << rematValue);
         return v;
       },
       [this](Value v, Attribute enc, Value converted) {
@@ -1488,8 +1498,8 @@ Operation *LayoutRematerialization::cloneElementwise(OpBuilder &rewriter,
       [](Operation *op, Attribute encoding) {
         return ttgi::inferSrcEncoding(op, encoding);
       },
-      [this](Value value, Attribute encoding) {
-        return getValueAs(value, encoding);
+      [this, op](Value value, Attribute encoding) {
+        return getValueAs(value, encoding, op);
       });
 }
 
