@@ -376,14 +376,13 @@ def get_unified_attention_benchmark(
             # to optionally select the 3D kernel based on its analysis.
             seq_threshold_3D = 32
             num_par_softmax_segments = 16
-            softmax_segm_output = torch.empty(maybe_quantized_query.shape[0],
+            softmax_segm_output = torch.empty(seq_threshold_3D,
                                               maybe_quantized_query.shape[1], num_par_softmax_segments,
                                               triton.next_power_of_2(head_size), dtype=torch.float32,
                                               device=maybe_quantized_query.device)
-            softmax_segm_max = torch.empty(maybe_quantized_query.shape[0], maybe_quantized_query.shape[1],
-                                           num_par_softmax_segments, dtype=torch.float32,
-                                           device=maybe_quantized_query.device)
-            softmax_segm_expsum = torch.empty(maybe_quantized_query.shape[0], maybe_quantized_query.shape[1],
+            softmax_segm_max = torch.empty(seq_threshold_3D, maybe_quantized_query.shape[1], num_par_softmax_segments,
+                                           dtype=torch.float32, device=maybe_quantized_query.device)
+            softmax_segm_expsum = torch.empty(seq_threshold_3D, maybe_quantized_query.shape[1],
                                               num_par_softmax_segments, dtype=torch.float32,
                                               device=maybe_quantized_query.device)
 
