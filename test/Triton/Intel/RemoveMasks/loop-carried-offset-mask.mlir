@@ -84,6 +84,7 @@ module {
   // CHECK-LABEL: @loop_carried_bound_mask
   // CHECK: scf.for
   // CHECK:   %[[MASK:.*]] = arith.cmpi slt
+  // CHECK-NOT: tt.load
   // CHECK:   tt.load {{.*}}, %[[MASK]], {{.*}} : tensor<32x!tt.ptr<f16>>
   // CHECK: }
 }
