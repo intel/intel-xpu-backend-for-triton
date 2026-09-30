@@ -280,7 +280,7 @@ Use `--wheel-set` (repeatable) to filter by predefined wheel sets:
 
 | Preset | Packages |
 |--------|----------|
-| `torch` | torch, torchvision, torchaudio, timm |
+| `torch` | torch, torchvision, torchaudio, torchao, timm |
 | `triton` | triton |
 | `bench` | triton_kernels_benchmark |
 | `pti` | intel_pti |

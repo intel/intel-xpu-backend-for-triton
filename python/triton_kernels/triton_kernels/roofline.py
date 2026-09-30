@@ -255,12 +255,13 @@ def plot_roofline(series, flops_dtype, out_path, max_tbps="memset", max_tflops="
     xs, flops_ref, bytes_ref, _ = perfs[0]
     n = len(xs)
 
+    device = triton.runtime.driver.active.get_active_torch_device()
     if not isinstance(max_tbps, int):
         assert max_tbps == "memset"
-        max_tbps = get_memset_tbps()
+        max_tbps = get_memset_tbps(device=device)
     if not isinstance(max_tflops, int):
         assert max_tflops == "cublas"
-        max_tflops = get_blas_tflops(flops_dtype)
+        max_tflops = get_blas_tflops(flops_dtype, device=device)
 
     grey = "#7f7f7f"
     opints = [f / b for f, b in zip(flops_ref, bytes_ref)]  # arithmetic intensity per sample

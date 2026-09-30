@@ -87,6 +87,7 @@ def test_get_wheel_patterns_single_set():
     patterns = d._get_wheel_patterns()
     assert "torch-*.whl" in patterns
     assert "torchvision-*.whl" in patterns
+    assert "torchao-*.whl" in patterns
 
 
 def test_get_wheel_patterns_multiple_sets():
