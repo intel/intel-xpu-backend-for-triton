@@ -89,12 +89,12 @@ jobs:
         with:
           lts: ${{ inputs.runner_label == 'lts' }}
 
-      - name: Reuse current-head Triton wheel
+      - name: Reuse PR #7452 Triton wheel
         uses: actions/download-artifact@v8
         with:
           name: triton-vllm-${{ inputs.python_version }}
           path: dist/
-          run-id: 36756084693
+          run-id: 36612984279
           github-token: ${{ github.token }}
 
       - name: Upload Triton wheel
