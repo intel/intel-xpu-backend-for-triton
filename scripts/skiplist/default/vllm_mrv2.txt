@@ -17,18 +17,6 @@ tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[True-2.0
 tests/v1/sample/test_logprobs.py::test_none_logprobs[True]
 tests/v1/sample/test_logprobs.py::test_zero_logprobs[True]
 
-# oneCCL fails to start worker thread: https://github.com/intel/intel-xpu-backend-for-triton/issues/7686
-tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[False-0.0-BatchLogprobsComposition.NONE]
-tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[True-0.0-BatchLogprobsComposition.NONE]
-tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[True-0.0-BatchLogprobsComposition.SAMPLE]
-tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[True-0.0-BatchLogprobsComposition.PROMPT]
-tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[True-0.0-BatchLogprobsComposition.SAMPLE_PROMPT]
-tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[True-2.0-BatchLogprobsComposition.NONE]
-tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[True-2.0-BatchLogprobsComposition.SAMPLE]
-tests/v1/sample/test_logprobs.py::test_get_logprobs_and_prompt_logprobs[True-2.0-BatchLogprobsComposition.PROMPT]
-tests/v1/kv_connector/unit/test_nixl_connector.py::test_abort_timeout_on_prefiller
-tests/v1/sample/test_logprobs.py::test_prompt_logprobs_mode
-
 # NIXL is not available: https://github.com/intel/intel-xpu-backend-for-triton/issues/7419
 tests/v1/kv_connector/unit/test_nixl_connector.py::test_reqs_to_send_deadline_rebased_to_worker_clock
 
