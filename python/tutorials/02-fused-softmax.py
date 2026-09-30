@@ -115,18 +115,39 @@ def softmax_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride, n
 properties = driver.active.utils.get_device_properties(DEVICE.index)
 NUM_SM = properties["multiprocessor_count"]
 SIZE_SMEM = properties["max_shared_mem"]
-WARPS_PER_EU = 8  # TODO: Get from properties
-EU_PER_SM = 8  # TODO: Get from properties
-MAX_NUM_WG = 64  # TODO: Get from properties
+WARPS_PER_EU = properties["threads_per_eu"]
+EU_PER_SM = properties["eus_per_subslice"]
 WARP_SIZE = properties["sub_group_sizes"][-1]
 WG_SIZE = properties["max_work_group_size"]
 max_num_warps = WG_SIZE // WARP_SIZE
 target = triton.runtime.driver.active.get_current_target()
 warps_per_sm = WARPS_PER_EU * EU_PER_SM
+# Each resident work-group occupies at least one hardware thread, so the number of hardware threads an Xe-core can host
+# is also the maximum number of work-groups it can host.
+MAX_NUM_WG = warps_per_sm
 max_num_resident_warps = NUM_SM * warps_per_sm
 kernels = {}
-# Possible SLM allocation sizes in kB
-tg_slm_sizes = [i * 2**10 for i in [0, 1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128]]  # TODO: Get from properties
+
+
+def slm_allocation_sizes(max_size):
+    """Possible SLM allocation sizes in bytes, in increasing order.
+
+    The hardware rounds the amount of SLM a work-group requests up to one of a fixed set of allocation sizes: powers of
+    two, plus the intermediate 1.5x sizes (24, 48, 96 kB, ...) on devices allowing at least 128 kB of SLM per
+    work-group.
+    """
+    supports_intermediate_sizes = max_size >= 128 * 2**10
+    sizes = {0, max_size}
+    size = 2**10
+    while size < max_size:
+        sizes.add(size)
+        if supports_intermediate_sizes and size >= 16 * 2**10:
+            sizes.add(size + size // 2)
+        size *= 2
+    return sorted(size for size in sizes if size <= max_size)
+
+
+tg_slm_sizes = slm_allocation_sizes(SIZE_SMEM)
 
 
 def softmax(x):
