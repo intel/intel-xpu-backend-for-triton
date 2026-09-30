@@ -1109,7 +1109,7 @@ Bf16_to_Fp16WithRounding(Location loc, ConversionPatternRewriter &rewriter,
   SmallVector<Value> result;
   result.reserve(v.size());
   for (Value elem : v) {
-    Value fp32 = LLVM::FPExtOp::create(rewriter, loc, f32_ty, elem);
+    Value fp32 = intel::convertBf16ToFp32(loc, rewriter, elem);
     Value fp16 = LLVM::ConstrainedFPTruncIntr::create(
         rewriter, loc, f16_ty, fp32,
         LLVM::RoundingModeAttr::get(
@@ -1810,6 +1810,46 @@ struct AbsFOpConversion
   }
 };
 
+// Without native bf16 arithmetic (LTS drivers), lower a bf16 `tt.clampf` in
+// f32. `tt.clampf` is not an arith op, so `arith-emulate-unsupported-floats`
+// does not widen it. The result is one of the inputs or NaN, so the f32
+// round-trip is exact. Other cases fall through to the upstream pattern.
+struct Bf16ClampFOpConversion
+    : ElementwiseOpConversionBase<ClampFOp, Bf16ClampFOpConversion> {
+  using Base = ElementwiseOpConversionBase<ClampFOp, Bf16ClampFOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  LogicalResult
+  matchAndRewrite(ClampFOp op, Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!isa<BFloat16Type>(getElementTypeOrSelf(op.getType())) ||
+        mlir::LLVM::intel::hasModuleAttr(op, SUPPORT_BF16_ARITH()))
+      return failure();
+    return Base::matchAndRewrite(op, adaptor, rewriter);
+  }
+
+  SmallVector<Value> createDestOps(ClampFOp op, Adaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    Value x = intel::convertBf16ToFp32(loc, rewriter, operands[0][0]);
+    Value lo = intel::convertBf16ToFp32(loc, rewriter, operands[0][1]);
+    Value hi = intel::convertBf16ToFp32(loc, rewriter, operands[0][2]);
+    Value v = LLVM::MaxNumOp::create(rewriter, loc, f32_ty, x, lo);
+    Value res = LLVM::MinNumOp::create(rewriter, loc, v, hi);
+    if (op.getPropagateNan() == PropagateNan::ALL) {
+      // As in the upstream lowering, only `x` needs a NaN check.
+      Value isNan =
+          LLVM::FCmpOp::create(rewriter, loc, LLVM::FCmpPredicate::une, x, x);
+      res =
+          b.select(isNan, LLVM::createNaNConstant(loc, rewriter, f32_ty), res);
+    }
+    return {intel::convertFp32ToBf16(loc, rewriter, res, RoundingMode::RTNE)};
+  }
+};
+
 struct PreciseSqrtOpConversion
     : ElementwiseOpConversionBase<PreciseSqrtOp, PreciseSqrtOpConversion> {
   using Base =
@@ -1910,43 +1950,6 @@ struct PreciseDivFOpConversion
   }
 };
 
-// Following two patterns are copied from the common part to fix-up calling
-// convention for created function declaration.
-// TODO: propose changes in the common part to use CC provided by target.
-struct MulhiUIOpConversion
-    : public ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion> {
-  using Base = ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-  explicit MulhiUIOpConversion(LLVMTypeConverter &typeConverter,
-                               ModuleAxisInfoAnalysis &axisAnalysisPass,
-                               const TargetInfoBase &targetInfo,
-                               PatternBenefit benefit = 1)
-      : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
-        targetInfo(targetInfo) {}
-
-  SmallVector<Value> createDestOps(MulhiUIOp op, Adaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-
-    Type resultElementTy = getElementTypeOrSelf(op.getResult().getType());
-    assert(resultElementTy.isInteger(32) || resultElementTy.isInteger(64));
-
-    auto funcName = targetInfo.getMulhiFuncName(resultElementTy);
-    Type funcType = getFunctionType(elemTy, operands[0]);
-    LLVM::LLVMFuncOp funcOp =
-        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
-    funcOp.setCConv(triton::gpu::intel::getDefaultCConv(op));
-    auto callOp = LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]);
-    callOp.setCConv(funcOp.getCConv());
-    return {callOp.getResult()};
-  }
-
-protected:
-  const TargetInfoBase &targetInfo;
-};
-
 // Match a / (1 + exp(b)), setting expArg = b. Returns false if the RHS
 // doesn't have that shape. Does not inspect the sign of b — callers emit
 // fsigm(-b) so the folder handles any double-negation.
@@ -2028,6 +2031,34 @@ struct SigmoidConversion : public ConvertOpToLLVMPattern<arith::DivFOp> {
   }
 };
 
+// The LTS IGC miscompiles the i128 multiply upstream emits for 64-bit umulhi.
+struct MulhiUIOpConversion
+    : public ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion> {
+  using Base = ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(MulhiUIOp op, Adaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    Type resultElementTy = getElementTypeOrSelf(op.getResult().getType());
+    assert(resultElementTy.isInteger(32) || resultElementTy.isInteger(64));
+    StringRef funcName =
+        resultElementTy.isInteger(32) ? "__imf_umulhi" : "__imf_umul64hi";
+    Type funcType = getFunctionType(elemTy, operands[0]);
+    LLVM::LLVMFuncOp funcOp =
+        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
+    funcOp.setCConv(triton::gpu::intel::getDefaultCConv(op));
+    auto callOp = LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]);
+    callOp.setCConv(funcOp.getCConv());
+    return {callOp.getResult()};
+  }
+};
+
+// Following pattern is copied from the common part to fix-up calling
+// convention for created function declaration.
+// TODO: propose changes in the common part to use CC provided by target.
 struct ExternElementwiseOpConversion
     : public ElementwiseOpConversionBase<ExternElementwiseOp,
                                          ExternElementwiseOpConversion> {
@@ -2067,20 +2098,23 @@ void populateElementwiseOpToLLVMPatterns(
                                         benefit);
   patterns.add<PreciseDivFOpConversion>(typeConverter, axisInfoAnalysis,
                                         benefit);
-  patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis, targetInfo,
-                                    benefit);
+  if (axisInfoAnalysis.getModuleOp()->hasAttr(
+          gpu::intel::TritonIntelGPUDialect::getIsLTSAttrName()))
+    patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<ExternElementwiseOpConversion>(typeConverter, axisInfoAnalysis,
                                               benefit);
 
   // Use lower benefit for common patterns to prioritize our versions.
   assert(benefit > 0);
   mlir::triton::populateElementwiseOpToLLVMPatterns(
-      typeConverter, patterns, axisInfoAnalysis, targetInfo,
-      benefit.getBenefit() - 1);
+      typeConverter, patterns, axisInfoAnalysis, benefit.getBenefit() - 1);
 
   patterns.add<AbsFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SigmoidConversion>(typeConverter, benefit.getBenefit() + 10);
   patterns.add<ElementwiseOpConversion<arith::DivFOp, LLVM::FDivOp>>(
+      typeConverter, axisInfoAnalysis, benefit);
+  // The default fp32 division is already approximate on Intel GPUs.
+  patterns.add<ElementwiseOpConversion<triton::ApproxDivFOp, LLVM::FDivOp>>(
       typeConverter, axisInfoAnalysis, benefit);
   patterns.add<ElementwiseOpConversion<arith::MulFOp, LLVM::FMulOp>>(
       typeConverter, axisInfoAnalysis, benefit);
@@ -2114,6 +2148,8 @@ void populateElementwiseOpToLLVMPatterns(
   mlir::triton::populateMinMaxFOpToLLVMPattern(
       typeConverter, patterns, axisInfoAnalysis,
       /*hwNanPropagationSupported=*/false, benefitForPropNan);
+  patterns.add<Bf16ClampFOpConversion>(typeConverter, axisInfoAnalysis,
+                                       benefit.getBenefit() + 1);
   mlir::triton::populateClampFOpToLLVMPattern(
       typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
 }

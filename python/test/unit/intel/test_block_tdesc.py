@@ -30,7 +30,7 @@ def test_tdesc_load_store(M, N, dtype_str, device, tmp_path: pathlib.Path):
             %src_desc = tt.make_tensor_descriptor %arg0, [%cM_i32, %cN_i32], [%stride_i64, %c1_i64]
                         : !tt.ptr<{ty}>, !tt.tensordesc<{M}x{N}x{ty}, #blocked>
 
-            %data = tt.descriptor_load %src_desc [%c0_i32, %c0_i32]
+            %data = tt.descriptor_load %src_desc [%c0_i32, %c0_i32] {{ttig.desc_padding = 1 : i32}}
                     : !tt.tensordesc<{M}x{N}x{ty}, #blocked> -> tensor<{M}x{N}x{ty}, #blocked>
 
             %dst_desc = tt.make_tensor_descriptor %arg1, [%cM_i32, %cN_i32], [%stride_i64, %c1_i64]
@@ -92,7 +92,7 @@ def test_tdesc_load_zero_padding(M, N, dtype_str, device, tmp_path: pathlib.Path
             %src_desc = tt.make_tensor_descriptor %arg0, [%cM_minus1, %cN_minus1], [%stride_i64, %c1_i64]
                         : !tt.ptr<{ty}>, !tt.tensordesc<{M}x{N}x{ty}, #blocked>
 
-            %data = tt.descriptor_load %src_desc [%c0_i32, %c0_i32]
+            %data = tt.descriptor_load %src_desc [%c0_i32, %c0_i32] {{ttig.desc_padding = 1 : i32}}
                     : !tt.tensordesc<{M}x{N}x{ty}, #blocked> -> tensor<{M}x{N}x{ty}, #blocked>
 
             // Destination descriptor with full shape so we can store everything
@@ -151,7 +151,7 @@ def test_tdesc_rank_reducing_load_store(M, N, dtype_str, device, tmp_path: pathl
             // use stride M*N so their zero offsets keep the same contiguous view.
             %src_desc = tt.make_tensor_descriptor %arg0, [%c1_i32, %c1_i32, %cM_i32, %cN_i32], [%cMN_i64, %cMN_i64, %cN_i64, %c1_i64]
                         : !tt.ptr<{ty}>, !tt.tensordesc<1x1x{M}x{N}x{ty}>
-            %data = tt.descriptor_load %src_desc [%c0_i32, %c0_i32, %c0_i32, %c0_i32]
+            %data = tt.descriptor_load %src_desc [%c0_i32, %c0_i32, %c0_i32, %c0_i32] {{ttig.desc_padding = 1 : i32}}
                     : !tt.tensordesc<1x1x{M}x{N}x{ty}> -> tensor<{M}x{N}x{ty}, #blocked>
 
             %dst_desc = tt.make_tensor_descriptor %arg1, [%c1_i32, %c1_i32, %cM_i32, %cN_i32], [%cMN_i64, %cMN_i64, %cN_i64, %c1_i64]
