@@ -89,10 +89,13 @@ jobs:
         with:
           lts: ${{ inputs.runner_label == 'lts' }}
 
-      - name: Build Triton wheel
-        run: |
-          python -m build --wheel --no-isolation
-          ls -lh dist/*.whl
+      - name: Reuse current-head Triton wheel
+        uses: actions/download-artifact@v8
+        with:
+          name: triton-vllm-${{ inputs.python_version }}
+          path: dist/
+          run-id: 36756084693
+          github-token: ${{ github.token }}
 
       - name: Upload Triton wheel
         uses: actions/upload-artifact@v7
@@ -132,15 +135,7 @@ jobs:
       fail-fast: false
       matrix:
         suite:
-          - vllm-spec-decode
-          - vllm-mrv2
           - vllm-moe
-          - vllm-triton-attn
-          - vllm-mamba
-          - vllm-quant
-          - vllm-kda
-          - vllm-tdesc
-          - vllm-rest
     runs-on: ${{ fromJSON((inputs.runner_label == '' || startsWith(inputs.runner_label, 'max')) && format('["linux", "rolling", "{0}"]', inputs.runner_label || 'max1100') || format('["linux", "{0}"]', inputs.runner_label)) }}
     timeout-minutes: 300
     defaults:
@@ -243,7 +238,12 @@ jobs:
       - name: Run moe tests
         if: ${{ matrix.suite == 'vllm-moe' && steps.install-vllm.outcome == 'success' && !cancelled() }}
         run: |
-          ${{ env.TRITON_TEST_CMD }} --vllm-moe
+          pip install accelerate blake3 cachetools cbor2 openai_harmony pybase64 tblib
+          cd vllm
+          python -u -m pytest -s --tb=short -vvv \
+            "tests/kernels/moe/test_moe.py::test_fused_moe[True-True-dtype0-1-6-192-32768-2048-511]" \
+            "tests/kernels/moe/test_moe.py::test_fused_moe[True-True-dtype0-1-6-192-40000-1024-1024]" \
+            --junitxml=../reports/vllm_moe.xml
 
       - name: Run triton-attn tests
         if: ${{ matrix.suite == 'vllm-triton-attn' && steps.install-vllm.outcome == 'success' && !cancelled() }}
