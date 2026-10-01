@@ -100,9 +100,12 @@ TEST_F(RegisterPressureGRFModeTest, NumWarpsOver32CapsDefaultModeAtSmallest) {
 TEST_F(RegisterPressureGRFModeTest, NumWarpsOver32DoesNotCapAutoMode) {
   // `grf_mode='auto'` escalates inside IGC, not through `make_zebin`'s
   // retry, and is not itself gated on `num_warps` at the backend level, so
-  // the `num_warps > 32` exception must not apply to it.
-  auto module = createModule(StringRef("512"), /*numWarps=*/64);
-  EXPECT_EQ(largestBytes(*module, "auto"), 16384u);
+  // the `num_warps > 32` exception must not apply to it. Uses "256" (not
+  // "512") so the assertion actually distinguishes "the cap doesn't apply"
+  // from "the attribute's value happens to equal the uncapped answer too":
+  // if the cap wrongly applied here, this would resolve to 4096, not 8192.
+  auto module = createModule(StringRef("256"), /*numWarps=*/64);
+  EXPECT_EQ(largestBytes(*module, "auto"), 8192u);
 }
 
 TEST_F(RegisterPressureGRFModeTest, NumWarpsAtBoundaryIsUnaffected) {
@@ -112,15 +115,16 @@ TEST_F(RegisterPressureGRFModeTest, NumWarpsAtBoundaryIsUnaffected) {
   EXPECT_EQ(largestBytes(*module, "default"), 16384u);
 }
 
-TEST_F(RegisterPressureGRFModeTest, AutoModeIgnoresMaxGRFMode) {
-  // ttig.max_grf_mode is only ever realized by 'default''s own rebuild; IGC
-  // decides 'auto' escalation on its own with nothing in this backend that
-  // reads back or constrains it, so the attribute must not apply to 'auto'.
-  // A target whose max_grf_mode is "256" (non-"cri") would previously have
-  // collapsed 'auto' to the same 8192-byte budget as 'default'; it must now
-  // stay at the unconditional 16384-byte bound instead.
+TEST_F(RegisterPressureGRFModeTest, AutoModeRespectsMaxGRFMode) {
+  // The per-target ceiling `ttig.max_grf_mode` encodes is a hardware/IGC
+  // limitation on which GRF modes are reachable at all, not an artifact of
+  // the backend's own retry mechanism: IGC's internal auto-GRF heuristic
+  // cannot select a larger mode than the backend's own escalation paths do
+  // on a given target either. A target whose max_grf_mode is "256"
+  // (non-"cri") collapses 'auto' to the same 8192-byte budget as 'default',
+  // not the unconditional 16384-byte bound an absent attribute falls back to.
   auto module = createModule(StringRef("256"));
-  EXPECT_EQ(largestBytes(*module, "auto"), 16384u);
+  EXPECT_EQ(largestBytes(*module, "auto"), 8192u);
 }
 
 #ifndef NDEBUG

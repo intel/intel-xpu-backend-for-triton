@@ -159,32 +159,34 @@ public:
   enum class UnknownGRFSizeAssumption {
     /// Assume the smallest GRF size the device supports (128-register mode).
     Smallest,
-    /// Assume the largest GRF size the backend's automatic escalation will
-    /// ever select for this target. This per-target ceiling only applies to
-    /// `grf_mode='default'`; `'auto'` always gets the unconditional
-    /// 512-register-mode bound described below, for reasons covered there.
+    /// Assume the largest GRF size this target will ever actually run at,
+    /// whether that mode was reached via the backend's own automatic
+    /// escalation (`grf_mode='default'`) or IGC's internal auto-GRF heuristic
+    /// (`grf_mode='auto'`). Both share one per-target ceiling: it is a
+    /// hardware/IGC limitation on which GRF modes are reachable on a given
+    /// target at all, not an artifact of which mechanism is asking, so
+    /// `'auto'` is not exempt from it.
     ///
-    /// `'default'`'s ceiling is per-target: its AOT/JIT retry
+    /// The per-target ceiling: the backend's own AOT/JIT retry
     /// (`make_zebin`/`driver.c`) only ever selects 512-register mode on
     /// "cri", every other target (including BMG and PVC) caps at
     /// 256-register mode (see `get_max_grf_mode()` in
     /// third_party/intel/backend/compiler.py, the single source of truth for
     /// this policy). That value is mirrored onto the module as the
     /// `ttig.max_grf_mode` attribute (stamped by TritonAnnotateModule) and
-    /// read back here when resolving this case for `'default'`. BMG and PVC
-    /// do support 512-register mode explicitly (`grf_mode='512'` works on
-    /// both); they just never auto-escalate to it, which is all this
-    /// per-target ceiling describes. This case additionally caps at
-    /// `Smallest` once `num_warps > 32`: a larger GRF mode reduces the maximum
-    /// launchable work-group size, so the AOT path skips the retry outright
-    /// above that bound and the JIT path attempts it and fails to build;
-    /// either way `ttig.max_grf_mode` never actually takes effect there.
+    /// read back here for both `'default'` and `'auto'`. BMG and PVC do
+    /// support 512-register mode explicitly (`grf_mode='512'` works on
+    /// both); they just never *auto*-escalate to it (neither the backend's
+    /// own retry nor IGC's internal heuristic ever will), which is all this
+    /// per-target ceiling describes.
     ///
-    /// `'auto'`'s escalation happens inside IGC, which decides on its own
-    /// with no backend path that reads back or constrains its choice, so
-    /// `ttig.max_grf_mode` (only ever realized by `'default'`'s own rebuild)
-    /// does not apply to it; `'auto'` always resolves to the unconditional
-    /// 512-register-mode bound below, same as an absent attribute.
+    /// `'default'` additionally caps at `Smallest` once `num_warps > 32`: a
+    /// larger GRF mode reduces the maximum launchable work-group size, so the
+    /// AOT path skips the retry outright above that bound and the JIT path
+    /// attempts it and fails to build; either way `ttig.max_grf_mode` never
+    /// actually takes effect there. `'auto'`'s escalation happens entirely
+    /// inside IGC and is not itself gated on `num_warps` at the backend
+    /// level, so this additional cap does not apply to it.
     ///
     /// If the attribute is absent (e.g. a hand-written test module that never
     /// went through the Python compiler pipeline), the pre-existing default
