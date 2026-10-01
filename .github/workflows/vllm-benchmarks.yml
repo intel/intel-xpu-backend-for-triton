@@ -3,6 +3,12 @@ run-name: UA CI-input tuning on B580 (${{ github.ref_name }})
 
 on:
   workflow_dispatch:
+    inputs:
+      part:
+        description: Tuning part to run (both runs sequentially)
+        type: choice
+        default: both
+        options: [both, '1', '2']
 
 permissions:
   contents: read
@@ -18,8 +24,14 @@ env:
 
 jobs:
   tune:
+    name: Tune part ${{ matrix.part }} of 2
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        part: ${{ fromJSON(inputs.part == 'both' && '[1,2]' || format('[{0}]', inputs.part)) }}
     runs-on: [linux, b580]
-    timeout-minutes: 2880
+    timeout-minutes: 1440
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
@@ -41,7 +53,8 @@ jobs:
           ./scripts/capture-hw-details.sh > reports/environment.txt
           python -m pip freeze > reports/packages.txt
           git rev-parse HEAD > reports/checkout.txt
-          cp scripts/ua-ci-inputs-*.json reports/
+          python scripts/ua_ci_shard.py --part ${{ matrix.part }} --output reports/manifests
+          cp scripts/ua-ci-tuning-shards.json reports/
           git diff 0ea7fbf49e45b4cf1a3881a66ade4f3ba5a5c7ed -- python third_party include lib cmake > reports/compiler-changes.diff
           test ! -s reports/compiler-changes.diff
       - name: Check cold graph timing against CI profiler
@@ -55,31 +68,31 @@ jobs:
         run: |
           git -C vllm apply --check "$PWD/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention.patch"
           git -C vllm apply "$PWD/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention.patch"
-      - name: Tune 87 BF16 CI inputs
+      - name: Tune BF16 inputs for this part
         run: |
           export PYTHONPATH="$PWD/vllm${PYTHONPATH:+:$PYTHONPATH}"
           python scripts/ua_ci_tune.py --tune --clear-cache \
-            --manifest scripts/ua-ci-inputs-bfloat16.json \
+            --manifest reports/manifests/bfloat16.json \
             --save-dir reports/profiles --measurements reports/bf16-measurements.json \
             --warmup-ms 25 --rep-ms 100 2>&1 | tee reports/bf16-tuning.log
       - name: Save BF16 profiles and measurements
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: ua-cold-graph-bf16-checkpoint
+          name: ua-cold-graph-part-${{ matrix.part }}-bf16-checkpoint
           path: reports
           if-no-files-found: warn
-      - name: Tune 10 FP8 CI inputs
+      - name: Tune FP8 inputs for this part
         run: |
           export PYTHONPATH="$PWD/vllm${PYTHONPATH:+:$PYTHONPATH}"
           python scripts/ua_ci_tune.py --tune --clear-cache \
-            --manifest scripts/ua-ci-inputs-float8_e4m3fn.json \
+            --manifest reports/manifests/float8_e4m3fn.json \
             --save-dir reports/profiles --measurements reports/fp8-measurements.json \
             --warmup-ms 25 --rep-ms 100 2>&1 | tee reports/fp8-tuning.log
       - name: Upload generated JSONs and measurements
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: ua-cold-graph-ci-profiles
+          name: ua-cold-graph-part-${{ matrix.part }}-profiles
           path: reports
           if-no-files-found: warn
