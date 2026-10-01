@@ -116,13 +116,10 @@ TEST_F(RegisterPressureGRFModeTest, NumWarpsAtBoundaryIsUnaffected) {
 }
 
 TEST_F(RegisterPressureGRFModeTest, AutoModeRespectsMaxGRFMode) {
-  // The per-target ceiling `ttig.max_grf_mode` encodes is a hardware/IGC
-  // limitation on which GRF modes are reachable at all, not an artifact of
-  // the backend's own retry mechanism: IGC's internal auto-GRF heuristic
-  // cannot select a larger mode than the backend's own escalation paths do
-  // on a given target either. A target whose max_grf_mode is "256"
-  // (non-"cri") collapses 'auto' to the same 8192-byte budget as 'default',
-  // not the unconditional 16384-byte bound an absent attribute falls back to.
+  // 'auto' resolves `ttig.max_grf_mode` the same way 'default' does. A
+  // target whose max_grf_mode is "256" (non-"cri") collapses 'auto' to the
+  // same 8192-byte budget as 'default', not the unconditional 16384-byte
+  // bound an absent attribute falls back to.
   auto module = createModule(StringRef("256"));
   EXPECT_EQ(largestBytes(*module, "auto"), 8192u);
 }

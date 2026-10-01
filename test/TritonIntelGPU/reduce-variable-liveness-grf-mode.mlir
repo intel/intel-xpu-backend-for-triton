@@ -19,10 +19,7 @@
 // COM:     (modules 1-4, which have no such attribute)
 // COM:   auto -> reads `ttig.max_grf_mode` exactly like "default" does (module 5
 // COM:     below), otherwise the same 16384 B/thread / 16 = 1024 B/lane fallback
-// COM:     (modules 1-4): the per-target ceiling is a hardware/IGC limitation on
-// COM:     which GRF modes are reachable at all, not an artifact of which
-// COM:     mechanism (the backend's own retry, or IGC's internal auto-GRF
-// COM:     heuristic) is asking, so "auto" is not exempt from it
+// COM:     (modules 1-4)
 // COM:
 // COM: The true GRF size isn't known at this point in the pipeline, and this gate
 // COM: treats the budget as a threshold to sink rather than a ceiling on what may
@@ -32,13 +29,11 @@
 // COM: would ever have required).
 // COM:
 // COM: For "default" and "auto" alike, that means the largest mode *this target's
-// COM: own automatic escalation* reaches (whether driven by the backend's own retry
-// COM: or by IGC's internal auto-GRF heuristic), not the largest mode it can be
-// COM: explicitly told to use (BMG and PVC both accept an explicit grf_mode='512';
-// COM: 256 is only where their automatic path -- either path -- stops), and not the
-// COM: largest any device supports. Modules 1-4 never set `ttig.max_grf_mode`, so
-// COM: they exercise the pre-target-aware fallback: unconditionally 512-register
-// COM: mode (1024 B/lane), for both "default" and "auto" alike.
+// COM: own automatic escalation* reaches, not the largest mode it can be explicitly
+// COM: told to use (BMG and PVC both accept an explicit grf_mode='512'; 256 is only
+// COM: where their automatic path stops), and not the largest any device supports.
+// COM: Modules 1-4 never set `ttig.max_grf_mode`, so they exercise the
+// COM: pre-target-aware fallback: unconditionally 512-register mode (1024 B/lane).
 // COM:
 // COM: "auto" resolves identically to "default" throughout this file: both read
 // COM: `ttig.max_grf_mode` when present (module 5 below) and share the same
@@ -59,8 +54,8 @@
 // COM: Python-side device info, see compiler.py's `get_max_grf_mode()`), since
 // COM: this lit test builds MLIR directly and never runs the Python compiler
 // COM: pipeline that would otherwise populate it. It pins the target-aware
-// COM: resolution of `UnknownGRFSizeAssumption::Largest` for "default" only: with
-// COM: the attribute set to "256", both "default" and "auto" now resolve to the
+// COM: resolution of `UnknownGRFSizeAssumption::Largest` for "default" and "auto":
+// COM: with the attribute set to "256", both now resolve to the
 // COM: 512 B/lane budget of an explicit "256" mode instead of the 1024 B/lane
 // COM: fallback modules 1-4 get (they have no such attribute).
 

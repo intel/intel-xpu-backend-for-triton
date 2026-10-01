@@ -177,12 +177,10 @@ def TritonIntelGPU_Dialect : Dialect {
     /// Get the name of the attribute holding the largest GRF mode ("128",
     /// "256" or "512") the backend's automatic escalation paths target for
     /// the device, i.e. the register-mode ceiling `ReduceVariableLiveness`'s
-    /// "default" and "auto" GRF budget resolution should assume (the ceiling
-    /// is a hardware/IGC limitation on which modes are reachable at all, so
-    /// it bounds "auto"'s IGC-internal escalation too, not just the
-    /// backend's own retry paths). Mirrors the same per-target policy
-    /// compiler.py's `get_max_grf_mode()` computes (only "cri" gets
-    /// 512-register mode; every other target caps at 256). Absent
+    /// "default" and "auto" GRF budget resolution should assume. Mirrors the
+    /// same per-target policy compiler.py's `get_max_grf_mode()` computes
+    /// (only "cri" gets 512-register mode; every other target caps at
+    /// 256). Absent
     /// when unknown (e.g. a hand-written test module, or a
     /// `-triton-annotate-module` invocation that didn't set `max-grf-mode`).
     static constexpr llvm::StringRef getMaxGRFModeAttrName() {
