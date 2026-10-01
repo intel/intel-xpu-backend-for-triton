@@ -612,7 +612,9 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
 - `TRITON_ALWAYS_COMPILE=1` forces to compile kernels regardless of cache hit.
 - `MLIR_ENABLE_TIMING` dumps the timing information for each MLIR pass.
 - `LLVM_ENABLE_TIMING` dumps the timing information for each LLVM pass.
-- `TRITON_DEFAULT_FP_FUSION` overrides the default behavior of allowing fp fusion (mul+add->fma).
+- `TRITON_DEFAULT_FP_FUSION` overrides the default behavior of disabling fp fusion (mul+add->fma).
+- `TRITON_FORCE_DISABLE_FP_FUSION=1` disables implicit fp fusion even when a kernel
+  requests `enable_fp_fusion=True`. Explicit fused operations such as `tl.fma` are unchanged.
 - `MLIR_ENABLE_REMARK` enables the performance warnings that are emitted as remarks.
 
 # Usage Guide
