@@ -49,6 +49,7 @@ namespace mlir::triton::gpu {
 
 constexpr static char AttrMaxRegistersName[] = "ttg.maxnreg";
 constexpr static char AttrNumWarpsName[] = "ttg.num-warps";
+constexpr static char AttrWarpIdOffsetName[] = "ttg.warp-id-offset";
 constexpr static char AttrNumCTAsName[] = "ttg.num-ctas";
 constexpr static char AttrTargetName[] = "ttg.target";
 constexpr static char AttrNumThreadsPerWarp[] = "ttg.threads-per-warp";
@@ -286,6 +287,11 @@ std::optional<CGAEncodingAttr> parseCGAAttr(AsmParser &parser, Attribute attr,
                                             unsigned rank);
 
 void printCGAAttr(AsmPrinter &printer, CGAEncodingAttr layout);
+
+// Return the CGA factor if layout = CTA * CGA, preserving broadcast block bits.
+// Pass a shape-instantiated layout when querying a tensor's CTA distribution.
+FailureOr<CGAEncodingAttr>
+maybeLinearToCGAEncodingAttr(const LinearLayout &layout);
 
 CGAEncodingAttr getCGALayout(Attribute layout);
 

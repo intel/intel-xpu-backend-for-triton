@@ -41,7 +41,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // NO-PREDICATED-NEXT: llvm.br ^[[BB_MERGE]](%[[LOADED0]] : i32)
     // NO-PREDICATED-NEXT: ^[[BB_MERGE]](%[[V0:.*]]: i32):
     // CHECK-NEXT:         llvm.bitcast %[[V0]] : i32 to f32
-    %3 = tt.descriptor_load %0[%arg1, %arg2] : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
+    %3 = tt.descriptor_load %0[%arg1, %arg2] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
     tt.return %3 : tensor<4x4xf32, #blocked>
   }
 }
@@ -72,7 +72,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
     // NO-PREDICATED-NEXT: llvm.br ^[[BB_MERGE]](%[[LOADED0]] : i32)
     // NO-PREDICATED-NEXT: ^[[BB_MERGE]](%[[V0:.*]]: i32):
     // CHECK-NEXT:         llvm.bitcast %[[V0]] : i32 to f32
-    %3 = tt.descriptor_load %0[%c4_i32, %c4_i32] : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
+    %3 = tt.descriptor_load %0[%c4_i32, %c4_i32] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
     tt.return %3 : tensor<4x4xf32, #blocked>
   }
 }
@@ -100,7 +100,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32}
     // CHECK-NEXT: %[[LOADED:.*]] = llvm.load %[[PTR]] {alignment = 4 : i64} : !llvm.ptr<1> -> i32
     // CHECK-NEXT: llvm.br ^[[BB_MERGE]](%[[LOADED]] : i32)
     // CHECK-NOT:  triton_gen.predicated_load
-    %3 = tt.descriptor_load %0[%arg1, %arg2] : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
+    %3 = tt.descriptor_load %0[%arg1, %arg2] {ttig.desc_padding = 1 : i32} : !tt.tensordesc<4x4xf32> -> tensor<4x4xf32, #blocked>
     tt.return %3 : tensor<4x4xf32, #blocked>
   }
 }
@@ -142,7 +142,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.sup
     // NO-PREDICATED-NOT: L1IAR_L3C
     // NO-PREDICATED:     llvm.cond_br
     // NO-PREDICATED-NOT: L1IAR_L3C
-    %val = tt.descriptor_load %desc[%c0_i32] evictionPolicy = evict_first : !tt.tensordesc<128xf32> -> tensor<128xf32, #blocked1>
+    %val = tt.descriptor_load %desc[%c0_i32] {cachePolicy = #tt.cache_policy<cache_modifier = none, eviction_policy = evict_first>} : !tt.tensordesc<128xf32> -> tensor<128xf32, #blocked1>
     tt.return
   }
 }

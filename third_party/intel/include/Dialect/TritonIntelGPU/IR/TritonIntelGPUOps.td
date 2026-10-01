@@ -32,21 +32,6 @@ def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
 class TTIG_Op<string mnemonic, list<Trait> traits = []> :
     Op<TritonIntelGPU_Dialect, mnemonic, !listconcat(traits, [VerifyMemDescLayoutsTrait])>;
 
-def TTIG_AllocOp : TTIG_Op<"alloc", [MemoryEffects<[MemAlloc]>]> {
-  let summary = "Memory allocation operation";
-  let description = [{
-    The `alloc` operation allocates a region of memory as specified by its type.
-    Example:
-      ```mlir
-      %0 = ttig.alloc() : <8x64xf32, 3>
-      ```
-  }];
-  let results = (outs TT_Ptr:$result);
-  let assemblyFormat = [{
-    attr-dict `:` type($result)
-  }];
-}
-
 def TTIG_PrefetchOp : TTIG_Op<"prefetch", [
   MemoryEffects<[MemWrite<L2Cache>]>,
   DeclareOpInterfaceMethods<PredicatedOpInterface>,
@@ -106,22 +91,6 @@ def TTIG_DescriptorPrefetchOp : TTIG_Op<"descriptor_prefetch", [MemoryEffects<[M
     attr-dict `:` qualified(type($desc))
   }];
   let hasVerifier = 1;
-}
-
-// same as tt.broadcast except that we don't require SameOperandsAndResultEncoding
-def TTIG_BroadcastOp : TTIG_Op<"broadcast", [Pure, SameOperandsAndResultElementType]> {
-  let summary = "broadcast a tensor";
-  let description = [{
-    For a given tensor, broadcast changes one or more dimensions with size 1
-    to a new size, e.g. tensor<1x32x1xf32> -> tensor<2x32x4xf32>.  You cannot
-    change the size of a non-1 dimension.
-  }];
-
-  let arguments = (ins TT_Tensor:$src);
-  let results = (outs TT_Tensor:$result);
-  let assemblyFormat = [{
-    $src attr-dict `:` type($src) `->` type($result)
-  }];
 }
 
 // `tt.ptr` no longer spells the workgroup (SLM) address space: PtrAddrSpace
@@ -208,7 +177,9 @@ def TTIG_ExtractDescOp : TTIG_Op<"extract_desc", [Pure]> {
   let assemblyFormat = "$desc `[` $index `]` attr-dict `:` type($desc) `->` type($result)";
 }
 
-def TTIG_Subgroup2DBlockLoadOp : TTIG_Op<"2d_block_load"> {
+def TTIG_Subgroup2DBlockLoadOp : TTIG_Op<"2d_block_load", [
+  AttrSizedOperandSegments
+]> {
   let summary = "2D block load from a descriptor-based surface";
   let description = [{
     Loads a 2D tile from a memory surface described by decomposed parameters.
@@ -234,6 +205,17 @@ def TTIG_Subgroup2DBlockLoadOp : TTIG_Op<"2d_block_load"> {
     / `base_pitch` (those describe a single 2D surface only), so they must be
     supplied by the producer of this op.
 
+    `batch_offsets` and `batch_shapes` carry the index and the declared extent
+    of every batch dimension of the *descriptor*, outermost first. They are used
+    only to bounds-check those dimensions: `base_ptr` already includes every
+    batch offset, so a batch index escapes the hardware's `base_width` x
+    `base_height` clamp and cannot be checked by the hardware. Unlike
+    `batch_strides`, which describes only what the result layout walks
+    (`rank - 2` entries), these describe the descriptor (`descriptor_rank - 2`
+    entries) and so also cover the leading dimensions a rank-reducing load
+    drops. The dropped dimensions are therefore the first
+    `batch_offsets.size() - batch_strides.size()` entries.
+
     When `pad_nan` is set, the LLVM lowering builds boundary masks from
     the surface dimensions and fills out-of-bounds elements with NaN.
     Otherwise, the hardware zero-fills out-of-bounds elements.
@@ -248,6 +230,8 @@ def TTIG_Subgroup2DBlockLoadOp : TTIG_Op<"2d_block_load"> {
     I32:$offset_x,
     I32:$offset_y,
     Variadic<I64>:$batch_strides,
+    Variadic<I32>:$batch_offsets,
+    Variadic<I32>:$batch_shapes,
     OptionalAttr<UnitAttr>:$pad_nan,
     TTIG_BlockIOMode:$memory_layout
   );
@@ -257,6 +241,8 @@ def TTIG_Subgroup2DBlockLoadOp : TTIG_Op<"2d_block_load"> {
     $base_ptr `,` $base_width `,` $base_height `,` $base_pitch
     `[` $offset_x `,` $offset_y `]`
     (`batch_strides` `[` $batch_strides^ `]`)?
+    (`batch_offsets` `[` $batch_offsets^ `]`)?
+    (`batch_shapes` `[` $batch_shapes^ `]`)?
     `{` $memory_layout (`,` `pad_nan` $pad_nan^)? `}`
     attr-dict `:` type($base_ptr) `->` type($result)
   }];

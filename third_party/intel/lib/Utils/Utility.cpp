@@ -7,9 +7,11 @@
 #include "mlir/Interfaces/LoopLikeInterface.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include <optional>
+#include <type_traits>
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -220,7 +222,13 @@ void eraseOperations(SmallPtrSetImpl<Operation *> &operations) {
   }
 }
 
-SmallVector<tt::MakeTensorDescOp> findAllMakeTensorDescOps(Value val) {
+// True if any region of `op` has no blocks.
+static bool hasEmptyRegion(Operation *op) {
+  return llvm::any_of(op->getRegions(),
+                      [](Region &region) { return region.empty(); });
+}
+
+static SmallVector<tt::MakeTensorDescOp> findAllMakeTensorDescOps(Value val) {
   llvm::SmallSetVector<tt::MakeTensorDescOp, 4> results;
   SmallPtrSet<Value, 8> visited;
   SmallVector<Value, 8> worklist;
@@ -230,6 +238,18 @@ SmallVector<tt::MakeTensorDescOp> findAllMakeTensorDescOps(Value val) {
     Value cur = worklist.pop_back_val();
     if (!visited.insert(cur).second)
       continue;
+
+    // A region-less op is transiently half-converted (`ConvertForOpTypes` and
+    // friends move the body out before replacing the old op, and the conversion
+    // driver re-queries legality -- so this function -- inside that window):
+    // every accessor below that reaches a region terminator asserts on it, and
+    // a half-moved `scf.if` would yield a confident one-arm answer. Fail the
+    // trace instead of reasoning about unreadable IR (#8167).
+    Operation *owner = cur.getDefiningOp();
+    if (!owner)
+      owner = cur.getParentBlock()->getParentOp();
+    if (owner && hasEmptyRegion(owner))
+      return {};
 
     if (auto arg = dyn_cast<BlockArgument>(cur)) {
       Operation *parentOp = arg.getParentBlock()->getParentOp();
@@ -277,23 +297,39 @@ SmallVector<tt::MakeTensorDescOp> findAllMakeTensorDescOps(Value val) {
     }
     if (auto opRes = dyn_cast<OpResult>(cur)) {
       Operation *defOp = opRes.getOwner();
+      if (auto whileOp = dyn_cast<scf::WhileOp>(defOp)) {
+        // An `scf.while` result is the `scf.condition` arg, not the after
+        // region's yield that `getYieldedValues` returns.
+        worklist.push_back(
+            whileOp.getConditionOp().getArgs()[opRes.getResultNumber()]);
+        continue;
+      }
       if (auto loopOp = dyn_cast<LoopLikeOpInterface>(defOp)) {
-        worklist.push_back(loopOp.getYieldedValues()[opRes.getResultNumber()]);
+        // Hop to the region iter-arg rather than indexing `getYieldedValues`:
+        // that range is indexed by loop-carried position, not result number,
+        // and is empty for loops taking the interface default. The
+        // block-argument branch above then walks both the init (the zero-trip
+        // value) and the yield edge.
+        BlockArgument iterArg = loopOp.getTiedLoopRegionIterArg(opRes);
+        if (!iterArg)
+          return {};
+        worklist.push_back(iterArg);
         continue;
       }
       if (auto ifOp = dyn_cast<scf::IfOp>(defOp)) {
+        // The verifier requires both regions once an `scf.if` has results, so
+        // an empty arm is only transient conversion state -- the check at the
+        // top of the loop fails the trace there. Skipping the unreadable arm
+        // instead was the quiet half of #8167: it hands back a one-arm set that
+        // a caller reasoning about `padding` reads as consistent, and wrong.
         Region &thenRgn = ifOp.getThenRegion();
         Region &elseRgn = ifOp.getElseRegion();
-        if (!thenRgn.empty()) {
-          auto thenYieldOp =
-              cast<scf::YieldOp>(thenRgn.getBlocks().front().getTerminator());
-          worklist.push_back(thenYieldOp->getOperand(opRes.getResultNumber()));
-        }
-        if (!elseRgn.empty()) {
-          auto elseYieldOp =
-              cast<scf::YieldOp>(elseRgn.getBlocks().front().getTerminator());
-          worklist.push_back(elseYieldOp->getOperand(opRes.getResultNumber()));
-        }
+        auto thenYieldOp =
+            cast<scf::YieldOp>(thenRgn.getBlocks().front().getTerminator());
+        worklist.push_back(thenYieldOp->getOperand(opRes.getResultNumber()));
+        auto elseYieldOp =
+            cast<scf::YieldOp>(elseRgn.getBlocks().front().getTerminator());
+        worklist.push_back(elseYieldOp->getOperand(opRes.getResultNumber()));
         continue;
       }
       if (auto selectOp = dyn_cast<arith::SelectOp>(defOp)) {
@@ -320,6 +356,40 @@ std::optional<tt::MakeTensorDescOp> findMakeTensorDescOp(Value val) {
   if (all.size() == 1)
     return all[0];
   return std::nullopt;
+}
+
+DescriptorDefinitions findDescriptorDefinitions(Value val) {
+  return DescriptorDefinitions(findAllMakeTensorDescOps(val));
+}
+
+// The value `get` returns for every candidate, or nullopt if they disagree.
+template <typename Getter>
+static auto consistentValue(ArrayRef<tt::MakeTensorDescOp> ops, Getter get)
+    -> std::optional<std::decay_t<decltype(get(ops.front()))>> {
+  if (ops.empty())
+    return std::nullopt;
+  auto first = get(ops.front());
+  if (!llvm::all_of(ops.drop_front(),
+                    [&](tt::MakeTensorDescOp d) { return get(d) == first; }))
+    return std::nullopt;
+  return first;
+}
+
+std::optional<tt::PaddingOption>
+DescriptorDefinitions::consistentPadding() const {
+  return consistentValue(ops,
+                         [](tt::MakeTensorDescOp d) { return d.getPadding(); });
+}
+
+std::optional<Operation::operand_range>
+DescriptorDefinitions::consistentShape() const {
+  return consistentValue(ops,
+                         [](tt::MakeTensorDescOp d) { return d.getShape(); });
+}
+
+bool DescriptorDefinitions::allSatisfy(
+    llvm::function_ref<bool(tt::MakeTensorDescOp)> pred) const {
+  return !ops.empty() && llvm::all_of(ops, pred);
 }
 
 } // namespace mlir::triton::intel

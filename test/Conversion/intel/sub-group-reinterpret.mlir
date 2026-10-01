@@ -1,0 +1,604 @@
+// RUN: triton-opt %s -split-input-file --intel-allocate-shared-memory --convert-triton-intel-gpu-to-llvm --convert-tritongen-to-llvm | FileCheck %s
+
+
+// 32x32xf8E5M2 mma <-> dot_a layout conversion via sub-group bitcast shuffle.
+// The conversion reinterprets packed f8E5M2 elements by calling the
+// GenISA_SubgroupBitcastShuffle intrinsic.
+
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1], A = [8, 32], B = [32, 16], C = [8, 16]}>
+#dot_a = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>
+
+// CHECK: llvm.func spir_funccc @llvm.genx.GenISA.SubgroupBitcastShuffle.v8i16.v16i8(vector<16xi8>) -> vector<8xi16>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL:   llvm.func spir_kernelcc @test_reinterpret_d_to_a(
+  // CHECK-SAME:      %[[ARG0:.*]]: !llvm.struct<(i8, i8, {{.*}})>,
+  tt.func @test_reinterpret_d_to_a(%arg0: tensor<32x32xf8E5M2, #mma>) -> tensor<32x32xf8E5M2, #dot_a> {
+    // CHECK:           %[[DPAS_D_0:.*]] = llvm.extractvalue %[[ARG0]][0] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_1:.*]] = llvm.extractvalue %[[ARG0]][1] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_2:.*]] = llvm.extractvalue %[[ARG0]][2] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_3:.*]] = llvm.extractvalue %[[ARG0]][3] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_4:.*]] = llvm.extractvalue %[[ARG0]][4] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_5:.*]] = llvm.extractvalue %[[ARG0]][5] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_6:.*]] = llvm.extractvalue %[[ARG0]][6] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_7:.*]] = llvm.extractvalue %[[ARG0]][7] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_8:.*]] = llvm.extractvalue %[[ARG0]][8] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_9:.*]] = llvm.extractvalue %[[ARG0]][9] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_10:.*]] = llvm.extractvalue %[[ARG0]][10] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_11:.*]] = llvm.extractvalue %[[ARG0]][11] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_12:.*]] = llvm.extractvalue %[[ARG0]][12] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_13:.*]] = llvm.extractvalue %[[ARG0]][13] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_14:.*]] = llvm.extractvalue %[[ARG0]][14] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_15:.*]] = llvm.extractvalue %[[ARG0]][15] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_16:.*]] = llvm.extractvalue %[[ARG0]][16] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_17:.*]] = llvm.extractvalue %[[ARG0]][17] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_18:.*]] = llvm.extractvalue %[[ARG0]][18] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_19:.*]] = llvm.extractvalue %[[ARG0]][19] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_20:.*]] = llvm.extractvalue %[[ARG0]][20] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_21:.*]] = llvm.extractvalue %[[ARG0]][21] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_22:.*]] = llvm.extractvalue %[[ARG0]][22] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_23:.*]] = llvm.extractvalue %[[ARG0]][23] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_24:.*]] = llvm.extractvalue %[[ARG0]][24] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_25:.*]] = llvm.extractvalue %[[ARG0]][25] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_26:.*]] = llvm.extractvalue %[[ARG0]][26] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_27:.*]] = llvm.extractvalue %[[ARG0]][27] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_28:.*]] = llvm.extractvalue %[[ARG0]][28] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_29:.*]] = llvm.extractvalue %[[ARG0]][29] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_30:.*]] = llvm.extractvalue %[[ARG0]][30] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_31:.*]] = llvm.extractvalue %[[ARG0]][31] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_32:.*]] = llvm.extractvalue %[[ARG0]][32] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_33:.*]] = llvm.extractvalue %[[ARG0]][33] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_34:.*]] = llvm.extractvalue %[[ARG0]][34] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_35:.*]] = llvm.extractvalue %[[ARG0]][35] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_36:.*]] = llvm.extractvalue %[[ARG0]][36] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_37:.*]] = llvm.extractvalue %[[ARG0]][37] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_38:.*]] = llvm.extractvalue %[[ARG0]][38] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_39:.*]] = llvm.extractvalue %[[ARG0]][39] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_40:.*]] = llvm.extractvalue %[[ARG0]][40] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_41:.*]] = llvm.extractvalue %[[ARG0]][41] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_42:.*]] = llvm.extractvalue %[[ARG0]][42] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_43:.*]] = llvm.extractvalue %[[ARG0]][43] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_44:.*]] = llvm.extractvalue %[[ARG0]][44] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_45:.*]] = llvm.extractvalue %[[ARG0]][45] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_46:.*]] = llvm.extractvalue %[[ARG0]][46] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_47:.*]] = llvm.extractvalue %[[ARG0]][47] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_48:.*]] = llvm.extractvalue %[[ARG0]][48] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_49:.*]] = llvm.extractvalue %[[ARG0]][49] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_50:.*]] = llvm.extractvalue %[[ARG0]][50] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_51:.*]] = llvm.extractvalue %[[ARG0]][51] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_52:.*]] = llvm.extractvalue %[[ARG0]][52] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_53:.*]] = llvm.extractvalue %[[ARG0]][53] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_54:.*]] = llvm.extractvalue %[[ARG0]][54] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_55:.*]] = llvm.extractvalue %[[ARG0]][55] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_56:.*]] = llvm.extractvalue %[[ARG0]][56] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_57:.*]] = llvm.extractvalue %[[ARG0]][57] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_58:.*]] = llvm.extractvalue %[[ARG0]][58] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_59:.*]] = llvm.extractvalue %[[ARG0]][59] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_60:.*]] = llvm.extractvalue %[[ARG0]][60] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_61:.*]] = llvm.extractvalue %[[ARG0]][61] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_62:.*]] = llvm.extractvalue %[[ARG0]][62] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_D_63:.*]] = llvm.extractvalue %[[ARG0]][63] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+
+    // COM: Two 2x DPAS D packed to 1x DPAS A of fp8 type.
+    // COM: The order is a0, a8, a1, a9, a2, a10, a3, a11, a4, a12, a5, a13, a6, a14, a7, a15.
+    // CHECK:           %[[UNPACKED_DPAS_D:.*]] = llvm.mlir.undef : vector<16xi8>
+    // CHECK:           %[[MLIR_1:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[UNPACKED_DPAS_D_0:.*]] = llvm.insertelement %[[DPAS_D_0]], %[[UNPACKED_DPAS_D]]{{\[}}%[[MLIR_1]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_2:.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK:           %[[UNPACKED_DPAS_D_1:.*]] = llvm.insertelement %[[DPAS_D_8]], %[[UNPACKED_DPAS_D_0]]{{\[}}%[[MLIR_2]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_3:.*]] = llvm.mlir.constant(2 : i32) : i32
+    // CHECK:           %[[UNPACKED_DPAS_D_2:.*]] = llvm.insertelement %[[DPAS_D_1]], %[[UNPACKED_DPAS_D_1]]{{\[}}%[[MLIR_3]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_4:.*]] = llvm.mlir.constant(3 : i32) : i32
+    // CHECK:           %[[UNPACKED_DPAS_D_3:.*]] = llvm.insertelement %[[DPAS_D_9]], %[[UNPACKED_DPAS_D_2]]{{\[}}%[[MLIR_4]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_5:.*]] = llvm.mlir.constant(4 : i32) : i32
+    // CHECK:           %[[UNPACKED_DPAS_D_4:.*]] = llvm.insertelement %[[DPAS_D_2]], %[[UNPACKED_DPAS_D_3]]{{\[}}%[[MLIR_5]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_6:.*]] = llvm.mlir.constant(5 : i32) : i32
+    // CHECK:           %[[UNPACKED_DPAS_D_5:.*]] = llvm.insertelement %[[DPAS_D_10]], %[[UNPACKED_DPAS_D_4]]{{\[}}%[[MLIR_6]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_7:.*]] = llvm.mlir.constant(6 : i32) : i32
+    // CHECK:           %[[UNPACKED_DPAS_D_6:.*]] = llvm.insertelement %[[DPAS_D_3]], %[[UNPACKED_DPAS_D_5]]{{\[}}%[[MLIR_7]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_8:.*]] = llvm.mlir.constant(7 : i32) : i32
+    // CHECK:           %[[UNPACKED_DPAS_D_7:.*]] = llvm.insertelement %[[DPAS_D_11]], %[[UNPACKED_DPAS_D_6]]{{\[}}%[[MLIR_8]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_9:.*]] = llvm.mlir.constant(8 : i32) : i32
+    // CHECK:           %[[UNPACKED_DPAS_D_8:.*]] = llvm.insertelement %[[DPAS_D_4]], %[[UNPACKED_DPAS_D_7]]{{\[}}%[[MLIR_9]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_10:.*]] = llvm.mlir.constant(9 : i32) : i32
+    // CHECK:           %[[UNPACKED_DPAS_D_9:.*]] = llvm.insertelement %[[DPAS_D_12]], %[[UNPACKED_DPAS_D_8]]{{\[}}%[[MLIR_10]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_11:.*]] = llvm.mlir.constant(10 : i32) : i32
+    // CHECK:           %[[UNPACKED_DPAS_D_10:.*]] = llvm.insertelement %[[DPAS_D_5]], %[[UNPACKED_DPAS_D_9]]{{\[}}%[[MLIR_11]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_12:.*]] = llvm.mlir.constant(11 : i32) : i32
+    // CHECK:           %[[UNPACKED_DPAS_D_11:.*]] = llvm.insertelement %[[DPAS_D_13]], %[[UNPACKED_DPAS_D_10]]{{\[}}%[[MLIR_12]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_13:.*]] = llvm.mlir.constant(12 : i32) : i32
+    // CHECK:           %[[UNPACKED_DPAS_D_12:.*]] = llvm.insertelement %[[DPAS_D_6]], %[[UNPACKED_DPAS_D_11]]{{\[}}%[[MLIR_13]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_14:.*]] = llvm.mlir.constant(13 : i32) : i32
+    // CHECK:           %[[UNPACKED_DPAS_D_13:.*]] = llvm.insertelement %[[DPAS_D_14]], %[[UNPACKED_DPAS_D_12]]{{\[}}%[[MLIR_14]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_15:.*]] = llvm.mlir.constant(14 : i32) : i32
+    // CHECK:           %[[UNPACKED_DPAS_D_14:.*]] = llvm.insertelement %[[DPAS_D_7]], %[[UNPACKED_DPAS_D_13]]{{\[}}%[[MLIR_15]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_16:.*]] = llvm.mlir.constant(15 : i32) : i32
+    // CHECK:           %[[UNPACKED_DPAS_D_15:.*]] = llvm.insertelement %[[DPAS_D_15]], %[[UNPACKED_DPAS_D_14]]{{\[}}%[[MLIR_16]] : i32] : vector<16xi8>
+    // CHECK:           %[[PACKED_DPAS_A:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.SubgroupBitcastShuffle.v8i16.v16i8(%[[UNPACKED_DPAS_D_15]])
+    // CHECK:           %[[UNPACKED_DPAS_A:.*]] = llvm.bitcast %[[PACKED_DPAS_A]] : vector<8xi16> to vector<16xi8>
+
+    // COM: The 2nd DPAS operands shuffle.
+    // COM: The base is a16 instead of a0, and the order is a16, a24, a17, a25, a18, a26, a19, a27, a20, a28, a21, a29, a22, a30, a23, a31.
+    // CHECK:           %[[UNPACKED_DPAS_D:.*]] = llvm.mlir.undef : vector<16xi8>
+    // CHECK:           %[[MLIR_34:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[UNPACKED_DPAS_D_16:.*]] = llvm.insertelement %[[DPAS_D_16]], %[[UNPACKED_DPAS_D]]{{\[}}%[[MLIR_34]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_35:.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK:           %[[UNPACKED_DPAS_D_17:.*]] = llvm.insertelement %[[DPAS_D_24]], %[[UNPACKED_DPAS_D_16]]{{\[}}%[[MLIR_35]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_36:.*]] = llvm.mlir.constant(2 : i32) : i32
+    // CHECK:           %[[UNPACKED_DPAS_D_18:.*]] = llvm.insertelement %[[DPAS_D_17]], %[[UNPACKED_DPAS_D_17]]{{\[}}%[[MLIR_36]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_37:.*]] = llvm.mlir.constant(3 : i32) : i32
+    // CHECK:           %[[UNPACKED_DPAS_D_19:.*]] = llvm.insertelement %[[DPAS_D_25]], %[[UNPACKED_DPAS_D_18]]{{\[}}%[[MLIR_37]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_38:.*]] = llvm.mlir.constant(4 : i32) : i32
+    // CHECK:           %[[UNPACKED_DPAS_D_20:.*]] = llvm.insertelement %[[DPAS_D_18]], %[[UNPACKED_DPAS_D_19]]{{\[}}%[[MLIR_38]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_39:.*]] = llvm.mlir.constant(5 : i32) : i32
+    // CHECK:           %[[UNPACKED_DPAS_D_21:.*]] = llvm.insertelement %[[DPAS_D_26]], %[[UNPACKED_DPAS_D_20]]{{\[}}%[[MLIR_39]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_40:.*]] = llvm.mlir.constant(6 : i32) : i32
+    // CHECK:           %[[UNPACKED_DPAS_D_22:.*]] = llvm.insertelement %[[DPAS_D_19]], %[[UNPACKED_DPAS_D_21]]{{\[}}%[[MLIR_40]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_41:.*]] = llvm.mlir.constant(7 : i32) : i32
+    // CHECK:           %[[UNPACKED_DPAS_D_23:.*]] = llvm.insertelement %[[DPAS_D_27]], %[[UNPACKED_DPAS_D_22]]{{\[}}%[[MLIR_41]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_42:.*]] = llvm.mlir.constant(8 : i32) : i32
+    // CHECK:           %[[UNPACKED_DPAS_D_24:.*]] = llvm.insertelement %[[DPAS_D_20]], %[[UNPACKED_DPAS_D_23]]{{\[}}%[[MLIR_42]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_43:.*]] = llvm.mlir.constant(9 : i32) : i32
+    // CHECK:           %[[UNPACKED_DPAS_D_25:.*]] = llvm.insertelement %[[DPAS_D_28]], %[[UNPACKED_DPAS_D_24]]{{\[}}%[[MLIR_43]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_44:.*]] = llvm.mlir.constant(10 : i32) : i32
+    // CHECK:           %[[UNPACKED_DPAS_D_26:.*]] = llvm.insertelement %[[DPAS_D_21]], %[[UNPACKED_DPAS_D_25]]{{\[}}%[[MLIR_44]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_45:.*]] = llvm.mlir.constant(11 : i32) : i32
+    // CHECK:           %[[UNPACKED_DPAS_D_27:.*]] = llvm.insertelement %[[DPAS_D_29]], %[[UNPACKED_DPAS_D_26]]{{\[}}%[[MLIR_45]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_46:.*]] = llvm.mlir.constant(12 : i32) : i32
+    // CHECK:           %[[UNPACKED_DPAS_D_28:.*]] = llvm.insertelement %[[DPAS_D_22]], %[[UNPACKED_DPAS_D_27]]{{\[}}%[[MLIR_46]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_47:.*]] = llvm.mlir.constant(13 : i32) : i32
+    // CHECK:           %[[UNPACKED_DPAS_D_29:.*]] = llvm.insertelement %[[DPAS_D_30]], %[[UNPACKED_DPAS_D_28]]{{\[}}%[[MLIR_47]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_48:.*]] = llvm.mlir.constant(14 : i32) : i32
+    // CHECK:           %[[UNPACKED_DPAS_D_30:.*]] = llvm.insertelement %[[DPAS_D_23]], %[[UNPACKED_DPAS_D_29]]{{\[}}%[[MLIR_48]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_49:.*]] = llvm.mlir.constant(15 : i32) : i32
+    // CHECK:           %[[UNPACKED_DPAS_D_31:.*]] = llvm.insertelement %[[DPAS_D_31]], %[[UNPACKED_DPAS_D_30]]{{\[}}%[[MLIR_49]] : i32] : vector<16xi8>
+    // CHECK:           %[[PACKED_DPAS_A:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.SubgroupBitcastShuffle.v8i16.v16i8(%[[UNPACKED_DPAS_D_31]]) {convergent, function_type = !llvm.func<vector<8xi16> (vector<16xi8>)>, linkage = #llvm.linkage<external>, no_unwind, sym_name = "llvm.genx.GenISA.SubgroupBitcastShuffle.v8i16.v16i8", visibility_ = 0 : i64, will_return} : (vector<16xi8>) -> vector<8xi16>
+    // CHECK:           %[[UNPACKED_DPAS_A:.*]] = llvm.bitcast %[[PACKED_DPAS_A]] : vector<8xi16> to vector<16xi8>
+
+    // COM: The remianing 2 DPAS D to DPAS A shuffle.
+    // CHECK-COUNT-2: llvm.call spir_funccc @llvm.genx.GenISA.SubgroupBitcastShuffle.v8i16.v16i8(
+    %0 = ttg.convert_layout %arg0 : tensor<32x32xf8E5M2, #mma> -> tensor<32x32xf8E5M2, #dot_a>
+    tt.return %0 : tensor<32x32xf8E5M2, #dot_a>
+  }
+}
+
+// -----
+
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 4, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [1, 1], A = [8, 32], B = [32, 16], C = [8, 16]}>
+#dot_a = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>
+
+// CHECK: llvm.func spir_funccc @llvm.genx.GenISA.SubgroupBitcastShuffle.v16i8.v8i16(vector<8xi16>) -> vector<16xi8>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK-LABEL:   llvm.func spir_kernelcc @test_reinterpret_a_to_d(
+  // CHECK-SAME:      %[[ARG0:.*]]: !llvm.struct<(i8, i8, {{.*}})>,
+  tt.func @test_reinterpret_a_to_d(%arg0: tensor<32x32xf8E5M2, #dot_a>) -> tensor<32x32xf8E5M2, #mma> {
+    // CHECK:           %[[DPAS_A_0:.*]] = llvm.extractvalue %[[ARG0]][0] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_1:.*]] = llvm.extractvalue %[[ARG0]][1] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_2:.*]] = llvm.extractvalue %[[ARG0]][2] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_3:.*]] = llvm.extractvalue %[[ARG0]][3] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_4:.*]] = llvm.extractvalue %[[ARG0]][4] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_5:.*]] = llvm.extractvalue %[[ARG0]][5] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_6:.*]] = llvm.extractvalue %[[ARG0]][6] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_7:.*]] = llvm.extractvalue %[[ARG0]][7] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_8:.*]] = llvm.extractvalue %[[ARG0]][8] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_9:.*]] = llvm.extractvalue %[[ARG0]][9] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_10:.*]] = llvm.extractvalue %[[ARG0]][10] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_11:.*]] = llvm.extractvalue %[[ARG0]][11] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_12:.*]] = llvm.extractvalue %[[ARG0]][12] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_13:.*]] = llvm.extractvalue %[[ARG0]][13] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_14:.*]] = llvm.extractvalue %[[ARG0]][14] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_15:.*]] = llvm.extractvalue %[[ARG0]][15] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_16:.*]] = llvm.extractvalue %[[ARG0]][16] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_17:.*]] = llvm.extractvalue %[[ARG0]][17] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_18:.*]] = llvm.extractvalue %[[ARG0]][18] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_19:.*]] = llvm.extractvalue %[[ARG0]][19] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_20:.*]] = llvm.extractvalue %[[ARG0]][20] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_21:.*]] = llvm.extractvalue %[[ARG0]][21] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_22:.*]] = llvm.extractvalue %[[ARG0]][22] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_23:.*]] = llvm.extractvalue %[[ARG0]][23] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_24:.*]] = llvm.extractvalue %[[ARG0]][24] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_25:.*]] = llvm.extractvalue %[[ARG0]][25] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_26:.*]] = llvm.extractvalue %[[ARG0]][26] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_27:.*]] = llvm.extractvalue %[[ARG0]][27] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_28:.*]] = llvm.extractvalue %[[ARG0]][28] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_29:.*]] = llvm.extractvalue %[[ARG0]][29] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_30:.*]] = llvm.extractvalue %[[ARG0]][30] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_31:.*]] = llvm.extractvalue %[[ARG0]][31] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_32:.*]] = llvm.extractvalue %[[ARG0]][32] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_33:.*]] = llvm.extractvalue %[[ARG0]][33] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_34:.*]] = llvm.extractvalue %[[ARG0]][34] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_35:.*]] = llvm.extractvalue %[[ARG0]][35] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_36:.*]] = llvm.extractvalue %[[ARG0]][36] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_37:.*]] = llvm.extractvalue %[[ARG0]][37] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_38:.*]] = llvm.extractvalue %[[ARG0]][38] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_39:.*]] = llvm.extractvalue %[[ARG0]][39] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_40:.*]] = llvm.extractvalue %[[ARG0]][40] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_41:.*]] = llvm.extractvalue %[[ARG0]][41] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_42:.*]] = llvm.extractvalue %[[ARG0]][42] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_43:.*]] = llvm.extractvalue %[[ARG0]][43] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_44:.*]] = llvm.extractvalue %[[ARG0]][44] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_45:.*]] = llvm.extractvalue %[[ARG0]][45] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_46:.*]] = llvm.extractvalue %[[ARG0]][46] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_47:.*]] = llvm.extractvalue %[[ARG0]][47] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_48:.*]] = llvm.extractvalue %[[ARG0]][48] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_49:.*]] = llvm.extractvalue %[[ARG0]][49] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_50:.*]] = llvm.extractvalue %[[ARG0]][50] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_51:.*]] = llvm.extractvalue %[[ARG0]][51] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_52:.*]] = llvm.extractvalue %[[ARG0]][52] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_53:.*]] = llvm.extractvalue %[[ARG0]][53] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_54:.*]] = llvm.extractvalue %[[ARG0]][54] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_55:.*]] = llvm.extractvalue %[[ARG0]][55] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_56:.*]] = llvm.extractvalue %[[ARG0]][56] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_57:.*]] = llvm.extractvalue %[[ARG0]][57] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_58:.*]] = llvm.extractvalue %[[ARG0]][58] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_59:.*]] = llvm.extractvalue %[[ARG0]][59] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_60:.*]] = llvm.extractvalue %[[ARG0]][60] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_61:.*]] = llvm.extractvalue %[[ARG0]][61] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_62:.*]] = llvm.extractvalue %[[ARG0]][62] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK:           %[[DPAS_A_63:.*]] = llvm.extractvalue %[[ARG0]][63] : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+
+    // COM: 1x DPAS A unpacked to 2x DPAS C of fp8 type.
+    // COM: The order is a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15.
+    // CHECK:           %[[PACKED_DPAS_A:.*]] = llvm.mlir.undef : vector<16xi8>
+    // CHECK:           %[[MLIR_1:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[PACKED_DPAS_A_0:.*]] = llvm.insertelement %[[DPAS_A_0]], %[[PACKED_DPAS_A]]{{\[}}%[[MLIR_1]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_2:.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK:           %[[PACKED_DPAS_A_1:.*]] = llvm.insertelement %[[DPAS_A_1]], %[[PACKED_DPAS_A_0]]{{\[}}%[[MLIR_2]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_3:.*]] = llvm.mlir.constant(2 : i32) : i32
+    // CHECK:           %[[PACKED_DPAS_A_2:.*]] = llvm.insertelement %[[DPAS_A_2]], %[[PACKED_DPAS_A_1]]{{\[}}%[[MLIR_3]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_4:.*]] = llvm.mlir.constant(3 : i32) : i32
+    // CHECK:           %[[PACKED_DPAS_A_3:.*]] = llvm.insertelement %[[DPAS_A_3]], %[[PACKED_DPAS_A_2]]{{\[}}%[[MLIR_4]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_5:.*]] = llvm.mlir.constant(4 : i32) : i32
+    // CHECK:           %[[PACKED_DPAS_A_4:.*]] = llvm.insertelement %[[DPAS_A_4]], %[[PACKED_DPAS_A_3]]{{\[}}%[[MLIR_5]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_6:.*]] = llvm.mlir.constant(5 : i32) : i32
+    // CHECK:           %[[PACKED_DPAS_A_5:.*]] = llvm.insertelement %[[DPAS_A_5]], %[[PACKED_DPAS_A_4]]{{\[}}%[[MLIR_6]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_7:.*]] = llvm.mlir.constant(6 : i32) : i32
+    // CHECK:           %[[PACKED_DPAS_A_6:.*]] = llvm.insertelement %[[DPAS_A_6]], %[[PACKED_DPAS_A_5]]{{\[}}%[[MLIR_7]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_8:.*]] = llvm.mlir.constant(7 : i32) : i32
+    // CHECK:           %[[PACKED_DPAS_A_7:.*]] = llvm.insertelement %[[DPAS_A_7]], %[[PACKED_DPAS_A_6]]{{\[}}%[[MLIR_8]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_9:.*]] = llvm.mlir.constant(8 : i32) : i32
+    // CHECK:           %[[PACKED_DPAS_A_8:.*]] = llvm.insertelement %[[DPAS_A_8]], %[[PACKED_DPAS_A_7]]{{\[}}%[[MLIR_9]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_10:.*]] = llvm.mlir.constant(9 : i32) : i32
+    // CHECK:           %[[PACKED_DPAS_A_9:.*]] = llvm.insertelement %[[DPAS_A_9]], %[[PACKED_DPAS_A_8]]{{\[}}%[[MLIR_10]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_11:.*]] = llvm.mlir.constant(10 : i32) : i32
+    // CHECK:           %[[PACKED_DPAS_A_10:.*]] = llvm.insertelement %[[DPAS_A_10]], %[[PACKED_DPAS_A_9]]{{\[}}%[[MLIR_11]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_12:.*]] = llvm.mlir.constant(11 : i32) : i32
+    // CHECK:           %[[PACKED_DPAS_A_11:.*]] = llvm.insertelement %[[DPAS_A_11]], %[[PACKED_DPAS_A_10]]{{\[}}%[[MLIR_12]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_13:.*]] = llvm.mlir.constant(12 : i32) : i32
+    // CHECK:           %[[PACKED_DPAS_A_12:.*]] = llvm.insertelement %[[DPAS_A_12]], %[[PACKED_DPAS_A_11]]{{\[}}%[[MLIR_13]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_14:.*]] = llvm.mlir.constant(13 : i32) : i32
+    // CHECK:           %[[PACKED_DPAS_A_13:.*]] = llvm.insertelement %[[DPAS_A_13]], %[[PACKED_DPAS_A_12]]{{\[}}%[[MLIR_14]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_15:.*]] = llvm.mlir.constant(14 : i32) : i32
+    // CHECK:           %[[PACKED_DPAS_A_14:.*]] = llvm.insertelement %[[DPAS_A_14]], %[[PACKED_DPAS_A_13]]{{\[}}%[[MLIR_15]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_16:.*]] = llvm.mlir.constant(15 : i32) : i32
+    // CHECK:           %[[PACKED_DPAS_A_15:.*]] = llvm.insertelement %[[DPAS_A_15]], %[[PACKED_DPAS_A_14]]{{\[}}%[[MLIR_16]] : i32] : vector<16xi8>
+    // CHECK:           %[[PACKED_DPAS_A:.*]] = llvm.bitcast %[[PACKED_DPAS_A_15]] : vector<16xi8> to vector<8xi16>
+    // CHECK:           %[[UNPACKED_DPAS_A:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.SubgroupBitcastShuffle.v16i8.v8i16(%[[PACKED_DPAS_A]])
+
+    // COM: The 2nd DPAS operands shuffle.
+    // COM: The base is a16 instead of a0, and the order is a16, a17, a18, a19, a20, a21, a22, a23, a24, a25, a26, a27, a28, a29, a30, a31.
+    // CHECK:           %[[PACKED_DPAS_A:.*]] = llvm.mlir.undef : vector<16xi8>
+    // CHECK:           %[[MLIR_34:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[PACKED_DPAS_A_16:.*]] = llvm.insertelement %[[DPAS_A_16]], %[[PACKED_DPAS_A]]{{\[}}%[[MLIR_34]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_35:.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK:           %[[PACKED_DPAS_A_17:.*]] = llvm.insertelement %[[DPAS_A_17]], %[[PACKED_DPAS_A_16]]{{\[}}%[[MLIR_35]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_36:.*]] = llvm.mlir.constant(2 : i32) : i32
+    // CHECK:           %[[PACKED_DPAS_A_18:.*]] = llvm.insertelement %[[DPAS_A_18]], %[[PACKED_DPAS_A_17]]{{\[}}%[[MLIR_36]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_37:.*]] = llvm.mlir.constant(3 : i32) : i32
+    // CHECK:           %[[PACKED_DPAS_A_19:.*]] = llvm.insertelement %[[DPAS_A_19]], %[[PACKED_DPAS_A_18]]{{\[}}%[[MLIR_37]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_38:.*]] = llvm.mlir.constant(4 : i32) : i32
+    // CHECK:           %[[PACKED_DPAS_A_20:.*]] = llvm.insertelement %[[DPAS_A_20]], %[[PACKED_DPAS_A_19]]{{\[}}%[[MLIR_38]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_39:.*]] = llvm.mlir.constant(5 : i32) : i32
+    // CHECK:           %[[PACKED_DPAS_A_21:.*]] = llvm.insertelement %[[DPAS_A_21]], %[[PACKED_DPAS_A_20]]{{\[}}%[[MLIR_39]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_40:.*]] = llvm.mlir.constant(6 : i32) : i32
+    // CHECK:           %[[PACKED_DPAS_A_22:.*]] = llvm.insertelement %[[DPAS_A_22]], %[[PACKED_DPAS_A_21]]{{\[}}%[[MLIR_40]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_41:.*]] = llvm.mlir.constant(7 : i32) : i32
+    // CHECK:           %[[PACKED_DPAS_A_23:.*]] = llvm.insertelement %[[DPAS_A_23]], %[[PACKED_DPAS_A_22]]{{\[}}%[[MLIR_41]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_42:.*]] = llvm.mlir.constant(8 : i32) : i32
+    // CHECK:           %[[PACKED_DPAS_A_24:.*]] = llvm.insertelement %[[DPAS_A_24]], %[[PACKED_DPAS_A_23]]{{\[}}%[[MLIR_42]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_43:.*]] = llvm.mlir.constant(9 : i32) : i32
+    // CHECK:           %[[PACKED_DPAS_A_25:.*]] = llvm.insertelement %[[DPAS_A_25]], %[[PACKED_DPAS_A_24]]{{\[}}%[[MLIR_43]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_44:.*]] = llvm.mlir.constant(10 : i32) : i32
+    // CHECK:           %[[PACKED_DPAS_A_26:.*]] = llvm.insertelement %[[DPAS_A_26]], %[[PACKED_DPAS_A_25]]{{\[}}%[[MLIR_44]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_45:.*]] = llvm.mlir.constant(11 : i32) : i32
+    // CHECK:           %[[PACKED_DPAS_A_27:.*]] = llvm.insertelement %[[DPAS_A_27]], %[[PACKED_DPAS_A_26]]{{\[}}%[[MLIR_45]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_46:.*]] = llvm.mlir.constant(12 : i32) : i32
+    // CHECK:           %[[PACKED_DPAS_A_28:.*]] = llvm.insertelement %[[DPAS_A_28]], %[[PACKED_DPAS_A_27]]{{\[}}%[[MLIR_46]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_47:.*]] = llvm.mlir.constant(13 : i32) : i32
+    // CHECK:           %[[PACKED_DPAS_A_29:.*]] = llvm.insertelement %[[DPAS_A_29]], %[[PACKED_DPAS_A_28]]{{\[}}%[[MLIR_47]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_48:.*]] = llvm.mlir.constant(14 : i32) : i32
+    // CHECK:           %[[PACKED_DPAS_A_30:.*]] = llvm.insertelement %[[DPAS_A_30]], %[[PACKED_DPAS_A_29]]{{\[}}%[[MLIR_48]] : i32] : vector<16xi8>
+    // CHECK:           %[[MLIR_49:.*]] = llvm.mlir.constant(15 : i32) : i32
+    // CHECK:           %[[PACKED_DPAS_A_31:.*]] = llvm.insertelement %[[DPAS_A_31]], %[[PACKED_DPAS_A_30]]{{\[}}%[[MLIR_49]] : i32] : vector<16xi8>
+    // CHECK:           %[[PACKED_DPAS_A:.*]] = llvm.bitcast %[[PACKED_DPAS_A_31]] : vector<16xi8> to vector<8xi16>
+    // CHECK:           %[[UNPACKED_DPAS_A:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.SubgroupBitcastShuffle.v16i8.v8i16(%[[PACKED_DPAS_A]])
+
+
+    // COM: The remianing 2 DPAS D to DPAS A shuffle.
+    // CHECK-COUNT-2: llvm.call spir_funccc @llvm.genx.GenISA.SubgroupBitcastShuffle.v16i8.v8i16(
+    %0 = ttg.convert_layout %arg0 : tensor<32x32xf8E5M2, #dot_a> -> tensor<32x32xf8E5M2, #mma>
+    tt.return %0 : tensor<32x32xf8E5M2, #mma>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [16, 2], warpsPerCTA = [1, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 1 : i32, ttg.shared = 0 : i32, "ttg.threads-per-warp" = 32 : i32} {
+
+  // CHECK:   llvm.func spir_funccc @llvm.genx.GenISA.SubgroupBitcastShuffle.v16i32.v8i64(vector<8xi64>) -> vector<16xi32>
+  // CHECK-LABEL:   llvm.func spir_kernelcc @test_reinterpret(
+  tt.func public @test_reinterpret(%arg0: tensor<64x64xi32, #blocked>)  -> tensor<64x64xi32, #blocked1> {
+
+    // Reinterpret cast are vectorized.
+    // Reinterpret cast mapping:
+    //  - register=1 -> (1, 0)
+    //    register=2 -> (2, 0)
+    //    register=4 -> (0, 1)
+    //    register=8 -> (4, 0)
+    //    register=16 -> (8, 0)
+    //    register=32 -> (16, 0)
+    //    register=64 -> (64, 0)
+    //  - lane=1 -> (0, 2)
+    //    lane=2 -> (0, 4)
+    //    lane=4 -> (0, 8)
+    //    lane=8 -> (0, 16)
+    //    lane=16 -> (32, 0)
+    // where out dims are: [register (size 128), lane (size 32)]
+
+    // The register reorder mapping:
+    //  - register=1 -> (4)     reg -> lane
+    //    register=2 -> (8)     reg -> reg shuffle
+    //    register=4 -> (16)    reg -> reg shuffle
+    //    register=8 -> (32)    reg -> reg shuffle  vec size end here = 16.
+    //    register=16 -> (1)    reg -> reg identical
+    //    register=32 -> (2)    reg -> reg identical
+    //    register=64 -> (64)   reg -> reg identical
+
+    // CHECK:           %[[SRC_0:.*]] = llvm.extractvalue %arg0[0] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_1:.*]] = llvm.extractvalue %arg0[1] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_2:.*]] = llvm.extractvalue %arg0[2] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_3:.*]] = llvm.extractvalue %arg0[3] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_4:.*]] = llvm.extractvalue %arg0[4] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_5:.*]] = llvm.extractvalue %arg0[5] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_6:.*]] = llvm.extractvalue %arg0[6] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_7:.*]] = llvm.extractvalue %arg0[7] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_8:.*]] = llvm.extractvalue %arg0[8] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_9:.*]] = llvm.extractvalue %arg0[9] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_10:.*]] = llvm.extractvalue %arg0[10] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_11:.*]] = llvm.extractvalue %arg0[11] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_12:.*]] = llvm.extractvalue %arg0[12] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_13:.*]] = llvm.extractvalue %arg0[13] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_14:.*]] = llvm.extractvalue %arg0[14] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_15:.*]] = llvm.extractvalue %arg0[15] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_16:.*]] = llvm.extractvalue %arg0[16] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_17:.*]] = llvm.extractvalue %arg0[17] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_18:.*]] = llvm.extractvalue %arg0[18] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_19:.*]] = llvm.extractvalue %arg0[19] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_20:.*]] = llvm.extractvalue %arg0[20] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_21:.*]] = llvm.extractvalue %arg0[21] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_22:.*]] = llvm.extractvalue %arg0[22] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_23:.*]] = llvm.extractvalue %arg0[23] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_24:.*]] = llvm.extractvalue %arg0[24] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_25:.*]] = llvm.extractvalue %arg0[25] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_26:.*]] = llvm.extractvalue %arg0[26] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_27:.*]] = llvm.extractvalue %arg0[27] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_28:.*]] = llvm.extractvalue %arg0[28] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_29:.*]] = llvm.extractvalue %arg0[29] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_30:.*]] = llvm.extractvalue %arg0[30] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_31:.*]] = llvm.extractvalue %arg0[31] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_32:.*]] = llvm.extractvalue %arg0[32] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_33:.*]] = llvm.extractvalue %arg0[33] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_34:.*]] = llvm.extractvalue %arg0[34] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_35:.*]] = llvm.extractvalue %arg0[35] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_36:.*]] = llvm.extractvalue %arg0[36] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_37:.*]] = llvm.extractvalue %arg0[37] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_38:.*]] = llvm.extractvalue %arg0[38] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_39:.*]] = llvm.extractvalue %arg0[39] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_40:.*]] = llvm.extractvalue %arg0[40] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_41:.*]] = llvm.extractvalue %arg0[41] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_42:.*]] = llvm.extractvalue %arg0[42] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_43:.*]] = llvm.extractvalue %arg0[43] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_44:.*]] = llvm.extractvalue %arg0[44] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_45:.*]] = llvm.extractvalue %arg0[45] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_46:.*]] = llvm.extractvalue %arg0[46] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_47:.*]] = llvm.extractvalue %arg0[47] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_48:.*]] = llvm.extractvalue %arg0[48] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_49:.*]] = llvm.extractvalue %arg0[49] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_50:.*]] = llvm.extractvalue %arg0[50] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_51:.*]] = llvm.extractvalue %arg0[51] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_52:.*]] = llvm.extractvalue %arg0[52] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_53:.*]] = llvm.extractvalue %arg0[53] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_54:.*]] = llvm.extractvalue %arg0[54] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_55:.*]] = llvm.extractvalue %arg0[55] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_56:.*]] = llvm.extractvalue %arg0[56] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_57:.*]] = llvm.extractvalue %arg0[57] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_58:.*]] = llvm.extractvalue %arg0[58] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_59:.*]] = llvm.extractvalue %arg0[59] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_60:.*]] = llvm.extractvalue %arg0[60] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_61:.*]] = llvm.extractvalue %arg0[61] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_62:.*]] = llvm.extractvalue %arg0[62] : !llvm.struct<(i32
+    // CHECK:           %[[SRC_63:.*]] = llvm.extractvalue %arg0[63] : !llvm.struct<(i32
+    // CHECK-COUNT-32:  llvm.extractvalue %arg0
+
+    // COM: reinterpret cast and register reorder for the convert layout.
+    // CHECK:           %[[UNPACKED_SRC:.*]] = llvm.mlir.undef : vector<16xi32>
+    // CHECK:           %[[MLIR_1:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[UNPACKED_SRC_0:.*]] = llvm.insertelement %[[SRC_0]], %[[UNPACKED_SRC]]{{\[}}%[[MLIR_1]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_2:.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK:           %[[UNPACKED_SRC_1:.*]] = llvm.insertelement %[[SRC_4]], %[[UNPACKED_SRC_0]]{{\[}}%[[MLIR_2]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_3:.*]] = llvm.mlir.constant(2 : i32) : i32
+    // CHECK:           %[[UNPACKED_SRC_2:.*]] = llvm.insertelement %[[SRC_8]], %[[UNPACKED_SRC_1]]{{\[}}%[[MLIR_3]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_4:.*]] = llvm.mlir.constant(3 : i32) : i32
+    // CHECK:           %[[UNPACKED_SRC_3:.*]] = llvm.insertelement %[[SRC_12]], %[[UNPACKED_SRC_2]]{{\[}}%[[MLIR_4]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_5:.*]] = llvm.mlir.constant(4 : i32) : i32
+    // CHECK:           %[[UNPACKED_SRC_4:.*]] = llvm.insertelement %[[SRC_16]], %[[UNPACKED_SRC_3]]{{\[}}%[[MLIR_5]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_6:.*]] = llvm.mlir.constant(5 : i32) : i32
+    // CHECK:           %[[UNPACKED_SRC_5:.*]] = llvm.insertelement %[[SRC_20]], %[[UNPACKED_SRC_4]]{{\[}}%[[MLIR_6]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_7:.*]] = llvm.mlir.constant(6 : i32) : i32
+    // CHECK:           %[[UNPACKED_SRC_6:.*]] = llvm.insertelement %[[SRC_24]], %[[UNPACKED_SRC_5]]{{\[}}%[[MLIR_7]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_8:.*]] = llvm.mlir.constant(7 : i32) : i32
+    // CHECK:           %[[UNPACKED_SRC_7:.*]] = llvm.insertelement %[[SRC_28]], %[[UNPACKED_SRC_6]]{{\[}}%[[MLIR_8]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_9:.*]] = llvm.mlir.constant(8 : i32) : i32
+    // CHECK:           %[[UNPACKED_SRC_8:.*]] = llvm.insertelement %[[SRC_32]], %[[UNPACKED_SRC_7]]{{\[}}%[[MLIR_9]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_10:.*]] = llvm.mlir.constant(9 : i32) : i32
+    // CHECK:           %[[UNPACKED_SRC_9:.*]] = llvm.insertelement %[[SRC_36]], %[[UNPACKED_SRC_8]]{{\[}}%[[MLIR_10]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_11:.*]] = llvm.mlir.constant(10 : i32) : i32
+    // CHECK:           %[[UNPACKED_SRC_10:.*]] = llvm.insertelement %[[SRC_40]], %[[UNPACKED_SRC_9]]{{\[}}%[[MLIR_11]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_12:.*]] = llvm.mlir.constant(11 : i32) : i32
+    // CHECK:           %[[UNPACKED_SRC_11:.*]] = llvm.insertelement %[[SRC_44]], %[[UNPACKED_SRC_10]]{{\[}}%[[MLIR_12]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_13:.*]] = llvm.mlir.constant(12 : i32) : i32
+    // CHECK:           %[[UNPACKED_SRC_12:.*]] = llvm.insertelement %[[SRC_48]], %[[UNPACKED_SRC_11]]{{\[}}%[[MLIR_13]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_14:.*]] = llvm.mlir.constant(13 : i32) : i32
+    // CHECK:           %[[UNPACKED_SRC_13:.*]] = llvm.insertelement %[[SRC_52]], %[[UNPACKED_SRC_12]]{{\[}}%[[MLIR_14]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_15:.*]] = llvm.mlir.constant(14 : i32) : i32
+    // CHECK:           %[[UNPACKED_SRC_14:.*]] = llvm.insertelement %[[SRC_56]], %[[UNPACKED_SRC_13]]{{\[}}%[[MLIR_15]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_16:.*]] = llvm.mlir.constant(15 : i32) : i32
+    // CHECK:           %[[UNPACKED_SRC_15:.*]] = llvm.insertelement %[[SRC_60]], %[[UNPACKED_SRC_14]]{{\[}}%[[MLIR_16]] : i32] : vector<16xi32>
+    // CHECK:           %[[PACKED_SRC:.*]] = llvm.bitcast %[[UNPACKED_SRC_15]] : vector<16xi32> to vector<8xi64>
+    // CHECK:           %[[UNPACKED_SRC:.*]] = llvm.call spir_funccc @llvm.genx.GenISA.SubgroupBitcastShuffle.v16i32.v8i64(%[[PACKED_SRC]])
+
+    // CHECK:           %[[MLIR_17:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK:           %[[EXTRACTELEMENT_0:.*]] = llvm.extractelement %[[UNPACKED_SRC]]{{\[}}%[[MLIR_17]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_18:.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK:           %[[EXTRACTELEMENT_1:.*]] = llvm.extractelement %[[UNPACKED_SRC]]{{\[}}%[[MLIR_18]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_19:.*]] = llvm.mlir.constant(2 : i32) : i32
+    // CHECK:           %[[EXTRACTELEMENT_2:.*]] = llvm.extractelement %[[UNPACKED_SRC]]{{\[}}%[[MLIR_19]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_20:.*]] = llvm.mlir.constant(3 : i32) : i32
+    // CHECK:           %[[EXTRACTELEMENT_3:.*]] = llvm.extractelement %[[UNPACKED_SRC]]{{\[}}%[[MLIR_20]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_21:.*]] = llvm.mlir.constant(4 : i32) : i32
+    // CHECK:           %[[EXTRACTELEMENT_4:.*]] = llvm.extractelement %[[UNPACKED_SRC]]{{\[}}%[[MLIR_21]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_22:.*]] = llvm.mlir.constant(5 : i32) : i32
+    // CHECK:           %[[EXTRACTELEMENT_5:.*]] = llvm.extractelement %[[UNPACKED_SRC]]{{\[}}%[[MLIR_22]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_23:.*]] = llvm.mlir.constant(6 : i32) : i32
+    // CHECK:           %[[EXTRACTELEMENT_6:.*]] = llvm.extractelement %[[UNPACKED_SRC]]{{\[}}%[[MLIR_23]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_24:.*]] = llvm.mlir.constant(7 : i32) : i32
+    // CHECK:           %[[EXTRACTELEMENT_7:.*]] = llvm.extractelement %[[UNPACKED_SRC]]{{\[}}%[[MLIR_24]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_25:.*]] = llvm.mlir.constant(8 : i32) : i32
+    // CHECK:           %[[EXTRACTELEMENT_8:.*]] = llvm.extractelement %[[UNPACKED_SRC]]{{\[}}%[[MLIR_25]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_26:.*]] = llvm.mlir.constant(9 : i32) : i32
+    // CHECK:           %[[EXTRACTELEMENT_9:.*]] = llvm.extractelement %[[UNPACKED_SRC]]{{\[}}%[[MLIR_26]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_27:.*]] = llvm.mlir.constant(10 : i32) : i32
+    // CHECK:           %[[EXTRACTELEMENT_10:.*]] = llvm.extractelement %[[UNPACKED_SRC]]{{\[}}%[[MLIR_27]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_28:.*]] = llvm.mlir.constant(11 : i32) : i32
+    // CHECK:           %[[EXTRACTELEMENT_11:.*]] = llvm.extractelement %[[UNPACKED_SRC]]{{\[}}%[[MLIR_28]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_29:.*]] = llvm.mlir.constant(12 : i32) : i32
+    // CHECK:           %[[EXTRACTELEMENT_12:.*]] = llvm.extractelement %[[UNPACKED_SRC]]{{\[}}%[[MLIR_29]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_30:.*]] = llvm.mlir.constant(13 : i32) : i32
+    // CHECK:           %[[EXTRACTELEMENT_13:.*]] = llvm.extractelement %[[UNPACKED_SRC]]{{\[}}%[[MLIR_30]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_31:.*]] = llvm.mlir.constant(14 : i32) : i32
+    // CHECK:           %[[EXTRACTELEMENT_14:.*]] = llvm.extractelement %[[UNPACKED_SRC]]{{\[}}%[[MLIR_31]] : i32] : vector<16xi32>
+    // CHECK:           %[[MLIR_32:.*]] = llvm.mlir.constant(15 : i32) : i32
+    // CHECK:           %[[EXTRACTELEMENT_15:.*]] = llvm.extractelement %[[UNPACKED_SRC]]{{\[}}%[[MLIR_32]] : i32] : vector<16xi32>
+
+    // CHECK-COUNT-7:  llvm.call spir_funccc @llvm.genx.GenISA.SubgroupBitcastShuffle.v16i32.v8i64
+
+    // CHECK:           %[[MLIR_264:.*]] = llvm.mlir.undef : !llvm.struct<(i32,
+    // CHECK:           %[[INSERTVALUE_0:.*]] = llvm.insertvalue %[[EXTRACTELEMENT_0]], {{.*}}[0] : !llvm.struct<(i32,
+    // CHECK:           %[[INSERTVALUE_4:.*]] = llvm.insertvalue %[[EXTRACTELEMENT_2]], {{.*}}[4] : !llvm.struct<(i32,
+    // CHECK:           %[[INSERTVALUE_8:.*]] = llvm.insertvalue %[[EXTRACTELEMENT_4]], {{.*}}[8] : !llvm.struct<(i32,
+    // CHECK:           %[[INSERTVALUE_12:.*]] = llvm.insertvalue %[[EXTRACTELEMENT_6]], {{.*}}[12] : !llvm.struct<(i32,
+    // CHECK:           %[[INSERTVALUE_16:.*]] = llvm.insertvalue %[[EXTRACTELEMENT_8]], {{.*}}[16] : !llvm.struct<(i32,
+    // CHECK:           %[[INSERTVALUE_20:.*]] = llvm.insertvalue %[[EXTRACTELEMENT_10]], {{.*}}[20] : !llvm.struct<(i32,
+    // CHECK:           %[[INSERTVALUE_24:.*]] = llvm.insertvalue %[[EXTRACTELEMENT_12]], {{.*}}[24] : !llvm.struct<(i32,
+    // CHECK:           %[[INSERTVALUE_28:.*]] = llvm.insertvalue %[[EXTRACTELEMENT_14]], {{.*}}[28] : !llvm.struct<(i32,
+    // CHECK:           %[[INSERTVALUE_32:.*]] = llvm.insertvalue %[[EXTRACTELEMENT_1]], {{.*}}[32] : !llvm.struct<(i32,
+    // CHECK:           %[[INSERTVALUE_36:.*]] = llvm.insertvalue %[[EXTRACTELEMENT_3]], {{.*}}[36] : !llvm.struct<(i32,
+    // CHECK:           %[[INSERTVALUE_40:.*]] = llvm.insertvalue %[[EXTRACTELEMENT_5]], {{.*}}[40] : !llvm.struct<(i32,
+    // CHECK:           %[[INSERTVALUE_44:.*]] = llvm.insertvalue %[[EXTRACTELEMENT_7]], {{.*}}[44] : !llvm.struct<(i32,
+    // CHECK:           %[[INSERTVALUE_48:.*]] = llvm.insertvalue %[[EXTRACTELEMENT_9]], {{.*}}[48] : !llvm.struct<(i32,
+    // CHECK:           %[[INSERTVALUE_52:.*]] = llvm.insertvalue %[[EXTRACTELEMENT_11]], {{.*}}[52] : !llvm.struct<(i32,
+    // CHECK:           %[[INSERTVALUE_56:.*]] = llvm.insertvalue %[[EXTRACTELEMENT_13]], {{.*}}[56] : !llvm.struct<(i32,
+    // CHECK:           %[[INSERTVALUE_60:.*]] = llvm.insertvalue %[[EXTRACTELEMENT_15]], {{.*}}[60] : !llvm.struct<(i32,
+
+    %0 = ttg.convert_layout %arg0 {allocation.offset = 0 : i32} : tensor<64x64xi32, #blocked> -> tensor<64x64xi32, #blocked1>
+    tt.return %0 : tensor<64x64xi32, #blocked1>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 4], warpsPerCTA = [1, 1], order = [1, 0]}>
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 1, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [2, 1], A = [16, 8], B = [8, 16], C = [16, 16]}>
+
+module attributes {"ttg.num-warps" = 1 : i32, ttg.shared = 1280 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // CHECK:   llvm.func spir_funccc @llvm.genx.GenISA.SubgroupBitcastShuffle.v1i64.v4i16
+  // CHECK-LABEL:   llvm.func spir_kernelcc @test_reinterpret(
+  tt.func public @test_reinterpret(%arg0: tensor<16x16xf32, #mma>, %arg1: tensor<16x16xf16, #mma>)  -> (tensor<16x16xf32, #blocked>, tensor<16x16xf16, #blocked>) {
+    // CHECK-COUNT-4:  llvm.call spir_funccc @llvm.genx.GenISA.SubgroupBitcastShuffle.v1i64.v4i16
+    %1 = ttg.convert_layout %arg1 : tensor<16x16xf16, #mma> -> tensor<16x16xf16, #blocked>
+    // COM: This should be converted to a call to GenISA.SubgroupBitcastShuffle, but IGC currently don't support bitcast >= 128 bits.
+    // CHECK-NOT: llvm.call spir_funccc @llvm.genx.GenISA.SubgroupBitcastShuffle
+    %0 = ttg.convert_layout %arg0 {allocation.offset = 0 : i32} : tensor<16x16xf32, #mma> -> tensor<16x16xf32, #blocked>
+    tt.return %0, %1 : tensor<16x16xf32, #blocked>, tensor<16x16xf16, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [1, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 1 : i32, ttg.shared = 1280 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL:   llvm.func spir_kernelcc @test_reinterpret(
+  tt.func public @test_reinterpret(%arg0: tensor<32x32xf16, #blocked>)  -> tensor<32x32xf16, #blocked1> {
+    //  lane mapping is not valid for reinterpret cast:
+    //  - lane=1 -> (2, 0)
+    //    lane=2 -> (4, 0)
+    //    lane=4 -> (0, 2)
+    //    lane=8 -> (0, 4)
+    //    lane=16 -> (0, 8)
+    //  where out dims are: [register (size 32), lane (size 32)]
+    // But maybe can be implemented with a new shuffle intrinsic. For now, just use a generic convert_layout.
+    // CHECK-NOT: llvm.call spir_funccc @llvm.genx.GenISA.SubgroupBitcastShuffle
+    %0 = ttg.convert_layout %arg0 {allocation.offset = 0 : i32} : tensor<32x32xf16, #blocked> -> tensor<32x32xf16, #blocked1>
+    tt.return %0 : tensor<32x32xf16, #blocked1>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL:   llvm.func spir_kernelcc @test_reinterpret(
+  tt.func public @test_reinterpret(%arg0: tensor<32x32xf32, #blocked>)  -> tensor<32x32xf32, #blocked1> {
+    //  lane mapping is not valid for reinterpret cast:
+    // - lane=1 -> (0, 2)
+    //   lane=2 -> (0, 4)
+    //   lane=4 -> (0, 8)
+    //   lane=8 -> (2, 0)
+    //   lane=16 -> (0, 16)
+    // where out dims are: [register (size 32), lane (size 32)]
+    // But maybe can be implemented with a new shuffle intrinsic. For now, just use a generic convert_layout.
+    // CHECK-NOT: llvm.call spir_funccc @llvm.genx.GenISA.SubgroupBitcastShuffle
+    %0 = ttg.convert_layout %arg0 : tensor<32x32xf32, #blocked> -> tensor<32x32xf32, #blocked1>
+    tt.return %0 : tensor<32x32xf32, #blocked1>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [2, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL:   llvm.func spir_kernelcc @test_reinterpret(
+  tt.func public @test_reinterpret(%arg0: tensor<32x32xf16, #blocked>)  -> tensor<32x32xf16, #blocked1> {
+    //  lane mapping is not valid for reinterpret cast:
+    // - lane=1 -> (0, 4)
+    //   lane=2 -> (0, 8)
+    //   lane=4 -> (16, 0)
+    //   lane=8 -> (1, 0)
+    //   lane=16 -> (2, 0)
+    //where out dims are: [register (size 32), lane (size 32)]
+    // But maybe can be implemented with a new shuffle intrinsic. For now, just use a generic convert_layout.
+    // CHECK-NOT: llvm.call spir_funccc @llvm.genx.GenISA.SubgroupBitcastShuffle
+    %0 = ttg.convert_layout %arg0 : tensor<32x32xf16, #blocked> -> tensor<32x32xf16, #blocked1>
+    tt.return %0 : tensor<32x32xf16, #blocked1>
+  }
+}

@@ -4,10 +4,10 @@ import numpy as np
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_hopper, is_sm12x, is_interpreter, numpy_random, to_triton, unwrap_tensor, tma_dtypes, to_numpy
+from triton._internal_testing import is_hip_gfx1250, is_hopper, is_sm12x, is_interpreter, numpy_random, to_triton, unwrap_tensor, tma_dtypes, to_numpy
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from typing import Optional
-from triton._internal_testing import is_compile_warmup, is_cuda, is_hip, is_hip_cdna3, is_xpu, is_xpu_cri
+from triton._internal_testing import is_compile_warmup, is_cuda, is_hip, is_hip_cdna3, is_xpu
 from triton.tools.tensor_descriptor import TensorDescriptor
 from triton import CompilationError
 
@@ -295,7 +295,8 @@ def test_tensor_descriptor_load_nd(dtype_str, num_ctas, ndim, INNER_BLOCK, devic
     triton.set_allocator(alloc_fn)
 
     alloc_shape = (1, 1, 3, 7, INNER_BLOCK)[-ndim:]
-    inp = to_triton(numpy_random(alloc_shape, dtype_str)[..., :INNER_BLOCK - 3], device=device, dst_type=dtype_str)
+    inp = to_triton(numpy_random(alloc_shape, dtype_str), device=device, dst_type=dtype_str)
+    inp.data = inp.data[..., :INNER_BLOCK - 3]
 
     if INNER_BLOCK * inp.element_size() < 32:
         return pytest.xfail("Invalid last dim size")
@@ -425,6 +426,10 @@ def test_tensor_descriptor_padding(device):
     M_BLOCK = 32
     N_BLOCK = 32
     padding = "nan"
+
+    if is_hip_gfx1250() and padding != "zero":
+        pytest.skip("TDM load with padding on GFX1250 does not support non-zero padding.")
+
     input = torch.arange(IM * IN, device=device, dtype=torch.float32)
     input = input.reshape(IM, IN)
     out_device_tma = torch.zeros((OM, ON), device=device, dtype=torch.float32)
@@ -630,8 +635,6 @@ def test_make_tensor_descriptor_matmul(num_stages, num_ctas, BLOCK_M, BLOCK_N, B
         M, N, K = BLOCK_M, BLOCK_N, BLOCK_K
     else:
         M, N, K = 1024, 512, 256
-        if is_xpu_cri():
-            M = 512
 
     torch.manual_seed(42)
     A = torch.randn((M, K), dtype=torch.float16, device=device)
@@ -825,8 +828,6 @@ def test_tensor_descriptor_batched_gemm_2d_tma(device):
 
     if is_interpreter():
         B, M, N, K = 2, BLOCK_M, BLOCK_N, BLOCK_K
-    elif is_xpu_cri():
-        B, M, N, K = 2, 128, 256, 128
     else:
         B, M, N, K = 2, 1024, 1024, 128
     NUM_SMS = 96
@@ -935,8 +936,6 @@ def test_tensor_descriptor_batched_gemm_3d_tma(device):
 
     if is_interpreter():
         B, M, N, K = 2, BLOCK_M, BLOCK_N, BLOCK_K
-    elif is_xpu_cri():
-        B, M, N, K = 2, 128, 256, 128
     else:
         B, M, N, K = 2, 1024, 1024, 128
     NUM_SMS = 96
@@ -1328,7 +1327,7 @@ def mxfp8_mxfp4_matmul_tma(  #
 @pytest.mark.interpreter
 @pytest.mark.parametrize("M, N, K", [(1024, 512, 256), (128, 256, 256), (8192, 8192, 8192)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (128, 128, 256), (128, 256, 128),
-                                                       (128, 256, 256)])
+                                                       (128, 256, 256), (128, 128, 32), (128, 128, 64)])
 @pytest.mark.parametrize("NUM_STAGES", [1, 3])
 @pytest.mark.skipif(is_hip(), reason="HIP devices don't have full support for MX formats")
 def test_mxfp8_mxfp4_matmul_tma(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, device):
@@ -1661,6 +1660,37 @@ def test_tensor_descriptor_reduce(kind, descriptor, dtype_str, num_ctas, M_BLOCK
 
 
 @pytest.mark.interpreter()
+def test_host_tensor_descriptor_round_f32_to_tf32(device):
+    if is_hip_gfx1250():
+        pytest.skip("TDM descriptor loads on GFX1250 do not apply tf32 rounding.")
+
+    @triton.jit
+    def kernel(out_ptr, desc):
+        block = desc.load([0, 0])
+        idx = tl.arange(0, 16)[None, :]
+        tl.store(out_ptr + idx, block)
+
+    def round_to_tf32(x: torch.Tensor) -> torch.Tensor:
+        bits = x.view(torch.int32).to(torch.int64) & 0xFFFFFFFF
+        exp_mask = 0x7F800000
+        is_special = (bits & exp_mask) == exp_mask
+        round_bias = ((bits >> 13) & 1) + 0x00000FFF
+        rounded = (bits + round_bias) & 0xFFFFE000
+        return (torch.where(is_special, bits, rounded) & 0xFFFFFFFF).to(torch.int32).view(torch.float32)
+
+    torch.manual_seed(17)
+    inp = torch.randn((1, 16), device=device, dtype=torch.float32)
+    # a tie that rounds to even, one that rounds up, a mantissa that carries out, and the specials
+    inp[0, :6] = torch.tensor(
+        [1.0 + 2.0**-11, 1.0 + 2.0**-10 + 2.0**-11, 2.0 - 2.0**-23,
+         float("nan"), float("inf"), -3.0])
+    out = torch.empty_like(inp)
+    desc = TensorDescriptor.from_tensor(inp, [1, 16], round_f32_to_tf32=True)
+    kernel[(1, )](out, desc)
+    torch.testing.assert_close(out, round_to_tf32(inp), rtol=0, atol=0, equal_nan=True)
+
+
+@pytest.mark.interpreter()
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
 @pytest.mark.parametrize("num_ctas", [1, 2])
 @pytest.mark.parametrize("M_BLOCK,N_BLOCK", [(2, 16), (8, 16), (8, 32), (8, 128)])
@@ -1784,8 +1814,6 @@ def test_host_tensor_descriptor_matmul(num_stages, num_ctas, BLOCK_M, BLOCK_N, B
         M, N, K = BLOCK_M, BLOCK_N, BLOCK_K
     else:
         M, N, K = 1024, 512, 256
-        if is_xpu_cri():
-            M = 256
     torch.manual_seed(42)
     A = torch.randn((M, K), dtype=torch.float16, device=device)
     B = torch.randn((K, N), dtype=torch.float16, device=device)

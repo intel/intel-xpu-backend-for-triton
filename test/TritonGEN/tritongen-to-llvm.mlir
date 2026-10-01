@@ -201,134 +201,142 @@ llvm.func @triton_gen.predicated_store(%ptr : !llvm.ptr<1>, %value : i32, %predi
 
 // -----
 
-// CHECK: llvm.func spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f16.v8f16.v8i16.v8i32.v2i8.v2i8(vector<8xbf16>, vector<8xi16>, vector<8xi32>, vector<2xi8>, vector<2xi8>, i32, i32) -> vector<8xbf16> attributes {convergent, no_unwind, will_return}
+// CHECK: llvm.func spir_funccc @_Z51__spirv_SubgroupScaledMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_DF16bDv2_cS2_i(i32, vector<8xi16>, vector<8xi32>, vector<8xbf16>, vector<2xi8>, vector<2xi8>, i32) -> vector<8xbf16> attributes {convergent, memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return}
 
 llvm.func @triton_gen.bdpas.bf16_accum(%c: vector<8xbf16>, %a : vector<8xi16>, %b : vector<8xi32>, %sa : vector<2xi8>, %sb : vector<2xi8>) {
   // CHECK: llvm.func @triton_gen.bdpas.bf16_accum(%arg0: vector<8xbf16>, %arg1: vector<8xi16>, %arg2: vector<8xi32>, %arg3: vector<2xi8>, %arg4: vector<2xi8>) {
-  // CHECK: [[PREC_A:%.*]] = llvm.mlir.constant(13 : i32) : i32
-  // CHECK: [[PREC_B:%.*]] = llvm.mlir.constant(13 : i32) : i32
-  // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f16.v8f16.v8i16.v8i32.v2i8.v2i8(%arg0, %arg1, %arg2, %arg3, %arg4, [[PREC_A]], [[PREC_B]]) {{.*}} : (vector<8xbf16>, vector<8xi16>, vector<8xi32>, vector<2xi8>, vector<2xi8>, i32, i32) -> vector<8xbf16>
+  // CHECK: [[K_DIM:%.*]] = llvm.mlir.constant(64 : i32) : i32
+  // CHECK: [[FLAGS:%.*]] = llvm.mlir.constant(3932172 : i32) : i32
+  // CHECK: llvm.call spir_funccc @_Z51__spirv_SubgroupScaledMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_DF16bDv2_cS2_i([[K_DIM]], %arg1, %arg2, %arg0, %arg3, %arg4, [[FLAGS]]) {{.*}} : (i32, vector<8xi16>, vector<8xi32>, vector<8xbf16>, vector<2xi8>, vector<2xi8>, i32) -> vector<8xbf16>
   %0 = triton_gen.bdpas %c, %a, %b, %sa, %sb {pa = e2m1, pb = e2m1, rc = 8} {operandSegmentSizes = array<i32: 1, 1, 1, 1, 1>} : (vector<8xbf16>, vector<8xi16>, vector<8xi32>, vector<2xi8>, vector<2xi8>) -> vector<8xbf16>
   llvm.return
 }
 
 // -----
 
-// CHECK: llvm.func spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8(vector<8xf32>, vector<8xi16>, vector<8xi32>, vector<2xi8>, vector<2xi8>, i32, i32) -> vector<8xf32> attributes {convergent, no_unwind, will_return}
+// CHECK: llvm.func spir_funccc @_Z51__spirv_SubgroupScaledMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fDv2_cS2_i(i32, vector<8xi16>, vector<8xi32>, vector<8xf32>, vector<2xi8>, vector<2xi8>, i32) -> vector<8xf32> attributes {convergent, memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return}
 
 llvm.func @triton_gen.bdpas.f32_accum(%c: vector<8xf32>, %a : vector<8xi16>, %b : vector<8xi32>, %sa : vector<2xi8>, %sb : vector<2xi8>) {
   // CHECK: llvm.func @triton_gen.bdpas.f32_accum(%arg0: vector<8xf32>, %arg1: vector<8xi16>, %arg2: vector<8xi32>, %arg3: vector<2xi8>, %arg4: vector<2xi8>) {
-  // CHECK: [[PREC_A:%.*]] = llvm.mlir.constant(13 : i32) : i32
-  // CHECK: [[PREC_B:%.*]] = llvm.mlir.constant(13 : i32) : i32
-  // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8(%arg0, %arg1, %arg2, %arg3, %arg4, [[PREC_A]], [[PREC_B]]) {{.*}} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, vector<2xi8>, vector<2xi8>, i32, i32) -> vector<8xf32>
+  // CHECK: [[K_DIM:%.*]] = llvm.mlir.constant(64 : i32) : i32
+  // CHECK: [[FLAGS:%.*]] = llvm.mlir.constant(3932160 : i32) : i32
+  // CHECK: llvm.call spir_funccc @_Z51__spirv_SubgroupScaledMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fDv2_cS2_i([[K_DIM]], %arg1, %arg2, %arg0, %arg3, %arg4, [[FLAGS]]) {{.*}} : (i32, vector<8xi16>, vector<8xi32>, vector<8xf32>, vector<2xi8>, vector<2xi8>, i32) -> vector<8xf32>
   %0 = triton_gen.bdpas %c, %a, %b, %sa, %sb {pa = e2m1, pb = e2m1, rc = 8} {operandSegmentSizes = array<i32: 1, 1, 1, 1, 1>} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, vector<2xi8>, vector<2xi8>) -> vector<8xf32>
   llvm.return
 }
 
 // -----
 
-// CHECK: llvm.func spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.i8.i8(vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8, i32, i32) -> vector<8xf32> attributes {convergent, no_unwind, will_return}
+// CHECK: llvm.func spir_funccc @_Z51__spirv_SubgroupScaledMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fcci(i32, vector<8xi16>, vector<8xi32>, vector<8xf32>, i8, i8, i32) -> vector<8xf32> attributes {convergent, memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return}
 
 llvm.func @triton_gen.bdpas.bf8(%c: vector<8xf32>, %a : vector<8xi16>, %b : vector<8xi32>, %sa : i8, %sb :i8) {
-  // CHECK: llvm.func @triton_gen.bdpas.bf8(%arg0: vector<8xf32>, %arg1: vector<8xi16>, %arg2: vector<8xi32>, %arg3: i8, %arg4: i8) {
-  // CHECK: [[PREC_A:%.*]] = llvm.mlir.constant(7 : i32) : i32
-  // CHECK: [[PREC_B:%.*]] = llvm.mlir.constant(7 : i32) : i32
-  // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.i8.i8(%arg0, %arg1, %arg2, %arg3, %arg4, [[PREC_A]], [[PREC_B]]) {{.*}} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8, i32, i32) -> vector<8xf32>
+  // CHECK-LABEL: llvm.func @triton_gen.bdpas.bf8
+  // CHECK-SAME: (%arg0: vector<8xf32>, %arg1: vector<8xi16>, %arg2: vector<8xi32>, %arg3: i8, %arg4: i8)
+  // CHECK: [[K_DIM:%.*]] = llvm.mlir.constant(32 : i32) : i32
+  // CHECK: [[FLAGS:%.*]] = llvm.mlir.constant(3342336 : i32) : i32
+  // CHECK: llvm.call spir_funccc @_Z51__spirv_SubgroupScaledMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fcci([[K_DIM]], %arg1, %arg2, %arg0, %arg3, %arg4, [[FLAGS]])
   %0 = triton_gen.bdpas %c, %a, %b, %sa, %sb {pa = bf8, pb = bf8, rc = 8} {operandSegmentSizes = array<i32: 1, 1, 1, 1, 1>} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8) -> vector<8xf32>
   llvm.return
 }
 
 // -----
 
-// CHECK: llvm.func spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.i8.i8(vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8, i32, i32) -> vector<8xf32> attributes {convergent, no_unwind, will_return}
+// CHECK: llvm.func spir_funccc @_Z51__spirv_SubgroupScaledMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fcci(i32, vector<8xi16>, vector<8xi32>, vector<8xf32>, i8, i8, i32) -> vector<8xf32> attributes {convergent, memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return}
 
 llvm.func @triton_gen.bdpas.hf8(%c: vector<8xf32>, %a : vector<8xi16>, %b : vector<8xi32>, %sa : i8, %sb :i8) {
-  // CHECK: llvm.func @triton_gen.bdpas.hf8(%arg0: vector<8xf32>, %arg1: vector<8xi16>, %arg2: vector<8xi32>, %arg3: i8, %arg4: i8) {
-  // CHECK: [[PREC_A:%.*]] = llvm.mlir.constant(8 : i32) : i32
-  // CHECK: [[PREC_B:%.*]] = llvm.mlir.constant(8 : i32) : i32
-  // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.i8.i8(%arg0, %arg1, %arg2, %arg3, %arg4, [[PREC_A]], [[PREC_B]]) {{.*}} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8, i32, i32) -> vector<8xf32>
+  // CHECK-LABEL: llvm.func @triton_gen.bdpas.hf8
+  // CHECK-SAME: (%arg0: vector<8xf32>, %arg1: vector<8xi16>, %arg2: vector<8xi32>, %arg3: i8, %arg4: i8)
+  // CHECK: [[K_DIM:%.*]] = llvm.mlir.constant(32 : i32) : i32
+  // CHECK: [[FLAGS:%.*]] = llvm.mlir.constant(3194880 : i32) : i32
+  // CHECK: llvm.call spir_funccc @_Z51__spirv_SubgroupScaledMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fcci([[K_DIM]], %arg1, %arg2, %arg0, %arg3, %arg4, [[FLAGS]])
   %0 = triton_gen.bdpas %c, %a, %b, %sa, %sb {pa = hf8, pb = hf8, rc = 8} {operandSegmentSizes = array<i32: 1, 1, 1, 1, 1>} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8) -> vector<8xf32>
   llvm.return
 }
 
 // -----
 
-// CHECK: llvm.func spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.i8.i8(vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8, i32, i32) -> vector<8xf32> attributes {convergent, no_unwind, will_return}
+// CHECK: llvm.func spir_funccc @_Z51__spirv_SubgroupScaledMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fcci(i32, vector<8xi16>, vector<8xi32>, vector<8xf32>, i8, i8, i32) -> vector<8xf32> attributes {convergent, memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return}
 
 llvm.func @triton_gen.bdpas.f16(%c: vector<8xf32>, %a : vector<8xi16>, %b : vector<8xi32>, %sa : i8, %sb :i8) {
-  // CHECK: llvm.func @triton_gen.bdpas.f16(%arg0: vector<8xf32>, %arg1: vector<8xi16>, %arg2: vector<8xi32>, %arg3: i8, %arg4: i8) {
-  // CHECK: [[PREC_A:%.*]] = llvm.mlir.constant(12 : i32) : i32
-  // CHECK: [[PREC_B:%.*]] = llvm.mlir.constant(12 : i32) : i32
-  // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.i8.i8(%arg0, %arg1, %arg2, %arg3, %arg4, [[PREC_A]], [[PREC_B]]) {{.*}} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8, i32, i32) -> vector<8xf32>
+  // CHECK-LABEL: llvm.func @triton_gen.bdpas.f16
+  // CHECK-SAME: (%arg0: vector<8xf32>, %arg1: vector<8xi16>, %arg2: vector<8xi32>, %arg3: i8, %arg4: i8)
+  // CHECK: [[K_DIM:%.*]] = llvm.mlir.constant(16 : i32) : i32
+  // CHECK: [[FLAGS:%.*]] = llvm.mlir.constant(3148800 : i32) : i32
+  // CHECK: llvm.call spir_funccc @_Z51__spirv_SubgroupScaledMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fcci([[K_DIM]], %arg1, %arg2, %arg0, %arg3, %arg4, [[FLAGS]])
   %0 = triton_gen.bdpas %c, %a, %b, %sa, %sb {pa = f16, pb = f16, rc = 8} {operandSegmentSizes = array<i32: 1, 1, 1, 1, 1>} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8) -> vector<8xf32>
   llvm.return
 }
 
 // -----
 
-// CHECK: llvm.func spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.i8.i8(vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8, i32, i32) -> vector<8xf32> attributes {convergent, no_unwind, will_return}
+// CHECK: llvm.func spir_funccc @_Z51__spirv_SubgroupScaledMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fcci(i32, vector<8xi16>, vector<8xi32>, vector<8xf32>, i8, i8, i32) -> vector<8xf32> attributes {convergent, memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return}
 
 llvm.func @triton_gen.bdpas.bf16(%c: vector<8xf32>, %a : vector<8xi16>, %b : vector<8xi32>, %sa : i8, %sb :i8) {
-  // CHECK: llvm.func @triton_gen.bdpas.bf16(%arg0: vector<8xf32>, %arg1: vector<8xi16>, %arg2: vector<8xi32>, %arg3: i8, %arg4: i8) {
-  // CHECK: [[PREC_A:%.*]] = llvm.mlir.constant(11 : i32) : i32
-  // CHECK: [[PREC_B:%.*]] = llvm.mlir.constant(11 : i32) : i32
-  // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.i8.i8(%arg0, %arg1, %arg2, %arg3, %arg4, [[PREC_A]], [[PREC_B]]) {{.*}} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8, i32, i32) -> vector<8xf32>
+  // CHECK-LABEL: llvm.func @triton_gen.bdpas.bf16
+  // CHECK-SAME: (%arg0: vector<8xf32>, %arg1: vector<8xi16>, %arg2: vector<8xi32>, %arg3: i8, %arg4: i8)
+  // CHECK: [[K_DIM:%.*]] = llvm.mlir.constant(16 : i32) : i32
+  // CHECK: [[FLAGS:%.*]] = llvm.mlir.constant(3158016 : i32) : i32
+  // CHECK: llvm.call spir_funccc @_Z51__spirv_SubgroupScaledMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fcci([[K_DIM]], %arg1, %arg2, %arg0, %arg3, %arg4, [[FLAGS]])
   %0 = triton_gen.bdpas %c, %a, %b, %sa, %sb {pa = bf16, pb = bf16, rc = 8} {operandSegmentSizes = array<i32: 1, 1, 1, 1, 1>} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8) -> vector<8xf32>
   llvm.return
 }
 
 // -----
+// COM: Test both scale_a and scale_b provided
 
-// CHECK: llvm.func spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.i8.i8(vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8, i32, i32) -> vector<8xf32> attributes {convergent, no_unwind, will_return}
+// CHECK: llvm.func spir_funccc @_Z51__spirv_SubgroupScaledMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fcci(i32, vector<8xi16>, vector<8xi32>, vector<8xf32>, i8, i8, i32) -> vector<8xf32> attributes {convergent, memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return}
 
-llvm.func @triton_gen.bdpas.hf8.bf8(%c: vector<8xf32>, %a : vector<8xi16>, %b : vector<8xi32>, %sa : i8, %sb :i8) {
-  // CHECK: llvm.func @triton_gen.bdpas.hf8.bf8(%arg0: vector<8xf32>, %arg1: vector<8xi16>, %arg2: vector<8xi32>, %arg3: i8, %arg4: i8) {
-  // CHECK: [[PREC_A:%.*]] = llvm.mlir.constant(8 : i32) : i32
-  // CHECK: [[PREC_B:%.*]] = llvm.mlir.constant(7 : i32) : i32
-  // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.i8.i8(%arg0, %arg1, %arg2, %arg3, %arg4, [[PREC_A]], [[PREC_B]]) {{.*}} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8, i32, i32) -> vector<8xf32>
+llvm.func @triton_gen.bdpas.hf8.bf8.both_scales(%c: vector<8xf32>, %a : vector<8xi16>, %b : vector<8xi32>, %sa : i8, %sb :i8) {
+  // CHECK-LABEL: llvm.func @triton_gen.bdpas.hf8.bf8.both_scales
+  // CHECK-SAME: (%arg0: vector<8xf32>, %arg1: vector<8xi16>, %arg2: vector<8xi32>, %arg3: i8, %arg4: i8)
+  // CHECK: [[K_DIM:%.*]] = llvm.mlir.constant(32 : i32) : i32
+  // CHECK: [[FLAGS:%.*]] = llvm.mlir.constant(3293184 : i32) : i32
+  // CHECK: llvm.call spir_funccc @_Z51__spirv_SubgroupScaledMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fcci([[K_DIM]], %arg1, %arg2, %arg0, %arg3, %arg4, [[FLAGS]])
   %0 = triton_gen.bdpas %c, %a, %b, %sa, %sb {pa = hf8, pb = bf8, rc = 8} {operandSegmentSizes = array<i32: 1, 1, 1, 1, 1>} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8) -> vector<8xf32>
   llvm.return
 }
 
 // -----
+// COM: Test only scale_a provided - verifies default scale_b (127) is generated
 
-// CHECK: llvm.func spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.i8.i8(vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8, i32, i32) -> vector<8xf32> attributes {convergent, no_unwind, will_return}
+// CHECK: llvm.func spir_funccc @_Z51__spirv_SubgroupScaledMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fcci(i32, vector<8xi16>, vector<8xi32>, vector<8xf32>, i8, i8, i32) -> vector<8xf32> attributes {convergent, memory_effects = #llvm.memory_effects<other = none, argMem = none, inaccessibleMem = none, errnoMem = none, targetMem0 = none, targetMem1 = none>, no_unwind, will_return}
 
-llvm.func @triton_gen.bdpas.hf8.bf8(%c: vector<8xf32>, %a : vector<8xi16>, %b : vector<8xi32>, %sa : i8) {
-  // CHECK: llvm.func @triton_gen.bdpas.hf8.bf8(%arg0: vector<8xf32>, %arg1: vector<8xi16>, %arg2: vector<8xi32>, %arg3: i8) {
-  // CHECK: [[PREC_A:%.*]] = llvm.mlir.constant(8 : i32) : i32
-  // CHECK: [[PREC_B:%.*]] = llvm.mlir.constant(7 : i32) : i32
-  // CHECK: [[E8M0_VAL_1:%.*]] = llvm.mlir.constant(127 : i8) : i8
-  // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.i8.i8(%arg0, %arg1, %arg2, %arg3, [[E8M0_VAL_1]], [[PREC_A]], [[PREC_B]]) {{.*}} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8, i32, i32) -> vector<8xf32>
+llvm.func @triton_gen.bdpas.hf8.bf8.sa_only(%c: vector<8xf32>, %a : vector<8xi16>, %b : vector<8xi32>, %sa : i8) {
+  // CHECK-LABEL: llvm.func @triton_gen.bdpas.hf8.bf8.sa_only
+  // CHECK-SAME: (%arg0: vector<8xf32>, %arg1: vector<8xi16>, %arg2: vector<8xi32>, %arg3: i8)
+  // CHECK: [[DEFAULT_SB:%.*]] = llvm.mlir.constant(127 : i8) : i8
+  // CHECK: [[K_DIM:%.*]] = llvm.mlir.constant(32 : i32) : i32
+  // CHECK: [[FLAGS:%.*]] = llvm.mlir.constant(3293184 : i32) : i32
+  // CHECK: llvm.call spir_funccc @_Z51__spirv_SubgroupScaledMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fcci([[K_DIM]], %arg1, %arg2, %arg0, %arg3, [[DEFAULT_SB]], [[FLAGS]])
   %0 = triton_gen.bdpas %c, %a, %b, %sa {pa = hf8, pb = bf8, rc = 8} {operandSegmentSizes = array<i32: 1, 1, 1, 1, 0>} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, i8) -> vector<8xf32>
   llvm.return
 }
 
 // -----
+// COM: Test only scale_b provided - verifies default scale_a (127) is generated
 
-// CHECK: llvm.func spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.i8.i8(vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8, i32, i32) -> vector<8xf32> attributes {convergent, no_unwind, will_return}
-
-llvm.func @triton_gen.bdpas.hf8.bf8(%c: vector<8xf32>, %a : vector<8xi16>, %b : vector<8xi32>, %sb :i8) {
-  // CHECK: llvm.func @triton_gen.bdpas.hf8.bf8(%arg0: vector<8xf32>, %arg1: vector<8xi16>, %arg2: vector<8xi32>, %arg3: i8) {
-  // CHECK: [[PREC_A:%.*]] = llvm.mlir.constant(8 : i32) : i32
-  // CHECK: [[PREC_B:%.*]] = llvm.mlir.constant(7 : i32) : i32
-  // CHECK: [[E8M0_VAL_1:%.*]] = llvm.mlir.constant(127 : i8) : i8
-  // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.i8.i8(%arg0, %arg1, %arg2, [[E8M0_VAL_1]], %arg3, [[PREC_A]], [[PREC_B]]) {{.*}} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, i8, i8, i32, i32) -> vector<8xf32>
+llvm.func @triton_gen.bdpas.hf8.bf8.sb_only(%c: vector<8xf32>, %a : vector<8xi16>, %b : vector<8xi32>, %sb :i8) {
+  // CHECK-LABEL: llvm.func @triton_gen.bdpas.hf8.bf8.sb_only
+  // CHECK-SAME: (%arg0: vector<8xf32>, %arg1: vector<8xi16>, %arg2: vector<8xi32>, %arg3: i8)
+  // CHECK: [[DEFAULT_SA:%.*]] = llvm.mlir.constant(127 : i8) : i8
+  // CHECK: [[K_DIM:%.*]] = llvm.mlir.constant(32 : i32) : i32
+  // CHECK: [[FLAGS:%.*]] = llvm.mlir.constant(3293184 : i32) : i32
+  // CHECK: llvm.call spir_funccc @_Z51__spirv_SubgroupScaledMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fcci([[K_DIM]], %arg1, %arg2, %arg0, [[DEFAULT_SA]], %arg3, [[FLAGS]])
   %0 = triton_gen.bdpas %c, %a, %b, %sb {pa = hf8, pb = bf8, rc = 8} {operandSegmentSizes = array<i32: 1, 1, 1, 0, 1>} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, i8) -> vector<8xf32>
   llvm.return
 }
 
 // -----
 
-// CHECK: llvm.func spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8(vector<8xf32>, vector<8xi16>, vector<8xi32>, vector<2xi8>, vector<2xi8>, i32, i32) -> vector<8xf32> attributes {convergent, no_unwind, will_return}
 
 llvm.func @triton_gen.bdpas.f32_accum(%c: vector<8xf32>, %a : vector<8xi16>, %b : vector<8xi32>) {
-  // CHECK: llvm.func @triton_gen.bdpas.f32_accum(%arg0: vector<8xf32>, %arg1: vector<8xi16>, %arg2: vector<8xi32>) {
-  // CHECK: [[PREC_A:%.*]] = llvm.mlir.constant(13 : i32) : i32
-  // CHECK: [[PREC_B:%.*]] = llvm.mlir.constant(13 : i32) : i32
+  // CHECK-LABEL: llvm.func @triton_gen.bdpas.f32_accum
+  // CHECK-SAME: (%arg0: vector<8xf32>, %arg1: vector<8xi16>, %arg2: vector<8xi32>)
   // CHECK: [[SCALE_A:%.*]] = llvm.mlir.constant(dense<127> : vector<2xi8>) : vector<2xi8>
   // CHECK: [[SCALE_B:%.*]] = llvm.mlir.constant(dense<127> : vector<2xi8>) : vector<2xi8>
-  // CHECK: llvm.call spir_funccc @llvm.genx.GenISA.sub.group.bdpas.v8f32.v8f32.v8i16.v8i32.v2i8.v2i8(%arg0, %arg1, %arg2, [[SCALE_A]], [[SCALE_B]], [[PREC_A]], [[PREC_B]]) {{.*}} : (vector<8xf32>, vector<8xi16>, vector<8xi32>, vector<2xi8>, vector<2xi8>, i32, i32) -> vector<8xf32>
+  // CHECK: [[K_DIM:%.*]] = llvm.mlir.constant(64 : i32) : i32
+  // CHECK: [[FLAGS:%.*]] = llvm.mlir.constant(3932160 : i32) : i32
+  // CHECK: llvm.call spir_funccc @_Z51__spirv_SubgroupScaledMatrixMultiplyAccumulateINTELiDv8_sDv8_iDv8_fDv2_cS2_i([[K_DIM]], %arg1, %arg2, %arg0, [[SCALE_A]], [[SCALE_B]], [[FLAGS]])
   %0 = triton_gen.bdpas %c, %a, %b {pa = e2m1, pb = e2m1, rc = 8} {operandSegmentSizes = array<i32: 1, 1, 1, 0, 0>} : (vector<8xf32>, vector<8xi16>, vector<8xi32>) -> vector<8xf32>
   llvm.return
 }

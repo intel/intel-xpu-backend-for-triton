@@ -567,7 +567,11 @@ class runtime_knobs(base_knobs):
 
 class language_knobs(base_knobs):
     fp32_default: env_opt_str = env_opt_str("TRITON_F32_DEFAULT")
-    default_fp_fusion: env_bool = env_bool("TRITON_DEFAULT_FP_FUSION", True)
+    default_fp_fusion: env_bool = env_bool("TRITON_DEFAULT_FP_FUSION", False)
+    force_disable_fp_fusion: env_bool = env_bool("TRITON_FORCE_DISABLE_FP_FUSION")
+
+    def fp_fusion_enabled(self, requested: Optional[bool]) -> bool:
+        return not self.force_disable_fp_fusion and (self.default_fp_fusion if requested is None else requested)
 
 
 class nvidia_knobs(base_knobs):
@@ -593,10 +597,13 @@ class intel_knobs(base_knobs):
     gen_native_code: env_bool = env_bool("TRITON_XPU_GEN_NATIVE_CODE", False)
     opt_reduction_locality: env_bool = env_bool("TRITON_INTEL_OPTIMIZE_REDUCTION_LOCALITY", False)
     disable_igc_opt: env_bool = env_bool("TRITON_INTEL_DISABLE_IGC_OPT", False)
-    # Enable the AnnotateCacheControl pass by default everywhere except Windows,
-    # where it triggers E2E performance regressions (see issue #7495).
-    disable_annotate_cache_control: env_bool = env_bool("TRITON_INTEL_DISABLE_ANNOTATE_CACHE_CONTROL", os.name == "nt")
+    # Disabled on Windows after the regressions tracked in issue #7495. The harmful
+    # `cg`-to-`!nontemporal` lowering (an L3 bypass) was removed in issue #7901, so
+    # the pass is enabled on every OS again. See issue #7945.
+    disable_annotate_cache_control: env_bool = env_bool("TRITON_INTEL_DISABLE_ANNOTATE_CACHE_CONTROL", False)
     enable_code_sinking: env_bool = env_bool("TRITON_INTEL_ENABLE_CODE_SINKING", False)
+    in_loop_sink: env_bool = env_bool("TRITON_INTEL_IN_LOOP_SINK", True)
+    disable_optimize_load_masks: env_bool = env_bool("TRITON_INTEL_DISABLE_OPTIMIZE_LOAD_MASKS", False)
     disable_canonicalize_pointers: env_bool = env_bool("TRITON_INTEL_DISABLE_CANONICALIZE_POINTERS", True)
     enable_loop_distribution: env_bool = env_bool("TRITON_INTEL_ENABLE_LOOP_DISTRIBUTION", False)
     enable_sub_32_dpas: env_bool = env_bool("TRITON_INTEL_ENABLE_DPAS_FOR_WARP_SIZE_32", False)
@@ -622,6 +629,7 @@ class intel_knobs(base_knobs):
 
 
 class amd_knobs(base_knobs):
+    codegen_path: env_opt_str = env_opt_str("TRITON_AMD_CODEGEN_PATH")
     use_buffer_ops: env_bool = env_bool("AMDGCN_USE_BUFFER_OPS", True)
     # Note: This requires use_buffer_ops be true to have any effect
     use_buffer_atomics: env_bool = env_bool("AMDGCN_USE_BUFFER_ATOMICS", True)

@@ -28,3 +28,34 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return %dst : tensor<16xf16, #blocked>
   }
 }
+
+// -----
+
+// COM: Same conversion on an LTS driver (ttig.is_lts), which selects the 11-op
+// COM: integer-domain sequence instead: the oneDNN sequence is short, unpredicated
+// COM: float arithmetic that the LTS IGC's LoopSink clones ~6x inside unrolled
+// COM: loops, tripling compile time on fp8 GEMMs (issue #8046). The icmp/select
+// COM: NaN fixup here is what keeps this version from being sunk, so this test
+// COM: pins it along with the single exact x256 rebias.
+#blocked = #ttg.blocked<{sizePerThread = [16], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttig.is_lts, ttig.min_sg_size = 16 : i32, ttig.target_arch = "spir64"} {
+  // CHECK-LABEL: @convert_fp8e4m3_to_fp16_lts
+  tt.func public @convert_fp8e4m3_to_fp16_lts(%src: tensor<16xf8E4M3FN, #blocked>) -> tensor<16xf16, #blocked> {
+    %dst = tt.fp_to_fp %src : tensor<16xf8E4M3FN, #blocked> -> tensor<16xf16, #blocked>
+    // CHECK-DAG: llvm.mlir.constant(2.560000e+02 : f16) : f16
+    // CHECK-DAG: llvm.mlir.constant(8323199 : i32) : i32
+    // CHECK: llvm.lshr {{.*}} : i32
+    // CHECK: llvm.and {{.*}} : i32
+    // CHECK: llvm.shl {{.*}} : i32
+    // CHECK: llvm.bitcast {{.*}} : i32 to vector<2xf16>
+    // CHECK: llvm.fmul {{.*}} : vector<2xf16>
+    // CHECK: llvm.icmp "eq"
+    // CHECK: llvm.select
+    // CHECK: llvm.select
+    // COM: The oneDNN sequence must not be used here.
+    // CHECK-NOT: llvm.ashr {{.*}} : vector<2xi16>
+    // CHECK-NOT: llvm.fadd {{.*}} : vector<2xf16>
+    // CHECK-NOT: llvm.call spir_funccc @_Z38__builtin_spirv_ConvertE4M3ToFP16INTEL
+    tt.return %dst : tensor<16xf16, #blocked>
+  }
+}

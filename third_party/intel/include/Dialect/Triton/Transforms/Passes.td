@@ -248,4 +248,78 @@ def TritonIntelReassociateDotScale
   ];
 }
 
+def TritonIntelOptimizeLoadMasks
+    : Pass<"triton-intel-optimize-load-masks", "mlir::ModuleOp"> {
+  let summary = "Reduce masked-load work using the conditions selects carry";
+
+  let description = [{
+    Removes memory reads that Inductor-generated kernels perform but do not
+    need.
+
+    Inductor typically asks "is this index in range?" twice -- once as the mask
+    of a `tt.load`, once as an `arith.select` on the loaded value afterwards --
+    and emits the two independently. Two costs follow, and a kernel may show
+    either alone: the same addresses are read twice under masks differing only
+    by a condition the select already establishes, and a read fetches lanes
+    whose values a downstream select discards. Neither is visible to CSE, which
+    compares mask operands for identity, or to canonicalization, which has no
+    rule relating a select's condition to a nearby load's mask.
+
+    This pass relates the two -- what LLVM's GVN does for a conditional branch
+    (`propagateEquality`), applied to the branch-free form Triton emits. On the
+    lanes an arm decides, the select's condition holds (true arm) or does not
+    (false arm), and the rule that pays off is that `%c & %w` is just `%w` in
+    the true arm of `select %c`, and false in the false arm.
+
+    Weakening a mask lets a load coincide with one already present:
+
+        %cst = arith.constant dense<0.000000e+00>
+        %m   = arith.andi %c, %w
+        %v0  = tt.load %ptr, %w
+        %v1  = tt.load %ptr, %m, %cst
+        %r   = arith.select %c, %v1, %v0
+
+    `%v1` is observed only where `%c` holds, and there `%m` is `%w`, so `%v1` is
+    `%v0`. The arm's use is redirected to `%v0`; `%v1` and the select are then
+    dead and the pass erases them, leaving one predicated read where there were
+    two. This needs the two loads to agree on their masked-off lanes -- an
+    absent `other` counts as zero -- and nothing that writes memory in between.
+
+    Strengthening a mask stops a load reading lanes nothing observes. Following
+    a load's single-use chain through pure elementwise operations and selects:
+
+        %v = tt.load %ptr, %w, %cst
+        %r = arith.select %c, %v, %z
+
+    `%v` is read only where `%c` holds, so the mask becomes `%w & %c` -- and
+    `%w & !%c` for the false arm. The condition usually sits after the load and
+    is hoisted above it when the mask arithmetic that computes it can be moved.
+    Where the strengthened mask is provably false the load contributes only its
+    `other` on every lane observed, so it is dropped outright; that applies at
+    any rank, whereas ANDing a routinely data-dependent condition into the mask
+    of a load of rank 2 or more would cost the `ttig.block_io` tile a later pass
+    grants on the strength of the mask's per-dimension constancy, so that
+    rewrite is limited to rank < 2.
+
+    Only strengthening may be applied to an existing load's mask: it reads a
+    subset of what the load already read, so it can neither fault nor change an
+    observed value, where weakening one would read addresses the program never
+    read. The reuse direction therefore never edits a mask; it only redirects a
+    use to a load already present.
+
+    Reuse runs first, because dropping an unobserved load would retire one reuse
+    would have retired anyway, and because reuse gives the load it keeps an extra
+    consumer -- narrowing first would forfeit the reuse and see fewer loads as
+    unobserved. A clean-up runs in between: reuse can duplicate the operations
+    between a load and the select arm it feeds, and until those are unified the
+    load has several consumers and the single-use walk cannot reach the
+    condition on the far end.
+  }];
+
+  let dependentDialects = [
+    "mlir::arith::ArithDialect",
+    "mlir::triton::TritonDialect"
+  ];
+}
+
 #endif // TRITON_DIALECT_TRITON_INTEL_TRANSFORMS_PASSES

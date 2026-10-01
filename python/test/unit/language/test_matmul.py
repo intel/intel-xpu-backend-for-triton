@@ -3,7 +3,7 @@ import pytest
 import torch
 import triton
 import triton.language as tl
-from test_mxfp import MXFP4Tensor, MXScaleTensor
+from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor, fp8e8m0_to_float32
 import re
 from triton._internal_testing import is_compile_warmup, is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_cdna, is_hip_gfx1250, is_xpu, is_xpu_cri, is_rubin, is_blackwell
 
@@ -131,7 +131,7 @@ def get_src_element_ty_size(dtype_str):
                          [(128, 128, 16, 4), (64, 128, 32, 4), (32, 32, 32, 4), (256, 128, 32, 4), (64, 512, 32, 2),
                           (512, 64, 32, 2), (64, 16, 64, 4)] + ([(256, 128, 128, 3)] if is_rubin() else []))
 @pytest.mark.parametrize("NUM_CTAS", [1, 2])
-@pytest.mark.parametrize("NUM_WARPS", [32 if is_xpu_cri() else 4, 8])
+@pytest.mark.parametrize("NUM_WARPS", [4, 8])
 @pytest.mark.parametrize("EPILOGUE_SUBTILE", [True, False])
 def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, NUM_WARPS, NUM_CTAS, device,
                        EPILOGUE_SUBTILE):
@@ -167,8 +167,6 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
     if not is_xpu() and EPILOGUE_SUBTILE and (is_hip() or NUM_CTAS > 1 or BLOCK_N >= 512):
         pytest.skip("creates convert layout too big to fit in smem")
     M, N, K = 1024, 512, 256
-    if is_xpu_cri():
-        M, N, K = 512, 512, 64
     torch.manual_seed(42)
     precision = "tf32" if dtype_src_str == "tensorfloat32" else "ieee"
     dtype_src_str = "float32" if dtype_src_str == "tensorfloat32" else dtype_src_str
@@ -325,12 +323,10 @@ def simple_persistent_kernel(a_ptr, b_ptr, c_ptr, M, N, K, stride_am, stride_ak,
 
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 16), (64, 128, 32), (32, 32, 32), (256, 128, 16),
                                                        (64, 512, 16), (512, 64, 16), (64, 16, 16)])
-@pytest.mark.parametrize("NUM_WARPS", [32 if is_xpu_cri() else 4, 8])
+@pytest.mark.parametrize("NUM_WARPS", [4, 8])
 @pytest.mark.parametrize("DISALLOW_ACC_MULTI_BUFFER", [True, False])
 def test_simple_persistent_matmul(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, DISALLOW_ACC_MULTI_BUFFER, device):
     M, N, K = 1024, 512, 256
-    if is_xpu_cri():
-        M, N, K = 512, 512, 64
     NUM_STAGES = 3
     a = torch.randn(M, K, dtype=torch.float16, device=device)
     b = torch.randn(K, N, dtype=torch.float16, device=device)
@@ -406,27 +402,17 @@ def mxfp_matmul(  #
     tl.store(output_ptrs, accumulator, mask=c_mask)
 
 
-def fp8e8m0_to_float32(scale):
-    scale = scale.view(torch.uint8)
-    scale = scale.to(torch.int32)
-    scale = scale << 23
-    scale = scale.view(torch.float32)
-    return scale
-
-
 @pytest.mark.interpreter
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (256, 128, 128), (128, 256, 128),
                                                        (128, 256, 256), (128, 128, 64), (128, 64, 128), (128, 16, 256),
                                                        (128, 16, 64)] + ([(256, 256, 128)] if is_rubin() else []))
 @pytest.mark.parametrize("NUM_STAGES", [1, 3])
-@pytest.mark.parametrize("NUM_WARPS", [32 if is_xpu_cri() else 4, 8])
+@pytest.mark.parametrize("NUM_WARPS", [4, 8])
 @pytest.mark.parametrize("nonKDim", ([0, 16, 32] if (is_hip_cdna() or is_hip_gfx1250()) else [0]))
 def test_mxfp(BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS, device):
     M = 1024
     N = 512
     K = 2048
-    if is_xpu_cri():
-        M, N, K = 256, 256, 512
     if K % BLOCK_K != 0:
         pytest.skip("Kernel requires shapes aligned by K dimension")
     if is_cuda() and torch.cuda.get_device_capability()[0] < 10:
@@ -481,7 +467,7 @@ def test_mxfp(BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS, device)
         assert "mma.sync.aligned.m16n8k32.row.col.kind::mxf8f6f4.block_scale.scale_vec::1X" in ptx
     if is_xpu_cri():
         llir = out.asm["llir"]
-        count = llir.count("llvm.genx.GenISA.sub.group.bdpas")
+        count = llir.count("__spirv_SubgroupScaledMatrixMultiplyAccumulateINTEL")
         assert count > 0, "Unexpected LLVM IR generated."
 
 
@@ -731,11 +717,6 @@ def test_preshuffle_scale_mxfp_cdna4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, DTYPE_A
         scales_shuffled = scales_shuffled.view(sm // 32, sn * 32)
         return scales_shuffled
 
-    def e8m0_to_f32(x):
-        x_f32 = 2**((x - 127).to(torch.float32))
-        x_f32[x_f32 == 128] = float("nan")
-        return x_f32
-
     def run_torch(x, w, x_scales, w_scales, dtype):
         # First convert the x and w inputs to f32.
         SCALE_GROUP_SIZE = 32
@@ -743,12 +724,10 @@ def test_preshuffle_scale_mxfp_cdna4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, DTYPE_A
         w_f32 = w.to(torch.float32)
         # Next convert the e8m0 scales to f32.
         if x_scales is not None:
-            x_scales = x_scales.repeat_interleave(SCALE_GROUP_SIZE, dim=1).to(torch.float32)
-            x_scales_f32 = e8m0_to_f32(x_scales)
+            x_scales_f32 = fp8e8m0_to_float32(x_scales).repeat_interleave(SCALE_GROUP_SIZE, dim=1)
             x_f32 = x_f32 * x_scales_f32
         if w_scales is not None:
-            w_scales = w_scales.repeat_interleave(SCALE_GROUP_SIZE, dim=1).to(torch.float32)
-            w_scales_f32 = e8m0_to_f32(w_scales)
+            w_scales_f32 = fp8e8m0_to_float32(w_scales).repeat_interleave(SCALE_GROUP_SIZE, dim=1)
             w_f32 = w_f32 * w_scales_f32
         return torch.mm(x_f32, w_f32.T).to(dtype)
 
@@ -916,8 +895,6 @@ def test_lhs_in_tmem(BLOCK_M, BLOCK_N, BLOCK_K, a_trans, dtype_src_str, device, 
     M = 1024
     N = 512
     K = 256
-    if is_xpu_cri():
-        M, N, K = 256, 256, 256
     _knob_promote_lhs_to_tmem(monkeypatch)
     torch.manual_seed(42)
     if dtype_src_str == "float8e5":
@@ -1172,9 +1149,6 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
     kernel_kwargs = {}
     if is_hip():
         kernel_kwargs["matrix_instr_nonkdim"] = nonKDim
-    if is_xpu_cri():
-        # Reduce spill size to speedup the test.
-        kernel_kwargs["num_warps"] = 16
     k = block_scale_fp4_matmul[grid](a, b, output, a_scale, b_scale, M, N, K, stride_scale, a.stride(0), a.stride(1),
                                      b.stride(0), b.stride(1), output.stride(0), output.stride(1), VEC_SIZE, BLOCK_M,
                                      BLOCK_N, BLOCK_K, NUM_STAGES=NUM_STAGES, PACK_ALONG_K=pack_along_k,
@@ -1194,6 +1168,38 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
             assert "kind::mxf4" in ptx
         else:
             assert "kind::mxf8f6f4" in ptx
+
+
+@triton.jit
+def rhs_scaled_n_packed_fp4_matmul(A, B, BS, C):
+    a = tl.load(A + tl.arange(0, 128)[:, None] * 32 + tl.arange(0, 32)[None, :])
+    b = tl.load(B + tl.arange(0, 32)[:, None] * 64 + tl.arange(0, 64)[None, :])
+    bs = tl.load(BS + tl.arange(0, 128)[:, None])
+    c = tl.dot_scaled(a, None, "bf16", b, bs, "e2m1", rhs_k_pack=False)
+    tl.store(C + tl.arange(0, 128)[:, None] * 128 + tl.arange(0, 128)[None, :], c)
+
+
+def test_dot_scaled_unscaled_lhs_fp4_rhs(device):
+    if is_cuda() and torch.cuda.get_device_capability()[0] < 8:
+        pytest.skip("Requires NVIDIA compute capability >= 8")
+    if not (is_cuda() or is_xpu()):
+        pytest.skip("Only tested on CUDA and XPU")
+
+    M, N, K = 128, 128, 32
+    torch.manual_seed(42)
+    a = torch.randn((M, K), dtype=torch.bfloat16, device=device)
+    b_mxfp4 = MXFP4Tensor(size=(K, N), device=device).random()
+    b = b_mxfp4.to_packed_tensor(dim=1)
+    b_scale = MXScaleTensor(size=(N, K // 32), device=device).random(low=0.5, high=2.0)
+    output = torch.empty((M, N), dtype=torch.float32, device=device)
+
+    rhs_scaled_n_packed_fp4_matmul[(1, )](a, b, b_scale.data, output)
+    if is_compile_warmup():
+        return
+
+    scale_ref = b_scale.to(torch.float32).T
+    ref_out = torch.matmul(a.float(), b_mxfp4.to(torch.float32) * scale_ref)
+    torch.testing.assert_close(output, ref_out, atol=1e-3, rtol=1e-3)
 
 
 @triton.jit
@@ -1267,7 +1273,7 @@ def mxfp8_mxfp4_matmul(  #
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("M, N, K", [(256, 256, 256) if is_xpu_cri() else (1024, 512, 512)])
+@pytest.mark.parametrize("M, N, K", [(1024, 512, 512)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (256, 128, 128), (128, 256, 128),
                                                        (128, 256, 256), (128, 128, 64), (128, 64, 128)])
 @pytest.mark.parametrize("NUM_STAGES", [1, 3])
@@ -1392,7 +1398,7 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
         assert "fp4Padded = true" in ttgir
     if is_xpu_cri():
         llir = out.asm["llir"]
-        count = llir.count("llvm.genx.GenISA.sub.group.bdpas")
+        count = llir.count("__spirv_SubgroupScaledMatrixMultiplyAccumulateINTEL")
         assert count > 0, "Unexpected LLVM IR generated."
 
     torch.testing.assert_close(ref_out, output, atol=1e-3, rtol=1e-3)
@@ -1459,10 +1465,10 @@ def batched_mxfp_matmul(  #
 @pytest.mark.parametrize("BATCH_SIZE, BLOCK_BATCH_SIZE", [(1, 1), (16, 1), (16, 4)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 64), (128, 64, 128), (64, 64, 128)])
 @pytest.mark.parametrize("NUM_STAGES", [1, 2 if is_hip() else 3])
-@pytest.mark.parametrize("NUM_WARPS", [32 if is_xpu_cri() else 4, 8])
+@pytest.mark.parametrize("NUM_WARPS", [4, 8])
 @pytest.mark.parametrize("nonKDim", ([0, 16, 32] if (is_hip_cdna() or is_hip_gfx1250()) else [0]))
 def test_batched_mxfp(BATCH_SIZE, BLOCK_BATCH_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS, device):
-    M, N, K = [128, 128, 512] if is_xpu_cri() else [1024, 512, 2048]
+    M, N, K = [1024, 512, 2048]
 
     if K % BLOCK_K != 0:
         pytest.xfail("Kernel requires shapes aligned by K dimension")
@@ -1552,7 +1558,7 @@ def test_batched_mxfp(BATCH_SIZE, BLOCK_BATCH_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, N
         assert "mma.sync.aligned.m16n8k32.row.col.kind::mxf8f6f4.block_scale.scale_vec::1X" in ptx
     if is_xpu_cri():
         llir = out.asm["llir"]
-        assert "llvm.genx.GenISA.sub.group.bdpas" in llir
+        assert "__spirv_SubgroupScaledMatrixMultiplyAccumulateINTEL" in llir
 
 
 @triton.jit

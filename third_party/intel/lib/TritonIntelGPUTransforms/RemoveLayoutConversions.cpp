@@ -554,7 +554,7 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
     if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
       auto parent = yieldOp->getParentOp();
       SmallVector<Value> valuesToPropagate;
-      if (isa<scf::ForOp, scf::IfOp, scf::WhileOp>(parent))
+      if (isa<scf::ForOp, scf::IfOp>(parent))
         valuesToPropagate.push_back(parent->getResult(use.getOperandNumber()));
       if (auto forOp = dyn_cast<scf::ForOp>(parent))
         valuesToPropagate.push_back(
@@ -594,6 +594,9 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
         continue;
       }
     }
+    if (auto reshapeOp = dyn_cast<tt::ReshapeOp>(user);
+        reshapeOp && reshapeOp.getEfficientLayout())
+      continue;
     if (auto storeOp = dyn_cast<tt::StoreOp>(user)) {
       if (llvm::all_of(info.encodings, checkMMAorMMADerived)) {
         SmallVector<Value> valuesToChange{storeOp.getPtr(), storeOp.getValue()};
@@ -613,8 +616,8 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
     }
     if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
         user->hasTrait<OpTrait::Elementwise>() ||
-        isa<tt::ReduceOp, tt::ExpandDimsOp, tt::ReshapeOp, tt::TransOp,
-            tt::JoinOp, tt::SplitOp, ttg::ConvertLayoutOp>(user)) {
+        isa<tt::BroadcastOp, tt::ReduceOp, tt::ExpandDimsOp, tt::ReshapeOp,
+            tt::TransOp, tt::JoinOp, tt::SplitOp, ttg::ConvertLayoutOp>(user)) {
       setEncoding(user->getResults(), info, changed, user);
       continue;
     }
@@ -995,9 +998,9 @@ void LayoutPropagation::rewriteOp(Operation *op) {
       setEncodingInPlace(op->getResult(0), encoding);
     } else if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
                op->hasTrait<OpTrait::Elementwise>() ||
-               isa<tt::ReduceOp, tt::ExpandDimsOp, tt::ReshapeOp, tt::TransOp,
-                   tt::JoinOp, tt::SplitOp, tt::GatherOp, ttg::ConvertLayoutOp>(
-                   op)) {
+               isa<tt::BroadcastOp, tt::ReduceOp, tt::ExpandDimsOp,
+                   tt::ReshapeOp, tt::TransOp, tt::JoinOp, tt::SplitOp,
+                   tt::GatherOp, ttg::ConvertLayoutOp>(op)) {
       rewriteGenericOpInPlace(op, encoding);
     } else {
       llvm::report_fatal_error("unexpected op in rewrite");
@@ -1019,7 +1022,7 @@ bool canBeRemat(Operation *op) {
   if (isa<scf::WhileOp, scf::ConditionOp>(op))
     return false;
 
-  return true;
+  return !hasEffect<MemoryEffects::Write>(op);
 }
 
 // Returns true for shape-changing ops that carry no encoding constraint of
@@ -1095,6 +1098,52 @@ bool isExpensiveLoadRematCandidate(Operation *op) {
 // any other caller of canBeRemat.
 static bool isRematerializableInSlice(Operation *op) {
   return canBeRemat(op) || isExpensiveLoadRematCandidate(op);
+}
+
+// Helper function to get the base pointer by tracing through AddPtrOp and
+// SplatOp operations.
+static Value getBasePointer(Value ptr) {
+  Value base = ptr;
+  // Trace through AddPtrOp chains
+  while (auto addPtrOp = base.getDefiningOp<tt::AddPtrOp>())
+    base = addPtrOp.getPtr();
+  // Trace through SplatOp to get the scalar pointer
+  if (auto splatOp = base.getDefiningOp<tt::SplatOp>())
+    base = splatOp.getSrc();
+  return base;
+}
+
+// Check if a pointer is stored to anywhere in the function with a DIFFERENT
+// encoding than the target encoding. Used to reject rematerializations that
+// could create race conditions when the same pointer is accessed with different
+// encodings. If the store uses the SAME encoding, it's safe.
+static bool isPointerStoredWithDifferentEncoding(Value basePtr,
+                                                 tt::FuncOp funcOp,
+                                                 Attribute targetEncoding) {
+  // Lambda to check if a store conflicts with the target encoding
+  auto checkStoreEncoding = [&](Value storePtr, Value storeValue) -> bool {
+    if (getBasePointer(storePtr) == basePtr) {
+      auto valueTy = dyn_cast<RankedTensorType>(storeValue.getType());
+      if (valueTy) {
+        Attribute storeEncoding = valueTy.getEncoding();
+        if (storeEncoding != targetEncoding)
+          return true; // Different encoding - conflict!
+      }
+    }
+    return false;
+  };
+
+  auto result = funcOp.walk([&](Operation *op) {
+    if (auto storeOp = dyn_cast<tt::StoreOp>(op)) {
+      if (checkStoreEncoding(storeOp.getPtr(), storeOp.getValue()))
+        return WalkResult::interrupt();
+    } else if (auto descStoreOp = dyn_cast<tt::DescriptorStoreOp>(op)) {
+      if (checkStoreEncoding(descStoreOp.getDesc(), descStoreOp.getSrc()))
+        return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  return result.wasInterrupted();
 }
 
 void LayoutRematerialization::updateRematMapping(
@@ -1600,6 +1649,49 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
         return failure();
     }
   }
+
+  // Check to prevent rematerializing loads from pointers that are stored to
+  // elsewhere with a DIFFERENT encoding.
+  //
+  // When rematerializing memory operations with different encodings, we must
+  // ensure that operations on the same pointer use consistent thread-to-address
+  // mappings. Otherwise, different work-items will access different addresses
+  // for the same logical element, creating a race condition.
+  //
+  // Example: If in_out_ptr0 is loaded in this slice (to be rematerialized with
+  // #blocked1), and there's a store to in_out_ptr0 elsewhere with #blocked,
+  // we would create:
+  //   - Path 1 (store): Lane 0 writes to address X (encoding #blocked)
+  //   - Path 2 (load):  Lane 0 reads from address Y (encoding #blocked1,
+  //   transposed)
+  // This creates a race where lanes read/write each other's data.
+  //
+  // However, if the store uses the SAME encoding (rootEncoding), both the load
+  // and store would use the same thread-to-address mapping, which is safe.
+  for (Value v : slice) {
+    Operation *op = v.getDefiningOp();
+    if (!op)
+      continue;
+
+    // Check loads - if the pointer is stored to with a different encoding,
+    // reject
+    Value ptr;
+    if (auto loadOp = dyn_cast<tt::LoadOp>(op))
+      ptr = loadOp.getPtr();
+    else if (auto descLoadOp = dyn_cast<tt::DescriptorLoadOp>(op))
+      ptr = descLoadOp.getDesc();
+    else
+      continue;
+
+    Value basePtr = getBasePointer(ptr);
+    if (isPointerStoredWithDifferentEncoding(basePtr, funcOp, rootEncoding)) {
+      LDBG("Rejecting slice: pointer "
+           << basePtr << " is loaded (in slice) with encoding " << rootEncoding
+           << " but stored elsewhere with different encoding");
+      return failure();
+    }
+  }
+
   sliceArg = std::move(slice);
   layoutArg = std::move(layout);
   return success();
