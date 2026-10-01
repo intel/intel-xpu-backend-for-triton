@@ -929,3 +929,63 @@ module {
 // CHECK-NOT: unrealized_conversion_cast
 // CHECK-NOT: tt.tensordesc
 // CHECK: tt.return
+
+// -----
+
+// A select joining a local descriptor and an untraceable function argument must
+// not crash AxisInfo analysis. Both loads take the pointer path (#8170).
+module {
+  tt.func public @desc_select_untraceable(%arg: !tt.tensordesc<128x128xf32>, %c: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %p: i1, %o: i32) -> (tensor<128x128xf32>, tensor<128x128xf32>) {
+    %c1_i64 = arith.constant 1 : i64
+    %c256_i64 = arith.constant 256 : i64
+    %c256_i32 = arith.constant 256 : i32
+    %d = tt.make_tensor_descriptor %c, [%c256_i32, %c256_i32], [%c256_i64, %c1_i64] {padding = 1 : i32} : <f32>, <128x128xf32>
+    %l = tt.descriptor_load %d[%o, %o] : !tt.tensordesc<128x128xf32> -> tensor<128x128xf32>
+    %s = arith.select %p, %d, %arg : !tt.tensordesc<128x128xf32>
+    %l2 = tt.descriptor_load %s[%o, %o] : !tt.tensordesc<128x128xf32> -> tensor<128x128xf32>
+    tt.return %l, %l2 : tensor<128x128xf32>, tensor<128x128xf32>
+  }
+}
+
+// CHECK-LABEL: @desc_select_untraceable
+// CHECK-NOT: unrealized_conversion_cast
+// CHECK-NOT: tt.make_tensor_descriptor
+// CHECK-NOT: tt.descriptor_load
+// CHECK: %[[LOCAL:.*]] = tt.load
+// CHECK-NOT: unrealized_conversion_cast
+// CHECK-NOT: tt.make_tensor_descriptor
+// CHECK-NOT: tt.descriptor_load
+// CHECK: tt.load
+// CHECK-NOT: unrealized_conversion_cast
+// CHECK-NOT: tt.tensordesc
+// CHECK-NOT: tt.descriptor_load
+// CHECK: tt.return %[[LOCAL]],
+
+// -----
+
+// Multi-dimensional descriptor AxisInfo is not forwarded as scalar hints to a
+// callee.
+module {
+  tt.func public @desc_call_kernel(%arg: !tt.tensordesc<32x32xf32> {tt.divisibility = 16 : i32}, %out: !tt.ptr<f32>) {
+    %v = tt.call @desc_call_callee(%arg) : (!tt.tensordesc<32x32xf32>) -> tensor<32x32xf32>
+    %p = tt.splat %out : !tt.ptr<f32> -> tensor<32x32x!tt.ptr<f32>>
+    tt.store %p, %v : tensor<32x32x!tt.ptr<f32>>
+    tt.return
+  }
+  tt.func private @desc_call_callee(%arg: !tt.tensordesc<32x32xf32>) -> tensor<32x32xf32> attributes {noinline = true} {
+    %c0 = arith.constant 0 : i32
+    %v = tt.descriptor_load %arg[%c0, %c0] : !tt.tensordesc<32x32xf32> -> tensor<32x32xf32>
+    tt.return %v : tensor<32x32xf32>
+  }
+}
+
+// CHECK-LABEL: @desc_call_kernel
+// CHECK: tt.call @desc_call_callee
+// CHECK: tt.store
+// CHECK-LABEL: tt.func private @desc_call_callee
+// CHECK-NOT: tt.contiguity
+// CHECK-NOT: tt.divisibility
+// CHECK-NOT: tt.constancy
+// CHECK: arith.constant
+// CHECK: tt.load
+// CHECK: tt.return
