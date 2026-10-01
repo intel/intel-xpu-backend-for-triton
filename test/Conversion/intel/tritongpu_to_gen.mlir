@@ -2098,6 +2098,36 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.support_bfloat16_conversion} {
+  tt.func @f16_to_bf16_rtne(%arg0: tensor<256xf16, #blocked>) {
+    // CHECK-LABEL: @f16_to_bf16_rtne
+    // CHECK: llvm.fpext %{{.*}} : f16 to f32
+    // CHECK-NEXT: llvm.call spir_funccc @_Z27__spirv_ConvertFToBF16INTELf(%{{.*}}) {{.*}} : (f32) -> i16
+    // CHECK-NEXT: llvm.bitcast %{{.*}} : i16 to bf16
+    %a = tt.fp_to_fp %arg0, rounding = rtne : tensor<256xf16, #blocked> -> tensor<256xbf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @f16_to_bf16_rtz_no_bf16_conversion(%arg0: tensor<256xf16, #blocked>) {
+    // CHECK-LABEL: @f16_to_bf16_rtz_no_bf16_conversion
+    // CHECK: llvm.fpext %{{.*}} : f16 to f32
+    // CHECK: llvm.bitcast %{{.*}} : f32 to i32
+    // CHECK: llvm.lshr
+    // CHECK-NEXT: llvm.trunc %{{.*}} : i32 to i16
+    // CHECK-NEXT: llvm.bitcast %{{.*}} : i16 to bf16
+    %a = tt.fp_to_fp %arg0, rounding = rtz : tensor<256xf16, #blocked> -> tensor<256xbf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func @fp8_const(%arg0: tensor<1024xi1, #blocked>, %arg1: tensor<1024xf8E4M3FNUZ, #blocked>) {
