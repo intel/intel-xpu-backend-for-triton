@@ -34,7 +34,6 @@ import triton
 import triton.language as tl
 
 import triton.backends.intel.compiler as intel_compiler
-from triton._internal_testing import is_xpu_cri
 from triton.backends.intel.driver import is_lts
 from triton.runtime.errors import IntelGPUError
 
@@ -176,14 +175,24 @@ def _spy_on_ocloc(monkeypatch):
     return calls
 
 
-# `make_zebin` picks the large-GRF retry flag per target: CRI upgrades straight to
-# 512-GRF, everything else to 256-GRF. Match whichever this device would use, so
-# the assertions below track the guard and not the flag choice.
-LARGE_GRF_FLAG = "-cl-intel-512-GRF-per-thread" if is_xpu_cri() else "-cl-intel-256-GRF-per-thread"
+def _large_grf_flag() -> str:
+    """The large-GRF retry flag this target escalates to.
+
+    Asked of the backend rather than re-derived here: the assertions below
+    are about the num_warps guard, not about the flag choice. Deferred to
+    call time (not a module-level constant) so importing this module never
+    needs a live device: `get_current_target()` raises on a driverless box,
+    and this file's own `pytestmark` skip is only checked at collection,
+    which is too late to save an import-time exception.
+    """
+    arch = triton.runtime.driver.active.get_current_target().arch
+    max_grf_mode = arch.get("max_grf_mode", intel_compiler.get_max_grf_mode(arch))
+    return f"-cl-intel-{max_grf_mode}-GRF-per-thread"
 
 
 def _large_grf_retries(calls) -> int:
-    return sum(1 for c in calls if any(LARGE_GRF_FLAG in str(a) for a in c))
+    flag = _large_grf_flag()
+    return sum(1 for c in calls if any(flag in str(a) for a in c))
 
 
 @pytest.mark.parametrize("spill_size, expected_retries", [(960, 0), (1024, 1)])
@@ -210,7 +219,7 @@ def test_spill_gate_rebuilds_at_1024_bytes_per_thread(monkeypatch, fresh_triton_
     assert torch.allclose(y, x + 1.0)
     assert _large_grf_retries(calls) == expected_retries, (
         f"{spill_size} B/hardware-thread at SIMD{WARP_SIZE}: expected {expected_retries} "
-        f"{LARGE_GRF_FLAG} retries, got ocloc calls: {calls}")
+        f"{_large_grf_flag()} retries, got ocloc calls: {calls}")
 
 
 def _stub_degenerate_first_build(monkeypatch):
@@ -254,7 +263,7 @@ def test_exception_retry_not_attempted_for_num_warps_64(monkeypatch, fresh_trito
     with pytest.raises(IntelGPUError):
         _launch(num_warps=64)
 
-    assert _large_grf_retries(calls) == 0, (f"no {LARGE_GRF_FLAG} retry should be attempted for num_warps > 32; "
+    assert _large_grf_retries(calls) == 0, (f"no {_large_grf_flag()} retry should be attempted for num_warps > 32; "
                                             f"got ocloc calls: {calls}")
 
 
@@ -271,7 +280,7 @@ def test_exception_retry_still_attempted_for_num_warps_32(monkeypatch, fresh_tri
     # first spill probe was stubbed to raise), so the launch succeeds.
     x, y = _launch(num_warps=32)
     assert torch.allclose(y, x + 1.0)
-    assert _large_grf_retries(calls) == 1, (f"expected exactly one {LARGE_GRF_FLAG} retry for num_warps <= 32; "
+    assert _large_grf_retries(calls) == 1, (f"expected exactly one {_large_grf_flag()} retry for num_warps <= 32; "
                                             f"got: {calls}")
 
 
