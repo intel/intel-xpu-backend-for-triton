@@ -100,7 +100,9 @@ bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
 /// enforces: a valid tile shape, the HW address payload restriction, no
 /// transpose, and a single v-block. On success returns true and writes the
 /// validated tile geometry (with vBlocks forced to 1) into \p sizeInfoOut; on
-/// failure returns false and leaves \p sizeInfoOut unspecified.
+/// failure returns false and leaves \p sizeInfoOut unspecified. For 16-bit
+/// elements, a v-block pair that the layout proves is one dense, aligned tile
+/// is folded into a doubled tileWidth (64 B rows) instead of being dropped.
 ///
 /// This is the single source of truth for 2D block store eligibility, shared
 /// by the store lowering patterns in LoadStoreOpToLLVM.cpp so their tile

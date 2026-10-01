@@ -1035,7 +1035,13 @@ struct TritonMatrix2DBlockStoreLowering
                   ConversionPatternRewriter &rewriter) const override {
     create2DBlockAsserts(op, rewriter, emitter);
 
-    if (!isSPVBuiltinAvailable(op)) {
+    // At sub-group 16 the SPIR-V builtin gives lane l columns (2l, 2l + 1) of a
+    // 16-bit tile of width 32, not the op's payload order, which GenISA takes.
+    auto mod = op->getParentOfType<mlir::ModuleOp>();
+    bool isGRFOrderTile =
+        op.getElemSizeInBits() == 16 && op.getTileWidth() == 32 &&
+        triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod) == 16;
+    if (!isSPVBuiltinAvailable(op) || isGRFOrderTile) {
       // Fallback to GenISA interface.
       rewriter.replaceOp(op, createGenISA2DBlockWrite(op, rewriter));
       return success();

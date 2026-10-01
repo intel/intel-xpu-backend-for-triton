@@ -270,6 +270,8 @@ def TritonGEN_Matrix2DBlockStoreOp : TritonGEN_Op<"2Dblockstore">,
 
     Notes:
       - coordinate is provided in elements, while width and pitch are provided in bytes.
+      - $stored_val is the tile in row-major order across the N lanes of the sub-group: element (r, c) is
+        element (r * $tile_width + c) / N of lane c % N, for $tile_width = N, or 2N for 16-bit at N = 16.
   }];
 
   let assemblyFormat = [{

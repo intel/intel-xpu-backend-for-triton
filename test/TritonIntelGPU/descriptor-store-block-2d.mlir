@@ -34,7 +34,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
 module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
   // CHECK-LABEL: llvm.func spir_kernelcc @store_rank_reducing_dpas_tdesc
-  // CHECK-COUNT-8: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
+  // CHECK-COUNT-4: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 16, tile_width = 32, tile_height = 8, v_blocks = 1, cache_control = Default}
   tt.func public @store_rank_reducing_dpas_tdesc(%arg0: !tt.ptr<f16>, %arg1: i32,
                                                   %arg2: i32, %arg3: i64) {
     %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf16, #dpas>
@@ -145,14 +145,15 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK:           %[[OFF_ROW:.*]] = llvm.add %[[C0]], {{.*}} : i32
 
     // Compose value vector and insert elements.
-    // CHECK:           llvm.mlir.undef : vector<8xf16>
-    // CHECK-COUNT-8:   llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<8xf16>
+    // CHECK:           llvm.mlir.undef : vector<16xf16>
+    // CHECK-COUNT-16:  llvm.insertelement %{{[0-9]+}}, %{{[0-9]+}}{{\[}}{{.*}} : i32] : vector<16xf16>
 
     // The 2D block store: base ptr from descriptor, computed width/height/pitch.
-    // CHECK:           triton_gen.2Dblockstore %[[EX_BASE]], %[[BASE_WIDTH]], %[[BASE_HEIGHT]], %[[PITCH]], {{.*}}, %[[OFF_ROW]], {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32, vector<8xi16>)
+    // CHECK:           triton_gen.2Dblockstore %[[EX_BASE]], %[[BASE_WIDTH]], %[[BASE_HEIGHT]], %[[PITCH]], {{.*}}, %[[OFF_ROW]], {{.*}} {elem_size_in_bits = 16, tile_width = 32, tile_height = 8, v_blocks = 1, cache_control = Default} : (!llvm.ptr<1>, i32, i32, i32, i32, i32, vector<16xi16>)
 
-    // Remaining 7 stores (repCluster [4,2] => 8 total stores).
-    // CHECK-COUNT-7: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
+    // Remaining 3 stores (repCluster [4,2]: the two N-adjacent 8x16 tiles of
+    // each 8-row band form one 8x32 store => 4 total stores).
+    // CHECK-COUNT-3: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 16, tile_width = 32, tile_height = 8, v_blocks = 1, cache_control = Default}
     %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2], [%arg3, %c1_i64] : <f16>, <32x32xf16, #dpas>
     tt.descriptor_store %desc[%c0_i32, %c0_i32], %cst {ttig.block_io = "row_major"} : !tt.tensordesc<32x32xf16, #dpas>, tensor<32x32xf16, #dpas>
     tt.return
