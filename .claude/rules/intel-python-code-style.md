@@ -1,3 +1,9 @@
+---
+description: 'Python coding guidelines: naming, formatting, type hints, imports, docstrings, dataclasses, Triton kernel conventions'
+paths:
+  - "**/*.py"
+---
+
 # Python Coding Guidelines
 
 ## Naming Conventions

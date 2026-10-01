@@ -201,7 +201,7 @@ private:
     //
     // Not checked here:
     //  - Non-foldable (runtime) values are trusted to be in range.
-    //  - Alignment (base 4B, width multiple of 4B, pitch multiple of 16B):
+    //  - Alignment (base 4B, width multiple of 4B):
     //    in the normal pipeline MaterializeBlockPointer checks it before it
     //    tags the load (runtime values rely on the tt.make_tensor_descriptor
     //    16-byte contract); hand-tagged IR is not re-checked here.
@@ -238,6 +238,18 @@ private:
         isOutOfRange(/*pitch stride*/ 1 + descRank + (descRank - 2),
                      elemBytesConst, kMax2DBlockField, "base_pitch"))
       return;
+
+    for (tt::MakeTensorDescOp d : defs) {
+      std::optional<int64_t> stride = tt::intel::getFoldedConstantValue(
+          d->getOperand(/*pitch stride*/ 1 + descRank + (descRank - 2)));
+      if (stride && (*stride * elemBytesConst) % 16 != 0) {
+        op->emitOpError("descriptor pitch of ")
+            << *stride * elemBytesConst
+            << " bytes is not a multiple of 16 bytes";
+        signalPassFailure();
+        return;
+      }
+    }
 
     OpBuilder builder(op);
     Location loc = op.getLoc();

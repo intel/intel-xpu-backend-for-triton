@@ -151,7 +151,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %c1_i32 = arith.constant 1 : i32
     %c1_i64 = arith.constant 1 : i64
     %c0_i32 = arith.constant 0 : i32
-    %desc = tt.make_tensor_descriptor %arg0, [%c1_i32, %arg1, %arg2], [%arg3, %c1_i64, %c1_i64] : <f16>, <1x64x32xf16>
+    %c32_i64 = arith.constant 32 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%c1_i32, %arg1, %arg2], [%arg3, %c32_i64, %c1_i64] : <f16>, <1x64x32xf16>
     // CHECK: %[[SHAPE0:.*]] = ttig.extract_desc %{{.*}}[0] : <1x64x32xf16> -> i64
     // CHECK: ttig.extract_desc
     // CHECK: %[[BATCH_EXT:.*]] = arith.extsi %arg4 : i32 to i64
@@ -261,7 +262,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
   tt.func @descriptor_load_two_batch_dims(%arg0: !tt.ptr<f16>, %arg1: i32, %arg2: i32, %arg3: i32, %arg4: i32, %arg5: i64, %bi0: i32, %bi1: i32) -> tensor<64x32xf16, #dot0> {
     %c1_i64 = arith.constant 1 : i64
     %c0_i32 = arith.constant 0 : i32
-    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2, %arg3, %arg4], [%arg5, %arg5, %c1_i64, %c1_i64] : <f16>, <1x1x64x32xf16>
+    %c32_i64 = arith.constant 32 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%arg1, %arg2, %arg3, %arg4], [%arg5, %arg5, %c32_i64, %c1_i64] : <f16>, <1x1x64x32xf16>
     // CHECK: %[[SHAPE0:.*]] = ttig.extract_desc %{{.*}}[0] : <1x1x64x32xf16> -> i64
     // CHECK: %[[SHAPE1:.*]] = ttig.extract_desc %{{.*}}[1] : <1x1x64x32xf16> -> i64
     // CHECK: %[[S0:.*]] = arith.trunci %[[SHAPE0]] : i64 to i32

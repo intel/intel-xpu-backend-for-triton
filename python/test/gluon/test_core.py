@@ -1181,7 +1181,8 @@ def async_copy_mbarrier_kernel(out, inp, xnumel, XBLOCK: ttgl.constexpr, YBLOCK:
         l2=ttgl.nvidia.ampere.FractionalEvictionPolicy("evict_last", 0.5, "evict_first"),
         l2_prefetch_size=128,
     ),
-], ids=["default", "evict_first", "evict_last", "fractional"])
+    ttgl.nvidia.ampere.CachePolicy(l2=ttgl.nvidia.ampere.FractionalEvictionPolicy("evict_last", 1.0), ),
+], ids=["default", "evict_first", "evict_last", "fractional", "fractional_one"])
 @pytest.mark.xfail(not is_ampere_or_newer(), reason="Requires Ampere", run=False)
 def test_async_copy_mbarrier(copy_vec, cache_policy, device):
     tensor_opts = dict(dtype=torch.float, device=device)

@@ -25,11 +25,6 @@
 // (Case 16). Each negative case also checks that the pass emitted no IR before
 // bailing (no stray ttig.extract_desc).
 //
-// This pass deliberately enforces neither the 64 B minimum nor the 16 B
-// alignment; both are left to a follow-up issue, and no case in this file
-// pins either behavior. @descriptor_load_rank_reducing in descriptor-load.mlir
-// (2 B pitch) is an existing test that must keep converting.
-//
 // From Case 3 on, at most one width/height/pitch operand is a compile-time
 // constant (the field under test; none in Case 16) and the others are runtime
 // arguments. So are the remaining operands, except the innermost stride

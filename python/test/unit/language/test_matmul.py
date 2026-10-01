@@ -1180,8 +1180,10 @@ def rhs_scaled_n_packed_fp4_matmul(A, B, BS, C):
 
 
 def test_dot_scaled_unscaled_lhs_fp4_rhs(device):
-    if not is_cuda() or torch.cuda.get_device_capability()[0] < 8:
+    if is_cuda() and torch.cuda.get_device_capability()[0] < 8:
         pytest.skip("Requires NVIDIA compute capability >= 8")
+    if not (is_cuda() or is_xpu()):
+        pytest.skip("Only tested on CUDA and XPU")
 
     M, N, K = 128, 128, 32
     torch.manual_seed(42)

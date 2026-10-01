@@ -1,6 +1,15 @@
 ---
 description: 'Testing conventions: MLIR lit tests, Python pytest, C++ gtest, skip lists, test runner scripts, CI configuration'
-applyTo: '**/test/**/*.mlir, **/test/**/*.py, **/unittest/**/*.cpp, **/scripts/test-triton.sh, **/scripts/pytest-utils.sh, **/scripts/skiplist/**/*.txt, **/conftest.py, **/_internal_testing.py, **/CMakeLists.txt'
+paths:
+  - "**/test/**/*.mlir"
+  - "**/test/**/*.py"
+  - "**/unittest/**/*.cpp"
+  - "**/scripts/test-triton.sh"
+  - "**/scripts/pytest-utils.sh"
+  - "**/scripts/skiplist/**/*.txt"
+  - "**/conftest.py"
+  - "**/_internal_testing.py"
+  - "**/CMakeLists.txt"
 ---
 
 # Testing Conventions
