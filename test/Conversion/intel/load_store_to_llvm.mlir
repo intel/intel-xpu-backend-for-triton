@@ -153,10 +153,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttig.sup
 // COM: evict_first on the non-predicated scalar load path deliberately does NOT
 // COM: set the `nontemporal` flag on the underlying llvm.load. These loads are
 // COM: spatially coalesced across the subgroup; bypassing L1 defeats intra-line
-// COM: reuse and roughly doubles memory traffic (regression #7520). The eviction
-// COM: hint is honored via the LSC cache-control decoration on the predicated
-// COM: path (see load_evict_first_predicated), not via nontemporal. Do not
-// COM: re-add nontemporal here.
+// COM: reuse and roughly doubles memory traffic (regression #7520). The
+// COM: predicated path ignores evict_first too (see load_evict_first_predicated).
+// COM: Do not re-add nontemporal here.
 
 #blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
