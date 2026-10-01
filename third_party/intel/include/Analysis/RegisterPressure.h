@@ -173,12 +173,11 @@ public:
     /// both `'default'` and `'auto'`. BMG and PVC do support 512-register
     /// mode explicitly (`grf_mode='512'` works on both); they just never
     /// auto-escalate to it, which is all this per-target ceiling describes.
-    /// `'default'` additionally caps at `Smallest` once `num_warps > 32`: a
-    /// larger GRF mode reduces the maximum launchable work-group size, so the
-    /// AOT path skips the retry outright above that bound and the JIT path
-    /// attempts it and fails to build; either way `ttig.max_grf_mode` never
-    /// actually takes effect there. This additional cap does not apply to
-    /// `'auto'`.
+    /// Both additionally cap at `Smallest` once `num_warps > 32`: a larger
+    /// GRF mode reduces the maximum launchable work-group size, so the
+    /// kernel can never actually run at a larger mode no matter which
+    /// mechanism would have picked it; `ttig.max_grf_mode` never actually
+    /// takes effect there either way.
     ///
     /// If the attribute is absent (e.g. a hand-written test module that never
     /// went through the Python compiler pipeline), the pre-existing default
@@ -198,7 +197,7 @@ public:
   /// the smallest or largest GRF size per `unknownAssumption` (see its
   /// documentation for which one a given caller needs, for how `Largest`
   /// uses `mod`'s `ttig.max_grf_mode` attribute, and for the `num_warps > 32`
-  /// exception on the `grfMode == "default"` path).
+  /// exception).
   static unsigned
   getGRFBytesPerHardwareThread(StringRef grfMode, ModuleOp mod,
                                UnknownGRFSizeAssumption unknownAssumption);

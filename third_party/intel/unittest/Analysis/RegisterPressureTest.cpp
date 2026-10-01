@@ -89,30 +89,30 @@ TEST_F(RegisterPressureGRFModeTest, InvalidAttrFallsThroughToAbsenceDefault) {
 }
 
 TEST_F(RegisterPressureGRFModeTest, NumWarpsOver32CapsDefaultModeAtSmallest) {
-  // `make_zebin`'s automatic-escalation retry, the only path that would
-  // ever realize `ttig.max_grf_mode` on the `grf_mode='default'` path, is
-  // itself skipped outright once `num_warps > 32`, so the realizable
-  // ceiling is `Smallest`'s answer regardless of what the attribute says.
+  // A larger GRF mode halves (256) or quarters (512) the maximum launchable
+  // work-group size, so a `num_warps > 32` kernel can never actually run at
+  // a larger mode, regardless of what the attribute says.
   auto module = createModule(StringRef("512"), /*numWarps=*/64);
   EXPECT_EQ(largestBytes(*module, "default"), 4096u);
 }
 
-TEST_F(RegisterPressureGRFModeTest, NumWarpsOver32DoesNotCapAutoMode) {
-  // `grf_mode='auto'` escalates inside IGC, not through `make_zebin`'s
-  // retry, and is not itself gated on `num_warps` at the backend level, so
-  // the `num_warps > 32` exception must not apply to it. Uses "256" (not
-  // "512") so the assertion actually distinguishes "the cap doesn't apply"
-  // from "the attribute's value happens to equal the uncapped answer too":
-  // if the cap wrongly applied here, this would resolve to 4096, not 8192.
+TEST_F(RegisterPressureGRFModeTest, NumWarpsOver32CapsAutoModeAtSmallestToo) {
+  // The same cap applies regardless of which mechanism would have picked
+  // the larger mode: `'auto'` is capped here just like `'default'` is.
   auto module = createModule(StringRef("256"), /*numWarps=*/64);
-  EXPECT_EQ(largestBytes(*module, "auto"), 8192u);
+  EXPECT_EQ(largestBytes(*module, "auto"), 4096u);
 }
 
 TEST_F(RegisterPressureGRFModeTest, NumWarpsAtBoundaryIsUnaffected) {
-  // 32 itself is still eligible for escalation (`make_zebin` guards on
-  // `num_warps <= 32`), so the cap must not fire here.
+  // 32 itself is still launchable at a larger GRF mode, so the cap must not
+  // fire here.
   auto module = createModule(StringRef("512"), /*numWarps=*/32);
   EXPECT_EQ(largestBytes(*module, "default"), 16384u);
+}
+
+TEST_F(RegisterPressureGRFModeTest, NumWarpsAtBoundaryIsUnaffectedForAutoToo) {
+  auto module = createModule(StringRef("512"), /*numWarps=*/32);
+  EXPECT_EQ(largestBytes(*module, "auto"), 16384u);
 }
 
 TEST_F(RegisterPressureGRFModeTest, AutoModeRespectsMaxGRFMode) {

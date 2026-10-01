@@ -75,12 +75,10 @@ unsigned RegisterPressureAnalysis::getGRFBytesPerHardwareThread(
   if (unknownAssumption == UnknownGRFSizeAssumption::Smallest)
     return SmallestGRFModeBytes;
   // A larger GRF mode reduces the maximum launchable work-group size, so a
-  // num_warps > 32 kernel on `grf_mode='default'` can never actually run at
-  // a larger mode: the AOT path (make_zebin) skips the escalation attempt
-  // outright, and the JIT path (driver.c) attempts it and fails to build.
-  // Same ceiling either way, regardless of what `ttig.max_grf_mode` says.
-  // This cap does not apply to `'auto'`.
-  if (grfMode == "default" && lookupNumWarps(mod) > 32)
+  // num_warps > 32 kernel can never actually run at a larger mode, no matter
+  // which mechanism would have picked it: the cap applies to both
+  // `'default'` and `'auto'`.
+  if (lookupNumWarps(mod) > 32)
     return SmallestGRFModeBytes;
   // Largest: the true ceiling is per-target, mirrored onto the module via the
   // ttig.max_grf_mode attribute (see UnknownGRFSizeAssumption::Largest's

@@ -110,11 +110,11 @@ Both `'default'` and `'auto'` get a target-specific ceiling here: the
 `ttig.max_grf_mode` module attribute (512 B/lane on every non-`cri` target,
 1024 B/lane on `cri`, or 1024 B/lane if the attribute is absent, e.g.
 hand-written TTGIR that never went through `TritonAnnotateModule`).
-`'default'` additionally caps at `Smallest` once `num_warps > 32`: its own
-AOT/JIT retry is gated on (and fails above) that bound, so `ttig.max_grf_mode`
-never actually takes effect there. This additional cap does not apply to
-`'auto'`. There is no fixed tensor-size floor; sizes only matter through
-their contribution to the measured pressure.
+Both additionally cap at `Smallest` once `num_warps > 32`: a larger GRF mode
+is unlaunchable there regardless of which mechanism would have picked it (see
+the `num_warps ≤ 32` constraint above), so `ttig.max_grf_mode` never actually
+takes effect either way. There is no fixed tensor-size floor; sizes only
+matter through their contribution to the measured pressure.
 
 Peak, not live-in, pressure is the gate: `liveInPressure` derives from
 `LivenessBlockInfo::in()`, which excludes block arguments and so never counts the
