@@ -54,7 +54,7 @@ def atomic_json(path, value):
 
 def candidate_configs(key):
     # MAX preserves the model's full GQA group, including non-power-of-two ratios.
-    heads = ["MAX"] + [h for h in (1, 2, 4, 8) if h < key.num_queries_per_kv and key.num_queries_per_kv % h == 0]
+    heads = ["MAX"] + [h for h in (1, 8) if h < key.num_queries_per_kv and key.num_queries_per_kv % h == 0]
     return [{"block_m": m, "tile_size": t, "num_warps": w, "num_stages": s, "grf_mode": g, "heads_per_program": h}
             for h in heads
             for m in (16, 32, 64, 128)
