@@ -384,25 +384,19 @@ def cold_graph_timer(fn, device, warmup_ms, rep_ms):
         eviction.replay()
         attention.replay()
         backend.synchronize(device)
-        pairs = [(backend.Event(enable_timing=True), backend.Event(enable_timing=True)) for _ in range(256)]
-        for start, end in pairs:
-            start.record()
-            end.record()
-        boundary_start, boundary_end = backend.Event(enable_timing=True), backend.Event(enable_timing=True)
-        boundary_start.record()
-        boundary_end.record()
-        backend.synchronize(device)
-
         def batch(repeats):
+            # Fresh events avoid re-recording profiling tags across replay batches.
+            pairs = [(backend.Event(enable_timing=True), backend.Event(enable_timing=True)) for _ in range(repeats)]
+            boundary_start, boundary_end = backend.Event(enable_timing=True), backend.Event(enable_timing=True)
             boundary_start.record()
-            for start, end in pairs[:repeats]:
+            for start, end in pairs:
                 eviction.replay()
                 start.record()
                 attention.replay()
                 end.record()
             boundary_end.record()
             backend.synchronize(device)
-            samples = [start.elapsed_time(end) for start, end in pairs[:repeats]]
+            samples = [start.elapsed_time(end) for start, end in pairs]
             total_ms = boundary_start.elapsed_time(boundary_end)
             if not all(math.isfinite(value) and value > 0 for value in samples + [total_ms]):
                 raise RuntimeError("Invalid cold graph timing")
