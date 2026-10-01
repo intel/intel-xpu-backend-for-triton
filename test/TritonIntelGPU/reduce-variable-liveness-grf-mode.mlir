@@ -31,12 +31,14 @@
 // COM: smallest would make the pass sink more than the real hardware, once known,
 // COM: would ever have required).
 // COM:
-// COM: For "default" that means the largest mode *this target's own automatic
-// COM: escalation* reaches, not the largest mode it can be explicitly told to use
-// COM: (BMG and PVC both accept an explicit grf_mode='512'; 256 is only where their
-// COM: automatic path stops), and not the largest any device supports. Modules 1-4
-// COM: never set `ttig.max_grf_mode`, so they exercise the pre-target-aware
-// COM: fallback: unconditionally 512-register mode (1024 B/lane).
+// COM: For "default" and "auto" alike, that means the largest mode *this target's
+// COM: own automatic escalation* reaches (whether driven by the backend's own retry
+// COM: or by IGC's internal auto-GRF heuristic), not the largest mode it can be
+// COM: explicitly told to use (BMG and PVC both accept an explicit grf_mode='512';
+// COM: 256 is only where their automatic path -- either path -- stops), and not the
+// COM: largest any device supports. Modules 1-4 never set `ttig.max_grf_mode`, so
+// COM: they exercise the pre-target-aware fallback: unconditionally 512-register
+// COM: mode (1024 B/lane), for both "default" and "auto" alike.
 // COM:
 // COM: "auto" resolves identically to "default" throughout this file: both read
 // COM: `ttig.max_grf_mode` when present (module 5 below) and share the same
