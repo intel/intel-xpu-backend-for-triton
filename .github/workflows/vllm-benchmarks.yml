@@ -4,6 +4,10 @@ run-name: UA CI-input tuning on B580 (${{ github.ref_name }})
 on:
   workflow_dispatch:
     inputs:
+      timing_probe:
+        description: Run only the short graph timing investigation
+        type: boolean
+        default: false
       part:
         description: Tuning part to run (both runs sequentially)
         type: choice
@@ -24,6 +28,7 @@ env:
 
 jobs:
   tune:
+    if: ${{ !inputs.timing_probe }}
     name: Tune part ${{ matrix.part }} of 2
     strategy:
       fail-fast: false
@@ -96,3 +101,28 @@ jobs:
           name: ua-cold-graph-part-${{ matrix.part }}-profiles
           path: reports
           if-no-files-found: warn
+
+  timing-probe:
+    if: ${{ inputs.timing_probe }}
+    runs-on: [linux, b580]
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-pyenv-python
+        with:
+          python-version: '3.12'
+      - uses: ./.github/actions/setup-pytorch
+      - name: Probe graph timing
+        run: |
+          mkdir -p reports
+          ./scripts/capture-hw-details.sh > reports/environment.txt
+          python -m pip freeze > reports/packages.txt
+          python scripts/ua_graph_timing_probe.py --output reports/probe 2>&1 | tee reports/probe.log
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: ua-graph-timing-probe
+          path: reports
