@@ -119,15 +119,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK-LABEL: tt.func @backward_remat_reuse(
   // CHECK-SAME: %[[BASE:.*]]: !tt.ptr<f32>, %[[BOUND:.*]]: i32, %[[START:.*]]: i32)
   // CHECK-NOT: {{tt\.broadcast|ttg\.convert_layout}}
+  // CHECK: %[[ONE_F:.*]] = arith.constant dense<1.000000e+00> : tensor<64x2xf32,
+  // CHECK-NOT: {{tt\.broadcast|ttg\.convert_layout}}
   // CHECK: %[[ONE_I:.*]] = arith.constant dense<1> : tensor<64x2xi32,
   // CHECK-NOT: {{tt\.broadcast|ttg\.convert_layout}}
-  // CHECK: %[[LOOP:.*]]:2 = scf.for {{.*}} = %[[START]] to %[[BOUND]] step %[[BOUND]] iter_args(%[[ACC:.*]] = %[[ONE_F:.*]], %[[PREV:.*]] = %[[ONE_F]])
+  // CHECK: %[[ADDR_INDEX:.*]] = tt.splat %[[BOUND]] : i32 -> tensor<64x1xi32,
   // CHECK-NOT: {{tt\.broadcast|ttg\.convert_layout}}
-  // CHECK: %[[CMP_BCAST:.*]] = tt.broadcast {{.*}} : tensor<64x1xi32,
+  // CHECK: %[[CMP_INDEX:.*]] = tt.splat %[[BOUND]] : i32 -> tensor<64x1xi32,
+  // CHECK-NOT: {{tt\.broadcast|ttg\.convert_layout}}
+  // CHECK: %[[LOOP:.*]]:2 = scf.for {{.*}} = %[[START]] to %[[BOUND]] step %[[BOUND]] iter_args(%[[ACC:.*]] = %[[ONE_F]], %[[PREV:.*]] = %[[ONE_F]])
+  // CHECK-NOT: {{tt\.broadcast|ttg\.convert_layout}}
+  // CHECK: %[[CMP_BCAST:.*]] = tt.broadcast %[[CMP_INDEX]] : tensor<64x1xi32,
   // CHECK-NOT: {{tt\.broadcast|ttg\.convert_layout}}
   // CHECK: %[[CMP:.*]] = arith.cmpi slt, %[[CMP_BCAST]], %[[ONE_I]] :
   // CHECK-NOT: {{tt\.broadcast|ttg\.convert_layout}}
-  // CHECK: %[[ADDR_BCAST:.*]] = tt.broadcast {{.*}} : tensor<64x1xi32,
+  // CHECK: %[[ADDR_BCAST:.*]] = tt.broadcast %[[ADDR_INDEX]] : tensor<64x1xi32,
   // CHECK-NOT: {{tt\.broadcast|ttg\.convert_layout}}
   // CHECK: %[[BASES:.*]] = tt.splat %[[BASE]] : !tt.ptr<f32> -> tensor<64x2x!tt.ptr<f32>,
   // CHECK-NOT: {{tt\.broadcast|ttg\.convert_layout}}
