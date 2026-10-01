@@ -1,4 +1,14 @@
-// RUN: triton-opt %s --triton-intel-rewrite-tensor-descriptor-to-pointer --canonicalize --cse --split-input-file | FileCheck %s
+// RUN: triton-opt %s --triton-intel-rewrite-tensor-descriptor-to-pointer --canonicalize --cse --split-input-file | FileCheck %s --implicit-check-not=unrealized_conversion_cast
+// RUN: triton-opt %s --triton-intel-rewrite-tensor-descriptor-to-pointer --split-input-file | FileCheck %s --check-prefix=RAW --implicit-check-not=unrealized_conversion_cast
+// RUN: triton-opt %s --triton-intel-rewrite-tensor-descriptor-to-pointer --cse --canonicalize --cse --split-input-file > %t.cse
+// RUN: FileCheck %s --implicit-check-not=unrealized_conversion_cast < %t.cse
+// RUN: triton-opt %t.cse --triton-intel-rewrite-tensor-descriptor-to-pointer --split-input-file > %t.twice
+// RUN: FileCheck %s --check-prefix=TWICE < %t.twice
+
+// COM: RAW checks bound maker/access counts before cleanup can hide extra clones.
+// COM: Immediate CSE must run after fallback conversion, not between splitting
+// COM: and conversion. TWICE checks ensure a second pass does not duplicate the
+// COM: native clone; unrelated call-attribute inference may still update.
 
 module {
   tt.func public @load(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32) -> (tensor<128x128xf32>) {
@@ -136,20 +146,26 @@ module {
   }
 }
 
-// COM: Descriptor has two users: gather (-> tt.load) and store (-> tt.store).
-// COM: Both are lowered to the pointer fallback path since the gather makes
-// COM: the descriptor "unhandled".
+// COM: The non-contiguous gather still makes the original descriptor unhandled.
+// COM: Splitting gives the direct store its own native maker, while the gather
+// COM: remains on the pointer fallback path. No memory operation is duplicated.
 // CHECK-LABEL: @multi_users
 // CHECK-SAME: %[[ARG0:[^:]*]]: !tt.ptr<f32>
 // CHECK-SAME: %[[ARG1:[^:]*]]: i32
 // CHECK-SAME: %[[ARG2:[^:]*]]: i32
 // CHECK-SAME: %[[ARG3:[^:]*]]: tensor<1x128xf32>
+// CHECK: %[[DESC:.*]] = tt.make_tensor_descriptor %[[ARG0]],
 
 // COM: Gather path: lowered to tt.load with pointer arithmetic.
-// CHECK: tt.load {{.*}} : tensor<32x128x!tt.ptr<f32>>
+// CHECK-NOT: tt.make_tensor_descriptor
+// CHECK-NOT: tt.descriptor_gather
+// CHECK: %[[GATHER:.*]] = tt.load {{.*}} : tensor<32x128x!tt.ptr<f32>>
 
-// COM: Store path: lowered to tt.store with pointer arithmetic.
-// CHECK: tt.store {{.*}}, %[[ARG3]], {{.*}} : tensor<1x128x!tt.ptr<f32>>
+// COM: Store path: the direct descriptor operand uses the retained maker.
+// CHECK-NOT: tt.make_tensor_descriptor
+// CHECK-NOT: tt.store
+// CHECK: tt.descriptor_store %[[DESC]][%[[ARG1]], %[[ARG2]]], %[[ARG3]] : !tt.tensordesc<1x128xf32>, tensor<1x128xf32>
+// CHECK-NEXT: tt.return %[[GATHER]] : tensor<32x128xf32>
 
 // -----
 
@@ -650,30 +666,12 @@ module {
 
 // -----
 
-// COM: THIS TEST EXISTS TO DOCUMENT A COST, not to celebrate a behaviour.
-// COM:
-// COM: One `tt.make_tensor_descriptor` (%d0, PAD_ZERO) feeds two things: the
-// COM: divergent `scf.if` merge whose other arm is PAD_NAN, and -- directly -- a
-// COM: second `tt.descriptor_load` whose provenance is the single candidate %d0 and
-// COM: is therefore perfectly consistent. That second load would be safe on the
-// COM: descriptor-native route, yet BOTH loads are expected to become `tt.load`.
-// COM:
-// COM: The reason is structural, not a judgement call: this pass runs the type
-// COM: conversion with `buildMaterializations = false`, so there is no
-// COM: descriptor<->{ptr,shape,stride,pad,round} materialization available to
-// COM: bridge the two worlds. A single `tt.make_tensor_descriptor` is therefore
-// COM: either expanded for all of its users or for none of them -- legality is
-// COM: per-producer and cannot be mixed within one producer's use set. Evicting the
-// COM: shared producer costs the consistent load its 2D block I/O fast path.
-// COM:
-// COM: IF SOMEONE LATER NARROWS THE EVICTION (e.g. by cloning the shared producer
-// COM: so the consistent load keeps its own candidate, or by enabling
-// COM: materializations), THIS IS THE TEST THAT SHOULD CHANGE: the second load
-// COM: would then be expected to stay a `tt.descriptor_load`. Do not "fix" it by
-// COM: relaxing the CHECKs; change it deliberately and say why.
-// COM:
-// COM: Fix witness: without the fix the pass is a no-op -- the shared producer and
-// COM: both `tt.descriptor_load`s survive.
+// COM: The shared PAD_ZERO maker feeds a divergent merge and a direct load.
+// COM: Selective splitting deliberately changes the former all-fallback policy:
+// COM: the direct load keeps a native clone with its own PAD_ZERO padding, while
+// COM: the merge still expands with the runtime-selected fill. The original and
+// COM: the else-arm maker remain fallback-only; no descriptor materialization is
+// COM: needed, and the return order must not change.
 module {
   tt.func public @if_divergent_padding_shared_producer(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %cond: i1) -> (tensor<128x128xf32>, tensor<128x128xf32>) {
     %c1_i64 = arith.constant 1 : i64
@@ -696,19 +694,21 @@ module {
 // CHECK-LABEL: @if_divergent_padding_shared_producer
 // CHECK-DAG: %[[ZERO:.*]] = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
 // CHECK-DAG: %[[NAN:.*]] = arith.constant dense<0x7FC00000> : tensor<128x128xf32>
+// CHECK-DAG: %[[C256:.*]] = arith.constant 256 : i32
+// CHECK-DAG: %[[C0:.*]] = arith.constant 0 : i32
+// COM: PAD_ZERO is the default and is elided; the complete dictionary excludes
+// COM: PAD_NAN on this retained maker.
+// CHECK: %[[DESC:.*]] = tt.make_tensor_descriptor %arg0, [%[[C256]], %[[C256]]], {{.*}} {order = array<i32: 0>} :
+// CHECK-NOT: tt.make_tensor_descriptor
 // CHECK: %[[OTHER:.*]] = arith.select %arg1, %[[ZERO]], %[[NAN]] : tensor<128x128xf32>
 // CHECK-NOT: tt.make_tensor_descriptor
 // CHECK-NOT: tt.descriptor_load
 // CHECK: %[[MASK:.*]] = arith.andi %{{.*}}, %{{.*}} : tensor<128x128xi1>
-// COM: The two loads are distinguished by their `other` operand, and that is the
-// COM: assertion that matters: the divergent load gets the runtime select, while the
-// COM: load whose provenance is only the shared PAD_ZERO producer gets the bare zero
-// COM: splat. So the eviction costs the second load its fast path (the documented
-// COM: cost above) WITHOUT corrupting its fill -- it is still exactly PAD_ZERO, not
-// COM: the divergent select.
+// COM: Only the divergent access is pointer-based. The direct load uses exactly
+// COM: the retained PAD_ZERO maker, not the divergent descriptor or fill.
 // CHECK: %[[V0:.*]] = tt.load %{{.*}}, %[[MASK]], %[[OTHER]] : tensor<128x128x!tt.ptr<f32>>
-// CHECK: %[[V1:.*]] = tt.load %{{.*}}, %[[MASK]], %[[ZERO]] : tensor<128x128x!tt.ptr<f32>>
-// CHECK: tt.return %[[V0]], %[[V1]] :
+// CHECK-NEXT: %[[V1:.*]] = tt.descriptor_load %[[DESC]][%[[C0]], %[[C0]]] : !tt.tensordesc<128x128xf32> -> tensor<128x128xf32>
+// CHECK-NEXT: tt.return %[[V0]], %[[V1]] :
 
 // -----
 
@@ -900,16 +900,11 @@ module {
 
 // -----
 
-// COM: An untraceable descriptor evicts the group it shares an op with (#8170).
-// COM: `%arg` is a function parameter, so findDescriptorDefinitions returns nothing
-// COM: for it. That already makes this `tt.return` illegal, while `%dC` -- reached
-// COM: directly by a load -- stayed a candidate, and an empty trace contributes no
-// COM: producer for the closure to spread from. With `buildMaterializations = false`
-// COM: the two paths cannot meet on one op.
-// COM:
-// COM: Fix witness: without the eviction the pass exits 0 but leaks
-// COM: `%1:7 = builtin.unrealized_conversion_cast %0 : !tt.tensordesc<128x128xf32> to
-// COM: !tt.ptr<f32>, i64, i64, i64, i64, i1, i1` -- hence the CHECK-NOT.
+// COM: The untraceable function argument still evicts the descriptor-return
+// COM: group (#8170), and both descriptor results must expand 1 -> 7. Splitting
+// COM: now isolates the direct load on a native clone rather than expanding it
+// COM: with the return operands. Pin every returned component to catch mixed
+// COM: representations, swapped results, or a leaked materialization.
 module {
   tt.func private @f(%arg: !tt.tensordesc<128x128xf32>, %c: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %o: i32) -> (tensor<128x128xf32>, !tt.tensordesc<128x128xf32>, !tt.tensordesc<128x128xf32>) attributes {noinline = true} {
     %c1_i64 = arith.constant 1 : i64
@@ -922,18 +917,26 @@ module {
 }
 
 // CHECK-LABEL: @f
-// CHECK-NOT: unrealized_conversion_cast
+// CHECK-SAME: %[[PTR:[^:]*]]: !tt.ptr<f32>, %[[SHAPE0:[^:]*]]: i64, %[[SHAPE1:[^:]*]]: i64, %[[STRIDE0:[^:]*]]: i64, %[[STRIDE1:[^:]*]]: i64, %[[PAD:[^:]*]]: i1, %[[ROUND:[^:]*]]: i1,
+// CHECK-SAME: %[[LOCAL_PTR:[^:]*]]: !tt.ptr<f32>
+// CHECK-SAME: %[[OFFSET:[^:]*]]: i32) -> (tensor<128x128xf32>, !tt.ptr<f32>, i64, i64, i64, i64, i1, i1, !tt.ptr<f32>, i64, i64, i64, i64, i1, i1)
+// CHECK-DAG: %[[C256_I32:.*]] = arith.constant 256 : i32
+// CHECK-DAG: %[[C256_I64:.*]] = arith.constant 256 : i64
+// CHECK-DAG: %[[C1:.*]] = arith.constant 1 : i64
+// CHECK-DAG: %[[FALSE:.*]] = arith.constant false
 // CHECK-NOT: tt.make_tensor_descriptor
-// CHECK-NOT: tt.descriptor_load
-// CHECK: %[[V:.*]] = tt.load
-// CHECK-NOT: unrealized_conversion_cast
-// CHECK-NOT: tt.tensordesc
-// CHECK: tt.return
+// CHECK-NOT: tt.load
+// CHECK: %[[DESC:.*]] = tt.make_tensor_descriptor %[[LOCAL_PTR]], [%[[C256_I32]], %[[C256_I32]]], [%[[C256_I64]], %[[C1]]]
+// CHECK-NEXT: %[[V:.*]] = tt.descriptor_load %[[DESC]][%[[OFFSET]], %[[OFFSET]]] : !tt.tensordesc<128x128xf32> -> tensor<128x128xf32>
+// CHECK-NEXT: tt.return %[[V]], %[[LOCAL_PTR]], %[[C256_I64]], %[[C256_I64]], %[[C256_I64]], %[[C1]], %[[FALSE]], %[[FALSE]], %[[PTR]], %[[SHAPE0]], %[[SHAPE1]], %[[STRIDE0]], %[[STRIDE1]], %[[PAD]], %[[ROUND]] : tensor<128x128xf32>, !tt.ptr<f32>, i64, i64, i64, i64, i1, i1, !tt.ptr<f32>, i64, i64, i64, i64, i1, i1
 
 // -----
 
-// A select joining a local descriptor and an untraceable function argument must
-// not crash AxisInfo analysis. Both loads take the pointer path (#8170).
+// COM: A select joining a local descriptor and an untraceable function argument
+// COM: must not crash AxisInfo analysis (#8170). The first, direct load now keeps
+// COM: a native maker, while the selected access still expands. Its incoming
+// COM: descriptor may request TF32 rounding, so the second returned tensor is the
+// COM: post-load conditional result, not necessarily the raw tt.load result.
 module {
   tt.func public @desc_select_untraceable(%arg: !tt.tensordesc<128x128xf32>, %c: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %p: i1, %o: i32) -> (tensor<128x128xf32>, tensor<128x128xf32>) {
     %c1_i64 = arith.constant 1 : i64
@@ -948,18 +951,25 @@ module {
 }
 
 // CHECK-LABEL: @desc_select_untraceable
-// CHECK-NOT: unrealized_conversion_cast
+// CHECK-SAME: %[[PTR:[^:]*]]: !tt.ptr<f32>
+// CHECK-SAME: %[[PAD:[^:]*]]: i1, %[[ROUND:[^:]*]]: i1, %[[LOCAL_PTR:[^:]*]]: !tt.ptr<f32>
+// CHECK-SAME: %[[COND:[^:]*]]: i1, %[[OFFSET:[^:]*]]: i32)
+// CHECK: %[[DESC:.*]] = tt.make_tensor_descriptor %[[LOCAL_PTR]],
+// CHECK-NEXT: %[[LOCAL:.*]] = tt.descriptor_load %[[DESC]][%[[OFFSET]], %[[OFFSET]]] : !tt.tensordesc<128x128xf32> -> tensor<128x128xf32>
 // CHECK-NOT: tt.make_tensor_descriptor
 // CHECK-NOT: tt.descriptor_load
-// CHECK: %[[LOCAL:.*]] = tt.load
-// CHECK-NOT: unrealized_conversion_cast
-// CHECK-NOT: tt.make_tensor_descriptor
-// CHECK-NOT: tt.descriptor_load
-// CHECK: tt.load
-// CHECK-NOT: unrealized_conversion_cast
-// CHECK-NOT: tt.tensordesc
-// CHECK-NOT: tt.descriptor_load
-// CHECK: tt.return %[[LOCAL]],
+// CHECK: %[[SELECTED_PTR:.*]] = arith.select %[[COND]], %[[LOCAL_PTR]], %[[PTR]] : !tt.ptr<f32>
+// CHECK: tt.splat %[[SELECTED_PTR]] : !tt.ptr<f32> -> tensor<128x128x!tt.ptr<f32>>
+// CHECK: %[[LOADED:.*]] = tt.load {{.*}} : tensor<128x128x!tt.ptr<f32>>
+// COM: Track both branches of the existing TF32 post-processing to prove the
+// COM: second return still consumes the selected load, and not the native one.
+// CHECK: %[[SELECTED:.*]] = scf.if {{.*}} -> (tensor<128x128xf32>)
+// CHECK: %[[BITS:.*]] = tt.bitcast %[[LOADED]] : tensor<128x128xf32> -> tensor<128x128xi32>
+// CHECK: %[[ROUNDED:.*]] = tt.bitcast %{{.*}} : tensor<128x128xi32> -> tensor<128x128xf32>
+// CHECK: scf.yield %[[ROUNDED]] : tensor<128x128xf32>
+// CHECK: } else {
+// CHECK-NEXT: scf.yield %[[LOADED]] : tensor<128x128xf32>
+// CHECK: tt.return %[[LOCAL]], %[[SELECTED]] : tensor<128x128xf32>, tensor<128x128xf32>
 
 // -----
 
@@ -989,3 +999,202 @@ module {
 // CHECK: arith.constant
 // CHECK: tt.load
 // CHECK: tt.return
+
+// -----
+
+// COM: Wholly native sharing is not a split request. The two loads and the
+// COM: intervening store must share one maker, even before CSE. Different load
+// COM: offsets and the store prevent cleanup from hiding duplicated accesses.
+module {
+  tt.func public @native_only_shared(%base: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %height: i32, %width: i32, %pitch: i64, %row: i32, %col0: i32, %col1: i32) -> (tensor<8x16xf16>, tensor<8x16xf16>) {
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %base, [%height, %width], [%pitch, %c1_i64] : <f16>, <8x16xf16>
+    %v0 = tt.descriptor_load %desc[%row, %col0] : !tt.tensordesc<8x16xf16> -> tensor<8x16xf16>
+    tt.descriptor_store %desc[%row, %col0], %v0 : !tt.tensordesc<8x16xf16>, tensor<8x16xf16>
+    %v1 = tt.descriptor_load %desc[%row, %col1] : !tt.tensordesc<8x16xf16> -> tensor<8x16xf16>
+    tt.return %v0, %v1 : tensor<8x16xf16>, tensor<8x16xf16>
+  }
+}
+
+// CHECK-LABEL: @native_only_shared
+// CHECK: %[[DESC:.*]] = tt.make_tensor_descriptor
+// CHECK-NEXT: %[[V0:.*]] = tt.descriptor_load %[[DESC]]
+// CHECK-NEXT: tt.descriptor_store %[[DESC]]{{.*}}, %[[V0]] :
+// CHECK-NEXT: %[[V1:.*]] = tt.descriptor_load %[[DESC]]
+// CHECK-NEXT: tt.return %[[V0]], %[[V1]] :
+
+// RAW-LABEL: @native_only_shared
+// RAW-SAME: %[[BASE:[^:]*]]: !tt.ptr<f16>
+// RAW-SAME: %[[HEIGHT:[^:]*]]: i32, %[[WIDTH:[^:]*]]: i32, %[[PITCH:[^:]*]]: i64, %[[ROW:[^:]*]]: i32, %[[COL0:[^:]*]]: i32, %[[COL1:[^:]*]]: i32)
+// RAW-NOT: tt.make_tensor_descriptor
+// RAW: %[[ONE:.*]] = arith.constant 1 : i64
+// RAW-NOT: tt.make_tensor_descriptor
+// RAW: %[[DESC:.*]] = tt.make_tensor_descriptor %[[BASE]], [%[[HEIGHT]], %[[WIDTH]]], [%[[PITCH]], %[[ONE]]] :
+// RAW-NEXT: %[[V0:.*]] = tt.descriptor_load %[[DESC]][%[[ROW]], %[[COL0]]] :
+// RAW-NEXT: tt.descriptor_store %[[DESC]][%[[ROW]], %[[COL0]]], %[[V0]] :
+// RAW-NEXT: %[[V1:.*]] = tt.descriptor_load %[[DESC]][%[[ROW]], %[[COL1]]] :
+// RAW-NEXT: tt.return %[[V0]], %[[V1]] :
+// RAW-NOT: tt.make_tensor_descriptor
+// RAW-NOT: tt.descriptor_load
+// RAW-NOT: tt.descriptor_store
+
+// -----
+
+// COM: Wholly fallback sharing has no direct load/store descriptor operand to
+// COM: rescue. Repeated row indices are neither contiguous nor at most four
+// COM: contiguous sub-ranges, so the greedy gather pre-rewrites do not apply.
+module {
+  tt.func public @fallback_only_shared(%base: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %height: i32, %width: i32, %pitch: i64, %col0: i32, %col1: i32) -> (tensor<32x16xf16>, tensor<32x16xf16>) {
+    %c1_i64 = arith.constant 1 : i64
+    %rows = arith.constant dense<1> : tensor<32xi32>
+    %desc = tt.make_tensor_descriptor %base, [%height, %width], [%pitch, %c1_i64] : <f16>, <1x16xf16>
+    %v0 = tt.descriptor_gather %desc[%rows, %col0] : (!tt.tensordesc<1x16xf16>, tensor<32xi32>, i32) -> tensor<32x16xf16>
+    %v1 = tt.descriptor_gather %desc[%rows, %col1] : (!tt.tensordesc<1x16xf16>, tensor<32xi32>, i32) -> tensor<32x16xf16>
+    tt.return %v0, %v1 : tensor<32x16xf16>, tensor<32x16xf16>
+  }
+}
+
+// CHECK-LABEL: @fallback_only_shared
+// CHECK-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+// CHECK: %[[V0:.*]] = tt.load {{.*}} : tensor<32x16x!tt.ptr<f16>>
+// CHECK-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+// CHECK: %[[V1:.*]] = tt.load {{.*}} : tensor<32x16x!tt.ptr<f16>>
+// CHECK-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+// CHECK: tt.return %[[V0]], %[[V1]] :
+
+// RAW-LABEL: @fallback_only_shared
+// RAW-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+// RAW: %[[V0:.*]] = tt.load {{.*}} : tensor<32x16x!tt.ptr<f16>>
+// RAW-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+// RAW-NOT: tt.load
+// RAW: %[[V1:.*]] = tt.load {{.*}} : tensor<32x16x!tt.ptr<f16>>
+// RAW-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+// RAW-NOT: tt.load
+// RAW: tt.return %[[V0]], %[[V1]] :
+// RAW-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+
+// -----
+
+// COM: One evicted maker has several direct users and one select-connected
+// COM: fallback access. All direct descriptor operands must share ONE complete
+// COM: native clone, including PAD_NAN, dynamic shape/stride operands, and the
+// COM: discardable order attribute. No load or store may be cloned. f16 isolates
+// COM: splitting/padding from the focal f32 case's runtime TF32 processing.
+module {
+  tt.func public @split_multiple_direct_users_nan(%incoming: !tt.tensordesc<8x16xf16>, %base: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %height: i32, %width: i32, %pitch: i64, %choose_local: i1, %row: i32, %col0: i32, %col1: i32) -> (tensor<8x16xf16>, tensor<8x16xf16>, tensor<8x16xf16>) {
+    %c1_i64 = arith.constant 1 : i64
+    %desc = tt.make_tensor_descriptor %base, [%height, %width], [%pitch, %c1_i64] {order = array<i32: 1, 0>, padding = 2 : i32} : <f16>, <8x16xf16>
+    %v0 = tt.descriptor_load %desc[%row, %col0] : !tt.tensordesc<8x16xf16> -> tensor<8x16xf16>
+    tt.descriptor_store %desc[%row, %col0], %v0 : !tt.tensordesc<8x16xf16>, tensor<8x16xf16>
+    %v1 = tt.descriptor_load %desc[%row, %col1] : !tt.tensordesc<8x16xf16> -> tensor<8x16xf16>
+    %selected = arith.select %choose_local, %desc, %incoming : !tt.tensordesc<8x16xf16>
+    %v2 = tt.descriptor_load %selected[%row, %col1] : !tt.tensordesc<8x16xf16> -> tensor<8x16xf16>
+    tt.return %v0, %v1, %v2 : tensor<8x16xf16>, tensor<8x16xf16>, tensor<8x16xf16>
+  }
+}
+
+// CHECK-LABEL: @split_multiple_direct_users_nan
+// CHECK: %[[DESC:.*]] = tt.make_tensor_descriptor {{.*}} {order = array<i32: 1, 0>, padding = 2 : i32} :
+// CHECK-NEXT: %[[V0:.*]] = tt.descriptor_load %[[DESC]]
+// CHECK-NEXT: tt.descriptor_store %[[DESC]]{{.*}}, %[[V0]] :
+// CHECK-NEXT: %[[V1:.*]] = tt.descriptor_load %[[DESC]]
+// CHECK-NOT: tt.make_tensor_descriptor
+// CHECK-NOT: tt.descriptor_
+// CHECK: %[[V2:.*]] = tt.load {{.*}} : tensor<8x16x!tt.ptr<f16>>
+// CHECK-NEXT: tt.return %[[V0]], %[[V1]], %[[V2]] :
+
+// RAW-LABEL: @split_multiple_direct_users_nan
+// RAW-SAME: %[[INCOMING_PTR:[^:]*]]: !tt.ptr<f16>
+// RAW-SAME: %[[PAD:[^:]*]]: i1, %[[ROUND:[^:]*]]: i1, %[[BASE:[^:]*]]: !tt.ptr<f16>
+// RAW-SAME: %[[HEIGHT:[^:]*]]: i32, %[[WIDTH:[^:]*]]: i32, %[[PITCH:[^:]*]]: i64, %[[COND:[^:]*]]: i1, %[[ROW:[^:]*]]: i32, %[[COL0:[^:]*]]: i32, %[[COL1:[^:]*]]: i32)
+// RAW-NOT: tt.make_tensor_descriptor
+// RAW: %[[ONE:.*]] = arith.constant 1 : i64
+// RAW-NOT: tt.make_tensor_descriptor
+// RAW: %[[DESC:.*]] = tt.make_tensor_descriptor %[[BASE]], [%[[HEIGHT]], %[[WIDTH]]], [%[[PITCH]], %[[ONE]]] {order = array<i32: 1, 0>, padding = 2 : i32} :
+// RAW-NEXT: %[[V0:.*]] = tt.descriptor_load %[[DESC]][%[[ROW]], %[[COL0]]] :
+// RAW-NEXT: tt.descriptor_store %[[DESC]][%[[ROW]], %[[COL0]]], %[[V0]] :
+// RAW-NEXT: %[[V1:.*]] = tt.descriptor_load %[[DESC]][%[[ROW]], %[[COL1]]] :
+// RAW-NOT: tt.make_tensor_descriptor
+// RAW-NOT: tt.descriptor_
+// RAW: %[[SELECTED:.*]]:7 = scf.if %[[COND]] -> (!tt.ptr<f16>, i64, i64, i64, i64, i1, i1) {
+// RAW: scf.yield %[[BASE]], {{.*}} : !tt.ptr<f16>, i64, i64, i64, i64, i1, i1
+// RAW: } else {
+// RAW: scf.yield %[[INCOMING_PTR]], {{.*}} : !tt.ptr<f16>, i64, i64, i64, i64, i1, i1
+// RAW: }
+// RAW-NOT: tt.make_tensor_descriptor
+// RAW-NOT: tt.descriptor_
+// RAW: tt.splat %[[SELECTED]]#0 : !tt.ptr<f16> -> tensor<8x16x!tt.ptr<f16>>
+// RAW-NOT: tt.make_tensor_descriptor
+// RAW-NOT: tt.descriptor_
+// RAW: %[[V2:.*]] = tt.load {{.*}} : tensor<8x16x!tt.ptr<f16>>
+// RAW-NEXT: tt.return %[[V0]], %[[V1]], %[[V2]] :
+// RAW-NOT: tt.make_tensor_descriptor
+// RAW-NOT: tt.descriptor_
+// RAW-NOT: tt.load
+
+// TWICE-LABEL: @split_multiple_direct_users_nan
+// TWICE: tt.make_tensor_descriptor
+// TWICE-NEXT: tt.descriptor_load
+// TWICE-NEXT: tt.descriptor_store
+// TWICE-NEXT: tt.descriptor_load
+// TWICE-NOT: tt.make_tensor_descriptor
+// TWICE-NOT: tt.descriptor_load
+// TWICE: tt.load
+// TWICE-NOT: tt.make_tensor_descriptor
+// TWICE-NOT: tt.descriptor_load
+
+// -----
+
+// COM: Loop-carried sharing: the maker seeds an scf.for iter_arg whose yield is
+// COM: an untraceable host descriptor, and is also loaded directly in the loop
+// COM: body. The direct load must use a native clone defined before the loop;
+// COM: the carried descriptor must become pointer sidecars with a tt.load.
+module {
+  tt.func public @split_loop_carried(%incoming: !tt.tensordesc<8x16xf16>, %base: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %height: i32, %width: i32, %pitch: i64, %n: i32) -> tensor<8x16xf16> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %cst = arith.constant dense<0.000000e+00> : tensor<8x16xf16>
+    %desc = tt.make_tensor_descriptor %base, [%height, %width], [%pitch, %c1_i64] : <f16>, <8x16xf16>
+    %res:2 = scf.for %iv = %c0_i32 to %n step %c1_i32 iter_args(%acc = %cst, %cur = %desc) -> (tensor<8x16xf16>, !tt.tensordesc<8x16xf16>) : i32 {
+      %direct = tt.descriptor_load %desc[%iv, %c0_i32] : !tt.tensordesc<8x16xf16> -> tensor<8x16xf16>
+      %carried = tt.descriptor_load %cur[%iv, %c0_i32] : !tt.tensordesc<8x16xf16> -> tensor<8x16xf16>
+      %sum = arith.addf %direct, %carried : tensor<8x16xf16>
+      %next = arith.addf %acc, %sum : tensor<8x16xf16>
+      scf.yield %next, %incoming : tensor<8x16xf16>, !tt.tensordesc<8x16xf16>
+    }
+    tt.return %res#0 : tensor<8x16xf16>
+  }
+}
+
+// CHECK-LABEL: @split_loop_carried
+// CHECK-SAME: (%[[INCOMING_PTR:[^:]+]]: !tt.ptr<f16>, {{.*}}%[[BASE:[^:]+]]: !tt.ptr<f16> {tt.divisibility = 16 : i32}
+// CHECK: %[[NATIVE:.*]] = tt.make_tensor_descriptor %[[BASE]], {{.*}} : <f16>, <8x16xf16>
+// CHECK-NOT: tt.make_tensor_descriptor
+// CHECK: scf.for {{.*}} iter_args({{.*}}, %{{.*}} = %[[BASE]], {{.*}}) -> (tensor<8x16xf16>, !tt.ptr<f16>, i64, i64, i64, i64, i1)
+// CHECK: tt.descriptor_load %[[NATIVE]][
+// CHECK-NOT: tt.descriptor_load
+// CHECK: tt.load {{.*}} : tensor<8x16x!tt.ptr<f16>>
+// CHECK-NOT: tt.descriptor_load
+// CHECK: scf.yield {{.*}}, %[[INCOMING_PTR]], {{.*}} : tensor<8x16xf16>, !tt.ptr<f16>, i64, i64, i64, i64, i1
+// CHECK-NOT: tt.make_tensor_descriptor
+// CHECK-NOT: tt.descriptor_
+
+// RAW-LABEL: @split_loop_carried
+// RAW-COUNT-1: tt.make_tensor_descriptor
+// RAW-NOT: tt.make_tensor_descriptor
+// RAW: scf.for
+// RAW: tt.descriptor_load
+// RAW-NOT: tt.descriptor_load
+// RAW: tt.load {{.*}} : tensor<8x16x!tt.ptr<f16>>
+// RAW-NOT: tt.load
+// RAW-NOT: tt.{{make_tensor_descriptor|descriptor_}}
+
+// TWICE-LABEL: @split_loop_carried
+// TWICE: tt.make_tensor_descriptor
+// TWICE-NOT: tt.make_tensor_descriptor
+// TWICE: scf.for
+// TWICE: tt.descriptor_load
+// TWICE-NOT: tt.descriptor_load
+// TWICE: tt.load
+// TWICE-NOT: tt.{{make_tensor_descriptor|descriptor_}}
