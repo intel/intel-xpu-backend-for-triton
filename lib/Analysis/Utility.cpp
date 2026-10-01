@@ -2,7 +2,6 @@
 
 #include <deque>
 
-#include "intel/include/Analysis/Utility.h"
 #include "mlir/Analysis/DataFlow/ConstantPropagationAnalysis.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -26,6 +25,13 @@ namespace mlir {
 
 using namespace triton;
 using namespace triton::gpu;
+
+bool triton::canUseWarpBallotHistogram(HistogramOp op) {
+  int numBins = op.getType().getNumElements();
+  // Limit ballot and reduction overhead relative to shared-memory atomics.
+  return !hasCrossCTAScratch(op) && numBins <= 2 &&
+         numBins * gpu::lookupNumWarps(op) <= 4;
+}
 
 // Cases where distributed shared memory is not required in ConvertLayout:
 // (1) numCTAs == 1
@@ -1249,10 +1255,8 @@ bool cvtNeedsWarpShuffle(triton::gpu::ConvertLayoutOp op) {
 }
 
 bool cvtNeedsSharedMemory(triton::gpu::ConvertLayoutOp op) {
-  RankedTensorType srcTy = op.getSrc().getType();
-  RankedTensorType dstTy = op.getType();
-  return !cvtReordersRegisters(srcTy, dstTy) && !cvtNeedsWarpShuffle(op) &&
-         !triton::gpu::intel::isDpasToDotShortcut(srcTy, dstTy);
+  return !cvtReordersRegisters(op.getSrc().getType(), op.getType()) &&
+         !cvtNeedsWarpShuffle(op);
 }
 
 std::unique_ptr<DataFlowSolver> createDataFlowSolver() {
