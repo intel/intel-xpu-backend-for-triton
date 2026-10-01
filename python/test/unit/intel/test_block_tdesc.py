@@ -1,6 +1,7 @@
 import pytest
 import torch
 import pathlib
+import re
 
 import triton
 import triton.language as tl
@@ -294,3 +295,46 @@ def test_tdesc_loop_carried_index(step, device, with_allocator):
 
     assert torch.equal(c, ref), \
         f"step={step}: {num_wrong}/{M * N} elements wrong with {block_loads} 2D block load(s)"
+
+
+@triton.jit
+def _dpas_store_kernel(a_ptr, b_ptr, c_ptr, M, N, K, stride_cm, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
+                       BLOCK_K: tl.constexpr):
+    pid_m = tl.program_id(0)
+    pid_n = tl.program_id(1)
+    a_desc = tl.make_tensor_descriptor(a_ptr, shape=[M, K], strides=[K, 1], block_shape=[BLOCK_M, BLOCK_K])
+    b_desc = tl.make_tensor_descriptor(b_ptr, shape=[K, N], strides=[N, 1], block_shape=[BLOCK_K, BLOCK_N])
+    c_desc = tl.make_tensor_descriptor(c_ptr, shape=[M, N], strides=[stride_cm, 1], block_shape=[BLOCK_M, BLOCK_N])
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    for k in range(0, K, BLOCK_K):
+        acc = tl.dot(a_desc.load([pid_m * BLOCK_M, k]), b_desc.load([k, pid_n * BLOCK_N]), acc)
+    c_desc.store([pid_m * BLOCK_M, pid_n * BLOCK_N], acc.to(c_ptr.dtype.element_ty))
+
+
+# 16-bit DPAS results with 32 columns per warp are stored as 8x32 blocks, also at edge tiles and with a wider
+# pitch. The edge pitch has room for the up to 48 B that aligning the base to 64 B adds to the width, and the
+# sentinel frame covers whole tiles, so it catches any write outside the tensor. N % 16 == 0, or no 2D store is used.
+@pytest.mark.parametrize("M, N, stride_cm", [(256, 256, 256), (200, 208, 264)])
+@pytest.mark.parametrize("dtype_str", ["float16", "bfloat16"])
+@pytest.mark.skipif(not is_xpu(), reason="Tensor descriptor block I/O is specific to the XPU backend")
+@pytest.mark.xfail(not _has_2d_block_io(), reason="2D block I/O not supported", run=False)
+def test_tdesc_store_16bit_dpas_64b_rows(M, N, stride_cm, dtype_str, device, with_allocator):
+    K, BLOCK_M, BLOCK_N, BLOCK_K = 32, 128, 128, 32
+    dtype = getattr(torch, dtype_str)
+    # Integers in [-2, 2]: every sum (|acc| <= 4 * K = 128) is exact in fp32 and in both 16-bit types.
+    generator = torch.Generator().manual_seed(17)
+    a = torch.randint(-2, 3, (M, K), generator=generator, dtype=torch.int8).to(dtype).to(device)
+    b = torch.randint(-2, 3, (K, N), generator=generator, dtype=torch.int8).to(dtype).to(device)
+    out = torch.full((triton.cdiv(M, BLOCK_M) * BLOCK_M + 2, stride_cm), -7.0, dtype=dtype, device=device)
+    c = out[1:M + 1, :N]
+    expected = out.clone()
+    expected[1:M + 1, :N] = (a.float() @ b.float()).to(dtype)
+
+    grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
+    kernel = _dpas_store_kernel[grid](a, b, c, M, N, K, c.stride(0), BLOCK_M, BLOCK_N, BLOCK_K, num_warps=8)
+    torch.xpu.synchronize()
+
+    # (elem bits, width, height, v-blocks) after the six address args of the GenISA write.
+    assert re.search(r"GenISA\.LSC2DBlockWrite\.\w+\((?:[^,()]+,\s*){6}i32 16, i32 32, i32 8, i32 1,",
+                     kernel.asm["llir"]), "expected an 8x32 16-bit GenISA 2D block store"
+    assert torch.equal(out, expected)
