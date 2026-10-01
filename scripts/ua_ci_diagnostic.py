@@ -239,7 +239,9 @@ try:
             filename = r.profile_filename(r.get_profile_identity(device), key.static_key())
             entries = json.loads((W / 'profiles' / filename).read_text())['entries']
             entry = next(e for e in entries if e['key'] == asdict(key.dynamic_key()))
-            assert selected is not None and entry['config'] == asdict(selected), 'Expected exact shipped profile hit'
+            # Older profiles omit optional fields such as heads_per_program.
+            expected = r.AttentionConfig(**entry['config']) if entry['config'] is not None else None
+            assert selected is not None and expected == selected, 'Expected exact shipped profile hit'
             with observe(main) as logs:
                 main.unified_attention(**inputs)
                 torch.xpu.synchronize()
