@@ -12,7 +12,7 @@ from triton.tools.tensor_descriptor import TensorDescriptor
 
 from triton._internal_testing import is_blackwell, is_cuda, is_ampere_or_newer, is_hopper_or_newer, is_sm12x
 from triton.experimental.gsan import create_mem_pool
-from triton._C.libtriton.gsan_testing import AtomicScope, SHADOW_GRANULARITY_BYTES, ScalarClock
+from triton._C.libtriton.gsan_testing import AtomicScope, ScalarClock, shadow_granularity
 from triton.experimental.gsan._testing_utils import (atomic_poll, load_one_i32, shadow_cell_from_address, store_one_i32,
                                                      thread_state_from_smid)
 
@@ -928,6 +928,50 @@ def test_atomic_load_only_records_read(with_gsan, dtype, sem, scope, expected_sc
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+@pytest.mark.parametrize("op", ["load", "store"])
+@pytest.mark.parametrize("dtype", [torch.int8, torch.float16, torch.int32, torch.float64])
+def test_atomic_load_store_vectorized_shadow(with_gsan, op, dtype):
+
+    @gluon.jit
+    def kernel(Src, Out, STORE: gl.constexpr):
+        x = gl.arange(0, 256, layout=gl.BlockedLayout([8], [32], [1], [0]))
+        mask = x // 8 % 2 == 0
+        if STORE:
+            values = gl.load(Src + x)
+            gl.atomic_store(Out + x, values, mask=mask, sem="release")
+        else:
+            values = gl.atomic_load(Src + x, mask=mask, sem="acquire")
+            gl.store(Out + x, values, mask=mask)
+
+    src = (torch.arange(256, device="cuda") - 64).to(dtype)
+    out = torch.full_like(src, -1)
+    compiled = kernel[(1, )](src, out, op == "store", num_warps=1)
+
+    mask = torch.arange(256, device="cuda") // 8 % 2 == 0
+    assert torch.equal(out, torch.where(mask, src, -1))
+    suffix = "b64" if dtype == torch.float64 else "v2.b32"
+    opcode = "st" if op == "store" else "ld"
+    assert f"{opcode}.relaxed.gpu.global.{suffix}" in compiled.asm["ptx"]
+    target = out if op == "store" else src
+    target_ptr = target.data_ptr()
+    granularity = shadow_granularity(target_ptr)
+    for byte_offset in range(0, src.numel() * dtype.itemsize, granularity):
+        address = target_ptr + byte_offset
+        if byte_offset // dtype.itemsize // 8 % 2 == 0:
+            if op == "store":
+                cell = shadow_cell_from_address(address)
+                assert cell.write_clock.scope == AtomicScope.GPU
+                assert cell.write_clock.is_release
+                assert cell.num_reads == 0
+            else:
+                _assert_atomic_read_only_shadow(address, AtomicScope.GPU)
+        else:
+            cell = shadow_cell_from_address(address)
+            assert cell.num_reads == 0
+            assert cell.write_clock == ScalarClock(0, 0, AtomicScope.NON_ATOMIC)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
 @pytest.mark.parametrize("scope, expected_scope", ATOMIC_SCOPE_CASES)
 @pytest.mark.parametrize("sem, is_release", [("relaxed", False), ("release", True)])
 @pytest.mark.parametrize("dtype", ATOMIC_LOAD_STORE_TYPES)
@@ -963,9 +1007,11 @@ def test_masked_atomic_load_store_only_updates_active_lanes(with_gsan, dtype):
     # Keep each lane in a separate shadow cell. Byte accesses start inside the
     # cell so the value checks also catch overwrites of neighboring bytes.
     itemsize = dtype.itemsize
-    stride = max(1, SHADOW_GRANULARITY_BYTES // itemsize)
+    target = torch.empty(4, dtype=dtype, device="cuda")
+    granularity = shadow_granularity(target.data_ptr())
+    stride = max(1, granularity // itemsize)
     offset = 1 if itemsize == 1 else 0
-    target = torch.zeros(4 * stride, dtype=dtype, device="cuda")
+    target.resize_(4 * stride).zero_()
     out = torch.full_like(target, True if dtype == torch.bool else 42)
 
     _masked_atomic_load_store_kernel[(1, )](target[offset:], out[offset:], stride, num_warps=1)
@@ -977,7 +1023,7 @@ def test_masked_atomic_load_store_only_updates_active_lanes(with_gsan, dtype):
     torch.testing.assert_close(target, expected_target)
     torch.testing.assert_close(out, expected_out)
     for index in range(4):
-        for byte_offset in range(0, itemsize, SHADOW_GRANULARITY_BYTES):
+        for byte_offset in range(0, itemsize, granularity):
             cell = shadow_cell_from_address(target[offset + index * stride].data_ptr() + byte_offset)
             if index < 2:
                 assert cell.num_reads == 1
@@ -1036,8 +1082,10 @@ def test_atomic_poll_timeout_does_not_record_read(with_gsan):
 def test_atomic_poll_tensor_only_records_matched_reads(with_gsan, block_size, dtype, sem, scope, expected_scope,
                                                        timeout):
     # Separate shadow cells let us check successful and timed-out elements independently.
-    stride = max(1, SHADOW_GRANULARITY_BYTES // torch.empty((), dtype=dtype).element_size())
-    target = torch.zeros(block_size * stride, dtype=dtype, device="cuda")
+    target = torch.empty(block_size, dtype=dtype, device="cuda")
+    granularity = shadow_granularity(target.data_ptr())
+    stride = max(1, granularity // target.element_size())
+    target.resize_(block_size * stride).zero_()
     expected = torch.arange(1, block_size + 1, dtype=dtype, device="cuda")
     target[::stride] = expected
     if timeout is not None:
@@ -1048,7 +1096,7 @@ def test_atomic_poll_tensor_only_records_matched_reads(with_gsan, block_size, dt
     torch.testing.assert_close(out, target[::stride] == expected)
 
     for index in range(block_size):
-        for byte_offset in range(0, target.element_size(), SHADOW_GRANULARITY_BYTES):
+        for byte_offset in range(0, target.element_size(), granularity):
             address = target.data_ptr() + index * stride * target.element_size() + byte_offset
             if timeout is None or index % 2:
                 _assert_atomic_read_only_shadow(address, expected_scope)
@@ -1062,8 +1110,9 @@ def test_atomic_poll_tensor_only_records_matched_reads(with_gsan, block_size, dt
 @pytest.mark.parametrize("block_size", [16, 256])
 @pytest.mark.parametrize("scope, expected_scope", ATOMIC_SCOPE_CASES[1:])
 def test_atomic_poll_tensor_acquires_all_producers(with_gsan, capfd, block_size, scope, expected_scope):
-    stride = SHADOW_GRANULARITY_BYTES // 4
-    payload = torch.zeros(block_size * stride, dtype=torch.int32, device="cuda")
+    payload = torch.empty(block_size, dtype=torch.int32, device="cuda")
+    stride = max(1, shadow_granularity(payload.data_ptr()) // payload.element_size())
+    payload.resize_(block_size * stride).zero_()
     flags = torch.zeros_like(payload)
     out = torch.full((block_size, ), -1, dtype=torch.int32, device="cuda")
 
@@ -1386,7 +1435,7 @@ def _shadow_cells_for_tensor(tensor: torch.Tensor):
     row = []
     for i in range(tensor.shape[0]):
         real_ptr = tensor[i].data_ptr()
-        assert real_ptr % SHADOW_GRANULARITY_BYTES == 0
+        assert real_ptr % shadow_granularity(real_ptr) == 0
         row.append(shadow_cell_from_address(real_ptr, device_index=device_idx))
     return row
 
@@ -1633,8 +1682,9 @@ def test_host_tma_reduce_updates_atomic_shadow(with_gsan, block_x, dtype):
     torch.cuda.synchronize()
 
     torch.testing.assert_close(target, src)
+    granularity = shadow_granularity(target.data_ptr())
     for row in range(block_x):
         for col in range(block_y):
-            for byte_offset in range(0, target.element_size(), SHADOW_GRANULARITY_BYTES):
+            for byte_offset in range(0, target.element_size(), granularity):
                 address = target[row, col].data_ptr() + byte_offset
                 _assert_atomic_rmw_shadow(address, AtomicScope.GPU, is_release=False)

@@ -1,6 +1,17 @@
 ---
 description: 'Intel GPU hardware architecture: Xe generations, GRF modes, DPAS encoding, target capabilities, register pressure, compilation pipeline'
-applyTo: '**/TritonIntelGPUTransforms/**/*.cpp, **/TritonIntelGPUTransforms/**/*.h, **/Dialect/TritonIntelGPU/**/*.td, **/Dialect/TritonIntelGPU/**/*.cpp, **/Dialect/TritonIntelGPU/**/*.h, **/backend/compiler.py, **/backend/driver.c, **/backend/driver.py, **/Analysis/**/*.h, **/Analysis/**/*.cpp, **/Analysis/**/*.tpp'
+paths:
+  - "**/TritonIntelGPUTransforms/**/*.cpp"
+  - "**/TritonIntelGPUTransforms/**/*.h"
+  - "**/Dialect/TritonIntelGPU/**/*.td"
+  - "**/Dialect/TritonIntelGPU/**/*.cpp"
+  - "**/Dialect/TritonIntelGPU/**/*.h"
+  - "**/backend/compiler.py"
+  - "**/backend/driver.c"
+  - "**/backend/driver.py"
+  - "**/Analysis/**/*.h"
+  - "**/Analysis/**/*.cpp"
+  - "**/Analysis/**/*.tpp"
 ---
 
 # Intel GPU Hardware Architecture
@@ -13,26 +24,46 @@ applyTo: '**/TritonIntelGPUTransforms/**/*.cpp, **/TritonIntelGPUTransforms/**/*
 
 ## GRF (General Register File)
 
-Each hardware thread has a private register file. **Do not guess** GRF register specs or mode details (128/256/auto flags) — read them from `.claude/reference/hardware-reference.md`.
+Each hardware thread has a private register file. **Do not guess** GRF register specs or mode details (128/256/512/auto flags) — read them from `.claude/reference/hardware-reference.md`.
 
 ### Auto-GRF Mode Selection (`grf_mode='default'`)
 1. Compile with default (small) GRF
 2. Extract spill size from ZEBIN `.ze_info` section (AOT) or query Level Zero
    `spillMemSize` (JIT) — both are **bytes per hardware thread**
-3. Normalize to **dword-equivalents per lane** (`bytes / (4 × sub-group size)`),
-   the unit CUDA/HIP report `n_spills` in and that external consumers threshold on
-4. If that exceeds `16` → recompile with 256-GRF mode
+3. If the spill reaches **1024 B per hardware thread** → recompile with the
+   largest GRF mode this target auto-escalates to (256-GRF on every non-`cri`
+   target; 512-GRF on `cri` — see `get_max_grf_mode()` in `compiler.py`)
+4. Normalize to **dword-equivalents per lane** (`bytes / (4 × sub-group size)`) for
+   *reporting* `n_spills`, the unit CUDA/HIP use and external consumers threshold on
 
-The threshold is `16` dword-equivalents/lane, aligned between
-`MAX_REG_SPILL_SLOTS_PER_LANE` in `compiler.py` and `kMaxSpillSlotsPerLane` in
-`driver.c`. It is PyTorch inductor's default `spill_threshold` for non-HIP, so a
-spill at or below it cannot change inductor's autotuning verdict and a rebuild
-would only cost compile time. Compare in the normalized unit, not in bytes —
-inductor tests the truncated per-lane count, so a byte threshold over-triggers.
+The threshold is a constant in bytes per hardware thread, the unit both spill probes
+report: `REBUILD_SPILL_BYTES_PER_THREAD` in `compiler.py` and
+`kRebuildSpillBytesPerThread` in `driver.c`. The compiled sub-group size is not an
+input to the gate — only to `n_spills`' presentation (`Spills::slotsPerLane` in
+`driver.c`, the only producer of `n_spills` on either path).
+
+1024 B is the largest threshold that keeps every *accepted* kernel strictly below
+PyTorch inductor's `spill_threshold` (16 dword-equivalents/lane by default off HIP) at
+every width the backend can compile at. SIMD16 is the binding case, being the narrowest
+(`warp_size` defaults to 32 and `setThreadsPerWarp` only ever lowers it to 16): 16
+slots/lane is 16 × 4 × 16 = 1024 B there, so 1025 would let a SIMD16 kernel reach
+inductor's threshold on the default-GRF build. Inductor prunes strictly above 16, so
+this leaves a slot of margin at SIMD16, and the threshold only prunes configs from
+inductor's timing contest — a spill below it is not one inductor has approved.
+
+Bytes, not slots, is what makes that bound hold: 16 slots/lane is 2048 B at SIMD32, so
+comparing slots at the *compiled* width lets the byte budget float up with it. #7959 did
+exactly that and the gate went silent from 1024 B up to 2175 B at SIMD32 — the band
+issue #8077 reported as an inductor regression. Taking the minimum over widths means the
+wider width fires early (8 slots/lane at SIMD32), the safe direction.
+
+Rolling only. On LTS, `accepts_default_grf` rebuilds for **any** positive spill
+(issue #8106); `driver.c` takes no `is_lts` input at all, so the two gates are not
+symmetric there.
 
 ### Constraints
-- **256-GRF requires `num_warps ≤ 32`** (because halved thread occupancy limits available hardware threads)
-- `grf_mode` options: `'default'`, `'128'`, `'256'`, `'auto'`
+- **256-GRF and 512-GRF require `num_warps ≤ 32`** (256-GRF halves, and 512-GRF quarters, the hardware threads available per subslice — see the occupancy column in `.claude/reference/hardware-reference.md`'s GRF mode table — capping the launchable work-group size below what `num_warps > 32` needs)
+- `grf_mode` options: `'default'`, `'128'`, `'256'`, `'512'`, `'auto'`
 
 ## Subgroups and SIMD Execution
 
@@ -77,16 +108,24 @@ the kernel is compiled with.
 Gate: a 2D operand load that is live-in to a loop is sunk into it (leaving a
 prefetch behind) when the loop body's **peak** register pressure, from
 `RegisterPressureAnalysis::peakPressure(loop)`, is at or above the **per-lane**
-GRF budget — `getPerLaneGRFBudgetInBytes(grfMode, mod, UnknownGRFSizeAssumption::Largest)`.
+GRF budget, `getPerLaneGRFBudgetInBytes(grfMode, mod, UnknownGRFSizeAssumption::Largest)`.
 At `threads-per-warp = 16` that is 256 B/lane for `'128'`, 512 for `'256'`, and
-1024 for `'512'` and for `'default'`/`'auto'` (the true GRF size isn't known at
+1024 for `'512'`. The true GRF size for `'default'`/`'auto'` isn't known at
 this point in the pipeline, and this gate treats the budget as a threshold to
 sink rather than a ceiling, so the safe assumption under uncertainty is the
-*largest* size the device supports — see `RegisterPressureAnalysis`'s
-`UnknownGRFSizeAssumption` for the full rationale, including why
-`HoistLayoutConversions` correctly assumes the opposite (`Smallest`) for the
-same unknown modes). There is no fixed tensor-size floor; sizes only matter
-through their contribution to the measured pressure.
+*largest* mode reachable, per `RegisterPressureAnalysis`'s
+`UnknownGRFSizeAssumption` (see why `HoistLayoutConversions` correctly
+assumes the opposite, `Smallest`, for the same unknown modes).
+
+Only `'default'` gets a target-specific ceiling here: its own AOT/JIT retry is
+the one path that realizes the `ttig.max_grf_mode` module attribute (512
+B/lane on every non-`cri` target, 1024 B/lane on `cri`, or 1024 B/lane if the
+attribute is absent, e.g. hand-written TTGIR that never went through
+`TritonAnnotateModule`). `'auto'`'s escalation happens inside IGC with no
+backend path that reads back or constrains it, so it always resolves to the
+unconditional 1024 B/lane bound regardless of target or the attribute. There
+is no fixed tensor-size floor; sizes only matter through their contribution to
+the measured pressure.
 
 Peak, not live-in, pressure is the gate: `liveInPressure` derives from
 `LivenessBlockInfo::in()`, which excludes block arguments and so never counts the

@@ -7,8 +7,6 @@
 
 namespace mlir::triton::gpu::intel {
 
-bool isDpasToDotShortcut(RankedTensorType dpasTy, RankedTensorType dotTy);
-
 struct SubGroupReinterpretPackInfo {
   bool isPack;
   unsigned packedRegisterSize;

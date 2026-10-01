@@ -2,7 +2,6 @@
 
 #include <deque>
 
-#include "intel/include/Analysis/Utility.h"
 #include "mlir/Analysis/DataFlow/ConstantPropagationAnalysis.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -26,6 +25,13 @@ namespace mlir {
 
 using namespace triton;
 using namespace triton::gpu;
+
+bool triton::canUseWarpBallotHistogram(HistogramOp op) {
+  int numBins = op.getType().getNumElements();
+  // Limit ballot and reduction overhead relative to shared-memory atomics.
+  return !hasCrossCTAScratch(op) && numBins <= 2 &&
+         numBins * gpu::lookupNumWarps(op) <= 4;
+}
 
 // Cases where distributed shared memory is not required in ConvertLayout:
 // (1) numCTAs == 1
@@ -1249,10 +1255,8 @@ bool cvtNeedsWarpShuffle(triton::gpu::ConvertLayoutOp op) {
 }
 
 bool cvtNeedsSharedMemory(triton::gpu::ConvertLayoutOp op) {
-  RankedTensorType srcTy = op.getSrc().getType();
-  RankedTensorType dstTy = op.getType();
-  return !cvtReordersRegisters(srcTy, dstTy) && !cvtNeedsWarpShuffle(op) &&
-         !triton::gpu::intel::isDpasToDotShortcut(srcTy, dstTy);
+  return !cvtReordersRegisters(op.getSrc().getType(), op.getType()) &&
+         !cvtNeedsWarpShuffle(op);
 }
 
 std::unique_ptr<DataFlowSolver> createDataFlowSolver() {
@@ -1300,6 +1304,30 @@ BarrierStages getAtomicBarrierStages(MemSemantic semantic,
                             semantic == MemSemantic::ACQUIRE_RELEASE);
   stages.betweenMemoryEffects = hasResultBarrier;
   return stages;
+}
+
+std::optional<int32_t> getAtomicResultShuffleMask(Value result) {
+  if (result.use_empty())
+    return 0;
+
+  int32_t laneMask, warpMask, blockMask;
+  if (auto tensorTy = dyn_cast<RankedTensorType>(result.getType())) {
+    auto masks = gpu::toLinearLayout(tensorTy).getFreeVariableMasks();
+    auto *ctx = result.getContext();
+    laneMask = masks.lookup(StringAttr::get(ctx, "lane"));
+    warpMask = masks.lookup(StringAttr::get(ctx, "warp"));
+    blockMask = masks.lookup(StringAttr::get(ctx, "block"));
+  } else {
+    auto *op = result.getDefiningOp();
+    laneMask = gpu::TritonGPUDialect::getThreadsPerWarp(
+                   op->getParentOfType<ModuleOp>()) -
+               1;
+    warpMask = gpu::lookupNumWarps(op) - 1;
+    blockMask = gpu::lookupNumCTAs(op) - 1;
+  }
+  if (warpMask || blockMask)
+    return std::nullopt;
+  return laneMask;
 }
 
 bool atomicResultHasCTABroadcast(Operation *op) {

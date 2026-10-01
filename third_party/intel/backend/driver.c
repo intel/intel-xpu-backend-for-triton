@@ -269,6 +269,11 @@ extern "C" EXPORT_FUNC PyObject *get_device_properties(int device_id) {
       device_properties.numSlices * device_properties.numSubslicesPerSlice;
   // To align with other backends - convert MHz to KHz
   int sm_clock_rate = device_properties.coreClockRate * 1000;
+  // `multiprocessor_count` counts sub-slices (Xe-cores), so
+  // `threads_per_eu * eus_per_subslice` is the number of hardware threads
+  // (sub-groups) that can be resident on a single "SM".
+  int threads_per_eu = device_properties.numThreadsPerEU;
+  int eus_per_subslice = device_properties.numEUsPerSubslice;
 
   ze_device_compute_properties_t compute_properties = {};
   compute_properties.stype = ZE_STRUCTURE_TYPE_DEVICE_COMPUTE_PROPERTIES;
@@ -309,12 +314,13 @@ extern "C" EXPORT_FUNC PyObject *get_device_properties(int device_id) {
     PyTuple_SetItem(subgroup_sizes, i, item);
   }
 
-  return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i, s:i, s:N}", "max_shared_mem",
-                       max_shared_mem, "multiprocessor_count",
+  return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i, s:i, s:i, s:i, s:N}",
+                       "max_shared_mem", max_shared_mem, "multiprocessor_count",
                        multiprocessor_count, "sm_clock_rate", sm_clock_rate,
                        "mem_clock_rate", mem_clock_rate, "mem_bus_width",
                        mem_bus_width, "max_work_group_size", max_group_size,
-                       "sub_group_sizes", subgroup_sizes);
+                       "threads_per_eu", threads_per_eu, "eus_per_subslice",
+                       eus_per_subslice, "sub_group_sizes", subgroup_sizes);
 }
 
 struct KernelInfo {
@@ -377,6 +383,18 @@ private:
   int64_t bytes = -1;        // L0 spillMemSize (uint32_t) widened; -1 == error.
   uint32_t subgroupSize = 0; // Compiled SIMD width; 0 == unknown.
 };
+
+// Spill at which `load_binary` rebuilds at large GRF, in the unit both spill
+// probes report: bytes per hardware thread. Mirrors
+// `REBUILD_SPILL_BYTES_PER_THREAD` in compiler.py -- see the comment there for
+// where 1024 comes from.
+//
+// Compared in bytes rather than in `slotsPerLane()`'s per-lane unit because the
+// compiled sub-group size has no part in the decision: routing the spill and
+// the threshold through the same truncating conversion cancels the divisor, so
+// the per-lane form of this gate decided exactly this comparison at every width
+// the backend can reach.
+constexpr int64_t kRebuildSpillBytesPerThread = 1024;
 
 // Converts a spill count to the `Py_BuildValue("i")` domain, saturating rather
 // than wrapping. Only the unknown-width byte passthrough can approach the
@@ -486,12 +504,18 @@ struct BuildFlags {
     return false;
   }
 
-  void addLargeGRFSizeFlag() {
-    build_flags_str = build_flags_str.append(" ").append(LARGE_GRF_FLAG);
-  }
-
-  void addXLargeGRFSizeFlag() {
-    build_flags_str = build_flags_str.append(" ").append(XLARGE_GRF_FLAG);
+  // Appends the `-cl-intel-<n>-GRF-per-thread` flag for GRF mode `mode`
+  // ("128", "256" or "512"). The mode is decided by the Python compiler
+  // backend (see `get_max_grf_mode` in compiler.py); an unrecognised value
+  // falls back to 256, the mode every currently-supported target other than
+  // "cri" auto-escalates to.
+  void addGRFSizeFlag(const char *mode) {
+    const char *flag = LARGE_GRF_FLAG;
+    if (std::strcmp(mode, "512") == 0)
+      flag = XLARGE_GRF_FLAG;
+    else if (std::strcmp(mode, "128") == 0)
+      flag = SMALL_GRF_FLAG;
+    build_flags_str = build_flags_str.append(" ").append(flag);
   }
 };
 
@@ -530,20 +554,29 @@ extern "C" EXPORT_FUNC PyObject *get_last_selected_build_flags() {
 }
 
 extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
-  const char *name, *build_flags_ptr, *deviceArch = nullptr;
+  const char *name, *build_flags_ptr, *maxGRFMode = nullptr;
   int shared;
   PyObject *py_bytes;
   int is_spv;
   int devId;
 
   if (!PyArg_ParseTuple(args, "sSispi|z", &name, &py_bytes, &shared,
-                        &build_flags_ptr, &is_spv, &devId, &deviceArch)) {
+                        &build_flags_ptr, &is_spv, &devId, &maxGRFMode)) {
     // PyArg_ParseTuple will set a PyErr
     return NULL;
   }
 
-  const char *resolvedDeviceArch =
-      (deviceArch != nullptr && deviceArch[0] != '\0') ? deviceArch : "unknown";
+  // Largest GRF mode this target auto-escalates to, decided in Python
+  // (`get_max_grf_mode` in compiler.py, carried via `metadata["max_grf_mode"]`)
+  // and handed over rather than re-derived here: this retry runs per-kernel at
+  // JIT time and has no access to the module attributes the compile-time
+  // consumers read. Default "256" preserves this call's own pre-existing
+  // behaviour on a missing argument (it previously resolved to "unknown",
+  // which already selected 256) -- the same absence-preserves-status-quo
+  // principle as `RegisterPressure.cpp`'s divergent 512 default; see that
+  // file's comment if either fallback's rationale ever changes.
+  const char *resolvedMaxGRFMode =
+      (maxGRFMode != nullptr && maxGRFMode[0] != '\0') ? maxGRFMode : "256";
 
   TRITON_ZE_FAIL_IF(devId >= g_sycl_l0_device_list.size(),
                     "Device is not found");
@@ -581,38 +614,53 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
   }
 
   const bool debugEnabled = getBoolEnv("TRITON_DEBUG");
-  // Only rebuild at large GRF once the kernel spills past what torch inductor's
-  // autotuner tolerates, so the rebuild can only rescue a config inductor would
-  // have discarded and never perturbs one it would have kept. 16 is inductor's
-  // default `spill_threshold` for non-HIP (`triton_heuristics.py`); a caller
-  // that overrides it is not tracked here.
+  // Rebuild once spilling reaches 1024 B per hardware thread -- the level that
+  // keeps an accepted kernel under inductor's `spill_threshold` of 16
+  // dword-equivalents/lane at SIMD16, the narrowest width we compile at; see
+  // `REBUILD_SPILL_BYTES_PER_THREAD` in compiler.py. Fixing a byte count rather
+  // than a per-lane slot count is what makes that hold at every width: #7959's
+  // rule compared slots at the compiled width, so the effective budget doubled
+  // with the sub-group size -- 2176 B at SIMD32 -- and the gate stayed silent
+  // across a band where rebuilding measurably paid (issue #8077). Inductor's
+  // threshold sets the level but grants no licence below it: it prunes configs
+  // from inductor's timing contest rather than approving them, so declining the
+  // rebuild leaves inductor timing the spilling default-GRF binary with no
+  // faster rival.
   //
-  // Compared against `slotsPerLane()` -- the very value handed to Python as
-  // `n_spills` -- rather than converting the budget into bytes: inductor tests
-  // the truncated per-lane count, so a byte threshold would also fire on the
-  // band that truncates back down to an accepted value. An unknown SIMD width
-  // makes `slotsPerLane()` fall back to raw bytes, which retries on all but the
-  // smallest spills (issue #7821).
-  constexpr int64_t kMaxSpillSlotsPerLane = 16;
-
+  // Mirrors `accepts_default_grf` in compiler.py, except that compiler.py
+  // additionally rebuilds on any spill for LTS drivers: `load_binary` has no
+  // `is_lts` input, so this gate cannot express that carve-out.
   if (canRetryWithLargeGRF &&
-      (firstBuildFailed || n_spills.slotsPerLane() > kMaxSpillSlotsPerLane)) {
+      (firstBuildFailed ||
+       n_spills.getBytes() >= kRebuildSpillBytesPerThread)) {
     PyObject *orig_type = nullptr, *orig_value = nullptr, *orig_tb = nullptr;
     // Save the original error before clearing it for the retry attempt.
     if (firstBuildFailed)
       PyErr_Fetch(&orig_type, &orig_value, &orig_tb);
 
-    if (debugEnabled)
-      std::cout << (firstBuildFailed ? "(I): Build failed for \""
-                                     : "(I): Detected spills for \"")
-                << kernel_name << "\", retrying with large GRF mode"
-                << std::endl;
-
-    if (std::strcmp(resolvedDeviceArch, "cri") == 0) {
-      build_flags.addXLargeGRFSizeFlag();
-    } else {
-      build_flags.addLargeGRFSizeFlag();
+    // Report the numbers the gate acted on here, not later: the retry
+    // overwrites `n_spills` below, so this is the only place the pre-retry
+    // spill is visible. The build-failure path has no numbers to report -- it
+    // enters on `firstBuildFailed` with an unknown `Spills` (bytes == -1,
+    // SIMD 0) and never reaches the threshold -- so printing them there would
+    // only invite reading `-1 B at SIMD0` as a measurement.
+    if (debugEnabled) {
+      if (firstBuildFailed)
+        std::cout << "(I): Build failed for \"" << kernel_name
+                  << "\", retrying with large GRF mode (" << resolvedMaxGRFMode
+                  << ")" << std::endl;
+      else
+        std::cout << "(I): Detected spills for \"" << kernel_name
+                  << "\", retrying with large GRF mode (" << resolvedMaxGRFMode
+                  << ", spill " << n_spills.getBytes()
+                  << " B/hardware-thread = " << n_spills.slotsPerLane()
+                  << " dword-equivalents/lane at SIMD"
+                  << n_spills.getSubgroupSize() << ", rebuild at "
+                  << kRebuildSpillBytesPerThread << " B/hardware-thread)"
+                  << std::endl;
     }
+
+    build_flags.addGRFSizeFlag(resolvedMaxGRFMode);
 
     try {
       auto [l0_module_retry, l0_kernel_retry, n_spills_retry] =
@@ -689,15 +737,18 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
     }
   }
 
-  // Both numbers are logged: the byte count is what the retry gate above acts
-  // on, the per-lane count is what Python receives. test_auto_grf matches the
-  // byte count specifically to pin the retry, so keep that wording stable.
+  // Reports the *selected* pass -- post-retry after a successful replacement,
+  // the default build on the accept path or after a failed retry. The threshold
+  // is printed too so tests can assert it against
+  // `REBUILD_SPILL_BYTES_PER_THREAD`. test_auto_grf matches the byte count to
+  // pin the retry, so keep that wording.
   if (debugEnabled && n_spills.getBytes()) {
     std::cout << "(I): Detected " << n_spills.getBytes()
               << " spill bytes per hardware thread; n_spills "
               << n_spills.slotsPerLane() << " dword-equivalents/lane (SIMD"
-              << n_spills.getSubgroupSize() << ") for \"" << kernel_name << "\""
-              << std::endl;
+              << n_spills.getSubgroupSize() << "), rebuild at "
+              << kRebuildSpillBytesPerThread << " B/hardware-thread for \""
+              << kernel_name << "\"" << std::endl;
   }
 
   auto n_regs = build_flags.n_regs();
@@ -1012,6 +1063,13 @@ static inline void printScalarArgByType(uint32_t index, const void *value,
 }
 
 static PyObject *data_ptr_str = NULL;
+// Interned kernel metadata attribute names, read on every launch.
+// `PyObject_GetAttrString` would create a new string per call, which the
+// type attribute cache then keeps alive.
+static PyObject *num_warps_str = NULL;
+static PyObject *num_ctas_str = NULL;
+static PyObject *shared_str = NULL;
+static PyObject *threads_per_warp_str = NULL;
 
 // Extract a XPU device pointer from a pointer-like PyObject obj, and store
 // it to the memory location pointed by ptr.
@@ -1437,18 +1495,17 @@ extern "C" EXPORT_FUNC PyObject *launch(PyObject *args) {
   }
 
   // extract kernel metadata
-  PyObject *num_warps_attr =
-      PyObject_GetAttrString(kernel_metadata, "num_warps");
+  PyObject *num_warps_attr = PyObject_GetAttr(kernel_metadata, num_warps_str);
   int num_warps = PyLong_AsLong(num_warps_attr);
   Py_DECREF(num_warps_attr);
-  PyObject *num_ctas_attr = PyObject_GetAttrString(kernel_metadata, "num_ctas");
+  PyObject *num_ctas_attr = PyObject_GetAttr(kernel_metadata, num_ctas_str);
   int num_ctas = PyLong_AsLong(num_ctas_attr);
   Py_DECREF(num_ctas_attr);
-  PyObject *shared_attr = PyObject_GetAttrString(kernel_metadata, "shared");
+  PyObject *shared_attr = PyObject_GetAttr(kernel_metadata, shared_str);
   int shared_memory = PyLong_AsLong(shared_attr);
   Py_DECREF(shared_attr);
   PyObject *threads_per_warp_attr =
-      PyObject_GetAttrString(kernel_metadata, "threads_per_warp");
+      PyObject_GetAttr(kernel_metadata, threads_per_warp_str);
   int threads_per_warp = PyLong_AsLong(threads_per_warp_attr);
   Py_DECREF(threads_per_warp_attr);
 
@@ -1592,6 +1649,12 @@ extern "C" EXPORT_FUNC PyTypeObject *init_PyKernelArgType() {
 
   data_ptr_str = PyUnicode_InternFromString("data_ptr");
   if (data_ptr_str == NULL)
+    return NULL;
+  num_warps_str = PyUnicode_InternFromString("num_warps");
+  num_ctas_str = PyUnicode_InternFromString("num_ctas");
+  shared_str = PyUnicode_InternFromString("shared");
+  threads_per_warp_str = PyUnicode_InternFromString("threads_per_warp");
+  if (!num_warps_str || !num_ctas_str || !shared_str || !threads_per_warp_str)
     return NULL;
 
   Py_INCREF(&PyKernelArgType);

@@ -1109,13 +1109,28 @@ Bf16_to_Fp16WithRounding(Location loc, ConversionPatternRewriter &rewriter,
   SmallVector<Value> result;
   result.reserve(v.size());
   for (Value elem : v) {
-    Value fp32 = LLVM::FPExtOp::create(rewriter, loc, f32_ty, elem);
+    Value fp32 = intel::convertBf16ToFp32(loc, rewriter, elem);
     Value fp16 = LLVM::ConstrainedFPTruncIntr::create(
         rewriter, loc, f16_ty, fp32,
         LLVM::RoundingModeAttr::get(
             ctx, LLVM::intel::convertTritonRoundingModeToLLVM(Rounding)),
         arith::getLLVMDefaultFPExceptionBehavior(*ctx));
     result.push_back(fp16);
+  }
+  return result;
+}
+
+// For RTNE/RTZ callers. FP16 -> FP32 extension is always exact, so the
+// requested rounding only needs to apply on the FP32 -> BF16 narrowing step.
+template <RoundingMode Rounding>
+static SmallVector<Value>
+Fp16_to_Bf16WithRounding(Location loc, ConversionPatternRewriter &rewriter,
+                         const SmallVector<Value> &v) {
+  SmallVector<Value> result;
+  result.reserve(v.size());
+  for (Value elem : v) {
+    Value fp32 = LLVM::FPExtOp::create(rewriter, loc, f32_ty, elem);
+    result.push_back(intel::convertFp32ToBf16(loc, rewriter, fp32, Rounding));
   }
   return result;
 }
@@ -1418,6 +1433,11 @@ struct FpToFpOpConversion
              {Bf16_to_Fp16WithRounding<RoundingMode::RTNE>, 2}},
             {{BF16TyID, F16TyID, RoundingMode::RTZ},
              {Bf16_to_Fp16WithRounding<RoundingMode::RTZ>, 2}},
+            // F16 -> BF16
+            {{F16TyID, BF16TyID, RoundingMode::RTNE},
+             {Fp16_to_Bf16WithRounding<RoundingMode::RTNE>, 2}},
+            {{F16TyID, BF16TyID, RoundingMode::RTZ},
+             {Fp16_to_Bf16WithRounding<RoundingMode::RTZ>, 2}},
             // F32 -> F8
             {{F32TyID, F8E4M3TyID, RoundingMode::RTNE},
              {Fp_to_Fp8_RTNE<Float32Type, Float8E4M3Type>, 1}},
@@ -1810,6 +1830,46 @@ struct AbsFOpConversion
   }
 };
 
+// Without native bf16 arithmetic (LTS drivers), lower a bf16 `tt.clampf` in
+// f32. `tt.clampf` is not an arith op, so `arith-emulate-unsupported-floats`
+// does not widen it. The result is one of the inputs or NaN, so the f32
+// round-trip is exact. Other cases fall through to the upstream pattern.
+struct Bf16ClampFOpConversion
+    : ElementwiseOpConversionBase<ClampFOp, Bf16ClampFOpConversion> {
+  using Base = ElementwiseOpConversionBase<ClampFOp, Bf16ClampFOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  LogicalResult
+  matchAndRewrite(ClampFOp op, Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!isa<BFloat16Type>(getElementTypeOrSelf(op.getType())) ||
+        mlir::LLVM::intel::hasModuleAttr(op, SUPPORT_BF16_ARITH()))
+      return failure();
+    return Base::matchAndRewrite(op, adaptor, rewriter);
+  }
+
+  SmallVector<Value> createDestOps(ClampFOp op, Adaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    Value x = intel::convertBf16ToFp32(loc, rewriter, operands[0][0]);
+    Value lo = intel::convertBf16ToFp32(loc, rewriter, operands[0][1]);
+    Value hi = intel::convertBf16ToFp32(loc, rewriter, operands[0][2]);
+    Value v = LLVM::MaxNumOp::create(rewriter, loc, f32_ty, x, lo);
+    Value res = LLVM::MinNumOp::create(rewriter, loc, v, hi);
+    if (op.getPropagateNan() == PropagateNan::ALL) {
+      // As in the upstream lowering, only `x` needs a NaN check.
+      Value isNan =
+          LLVM::FCmpOp::create(rewriter, loc, LLVM::FCmpPredicate::une, x, x);
+      res =
+          b.select(isNan, LLVM::createNaNConstant(loc, rewriter, f32_ty), res);
+    }
+    return {intel::convertFp32ToBf16(loc, rewriter, res, RoundingMode::RTNE)};
+  }
+};
+
 struct PreciseSqrtOpConversion
     : ElementwiseOpConversionBase<PreciseSqrtOp, PreciseSqrtOpConversion> {
   using Base =
@@ -2073,6 +2133,9 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<SigmoidConversion>(typeConverter, benefit.getBenefit() + 10);
   patterns.add<ElementwiseOpConversion<arith::DivFOp, LLVM::FDivOp>>(
       typeConverter, axisInfoAnalysis, benefit);
+  // The default fp32 division is already approximate on Intel GPUs.
+  patterns.add<ElementwiseOpConversion<triton::ApproxDivFOp, LLVM::FDivOp>>(
+      typeConverter, axisInfoAnalysis, benefit);
   patterns.add<ElementwiseOpConversion<arith::MulFOp, LLVM::FMulOp>>(
       typeConverter, axisInfoAnalysis, benefit);
   patterns.add<ElementwiseOpConversion<arith::AddFOp, LLVM::FAddOp>>(
@@ -2105,6 +2168,8 @@ void populateElementwiseOpToLLVMPatterns(
   mlir::triton::populateMinMaxFOpToLLVMPattern(
       typeConverter, patterns, axisInfoAnalysis,
       /*hwNanPropagationSupported=*/false, benefitForPropNan);
+  patterns.add<Bf16ClampFOpConversion>(typeConverter, axisInfoAnalysis,
+                                       benefit.getBenefit() + 1);
   mlir::triton::populateClampFOpToLLVMPattern(
       typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
 }
