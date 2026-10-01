@@ -160,8 +160,8 @@ def get_max_grf_mode(arch: dict) -> str:
     this file uses), from which it reaches every consumer as
     `opt.max_grf_mode`: `annotate_module`'s `ttig.max_grf_mode` module
     attribute (read by `RegisterPressureAnalysis::getGRFBytesPerHardwareThread`
-    to resolve its `UnknownGRFSizeAssumption::Largest` case for
-    `grf_mode='default'` only), `metadata["max_grf_mode"]` (via
+    to resolve its `UnknownGRFSizeAssumption::Largest` case for both
+    `grf_mode='default'` and `grf_mode='auto'`), `metadata["max_grf_mode"]` (via
     `options.__dict__`, handed to `driver.c`'s `load_binary` so the JIT
     large-GRF retry escalates to the same mode), and `make_zebin`'s ocloc
     auto-large-GRF retry flag.
