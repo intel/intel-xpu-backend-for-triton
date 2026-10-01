@@ -19,7 +19,7 @@ env:
 jobs:
   tune:
     runs-on: [linux, b580]
-    timeout-minutes: 720
+    timeout-minutes: 2880
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"

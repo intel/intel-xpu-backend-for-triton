@@ -52,9 +52,12 @@ def atomic_json(path, value):
             os.unlink(temporary)
 
 
-def candidate_configs():
-    return [{"block_m": m, "tile_size": t, "num_warps": w, "num_stages": s, "grf_mode": g}
-            for m in (16, 32, 64)
+def candidate_configs(key):
+    # MAX preserves the model's full GQA group, including non-power-of-two ratios.
+    heads = ["MAX"] + [h for h in (1, 2, 4, 8) if h < key.num_queries_per_kv and key.num_queries_per_kv % h == 0]
+    return [{"block_m": m, "tile_size": t, "num_warps": w, "num_stages": s, "grf_mode": g, "heads_per_program": h}
+            for h in heads
+            for m in (16, 32, 64, 128)
             for t in (16, 32, 64, 128)
             for w in (2, 4, 8, 16)
             for s in (1, 2, 3)
@@ -471,7 +474,7 @@ def tune(args, manifest, device):
                     raise RuntimeError(f"Fallback failed for {case['id']}: {fallback.get('error')}")
                 row["key"] = fallback["key"]
                 key = runtime.AttentionKey(**row["key"])  # pylint: disable=not-a-mapping
-                for config_index, config in enumerate(candidate_configs()):
+                for config_index, config in enumerate(candidate_configs(key)):
                     option = {"id": config_id(config), "config": config, "status": "pending", "samples_ms": []}
                     row["options"].append(option)
                     if not runtime.validate_config(runtime.AttentionConfig(**config), key, device.type):
