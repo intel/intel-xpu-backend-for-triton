@@ -3315,7 +3315,8 @@ struct DescriptorStoreOpToBlockIOConversion
     assert(llEncoding.has_value() &&
            "unexpected failure when getting linear layout");
 
-    unsigned contiguousDim = memoryRowMajor ? 1 : 0;
+    unsigned contiguousDim =
+        memoryRowMajor ? tensorType.getRank() - 1 : tensorType.getRank() - 2;
     Type eltTy = getTypeConverter()->convertType(tensorType.getElementType());
     unsigned elemSizeInBits = eltTy.getIntOrFloatBitWidth();
 
@@ -3448,7 +3449,8 @@ struct DescriptorStoreOpToBlockIOConversion
                                         {kLane, b.i32_val(0)},
                                         {kWarp, warpId},
                                         {kBlock, b.i32_val(0)}});
-      assert(offsets.size() == 2 && "only support 2D tensor for now.");
+      assert(offsets.size() == rank &&
+             "linear layout must produce one offset per tensor dimension.");
 
       Value addrElem = ptrElems[registerIdx];
 
@@ -3458,13 +3460,36 @@ struct DescriptorStoreOpToBlockIOConversion
       Value offsetX = b.add(baseOffsets[descColDim], offsets[colDim].second);
       Value offsetY = b.add(baseOffsets[descRowDim], offsets[rowDim].second);
 
+      // The payload has only the 2D tile plane, so fold every other dimension
+      // into the base pointer, as the load side's `computeAddress` does. That
+      // escapes the base_width x base_height clamp, so bounds-check it (#8023).
+      Value boundsPred;
+      for (unsigned descDim = 0; descDim < descRank; ++descDim) {
+        if (descDim == descRowDim || descDim == descColDim)
+          continue;
+        Value outerOffset = baseOffsets[descDim];
+        if (descDim >= rankDelta)
+          outerOffset =
+              b.add(outerOffset, offsets[descDim - rankDelta].second); // i32
+        Value outerOffset64 = b.zext(i64_ty, outerOffset);
+        Value elemOffset = b.mul(outerOffset64, desc.strides[descDim]);
+        addrElem = b.gep(ptr_ty(ctx, 1), eltTy, addrElem, elemOffset);
+        // Signed: nothing verifies that a descriptor extent is non-negative.
+        // The trunc is lossless, as `tt.make_tensor_descriptor` takes i32.
+        Value isNonNegative = b.icmp_sge(outerOffset, b.i32_val(0));
+        Value isBelowShape =
+            b.icmp_slt(outerOffset, b.trunc(i32_ty, desc.shapes[descDim]));
+        boundsPred = maybeAnd(rewriter, loc, boundsPred,
+                              b.and_(isNonNegative, isBelowShape));
+      }
+
       // Tensor descriptors always encode full shape bounds, so we always
       // use the descriptor's baseWidth/baseHeight for HW boundary
       // protection (no need to expand or adjust like block pointers).
       Value adjustedBaseWidth = baseWidth;
       Value adjustedBaseHeight = baseHeight;
 
-      Value pred = threadPred;
+      Value pred = maybeAnd(rewriter, loc, threadPred, boundsPred);
       if (pred) {
         // We leverage the GPU block I/O hardware out-of-bound protection
         // feature by setting the offset to an invalid value when 'pred'
