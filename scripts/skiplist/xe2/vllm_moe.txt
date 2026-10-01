@@ -157,6 +157,11 @@ tests/kernels/moe/test_moe.py::test_fused_moe[True-False-dtype0-4-2-8-40000-1024
 tests/kernels/moe/test_moe.py::test_fused_moe[True-False-dtype0-4-6-8-32768-2048-511]
 tests/kernels/moe/test_moe.py::test_fused_moe[True-False-dtype0-4-6-8-40000-1024-1024]
 
+# NCCL/expert parallel load balancing unsupported: https://github.com/intel/intel-xpu-backend-for-triton/issues/8179
+tests/kernels/moe/test_moe_layer.py::test_moe_layer[False-allgather_reducescatter-1-2-False]
+tests/kernels/moe/test_moe_layer.py::test_moe_layer[False-allgather_reducescatter-2-1-True]
+tests/kernels/moe/test_moe_layer.py::test_moe_layer[True-allgather_reducescatter-2-1-True]
+
 # Reference moe_sum kernel interface mismatch: https://github.com/intel/intel-xpu-backend-for-triton/issues/7811
 tests/kernels/moe/test_moe.py::test_moe_sum[contig-dtype0-128-2-1]
 tests/kernels/moe/test_moe.py::test_moe_sum[contig-dtype0-128-2-33]
