@@ -794,6 +794,72 @@ bool validate2DBlockLoadTile(const LinearLayout &ll, unsigned memContiguousDim,
   return true;
 }
 
+// A 2D block store has one v-block, so fold a 16-bit v-block pair (the same
+// rows, columns tileWidth apart) into one tile of twice the width: 64 B rows.
+// The layout must prove the pair is one dense tile aligned to the doubled width
+// (lanes are columns, then the row registers, then the pair register; every
+// other basis is zero in the tile's bits), so the XOR layout is an ADD inside
+// it. Masks need no check: the walk pairs v-blocks only if the mask is constant
+// over 2 * tileWidth columns. The payload puts element (r, c) in register
+// 2r + c / 16 (see `triton_gen.2Dblockstore`), so the pair register goes first.
+static void foldStoreVBlockPairIntoTileWidth(const LinearLayout &ll,
+                                             unsigned elemSizeInBits,
+                                             MLIRContext *ctx,
+                                             BlockIOTileSizeInfo &sizeInfo) {
+  const int tileWidth = sizeInfo.tileWidth;
+  const int tileHeight = sizeInfo.tileHeight;
+  if (elemSizeInBits != 16 || sizeInfo.numElemPerPackedVal != 1 ||
+      sizeInfo.vBlocks < 2 || ll.getNumOutDims() != 2 ||
+      !check2DBlockAddressPayloadRestriction(elemSizeInBits, 2 * tileWidth))
+    return;
+
+  StringAttr kRegister = StringAttr::get(ctx, "register");
+  StringAttr kLane = StringAttr::get(ctx, "lane");
+  const int rowDim = sizeInfo.rowDim, colDim = sizeInfo.colDim;
+  auto isBasis = [&](ArrayRef<int32_t> basis, int row, int col) {
+    return basis[rowDim] == row && basis[colDim] == col;
+  };
+
+  if (ll.getInDimSize(kLane) != tileWidth)
+    return;
+  for (int k = 0; k < ll.getInDimSizeLog2(kLane); ++k)
+    if (!isBasis(ll.getBasis(kLane, k), 0, 1 << k))
+      return;
+
+  const SetVector<unsigned> &order = *sizeInfo.regPackedBases;
+  const unsigned numRowBases = llvm::Log2_32(tileHeight);
+  if (order.size() <= numRowBases)
+    return;
+  SmallVector<int> tileRegBits;
+  for (unsigned i = 0; i <= numRowBases; ++i) {
+    int bit = llvm::Log2_32(order[i]);
+    bool isPair = i == numRowBases;
+    if (!isBasis(ll.getBasis(kRegister, bit), isPair ? 0 : 1 << i,
+                 isPair ? tileWidth : 0))
+      return;
+    tileRegBits.push_back(bit);
+  }
+
+  for (StringAttr inDim : ll.getInDimNames()) {
+    if (inDim == kLane)
+      continue;
+    for (int k = 0; k < ll.getInDimSizeLog2(inDim); ++k) {
+      if (inDim == kRegister && llvm::is_contained(tileRegBits, k))
+        continue;
+      ArrayRef<int32_t> basis = ll.getBasis(inDim, k);
+      if ((basis[rowDim] & (tileHeight - 1)) ||
+          (basis[colDim] & (2 * tileWidth - 1)))
+        return;
+    }
+  }
+
+  SetVector<unsigned> newOrder;
+  newOrder.insert(order[numRowBases]);
+  newOrder.insert(order.begin(), order.end());
+  sizeInfo.regPackedBases = std::move(newOrder);
+  sizeInfo.tileWidth = 2 * tileWidth;
+}
+
 bool validate2DBlockStoreTile(const LinearLayout &ll, unsigned memContiguousDim,
                               unsigned elemSizeInBits,
                               RankedTensorType tensorType,
@@ -820,6 +886,9 @@ bool validate2DBlockStoreTile(const LinearLayout &ll, unsigned memContiguousDim,
   // 2D block store does not support vnni packing.
   if (sizeInfo.vnni)
     return false;
+
+  foldStoreVBlockPairIntoTileWidth(ll, elemSizeInBits, tensorType.getContext(),
+                                   sizeInfo);
 
   // The store always issues a single v-block per message.
   sizeInfo.vBlocks = 1;
