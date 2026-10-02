@@ -43,7 +43,10 @@ bool isConstant(Value val, int64_t expected);
 // Issue #7990 was exactly that. For such a proof, query the raw value through
 // ModuleAxisInfoAnalysis, which reaches a fixpoint over the loop, and conjoin
 // this only as a conservative second opinion.
-Value getFinalValue(Value value);
+// When \p crossedLoopCarriedValue is given it is set to true if the resolution
+// crossed an iteration argument the loop updates, i.e. the result describes the
+// first iteration only and must not be reasoned about as loop invariant.
+Value getFinalValue(Value value, bool *crossedLoopCarriedValue = nullptr);
 
 // Erase the operations in \p operations.
 void eraseOperations(SmallPtrSetImpl<Operation *> &operations);

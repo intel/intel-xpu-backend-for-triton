@@ -364,11 +364,25 @@ private:
     if (!isSupportedBoundPredicate(pred))
       return MaskClassification::Unknown;
 
+    // `getFinalValue` resolves an `scf.for` iteration argument to its init
+    // operand, i.e. to the value it holds on the *first* iteration. Reasoning
+    // about such a result as if it were loop invariant is unsound when the loop
+    // updates the argument, so track whether the resolution crossed one: the
+    // mask would be judged against the first iteration alone and deleted
+    // outright by `dropMask`, leaving the load unguarded (#8060).
+    bool boundCrossedLoopCarriedValue = false;
     Value lhs = tt::intel::getFinalValue(cmpOp.getLhs());
-    Value rhs = tt::intel::getFinalValue(cmpOp.getRhs());
+    Value rhs =
+        tt::intel::getFinalValue(cmpOp.getRhs(), &boundCrossedLoopCarriedValue);
     Operation *lhsOp = tt::intel::getFinalValue(lhs).getDefiningOp();
-    Operation *rhsOp = tt::intel::getFinalValue(rhs).getDefiningOp();
+    Operation *rhsOp =
+        tt::intel::getFinalValue(rhs, &boundCrossedLoopCarriedValue)
+            .getDefiningOp();
     if (!lhsOp || !rhsOp)
+      return MaskClassification::Unknown;
+
+    // The compared-against bound must hold for every iteration.
+    if (boundCrossedLoopCarriedValue)
       return MaskClassification::Unknown;
 
     auto getIntConstantValue = [](Operation *op) -> std::optional<APInt> {
@@ -394,8 +408,15 @@ private:
     if (!addOp)
       return MaskClassification::Unknown;
 
+    // Note: `addLhs` is allowed to resolve through a loop-carried iteration
+    // argument - `getIVEquivalentRange` re-derives its range from the loop
+    // bounds after checking the argument advances like the induction variable.
+    // `addRhs` gets no such treatment: it is used as a plain `tt.make_range`,
+    // so it must genuinely hold the same value on every iteration.
+    bool offsetCrossedLoopCarriedValue = false;
     Value addLhs = tt::intel::getFinalValue(addOp.getLhs());
-    Value addRhs = tt::intel::getFinalValue(addOp.getRhs());
+    Value addRhs = tt::intel::getFinalValue(addOp.getRhs(),
+                                           &offsetCrossedLoopCarriedValue);
 
     std::optional<ConstantIntRanges> lhsRange =
         getIVEquivalentRange(forOp, addLhs);
@@ -404,7 +425,7 @@ private:
 
     auto makeRangeOp =
         dyn_cast_or_null<tt::MakeRangeOp>(addRhs.getDefiningOp());
-    if (!makeRangeOp)
+    if (!makeRangeOp || offsetCrossedLoopCarriedValue)
       return MaskClassification::Unknown;
 
     return classifyMask(pred, *lhsRange, makeRangeOp.getStart(),
