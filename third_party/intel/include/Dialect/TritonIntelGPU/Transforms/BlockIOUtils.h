@@ -64,6 +64,20 @@ BlockIOTileSizeInfo getBlockIOPrefetchTileSize(const LinearLayout &, unsigned,
 std::optional<unsigned> getLaneFastChangeDim(const LinearLayout &ll,
                                              MLIRContext *ctx);
 
+/// Consistency guardrail for issue #7806: check that the register mapping
+/// implied by a computed tile is geometrically consistent with that tile. A
+/// single 2D block load message must deliver each element to a distinct
+/// register (injective) and vary only the tile's two dimensions
+/// (\p sizeInfo.rowDim and \p sizeInfo.colDim). Well-formed tiles always
+/// satisfy this; a tile whose register bases are inconsistent with its geometry
+/// -- e.g. it absorbed a non-representable swizzled basis, or leaked into
+/// another dimension -- does not, and callers must fall back to the scatter
+/// path instead of emitting a load that would place values in the wrong
+/// registers. Returns false for an invalid \p sizeInfo or one without register
+/// bases. getBlockIOTileSize applies this before returning a tile.
+bool isTileRegMappingConsistent(const LinearLayout &ll,
+                                const BlockIOTileSizeInfo &sizeInfo);
+
 /// Get the DPAS operand index from a tensor type's encoding.
 /// The encoding must be DPAS or DotOperand-with-DPAS parent.
 DpasEncodingAttr::OpIdx getOpIdx(RankedTensorType tensorTy);
