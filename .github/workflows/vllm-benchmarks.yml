@@ -1,46 +1,24 @@
-name: UA offline tuning with cold graph replay
-run-name: UA CI-input tuning on B580 (${{ github.ref_name }})
+name: timing test
+run-name: timing test
 
 on:
   workflow_dispatch:
-    inputs:
-      timing_probe:
-        description: Run only the short graph timing investigation
-        type: boolean
-        default: false
-      allow_parallel:
-        description: Allow this run alongside other tuning runs on a separate runner
-        type: boolean
-        default: false
-      part:
-        description: Tuning part to run (both runs sequentially)
-        type: choice
-        default: both
-        options: [both, '1', '2']
 
 permissions:
   contents: read
-  actions: read
 
 concurrency:
-  group: ${{ inputs.allow_parallel && format('ua-ci-offline-tune-{0}', github.run_id) || 'ua-ci-offline-tune' }}
+  group: ua-timing-test
   cancel-in-progress: false
 
 env:
-  GH_TOKEN: ${{ github.token }}
-  TRITON_CACHE_DIR: ${{ github.workspace }}/.ua-tuning-cache-${{ github.run_id }}
+  TRITON_CACHE_DIR: ${{ github.workspace }}/.ua-timing-cache-${{ github.run_id }}
 
 jobs:
-  tune:
-    if: ${{ !inputs.timing_probe }}
-    name: Tune part ${{ matrix.part }} of 2
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix:
-        part: ${{ fromJSON(inputs.part == 'both' && '[1,2]' || format('[{0}]', inputs.part)) }}
+  timing-test:
+    name: timing test
     runs-on: [linux, b580]
-    timeout-minutes: 1440
+    timeout-minutes: 180
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
@@ -56,77 +34,38 @@ jobs:
       - uses: ./.github/actions/setup-pytorch
       - uses: ./.github/actions/setup-triton
       - uses: ./.github/actions/install-vllm
-      - name: Record environment and inputs
-        run: |
-          mkdir -p reports/profiles
-          ./scripts/capture-hw-details.sh > reports/environment.txt
-          python -m pip freeze > reports/packages.txt
-          git rev-parse HEAD > reports/checkout.txt
-          python scripts/ua_ci_shard.py --part ${{ matrix.part }} --output reports/manifests
-          cp scripts/ua-ci-tuning-shards.json reports/
-          git diff 0ea7fbf49e45b4cf1a3881a66ade4f3ba5a5c7ed -- python third_party include lib cmake > reports/compiler-changes.diff
-          test ! -s reports/compiler-changes.diff
-      - name: Check cold graph timing against CI profiler
-        run: |
-          export PYTHONPATH="$PWD/vllm${PYTHONPATH:+:$PYTHONPATH}"
-          python scripts/ua_ci_diagnostic.py --clear-cache \
-            --vllm-source "$PWD/vllm" --output "$PWD/reports/timing-check" \
-            2>&1 | tee reports/timing-check.log
-          python scripts/ua_check_cold_timing.py reports/timing-check/results.json
-      - name: Apply offline UA patch
-        run: |
-          git -C vllm apply --check "$PWD/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention.patch"
-          git -C vllm apply "$PWD/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention.patch"
-      - name: Tune BF16 inputs for this part
-        run: |
-          export PYTHONPATH="$PWD/vllm${PYTHONPATH:+:$PYTHONPATH}"
-          python scripts/ua_ci_tune.py --tune --clear-cache \
-            --manifest reports/manifests/bfloat16.json \
-            --save-dir reports/profiles --measurements reports/bf16-measurements.json \
-            --warmup-ms 25 --rep-ms 100 2>&1 | tee reports/bf16-tuning.log
-      - name: Save BF16 profiles and measurements
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: ua-cold-graph-part-${{ matrix.part }}-bf16-checkpoint
-          path: reports
-          if-no-files-found: warn
-      - name: Tune FP8 inputs for this part
-        run: |
-          export PYTHONPATH="$PWD/vllm${PYTHONPATH:+:$PYTHONPATH}"
-          python scripts/ua_ci_tune.py --tune --clear-cache \
-            --manifest reports/manifests/float8_e4m3fn.json \
-            --save-dir reports/profiles --measurements reports/fp8-measurements.json \
-            --warmup-ms 25 --rep-ms 100 2>&1 | tee reports/fp8-tuning.log
-      - name: Upload generated JSONs and measurements
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: ua-cold-graph-part-${{ matrix.part }}-profiles
-          path: reports
-          if-no-files-found: warn
-
-  timing-probe:
-    if: ${{ inputs.timing_probe }}
-    runs-on: [linux, b580]
-    timeout-minutes: 45
-    defaults:
-      run:
-        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
-    steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/setup-pyenv-python
-        with:
-          python-version: '3.12'
-      - uses: ./.github/actions/setup-pytorch
-      - name: Probe graph timing
+      - name: Record environment
         run: |
           mkdir -p reports
           ./scripts/capture-hw-details.sh > reports/environment.txt
           python -m pip freeze > reports/packages.txt
-          python scripts/ua_graph_timing_probe.py --output reports/probe 2>&1 | tee reports/probe.log
-      - uses: actions/upload-artifact@v7
+          git rev-parse HEAD > reports/checkout.txt
+          printf '%s\n' "$RUNNER_NAME" > reports/runner.txt
+          git -C vllm rev-parse HEAD > reports/vllm-pin.txt
+      - name: Prepare main TD attention source
+        run: |
+          mkdir -p reports/main-source/vllm/v1/attention
+          cp -r vllm/v1/attention/ops reports/main-source/vllm/v1/attention/
+          git show 0849431d24201f4a249636fda4c4eac559406bb2:benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention.patch > reports/main.patch
+          git -C reports/main-source init -q
+          git -C reports/main-source apply --check --include='vllm/v1/attention/ops/*' "$PWD/reports/main.patch"
+          git -C reports/main-source apply --include='vllm/v1/attention/ops/*' "$PWD/reports/main.patch"
+      - name: Preview timing matrix
+        run: |
+          python scripts/ua_timing_probe.py --repo "$PWD" --output reports/matrix \
+            --workload matmul_short matmul_long ua_decode ua_prefill ua_mixed \
+            --trials 2 --dry-run > reports/planned-matrix.json
+      - name: Compare event and wall timings in fresh processes
+        run: |
+          export PYTHONPATH="$PWD/vllm${PYTHONPATH:+:$PYTHONPATH}"
+          python scripts/ua_timing_probe.py --repo "$PWD" \
+            --ua-source "$PWD/reports/main-source" --output "$PWD/reports/matrix" \
+            --workload matmul_short matmul_long ua_decode ua_prefill ua_mixed \
+            --trials 2 --rounds 3 --repeats 12 2>&1 | tee reports/probe.log
+      - name: Upload timings, traces, and environment
         if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: ua-graph-timing-probe
-          path: reports
+          name: timing-test-${{ github.run_attempt }}
+          path: reports/
+          retention-days: 14
