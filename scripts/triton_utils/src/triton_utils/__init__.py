@@ -16,6 +16,7 @@ from .gh_utils import (
     GHTestReportProcessor,
 )
 from .pass_rate_utils import (
+    AggregationLevel,
     CompareScope,
     RunResult,
     SortByCompare,

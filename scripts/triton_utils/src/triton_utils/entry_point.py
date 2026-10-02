@@ -13,7 +13,7 @@ import pandas as pd
 from typing_extensions import Any, Self
 
 from .gh_utils import GHABuildTestReportProcessor, GHANightlyTestReportProcessor, GHAWheelDownloader
-from .pass_rate_utils import CompareScope, SortByCompare, SortByStats, Test, TestGroupingLevel, TestReport
+from .pass_rate_utils import AggregationLevel, CompareScope, SortByCompare, SortByStats, Test, TestGroupingLevel, TestReport
 from .pattern_matcher import PatternMatcher
 
 
@@ -52,6 +52,7 @@ class Config:  # pylint: disable=R0902
 
     error_on_failures: bool = False
     tests_with_multiple_testsuites: bool = False
+    aggregation_level: str = "none"
 
     _report_grouping_level: str = TestGroupingLevel.TEST.value
     list_test_instances: bool = False
@@ -257,6 +258,12 @@ class Config:  # pylint: disable=R0902
             dest="pass_rate_level",
             help="Grouping level for pass rate report (default: all)",
         )
+        pass_rate_parser.add_argument(
+            "--aggregation-level",
+            choices=[level.value for level in AggregationLevel],
+            default=AggregationLevel.NONE.value,
+            help="Aggregate test results at the selected level",
+        )
 
         test_stats_parser = cls._add_parser(
             subparsers,
@@ -305,6 +312,12 @@ class Config:  # pylint: disable=R0902
             action="store_true",
             required=False,
             help="Pretty print stats",
+        )
+        test_stats_parser.add_argument(
+            "--aggregation-level",
+            choices=[level.value for level in AggregationLevel],
+            default=AggregationLevel.NONE.value,
+            help="Aggregate test results at the selected level",
         )
 
         compare_stats_parser = cls._add_parser(
@@ -371,6 +384,12 @@ class Config:  # pylint: disable=R0902
             action="store_true",
             required=False,
             help="Omit test class name from displayed test names",
+        )
+        compare_stats_parser.add_argument(
+              "--aggregation-level",
+              choices=[level.value for level in AggregationLevel],
+              default=AggregationLevel.NONE.value,
+              help="Aggregate test results at the selected level",
         )
 
         convert_to_parser = cls._add_parser(
@@ -584,6 +603,7 @@ class ReportActionRunner(ActionRunner):
                 rep_path,
                 tests_with_multiple_testsuites=config.tests_with_multiple_testsuites,
                 ignore_testsuites_filter=config.ignore_testsuite_filter,
+                aggregation_level=config.aggregation_level,
                 pattern_matcher=PatternMatcher(
                     include_patterns=config.include_subdir_patterns,
                     exclude_patterns=config.exclude_subdir_patterns,
