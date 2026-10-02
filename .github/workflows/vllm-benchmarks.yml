@@ -45,7 +45,7 @@ jobs:
       - name: Prepare main TD attention source
         run: |
           mkdir -p reports/main-source/vllm/v1/attention
-          cp -r vllm/v1/attention/ops reports/main-source/vllm/v1/attention/
+          cp -r vllm/vllm/v1/attention/ops reports/main-source/vllm/v1/attention/
           git show 0849431d24201f4a249636fda4c4eac559406bb2:benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention.patch > reports/main.patch
           git -C reports/main-source init -q
           git -C reports/main-source apply --check --include='vllm/v1/attention/ops/*' "$PWD/reports/main.patch"
