@@ -458,15 +458,45 @@ Fp16_to_Fp8E4M3B15(Location loc, ConversionPatternRewriter &rewriter,
 // Note: when handled by software, this format
 // has more than a single NaN values.
 
-// Fp8E4M3 -> Fp16 (packed), oneDNN-derived. 6 arithmetic ops per 2 elements,
-// down from ~20 in the implementation this replaces, which spent 14 of them
-// on an integer NaN fixup. Runs entirely in the <2 x i16> / <2 x half>
-// domain:
+// Returns (vec, k) if `v` is byte k of an <N x i32> `vec` bitcast to bytes.
+static std::optional<std::pair<Value, int64_t>> getByteOfI32Vector(Value v) {
+  if (auto extract = v.getDefiningOp<LLVM::ExtractValueOp>()) {
+    Value container = extract.getContainer();
+    Value inserted;
+    while (auto insert = container.getDefiningOp<LLVM::InsertValueOp>()) {
+      if (insert.getPosition().size() != extract.getPosition().size())
+        return std::nullopt;
+      if (insert.getPosition() == extract.getPosition()) {
+        inserted = insert.getValue();
+        break;
+      }
+      container = insert.getContainer();
+    }
+    if (!inserted)
+      return std::nullopt;
+    v = inserted;
+  }
+  auto extractElt = v.getDefiningOp<LLVM::ExtractElementOp>();
+  if (!extractElt || !extractElt.getType().isInteger(8))
+    return std::nullopt;
+  auto bitcast = extractElt.getVector().getDefiningOp<LLVM::BitcastOp>();
+  if (!bitcast)
+    return std::nullopt;
+  auto srcTy = dyn_cast<VectorType>(bitcast.getArg().getType());
+  if (!srcTy || !srcTy.getElementType().isInteger(32))
+    return std::nullopt;
+  APInt idx;
+  if (!matchPattern(extractElt.getPosition(), m_ConstantInt(&idx)))
+    return std::nullopt;
+  return std::make_pair(bitcast.getArg(), idx.getSExtValue());
+}
+
+// Fp8E4M3 -> Fp16, oneDNN-derived:
 //
-//   ashr <2 x i16>, 1       reposition exp+mantissa; arithmetic, so it also
+//   ashr i16, 1             reposition exp+mantissa; arithmetic, so it also
 //                           smears the sign into bit 15, placing it in the
 //                           fp16 sign position for free
-//   and  <2 x i16>, 0xBFFF  clear bit 14, which the shift duplicated
+//   and  i16, 0xBFFF        clear bit 14, which the shift duplicated
 //   fmul 36864.0            rebias, part 1
 //   fmul 0.0069427490234375 rebias, part 2
 //   fadd(h, fmul(h, 0.0))   Inf -> NaN; oneDNN's `mad y, y, y, 0:hf`
@@ -503,10 +533,12 @@ Fp16_to_Fp8E4M3B15(Location loc, ConversionPatternRewriter &rewriter,
 //
 // This file has a history of IGC flush-to-zero bugs that are sensitive to the
 // integer domain (see Fp8E5M2_to_Bf16, which needs i32, and
-// Fp8E4M3Nv_to_Bf16, which needs i16). If the <2 x i16> ashr ever trips one,
-// the fallback is the i32 domain: `lshr i32, 1` + `and 0x3FFF3FFF` +
+// Fp8E4M3Nv_to_Bf16, which needs i16). If the i16 ashr ever trips one, the
+// fallback is the i32 domain: `lshr i32, 1` + `and 0x3FFF3FFF` +
 // `and 0x80008000` + `or`. That is 8 ops instead of 6 and was verified
 // bit-identical on all 256 bytes.
+//
+// Do NOT pack bytes into vectors: IGC moves each vector element separately.
 //
 // Not used on LTS drivers, where it triggers an IGC compile-time blowup; see
 // Fp8E4M3Nv_to_Fp16Int below and the dispatch in getConversionFunc().
@@ -515,48 +547,31 @@ static SmallVector<Value> Fp8E4M3Nv_to_Fp16(Location loc,
                                             const SmallVector<Value> &v) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  // Pack into byte positions 1 and 3, putting each fp8 byte in the high half
-  // of its 16-bit lane. Positions 0 and 2 MUST stay zero: `ashr` moves their
-  // bits 1-7 into fp16 mantissa bits 0-6 of the same lane and `and 0xBFFF`
-  // does not clear them.
-  auto fp8x4VecTy = vec_ty(i8_ty, 4);
-  Value pack4 = b.undef(fp8x4VecTy);
-  pack4 = b.insert_element(fp8x4VecTy, pack4, b.int_val(8, 0), b.i32_val(0));
-  pack4 = b.insert_element(fp8x4VecTy, pack4, v[0], b.i32_val(1));
-  pack4 = b.insert_element(fp8x4VecTy, pack4, b.int_val(8, 0), b.i32_val(2));
-  pack4 = b.insert_element(fp8x4VecTy, pack4, v[1], b.i32_val(3));
+  SmallVector<Value> ret;
+  for (Value fp8 : v) {
+    Value aligned;
+    if (auto byteOfI32 = getByteOfI32Vector(fp8)) {
+      // Read the byte from its dword; 0xBF80 also clears what ashr shifts in.
+      auto [vec, k] = *byteOfI32;
+      Value dword = b.extract_element(i32_ty, vec, b.i32_val(k / 4));
+      if (unsigned shift = 24 - 8 * (k % 4))
+        dword = b.shl(i32_ty, dword, b.i32_val(shift));
+      Value shifted = b.trunc(i16_ty, b.ashr(i32_ty, dword, b.i32_val(17)));
+      aligned = b.and_(i16_ty, shifted, b.i16_val(0xBF80));
+    } else {
+      // The low byte must stay zero: `and 0xBFFF` keeps mantissa bits 0-6.
+      Value lane = b.shl(i16_ty, b.zext(i16_ty, fp8), b.i16_val(8));
+      Value shifted = b.ashr(i16_ty, lane, b.i16_val(1));
+      aligned = b.and_(i16_ty, shifted, b.i16_val(0xBFFF));
+    }
 
-  auto i16x2VecTy = vec_ty(i16_ty, 2);
-  auto fp16x2VecTy = vec_ty(f16_ty, 2);
-
-  // undef + 2 inserts is how the sibling converters build vector constants;
-  // LLVM folds it to a splat.
-  auto splatI16 = [&](int64_t val) {
-    Value c = b.i16_val(val);
-    Value vec = b.undef(i16x2VecTy);
-    vec = b.insert_element(i16x2VecTy, vec, c, b.i32_val(0));
-    vec = b.insert_element(i16x2VecTy, vec, c, b.i32_val(1));
-    return vec;
-  };
-  auto splatF16 = [&](float val) {
-    Value c = b.f16_val(val);
-    Value vec = b.undef(fp16x2VecTy);
-    vec = b.insert_element(fp16x2VecTy, vec, c, b.i32_val(0));
-    vec = b.insert_element(fp16x2VecTy, vec, c, b.i32_val(1));
-    return vec;
-  };
-
-  Value lanes = b.bitcast(pack4, i16x2VecTy);
-  Value shifted = b.ashr(i16x2VecTy, lanes, splatI16(1));
-  Value aligned = b.and_(i16x2VecTy, shifted, splatI16(0xBFFF));
-
-  Value h = b.bitcast(aligned, fp16x2VecTy);
-  h = b.fmul(h, splatF16(36864.0f));
-  h = b.fmul(h, splatF16(0.0069427490234375f));
-  h = b.fadd(h, b.fmul(h, splatF16(0.0f)));
-
-  return {b.extract_element(f16_ty, h, b.i32_val(0)),
-          b.extract_element(f16_ty, h, b.i32_val(1))};
+    Value h = b.bitcast(aligned, f16_ty);
+    h = b.fmul(h, b.f16_val(36864.0f));
+    h = b.fmul(h, b.f16_val(0.0069427490234375f));
+    h = b.fadd(h, b.fmul(h, b.f16_val(0.0f)));
+    ret.push_back(h);
+  }
+  return ret;
 }
 
 // Fp8E4M3 -> Fp16 (packed), integer domain. Used only on LTS drivers.
