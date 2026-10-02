@@ -32,3 +32,36 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.th
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 8], warpsPerCTA = [2, 1], order = [1, 0]}>
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 1], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_2d_block_io} {
+  // CHECK-LABEL: no_duplication_size1_dim
+  tt.func public @no_duplication_size1_dim() {
+    %cst = arith.constant dense<0> : tensor<32x1xi64, #blocked>
+    // CHECK: ttg.convert_layout
+    // CHECK-NOT: ttg.local_alloc
+    // CHECK-NOT: ttg.local_load
+    %0 = ttg.convert_layout %cst : tensor<32x1xi64, #blocked> -> tensor<32x1xi64, #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>>
+    tt.return
+  }
+}
+
+// -----
+
+// The size-1 guard above only blocks size-1 dims; this N=2 shape still takes
+// the shared-memory round trip.
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 8], warpsPerCTA = [2, 1], order = [1, 0]}>
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [2, 1], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_subgroup_matrix_multiply_accumulate, ttig.support_2d_block_io} {
+  // CHECK-LABEL: duplication_n2
+  tt.func public @duplication_n2() {
+    %cst = arith.constant dense<0> : tensor<32x2xi64, #blocked>
+    // CHECK: ttg.local_alloc
+    // CHECK: ttg.local_load
+    %0 = ttg.convert_layout %cst : tensor<32x2xi64, #blocked> -> tensor<32x2xi64, #ttg.dot_op<{opIdx = 1, parent = #dpas, kWidth = 2}>>
+    tt.return
+  }
+}
