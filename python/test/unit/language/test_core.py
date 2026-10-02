@@ -41,7 +41,9 @@ from triton._internal_testing import (
     is_hip_rdna4,
     is_hip_gfx1250,
     is_xpu,
+    is_xpu_bmg,
     is_xpu_cri,
+    is_xpu_pvc,
     torch_float8_dtypes,
     torch_dtypes,
     numpy_random,
@@ -4998,7 +5000,7 @@ def _scaled_dot_scale_kernel(X, W, S, Y, RHS_SCALE: tl.constexpr, NORMAL_TYPE: t
 @pytest.mark.parametrize("fast_math", [False, True])
 @pytest.mark.enable_warmup(min_capability=9)
 def test_scaled_dot_minimum_scale(rhs_scale, normal_type, fast_math, device):
-    if not is_cuda() or torch.cuda.get_device_capability() < (8, 9):
+    if not (is_xpu_pvc() or is_xpu_bmg()) and (not is_cuda() or torch.cuda.get_device_capability() < (8, 9)):
         pytest.xfail("requires CUDA FP8 support")
 
     dtype = torch.bfloat16 if normal_type == "bf16" else torch.float16
@@ -5026,7 +5028,8 @@ def test_scaled_dot_minimum_scale(rhs_scale, normal_type, fast_math, device):
 @pytest.mark.parametrize("scale_dtype, scale_factor", [(torch.uint8, 32), (torch.float8_e4m3fn, 16)])
 @pytest.mark.enable_warmup(min_capability=9)
 def test_scaled_dot_zero_scale(rhs_scale, normal_type, scale_dtype, scale_factor, device):
-    if not is_interpreter() and (not is_cuda() or torch.cuda.get_device_capability() < (8, 9)):
+    if not is_interpreter() and not (is_xpu_pvc() or is_xpu_bmg()) and (not is_cuda()
+                                                                        or torch.cuda.get_device_capability() < (8, 9)):
         pytest.xfail("requires CUDA FP8 support")
 
     dtype = torch.bfloat16 if normal_type == "bf16" else torch.float16
