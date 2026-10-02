@@ -2,7 +2,7 @@ from triton.backends.compiler import BaseBackend, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm, intel
 from triton.backends.intel.driver import compile_module_from_src, is_lts
 from triton.backends.intel.track import track
-from triton.backends.intel.extension_utils import query_device_extensions
+from triton.backends.intel.extension_utils import query_device_extensions, get_device_extensions
 from triton import knobs
 from triton._instrumentation import instrument as _instrument, is_enabled
 from triton.runtime.errors import IntelGPUError, OutOfResources
@@ -328,6 +328,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             # need to query any GPU device
             device_id = tgt_prop.get("device_id")
             extensions = query_device_extensions(device_id)
+            print(get_device_extensions(device_id))
             dev_prop.update(extensions)
             dev_prop['__intel_already_queried_extensions__'] = True
 

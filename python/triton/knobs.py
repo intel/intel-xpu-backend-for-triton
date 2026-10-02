@@ -615,9 +615,9 @@ class intel_knobs(base_knobs):
 
     libdevice_path: env_opt_str = env_opt_str("TRITON_LIBDEVICE_PATH")
 
-    # Space separated list of device extensions, similar to the output of
-    # `ocloc query CL_DEVICE_EXTENSIONS`. If not set, a compiler calls `ocloc` in runtime to get
-    # the actual device extensions.
+    # Space separated list of SPIR-V device extensions, similar to the output of
+    # `zeDeviceGetCompilerInfo(ZE_DEVICE_COMPILER_INFO_SPIRV_EXTENSIONS)`. If not set, the compiler
+    # queries the device directly at runtime to get the actual extensions.
     device_extensions: env_opt_str = env_opt_str("TRITON_INTEL_DEVICE_EXTENSIONS")
     device_arch: env_opt_str = env_opt_str("TRITON_INTEL_DEVICE_ARCH")
     # SYCL compiler Triton needs to be compatible with when generating kernel launchers
