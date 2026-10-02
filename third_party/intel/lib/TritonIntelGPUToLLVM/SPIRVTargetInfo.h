@@ -19,6 +19,11 @@ protected:
   Value genWarpReduce(RewriterBase &rewriter, Location loc, Value acc,
                       Operation *reduceOp, unsigned numLanesToReduce,
                       unsigned warpSize) const final;
+
+  FailureOr<Operation *>
+  matchSupportedWarpScanOp(triton::ScanOp op) const final;
+  Value genWarpScan(RewriterBase &rewriter, Location loc, Value acc,
+                    Operation *combineOp, unsigned warpSize) const final;
 };
 } // namespace mlir::triton::intel
 
