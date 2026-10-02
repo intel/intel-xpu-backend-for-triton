@@ -635,7 +635,6 @@ private:
                int opIdx, tt::ScaleDotElemType computeType) const {
     TypedValue<RankedTensorType> v =
         opIdx == 0 ? scaledDotOp.getA() : scaledDotOp.getB();
-    TypedValue<RankedTensorType> res = scaledDotOp.getD();
     bool isFp4 =
         tt::ScaleDotElemType::E2M1 ==
         (opIdx == 0 ? scaledDotOp.getAElemType() : scaledDotOp.getBElemType());
@@ -646,13 +645,9 @@ private:
 
     // Upcast value to computeType (fp16/bf16)
     if (isFp4) {
-      ArrayRef<int64_t> resShape = res.getType().getShape();
-      ArrayRef<int64_t> vShape = v.getType().getShape();
-      int64_t packDim = kDim;
-      if ((opIdx == 0 && resShape[rank - 2] != vShape[rank - 2]) ||
-          (opIdx == 1 && resShape[rank - 1] != vShape[rank - 1])) {
-        packDim = (packDim + 1) % 2;
-      }
+      bool kPack =
+          opIdx == 0 ? scaledDotOp.getLhsKPack() : scaledDotOp.getRhsKPack();
+      int64_t packDim = kPack ? kDim : (opIdx == 0 ? rank - 2 : rank - 1);
       v = ttg::Fp4ToFpOp::create(rewriter, loc, v,
                                  getScalarType(rewriter, computeType), packDim);
     } else {
