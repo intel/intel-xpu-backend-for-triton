@@ -117,15 +117,15 @@ sink rather than a ceiling, so the safe assumption under uncertainty is the
 `UnknownGRFSizeAssumption` (see why `HoistLayoutConversions` correctly
 assumes the opposite, `Smallest`, for the same unknown modes).
 
-Only `'default'` gets a target-specific ceiling here: its own AOT/JIT retry is
-the one path that realizes the `ttig.max_grf_mode` module attribute (512
-B/lane on every non-`cri` target, 1024 B/lane on `cri`, or 1024 B/lane if the
-attribute is absent, e.g. hand-written TTGIR that never went through
-`TritonAnnotateModule`). `'auto'`'s escalation happens inside IGC with no
-backend path that reads back or constrains it, so it always resolves to the
-unconditional 1024 B/lane bound regardless of target or the attribute. There
-is no fixed tensor-size floor; sizes only matter through their contribution to
-the measured pressure.
+Both `'default'` and `'auto'` get a target-specific ceiling here: the
+`ttig.max_grf_mode` module attribute (512 B/lane on every non-`cri` target,
+1024 B/lane on `cri`, or 1024 B/lane if the attribute is absent, e.g.
+hand-written TTGIR that never went through `TritonAnnotateModule`).
+Both additionally cap at `Smallest` once `num_warps > 32`: a larger GRF mode
+is unlaunchable there regardless of which mechanism would have picked it (see
+the `num_warps ≤ 32` constraint above), so `ttig.max_grf_mode` never actually
+takes effect either way. There is no fixed tensor-size floor; sizes only
+matter through their contribution to the measured pressure.
 
 Peak, not live-in, pressure is the gate: `liveInPressure` derives from
 `LivenessBlockInfo::in()`, which excludes block arguments and so never counts the

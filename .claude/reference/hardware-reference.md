@@ -84,7 +84,7 @@ Capabilities queried via Level Zero and set as module attributes:
 | `has_f4_conversions` | `ttig.support_f4_conversion` | FP4 (E2M1) conversions |
 | `has_predicated_io` | `ttig.support_predicated_io` | Predicated load/store |
 | `has_256b_prefetch` | `ttig.support_prefetch_256b` | 256-byte 2D block prefetch |
-| `max_grf_mode` (derived, `get_max_grf_mode()`) | `ttig.max_grf_mode` | Largest GRF mode ("256"/"512") this target's automatic escalation paths select; read by `RegisterPressureAnalysis::getGRFBytesPerHardwareThread` to resolve `UnknownGRFSizeAssumption::Largest` for `'default'` GRF mode only (`'auto'` always uses the unconditional 512-register-mode bound) |
+| `max_grf_mode` (derived, `get_max_grf_mode()`) | `ttig.max_grf_mode` | Largest GRF mode ("256"/"512") this target's automatic escalation paths select; read by `RegisterPressureAnalysis::getGRFBytesPerHardwareThread` to resolve `UnknownGRFSizeAssumption::Largest` for both `'default'` and `'auto'` GRF mode |
 
 ### DPAS Hardware Constants
 

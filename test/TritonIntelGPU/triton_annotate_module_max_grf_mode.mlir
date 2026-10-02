@@ -3,7 +3,7 @@
 
 // COM: Dedicated coverage for the 'max-grf-mode' option: RegisterPressureAnalysis
 // COM: reads the 'ttig.max_grf_mode' module attribute this stamps to resolve
-// COM: UnknownGRFSizeAssumption::Largest for "default" GRF mode ("auto" ignores it).
+// COM: UnknownGRFSizeAssumption::Largest for both "default" and "auto" GRF mode.
 
 module {
   // COM: Ensure 'max-grf-mode' is stamped as the 'ttig.max_grf_mode' module attribute
