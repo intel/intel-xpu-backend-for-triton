@@ -69,7 +69,9 @@ def test_n_spills_reported_per_lane(device, monkeypatch, capfd, warp_size):
     on any spill for LTS.
     """
     monkeypatch.setenv("TRITON_DEBUG", "1")
-    BLOCK = 1024 * 8
+    # Same fixture size as test_auto_grf: CRI's larger (512-GRF) register file
+    # needs a bigger tile to spill; other targets already spill at 8K.
+    BLOCK = 1024 * 32 if is_xpu_cri() else 1024 * 8
     z_tri = torch.empty(BLOCK, dtype=torch.int32, device=device)
 
     # Known-spilling fixture, shared with test_auto_grf.
@@ -90,7 +92,7 @@ def test_n_spills_reported_per_lane(device, monkeypatch, capfd, warp_size):
     # Only the spill path logs numbers: the build-failure path enters the same branch
     # with an unknown `Spills` and reaches neither the threshold nor this format.
     retried = re.compile(r"Detected spills for \"[^\"]*\", retrying with large GRF mode "
-                         r"\(spill (\d+) B/hardware-thread = (\d+) dword-equivalents/lane "
+                         r"\(\w+, spill (\d+) B/hardware-thread = (\d+) dword-equivalents/lane "
                          r"at SIMD(\d+), rebuild at (\d+) B/hardware-thread\)")
     # Keep the last match: it describes the finally selected binary.
     matches = selected.findall(out)

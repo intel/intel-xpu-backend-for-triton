@@ -12,6 +12,10 @@ on:
       - main
       - release/**
 
+concurrency:
+  group: ${{ github.workflow }}-${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'push') && github.run_id || github.event.pull_request.number }}
+  cancel-in-progress: true
+
 permissions: read-all
 
 env:

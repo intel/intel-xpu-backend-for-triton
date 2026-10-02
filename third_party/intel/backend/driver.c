@@ -269,6 +269,11 @@ extern "C" EXPORT_FUNC PyObject *get_device_properties(int device_id) {
       device_properties.numSlices * device_properties.numSubslicesPerSlice;
   // To align with other backends - convert MHz to KHz
   int sm_clock_rate = device_properties.coreClockRate * 1000;
+  // `multiprocessor_count` counts sub-slices (Xe-cores), so
+  // `threads_per_eu * eus_per_subslice` is the number of hardware threads
+  // (sub-groups) that can be resident on a single "SM".
+  int threads_per_eu = device_properties.numThreadsPerEU;
+  int eus_per_subslice = device_properties.numEUsPerSubslice;
 
   ze_device_compute_properties_t compute_properties = {};
   compute_properties.stype = ZE_STRUCTURE_TYPE_DEVICE_COMPUTE_PROPERTIES;
@@ -309,12 +314,13 @@ extern "C" EXPORT_FUNC PyObject *get_device_properties(int device_id) {
     PyTuple_SetItem(subgroup_sizes, i, item);
   }
 
-  return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i, s:i, s:N}", "max_shared_mem",
-                       max_shared_mem, "multiprocessor_count",
+  return Py_BuildValue("{s:i, s:i, s:i, s:i, s:i, s:i, s:i, s:i, s:N}",
+                       "max_shared_mem", max_shared_mem, "multiprocessor_count",
                        multiprocessor_count, "sm_clock_rate", sm_clock_rate,
                        "mem_clock_rate", mem_clock_rate, "mem_bus_width",
                        mem_bus_width, "max_work_group_size", max_group_size,
-                       "sub_group_sizes", subgroup_sizes);
+                       "threads_per_eu", threads_per_eu, "eus_per_subslice",
+                       eus_per_subslice, "sub_group_sizes", subgroup_sizes);
 }
 
 struct KernelInfo {
@@ -498,12 +504,18 @@ struct BuildFlags {
     return false;
   }
 
-  void addLargeGRFSizeFlag() {
-    build_flags_str = build_flags_str.append(" ").append(LARGE_GRF_FLAG);
-  }
-
-  void addXLargeGRFSizeFlag() {
-    build_flags_str = build_flags_str.append(" ").append(XLARGE_GRF_FLAG);
+  // Appends the `-cl-intel-<n>-GRF-per-thread` flag for GRF mode `mode`
+  // ("128", "256" or "512"). The mode is decided by the Python compiler
+  // backend (see `get_max_grf_mode` in compiler.py); an unrecognised value
+  // falls back to 256, the mode every currently-supported target other than
+  // "cri" auto-escalates to.
+  void addGRFSizeFlag(const char *mode) {
+    const char *flag = LARGE_GRF_FLAG;
+    if (std::strcmp(mode, "512") == 0)
+      flag = XLARGE_GRF_FLAG;
+    else if (std::strcmp(mode, "128") == 0)
+      flag = SMALL_GRF_FLAG;
+    build_flags_str = build_flags_str.append(" ").append(flag);
   }
 };
 
@@ -542,20 +554,29 @@ extern "C" EXPORT_FUNC PyObject *get_last_selected_build_flags() {
 }
 
 extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
-  const char *name, *build_flags_ptr, *deviceArch = nullptr;
+  const char *name, *build_flags_ptr, *maxGRFMode = nullptr;
   int shared;
   PyObject *py_bytes;
   int is_spv;
   int devId;
 
   if (!PyArg_ParseTuple(args, "sSispi|z", &name, &py_bytes, &shared,
-                        &build_flags_ptr, &is_spv, &devId, &deviceArch)) {
+                        &build_flags_ptr, &is_spv, &devId, &maxGRFMode)) {
     // PyArg_ParseTuple will set a PyErr
     return NULL;
   }
 
-  const char *resolvedDeviceArch =
-      (deviceArch != nullptr && deviceArch[0] != '\0') ? deviceArch : "unknown";
+  // Largest GRF mode this target auto-escalates to, decided in Python
+  // (`get_max_grf_mode` in compiler.py, carried via `metadata["max_grf_mode"]`)
+  // and handed over rather than re-derived here: this retry runs per-kernel at
+  // JIT time and has no access to the module attributes the compile-time
+  // consumers read. Default "256" preserves this call's own pre-existing
+  // behaviour on a missing argument (it previously resolved to "unknown",
+  // which already selected 256) -- the same absence-preserves-status-quo
+  // principle as `RegisterPressure.cpp`'s divergent 512 default; see that
+  // file's comment if either fallback's rationale ever changes.
+  const char *resolvedMaxGRFMode =
+      (maxGRFMode != nullptr && maxGRFMode[0] != '\0') ? maxGRFMode : "256";
 
   TRITON_ZE_FAIL_IF(devId >= g_sycl_l0_device_list.size(),
                     "Device is not found");
@@ -626,11 +647,12 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
     if (debugEnabled) {
       if (firstBuildFailed)
         std::cout << "(I): Build failed for \"" << kernel_name
-                  << "\", retrying with large GRF mode" << std::endl;
+                  << "\", retrying with large GRF mode (" << resolvedMaxGRFMode
+                  << ")" << std::endl;
       else
         std::cout << "(I): Detected spills for \"" << kernel_name
-                  << "\", retrying with large GRF mode (spill "
-                  << n_spills.getBytes()
+                  << "\", retrying with large GRF mode (" << resolvedMaxGRFMode
+                  << ", spill " << n_spills.getBytes()
                   << " B/hardware-thread = " << n_spills.slotsPerLane()
                   << " dword-equivalents/lane at SIMD"
                   << n_spills.getSubgroupSize() << ", rebuild at "
@@ -638,11 +660,7 @@ extern "C" EXPORT_FUNC PyObject *load_binary(PyObject *args) {
                   << std::endl;
     }
 
-    if (std::strcmp(resolvedDeviceArch, "cri") == 0) {
-      build_flags.addXLargeGRFSizeFlag();
-    } else {
-      build_flags.addLargeGRFSizeFlag();
-    }
+    build_flags.addGRFSizeFlag(resolvedMaxGRFMode);
 
     try {
       auto [l0_module_retry, l0_kernel_retry, n_spills_retry] =
@@ -856,10 +874,17 @@ static int PyKernelArg_init(PyKernelArgObject *self, PyObject *args,
 
 static void PyKernelArg_free(void *ptr) { free(ptr); }
 
-// Zero-initialize with only the required head macro; remaining fields are set
-// in init_PyKernelArgType() to avoid designated initializers (C7555/C7556 on
-// MSVC).
-static PyTypeObject PyKernelArgType = {PyVarObject_HEAD_INIT(NULL, 0)};
+static PyTypeObject PyKernelArgType = {
+    PyVarObject_HEAD_INIT(NULL, 0).tp_name =
+        "triton.backends.intel.PyKernelArg",
+    .tp_basicsize = sizeof(PyKernelArgObject),
+    .tp_itemsize = 0,
+    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_doc = "Kernel Argument Metadata",
+    .tp_new = PyType_GenericNew,
+    .tp_init = (initproc)PyKernelArg_init,
+    .tp_dealloc = (destructor)PyKernelArg_dealloc,
+};
 
 static inline void gpuAssert(ze_result_t code, const char *file, int line) {
   if (code != ZE_RESULT_SUCCESS) {
@@ -967,23 +992,21 @@ typedef void (*SetArgFunc)(sycl::handler &, int, const void *);
 // hot path inside the kernel submit lambda. A small, cache-resident table of
 // function pointers turns what would otherwise be a per-argument switch
 // (branch mispredicts under cache pressure) into a simple indirect call.
-// Positional initialization matches enum order to avoid designated
-// initializers, which require /std:c++20 on MSVC (see extraction_map above).
 static const SetArgFunc set_arg_table[EXTRACTOR_TYPE_COUNT] = {
-    /* EXTRACTOR_UNKOWN_INDEX   */ nullptr,
-    /* EXTRACTOR_POINTER_INDEX  */ set_scalar_arg<void *>,
-    /* EXTRACTOR_INT8_INDEX     */ set_scalar_arg<int8_t>,
-    /* EXTRACTOR_INT16_INDEX    */ set_scalar_arg<int16_t>,
-    /* EXTRACTOR_INT32_INDEX    */ set_scalar_arg<int32_t>,
-    /* EXTRACTOR_INT64_INDEX    */ set_scalar_arg<int64_t>,
-    /* EXTRACTOR_UINT8_INDEX    */ set_scalar_arg<uint8_t>,
-    /* EXTRACTOR_UINT16_INDEX   */ set_scalar_arg<uint16_t>,
-    /* EXTRACTOR_UINT32_INDEX   */ set_scalar_arg<uint32_t>,
-    /* EXTRACTOR_UINT64_INDEX   */ set_scalar_arg<uint64_t>,
-    /* EXTRACTOR_FP16_INDEX     */ set_scalar_arg<uint16_t>,
-    /* EXTRACTOR_BF16_INDEX     */ set_scalar_arg<uint16_t>,
-    /* EXTRACTOR_FP32_INDEX     */ set_scalar_arg<uint32_t>,
-    /* EXTRACTOR_FP64_INDEX     */ set_scalar_arg<uint64_t>,
+    [EXTRACTOR_UNKOWN_INDEX] = nullptr,
+    [EXTRACTOR_POINTER_INDEX] = set_scalar_arg<void *>,
+    [EXTRACTOR_INT8_INDEX] = set_scalar_arg<int8_t>,
+    [EXTRACTOR_INT16_INDEX] = set_scalar_arg<int16_t>,
+    [EXTRACTOR_INT32_INDEX] = set_scalar_arg<int32_t>,
+    [EXTRACTOR_INT64_INDEX] = set_scalar_arg<int64_t>,
+    [EXTRACTOR_UINT8_INDEX] = set_scalar_arg<uint8_t>,
+    [EXTRACTOR_UINT16_INDEX] = set_scalar_arg<uint16_t>,
+    [EXTRACTOR_UINT32_INDEX] = set_scalar_arg<uint32_t>,
+    [EXTRACTOR_UINT64_INDEX] = set_scalar_arg<uint64_t>,
+    [EXTRACTOR_FP16_INDEX] = set_scalar_arg<uint16_t>,
+    [EXTRACTOR_BF16_INDEX] = set_scalar_arg<uint16_t>,
+    [EXTRACTOR_FP32_INDEX] = set_scalar_arg<uint32_t>,
+    [EXTRACTOR_FP64_INDEX] = set_scalar_arg<uint64_t>,
 };
 
 static inline void setScalarArgByType(sycl::handler &cgh, int index,
@@ -1180,28 +1203,48 @@ typedef struct {
   const char *name[MAX_NAMES_PER_EXTRACTOR];
 } Extractor;
 
-// extraction_map is indexed by ExtractorTypeIndex (sequential enum 0..N-1).
-// Positional initialization is used to avoid C99 designated initializers
-// (array [idx]= and struct .field= forms) which require /std:c++20 on MSVC.
-// Field order: {extract, size, alignment, name[2]}.
 Extractor extraction_map[EXTRACTOR_TYPE_COUNT] = {
-    /* EXTRACTOR_UNKOWN_INDEX   */ {NULL, 0, 0, {NULL}},
-    /* EXTRACTOR_POINTER_INDEX  */ {extractPointer, sizeof(void *), 0, {NULL}},
-    /* EXTRACTOR_INT8_INDEX     */ {extractI8, sizeof(int8_t), 0, {"i8"}},
-    /* EXTRACTOR_INT16_INDEX    */ {extractI16, sizeof(int16_t), 0, {"i16"}},
-    /* EXTRACTOR_INT32_INDEX    */
-    {extractI32, sizeof(int32_t), 0, {"i1", "i32"}},
-    /* EXTRACTOR_INT64_INDEX    */ {extractI64, sizeof(int64_t), 0, {"i64"}},
-    /* EXTRACTOR_UINT8_INDEX    */ {extractU8, sizeof(uint8_t), 0, {"u8"}},
-    /* EXTRACTOR_UINT16_INDEX   */ {extractU16, sizeof(uint16_t), 0, {"u16"}},
-    /* EXTRACTOR_UINT32_INDEX   */
-    {extractU32, sizeof(uint32_t), 0, {"u1", "u32"}},
-    /* EXTRACTOR_UINT64_INDEX   */ {extractU64, sizeof(uint64_t), 0, {"u64"}},
-    /* EXTRACTOR_FP16_INDEX     */ {extractFP16, sizeof(uint16_t), 0, {"fp16"}},
-    /* EXTRACTOR_BF16_INDEX     */ {extractBF16, sizeof(uint16_t), 0, {"bf16"}},
-    /* EXTRACTOR_FP32_INDEX     */
-    {extractFP32, sizeof(uint32_t), 0, {"fp32", "f32"}},
-    /* EXTRACTOR_FP64_INDEX     */ {extractFP64, sizeof(uint64_t), 0, {"fp64"}},
+    [EXTRACTOR_UNKOWN_INDEX] =
+        (Extractor){.extract = NULL, .size = 0, .name = NULL},
+    [EXTRACTOR_POINTER_INDEX] = (Extractor){.extract = extractPointer,
+                                            .size = sizeof(void *),
+                                            .name = NULL},
+    [EXTRACTOR_INT8_INDEX] = (Extractor){.extract = extractI8,
+                                         .size = sizeof(int8_t),
+                                         .name = {"i8"}},
+    [EXTRACTOR_INT16_INDEX] = (Extractor){.extract = extractI16,
+                                          .size = sizeof(int16_t),
+                                          .name = {"i16"}},
+    [EXTRACTOR_INT32_INDEX] = (Extractor){.extract = extractI32,
+                                          .size = sizeof(int32_t),
+                                          .name = {"i1", "i32"}},
+    [EXTRACTOR_INT64_INDEX] = (Extractor){.extract = extractI64,
+                                          .size = sizeof(int64_t),
+                                          .name = {"i64"}},
+    [EXTRACTOR_UINT8_INDEX] = (Extractor){.extract = extractU8,
+                                          .size = sizeof(uint8_t),
+                                          .name = {"u8"}},
+    [EXTRACTOR_UINT16_INDEX] = (Extractor){.extract = extractU16,
+                                           .size = sizeof(uint16_t),
+                                           .name = {"u16"}},
+    [EXTRACTOR_UINT32_INDEX] = (Extractor){.extract = extractU32,
+                                           .size = sizeof(uint32_t),
+                                           .name = {"u1", "u32"}},
+    [EXTRACTOR_UINT64_INDEX] = (Extractor){.extract = extractU64,
+                                           .size = sizeof(uint64_t),
+                                           .name = {"u64"}},
+    [EXTRACTOR_FP16_INDEX] = (Extractor){.extract = extractFP16,
+                                         .size = sizeof(uint16_t),
+                                         .name = {"fp16"}},
+    [EXTRACTOR_BF16_INDEX] = (Extractor){.extract = extractBF16,
+                                         .size = sizeof(uint16_t),
+                                         .name = {"bf16"}},
+    [EXTRACTOR_FP32_INDEX] = (Extractor){.extract = extractFP32,
+                                         .size = sizeof(uint32_t),
+                                         .name = {"fp32", "f32"}},
+    [EXTRACTOR_FP64_INDEX] = (Extractor){.extract = extractFP64,
+                                         .size = sizeof(uint64_t),
+                                         .name = {"fp64"}},
 };
 
 Extractor getExtractor(uint8_t index) {
@@ -1617,15 +1660,6 @@ extern "C" EXPORT_FUNC PyObject *launch(PyObject *args) {
 }
 
 extern "C" EXPORT_FUNC PyTypeObject *init_PyKernelArgType() {
-  PyKernelArgType.tp_name = "triton.backends.intel.PyKernelArg";
-  PyKernelArgType.tp_basicsize = sizeof(PyKernelArgObject);
-  PyKernelArgType.tp_itemsize = 0;
-  PyKernelArgType.tp_dealloc = (destructor)PyKernelArg_dealloc;
-  PyKernelArgType.tp_flags = Py_TPFLAGS_DEFAULT;
-  PyKernelArgType.tp_doc = "Kernel Argument Metadata";
-  PyKernelArgType.tp_init = (initproc)PyKernelArg_init;
-  PyKernelArgType.tp_new = PyType_GenericNew;
-
   if (PyType_Ready(&PyKernelArgType) < 0)
     return NULL;
 

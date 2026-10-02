@@ -12,9 +12,8 @@ on:
       - scripts/vllm/**
       - .github/pins/pytorch.txt
   schedule:
-    # Thursday/Sunday 2:05AM PST (UTC-8) or 3:05AM PDT (UTC-7)
-    - cron: "5 10 * * THU"
-    - cron: "5 10 * * SUN"
+    # Daily 2:05AM PST (UTC-8) or 3:05AM PDT (UTC-7)
+    - cron: "5 10 * * *"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || 'ci' }}
