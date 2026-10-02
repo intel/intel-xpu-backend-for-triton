@@ -366,11 +366,16 @@ class ExtensionUtils:
         self.shared_library = ctypes.PyDLL(cache_path)
         self.shared_library.check_extension.restype = ctypes.py_object
         self.shared_library.check_extension.argtypes = (ctypes.c_int, ctypes.c_char_p)
+        self.shared_library.get_device_extensions.restype = ctypes.py_object
+        self.shared_library.get_device_extensions.argtypes = (ctypes.c_int, )
         self.shared_library.get_device_id.restype = ctypes.py_object
         self.shared_library.get_device_id.argtypes = (ctypes.c_int, )
 
     def check_extension(self, device_id: int, extension: bytes) -> bool:
         return self.shared_library.check_extension(device_id, extension)
+
+    def get_device_extensions(self, device_id: int) -> tuple[str, ...] | None:
+        return self.shared_library.get_device_extensions(device_id)
 
     def get_device_id(self, device_idx: int) -> int:
         return self.shared_library.get_device_id(device_idx)
@@ -793,7 +798,7 @@ class XPUDriver(DriverBase):
     @lru_cache
     def _construct_target(self, device):
         import torch
-        from triton.backends.intel.extension_utils import query_device_extensions
+        from triton.backends.intel.extension_utils import query_device_extensions, get_device_extensions
 
         dev_property = torch.xpu.get_device_capability(device)
 
@@ -809,6 +814,7 @@ class XPUDriver(DriverBase):
         # need to query any GPU device
         device_id = dev_property.get("device_id")
         extensions = query_device_extensions(device_id)
+        print(get_device_extensions(device_id))
         dev_property.update(extensions)
         dev_property["__intel_already_queried_extensions__"] = True
         dev_property["core_clock_rate"] = self.utils.get_device_properties(device).get("sm_clock_rate", 0)

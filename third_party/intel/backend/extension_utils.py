@@ -37,14 +37,15 @@ def get_device_extensions_from_env():
 
 def has_device_extension(device_id: int, extension_name: str) -> bool:
     """
-    Check if a device supports a specific OpenCL extension.
+    Check if a device supports a specific SPIR-V extension.
 
     First checks the TRITON_INTEL_DEVICE_EXTENSIONS environment variable.
-    If not set, queries the device directly using a lightweight C utility.
+    If not set, queries the device directly using a lightweight C utility
+    that reads the extensions reported by `zeDeviceGetCompilerInfo`.
 
     Args:
         device_id: Device ID to query (from sycl::ext::intel::info::device::device_id)
-        extension_name: Name of the extension (e.g., 'cl_intel_subgroup_2d_block_io')
+        extension_name: Name of the extension (e.g., 'SPV_INTEL_2d_block_io')
 
     Returns:
         True/False if the extension is supported/not supported, or
@@ -59,6 +60,33 @@ def has_device_extension(device_id: int, extension_name: str) -> bool:
     # This requires minimal SYCL initialization (no PyTorch dependency)
     extension_checker = _get_extension_checker()
     return extension_checker.check_extension(device_id, extension_name.encode())
+
+
+def get_device_extensions(device_id: int) -> frozenset[str] | None:
+    """
+    Query every SPIR-V extension a device's compiler reports in a single call,
+    instead of checking one extension name at a time.
+
+    Backed by the same lightweight C utility and per-device cache as
+    `has_device_extension`: `zeDeviceGetCompilerInfo` runs at most once per
+    device per process.
+
+    Args:
+        device_id: Device ID to query (from sycl::ext::intel::info::device::device_id)
+
+    Returns:
+        A frozenset of extension names, or None if the specific GPU instance
+        is not found. Empty when the device's driver doesn't support the
+        underlying query (e.g. LTS drivers) -- callers that need one of the
+        extensions this backend probes should use `has_device_extension`
+        instead, which falls back to the legacy OpenCL-named query per
+        extension in that case.
+    """
+    extension_checker = _get_extension_checker()
+    extensions = extension_checker.get_device_extensions(device_id)
+    if extensions is None:
+        return None
+    return frozenset(extensions)
 
 
 def query_device_extensions(device_id: int):
@@ -76,13 +104,13 @@ def query_device_extensions(device_id: int):
     """
     extensions = {
         "has_subgroup_matrix_multiply_accumulate":
-        has_device_extension(device_id, "cl_intel_subgroup_matrix_multiply_accumulate"),
+        has_device_extension(device_id, "SPV_INTEL_subgroup_matrix_multiply_accumulate"),
         "has_subgroup_matrix_multiply_accumulate_tensor_float32":
-        has_device_extension(device_id, "cl_intel_subgroup_matrix_multiply_accumulate_tensor_float32"),
+        has_device_extension(device_id, "SPV_INTEL_tensor_float32_conversion"),
         "has_2d_block_io":
-        has_device_extension(device_id, "cl_intel_subgroup_2d_block_io"),
+        has_device_extension(device_id, "SPV_INTEL_2d_block_io"),
         "has_bfloat16_conversion":
-        has_device_extension(device_id, "cl_intel_bfloat16_conversions"),
+        has_device_extension(device_id, "SPV_INTEL_bfloat16_conversion"),
     }
     return {extension: supported for extension, supported in extensions.items() if supported is not None}
 
