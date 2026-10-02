@@ -8,6 +8,10 @@ on:
         description: Run only the short graph timing investigation
         type: boolean
         default: false
+      allow_parallel:
+        description: Allow this run alongside other tuning runs on a separate runner
+        type: boolean
+        default: false
       part:
         description: Tuning part to run (both runs sequentially)
         type: choice
@@ -19,7 +23,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: ua-ci-offline-tune
+  group: ${{ inputs.allow_parallel && format('ua-ci-offline-tune-{0}', github.run_id) || 'ua-ci-offline-tune' }}
   cancel-in-progress: false
 
 env:
