@@ -1,132 +1,168 @@
-name: UA offline tuning with cold graph replay
-run-name: UA CI-input tuning on B580 (${{ github.ref_name }})
+name: vLLM UA benchmarks (part 1 profiles)
 
 on:
   workflow_dispatch:
     inputs:
-      timing_probe:
-        description: Run only the short graph timing investigation
-        type: boolean
-        default: false
-      allow_parallel:
-        description: Allow this run alongside other tuning runs on a separate runner
-        type: boolean
-        default: false
-      part:
-        description: Tuning part to run (both runs sequentially)
-        type: choice
-        default: both
-        options: [both, '1', '2']
+      runner_label:
+        description: Runner label, keep empty for default
+        type: string
+        default: ""
+      tag:
+        description: Tag for benchmark results
+        type: string
+        default: "test"
+      vllm_pin:
+        description: vLLM pin (commit hash), keep empty for default
+        type: string
+        default: ""
+      kernels_hash:
+        description: vLLM XPU kernels commit hash to build from source, keep empty to install vLLM's pinned release
+        type: string
+        default: ""
+  workflow_call:
+    inputs:
+      runner_label:
+        description: Runner label
+        type: string
+      tag:
+        description: Tag for benchmark results
+        type: string
+        # Empty default so the TAG fallback below can resolve pr-<n>/ci from the
+        # caller's event. A non-empty default would short-circuit that expression.
+        default: ""
+      vllm_pin:
+        description: vLLM pin (commit hash), keep empty for default
+        type: string
+        default: ""
+      kernels_hash:
+        description: vLLM XPU kernels commit hash to build from source, keep empty to install vLLM's pinned release
+        type: string
+        default: ""
 
-permissions:
-  contents: read
-  actions: read
-
-concurrency:
-  group: ${{ inputs.allow_parallel && format('ua-ci-offline-tune-{0}', github.run_id) || 'ua-ci-offline-tune' }}
-  cancel-in-progress: false
+permissions: read-all
 
 env:
+  PYTHON_VERSION: "3.12"
+  TAG: ${{ inputs.tag || (github.event_name == 'pull_request' && format('pr-{0}', github.event.number)) || (github.event_name == 'schedule' && 'ci') || 'test' }}
+  HF_TOKEN: ${{ secrets.HF_TOKEN || '' }}
   GH_TOKEN: ${{ github.token }}
-  TRITON_CACHE_DIR: ${{ github.workspace }}/.ua-tuning-cache-${{ github.run_id }}
 
 jobs:
-  tune:
-    if: ${{ !inputs.timing_probe }}
-    name: Tune part ${{ matrix.part }} of 2
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix:
-        part: ${{ fromJSON(inputs.part == 'both' && '[1,2]' || format('[{0}]', inputs.part)) }}
-    runs-on: [linux, b580]
-    timeout-minutes: 1440
+  build:
+    name: vLLM benchmarks
+    runs-on:
+      - linux
+      - ${{ inputs.runner_label || 'b580' }}
+    timeout-minutes: 720
     defaults:
       run:
         shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
     steps:
-      - uses: actions/checkout@v7
+      - name: Print inputs
+        run: |
+          cat <<EOF
+          ${{ toJSON(inputs) }}
+          EOF
+
+      - name: Checkout repository
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: ./.github/actions/setup-pyenv-python
-        with:
-          python-version: '3.12'
-      - name: Install build dependencies
-        run: pip install cmake
-      - uses: ./.github/actions/setup-pytorch
-      - uses: ./.github/actions/setup-triton
-      - uses: ./.github/actions/install-vllm
-      - name: Record environment and inputs
-        run: |
-          mkdir -p reports/profiles
-          ./scripts/capture-hw-details.sh > reports/environment.txt
-          python -m pip freeze > reports/packages.txt
-          git rev-parse HEAD > reports/checkout.txt
-          python scripts/ua_ci_shard.py --part ${{ matrix.part }} --output reports/manifests
-          cp scripts/ua-ci-tuning-shards.json reports/
-          git diff 0ea7fbf49e45b4cf1a3881a66ade4f3ba5a5c7ed -- python third_party include lib cmake > reports/compiler-changes.diff
-          test ! -s reports/compiler-changes.diff
-      - name: Check cold graph timing against CI profiler
-        run: |
-          export PYTHONPATH="$PWD/vllm${PYTHONPATH:+:$PYTHONPATH}"
-          python scripts/ua_ci_diagnostic.py --clear-cache \
-            --vllm-source "$PWD/vllm" --output "$PWD/reports/timing-check" \
-            2>&1 | tee reports/timing-check.log
-          python scripts/ua_check_cold_timing.py reports/timing-check/results.json
-      - name: Apply offline UA patch
-        run: |
-          git -C vllm apply --check "$PWD/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention.patch"
-          git -C vllm apply "$PWD/benchmarks/triton_kernels_benchmark/vllm/unified_attention/unified_attention.patch"
-      - name: Tune BF16 inputs for this part
-        run: |
-          export PYTHONPATH="$PWD/vllm${PYTHONPATH:+:$PYTHONPATH}"
-          python scripts/ua_ci_tune.py --tune --clear-cache \
-            --manifest reports/manifests/bfloat16.json \
-            --save-dir reports/profiles --measurements reports/bf16-measurements.json \
-            --warmup-ms 25 --rep-ms 100 2>&1 | tee reports/bf16-tuning.log
-      - name: Save BF16 profiles and measurements
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: ua-cold-graph-part-${{ matrix.part }}-bf16-checkpoint
-          path: reports
-          if-no-files-found: warn
-      - name: Tune FP8 inputs for this part
-        run: |
-          export PYTHONPATH="$PWD/vllm${PYTHONPATH:+:$PYTHONPATH}"
-          python scripts/ua_ci_tune.py --tune --clear-cache \
-            --manifest reports/manifests/float8_e4m3fn.json \
-            --save-dir reports/profiles --measurements reports/fp8-measurements.json \
-            --warmup-ms 25 --rep-ms 100 2>&1 | tee reports/fp8-tuning.log
-      - name: Upload generated JSONs and measurements
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: ua-cold-graph-part-${{ matrix.part }}-profiles
-          path: reports
-          if-no-files-found: warn
 
-  timing-probe:
-    if: ${{ inputs.timing_probe }}
-    runs-on: [linux, b580]
-    timeout-minutes: 45
-    defaults:
-      run:
-        shell: bash -noprofile --norc -eo pipefail -c "source /opt/intel/oneapi/setvars.sh > /dev/null; source {0}"
-    steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/setup-pyenv-python
-        with:
-          python-version: '3.12'
-      - uses: ./.github/actions/setup-pytorch
-      - name: Probe graph timing
+      - name: Override vLLM pin
+        if: ${{ inputs.vllm_pin }}
         run: |
-          mkdir -p reports
-          ./scripts/capture-hw-details.sh > reports/environment.txt
-          python -m pip freeze > reports/packages.txt
-          python scripts/ua_graph_timing_probe.py --output reports/probe 2>&1 | tee reports/probe.log
-      - uses: actions/upload-artifact@v7
-        if: always()
+          echo "${{ inputs.vllm_pin }}" > scripts/vllm/vllm-pin.txt
+          echo "Overriding vLLM pin to: ${{ inputs.vllm_pin }}"
+
+      - name: Install Python (from pyenv) ${{ inputs.python_version }}
+        uses: ./.github/actions/setup-pyenv-python
         with:
-          name: ua-graph-timing-probe
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Identify Python version
+        run: |
+          PYTHON_VERSION="$(python -c 'import sys; print(f"{sys.version_info[0]}.{ sys.version_info[1]}")')"
+          echo "PYTHON_VERSION=$PYTHON_VERSION" | tee -a $GITHUB_ENV
+
+      - name: Install Python build dependencies
+        run: |
+          pip install cmake
+
+      - name: Setup PyTorch
+        uses: ./.github/actions/setup-pytorch
+        with:
+          lts: ${{ inputs.runner_label == 'lts' }}
+
+      - name: Setup Triton
+        uses: ./.github/actions/setup-triton
+
+      - name: Create reports dir
+        run: |
+          mkdir reports
+          echo "REPORTS=$PWD/reports" >> $GITHUB_ENV
+
+      - name: Install benchmark dependencies
+        id: install
+        run: |
+          pip install transformers 'pandas<3.0' pytest
+
+      - name: Install benchmarks
+        id: install-benchmarks
+        uses: ./.github/actions/install-benchmarks
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          github-token: ${{ github.token }}
+
+      - name: Install vllm
+        id: install-vllm
+        if: ${{ steps.install-benchmarks.outcome == 'success' && !cancelled() }}
+        uses: ./.github/actions/install-vllm
+        with:
+          kernels-hash: ${{ inputs.kernels_hash }}
+
+      - name: Report environment details
+        timeout-minutes: 1
+        run: |
+          cat <<EOF | tee "$REPORTS/.env"
+          TIMESTAMP=$(date '+%Y%m%d%H%M%S')
+          GITHUB_RUN_ID=$GITHUB_RUN_ID
+          GITHUB_RUN_NUMBER=$GITHUB_RUN_NUMBER
+          GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT
+          PYTHON_VERSION=$PYTHON_VERSION
+          TRITON_REPO=$GITHUB_REPOSITORY
+          TRITON_COMMIT_ID=$GITHUB_SHA
+          TRITON_BRANCH=$GITHUB_REF_NAME
+          VLLM_PIN=$(cat scripts/vllm/vllm-pin.txt)
+          VLLM_XPU_KERNELS_VERSION=$(pip show vllm-xpu-kernels | awk '/^Version:/ {print $2}')
+          OS=${{ runner.os }}
+          EOF
+          ./scripts/capture-hw-details.sh | tee -a "$REPORTS/.env"
+
+      - name: Record profile coverage
+        run: |
+          cp scripts/ua-part1-profile-coverage.json "$REPORTS/"
+          cp -r benchmarks/triton_kernels_benchmark/vllm/unified_attention/profiles "$REPORTS/profiles-used"
+
+      - name: Run vllm unified attention bf16
+        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
+        run: |
+          source ./scripts/capture-hw-details.sh
+
+          cd benchmarks/triton_kernels_benchmark/vllm
+          bash run_benchmark.sh unified_attention --reports $REPORTS --tag $TAG
+
+      - name: Run vllm unified attention fp8
+        if: ${{ steps.install-vllm.outcome == 'success' && !cancelled() }}
+        run: |
+          source ./scripts/capture-hw-details.sh
+
+          cd benchmarks/triton_kernels_benchmark/vllm
+          FP8="1" bash run_benchmark.sh unified_attention --reports $REPORTS --tag $TAG
+
+      - name: Upload benchmark reports
+        if: ${{ steps.install.outcome == 'success' && !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: benchmark-reports
           path: reports
