@@ -1,11 +1,29 @@
-#include "ReduceScanCommon.h"
+//===- ScanOpToLLVM.cpp - Scan lowering -----------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+//
+// Fork of lib/Conversion/TritonGPUToLLVM/ScanOpToLLVM.cpp. The only divergence
+// is in the in-warp phase (`warpScan` below), which tries the hardware
+// sub-group scan before falling back to the upstream shuffle chain. Everything
+// else is kept verbatim to keep future upstream fixes portable by hand.
+//
+//===----------------------------------------------------------------------===//
+
+#include "lib/Conversion/TritonGPUToLLVM/ReduceScanCommon.h"
+
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
-#include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/STLExtras.h"
+
+#include "PatternTritonGPUOpToLLVM.h"
+#include "TargetInfo.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -52,31 +70,43 @@ scanThreadContiguousElements(SmallVector<SmallVector<Value>> &srcValues,
 // contiguous group of elements.
 static void warpScan(SmallVector<SmallVector<Value>> &srcValues,
                      ConversionPatternRewriter &rewriter,
-                     const TargetInfoBase &targetInfo,
-                     ScanLoweringHelper &helper, Value laneIdAxis) {
+                     const intel::TargetInfo &targetInfo, triton::ScanOp op,
+                     ScanLoweringHelper &helper, Value laneIdAxis,
+                     unsigned warpSize) {
   Location loc = helper.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   unsigned scanElementsPerThreads = helper.getAxisNumElementsPerThread();
   unsigned elementStride = helper.getAxisElementStride();
   unsigned threadStride = helper.getAxisThreadStride();
   unsigned scanDim = helper.getAxisNumThreadsPerWarpWithUniqueData();
+  // The builtin walks the lanes in lane order. A full-sub-group scan axis
+  // implies unit thread stride for every layout
+  // `ScanLoweringHelper::isSupported` admits today, but gate on it rather than
+  // assert, so widening that set cannot silently start scanning the wrong lanes
+  // in a release build.
+  bool tryHardwareScan = threadStride == 1;
   for (unsigned srcIndex = 0; srcIndex < srcValues.size(); srcIndex++) {
     unsigned elementIdx = (srcIndex / elementStride) % scanElementsPerThreads;
     // Only consider the last element of each contiguous chunk of elements.
     if (elementIdx != scanElementsPerThreads - 1)
       continue;
-    // Reduce within warps.
+    // Reduce within warps. `warpScan` leaves `acc` untouched when it declines,
+    // so the shuffle chain below stays a complete fallback.
     SmallVector<Value> acc = srcValues[srcIndex];
-    for (unsigned i = 1; i <= scanDim / 2; i <<= 1) {
-      SmallVector<Value> shfl(acc.size());
-      for (unsigned j = 0; j < acc.size(); ++j) {
-        shfl[j] = targetInfo.shuffleUp(rewriter, loc, acc[j], i * threadStride);
-      }
-      Value mask = b.icmp_sge(laneIdAxis, b.i32_val(i));
-      SmallVector<Value> tempAcc =
-          accumulate(helper, rewriter, shfl, acc, mask);
-      for (unsigned j = 0; j < acc.size(); ++j) {
-        acc[j] = b.select(mask, tempAcc[j], acc[j]);
+    if (!tryHardwareScan ||
+        !targetInfo.warpScan(rewriter, loc, acc, op, scanDim, warpSize)) {
+      for (unsigned i = 1; i <= scanDim / 2; i <<= 1) {
+        SmallVector<Value> shfl(acc.size());
+        for (unsigned j = 0; j < acc.size(); ++j) {
+          shfl[j] =
+              targetInfo.shuffleUp(rewriter, loc, acc[j], i * threadStride);
+        }
+        Value mask = b.icmp_sge(laneIdAxis, b.i32_val(i));
+        SmallVector<Value> tempAcc =
+            accumulate(helper, rewriter, shfl, acc, mask);
+        for (unsigned j = 0; j < acc.size(); ++j) {
+          acc[j] = b.select(mask, tempAcc[j], acc[j]);
+        }
       }
     }
     srcValues[srcIndex] = std::move(acc);
@@ -331,7 +361,7 @@ public:
   using ConvertTritonGPUReduceScanToLLVMPattern<
       triton::ScanOp>::ConvertTritonGPUReduceScanToLLVMPattern;
   explicit ScanOpConversion(LLVMTypeConverter &typeConverter,
-                            const TargetInfoBase &targetInfo,
+                            const intel::TargetInfo &targetInfo,
                             PatternBenefit benefit = 1)
       : ConvertTritonGPUReduceScanToLLVMPattern<triton::ScanOp>(typeConverter,
                                                                 benefit),
@@ -346,7 +376,7 @@ public:
   }
 
 private:
-  const TargetInfoBase &targetInfo;
+  const intel::TargetInfo &targetInfo;
   std::tuple<SmallVector<Value>, Value>
   getMultiDimLaneId(ConversionPatternRewriter &rewriter,
                     ScanLoweringHelper &helper, Value laneId) const;
@@ -359,7 +389,7 @@ private:
                      Value warpId) const;
   LogicalResult emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
                              ConversionPatternRewriter &rewriter,
-                             const TargetInfoBase &targetInfo) const;
+                             const intel::TargetInfo &targetInfo) const;
 };
 
 std::tuple<SmallVector<Value>, Value>
@@ -461,7 +491,7 @@ flipSrcValues(Location loc, triton::ScanOp op,
 LogicalResult
 ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
                                ConversionPatternRewriter &rewriter,
-                               const TargetInfoBase &targetInfo) const {
+                               const intel::TargetInfo &targetInfo) const {
   ScanLoweringHelper helper(op);
   auto loc = helper.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -499,7 +529,7 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   scanThreadContiguousElements(srcValues, rewriter, helper);
   // Apply warp level scan to the last element of each chunk of contiguous
   // elements.
-  warpScan(srcValues, rewriter, targetInfo, helper, laneIdAxis);
+  warpScan(srcValues, rewriter, targetInfo, op, helper, laneIdAxis, iWarpSize);
 
   if (axisNumWarps > 1) {
     // Slow path for the case where there are multiple warps with unique data on
@@ -566,8 +596,8 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
 }
 } // namespace
 
-void mlir::triton::populateScanOpToLLVMPatterns(
+void mlir::triton::intel::populateScanOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    const TargetInfoBase &targetInfo, PatternBenefit benefit) {
+    const TargetInfo &targetInfo, PatternBenefit benefit) {
   patterns.add<ScanOpConversion>(typeConverter, targetInfo, benefit);
 }
