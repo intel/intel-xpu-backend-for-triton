@@ -12,11 +12,7 @@ import torch
 
 import triton_kernels_benchmark as benchmark_suite
 
-# This supports both the current dispatcher name and older direct name.
-try:
-    from sglang.kernels.ops.quantization.fp8_kernel import w8a8_block_fp8_matmul_triton as w8a8_block_fp8_matmul
-except ImportError:
-    from sglang.kernels.ops.quantization.fp8_kernel import w8a8_block_fp8_matmul
+from sglang.kernels.ops.gemm.fp8_kernel import w8a8_block_fp8_matmul_triton as w8a8_block_fp8_matmul
 
 DEVICE_NAME = torch.xpu.get_device_name()
 DEVICE_TOTAL_MEMORY = torch.xpu.get_device_properties().total_memory
