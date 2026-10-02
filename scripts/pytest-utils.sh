@@ -105,9 +105,14 @@ pytest() {
     fi
 
     export TEST_UNSKIP
+    # Intel-only pytest support (TEST_UNSKIP) lives in a plugin so the shared
+    # conftest files stay identical to upstream. PYTHONPATH is set for this command only,
+    # otherwise every call would append the same entry to the caller's environment.
+    pytest_extra_args+=("-p" "intel_test_support")
     # Exit code 5 means no tests were collected, which is not an error for a shard:
     # a shard may get no tests at all if the suite has fewer tests than shards.
-    python -u -m pytest "${pytest_extra_args[@]}" "$@" || [[ $? -eq 5 && $USING_SHARDS = true ]] || handle_test_error
+    PYTHONPATH="$SCRIPTS_DIR/pytest_plugins${PYTHONPATH:+:$PYTHONPATH}" \
+        python -u -m pytest "${pytest_extra_args[@]}" "$@" || [[ $? -eq 5 && $USING_SHARDS = true ]] || handle_test_error
 }
 
 capture_runtime_env() {

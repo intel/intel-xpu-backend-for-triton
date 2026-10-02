@@ -5,7 +5,7 @@ from triton.backends.compiler import GPUTarget
 from triton.knobs import CompileTimes
 from triton.compiler.compiler import ASTSource, IRSource
 
-from typing import Any, Union, Callable
+from typing import Any, Union
 
 import torch
 
@@ -17,7 +17,7 @@ def cumsum_kernel(ptr):
     tl.store(block, tl.cumsum(x, 0))
 
 
-def test_compile_stats(device: str, fresh_knobs: Any, fresh_triton_cache_scope: Callable) -> None:
+def test_compile_stats(device: str, fresh_knobs: Any, fresh_triton_cache: str) -> None:
     captured: Union[tuple[Union[ASTSource, IRSource], dict[str, Any], dict[str, Any], CompileTimes, bool], None] = None
 
     def compile_listener(src: Union[ASTSource, IRSource], metadata: dict[str, str], metadata_group: dict[str, Any],
@@ -29,8 +29,7 @@ def test_compile_stats(device: str, fresh_knobs: Any, fresh_triton_cache_scope: 
     fresh_knobs.compilation.listener = compile_listener
 
     x = torch.randn(4, device=device)
-    with fresh_triton_cache_scope():
-        cumsum_kernel[(1, )](x)
+    cumsum_kernel[(1, )](x)
 
     assert captured is not None
 
