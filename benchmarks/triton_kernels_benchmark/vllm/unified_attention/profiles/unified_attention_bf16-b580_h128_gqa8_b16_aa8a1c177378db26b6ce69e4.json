@@ -3,10 +3,11 @@
   "entries": [
     {
       "config": {
-        "block_m": 32,
+        "block_m": 64,
         "grf_mode": "256",
-        "num_stages": 1,
-        "num_warps": 4,
+        "heads_per_program": 1,
+        "num_stages": 2,
+        "num_warps": 8,
         "tile_size": 16
       },
       "key": {
@@ -22,6 +23,7 @@
       "config": {
         "block_m": 16,
         "grf_mode": "256",
+        "heads_per_program": "MAX",
         "num_stages": 2,
         "num_warps": 4,
         "tile_size": 16
@@ -39,8 +41,9 @@
       "config": {
         "block_m": 16,
         "grf_mode": "256",
-        "num_stages": 1,
-        "num_warps": 2,
+        "heads_per_program": "MAX",
+        "num_stages": 2,
+        "num_warps": 8,
         "tile_size": 16
       },
       "key": {
@@ -68,5 +71,5 @@
     "use_td": true,
     "v_dtype": "bfloat16"
   },
-  "triton_version": "3.8.0"
+  "triton_version": "3.9.0"
 }
