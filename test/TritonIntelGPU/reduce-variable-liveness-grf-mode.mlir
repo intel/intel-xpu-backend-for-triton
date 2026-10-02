@@ -30,8 +30,7 @@
 // COM:
 // COM: For "default" and "auto" alike, that means the largest mode *this target's
 // COM: own automatic escalation* reaches, not the largest mode it can be explicitly
-// COM: told to use (BMG and PVC both accept an explicit grf_mode='512'; 256 is only
-// COM: where their automatic path stops), and not the largest any device supports.
+// COM: told to use, and not the largest any device supports.
 // COM: Modules 1-4 never set `ttig.max_grf_mode`, so they exercise the
 // COM: pre-target-aware fallback: unconditionally 512-register mode (1024 B/lane).
 // COM:

@@ -163,16 +163,13 @@ public:
     /// ever select for this target. This per-target ceiling applies to both
     /// `grf_mode='default'` and `grf_mode='auto'`.
     ///
-    /// The ceiling is per-target: the AOT/JIT retry (`make_zebin`/`driver.c`)
-    /// only ever selects 512-register mode on "cri", every other target
-    /// (including BMG and PVC) caps at 256-register mode (see
+    /// The ceiling is per-target: only "cri" reaches 512-register mode, every
+    /// other target (including BMG and PVC) caps at 256-register mode (see
     /// `get_max_grf_mode()` in third_party/intel/backend/compiler.py, the
     /// single source of truth for this policy). That value is mirrored onto
     /// the module as the `ttig.max_grf_mode` attribute (stamped by
     /// TritonAnnotateModule) and read back here when resolving this case for
-    /// both `'default'` and `'auto'`. BMG and PVC do support 512-register
-    /// mode explicitly (`grf_mode='512'` works on both); they just never
-    /// auto-escalate to it, which is all this per-target ceiling describes.
+    /// both `'default'` and `'auto'`.
     /// Both additionally cap at `Smallest` once `num_warps > 32`: a larger
     /// GRF mode reduces the maximum launchable work-group size, so the
     /// kernel can never actually run at a larger mode no matter which
