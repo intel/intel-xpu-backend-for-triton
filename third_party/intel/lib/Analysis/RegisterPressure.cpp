@@ -74,26 +74,19 @@ unsigned RegisterPressureAnalysis::getGRFBytesPerHardwareThread(
   // caller; see UnknownGRFSizeAssumption's documentation.
   if (unknownAssumption == UnknownGRFSizeAssumption::Smallest)
     return SmallestGRFModeBytes;
-  // 'auto' escalation happens inside IGC, which decides on its own with no
-  // path in this backend that reads back or constrains its choice.
-  // ttig.max_grf_mode (below) is only ever realized by the 'default' path's
-  // own rebuild, so it has no established relationship to what IGC actually
-  // picks under 'auto' and must not be applied there.
-  if (grfMode != "default")
-    return LargestGRFModeBytes;
   // A larger GRF mode reduces the maximum launchable work-group size, so a
-  // num_warps > 32 kernel can never actually run at a larger mode: the AOT
-  // path (make_zebin) skips the escalation attempt outright, and the JIT
-  // path (driver.c) attempts it and fails to build. Same ceiling either
-  // way, regardless of what `ttig.max_grf_mode` says.
+  // num_warps > 32 kernel can never actually run at a larger mode, no matter
+  // which mechanism would have picked it: the cap applies to both
+  // `'default'` and `'auto'`.
   if (lookupNumWarps(mod) > 32)
     return SmallestGRFModeBytes;
   // Largest: the true ceiling is per-target, mirrored onto the module via the
   // ttig.max_grf_mode attribute (see UnknownGRFSizeAssumption::Largest's
-  // documentation). Reuse the same explicit-mode table above so a value other
-  // than exactly "256"/"512"/"128" (a typo, a future mode, or the attribute
-  // being absent) cannot silently resolve to the wrong budget: it falls
-  // through to the behaviour-preserving 512-register-mode default below.
+  // documentation), and applies to both `'default'` and `'auto'`. Reuse the
+  // same explicit-mode table above so a value other than exactly
+  // "256"/"512"/"128" (a typo, a future mode, or the attribute being absent)
+  // cannot silently resolve to the wrong budget: it falls through to the
+  // behaviour-preserving 512-register-mode default below.
   if (auto maxGRFMode = mod->getAttrOfType<StringAttr>(
           TritonIntelGPUDialect::getMaxGRFModeAttrName()))
     if (unsigned explicitBytes = explicitGRFModeToBytes(maxGRFMode.getValue()))
