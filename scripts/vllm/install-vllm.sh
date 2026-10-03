@@ -95,7 +95,11 @@ clone_repo() {
   git clone --single-branch -b "$DEFAULT_BRANCH" "$repo_url" "$target_dir"
 
   if [[ "$latest" == false ]]; then
-    git -C "$target_dir" checkout "$pinned_commit"
+    # A commit outside the default branch, such as a release tag, has to be fetched explicitly.
+    if ! git -C "$target_dir" checkout "$pinned_commit"; then
+      git -C "$target_dir" fetch origin "$pinned_commit"
+      git -C "$target_dir" checkout FETCH_HEAD
+    fi
   fi
 
   update_submodules_and_clean "$target_dir"
@@ -190,9 +194,23 @@ use_venv=false
 clean=true
 build_kernels=false
 kernels_hash=""
+pin_file="$SCRIPTS_DIR/vllm/vllm-pin.txt"
+fix_patch=true
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --pin-file)
+      if [[ -z "${2:-}" ]]; then
+        echo "ERROR: --pin-file requires an argument." >&2
+        exit 1
+      fi
+      pin_file="$2"
+      shift 2
+      ;;
+    --no-fix-patch)
+      fix_patch=false
+      shift
+      ;;
     --kernels-source)
       build_kernels=true
       shift
@@ -234,6 +252,10 @@ vLLM is built and installed from source at the pinned commit hash as an editable
 install and vLLM XPU kernels are installed from the release pinned by vLLM.
 
 Options:
+  --pin-file <path>              Read the vLLM commit hash from the given file instead of vllm-pin.txt.
+
+  --no-fix-patch                 Do not apply vllm-fix.patch to the vLLM source.
+
   --kernels-source               Build vLLM XPU kernels from source at the top of the $DEFAULT_BRANCH branch.
 
   --kernels-hash <hash>          Build vLLM XPU kernels from source at the given commit hash. Implies --kernels-source.
@@ -287,7 +309,7 @@ fi
 
 vllm_pinned_commit=""
 if [[ "$latest" == false ]]; then
-  vllm_pinned_commit="$(<"$SCRIPTS_DIR/vllm/vllm-pin.txt")"
+  vllm_pinned_commit="$(<"$pin_file")"
   echo "*** Using the pinned vllm commit: $vllm_pinned_commit. ***"
 fi
 
@@ -318,7 +340,9 @@ fi
 
 # Apply patches to vLLM source code.
 if [[ "$clean" == true ]]; then
-  git -C "$VLLM_PROJ" apply "$SCRIPTS_DIR/vllm/vllm-fix.patch"
+  if [[ "$fix_patch" == true ]]; then
+    git -C "$VLLM_PROJ" apply "$SCRIPTS_DIR/vllm/vllm-fix.patch"
+  fi
   # The patcher rewrites hardcoded CUDA references in vLLM's tests to XPU ones.
   if [[ "$target_device" == xpu ]]; then
     python "$SCRIPTS_DIR/vllm/vllm_xpu_patch.py" "$VLLM_PROJ"
