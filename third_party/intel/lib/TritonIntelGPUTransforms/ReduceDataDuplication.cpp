@@ -4,6 +4,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -19,6 +20,49 @@ using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 
 namespace {
+
+/// Return true if \p op, or an op nested in it, may write memory, so a
+/// shared-memory store must not be moved above it. This mirrors
+/// `hasWriteSideEffect` in TritonGPUReorderInstructions, except that:
+///  - writes to the `L2Cache` resource are ignored: `ttig.prefetch` and
+///    `ttig.descriptor_prefetch` declare `MemWrite<L2Cache>` only to keep
+///    CSE/DCE from removing them (see CodeSinking.cpp). The resource IDs are
+///    compared directly because `isa<>` on resources is tree-based;
+///  - unknown effects count as a write, so ops without a memory-effect
+///    interface (e.g. `ttg.barrier`, `ttg.async_wait`) are not crossed.
+bool mayWriteMemory(Operation *op) {
+  std::optional<SmallVector<MemoryEffects::EffectInstance>> effects =
+      getEffectsRecursively(op);
+  if (!effects)
+    return true;
+  return llvm::any_of(*effects, [](const MemoryEffects::EffectInstance &e) {
+    if (isa<MemoryEffects::Read, MemoryEffects::Allocate, MemoryEffects::Free>(
+            e.getEffect()))
+      return false;
+    return e.getResource()->getResourceID() !=
+           triton::gpu::intel::L2Cache::getResourceID();
+  });
+}
+
+/// Return true if an op that may write memory executes between \p start and
+/// \p end, where \p start dominates \p end. Ops are scanned in the block of
+/// \p start up to and including the ancestor of \p end; that ancestor (e.g.
+/// the loop containing \p end) is checked as a whole, since all of its body
+/// can run between \p start and \p end on some iteration.
+bool crossesMemoryWrite(Operation *start, Operation *end) {
+  Operation *ancestor = start->getBlock()->findAncestorOpInBlock(*end);
+  if (!ancestor)
+    return true;
+  for (Operation *op = start->getNextNode(); op; op = op->getNextNode()) {
+    if (op == end)
+      return false;
+    if (mayWriteMemory(op))
+      return true;
+    if (op == ancestor)
+      return false;
+  }
+  return true;
+}
 
 /// Return the op after which the shared-memory staging buffer that replaces
 /// \p cvtOp should be allocated, or nullptr to allocate it at \p cvtOp.
@@ -40,6 +84,11 @@ Operation *getLoopInvariantAllocAnchor(ConvertLayoutOp cvtOp) {
   // Staging a scalar-derived value for the whole loop costs shared memory for
   // no benefit; TritonGPUReorderInstructions skips these for the same reason.
   if (isa<arith::ConstantOp, triton::SplatOp>(srcDef))
+    return nullptr;
+  // Keep the store after ops that may write memory, e.g. waits that complete
+  // earlier asynchronous reads of shared memory, as
+  // TritonGPUReorderInstructions does when hoisting allocations.
+  if (crossesMemoryWrite(srcDef, cvtOp))
     return nullptr;
   return srcDef;
 }
