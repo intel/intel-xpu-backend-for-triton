@@ -9,6 +9,7 @@
 #include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/MapVector.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringSwitch.h"
@@ -59,6 +60,28 @@ enum class SubtreeOrder {
   Unknown, ///< Cannot be placed relative to the reference at all.
 };
 
+/// Why a candidate was refused, recorded rather than acted on at once so the
+/// shared-source phase (`reconsiderSharedSources`) can still overturn it; see
+/// `FunctionHoistState`.
+///
+/// Declared here (rather than where it is first used, in
+/// `reconsiderSharedSources`) so that `hoistRetiresSource` below can see
+/// `Refusal`'s definition and consult a function's refusals so far when
+/// computing credit; see its doc comment.
+enum class RefusalReason {
+  Pressure,
+  FunctionPeakExact,
+  FunctionPeakFallback,
+};
+
+struct Refusal {
+  ttg::ConvertLayoutOp cvtOp;
+  scf::ForOp forOp;
+  RefusalReason reason;
+  /// Set once a joint hoist overturns this refusal.
+  bool overturned = false;
+};
+
 /// Returns where \p subject sits relative to \p reference. `Unknown` means
 /// \p subject lives in a region that does not nest under \p reference's block
 /// (including a region *containing* it), so callers must take the conservative
@@ -89,9 +112,33 @@ static SubtreeOrder subtreeOrder(Operation *subject, Operation *reference) {
 /// real. Asking the frozen analysis made the answer depend on which of two
 /// loops sharing a source the pass reached first (`runOnOperation` visits loops
 /// last-to-first so this view is final).
-static bool hoistRetiresSource(ttg::ConvertLayoutOp cvtOp, scf::ForOp forOp) {
+///
+/// \p priorRefusals additionally excuses a user that is itself a *refused*
+/// hoist candidate for the exact same (source, result type) pair as \p cvtOp.
+/// Such a twin, though still physically sitting in its own loop right now,
+/// does not survive the pipeline once \p cvtOp is hoisted: both derive their
+/// hoist anchor from the same source (`hoistAnchor` depends only on
+/// `cvtOp.getSrc()`), so the hoisted \p cvtOp dominates the twin, and
+/// `remove_layout_conversions`'s backward-rematerialization cache
+/// (`getRematValue` + a dominance check) replaces the twin with it. Counting
+/// the twin as a real reader double-charges this hoist for a read that will
+/// not remain, which is what denies a sibling loop's hoist its own credit in
+/// a shared-source cascade (see ticket #8053's cost-model gap analysis,
+/// finding G1 -- confirmed empirically there via the compiled TTGIR, where
+/// exactly this merge is what keeps the twin from being duplicated).
+static bool hoistRetiresSource(ttg::ConvertLayoutOp cvtOp, scf::ForOp forOp,
+                               ArrayRef<Refusal> priorRefusals = {}) {
+  auto isUnenforceableTwin = [&](Operation *user) {
+    auto otherCvt = dyn_cast<ttg::ConvertLayoutOp>(user);
+    if (!otherCvt || otherCvt.getSrc() != cvtOp.getSrc() ||
+        otherCvt.getType() != cvtOp.getType())
+      return false;
+    return llvm::any_of(priorRefusals, [&](const Refusal &r) {
+      return !r.overturned && r.cvtOp == otherCvt;
+    });
+  };
   for (Operation *user : cvtOp.getSrc().getUsers()) {
-    if (user == cvtOp.getOperation())
+    if (user == cvtOp.getOperation() || isUnenforceableTwin(user))
       continue;
     switch (subtreeOrder(user, forOp)) {
     case SubtreeOrder::Inside:
@@ -170,14 +217,18 @@ static scf::ForOp getHoistCandidateLoop(ttg::ConvertLayoutOp cvtOp) {
 /// The credit comes from the analysis rather than the source's type because
 /// `liveInPressure` filters out rematerializable values: a constant source
 /// never occupied the bytes its type suggests.
-static int
-hoistDeltaBytes(ttg::ConvertLayoutOp cvtOp, scf::ForOp forOp,
-                const ttg::intel::RegisterPressureAnalysis &analysis) {
+///
+/// \p priorRefusals is forwarded to `hoistRetiresSource` so a sibling loop's
+/// already-refused, equivalent conversion does not withhold this credit; see
+/// that function's doc comment.
+static int hoistDeltaBytes(ttg::ConvertLayoutOp cvtOp, scf::ForOp forOp,
+                           const ttg::intel::RegisterPressureAnalysis &analysis,
+                           ArrayRef<Refusal> priorRefusals = {}) {
   unsigned hoistBytes =
       ttg::intel::RegisterPressureAnalysis::getPerThreadSizeInBytes(
           cvtOp.getType());
   unsigned retiredBytes =
-      hoistRetiresSource(cvtOp, forOp)
+      hoistRetiresSource(cvtOp, forOp, priorRefusals)
           ? analysis.liveInContribution(forOp.getBody(), cvtOp.getSrc())
           : 0;
   return static_cast<int>(hoistBytes) - static_cast<int>(retiredBytes);
@@ -1057,23 +1108,6 @@ private:
   DenseMap<Operation *, uint64_t> regionPeakCache;
 };
 
-/// Why a candidate was refused, recorded rather than acted on at once so the
-/// shared-source phase (`reconsiderSharedSources`) can still overturn it; see
-/// `FunctionHoistState`.
-enum class RefusalReason {
-  Pressure,
-  FunctionPeakExact,
-  FunctionPeakFallback,
-};
-
-struct Refusal {
-  ttg::ConvertLayoutOp cvtOp;
-  scf::ForOp forOp;
-  RefusalReason reason;
-  /// Set once a joint hoist overturns this refusal.
-  bool overturned = false;
-};
-
 /// Decision state for one function, shared between the one-at-a-time phase
 /// (`hoistCvtDotOpsOutOfLoop`) and the shared-source phase
 /// (`reconsiderSharedSources`), and settled by `finalizeRefusals`.
@@ -1150,9 +1184,10 @@ static void hoistCvtDotOpsOutOfLoop(
     // Ties are outcome-neutral: equal deltas project the same values whichever
     // of the two is decided first.
     unsigned bestIdx = 0;
-    int bestDelta = hoistDeltaBytes(pending[0], forOp, analysis);
+    int bestDelta =
+        hoistDeltaBytes(pending[0], forOp, analysis, state.refusals);
     for (unsigned i = 1, e = pending.size(); i != e; ++i) {
-      int delta = hoistDeltaBytes(pending[i], forOp, analysis);
+      int delta = hoistDeltaBytes(pending[i], forOp, analysis, state.refusals);
       if (delta < bestDelta) {
         bestDelta = delta;
         bestIdx = i;
@@ -1298,7 +1333,7 @@ reconsiderSharedSources(FunctionHoistState &state,
     for (auto &[loop, refusal] : firstInLoop) {
       scf::ForOp forOp = refusal->forOp;
       int &delta = deltas[loop];
-      if (hoistRetiresSource(refusal->cvtOp, forOp))
+      if (hoistRetiresSource(refusal->cvtOp, forOp, state.refusals))
         delta -=
             static_cast<int>(analysis.liveInContribution(forOp.getBody(), src));
       int projectedBytes =

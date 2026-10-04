@@ -51,12 +51,17 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // -----
 
-// COM: Case 45's shape: six refused alone (loop 6 by the peak, loops 5..1 by
-// COM: the loop-level gate), then the group of six is refused by the measured
-// COM: peak. Each still counts once, under its first reason: +6 considered,
-// COM: +5 rejected_pressure, +1 under whichever peak counter loop 6's
-// COM: projection reported.
-// STATS: [HoistLayoutConversions] considered=8 hoisted=2 rejected_pressure=5 rejected_function_peak_exact=1 rejected_function_peak_fallback=0 skipped_other=0
+// COM: Case 45's shape: loops 6..2 are refused alone by the peak (five
+// COM: candidates). Loop 1, decided last, is credited as if %src were fully
+// COM: retired (loops 6..2's refusals share %src's exact (source, result
+// COM: type), so hoisting %cvt1 would dominate and retire them too -- see
+// COM: hoistRetiresSource's doc comment), so it clears both gates and is
+// COM: hoisted directly. The group of six is then refused by the joint
+// COM: trial's measured peak regardless, same as before this credit fix,
+// COM: but %cvt1 is no longer part of that group (it already hoisted): +6
+// COM: considered, +1 hoisted, +5 under whichever peak counter loops 6..2's
+// COM: projections reported.
+// STATS: [HoistLayoutConversions] considered=8 hoisted=3 rejected_pressure=0 rejected_function_peak_exact=5 rejected_function_peak_fallback=0 skipped_other=0
 // STATS-NOT: [HoistLayoutConversions]
 
 
@@ -115,7 +120,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 
 // COM: Case 46's shape: both refused alone by the loop-level gate, and the
 // COM: group refused by it again: +2 considered, +2 rejected_pressure.
-// STATS: [HoistLayoutConversions] considered=10 hoisted=2 rejected_pressure=7 rejected_function_peak_exact=1 rejected_function_peak_fallback=0 skipped_other=0
+// STATS: [HoistLayoutConversions] considered=10 hoisted=3 rejected_pressure=2 rejected_function_peak_exact=5 rejected_function_peak_fallback=0 skipped_other=0
 // STATS-NOT: [HoistLayoutConversions]
 
 

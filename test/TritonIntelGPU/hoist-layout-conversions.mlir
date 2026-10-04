@@ -13,7 +13,7 @@
 // COM: check the sum: hoisted + the three rejected counters + skipped_other must
 // COM: equal considered.
 // STATS: [HoistLayoutConversions] considered={{[0-9]+}} hoisted={{[0-9]+}} rejected_pressure={{[0-9]+}} rejected_function_peak_exact={{[0-9]+}} rejected_function_peak_fallback={{[0-9]+}} skipped_other={{[0-9]+}}
-// STATS: [HoistLayoutConversions] considered=67 hoisted=34 rejected_pressure=12 rejected_function_peak_exact=7 rejected_function_peak_fallback=5 skipped_other=9
+// STATS: [HoistLayoutConversions] considered=67 hoisted=35 rejected_pressure=7 rejected_function_peak_exact=11 rejected_function_peak_fallback=5 skipped_other=9
 // STATS-NOT: [HoistLayoutConversions]
 
 // COM: Case 1: Hoist ConvertLayoutOp with DotOperandEncoding out of scf.for loop.
@@ -2427,14 +2427,23 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // COM: are light. Hoisting all six retires %src but leaves six 64-byte results
 // COM: spanning loop 1: 640 + 6*64 + 32 = 1056 at %t4, above the 992 ceiling.
 // COM: (Five siblings would reach exactly 992 and be accepted; six is the
-// COM: smallest group this shape refuses.) No proper subset helps either: any
-// COM: conversion left behind keeps %src live through loop 1.
-// COM:   * 128-GRF/default: loop 6 is refused alone by the peak (1056), loops
-// COM:     5..1 by the loop-level gate (352 >= 204.8); the group of all six is
-// COM:     moved, measured at 1056, and moved back. All six are stamped.
-// COM:   * 256-GRF: loops 6..2 are refused alone by the peak (1056 each), loop
-// COM:     1 hoists alone at 992; the group {%cvt6 .. %cvt2} measures 1056 and
-// COM:     is moved back. Only %cvt1 is hoisted.
+// COM: smallest group this shape refuses.) No proper subset of the group
+// COM: helps either, by the same measured-peak math: moving fewer than all six
+// COM: still leaves %src live through loop 1, so the joint trial always
+// COM: measures 1056 and is moved back regardless of group size.
+// COM:
+// COM: Loops 6..2 are refused alone by the peak (1056 each). Loop 1 is decided
+// COM: last (loops are visited last-to-first) and sees loops 6..2's refusals
+// COM: already recorded: since those refused conversions share %src's exact
+// COM: (source, result type), hoisting %cvt1 would dominate and retire them
+// COM: too (remove_layout_conversions merges a dominated equivalent conversion
+// COM: into whatever dominates it), so %cvt1's hoist is credited as if %src
+// COM: were fully retired. That credit clears both the loop-level gate and the
+// COM: peak gate at 992, independent of GRF mode -- 128-GRF/default and
+// COM: 256-GRF now hoist identically. The joint phase then retries
+// COM: {%cvt6 .. %cvt2} as a group (since %src already has a hoisted sibling),
+// COM: measures 1056, and moves it back: only %cvt1 is hoisted, same outcome
+// COM: as before this credit fix at 256-GRF, now also reached at 128-GRF.
 
 #blocked45 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas45 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
@@ -2449,12 +2458,10 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
     %c1_i32 = arith.constant 1 : i32
     %src = arith.addf %arg0, %arg0 : tensor<128x16xf16, #blocked45>
     // CHECK: arith.addf
-    // GRF256-NEXT: ttg.convert_layout %{{[0-9a-z_]+}} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
-    // GRF256-NEXT: scf.for
-    // GRF256-NOT: ttg.convert_layout
-    // GRF256: tt.dot
-    // GRF128-NEXT: scf.for
-    // GRF128-NEXT: ttg.convert_layout %{{.*}} {tt.no_licm} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // CHECK-NEXT: ttg.convert_layout %{{[0-9a-z_]+}} : tensor<128x16xf16, #{{.*}}> -> tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #{{.*}}, kWidth = 1}>>
+    // CHECK-NEXT: scf.for
+    // CHECK-NOT: ttg.convert_layout
+    // CHECK: tt.dot
     %r1 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %arg2) -> (tensor<128x16xf32, #dpas45>) : i32 {
       %cvt1 = ttg.convert_layout %src : tensor<128x16xf16, #blocked45> -> tensor<128x16xf16, #dot_a45>
       %t1 = arith.addf %acc, %acc : tensor<128x16xf32, #dpas45>
