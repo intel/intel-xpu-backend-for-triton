@@ -3,9 +3,10 @@
   "entries": [
     {
       "config": {
-        "block_m": 64,
+        "block_m": 128,
         "grf_mode": "default",
-        "num_stages": 2,
+        "heads_per_program": "MAX",
+        "num_stages": 1,
         "num_warps": 8,
         "tile_size": 32
       },
@@ -22,9 +23,10 @@
       "config": {
         "block_m": 16,
         "grf_mode": "256",
-        "num_stages": 1,
-        "num_warps": 2,
-        "tile_size": 32
+        "heads_per_program": "MAX",
+        "num_stages": 2,
+        "num_warps": 8,
+        "tile_size": 64
       },
       "key": {
         "is_3d": true,
@@ -39,9 +41,10 @@
       "config": {
         "block_m": 16,
         "grf_mode": "256",
-        "num_stages": 1,
-        "num_warps": 2,
-        "tile_size": 32
+        "heads_per_program": "MAX",
+        "num_stages": 2,
+        "num_warps": 8,
+        "tile_size": 64
       },
       "key": {
         "is_3d": true,
@@ -54,9 +57,10 @@
     },
     {
       "config": {
-        "block_m": 64,
-        "grf_mode": "default",
-        "num_stages": 2,
+        "block_m": 128,
+        "grf_mode": "256",
+        "heads_per_program": "MAX",
+        "num_stages": 1,
         "num_warps": 8,
         "tile_size": 32
       },
@@ -73,9 +77,10 @@
       "config": {
         "block_m": 16,
         "grf_mode": "default",
+        "heads_per_program": "MAX",
         "num_stages": 2,
-        "num_warps": 2,
-        "tile_size": 32
+        "num_warps": 8,
+        "tile_size": 64
       },
       "key": {
         "is_3d": false,
@@ -84,40 +89,6 @@
         "num_seqs": 256,
         "q_len_bucket": 2,
         "query_work": 146944
-      }
-    },
-    {
-      "config": {
-        "block_m": 16,
-        "grf_mode": "default",
-        "num_stages": 1,
-        "num_warps": 2,
-        "tile_size": 32
-      },
-      "key": {
-        "is_3d": true,
-        "kv_len_bucket": 2,
-        "num_segments": 16,
-        "num_seqs": 3,
-        "q_len_bucket": 0,
-        "query_work": 192
-      }
-    },
-    {
-      "config": {
-        "block_m": 32,
-        "grf_mode": "256",
-        "num_stages": 2,
-        "num_warps": 4,
-        "tile_size": 32
-      },
-      "key": {
-        "is_3d": false,
-        "kv_len_bucket": 2,
-        "num_segments": 1,
-        "num_seqs": 3,
-        "q_len_bucket": 2,
-        "query_work": 8640
       }
     }
   ],
@@ -136,5 +107,5 @@
     "use_td": true,
     "v_dtype": "float8_e4m3fn"
   },
-  "triton_version": "3.8.0"
+  "triton_version": "3.9.0"
 }
