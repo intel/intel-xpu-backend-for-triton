@@ -11,9 +11,10 @@
 // COM: cases 16, 45 and 46 of hoist-layout-conversions.mlir, which explain the
 // COM: byte math; this file runs at grf-mode=default only.
 
-// COM: Case 16's shape: both conversions refused alone (one by the peak, one
-// COM: by the loop-level gate), both overturned by the group. Two considered,
-// COM: two hoisted, nothing rejected.
+// COM: Case 16's shape: loop 2's conversion refused alone by the peak, loop
+// COM: 1's credited past that refused twin and hoisted alone, then loop 2's
+// COM: overturned by the singleton group. Two considered, two hoisted,
+// COM: nothing rejected.
 // STATS: [HoistLayoutConversions] considered=2 hoisted=2 rejected_pressure=0 rejected_function_peak_exact=0 rejected_function_peak_fallback=0 skipped_other=0
 // STATS-NOT: [HoistLayoutConversions]
 
@@ -56,7 +57,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // COM: retired (loops 6..2's refusals share %src's exact (source, result
 // COM: type), so hoisting %cvt1 would dominate and retire them too -- see
 // COM: hoistRetiresSource's doc comment), so it clears both gates and is
-// COM: hoisted directly. The group of six is then refused by the joint
+// COM: hoisted directly. The group of five is then refused by the joint
 // COM: trial's measured peak regardless, same as before this credit fix,
 // COM: but %cvt1 is no longer part of that group (it already hoisted): +6
 // COM: considered, +1 hoisted, +5 under whichever peak counter loops 6..2's

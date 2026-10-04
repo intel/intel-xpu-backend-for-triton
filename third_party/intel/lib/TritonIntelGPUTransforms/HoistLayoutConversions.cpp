@@ -80,6 +80,15 @@ struct Refusal {
   RefusalReason reason;
   /// Set once a joint hoist overturns this refusal.
   bool overturned = false;
+  /// Set once an accepted hoist structurally merges this refusal away (see
+  /// `collectMergingTwins`) and this refusal's own loop was charged, in
+  /// `netBytes`, for that merge (see `chargeMergedTwins`) -- whether or not
+  /// the hoist's own delta actually relied on excusing this refusal as an
+  /// unenforceable twin (see `hoistRetiresSource`). From then on the loop's
+  /// figure already reflects the merge, so `reconsiderSharedSources` must not
+  /// price this refusal's move again. It may still excuse a later hoist's
+  /// credit: the merge retires the source for every hoisting loop.
+  bool mergeCharged = false;
 };
 
 /// Returns where \p subject sits relative to \p reference. `Unknown` means
@@ -98,6 +107,62 @@ static SubtreeOrder subtreeOrder(Operation *subject, Operation *reference) {
                                               : SubtreeOrder::Before;
 }
 
+/// Returns true if `remove_layout_conversions` will replace \p twin -- a
+/// conversion of the same source to the same type as \p cvtOp -- with \p
+/// cvtOp's result once \p cvtOp is hoisted out of \p forOp. That pass's
+/// backward rematerialization reuses an earlier conversion of the same (value,
+/// encoding) pair only if it properly dominates the later one, and never for a
+/// dot operand whose parent is a blocked layout: it returns for those before
+/// consulting its remat cache at all (an FMA dot's operands).
+///
+/// Dominance follows from where `hoistAnchor` puts \p cvtOp. Below a defining
+/// operation it dominates every user of the source, \p twin included. A block
+/// argument has none, so \p cvtOp lands just above \p forOp instead and
+/// dominates only what nests inside \p forOp or follows it in its block: a
+/// twin in a loop after an `scf.if` holding \p forOp, say, is not replaced.
+static bool mergesIntoHoist(ttg::ConvertLayoutOp cvtOp, Operation *twin,
+                            scf::ForOp forOp) {
+  auto rtType = dyn_cast<RankedTensorType>(cvtOp.getType());
+  auto dotEnc =
+      rtType
+          ? dyn_cast_or_null<ttg::DotOperandEncodingAttr>(rtType.getEncoding())
+          : ttg::DotOperandEncodingAttr();
+  if (!dotEnc || isa<ttg::BlockedEncodingAttr>(dotEnc.getParent()))
+    return false;
+  if (cvtOp.getSrc().getDefiningOp())
+    return true;
+  SubtreeOrder order = subtreeOrder(twin, forOp);
+  return order == SubtreeOrder::Inside || order == SubtreeOrder::After;
+}
+
+/// Appends to \p twinIdxs the index, within \p refusals, of every
+/// non-overturned refusal that `remove_layout_conversions` will replace with
+/// \p cvtOp's result once it is hoisted out of \p forOp: same source, same
+/// result type, `mergesIntoHoist` holding.
+///
+/// Unlike `hoistRetiresSource`'s own twin match, this does not consult
+/// \p cvtOp's credit decision at all -- not `mergeFits`, and not whether
+/// `hoistRetiresSource` judged \p cvtOp's own hoist to retire the source.
+/// Those two questions are about whether *this* hoist's delta may treat the
+/// twin as absent; this one is about which twins the hoist makes
+/// `remove_layout_conversions` merge away regardless, which is unconditional
+/// on the structural match alone. A twin `mergeFits` refuses, or one left
+/// out because `hoistRetiresSource` returned false for an unrelated reader,
+/// still merges once \p cvtOp is actually hoisted -- see `chargeMergedTwins`,
+/// which this collects for.
+static void collectMergingTwins(ttg::ConvertLayoutOp cvtOp, scf::ForOp forOp,
+                                ArrayRef<Refusal> refusals,
+                                SmallVectorImpl<unsigned> &twinIdxs) {
+  for (auto [idx, r] : llvm::enumerate(refusals)) {
+    ttg::ConvertLayoutOp otherCvt = r.cvtOp;
+    if (r.overturned || otherCvt.getSrc() != cvtOp.getSrc() ||
+        otherCvt.getType() != cvtOp.getType())
+      continue;
+    if (mergesIntoHoist(cvtOp, otherCvt.getOperation(), forOp))
+      twinIdxs.push_back(idx);
+  }
+}
+
 /// Returns true if hoisting \p cvtOp out of \p forOp retires \p cvtOp's source
 /// from the loop, i.e. once \p cvtOp has moved out, nothing remaining inside
 /// the loop reads the source *and* nothing after the loop does either, so it
@@ -114,28 +179,48 @@ static SubtreeOrder subtreeOrder(Operation *subject, Operation *reference) {
 /// last-to-first so this view is final).
 ///
 /// \p priorRefusals additionally excuses a user that is itself a *refused*
-/// hoist candidate for the exact same (source, result type) pair as \p cvtOp.
-/// Such a twin, though still physically sitting in its own loop right now,
-/// does not survive the pipeline once \p cvtOp is hoisted: both derive their
-/// hoist anchor from the same source (`hoistAnchor` depends only on
-/// `cvtOp.getSrc()`), so the hoisted \p cvtOp dominates the twin, and
-/// `remove_layout_conversions`'s backward-rematerialization cache
-/// (`getRematValue` + a dominance check) replaces the twin with it. Counting
-/// the twin as a real reader double-charges this hoist for a read that will
-/// not remain, which is what denies a sibling loop's hoist its own credit in
-/// a shared-source cascade (see ticket #8053's cost-model gap analysis,
-/// finding G1 -- confirmed empirically there via the compiled TTGIR, where
-/// exactly this merge is what keeps the twin from being duplicated).
-static bool hoistRetiresSource(ttg::ConvertLayoutOp cvtOp, scf::ForOp forOp,
-                               ArrayRef<Refusal> priorRefusals = {}) {
+/// hoist candidate for the exact same (source, result type) pair as \p cvtOp,
+/// provided `mergesIntoHoist` holds for it. Such a twin, though still
+/// physically sitting in its own loop right now, does not survive the
+/// pipeline once \p cvtOp is hoisted: `remove_layout_conversions`'s
+/// backward-rematerialization cache (`getRematValue` + a dominance check)
+/// replaces it with the hoisted \p cvtOp. Counting the twin as a real reader
+/// double-charges this hoist for a read that will not remain, which is what
+/// denies a sibling loop's hoist its own credit in a shared-source cascade --
+/// confirmed empirically on `_attn_bwd` via the compiled TTGIR, where exactly
+/// this merge is what keeps the twin from being duplicated. A twin
+/// `mergesIntoHoist` rejects
+/// stays in its loop and keeps reading the source there, so it is a real
+/// reader like any other.
+///
+/// The merge also changes the twin's *own* loop, which this credit says
+/// nothing about: that loop stops reading the source and reads \p cvtOp's
+/// hoisted result instead, exactly as if the twin itself had been hoisted.
+/// When \p mergeFits is set, a twin in a loop other than \p forOp that is not
+/// yet `mergeCharged` is excused only if \p mergeFits accepts that change for
+/// the twin's loop; a twin it refuses is a real reader too, so the credit is
+/// never what pushes another loop past a gate the pass enforces (see
+/// `hoistCvtDotOpsOutOfLoop`). This governs only whether *this* hoist's own
+/// delta may treat the twin as absent, not whether the twin's own loop gets
+/// charged for the merge -- that is `collectMergingTwins`' job, asked
+/// unconditionally of every accepted hoist regardless of what this function
+/// returns (see `chargeMergedTwins`).
+static bool
+hoistRetiresSource(ttg::ConvertLayoutOp cvtOp, scf::ForOp forOp,
+                   ArrayRef<Refusal> priorRefusals = {},
+                   llvm::function_ref<bool(const Refusal &)> mergeFits = {}) {
   auto isUnenforceableTwin = [&](Operation *user) {
     auto otherCvt = dyn_cast<ttg::ConvertLayoutOp>(user);
     if (!otherCvt || otherCvt.getSrc() != cvtOp.getSrc() ||
-        otherCvt.getType() != cvtOp.getType())
+        otherCvt.getType() != cvtOp.getType() ||
+        !mergesIntoHoist(cvtOp, user, forOp))
       return false;
-    return llvm::any_of(priorRefusals, [&](const Refusal &r) {
-      return !r.overturned && r.cvtOp == otherCvt;
-    });
+    for (const Refusal &r : priorRefusals) {
+      if (r.overturned || r.cvtOp != otherCvt)
+        continue;
+      return !mergeFits || r.mergeCharged || r.forOp == forOp || mergeFits(r);
+    }
+    return false;
   };
   for (Operation *user : cvtOp.getSrc().getUsers()) {
     if (user == cvtOp.getOperation() || isUnenforceableTwin(user))
@@ -218,17 +303,19 @@ static scf::ForOp getHoistCandidateLoop(ttg::ConvertLayoutOp cvtOp) {
 /// `liveInPressure` filters out rematerializable values: a constant source
 /// never occupied the bytes its type suggests.
 ///
-/// \p priorRefusals is forwarded to `hoistRetiresSource` so a sibling loop's
-/// already-refused, equivalent conversion does not withhold this credit; see
-/// that function's doc comment.
-static int hoistDeltaBytes(ttg::ConvertLayoutOp cvtOp, scf::ForOp forOp,
-                           const ttg::intel::RegisterPressureAnalysis &analysis,
-                           ArrayRef<Refusal> priorRefusals = {}) {
+/// \p priorRefusals and \p mergeFits are forwarded to `hoistRetiresSource` so
+/// a sibling loop's already-refused, equivalent conversion does not withhold
+/// this credit; see that function's doc comment.
+static int
+hoistDeltaBytes(ttg::ConvertLayoutOp cvtOp, scf::ForOp forOp,
+                const ttg::intel::RegisterPressureAnalysis &analysis,
+                ArrayRef<Refusal> priorRefusals = {},
+                llvm::function_ref<bool(const Refusal &)> mergeFits = {}) {
   unsigned hoistBytes =
       ttg::intel::RegisterPressureAnalysis::getPerThreadSizeInBytes(
           cvtOp.getType());
   unsigned retiredBytes =
-      hoistRetiresSource(cvtOp, forOp, priorRefusals)
+      hoistRetiresSource(cvtOp, forOp, priorRefusals, mergeFits)
           ? analysis.liveInContribution(forOp.getBody(), cvtOp.getSrc())
           : 0;
   return static_cast<int>(hoistBytes) - static_cast<int>(retiredBytes);
@@ -1137,6 +1224,70 @@ static int liveInThreshold(unsigned grfBudget) {
   return static_cast<int>(grfBudget * 4 / 5);
 }
 
+/// Charges each loop whose twin the just-accepted hoist out of \p forOp makes
+/// `remove_layout_conversions` merge away, for the merge that pass performs
+/// unconditionally once that hoist exists.
+///
+/// `remove_layout_conversions` replaces every twin `mergesIntoHoist` allows
+/// with the hoisted result (see `collectMergingTwins`, which gathers \p
+/// twinIdxs), whether or not `hoistRetiresSource` excused it from this
+/// hoist's own delta, and whether or not `reconsiderSharedSources` later
+/// moves the twin, so the twin's loop ends up exactly as if the twin had been
+/// hoisted: the result becomes live-in, and the source -- which the merge
+/// proves nothing outside the twins reads at or after \p forOp -- stops
+/// being. That is `hoistDeltaBytes` of the twin, the same substitution
+/// phase 2 prices when it moves a group, charged here once per loop and
+/// flagged `mergeCharged` so phase 2 does not price it a second time whatever
+/// its own verdict. Several twins in one loop merge into the one result, so
+/// only the first is charged. A twin in \p forOp itself costs nothing more:
+/// \p forOp's own delta already retired the source and charged the result it
+/// merges into. A twin already charged for an earlier hoist of the same pair
+/// is skipped; its loop's merge is already priced.
+///
+/// \p twinIdxs is every *currently known* refusal `collectMergingTwins`
+/// structurally matches to \p forOp's hoist -- not only the ones this hoist's
+/// own credit relied on (that gap, a sibling hoisting on its own uncredited
+/// merits still merging an unexcused twin away for free, is closed by asking
+/// \p twinIdxs this way regardless of what `mergeFits` decided). One gap
+/// remains, and is not closed here: a same-pair conversion refused *later*,
+/// in a loop decided after \p forOp (so not yet in \p state's refusals when
+/// this runs), also merges into the hoisted result once that later loop is
+/// decided, but its loop keeps the figure its own refusal left it at,
+/// uncorrected -- `state.refusals` cannot be asked about a refusal that has
+/// not happened yet. Not a conservative overcharge in general, only when the
+/// merging result is no bigger per lane than the retired source (dst <=
+/// src); when dst > src -- the replicated dot_b shape the twin credit
+/// targets -- the loop's true post-merge live-in is higher than its recorded
+/// figure, an undercharge a later phase-2 group gated on that loop can be
+/// fooled by (see
+/// `test/TritonIntelGPU/hoist-layout-conversions-uncharged-merge.mlir` for a
+/// constructed repro of this remaining gap).
+static void
+chargeMergedTwins(ArrayRef<unsigned> twinIdxs, scf::ForOp forOp,
+                  const ttg::intel::RegisterPressureAnalysis &analysis,
+                  FunctionHoistState &state) {
+  llvm::SmallPtrSet<Operation *, 4> chargedLoops;
+  for (unsigned idx : twinIdxs) {
+    Refusal &twin = state.refusals[idx];
+    if (twin.mergeCharged)
+      continue;
+    twin.mergeCharged = true;
+    Operation *twinLoop = twin.forOp.getOperation();
+    if (twinLoop == forOp.getOperation() ||
+        !chargedLoops.insert(twinLoop).second)
+      continue;
+    // A twin's loop was decided before \p forOp's, so its entry exists. Looked
+    // up rather than indexed: the caller holds a reference into `netBytes`
+    // that an insertion's rehash would invalidate.
+    auto it = state.netBytes.find(twinLoop);
+    assert(it != state.netBytes.end() && "twin's loop never decided");
+    if (it == state.netBytes.end())
+      continue;
+    it->second +=
+        hoistDeltaBytes(twin.cvtOp, twin.forOp, analysis, state.refusals);
+  }
+}
+
 /// Decide, for every hoisting candidate of a single \p forOp, whether to hoist
 /// it out of the loop or to reject it on register pressure grounds.
 ///
@@ -1178,6 +1329,48 @@ static void hoistCvtDotOpsOutOfLoop(
   // budget.
   int threshold = liveInThreshold(grfBudget);
 
+  // Whether a refused twin's downstream merge, which a credit past it relies
+  // on, keeps the twin's loop within this same loop-level gate. This does not
+  // look at why the twin was refused (`Refusal::reason` is never read here):
+  // it simply reruns the loop-level gate for the twin's own loop, at that
+  // loop's current figure plus the delta the merge would add. A twin the
+  // loop-level gate itself refused will, by construction, still fail this
+  // same gate run again unless a merge charge has since lowered its loop's
+  // figure: its own refusal already described the merged loop exactly, and
+  // the credit must not be what overrides it. A twin only the peak gate
+  // refused was never checked against the loop-level gate as failing, so it
+  // commonly keeps its credit here -- but that is not because the merged
+  // state is known to be no worse: this function never re-examines the peak
+  // gate's own concern, the whole-function peak, for the twin's loop at all.
+  // Measured on the kernel this asymmetry targets (_attn_bwd's forced config
+  // at grf256), the merge is not safe by that measure: the peak gate refused
+  // the K twin at a projected 1876, but after HLC and the downstream merge
+  // both run, the real function peak is 1940, over both that refused figure
+  // and HLC's 1812 ceiling. The asymmetry is kept anyway, backed by hardware
+  // evidence rather than by this projection: at that config n_spills=0,
+  // matching main, so the reported peak overstates physical demand there.
+  // The twin's delta is asked without this predicate, so the check cannot
+  // recurse.
+  auto mergeFits = [&](const Refusal &twin) {
+    scf::ForOp twinForOp = twin.forOp;
+    Operation *twinLoop = twinForOp.getOperation();
+    auto it = state.netBytes.find(twinLoop);
+    if (it == state.netBytes.end())
+      return false;
+    int delta =
+        hoistDeltaBytes(twin.cvtOp, twinForOp, analysis, state.refusals);
+    int projected =
+        static_cast<int>(analysis.liveInPressure(twinForOp.getBody())) +
+        it->second + delta;
+    if (delta <= 0 || projected < threshold)
+      return true;
+    LDBG("No twin credit: merging would leave its loop at liveIn="
+         << analysis.liveInPressure(twinForOp.getBody()) << " + alreadyHoisted="
+         << it->second << " + thisHoist=" << delta << " = " << projected
+         << " B/lane, past 80% of budget=" << grfBudget << " B/lane");
+    return false;
+  };
+
   SmallVector<ttg::ConvertLayoutOp> pending(candidates);
   while (!pending.empty()) {
     // Pick the cheapest remaining candidate, breaking ties in program order.
@@ -1185,9 +1378,10 @@ static void hoistCvtDotOpsOutOfLoop(
     // of the two is decided first.
     unsigned bestIdx = 0;
     int bestDelta =
-        hoistDeltaBytes(pending[0], forOp, analysis, state.refusals);
+        hoistDeltaBytes(pending[0], forOp, analysis, state.refusals, mergeFits);
     for (unsigned i = 1, e = pending.size(); i != e; ++i) {
-      int delta = hoistDeltaBytes(pending[i], forOp, analysis, state.refusals);
+      int delta = hoistDeltaBytes(pending[i], forOp, analysis, state.refusals,
+                                  mergeFits);
       if (delta < bestDelta) {
         bestDelta = delta;
         bestIdx = i;
@@ -1235,6 +1429,13 @@ static void hoistCvtDotOpsOutOfLoop(
          << liveInBytes << " + alreadyHoisted=" << netBytes
          << " + thisHoist=" << bestDelta << " = " << projectedBytes
          << " B/lane budget=" << grfBudget << " B/lane");
+    // Every refusal `remove_layout_conversions` will merge into `cvtOp`'s
+    // result, not just the ones this hoist's own credit relied on:
+    // `mergesIntoHoist` only looks at `forOp`, the twin, and the source's
+    // defining op, none of which `cvtOp`'s own position affects, so this can
+    // run before or after the move with the same answer.
+    SmallVector<unsigned> mergingTwins;
+    collectMergingTwins(cvtOp, forOp, state.refusals, mergingTwins);
     // Hoist the conversion out of the loop, to the program point the projection
     // above was measured at.
     if (Operation *anchor = hoistAnchor(cvtOp, forOp))
@@ -1246,6 +1447,7 @@ static void hoistCvtDotOpsOutOfLoop(
     netBytes += bestDelta;
     state.hoistedSources.insert(cvtOp.getSrc());
     peakGate.noteHoisted();
+    chargeMergedTwins(mergingTwins, forOp, analysis, state);
   }
 }
 
@@ -1269,11 +1471,20 @@ static void moveToHoistAnchor(ttg::ConvertLayoutOp cvtOp, scf::ForOp forOp) {
 /// hoist-layout-conversions.mlir is the shape: one source feeding a conversion
 /// in each of two sibling loops. Alone, the later loop's hoist lands above the
 /// earlier loop, whose own conversion still holds the source live through it,
-/// so the peak rises; and the earlier loop's hoist earns no credit because the
-/// later loop still reads the source. Together, the source dies right after
-/// the two conversions and the function's peak falls. Re-queueing a refusal
-/// once a sibling is hoisted is not enough: in that shape no sibling is ever
-/// hoisted alone at 128-GRF, so there is no such moment.
+/// so the peak rises; and the earlier loop's hoist earns its credit only
+/// because the later loop's refused conversion is an unenforceable twin (see
+/// `hoistRetiresSource`). Together, the source dies right after the two
+/// conversions and the function's peak falls. Re-queueing a refusal once a
+/// sibling is hoisted is not enough: without a twin to credit past -- the
+/// result types differ, as in case 50 -- no sibling is ever hoisted alone at
+/// 128-GRF, so there is no such moment.
+///
+/// A group made only of `mergeCharged` refusals still gets a trial, though it
+/// merges downstream whatever the verdict: an accepted trial moves it out of
+/// its loops, and every later trial in this phase is measured against, and
+/// takes its ceiling from, the IR that leaves. Its trial spends the rebuild cap
+/// like any other, and a refused one leaves its members counted as refusals
+/// although none survives the pipeline.
 ///
 /// A group is decided by applying it and measuring, since the single-candidate
 /// projection has no way to express several moves at once. It must pass both
@@ -1323,6 +1534,16 @@ reconsiderSharedSources(FunctionHoistState &state,
     llvm::MapVector<Operation *, int> deltas;
     llvm::MapVector<Operation *, Refusal *> firstInLoop;
     for (Refusal *refusal : group) {
+      // Its loop already carries this move's effect: an earlier hoist already
+      // made this refusal's merge inevitable and charged its loop for it (see
+      // `chargeMergedTwins`), whether or not that hoist's own credit relied
+      // on this refusal specifically. Skipping it here avoids pricing that
+      // same merge a second time. This does not drop the whole loop out of
+      // the gate: a different member of this group sharing the loop but not
+      // this refusal's (source, type) pair, or one not yet merge-charged, is
+      // still priced below.
+      if (refusal->mergeCharged)
+        continue;
       Operation *loop = refusal->forOp.getOperation();
       deltas[loop] += static_cast<int>(
           ttg::intel::RegisterPressureAnalysis::getPerThreadSizeInBytes(

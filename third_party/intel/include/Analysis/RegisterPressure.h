@@ -163,7 +163,9 @@ public:
   /// nested in \p func: registers are allocated per kernel, so a per-kernel
   /// allocation must cover the maximum over all blocks, not any one block's.
   ///
-  /// Shares its block walk with `print()` so the two cannot drift apart.
+  /// `print()` performs its own, separate walk; the two report the same
+  /// figure by construction (both take the max over every block of \p func),
+  /// not because they share code.
   unsigned peakPressure(FunctionOpInterface func) const;
 
   /// Returns the per-thread register pressure in bytes immediately *above*
@@ -374,8 +376,8 @@ private:
   bool isRematerializable(Value value) const;
 
   /// Returns the peak of `peakPressure(Block *)` over every block nested in
-  /// \p root, in the walk order `print()` reports them in. Shared by
-  /// `peakPressure(FunctionOpInterface)` and `print()`.
+  /// \p root. Used by `peakPressure(FunctionOpInterface)`; `print()` performs
+  /// its own, separate walk rather than calling this.
   unsigned peakPressureOverNestedBlocks(Operation *root) const;
 
   LivenessAnalysis liveness;
