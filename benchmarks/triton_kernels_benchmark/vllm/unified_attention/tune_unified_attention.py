@@ -1,14 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tune XPU attention with graph replay and export device-specific JSON configs.
 
-Run ``--tune --manifest inputs.json --save-dir profiles`` to generate configs.
+Run ``--model MODEL --tune --save-dir profiles`` to generate configs.
+Use ``--batch-size``, ``--query-len`` and ``--kv-len`` for workload ranges.
 Omit ``--tune`` to benchmark configs from the same folder.
+For exact CI inputs, use ``tune_unified_attention_manifest.py --manifest inputs.json``.
 """
 
 from __future__ import annotations
-
-# Exact integer checks reject bools in workload manifests.
-# pylint: disable=unidiomatic-typecheck
 
 import argparse
 import json
@@ -21,10 +20,13 @@ import time
 from collections import defaultdict
 from contextlib import contextmanager
 from dataclasses import asdict
+from itertools import product
 from pathlib import Path
 
 import torch
 import triton
+from vllm.transformers_utils.config import get_config, get_hf_text_config
+from vllm.utils.argparse_utils import FlexibleArgumentParser
 from vllm.v1.attention.ops import triton_unified_attention_config as runtime
 from vllm.v1.attention.ops.triton_unified_attention import unified_attention
 
@@ -68,67 +70,92 @@ def config_id(config):
     return "fallback" if config is None else canonical(config)
 
 
-# pylint: disable-next=too-many-branches
-def normalize_workloads(raw):
-    if not isinstance(raw, list) or not raw:
-        raise ValueError("Manifest must be a nonempty JSON list")
-    cases, ids = [], set()
-    for index, source in enumerate(raw):
-        case = dict(source)
-        case.setdefault("id", f"case-{index:04d}")
-        if not isinstance(case["id"], str) or case["id"] in ids:
-            raise ValueError("Every workload needs a unique string id")
-        ids.add(case["id"])
-        case.setdefault("q_layout", "contiguous")
-        if case["q_layout"] not in ("contiguous", "qkv"):
-            raise ValueError("q_layout must be contiguous or qkv")
-        case.setdefault("kv_layout", "contiguous")
-        if case["kv_layout"] not in ("contiguous", "interleaved"):
-            raise ValueError("kv_layout must be contiguous or interleaved")
-        case.setdefault("dtype", "bfloat16")
-        case["dtype"] = {"bf16": "bfloat16", "fp16": "float16", "fp8":
-                         "float8_e4m3fn"}.get(case["dtype"], case["dtype"])
-        if case["dtype"] not in ("bfloat16", "float16", "float8_e4m3fn"):
-            raise ValueError("Supported query/K/V dtypes: bfloat16, float16, float8_e4m3fn")
-        case.setdefault("out_dtype", "bfloat16" if case["dtype"].startswith("float8") else case["dtype"])
-        if case["out_dtype"] not in ("bfloat16", "float16"):
-            raise ValueError("Output dtype must be bfloat16 or float16")
-        for name, default in (
-            ("batch", 1),
-            ("block_size", 32),
-            ("head_size", 128),
-            ("q_heads", 32),
-            ("kv_heads", 8),
-            ("num_segments", 16),
-            ("seq_threshold_3d", 32),
-        ):
-            case.setdefault(name, default)
-            minimum = 0 if name == "seq_threshold_3d" else 1
-            if type(case[name]) is not int or case[name] < minimum:
-                raise ValueError(f"{case['id']}: {name} must be an integer >= {minimum}")
-        if case["q_heads"] % case["kv_heads"]:
-            raise ValueError("q_heads must be divisible by kv_heads")
-        for plural, scalar in (("query_lens", "query_len"), ("kv_lens", "kv_len")):
-            if plural not in case:
-                if scalar not in case:
-                    raise ValueError(f"{case['id']}: provide {plural} or {scalar}")
-                case[plural] = [case[scalar]] * case["batch"]
-            if len(case[plural]) != case["batch"] or any(
-                    type(length) is not int or length <= 0 for length in case[plural]):
-                raise ValueError(f"{case['id']}: invalid {plural}")
-        if any(q > k for q, k in zip(case["query_lens"], case["kv_lens"])):
-            raise ValueError("Every query length must be <= its KV length")
-        case.setdefault("sliding_window", 0)
-        case.setdefault("softcap", 0.0)
-        if type(case["sliding_window"]) is not int or case["sliding_window"] < 0:
-            raise ValueError("sliding_window must be a nonnegative integer")
-        if not isinstance(case["softcap"], (int, float)) or not math.isfinite(case["softcap"]) or case["softcap"] < 0:
-            raise ValueError("softcap must be finite and nonnegative")
-        if case["block_size"] % 16:
-            raise ValueError("The initial TD workloads require block_size divisible by 16")
-        if case["dtype"].startswith("float8_") and case["block_size"] % 32:
-            raise ValueError("Native FP8 + TD requires block_size divisible by 32; pointer fallback is disabled")
-        cases.append(case)
+def model_windows(config, override):
+    if override is not None:
+        return list(dict.fromkeys(override))
+    window = getattr(config, "sliding_window", None) or 0
+    if not getattr(config, "use_sliding_window", True) or getattr(config, "max_window_layers", None) == 0:
+        return [0]
+    if not isinstance(window, int):
+        raise ValueError("Specify --sliding-window for models with non-scalar window settings")
+    layer_types = getattr(config, "layer_types", None)
+    if layer_types:
+        if set(layer_types) - {"full_attention", "sliding_attention"}:
+            raise ValueError("Model input currently supports full/sliding MHA and GQA layers")
+        return list(dict.fromkeys(window if kind == "sliding_attention" else 0 for kind in layer_types))
+    window_layers = getattr(config, "max_window_layers", None)
+    if window and window_layers is not None and window_layers < config.num_hidden_layers:
+        return [0, window]
+    if window and getattr(config, "sliding_window_pattern", None):
+        return [0, window]
+    return [window]
+
+
+def model_dimensions(config, tp_size):
+    if getattr(config, "kv_lora_rank", None) is not None or getattr(config, "is_encoder_decoder", False):
+        raise ValueError("Model input supports causal MHA/GQA, not MLA or encoder-decoder attention")
+    q_heads = config.num_attention_heads
+    kv_heads = getattr(config, "num_key_value_heads", None) or (1 if getattr(config, "multi_query", False) else q_heads)
+    head_size = getattr(config, "head_dim", None)
+    if head_size is None:
+        if config.hidden_size % q_heads:
+            raise ValueError("hidden_size must be divisible by num_attention_heads when head_dim is absent")
+        head_size = config.hidden_size // q_heads
+    if getattr(config, "global_head_dim", head_size) not in (None, head_size):
+        raise ValueError("Models with different local/global head dimensions need separate CI workloads")
+    if q_heads % kv_heads or q_heads % tp_size:
+        raise ValueError("Query heads must be divisible by KV heads and tensor parallel size")
+    if (kv_heads >= tp_size and kv_heads % tp_size) or (kv_heads < tp_size and tp_size % kv_heads):
+        raise ValueError("KV heads must divide or be divisible by tensor parallel size")
+    q_heads //= tp_size
+    kv_heads = max(1, kv_heads // tp_size)  # Replicate KV heads when TP exceeds their count.
+    return q_heads, kv_heads, head_size
+
+
+def model_workloads(args):
+    config = get_config(model=args.model, trust_remote_code=args.trust_remote_code, revision=args.revision)
+    if args.model_prefix:
+        config = getattr(config, args.model_prefix)
+    config = get_hf_text_config(config)
+    q_heads, kv_heads, head_size = model_dimensions(config, args.tp_size)
+    dtype = args.dtype
+    if dtype == "auto":
+        dtype = str(getattr(config, "dtype", None) or getattr(config, "torch_dtype", None) or torch.bfloat16)
+        dtype = dtype.removeprefix("torch.")
+    dtype = "float8_e4m3fn" if dtype == "fp8" else dtype
+    if dtype not in ("bfloat16", "float16", "float8_e4m3fn"):
+        raise ValueError("Specify --dtype bfloat16, float16 or fp8 for this model")
+    if args.block_size % (32 if dtype == "float8_e4m3fn" else 16):
+        raise ValueError("TD needs block_size divisible by 16, or 32 for FP8")
+    windows = model_windows(config, args.sliding_window)
+    softcap = getattr(config, "attn_logit_softcapping", None) or 0.0
+    softmax_scale = (getattr(config, "query_pre_attn_scalar", None) or head_size)**-0.5
+    cases = []
+    batch_sizes = args.batch_size if args.batch_size is not None else [1, 8, 32]
+    for batch, query_len, kv_len, window in product(batch_sizes, args.query_len, args.kv_len, windows):
+        if query_len > kv_len:
+            continue
+        cases.append({
+            "id": f"model-{len(cases):04d}",
+            "batch": batch,
+            "query_lens": [query_len] * batch,
+            "kv_lens": [kv_len] * batch,
+            "q_heads": q_heads,
+            "kv_heads": kv_heads,
+            "head_size": head_size,
+            "dtype": dtype,
+            "out_dtype": "bfloat16" if dtype == "float8_e4m3fn" else dtype,
+            "block_size": args.block_size,
+            "sliding_window": window,
+            "softcap": softcap,
+            "softmax_scale": softmax_scale,
+            "q_layout": args.q_layout,
+            "kv_layout": args.kv_layout,
+            "seq_threshold_3d": 32,
+            "num_segments": 16,
+        })
+    if not cases:
+        raise ValueError("At least one query length must be <= a KV length")
     return cases
 
 
@@ -282,9 +309,9 @@ def allocate_case(case, device, seed):
     kwargs = {
         "q": q, "k": k, "v": v, "out": out, "cu_seqlens_q": torch.tensor(cumulative, device=device, dtype=torch.int32),
         "max_seqlen_q": max(q_lens), "seqused_k": torch.tensor(kv_lens, device=device, dtype=torch.int32),
-        "max_seqlen_k": max(kv_lens), "softmax_scale": dim**-0.5, "causal": True, "window_size":
-        (case["sliding_window"] - 1, 0) if case["sliding_window"] else (-1, -1), "block_table": table, "softcap":
-        case["softcap"], "q_descale": None, "k_descale": None, "v_descale": None, "seq_threshold_3D":
+        "max_seqlen_k": max(kv_lens), "softmax_scale": case.get("softmax_scale", dim**-0.5), "causal": True,
+        "window_size": (case["sliding_window"] - 1, 0) if case["sliding_window"] else (-1, -1), "block_table": table,
+        "softcap": case["softcap"], "q_descale": None, "k_descale": None, "v_descale": None, "seq_threshold_3D":
         case["seq_threshold_3d"], "num_par_softmax_segments": segments, "use_td": True, **buffers
     }
     return kwargs
@@ -544,13 +571,12 @@ def benchmark(args, manifest, device):
         del inputs
 
 
-def parse_args(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+def create_parser(description=__doc__):
+    parser = FlexibleArgumentParser(description=description)
     parser.add_argument("--clear-cache", action="store_true",
                         help="Evict 256 MB before each graph replay, excluding eviction from timing")
     parser.add_argument("--tune", action="store_true", help="Search candidates and export winners")
-    parser.add_argument("--manifest", required=True)
-    parser.add_argument("--save-dir", default=str(Path(__file__).with_name("profiles")),
+    parser.add_argument("--save-dir", type=str, default="./",
                         help="Profile output folder, or profile input folder when benchmarking")
     parser.add_argument("--measurements", help="Optional detailed tuning checkpoint JSON")
     parser.add_argument("--device", default="xpu:0")
@@ -559,35 +585,64 @@ def parse_args(argv=None):
     parser.add_argument("--finalists", type=int, default=3)
     parser.add_argument("--warmup-ms", type=float, default=10)
     parser.add_argument("--rep-ms", type=float, default=50)
-    parser.add_argument("--seed", type=int, default=1729)
+    parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--tolerance", type=float, default=0.01,
                         help="Worst-regret tie tolerance before geometric-mean tie-breaking")
+    return parser
+
+
+def parse_args(argv=None):
+    parser = create_parser()
+    parser.add_argument("--model", type=str, default="mistralai/Mixtral-8x7B-Instruct-v0.1",
+                        help="Hugging Face model ID or local config directory; weights are not loaded")
+    parser.add_argument("--tp-size", "-tp", "--tensor-parallel-size", type=int, default=2)
+    parser.add_argument("--trust-remote-code", action="store_true")
+    parser.add_argument("--revision", help="Model config revision")
+    parser.add_argument("--model-prefix", help="Select a nested model configuration before extracting its text config")
+    parser.add_argument("--dtype", choices=("auto", "bfloat16", "float16", "fp8"), default="auto",
+                        help="Query/K/V dtype")
+    parser.add_argument("--batch-size", type=int, nargs="+", help="Sequence counts (default: 1 8 32)")
+    parser.add_argument("--query-len", type=int, nargs="+", default=[1],
+                        help="Query tokens per sequence; 1 selects decode")
+    parser.add_argument("--kv-len", type=int, nargs="+", default=[1024],
+                        help="KV tokens per sequence, including query tokens")
+    parser.add_argument("--block-size", type=int, default=32)
+    parser.add_argument("--sliding-window", type=int, nargs="+",
+                        help="Override model windows; 0 selects full attention")
+    parser.add_argument("--q-layout", choices=("contiguous", "qkv"), default="qkv")
+    parser.add_argument("--kv-layout", choices=("contiguous", "interleaved"), default="interleaved")
     args = parser.parse_args(argv)
-    for name in ("rounds", "warmup_ms", "rep_ms", "confirmation_rounds", "finalists"):
-        if not math.isfinite(getattr(args, name)) or getattr(args, name) <= 0:
-            parser.error(f"--{name.replace('_', '-')} must be finite and positive")
-    if not math.isfinite(args.tolerance) or args.tolerance < 0:
-        parser.error("--tolerance must be finite and nonnegative")
-    if args.measurements and not args.tune:
-        parser.error("--measurements requires --tune")
+    if min((args.batch_size or []) + args.query_len + args.kv_len + [args.tp_size, args.block_size]) <= 0:
+        parser.error("Batch sizes, lengths, tensor parallel size and block size must be positive")
+    if args.sliding_window is not None and min(args.sliding_window) < 0:
+        parser.error("Sliding windows must be nonnegative")
     return args
 
 
-def main(argv=None):
-    args = parse_args(argv)
+def main(args: argparse.Namespace, workloads=None):
+    print(args)
+    for name in ("rounds", "warmup_ms", "rep_ms", "confirmation_rounds", "finalists"):
+        if not math.isfinite(getattr(args, name)) or getattr(args, name) <= 0:
+            raise ValueError(f"--{name.replace('_', '-')} must be finite and positive")
+    if not math.isfinite(args.tolerance) or args.tolerance < 0:
+        raise ValueError("--tolerance must be finite and nonnegative")
+    if args.measurements and not args.tune:
+        raise ValueError("--measurements requires --tune")
+    if workloads is None:
+        workloads = model_workloads(args)
     device = torch.device(args.device)
     if device.type != "xpu":
         raise ValueError("The candidate pool and profiles target XPU")
     torch.xpu.set_device(device)
-    manifest = normalize_workloads(json.loads(Path(args.manifest).read_text(encoding="utf-8")))
+    print(f"{'Tuning' if args.tune else 'Benchmarking'} {len(workloads)} workloads")
     started = time.perf_counter()
     if args.tune:
-        result = tune(args, manifest, device)
+        result = tune(args, workloads, device)
         print(f"Exported {result['accepted_keys']} keys to {args.save_dir}")
     else:
-        benchmark(args, manifest, device)
+        benchmark(args, workloads, device)
     print(f"Finished in {time.perf_counter() - started:.1f} seconds")
 
 
 if __name__ == "__main__":
-    main()
+    main(parse_args())
