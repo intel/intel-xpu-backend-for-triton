@@ -32,10 +32,17 @@ def get_benchmark(providers_filter: Optional[List[str]] = None):
     @benchmark_suite.perf_report(
         benchmark_suite.Benchmark(
             x_names=["M", "N", "AXIS"],
-            x_vals=[(m, n, a)
-                    for (m, n) in [(32, 16), (32, 32), (32, 64), (64, 32)]  #  #  #  #
-                    for a in [0, 1]  #  #
-                    ],
+            x_vals=[
+                (m, n, a)
+                for (m, n) in [(32, 16), (32, 32), (32, 64), (64, 32)]  #  #  #  #
+                for a in [0, 1]  #  #
+            ] + [
+                # A one-row tile puts the whole sub-group on the scanned axis
+                # (threadsPerWarp = [1, 32]), which is what reaches the hardware
+                # sub-group scan. The square tiles above split threadsPerWarp
+                # across both dimensions and never do.
+                (1, n, 1) for n in [1024, 8192]
+            ],
             line_arg="provider",
             line_vals=list(providers.keys()),
             line_names=list(providers.values()),

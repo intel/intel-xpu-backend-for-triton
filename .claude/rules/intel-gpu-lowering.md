@@ -1,6 +1,12 @@
 ---
 description: 'Intel GPU lowering: TritonGEN ops to SPIR-V builtins and GenISA intrinsics, cache control decorations, SPIR-V extensions'
-applyTo: '**/TritonGENToLLVM/**/*.cpp, **/TritonGENToLLVM/**/*.h, **/TritonGENToSPIRV/**/*.cpp, **/Target/SPIRV/**/*.cpp, **/TritonIntelGPUToLLVM/**/*.cpp, **/TritonIntelGPUToLLVM/**/*.h'
+paths:
+  - "**/TritonGENToLLVM/**/*.cpp"
+  - "**/TritonGENToLLVM/**/*.h"
+  - "**/TritonGENToSPIRV/**/*.cpp"
+  - "**/Target/SPIRV/**/*.cpp"
+  - "**/TritonIntelGPUToLLVM/**/*.cpp"
+  - "**/TritonIntelGPUToLLVM/**/*.h"
 ---
 
 # Intel GPU Lowering: TritonGEN to SPIR-V and GenISA

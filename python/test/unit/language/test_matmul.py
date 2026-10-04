@@ -131,7 +131,7 @@ def get_src_element_ty_size(dtype_str):
                          [(128, 128, 16, 4), (64, 128, 32, 4), (32, 32, 32, 4), (256, 128, 32, 4), (64, 512, 32, 2),
                           (512, 64, 32, 2), (64, 16, 64, 4)] + ([(256, 128, 128, 3)] if is_rubin() else []))
 @pytest.mark.parametrize("NUM_CTAS", [1, 2])
-@pytest.mark.parametrize("NUM_WARPS", [32 if is_xpu_cri() else 4, 8])
+@pytest.mark.parametrize("NUM_WARPS", [4, 8])
 @pytest.mark.parametrize("EPILOGUE_SUBTILE", [True, False])
 def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, NUM_WARPS, NUM_CTAS, device,
                        EPILOGUE_SUBTILE):
@@ -167,8 +167,6 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
     if not is_xpu() and EPILOGUE_SUBTILE and (is_hip() or NUM_CTAS > 1 or BLOCK_N >= 512):
         pytest.skip("creates convert layout too big to fit in smem")
     M, N, K = 1024, 512, 256
-    if is_xpu_cri():
-        M, N, K = 512, 512, 64
     torch.manual_seed(42)
     precision = "tf32" if dtype_src_str == "tensorfloat32" else "ieee"
     dtype_src_str = "float32" if dtype_src_str == "tensorfloat32" else dtype_src_str
@@ -325,12 +323,10 @@ def simple_persistent_kernel(a_ptr, b_ptr, c_ptr, M, N, K, stride_am, stride_ak,
 
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 16), (64, 128, 32), (32, 32, 32), (256, 128, 16),
                                                        (64, 512, 16), (512, 64, 16), (64, 16, 16)])
-@pytest.mark.parametrize("NUM_WARPS", [32 if is_xpu_cri() else 4, 8])
+@pytest.mark.parametrize("NUM_WARPS", [4, 8])
 @pytest.mark.parametrize("DISALLOW_ACC_MULTI_BUFFER", [True, False])
 def test_simple_persistent_matmul(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, DISALLOW_ACC_MULTI_BUFFER, device):
     M, N, K = 1024, 512, 256
-    if is_xpu_cri():
-        M, N, K = 512, 512, 64
     NUM_STAGES = 3
     a = torch.randn(M, K, dtype=torch.float16, device=device)
     b = torch.randn(K, N, dtype=torch.float16, device=device)
@@ -411,14 +407,12 @@ def mxfp_matmul(  #
                                                        (128, 256, 256), (128, 128, 64), (128, 64, 128), (128, 16, 256),
                                                        (128, 16, 64)] + ([(256, 256, 128)] if is_rubin() else []))
 @pytest.mark.parametrize("NUM_STAGES", [1, 3])
-@pytest.mark.parametrize("NUM_WARPS", [32 if is_xpu_cri() else 4, 8])
+@pytest.mark.parametrize("NUM_WARPS", [4, 8])
 @pytest.mark.parametrize("nonKDim", ([0, 16, 32] if (is_hip_cdna() or is_hip_gfx1250()) else [0]))
 def test_mxfp(BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS, device):
     M = 1024
     N = 512
     K = 2048
-    if is_xpu_cri():
-        M, N, K = 256, 256, 512
     if K % BLOCK_K != 0:
         pytest.skip("Kernel requires shapes aligned by K dimension")
     if is_cuda() and torch.cuda.get_device_capability()[0] < 10:
@@ -430,6 +424,9 @@ def test_mxfp(BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS, device)
             pytest.skip(f"CDNA4 does not support {BLOCK_K=} for scaled mfma {nonKDim=} variants")
         if (BLOCK_M == 256 or BLOCK_N == 256) and BLOCK_K == 256:
             pytest.skip("Config requires too much shared memory")
+        # TODO: Re-enable once scaled-upcast layout selection preserves packed groups.
+        if is_hip_cdna4() and nonKDim == 0 and NUM_STAGES == 3 and (BLOCK_M, BLOCK_N, BLOCK_K) == (128, 16, 64):
+            pytest.skip("Incorrect scaled-upcast layout selection")
 
     if not is_rubin() and BLOCK_N == 256 and BLOCK_K == 256:
         NUM_STAGES = min(NUM_STAGES, 2)
@@ -901,8 +898,6 @@ def test_lhs_in_tmem(BLOCK_M, BLOCK_N, BLOCK_K, a_trans, dtype_src_str, device, 
     M = 1024
     N = 512
     K = 256
-    if is_xpu_cri():
-        M, N, K = 256, 256, 256
     _knob_promote_lhs_to_tmem(monkeypatch)
     torch.manual_seed(42)
     if dtype_src_str == "float8e5":
@@ -1157,9 +1152,6 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
     kernel_kwargs = {}
     if is_hip():
         kernel_kwargs["matrix_instr_nonkdim"] = nonKDim
-    if is_xpu_cri():
-        # Reduce spill size to speedup the test.
-        kernel_kwargs["num_warps"] = 16
     k = block_scale_fp4_matmul[grid](a, b, output, a_scale, b_scale, M, N, K, stride_scale, a.stride(0), a.stride(1),
                                      b.stride(0), b.stride(1), output.stride(0), output.stride(1), VEC_SIZE, BLOCK_M,
                                      BLOCK_N, BLOCK_K, NUM_STAGES=NUM_STAGES, PACK_ALONG_K=pack_along_k,
@@ -1191,8 +1183,10 @@ def rhs_scaled_n_packed_fp4_matmul(A, B, BS, C):
 
 
 def test_dot_scaled_unscaled_lhs_fp4_rhs(device):
-    if not is_cuda() or torch.cuda.get_device_capability()[0] < 8:
+    if is_cuda() and torch.cuda.get_device_capability()[0] < 8:
         pytest.skip("Requires NVIDIA compute capability >= 8")
+    if not (is_cuda() or is_xpu()):
+        pytest.skip("Only tested on CUDA and XPU")
 
     M, N, K = 128, 128, 32
     torch.manual_seed(42)
@@ -1282,7 +1276,7 @@ def mxfp8_mxfp4_matmul(  #
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("M, N, K", [(256, 256, 256) if is_xpu_cri() else (1024, 512, 512)])
+@pytest.mark.parametrize("M, N, K", [(1024, 512, 512)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (256, 128, 128), (128, 256, 128),
                                                        (128, 256, 256), (128, 128, 64), (128, 64, 128)])
 @pytest.mark.parametrize("NUM_STAGES", [1, 3])
@@ -1312,6 +1306,11 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
             pytest.skip("Float4 without scale is tested in test_block_scale_fp4")
         if (BLOCK_M == 256 or BLOCK_N == 256) and BLOCK_K == 256:
             pytest.skip("Config requires too much shared memory")
+        # TODO: Re-enable once the gfx950 FP8 x FP4 NaN failure seen with ROCm 10.1 is fixed.
+        if (is_hip_cdna4() and (nonKDim, CONST_SCALE) in ((0, False), (16, True))
+                and (BLOCK_M, BLOCK_N, BLOCK_K) == (128, 64, 128) and NUM_STAGES == 3 and A_DATA_TYPE == "float8e5"
+                and B_DATA_TYPE == "float4" and WITH_A_SCALE and WITH_B_SCALE and not PACK_B_ALONG_K and not B_TRANS):
+            pytest.skip("NaNs in gfx950 FP8 x FP4 scaled matmul")
     elif is_xpu():
         if not is_xpu_cri() and not (WITH_A_SCALE and WITH_B_SCALE):
             pytest.xfail("None scale has not been tested on XPU backend")
@@ -1474,10 +1473,10 @@ def batched_mxfp_matmul(  #
 @pytest.mark.parametrize("BATCH_SIZE, BLOCK_BATCH_SIZE", [(1, 1), (16, 1), (16, 4)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 64), (128, 64, 128), (64, 64, 128)])
 @pytest.mark.parametrize("NUM_STAGES", [1, 2 if is_hip() else 3])
-@pytest.mark.parametrize("NUM_WARPS", [32 if is_xpu_cri() else 4, 8])
+@pytest.mark.parametrize("NUM_WARPS", [4, 8])
 @pytest.mark.parametrize("nonKDim", ([0, 16, 32] if (is_hip_cdna() or is_hip_gfx1250()) else [0]))
 def test_batched_mxfp(BATCH_SIZE, BLOCK_BATCH_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS, device):
-    M, N, K = [128, 128, 512] if is_xpu_cri() else [1024, 512, 2048]
+    M, N, K = [1024, 512, 2048]
 
     if K % BLOCK_K != 0:
         pytest.xfail("Kernel requires shapes aligned by K dimension")
@@ -1677,3 +1676,43 @@ def test_nvfp4_ue5m3_matmul():
     torch.testing.assert_close(ref, out, atol=1e-3, rtol=1e-3)
     if not is_compile_warmup():
         assert "kind::mxf4nvf4.block_scale.block16" in kernel.asm["ptx"]
+
+
+@pytest.mark.xfail(not is_blackwell(), reason="Requires Blackwell", run=False)
+def test_warp_specialized_matmul_auxiliary_output(device, fresh_compilation_knobs):
+    from triton.tools.tensor_descriptor import TensorDescriptor
+
+    fresh_compilation_knobs.compilation.instrumentation_mode = "consan"
+
+    @triton.jit
+    def kernel(A, B, C, X, Y, K: tl.constexpr):
+        rows = tl.arange(0, 128)[:, None]
+        cols = tl.arange(0, 64)[None, :]
+        acc = tl.full((128, 128), 0, tl.float32)
+        aux = tl.full((128, 64), 0, tl.float32)
+        for k in tl.range(K // 64, warp_specialize=True):
+            a = A.load([0, k * 64])
+            b = B.load([k * 64, 0])
+            aux += tl.load(X + rows * K + cols + k * 64).to(tl.float32)
+            acc = tl.dot(a, b, acc)
+        C.store([0, 0], acc.to(tl.float16))
+        # Its shared-memory staging store must follow the MMA completion wait.
+        Y.store([0, 0], aux)
+
+    torch.manual_seed(0)
+    a = torch.randn((128, 1024), device=device, dtype=torch.float16) * 0.1
+    b = torch.randn((1024, 128), device=device, dtype=torch.float16) * 0.1
+    x = torch.randn_like(a)
+    c = torch.empty((128, 128), device=device, dtype=torch.float16)
+    y = torch.empty((128, 64), device=device, dtype=torch.float32)
+    a_desc, b_desc, c_desc, y_desc = [
+        TensorDescriptor.from_tensor(tensor, block)
+        for tensor, block in [(a, [128, 64]), (b, [64, 128]), (c, [128, 128]), (y, [128, 64])]
+    ]
+    compiled = kernel[(1, )](a_desc, b_desc, c_desc, x, y_desc, 1024, num_stages=3, num_warps=4)
+    if is_compile_warmup():
+        return
+    torch.cuda.synchronize()
+    assert "ttg.warp_specialize" in compiled.asm["ttgir"]
+    torch.testing.assert_close(c, a @ b, atol=0.01, rtol=0.01)
+    torch.testing.assert_close(y, x.float().reshape(128, 16, 64).sum(1), atol=0.001, rtol=0.001)

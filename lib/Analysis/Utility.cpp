@@ -2,7 +2,6 @@
 
 #include <deque>
 
-#include "intel/include/Analysis/Utility.h"
 #include "mlir/Analysis/DataFlow/ConstantPropagationAnalysis.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -26,6 +25,13 @@ namespace mlir {
 
 using namespace triton;
 using namespace triton::gpu;
+
+bool triton::canUseWarpBallotHistogram(HistogramOp op) {
+  int numBins = op.getType().getNumElements();
+  // Limit ballot and reduction overhead relative to shared-memory atomics.
+  return !hasCrossCTAScratch(op) && numBins <= 2 &&
+         numBins * gpu::lookupNumWarps(op) <= 4;
+}
 
 // Cases where distributed shared memory is not required in ConvertLayout:
 // (1) numCTAs == 1
@@ -478,6 +484,7 @@ unsigned ScanLoweringHelper::getAxisNumBlocks() {
 }
 
 unsigned ScanLoweringHelper::getNonAxisNumBlocks() {
+  auto shapePerCTA = getShapePerCTA(getEncoding(), getShape());
   auto contigPerThread = getEncoding().getContigPerThread();
   auto threadsPerWarp = getEncoding().getThreadsPerWarp();
   auto warpsPerCTA = getEncoding().getWarpsPerCTA();
@@ -488,8 +495,8 @@ unsigned ScanLoweringHelper::getNonAxisNumBlocks() {
     if (i == axis)
       continue;
     numBlocks *=
-        ceil<unsigned>(getShape()[i], (contigPerThread[i] * threadsPerWarp[i] *
-                                       warpsPerCTA[i]));
+        ceil<unsigned>(shapePerCTA[i], (contigPerThread[i] * threadsPerWarp[i] *
+                                        warpsPerCTA[i]));
   }
   return numBlocks;
 }
@@ -499,7 +506,8 @@ bool ScanLoweringHelper::isSupported() {
   // 1. Scan on non-blocking encodings
   if (!isa<BlockedEncodingAttr>(legacyEncoding))
     return false;
-  return true;
+  // Partial results are only combined within each CTA.
+  return getCTASplitNum(srcEncoding)[getAxis()] == 1;
 }
 
 unsigned ScanLoweringHelper::getScratchSizeInElems() {
@@ -988,7 +996,7 @@ getReshapeDecomposition(ArrayRef<int64_t> srcShape,
 }
 
 unsigned ScanLoweringHelper::getAxisElementStride() {
-  auto order = getOrder();
+  auto order = getEncoding().getOrder();
   unsigned stride = 1;
   for (unsigned dim : order) {
     if (dim == getAxis())
@@ -1009,6 +1017,7 @@ unsigned ScanLoweringHelper::getAxisThreadStride() {
 
 unsigned ScanLoweringHelper::getAxisBlockStride() {
   auto order = getOrder();
+  auto shapePerCTA = getShapePerCTA(getEncoding(), getShape());
   unsigned stride = 1;
   auto contigPerThread = getEncoding().getContigPerThread();
   auto threadsPerWarp = getEncoding().getThreadsPerWarp();
@@ -1016,9 +1025,9 @@ unsigned ScanLoweringHelper::getAxisBlockStride() {
   for (unsigned dim : order) {
     if (dim == getAxis())
       return stride;
-    stride *= ceil<unsigned int>(getShape()[dim], contigPerThread[dim] *
-                                                      threadsPerWarp[dim] *
-                                                      warpsPerCTA[dim]);
+    stride *= ceil<unsigned int>(shapePerCTA[dim], contigPerThread[dim] *
+                                                       threadsPerWarp[dim] *
+                                                       warpsPerCTA[dim]);
   }
   llvm_unreachable("Axis not found in order");
 }
@@ -1249,10 +1258,8 @@ bool cvtNeedsWarpShuffle(triton::gpu::ConvertLayoutOp op) {
 }
 
 bool cvtNeedsSharedMemory(triton::gpu::ConvertLayoutOp op) {
-  RankedTensorType srcTy = op.getSrc().getType();
-  RankedTensorType dstTy = op.getType();
-  return !cvtReordersRegisters(srcTy, dstTy) && !cvtNeedsWarpShuffle(op) &&
-         !triton::gpu::intel::isDpasToDotShortcut(srcTy, dstTy);
+  return !cvtReordersRegisters(op.getSrc().getType(), op.getType()) &&
+         !cvtNeedsWarpShuffle(op);
 }
 
 std::unique_ptr<DataFlowSolver> createDataFlowSolver() {
@@ -1302,6 +1309,30 @@ BarrierStages getAtomicBarrierStages(MemSemantic semantic,
   return stages;
 }
 
+std::optional<int32_t> getAtomicResultShuffleMask(Value result) {
+  if (result.use_empty())
+    return 0;
+
+  int32_t laneMask, warpMask, blockMask;
+  if (auto tensorTy = dyn_cast<RankedTensorType>(result.getType())) {
+    auto masks = gpu::toLinearLayout(tensorTy).getFreeVariableMasks();
+    auto *ctx = result.getContext();
+    laneMask = masks.lookup(StringAttr::get(ctx, "lane"));
+    warpMask = masks.lookup(StringAttr::get(ctx, "warp"));
+    blockMask = masks.lookup(StringAttr::get(ctx, "block"));
+  } else {
+    auto *op = result.getDefiningOp();
+    laneMask = gpu::TritonGPUDialect::getThreadsPerWarp(
+                   op->getParentOfType<ModuleOp>()) -
+               1;
+    warpMask = gpu::lookupNumWarps(op) - 1;
+    blockMask = gpu::lookupNumCTAs(op) - 1;
+  }
+  if (warpMask || blockMask)
+    return std::nullopt;
+  return laneMask;
+}
+
 bool atomicResultHasCTABroadcast(Operation *op) {
   if (op->getNumResults() != 1 || op->getResult(0).use_empty())
     return false;
@@ -1338,6 +1369,8 @@ bool needsClusterBarrier(Operation *op) {
   }
   if (auto reduce = dyn_cast<ReduceOp>(op))
     return !ReduceOpHelper(reduce).isReduceWithinCTA();
+  if (isa<HistogramOp>(op))
+    return hasCrossCTAScratch(op);
   return atomicNeedsClusterBarrier(op);
 }
 

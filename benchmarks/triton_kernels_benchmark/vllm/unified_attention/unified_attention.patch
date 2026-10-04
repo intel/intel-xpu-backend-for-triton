@@ -1,8 +1,8 @@
 diff --git a/setup.py b/setup.py
-index 81ff499..6abfe7c 100644
+index ed96161..05a2529 100644
 --- a/setup.py
 +++ b/setup.py
-@@ -1419,6 +1419,7 @@ package_data = {
+@@ -1442,6 +1442,7 @@ package_data = {
          "py.typed",
          "libs/*.so*",
          "model_executor/layers/fused_moe/configs/*.json",
@@ -11,10 +11,10 @@ index 81ff499..6abfe7c 100644
          "entrypoints/serve/instrumentator/static/*.js",
          "entrypoints/serve/instrumentator/static/*.css",
 diff --git a/tests/kernels/attention/test_triton_unified_attention.py b/tests/kernels/attention/test_triton_unified_attention.py
-index 772fee1..650e383 100644
+index e30d922..b3a209f 100644
 --- a/tests/kernels/attention/test_triton_unified_attention.py
 +++ b/tests/kernels/attention/test_triton_unified_attention.py
-@@ -458,6 +458,7 @@ def test_triton_unified_attn(
+@@ -460,6 +460,7 @@ def test_triton_unified_attn(
          softmax_segm_max=softmax_segm_max,
          softmax_segm_expsum=softmax_segm_expsum,
          kv_quant_mode=kv_quant_mode,
@@ -22,7 +22,7 @@ index 772fee1..650e383 100644
      )
  
      ref_output = ref_paged_attn(
-@@ -578,6 +579,7 @@ def test_triton_unified_attn_bf16_query_fp8_kv(
+@@ -580,6 +581,7 @@ def test_triton_unified_attn_bf16_query_fp8_kv(
          softmax_segm_max=softmax_segm_max,
          softmax_segm_expsum=softmax_segm_expsum,
          kv_quant_mode=KVQuantMode.FP8_PER_TENSOR,
@@ -30,7 +30,7 @@ index 772fee1..650e383 100644
      )
  
      ref_output = ref_paged_attn(
-@@ -697,6 +699,7 @@ def test_triton_unified_attn_fp16_input_fp8_output(
+@@ -699,6 +701,7 @@ def test_triton_unified_attn_fp16_input_fp8_output(
          softmax_segm_output=softmax_segm_output,
          softmax_segm_max=softmax_segm_max,
          softmax_segm_expsum=softmax_segm_expsum,
@@ -38,7 +38,7 @@ index 772fee1..650e383 100644
      )
  
      ref_output = ref_paged_attn(
-@@ -872,23 +875,13 @@ def test_triton_unified_attn_use_td(
+@@ -874,23 +877,13 @@ def test_triton_unified_attn_use_td(
      )
  
  
@@ -65,10 +65,10 @@ index 772fee1..650e383 100644
          seq_lens=[(256, 256), (128, 128)],
          num_heads=num_heads,
 diff --git a/vllm/v1/attention/ops/triton_attention_helpers.py b/vllm/v1/attention/ops/triton_attention_helpers.py
-index dff0b21..2a12c31 100644
+index 7804b01..0ac1271 100644
 --- a/vllm/v1/attention/ops/triton_attention_helpers.py
 +++ b/vllm/v1/attention/ops/triton_attention_helpers.py
-@@ -64,7 +64,7 @@ def resolve_seq_and_query_len(
+@@ -68,7 +68,7 @@ def resolve_seq_and_query_len(
      """
      # find_seq_idx is defined below; forward use is fine inside @triton.jit.
      seq_idx = find_seq_idx(
@@ -77,7 +77,7 @@ index dff0b21..2a12c31 100644
      )
      q_block_start_idx = tl.load(query_start_len_ptr + seq_idx) // BLOCK_Q + seq_idx
      q_block_local_idx = q_block_global_idx - q_block_start_idx
-@@ -80,8 +80,8 @@ def find_seq_idx(
+@@ -84,8 +84,8 @@ def find_seq_idx(
      query_start_len_ptr,
      target_idx,
      num_seqs,
@@ -87,7 +87,7 @@ index dff0b21..2a12c31 100644
  ):
      """Binary search over the cumulative query-length prefix.
  
-@@ -91,6 +91,10 @@ def find_seq_idx(
+@@ -95,6 +95,10 @@ def find_seq_idx(
      we search the plain cumulative-length prefix (used by
      ``reduce_segments`` which iterates over raw query tokens).
      """
@@ -99,7 +99,7 @@ index dff0b21..2a12c31 100644
      right = num_seqs
      while left < right:
 diff --git a/vllm/v1/attention/ops/triton_unified_attention.py b/vllm/v1/attention/ops/triton_unified_attention.py
-index b0231dd..ffd762b 100644
+index b0231dd..f2494c5 100644
 --- a/vllm/v1/attention/ops/triton_unified_attention.py
 +++ b/vllm/v1/attention/ops/triton_unified_attention.py
 @@ -21,13 +21,16 @@ from vllm.v1.attention.ops.triton_attention_helpers import (
@@ -495,72 +495,16 @@ index b0231dd..ffd762b 100644
  
      # Wider KV tile for the tuned large-head path (see above). Only the 2D
      # path (used when max_seqlen_q > 1) reads TILE_SIZE_PREFILL.
-@@ -1038,21 +1034,30 @@ def unified_attention(
-             f"(out.stride(1) = {out.stride(1)} != head_size = {head_size})."
-         )
- 
--    # Launch the 2D kernel if
--    # 1. No intermediate tiled softmax buffers for the 3D kernel have been allocated, or
--    # 2. The batch includes at least one prefill request, or
--    # 3. The number of sequences exceeds the configured threshold, or
--    # 4. Batch invariance is enabled
--    use_3d = not (
--        seq_threshold_3D is None
--        or num_par_softmax_segments is None
--        or softmax_segm_output is None
--        or softmax_segm_max is None
--        or softmax_segm_expsum is None
--        or max_seqlen_q > 1
--        or num_seqs > seq_threshold_3D
--        or is_batch_invariant
--    )
-+    if is_xpu:
-+        # Keep short windows in 2D; split other small decode batches.
-+        use_3d = (
-+            max_seqlen_q == 1
-+            and num_seqs <= 32
-+            and not 0 < sliding_window_val <= 1024
-+            and not is_batch_invariant
-+        )
-+    else:
-+        # Launch the 2D kernel if
-+        # 1. No intermediate tiled softmax buffers for the 3D kernel have been allocated, or
-+        # 2. The batch includes at least one prefill request, or
-+        # 3. The number of sequences exceeds the configured threshold, or
-+        # 4. Batch invariance is enabled
-+        use_3d = not (
-+            seq_threshold_3D is None
-+            or num_par_softmax_segments is None
-+            or softmax_segm_output is None
-+            or softmax_segm_max is None
-+            or softmax_segm_expsum is None
-+            or max_seqlen_q > 1
-+            or num_seqs > seq_threshold_3D
-+            or is_batch_invariant
-+        )
+@@ -1052,6 +1048,8 @@ def unified_attention(
+         or max_seqlen_q > 1
+         or num_seqs > seq_threshold_3D
+         or is_batch_invariant
++        # Keep short-window attention on the optimized 2D path.
++        or (is_xpu and 0 < sliding_window_val <= 1024)
+     )
  
      # The kernel signature is the same for 2D and 3D — only the launch
-     # grid + a handful of constexpr toggles differ.  Per-token-head scale
-@@ -1073,6 +1078,18 @@ def unified_attention(
-         v_scale_ptr = None
-     # 3D needs real segm tensors; 2D never touches them.  Pass ``None`` in
-     # 2D mode so Triton can skip materialising these pointer arguments.
-+    if is_xpu and use_3d:
-+        num_par_softmax_segments = 16
-+        segment_shape = (q.shape[0], num_query_heads, num_par_softmax_segments)
-+        softmax_segm_output = torch.empty(
-+            (*segment_shape, head_size_padded), dtype=torch.float32, device=q.device
-+        )
-+        softmax_segm_max = torch.empty(
-+            segment_shape, dtype=torch.float32, device=q.device
-+        )
-+        softmax_segm_expsum = torch.empty(
-+            segment_shape, dtype=torch.float32, device=q.device
-+        )
-     segm_output_ptr = softmax_segm_output if use_3d else None
-     segm_max_ptr = softmax_segm_max if use_3d else None
-     segm_expsum_ptr = softmax_segm_expsum if use_3d else None
-@@ -1092,6 +1109,89 @@ def unified_attention(
+@@ -1092,6 +1090,89 @@ def unified_attention(
      if launch_num_stages is not None:
          launch_kwargs["num_stages"] = launch_num_stages
  
@@ -650,7 +594,7 @@ index b0231dd..ffd762b 100644
      kernel_unified_attention[grid](
          output_ptr=out,
          segm_output_ptr=segm_output_ptr,
-@@ -1168,6 +1268,7 @@ def unified_attention(
+@@ -1168,6 +1249,7 @@ def unified_attention(
          USE_TD=use_td,
          USE_TD_QO=use_td_qo,
          MM_PREFIX_CLAMP_SW=mm_prefix_clamp_sliding_window,
@@ -658,7 +602,7 @@ index b0231dd..ffd762b 100644
          **launch_kwargs,
      )
  
-@@ -1184,11 +1285,9 @@ def unified_attention(
+@@ -1184,11 +1266,9 @@ def unified_attention(
              output_stride_0=out.stride(0),
              output_stride_1=out.stride(1),
              block_table_stride=block_table.stride(0),

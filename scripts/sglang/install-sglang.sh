@@ -97,7 +97,8 @@ patch_sglang() {
   # Remove all torch libraries from requirements to avoid reinstalling triton & torch.
   # Remove sgl-kernel due to a bug in the current environment (newer torch); we don't use it here.
   # Remove timm because it depends on torchvision, which depends on a pinned torch.
-  sed -i '/pytorch\|torch\|sgl-kernel\|timm/d' "$SGLANG_DIR/python/pyproject.toml"
+  sed -i -e '/^requires = /s/ *"torch[^"]*",\?//' \
+    -e '/pytorch\|torch\|sgl-kernel\|sglang-kernel\|timm/d' "$SGLANG_DIR/python/pyproject.toml"
   cat "$SGLANG_DIR/python/pyproject.toml"
 }
 
@@ -185,7 +186,7 @@ install_runtime_dependencies() {
   # sglang imports xgrammar unconditionally, but pyproject_xpu.toml leaves it out because
   # it pulls in CUDA torch. Install without deps so our XPU torch and triton survive.
   # Versions match sglang's own pyproject.toml, so an upstream release cannot break us.
-  pip install --no-deps xgrammar==0.2.1 apache-tvm-ffi==0.1.11
+  pip install --no-deps xgrammar==0.2.7 apache-tvm-ffi==0.1.11
 }
 
 # As in scripts/vllm/install-vllm.sh, --force-reinstall only drops the installed
@@ -226,7 +227,7 @@ if [ "$SKIP_INSTALL" = true ]; then
 fi
 
 install_runtime_dependencies
-pip install -e "$SGLANG_DIR/python"
+SGLANG_BUILD_RUST_EXTS=none pip install -e "$SGLANG_DIR/python"
 
 echo "**** SGLang installed successfully ****"
 

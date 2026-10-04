@@ -40,6 +40,7 @@ class XPUOptions:
     enable_fp_fusion: bool = True
     launch_cooperative_grid: bool = False
     reduce_variable_liveness: bool = True
+    in_loop_sink: bool = True
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e4nv", "fp8e4b15")
     deprecated_fp8_dot_operand_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "tf32"
@@ -64,6 +65,10 @@ class XPUOptions:
     fpsan_homomorphic_casts: bool = False
     core_clock_rate: int = 0  # kHz, scales the in-kernel cycle counter
     is_lts: bool = True
+    # Largest GRF mode the backend's automatic escalation will ever select
+    # for this target ("256" everywhere except "cri", which gets "512"); see
+    # `get_max_grf_mode`, the single source of truth for this policy.
+    max_grf_mode: str = "256"
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -83,14 +88,24 @@ class XPUOptions:
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
-# Largest spill the auto-large-GRF upgrade tolerates before rebuilding, in the
-# unit external consumers compare `n_spills` in: dword-equivalents per lane. 16
-# is PyTorch inductor's default `spill_threshold` for non-HIP, so a spill at or
-# below this cannot change inductor's verdict and a rebuild would only cost
-# compile time. Kept in sync with `kMaxSpillSlotsPerLane` in driver.c, except on
-# the LTS driver line -- see `accepts_default_grf` -- because driver.c has no
-# driver-version context and the SPV path it gates was not measured for #8106.
-MAX_REG_SPILL_SLOTS_PER_LANE = 16
+# The largest rebuild threshold that keeps every *accepted* kernel strictly below
+# PyTorch inductor's `spill_threshold` -- 16 dword-equivalents per lane by default off
+# HIP -- at every sub-group width the backend can compile at. SIMD16 is the binding
+# case, being the narrowest (`warp_size` defaults to 32 and `setThreadsPerWarp` only
+# ever lowers it to 16): 16 slots/lane is 16 * 4 * 16 = 1024 B there, so 1025 would
+# already let a SIMD16 kernel reach inductor's threshold on the default-GRF build.
+# Inductor prunes strictly above 16, so this leaves a slot of margin at SIMD16.
+#
+# Bytes, not slots, is what makes that bound hold: the same 16 slots/lane is 2048 B at
+# SIMD32, so comparing slots at the *compiled* width lets the byte budget float up with
+# it. #7959 did exactly that and the gate went silent from 1024 B all the way to 2175 B
+# at SIMD32 -- the band issue #8077 regressed in. Taking the minimum over widths means
+# the wider width fires early (8 slots/lane at SIMD32), which is the safe direction: a
+# rebuild costs compile time, while declining leaves inductor timing a spilling binary.
+#
+# Kept in sync with driver.c, except on the LTS driver line -- see
+# `accepts_default_grf`.
+REBUILD_SPILL_BYTES_PER_THREAD = 1024
 
 SPILL_SIZE_RE = re.compile(r'spill_size\s*[:=]\s*(\d+)')
 PTSS_OVERFLOW_RE = re.compile(
@@ -129,38 +144,70 @@ def extract_spill_size_from_zebin(file):
     return 0
 
 
-def spill_slots_per_lane(spill_size, threads_per_warp):
-    """Convert a zebin `spill_size` to the unit `n_spills` is reported in.
-
-    `spill_size` is bytes allocated per hardware thread; CUDA and HIP report
-    `n_spills` as dword-equivalents per lane, and that is the unit external
-    consumers threshold on. Mirrors `Spills::slotsPerLane` in driver.c, down to
-    the truncating division and the raw-byte fallback for an unknown width.
+def get_max_grf_mode(arch: dict) -> str:
     """
-    if spill_size <= 0 or threads_per_warp <= 0:
-        return spill_size
-    return spill_size // (4 * threads_per_warp)
+    Returns the largest GRF mode the backend's automatic escalation paths
+    will ever select for a target ("automatic" is load-bearing: an explicit
+    `grf_mode='512'` bypasses this, and a `num_warps > 32` kernel on
+    `grf_mode='default'` gets no automatic escalation at all, see
+    `make_spv`/`make_zebin`).
+
+    This is the single source of truth for the "cri" vs. everything-else GRF
+    policy. `parse_target` calls this once per target to populate
+    `dev_prop['max_grf_mode']` (see the `tgt_prop.get('max_grf_mode', ...)`
+    call there for how a driver- or out-of-tree-arch-module-supplied override
+    participates, the same mechanism every other per-target capability in
+    this file uses), from which it reaches every consumer as
+    `opt.max_grf_mode`: `annotate_module`'s `ttig.max_grf_mode` module
+    attribute (read by `RegisterPressureAnalysis::getGRFBytesPerHardwareThread`
+    to resolve its `UnknownGRFSizeAssumption::Largest` case for both
+    `grf_mode='default'` and `grf_mode='auto'`), `metadata["max_grf_mode"]` (via
+    `options.__dict__`, handed to `driver.c`'s `load_binary` so the JIT
+    large-GRF retry escalates to the same mode), and `make_zebin`'s ocloc
+    auto-large-GRF retry flag.
+
+    Arguments:
+      arch: the `target.arch` dict for the current device.
+
+    Returns:
+      "512" if the target is "cri", otherwise "256".
+    """
+    return "512" if arch.get("arch") == "cri" else "256"
 
 
-def accepts_default_grf(spill_size, threads_per_warp, is_lts):
+def accepts_default_grf(spill_size, is_lts):
     """Whether the default-GRF build is good enough to skip the large-GRF rebuild.
 
-    On the rolling driver line a spill at or below inductor's `spill_threshold`
-    cannot change its accept/reject verdict, so the rebuild would only add
-    compile time. LTS IGC prices the resulting binaries differently: declining
-    the rebuild costs +21% end to end on `pyhpc_isoneutral_mixing` (Max 1100,
-    12 of 165 configs affected, issue #8106), while the same 12 configs measure
-    neutral on rolling. So LTS keeps the older rule of rebuilding on any spill
-    and rolling keeps the compile-time saving.
+    Rolling rebuilds once the spill reaches `REBUILD_SPILL_BYTES_PER_THREAD` bytes per
+    hardware thread -- the level that keeps an accepted kernel under inductor's
+    `spill_threshold` at the narrowest width we compile at. Fixing a byte count rather
+    than a per-lane slot count is what makes that hold at every width: #7959's rule
+    compared slots at the compiled width, so the effective budget doubled with the
+    sub-group size -- 2176 B at SIMD32 -- and the gate stayed silent across a band where
+    rebuilding measurably paid (issue #8077).
 
-    The LTS branch compares BYTES rather than slots on purpose. Because
-    `spill_slots_per_lane` truncates, a slot threshold of 0 would still accept a
-    64 B spill (0 slots at SIMD32) and skip the rebuild -- and a 64 B config is
-    one of the 12 this is meant to cover.
+    Inductor's threshold sets the level but grants no licence below it: it only prunes
+    configs from inductor's timing contest, so a spill under it is not one inductor has
+    approved. Declining the rebuild leaves inductor timing the spilling default-GRF
+    binary with no faster rival to pick.
+
+    LTS IGC prices the resulting binaries differently: declining the rebuild costs
+    +21% end to end on `pyhpc_isoneutral_mixing` (Max 1100, 12 of 165 configs
+    affected, issue #8106), while the same 12 configs measure neutral on rolling. So
+    LTS keeps the older rule of rebuilding on any spill.
+
+    Both branches compare bytes, the unit both spill probes report. Neither needs the
+    compiled sub-group size: routing the spill and the threshold through the same
+    truncating bytes-to-dword-equivalents conversion cancels the divisor, so the
+    per-lane form of this gate decided exactly
+    `spill_size >= REBUILD_SPILL_BYTES_PER_THREAD` at every width a power-of-two
+    4 * threads_per_warp divides -- every width the backend can reach, plus the
+    unknown-width fallback. That conversion lives in `Spills::slotsPerLane` in
+    driver.c, which is the only producer of `n_spills` on either path.
     """
     if is_lts:
         return spill_size <= 0
-    return spill_slots_per_lane(spill_size, threads_per_warp) <= MAX_REG_SPILL_SLOTS_PER_LANE
+    return spill_size < REBUILD_SPILL_BYTES_PER_THREAD
 
 
 def min_dot_size(device_props: Union[Dict, GPUTarget]):
@@ -258,6 +305,23 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         dev_prop['block_io_base_alignment'] = tgt_prop.get('block_io_base_alignment', 64)
         dev_prop['core_clock_rate'] = self.core_clock_rate(tgt_prop)
         dev_prop['is_lts'] = is_lts
+        # Largest GRF mode the backend's automatic escalation will ever select
+        # for this target; see `get_max_grf_mode`. A driver- or out-of-tree
+        # arch-module-supplied override wins, same as every other capability
+        # above. Unlike its siblings, an invalid value here is not merely
+        # cosmetic: `make_zebin` interpolates it directly into an `ocloc`
+        # flag (hard failure on a typo), `driver.c`'s JIT retry silently
+        # falls back to 256 for anything that isn't exactly "512"/"128", and
+        # `RegisterPressureAnalysis` silently falls back to 512 for anything
+        # that isn't exactly "128"/"256": three different interpretations of
+        # the same bad value, with the worst combination (a permissive
+        # 512-byte pressure budget paired with a 256-GRF hardware ceiling)
+        # silently reproducing a register-pressure undercount.
+        # Validate here, once, so every downstream consumer agrees.
+        dev_prop['max_grf_mode'] = tgt_prop.get('max_grf_mode', get_max_grf_mode(tgt_prop))
+        if dev_prop['max_grf_mode'] not in ("128", "256", "512"):
+            raise AssertionError(
+                f"invalid max_grf_mode override {dev_prop['max_grf_mode']!r}: must be one of '128', '256', '512'")
 
         if '__intel_already_queried_extensions__' not in tgt_prop:
             # All GPUs with the same device_id have the same extensions, so we just
@@ -274,8 +338,11 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         args["allow_fp8e4nv"] = True
         args["core_clock_rate"] = self.properties['core_clock_rate']
         args["is_lts"] = self.properties['is_lts']
+        args["max_grf_mode"] = self.properties['max_grf_mode']
         if "enable_fp_fusion" not in args:
             args["enable_fp_fusion"] = knobs.language.default_fp_fusion
+        if "in_loop_sink" not in args:
+            args["in_loop_sink"] = knobs.intel.in_loop_sink
         return XPUOptions(**args)
 
     @staticmethod
@@ -283,6 +350,8 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         ret = BaseBackend.parse_attr(desc)
         if "N" in desc:
             ret += [["tt.padding", 1]]
+        if "T" in desc:
+            ret += [["tt.round_f32_to_tf32", 1]]
         # Shape divisibility: S<dim>D<divisor> (e.g., S0D128)
         import re
         for match in re.finditer(r'S(\d+)D(\d+)', desc):
@@ -303,10 +372,12 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
 
     @staticmethod
     def get_tensordesc_specialization(arg, **kwargs):
-        # Format: "N" (padding) + "S<dim>D<divisor>" (shape divisibility)
+        # Format: "N" (padding) + "T" (tf32 rounding) + "S<dim>D<divisor>" (shape divisibility)
         key = ""
         if getattr(arg, "padding", None) == "nan":
             key += "N"
+        if getattr(arg, "round_f32_to_tf32", False):
+            key += "T"
         # A cap of 4 is enough for the 2D block I/O alignment check, but collapsing a
         # unit dim of a rank-3 descriptor needs shape[i] % block_shape[i] == 0, so for
         # that shape cap at the block extent instead (issues/7679).
@@ -394,6 +465,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         module_opts.sub_32_dpas = opt.sub_32_dpas
         module_opts.target_arch = cls.target_arch
         module_opts.block_io_base_alignment = properties["block_io_base_alignment"]
+        module_opts.max_grf_mode = opt.max_grf_mode
 
     @classmethod
     @track
@@ -484,7 +556,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         intel.passes.ttgpuir.add_pipeline(pm, opt.num_stages, opt.use_barrier)
 
         if (opt.reduce_variable_liveness):
-            intel.passes.ttgpuir.add_reduce_variable_liveness(pm, opt.grf_mode)
+            intel.passes.ttgpuir.add_reduce_variable_liveness(pm, opt.grf_mode, not opt.in_loop_sink)
 
         # Off by default: code sinking is perf-neutral on measured kernels (it
         # reliably reduces register spills, but the relieved traffic is not on
@@ -646,6 +718,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
         if total_num_warps is not None:
             metadata["num_warps"] = total_num_warps
         metadata["threads_per_warp"] = intel.get_threads_per_warp(src)
+        metadata["warp_size"] = metadata["threads_per_warp"]
         metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size")
         metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment")
         metadata["profile_scratch_size"] = src.get_int_attr("ttg.profile_scratch_memory_size") or 0
@@ -663,11 +736,15 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
     @track
     def make_spv(cls, src, metadata, options):
         driver_version = metadata["target"].arch.get("driver_version")
-        is_lts = cls.is_lts(driver_version)
-        os.environ["INTEL_XPU_BACKEND_IS_LTS"] = "1" if is_lts else "0"
-        spirv, name = intel.translate_to_spirv(src, is_lts)
+        spirv, name = intel.translate_to_spirv(src, cls.is_lts(driver_version))
         metadata["name"] = name
         metadata.setdefault("build_flags", "")
+        # `metadata["max_grf_mode"]` is already populated from `options.__dict__`
+        # at compile-metadata init time (see `XPUOptions.max_grf_mode`, sourced
+        # from `parse_target`'s `get_max_grf_mode` call), covering both the
+        # Triton and the Gluon stage lists uniformly. Carried downstream to
+        # `make_zebin`'s retry below and to `driver.c`'s JIT retry via the
+        # `load_binary` metadata argument.
         if options.grf_mode == '128':
             metadata["build_flags"] += " -cl-intel-128-GRF-per-thread"
         elif options.grf_mode == '256':
@@ -719,10 +796,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
             if options.grf_mode == 'default' and options.num_warps <= 32:
                 # Try rebuilding with larger GRF modes (default first, then larger).
                 retry_grf_mode_list = [""]  # default GRF mode by omitting the flag
-                if metadata["target"].arch.get("arch") == 'cri':
-                    retry_grf_mode_list.append("-cl-intel-512-GRF-per-thread")
-                else:
-                    retry_grf_mode_list.append("-cl-intel-256-GRF-per-thread")
+                retry_grf_mode_list.append(f"-cl-intel-{metadata['max_grf_mode']}-GRF-per-thread")
             else:
                 # Non-default GRF mode is already encoded in metadata["build_flags"] (including "auto").
                 retry_grf_mode_list = [""]
@@ -735,7 +809,7 @@ class XPUBackend(BaseBackend, metaclass=XPUBackendMeta):
                     subprocess.check_output(ocloc_cmd, stderr=subprocess.STDOUT, text=True)
                     if options.grf_mode == "default":
                         spill_size = extract_spill_size_from_zebin(fbin)
-                        if accepts_default_grf(spill_size, metadata["threads_per_warp"], options.is_lts):
+                        if accepts_default_grf(spill_size, options.is_lts):
                             break
                 except (subprocess.CalledProcessError, IntelGPUError) as e:
                     # If GRF mode was not last yet, retry with different GRF mode

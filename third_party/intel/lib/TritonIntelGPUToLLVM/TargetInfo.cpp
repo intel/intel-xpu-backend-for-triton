@@ -102,6 +102,37 @@ StringRef TargetInfo::getAtomicSyncScope(MemSyncScope scope) const {
   llvm_unreachable("unknown memory synchronization scope");
 }
 
+Value TargetInfo::loadRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
+                              Type valueTy, Value pred,
+                              MemSyncScope scope) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto results =
+      emitPredicated(rewriter, loc, pred, ValueRange{b.undef(valueTy)}, [&] {
+        unsigned alignment = valueTy.getIntOrFloatBitWidth() / 8;
+        Value loaded = LLVM::LoadOp::create(
+            rewriter, loc, valueTy, ptr, alignment, /*isVolatile=*/false,
+            /*isNonTemporal=*/false, /*isInvariant=*/false,
+            /*isInvariantGroup=*/false, LLVM::AtomicOrdering::monotonic,
+            getAtomicSyncScope(scope));
+        return SmallVector<Value>{loaded};
+      });
+  return results.front();
+}
+
+void TargetInfo::storeRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
+                              Value value, Value pred,
+                              MemSyncScope scope) const {
+  emitPredicated(rewriter, loc, pred, ValueRange{}, [&] {
+    unsigned alignment = value.getType().getIntOrFloatBitWidth() / 8;
+    LLVM::StoreOp::create(rewriter, loc, value, ptr, alignment,
+                          /*isVolatile=*/false, /*isNonTemporal=*/false,
+                          /*isInvariantGroup=*/false,
+                          LLVM::AtomicOrdering::monotonic,
+                          getAtomicSyncScope(scope));
+    return SmallVector<Value>{};
+  });
+}
+
 void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
                          triton::gpu::AddrSpace targets) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -125,8 +156,43 @@ Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
   return b.i32_val(0);
 }
 
+// SPIR-V has no vector of pointers without SPV_INTEL_masked_gather_scatter.
+// Cast per element: a cast of the whole vector keeps the pointer vector type.
+static Value ptrsToInts(RewriterBase &rewriter, Location loc, Value val) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto vecTy = dyn_cast<VectorType>(val.getType());
+  if (!vecTy)
+    return b.ptrtoint(i64_ty, val);
+
+  Value res = b.undef(vecTy.clone(i64_ty));
+  for (int i = 0; i < vecTy.getNumElements(); ++i) {
+    Value idx = b.i32_val(i);
+    Value elem = b.extract_element(val, idx);
+    res = b.insert_element(res, b.ptrtoint(i64_ty, elem), idx);
+  }
+  return res;
+}
+
+static Value intsToPtrs(RewriterBase &rewriter, Location loc, Value val,
+                        Type ptrTy) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto vecTy = dyn_cast<VectorType>(ptrTy);
+  if (!vecTy)
+    return b.inttoptr(ptrTy, val);
+
+  Value res = b.undef(vecTy);
+  for (int i = 0; i < vecTy.getNumElements(); ++i) {
+    Value idx = b.i32_val(i);
+    Value elem = b.extract_element(val, idx);
+    res = b.insert_element(res, b.inttoptr(vecTy.getElementType(), elem), idx);
+  }
+  return res;
+}
+
 void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
                               Value ctaId, Value val, Value pred) const {
+  if (isa<LLVM::LLVMPointerType>(getElementTypeOrSelf(val.getType())))
+    val = ptrsToInts(rewriter, loc, val);
   LLVM::intel::createPredicatedBlock(rewriter, loc, pred, [&] {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     b.store(val, ptr);
@@ -137,6 +203,15 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
 Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
                               Value ctaId, Type elemTy, Value pred,
                               Operation *localLoadOp) const {
+  if (isa<LLVM::LLVMPointerType>(getElementTypeOrSelf(elemTy))) {
+    Type loadTy = i64_ty;
+    if (auto vecTy = dyn_cast<VectorType>(elemTy))
+      loadTy = vecTy.clone(i64_ty);
+    Value result =
+        loadDShared(rewriter, loc, ptr, ctaId, loadTy, pred, localLoadOp);
+    return intsToPtrs(rewriter, loc, result, elemTy);
+  }
+
   assert(cast<mlir::LLVM::LLVMPointerType>(ptr.getType()).getAddressSpace() ==
              3 &&
          "Invalid addr space for loadShared");
@@ -184,7 +259,8 @@ Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
 
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
-                            unsigned reduceLaneIdMask) const {
+                            unsigned reduceLaneIdMask,
+                            unsigned /*broadcastLaneIdMask*/) const {
   /**
   The reduceLaneIdMask is the bit map of the bases of the linear layout to be
   reduced within warp. Here is the code pieces of ReduceOpToLLVM.cpp:
@@ -230,37 +306,45 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
   // TritonGEN::SubGroupReduceOp.
   if (op.getNumOperands() != 1 || op.getNumResults() != 1)
     return false;
-  Region &combineOp = op.getCombineOp();
-  if (combineOp.getBlocks().size() > 1)
-    return false;
-  Block &block = *combineOp.begin();
-  Operation *yield = block.getTerminator();
-  Operation *reduceOp = yield->getOperand(0).getDefiningOp();
-  if (!reduceOp || reduceOp->getNumOperands() != 2 ||
-      reduceOp->getNumResults() != 1)
-    return false;
-  if (reduceOp->getOperand(0) != block.getArgument(0) ||
-      reduceOp->getOperand(1) != block.getArgument(1))
+  FailureOr<Operation *> reduceOp =
+      gpu::intel::matchSingleBinaryCombine(op.getCombineOp());
+  if (failed(reduceOp))
     return false;
 
   auto mod = op->getParentOfType<ModuleOp>();
   unsigned warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
-  if (!isSupportedWarpReduceOp(reduceOp, numLaneToReduce, warpSize))
+  if (!isSupportedWarpReduceOp(*reduceOp, numLaneToReduce, warpSize))
     return false;
 
   for (unsigned i = 0; i < acc.size(); ++i) {
-    acc[i] = genWarpReduce(rewriter, loc, acc[i], reduceOp, numLaneToReduce,
+    acc[i] = genWarpReduce(rewriter, loc, acc[i], *reduceOp, numLaneToReduce,
                            warpSize);
   }
 
   return true;
 }
 
-std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
-  std::string funcName =
-      resultElementTy.isInteger(32) ? "__imf_umulhi" : "__imf_umul64hi";
-  return funcName;
+bool TargetInfo::warpScan(RewriterBase &rewriter, Location loc,
+                          SmallVector<Value> &acc, triton::ScanOp op,
+                          unsigned scanDim, unsigned warpSize) const {
+  if (!gpu::intel::isSubgroupScanEnabled())
+    return false;
+
+  // `InclusiveScan` scans the entire sub-group and SPIR-V offers no portable
+  // clustered scan, so the axis must occupy every lane. Gate on the
+  // unique-data lane count, which discounts broadcast duplicates.
+  if (scanDim != warpSize)
+    return false;
+
+  FailureOr<Operation *> combineOp = matchSupportedWarpScanOp(op);
+  if (failed(combineOp))
+    return false;
+
+  for (Value &value : acc)
+    value = genWarpScan(rewriter, loc, value, *combineOp, warpSize);
+
+  return true;
 }
 
 void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,

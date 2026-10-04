@@ -24,16 +24,6 @@ index be4930052..32744d307 100644
  @triton.jit
  def fused_moe_kernel(
      # Pointers to matrices
-@@ -414,9 +429,6 @@ def fused_moe_kernel(
-             pid_m,  # first element = pid_m
-             num_valid_tokens,  # remaining elements = constant
-         )
--    # Cast to int64 to prevent overflow in stride*offset products
--    # (e.g. stride_cm * offs_token can exceed int32 for large token counts)
--    offs_token = offs_token.to(tl.int64)
- 
-     token_mask = offs_token < num_valid_tokens
- 
 @@ -558,9 +570,9 @@ def fused_moe_kernel(
                      else:
                          accumulator = tl.dot(a, b, acc=accumulator)

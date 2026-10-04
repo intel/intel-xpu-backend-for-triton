@@ -519,7 +519,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>
 #smem = #ttg.shared_memory
 
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 8 : i32, "ttng.two-ctas" = true, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 8 : i32, "ttng.two-ctas" = true, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @end_cluster_barrier_for_mma_with_tmem_teardown
   // CHECK: ttng.tmem_alloc
   // CHECK: ttng.tc_gen5_mma
@@ -845,7 +845,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>
 #smem = #ttg.shared_memory
 
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 8 : i32, "ttng.two-ctas" = true, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 8 : i32, "ttng.two-ctas" = true, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @mma_v5_two_ctas_wait_barrier_no_cluster
   // CHECK: ttng.init_barrier
   // CHECK: ttng.tc_gen5_mma
@@ -1028,7 +1028,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 32, colStride = 1, CGALayout = [[0, 0]]>
 #smem = #ttg.shared_memory
 
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // Negative test: no cluster barrier should be inserted for multiCTA MMA when the twoCTAs is not set
   // CHECK-LABEL: @no_cluster_mma_without_two_ctas
   // CHECK: ttng.init_barrier
@@ -1667,5 +1667,35 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.tot
     ttng.wait_barrier %bar, %c1, %true deps %page : !ttg.memdesc<2xi64, #barrier, #smem, mutable>, !ttg.memdesc<64xi32, #shared, #smem, mutable>
     ttng.inval_barrier %bar : !ttg.memdesc<2xi64, #barrier, #smem, mutable>
     tt.return
+  }
+}
+
+// -----
+
+#histSplit = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1]]}>
+#histBroadcast = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // The first histogram's remote reads must finish before the second one
+  // initializes the same scratch, even though that histogram is CTA-local.
+  // CHECK-LABEL: @cross_cta_histogram_scratch_reuse
+  // CHECK: tt.histogram {{.*}}allocation.offset = [[HIST_SCRATCH:[0-9]+]]
+  // CHECK-NEXT: ttng.cluster_barrier
+  // CHECK-NEXT: tt.histogram {{.*}}allocation.offset = [[HIST_SCRATCH]]
+  tt.func @cross_cta_histogram_scratch_reuse(%input: tensor<2048xi32, #histSplit>, %local: tensor<2048xi32, #histBroadcast>) -> (tensor<512xi32, #histSplit>, tensor<512xi32, #histBroadcast>) {
+    %hist = tt.histogram %input : tensor<2048xi32, #histSplit> -> tensor<512xi32, #histSplit>
+    %next = tt.histogram %local : tensor<2048xi32, #histBroadcast> -> tensor<512xi32, #histBroadcast>
+    tt.return %hist, %next : tensor<512xi32, #histSplit>, tensor<512xi32, #histBroadcast>
+  }
+
+  // Fully replicated inputs do not need cross-CTA histogram communication.
+  // CHECK-LABEL: @local_histogram_scratch_reuse
+  // CHECK: tt.histogram
+  // CHECK-NOT: ttng.cluster_barrier
+  // CHECK: tt.histogram
+  tt.func @local_histogram_scratch_reuse(%input: tensor<2048xi32, #histBroadcast>, %local: tensor<2048xi32, #histBroadcast>) -> (tensor<512xi32, #histSplit>, tensor<512xi32, #histBroadcast>) {
+    %hist = tt.histogram %input : tensor<2048xi32, #histBroadcast> -> tensor<512xi32, #histSplit>
+    %next = tt.histogram %local : tensor<2048xi32, #histBroadcast> -> tensor<512xi32, #histBroadcast>
+    tt.return %hist, %next : tensor<512xi32, #histSplit>, tensor<512xi32, #histBroadcast>
   }
 }
