@@ -2714,8 +2714,20 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // COM: loops 1 and 2: loop 2 also converts %s2 (%cvtX, to #dot_b, 32 B/lane)
 // COM: and reads %argB; loop 3 converts %s2 again (%cvtZ); %keep reads %s2
 // COM: after every loop, so no hoist ever retires %s2. Loop 2's live-in is
-// COM: %src 256 + %s2 32 + %argB 32 = 320. Decided last to first, at
-// COM: 128-GRF/default:
+// COM: %src 256 + %s2 32 + %argB 32 = 320. %cvtZ converts %s2 to #dot_b48r,
+// COM: not #dot_b48: its parent differs from #dpas48 only in repCluster
+// COM: ([2, 1] instead of [4, 1]), and loop 3's %argA and accumulator take
+// COM: that parent too, as case 50 does. Every per-lane size is unchanged
+// COM: (#dot_b48r 32, #dot_a48r 64, the accumulator 128). Loop 3 starts from
+// COM: a zero accumulator and %r2 is returned instead; %r2 then spans loop 3,
+// COM: which no figure below sees: liveInPressure ignores a value merely
+// COM: spanning a loop, and loop 3's own peak stays far under 1088. The types
+// COM: differ so that %cvtX is no twin of %cvtZ: with one type, %cvtX's
+// COM: refusal would be charged at once as a merge into the hoisted %cvtZ,
+// COM: {%cvtX} would skip the loop-level gate, and nothing would read the
+// COM: charge this case is about (that path is covered by
+// COM: hoist-layout-conversions-late-refusal-merge.mlir). Decided last to
+// COM: first, at 128-GRF/default:
 // COM:   * loop 3: %cvtZ, +32 on a 96 live-in (%s2 + %argA); its anchor is
 // COM:     %s2, below loop 1, so the peak is untouched. Hoisted.
 // COM:   * loop 2: %cvt2 (-192, loop 1's %cvt1 sits before loop 2) is refused
@@ -2728,29 +2740,37 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // COM:     just %cvt1's own +64. netBytes[loop 2] = -192.
 // COM:   * shared-source phase: group {%cvt2} is merge-charged, so its loop is
 // COM:     left out of the loop-level gate; the trial is still measured, at
-// COM:     896 <= 1088, and accepted. Then group {%cvtX}: 320 - 192 + 32 =
-// COM:     160 < 204, hoisted.
+// COM:     896 <= 1088, and accepted. Then group {%cvtX} (%s2 already has the
+// COM:     hoisted %cvtZ): 320 - 192 + 32 = 160 < 204, hoisted.
 // COM: At 256-GRF, %cvtX clears the loop-level gate in the first phase (352 <
 // COM: 409.6) and is hoisted there, so the charge is never consulted for it.
 // COM: All four conversions land outside their loops at every GRF mode; none
 // COM: is stamped. (An earlier, since-corrected version of this charge flat-
 // COM: debited loop 2 only +64 instead of the full -192, which double-counted
 // COM: %cvt2's 64 bytes against group {%cvt2}'s own delta and left %cvtX
-// COM: refused at 224 instead of hoisted at 160.) This case pins that
-// COM: correction only: with no merge charge at all, the accepted group
-// COM: {%cvt2} would price loop 2 at the same -192 itself, before {%cvtX} is
-// COM: tried, and the outcome would be identical. Case 51 is the shape whose
-// COM: outcome needs the charge.
+// COM: refused at 224 instead of hoisted at 160. With group {%cvt2}'s
+// COM: merge-charged skip in place, the same flat +64 gives 320 + 64 + 32 =
+// COM: 416 >= 204, refused all the same.) This case pins that correction
+// COM: only: with no merge charge at all, the accepted group {%cvt2} would
+// COM: price loop 2 at the same -192 itself, before {%cvtX} is tried, and
+// COM: the outcome would be identical. Case 51 is the shape whose outcome
+// COM: needs the charge.
+// COM: (Predicted from static analysis, not yet confirmed against a build:
+// COM: the retyping of %cvtZ and loop 3 postdates this case's last confirmed
+// COM: trace. Every figure above is predicted to be unchanged from it.)
 
 #blocked48 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas48 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
 #dot_a48 = #ttg.dot_op<{opIdx = 0, parent = #dpas48, kWidth = 1}>
 #dot_b48 = #ttg.dot_op<{opIdx = 1, parent = #dpas48, kWidth = 2}>
+#dpas48r = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [2, 1], A = [16, 16], B = [16, 16], C = [16, 16]}>
+#dot_a48r = #ttg.dot_op<{opIdx = 0, parent = #dpas48r, kWidth = 1}>
+#dot_b48r = #ttg.dot_op<{opIdx = 1, parent = #dpas48r, kWidth = 2}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: tt.func @twin_merge_charge_frees_sibling_source
   tt.func @twin_merge_charge_frees_sibling_source(%arg0: tensor<128x16xf16, #blocked48>, %argB: tensor<16x16xf16, #dot_b48>,
-      %argA: tensor<128x16xf16, #dot_a48>, %argS2: tensor<16x16xf16, #blocked48>,
-      %arg2: tensor<128x16xf32, #dpas48>) -> (tensor<128x16xf32, #dpas48>, tensor<16x16xf16, #blocked48>) {
+      %argA: tensor<128x16xf16, #dot_a48r>, %argS2: tensor<16x16xf16, #blocked48>,
+      %arg2: tensor<128x16xf32, #dpas48>) -> (tensor<128x16xf32, #dpas48>, tensor<128x16xf32, #dpas48r>, tensor<16x16xf16, #blocked48>) {
     %c0_i32 = arith.constant 0 : i32
     %c8_i32 = arith.constant 8 : i32
     %c1_i32 = arith.constant 1 : i32
@@ -2786,16 +2806,17 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
       %e2 = tt.dot %cvt2, %argB, %d2, inputPrecision = tf32 : tensor<128x16xf16, #dot_a48> * tensor<16x16xf16, #dot_b48> -> tensor<128x16xf32, #dpas48>
       scf.yield %e2 : tensor<128x16xf32, #dpas48>
     }
+    %zC = arith.constant dense<0.000000e+00> : tensor<128x16xf32, #dpas48r>
     // CHECK: scf.for
     // CHECK-NOT: ttg.convert_layout
     // CHECK: tt.dot
-    %r3 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %r2) -> (tensor<128x16xf32, #dpas48>) : i32 {
-      %cvtZ = ttg.convert_layout %s2 : tensor<16x16xf16, #blocked48> -> tensor<16x16xf16, #dot_b48>
-      %d3 = tt.dot %argA, %cvtZ, %acc, inputPrecision = tf32 : tensor<128x16xf16, #dot_a48> * tensor<16x16xf16, #dot_b48> -> tensor<128x16xf32, #dpas48>
-      scf.yield %d3 : tensor<128x16xf32, #dpas48>
+    %r3 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %zC) -> (tensor<128x16xf32, #dpas48r>) : i32 {
+      %cvtZ = ttg.convert_layout %s2 : tensor<16x16xf16, #blocked48> -> tensor<16x16xf16, #dot_b48r>
+      %d3 = tt.dot %argA, %cvtZ, %acc, inputPrecision = tf32 : tensor<128x16xf16, #dot_a48r> * tensor<16x16xf16, #dot_b48r> -> tensor<128x16xf32, #dpas48r>
+      scf.yield %d3 : tensor<128x16xf32, #dpas48r>
     }
     %keep = arith.addf %s2, %s2 : tensor<16x16xf16, #blocked48>
-    tt.return %r3, %keep : tensor<128x16xf32, #dpas48>, tensor<16x16xf16, #blocked48>
+    tt.return %r2, %r3, %keep : tensor<128x16xf32, #dpas48>, tensor<128x16xf32, #dpas48r>, tensor<16x16xf16, #blocked48>
   }
 }
 
@@ -2984,8 +3005,12 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // COM: case 48's does not (see there). Case 48 plus four more light loops
 // COM: (2b..2e) between loops 2 and 3, each converting %src to #dot_a again,
 // COM: so the refused twins of %cvt1 are five and their group fails the
-// COM: shared-source phase, as case 45's does. The charge then is the only
-// COM: thing that prices loop 2's merge before {%cvtX} is tried.
+// COM: shared-source phase, as case 45's does. The charge %cvt1's hoist makes
+// COM: is then the only thing that prices loop 2's merge before {%cvtX} is
+// COM: tried. %cvtZ and loop 3 are retyped as in case 48 (to #dot_b51r and
+// COM: #dpas51r, %r2e returned instead of feeding loop 3) and for the same
+// COM: reason: with one type, %cvtX's refusal would itself be charged as a
+// COM: merge into %cvtZ, and {%cvtX} would skip the loop-level gate.
 // COM: Per-lane bytes as in case 48: %src 256, each #dot_a result 64, %s2
 // COM: and each #dot_b result 32, %argB 32, %argA 64. Loop 1's live-in is
 // COM: %src + %argB = 288, loop 2's is %src + %s2 + %argB = 320, loops
@@ -3011,20 +3036,28 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // COM:     <= 1088. Hoisted.
 // COM: Without the merge charge, loop 2's figure would still be 0 when
 // COM: {%cvtX} is tried, since the group that would have priced its merge
-// COM: failed: 320 + 0 + 32 = 352 >= 204, and %cvtX would be stamped too.
+// COM: failed: 320 + 0 + 32 = 352 >= 204, and %cvtX would be stamped too. A
+// COM: flat +64 charge in its place (case 48's earlier bug) gives 320 + 64 +
+// COM: 32 = 416 >= 204, and stamps %cvtX the same way.
 // COM: At 256-GRF, %cvtX clears the loop-level gate in the first phase (352 <
 // COM: 409.6) and everything else is decided as above, so the output is the
 // COM: same at every mode; only 128-GRF/default exercise the charge.
+// COM: (Predicted from static analysis, not yet confirmed against a build:
+// COM: the retyping of %cvtZ and loop 3 postdates this case's last confirmed
+// COM: trace. Every figure above is predicted to be unchanged from it.)
 
 #blocked51 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dpas51 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [4, 1], A = [32, 16], B = [16, 16], C = [32, 16]}>
 #dot_a51 = #ttg.dot_op<{opIdx = 0, parent = #dpas51, kWidth = 1}>
 #dot_b51 = #ttg.dot_op<{opIdx = 1, parent = #dpas51, kWidth = 2}>
+#dpas51r = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [4, 1], repCluster = [2, 1], A = [16, 16], B = [16, 16], C = [16, 16]}>
+#dot_a51r = #ttg.dot_op<{opIdx = 0, parent = #dpas51r, kWidth = 1}>
+#dot_b51r = #ttg.dot_op<{opIdx = 1, parent = #dpas51r, kWidth = 2}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
   // CHECK-LABEL: tt.func @merge_charge_outlives_refused_twin_group
   tt.func @merge_charge_outlives_refused_twin_group(%arg0: tensor<128x16xf16, #blocked51>, %argB: tensor<16x16xf16, #dot_b51>,
-      %argA: tensor<128x16xf16, #dot_a51>, %argS2: tensor<16x16xf16, #blocked51>,
-      %arg2: tensor<128x16xf32, #dpas51>) -> (tensor<128x16xf32, #dpas51>, tensor<16x16xf16, #blocked51>) {
+      %argA: tensor<128x16xf16, #dot_a51r>, %argS2: tensor<16x16xf16, #blocked51>,
+      %arg2: tensor<128x16xf32, #dpas51>) -> (tensor<128x16xf32, #dpas51>, tensor<128x16xf32, #dpas51r>, tensor<16x16xf16, #blocked51>) {
     %c0_i32 = arith.constant 0 : i32
     %c8_i32 = arith.constant 8 : i32
     %c1_i32 = arith.constant 1 : i32
@@ -3088,16 +3121,17 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
       %d2e = tt.dot %cvt2e, %argB, %acc, inputPrecision = tf32 : tensor<128x16xf16, #dot_a51> * tensor<16x16xf16, #dot_b51> -> tensor<128x16xf32, #dpas51>
       scf.yield %d2e : tensor<128x16xf32, #dpas51>
     }
+    %zC = arith.constant dense<0.000000e+00> : tensor<128x16xf32, #dpas51r>
     // CHECK: scf.for
     // CHECK-NOT: ttg.convert_layout
     // CHECK: tt.dot
-    %r3 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %r2e) -> (tensor<128x16xf32, #dpas51>) : i32 {
-      %cvtZ = ttg.convert_layout %s2 : tensor<16x16xf16, #blocked51> -> tensor<16x16xf16, #dot_b51>
-      %d3 = tt.dot %argA, %cvtZ, %acc, inputPrecision = tf32 : tensor<128x16xf16, #dot_a51> * tensor<16x16xf16, #dot_b51> -> tensor<128x16xf32, #dpas51>
-      scf.yield %d3 : tensor<128x16xf32, #dpas51>
+    %r3 = scf.for %iv = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%acc = %zC) -> (tensor<128x16xf32, #dpas51r>) : i32 {
+      %cvtZ = ttg.convert_layout %s2 : tensor<16x16xf16, #blocked51> -> tensor<16x16xf16, #dot_b51r>
+      %d3 = tt.dot %argA, %cvtZ, %acc, inputPrecision = tf32 : tensor<128x16xf16, #dot_a51r> * tensor<16x16xf16, #dot_b51r> -> tensor<128x16xf32, #dpas51r>
+      scf.yield %d3 : tensor<128x16xf32, #dpas51r>
     }
     %keep = arith.addf %s2, %s2 : tensor<16x16xf16, #blocked51>
-    tt.return %r3, %keep : tensor<128x16xf32, #dpas51>, tensor<16x16xf16, #blocked51>
+    tt.return %r2e, %r3, %keep : tensor<128x16xf32, #dpas51>, tensor<128x16xf32, #dpas51r>, tensor<16x16xf16, #blocked51>
   }
 }
 

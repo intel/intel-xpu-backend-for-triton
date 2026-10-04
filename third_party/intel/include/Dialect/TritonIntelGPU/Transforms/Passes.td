@@ -257,13 +257,14 @@ def TritonIntelGPUHoistLayoutConversions
     This does not reach a sibling hoisting on its own merits regardless of
     any twin's budget, which can still merge a twin away unconditionally, as
     it could before the twin credit existed. That merge is still charged to
-    the twin's loop: every twin a hoist structurally merges away is charged
-    the moment that hoist is accepted, whether or not this hoist's own credit
-    actually relied on excusing it. One case is not charged, and stays a
-    disclosed non-goal: a same-pair conversion refused in a loop decided
-    *after* this one (so not yet refused, and so not yet chargeable, at the
-    moment this hoist is accepted) still merges away once that later loop is
-    decided, but its loop keeps the figure its own refusal left it at.
+    the twin's loop, whichever of the two is decided first: a twin already
+    refused when a hoist is accepted is charged the moment that hoist is
+    accepted, whether or not this hoist's own credit actually relied on
+    excusing it, and a same-pair conversion refused only later, in a loop
+    decided after the hoisting one, is charged the moment its own refusal is
+    recorded, since its refusal does not stop the merge. Both charge the same
+    figure and flag the twin the same way, so the shared-source phase does
+    not price that merge again.
 
     A `tt.no_licm` stamp on a surviving refusal therefore does not mean the
     conversion survives: it only means this pass did not itself move it. The
@@ -366,13 +367,12 @@ def TritonIntelGPUHoistLayoutConversions
     * `liveInPressure` ignores a value merely spanning the loop to feed code
       below it, so the loop-level baseline measures what a hoist adds, not
       absolute occupancy. The peak gate does see such a value.
-    * A twin's loop is charged for a merge only when that twin is already a
-      recorded refusal at the moment the hoist it merges into is accepted
-      (see Twin credit). A same-pair conversion refused *later*, in a loop
-      decided after the hoisting one, merges away just the same once its own
-      loop is decided, but nothing goes back to correct the earlier charge:
-      "fold" the charge in at that later refusal's own time, rather than only
-      at the hoist's, is not implemented.
+    * A merge charged when its twin is refused (see Twin credit) is seen only
+      by what is decided after that refusal. A candidate in the same loop
+      decided before it, the cheaper one by this pass's own ordering, was
+      gated on a figure without the merge, although the merge was already
+      certain once the earlier-decided loop hoisted. The loop's figure is
+      right from the refusal on; that candidate is not re-decided.
   }];
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
 
