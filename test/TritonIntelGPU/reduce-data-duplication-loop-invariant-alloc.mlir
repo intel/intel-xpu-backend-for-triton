@@ -362,3 +362,74 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, ttg.tar
     tt.return %res : tensor<64x64xf32, #mma>
   }
 }
+
+// -----
+
+// COM: The _attn_bwd hit-case shape (flash_attention_benchmark.py, BLOCK_M2=64,
+// COM: BLOCK_N2=64, num_warps=16, D_HEAD=128): one loop-invariant `do` tile is
+// COM: converted in two sibling loops (the masked and unmasked dq loops), to a
+// COM: different dot-operand parent in each, and both loops prefetch. Each
+// COM: conversion gets its own allocation right after the load, outside both
+// COM: loops; the second one is anchored across the whole first loop, its
+// COM: prefetches and the first allocation.
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 16], warpsPerCTA = [16, 1], order = [1, 0]}>
+#mma = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 2], repCluster = [1, 2], A = [8, 16], B = [16, 32], C = [8, 32]}>
+#mma1 = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [8, 2], repCluster = [1, 1], A = [8, 16], B = [16, 16], C = [8, 16]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, ttg.target = "xpu", "ttg.threads-per-warp" = 16 : i32, ttig.min_sg_size = 16 : i32, ttig.support_2d_block_io, ttig.support_subgroup_matrix_multiply_accumulate} {
+  // RDD-LABEL: @loop_invariant_cvt_src_sibling_loops
+  // RDD:       %[[DO:.*]] = tt.load
+  // RDD-NEXT:  %[[ALLOC1:.*]] = ttg.local_alloc %[[DO]] :
+  // RDD-NEXT:  %[[ALLOC0:.*]] = ttg.local_alloc %[[DO]] :
+  // RDD-NEXT:  ttig.descriptor_prefetch
+  // RDD:       scf.for
+  // RDD-NOT:   ttg.local_alloc
+  // RDD:       ttg.local_load %[[ALLOC0]] :
+  // RDD-NOT:   ttg.local_alloc
+  // RDD:       scf.yield
+  // RDD-NOT:   ttg.local_alloc
+  // RDD:       scf.for
+  // RDD-NOT:   ttg.local_alloc
+  // RDD:       ttg.local_load %[[ALLOC1]] :
+  // RDD-NOT:   ttg.local_alloc
+  // RDD:       scf.yield
+  // COM: TritonGPUReorderInstructions re-anchors each allocation right after
+  // COM: the load, in program order, which swaps the two.
+  // PIPE-LABEL: @loop_invariant_cvt_src_sibling_loops
+  // PIPE:       %[[DO:.*]] = tt.load
+  // PIPE-NEXT:  %[[ALLOC0:.*]] = ttg.local_alloc %[[DO]] :
+  // PIPE-NEXT:  %[[ALLOC1:.*]] = ttg.local_alloc %[[DO]] :
+  // PIPE-NEXT:  ttig.descriptor_prefetch
+  // PIPE:       scf.for
+  // PIPE-NOT:   ttg.local_alloc
+  // PIPE:       ttg.local_load %[[ALLOC0]] :
+  // PIPE-NOT:   ttg.local_alloc
+  // PIPE:       scf.yield
+  // PIPE-NOT:   ttg.local_alloc
+  // PIPE:       scf.for
+  // PIPE-NOT:   ttg.local_alloc
+  // PIPE:       ttg.local_load %[[ALLOC1]] :
+  // PIPE-NOT:   ttg.local_alloc
+  // PIPE:       scf.yield
+  tt.func public @loop_invariant_cvt_src_sibling_loops(%do_ptr: tensor<64x128x!tt.ptr<f16>, #blocked>, %desc0: !tt.tensordesc<32x128xf16>, %desc1: !tt.tensordesc<64x128xf16>, %vT0: tensor<128x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma1, kWidth = 2}>>, %vT1: tensor<128x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>, %n0: i32, %n1: i32) -> (tensor<64x32xf32, #mma1>, tensor<64x64xf32, #mma>) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %cst0 = arith.constant dense<0.000000e+00> : tensor<64x32xf32, #mma1>
+    %cst1 = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
+    %do = tt.load %do_ptr : tensor<64x128x!tt.ptr<f16>, #blocked>
+    ttig.descriptor_prefetch %desc0[%c0, %c0] : !tt.tensordesc<32x128xf16>
+    %res0 = scf.for %i = %c0 to %n0 step %c1 iter_args(%acc = %cst0) -> (tensor<64x32xf32, #mma1>) : i32 {
+      ttig.descriptor_prefetch %desc0[%i, %c0] : !tt.tensordesc<32x128xf16>
+      %do_cvt = ttg.convert_layout %do : tensor<64x128xf16, #blocked> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma1, kWidth = 1}>>
+      %dp = tt.dot %do_cvt, %vT0, %acc, inputPrecision = tf32 : tensor<64x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma1, kWidth = 1}>> * tensor<128x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma1, kWidth = 2}>> -> tensor<64x32xf32, #mma1>
+      scf.yield %dp : tensor<64x32xf32, #mma1>
+    }
+    ttig.descriptor_prefetch %desc1[%c0, %c0] : !tt.tensordesc<64x128xf16>
+    %res1 = scf.for %i = %c0 to %n1 step %c1 iter_args(%acc = %cst1) -> (tensor<64x64xf32, #mma>) : i32 {
+      ttig.descriptor_prefetch %desc1[%i, %c0] : !tt.tensordesc<64x128xf16>
+      %do_cvt = ttg.convert_layout %do : tensor<64x128xf16, #blocked> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+      %dp = tt.dot %do_cvt, %vT1, %acc, inputPrecision = tf32 : tensor<64x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<128x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<64x64xf32, #mma>
+      scf.yield %dp : tensor<64x64xf32, #mma>
+    }
+    tt.return %res0, %res1 : tensor<64x32xf32, #mma1>, tensor<64x64xf32, #mma>
+  }
+}
