@@ -384,6 +384,7 @@ def cold_graph_timer(fn, device, warmup_ms, rep_ms):
         eviction.replay()
         attention.replay()
         backend.synchronize(device)
+
         def batch(repeats):
             # Fresh events avoid re-recording profiling tags across replay batches.
             pairs = [(backend.Event(enable_timing=True), backend.Event(enable_timing=True)) for _ in range(repeats)]
@@ -434,7 +435,8 @@ def time_options(options, inputs, device, rounds, warmup_ms, rep_ms, seed, field
             config = runtime.AttentionConfig(**option["config"]) if option["config"] is not None else None
             try:
                 with runtime.override_config(config):
-                    value = benchmark_callable(lambda: unified_attention(**inputs), device, warmup_ms, rep_ms, clear_cache)
+                    value = benchmark_callable(lambda: unified_attention(**inputs), device, warmup_ms, rep_ms,
+                                               clear_cache)
                 if not math.isfinite(value) or value <= 0:
                     raise RuntimeError(f"Invalid latency {value}")
                 option.setdefault(field, []).append(value)
@@ -452,7 +454,8 @@ def tune(args, manifest, device):
         "manifest": manifest,
         "settings": vars(args),
         "cases": [],
-        "timing_scope": "attention_sequence_cold_graph_device" if args.clear_cache else "attention_sequence_graph_device",
+        "timing_scope":
+        "attention_sequence_cold_graph_device" if args.clear_cache else "attention_sequence_graph_device",
         "started_at": time.time(),
     }
     checkpoint(args.measurements, data)
@@ -534,8 +537,8 @@ def benchmark(args, manifest, device):
     for index, case in enumerate(manifest):
         inputs = allocate_case(case, device, args.seed + index)
         samples = [
-            benchmark_callable(lambda inputs=inputs: unified_attention(**inputs), device, args.warmup_ms, args.rep_ms, args.clear_cache)
-            for _ in range(args.rounds)
+            benchmark_callable(lambda inputs=inputs: unified_attention(**inputs), device, args.warmup_ms, args.rep_ms,
+                               args.clear_cache) for _ in range(args.rounds)
         ]
         print(f"{case['id']}: {statistics.median(samples) * 1000:.3f} us", flush=True)
         del inputs
@@ -543,7 +546,8 @@ def benchmark(args, manifest, device):
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--clear-cache", action="store_true", help="Evict 256 MB before each graph replay, excluding eviction from timing")
+    parser.add_argument("--clear-cache", action="store_true",
+                        help="Evict 256 MB before each graph replay, excluding eviction from timing")
     parser.add_argument("--tune", action="store_true", help="Search candidates and export winners")
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--save-dir", default=str(Path(__file__).with_name("profiles")),
