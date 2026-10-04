@@ -3366,6 +3366,35 @@ struct DescriptorStoreOpToBlockIOConversion
     const unsigned descRowDim = mapSrcDimToDescDim(rowDim);
     const unsigned descColDim = mapSrcDimToDescDim(colDim);
 
+    // Dimensions outside the tile plane are folded into the base pointer
+    // below. Where the 2D block lowering realigns the base to 64 bytes, it adds
+    // the remainder to base_width but not to the pitch, which can leave width >
+    // pitch, so fold only if the base and every folded stride are provably
+    // 64-byte aligned.
+    if (descRank > 2 && needs2DBlockIOAlignmentCompensation(op)) {
+      // Not ttgi::isDivisible: it reads hints only from tt.func arguments, and
+      // the functions are already llvm.func here.
+      auto isDivisibleBy = [&](Value v, int64_t divisor) {
+        AxisInfo *info = const_cast<triton::intel::ModuleAxisInfoAnalysis &>(
+                             axisAnalysisPass)
+                             .getAxisInfo(v);
+        return info && info->getDivisibility(0) % divisor == 0;
+      };
+      int64_t strideDivisor = 64 / (elemSizeInBits / 8);
+      auto isFoldedBaseAligned = [&](MakeTensorDescOp d) {
+        if (!isDivisibleBy(d.getBase(), 64))
+          return false;
+        for (unsigned dim = 0; dim < descRank; ++dim)
+          if (dim != descRowDim && dim != descColDim &&
+              !isDivisibleBy(d.getStrides()[dim], strideDivisor))
+            return false;
+        return true;
+      };
+      if (!mlir::triton::intel::findDescriptorDefinitions(op.getDesc())
+               .allSatisfy(isFoldedBaseAligned))
+        return failure();
+    }
+
     unsigned numElems = getTotalElemsPerThread(tensorType);
 
     // The base pointer is uniform across all elements (unlike tensor-of-

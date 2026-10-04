@@ -35,8 +35,8 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
   // CHECK-LABEL: llvm.func spir_kernelcc @store_rank_reducing_dpas_tdesc
   // CHECK-COUNT-8: triton_gen.2Dblockstore {{.*}} {elem_size_in_bits = 16, tile_width = 16, tile_height = 8, v_blocks = 1, cache_control = Default}
-  tt.func public @store_rank_reducing_dpas_tdesc(%arg0: !tt.ptr<f16>, %arg1: i32,
-                                                  %arg2: i32, %arg3: i64) {
+  tt.func public @store_rank_reducing_dpas_tdesc(%arg0: !tt.ptr<f16> {tt.divisibility = 64 : i32}, %arg1: i32,
+                                                  %arg2: i32, %arg3: i64 {tt.divisibility = 32 : i32}) {
     %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf16, #dpas>
     %c0_i32 = arith.constant 0 : i32
     %c1_i32 = arith.constant 1 : i32
@@ -251,13 +251,14 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 16 : i32,
 
 // -----
 // COM: Rank-reducing descriptor store with a non-zero leading index: the index
-// COM: is folded into the base pointer with the leading stride (%arg4).
+// COM: is folded into the base pointer with the leading stride (%arg4). The
+// COM: divisibility hints prove the folded base stays 64-byte aligned.
 
 #dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
 module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
   // CHECK-LABEL: llvm.func spir_kernelcc @store_rank_reducing_nonzero_batch_index
-  tt.func public @store_rank_reducing_nonzero_batch_index(%arg0: !tt.ptr<f32>, %arg1: i32,
-                                                          %arg2: i32, %arg3: i64, %arg4: i64,
+  tt.func public @store_rank_reducing_nonzero_batch_index(%arg0: !tt.ptr<f32> {tt.divisibility = 64 : i32}, %arg1: i32,
+                                                          %arg2: i32, %arg3: i64, %arg4: i64 {tt.divisibility = 16 : i32},
                                                           %arg5: i32) {
     %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #dpas>
     %c0_i32 = arith.constant 0 : i32
@@ -294,6 +295,64 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32,
     // CHECK-NOT: triton_gen.2Dblockstore
     // CHECK-NOT: triton_gen.predicated.store
     tt.descriptor_store %desc[%arg5, %c0_i32, %c0_i32], %cst {ttig.block_io = "row_major"} : !tt.tensordesc<1x32x32xf32, #dpas>, tensor<32x32xf32, #dpas>
+    tt.return
+  }
+}
+
+// -----
+// COM: Without that proof the fold is declined and the generic lowering stores
+// COM: the tile: the leading stride is unknown in the first store, the base is
+// COM: only 16-byte aligned in the second, and the third is f16 with an 800-byte
+// COM: stride, a multiple of 16 elements but not of 64 bytes.
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @store_rank_reducing_unaligned_fold
+  // CHECK-NOT: triton_gen.2Dblockstore
+  // CHECK: llvm.store
+  // CHECK-NOT: triton_gen.2Dblockstore
+  tt.func public @store_rank_reducing_unaligned_fold(%arg0: !tt.ptr<f32> {tt.divisibility = 64 : i32},
+                                                     %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32},
+                                                     %arg2: i64, %arg3: i32,
+                                                     %arg4: !tt.ptr<f16> {tt.divisibility = 64 : i32}) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #dpas>
+    %c0_i32 = arith.constant 0 : i32
+    %c2_i32 = arith.constant 2 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c32_i64 = arith.constant 32 : i64
+    %c1024_i64 = arith.constant 1024 : i64
+    %desc0 = tt.make_tensor_descriptor %arg0, [%c2_i32, %c32_i32, %c32_i32], [%arg2, %c32_i64, %c1_i64] : <f32>, <1x32x32xf32, #dpas>
+    tt.descriptor_store %desc0[%arg3, %c0_i32, %c0_i32], %cst {ttig.block_io = "row_major"} : !tt.tensordesc<1x32x32xf32, #dpas>, tensor<32x32xf32, #dpas>
+    %desc1 = tt.make_tensor_descriptor %arg1, [%c2_i32, %c32_i32, %c32_i32], [%c1024_i64, %c32_i64, %c1_i64] : <f32>, <1x32x32xf32, #dpas>
+    tt.descriptor_store %desc1[%arg3, %c0_i32, %c0_i32], %cst {ttig.block_io = "row_major"} : !tt.tensordesc<1x32x32xf32, #dpas>, tensor<32x32xf32, #dpas>
+    %cst_f16 = arith.constant dense<0.000000e+00> : tensor<32x32xf16, #dpas>
+    %c10_i32 = arith.constant 10 : i32
+    %c40_i64 = arith.constant 40 : i64
+    %c400_i64 = arith.constant 400 : i64
+    %desc2 = tt.make_tensor_descriptor %arg4, [%c2_i32, %c10_i32, %c32_i32], [%c400_i64, %c40_i64, %c1_i64] : <f16>, <1x32x32xf16, #dpas>
+    tt.descriptor_store %desc2[%arg3, %c0_i32, %c0_i32], %cst_f16 {ttig.block_io = "row_major"} : !tt.tensordesc<1x32x32xf16, #dpas>, tensor<32x32xf16, #dpas>
+    tt.return
+  }
+}
+
+// -----
+// COM: A target that needs no 64-byte base alignment never widens base_width,
+// COM: so the fold needs no proof there.
+
+#dpas = #ttig.dpas<{repeatCount = 8, systolicDepth = 8, executionSize = 16, opsPerChan = 2, threadsPerWarp = 16, warpsPerCTA = [1, 1], repCluster = [4, 2], A = [32, 16], B = [16, 32], C = [32, 32]}>
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 16 : i32, ttig.2d_block_io_base_alignment = 4 : i32, "ttig.support_2d_block_io"} {
+  // CHECK-LABEL: llvm.func spir_kernelcc @store_rank_reducing_no_realignment
+  // CHECK: triton_gen.2Dblockstore
+  tt.func public @store_rank_reducing_no_realignment(%arg0: !tt.ptr<f32>, %arg1: i64, %arg2: i32) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #dpas>
+    %c0_i32 = arith.constant 0 : i32
+    %c2_i32 = arith.constant 2 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c32_i64 = arith.constant 32 : i64
+    %desc = tt.make_tensor_descriptor %arg0, [%c2_i32, %c32_i32, %c32_i32], [%arg1, %c32_i64, %c1_i64] : <f32>, <1x32x32xf32, #dpas>
+    tt.descriptor_store %desc[%arg2, %c0_i32, %c0_i32], %cst {ttig.block_io = "row_major"} : !tt.tensordesc<1x32x32xf32, #dpas>, tensor<32x32xf32, #dpas>
     tt.return
   }
 }
