@@ -15,6 +15,7 @@ from itertools import product
 from typing import Optional
 
 import torch
+import triton
 
 import triton_kernels_benchmark as benchmark_suite
 from triton_kernels_benchmark.benchmark_testing import BENCHMARKING_CONFIG, DEVICE
@@ -374,6 +375,20 @@ def get_unified_attention_benchmark(
                 k_descale = torch.rand(scale_shape, dtype=torch.float32)
                 v_descale = torch.rand(scale_shape, dtype=torch.float32)
 
+            # Set the 3D kernel specific arguments to allow the kernel wrapper
+            # to optionally select the 3D kernel based on its analysis.
+            seq_threshold_3D = 32
+            num_par_softmax_segments = 16
+            softmax_segm_output = torch.empty(seq_threshold_3D,
+                                              maybe_quantized_query.shape[1], num_par_softmax_segments,
+                                              triton.next_power_of_2(head_size), dtype=torch.float32,
+                                              device=maybe_quantized_query.device)
+            softmax_segm_max = torch.empty(seq_threshold_3D, maybe_quantized_query.shape[1], num_par_softmax_segments,
+                                           dtype=torch.float32, device=maybe_quantized_query.device)
+            softmax_segm_expsum = torch.empty(seq_threshold_3D, maybe_quantized_query.shape[1],
+                                              num_par_softmax_segments, dtype=torch.float32,
+                                              device=maybe_quantized_query.device)
+
             def triton_fn():
                 unified_attention(
                     q=maybe_quantized_query,
@@ -392,6 +407,11 @@ def get_unified_attention_benchmark(
                     q_descale=q_descale,
                     k_descale=k_descale,
                     v_descale=v_descale,
+                    seq_threshold_3D=seq_threshold_3D,
+                    num_par_softmax_segments=num_par_softmax_segments,
+                    softmax_segm_output=softmax_segm_output,
+                    softmax_segm_max=softmax_segm_max,
+                    softmax_segm_expsum=softmax_segm_expsum,
                     use_td=is_td_patched,
                 )
                 return output

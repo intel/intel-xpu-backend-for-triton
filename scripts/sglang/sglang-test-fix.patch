@@ -1,8 +1,8 @@
 diff --git a/python/sglang/kernels/ops/attention/dsv4/compress.py b/python/sglang/kernels/ops/attention/dsv4/compress.py
-index 99b9597c99..981e9839d9 100644
+index 4048d2fac4..f36bc7ea04 100644
 --- a/python/sglang/kernels/ops/attention/dsv4/compress.py
 +++ b/python/sglang/kernels/ops/attention/dsv4/compress.py
-@@ -19,23 +19,27 @@ from sglang.srt.utils import is_hip, is_xpu
+@@ -20,23 +20,27 @@ from .kv_layout import KVLayout
  from .utils import make_name
  
  _is_xpu = is_xpu()
@@ -47,10 +47,10 @@ index 99b9597c99..981e9839d9 100644
  
  if TYPE_CHECKING:
 diff --git a/python/sglang/kernels/ops/attention/dsv4/elementwise.py b/python/sglang/kernels/ops/attention/dsv4/elementwise.py
-index 053eb01c6c..fe941fb8cb 100644
+index c0ab88af3e..209600bf4a 100644
 --- a/python/sglang/kernels/ops/attention/dsv4/elementwise.py
 +++ b/python/sglang/kernels/ops/attention/dsv4/elementwise.py
-@@ -15,9 +15,15 @@ from .utils import make_name
+@@ -16,9 +16,15 @@ from .utils import make_name
  _is_hip = is_hip()
  _is_xpu = is_xpu()
  
@@ -70,11 +70,11 @@ index 053eb01c6c..fe941fb8cb 100644
  
  @cache_once
 diff --git a/python/sglang/kernels/ops/quantization/fp8_kernel.py b/python/sglang/kernels/ops/quantization/fp8_kernel.py
-index 6c8c805f09..02fcf2a505 100644
+index 8ec785e18b..7ff3aa7572 100644
 --- a/python/sglang/kernels/ops/quantization/fp8_kernel.py
 +++ b/python/sglang/kernels/ops/quantization/fp8_kernel.py
-@@ -59,7 +59,11 @@ if _is_cuda:
-         per_tensor_quant_fp8 as sgl_per_tensor_quant_fp8,
+@@ -51,7 +51,11 @@ if _is_cuda:
+         per_token_group_quant,
      )
  elif _is_xpu:
 -    from sgl_kernel import sgl_per_tensor_quant_fp8, sgl_per_token_quant_fp8
@@ -87,10 +87,10 @@ index 6c8c805f09..02fcf2a505 100644
  if _is_musa:
      from sgl_kernel import sgl_per_token_quant_fp8
 diff --git a/test/registered/attention/test_triton_attention_kernels.py b/test/registered/attention/test_triton_attention_kernels.py
-index ff90b20a70..4a49fb66a5 100644
+index 347e77b14d..5964f30644 100644
 --- a/test/registered/attention/test_triton_attention_kernels.py
 +++ b/test/registered/attention/test_triton_attention_kernels.py
-@@ -1004,15 +1004,22 @@ class TestTritonAttention(CustomTestCase):
+@@ -1003,15 +1003,22 @@ class TestTritonAttention(CustomTestCase):
              v_scale=1.0,
          )
  
@@ -120,7 +120,7 @@ index ff90b20a70..4a49fb66a5 100644
          unified_kv_indptr, unified_kv_indices, prefix_lens = build_unified_kv_indices(
              kv_indptr,
 diff --git a/python/sglang/srt/layers/activation.py b/python/sglang/srt/layers/activation.py
-index 8e5d6d048c..79df66b8e0 100644
+index 7c1bf82fed..5cf552dff7 100644
 --- a/python/sglang/srt/layers/activation.py
 +++ b/python/sglang/srt/layers/activation.py
 @@ -105,7 +105,23 @@ if _is_cuda:
@@ -149,10 +149,10 @@ index 8e5d6d048c..79df66b8e0 100644
      from sgl_kernel import gelu_and_mul, gelu_quick, gelu_tanh_and_mul, silu_and_mul
  elif _is_musa:
 diff --git a/python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe.py b/python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe.py
-index 758c2eacf6..b02fe7708b 100644
+index d4baddfe68..7a8eb137b9 100644
 --- a/python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe.py
 +++ b/python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe.py
-@@ -73,7 +73,12 @@ elif _is_hip:
+@@ -77,7 +77,12 @@ elif _is_hip:
      # Note: vllm_ops is not needed for HIP when _use_aiter=False
      # because the code uses moe_sum_reduce_triton as fallback (line 619)
  elif _is_xpu:
@@ -166,7 +166,7 @@ index 758c2eacf6..b02fe7708b 100644
  elif _is_musa:
      from sgl_kernel import moe_sum_reduce
  
-@@ -95,6 +100,39 @@ padding_size = get_moe_padding_size(_use_aiter)
+@@ -99,6 +104,39 @@ padding_size = get_moe_padding_size(_use_aiter)
  logger = logging.getLogger(__name__)
  
  
@@ -206,7 +206,7 @@ index 758c2eacf6..b02fe7708b 100644
  def _validate_fused_swiglu_interleaved(
      *,
      activation: str,
-@@ -1131,7 +1169,18 @@ def fused_moe(
+@@ -1155,7 +1193,18 @@ def fused_moe(
      Returns:
      - torch.Tensor: The output tensor after applying the MoE layer.
      """
@@ -227,7 +227,7 @@ index 758c2eacf6..b02fe7708b 100644
          from sgl_kernel import fused_experts as sgl_fused_experts
  
 diff --git a/python/sglang/srt/layers/moe/moe_runner/triton_utils/moe_align_block_size.py b/python/sglang/srt/layers/moe/moe_runner/triton_utils/moe_align_block_size.py
-index 9c611a4682..f2dbdb928f 100644
+index b36b37ea5e..e8f16d1f4f 100644
 --- a/python/sglang/srt/layers/moe/moe_runner/triton_utils/moe_align_block_size.py
 +++ b/python/sglang/srt/layers/moe/moe_runner/triton_utils/moe_align_block_size.py
 @@ -18,6 +18,61 @@ _is_musa = is_musa()
@@ -293,10 +293,10 @@ index 9c611a4682..f2dbdb928f 100644
      from sglang.kernels.ops.moe.moe_align_small_numel import (
          SMALL_NUMEL_LIMIT,
 diff --git a/python/sglang/srt/layers/moe/topk.py b/python/sglang/srt/layers/moe/topk.py
-index e7431a2f2e..44f4e48042 100644
+index 25c6a34a07..61779ff65c 100644
 --- a/python/sglang/srt/layers/moe/topk.py
 +++ b/python/sglang/srt/layers/moe/topk.py
-@@ -194,7 +194,28 @@ if _is_cuda or _is_hip or _is_xpu:
+@@ -219,7 +219,28 @@ if _is_cuda or _is_hip or _is_xpu:
          # XPU has no tvm_ffi, so the CUDA JIT topk_sigmoid isn't reachable;
          # use the AOT symbols from sgl_kernel directly. topk_sigmoid was aligned
          # with the post-#28715 CUDA signature in sgl-kernel-xpu#285.
@@ -327,7 +327,7 @@ index e7431a2f2e..44f4e48042 100644
          from sglang.kernels.ops.moe import topk_softmax
  
 diff --git a/test/registered/moe/test_fused_moe.py b/test/registered/moe/test_fused_moe.py
-index d7f22c2c65..1f636cd2c5 100644
+index ace128004c..526789e462 100644
 --- a/test/registered/moe/test_fused_moe.py
 +++ b/test/registered/moe/test_fused_moe.py
 @@ -117,7 +117,12 @@ class TestFusedMOE(CustomTestCase):
@@ -345,7 +345,7 @@ index d7f22c2c65..1f636cd2c5 100644
  
              a = self.create_random_gpu_tensor((m, k), dtype)
 diff --git a/python/sglang/kernels/ops/attention/fla/chunk_o.py b/python/sglang/kernels/ops/attention/fla/chunk_o.py
-index c2c04312a4..6c8396e8f6 100644
+index f644f15fc3..b681094401 100644
 --- a/python/sglang/kernels/ops/attention/fla/chunk_o.py
 +++ b/python/sglang/kernels/ops/attention/fla/chunk_o.py
 @@ -9,7 +9,7 @@ import triton
@@ -357,7 +357,7 @@ index c2c04312a4..6c8396e8f6 100644
  from sglang.kernels.ops.attention.fla.utils import check_shared_mem, is_nvidia_hopper
  
  BKV_LIST = [64, 128] if check_shared_mem() else [32, 64]
-@@ -76,51 +76,54 @@ def chunk_fwd_kernel_o(
+@@ -78,51 +78,54 @@ def chunk_fwd_kernel_o(
      b_o = tl.zeros([BT, BV], dtype=tl.float32)
      b_A = tl.zeros([BT, BT], dtype=tl.float32)
  
@@ -435,7 +435,7 @@ index c2c04312a4..6c8396e8f6 100644
  
  def chunk_fwd_o(
 diff --git a/python/sglang/kernels/ops/attention/fla/cumsum.py b/python/sglang/kernels/ops/attention/fla/cumsum.py
-index 775a8f800e..59a8f7070d 100644
+index b31331c724..d63374d738 100644
 --- a/python/sglang/kernels/ops/attention/fla/cumsum.py
 +++ b/python/sglang/kernels/ops/attention/fla/cumsum.py
 @@ -9,6 +9,7 @@ import triton
@@ -446,7 +446,7 @@ index 775a8f800e..59a8f7070d 100644
  from sglang.kernels.ops.attention.fla.utils import check_shared_mem, input_guard
  
  BS_LIST = [32, 64] if check_shared_mem() else [16, 32]
-@@ -47,25 +48,24 @@ def chunk_local_cumsum_scalar_kernel(
+@@ -49,25 +50,24 @@ def chunk_local_cumsum_scalar_kernel(
      else:
          bos, eos = i_b * T, i_b * T + T
  
@@ -481,7 +481,7 @@ index 775a8f800e..59a8f7070d 100644
  
  
  @triton.autotune(
-@@ -115,45 +115,25 @@ def chunk_local_cumsum_vector_kernel(
+@@ -118,45 +118,25 @@ def chunk_local_cumsum_vector_kernel(
          m_s = tl.where(o_i[:, None] >= o_i[None, :], 1.0, 0.0)
  
      if HEAD_FIRST:
@@ -542,7 +542,7 @@ index 775a8f800e..59a8f7070d 100644
  
  def chunk_local_cumsum_scalar(
 diff --git a/python/sglang/kernels/ops/attention/fla/l2norm.py b/python/sglang/kernels/ops/attention/fla/l2norm.py
-index 0527324a89..4b1d84dd7e 100644
+index 30b445d3c1..764eede769 100644
 --- a/python/sglang/kernels/ops/attention/fla/l2norm.py
 +++ b/python/sglang/kernels/ops/attention/fla/l2norm.py
 @@ -9,6 +9,7 @@ import torch.nn as nn
@@ -575,7 +575,7 @@ index 0527324a89..4b1d84dd7e 100644
  
  def l2norm_fwd(
 diff --git a/python/sglang/kernels/ops/attention/fla/wy_fast.py b/python/sglang/kernels/ops/attention/fla/wy_fast.py
-index 9956b6a92c..c85df2fdd1 100644
+index 762e090300..2caec18887 100644
 --- a/python/sglang/kernels/ops/attention/fla/wy_fast.py
 +++ b/python/sglang/kernels/ops/attention/fla/wy_fast.py
 @@ -9,6 +9,7 @@ import triton
@@ -586,7 +586,7 @@ index 9956b6a92c..c85df2fdd1 100644
  
  
  # @triton.autotune(
-@@ -52,60 +53,54 @@ def recompute_w_u_fwd_kernel(
+@@ -54,60 +55,54 @@ def recompute_w_u_fwd_kernel(
          T = eos - bos
      else:
          bos, eos = i_b * T, i_b * T + T
@@ -687,10 +687,10 @@ index 9956b6a92c..c85df2fdd1 100644
  
  def recompute_w_u_fwd(
 diff --git a/python/sglang/srt/hardware_backend/xpu/kernels/fla/chunk_delta_h.py b/python/sglang/srt/hardware_backend/xpu/kernels/fla/chunk_delta_h.py
-index 9f4734a41b..f121287ce7 100644
+index 0102ab4cad..7d56c14078 100644
 --- a/python/sglang/srt/hardware_backend/xpu/kernels/fla/chunk_delta_h.py
 +++ b/python/sglang/srt/hardware_backend/xpu/kernels/fla/chunk_delta_h.py
-@@ -121,9 +121,30 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64_k_loop(
+@@ -131,18 +131,45 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64_k_loop(
          h0 = h0 + i_h * V * K
      if INPLACE_UPDATE:
          ht = ht + i_h * V * K
@@ -710,6 +710,21 @@ index 9f4734a41b..f121287ce7 100644
 +    # g is a [T, H] slice, so a 1D block with stride H is indexed directly.
 +    o_t = tl.arange(0, BT)
  
+     if TRACK_STATE:
+         i_track = tl.load(track_chunk_idx + i_n).to(tl.int32)
+         p_track_base = track_state + (i_n * stride_track_state + i_h * V * K).to(
+             tl.int64
+         )
++        track_desc = make_tensor_descriptor(
++            base=p_track_base,
++            shape=(V, K),
++            strides=(K, 1),
++            block_shape=(BV, 64),
++        )
+     else:
+         i_track = -1
+         p_track_base = track_state
+ 
      # main recurrence — time is the outer loop
      for i_t in range(NT):
 +        ho_desc = make_tensor_descriptor(
@@ -721,7 +736,7 @@ index 9f4734a41b..f121287ce7 100644
          ########################################################################
          # Phase 1: store h to output, compute v_new = u - sum_k(w_k @ h_k^T)
          ########################################################################
-@@ -132,30 +153,16 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64_k_loop(
+@@ -151,38 +178,21 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64_k_loop(
              # Load h: from initial_state (i_t==0) or scratch (i_t>0)
              if i_t == 0:
                  if USE_INITIAL_STATE and valid_state:
@@ -753,9 +768,18 @@ index 9f4734a41b..f121287ce7 100644
 -            tl.store(p_ho, b_h.to(p_ho.dtype.element_ty), boundary_check=(0, 1))
 +            ho_desc.store([i_v * BV, k_blk], b_h.to(h.dtype.element_ty))
  
+             # Mid-sequence checkpoint for the mamba prefix cache: the same
+             # pre-update state, kept in fp32 so the caller rounds only once.
+             if TRACK_STATE and i_t == i_track:
+-                p_track = tl.make_block_ptr(
+-                    p_track_base, (V, K), (K, 1), (i_v * BV, k_blk), (BV, 64), (1, 0)
+-                )
+-                tl.store(p_track, b_h, boundary_check=(0, 1))
++                track_desc.store([i_v * BV, k_blk], b_h)
+ 
              # Accumulate correction: w_k @ h_k^T
              b_w = w_desc.load([i_t * BT, k_blk])
-@@ -171,10 +178,8 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64_k_loop(
+@@ -198,10 +208,8 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64_k_loop(
          last_idx = min((i_t + 1) * BT, T) - 1
          if USE_G:
              b_g_last = tl.load(g + bos * H + last_idx * H + i_h)
@@ -768,7 +792,7 @@ index 9f4734a41b..f121287ce7 100644
              b_v = b_v * tl.expand_dims(safe_exp(b_g_last - b_g), 1)
              b_g_last = exp(b_g_last)
  
-@@ -187,17 +192,11 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64_k_loop(
+@@ -214,17 +222,11 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64_k_loop(
              # Reload h (same source as Phase 1)
              if i_t == 0:
                  if USE_INITIAL_STATE and valid_state:
@@ -788,7 +812,7 @@ index 9f4734a41b..f121287ce7 100644
              else:
                  b_h = tl.zeros([BV, 64], dtype=tl.float32)
  
-@@ -223,10 +222,9 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64_k_loop(
+@@ -250,10 +252,9 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64_k_loop(
  
              # Save updated h to scratch (initial_state) for next time step
              if INPLACE_UPDATE and valid_state:
@@ -802,7 +826,7 @@ index 9f4734a41b..f121287ce7 100644
  
  def chunk_gated_delta_rule_fwd_h(
 diff --git a/python/sglang/srt/hardware_backend/xpu/kernels/fla/chunk_fwd.py b/python/sglang/srt/hardware_backend/xpu/kernels/fla/chunk_fwd.py
-index ead49963c0..8ad4092226 100644
+index b327d25787..f7fc002c12 100644
 --- a/python/sglang/srt/hardware_backend/xpu/kernels/fla/chunk_fwd.py
 +++ b/python/sglang/srt/hardware_backend/xpu/kernels/fla/chunk_fwd.py
 @@ -3,7 +3,7 @@ import triton
@@ -823,7 +847,7 @@ index ead49963c0..8ad4092226 100644
      stores/loads safe so no runtime `if i_tcX < T` guards are needed).
      """
      i_t, i_bh = tl.program_id(0), tl.program_id(1)
-@@ -83,27 +83,29 @@ def chunk_gated_delta_rule_fwd_kkt_solve_kernel_low_reg(
+@@ -85,27 +85,29 @@ def chunk_gated_delta_rule_fwd_kkt_solve_kernel_low_reg(
      m_d = o_i[:, None] > o_i[None, :]
      m_I = o_i[:, None] == o_i[None, :]
  
@@ -865,7 +889,7 @@ index ead49963c0..8ad4092226 100644
              b_A += tl.dot(b_k, tl.trans(b_k))
          if USE_G:
              b_A *= safe_exp(b_gi[:, None] - b_gi[None, :])
-@@ -119,10 +121,7 @@ def chunk_gated_delta_rule_fwd_kkt_solve_kernel_low_reg(
+@@ -121,10 +123,7 @@ def chunk_gated_delta_rule_fwd_kkt_solve_kernel_low_reg(
              b_a = b_a + tl.sum(b_a[:, None] * b_Ai, 0)
              b_Ai = tl.where((o_i == i)[:, None], b_a, b_Ai)
          b_Ai += m_I
@@ -877,7 +901,7 @@ index ead49963c0..8ad4092226 100644
  
      ############################################################################
      # Pass 2: off-diagonal blocks — one K-loop per (i,j) pair.
-@@ -137,31 +136,18 @@ def chunk_gated_delta_rule_fwd_kkt_solve_kernel_low_reg(
+@@ -139,31 +138,18 @@ def chunk_gated_delta_rule_fwd_kkt_solve_kernel_low_reg(
              i = j + d  # compile-time ints from static_range
              i_tci = i_tc0 + i * BC
              i_tcj = i_tc0 + j * BC
@@ -916,7 +940,7 @@ index ead49963c0..8ad4092226 100644
                  )
              if USE_G:
                  b_A *= safe_exp(b_gi[:, None] - b_gj[None, :])
-@@ -172,10 +158,7 @@ def chunk_gated_delta_rule_fwd_kkt_solve_kernel_low_reg(
+@@ -174,10 +160,7 @@ def chunk_gated_delta_rule_fwd_kkt_solve_kernel_low_reg(
              #   (i=1,j=0)->col1  (i=2,j=1)->col2  (i=2,j=0)->col3
              if i < 3:
                  sc = 1 if (i == 1 and j == 0) else (2 if (i == 2 and j == 1) else 3)
@@ -928,7 +952,7 @@ index ead49963c0..8ad4092226 100644
              # Correction sum: sum_{m=j+1}^{i-1} Ai_im @ A_mj_raw
              # Unrolled manually (d is a compile-time Python int from tl.static_range):
              #   d=1: no corrections; d=2: m=j+1; d=3: m=j+1 then m=j+2
-@@ -185,15 +168,9 @@ def chunk_gated_delta_rule_fwd_kkt_solve_kernel_low_reg(
+@@ -187,15 +170,9 @@ def chunk_gated_delta_rule_fwd_kkt_solve_kernel_low_reg(
                  sc_m1j = (
                      1 if (m1 == 1 and j == 0) else (2 if (m1 == 2 and j == 1) else 3)
                  )
@@ -946,7 +970,7 @@ index ead49963c0..8ad4092226 100644
                      b_A_m1j,
                      input_precision=_MERGE_DOT_PRECISION,
                  )
-@@ -202,46 +179,28 @@ def chunk_gated_delta_rule_fwd_kkt_solve_kernel_low_reg(
+@@ -204,46 +181,28 @@ def chunk_gated_delta_rule_fwd_kkt_solve_kernel_low_reg(
                  sc_m2j = (
                      1 if (m2 == 1 and j == 0) else (2 if (m2 == 2 and j == 1) else 3)
                  )
@@ -1000,18 +1024,18 @@ index ead49963c0..8ad4092226 100644
  
  def chunk_gated_delta_rule_fwd_intra(
 diff --git a/python/sglang/test/kits/attention_unittest/attention_methods/dense_attention.py b/python/sglang/test/kits/attention_unittest/attention_methods/dense_attention.py
-index b352cd7c29..382b758886 100644
+index 3b0f392c5b..5d0d9cc826 100644
 --- a/python/sglang/test/kits/attention_unittest/attention_methods/dense_attention.py
 +++ b/python/sglang/test/kits/attention_unittest/attention_methods/dense_attention.py
-@@ -22,6 +22,7 @@ from sglang.srt.model_executor.graph_shared_output import GraphSharedOutput
+@@ -21,6 +21,7 @@ from sglang.srt.model_executor.graph_shared_output import GraphSharedOutput
  from sglang.srt.model_executor.model_runner import ModelRunner
  from sglang.srt.runtime_context import get_context, get_parallel
  from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 +from sglang.srt.utils import get_device, get_device_module
  
- # Unit tests run without distributed initialization. Backends that size buffers by
- # attention tensor-parallel degree should see the single-rank default.
-@@ -32,7 +33,7 @@ DEFAULT_HEAD_DIM = 16
+ # Use single-rank attention without distributed initialization.
+ _parallel_override = get_parallel().override(attn_tp_size=1, attn_dcp_rank=0)
+@@ -30,7 +31,7 @@ DEFAULT_HEAD_DIM = 16
  DEFAULT_HIDDEN_SIZE = 64
  DEFAULT_MAX_CONTEXT_LEN = 64
  DEFAULT_DTYPE = torch.float16
@@ -1020,7 +1044,7 @@ index b352cd7c29..382b758886 100644
  DENSE_ATOL = 3e-2
  DENSE_RTOL = 3e-2
  
-@@ -979,7 +980,7 @@ def build_dense_attention_fixture(
+@@ -972,7 +973,7 @@ def build_dense_attention_fixture(
  ) -> DenseAttentionFixture:
      seed = 2026 + len(case.name) + case.num_kv_heads
      torch.manual_seed(seed)
@@ -1030,7 +1054,7 @@ index b352cd7c29..382b758886 100644
      model_config = TinyModelConfig(
          num_heads=case.num_heads,
 diff --git a/python/sglang/test/kits/attention_unittest/runner_modes/speculative_draft_runner.py b/python/sglang/test/kits/attention_unittest/runner_modes/speculative_draft_runner.py
-index cbebd85c09..9aa2a04860 100644
+index 802a677dfe..c99cb757b4 100644
 --- a/python/sglang/test/kits/attention_unittest/runner_modes/speculative_draft_runner.py
 +++ b/python/sglang/test/kits/attention_unittest/runner_modes/speculative_draft_runner.py
 @@ -32,6 +32,7 @@ from sglang.srt.speculative.frozen_kv_mtp_info import (
@@ -1072,7 +1096,7 @@ index cbebd85c09..9aa2a04860 100644
  
  def _reset_cuda_graph_test_buffers() -> None:
 diff --git a/test/registered/attention/unittests/dense/test_triton.py b/test/registered/attention/unittests/dense/test_triton.py
-index 5cb86c296e..7933988446 100644
+index 64559579ca..4405010c18 100644
 --- a/test/registered/attention/unittests/dense/test_triton.py
 +++ b/test/registered/attention/unittests/dense/test_triton.py
 @@ -3,8 +3,12 @@ import unittest
@@ -1091,8 +1115,8 @@ index 5cb86c296e..7933988446 100644
      DenseAttentionCase,
      make_dense_cases,
 @@ -33,9 +37,10 @@ from sglang.test.test_utils import CustomTestCase
- register_cuda_ci(est_time=25, stage="base-b", runner_config="4-gpu-b200")
- register_cuda_ci(est_time=25, stage="base-b", runner_config="1-gpu-large")
+ register_cuda_ci(est_time=18, stage="base-b", runner_config="4-gpu-b200")
+ register_cuda_ci(est_time=19, stage="base-b", runner_config="1-gpu-large")
  register_amd_ci(est_time=25, suite="stage-b-test-1-gpu-large-amd")
 +register_xpu_ci(est_time=25, suite="stage-b-test-1-gpu-xpu")
  
@@ -1102,84 +1126,226 @@ index 5cb86c296e..7933988446 100644
  class TestTritonDenseAttentionBackendCorrectness(CustomTestCase):
      CASES = make_dense_cases("triton")
      CUDA_GRAPH_CASES = (
-diff --git a/python/sglang/srt/layers/attention/dual_chunk_flashattention_backend.py b/python/sglang/srt/layers/attention/dual_chunk_flashattention_backend.py
-index 83c22746ea..f72956bbf3 100644
---- a/python/sglang/srt/layers/attention/dual_chunk_flashattention_backend.py
-+++ b/python/sglang/srt/layers/attention/dual_chunk_flashattention_backend.py
-@@ -9,11 +9,28 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+diff --git a/python/sglang/srt/layers/layernorm.py b/python/sglang/srt/layers/layernorm.py
+index 6a4d049b65..d6966a34cf 100644
+--- a/python/sglang/srt/layers/layernorm.py
++++ b/python/sglang/srt/layers/layernorm.py
+@@ -99,12 +99,22 @@ if _is_cuda or _is_xpu or _is_musa:
+         _flashinfer_layernorm_available = False
+         _flashinfer_rmsnorm_quant_available = False
  
- import torch
- import torch.nn.functional as F
--from sgl_kernel.sparse_flash_attn import (
--    convert_vertical_slash_indexes,
--    convert_vertical_slash_indexes_mergehead,
--    sparse_attn_func,
--)
-+try:
-+    from sgl_kernel.sparse_flash_attn import (
-+        convert_vertical_slash_indexes,
-+        convert_vertical_slash_indexes_mergehead,
-+        sparse_attn_func,
-+    )
-+except ImportError:
-+    # sgl-kernel-xpu is optional (and has no PVC build at all), but importing this
-+    # module must not fail: the attention unittest kit reaches it through
-+    # attention_methods/dual_chunk_attention.py, so an unguarded import here also
-+    # takes out the dense Triton attention tests, which never touch dual chunk
-+    # attention. These three are only called from the sparse path below, so defer
-+    # the failure to whoever actually asks for it.
-+    def _sgl_kernel_sparse_flash_attn_required(*args, **kwargs):
-+        raise ImportError(
-+            "dual chunk sparse attention requires sgl-kernel-xpu, which is not "
-+            "installed"
+-    from sgl_kernel import (
+-        fused_add_rmsnorm,
+-        gemma_fused_add_rmsnorm,
+-        gemma_rmsnorm,
+-        rmsnorm,
+-    )
++    try:
++        from sgl_kernel import (
++            fused_add_rmsnorm,
++            gemma_fused_add_rmsnorm,
++            gemma_rmsnorm,
++            rmsnorm,
 +        )
++    except ImportError:
++        if not _is_xpu:
++            raise
 +
-+    convert_vertical_slash_indexes = _sgl_kernel_sparse_flash_attn_required
-+    convert_vertical_slash_indexes_mergehead = _sgl_kernel_sparse_flash_attn_required
-+    sparse_attn_func = _sgl_kernel_sparse_flash_attn_required
++        # sgl-kernel-xpu is optional.
++        def rmsnorm(*args, **kwargs):
++            raise ImportError("rmsnorm requires sgl-kernel-xpu, which is not installed")
++
++        fused_add_rmsnorm = gemma_fused_add_rmsnorm = gemma_rmsnorm = rmsnorm
+ _has_aiter_layer_norm = False
+ _has_vllm_rms_norm = False
+ _has_rocm_triton_gemma_rms_norm = False
+diff --git a/python/sglang/srt/layers/sampler.py b/python/sglang/srt/layers/sampler.py
+index c1dae6ef24..bb57e0786a 100644
+--- a/python/sglang/srt/layers/sampler.py
++++ b/python/sglang/srt/layers/sampler.py
+@@ -44,12 +44,23 @@ if is_cuda():
+     )
  
- from sglang.kernels.ops.attention.flash_attention import (
-     flash_attn_varlen_func,
-diff --git a/python/sglang/srt/layers/attention/flashattention_backend.py b/python/sglang/srt/layers/attention/flashattention_backend.py
-index 2c81c59373..12fdc291e6 100644
---- a/python/sglang/srt/layers/attention/flashattention_backend.py
-+++ b/python/sglang/srt/layers/attention/flashattention_backend.py
-@@ -47,7 +47,17 @@ if TYPE_CHECKING:
-     from sglang.srt.layers.radix_attention import RadixAttention
-     from sglang.srt.model_executor.model_runner import ModelRunner
- 
--from sgl_kernel import merge_state_v2
-+try:
-+    from sgl_kernel import merge_state_v2
-+except ImportError:
-+    # sgl-kernel-xpu is optional (and has no PVC build), but this module must stay
-+    # importable: the attention unittest kit reaches it through the dual chunk
-+    # backend, so an unguarded import here also takes out the dense Triton
-+    # attention tests. merge_state_v2 is only called from the paths below.
-+    def merge_state_v2(*args, **kwargs):
-+        raise ImportError(
-+            "merge_state_v2 requires sgl-kernel-xpu, which is not installed"
+ if is_musa() or is_xpu():
+-    from sgl_kernel import (
+-        min_p_sampling_from_probs,
+-        top_k_renorm_prob,
+-        top_k_top_p_sampling_from_probs,
+-        top_p_renorm_prob,
+-    )
++    try:
++        from sgl_kernel import (
++            min_p_sampling_from_probs,
++            top_k_renorm_prob,
++            top_k_top_p_sampling_from_probs,
++            top_p_renorm_prob,
 +        )
++    except ImportError:
++        if not is_xpu():
++            raise
++
++        # sgl-kernel-xpu is optional.
++        def top_k_renorm_prob(*args, **kwargs):
++            raise ImportError("intel_xpu sampling requires sgl-kernel-xpu")
++
++        min_p_sampling_from_probs = top_k_top_p_sampling_from_probs = top_k_renorm_prob
++        top_p_renorm_prob = top_k_renorm_prob
  
- from sglang.kernels.ops.attention.flash_attention import (
-     flash_attn_varlen_func,
-diff --git a/python/sglang/srt/utils/common.py b/python/sglang/srt/utils/common.py
-index 04b04eb9c0..229012024d 100644
---- a/python/sglang/srt/utils/common.py
-+++ b/python/sglang/srt/utils/common.py
-@@ -765,7 +765,14 @@ def get_cpu_memory_capacity():
- def get_xpu_memory_capacity():
-     try:
-         if torch.xpu.is_available():
--            return torch.xpu.mem_get_info()[1] // 1024 // 1024  # unit: MB
-+            try:
-+                return torch.xpu.mem_get_info()[1] // 1024 // 1024  # unit: MB
-+            except RuntimeError:
-+                # Data Center GPU Max (PVC) does not implement the free-memory
-+                # query, so mem_get_info raises there. Only element [1] (total)
-+                # is read here and device properties report the same value.
-+                total = torch.xpu.get_device_properties().total_memory
-+                return total // 1024 // 1024  # unit: MB
-         raise ValueError("No GPU memory values found.")
-     except AttributeError:
-         raise RuntimeError("torch.xpu is not available.")
+ _is_hip = is_hip()
+ _use_aiter = get_bool_env_var("SGLANG_USE_AITER") and is_hip()
+diff --git a/python/sglang/srt/managers/hisparse_coordinator.py b/python/sglang/srt/managers/hisparse_coordinator.py
+index 37e87d29db..6a22ef41c7 100644
+--- a/python/sglang/srt/managers/hisparse_coordinator.py
++++ b/python/sglang/srt/managers/hisparse_coordinator.py
+@@ -8,10 +8,19 @@ import torch
+ from sglang.srt.utils import get_device_module, is_hip, is_xpu
+ 
+ if is_xpu():
+-    from sgl_kernel import (
+-        load_cache_to_device_buffer_dsv4_mla,
+-        load_cache_to_device_buffer_mla,
+-    )
++    try:
++        from sgl_kernel import (
++            load_cache_to_device_buffer_dsv4_mla,
++            load_cache_to_device_buffer_mla,
++        )
++    except ImportError:
++        # sgl-kernel-xpu is optional.
++        def load_cache_to_device_buffer_mla(*args, **kwargs):
++            raise ImportError(
++                "HiSparse requires sgl-kernel-xpu, which is not installed"
++            )
++
++        load_cache_to_device_buffer_dsv4_mla = load_cache_to_device_buffer_mla
+ 
+     def copy_cache_planned_mla(*args, **kwargs):
+         raise RuntimeError(
+diff --git a/python/sglang/srt/mem_cache/hisparse_memory_pool.py b/python/sglang/srt/mem_cache/hisparse_memory_pool.py
+index 210b691a2c..554b5cca94 100644
+--- a/python/sglang/srt/mem_cache/hisparse_memory_pool.py
++++ b/python/sglang/srt/mem_cache/hisparse_memory_pool.py
+@@ -19,7 +19,18 @@ _is_cuda = is_cuda()
+ _is_hip = is_hip()
+ _is_xpu = is_xpu()
+ if _is_cuda or _is_hip or _is_xpu:
+-    from sgl_kernel.kvcacheio import transfer_kv_all_layer_mla
++    try:
++        from sgl_kernel.kvcacheio import transfer_kv_all_layer_mla
++    except ImportError:
++        if not _is_xpu:
++            raise
++
++        # sgl-kernel-xpu is optional.
++        def transfer_kv_all_layer_mla(*args, **kwargs):
++            raise ImportError(
++                "HiSparse requires sgl-kernel-xpu, which is not installed"
++            )
++
+ else:
+ 
+     def transfer_kv_all_layer_mla(*args, **kwargs):
+diff --git a/python/sglang/srt/mem_cache/memory_pool.py b/python/sglang/srt/mem_cache/memory_pool.py
+index a39d8a62d7..9efe21e2c0 100644
+--- a/python/sglang/srt/mem_cache/memory_pool.py
++++ b/python/sglang/srt/mem_cache/memory_pool.py
+@@ -120,7 +120,11 @@ _is_fp8_fnuz = is_fp8_fnuz()
+ _use_aiter = bool(envs.SGLANG_USE_AITER.get()) and _is_hip
+ 
+ if _is_xpu:
+-    from sgl_kernel import store_cache_xpu
++    try:
++        from sgl_kernel import store_cache_xpu
++    except ImportError:
++        # sgl-kernel-xpu is optional.
++        _is_xpu = False
+ 
+ 
+ def conv_window_dedup_enabled(
+@@ -175,7 +179,7 @@ def _set_kv_buffer_impl(
+             size_limit=size_limit,
+         )
+ 
+-    if _is_xpu and v_row_dim == row_dim:
++    if _is_xpu and v_row_dim == row_dim and indices.is_contiguous():
+         return store_cache_xpu(
+             k.view(-1, row_dim),
+             v.view(-1, row_dim),
+diff --git a/python/sglang/srt/mem_cache/memory_pool_host.py b/python/sglang/srt/mem_cache/memory_pool_host.py
+index 476712b364..1fe8f760c2 100644
+--- a/python/sglang/srt/mem_cache/memory_pool_host.py
++++ b/python/sglang/srt/mem_cache/memory_pool_host.py
+@@ -19,20 +19,25 @@ _is_hip = is_hip()
+ _is_npu = is_npu()
+ _is_xpu = is_xpu()
+ _is_mps = is_mps()
+-if _is_xpu:
+-    from sgl_kernel import transfer_cache_dsv4_mla
+-else:
+-    from sglang.kernels.ops.kvcache.hisparse import transfer_cache_dsv4_mla
+-if _is_cuda or _is_hip or _is_xpu:
+-    from sgl_kernel.kvcacheio import (
+-        transfer_kv_all_layer_direct_lf_pf,
+-        transfer_kv_all_layer_mla,
+-        transfer_kv_all_layer_mla_lf_pf,
+-        transfer_kv_direct,
+-        transfer_kv_per_layer_direct_pf_lf,
+-        transfer_kv_per_layer_mla,
+-        transfer_kv_per_layer_mla_pf_lf,
+-    )
++try:
++    if _is_xpu:
++        from sgl_kernel import transfer_cache_dsv4_mla
++    else:
++        from sglang.kernels.ops.kvcache.hisparse import transfer_cache_dsv4_mla
++    if _is_cuda or _is_hip or _is_xpu:
++        from sgl_kernel.kvcacheio import (
++            transfer_kv_all_layer_direct_lf_pf,
++            transfer_kv_all_layer_mla,
++            transfer_kv_all_layer_mla_lf_pf,
++            transfer_kv_direct,
++            transfer_kv_per_layer_direct_pf_lf,
++            transfer_kv_per_layer_mla,
++            transfer_kv_per_layer_mla_pf_lf,
++        )
++except ImportError:
++    # sgl-kernel-xpu is optional.
++    if not _is_xpu:
++        raise
+ 
+ if _is_npu:
+     from sgl_kernel_npu.kvcacheio import TransferDirection, transfer_kv_dim_exchange
+diff --git a/python/sglang/srt/mem_cache/pool_host/mla.py b/python/sglang/srt/mem_cache/pool_host/mla.py
+index b60325f8be..fb1adf4e5c 100644
+--- a/python/sglang/srt/mem_cache/pool_host/mla.py
++++ b/python/sglang/srt/mem_cache/pool_host/mla.py
+@@ -48,15 +48,20 @@ _is_npu = is_npu()
+ _is_xpu = is_xpu()
+ _is_mps = is_mps()
+ if _is_cuda or _is_hip or _is_xpu:
+-    from sgl_kernel.kvcacheio import (
+-        transfer_kv_all_layer_direct_lf_pf,
+-        transfer_kv_all_layer_mla,
+-        transfer_kv_all_layer_mla_lf_pf,
+-        transfer_kv_direct,
+-        transfer_kv_per_layer_direct_pf_lf,
+-        transfer_kv_per_layer_mla,
+-        transfer_kv_per_layer_mla_pf_lf,
+-    )
++    try:
++        from sgl_kernel.kvcacheio import (
++            transfer_kv_all_layer_direct_lf_pf,
++            transfer_kv_all_layer_mla,
++            transfer_kv_all_layer_mla_lf_pf,
++            transfer_kv_direct,
++            transfer_kv_per_layer_direct_pf_lf,
++            transfer_kv_per_layer_mla,
++            transfer_kv_per_layer_mla_pf_lf,
++        )
++    except ImportError:
++        # sgl-kernel-xpu is optional.
++        if not _is_xpu:
++            raise
+ if _is_npu:
+     from sgl_kernel_npu.kvcacheio import TransferDirection, transfer_kv_dim_exchange
+ 
