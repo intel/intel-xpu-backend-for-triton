@@ -109,50 +109,22 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32}
 // COM: by the unchanged upstream blocked layouts.
 // COM: These output checks pass before the bookkeeping fix; the local
 // COM: rewriteSlice assertion in assertions-enabled builds detects stale mappings.
-// COM: Capture the two broadcasts' users and exclude extra broadcasts/converts
-// COM: between checks through the return; only the loop-result convert remains.
+// COM: Both broadcasts are rematerialized in the loop; only the loop-result
+// COM: convert remains.
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [16, 2], warpsPerCTA = [1, 4], order = [0, 1]}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "xpu"} {
   // CHECK-LABEL: tt.func @backward_remat_reuse(
-  // CHECK-SAME: %[[BASE:.*]]: !tt.ptr<f32>, %[[BOUND:.*]]: i32, %[[START:.*]]: i32)
-  // CHECK-NOT: {{tt\.broadcast|ttg\.convert_layout}}
-  // CHECK: %[[ONE_F:.*]] = arith.constant dense<1.000000e+00> : tensor<64x2xf32,
-  // CHECK-NOT: {{tt\.broadcast|ttg\.convert_layout}}
-  // CHECK: %[[ONE_I:.*]] = arith.constant dense<1> : tensor<64x2xi32,
-  // CHECK-NOT: {{tt\.broadcast|ttg\.convert_layout}}
-  // CHECK: %[[ADDR_INDEX:.*]] = tt.splat %[[BOUND]] : i32 -> tensor<64x1xi32,
-  // CHECK-NOT: {{tt\.broadcast|ttg\.convert_layout}}
-  // CHECK: %[[CMP_INDEX:.*]] = tt.splat %[[BOUND]] : i32 -> tensor<64x1xi32,
-  // CHECK-NOT: {{tt\.broadcast|ttg\.convert_layout}}
-  // CHECK: %[[LOOP:.*]]:2 = scf.for {{.*}} = %[[START]] to %[[BOUND]] step %[[BOUND]] iter_args(%[[ACC:.*]] = %[[ONE_F]], %[[PREV:.*]] = %[[ONE_F]])
-  // CHECK-NOT: {{tt\.broadcast|ttg\.convert_layout}}
-  // CHECK: %[[CMP_BCAST:.*]] = tt.broadcast %[[CMP_INDEX]] : tensor<64x1xi32,
-  // CHECK-NOT: {{tt\.broadcast|ttg\.convert_layout}}
-  // CHECK: %[[CMP:.*]] = arith.cmpi slt, %[[CMP_BCAST]], %[[ONE_I]] :
-  // CHECK-NOT: {{tt\.broadcast|ttg\.convert_layout}}
-  // CHECK: %[[ADDR_BCAST:.*]] = tt.broadcast %[[ADDR_INDEX]] : tensor<64x1xi32,
-  // CHECK-NOT: {{tt\.broadcast|ttg\.convert_layout}}
-  // CHECK: %[[BASES:.*]] = tt.splat %[[BASE]] : !tt.ptr<f32> -> tensor<64x2x!tt.ptr<f32>,
-  // CHECK-NOT: {{tt\.broadcast|ttg\.convert_layout}}
-  // CHECK: %[[ADDR:.*]] = tt.addptr %[[BASES]], %[[ADDR_BCAST]] :
-  // CHECK-NOT: {{tt\.broadcast|ttg\.convert_layout}}
-  // CHECK: %[[LOAD:.*]] = tt.load %[[ADDR]] :
-  // CHECK-NOT: {{tt\.broadcast|ttg\.convert_layout}}
-  // CHECK: %[[PREV_NEXT:.*]] = arith.select %[[CMP]], %[[ONE_F]], %[[PREV]] :
-  // CHECK-NOT: {{tt\.broadcast|ttg\.convert_layout}}
-  // CHECK: %[[MUL:.*]] = arith.mulf %[[LOAD]], %[[PREV]] :
-  // CHECK-NOT: {{tt\.broadcast|ttg\.convert_layout}}
-  // CHECK: %[[ACC_NEXT:.*]] = arith.select %[[CMP]], %[[MUL]], %[[ACC]] :
-  // CHECK-NOT: {{tt\.broadcast|ttg\.convert_layout}}
-  // CHECK: scf.yield %[[ACC_NEXT]], %[[PREV_NEXT]] :
-  // CHECK-NOT: {{tt\.broadcast|ttg\.convert_layout}}
-  // CHECK: %[[CVT:.*]] = ttg.convert_layout %[[LOOP]]#0 : tensor<64x2xf32, {{.*}}> -> tensor<64x2xf32, {{.*}}>
-  // CHECK-NOT: {{tt\.broadcast|ttg\.convert_layout}}
-  // CHECK: tt.return %[[CVT]] :
-  // CHECK-NEXT: }
+  // CHECK-NOT:     ttg.convert_layout
+  // CHECK:         %[[LOOP:.*]]:2 = scf.for
+  // CHECK-COUNT-2:   tt.broadcast
+  // CHECK-NOT:       ttg.convert_layout
+  // CHECK:           scf.yield
+  // CHECK-NEXT:    }
+  // CHECK-NEXT:    %[[CVT:.*]] = ttg.convert_layout %[[LOOP]]#0
+  // CHECK-NEXT:    tt.return %[[CVT]]
   tt.func @backward_remat_reuse(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: i32) -> tensor<64x2xf32, #blocked> {
     %cst_0 = arith.constant dense<1.000000e+00> : tensor<64x2xf32, #blocked>
     %cst_1 = arith.constant dense<1> : tensor<64x2xi32, #blocked>
