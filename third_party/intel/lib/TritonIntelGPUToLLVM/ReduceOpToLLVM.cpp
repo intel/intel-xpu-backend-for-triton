@@ -14,6 +14,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -164,6 +165,38 @@ private:
     }
   }
 
+  using InThreadVectorizeOpKind = ReduceOpHelper::InThreadVectorizeOpKind;
+
+  template <typename Op>
+  static Value createBinaryOp(OpBuilder &builder, Location loc, Value lhs,
+                              Value rhs) {
+    return Op::create(builder, loc, lhs.getType(), lhs, rhs);
+  }
+
+  Value createInThreadVectorizedCombineOp(OpBuilder &builder, Location loc,
+                                          InThreadVectorizeOpKind kind,
+                                          Value lhs, Value rhs) const {
+    using CreateOpFn = Value (*)(OpBuilder &, Location, Value, Value);
+    static const DenseMap<InThreadVectorizeOpKind, CreateOpFn> builders = {
+        {InThreadVectorizeOpKind::AddF, createBinaryOp<LLVM::FAddOp>},
+        {InThreadVectorizeOpKind::MulF, createBinaryOp<LLVM::FMulOp>},
+        {InThreadVectorizeOpKind::MinNumF, createBinaryOp<LLVM::MinNumOp>},
+        {InThreadVectorizeOpKind::MaxNumF, createBinaryOp<LLVM::MaxNumOp>},
+        {InThreadVectorizeOpKind::MinimumF, createBinaryOp<LLVM::MinimumOp>},
+        {InThreadVectorizeOpKind::MaximumF, createBinaryOp<LLVM::MaximumOp>},
+        {InThreadVectorizeOpKind::AddI, createBinaryOp<LLVM::AddOp>},
+        {InThreadVectorizeOpKind::MulI, createBinaryOp<LLVM::MulOp>},
+        {InThreadVectorizeOpKind::MinSI, createBinaryOp<LLVM::SMinOp>},
+        {InThreadVectorizeOpKind::MaxSI, createBinaryOp<LLVM::SMaxOp>},
+        {InThreadVectorizeOpKind::MinUI, createBinaryOp<LLVM::UMinOp>},
+        {InThreadVectorizeOpKind::MaxUI, createBinaryOp<LLVM::UMaxOp>},
+    };
+    auto createOp = builders.lookup(kind);
+    if (!createOp)
+      llvm::report_fatal_error("Unsupported in-thread vectorize op kind");
+    return createOp(builder, loc, lhs, rhs);
+  }
+
   std::unique_ptr<Region> createVectorCombineRegion(
       Location loc, Type elemTy,
       ReduceOpHelper::InThreadVectorizeOpKind vectorizeKind,
@@ -181,7 +214,7 @@ private:
 
     OpBuilder builder(ctx);
     builder.setInsertionPointToStart(block);
-    Value result = ReduceOpHelper::createInThreadVectorizedCombineOp(
+    Value result = createInThreadVectorizedCombineOp(
         builder, loc, vectorizeKind, block->getArgument(0),
         block->getArgument(1));
     triton::ReduceReturnOp::create(builder, loc, ValueRange{result});
