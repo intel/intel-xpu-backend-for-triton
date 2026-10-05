@@ -240,9 +240,9 @@ def _fake_sycl_setup(monkeypatch, tmp_path: pathlib.Path, loaded: str, torch_hea
 
     Makes the runtimes named by `loaded` ("oneapi", "torch", "both" or "nothing") look loaded into
     the process, or makes the process look unable to tell ("unreadable"). "torch_two" maps two
-    runtimes from PyTorch's directory; "torch_deleted" maps PyTorch's runtime after it was removed
-    from disk. Returns oneAPI's compiler root as `icpx` reports it, PyTorch's root, and the file the
-    fake `icpx` creates when it runs.
+    runtimes from PyTorch's directory; "torch_deleted" and "oneapi_deleted" map a runtime after it
+    was removed from disk. Returns oneAPI's compiler root as `icpx` reports it, PyTorch's root, and
+    the file the fake `icpx` creates when it runs.
     """
     # As in oneAPI, `latest` is a symlink, and the process maps the library by its real path.
     oneapi = tmp_path / "oneapi" / "compiler" / "latest"
@@ -263,12 +263,13 @@ def _fake_sycl_setup(monkeypatch, tmp_path: pathlib.Path, loaded: str, torch_hea
     if loaded != "unreadable":
         mapped = {
             "oneapi": [oneapi_lib], "torch": [torch_lib], "both": [torch_lib, oneapi_lib], "nothing": [], "torch_two":
-            [torch_lib, torch_lib.with_name("libsycl.so.8")], "torch_deleted": [torch_lib]
+            [torch_lib,
+             torch_lib.with_name("libsycl.so.8")], "torch_deleted": [torch_lib], "oneapi_deleted": [oneapi_lib]
         }[loaded]
-        # The kernel marks a mapped file that was unlinked since.
+        # The kernel marks a mapped file that was unlinked since. oneAPI's `libsycl.so` symlink then dangles.
         suffix = ""
-        if loaded == "torch_deleted":
-            torch_lib.unlink()
+        if loaded.endswith("_deleted"):
+            mapped[0].unlink()
             suffix = " (deleted)"
         lines = [
             "01f17000-0a5d7000 rw-p 00000000 00:00 0                                  [heap]",
@@ -294,6 +295,7 @@ def _fake_sycl_setup(monkeypatch, tmp_path: pathlib.Path, loaded: str, torch_hea
     pytest.param("unreadable", True, "oneapi", id="not_linux"),
     pytest.param("torch", False, "oneapi", id="no_headers_to_build_against"),
     pytest.param("torch_deleted", True, "oneapi", id="loaded_runtime_removed_from_disk"),
+    pytest.param("oneapi_deleted", True, "oneapi", id="loaded_runtime_removed_from_disk_leaving_dangling_symlink"),
 ])
 def test_find_sycl_prefers_loaded_runtime(monkeypatch, recwarn, tmp_path: pathlib.Path, loaded, torch_headers,
                                           builds_against):
@@ -317,9 +319,13 @@ def test_find_sycl_prefers_loaded_runtime(monkeypatch, recwarn, tmp_path: pathli
     # `icpx` adds its own SYCL to the build, so it may build only against that one.
     assert helper.use_sycl_compiler == (builds_against == "oneapi")
     warned = [str(w.message) for w in recwarn]
-    # PyTorch's runtime is known to be the one loaded, yet cannot be built against.
-    if loaded in ("torch", "torch_deleted") and builds_against == "oneapi":
-        assert any(str(torch_root / "lib") in m for m in warned), f"a possible crash was not reported: {warned}"
+    # One runtime is known to be the one loaded, yet cannot be built against.
+    unusable = {
+        "torch": torch_root / "lib", "torch_deleted": torch_root / "lib", "oneapi_deleted":
+        oneapi.with_name("2025.3") / "lib"
+    }.get(loaded)
+    if unusable and builds_against == "oneapi":
+        assert any(str(unusable) in m for m in warned), f"a possible crash was not reported: {warned}"
     else:
         assert not warned, f"unexpected warnings: {warned}"
 

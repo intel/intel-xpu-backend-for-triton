@@ -211,8 +211,8 @@ def _links_runtime(lib_dir: str, runtime: str) -> bool:
     needs the soname of the `libsycl.so` it is linked against, and the loader reuses a loaded library
     with that soname, so compare those. A wheel ships `libsycl.so` as a copy, so its path says nothing.
     """
-    return (os.path.realpath(lib_dir) == os.path.dirname(runtime)
-            and _soname(os.path.join(lib_dir, "libsycl.so")) == _soname(runtime))
+    soname = _soname(os.path.join(lib_dir, "libsycl.so"))
+    return (soname is not None and os.path.realpath(lib_dir) == os.path.dirname(runtime) and soname == _soname(runtime))
 
 
 def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str], bool]:
