@@ -510,6 +510,10 @@ def get_hasher_common(is_lts: bool = False):
     # share the same cache entry and load an incompatible .so.
     if COMPILATION_HELPER.libsycl_dir:
         hasher.update(str(COMPILATION_HELPER.libsycl_dir).encode("utf-8"))
+        # The directory stays when the runtime in it is upgraded in place (`pip install -U`), but the
+        # helper is linked against one soname, so it must be rebuilt then.
+        for sycl_dir in COMPILATION_HELPER.libsycl_dir:
+            hasher.update(str(_soname(os.path.join(sycl_dir, "libsycl.so"))).encode("utf-8"))
     if is_lts:
         hasher.update("is_lts=True".encode("utf-8"))
     return hasher

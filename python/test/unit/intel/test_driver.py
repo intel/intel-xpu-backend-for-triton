@@ -336,6 +336,33 @@ def test_find_sycl_checks_which_runtime_links(monkeypatch, recwarn, tmp_path: pa
     assert any(str(lib / "libsycl.so.8") in m for m in warned), f"a possible crash was not reported: {warned}"
 
 
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the loaded SYCL runtime is found through /proc")
+def test_helper_cache_key_follows_runtime_upgrade_in_place(monkeypatch, request, tmp_path: pathlib.Path):
+    """A cached helper is not reused after the SYCL runtime in the same directory changes.
+
+    `pip install -U` replaces the runtime without moving it, so the directory in the cache key stays
+    the same while the helper built before still needs the old soname. The cache is consulted before
+    any helper is loaded, so no runtime is mapped yet.
+    """
+    oneapi, _, _ = _fake_sycl_setup(monkeypatch, tmp_path, "nothing")
+    request.addfinalizer(intel_driver.get_hasher_common.cache_clear)
+
+    def cache_key() -> tuple[list[str], str]:
+        monkeypatch.setattr(intel_driver, "COMPILATION_HELPER", CompilationHelper())
+        intel_driver.get_hasher_common.cache_clear()
+        return intel_driver.COMPILATION_HELPER.libsycl_dir, intel_driver.get_hasher_common().hexdigest()
+
+    dirs_before, key_before = cache_key()
+    lib = oneapi.with_name("2025.3") / "lib"
+    _write_shared_library(lib / "libsycl.so.9", "libsycl.so.9")
+    (lib / "libsycl.so").unlink()
+    (lib / "libsycl.so").symlink_to("libsycl.so.9")
+    dirs_after, key_after = cache_key()
+
+    assert dirs_before == dirs_after == [str(oneapi / "lib")]
+    assert key_before != key_after
+
+
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads the libraries mapped into this process")
 def test_soname_of_a_real_library():
     """`_soname` reads real shared libraries, not only the fakes above: libc's soname is the same everywhere."""
