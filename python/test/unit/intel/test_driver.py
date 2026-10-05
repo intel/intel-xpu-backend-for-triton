@@ -1,5 +1,7 @@
+import os
 import re
 import shutil
+import sys
 
 import pytest
 import torch
@@ -8,11 +10,13 @@ import triton.language as tl
 
 import pathlib
 
+from triton.runtime import build
 from triton.runtime.driver import driver
 from triton._internal_testing import is_xpu_cri
+from triton.backends.intel import driver as intel_driver
 from triton.backends.intel import extension_utils
 from triton.backends.intel.compiler import REBUILD_SPILL_BYTES_PER_THREAD
-from triton.backends.intel.driver import find_sycl_icpx
+from triton.backends.intel.driver import CompilationHelper, find_sycl_icpx
 from triton.runtime.errors import IntelGPUError, OutOfResources
 
 
@@ -197,6 +201,117 @@ def test_find_sycl_uses_oneapi_root(monkeypatch, no_icpx, recwarn, tmp_path: pat
     assert str(compiler_root / "include") in include_dir
     assert str(compiler_root / "include" / "sycl") in include_dir
     assert not [str(w.message) for w in recwarn], f"unexpected warnings: {[str(w.message) for w in recwarn]}"
+
+
+def _make_sycl_install(root: pathlib.Path, soname: str, headers: bool = True) -> pathlib.Path:
+    """Lays out a SYCL runtime as oneAPI and the `intel-sycl-rt` wheel do, and returns its library."""
+    library = root / "lib" / soname
+    library.parent.mkdir(parents=True)
+    library.touch()
+    if headers:
+        (root / "include" / "sycl").mkdir(parents=True)
+        (root / "include" / "sycl" / "sycl.hpp").touch()
+    return library
+
+
+def _fake_sycl_setup(monkeypatch, tmp_path: pathlib.Path, loaded: str, torch_headers: bool = True):
+    """An `icpx` from oneAPI 2025.3 on `PATH` next to the newer SYCL runtime of PyTorch's wheels.
+
+    Makes the runtimes named by `loaded` ("oneapi", "torch", "both" or "nothing") look loaded into
+    the process, or makes the process look unable to tell ("unreadable"). Returns oneAPI's compiler
+    root as `icpx` reports it, PyTorch's root, and the file the fake `icpx` creates when it runs.
+    """
+    # As in oneAPI, `latest` is a symlink, and the process maps the library by its real path.
+    oneapi = tmp_path / "oneapi" / "compiler" / "latest"
+    oneapi_lib = _make_sycl_install(oneapi.with_name("2025.3"), "libsycl.so.8")
+    oneapi.symlink_to("2025.3")
+    icpx_ran = tmp_path / "icpx_ran"
+    icpx = oneapi / "bin" / "icpx"
+    icpx.parent.mkdir()
+    icpx.write_text(f"#!/bin/sh\ntouch '{icpx_ran}'\nexit 1\n")
+    icpx.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{icpx.parent}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.delenv("TRITON_INTEL_SYCL_COMPILER", raising=False)
+
+    torch_root = tmp_path / "venv"
+    torch_lib = _make_sycl_install(torch_root, "libsycl.so.9", headers=torch_headers)
+
+    maps = tmp_path / "maps"
+    if loaded != "unreadable":
+        mapped = {"oneapi": [oneapi_lib], "torch": [torch_lib], "both": [torch_lib, oneapi_lib], "nothing": []}[loaded]
+        lines = [
+            "01f17000-0a5d7000 rw-p 00000000 00:00 0                                  [heap]",
+            "71d16c800000-71d16e600000 rw-p 00000000 00:00 0 ",
+        ]
+        for inode, library in enumerate(mapped, start=3184608):
+            lines += [
+                f"71d182000000-71d1820fd000 r--p 00000000 fc:01 {inode}                    {library}",
+                f"71d1820fd000-71d1823d1000 r-xp 000fc000 fc:01 {inode}                    {library}",
+            ]
+        maps.write_text("\n".join(lines) + "\n")
+    monkeypatch.setattr(intel_driver, "_PROC_SELF_MAPS", str(maps))
+    return oneapi, torch_root, icpx_ran
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the loaded SYCL runtime is found through /proc")
+@pytest.mark.parametrize("loaded, torch_headers, builds_against", [
+    pytest.param("torch", True, "torch", id="issue_8200"),
+    pytest.param("oneapi", True, "oneapi", id="icpx_runtime_loaded"),
+    pytest.param("nothing", True, "oneapi", id="no_runtime_loaded"),
+    pytest.param("both", True, "oneapi", id="unknown_which_runtime_pytorch_uses"),
+    pytest.param("unreadable", True, "oneapi", id="not_linux"),
+    pytest.param("torch", False, "oneapi", id="no_headers_to_build_against"),
+])
+def test_find_sycl_prefers_loaded_runtime(monkeypatch, recwarn, tmp_path: pathlib.Path, loaded, torch_headers,
+                                          builds_against):
+    """Triton's helpers are built against the SYCL runtime PyTorch has already loaded.
+
+    PyTorch hands them its `sycl::queue`, so building them against another runtime puts two SYCL
+    runtimes with different ABIs into one process. With PyTorch 2.13 wheels (SYCL 2026.0) and an
+    `icpx` from oneAPI 2025.3 on `PATH`, the first call on the queue segfaulted in
+    `sycl::context::get_devices()`.
+    See https://github.com/intel/intel-xpu-backend-for-triton/issues/8200.
+    """
+    oneapi, torch_root, _ = _fake_sycl_setup(monkeypatch, tmp_path, loaded, torch_headers)
+    expected, other = (torch_root, tmp_path / "oneapi") if builds_against == "torch" else (oneapi, torch_root)
+
+    helper = CompilationHelper()
+
+    assert helper.libsycl_dir == [str(expected / "lib")]
+    assert str(expected / "include" / "sycl") in helper.include_dir
+    assert not any(str(other) in d for d in helper.include_dir + helper.library_dir), \
+        f"the other SYCL runtime leaked into the compiler flags: {helper.include_dir + helper.library_dir}"
+    # `icpx` adds its own SYCL to the build, so it may build only against that one.
+    assert helper.use_sycl_compiler == (builds_against == "oneapi")
+    warned = [str(w.message) for w in recwarn]
+    if torch_headers:
+        assert not warned, f"unexpected warnings: {warned}"
+    else:
+        assert any(str(torch_root / "lib") in m for m in warned), f"a possible crash was not reported: {warned}"
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the loaded SYCL runtime is found through /proc")
+@pytest.mark.parametrize("loaded, runs_icpx", [("torch", False), ("oneapi", True)])
+def test_helpers_built_without_icpx_for_loaded_runtime(monkeypatch, request, tmp_path: pathlib.Path, loaded, runs_icpx):
+    """Helpers built against PyTorch's SYCL runtime are compiled by the host compiler, not `icpx`.
+
+    `icpx` adds its own SYCL headers and runtime to the build, which need not be PyTorch's.
+    """
+    _, _, icpx_ran = _fake_sycl_setup(monkeypatch, tmp_path, loaded)
+    monkeypatch.setattr(intel_driver, "COMPILATION_HELPER", CompilationHelper())
+    # `get_hasher_common` caches a hash of the fake helper above.
+    request.addfinalizer(intel_driver.get_hasher_common.cache_clear)
+    monkeypatch.setenv("TRITON_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.delenv("CXX", raising=False)
+    # The SYCL compiler is chosen only on XPU; do not depend on a device being present.
+    monkeypatch.setattr(build, "is_xpu", lambda: True)
+
+    # The build fails with either compiler, so no fake runtime is ever loaded; what is checked is
+    # which compiler ran.
+    with pytest.raises(RuntimeError):
+        intel_driver.compile_module_from_src("#error stop after choosing the compiler\n", "sycl_compiler_choice")
+
+    assert icpx_ran.exists() == runs_icpx
 
 
 def test_get_properties_error(device):

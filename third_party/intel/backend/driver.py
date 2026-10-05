@@ -145,7 +145,26 @@ def find_sycl_dpclang(include_dir: list[str]) -> tuple[list[str], list[str]]:
     return include_dir, sycl_dirs
 
 
-def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str]]:
+_PROC_SELF_MAPS = "/proc/self/maps"
+
+
+def _loaded_libsycl_dir() -> str | None:
+    """Returns the directory of the SYCL runtime loaded into this process, if exactly one is."""
+    try:
+        with open(_PROC_SELF_MAPS) as maps:
+            lines = maps.read().splitlines()
+    except OSError:  # not Linux
+        return None
+    dirs = set()
+    for line in lines:
+        # address, permissions, offset, device, inode and, for a mapped file, its path
+        fields = line.split(maxsplit=5)
+        if len(fields) == 6 and re.fullmatch(r"libsycl\.so(\.\d+)*", os.path.basename(fields[5])):
+            dirs.add(os.path.dirname(fields[5]))
+    return dirs.pop() if len(dirs) == 1 else None
+
+
+def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str], bool]:
     """
     Looks for the sycl library in known places.
 
@@ -153,25 +172,46 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str]]:
       include_dir: list of include directories to pass to compiler.
 
     Returns:
-      enriched include_dir and libsycl.so location.
+      enriched include_dir, libsycl.so location, and whether a SYCL compiler may build against it.
 
     Raises:
       AssertionError: if library was not found.
     """
 
+    base_include_dir = include_dir
     sycl_dirs = []
     csycl = knobs.intel.sycl_compiler
     if not csycl or csycl == "icpx":
         include_dir, sycl_dirs = find_sycl_icpx(include_dir)
     if len(sycl_dirs) == 0 and (not csycl or csycl.startswith("dpclang")):
         include_dir, sycl_dirs = find_sycl_dpclang(include_dir)
+
+    # The helpers are handed PyTorch's `sycl::queue`, so they must use the SYCL runtime PyTorch has
+    # already loaded. One found above may be another version, with another ABI, and crash on the
+    # first call on the queue. A SYCL compiler brings its own runtime, so it may not build them then.
+    # See https://github.com/intel/intel-xpu-backend-for-triton/issues/8200.
+    loaded_dir = _loaded_libsycl_dir()
+    if loaded_dir and loaded_dir not in map(os.path.realpath, sycl_dirs):
+        loaded_root = os.path.dirname(loaded_dir)
+        if os.path.isfile(os.path.join(loaded_root, "include", "sycl", "sycl.hpp")):
+            include_dir = base_include_dir + [
+                os.path.join(loaded_root, "include"),
+                os.path.join(loaded_root, "include", "sycl")
+            ]
+            return include_dir, [loaded_dir], False
+        if sycl_dirs:
+            warnings.warn(
+                f"The SYCL runtime loaded from {loaded_dir} has no headers in {os.path.join(loaded_root, 'include')}; "
+                "Triton builds against another SYCL instead, which crashes if their ABIs differ.",
+                stacklevel=2,
+            )
     if len(sycl_dirs) == 0:
         raise AssertionError("sycl headers not found, please install `icpx` compiler, "
                              "or provide `ONEAPI_ROOT` environment "
                              "or install `intel-sycl-rt>=2025.0.0` wheel"
                              "or instal `dpclang` compiler (experimental)")
 
-    return include_dir, sycl_dirs
+    return include_dir, sycl_dirs, True
 
 
 class CompilationHelper:
@@ -183,6 +223,7 @@ class CompilationHelper:
         self._library_dir = None
         self._include_dir = None
         self._libsycl_dir = None
+        self._use_sycl_compiler = None
         self.libraries = ['sycl', 'ze_loader']
 
     @property
@@ -197,7 +238,7 @@ class CompilationHelper:
         include_dir = [os.path.join(ze_root, "include")]
 
         library_dir = []
-        include_dir, self._libsycl_dir = find_sycl(include_dir)
+        include_dir, self._libsycl_dir, self._use_sycl_compiler = find_sycl(include_dir)
         if self._libsycl_dir:
             library_dir += self._libsycl_dir
         if os.name == "nt":
@@ -235,6 +276,11 @@ class CompilationHelper:
     def libsycl_dir(self) -> list[str]:
         self._compute_compilation_options_lazy
         return self._libsycl_dir
+
+    @cached_property
+    def use_sycl_compiler(self) -> bool:
+        self._compute_compilation_options_lazy
+        return self._use_sycl_compiler
 
 
 COMPILATION_HELPER = CompilationHelper()
@@ -457,7 +503,8 @@ def compile_module_from_src(src: str, name: str, is_lts: bool = False):
                     extra_compiler_args += ["-DENABLE_EXPERIMENTAL_EVENTLESS_SUBMIT"]
 
             so = _build(name, src_path, tmpdir, COMPILATION_HELPER.library_dir, COMPILATION_HELPER.include_dir,
-                        COMPILATION_HELPER.libraries, ccflags=extra_compiler_args)
+                        COMPILATION_HELPER.libraries, ccflags=extra_compiler_args,
+                        use_sycl_compiler=COMPILATION_HELPER.use_sycl_compiler)
             with open(so, "rb") as f:
                 cache_path = cache.put(f.read(), f"{name}{suffix}", binary=True)
 
