@@ -1,3 +1,4 @@
+# pylint: disable=too-many-lines
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -674,6 +675,7 @@ class BenchmarkCategory(Enum):
     GEMM = "gemm"
     FLASH_ATTENTION = "flash_attention"
     PREFIX_SUMS = "prefix_sums"
+    RUNTIME = "runtime"
     CORE = "core"
     OPTIONAL = "optional"
     EXPERIMENTAL = "experimental"
@@ -719,6 +721,9 @@ class _BenchmarkSummary(ABC):
 
     memory_metric: ClassVar[str] = "GB/s"
     compute_metric: ClassVar[str] = "TFlops"
+    # Host-bound benchmarks (launch overhead) report the time per call instead of the device throughput.
+    time_metrics: ClassVar[Tuple[str, ...]] = ("time_us", "time_ms")
+    auxiliary_metrics: ClassVar[Tuple[str, ...]] = ("ns_per_arg", "cpu_mhz")
 
     @property
     @abstractmethod
@@ -760,11 +765,11 @@ class _BenchmarkSummary(ABC):
 
     @property
     def primary_metric(self) -> str:
-        known_metrics = [self.memory_metric, self.compute_metric]
+        known_metrics = [self.memory_metric, self.compute_metric, *self.time_metrics, *self.auxiliary_metrics]
         for metric in self.perf_metrics:
             if metric not in known_metrics:
                 raise NotImplementedError(f"Unsupported {metric} metric. Known metrics are {known_metrics}")
-        return self.compute_metric
+        return next((metric for metric in self.time_metrics if metric in self.perf_metrics), self.compute_metric)
 
     @property
     def perf_metrics(self) -> str:
@@ -862,6 +867,8 @@ class BenchmarkConfig:  # pylint: disable=too-many-instance-attributes
     # Set to emit one long/db-format report (via transform_results) instead of per-provider wide reports.
     long_report_group: Optional[str] = None
     long_report_param_cols: Optional[str] = None
+    # Called when the long report is built; the returned params are added to every row (e.g. the CPU model).
+    long_report_params: Optional[Callable[[], Dict[str, Union[str, int]]]] = None
     # Set so `describe` lists the config without resolving it (avoids importing optional deps like vLLM).
     describe_metadata_only: bool = False
 
@@ -968,6 +975,7 @@ class BenchmarkConfigRunResult(BenchmarkRunResult, BenchmarkConfig):
                 self.long_report_group,
                 self.benchmark_report_name,
                 self.long_report_param_cols.split(","),
+                extra_params=self.long_report_params() if self.long_report_params else None,
             )
             if long_df.empty:
                 warnings.warn(
