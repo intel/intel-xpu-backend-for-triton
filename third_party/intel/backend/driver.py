@@ -1,7 +1,9 @@
 import importlib.metadata
+import mmap
 import os
 import json
 import re
+import struct
 import sys
 import hashlib
 import shutil
@@ -148,20 +150,66 @@ def find_sycl_dpclang(include_dir: list[str]) -> tuple[list[str], list[str]]:
 _PROC_SELF_MAPS = "/proc/self/maps"
 
 
-def _loaded_libsycl_dir() -> str | None:
-    """Returns the directory of the SYCL runtime loaded into this process, if exactly one is."""
+def _loaded_libsycl() -> str | None:
+    """Returns the path of the SYCL runtime loaded into this process, if exactly one is."""
     try:
         with open(_PROC_SELF_MAPS) as maps:
             lines = maps.read().splitlines()
     except OSError:  # not Linux
         return None
-    dirs = set()
+    paths = set()
     for line in lines:
         # address, permissions, offset, device, inode and, for a mapped file, its path
         fields = line.split(maxsplit=5)
         if len(fields) == 6 and re.fullmatch(r"libsycl\.so(\.\d+)*", os.path.basename(fields[5])):
-            dirs.add(os.path.dirname(fields[5]))
-    return dirs.pop() if len(dirs) == 1 else None
+            paths.add(fields[5])
+    return paths.pop() if len(paths) == 1 else None
+
+
+def _soname(path: str) -> str | None:
+    """Returns the soname of the 64-bit little-endian ELF shared library at `path`, if it has one."""
+    try:
+        with open(path, "rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as elf:
+            if elf[:6] != b"\x7fELF\x02\x01":
+                return None
+            phoff, = struct.unpack_from("<Q", elf, 0x20)
+            phentsize, phnum = struct.unpack_from("<HH", elf, 0x36)
+            loads, dynamic = [], range(0)
+            for i in range(phnum):
+                p_type, _, p_offset, p_vaddr, _, p_filesz = struct.unpack_from("<IIQQQQ", elf, phoff + i * phentsize)
+                if p_type == 1:  # PT_LOAD
+                    loads.append((p_vaddr, p_offset, p_filesz))
+                elif p_type == 2:  # PT_DYNAMIC
+                    dynamic = range(p_offset, p_offset + p_filesz, 16)
+            tags = {}
+            for entry in dynamic:
+                tag, value = struct.unpack_from("<qQ", elf, entry)
+                if tag == 0:  # DT_NULL
+                    break
+                tags.setdefault(tag, value)
+            strtab, name = tags.get(5), tags.get(14)  # DT_STRTAB, DT_SONAME
+            if strtab is None or name is None:
+                return None
+            # DT_STRTAB is the address the string table is loaded at, so find it in the file.
+            for p_vaddr, p_offset, p_filesz in loads:
+                if p_vaddr <= strtab < p_vaddr + p_filesz:
+                    start = p_offset + strtab - p_vaddr + name
+                    end = elf.find(b"\0", start)
+                    return elf[start:end].decode() if end >= 0 else None
+    except (OSError, ValueError, struct.error):  # unreadable, empty or truncated
+        pass
+    return None
+
+
+def _links_runtime(lib_dir: str, runtime: str) -> bool:
+    """Whether `-lsycl` in `lib_dir` links the SYCL runtime at `runtime`, which helpers then use.
+
+    The directory holding the runtime may also hold another, which `libsycl.so` links instead. A helper
+    needs the soname of the `libsycl.so` it is linked against, and the loader reuses a loaded library
+    with that soname, so compare those. A wheel ships `libsycl.so` as a copy, so its path says nothing.
+    """
+    return (os.path.realpath(lib_dir) == os.path.dirname(runtime)
+            and _soname(os.path.join(lib_dir, "libsycl.so")) == _soname(runtime))
 
 
 def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str], bool]:
@@ -190,10 +238,12 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str], bool]:
     # already loaded. One found above may be another version, with another ABI, and crash on the
     # first call on the queue. A SYCL compiler brings its own runtime, so it may not build them then.
     # See https://github.com/intel/intel-xpu-backend-for-triton/issues/8200.
-    loaded_dir = _loaded_libsycl_dir()
-    if loaded_dir and loaded_dir not in map(os.path.realpath, sycl_dirs):
+    loaded = _loaded_libsycl()
+    if loaded and not any(_links_runtime(sycl_dir, loaded) for sycl_dir in sycl_dirs):
+        loaded_dir = os.path.dirname(loaded)
         loaded_root = os.path.dirname(loaded_dir)
-        if os.path.isfile(os.path.join(loaded_root, "include", "sycl", "sycl.hpp")):
+        if _links_runtime(loaded_dir, loaded) and os.path.isfile(
+                os.path.join(loaded_root, "include", "sycl", "sycl.hpp")):
             include_dir = base_include_dir + [
                 os.path.join(loaded_root, "include"),
                 os.path.join(loaded_root, "include", "sycl")
@@ -201,8 +251,9 @@ def find_sycl(include_dir: list[str]) -> tuple[list[str], list[str], bool]:
             return include_dir, [loaded_dir], False
         if sycl_dirs:
             warnings.warn(
-                f"The SYCL runtime loaded from {loaded_dir} has no headers in {os.path.join(loaded_root, 'include')}; "
-                "Triton builds against another SYCL instead, which crashes if their ABIs differ.",
+                f"Triton cannot build against the SYCL runtime loaded from {loaded}: that needs "
+                f"{os.path.join(loaded_dir, 'libsycl.so')} to link it and headers in {os.path.join(loaded_root, 'include')}. "
+                f"Triton builds against the SYCL in {', '.join(sycl_dirs)} instead, which crashes if their ABIs differ.",
                 stacklevel=2,
             )
     if len(sycl_dirs) == 0:

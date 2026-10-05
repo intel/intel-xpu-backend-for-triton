@@ -1,6 +1,7 @@
 import os
 import re
 import shutil
+import struct
 import sys
 
 import pytest
@@ -203,11 +204,31 @@ def test_find_sycl_uses_oneapi_root(monkeypatch, no_icpx, recwarn, tmp_path: pat
     assert not [str(w.message) for w in recwarn], f"unexpected warnings: {[str(w.message) for w in recwarn]}"
 
 
-def _make_sycl_install(root: pathlib.Path, soname: str, headers: bool = True) -> pathlib.Path:
-    """Lays out a SYCL runtime as oneAPI and the `intel-sycl-rt` wheel do, and returns its library."""
+def _write_shared_library(path: pathlib.Path, soname: str):
+    """Writes the smallest 64-bit ELF shared library with a soname: no code, just the dynamic section."""
+    base, dynamic_offset = 0x1000, 64 + 2 * 56  # the ELF header, then two program headers
+    strtab_offset = dynamic_offset + 3 * 16
+    dynamic = struct.pack("<qQqQqQ", 5, base + strtab_offset, 14, 1, 0, 0)  # DT_STRTAB, DT_SONAME, DT_NULL
+    strtab = b"\0" + soname.encode() + b"\0"
+    size = strtab_offset + len(strtab)
+    header = b"\x7fELF\x02\x01\x01" + bytes(9) + struct.pack("<HHIQQQIHHHHHH", 3, 62, 1, 0, 64, 0, 0, 64, 56, 2, 64, 0,
+                                                             0)
+    load = struct.pack("<IIQQQQQQ", 1, 4, 0, base, base, size, size, 0x1000)  # PT_LOAD of the whole file
+    dynamic_header = struct.pack("<IIQQQQQQ", 2, 4, dynamic_offset, base + dynamic_offset, base + dynamic_offset,
+                                 len(dynamic), len(dynamic), 8)  # PT_DYNAMIC
+    path.write_bytes(header + load + dynamic_header + dynamic + strtab)
+
+
+def _make_sycl_install(root: pathlib.Path, soname: str, headers: bool = True, wheel: bool = False) -> pathlib.Path:
+    """Lays out a SYCL runtime as oneAPI or, with `wheel`, the `intel-sycl-rt` wheel does, and returns its library."""
     library = root / "lib" / soname
     library.parent.mkdir(parents=True)
-    library.touch()
+    _write_shared_library(library, soname)
+    if wheel:
+        # A wheel cannot hold symlinks, so `libsycl.so` is a copy.
+        shutil.copyfile(library, library.with_name("libsycl.so"))
+    else:
+        library.with_name("libsycl.so").symlink_to(soname)
     if headers:
         (root / "include" / "sycl").mkdir(parents=True)
         (root / "include" / "sycl" / "sycl.hpp").touch()
@@ -218,8 +239,9 @@ def _fake_sycl_setup(monkeypatch, tmp_path: pathlib.Path, loaded: str, torch_hea
     """An `icpx` from oneAPI 2025.3 on `PATH` next to the newer SYCL runtime of PyTorch's wheels.
 
     Makes the runtimes named by `loaded` ("oneapi", "torch", "both" or "nothing") look loaded into
-    the process, or makes the process look unable to tell ("unreadable"). Returns oneAPI's compiler
-    root as `icpx` reports it, PyTorch's root, and the file the fake `icpx` creates when it runs.
+    the process, or makes the process look unable to tell ("unreadable"). "torch_two" maps two
+    runtimes from PyTorch's directory. Returns oneAPI's compiler root as `icpx` reports it,
+    PyTorch's root, and the file the fake `icpx` creates when it runs.
     """
     # As in oneAPI, `latest` is a symlink, and the process maps the library by its real path.
     oneapi = tmp_path / "oneapi" / "compiler" / "latest"
@@ -234,11 +256,14 @@ def _fake_sycl_setup(monkeypatch, tmp_path: pathlib.Path, loaded: str, torch_hea
     monkeypatch.delenv("TRITON_INTEL_SYCL_COMPILER", raising=False)
 
     torch_root = tmp_path / "venv"
-    torch_lib = _make_sycl_install(torch_root, "libsycl.so.9", headers=torch_headers)
+    torch_lib = _make_sycl_install(torch_root, "libsycl.so.9", headers=torch_headers, wheel=True)
 
     maps = tmp_path / "maps"
     if loaded != "unreadable":
-        mapped = {"oneapi": [oneapi_lib], "torch": [torch_lib], "both": [torch_lib, oneapi_lib], "nothing": []}[loaded]
+        mapped = {
+            "oneapi": [oneapi_lib], "torch": [torch_lib], "both": [torch_lib, oneapi_lib], "nothing": [], "torch_two":
+            [torch_lib, torch_lib.with_name("libsycl.so.8")]
+        }[loaded]
         lines = [
             "01f17000-0a5d7000 rw-p 00000000 00:00 0                                  [heap]",
             "71d16c800000-71d16e600000 rw-p 00000000 00:00 0 ",
@@ -259,6 +284,7 @@ def _fake_sycl_setup(monkeypatch, tmp_path: pathlib.Path, loaded: str, torch_hea
     pytest.param("oneapi", True, "oneapi", id="icpx_runtime_loaded"),
     pytest.param("nothing", True, "oneapi", id="no_runtime_loaded"),
     pytest.param("both", True, "oneapi", id="unknown_which_runtime_pytorch_uses"),
+    pytest.param("torch_two", True, "oneapi", id="unknown_which_runtime_in_one_directory_pytorch_uses"),
     pytest.param("unreadable", True, "oneapi", id="not_linux"),
     pytest.param("torch", False, "oneapi", id="no_headers_to_build_against"),
 ])
@@ -288,6 +314,42 @@ def test_find_sycl_prefers_loaded_runtime(monkeypatch, recwarn, tmp_path: pathli
         assert not warned, f"unexpected warnings: {warned}"
     else:
         assert any(str(torch_root / "lib") in m for m in warned), f"a possible crash was not reported: {warned}"
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the loaded SYCL runtime is found through /proc")
+def test_find_sycl_checks_which_runtime_links(monkeypatch, recwarn, tmp_path: pathlib.Path):
+    """Holding the loaded runtime does not make a directory safe to build against.
+
+    Here oneAPI's directory also holds a newer runtime, which `libsycl.so` links, so a helper built
+    against it would load that one next to the one already loaded.
+    """
+    oneapi, _, _ = _fake_sycl_setup(monkeypatch, tmp_path, "oneapi")
+    lib = oneapi.with_name("2025.3") / "lib"
+    _write_shared_library(lib / "libsycl.so.9", "libsycl.so.9")
+    (lib / "libsycl.so").unlink()
+    (lib / "libsycl.so").symlink_to("libsycl.so.9")
+
+    helper = CompilationHelper()
+
+    assert helper.libsycl_dir == [str(oneapi / "lib")]
+    warned = [str(w.message) for w in recwarn]
+    assert any(str(lib / "libsycl.so.8") in m for m in warned), f"a possible crash was not reported: {warned}"
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads the libraries mapped into this process")
+def test_soname_of_a_real_library():
+    """`_soname` reads real shared libraries, not only the fakes above: libc's soname is the same everywhere."""
+    with open("/proc/self/maps") as maps:
+        mapped = {
+            fields[5]
+            for fields in (line.split(maxsplit=5) for line in maps.read().splitlines())
+            if len(fields) == 6
+        }
+    libc = next((path for path in mapped if re.fullmatch(r"libc(\.so\.6|-[\d.]+\.so)", os.path.basename(path))), None)
+    if libc is None:
+        pytest.skip(f"no glibc mapped into this process: {sorted(mapped)}")
+
+    assert intel_driver._soname(libc) == "libc.so.6"
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the loaded SYCL runtime is found through /proc")
