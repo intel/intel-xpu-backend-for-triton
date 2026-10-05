@@ -267,11 +267,18 @@ def _first_launch_samples(cold_reps: int, warm_reps: int) -> Dict[str, List[dict
     options = {"arg-type": arg_type, "num-args": num_args, "cpu": launch_cpu()}
     with tempfile.TemporaryDirectory(prefix="launch-overhead-") as tmpdir:
         # A fresh Triton cache and Intel GPU driver (NEO) compiler cache for every cold sample.
-        cache_envs = [{
-            "TRITON_CACHE_DIR": os.path.join(tmpdir, str(i), "triton"),
-            "NEO_CACHE_PERSISTENT": "1",
-            "NEO_CACHE_DIR": os.path.join(tmpdir, str(i), "neo"),
-        } for i in range(cold_reps)]
+        cache_envs = []
+        for i in range(cold_reps):
+            triton_dir = os.path.join(tmpdir, str(i), "triton")
+            neo_dir = os.path.join(tmpdir, str(i), "neo")
+            # NEO disables the persistent cache if NEO_CACHE_DIR does not exist.
+            os.makedirs(triton_dir, exist_ok=True)
+            os.makedirs(neo_dir, exist_ok=True)
+            cache_envs.append({
+                "TRITON_CACHE_DIR": triton_dir,
+                "NEO_CACHE_PERSISTENT": "1",
+                "NEO_CACHE_DIR": neo_dir,
+            })
         samples = {"cold": [_run_worker("first-launch", options, env) for env in cache_envs]}
         samples["warm"] = [_run_worker("first-launch", options, cache_envs[-1]) for _ in range(warm_reps)]
     return samples
