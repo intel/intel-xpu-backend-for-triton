@@ -161,8 +161,11 @@ def _loaded_libsycl() -> str | None:
     for line in lines:
         # address, permissions, offset, device, inode and, for a mapped file, its path
         fields = line.split(maxsplit=5)
-        if len(fields) == 6 and re.fullmatch(r"libsycl\.so(\.\d+)*", os.path.basename(fields[5])):
-            paths.add(fields[5])
+        if len(fields) == 6:
+            # The kernel marks a mapped file that was unlinked since, as `pip install -U` does.
+            path = fields[5].removesuffix(" (deleted)")
+            if re.fullmatch(r"libsycl\.so(\.\d+)*", os.path.basename(path)):
+                paths.add(path)
     return paths.pop() if len(paths) == 1 else None
 
 
