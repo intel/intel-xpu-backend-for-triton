@@ -303,8 +303,9 @@ private:
   // Existing tuples of (value, layout) that needs to be updated when recreating
   // scf ops. This prevents keeping track of Values that have been delete when
   // rewriting slices. The Value maybe mapped to different attributes in remove
-  // layout.
-  DenseMap<Value, SmallVector<Attribute>> mappedValues;
+  // layout. A set, because a duplicate encoding would make updateRematMapping
+  // look up a key it has already moved.
+  DenseMap<Value, llvm::SmallSetVector<Attribute, 4>> mappedValues;
   // map of the values remat based on encoding.
   DenseMap<std::pair<Value, Attribute>, Value> rematMapping;
   // DenseMap<std::pair<Operation*, Attribute>, Operation*>
@@ -321,11 +322,7 @@ void LayoutRematerialization::addRematValue(Value old, Attribute encoding,
                                             Value newV) {
   LDBG("addRematValue " << old << " encoding " << encoding << " " << newV);
   rematMapping[{old, encoding}] = newV;
-  // Re-recording an existing (old, encoding) pair only replaces the remat;
-  // a duplicate encoding would make updateRematMapping look up an erased key.
-  SmallVector<Attribute> &encodings = mappedValues[old];
-  if (!llvm::is_contained(encodings, encoding))
-    encodings.push_back(encoding);
+  mappedValues[old].insert(encoding);
 }
 
 // Remove unneeded values now that we are done with the rematMapping.
@@ -1152,7 +1149,7 @@ void LayoutRematerialization::updateRematMapping(
   for (auto [old, newV] : values) {
     auto it = mappedValues.find(old);
     if (it != mappedValues.end()) {
-      SmallVector<Attribute> encodings = it->second;
+      llvm::SmallSetVector<Attribute, 4> encodings = it->second;
       for (Attribute encoding : encodings) {
         auto rematIt = rematMapping.find({old, encoding});
         assert(rematIt != rematMapping.end());
@@ -1169,10 +1166,7 @@ void LayoutRematerialization::updateRematMapping(
         rematMapping[{newV, encoding}] = replacedValue;
       }
       mappedValues.erase(it);
-      if (mappedValues.contains(newV))
-        mappedValues[newV].append(encodings);
-      else
-        mappedValues[newV] = std::move(encodings);
+      mappedValues[newV].insert(encodings.begin(), encodings.end());
     }
   }
 }

@@ -1,5 +1,6 @@
 // RUN: triton-opt %s -split-input-file -tritonintelgpu-remove-layout-conversions | FileCheck %s
 // RUN: triton-opt %s -split-input-file -tritonintelgpu-remove-layout-conversions='max-backward-remat-iterations=10' | FileCheck %s
+// RUN: env TRITON_INTEL_REMOVELAYOUTCONVERSION_SUPPORT_FOR_LOOP=1 triton-opt %s -split-input-file -tritonintelgpu-remove-layout-conversions | FileCheck %s --check-prefix=FOR-LOOP
 
 // COM: https://github.com/intel/intel-xpu-backend-for-triton/issues/8192
 // COM: The convert of %x1 survives (its backward slice reaches a function argument) but is recorded as a remat.
@@ -178,5 +179,42 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %a = ttg.convert_layout %x1 : tensor<128xi32, #blocked1> -> tensor<128xi32, #blocked>
     %b = ttg.convert_layout %x0 : tensor<128xi32, #blocked1> -> tensor<128xi32, #blocked>
     tt.return %a, %b : tensor<128xi32, #blocked>, tensor<128xi32, #blocked>
+  }
+}
+
+// -----
+
+// COM: With for-loop support, removing %a records the remat of %res both on the old loop result and on the new one,
+// COM: so remapping the old result into the new one merged a duplicate encoding. Removing %b then rewrites the new
+// COM: loop again, and the duplicate used to hit an assertion in updateRematMapping.
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [16], warpsPerCTA = [4], order = [0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [16], warpsPerCTA = [4], order = [0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [16], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 16 : i32} {
+  // FOR-LOOP-LABEL: tt.func public @kernel_loop_remap_twice(
+  // FOR-LOOP: [[LOOP:%.*]]:2 = scf.for
+  // FOR-LOOP-NOT: ttg.convert_layout
+  // FOR-LOOP: tt.store {{.*}}, [[LOOP]]#0 :
+  // FOR-LOOP-NOT: ttg.convert_layout
+  // FOR-LOOP: tt.store {{.*}}, [[LOOP]]#1 :
+  tt.func public @kernel_loop_remap_twice(%lb: index, %ub: index, %st: index, %p: !tt.ptr<f32>) {
+    %r = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked1>
+    %init = arith.sitofp %r : tensor<128xi32, #blocked1> to tensor<128xf32, #blocked1>
+    %res = scf.for %i = %lb to %ub step %st iter_args(%acc = %init) -> (tensor<128xf32, #blocked1>) {
+      %n = arith.addf %acc, %acc : tensor<128xf32, #blocked1>
+      scf.yield %n : tensor<128xf32, #blocked1>
+    }
+    %ra = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked>
+    %sa = tt.splat %p : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>, #blocked>
+    %pa = tt.addptr %sa, %ra : tensor<128x!tt.ptr<f32>, #blocked>, tensor<128xi32, #blocked>
+    %a = ttg.convert_layout %res : tensor<128xf32, #blocked1> -> tensor<128xf32, #blocked>
+    tt.store %pa, %a : tensor<128x!tt.ptr<f32>, #blocked>
+    %rb = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked2>
+    %sb = tt.splat %p : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>, #blocked2>
+    %pb = tt.addptr %sb, %rb : tensor<128x!tt.ptr<f32>, #blocked2>, tensor<128xi32, #blocked2>
+    %b = ttg.convert_layout %res : tensor<128xf32, #blocked1> -> tensor<128xf32, #blocked2>
+    tt.store %pb, %b : tensor<128x!tt.ptr<f32>, #blocked2>
+    tt.return
   }
 }
